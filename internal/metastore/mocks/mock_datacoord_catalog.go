@@ -5,8 +5,10 @@ package mocks
 import (
 	context "context"
 
-	metastore "github.com/milvus-io/milvus/internal/metastore"
 	datapb "github.com/milvus-io/milvus/internal/proto/datapb"
+	logpb "github.com/milvus-io/milvus/internal/proto/logpb"
+
+	metastore "github.com/milvus-io/milvus/internal/metastore"
 
 	mock "github.com/stretchr/testify/mock"
 
@@ -474,6 +476,92 @@ func (_c *DataCoordCatalog_DropIndex_Call) RunAndReturn(run func(context.Context
 	return _c
 }
 
+// DropPChannelCheckpoint provides a mock function with given fields: ctx, pChannel
+func (_m *DataCoordCatalog) DropPChannelCheckpoint(ctx context.Context, pChannel string) error {
+	ret := _m.Called(ctx, pChannel)
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string) error); ok {
+		r0 = rf(ctx, pChannel)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// DataCoordCatalog_DropPChannelCheckpoint_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DropPChannelCheckpoint'
+type DataCoordCatalog_DropPChannelCheckpoint_Call struct {
+	*mock.Call
+}
+
+// DropPChannelCheckpoint is a helper method to define mock.On call
+//   - ctx context.Context
+//   - pChannel string
+func (_e *DataCoordCatalog_Expecter) DropPChannelCheckpoint(ctx interface{}, pChannel interface{}) *DataCoordCatalog_DropPChannelCheckpoint_Call {
+	return &DataCoordCatalog_DropPChannelCheckpoint_Call{Call: _e.mock.On("DropPChannelCheckpoint", ctx, pChannel)}
+}
+
+func (_c *DataCoordCatalog_DropPChannelCheckpoint_Call) Run(run func(ctx context.Context, pChannel string)) *DataCoordCatalog_DropPChannelCheckpoint_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string))
+	})
+	return _c
+}
+
+func (_c *DataCoordCatalog_DropPChannelCheckpoint_Call) Return(_a0 error) *DataCoordCatalog_DropPChannelCheckpoint_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *DataCoordCatalog_DropPChannelCheckpoint_Call) RunAndReturn(run func(context.Context, string) error) *DataCoordCatalog_DropPChannelCheckpoint_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// DropPChannelInfo provides a mock function with given fields: ctx, name
+func (_m *DataCoordCatalog) DropPChannelInfo(ctx context.Context, name string) error {
+	ret := _m.Called(ctx, name)
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string) error); ok {
+		r0 = rf(ctx, name)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// DataCoordCatalog_DropPChannelInfo_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DropPChannelInfo'
+type DataCoordCatalog_DropPChannelInfo_Call struct {
+	*mock.Call
+}
+
+// DropPChannelInfo is a helper method to define mock.On call
+//   - ctx context.Context
+//   - name string
+func (_e *DataCoordCatalog_Expecter) DropPChannelInfo(ctx interface{}, name interface{}) *DataCoordCatalog_DropPChannelInfo_Call {
+	return &DataCoordCatalog_DropPChannelInfo_Call{Call: _e.mock.On("DropPChannelInfo", ctx, name)}
+}
+
+func (_c *DataCoordCatalog_DropPChannelInfo_Call) Run(run func(ctx context.Context, name string)) *DataCoordCatalog_DropPChannelInfo_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string))
+	})
+	return _c
+}
+
+func (_c *DataCoordCatalog_DropPChannelInfo_Call) Return(_a0 error) *DataCoordCatalog_DropPChannelInfo_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *DataCoordCatalog_DropPChannelInfo_Call) RunAndReturn(run func(context.Context, string) error) *DataCoordCatalog_DropPChannelInfo_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // DropSegment provides a mock function with given fields: ctx, segment
 func (_m *DataCoordCatalog) DropSegment(ctx context.Context, segment *datapb.SegmentInfo) error {
 	ret := _m.Called(ctx, segment)
@@ -711,6 +799,168 @@ func (_c *DataCoordCatalog_ListIndexes_Call) Return(_a0 []*model.Index, _a1 erro
 }
 
 func (_c *DataCoordCatalog_ListIndexes_Call) RunAndReturn(run func(context.Context) ([]*model.Index, error)) *DataCoordCatalog_ListIndexes_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListPChannelCheckpoint provides a mock function with given fields: ctx
+func (_m *DataCoordCatalog) ListPChannelCheckpoint(ctx context.Context) (map[string]*msgpb.MsgPosition, error) {
+	ret := _m.Called(ctx)
+
+	var r0 map[string]*msgpb.MsgPosition
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) (map[string]*msgpb.MsgPosition, error)); ok {
+		return rf(ctx)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) map[string]*msgpb.MsgPosition); ok {
+		r0 = rf(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(map[string]*msgpb.MsgPosition)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// DataCoordCatalog_ListPChannelCheckpoint_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListPChannelCheckpoint'
+type DataCoordCatalog_ListPChannelCheckpoint_Call struct {
+	*mock.Call
+}
+
+// ListPChannelCheckpoint is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *DataCoordCatalog_Expecter) ListPChannelCheckpoint(ctx interface{}) *DataCoordCatalog_ListPChannelCheckpoint_Call {
+	return &DataCoordCatalog_ListPChannelCheckpoint_Call{Call: _e.mock.On("ListPChannelCheckpoint", ctx)}
+}
+
+func (_c *DataCoordCatalog_ListPChannelCheckpoint_Call) Run(run func(ctx context.Context)) *DataCoordCatalog_ListPChannelCheckpoint_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *DataCoordCatalog_ListPChannelCheckpoint_Call) Return(_a0 map[string]*msgpb.MsgPosition, _a1 error) *DataCoordCatalog_ListPChannelCheckpoint_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *DataCoordCatalog_ListPChannelCheckpoint_Call) RunAndReturn(run func(context.Context) (map[string]*msgpb.MsgPosition, error)) *DataCoordCatalog_ListPChannelCheckpoint_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListPChannelInfo provides a mock function with given fields: ctx
+func (_m *DataCoordCatalog) ListPChannelInfo(ctx context.Context) (map[string]*logpb.PChannelInfo, error) {
+	ret := _m.Called(ctx)
+
+	var r0 map[string]*logpb.PChannelInfo
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) (map[string]*logpb.PChannelInfo, error)); ok {
+		return rf(ctx)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) map[string]*logpb.PChannelInfo); ok {
+		r0 = rf(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(map[string]*logpb.PChannelInfo)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// DataCoordCatalog_ListPChannelInfo_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListPChannelInfo'
+type DataCoordCatalog_ListPChannelInfo_Call struct {
+	*mock.Call
+}
+
+// ListPChannelInfo is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *DataCoordCatalog_Expecter) ListPChannelInfo(ctx interface{}) *DataCoordCatalog_ListPChannelInfo_Call {
+	return &DataCoordCatalog_ListPChannelInfo_Call{Call: _e.mock.On("ListPChannelInfo", ctx)}
+}
+
+func (_c *DataCoordCatalog_ListPChannelInfo_Call) Run(run func(ctx context.Context)) *DataCoordCatalog_ListPChannelInfo_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *DataCoordCatalog_ListPChannelInfo_Call) Return(_a0 map[string]*logpb.PChannelInfo, _a1 error) *DataCoordCatalog_ListPChannelInfo_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *DataCoordCatalog_ListPChannelInfo_Call) RunAndReturn(run func(context.Context) (map[string]*logpb.PChannelInfo, error)) *DataCoordCatalog_ListPChannelInfo_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListPChannelLeaseID provides a mock function with given fields: ctx
+func (_m *DataCoordCatalog) ListPChannelLeaseID(ctx context.Context) (map[string]uint64, error) {
+	ret := _m.Called(ctx)
+
+	var r0 map[string]uint64
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) (map[string]uint64, error)); ok {
+		return rf(ctx)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) map[string]uint64); ok {
+		r0 = rf(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(map[string]uint64)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// DataCoordCatalog_ListPChannelLeaseID_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListPChannelLeaseID'
+type DataCoordCatalog_ListPChannelLeaseID_Call struct {
+	*mock.Call
+}
+
+// ListPChannelLeaseID is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *DataCoordCatalog_Expecter) ListPChannelLeaseID(ctx interface{}) *DataCoordCatalog_ListPChannelLeaseID_Call {
+	return &DataCoordCatalog_ListPChannelLeaseID_Call{Call: _e.mock.On("ListPChannelLeaseID", ctx)}
+}
+
+func (_c *DataCoordCatalog_ListPChannelLeaseID_Call) Run(run func(ctx context.Context)) *DataCoordCatalog_ListPChannelLeaseID_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *DataCoordCatalog_ListPChannelLeaseID_Call) Return(_a0 map[string]uint64, _a1 error) *DataCoordCatalog_ListPChannelLeaseID_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *DataCoordCatalog_ListPChannelLeaseID_Call) RunAndReturn(run func(context.Context) (map[string]uint64, error)) *DataCoordCatalog_ListPChannelLeaseID_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -992,6 +1242,137 @@ func (_c *DataCoordCatalog_SaveDroppedSegmentsInBatch_Call) Return(_a0 error) *D
 }
 
 func (_c *DataCoordCatalog_SaveDroppedSegmentsInBatch_Call) RunAndReturn(run func(context.Context, []*datapb.SegmentInfo) error) *DataCoordCatalog_SaveDroppedSegmentsInBatch_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SavePChannelCheckpoint provides a mock function with given fields: ctx, pChannel, pos
+func (_m *DataCoordCatalog) SavePChannelCheckpoint(ctx context.Context, pChannel string, pos *msgpb.MsgPosition) error {
+	ret := _m.Called(ctx, pChannel, pos)
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, *msgpb.MsgPosition) error); ok {
+		r0 = rf(ctx, pChannel, pos)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// DataCoordCatalog_SavePChannelCheckpoint_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SavePChannelCheckpoint'
+type DataCoordCatalog_SavePChannelCheckpoint_Call struct {
+	*mock.Call
+}
+
+// SavePChannelCheckpoint is a helper method to define mock.On call
+//   - ctx context.Context
+//   - pChannel string
+//   - pos *msgpb.MsgPosition
+func (_e *DataCoordCatalog_Expecter) SavePChannelCheckpoint(ctx interface{}, pChannel interface{}, pos interface{}) *DataCoordCatalog_SavePChannelCheckpoint_Call {
+	return &DataCoordCatalog_SavePChannelCheckpoint_Call{Call: _e.mock.On("SavePChannelCheckpoint", ctx, pChannel, pos)}
+}
+
+func (_c *DataCoordCatalog_SavePChannelCheckpoint_Call) Run(run func(ctx context.Context, pChannel string, pos *msgpb.MsgPosition)) *DataCoordCatalog_SavePChannelCheckpoint_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(*msgpb.MsgPosition))
+	})
+	return _c
+}
+
+func (_c *DataCoordCatalog_SavePChannelCheckpoint_Call) Return(_a0 error) *DataCoordCatalog_SavePChannelCheckpoint_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *DataCoordCatalog_SavePChannelCheckpoint_Call) RunAndReturn(run func(context.Context, string, *msgpb.MsgPosition) error) *DataCoordCatalog_SavePChannelCheckpoint_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SavePChannelInfo provides a mock function with given fields: ctx, info
+func (_m *DataCoordCatalog) SavePChannelInfo(ctx context.Context, info *logpb.PChannelInfo) error {
+	ret := _m.Called(ctx, info)
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, *logpb.PChannelInfo) error); ok {
+		r0 = rf(ctx, info)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// DataCoordCatalog_SavePChannelInfo_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SavePChannelInfo'
+type DataCoordCatalog_SavePChannelInfo_Call struct {
+	*mock.Call
+}
+
+// SavePChannelInfo is a helper method to define mock.On call
+//   - ctx context.Context
+//   - info *logpb.PChannelInfo
+func (_e *DataCoordCatalog_Expecter) SavePChannelInfo(ctx interface{}, info interface{}) *DataCoordCatalog_SavePChannelInfo_Call {
+	return &DataCoordCatalog_SavePChannelInfo_Call{Call: _e.mock.On("SavePChannelInfo", ctx, info)}
+}
+
+func (_c *DataCoordCatalog_SavePChannelInfo_Call) Run(run func(ctx context.Context, info *logpb.PChannelInfo)) *DataCoordCatalog_SavePChannelInfo_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(*logpb.PChannelInfo))
+	})
+	return _c
+}
+
+func (_c *DataCoordCatalog_SavePChannelInfo_Call) Return(_a0 error) *DataCoordCatalog_SavePChannelInfo_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *DataCoordCatalog_SavePChannelInfo_Call) RunAndReturn(run func(context.Context, *logpb.PChannelInfo) error) *DataCoordCatalog_SavePChannelInfo_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SavePChannelLeaseID provides a mock function with given fields: ctx, channel, leaseID
+func (_m *DataCoordCatalog) SavePChannelLeaseID(ctx context.Context, channel string, leaseID uint64) error {
+	ret := _m.Called(ctx, channel, leaseID)
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, uint64) error); ok {
+		r0 = rf(ctx, channel, leaseID)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// DataCoordCatalog_SavePChannelLeaseID_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SavePChannelLeaseID'
+type DataCoordCatalog_SavePChannelLeaseID_Call struct {
+	*mock.Call
+}
+
+// SavePChannelLeaseID is a helper method to define mock.On call
+//   - ctx context.Context
+//   - channel string
+//   - leaseID uint64
+func (_e *DataCoordCatalog_Expecter) SavePChannelLeaseID(ctx interface{}, channel interface{}, leaseID interface{}) *DataCoordCatalog_SavePChannelLeaseID_Call {
+	return &DataCoordCatalog_SavePChannelLeaseID_Call{Call: _e.mock.On("SavePChannelLeaseID", ctx, channel, leaseID)}
+}
+
+func (_c *DataCoordCatalog_SavePChannelLeaseID_Call) Run(run func(ctx context.Context, channel string, leaseID uint64)) *DataCoordCatalog_SavePChannelLeaseID_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(uint64))
+	})
+	return _c
+}
+
+func (_c *DataCoordCatalog_SavePChannelLeaseID_Call) Return(_a0 error) *DataCoordCatalog_SavePChannelLeaseID_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *DataCoordCatalog_SavePChannelLeaseID_Call) RunAndReturn(run func(context.Context, string, uint64) error) *DataCoordCatalog_SavePChannelLeaseID_Call {
 	_c.Call.Return(run)
 	return _c
 }

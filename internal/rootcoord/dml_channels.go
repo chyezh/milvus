@@ -36,13 +36,26 @@ import (
 )
 
 type dmlMsgStream struct {
-	ms    msgstream.MsgStream
-	mutex sync.RWMutex
+	// LogCoord(Embedding in DataCoord) and RootCoord has looped dependency,
+	// So AsProducer need to be called after RootCoord is created
+	once         sync.Once
+	ms           msgstream.MsgStream
+	mutex        sync.RWMutex
+	pChannelName string
 
 	refcnt int64 // current in use count
 	used   int64 // total used counter in current run, not stored in meta so meant to be inaccurate
 	idx    int64 // idx for name
 	pos    int   // position in the heap slice
+}
+
+// Broadcast Convert msgstream into producer and broadcast.
+func (dms *dmlMsgStream) Broadcast(pack *msgstream.MsgPack) (map[string][]mqwrapper.MessageID, error) {
+	// TODO: Remove all log manage operation into logcoord.
+	dms.once.Do(func() {
+		dms.ms.AsProducer([]string{dms.pChannelName})
+	})
+	return dms.ms.Broadcast(pack)
 }
 
 // RefCnt returns refcnt with mutex protection.
@@ -198,7 +211,6 @@ func newDmlChannels(ctx context.Context, factory msgstream.Factory, chanNamePref
 			}
 		}
 
-		ms.AsProducer([]string{name})
 		dms := &dmlMsgStream{
 			ms:     ms,
 			refcnt: 0,
@@ -278,7 +290,7 @@ func (d *dmlChannels) broadcast(chanNames []string, pack *msgstream.MsgPack) err
 
 		dms.mutex.RLock()
 		if dms.refcnt > 0 {
-			if _, err := dms.ms.Broadcast(pack); err != nil {
+			if _, err := dms.Broadcast(pack); err != nil {
 				log.Error("Broadcast failed", zap.Error(err), zap.String("chanName", chanName))
 				dms.mutex.RUnlock()
 				return err
@@ -299,7 +311,7 @@ func (d *dmlChannels) broadcastMark(chanNames []string, pack *msgstream.MsgPack)
 
 		dms.mutex.RLock()
 		if dms.refcnt > 0 {
-			ids, err := dms.ms.Broadcast(pack)
+			ids, err := dms.Broadcast(pack)
 			if err != nil {
 				log.Error("BroadcastMark failed", zap.Error(err), zap.String("chanName", chanName))
 				dms.mutex.RUnlock()

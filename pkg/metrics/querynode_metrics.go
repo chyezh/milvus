@@ -524,6 +524,9 @@ func RegisterQueryNode(registry *prometheus.Registry) {
 	registry.MustRegister(StoppingBalanceNodeNum)
 	registry.MustRegister(StoppingBalanceChannelNum)
 	registry.MustRegister(StoppingBalanceSegmentNum)
+
+	// may use LogServiceClient, so we need to register LogServiceClient metrics here.
+	RegisterLogServiceClient(registry)
 }
 
 func CleanupQueryNodeCollectionMetrics(nodeID int64, collectionID int64) {

@@ -71,6 +71,10 @@ func GetNodeID() UniqueID {
 	return nodeID
 }
 
+func GetNodeIDString() string {
+	return params.baseTable.Get(runtimeNodeIDKey)
+}
+
 func SetRole(role string) {
 	params.baseTable.Save(runtimeRoleKey, role)
 }

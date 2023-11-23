@@ -43,10 +43,10 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/componentutil"
 	"github.com/milvus-io/milvus/internal/util/dependency"
+	kvfactory "github.com/milvus-io/milvus/internal/util/dependency/kv"
 	_ "github.com/milvus-io/milvus/internal/util/grpcclient"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/tracer"
-	"github.com/milvus-io/milvus/pkg/util/etcd"
 	"github.com/milvus-io/milvus/pkg/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/util/interceptor"
 	"github.com/milvus-io/milvus/pkg/util/logutil"
@@ -88,6 +88,7 @@ func NewServer(ctx context.Context, factory dependency.Factory) (*Server, error)
 		newDataCoordClient: func() (types.DataCoordClient, error) {
 			return dcc.NewClient(ctx1)
 		},
+		etcdCli: kvfactory.GetEtcd(),
 	}
 
 	s.datanode = dn.NewDataNode(s.ctx, s.factory)
@@ -219,7 +220,6 @@ func (s *Server) Stop() error {
 
 // init initializes Datanode's grpc service.
 func (s *Server) init() error {
-	etcdConfig := &paramtable.Get().EtcdCfg
 	Params := &paramtable.Get().DataNodeGrpcServerCfg
 	ctx := context.Background()
 	if !funcutil.CheckPortAvailable(Params.Port.GetAsInt()) {
@@ -227,24 +227,11 @@ func (s *Server) init() error {
 		log.Warn("DataNode found available port during init", zap.Int("port", Params.Port.GetAsInt()))
 	}
 
-	etcdCli, err := etcd.GetEtcdClient(
-		etcdConfig.UseEmbedEtcd.GetAsBool(),
-		etcdConfig.EtcdUseSSL.GetAsBool(),
-		etcdConfig.Endpoints.GetAsStrings(),
-		etcdConfig.EtcdTLSCert.GetValue(),
-		etcdConfig.EtcdTLSKey.GetValue(),
-		etcdConfig.EtcdTLSCACert.GetValue(),
-		etcdConfig.EtcdTLSMinVersion.GetValue())
-	if err != nil {
-		log.Error("failed to connect to etcd", zap.Error(err))
-		return err
-	}
-	s.etcdCli = etcdCli
 	s.SetEtcdClient(s.etcdCli)
 	s.datanode.SetAddress(Params.GetAddress())
 	log.Info("DataNode address", zap.String("address", Params.IP+":"+strconv.Itoa(Params.Port.GetAsInt())))
 
-	err = s.startGrpc()
+	err := s.startGrpc()
 	if err != nil {
 		return err
 	}

@@ -46,6 +46,10 @@ const (
 	DataNodeRole = "datanode"
 	// IndexNodeRole is a constant represent IndexNode
 	IndexNodeRole = "indexnode"
+	// LogCoord is a constant represent LogCoord
+	LogCoordRole = "logcoord"
+	// LogNode is a constant represent LogNode
+	LogNodeRole = "lognode"
 )
 
 var (
@@ -58,6 +62,7 @@ var (
 		IndexNodeRole,
 		DataCoordRole,
 		DataNodeRole,
+		LogNodeRole,
 	)
 	serverTypeList = serverTypeSet.Collect()
 )

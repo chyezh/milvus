@@ -64,11 +64,11 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/componentutil"
 	"github.com/milvus-io/milvus/internal/util/dependency"
+	kvfactory "github.com/milvus-io/milvus/internal/util/dependency/kv"
 	_ "github.com/milvus-io/milvus/internal/util/grpcclient"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/tracer"
 	"github.com/milvus-io/milvus/pkg/util"
-	"github.com/milvus-io/milvus/pkg/util/etcd"
 	"github.com/milvus-io/milvus/pkg/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/util/interceptor"
 	"github.com/milvus-io/milvus/pkg/util/logutil"
@@ -114,7 +114,8 @@ type Server struct {
 func NewServer(ctx context.Context, factory dependency.Factory) (*Server, error) {
 	var err error
 	server := &Server{
-		ctx: ctx,
+		ctx:     ctx,
+		etcdCli: kvfactory.GetEtcd(),
 	}
 
 	server.proxy, err = proxy.NewProxy(server.ctx, factory)
@@ -427,7 +428,6 @@ func (s *Server) Run() error {
 }
 
 func (s *Server) init() error {
-	etcdConfig := &paramtable.Get().EtcdCfg
 	Params := &paramtable.Get().ProxyGrpcServerCfg
 	log.Debug("Proxy init service's parameter table done")
 	HTTPParams := &paramtable.Get().HTTPCfg
@@ -443,19 +443,6 @@ func (s *Server) init() error {
 	serviceName := fmt.Sprintf("Proxy ip: %s, port: %d", Params.IP, Params.Port.GetAsInt())
 	log.Debug("init Proxy's tracer done", zap.String("service name", serviceName))
 
-	etcdCli, err := etcd.GetEtcdClient(
-		etcdConfig.UseEmbedEtcd.GetAsBool(),
-		etcdConfig.EtcdUseSSL.GetAsBool(),
-		etcdConfig.Endpoints.GetAsStrings(),
-		etcdConfig.EtcdTLSCert.GetValue(),
-		etcdConfig.EtcdTLSKey.GetValue(),
-		etcdConfig.EtcdTLSCACert.GetValue(),
-		etcdConfig.EtcdTLSMinVersion.GetValue())
-	if err != nil {
-		log.Debug("Proxy connect to etcd failed", zap.Error(err))
-		return err
-	}
-	s.etcdCli = etcdCli
 	s.proxy.SetEtcdClient(s.etcdCli)
 	s.proxy.SetAddress(Params.GetInternalAddress())
 
@@ -470,11 +457,10 @@ func (s *Server) init() error {
 	{
 		log.Info("Proxy server listen on tcp", zap.Int("port", Params.Port.GetAsInt()))
 		var lis net.Listener
-		var listenErr error
 
 		log.Info("Proxy server already listen on tcp", zap.Int("port", Params.Port.GetAsInt()))
-		lis, listenErr = net.Listen("tcp", ":"+strconv.Itoa(Params.Port.GetAsInt()))
-		if listenErr != nil {
+		lis, err := net.Listen("tcp", ":"+strconv.Itoa(Params.Port.GetAsInt()))
+		if err != nil {
 			log.Error("Proxy server(grpc/http) failed to listen on", zap.Error(err), zap.Int("port", Params.Port.GetAsInt()))
 			return err
 		}
@@ -489,9 +475,10 @@ func (s *Server) init() error {
 		}
 
 		if HTTPParams.Enabled.GetAsBool() && HTTPParams.Port.GetValue() != "" && HTTPParams.Port.GetAsInt() != Params.Port.GetAsInt() {
+			var err error
 			if Params.TLSMode.GetAsInt() == 0 {
-				s.httpListener, listenErr = net.Listen("tcp", ":"+strconv.Itoa(HTTPParams.Port.GetAsInt()))
-				if listenErr != nil {
+				s.httpListener, err = net.Listen("tcp", ":"+strconv.Itoa(HTTPParams.Port.GetAsInt()))
+				if err != nil {
 					log.Error("Proxy server(grpc/http) failed to listen on", zap.Error(err), zap.Int("port", Params.Port.GetAsInt()))
 					return err
 				}
@@ -501,12 +488,12 @@ func (s *Server) init() error {
 					log.Error("proxy can't create creds", zap.Error(err))
 					return err
 				}
-				s.httpListener, listenErr = tls.Listen("tcp", ":"+strconv.Itoa(HTTPParams.Port.GetAsInt()), &tls.Config{
+				s.httpListener, err = tls.Listen("tcp", ":"+strconv.Itoa(HTTPParams.Port.GetAsInt()), &tls.Config{
 					Certificates: []tls.Certificate{creds},
 				})
-				if listenErr != nil {
+				if err != nil {
 					log.Error("Proxy server(grpc/http) failed to listen on", zap.Error(err), zap.Int("port", Params.Port.GetAsInt()))
-					return listenErr
+					return err
 				}
 			} else if Params.TLSMode.GetAsInt() == 2 {
 				cert, err := tls.LoadX509KeyPair(Params.ServerPemPath.GetValue(), Params.ServerKeyPath.GetValue())
@@ -532,10 +519,10 @@ func (s *Server) init() error {
 					ClientCAs:    certPool,
 					MinVersion:   tls.VersionTLS13,
 				}
-				s.httpListener, listenErr = tls.Listen("tcp", ":"+strconv.Itoa(HTTPParams.Port.GetAsInt()), tlsConf)
-				if listenErr != nil {
+				s.httpListener, err = tls.Listen("tcp", ":"+strconv.Itoa(HTTPParams.Port.GetAsInt()), tlsConf)
+				if err != nil {
 					log.Error("Proxy server(grpc/http) failed to listen on", zap.Error(err), zap.Int("port", Params.Port.GetAsInt()))
-					return listenErr
+					return err
 				}
 			}
 		}

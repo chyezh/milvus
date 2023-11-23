@@ -43,11 +43,11 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/componentutil"
 	"github.com/milvus-io/milvus/internal/util/dependency"
+	kvfactory "github.com/milvus-io/milvus/internal/util/dependency/kv"
 	_ "github.com/milvus-io/milvus/internal/util/grpcclient"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/tracer"
 	"github.com/milvus-io/milvus/pkg/util"
-	"github.com/milvus-io/milvus/pkg/util/etcd"
 	"github.com/milvus-io/milvus/pkg/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/util/interceptor"
 	"github.com/milvus-io/milvus/pkg/util/logutil"
@@ -91,6 +91,7 @@ func NewServer(ctx context.Context, factory dependency.Factory) (*Server, error)
 		loopCtx:     ctx1,
 		loopCancel:  cancel,
 		factory:     factory,
+		etcdCli:     kvfactory.GetEtcd(),
 		grpcErrChan: make(chan error),
 	}, nil
 }
@@ -114,25 +115,12 @@ var getTiKVClient = tikv.GetTiKVClient
 // init initializes QueryCoord's grpc service.
 func (s *Server) init() error {
 	params := paramtable.Get()
-	etcdConfig := &params.EtcdCfg
 	rpcParams := &params.QueryCoordGrpcServerCfg
 
-	etcdCli, err := etcd.GetEtcdClient(
-		etcdConfig.UseEmbedEtcd.GetAsBool(),
-		etcdConfig.EtcdUseSSL.GetAsBool(),
-		etcdConfig.Endpoints.GetAsStrings(),
-		etcdConfig.EtcdTLSCert.GetValue(),
-		etcdConfig.EtcdTLSKey.GetValue(),
-		etcdConfig.EtcdTLSCACert.GetValue(),
-		etcdConfig.EtcdTLSMinVersion.GetValue())
-	if err != nil {
-		log.Debug("QueryCoord connect to etcd failed", zap.Error(err))
-		return err
-	}
-	s.etcdCli = etcdCli
-	s.SetEtcdClient(etcdCli)
+	s.SetEtcdClient(s.etcdCli)
 	s.queryCoord.SetAddress(rpcParams.GetAddress())
 
+	var err error
 	if params.MetaStoreCfg.MetaStoreType.GetValue() == util.MetaStoreTypeTiKV {
 		log.Info("Connecting to tikv metadata storage.")
 		s.tikvCli, err = getTiKVClient(&paramtable.Get().TiKVCfg)

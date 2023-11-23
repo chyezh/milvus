@@ -351,6 +351,9 @@ func RegisterProxy(registry *prometheus.Registry) {
 	registry.MustRegister(ProxyWorkLoadScore)
 	registry.MustRegister(ProxyExecutingTotalNq)
 	registry.MustRegister(ProxyRateLimitReqCount)
+
+	// may use LogServiceClient, so we need to register LogServiceClient metrics here.
+	RegisterLogServiceClient(registry)
 }
 
 func CleanupCollectionMetrics(nodeID int64, collection string) {

@@ -42,11 +42,12 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/dependency"
+	kvfactory "github.com/milvus-io/milvus/internal/util/dependency/kv"
 	_ "github.com/milvus-io/milvus/internal/util/grpcclient"
+	logserviceinterceptor "github.com/milvus-io/milvus/internal/util/logserviceutil/service/interceptor"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/tracer"
 	"github.com/milvus-io/milvus/pkg/util"
-	"github.com/milvus-io/milvus/pkg/util/etcd"
 	"github.com/milvus-io/milvus/pkg/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/util/interceptor"
 	"github.com/milvus-io/milvus/pkg/util/logutil"
@@ -81,6 +82,7 @@ func NewServer(ctx context.Context, factory dependency.Factory, opts ...datacoor
 		grpcErrChan: make(chan error),
 	}
 	s.dataCoord = datacoord.CreateServer(s.ctx, factory, opts...)
+	s.etcdCli = kvfactory.GetEtcd()
 	return s
 }
 
@@ -88,22 +90,7 @@ var getTiKVClient = tikv.GetTiKVClient
 
 func (s *Server) init() error {
 	params := paramtable.Get()
-	etcdConfig := &params.EtcdCfg
-
-	etcdCli, err := etcd.GetEtcdClient(
-		etcdConfig.UseEmbedEtcd.GetAsBool(),
-		etcdConfig.EtcdUseSSL.GetAsBool(),
-		etcdConfig.Endpoints.GetAsStrings(),
-		etcdConfig.EtcdTLSCert.GetValue(),
-		etcdConfig.EtcdTLSKey.GetValue(),
-		etcdConfig.EtcdTLSCACert.GetValue(),
-		etcdConfig.EtcdTLSMinVersion.GetValue())
-	if err != nil {
-		log.Debug("DataCoord connect to etcd failed", zap.Error(err))
-		return err
-	}
-	s.etcdCli = etcdCli
-	s.dataCoord.SetEtcdClient(etcdCli)
+	s.dataCoord.SetEtcdClient(s.etcdCli)
 	s.dataCoord.SetAddress(params.DataCoordGrpcServerCfg.GetAddress())
 
 	if params.MetaStoreCfg.MetaStoreType.GetValue() == util.MetaStoreTypeTiKV {
@@ -117,14 +104,14 @@ func (s *Server) init() error {
 		log.Info("Connected to tikv. Using tikv as metadata storage.")
 	}
 
-	err = s.startGrpc()
-	if err != nil {
-		log.Debug("DataCoord startGrpc failed", zap.Error(err))
+	if err := s.dataCoord.Init(); err != nil {
+		log.Error("dataCoord init error", zap.Error(err))
 		return err
 	}
 
-	if err := s.dataCoord.Init(); err != nil {
-		log.Error("dataCoord init error", zap.Error(err))
+	err := s.startGrpc()
+	if err != nil {
+		log.Debug("DataCoord startGrpc failed", zap.Error(err))
 		return err
 	}
 	return nil
@@ -181,6 +168,7 @@ func (s *Server) startGrpcLoop(grpcPort int) {
 				}
 				return s.serverID.Load()
 			}),
+			logserviceinterceptor.NewLogServiceUnaryServerInterceptor(),
 		)),
 		grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(
 			otelgrpc.StreamServerInterceptor(opts...),
@@ -192,9 +180,11 @@ func (s *Server) startGrpcLoop(grpcPort int) {
 				}
 				return s.serverID.Load()
 			}),
+			logserviceinterceptor.NewLogServiceStreamServerInterceptor(),
 		)))
 	indexpb.RegisterIndexCoordServer(s.grpcServer, s)
 	datapb.RegisterDataCoordServer(s.grpcServer, s)
+	s.dataCoord.RegisterLogCoordGRPCService(s.grpcServer)
 	go funcutil.CheckGrpcReady(ctx, s.grpcErrChan)
 	if err := s.grpcServer.Serve(lis); err != nil {
 		s.grpcErrChan <- err
