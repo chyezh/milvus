@@ -34,8 +34,6 @@ type localAllocator struct {
 
 // AllocateOne allocates a timestamp.
 func (a *localAllocator) allocateOne() (uint64, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	if a.nextStartID < a.endStartID {
 		id := a.nextStartID
 		a.nextStartID++
@@ -46,9 +44,6 @@ func (a *localAllocator) allocateOne() (uint64, error) {
 
 // update updates the local allocator.
 func (a *localAllocator) update(start uint64, count int) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	// local allocator can be only increasing.
 	if start >= a.endStartID {
 		a.nextStartID = start
@@ -57,9 +52,7 @@ func (a *localAllocator) update(start uint64, count int) {
 }
 
 // expire expires all id in the local allocator.
-func (a *localAllocator) expire() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+func (a *localAllocator) exhausted() {
 	a.endStartID = a.nextStartID
 }
 

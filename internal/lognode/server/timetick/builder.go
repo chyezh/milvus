@@ -13,23 +13,28 @@ import (
 
 var _ interceptor.Builder = (*interceptorBuilder)(nil)
 
+// NewInterceptorBuilder creates a new interceptor builder.
+// 1. Add timetick to all message before append to wal.
+// 2. Collect timetick info, and generate sync-timetick message to wal.
 func NewInterceptorBuilder(rc types.RootCoordClient) interceptor.Builder {
 	return &interceptorBuilder{
 		allocator: timestamp.NewAllocator(rc),
 	}
 }
 
+// interceptorBuilder is a builder to build timeTickAppendInterceptor.
 type interceptorBuilder struct {
 	allocator timestamp.Allocator
 }
 
+// Build implements Builder.
 func (b *interceptorBuilder) Build(wal wal.WAL) interceptor.AppendInterceptor {
 	ctx, cancel := context.WithCancel(context.Background())
-	interceptor := &timestampAssignAppendInterceptor{
+	interceptor := &timeTickAppendInterceptor{
 		ctx:       ctx,
 		cancel:    cancel,
 		ready:     make(chan struct{}),
-		allocator: newAllocatorWithRecorder(b.allocator),
+		allocator: timestamp.NewTimestampAckManager(b.allocator),
 		sourceID:  paramtable.GetNodeID(),
 		wal:       wal,
 	}

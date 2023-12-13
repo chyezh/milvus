@@ -36,8 +36,8 @@ func NewAllocator(rc types.RootCoordClient) Allocator {
 }
 
 type Allocator interface {
-	// AllocateOne allocates a timestamp.
-	AllocateOne(ctx context.Context) (uint64, error)
+	// Allocate allocates a timestamp.
+	Allocate(ctx context.Context) (uint64, error)
 
 	// Sync syncs the local allocator and remote allocator.
 	Sync()
@@ -50,7 +50,10 @@ type allocatorImpl struct {
 }
 
 // AllocateOne allocates a timestamp.
-func (ta *allocatorImpl) AllocateOne(ctx context.Context) (uint64, error) {
+func (ta *allocatorImpl) Allocate(ctx context.Context) (uint64, error) {
+	ta.mu.Lock()
+	defer ta.mu.Unlock()
+
 	// allocate one from local allocator first.
 	if id, err := ta.localAllocator.allocateOne(); err == nil {
 		return id, nil
@@ -64,19 +67,11 @@ func (ta *allocatorImpl) Sync() {
 	ta.mu.Lock()
 	defer ta.mu.Unlock()
 
-	ta.localAllocator.expire()
+	ta.localAllocator.exhausted()
 }
 
 // allocateRemote allocates timestamp from remote root coordinator.
 func (ta *allocatorImpl) allocateRemote(ctx context.Context) (uint64, error) {
-	ta.mu.Lock()
-	defer ta.mu.Unlock()
-
-	// Do allocate at local again, it may already updated by other goroutine.
-	if id, err := ta.localAllocator.allocateOne(); err == nil {
-		return id, nil
-	}
-
 	// Update local allocator from remote.
 	start, count, err := ta.remoteAllocator.allocate(ctx, batchAllocateSize)
 	if err != nil {
