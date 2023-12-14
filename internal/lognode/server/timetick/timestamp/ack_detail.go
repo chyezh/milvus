@@ -17,41 +17,18 @@ type AckDetail struct {
 	Err       error
 }
 
-// AckDetails records the information of AckDetail.
-// Used to analyze the ack details.
-// TODO: add more analysis methods. e.g. such as counter function with filter.
-type AckDetails struct {
-	detail []*AckDetail
-}
+type AckOption func(*AckDetail)
 
-// AddDetails adds details to AckDetails.
-func (ad *AckDetails) AddDetails(details []*AckDetail) {
-	if len(details) == 0 {
-		return
+// OptSync marks the timestampAck is sync message.
+func OptSync() AckOption {
+	return func(detail *AckDetail) {
+		detail.IsSync = true
 	}
-	if len(ad.detail) == 0 {
-		ad.detail = details
+}
+
+// OptError marks the timestamp ack with error info.
+func OptError(err error) AckOption {
+	return func(detail *AckDetail) {
+		detail.Err = err
 	}
-	ad.detail = append(ad.detail, details...)
-}
-
-// Empty returns true if the AckDetails is empty.
-func (ad *AckDetails) Empty() bool {
-	return len(ad.detail) == 0
-}
-
-// Len returns the count of AckDetail.
-func (ad *AckDetails) Len() int {
-	return len(ad.detail)
-}
-
-// LastAllAcknowledgedTimestamp returns the last timestamp which all timestamps before it have been acknowledged.
-// panic if no timestamp has been acknowledged.
-func (ad *AckDetails) LastAllAcknowledgedTimestamp() uint64 {
-	return ad.detail[len(ad.detail)-1].Timestamp
-}
-
-// Clear clears the AckDetails.
-func (ad *AckDetails) Clear() {
-	ad.detail = nil
 }

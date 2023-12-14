@@ -23,7 +23,7 @@ type timeTickAppendInterceptor struct {
 	ready  chan struct{}
 
 	allocator  *timestamp.AckManager
-	ackDetails *timestamp.AckDetails
+	ackDetails *ackDetails
 	sourceID   int64
 	wal        wal.WAL
 }

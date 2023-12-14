@@ -13,6 +13,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/status"
 	"github.com/milvus-io/milvus/pkg/log"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 )
 
 // CreateConsumer creates a new consumer client.
@@ -30,7 +31,8 @@ func CreateConsumer(
 		Term:          assignment.Term,
 		DeliverPolicy: opts.DeliverPolicy,
 	})
-	streamClient, err := handlerClient.Consume(ctx)
+	// TODO: configurable or auto adjust grpc.MaxCallRecvMsgSize
+	streamClient, err := handlerClient.Consume(ctx, grpc.MaxCallRecvMsgSize(8388608))
 	if err != nil {
 		return nil, err
 	}

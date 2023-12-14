@@ -61,6 +61,7 @@ func (node *DataNode) StartWatchChannels(ctx context.Context) {
 		case event, ok := <-evtChan:
 			if !ok {
 				log.Warn("datanode failed to watch channel, return")
+				node.stopWaiter.Add(1)
 				go node.StartWatchChannels(ctx)
 				return
 			}
@@ -69,6 +70,7 @@ func (node *DataNode) StartWatchChannels(ctx context.Context) {
 				log.Warn("datanode watch channel canceled", zap.Error(event.Err()))
 				// https://github.com/etcd-io/etcd/issues/8980
 				if event.Err() == v3rpc.ErrCompacted {
+					node.stopWaiter.Add(1)
 					go node.StartWatchChannels(ctx)
 					return
 				}

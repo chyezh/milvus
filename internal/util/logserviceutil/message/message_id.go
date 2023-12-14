@@ -47,11 +47,11 @@ func NewPBMessageIDFromMessageID(msgID MessageID) *logpb.MessageID {
 				},
 			},
 		}
-	case interface{ RMQID() int64 }:
+	case *server.RmqID:
 		return &logpb.MessageID{
 			Id: &logpb.MessageID_Rmq{
 				Rmq: &logpb.MessageIDRmq{
-					Offset: id.RMQID(),
+					Offset: id.MessageID,
 				},
 			},
 		}

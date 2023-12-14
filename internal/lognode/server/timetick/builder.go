@@ -31,12 +31,13 @@ type interceptorBuilder struct {
 func (b *interceptorBuilder) Build(wal wal.WAL) interceptor.AppendInterceptor {
 	ctx, cancel := context.WithCancel(context.Background())
 	interceptor := &timeTickAppendInterceptor{
-		ctx:       ctx,
-		cancel:    cancel,
-		ready:     make(chan struct{}),
-		allocator: timestamp.NewTimestampAckManager(b.allocator),
-		sourceID:  paramtable.GetNodeID(),
-		wal:       wal,
+		ctx:        ctx,
+		cancel:     cancel,
+		ready:      make(chan struct{}),
+		allocator:  timestamp.NewTimestampAckManager(b.allocator),
+		ackDetails: &ackDetails{},
+		sourceID:   paramtable.GetNodeID(),
+		wal:        wal,
 	}
 	go interceptor.executeSyncTimeTick(
 		// TODO: move the configuration to lognode.
