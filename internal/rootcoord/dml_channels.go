@@ -212,11 +212,12 @@ func newDmlChannels(ctx context.Context, factory msgstream.Factory, chanNamePref
 		}
 
 		dms := &dmlMsgStream{
-			ms:     ms,
-			refcnt: 0,
-			used:   0,
-			idx:    int64(i),
-			pos:    i,
+			ms:           ms,
+			pChannelName: name,
+			refcnt:       0,
+			used:         0,
+			idx:          int64(i),
+			pos:          i,
 		}
 		d.pool.Insert(name, dms)
 		d.channelsHeap = append(d.channelsHeap, dms)
