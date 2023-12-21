@@ -1,0 +1,10 @@
+quiet: False
+with-expecter: True
+filename: "mock_{{.InterfaceName}}.go"
+dir: "{{.InterfaceDir}}"
+mockname: "Mock{{.InterfaceName}}"
+outpkg: "{{.PackageName}}"
+packages:
+  github.com/milvus-io/milvus/internal/lognode/server/wal/interceptor:
+    interfaces:
+      AppendInterceptorWithReady:

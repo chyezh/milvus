@@ -1,6 +1,7 @@
-package scanner
+package mqbased
 
 import (
+	"github.com/milvus-io/milvus/internal/lognode/server/wal"
 	"github.com/milvus-io/milvus/internal/proto/logpb"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/status"
@@ -10,8 +11,10 @@ import (
 	"go.uber.org/zap"
 )
 
+var _ wal.Scanner = (*mqBasedScanner)(nil)
+
 // newMQBasedScanner creates a new scanner based on message queue.
-func newMQBasedScanner(channel logpb.PChannelInfo, c mqwrapper.Consumer) Scanner {
+func newMQBasedScanner(channel *logpb.PChannelInfo, c mqwrapper.Consumer) *mqBasedScanner {
 	s := &mqBasedScanner{
 		channel:  channel,
 		c:        c,
@@ -28,7 +31,7 @@ func newMQBasedScanner(channel logpb.PChannelInfo, c mqwrapper.Consumer) Scanner
 
 // mqBasedScanner is a scanner based on message queue.
 type mqBasedScanner struct {
-	channel logpb.PChannelInfo
+	channel *logpb.PChannelInfo
 	c       mqwrapper.Consumer
 
 	err      error
@@ -75,7 +78,7 @@ func (s *mqBasedScanner) execute() {
 	}
 }
 
-func (s *mqBasedScanner) Channel() logpb.PChannelInfo {
+func (s *mqBasedScanner) Channel() *logpb.PChannelInfo {
 	return s.channel
 }
 

@@ -1,0 +1,32 @@
+package wal
+
+import (
+	"github.com/milvus-io/milvus/internal/proto/logpb"
+	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
+	"github.com/milvus-io/milvus/internal/util/logserviceutil/options"
+)
+
+// ReadOption is the option for reading records from the wal.
+type ReadOption struct {
+	DeliverPolicy options.DeliverPolicy
+}
+
+// Scanner is the interface for reading records from the wal.
+type Scanner interface {
+	// Channel returns the channel assignment info of the wal.
+	Channel() *logpb.PChannelInfo
+
+	// Chan returns the channel of message.
+	Chan() <-chan message.ImmutableMessage
+
+	// Error returns the error of scanner failed.
+	// Will block until scanner is closed or Chan is dry out.
+	Error() error
+
+	// Done returns a channel which will be closed when scanner is finished or closed.
+	Done() <-chan struct{}
+
+	// Close the scanner, release the underlying resources.
+	// Return the error same with `Error`
+	Close() error
+}

@@ -56,7 +56,7 @@ func CreateProduceServer(walManager walmanager.Manager, streamServer logpb.LogNo
 
 // ProduceServer is a ProduceServer of log messages.
 type ProduceServer struct {
-	wal              wal.WALExtend
+	wal              wal.WAL
 	grpcStreamServer *produceGrpcServer
 	logger           *log.MLogger
 	produceMessageCh chan *logpb.ProduceMessageResponse // All processing messages result should sent from theses channel.

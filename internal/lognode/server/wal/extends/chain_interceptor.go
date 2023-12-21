@@ -1,17 +1,23 @@
-package interceptor
+package extends
 
 import (
 	"context"
 
+	"github.com/milvus-io/milvus/internal/lognode/server/wal"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 )
 
-// NewChainedInterceptor creates a new chained interceptor.
-func NewChainedInterceptor(interceptors ...AppendInterceptor) AppendInterceptorWithReady {
+var _ wal.AppendInterceptorWithReady = (*chainedInterceptor)(nil)
+
+// appendInterceptorCall is the common function to execute the interceptor.
+type appendInterceptorCall func(ctx context.Context, msg message.MutableMessage, append wal.Append) (message.MessageID, error)
+
+// newChainedInterceptor creates a new chained interceptor.
+func newChainedInterceptor(interceptors ...wal.AppendInterceptor) wal.AppendInterceptorWithReady {
 	if len(interceptors) == 0 {
 		return nil
 	}
-	calls := make([]AppendInterceptorCall, 0, len(interceptors))
+	calls := make([]appendInterceptorCall, 0, len(interceptors))
 	for _, i := range interceptors {
 		calls = append(calls, i.Do)
 	}
@@ -25,8 +31,8 @@ func NewChainedInterceptor(interceptors ...AppendInterceptor) AppendInterceptorW
 // chainedInterceptor chains all interceptors into one.
 type chainedInterceptor struct {
 	closed       chan struct{}
-	interceptors []AppendInterceptor
-	do           func(ctx context.Context, msg message.MutableMessage, append Append) (message.MessageID, error)
+	interceptors []wal.AppendInterceptor
+	do           func(ctx context.Context, msg message.MutableMessage, append wal.Append) (message.MessageID, error)
 }
 
 // Ready wait all interceptors to be ready.
@@ -35,7 +41,7 @@ func (c *chainedInterceptor) Ready() <-chan struct{} {
 	go func() {
 		for _, i := range c.interceptors {
 			// check if ready is implemented
-			if r, ok := i.(AppendInterceptorWithReady); ok {
+			if r, ok := i.(wal.AppendInterceptorWithReady); ok {
 				select {
 				case <-r.Ready():
 				case <-c.closed:
@@ -49,7 +55,7 @@ func (c *chainedInterceptor) Ready() <-chan struct{} {
 }
 
 // Do execute the chained interceptors.
-func (c *chainedInterceptor) Do(ctx context.Context, msg message.MutableMessage, append Append) (message.MessageID, error) {
+func (c *chainedInterceptor) Do(ctx context.Context, msg message.MutableMessage, append wal.Append) (message.MessageID, error) {
 	return c.do(ctx, msg, append)
 }
 
@@ -62,20 +68,20 @@ func (c *chainedInterceptor) Close() {
 }
 
 // chainUnaryClientInterceptors chains all unary client interceptors into one.
-func chainUnaryClientInterceptors(interceptorCalls []AppendInterceptorCall) AppendInterceptorCall {
+func chainUnaryClientInterceptors(interceptorCalls []appendInterceptorCall) appendInterceptorCall {
 	if len(interceptorCalls) == 0 {
 		return nil
 	} else if len(interceptorCalls) == 1 {
 		return interceptorCalls[0]
 	} else {
-		return func(ctx context.Context, msg message.MutableMessage, invoker Append) (message.MessageID, error) {
+		return func(ctx context.Context, msg message.MutableMessage, invoker wal.Append) (message.MessageID, error) {
 			return interceptorCalls[0](ctx, msg, getChainUnaryInvoker(interceptorCalls, 0, invoker))
 		}
 	}
 }
 
 // getChainUnaryInvoker recursively generate the chained unary invoker.
-func getChainUnaryInvoker(interceptors []AppendInterceptorCall, idx int, finalInvoker Append) Append {
+func getChainUnaryInvoker(interceptors []appendInterceptorCall, idx int, finalInvoker wal.Append) wal.Append {
 	// all interceptor is called, so return the final invoker.
 	if idx == len(interceptors)-1 {
 		return finalInvoker

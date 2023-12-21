@@ -2,41 +2,65 @@ package wal
 
 import (
 	"context"
+	"strings"
 
-	"github.com/milvus-io/milvus/internal/lognode/server/wal/interceptor"
-	"github.com/milvus-io/milvus/internal/lognode/server/wal/scanner"
-	"github.com/milvus-io/milvus/internal/lognode/server/wal/wal"
 	"github.com/milvus-io/milvus/internal/proto/logpb"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
+	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
 
-var _ Allocator = (*allocatorImpl)(nil)
+// builders is a map of registered wal builders.
+var builders typeutil.ConcurrentMap[string, OpenerBuilder]
 
-// Scanner is the interface for reading records from the wal.
-type (
-	Scanner    = scanner.Scanner
-	ReadOption = wal.ReadOption
-)
-
-// AllocateOption is the option for allocating wal instance.
-type AllocateOption struct {
-	Channel  *logpb.PChannelInfo
-	Builders []interceptor.Builder
+// Register registers the wal builder.
+//
+// NOTE: this function must only be called during initialization time (i.e. in
+// an init() function), name of builder is lowercase. If multiple Builder are
+// registered with the same name, panic will occur.
+func RegisterBuilder(b OpenerBuilder) {
+	_, loaded := builders.GetOrInsert(strings.ToLower(b.Name()), b)
+	if loaded {
+		panic("wal builder already registered: " + b.Name())
+	}
 }
 
-// Allocator is the interface for allocating wal instances.
-type Allocator interface {
-	// Allocate opens a wal instance for the channel.
-	Allocate(opt *AllocateOption) (WALExtend, error)
+// MustGetBuilder returns the wal builder by name.
+func MustGetBuilder(name string) OpenerBuilder {
+	b, ok := builders.Get(name)
+	if !ok {
+		panic("wal builder not found: " + name)
+	}
+	return b
+}
 
-	// Close the wal allocator, release all related wal resources.
+// Append is the common function to append a msg to the wal.
+type Append func(ctx context.Context, msg message.MutableMessage) (message.MessageID, error)
+
+// BasicWAL is basic wal interface.
+type BasicWAL interface {
+	// Channel returns the channel assignment info of the wal.
+	// Should be read-only.
+	Channel() *logpb.PChannelInfo
+
+	// Append writes a record to the log.
+	Append(ctx context.Context, msg message.MutableMessage) (message.MessageID, error)
+
+	// Read returns a scanner for reading records from the wal.
+	Read(ctx context.Context, deliverPolicy ReadOption) (Scanner, error)
+
+	// GetLatestMessageID returns the latest message id of the channel.
+	GetLatestMessageID(ctx context.Context) (message.MessageID, error)
+
+	// Close closes the wal instance.
 	Close()
 }
 
-// WALExtend is the interface for extending wal.
-type WALExtend interface {
-	wal.WAL
+// WAL is the extend version interface of wal.
+// Use extends.NewWALExtend to convert a BasicWAL into WAL.
+// !!! Don't implement it directly.
+type WAL interface {
+	BasicWAL
 
-	// AppendAsync writes a record to the log asynchronously.
+	// Append a record to the log asynchronously.
 	AppendAsync(ctx context.Context, msg message.MutableMessage, cb func(message.MessageID, error))
 }

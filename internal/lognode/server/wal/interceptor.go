@@ -1,4 +1,4 @@
-package interceptor
+package wal
 
 import (
 	"context"
@@ -6,11 +6,13 @@ import (
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 )
 
-// Append is the common function to append a msg to the wal.
-type Append func(ctx context.Context, msg message.MutableMessage) (message.MessageID, error)
-
-// AppendInterceptorCall is the common function to execute the interceptor.
-type AppendInterceptorCall func(ctx context.Context, msg message.MutableMessage, append Append) (message.MessageID, error)
+// InterceptorBuilder is the interface to build a interceptor.
+// 1. InterceptorBuilder is concurrent safe.
+// 2. InterceptorBuilder can used to build a interceptor with cross-wal shared resources.
+type InterceptorBuilder interface {
+	// Build build a interceptor with wal that interceptor will work on.
+	Build(wal BasicWAL) AppendInterceptor
+}
 
 // AppendInterceptor is the interceptor for Append functions.
 // All wal extra operations should be done by these function, such as

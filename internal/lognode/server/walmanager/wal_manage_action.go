@@ -14,7 +14,7 @@ const (
 type walManageAction struct {
 	ctx         context.Context
 	action      int
-	allocateOpt *wal.AllocateOption
+	allocateOpt *wal.OpenOption
 	term        int64
 	result      chan error
 }

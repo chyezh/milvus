@@ -1,32 +1,32 @@
-package wal
+package extends
 
 import (
 	"context"
 
-	"github.com/milvus-io/milvus/internal/lognode/server/wal/interceptor"
-	"github.com/milvus-io/milvus/internal/lognode/server/wal/wal"
+	"github.com/milvus-io/milvus/internal/lognode/server/wal"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 )
 
-func newWALWithInterceptors(wal wal.WAL, builders ...interceptor.Builder) wal.WAL {
+// newWALWithInterceptors creates a new wal with interceptors.
+func newWALWithInterceptors(l wal.BasicWAL, builders ...wal.InterceptorBuilder) wal.BasicWAL {
 	if len(builders) == 0 {
-		return wal
+		return l
 	}
 	// Build all interceptors.
-	interceptors := make([]interceptor.AppendInterceptor, 0, len(builders))
+	interceptors := make([]wal.AppendInterceptor, 0, len(builders))
 	for _, b := range builders {
-		interceptors = append(interceptors, b.Build(wal))
+		interceptors = append(interceptors, b.Build(l))
 	}
 	return &walWithInterceptor{
-		WAL:         wal,
-		interceptor: interceptor.NewChainedInterceptor(interceptors...),
+		BasicWAL:    l,
+		interceptor: newChainedInterceptor(interceptors...),
 	}
 }
 
 // walWithInterceptor is a wrapper of wal with interceptors.
 type walWithInterceptor struct {
-	interceptor interceptor.AppendInterceptorWithReady
-	wal.WAL
+	interceptor wal.AppendInterceptorWithReady
+	wal.BasicWAL
 }
 
 // Append with interceptors.
@@ -39,11 +39,11 @@ func (w *walWithInterceptor) Append(ctx context.Context, msg message.MutableMess
 	}
 
 	// Execute the interceptor and wal append.
-	return w.interceptor.Do(ctx, msg, w.WAL.Append)
+	return w.interceptor.Do(ctx, msg, w.BasicWAL.Append)
 }
 
 // close all interceptor and underlying wal.
 func (w *walWithInterceptor) Close() {
+	w.BasicWAL.Close()
 	w.interceptor.Close()
-	w.WAL.Close()
 }

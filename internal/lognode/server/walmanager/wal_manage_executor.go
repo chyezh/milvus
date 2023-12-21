@@ -14,9 +14,9 @@ import (
 )
 
 // newWALManagerExecutor creates a new walManageExecutor for a single channel.
-func newWALManagerExecutor(allocator wal.Allocator, channel string) *walManageExecutor {
+func newWALManagerExecutor(opener wal.Opener, channel string) *walManageExecutor {
 	return &walManageExecutor{
-		allocator: allocator,
+		opener:    opener,
 		channel:   channel,
 		lifetime:  lifetime.NewLifetime(lifetime.Working),
 		logger:    log.With(zap.String("channel", channel)),
@@ -31,19 +31,19 @@ func newWALManagerExecutor(allocator wal.Allocator, channel string) *walManageEx
 // All Write(Management) Operation for a wal should be serialized with order of term.
 // And Remove operation should be executed after Open or compact like nothing happened.
 type walManageExecutor struct {
-	allocator wal.Allocator
-	channel   string
+	opener  wal.Opener
+	channel string
 
 	lifetime  lifetime.Lifetime[lifetime.State]
 	logger    *log.MLogger
 	actionsCh chan *walManageAction
 	finishCh  chan struct{}
 	mu        sync.Mutex
-	wal       wal.WALExtend
+	wal       wal.WAL
 }
 
 // GetWAL returns a available wal instance for the channel.
-func (wma *walManageExecutor) GetWAL() (wal.WALExtend, error) {
+func (wma *walManageExecutor) GetWAL() (wal.WAL, error) {
 	if wma.lifetime.Add(lifetime.IsWorking) != nil {
 		return nil, status.NewOnShutdownError("wal manager executor is closed")
 	}
@@ -53,7 +53,7 @@ func (wma *walManageExecutor) GetWAL() (wal.WALExtend, error) {
 }
 
 // Open opens a wal instance for the channel on this Manager.
-func (wma *walManageExecutor) Open(ctx context.Context, opt *wal.AllocateOption) error {
+func (wma *walManageExecutor) Open(ctx context.Context, opt *wal.OpenOption) error {
 	if wma.lifetime.Add(lifetime.IsWorking) != nil {
 		return status.NewOnShutdownError("wal manager executor is closed")
 	}
@@ -164,7 +164,7 @@ L:
 }
 
 // getWAL returns the wal instance.
-func (wma *walManageExecutor) getWAL() wal.WALExtend {
+func (wma *walManageExecutor) getWAL() wal.WAL {
 	wma.mu.Lock()
 	l := wma.wal
 	wma.mu.Unlock()
@@ -172,7 +172,7 @@ func (wma *walManageExecutor) getWAL() wal.WALExtend {
 }
 
 // swap swaps the wal instance.
-func (wma *walManageExecutor) swap(wal wal.WALExtend) wal.WALExtend {
+func (wma *walManageExecutor) swap(wal wal.WAL) wal.WAL {
 	wma.mu.Lock()
 	oldWAL := wma.wal
 	wma.wal = wal
@@ -208,7 +208,7 @@ func (wma *walManageExecutor) applyAction(action *walManageAction) error {
 		}
 
 		// open new wal at new term
-		l, err := wma.allocator.Allocate(action.allocateOpt)
+		l, err := wma.opener.Open(context.TODO(), action.allocateOpt)
 		if err != nil {
 			return err
 		}

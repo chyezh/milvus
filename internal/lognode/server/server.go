@@ -7,7 +7,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/lognode/server/service"
 	"github.com/milvus-io/milvus/internal/lognode/server/timetick"
-	"github.com/milvus-io/milvus/internal/lognode/server/wal/interceptor"
+	"github.com/milvus-io/milvus/internal/lognode/server/wal"
 	"github.com/milvus-io/milvus/internal/lognode/server/walmanager"
 	"github.com/milvus-io/milvus/internal/proto/logpb"
 	"github.com/milvus-io/milvus/internal/types"
@@ -75,13 +75,17 @@ func (s *Server) Health(ctx context.Context) commonpb.StateCode {
 
 // initBasicComponent initialize all underlying dependency for lognode.
 func (s *Server) initBasicComponent(ctx context.Context) {
-	s.walManager = walmanager.OpenManager(
+	var err error
+	s.walManager, err = walmanager.OpenManager(
 		&walmanager.OpenOption{
-			InterceptorBuilders: []interceptor.Builder{
+			InterceptorBuilders: []wal.InterceptorBuilder{
 				timetick.NewInterceptorBuilder(s.rc),
 			},
 		},
 	)
+	if err != nil {
+		panic("open wal manager failed")
+	}
 }
 
 // initService initializes the grpc service.

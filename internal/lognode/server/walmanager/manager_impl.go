@@ -4,9 +4,9 @@ import (
 	"context"
 
 	"github.com/milvus-io/milvus/internal/lognode/server/wal"
-	"github.com/milvus-io/milvus/internal/lognode/server/wal/interceptor"
 	"github.com/milvus-io/milvus/internal/proto/logpb"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/status"
+	"github.com/milvus-io/milvus/internal/util/logserviceutil/util"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/util/lifetime"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
@@ -15,26 +15,32 @@ import (
 
 // OpenOption is used to open a wal manager.
 type OpenOption struct {
-	InterceptorBuilders []interceptor.Builder // used to open new wal instance.
+	InterceptorBuilders []wal.InterceptorBuilder // used to open new wal instance.
 }
 
 // OpenManager create a wal manager.
-func OpenManager(opt *OpenOption) Manager {
-	return &managerImpl{
-		lifetime:  lifetime.NewLifetime(lifetime.Working),
-		walMap:    typeutil.NewConcurrentMap[string, *walManageExecutor](),
-		allocator: wal.NewAllocator(),
-		openOpt:   opt,
+func OpenManager(opt *OpenOption) (Manager, error) {
+	mqType := util.MustSelectMQType()
+	log.Info("open wal manager", zap.String("mqType", mqType))
+	opener, err := wal.MustGetBuilder(mqType).Build()
+	if err != nil {
+		return nil, err
 	}
+	return &managerImpl{
+		lifetime: lifetime.NewLifetime(lifetime.Working),
+		walMap:   typeutil.NewConcurrentMap[string, *walManageExecutor](),
+		opener:   opener,
+		openOpt:  opt,
+	}, nil
 }
 
 // All management operation for a wal will be serialized with order of term.
 type managerImpl struct {
 	lifetime lifetime.Lifetime[lifetime.State]
 
-	walMap    *typeutil.ConcurrentMap[string, *walManageExecutor]
-	allocator wal.Allocator // wal allocator
-	openOpt   *OpenOption   // used to allocate timestamp for wal and broadcast the wal timetick message.
+	walMap  *typeutil.ConcurrentMap[string, *walManageExecutor]
+	opener  wal.Opener  // wal allocator
+	openOpt *OpenOption // used to allocate timestamp for wal and broadcast the wal timetick message.
 }
 
 // Open opens a wal instance for the channel on this Manager.
@@ -53,9 +59,9 @@ func (m *managerImpl) Open(ctx context.Context, channel *logpb.PChannelInfo) (er
 	}()
 
 	executor := m.getExecutor(channel.Name)
-	return executor.Open(ctx, &wal.AllocateOption{
-		Channel:  channel,
-		Builders: m.openOpt.InterceptorBuilders,
+	return executor.Open(ctx, &wal.OpenOption{
+		Channel:             channel,
+		InterceptorBuilders: m.openOpt.InterceptorBuilders,
 	})
 }
 
@@ -79,7 +85,7 @@ func (m *managerImpl) Remove(ctx context.Context, channel logpb.PChannelInfo) (e
 
 // GetAvailableWAL returns a available wal instance for the channel.
 // Return nil if the wal instance is not found.
-func (m *managerImpl) GetAvailableWAL(channelName string, term int64) (wal.WALExtend, error) {
+func (m *managerImpl) GetAvailableWAL(channelName string, term int64) (wal.WAL, error) {
 	// reject operation if manager is closing.
 	if m.lifetime.Add(lifetime.IsWorking) != nil {
 		return nil, status.NewOnShutdownError("wal manager is closed")
@@ -114,14 +120,14 @@ func (m *managerImpl) GetAllAvailableChannels() ([]*logpb.PChannelInfo, error) {
 	infos := make([]*logpb.PChannelInfo, 0)
 	var err error
 	m.walMap.Range(func(channel string, executer *walManageExecutor) bool {
-		var l wal.WALExtend
+		var l wal.WAL
 		l, err = executer.GetWAL()
 		if err != nil {
 			return false
 		}
 		if l != nil {
 			info := l.Channel()
-			infos = append(infos, &info)
+			infos = append(infos, info)
 		}
 		return true
 	})
@@ -142,12 +148,12 @@ func (m *managerImpl) Close() {
 	})
 
 	// close all underlying wal instance by allocator if there's resource leak.
-	m.allocator.Close()
+	m.opener.Close()
 }
 
 // getExecutor returns the walManageExecutor for the channel.
 func (m *managerImpl) getExecutor(channel string) *walManageExecutor {
-	newExecutor := newWALManagerExecutor(m.allocator, channel)
+	newExecutor := newWALManagerExecutor(m.opener, channel)
 	executor, loaded := m.walMap.GetOrInsert(channel, newExecutor)
 	// if the walManageExecutor is not loaded, start it.
 	if !loaded {
