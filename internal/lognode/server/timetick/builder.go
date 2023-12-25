@@ -5,18 +5,17 @@ import (
 	"time"
 
 	"github.com/milvus-io/milvus/internal/lognode/server/timetick/timestamp"
-	"github.com/milvus-io/milvus/internal/lognode/server/wal/interceptor"
-	"github.com/milvus-io/milvus/internal/lognode/server/wal/wal"
+	"github.com/milvus-io/milvus/internal/lognode/server/wal"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 )
 
-var _ interceptor.Builder = (*interceptorBuilder)(nil)
+var _ wal.InterceptorBuilder = (*interceptorBuilder)(nil)
 
 // NewInterceptorBuilder creates a new interceptor builder.
 // 1. Add timetick to all message before append to wal.
 // 2. Collect timetick info, and generate sync-timetick message to wal.
-func NewInterceptorBuilder(rc types.RootCoordClient) interceptor.Builder {
+func NewInterceptorBuilder(rc types.RootCoordClient) wal.InterceptorBuilder {
 	return &interceptorBuilder{
 		allocator: timestamp.NewAllocator(rc),
 	}
@@ -28,7 +27,7 @@ type interceptorBuilder struct {
 }
 
 // Build implements Builder.
-func (b *interceptorBuilder) Build(wal wal.WAL) interceptor.AppendInterceptor {
+func (b *interceptorBuilder) Build(wal wal.BasicWAL) wal.AppendInterceptor {
 	ctx, cancel := context.WithCancel(context.Background())
 	interceptor := &timeTickAppendInterceptor{
 		ctx:        ctx,

@@ -28,7 +28,7 @@ func OpenManager(opt *OpenOption) (Manager, error) {
 	}
 	return &managerImpl{
 		lifetime: lifetime.NewLifetime(lifetime.Working),
-		walMap:   typeutil.NewConcurrentMap[string, *walManageExecutor](),
+		wltMap:   typeutil.NewConcurrentMap[string, *walLifetime](),
 		opener:   opener,
 		openOpt:  opt,
 	}, nil
@@ -38,7 +38,7 @@ func OpenManager(opt *OpenOption) (Manager, error) {
 type managerImpl struct {
 	lifetime lifetime.Lifetime[lifetime.State]
 
-	walMap  *typeutil.ConcurrentMap[string, *walManageExecutor]
+	wltMap  *typeutil.ConcurrentMap[string, *walLifetime]
 	opener  wal.Opener  // wal allocator
 	openOpt *OpenOption // used to allocate timestamp for wal and broadcast the wal timetick message.
 }
@@ -58,8 +58,7 @@ func (m *managerImpl) Open(ctx context.Context, channel *logpb.PChannelInfo) (er
 		log.Info("open wal success", zap.String("channel", channel.Name), zap.Int64("term", channel.Term))
 	}()
 
-	executor := m.getExecutor(channel.Name)
-	return executor.Open(ctx, &wal.OpenOption{
+	return m.getWALLifetime(channel.Name).Open(ctx, &wal.OpenOption{
 		Channel:             channel,
 		InterceptorBuilders: m.openOpt.InterceptorBuilders,
 	})
@@ -79,8 +78,7 @@ func (m *managerImpl) Remove(ctx context.Context, channel logpb.PChannelInfo) (e
 		log.Info("remove wal success", zap.String("channel", channel.Name), zap.Int64("term", channel.Term))
 	}()
 
-	executor := m.getExecutor(channel.Name)
-	return executor.Remove(ctx, channel.Term)
+	return m.getWALLifetime(channel.Name).Remove(ctx, channel.Term)
 }
 
 // GetAvailableWAL returns a available wal instance for the channel.
@@ -92,11 +90,7 @@ func (m *managerImpl) GetAvailableWAL(channelName string, term int64) (wal.WAL, 
 	}
 	defer m.lifetime.Done()
 
-	executor := m.getExecutor(channelName)
-	l, err := executor.GetWAL()
-	if err != nil {
-		return nil, err
-	}
+	l := m.getWALLifetime(channelName).GetWAL()
 	if l == nil {
 		return nil, status.NewChannelNotExist(channelName)
 	}
@@ -119,13 +113,8 @@ func (m *managerImpl) GetAllAvailableChannels() ([]*logpb.PChannelInfo, error) {
 	// collect all available wal info.
 	infos := make([]*logpb.PChannelInfo, 0)
 	var err error
-	m.walMap.Range(func(channel string, executer *walManageExecutor) bool {
-		var l wal.WAL
-		l, err = executer.GetWAL()
-		if err != nil {
-			return false
-		}
-		if l != nil {
+	m.wltMap.Range(func(channel string, lt *walLifetime) bool {
+		if l := lt.GetWAL(); l != nil {
 			info := l.Channel()
 			infos = append(infos, info)
 		}
@@ -141,9 +130,11 @@ func (m *managerImpl) GetAllAvailableChannels() ([]*logpb.PChannelInfo, error) {
 func (m *managerImpl) Close() {
 	m.lifetime.SetState(lifetime.Stopped)
 	m.lifetime.Wait()
-	// close all underlying walManageExecutor.
-	m.walMap.Range(func(channel string, executer *walManageExecutor) bool {
-		executer.Close()
+	m.lifetime.Close()
+
+	// close all underlying walLifetime.
+	m.wltMap.Range(func(channel string, wlt *walLifetime) bool {
+		wlt.Close()
 		return true
 	})
 
@@ -151,13 +142,17 @@ func (m *managerImpl) Close() {
 	m.opener.Close()
 }
 
-// getExecutor returns the walManageExecutor for the channel.
-func (m *managerImpl) getExecutor(channel string) *walManageExecutor {
-	newExecutor := newWALManagerExecutor(m.opener, channel)
-	executor, loaded := m.walMap.GetOrInsert(channel, newExecutor)
-	// if the walManageExecutor is not loaded, start it.
-	if !loaded {
-		executor.start()
+// getWALLifetime returns the wal lifetime for the channel.
+func (m *managerImpl) getWALLifetime(channel string) *walLifetime {
+	if wlt, loaded := m.wltMap.Get(channel); loaded {
+		return wlt
 	}
-	return executor
+
+	newWLT := newWALLifetime(m.opener, channel)
+	wlt, loaded := m.wltMap.GetOrInsert(channel, newWLT)
+	// if loaded, lifetime is exist, close the redundant lifetime.
+	if loaded {
+		newWLT.Close()
+	}
+	return wlt
 }

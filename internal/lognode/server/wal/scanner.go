@@ -1,7 +1,6 @@
 package wal
 
 import (
-	"github.com/milvus-io/milvus/internal/proto/logpb"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/options"
 )
@@ -13,9 +12,6 @@ type ReadOption struct {
 
 // Scanner is the interface for reading records from the wal.
 type Scanner interface {
-	// Channel returns the channel assignment info of the wal.
-	Channel() *logpb.PChannelInfo
-
 	// Chan returns the channel of message.
 	Chan() <-chan message.ImmutableMessage
 

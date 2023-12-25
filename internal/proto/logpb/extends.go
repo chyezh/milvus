@@ -4,7 +4,10 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-const ServiceMethodPrefix = "/milvus.proto.log"
+const (
+	ServiceMethodPrefix = "/milvus.proto.log"
+	InitialTerm         = -1
+)
 
 func NewDeliverAll() *DeliverPolicy {
 	return &DeliverPolicy{

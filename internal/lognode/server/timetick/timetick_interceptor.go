@@ -6,15 +6,14 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/milvus-io/milvus/internal/lognode/server/timetick/timestamp"
-	"github.com/milvus-io/milvus/internal/lognode/server/wal/interceptor"
-	"github.com/milvus-io/milvus/internal/lognode/server/wal/wal"
+	"github.com/milvus-io/milvus/internal/lognode/server/wal"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/status"
 	"github.com/milvus-io/milvus/pkg/log"
 	"go.uber.org/zap"
 )
 
-var _ interceptor.AppendInterceptor = (*timeTickAppendInterceptor)(nil)
+var _ wal.AppendInterceptor = (*timeTickAppendInterceptor)(nil)
 
 // timeTickAppendInterceptor is a append interceptor.
 type timeTickAppendInterceptor struct {
@@ -25,7 +24,7 @@ type timeTickAppendInterceptor struct {
 	allocator  *timestamp.AckManager
 	ackDetails *ackDetails
 	sourceID   int64
-	wal        wal.WAL
+	wal        wal.BasicWAL
 }
 
 // Ready implements AppendInterceptor.
@@ -34,7 +33,7 @@ func (impl *timeTickAppendInterceptor) Ready() <-chan struct{} {
 }
 
 // Do implements AppendInterceptor.
-func (impl *timeTickAppendInterceptor) Do(ctx context.Context, msg message.MutableMessage, append interceptor.Append) (message.MessageID, error) {
+func (impl *timeTickAppendInterceptor) Do(ctx context.Context, msg message.MutableMessage, append wal.Append) (message.MessageID, error) {
 	// Allocate new ts for message.
 	ts, err := impl.allocator.Allocate(ctx)
 	if err != nil {
