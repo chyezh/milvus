@@ -10,13 +10,10 @@ import (
 var _ wal.AppendInterceptorWithReady = (*chainedInterceptor)(nil)
 
 // appendInterceptorCall is the common function to execute the interceptor.
-type appendInterceptorCall func(ctx context.Context, msg message.MutableMessage, append wal.Append) (message.MessageID, error)
+type appendInterceptorCall = func(ctx context.Context, msg message.MutableMessage, append wal.Append) (message.MessageID, error)
 
 // newChainedInterceptor creates a new chained interceptor.
 func newChainedInterceptor(interceptors ...wal.AppendInterceptor) wal.AppendInterceptorWithReady {
-	if len(interceptors) == 0 {
-		return nil
-	}
 	calls := make([]appendInterceptorCall, 0, len(interceptors))
 	for _, i := range interceptors {
 		calls = append(calls, i.Do)
@@ -61,16 +58,19 @@ func (c *chainedInterceptor) Do(ctx context.Context, msg message.MutableMessage,
 
 // Close close all interceptors.
 func (c *chainedInterceptor) Close() {
+	close(c.closed)
 	for _, i := range c.interceptors {
 		i.Close()
 	}
-	close(c.closed)
 }
 
 // chainUnaryClientInterceptors chains all unary client interceptors into one.
 func chainUnaryClientInterceptors(interceptorCalls []appendInterceptorCall) appendInterceptorCall {
 	if len(interceptorCalls) == 0 {
-		return nil
+		// Do nothing if no interceptors.
+		return func(ctx context.Context, msg message.MutableMessage, append wal.Append) (message.MessageID, error) {
+			return append(ctx, msg)
+		}
 	} else if len(interceptorCalls) == 1 {
 		return interceptorCalls[0]
 	} else {

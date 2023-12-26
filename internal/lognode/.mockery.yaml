@@ -1,10 +1,17 @@
 quiet: False
 with-expecter: True
 filename: "mock_{{.InterfaceName}}.go"
-dir: "{{.InterfaceDir}}"
+dir: "internal/mocks/{{trimPrefix .PackagePath \"github.com/milvus-io/milvus/internal\"}}"
 mockname: "Mock{{.InterfaceName}}"
-outpkg: "{{.PackageName}}"
+outpkg: "mock_{{.PackageName}}"
 packages:
-  github.com/milvus-io/milvus/internal/lognode/server/wal/interceptor:
+  github.com/milvus-io/milvus/internal/lognode/server/wal:
     interfaces:
+      OpenerBuilder:
+      Opener:
+      InterceptorBuilder:
+      AppendInterceptor:
       AppendInterceptorWithReady:
+      Scanner:
+      BasicWAL:
+      WAL:

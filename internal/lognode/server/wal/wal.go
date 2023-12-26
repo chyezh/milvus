@@ -33,9 +33,6 @@ func MustGetBuilder(name string) OpenerBuilder {
 	return b
 }
 
-// Append is the common function to append a msg to the wal.
-type Append func(ctx context.Context, msg message.MutableMessage) (message.MessageID, error)
-
 // BasicWAL is basic wal interface.
 type BasicWAL interface {
 	// Channel returns the channel assignment info of the wal.
