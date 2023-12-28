@@ -8,12 +8,30 @@ import (
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/status"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/util"
+	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/util/conc"
 	"github.com/milvus-io/milvus/pkg/util/lifetime"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
+	"go.uber.org/zap"
 )
 
 var _ wal.WAL = (*walExtendImpl)(nil)
+
+// newWALExtend creates a new wal with extend functions.
+// Extend functions:
+// AppendAsync.
+// Extend facilities:
+// lifetime management.
+func newWALExtend(basicWAL wal.BasicWAL) wal.WAL {
+	return &walExtendImpl{
+		lifetime:    lifetime.NewLifetime(lifetime.Working),
+		idAllocator: util.NewIDAllocator(),
+		inner:       basicWAL,
+		// TODO: make the pool size configurable.
+		appendExecutionPool: conc.NewPool[struct{}](10),
+		scanners:            typeutil.NewConcurrentMap[int64, wal.Scanner](),
+	}
+}
 
 // walExtendImpl is a wrapper of BasicWAL to extend it into a WAL interface.
 type walExtendImpl struct {
@@ -73,10 +91,13 @@ func (w *walExtendImpl) GetLatestMessageID(ctx context.Context) (message.Message
 func (w *walExtendImpl) AppendAsync(ctx context.Context, msg message.MutableMessage, cb func(message.MessageID, error)) {
 	if w.lifetime.Add(lifetime.IsWorking) != nil {
 		cb(nil, status.NewOnShutdownError("wal is on shutdown"))
+		return
 	}
-	defer w.lifetime.Done()
 
+	// Submit async append to a background execution pool.
 	_ = w.appendExecutionPool.Submit(func() (struct{}, error) {
+		defer w.lifetime.Done()
+
 		msgID, err := w.inner.Append(ctx, msg)
 		cb(msgID, err)
 		return struct{}{}, nil
@@ -89,6 +110,12 @@ func (w *walExtendImpl) Close() {
 	w.lifetime.Wait()
 	w.lifetime.Close()
 
+	// close all wal instances.
+	w.scanners.Range(func(id int64, s wal.Scanner) bool {
+		s.Close()
+		log.Info("close scanner by wal extend", zap.Int64("id", id), zap.Any("channel", w.Channel()))
+		return true
+	})
 	w.inner.Close()
 	w.appendExecutionPool.Free()
 }

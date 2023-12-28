@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/milvus-io/milvus/internal/lognode/server/wal"
-	"github.com/milvus-io/milvus/internal/lognode/server/wal/extends"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/status"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/mq/msgstream/mqwrapper"
@@ -12,7 +11,7 @@ import (
 	"go.uber.org/zap"
 )
 
-var _ extends.BasicOpener = (*mqBasedOpener)(nil)
+var _ wal.BasicOpener = (*mqBasedOpener)(nil)
 
 // mqBasedOpener is the opener implementation based on message queue.
 type mqBasedOpener struct {
@@ -20,7 +19,7 @@ type mqBasedOpener struct {
 }
 
 // Open creates a new wal instance based on message queue.
-func (o *mqBasedOpener) Open(ctx context.Context, opt *extends.OpenOpt) (wal.BasicWAL, error) {
+func (o *mqBasedOpener) Open(ctx context.Context, opt *wal.BasicOpenOption) (wal.BasicWAL, error) {
 	p, err := o.c.CreateProducer(mqwrapper.ProducerOptions{
 		Topic: opt.Channel.Name,
 	})

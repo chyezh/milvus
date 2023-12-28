@@ -14,9 +14,25 @@ type OpenerBuilder interface {
 	Build() (Opener, error)
 }
 
+// BasicOpenOption is the basic option for allocating wal instance.
+// It is used to build BasicWAL instance with BasicOpener.
+type BasicOpenOption struct {
+	Channel *logpb.PChannelInfo // Channel to open.
+}
+
+// BasicOpener is the interface for build BasicWAL instance.
+// BasicOpener can be extended to Opener by using `extends.NewOpenerWithBasicOpener`.
+type BasicOpener interface {
+	// Open open a basicWAL instance.
+	Open(ctx context.Context, opt *BasicOpenOption) (BasicWAL, error)
+
+	// Close release the resources.
+	Close()
+}
+
 // OpenOption is the option for allocating wal instance.
 type OpenOption struct {
-	Channel             *logpb.PChannelInfo  // Channel to open.
+	BasicOpenOption
 	InterceptorBuilders []InterceptorBuilder // Interceptor builders to build when open.
 }
 

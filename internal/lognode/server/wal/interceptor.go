@@ -36,6 +36,8 @@ type AppendInterceptorWithReady interface {
 	AppendInterceptor
 
 	// Ready check if interceptor is ready.
+	// Close of Interceptor would not notify the ready (closed interceptor is not ready).
+	// So always apply timeout when waiting for ready.
 	// Some append interceptor may be stateful, such as index builder and unique primary key filter,
 	// so it need to implement the recovery logic from crash by itself before notifying ready.
 	// Append operation will block until ready or canceled.

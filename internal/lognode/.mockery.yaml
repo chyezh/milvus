@@ -7,6 +7,7 @@ outpkg: "mock_{{.PackageName}}"
 packages:
   github.com/milvus-io/milvus/internal/lognode/server/wal:
     interfaces:
+      BasicOpener:
       OpenerBuilder:
       Opener:
       InterceptorBuilder:

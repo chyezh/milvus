@@ -21,7 +21,7 @@ type walImpl struct {
 	logger   *log.MLogger
 	channel  *logpb.PChannelInfo
 	registry *scannerRegistry
-	scanners *typeutil.ConcurrentMap[string, *mqBasedScanner]
+	scanners *typeutil.ConcurrentMap[string, *mqBasedScanner] // only for GetLatestMessageID api. lifetime management is managed by `extends.walExtendImpl`
 	c        mqwrapper.Client
 	p        mqwrapper.Producer
 }
@@ -84,7 +84,8 @@ func (a *walImpl) GetLatestMessageID(ctx context.Context) (message.MessageID, er
 // Close closes the writer.
 func (w *walImpl) Close() {
 	w.p.Close()
-	w.logger.Info("writer closed")
+	// scanners is managed by `extends.walExtendImpl`, so don't close it here.
+	w.logger.Info("wal writer closed")
 }
 
 // createNewScanner creates a new scanner.

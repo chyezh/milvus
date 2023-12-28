@@ -3,6 +3,7 @@ package extends
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/milvus-io/milvus/internal/lognode/server/wal"
 	mock_wal "github.com/milvus-io/milvus/internal/mocks/lognode/server/wal"
@@ -15,6 +16,58 @@ import (
 func TestChainInterceptor(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		testChainInterceptor(t, i)
+	}
+}
+
+func TestChainReady(t *testing.T) {
+	count := 5
+	channels := make([]chan struct{}, 0, count)
+	interceptors := make([]wal.AppendInterceptor, 0, count)
+	for i := 0; i < count; i++ {
+		ch := make(chan struct{})
+		channels = append(channels, ch)
+		interceptor := mock_wal.NewMockAppendInterceptorWithReady(t)
+		interceptor.EXPECT().Ready().Return(ch)
+		interceptor.EXPECT().Close().Return()
+		interceptors = append(interceptors, interceptor)
+	}
+	chainInterceptor := newChainedInterceptor(interceptors...)
+
+	for i := 0; i < count; i++ {
+		// part of interceptors is not ready
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		select {
+		case <-chainInterceptor.Ready():
+			t.Fatal("should not ready")
+		case <-ctx.Done():
+		}
+		close(channels[i])
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	select {
+	case <-chainInterceptor.Ready():
+	case <-ctx.Done():
+		t.Fatal("interceptor should be ready now")
+	}
+	chainInterceptor.Close()
+
+	interceptor := mock_wal.NewMockAppendInterceptorWithReady(t)
+	ch := make(chan struct{})
+	interceptor.EXPECT().Ready().Return(ch)
+	interceptor.EXPECT().Close().Return()
+	chainInterceptor = newChainedInterceptor(interceptor)
+	chainInterceptor.Close()
+
+	// closed chain interceptor should block the ready (internal interceptor is not ready)
+	ctx, cancel = context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	select {
+	case <-chainInterceptor.Ready():
+		t.Fatal("chan interceptor that closed but internal interceptor is not ready should block the ready")
+	case <-ctx.Done():
 	}
 }
 
@@ -49,7 +102,7 @@ func testChainInterceptor(t *testing.T, count int) {
 	// fast return
 	<-interceptor.Ready()
 
-	msg, err := interceptor.Do(context.TODO(), nil, func(context.Context, message.MutableMessage) (mqwrapper.MessageID, error) {
+	msg, err := interceptor.Do(context.Background(), nil, func(context.Context, message.MutableMessage) (mqwrapper.MessageID, error) {
 		return nil, nil
 	})
 	assert.NoError(t, err)

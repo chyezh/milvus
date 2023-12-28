@@ -59,7 +59,9 @@ func (m *managerImpl) Open(ctx context.Context, channel *logpb.PChannelInfo) (er
 	}()
 
 	return m.getWALLifetime(channel.Name).Open(ctx, &wal.OpenOption{
-		Channel:             channel,
+		BasicOpenOption: wal.BasicOpenOption{
+			Channel: channel,
+		},
 		InterceptorBuilders: m.openOpt.InterceptorBuilders,
 	})
 }
