@@ -26,12 +26,17 @@ func OpenManager(opt *OpenOption) (Manager, error) {
 	if err != nil {
 		return nil, err
 	}
+	return newManager(opener, opt), nil
+}
+
+// newManager create a wal manager.
+func newManager(opener wal.Opener, opt *OpenOption) Manager {
 	return &managerImpl{
 		lifetime: lifetime.NewLifetime(lifetime.Working),
 		wltMap:   typeutil.NewConcurrentMap[string, *walLifetime](),
 		opener:   opener,
 		openOpt:  opt,
-	}, nil
+	}
 }
 
 // All management operation for a wal will be serialized with order of term.
@@ -64,7 +69,7 @@ func (m *managerImpl) Open(ctx context.Context, channel *logpb.PChannelInfo) (er
 }
 
 // Remove removes the wal instance for the channel.
-func (m *managerImpl) Remove(ctx context.Context, channel logpb.PChannelInfo) (err error) {
+func (m *managerImpl) Remove(ctx context.Context, channel string, term int64) (err error) {
 	// reject operation if manager is closing.
 	if m.lifetime.Add(lifetime.IsWorking) != nil {
 		return status.NewOnShutdownError("wal manager is closed")
@@ -72,12 +77,12 @@ func (m *managerImpl) Remove(ctx context.Context, channel logpb.PChannelInfo) (e
 	defer func() {
 		m.lifetime.Done()
 		if err != nil {
-			log.Warn("remove wal failed", zap.Error(err), zap.String("channel", channel.Name), zap.Int64("term", channel.Term))
+			log.Warn("remove wal failed", zap.Error(err), zap.String("channel", channel), zap.Int64("term", term))
 		}
-		log.Info("remove wal success", zap.String("channel", channel.Name), zap.Int64("term", channel.Term))
+		log.Info("remove wal success", zap.String("channel", channel), zap.Int64("term", term))
 	}()
 
-	return m.getWALLifetime(channel.Name).Remove(ctx, channel.Term)
+	return m.getWALLifetime(channel).Remove(ctx, term)
 }
 
 // GetAvailableWAL returns a available wal instance for the channel.
@@ -95,7 +100,7 @@ func (m *managerImpl) GetAvailableWAL(channelName string, term int64) (wal.WAL, 
 	}
 
 	channelTerm := l.Channel().Term
-	if channelTerm < term {
+	if channelTerm != term {
 		return nil, status.NewUnmatchedChannelTerm(channelName, term, channelTerm)
 	}
 	return l, nil
@@ -111,7 +116,6 @@ func (m *managerImpl) GetAllAvailableChannels() ([]*logpb.PChannelInfo, error) {
 
 	// collect all available wal info.
 	infos := make([]*logpb.PChannelInfo, 0)
-	var err error
 	m.wltMap.Range(func(channel string, lt *walLifetime) bool {
 		if l := lt.GetWAL(); l != nil {
 			info := l.Channel()
@@ -119,9 +123,6 @@ func (m *managerImpl) GetAllAvailableChannels() ([]*logpb.PChannelInfo, error) {
 		}
 		return true
 	})
-	if err != nil {
-		return nil, err
-	}
 	return infos, nil
 }
 

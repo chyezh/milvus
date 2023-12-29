@@ -69,6 +69,13 @@ func TestStatePair(t *testing.T) {
 }
 
 func assertErrorTermExpired(t *testing.T, err error) {
+	assert.Error(t, err)
 	logErr := status.AsLogError(err)
 	assert.Equal(t, logpb.LogCode_LOG_CODE_UNMATCHED_CHANNEL_TERM, logErr.Code)
+}
+
+func assertErrorChannelNotExist(t *testing.T, err error) {
+	assert.Error(t, err)
+	logErr := status.AsLogError(err)
+	assert.Equal(t, logpb.LogCode_LOG_CODE_CHANNEL_NOT_EXIST, logErr.Code)
 }

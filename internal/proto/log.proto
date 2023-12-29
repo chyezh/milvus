@@ -188,8 +188,9 @@ message AssignmentDiscoverResponse {
 
 // ReportLogErrorRequest is the request of ReportLogError
 message ReportLogErrorRequest {
-    PChannelInfo channel = 1;
-    LogError err = 2;
+    string name = 1; // channel name
+    int64 term = 2; // A monotonic increasing term, every time the channel is recovered or moved to another lognode, the term will increase by meta server.
+    LogError err = 3; // error happend on log node
 }
 
 // ReportLogErrorResponse is the response of ReportLogError
@@ -381,7 +382,8 @@ message LogNodeManagerAssignResponse {
 }
 
 message LogNodeManagerRemoveRequest {
-    PChannelInfo channel = 1;
+    string channelName = 1;
+    int64 term = 2;
 }
 
 message LogNodeManagerRemoveResponse {}

@@ -162,7 +162,8 @@ func (c *managerClientImpl) Remove(ctx context.Context, serverID int64, channel 
 	// Select a log node to remove the wal instance.
 	ctx = contextutil.WithPickServerID(ctx, serverID)
 	_, err = manager.Remove(ctx, &logpb.LogNodeManagerRemoveRequest{
-		Channel: &channel,
+		ChannelName: channel.Name,
+		Term:        channel.Term,
 	})
 	return err
 }

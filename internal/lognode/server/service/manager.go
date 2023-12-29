@@ -39,7 +39,7 @@ func (ms *managerServiceImpl) Assign(ctx context.Context, req *logpb.LogNodeMana
 // Remove removes the wal instance for the channel.
 // After remove returns, the wal instance is removed and all underlying read write operation should be rejected.
 func (ms *managerServiceImpl) Remove(ctx context.Context, req *logpb.LogNodeManagerRemoveRequest) (*logpb.LogNodeManagerRemoveResponse, error) {
-	if err := ms.walManager.Remove(ctx, *req.Channel); err != nil {
+	if err := ms.walManager.Remove(ctx, req.ChannelName, req.Term); err != nil {
 		return nil, err
 	}
 	return &logpb.LogNodeManagerRemoveResponse{}, nil

@@ -23,7 +23,7 @@ type Manager interface {
 	GetAllAvailableChannels() ([]*logpb.PChannelInfo, error)
 
 	// Remove removes the wal instance for the channel.
-	Remove(ctx context.Context, channel logpb.PChannelInfo) error
+	Remove(ctx context.Context, channel string, term int64) error
 
 	// Close these manager and release all managed WAL.
 	Close()
