@@ -33,7 +33,7 @@ func (w *walStatePair) WaitCurrentStateReachExpected(ctx context.Context, expect
 	}
 	// Request term is a expired term, return term error.
 	if current.Term() > expected.Term() {
-		status.NewUnmatchedChannelTerm("request term is expired, expected: %d, actual: %d", expected.Term(), current.Term())
+		return status.NewUnmatchedChannelTerm("request term is expired, expected: %d, actual: %d", expected.Term(), current.Term())
 	}
 	// Check if the wal is as expected.
 	return current.GetLastError()
@@ -55,13 +55,13 @@ func (w *walStatePair) WaitExpectedStateChanged(ctx context.Context, oldExpected
 }
 
 // SetExpectedState sets the expected state of the wal.
-func (w *walStatePair) SetExpectedState(s expectedWALState) {
-	w.expectedState.SetStateAndNotify(s)
+func (w *walStatePair) SetExpectedState(s expectedWALState) bool {
+	return w.expectedState.SetStateAndNotify(s)
 }
 
 // SetCurrentState sets the current state of the wal.
-func (w *walStatePair) SetCurrentState(s currentWALState) {
-	w.currentState.SetStateAndNotify(s)
+func (w *walStatePair) SetCurrentState(s currentWALState) bool {
+	return w.currentState.SetStateAndNotify(s)
 }
 
 // GetWAL returns the current wal.

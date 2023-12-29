@@ -6,7 +6,7 @@ import (
 
 const (
 	ServiceMethodPrefix = "/milvus.proto.log"
-	InitialTerm         = -1
+	InitialTerm         = int64(-1)
 )
 
 func NewDeliverAll() *DeliverPolicy {

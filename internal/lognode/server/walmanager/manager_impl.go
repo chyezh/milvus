@@ -58,11 +58,8 @@ func (m *managerImpl) Open(ctx context.Context, channel *logpb.PChannelInfo) (er
 		log.Info("open wal success", zap.String("channel", channel.Name), zap.Int64("term", channel.Term))
 	}()
 
-	return m.getWALLifetime(channel.Name).Open(ctx, &wal.OpenOption{
-		BasicOpenOption: wal.BasicOpenOption{
-			Channel: channel,
-		},
-		InterceptorBuilders: m.openOpt.InterceptorBuilders,
+	return m.getWALLifetime(channel.Name).Open(ctx, &wal.BasicOpenOption{
+		Channel: channel,
 	})
 }
 
@@ -150,7 +147,7 @@ func (m *managerImpl) getWALLifetime(channel string) *walLifetime {
 		return wlt
 	}
 
-	newWLT := newWALLifetime(m.opener, channel)
+	newWLT := newWALLifetime(m.opener, channel, m.openOpt)
 	wlt, loaded := m.wltMap.GetOrInsert(channel, newWLT)
 	// if loaded, lifetime is exist, close the redundant lifetime.
 	if loaded {

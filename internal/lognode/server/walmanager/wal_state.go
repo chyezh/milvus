@@ -21,8 +21,39 @@ var (
 	}
 	initialCurrentWALState currentWALState = &unavailableCurrentWALState{
 		term: logpb.InitialTerm,
+		err:  nil,
 	}
 )
+
+// newAvailableCurrentState creates a new available current state.
+func newAvailableCurrentState(l wal.WAL) currentWALState {
+	return availableCurrentWALState{
+		l: l,
+	}
+}
+
+// newUnavailableCurrentState creates a new unavailable current state.
+func newUnavailableCurrentState(term int64, err error) currentWALState {
+	return unavailableCurrentWALState{
+		term: term,
+		err:  err,
+	}
+}
+
+// newAvailableExpectedState creates a new available expected state.
+func newAvailableExpectedState(ctx context.Context, channel *logpb.PChannelInfo) expectedWALState {
+	return availableExpectedWALState{
+		ctx:     ctx,
+		channel: channel,
+	}
+}
+
+// newUnavailableExpectedState creates a new unavailable expected state.
+func newUnavailableExpectedState(term int64) expectedWALState {
+	return unavailableExpectedWALState{
+		term: term,
+	}
+}
 
 // walState is the state of a wal.
 type walState interface {
@@ -203,5 +234,5 @@ func isStateBefore(s1, s2 walState) bool {
 
 // toStateString returns the string representation of wal state.
 func toStateString(s walState) string {
-	return fmt.Sprintf("%d/%b", s.Term(), s.Available())
+	return fmt.Sprintf("(%d,%t)", s.Term(), s.Available())
 }
