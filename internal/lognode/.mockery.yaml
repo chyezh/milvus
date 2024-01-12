@@ -16,3 +16,9 @@ packages:
       Scanner:
       BasicWAL:
       WAL:
+  github.com/milvus-io/milvus/internal/lognode/server/walmanager:
+    interfaces:
+      Manager:
+  github.com/milvus-io/milvus/internal/proto/logpb:
+    interfaces:
+      LogNodeHandlerService_ConsumeServer:

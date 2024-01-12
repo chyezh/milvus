@@ -69,7 +69,6 @@ func (ta *AckManager) popUntilLastAllAcknowledged() []*AckDetail {
 	details := make([]*AckDetail, 0, 5)
 	for ta.notAckHeap.Len() > 0 && ta.notAckHeap.Peek().acknowledged.Load() {
 		ack := ta.notAckHeap.Pop()
-		// Filter the sync message.
 		details = append(details, ack.ackDetail())
 	}
 	return details

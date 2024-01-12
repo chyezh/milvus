@@ -110,6 +110,11 @@ func (it *AlterIndexMsg) SetID(id UniqueID) {
 	it.Base.MsgID = id
 }
 
+func (it *AlterIndexMsg) SetTs(ts Timestamp) {
+	it.BeginTimestamp = ts
+	it.EndTimestamp = ts
+}
+
 // Type returns the type of this message pack
 func (it *AlterIndexMsg) Type() MsgType {
 	return it.Base.MsgType

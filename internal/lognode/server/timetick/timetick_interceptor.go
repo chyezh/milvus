@@ -61,6 +61,10 @@ func (impl *timeTickAppendInterceptor) executeSyncTimeTick(interval time.Duratio
 	// Send first timetick message to wal before interceptor is ready.
 	for count := 0; ; count++ {
 		// Sent first timetick message to wal before ready.
+		// New TT is always greater than all tt on previous lognode.
+		// A fencing operation of underlying WAL is needed to make exclusive produce of topic.
+		// Otherwise, the TT principle may be violated.
+		// The previous timetick message may be lost on previous lognode, send it on new lognode to recover the consuming as fast as possible.
 		select {
 		case <-impl.ctx.Done():
 			return
@@ -68,6 +72,7 @@ func (impl *timeTickAppendInterceptor) executeSyncTimeTick(interval time.Duratio
 		}
 		if err := impl.sendTsMsg(impl.ctx); err != nil {
 			log.Warn("send first timestamp message failed", zap.Error(err), zap.Int("retryCount", count))
+			// TODO: exponential backoff.
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
@@ -79,7 +84,7 @@ func (impl *timeTickAppendInterceptor) executeSyncTimeTick(interval time.Duratio
 
 	// TODO: sync time tick message to wal periodically.
 	// Add a trigger on `AckManager` to sync time tick message without periodically.
-	// `AckManager` gather detail information, time tick sync can check it and make the message between tt more smaller
+	// `AckManager` gather detail information, time tick sync can check it and make the message between tt more smaller.
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -114,6 +119,7 @@ func (impl *timeTickAppendInterceptor) sendTsMsg(ctx context.Context) error {
 
 	if impl.ackDetails.Empty() {
 		// No acknowledged info can be sent.
+		// Some message sent operation is blocked, new TT cannot be pushed forward.
 		return nil
 	}
 
@@ -127,7 +133,7 @@ func (impl *timeTickAppendInterceptor) sendTsMsg(ctx context.Context) error {
 	_, err = impl.wal.Append(impl.ctx, msg)
 	if err != nil {
 		return errors.Wrapf(err,
-			"append time tick msg to wal failed, timestamp: %d, before message: %d",
+			"append time tick msg to wal failed, timestamp: %d, previous message counter: %d",
 			impl.ackDetails.LastAllAcknowledgedTimestamp(),
 			impl.ackDetails.Len(),
 		)

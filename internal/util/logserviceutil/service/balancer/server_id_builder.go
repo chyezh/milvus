@@ -34,7 +34,8 @@ func (b *serverIDPickerBuilder) Build(info base.PickerBuildInfo) balancer.Picker
 	for sc, scInfo := range info.ReadySCs {
 		serverID := attributes.GetServerID(scInfo.Address.BalancerAttributes)
 		if serverID == nil {
-			log.Info("no server id found in subConn", zap.String("address", scInfo.Address.Addr))
+			log.Warn("no server id found in subConn", zap.String("address", scInfo.Address.Addr))
+			continue
 		}
 
 		info := subConnInfo{
@@ -44,6 +45,11 @@ func (b *serverIDPickerBuilder) Build(info base.PickerBuildInfo) balancer.Picker
 		}
 		m[*serverID] = info
 		list = append(list, info)
+	}
+
+	if len(list) == 0 {
+		log.Warn("no subConn available after serverID filtering")
+		return base.NewErrPicker(balancer.ErrNoSubConnAvailable)
 	}
 	p := &serverIDPicker{
 		next:        atomic.NewInt64(0),

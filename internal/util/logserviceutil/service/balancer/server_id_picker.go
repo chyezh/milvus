@@ -92,7 +92,7 @@ func (p *serverIDPicker) roundRobin(pickInfo balancer.PickInfo) (*subConnInfo, e
 func (p *serverIDPicker) useGivenAddr(pickInfo balancer.PickInfo, serverID int64) (*subConnInfo, error) {
 	sc, ok := p.subConnsMap[serverID]
 	if !ok {
-		// If the given address is not in the subConnsMap, return a unknown error to trigger a recovery service.
+		// If the given address is not in the subConnsMap, return a unknown error to user to avoid block rpc.
 		// FailPrecondition will be converted to Internal by grpc framework in function `IsRestrictedControlPlaneCode`.
 		return nil, status.New(
 			codes.Unknown,
