@@ -3,6 +3,7 @@ package contextutil
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 
 	"github.com/cockroachdb/errors"
 	"github.com/golang/protobuf/proto"
@@ -16,7 +17,10 @@ const (
 
 // WithCreateProducer attaches create producer request to context.
 func WithCreateProducer(ctx context.Context, req *logpb.CreateProducerRequest) context.Context {
-	bytes, _ := proto.Marshal(req)
+	bytes, err := proto.Marshal(req)
+	if err != nil {
+		panic(fmt.Sprintf("unreachable: marshal create producer request failed, %+v", err))
+	}
 	// use base64 encoding to transfer binary to text.
 	msg := base64.StdEncoding.EncodeToString(bytes)
 	return metadata.AppendToOutgoingContext(ctx, createProducerKey, msg)

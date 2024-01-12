@@ -3,6 +3,7 @@ package contextutil
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 
 	"github.com/cockroachdb/errors"
 	"github.com/golang/protobuf/proto"
@@ -16,7 +17,10 @@ const (
 
 // WithCreateConsumer attaches create consumer request to context.
 func WithCreateConsumer(ctx context.Context, req *logpb.CreateConsumerRequest) context.Context {
-	bytes, _ := proto.Marshal(req)
+	bytes, err := proto.Marshal(req)
+	if err != nil {
+		panic(fmt.Sprintf("unreachable: marshal create consumer request should never failed, %+v", req))
+	}
 	// use base64 encoding to transfer binary to text.
 	msg := base64.StdEncoding.EncodeToString(bytes)
 	return metadata.AppendToOutgoingContext(ctx, createConsumerKey, msg)
