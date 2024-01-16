@@ -10,6 +10,16 @@ import (
 
 var _ resolver.Resolver = (*watchBasedGRPCResolver)(nil)
 
+// newWatchBasedGRPCResolver creates a new watch based grpc resolver.
+func newWatchBasedGRPCResolver(cc resolver.ClientConn, logger *log.MLogger) *watchBasedGRPCResolver {
+	return &watchBasedGRPCResolver{
+		lifetime: lifetime.NewLifetime(lifetime.Working),
+		cc:       cc,
+		logger:   logger,
+	}
+}
+
+// watchBasedGRPCResolver is a watch based grpc resolver.
 type watchBasedGRPCResolver struct {
 	lifetime lifetime.Lifetime[lifetime.State]
 
@@ -28,6 +38,7 @@ func (r *watchBasedGRPCResolver) ResolveNow(_ resolver.ResolveNowOptions) {
 // Do nothing.
 func (r *watchBasedGRPCResolver) Close() {
 	r.lifetime.SetState(lifetime.Stopped)
+	r.lifetime.Wait()
 	r.lifetime.Close()
 }
 
@@ -43,4 +54,9 @@ func (r *watchBasedGRPCResolver) Update(state VersionedState) error {
 	}
 	r.logger.Info("update resolver state success", zap.Any("state", state.State))
 	return nil
+}
+
+// State returns the state of the resolver.
+func (r *watchBasedGRPCResolver) State() lifetime.State {
+	return r.lifetime.GetState()
 }

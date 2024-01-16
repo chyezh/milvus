@@ -10,7 +10,6 @@ import (
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/util"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/pkg/log"
-	"github.com/milvus-io/milvus/pkg/util/lifetime"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/resolver"
@@ -18,7 +17,6 @@ import (
 
 // sessionDiscoverer is used to apply a session watch on etcd.
 type sessionDiscoverer struct {
-	lifetime     lifetime.Lifetime[lifetime.State]
 	etcdCli      *clientv3.Client
 	prefix       string
 	logger       *log.MLogger
@@ -37,27 +35,22 @@ func (sw *sessionDiscoverer) NewVersionedState() VersionedState {
 
 // Discover watches the service discovery on these goroutine.
 // It may be broken down if compaction happens on etcd server.
-func (sw *sessionDiscoverer) Discover(ctx context.Context, ch chan<- VersionedState) error {
-	if sw.lifetime.Add(lifetime.IsWorking) != nil {
-		return errors.New("session discoverer is closed")
-	}
-	defer sw.lifetime.Done()
-
+func (sw *sessionDiscoverer) Discover(ctx context.Context, cb func(VersionedState) error) error {
 	// init the discoverer.
 	if err := sw.initDiscover(ctx); err != nil {
 		return err
 	}
 
-	// Send the latest Discover state to the channel first.
-	if err := sw.sendDiscovered(ctx, ch); err != nil {
+	// Always send the current state first.
+	// Outside logic may lost the last state before retry Discover function.
+	if err := cb(sw.parseState()); err != nil {
 		return err
 	}
-
-	return sw.watch(ctx, ch)
+	return sw.watch(ctx, cb)
 }
 
 // watch performs the watch on etcd.
-func (sw *sessionDiscoverer) watch(ctx context.Context, ch chan<- VersionedState) error {
+func (sw *sessionDiscoverer) watch(ctx context.Context, cb func(VersionedState) error) error {
 	// start a watcher at background.
 	eventCh := sw.etcdCli.Watch(
 		ctx,
@@ -80,21 +73,10 @@ func (sw *sessionDiscoverer) watch(ctx context.Context, ch chan<- VersionedState
 				return err
 			}
 		}
-
-		// Send the latest Discover state to the channel first.
-		if err := sw.sendDiscovered(ctx, ch); err != nil {
+		if err := cb(sw.parseState()); err != nil {
 			return err
 		}
 	}
-}
-
-// Close closes the discoverer.
-func (d *sessionDiscoverer) Close() error {
-	d.lifetime.SetState(lifetime.Stopped)
-	d.lifetime.Wait()
-	d.lifetime.Close()
-	// etcdCli is passed from outside, so we don't close it here.
-	return nil
 }
 
 // handleETCDEvent handles the etcd event.
@@ -147,17 +129,6 @@ func (sw *sessionDiscoverer) initDiscover(ctx context.Context) error {
 	}
 	sw.revision = resp.Header.Revision
 	return nil
-}
-
-// sendDiscovered notifies the channel with the latest discovery.
-func (sw *sessionDiscoverer) sendDiscovered(ctx context.Context, ch chan<- VersionedState) error {
-	// Send the latest Discover state to the channel first.
-	select {
-	case <-ctx.Done():
-		return errors.Wrap(ctx.Err(), "cancel the discovery")
-	case ch <- sw.parseState():
-		return nil
-	}
 }
 
 // parseSession parse the session from etcd value.

@@ -33,9 +33,6 @@ type Resolver interface {
 	// cb will be called with latest state after call, and will be called with new state when state changed.
 	// version may be skipped if the state is changed too fast.
 	// last version can be seen by cb.
-	// ctx.Cancel() should be called to release the resource.
+	// ctx.Cancel() should be called to release the underlying resource.
 	Watch(ctx context.Context, cb func(VersionedState))
-
-	// Close the resolver
-	Close()
 }

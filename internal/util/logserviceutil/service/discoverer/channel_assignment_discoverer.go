@@ -3,24 +3,21 @@ package discoverer
 import (
 	"context"
 
-	"github.com/cockroachdb/errors"
 	"github.com/milvus-io/milvus/internal/proto/logpb"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/service/attributes"
-	"github.com/milvus-io/milvus/internal/util/logserviceutil/status"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/util"
-	"github.com/milvus-io/milvus/pkg/util/lifetime"
 	"google.golang.org/grpc/resolver"
 )
 
 type AssignmentDiscoverWatcher interface {
 	// AssignmentDiscover watches the assignment discovery.
-	// The watcher will be closed when context cancel or error occurs.
-	AssignmentDiscover(ctx context.Context, watcher chan<- *logpb.AssignmentDiscoverResponse) error
+	// The callback will be called when the discovery is changed.
+	// The final error will be returned when the watcher is closed or broken.
+	AssignmentDiscover(ctx context.Context, cb func(*logpb.AssignmentDiscoverResponse) error) error
 }
 
 // channelAssignmentDiscoverer is the discoverer for channel assignment.
 type channelAssignmentDiscoverer struct {
-	lifetime          lifetime.Lifetime[lifetime.State]
 	assignmentWatcher AssignmentDiscoverWatcher
 	// last discovered state and last version discovery.
 	lastDiscovery *logpb.AssignmentDiscoverResponse
@@ -34,38 +31,16 @@ func (d *channelAssignmentDiscoverer) NewVersionedState() VersionedState {
 }
 
 // channelAssignmentDiscoverer implements the resolver.Discoverer interface.
-func (d *channelAssignmentDiscoverer) Discover(ctx context.Context, ch chan<- VersionedState) error {
-	if d.lifetime.Add(lifetime.IsWorking) != nil {
-		return status.NewOnShutdownError("channel assignment discoverer is closed")
+func (d *channelAssignmentDiscoverer) Discover(ctx context.Context, cb func(VersionedState) error) error {
+	// Always send the current state first.
+	// Outside logic may lost the last state before retry Discover function.
+	if err := cb(d.parseState()); err != nil {
+		return err
 	}
-
-	watcher := make(chan *logpb.AssignmentDiscoverResponse, 1)
-	err := d.assignmentWatcher.AssignmentDiscover(ctx, watcher)
-	if err != nil {
-		return errors.Wrap(err, "at creating discoverer")
-	}
-	for {
-		// Always sent the current state to the channel first.
-		select {
-		case <-ctx.Done():
-			return errors.Wrap(ctx.Err(), "cancel the discovery")
-		case ch <- d.parseState():
-		}
-
-		// wait for the next discovery.
-		resp, ok := <-watcher
-		if !ok {
-			return errors.New("watch fail, at receiving the next discovery")
-		}
+	return d.assignmentWatcher.AssignmentDiscover(ctx, func(resp *logpb.AssignmentDiscoverResponse) error {
 		d.lastDiscovery = resp
-	}
-}
-
-// Close closes the discoverer.
-func (d *channelAssignmentDiscoverer) Close() error {
-	d.lifetime.SetState(lifetime.Stopped)
-	d.lifetime.Wait()
-	return nil
+		return cb(d.parseState())
+	})
 }
 
 // parseState parses the addresses from the discovery response.

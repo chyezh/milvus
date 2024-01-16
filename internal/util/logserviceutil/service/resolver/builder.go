@@ -1,6 +1,7 @@
 package resolver
 
 import (
+	"errors"
 	"time"
 
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/service/discoverer"
@@ -33,9 +34,8 @@ func NewSessionBuilder(c *clientv3.Client, role string) Builder {
 // newBuilder creates a new resolver builder.
 func newBuilder(scheme string, d discoverer.Discoverer) Builder {
 	resolver := newResolverWithDiscoverer(scheme, d, 1*time.Second) // configurable.
-	resolver.doDiscoverOnBackground()
-
 	return &builderImpl{
+		lifetime: lifetime.NewLifetime(lifetime.Working),
 		scheme:   scheme,
 		resolver: resolver,
 	}
@@ -43,6 +43,7 @@ func newBuilder(scheme string, d discoverer.Discoverer) Builder {
 
 // builderImpl implements resolver.Builder.
 type builderImpl struct {
+	lifetime lifetime.Lifetime[lifetime.State]
 	scheme   string
 	resolver *resolverWithDiscoverer
 }
@@ -52,12 +53,13 @@ type builderImpl struct {
 // gRPC dial calls Build synchronously, and fails if the returned error is
 // not nil.
 func (b *builderImpl) Build(_ resolver.Target, cc resolver.ClientConn, _ resolver.BuildOptions) (resolver.Resolver, error) {
-	r := &watchBasedGRPCResolver{
-		lifetime: lifetime.NewLifetime(lifetime.Working),
-		cc:       cc,
-		logger:   b.resolver.logger.With(zap.Int64("id", idAllocator.Allocate())),
+	if err := b.lifetime.Add(lifetime.IsWorking); err != nil {
+		return nil, errors.New("builder is closed")
 	}
-	b.resolver.registerNewWatcher(r)
+	defer b.lifetime.Done()
+
+	r := newWatchBasedGRPCResolver(cc, b.resolver.logger.With(zap.Int64("id", idAllocator.Allocate())))
+	b.resolver.RegisterNewWatcher(r)
 	return r, nil
 }
 
@@ -74,5 +76,8 @@ func (b *builderImpl) Scheme() string {
 }
 
 func (b *builderImpl) Close() {
+	b.lifetime.SetState(lifetime.Stopped)
+	b.lifetime.Wait()
+	b.lifetime.Close()
 	b.resolver.Close()
 }

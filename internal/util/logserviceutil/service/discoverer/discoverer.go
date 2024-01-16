@@ -10,7 +10,6 @@ import (
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/util"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/pkg/log"
-	"github.com/milvus-io/milvus/pkg/util/lifetime"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
@@ -20,64 +19,35 @@ import (
 // NewSessionDiscoverer returns a new Discoverer for the milvus session registration.
 func NewSessionDiscoverer(etcdCli *clientv3.Client, role string, minimumVersion string) Discoverer {
 	prefix := path.Join(paramtable.Get().EtcdCfg.MetaRootPath.GetValue(), sessionutil.DefaultServiceRoot, role)
-	return &asyncDiscover{
-		&sessionDiscoverer{
-			lifetime:     lifetime.NewLifetime(lifetime.Working),
-			etcdCli:      etcdCli,
-			prefix:       prefix,
-			versionRange: semver.MustParseRange(">=" + minimumVersion),
-			logger:       log.With(zap.String("role", role), zap.String("expectedVersion", minimumVersion)),
-			revision:     0,
-			peerSessions: make(map[string]*sessionutil.Session),
-		},
+	return &sessionDiscoverer{
+		etcdCli:      etcdCli,
+		prefix:       prefix,
+		versionRange: semver.MustParseRange(">=" + minimumVersion),
+		logger:       log.With(zap.String("role", role), zap.String("expectedVersion", minimumVersion)),
+		revision:     0,
+		peerSessions: make(map[string]*sessionutil.Session),
 	}
 }
 
 // NewChannelAssignmentDiscoverer returns a new Discoverer for the channel assignment registration.
 func NewChannelAssignmentDiscoverer(logCoordManager AssignmentDiscoverWatcher) Discoverer {
-	return &asyncDiscover{
-		&channelAssignmentDiscoverer{
-			lifetime:          lifetime.NewLifetime(lifetime.Working),
-			assignmentWatcher: logCoordManager,
-			lastDiscovery:     nil,
-		},
+	return &channelAssignmentDiscoverer{
+		assignmentWatcher: logCoordManager,
+		lastDiscovery:     nil,
 	}
 }
 
-// Discoverer is the interface for the service discovery.
+// Discoverer is the interface for the discoverer.
+// Do not promise
+// 1. concurrent safe.
+// 2. the version of discovery may be repeated or decreasing. So user should check the version in callback.
 type Discoverer interface {
-	DiscoverAPI
-
-	// AsyncDiscover is a non-blocking version of Discover.
-	AsyncDiscover(ctx context.Context, ch chan<- VersionedState) <-chan error
-}
-
-type DiscoverAPI interface {
 	NewVersionedState() VersionedState
 
 	// Discover watches the service discovery on these goroutine.
+	// Call the callback when the discovery is changed.
 	// Block until the discovery is canceled or break down.
-	// Once the discovery is done, it will return an error with context.Canceled.
-	// It will return an error if the discovery is break down.
-	Discover(ctx context.Context, ch chan<- VersionedState) error
-
-	// Close closes the discoverer.
-	Close() error
-}
-
-// AsyncDiscover is a non-blocking version of Discover.
-type asyncDiscover struct {
-	DiscoverAPI
-}
-
-// AsyncDiscover is a non-blocking version of Discover.
-func (a *asyncDiscover) AsyncDiscover(ctx context.Context, ch chan<- VersionedState) <-chan error {
-	errCh := make(chan error, 1)
-	go func() {
-		defer close(errCh)
-		errCh <- a.Discover(ctx, ch)
-	}()
-	return errCh
+	Discover(ctx context.Context, cb func(VersionedState) error) error
 }
 
 // VersionedState is the state with version.

@@ -34,7 +34,7 @@ type ChannelService interface {
 }
 
 type AssignmentService interface {
-	AssignmentDiscover(ctx context.Context, watcher chan<- *logpb.AssignmentDiscoverResponse) error
+	AssignmentDiscover(ctx context.Context, cb func(*logpb.AssignmentDiscoverResponse) error) error
 
 	ReportLogError(ctx context.Context, req *logpb.ReportLogErrorRequest) error
 }

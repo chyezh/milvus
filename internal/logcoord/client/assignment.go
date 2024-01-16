@@ -2,20 +2,19 @@ package client
 
 import (
 	"context"
+	"io"
 
 	"github.com/cockroachdb/errors"
 	"github.com/milvus-io/milvus/internal/proto/logpb"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/status"
-	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/util/lifetime"
-	"go.uber.org/zap"
 )
 
 type assignmentService struct {
 	*clientImpl
 }
 
-func (c *assignmentService) AssignmentDiscover(ctx context.Context, watcher chan<- *logpb.AssignmentDiscoverResponse) error {
+func (c *assignmentService) AssignmentDiscover(ctx context.Context, cb func(*logpb.AssignmentDiscoverResponse) error) error {
 	if c.lifetime.Add(lifetime.IsWorking) != nil {
 		return status.NewOnShutdownError("assignment client is closing")
 	}
@@ -33,17 +32,19 @@ func (c *assignmentService) AssignmentDiscover(ctx context.Context, watcher chan
 		return errors.Wrap(err, "at creating stream")
 	}
 
-	go func() {
-		for {
-			resp, err := listener.Recv()
-			if err != nil {
-				log.Warn("at receiving the next discovery", zap.Error(err))
-				break
+	// receive stream.
+	for {
+		resp, err := listener.Recv()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
 			}
-			watcher <- resp
+			return errors.Wrap(err, "at receiving the next discovery")
 		}
-	}()
-	return nil
+		if err := cb(resp); err != nil {
+			return errors.Wrap(err, "at callback")
+		}
+	}
 }
 
 func (c *assignmentService) ReportLogError(ctx context.Context, req *logpb.ReportLogErrorRequest) error {
