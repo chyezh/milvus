@@ -51,6 +51,7 @@ func TestResolverWithDiscoverer(t *testing.T) {
 	})
 	assert.Equal(t, util.NewVersionInt64(), state.Version)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.True(t, errors.Is(err, ErrCanceled))
 
 	// should be non block after state operation failure.
 	testErr := errors.New("test error")
@@ -58,13 +59,14 @@ func TestResolverWithDiscoverer(t *testing.T) {
 		return testErr
 	})
 	assert.ErrorIs(t, err, testErr)
+	assert.True(t, errors.Is(err, ErrInterrupted))
 
 	outCh := make(chan VersionedState, 1)
 	go func() {
 		var state VersionedState
-		err := r.Watch(ctx, func(s VersionedState) error {
+		err := r.Watch(context.Background(), func(s VersionedState) error {
 			state = s
-			if state.Version.GT(util.VersionInt64(3)) {
+			if state.Version.GT(util.VersionInt64(2)) {
 				return testErr
 			}
 			return nil

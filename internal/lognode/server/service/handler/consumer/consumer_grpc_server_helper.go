@@ -2,13 +2,13 @@ package consumer
 
 import "github.com/milvus-io/milvus/internal/proto/logpb"
 
-// consumeGrpcServer is a wrapped consumer server of log messages.
-type consumeGrpcServer struct {
+// consumeGrpcServerHelper is a wrapped consumer server of log messages.
+type consumeGrpcServerHelper struct {
 	logpb.LogNodeHandlerService_ConsumeServer
 }
 
 // SendConsumeMessage sends the consume result to client.
-func (p *consumeGrpcServer) SendConsumeMessage(resp *logpb.ConsumeMessageReponse) error {
+func (p *consumeGrpcServerHelper) SendConsumeMessage(resp *logpb.ConsumeMessageReponse) error {
 	return p.Send(&logpb.ConsumeResponse{
 		Response: &logpb.ConsumeResponse_Consume{
 			Consume: resp,
@@ -17,7 +17,7 @@ func (p *consumeGrpcServer) SendConsumeMessage(resp *logpb.ConsumeMessageReponse
 }
 
 // SendCreated sends the create response to client.
-func (p *consumeGrpcServer) SendCreated(resp *logpb.CreateConsumerResponse) error {
+func (p *consumeGrpcServerHelper) SendCreated(resp *logpb.CreateConsumerResponse) error {
 	return p.Send(&logpb.ConsumeResponse{
 		Response: &logpb.ConsumeResponse_Create{
 			Create: resp,
@@ -27,7 +27,7 @@ func (p *consumeGrpcServer) SendCreated(resp *logpb.CreateConsumerResponse) erro
 
 // SendClosed sends the close response to client.
 // no more message should be sent after sending close response.
-func (p *consumeGrpcServer) SendClosed() error {
+func (p *consumeGrpcServerHelper) SendClosed() error {
 	// wait for all consume messages are processed.
 	return p.Send(&logpb.ConsumeResponse{
 		Response: &logpb.ConsumeResponse_Close{

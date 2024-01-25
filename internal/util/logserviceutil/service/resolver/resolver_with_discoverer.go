@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/service/discoverer"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/util"
 	"github.com/milvus-io/milvus/internal/util/syncutil"
@@ -67,16 +68,16 @@ func (r *resolverWithDiscoverer) GetLatestState() VersionedState {
 func (r *resolverWithDiscoverer) Watch(ctx context.Context, cb func(VersionedState) error) error {
 	state := r.GetLatestState()
 	if err := cb(state); err != nil {
-		return err
+		return errors.Mark(err, ErrInterrupted)
 	}
 	version := state.Version
 	for {
 		if err := r.watchStateChange(ctx, version); err != nil {
-			return err
+			return errors.Mark(err, ErrCanceled)
 		}
 		state := r.GetLatestState()
 		if err := cb(state); err != nil {
-			return err
+			return errors.Mark(err, ErrInterrupted)
 		}
 		version = state.Version
 	}

@@ -3,6 +3,7 @@ package consumer
 import (
 	"io"
 
+	"github.com/cockroachdb/errors"
 	"github.com/milvus-io/milvus/internal/lognode/server/wal"
 	"github.com/milvus-io/milvus/internal/lognode/server/walmanager"
 	"github.com/milvus-io/milvus/internal/proto/logpb"
@@ -30,30 +31,31 @@ const (
 func CreateConsumeServer(walManager walmanager.Manager, streamServer logpb.LogNodeHandlerService_ConsumeServer) (*ConsumeServer, error) {
 	createReq, err := contextutil.GetCreateConsumer(streamServer.Context())
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "at get create consumer request")
 	}
 
 	l, err := walManager.GetAvailableWAL(createReq.ChannelName, createReq.Term)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "at get available wal")
 	}
 	scanner, err := l.Read(streamServer.Context(), wal.ReadOption{
 		DeliverPolicy: createReq.DeliverPolicy,
 	})
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "at create scanner")
 	}
 
-	consumeServer := &consumeGrpcServer{
+	consumeServer := &consumeGrpcServerHelper{
 		LogNodeHandlerService_ConsumeServer: streamServer,
 	}
-	consumeServer.SendCreated(&logpb.CreateConsumerResponse{})
+	if err := consumeServer.SendCreated(&logpb.CreateConsumerResponse{}); err != nil {
+		return nil, errors.Wrap(err, "at send created")
+	}
 	return &ConsumeServer{
-		scanner:          scanner,
-		grpcStreamServer: consumeServer,
-		cancelConsumerCh: make(chan struct{}),
-		closeCh:          make(chan struct{}),
-		logger:           log.With(zap.String("channel", l.Channel().Name), zap.Int64("term", l.Channel().Term)),
+		scanner:                scanner,
+		grpcStreamServerHelper: consumeServer,
+		cancelConsumerCh:       make(chan struct{}),
+		logger:                 log.With(zap.String("channel", l.Channel().Name), zap.Int64("term", l.Channel().Term)),
 	}, nil
 }
 
@@ -61,65 +63,27 @@ func CreateConsumeServer(walManager walmanager.Manager, streamServer logpb.LogNo
 type ConsumeServer struct {
 	scanner wal.Scanner
 
-	grpcStreamServer *consumeGrpcServer
-	cancelConsumerCh chan struct{}
-	closeCh          chan struct{}
-	logger           *log.MLogger
+	grpcStreamServerHelper *consumeGrpcServerHelper
+	cancelConsumerCh       chan struct{}
+	logger                 *log.MLogger
 }
 
 // Execute executes the consumer.
-func (c *ConsumeServer) Execute() (err error) {
-	errSendCh := c.startSend()
-	errRecvCh := c.startRecv()
-
-	// wait for send or recv loop exit.
-	select {
-	case <-errSendCh:
-	case err = <-errRecvCh:
-	}
-
-	// notify close on another arm to exit.
-	c.close()
-
-	// wait for another arm exit.
-	select {
-	case <-errSendCh:
-	case err = <-errRecvCh:
-	}
-
-	// return recv error at high priority.
-	if err != nil {
-		return err
-	}
-	// return scanner error.
-	return c.scanner.Error()
-}
-
-// startSend starts the send loop.
-func (c *ConsumeServer) startSend() <-chan struct{} {
-	ch := make(chan struct{})
+func (c *ConsumeServer) Execute() error {
+	// Start a recv arm to handling the control message on background.
 	go func() {
-		_ = c.sendLoop()
-		close(ch)
+		// recv loop will be blocked until the stream is closed.
+		// 1. close by client.
+		// 2. close by server context cancel by return of outside Execute.
+		_ = c.recvLoop()
 	}()
-	return ch
-}
 
-// startRecv starts the recv loop.
-func (c *ConsumeServer) startRecv() <-chan error {
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- c.recvLoop()
-	}()
-	return errCh
-}
-
-// close closes the consumer.
-func (c *ConsumeServer) close() {
-	close(c.closeCh)
-	if err := c.scanner.Close(); err != nil {
-		c.logger.Warn("close scanner failed", zap.Error(err))
-	}
+	// Start a send loop on current main goroutine.
+	// the loop will be blocked until:
+	// 1. the stream is broken.
+	// 2. recv arm recv close signal.
+	// 3. scanner is quit with expected error.
+	return c.sendLoop()
 }
 
 // sendLoop sends the message to client.
@@ -130,31 +94,34 @@ func (c *ConsumeServer) sendLoop() (err error) {
 		} else {
 			c.logger.Info("send arm of stream closed")
 		}
+		if err := c.scanner.Close(); err != nil {
+			c.logger.Warn("close scanner failed", zap.Error(err))
+		}
 	}()
 	// Read ahead buffer is implemented by scanner.
-	// Do not need to add buffer here.
+	// Do not add buffer here.
 	for {
 		select {
 		case msg, ok := <-c.scanner.Chan():
 			if !ok {
-				return nil
+				return errors.Wrap(c.scanner.Error(), "at scanner")
 			}
 			// Send Consumed message to client and do metrics.
 			messageSize := msg.EstimateSize()
-			if err := c.grpcStreamServer.SendConsumeMessage(&logpb.ConsumeMessageReponse{
+			if err := c.grpcStreamServerHelper.SendConsumeMessage(&logpb.ConsumeMessageReponse{
 				Id: message.NewPBMessageIDFromMessageID(msg.MessageID()),
 				Message: &logpb.Message{
 					Payload:    msg.Payload(),
 					Properties: msg.Properties().ToRawMap(),
 				},
 			}); err != nil {
-				return err
+				return errors.Wrap(err, "at send consume message")
 			}
 			metrics.LogNodeConsumeBytes.WithLabelValues(paramtable.GetNodeIDString()).Observe(float64(messageSize))
 		case <-c.cancelConsumerCh:
-			return c.grpcStreamServer.SendClosed()
-		case <-c.grpcStreamServer.Context().Done():
-			return c.grpcStreamServer.SendClosed()
+			return errors.Wrap(c.grpcStreamServerHelper.SendClosed(), "at send close")
+		case <-c.grpcStreamServerHelper.Context().Done():
+			return errors.Wrap(c.grpcStreamServerHelper.Context().Err(), "at grpc context done")
 		}
 	}
 }
@@ -171,7 +138,7 @@ func (c *ConsumeServer) recvLoop() (err error) {
 	}()
 
 	for {
-		req, err := c.grpcStreamServer.Recv()
+		req, err := c.grpcStreamServerHelper.Recv()
 		if err == io.EOF {
 			c.logger.Debug("stream closed by client")
 			return nil

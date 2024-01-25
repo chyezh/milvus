@@ -89,7 +89,7 @@ func (w *walImpl) Close() {
 }
 
 // createNewScanner creates a new scanner.
-func (sc *walImpl) createNewScanner(ctx context.Context, scannerName string, opt *wal.ReadOption) (*mqBasedScanner, error) {
+func (sc *walImpl) createNewScanner(_ context.Context, scannerName string, opt *wal.ReadOption) (*mqBasedScanner, error) {
 	consumerOption := mqwrapper.ConsumerOptions{
 		Topic:                       sc.channel.Name,
 		SubscriptionName:            scannerName,

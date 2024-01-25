@@ -8,6 +8,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/service/discoverer"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/service/resolver"
 	"github.com/milvus-io/milvus/internal/util/syncutil"
+	"github.com/pingcap/log"
 )
 
 func NewWatcher(r resolver.Resolver) Watcher {
@@ -33,8 +34,13 @@ type watcherImpl struct {
 }
 
 func (w *watcherImpl) execute() {
-	w.r.Watch(w.ctx, func(state discoverer.VersionedState) {
+	log.Info("assignment watcher start")
+	defer log.Info("assignment watcher close")
+
+	// error can be ignored here, error is always context canceled.
+	_ = w.r.Watch(w.ctx, func(state discoverer.VersionedState) error {
 		w.updateAssignment(state)
+		return nil
 	})
 }
 

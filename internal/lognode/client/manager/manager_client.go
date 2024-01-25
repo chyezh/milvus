@@ -47,12 +47,14 @@ func (c *managerClientImpl) WatchNodeChanged(ctx context.Context) <-chan map[int
 	resultCh := make(chan map[int64]*sessionutil.Session)
 	go func() {
 		defer close(resultCh)
-		c.rb.Resolver().Watch(ctx, func(state resolver.VersionedState) {
+		c.rb.Resolver().Watch(ctx, func(state resolver.VersionedState) error {
 			select {
 			case <-ctx.Done():
-			case resultCh <- state.Sessions():
 			case <-c.lifetime.CloseCh():
+				return ctx.Err()
+			case resultCh <- state.Sessions():
 			}
+			return nil
 		})
 	}()
 	return resultCh
