@@ -22,9 +22,13 @@ packages:
   github.com/milvus-io/milvus/internal/proto/logpb:
     interfaces:
       LogNodeHandlerService_ConsumeServer:
+      LogNodeHandlerService_ProduceServer:
   github.com/milvus-io/milvus/internal/util/logserviceutil/message:
     interfaces:
       MessageID:
+      ImmutableMessage:
+      MutableMessage:
+      RProperties:
   github.com/milvus-io/milvus/internal/util/logserviceutil/service/discoverer:
     interfaces:
       Discoverer:

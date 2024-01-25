@@ -4,13 +4,13 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/logpb"
 )
 
-// produceGrpcServer is a wrapped producer server of log messages.
-type produceGrpcServer struct {
+// produceGrpcServerHelper is a wrapped producer server of log messages.
+type produceGrpcServerHelper struct {
 	logpb.LogNodeHandlerService_ProduceServer
 }
 
 // SendProduceMessage sends the produce result to client.
-func (p *produceGrpcServer) SendProduceMessage(resp *logpb.ProduceMessageResponse) error {
+func (p *produceGrpcServerHelper) SendProduceMessage(resp *logpb.ProduceMessageResponse) error {
 	return p.Send(&logpb.ProduceResponse{
 		Response: &logpb.ProduceResponse_Produce{
 			Produce: resp,
@@ -19,7 +19,7 @@ func (p *produceGrpcServer) SendProduceMessage(resp *logpb.ProduceMessageRespons
 }
 
 // SendCreated sends the create response to client.
-func (p *produceGrpcServer) SendCreated() error {
+func (p *produceGrpcServerHelper) SendCreated() error {
 	return p.Send(&logpb.ProduceResponse{
 		Response: &logpb.ProduceResponse_Create{
 			Create: &logpb.CreateProducerResponse{},
@@ -29,7 +29,7 @@ func (p *produceGrpcServer) SendCreated() error {
 
 // SendClosed sends the close response to client.
 // no more message should be sent after sending close response.
-func (p *produceGrpcServer) SendClosed() error {
+func (p *produceGrpcServerHelper) SendClosed() error {
 	// wait for all produce messages are processed.
 	return p.Send(&logpb.ProduceResponse{
 		Response: &logpb.ProduceResponse_Close{

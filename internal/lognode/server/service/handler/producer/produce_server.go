@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/milvus-io/milvus/internal/lognode/server/wal"
 	"github.com/milvus-io/milvus/internal/lognode/server/walmanager"
 	"github.com/milvus-io/milvus/internal/proto/logpb"
@@ -14,7 +15,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/metrics"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
 )
 
@@ -33,68 +33,52 @@ const (
 func CreateProduceServer(walManager walmanager.Manager, streamServer logpb.LogNodeHandlerService_ProduceServer) (*ProduceServer, error) {
 	createReq, err := contextutil.GetCreateProducer(streamServer.Context())
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "at get create producer request")
 	}
 	l, err := walManager.GetAvailableWAL(createReq.ChannelName, createReq.Term)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "at get available wal")
 	}
 
-	produceServer := &produceGrpcServer{
+	produceServer := &produceGrpcServerHelper{
 		LogNodeHandlerService_ProduceServer: streamServer,
 	}
-	produceServer.SendCreated()
+	if err := produceServer.SendCreated(); err != nil {
+		return nil, errors.Wrap(err, "at send created")
+	}
 	return &ProduceServer{
 		wal:              l,
-		grpcStreamServer: produceServer,
+		produceServer:    produceServer,
 		logger:           log.With(zap.String("channel", l.Channel().Name), zap.Int64("term", l.Channel().Term)),
 		produceMessageCh: make(chan *logpb.ProduceMessageResponse),
 		appendWG:         sync.WaitGroup{},
-		sendExitCh:       make(chan struct{}),
 	}, nil
 }
 
 // ProduceServer is a ProduceServer of log messages.
 type ProduceServer struct {
 	wal              wal.WAL
-	grpcStreamServer *produceGrpcServer
+	produceServer    *produceGrpcServerHelper
 	logger           *log.MLogger
 	produceMessageCh chan *logpb.ProduceMessageResponse // All processing messages result should sent from theses channel.
 	appendWG         sync.WaitGroup
-	sendExitCh       chan struct{}
 }
 
 // Execute starts the producer.
 func (p *ProduceServer) Execute() error {
-	errSendCh := p.startSend()
-	errRecvCh := p.startRecv()
-
-	// Wait for send and recv arm to exit.
-	err := <-errRecvCh
-	<-errSendCh
-
-	// Only return the error of recv arm.
-	// error on send loop arm make no sense for client.
-	return err
-}
-
-// startSend starts the send loop.
-func (p *ProduceServer) startSend() <-chan struct{} {
-	ch := make(chan struct{})
+	// Start a recv arm to handle the control message from client.
 	go func() {
-		_ = p.sendLoop()
-		close(ch)
+		// recv loop will be blocked until the stream is closed.
+		// 1. close by client.
+		// 2. close by server context cancel by return of outside Execute.
+		_ = p.recvLoop()
 	}()
-	return ch
-}
 
-// startRecv starts the recv loop.
-func (p *ProduceServer) startRecv() <-chan error {
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- p.recvLoop()
-	}()
-	return errCh
+	// Start a send loop on current main goroutine.
+	// the loop will be blocked until:
+	// 1. the stream is broken.
+	// 2. recv arm recv closed and all response is sent.
+	return p.sendLoop()
 }
 
 // sendLoop sends the message to client.
@@ -105,21 +89,20 @@ func (p *ProduceServer) sendLoop() (err error) {
 		} else {
 			p.logger.Info("send arm of stream closed")
 		}
-		close(p.sendExitCh)
 	}()
 	for {
 		select {
 		case resp, ok := <-p.produceMessageCh:
 			if !ok {
 				// all message has been sent, sent close response.
-				p.grpcStreamServer.SendClosed()
+				p.produceServer.SendClosed()
 				return nil
 			}
-			if err := p.grpcStreamServer.SendProduceMessage(resp); err != nil {
+			if err := p.produceServer.SendProduceMessage(resp); err != nil {
 				return err
 			}
-		case <-p.grpcStreamServer.Context().Done():
-			return errors.Wrap(p.grpcStreamServer.Context().Err(), "cancel send loop by stream server")
+		case <-p.produceServer.Context().Done():
+			return errors.Wrap(p.produceServer.Context().Err(), "cancel send loop by stream server")
 		}
 	}
 }
@@ -128,16 +111,19 @@ func (p *ProduceServer) sendLoop() (err error) {
 func (p *ProduceServer) recvLoop() (err error) {
 	recvState := producerStateRunning
 	defer func() {
+		p.logger.Info("recv arm of stream start to close, waiting for all append request done")
+		p.appendWG.Wait()
+		close(p.produceMessageCh)
+
 		if err != nil {
 			p.logger.Warn("recv arm of stream closed by unexpected error", zap.Error(err))
 		} else {
 			p.logger.Info("recv arm of stream closed")
 		}
-		p.appendWG.Wait()
-		close(p.produceMessageCh)
 	}()
+
 	for {
-		req, err := p.grpcStreamServer.Recv()
+		req, err := p.produceServer.Recv()
 		if err == io.EOF {
 			p.logger.Debug("stream closed by client")
 			return nil
@@ -157,8 +143,8 @@ func (p *ProduceServer) recvLoop() (err error) {
 			}
 			recvState = producerStateClosed
 		default:
-			// skip message here.
-			p.logger.Error("unknown request type", zap.Any("request", req))
+			// skip message here, to keep the forward compatibility.
+			p.logger.Warn("unknown request type", zap.Any("request", req))
 		}
 	}
 }
@@ -173,7 +159,7 @@ func (p *ProduceServer) handleProduce(req *logpb.ProduceMessageRequest) {
 	messageSize := msg.EstimateSize()
 	now := time.Now()
 	p.appendWG.Add(1)
-	p.wal.AppendAsync(p.grpcStreamServer.Context(), msg, func(id message.MessageID, err error) {
+	p.wal.AppendAsync(p.produceServer.Context(), msg, func(id message.MessageID, err error) {
 		defer func() {
 			p.appendWG.Done()
 			if err == nil {
@@ -202,12 +188,12 @@ func (p *ProduceServer) sendProduceResult(reqID int64, id message.MessageID, err
 		}
 	}
 
-	// If sendExitCh is closed, it means the stream has been closed.
+	// If server context is canceled, it means the stream has been closed.
 	// all pending response message should be dropped, client side will handle it.
 	select {
 	case p.produceMessageCh <- resp:
 		p.logger.Debug("send produce message response to client", zap.Int64("requestID", reqID), zap.Any("messageID", id), zap.Error(err))
-	case <-p.sendExitCh:
+	case <-p.produceServer.Context().Done():
 		p.logger.Warn("stream closed before produce message response sent", zap.Int64("requestID", reqID), zap.Any("messageID", id))
 		return
 	}

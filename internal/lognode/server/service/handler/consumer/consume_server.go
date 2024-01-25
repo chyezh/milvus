@@ -52,10 +52,10 @@ func CreateConsumeServer(walManager walmanager.Manager, streamServer logpb.LogNo
 		return nil, errors.Wrap(err, "at send created")
 	}
 	return &ConsumeServer{
-		scanner:                scanner,
-		grpcStreamServerHelper: consumeServer,
-		cancelConsumerCh:       make(chan struct{}),
-		logger:                 log.With(zap.String("channel", l.Channel().Name), zap.Int64("term", l.Channel().Term)),
+		scanner:          scanner,
+		consumeServer:    consumeServer,
+		cancelConsumerCh: make(chan struct{}),
+		logger:           log.With(zap.String("channel", l.Channel().Name), zap.Int64("term", l.Channel().Term)),
 	}, nil
 }
 
@@ -63,14 +63,14 @@ func CreateConsumeServer(walManager walmanager.Manager, streamServer logpb.LogNo
 type ConsumeServer struct {
 	scanner wal.Scanner
 
-	grpcStreamServerHelper *consumeGrpcServerHelper
-	cancelConsumerCh       chan struct{}
-	logger                 *log.MLogger
+	consumeServer    *consumeGrpcServerHelper
+	cancelConsumerCh chan struct{}
+	logger           *log.MLogger
 }
 
 // Execute executes the consumer.
 func (c *ConsumeServer) Execute() error {
-	// Start a recv arm to handling the control message on background.
+	// Start a recv arm to handle the control message on background.
 	go func() {
 		// recv loop will be blocked until the stream is closed.
 		// 1. close by client.
@@ -108,7 +108,7 @@ func (c *ConsumeServer) sendLoop() (err error) {
 			}
 			// Send Consumed message to client and do metrics.
 			messageSize := msg.EstimateSize()
-			if err := c.grpcStreamServerHelper.SendConsumeMessage(&logpb.ConsumeMessageReponse{
+			if err := c.consumeServer.SendConsumeMessage(&logpb.ConsumeMessageReponse{
 				Id: message.NewPBMessageIDFromMessageID(msg.MessageID()),
 				Message: &logpb.Message{
 					Payload:    msg.Payload(),
@@ -119,9 +119,9 @@ func (c *ConsumeServer) sendLoop() (err error) {
 			}
 			metrics.LogNodeConsumeBytes.WithLabelValues(paramtable.GetNodeIDString()).Observe(float64(messageSize))
 		case <-c.cancelConsumerCh:
-			return errors.Wrap(c.grpcStreamServerHelper.SendClosed(), "at send close")
-		case <-c.grpcStreamServerHelper.Context().Done():
-			return errors.Wrap(c.grpcStreamServerHelper.Context().Err(), "at grpc context done")
+			return errors.Wrap(c.consumeServer.SendClosed(), "at send close")
+		case <-c.consumeServer.Context().Done():
+			return errors.Wrap(c.consumeServer.Context().Err(), "at grpc context done")
 		}
 	}
 }
@@ -138,7 +138,7 @@ func (c *ConsumeServer) recvLoop() (err error) {
 	}()
 
 	for {
-		req, err := c.grpcStreamServerHelper.Recv()
+		req, err := c.consumeServer.Recv()
 		if err == io.EOF {
 			c.logger.Debug("stream closed by client")
 			return nil
@@ -153,6 +153,7 @@ func (c *ConsumeServer) recvLoop() (err error) {
 			}
 			close(c.cancelConsumerCh)
 		default:
+			// skip unknown message here, to keep the forward compatibility.
 			c.logger.Warn("unknown request type", zap.Any("request", req))
 		}
 	}
