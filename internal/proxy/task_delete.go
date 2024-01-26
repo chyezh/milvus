@@ -60,7 +60,8 @@ type deleteTask struct {
 	msgID UniqueID
 
 	// result
-	count int64
+	count       int64
+	allQueryCnt int64
 }
 
 func (dt *deleteTask) TraceCtx() context.Context {
@@ -245,6 +246,8 @@ type deleteRunner struct {
 
 	// task queue
 	queue *dmTaskQueue
+
+	allQueryCnt atomic.Int64
 }
 
 func (dr *deleteRunner) Init(ctx context.Context) error {
@@ -421,6 +424,7 @@ func (dr *deleteRunner) getStreamingQueryAndDelteFunc(plan *planpb.PlanNode) exe
 
 		taskCh := make(chan *deleteTask, 256)
 		go dr.receiveQueryResult(ctx, client, taskCh)
+		var allQueryCnt int64
 		// wait all task finish
 		for task := range taskCh {
 			err := task.WaitToFinish()
@@ -428,12 +432,14 @@ func (dr *deleteRunner) getStreamingQueryAndDelteFunc(plan *planpb.PlanNode) exe
 				return err
 			}
 			dr.count.Add(task.count)
+			allQueryCnt += task.allQueryCnt
 		}
 
 		// query or produce task failed
 		if dr.err != nil {
 			return dr.err
 		}
+		dr.allQueryCnt.Add(allQueryCnt)
 		return nil
 	}
 }
@@ -467,6 +473,7 @@ func (dr *deleteRunner) receiveQueryResult(ctx context.Context, client querypb.Q
 			log.Warn("produce delete task failed", zap.Error(err))
 			return
 		}
+		task.allQueryCnt = result.GetAllRetrieveCount()
 
 		taskCh <- task
 	}
