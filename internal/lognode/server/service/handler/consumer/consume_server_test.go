@@ -18,6 +18,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/service/contextutil"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/util/typeutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc/metadata"
@@ -81,8 +82,7 @@ func TestConsumeServerRecvArm(t *testing.T) {
 		consumeServer: &consumeGrpcServerHelper{
 			LogNodeHandlerService_ConsumeServer: grpcConsumerServer,
 		},
-		logger:           log.With(),
-		cancelConsumerCh: make(chan struct{}),
+		logger: log.With(),
 	}
 	recvCh := make(chan *logpb.ConsumeRequest)
 	grpcConsumerServer.EXPECT().Recv().RunAndReturn(func() (*logpb.ConsumeRequest, error) {
@@ -94,20 +94,21 @@ func TestConsumeServerRecvArm(t *testing.T) {
 	})
 
 	// Test recv arm
+	recvFailureCh := typeutil.NewChanSignal[error]()
 	ch := make(chan error)
 	go func() {
-		ch <- server.recvLoop()
+		ch <- server.recvLoop(recvFailureCh)
 	}()
 
 	// should be blocked.
 	testChannelShouldBeBlocked(t, ch, 500*time.Millisecond)
-	testChannelShouldBeBlocked(t, server.cancelConsumerCh, 500*time.Millisecond)
+	testChannelShouldBeBlocked(t, recvFailureCh.Chan(), 500*time.Millisecond)
 
 	// cancelConsumerCh should be closed after receiving close request.
 	recvCh <- &logpb.ConsumeRequest{
 		Request: &logpb.ConsumeRequest_Close{},
 	}
-	<-server.cancelConsumerCh
+	<-recvFailureCh.Chan()
 	testChannelShouldBeBlocked(t, ch, 500*time.Millisecond)
 
 	// Test io.EOF
@@ -117,7 +118,8 @@ func TestConsumeServerRecvArm(t *testing.T) {
 	// Test unexpected recv error.
 	grpcConsumerServer.EXPECT().Recv().Unset()
 	grpcConsumerServer.EXPECT().Recv().Return(nil, io.ErrUnexpectedEOF)
-	assert.ErrorIs(t, server.recvLoop(), io.ErrUnexpectedEOF)
+	recvFailureCh = typeutil.NewChanSignal[error]()
+	assert.ErrorIs(t, server.recvLoop(recvFailureCh), io.ErrUnexpectedEOF)
 }
 
 func TestConsumerServeSendArm(t *testing.T) {
@@ -127,9 +129,8 @@ func TestConsumerServeSendArm(t *testing.T) {
 		consumeServer: &consumeGrpcServerHelper{
 			LogNodeHandlerService_ConsumeServer: grpcConsumerServer,
 		},
-		logger:           log.With(),
-		cancelConsumerCh: make(chan struct{}),
-		scanner:          scanner,
+		logger:  log.With(),
+		scanner: scanner,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	grpcConsumerServer.EXPECT().Context().Return(ctx)
@@ -140,9 +141,10 @@ func TestConsumerServeSendArm(t *testing.T) {
 	scanner.EXPECT().Close().Return(nil).Times(3)
 
 	// Test send arm
+	recvFailureCh := typeutil.NewChanSignal[error]()
 	ch := make(chan error)
 	go func() {
-		ch <- s.sendLoop()
+		ch <- s.sendLoop(recvFailureCh)
 	}()
 
 	// should be blocked.
@@ -167,17 +169,17 @@ func TestConsumerServeSendArm(t *testing.T) {
 	scanner.EXPECT().Chan().Unset()
 	scanner.EXPECT().Chan().Return(make(<-chan message.ImmutableMessage))
 	go func() {
-		ch <- s.sendLoop()
+		ch <- s.sendLoop(recvFailureCh)
 	}()
 	// should be blocked.
 	testChannelShouldBeBlocked(t, ch, 500*time.Millisecond)
-	close(s.cancelConsumerCh)
+	recvFailureCh.Release()
 	assert.NoError(t, <-ch)
 
 	// test cancel by server context.
-	s.cancelConsumerCh = make(chan struct{})
+	recvFailureCh = typeutil.NewChanSignal[error]()
 	go func() {
-		ch <- s.sendLoop()
+		ch <- s.sendLoop(recvFailureCh)
 	}()
 	testChannelShouldBeBlocked(t, ch, 500*time.Millisecond)
 	cancel()

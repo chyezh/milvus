@@ -15,6 +15,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/metrics"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/util/typeutil"
 	"go.uber.org/zap"
 )
 
@@ -66,23 +67,26 @@ type ProduceServer struct {
 
 // Execute starts the producer.
 func (p *ProduceServer) Execute() error {
+	// sender: recv arm, receiver: send arm.
+	recvFailureSignal := typeutil.NewChanSignal[error]()
+
 	// Start a recv arm to handle the control message from client.
 	go func() {
 		// recv loop will be blocked until the stream is closed.
 		// 1. close by client.
 		// 2. close by server context cancel by return of outside Execute.
-		_ = p.recvLoop()
+		_ = p.recvLoop(recvFailureSignal)
 	}()
 
 	// Start a send loop on current main goroutine.
 	// the loop will be blocked until:
 	// 1. the stream is broken.
 	// 2. recv arm recv closed and all response is sent.
-	return p.sendLoop()
+	return p.sendLoop(recvFailureSignal)
 }
 
 // sendLoop sends the message to client.
-func (p *ProduceServer) sendLoop() (err error) {
+func (p *ProduceServer) sendLoop(recvFailureSignal typeutil.ChanSignalListener[error]) (err error) {
 	defer func() {
 		if err != nil {
 			p.logger.Warn("send arm of stream closed by unexpected error", zap.Error(err))
@@ -90,6 +94,7 @@ func (p *ProduceServer) sendLoop() (err error) {
 			p.logger.Info("send arm of stream closed")
 		}
 	}()
+	ch := recvFailureSignal.Chan()
 	for {
 		select {
 		case resp, ok := <-p.produceMessageCh:
@@ -101,6 +106,9 @@ func (p *ProduceServer) sendLoop() (err error) {
 			if err := p.produceServer.SendProduceMessage(resp); err != nil {
 				return err
 			}
+		case err = <-ch:
+			// get recv arm error, unregister the channel signal.
+			ch = nil
 		case <-p.produceServer.Context().Done():
 			return errors.Wrap(p.produceServer.Context().Err(), "cancel send loop by stream server")
 		}
@@ -108,12 +116,13 @@ func (p *ProduceServer) sendLoop() (err error) {
 }
 
 // recvLoop receives the message from client.
-func (p *ProduceServer) recvLoop() (err error) {
+func (p *ProduceServer) recvLoop(recvFailureSignal typeutil.ChanSignalNotifier[error]) (err error) {
 	recvState := producerStateRunning
 	defer func() {
 		p.logger.Info("recv arm of stream start to close, waiting for all append request done")
 		p.appendWG.Wait()
 		close(p.produceMessageCh)
+		recvFailureSignal.Release()
 
 		if err != nil {
 			p.logger.Warn("recv arm of stream closed by unexpected error", zap.Error(err))
@@ -129,18 +138,24 @@ func (p *ProduceServer) recvLoop() (err error) {
 			return nil
 		}
 		if err != nil {
+			recvFailureSignal.MustNotify(err)
 			return err
 		}
 		switch req := req.Request.(type) {
 		case *logpb.ProduceRequest_Produce:
 			if recvState != producerStateRunning {
-				return status.NewInvalidRequestSeq("unexpected stream rpc arrive sequence, wal already closed or not ready")
+				err = status.NewInvalidRequestSeq("unexpected stream rpc arrive sequence, producer already closed or not ready")
+				recvFailureSignal.MustNotify(err)
+				return err
 			}
 			p.handleProduce(req.Produce)
 		case *logpb.ProduceRequest_Close:
 			if recvState != producerStateRunning {
-				return status.NewInvalidRequestSeq("unexpected stream rpc arrive sequence, close unready wal")
+				err = status.NewInvalidRequestSeq("unexpected stream rpc arrive sequence, close unready producer")
+				recvFailureSignal.MustNotify(err)
+				return err
 			}
+			recvFailureSignal.MustNotify(nil)
 			recvState = producerStateClosed
 		default:
 			// skip message here, to keep the forward compatibility.
