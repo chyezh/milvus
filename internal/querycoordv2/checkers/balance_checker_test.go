@@ -98,8 +98,8 @@ func (suite *BalanceCheckerTestSuite) TestAutoBalanceConf() {
 		Address:  "localhost",
 		Hostname: "localhost",
 	}))
-	suite.checker.meta.ResourceManager.AssignNode(meta.DefaultResourceGroupName, int64(nodeID1))
-	suite.checker.meta.ResourceManager.AssignNode(meta.DefaultResourceGroupName, int64(nodeID2))
+	suite.checker.meta.ResourceManager.HandleNodeUp(int64(nodeID1))
+	suite.checker.meta.ResourceManager.HandleNodeUp(int64(nodeID2))
 
 	// set collections meta
 	segments := []*datapb.SegmentInfo{
@@ -175,8 +175,8 @@ func (suite *BalanceCheckerTestSuite) TestBusyScheduler() {
 		Address:  "localhost",
 		Hostname: "localhost",
 	}))
-	suite.checker.meta.ResourceManager.AssignNode(meta.DefaultResourceGroupName, int64(nodeID1))
-	suite.checker.meta.ResourceManager.AssignNode(meta.DefaultResourceGroupName, int64(nodeID2))
+	suite.checker.meta.ResourceManager.HandleNodeUp(int64(nodeID1))
+	suite.checker.meta.ResourceManager.HandleNodeUp(int64(nodeID2))
 
 	segments := []*datapb.SegmentInfo{
 		{
@@ -238,9 +238,8 @@ func (suite *BalanceCheckerTestSuite) TestStoppingBalance() {
 		Address:  "localhost",
 		Hostname: "localhost",
 	}))
-	suite.nodeMgr.Stopping(int64(nodeID1))
-	suite.checker.meta.ResourceManager.AssignNode(meta.DefaultResourceGroupName, int64(nodeID1))
-	suite.checker.meta.ResourceManager.AssignNode(meta.DefaultResourceGroupName, int64(nodeID2))
+	suite.checker.meta.ResourceManager.HandleNodeUp(int64(nodeID1))
+	suite.checker.meta.ResourceManager.HandleNodeUp(int64(nodeID2))
 
 	segments := []*datapb.SegmentInfo{
 		{

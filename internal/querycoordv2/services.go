@@ -979,9 +979,28 @@ func (s *Server) CreateResourceGroup(ctx context.Context, req *milvuspb.CreateRe
 		return merr.Status(err), nil
 	}
 
-	err := s.meta.ResourceManager.AddResourceGroup(req.GetResourceGroup())
+	err := s.meta.ResourceManager.AddResourceGroup(req.GetResourceGroup(), req.GetConfig())
 	if err != nil {
 		log.Warn("failed to create resource group", zap.Error(err))
+		return merr.Status(err), nil
+	}
+	return merr.Success(), nil
+}
+
+func (s *Server) UpdateResourceGroups(ctx context.Context, req *milvuspb.UpdateResourceGroupsRequest) (*commonpb.Status, error) {
+	log := log.Ctx(ctx).With(
+		zap.Any("rgName", req.GetResourceGroups()),
+	)
+
+	log.Info("update resource group request received")
+	if err := merr.CheckHealthy(s.State()); err != nil {
+		log.Warn("failed to update resource group", zap.Error(err))
+		return merr.Status(err), nil
+	}
+
+	err := s.meta.ResourceManager.UpdateResourceGroups(req.GetResourceGroups())
+	if err != nil {
+		log.Warn("failed to update resource group", zap.Error(err))
 		return merr.Status(err), nil
 	}
 	return merr.Success(), nil
@@ -1013,6 +1032,7 @@ func (s *Server) DropResourceGroup(ctx context.Context, req *milvuspb.DropResour
 	return merr.Success(), nil
 }
 
+// go:deprecated TransferNode transfer nodes between resource groups.
 func (s *Server) TransferNode(ctx context.Context, req *milvuspb.TransferNodeRequest) (*commonpb.Status, error) {
 	log := log.Ctx(ctx).With(
 		zap.String("source", req.GetSourceResourceGroup()),
@@ -1041,13 +1061,27 @@ func (s *Server) TransferNode(ctx context.Context, req *milvuspb.TransferNodeReq
 		return merr.Status(err), nil
 	}
 
-	_, err := s.meta.ResourceManager.TransferNode(req.GetSourceResourceGroup(), req.GetTargetResourceGroup(), int(req.GetNumNode()))
-	if err != nil {
+	replicasInSource := s.meta.ReplicaManager.GetByResourceGroup(req.GetSourceResourceGroup())
+	replicasInTarget := s.meta.ReplicaManager.GetByResourceGroup(req.GetTargetResourceGroup())
+	loadSameCollection := false
+	sameCollectionID := int64(0)
+	for _, r1 := range replicasInSource {
+		for _, r2 := range replicasInTarget {
+			if r1.GetCollectionID() == r2.GetCollectionID() {
+				loadSameCollection = true
+				sameCollectionID = r1.GetCollectionID()
+			}
+		}
+	}
+	if loadSameCollection {
+		err := merr.WrapErrParameterInvalid("resource groups load not the same collection", fmt.Sprintf("collection %d loaded for both", sameCollectionID))
+		return merr.Status(err), nil
+	}
+
+	if err := s.meta.ResourceManager.TransferNode(req.GetSourceResourceGroup(), req.GetTargetResourceGroup(), int(req.GetNumNode())); err != nil {
 		log.Warn("failed to transfer node", zap.Error(err))
 		return merr.Status(err), nil
 	}
-	utils.RecoverAllCollectionInRG(s.meta, req.GetTargetResourceGroup())
-
 	return merr.Success(), nil
 }
 
@@ -1119,8 +1153,9 @@ func (s *Server) DescribeResourceGroup(ctx context.Context, req *querypb.Describ
 		return resp, nil
 	}
 
-	rg, err := s.meta.ResourceManager.GetResourceGroup(req.GetResourceGroup())
-	if err != nil {
+	rg := s.meta.ResourceManager.GetResourceGroup(req.GetResourceGroup())
+	if rg == nil {
+		err := merr.WrapErrResourceGroupNotFound(req.GetResourceGroup())
 		resp.Status = merr.Status(err)
 		return resp, nil
 	}
@@ -1153,13 +1188,28 @@ func (s *Server) DescribeResourceGroup(ctx context.Context, req *querypb.Describ
 		}
 	}
 
+	nodes := make([]*commonpb.NodeInfo, 0, len(rg.GetNodes()))
+	for _, nodeID := range rg.GetNodes() {
+		nodeSessionInfo := s.nodeMgr.Get(nodeID)
+		// Filter offline nodes and nodes in stopping state
+		if nodeSessionInfo != nil && !nodeSessionInfo.IsStoppingState() {
+			nodes = append(nodes, &commonpb.NodeInfo{
+				NodeID:   nodeSessionInfo.ID(),
+				Address:  nodeSessionInfo.Addr(),
+				Hostname: nodeSessionInfo.Hostname(),
+			})
+		}
+	}
+
 	resp.ResourceGroup = &querypb.ResourceGroupInfo{
 		Name:             req.GetResourceGroup(),
 		Capacity:         int32(rg.GetCapacity()),
-		NumAvailableNode: int32(len(rg.GetNodes())),
+		NumAvailableNode: int32(len(nodes)),
 		NumLoadedReplica: loadedReplicas,
 		NumOutgoingNode:  outgoingNodes,
 		NumIncomingNode:  incomingNodes,
+		Config:           rg.GetConfig(),
+		Nodes:            nodes,
 	}
 	return resp, nil
 }
