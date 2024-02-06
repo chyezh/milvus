@@ -27,6 +27,8 @@ const (
 
 	// SystemInfoMetrics means users request for system information metrics.
 	SystemInfoMetrics = "system_info"
+
+	QueryNodeLoadMetrics = "query_node_load_metrics"
 )
 
 // ParseMetricType returns the metric type of req
