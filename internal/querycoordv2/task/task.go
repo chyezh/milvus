@@ -106,9 +106,8 @@ type baseTask struct {
 
 	id           typeutil.UniqueID // Set by scheduler
 	collectionID typeutil.UniqueID
-	replica      *meta.ReplicaForPlan // May be nil if the task is a reduce task,
+	replica      *meta.Replica // May be nil if the task is a reduce task,
 	// So all replica operation should be checked before using it.
-	// TODO: change it into meta.Replica in future.
 	shard    string
 	loadType querypb.LoadType
 
@@ -124,7 +123,7 @@ type baseTask struct {
 	span trace.Span
 }
 
-func newBaseTask(ctx context.Context, source Source, collectionID typeutil.UniqueID, replica *meta.ReplicaForPlan, shard string, taskTag string) *baseTask {
+func newBaseTask(ctx context.Context, source Source, collectionID typeutil.UniqueID, replica *meta.Replica, shard string, taskTag string) *baseTask {
 	ctx, cancel := context.WithCancel(ctx)
 	ctx, span := otel.Tracer(typeutil.QueryCoordRole).Start(ctx, taskTag)
 
@@ -305,7 +304,7 @@ func NewSegmentTask(ctx context.Context,
 	timeout time.Duration,
 	source Source,
 	collectionID typeutil.UniqueID,
-	replica *meta.ReplicaForPlan,
+	replica *meta.Replica,
 	actions ...Action,
 ) (*SegmentTask, error) {
 	if len(actions) == 0 {
@@ -358,7 +357,7 @@ func NewChannelTask(ctx context.Context,
 	timeout time.Duration,
 	source Source,
 	collectionID typeutil.UniqueID,
-	replica *meta.ReplicaForPlan,
+	replica *meta.Replica,
 	actions ...Action,
 ) (*ChannelTask, error) {
 	if len(actions) == 0 {
@@ -408,7 +407,7 @@ func NewLeaderTask(ctx context.Context,
 	timeout time.Duration,
 	source Source,
 	collectionID typeutil.UniqueID,
-	replicaID *meta.ReplicaForPlan,
+	replicaID *meta.Replica,
 	leaderID int64,
 	action *LeaderAction,
 ) *LeaderTask {

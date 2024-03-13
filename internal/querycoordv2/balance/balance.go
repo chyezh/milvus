@@ -27,8 +27,8 @@ import (
 
 type SegmentAssignPlan struct {
 	Segment *meta.Segment
-	Replica *meta.ReplicaForPlan // TODO: meta.Replica has lock now, struct is hard to use, fix it after resource group enhancement.
-	From    int64                // -1 if empty
+	Replica *meta.Replica
+	From    int64 // -1 if empty
 	To      int64
 }
 
@@ -39,7 +39,7 @@ func (segPlan *SegmentAssignPlan) ToString() string {
 
 type ChannelAssignPlan struct {
 	Channel *meta.DmChannel
-	Replica *meta.ReplicaForPlan // TODO: meta.Replica has lock now, struct is hard to use, fix it after resource group enhancement.
+	Replica *meta.Replica
 	From    int64
 	To      int64
 }

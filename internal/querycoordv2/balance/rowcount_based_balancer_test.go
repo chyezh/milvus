@@ -164,7 +164,7 @@ func (suite *RowCountBasedBalancerTestSuite) TestBalance() {
 				},
 			},
 			expectPlans: []SegmentAssignPlan{
-				{Segment: &meta.Segment{SegmentInfo: &datapb.SegmentInfo{ID: 2, CollectionID: 1, NumOfRows: 20}, Node: 2}, From: 2, To: 1, Replica: meta.NewReplicaForPlanAtDefaultRG(1)},
+				{Segment: &meta.Segment{SegmentInfo: &datapb.SegmentInfo{ID: 2, CollectionID: 1, NumOfRows: 20}, Node: 2}, From: 2, To: 1, Replica: meta.NewReplica(&querypb.Replica{ID: 1})},
 			},
 			expectChannelPlans: []ChannelAssignPlan{},
 		},
@@ -244,7 +244,7 @@ func (suite *RowCountBasedBalancerTestSuite) TestBalance() {
 			},
 			expectPlans: []SegmentAssignPlan{},
 			expectChannelPlans: []ChannelAssignPlan{
-				{Channel: &meta.DmChannel{VchannelInfo: &datapb.VchannelInfo{CollectionID: 1, ChannelName: "v3"}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplicaForPlanAtDefaultRG(1)},
+				{Channel: &meta.DmChannel{VchannelInfo: &datapb.VchannelInfo{CollectionID: 1, ChannelName: "v3"}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplica(&querypb.Replica{ID: 1})},
 			},
 		},
 		{
@@ -273,8 +273,8 @@ func (suite *RowCountBasedBalancerTestSuite) TestBalance() {
 				},
 			},
 			expectPlans: []SegmentAssignPlan{
-				{Segment: &meta.Segment{SegmentInfo: &datapb.SegmentInfo{ID: 4, CollectionID: 1, NumOfRows: 10}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplicaForPlanAtDefaultRG(1)},
-				{Segment: &meta.Segment{SegmentInfo: &datapb.SegmentInfo{ID: 5, CollectionID: 1, NumOfRows: 10}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplicaForPlanAtDefaultRG(1)},
+				{Segment: &meta.Segment{SegmentInfo: &datapb.SegmentInfo{ID: 4, CollectionID: 1, NumOfRows: 10}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplica(&querypb.Replica{ID: 1})},
+				{Segment: &meta.Segment{SegmentInfo: &datapb.SegmentInfo{ID: 5, CollectionID: 1, NumOfRows: 10}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplica(&querypb.Replica{ID: 1})},
 			},
 			expectChannelPlans: []ChannelAssignPlan{},
 		},
@@ -294,7 +294,7 @@ func (suite *RowCountBasedBalancerTestSuite) TestBalance() {
 			},
 			expectPlans: []SegmentAssignPlan{},
 			expectChannelPlans: []ChannelAssignPlan{
-				{Channel: &meta.DmChannel{VchannelInfo: &datapb.VchannelInfo{CollectionID: 1, ChannelName: "v3"}, Node: 2}, From: 2, To: 3, Replica: meta.NewReplicaForPlanAtDefaultRG(1)},
+				{Channel: &meta.DmChannel{VchannelInfo: &datapb.VchannelInfo{CollectionID: 1, ChannelName: "v3"}, Node: 2}, From: 2, To: 3, Replica: meta.NewReplica(&querypb.Replica{ID: 1})},
 			},
 		},
 		{
@@ -336,8 +336,8 @@ func (suite *RowCountBasedBalancerTestSuite) TestBalance() {
 			},
 			expectPlans: []SegmentAssignPlan{},
 			expectChannelPlans: []ChannelAssignPlan{
-				{Channel: &meta.DmChannel{VchannelInfo: &datapb.VchannelInfo{CollectionID: 1, ChannelName: "v2"}, Node: 1}, From: 1, To: 2, Replica: meta.NewReplicaForPlanAtDefaultRG(1)},
-				{Channel: &meta.DmChannel{VchannelInfo: &datapb.VchannelInfo{CollectionID: 1, ChannelName: "v2"}, Node: 1}, From: 1, To: 3, Replica: meta.NewReplicaForPlanAtDefaultRG(1)},
+				{Channel: &meta.DmChannel{VchannelInfo: &datapb.VchannelInfo{CollectionID: 1, ChannelName: "v2"}, Node: 1}, From: 1, To: 2, Replica: meta.NewReplica(&querypb.Replica{ID: 1})},
+				{Channel: &meta.DmChannel{VchannelInfo: &datapb.VchannelInfo{CollectionID: 1, ChannelName: "v2"}, Node: 1}, From: 1, To: 3, Replica: meta.NewReplica(&querypb.Replica{ID: 1})},
 			},
 			multiple: true,
 		},
@@ -520,8 +520,8 @@ func (suite *RowCountBasedBalancerTestSuite) TestBalanceOnPartStopping() {
 				},
 			},
 			expectPlans: []SegmentAssignPlan{
-				{Segment: &meta.Segment{SegmentInfo: &datapb.SegmentInfo{ID: 4, CollectionID: 1, NumOfRows: 10}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplicaForPlanAtDefaultRG(1)},
-				{Segment: &meta.Segment{SegmentInfo: &datapb.SegmentInfo{ID: 5, CollectionID: 1, NumOfRows: 10}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplicaForPlanAtDefaultRG(1)},
+				{Segment: &meta.Segment{SegmentInfo: &datapb.SegmentInfo{ID: 4, CollectionID: 1, NumOfRows: 10}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplica(&querypb.Replica{ID: 1})},
+				{Segment: &meta.Segment{SegmentInfo: &datapb.SegmentInfo{ID: 5, CollectionID: 1, NumOfRows: 10}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplica(&querypb.Replica{ID: 1})},
 			},
 			expectChannelPlans: []ChannelAssignPlan{},
 		},
@@ -584,7 +584,7 @@ func (suite *RowCountBasedBalancerTestSuite) TestBalanceOnPartStopping() {
 			},
 			expectPlans: []SegmentAssignPlan{},
 			expectChannelPlans: []ChannelAssignPlan{
-				{Channel: &meta.DmChannel{VchannelInfo: &datapb.VchannelInfo{CollectionID: 1, ChannelName: "v3"}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplicaForPlanAtDefaultRG(1)},
+				{Channel: &meta.DmChannel{VchannelInfo: &datapb.VchannelInfo{CollectionID: 1, ChannelName: "v3"}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplica(&querypb.Replica{ID: 1})},
 			},
 		},
 	}
@@ -670,7 +670,7 @@ func (suite *RowCountBasedBalancerTestSuite) TestBalanceOutboundNodes() {
 			},
 			expectPlans: []SegmentAssignPlan{},
 			expectChannelPlans: []ChannelAssignPlan{
-				{Channel: &meta.DmChannel{VchannelInfo: &datapb.VchannelInfo{CollectionID: 1, ChannelName: "v3"}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplicaForPlanAtDefaultRG(1)},
+				{Channel: &meta.DmChannel{VchannelInfo: &datapb.VchannelInfo{CollectionID: 1, ChannelName: "v3"}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplica(&querypb.Replica{ID: 1})},
 			},
 		},
 		{
@@ -699,8 +699,8 @@ func (suite *RowCountBasedBalancerTestSuite) TestBalanceOutboundNodes() {
 				},
 			},
 			expectPlans: []SegmentAssignPlan{
-				{Segment: &meta.Segment{SegmentInfo: &datapb.SegmentInfo{ID: 4, CollectionID: 1, NumOfRows: 10}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplicaForPlanAtDefaultRG(1)},
-				{Segment: &meta.Segment{SegmentInfo: &datapb.SegmentInfo{ID: 5, CollectionID: 1, NumOfRows: 10}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplicaForPlanAtDefaultRG(1)},
+				{Segment: &meta.Segment{SegmentInfo: &datapb.SegmentInfo{ID: 4, CollectionID: 1, NumOfRows: 10}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplica(&querypb.Replica{ID: 1})},
+				{Segment: &meta.Segment{SegmentInfo: &datapb.SegmentInfo{ID: 5, CollectionID: 1, NumOfRows: 10}, Node: 3}, From: 3, To: 1, Replica: meta.NewReplica(&querypb.Replica{ID: 1})},
 			},
 			expectChannelPlans: []ChannelAssignPlan{},
 		},
@@ -764,6 +764,7 @@ func (suite *RowCountBasedBalancerTestSuite) TestBalanceOutboundNodes() {
 			suite.NoError(err)
 			err = balancer.meta.ResourceManager.AssignNode(meta.DefaultResourceGroupName, 2)
 			suite.NoError(err)
+			utils.RecoverAllCollectionInRG(balancer.meta, meta.DefaultResourceGroupName)
 			segmentPlans, channelPlans := suite.getCollectionBalancePlans(balancer, 1)
 			suite.ElementsMatch(c.expectChannelPlans, channelPlans)
 			suite.ElementsMatch(c.expectPlans, segmentPlans)
@@ -905,7 +906,7 @@ func (suite *RowCountBasedBalancerTestSuite) TestDisableBalanceChannel() {
 			},
 			expectPlans: []SegmentAssignPlan{},
 			expectChannelPlans: []ChannelAssignPlan{
-				{Channel: &meta.DmChannel{VchannelInfo: &datapb.VchannelInfo{CollectionID: 1, ChannelName: "v3"}, Node: 2}, From: 2, To: 3, Replica: meta.NewReplicaForPlanAtDefaultRG(1)},
+				{Channel: &meta.DmChannel{VchannelInfo: &datapb.VchannelInfo{CollectionID: 1, ChannelName: "v3"}, Node: 2}, From: 2, To: 3, Replica: meta.NewReplica(&querypb.Replica{ID: 1})},
 			},
 			enableBalanceChannel: true,
 		},

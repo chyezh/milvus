@@ -59,7 +59,7 @@ type TaskSuite struct {
 
 	// Data
 	collection      int64
-	replica         *meta.ReplicaForPlan
+	replica         *meta.Replica
 	subChannels     []string
 	unsubChannels   []string
 	moveChannels    []string
@@ -86,7 +86,9 @@ type TaskSuite struct {
 func (suite *TaskSuite) SetupSuite() {
 	paramtable.Init()
 	suite.collection = 1000
-	suite.replica = meta.NewReplicaForPlanAtDefaultRG(10)
+	suite.replica = meta.NewReplica(&querypb.Replica{
+		ID: 10,
+	}, nil)
 	suite.subChannels = []string{
 		"sub-0",
 		"sub-1",

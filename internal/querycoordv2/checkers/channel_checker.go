@@ -20,7 +20,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/samber/lo"
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
@@ -103,16 +102,16 @@ func (c *ChannelChecker) checkReplica(ctx context.Context, replica *meta.Replica
 	ret := make([]task.Task, 0)
 
 	lacks, redundancies := c.getDmChannelDiff(replica.GetCollectionID(), replica.GetID())
-	tasks := c.createChannelLoadTask(c.getTraceCtx(ctx, replica.CollectionID), lacks, replica)
+	tasks := c.createChannelLoadTask(c.getTraceCtx(ctx, replica.GetCollectionID()), lacks, replica)
 	task.SetReason("lacks of channel", tasks...)
 	ret = append(ret, tasks...)
 
-	tasks = c.createChannelReduceTasks(c.getTraceCtx(ctx, replica.CollectionID), redundancies, replica)
+	tasks = c.createChannelReduceTasks(c.getTraceCtx(ctx, replica.GetCollectionID()), redundancies, replica)
 	task.SetReason("collection released", tasks...)
 	ret = append(ret, tasks...)
 
 	repeated := c.findRepeatedChannels(ctx, replica.GetID())
-	tasks = c.createChannelReduceTasks(c.getTraceCtx(ctx, replica.CollectionID), repeated, replica)
+	tasks = c.createChannelReduceTasks(c.getTraceCtx(ctx, replica.GetCollectionID()), repeated, replica)
 	task.SetReason("redundancies of channel", tasks...)
 	ret = append(ret, tasks...)
 
@@ -218,13 +217,10 @@ func (c *ChannelChecker) findRepeatedChannels(ctx context.Context, replicaID int
 }
 
 func (c *ChannelChecker) createChannelLoadTask(ctx context.Context, channels []*meta.DmChannel, replica *meta.Replica) []task.Task {
-	outboundNodes := c.meta.ResourceManager.CheckOutboundNodes(replica)
-	availableNodes := lo.Filter(replica.Replica.GetNodes(), func(node int64, _ int) bool {
-		return !outboundNodes.Contain(node)
-	})
+	availableNodes := replica.GetNodes()
 	plans := c.balancer.AssignChannel(channels, availableNodes)
 	for i := range plans {
-		plans[i].Replica = replica.GetReplicaForPlan()
+		plans[i].Replica = replica
 	}
 
 	return balance.CreateChannelTasksFromPlans(ctx, c.ID(), Params.QueryCoordCfg.ChannelTaskTimeout.GetAsDuration(time.Millisecond), plans)
@@ -234,7 +230,7 @@ func (c *ChannelChecker) createChannelReduceTasks(ctx context.Context, channels 
 	ret := make([]task.Task, 0, len(channels))
 	for _, ch := range channels {
 		action := task.NewChannelAction(ch.Node, task.ActionTypeReduce, ch.GetChannelName())
-		task, err := task.NewChannelTask(ctx, Params.QueryCoordCfg.ChannelTaskTimeout.GetAsDuration(time.Millisecond), c.ID(), ch.GetCollectionID(), replica.GetReplicaForPlan(), action)
+		task, err := task.NewChannelTask(ctx, Params.QueryCoordCfg.ChannelTaskTimeout.GetAsDuration(time.Millisecond), c.ID(), ch.GetCollectionID(), replica, action)
 		if err != nil {
 			log.Warn("create channel reduce task failed",
 				zap.Int64("collection", ch.GetCollectionID()),

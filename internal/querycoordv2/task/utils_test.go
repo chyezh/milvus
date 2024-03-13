@@ -44,7 +44,9 @@ func (s *UtilsSuite) TestPackLoadSegmentRequest() {
 		time.Second,
 		nil,
 		1,
-		meta.NewReplicaForPlanAtDefaultRG(10),
+		meta.NewReplica(&querypb.Replica{
+			ID: 10,
+		}),
 		action,
 	)
 	s.NoError(err)
@@ -97,7 +99,9 @@ func (s *UtilsSuite) TestPackLoadSegmentRequestMmap() {
 		time.Second,
 		nil,
 		1,
-		meta.NewReplicaForPlanAtDefaultRG(10),
+		meta.NewReplica(&querypb.Replica{
+			ID: 10,
+		}),
 		action,
 	)
 	s.NoError(err)

@@ -137,7 +137,7 @@ func (c *LeaderChecker) findNeedLoadedSegments(ctx context.Context, replica *met
 				params.Params.QueryCoordCfg.SegmentTaskTimeout.GetAsDuration(time.Millisecond),
 				c.ID(),
 				s.GetCollectionID(),
-				replica.GetReplicaForPlan(),
+				replica,
 				leaderView.ID,
 				action,
 			)
@@ -179,7 +179,7 @@ func (c *LeaderChecker) findNeedRemovedSegments(ctx context.Context, replica *me
 			paramtable.Get().QueryCoordCfg.SegmentTaskTimeout.GetAsDuration(time.Millisecond),
 			c.ID(),
 			leaderView.CollectionID,
-			replica.GetReplicaForPlan(),
+			replica,
 			leaderView.ID,
 			action,
 		)
