@@ -1130,7 +1130,10 @@ func (suite *RowCountBasedBalancerTestSuite) TestMultiReplicaBalance() {
 			// 3. set up nodes info and resourceManager for balancer
 			for _, nodes := range c.replicaWithNodes {
 				for i := range nodes {
-					nodeInfo := session.NewNodeInfo(nodes[i], "127.0.0.1:0")
+					nodeInfo := session.NewNodeInfo(session.ImmutableNodeInfo{
+						NodeID:  nodes[i],
+						Address: "127.0.0.1:0",
+					})
 					nodeInfo.UpdateStats(session.WithChannelCnt(len(c.channelDist[nodes[i]])))
 					nodeInfo.SetState(c.states[i])
 					suite.balancer.nodeManager.Add(nodeInfo)

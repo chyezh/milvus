@@ -300,8 +300,14 @@ func (suite *BalanceCheckerTestSuite) TestStoppingBalance() {
 func (suite *BalanceCheckerTestSuite) TestTargetNotReady() {
 	// set up nodes info, stopping node1
 	nodeID1, nodeID2 := 1, 2
-	suite.nodeMgr.Add(session.NewNodeInfo(int64(nodeID1), "localhost"))
-	suite.nodeMgr.Add(session.NewNodeInfo(int64(nodeID2), "localhost"))
+	suite.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		NodeID:  int64(nodeID1),
+		Address: "localhost",
+	}))
+	suite.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		NodeID:  int64(nodeID2),
+		Address: "localhost",
+	}))
 	suite.nodeMgr.Stopping(int64(nodeID1))
 	suite.checker.meta.ResourceManager.AssignNode(meta.DefaultResourceGroupName, int64(nodeID1))
 	suite.checker.meta.ResourceManager.AssignNode(meta.DefaultResourceGroupName, int64(nodeID2))
