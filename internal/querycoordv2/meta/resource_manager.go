@@ -187,8 +187,8 @@ func (rm *ResourceManager) UpdateResourceGroups(rgs map[string]*rgpb.ResourceGro
 
 // updateResourceGroups update resource group configuration.
 func (rm *ResourceManager) updateResourceGroups(rgs map[string]*rgpb.ResourceGroupConfig) error {
+	modifiedRG := make([]*ResourceGroup, 0, len(rgs))
 	updates := make([]*querypb.ResourceGroup, 0, len(rgs))
-	txns := make([]*ResourceGroupUpdateTxn, 0, len(rgs))
 	for rgName, cfg := range rgs {
 		if _, ok := rm.groups[rgName]; !ok {
 			return merr.WrapErrResourceGroupNotFound(rgName)
@@ -197,11 +197,13 @@ func (rm *ResourceManager) updateResourceGroups(rgs map[string]*rgpb.ResourceGro
 		if err := rm.validateResourceGroupConfig(rgName, cfg); err != nil {
 			return err
 		}
-		txn := rm.groups[rgName].UpdateTxn()
-		txn.UpdateConfig(cfg)
-		update := txn.GetUpdatedMeta()
-		txns = append(txns, txn)
-		updates = append(updates, update)
+		// Update with copy on write.
+		mrg := rm.groups[rgName].CopyForWrite()
+		mrg.UpdateConfig(cfg)
+		rg := mrg.ToResourceGroup()
+
+		updates = append(updates, rg.GetMeta())
+		modifiedRG = append(modifiedRG, rg)
 	}
 
 	if err := rm.catalog.SaveResourceGroup(updates...); err != nil {
@@ -215,14 +217,13 @@ func (rm *ResourceManager) updateResourceGroups(rgs map[string]*rgpb.ResourceGro
 		return err
 	}
 
-	for _, txn := range txns {
-		txn.Commit()
-	}
-	for rgName, cfg := range rgs {
+	// Commit updates to memory.
+	for _, rg := range modifiedRG {
 		log.Info("update resource group",
-			zap.String("rgName", rgName),
-			zap.Any("config", cfg),
+			zap.String("rgName", rg.GetName()),
+			zap.Any("config", rg.GetConfig()),
 		)
+		rm.groups[rg.GetName()] = rg
 	}
 
 	// notify that resource group has been changed.
@@ -326,14 +327,10 @@ func (rm *ResourceManager) GetOutgoingNodeNumByReplica(replica *Replica) map[str
 
 	ret := make(map[string]int32)
 	for _, node := range replica.GetOutboundNodes() {
-		if !rg.ContainNode(node) {
-			rgName, err := rm.findResourceGroupByNode(node)
-			if err == nil {
-				ret[rgName]++
-			}
+		if rm.nodeIDMap[node] != nil && rm.nodeIDMap[node].GetName() != rg.GetName() {
+			ret[rm.nodeIDMap[node].GetName()]++
 		}
 	}
-
 	return ret
 }
 
@@ -734,7 +731,8 @@ func (rm *ResourceManager) transferNode(rgName string, node int64) error {
 		return merr.WrapErrResourceGroupNotFound(rgName)
 	}
 
-	txns := make([]*ResourceGroupUpdateTxn, 0, 2)
+	updates := make([]*querypb.ResourceGroup, 0, 2)
+	modifiedRG := make([]*ResourceGroup, 0, 2)
 	originalRG := "_"
 	// Check if node is already assign to rg.
 	if rg, ok := rm.nodeIDMap[node]; ok {
@@ -746,22 +744,24 @@ func (rm *ResourceManager) transferNode(rgName string, node int64) error {
 			)
 			return nil
 		}
-		txn := rg.UpdateTxn()
-		txn.UnassignNode(node)
-		txns = append(txns, txn)
+		// Apply update.
+		mrg := rg.CopyForWrite()
+		mrg.UnassignNode(node)
+		rg := mrg.ToResourceGroup()
+
+		updates = append(updates, rg.GetMeta())
+		modifiedRG = append(modifiedRG, rg)
 		originalRG = rg.GetName()
 	}
 
 	// assign the node to rg.
-	txn := rm.groups[rgName].UpdateTxn()
-	txn.AssignNode(node)
-	txns = append(txns, txn)
+	mrg := rm.groups[rgName].CopyForWrite()
+	mrg.AssignNode(node)
+	rg := mrg.ToResourceGroup()
+	updates = append(updates, rg.GetMeta())
+	modifiedRG = append(modifiedRG, rg)
 
 	// Commit updates to meta storage.
-	updates := make([]*querypb.ResourceGroup, 0, len(txns))
-	for _, txn := range txns {
-		updates = append(updates, txn.GetUpdatedMeta())
-	}
 	if err := rm.catalog.SaveResourceGroup(updates...); err != nil {
 		log.Warn("failed to transfer node to resource group",
 			zap.String("rgName", rgName),
@@ -773,8 +773,8 @@ func (rm *ResourceManager) transferNode(rgName string, node int64) error {
 	}
 
 	// Commit updates to memory.
-	for _, txn := range txns {
-		txn.Commit()
+	for _, rg := range modifiedRG {
+		rm.groups[rg.GetName()] = rg
 	}
 	rm.nodeIDMap[node] = rm.groups[rgName]
 	log.Info("transfer node to resource group",
@@ -791,10 +791,10 @@ func (rm *ResourceManager) transferNode(rgName string, node int64) error {
 // unassignNode remove a node from resource group where it belongs to.
 func (rm *ResourceManager) unassignNode(node int64) (string, error) {
 	if rg, ok := rm.nodeIDMap[node]; ok {
-		txn := rg.UpdateTxn()
-		txn.UnassignNode(node)
-		update := txn.GetUpdatedMeta()
-		if err := rm.catalog.SaveResourceGroup(update); err != nil {
+		mrg := rg.CopyForWrite()
+		mrg.UnassignNode(node)
+		rg := mrg.ToResourceGroup()
+		if err := rm.catalog.SaveResourceGroup(rg.GetMeta()); err != nil {
 			log.Warn("unassign node from resource group",
 				zap.String("rgName", rg.GetName()),
 				zap.Int64("node", node),
@@ -802,7 +802,9 @@ func (rm *ResourceManager) unassignNode(node int64) (string, error) {
 			)
 			return "", err
 		}
-		txn.Commit()
+
+		// Commit updates to memory.
+		rm.groups[rg.GetName()] = rg
 		delete(rm.nodeIDMap, node)
 		log.Info("unassign node to resource group",
 			zap.String("rgName", rg.GetName()),

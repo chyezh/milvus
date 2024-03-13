@@ -159,15 +159,6 @@ func (rg *ResourceGroup) HasTo(rgName string) bool {
 	return false
 }
 
-// UpdateTxn start a update transaction.
-func (rg *ResourceGroup) UpdateTxn() *ResourceGroupUpdateTxn {
-	return &ResourceGroupUpdateTxn{
-		original: rg,
-		nodes:    rg.nodes.Clone(),
-		cfg:      rg.GetConfigCloned(),
-	}
-}
-
 // GetMeta return resource group meta.
 func (rg *ResourceGroup) GetMeta() *querypb.ResourceGroup {
 	capacity := rg.GetCapacity()
@@ -175,7 +166,7 @@ func (rg *ResourceGroup) GetMeta() *querypb.ResourceGroup {
 		Name:     rg.name,
 		Capacity: int32(capacity),
 		Nodes:    rg.nodes.Collect(),
-		Config:   rg.cfg,
+		Config:   rg.GetConfigCloned(),
 	}
 }
 
@@ -210,40 +201,40 @@ func (rg *ResourceGroup) MeetRequirement() error {
 	return nil
 }
 
-// ResourceGroupUpdateTxn is the interface for resource group update transaction.
-type ResourceGroupUpdateTxn struct {
-	original *ResourceGroup
-	nodes    typeutil.UniqueSet
-	cfg      *rgpb.ResourceGroupConfig
+// CopyForWrite return a mutable resource group.
+func (rg *ResourceGroup) CopyForWrite() *mutableResourceGroup {
+	return &mutableResourceGroup{
+		ResourceGroup: &ResourceGroup{
+			name:  rg.name,
+			nodes: rg.nodes.Clone(),
+			cfg:   rg.GetConfigCloned(),
+		},
+	}
+}
+
+// mutableResourceGroup is a mutable type (COW) for manipulating resource group meta info for replica manager.
+type mutableResourceGroup struct {
+	*ResourceGroup
 }
 
 // UpdateConfig update resource group config.
-func (txn *ResourceGroupUpdateTxn) UpdateConfig(cfg *rgpb.ResourceGroupConfig) {
-	txn.cfg = cfg
+func (r *mutableResourceGroup) UpdateConfig(cfg *rgpb.ResourceGroupConfig) {
+	r.cfg = cfg
 }
 
 // Assign node to resource group.
-func (txn *ResourceGroupUpdateTxn) AssignNode(id int64) {
-	txn.nodes.Insert(id)
+func (r *mutableResourceGroup) AssignNode(id int64) {
+	r.nodes.Insert(id)
 }
 
 // Unassign node from resource group.
-func (txn *ResourceGroupUpdateTxn) UnassignNode(id int64) {
-	txn.nodes.Remove(id)
+func (r *mutableResourceGroup) UnassignNode(id int64) {
+	r.nodes.Remove(id)
 }
 
-// GetUpdatedMeta return updated resource group meta.
-func (txn *ResourceGroupUpdateTxn) GetUpdatedMeta() *querypb.ResourceGroup {
-	newRG := &ResourceGroup{
-		name:  txn.original.GetName(),
-		nodes: txn.nodes,
-		cfg:   txn.cfg,
-	}
-	return newRG.GetMeta()
-}
-
-// Commit commit the update transaction into original resource group.
-func (txn *ResourceGroupUpdateTxn) Commit() {
-	txn.original.nodes = txn.nodes
-	txn.original.cfg = txn.cfg
+// ToResourceGroup return updated resource group, After calling this method, the mutable resource group should not be used again.
+func (r *mutableResourceGroup) ToResourceGroup() *ResourceGroup {
+	rg := r.ResourceGroup
+	r.ResourceGroup = nil
+	return rg
 }

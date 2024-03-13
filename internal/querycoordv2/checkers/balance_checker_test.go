@@ -298,12 +298,20 @@ func (suite *BalanceCheckerTestSuite) TestStoppingBalance() {
 
 func (suite *BalanceCheckerTestSuite) TestTargetNotReady() {
 	// set up nodes info, stopping node1
-	nodeID1, nodeID2 := 1, 2
-	suite.nodeMgr.Add(session.NewNodeInfo(int64(nodeID1), "localhost"))
-	suite.nodeMgr.Add(session.NewNodeInfo(int64(nodeID2), "localhost"))
+	nodeID1, nodeID2 := int64(1), int64(2)
+	suite.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		NodeID:   nodeID1,
+		Address:  "localhost",
+		Hostname: "localhost",
+	}))
+	suite.nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+		NodeID:   nodeID2,
+		Address:  "localhost",
+		Hostname: "localhost",
+	}))
 	suite.nodeMgr.Stopping(int64(nodeID1))
-	suite.checker.meta.ResourceManager.AssignNode(meta.DefaultResourceGroupName, int64(nodeID1))
-	suite.checker.meta.ResourceManager.AssignNode(meta.DefaultResourceGroupName, int64(nodeID2))
+	suite.checker.meta.ResourceManager.HandleNodeUp(int64(nodeID1))
+	suite.checker.meta.ResourceManager.HandleNodeUp(int64(nodeID2))
 
 	segments := []*datapb.SegmentInfo{
 		{

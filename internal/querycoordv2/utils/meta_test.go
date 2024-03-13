@@ -253,20 +253,15 @@ func TestAddNodesToCollectionsInRG(t *testing.T) {
 		},
 		typeutil.NewUniqueSet(),
 	))
-	nodeMgr.Add(session.NewNodeInfo(1, "localhost"))
-	_, err := m.ResourceManager.HandleNodeUp(1)
-	assert.NoError(t, err)
-	nodeMgr.Add(session.NewNodeInfo(2, "localhost"))
-	_, err = m.ResourceManager.HandleNodeUp(2)
-	assert.NoError(t, err)
-	nodeMgr.Add(session.NewNodeInfo(3, "localhost"))
-	_, err = m.ResourceManager.HandleNodeUp(3)
-	assert.NoError(t, err)
-	nodeMgr.Add(session.NewNodeInfo(4, "localhost"))
-	_, err = m.ResourceManager.HandleNodeUp(4)
-	assert.NoError(t, err)
-	_, err = m.ResourceManager.TransferNode(meta.DefaultResourceGroupName, "rg", 4)
-	assert.NoError(t, err)
+	for i := 1; i < 5; i++ {
+		nodeID := int64(i)
+		nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{
+			NodeID:   nodeID,
+			Address:  "127.0.0.1",
+			Hostname: "localhost",
+		}))
+		m.ResourceManager.HandleNodeUp(nodeID)
+	}
 	RecoverAllCollectionInRG(m, "rg")
 
 	assert.Len(t, m.ReplicaManager.Get(1).GetNodes(), 2)

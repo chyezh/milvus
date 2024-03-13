@@ -45,7 +45,7 @@ func TestResourceGroup(t *testing.T) {
 	assertion()
 
 	// Test Txn
-	txn := rg.UpdateTxn()
+	mrg := rg.CopyForWrite()
 	cfg = &rgpb.ResourceGroupConfig{
 		Requests: &rgpb.ResourceGroupLimit{
 			NodeNum: 2,
@@ -60,12 +60,12 @@ func TestResourceGroup(t *testing.T) {
 			ResourceGroup: "rg2",
 		}},
 	}
-	txn.UpdateConfig(cfg)
+	mrg.UpdateConfig(cfg)
 
 	// nothing happens before commit.
 	assertion()
 
-	txn.Commit()
+	rg = mrg.ToResourceGroup()
 	assertion = func() {
 		assert.Equal(t, "rg1", rg.GetName())
 		assert.Empty(t, rg.GetNodes())
@@ -84,11 +84,11 @@ func TestResourceGroup(t *testing.T) {
 	assertion()
 
 	// Test AddNode
-	txn = rg.UpdateTxn()
-	txn.AssignNode(1)
-	txn.AssignNode(1)
+	mrg = rg.CopyForWrite()
+	mrg.AssignNode(1)
+	mrg.AssignNode(1)
 	assertion()
-	txn.Commit()
+	rg = mrg.ToResourceGroup()
 
 	assertion = func() {
 		assert.Equal(t, "rg1", rg.GetName())
@@ -108,10 +108,10 @@ func TestResourceGroup(t *testing.T) {
 	assertion()
 
 	// Test AddNode until meet requirement.
-	txn = rg.UpdateTxn()
-	txn.AssignNode(2)
+	mrg = rg.CopyForWrite()
+	mrg.AssignNode(2)
 	assertion()
-	txn.Commit()
+	rg = mrg.ToResourceGroup()
 
 	assertion = func() {
 		assert.Equal(t, "rg1", rg.GetName())
@@ -132,11 +132,11 @@ func TestResourceGroup(t *testing.T) {
 	assertion()
 
 	// Test AddNode until exceed requirement.
-	txn = rg.UpdateTxn()
-	txn.AssignNode(3)
-	txn.AssignNode(4)
+	mrg = rg.CopyForWrite()
+	mrg.AssignNode(3)
+	mrg.AssignNode(4)
 	assertion()
-	txn.Commit()
+	rg = mrg.ToResourceGroup()
 
 	assertion = func() {
 		assert.Equal(t, "rg1", rg.GetName())
@@ -159,17 +159,17 @@ func TestResourceGroup(t *testing.T) {
 	assertion()
 
 	// Test UnassignNode.
-	txn = rg.UpdateTxn()
-	txn.UnassignNode(3)
+	mrg = rg.CopyForWrite()
+	mrg.UnassignNode(3)
 	assertion()
-	rgMeta := txn.GetUpdatedMeta()
+	rg = mrg.ToResourceGroup()
+	rgMeta := rg.GetMeta()
 	assert.Equal(t, 3, len(rgMeta.Nodes))
 	assert.Equal(t, "rg1", rgMeta.Name)
 	assert.Equal(t, "rg3", rgMeta.Config.From[0].ResourceGroup)
 	assert.Equal(t, "rg2", rgMeta.Config.To[0].ResourceGroup)
 	assert.Equal(t, int32(2), rgMeta.Config.Requests.NodeNum)
 	assert.Equal(t, int32(3), rgMeta.Config.Limits.NodeNum)
-	txn.Commit()
 
 	assertion2 := func(rg *ResourceGroup) {
 		assert.Equal(t, "rg1", rg.GetName())
@@ -329,5 +329,5 @@ func TestResourceGroupMeta(t *testing.T) {
 	assert.NoError(t, rg.MeetRequirement())
 
 	newMeta = rg.GetMeta()
-	assert.Equal(t, int32(3), newMeta.Capacity)
+	assert.Equal(t, int32(1000000), newMeta.Capacity)
 }
