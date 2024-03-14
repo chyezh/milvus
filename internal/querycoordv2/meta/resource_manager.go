@@ -61,10 +61,11 @@ var (
 
 type ResourceManager struct {
 	incomingNode typeutil.UniqueSet
-	groups       map[string]*ResourceGroup
-	nodeIDMap    map[int64]*ResourceGroup
-	catalog      metastore.QueryCoordCatalog
-	nodeMgr      *session.NodeManager
+	groups       map[string]*ResourceGroup // primary index from resource group name to resource group
+	nodeIDMap    map[int64]string          // secondary index from node id to resource group
+
+	catalog metastore.QueryCoordCatalog
+	nodeMgr *session.NodeManager
 
 	rwmutex             sync.RWMutex
 	rgChangedNotifier   *syncutil.VersionedNotifier
@@ -85,7 +86,7 @@ func NewResourceManager(catalog metastore.QueryCoordCatalog, nodeMgr *session.No
 	return &ResourceManager{
 		incomingNode: typeutil.NewUniqueSet(),
 		groups:       groups,
-		nodeIDMap:    make(map[int64]*ResourceGroup),
+		nodeIDMap:    make(map[int64]string),
 		catalog:      catalog,
 		nodeMgr:      nodeMgr,
 
@@ -108,11 +109,11 @@ func (rm *ResourceManager) Recover() error {
 		rg := NewResourceGroupFromMeta(meta)
 		rm.groups[rg.GetName()] = rg
 		for _, node := range rg.GetNodes() {
-			if rm.nodeIDMap[node] != nil {
+			if _, ok := rm.nodeIDMap[node]; ok {
 				// unreachable code, should never happen.
-				panic(fmt.Sprintf("dirty meta, node has been assign to multi resource group, %s, %s", rm.nodeIDMap[node].GetName(), rg.GetName()))
+				panic(fmt.Sprintf("dirty meta, node has been assign to multi resource group, %s, %s", rm.nodeIDMap[node], rg.GetName()))
 			}
-			rm.nodeIDMap[node] = rg
+			rm.nodeIDMap[node] = rg.GetName()
 		}
 		log.Info("Recover resource group",
 			zap.String("rgName", rg.GetName()),
@@ -327,11 +328,20 @@ func (rm *ResourceManager) GetOutgoingNodeNumByReplica(replica *Replica) map[str
 
 	ret := make(map[string]int32)
 	for _, node := range replica.GetOutboundNodes() {
-		if rm.nodeIDMap[node] != nil && rm.nodeIDMap[node].GetName() != rg.GetName() {
-			ret[rm.nodeIDMap[node].GetName()]++
+		// if rgOfNode is not equal to rg of replica, outgoing node found.
+		if rgOfNode := rm.getResourceGroupByNodeID(node); rgOfNode != nil && rgOfNode.GetName() != rg.GetName() {
+			ret[rgOfNode.GetName()]++
 		}
 	}
 	return ret
+}
+
+// getResourceGroupByNodeID get resource group by node id.
+func (rm *ResourceManager) getResourceGroupByNodeID(nodeID int64) *ResourceGroup {
+	if rgName, ok := rm.nodeIDMap[nodeID]; ok {
+		return rm.groups[rgName]
+	}
+	return nil
 }
 
 // ContainsNode return whether given node is in given resource group.
@@ -486,8 +496,8 @@ func (rm *ResourceManager) AutoRecoverResourceGroup(rgName string) error {
 
 // recoverMissingNodeRG recover resource group by transfer node from other resource group.
 func (rm *ResourceManager) recoverMissingNodeRG(rgName string) error {
-	rg := rm.groups[rgName]
-	for rg.MissingNumOfNodes() > 0 {
+	for rm.groups[rgName].MissingNumOfNodes() > 0 {
+		rg := rm.groups[rgName]
 		sourceRG := rm.selectMissingRecoverSourceRG(rg)
 		if sourceRG == nil {
 			log.Warn("fail to select source resource group", zap.String("rgName", rg.GetName()))
@@ -551,8 +561,8 @@ func (rm *ResourceManager) selectMissingRecoverSourceRG(rg *ResourceGroup) *Reso
 
 // recoverRedundantNodeRG recover resource group by transfer node to other resource group.
 func (rm *ResourceManager) recoverRedundantNodeRG(rgName string) error {
-	rg := rm.groups[rgName]
-	for rg.RedundantNumOfNodes() > 0 {
+	for rm.groups[rgName].RedundantNumOfNodes() > 0 {
+		rg := rm.groups[rgName]
 		targetRG := rm.selectRedundantRecoverTargetRG(rg)
 		if targetRG == nil {
 			log.Info("failed to select redundant recover target resource group, please check resource group configuration is as expected.",
@@ -661,9 +671,8 @@ func (rm *ResourceManager) assignIncomingNodeWithNodeCheck(node int64) (string, 
 // assignIncomingNode assign node to resource group.
 func (rm *ResourceManager) assignIncomingNode(node int64) (string, error) {
 	// If node already assign to rg.
-	rg, ok := rm.nodeIDMap[node]
-	if ok {
-		// unreachable code.
+	rg := rm.getResourceGroupByNodeID(node)
+	if rg != nil {
 		log.Info("HandleNodeUp: node already assign to resource group",
 			zap.String("rgName", rg.GetName()),
 			zap.Int64("node", node),
@@ -735,7 +744,7 @@ func (rm *ResourceManager) transferNode(rgName string, node int64) error {
 	modifiedRG := make([]*ResourceGroup, 0, 2)
 	originalRG := "_"
 	// Check if node is already assign to rg.
-	if rg, ok := rm.nodeIDMap[node]; ok {
+	if rg := rm.getResourceGroupByNodeID(node); rg != nil {
 		if rg.GetName() == rgName {
 			// node is already assign to rg.
 			log.Info("node already assign to resource group",
@@ -776,7 +785,7 @@ func (rm *ResourceManager) transferNode(rgName string, node int64) error {
 	for _, rg := range modifiedRG {
 		rm.groups[rg.GetName()] = rg
 	}
-	rm.nodeIDMap[node] = rm.groups[rgName]
+	rm.nodeIDMap[node] = rgName
 	log.Info("transfer node to resource group",
 		zap.String("rgName", rgName),
 		zap.String("originalRG", originalRG),
@@ -790,7 +799,7 @@ func (rm *ResourceManager) transferNode(rgName string, node int64) error {
 
 // unassignNode remove a node from resource group where it belongs to.
 func (rm *ResourceManager) unassignNode(node int64) (string, error) {
-	if rg, ok := rm.nodeIDMap[node]; ok {
+	if rg := rm.getResourceGroupByNodeID(node); rg != nil {
 		mrg := rg.CopyForWrite()
 		mrg.UnassignNode(node)
 		rg := mrg.ToResourceGroup()
