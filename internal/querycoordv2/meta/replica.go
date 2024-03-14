@@ -39,16 +39,25 @@ func newReplica(replica *querypb.Replica) *Replica {
 
 // GetID returns the id of the replica.
 func (replica *Replica) GetID() typeutil.UniqueID {
+	if replica == nil {
+		return -1
+	}
 	return replica.replicaPB.GetID()
 }
 
 // GetCollectionID returns the collection id of the replica.
 func (replica *Replica) GetCollectionID() typeutil.UniqueID {
+	if replica == nil {
+		return -1
+	}
 	return replica.replicaPB.GetCollectionID()
 }
 
 // GetResourceGroup returns the resource group name of the replica.
 func (replica *Replica) GetResourceGroup() string {
+	if replica == nil {
+		return ""
+	}
 	return replica.replicaPB.GetResourceGroup()
 }
 
