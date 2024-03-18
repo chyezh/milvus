@@ -88,20 +88,20 @@ func getVchanInfo(info *testInfo) *datapb.VchannelInfo {
 		ufs = []*datapb.SegmentInfo{}
 	}
 
-	var ufsIds []int64
-	var fsIds []int64
+	var ufsIDs []int64
+	var fsIDs []int64
 	for _, segmentInfo := range ufs {
-		ufsIds = append(ufsIds, segmentInfo.ID)
+		ufsIDs = append(ufsIDs, segmentInfo.ID)
 	}
 	for _, segmentInfo := range fs {
-		fsIds = append(fsIds, segmentInfo.ID)
+		fsIDs = append(fsIDs, segmentInfo.ID)
 	}
 	vi := &datapb.VchannelInfo{
 		CollectionID:        info.collID,
 		ChannelName:         info.chanName,
 		SeekPosition:        &msgpb.MsgPosition{},
-		UnflushedSegmentIds: ufsIds,
-		FlushedSegmentIds:   fsIds,
+		UnflushedSegmentIds: ufsIDs,
+		FlushedSegmentIds:   fsIDs,
 	}
 	return vi
 }
@@ -410,13 +410,13 @@ func (s *DataSyncServiceSuite) TestStartStop() {
 		NumOfRows:     0,
 		DmlPosition:   &msgpb.MsgPosition{},
 	}}
-	var ufsIds []int64
-	var fsIds []int64
+	var ufsIDs []int64
+	var fsIDs []int64
 	for _, segmentInfo := range ufs {
-		ufsIds = append(ufsIds, segmentInfo.ID)
+		ufsIDs = append(ufsIDs, segmentInfo.ID)
 	}
 	for _, segmentInfo := range fs {
-		fsIds = append(fsIds, segmentInfo.ID)
+		fsIDs = append(fsIDs, segmentInfo.ID)
 	}
 
 	watchInfo := &datapb.ChannelWatchInfo{
@@ -424,8 +424,8 @@ func (s *DataSyncServiceSuite) TestStartStop() {
 		Vchan: &datapb.VchannelInfo{
 			CollectionID:        collMeta.ID,
 			ChannelName:         insertChannelName,
-			UnflushedSegmentIds: ufsIds,
-			FlushedSegmentIds:   fsIds,
+			UnflushedSegmentIds: ufsIDs,
+			FlushedSegmentIds:   fsIDs,
 		},
 	}
 

@@ -61,7 +61,6 @@ import (
 	"github.com/milvus-io/milvus/internal/util/componentutil"
 	"github.com/milvus-io/milvus/internal/util/dependency"
 	"github.com/milvus-io/milvus/internal/util/hookutil"
-	"github.com/milvus-io/milvus/internal/util/importutil"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/pkg/common"
 	"github.com/milvus-io/milvus/pkg/log"
@@ -1087,7 +1086,7 @@ func TestProxy(t *testing.T) {
 		assert.NotEqual(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
 	})
 
-	var insertedIds []int64
+	var insertedIDs []int64
 	wg.Add(1)
 	t.Run("insert", func(t *testing.T) {
 		defer wg.Done()
@@ -1102,7 +1101,7 @@ func TestProxy(t *testing.T) {
 
 		switch field := resp.GetIDs().GetIdField().(type) {
 		case *schemapb.IDs_IntId:
-			insertedIds = field.IntId.GetData()
+			insertedIDs = field.IntId.GetData()
 		default:
 			t.Fatalf("Unexpected ID type")
 		}
@@ -1613,7 +1612,7 @@ func TestProxy(t *testing.T) {
 	nq = 10
 
 	constructPrimaryKeysPlaceholderGroup := func() *commonpb.PlaceholderGroup {
-		expr := fmt.Sprintf("%v in [%v]", int64Field, insertedIds[0])
+		expr := fmt.Sprintf("%v in [%v]", int64Field, insertedIDs[0])
 		exprBytes := []byte(expr)
 
 		return &commonpb.PlaceholderGroup{
@@ -5025,6 +5024,7 @@ type CheckExtension struct {
 	reportChecker func(info any)
 }
 
-func (c CheckExtension) Report(info any) {
+func (c CheckExtension) Report(info any) int {
 	c.reportChecker(info)
+	return 0
 }
