@@ -9,7 +9,17 @@ import (
 )
 
 var (
-	DefaultResourceGroupName           = "__default_resource_group"
+	DefaultResourceGroupName   = "__default_resource_group"
+	DefaultResourceGroupConfig = &rgpb.ResourceGroupConfig{
+		Requests: &rgpb.ResourceGroupLimit{
+			NodeNum: 0,
+		},
+		Limits: &rgpb.ResourceGroupLimit{
+			NodeNum: 0,
+		},
+		From: make([]*rgpb.ResourceGroupTransfer, 0),
+		To:   make([]*rgpb.ResourceGroupTransfer, 0),
+	}
 	DefaultResourceGroupCapacity int32 = 1000000
 )
 

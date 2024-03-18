@@ -36,15 +36,6 @@ import (
 )
 
 var (
-	DefaultResourceGroupConfig = &rgpb.ResourceGroupConfig{
-		Requests: &rgpb.ResourceGroupLimit{
-			NodeNum: 0,
-		},
-		Limits: &rgpb.ResourceGroupLimit{
-			NodeNum: 0,
-		},
-	}
-
 	ErrRGAlreadyExist                = errors.New("resource group already exist, but create with different config")
 	ErrRecoverResourceGroupFromStore = errors.New("failed to recover resource group from store")
 	ErrNodeNotAssignToRG             = errors.New("node hasn't been assign to any resource group")
@@ -133,10 +124,14 @@ func (rm *ResourceManager) AddResourceGroup(rgName string, cfg *rgpb.ResourceGro
 	if rgName == DefaultResourceGroupName {
 		return ErrRGAlreadyExist
 	}
+	if cfg == nil {
+		// Use default config if not set.
+		// Compatible with old version.
+		cfg = DefaultResourceGroupConfig // use default config if not set.
+	}
 
 	rm.rwmutex.Lock()
 	defer rm.rwmutex.Unlock()
-
 	if rm.groups[rgName] != nil {
 		// if resource group already exist, check if configuration is the same.
 		if proto.Equal(rm.groups[rgName].GetConfig(), cfg) {
@@ -460,10 +455,11 @@ func (rm *ResourceManager) RemoveAllDownNode() {
 	defer rm.rwmutex.Unlock()
 
 	for nodeID := range rm.nodeIDMap {
-		if rm.nodeMgr.Get(nodeID) == nil {
+		if node := rm.nodeMgr.Get(nodeID); node == nil || node.IsStoppingState() {
 			// unassignNode failure can be skip.
 			rgName, err := rm.unassignNode(nodeID)
 			log.Info("remove down node from resource group",
+				zap.Bool("nodeExist", node != nil),
 				zap.Int64("nodeID", nodeID),
 				zap.String("rgName", rgName),
 				zap.Error(err),
