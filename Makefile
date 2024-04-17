@@ -25,7 +25,7 @@ ifdef disk_index
 	use_disk_index = ${disk_index}
 endif
 
-use_asan = OFF
+use_asan = ON
 ifdef USE_ASAN
 	use_asan =${USE_ASAN}
 endif
