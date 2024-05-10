@@ -213,7 +213,7 @@ func GetSegmentRelatedDataSize(segment Segment) int64 {
 	if segment.Type() == SegmentTypeSealed {
 		return calculateSegmentLogSize(segment.LoadInfo())
 	}
-	return segment.MemSize()
+	return int64(segment.ResourceUsageEstimate().InUsed.MemorySize)
 }
 
 func calculateSegmentLogSize(segmentLoadInfo *querypb.SegmentLoadInfo) int64 {

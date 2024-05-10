@@ -100,6 +100,9 @@ class VectorMemIndex : public VectorIndex {
                     const knowhere::Json& json,
                     const BitsetView& bitset) const override;
 
+    ResourceUsage
+    GetResourceUsage() const override;
+
  protected:
     virtual void
     LoadWithoutAssemble(const BinarySet& binary_set, const Config& config);
@@ -113,6 +116,8 @@ class VectorMemIndex : public VectorIndex {
 
  protected:
     Config config_;
+
+    ResourceUsage resource_usage_{};
     knowhere::Index<knowhere::IndexNode> index_;
     std::shared_ptr<storage::MemFileManagerImpl> file_manager_;
     std::shared_ptr<milvus_storage::Space> space_;

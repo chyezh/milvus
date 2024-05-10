@@ -111,6 +111,9 @@ class BitmapIndex : public ScalarIndex<T> {
         return bitsets_.size();
     }
 
+    ResourceUsage
+    GetResourceUsage() const override;
+
  private:
     size_t
     GetIndexDataSize();

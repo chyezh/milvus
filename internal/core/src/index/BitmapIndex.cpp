@@ -266,6 +266,12 @@ BitmapIndex<T>::UploadV2(const Config& config) {
 }
 
 template <typename T>
+ResourceUsage
+BitmapIndex<T>::GetResourceUsage() const {
+    return ResourceUsage{0, 0};
+}
+
+template <typename T>
 void
 BitmapIndex<T>::Load(const BinarySet& binary_set, const Config& config) {
     milvus::Assemble(const_cast<BinarySet&>(binary_set));
