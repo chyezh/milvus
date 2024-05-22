@@ -144,4 +144,6 @@ func RegisterQueryCoord(registry *prometheus.Registry) {
 	registry.MustRegister(QueryCoordNumQueryNodes)
 	registry.MustRegister(QueryCoordCurrentTargetCheckpointUnixSeconds)
 	registry.MustRegister(QueryCoordTaskLatency)
+	// may use LogServiceClient, so we need to register LogServiceClient metrics here.
+	RegisterLogServiceClient(registry)
 }
