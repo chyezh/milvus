@@ -45,6 +45,25 @@ func Test_AtEarliestPosition(t *testing.T) {
 	assert.False(t, rid.AtEarliestPosition())
 }
 
+func TestKafkaID_Compare(t *testing.T) {
+	rid1 := NewNmqID(1)
+	rid2 := NewNmqID(2)
+	assert.True(t, rid1.LT(rid2))
+	assert.True(t, rid1.LTE(rid2))
+	assert.False(t, rid1.EQ(rid2))
+	assert.False(t, rid2.LT(rid1))
+	assert.False(t, rid2.LTE(rid1))
+	assert.False(t, rid2.EQ(rid1))
+
+	rid1 = NewNmqID(2)
+	assert.False(t, rid1.LT(rid2))
+	assert.True(t, rid1.LTE(rid2))
+	assert.True(t, rid1.EQ(rid2))
+	assert.False(t, rid2.LT(rid1))
+	assert.True(t, rid2.LTE(rid1))
+	assert.True(t, rid2.EQ(rid1))
+}
+
 func TestLessOrEqualThan(t *testing.T) {
 	rid1 := &nmqID{
 		messageID: 0,
