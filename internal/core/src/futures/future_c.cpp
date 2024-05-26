@@ -48,15 +48,6 @@ future_register_ready_callback(CFuture* future,
         ->registerReadyCallback(unlockFn, mutex);
 }
 
-extern "C" void
-future_register_releasable_callback(CFuture* future,
-                                    CUnlockGoMutexFn unlockFn,
-                                    CLockedGoMutex* mutex) {
-    static_cast<milvus::futures::IFuture*>(static_cast<void*>(future))
-        ->registerReleasableCallback(
-            folly::getGlobalCPUExecutor(), 0, unlockFn, mutex);
-}
-
 extern "C" CStatus
 future_leak_and_get(CFuture* future, void** result) {
     auto [r, s] =

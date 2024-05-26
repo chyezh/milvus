@@ -53,9 +53,6 @@ type basicFuture interface {
 
 	// cancel the future with error.
 	cancel(error)
-
-	// releaseWhenUnderlyingDone release the resources of the future when underlying cgo function is done.
-	releaseWhenUnderlyingDone()
 }
 
 type Future interface {
@@ -145,17 +142,5 @@ func (f *futureImpl) blockUntilReady() {
 	C.future_go_register_ready_callback(f.future, (*C.CLockedGoMutex)(unsafe.Pointer(mu)))
 	mu.Lock()
 
-	f.ctxCancel()
-}
-
-func (f *futureImpl) releaseWhenUnderlyingDone() {
-	mu := &sync.Mutex{}
-	mu.Lock()
-	C.future_go_register_releasable_callback(f.future, (*C.CLockedGoMutex)(unsafe.Pointer(mu)))
-	mu.Lock()
-
-	if f.opts.releaser != nil {
-		f.opts.releaser()
-	}
 	f.ctxCancel()
 }

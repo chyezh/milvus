@@ -129,6 +129,7 @@ TEST(Futures, Future) {
         ASSERT_EQ(r, nullptr);
         ASSERT_EQ(s.error_code, milvus::NotImplemented);
         ASSERT_STREQ(s.error_msg, "unimplemented");
+        free((char*)(s.error_msg));
     }
 
     // cancellation path.
@@ -156,12 +157,5 @@ TEST(Futures, Future) {
 
         ASSERT_EQ(r, nullptr);
         ASSERT_EQ(s.error_code, milvus::FollyCancel);
-
-        future->registerReleasableCallback(
-            &executor,
-            0,
-            [](CLockedGoMutex* mutex) { ((std::mutex*)(mutex))->unlock(); },
-            (CLockedGoMutex*)(&mu));
-        mu.lock();
     }
 }

@@ -26,7 +26,6 @@ type futureManagerStat struct {
 
 func newActiveFutureManager() *activeFutureManager {
 	manager := &activeFutureManager{
-		gcManager:     newGCManager(),
 		activeCount:   atomic.NewInt64(0),
 		activeFutures: make([]basicFuture, 0),
 		cases:         make([]reflect.SelectCase, 1),
@@ -40,7 +39,6 @@ func newActiveFutureManager() *activeFutureManager {
 }
 
 type activeFutureManager struct {
-	gcManager     *gcFutureManager
 	activeCount   *atomic.Int64
 	activeFutures []basicFuture
 	cases         []reflect.SelectCase
@@ -53,7 +51,6 @@ func (m *activeFutureManager) Run() {
 			m.doSelect()
 		}
 	}()
-	go m.gcManager.Run()
 }
 
 func (m *activeFutureManager) Register(c basicFuture) {
@@ -63,7 +60,6 @@ func (m *activeFutureManager) Register(c basicFuture) {
 func (m *activeFutureManager) Stat() futureManagerStat {
 	return futureManagerStat{
 		ActiveCount: m.activeCount.Load(),
-		GCCount:     m.gcManager.PendingCount(),
 	}
 }
 
@@ -81,7 +77,6 @@ func (m *activeFutureManager) doSelect() {
 		offset := index - 1
 		// cancel the future and move it into gc manager.
 		m.activeFutures[offset].cancel(m.activeFutures[offset].Context().Err())
-		m.gcManager.Register(m.activeFutures[offset])
 		m.activeFutures = append(m.activeFutures[:offset], m.activeFutures[offset+1:]...)
 	}
 	m.activeCount.Store(int64(len(m.activeFutures)))
