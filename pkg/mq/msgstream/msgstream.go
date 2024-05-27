@@ -72,6 +72,7 @@ type MsgStream interface {
 }
 
 type Factory interface {
+	NewClient(ctx context.Context) (mqwrapper.Client, error)
 	NewMsgStream(ctx context.Context) (MsgStream, error)
 	NewTtMsgStream(ctx context.Context) (MsgStream, error)
 	NewMsgStreamDisposer(ctx context.Context) func([]string, string) error

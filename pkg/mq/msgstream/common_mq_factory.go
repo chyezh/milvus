@@ -21,10 +21,14 @@ type CommonFactory struct {
 	MQBufSize         int64
 }
 
+func (f *CommonFactory) NewClient(ctx context.Context) (mqwrapper.Client, error) {
+	return f.Newer(ctx)
+}
+
 // NewMsgStream is used to generate a new Msgstream object
 func (f *CommonFactory) NewMsgStream(ctx context.Context) (ms MsgStream, err error) {
 	defer wrapError(&err, "NewMsgStream")
-	cli, err := f.Newer(ctx)
+	cli, err := f.NewClient(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +38,7 @@ func (f *CommonFactory) NewMsgStream(ctx context.Context) (ms MsgStream, err err
 // NewTtMsgStream is used to generate a new TtMsgstream object
 func (f *CommonFactory) NewTtMsgStream(ctx context.Context) (ms MsgStream, err error) {
 	defer wrapError(&err, "NewTtMsgStream")
-	cli, err := f.Newer(ctx)
+	cli, err := f.NewClient(ctx)
 	if err != nil {
 		return nil, err
 	}

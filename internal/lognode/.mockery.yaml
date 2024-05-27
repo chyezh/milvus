@@ -1,0 +1,24 @@
+quiet: False
+with-expecter: True
+filename: "mock_{{.InterfaceName}}.go"
+dir: "internal/mocks/{{trimPrefix .PackagePath \"github.com/milvus-io/milvus/internal\"}}"
+mockname: "Mock{{.InterfaceName}}"
+outpkg: "mock_{{.PackageName}}"
+packages:
+  github.com/milvus-io/milvus/internal/lognode/server/wal:
+    interfaces:
+      BasicOpener:
+      OpenerBuilder:
+      Opener:
+      InterceptorBuilder:
+      AppendInterceptor:
+      AppendInterceptorWithReady:
+      Scanner:
+      BasicWAL:
+      WAL:
+  github.com/milvus-io/milvus/internal/util/logserviceutil/message:
+    interfaces:
+      MessageID:
+      ImmutableMessage:
+      MutableMessage:
+      RProperties:
