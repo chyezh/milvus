@@ -8,7 +8,9 @@ import (
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/status"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/util"
 	"github.com/milvus-io/milvus/pkg/log"
+	"github.com/milvus-io/milvus/pkg/metrics"
 	"github.com/milvus-io/milvus/pkg/util/lifetime"
+	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 	"go.uber.org/zap"
 )
@@ -59,6 +61,7 @@ func (o *openerAdaptorImpl) Open(ctx context.Context, opt *wal.OpenOption) (wal.
 
 	o.walInstances.Insert(id, wal)
 	log.Info("new wal created")
+	metrics.LogNodeWALTotal.WithLabelValues(paramtable.GetStringNodeID()).Inc()
 	return wal, nil
 }
 

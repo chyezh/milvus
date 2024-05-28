@@ -31,6 +31,8 @@ const (
 	AnalyzeTaskPrefix                  = MetaPrefix + "/analyze-task"
 	PartitionStatsInfoPrefix           = MetaPrefix + "/partition-stats"
 	PartitionStatsCurrentVersionPrefix = MetaPrefix + "/partition-stats-current-version"
+	PChannelInfoPrefix                 = MetaPrefix + "/pchannel-watch"
+	PChannelLeaseIDPrefix              = MetaPrefix + "/pchannel-leaseID"
 
 	NonRemoveFlagTomestone = "non-removed"
 	RemoveFlagTomestone    = "removed"

@@ -211,7 +211,7 @@ func (f *KmsFactory) NewMsgStreamDisposer(ctx context.Context) func([]string, st
 	}
 }
 
-func NewKmsFactory(config *paramtable.ServiceParam) Factory {
+func NewKmsFactory(config *paramtable.ServiceParam) *KmsFactory {
 	f := &KmsFactory{
 		dispatcherFactory: ProtoUDFactory{},
 		ReceiveBufSize:    config.MQCfg.ReceiveBufSize.GetAsInt64(),
@@ -222,14 +222,12 @@ func NewKmsFactory(config *paramtable.ServiceParam) Factory {
 }
 
 // NewNatsmqFactory create a new nats-mq factory.
-func NewNatsmqFactory() Factory {
+func NewNatsmqFactory() *CommonFactory {
 	paramtable.Init()
 	paramtable := paramtable.Get()
 	nmq.MustInitNatsMQ(nmq.ParseServerOption(paramtable))
 	return &CommonFactory{
 		Newer:             nmq.NewClientWithDefaultOptions,
 		DispatcherFactory: ProtoUDFactory{},
-		ReceiveBufSize:    paramtable.MQCfg.ReceiveBufSize.GetAsInt64(),
-		MQBufSize:         paramtable.MQCfg.MQBufSize.GetAsInt64(),
 	}
 }

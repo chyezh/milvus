@@ -36,6 +36,7 @@ import (
 	"github.com/milvus-io/milvus/internal/http"
 	"github.com/milvus-io/milvus/internal/http/healthz"
 	rocksmqimpl "github.com/milvus-io/milvus/internal/mq/mqimpl/rocksmq/server"
+	_ "github.com/milvus-io/milvus/internal/mq/msgstream/mqwrapper/logservice"
 	"github.com/milvus-io/milvus/internal/util/dependency"
 	kvfactory "github.com/milvus-io/milvus/internal/util/dependency/kv"
 	"github.com/milvus-io/milvus/internal/util/initcore"
@@ -137,6 +138,7 @@ type MilvusRoles struct {
 	EnableDataNode   bool `env:"ENABLE_DATA_NODE"`
 	EnableIndexCoord bool `env:"ENABLE_INDEX_COORD"`
 	EnableIndexNode  bool `env:"ENABLE_INDEX_NODE"`
+	EnableLogNode    bool `env:"ENABLE_LOG_NODE"`
 
 	Local    bool
 	Alias    string
@@ -223,6 +225,11 @@ func (mr *MilvusRoles) runIndexNode(ctx context.Context, localMsg bool, wg *sync
 	cleanLocalDir(indexDataLocalPath)
 
 	return runComponent(ctx, localMsg, wg, components.NewIndexNode, metrics.RegisterIndexNode)
+}
+
+func (mr *MilvusRoles) runLogNode(ctx context.Context, localMsg bool, wg *sync.WaitGroup) component {
+	wg.Add(1)
+	return runComponent(ctx, localMsg, wg, components.NewLogNode, metrics.RegisterLogNode)
 }
 
 func (mr *MilvusRoles) setupLogger() {
@@ -360,7 +367,7 @@ func (mr *MilvusRoles) Run() {
 
 	componentMap := make(map[string]component)
 	var rootCoord, queryCoord, indexCoord, dataCoord component
-	var proxy, dataNode, indexNode, queryNode component
+	var proxy, dataNode, indexNode, queryNode, logNode component
 	if mr.EnableRootCoord {
 		rootCoord = mr.runRootCoord(ctx, local, &wg)
 		componentMap[typeutil.RootCoordRole] = rootCoord
@@ -398,6 +405,10 @@ func (mr *MilvusRoles) Run() {
 	if mr.EnableProxy {
 		proxy = mr.runProxy(ctx, local, &wg)
 		componentMap[typeutil.ProxyRole] = proxy
+	}
+
+	if mr.EnableLogNode {
+		logNode = mr.runLogNode(ctx, local, &wg)
 	}
 
 	wg.Wait()
@@ -467,7 +478,7 @@ func (mr *MilvusRoles) Run() {
 	log.Info("All coordinators have stopped")
 
 	// stop nodes
-	nodes := []component{queryNode, indexNode, dataNode}
+	nodes := []component{queryNode, indexNode, dataNode, logNode}
 	for idx, node := range nodes {
 		if node != nil {
 			log.Info("stop node", zap.Int("idx", idx), zap.Any("node", node))
