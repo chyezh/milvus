@@ -12,6 +12,7 @@
 package client
 
 import (
+	"context"
 	"reflect"
 	"sync"
 
@@ -25,7 +26,6 @@ import (
 type client struct {
 	server          RocksMQ
 	producerOptions []ProducerOptions
-	consumerOptions []ConsumerOptions
 	wg              *sync.WaitGroup
 	closeCh         chan struct{}
 	closeOnce       sync.Once
@@ -117,11 +117,11 @@ func (c *client) Subscribe(options ConsumerOptions) (Consumer, error) {
 		}
 	}
 
-	// Take messages from RocksDB and put it into consumer.Chan(),
-	// trigger by consumer.MsgMutex which trigger by producer
-	c.consumerOptions = append(c.consumerOptions, options)
-
 	return consumer, nil
+}
+
+func (c *client) GetLatestMessageID(ctx context.Context, topic string) (int64, error) {
+	return c.server.GetLatestMsg(topic)
 }
 
 func (c *client) consume(consumer *consumer) {

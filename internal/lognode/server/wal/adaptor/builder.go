@@ -22,11 +22,9 @@ func (b builderAdaptorImpl) Name() string {
 }
 
 func (b builderAdaptorImpl) Build() (wal.Opener, error) {
-	_, err := b.builder.Build()
+	o, err := b.builder.Build()
 	if err != nil {
 		return nil, err
 	}
-	return nil, nil
-	// TODO: wait for implementation.
-	// return adaptImplsToOpener(o), nil
+	return adaptImplsToOpener(o), nil
 }
