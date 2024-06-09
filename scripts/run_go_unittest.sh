@@ -102,11 +102,12 @@ go test -race -cover -tags dynamic "${MILVUS_DIR}/util/funcutil/..." -failfast -
 pushd pkg
 go test -race -cover -tags dynamic "${PKG_DIR}/util/retry/..." -failfast -count=1  -ldflags="-r ${RPATH}"
 popd
-go test -race -cover -tags dynamic "${MILVUS_DIR}/util/sessionutil/..." -failfast -count=1  -ldflags="-r ${RPATH}"
-go test -race -cover -tags dynamic "${MILVUS_DIR}/util/typeutil/..." -failfast -count=1  -ldflags="-r ${RPATH}"
-go test -race -cover -tags dynamic "${MILVUS_DIR}/util/importutilv2/..." -failfast -count=1  -ldflags="-r ${RPATH}"
-go test -race -cover -tags dynamic "${MILVUS_DIR}/util/proxyutil/..." -failfast -count=1  -ldflags="-r ${RPATH}"
-go test -race -cover -tags dynamic "${MILVUS_DIR}/util/initcore/..." -failfast -count=1  -ldflags="-r ${RPATH}"
+go test -race -cover -tags dynamic,test "${MILVUS_DIR}/util/sessionutil/..." -failfast -count=1  -ldflags="-r ${RPATH}"
+go test -race -cover -tags dynamic,test "${MILVUS_DIR}/util/typeutil/..." -failfast -count=1  -ldflags="-r ${RPATH}"
+go test -race -cover -tags dynamic,test "${MILVUS_DIR}/util/importutilv2/..." -failfast -count=1  -ldflags="-r ${RPATH}"
+go test -race -cover -tags dynamic,test "${MILVUS_DIR}/util/proxyutil/..." -failfast -count=1  -ldflags="-r ${RPATH}"
+go test -race -cover -tags dynamic,test "${MILVUS_DIR}/util/initcore/..." -failfast -count=1  -ldflags="-r ${RPATH}"
+go test -race -cover -tags dynamic,test "${MILVUS_DIR}/util/cgo/..." -failfast -count=1  -ldflags="-r ${RPATH}"
 }
 
 function test_pkg()
