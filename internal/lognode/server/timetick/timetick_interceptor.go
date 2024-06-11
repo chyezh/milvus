@@ -105,7 +105,7 @@ func (impl *timeTickAppendInterceptor) executeSyncTimeTick(interval time.Duratio
 // syncAcknowledgedDetails syncs the timestamp acknowledged details.
 func (impl *timeTickAppendInterceptor) syncAcknowledgedDetails() {
 	// Sync up and get last confirmed timestamp.
-	ackDetails, err := impl.allocator.Sync(impl.ctx)
+	ackDetails, err := impl.allocator.SyncAndGetAcknowledged(impl.ctx)
 	if err != nil {
 		log.Warn("sync timestamp ack manager failed", zap.Error(err))
 	}

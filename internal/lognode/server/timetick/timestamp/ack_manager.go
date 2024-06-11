@@ -42,9 +42,9 @@ func (ta *AckManager) Allocate(ctx context.Context) (*Timestamp, error) {
 	return tsWithAck, nil
 }
 
-// Sync syncs the recorder with allocator, and get the last all acknowledged info.
+// SyncAndGetAcknowledged syncs the ack records with allocator, and get the last all acknowledged info.
 // Concurrent safe to call with Allocate.
-func (ta *AckManager) Sync(ctx context.Context) ([]*AckDetail, error) {
+func (ta *AckManager) SyncAndGetAcknowledged(ctx context.Context) ([]*AckDetail, error) {
 	// local timestamp may out of date, sync the underlying allocator before get last all acknowledged.
 	ta.timestampAllocator.Sync()
 

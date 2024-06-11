@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
@@ -19,7 +18,6 @@ var errExhausted = errors.New("exhausted")
 // newLocalAllocator creates a new local allocator.
 func newLocalAllocator() *localAllocator {
 	return &localAllocator{
-		mu:          sync.Mutex{},
 		nextStartID: 0,
 		endStartID:  0,
 	}
@@ -27,7 +25,6 @@ func newLocalAllocator() *localAllocator {
 
 // localAllocator allocates timestamp locally.
 type localAllocator struct {
-	mu          sync.Mutex
 	nextStartID uint64 // Allocate timestamp locally.
 	endStartID  uint64
 }
@@ -63,7 +60,6 @@ type remoteAllocator struct {
 }
 
 // newRemoteAllocator creates a new remote allocator.
-// TODO: should be batch allocated on remote and cache locally.
 func newRemoteAllocator(rc types.RootCoordClient) *remoteAllocator {
 	a := &remoteAllocator{
 		nodeID: paramtable.GetNodeID(),

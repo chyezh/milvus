@@ -23,10 +23,12 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 )
 
+// batchAllocateSize is the size of batch allocate from remote allocator.
 const batchAllocateSize = 1000
 
 var _ Allocator = (*allocatorImpl)(nil)
 
+// NewAllocator creates a new allocator.
 func NewAllocator(rc types.RootCoordClient) Allocator {
 	return &allocatorImpl{
 		mu:              sync.Mutex{},
@@ -39,7 +41,8 @@ type Allocator interface {
 	// Allocate allocates a timestamp.
 	Allocate(ctx context.Context) (uint64, error)
 
-	// Sync syncs the local allocator and remote allocator.
+	// Sync expire the local allocator messages,
+	// syncs the local allocator and remote allocator.
 	Sync()
 }
 
@@ -62,7 +65,8 @@ func (ta *allocatorImpl) Allocate(ctx context.Context) (uint64, error) {
 	return ta.allocateRemote(ctx)
 }
 
-// Sync syncs the local allocator and remote allocator.
+// Sync expire the local allocator messages,
+// syncs the local allocator and remote allocator.
 func (ta *allocatorImpl) Sync() {
 	ta.mu.Lock()
 	defer ta.mu.Unlock()
