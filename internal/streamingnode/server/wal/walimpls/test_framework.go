@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -56,38 +57,78 @@ func (f walImplsTestFramework) Run() {
 	assert.NotNil(f.t, o)
 	defer o.Close()
 
-	// construct pChannel
-	name := "test_" + randString(4)
-	pChannel := &streamingpb.PChannelInfo{
-		Name:          name,
-		Term:          1,
-		ServerID:      1,
-		VChannelInfos: []*streamingpb.VChannelInfo{},
+	// Test on multi pchannels
+	wg := sync.WaitGroup{}
+	pchannelCnt := 3
+	wg.Add(pchannelCnt)
+	for i := 0; i < pchannelCnt; i++ {
+		// construct pChannel
+		name := fmt.Sprintf("test_%d_%s", i, randString(4))
+		go func(name string) {
+			defer wg.Done()
+			newTestOneWALImpls(f.t, o, name, f.messageCount).Run()
+		}(name)
 	}
-	ctx := context.Background()
-
-	// create a wal.
-	w, err := o.Open(ctx, &OpenOption{
-		Channel: pChannel,
-	})
-	assert.NoError(f.t, err)
-	assert.NotNil(f.t, w)
-	defer w.Close()
-
-	f.testReadAndWrite(ctx, w)
+	wg.Wait()
 }
 
-func (f walImplsTestFramework) testReadAndWrite(ctx context.Context, w WALImpls) {
+func newTestOneWALImpls(t *testing.T, opener OpenerImpls, pchannel string, messageCount int) *testOneWALImplsFramework {
+	return &testOneWALImplsFramework{
+		t:            t,
+		opener:       opener,
+		pchannel:     pchannel,
+		written:      make([]message.ImmutableMessage, 0),
+		messageCount: messageCount,
+		term:         1,
+	}
+}
+
+type testOneWALImplsFramework struct {
+	t            *testing.T
+	opener       OpenerImpls
+	written      []message.ImmutableMessage
+	pchannel     string
+	messageCount int
+	term         int
+}
+
+func (f *testOneWALImplsFramework) Run() {
+	ctx := context.Background()
+
+	// test a read write loop
+	for ; f.term <= 3; f.term++ {
+		pChannel := &streamingpb.PChannelInfo{
+			Name:     f.pchannel,
+			Term:     int64(f.term),
+			ServerId: 1,
+		}
+		// create a wal.
+		w, err := f.opener.Open(ctx, &OpenOption{
+			Channel: pChannel,
+		})
+		assert.NoError(f.t, err)
+		assert.NotNil(f.t, w)
+		assert.Equal(f.t, pChannel.GetName(), w.Channel().GetName())
+		assert.Equal(f.t, pChannel.GetServerId(), w.Channel().GetServerId())
+		assert.Equal(f.t, pChannel.GetTerm(), w.Channel().GetTerm())
+
+		f.testReadAndWrite(ctx, w)
+		// close the wal
+		w.Close()
+	}
+}
+
+func (f *testOneWALImplsFramework) testReadAndWrite(ctx context.Context, w WALImpls) {
 	// Test read and write.
 	wg := sync.WaitGroup{}
 	wg.Add(3)
 
-	var written []message.ImmutableMessage
+	var newWritten []message.ImmutableMessage
 	var read1, read2 []message.ImmutableMessage
 	go func() {
 		defer wg.Done()
 		var err error
-		written, err = f.testAppend(ctx, w)
+		newWritten, err = f.testAppend(ctx, w)
 		assert.NoError(f.t, err)
 	}()
 	go func() {
@@ -107,23 +148,25 @@ func (f walImplsTestFramework) testReadAndWrite(ctx context.Context, w WALImpls)
 
 	f.assertSortedMessageList(read1)
 	f.assertSortedMessageList(read2)
-	sort.Sort(sortByMessageID(written))
-	f.assertEqualMessageList(written, read1)
-	f.assertEqualMessageList(written, read2)
+	sort.Sort(sortByMessageID(newWritten))
+	f.written = append(f.written, newWritten...)
+	f.assertSortedMessageList(f.written)
+	f.assertEqualMessageList(f.written, read1)
+	f.assertEqualMessageList(f.written, read2)
 
 	// Test different scan policy, StartFrom.
-	readFromIdx := len(read1) / 2
-	readFromMsgID := read1[readFromIdx].MessageID()
+	readFromIdx := len(f.written) / 2
+	readFromMsgID := f.written[readFromIdx].MessageID()
 	s, err := w.Read(ctx, ReadOption{
 		Name:          "scanner_deliver_start_from",
 		DeliverPolicy: options.DeliverPolicyStartFrom(readFromMsgID),
 	})
 	assert.NoError(f.t, err)
-	for i := readFromIdx; i < len(read1); i++ {
+	for i := readFromIdx; i < len(f.written); i++ {
 		msg, ok := <-s.Chan()
 		assert.NotNil(f.t, msg)
 		assert.True(f.t, ok)
-		assert.True(f.t, msg.MessageID().EQ(read1[i].MessageID()))
+		assert.True(f.t, msg.MessageID().EQ(f.written[i].MessageID()))
 	}
 	s.Close()
 
@@ -133,11 +176,11 @@ func (f walImplsTestFramework) testReadAndWrite(ctx context.Context, w WALImpls)
 		DeliverPolicy: options.DeliverPolicyStartAfter(readFromMsgID),
 	})
 	assert.NoError(f.t, err)
-	for i := readFromIdx + 1; i < len(read1); i++ {
+	for i := readFromIdx + 1; i < len(f.written); i++ {
 		msg, ok := <-s.Chan()
 		assert.NotNil(f.t, msg)
 		assert.True(f.t, ok)
-		assert.True(f.t, msg.MessageID().EQ(read1[i].MessageID()))
+		assert.True(f.t, msg.MessageID().EQ(f.written[i].MessageID()))
 	}
 	s.Close()
 
@@ -156,15 +199,14 @@ func (f walImplsTestFramework) testReadAndWrite(ctx context.Context, w WALImpls)
 	s.Close()
 }
 
-func (f walImplsTestFramework) assertSortedMessageList(msgs []message.ImmutableMessage) {
+func (f *testOneWALImplsFramework) assertSortedMessageList(msgs []message.ImmutableMessage) {
 	for i := 1; i < len(msgs); i++ {
 		assert.True(f.t, msgs[i-1].MessageID().LT(msgs[i].MessageID()))
 	}
 }
 
-func (f walImplsTestFramework) assertEqualMessageList(msgs1 []message.ImmutableMessage, msgs2 []message.ImmutableMessage) {
-	assert.Equal(f.t, f.messageCount, len(msgs1))
-	assert.Equal(f.t, f.messageCount, len(msgs2))
+func (f *testOneWALImplsFramework) assertEqualMessageList(msgs1 []message.ImmutableMessage, msgs2 []message.ImmutableMessage) {
+	assert.Equal(f.t, len(msgs2), len(msgs1))
 	for i := 0; i < len(msgs1); i++ {
 		assert.True(f.t, msgs1[i].MessageID().EQ(msgs2[i].MessageID()))
 		// assert.True(f.t, bytes.Equal(msgs1[i].Payload(), msgs2[i].Payload()))
@@ -181,10 +223,10 @@ func (f walImplsTestFramework) assertEqualMessageList(msgs1 []message.ImmutableM
 	}
 }
 
-func (f walImplsTestFramework) testAppend(ctx context.Context, w WALImpls) ([]message.ImmutableMessage, error) {
+func (f *testOneWALImplsFramework) testAppend(ctx context.Context, w WALImpls) ([]message.ImmutableMessage, error) {
 	ids := make([]message.ImmutableMessage, f.messageCount)
 	swg := sizedwaitgroup.New(5)
-	for i := 0; i < f.messageCount; i++ {
+	for i := 0; i < f.messageCount-1; i++ {
 		swg.Add()
 		go func(i int) {
 			defer swg.Done()
@@ -222,24 +264,68 @@ func (f walImplsTestFramework) testAppend(ctx context.Context, w WALImpls) ([]me
 		}(i)
 	}
 	swg.Wait()
+	// send a final hint message
+	header := commonpb.MsgHeader{
+		Base: &commonpb.MsgBase{
+			MsgType: commonpb.MsgType_Insert,
+			MsgID:   int64(f.messageCount - 1),
+		},
+	}
+	payload, err := proto.Marshal(&header)
+	if err != nil {
+		panic(err)
+	}
+	properties := map[string]string{
+		"id":    fmt.Sprintf("%d", f.messageCount-1),
+		"const": "t",
+		"term":  strconv.FormatInt(int64(f.term), 10),
+	}
+	msg := message.NewBuilder().
+		WithPayload(payload).
+		WithProperties(properties).
+		WithMessageType(message.MessageTypeTimeTick).
+		BuildMutable()
+	id, err := w.Append(ctx, msg)
+	assert.NoError(f.t, err)
+	ids[f.messageCount-1] = message.NewBuilder().
+		WithPayload(payload).
+		WithProperties(properties).
+		WithMessageID(id).
+		WithMessageType(message.MessageTypeTimeTick).
+		BuildImmutable()
 	return ids, nil
 }
 
-func (f walImplsTestFramework) testRead(ctx context.Context, w WALImpls, name string) ([]message.ImmutableMessage, error) {
+func (f *testOneWALImplsFramework) testRead(ctx context.Context, w WALImpls, name string) ([]message.ImmutableMessage, error) {
 	s, err := w.Read(ctx, ReadOption{
-		Name:          name,
-		DeliverPolicy: options.DeliverPolicyAll(),
+		Name:                name,
+		DeliverPolicy:       options.DeliverPolicyAll(),
+		ReadAheadBufferSize: 128,
 	})
 	assert.NoError(f.t, err)
 	assert.Equal(f.t, name, s.Name())
 	defer s.Close()
 
-	msgs := make([]message.ImmutableMessage, 0, f.messageCount)
-	for i := 0; i < f.messageCount; i++ {
+	expectedCnt := f.messageCount + len(f.written)
+	msgs := make([]message.ImmutableMessage, 0, expectedCnt)
+	for {
 		msg, ok := <-s.Chan()
 		assert.NotNil(f.t, msg)
 		assert.True(f.t, ok)
 		msgs = append(msgs, msg)
+		if msg.MessageType() == message.MessageTypeTimeTick {
+			termString, ok := msg.Properties().Get("term")
+			if !ok {
+				panic("lost term properties")
+			}
+			term, err := strconv.ParseInt(termString, 10, 64)
+			if err != nil {
+				panic(err)
+			}
+			if int(term) == f.term {
+				break
+			}
+		}
 	}
 	return msgs, nil
 }

@@ -6,7 +6,14 @@ import (
 )
 
 type ReadOption struct {
-	Name          string
+	// The name of the reader.
+	Name string
+	// ReadAheadBufferSize sets the size of scanner read ahead queue size.
+	// Control how many messages can be read ahead by the scanner.
+	// Higher value could potentially increase the scanner throughput but bigger memory utilization.
+	// 0 is the default value determined by the underlying wal implementation.
+	ReadAheadBufferSize int
+	// DeliverPolicy sets the deliver policy of the reader.
 	DeliverPolicy options.DeliverPolicy
 }
 

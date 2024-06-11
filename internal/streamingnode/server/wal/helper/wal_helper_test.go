@@ -12,10 +12,9 @@ import (
 func TestWALHelper(t *testing.T) {
 	h := NewWALHelper(&walimpls.OpenOption{
 		Channel: &streamingpb.PChannelInfo{
-			Name:          "test",
-			Term:          1,
-			ServerID:      1,
-			VChannelInfos: []*streamingpb.VChannelInfo{},
+			Name:     "test",
+			Term:     1,
+			ServerId: 1,
 		},
 	})
 	assert.NotNil(t, h.Channel())
