@@ -1,31 +1,46 @@
 package cache
 
-import "github.com/milvus-io/milvus/internal/lognode/server/wal/cache/lclock"
+import "github.com/milvus-io/milvus/internal/util/logserviceutil/message"
+
+// newPendingQueue creates a new pending queue.
+func newPendingQueue() *pendingQueue {
+	return &pendingQueue{
+		h: make(mesasgeWithClockHeap, 0),
+	}
+}
 
 // pendingQueue is a queue of messages.
 type pendingQueue struct {
-	pendings []messageWithClock
+	h mesasgeWithClockHeap
 }
 
 // Add add a message as pending one
 func (pq *pendingQueue) Add(msg messageWithClock) {
-	pq.pendings = append(pq.pendings, msg)
+	pq.h.Push(msg)
 }
 
-// Pop return the message that is no more pending
-func (pq *pendingQueue) Pop(confirmInfo lclock.ConfirmedInfo) []messageWithClock {
-	confirmedResult := make([]messageWithClock, 0)
-	pendings := make([]messageWithClock, 0, len(pq.pendings))
-	var droped bool
-	for _, msg := range pq.pendings {
-		state := msg.CheckState(confirmInfo)
-		switch state {
-		case messageStateConfirmed:
-			confirmedResult = append(confirmedResult, msg)
-		case messageStatePending:
-			pendings = append(pendings, msg)
-		case messageStateDropped:
-			continue
+// PopUntilEndClckReachLAC pops all messages's end clock reach the last confirmed message
+func (pq *pendingQueue) PopUntilEndClckReachLAC(lac int64) []message.ImmutableMessage {
+	result := make([]message.ImmutableMessage, 0)
+	for pq.h.Len() > 0 {
+		msg := pq.h.Peek().(messageWithClock)
+		if msg.EndClock() < lac {
+			result = append(result, pq.h.Pop().(messageWithClock).ImmutableMessage)
+		} else {
+			break
+		}
+	}
+	return result
+}
+
+// PopUtilBeginClockReachLF pops all messages's begin clock reach the last fenced message
+func (pq *pendingQueue) PopUntilBeginClockReachLF(lf int64) {
+	for pq.h.Len() > 0 {
+		msg := pq.h.Peek().(messageWithClock)
+		if msg.BeginClock() < lf {
+			pq.h.Pop()
+		} else {
+			break
 		}
 	}
 }

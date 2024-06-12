@@ -26,8 +26,8 @@ func (c *UnconfirmedLogicClock) Confirm(err error) int64 {
 
 // ConfirmedInfo is a pair of clock that contains LAC and LEC.
 type ConfirmedInfo struct {
-	LAC int64 // LAC may be less than LEC.
-	LEC int64
+	LAC int64 // Last add confirmed clock that can be read from cache.
+	LF  int64 // Last fenced clock that can be read from cache.
 }
 
 // LogicClockManager is the manager that manages the logic clock allocation and confirming.
@@ -54,7 +54,7 @@ func NewLogicClockManager() *LogicClockManager {
 	}
 }
 
-// AllocateBeginClock allocates a new clock.
+// AllocateClock allocates a new clock.
 func (lcm *LogicClockManager) AllocateClock(ctx context.Context) (UnconfirmedLogicClock, error) {
 	// if the logic clock is fenced, wait until it's not fenced.
 	if err := lcm.waitUntilNotFencedAndLock(ctx); err != nil {
@@ -96,20 +96,17 @@ func (lcm *LogicClockManager) confirm(clock int64, err error) int64 {
 		if _, ok := lcm.unconfirmedBeginClockMap[lcm.unconfirmedBeginClockHeap.Peek()]; ok {
 			break
 		}
-		// pop all deleted clocks
-		if err == nil {
-			// advance LAC only if the clock is confirmed without error.
-			lcm.confirmedInfo.LAC = lcm.unconfirmedBeginClockHeap.Peek()
-		}
+		// pop all deleted clocks and advance LAC
+		lcm.confirmedInfo.LAC = lcm.unconfirmedBeginClockHeap.Peek()
 		lcm.unconfirmedBeginClockHeap.Pop()
 	}
 
 	confirmedClock := lcm.allocateNewClock()
-	if err != nil {
+	if err != nil || lcm.fencing {
 		// if the clock is confirmed with error,
 		// fence the logic clock until all concurrency operations are done.
 		lcm.fencing = true
-		lcm.confirmedInfo.LEC = confirmedClock // confirmedClock is always the latest, so it's the new LEC.
+		lcm.confirmedInfo.LF = confirmedClock // confirmedClock is always the latest, so it's the new LF.
 	}
 	if lcm.unconfirmedBeginClockHeap.Len() == 0 {
 		// there's no concurrency operation, so the logic clock can turn into unfenced.
