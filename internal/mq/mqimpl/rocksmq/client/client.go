@@ -11,7 +11,11 @@
 
 package client
 
-import "github.com/milvus-io/milvus/internal/mq/mqimpl/rocksmq/server"
+import (
+	"context"
+
+	"github.com/milvus-io/milvus/internal/mq/mqimpl/rocksmq/server"
+)
 
 // RocksMQ is the type server.RocksMQ
 type RocksMQ = server.RocksMQ
@@ -36,6 +40,9 @@ type Client interface {
 
 	// Create a consumer instance and subscribe a topic
 	Subscribe(options ConsumerOptions) (Consumer, error)
+
+	// GetLatestMessageID returns the latest message ID
+	GetLatestMessageID(ctx context.Context, topic string) (int64, error)
 
 	// Close the client and free associated resources
 	Close()
