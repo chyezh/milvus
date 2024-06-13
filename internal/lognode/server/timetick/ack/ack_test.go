@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/milvus-io/milvus/internal/lognode/server/timetick/timestamp"
-	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
+	"github.com/milvus-io/milvus/internal/lognode/server/wal/walimplstest"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/stretchr/testify/assert"
 )
@@ -19,13 +19,13 @@ func TestAck(t *testing.T) {
 	client := timestamp.NewMockRootCoordClient(t)
 	allocator := timestamp.NewAllocator(client)
 	ackManager := NewAckManager(allocator)
-	ackManager.AdvanceLastConfirmedMessageID(message.NewTestMessageID(1))
+	ackManager.AdvanceLastConfirmedMessageID(walimplstest.NewTestMessageID(1))
 
 	ackers := map[uint64]*Acker{}
 	for i := 0; i < 10; i++ {
 		acker, err := ackManager.Allocate(ctx)
 		assert.NoError(t, err)
-		assert.True(t, acker.LastConfirmedMessageID().EQ(message.NewTestMessageID(1)))
+		assert.True(t, acker.LastConfirmedMessageID().EQ(walimplstest.NewTestMessageID(1)))
 		ackers[acker.Timestamp()] = acker
 	}
 

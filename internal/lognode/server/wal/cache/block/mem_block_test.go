@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/milvus-io/milvus/internal/lognode/server/wal/walimplstest"
 	"github.com/milvus-io/milvus/internal/mocks/util/logserviceutil/mock_message"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 	"github.com/stretchr/testify/assert"
@@ -22,7 +23,7 @@ func TestMemBlockImpl(t *testing.T) {
 		defer wg.Done()
 		for i := 0; i < msgCount; i++ {
 			time.Sleep(1 * time.Millisecond)
-			msgID := message.NewTestMessageID(int64(i))
+			msgID := walimplstest.NewTestMessageID(int64(i))
 			msg := mock_message.NewMockImmutableMessage(t)
 			msg.EXPECT().MessageID().Return(msgID).Maybe()
 			msg.EXPECT().EstimateSize().Return(2)
@@ -33,11 +34,11 @@ func TestMemBlockImpl(t *testing.T) {
 	}()
 	go func() {
 		defer wg.Done()
-		testScan(t, mutableB, message.NewTestMessageID(0), msgCount)
+		testScan(t, mutableB, walimplstest.NewTestMessageID(0), msgCount)
 	}()
 	go func() {
 		defer wg.Done()
-		testScan(t, mutableB, message.NewTestMessageID(50), msgCount-50)
+		testScan(t, mutableB, walimplstest.NewTestMessageID(50), msgCount-50)
 	}()
 	wg.Wait()
 	assert.Equal(t, 2*msgCount, immutableB.EstimateSize())
@@ -46,38 +47,38 @@ func TestMemBlockImpl(t *testing.T) {
 	wg.Add(4)
 	go func() {
 		defer wg.Done()
-		testScan(t, mutableB, message.NewTestMessageID(0), msgCount)
+		testScan(t, mutableB, walimplstest.NewTestMessageID(0), msgCount)
 	}()
 	go func() {
 		defer wg.Done()
-		testScan(t, mutableB, message.NewTestMessageID(20), msgCount-20)
+		testScan(t, mutableB, walimplstest.NewTestMessageID(20), msgCount-20)
 	}()
 	go func() {
 		defer wg.Done()
-		testScan(t, immutableB, message.NewTestMessageID(50), msgCount-50)
+		testScan(t, immutableB, walimplstest.NewTestMessageID(50), msgCount-50)
 	}()
 	go func() {
 		defer wg.Done()
-		testScan(t, immutableB, message.NewTestMessageID(80), msgCount-80)
+		testScan(t, immutableB, walimplstest.NewTestMessageID(80), msgCount-80)
 	}()
 	wg.Wait()
 }
 
 func TestMemBlockTimeoutImpl(t *testing.T) {
 	mutableB := NewMutableBlock()
-	scanner := mutableB.ReadFrom(message.NewTestMessageID(100))
+	scanner := mutableB.ReadFrom(walimplstest.NewTestMessageID(100))
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 	err := scanner.Scan(ctx)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 
-	msgID := message.NewTestMessageID(0)
+	msgID := walimplstest.NewTestMessageID(0)
 	msg := mock_message.NewMockImmutableMessage(t)
 	msg.EXPECT().MessageID().Return(msgID).Maybe()
 	msg.EXPECT().EstimateSize().Return(2)
 	mutableB.Append([]message.ImmutableMessage{msg})
 
-	scanner = mutableB.ReadFrom(message.NewTestMessageID(0))
+	scanner = mutableB.ReadFrom(walimplstest.NewTestMessageID(0))
 	ctx, cancel = context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	err = scanner.Scan(ctx)

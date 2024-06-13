@@ -5,10 +5,13 @@ import (
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/options"
 )
 
+type MessageFilter = func(message.ImmutableMessage) bool
+
 // ReadOption is the option for reading records from the wal.
 type ReadOption struct {
 	DeliverPolicy options.DeliverPolicy
 	DeliverOrder  options.DeliverOrder
+	MessageFilter MessageFilter
 }
 
 // Scanner is the interface for reading records from the wal.

@@ -12,8 +12,9 @@ var _ wal.Scanner = (*scannerAdaptorImpl)(nil)
 
 // newScannerAdaptor creates a new scanner adaptor.
 func newScannerAdaptor(
+	name string,
 	l walimpls.WALImpls,
-	readOption walimpls.ReadOption,
+	readOption wal.ReadOption,
 	cleanup func(),
 ) wal.Scanner {
 	s := &scannerAdaptorImpl{
@@ -23,7 +24,7 @@ func newScannerAdaptor(
 		reorderBuffer: utility.NewReOrderBuffer(),
 		pendingQueue:  utility.NewImmutableMessageQueue(),
 		cleanup:       cleanup,
-		ScannerHelper: helper.NewScannerHelper(readOption.Name),
+		ScannerHelper: helper.NewScannerHelper(name),
 	}
 	go s.executeConsume()
 	return s
@@ -33,7 +34,7 @@ func newScannerAdaptor(
 type scannerAdaptorImpl struct {
 	*helper.ScannerHelper
 	innerWAL      walimpls.WALImpls
-	readOption    walimpls.ReadOption
+	readOption    wal.ReadOption
 	sendingCh     chan message.ImmutableMessage
 	reorderBuffer *utility.ReOrderByTimeTickBuffer // only support time tick reorder now.
 	pendingQueue  *utility.ImmutableMessageQueue   //
@@ -53,7 +54,10 @@ func (s *scannerAdaptorImpl) Close() error {
 }
 
 func (s *scannerAdaptorImpl) executeConsume() {
-	innerScanner, err := s.innerWAL.Read(s.Context(), s.readOption)
+	innerScanner, err := s.innerWAL.Read(s.Context(), walimpls.ReadOption{
+		Name:          s.Name(),
+		DeliverPolicy: s.readOption.DeliverPolicy,
+	})
 	if err != nil {
 		s.Finish(err)
 		return
@@ -64,6 +68,7 @@ func (s *scannerAdaptorImpl) executeConsume() {
 	}()
 	for {
 		// generate the event channel and do the event loop.
+		// TODO: Consume from local cache.
 		upstream, sending := s.getEventCh(innerScanner)
 		select {
 		case <-s.Context().Done():
@@ -100,6 +105,10 @@ func (s *scannerAdaptorImpl) handleUpstream(msg message.ImmutableMessage) {
 		// If the time tick message incoming,
 		// the reorder buffer can be consumed into a pending queue with latest timetick.
 		s.pendingQueue.Add(s.reorderBuffer.PopUtilTimeTick(msg.TimeTick()))
+		return
+	}
+	// Filtering the message if needed.
+	if s.readOption.MessageFilter != nil && !s.readOption.MessageFilter(msg) {
 		return
 	}
 	// otherwise add message into reorder buffer directly.

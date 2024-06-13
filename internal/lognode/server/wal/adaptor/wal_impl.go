@@ -91,10 +91,7 @@ func (w *walAdaptorImpl) Read(ctx context.Context, opts wal.ReadOption) (wal.Sca
 	}
 	// wrap the scanner with cleanup function.
 	id := w.idAllocator.Allocate()
-	s := newScannerAdaptor(w.inner, walimpls.ReadOption{
-		DeliverPolicy: opts.DeliverPolicy,
-		Name:          name,
-	}, func() {
+	s := newScannerAdaptor(name, w.inner, opts, func() {
 		w.scanners.Remove(id)
 	})
 	w.scanners.Insert(id, s)
