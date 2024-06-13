@@ -1,33 +1,40 @@
-package timestamp
+package ack
 
 import (
+	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 	"go.uber.org/atomic"
 )
 
 var _ typeutil.HeapInterface = (*timestampWithAckArray)(nil)
 
-// newTimestampAck creates a new timestampAck.
-func newTimestampAck(ts uint64) *Timestamp {
-	return &Timestamp{
-		detail:       newDefaultAckDetail(ts),
+// newAcker creates a new acker.
+func newAcker(ts uint64, lastConfirmedMessageID message.MessageID) *Acker {
+	return &Acker{
 		acknowledged: atomic.NewBool(false),
+		detail:       newAckDetail(ts, lastConfirmedMessageID),
 	}
 }
 
-// Timestamp records the timestamp and if it has been acknowledged.
-type Timestamp struct {
+// Acker records the timestamp and last confirmed message id that has not been acknowledged.
+type Acker struct {
 	acknowledged *atomic.Bool // is acknowledged.
 	detail       *AckDetail   // info is available after acknowledged.
+	m            *AckManager
+}
+
+// LastConfirmedMessageID returns the last confirmed message id.
+func (ta *Acker) LastConfirmedMessageID() message.MessageID {
+	return ta.detail.LastConfirmedMessageID
 }
 
 // Timestamp returns the timestamp.
-func (ta *Timestamp) Timestamp() uint64 {
+func (ta *Acker) Timestamp() uint64 {
 	return ta.detail.Timestamp
 }
 
 // Ack marks the timestamp as acknowledged.
-func (ta *Timestamp) Ack(opts ...AckOption) {
+func (ta *Acker) Ack(opts ...AckOption) {
 	for _, opt := range opts {
 		opt(ta.detail)
 	}
@@ -35,7 +42,7 @@ func (ta *Timestamp) Ack(opts ...AckOption) {
 }
 
 // ackDetail returns the ack info, only can be called after acknowledged.
-func (ta *Timestamp) ackDetail() *AckDetail {
+func (ta *Acker) ackDetail() *AckDetail {
 	if !ta.acknowledged.Load() {
 		panic("unreachable: ackDetail can only be called after acknowledged")
 	}
@@ -43,7 +50,7 @@ func (ta *Timestamp) ackDetail() *AckDetail {
 }
 
 // timestampWithAckArray is a heap underlying represent of timestampAck.
-type timestampWithAckArray []*Timestamp
+type timestampWithAckArray []*Acker
 
 // Len returns the length of the heap.
 func (h timestampWithAckArray) Len() int {
@@ -62,7 +69,7 @@ func (h timestampWithAckArray) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
 func (h *timestampWithAckArray) Push(x interface{}) {
 	// Push and Pop use pointer receivers because they modify the slice's length,
 	// not just its contents.
-	*h = append(*h, x.(*Timestamp))
+	*h = append(*h, x.(*Acker))
 }
 
 // Pop pop the last one at len.

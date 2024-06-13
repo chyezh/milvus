@@ -1,28 +1,32 @@
-package timestamp
+package ack
 
 import (
 	"context"
 	"testing"
 
+	"github.com/milvus-io/milvus/internal/lognode/server/timetick/timestamp"
+	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestTimestampAck(t *testing.T) {
+func TestAck(t *testing.T) {
 	paramtable.Init()
 	paramtable.SetNodeID(1)
 
 	ctx := context.Background()
 
-	client := newMockRootCoordClient(t)
-	allocator := NewAllocator(client)
-	ackManager := NewTimestampAckManager(allocator)
+	client := timestamp.NewMockRootCoordClient(t)
+	allocator := timestamp.NewAllocator(client)
+	ackManager := NewAckManager(allocator)
+	ackManager.AdvanceLastConfirmedMessageID(message.NewTestMessageID(1))
 
-	timestamps := map[uint64]*Timestamp{}
+	ackers := map[uint64]*Acker{}
 	for i := 0; i < 10; i++ {
-		ts, err := ackManager.Allocate(ctx)
+		acker, err := ackManager.Allocate(ctx)
 		assert.NoError(t, err)
-		timestamps[ts.detail.Timestamp] = ts
+		assert.True(t, acker.LastConfirmedMessageID().EQ(message.NewTestMessageID(1)))
+		ackers[acker.Timestamp()] = acker
 	}
 
 	// notAck: [1, 2, 3, ..., 10]
@@ -33,21 +37,21 @@ func TestTimestampAck(t *testing.T) {
 
 	// notAck: [1, 3, ..., 10]
 	// ack: [2]
-	timestamps[2].Ack()
+	ackers[2].Ack()
 	details, err = ackManager.SyncAndGetAcknowledged(ctx)
 	assert.NoError(t, err)
 	assert.Empty(t, details)
 
 	// notAck: [1, 3, 5, ..., 10]
 	// ack: [2, 4]
-	timestamps[4].Ack()
+	ackers[4].Ack()
 	details, err = ackManager.SyncAndGetAcknowledged(ctx)
 	assert.NoError(t, err)
 	assert.Empty(t, details)
 
 	// notAck: [3, 5, ..., 10]
 	// ack: [1, 2, 4]
-	timestamps[1].Ack()
+	ackers[1].Ack()
 	// notAck: [3, 5, ..., 10]
 	// ack: [4]
 	details, err = ackManager.SyncAndGetAcknowledged(ctx)
@@ -65,7 +69,7 @@ func TestTimestampAck(t *testing.T) {
 	// notAck: [3]
 	// ack: [4, ..., 10]
 	for i := 5; i <= 10; i++ {
-		timestamps[uint64(i)].Ack()
+		ackers[uint64(i)].Ack()
 	}
 	details, err = ackManager.SyncAndGetAcknowledged(ctx)
 	assert.NoError(t, err)
@@ -83,7 +87,7 @@ func TestTimestampAck(t *testing.T) {
 
 	// notAck: [...,x, y]
 	// ack: [3, ..., 10]
-	timestamps[3].Ack()
+	ackers[3].Ack()
 
 	// notAck: [...,x, y]
 	// ack: []

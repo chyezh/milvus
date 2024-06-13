@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
-	"github.com/milvus-io/milvus/internal/lognode/server/timetick/timestamp"
+	"github.com/milvus-io/milvus/internal/lognode/server/timetick/ack"
 	"github.com/milvus-io/milvus/internal/lognode/server/wal/walimpls"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/status"
@@ -21,7 +21,7 @@ type timeTickAppendInterceptor struct {
 	cancel context.CancelFunc
 	ready  chan struct{}
 
-	allocator  *timestamp.AckManager
+	ackManager *ack.AckManager
 	ackDetails *ackDetails
 	sourceID   int64
 }
@@ -32,18 +32,23 @@ func (impl *timeTickAppendInterceptor) Ready() <-chan struct{} {
 }
 
 // Do implements AppendInterceptor.
-func (impl *timeTickAppendInterceptor) DoAppend(ctx context.Context, msg message.MutableMessage, append walimpls.Append) (message.MessageID, error) {
+func (impl *timeTickAppendInterceptor) DoAppend(ctx context.Context, msg message.MutableMessage, append walimpls.Append) (msgID message.MessageID, err error) {
 	if msg.MessageType() != message.MessageTypeTimeTick {
-		// Allocate new ts for message.
-		ts, err := impl.allocator.Allocate(ctx)
+		// Allocate new acker for message.
+		acker, err := impl.ackManager.Allocate(ctx)
 		if err != nil {
 			err := status.NewInner("allocate timestamp failed, %s", err.Error())
 			return nil, err
 		}
-		defer ts.Ack() // TODO: add more ack details.
+		defer func() {
+			acker.Ack(ack.OptError(err))
+			impl.ackManager.AdvanceLastConfirmedMessageID(msgID)
+		}()
 
 		// Assign timestamp to message and call append method.
-		msg = msg.WithTimeTick(ts.Timestamp())
+		msg = msg.
+			WithTimeTick(acker.Timestamp()).                  // message assigned with these timetick.
+			WithLastConfirmed(acker.LastConfirmedMessageID()) // start consuming from these message id, the message which timetick greater than current timetick will never be lost.
 	}
 	return append(ctx, msg)
 }
@@ -67,7 +72,7 @@ func (impl *timeTickAppendInterceptor) executeSyncTimeTick(interval time.Duratio
 		// New TT is always greater than all tt on previous lognode.
 		// A fencing operation of underlying WAL is needed to make exclusive produce of topic.
 		// Otherwise, the TT principle may be violated.
-		// The previous timetick message may be lost on previous lognode, send it on new lognode to recover the consuming as fast as possible.
+		// And sendTsMsg must be done, to help ackManager to get first LastConfirmedMessageID
 		select {
 		case <-impl.ctx.Done():
 			return
@@ -105,7 +110,7 @@ func (impl *timeTickAppendInterceptor) executeSyncTimeTick(interval time.Duratio
 // syncAcknowledgedDetails syncs the timestamp acknowledged details.
 func (impl *timeTickAppendInterceptor) syncAcknowledgedDetails() {
 	// Sync up and get last confirmed timestamp.
-	ackDetails, err := impl.allocator.SyncAndGetAcknowledged(impl.ctx)
+	ackDetails, err := impl.ackManager.SyncAndGetAcknowledged(impl.ctx)
 	if err != nil {
 		log.Warn("sync timestamp ack manager failed", zap.Error(err))
 	}
@@ -133,7 +138,7 @@ func (impl *timeTickAppendInterceptor) sendTsMsg(_ context.Context, wal walimpls
 	}
 
 	// Append it to wal.
-	_, err = wal.Append(impl.ctx, msg)
+	msgID, err := wal.Append(impl.ctx, msg)
 	if err != nil {
 		return errors.Wrapf(err,
 			"append time tick msg to wal failed, timestamp: %d, previous message counter: %d",
@@ -144,5 +149,6 @@ func (impl *timeTickAppendInterceptor) sendTsMsg(_ context.Context, wal walimpls
 
 	// Ack details has been committed to wal, clear it.
 	impl.ackDetails.Clear()
+	impl.ackManager.AdvanceLastConfirmedMessageID(msgID)
 	return nil
 }

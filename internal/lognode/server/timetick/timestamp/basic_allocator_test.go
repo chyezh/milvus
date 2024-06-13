@@ -2,13 +2,12 @@ package timestamp
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"testing"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/mocks"
 	"github.com/milvus-io/milvus/internal/proto/rootcoordpb"
-	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -62,32 +61,36 @@ func TestRemoteAllocator(t *testing.T) {
 	paramtable.Init()
 	paramtable.SetNodeID(1)
 
-	client := newMockRootCoordClient(t)
+	client := NewMockRootCoordClient(t)
 
 	allocator := newRemoteAllocator(client)
 	ts, count, err := allocator.allocate(context.Background(), 100)
 	assert.NoError(t, err)
 	assert.NotZero(t, ts)
 	assert.Equal(t, count, 100)
-}
 
-func newMockRootCoordClient(t *testing.T) types.RootCoordClient {
-	counter := atomic.NewUint64(1)
-	client := mocks.NewMockRootCoordClient(t)
+	// Test error.
+	client = mocks.NewMockRootCoordClient(t)
 	client.EXPECT().AllocTimestamp(mock.Anything, mock.Anything).RunAndReturn(
 		func(ctx context.Context, atr *rootcoordpb.AllocTimestampRequest, co ...grpc.CallOption) (*rootcoordpb.AllocTimestampResponse, error) {
-			if atr.Count > 1000 {
-				panic(fmt.Sprintf("count %d is too large", atr.Count))
-			}
-			c := counter.Add(uint64(atr.Count))
+			return nil, errors.New("test")
+		},
+	)
+	allocator = newRemoteAllocator(client)
+	_, _, err = allocator.allocate(context.Background(), 100)
+	assert.Error(t, err)
+
+	client.EXPECT().AllocTimestamp(mock.Anything, mock.Anything).Unset()
+	client.EXPECT().AllocTimestamp(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, atr *rootcoordpb.AllocTimestampRequest, co ...grpc.CallOption) (*rootcoordpb.AllocTimestampResponse, error) {
 			return &rootcoordpb.AllocTimestampResponse{
 				Status: &commonpb.Status{
-					ErrorCode: commonpb.ErrorCode_Success,
+					ErrorCode: commonpb.ErrorCode_ForceDeny,
 				},
-				Timestamp: c - uint64(atr.Count),
-				Count:     atr.Count,
 			}, nil
 		},
 	)
-	return client
+	allocator = newRemoteAllocator(client)
+	_, _, err = allocator.allocate(context.Background(), 100)
+	assert.Error(t, err)
 }

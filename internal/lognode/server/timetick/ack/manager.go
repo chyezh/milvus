@@ -1,31 +1,34 @@
-package timestamp
+package ack
 
 import (
 	"context"
 	"sync"
 
+	"github.com/milvus-io/milvus/internal/lognode/server/timetick/timestamp"
+	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
 
 // AckManager manages the timestampAck.
 type AckManager struct {
-	mu                 sync.Mutex
-	timestampAllocator Allocator
-	notAckHeap         typeutil.Heap[*Timestamp] // a minimum heap of timestampAck to search minimum timestamp in list.
+	mu                     sync.Mutex
+	timestampAllocator     timestamp.Allocator
+	notAckHeap             typeutil.Heap[*Acker] // a minimum heap of timestampAck to search minimum timestamp in list.
+	lastConfirmedMessageID message.MessageID
 }
 
-// NewTimestampAckManager creates a new timestampAckHelper.
-func NewTimestampAckManager(allocator Allocator) *AckManager {
+// NewAckManager creates a new timestampAckHelper.
+func NewAckManager(allocator timestamp.Allocator) *AckManager {
 	return &AckManager{
 		mu:                 sync.Mutex{},
 		timestampAllocator: allocator,
-		notAckHeap:         typeutil.NewHeap[*Timestamp](&timestampWithAckArray{}),
+		notAckHeap:         typeutil.NewHeap[*Acker](&timestampWithAckArray{}),
 	}
 }
 
 // Allocate allocates a timestamp.
 // Concurrent safe to call with Sync and Allocate.
-func (ta *AckManager) Allocate(ctx context.Context) (*Timestamp, error) {
+func (ta *AckManager) Allocate(ctx context.Context) (*Acker, error) {
 	ta.mu.Lock()
 	defer ta.mu.Unlock()
 
@@ -37,7 +40,7 @@ func (ta *AckManager) Allocate(ctx context.Context) (*Timestamp, error) {
 
 	// create new timestampAck for ack process.
 	// add ts to heap wait for ack.
-	tsWithAck := newTimestampAck(ts)
+	tsWithAck := newAcker(ts, ta.lastConfirmedMessageID)
 	ta.notAckHeap.Push(tsWithAck)
 	return tsWithAck, nil
 }
@@ -72,4 +75,17 @@ func (ta *AckManager) popUntilLastAllAcknowledged() []*AckDetail {
 		details = append(details, ack.ackDetail())
 	}
 	return details
+}
+
+// AdvanceLastConfirmedMessageID update the last confirmed message id.
+func (ta *AckManager) AdvanceLastConfirmedMessageID(msgID message.MessageID) {
+	if msgID == nil {
+		return
+	}
+
+	ta.mu.Lock()
+	if ta.lastConfirmedMessageID == nil || ta.lastConfirmedMessageID.LT(msgID) {
+		ta.lastConfirmedMessageID = msgID
+	}
+	ta.mu.Unlock()
 }

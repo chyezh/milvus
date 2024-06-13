@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/milvus-io/milvus/internal/lognode/server/timetick/ack"
 	"github.com/milvus-io/milvus/internal/lognode/server/timetick/timestamp"
 	"github.com/milvus-io/milvus/internal/lognode/server/wal/walimpls"
 	"github.com/milvus-io/milvus/internal/types"
@@ -33,7 +34,7 @@ func (b *interceptorBuilder) Build(walReady <-chan walimpls.WALImpls) walimpls.B
 		ctx:        ctx,
 		cancel:     cancel,
 		ready:      make(chan struct{}),
-		allocator:  timestamp.NewTimestampAckManager(b.allocator),
+		ackManager: ack.NewAckManager(b.allocator),
 		ackDetails: &ackDetails{},
 		sourceID:   paramtable.GetNodeID(),
 	}

@@ -16,7 +16,7 @@ func TestLogicClock(t *testing.T) {
 	m := NewLogicClockManager()
 	info := m.ConfirmedInfo()
 	assert.Equal(t, int64(0), info.LAC)
-	assert.Equal(t, int64(0), info.LFC)
+	assert.Equal(t, int64(0), info.LF)
 
 	unconfirmedClocks := make([]UnconfirmedLogicClock, 0)
 	for i := 0; i < 10; i++ {
@@ -26,7 +26,7 @@ func TestLogicClock(t *testing.T) {
 	}
 	info = m.ConfirmedInfo()
 	assert.Equal(t, int64(0), info.LAC)
-	assert.Equal(t, int64(0), info.LFC)
+	assert.Equal(t, int64(0), info.LF)
 
 	for i := 0; i < 10; i++ {
 		unconfirmedClocks[i].Confirm(nil)
@@ -36,18 +36,18 @@ func TestLogicClock(t *testing.T) {
 		} else {
 			assert.Equal(t, int64(i+1), info.LAC)
 		}
-		assert.Equal(t, int64(0), info.LFC)
+		assert.Equal(t, int64(0), info.LF)
 	}
 	info = m.ConfirmedInfo()
 	assert.Equal(t, int64(21), info.LAC)
-	assert.Equal(t, int64(0), info.LFC)
+	assert.Equal(t, int64(0), info.LF)
 }
 
 func TestLogicClockWithError(t *testing.T) {
 	m := NewLogicClockManager()
 	info := m.ConfirmedInfo()
 	assert.Equal(t, int64(0), info.LAC)
-	assert.Equal(t, int64(0), info.LFC)
+	assert.Equal(t, int64(0), info.LF)
 
 	unconfirmedClocks := make([]UnconfirmedLogicClock, 0)
 	for i := 0; i < 10; i++ {
@@ -59,12 +59,12 @@ func TestLogicClockWithError(t *testing.T) {
 		unconfirmedClocks[i].Confirm(nil)
 		info := m.ConfirmedInfo()
 		assert.Equal(t, int64(i+1), info.LAC)
-		assert.Equal(t, int64(0), info.LFC)
+		assert.Equal(t, int64(0), info.LF)
 	}
 	confirmedClock := unconfirmedClocks[5].Confirm(errors.New("test"))
 	info = m.ConfirmedInfo()
 	assert.Equal(t, int64(6), info.LAC)
-	assert.Equal(t, int64(confirmedClock), info.LFC)
+	assert.Equal(t, int64(confirmedClock), info.LF)
 	for i := 6; i < 10; i++ {
 		unconfirmedClocks[i].Confirm(nil)
 		info := m.ConfirmedInfo()
@@ -73,7 +73,7 @@ func TestLogicClockWithError(t *testing.T) {
 		} else {
 			assert.Equal(t, int64(i+1), info.LAC)
 		}
-		assert.Equal(t, int64(confirmedClock), info.LFC)
+		assert.Equal(t, int64(confirmedClock), info.LF)
 	}
 }
 
@@ -97,11 +97,11 @@ func TestConcurrency(t *testing.T) {
 	}
 	assert.Eventually(t, func() bool {
 		info := m.ConfirmedInfo()
-		return errConfirmed.Load() == info.LFC && info.LAC == 21
+		return errConfirmed.Load() == info.LF && info.LAC == 21
 	}, time.Second, 10*time.Millisecond)
 	wg.Wait()
 	info := m.ConfirmedInfo()
-	assert.Equal(t, errConfirmed.Load(), info.LFC)
+	assert.Equal(t, errConfirmed.Load(), info.LF)
 	assert.Equal(t, int64(21), info.LAC)
 }
 
@@ -140,7 +140,7 @@ func TestFencing(t *testing.T) {
 		}
 		<-ch
 		info := m.ConfirmedInfo()
-		assert.Equal(t, errConfirmedClock, info.LFC)
+		assert.Equal(t, errConfirmedClock, info.LF)
 		assert.Equal(t, int64(24), info.LAC)
 	}
 

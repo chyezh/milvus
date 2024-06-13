@@ -1,16 +1,16 @@
 package timetick
 
-import "github.com/milvus-io/milvus/internal/lognode/server/timetick/timestamp"
+import "github.com/milvus-io/milvus/internal/lognode/server/timetick/ack"
 
 // ackDetails records the information of AckDetail.
 // Used to analyze the ack details.
 // TODO: add more analysis methods. e.g. such as counter function with filter.
 type ackDetails struct {
-	detail []*timestamp.AckDetail
+	detail []*ack.AckDetail
 }
 
 // AddDetails adds details to AckDetails.
-func (ad *ackDetails) AddDetails(details []*timestamp.AckDetail) {
+func (ad *ackDetails) AddDetails(details []*ack.AckDetail) {
 	if len(details) == 0 {
 		return
 	}
