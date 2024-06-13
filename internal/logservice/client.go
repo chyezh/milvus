@@ -1,12 +1,9 @@
 package logservice
 
 import (
-	"context"
-
 	"github.com/milvus-io/milvus/internal/logcoord/client"
 	"github.com/milvus-io/milvus/internal/logservice/consumer"
 	"github.com/milvus-io/milvus/internal/logservice/producer"
-	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/options"
 )
 
@@ -27,9 +24,6 @@ type Client interface {
 
 	// CreateConsumer creates a consumer.
 	CreateConsumer(opts *options.ConsumerOptions) Consumer
-
-	// GetLatestMessageID returns the latest message id of the channel.
-	GetLatestMessageID(ctx context.Context, channelName string) (message.MessageID, error)
 
 	// Close closes the handler client.
 	Close()

@@ -1,13 +1,10 @@
 package logservice
 
 import (
-	"context"
-
 	"github.com/milvus-io/milvus/internal/logcoord/client"
 	"github.com/milvus-io/milvus/internal/lognode/client/handler"
 	"github.com/milvus-io/milvus/internal/logservice/consumer"
 	"github.com/milvus-io/milvus/internal/logservice/producer"
-	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/options"
 )
 
@@ -30,11 +27,6 @@ func (c *clientImpl) CreateProducer(opts *options.ProducerOptions) Producer {
 // CreateConsumer creates a consumer.
 func (c *clientImpl) CreateConsumer(opts *options.ConsumerOptions) Consumer {
 	return consumer.NewResumableConsumer(c.handlerClient.CreateConsumer, opts)
-}
-
-// GetLatestMessageID returns the latest message id of the channel.
-func (c *clientImpl) GetLatestMessageID(ctx context.Context, channelName string) (message.MessageID, error) {
-	return c.handlerClient.GetLatestMessageID(ctx, channelName)
 }
 
 // Close closes the handler client.

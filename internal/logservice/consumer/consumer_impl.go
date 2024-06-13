@@ -76,7 +76,7 @@ func (rc *resumableConsumerImpl) resumeLoop() {
 		// Get last checkpoint sent.
 		if rc.mh.lastMessageID != nil {
 			// set the deliver policy start after the last message id.
-			deliverPolicy = options.DeliverStartAfter(rc.mh.lastMessageID)
+			deliverPolicy = options.DeliverPolicyStartAfter(rc.mh.lastMessageID)
 		}
 		opts := &options.ConsumerOptions{
 			Channel:        rc.opts.Channel,

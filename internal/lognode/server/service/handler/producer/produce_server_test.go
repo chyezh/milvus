@@ -8,16 +8,15 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
+	"github.com/milvus-io/milvus/internal/lognode/server/wal/walimplstest"
 	"github.com/milvus-io/milvus/internal/lognode/server/walmanager"
-	mock_wal "github.com/milvus-io/milvus/internal/mocks/lognode/server/wal"
-	mock_walmanager "github.com/milvus-io/milvus/internal/mocks/lognode/server/walmanager"
-	mock_logpb "github.com/milvus-io/milvus/internal/mocks/proto/logpb"
-	"github.com/milvus-io/milvus/internal/mq/mqimpl/rocksmq/server"
+	"github.com/milvus-io/milvus/internal/mocks/lognode/server/mock_wal"
+	"github.com/milvus-io/milvus/internal/mocks/lognode/server/mock_walmanager"
+	"github.com/milvus-io/milvus/internal/mocks/proto/mock_logpb"
 	"github.com/milvus-io/milvus/internal/proto/logpb"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/service/contextutil"
 	"github.com/milvus-io/milvus/pkg/log"
-	"github.com/milvus-io/milvus/pkg/mq/msgstream/mqwrapper"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 	"github.com/stretchr/testify/assert"
@@ -87,8 +86,8 @@ func TestProduceServerRecvArm(t *testing.T) {
 	grpcProduceServer.EXPECT().Context().Return(ctx)
 
 	l := mock_wal.NewMockWAL(t)
-	l.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).Run(func(ctx context.Context, mm message.MutableMessage, f func(mqwrapper.MessageID, error)) {
-		msgID := &server.RmqID{MessageID: 1}
+	l.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).Run(func(ctx context.Context, mm message.MutableMessage, f func(message.MessageID, error)) {
+		msgID := walimplstest.NewTestMessageID(1)
 		f(msgID, nil)
 	})
 
@@ -127,7 +126,7 @@ func TestProduceServerRecvArm(t *testing.T) {
 
 	// Test send error.
 	l.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).Unset()
-	l.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).Run(func(ctx context.Context, mm message.MutableMessage, f func(mqwrapper.MessageID, error)) {
+	l.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).Run(func(ctx context.Context, mm message.MutableMessage, f func(message.MessageID, error)) {
 		f(nil, errors.New("append error"))
 	})
 

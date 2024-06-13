@@ -62,6 +62,7 @@ func CreateConsumer(
 
 type ConsumerImpl struct {
 	channel          string
+	walName          string
 	grpcStreamClient logpb.LogNodeHandlerService_ConsumeClient
 	handlerClient    logpb.LogNodeHandlerServiceClient
 	logger           *log.MLogger
@@ -125,7 +126,16 @@ func (c *ConsumerImpl) recvLoop() (err error) {
 		}
 		switch resp := resp.Response.(type) {
 		case *logpb.ConsumeResponse_Consume:
-			c.msgHandler.Handle(message.NewImmutableMessageFromPBMessage(resp.Consume.Id, resp.Consume.Message))
+			msgID, err := message.UnmarshalMessageID(c.walName, resp.Consume.GetId().GetId())
+			if err != nil {
+				return err
+			}
+			msg := message.NewBuilder().
+				WithMessageID(msgID).
+				WithPayload(resp.Consume.GetMessage().GetPayload()).
+				WithProperties(resp.Consume.GetMessage().GetProperties()).
+				BuildImmutable()
+			c.msgHandler.Handle(msg)
 		case *logpb.ConsumeResponse_Close:
 			return nil
 		default:

@@ -7,9 +7,7 @@ import (
 	"github.com/milvus-io/milvus/internal/lognode/client/handler/consumer"
 	"github.com/milvus-io/milvus/internal/lognode/client/handler/producer"
 	"github.com/milvus-io/milvus/internal/proto/logpb"
-	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/options"
-	"github.com/milvus-io/milvus/internal/util/logserviceutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/service/lazyconn"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/service/resolver"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/status"
@@ -34,9 +32,6 @@ type HandlerClient interface {
 	// CreateConsumer creates a consumer.
 	// Consumer is a stream client, it will be available until context canceled or active close.
 	CreateConsumer(ctx context.Context, opts *options.ConsumerOptions) (Consumer, error)
-
-	// GetLatestMessageID returns the latest message id of the channel.
-	GetLatestMessageID(ctx context.Context, channelName string) (message.MessageID, error)
 
 	// Close closes the handler client.
 	Close()
@@ -79,28 +74,6 @@ func (hc *handlerClientImpl) CreateConsumer(ctx context.Context, opts *options.C
 		return nil, err
 	}
 	return c.(Consumer), nil
-}
-
-// GetLatestMessageID returns the latest message id of the channel.
-func (hc *handlerClientImpl) GetLatestMessageID(ctx context.Context, channelName string) (message.MessageID, error) {
-	// Wait for handler service is ready.
-	handlerService, err := hc.getHandlerService(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	resp, err := hc.createHandlerUntilLogNodeReady(ctx, channelName, func(ctx context.Context, assign *assignment.Assignment) (any, error) {
-		// select server to consume.
-		ctx = contextutil.WithPickServerID(ctx, assign.ServerID)
-		return handlerService.GetLatestMessageID(ctx, &logpb.GetLatestMessageIDRequest{
-			ChannelName: channelName,
-			Term:        assign.Term,
-		})
-	})
-	if err != nil {
-		return nil, err
-	}
-	return message.NewMessageIDFromPBMessageID(resp.(*logpb.GetLatestMessageIDResponse).Id), nil
 }
 
 // createHandlerUntilLogNodeReady creates a handler until log node ready.

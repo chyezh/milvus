@@ -7,7 +7,6 @@ import (
 	"github.com/milvus-io/milvus/internal/lognode/server/wal"
 	"github.com/milvus-io/milvus/internal/lognode/server/walmanager"
 	"github.com/milvus-io/milvus/internal/proto/logpb"
-	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/status"
 	"github.com/milvus-io/milvus/pkg/log"
@@ -110,7 +109,9 @@ func (c *ConsumeServer) sendLoop(recvChanSignal typeutil.ChanSignalListener[erro
 			// Send Consumed message to client and do metrics.
 			messageSize := msg.EstimateSize()
 			if err := c.consumeServer.SendConsumeMessage(&logpb.ConsumeMessageReponse{
-				Id: message.NewPBMessageIDFromMessageID(msg.MessageID()),
+				Id: &logpb.MessageID{
+					Id: msg.MessageID().Marshal(),
+				},
 				Message: &logpb.Message{
 					Payload:    msg.Payload(),
 					Properties: msg.Properties().ToRawMap(),

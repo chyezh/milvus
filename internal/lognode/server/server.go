@@ -7,7 +7,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/lognode/server/service"
 	"github.com/milvus-io/milvus/internal/lognode/server/timetick"
-	"github.com/milvus-io/milvus/internal/lognode/server/wal"
+	"github.com/milvus-io/milvus/internal/lognode/server/wal/walimpls"
 	"github.com/milvus-io/milvus/internal/lognode/server/walmanager"
 	"github.com/milvus-io/milvus/internal/proto/logpb"
 	"github.com/milvus-io/milvus/internal/types"
@@ -78,7 +78,7 @@ func (s *Server) initBasicComponent(ctx context.Context) {
 	var err error
 	s.walManager, err = walmanager.OpenManager(
 		&walmanager.OpenOption{
-			InterceptorBuilders: []wal.InterceptorBuilder{
+			InterceptorBuilders: []walimpls.InterceptorBuilder{
 				timetick.NewInterceptorBuilder(s.rc),
 			},
 		},

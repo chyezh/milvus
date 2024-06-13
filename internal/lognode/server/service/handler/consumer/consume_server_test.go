@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
+	"github.com/milvus-io/milvus/internal/lognode/server/wal/walimplstest"
 	"github.com/milvus-io/milvus/internal/lognode/server/walmanager"
-	mock_wal "github.com/milvus-io/milvus/internal/mocks/lognode/server/wal"
-	mock_walmanager "github.com/milvus-io/milvus/internal/mocks/lognode/server/walmanager"
-	mock_logpb "github.com/milvus-io/milvus/internal/mocks/proto/logpb"
-	mock_message "github.com/milvus-io/milvus/internal/mocks/util/logserviceutil/message"
-	"github.com/milvus-io/milvus/internal/mq/mqimpl/rocksmq/server"
+	"github.com/milvus-io/milvus/internal/mocks/lognode/server/mock_wal"
+	"github.com/milvus-io/milvus/internal/mocks/lognode/server/mock_walmanager"
+	"github.com/milvus-io/milvus/internal/mocks/proto/mock_logpb"
+	"github.com/milvus-io/milvus/internal/mocks/util/logserviceutil/mock_message"
 	"github.com/milvus-io/milvus/internal/proto/logpb"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/message"
 	"github.com/milvus-io/milvus/internal/util/logserviceutil/service/contextutil"
@@ -152,7 +152,7 @@ func TestConsumerServeSendArm(t *testing.T) {
 
 	// test send.
 	msg := mock_message.NewMockImmutableMessage(t)
-	msg.EXPECT().MessageID().Return(&server.RmqID{})
+	msg.EXPECT().MessageID().Return(walimplstest.NewTestMessageID(1))
 	msg.EXPECT().EstimateSize().Return(0)
 	msg.EXPECT().Payload().Return([]byte{})
 	properties := mock_message.NewMockRProperties(t)

@@ -196,9 +196,6 @@ service LogNodeHandlerService {
     // If channel isn't assign to this log node, the RPC will return error CHANNEL_NOT_EXIST.
     // If channel is moving away to other log node, the RPC will return error CHANNEL_FENCED.
     rpc Consume(stream ConsumeRequest) returns (stream ConsumeResponse) {};
-
-    // GetLatestMessageID is a unary RPC to get the latest message id of a channel.
-    rpc GetLatestMessageID(GetLatestMessageIDRequest) returns (GetLatestMessageIDResponse) {};
 }
 
 // ProduceRequest is the request of the Produce RPC.

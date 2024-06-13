@@ -79,6 +79,7 @@ func CreateProducer(
 // CloseProducer
 type ProducerImpl struct {
 	channel          string
+	walName          string
 	logger           *log.MLogger
 	lifetime         lifetime.Lifetime[lifetime.State]
 	idAllocator      *util.IDAllocator
@@ -260,8 +261,15 @@ func (p *ProducerImpl) recvLoop() (err error) {
 			var result produceResponse
 			switch produceResp := resp.Produce.Response.(type) {
 			case *logpb.ProduceMessageResponse_Result:
+				msgID, err := message.UnmarshalMessageID(
+					p.walName,
+					produceResp.Result.GetId().GetId(),
+				)
+				if err != nil {
+					return err
+				}
 				result = produceResponse{
-					id: message.NewMessageIDFromPBMessageID(produceResp.Result.Id),
+					id: msgID,
 				}
 			case *logpb.ProduceMessageResponse_Error:
 				result = produceResponse{

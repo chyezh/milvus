@@ -167,7 +167,10 @@ func (p *ProduceServer) recvLoop(recvFailureSignal typeutil.ChanSignalNotifier[e
 // handleProduce handles the produce message request.
 func (p *ProduceServer) handleProduce(req *logpb.ProduceMessageRequest) {
 	p.logger.Debug("recv produce message from client", zap.Int64("requestID", req.RequestID))
-	msg := message.NewMessageFromPBMessage(req.Message)
+	msg := message.NewBuilder().
+		WithPayload(req.GetMessage().GetPayload()).
+		WithProperties(req.GetMessage().GetProperties()).
+		BuildMutable()
 
 	// Append message to wal.
 	// Concurrent append request can be executed concurrently.
@@ -198,7 +201,9 @@ func (p *ProduceServer) sendProduceResult(reqID int64, id message.MessageID, err
 	} else {
 		resp.Response = &logpb.ProduceMessageResponse_Result{
 			Result: &logpb.ProduceMessageResponseResult{
-				Id: message.NewPBMessageIDFromMessageID(id),
+				Id: &logpb.MessageID{
+					Id: id.Marshal(),
+				},
 			},
 		}
 	}
