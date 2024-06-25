@@ -75,21 +75,23 @@ type ComponentParam struct {
 	LogCfg        logConfig
 	RoleCfg       roleConfig
 
-	RootCoordGrpcServerCfg  GrpcServerConfig
-	ProxyGrpcServerCfg      GrpcServerConfig
-	QueryCoordGrpcServerCfg GrpcServerConfig
-	QueryNodeGrpcServerCfg  GrpcServerConfig
-	DataCoordGrpcServerCfg  GrpcServerConfig
-	DataNodeGrpcServerCfg   GrpcServerConfig
-	IndexNodeGrpcServerCfg  GrpcServerConfig
+	RootCoordGrpcServerCfg     GrpcServerConfig
+	ProxyGrpcServerCfg         GrpcServerConfig
+	QueryCoordGrpcServerCfg    GrpcServerConfig
+	QueryNodeGrpcServerCfg     GrpcServerConfig
+	DataCoordGrpcServerCfg     GrpcServerConfig
+	DataNodeGrpcServerCfg      GrpcServerConfig
+	IndexNodeGrpcServerCfg     GrpcServerConfig
+	StreamingNodeGrpcServerCfg GrpcServerConfig
 
-	RootCoordGrpcClientCfg  GrpcClientConfig
-	ProxyGrpcClientCfg      GrpcClientConfig
-	QueryCoordGrpcClientCfg GrpcClientConfig
-	QueryNodeGrpcClientCfg  GrpcClientConfig
-	DataCoordGrpcClientCfg  GrpcClientConfig
-	DataNodeGrpcClientCfg   GrpcClientConfig
-	IndexNodeGrpcClientCfg  GrpcClientConfig
+	RootCoordGrpcClientCfg     GrpcClientConfig
+	ProxyGrpcClientCfg         GrpcClientConfig
+	QueryCoordGrpcClientCfg    GrpcClientConfig
+	QueryNodeGrpcClientCfg     GrpcClientConfig
+	DataCoordGrpcClientCfg     GrpcClientConfig
+	DataNodeGrpcClientCfg      GrpcClientConfig
+	IndexNodeGrpcClientCfg     GrpcClientConfig
+	StreamingNodeGrpcClientCfg GrpcClientConfig
 
 	IntegrationTestCfg integrationTestConfig
 
@@ -134,6 +136,7 @@ func (p *ComponentParam) init(bt *BaseTable) {
 	p.DataCoordGrpcServerCfg.Init("dataCoord", bt)
 	p.DataNodeGrpcServerCfg.Init("dataNode", bt)
 	p.IndexNodeGrpcServerCfg.Init("indexNode", bt)
+	p.StreamingNodeGrpcServerCfg.Init("logNode", bt)
 
 	p.RootCoordGrpcClientCfg.Init("rootCoord", bt)
 	p.ProxyGrpcClientCfg.Init("proxy", bt)
@@ -142,6 +145,7 @@ func (p *ComponentParam) init(bt *BaseTable) {
 	p.DataCoordGrpcClientCfg.Init("dataCoord", bt)
 	p.DataNodeGrpcClientCfg.Init("dataNode", bt)
 	p.IndexNodeGrpcClientCfg.Init("indexNode", bt)
+	p.StreamingNodeGrpcClientCfg.Init("logNode", bt)
 
 	p.IntegrationTestCfg.init(bt)
 }

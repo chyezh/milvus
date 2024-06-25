@@ -383,6 +383,8 @@ func RegisterProxy(registry *prometheus.Registry) {
 
 	registry.MustRegister(ProxySlowQueryCount)
 	registry.MustRegister(ProxyReportValue)
+	// may use StreamingServiceClient, so we need to register StreamingServiceClient metrics here.
+	RegisterStreamingServiceClient(registry)
 }
 
 func CleanupProxyDBMetrics(nodeID int64, dbName string) {

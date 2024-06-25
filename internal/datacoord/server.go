@@ -32,6 +32,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/datacoord/broker"
@@ -44,6 +45,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore/kv/datacoord"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/storage"
+	streamingcoord "github.com/milvus-io/milvus/internal/streamingcoord/server"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/dependency"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
@@ -159,6 +161,9 @@ type Server struct {
 
 	// manage ways that data coord access other coord
 	broker broker.Broker
+
+	// streamingcoord server is embedding in datacoord now.
+	logCoord *streamingcoord.Server
 }
 
 type CollectionNameInfo struct {
@@ -336,6 +341,10 @@ func (s *Server) Init() error {
 	return s.initDataCoord()
 }
 
+func (s *Server) RegisterStreamingCoordGRPCService(server *grpc.Server) {
+	s.logCoord.RegisterGRPCService(server)
+}
+
 func (s *Server) initDataCoord() error {
 	s.stateCode.Store(commonpb.StateCode_Initializing)
 	var err error
@@ -354,6 +363,15 @@ func (s *Server) initDataCoord() error {
 	log.Info("init chunk manager factory done")
 
 	if err = s.initMeta(storageCli); err != nil {
+		return err
+	}
+
+	// Initialize log coordinator.
+	s.logCoord = streamingcoord.NewServerBuilder().
+		WithETCD(s.etcdCli).
+		WithMetaKV(s.kv).
+		WithSession(s.session).Build()
+	if err = s.logCoord.Init(context.TODO()); err != nil {
 		return err
 	}
 
@@ -415,6 +433,8 @@ func (s *Server) Start() error {
 		s.startDataCoord()
 		log.Info("DataCoord startup successfully")
 	}
+	// TODO: streamingcoord need to start in standby mode?
+	s.logCoord.Start()
 
 	return nil
 }
@@ -1134,6 +1154,10 @@ func (s *Server) Stop() error {
 	s.stopServerLoop()
 	logutil.Logger(s.ctx).Info("datacoord serverloop stopped")
 	logutil.Logger(s.ctx).Warn("datacoord stop successful")
+
+	log.Info("stop streamingcoord...")
+	s.logCoord.Stop()
+	log.Info("streamingcoord stopped")
 
 	return nil
 }

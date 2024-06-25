@@ -146,6 +146,8 @@ func RegisterQueryCoord(registry *prometheus.Registry) {
 	registry.MustRegister(QueryCoordNumQueryNodes)
 	registry.MustRegister(QueryCoordCurrentTargetCheckpointUnixSeconds)
 	registry.MustRegister(QueryCoordTaskLatency)
+	// may use StreamingServiceClient, so we need to register StreamingServiceClient metrics here.
+	RegisterStreamingServiceClient(registry)
 }
 
 func CleanQueryCoordMetricsWithCollectionID(collectionID int64) {

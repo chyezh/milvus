@@ -246,6 +246,8 @@ func RegisterRootCoord(registry *prometheus.Registry) {
 
 	registry.MustRegister(RootCoordNumEntities)
 	registry.MustRegister(RootCoordIndexedNumEntities)
+	// may use StreamingServiceClient, so we need to register StreamingServiceClient metrics here.
+	RegisterStreamingServiceClient(registry)
 }
 
 func CleanupRootCoordDBMetrics(dbName string) {

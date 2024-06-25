@@ -28,3 +28,19 @@ packages:
       Interceptor:
       InterceptorWithReady:
       InterceptorBuilder:
+  github.com/milvus-io/milvus/internal/streamingnode/server/walmanager:
+    interfaces:
+      Manager:
+  github.com/milvus-io/milvus/internal/proto/streamingpb:
+    interfaces:
+      StreamingNodeHandlerService_ConsumeServer:
+      StreamingNodeHandlerService_ProduceServer:
+  github.com/milvus-io/milvus/internal/util/streamingutil/service/discoverer:
+    interfaces:
+      Discoverer:
+  github.com/milvus-io/milvus/internal/util/streamingutil/service/resolver:
+    interfaces:
+      Resolver:
+  google.golang.org/grpc/resolver:
+    interfaces:
+      ClientConn:
