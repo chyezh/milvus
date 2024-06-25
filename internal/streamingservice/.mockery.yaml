@@ -23,6 +23,8 @@ packages:
       OpenerImpls:
       ScannerImpls:
       WALImpls:
+  github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors:
+    interfaces:
       Interceptor:
       InterceptorWithReady:
       InterceptorBuilder:

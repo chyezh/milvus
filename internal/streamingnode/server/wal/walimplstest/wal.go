@@ -5,6 +5,8 @@ package walimplstest
 
 import (
 	"context"
+	"math/rand"
+	"time"
 
 	"github.com/milvus-io/milvus/internal/proto/streamingpb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/helper"
@@ -20,6 +22,7 @@ type walImpls struct {
 }
 
 func (w *walImpls) Append(ctx context.Context, msg message.MutableMessage) (message.MessageID, error) {
+	time.Sleep(time.Duration(2+rand.Int31n(5)) * time.Millisecond)
 	return w.datas.Append(ctx, msg)
 }
 
