@@ -193,11 +193,8 @@ type StreamingCoordCataLog interface {
 	// physical channel watch related
 
 	// ListPChannel list all pchannels on milvus.
-	ListPChannel(ctx context.Context) (map[string]*streamingpb.PChannelInfo, error)
+	ListPChannel(ctx context.Context) ([]*streamingpb.PChannelInfo, error)
 
 	// SavePChannel save a pchannel info to metastore.
-	SavePChannel(ctx context.Context, info *streamingpb.PChannelInfo) error
-
-	// DropPChannel drop a pchannel info from metastore.
-	DropPChannel(ctx context.Context, name string) error
+	SavePChannels(ctx context.Context, info []*streamingpb.PChannelInfo) error
 }

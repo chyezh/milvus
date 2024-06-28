@@ -23,3 +23,6 @@ packages:
   github.com/milvus-io/milvus/internal/streamingnode/server/walmanager:
     interfaces:
       Manager:
+  github.com/milvus-io/milvus/internal/metastore:
+    interfaces:
+      StreamingCoordCataLog:

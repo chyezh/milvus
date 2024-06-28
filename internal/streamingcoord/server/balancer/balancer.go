@@ -3,7 +3,6 @@ package balancer
 import (
 	"context"
 
-	"github.com/milvus-io/milvus/internal/streamingcoord/server/channel"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/layout"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/util"
 )
@@ -20,10 +19,6 @@ type Balancer interface {
 
 	// A hint to trigger a balance.
 	ReBalance() error
-
-	// UpdateChannel update the channel info.
-	// It may be trigger a re-balance of channels.
-	UpdateChannel(channels map[string]channel.PhysicalChannel) error
 
 	// UpdateStreamingNodeStatus update the log node status.
 	// It may be trigger a re-balance of channels.

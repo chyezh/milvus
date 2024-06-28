@@ -33,12 +33,6 @@ func NewBalancer(policy Policy,
 	return b
 }
 
-// opUpdateChannel is a operation to update channel to log meta.
-type opUpdateChannel struct {
-	channel  map[string]channel.PhysicalChannel
-	finished chan struct{}
-}
-
 // opUpdateStreamingNodeStatus is a operation to update log node status.
 type opUpdateStreamingNodeStatus struct {
 	status   map[int64]*layout.NodeStatus
@@ -53,6 +47,8 @@ type opReBalance struct {
 // balancerImpl is a implementation of Balancer.
 type balancerImpl struct {
 	lifetime lifetime.Lifetime[lifetime.State]
+
+	channelManager channel.ChannelManager
 
 	// used to background balance.
 	policy Policy
@@ -85,21 +81,6 @@ func (b *balancerImpl) ReBalance() error {
 	defer b.lifetime.Done()
 
 	req := &opReBalance{
-		finished: make(chan struct{}, 1),
-	}
-	b.req <- req
-	return nil
-}
-
-// UpdateChannel update the channel to balancer.
-func (b *balancerImpl) UpdateChannel(channels map[string]channel.PhysicalChannel) error {
-	if b.lifetime.Add(lifetime.IsWorking) != nil {
-		return status.NewOnShutdownError("balancer is closing")
-	}
-	defer b.lifetime.Done()
-
-	req := &opUpdateChannel{
-		channel:  channels,
 		finished: make(chan struct{}, 1),
 	}
 	b.req <- req
@@ -216,15 +197,6 @@ func (b *balancerImpl) balance() error {
 // handlingOperation handle the operation.
 func (b *balancerImpl) handlingOperation(op any) {
 	switch op := op.(type) {
-	case *opUpdateChannel:
-		for name, channelInfo := range op.channel {
-			if channelInfo == nil {
-				b.layout.DeleteChannel(name)
-			} else {
-				b.layout.AddChannel(channelInfo)
-			}
-		}
-		close(op.finished)
 	case *opUpdateStreamingNodeStatus:
 		b.layout.UpdateNodeStatus(op.status)
 		close(op.finished)

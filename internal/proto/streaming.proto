@@ -48,33 +48,6 @@ service StreamingNodeStateService {
 }
 
 //
-// StreamingCoordChannelService
-//
-
-// StreamingCoordChannelService is the channel management operation on log coord.
-service StreamingCoordChannelService {
-    // CreatePChannel is a unary RPC to add a pchannel on log coord.
-    rpc CreatePChannel(CreatePChannelRequest) returns (CreatePChannelResponse) {}
-
-    // RemovePChannel is a unary RPC to remove a pchannel on log coord.
-    rpc RemovePChannel(RemovePChannelRequest) returns (RemovePChannelResponse) {}
-}
-
-message CreatePChannelRequest {
-    string pchannel = 1; // channel name
-}
-
-message CreatePChannelResponse {
-}
-
-message RemovePChannelRequest {
-    string pchannel = 1; // channel name
-}
-
-message RemovePChannelResponse {
-}
-
-//
 // StreamingCoordAssignmentService
 //
 
@@ -91,6 +64,7 @@ service StreamingCoordAssignmentService {
 message AssignmentDiscoverRequest {
     oneof command {
         ReportAssignmentErrorRequest report_error = 1; // report streaming error, trigger reassign right now.
+        CloseAssignmentDiscoverRequest close = 2; // close the stream.
     }
 }
 
@@ -101,10 +75,14 @@ message ReportAssignmentErrorRequest {
     StreamingError err = 3; // error happend on log node
 }
 
+// CloseAssignmentDiscoverRequest is the request to close the stream.
+message CloseAssignmentDiscoverRequest {
+}
+
 // AssignmentDiscoverResponse is the response of Discovery
 message AssignmentDiscoverResponse {
     oneof response {
-        FullStreamingNodeAssignmentWithVersion assign = 1; // all assignment info.
+        FullStreamingNodeAssignmentWithVersion full_assignment = 1; // all assignment info.
         // TODO: may be support partial assignment info in future.
     }
 }

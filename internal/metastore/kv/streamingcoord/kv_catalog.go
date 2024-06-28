@@ -3,12 +3,11 @@ package streamingcoord
 import (
 	"context"
 
+	"github.com/cockroachdb/errors"
 	"github.com/golang/protobuf/proto"
-	"github.com/milvus-io/milvus/internal/kv"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/proto/streamingpb"
-	"github.com/milvus-io/milvus/pkg/log"
-	"go.uber.org/zap"
+	"github.com/milvus-io/milvus/pkg/kv"
 )
 
 // NewCataLog creates a new catalog instance
@@ -21,43 +20,39 @@ func NewCataLog(metaKV kv.MetaKv) metastore.StreamingCoordCataLog {
 // catalog is a kv based catalog.
 type catalog struct {
 	metaKV kv.MetaKv
-	prefix string
 }
 
 // ListPChannels returns all pchannels
-func (c *catalog) ListPChannel(ctx context.Context) (map[string]*streamingpb.PChannelInfo, error) {
-	_, values, err := c.metaKV.LoadWithPrefix(PChannelInfo)
+func (c *catalog) ListPChannel(ctx context.Context) ([]*streamingpb.PChannelInfo, error) {
+	keys, values, err := c.metaKV.LoadWithPrefix(PChannelInfo)
 	if err != nil {
 		return nil, err
 	}
 
-	infos := make(map[string]*streamingpb.PChannelInfo)
-	for _, value := range values {
+	infos := make([]*streamingpb.PChannelInfo, 0, len(values))
+	for k, value := range values {
 		info := &streamingpb.PChannelInfo{}
 		err = proto.Unmarshal([]byte(value), info)
 		if err != nil {
-			log.Error("unmarshal info failed when ListPChannelInfo", zap.Error(err))
-			return nil, err
+			return nil, errors.Wrapf(err, "unmarshal pchannel %s failed", keys[k])
 		}
-		infos[info.GetName()] = info
+		infos = append(infos, info)
 	}
 	return infos, nil
 }
 
-// SavePChannel saves a pchannel
-func (c *catalog) SavePChannel(ctx context.Context, info *streamingpb.PChannelInfo) error {
-	k := buildPChannelInfoPath(info.GetName())
-	v, err := proto.Marshal(info)
-	if err != nil {
-		return err
+// SavePChannels saves a pchannel
+func (c *catalog) SavePChannels(ctx context.Context, infos []*streamingpb.PChannelInfo) error {
+	kvs := make(map[string]string, len(infos))
+	for _, info := range infos {
+		key := buildPChannelInfoPath(info.GetName())
+		v, err := proto.Marshal(info)
+		if err != nil {
+			return errors.Wrapf(err, "marshal pchannel %s failed", info.GetName())
+		}
+		kvs[key] = string(v)
 	}
-	return c.metaKV.Save(k, string(v))
-}
-
-// DropPChannel drops a pchannel
-func (c *catalog) DropPChannel(ctx context.Context, name string) error {
-	k := buildPChannelInfoPath(name)
-	return c.metaKV.Remove(k)
+	return c.metaKV.MultiSave(kvs)
 }
 
 // buildPChannelInfoPath builds the path for pchannel info.
