@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package milvus.proto.log;
+package milvus.proto.streaming;
 
 option go_package = "github.com/milvus-io/milvus/internal/proto/streamingpb";
 
@@ -29,9 +29,97 @@ message PChannelInfo {
     int64 server_id = 3; // The log node id address of the channel.
 }
 
-// VChannelInfo is the information of a vchannel info.
-message VChannelInfo {
-    string name = 1;
+// VersionPair is the version pair of global and local.
+message VersionPair {
+    int64 global = 1;
+    int64 local = 2;
+}
+
+//
+// Milvus Service
+//
+
+service StreamingCoordStateService {
+    rpc GetComponentStates(milvus.GetComponentStatesRequest) returns (milvus.ComponentStates) {}
+}
+
+service StreamingNodeStateService {
+    rpc GetComponentStates(milvus.GetComponentStatesRequest) returns (milvus.ComponentStates) {}
+}
+
+//
+// StreamingCoordChannelService
+//
+
+// StreamingCoordChannelService is the channel management operation on log coord.
+service StreamingCoordChannelService {
+    // CreatePChannel is a unary RPC to add a pchannel on log coord.
+    rpc CreatePChannel(CreatePChannelRequest) returns (CreatePChannelResponse) {}
+
+    // RemovePChannel is a unary RPC to remove a pchannel on log coord.
+    rpc RemovePChannel(RemovePChannelRequest) returns (RemovePChannelResponse) {}
+}
+
+message CreatePChannelRequest {
+    string pchannel = 1; // channel name
+}
+
+message CreatePChannelResponse {
+}
+
+message RemovePChannelRequest {
+    string pchannel = 1; // channel name
+}
+
+message RemovePChannelResponse {
+}
+
+//
+// StreamingCoordAssignmentService
+//
+
+// StreamingCoordAssignmentService is the global log management service.
+// Server: log coord. Running on every log node.
+// Client: all log publish/consuming node.
+service StreamingCoordAssignmentService {
+    // AssignmentDiscover is used to discover all log nodes managed by the streamingcoord.
+    // Channel assignment information will be pushed to client by stream.
+    rpc AssignmentDiscover(stream AssignmentDiscoverRequest) returns (stream AssignmentDiscoverResponse) {}
+}
+
+// AssignmentDiscoverRequest is the request of Discovery
+message AssignmentDiscoverRequest {
+    oneof command {
+        ReportAssignmentErrorRequest report_error = 1; // report streaming error, trigger reassign right now.
+    }
+}
+
+// ReportAssignmentErrorRequest is the request to report assignment error happens.
+message ReportAssignmentErrorRequest {
+    string name = 1; // channel name
+    int64 term = 2; // A monotonic increasing term, every time the channel is recovered or moved to another streamingnode, the term will increase by meta server.
+    StreamingError err = 3; // error happend on log node
+}
+
+// AssignmentDiscoverResponse is the response of Discovery
+message AssignmentDiscoverResponse {
+    oneof response {
+        FullStreamingNodeAssignmentWithVersion assign = 1; // all assignment info.
+        // TODO: may be support partial assignment info in future.
+    }
+}
+
+// FullStreamingNodeAssignmentWithVersion is the full assignment info of a log node with version.
+message FullStreamingNodeAssignmentWithVersion {
+    VersionPair version = 1;
+    repeated StreamingNodeAssignment assignment = 2;
+}
+
+// StreamingNodeAssignment is the assignment info of a log node.
+message StreamingNodeAssignment {
+    int64 server_id = 1;
+    string address = 2;
+    repeated PChannelInfo channels = 3;
 }
 
 // DeliverPolicy is the policy to deliver message.
