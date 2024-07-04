@@ -58,6 +58,12 @@ func (b *MutableMesasgeBuilder) WithProperties(kvs map[string]string) *MutableMe
 	return b
 }
 
+// WithVChannel creates a new builder with virtual channel.
+func (b *MutableMesasgeBuilder) WithVChannel(vchannel string) *MutableMesasgeBuilder {
+	b.properties.Set(messageVChannel, vchannel)
+	return b
+}
+
 // BuildMutable builds a mutable message.
 // Panic if not set payload and message type.
 // should only used at client side.
