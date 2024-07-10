@@ -821,6 +821,8 @@ func RegisterQueryNode(registry *prometheus.Registry) {
 	registry.MustRegister(QueryNodeForwardDeleteCost)
 	// Add cgo metrics
 	RegisterCGOMetrics(registry)
+	// may use StreamingServiceClient, so we need to register StreamingServiceClient metrics here.
+	RegisterStreamingServiceClient(registry)
 }
 
 func CleanupQueryNodeCollectionMetrics(nodeID int64, collectionID int64) {

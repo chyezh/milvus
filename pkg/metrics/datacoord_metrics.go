@@ -333,6 +333,10 @@ func RegisterDataCoord(registry *prometheus.Registry) {
 	registry.MustRegister(ImportTasks)
 	registry.MustRegister(GarbageCollectorFileScanDuration)
 	registry.MustRegister(GarbageCollectorRunCount)
+	// StreamingCoord is embedded in DataCoord, so we need to register StreamingCoord metrics here.
+	RegisterStreamingCoord(registry)
+	// may use StreamingServiceClient, so we need to register StreamingServiceClient metrics here.
+	RegisterStreamingServiceClient(registry)
 }
 
 func CleanupDataCoordSegmentMetrics(dbName string, collectionID int64, segmentID int64) {
