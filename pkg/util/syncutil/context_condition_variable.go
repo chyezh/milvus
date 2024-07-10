@@ -27,6 +27,12 @@ type ContextCond struct {
 //	c.L.Unlock()
 func (cv *ContextCond) LockAndBroadcast() {
 	cv.L.Lock()
+	cv.UnsafeBroadcast()
+}
+
+// UnsafeBroadcast performs a broadcast.
+// !!! It must be called with the underlying locker locked.
+func (cv *ContextCond) UnsafeBroadcast() {
 	if cv.ch != nil {
 		close(cv.ch)
 		cv.ch = nil
