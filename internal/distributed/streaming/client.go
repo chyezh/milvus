@@ -1,19 +1,25 @@
 package streaming
 
 import (
-	"github.com/milvus-io/milvus/internal/distributed/streaming/consumer"
-	"github.com/milvus-io/milvus/internal/distributed/streaming/producer"
+	"github.com/milvus-io/milvus/internal/distributed/streaming/internal/consumer"
+	"github.com/milvus-io/milvus/internal/distributed/streaming/internal/errs"
+	"github.com/milvus-io/milvus/internal/distributed/streaming/internal/producer"
 	"github.com/milvus-io/milvus/internal/streamingcoord/client"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler"
-	"github.com/milvus-io/milvus/pkg/streaming/util/options"
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
-var _ Client = (*clientImpl)(nil)
+var (
+	_           Client = (*clientImpl)(nil)
+	ErrCanceled        = errs.ErrCanceled
+	ErrClosed          = errs.ErrClosed
+)
 
 type (
-	Producer = producer.ResumableProducer
-	Consumer = consumer.ResumableConsumer
+	Producer        = producer.ResumableProducer
+	ProducerOptions = producer.ProducerOptions
+	Consumer        = consumer.ResumableConsumer
+	ConsumerOptions = consumer.ConsumerOptions
 )
 
 // Client is the interface of streamingservice client.
@@ -26,7 +32,7 @@ type Client interface {
 	// 3. Producer will preform auto reconnection when connection is broken.
 	//    So when streaming node is down, producer will try to reconnect to another streaming node, and send the message again.
 	//    Duplicate message writen will be generated in current implementation.
-	CreateProducer(opts *options.ProducerOptions) Producer
+	CreateProducer(opts *ProducerOptions) Producer
 
 	// CreateConsumer creates a consumer.
 	// 1. Consumer is runing on a grpc stream.
@@ -35,7 +41,7 @@ type Client interface {
 	//    So huge count of grpc stream will be generated if there's many vchannel on pchannel.
 	// TODO: Optimize the consumer to share the underlying grpc stream.
 	// Perform a server dispatching and client dispatching together.
-	CreateConsumer(opts *options.ConsumerOptions) Consumer
+	CreateConsumer(opts *ConsumerOptions) Consumer
 
 	// Close closes the handler client.
 	// Close will also stop all producer and consumer.

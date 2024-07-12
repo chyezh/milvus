@@ -43,24 +43,18 @@ func (b *MutableMesasgeBuilder) WithPayload(payload []byte) *MutableMesasgeBuild
 }
 
 // WithProperty creates a new builder with message property.
-// A key started with '_' is reserved for log system, should never used at user of client.
+// A key started with '_' is reserved for streaming system, should never used at user of client.
 func (b *MutableMesasgeBuilder) WithProperty(key string, val string) *MutableMesasgeBuilder {
 	b.properties.Set(key, val)
 	return b
 }
 
 // WithProperties creates a new builder with message properties.
-// A key started with '_' is reserved for log system, should never used at user of client.
+// A key started with '_' is reserved for streaming system, should never used at user of client.
 func (b *MutableMesasgeBuilder) WithProperties(kvs map[string]string) *MutableMesasgeBuilder {
 	for key, val := range kvs {
 		b.properties.Set(key, val)
 	}
-	return b
-}
-
-// WithVChannel creates a new builder with virtual channel.
-func (b *MutableMesasgeBuilder) WithVChannel(vchannel string) *MutableMesasgeBuilder {
-	b.properties.Set(messageVChannel, vchannel)
 	return b
 }
 

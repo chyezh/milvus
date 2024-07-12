@@ -14,11 +14,12 @@ import (
 	"github.com/milvus-io/milvus/pkg/metrics"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/streaming/util/options"
+	"github.com/milvus-io/milvus/pkg/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 )
 
 // NewResumableConsumer creates a new resumable consumer.
-func NewResumableConsumer(factory factory, opts *options.ConsumerOptions) ResumableConsumer {
+func NewResumableConsumer(factory factory, opts *ConsumerOptions) ResumableConsumer {
 	ctx, cancel := context.WithCancel(context.Background())
 	consumer := &resumableConsumerImpl{
 		ctx:            ctx,
@@ -46,15 +47,15 @@ type resumableConsumerImpl struct {
 	stopResumingCh chan struct{}
 	resumingExitCh chan struct{}
 
-	opts    *options.ConsumerOptions
+	opts    *ConsumerOptions
 	mh      *timeTickOrderMessageHandler
 	factory factory
 }
 
-type factory = func(ctx context.Context, opts *options.ConsumerOptions) (consumer.Consumer, error)
+type factory = func(ctx context.Context, opts *handler.ConsumerOptions) (consumer.Consumer, error)
 
-// Channel returns the channel name.
-func (rc *resumableConsumerImpl) Channel() string {
+// VChannel returns the vchannel name.
+func (rc *resumableConsumerImpl) VChannel() string {
 	return rc.opts.VChannel
 }
 
@@ -70,6 +71,8 @@ func (rc *resumableConsumerImpl) resumeLoop() {
 	// Use the initialized deliver policy at first running.
 	deliverPolicy := rc.opts.DeliverPolicy
 	deliverFilters := rc.opts.DeliverFilters
+	// Filtering out the vchannel message.
+	deliverFilters = append(deliverFilters, options.DeliverFilterVChannel(funcutil.ToPhysicalChannel(rc.opts.VChannel)))
 	// consumer need to resume when error occur, so message handler shouldn't close if the internal consumer encounter failure.
 	nopCloseMH := message.NopCloseHandler{
 		Handler: rc.mh,
@@ -90,8 +93,8 @@ func (rc *resumableConsumerImpl) resumeLoop() {
 			newDeliverFilters = append(newDeliverFilters, options.DeliverFilterTimeTickGT(rc.mh.lastTimeTick))
 			deliverFilters = newDeliverFilters
 		}
-		opts := &options.ConsumerOptions{
-			VChannel:       rc.opts.VChannel,
+		opts := &handler.ConsumerOptions{
+			PChannel:       funcutil.ToPhysicalChannel(rc.opts.VChannel),
 			DeliverPolicy:  deliverPolicy,
 			DeliverFilters: deliverFilters,
 			MessageHandler: nopCloseMH,
@@ -111,7 +114,7 @@ func (rc *resumableConsumerImpl) resumeLoop() {
 	}
 }
 
-func (rc *resumableConsumerImpl) createNewConsumer(opts *options.ConsumerOptions) (consumer.Consumer, error) {
+func (rc *resumableConsumerImpl) createNewConsumer(opts *handler.ConsumerOptions) (consumer.Consumer, error) {
 	// Mark as unavailable.
 	metrics.StreamingServiceClientConsumerTotal.WithLabelValues(paramtable.GetStringNodeID(), metrics.StreamingServiceClientProducerUnAvailable).Inc()
 	defer metrics.StreamingServiceClientConsumerTotal.WithLabelValues(paramtable.GetStringNodeID(), metrics.StreamingServiceClientProducerUnAvailable).Dec()

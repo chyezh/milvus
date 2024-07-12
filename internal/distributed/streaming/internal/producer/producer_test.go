@@ -9,9 +9,9 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/milvus-io/milvus/internal/mocks/streamingnode/client/handler/mock_producer"
+	"github.com/milvus-io/milvus/internal/streamingnode/client/handler"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/producer"
 	"github.com/milvus-io/milvus/pkg/mocks/streaming/util/mock_message"
-	"github.com/milvus-io/milvus/pkg/streaming/util/options"
 )
 
 func TestResumableProducer(t *testing.T) {
@@ -31,7 +31,7 @@ func TestResumableProducer(t *testing.T) {
 	})
 
 	i := 0
-	rp := NewResumableProducer(func(ctx context.Context, opts *options.ProducerOptions) (producer.Producer, error) {
+	rp := NewResumableProducer(func(ctx context.Context, opts *handler.ProducerOptions) (producer.Producer, error) {
 		if i == 0 {
 			i++
 			return p, nil
@@ -54,13 +54,14 @@ func TestResumableProducer(t *testing.T) {
 			}
 		})
 		return p, nil
-	}, &options.ProducerOptions{
+	}, &ProducerOptions{
 		VChannel: "test",
 	})
 
-	assert.Equal(t, "test", rp.Channel())
+	assert.Equal(t, "test", rp.VChannel())
 	msg := mock_message.NewMockMutableMessage(t)
 	msg.EXPECT().EstimateSize().Return(1)
+	msg.EXPECT().WithVChannel(mock.Anything).Return(msg)
 	id, err := rp.Produce(context.Background(), msg)
 	assert.NotNil(t, id)
 	assert.NoError(t, err)

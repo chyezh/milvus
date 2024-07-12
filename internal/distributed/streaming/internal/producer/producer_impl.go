@@ -9,14 +9,14 @@ import (
 	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus/internal/distributed/streaming/errs"
+	"github.com/milvus-io/milvus/internal/distributed/streaming/internal/errs"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/producer"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/metrics"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
-	"github.com/milvus-io/milvus/pkg/streaming/util/options"
+	"github.com/milvus-io/milvus/pkg/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/util/lifetime"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/util/syncutil"
@@ -24,7 +24,7 @@ import (
 
 // NewResumableProducer creates a new producer.
 // Provide an auto resuming producer.
-func NewResumableProducer(f factory, opts *options.ProducerOptions) ResumableProducer {
+func NewResumableProducer(f factory, opts *ProducerOptions) ResumableProducer {
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &resumableProducerImpl{
 		ctx:            ctx,
@@ -44,7 +44,7 @@ func NewResumableProducer(f factory, opts *options.ProducerOptions) ResumablePro
 }
 
 // factory is a factory used to create a new underlying streamingnode producer.
-type factory func(ctx context.Context, opts *options.ProducerOptions) (producer.Producer, error)
+type factory func(ctx context.Context, opts *handler.ProducerOptions) (producer.Producer, error)
 
 // resumableProducerImpl is a producer implementation.
 type resumableProducerImpl struct {
@@ -57,17 +57,16 @@ type resumableProducerImpl struct {
 
 	lifetime lifetime.Lifetime[lifetime.State]
 	logger   *log.MLogger
-	opts     *options.ProducerOptions
+	opts     *ProducerOptions
 
-	// TODO: we should use more stream producer to support high throughput.
 	producer handler.Producer
 	cond     *syncutil.ContextCond
 	// factory is used to create a new producer.
-	factory func(ctx context.Context, opts *options.ProducerOptions) (handler.Producer, error)
+	factory factory
 }
 
 // Channel returns the channel of producer.
-func (p *resumableProducerImpl) Channel() string {
+func (p *resumableProducerImpl) VChannel() string {
 	return p.opts.VChannel
 }
 
@@ -93,6 +92,8 @@ func (p *resumableProducerImpl) Produce(ctx context.Context, msg message.Mutable
 		if err != nil {
 			return nil, errors.Mark(err, errors.Wrapf(errs.ErrCanceled, "wait for producer ready"))
 		}
+		// attach the vchannel to the message.
+		msg = msg.WithVChannel(p.opts.VChannel)
 		msgID, err := producerHandler.Produce(ctx, msg)
 		if err == nil {
 			return msgID, nil
@@ -195,7 +196,9 @@ func (p *resumableProducerImpl) createNewProducer() (producer.Producer, error) {
 		// Create a new producer.
 		// a underlying stream producer life time should be equal to the resumable producer.
 		// so ctx of resumable producer is passed to underlying stream producer creation.
-		producerHandler, err := p.factory(p.ctx, p.opts)
+		producerHandler, err := p.factory(p.ctx, &handler.ProducerOptions{
+			PChannel: funcutil.ToPhysicalChannel(p.opts.VChannel),
+		})
 		if errors.Is(err, context.Canceled) {
 			return nil, err
 		}

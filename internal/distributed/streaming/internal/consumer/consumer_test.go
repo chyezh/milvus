@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/milvus-io/milvus/internal/mocks/streamingnode/client/handler/mock_consumer"
+	"github.com/milvus-io/milvus/internal/streamingnode/client/handler"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/consumer"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/streaming/util/options"
@@ -23,7 +24,7 @@ func TestResumableConsumer(t *testing.T) {
 	c.EXPECT().Done().Return(ch)
 	c.EXPECT().Error().Return(errors.New("test"))
 	c.EXPECT().Close().Return()
-	rc := NewResumableConsumer(func(ctx context.Context, opts *options.ConsumerOptions) (consumer.Consumer, error) {
+	rc := NewResumableConsumer(func(ctx context.Context, opts *handler.ConsumerOptions) (consumer.Consumer, error) {
 		if i == 0 {
 			i++
 			opts.MessageHandler.Handle(message.NewImmutableMesasge(
@@ -46,7 +47,7 @@ func TestResumableConsumer(t *testing.T) {
 		newC.EXPECT().Error().Return(errors.New("test"))
 		newC.EXPECT().Close().Return()
 		return newC, nil
-	}, &options.ConsumerOptions{
+	}, &ConsumerOptions{
 		VChannel:      "test",
 		DeliverPolicy: options.DeliverPolicyAll(),
 		DeliverFilters: []options.DeliverFilter{
@@ -67,7 +68,7 @@ func TestResumableConsumer(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	assert.Equal(t, "test", rc.Channel())
+	assert.Equal(t, "test", rc.VChannel())
 	rc.Close()
 	<-rc.Done()
 }

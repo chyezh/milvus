@@ -35,7 +35,7 @@ func (m *messageImpl) Payload() []byte {
 }
 
 // Properties returns the message properties.
-func (m *messageImpl) Properties() Properties {
+func (m *messageImpl) Properties() RProperties {
 	return m.properties
 }
 
@@ -43,6 +43,12 @@ func (m *messageImpl) Properties() Properties {
 func (m *messageImpl) EstimateSize() int {
 	// TODO: more accurate size estimation.
 	return len(m.payload) + m.properties.EstimateSize()
+}
+
+// WithVChannel sets the virtual channel of current message.
+func (m *messageImpl) WithVChannel(vChannel string) MutableMessage {
+	m.properties.Set(messageVChannel, vChannel)
+	return m
 }
 
 // WithTimeTick sets the time tick of current message.
@@ -113,9 +119,4 @@ func (m *immutableMessageImpl) VChannel() string {
 		panic(fmt.Sprintf("there's a bug in the message codes, vchannel lost in properties of message, id: %+v", m.id))
 	}
 	return value
-}
-
-// Properties returns the message read only properties.
-func (m *immutableMessageImpl) Properties() RProperties {
-	return m.properties
 }

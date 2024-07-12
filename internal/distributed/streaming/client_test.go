@@ -18,7 +18,7 @@ func TestStreamingProduce(t *testing.T) {
 	paramtable.Init()
 	etcd, _ := kvfactory.GetEtcdAndPath()
 	c := streaming.NewClient(etcd)
-	p := c.CreateProducer(&options.ProducerOptions{
+	p := c.CreateProducer(&streaming.ProducerOptions{
 		VChannel: "by-dev-rootcoord-dml_0",
 	})
 	for i := 0; i < 100; i++ {
@@ -40,7 +40,7 @@ func TestStreamingConsume(t *testing.T) {
 	etcd, _ := kvfactory.GetEtcdAndPath()
 	c := streaming.NewClient(etcd)
 	ch := make(message.ChanMessageHandler, 10)
-	consumer := c.CreateConsumer(&options.ConsumerOptions{
+	consumer := c.CreateConsumer(&streaming.ConsumerOptions{
 		VChannel:       "by-dev-rootcoord-dml_0",
 		DeliverPolicy:  options.DeliverPolicyAll(),
 		MessageHandler: ch,

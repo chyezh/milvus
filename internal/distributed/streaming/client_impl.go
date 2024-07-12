@@ -1,11 +1,10 @@
 package streaming
 
 import (
-	"github.com/milvus-io/milvus/internal/distributed/streaming/consumer"
-	"github.com/milvus-io/milvus/internal/distributed/streaming/producer"
+	"github.com/milvus-io/milvus/internal/distributed/streaming/internal/consumer"
+	"github.com/milvus-io/milvus/internal/distributed/streaming/internal/producer"
 	"github.com/milvus-io/milvus/internal/streamingcoord/client"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler"
-	"github.com/milvus-io/milvus/pkg/streaming/util/options"
 )
 
 type clientImpl struct {
@@ -15,12 +14,12 @@ type clientImpl struct {
 }
 
 // CreateProducer creates a producer.
-func (c *clientImpl) CreateProducer(opts *options.ProducerOptions) Producer {
+func (c *clientImpl) CreateProducer(opts *ProducerOptions) Producer {
 	return producer.NewResumableProducer(c.handlerClient.CreateProducer, opts)
 }
 
 // CreateConsumer creates a consumer.
-func (c *clientImpl) CreateConsumer(opts *options.ConsumerOptions) Consumer {
+func (c *clientImpl) CreateConsumer(opts *ConsumerOptions) Consumer {
 	return consumer.NewResumableConsumer(c.handlerClient.CreateConsumer, opts)
 }
 
