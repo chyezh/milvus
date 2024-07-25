@@ -612,6 +612,7 @@ tls:
   caPemPath: configs/cert/ca.pem
 
 common:
+  enableStreamingService: true
   defaultPartitionName: _default # default partition name for a collection
   defaultIndexName: _default_idx # default index name
   entityExpiration: -1 # Entity expiration in seconds, CAUTION -1 means never expire
