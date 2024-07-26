@@ -27,8 +27,8 @@ type AppendResponses struct {
 	Responses []AppendResponse
 }
 
-// IsAnyError returns the first error in the responses.
-func (a AppendResponses) IsAnyError() error {
+// UnwrapFirstError returns the first error in the responses.
+func (a AppendResponses) UnwrapFirstError() error {
 	for _, r := range a.Responses {
 		if r.Error != nil {
 			return r.Error

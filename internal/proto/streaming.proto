@@ -4,6 +4,7 @@ package milvus.proto.streaming;
 
 option go_package = "github.com/milvus-io/milvus/internal/proto/streamingpb";
 
+import "common.proto";
 import "milvus.proto";
 import "google/protobuf/empty.proto";
 
@@ -166,6 +167,7 @@ message DeliverFilter {
         DeliverFilterTimeTickGT time_tick_gt   = 1;
         DeliverFilterTimeTickGTE time_tick_gte = 2;
         DeliverFilterVChannel vchannel         = 3;
+        DeliverFilterMessageType message_type  = 4;
     }
 }
 
@@ -186,6 +188,11 @@ message DeliverFilterTimeTickGTE {
 // DeliverFilterVChannel is the filter to deliver message with vchannel name.
 message DeliverFilterVChannel {
     string vchannel = 1;  // deliver message with vchannel name.
+}
+
+message DeliverFilterMessageType {
+    repeated common.MsgType message_types =
+        1;  // deliver message with message type.
 }
 
 // StreamingCode is the error code for log internal component.
