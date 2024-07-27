@@ -7,6 +7,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
 
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick/ack"
 	"github.com/milvus-io/milvus/pkg/log"
@@ -14,7 +15,10 @@ import (
 	"github.com/milvus-io/milvus/pkg/streaming/walimpls"
 )
 
-var _ interceptors.AppendInterceptor = (*timeTickAppendInterceptor)(nil)
+var (
+	_ interceptors.InterceptorWithReady           = (*timeTickAppendInterceptor)(nil)
+	_ interceptors.InterceptorWithUnwrapMessageID = (*timeTickAppendInterceptor)(nil)
+)
 
 // timeTickAppendInterceptor is a append interceptor.
 type timeTickAppendInterceptor struct {
@@ -33,10 +37,14 @@ func (impl *timeTickAppendInterceptor) Ready() <-chan struct{} {
 }
 
 // Do implements AppendInterceptor.
-func (impl *timeTickAppendInterceptor) DoAppend(ctx context.Context, msg message.MutableMessage, append interceptors.Append) (msgID message.MessageID, err error) {
+func (impl *timeTickAppendInterceptor) DoAppend(ctx context.Context, msg message.MutableMessage, append interceptors.Append) (message.MessageID, error) {
+	var timetick uint64
+	var msgID message.MessageID
+	var err error
 	if msg.MessageType() != message.MessageTypeTimeTick {
 		// Allocate new acker for message.
 		var acker *ack.Acker
+		var err error
 		if acker, err = impl.ackManager.Allocate(ctx); err != nil {
 			return nil, errors.Wrap(err, "allocate timestamp failed")
 		}
@@ -49,8 +57,21 @@ func (impl *timeTickAppendInterceptor) DoAppend(ctx context.Context, msg message
 		msg = msg.
 			WithTimeTick(acker.Timestamp()).                  // message assigned with these timetick.
 			WithLastConfirmed(acker.LastConfirmedMessageID()) // start consuming from these message id, the message which timetick greater than current timetick will never be lost.
+		timetick = acker.Timestamp()
+	} else {
+		timetick = msg.TimeTick()
 	}
-	return append(ctx, msg)
+
+	// append the message into wal.
+	if msgID, err = append(ctx, msg); err != nil {
+		return nil, err
+	}
+
+	// wrap message id with timetick.
+	return wrapMessageIDWithTimeTick{
+		MessageID: msgID,
+		timetick:  timetick,
+	}, nil
 }
 
 // Close implements AppendInterceptor.
@@ -84,7 +105,14 @@ func (impl *timeTickAppendInterceptor) executeSyncTimeTick(interval time.Duratio
 		case <-impl.ctx.Done():
 			return
 		case <-ticker.C:
-			if err := impl.sendTsMsg(impl.ctx, wal.Append); err != nil {
+			if err := impl.sendTsMsg(impl.ctx,
+				func(ctx context.Context, msg message.MutableMessage) (message.MessageID, error) {
+					appendResult, err := wal.Append(ctx, msg)
+					if err != nil {
+						return nil, err
+					}
+					return appendResult.MessageID, nil
+				}); err != nil {
 				log.Warn("send time tick sync message failed", zap.Error(err))
 			}
 		}
@@ -167,4 +195,15 @@ func (impl *timeTickAppendInterceptor) sendTsMsg(_ context.Context, appender fun
 	impl.ackDetails.Clear()
 	impl.ackManager.AdvanceLastConfirmedMessageID(msgID)
 	return nil
+}
+
+func (impl *timeTickAppendInterceptor) UnwrapMessageID(r *wal.AppendResult) {
+	m := r.MessageID.(wrapMessageIDWithTimeTick)
+	r.MessageID = m.MessageID
+	r.TimeTick = m.timetick
+}
+
+type wrapMessageIDWithTimeTick struct {
+	message.MessageID
+	timetick uint64
 }

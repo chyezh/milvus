@@ -17,7 +17,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
 
-var _ interceptors.AppendInterceptor = (*segmentInterceptor)(nil)
+var _ interceptors.InterceptorWithReady = (*segmentInterceptor)(nil)
 
 // segmentInterceptor is the implementation of segment assignment interceptor.
 type segmentInterceptor struct {
