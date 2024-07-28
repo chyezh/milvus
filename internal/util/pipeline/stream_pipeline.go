@@ -30,7 +30,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/mq/common"
 	"github.com/milvus-io/milvus/pkg/mq/msgdispatcher"
 	"github.com/milvus-io/milvus/pkg/mq/msgstream"
-	"github.com/milvus-io/milvus/pkg/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message/adaptor"
 	"github.com/milvus-io/milvus/pkg/streaming/util/options"
 	"github.com/milvus-io/milvus/pkg/util/tsoutil"
@@ -79,11 +78,12 @@ func (p *streamPipeline) ConsumeMsgStream(position *msgpb.MsgPosition) error {
 	if streamingutil.IsStreamingServiceEnabled() {
 		handler := adaptor.NewMsgPackAdaptorHandler()
 		p.scanner = streaming.WAL().Read(context.Background(), streaming.ReadOption{
-			VChannel:      position.GetChannelName(),
-			DeliverPolicy: options.DeliverPolicyStartFrom(adaptor.MustGetMessageIDFromMQWrapperID(nil)), // position.GetMsgID())),
+			VChannel: position.GetChannelName(),
+			DeliverPolicy: options.DeliverPolicyStartFrom(
+				adaptor.MustGetMessageIDFromMQWrapperIDBytes("pulsar", position.GetMsgID()),
+			),
 			DeliverFilters: []options.DeliverFilter{
 				options.DeliverFilterTimeTickGT(position.GetTimestamp()),
-				options.DeliverFilterMessageType(message.MessageTypeDelete), // only receive delete message.
 			},
 			MessageHandler: handler,
 		})

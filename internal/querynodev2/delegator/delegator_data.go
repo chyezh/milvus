@@ -45,6 +45,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/metrics"
 	mqcommon "github.com/milvus-io/milvus/pkg/mq/common"
 	"github.com/milvus-io/milvus/pkg/mq/msgstream"
+	"github.com/milvus-io/milvus/pkg/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message/adaptor"
 	"github.com/milvus-io/milvus/pkg/streaming/util/options"
 	"github.com/milvus-io/milvus/pkg/util/commonpbutil"
@@ -772,11 +773,13 @@ func (sd *shardDelegator) createStreamFromMsgStream(ctx context.Context, positio
 func (sd *shardDelegator) createDeleteStreamFromStreamingService(ctx context.Context, position *msgpb.MsgPosition) (ch <-chan *msgstream.MsgPack, closer func(), err error) {
 	handler := adaptor.NewMsgPackAdaptorHandler()
 	s := streaming.WAL().Read(ctx, streaming.ReadOption{
-		VChannel:      position.GetChannelName(),
-		DeliverPolicy: options.DeliverPolicyStartFrom(adaptor.MustGetMessageIDFromMQWrapperID(nil)), // position.GetMsgID())),
+		VChannel: position.GetChannelName(),
+		DeliverPolicy: options.DeliverPolicyStartFrom(
+			adaptor.MustGetMessageIDFromMQWrapperIDBytes("pulsar", position.GetMsgID()),
+		),
 		DeliverFilters: []options.DeliverFilter{
 			options.DeliverFilterTimeTickGT(position.GetTimestamp()),
-			// options.DeliverFilterMessageType(), // TODO: filter out delete message.
+			options.DeliverFilterMessageType(message.MessageTypeDelete),
 		},
 		MessageHandler: handler,
 	})

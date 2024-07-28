@@ -11,21 +11,23 @@ import (
 
 type defaultMessageHandler chan message.ImmutableMessage
 
-func (h defaultMessageHandler) Handle(ctx context.Context, upstream <-chan message.ImmutableMessage, msg message.ImmutableMessage) (incoming message.ImmutableMessage, ok bool, err error) {
+func (h defaultMessageHandler) Handle(param wal.HandleParam) wal.HandleResult {
 	var sendingCh chan message.ImmutableMessage
-	if msg != nil {
+	if param.Message != nil {
 		sendingCh = h
 	}
 	select {
-	case <-ctx.Done():
-		return nil, false, ctx.Err()
-	case msg, ok := <-upstream:
+	case <-param.Ctx.Done():
+		return wal.HandleResult{Error: param.Ctx.Err()}
+	case msg, ok := <-param.Upstream:
 		if !ok {
-			return nil, false, wal.ErrUpstreamClosed
+			return wal.HandleResult{Error: wal.ErrUpstreamClosed}
 		}
-		return msg, false, nil
-	case sendingCh <- msg:
-		return nil, true, nil
+		return wal.HandleResult{Incoming: msg}
+	case sendingCh <- param.Message:
+		return wal.HandleResult{Messagehandled: true}
+	case <-param.TimeTickChan:
+		return wal.HandleResult{TimeTickUpdated: true}
 	}
 }
 

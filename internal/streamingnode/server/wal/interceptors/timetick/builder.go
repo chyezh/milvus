@@ -2,11 +2,15 @@ package timetick
 
 import (
 	"context"
-	"time"
 
+	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick/ack"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick/inspector"
+	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/util/syncutil"
+	"go.uber.org/zap"
 )
 
 var _ interceptors.InterceptorBuilder = (*interceptorBuilder)(nil)
@@ -24,18 +28,22 @@ type interceptorBuilder struct{}
 // Build implements Builder.
 func (b *interceptorBuilder) Build(param interceptors.InterceptorBuildParam) interceptors.Interceptor {
 	ctx, cancel := context.WithCancel(context.Background())
-	interceptor := &timeTickAppendInterceptor{
-		ctx:        ctx,
-		cancel:     cancel,
-		ready:      make(chan struct{}),
-		ackManager: ack.NewAckManager(),
-		ackDetails: &ackDetails{},
-		sourceID:   paramtable.GetNodeID(),
+	operator := &timeTickSyncOperator{
+		ctx:                   ctx,
+		cancel:                cancel,
+		logger:                log.With(zap.Any("pchannel", param.WALImpls.Channel())),
+		pchannel:              param.WALImpls.Channel(),
+		notifier:              syncutil.NewFuture[*inspector.SyncNotifier](),
+		ready:                 make(chan struct{}),
+		interceptorBuildParam: param,
+		ackManager:            ack.NewAckManager(),
+		ackDetails:            &ackDetails{},
+		sourceID:              paramtable.GetNodeID(),
+		timeTickInfoListener:  inspector.NewTimeTickInfoListener(),
 	}
-	go interceptor.executeSyncTimeTick(
-		// TODO: move the configuration to streamingnode.
-		paramtable.Get().ProxyCfg.TimeTickInterval.GetAsDuration(time.Millisecond),
-		param,
-	)
-	return interceptor
+	go operator.initialize()
+	resource.Resource().TimeTickInspector().RegisterSyncOperator(operator)
+	return &timeTickAppendInterceptor{
+		operator: operator,
+	}
 }

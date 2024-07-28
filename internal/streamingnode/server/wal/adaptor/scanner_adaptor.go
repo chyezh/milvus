@@ -3,7 +3,9 @@ package adaptor
 import (
 	"go.uber.org/zap"
 
+	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick/inspector"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
@@ -20,19 +22,22 @@ func newScannerAdaptor(
 	name string,
 	l walimpls.WALImpls,
 	readOption wal.ReadOption,
+	timeTickListener *inspector.TimeTickInfoListener,
 	cleanup func(),
 ) wal.Scanner {
 	if readOption.MesasgeHandler == nil {
 		readOption.MesasgeHandler = defaultMessageHandler(make(chan message.ImmutableMessage))
 	}
 	s := &scannerAdaptorImpl{
-		logger:        log.With(zap.String("name", name), zap.String("channel", l.Channel().Name)),
-		innerWAL:      l,
-		readOption:    readOption,
-		reorderBuffer: utility.NewReOrderBuffer(),
-		pendingQueue:  typeutil.NewMultipartQueue[message.ImmutableMessage](),
-		cleanup:       cleanup,
-		ScannerHelper: helper.NewScannerHelper(name),
+		logger:           log.With(zap.String("name", name), zap.String("channel", l.Channel().Name)),
+		innerWAL:         l,
+		timeTickListener: timeTickListener,
+		readOption:       readOption,
+		reorderBuffer:    utility.NewReOrderBuffer(),
+		pendingQueue:     typeutil.NewMultipartQueue[message.ImmutableMessage](),
+		cleanup:          cleanup,
+		ScannerHelper:    helper.NewScannerHelper(name),
+		lastTimeTickInfo: inspector.TimeTickInfo{},
 	}
 	go s.executeConsume()
 	return s
@@ -41,12 +46,14 @@ func newScannerAdaptor(
 // scannerAdaptorImpl is a wrapper of ScannerImpls to extend it into a Scanner interface.
 type scannerAdaptorImpl struct {
 	*helper.ScannerHelper
-	logger        *log.MLogger
-	innerWAL      walimpls.WALImpls
-	readOption    wal.ReadOption
-	reorderBuffer *utility.ReOrderByTimeTickBuffer                   // only support time tick reorder now.
-	pendingQueue  *typeutil.MultipartQueue[message.ImmutableMessage] //
-	cleanup       func()
+	logger           *log.MLogger
+	timeTickListener *inspector.TimeTickInfoListener
+	innerWAL         walimpls.WALImpls
+	readOption       wal.ReadOption
+	reorderBuffer    *utility.ReOrderByTimeTickBuffer                   // only support time tick reorder now.
+	pendingQueue     *typeutil.MultipartQueue[message.ImmutableMessage] //
+	cleanup          func()
+	lastTimeTickInfo inspector.TimeTickInfo
 }
 
 // Channel returns the channel assignment info of the wal.
@@ -85,20 +92,35 @@ func (s *scannerAdaptorImpl) executeConsume() {
 	for {
 		// generate the event channel and do the event loop.
 		// TODO: Consume from local cache.
-		upstream := s.getUpstream(innerScanner)
-
-		msg, ok, err := s.readOption.MesasgeHandler.Handle(s.Context(), upstream, s.pendingQueue.Next())
-		if err != nil {
+		handleResult := s.readOption.MesasgeHandler.Handle(wal.HandleParam{
+			Ctx:          s.Context(),
+			Upstream:     s.getUpstream(innerScanner),
+			TimeTickChan: s.getTimeTickUpdateChan(),
+			Message:      s.pendingQueue.Next(),
+		})
+		if handleResult.Error != nil {
 			s.Finish(err)
 			return
 		}
-		if ok {
+		if handleResult.Messagehandled {
 			s.pendingQueue.UnsafeAdvance()
 		}
-		if msg != nil {
-			s.handleUpstream(msg)
+		if handleResult.Incoming != nil {
+			s.handleUpstream(handleResult.Incoming)
+		}
+		// If the timetick just updated with a non persist operation,
+		// we just make a fake message to keep timetick sync if there are no more pending message.
+		if handleResult.TimeTickUpdated {
+			s.handleTimeTickUpdated()
 		}
 	}
+}
+
+func (s *scannerAdaptorImpl) getTimeTickUpdateChan() <-chan struct{} {
+	if s.pendingQueue.Len() == 0 && s.reorderBuffer.Len() == 0 && !s.lastTimeTickInfo.IsZero() {
+		return s.timeTickListener.WatchAtMessageID(s.lastTimeTickInfo.MessageID, s.lastTimeTickInfo.LastTimeTick)
+	}
+	return nil
 }
 
 func (s *scannerAdaptorImpl) getUpstream(scanner walimpls.ScannerImpls) <-chan message.ImmutableMessage {
@@ -115,6 +137,11 @@ func (s *scannerAdaptorImpl) handleUpstream(msg message.ImmutableMessage) {
 		// If the time tick message incoming,
 		// the reorder buffer can be consumed into a pending queue with latest timetick.
 		s.pendingQueue.Add(s.reorderBuffer.PopUtilTimeTick(msg.TimeTick()))
+		s.lastTimeTickInfo = inspector.TimeTickInfo{
+			MessageID:              msg.MessageID(),
+			LastTimeTick:           msg.TimeTick(),
+			LastConfirmedMessageID: msg.LastConfirmedMessageID(),
+		}
 		return
 	}
 	// Filtering the message if needed.
@@ -128,5 +155,26 @@ func (s *scannerAdaptorImpl) handleUpstream(msg message.ImmutableMessage) {
 			zap.Uint64("timetick", msg.TimeTick()),
 			zap.String("vchannel", msg.VChannel()),
 			zap.Error(err))
+	}
+}
+
+func (s *scannerAdaptorImpl) handleTimeTickUpdated() {
+	msg, err := message.NewTimeTickMessageBuilderV1().
+		WithBroadcast().
+		WithHeader(&message.TimeTickMessageHeader{}).
+		WithBody(&msgpb.TimeTickMsg{}).
+		BuildMutable()
+	if err != nil {
+		s.logger.Warn("unreachable: a marshal timetick operation must be success")
+	}
+	timeTickInfo := s.timeTickListener.Get()
+	if timeTickInfo.MessageID.EQ(s.lastTimeTickInfo.MessageID) && timeTickInfo.LastTimeTick > s.lastTimeTickInfo.LastTimeTick {
+		s.lastTimeTickInfo.LastTimeTick = timeTickInfo.LastTimeTick
+		s.pendingQueue.AddOne(
+			msg.
+				WithLastConfirmed(s.lastTimeTickInfo.LastConfirmedMessageID).
+				WithTimeTick(s.lastTimeTickInfo.LastTimeTick).
+				IntoImmutableMessage(s.lastTimeTickInfo.MessageID),
+		)
 	}
 }

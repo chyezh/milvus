@@ -48,6 +48,9 @@ type MutableMessage interface {
 	// !!! preserved for streaming system internal usage, don't call it outside of log system.
 	WithLastConfirmed(id MessageID) MutableMessage
 
+	// WithLastConfirmedUseMessageID sets the last confirmed message id of current message to be the same as message id.
+	WithLastConfirmedUseMessageID() MutableMessage
+
 	// WithTimeTick sets the time tick of current message.
 	// !!! preserved for streaming system internal usage, don't call it outside of log system.
 	WithTimeTick(tt uint64) MutableMessage
