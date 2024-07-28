@@ -89,10 +89,11 @@ func (m *messageImpl) TimeTick() uint64 {
 }
 
 // VChannel returns the vchannel of current message.
+// If the message is broadcasted, the vchannel will be empty.
 func (m *messageImpl) VChannel() string {
 	value, ok := m.properties.Get(messageVChannel)
 	if !ok {
-		panic(fmt.Sprintf("there's a bug in the message codes, vchannel lost in properties of message"))
+		return ""
 	}
 	return value
 }

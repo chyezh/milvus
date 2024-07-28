@@ -1,12 +1,15 @@
 package adaptor
 
 import (
-	"context"
-
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/pkg/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message/adaptor"
+)
+
+var (
+	_ wal.MessageHandler = defaultMessageHandler(nil)
+	_ wal.MessageHandler = (*MsgPackAdaptorHandler)(nil)
 )
 
 type defaultMessageHandler chan message.ImmutableMessage
@@ -50,11 +53,12 @@ func (m *MsgPackAdaptorHandler) Chan() <-chan *msgstream.MsgPack {
 }
 
 // Handle is the callback for handling message.
-func (m *MsgPackAdaptorHandler) Handle(ctx context.Context, upstream <-chan message.ImmutableMessage, msg message.ImmutableMessage) (incoming message.ImmutableMessage, ok bool, err error) {
+func (m *MsgPackAdaptorHandler) Handle(param wal.HandleParam) wal.HandleResult {
+	messageHandled := false
 	// not handle new message if there are pending msgPack.
-	if msg != nil && m.base.PendingMsgPack.Len() == 0 {
-		m.base.GenerateMsgPack(msg)
-		ok = true
+	if param.Message != nil && m.base.PendingMsgPack.Len() == 0 {
+		m.base.GenerateMsgPack(param.Message)
+		messageHandled = true
 	}
 
 	for {
@@ -64,19 +68,33 @@ func (m *MsgPackAdaptorHandler) Handle(ctx context.Context, upstream <-chan mess
 		}
 
 		select {
-		case <-ctx.Done():
-			return nil, ok, ctx.Err()
-		case msg, notClose := <-upstream:
-			if !notClose {
-				return nil, ok, wal.ErrUpstreamClosed
+		case <-param.Ctx.Done():
+			return wal.HandleResult{
+				Messagehandled: messageHandled,
+				Error:          param.Ctx.Err(),
 			}
-			return msg, ok, nil
+		case msg, notClose := <-param.Upstream:
+			if !notClose {
+				return wal.HandleResult{
+					Messagehandled: messageHandled,
+					Error:          wal.ErrUpstreamClosed,
+				}
+			}
+			return wal.HandleResult{
+				Incoming:       msg,
+				Messagehandled: messageHandled,
+			}
 		case sendCh <- m.base.PendingMsgPack.Next():
 			m.base.PendingMsgPack.UnsafeAdvance()
 			if m.base.PendingMsgPack.Len() > 0 {
 				continue
 			}
-			return nil, ok, nil
+			return wal.HandleResult{Messagehandled: messageHandled}
+		case <-param.TimeTickChan:
+			return wal.HandleResult{
+				Messagehandled:  messageHandled,
+				TimeTickUpdated: true,
+			}
 		}
 	}
 }

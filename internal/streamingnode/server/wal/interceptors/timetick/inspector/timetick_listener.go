@@ -62,6 +62,7 @@ func (l *TimeTickInfoListener) WatchAtMessageID(messageID message.MessageID, ts 
 	if ts < l.info.LastTimeTick {
 		ch := make(chan struct{})
 		close(ch)
+		l.cond.L.Unlock()
 		return ch
 	}
 	return l.cond.WaitChan()

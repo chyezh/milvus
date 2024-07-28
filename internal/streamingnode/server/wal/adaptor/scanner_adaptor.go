@@ -3,8 +3,8 @@ package adaptor
 import (
 	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick/inspector"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/log"
@@ -12,6 +12,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/streaming/walimpls"
 	"github.com/milvus-io/milvus/pkg/streaming/walimpls/helper"
+	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
 
@@ -159,22 +160,18 @@ func (s *scannerAdaptorImpl) handleUpstream(msg message.ImmutableMessage) {
 }
 
 func (s *scannerAdaptorImpl) handleTimeTickUpdated() {
-	msg, err := message.NewTimeTickMessageBuilderV1().
-		WithBroadcast().
-		WithHeader(&message.TimeTickMessageHeader{}).
-		WithBody(&msgpb.TimeTickMsg{}).
-		BuildMutable()
-	if err != nil {
-		s.logger.Warn("unreachable: a marshal timetick operation must be success")
-	}
 	timeTickInfo := s.timeTickListener.Get()
 	if timeTickInfo.MessageID.EQ(s.lastTimeTickInfo.MessageID) && timeTickInfo.LastTimeTick > s.lastTimeTickInfo.LastTimeTick {
 		s.lastTimeTickInfo.LastTimeTick = timeTickInfo.LastTimeTick
-		s.pendingQueue.AddOne(
-			msg.
-				WithLastConfirmed(s.lastTimeTickInfo.LastConfirmedMessageID).
-				WithTimeTick(s.lastTimeTickInfo.LastTimeTick).
-				IntoImmutableMessage(s.lastTimeTickInfo.MessageID),
+		msg, err := timetick.NewTimeTickMsg(
+			timeTickInfo.LastTimeTick,
+			timeTickInfo.LastConfirmedMessageID,
+			paramtable.GetNodeID(),
 		)
+		if err != nil {
+			s.logger.Warn("unreachable: a marshal timetick operation must be success")
+			return
+		}
+		s.pendingQueue.AddOne(msg.IntoImmutableMessage(s.lastTimeTickInfo.MessageID))
 	}
 }

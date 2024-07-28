@@ -176,7 +176,7 @@ func (impl *timeTickSyncOperator) sendPersistentTsMsg(ctx context.Context,
 	lastConfirmedMessageID message.MessageID,
 	appender func(ctx context.Context, msg message.MutableMessage) (message.MessageID, error),
 ) error {
-	msg, err := newTimeTickMsg(ts, lastConfirmedMessageID, impl.sourceID)
+	msg, err := NewTimeTickMsg(ts, lastConfirmedMessageID, impl.sourceID)
 	if err != nil {
 		return errors.Wrap(err, "at build time tick msg")
 	}

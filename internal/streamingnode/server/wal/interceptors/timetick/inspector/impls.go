@@ -4,17 +4,20 @@ import (
 	"time"
 
 	"github.com/milvus-io/milvus/pkg/streaming/util/types"
+	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/util/syncutil"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
 
 // NewTimeTickSyncInspector creates a new time tick sync inspector.
 func NewTimeTickSyncInspector() TimeTickSyncInspector {
-	return &timeTickSyncInspectorImpl{
+	inspector := &timeTickSyncInspectorImpl{
 		taskNotifier: syncutil.NewAsyncTaskNotifier[struct{}](),
 		syncNotifier: NewSyncNotifier(),
 		operators:    typeutil.NewConcurrentMap[string, TimeTickSyncOperator](),
 	}
+	go inspector.background()
+	return inspector
 }
 
 type timeTickSyncInspectorImpl struct {
@@ -38,11 +41,12 @@ func (s *timeTickSyncInspectorImpl) UnregisterSyncOperator(operator TimeTickSync
 	}
 }
 
-// execute executes the time tick sync inspector.
-func (s *timeTickSyncInspectorImpl) execute() {
+// background executes the time tick sync inspector.
+func (s *timeTickSyncInspectorImpl) background() {
 	defer s.taskNotifier.Finish(struct{}{})
 
-	ticker := time.NewTicker(time.Second)
+	interval := paramtable.Get().ProxyCfg.TimeTickInterval.GetAsDuration(time.Millisecond)
+	ticker := time.NewTicker(interval)
 	for {
 		select {
 		case <-s.taskNotifier.Context().Done():

@@ -30,7 +30,7 @@ type BasicMessage interface {
 
 	// VChannel returns the virtual channel of current message.
 	// Available only when the message's version greater than 0.
-	// Otherwise, it will panic.
+	// Return "" if message is broadcasted.
 	VChannel() string
 
 	// TimeTick returns the time tick of current message.
