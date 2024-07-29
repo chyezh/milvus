@@ -121,6 +121,12 @@ include( ThirdPartyPackages )
 message( STATUS "Building Milvus CPU version" )
 
 if (LINUX OR MSYS)
+    if ( true )
+        message( STATUS "Building Milvus using AddressSanitizer")
+        add_compile_options(-fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=leak)
+        add_link_options(-fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=leak)
+    endif()
+
     append_flags( CMAKE_CXX_FLAGS
                   FLAGS
                   "-fPIC"
