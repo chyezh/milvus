@@ -39,7 +39,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/samber/lo"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
@@ -400,78 +399,77 @@ func (node *QueryNode) Start() error {
 func (node *QueryNode) Stop() error {
 	node.stopOnce.Do(func() {
 		log.Info("Query node stop...")
-		err := node.session.GoingStop()
-		if err != nil {
-			log.Warn("session fail to go stopping state", zap.Error(err))
-		} else {
-			metrics.StoppingBalanceNodeNum.WithLabelValues().Set(1)
-			// TODO: Redundant timeout control, graceful stop timeout is controlled by outside by `component`.
-			// Integration test is still using it, Remove it in future.
-			timeoutCh := time.After(paramtable.Get().QueryNodeCfg.GracefulStopTimeout.GetAsDuration(time.Second))
+		node.session.GoingStop()
+		// if err != nil {
+		// 	log.Warn("session fail to go stopping state", zap.Error(err))
+		// } else {
+		// 	metrics.StoppingBalanceNodeNum.WithLabelValues().Set(1)
+		// 	// TODO: Redundant timeout control, graceful stop timeout is controlled by outside by `component`.
+		// 	// Integration test is still using it, Remove it in future.
+		// 	timeoutCh := time.After(paramtable.Get().QueryNodeCfg.GracefulStopTimeout.GetAsDuration(time.Second))
 
-		outer:
-			for (node.manager != nil && !node.manager.Segment.Empty()) ||
-				(node.pipelineManager != nil && node.pipelineManager.Num() != 0) {
-				var (
-					sealedSegments  = []segments.Segment{}
-					growingSegments = []segments.Segment{}
-					channelNum      = 0
-				)
-				if node.manager != nil {
-					sealedSegments = node.manager.Segment.GetBy(segments.WithType(segments.SegmentTypeSealed))
-					growingSegments = node.manager.Segment.GetBy(segments.WithType(segments.SegmentTypeGrowing))
-				}
-				if node.pipelineManager != nil {
-					channelNum = node.pipelineManager.Num()
-				}
+		// outer:
+		// 	for node.manager != nil && !node.manager.Segment.Empty() {
+		// 		var (
+		// 			sealedSegments  = []segments.Segment{}
+		// 			growingSegments = []segments.Segment{}
+		// 			channelNum      = 0
+		// 		)
+		// 		if node.manager != nil {
+		// 			sealedSegments = node.manager.Segment.GetBy(segments.WithType(segments.SegmentTypeSealed))
+		// 			growingSegments = node.manager.Segment.GetBy(segments.WithType(segments.SegmentTypeGrowing))
+		// 		}
+		// 		if node.pipelineManager != nil {
+		// 			channelNum = node.pipelineManager.Num()
+		// 		}
 
-				select {
-				case <-timeoutCh:
-					log.Warn("migrate data timed out", zap.Int64("ServerID", node.GetNodeID()),
-						zap.Int64s("sealedSegments", lo.Map(sealedSegments, func(s segments.Segment, i int) int64 {
-							return s.ID()
-						})),
-						zap.Int64s("growingSegments", lo.Map(growingSegments, func(t segments.Segment, i int) int64 {
-							return t.ID()
-						})),
-						zap.Int("channelNum", channelNum),
-					)
-					break outer
-				case <-time.After(time.Second):
-					metrics.StoppingBalanceSegmentNum.WithLabelValues(fmt.Sprint(node.GetNodeID())).Set(float64(len(sealedSegments)))
-					metrics.StoppingBalanceChannelNum.WithLabelValues(fmt.Sprint(node.GetNodeID())).Set(float64(channelNum))
-					log.Info("migrate data...", zap.Int64("ServerID", node.GetNodeID()),
-						zap.Int64s("sealedSegments", lo.Map(sealedSegments, func(s segments.Segment, i int) int64 {
-							return s.ID()
-						})),
-						zap.Int64s("growingSegments", lo.Map(growingSegments, func(t segments.Segment, i int) int64 {
-							return t.ID()
-						})),
-						zap.Int("channelNum", channelNum),
-					)
-				}
-			}
+		// 		select {
+		// 		case <-timeoutCh:
+		// 			log.Warn("migrate data timed out", zap.Int64("ServerID", node.GetNodeID()),
+		// 				zap.Int64s("sealedSegments", lo.Map(sealedSegments, func(s segments.Segment, i int) int64 {
+		// 					return s.ID()
+		// 				})),
+		// 				zap.Int64s("growingSegments", lo.Map(growingSegments, func(t segments.Segment, i int) int64 {
+		// 					return t.ID()
+		// 				})),
+		// 				zap.Int("channelNum", channelNum),
+		// 			)
+		// 			break outer
+		// 		case <-time.After(time.Second):
+		// 			metrics.StoppingBalanceSegmentNum.WithLabelValues(fmt.Sprint(node.GetNodeID())).Set(float64(len(sealedSegments)))
+		// 			metrics.StoppingBalanceChannelNum.WithLabelValues(fmt.Sprint(node.GetNodeID())).Set(float64(channelNum))
+		// 			log.Info("migrate data...", zap.Int64("ServerID", node.GetNodeID()),
+		// 				zap.Int64s("sealedSegments", lo.Map(sealedSegments, func(s segments.Segment, i int) int64 {
+		// 					return s.ID()
+		// 				})),
+		// 				zap.Int64s("growingSegments", lo.Map(growingSegments, func(t segments.Segment, i int) int64 {
+		// 					return t.ID()
+		// 				})),
+		// 				zap.Int("channelNum", channelNum),
+		// 			)
+		// 		}
+		// 	}
 
-			metrics.StoppingBalanceNodeNum.WithLabelValues().Set(0)
-			metrics.StoppingBalanceSegmentNum.WithLabelValues(fmt.Sprint(node.GetNodeID())).Set(0)
-			metrics.StoppingBalanceChannelNum.WithLabelValues(fmt.Sprint(node.GetNodeID())).Set(0)
-		}
+		// 	metrics.StoppingBalanceNodeNum.WithLabelValues().Set(0)
+		// 	metrics.StoppingBalanceSegmentNum.WithLabelValues(fmt.Sprint(node.GetNodeID())).Set(0)
+		// 	metrics.StoppingBalanceChannelNum.WithLabelValues(fmt.Sprint(node.GetNodeID())).Set(0)
+		// }
 
-		node.UpdateStateCode(commonpb.StateCode_Abnormal)
-		node.lifetime.Wait()
-		if node.scheduler != nil {
-			node.scheduler.Stop()
-		}
-		if node.pipelineManager != nil {
-			node.pipelineManager.Close()
-		}
+		// node.UpdateStateCode(commonpb.StateCode_Abnormal)
+		// node.lifetime.Wait()
+		// if node.scheduler != nil {
+		// 	node.scheduler.Stop()
+		// }
+		// if node.pipelineManager != nil {
+		// 	node.pipelineManager.Close()
+		// }
 
-		if node.session != nil {
-			node.session.Stop()
-		}
-		if node.dispClient != nil {
-			node.dispClient.Close()
-		}
+		// if node.session != nil {
+		// 	node.session.Stop()
+		// }
+		// if node.dispClient != nil {
+		// 	node.dispClient.Close()
+		// }
 		if node.manager != nil {
 			node.manager.Segment.Clear(context.Background())
 		}

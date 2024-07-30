@@ -191,7 +191,7 @@ MinioChunkManager::ShutdownSDKAPI() {
     std::scoped_lock lock{client_mutex_};
     const size_t initCount = --init_count_;
     if (initCount == 0) {
-        Aws::ShutdownAPI(sdk_options_);
+        // Aws::ShutdownAPI(sdk_options_);
     }
 }
 

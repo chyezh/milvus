@@ -53,9 +53,9 @@ list(APPEND
         JEMALLOC_CONFIGURE_COMMAND
         "--prefix=${JEMALLOC_PREFIX}"
         "--libdir=${JEMALLOC_LIB_DIR}")
-if (CMAKE_BUILD_TYPE EQUAL "DEBUG")
+if ( True )
     # Enable jemalloc debug checks when Milvus itself has debugging enabled
-    list(APPEND JEMALLOC_CONFIGURE_COMMAND "--enable-debug")
+    list(APPEND JEMALLOC_CONFIGURE_COMMAND "--enable-debug" "--enable-prof")
 endif ()
 set(JEMALLOC_BUILD_COMMAND ${MAKE} ${MAKE_BUILD_ARGS})
 if (CMAKE_OSX_SYSROOT)
