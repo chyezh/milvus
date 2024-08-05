@@ -23,6 +23,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/milvus-io/milvus/internal/flushcommon/broker"
 	"github.com/milvus-io/milvus/internal/flushcommon/pipeline"
 	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
 	"github.com/milvus-io/milvus/internal/flushcommon/util"
@@ -40,6 +41,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/streaming/util/options"
 	"github.com/milvus-io/milvus/pkg/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/util/merr"
+	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
 
@@ -48,6 +50,7 @@ var tickDuration = 3 * time.Second
 var _ flusher.Flusher = (*flusherImpl)(nil)
 
 type flusherImpl struct {
+	broker    broker.Broker
 	fgMgr     pipeline.FlowgraphManager
 	syncMgr   syncmgr.SyncManager
 	wbMgr     writebuffer.BufferManager
@@ -67,8 +70,10 @@ func NewFlusher(chunkManager storage.ChunkManager) flusher.Flusher {
 }
 
 func newFlusherWithParam(params *util.PipelineParams) flusher.Flusher {
+	cb := broker.NewCoordBroker(resource.Resource().DataCoordClient(), paramtable.GetNodeID())
 	fgMgr := pipeline.NewFlowgraphManager()
 	return &flusherImpl{
+		broker:         cb,
 		fgMgr:          fgMgr,
 		syncMgr:        params.SyncMgr,
 		wbMgr:          params.WriteBufferManager,
@@ -108,6 +113,7 @@ func (f *flusherImpl) UnregisterPChannel(pchannel string) {
 
 func (f *flusherImpl) RegisterVChannel(vchannel string, wal wal.WAL) {
 	f.tasks.Insert(vchannel, wal)
+	log.Info("flusher register vchannel done", zap.String("vchannel", vchannel))
 }
 
 func (f *flusherImpl) UnregisterVChannel(vchannel string) {
@@ -119,6 +125,7 @@ func (f *flusherImpl) UnregisterVChannel(vchannel string) {
 	}
 	f.fgMgr.RemoveFlowgraph(vchannel)
 	f.wbMgr.RemoveChannel(vchannel)
+	log.Info("flusher unregister vchannel done", zap.String("vchannel", vchannel))
 }
 
 func (f *flusherImpl) Start() {
@@ -130,7 +137,7 @@ func (f *flusherImpl) Start() {
 		for {
 			select {
 			case <-f.stopChan:
-				log.Info("flusher stopped")
+				log.Info("flusher exited")
 				return
 			case <-ticker.C:
 				f.tasks.Range(func(vchannel string, wal wal.WAL) bool {
@@ -180,11 +187,7 @@ func (f *flusherImpl) buildPipeline(vchannel string, w wal.WAL) error {
 	}
 
 	// Convert common.MessageID to message.messageID.
-	mqWrapperID, err := adaptor.DeserializeToMQWrapperID(resp.GetInfo().GetSeekPosition().GetMsgID(), w.WALName())
-	if err != nil {
-		return err
-	}
-	messageID := adaptor.MustGetMessageIDFromMQWrapperID(mqWrapperID)
+	messageID := adaptor.MustGetMessageIDFromMQWrapperIDBytes(w.WALName(), resp.GetInfo().GetSeekPosition().GetMsgID())
 
 	// Create scanner.
 	policy := options.DeliverPolicyStartFrom(messageID)

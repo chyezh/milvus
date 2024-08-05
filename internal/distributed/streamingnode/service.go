@@ -76,6 +76,8 @@ type Server struct {
 	grpcServer *grpc.Server
 	lis        net.Listener
 
+	factory dependency.Factory
+
 	// component client
 	etcdCli      *clientv3.Client
 	tikvCli      *txnkv.Client
@@ -200,6 +202,7 @@ func (s *Server) init(ctx context.Context) (err error) {
 	// Create StreamingNode service.
 	s.streamingnode = streamingnodeserver.NewServerBuilder().
 		WithETCD(s.etcdCli).
+		WithChunkManager(s.chunkManager).
 		WithGRPCServer(s.grpcServer).
 		WithRootCoordClient(s.rootCoord).
 		WithDataCoordClient(s.dataCoord).

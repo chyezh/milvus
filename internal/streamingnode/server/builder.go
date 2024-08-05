@@ -1,9 +1,6 @@
 package server
 
 import (
-	clientv3 "go.etcd.io/etcd/client/v3"
-	"google.golang.org/grpc"
-
 	"github.com/milvus-io/milvus/internal/metastore/kv/streamingnode"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/flusher/flusherimpl"
@@ -13,6 +10,8 @@ import (
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/pkg/kv"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
+	clientv3 "go.etcd.io/etcd/client/v3"
+	"google.golang.org/grpc"
 )
 
 // ServerBuilder is used to build a server.
@@ -35,6 +34,12 @@ func NewServerBuilder() *ServerBuilder {
 // WithETCD sets etcd client to the server builder.
 func (b *ServerBuilder) WithETCD(e *clientv3.Client) *ServerBuilder {
 	b.etcdClient = e
+	return b
+}
+
+// WithChunkManager sets chunk manager to the server builder.
+func (b *ServerBuilder) WithChunkManager(cm storage.ChunkManager) *ServerBuilder {
+	b.chunkManager = cm
 	return b
 }
 
@@ -87,8 +92,8 @@ func (s *ServerBuilder) Build() *Server {
 	)
 	resource.Done()
 	return &Server{
-		session:               s.session,
-		grpcServer:            s.grpcServer,
+		session:               b.session,
+		grpcServer:            b.grpcServer,
 		componentStateService: componentutil.NewComponentStateService(typeutil.StreamingNodeRole),
 	}
 }
