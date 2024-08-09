@@ -72,7 +72,7 @@ func NewFlushMessageBody(msg message.ImmutableMessage) (msgstream.TsMsg, error) 
 			},
 			ts:      msg.TimeTick(),
 			sz:      msg.EstimateSize(),
-			msgType: commonpb.MsgType(msg.MessageType()),
+			msgType: MustGetCommonpbMsgTypeFromMessageType(msg.MessageType()),
 		},
 		FlushMessageBody: body,
 	}, nil
