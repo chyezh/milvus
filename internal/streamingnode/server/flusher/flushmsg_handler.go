@@ -16,6 +16,10 @@
 
 package flusher
 
-import "github.com/milvus-io/milvus/pkg/streaming/util/message/adaptor"
+import "github.com/milvus-io/milvus/pkg/streaming/util/message"
 
-type FlushMsgHandler = func(vchannel string, flushMsg *adaptor.FlushMessageBody)
+type FlushMsgHandler interface {
+	HandleFlush(vchannel string, flushMsg message.ImmutableFlushMessageV2) error
+
+	HandleManualFlush(vchannel string, flushMsg message.ImmutableManualFlushMessageV2) error
+}

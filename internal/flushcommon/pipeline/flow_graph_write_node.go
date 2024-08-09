@@ -14,6 +14,7 @@ import (
 	"github.com/milvus-io/milvus/internal/flushcommon/metacache"
 	"github.com/milvus-io/milvus/internal/flushcommon/util"
 	"github.com/milvus-io/milvus/internal/flushcommon/writebuffer"
+	"github.com/milvus-io/milvus/internal/util/streamingutil"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
@@ -98,7 +99,7 @@ func (wNode *writeNode) Operate(in []Msg) []Msg {
 			}, true
 		})
 
-	if wNode.updater != nil {
+	if !streamingutil.IsStreamingServiceEnabled() {
 		wNode.updater.Update(wNode.channelName, end.GetTimestamp(), stats)
 	}
 

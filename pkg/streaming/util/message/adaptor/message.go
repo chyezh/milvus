@@ -124,6 +124,8 @@ func fromMessageToTsMsgV2(msg message.ImmutableMessage) (msgstream.TsMsg, error)
 	switch msg.MessageType() {
 	case message.MessageTypeFlush:
 		tsMsg, err = NewFlushMessageBody(msg)
+	case message.MessageTypeManualFlush:
+		tsMsg, err = NewManualFlushMessageBody(msg)
 	default:
 		panic("unsupported message type")
 	}

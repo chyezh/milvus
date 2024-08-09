@@ -19,23 +19,17 @@ package proxy
 import (
 	"context"
 	"fmt"
+
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/internal/util/streamingutil"
-	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/mq/msgstream"
-	"github.com/milvus-io/milvus/pkg/streaming/util/message"
-	"github.com/milvus-io/milvus/pkg/streaming/util/message/messagepb"
 	"github.com/milvus-io/milvus/pkg/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/util/merr"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
-	"github.com/samber/lo"
-	"go.uber.org/zap"
 )
 
 type flushTask struct {
@@ -121,24 +115,6 @@ func (t *flushTask) Execute(ctx context.Context) error {
 		coll2SealTimes[collName] = resp.GetTimeOfSeal()
 		coll2FlushTs[collName] = resp.GetFlushTs()
 		channelCps = resp.GetChannelCps()
-
-		if streamingutil.IsStreamingServiceEnabled() {
-			// TODO: sheep, return sealed segments group by vchannel
-			vchannels := lo.Keys(resp.GetChannelCps())
-			for _, vchannel := range vchannels {
-				msg, err := buildFlushMessage(vchannel, collID, resp.GetSegmentIDs(), resp.GetFlushTs())
-				if err != nil {
-					log.Warn("build flush message failed", zap.Error(err))
-					t.result.Status = merr.Status(err)
-					return err
-				}
-				if err := streaming.WAL().Append(ctx, msg).UnwrapFirstError(); err != nil {
-					log.Warn("append flush message to wal failed", zap.Error(err))
-					t.result.Status = merr.Status(err)
-				}
-				log.Info("append flush message to wal successfully", zap.String("vchannel", vchannel))
-			}
-		}
 	}
 
 	SendReplicateMessagePack(ctx, t.replicateMsgStream, t.FlushRequest)
@@ -156,17 +132,4 @@ func (t *flushTask) Execute(ctx context.Context) error {
 
 func (t *flushTask) PostExecute(ctx context.Context) error {
 	return nil
-}
-
-func buildFlushMessage(vchannel string, collectionID int64, segmentIDs []int64, flushTs uint64) (message.MutableMessage, error) {
-	newMsg, err := message.NewFlushMessageBuilderV2().
-		WithVChannel(vchannel).
-		WithHeader(&messagepb.FlushMessageHeader{}).
-		WithBody(&messagepb.FlushMessageBody{
-			CollectionId: collectionID,
-			SegmentId:    segmentIDs,
-			FlushTs:      flushTs,
-		}).
-		BuildMutable()
-	return newMsg, err
 }
