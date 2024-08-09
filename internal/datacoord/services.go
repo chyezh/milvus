@@ -255,6 +255,12 @@ func (s *Server) AllocSegment(ctx context.Context, req *datapb.AllocSegmentReque
 		return &datapb.AllocSegmentResponse{Status: merr.Status(merr.ErrParameterInvalid)}, nil
 	}
 
+	//	refresh the meta of the collection.
+	_, err := s.handler.GetCollection(ctx, req.GetCollectionId())
+	if err != nil {
+		return &datapb.AllocSegmentResponse{Status: merr.Status(err)}, nil
+	}
+
 	// Alloc new growing segment and return the segment info.
 	segmentInfo, err := s.segmentManager.AllocNewGrowingSegment(ctx, req.GetCollectionId(), req.GetPartitionId(), req.GetSegmentId(), req.GetVchannel())
 	if err != nil {

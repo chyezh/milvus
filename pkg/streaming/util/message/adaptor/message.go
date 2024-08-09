@@ -22,18 +22,18 @@ func NewMsgPackFromMessage(msgs ...message.ImmutableMessage) (*msgstream.MsgPack
 
 	var finalErr error
 	for _, msg := range msgs {
-		var tsMsg msgstream.TsMsg
-		var err error
-		switch msg.Version() {
-		case message.VersionOld:
-			tsMsg, err = fromMessageToTsMsgVOld(msg)
-		case message.VersionV1:
-			tsMsg, err = fromMessageToTsMsgV1(msg)
-		case message.VersionV2:
-			tsMsg, err = fromMessageToTsMsgV2(msg)
-		default:
-			panic("unsupported message version")
+		// Parse a transaction message into multiple tsMsgs.
+		if msg.MessageType() == message.MessageTypeTxn {
+			tsMsgs, err := parseTxnMsg(msg)
+			if err != nil {
+				finalErr = errors.CombineErrors(finalErr, errors.Wrapf(err, "Failed to convert txn message to msgpack, %v", msg.MessageID()))
+				continue
+			}
+			allTsMsgs = append(allTsMsgs, tsMsgs...)
+			continue
 		}
+
+		tsMsg, err := parseSingleMsg(msg)
 		if err != nil {
 			finalErr = errors.CombineErrors(finalErr, errors.Wrapf(err, "Failed to convert message to msgpack, %v", msg.MessageID()))
 			continue
@@ -56,6 +56,43 @@ func NewMsgPackFromMessage(msgs ...message.ImmutableMessage) (*msgstream.MsgPack
 		StartPositions: []*msgstream.MsgPosition{allTsMsgs[0].Position()},
 		EndPositions:   []*msgstream.MsgPosition{allTsMsgs[len(allTsMsgs)-1].Position()},
 	}, finalErr
+}
+
+// parseTxnMsg converts a txn message to ts message list.
+func parseTxnMsg(msg message.ImmutableMessage) ([]msgstream.TsMsg, error) {
+	txnMsg := message.AsImmutableTxnMessage(msg)
+	if txnMsg == nil {
+		panic("unreachable code, message must be a txn message")
+	}
+
+	tsMsgs := make([]msgstream.TsMsg, 0, txnMsg.Size())
+	err := txnMsg.RangeOver(func(im message.ImmutableMessage) error {
+		var tsMsg msgstream.TsMsg
+		tsMsg, err := parseSingleMsg(im)
+		if err != nil {
+			return err
+		}
+		tsMsgs = append(tsMsgs, tsMsg)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return tsMsgs, nil
+}
+
+// parseSingleMsg converts message to ts message.
+func parseSingleMsg(msg message.ImmutableMessage) (msgstream.TsMsg, error) {
+	switch msg.Version() {
+	case message.VersionOld:
+		return fromMessageToTsMsgVOld(msg)
+	case message.VersionV1:
+		return fromMessageToTsMsgV1(msg)
+	case message.VersionV2:
+		return fromMessageToTsMsgV2(msg)
+	default:
+		panic("unsupported message version")
+	}
 }
 
 func fromMessageToTsMsgVOld(msg message.ImmutableMessage) (msgstream.TsMsg, error) {
@@ -115,6 +152,12 @@ func recoverMessageFromHeader(tsMsg msgstream.TsMsg, msg message.ImmutableMessag
 		// insertMsg has multiple partition and segment assignment is done by insert message header.
 		// so recover insert message from header before send it.
 		return recoverInsertMsgFromHeader(tsMsg.(*msgstream.InsertMsg), insertMessage.Header(), msg.TimeTick())
+	case message.MessageTypeDelete:
+		deleteMessage, err := message.AsImmutableDeleteMessageV1(msg)
+		if err != nil {
+			return nil, errors.Wrap(err, "Failed to convert message to delete message")
+		}
+		return recoverDeleteMsgFromHeader(tsMsg.(*msgstream.DeleteMsg), deleteMessage.Header(), msg.TimeTick())
 	default:
 		return tsMsg, nil
 	}
@@ -146,4 +189,16 @@ func recoverInsertMsgFromHeader(insertMsg *msgstream.InsertMsg, header *message.
 	}
 	insertMsg.Timestamps = timestamps
 	return insertMsg, nil
+}
+
+func recoverDeleteMsgFromHeader(deleteMsg *msgstream.DeleteMsg, header *message.DeleteMessageHeader, timetick uint64) (msgstream.TsMsg, error) {
+	if deleteMsg.GetCollectionID() != header.GetCollectionId() {
+		panic("unreachable code, collection id is not equal")
+	}
+	timestamps := make([]uint64, len(deleteMsg.Timestamps))
+	for i := 0; i < len(timestamps); i++ {
+		timestamps[i] = timetick
+	}
+	deleteMsg.Timestamps = timestamps
+	return deleteMsg, nil
 }
