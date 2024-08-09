@@ -3388,7 +3388,15 @@ func (node *Proxy) Flush(ctx context.Context, request *milvuspb.FlushRequest) (*
 
 	log.Debug(rpcReceived(method))
 
-	if err := node.sched.dcQueue.Enqueue(ft); err != nil {
+	var enqueuedTask task = ft
+	if streamingutil.IsStreamingServiceEnabled() {
+		enqueuedTask = &flushTaskByStreamingService{
+			flushTask: ft,
+			chMgr:     node.chMgr,
+		}
+	}
+
+	if err := node.sched.dcQueue.Enqueue(enqueuedTask); err != nil {
 		log.Warn(
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
