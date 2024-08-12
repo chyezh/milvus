@@ -3,6 +3,7 @@ package adaptor
 import (
 	"github.com/cockroachdb/errors"
 
+	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/pkg/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
@@ -49,12 +50,24 @@ func NewMsgPackFromMessage(msgs ...message.ImmutableMessage) (*msgstream.MsgPack
 	// 1. So use the first tsMsgs's Position can read all messages which timetick is greater or equal than the first tsMsgs's BeginTs.
 	//    In other words, from the StartPositions, you can read the full msgPack.
 	// 2. Use the last tsMsgs's Position as the EndPosition, you can read all messages following the msgPack.
+	beginTs := allTsMsgs[0].BeginTs()
+	endTs := allTsMsgs[len(allTsMsgs)-1].EndTs()
+	startPosition := allTsMsgs[0].Position()
+	endPosition := allTsMsgs[len(allTsMsgs)-1].Position()
+	// filter the TimeTick message.
+	tsMsgs := make([]msgstream.TsMsg, 0, len(allTsMsgs))
+	for _, msg := range allTsMsgs {
+		if msg.Type() == commonpb.MsgType_TimeTick {
+			continue
+		}
+		tsMsgs = append(tsMsgs, msg)
+	}
 	return &msgstream.MsgPack{
-		BeginTs:        allTsMsgs[0].BeginTs(),
-		EndTs:          allTsMsgs[len(allTsMsgs)-1].EndTs(),
-		Msgs:           allTsMsgs,
-		StartPositions: []*msgstream.MsgPosition{allTsMsgs[0].Position()},
-		EndPositions:   []*msgstream.MsgPosition{allTsMsgs[len(allTsMsgs)-1].Position()},
+		BeginTs:        beginTs,
+		EndTs:          endTs,
+		Msgs:           tsMsgs,
+		StartPositions: []*msgstream.MsgPosition{startPosition},
+		EndPositions:   []*msgstream.MsgPosition{endPosition},
 	}, finalErr
 }
 
