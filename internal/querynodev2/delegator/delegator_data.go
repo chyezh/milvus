@@ -789,7 +789,9 @@ func (sd *shardDelegator) createDeleteStreamFromStreamingService(ctx context.Con
 			adaptor.MustGetMessageIDFromMQWrapperIDBytes("pulsar", position.GetMsgID()),
 		),
 		DeliverFilters: []options.DeliverFilter{
-			options.DeliverFilterTimeTickGT(position.GetTimestamp()),
+			// only deliver message which timestamp >= position.Timestamp
+			options.DeliverFilterTimeTickGTE(position.GetTimestamp()),
+			// only delete message
 			options.DeliverFilterMessageType(message.MessageTypeDelete),
 		},
 		MessageHandler: handler,

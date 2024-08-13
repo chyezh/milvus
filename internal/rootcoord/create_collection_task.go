@@ -439,13 +439,13 @@ func (t *createCollectionTask) genCreateCollectionRequest() *msgpb.CreateCollect
 func (t *createCollectionTask) addChannelsAndGetStartPositions(ctx context.Context, ts uint64) (map[string][]byte, error) {
 	t.core.chanTimeTick.addDmlChannels(t.channels.physicalChannels...)
 	if streamingutil.IsStreamingServiceEnabled() {
-		return t.broadcastCreateCollectionMsgIntoStreamingService(ctx)
+		return t.broadcastCreateCollectionMsgIntoStreamingService(ctx, ts)
 	}
 	msg := t.genCreateCollectionMsg(ctx, ts)
 	return t.core.chanTimeTick.broadcastMarkDmlChannels(t.channels.physicalChannels, msg)
 }
 
-func (t *createCollectionTask) broadcastCreateCollectionMsgIntoStreamingService(ctx context.Context) (map[string][]byte, error) {
+func (t *createCollectionTask) broadcastCreateCollectionMsgIntoStreamingService(ctx context.Context, ts uint64) (map[string][]byte, error) {
 	req := t.genCreateCollectionRequest()
 	// dispatch the createCollectionMsg into all vchannel.
 	msgs := make([]message.MutableMessage, 0, len(req.VirtualChannelNames))
@@ -464,7 +464,12 @@ func (t *createCollectionTask) broadcastCreateCollectionMsgIntoStreamingService(
 		msgs = append(msgs, msg)
 	}
 	// send the createCollectionMsg into streaming service.
-	resps := streaming.WAL().Utility().AppendMessages(ctx, msgs...)
+	// ts is used as initial checkpoint at datacoord,
+	// it must be set as barrier time tick.
+	// The timetick of create message in wal must be greater than ts, to avoid data read loss at read side.
+	resps := streaming.WAL().Utility().AppendMessagesWithOption(ctx, streaming.AppendOption{
+		BarrierTimeTick: ts,
+	}, msgs...)
 	if err := resps.UnwrapFirstError(); err != nil {
 		return nil, err
 	}
