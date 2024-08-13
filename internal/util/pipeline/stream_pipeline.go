@@ -86,10 +86,8 @@ func (p *streamPipeline) ConsumeMsgStream(position *msgpb.MsgPosition) error {
 		)
 		handler := adaptor.NewMsgPackAdaptorHandler()
 		p.scanner = streaming.WAL().Read(context.Background(), streaming.ReadOption{
-			VChannel: position.GetChannelName(),
-			DeliverPolicy: options.DeliverPolicyStartFrom(
-				adaptor.MustGetMessageIDFromMQWrapperIDBytes("pulsar", position.GetMsgID()),
-			),
+			VChannel:      position.GetChannelName(),
+			DeliverPolicy: options.DeliverPolicyStartFrom(startFrom),
 			DeliverFilters: []options.DeliverFilter{
 				// only consume messages with timestamp >= position timestamp
 				options.DeliverFilterTimeTickGTE(position.GetTimestamp()),

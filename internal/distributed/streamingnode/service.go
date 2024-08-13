@@ -196,9 +196,6 @@ func (s *Server) init(ctx context.Context) (err error) {
 	if err := s.initDataCoord(ctx); err != nil {
 		return err
 	}
-	if err := s.initChunkManager(ctx); err != nil {
-		return err
-	}
 	s.initGRPCServer()
 
 	// Create StreamingNode service.
