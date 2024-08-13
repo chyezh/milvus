@@ -203,6 +203,7 @@ func recoverInsertMsgFromHeader(insertMsg *msgstream.InsertMsg, header *message.
 		timestamps[i] = timetick
 	}
 	insertMsg.Timestamps = timestamps
+	insertMsg.Base.Timestamp = timetick
 	return insertMsg, nil
 }
 
