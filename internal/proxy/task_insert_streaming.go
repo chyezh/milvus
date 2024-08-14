@@ -66,10 +66,13 @@ func (it *insertTaskByStreamingService) Execute(ctx context.Context) error {
 		it.result.Status = merr.Status(err)
 		return err
 	}
-	if err := streaming.WAL().Utility().AppendMessages(ctx, msgs...).UnwrapFirstError(); err != nil {
+	resp := streaming.WAL().Utility().AppendMessages(ctx, msgs...)
+	if err := resp.UnwrapFirstError(); err != nil {
 		log.Warn("append messages to wal failed", zap.Error(err))
 		it.result.Status = merr.Status(err)
 	}
+	// Update result.Timestamp for session consistency.
+	it.result.Timestamp = resp.MaxTimeTick()
 	return nil
 }
 

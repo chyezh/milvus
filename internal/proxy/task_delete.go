@@ -64,6 +64,8 @@ type deleteTask struct {
 	// result
 	count       int64
 	allQueryCnt int64
+
+	sessionTS Timestamp
 }
 
 func (dt *deleteTask) TraceCtx() context.Context {
@@ -181,6 +183,7 @@ func (dt *deleteTask) Execute(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
+	dt.sessionTS = dt.ts
 	dt.count += numRows
 	return nil
 }
@@ -300,6 +303,7 @@ type deleteRunner struct {
 	queue *dmTaskQueue
 
 	allQueryCnt atomic.Int64
+	sessionTS   atomic.Uint64
 }
 
 func (dr *deleteRunner) Init(ctx context.Context) error {
@@ -497,6 +501,7 @@ func (dr *deleteRunner) getStreamingQueryAndDelteFunc(plan *planpb.PlanNode) exe
 		}()
 		var allQueryCnt int64
 		// wait all task finish
+		var sessionTS uint64
 		for task := range taskCh {
 			err := task.WaitToFinish()
 			if err != nil {
@@ -504,6 +509,9 @@ func (dr *deleteRunner) getStreamingQueryAndDelteFunc(plan *planpb.PlanNode) exe
 			}
 			dr.count.Add(task.count)
 			allQueryCnt += task.allQueryCnt
+			if sessionTS < task.sessionTS {
+				sessionTS = task.sessionTS
+			}
 		}
 
 		// query or produce task failed
@@ -511,6 +519,7 @@ func (dr *deleteRunner) getStreamingQueryAndDelteFunc(plan *planpb.PlanNode) exe
 			return receiveErr
 		}
 		dr.allQueryCnt.Add(allQueryCnt)
+		dr.sessionTS.Store(sessionTS)
 		return nil
 	}
 }
@@ -573,6 +582,7 @@ func (dr *deleteRunner) complexDelete(ctx context.Context, plan *planpb.PlanNode
 		exec:           dr.getStreamingQueryAndDelteFunc(plan),
 	})
 	dr.result.DeleteCnt = dr.count.Load()
+	dr.result.Timestamp = dr.sessionTS.Load()
 	if err != nil {
 		log.Warn("fail to execute complex delete",
 			zap.Int64("deleteCnt", dr.result.GetDeleteCnt()),
@@ -600,6 +610,7 @@ func (dr *deleteRunner) simpleDelete(ctx context.Context, pk *schemapb.IDs, numR
 	err = task.WaitToFinish()
 	if err == nil {
 		dr.result.DeleteCnt = task.count
+		dr.result.Timestamp = task.sessionTS
 	}
 	return err
 }

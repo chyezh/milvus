@@ -35,10 +35,13 @@ func (ut *upsertTaskByStreamingService) Execute(ctx context.Context) error {
 	}
 
 	messages := append(insertMsgs, deleteMsgs...)
-	if err := streaming.WAL().Utility().AppendMessages(ctx, messages...).UnwrapFirstError(); err != nil {
+	resp := streaming.WAL().Utility().AppendMessages(ctx, messages...)
+	if err := resp.UnwrapFirstError(); err != nil {
 		log.Warn("append messages to wal failed", zap.Error(err))
 		return err
 	}
+	// Update result.Timestamp for session consistency.
+	ut.result.Timestamp = resp.MaxTimeTick()
 	return nil
 }
 

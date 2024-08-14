@@ -67,9 +67,12 @@ func (dt *deleteTaskByStreamingService) Execute(ctx context.Context) (err error)
 		zap.Int64("taskID", dt.ID()),
 		zap.Duration("prepare duration", dt.tr.RecordSpan()))
 
-	if err := streaming.WAL().Utility().AppendMessages(ctx, msgs...).UnwrapFirstError(); err != nil {
+	resp := streaming.WAL().Utility().AppendMessages(ctx, msgs...)
+	if resp.UnwrapFirstError(); err != nil {
+		log.Warn("append messages to wal failed", zap.Error(err))
 		return err
 	}
+	dt.sessionTS = resp.MaxTimeTick()
 	dt.count += numRows
 	return nil
 }
