@@ -3,6 +3,7 @@ package utility
 import (
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 	"go.uber.org/zap"
 )
@@ -12,7 +13,7 @@ func NewTxnBuffer(logger *log.MLogger) *TxnBuffer {
 	return &TxnBuffer{
 		logger:            logger,
 		builders:          make(map[message.TxnID]*message.ImmutableTxnMessageBuilder),
-		notExpiredTxnHeap: typeutil.NewHeap[*message.TxnContext](&txnContextsOrderByExpired{}),
+		notExpiredTxnHeap: typeutil.NewHeap[txnCtxWithExpiredTimeTick](&txnContextsOrderByExpired{}),
 	}
 }
 
@@ -20,7 +21,7 @@ func NewTxnBuffer(logger *log.MLogger) *TxnBuffer {
 type TxnBuffer struct {
 	logger            *log.MLogger
 	builders          map[message.TxnID]*message.ImmutableTxnMessageBuilder
-	notExpiredTxnHeap typeutil.Heap[*message.TxnContext]
+	notExpiredTxnHeap typeutil.Heap[txnCtxWithExpiredTimeTick]
 }
 
 // HandleImmutableMessages handles immutable messages.
@@ -74,7 +75,10 @@ func (b *TxnBuffer) handleBeginTxn(msg message.ImmutableMessage) {
 		return
 	}
 	b.builders[beginMsg.TxnContext().TxnID] = message.NewImmutableTxnMessageBuilder(beginMsg)
-	b.notExpiredTxnHeap.Push(beginMsg.TxnContext())
+	b.notExpiredTxnHeap.Push(txnCtxWithExpiredTimeTick{
+		TxnContext:      beginMsg.TxnContext(),
+		expiredTimeTick: tsoutil.AddPhysicalDurationOnTs(beginMsg.TimeTick(), beginMsg.TxnContext().Keepalive),
+	})
 }
 
 // handleCommitTxn handles commit txn message.
@@ -149,33 +153,45 @@ func (b *TxnBuffer) handleTxnBodyMessage(msg message.ImmutableMessage) {
 		return
 	}
 	builder.Add(msg)
+	b.notExpiredTxnHeap.Push(txnCtxWithExpiredTimeTick{
+		TxnContext:      msg.TxnContext(),
+		expiredTimeTick: tsoutil.AddPhysicalDurationOnTs(msg.TimeTick(), msg.TxnContext().Keepalive),
+	})
 }
 
 // clearExpiredTxn clears the expired txn.
 func (b *TxnBuffer) clearExpiredTxn(ts uint64) {
-	for b.notExpiredTxnHeap.Len() > 0 && b.notExpiredTxnHeap.Peek().ExpiredTimeTick() <= ts {
+	for b.notExpiredTxnHeap.Len() > 0 && b.notExpiredTxnHeap.Peek().expiredTimeTick <= ts {
 		txnContext := b.notExpiredTxnHeap.Pop()
 		if _, ok := b.builders[txnContext.TxnID]; ok {
-			delete(b.builders, txnContext.TxnID)
-			b.logger.Debug(
-				"the txn is expired, so drop the txn from buffer",
-				zap.Int64("txnID", int64(txnContext.TxnID)),
-				zap.Uint64("expiredTimeTick", txnContext.ExpiredTimeTick()),
-				zap.Uint64("currentTimeTick", ts),
-			)
+			expiredTimeTick := b.builders[txnContext.TxnID].ExpiredTimeTick()
+			if expiredTimeTick <= ts {
+				delete(b.builders, txnContext.TxnID)
+				b.logger.Debug(
+					"the txn is expired, so drop the txn from buffer",
+					zap.Int64("txnID", int64(txnContext.TxnID)),
+					zap.Uint64("expiredTimeTick", expiredTimeTick),
+					zap.Uint64("currentTimeTick", ts),
+				)
+			}
 		}
 	}
 }
 
+type txnCtxWithExpiredTimeTick struct {
+	*message.TxnContext
+	expiredTimeTick uint64
+}
+
 // txnContextsOrderByExpired is the heap array of the txnSession.
-type txnContextsOrderByExpired []*message.TxnContext
+type txnContextsOrderByExpired []txnCtxWithExpiredTimeTick
 
 func (h txnContextsOrderByExpired) Len() int {
 	return len(h)
 }
 
 func (h txnContextsOrderByExpired) Less(i, j int) bool {
-	return h[i].ExpiredTimeTick() < h[j].ExpiredTimeTick()
+	return h[i].expiredTimeTick < h[j].expiredTimeTick
 }
 
 func (h txnContextsOrderByExpired) Swap(i, j int) {
@@ -183,7 +199,7 @@ func (h txnContextsOrderByExpired) Swap(i, j int) {
 }
 
 func (h *txnContextsOrderByExpired) Push(x interface{}) {
-	*h = append(*h, x.(*message.TxnContext))
+	*h = append(*h, x.(txnCtxWithExpiredTimeTick))
 }
 
 // Pop pop the last one at len.

@@ -81,6 +81,64 @@ func (_c *MockUtility_AppendMessages_Call) RunAndReturn(run func(context.Context
 	return _c
 }
 
+// AppendMessagesWithOption provides a mock function with given fields: ctx, opts, msgs
+func (_m *MockUtility) AppendMessagesWithOption(ctx context.Context, opts streaming.AppendOption, msgs ...message.MutableMessage) streaming.AppendResponses {
+	_va := make([]interface{}, len(msgs))
+	for _i := range msgs {
+		_va[_i] = msgs[_i]
+	}
+	var _ca []interface{}
+	_ca = append(_ca, ctx, opts)
+	_ca = append(_ca, _va...)
+	ret := _m.Called(_ca...)
+
+	var r0 streaming.AppendResponses
+	if rf, ok := ret.Get(0).(func(context.Context, streaming.AppendOption, ...message.MutableMessage) streaming.AppendResponses); ok {
+		r0 = rf(ctx, opts, msgs...)
+	} else {
+		r0 = ret.Get(0).(streaming.AppendResponses)
+	}
+
+	return r0
+}
+
+// MockUtility_AppendMessagesWithOption_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AppendMessagesWithOption'
+type MockUtility_AppendMessagesWithOption_Call struct {
+	*mock.Call
+}
+
+// AppendMessagesWithOption is a helper method to define mock.On call
+//   - ctx context.Context
+//   - opts streaming.AppendOption
+//   - msgs ...message.MutableMessage
+func (_e *MockUtility_Expecter) AppendMessagesWithOption(ctx interface{}, opts interface{}, msgs ...interface{}) *MockUtility_AppendMessagesWithOption_Call {
+	return &MockUtility_AppendMessagesWithOption_Call{Call: _e.mock.On("AppendMessagesWithOption",
+		append([]interface{}{ctx, opts}, msgs...)...)}
+}
+
+func (_c *MockUtility_AppendMessagesWithOption_Call) Run(run func(ctx context.Context, opts streaming.AppendOption, msgs ...message.MutableMessage)) *MockUtility_AppendMessagesWithOption_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		variadicArgs := make([]message.MutableMessage, len(args)-2)
+		for i, a := range args[2:] {
+			if a != nil {
+				variadicArgs[i] = a.(message.MutableMessage)
+			}
+		}
+		run(args[0].(context.Context), args[1].(streaming.AppendOption), variadicArgs...)
+	})
+	return _c
+}
+
+func (_c *MockUtility_AppendMessagesWithOption_Call) Return(_a0 streaming.AppendResponses) *MockUtility_AppendMessagesWithOption_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockUtility_AppendMessagesWithOption_Call) RunAndReturn(run func(context.Context, streaming.AppendOption, ...message.MutableMessage) streaming.AppendResponses) *MockUtility_AppendMessagesWithOption_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // NewMockUtility creates a new instance of MockUtility. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewMockUtility(t interface {

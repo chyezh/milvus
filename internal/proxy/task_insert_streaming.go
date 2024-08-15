@@ -105,7 +105,7 @@ func repackInsertDataForStreamingService(
 						{
 							PartitionId: partitionID,
 							Rows:        uint64(len(rowOffsets)),
-							BinarySize:  0, // current not used, message estimate size is used.
+							BinarySize:  0, // TODO: current not used, message estimate size is used.
 						},
 					},
 				}).
@@ -183,7 +183,7 @@ func repackInsertDataWithPartitionKeyForStreamingService(
 							{
 								PartitionId: partitionIDs[partitionName],
 								Rows:        uint64(len(rowOffsets)),
-								BinarySize:  0, // current not used, message estimate size is used.
+								BinarySize:  0, // TODO: current not used, message estimate size is used.
 							},
 						},
 					}).

@@ -70,7 +70,7 @@ func TestMsgPackAdaptorHandler(t *testing.T) {
 	msg, err := message.NewBeginTxnMessageBuilderV2().
 		WithVChannel("vchan1").
 		WithHeader(&message.BeginTxnMessageHeader{
-			TtlMilliseconds: 1000,
+			KeepaliveMilliseconds: 1000,
 		}).
 		WithBody(&message.BeginTxnMessageBody{}).
 		BuildMutable()
