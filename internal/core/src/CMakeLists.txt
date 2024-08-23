@@ -73,7 +73,6 @@ set(LINK_TARGETS
     simdjson
     tantivy_binding
     knowhere
-    ${OpenMP_CXX_FLAGS}
     ${CONAN_LIBS})
 
 if(USE_OPENDAL)
