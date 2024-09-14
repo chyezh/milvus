@@ -14,11 +14,12 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walcache/rm"
 	"github.com/milvus-io/milvus/pkg/mocks/streaming/util/mock_message"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/streaming/walimpls/impls/walimplstest"
 )
 
 func TestBList(t *testing.T) {
-	mutableBL := NewMutableContinousBlockList(10, createATestMessage(t, 0), nil)
+	mutableBL := NewMutableContinousBlockList(types.PChannelInfo{}, 10, createATestMessage(t, 0), nil)
 	var immutableBL *ImmutableContinousBlockList
 	msgCount := 100
 	wg := sync.WaitGroup{}
@@ -129,7 +130,7 @@ func TestBList(t *testing.T) {
 }
 
 func TestMutableBlockListEvict(t *testing.T) {
-	mutableBL := NewMutableContinousBlockList(10, createATestMessage(t, 0), nil)
+	mutableBL := NewMutableContinousBlockList(types.PChannelInfo{}, 10, createATestMessage(t, 0), nil)
 	msgCount := 100
 	wg := sync.WaitGroup{}
 	wg.Add(2)
@@ -179,7 +180,7 @@ func appendMutableBlockList(t *testing.T, mutableBL *MutableCountinousBlockList,
 
 func TestError(t *testing.T) {
 	// Not Found
-	mutableB := NewMutableContinousBlockList(100, createATestMessage(t, 1), nil)
+	mutableB := NewMutableContinousBlockList(types.PChannelInfo{}, 100, createATestMessage(t, 1), nil)
 
 	scanner, err := mutableB.Read(walimplstest.NewTestMessageID(0))
 	assert.ErrorIs(t, err, walcache.ErrNotFound)

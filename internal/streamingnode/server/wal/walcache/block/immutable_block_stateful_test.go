@@ -16,6 +16,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walcache"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walcache/rm"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/streaming/walimpls/impls/walimplstest"
 )
 
@@ -77,5 +78,8 @@ func createImmutableBlock() *ImmutableBlock {
 			},
 		))
 	}
-	return newImmutableBlock(msgs, size, nil)
+	return newImmutableBlock(types.PChannelInfo{
+		Name: "test",
+		Term: 1,
+	}, msgs, size, nil)
 }

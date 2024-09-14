@@ -8,6 +8,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walcache"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walcache/util"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/util/syncutil"
 )
 
@@ -17,7 +18,12 @@ var (
 )
 
 // NewMutableBlock creates a new mutable block.
-func NewMutableBlock(capacity int, firstMessage message.ImmutableMessage, evictCallback walcache.EvictCallback) *MutableBlock {
+func NewMutableBlock(
+	pchannel types.PChannelInfo,
+	capacity int,
+	firstMessage message.ImmutableMessage,
+	evictCallback walcache.EvictCallback,
+) *MutableBlock {
 	data := make([]message.ImmutableMessage, 0, 16)
 	data = append(data, firstMessage)
 	return &MutableBlock{
@@ -27,6 +33,7 @@ func NewMutableBlock(capacity int, firstMessage message.ImmutableMessage, evictC
 		size:          len(firstMessage.Payload()),
 		sealed:        false,
 		capacity:      capacity,
+		pchannel:      pchannel,
 		evictCallback: evictCallback,
 	}
 }
@@ -40,6 +47,7 @@ type MutableBlock struct {
 	size          int  // the current size of the block, only size of payload message is counted.
 	capacity      int  // the capacity of the block, the size can only grow once beyond the capacity.
 	sealed        bool // the block is sealed or not, no more message can be appended if sealed.
+	pchannel      types.PChannelInfo
 	evictCallback walcache.EvictCallback
 }
 
@@ -112,7 +120,7 @@ func (b *MutableBlock) Append(msgs []message.ImmutableMessage) int {
 // If the block is empty, return nil and seal operation is ignored.
 func (b *MutableBlock) IntoImmutable() *ImmutableBlock {
 	b.cond.LockAndBroadcast()
-	immutableBlock := newImmutableBlock(b.data, b.size, b.evictCallback)
+	immutableBlock := newImmutableBlock(b.pchannel, b.data, b.size, b.evictCallback)
 	b.sealed = true
 	b.cond.L.Unlock()
 	return immutableBlock

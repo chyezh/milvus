@@ -9,19 +9,21 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walcache/block"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walcache/util"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/util/syncutil"
 )
 
 // NewMutableContinousBlockList creates a new MutableContinousBlockList.
-func NewMutableContinousBlockList(rotationCapacity int, firstMessage message.ImmutableMessage, evictCallback walcache.EvictCallback) *MutableCountinousBlockList {
+func NewMutableContinousBlockList(pchannel types.PChannelInfo, rotationCapacity int, firstMessage message.ImmutableMessage, evictCallback walcache.EvictCallback) *MutableCountinousBlockList {
 	return &MutableCountinousBlockList{
 		cond:             syncutil.NewContextCond(&sync.Mutex{}),
-		tail:             block.NewMutableBlock(rotationCapacity, firstMessage, evictCallback),
+		tail:             block.NewMutableBlock(pchannel, rotationCapacity, firstMessage, evictCallback),
 		sealed:           false,
 		rotationCapacity: rotationCapacity,
 		blocksOffset:     0,
 		immutableBlocks:  []*block.ImmutableBlock{},
 		evictCallback:    evictCallback,
+		pchannel:         pchannel,
 	}
 }
 
@@ -34,6 +36,7 @@ type MutableCountinousBlockList struct {
 	blocksOffset     int                     // the offset of the blocks array after evict operation.
 	immutableBlocks  []*block.ImmutableBlock // should never be empty.
 	evictCallback    walcache.EvictCallback
+	pchannel         types.PChannelInfo
 }
 
 // Append appends a message to MutableBlockList.
@@ -59,7 +62,7 @@ func (mbl *MutableCountinousBlockList) appendInternal(msgs []message.ImmutableMe
 	if len(msgs) > 0 {
 		// If there'are still messages left, seal the tail and create a new one, aka. rotate the block.
 		mbl.sealTail()
-		mbl.tail = block.NewMutableBlock(mbl.rotationCapacity, msgs[0], mbl.evictCallback)
+		mbl.tail = block.NewMutableBlock(mbl.pchannel, mbl.rotationCapacity, msgs[0], mbl.evictCallback)
 		msgs = msgs[1:]
 	}
 	return msgs

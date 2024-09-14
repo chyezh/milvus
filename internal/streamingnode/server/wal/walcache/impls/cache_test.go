@@ -16,6 +16,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walcache"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walcache/rm"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/streaming/walimpls/impls/walimplstest"
 )
 
@@ -30,7 +31,10 @@ func TestCache(t *testing.T) {
 	caches := make([]*Cache, 2)
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
-		caches[i] = NewCache(200)
+		caches[i] = NewCache(types.PChannelInfo{
+			Name: "test",
+			Term: int64(i),
+		}, 200)
 		go func(i int) {
 			defer wg.Done()
 			testCache(t, caches[i])

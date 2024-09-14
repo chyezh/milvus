@@ -13,6 +13,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walcache/rm"
 	"github.com/milvus-io/milvus/pkg/mocks/streaming/util/mock_message"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/streaming/walimpls/impls/walimplstest"
 )
 
@@ -20,7 +21,10 @@ func TestMemBlockImpl(t *testing.T) {
 	rm.Init(1000, 0, "")
 
 	// Test mutable block concurrent read write.
-	mutableB := NewMutableBlock(200, createATestMessage(t, 0), nil)
+	mutableB := NewMutableBlock(types.PChannelInfo{
+		Name: "test",
+		Term: 1,
+	}, 200, createATestMessage(t, 0), nil)
 	var immutableB *ImmutableBlock
 	msgCount := 100
 	wg := sync.WaitGroup{}
@@ -106,7 +110,10 @@ func TestMemBlockImpl(t *testing.T) {
 func TestErrors(t *testing.T) {
 	rm.Init(1000, 0, "")
 	// Not Found
-	mutableB := NewMutableBlock(100, createATestMessage(t, 1), nil)
+	mutableB := NewMutableBlock(types.PChannelInfo{
+		Name: "test",
+		Term: 1,
+	}, 100, createATestMessage(t, 1), nil)
 
 	scanner, err := mutableB.Read(walimplstest.NewTestMessageID(0))
 	assert.ErrorIs(t, err, walcache.ErrNotFound)
@@ -141,7 +148,10 @@ func TestErrors(t *testing.T) {
 }
 
 func TestMemTimeoutImpl(t *testing.T) {
-	mutableB := NewMutableBlock(100, createATestMessage(t, 0), nil)
+	mutableB := NewMutableBlock(types.PChannelInfo{
+		Name: "test",
+		Term: 1,
+	}, 100, createATestMessage(t, 0), nil)
 	scanner, err := mutableB.Read(walimplstest.NewTestMessageID(100))
 	assert.NoError(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)

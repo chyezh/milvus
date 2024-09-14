@@ -9,6 +9,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walcache"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walcache/util"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
 
@@ -19,7 +20,12 @@ var (
 )
 
 // newImmutableBlock creates a new immutable block.
-func newImmutableBlock(data []message.ImmutableMessage, size int, evictCallback walcache.EvictCallback) *ImmutableBlock {
+func newImmutableBlock(
+	pchannel types.PChannelInfo,
+	data []message.ImmutableMessage,
+	size int,
+	evictCallback walcache.EvictCallback,
+) *ImmutableBlock {
 	if len(data) == 0 {
 		panic("unreachable: immutable block should never be empty")
 	}
@@ -50,6 +56,7 @@ func newImmutableBlock(data []message.ImmutableMessage, size int, evictCallback 
 // An ImmutableBlock can be setted in memory or disk.
 type ImmutableBlock struct {
 	cond          *sync.Cond
+	pchannel      types.PChannelInfo
 	blockID       int64
 	state         blockState
 	data          []message.ImmutableMessage
@@ -61,6 +68,11 @@ type ImmutableBlock struct {
 	// for disk cache
 	offsets  []int
 	diskFile string
+}
+
+// PChannel returns the pchannel info of the block.
+func (b *ImmutableBlock) PChannel() types.PChannelInfo {
+	return b.pchannel
 }
 
 // Count returns the message count in the block.

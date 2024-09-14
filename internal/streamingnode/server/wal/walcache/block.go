@@ -1,7 +1,12 @@
 package walcache
 
+import "github.com/milvus-io/milvus/pkg/streaming/util/types"
+
 // BlockOperator is the interface of block operator.
 type BlockOperator interface {
+	// PChannel returns the pchannel of the block.
+	PChannel() types.PChannelInfo
+
 	// BlockID returns the id of the block.
 	BlockID() int64
 

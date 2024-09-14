@@ -6,6 +6,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walcache"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walcache/blist"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/streaming/util/types"
 )
 
 const (
@@ -14,12 +15,13 @@ const (
 )
 
 // NewCache creates a new cache.
-func NewCache(capacity int) *Cache {
+func NewCache(pchannel types.PChannelInfo, capacity int) *Cache {
 	if capacity == 0 {
 		capacity = defaultCapacity
 	}
 	return &Cache{
 		mu:         sync.Mutex{},
+		pchannel:   pchannel,
 		capacity:   capacity,
 		immutables: make([]*blist.ImmutableContinousBlockList, 0),
 		mutable:    nil,
@@ -30,6 +32,7 @@ func NewCache(capacity int) *Cache {
 // TODO: clear cache after the Cache is closed.
 type Cache struct {
 	mu         sync.Mutex
+	pchannel   types.PChannelInfo
 	capacity   int
 	immutables []*blist.ImmutableContinousBlockList
 	mutable    *blist.MutableCountinousBlockList
@@ -58,7 +61,7 @@ func (c *Cache) getOrCreateMutableCountinousBlockList(msg message.ImmutableMessa
 	defer c.mu.Unlock()
 
 	if c.mutable == nil {
-		c.mutable = blist.NewMutableContinousBlockList(c.capacity, msg, c)
+		c.mutable = blist.NewMutableContinousBlockList(c.pchannel, c.capacity, msg, c)
 		return c.mutable, false
 	}
 	return c.mutable, true
