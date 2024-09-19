@@ -26,6 +26,7 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
+	"github.com/milvus-io/milvus/internal/kv/utility"
 	"github.com/milvus-io/milvus/pkg/kv/predicates"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/metrics"
@@ -108,13 +109,24 @@ func (kv *etcdKV) WalkWithPrefix(prefix string, paginationSize int, fn func([]by
 	return nil
 }
 
+func (kv *etcdKV) LoadDirectory(directory string) ([]string, []string, error) {
+	prefix := utility.GetPrefixByDirectory(kv.rootPath, directory)
+	return kv.loadWithPrefix(prefix)
+}
+
 // LoadWithPrefix returns all the keys and values with the given key prefix.
 func (kv *etcdKV) LoadWithPrefix(key string) ([]string, []string, error) {
-	start := time.Now()
 	key = path.Join(kv.rootPath, key)
+	return kv.loadWithPrefix(key)
+}
+
+// loadWithPrefix loads all the keys and values with the given key prefix.
+func (kv *etcdKV) loadWithPrefix(prefix string) ([]string, []string, error) {
+	start := time.Now()
+
 	ctx, cancel := context.WithTimeout(context.TODO(), kv.requestTimeout)
 	defer cancel()
-	resp, err := kv.getEtcdMeta(ctx, key, clientv3.WithPrefix(),
+	resp, err := kv.getEtcdMeta(ctx, prefix, clientv3.WithPrefix(),
 		clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend))
 	if err != nil {
 		return nil, nil, err
@@ -144,7 +156,15 @@ func (kv *etcdKV) Has(key string) (bool, error) {
 	return resp.Count != 0, nil
 }
 
+func (kv *etcdKV) HasDirectory(directory string) (bool, error) {
+	return kv.hasPrefix(utility.GetPrefixByDirectory(kv.rootPath, directory))
+}
+
 func (kv *etcdKV) HasPrefix(prefix string) (bool, error) {
+	return kv.hasPrefix(prefix)
+}
+
+func (kv *etcdKV) hasPrefix(prefix string) (bool, error) {
 	start := time.Now()
 	prefix = path.Join(kv.rootPath, prefix)
 	ctx, cancel := context.WithTimeout(context.TODO(), kv.requestTimeout)
@@ -408,14 +428,24 @@ func (kv *etcdKV) MultiSaveBytes(kvs map[string][]byte) error {
 	return err
 }
 
+// RemoveDirectory removes the keys under the directory.
+func (kv *etcdKV) RemoveDirectory(directory string) error {
+	return kv.RemoveWithPrefix(utility.GetPrefixByDirectory(kv.rootPath, directory))
+}
+
 // RemoveWithPrefix removes the keys with given prefix.
 func (kv *etcdKV) RemoveWithPrefix(prefix string) error {
+	prefix = path.Join(kv.rootPath, prefix)
+	return kv.removeWithPrefix(prefix)
+}
+
+// removeWithPrefix removes the keys with given prefix.
+func (kv *etcdKV) removeWithPrefix(prefix string) error {
 	start := time.Now()
-	key := path.Join(kv.rootPath, prefix)
 	ctx, cancel := context.WithTimeout(context.TODO(), kv.requestTimeout)
 	defer cancel()
 
-	_, err := kv.removeEtcdMeta(ctx, key, clientv3.WithPrefix())
+	_, err := kv.removeEtcdMeta(ctx, prefix, clientv3.WithPrefix())
 	CheckElapseAndWarn(start, "Slow etcd operation remove with prefix", zap.String("prefix", prefix))
 	return err
 }

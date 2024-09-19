@@ -29,7 +29,7 @@ type catalog struct {
 
 func (c *catalog) ListSegmentAssignment(ctx context.Context, pChannelName string) ([]*streamingpb.SegmentAssignmentMeta, error) {
 	prefix := buildSegmentAssignmentMetaPath(pChannelName)
-	keys, values, err := c.metaKV.LoadWithPrefix(prefix)
+	keys, values, err := c.metaKV.LoadDirectory(prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -83,13 +83,10 @@ func (c *catalog) SaveSegmentAssignments(ctx context.Context, pChannelName strin
 // buildSegmentAssignmentMetaPath builds the path for segment assignment
 // streamingnode-meta/segment-assign/${pChannelName}
 func buildSegmentAssignmentMetaPath(pChannelName string) string {
-	// !!! bad implementation here, but we can't make compatibility for underlying meta kv.
-	// underlying meta kv will remove the last '/' of the path, cause the pchannel lost.
-	// So we add a special sub path to avoid this.
-	return path.Join(SegmentAssignMeta, pChannelName, SegmentAssignSubFolder) + "/"
+	return path.Join(SegmentAssignMeta, pChannelName)
 }
 
 // buildSegmentAssignmentMetaPathOfSegment builds the path for segment assignment
 func buildSegmentAssignmentMetaPathOfSegment(pChannelName string, segmentID int64) string {
-	return path.Join(SegmentAssignMeta, pChannelName, SegmentAssignSubFolder, strconv.FormatInt(segmentID, 10))
+	return path.Join(SegmentAssignMeta, pChannelName, strconv.FormatInt(segmentID, 10))
 }

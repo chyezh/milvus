@@ -42,14 +42,17 @@ func NewCompareFailedError(err error) error {
 type BaseKV interface {
 	Load(key string) (string, error)
 	MultiLoad(keys []string) ([]string, error)
-	LoadWithPrefix(key string) ([]string, []string, error)
+	// LoadDirectory loads all keys and its values with prefix {rootPath}/{direcotry}/
+	// The directory should be a relative path without rootPath.
+	LoadDirectory(directory string) ([]string, []string, error)
+	RemoveDirectory(directory string) error
+	HasDirectory(directory string) (bool, error)
+
 	Save(key, value string) error
 	MultiSave(kvs map[string]string) error
 	Remove(key string) error
 	MultiRemove(keys []string) error
-	RemoveWithPrefix(key string) error
 	Has(key string) (bool, error)
-	HasPrefix(prefix string) (bool, error)
 	Close()
 }
 
@@ -68,7 +71,7 @@ type TxnKV interface {
 type MetaKv interface {
 	TxnKV
 	GetPath(key string) string
-	LoadWithPrefix(key string) ([]string, []string, error)
+	LoadDirectory(directory string) ([]string, []string, error)
 	CompareVersionAndSwap(key string, version int64, target string) (bool, error)
 	WalkWithPrefix(prefix string, paginationSize int, fn func([]byte, []byte) error) error
 }

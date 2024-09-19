@@ -27,7 +27,7 @@ type catalog struct {
 
 // ListPChannels returns all pchannels
 func (c *catalog) ListPChannel(ctx context.Context) ([]*streamingpb.PChannelMeta, error) {
-	keys, values, err := c.metaKV.LoadWithPrefix(PChannelMeta)
+	keys, values, err := c.metaKV.LoadDirectory(PChannelMeta)
 	if err != nil {
 		return nil, err
 	}

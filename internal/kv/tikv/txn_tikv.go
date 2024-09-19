@@ -32,6 +32,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
 	"go.uber.org/zap"
 
+	"github.com/milvus-io/milvus/internal/kv/utility"
 	"github.com/milvus-io/milvus/pkg/kv"
 	"github.com/milvus-io/milvus/pkg/kv/predicates"
 	"github.com/milvus-io/milvus/pkg/log"
@@ -166,10 +167,20 @@ func rollbackOnFailure(err *error, txn *transaction.KVTxn) {
 	}
 }
 
+// HasDirectory returns if a directory exists.
+func (kv *txnTiKV) HasDirectory(directory string) (bool, error) {
+	return kv.HasPrefix(utility.GetPrefixByDirectory(kv.rootPath, directory))
+}
+
 // HasPrefix returns if a key prefix exists.
 func (kv *txnTiKV) HasPrefix(prefix string) (bool, error) {
-	start := time.Now()
 	prefix = path.Join(kv.rootPath, prefix)
+	return kv.hasPrefix(prefix)
+}
+
+// hasPrefix returns if a key prefix exists.
+func (kv *txnTiKV) hasPrefix(prefix string) (bool, error) {
+	start := time.Now()
 
 	var loggingErr error
 	defer logWarnOnFailure(&loggingErr, "txnTiKV HasPrefix() error", zap.String("prefix", prefix))
@@ -270,10 +281,19 @@ func (kv *txnTiKV) MultiLoad(keys []string) ([]string, error) {
 	return validValues, loggingErr
 }
 
+func (kv *txnTiKV) LoadDirectory(directory string) ([]string, []string, error) {
+	return kv.loadWithPrefix(utility.GetPrefixByDirectory(kv.rootPath, directory))
+}
+
 // LoadWithPrefix returns all the keys and values for the given key prefix.
 func (kv *txnTiKV) LoadWithPrefix(prefix string) ([]string, []string, error) {
-	start := time.Now()
 	prefix = path.Join(kv.rootPath, prefix)
+	return kv.loadWithPrefix(prefix)
+}
+
+// LoadWithPrefix returns all the keys and values for the given key prefix.
+func (kv *txnTiKV) loadWithPrefix(prefix string) ([]string, []string, error) {
+	start := time.Now()
 
 	var loggingErr error
 	defer logWarnOnFailure(&loggingErr, "txnTiKV LoadWithPrefix() error", zap.String("prefix", prefix))
@@ -414,10 +434,19 @@ func (kv *txnTiKV) MultiRemove(keys []string) error {
 	return nil
 }
 
+func (kv *txnTiKV) RemoveDirectory(directory string) error {
+	return kv.RemoveWithPrefix(utility.GetPrefixByDirectory(kv.rootPath, directory))
+}
+
 // RemoveWithPrefix removes the keys for the given prefix.
 func (kv *txnTiKV) RemoveWithPrefix(prefix string) error {
-	start := time.Now()
 	prefix = path.Join(kv.rootPath, prefix)
+	return kv.removeWithPrefix(prefix)
+}
+
+// removeWithPrefix removes the keys for the given prefix.
+func (kv *txnTiKV) removeWithPrefix(prefix string) error {
+	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), kv.requestTimeout)
 	defer cancel()
 

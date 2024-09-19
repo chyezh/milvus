@@ -210,7 +210,7 @@ func (s Catalog) ReleaseCollection(collection int64) error {
 		return err
 	}
 	partitionsPrefix := fmt.Sprintf("%s/%d", PartitionLoadInfoPrefix, collection)
-	return s.cli.RemoveWithPrefix(partitionsPrefix)
+	return s.cli.RemoveDirectory(partitionsPrefix)
 }
 
 func (s Catalog) ReleasePartition(collection int64, partitions ...int64) error {
@@ -237,7 +237,7 @@ func (s Catalog) ReleasePartition(collection int64, partitions ...int64) error {
 
 func (s Catalog) ReleaseReplicas(collectionID int64) error {
 	key := encodeCollectionReplicaKey(collectionID)
-	return s.cli.RemoveWithPrefix(key)
+	return s.cli.RemoveDirectory(key)
 }
 
 func (s Catalog) ReleaseReplica(collection, replica int64) error {

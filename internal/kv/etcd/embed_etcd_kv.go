@@ -29,6 +29,7 @@ import (
 	"go.etcd.io/etcd/server/v3/etcdserver/api/v3client"
 	"go.uber.org/zap"
 
+	"github.com/milvus-io/milvus/internal/kv/utility"
 	"github.com/milvus-io/milvus/pkg/kv"
 	"github.com/milvus-io/milvus/pkg/kv/predicates"
 	"github.com/milvus-io/milvus/pkg/log"
@@ -72,7 +73,6 @@ func NewEmbededEtcdKV(cfg *embed.Config, rootPath string, options ...Option) (*E
 		e, err = embed.StartEtcd(cfg)
 		return err
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +102,6 @@ func NewEmbededEtcdKV(cfg *embed.Config, rootPath string, options ...Option) (*E
 			return errors.New("Embedded etcd took too long to start")
 		}
 	})
-
 	if err != nil {
 		return nil, err
 	}
@@ -157,9 +156,17 @@ func (kv *EmbedEtcdKV) WalkWithPrefix(prefix string, paginationSize int, fn func
 	return nil
 }
 
+func (kv *EmbedEtcdKV) LoadDirectory(directory string) ([]string, []string, error) {
+	return kv.loadWithPrefix(utility.GetPrefixByDirectory(kv.rootPath, directory))
+}
+
 // LoadWithPrefix returns all the keys and values with the given key prefix
 func (kv *EmbedEtcdKV) LoadWithPrefix(key string) ([]string, []string, error) {
 	key = path.Join(kv.rootPath, key)
+	return kv.loadWithPrefix(key)
+}
+
+func (kv *EmbedEtcdKV) loadWithPrefix(key string) ([]string, []string, error) {
 	log.Debug("LoadWithPrefix ", zap.String("prefix", key))
 	ctx, cancel := context.WithTimeout(context.TODO(), kv.requestTimeout)
 	defer cancel()
@@ -190,8 +197,11 @@ func (kv *EmbedEtcdKV) Has(key string) (bool, error) {
 	return resp.Count != 0, nil
 }
 
-func (kv *EmbedEtcdKV) HasPrefix(prefix string) (bool, error) {
-	prefix = path.Join(kv.rootPath, prefix)
+func (kv *EmbedEtcdKV) HasDirectory(directory string) (bool, error) {
+	return kv.hasPrefix(utility.GetPrefixByDirectory(kv.rootPath, directory))
+}
+
+func (kv *EmbedEtcdKV) hasPrefix(prefix string) (bool, error) {
 	log.Debug("HasPrefix", zap.String("prefix", prefix))
 
 	ctx, cancel := context.WithTimeout(context.TODO(), kv.requestTimeout)
@@ -426,9 +436,18 @@ func (kv *EmbedEtcdKV) MultiSaveBytes(kvs map[string][]byte) error {
 	return err
 }
 
+func (kv *EmbedEtcdKV) RemoveDirectory(directory string) error {
+	return kv.removeWithPrefix(utility.GetPrefixByDirectory(kv.rootPath, directory))
+}
+
 // RemoveWithPrefix removes the keys with given prefix.
 func (kv *EmbedEtcdKV) RemoveWithPrefix(prefix string) error {
 	key := path.Join(kv.rootPath, prefix)
+	return kv.removeWithPrefix(key)
+}
+
+// removeWithPrefix removes the keys with given prefix.
+func (kv *EmbedEtcdKV) removeWithPrefix(key string) error {
 	ctx, cancel := context.WithTimeout(context.TODO(), kv.requestTimeout)
 	defer cancel()
 

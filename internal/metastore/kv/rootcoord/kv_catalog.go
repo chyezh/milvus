@@ -793,7 +793,7 @@ func (kc *Catalog) ListCredentials(ctx context.Context) ([]string, error) {
 }
 
 func (kc *Catalog) ListCredentialsWithPasswd(ctx context.Context) (map[string]string, error) {
-	keys, values, err := kc.Txn.LoadWithPrefix(CredentialPrefix)
+	keys, values, err := kc.Txn.LoadDirectory(CredentialPrefix)
 	if err != nil {
 		log.Error("list all credential usernames fail", zap.String("prefix", CredentialPrefix), zap.Error(err))
 		return nil, err
@@ -902,7 +902,7 @@ func (kc *Catalog) ListRole(ctx context.Context, tenant string, entity *milvuspb
 	roleToUsers := make(map[string][]string)
 	if includeUserInfo {
 		roleMappingKey := funcutil.HandleTenantForEtcdKey(RoleMappingPrefix, tenant, "")
-		keys, _, err := kc.Txn.LoadWithPrefix(roleMappingKey)
+		keys, _, err := kc.Txn.LoadDirectory(roleMappingKey)
 		if err != nil {
 			log.Error("fail to load role mappings", zap.String("key", roleMappingKey), zap.Error(err))
 			return results, err
@@ -933,7 +933,7 @@ func (kc *Catalog) ListRole(ctx context.Context, tenant string, entity *milvuspb
 
 	if entity == nil {
 		roleKey := funcutil.HandleTenantForEtcdKey(RolePrefix, tenant, "")
-		keys, _, err := kc.Txn.LoadWithPrefix(roleKey)
+		keys, _, err := kc.Txn.LoadDirectory(roleKey)
 		if err != nil {
 			log.Error("fail to load roles", zap.String("key", roleKey), zap.Error(err))
 			return results, err
@@ -965,7 +965,7 @@ func (kc *Catalog) ListRole(ctx context.Context, tenant string, entity *milvuspb
 func (kc *Catalog) getRolesByUsername(tenant string, username string) ([]string, error) {
 	var roles []string
 	k := funcutil.HandleTenantForEtcdKey(RoleMappingPrefix, tenant, username)
-	keys, _, err := kc.Txn.LoadWithPrefix(k)
+	keys, _, err := kc.Txn.LoadDirectory(k)
 	if err != nil {
 		log.Error("fail to load role mappings by the username", zap.String("key", k), zap.Error(err))
 		return roles, err
@@ -1120,7 +1120,7 @@ func (kc *Catalog) ListGrant(ctx context.Context, tenant string, entity *milvusp
 			return nil
 		}
 		granteeIDKey := funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, v)
-		keys, values, err := kc.Txn.LoadWithPrefix(granteeIDKey)
+		keys, values, err := kc.Txn.LoadDirectory(granteeIDKey)
 		if err != nil {
 			log.Error("fail to load the grantee ids", zap.String("key", granteeIDKey), zap.Error(err))
 			return err
@@ -1181,7 +1181,7 @@ func (kc *Catalog) ListGrant(ctx context.Context, tenant string, entity *milvusp
 		}
 	} else {
 		granteeKey = funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, entity.Role.Name)
-		keys, values, err := kc.Txn.LoadWithPrefix(granteeKey)
+		keys, values, err := kc.Txn.LoadDirectory(granteeKey)
 		if err != nil {
 			log.Error("fail to load grant privilege entities", zap.String("key", granteeKey), zap.Error(err))
 			return entities, err
@@ -1212,7 +1212,7 @@ func (kc *Catalog) DeleteGrant(ctx context.Context, tenant string, role *milvusp
 	removeKeys = append(removeKeys, k)
 
 	// the values are the grantee id list
-	_, values, err := kc.Txn.LoadWithPrefix(k)
+	_, values, err := kc.Txn.LoadDirectory(k)
 	if err != nil {
 		log.Warn("fail to load grant privilege entities", zap.String("key", k), zap.Error(err))
 		return err
@@ -1231,7 +1231,7 @@ func (kc *Catalog) DeleteGrant(ctx context.Context, tenant string, role *milvusp
 func (kc *Catalog) ListPolicy(ctx context.Context, tenant string) ([]string, error) {
 	var grantInfoStrs []string
 	granteeKey := funcutil.HandleTenantForEtcdKey(GranteePrefix, tenant, "")
-	keys, values, err := kc.Txn.LoadWithPrefix(granteeKey)
+	keys, values, err := kc.Txn.LoadDirectory(granteeKey)
 	if err != nil {
 		log.Error("fail to load all grant privilege entities", zap.String("key", granteeKey), zap.Error(err))
 		return []string{}, err
@@ -1244,7 +1244,7 @@ func (kc *Catalog) ListPolicy(ctx context.Context, tenant string) ([]string, err
 			continue
 		}
 		granteeIDKey := funcutil.HandleTenantForEtcdKey(GranteeIDPrefix, tenant, values[i])
-		idKeys, _, err := kc.Txn.LoadWithPrefix(granteeIDKey)
+		idKeys, _, err := kc.Txn.LoadDirectory(granteeIDKey)
 		if err != nil {
 			log.Error("fail to load the grantee ids", zap.String("key", granteeIDKey), zap.Error(err))
 			return []string{}, err
@@ -1266,7 +1266,7 @@ func (kc *Catalog) ListPolicy(ctx context.Context, tenant string) ([]string, err
 func (kc *Catalog) ListUserRole(ctx context.Context, tenant string) ([]string, error) {
 	var userRoles []string
 	k := funcutil.HandleTenantForEtcdKey(RoleMappingPrefix, tenant, "")
-	keys, _, err := kc.Txn.LoadWithPrefix(k)
+	keys, _, err := kc.Txn.LoadDirectory(k)
 	if err != nil {
 		log.Error("fail to load all user-role mappings", zap.String("key", k), zap.Error(err))
 		return []string{}, err

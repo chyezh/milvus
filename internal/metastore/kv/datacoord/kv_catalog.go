@@ -381,19 +381,19 @@ func (kc *Catalog) collectMetrics(s *datapb.SegmentInfo) {
 func (kc *Catalog) hasBinlogPrefix(segment *datapb.SegmentInfo) (bool, error) {
 	collectionID, partitionID, segmentID := segment.GetCollectionID(), segment.GetPartitionID(), segment.GetID()
 	prefix := buildFieldBinlogPathPrefix(collectionID, partitionID, segmentID)
-	hasBinlogPrefix, err := kc.MetaKv.HasPrefix(prefix)
+	hasBinlogPrefix, err := kc.MetaKv.HasDirectory(prefix)
 	if err != nil {
 		return false, err
 	}
 
 	prefix = buildFieldDeltalogPathPrefix(collectionID, partitionID, segmentID)
-	hasDeltaPrefix, err := kc.MetaKv.HasPrefix(prefix)
+	hasDeltaPrefix, err := kc.MetaKv.HasDirectory(prefix)
 	if err != nil {
 		return false, err
 	}
 
 	prefix = buildFieldStatslogPathPrefix(collectionID, partitionID, segmentID)
-	hasStatsPrefix, err := kc.MetaKv.HasPrefix(prefix)
+	hasStatsPrefix, err := kc.MetaKv.HasDirectory(prefix)
 	if err != nil {
 		return false, err
 	}
