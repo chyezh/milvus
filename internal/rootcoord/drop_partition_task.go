@@ -97,6 +97,7 @@ func (t *dropPartitionTask) Execute(ctx context.Context) error {
 		},
 		isSkip: t.Req.GetBase().GetReplicateInfo().GetIsReplicate(),
 	})
+	redoTask.AddAsyncStep(newDropPartitionAtDataCoordStep(t.core, t.collMeta.CollectionID, partID))
 	redoTask.AddAsyncStep(newConfirmGCStep(t.core, t.collMeta.CollectionID, partID))
 	redoTask.AddAsyncStep(&removePartitionMetaStep{
 		baseStep:     baseStep{core: t.core},

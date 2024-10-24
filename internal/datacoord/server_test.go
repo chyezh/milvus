@@ -863,6 +863,9 @@ func (s *spySegmentManager) ExpireAllocations(channel string, ts Timestamp) erro
 	return nil
 }
 
+func (s *spySegmentManager) DropSegmentsOfPartition(ctx context.Context, partitionID UniqueID) {
+}
+
 // DropSegmentsOfChannel drops all segments in a channel
 func (s *spySegmentManager) DropSegmentsOfChannel(ctx context.Context, channel string) {
 	s.spyCh <- struct{}{}

@@ -240,6 +240,60 @@ func (s *deleteCollectionDataStep) Weight() stepPriority {
 	return stepPriorityImportant
 }
 
+func newDropCollectionAtDataCoordStep(core *Core, collectionID UniqueID, vChannels []string) *dropCollectionAtDataCoordStep {
+	return &dropCollectionAtDataCoordStep{
+		baseStep:     baseStep{core: core},
+		collectionID: collectionID,
+		vChannels:    vChannels,
+	}
+}
+
+type dropCollectionAtDataCoordStep struct {
+	baseStep
+	collectionID UniqueID
+	vChannels    []string
+}
+
+func (s *dropCollectionAtDataCoordStep) Execute(ctx context.Context) ([]nestedStep, error) {
+	err := s.core.broker.DropCollectionAtDataCoord(ctx, s.collectionID, s.vChannels)
+	return nil, err
+}
+
+func (s *dropCollectionAtDataCoordStep) Desc() string {
+	return fmt.Sprintf("drop collection at data coord, collection: %d, vchannel count: %+v", s.collectionID, len(s.vChannels))
+}
+
+func (s *dropCollectionAtDataCoordStep) Weight() stepPriority {
+	return stepPriorityImportant
+}
+
+func newDropPartitionAtDataCoordStep(core *Core, collectionID UniqueID, partitionID UniqueID) *dropPartitionAtDataCoordStep {
+	return &dropPartitionAtDataCoordStep{
+		baseStep:     baseStep{core: core},
+		collectionID: collectionID,
+		partitionID:  partitionID,
+	}
+}
+
+type dropPartitionAtDataCoordStep struct {
+	baseStep
+	collectionID UniqueID
+	partitionID  UniqueID
+}
+
+func (s *dropPartitionAtDataCoordStep) Execute(ctx context.Context) ([]nestedStep, error) {
+	err := s.core.broker.DropPartitionAtDataCoord(ctx, s.collectionID, s.partitionID)
+	return nil, err
+}
+
+func (s *dropPartitionAtDataCoordStep) Desc() string {
+	return fmt.Sprintf("drop collection at data coord, collection: %d, partition: %d", s.collectionID, s.partitionID)
+}
+
+func (s *dropPartitionAtDataCoordStep) Weight() stepPriority {
+	return stepPriorityImportant
+}
+
 // waitForTsSyncedStep child step of deleteCollectionDataStep.
 type waitForTsSyncedStep struct {
 	baseStep

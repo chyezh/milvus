@@ -74,6 +74,12 @@ func (t *dropCollectionTask) Execute(ctx context.Context) error {
 
 	redoTask := newBaseRedoTask(t.core.stepExecutor)
 
+	redoTask.AddSyncStep(&changeCollectionStateStep{
+		baseStep:     baseStep{core: t.core},
+		collectionID: collMeta.CollectionID,
+		state:        pb.CollectionState_CollectionDropping,
+		ts:           ts,
+	})
 	redoTask.AddSyncStep(&expireCacheStep{
 		baseStep:        baseStep{core: t.core},
 		dbName:          t.Req.GetDbName(),
@@ -81,12 +87,6 @@ func (t *dropCollectionTask) Execute(ctx context.Context) error {
 		collectionID:    collMeta.CollectionID,
 		ts:              ts,
 		opts:            []proxyutil.ExpireCacheOpt{proxyutil.SetMsgType(commonpb.MsgType_DropCollection)},
-	})
-	redoTask.AddSyncStep(&changeCollectionStateStep{
-		baseStep:     baseStep{core: t.core},
-		collectionID: collMeta.CollectionID,
-		state:        pb.CollectionState_CollectionDropping,
-		ts:           ts,
 	})
 
 	redoTask.AddAsyncStep(&releaseCollectionStep{
@@ -107,6 +107,7 @@ func (t *dropCollectionTask) Execute(ctx context.Context) error {
 		baseStep:  baseStep{core: t.core},
 		pChannels: collMeta.PhysicalChannelNames,
 	})
+	redoTask.AddAsyncStep(newDropCollectionAtDataCoordStep(t.core, collMeta.CollectionID, collMeta.VirtualChannelNames))
 	redoTask.AddAsyncStep(newConfirmGCStep(t.core, collMeta.CollectionID, allPartition))
 	redoTask.AddAsyncStep(&deleteCollectionMetaStep{
 		baseStep:     baseStep{core: t.core},

@@ -39,6 +39,7 @@ import (
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/datacoord/broker"
 	"github.com/milvus-io/milvus/internal/datacoord/session"
+	"github.com/milvus-io/milvus/internal/datacoord/tombstone"
 	datanodeclient "github.com/milvus-io/milvus/internal/distributed/datanode/client"
 	indexnodeclient "github.com/milvus-io/milvus/internal/distributed/indexnode/client"
 	rootcoordclient "github.com/milvus-io/milvus/internal/distributed/rootcoord/client"
@@ -96,6 +97,8 @@ var Params = paramtable.Get()
 // Server implements `types.DataCoord`
 // handles Data Coordinator related jobs
 type Server struct {
+	datapb.UnimplementedDataCoordServer
+
 	ctx              context.Context
 	serverLoopCtx    context.Context
 	serverLoopCancel context.CancelFunc
@@ -663,6 +666,10 @@ func (s *Server) initMeta(chunkManager storage.ChunkManager) error {
 	reloadEtcdFn := func() error {
 		var err error
 		catalog := datacoord.NewCatalog(s.kv, chunkManager.RootPath(), metaRootPath)
+		if err := tombstone.RecoverCollectionTombstone(s.ctx, catalog); err != nil {
+			return err
+		}
+
 		s.meta, err = newMeta(s.ctx, catalog, chunkManager)
 		if err != nil {
 			return err
@@ -1102,6 +1109,7 @@ func (s *Server) Stop() error {
 	s.stopServerLoop()
 	logutil.Logger(s.ctx).Info("datacoord serverloop stopped")
 	logutil.Logger(s.ctx).Warn("datacoord stop successful")
+	tombstone.CollectionTombstone().Close()
 	return nil
 }
 
