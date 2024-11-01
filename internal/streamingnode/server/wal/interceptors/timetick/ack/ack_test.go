@@ -47,7 +47,7 @@ func TestAck(t *testing.T) {
 
 	ackManager := NewAckManager(0, nil, metricsutil.NewTimeTickMetrics("test"))
 
-	ackers := map[uint64]*Acker{}
+	ackers := map[uint64]*AckerRef{}
 	for i := 0; i < 10; i++ {
 		acker, err := ackManager.Allocate(ctx)
 		assert.NoError(t, err)
@@ -62,21 +62,21 @@ func TestAck(t *testing.T) {
 
 	// notAck: [1, 3, ..., 10]
 	// ack: [2]
-	ackers[2].Ack(OptSync())
+	ackers[2].Ack(optSync())
 	details, err = ackManager.SyncAndGetAcknowledged(ctx)
 	assert.NoError(t, err)
 	assert.Empty(t, details)
 
 	// notAck: [1, 3, 5, ..., 10]
 	// ack: [2, 4]
-	ackers[4].Ack(OptSync())
+	ackers[4].Ack(optSync())
 	details, err = ackManager.SyncAndGetAcknowledged(ctx)
 	assert.NoError(t, err)
 	assert.Empty(t, details)
 
 	// notAck: [3, 5, ..., 10]
 	// ack: [1, 2, 4]
-	ackers[1].Ack(OptSync())
+	ackers[1].Ack(optSync())
 	// notAck: [3, 5, ..., 10]
 	// ack: [4]
 	details, err = ackManager.SyncAndGetAcknowledged(ctx)
@@ -94,7 +94,7 @@ func TestAck(t *testing.T) {
 	// notAck: [3]
 	// ack: [4, ..., 10]
 	for i := 5; i <= 10; i++ {
-		ackers[uint64(i)].Ack(OptSync())
+		ackers[uint64(i)].Ack(optSync())
 	}
 	details, err = ackManager.SyncAndGetAcknowledged(ctx)
 	assert.NoError(t, err)
@@ -112,7 +112,7 @@ func TestAck(t *testing.T) {
 
 	// notAck: [...,x, y]
 	// ack: [3, ..., 10]
-	ackers[3].Ack(OptSync())
+	ackers[3].Ack(optSync())
 
 	// notAck: [...,x, y]
 	// ack: []
@@ -126,8 +126,8 @@ func TestAck(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Empty(t, details)
 
-	tsX.Ack(OptSync())
-	tsY.Ack(OptSync())
+	tsX.Ack(optSync())
+	tsY.Ack(optSync())
 
 	// notAck: []
 	// ack: []
@@ -174,7 +174,7 @@ func TestAckManager(t *testing.T) {
 			currentDetails, err := ackManager.SyncAndGetAcknowledged(ctx)
 			assert.NoError(t, err)
 			for _, d := range currentDetails {
-				if !d.IsSync {
+				if !d.IsControl() {
 					details = append(details, d)
 				}
 			}

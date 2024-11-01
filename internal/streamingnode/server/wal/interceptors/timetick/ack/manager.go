@@ -17,10 +17,10 @@ type AckManager struct {
 	cond                  *syncutil.ContextCond
 	lastAllocatedTimeTick uint64                // The last allocated time tick, the latest timestamp allocated by the allocator.
 	lastConfirmedTimeTick uint64                // The last confirmed time tick, the message which time tick less than lastConfirmedTimeTick has been committed into wal.
-	notAckHeap            typeutil.Heap[*Acker] // A minimum heap of timestampAck to search minimum allocated but not ack timestamp in list.
+	notAckHeap            typeutil.Heap[*acker] // A minimum heap of timestampAck to search minimum allocated but not ack timestamp in list.
 	// Actually, the notAckHeap can be replaced by a list because of the the allocate operation is protected by mutex,
 	// keep it as a heap to make the code more readable.
-	ackHeap typeutil.Heap[*Acker] // A minimum heap of timestampAck to search minimum ack timestamp in list.
+	ackHeap typeutil.Heap[*acker] // A minimum heap of timestampAck to search minimum ack timestamp in list.
 	// It is used to detect the concurrent operation to find the last confirmed message id.
 	acknowledgedDetails  sortedDetails         // All ack details which time tick less than lastConfirmedTimeTick will be temporarily kept here until sync operation happens.
 	lastConfirmedManager *lastConfirmedManager // The last confirmed message id manager.
@@ -36,8 +36,8 @@ func NewAckManager(
 	return &AckManager{
 		cond:                  syncutil.NewContextCond(&sync.Mutex{}),
 		lastAllocatedTimeTick: 0,
-		notAckHeap:            typeutil.NewHeap[*Acker](&ackersOrderByTimestamp{}),
-		ackHeap:               typeutil.NewHeap[*Acker](&ackersOrderByEndTimestamp{}),
+		notAckHeap:            typeutil.NewHeap[*acker](&ackersOrderByTimestamp{}),
+		ackHeap:               typeutil.NewHeap[*acker](&ackersOrderByEndTimestamp{}),
 		lastConfirmedTimeTick: lastConfirmedTimeTick,
 		lastConfirmedManager:  newLastConfirmedManager(lastConfirmedMessageID),
 		metrics:               metrics,
@@ -45,7 +45,7 @@ func NewAckManager(
 }
 
 // AllocateWithBarrier allocates a timestamp with a barrier.
-func (ta *AckManager) AllocateWithBarrier(ctx context.Context, barrierTimeTick uint64) (*Acker, error) {
+func (ta *AckManager) AllocateWithBarrier(ctx context.Context, barrierTimeTick uint64) (*AckerRef, error) {
 	// wait until the lastConfirmedTimeTick is greater than barrierTimeTick.
 	ta.cond.L.Lock()
 	for ta.lastConfirmedTimeTick <= barrierTimeTick {
@@ -60,10 +60,19 @@ func (ta *AckManager) AllocateWithBarrier(ctx context.Context, barrierTimeTick u
 
 // Allocate allocates a timestamp.
 // Concurrent safe to call with Sync and Allocate.
-func (ta *AckManager) Allocate(ctx context.Context) (*Acker, error) {
+func (ta *AckManager) Allocate(ctx context.Context) (*AckerRef, error) {
 	ta.cond.L.Lock()
 	defer ta.cond.L.Unlock()
 
+	acker, err := ta.allocateWithoutLock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &AckerRef{acker}, nil
+}
+
+// allocateWithoutLock allocates a timestamp without lock.
+func (ta *AckManager) allocateWithoutLock(ctx context.Context) (*acker, error) {
 	// allocate one from underlying allocator first.
 	ts, err := resource.Resource().TSOAllocator().Allocate(ctx)
 	if err != nil {
@@ -74,7 +83,7 @@ func (ta *AckManager) Allocate(ctx context.Context) (*Acker, error) {
 
 	// create new timestampAck for ack process.
 	// add ts to heap wait for ack.
-	acker := &Acker{
+	acker := &acker{
 		acknowledged: false,
 		detail:       newAckDetail(ts, ta.lastConfirmedManager.GetLastConfirmedMessageID()),
 		manager:      ta,
@@ -95,7 +104,7 @@ func (ta *AckManager) SyncAndGetAcknowledged(ctx context.Context) ([]*AckDetail,
 	if err != nil {
 		return nil, err
 	}
-	tsWithAck.Ack(OptSync())
+	tsWithAck.Ack(optSync())
 
 	ta.cond.L.Lock()
 	defer ta.cond.L.Unlock()
@@ -105,15 +114,39 @@ func (ta *AckManager) SyncAndGetAcknowledged(ctx context.Context) ([]*AckDetail,
 	return details, nil
 }
 
-// ack marks the timestamp as acknowledged.
-func (ta *AckManager) ack(acker *Acker) {
+// refreshTimeTick refreshes the time tick belong to the acker underlying the ref.
+// make the old one commited and the new one available.
+func (ta *AckManager) refreshTimeTick(ctx context.Context, ackerRef *AckerRef) error {
 	ta.cond.L.Lock()
 	defer ta.cond.L.Unlock()
 
+	// allocate a new one first.
+	newAcker, err := ta.allocateWithoutLock(ctx)
+	if err != nil {
+		return err
+	}
+
+	// replace the old one and ack the old one.
+	old := ackerRef.swap(newAcker)
+	optRefresh()(old.detail) // mark the old one as refresh control.
+	ta.ackWithoutLock(old)
+	return nil
+}
+
+// ack marks the timestamp as acknowledged.
+func (ta *AckManager) ack(acker *acker) {
+	ta.cond.L.Lock()
+	defer ta.cond.L.Unlock()
+
+	ta.ackWithoutLock(acker)
+}
+
+// ack marks the timestamp as acknowledged.
+func (ta *AckManager) ackWithoutLock(acker *acker) {
 	acker.acknowledged = true
 	acker.detail.EndTimestamp = ta.lastAllocatedTimeTick
 	ta.ackHeap.Push(acker)
-	ta.metrics.CountAcknowledgeTimeTick(acker.ackDetail().IsSync)
+	ta.metrics.CountAcknowledgeTimeTick(acker.ackDetail().MetricString())
 	ta.popUntilLastAllAcknowledged()
 }
 

@@ -13,7 +13,7 @@ func TestAckDetails(t *testing.T) {
 	assert.True(t, details.Empty())
 	assert.Equal(t, 0, details.Len())
 	details.AddDetails(sortedDetails{
-		&AckDetail{BeginTimestamp: 1, IsSync: true},
+		&AckDetail{BeginTimestamp: 1, AckDetailControl: controlSync},
 	})
 	assert.True(t, details.IsNoPersistedMessage())
 	assert.Equal(t, uint64(1), details.LastAllAcknowledgedTimestamp())
@@ -27,7 +27,7 @@ func TestAckDetails(t *testing.T) {
 
 	assert.Panics(t, func() {
 		details.AddDetails(sortedDetails{
-			&AckDetail{BeginTimestamp: 1, IsSync: true},
+			&AckDetail{BeginTimestamp: 1, AckDetailControl: controlSync},
 		})
 	})
 

@@ -34,7 +34,7 @@ func (impl *timeTickAppendInterceptor) DoAppend(ctx context.Context, msg message
 	var txnSession *txn.TxnSession
 	if msg.MessageType() != message.MessageTypeTimeTick {
 		// Allocate new timestamp acker for message.
-		var acker *ack.Acker
+		var acker *ack.AckerRef
 		if msg.BarrierTimeTick() == 0 {
 			if acker, err = impl.operator.AckManager().Allocate(ctx); err != nil {
 				return nil, errors.Wrap(err, "allocate timestamp failed")

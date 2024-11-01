@@ -11,19 +11,17 @@ import (
 
 // TimeTickMetrics is the metrics for time tick.
 type TimeTickMetrics struct {
-	mu                                 syncutil.ClosableLock
-	constLabel                         prometheus.Labels
-	allocatedTimeTickCounter           prometheus.Counter
-	acknowledgedTimeTickCounterForSync prometheus.Counter
-	syncTimeTickCounterForSync         prometheus.Counter
-	acknowledgedTimeTickCounter        prometheus.Counter
-	syncTimeTickCounter                prometheus.Counter
-	lastAllocatedTimeTick              prometheus.Gauge
-	lastConfirmedTimeTick              prometheus.Gauge
-	persistentTimeTickSyncCounter      prometheus.Counter
-	persistentTimeTickSync             prometheus.Gauge
-	nonPersistentTimeTickSyncCounter   prometheus.Counter
-	nonPersistentTimeTickSync          prometheus.Gauge
+	mu                               syncutil.ClosableLock
+	constLabel                       prometheus.Labels
+	allocatedTimeTickCounter         prometheus.Counter
+	acknowledgedTimeTickCounter      *prometheus.CounterVec
+	syncTimeTickCounter              *prometheus.CounterVec
+	lastAllocatedTimeTick            prometheus.Gauge
+	lastConfirmedTimeTick            prometheus.Gauge
+	persistentTimeTickSyncCounter    prometheus.Counter
+	persistentTimeTickSync           prometheus.Gauge
+	nonPersistentTimeTickSyncCounter prometheus.Counter
+	nonPersistentTimeTickSync        prometheus.Gauge
 }
 
 // NewTimeTickMetrics creates a new time tick metrics.
@@ -33,19 +31,17 @@ func NewTimeTickMetrics(pchannel string) *TimeTickMetrics {
 		metrics.WALChannelLabelName: pchannel,
 	}
 	return &TimeTickMetrics{
-		mu:                                 syncutil.ClosableLock{},
-		constLabel:                         constLabel,
-		allocatedTimeTickCounter:           metrics.WALAllocateTimeTickTotal.With(constLabel),
-		acknowledgedTimeTickCounterForSync: metrics.WALAcknowledgeTimeTickTotal.MustCurryWith(constLabel).WithLabelValues("sync"),
-		syncTimeTickCounterForSync:         metrics.WALSyncTimeTickTotal.MustCurryWith(constLabel).WithLabelValues("sync"),
-		acknowledgedTimeTickCounter:        metrics.WALAcknowledgeTimeTickTotal.MustCurryWith(constLabel).WithLabelValues("common"),
-		syncTimeTickCounter:                metrics.WALSyncTimeTickTotal.MustCurryWith(constLabel).WithLabelValues("common"),
-		lastAllocatedTimeTick:              metrics.WALLastAllocatedTimeTick.With(constLabel),
-		lastConfirmedTimeTick:              metrics.WALLastConfirmedTimeTick.With(constLabel),
-		persistentTimeTickSyncCounter:      metrics.WALTimeTickSyncTotal.MustCurryWith(constLabel).WithLabelValues("persistent"),
-		persistentTimeTickSync:             metrics.WALTimeTickSyncTimeTick.MustCurryWith(constLabel).WithLabelValues("persistent"),
-		nonPersistentTimeTickSyncCounter:   metrics.WALTimeTickSyncTotal.MustCurryWith(constLabel).WithLabelValues("memory"),
-		nonPersistentTimeTickSync:          metrics.WALTimeTickSyncTimeTick.MustCurryWith(constLabel).WithLabelValues("memory"),
+		mu:                               syncutil.ClosableLock{},
+		constLabel:                       constLabel,
+		allocatedTimeTickCounter:         metrics.WALAllocateTimeTickTotal.With(constLabel),
+		acknowledgedTimeTickCounter:      metrics.WALAcknowledgeTimeTickTotal.MustCurryWith(constLabel),
+		syncTimeTickCounter:              metrics.WALSyncTimeTickTotal.MustCurryWith(constLabel),
+		lastAllocatedTimeTick:            metrics.WALLastAllocatedTimeTick.With(constLabel),
+		lastConfirmedTimeTick:            metrics.WALLastConfirmedTimeTick.With(constLabel),
+		persistentTimeTickSyncCounter:    metrics.WALTimeTickSyncTotal.MustCurryWith(constLabel).WithLabelValues("persistent"),
+		persistentTimeTickSync:           metrics.WALTimeTickSyncTimeTick.MustCurryWith(constLabel).WithLabelValues("persistent"),
+		nonPersistentTimeTickSyncCounter: metrics.WALTimeTickSyncTotal.MustCurryWith(constLabel).WithLabelValues("memory"),
+		nonPersistentTimeTickSync:        metrics.WALTimeTickSyncTimeTick.MustCurryWith(constLabel).WithLabelValues("memory"),
 	}
 }
 
@@ -58,27 +54,19 @@ func (m *TimeTickMetrics) CountAllocateTimeTick(ts uint64) {
 	m.mu.Unlock()
 }
 
-func (m *TimeTickMetrics) CountAcknowledgeTimeTick(isSync bool) {
+func (m *TimeTickMetrics) CountAcknowledgeTimeTick(control string) {
 	if !m.mu.LockIfNotClosed() {
 		return
 	}
-	if isSync {
-		m.acknowledgedTimeTickCounterForSync.Inc()
-	} else {
-		m.acknowledgedTimeTickCounter.Inc()
-	}
+	m.acknowledgedTimeTickCounter.WithLabelValues(control).Inc()
 	m.mu.Unlock()
 }
 
-func (m *TimeTickMetrics) CountSyncTimeTick(isSync bool) {
+func (m *TimeTickMetrics) CountSyncTimeTick(control string) {
 	if !m.mu.LockIfNotClosed() {
 		return
 	}
-	if isSync {
-		m.syncTimeTickCounterForSync.Inc()
-	} else {
-		m.syncTimeTickCounter.Inc()
-	}
+	m.syncTimeTickCounter.WithLabelValues(control).Inc()
 	m.mu.Unlock()
 }
 

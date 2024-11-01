@@ -233,7 +233,7 @@ func (impl *timeTickSyncOperator) sendPersistentTsMsg(ctx context.Context,
 	// metrics updates
 	impl.metrics.CountPersistentTimeTickSync(ts)
 	impl.ackDetails.Range(func(detail *ack.AckDetail) bool {
-		impl.metrics.CountSyncTimeTick(detail.IsSync)
+		impl.metrics.CountSyncTimeTick(detail.MetricString())
 		return true
 	})
 	// Ack details has been committed to wal, clear it.
@@ -272,7 +272,7 @@ func (impl *timeTickSyncOperator) sendNoPersistentTsMsg(ctx context.Context, ts 
 	// metrics updates.
 	impl.metrics.CountMemoryTimeTickSync(ts)
 	impl.ackDetails.Range(func(detail *ack.AckDetail) bool {
-		impl.metrics.CountSyncTimeTick(detail.IsSync)
+		impl.metrics.CountSyncTimeTick(detail.MetricString())
 		return true
 	})
 	// Ack details has been committed to wal, clear it.

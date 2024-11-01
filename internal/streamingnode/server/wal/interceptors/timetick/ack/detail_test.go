@@ -20,11 +20,11 @@ func TestDetail(t *testing.T) {
 	ackDetail := newAckDetail(1, msgID)
 	assert.Equal(t, uint64(1), ackDetail.BeginTimestamp)
 	assert.True(t, ackDetail.LastConfirmedMessageID.EQ(msgID))
-	assert.False(t, ackDetail.IsSync)
+	assert.False(t, ackDetail.IsControl())
 	assert.NoError(t, ackDetail.Err)
 
-	OptSync()(ackDetail)
-	assert.True(t, ackDetail.IsSync)
+	optSync()(ackDetail)
+	assert.True(t, ackDetail.IsControl())
 	OptError(errors.New("test"))(ackDetail)
 	assert.Error(t, ackDetail.Err)
 

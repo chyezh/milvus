@@ -28,7 +28,9 @@ type lastConfirmedManager struct {
 // AddConfirmedDetails adds the confirmed details.
 func (m *lastConfirmedManager) AddConfirmedDetails(details sortedDetails, ts uint64) {
 	for _, detail := range details {
-		if detail.IsSync || detail.Err != nil {
+		// The control ack is used to make some control operation in timetick manager.
+		// So it will never commited into wal.
+		if detail.IsControl() || detail.Err != nil {
 			continue
 		}
 		m.notDoneTxnMessage.Push(&uncommittedTxnInfo{

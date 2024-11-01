@@ -1,6 +1,8 @@
 package ack
 
 import (
+	"context"
+
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
@@ -10,25 +12,45 @@ var (
 	_ typeutil.HeapInterface = (*ackersOrderByEndTimestamp)(nil)
 )
 
-// Acker records the timestamp and last confirmed message id that has not been acknowledged.
-type Acker struct {
+// AckerRef is a reference of the acker.
+type AckerRef struct {
+	*acker
+}
+
+// RefreshTimeTick refreshes the timetick of the current acker.
+// The underlying acker will be acknowledged with refresh control mark and new acker will be allocated.
+// If the error is not nil, the acker will be kept without acknowledged.
+// !!!WARNING: RefreshTimeTick can be only called before the related message is not committed, otherwise it's unsound.
+func (ar *AckerRef) RefreshTimeTick(ctx context.Context) error {
+	return ar.manager.refreshTimeTick(ctx, ar)
+}
+
+// swap swaps the underlying acker in the ref.
+func (ar *AckerRef) swap(acker *acker) *acker {
+	old := ar.acker
+	ar.acker = acker
+	return old
+}
+
+// acker records the timestamp and last confirmed message id that has not been acknowledged.
+type acker struct {
 	acknowledged bool        // is acknowledged.
 	detail       *AckDetail  // info is available after acknowledged.
 	manager      *AckManager // the manager of the acker.
 }
 
 // LastConfirmedMessageID returns the last confirmed message id.
-func (ta *Acker) LastConfirmedMessageID() message.MessageID {
+func (ta *acker) LastConfirmedMessageID() message.MessageID {
 	return ta.detail.LastConfirmedMessageID
 }
 
 // Timestamp returns the timestamp.
-func (ta *Acker) Timestamp() uint64 {
+func (ta *acker) Timestamp() uint64 {
 	return ta.detail.BeginTimestamp
 }
 
 // Ack marks the timestamp as acknowledged.
-func (ta *Acker) Ack(opts ...AckOption) {
+func (ta *acker) Ack(opts ...AckOption) {
 	for _, opt := range opts {
 		opt(ta.detail)
 	}
@@ -36,7 +58,7 @@ func (ta *Acker) Ack(opts ...AckOption) {
 }
 
 // ackDetail returns the ack info, only can be called after acknowledged.
-func (ta *Acker) ackDetail() *AckDetail {
+func (ta *acker) ackDetail() *AckDetail {
 	if !ta.acknowledged {
 		panic("unreachable: ackDetail can only be called after acknowledged")
 	}
@@ -64,7 +86,7 @@ func (h ackersOrderByEndTimestamp) Less(i, j int) bool {
 }
 
 // ackers is a heap underlying represent of timestampAck.
-type ackers []*Acker
+type ackers []*acker
 
 // Len returns the length of the heap.
 func (h ackers) Len() int {
@@ -78,7 +100,7 @@ func (h ackers) Swap(i, j int) { h[i], h[j] = h[j], h[i] }
 func (h *ackers) Push(x interface{}) {
 	// Push and Pop use pointer receivers because they modify the slice's length,
 	// not just its contents.
-	*h = append(*h, x.(*Acker))
+	*h = append(*h, x.(*acker))
 }
 
 // Pop pop the last one at len.

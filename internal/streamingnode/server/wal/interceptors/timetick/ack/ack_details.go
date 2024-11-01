@@ -52,7 +52,7 @@ func (ad *AckDetails) IsNoPersistedMessage() bool {
 	for _, detail := range ad.detail {
 		// only sync message do not persist.
 		// it just sync up the timetick with rootcoord
-		if !detail.IsSync {
+		if !detail.IsControl() {
 			return false
 		}
 	}
