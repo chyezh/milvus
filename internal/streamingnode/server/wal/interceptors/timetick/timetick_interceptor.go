@@ -46,9 +46,8 @@ func (impl *timeTickAppendInterceptor) DoAppend(ctx context.Context, msg message
 		}
 
 		// Assign timestamp to message and call the append method.
-		msg = msg.
-			WithTimeTick(acker.Timestamp()).                  // message assigned with these timetick.
-			WithLastConfirmed(acker.LastConfirmedMessageID()) // start consuming from these message id, the message which timetick greater than current timetick will never be lost.
+		acker.BindWithMessage(msg)
+		ctx = ack.WithAckRef(ctx, acker)
 
 		defer func() {
 			if err != nil {

@@ -263,9 +263,7 @@ func GetTxnSessionFromContext(ctx context.Context) *TxnSession {
 		return nil
 	}
 	if v := ctx.Value(txnSessionKeyValue); v != nil {
-		if session, ok := v.(*TxnSession); ok {
-			return session
-		}
+		return v.(*TxnSession)
 	}
 	return nil
 }

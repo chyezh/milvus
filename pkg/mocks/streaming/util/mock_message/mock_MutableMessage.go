@@ -527,17 +527,24 @@ func (_c *MockMutableMessage_WithBarrierTimeTick_Call) RunAndReturn(run func(uin
 	return _c
 }
 
-// WithLastConfirmed provides a mock function with given fields: id
-func (_m *MockMutableMessage) WithLastConfirmed(id message.MessageID) message.MutableMessage {
-	ret := _m.Called(id)
+// WithLastConfirmed provides a mock function with given fields: id, overwrite
+func (_m *MockMutableMessage) WithLastConfirmed(id message.MessageID, overwrite ...bool) message.MutableMessage {
+	_va := make([]interface{}, len(overwrite))
+	for _i := range overwrite {
+		_va[_i] = overwrite[_i]
+	}
+	var _ca []interface{}
+	_ca = append(_ca, id)
+	_ca = append(_ca, _va...)
+	ret := _m.Called(_ca...)
 
 	if len(ret) == 0 {
 		panic("no return value specified for WithLastConfirmed")
 	}
 
 	var r0 message.MutableMessage
-	if rf, ok := ret.Get(0).(func(message.MessageID) message.MutableMessage); ok {
-		r0 = rf(id)
+	if rf, ok := ret.Get(0).(func(message.MessageID, ...bool) message.MutableMessage); ok {
+		r0 = rf(id, overwrite...)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(message.MutableMessage)
@@ -554,13 +561,21 @@ type MockMutableMessage_WithLastConfirmed_Call struct {
 
 // WithLastConfirmed is a helper method to define mock.On call
 //   - id message.MessageID
-func (_e *MockMutableMessage_Expecter) WithLastConfirmed(id interface{}) *MockMutableMessage_WithLastConfirmed_Call {
-	return &MockMutableMessage_WithLastConfirmed_Call{Call: _e.mock.On("WithLastConfirmed", id)}
+//   - overwrite ...bool
+func (_e *MockMutableMessage_Expecter) WithLastConfirmed(id interface{}, overwrite ...interface{}) *MockMutableMessage_WithLastConfirmed_Call {
+	return &MockMutableMessage_WithLastConfirmed_Call{Call: _e.mock.On("WithLastConfirmed",
+		append([]interface{}{id}, overwrite...)...)}
 }
 
-func (_c *MockMutableMessage_WithLastConfirmed_Call) Run(run func(id message.MessageID)) *MockMutableMessage_WithLastConfirmed_Call {
+func (_c *MockMutableMessage_WithLastConfirmed_Call) Run(run func(id message.MessageID, overwrite ...bool)) *MockMutableMessage_WithLastConfirmed_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(message.MessageID))
+		variadicArgs := make([]bool, len(args)-1)
+		for i, a := range args[1:] {
+			if a != nil {
+				variadicArgs[i] = a.(bool)
+			}
+		}
+		run(args[0].(message.MessageID), variadicArgs...)
 	})
 	return _c
 }
@@ -570,7 +585,7 @@ func (_c *MockMutableMessage_WithLastConfirmed_Call) Return(_a0 message.MutableM
 	return _c
 }
 
-func (_c *MockMutableMessage_WithLastConfirmed_Call) RunAndReturn(run func(message.MessageID) message.MutableMessage) *MockMutableMessage_WithLastConfirmed_Call {
+func (_c *MockMutableMessage_WithLastConfirmed_Call) RunAndReturn(run func(message.MessageID, ...bool) message.MutableMessage) *MockMutableMessage_WithLastConfirmed_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -622,17 +637,24 @@ func (_c *MockMutableMessage_WithLastConfirmedUseMessageID_Call) RunAndReturn(ru
 	return _c
 }
 
-// WithTimeTick provides a mock function with given fields: tt
-func (_m *MockMutableMessage) WithTimeTick(tt uint64) message.MutableMessage {
-	ret := _m.Called(tt)
+// WithTimeTick provides a mock function with given fields: tt, overwrite
+func (_m *MockMutableMessage) WithTimeTick(tt uint64, overwrite ...bool) message.MutableMessage {
+	_va := make([]interface{}, len(overwrite))
+	for _i := range overwrite {
+		_va[_i] = overwrite[_i]
+	}
+	var _ca []interface{}
+	_ca = append(_ca, tt)
+	_ca = append(_ca, _va...)
+	ret := _m.Called(_ca...)
 
 	if len(ret) == 0 {
 		panic("no return value specified for WithTimeTick")
 	}
 
 	var r0 message.MutableMessage
-	if rf, ok := ret.Get(0).(func(uint64) message.MutableMessage); ok {
-		r0 = rf(tt)
+	if rf, ok := ret.Get(0).(func(uint64, ...bool) message.MutableMessage); ok {
+		r0 = rf(tt, overwrite...)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(message.MutableMessage)
@@ -649,13 +671,21 @@ type MockMutableMessage_WithTimeTick_Call struct {
 
 // WithTimeTick is a helper method to define mock.On call
 //   - tt uint64
-func (_e *MockMutableMessage_Expecter) WithTimeTick(tt interface{}) *MockMutableMessage_WithTimeTick_Call {
-	return &MockMutableMessage_WithTimeTick_Call{Call: _e.mock.On("WithTimeTick", tt)}
+//   - overwrite ...bool
+func (_e *MockMutableMessage_Expecter) WithTimeTick(tt interface{}, overwrite ...interface{}) *MockMutableMessage_WithTimeTick_Call {
+	return &MockMutableMessage_WithTimeTick_Call{Call: _e.mock.On("WithTimeTick",
+		append([]interface{}{tt}, overwrite...)...)}
 }
 
-func (_c *MockMutableMessage_WithTimeTick_Call) Run(run func(tt uint64)) *MockMutableMessage_WithTimeTick_Call {
+func (_c *MockMutableMessage_WithTimeTick_Call) Run(run func(tt uint64, overwrite ...bool)) *MockMutableMessage_WithTimeTick_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(uint64))
+		variadicArgs := make([]bool, len(args)-1)
+		for i, a := range args[1:] {
+			if a != nil {
+				variadicArgs[i] = a.(bool)
+			}
+		}
+		run(args[0].(uint64), variadicArgs...)
 	})
 	return _c
 }
@@ -665,7 +695,7 @@ func (_c *MockMutableMessage_WithTimeTick_Call) Return(_a0 message.MutableMessag
 	return _c
 }
 
-func (_c *MockMutableMessage_WithTimeTick_Call) RunAndReturn(run func(uint64) message.MutableMessage) *MockMutableMessage_WithTimeTick_Call {
+func (_c *MockMutableMessage_WithTimeTick_Call) RunAndReturn(run func(uint64, ...bool) message.MutableMessage) *MockMutableMessage_WithTimeTick_Call {
 	_c.Call.Return(run)
 	return _c
 }

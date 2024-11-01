@@ -7,6 +7,10 @@ import (
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
 
+type ackKeyType int
+
+var ackKey ackKeyType = 1
+
 var (
 	_ typeutil.HeapInterface = (*ackersOrderByTimestamp)(nil)
 	_ typeutil.HeapInterface = (*ackersOrderByEndTimestamp)(nil)
@@ -15,14 +19,37 @@ var (
 // AckerRef is a reference of the acker.
 type AckerRef struct {
 	*acker
+	message message.MutableMessage
+}
+
+// BindWithMessage binds the message with the acker.
+func (ar *AckerRef) BindWithMessage(msg message.MutableMessage) {
+	if ar.message != nil {
+		panic("unreachable: acker is already bound with message")
+	}
+	ar.message = msg
+	ar.message.WithTimeTick(ar.detail.BeginTimestamp).WithLastConfirmed(ar.detail.LastConfirmedMessageID)
 }
 
 // RefreshTimeTick refreshes the timetick of the current acker.
 // The underlying acker will be acknowledged with refresh control mark and new acker will be allocated.
 // If the error is not nil, the acker will be kept without acknowledged.
 // !!!WARNING: RefreshTimeTick can be only called before the related message is not committed, otherwise it's unsound.
+// And the message belong to transaction can't be refreshed.
 func (ar *AckerRef) RefreshTimeTick(ctx context.Context) error {
-	return ar.manager.refreshTimeTick(ctx, ar)
+	if ar.message == nil {
+		panic("unreachable: call refresh time tick when acker is not bound with message")
+	}
+	if ar.message.TxnContext() != nil {
+		panic("unreachable: call refresh time tick when acker is bound with transaction message")
+	}
+
+	if err := ar.manager.refreshTimeTick(ctx, ar); err != nil {
+		return err
+	}
+	// overwrite the timetick of the message.
+	ar.message.WithTimeTick(ar.detail.BeginTimestamp, true).WithLastConfirmed(ar.detail.LastConfirmedMessageID, true)
+	return nil
 }
 
 // swap swaps the underlying acker in the ref.
@@ -115,4 +142,20 @@ func (h *ackers) Pop() interface{} {
 // Peek returns the element at the top of the heap.
 func (h *ackers) Peek() interface{} {
 	return (*h)[0]
+}
+
+// WithAckRef returns the acker reference from the context.
+func WithAckRef(ctx context.Context, ref *AckerRef) context.Context {
+	return context.WithValue(ctx, ackKey, ref)
+}
+
+// GetAckRef returns the acker reference from the context.
+func GetAckRef(ctx context.Context) *AckerRef {
+	if ctx == nil {
+		return nil
+	}
+	if ref := ctx.Value(ackKey); ref != nil {
+		return ref.(*AckerRef)
+	}
+	return nil
 }

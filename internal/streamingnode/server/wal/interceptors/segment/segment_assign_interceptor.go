@@ -11,6 +11,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/segment/inspector"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/segment/manager"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/segment/stats"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick/ack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/txn"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
@@ -168,11 +169,12 @@ func (impl *segmentInterceptor) handleInsertMessage(ctx context.Context, msg mes
 
 // handleManualFlushMessage handles the manual flush message.
 func (impl *segmentInterceptor) handleManualFlushMessage(ctx context.Context, msg message.MutableMessage, appendOp interceptors.Append) (message.MessageID, error) {
-	maunalFlushMsg, err := message.AsMutableManualFlushMessageV2(msg)
+	manualFlushMsg, err := message.AsMutableManualFlushMessageV2(msg)
 	if err != nil {
 		return nil, err
 	}
-	header := maunalFlushMsg.Header()
+	header := manualFlushMsg.Header()
+	// Will generate multi FlushSegment message to flush segment.
 	segmentIDs, err := impl.assignManager.Get().SealAllSegmentsAndFenceUntil(ctx, header.GetCollectionId(), header.GetFlushTs())
 	if err != nil {
 		return nil, status.NewInner("segment seal failure with error: %s", err.Error())
@@ -184,6 +186,13 @@ func (impl *segmentInterceptor) handleManualFlushMessage(ctx context.Context, ms
 	})
 	if err != nil {
 		return nil, status.NewInner("create extra response failed with error: %s", err.Error())
+	}
+
+	// Before append message, we need refresh the time tick of the message.
+	// Keep the sequence of the message in the wal with following seq:
+	// FlushSegment1 -> FlushSegment2 -> FlushSegment3 -> ManualFlush.
+	if err := ack.GetAckRef(ctx).RefreshTimeTick(ctx); err != nil {
+		return nil, status.NewInner("refresh time tick failed with error: %s", err.Error())
 	}
 
 	// send the manual flush message.

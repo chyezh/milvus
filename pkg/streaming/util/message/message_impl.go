@@ -64,8 +64,8 @@ func (m *messageImpl) WithWALTerm(term int64) MutableMessage {
 }
 
 // WithTimeTick sets the time tick of current message.
-func (m *messageImpl) WithTimeTick(tt uint64) MutableMessage {
-	if m.properties.Exist(messageTimeTick) {
+func (m *messageImpl) WithTimeTick(tt uint64, overwrite ...bool) MutableMessage {
+	if (len(overwrite) == 0 || !overwrite[0]) && m.properties.Exist(messageTimeTick) {
 		panic("time tick already set in properties of message")
 	}
 	m.properties.Set(messageTimeTick, EncodeUint64(tt))
@@ -73,13 +73,16 @@ func (m *messageImpl) WithTimeTick(tt uint64) MutableMessage {
 }
 
 // WithLastConfirmed sets the last confirmed message id of current message.
-func (m *messageImpl) WithLastConfirmed(id MessageID) MutableMessage {
-	if m.properties.Exist(messageLastConfirmedIDSameWithMessageID) {
-		panic("last confirmed message already set in properties of message")
+func (m *messageImpl) WithLastConfirmed(id MessageID, overwrite ...bool) MutableMessage {
+	if len(overwrite) == 0 || !overwrite[0] {
+		if m.properties.Exist(messageLastConfirmedIDSameWithMessageID) {
+			panic("last confirmed message already set in properties of message")
+		}
+		if m.properties.Exist(messageLastConfirmed) {
+			panic("last confirmed message already set in properties of message")
+		}
 	}
-	if m.properties.Exist(messageLastConfirmed) {
-		panic("last confirmed message already set in properties of message")
-	}
+	m.properties.Delete(messageLastConfirmedIDSameWithMessageID)
 	m.properties.Set(messageLastConfirmed, id.Marshal())
 	return m
 }

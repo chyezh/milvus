@@ -68,7 +68,9 @@ func (ta *AckManager) Allocate(ctx context.Context) (*AckerRef, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &AckerRef{acker}, nil
+	return &AckerRef{
+		acker: acker,
+	}, nil
 }
 
 // allocateWithoutLock allocates a timestamp without lock.
@@ -124,6 +126,9 @@ func (ta *AckManager) refreshTimeTick(ctx context.Context, ackerRef *AckerRef) e
 	newAcker, err := ta.allocateWithoutLock(ctx)
 	if err != nil {
 		return err
+	}
+	if newAcker.Timestamp() > ackerRef.Timestamp() {
+		panic("unreachable: refresh time tick with new timestamp less than old one")
 	}
 
 	// replace the old one and ack the old one.
