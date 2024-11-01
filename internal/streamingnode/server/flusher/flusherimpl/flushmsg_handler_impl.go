@@ -35,6 +35,14 @@ type flushMsgHandlerImpl struct {
 	wbMgr writebuffer.BufferManager
 }
 
+func (impl *flushMsgHandlerImpl) HandleCreateSegment(ctx context.Context, vchannel string, createSegmentMsg message.ImmutableCreateSegmentMessageV2) error {
+	body, err := createSegmentMsg.Body()
+	if err != nil {
+		return errors.Wrap(err, "failed to get create segment message body")
+	}
+	return impl.wbMgr.CreateNewGrowingSegment(ctx, vchannel, body.GetPartitionId(), body.GetSegmentId())
+}
+
 func (impl *flushMsgHandlerImpl) HandleFlush(vchannel string, flushMsg message.ImmutableFlushMessageV2) error {
 	body, err := flushMsg.Body()
 	if err != nil {

@@ -236,6 +236,19 @@ func (ddn *ddNode) Operate(in []Msg) []Msg {
 				WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.DeleteLabel).
 				Add(float64(dmsg.GetNumRows()))
 			fgMsg.DeleteMessages = append(fgMsg.DeleteMessages, dmsg)
+		case commonpb.MsgType_CreateSegment:
+			createSegment := msg.(*adaptor.CreateSegmentMessageBody)
+			logger := log.With(
+				zap.String("vchannel", ddn.Name()),
+				zap.Int32("msgType", int32(msg.Type())),
+				zap.Uint64("timetick", createSegment.CreateSegmentMessage.TimeTick()),
+			)
+			logger.Info("receive create segment message")
+			if err := ddn.flushMsgHandler.HandleCreateSegment(context.Background(), ddn.vChannelName, createSegment.CreateSegmentMessage); err != nil {
+				logger.Warn("handle create segment message failed", zap.Error(err))
+			} else {
+				logger.Info("handle create segment message success")
+			}
 		case commonpb.MsgType_FlushSegment:
 			flushMsg := msg.(*adaptor.FlushMessageBody)
 			logger := log.With(

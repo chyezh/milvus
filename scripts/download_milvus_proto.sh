@@ -7,14 +7,15 @@ API_VERSION=$(go list -m github.com/milvus-io/milvus-proto/go-api/v2 | awk -F' '
 if [ ! -d "$THIRD_PARTY_DIR/milvus-proto" ]; then
   mkdir -p $THIRD_PARTY_DIR
   pushd $THIRD_PARTY_DIR
-  git clone https://github.com/milvus-io/milvus-proto.git
+  git clone https://github.com/chyezh/milvus-proto.git
   cd milvus-proto
+  COMMIT_ID="677e6547aa9b55440859886a4b7b3cdd36ac31d3"
   # try tagged version first
-  COMMIT_ID=$(git ls-remote https://github.com/milvus-io/milvus-proto.git refs/tags/${API_VERSION} | cut -f 1)
-  if [[ -z $COMMIT_ID ]]; then
-    # parse commit from pseudo version (eg v0.0.0-20230608062631-c453ef1b870a => c453ef1b870a)  
-    COMMIT_ID=$(echo $API_VERSION | awk -F'-' '{print $3}')
-  fi
+  # COMMIT_ID=$(git ls-remote https://github.com/milvus-io/milvus-proto.git refs/tags/${API_VERSION} | cut -f 1)
+  # if [[ -z $COMMIT_ID ]]; then
+  #   # parse commit from pseudo version (eg v0.0.0-20230608062631-c453ef1b870a => c453ef1b870a)  
+  #   COMMIT_ID=$(echo $API_VERSION | awk -F'-' '{print $3}')
+  # fi
   echo "version: $API_VERSION, commitID: $COMMIT_ID"
   if [ -z $COMMIT_ID ]; then
       git checkout -b $API_VERSION $API_VERSION

@@ -59,7 +59,7 @@ type SyncOperationMetrics struct {
 // AllocRows alloc space of rows on current segment.
 // Return true if the segment is assigned.
 func (s *SegmentStats) AllocRows(m InsertMetrics) bool {
-	if m.BinarySize > s.BinaryCanBeAssign() {
+	if m.BinarySize > s.BinaryCanBeAssign() && s.Insert.BinarySize > 0 {
 		s.ReachLimit = true
 		return false
 	}
@@ -72,6 +72,16 @@ func (s *SegmentStats) AllocRows(m InsertMetrics) bool {
 // BinaryCanBeAssign returns the capacity of binary size can be inserted.
 func (s *SegmentStats) BinaryCanBeAssign() uint64 {
 	return s.MaxBinarySize - s.Insert.BinarySize
+}
+
+// ShouldBeSealed returns if the segment should be sealed.
+func (s *SegmentStats) ShouldBeSealed() bool {
+	return s.ReachLimit
+}
+
+// IsEmpty returns if the segment is empty.
+func (s *SegmentStats) IsEmpty() bool {
+	return s.Insert.Rows == 0
 }
 
 // UpdateOnSync updates the stats of segment on sync.

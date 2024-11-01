@@ -163,7 +163,7 @@ func TestSegmentAllocManager(t *testing.T) {
 	ts := tsoutil.GetCurrentTime()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
-	ids, err := m.SealAllSegmentsAndFenceUntil(ctx, 1, ts)
+	ids, err := m.SealAndFenceSegmentUntil(ctx, 1, ts)
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Empty(t, ids)

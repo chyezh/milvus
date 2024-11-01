@@ -151,6 +151,11 @@ func (wb *l0WriteBuffer) dispatchDeleteMsgsWithoutFilter(deleteMsgs []*msgstream
 	}
 }
 
+func (wb *l0WriteBuffer) CreateBuffer(collectionID int64, vchannel string, partitionID int64, segmentID int64) {
+	wb.mut.Lock()
+	defer wb.mut.Unlock()
+}
+
 func (wb *l0WriteBuffer) BufferData(insertData []*InsertData, deleteMsgs []*msgstream.DeleteMsg, startPos, endPos *msgpb.MsgPosition) error {
 	wb.mut.Lock()
 	defer wb.mut.Unlock()
