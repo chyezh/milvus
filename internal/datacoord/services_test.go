@@ -361,6 +361,7 @@ func (s *ServerSuite) TestSaveBinlogPath_NormalCase() {
 	segments := map[int64]int64{
 		0: 0,
 		1: 0,
+		2: 0,
 	}
 	for segID, collID := range segments {
 		info := &datapb.SegmentInfo{
@@ -445,6 +446,24 @@ func (s *ServerSuite) TestSaveBinlogPath_NormalCase() {
 	s.EqualValues(segment.DmlPosition.ChannelName, "ch1")
 	s.EqualValues(segment.DmlPosition.MsgID, []byte{1, 2, 3})
 	s.EqualValues(segment.NumOfRows, 10)
+
+	resp, err = s.testServer.SaveBinlogPaths(ctx, &datapb.SaveBinlogPathsRequest{
+		Base: &commonpb.MsgBase{
+			Timestamp: uint64(time.Now().Unix()),
+		},
+		SegmentID:           2,
+		CollectionID:        0,
+		Channel:             "ch1",
+		Field2BinlogPaths:   []*datapb.FieldBinlog{},
+		Field2StatslogPaths: []*datapb.FieldBinlog{},
+		CheckPoints:         []*datapb.CheckPoint{},
+		Flushed:             true,
+	})
+	s.NoError(err)
+	s.EqualValues(resp.ErrorCode, commonpb.ErrorCode_Success)
+	segment = s.testServer.meta.GetSegment(2)
+	s.NotNil(segment)
+	s.Equal(commonpb.SegmentState_Dropped, segment.GetState())
 }
 
 func (s *ServerSuite) TestFlush_NormalCase() {

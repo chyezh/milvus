@@ -23,6 +23,7 @@ func (r *redoAppendInterceptor) DoAppend(ctx context.Context, msg message.Mutabl
 			return nil, ctx.Err()
 		}
 		msgID, err = append(ctx, msg)
+		// If the error is ErrRedo, we should redo the append operation.
 		if errors.Is(err, ErrRedo) {
 			continue
 		}

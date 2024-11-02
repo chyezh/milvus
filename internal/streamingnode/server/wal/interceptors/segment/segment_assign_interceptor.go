@@ -251,7 +251,7 @@ func (impl *segmentInterceptor) recoverPChannelManager(param interceptors.Interc
 		}
 
 		// register the manager into inspector, to do the seal asynchronously
-		inspector.GetSegmentSealedInspector().RegsiterPChannelManager(pm)
+		inspector.GetSegmentSealedInspector().RegisterPChannelManager(pm)
 		impl.assignManager.Set(pm)
 		impl.logger.Info("recover PChannel Assignment Manager success")
 		return
