@@ -26,6 +26,7 @@
 #include <unistd.h>
 #include "glog/logging.h"
 #include "fmt/core.h"
+#include "common/Tracer.h"
 
 // namespace milvus {
 
@@ -72,11 +73,12 @@
            (typeid(*this).name()),   \
            __FUNCTION__,             \
            GetThreadName().c_str())
-#define SERVER_MODULE_FUNCTION \
-    LogOut("[%s][%s][%s] ",    \
-           SERVER_MODULE_NAME, \
-           __FUNCTION__,       \
-           GetThreadName().c_str())
+#define SERVER_MODULE_FUNCTION      \
+    LogOut("[%s][%s][%s][%s]",      \
+           SERVER_MODULE_NAME,      \
+           __FUNCTION__,            \
+           GetThreadName().c_str(), \
+           milvus::tracer::GetTraceID().c_str())
 
 #define LOG_DEBUG(args...) \
     VLOG(GLOG_DEBUG) << SERVER_MODULE_FUNCTION << fmt::format(args)

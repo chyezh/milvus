@@ -124,6 +124,17 @@ StartSpan(const std::string& name, TraceContext* parentCtx) {
     return GetTracer()->StartSpan(name, opts);
 }
 
+std::string
+GetTraceID() {
+    if (local_span == nullptr) {
+        return std::string();
+    }
+    auto ctx = local_span->GetContext();
+    auto trace_id = ctx.trace_id();
+    auto rep = trace_id.Id();
+    return BytesToHexStr(rep.data(), rep.size());
+}
+
 thread_local std::shared_ptr<trace::Span> local_span;
 void
 SetRootSpan(std::shared_ptr<trace::Span> span) {

@@ -153,6 +153,9 @@ ExecPlanNodeVisitor::VectorVisitorImpl(VectorPlanNode& node) {
     auto src_data = ph.get_blob();
     auto num_queries = ph.num_of_queries_;
 
+    std::chrono::high_resolution_clock::time_point scalar_start =
+        std::chrono::high_resolution_clock::now();
+
     // TODO: add API to unify row_count
     // auto row_count = segment->get_row_count();
     auto active_count = segment->get_active_count(timestamp_);
@@ -164,8 +167,9 @@ ExecPlanNodeVisitor::VectorVisitorImpl(VectorPlanNode& node) {
         return;
     }
 
-    std::chrono::high_resolution_clock::time_point scalar_start =
+    std::chrono::high_resolution_clock::time_point get_active_end =
         std::chrono::high_resolution_clock::now();
+
     std::unique_ptr<BitsetType> bitset_holder;
     if (node.filter_plannode_.has_value()) {
         BitsetType expr_res;
@@ -177,6 +181,9 @@ ExecPlanNodeVisitor::VectorVisitorImpl(VectorPlanNode& node) {
         bitset_holder = std::make_unique<BitsetType>(active_count, false);
     }
     segment->mask_with_timestamps(*bitset_holder, timestamp_);
+
+    std::chrono::high_resolution_clock::time_point mv_ts_end =
+        std::chrono::high_resolution_clock::now();
 
     segment->mask_with_delete(*bitset_holder, active_count, timestamp_);
     std::chrono::high_resolution_clock::time_point scalar_end =
@@ -233,6 +240,19 @@ ExecPlanNodeVisitor::VectorVisitorImpl(VectorPlanNode& node) {
     double scalar_ratio = total_cost > 0.0 ? scalar_cost / total_cost : 0.0;
     monitor::internal_core_search_latency_scalar_proportion.Observe(
         scalar_ratio);
+    double get_active_cost =
+        std::chrono::duration<double, std::micro>(get_active_end - scalar_start)
+            .count();
+    double delete_cost =
+        std::chrono::duration<double, std::micro>(scalar_end - mv_ts_end)
+            .count();
+    LOG_INFO(
+        "xxx search scalar cost:{}, vector_cost:{}, get_active cost: {}, "
+        "delete_cost: {}",
+        scalar_cost,
+        vector_cost,
+        get_active_cost,
+        delete_cost);
 }
 
 std::unique_ptr<RetrieveResult>

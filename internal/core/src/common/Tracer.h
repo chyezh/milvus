@@ -20,6 +20,8 @@
 
 namespace milvus::tracer {
 
+extern thread_local std::shared_ptr<opentelemetry::v1::trace::Span> local_span;
+
 struct TraceConfig {
     std::string exporter;
     float sampleFraction;
@@ -73,6 +75,9 @@ GetTraceIDAsHexStr(const TraceContext* ctx);
 
 std::string
 GetSpanIDAsHexStr(const TraceContext* ctx);
+
+std::string
+GetTraceID();
 
 struct AutoSpan {
     explicit AutoSpan(const std::string& name,

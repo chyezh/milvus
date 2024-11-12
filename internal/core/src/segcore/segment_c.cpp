@@ -95,10 +95,11 @@ AsyncSearch(CTraceContext c_trace,
     auto phg_ptr = reinterpret_cast<const milvus::query::PlaceholderGroup*>(
         c_placeholder_group);
 
+    auto start = std::chrono::steady_clock::now();
     auto future = milvus::futures::Future<milvus::SearchResult>::async(
         milvus::futures::getGlobalCPUExecutor(),
         milvus::futures::ExecutePriority::HIGH,
-        [c_trace, segment, plan, phg_ptr, timestamp](
+        [c_trace, segment, plan, phg_ptr, timestamp, start](
             milvus::futures::CancellationToken cancel_token) {
             // save trace context into search_info
             auto& trace_ctx = plan->plan_node_->search_info_.trace_ctx_;
@@ -109,7 +110,18 @@ AsyncSearch(CTraceContext c_trace,
             auto span = milvus::tracer::StartSpan("SegCoreSearch", &trace_ctx);
             milvus::tracer::SetRootSpan(span);
 
+            LOG_INFO("xxx start search cost, {}us",
+                     std::chrono::duration<double, std::micro>(
+                         std::chrono::steady_clock::now() - start)
+                         .count());
+
+            auto task_start = std::chrono::steady_clock::now();
             auto search_result = segment->Search(plan, phg_ptr, timestamp);
+
+            LOG_INFO("xxx search done cost, {}us",
+                     std::chrono::duration<double, std::micro>(
+                         std::chrono::steady_clock::now() - task_start)
+                         .count());
             if (!milvus::PositivelyRelated(
                     plan->plan_node_->search_info_.metric_type_)) {
                 for (auto& dis : search_result->distances_) {
@@ -118,8 +130,18 @@ AsyncSearch(CTraceContext c_trace,
             }
             span->End();
             milvus::tracer::CloseRootSpan();
+
+            LOG_INFO("xxx search done return, {}us",
+                     std::chrono::duration<double, std::micro>(
+                         std::chrono::steady_clock::now() - task_start)
+                         .count());
             return search_result.release();
         });
+    auto end = std::chrono::steady_clock::now();
+    auto s = milvus::tracer::BytesToHexStr(c_trace.traceID, 16);
+    LOG_INFO("xxx cgo cost: {}us, {}",
+             std::chrono::duration<double, std::micro>(end - start).count(),
+             s);
     return static_cast<CFuture*>(static_cast<void*>(
         static_cast<milvus::futures::IFuture*>(future.release())));
 }
