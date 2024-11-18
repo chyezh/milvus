@@ -27,7 +27,7 @@ ifdef disk_index
 	use_disk_index = ${disk_index}
 endif
 
-use_asan = OFF
+use_asan = ON
 ifeq ($(USE_ASAN), ON)
 	use_asan =${USE_ASAN}
 	CGO_LDFLAGS := $(shell go env CGO_LDFLAGS) -fsanitize=address -fno-omit-frame-pointer
@@ -73,7 +73,7 @@ PROTOC_GEN_GO_GRPC_VERSION := 1.3.0
 PROTOC_GEN_GO_GRPC_OUTPUT := $(shell print | $(INSTALL_PATH)/protoc-gen-go-grpc  --version 2>/dev/null)
 INSTALL_PROTOC_GEN_GO_GRPC := $(findstring $(PROTOC_GEN_GO_GRPC_VERSION),$(PROTOC_GEN_GO_GRPC_OUTPUT))
 
-index_engine = knowhere
+index_engine = cardinal
 
 export GIT_BRANCH=master
 
