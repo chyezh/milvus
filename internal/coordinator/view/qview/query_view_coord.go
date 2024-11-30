@@ -21,7 +21,7 @@ func (qv *QueryViewOfShardAtCoord) ApplyNodeStateView(incomingQV interface{}) {
 	panic("invalid incoming query view type")
 }
 
-// ApplyQueryNodeView applies the query node view to the coord query view.
+// applyQueryNodeView applies the query node view to the coord query view.
 func (qv *QueryViewOfShardAtCoord) applyQueryNodeView(viewAtQueryNode *QueryViewOfShardAtQueryNode) {
 	// Only preparing state query view can apply query node view.
 	if qv.State() != QueryViewStatePreparing {
@@ -33,8 +33,8 @@ func (qv *QueryViewOfShardAtCoord) applyQueryNodeView(viewAtQueryNode *QueryView
 	}
 
 	for idx, node := range qv.inner.QueryNode {
-		if node.GetNodeId() == viewAtQueryNode.NodeID() {
-			qv.inner.QueryNode[idx] = viewAtQueryNode.inner.GetQueryNode()[0]
+		if node.NodeId == viewAtQueryNode.NodeID() {
+			qv.inner.QueryNode[idx] = viewAtQueryNode.inner.QueryNode[0]
 			// Make a state transition, if all nodes are ready, the query view can be transited into ready.
 			// else into down state.
 			qv.transitionWhenPreparing()
@@ -52,7 +52,7 @@ func (qv *QueryViewOfShardAtCoord) applyStreamingNodeView(viewAtStreamingNode *Q
 	if !qv.Version().EQ(viewAtStreamingNode.Version()) {
 		panic("version of query view not match")
 	}
-	qv.inner.StreamingNode = viewAtStreamingNode.inner.GetStreamingNode()
+	qv.inner.StreamingNode = viewAtStreamingNode.inner.StreamingNode
 	qv.transitionWhenPreparing()
 }
 
@@ -73,18 +73,18 @@ func (qv *QueryViewOfShardAtCoord) Down() *QueryViewOfShardAtCoordTxn {
 }
 
 // transitionWhenPreparing transits the query view state when it is preparing.
-func (qv *QueryViewOfShardAtCoord) transitionWhenPreparing() bool {
-	if qv.transisitionWithNodeWhenPreparing(QueryViewNodeState(qv.inner.GetStreamingNode().GetState())) {
-		return true
+func (qv *QueryViewOfShardAtCoord) transitionWhenPreparing() {
+	if qv.transisitionWithNodeWhenPreparing(QueryViewNodeState(qv.inner.StreamingNode.State)) {
+		return
 	}
-	for _, node := range qv.inner.GetQueryNode() {
-		if qv.transisitionWithNodeWhenPreparing(QueryViewNodeState(node.GetState())) {
-			return true
+	for _, node := range qv.inner.QueryNode {
+		if qv.transisitionWithNodeWhenPreparing(QueryViewNodeState(node.State)) {
+			return
 		}
 	}
 	// All node are ready, transit the state into ready.
-	qv.inner.Shard.State = viewpb.QueryViewState(QueryViewStateReady)
-	return false
+	qv.inner.Meta.State = viewpb.QueryViewState(QueryViewStateReady)
+	return
 }
 
 // transisitionWithNodeWhenPreparing transits the query view state with the node state when it is preparing.
@@ -93,33 +93,33 @@ func (qv *QueryViewOfShardAtCoord) transisitionWithNodeWhenPreparing(s QueryView
 	case QueryViewNodeStatePreparing:
 		return false
 	case QueryViewNodeStateUnrecoverable:
-		qv.inner.Shard.State = viewpb.QueryViewState(QueryViewStateDown)
+		qv.inner.Meta.State = viewpb.QueryViewState(QueryViewStateDropping)
 		return true
 	case QueryViewNodeStateReady:
+		return false
 	default:
 		panic("found inconsistent state")
 	}
-	return false
 }
 
 // State returns the state of the query view.
 func (qv *QueryViewOfShardAtCoord) State() QueryViewState {
-	return QueryViewState(qv.inner.GetShard().GetState())
+	return QueryViewState(qv.inner.Meta.State)
 }
 
 // Version return the version of the query view.
 func (qv *QueryViewOfShardAtCoord) Version() QueryViewVersion {
-	v := qv.inner.GetShard().GetVersion()
+	v := qv.inner.Meta.Version
 	return QueryViewVersion{
-		DataVersion:  v.GetDataVersion(),
-		QueryVersion: v.GetQueryVersion(),
+		DataVersion:  v.DataVersion,
+		QueryVersion: v.QueryVersion,
 	}
 }
 
 // newQueryViewOfShardAtCoordTxn creates a new query view transaction.
-func newQueryViewOfShardAtCoordTxn(inner *viewpb.QueryViewOfShardAtCoord, targetState QueryViewState) *QueryViewOfShardAtCoordTxn {
-	oldState := inner.GetShard().GetState()
-	inner.Shard.State = viewpb.QueryViewState(targetState)
+func newQueryViewOfShardAtCoordTxn(inner *viewpb.QueryViewOfShard, targetState QueryViewState) *QueryViewOfShardAtCoordTxn {
+	oldState := inner.Meta.State
+	inner.Meta.State = viewpb.QueryViewState(targetState)
 	return &QueryViewOfShardAtCoordTxn{
 		QueryViewOfShardAtCoord: &QueryViewOfShardAtCoord{inner: inner},
 		oldState:                oldState,
@@ -133,7 +133,7 @@ type QueryViewOfShardAtCoordTxn struct {
 }
 
 // IntoProto converts the query view into proto representation.
-func (qv *QueryViewOfShardAtCoordTxn) IntoProto() *viewpb.QueryViewOfShardAtCoord {
+func (qv *QueryViewOfShardAtCoordTxn) IntoProto() *viewpb.QueryViewOfShard {
 	return qv.inner
 }
 
