@@ -66,7 +66,7 @@ func (qv *QueryViewOfShardAtCoord) transitWhenPreparing(incomingQV QueryViewOfSh
 	switch incomingQV.State() {
 	case QueryViewStatePreparing:
 		qv.syncRecord.MarkNodeAcked(incomingQV.WorkNode())
-	case QueryViewStateUnrecoverable:
+	case QueryViewStateDropping:
 		qv.dropView()
 	case QueryViewStateReady:
 		qv.syncRecord.MarkNodeReady(incomingQV.WorkNode())

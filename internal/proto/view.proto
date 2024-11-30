@@ -32,9 +32,8 @@ enum QueryViewState {
         2;  // Mark as Ready if all node on these shard is ready
     QueryViewStateUp = 3;
     QueryViewStateDown = 4;
-    QueryViewStateUnrecoverable = 5;
     QueryViewStateDropping =
-        6;  // Mark as dropping to do the resource cleanup opeartion for the view.
+        5;  // Mark as dropping to do the resource cleanup opeartion for the view.
 }
 
 enum QueryViewSegmentState {

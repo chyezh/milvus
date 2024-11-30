@@ -9,12 +9,11 @@ type (
 )
 
 const (
-	QueryViewStatePreparing     = QueryViewState(viewpb.QueryViewState_QueryViewStatePreparing)
-	QueryViewStateReady         = QueryViewState(viewpb.QueryViewState_QueryViewStateReady)
-	QueryViewStateUp            = QueryViewState(viewpb.QueryViewState_QueryViewStateUp)
-	QueryViewStateDown          = QueryViewState(viewpb.QueryViewState_QueryViewStateDown)
-	QueryViewStateUnrecoverable = QueryViewState(viewpb.QueryViewState_QueryViewStateUnrecoverable)
-	QueryViewStateDropping      = QueryViewState(viewpb.QueryViewState_QueryViewStateDropping)
+	QueryViewStatePreparing = QueryViewState(viewpb.QueryViewState_QueryViewStatePreparing)
+	QueryViewStateReady     = QueryViewState(viewpb.QueryViewState_QueryViewStateReady)
+	QueryViewStateUp        = QueryViewState(viewpb.QueryViewState_QueryViewStateUp)
+	QueryViewStateDown      = QueryViewState(viewpb.QueryViewState_QueryViewStateDown)
+	QueryViewStateDropping  = QueryViewState(viewpb.QueryViewState_QueryViewStateDropping)
 
 	NodeSyncStateNot      NodeSyncState = iota + 1 // NodeSync signal haven't been sent.
 	NodeSyncStateInFlight                          // NodeState signal has been sent, on flight and wait for acknowledge.
