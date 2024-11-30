@@ -62,8 +62,8 @@ mkdir -p indexpb
 mkdir -p datapb
 mkdir -p querypb
 mkdir -p planpb
-mkdir -p streamingpb
 mkdir -p workerpb
+mkdir -p viewpb
 
 mkdir -p $ROOT_DIR/cmd/tools/migration/legacy/legacypb
 
@@ -81,6 +81,7 @@ ${protoc_opt} --go_out=paths=source_relative:./querypb --go-grpc_out=require_uni
 ${protoc_opt} --go_out=paths=source_relative:./planpb --go-grpc_out=require_unimplemented_servers=false,paths=source_relative:./planpb plan.proto|| { echo 'generate plan.proto failed'; exit 1; }
 ${protoc_opt} --go_out=paths=source_relative:./segcorepb --go-grpc_out=require_unimplemented_servers=false,paths=source_relative:./segcorepb segcore.proto|| { echo 'generate segcore.proto failed'; exit 1; }
 ${protoc_opt} --go_out=paths=source_relative:./clusteringpb --go-grpc_out=require_unimplemented_servers=false,paths=source_relative:./clusteringpb clustering.proto|| { echo 'generate clustering.proto failed'; exit 1; }
+${protoc_opt} --go_out=paths=source_relative:./viewpb --go-grpc_out=require_unimplemented_servers=false,paths=source_relative:./viewpb view.proto|| { echo 'generate view.proto failed'; exit 1; }
 
 ${protoc_opt} --go_out=paths=source_relative:./workerpb --go-grpc_out=require_unimplemented_servers=false,paths=source_relative:./workerpb worker.proto|| { echo 'generate worker.proto failed'; exit 1; }
 
@@ -108,6 +109,7 @@ mkdir -p streamingpb
 
 # streaming node message protobuf
 ${protoc_opt} --go_out=paths=source_relative:./messagespb --go-grpc_out=require_unimplemented_servers=false,paths=source_relative:./messagespb messages.proto || { echo 'generate messagespb.proto failed'; exit 1; }
+
 ${protoc_opt} --go_out=paths=source_relative:./streamingpb --go-grpc_out=require_unimplemented_servers=false,paths=source_relative:./streamingpb streaming.proto || { echo 'generate streamingpb.proto failed'; exit 1; }
 
 popd

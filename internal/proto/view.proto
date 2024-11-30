@@ -1,0 +1,113 @@
+syntax = "proto3";
+package milvus.proto.view;
+
+option go_package = "github.com/milvus-io/milvus/internal/proto/viewpb";
+
+message DataViewOfCollection {
+    int64 collection_id = 1;
+    repeated DataViewOfShard shards = 2;
+    int64 data_version = 3;
+}
+
+message DataViewOfShard {
+    string vchannel = 1;
+    repeated DataViewOfPartition partitions = 2;
+}
+
+message DataViewOfPartition {
+    int64 partition_id = 1;
+    repeated DataViewOfSegment segments = 2;
+}
+
+message DataViewOfSegment {
+    int64 segment_id = 1;
+    int64 data_version =
+        2;  // Data version when this segment join the dataview.
+}
+
+enum QueryViewState {
+    QueryViewStateUnknown = 0;
+    QueryViewStatePreparing = 1;
+    QueryViewStateReady =
+        2;  // Mark as Ready if all node on these shard is ready
+    QueryViewStateUp = 3;
+    QueryViewStateDown = 4;
+    QueryViewStateDropping =
+        5;  // Mark as dropping to do the resource cleanup opeartion for the view.
+}
+
+enum QueryViewNodeState {
+    QueryViewNodeStateUnknown = 0;
+    QueryViewNodeStatePreparing = 1;
+    QueryViewNodeStateReady = 2;
+    QueryViewNodeStateUnrecoverable =
+        3;  // If current view cannot be achiveved at current node, it will be mark as Unrecoverable.
+}
+
+enum QueryViewSegmentState {
+    QueryViewSegmentStateUnknown = 0;
+    QueryViewSegmentStateNotReady = 1;
+    QueryViewSegmentStateReady = 2;
+}
+
+message QueryViewOfShard {
+    QueryViewMeta meta = 1;
+    repeated QueryViewOfQueryNode query_node = 2;
+    QueryViewOfStreamingNode streaming_node = 3;
+}
+
+message QueryViewMeta {
+    int64 collection_id = 1;
+    int64 replica_id = 2;
+    string vchannel = 3;
+    QueryViewVersion version = 4;
+    QueryViewState state = 5;
+    QueryViewSettings settings = 6;
+}
+
+message QueryViewSettings {
+    repeated int64 required_partitions =
+        1;  // the partitions that must be loaded to make the view available.
+    repeated int64 optional_partitions =
+        2;  // the partitions that need be loaded, but not influence the view availability.
+    // repeated int64 required_fields =
+    //     3;  // the fields that must be loaded to make the view available.
+    // repeated int64 optional_fields =
+    //     4;  // the fields that need be loaded, but not influence the view availability.
+}
+
+message QueryViewOfStreamingNode {
+    QueryViewNodeState state =
+        1;  // node is ready or unrecoverable, only updated by related streaming node.
+}
+
+message QueryViewOfQueryNode {
+    int64 node_id = 1;
+    repeated QueryViewOfPartition partitions =
+        2;  // paritions that need to be loaded, used for partitial partition loading.
+    QueryViewNodeState state =
+        3;  // node is ready or not or unrecoverable, only updated by related query node.
+}
+
+message QueryViewVersion {
+    int64 data_version = 1;   // the data version when this view is created.
+    int64 query_version = 2;  // the query version when this view is created.
+}
+
+message QueryViewOfPartition {
+    int64 partition_id = 1;
+    repeated QueryViewOfSegment segments = 2;
+}
+
+message QueryViewOfSegment {
+    int64 segment_id = 1;
+    QueryViewSegmentState state = 2;  // segment is ready or not.
+}
+
+message SyncQueryViewRequest {
+    repeated QueryViewOfShard query_views = 1;
+}
+
+message SyncQueryViewResponse {
+    repeated QueryViewOfShard query_views = 1;
+}
