@@ -26,26 +26,35 @@ func StreamingNode() WorkNode {
 	return WorkNode{ID: -1}
 }
 
-// newNodeSyncStateRecord creates a new node sync state record.
-func newNodeSyncStateRecord(qv *viewpb.QueryViewOfShardAtCoord) *nodeSyncStateRecord {
+// newAllWorkNodeSyncRecord indicate to make sync opearation to all worknode.
+func newAllWorkNodeSyncRecord(qv *viewpb.QueryViewOfShard) *workNodeSyncRecord {
 	nodes := make(map[WorkNode]NodeSyncState, len(qv.GetQueryNode())+1)
 	nodes[StreamingNode()] = NodeSyncStateNot
 	for _, node := range qv.QueryNode {
 		nodes[QueryNode(node.GetNodeId())] = NodeSyncStateNot
 	}
-	return &nodeSyncStateRecord{
+	return &workNodeSyncRecord{
 		nodes: nodes,
 	}
 }
 
-// nodeSyncStateRecord records the related node sync opeartion state of a query view.
-type nodeSyncStateRecord struct {
+// newStreamingNodeSyncRecord indicate to make sync operation to streaming node only.
+func newStreamingNodeSyncRecord() *workNodeSyncRecord {
+	return &workNodeSyncRecord{
+		nodes: map[WorkNode]NodeSyncState{
+			StreamingNode(): NodeSyncStateNot,
+		},
+	}
+}
+
+// workNodeSyncRecord records the related node sync opeartion state of a query view.
+type workNodeSyncRecord struct {
 	allAcked bool // allAcked indicates whether all nodes are
 	nodes    map[WorkNode]NodeSyncState
 }
 
 // FindAllUnsyncedNodes finds all the unsynced nodes.
-func (r *nodeSyncStateRecord) FindAllUnsyncedNodes(recover bool) []WorkNode {
+func (r *workNodeSyncRecord) FindAllUnsyncedNodes(recover bool) []WorkNode {
 	if r.allAcked {
 		// if all nodes has been acked, so no need to send the sync signal any more.
 		return nil
@@ -61,18 +70,34 @@ func (r *nodeSyncStateRecord) FindAllUnsyncedNodes(recover bool) []WorkNode {
 }
 
 // MarkNodeInFlight marks the node sync state as on flight.
-func (r *nodeSyncStateRecord) MarkNodeInFlight(node WorkNode) {
+func (r *workNodeSyncRecord) MarkNodeInFlight(node WorkNode) {
 	r.assertQueryNode(node)
 	r.nodes[node] = NodeSyncStateInFlight
 }
 
 // MarkNodeAcked marks the node sync state as acked.
-func (r *nodeSyncStateRecord) MarkNodeAcked(node WorkNode) {
+func (r *workNodeSyncRecord) MarkNodeAcked(node WorkNode) {
 	r.assertQueryNode(node)
 	r.nodes[node] = NodeSyncStateAcked
 }
 
-func (r *nodeSyncStateRecord) assertQueryNode(node WorkNode) {
+// MarkNodeAcked marks the node sync state as acked.
+func (r *workNodeSyncRecord) MarkNodeReady(node WorkNode) {
+	r.assertQueryNode(node)
+	r.nodes[node] = NodeSyncStateReady
+}
+
+// IsAllReady returns whether all nodes are ready.
+func (r *workNodeSyncRecord) IsAllReady() bool {
+	for _, state := range r.nodes {
+		if state != NodeSyncStateReady {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *workNodeSyncRecord) assertQueryNode(node WorkNode) {
 	if _, ok := r.nodes[node]; !ok {
 		panic(fmt.Sprintf("node should always be found, %v", node))
 	}

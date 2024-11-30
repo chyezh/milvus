@@ -12,14 +12,19 @@ func (qv *QueryViewOfShardAtQueryNode) WorkNode() WorkNode {
 	return QueryNode(qv.NodeID())
 }
 
+// Acknowledge acknowledges the query view of the query node.
+func (qv *QueryViewOfShardAtQueryNode) Acknowledge(q *QueryViewOfShardAtCoord) {
+	panic("implement me")
+}
+
 // NodeID returns the node id of the query node.
 func (qv *QueryViewOfShardAtQueryNode) NodeID() int64 {
 	return qv.inner.GetQueryNode()[0].GetNodeId()
 }
 
 // State returns the state of the query view.
-func (qv *QueryViewOfShardAtQueryNode) State() viewpb.QueryViewState {
-	return qv.inner.GetMeta().GetState()
+func (qv *QueryViewOfShardAtQueryNode) State() QueryViewState {
+	return QueryViewState(qv.inner.GetMeta().GetState())
 }
 
 // Version return the version of the view of query node.

@@ -32,16 +32,9 @@ enum QueryViewState {
         2;  // Mark as Ready if all node on these shard is ready
     QueryViewStateUp = 3;
     QueryViewStateDown = 4;
+    QueryViewStateUnrecoverable = 5;
     QueryViewStateDropping =
-        5;  // Mark as dropping to do the resource cleanup opeartion for the view.
-}
-
-enum QueryViewNodeState {
-    QueryViewNodeStateUnknown = 0;
-    QueryViewNodeStatePreparing = 1;
-    QueryViewNodeStateReady = 2;
-    QueryViewNodeStateUnrecoverable =
-        3;  // If current view cannot be achiveved at current node, it will be mark as Unrecoverable.
+        6;  // Mark as dropping to do the resource cleanup opeartion for the view.
 }
 
 enum QueryViewSegmentState {
@@ -77,16 +70,12 @@ message QueryViewSettings {
 }
 
 message QueryViewOfStreamingNode {
-    QueryViewNodeState state =
-        1;  // node is ready or unrecoverable, only updated by related streaming node.
 }
 
 message QueryViewOfQueryNode {
     int64 node_id = 1;
     repeated QueryViewOfPartition partitions =
         2;  // paritions that need to be loaded, used for partitial partition loading.
-    QueryViewNodeState state =
-        3;  // node is ready or not or unrecoverable, only updated by related query node.
 }
 
 message QueryViewVersion {
