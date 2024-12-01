@@ -7,16 +7,13 @@ func newQueryViewOfShardAtCoord(qv *viewpb.QueryViewOfShard) *QueryViewOfShardAt
 	return &QueryViewOfShardAtCoord{
 		inner:      qv,
 		syncRecord: newAllWorkNodeSyncRecord(qv), // The incoming pv must be a preparing state.
-		// So we need to make a new broadcast to all worknode.
-		waitPersist: true,
 	}
 }
 
 // QueryView is the representation of a query view of one shard.
 type QueryViewOfShardAtCoord struct {
-	inner       *viewpb.QueryViewOfShard
-	syncRecord  *workNodeSyncRecord // syncRecord is a record map to make record sync opeartion of worknode, help to achieve the 2PC.
-	waitPersist bool                // needPersistent indicates whether the query view need to be persistented.
+	inner      *viewpb.QueryViewOfShard
+	syncRecord *workNodeSyncRecord // syncRecord is a record map to make record sync opeartion of worknode, help to achieve the 2PC.
 }
 
 // ApplyNodeStateView applies the node state view to the coord query view.
@@ -25,11 +22,30 @@ func (qv *QueryViewOfShardAtCoord) ApplyNodeStateView(incomingQV QueryViewOfShar
 	if !qv.Version().EQ(incomingQV.Version()) {
 		panic("version of query view not match")
 	}
-	// Only preparing state query view can apply query node view.
-	if qv.State() != QueryViewStatePreparing {
-		panic("invalid state transition")
-	}
 
+	switch qv.State() {
+	case QueryViewStatePreparing:
+		qv.applyNodeStateViewAtPreparing(incomingQV)
+	case QueryViewStateReady:
+		if incomingQV.State() == QueryViewStateUp {
+			qv.upView()
+		}
+	case QueryViewStateDown:
+		if incomingQV.State() == QueryViewStateDown {
+			qv.dropView()
+		}
+	case QueryViewStateDropping:
+		if incomingQV.State() == QueryViewStateDropped {
+			qv.syncRecord.MarkNodeReady(incomingQV.WorkNode())
+			// If all nodes are ready, then transit the state into ready.
+			if qv.syncRecord.IsAllReady() {
+				qv.deleteView()
+			}
+		}
+	}
+}
+
+func (qv *QueryViewOfShardAtCoord) applyNodeStateViewAtPreparing(incomingQV QueryViewOfShardAtWorkNode) {
 	// Update the view of related node parts.
 	switch incomingQV := incomingQV.(type) {
 	case *QueryViewOfShardAtQueryNode:
@@ -42,6 +58,13 @@ func (qv *QueryViewOfShardAtCoord) ApplyNodeStateView(incomingQV QueryViewOfShar
 
 	// Do a state transition
 	qv.transitWhenPreparing(incomingQV)
+}
+
+func (qv *QueryViewOfShardAtCoord) transitWhenDropping(incomingQV QueryViewOfShardAtWorkNode) {
+	switch incomingQV.State() {
+	case QueryViewStatePreparing:
+		qv.syncRecord.MarkNodeAcked(incomingQV.WorkNode())
+	}
 }
 
 // applyQueryNodeView applies the query node view to the coord query view.
@@ -66,30 +89,20 @@ func (qv *QueryViewOfShardAtCoord) transitWhenPreparing(incomingQV QueryViewOfSh
 	switch incomingQV.State() {
 	case QueryViewStatePreparing:
 		qv.syncRecord.MarkNodeAcked(incomingQV.WorkNode())
-	case QueryViewStateDropping:
-		qv.dropView()
 	case QueryViewStateReady:
 		qv.syncRecord.MarkNodeReady(incomingQV.WorkNode())
+		// If all nodes are ready, then transit the state into ready.
 		if qv.syncRecord.IsAllReady() {
-			// If all nodes are ready, then transit the state into ready.
-			qv.inner.Meta.State = viewpb.QueryViewState(QueryViewStateReady)
-			// When the state is transited into ready, we need to sent a notification to streaming node to enable the view.
-			qv.syncRecord = newStreamingNodeSyncRecord()
+			qv.readyView()
 		}
+	case QueryViewStateDropping:
+		qv.dropView()
 	case QueryViewStateUp:
 		// If the node is marked as up (streaming node), then transit the state into up directly.
-		qv.inner.Meta.State = viewpb.QueryViewState(QueryViewStateUp)
+		qv.upView()
 	default:
 		panic("found inconsistent state")
 	}
-}
-
-// dropView marks the query view as dropping.
-func (qv *QueryViewOfShardAtCoord) dropView() {
-	qv.inner.Meta.State = viewpb.QueryViewState(QueryViewStateDropping)
-	// When the state is transited into dropping, we need to sent a broadcast to all nodes to notify them dropping these view.
-	// Empty the sync record to redo the sync signal.
-	qv.syncRecord = newAllWorkNodeSyncRecord(qv.inner)
 }
 
 // Up transits the query view state into up.
@@ -97,15 +110,15 @@ func (qv *QueryViewOfShardAtCoord) Up() {
 	if qv.State() != QueryViewStateReady {
 		panic("invalid state transition")
 	}
-	return newQueryViewOfShardAtCoordTxn(qv.inner, QueryViewStateUp)
+	qv.upView()
 }
 
-// Drop transits the query view state into dropping.
-func (qv *QueryViewOfShardAtCoord) Down() *QueryViewOfShardAtCoordTxn {
-	if qv.State() == QueryViewStateDropping {
+// Down transits the query view state into down.
+func (qv *QueryViewOfShardAtCoord) Down() {
+	if qv.State() == QueryViewStateUp {
 		panic("invalid state transition")
 	}
-	return newQueryViewOfShardAtCoordTxn(qv.inner, QueryViewStateDropping)
+	qv.downView()
 }
 
 // State returns the state of the query view.
@@ -120,4 +133,35 @@ func (qv *QueryViewOfShardAtCoord) Version() QueryViewVersion {
 		DataVersion:  v.DataVersion,
 		QueryVersion: v.QueryVersion,
 	}
+}
+
+// readyView marks the query view as ready.
+func (qv *QueryViewOfShardAtCoord) readyView() {
+	qv.inner.Meta.State = viewpb.QueryViewState(QueryViewStateReady)
+	// When the state is transited into ready, we need to sent a notification to streaming node to enable the view.
+	qv.syncRecord = newStreamingNodeSyncRecord()
+}
+
+// upView marks the query view as up.
+func (qv *QueryViewOfShardAtCoord) upView() {
+	qv.inner.Meta.State = viewpb.QueryViewState(QueryViewStateUp)
+	qv.syncRecord = nil
+}
+
+// downView marks the query view as down.
+func (qv *QueryViewOfShardAtCoord) downView() {
+	qv.inner.Meta.State = viewpb.QueryViewState(QueryViewStateDown)
+	qv.syncRecord = newStreamingNodeSyncRecord()
+}
+
+// dropView marks the query view as dropping.
+func (qv *QueryViewOfShardAtCoord) dropView() {
+	qv.inner.Meta.State = viewpb.QueryViewState(QueryViewStateDropping)
+	// When the state is transited into dropping, we need to sent a broadcast to all nodes to notify them drop these view.
+	qv.syncRecord = newAllWorkNodeSyncRecord(qv.inner)
+}
+
+func (qv *QueryViewOfShardAtCoord) deleteView() {
+	qv.inner.Meta.State = viewpb.QueryViewState(QueryViewStateDropped)
+	qv.syncRecord = nil
 }

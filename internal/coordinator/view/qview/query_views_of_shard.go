@@ -18,7 +18,7 @@ type QueryViewBuilder struct {
 type QueryViewsOfShard struct {
 	collectionID    int64
 	replicaID       int64
-	VChannel        string
+	vchannel        string
 	settings        *viewpb.QueryViewSettings
 	latestUpVersion *QueryViewVersion          // latestUpVersion is the latest version that the query view is up.
 	queryViews      []*QueryViewOfShardAtCoord // queryViews has been sorted by the version of the underlying query view.
@@ -48,7 +48,7 @@ func (qvs *QueryViewsOfShard) newQueryView(dataVersion int64) *viewpb.QueryViewO
 		Meta: &viewpb.QueryViewMeta{
 			CollectionId: qvs.collectionID,
 			ReplicaId:    qvs.replicaID,
-			Vchannel:     qvs.VChannel,
+			Vchannel:     qvs.vchannel,
 			Version: &viewpb.QueryViewVersion{
 				DataVersion:  dataVersion,
 				QueryVersion: qvs.generateNewQueryView(dataVersion),

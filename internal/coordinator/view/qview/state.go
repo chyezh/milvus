@@ -14,6 +14,7 @@ const (
 	QueryViewStateUp        = QueryViewState(viewpb.QueryViewState_QueryViewStateUp)
 	QueryViewStateDown      = QueryViewState(viewpb.QueryViewState_QueryViewStateDown)
 	QueryViewStateDropping  = QueryViewState(viewpb.QueryViewState_QueryViewStateDropping)
+	QueryViewStateDropped   = QueryViewState(viewpb.QueryViewState_QueryViewStateDropped)
 
 	NodeSyncStateNot      NodeSyncState = iota + 1 // NodeSync signal haven't been sent.
 	NodeSyncStateInFlight                          // NodeState signal has been sent, on flight and wait for acknowledge.

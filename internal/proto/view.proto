@@ -34,6 +34,7 @@ enum QueryViewState {
     QueryViewStateDown = 4;
     QueryViewStateDropping =
         5;  // Mark as dropping to do the resource cleanup opeartion for the view.
+    QueryViewStateDropped = 6;
 }
 
 enum QueryViewSegmentState {
