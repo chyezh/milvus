@@ -1,9 +1,30 @@
 package dview
 
-import "context"
+import (
+	"context"
+
+	"github.com/milvus-io/milvus/internal/proto/viewpb"
+)
 
 // DataViewOfCollection will be a simple struct.
-type DataViewOfCollection struct{}
+type DataViewOfCollection struct {
+	dataView *viewpb.DataViewOfCollection
+}
+
+// DataVersion returns the data version of the data view of the collection.
+func (dvc *DataViewOfCollection) DataVersion() int64 {
+	return dvc.dataView.DataVersion
+}
+
+// GetViewOfShard returns the view of the shard with the given vchannel.
+func (dvc *DataViewOfCollection) GetViewOfShard(vchannel string) *viewpb.DataViewOfShard {
+	for _, shard := range dvc.dataView.Shards {
+		if shard.Vchannel == vchannel {
+			return shard
+		}
+	}
+	panic("vchannel not found")
+}
 
 type WatchParams struct {
 	CollectionID int64
