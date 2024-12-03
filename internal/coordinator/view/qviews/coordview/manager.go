@@ -13,7 +13,7 @@ func NewEventLoop(coordSyncer qviews.CoordSyncer, recoveryStorage qviews.Recover
 		applier:         make(chan *QueryViewAtCoordBuilder, 1),
 		coordSyncer:     coordSyncer,
 		recoveryStorage: recoveryStorage,
-		shards:          make(map[qviews.ShardID]QueryViewsOfShard),
+		shards:          make(map[qviews.ShardID]shardViews),
 	}
 	go el.loop()
 	return el
@@ -26,10 +26,17 @@ type QueryViewManager struct {
 	applier         chan *QueryViewAtCoordBuilder
 	coordSyncer     qviews.CoordSyncer
 	recoveryStorage qviews.RecoveryStorage
-	shards          map[qviews.ShardID]QueryViewsOfShard
+	replicas        map[int64]qviews.ShardID // map the replica to the shards.
+	shards          map[qviews.ShardID]shardViews
 }
 
-func (e *QueryViewManager) ReleaseReplica(ctx context.Context, replicaID int64) error {
+func (e *QueryViewManager) AddReplicas(replicas []qviews.ShardID) {
+	for _, replica := range replicas {
+		e.replicas[replica.ReplicaID] = replica
+	}
+}
+
+func (e *QueryViewManager) ReleaseShard(ctx context.Context, shardID qviews.ShardID) error {
 	panic("not implemented")
 }
 
@@ -78,7 +85,7 @@ func (e *QueryViewManager) whenNewIncomingQueryView(newIncomingQV *QueryViewAtCo
 		// Just ignore the incoming query view if shard is dropped.
 		return
 	}
-	shard.ApplyNewQueryView(context.TODO(), newIncomingQV)
+	_ = shard.ApplyNewQueryView(context.TODO(), newIncomingQV)
 }
 
 // whenWorkNodeAcknowledged is the event handler for the work node acknowledged event.

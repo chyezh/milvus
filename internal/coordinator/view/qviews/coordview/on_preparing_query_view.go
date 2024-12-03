@@ -13,13 +13,13 @@ var ErrOnPreparingViewIsNotPersisted = errors.New("on preparing view is not pers
 // A preparing view is globally unique
 type onPreparingQueryView struct {
 	recovery     qviews.RecoveryStorage
-	currentView  *QueryViewAtCoord // The on preparing view, the state of the view may be preparing or unrecoverable.
-	previousView *QueryViewAtCoord // The old one unrecoverable view.
+	currentView  *queryViewAtCoord // The on preparing view, the state of the view may be preparing or unrecoverable.
+	previousView *queryViewAtCoord // The old one unrecoverable view.
 	persisted    bool
 }
 
 // Swap swaps the old preparing view with the new preparing view.
-func (qvs *onPreparingQueryView) Swap(ctx context.Context, newQV *QueryViewAtCoord) error {
+func (qvs *onPreparingQueryView) Swap(ctx context.Context, newQV *queryViewAtCoord) error {
 	// Check the old view current state, reject if the swap cannot be done.
 	if qvs.currentView != nil {
 		if !qvs.persisted {
@@ -54,7 +54,7 @@ func (qvs *onPreparingQueryView) Reset() {
 }
 
 // WhenPreparingPersisted is called when the preparing view is persisted.
-func (qvs *onPreparingQueryView) WhenPreparingPersisted() (previous *QueryViewAtCoord, current *QueryViewAtCoord) {
+func (qvs *onPreparingQueryView) WhenPreparingPersisted() (previous *queryViewAtCoord, current *queryViewAtCoord) {
 	if qvs.previousView != nil {
 		previous = qvs.previousView
 		previous.DropView()

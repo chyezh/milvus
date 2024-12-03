@@ -26,7 +26,7 @@ func (qb *QueryViewAtCoordBuilder) WithQueryVersion(version int64) *QueryViewAtC
 	return qb
 }
 
-func (qb *QueryViewAtCoordBuilder) Build() *QueryViewAtCoord {
+func (qb *QueryViewAtCoordBuilder) Build() *queryViewAtCoord {
 	c := qb.inner
 	qb.inner = nil
 	return newQueryViewOfShardAtCoord(c)

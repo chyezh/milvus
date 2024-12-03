@@ -8,25 +8,31 @@ import (
 )
 
 var (
+	ErrShardReleased          = errors.New("shard is on-releasing")
 	ErrDataVersionTooOld      = errors.New("data version is too old")
 	ErrOnPreparingViewIsReady = errors.New("on preparing view is ready")
 )
 
-// QueryViewsOfShard is a struct that contains all the query views of a shard which lifetime is not gone.
-type QueryViewsOfShard struct {
+// shardViews is a struct that contains all the query views of a shard which lifetime is not gone.
+type shardViews struct {
 	recovery qviews.RecoveryStorage
 	syncer   qviews.CoordSyncer
+	released bool // released is a flag to indicate that the shard is released.
 
 	onPreparingQueryView *onPreparingQueryView // onPreparingQueryView is the unique preparing query view that on-the-way.
 
 	latestUpVersion *qviews.QueryViewVersion                      // latestUpVersion is the latest version that the query view is up.
 	maxQueryVersion map[int64]int64                               // maxQueryVersion is the max query version of the data version.
-	queryViews      map[qviews.QueryViewVersion]*QueryViewAtCoord // A map to store the query view of the shard.
+	queryViews      map[qviews.QueryViewVersion]*queryViewAtCoord // A map to store the query view of the shard.
 }
 
 // ApplyNewQueryView applies a new query view into the query views of the shard.
 // It will replace the on-working preparing view if exists.
-func (qvs *QueryViewsOfShard) ApplyNewQueryView(ctx context.Context, b *QueryViewAtCoordBuilder) error {
+func (qvs *shardViews) ApplyNewQueryView(ctx context.Context, b *QueryViewAtCoordBuilder) error {
+	if qvs.released {
+		return ErrShardReleased
+	}
+
 	// if the latest up version is not nil and the data version is too old, return error directly.
 	if qvs.latestUpVersion != nil && qvs.latestUpVersion.DataVersion > b.DataVersion() {
 		return ErrDataVersionTooOld
@@ -43,7 +49,7 @@ func (qvs *QueryViewsOfShard) ApplyNewQueryView(ctx context.Context, b *QueryVie
 }
 
 // WhenPersisted is called when the query view is persisted.
-func (qvs *QueryViewsOfShard) WhenSave(version qviews.QueryViewVersion) {
+func (qvs *shardViews) WhenSave(version qviews.QueryViewVersion) {
 	qv := qvs.queryViews[version]
 	if qv == nil {
 		panic("the query view is not found in shard, a critical bug in query view state machine")
@@ -59,7 +65,7 @@ func (qvs *QueryViewsOfShard) WhenSave(version qviews.QueryViewVersion) {
 }
 
 // WhenDelete is called when the query view is deleted.
-func (qvs *QueryViewsOfShard) WhenDelete(version qviews.QueryViewVersion) {
+func (qvs *shardViews) WhenDelete(version qviews.QueryViewVersion) {
 	qv := qvs.queryViews[version]
 	if qv == nil {
 		panic("the query view is not found in shard, a critical bug in query view state machine")
@@ -71,14 +77,14 @@ func (qvs *QueryViewsOfShard) WhenDelete(version qviews.QueryViewVersion) {
 }
 
 // WhenSwapPreparingDone is called when the preparing view is persisted.
-func (qvs *QueryViewsOfShard) WhenSwapPreparingDone() {
+func (qvs *shardViews) WhenSwapPreparingDone() {
 	previousPreparing, currentPreparing := qvs.onPreparingQueryView.WhenPreparingPersisted()
 	qvs.queryViews[currentPreparing.Version()] = currentPreparing
 	qvs.syncer.SyncQueryView(previousPreparing.Proto(), currentPreparing.Proto())
 }
 
 // WhenWorkNodeAcknowledged is called when the work node acknowledged the query view.
-func (qvs *QueryViewsOfShard) WhenWorkNodeAcknowledged(w qviews.QueryViewAtWorkNode) {
+func (qvs *shardViews) WhenWorkNodeAcknowledged(w qviews.QueryViewAtWorkNode) {
 	qv, ok := qvs.queryViews[w.Version()]
 	if !ok {
 		if w.State() != qviews.QueryViewStateDropped {
@@ -105,7 +111,7 @@ func (qvs *QueryViewsOfShard) WhenWorkNodeAcknowledged(w qviews.QueryViewAtWorkN
 }
 
 // getMaxQueryVersion returns the max query version of the data version.
-func (qvs *QueryViewsOfShard) getMaxQueryVerion(dataVersion int64) int64 {
+func (qvs *shardViews) getMaxQueryVerion(dataVersion int64) int64 {
 	if _, ok := qvs.maxQueryVersion[dataVersion]; ok {
 		return qvs.maxQueryVersion[dataVersion] + 1
 	}
