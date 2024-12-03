@@ -1,6 +1,10 @@
-package qview
+package coordview
 
-import "github.com/milvus-io/milvus/internal/proto/viewpb"
+import (
+	"github.com/golang/protobuf/proto"
+	"github.com/milvus-io/milvus/internal/coordinator/view/qviews"
+	"github.com/milvus-io/milvus/internal/proto/viewpb"
+)
 
 // newQueryViewOfShardAtCoord creates a new query view of shard at coord.
 func newQueryViewOfShardAtCoord(qv *viewpb.QueryViewOfShard) *QueryViewAtCoord {
@@ -16,9 +20,14 @@ type QueryViewAtCoord struct {
 	syncRecord *workNodeSyncRecord // syncRecord is a record map to make record sync opeartion of worknode, help to achieve the 2PC.
 }
 
+// Proto returns the proto representation of the query view.
+func (qv *QueryViewAtCoord) Proto() *viewpb.QueryViewOfShard {
+	return proto.Clone(qv.inner).(*viewpb.QueryViewOfShard)
+}
+
 // ApplyViewFromWorkNode applies the node state view to the coord query view from the worknode.
 // Return true if the view need to be sync with other.
-func (qv *QueryViewAtCoord) ApplyViewFromWorkNode(incomingQV QueryViewOfShardAtWorkNode) *StateTransition {
+func (qv *QueryViewAtCoord) ApplyViewFromWorkNode(incomingQV qviews.QueryViewAtWorkNode) *qviews.StateTransition {
 	// The version must be matched.
 	if !qv.Version().EQ(incomingQV.Version()) {
 		panic("version of query view not match")
@@ -26,25 +35,25 @@ func (qv *QueryViewAtCoord) ApplyViewFromWorkNode(incomingQV QueryViewOfShardAtW
 	previousState := qv.State()
 
 	switch previousState {
-	case QueryViewStatePreparing:
+	case qviews.QueryViewStatePreparing:
 		qv.applyNodeStateViewAtPreparing(incomingQV)
-	case QueryViewStateReady:
-		if incomingQV.State() == QueryViewStateUp {
+	case qviews.QueryViewStateReady:
+		if incomingQV.State() == qviews.QueryViewStateUp {
 			qv.upView()
 		}
-	case QueryViewStateDown:
-		if incomingQV.State() == QueryViewStateDown {
+	case qviews.QueryViewStateDown:
+		if incomingQV.State() == qviews.QueryViewStateDown {
 			qv.dropView()
 		}
-	case QueryViewStateDropping:
-		if incomingQV.State() == QueryViewStateDropped {
+	case qviews.QueryViewStateDropping:
+		if incomingQV.State() == qviews.QueryViewStateDropped {
 			qv.syncRecord.MarkNodeReady(incomingQV.WorkNode())
 			// If all nodes are ready, then transit the state into ready.
 			if qv.syncRecord.IsAllReady() {
 				qv.deleteView()
 			}
 		}
-	case QueryViewStateUp, QueryViewStateDropped, QueryViewStateUnrecoverable:
+	case qviews.QueryViewStateUp, qviews.QueryViewStateDropped, qviews.QueryViewStateUnrecoverable:
 		// Some state on coord cannot be changed by the worknode.
 		// Can noly be changed by the coord itself, see `Down` and `DropView` interface.
 	default:
@@ -55,18 +64,18 @@ func (qv *QueryViewAtCoord) ApplyViewFromWorkNode(incomingQV QueryViewOfShardAtW
 	if previousState == currentState {
 		return nil
 	}
-	return &StateTransition{
+	return &qviews.StateTransition{
 		From: previousState,
 		To:   currentState,
 	}
 }
 
-func (qv *QueryViewAtCoord) applyNodeStateViewAtPreparing(incomingQV QueryViewOfShardAtWorkNode) {
+func (qv *QueryViewAtCoord) applyNodeStateViewAtPreparing(incomingQV qviews.QueryViewAtWorkNode) {
 	// Update the view of related node parts.
 	switch incomingQV := incomingQV.(type) {
-	case *QueryViewOfShardAtQueryNode:
+	case qviews.QueryViewAtQueryNode:
 		qv.applyQueryNodeView(incomingQV)
-	case *QueryViewOfShardAtStreamingNode:
+	case qviews.QueryViewAtStreamingNode:
 		qv.applyStreamingNodeView(incomingQV)
 	default:
 		panic("invalid incoming query view type")
@@ -77,13 +86,10 @@ func (qv *QueryViewAtCoord) applyNodeStateViewAtPreparing(incomingQV QueryViewOf
 }
 
 // applyQueryNodeView applies the query node view to the coord query view.
-func (qv *QueryViewAtCoord) applyQueryNodeView(viewAtQueryNode *QueryViewOfShardAtQueryNode) {
+func (qv *QueryViewAtCoord) applyQueryNodeView(viewAtQueryNode qviews.QueryViewAtQueryNode) {
 	for idx, node := range qv.inner.QueryNode {
 		if node.NodeId == viewAtQueryNode.NodeID() {
-			if len(viewAtQueryNode.inner.QueryNode) != 1 {
-				panic("invalid view from querynode")
-			}
-			qv.inner.QueryNode[idx] = viewAtQueryNode.inner.QueryNode[0]
+			qv.inner.QueryNode[idx] = viewAtQueryNode.ViewOfQueryNode()
 			return
 		}
 	}
@@ -91,24 +97,24 @@ func (qv *QueryViewAtCoord) applyQueryNodeView(viewAtQueryNode *QueryViewOfShard
 }
 
 // applyStreamingNodeView applies the streaming node view to the coord query view.
-func (qv *QueryViewAtCoord) applyStreamingNodeView(viewAtStreamingNode *QueryViewOfShardAtStreamingNode) {
-	qv.inner.StreamingNode = viewAtStreamingNode.inner.StreamingNode
+func (qv *QueryViewAtCoord) applyStreamingNodeView(viewAtStreamingNode qviews.QueryViewAtStreamingNode) {
+	qv.inner.StreamingNode = viewAtStreamingNode.ViewOfStreamingNode()
 }
 
 // transitWhenPreparing transits the query view state when it is preparing.
-func (qv *QueryViewAtCoord) transitWhenPreparing(incomingQV QueryViewOfShardAtWorkNode) {
+func (qv *QueryViewAtCoord) transitWhenPreparing(incomingQV qviews.QueryViewAtWorkNode) {
 	// Check the state of the query view.
 	switch incomingQV.State() {
-	case QueryViewStatePreparing:
+	case qviews.QueryViewStatePreparing:
 		// Do nothing.
 		return
-	case QueryViewStateReady, QueryViewStateUp: // The querynode is ready, the streaming node may be ready or up.
+	case qviews.QueryViewStateReady, qviews.QueryViewStateUp: // The querynode is ready, the streaming node may be ready or up.
 		qv.syncRecord.MarkNodeReady(incomingQV.WorkNode())
 		// If all nodes are ready, then transit the state into ready.
 		if qv.syncRecord.IsAllReady() {
 			qv.readyView()
 		}
-	case QueryViewStateUnrecoverable:
+	case qviews.QueryViewStateUnrecoverable:
 		qv.unrecoverableView()
 	default:
 		panic("found inconsistent state")
@@ -117,7 +123,7 @@ func (qv *QueryViewAtCoord) transitWhenPreparing(incomingQV QueryViewOfShardAtWo
 
 // UnrecoverableView transits the query view state into unrecoverable.
 func (qv *QueryViewAtCoord) UnrecoverableView() {
-	if qv.State() != QueryViewStatePreparing {
+	if qv.State() != qviews.QueryViewStatePreparing {
 		panic("invalid state transition")
 	}
 	qv.unrecoverableView()
@@ -125,7 +131,7 @@ func (qv *QueryViewAtCoord) UnrecoverableView() {
 
 // Down transits the query view state into down.
 func (qv *QueryViewAtCoord) DownView() {
-	if qv.State() != QueryViewStateUp {
+	if qv.State() != qviews.QueryViewStateUp {
 		panic("invalid state transition")
 	}
 	qv.downView()
@@ -133,60 +139,56 @@ func (qv *QueryViewAtCoord) DownView() {
 
 // DropView transits the query view state into dropping.
 func (qv *QueryViewAtCoord) DropView() {
-	if qv.State() != QueryViewStateUnrecoverable {
+	if qv.State() != qviews.QueryViewStateUnrecoverable {
 		panic("invalid state transition")
 	}
 	qv.dropView()
 }
 
 // State returns the state of the query view.
-func (qv *QueryViewAtCoord) State() QueryViewState {
-	return QueryViewState(qv.inner.Meta.State)
+func (qv *QueryViewAtCoord) State() qviews.QueryViewState {
+	return qviews.QueryViewState(qv.inner.Meta.State)
 }
 
 // Version return the version of the query view.
-func (qv *QueryViewAtCoord) Version() QueryViewVersion {
-	v := qv.inner.Meta.Version
-	return QueryViewVersion{
-		DataVersion:  v.DataVersion,
-		QueryVersion: v.QueryVersion,
-	}
+func (qv *QueryViewAtCoord) Version() qviews.QueryViewVersion {
+	return qviews.FromProtoQueryViewVersion(qv.inner.Meta.Version)
 }
 
 // readyView marks the query view as ready.
 func (qv *QueryViewAtCoord) readyView() {
-	qv.inner.Meta.State = viewpb.QueryViewState(QueryViewStateReady)
+	qv.inner.Meta.State = viewpb.QueryViewState(qviews.QueryViewStateReady)
 	// When the state is transited into ready, we need to sent a notification to streaming node to enable the view.
 	qv.syncRecord = newStreamingNodeSyncRecord()
 }
 
 // upView marks the query view as up.
 func (qv *QueryViewAtCoord) upView() {
-	qv.inner.Meta.State = viewpb.QueryViewState(QueryViewStateUp)
+	qv.inner.Meta.State = viewpb.QueryViewState(qviews.QueryViewStateUp)
 	qv.syncRecord = nil
 }
 
 // downView marks the query view as down.
 func (qv *QueryViewAtCoord) downView() {
-	qv.inner.Meta.State = viewpb.QueryViewState(QueryViewStateDown)
+	qv.inner.Meta.State = viewpb.QueryViewState(qviews.QueryViewStateDown)
 	qv.syncRecord = newStreamingNodeSyncRecord()
 }
 
 // unrecoverableView marks the query view as unrecoverable.
 func (qv *QueryViewAtCoord) unrecoverableView() {
-	qv.inner.Meta.State = viewpb.QueryViewState(QueryViewStateUnrecoverable)
+	qv.inner.Meta.State = viewpb.QueryViewState(qviews.QueryViewStateUnrecoverable)
 	// When the state is transited into unrecoverable, we need to do a persist opeartion with the incoming preparing view.
 	qv.syncRecord = nil
 }
 
 // dropView marks the query view as dropping.
 func (qv *QueryViewAtCoord) dropView() {
-	qv.inner.Meta.State = viewpb.QueryViewState(QueryViewStateDropping)
+	qv.inner.Meta.State = viewpb.QueryViewState(qviews.QueryViewStateDropping)
 	// When the state is transited into dropping, we need to sent a broadcast to all nodes to notify them drop these view.
 	qv.syncRecord = newAllWorkNodeSyncRecord(qv.inner)
 }
 
 func (qv *QueryViewAtCoord) deleteView() {
-	qv.inner.Meta.State = viewpb.QueryViewState(QueryViewStateDropped)
+	qv.inner.Meta.State = viewpb.QueryViewState(qviews.QueryViewStateDropped)
 	qv.syncRecord = nil
 }
