@@ -64,10 +64,8 @@ message QueryViewSettings {
         1;  // the partitions that must be loaded to make the view available.
     repeated int64 optional_partitions =
         2;  // the partitions that need be loaded, but not influence the view availability.
-    // repeated int64 required_fields =
-    //     3;  // the fields that must be loaded to make the view available.
-    // repeated int64 optional_fields =
-    //     4;  // the fields that need be loaded, but not influence the view availability.
+    repeated int64 required_fields =
+        3;  // the fields that must be loaded to make the view available.
 }
 
 message QueryViewOfStreamingNode {

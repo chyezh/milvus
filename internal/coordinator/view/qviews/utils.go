@@ -1,6 +1,10 @@
 package qviews
 
-import "github.com/milvus-io/milvus/internal/proto/viewpb"
+import (
+	"fmt"
+
+	"github.com/milvus-io/milvus/internal/proto/viewpb"
+)
 
 type (
 	QueryViewState viewpb.QueryViewState
@@ -31,8 +35,9 @@ type ShardID struct {
 	VChannel  string
 }
 
-func (s ShardID) GetShardID() ShardID {
-	return s
+// String returns the string representation of the shard id.
+func (id ShardID) String() string {
+	return fmt.Sprintf("%d-%s", id.ReplicaID, id.VChannel)
 }
 
 // NewShardIDFromQVMeta creates a new shard id from the query view meta.

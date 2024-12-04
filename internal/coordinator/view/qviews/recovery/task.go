@@ -2,6 +2,7 @@ package recovery
 
 import (
 	"github.com/milvus-io/milvus/internal/coordinator/view/qviews"
+	"github.com/milvus-io/milvus/internal/coordinator/view/qviews/events"
 	"github.com/milvus-io/milvus/internal/proto/viewpb"
 )
 
@@ -9,25 +10,36 @@ import (
 type pendingTask struct {
 	saves    map[string]string
 	removals []string
-	event    qviews.RecoveryEvent
+	event    events.RecoveryEvent
 }
 
-func (r *RecoveryImpl) newSwapPreparingTask(old *viewpb.QueryViewOfShard, new *viewpb.QueryViewOfShard) *pendingTask {
-	if new.Meta.ReplicaId != old.Meta.ReplicaId {
-		panic("replica id is not matched")
+func (r *RecoveryImpl) newSwapPreparingTask(shardID qviews.ShardID, old *viewpb.QueryViewOfShard, new *viewpb.QueryViewOfShard) *pendingTask {
+	saves := make(map[string]string, 2)
+	removals := make([]string, 0, 1)
+	if old != nil {
+		// If old is not nil, it must be persisted into the history path.
+		if old.Meta.State != viewpb.QueryViewState_QueryViewStateUnrecoverable {
+			panic("old view state must be unrecoverable")
+		}
+		saves[r.getHistoryPath(old.Meta)] = mustMarshal(old)
 	}
-	if new.Meta.Vchannel != old.Meta.Vchannel {
-		panic("vchannel is not matched")
+	if new != nil {
+		// If new is not nil, it must be persisted into the preparing path.
+		if new.Meta.State != viewpb.QueryViewState_QueryViewStatePreparing {
+			panic("new view state must be preparing")
+		}
+		saves[r.getPreparingPath(shardID)] = mustMarshal(new)
+	} else {
+		// Otherwise, the preparing view should be removed.
+		removals = append(removals, r.getPreparingPath(shardID))
 	}
 	return &pendingTask{
-		saves: map[string]string{
-			r.getHistoryPath(old.Meta):   mustMarshal(old),
-			r.getPreparingPath(new.Meta): mustMarshal(new),
-		},
-		event: qviews.RecoveryEventSwapPreparing{
-			ShardID:    qviews.NewShardIDFromQVMeta(old.Meta),
-			OldVersion: qviews.FromProtoQueryViewVersion(old.Meta.Version),
-			NewVersion: qviews.FromProtoQueryViewVersion(new.Meta.Version),
+		saves:    saves,
+		removals: removals,
+		event: events.EventRecoverySwap{
+			RecoveryEventBase: events.NewRecoveryEventBaseFromQVMeta(new.Meta),
+			OldVersion:        nil,
+			NewView:           new,
 		},
 	}
 }
@@ -38,11 +50,11 @@ func (r *RecoveryImpl) newUpNewPreparingView(newUp *viewpb.QueryViewOfShard) *pe
 			r.getHistoryPath(newUp.Meta): mustMarshal(newUp),
 		},
 		removals: []string{
-			r.getPreparingPath(newUp.Meta),
+			r.getPreparingPath(qviews.NewShardIDFromQVMeta(newUp.Meta)),
 		},
-		event: qviews.RecoveryEventUpNewPreparingView{
-			ShardID: qviews.NewShardIDFromQVMeta(newUp.Meta),
-			Version: qviews.FromProtoQueryViewVersion(newUp.Meta.Version),
+		event: events.EventRecoverySaveNewUp{
+			RecoveryEventBase: events.NewRecoveryEventBaseFromQVMeta(newUp.Meta),
+			Version:           qviews.FromProtoQueryViewVersion(newUp.Meta.Version),
 		},
 	}
 }
@@ -52,9 +64,10 @@ func (r *RecoveryImpl) newSave(newSave *viewpb.QueryViewOfShard) *pendingTask {
 		saves: map[string]string{
 			r.getHistoryPath(newSave.Meta): mustMarshal(newSave),
 		},
-		event: qviews.RecoveryEventSave{
-			ShardID: qviews.NewShardIDFromQVMeta(newSave.Meta),
-			Version: qviews.FromProtoQueryViewVersion(newSave.Meta.Version),
+		event: events.EventRecoverySave{
+			RecoveryEventBase: events.NewRecoveryEventBaseFromQVMeta(newSave.Meta),
+			Version:           qviews.FromProtoQueryViewVersion(newSave.Meta.Version),
+			State:             qviews.QueryViewState(newSave.Meta.State),
 		},
 	}
 }
@@ -64,9 +77,9 @@ func (r *RecoveryImpl) newDelete(newDelete *viewpb.QueryViewOfShard) *pendingTas
 		removals: []string{
 			r.getHistoryPath(newDelete.Meta),
 		},
-		event: qviews.RecoveryEventDelete{
-			ShardID: qviews.NewShardIDFromQVMeta(newDelete.Meta),
-			Version: qviews.FromProtoQueryViewVersion(newDelete.Meta.Version),
+		event: events.EventRecoveryDelete{
+			RecoveryEventBase: events.NewRecoveryEventBaseFromQVMeta(newDelete.Meta),
+			Version:           qviews.FromProtoQueryViewVersion(newDelete.Meta.Version),
 		},
 	}
 }

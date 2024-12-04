@@ -5,6 +5,8 @@ import (
 	"errors"
 
 	"github.com/milvus-io/milvus/internal/coordinator/view/qviews"
+	"github.com/milvus-io/milvus/internal/coordinator/view/qviews/recovery"
+	"github.com/milvus-io/milvus/internal/coordinator/view/qviews/syncer"
 )
 
 var (
@@ -13,10 +15,24 @@ var (
 	ErrOnPreparingViewIsReady = errors.New("on preparing view is ready")
 )
 
+// newShardViews creates a new shardViews.
+func newShardViews(recovery recovery.RecoveryStorage, syncer syncer.CoordSyncer) *shardViews {
+	return &shardViews{
+		recovery:             recovery,
+		syncer:               syncer,
+		released:             false,
+		onPreparingQueryView: newEmptyOnPreparingQueryView(recovery),
+		latestUpVersion:      nil,
+		maxQueryVersion:      make(map[int64]int64),
+		queryViews:           make(map[qviews.QueryViewVersion]*queryViewAtCoord),
+	}
+}
+
 // shardViews is a struct that contains all the query views of a shard which lifetime is not gone.
 type shardViews struct {
-	recovery qviews.RecoveryStorage
-	syncer   qviews.CoordSyncer
+	shardID  qviews.ShardID
+	recovery recovery.RecoveryStorage
+	syncer   syncer.CoordSyncer
 	released bool // released is a flag to indicate that the shard is released.
 
 	onPreparingQueryView *onPreparingQueryView // onPreparingQueryView is the unique preparing query view that on-the-way.
@@ -28,24 +44,48 @@ type shardViews struct {
 
 // ApplyNewQueryView applies a new query view into the query views of the shard.
 // It will replace the on-working preparing view if exists.
-func (qvs *shardViews) ApplyNewQueryView(ctx context.Context, b *QueryViewAtCoordBuilder) error {
+func (qvs *shardViews) ApplyNewQueryView(ctx context.Context, b *QueryViewAtCoordBuilder) (*qviews.QueryViewVersion, error) {
 	if qvs.released {
-		return ErrShardReleased
+		return nil, ErrShardReleased
 	}
 
 	// if the latest up version is not nil and the data version is too old, return error directly.
 	if qvs.latestUpVersion != nil && qvs.latestUpVersion.DataVersion > b.DataVersion() {
-		return ErrDataVersionTooOld
+		return nil, ErrDataVersionTooOld
 	}
 
 	// Assign a new query version for new incoming query view and make a swap.
 	newQueryVersion := qvs.getMaxQueryVerion(b.DataVersion())
 	newQueryView := b.WithQueryVersion(newQueryVersion).Build()
-	if err := qvs.onPreparingQueryView.Swap(ctx, newQueryView); err != nil {
-		return err
+	newVersion := newQueryView.Version()
+	if err := qvs.onPreparingQueryView.Swap(ctx, qvs.shardID, newQueryView); err != nil {
+		return nil, err
 	}
 	qvs.maxQueryVersion[b.DataVersion()] = newQueryVersion
-	return nil
+	return &newVersion, nil
+}
+
+// RequestRelease releases the shard views.
+func (qvs *shardViews) RequestRelease(ctx context.Context) {
+	// make a fence by released flag.
+	qvs.released = true
+	if qvs.onPreparingQueryView != nil {
+		// request the on preparing view to be unrecoverable if it exists.
+		qvs.onPreparingQueryView.Swap(ctx, qvs.shardID, nil)
+	}
+
+	for _, qv := range qvs.queryViews {
+		// Make all query view at up state to be Down.
+		if qv.State() == qviews.QueryViewStateUp {
+			qv.DownView()
+			qvs.recovery.Save(context.TODO(), qv.Proto())
+		}
+	}
+}
+
+// LatestUpVersion returns the latest up version of the query view.
+func (qvs *shardViews) LatestUpVersion() *qviews.QueryViewVersion {
+	return qvs.latestUpVersion
 }
 
 // WhenPersisted is called when the query view is persisted.

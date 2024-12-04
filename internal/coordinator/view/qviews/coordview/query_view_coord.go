@@ -22,6 +22,9 @@ type queryViewAtCoord struct {
 
 // Proto returns the proto representation of the query view.
 func (qv *queryViewAtCoord) Proto() *viewpb.QueryViewOfShard {
+	if qv == nil {
+		return nil
+	}
 	return proto.Clone(qv.inner).(*viewpb.QueryViewOfShard)
 }
 
