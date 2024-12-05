@@ -2,6 +2,14 @@ package events
 
 import "github.com/milvus-io/milvus/internal/coordinator/view/qviews"
 
+func NewSyncerEventBase(shardID ShardID, version qviews.QueryViewVersion, state qviews.QueryViewState) SyncerEventBase {
+	return SyncerEventBase{
+		EventBase: NewEventBase(shardID),
+		version:   version,
+		state:     state,
+	}
+}
+
 type SyncerEventBase struct {
 	EventBase
 	version QueryViewVersion

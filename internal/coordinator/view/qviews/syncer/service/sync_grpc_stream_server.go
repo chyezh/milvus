@@ -16,15 +16,6 @@ func (s *syncGrpcServer) SendViews(view *viewpb.SyncQueryViewsResponse) error {
 	})
 }
 
-// SendFenced sends the fence response to client.
-func (s *syncGrpcServer) SendFenced() error {
-	return s.Send(&viewpb.SyncResponse{
-		Response: &viewpb.SyncResponse_Fence{
-			Fence: &viewpb.SyncFencedReponse{},
-		},
-	})
-}
-
 // SendClose sends the close response to client.
 func (s *syncGrpcServer) SendClose() error {
 	return s.Send(&viewpb.SyncResponse{

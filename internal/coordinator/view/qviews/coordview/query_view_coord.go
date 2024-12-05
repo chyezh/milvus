@@ -3,6 +3,7 @@ package coordview
 import (
 	"github.com/golang/protobuf/proto"
 	"github.com/milvus-io/milvus/internal/coordinator/view/qviews"
+	"github.com/milvus-io/milvus/internal/coordinator/view/qviews/events"
 	"github.com/milvus-io/milvus/internal/proto/viewpb"
 )
 
@@ -76,9 +77,9 @@ func (qv *queryViewAtCoord) ApplyViewFromWorkNode(incomingQV qviews.QueryViewAtW
 func (qv *queryViewAtCoord) applyNodeStateViewAtPreparing(incomingQV qviews.QueryViewAtWorkNode) {
 	// Update the view of related node parts.
 	switch incomingQV := incomingQV.(type) {
-	case qviews.QueryViewAtQueryNode:
+	case *qviews.QueryViewAtQueryNode:
 		qv.applyQueryNodeView(incomingQV)
-	case qviews.QueryViewAtStreamingNode:
+	case *qviews.QueryViewAtStreamingNode:
 		qv.applyStreamingNodeView(incomingQV)
 	default:
 		panic("invalid incoming query view type")
@@ -89,7 +90,7 @@ func (qv *queryViewAtCoord) applyNodeStateViewAtPreparing(incomingQV qviews.Quer
 }
 
 // applyQueryNodeView applies the query node view to the coord query view.
-func (qv *queryViewAtCoord) applyQueryNodeView(viewAtQueryNode qviews.QueryViewAtQueryNode) {
+func (qv *queryViewAtCoord) applyQueryNodeView(viewAtQueryNode *qviews.QueryViewAtQueryNode) {
 	for idx, node := range qv.inner.QueryNode {
 		if node.NodeId == viewAtQueryNode.NodeID() {
 			qv.inner.QueryNode[idx] = viewAtQueryNode.ViewOfQueryNode()
@@ -100,7 +101,7 @@ func (qv *queryViewAtCoord) applyQueryNodeView(viewAtQueryNode qviews.QueryViewA
 }
 
 // applyStreamingNodeView applies the streaming node view to the coord query view.
-func (qv *queryViewAtCoord) applyStreamingNodeView(viewAtStreamingNode qviews.QueryViewAtStreamingNode) {
+func (qv *queryViewAtCoord) applyStreamingNodeView(viewAtStreamingNode *qviews.QueryViewAtStreamingNode) {
 	qv.inner.StreamingNode = viewAtStreamingNode.ViewOfStreamingNode()
 }
 
@@ -194,4 +195,20 @@ func (qv *queryViewAtCoord) dropView() {
 func (qv *queryViewAtCoord) deleteView() {
 	qv.inner.Meta.State = viewpb.QueryViewState(qviews.QueryViewStateDropped)
 	qv.syncRecord = nil
+}
+
+// queryViewsForSyncer is the implementation for QueryViewForSyncer
+type queryViewsForSyncer struct {
+	views []*viewpb.QueryViewOfShard
+}
+
+func (qvs *queryViewsForSyncer) ObserveSyncerEvent(event events.SyncerEvent) {
+}
+
+func (qvs *queryViewsForSyncer) Acknowledged() bool {
+	return false
+}
+
+func (qvs *queryViewsForSyncer) WaitForSync() map[qviews.WorkNode][]qviews.QueryViewAtWorkNode {
+	return nil
 }
