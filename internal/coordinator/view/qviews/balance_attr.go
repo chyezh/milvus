@@ -9,6 +9,22 @@ var (
 	_ BalanceAttrAtWorkNode = (*BalanceAttributesAtQueryNode)(nil)
 )
 
+func NewBalanceAttrAtWorkNodeFromProto(n WorkNode, proto *viewpb.SyncQueryViewsResponse) BalanceAttrAtWorkNode {
+	switch b := proto.BalanceAttributes.(type) {
+	case *viewpb.SyncQueryViewsResponse_QueryNode:
+		return &BalanceAttributesAtQueryNode{
+			nodeID: n.id,
+			inner:  b.QueryNode,
+		}
+	case *viewpb.SyncQueryViewsResponse_StreamingNode:
+		return &BalanceAttrAtStreamingNode{
+			inner: b.StreamingNode,
+		}
+	default:
+		panic("unknown balance attribute type")
+	}
+}
+
 type BalanceAttributesAtQueryNode struct {
 	nodeID int64
 	inner  *viewpb.QueryNodeBalanceAttributes

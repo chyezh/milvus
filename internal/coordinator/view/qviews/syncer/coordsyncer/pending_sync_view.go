@@ -42,7 +42,7 @@ func (v *pendingsAckView) Add(g *syncer.SyncGroup) []events.SyncerEvent {
 				v.pendings[view.WorkNode()] = append(v.pendings[view.WorkNode()], view)
 				v.indexes[key] = view
 				evs = append(evs, events.SyncerEventSent{
-					SyncerEventBase: events.NewSyncerEventBase(view.ShardID(), view.Version(), view.State()),
+					SyncerViewEventBase: events.NewSyncerViewEventBase(view.ShardID(), view.Version(), view.State()),
 				})
 			}
 		}
@@ -95,8 +95,8 @@ func (v *pendingsAckView) overwritePreviousState(key uniqueKey, view syncer.Quer
 			v.indexes[key] = view
 			v.pendings[view.WorkNode()][idx] = view
 			return events.SyncerEventOverwrite{
-				SyncerEventBase: events.NewSyncerEventBase(view.ShardID(), view.Version(), view.State()),
-				PreviousState:   previousState,
+				SyncerViewEventBase: events.NewSyncerViewEventBase(view.ShardID(), view.Version(), view.State()),
+				PreviousState:       previousState,
 			}
 		}
 	}

@@ -2,32 +2,39 @@ package events
 
 import "github.com/milvus-io/milvus/internal/coordinator/view/qviews"
 
-func NewSyncerEventBase(shardID ShardID, version qviews.QueryViewVersion, state qviews.QueryViewState) SyncerEventBase {
-	return SyncerEventBase{
+var (
+	_ SyncerViewEvent = SyncerEventSent{}
+	_ SyncerViewEvent = SyncerEventOverwrite{}
+	_ SyncerViewEvent = SyncerEventAck{}
+	_ SyncerEvent     = SyncerEventBalanceAttrUpdate{}
+)
+
+func NewSyncerViewEventBase(shardID ShardID, version qviews.QueryViewVersion, state qviews.QueryViewState) SyncerViewEventBase {
+	return SyncerViewEventBase{
 		EventBase: NewEventBase(shardID),
 		version:   version,
 		state:     state,
 	}
 }
 
-type SyncerEventBase struct {
+type SyncerViewEventBase struct {
 	EventBase
 	version QueryViewVersion
 	state   QueryViewState
 }
 
-func (s SyncerEventBase) isSyncerEvent() {}
+func (s SyncerViewEventBase) isSyncerEvent() {}
 
-func (s SyncerEventBase) Version() QueryViewVersion {
+func (s SyncerViewEventBase) Version() QueryViewVersion {
 	return s.version
 }
 
-func (s SyncerEventBase) State() QueryViewState {
+func (s SyncerViewEventBase) State() QueryViewState {
 	return s.state
 }
 
 type SyncerEventSent struct {
-	SyncerEventBase
+	SyncerViewEventBase
 }
 
 func (s SyncerEventSent) EventType() EventType {
@@ -35,7 +42,7 @@ func (s SyncerEventSent) EventType() EventType {
 }
 
 type SyncerEventOverwrite struct {
-	SyncerEventBase
+	SyncerViewEventBase
 	PreviousState QueryViewState
 }
 
@@ -44,10 +51,21 @@ func (s SyncerEventOverwrite) EventType() EventType {
 }
 
 type SyncerEventAck struct {
-	SyncerEventBase
+	SyncerViewEventBase
 	AcknowledgedView qviews.QueryViewAtWorkNode
 }
 
 func (s SyncerEventAck) EventType() EventType {
 	return EventTypeSyncAck
+}
+
+type SyncerEventBalanceAttrUpdate struct {
+	EventBase
+	BalanceAttr qviews.BalanceAttrAtWorkNode
+}
+
+func (s SyncerEventBalanceAttrUpdate) isSyncerEvent() {}
+
+func (s SyncerEventBalanceAttrUpdate) EventType() EventType {
+	return EventTypeBalanceAttrUpdate
 }

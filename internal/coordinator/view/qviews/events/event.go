@@ -51,9 +51,6 @@ var (
 
 // Event is the common interface for all events that can be watched.
 type Event interface {
-	// ShardID returns the related shard id of the event.
-	ShardID() ShardID
-
 	// EventType returns the type of the event.
 	EventType() EventType
 
@@ -66,6 +63,13 @@ type SyncerEvent interface {
 	Event
 
 	isSyncerEvent()
+}
+
+type SyncerViewEvent interface {
+	SyncerEvent
+
+	// ShardID returns the related shard id of the event.
+	ShardID() ShardID
 
 	// Version returns the version of the event.
 	Version() QueryViewVersion
@@ -77,6 +81,9 @@ type SyncerEvent interface {
 // RecoveryEvent is the interface for recovery events.
 type RecoveryEvent interface {
 	Event
+
+	// ShardID returns the related shard id of the event.
+	ShardID() ShardID
 
 	isRecoveryEvent()
 }

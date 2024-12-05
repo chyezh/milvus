@@ -33,8 +33,13 @@ type coordSyncerImpl struct {
 	resumeChan       chan qviews.WorkNode
 	nodeDownChan     chan qviews.WorkNode
 	syncChan         chan *syncer.SyncGroup
-	syncViewReceiver chan *viewpb.SyncQueryViewsResponse
+	syncViewReceiver chan *syncView
 	receiver         chan []events.SyncerEvent
+}
+
+type syncView struct {
+	resp     *viewpb.SyncQueryViewsResponse
+	workNode qviews.WorkNode
 }
 
 func (cs *coordSyncerImpl) Sync(g *syncer.SyncGroup) {
@@ -69,16 +74,18 @@ func (cs *coordSyncerImpl) loop() {
 			cs.syncWorkNode(node, views)
 		case receiver <- cs.pendingSentEvents:
 			cs.pendingSentEvents = nil
-		case viewProto := <-cs.syncViewReceiver:
-			for _, viewProto := range viewProto.QueryViews {
+		case syncView := <-cs.syncViewReceiver:
+			for _, viewProto := range syncView.resp.QueryViews {
 				view := qviews.NewQueryViewAtWorkNodeFromProto(viewProto)
 				cs.addPendingEvent(events.SyncerEventAck{
-					SyncerEventBase:  events.NewSyncerEventBase(view.ShardID(), view.Version(), view.State()),
-					AcknowledgedView: view,
+					SyncerViewEventBase: events.NewSyncerViewEventBase(view.ShardID(), view.Version(), view.State()),
+					AcknowledgedView:    view,
 				})
 			}
-			if viewProto.BalanceAttributes != nil {
-				cs.addPendingEvent(events.SyncerEventBalanceAttrUpdate{})
+			if syncView.resp.BalanceAttributes != nil {
+				cs.addPendingEvent(events.SyncerEventBalanceAttrUpdate{
+					BalanceAttr: qviews.NewBalanceAttrAtWorkNodeFromProto(syncView.workNode, syncView.resp),
+				})
 			}
 		}
 	}
@@ -102,8 +109,8 @@ func (cs *coordSyncerImpl) syncWorkNode(node qviews.WorkNode, views []syncer.Que
 		for _, view := range views {
 			downView := view.WhenNodeDown()
 			cs.addPendingEvent(events.SyncerEventAck{
-				SyncerEventBase:  events.NewSyncerEventBase(view.ShardID(), view.Version(), downView.State()),
-				AcknowledgedView: downView,
+				SyncerViewEventBase: events.NewSyncerViewEventBase(view.ShardID(), view.Version(), downView.State()),
+				AcknowledgedView:    downView,
 			})
 		}
 		return

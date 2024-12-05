@@ -6,13 +6,24 @@ import (
 	"io"
 	"sync"
 
+	"github.com/milvus-io/milvus/internal/coordinator/view/qviews"
 	"github.com/milvus-io/milvus/internal/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/log"
 	"go.uber.org/zap"
 )
 
+type SyncResponseFromNode struct {
+	WorkNode qviews.WorkNode
+	Response *viewpb.SyncQueryViewsResponse
+}
+
 // CreateSyncClient creates a sync stream rpc client.
-func CreateSyncClient(ctx context.Context, c viewpb.QueryViewSyncServiceClient) (*SyncClient, error) {
+func CreateSyncClient(
+	ctx context.Context,
+	workNode qviews.WorkNode,
+	c viewpb.QueryViewSyncServiceClient,
+	recvChan chan SyncResponseFromNode,
+) (*SyncClient, error) {
 	streamClient, err := c.Sync(ctx)
 	if err != nil {
 		return nil, err
@@ -20,28 +31,29 @@ func CreateSyncClient(ctx context.Context, c viewpb.QueryViewSyncServiceClient) 
 	sc := &SyncClient{
 		syncGrpcClient: syncGrpcClient{streamClient},
 		sendCh:         make(chan *viewpb.SyncQueryViewsRequest, 10),
-		recvCh:         make(chan *viewpb.SyncQueryViewsResponse, 10),
+		recvCh:         recvChan,
 		logger:         log.With(zap.String("component", "sync_client")),
 		sendExitCh:     make(chan struct{}),
 		recvExitCh:     make(chan struct{}),
 		finishedCh:     make(chan struct{}),
 	}
-	sc.execute()
 	return sc, nil
 }
 
 // SyncClient is the client wrapper of sync stream rpc for sync service.
 type SyncClient struct {
 	syncGrpcClient syncGrpcClient
+	workNode       qviews.WorkNode
 	sendCh         chan *viewpb.SyncQueryViewsRequest
-	recvCh         chan *viewpb.SyncQueryViewsResponse
+	recvCh         chan SyncResponseFromNode
 	logger         *log.MLogger
 	sendExitCh     chan struct{}
 	recvExitCh     chan struct{}
 	finishedCh     chan struct{}
 }
 
-func (c *SyncClient) execute() {
+// Execute starts the sync client.
+func (c *SyncClient) Execute() {
 	defer close(c.finishedCh)
 
 	wg := &sync.WaitGroup{}
@@ -57,21 +69,6 @@ func (c *SyncClient) execute() {
 	wg.Wait()
 }
 
-// IsAvailable returns whether the producer is available.
-func (c *SyncClient) IsAvailable() bool {
-	select {
-	case <-c.Available():
-		return false
-	default:
-		return true
-	}
-}
-
-// Available returns a channel that will be closed when the client is unavailable.
-func (c *SyncClient) Available() <-chan struct{} {
-	return c.sendExitCh
-}
-
 // SyncAtBackground creates a sync stream rpc client.
 // This operation doesn't promise the sync operation is done at server-side.
 // Make sure the sync operation is done by the Receiving message.
@@ -80,11 +77,6 @@ func (c *SyncClient) SyncAtBackground(req *viewpb.SyncQueryViewsRequest) {
 	case c.sendCh <- req:
 	case <-c.sendExitCh:
 	}
-}
-
-// ReportChan returns the channel to receive the sync response.
-func (c *SyncClient) ReportChan() <-chan *viewpb.SyncQueryViewsResponse {
-	return c.recvCh
 }
 
 // Close close the client.
@@ -133,7 +125,6 @@ func (c *SyncClient) recvLoop() (err error) {
 			return
 		}
 		c.logger.Info("recv arm of stream closed")
-		close(c.recvCh)
 		close(c.recvExitCh)
 	}()
 
@@ -149,7 +140,10 @@ func (c *SyncClient) recvLoop() (err error) {
 		case *viewpb.SyncResponse_Close:
 			// recv io.EOF after this message.
 		case *viewpb.SyncResponse_Views:
-			c.recvCh <- resp.Views
+			c.recvCh <- SyncResponseFromNode{
+				WorkNode: c.workNode,
+				Response: resp.Views,
+			}
 		default:
 			// skip message here.
 			c.logger.Error("unknown response type", zap.Any("response", resp))

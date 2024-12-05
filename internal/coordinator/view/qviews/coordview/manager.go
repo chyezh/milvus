@@ -72,13 +72,15 @@ func (e *QueryViewManager) loop() {
 			return
 		case req := <-e.apiRequest:
 			e.whenIncomingAPI(req)
-		case event, ok := <-e.coordSyncer.Receiver():
+		case evs, ok := <-e.coordSyncer.Receiver():
 			if !ok {
 				// syncer is closed, the event loop cannot be executed.
 				return
 			}
-			e.eventObserver.Observe(event)
-			e.whenWorkNodeAcknowledged(event)
+			for _, ev := range evs {
+				e.eventObserver.Observe(ev)
+				e.whenWorkNodeAcknowledged(ev)
+			}
 		case event, ok := <-e.recoveryStorage.Event():
 			if !ok {
 				// storage is closed, the event loop cannot be executed.
@@ -99,19 +101,22 @@ func (e *QueryViewManager) whenIncomingAPI(api apiImplementation) {
 }
 
 // whenWorkNodeAcknowledged is the event handler for the work node acknowledged event.
-func (e *QueryViewManager) whenWorkNodeAcknowledged(incomingNodeQV events.SyncerEvent) {
-	shard, ok := e.shards[incomingNodeQV.ShardID()]
+func (e *QueryViewManager) whenWorkNodeAcknowledged(incomingEv events.SyncerEvent) {
+	ev, ok := incomingEv.(events.SyncerEventAck)
+	if !ok {
+		return
+	}
+
+	shard, ok := e.shards[ev.ShardID()]
 	if !ok {
 		// shard may be dropped.
 		// Just ignore the incoming query view if shard is dropped.
-		if incomingNodeQV.State() != qviews.QueryViewStateDropped {
+		if ev.State() != qviews.QueryViewStateDropped {
 			panic("There's a critical bug in the query view state machine")
 		}
 		return
 	}
-	if ackEvent, ok := incomingNodeQV.(events.SyncerEventAck); ok {
-		shard.WhenWorkNodeAcknowledged(ackEvent.AcknowledgedView)
-	}
+	shard.WhenWorkNodeAcknowledged(ev.AcknowledgedView)
 }
 
 // whenRecoverStorageDone is the event handler for the recovery storage done event.

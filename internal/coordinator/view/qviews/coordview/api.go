@@ -58,7 +58,8 @@ func (api *applyAPI) Observe(evs ...events.Event) bool {
 		panic("the version should never be nil when doing the event check")
 	}
 	for _, ev := range evs {
-		if ev.EventType() != events.EventTypeRecoverySwap {
+		ev, ok := ev.(events.EventRecoverySwap)
+		if !ok {
 			continue
 		}
 		if ev.ShardID() != api.newIncomingQV.ShardID() {
