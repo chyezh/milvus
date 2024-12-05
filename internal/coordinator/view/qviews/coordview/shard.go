@@ -100,7 +100,7 @@ func (qvs *shardViews) WhenSave(version qviews.QueryViewVersion) {
 		qvs.latestUpVersion = &version
 		// TODO: make a notification to notify the balance recovery.
 	case qviews.QueryViewStateDown:
-		qvs.syncer.SyncQueryView(qv.Proto())
+		qvs.syncer.Sync(qv.Proto())
 	}
 }
 
@@ -120,7 +120,7 @@ func (qvs *shardViews) WhenDelete(version qviews.QueryViewVersion) {
 func (qvs *shardViews) WhenSwapPreparingDone() {
 	previousPreparing, currentPreparing := qvs.onPreparingQueryView.WhenPreparingPersisted()
 	qvs.queryViews[currentPreparing.Version()] = currentPreparing
-	qvs.syncer.SyncQueryView(previousPreparing.Proto(), currentPreparing.Proto())
+	qvs.syncer.Sync(previousPreparing.Proto(), currentPreparing.Proto())
 }
 
 // WhenWorkNodeAcknowledged is called when the work node acknowledged the query view.
@@ -138,7 +138,7 @@ func (qvs *shardViews) WhenWorkNodeAcknowledged(w qviews.QueryViewAtWorkNode) {
 	}
 	switch transition.To {
 	case qviews.QueryViewStateReady, qviews.QueryViewStateDropping:
-		qvs.syncer.SyncQueryView(qv.Proto())
+		qvs.syncer.Sync(qv.Proto())
 	case qviews.QueryViewStateUp:
 		qvs.recovery.UpNewPreparingView(context.TODO(), qv.Proto())
 	case qviews.QueryViewStateDropped:

@@ -32,6 +32,7 @@ const (
 	EventTypeSyncSent      // The event for sync, when sync operation is sent.
 	EventTypeSyncOverwrite // The event for overwrite, when the acknowledge or sync is not done but the state is transitted.
 	EventTypeSyncAck       // The event for acked, when first acknowledge returned.
+	EventTypeReport        // The event for report, when the query view is reported.
 )
 
 var (

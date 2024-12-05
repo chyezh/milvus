@@ -48,3 +48,19 @@ type QueryViewAtStreamingNode interface {
 
 	ViewOfStreamingNode() *viewpb.QueryViewOfStreamingNode
 }
+
+type BalanceAttrAtWorkNode interface {
+	WorkNode() WorkNode
+}
+
+type BalanceAttrAtQueryNode interface {
+	BalanceAttrAtWorkNode
+
+	BalanceAttrOfQueryNode() *viewpb.QueryNodeBalanceAttributes
+}
+
+type BalanceAttrAtStreamingNode interface {
+	BalanceAttrAtWorkNode
+
+	BalanceAttrOfStreamingNode() *viewpb.StreamingNodeBalanceAttributes
+}
