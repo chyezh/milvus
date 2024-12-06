@@ -78,6 +78,12 @@ packages:
   github.com/milvus-io/milvus/internal/util/searchutil/optimizers:
     interfaces:
       QueryHook:
+  github.com/milvus-io/milvus/internal/coordinator/view/qviews/syncer:
+    interfaces:
+      CoordSyncer:
+  github.com/milvus-io/milvus/internal/coordinator/view/qviews/recovery:
+    interfaces:
+      RecoveryStorage:
   google.golang.org/grpc/resolver:
     interfaces:
       ClientConn:

@@ -50,18 +50,19 @@ func (qvs *shardViews) ApplyNewQueryView(ctx context.Context, b *QueryViewAtCoor
 	}
 
 	// if the latest up version is not nil and the data version is too old, return error directly.
-	if qvs.latestUpVersion != nil && qvs.latestUpVersion.DataVersion > b.DataVersion() {
+	dataVersion := b.DataVersion()
+	if qvs.latestUpVersion != nil && qvs.latestUpVersion.DataVersion > dataVersion {
 		return nil, ErrDataVersionTooOld
 	}
 
 	// Assign a new query version for new incoming query view and make a swap.
-	newQueryVersion := qvs.getMaxQueryVerion(b.DataVersion())
+	newQueryVersion := qvs.getMaxQueryVerion(dataVersion)
 	newQueryView := b.WithQueryVersion(newQueryVersion).Build()
 	newVersion := newQueryView.Version()
 	if err := qvs.onPreparingQueryView.Swap(ctx, qvs.shardID, newQueryView); err != nil {
 		return nil, err
 	}
-	qvs.maxQueryVersion[b.DataVersion()] = newQueryVersion
+	qvs.maxQueryVersion[dataVersion] = newQueryVersion
 	return &newVersion, nil
 }
 

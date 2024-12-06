@@ -10,13 +10,15 @@ import (
 	"github.com/milvus-io/milvus/pkg/util/syncutil"
 )
 
-// NewEventLoop creates a new event loop for coordview state machine.
-func NewEventLoop(coordSyncer syncer.CoordSyncer, recoveryStorage recovery.RecoveryStorage) *QueryViewManager {
+// NewQueryViewManager creates a manage for executing coordview state machine.
+func NewQueryViewManager(coordSyncer syncer.CoordSyncer, recoveryStorage recovery.RecoveryStorage) *QueryViewManager {
 	el := &QueryViewManager{
+		notifier:        syncutil.NewAsyncTaskNotifier[struct{}](),
 		eventObserver:   newEventObservers(),
 		apiRequest:      make(chan apiImplementation, 1),
 		coordSyncer:     coordSyncer,
 		recoveryStorage: recoveryStorage,
+		replicas:        make(map[int64][]qviews.ShardID),
 		shards:          make(map[qviews.ShardID]*shardViews),
 	}
 	go el.loop()
@@ -64,7 +66,9 @@ func (e *QueryViewManager) Close() {
 
 // loop is the main loop of the event loop.
 func (e *QueryViewManager) loop() {
-	defer e.notifier.Finish(struct{}{})
+	defer func() {
+		e.notifier.Finish(struct{}{})
+	}()
 
 	for {
 		select {

@@ -1,6 +1,10 @@
 package coordview
 
-import "github.com/milvus-io/milvus/internal/coordinator/view/qviews/events"
+import (
+	"github.com/milvus-io/milvus/internal/coordinator/view/qviews/events"
+	"github.com/milvus-io/milvus/pkg/log"
+	"go.uber.org/zap"
+)
 
 // EventObserver is the observer to observe the event.
 // All Event in QueryViewManager can be seen by the observer sequentially.
@@ -13,7 +17,9 @@ type EventObserver interface {
 // newEventObservers creates a new EventObservers.
 func newEventObservers() *eventObservers {
 	return &eventObservers{
-		observers: make(map[EventObserver]struct{}),
+		observers: map[EventObserver]struct{}{
+			logAndMetricObserver{}: {},
+		},
 	}
 }
 
@@ -27,15 +33,12 @@ func (l *eventObservers) Register(o EventObserver) {
 	l.observers[o] = struct{}{}
 }
 
-// Unregister is the method to unregister the observer.
-func (l *eventObservers) Unregister(o EventObserver) {
-	delete(l.observers, o)
-}
-
 // Observe is the method to observe the event.
 func (l *eventObservers) Observe(e ...events.Event) {
 	for o := range l.observers {
-		o.Observe(e...)
+		if !o.Observe(e...) {
+			delete(l.observers, o)
+		}
 	}
 }
 
@@ -43,6 +46,10 @@ func (l *eventObservers) Observe(e ...events.Event) {
 type logAndMetricObserver struct{}
 
 // Observe is the method to log and metric the event.
-func (l *logAndMetricObserver) Observe(e ...events.Event) {
+func (l logAndMetricObserver) Observe(evs ...events.Event) bool {
 	// TOOD: log and metric the event.
+	for _, ev := range evs {
+		log.Info("QueryViewManager event: %v", zap.Any("event", ev))
+	}
+	return true
 }

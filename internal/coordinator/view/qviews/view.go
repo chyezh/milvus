@@ -1,7 +1,7 @@
 package qviews
 
 import (
-	"github.com/gogo/protobuf/proto"
+	"github.com/golang/protobuf/proto"
 	"github.com/milvus-io/milvus/internal/proto/viewpb"
 )
 
