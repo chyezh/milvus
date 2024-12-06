@@ -13,7 +13,7 @@ func NewBalanceAttrAtWorkNodeFromProto(n WorkNode, proto *viewpb.SyncQueryViewsR
 	switch b := proto.BalanceAttributes.(type) {
 	case *viewpb.SyncQueryViewsResponse_QueryNode:
 		return &BalanceAttributesAtQueryNode{
-			nodeID: n.id,
+			nodeID: n.(QueryNode).ID,
 			inner:  b.QueryNode,
 		}
 	case *viewpb.SyncQueryViewsResponse_StreamingNode:
@@ -31,7 +31,7 @@ type BalanceAttributesAtQueryNode struct {
 }
 
 func (qv *BalanceAttributesAtQueryNode) WorkNode() WorkNode {
-	return QueryNode(qv.nodeID)
+	return NewQueryNode(qv.nodeID)
 }
 
 func (qv *BalanceAttributesAtQueryNode) BalanceAttrOfQueryNode() *viewpb.QueryNodeBalanceAttributes {
@@ -39,11 +39,12 @@ func (qv *BalanceAttributesAtQueryNode) BalanceAttrOfQueryNode() *viewpb.QueryNo
 }
 
 type BalanceAttrAtStreamingNode struct {
-	inner *viewpb.StreamingNodeBalanceAttributes
+	vchannel string
+	inner    *viewpb.StreamingNodeBalanceAttributes
 }
 
 func (qv *BalanceAttrAtStreamingNode) WorkNode() WorkNode {
-	return StreamingNode()
+	return NewStreamingNode(qv.vchannel)
 }
 
 func (qv *BalanceAttrAtStreamingNode) BalanceAttrOfStreamingNode() *viewpb.StreamingNodeBalanceAttributes {

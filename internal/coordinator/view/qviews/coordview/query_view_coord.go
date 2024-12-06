@@ -163,7 +163,7 @@ func (qv *queryViewAtCoord) Version() qviews.QueryViewVersion {
 func (qv *queryViewAtCoord) readyView() {
 	qv.inner.Meta.State = viewpb.QueryViewState(qviews.QueryViewStateReady)
 	// When the state is transited into ready, we need to sent a notification to streaming node to enable the view.
-	qv.syncRecord = newStreamingNodeSyncRecord()
+	qv.syncRecord = newStreamingNodeSyncRecord(qv.inner)
 }
 
 // upView marks the query view as up.
@@ -175,7 +175,7 @@ func (qv *queryViewAtCoord) upView() {
 // downView marks the query view as down.
 func (qv *queryViewAtCoord) downView() {
 	qv.inner.Meta.State = viewpb.QueryViewState(qviews.QueryViewStateDown)
-	qv.syncRecord = newStreamingNodeSyncRecord()
+	qv.syncRecord = newStreamingNodeSyncRecord(qv.inner)
 }
 
 // unrecoverableView marks the query view as unrecoverable.

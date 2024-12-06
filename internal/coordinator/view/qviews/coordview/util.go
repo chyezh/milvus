@@ -8,17 +8,17 @@ import (
 // newAllWorkNodeSyncRecord indicate to make sync opearation to all worknode.
 func newAllWorkNodeSyncRecord(qv *viewpb.QueryViewOfShard) *workNodeSyncRecord {
 	nodes := make(map[qviews.WorkNode]struct{}, len(qv.GetQueryNode())+1)
-	nodes[qviews.StreamingNode()] = struct{}{}
+	nodes[qviews.NewStreamingNode(qv.Meta.Vchannel)] = struct{}{}
 	for _, node := range qv.QueryNode {
-		nodes[qviews.QueryNode(node.GetNodeId())] = struct{}{}
+		nodes[qviews.NewQueryNode(node.NodeId)] = struct{}{}
 	}
 	return &workNodeSyncRecord{nodes: nodes}
 }
 
 // newStreamingNodeSyncRecord indicate to make sync operation to streaming node only.
-func newStreamingNodeSyncRecord() *workNodeSyncRecord {
+func newStreamingNodeSyncRecord(qv *viewpb.QueryViewOfShard) *workNodeSyncRecord {
 	return &workNodeSyncRecord{
-		nodes: map[qviews.WorkNode]struct{}{qviews.StreamingNode(): {}},
+		nodes: map[qviews.WorkNode]struct{}{qviews.NewStreamingNode(qv.Meta.Vchannel): {}},
 	}
 }
 

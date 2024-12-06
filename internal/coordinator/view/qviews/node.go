@@ -1,24 +1,31 @@
 package qviews
 
 // WorkNode is the enum type for query node and streaming node.
-type WorkNode struct {
-	id int64 // ID is the node id of streaming or querynode, if the id is -1, it means the node is a streaming node.
+type WorkNode interface {
+	isWorkNode()
 }
 
-// IsStreaming returns whether the node is a streaming node.
-func (n *WorkNode) IsStreaming() bool {
-	return n.id == -1
+// NewQueryNode creates a new query node.
+func NewQueryNode(id int64) QueryNode {
+	return QueryNode{ID: id}
 }
 
-// QueryNode creates a query node.
-func QueryNode(id int64) WorkNode {
-	return WorkNode{id: id}
+type QueryNode struct {
+	ID int64 // ID is the node id of streaming or querynode, if the id is -1, it means the node is a streaming node.
 }
 
-// StreamingNode creates a streaming node.
-func StreamingNode() WorkNode {
-	return WorkNode{id: -1}
+func (QueryNode) isWorkNode() {}
+
+// NewStreamingNode creates a new streaming node.
+func NewStreamingNode(vchannel string) StreamingNode {
+	return StreamingNode{VChannel: vchannel}
 }
+
+type StreamingNode struct {
+	VChannel string
+}
+
+func (StreamingNode) isWorkNode() {}
 
 type BalanceAttrAtWorkNode interface {
 	WorkNode() WorkNode

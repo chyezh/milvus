@@ -12,7 +12,7 @@ type queryViewAtStreamingNode struct {
 
 // WorkNode returns the work node of the query view.
 func (qv *queryViewAtStreamingNode) WorkNode() qviews.WorkNode {
-	return qviews.StreamingNode()
+	return qviews.NewStreamingNode(qv.inner.Meta.Vchannel)
 }
 
 // State returns the state of the query view.

@@ -15,11 +15,11 @@ func NewCoordSyncer() syncer.CoordSyncer {
 	cs := &coordSyncerImpl{
 		pendingAckViews:   newPendingsAckView(),
 		pendingSentEvents: nil,
-		clients:           make(map[qviews.WorkNode]*service.SyncClient),
+		clients:           make(map[qviews.WorkNode]*autoResumeSyncClient),
 		resumeChan:        make(chan qviews.WorkNode),
 		nodeDownChan:      make(chan qviews.WorkNode),
 		syncChan:          make(chan *syncer.SyncGroup),
-		receiver:          make(chan []events.SyncerEvent),
+		eventReceiver:     make(chan []events.SyncerEvent),
 	}
 	go cs.loop()
 	return cs
@@ -29,34 +29,37 @@ type coordSyncerImpl struct {
 	pendingAckViews   *pendingsAckView
 	pendingSentEvents []events.SyncerEvent
 
-	clients          map[qviews.WorkNode]*service.SyncClient
+	clients          map[qviews.WorkNode]*autoResumeSyncClient
 	resumeChan       chan qviews.WorkNode
 	nodeDownChan     chan qviews.WorkNode
+	nodeUpChan       chan qviews.WorkNode
 	syncChan         chan *syncer.SyncGroup
-	syncViewReceiver chan *syncView
-	receiver         chan []events.SyncerEvent
-}
-
-type syncView struct {
-	resp     *viewpb.SyncQueryViewsResponse
-	workNode qviews.WorkNode
+	syncViewReceiver chan service.SyncResponseFromNode
+	eventReceiver    chan []events.SyncerEvent
 }
 
 func (cs *coordSyncerImpl) Sync(g *syncer.SyncGroup) {
 	cs.syncChan <- g
 }
 
+func (cs *coordSyncerImpl) Receiver() <-chan []events.SyncerEvent {
+	return cs.eventReceiver
+}
+
+// loop is the background loop to handle the sync events.
 func (cs *coordSyncerImpl) loop() {
 	for {
 		var receiver chan []events.SyncerEvent
 		if len(cs.pendingSentEvents) > 0 {
-			receiver = cs.receiver
+			receiver = cs.eventReceiver
 		} else {
 			receiver = nil
 		}
 
 		select {
 		case newGroup := <-cs.syncChan:
+			// When new sync group comes, the views should be dispatched right away,
+			// and add it into pending view to wait for the ack.
 			cs.pendingAckViews.Add(newGroup)
 			cs.dispatch(newGroup.Views)
 		case node := <-cs.resumeChan:
@@ -65,6 +68,12 @@ func (cs *coordSyncerImpl) loop() {
 			// syncer should resync all the pending views for this node.
 			views := cs.pendingAckViews.CollectResync(node)
 			cs.syncWorkNode(node, views)
+		case node := <-cs.nodeUpChan:
+			cs.clients[node] = newAutoResumeSyncClient(
+				node,
+				cs.syncViewReceiver,
+				cs.resumeChan,
+			)
 		case node := <-cs.nodeDownChan:
 			// When the node is gone, the related client should be stopped.
 			cs.clients[node].Close()
@@ -75,24 +84,20 @@ func (cs *coordSyncerImpl) loop() {
 		case receiver <- cs.pendingSentEvents:
 			cs.pendingSentEvents = nil
 		case syncView := <-cs.syncViewReceiver:
-			for _, viewProto := range syncView.resp.QueryViews {
+			for _, viewProto := range syncView.Response.QueryViews {
 				view := qviews.NewQueryViewAtWorkNodeFromProto(viewProto)
 				cs.addPendingEvent(events.SyncerEventAck{
 					SyncerViewEventBase: events.NewSyncerViewEventBase(view.ShardID(), view.Version(), view.State()),
 					AcknowledgedView:    view,
 				})
 			}
-			if syncView.resp.BalanceAttributes != nil {
+			if syncView.Response.BalanceAttributes != nil {
 				cs.addPendingEvent(events.SyncerEventBalanceAttrUpdate{
-					BalanceAttr: qviews.NewBalanceAttrAtWorkNodeFromProto(syncView.workNode, syncView.resp),
+					BalanceAttr: qviews.NewBalanceAttrAtWorkNodeFromProto(syncView.WorkNode, syncView.Response),
 				})
 			}
 		}
 	}
-}
-
-func (cs *coordSyncerImpl) Receiver() <-chan []events.SyncerEvent {
-	return cs.receiver
 }
 
 func (cs *coordSyncerImpl) dispatch(viewOnNodes map[qviews.WorkNode][]syncer.QueryViewAtWorkNodeWithAck) {

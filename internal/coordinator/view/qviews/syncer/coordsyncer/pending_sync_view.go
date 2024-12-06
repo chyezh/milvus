@@ -14,6 +14,7 @@ type uniqueKey struct {
 	ShardID qviews.ShardID
 }
 
+// newPendingsAckView creates a new pendingsAckView.
 func newPendingsAckView() *pendingsAckView {
 	return &pendingsAckView{
 		indexes:  make(map[uniqueKey]syncer.QueryViewAtWorkNodeWithAck),
@@ -21,6 +22,7 @@ func newPendingsAckView() *pendingsAckView {
 	}
 }
 
+// pendingsAckView is the struct to store the pending query views that need to be synced.
 type pendingsAckView struct {
 	indexes  map[uniqueKey]syncer.QueryViewAtWorkNodeWithAck
 	pendings map[qviews.WorkNode][]syncer.QueryViewAtWorkNodeWithAck

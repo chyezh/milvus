@@ -79,7 +79,7 @@ type QueryViewAtStreamingNode struct {
 }
 
 func (qv *QueryViewAtStreamingNode) WorkNode() WorkNode {
-	return StreamingNode()
+	return NewStreamingNode(qv.inner.Meta.Vchannel)
 }
 
 func (qv *QueryViewAtStreamingNode) ViewOfStreamingNode() *viewpb.QueryViewOfStreamingNode {
@@ -106,7 +106,7 @@ type QueryViewAtQueryNode struct {
 }
 
 func (qv *QueryViewAtQueryNode) WorkNode() WorkNode {
-	return QueryNode(qv.NodeID())
+	return NewQueryNode(qv.NodeID())
 }
 
 func (qv *QueryViewAtQueryNode) NodeID() int64 {
