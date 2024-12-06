@@ -29,7 +29,7 @@ type pendingsAckView struct {
 }
 
 // SyncNewView syncs the new query view to the pending sync view.
-func (v *pendingsAckView) Add(g *syncer.SyncGroup) []events.SyncerEvent {
+func (v *pendingsAckView) Add(g syncer.SyncGroup) []events.SyncerEvent {
 	evs := make([]events.SyncerEvent, 0, len(g.Views))
 	for _, views := range g.Views {
 		for _, view := range views {

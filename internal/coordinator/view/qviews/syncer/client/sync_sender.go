@@ -17,12 +17,11 @@ var _ QueryViewServiceSyncer = (*grpcSyncer)(nil)
 
 // newGRPCSyncer creates a sync client.
 func newGRPCSyncer(
-	service lazygrpc.Service[viewpb.QueryViewSyncServiceClient],
+	client *queryViewServiceClientImpl,
 	req *SyncOption,
 ) *grpcSyncer {
 	syncer := &grpcSyncer{
 		notifier:   syncutil.NewAsyncTaskNotifier[struct{}](),
-		service:    service,
 		workNode:   req.WorkNode,
 		sendCh:     make(chan *viewpb.SyncQueryViewsRequest, 10),
 		receiver:   req.Receiver,
@@ -30,7 +29,7 @@ func newGRPCSyncer(
 		recvExitCh: make(chan struct{}),
 		logger:     log.With(),
 	}
-	go syncer.execute()
+	go syncer.execute(client)
 	return syncer
 }
 
@@ -62,7 +61,7 @@ func (c *grpcSyncer) Close() {
 	c.notifier.BlockUntilFinish()
 }
 
-func (c *grpcSyncer) execute() (err error) {
+func (c *grpcSyncer) execute(qvsc *queryViewServiceClientImpl) (err error) {
 	defer func() {
 		c.notifier.Finish(struct{}{})
 		c.receiver <- SyncErrorMessage{workNode: c.workNode, Error: err}
@@ -70,14 +69,11 @@ func (c *grpcSyncer) execute() (err error) {
 
 	// TODO: make error mark here.
 
-	// Create a new stream to make sync works.
-	client, err := c.service.GetService(c.notifier.Context())
+	// Get the related service and target node id by worknode.
+	// maybe a streamingnode or querynode.
+	streamClient, err := qvsc.createNewSyncStreamClient(c.notifier.Context(), c.workNode)
 	if err != nil {
-		return
-	}
-	streamClient, err := client.Sync(c.notifier.Context())
-	if err != nil {
-		return
+		return err
 	}
 	newStreamClient := syncGrpcClient{streamClient}
 

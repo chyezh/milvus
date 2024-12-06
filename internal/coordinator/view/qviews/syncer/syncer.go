@@ -11,7 +11,7 @@ type CoordSyncer interface {
 	// Sync do a async operation at background.
 	// It make sure that the query view will be sent as much as possible (except node gone).
 	// Once the target node is gone, a unrecoverable work node view will be returned from the receiver.
-	Sync(g *SyncGroup)
+	Sync(g SyncGroup)
 
 	// Receiver returns the channel to receive the query view coming from the worknode.
 	Receiver() <-chan []events.SyncerEvent
@@ -22,6 +22,14 @@ type CoordSyncer interface {
 // But the resync operation doesn't promise the atomicity.
 type SyncGroup struct {
 	Views map[qviews.WorkNode][]QueryViewAtWorkNodeWithAck
+}
+
+// AddView adds a query view to the sync group.
+func (g *SyncGroup) AddView(view QueryViewAtWorkNodeWithAck) {
+	if g.Views == nil {
+		g.Views = make(map[qviews.WorkNode][]QueryViewAtWorkNodeWithAck)
+	}
+	g.Views[view.WorkNode()] = append(g.Views[view.WorkNode()], view)
 }
 
 // QueryViewAtWorkNodeWithAck is the interface to interact with CoordSyncer.
@@ -37,7 +45,7 @@ type QueryViewAtWorkNodeWithAck interface {
 	// Onces the view is acknowledged, the method should return true，
 	// then the view can be removed from the syncer.
 	// Otherwise, the view will be kept in the syncer, and resync if the underlying stream broken.
-	ObserveSyncerEvent(event events.SyncerEvent) (isAck bool)
+	ObserveSyncerEvent(event events.SyncerEventAck) (isAck bool)
 }
 
 // NodeReporter is the interface to sync the query view at worknode into the coord.

@@ -3,15 +3,18 @@ package coordview
 import (
 	"github.com/golang/protobuf/proto"
 	"github.com/milvus-io/milvus/internal/coordinator/view/qviews"
-	"github.com/milvus-io/milvus/internal/coordinator/view/qviews/events"
+	"github.com/milvus-io/milvus/internal/coordinator/view/qviews/syncer"
 	"github.com/milvus-io/milvus/internal/proto/viewpb"
 )
 
 // newQueryViewOfShardAtCoord creates a new query view of shard at coord.
 func newQueryViewOfShardAtCoord(qv *viewpb.QueryViewOfShard) *queryViewAtCoord {
 	return &queryViewAtCoord{
-		inner:      qv,
-		syncRecord: newAllWorkNodeSyncRecord(qv), // The incoming pv must be a preparing state.
+		inner: qv,
+		syncRecord: newAllWorkNodeSyncRecord(qv, []qviews.QueryViewState{
+			qviews.QueryViewStateReady,
+			qviews.QueryViewStateUnrecoverable,
+		}, qviews.QueryViewStateUnrecoverable), // The incoming pv must be a preparing state.
 	}
 }
 
@@ -159,11 +162,16 @@ func (qv *queryViewAtCoord) Version() qviews.QueryViewVersion {
 	return qviews.FromProtoQueryViewVersion(qv.inner.Meta.Version)
 }
 
+// GetPendingAckViews returns the pending ack views.
+func (qv *queryViewAtCoord) GetPendingAckViews() []syncer.QueryViewAtWorkNodeWithAck {
+	return qv.syncRecord.GetPendingAckViews()
+}
+
 // readyView marks the query view as ready.
 func (qv *queryViewAtCoord) readyView() {
 	qv.inner.Meta.State = viewpb.QueryViewState(qviews.QueryViewStateReady)
 	// When the state is transited into ready, we need to sent a notification to streaming node to enable the view.
-	qv.syncRecord = newStreamingNodeSyncRecord(qv.inner)
+	qv.syncRecord = newStreamingNodeSyncRecord(qv.inner, []qviews.QueryViewState{qviews.QueryViewStateUp})
 }
 
 // upView marks the query view as up.
@@ -175,7 +183,7 @@ func (qv *queryViewAtCoord) upView() {
 // downView marks the query view as down.
 func (qv *queryViewAtCoord) downView() {
 	qv.inner.Meta.State = viewpb.QueryViewState(qviews.QueryViewStateDown)
-	qv.syncRecord = newStreamingNodeSyncRecord(qv.inner)
+	qv.syncRecord = newStreamingNodeSyncRecord(qv.inner, []qviews.QueryViewState{qviews.QueryViewStateDropping})
 }
 
 // unrecoverableView marks the query view as unrecoverable.
@@ -189,26 +197,10 @@ func (qv *queryViewAtCoord) unrecoverableView() {
 func (qv *queryViewAtCoord) dropView() {
 	qv.inner.Meta.State = viewpb.QueryViewState(qviews.QueryViewStateDropping)
 	// When the state is transited into dropping, we need to sent a broadcast to all nodes to notify them drop these view.
-	qv.syncRecord = newAllWorkNodeSyncRecord(qv.inner)
+	qv.syncRecord = newAllWorkNodeSyncRecord(qv.inner, []qviews.QueryViewState{qviews.QueryViewStateDropped}, qviews.QueryViewStateDropped)
 }
 
 func (qv *queryViewAtCoord) deleteView() {
 	qv.inner.Meta.State = viewpb.QueryViewState(qviews.QueryViewStateDropped)
 	qv.syncRecord = nil
-}
-
-// queryViewsForSyncer is the implementation for QueryViewForSyncer
-type queryViewsForSyncer struct {
-	views []*viewpb.QueryViewOfShard
-}
-
-func (qvs *queryViewsForSyncer) ObserveSyncerEvent(event events.SyncerEvent) {
-}
-
-func (qvs *queryViewsForSyncer) Acknowledged() bool {
-	return false
-}
-
-func (qvs *queryViewsForSyncer) WaitForSync() map[qviews.WorkNode][]qviews.QueryViewAtWorkNode {
-	return nil
 }

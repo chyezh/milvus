@@ -27,6 +27,7 @@ const (
 	QueryViewStateUnrecoverable = QueryViewState(viewpb.QueryViewState_QueryViewStateUnrecoverable)
 	QueryViewStateDropping      = QueryViewState(viewpb.QueryViewState_QueryViewStateDropping)
 	QueryViewStateDropped       = QueryViewState(viewpb.QueryViewState_QueryViewStateDropped)
+	QueryViewStateNil           = QueryViewState(viewpb.QueryViewState_QueryViewStateUnknown)
 )
 
 // ShardID is the unique identifier of a shard.

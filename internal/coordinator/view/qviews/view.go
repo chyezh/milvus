@@ -40,7 +40,7 @@ func (qv *queryViewAtWorkNodeBase) Version() QueryViewVersion {
 }
 
 func (qv *queryViewAtWorkNodeBase) IntoProto() *viewpb.QueryViewOfShard {
-	return qv.inner
+	return proto.Clone(qv.inner).(*viewpb.QueryViewOfShard)
 }
 
 // NewQueryViewAtWorkNodeFromProto creates a new query view at work node from proto.
@@ -62,7 +62,7 @@ func NewQueryViewAtWorkNodeFromProto(proto *viewpb.QueryViewOfShard) QueryViewAt
 }
 
 // NewQueryViewAtQueryNode creates a new query view at query node.
-func NewQueryViewAtStreamingNode(meta *viewpb.QueryViewOfStreamingNode, view *viewpb.QueryViewOfStreamingNode) QueryViewAtWorkNode {
+func NewQueryViewAtStreamingNode(meta *viewpb.QueryViewMeta, view *viewpb.QueryViewOfStreamingNode) QueryViewAtWorkNode {
 	return &QueryViewAtStreamingNode{
 		queryViewAtWorkNodeBase: queryViewAtWorkNodeBase{
 			inner: &viewpb.QueryViewOfShard{
@@ -87,7 +87,7 @@ func (qv *QueryViewAtStreamingNode) ViewOfStreamingNode() *viewpb.QueryViewOfStr
 }
 
 // NewQueryViewAtQueryNode creates a new query view at query node.
-func NewQueryViewAtQueryNode(meta *viewpb.QueryViewOfStreamingNode, view *viewpb.QueryViewOfQueryNode) QueryViewAtWorkNode {
+func NewQueryViewAtQueryNode(meta *viewpb.QueryViewMeta, view *viewpb.QueryViewOfQueryNode) QueryViewAtWorkNode {
 	return &QueryViewAtStreamingNode{
 		queryViewAtWorkNodeBase: queryViewAtWorkNodeBase{
 			inner: &viewpb.QueryViewOfShard{

@@ -100,7 +100,7 @@ func (qvs *shardViews) WhenSave(version qviews.QueryViewVersion) {
 		qvs.latestUpVersion = &version
 		// TODO: make a notification to notify the balance recovery.
 	case qviews.QueryViewStateDown:
-		qvs.syncer.Sync(qv.Proto())
+		qvs.sync(qv)
 	}
 }
 
@@ -120,7 +120,7 @@ func (qvs *shardViews) WhenDelete(version qviews.QueryViewVersion) {
 func (qvs *shardViews) WhenSwapPreparingDone() {
 	previousPreparing, currentPreparing := qvs.onPreparingQueryView.WhenPreparingPersisted()
 	qvs.queryViews[currentPreparing.Version()] = currentPreparing
-	qvs.syncer.Sync(previousPreparing.Proto(), currentPreparing.Proto())
+	qvs.sync(previousPreparing, currentPreparing)
 }
 
 // WhenWorkNodeAcknowledged is called when the work node acknowledged the query view.
@@ -138,7 +138,7 @@ func (qvs *shardViews) WhenWorkNodeAcknowledged(w qviews.QueryViewAtWorkNode) {
 	}
 	switch transition.To {
 	case qviews.QueryViewStateReady, qviews.QueryViewStateDropping:
-		qvs.syncer.Sync(qv.Proto())
+		qvs.sync(qv)
 	case qviews.QueryViewStateUp:
 		qvs.recovery.UpNewPreparingView(context.TODO(), qv.Proto())
 	case qviews.QueryViewStateDropped:
@@ -148,6 +148,16 @@ func (qvs *shardViews) WhenWorkNodeAcknowledged(w qviews.QueryViewAtWorkNode) {
 	default:
 		panic("work node acknowledged should not transit to this state")
 	}
+}
+
+func (qvs *shardViews) sync(qvc ...*queryViewAtCoord) {
+	g := syncer.SyncGroup{}
+	for _, qv := range qvc {
+		for _, view := range qv.GetPendingAckViews() {
+			g.AddView(view)
+		}
+	}
+	qvs.syncer.Sync(g)
 }
 
 // getMaxQueryVersion returns the max query version of the data version.
