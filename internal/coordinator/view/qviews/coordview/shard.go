@@ -154,6 +154,9 @@ func (qvs *shardViews) WhenWorkNodeAcknowledged(w qviews.QueryViewAtWorkNode) {
 func (qvs *shardViews) sync(qvc ...*queryViewAtCoord) {
 	g := syncer.SyncGroup{}
 	for _, qv := range qvc {
+		if qv == nil {
+			continue
+		}
 		for _, view := range qv.GetPendingAckViews() {
 			g.AddView(view)
 		}

@@ -21,7 +21,15 @@ func NewRecovery(metaKV kv.MetaKv) *RecoveryImpl {
 		metaKV:        metaKV,
 		taskChan:      make(chan *pendingTask, 100),
 		eventNotifier: make(chan events.RecoveryEvent, 100),
-		n:             syncutil.NewAsyncTaskNotifier[struct{}](),
+		backoff: typeutil.NewBackoffTimer(typeutil.BackoffTimerConfig{
+			Default: 500 * time.Millisecond,
+			Backoff: typeutil.BackoffConfig{
+				InitialInterval: 10 * time.Millisecond,
+				Multiplier:      1.5,
+				MaxInterval:     500 * time.Millisecond,
+			},
+		}),
+		n: syncutil.NewAsyncTaskNotifier[struct{}](),
 	}
 	go r.backgroundTask()
 	return r
@@ -83,6 +91,7 @@ func (r *RecoveryImpl) handlePendingEvents(tasks []*pendingTask) []*pendingTask 
 	// TODO: do a task mergify here.
 	failTasks := make([]*pendingTask, 0, len(tasks))
 	for _, task := range tasks {
+		// TODO: make it concurrently.
 		if err := r.metaKV.MultiSaveAndRemove(task.saves, task.removals); err != nil {
 			failTasks = append(failTasks, task)
 			continue

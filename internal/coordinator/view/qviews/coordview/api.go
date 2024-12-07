@@ -36,6 +36,7 @@ type ApplyResult struct {
 
 // applyAPI is the api to apply the new incoming query view.
 type applyAPI struct {
+	shardID       qviews.ShardID
 	newIncomingQV *QueryViewAtCoordBuilder
 	version       *qviews.QueryViewVersion
 	result        *syncutil.Future[ApplyResult]
@@ -43,7 +44,9 @@ type applyAPI struct {
 
 // Apply applies the new incoming query view to the QueryViewManager.
 func (api *applyAPI) Apply(qvm *QueryViewManager) error {
+	api.shardID = api.newIncomingQV.ShardID()
 	version, err := qvm.apply(api.newIncomingQV)
+	api.newIncomingQV = nil
 	if err != nil {
 		api.result.Set(ApplyResult{Err: err})
 		return err
@@ -62,7 +65,7 @@ func (api *applyAPI) Observe(evs ...events.Event) bool {
 		if !ok {
 			continue
 		}
-		if ev.ShardID() != api.newIncomingQV.ShardID() {
+		if ev.ShardID() != api.shardID {
 			continue
 		}
 		api.result.Set(ApplyResult{Version: api.version})

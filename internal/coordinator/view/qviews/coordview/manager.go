@@ -149,12 +149,13 @@ func (e *QueryViewManager) apply(newIncomingQV *QueryViewAtCoordBuilder) (*qview
 		// Just ignore the incoming query view if shard is dropped.
 		return nil, ErrShardReleased
 	}
+	shardID := newIncomingQV.ShardID()
 	newVersion, err := shard.ApplyNewQueryView(context.TODO(), newIncomingQV)
 	if err != nil {
 		return nil, err
 	}
 	e.eventObserver.Observe(events.EventQVApply{
-		EventBase: events.NewEventBase(newIncomingQV.ShardID()),
+		EventBase: events.NewEventBase(shardID),
 		Version:   *newVersion,
 	})
 	return newVersion, nil

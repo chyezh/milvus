@@ -27,6 +27,7 @@ func (qb *QueryViewAtCoordBuilder) WithQueryVersion(version int64) *QueryViewAtC
 }
 
 func (qb *QueryViewAtCoordBuilder) Build() *queryViewAtCoord {
+	qb.inner.Meta.State = viewpb.QueryViewState(qviews.QueryViewStatePreparing)
 	c := qb.inner
 	qb.inner = nil
 	return newQueryViewOfShardAtCoord(c)

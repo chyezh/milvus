@@ -7,9 +7,12 @@ import (
 
 	"github.com/milvus-io/milvus/internal/coordinator/view/qviews"
 	"github.com/milvus-io/milvus/internal/coordinator/view/qviews/events"
-	"github.com/milvus-io/milvus/internal/mocks/coordinator/view/qviews/mock_recovery"
+	"github.com/milvus-io/milvus/internal/coordinator/view/qviews/recovery"
 	"github.com/milvus-io/milvus/internal/mocks/coordinator/view/qviews/mock_syncer"
 	"github.com/milvus-io/milvus/internal/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/kv/predicates"
+	"github.com/milvus-io/milvus/pkg/mocks/mock_kv"
+	"github.com/milvus-io/milvus/pkg/util/syncutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -17,27 +20,28 @@ import (
 func TestManagerAPI(t *testing.T) {
 	syncerChan := make(chan []events.SyncerEvent, 10)
 	mockSyncer := mock_syncer.NewMockCoordSyncer(t)
+	mockSyncer.EXPECT().Sync(mock.Anything).Return().Maybe()
 	mockSyncer.EXPECT().Receiver().Return(syncerChan)
 
-	recoveryChan := make(chan events.RecoveryEvent, 10)
-	recoveryStorage := mock_recovery.NewMockRecoveryStorage(t)
-	recoveryStorage.EXPECT().Event().Return(recoveryChan)
-	recoveryStorage.EXPECT().SwapPreparing(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return()
+	kv := mock_kv.NewMockMetaKv(t)
+	kvStepForward := make(chan error, 1)
+	kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything).RunAndReturn(func(m map[string]string, s []string, p ...predicates.Predicate) error {
+		return <-kvStepForward
+	})
+	recoveryStorage := recovery.NewRecovery(kv)
 	qvm := NewQueryViewManager(mockSyncer, recoveryStorage)
 
 	// Add replica into QueryViewManager
-	result := qvm.AddReplicas(AddReplicasRequest{
+	applyReplicasResult := qvm.AddReplicas(AddReplicasRequest{
 		Shards: []AddShardRequest{{
 			ShardID: qviews.ShardID{ReplicaID: 1, VChannel: "v1"},
 		}},
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-	defer cancel()
-	_, err := result.GetWithContext(ctx)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	// The result should be blocked until first view ready.
+	testShouldBlock(t, applyReplicasResult)
 
-	result2 := qvm.Apply(&QueryViewAtCoordBuilder{
+	applyViewResult := qvm.Apply(&QueryViewAtCoordBuilder{
 		inner: &viewpb.QueryViewOfShard{
 			Meta: &viewpb.QueryViewMeta{
 				CollectionId: 1,
@@ -53,5 +57,17 @@ func TestManagerAPI(t *testing.T) {
 		},
 	})
 
-	result2.Get()
+	// The result should be blocked until the view is persisted.
+	testShouldBlock(t, applyViewResult)
+	kvStepForward <- nil
+	result := applyViewResult.Get()
+	assert.NoError(t, result.Err)
+	assert.NotNil(t, result.Version)
+}
+
+func testShouldBlock[T any](t *testing.T, f *syncutil.Future[T]) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	_, err := f.GetWithContext(ctx)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
