@@ -64,8 +64,8 @@ func (qvs *onPreparingQueryView) Reset() {
 	qvs.currentView = nil
 }
 
-// WhenPreparingPersisted is called when the preparing view is persisted.
-func (qvs *onPreparingQueryView) WhenPreparingPersisted() (previous *queryViewAtCoord, current *queryViewAtCoord) {
+// WhenSwapPersisted is called when the preparing view is persisted.
+func (qvs *onPreparingQueryView) WhenSwapPersisted() (previous *queryViewAtCoord, current *queryViewAtCoord) {
 	if qvs.previousView != nil {
 		previous = qvs.previousView
 		previous.DropView()

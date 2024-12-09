@@ -52,9 +52,6 @@ type QueryViewServiceClient interface {
 	// Sync create a syncer to send sync request to the related node.
 	// Various goroutines will be created to handle the sync operation at background.
 	Sync(opt SyncOption) QueryViewServiceSyncer
-
-	// Close the client.
-	Close()
 }
 
 // QueryViewServiceSyncer is the interface to send sync request to the view service.

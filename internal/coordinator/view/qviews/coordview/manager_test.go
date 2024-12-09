@@ -60,9 +60,18 @@ func TestManagerAPI(t *testing.T) {
 	// The result should be blocked until the view is persisted.
 	testShouldBlock(t, applyViewResult)
 	kvStepForward <- nil
+
+	// Now the view is at preparing state.
 	result := applyViewResult.Get()
 	assert.NoError(t, result.Err)
 	assert.NotNil(t, result.Version)
+	assert.Equal(t, result.Version.QueryVersion, 1)
+	assert.Equal(t, result.Version.DataVersion, 1)
+
+	// The add replica operation should be blocked until first view is up.
+	testShouldBlock(t, applyReplicasResult)
+
+	// There are no querynodes in the view, so the view only wait for streaming node ready.
 }
 
 func testShouldBlock[T any](t *testing.T, f *syncutil.Future[T]) {

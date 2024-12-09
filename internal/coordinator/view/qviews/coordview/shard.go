@@ -117,9 +117,9 @@ func (qvs *shardViews) WhenDelete(version qviews.QueryViewVersion) {
 	delete(qvs.queryViews, version)
 }
 
-// WhenSwapPreparingDone is called when the preparing view is persisted.
-func (qvs *shardViews) WhenSwapPreparingDone() {
-	previousPreparing, currentPreparing := qvs.onPreparingQueryView.WhenPreparingPersisted()
+// WhenSwapDone is called when the preparing view is persisted.
+func (qvs *shardViews) WhenSwapDone() {
+	previousPreparing, currentPreparing := qvs.onPreparingQueryView.WhenSwapPersisted()
 	qvs.queryViews[currentPreparing.Version()] = currentPreparing
 	qvs.sync(previousPreparing, currentPreparing)
 }

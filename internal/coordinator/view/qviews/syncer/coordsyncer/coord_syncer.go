@@ -38,6 +38,10 @@ type coordSyncerImpl struct {
 }
 
 func (cs *coordSyncerImpl) Sync(g syncer.SyncGroup) {
+	// Empty group should be ignored.
+	if len(g.Views) == 0 {
+		panic("empty sync operation is never allowed, at least streaming node")
+	}
 	cs.syncChan <- g
 }
 

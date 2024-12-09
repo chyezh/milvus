@@ -131,7 +131,7 @@ func (e *QueryViewManager) whenRecoveryStorageDone(event events.RecoveryEvent) {
 	}
 	switch event := event.(type) {
 	case events.EventRecoverySwap:
-		shard.WhenSwapPreparingDone()
+		shard.WhenSwapDone()
 	case events.EventRecoverySaveNewUp:
 		shard.WhenSave(event.Version)
 	case events.EventRecoverySave:

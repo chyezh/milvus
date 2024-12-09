@@ -2,7 +2,6 @@ package client
 
 import (
 	"context"
-	"sync"
 
 	"github.com/cockroachdb/errors"
 	"github.com/milvus-io/milvus/internal/coordinator/view/qviews"
@@ -13,18 +12,25 @@ import (
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/lazygrpc"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/resolver"
 	"github.com/milvus-io/milvus/pkg/util/funcutil"
-	"github.com/milvus-io/milvus/pkg/util/lifetime"
 	"github.com/milvus-io/milvus/pkg/util/syncutil"
 )
 
+// NewQueryViewServiceClient creates a new QueryViewServiceClient.
+func NewQueryViewServiceClient() QueryViewServiceClient {
+	return &queryViewServiceClientImpl{
+		notifier: syncutil.NewAsyncTaskNotifier[struct{}](),
+
+		activeQN: make(map[qviews.WorkNode]struct{}),
+		activeSN: make(map[qviews.WorkNode]struct{}),
+	}
+}
+
 // queryViewServiceClientImpl is the client implementation of the query view service.
 type queryViewServiceClientImpl struct {
-	lifetime lifetime.Lifetime[lifetime.State]
 	notifier *syncutil.AsyncTaskNotifier[struct{}]
 
-	workNodeMu sync.Mutex
-	activeQN   map[qviews.WorkNode]struct{}
-	activeSN   map[qviews.WorkNode]struct{}
+	activeQN map[qviews.WorkNode]struct{}
+	activeSN map[qviews.WorkNode]struct{}
 
 	qnResolver resolver.Builder
 	qnService  lazygrpc.Service[viewpb.QueryViewSyncServiceClient]
@@ -35,13 +41,8 @@ type queryViewServiceClientImpl struct {
 }
 
 // Sync syncs the query view service.
-func (c *queryViewServiceClientImpl) Sync(req SyncOption) (QueryViewServiceSyncer, error) {
-	if c.lifetime.Add(lifetime.IsWorking) != nil {
-		return nil, ErrClosed
-	}
-	defer c.lifetime.Done()
-
-	return newGRPCSyncer(c, &req), nil
+func (c *queryViewServiceClientImpl) Sync(req SyncOption) QueryViewServiceSyncer {
+	return newGRPCSyncer(c, &req)
 }
 
 func (c *queryViewServiceClientImpl) createNewSyncStreamClient(ctx context.Context, workNode qviews.WorkNode) (viewpb.QueryViewSyncService_SyncClient, error) {
