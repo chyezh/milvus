@@ -518,3 +518,48 @@ func (m *ReplicaManager) GetReplicasJSON(ctx context.Context) string {
 	}
 	return string(ret)
 }
+
+// RecoverSQNodesInCollection recovers all sq nodes in collection with latest node list.
+// Promise a node will be only assigned to one replica in same collection at same time.
+// 1. Move the rw nodes to ro nodes if current replica use too much sqn.
+// 2. Add new incoming nodes into the replica if they are not ro node of other replicas in same collection.
+// 3. replicas will shared the nodes in resource group fairly.
+func (m *ReplicaManager) RecoverSQNodesInCollection(ctx context.Context, collectionID int64, sqnNodeIDs typeutil.UniqueSet) error {
+	m.rwmutex.Lock()
+	defer m.rwmutex.Unlock()
+
+	collReplicas, ok := m.coll2Replicas[collectionID]
+	if !ok {
+		return errors.Errorf("collection %d not loaded", collectionID)
+	}
+
+	helper := newReplicaSQNAssignmentHelper(collReplicas.replicas, sqnNodeIDs)
+	helper.updateExpectedNodeCountForReplicas(len(sqnNodeIDs))
+
+	modifiedReplicas := make([]*Replica, 0)
+	// recover node by given sqn node list.
+	helper.RangeOverReplicas(func(assignment *replicaAssignmentInfo) {
+		roNodes := assignment.GetNewRONodes()
+		recoverableNodes, incomingNodeCount := assignment.GetRecoverNodesAndIncomingNodeCount()
+		// There may be not enough incoming nodes for current replica,
+		// Even we filtering the nodes that are used by other replica of same collection in other resource group,
+		// current replica's expected node may be still used by other replica of same collection in same resource group.
+		incomingNode := helper.AllocateIncomingNodes(incomingNodeCount)
+		if len(roNodes) == 0 && len(recoverableNodes) == 0 && len(incomingNode) == 0 {
+			// nothing to do.
+			return
+		}
+		mutableReplica := m.replicas[assignment.GetReplicaID()].CopyForWrite()
+		mutableReplica.AddROSQNode(roNodes...)          // rw -> ro
+		mutableReplica.AddRWSQNode(recoverableNodes...) // ro -> rw
+		mutableReplica.AddRWSQNode(incomingNode...)     // unused -> rw
+		log.Info(
+			"new replica recovery streaming query node found",
+			zap.Int64("replicaID", assignment.GetReplicaID()),
+			zap.Int64s("newRONodes", roNodes),
+			zap.Int64s("roToRWNodes", recoverableNodes),
+			zap.Int64s("newIncomingNodes", incomingNode))
+		modifiedReplicas = append(modifiedReplicas, mutableReplica.IntoReplica())
+	})
+	return m.put(ctx, modifiedReplicas...)
+}

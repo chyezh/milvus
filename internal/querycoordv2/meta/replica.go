@@ -18,13 +18,23 @@ var NilReplica = newReplica(&querypb.Replica{
 // So only read only operations are allowed on these type.
 type Replica struct {
 	replicaPB *querypb.Replica
-	rwNodes   typeutil.UniqueSet // a helper field for manipulating replica's Available Nodes slice field.
+	// Nodes is the legacy querynode that is not embedded in the streamingnode, which can only load sealed segment.
+	rwNodes typeutil.UniqueSet // a helper field for manipulating replica's Available Nodes slice field.
 	// always keep consistent with replicaPB.Nodes.
 	// mutual exclusive with roNodes.
 	roNodes typeutil.UniqueSet // a helper field for manipulating replica's RO Nodes slice field.
 	// always keep consistent with replicaPB.RoNodes.
-	// node used by replica but cannot add more channel or segment ont it.
+	// node used by replica but cannot add segment on it.
 	// include rebalance node or node out of resource group.
+
+	// SQNodes is the querynode that is embedded in the streamingnode, which can only watch channel and load growing segment.
+	rwSQNodes typeutil.UniqueSet // a helper field for manipulating replica's RW SQ Nodes slice field.
+	// always keep consistent with replicaPB.RwSqNodes.
+	// mutable exclusive with roSQNodes.
+	roSQNodes typeutil.UniqueSet // a helper field for manipulating replica's RO SQ Nodes slice field.
+	// always keep consistent with replicaPB.RoSqNodes.
+	// node used by replica but cannot add more channel on it.
+	// include the rebalance node.
 }
 
 // Deprecated: may break the consistency of ReplicaManager, use `Spawn` of `ReplicaManager` or `newReplica` instead.
@@ -44,6 +54,8 @@ func newReplica(replica *querypb.Replica) *Replica {
 		replicaPB: proto.Clone(replica).(*querypb.Replica),
 		rwNodes:   typeutil.NewUniqueSet(replica.Nodes...),
 		roNodes:   typeutil.NewUniqueSet(replica.RoNodes...),
+		rwSQNodes: typeutil.NewUniqueSet(replica.RwSqNodes...),
+		roSQNodes: typeutil.NewUniqueSet(replica.RoSqNodes...),
 	}
 }
 
@@ -81,6 +93,18 @@ func (replica *Replica) GetRONodes() []int64 {
 // readonly, don't modify the returned slice.
 func (replica *Replica) GetRWNodes() []int64 {
 	return replica.replicaPB.GetNodes()
+}
+
+// GetROSQNodes returns the ro sq nodes of the replica.
+// readonly, don't modify the returned slice.
+func (replica *Replica) GetROSQNodes() []int64 {
+	return replica.replicaPB.GetRoSqNodes()
+}
+
+// GetRWSQNodes returns the rw sq nodes of the replica.
+// readonly, don't modify the returned slice.
+func (replica *Replica) GetRWSQNodes() []int64 {
+	return replica.replicaPB.GetRwSqNodes()
 }
 
 // RangeOverRWNodes iterates over the read and write nodes of the replica.
@@ -121,6 +145,21 @@ func (replica *Replica) ContainRONode(node int64) bool {
 // ContainRONode checks if the node is in ro nodes of the replica.
 func (replica *Replica) ContainRWNode(node int64) bool {
 	return replica.rwNodes.Contain(node)
+}
+
+// ContainSQNode checks if the node is in rw sq nodes of the replica.
+func (replica *Replica) ContainSQNode(node int64) bool {
+	return replica.ContainROSQNode(node) || replica.ContainRWSQNode(node)
+}
+
+// ContainRWSQNode checks if the node is in rw sq nodes of the replica.
+func (replica *Replica) ContainROSQNode(node int64) bool {
+	return replica.roSQNodes.Contain(node)
+}
+
+// ContainRWSQNode checks if the node is in rw sq nodes of the replica.
+func (replica *Replica) ContainRWSQNode(node int64) bool {
+	return replica.rwSQNodes.Contain(node)
 }
 
 // Deprecated: Warning, break the consistency of ReplicaManager, use `SetAvailableNodesInSameCollectionAndRG` in ReplicaManager instead.
@@ -207,6 +246,22 @@ func (replica *mutableReplica) RemoveNode(nodes ...int64) {
 
 	// try to update node's assignment between channels
 	replica.tryBalanceNodeForChannel()
+}
+
+// AddRWSQNode adds the node to rw sq nodes of the replica.
+func (replica *mutableReplica) AddRWSQNode(nodes ...int64) {
+	replica.roSQNodes.Remove(nodes...)
+	replica.replicaPB.RoSqNodes = replica.roSQNodes.Collect()
+	replica.rwSQNodes.Insert(nodes...)
+	replica.replicaPB.RwSqNodes = replica.rwSQNodes.Collect()
+}
+
+// AddROSQNode add the node to ro sq nodes of the replica.
+func (replica *mutableReplica) AddROSQNode(nodes ...int64) {
+	replica.rwSQNodes.Remove(nodes...)
+	replica.replicaPB.RwSqNodes = replica.rwSQNodes.Collect()
+	replica.roSQNodes.Insert(nodes...)
+	replica.replicaPB.RoSqNodes = replica.roSQNodes.Collect()
 }
 
 func (replica *mutableReplica) removeChannelExclusiveNodes(nodes ...int64) {

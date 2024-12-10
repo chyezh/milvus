@@ -179,6 +179,40 @@ func newReplicaAssignmentInfo(replica *Replica, nodeInRG typeutil.UniqueSet) *re
 	}
 }
 
+func newReplicaSQNAssignmentInfo(replica *Replica, nodes typeutil.UniqueSet) *replicaAssignmentInfo {
+	// node in replica can be split into 3 part.
+	rwNodes := make(typeutil.UniqueSet, replica.RWNodesCount())
+	newRONodes := make(typeutil.UniqueSet, replica.RONodesCount())
+	unrecoverableRONodes := make(typeutil.UniqueSet, replica.RONodesCount())
+	recoverableRONodes := make(typeutil.UniqueSet, replica.RONodesCount())
+
+	replica.RangeOverRWNodes(func(nodeID int64) bool {
+		if nodes.Contain(nodeID) {
+			rwNodes.Insert(nodeID)
+		} else {
+			newRONodes.Insert(nodeID)
+		}
+		return true
+	})
+
+	replica.RangeOverRONodes(func(nodeID int64) bool {
+		if nodes.Contain(nodeID) {
+			recoverableRONodes.Insert(nodeID)
+		} else {
+			unrecoverableRONodes.Insert(nodeID)
+		}
+		return true
+	})
+	return &replicaAssignmentInfo{
+		replicaID:            replica.GetID(),
+		expectedNodeCount:    0,
+		rwNodes:              rwNodes,
+		newRONodes:           newRONodes,
+		recoverableRONodes:   recoverableRONodes,
+		unrecoverableRONodes: unrecoverableRONodes,
+	}
+}
+
 type replicaAssignmentInfo struct {
 	replicaID            typeutil.UniqueID
 	expectedNodeCount    int                // expected node count for each replica.
@@ -269,4 +303,22 @@ func (s replicaAssignmentInfoSortByAvailableAndRecoverable) Less(i, j int) bool 
 	// Reach stable sort result by replica id.
 	// Otherwise unstable assignment may cause unnecessary node transfer.
 	return left < right || (left == right && s.replicaAssignmentInfoSorter[i].replicaID < s.replicaAssignmentInfoSorter[j].replicaID)
+}
+
+// newReplicaSQNAssignmentHelper creates a new replicaSQNAssignmentHelper.
+func newReplicaSQNAssignmentHelper(
+	replicas []*Replica,
+	nodes typeutil.UniqueSet,
+) *replicasInSameRGAssignmentHelper {
+	// We use a fake resource group name to create a helper.
+	assignmentInfos := make([]*replicaAssignmentInfo, 0, len(replicas))
+	for _, replica := range replicas {
+		assignmentInfos = append(assignmentInfos, newReplicaAssignmentInfo(replica, nodes))
+	}
+	return &replicasInSameRGAssignmentHelper{
+		rgName:        "",
+		nodesInRG:     nodes,
+		incomingNodes: typeutil.NewUniqueSet(),
+		replicas:      make([]*replicaAssignmentInfo, 0, len(replicas)),
+	}
 }

@@ -23,11 +23,13 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/params"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/util/syncutil"
+	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
 
 // check replica, find read only nodes and remove it from replica if all segment/channel has been moved
@@ -53,8 +55,9 @@ func (ob *ReplicaObserver) Start() {
 		ctx, cancel := context.WithCancel(context.Background())
 		ob.cancel = cancel
 
-		ob.wg.Add(1)
+		ob.wg.Add(2)
 		go ob.schedule(ctx)
+		go ob.scheduleStreamingQN(ctx)
 	})
 }
 
@@ -85,10 +88,35 @@ func (ob *ReplicaObserver) schedule(ctx context.Context) {
 	}
 }
 
+// scheduleStreamingQN is used to check streaming query node in replica
+func (ob *ReplicaObserver) scheduleStreamingQN(ctx context.Context) {
+	defer ob.wg.Done()
+	log.Info("Start streaming query node check replica loop")
+
+	listener := snmanager.StaticStreamingNodeManager.ListenNodeChanged()
+	for {
+		ob.waitNodeChangedOrTimeout(ctx, listener)
+		if ctx.Err() != nil {
+			log.Info("Stop streaming query node check replica observer")
+			return
+		}
+
+		ids := snmanager.StaticStreamingNodeManager.GetStreamingQueryNodeIDs()
+		ob.checkStreamingQueryNodesInReplica(ids)
+	}
+}
+
 func (ob *ReplicaObserver) waitNodeChangedOrTimeout(ctx context.Context, listener *syncutil.VersionedListener) {
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, params.Params.QueryCoordCfg.CheckNodeInReplicaInterval.GetAsDuration(time.Second))
 	defer cancel()
 	listener.Wait(ctxWithTimeout)
+}
+
+func (ob *ReplicaObserver) checkStreamingQueryNodesInReplica(sqNodeIDs typeutil.UniqueSet) {
+	collections := ob.meta.GetAll(context.Background())
+	for _, collectionID := range collections {
+		ob.meta.RecoverSQNodesInCollection(context.Background(), collectionID, sqNodeIDs)
+	}
 }
 
 func (ob *ReplicaObserver) checkNodesInReplica() {

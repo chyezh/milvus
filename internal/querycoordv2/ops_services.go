@@ -227,10 +227,16 @@ func (s *Server) ResumeNode(ctx context.Context, req *querypb.ResumeNodeRequest)
 		return merr.Status(errors.Wrap(err, errMsg)), nil
 	}
 
-	if s.nodeMgr.Get(req.GetNodeID()) == nil {
+	info := s.nodeMgr.Get(req.GetNodeID())
+	if info == nil {
 		err := merr.WrapErrNodeNotFound(req.GetNodeID(), errMsg)
 		log.Warn(errMsg, zap.Error(err))
 		return merr.Status(err), nil
+	}
+
+	if info.IsEmbeddedQueryNodeInStreamingNode() {
+		return merr.Status(
+			merr.WrapErrParameterInvalidMsg("embedded query node in streaming node can't be resumed")), nil
 	}
 
 	s.meta.ResourceManager.HandleNodeUp(ctx, req.GetNodeID())
