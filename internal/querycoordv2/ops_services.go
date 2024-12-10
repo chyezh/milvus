@@ -227,10 +227,16 @@ func (s *Server) ResumeNode(ctx context.Context, req *querypb.ResumeNodeRequest)
 		return merr.Status(errors.Wrap(err, errMsg)), nil
 	}
 
-	if s.nodeMgr.Get(req.GetNodeID()) == nil {
+	info := s.nodeMgr.Get(req.GetNodeID())
+	if info == nil {
 		err := merr.WrapErrNodeNotFound(req.GetNodeID(), errMsg)
 		log.Warn(errMsg, zap.Error(err))
 		return merr.Status(err), nil
+	}
+
+	if info.IsEmbeddedQueryNodeInStreamingNode() {
+		return merr.Status(
+			merr.WrapErrParameterInvalidMsg("embedded query node in streaming node can't be resumed")), nil
 	}
 
 	s.meta.ResourceManager.HandleNodeUp(ctx, req.GetNodeID())
@@ -339,11 +345,15 @@ func (s *Server) TransferChannel(ctx context.Context, req *querypb.TransferChann
 		// when no dst node specified, default to use all other nodes in same
 		dstNodeSet := typeutil.NewUniqueSet()
 		if req.GetToAllNodes() {
-			dstNodeSet.Insert(replica.GetRWNodes()...)
+			dstNodeSet.Insert(replica.GetRWSQNodes()...)
 		} else {
 			// check whether dstNode is healthy
 			if err := s.isStoppingNode(req.GetTargetNodeID()); err != nil {
-				err := merr.WrapErrNodeNotAvailable(srcNode, "the target node is invalid")
+				err := merr.WrapErrNodeNotAvailable(req.GetTargetNodeID(), "the target node is invalid")
+				return merr.Status(err), nil
+			}
+			if replica.ContainRWSQNode(req.GetTargetNodeID()) {
+				err := merr.WrapErrNodeNotAvailable(req.GetTargetNodeID(), "the target node is not in rw streaming query node")
 				return merr.Status(err), nil
 			}
 			dstNodeSet.Insert(req.GetTargetNodeID())
