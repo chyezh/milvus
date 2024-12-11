@@ -345,11 +345,15 @@ func (s *Server) TransferChannel(ctx context.Context, req *querypb.TransferChann
 		// when no dst node specified, default to use all other nodes in same
 		dstNodeSet := typeutil.NewUniqueSet()
 		if req.GetToAllNodes() {
-			dstNodeSet.Insert(replica.GetRWNodes()...)
+			dstNodeSet.Insert(replica.GetRWSQNodes()...)
 		} else {
 			// check whether dstNode is healthy
 			if err := s.isStoppingNode(req.GetTargetNodeID()); err != nil {
-				err := merr.WrapErrNodeNotAvailable(srcNode, "the target node is invalid")
+				err := merr.WrapErrNodeNotAvailable(req.GetTargetNodeID(), "the target node is invalid")
+				return merr.Status(err), nil
+			}
+			if replica.ContainRWSQNode(req.GetTargetNodeID()) {
+				err := merr.WrapErrNodeNotAvailable(req.GetTargetNodeID(), "the target node is not in rw streaming query node")
 				return merr.Status(err), nil
 			}
 			dstNodeSet.Insert(req.GetTargetNodeID())

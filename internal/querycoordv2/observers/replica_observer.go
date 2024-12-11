@@ -113,9 +113,47 @@ func (ob *ReplicaObserver) waitNodeChangedOrTimeout(ctx context.Context, listene
 }
 
 func (ob *ReplicaObserver) checkStreamingQueryNodesInReplica(sqNodeIDs typeutil.UniqueSet) {
+	ctx := context.Background()
+	log := log.Ctx(ctx).WithRateGroup("qcv2.replicaObserver", 1, 60)
 	collections := ob.meta.GetAll(context.Background())
+
 	for _, collectionID := range collections {
 		ob.meta.RecoverSQNodesInCollection(context.Background(), collectionID, sqNodeIDs)
+	}
+
+	for _, collectionID := range collections {
+		replicas := ob.meta.ReplicaManager.GetByCollection(ctx, collectionID)
+		for _, replica := range replicas {
+			roSQNodes := replica.GetROSQNodes()
+			rwSQNodes := replica.GetRWSQNodes()
+			if len(roSQNodes) == 0 {
+				continue
+			}
+			removeNodes := make([]int64, 0, len(roSQNodes))
+			for _, node := range roSQNodes {
+				channels := ob.distMgr.ChannelDistManager.GetByCollectionAndFilter(replica.GetCollectionID(), meta.WithNodeID2Channel(node))
+				segments := ob.distMgr.SegmentDistManager.GetByFilter(meta.WithCollectionID(collectionID), meta.WithNodeID(node))
+				if len(channels) == 0 && len(segments) == 0 {
+					removeNodes = append(removeNodes, node)
+				}
+			}
+			if len(removeNodes) == 0 {
+				continue
+			}
+			logger := log.With(
+				zap.Int64("collectionID", replica.GetCollectionID()),
+				zap.Int64("replicaID", replica.GetID()),
+				zap.Int64s("removedNodes", removeNodes),
+				zap.Int64s("roNodes", roSQNodes),
+				zap.Int64s("rwNodes", rwSQNodes),
+			)
+			if err := ob.meta.ReplicaManager.RemoveSQNode(ctx, replica.GetID(), removeNodes...); err != nil {
+				logger.Warn("fail to remove streaming query node from replica", zap.Error(err))
+				continue
+			}
+			logger.Info("all segment/channel has been removed from ro streaming query node, remove it from replica")
+		}
+
 	}
 }
 
@@ -163,7 +201,7 @@ func (ob *ReplicaObserver) checkNodesInReplica() {
 				logger.Warn("fail to remove node from replica", zap.Error(err))
 				continue
 			}
-			logger.Info("all segment/channel has been removed from ro node, try to remove it from replica")
+			logger.Info("all segment/channel has been removed from ro node, remove it from replica")
 		}
 	}
 }

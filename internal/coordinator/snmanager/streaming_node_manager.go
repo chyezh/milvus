@@ -6,21 +6,24 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer"
+	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/util/syncutil"
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
+	"go.uber.org/zap"
 )
 
 var StaticStreamingNodeManager = newStreamingNodeManager()
 
 func newStreamingNodeManager() *StreamingNodeManager {
 	snm := &StreamingNodeManager{
-		notifier:          syncutil.NewAsyncTaskNotifier[struct{}](),
-		balancer:          syncutil.NewFuture[balancer.Balancer](),
-		cond:              syncutil.NewContextCond(&sync.Mutex{}),
-		latestAssignments: make(map[string]types.PChannelInfoAssigned),
-		streamingNodes:    typeutil.NewUniqueSet(),
+		notifier:            syncutil.NewAsyncTaskNotifier[struct{}](),
+		balancer:            syncutil.NewFuture[balancer.Balancer](),
+		cond:                syncutil.NewContextCond(&sync.Mutex{}),
+		latestAssignments:   make(map[string]types.PChannelInfoAssigned),
+		streamingNodes:      typeutil.NewUniqueSet(),
+		nodeChangedNotifier: syncutil.NewVersionedNotifier(),
 	}
 	go snm.execute()
 	return snm
@@ -92,6 +95,7 @@ func (s *StreamingNodeManager) execute() (err error) {
 				s.streamingNodes.Insert(relation.Node.ServerID)
 			}
 			s.nodeChangedNotifier.NotifyAll()
+			log.Info("streaming node manager updated", zap.Any("assignments", s.latestAssignments), zap.Any("streamingNodes", s.streamingNodes))
 			s.cond.L.Unlock()
 			return nil
 		}); err != nil {

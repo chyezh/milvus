@@ -181,12 +181,12 @@ func newReplicaAssignmentInfo(replica *Replica, nodeInRG typeutil.UniqueSet) *re
 
 func newReplicaSQNAssignmentInfo(replica *Replica, nodes typeutil.UniqueSet) *replicaAssignmentInfo {
 	// node in replica can be split into 3 part.
-	rwNodes := make(typeutil.UniqueSet, replica.RWNodesCount())
-	newRONodes := make(typeutil.UniqueSet, replica.RONodesCount())
-	unrecoverableRONodes := make(typeutil.UniqueSet, replica.RONodesCount())
-	recoverableRONodes := make(typeutil.UniqueSet, replica.RONodesCount())
+	rwNodes := make(typeutil.UniqueSet, replica.RWSQNodesCount())
+	newRONodes := make(typeutil.UniqueSet, replica.ROSQNodesCount())
+	unrecoverableRONodes := make(typeutil.UniqueSet, replica.ROSQNodesCount())
+	recoverableRONodes := make(typeutil.UniqueSet, replica.ROSQNodesCount())
 
-	replica.RangeOverRWNodes(func(nodeID int64) bool {
+	replica.RangeOverRWSQNodes(func(nodeID int64) bool {
 		if nodes.Contain(nodeID) {
 			rwNodes.Insert(nodeID)
 		} else {
@@ -195,7 +195,7 @@ func newReplicaSQNAssignmentInfo(replica *Replica, nodes typeutil.UniqueSet) *re
 		return true
 	})
 
-	replica.RangeOverRONodes(func(nodeID int64) bool {
+	replica.RangeOverROSQNodes(func(nodeID int64) bool {
 		if nodes.Contain(nodeID) {
 			recoverableRONodes.Insert(nodeID)
 		} else {
@@ -270,6 +270,11 @@ func (s *replicaAssignmentInfo) GetRecoverNodesAndIncomingNodeCount() (recoverNo
 	return recoverNodes, incomingNodeCount
 }
 
+// GetUnrecoverableNodes returns the unrecoverable ro nodes for these replica.
+func (s *replicaAssignmentInfo) GetUnrecoverableNodes() []int64 {
+	return s.unrecoverableRONodes.Collect()
+}
+
 // RangeOverAllNodes iterate all nodes in replica.
 func (s *replicaAssignmentInfo) RangeOverAllNodes(f func(nodeID int64)) {
 	ff := func(nodeID int64) bool {
@@ -313,12 +318,23 @@ func newReplicaSQNAssignmentHelper(
 	// We use a fake resource group name to create a helper.
 	assignmentInfos := make([]*replicaAssignmentInfo, 0, len(replicas))
 	for _, replica := range replicas {
-		assignmentInfos = append(assignmentInfos, newReplicaAssignmentInfo(replica, nodes))
+		assignmentInfos = append(assignmentInfos, newReplicaSQNAssignmentInfo(replica, nodes))
 	}
-	return &replicasInSameRGAssignmentHelper{
+	h := &replicasInSameRGAssignmentHelper{
 		rgName:        "",
 		nodesInRG:     nodes,
-		incomingNodes: typeutil.NewUniqueSet(),
-		replicas:      make([]*replicaAssignmentInfo, 0, len(replicas)),
+		incomingNodes: nodes.Clone(),
+		replicas:      assignmentInfos,
 	}
+	// generate incoming nodes for collection.
+	h.RangeOverReplicas(func(assignment *replicaAssignmentInfo) {
+		assignment.RangeOverAllNodes(func(nodeID int64) {
+			if nodes.Contain(nodeID) {
+				h.incomingNodes.Remove(nodeID)
+			}
+		})
+	})
+	// update expected node count for all replicas in same resource group.
+	h.updateExpectedNodeCountForReplicas(len(nodes))
+	return h
 }

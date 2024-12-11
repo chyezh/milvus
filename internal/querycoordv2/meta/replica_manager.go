@@ -483,6 +483,21 @@ func (m *ReplicaManager) RemoveNode(ctx context.Context, replicaID typeutil.Uniq
 	return m.put(ctx, mutableReplica.IntoReplica())
 }
 
+// RemoveSQNode removes the sq node from all replicas of given collection.
+func (m *ReplicaManager) RemoveSQNode(ctx context.Context, replicaID typeutil.UniqueID, nodes ...typeutil.UniqueID) error {
+	m.rwmutex.Lock()
+	defer m.rwmutex.Unlock()
+
+	replica, ok := m.replicas[replicaID]
+	if !ok {
+		return merr.WrapErrReplicaNotFound(replicaID)
+	}
+
+	mutableReplica := replica.CopyForWrite()
+	mutableReplica.RemoveSQNode(nodes...) // ro -> unused
+	return m.put(ctx, mutableReplica.IntoReplica())
+}
+
 func (m *ReplicaManager) GetResourceGroupByCollection(ctx context.Context, collection typeutil.UniqueID) typeutil.Set[string] {
 	replicas := m.GetByCollection(ctx, collection)
 	ret := typeutil.NewSet(lo.Map(replicas, func(r *Replica, _ int) string { return r.GetResourceGroup() })...)

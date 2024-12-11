@@ -80,6 +80,8 @@ func (replica *Replica) GetNodes() []int64 {
 	nodes := make([]int64, 0)
 	nodes = append(nodes, replica.replicaPB.GetRoNodes()...)
 	nodes = append(nodes, replica.replicaPB.GetNodes()...)
+	nodes = append(nodes, replica.replicaPB.GetRwSqNodes()...)
+	nodes = append(nodes, replica.replicaPB.GetRoSqNodes()...)
 	return nodes
 }
 
@@ -117,6 +119,16 @@ func (replica *Replica) RangeOverRONodes(f func(node int64) bool) {
 	replica.roNodes.Range(f)
 }
 
+// RangeOverRWSQNodes iterates over the read and write streaming query nodes of the replica.
+func (replica *Replica) RangeOverRWSQNodes(f func(node int64) bool) {
+	replica.rwSQNodes.Range(f)
+}
+
+// RangeOverROSQNodes iterates over the ro streaming query nodes of the replica.
+func (replica *Replica) RangeOverROSQNodes(f func(node int64) bool) {
+	replica.roSQNodes.Range(f)
+}
+
 // RWNodesCount returns the count of rw nodes of the replica.
 func (replica *Replica) RWNodesCount() int {
 	return replica.rwNodes.Len()
@@ -127,6 +139,16 @@ func (replica *Replica) RONodesCount() int {
 	return replica.roNodes.Len()
 }
 
+// RWSQNodesCount returns the count of rw nodes of the replica.
+func (replica *Replica) RWSQNodesCount() int {
+	return replica.rwSQNodes.Len()
+}
+
+// ROSQNodesCount returns the count of ro nodes of the replica.
+func (replica *Replica) ROSQNodesCount() int {
+	return replica.roSQNodes.Len()
+}
+
 // NodesCount returns the count of rw nodes and ro nodes of the replica.
 func (replica *Replica) NodesCount() int {
 	return replica.rwNodes.Len() + replica.roNodes.Len()
@@ -134,7 +156,7 @@ func (replica *Replica) NodesCount() int {
 
 // Contains checks if the node is in rw nodes of the replica.
 func (replica *Replica) Contains(node int64) bool {
-	return replica.ContainRONode(node) || replica.ContainRWNode(node)
+	return replica.ContainRONode(node) || replica.ContainRWNode(node) || replica.ContainSQNode(node) || replica.ContainRWSQNode(node)
 }
 
 // ContainRONode checks if the node is in ro nodes of the replica.
@@ -193,6 +215,8 @@ func (replica *Replica) CopyForWrite() *mutableReplica {
 			replicaPB: proto.Clone(replica.replicaPB).(*querypb.Replica),
 			rwNodes:   typeutil.NewUniqueSet(replica.replicaPB.Nodes...),
 			roNodes:   typeutil.NewUniqueSet(replica.replicaPB.RoNodes...),
+			rwSQNodes: typeutil.NewUniqueSet(replica.replicaPB.RwSqNodes...),
+			roSQNodes: typeutil.NewUniqueSet(replica.replicaPB.RoSqNodes...),
 		},
 		exclusiveRWNodeToChannel: exclusiveRWNodeToChannel,
 	}
@@ -261,6 +285,14 @@ func (replica *mutableReplica) AddROSQNode(nodes ...int64) {
 	replica.rwSQNodes.Remove(nodes...)
 	replica.replicaPB.RwSqNodes = replica.rwSQNodes.Collect()
 	replica.roSQNodes.Insert(nodes...)
+	replica.replicaPB.RoSqNodes = replica.roSQNodes.Collect()
+}
+
+// RemoveSQNode removes the node from rw sq nodes and ro sq nodes of the replica.
+func (replica *mutableReplica) RemoveSQNode(nodes ...int64) {
+	replica.rwSQNodes.Remove(nodes...)
+	replica.replicaPB.RwSqNodes = replica.rwSQNodes.Collect()
+	replica.roSQNodes.Remove(nodes...)
 	replica.replicaPB.RoSqNodes = replica.roSQNodes.Collect()
 }
 
