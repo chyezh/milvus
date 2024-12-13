@@ -340,7 +340,7 @@ func (s *Server) initDataCoord(ctx context.Context) {
 			log.Info("StreamingNode wait for DataCoord ready")
 			s.dataCoord.Set(dataCoord)
 			return nil
-		})
+		}, retry.AttemptAlways())
 	}()
 }
 
