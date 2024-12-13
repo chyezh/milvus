@@ -11,6 +11,8 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/assignment"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/consumer"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/producer"
+	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/registry"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/balancer/picker"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/lazygrpc"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/resolver"
@@ -21,7 +23,11 @@ import (
 	"github.com/milvus-io/milvus/pkg/util/typeutil"
 )
 
-var errWaitNextBackoff = errors.New("wait for next backoff")
+var (
+	errWaitNextBackoff                   = errors.New("wait for next backoff")
+	_                  producer.Producer = wal.WAL(nil)
+	_                  consumer.Consumer = wal.Scanner(nil)
+)
 
 type handlerClientImpl struct {
 	lifetime         *typeutil.Lifetime
@@ -41,6 +47,16 @@ func (hc *handlerClientImpl) CreateProducer(ctx context.Context, opts *ProducerO
 	defer hc.lifetime.Done()
 
 	p, err := hc.createHandlerAfterStreamingNodeReady(ctx, opts.PChannel, func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
+		// Check if the localWAL is assigned at local
+		localWAL, err := registry.GetAvailableWAL(assign.Channel)
+		if err == nil {
+			return localWAL, nil
+		}
+		// If there's no streaming node depolyment, try to make a remote creation.
+		if !errors.Is(err, registry.ErrNoStreamingNodeDeployed) {
+			return nil, err
+		}
+
 		// Wait for handler service is ready.
 		handlerService, err := hc.service.GetService(ctx)
 		if err != nil {
@@ -64,6 +80,21 @@ func (hc *handlerClientImpl) CreateConsumer(ctx context.Context, opts *ConsumerO
 	defer hc.lifetime.Done()
 
 	c, err := hc.createHandlerAfterStreamingNodeReady(ctx, opts.PChannel, func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
+		// Check if the localWAL is assigned at local
+		localWAL, err := registry.GetAvailableWAL(assign.Channel)
+		if err == nil {
+			return localWAL.Read(ctx, wal.ReadOption{
+				VChannel:       opts.VChannel,
+				DeliverPolicy:  opts.DeliverPolicy,
+				MessageFilter:  opts.DeliverFilters,
+				MesasgeHandler: opts.MessageHandler,
+			})
+		}
+		// If there's no streaming node depolyment, try to make a remote creation.
+		if !errors.Is(err, registry.ErrNoStreamingNodeDeployed) {
+			return nil, err
+		}
+
 		// Wait for handler service is ready.
 		handlerService, err := hc.service.GetService(ctx)
 		if err != nil {
