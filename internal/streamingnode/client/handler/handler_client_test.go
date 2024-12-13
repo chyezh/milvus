@@ -19,7 +19,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/mocks/streaming/proto/mock_streamingpb"
 	"github.com/milvus-io/milvus/pkg/mocks/streaming/util/mock_types"
 	"github.com/milvus-io/milvus/pkg/streaming/proto/streamingpb"
-	"github.com/milvus-io/milvus/pkg/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/streaming/util/message/adaptor"
 	"github.com/milvus-io/milvus/pkg/streaming/util/options"
 	"github.com/milvus-io/milvus/pkg/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
@@ -104,7 +104,7 @@ func TestHandlerClient(t *testing.T) {
 			options.DeliverFilterTimeTickGT(10),
 			options.DeliverFilterTimeTickGTE(10),
 		},
-		MessageHandler: make(message.ChanMessageHandler),
+		MessageHandler: make(adaptor.ChanMessageHandler),
 	})
 	assert.NoError(t, err)
 	assert.NotNil(t, consumer)
