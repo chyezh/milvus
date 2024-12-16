@@ -1,8 +1,12 @@
 package registry
 
 import (
+	"context"
+
 	"github.com/cockroachdb/errors"
+
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/util/syncutil"
@@ -21,6 +25,7 @@ func RegisterLocalWALManager(manager WALManager) {
 		panic("unreachable: streaming node is not enabled but wal setup")
 	}
 	registry.Set(manager)
+	log.Ctx(context.Background()).Info("register local wal manager done")
 }
 
 // GetAvailableWAL returns a available wal instance for the channel.
