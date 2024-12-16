@@ -515,6 +515,53 @@ func (_c *DataCoordCatalog_DropChannelCheckpoint_Call) RunAndReturn(run func(con
 	return _c
 }
 
+// DropCollectionTombstone provides a mock function with given fields: ctx, tombstone
+func (_m *DataCoordCatalog) DropCollectionTombstone(ctx context.Context, tombstone *model.CollectionTombstone) error {
+	ret := _m.Called(ctx, tombstone)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DropCollectionTombstone")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, *model.CollectionTombstone) error); ok {
+		r0 = rf(ctx, tombstone)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// DataCoordCatalog_DropCollectionTombstone_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DropCollectionTombstone'
+type DataCoordCatalog_DropCollectionTombstone_Call struct {
+	*mock.Call
+}
+
+// DropCollectionTombstone is a helper method to define mock.On call
+//   - ctx context.Context
+//   - tombstone *model.CollectionTombstone
+func (_e *DataCoordCatalog_Expecter) DropCollectionTombstone(ctx interface{}, tombstone interface{}) *DataCoordCatalog_DropCollectionTombstone_Call {
+	return &DataCoordCatalog_DropCollectionTombstone_Call{Call: _e.mock.On("DropCollectionTombstone", ctx, tombstone)}
+}
+
+func (_c *DataCoordCatalog_DropCollectionTombstone_Call) Run(run func(ctx context.Context, tombstone *model.CollectionTombstone)) *DataCoordCatalog_DropCollectionTombstone_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(*model.CollectionTombstone))
+	})
+	return _c
+}
+
+func (_c *DataCoordCatalog_DropCollectionTombstone_Call) Return(_a0 error) *DataCoordCatalog_DropCollectionTombstone_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *DataCoordCatalog_DropCollectionTombstone_Call) RunAndReturn(run func(context.Context, *model.CollectionTombstone) error) *DataCoordCatalog_DropCollectionTombstone_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // DropCompactionTask provides a mock function with given fields: ctx, task
 func (_m *DataCoordCatalog) DropCompactionTask(ctx context.Context, task *datapb.CompactionTask) error {
 	ret := _m.Called(ctx, task)
@@ -619,6 +666,10 @@ func (_m *DataCoordCatalog) DropImportJob(ctx context.Context, jobID int64) erro
 		panic("no return value specified for DropImportJob")
 	}
 
+	if len(ret) == 0 {
+		panic("no return value specified for DropImportJob")
+	}
+
 	var r0 error
 	if rf, ok := ret.Get(0).(func(context.Context, int64) error); ok {
 		r0 = rf(ctx, jobID)
@@ -661,6 +712,10 @@ func (_c *DataCoordCatalog_DropImportJob_Call) RunAndReturn(run func(context.Con
 // DropImportTask provides a mock function with given fields: ctx, taskID
 func (_m *DataCoordCatalog) DropImportTask(ctx context.Context, taskID int64) error {
 	ret := _m.Called(ctx, taskID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DropImportTask")
+	}
 
 	if len(ret) == 0 {
 		panic("no return value specified for DropImportTask")
@@ -803,6 +858,10 @@ func (_c *DataCoordCatalog_DropPartitionStatsInfo_Call) RunAndReturn(run func(co
 // DropPreImportTask provides a mock function with given fields: ctx, taskID
 func (_m *DataCoordCatalog) DropPreImportTask(ctx context.Context, taskID int64) error {
 	ret := _m.Called(ctx, taskID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DropPreImportTask")
+	}
 
 	if len(ret) == 0 {
 		panic("no return value specified for DropPreImportTask")
@@ -1214,6 +1273,64 @@ func (_c *DataCoordCatalog_ListChannelCheckpoint_Call) RunAndReturn(run func(con
 	return _c
 }
 
+// ListCollectionTombstone provides a mock function with given fields: ctx
+func (_m *DataCoordCatalog) ListCollectionTombstone(ctx context.Context) ([]*model.CollectionTombstone, error) {
+	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListCollectionTombstone")
+	}
+
+	var r0 []*model.CollectionTombstone
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context) ([]*model.CollectionTombstone, error)); ok {
+		return rf(ctx)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context) []*model.CollectionTombstone); ok {
+		r0 = rf(ctx)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]*model.CollectionTombstone)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// DataCoordCatalog_ListCollectionTombstone_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListCollectionTombstone'
+type DataCoordCatalog_ListCollectionTombstone_Call struct {
+	*mock.Call
+}
+
+// ListCollectionTombstone is a helper method to define mock.On call
+//   - ctx context.Context
+func (_e *DataCoordCatalog_Expecter) ListCollectionTombstone(ctx interface{}) *DataCoordCatalog_ListCollectionTombstone_Call {
+	return &DataCoordCatalog_ListCollectionTombstone_Call{Call: _e.mock.On("ListCollectionTombstone", ctx)}
+}
+
+func (_c *DataCoordCatalog_ListCollectionTombstone_Call) Run(run func(ctx context.Context)) *DataCoordCatalog_ListCollectionTombstone_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context))
+	})
+	return _c
+}
+
+func (_c *DataCoordCatalog_ListCollectionTombstone_Call) Return(_a0 []*model.CollectionTombstone, _a1 error) *DataCoordCatalog_ListCollectionTombstone_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *DataCoordCatalog_ListCollectionTombstone_Call) RunAndReturn(run func(context.Context) ([]*model.CollectionTombstone, error)) *DataCoordCatalog_ListCollectionTombstone_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListCompactionTask provides a mock function with given fields: ctx
 func (_m *DataCoordCatalog) ListCompactionTask(ctx context.Context) ([]*datapb.CompactionTask, error) {
 	ret := _m.Called(ctx)
@@ -1280,6 +1397,10 @@ func (_m *DataCoordCatalog) ListImportJobs(ctx context.Context) ([]*datapb.Impor
 		panic("no return value specified for ListImportJobs")
 	}
 
+	if len(ret) == 0 {
+		panic("no return value specified for ListImportJobs")
+	}
+
 	var r0 []*datapb.ImportJob
 	var r1 error
 	if rf, ok := ret.Get(0).(func(context.Context) ([]*datapb.ImportJob, error)); ok {
@@ -1333,6 +1454,10 @@ func (_c *DataCoordCatalog_ListImportJobs_Call) RunAndReturn(run func(context.Co
 // ListImportTasks provides a mock function with given fields: ctx
 func (_m *DataCoordCatalog) ListImportTasks(ctx context.Context) ([]*datapb.ImportTaskV2, error) {
 	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListImportTasks")
+	}
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListImportTasks")
@@ -1507,6 +1632,10 @@ func (_c *DataCoordCatalog_ListPartitionStatsInfos_Call) RunAndReturn(run func(c
 // ListPreImportTasks provides a mock function with given fields: ctx
 func (_m *DataCoordCatalog) ListPreImportTasks(ctx context.Context) ([]*datapb.PreImportTask, error) {
 	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListPreImportTasks")
+	}
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListPreImportTasks")
@@ -1972,6 +2101,53 @@ func (_c *DataCoordCatalog_SaveChannelCheckpoints_Call) RunAndReturn(run func(co
 	return _c
 }
 
+// SaveCollectionTombstone provides a mock function with given fields: ctx, tombstone
+func (_m *DataCoordCatalog) SaveCollectionTombstone(ctx context.Context, tombstone *model.CollectionTombstone) error {
+	ret := _m.Called(ctx, tombstone)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SaveCollectionTombstone")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, *model.CollectionTombstone) error); ok {
+		r0 = rf(ctx, tombstone)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// DataCoordCatalog_SaveCollectionTombstone_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SaveCollectionTombstone'
+type DataCoordCatalog_SaveCollectionTombstone_Call struct {
+	*mock.Call
+}
+
+// SaveCollectionTombstone is a helper method to define mock.On call
+//   - ctx context.Context
+//   - tombstone *model.CollectionTombstone
+func (_e *DataCoordCatalog_Expecter) SaveCollectionTombstone(ctx interface{}, tombstone interface{}) *DataCoordCatalog_SaveCollectionTombstone_Call {
+	return &DataCoordCatalog_SaveCollectionTombstone_Call{Call: _e.mock.On("SaveCollectionTombstone", ctx, tombstone)}
+}
+
+func (_c *DataCoordCatalog_SaveCollectionTombstone_Call) Run(run func(ctx context.Context, tombstone *model.CollectionTombstone)) *DataCoordCatalog_SaveCollectionTombstone_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(*model.CollectionTombstone))
+	})
+	return _c
+}
+
+func (_c *DataCoordCatalog_SaveCollectionTombstone_Call) Return(_a0 error) *DataCoordCatalog_SaveCollectionTombstone_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *DataCoordCatalog_SaveCollectionTombstone_Call) RunAndReturn(run func(context.Context, *model.CollectionTombstone) error) *DataCoordCatalog_SaveCollectionTombstone_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // SaveCompactionTask provides a mock function with given fields: ctx, task
 func (_m *DataCoordCatalog) SaveCompactionTask(ctx context.Context, task *datapb.CompactionTask) error {
 	ret := _m.Called(ctx, task)
@@ -2124,6 +2300,10 @@ func (_m *DataCoordCatalog) SaveImportJob(ctx context.Context, job *datapb.Impor
 		panic("no return value specified for SaveImportJob")
 	}
 
+	if len(ret) == 0 {
+		panic("no return value specified for SaveImportJob")
+	}
+
 	var r0 error
 	if rf, ok := ret.Get(0).(func(context.Context, *datapb.ImportJob) error); ok {
 		r0 = rf(ctx, job)
@@ -2166,6 +2346,10 @@ func (_c *DataCoordCatalog_SaveImportJob_Call) RunAndReturn(run func(context.Con
 // SaveImportTask provides a mock function with given fields: ctx, task
 func (_m *DataCoordCatalog) SaveImportTask(ctx context.Context, task *datapb.ImportTaskV2) error {
 	ret := _m.Called(ctx, task)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SaveImportTask")
+	}
 
 	if len(ret) == 0 {
 		panic("no return value specified for SaveImportTask")
@@ -2260,6 +2444,10 @@ func (_c *DataCoordCatalog_SavePartitionStatsInfo_Call) RunAndReturn(run func(co
 // SavePreImportTask provides a mock function with given fields: ctx, task
 func (_m *DataCoordCatalog) SavePreImportTask(ctx context.Context, task *datapb.PreImportTask) error {
 	ret := _m.Called(ctx, task)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SavePreImportTask")
+	}
 
 	if len(ret) == 0 {
 		panic("no return value specified for SavePreImportTask")

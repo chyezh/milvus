@@ -60,6 +60,7 @@ packages:
   github.com/milvus-io/milvus/internal/metastore:
     interfaces:
       StreamingCoordCataLog:
+      DataCoordCatalog:
       StreamingNodeCataLog:
   github.com/milvus-io/milvus/internal/util/segcore:
     interfaces:

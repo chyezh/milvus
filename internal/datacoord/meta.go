@@ -38,6 +38,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/proto/workerpb"
+	"github.com/milvus-io/milvus/internal/rootcoord/tombstone"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/segmentutil"
 	"github.com/milvus-io/milvus/pkg/common"
@@ -508,20 +509,24 @@ func (m *meta) GetAllCollectionNumRows() map[int64]int64 {
 
 // AddSegment records segment info, persisting info into kv store
 func (m *meta) AddSegment(ctx context.Context, segment *SegmentInfo) error {
-	log := log.Ctx(ctx).With(zap.String("channel", segment.GetInsertChannel()))
-	log.Info("meta update: adding segment - Start", zap.Int64("segmentID", segment.GetID()))
+	log := log.Ctx(ctx).With(zap.String("channel", segment.GetInsertChannel())).With(zap.Int64("segmentID", segment.GetID()))
+	log.Info("meta update: adding segment - Start")
 	m.Lock()
 	defer m.Unlock()
+
+	if err := tombstone.CollectionTombstone().CheckIfPartitionDrop(segment.CollectionID, segment.PartitionID); err != nil {
+		log.Warn("meta update: adding segment failed", zap.Error(err))
+		return err
+	}
+
 	if err := m.catalog.AddSegment(ctx, segment.SegmentInfo); err != nil {
-		log.Error("meta update: adding segment failed",
-			zap.Int64("segmentID", segment.GetID()),
-			zap.Error(err))
+		log.Error("meta update: adding segment failed", zap.Error(err))
 		return err
 	}
 	m.segments.SetSegment(segment.GetID(), segment)
 
 	metrics.DataCoordNumSegments.WithLabelValues(segment.GetState().String(), segment.GetLevel().String(), getSortStatus(segment.GetIsSorted())).Inc()
-	log.Info("meta update: adding segment - complete", zap.Int64("segmentID", segment.GetID()))
+	log.Info("meta update: adding segment - complete")
 	return nil
 }
 
@@ -641,14 +646,22 @@ func (m *meta) SetState(ctx context.Context, segmentID UniqueID, targetState com
 		}
 		return fmt.Errorf("segment is not exist with ID = %d", segmentID)
 	}
+	if curSegInfo.GetState() == commonpb.SegmentState_Dropped {
+		return fmt.Errorf("set state on a segment has been dropped with ID = %d", segmentID)
+	}
+
 	// Persist segment updates first.
 	clonedSegment := curSegInfo.Clone()
+
 	metricMutation := &segMetricMutation{
 		stateChange: make(map[string]map[string]map[string]int),
 	}
 	if clonedSegment != nil && isSegmentHealthy(clonedSegment) {
 		// Update segment state and prepare segment metric update.
 		updateSegStateAndPrepareMetrics(clonedSegment, targetState, metricMutation)
+		if err := m.checkIfSegmentInfoUpdatable(clonedSegment.SegmentInfo); err != nil {
+			return err
+		}
 		if err := m.catalog.AlterSegments(ctx, []*datapb.SegmentInfo{clonedSegment.SegmentInfo}); err != nil {
 			log.Warn("meta update: setting segment state - failed to alter segments",
 				zap.Int64("segmentID", segmentID),
@@ -693,6 +706,11 @@ func (m *meta) UpdateSegment(segmentID int64, operators ...SegmentOperator) erro
 		return nil
 	}
 
+	if err := m.checkIfSegmentInfoUpdatable(cloned.SegmentInfo); err != nil {
+		log.Warn("meta update: update segment - failed", zap.Int64("segmentID", segmentID), zap.Error(err))
+		return err
+	}
+
 	if err := m.catalog.AlterSegments(m.ctx, []*datapb.SegmentInfo{cloned.SegmentInfo}); err != nil {
 		log.Warn("meta update: update segment - failed to alter segments",
 			zap.Int64("segmentID", segmentID),
@@ -704,6 +722,21 @@ func (m *meta) UpdateSegment(segmentID int64, operators ...SegmentOperator) erro
 
 	log.Info("meta update: update segment - complete",
 		zap.Int64("segmentID", segmentID))
+	return nil
+}
+
+// checkIfSegmentInfoUpdatable checks if the segment info is updatable.
+// If a collection or partition is dropped, the segment info cannot be updated as undropped anymore.
+func (m *meta) checkIfSegmentInfoUpdatable(segmentInfo *datapb.SegmentInfo) error {
+	// if segment state is setup as dropped, then it always can be updated.
+	if segmentInfo.GetState() == commonpb.SegmentState_Dropped {
+		return nil
+	}
+
+	// Check if the partition is dropped.
+	if err := tombstone.CollectionTombstone().CheckIfPartitionDrop(segmentInfo.GetCollectionID(), segmentInfo.GetPartitionID()); err != nil {
+		return errors.Wrapf(err, "with segment id %d", segmentInfo.GetID())
+	}
 	return nil
 }
 
@@ -1073,6 +1106,14 @@ func (m *meta) UpdateSegmentsInfo(ctx context.Context, operators ...UpdateOperat
 		return nil
 	}
 
+	// Precondition: all segments should belong to the same parition
+	// and collection, otherwise the implementation of checker is unsound.
+	for _, segment := range updatePack.segments {
+		if err := m.checkIfSegmentInfoUpdatable(segment.SegmentInfo); err != nil {
+			return err
+		}
+	}
+
 	segments := lo.MapToSlice(updatePack.segments, func(_ int64, segment *SegmentInfo) *datapb.SegmentInfo { return segment.SegmentInfo })
 	increments := lo.Values(updatePack.increments)
 
@@ -1088,6 +1129,41 @@ func (m *meta) UpdateSegmentsInfo(ctx context.Context, operators ...UpdateOperat
 		m.segments.SetSegment(id, s)
 	}
 	log.Ctx(ctx).Info("meta update: update flush segments info - update flush segments info successfully")
+	return nil
+}
+
+func (m *meta) DropSegmentsOfPartition(ctx context.Context, partitionID int64) error {
+	m.Lock()
+	defer m.Unlock()
+
+	// Filter out the segments of the partition to be dropped.
+	metricMutation := &segMetricMutation{
+		stateChange: make(map[string]map[string]map[string]int),
+	}
+	modSegments := make([]*SegmentInfo, 0)
+	segments := make([]*datapb.SegmentInfo, 0)
+	// set existed segments of channel to Dropped
+	for _, seg := range m.segments.segments {
+		if seg.PartitionID != partitionID {
+			continue
+		}
+		clonedSeg := seg.Clone()
+		updateSegStateAndPrepareMetrics(clonedSeg, commonpb.SegmentState_Dropped, metricMutation)
+		modSegments = append(modSegments, clonedSeg)
+		segments = append(segments, clonedSeg.SegmentInfo)
+	}
+
+	// Save dropped segments in batch into meta.
+	err := m.catalog.SaveDroppedSegmentsInBatch(m.ctx, segments)
+	if err != nil {
+		return err
+	}
+
+	// update memory info
+	for _, segment := range modSegments {
+		m.segments.SetSegment(segment.GetID(), segment)
+	}
+	metricMutation.commit()
 	return nil
 }
 
@@ -1514,6 +1590,12 @@ func (m *meta) completeClusterCompactionMutation(t *datapb.CompactionTask, resul
 		return info.SegmentInfo
 	})
 
+	for _, seg := range compactToInfos {
+		if err := m.checkIfSegmentInfoUpdatable(seg); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	binlogs := make([]metastore.BinlogsIncrement, 0)
 	for _, seg := range compactToInfos {
 		binlogs = append(binlogs, metastore.BinlogsIncrement{Segment: seg})
@@ -1615,6 +1697,12 @@ func (m *meta) completeMixCompactionMutation(t *datapb.CompactionTask, result *d
 		return info.SegmentInfo
 	})
 
+	for _, seg := range compactToInfos {
+		if err := m.checkIfSegmentInfoUpdatable(seg); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	binlogs := make([]metastore.BinlogsIncrement, 0)
 	for _, seg := range compactToInfos {
 		binlogs = append(binlogs, metastore.BinlogsIncrement{Segment: seg})
@@ -1697,6 +1785,10 @@ func (m *meta) UpdateChannelCheckpoint(ctx context.Context, vChannel string, pos
 	if pos == nil || pos.GetMsgID() == nil {
 		return fmt.Errorf("channelCP is nil, vChannel=%s", vChannel)
 	}
+	if err := tombstone.CollectionTombstone().CheckIfVChannelDropped(vChannel); err != nil {
+		log.Warn("channel has been dropped, ignore check point update", zap.String("vChannel", vChannel), zap.Any("pos", pos))
+		return nil
+	}
 
 	m.channelCPs.Lock()
 	defer m.channelCPs.Unlock()
@@ -1754,6 +1846,11 @@ func (m *meta) UpdateChannelCheckpoints(ctx context.Context, positions []*msgpb.
 		}
 		vChannel := pos.GetChannelName()
 		oldPosition, ok := m.channelCPs.checkpoints[vChannel]
+
+		if err := tombstone.CollectionTombstone().CheckIfVChannelDropped(vChannel); err != nil {
+			log.Warn("channel has been dropped, ignore check point updates", zap.String("vChannel", vChannel), zap.Any("pos", pos))
+			return false
+		}
 		return !ok || oldPosition.Timestamp < pos.Timestamp
 	})
 	err := m.catalog.SaveChannelCheckpoints(ctx, toUpdates)
@@ -1997,6 +2094,11 @@ func (m *meta) CleanPartitionStatsInfo(ctx context.Context, info *datapb.Partiti
 func (m *meta) SaveStatsResultSegment(oldSegmentID int64, result *workerpb.StatsResult) (*segMetricMutation, error) {
 	m.Lock()
 	defer m.Unlock()
+
+	if err := tombstone.CollectionTombstone().CheckIfPartitionDrop(result.GetCollectionID(), result.GetPartitionID()); err != nil {
+		log.Ctx(m.ctx).Warn("partition is dropped", zap.Int64("collectionID", result.GetCollectionID()), zap.Int64("partitionID", result.GetPartitionID()))
+		return nil, err
+	}
 
 	log := log.Ctx(m.ctx).With(zap.Int64("collectionID", result.GetCollectionID()),
 		zap.Int64("partitionID", result.GetPartitionID()),

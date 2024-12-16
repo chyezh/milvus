@@ -31,6 +31,10 @@ func (_m *QueryCoordCatalog) GetCollectionTargets(ctx context.Context) (map[int6
 		panic("no return value specified for GetCollectionTargets")
 	}
 
+	if len(ret) == 0 {
+		panic("no return value specified for GetCollectionTargets")
+	}
+
 	var r0 map[int64]*querypb.CollectionTarget
 	var r1 error
 	if rf, ok := ret.Get(0).(func(context.Context) (map[int64]*querypb.CollectionTarget, error)); ok {
@@ -84,6 +88,10 @@ func (_c *QueryCoordCatalog_GetCollectionTargets_Call) RunAndReturn(run func(con
 // GetCollections provides a mock function with given fields: ctx
 func (_m *QueryCoordCatalog) GetCollections(ctx context.Context) ([]*querypb.CollectionLoadInfo, error) {
 	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetCollections")
+	}
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetCollections")
@@ -147,6 +155,10 @@ func (_m *QueryCoordCatalog) GetPartitions(ctx context.Context) (map[int64][]*qu
 		panic("no return value specified for GetPartitions")
 	}
 
+	if len(ret) == 0 {
+		panic("no return value specified for GetPartitions")
+	}
+
 	var r0 map[int64][]*querypb.PartitionLoadInfo
 	var r1 error
 	if rf, ok := ret.Get(0).(func(context.Context) (map[int64][]*querypb.PartitionLoadInfo, error)); ok {
@@ -200,6 +212,10 @@ func (_c *QueryCoordCatalog_GetPartitions_Call) RunAndReturn(run func(context.Co
 // GetReplicas provides a mock function with given fields: ctx
 func (_m *QueryCoordCatalog) GetReplicas(ctx context.Context) ([]*querypb.Replica, error) {
 	ret := _m.Called(ctx)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetReplicas")
+	}
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetReplicas")
@@ -263,6 +279,10 @@ func (_m *QueryCoordCatalog) GetResourceGroups(ctx context.Context) ([]*querypb.
 		panic("no return value specified for GetResourceGroups")
 	}
 
+	if len(ret) == 0 {
+		panic("no return value specified for GetResourceGroups")
+	}
+
 	var r0 []*querypb.ResourceGroup
 	var r1 error
 	if rf, ok := ret.Get(0).(func(context.Context) ([]*querypb.ResourceGroup, error)); ok {
@@ -316,6 +336,10 @@ func (_c *QueryCoordCatalog_GetResourceGroups_Call) RunAndReturn(run func(contex
 // ReleaseCollection provides a mock function with given fields: ctx, collection
 func (_m *QueryCoordCatalog) ReleaseCollection(ctx context.Context, collection int64) error {
 	ret := _m.Called(ctx, collection)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReleaseCollection")
+	}
 
 	if len(ret) == 0 {
 		panic("no return value specified for ReleaseCollection")
@@ -492,6 +516,10 @@ func (_m *QueryCoordCatalog) ReleaseReplicas(ctx context.Context, collectionID i
 		panic("no return value specified for ReleaseReplicas")
 	}
 
+	if len(ret) == 0 {
+		panic("no return value specified for ReleaseReplicas")
+	}
+
 	var r0 error
 	if rf, ok := ret.Get(0).(func(context.Context, int64) error); ok {
 		r0 = rf(ctx, collectionID)
@@ -539,6 +567,10 @@ func (_m *QueryCoordCatalog) RemoveCollectionTarget(ctx context.Context, collect
 		panic("no return value specified for RemoveCollectionTarget")
 	}
 
+	if len(ret) == 0 {
+		panic("no return value specified for RemoveCollectionTarget")
+	}
+
 	var r0 error
 	if rf, ok := ret.Get(0).(func(context.Context, int64) error); ok {
 		r0 = rf(ctx, collectionID)
@@ -581,6 +613,10 @@ func (_c *QueryCoordCatalog_RemoveCollectionTarget_Call) RunAndReturn(run func(c
 // RemoveResourceGroup provides a mock function with given fields: ctx, rgName
 func (_m *QueryCoordCatalog) RemoveResourceGroup(ctx context.Context, rgName string) error {
 	ret := _m.Called(ctx, rgName)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RemoveResourceGroup")
+	}
 
 	if len(ret) == 0 {
 		panic("no return value specified for RemoveResourceGroup")

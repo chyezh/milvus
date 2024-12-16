@@ -2080,7 +2080,7 @@ func (s *RootCoordSuite) TestRestore() {
 	gc := mockrootcoord.NewGarbageCollector(s.T())
 
 	finishCh := make(chan struct{}, 4)
-	gc.EXPECT().ReDropPartition(mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Once().
+	gc.EXPECT().ReDropPartition(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Once().
 		Run(func(args mock.Arguments) {
 			finishCh <- struct{}{}
 		})
@@ -2088,7 +2088,7 @@ func (s *RootCoordSuite) TestRestore() {
 		Run(func(args mock.Arguments) {
 			finishCh <- struct{}{}
 		})
-	gc.EXPECT().ReDropCollection(mock.Anything, mock.Anything).Once().
+	gc.EXPECT().ReDropCollection(mock.Anything, mock.Anything, mock.Anything).Once().
 		Run(func(args mock.Arguments) {
 			finishCh <- struct{}{}
 		})
