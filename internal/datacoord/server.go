@@ -698,9 +698,6 @@ func (s *Server) initMeta(chunkManager storage.ChunkManager) error {
 	reloadEtcdFn := func() error {
 		var err error
 		catalog := datacoord.NewCatalog(s.kv, chunkManager.RootPath(), s.metaRootPath)
-		if err := tombstone.RecoverCollectionTombstone(s.ctx, catalog); err != nil {
-			return err
-		}
 
 		s.meta, err = newMeta(s.ctx, catalog, chunkManager)
 		if err != nil {

@@ -976,13 +976,6 @@ func Test_createCollectionTask_Execute(t *testing.T) {
 		schema := &schemapb.CollectionSchema{Name: "", Fields: []*schemapb.FieldSchema{{}}}
 		task := &createCollectionTask{
 			baseTask: newBaseTask(context.Background(), core),
-			Req: &milvuspb.CreateCollectionRequest{
-				Base:           &commonpb.MsgBase{MsgType: commonpb.MsgType_CreateCollection},
-				CollectionName: "",
-				Schema:         []byte{},
-				ShardsNum:      int32(shardNum),
-			},
-			schema: schema,
 			channels: collectionChannels{
 				physicalChannels: pchans,
 				virtualChannels:  []string{funcutil.GenRandomStr(), funcutil.GenRandomStr()},

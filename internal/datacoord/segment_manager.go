@@ -684,7 +684,7 @@ func (s *SegmentManager) DropSegmentsOfPartition(ctx context.Context, partitionI
 
 	validSegments := make([]int64, 0, len(s.segments))
 	for _, sid := range s.segments {
-		segment := s.meta.GetHealthySegment(sid)
+		segment := s.meta.GetHealthySegment(ctx, sid)
 		if segment == nil {
 			continue
 		}

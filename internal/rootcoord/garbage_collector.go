@@ -55,7 +55,7 @@ func (c *bgGarbageCollector) ReDropCollection(collMeta *model.Collection, dbName
 	c.s.chanTimeTick.addDmlChannels(collMeta.PhysicalChannelNames...)
 
 	// meta cache of all aliases should also be cleaned.
-	aliases := c.s.meta.ListAliasesByID(collMeta.CollectionID)
+	aliases := c.s.meta.ListAliasesByID(context.Background(), collMeta.CollectionID)
 
 	task := newDropCollectionRedoTask(c.s, collMeta, dbName, aliases, ts, true)
 	if err := task.Execute(context.Background()); err != nil {

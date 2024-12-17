@@ -626,7 +626,7 @@ func (s *Server) dropCollection(ctx context.Context, req *datapb.DropCollectionR
 
 	// release all segments of the collection.
 	for _, channel := range req.GetVchannelNames() {
-		err := s.meta.UpdateDropChannelSegmentInfo(channel, nil)
+		err := s.meta.UpdateDropChannelSegmentInfo(ctx, channel, nil)
 		if err != nil {
 			log.Error("Update Drop Channel segment info failed", zap.String("channel", channel), zap.Error(err))
 			return err

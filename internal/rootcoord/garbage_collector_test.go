@@ -45,7 +45,7 @@ func TestGarbageCollectorCtx_ReDropCollection(t *testing.T) {
 	}()
 	confirmGCInterval = 0
 	meta := mockrootcoord.NewIMetaTable(t)
-	meta.EXPECT().ListAliasesByID(mock.Anything).Return(nil).Maybe()
+	meta.EXPECT().ListAliasesByID(mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	t.Run("failed to release collection", func(t *testing.T) {
 		broker := newMockBroker()
@@ -159,7 +159,7 @@ func TestGarbageCollectorCtx_ReDropCollection(t *testing.T) {
 				dropMetaChan <- struct{}{}
 			}).
 			Return(errors.New("error mock RemoveCollection"))
-		meta.EXPECT().ListAliasesByID(mock.Anything).Return(nil)
+		meta.EXPECT().ListAliasesByID(mock.Anything, mock.Anything).Return(nil)
 		ticker := newTickerWithMockNormalStream()
 		tsoAllocator := newMockTsoAllocator()
 		tsoAllocator.GenerateTSOF = func(count uint32) (uint64, error) {
@@ -212,7 +212,7 @@ func TestGarbageCollectorCtx_ReDropCollection(t *testing.T) {
 		meta := mockrootcoord.NewIMetaTable(t)
 		removeCollectionCalled := false
 		removeCollectionChan := make(chan struct{}, 1)
-		meta.EXPECT().ListAliasesByID(mock.Anything).Return(nil)
+		meta.EXPECT().ListAliasesByID(mock.Anything, mock.Anything).Return(nil)
 		meta.On("RemoveCollection",
 			mock.Anything, // context.Context
 			mock.AnythingOfType("int64"),

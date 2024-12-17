@@ -168,7 +168,6 @@ func (m *bufferManager) Register(channel string, metacache metacache.MetaCache, 
 
 	_, loaded := m.buffers.GetOrInsert(channel, buf)
 	if loaded {
-		buf.Close(context.Background(), false)
 		return merr.WrapErrChannelReduplicate(channel)
 	}
 	return nil
