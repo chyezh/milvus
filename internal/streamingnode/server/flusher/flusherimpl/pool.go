@@ -23,18 +23,18 @@ import (
 )
 
 var (
-	execPool         *conc.Pool[any]
+	execPool         *conc.Pool[*dataService]
 	execPoolInitOnce sync.Once
 )
 
 func initExecPool() {
-	execPool = conc.NewPool[any](
+	execPool = conc.NewPool[*dataService](
 		128,
 		conc.WithPreAlloc(true),
 	)
 }
 
-func GetExecPool() *conc.Pool[any] {
+func GetExecPool() *conc.Pool[*dataService] {
 	execPoolInitOnce.Do(initExecPool)
 	return execPool
 }

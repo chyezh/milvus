@@ -93,14 +93,6 @@ func (f *flusherImpl) RegisterPChannel(pchannel string, wal wal.WAL) error {
 	return nil
 }
 
-func (f *flusherImpl) RegisterVChannel(vchannel string, wal wal.WAL) {
-	_, ok := f.channelLifetimes.GetOrInsert(vchannel, NewChannelLifetime(f, vchannel, wal))
-	if !ok {
-		log.Info("flusher register vchannel done", zap.String("vchannel", vchannel))
-	}
-	f.notify()
-}
-
 func (f *flusherImpl) UnregisterPChannel(pchannel string) {
 	f.channelLifetimes.Range(func(vchannel string, _ ChannelLifetime) bool {
 		if funcutil.ToPhysicalChannel(vchannel) == pchannel {
@@ -108,12 +100,6 @@ func (f *flusherImpl) UnregisterPChannel(pchannel string) {
 		}
 		return true
 	})
-}
-
-func (f *flusherImpl) UnregisterVChannel(vchannel string) {
-	if clt, ok := f.channelLifetimes.GetAndRemove(vchannel); ok {
-		clt.Cancel()
-	}
 }
 
 func (f *flusherImpl) notify() {

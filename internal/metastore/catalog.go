@@ -214,7 +214,18 @@ type StreamingCoordCataLog interface {
 
 // StreamingNodeCataLog is the interface for streamingnode catalog
 type StreamingNodeCataLog interface {
+	// WAL select the wal related recovery infos.
+	// Which must give the pchannel name.
+
+	// ListSegmentAssignment list all segment assignments for the wal.
 	ListSegmentAssignment(ctx context.Context, pChannelName string) ([]*streamingpb.SegmentAssignmentMeta, error)
 
+	// SaveSegmentAssignments save the segment assignments for the wal.
 	SaveSegmentAssignments(ctx context.Context, pChannelName string, infos []*streamingpb.SegmentAssignmentMeta) error
+
+	// GetConsumeCheckpoint gets the consuming checkpoint of the wal.
+	GetConsumeCheckpoint(ctx context.Context, pChannelName string) (*streamingpb.WALCheckpoint, error)
+
+	// SaveConsumeCheckpoint saves the consuming checkpoint of the wal.
+	SaveConsumeCheckpoint(ctx context.Context, pChannelName string, checkpoint *streamingpb.WALCheckpoint) error
 }

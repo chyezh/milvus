@@ -54,20 +54,18 @@ type ChannelLifetime interface {
 }
 
 type channelLifetime struct {
-	mu       sync.Mutex
-	state    LifetimeState
-	vchannel string
-	wal      wal.WAL
-	scanner  wal.Scanner
-	f        *flusherImpl
+	mu    sync.Mutex
+	state LifetimeState
+	wal   wal.WAL
+	f     *flusherImpl
 }
 
-func NewChannelLifetime(f *flusherImpl, vchannel string, wal wal.WAL) ChannelLifetime {
+func NewChannelLifetime(f *flusherImpl, wal wal.WAL) ChannelLifetime {
 	return &channelLifetime{
-		state:    Pending,
-		f:        f,
-		vchannel: vchannel,
-		wal:      wal,
+		mu:    sync.Mutex{},
+		state: Pending,
+		wal:   wal,
+		f:     f,
 	}
 }
 

@@ -3,7 +3,6 @@ package adaptor
 import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/ddl"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/redo"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/segment"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick"
@@ -36,6 +35,5 @@ func (b builderAdaptorImpl) Build() (wal.Opener, error) {
 		redo.NewInterceptorBuilder(),
 		timetick.NewInterceptorBuilder(),
 		segment.NewInterceptorBuilder(),
-		ddl.NewInterceptorBuilder(),
 	}), nil
 }
