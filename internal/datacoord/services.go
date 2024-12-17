@@ -648,7 +648,9 @@ func (s *Server) dropPartition(ctx context.Context, req *datapb.DropPartitionReq
 		zap.Int64("partitionID", req.GetPartitionId()))
 
 	// release all segments of the partition.
-	s.segmentManager.DropSegmentsOfPartition(ctx, req.GetPartitionId())
+	for _, vchannel := range req.Vchannels {
+		s.segmentManager.DropSegmentsOfPartition(ctx, vchannel, req.GetPartitionId())
+	}
 	return s.meta.DropSegmentsOfPartition(ctx, req.GetPartitionId())
 }
 

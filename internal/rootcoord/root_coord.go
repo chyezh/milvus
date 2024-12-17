@@ -46,6 +46,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
 	"github.com/milvus-io/milvus/internal/proto/proxypb"
 	"github.com/milvus-io/milvus/internal/proto/rootcoordpb"
+	"github.com/milvus-io/milvus/internal/rootcoord/tombstone"
 	tso2 "github.com/milvus-io/milvus/internal/tso"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/dependency"
@@ -384,6 +385,7 @@ func (c *Core) initMetaTable() error {
 			return err
 		}
 
+		tombstone.InitCollectionTombstone(c.meta.(*MetaTable))
 		return nil
 	}
 

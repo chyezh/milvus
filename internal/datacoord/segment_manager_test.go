@@ -886,7 +886,13 @@ func TestSegmentManager_DropSegmentsOfChannel(t *testing.T) {
 }
 
 func TestSegmentManager_DropSegmentOfPartition(t *testing.T) {
+	channel2Growing := typeutil.NewConcurrentMap[string, typeutil.UniqueSet]()
+	channel2Growing.Insert("ch1", typeutil.NewUniqueSet(1, 2))
+	channel2Sealed := typeutil.NewConcurrentMap[string, typeutil.UniqueSet]()
+	channel2Sealed.Insert("ch2", typeutil.NewUniqueSet(3))
+
 	s := &SegmentManager{
+		channelLock: lock.NewKeyLock[string](),
 		meta: &meta{
 			segments: &SegmentsInfo{
 				segments: map[int64]*SegmentInfo{
@@ -902,7 +908,7 @@ func TestSegmentManager_DropSegmentOfPartition(t *testing.T) {
 					2: {
 						SegmentInfo: &datapb.SegmentInfo{
 							ID:            2,
-							InsertChannel: "ch2",
+							InsertChannel: "ch1",
 							PartitionID:   1,
 							State:         commonpb.SegmentState_Growing,
 						},
@@ -913,17 +919,27 @@ func TestSegmentManager_DropSegmentOfPartition(t *testing.T) {
 							ID:            3,
 							InsertChannel: "ch3",
 							PartitionID:   1,
-							State:         commonpb.SegmentState_Growing,
+							State:         commonpb.SegmentState_Sealed,
 						},
 						allocations: []*Allocation{},
 					},
 				},
 			},
 		},
-		segments: []UniqueID{1, 2, 3},
+		channel2Growing: channel2Growing,
+		channel2Sealed:  channel2Sealed,
 	}
-	s.DropSegmentsOfPartition(context.Background(), 1)
+
+	s.DropSegmentsOfPartition(context.Background(), "ch1", 1)
 	assert.NotNil(t, s.meta.GetSegment(context.TODO(), 1).allocations)
 	assert.Nil(t, s.meta.GetSegment(context.TODO(), 2).allocations)
-	assert.Nil(t, s.meta.GetSegment(context.TODO(), 3).allocations)
+	assert.NotNil(t, s.meta.GetSegment(context.TODO(), 3).allocations)
+	growing, ok := s.channel2Growing.Get("ch1")
+	assert.True(t, ok)
+	assert.Equal(t, len(growing), 1)
+
+	s.DropSegmentsOfPartition(context.Background(), "ch3", 1)
+	sealed, ok := s.channel2Sealed.Get("ch3")
+	assert.True(t, ok)
+	assert.Equal(t, len(sealed), 0)
 }

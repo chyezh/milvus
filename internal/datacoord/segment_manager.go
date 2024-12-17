@@ -92,7 +92,7 @@ type Manager interface {
 	DropSegmentsOfChannel(ctx context.Context, channel string)
 
 	// DropSegmentsOfPartition drops all segments in a partition
-	DropSegmentsOfPartition(ctx context.Context, partitionID UniqueID)
+	DropSegmentsOfPartition(ctx context.Context, channel string, partitionID UniqueID)
 }
 
 // Allocation records the allocation info
@@ -666,7 +666,6 @@ func (s *SegmentManager) DropSegmentsOfChannel(ctx context.Context, channel stri
 		segment := s.meta.GetHealthySegment(ctx, sid)
 		if segment == nil {
 			log.Warn("failed to get segment, remove it", zap.String("channel", channel), zap.Int64("segmentID", sid))
-			growing.Remove(sid)
 			return true
 		}
 		s.meta.SetAllocations(sid, nil)
@@ -678,24 +677,40 @@ func (s *SegmentManager) DropSegmentsOfChannel(ctx context.Context, channel stri
 	s.channel2Growing.Remove(channel)
 }
 
-func (s *SegmentManager) DropSegmentsOfPartition(ctx context.Context, partitionID UniqueID) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *SegmentManager) DropSegmentsOfPartition(ctx context.Context, channel string, partitionID UniqueID) {
+	s.channelLock.Lock(channel)
+	defer s.channelLock.Unlock(channel)
 
-	validSegments := make([]int64, 0, len(s.segments))
-	for _, sid := range s.segments {
-		segment := s.meta.GetHealthySegment(ctx, sid)
-		if segment == nil {
-			continue
-		}
-		if segment.PartitionID != partitionID {
-			validSegments = append(validSegments, sid)
-			continue
-		}
-		s.meta.SetAllocations(sid, nil)
-		for _, allocation := range segment.allocations {
-			putAllocation(allocation)
-		}
+	if growing, ok := s.channel2Growing.Get(channel); ok {
+		growing.Range(func(sid int64) bool {
+			segment := s.meta.GetHealthySegment(ctx, sid)
+			if segment == nil {
+				return true
+			}
+			if segment.PartitionID != partitionID {
+				return true
+			}
+
+			s.meta.SetAllocations(sid, nil)
+			for _, allocation := range segment.allocations {
+				putAllocation(allocation)
+			}
+			growing.Remove(sid)
+			return true
+		})
 	}
-	s.segments = validSegments
+
+	if sealed, ok := s.channel2Sealed.Get(channel); ok {
+		sealed.Range(func(sid int64) bool {
+			segment := s.meta.GetHealthySegment(ctx, sid)
+			if segment == nil {
+				return true
+			}
+			if segment.PartitionID != partitionID {
+				return true
+			}
+			sealed.Remove(sid)
+			return true
+		})
+	}
 }

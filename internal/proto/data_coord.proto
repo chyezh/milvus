@@ -718,7 +718,8 @@ message DropCollectionResponse {
 
 message DropPartitionRequest {
   int64 collection_id = 1;
-  int64 partition_id = 2;
+  repeated string vchannels = 2;
+  int64 partition_id = 3;
 }
 
 message DropPartitionResponse {
