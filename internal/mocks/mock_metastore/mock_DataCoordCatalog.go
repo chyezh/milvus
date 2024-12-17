@@ -515,53 +515,6 @@ func (_c *MockDataCoordCatalog_DropChannelCheckpoint_Call) RunAndReturn(run func
 	return _c
 }
 
-// DropCollectionTombstone provides a mock function with given fields: ctx, tombstone
-func (_m *MockDataCoordCatalog) DropCollectionTombstone(ctx context.Context, tombstone *model.CollectionTombstone) error {
-	ret := _m.Called(ctx, tombstone)
-
-	if len(ret) == 0 {
-		panic("no return value specified for DropCollectionTombstone")
-	}
-
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *model.CollectionTombstone) error); ok {
-		r0 = rf(ctx, tombstone)
-	} else {
-		r0 = ret.Error(0)
-	}
-
-	return r0
-}
-
-// MockDataCoordCatalog_DropCollectionTombstone_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DropCollectionTombstone'
-type MockDataCoordCatalog_DropCollectionTombstone_Call struct {
-	*mock.Call
-}
-
-// DropCollectionTombstone is a helper method to define mock.On call
-//   - ctx context.Context
-//   - tombstone *model.CollectionTombstone
-func (_e *MockDataCoordCatalog_Expecter) DropCollectionTombstone(ctx interface{}, tombstone interface{}) *MockDataCoordCatalog_DropCollectionTombstone_Call {
-	return &MockDataCoordCatalog_DropCollectionTombstone_Call{Call: _e.mock.On("DropCollectionTombstone", ctx, tombstone)}
-}
-
-func (_c *MockDataCoordCatalog_DropCollectionTombstone_Call) Run(run func(ctx context.Context, tombstone *model.CollectionTombstone)) *MockDataCoordCatalog_DropCollectionTombstone_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(*model.CollectionTombstone))
-	})
-	return _c
-}
-
-func (_c *MockDataCoordCatalog_DropCollectionTombstone_Call) Return(_a0 error) *MockDataCoordCatalog_DropCollectionTombstone_Call {
-	_c.Call.Return(_a0)
-	return _c
-}
-
-func (_c *MockDataCoordCatalog_DropCollectionTombstone_Call) RunAndReturn(run func(context.Context, *model.CollectionTombstone) error) *MockDataCoordCatalog_DropCollectionTombstone_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // DropCompactionTask provides a mock function with given fields: ctx, task
 func (_m *MockDataCoordCatalog) DropCompactionTask(ctx context.Context, task *datapb.CompactionTask) error {
 	ret := _m.Called(ctx, task)
@@ -658,17 +611,17 @@ func (_c *MockDataCoordCatalog_DropCurrentPartitionStatsVersion_Call) RunAndRetu
 	return _c
 }
 
-// DropImportJob provides a mock function with given fields: jobID
-func (_m *MockDataCoordCatalog) DropImportJob(jobID int64) error {
-	ret := _m.Called(jobID)
+// DropImportJob provides a mock function with given fields: ctx, jobID
+func (_m *MockDataCoordCatalog) DropImportJob(ctx context.Context, jobID int64) error {
+	ret := _m.Called(ctx, jobID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for DropImportJob")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(int64) error); ok {
-		r0 = rf(jobID)
+	if rf, ok := ret.Get(0).(func(context.Context, int64) error); ok {
+		r0 = rf(ctx, jobID)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -682,14 +635,15 @@ type MockDataCoordCatalog_DropImportJob_Call struct {
 }
 
 // DropImportJob is a helper method to define mock.On call
+//   - ctx context.Context
 //   - jobID int64
-func (_e *MockDataCoordCatalog_Expecter) DropImportJob(jobID interface{}) *MockDataCoordCatalog_DropImportJob_Call {
-	return &MockDataCoordCatalog_DropImportJob_Call{Call: _e.mock.On("DropImportJob", jobID)}
+func (_e *MockDataCoordCatalog_Expecter) DropImportJob(ctx interface{}, jobID interface{}) *MockDataCoordCatalog_DropImportJob_Call {
+	return &MockDataCoordCatalog_DropImportJob_Call{Call: _e.mock.On("DropImportJob", ctx, jobID)}
 }
 
-func (_c *MockDataCoordCatalog_DropImportJob_Call) Run(run func(jobID int64)) *MockDataCoordCatalog_DropImportJob_Call {
+func (_c *MockDataCoordCatalog_DropImportJob_Call) Run(run func(ctx context.Context, jobID int64)) *MockDataCoordCatalog_DropImportJob_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(int64))
+		run(args[0].(context.Context), args[1].(int64))
 	})
 	return _c
 }
@@ -699,22 +653,22 @@ func (_c *MockDataCoordCatalog_DropImportJob_Call) Return(_a0 error) *MockDataCo
 	return _c
 }
 
-func (_c *MockDataCoordCatalog_DropImportJob_Call) RunAndReturn(run func(int64) error) *MockDataCoordCatalog_DropImportJob_Call {
+func (_c *MockDataCoordCatalog_DropImportJob_Call) RunAndReturn(run func(context.Context, int64) error) *MockDataCoordCatalog_DropImportJob_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// DropImportTask provides a mock function with given fields: taskID
-func (_m *MockDataCoordCatalog) DropImportTask(taskID int64) error {
-	ret := _m.Called(taskID)
+// DropImportTask provides a mock function with given fields: ctx, taskID
+func (_m *MockDataCoordCatalog) DropImportTask(ctx context.Context, taskID int64) error {
+	ret := _m.Called(ctx, taskID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for DropImportTask")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(int64) error); ok {
-		r0 = rf(taskID)
+	if rf, ok := ret.Get(0).(func(context.Context, int64) error); ok {
+		r0 = rf(ctx, taskID)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -728,14 +682,15 @@ type MockDataCoordCatalog_DropImportTask_Call struct {
 }
 
 // DropImportTask is a helper method to define mock.On call
+//   - ctx context.Context
 //   - taskID int64
-func (_e *MockDataCoordCatalog_Expecter) DropImportTask(taskID interface{}) *MockDataCoordCatalog_DropImportTask_Call {
-	return &MockDataCoordCatalog_DropImportTask_Call{Call: _e.mock.On("DropImportTask", taskID)}
+func (_e *MockDataCoordCatalog_Expecter) DropImportTask(ctx interface{}, taskID interface{}) *MockDataCoordCatalog_DropImportTask_Call {
+	return &MockDataCoordCatalog_DropImportTask_Call{Call: _e.mock.On("DropImportTask", ctx, taskID)}
 }
 
-func (_c *MockDataCoordCatalog_DropImportTask_Call) Run(run func(taskID int64)) *MockDataCoordCatalog_DropImportTask_Call {
+func (_c *MockDataCoordCatalog_DropImportTask_Call) Run(run func(ctx context.Context, taskID int64)) *MockDataCoordCatalog_DropImportTask_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(int64))
+		run(args[0].(context.Context), args[1].(int64))
 	})
 	return _c
 }
@@ -745,7 +700,7 @@ func (_c *MockDataCoordCatalog_DropImportTask_Call) Return(_a0 error) *MockDataC
 	return _c
 }
 
-func (_c *MockDataCoordCatalog_DropImportTask_Call) RunAndReturn(run func(int64) error) *MockDataCoordCatalog_DropImportTask_Call {
+func (_c *MockDataCoordCatalog_DropImportTask_Call) RunAndReturn(run func(context.Context, int64) error) *MockDataCoordCatalog_DropImportTask_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -845,17 +800,17 @@ func (_c *MockDataCoordCatalog_DropPartitionStatsInfo_Call) RunAndReturn(run fun
 	return _c
 }
 
-// DropPreImportTask provides a mock function with given fields: taskID
-func (_m *MockDataCoordCatalog) DropPreImportTask(taskID int64) error {
-	ret := _m.Called(taskID)
+// DropPreImportTask provides a mock function with given fields: ctx, taskID
+func (_m *MockDataCoordCatalog) DropPreImportTask(ctx context.Context, taskID int64) error {
+	ret := _m.Called(ctx, taskID)
 
 	if len(ret) == 0 {
 		panic("no return value specified for DropPreImportTask")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(int64) error); ok {
-		r0 = rf(taskID)
+	if rf, ok := ret.Get(0).(func(context.Context, int64) error); ok {
+		r0 = rf(ctx, taskID)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -869,14 +824,15 @@ type MockDataCoordCatalog_DropPreImportTask_Call struct {
 }
 
 // DropPreImportTask is a helper method to define mock.On call
+//   - ctx context.Context
 //   - taskID int64
-func (_e *MockDataCoordCatalog_Expecter) DropPreImportTask(taskID interface{}) *MockDataCoordCatalog_DropPreImportTask_Call {
-	return &MockDataCoordCatalog_DropPreImportTask_Call{Call: _e.mock.On("DropPreImportTask", taskID)}
+func (_e *MockDataCoordCatalog_Expecter) DropPreImportTask(ctx interface{}, taskID interface{}) *MockDataCoordCatalog_DropPreImportTask_Call {
+	return &MockDataCoordCatalog_DropPreImportTask_Call{Call: _e.mock.On("DropPreImportTask", ctx, taskID)}
 }
 
-func (_c *MockDataCoordCatalog_DropPreImportTask_Call) Run(run func(taskID int64)) *MockDataCoordCatalog_DropPreImportTask_Call {
+func (_c *MockDataCoordCatalog_DropPreImportTask_Call) Run(run func(ctx context.Context, taskID int64)) *MockDataCoordCatalog_DropPreImportTask_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(int64))
+		run(args[0].(context.Context), args[1].(int64))
 	})
 	return _c
 }
@@ -886,7 +842,7 @@ func (_c *MockDataCoordCatalog_DropPreImportTask_Call) Return(_a0 error) *MockDa
 	return _c
 }
 
-func (_c *MockDataCoordCatalog_DropPreImportTask_Call) RunAndReturn(run func(int64) error) *MockDataCoordCatalog_DropPreImportTask_Call {
+func (_c *MockDataCoordCatalog_DropPreImportTask_Call) RunAndReturn(run func(context.Context, int64) error) *MockDataCoordCatalog_DropPreImportTask_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1258,64 +1214,6 @@ func (_c *MockDataCoordCatalog_ListChannelCheckpoint_Call) RunAndReturn(run func
 	return _c
 }
 
-// ListCollectionTombstone provides a mock function with given fields: ctx
-func (_m *MockDataCoordCatalog) ListCollectionTombstone(ctx context.Context) ([]*model.CollectionTombstone, error) {
-	ret := _m.Called(ctx)
-
-	if len(ret) == 0 {
-		panic("no return value specified for ListCollectionTombstone")
-	}
-
-	var r0 []*model.CollectionTombstone
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context) ([]*model.CollectionTombstone, error)); ok {
-		return rf(ctx)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context) []*model.CollectionTombstone); ok {
-		r0 = rf(ctx)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]*model.CollectionTombstone)
-		}
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
-		r1 = rf(ctx)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// MockDataCoordCatalog_ListCollectionTombstone_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListCollectionTombstone'
-type MockDataCoordCatalog_ListCollectionTombstone_Call struct {
-	*mock.Call
-}
-
-// ListCollectionTombstone is a helper method to define mock.On call
-//   - ctx context.Context
-func (_e *MockDataCoordCatalog_Expecter) ListCollectionTombstone(ctx interface{}) *MockDataCoordCatalog_ListCollectionTombstone_Call {
-	return &MockDataCoordCatalog_ListCollectionTombstone_Call{Call: _e.mock.On("ListCollectionTombstone", ctx)}
-}
-
-func (_c *MockDataCoordCatalog_ListCollectionTombstone_Call) Run(run func(ctx context.Context)) *MockDataCoordCatalog_ListCollectionTombstone_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context))
-	})
-	return _c
-}
-
-func (_c *MockDataCoordCatalog_ListCollectionTombstone_Call) Return(_a0 []*model.CollectionTombstone, _a1 error) *MockDataCoordCatalog_ListCollectionTombstone_Call {
-	_c.Call.Return(_a0, _a1)
-	return _c
-}
-
-func (_c *MockDataCoordCatalog_ListCollectionTombstone_Call) RunAndReturn(run func(context.Context) ([]*model.CollectionTombstone, error)) *MockDataCoordCatalog_ListCollectionTombstone_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // ListCompactionTask provides a mock function with given fields: ctx
 func (_m *MockDataCoordCatalog) ListCompactionTask(ctx context.Context) ([]*datapb.CompactionTask, error) {
 	ret := _m.Called(ctx)
@@ -1374,9 +1272,9 @@ func (_c *MockDataCoordCatalog_ListCompactionTask_Call) RunAndReturn(run func(co
 	return _c
 }
 
-// ListImportJobs provides a mock function with given fields:
-func (_m *MockDataCoordCatalog) ListImportJobs() ([]*datapb.ImportJob, error) {
-	ret := _m.Called()
+// ListImportJobs provides a mock function with given fields: ctx
+func (_m *MockDataCoordCatalog) ListImportJobs(ctx context.Context) ([]*datapb.ImportJob, error) {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListImportJobs")
@@ -1384,19 +1282,19 @@ func (_m *MockDataCoordCatalog) ListImportJobs() ([]*datapb.ImportJob, error) {
 
 	var r0 []*datapb.ImportJob
 	var r1 error
-	if rf, ok := ret.Get(0).(func() ([]*datapb.ImportJob, error)); ok {
-		return rf()
+	if rf, ok := ret.Get(0).(func(context.Context) ([]*datapb.ImportJob, error)); ok {
+		return rf(ctx)
 	}
-	if rf, ok := ret.Get(0).(func() []*datapb.ImportJob); ok {
-		r0 = rf()
+	if rf, ok := ret.Get(0).(func(context.Context) []*datapb.ImportJob); ok {
+		r0 = rf(ctx)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]*datapb.ImportJob)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func() error); ok {
-		r1 = rf()
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -1410,13 +1308,14 @@ type MockDataCoordCatalog_ListImportJobs_Call struct {
 }
 
 // ListImportJobs is a helper method to define mock.On call
-func (_e *MockDataCoordCatalog_Expecter) ListImportJobs() *MockDataCoordCatalog_ListImportJobs_Call {
-	return &MockDataCoordCatalog_ListImportJobs_Call{Call: _e.mock.On("ListImportJobs")}
+//   - ctx context.Context
+func (_e *MockDataCoordCatalog_Expecter) ListImportJobs(ctx interface{}) *MockDataCoordCatalog_ListImportJobs_Call {
+	return &MockDataCoordCatalog_ListImportJobs_Call{Call: _e.mock.On("ListImportJobs", ctx)}
 }
 
-func (_c *MockDataCoordCatalog_ListImportJobs_Call) Run(run func()) *MockDataCoordCatalog_ListImportJobs_Call {
+func (_c *MockDataCoordCatalog_ListImportJobs_Call) Run(run func(ctx context.Context)) *MockDataCoordCatalog_ListImportJobs_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run()
+		run(args[0].(context.Context))
 	})
 	return _c
 }
@@ -1426,14 +1325,14 @@ func (_c *MockDataCoordCatalog_ListImportJobs_Call) Return(_a0 []*datapb.ImportJ
 	return _c
 }
 
-func (_c *MockDataCoordCatalog_ListImportJobs_Call) RunAndReturn(run func() ([]*datapb.ImportJob, error)) *MockDataCoordCatalog_ListImportJobs_Call {
+func (_c *MockDataCoordCatalog_ListImportJobs_Call) RunAndReturn(run func(context.Context) ([]*datapb.ImportJob, error)) *MockDataCoordCatalog_ListImportJobs_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// ListImportTasks provides a mock function with given fields:
-func (_m *MockDataCoordCatalog) ListImportTasks() ([]*datapb.ImportTaskV2, error) {
-	ret := _m.Called()
+// ListImportTasks provides a mock function with given fields: ctx
+func (_m *MockDataCoordCatalog) ListImportTasks(ctx context.Context) ([]*datapb.ImportTaskV2, error) {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListImportTasks")
@@ -1441,19 +1340,19 @@ func (_m *MockDataCoordCatalog) ListImportTasks() ([]*datapb.ImportTaskV2, error
 
 	var r0 []*datapb.ImportTaskV2
 	var r1 error
-	if rf, ok := ret.Get(0).(func() ([]*datapb.ImportTaskV2, error)); ok {
-		return rf()
+	if rf, ok := ret.Get(0).(func(context.Context) ([]*datapb.ImportTaskV2, error)); ok {
+		return rf(ctx)
 	}
-	if rf, ok := ret.Get(0).(func() []*datapb.ImportTaskV2); ok {
-		r0 = rf()
+	if rf, ok := ret.Get(0).(func(context.Context) []*datapb.ImportTaskV2); ok {
+		r0 = rf(ctx)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]*datapb.ImportTaskV2)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func() error); ok {
-		r1 = rf()
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -1467,13 +1366,14 @@ type MockDataCoordCatalog_ListImportTasks_Call struct {
 }
 
 // ListImportTasks is a helper method to define mock.On call
-func (_e *MockDataCoordCatalog_Expecter) ListImportTasks() *MockDataCoordCatalog_ListImportTasks_Call {
-	return &MockDataCoordCatalog_ListImportTasks_Call{Call: _e.mock.On("ListImportTasks")}
+//   - ctx context.Context
+func (_e *MockDataCoordCatalog_Expecter) ListImportTasks(ctx interface{}) *MockDataCoordCatalog_ListImportTasks_Call {
+	return &MockDataCoordCatalog_ListImportTasks_Call{Call: _e.mock.On("ListImportTasks", ctx)}
 }
 
-func (_c *MockDataCoordCatalog_ListImportTasks_Call) Run(run func()) *MockDataCoordCatalog_ListImportTasks_Call {
+func (_c *MockDataCoordCatalog_ListImportTasks_Call) Run(run func(ctx context.Context)) *MockDataCoordCatalog_ListImportTasks_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run()
+		run(args[0].(context.Context))
 	})
 	return _c
 }
@@ -1483,7 +1383,7 @@ func (_c *MockDataCoordCatalog_ListImportTasks_Call) Return(_a0 []*datapb.Import
 	return _c
 }
 
-func (_c *MockDataCoordCatalog_ListImportTasks_Call) RunAndReturn(run func() ([]*datapb.ImportTaskV2, error)) *MockDataCoordCatalog_ListImportTasks_Call {
+func (_c *MockDataCoordCatalog_ListImportTasks_Call) RunAndReturn(run func(context.Context) ([]*datapb.ImportTaskV2, error)) *MockDataCoordCatalog_ListImportTasks_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -1604,9 +1504,9 @@ func (_c *MockDataCoordCatalog_ListPartitionStatsInfos_Call) RunAndReturn(run fu
 	return _c
 }
 
-// ListPreImportTasks provides a mock function with given fields:
-func (_m *MockDataCoordCatalog) ListPreImportTasks() ([]*datapb.PreImportTask, error) {
-	ret := _m.Called()
+// ListPreImportTasks provides a mock function with given fields: ctx
+func (_m *MockDataCoordCatalog) ListPreImportTasks(ctx context.Context) ([]*datapb.PreImportTask, error) {
+	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
 		panic("no return value specified for ListPreImportTasks")
@@ -1614,19 +1514,19 @@ func (_m *MockDataCoordCatalog) ListPreImportTasks() ([]*datapb.PreImportTask, e
 
 	var r0 []*datapb.PreImportTask
 	var r1 error
-	if rf, ok := ret.Get(0).(func() ([]*datapb.PreImportTask, error)); ok {
-		return rf()
+	if rf, ok := ret.Get(0).(func(context.Context) ([]*datapb.PreImportTask, error)); ok {
+		return rf(ctx)
 	}
-	if rf, ok := ret.Get(0).(func() []*datapb.PreImportTask); ok {
-		r0 = rf()
+	if rf, ok := ret.Get(0).(func(context.Context) []*datapb.PreImportTask); ok {
+		r0 = rf(ctx)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]*datapb.PreImportTask)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func() error); ok {
-		r1 = rf()
+	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+		r1 = rf(ctx)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -1640,13 +1540,14 @@ type MockDataCoordCatalog_ListPreImportTasks_Call struct {
 }
 
 // ListPreImportTasks is a helper method to define mock.On call
-func (_e *MockDataCoordCatalog_Expecter) ListPreImportTasks() *MockDataCoordCatalog_ListPreImportTasks_Call {
-	return &MockDataCoordCatalog_ListPreImportTasks_Call{Call: _e.mock.On("ListPreImportTasks")}
+//   - ctx context.Context
+func (_e *MockDataCoordCatalog_Expecter) ListPreImportTasks(ctx interface{}) *MockDataCoordCatalog_ListPreImportTasks_Call {
+	return &MockDataCoordCatalog_ListPreImportTasks_Call{Call: _e.mock.On("ListPreImportTasks", ctx)}
 }
 
-func (_c *MockDataCoordCatalog_ListPreImportTasks_Call) Run(run func()) *MockDataCoordCatalog_ListPreImportTasks_Call {
+func (_c *MockDataCoordCatalog_ListPreImportTasks_Call) Run(run func(ctx context.Context)) *MockDataCoordCatalog_ListPreImportTasks_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run()
+		run(args[0].(context.Context))
 	})
 	return _c
 }
@@ -1656,7 +1557,7 @@ func (_c *MockDataCoordCatalog_ListPreImportTasks_Call) Return(_a0 []*datapb.Pre
 	return _c
 }
 
-func (_c *MockDataCoordCatalog_ListPreImportTasks_Call) RunAndReturn(run func() ([]*datapb.PreImportTask, error)) *MockDataCoordCatalog_ListPreImportTasks_Call {
+func (_c *MockDataCoordCatalog_ListPreImportTasks_Call) RunAndReturn(run func(context.Context) ([]*datapb.PreImportTask, error)) *MockDataCoordCatalog_ListPreImportTasks_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -2071,53 +1972,6 @@ func (_c *MockDataCoordCatalog_SaveChannelCheckpoints_Call) RunAndReturn(run fun
 	return _c
 }
 
-// SaveCollectionTombstone provides a mock function with given fields: ctx, tombstone
-func (_m *MockDataCoordCatalog) SaveCollectionTombstone(ctx context.Context, tombstone *model.CollectionTombstone) error {
-	ret := _m.Called(ctx, tombstone)
-
-	if len(ret) == 0 {
-		panic("no return value specified for SaveCollectionTombstone")
-	}
-
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *model.CollectionTombstone) error); ok {
-		r0 = rf(ctx, tombstone)
-	} else {
-		r0 = ret.Error(0)
-	}
-
-	return r0
-}
-
-// MockDataCoordCatalog_SaveCollectionTombstone_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SaveCollectionTombstone'
-type MockDataCoordCatalog_SaveCollectionTombstone_Call struct {
-	*mock.Call
-}
-
-// SaveCollectionTombstone is a helper method to define mock.On call
-//   - ctx context.Context
-//   - tombstone *model.CollectionTombstone
-func (_e *MockDataCoordCatalog_Expecter) SaveCollectionTombstone(ctx interface{}, tombstone interface{}) *MockDataCoordCatalog_SaveCollectionTombstone_Call {
-	return &MockDataCoordCatalog_SaveCollectionTombstone_Call{Call: _e.mock.On("SaveCollectionTombstone", ctx, tombstone)}
-}
-
-func (_c *MockDataCoordCatalog_SaveCollectionTombstone_Call) Run(run func(ctx context.Context, tombstone *model.CollectionTombstone)) *MockDataCoordCatalog_SaveCollectionTombstone_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(*model.CollectionTombstone))
-	})
-	return _c
-}
-
-func (_c *MockDataCoordCatalog_SaveCollectionTombstone_Call) Return(_a0 error) *MockDataCoordCatalog_SaveCollectionTombstone_Call {
-	_c.Call.Return(_a0)
-	return _c
-}
-
-func (_c *MockDataCoordCatalog_SaveCollectionTombstone_Call) RunAndReturn(run func(context.Context, *model.CollectionTombstone) error) *MockDataCoordCatalog_SaveCollectionTombstone_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // SaveCompactionTask provides a mock function with given fields: ctx, task
 func (_m *MockDataCoordCatalog) SaveCompactionTask(ctx context.Context, task *datapb.CompactionTask) error {
 	ret := _m.Called(ctx, task)
@@ -2262,17 +2116,17 @@ func (_c *MockDataCoordCatalog_SaveDroppedSegmentsInBatch_Call) RunAndReturn(run
 	return _c
 }
 
-// SaveImportJob provides a mock function with given fields: job
-func (_m *MockDataCoordCatalog) SaveImportJob(job *datapb.ImportJob) error {
-	ret := _m.Called(job)
+// SaveImportJob provides a mock function with given fields: ctx, job
+func (_m *MockDataCoordCatalog) SaveImportJob(ctx context.Context, job *datapb.ImportJob) error {
+	ret := _m.Called(ctx, job)
 
 	if len(ret) == 0 {
 		panic("no return value specified for SaveImportJob")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(*datapb.ImportJob) error); ok {
-		r0 = rf(job)
+	if rf, ok := ret.Get(0).(func(context.Context, *datapb.ImportJob) error); ok {
+		r0 = rf(ctx, job)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -2286,14 +2140,15 @@ type MockDataCoordCatalog_SaveImportJob_Call struct {
 }
 
 // SaveImportJob is a helper method to define mock.On call
+//   - ctx context.Context
 //   - job *datapb.ImportJob
-func (_e *MockDataCoordCatalog_Expecter) SaveImportJob(job interface{}) *MockDataCoordCatalog_SaveImportJob_Call {
-	return &MockDataCoordCatalog_SaveImportJob_Call{Call: _e.mock.On("SaveImportJob", job)}
+func (_e *MockDataCoordCatalog_Expecter) SaveImportJob(ctx interface{}, job interface{}) *MockDataCoordCatalog_SaveImportJob_Call {
+	return &MockDataCoordCatalog_SaveImportJob_Call{Call: _e.mock.On("SaveImportJob", ctx, job)}
 }
 
-func (_c *MockDataCoordCatalog_SaveImportJob_Call) Run(run func(job *datapb.ImportJob)) *MockDataCoordCatalog_SaveImportJob_Call {
+func (_c *MockDataCoordCatalog_SaveImportJob_Call) Run(run func(ctx context.Context, job *datapb.ImportJob)) *MockDataCoordCatalog_SaveImportJob_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(*datapb.ImportJob))
+		run(args[0].(context.Context), args[1].(*datapb.ImportJob))
 	})
 	return _c
 }
@@ -2303,22 +2158,22 @@ func (_c *MockDataCoordCatalog_SaveImportJob_Call) Return(_a0 error) *MockDataCo
 	return _c
 }
 
-func (_c *MockDataCoordCatalog_SaveImportJob_Call) RunAndReturn(run func(*datapb.ImportJob) error) *MockDataCoordCatalog_SaveImportJob_Call {
+func (_c *MockDataCoordCatalog_SaveImportJob_Call) RunAndReturn(run func(context.Context, *datapb.ImportJob) error) *MockDataCoordCatalog_SaveImportJob_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// SaveImportTask provides a mock function with given fields: task
-func (_m *MockDataCoordCatalog) SaveImportTask(task *datapb.ImportTaskV2) error {
-	ret := _m.Called(task)
+// SaveImportTask provides a mock function with given fields: ctx, task
+func (_m *MockDataCoordCatalog) SaveImportTask(ctx context.Context, task *datapb.ImportTaskV2) error {
+	ret := _m.Called(ctx, task)
 
 	if len(ret) == 0 {
 		panic("no return value specified for SaveImportTask")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(*datapb.ImportTaskV2) error); ok {
-		r0 = rf(task)
+	if rf, ok := ret.Get(0).(func(context.Context, *datapb.ImportTaskV2) error); ok {
+		r0 = rf(ctx, task)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -2332,14 +2187,15 @@ type MockDataCoordCatalog_SaveImportTask_Call struct {
 }
 
 // SaveImportTask is a helper method to define mock.On call
+//   - ctx context.Context
 //   - task *datapb.ImportTaskV2
-func (_e *MockDataCoordCatalog_Expecter) SaveImportTask(task interface{}) *MockDataCoordCatalog_SaveImportTask_Call {
-	return &MockDataCoordCatalog_SaveImportTask_Call{Call: _e.mock.On("SaveImportTask", task)}
+func (_e *MockDataCoordCatalog_Expecter) SaveImportTask(ctx interface{}, task interface{}) *MockDataCoordCatalog_SaveImportTask_Call {
+	return &MockDataCoordCatalog_SaveImportTask_Call{Call: _e.mock.On("SaveImportTask", ctx, task)}
 }
 
-func (_c *MockDataCoordCatalog_SaveImportTask_Call) Run(run func(task *datapb.ImportTaskV2)) *MockDataCoordCatalog_SaveImportTask_Call {
+func (_c *MockDataCoordCatalog_SaveImportTask_Call) Run(run func(ctx context.Context, task *datapb.ImportTaskV2)) *MockDataCoordCatalog_SaveImportTask_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(*datapb.ImportTaskV2))
+		run(args[0].(context.Context), args[1].(*datapb.ImportTaskV2))
 	})
 	return _c
 }
@@ -2349,7 +2205,7 @@ func (_c *MockDataCoordCatalog_SaveImportTask_Call) Return(_a0 error) *MockDataC
 	return _c
 }
 
-func (_c *MockDataCoordCatalog_SaveImportTask_Call) RunAndReturn(run func(*datapb.ImportTaskV2) error) *MockDataCoordCatalog_SaveImportTask_Call {
+func (_c *MockDataCoordCatalog_SaveImportTask_Call) RunAndReturn(run func(context.Context, *datapb.ImportTaskV2) error) *MockDataCoordCatalog_SaveImportTask_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -2401,17 +2257,17 @@ func (_c *MockDataCoordCatalog_SavePartitionStatsInfo_Call) RunAndReturn(run fun
 	return _c
 }
 
-// SavePreImportTask provides a mock function with given fields: task
-func (_m *MockDataCoordCatalog) SavePreImportTask(task *datapb.PreImportTask) error {
-	ret := _m.Called(task)
+// SavePreImportTask provides a mock function with given fields: ctx, task
+func (_m *MockDataCoordCatalog) SavePreImportTask(ctx context.Context, task *datapb.PreImportTask) error {
+	ret := _m.Called(ctx, task)
 
 	if len(ret) == 0 {
 		panic("no return value specified for SavePreImportTask")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(*datapb.PreImportTask) error); ok {
-		r0 = rf(task)
+	if rf, ok := ret.Get(0).(func(context.Context, *datapb.PreImportTask) error); ok {
+		r0 = rf(ctx, task)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -2425,14 +2281,15 @@ type MockDataCoordCatalog_SavePreImportTask_Call struct {
 }
 
 // SavePreImportTask is a helper method to define mock.On call
+//   - ctx context.Context
 //   - task *datapb.PreImportTask
-func (_e *MockDataCoordCatalog_Expecter) SavePreImportTask(task interface{}) *MockDataCoordCatalog_SavePreImportTask_Call {
-	return &MockDataCoordCatalog_SavePreImportTask_Call{Call: _e.mock.On("SavePreImportTask", task)}
+func (_e *MockDataCoordCatalog_Expecter) SavePreImportTask(ctx interface{}, task interface{}) *MockDataCoordCatalog_SavePreImportTask_Call {
+	return &MockDataCoordCatalog_SavePreImportTask_Call{Call: _e.mock.On("SavePreImportTask", ctx, task)}
 }
 
-func (_c *MockDataCoordCatalog_SavePreImportTask_Call) Run(run func(task *datapb.PreImportTask)) *MockDataCoordCatalog_SavePreImportTask_Call {
+func (_c *MockDataCoordCatalog_SavePreImportTask_Call) Run(run func(ctx context.Context, task *datapb.PreImportTask)) *MockDataCoordCatalog_SavePreImportTask_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(*datapb.PreImportTask))
+		run(args[0].(context.Context), args[1].(*datapb.PreImportTask))
 	})
 	return _c
 }
@@ -2442,7 +2299,7 @@ func (_c *MockDataCoordCatalog_SavePreImportTask_Call) Return(_a0 error) *MockDa
 	return _c
 }
 
-func (_c *MockDataCoordCatalog_SavePreImportTask_Call) RunAndReturn(run func(*datapb.PreImportTask) error) *MockDataCoordCatalog_SavePreImportTask_Call {
+func (_c *MockDataCoordCatalog_SavePreImportTask_Call) RunAndReturn(run func(context.Context, *datapb.PreImportTask) error) *MockDataCoordCatalog_SavePreImportTask_Call {
 	_c.Call.Return(run)
 	return _c
 }

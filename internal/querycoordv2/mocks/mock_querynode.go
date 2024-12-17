@@ -33,6 +33,10 @@ func (_m *MockQueryNodeServer) EXPECT() *MockQueryNodeServer_Expecter {
 func (_m *MockQueryNodeServer) CheckHealth(_a0 context.Context, _a1 *milvuspb.CheckHealthRequest) (*milvuspb.CheckHealthResponse, error) {
 	ret := _m.Called(_a0, _a1)
 
+	if len(ret) == 0 {
+		panic("no return value specified for CheckHealth")
+	}
+
 	var r0 *milvuspb.CheckHealthResponse
 	var r1 error
 	if rf, ok := ret.Get(0).(func(context.Context, *milvuspb.CheckHealthRequest) (*milvuspb.CheckHealthResponse, error)); ok {

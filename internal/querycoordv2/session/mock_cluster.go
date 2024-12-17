@@ -31,6 +31,10 @@ func (_m *MockCluster) EXPECT() *MockCluster_Expecter {
 func (_m *MockCluster) CheckHealth(ctx context.Context, nodeID int64) (*milvuspb.CheckHealthResponse, error) {
 	ret := _m.Called(ctx, nodeID)
 
+	if len(ret) == 0 {
+		panic("no return value specified for CheckHealth")
+	}
+
 	var r0 *milvuspb.CheckHealthResponse
 	var r1 error
 	if rf, ok := ret.Get(0).(func(context.Context, int64) (*milvuspb.CheckHealthResponse, error)); ok {

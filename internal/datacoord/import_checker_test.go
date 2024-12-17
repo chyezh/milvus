@@ -30,7 +30,6 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	broker2 "github.com/milvus-io/milvus/internal/datacoord/broker"
-	"github.com/milvus-io/milvus/internal/datacoord/tombstone"
 	"github.com/milvus-io/milvus/internal/metastore/mocks"
 	"github.com/milvus-io/milvus/internal/mocks/rootcoord/mock_tombstone"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
@@ -63,9 +62,6 @@ func (s *ImportCheckerSuite) SetupTest() {
 	catalog.EXPECT().ListCompactionTask(mock.Anything).Return(nil, nil)
 	catalog.EXPECT().ListPartitionStatsInfos(mock.Anything).Return(nil, nil)
 	catalog.EXPECT().ListStatsTasks(mock.Anything).Return(nil, nil)
-	catalog.EXPECT().ListCollectionTombstone(mock.Anything).Return(nil, nil).Maybe()
-	catalog.EXPECT().SaveCollectionTombstone(mock.Anything, mock.Anything).Return(nil).Maybe()
-	catalog.EXPECT().DropCollectionTombstone(mock.Anything, mock.Anything).Return(nil).Maybe()
 
 	cluster := NewMockCluster(s.T())
 	s.alloc = allocator.NewMockAllocator(s.T())

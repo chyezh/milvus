@@ -42,7 +42,6 @@ import (
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/datacoord/broker"
 	"github.com/milvus-io/milvus/internal/datacoord/session"
-	"github.com/milvus-io/milvus/internal/datacoord/tombstone"
 	datanodeclient "github.com/milvus-io/milvus/internal/distributed/datanode/client"
 	indexnodeclient "github.com/milvus-io/milvus/internal/distributed/indexnode/client"
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
@@ -1151,7 +1150,6 @@ func (s *Server) Stop() error {
 	s.stopServerLoop()
 	log.Info("datacoord serverloop stopped")
 	log.Warn("datacoord stop successful")
-	tombstone.CollectionTombstone().Close()
 	return nil
 }
 
