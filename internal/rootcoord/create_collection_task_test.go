@@ -972,14 +972,17 @@ func Test_createCollectionTask_Execute(t *testing.T) {
 		ticker := newTickerWithMockFailStream()
 		shardNum := 2
 		pchans := ticker.getDmlChannelNames(shardNum)
-		meta := newMockMetaTable()
-		meta.GetCollectionByNameFunc = func(ctx context.Context, collectionName string, ts Timestamp) (*model.Collection, error) {
-			return nil, errors.New("error mock GetCollectionByName")
-		}
-		core := newTestCore(withTtSynchronizer(ticker), withMeta(meta))
+		core := newTestCore(withTtSynchronizer(ticker))
 		schema := &schemapb.CollectionSchema{Name: "", Fields: []*schemapb.FieldSchema{{}}}
 		task := &createCollectionTask{
 			baseTask: newBaseTask(context.Background(), core),
+			Req: &milvuspb.CreateCollectionRequest{
+				Base:           &commonpb.MsgBase{MsgType: commonpb.MsgType_CreateCollection},
+				CollectionName: "",
+				Schema:         []byte{},
+				ShardsNum:      int32(shardNum),
+			},
+			schema: schema,
 			channels: collectionChannels{
 				physicalChannels: pchans,
 				virtualChannels:  []string{funcutil.GenRandomStr(), funcutil.GenRandomStr()},

@@ -67,6 +67,12 @@ func IsCanceledOrTimeout(err error) bool {
 	return errors.IsAny(err, context.Canceled, context.DeadlineExceeded)
 }
 
+// IsCollectionOrPartitionDropped checks whether the error is caused by collection or partition dropped
+func IsCollectionOrPartitionDropped(err error) bool {
+	code := Code(err)
+	return code == ErrCollectionDropped.code() || code == ErrPartitionDropped.code()
+}
+
 // Status returns a status according to the given err,
 // returns Success status if err is nil
 func Status(err error) *commonpb.Status {
@@ -569,6 +575,10 @@ func WrapErrCollectionVectorClusteringKeyNotAllowed(collection any, msgAndArgs .
 	return err
 }
 
+func WrapErrCollectionDropped(collectionID int64) error {
+	return wrapFields(ErrCollectionDropped, value("collectionID", collectionID))
+}
+
 func WrapErrAliasNotFound(db any, alias any, msg ...string) error {
 	err := wrapFields(ErrAliasNotFound,
 		value("database", db),
@@ -625,6 +635,10 @@ func WrapErrPartitionNotFullyLoaded(partition any, msg ...string) error {
 		err = errors.Wrap(err, strings.Join(msg, "->"))
 	}
 	return err
+}
+
+func WrapErrPartitionDropped(partitionID int64) error {
+	return wrapFields(ErrPartitionDropped, value("partitionID", partitionID))
 }
 
 func WrapGeneralCapacityExceed(newGeneralSize any, generalCapacity any, msg ...string) error {

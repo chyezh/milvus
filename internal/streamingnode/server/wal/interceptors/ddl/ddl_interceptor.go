@@ -42,11 +42,10 @@ func (d *ddlAppendInterceptor) DoAppend(ctx context.Context, msg message.Mutable
 	}
 
 	switch msg.MessageType() {
+	case message.MessageTypeDropCollection:
+		resource.Resource().Flusher().UnregisterVChannel(msg.VChannel())
 	case message.MessageTypeCreateCollection:
 		resource.Resource().Flusher().RegisterVChannel(msg.VChannel(), d.wal.Get())
-	case message.MessageTypeDropCollection:
-		// TODO: unregister vchannel, cannot unregister vchannel now.
-		// Wait for PR: https://github.com/milvus-io/milvus/pull/37176
 	}
 	return msgID, nil
 }
