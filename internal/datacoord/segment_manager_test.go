@@ -923,7 +923,7 @@ func TestSegmentManager_DropSegmentOfPartition(t *testing.T) {
 		segments: []UniqueID{1, 2, 3},
 	}
 	s.DropSegmentsOfPartition(context.Background(), 1)
-	assert.NotNil(t, s.meta.GetSegment(context.Background(), 1).allocations)
-	assert.Nil(t, s.meta.GetSegment(context.Background(), 2).allocations)
-	assert.Nil(t, s.meta.GetSegment(context.Background(), 3).allocations)
+	assert.NotNil(t, s.meta.GetSegment(context.TODO(), 1).allocations)
+	assert.Nil(t, s.meta.GetSegment(context.TODO(), 2).allocations)
+	assert.Nil(t, s.meta.GetSegment(context.TODO(), 3).allocations)
 }

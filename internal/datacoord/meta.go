@@ -39,6 +39,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/proto/workerpb"
+	"github.com/milvus-io/milvus/internal/rootcoord/tombstone"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/segmentutil"
 	"github.com/milvus-io/milvus/pkg/common"
@@ -520,9 +521,9 @@ func (m *meta) AddSegment(ctx context.Context, segment *SegmentInfo) error {
 	m.Lock()
 	defer m.Unlock()
 
-	if err := tombstone.CollectionTombstone().CheckIfPartitionDropped(segment.CollectionID, segment.PartitionID); err != nil {
-		log.Warn("meta update: adding segment failed", zap.Error(err))
-		return err
+	if !tombstone.CollectionTombstone().CheckIfPartitionAvailable(context.TODO(), segment.CollectionID, segment.PartitionID) {
+		log.Warn("meta update: adding segment failed")
+		return merr.WrapErrPartitionDrop(segment.PartitionID)
 	}
 
 	if err := m.catalog.AddSegment(ctx, segment.SegmentInfo); err != nil {
@@ -740,8 +741,8 @@ func (m *meta) checkIfSegmentInfoUpdatable(segmentInfo *datapb.SegmentInfo) erro
 	}
 
 	// Check if the partition is dropped.
-	if err := tombstone.CollectionTombstone().CheckIfPartitionDropped(segmentInfo.GetCollectionID(), segmentInfo.GetPartitionID()); err != nil {
-		return errors.Wrapf(err, "with segment id %d", segmentInfo.GetID())
+	if !tombstone.CollectionTombstone().CheckIfPartitionAvailable(context.TODO(), segmentInfo.GetCollectionID(), segmentInfo.GetPartitionID()) {
+		return merr.WrapErrPartitionDrop(segmentInfo.GetPartitionID())
 	}
 	return nil
 }
@@ -1791,7 +1792,7 @@ func (m *meta) UpdateChannelCheckpoint(ctx context.Context, vChannel string, pos
 	if pos == nil || pos.GetMsgID() == nil {
 		return fmt.Errorf("channelCP is nil, vChannel=%s", vChannel)
 	}
-	if err := tombstone.CollectionTombstone().CheckIfVChannelDropped(vChannel); err != nil {
+	if !tombstone.CollectionTombstone().CheckIfVChannelAvailable(ctx, vChannel) {
 		log.Warn("channel has been dropped, ignore check point update", zap.String("vChannel", vChannel), zap.Any("pos", pos))
 		return nil
 	}
@@ -1853,7 +1854,7 @@ func (m *meta) UpdateChannelCheckpoints(ctx context.Context, positions []*msgpb.
 		vChannel := pos.GetChannelName()
 		oldPosition, ok := m.channelCPs.checkpoints[vChannel]
 
-		if err := tombstone.CollectionTombstone().CheckIfVChannelDropped(vChannel); err != nil {
+		if !tombstone.CollectionTombstone().CheckIfVChannelAvailable(ctx, vChannel) {
 			log.Warn("channel has been dropped, ignore check point updates", zap.String("vChannel", vChannel), zap.Any("pos", pos))
 			return false
 		}
@@ -2101,9 +2102,9 @@ func (m *meta) SaveStatsResultSegment(oldSegmentID int64, result *workerpb.Stats
 	m.Lock()
 	defer m.Unlock()
 
-	if err := tombstone.CollectionTombstone().CheckIfPartitionDropped(result.GetCollectionID(), result.GetPartitionID()); err != nil {
+	if !tombstone.CollectionTombstone().CheckIfPartitionAvailable(context.TODO(), result.GetCollectionID(), result.GetPartitionID()) {
 		log.Ctx(m.ctx).Warn("partition is dropped", zap.Int64("collectionID", result.GetCollectionID()), zap.Int64("partitionID", result.GetPartitionID()))
-		return nil, err
+		return nil, merr.WrapErrPartitionDrop(result.GetPartitionID())
 	}
 
 	log := log.Ctx(m.ctx).With(zap.Int64("collectionID", result.GetCollectionID()),

@@ -67,10 +67,10 @@ func IsCanceledOrTimeout(err error) bool {
 	return errors.IsAny(err, context.Canceled, context.DeadlineExceeded)
 }
 
-// IsCollectionOrPartitionDropped checks whether the error is caused by collection or partition dropped
-func IsCollectionOrPartitionDropped(err error) bool {
+// IsCollectionOrPartitionDrop checks whether the error is caused by collection or partition dropped
+func IsCollectionOrPartitionDrop(err error) bool {
 	code := Code(err)
-	return code == ErrCollectionDropped.code() || code == ErrPartitionDropped.code()
+	return code == ErrCollectionDrop.code() || code == ErrPartitionDrop.code()
 }
 
 // Status returns a status according to the given err,
@@ -485,6 +485,11 @@ func WrapErrPrivilegeGroupNameInvalid(privilegeGroup any, msg ...string) error {
 	return err
 }
 
+// Collection not found
+func WrapErrCollectionNotFoundWithVChannel(vchannel string) error {
+	return wrapFields(ErrCollectionNotFound, value("vchannel", vchannel))
+}
+
 // Collection related
 func WrapErrCollectionNotFound(collection any, msg ...string) error {
 	err := wrapFields(ErrCollectionNotFound, value("collection", collection))
@@ -575,8 +580,8 @@ func WrapErrCollectionVectorClusteringKeyNotAllowed(collection any, msgAndArgs .
 	return err
 }
 
-func WrapErrCollectionDropped(collectionID int64) error {
-	return wrapFields(ErrCollectionDropped, value("collectionID", collectionID))
+func WrapErrCollectionDrop(collectionID int64) error {
+	return wrapFields(ErrCollectionDrop, value("collectionID", collectionID))
 }
 
 func WrapErrAliasNotFound(db any, alias any, msg ...string) error {
@@ -637,8 +642,8 @@ func WrapErrPartitionNotFullyLoaded(partition any, msg ...string) error {
 	return err
 }
 
-func WrapErrPartitionDropped(partitionID int64) error {
-	return wrapFields(ErrPartitionDropped, value("partitionID", partitionID))
+func WrapErrPartitionDrop(partitionID int64) error {
+	return wrapFields(ErrPartitionDrop, value("partitionID", partitionID))
 }
 
 func WrapGeneralCapacityExceed(newGeneralSize any, generalCapacity any, msg ...string) error {

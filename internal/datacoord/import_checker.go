@@ -30,9 +30,11 @@ import (
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/proto/indexpb"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
+	"github.com/milvus-io/milvus/internal/rootcoord/tombstone"
 	"github.com/milvus-io/milvus/internal/util/importutilv2"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/metrics"
+	"github.com/milvus-io/milvus/pkg/util/merr"
 	"github.com/milvus-io/milvus/pkg/util/tsoutil"
 )
 
@@ -461,9 +463,9 @@ func (c *importChecker) checkCollection(collectionID int64, jobs []ImportJob) {
 		var reason string
 		// Collection with partitionKey will never drop partition.
 		for _, partitionID := range job.GetPartitionIDs() {
-			if err := tombstone.CollectionTombstone().CheckIfPartitionDropped(collectionID, partitionID); err != nil {
+			if !tombstone.CollectionTombstone().CheckIfPartitionAvailable(context.TODO(), collectionID, partitionID) {
 				dropped = true
-				reason = err.Error()
+				reason = merr.WrapErrPartitionDrop(partitionID).Error()
 				break
 			}
 		}

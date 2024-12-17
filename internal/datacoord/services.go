@@ -31,7 +31,6 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
-	"github.com/milvus-io/milvus/internal/datacoord/tombstone"
 	"github.com/milvus-io/milvus/internal/metastore/kv/binlog"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
 	"github.com/milvus-io/milvus/internal/proto/internalpb"
@@ -562,7 +561,7 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 
 	// Update segment info in memory and meta.
 	if err := s.meta.UpdateSegmentsInfo(ctx, operators...); err != nil {
-		if merr.IsCollectionOrPartitionDropped(err) {
+		if merr.IsCollectionOrPartitionDrop(err) {
 			log.Warn("SaveBinlogPaths ignored, collection or partition is dropped", zap.Error(err))
 			return merr.Success(), nil
 		}
@@ -610,14 +609,6 @@ func (s *Server) dropCollection(ctx context.Context, req *datapb.DropCollectionR
 	logger := log.Ctx(ctx).With(zap.Int64("collectionID", req.GetCollectionId()), zap.Strings("vchannels", req.GetVchannelNames()))
 	logger.Info("receive DropCollection request")
 
-	if err := tombstone.CollectionTombstone().MarkCollectionAsDropping(ctx, &tombstone.DroppingCollection{
-		CollectionId: req.GetCollectionId(),
-		Vchannels:    req.GetVchannelNames(),
-	}); err != nil {
-		logger.Warn("failed to mark collection as dropping at tombstone", zap.Error(err))
-		return err
-	}
-
 	// release all channels of the collection.
 	if err := s.channelManager.ReleaseByCollectionID(req.GetCollectionId()); err != nil {
 		logger.Warn("failed to release channels of collection", zap.Error(err))
@@ -655,17 +646,6 @@ func (s *Server) dropPartition(ctx context.Context, req *datapb.DropPartitionReq
 	log.Ctx(ctx).Info("receive DropParitition request",
 		zap.Int64("collectionID", req.GetCollectionId()),
 		zap.Int64("partitionID", req.GetPartitionId()))
-
-	if err := tombstone.CollectionTombstone().MarkPartitionAsDropping(ctx, &tombstone.DroppingPartition{
-		CollectionId: req.GetCollectionId(),
-		PartitionId:  req.GetPartitionId(),
-	}); err != nil {
-		log.Ctx(ctx).Warn("failed to mark partition as dropping at tombstone",
-			zap.Int64("collectionID", req.GetCollectionId()),
-			zap.Int64("partitionID", req.GetPartitionId()),
-			zap.Error(err))
-		return err
-	}
 
 	// release all segments of the partition.
 	s.segmentManager.DropSegmentsOfPartition(ctx, req.GetPartitionId())

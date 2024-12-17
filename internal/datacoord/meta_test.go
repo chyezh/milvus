@@ -40,7 +40,9 @@ import (
 	mocks2 "github.com/milvus-io/milvus/internal/metastore/mocks"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/mocks"
+	"github.com/milvus-io/milvus/internal/mocks/rootcoord/mock_tombstone"
 	"github.com/milvus-io/milvus/internal/proto/datapb"
+	"github.com/milvus-io/milvus/internal/rootcoord/tombstone"
 	"github.com/milvus-io/milvus/pkg/common"
 	"github.com/milvus-io/milvus/pkg/kv"
 	"github.com/milvus-io/milvus/pkg/metrics"
@@ -139,7 +141,8 @@ type MetaBasicSuite struct {
 	partIDs     []int64
 	channelName string
 
-	meta *meta
+	meta   *meta
+	tbMeta *mock_tombstone.MockCollectionTombstoneInterface
 }
 
 func (suite *MetaBasicSuite) SetupSuite() {
@@ -155,7 +158,10 @@ func (suite *MetaBasicSuite) SetupTest() {
 
 	suite.Require().NoError(err)
 	suite.meta = meta
-	tombstone.RecoverCollectionTombstoneForTest(context.Background(), suite.meta.catalog)
+	tbMeta := mock_tombstone.NewMockCollectionTombstoneInterface(suite.T())
+	tbMeta.EXPECT().CheckIfPartitionAvailable(mock.Anything, mock.Anything, mock.Anything).Return(true).Maybe()
+	tombstone.InitCollectionTombstoneForTest(tbMeta)
+	suite.tbMeta = tbMeta
 }
 
 func (suite *MetaBasicSuite) getCollectionInfo(partIDs ...int64) *collectionInfo {
@@ -420,12 +426,9 @@ func (suite *MetaBasicSuite) TestSetSegment() {
 			InsertChannel: suite.channelName,
 			State:         commonpb.SegmentState_Flushed,
 		})
-		err := tombstone.CollectionTombstone().MarkPartitionAsDropping(context.Background(), &tombstone.DroppingPartition{
-			CollectionId: suite.collID,
-			PartitionId:  100,
-		})
-		suite.NoError(err)
-		err = meta.AddSegment(ctx, segment)
+
+		suite.tbMeta.EXPECT().CheckIfPartitionAvailable(mock.Anything, suite.collID, 100).Return(false)
+		err := meta.AddSegment(ctx, segment)
 		suite.Require().Error(err)
 
 		catalog.EXPECT().AddSegment(mock.Anything, mock.Anything).Return(nil).Twice()
@@ -434,11 +437,7 @@ func (suite *MetaBasicSuite) TestSetSegment() {
 		err = meta.AddSegment(ctx, segment)
 		suite.Require().NoError(err)
 
-		err = tombstone.CollectionTombstone().MarkPartitionAsDropping(context.Background(), &tombstone.DroppingPartition{
-			CollectionId: suite.collID,
-			PartitionId:  101,
-		})
-		suite.NoError(err)
+		suite.tbMeta.EXPECT().CheckIfPartitionAvailable(mock.Anything, suite.collID, 101).Return(false)
 
 		/// Test UpdateSegment
 
@@ -461,15 +460,11 @@ func (suite *MetaBasicSuite) TestSetSegment() {
 		err = meta.AddSegment(ctx, segment)
 		suite.Require().NoError(err)
 
-		err = tombstone.CollectionTombstone().MarkPartitionAsDropping(context.Background(), &tombstone.DroppingPartition{
-			CollectionId: suite.collID,
-			PartitionId:  102,
-		})
-		suite.NoError(err)
+		suite.tbMeta.EXPECT().CheckIfPartitionAvailable(mock.Anything, suite.collID, 102).Return(false)
 
-		err = meta.SetState(segmentID, commonpb.SegmentState_Dropped)
+		err = meta.SetState(context.TODO(), segmentID, commonpb.SegmentState_Dropped)
 		suite.Require().NoError(err)
-		err = meta.SetState(segmentID, commonpb.SegmentState_Flushed)
+		err = meta.SetState(context.TODO(), segmentID, commonpb.SegmentState_Flushed)
 		suite.Require().Error(err)
 	})
 
@@ -522,8 +517,9 @@ func TestMeta_Basic(t *testing.T) {
 
 	// mockAllocator := newMockAllocator(t)
 	meta, err := newMemoryMeta()
-	tombstone.RecoverCollectionTombstoneForTest(context.Background(), meta.catalog)
-	assert.NoError(t, err)
+	tbMeta := mock_tombstone.NewMockCollectionTombstoneInterface(t)
+	tbMeta.EXPECT().CheckIfPartitionAvailable(mock.Anything, mock.Anything, mock.Anything).Return(true).Maybe()
+	tombstone.InitCollectionTombstoneForTest(tbMeta)
 
 	testSchema := newTestSchema()
 
@@ -1010,8 +1006,10 @@ func TestUpdateSegmentsInfo(t *testing.T) {
 
 	t.Run("update dropped partition", func(t *testing.T) {
 		meta, err := newMemoryMeta()
-		tombstone.RecoverCollectionTombstoneForTest(context.Background(), meta.catalog)
 		assert.NoError(t, err)
+		tbMeta := mock_tombstone.NewMockCollectionTombstoneInterface(t)
+		tbMeta.EXPECT().CheckIfPartitionAvailable(mock.Anything, mock.Anything, mock.Anything).Return(true).Maybe()
+		tombstone.InitCollectionTombstoneForTest(tbMeta)
 
 		segment1 := &SegmentInfo{SegmentInfo: &datapb.SegmentInfo{
 			ID:           1,
@@ -1024,18 +1022,15 @@ func TestUpdateSegmentsInfo(t *testing.T) {
 		err = meta.AddSegment(context.TODO(), segment1)
 		assert.NoError(t, err)
 
-		err = tombstone.CollectionTombstone().MarkPartitionAsDropping(context.Background(), &tombstone.DroppingPartition{
-			CollectionId: 1,
-			PartitionId:  1,
-		})
-		assert.NoError(t, err)
-
+		tbMeta.EXPECT().CheckIfPartitionAvailable(mock.Anything, int64(1), int64(1)).Return(false)
 		err = meta.UpdateSegmentsInfo(
+			context.TODO(),
 			UpdateStatusOperator(1, commonpb.SegmentState_Flushing),
 		)
 		assert.Error(t, err)
 
 		err = meta.UpdateSegmentsInfo(
+			context.TODO(),
 			UpdateStatusOperator(1, commonpb.SegmentState_Dropped),
 		)
 		assert.NoError(t, err)
@@ -1290,6 +1285,9 @@ func equalCollectionInfo(t *testing.T, a *collectionInfo, b *collectionInfo) {
 }
 
 func TestChannelCP(t *testing.T) {
+	tbMeta := mock_tombstone.NewMockCollectionTombstoneInterface(t)
+	tbMeta.EXPECT().CheckIfVChannelAvailable(mock.Anything, mock.Anything).Return(true).Maybe()
+	tombstone.InitCollectionTombstoneForTest(tbMeta)
 	mockVChannel := "fake-by-dev-rootcoord-dml-1-testchannelcp-v0"
 	mockPChannel := "fake-by-dev-rootcoord-dml-1"
 
@@ -1518,7 +1516,10 @@ func TestMeta_GetSegmentsJSON(t *testing.T) {
 func Test_meta_DropSegmentsOfPartition(t *testing.T) {
 	meta, err := newMemoryMeta()
 	assert.NoError(t, err)
-	tombstone.RecoverCollectionTombstoneForTest(context.Background(), meta.catalog)
+	tbMeta := mock_tombstone.NewMockCollectionTombstoneInterface(t)
+	tbMeta.EXPECT().CheckIfPartitionAvailable(mock.Anything, mock.Anything, mock.Anything).Return(true).Maybe()
+	tbMeta.EXPECT().CheckIfVChannelAvailable(mock.Anything, mock.Anything).Return(true).Maybe()
+	tombstone.InitCollectionTombstoneForTest(tbMeta)
 
 	err = meta.AddSegment(context.Background(), NewSegmentInfo(&datapb.SegmentInfo{
 		ID:           1,
@@ -1542,10 +1543,10 @@ func Test_meta_DropSegmentsOfPartition(t *testing.T) {
 	err = meta.DropSegmentsOfPartition(context.Background(), 1)
 	assert.NoError(t, err)
 
-	segment := meta.GetSegment(1)
+	segment := meta.GetSegment(context.TODO(), 1)
 	assert.Equal(t, commonpb.SegmentState_Dropped, segment.GetState())
-	segment = meta.GetSegment(2)
+	segment = meta.GetSegment(context.TODO(), 2)
 	assert.Equal(t, commonpb.SegmentState_Dropped, segment.GetState())
-	segment = meta.GetSegment(3)
+	segment = meta.GetSegment(context.TODO(), 3)
 	assert.NotEqual(t, commonpb.SegmentState_Dropped, segment.GetState())
 }
