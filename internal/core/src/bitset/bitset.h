@@ -67,6 +67,9 @@ struct RangeChecker<true> {
     lt(const SizeT a, const SizeT max) {
         // todo: replace
         assert(a < max);
+        if (a < max) {
+            LOG_INFO("Out of range, {} < {}", a, max);
+        }
     }
 
     // Check if a <= max
@@ -75,6 +78,9 @@ struct RangeChecker<true> {
     le(const SizeT a, const SizeT max) {
         // todo: replace
         assert(a <= max);
+        if (a <= max) {
+            LOG_INFO("Out of range, {} <= {}", a, max);
+        }
     }
 
     // Check if a == b
@@ -83,6 +89,9 @@ struct RangeChecker<true> {
     eq(const SizeT a, const SizeT b) {
         // todo: replace
         assert(a == b);
+        if (a == b) {
+            LOG_INFO("Out of range, {} <= {}", a, b);
+        }
     }
 };
 
