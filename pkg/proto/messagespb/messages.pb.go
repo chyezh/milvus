@@ -35,6 +35,7 @@ const (
 	MessageType_DropPartition    MessageType = 8
 	MessageType_ManualFlush      MessageType = 9
 	MessageType_CreateSegment    MessageType = 10
+	MessageType_Import           MessageType = 11
 	// begin transaction message is only used for transaction, once a begin
 	// transaction message is received, all messages combined with the
 	// transaction message cannot be consumed until a CommitTxn message
@@ -72,6 +73,7 @@ var (
 		8:   "DropPartition",
 		9:   "ManualFlush",
 		10:  "CreateSegment",
+		11:  "Import",
 		900: "BeginTxn",
 		901: "CommitTxn",
 		902: "RollbackTxn",
@@ -89,6 +91,7 @@ var (
 		"DropPartition":    8,
 		"ManualFlush":      9,
 		"CreateSegment":    10,
+		"Import":           11,
 		"BeginTxn":         900,
 		"CommitTxn":        901,
 		"RollbackTxn":      902,
@@ -1574,6 +1577,44 @@ func (*TxnMessageHeader) Descriptor() ([]byte, []int) {
 	return file_messages_proto_rawDescGZIP(), []int{26}
 }
 
+type ImportMessageHeader struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+}
+
+func (x *ImportMessageHeader) Reset() {
+	*x = ImportMessageHeader{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_messages_proto_msgTypes[27]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *ImportMessageHeader) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ImportMessageHeader) ProtoMessage() {}
+
+func (x *ImportMessageHeader) ProtoReflect() protoreflect.Message {
+	mi := &file_messages_proto_msgTypes[27]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ImportMessageHeader.ProtoReflect.Descriptor instead.
+func (*ImportMessageHeader) Descriptor() ([]byte, []int) {
+	return file_messages_proto_rawDescGZIP(), []int{27}
+}
+
 // ManualFlushExtraResponse is the extra response of manual flush message.
 type ManualFlushExtraResponse struct {
 	state         protoimpl.MessageState
@@ -1586,7 +1627,7 @@ type ManualFlushExtraResponse struct {
 func (x *ManualFlushExtraResponse) Reset() {
 	*x = ManualFlushExtraResponse{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_messages_proto_msgTypes[27]
+		mi := &file_messages_proto_msgTypes[28]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1599,7 +1640,7 @@ func (x *ManualFlushExtraResponse) String() string {
 func (*ManualFlushExtraResponse) ProtoMessage() {}
 
 func (x *ManualFlushExtraResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_messages_proto_msgTypes[27]
+	mi := &file_messages_proto_msgTypes[28]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1612,7 +1653,7 @@ func (x *ManualFlushExtraResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ManualFlushExtraResponse.ProtoReflect.Descriptor instead.
 func (*ManualFlushExtraResponse) Descriptor() ([]byte, []int) {
-	return file_messages_proto_rawDescGZIP(), []int{27}
+	return file_messages_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ManualFlushExtraResponse) GetSegmentIds() []int64 {
@@ -1640,7 +1681,7 @@ type TxnContext struct {
 func (x *TxnContext) Reset() {
 	*x = TxnContext{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_messages_proto_msgTypes[28]
+		mi := &file_messages_proto_msgTypes[29]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1653,7 +1694,7 @@ func (x *TxnContext) String() string {
 func (*TxnContext) ProtoMessage() {}
 
 func (x *TxnContext) ProtoReflect() protoreflect.Message {
-	mi := &file_messages_proto_msgTypes[28]
+	mi := &file_messages_proto_msgTypes[29]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1666,7 +1707,7 @@ func (x *TxnContext) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TxnContext.ProtoReflect.Descriptor instead.
 func (*TxnContext) Descriptor() ([]byte, []int) {
-	return file_messages_proto_rawDescGZIP(), []int{28}
+	return file_messages_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *TxnContext) GetTxnId() int64 {
@@ -1696,7 +1737,7 @@ type RMQMessageLayout struct {
 func (x *RMQMessageLayout) Reset() {
 	*x = RMQMessageLayout{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_messages_proto_msgTypes[29]
+		mi := &file_messages_proto_msgTypes[30]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1709,7 +1750,7 @@ func (x *RMQMessageLayout) String() string {
 func (*RMQMessageLayout) ProtoMessage() {}
 
 func (x *RMQMessageLayout) ProtoReflect() protoreflect.Message {
-	mi := &file_messages_proto_msgTypes[29]
+	mi := &file_messages_proto_msgTypes[30]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1722,7 +1763,7 @@ func (x *RMQMessageLayout) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RMQMessageLayout.ProtoReflect.Descriptor instead.
 func (*RMQMessageLayout) Descriptor() ([]byte, []int) {
-	return file_messages_proto_rawDescGZIP(), []int{29}
+	return file_messages_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *RMQMessageLayout) GetPayload() []byte {
@@ -1753,7 +1794,7 @@ type BroadcastHeader struct {
 func (x *BroadcastHeader) Reset() {
 	*x = BroadcastHeader{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_messages_proto_msgTypes[30]
+		mi := &file_messages_proto_msgTypes[31]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1765,8 +1806,13 @@ func (x *BroadcastHeader) String() string {
 
 func (*BroadcastHeader) ProtoMessage() {}
 
+<<<<<<< HEAD
 func (x *BroadcastHeader) ProtoReflect() protoreflect.Message {
 	mi := &file_messages_proto_msgTypes[30]
+=======
+func (x *VChannels) ProtoReflect() protoreflect.Message {
+	mi := &file_messages_proto_msgTypes[31]
+>>>>>>> 3f1056c8c4 (support to replicate import msg)
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1777,9 +1823,15 @@ func (x *BroadcastHeader) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
+<<<<<<< HEAD
 // Deprecated: Use BroadcastHeader.ProtoReflect.Descriptor instead.
 func (*BroadcastHeader) Descriptor() ([]byte, []int) {
 	return file_messages_proto_rawDescGZIP(), []int{30}
+=======
+// Deprecated: Use VChannels.ProtoReflect.Descriptor instead.
+func (*VChannels) Descriptor() ([]byte, []int) {
+	return file_messages_proto_rawDescGZIP(), []int{31}
+>>>>>>> 3f1056c8c4 (support to replicate import msg)
 }
 
 func (x *BroadcastHeader) GetBroadcastId() uint64 {
@@ -2176,6 +2228,7 @@ var file_messages_proto_rawDesc = []byte{
 	0x73, 0x61, 0x67, 0x65, 0x48, 0x65, 0x61, 0x64, 0x65, 0x72, 0x22, 0x1a, 0x0a, 0x18, 0x52, 0x6f,
 	0x6c, 0x6c, 0x62, 0x61, 0x63, 0x6b, 0x54, 0x78, 0x6e, 0x4d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65,
 	0x48, 0x65, 0x61, 0x64, 0x65, 0x72, 0x22, 0x12, 0x0a, 0x10, 0x54, 0x78, 0x6e, 0x4d, 0x65, 0x73,
+<<<<<<< HEAD
 	0x73, 0x61, 0x67, 0x65, 0x48, 0x65, 0x61, 0x64, 0x65, 0x72, 0x22, 0x3b, 0x0a, 0x18, 0x4d, 0x61,
 	0x6e, 0x75, 0x61, 0x6c, 0x46, 0x6c, 0x75, 0x73, 0x68, 0x45, 0x78, 0x74, 0x72, 0x61, 0x52, 0x65,
 	0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x1f, 0x0a, 0x0b, 0x73, 0x65, 0x67, 0x6d, 0x65, 0x6e,
@@ -2273,6 +2326,60 @@ var file_messages_proto_rawDesc = []byte{
 	0x6f, 0x72, 0x74, 0x4a, 0x6f, 0x62, 0x49, 0x44, 0x10, 0x01, 0x12, 0x20, 0x0a, 0x1c, 0x52, 0x65,
 	0x73, 0x6f, 0x75, 0x72, 0x63, 0x65, 0x44, 0x6f, 0x6d, 0x61, 0x69, 0x6e, 0x43, 0x6f, 0x6c, 0x6c,
 	0x65, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x4e, 0x61, 0x6d, 0x65, 0x10, 0x02, 0x42, 0x32, 0x5a, 0x30,
+=======
+	0x73, 0x61, 0x67, 0x65, 0x48, 0x65, 0x61, 0x64, 0x65, 0x72, 0x22, 0x15, 0x0a, 0x13, 0x49, 0x6d,
+	0x70, 0x6f, 0x72, 0x74, 0x4d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x48, 0x65, 0x61, 0x64, 0x65,
+	0x72, 0x22, 0x3b, 0x0a, 0x18, 0x4d, 0x61, 0x6e, 0x75, 0x61, 0x6c, 0x46, 0x6c, 0x75, 0x73, 0x68,
+	0x45, 0x78, 0x74, 0x72, 0x61, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x1f, 0x0a,
+	0x0b, 0x73, 0x65, 0x67, 0x6d, 0x65, 0x6e, 0x74, 0x5f, 0x69, 0x64, 0x73, 0x18, 0x01, 0x20, 0x03,
+	0x28, 0x03, 0x52, 0x0a, 0x73, 0x65, 0x67, 0x6d, 0x65, 0x6e, 0x74, 0x49, 0x64, 0x73, 0x22, 0x5a,
+	0x0a, 0x0a, 0x54, 0x78, 0x6e, 0x43, 0x6f, 0x6e, 0x74, 0x65, 0x78, 0x74, 0x12, 0x15, 0x0a, 0x06,
+	0x74, 0x78, 0x6e, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x03, 0x52, 0x05, 0x74, 0x78,
+	0x6e, 0x49, 0x64, 0x12, 0x35, 0x0a, 0x16, 0x6b, 0x65, 0x65, 0x70, 0x61, 0x6c, 0x69, 0x76, 0x65,
+	0x5f, 0x6d, 0x69, 0x6c, 0x6c, 0x69, 0x73, 0x65, 0x63, 0x6f, 0x6e, 0x64, 0x73, 0x18, 0x02, 0x20,
+	0x01, 0x28, 0x03, 0x52, 0x15, 0x6b, 0x65, 0x65, 0x70, 0x61, 0x6c, 0x69, 0x76, 0x65, 0x4d, 0x69,
+	0x6c, 0x6c, 0x69, 0x73, 0x65, 0x63, 0x6f, 0x6e, 0x64, 0x73, 0x22, 0xc4, 0x01, 0x0a, 0x10, 0x52,
+	0x4d, 0x51, 0x4d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x4c, 0x61, 0x79, 0x6f, 0x75, 0x74, 0x12,
+	0x18, 0x0a, 0x07, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0c,
+	0x52, 0x07, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64, 0x12, 0x57, 0x0a, 0x0a, 0x70, 0x72, 0x6f,
+	0x70, 0x65, 0x72, 0x74, 0x69, 0x65, 0x73, 0x18, 0x02, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x37, 0x2e,
+	0x6d, 0x69, 0x6c, 0x76, 0x75, 0x73, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2e, 0x6d, 0x65, 0x73,
+	0x73, 0x61, 0x67, 0x65, 0x73, 0x2e, 0x52, 0x4d, 0x51, 0x4d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65,
+	0x4c, 0x61, 0x79, 0x6f, 0x75, 0x74, 0x2e, 0x50, 0x72, 0x6f, 0x70, 0x65, 0x72, 0x74, 0x69, 0x65,
+	0x73, 0x45, 0x6e, 0x74, 0x72, 0x79, 0x52, 0x0a, 0x70, 0x72, 0x6f, 0x70, 0x65, 0x72, 0x74, 0x69,
+	0x65, 0x73, 0x1a, 0x3d, 0x0a, 0x0f, 0x50, 0x72, 0x6f, 0x70, 0x65, 0x72, 0x74, 0x69, 0x65, 0x73,
+	0x45, 0x6e, 0x74, 0x72, 0x79, 0x12, 0x10, 0x0a, 0x03, 0x6b, 0x65, 0x79, 0x18, 0x01, 0x20, 0x01,
+	0x28, 0x09, 0x52, 0x03, 0x6b, 0x65, 0x79, 0x12, 0x14, 0x0a, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65,
+	0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x3a, 0x02, 0x38,
+	0x01, 0x22, 0x29, 0x0a, 0x09, 0x56, 0x43, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x73, 0x12, 0x1c,
+	0x0a, 0x09, 0x76, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x73, 0x18, 0x01, 0x20, 0x03, 0x28,
+	0x09, 0x52, 0x09, 0x76, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x73, 0x2a, 0x88, 0x02, 0x0a,
+	0x0b, 0x4d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x54, 0x79, 0x70, 0x65, 0x12, 0x0b, 0x0a, 0x07,
+	0x55, 0x6e, 0x6b, 0x6e, 0x6f, 0x77, 0x6e, 0x10, 0x00, 0x12, 0x0c, 0x0a, 0x08, 0x54, 0x69, 0x6d,
+	0x65, 0x54, 0x69, 0x63, 0x6b, 0x10, 0x01, 0x12, 0x0a, 0x0a, 0x06, 0x49, 0x6e, 0x73, 0x65, 0x72,
+	0x74, 0x10, 0x02, 0x12, 0x0a, 0x0a, 0x06, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x10, 0x03, 0x12,
+	0x09, 0x0a, 0x05, 0x46, 0x6c, 0x75, 0x73, 0x68, 0x10, 0x04, 0x12, 0x14, 0x0a, 0x10, 0x43, 0x72,
+	0x65, 0x61, 0x74, 0x65, 0x43, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x10, 0x05,
+	0x12, 0x12, 0x0a, 0x0e, 0x44, 0x72, 0x6f, 0x70, 0x43, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x69,
+	0x6f, 0x6e, 0x10, 0x06, 0x12, 0x13, 0x0a, 0x0f, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x50, 0x61,
+	0x72, 0x74, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x10, 0x07, 0x12, 0x11, 0x0a, 0x0d, 0x44, 0x72, 0x6f,
+	0x70, 0x50, 0x61, 0x72, 0x74, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x10, 0x08, 0x12, 0x0f, 0x0a, 0x0b,
+	0x4d, 0x61, 0x6e, 0x75, 0x61, 0x6c, 0x46, 0x6c, 0x75, 0x73, 0x68, 0x10, 0x09, 0x12, 0x11, 0x0a,
+	0x0d, 0x43, 0x72, 0x65, 0x61, 0x74, 0x65, 0x53, 0x65, 0x67, 0x6d, 0x65, 0x6e, 0x74, 0x10, 0x0a,
+	0x12, 0x0a, 0x0a, 0x06, 0x49, 0x6d, 0x70, 0x6f, 0x72, 0x74, 0x10, 0x0b, 0x12, 0x0d, 0x0a, 0x08,
+	0x42, 0x65, 0x67, 0x69, 0x6e, 0x54, 0x78, 0x6e, 0x10, 0x84, 0x07, 0x12, 0x0e, 0x0a, 0x09, 0x43,
+	0x6f, 0x6d, 0x6d, 0x69, 0x74, 0x54, 0x78, 0x6e, 0x10, 0x85, 0x07, 0x12, 0x10, 0x0a, 0x0b, 0x52,
+	0x6f, 0x6c, 0x6c, 0x62, 0x61, 0x63, 0x6b, 0x54, 0x78, 0x6e, 0x10, 0x86, 0x07, 0x12, 0x08, 0x0a,
+	0x03, 0x54, 0x78, 0x6e, 0x10, 0xe7, 0x07, 0x2a, 0x82, 0x01, 0x0a, 0x08, 0x54, 0x78, 0x6e, 0x53,
+	0x74, 0x61, 0x74, 0x65, 0x12, 0x0e, 0x0a, 0x0a, 0x54, 0x78, 0x6e, 0x55, 0x6e, 0x6b, 0x6e, 0x6f,
+	0x77, 0x6e, 0x10, 0x00, 0x12, 0x0c, 0x0a, 0x08, 0x54, 0x78, 0x6e, 0x42, 0x65, 0x67, 0x69, 0x6e,
+	0x10, 0x01, 0x12, 0x0f, 0x0a, 0x0b, 0x54, 0x78, 0x6e, 0x49, 0x6e, 0x46, 0x6c, 0x69, 0x67, 0x68,
+	0x74, 0x10, 0x02, 0x12, 0x0f, 0x0a, 0x0b, 0x54, 0x78, 0x6e, 0x4f, 0x6e, 0x43, 0x6f, 0x6d, 0x6d,
+	0x69, 0x74, 0x10, 0x03, 0x12, 0x10, 0x0a, 0x0c, 0x54, 0x78, 0x6e, 0x43, 0x6f, 0x6d, 0x6d, 0x69,
+	0x74, 0x74, 0x65, 0x64, 0x10, 0x04, 0x12, 0x11, 0x0a, 0x0d, 0x54, 0x78, 0x6e, 0x4f, 0x6e, 0x52,
+	0x6f, 0x6c, 0x6c, 0x62, 0x61, 0x63, 0x6b, 0x10, 0x05, 0x12, 0x11, 0x0a, 0x0d, 0x54, 0x78, 0x6e,
+	0x52, 0x6f, 0x6c, 0x6c, 0x62, 0x61, 0x63, 0x6b, 0x65, 0x64, 0x10, 0x06, 0x42, 0x32, 0x5a, 0x30,
+>>>>>>> 3f1056c8c4 (support to replicate import msg)
 	0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f, 0x6d, 0x2f, 0x6d, 0x69, 0x6c, 0x76, 0x75,
 	0x73, 0x2d, 0x69, 0x6f, 0x2f, 0x6d, 0x69, 0x6c, 0x76, 0x75, 0x73, 0x2f, 0x70, 0x6b, 0x67, 0x2f,
 	0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x73, 0x70, 0x62,
@@ -2291,6 +2398,7 @@ func file_messages_proto_rawDescGZIP() []byte {
 	return file_messages_proto_rawDescData
 }
 
+<<<<<<< HEAD
 var file_messages_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
 var file_messages_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
 var file_messages_proto_goTypes = []interface{}{
@@ -2356,6 +2464,63 @@ var file_messages_proto_depIdxs = []int32{
 	14, // [14:14] is the sub-list for extension type_name
 	14, // [14:14] is the sub-list for extension extendee
 	0,  // [0:14] is the sub-list for field type_name
+=======
+var file_messages_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_messages_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
+var file_messages_proto_goTypes = []interface{}{
+	(MessageType)(0),                      // 0: milvus.proto.messages.MessageType
+	(TxnState)(0),                         // 1: milvus.proto.messages.TxnState
+	(*MessageID)(nil),                     // 2: milvus.proto.messages.MessageID
+	(*Message)(nil),                       // 3: milvus.proto.messages.Message
+	(*ImmutableMessage)(nil),              // 4: milvus.proto.messages.ImmutableMessage
+	(*FlushMessageBody)(nil),              // 5: milvus.proto.messages.FlushMessageBody
+	(*ManualFlushMessageBody)(nil),        // 6: milvus.proto.messages.ManualFlushMessageBody
+	(*CreateSegmentMessageBody)(nil),      // 7: milvus.proto.messages.CreateSegmentMessageBody
+	(*CreateSegmentInfo)(nil),             // 8: milvus.proto.messages.CreateSegmentInfo
+	(*BeginTxnMessageBody)(nil),           // 9: milvus.proto.messages.BeginTxnMessageBody
+	(*CommitTxnMessageBody)(nil),          // 10: milvus.proto.messages.CommitTxnMessageBody
+	(*RollbackTxnMessageBody)(nil),        // 11: milvus.proto.messages.RollbackTxnMessageBody
+	(*TxnMessageBody)(nil),                // 12: milvus.proto.messages.TxnMessageBody
+	(*TimeTickMessageHeader)(nil),         // 13: milvus.proto.messages.TimeTickMessageHeader
+	(*InsertMessageHeader)(nil),           // 14: milvus.proto.messages.InsertMessageHeader
+	(*PartitionSegmentAssignment)(nil),    // 15: milvus.proto.messages.PartitionSegmentAssignment
+	(*SegmentAssignment)(nil),             // 16: milvus.proto.messages.SegmentAssignment
+	(*DeleteMessageHeader)(nil),           // 17: milvus.proto.messages.DeleteMessageHeader
+	(*FlushMessageHeader)(nil),            // 18: milvus.proto.messages.FlushMessageHeader
+	(*CreateSegmentMessageHeader)(nil),    // 19: milvus.proto.messages.CreateSegmentMessageHeader
+	(*ManualFlushMessageHeader)(nil),      // 20: milvus.proto.messages.ManualFlushMessageHeader
+	(*CreateCollectionMessageHeader)(nil), // 21: milvus.proto.messages.CreateCollectionMessageHeader
+	(*DropCollectionMessageHeader)(nil),   // 22: milvus.proto.messages.DropCollectionMessageHeader
+	(*CreatePartitionMessageHeader)(nil),  // 23: milvus.proto.messages.CreatePartitionMessageHeader
+	(*DropPartitionMessageHeader)(nil),    // 24: milvus.proto.messages.DropPartitionMessageHeader
+	(*BeginTxnMessageHeader)(nil),         // 25: milvus.proto.messages.BeginTxnMessageHeader
+	(*CommitTxnMessageHeader)(nil),        // 26: milvus.proto.messages.CommitTxnMessageHeader
+	(*RollbackTxnMessageHeader)(nil),      // 27: milvus.proto.messages.RollbackTxnMessageHeader
+	(*TxnMessageHeader)(nil),              // 28: milvus.proto.messages.TxnMessageHeader
+	(*ImportMessageHeader)(nil),           // 29: milvus.proto.messages.ImportMessageHeader
+	(*ManualFlushExtraResponse)(nil),      // 30: milvus.proto.messages.ManualFlushExtraResponse
+	(*TxnContext)(nil),                    // 31: milvus.proto.messages.TxnContext
+	(*RMQMessageLayout)(nil),              // 32: milvus.proto.messages.RMQMessageLayout
+	(*VChannels)(nil),                     // 33: milvus.proto.messages.VChannels
+	nil,                                   // 34: milvus.proto.messages.Message.PropertiesEntry
+	nil,                                   // 35: milvus.proto.messages.ImmutableMessage.PropertiesEntry
+	nil,                                   // 36: milvus.proto.messages.RMQMessageLayout.PropertiesEntry
+}
+var file_messages_proto_depIdxs = []int32{
+	34, // 0: milvus.proto.messages.Message.properties:type_name -> milvus.proto.messages.Message.PropertiesEntry
+	2,  // 1: milvus.proto.messages.ImmutableMessage.id:type_name -> milvus.proto.messages.MessageID
+	35, // 2: milvus.proto.messages.ImmutableMessage.properties:type_name -> milvus.proto.messages.ImmutableMessage.PropertiesEntry
+	8,  // 3: milvus.proto.messages.CreateSegmentMessageBody.segments:type_name -> milvus.proto.messages.CreateSegmentInfo
+	3,  // 4: milvus.proto.messages.TxnMessageBody.messages:type_name -> milvus.proto.messages.Message
+	15, // 5: milvus.proto.messages.InsertMessageHeader.partitions:type_name -> milvus.proto.messages.PartitionSegmentAssignment
+	16, // 6: milvus.proto.messages.PartitionSegmentAssignment.segment_assignment:type_name -> milvus.proto.messages.SegmentAssignment
+	36, // 7: milvus.proto.messages.RMQMessageLayout.properties:type_name -> milvus.proto.messages.RMQMessageLayout.PropertiesEntry
+	8,  // [8:8] is the sub-list for method output_type
+	8,  // [8:8] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
+>>>>>>> 3f1056c8c4 (support to replicate import msg)
 }
 
 func init() { file_messages_proto_init() }
@@ -2689,7 +2854,7 @@ func file_messages_proto_init() {
 			}
 		}
 		file_messages_proto_msgTypes[27].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ManualFlushExtraResponse); i {
+			switch v := v.(*ImportMessageHeader); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2701,7 +2866,7 @@ func file_messages_proto_init() {
 			}
 		}
 		file_messages_proto_msgTypes[28].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*TxnContext); i {
+			switch v := v.(*ManualFlushExtraResponse); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2713,7 +2878,7 @@ func file_messages_proto_init() {
 			}
 		}
 		file_messages_proto_msgTypes[29].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*RMQMessageLayout); i {
+			switch v := v.(*TxnContext); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -2725,7 +2890,11 @@ func file_messages_proto_init() {
 			}
 		}
 		file_messages_proto_msgTypes[30].Exporter = func(v interface{}, i int) interface{} {
+<<<<<<< HEAD
 			switch v := v.(*BroadcastHeader); i {
+=======
+			switch v := v.(*RMQMessageLayout); i {
+>>>>>>> 3f1056c8c4 (support to replicate import msg)
 			case 0:
 				return &v.state
 			case 1:
@@ -2737,6 +2906,7 @@ func file_messages_proto_init() {
 			}
 		}
 		file_messages_proto_msgTypes[31].Exporter = func(v interface{}, i int) interface{} {
+<<<<<<< HEAD
 			switch v := v.(*ResourceKey); i {
 			case 0:
 				return &v.state
@@ -2774,6 +2944,9 @@ func file_messages_proto_init() {
 		}
 		file_messages_proto_msgTypes[34].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*BroadcastResourceKeyAckOne); i {
+=======
+			switch v := v.(*VChannels); i {
+>>>>>>> 3f1056c8c4 (support to replicate import msg)
 			case 0:
 				return &v.state
 			case 1:
@@ -2794,8 +2967,13 @@ func file_messages_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_messages_proto_rawDesc,
+<<<<<<< HEAD
 			NumEnums:      3,
 			NumMessages:   38,
+=======
+			NumEnums:      2,
+			NumMessages:   35,
+>>>>>>> 3f1056c8c4 (support to replicate import msg)
 			NumExtensions: 0,
 			NumServices:   0,
 		},
