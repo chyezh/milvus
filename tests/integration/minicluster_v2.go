@@ -166,6 +166,8 @@ func StartMiniClusterV2(ctx context.Context, opts ...OptionV2) (*MiniClusterV2, 
 	}
 	cluster.EtcdCli = etcdCli
 
+	params.Save(params.MQCfg.Type.Key, "rocksmq")
+	paramtable.SetRole(typeutil.StandaloneRole)
 	if streamingutil.IsStreamingServiceEnabled() {
 		streaming.Init()
 	}
@@ -188,8 +190,6 @@ func StartMiniClusterV2(ctx context.Context, opts ...OptionV2) (*MiniClusterV2, 
 	params.DataNodeGrpcServerCfg.IP = "localhost"
 	params.IndexNodeGrpcServerCfg.IP = "localhost"
 	params.StreamingNodeGrpcServerCfg.IP = "localhost"
-	params.Save(params.MQCfg.Type.Key, "rocksmq")
-	paramtable.SetRole(typeutil.StandaloneRole)
 	params.Save(params.RootCoordGrpcServerCfg.Port.Key, fmt.Sprint(ports[0]))
 	params.Save(params.DataCoordGrpcServerCfg.Port.Key, fmt.Sprint(ports[1]))
 	params.Save(params.QueryCoordGrpcServerCfg.Port.Key, fmt.Sprint(ports[2]))
