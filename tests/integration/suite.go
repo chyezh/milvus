@@ -30,13 +30,10 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
-	"github.com/milvus-io/milvus/internal/coordinator/coordclient"
-	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
 	"github.com/milvus-io/milvus/internal/util/hookutil"
 	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/util/etcd"
 	"github.com/milvus-io/milvus/pkg/util/merr"
-	"github.com/milvus-io/milvus/pkg/util/paramtable"
 )
 
 var caseTimeout time.Duration
@@ -111,8 +108,6 @@ func (s *MiniClusterSuite) SetupTest() {
 	// setup env value to init etcd source
 	s.T().Setenv("etcd.endpoints", val)
 
-	params = paramtable.Get()
-
 	s.T().Log("Setup case timeout", caseTimeout)
 	ctx, cancel := context.WithTimeout(context.Background(), caseTimeout)
 	s.cancelFunc = cancel
@@ -171,6 +166,4 @@ func (s *MiniClusterSuite) TearDownTest() {
 	if s.Cluster != nil {
 		s.Cluster.Stop()
 	}
-	registry.ResetRegistration()
-	coordclient.ResetRegistration()
 }
