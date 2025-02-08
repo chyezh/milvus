@@ -17,7 +17,7 @@ func newScanner(scannerName string, exclude *kafkaID, consumer *kafka.Consumer) 
 	s := &scannerImpl{
 		ScannerHelper: helper.NewScannerHelper(scannerName),
 		consumer:      consumer,
-		msgChannel:    make(chan message.ImmutableMessage, 1),
+		msgChannel:    make(chan message.ImmutableMessage),
 		exclude:       exclude,
 	}
 	go s.executeConsume()

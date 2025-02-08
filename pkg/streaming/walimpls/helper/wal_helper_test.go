@@ -18,5 +18,5 @@ func TestWALHelper(t *testing.T) {
 	})
 	assert.NotNil(t, h.Channel())
 	assert.Equal(t, h.Channel().Name, "test")
-	assert.NotNil(t, h.Log())
+	assert.NotNil(t, h.Logger())
 }

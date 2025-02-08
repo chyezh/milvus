@@ -3,6 +3,7 @@ package helper
 import (
 	"context"
 
+	"github.com/milvus-io/milvus/pkg/log"
 	"github.com/milvus-io/milvus/pkg/util/syncutil"
 )
 
@@ -16,6 +17,7 @@ func NewScannerHelper(scannerName string) *ScannerHelper {
 
 // ScannerHelper is a helper for scanner implementation.
 type ScannerHelper struct {
+	log.Binder
 	scannerName string
 	notifier    *syncutil.AsyncTaskNotifier[error]
 }

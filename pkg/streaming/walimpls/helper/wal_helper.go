@@ -10,24 +10,20 @@ import (
 
 // NewWALHelper creates a new WALHelper.
 func NewWALHelper(opt *walimpls.OpenOption) *WALHelper {
-	return &WALHelper{
-		logger:  log.With(zap.Any("channel", opt.Channel)),
+	wh := &WALHelper{
 		channel: opt.Channel,
 	}
+	wh.SetLogger(log.With(log.FieldModule("walimpls"), zap.Stringer("channel", opt.Channel)))
+	return wh
 }
 
 // WALHelper is a helper for WAL implementation.
 type WALHelper struct {
-	logger  *log.MLogger
+	log.Binder
 	channel types.PChannelInfo
 }
 
 // Channel returns the channel of the WAL.
 func (w *WALHelper) Channel() types.PChannelInfo {
 	return w.channel
-}
-
-// Log returns the logger of the WAL.
-func (w *WALHelper) Log() *log.MLogger {
-	return w.logger
 }

@@ -5,6 +5,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/confluentinc/confluent-kafka-go/kafka"
+	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/pkg/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/streaming/util/message"
@@ -24,7 +25,12 @@ func (w *walImpl) WALName() string {
 	return walName
 }
 
-func (w *walImpl) Append(ctx context.Context, msg message.MutableMessage) (message.MessageID, error) {
+func (w *walImpl) Append(ctx context.Context, msg message.MutableMessage) (msgID message.MessageID, err error) {
+	defer func() {
+		if err != nil {
+			w.Logger().RatedWarn(1, "send message to kafka failed", zap.Error(err))
+		}
+	}()
 	properties := msg.Properties().ToRawMap()
 	headers := make([]kafka.Header, 0, len(properties))
 	for key, value := range properties {
@@ -95,7 +101,9 @@ func (w *walImpl) Read(ctx context.Context, opt walimpls.ReadOption) (s walimpls
 	if err := c.Assign([]kafka.TopicPartition{seekPosition}); err != nil {
 		return nil, errors.Wrap(err, "failed to assign kafka consumer")
 	}
-	return newScanner(opt.Name, exclude, c), nil
+	scanner := newScanner(opt.Name, exclude, c)
+	scanner.SetLogger(w.Logger())
+	return scanner, nil
 }
 
 func (w *walImpl) Close() {

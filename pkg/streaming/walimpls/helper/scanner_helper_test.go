@@ -9,6 +9,7 @@ import (
 
 func TestScanner(t *testing.T) {
 	h := NewScannerHelper("test")
+	assert.NotNil(t, h.Logger())
 	assert.NotNil(t, h.Context())
 	assert.Equal(t, h.Name(), "test")
 	assert.NotNil(t, h.Context())

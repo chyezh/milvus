@@ -44,7 +44,7 @@ type PChannelInfo struct {
 	Term int64  // term of pchannel.
 }
 
-func (c *PChannelInfo) String() string {
+func (c PChannelInfo) String() string {
 	return fmt.Sprintf("%s@%d", c.Name, c.Term)
 }
 

@@ -20,7 +20,7 @@ func newScanner(
 	s := &scannerImpl{
 		ScannerHelper: helper.NewScannerHelper(scannerName),
 		reader:        reader,
-		msgChannel:    make(chan message.ImmutableMessage, 1),
+		msgChannel:    make(chan message.ImmutableMessage),
 	}
 	go s.executeConsume()
 	return s

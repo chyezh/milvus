@@ -30,7 +30,7 @@ func (w *walImpl) Append(ctx context.Context, msg message.MutableMessage) (messa
 		Properties: msg.Properties().ToRawMap(),
 	})
 	if err != nil {
-		w.Log().RatedWarn(1, "send message to pulsar failed", zap.Error(err))
+		w.Logger().RatedWarn(1, "send message to pulsar failed", zap.Error(err))
 		return nil, err
 	}
 	return pulsarID{id}, nil
@@ -69,7 +69,9 @@ func (w *walImpl) Read(ctx context.Context, opt walimpls.ReadOption) (s walimpls
 	if err != nil {
 		return nil, err
 	}
-	return newScanner(opt.Name, reader), nil
+	scanner := newScanner(opt.Name, reader)
+	scanner.SetLogger(w.Logger())
+	return scanner, nil
 }
 
 func (w *walImpl) Close() {
