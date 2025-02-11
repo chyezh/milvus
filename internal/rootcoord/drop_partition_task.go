@@ -26,7 +26,6 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/util/proxyutil"
-	"github.com/milvus-io/milvus/pkg/common"
 	"github.com/milvus-io/milvus/pkg/log"
 	pb "github.com/milvus-io/milvus/pkg/proto/etcdpb"
 )
@@ -54,15 +53,15 @@ func (t *dropPartitionTask) Prepare(ctx context.Context) error {
 }
 
 func (t *dropPartitionTask) Execute(ctx context.Context) error {
-	partID := common.InvalidPartitionID
-	for _, partition := range t.collMeta.Partitions {
-		if partition.PartitionName == t.Req.GetPartitionName() {
-			partID = partition.PartitionID
+	var partition *model.Partition
+	for _, p := range t.collMeta.Partitions {
+		if p.PartitionName == t.Req.GetPartitionName() {
+			partition = p
 			break
 		}
 	}
-	if partID == common.InvalidPartitionID {
-		log.Ctx(ctx).Warn("drop an non-existent partition", zap.String("collection", t.Req.GetCollectionName()), zap.String("partition", t.Req.GetPartitionName()))
+	if partition == nil || partition.State == pb.PartitionState_PartitionDropping || partition.State == pb.PartitionState_PartitionDropped {
+		log.Ctx(ctx).Warn("drop an non-existent or dropping/dropped partition", zap.String("collection", t.Req.GetCollectionName()), zap.String("partition", t.Req.GetPartitionName()))
 		// make dropping partition idempotent.
 		return nil
 	}
@@ -92,6 +91,16 @@ func executeDropPartitionTaskSteps(ctx context.Context,
 	ts Timestamp,
 ) error {
 	redoTask := newBaseRedoTask(core.stepExecutor)
+	if !isRecover {
+		// if the task is recoverred from meta, the state has been changed to dropping, so skip it.
+		redoTask.AddSyncStep(&changePartitionStateStep{
+			baseStep:     baseStep{core: core},
+			collectionID: collMeta.CollectionID,
+			partitionID:  partition.PartitionID,
+			state:        pb.PartitionState_PartitionDropping,
+			ts:           ts,
+		})
+	}
 
 	redoTask.AddSyncStep(&expireCacheStep{
 		baseStep:        baseStep{core: core},
@@ -102,14 +111,6 @@ func executeDropPartitionTaskSteps(ctx context.Context,
 		ts:              ts,
 		opts:            []proxyutil.ExpireCacheOpt{proxyutil.SetMsgType(commonpb.MsgType_DropPartition)},
 	})
-	redoTask.AddSyncStep(&changePartitionStateStep{
-		baseStep:     baseStep{core: core},
-		collectionID: col.CollectionID,
-		partitionID:  partitionID,
-		state:        pb.PartitionState_PartitionDropping,
-		ts:           ts,
-	})
-
 	redoTask.AddAsyncStep(&deletePartitionDataStep{
 		baseStep: baseStep{core: core},
 		pchans:   col.PhysicalChannelNames,
@@ -121,6 +122,7 @@ func executeDropPartitionTaskSteps(ctx context.Context,
 		},
 		isSkip: isReplicate,
 	})
+	redoTask.AddAsyncStep(newDropPartitionAtDataCoordStep(core, col.CollectionID, partition.PartitionID))
 	redoTask.AddAsyncStep(newConfirmGCStep(core, col.CollectionID, partitionID))
 	redoTask.AddAsyncStep(&removePartitionMetaStep{
 		baseStep:     baseStep{core: core},

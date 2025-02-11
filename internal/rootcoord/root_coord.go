@@ -45,6 +45,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore"
 	kvmetestore "github.com/milvus-io/milvus/internal/metastore/kv/rootcoord"
 	"github.com/milvus-io/milvus/internal/metastore/model"
+	"github.com/milvus-io/milvus/internal/rootcoord/tombstone"
 	streamingcoord "github.com/milvus-io/milvus/internal/streamingcoord/server"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
 	tso2 "github.com/milvus-io/milvus/internal/tso"
@@ -389,6 +390,7 @@ func (c *Core) initMetaTable(initCtx context.Context) error {
 			return err
 		}
 
+		tombstone.InitCollectionTombstone(c.meta.(*MetaTable))
 		return nil
 	}
 
@@ -710,7 +712,7 @@ func (c *Core) restore(ctx context.Context) error {
 				for _, part := range coll.Partitions {
 					switch part.State {
 					case pb.PartitionState_PartitionDropping:
-						go c.garbageCollector.ReDropPartition(coll.DBID, coll.PhysicalChannelNames, coll.VirtualChannelNames, part.Clone(), ts)
+						go c.garbageCollector.ReDropPartition(coll.Clone(), part.Clone(), db.Name, ts)
 					case pb.PartitionState_PartitionCreating:
 						go c.garbageCollector.RemoveCreatingPartition(coll.DBID, part.Clone(), ts)
 					default:
@@ -719,7 +721,7 @@ func (c *Core) restore(ctx context.Context) error {
 			} else {
 				switch coll.State {
 				case pb.CollectionState_CollectionDropping:
-					go c.garbageCollector.ReDropCollection(coll.Clone(), ts)
+					go c.garbageCollector.ReDropCollection(coll.Clone(), db.Name, ts)
 				case pb.CollectionState_CollectionCreating:
 					go c.garbageCollector.RemoveCreatingCollection(coll.Clone())
 				default:

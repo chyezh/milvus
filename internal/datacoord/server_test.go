@@ -49,6 +49,8 @@ import (
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/mocks"
+	"github.com/milvus-io/milvus/internal/mocks/rootcoord/mock_tombstone"
+	"github.com/milvus-io/milvus/internal/rootcoord/tombstone"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/dependency"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
@@ -117,6 +119,9 @@ func TestGetTimeTickChannel(t *testing.T) {
 }
 
 func TestGetSegmentStates(t *testing.T) {
+	tbMeta := mock_tombstone.NewMockCollectionTombstoneInterface(t)
+	tbMeta.EXPECT().CheckIfPartitionAvailable(mock.Anything, mock.Anything, mock.Anything).Return(true).Maybe()
+	tombstone.InitCollectionTombstoneForTest(tbMeta)
 	t.Run("normal cases", func(t *testing.T) {
 		svr := newTestServer(t)
 		defer closeTestServer(t, svr)

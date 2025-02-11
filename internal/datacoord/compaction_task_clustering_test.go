@@ -35,6 +35,10 @@ import (
 	"github.com/milvus-io/milvus/internal/datacoord/session"
 	"github.com/milvus-io/milvus/internal/metastore/kv/datacoord"
 	"github.com/milvus-io/milvus/internal/metastore/model"
+	"github.com/milvus-io/milvus/internal/mocks/rootcoord/mock_tombstone"
+	"github.com/milvus-io/milvus/internal/proto/datapb"
+	"github.com/milvus-io/milvus/internal/proto/indexpb"
+	"github.com/milvus-io/milvus/internal/rootcoord/tombstone"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/common"
 	"github.com/milvus-io/milvus/pkg/proto/datapb"
@@ -64,6 +68,9 @@ func (s *ClusteringCompactionTaskSuite) SetupTest() {
 	catalog := datacoord.NewCatalog(NewMetaMemoryKV(), "", "")
 	broker := broker.NewMockBroker(s.T())
 	broker.EXPECT().ShowCollectionIDs(mock.Anything).Return(nil, nil)
+	tbMeta := mock_tombstone.NewMockCollectionTombstoneInterface(s.T())
+	tbMeta.EXPECT().CheckIfPartitionAvailable(mock.Anything, mock.Anything, mock.Anything).Return(true).Maybe()
+	tombstone.InitCollectionTombstoneForTest(tbMeta)
 	meta, err := newMeta(ctx, catalog, cm, broker)
 	s.NoError(err)
 	s.meta = meta

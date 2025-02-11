@@ -96,6 +96,15 @@ func executeDropCollectionTaskSteps(ctx context.Context,
 	ts Timestamp,
 ) error {
 	redoTask := newBaseRedoTask(core.stepExecutor)
+	if !isRecover {
+		// if the task is recoverred from meta, the state has been changed to dropping, so skip it.
+		redoTask.AddSyncStep(&changeCollectionStateStep{
+			baseStep:     baseStep{core: core},
+			collectionID: col.CollectionID,
+			state:        pb.CollectionState_CollectionDropping,
+			ts:           ts,
+		})
+	}
 
 	redoTask.AddSyncStep(&expireCacheStep{
 		baseStep:        baseStep{core: core},
@@ -105,13 +114,6 @@ func executeDropCollectionTaskSteps(ctx context.Context,
 		ts:              ts,
 		opts:            []proxyutil.ExpireCacheOpt{proxyutil.SetMsgType(commonpb.MsgType_DropCollection)},
 	})
-	redoTask.AddSyncStep(&changeCollectionStateStep{
-		baseStep:     baseStep{core: core},
-		collectionID: col.CollectionID,
-		state:        pb.CollectionState_CollectionDropping,
-		ts:           ts,
-	})
-
 	redoTask.AddAsyncStep(&releaseCollectionStep{
 		baseStep:     baseStep{core: core},
 		collectionID: col.CollectionID,
@@ -127,9 +129,10 @@ func executeDropCollectionTaskSteps(ctx context.Context,
 		isSkip:   isReplicate,
 	})
 	redoTask.AddAsyncStep(&removeDmlChannelsStep{
-		baseStep:  baseStep{core: core},
-		pChannels: col.PhysicalChannelNames,
+		baseStep: baseStep{core: core},
+		collInfo: col,
 	})
+	redoTask.AddAsyncStep(newDropCollectionAtDataCoordStep(core, col.CollectionID, col.VirtualChannelNames))
 	redoTask.AddAsyncStep(newConfirmGCStep(core, col.CollectionID, allPartition))
 	redoTask.AddAsyncStep(&deleteCollectionMetaStep{
 		baseStep:     baseStep{core: core},
@@ -139,6 +142,5 @@ func executeDropCollectionTaskSteps(ctx context.Context,
 		// wrap a step who will have these three children and connect them with ts.
 		ts: ts,
 	})
-
-	return redoTask.Execute(ctx)
+	return redoTask
 }

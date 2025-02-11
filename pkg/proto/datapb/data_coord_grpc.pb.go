@@ -50,6 +50,8 @@ const (
 	DataCoord_WatchChannels_FullMethodName               = "/milvus.proto.data.DataCoord/WatchChannels"
 	DataCoord_GetFlushState_FullMethodName               = "/milvus.proto.data.DataCoord/GetFlushState"
 	DataCoord_DropVirtualChannel_FullMethodName          = "/milvus.proto.data.DataCoord/DropVirtualChannel"
+	DataCoord_DropCollection_FullMethodName              = "/milvus.proto.data.DataCoord/DropCollection"
+	DataCoord_DropPartition_FullMethodName               = "/milvus.proto.data.DataCoord/DropPartition"
 	DataCoord_SetSegmentState_FullMethodName             = "/milvus.proto.data.DataCoord/SetSegmentState"
 	DataCoord_UpdateSegmentStatistics_FullMethodName     = "/milvus.proto.data.DataCoord/UpdateSegmentStatistics"
 	DataCoord_UpdateChannelCheckpoint_FullMethodName     = "/milvus.proto.data.DataCoord/UpdateChannelCheckpoint"
@@ -107,10 +109,16 @@ type DataCoordClient interface {
 	GetCompactionStateWithPlans(ctx context.Context, in *milvuspb.GetCompactionPlansRequest, opts ...grpc.CallOption) (*milvuspb.GetCompactionPlansResponse, error)
 	WatchChannels(ctx context.Context, in *WatchChannelsRequest, opts ...grpc.CallOption) (*WatchChannelsResponse, error)
 	GetFlushState(ctx context.Context, in *GetFlushStateRequest, opts ...grpc.CallOption) (*milvuspb.GetFlushStateResponse, error)
+	// Deprecated: Do not use.
 	DropVirtualChannel(ctx context.Context, in *DropVirtualChannelRequest, opts ...grpc.CallOption) (*DropVirtualChannelResponse, error)
+	// DropCollection is used to drop all data of a collection on datacoord.
+	DropCollection(ctx context.Context, in *DropCollectionRequest, opts ...grpc.CallOption) (*DropCollectionResponse, error)
+	DropPartition(ctx context.Context, in *DropPartitionRequest, opts ...grpc.CallOption) (*DropPartitionResponse, error)
+	// Deprecated: Do not use.
 	SetSegmentState(ctx context.Context, in *SetSegmentStateRequest, opts ...grpc.CallOption) (*SetSegmentStateResponse, error)
 	UpdateSegmentStatistics(ctx context.Context, in *UpdateSegmentStatisticsRequest, opts ...grpc.CallOption) (*commonpb.Status, error)
 	UpdateChannelCheckpoint(ctx context.Context, in *UpdateChannelCheckpointRequest, opts ...grpc.CallOption) (*commonpb.Status, error)
+	// Deprecated: Do not use.
 	MarkSegmentsDropped(ctx context.Context, in *MarkSegmentsDroppedRequest, opts ...grpc.CallOption) (*commonpb.Status, error)
 	BroadcastAlteredCollection(ctx context.Context, in *AlterCollectionRequest, opts ...grpc.CallOption) (*commonpb.Status, error)
 	CheckHealth(ctx context.Context, in *milvuspb.CheckHealthRequest, opts ...grpc.CallOption) (*milvuspb.CheckHealthResponse, error)
@@ -378,6 +386,7 @@ func (c *dataCoordClient) GetFlushState(ctx context.Context, in *GetFlushStateRe
 	return out, nil
 }
 
+// Deprecated: Do not use.
 func (c *dataCoordClient) DropVirtualChannel(ctx context.Context, in *DropVirtualChannelRequest, opts ...grpc.CallOption) (*DropVirtualChannelResponse, error) {
 	out := new(DropVirtualChannelResponse)
 	err := c.cc.Invoke(ctx, DataCoord_DropVirtualChannel_FullMethodName, in, out, opts...)
@@ -387,6 +396,25 @@ func (c *dataCoordClient) DropVirtualChannel(ctx context.Context, in *DropVirtua
 	return out, nil
 }
 
+func (c *dataCoordClient) DropCollection(ctx context.Context, in *DropCollectionRequest, opts ...grpc.CallOption) (*DropCollectionResponse, error) {
+	out := new(DropCollectionResponse)
+	err := c.cc.Invoke(ctx, DataCoord_DropCollection_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataCoordClient) DropPartition(ctx context.Context, in *DropPartitionRequest, opts ...grpc.CallOption) (*DropPartitionResponse, error) {
+	out := new(DropPartitionResponse)
+	err := c.cc.Invoke(ctx, DataCoord_DropPartition_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Deprecated: Do not use.
 func (c *dataCoordClient) SetSegmentState(ctx context.Context, in *SetSegmentStateRequest, opts ...grpc.CallOption) (*SetSegmentStateResponse, error) {
 	out := new(SetSegmentStateResponse)
 	err := c.cc.Invoke(ctx, DataCoord_SetSegmentState_FullMethodName, in, out, opts...)
@@ -414,6 +442,7 @@ func (c *dataCoordClient) UpdateChannelCheckpoint(ctx context.Context, in *Updat
 	return out, nil
 }
 
+// Deprecated: Do not use.
 func (c *dataCoordClient) MarkSegmentsDropped(ctx context.Context, in *MarkSegmentsDroppedRequest, opts ...grpc.CallOption) (*commonpb.Status, error) {
 	out := new(commonpb.Status)
 	err := c.cc.Invoke(ctx, DataCoord_MarkSegmentsDropped_FullMethodName, in, out, opts...)
@@ -618,10 +647,16 @@ type DataCoordServer interface {
 	GetCompactionStateWithPlans(context.Context, *milvuspb.GetCompactionPlansRequest) (*milvuspb.GetCompactionPlansResponse, error)
 	WatchChannels(context.Context, *WatchChannelsRequest) (*WatchChannelsResponse, error)
 	GetFlushState(context.Context, *GetFlushStateRequest) (*milvuspb.GetFlushStateResponse, error)
+	// Deprecated: Do not use.
 	DropVirtualChannel(context.Context, *DropVirtualChannelRequest) (*DropVirtualChannelResponse, error)
+	// DropCollection is used to drop all data of a collection on datacoord.
+	DropCollection(context.Context, *DropCollectionRequest) (*DropCollectionResponse, error)
+	DropPartition(context.Context, *DropPartitionRequest) (*DropPartitionResponse, error)
+	// Deprecated: Do not use.
 	SetSegmentState(context.Context, *SetSegmentStateRequest) (*SetSegmentStateResponse, error)
 	UpdateSegmentStatistics(context.Context, *UpdateSegmentStatisticsRequest) (*commonpb.Status, error)
 	UpdateChannelCheckpoint(context.Context, *UpdateChannelCheckpointRequest) (*commonpb.Status, error)
+	// Deprecated: Do not use.
 	MarkSegmentsDropped(context.Context, *MarkSegmentsDroppedRequest) (*commonpb.Status, error)
 	BroadcastAlteredCollection(context.Context, *AlterCollectionRequest) (*commonpb.Status, error)
 	CheckHealth(context.Context, *milvuspb.CheckHealthRequest) (*milvuspb.CheckHealthResponse, error)
@@ -730,6 +765,12 @@ func (UnimplementedDataCoordServer) GetFlushState(context.Context, *GetFlushStat
 }
 func (UnimplementedDataCoordServer) DropVirtualChannel(context.Context, *DropVirtualChannelRequest) (*DropVirtualChannelResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DropVirtualChannel not implemented")
+}
+func (UnimplementedDataCoordServer) DropCollection(context.Context, *DropCollectionRequest) (*DropCollectionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DropCollection not implemented")
+}
+func (UnimplementedDataCoordServer) DropPartition(context.Context, *DropPartitionRequest) (*DropPartitionResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DropPartition not implemented")
 }
 func (UnimplementedDataCoordServer) SetSegmentState(context.Context, *SetSegmentStateRequest) (*SetSegmentStateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetSegmentState not implemented")
@@ -1295,6 +1336,42 @@ func _DataCoord_DropVirtualChannel_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DataCoord_DropCollection_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DropCollectionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataCoordServer).DropCollection(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataCoord_DropCollection_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataCoordServer).DropCollection(ctx, req.(*DropCollectionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataCoord_DropPartition_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DropPartitionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataCoordServer).DropPartition(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataCoord_DropPartition_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataCoordServer).DropPartition(ctx, req.(*DropPartitionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _DataCoord_SetSegmentState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SetSegmentStateRequest)
 	if err := dec(in); err != nil {
@@ -1805,6 +1882,14 @@ var DataCoord_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DropVirtualChannel",
 			Handler:    _DataCoord_DropVirtualChannel_Handler,
+		},
+		{
+			MethodName: "DropCollection",
+			Handler:    _DataCoord_DropCollection_Handler,
+		},
+		{
+			MethodName: "DropPartition",
+			Handler:    _DataCoord_DropPartition_Handler,
 		},
 		{
 			MethodName: "SetSegmentState",
