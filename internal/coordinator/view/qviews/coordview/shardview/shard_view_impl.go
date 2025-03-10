@@ -7,6 +7,7 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/coordinator/view/qviews"
+	"github.com/milvus-io/milvus/internal/coordinator/view/qviews/events"
 	"github.com/milvus-io/milvus/internal/coordinator/view/qviews/syncer"
 	"github.com/milvus-io/milvus/pkg/v2/proto/viewpb"
 )
@@ -250,6 +251,11 @@ func (qvs *shardViewImpl) swapUpView() *queryView {
 	var previousUpView *queryView
 	if qvs.upVersion != nil {
 		previousUpView = qvs.queryViews[*qvs.upVersion]
+	} else {
+		// there's no up view, so notify the ready event when first ready.
+		events.Notify(events.EventShardReady{
+			ShardID: qvs.shardID,
+		})
 	}
 	qvs.upVersion = qvs.onPreparingVersion
 	qvs.onPreparingVersion = nil

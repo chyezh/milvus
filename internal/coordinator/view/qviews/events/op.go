@@ -4,6 +4,7 @@ import "github.com/milvus-io/milvus/internal/coordinator/view/qviews"
 
 type EventShardJoin struct {
 	eventBase
+	ShardID qviews.ShardID
 }
 
 func (EventShardJoin) EventType() EventType {
@@ -12,6 +13,7 @@ func (EventShardJoin) EventType() EventType {
 
 type EventShardReady struct {
 	eventBase
+	ShardID qviews.ShardID
 }
 
 func (EventShardReady) EventType() EventType {
@@ -29,6 +31,7 @@ func (EventShardRequestRelease) EventType() EventType {
 
 type EventShardReleaseDone struct {
 	eventBase
+	ShardID qviews.ShardID
 }
 
 func (EventShardReleaseDone) EventType() EventType {
