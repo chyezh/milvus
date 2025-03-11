@@ -16,7 +16,8 @@ type OpenerBuilder interface {
 
 // OpenOption is the option for allocating wal instance.
 type OpenOption struct {
-	Channel types.PChannelInfo
+	Channel    types.PChannelInfo
+	AccessMode types.AccessMode
 }
 
 // Opener is the interface for build wal instance.

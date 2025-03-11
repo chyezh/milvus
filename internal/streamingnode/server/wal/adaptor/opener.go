@@ -48,7 +48,8 @@ func (o *openerAdaptorImpl) Open(ctx context.Context, opt *wal.OpenOption) (wal.
 	logger := o.logger.With(zap.Any("channel", opt.Channel), zap.Int64("id", id))
 
 	l, err := o.opener.Open(ctx, &walimpls.OpenOption{
-		Channel: opt.Channel,
+		Channel:    opt.Channel,
+		AccessMode: opt.AccessMode,
 	})
 	if err != nil {
 		logger.Warn("open wal failed", zap.Error(err))

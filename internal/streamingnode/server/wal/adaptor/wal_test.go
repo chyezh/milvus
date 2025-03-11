@@ -137,7 +137,8 @@ func (f *testOneWALFramework) Run() {
 			Term: int64(f.term),
 		}
 		w, err := f.opener.Open(ctx, &wal.OpenOption{
-			Channel: pChannel,
+			Channel:    pChannel,
+			AccessMode: types.AccessModeRW,
 		})
 		assert.NoError(f.t, err)
 		assert.NotNil(f.t, w)

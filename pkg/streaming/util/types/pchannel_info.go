@@ -7,8 +7,23 @@ import (
 )
 
 const (
-	InitialTerm int64 = -1
+	InitialTerm  int64      = -1
+	AccessModeRO AccessMode = AccessMode(streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY)
+	AccessModeRW AccessMode = AccessMode(streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE)
 )
+
+type AccessMode streamingpb.PChannelAccessMode
+
+func (m AccessMode) String() string {
+	switch m {
+	case AccessModeRO:
+		return "RW"
+	case AccessModeRW:
+		return "RO"
+	default:
+		panic("undefined access mode")
+	}
+}
 
 // NewPChannelInfoFromProto converts protobuf PChannelInfo to PChannelInfo
 func NewPChannelInfoFromProto(pchannel *streamingpb.PChannelInfo) PChannelInfo {

@@ -156,7 +156,8 @@ func (w *walLifetime) doLifetimeChanged(expectedState expectedWALState) {
 	// If expected state is available, open a new wal.
 	// TODO: merge the expectedState and expected state context together.
 	l, err := w.opener.Open(expectedState.Context(), &wal.OpenOption{
-		Channel: expectedState.GetPChannelInfo(),
+		Channel:    expectedState.GetPChannelInfo(),
+		AccessMode: types.AccessModeRW, // TODO: support read only mode in future.
 	})
 	if err != nil {
 		logger.Warn("open new wal fail", zap.Error(err))

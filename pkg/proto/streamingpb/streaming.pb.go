@@ -24,6 +24,56 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// PChannelAccessMode is the access mode of a pchannel.
+type PChannelAccessMode int32
+
+const (
+	PChannelAccessMode_PCHANNEL_ACCESS_UNKNOWN   PChannelAccessMode = 0 // should never used.
+	PChannelAccessMode_PCHANNEL_ACCESS_READONLY  PChannelAccessMode = 1 // read only.
+	PChannelAccessMode_PCHANNEL_ACCESS_READWRITE PChannelAccessMode = 2 // read and write.
+)
+
+// Enum value maps for PChannelAccessMode.
+var (
+	PChannelAccessMode_name = map[int32]string{
+		0: "PCHANNEL_ACCESS_UNKNOWN",
+		1: "PCHANNEL_ACCESS_READONLY",
+		2: "PCHANNEL_ACCESS_READWRITE",
+	}
+	PChannelAccessMode_value = map[string]int32{
+		"PCHANNEL_ACCESS_UNKNOWN":   0,
+		"PCHANNEL_ACCESS_READONLY":  1,
+		"PCHANNEL_ACCESS_READWRITE": 2,
+	}
+)
+
+func (x PChannelAccessMode) Enum() *PChannelAccessMode {
+	p := new(PChannelAccessMode)
+	*p = x
+	return p
+}
+
+func (x PChannelAccessMode) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (PChannelAccessMode) Descriptor() protoreflect.EnumDescriptor {
+	return file_streaming_proto_enumTypes[0].Descriptor()
+}
+
+func (PChannelAccessMode) Type() protoreflect.EnumType {
+	return &file_streaming_proto_enumTypes[0]
+}
+
+func (x PChannelAccessMode) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use PChannelAccessMode.Descriptor instead.
+func (PChannelAccessMode) EnumDescriptor() ([]byte, []int) {
+	return file_streaming_proto_rawDescGZIP(), []int{0}
+}
+
 // PChannelMetaState
 type PChannelMetaState int32
 
@@ -64,11 +114,11 @@ func (x PChannelMetaState) String() string {
 }
 
 func (PChannelMetaState) Descriptor() protoreflect.EnumDescriptor {
-	return file_streaming_proto_enumTypes[0].Descriptor()
+	return file_streaming_proto_enumTypes[1].Descriptor()
 }
 
 func (PChannelMetaState) Type() protoreflect.EnumType {
-	return &file_streaming_proto_enumTypes[0]
+	return &file_streaming_proto_enumTypes[1]
 }
 
 func (x PChannelMetaState) Number() protoreflect.EnumNumber {
@@ -77,7 +127,7 @@ func (x PChannelMetaState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use PChannelMetaState.Descriptor instead.
 func (PChannelMetaState) EnumDescriptor() ([]byte, []int) {
-	return file_streaming_proto_rawDescGZIP(), []int{0}
+	return file_streaming_proto_rawDescGZIP(), []int{1}
 }
 
 // BroadcastTaskState is the state of the broadcast task.
@@ -117,11 +167,11 @@ func (x BroadcastTaskState) String() string {
 }
 
 func (BroadcastTaskState) Descriptor() protoreflect.EnumDescriptor {
-	return file_streaming_proto_enumTypes[1].Descriptor()
+	return file_streaming_proto_enumTypes[2].Descriptor()
 }
 
 func (BroadcastTaskState) Type() protoreflect.EnumType {
-	return &file_streaming_proto_enumTypes[1]
+	return &file_streaming_proto_enumTypes[2]
 }
 
 func (x BroadcastTaskState) Number() protoreflect.EnumNumber {
@@ -130,7 +180,7 @@ func (x BroadcastTaskState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use BroadcastTaskState.Descriptor instead.
 func (BroadcastTaskState) EnumDescriptor() ([]byte, []int) {
-	return file_streaming_proto_rawDescGZIP(), []int{1}
+	return file_streaming_proto_rawDescGZIP(), []int{2}
 }
 
 // StreamingCode is the error code for log internal component.
@@ -200,11 +250,11 @@ func (x StreamingCode) String() string {
 }
 
 func (StreamingCode) Descriptor() protoreflect.EnumDescriptor {
-	return file_streaming_proto_enumTypes[2].Descriptor()
+	return file_streaming_proto_enumTypes[3].Descriptor()
 }
 
 func (StreamingCode) Type() protoreflect.EnumType {
-	return &file_streaming_proto_enumTypes[2]
+	return &file_streaming_proto_enumTypes[3]
 }
 
 func (x StreamingCode) Number() protoreflect.EnumNumber {
@@ -213,7 +263,7 @@ func (x StreamingCode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use StreamingCode.Descriptor instead.
 func (StreamingCode) EnumDescriptor() ([]byte, []int) {
-	return file_streaming_proto_rawDescGZIP(), []int{2}
+	return file_streaming_proto_rawDescGZIP(), []int{3}
 }
 
 // SegmentAssignmentState is the state of segment assignment.
@@ -258,11 +308,11 @@ func (x SegmentAssignmentState) String() string {
 }
 
 func (SegmentAssignmentState) Descriptor() protoreflect.EnumDescriptor {
-	return file_streaming_proto_enumTypes[3].Descriptor()
+	return file_streaming_proto_enumTypes[4].Descriptor()
 }
 
 func (SegmentAssignmentState) Type() protoreflect.EnumType {
-	return &file_streaming_proto_enumTypes[3]
+	return &file_streaming_proto_enumTypes[4]
 }
 
 func (x SegmentAssignmentState) Number() protoreflect.EnumNumber {
@@ -271,7 +321,7 @@ func (x SegmentAssignmentState) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use SegmentAssignmentState.Descriptor instead.
 func (SegmentAssignmentState) EnumDescriptor() ([]byte, []int) {
-	return file_streaming_proto_rawDescGZIP(), []int{3}
+	return file_streaming_proto_rawDescGZIP(), []int{4}
 }
 
 // PChannelInfo is the information of a pchannel info, should only keep the
@@ -4101,7 +4151,14 @@ var file_streaming_proto_rawDesc = []byte{
 	0x73, 0x61, 0x67, 0x65, 0x49, 0x44, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x20, 0x2e, 0x6d,
 	0x69, 0x6c, 0x76, 0x75, 0x73, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2e, 0x6d, 0x65, 0x73, 0x73,
 	0x61, 0x67, 0x65, 0x73, 0x2e, 0x4d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x49, 0x44, 0x52, 0x09,
-	0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x49, 0x44, 0x2a, 0xc5, 0x01, 0x0a, 0x11, 0x50, 0x43,
+	0x6d, 0x65, 0x73, 0x73, 0x61, 0x67, 0x65, 0x49, 0x44, 0x2a, 0x6e, 0x0a, 0x12, 0x50, 0x43, 0x68,
+	0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x41, 0x63, 0x63, 0x65, 0x73, 0x73, 0x4d, 0x6f, 0x64, 0x65, 0x12,
+	0x1b, 0x0a, 0x17, 0x50, 0x43, 0x48, 0x41, 0x4e, 0x4e, 0x45, 0x4c, 0x5f, 0x41, 0x43, 0x43, 0x45,
+	0x53, 0x53, 0x5f, 0x55, 0x4e, 0x4b, 0x4e, 0x4f, 0x57, 0x4e, 0x10, 0x00, 0x12, 0x1c, 0x0a, 0x18,
+	0x50, 0x43, 0x48, 0x41, 0x4e, 0x4e, 0x45, 0x4c, 0x5f, 0x41, 0x43, 0x43, 0x45, 0x53, 0x53, 0x5f,
+	0x52, 0x45, 0x41, 0x44, 0x4f, 0x4e, 0x4c, 0x59, 0x10, 0x01, 0x12, 0x1d, 0x0a, 0x19, 0x50, 0x43,
+	0x48, 0x41, 0x4e, 0x4e, 0x45, 0x4c, 0x5f, 0x41, 0x43, 0x43, 0x45, 0x53, 0x53, 0x5f, 0x52, 0x45,
+	0x41, 0x44, 0x57, 0x52, 0x49, 0x54, 0x45, 0x10, 0x02, 0x2a, 0xc5, 0x01, 0x0a, 0x11, 0x50, 0x43,
 	0x68, 0x61, 0x6e, 0x6e, 0x65, 0x6c, 0x4d, 0x65, 0x74, 0x61, 0x53, 0x74, 0x61, 0x74, 0x65, 0x12,
 	0x1f, 0x0a, 0x1b, 0x50, 0x43, 0x48, 0x41, 0x4e, 0x4e, 0x45, 0x4c, 0x5f, 0x4d, 0x45, 0x54, 0x41,
 	0x5f, 0x53, 0x54, 0x41, 0x54, 0x45, 0x5f, 0x55, 0x4e, 0x4b, 0x4e, 0x4f, 0x57, 0x4e, 0x10, 0x00,
@@ -4264,162 +4321,163 @@ func file_streaming_proto_rawDescGZIP() []byte {
 	return file_streaming_proto_rawDescData
 }
 
-var file_streaming_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_streaming_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
 var file_streaming_proto_msgTypes = make([]protoimpl.MessageInfo, 56)
 var file_streaming_proto_goTypes = []interface{}{
-	(PChannelMetaState)(0),                            // 0: milvus.proto.streaming.PChannelMetaState
-	(BroadcastTaskState)(0),                           // 1: milvus.proto.streaming.BroadcastTaskState
-	(StreamingCode)(0),                                // 2: milvus.proto.streaming.StreamingCode
-	(SegmentAssignmentState)(0),                       // 3: milvus.proto.streaming.SegmentAssignmentState
-	(*PChannelInfo)(nil),                              // 4: milvus.proto.streaming.PChannelInfo
-	(*PChannelAssignmentLog)(nil),                     // 5: milvus.proto.streaming.PChannelAssignmentLog
-	(*PChannelMeta)(nil),                              // 6: milvus.proto.streaming.PChannelMeta
-	(*VersionPair)(nil),                               // 7: milvus.proto.streaming.VersionPair
-	(*BroadcastTask)(nil),                             // 8: milvus.proto.streaming.BroadcastTask
-	(*BroadcastRequest)(nil),                          // 9: milvus.proto.streaming.BroadcastRequest
-	(*BroadcastResponse)(nil),                         // 10: milvus.proto.streaming.BroadcastResponse
-	(*BroadcastAckRequest)(nil),                       // 11: milvus.proto.streaming.BroadcastAckRequest
-	(*BroadcastAckResponse)(nil),                      // 12: milvus.proto.streaming.BroadcastAckResponse
-	(*AssignmentDiscoverRequest)(nil),                 // 13: milvus.proto.streaming.AssignmentDiscoverRequest
-	(*ReportAssignmentErrorRequest)(nil),              // 14: milvus.proto.streaming.ReportAssignmentErrorRequest
-	(*CloseAssignmentDiscoverRequest)(nil),            // 15: milvus.proto.streaming.CloseAssignmentDiscoverRequest
-	(*AssignmentDiscoverResponse)(nil),                // 16: milvus.proto.streaming.AssignmentDiscoverResponse
-	(*FullStreamingNodeAssignmentWithVersion)(nil),    // 17: milvus.proto.streaming.FullStreamingNodeAssignmentWithVersion
-	(*CloseAssignmentDiscoverResponse)(nil),           // 18: milvus.proto.streaming.CloseAssignmentDiscoverResponse
-	(*StreamingNodeInfo)(nil),                         // 19: milvus.proto.streaming.StreamingNodeInfo
-	(*StreamingNodeAssignment)(nil),                   // 20: milvus.proto.streaming.StreamingNodeAssignment
-	(*DeliverPolicy)(nil),                             // 21: milvus.proto.streaming.DeliverPolicy
-	(*DeliverFilter)(nil),                             // 22: milvus.proto.streaming.DeliverFilter
-	(*DeliverFilterTimeTickGT)(nil),                   // 23: milvus.proto.streaming.DeliverFilterTimeTickGT
-	(*DeliverFilterTimeTickGTE)(nil),                  // 24: milvus.proto.streaming.DeliverFilterTimeTickGTE
-	(*DeliverFilterMessageType)(nil),                  // 25: milvus.proto.streaming.DeliverFilterMessageType
-	(*StreamingError)(nil),                            // 26: milvus.proto.streaming.StreamingError
-	(*ProduceRequest)(nil),                            // 27: milvus.proto.streaming.ProduceRequest
-	(*CreateProducerRequest)(nil),                     // 28: milvus.proto.streaming.CreateProducerRequest
-	(*ProduceMessageRequest)(nil),                     // 29: milvus.proto.streaming.ProduceMessageRequest
-	(*CloseProducerRequest)(nil),                      // 30: milvus.proto.streaming.CloseProducerRequest
-	(*ProduceResponse)(nil),                           // 31: milvus.proto.streaming.ProduceResponse
-	(*CreateProducerResponse)(nil),                    // 32: milvus.proto.streaming.CreateProducerResponse
-	(*ProduceMessageResponse)(nil),                    // 33: milvus.proto.streaming.ProduceMessageResponse
-	(*ProduceMessageResponseResult)(nil),              // 34: milvus.proto.streaming.ProduceMessageResponseResult
-	(*CloseProducerResponse)(nil),                     // 35: milvus.proto.streaming.CloseProducerResponse
-	(*ConsumeRequest)(nil),                            // 36: milvus.proto.streaming.ConsumeRequest
-	(*CloseConsumerRequest)(nil),                      // 37: milvus.proto.streaming.CloseConsumerRequest
-	(*CreateConsumerRequest)(nil),                     // 38: milvus.proto.streaming.CreateConsumerRequest
-	(*CreateVChannelConsumersRequest)(nil),            // 39: milvus.proto.streaming.CreateVChannelConsumersRequest
-	(*CreateVChannelConsumerRequest)(nil),             // 40: milvus.proto.streaming.CreateVChannelConsumerRequest
-	(*CreateVChannelConsumersResponse)(nil),           // 41: milvus.proto.streaming.CreateVChannelConsumersResponse
-	(*CreateVChannelConsumerResponse)(nil),            // 42: milvus.proto.streaming.CreateVChannelConsumerResponse
-	(*CloseVChannelConsumerRequest)(nil),              // 43: milvus.proto.streaming.CloseVChannelConsumerRequest
-	(*CloseVChannelConsumerResponse)(nil),             // 44: milvus.proto.streaming.CloseVChannelConsumerResponse
-	(*ConsumeResponse)(nil),                           // 45: milvus.proto.streaming.ConsumeResponse
-	(*CreateConsumerResponse)(nil),                    // 46: milvus.proto.streaming.CreateConsumerResponse
-	(*ConsumeMessageReponse)(nil),                     // 47: milvus.proto.streaming.ConsumeMessageReponse
-	(*CloseConsumerResponse)(nil),                     // 48: milvus.proto.streaming.CloseConsumerResponse
-	(*StreamingNodeManagerAssignRequest)(nil),         // 49: milvus.proto.streaming.StreamingNodeManagerAssignRequest
-	(*StreamingNodeManagerAssignResponse)(nil),        // 50: milvus.proto.streaming.StreamingNodeManagerAssignResponse
-	(*StreamingNodeManagerRemoveRequest)(nil),         // 51: milvus.proto.streaming.StreamingNodeManagerRemoveRequest
-	(*StreamingNodeManagerRemoveResponse)(nil),        // 52: milvus.proto.streaming.StreamingNodeManagerRemoveResponse
-	(*StreamingNodeManagerCollectStatusRequest)(nil),  // 53: milvus.proto.streaming.StreamingNodeManagerCollectStatusRequest
-	(*StreamingNodeBalanceAttributes)(nil),            // 54: milvus.proto.streaming.StreamingNodeBalanceAttributes
-	(*StreamingNodeManagerCollectStatusResponse)(nil), // 55: milvus.proto.streaming.StreamingNodeManagerCollectStatusResponse
-	(*SegmentAssignmentMeta)(nil),                     // 56: milvus.proto.streaming.SegmentAssignmentMeta
-	(*SegmentAssignmentStat)(nil),                     // 57: milvus.proto.streaming.SegmentAssignmentStat
-	(*WALCheckpoint)(nil),                             // 58: milvus.proto.streaming.WALCheckpoint
-	nil,                                               // 59: milvus.proto.streaming.BroadcastResponse.ResultsEntry
-	(*messagespb.Message)(nil),                        // 60: milvus.proto.messages.Message
-	(*emptypb.Empty)(nil),                             // 61: google.protobuf.Empty
-	(*messagespb.MessageID)(nil),                      // 62: milvus.proto.messages.MessageID
-	(messagespb.MessageType)(0),                       // 63: milvus.proto.messages.MessageType
-	(*messagespb.TxnContext)(nil),                     // 64: milvus.proto.messages.TxnContext
-	(*anypb.Any)(nil),                                 // 65: google.protobuf.Any
-	(*messagespb.ImmutableMessage)(nil),               // 66: milvus.proto.messages.ImmutableMessage
-	(*milvuspb.GetComponentStatesRequest)(nil),        // 67: milvus.proto.milvus.GetComponentStatesRequest
-	(*milvuspb.ComponentStates)(nil),                  // 68: milvus.proto.milvus.ComponentStates
+	(PChannelAccessMode)(0),                           // 0: milvus.proto.streaming.PChannelAccessMode
+	(PChannelMetaState)(0),                            // 1: milvus.proto.streaming.PChannelMetaState
+	(BroadcastTaskState)(0),                           // 2: milvus.proto.streaming.BroadcastTaskState
+	(StreamingCode)(0),                                // 3: milvus.proto.streaming.StreamingCode
+	(SegmentAssignmentState)(0),                       // 4: milvus.proto.streaming.SegmentAssignmentState
+	(*PChannelInfo)(nil),                              // 5: milvus.proto.streaming.PChannelInfo
+	(*PChannelAssignmentLog)(nil),                     // 6: milvus.proto.streaming.PChannelAssignmentLog
+	(*PChannelMeta)(nil),                              // 7: milvus.proto.streaming.PChannelMeta
+	(*VersionPair)(nil),                               // 8: milvus.proto.streaming.VersionPair
+	(*BroadcastTask)(nil),                             // 9: milvus.proto.streaming.BroadcastTask
+	(*BroadcastRequest)(nil),                          // 10: milvus.proto.streaming.BroadcastRequest
+	(*BroadcastResponse)(nil),                         // 11: milvus.proto.streaming.BroadcastResponse
+	(*BroadcastAckRequest)(nil),                       // 12: milvus.proto.streaming.BroadcastAckRequest
+	(*BroadcastAckResponse)(nil),                      // 13: milvus.proto.streaming.BroadcastAckResponse
+	(*AssignmentDiscoverRequest)(nil),                 // 14: milvus.proto.streaming.AssignmentDiscoverRequest
+	(*ReportAssignmentErrorRequest)(nil),              // 15: milvus.proto.streaming.ReportAssignmentErrorRequest
+	(*CloseAssignmentDiscoverRequest)(nil),            // 16: milvus.proto.streaming.CloseAssignmentDiscoverRequest
+	(*AssignmentDiscoverResponse)(nil),                // 17: milvus.proto.streaming.AssignmentDiscoverResponse
+	(*FullStreamingNodeAssignmentWithVersion)(nil),    // 18: milvus.proto.streaming.FullStreamingNodeAssignmentWithVersion
+	(*CloseAssignmentDiscoverResponse)(nil),           // 19: milvus.proto.streaming.CloseAssignmentDiscoverResponse
+	(*StreamingNodeInfo)(nil),                         // 20: milvus.proto.streaming.StreamingNodeInfo
+	(*StreamingNodeAssignment)(nil),                   // 21: milvus.proto.streaming.StreamingNodeAssignment
+	(*DeliverPolicy)(nil),                             // 22: milvus.proto.streaming.DeliverPolicy
+	(*DeliverFilter)(nil),                             // 23: milvus.proto.streaming.DeliverFilter
+	(*DeliverFilterTimeTickGT)(nil),                   // 24: milvus.proto.streaming.DeliverFilterTimeTickGT
+	(*DeliverFilterTimeTickGTE)(nil),                  // 25: milvus.proto.streaming.DeliverFilterTimeTickGTE
+	(*DeliverFilterMessageType)(nil),                  // 26: milvus.proto.streaming.DeliverFilterMessageType
+	(*StreamingError)(nil),                            // 27: milvus.proto.streaming.StreamingError
+	(*ProduceRequest)(nil),                            // 28: milvus.proto.streaming.ProduceRequest
+	(*CreateProducerRequest)(nil),                     // 29: milvus.proto.streaming.CreateProducerRequest
+	(*ProduceMessageRequest)(nil),                     // 30: milvus.proto.streaming.ProduceMessageRequest
+	(*CloseProducerRequest)(nil),                      // 31: milvus.proto.streaming.CloseProducerRequest
+	(*ProduceResponse)(nil),                           // 32: milvus.proto.streaming.ProduceResponse
+	(*CreateProducerResponse)(nil),                    // 33: milvus.proto.streaming.CreateProducerResponse
+	(*ProduceMessageResponse)(nil),                    // 34: milvus.proto.streaming.ProduceMessageResponse
+	(*ProduceMessageResponseResult)(nil),              // 35: milvus.proto.streaming.ProduceMessageResponseResult
+	(*CloseProducerResponse)(nil),                     // 36: milvus.proto.streaming.CloseProducerResponse
+	(*ConsumeRequest)(nil),                            // 37: milvus.proto.streaming.ConsumeRequest
+	(*CloseConsumerRequest)(nil),                      // 38: milvus.proto.streaming.CloseConsumerRequest
+	(*CreateConsumerRequest)(nil),                     // 39: milvus.proto.streaming.CreateConsumerRequest
+	(*CreateVChannelConsumersRequest)(nil),            // 40: milvus.proto.streaming.CreateVChannelConsumersRequest
+	(*CreateVChannelConsumerRequest)(nil),             // 41: milvus.proto.streaming.CreateVChannelConsumerRequest
+	(*CreateVChannelConsumersResponse)(nil),           // 42: milvus.proto.streaming.CreateVChannelConsumersResponse
+	(*CreateVChannelConsumerResponse)(nil),            // 43: milvus.proto.streaming.CreateVChannelConsumerResponse
+	(*CloseVChannelConsumerRequest)(nil),              // 44: milvus.proto.streaming.CloseVChannelConsumerRequest
+	(*CloseVChannelConsumerResponse)(nil),             // 45: milvus.proto.streaming.CloseVChannelConsumerResponse
+	(*ConsumeResponse)(nil),                           // 46: milvus.proto.streaming.ConsumeResponse
+	(*CreateConsumerResponse)(nil),                    // 47: milvus.proto.streaming.CreateConsumerResponse
+	(*ConsumeMessageReponse)(nil),                     // 48: milvus.proto.streaming.ConsumeMessageReponse
+	(*CloseConsumerResponse)(nil),                     // 49: milvus.proto.streaming.CloseConsumerResponse
+	(*StreamingNodeManagerAssignRequest)(nil),         // 50: milvus.proto.streaming.StreamingNodeManagerAssignRequest
+	(*StreamingNodeManagerAssignResponse)(nil),        // 51: milvus.proto.streaming.StreamingNodeManagerAssignResponse
+	(*StreamingNodeManagerRemoveRequest)(nil),         // 52: milvus.proto.streaming.StreamingNodeManagerRemoveRequest
+	(*StreamingNodeManagerRemoveResponse)(nil),        // 53: milvus.proto.streaming.StreamingNodeManagerRemoveResponse
+	(*StreamingNodeManagerCollectStatusRequest)(nil),  // 54: milvus.proto.streaming.StreamingNodeManagerCollectStatusRequest
+	(*StreamingNodeBalanceAttributes)(nil),            // 55: milvus.proto.streaming.StreamingNodeBalanceAttributes
+	(*StreamingNodeManagerCollectStatusResponse)(nil), // 56: milvus.proto.streaming.StreamingNodeManagerCollectStatusResponse
+	(*SegmentAssignmentMeta)(nil),                     // 57: milvus.proto.streaming.SegmentAssignmentMeta
+	(*SegmentAssignmentStat)(nil),                     // 58: milvus.proto.streaming.SegmentAssignmentStat
+	(*WALCheckpoint)(nil),                             // 59: milvus.proto.streaming.WALCheckpoint
+	nil,                                               // 60: milvus.proto.streaming.BroadcastResponse.ResultsEntry
+	(*messagespb.Message)(nil),                        // 61: milvus.proto.messages.Message
+	(*emptypb.Empty)(nil),                             // 62: google.protobuf.Empty
+	(*messagespb.MessageID)(nil),                      // 63: milvus.proto.messages.MessageID
+	(messagespb.MessageType)(0),                       // 64: milvus.proto.messages.MessageType
+	(*messagespb.TxnContext)(nil),                     // 65: milvus.proto.messages.TxnContext
+	(*anypb.Any)(nil),                                 // 66: google.protobuf.Any
+	(*messagespb.ImmutableMessage)(nil),               // 67: milvus.proto.messages.ImmutableMessage
+	(*milvuspb.GetComponentStatesRequest)(nil),        // 68: milvus.proto.milvus.GetComponentStatesRequest
+	(*milvuspb.ComponentStates)(nil),                  // 69: milvus.proto.milvus.ComponentStates
 }
 var file_streaming_proto_depIdxs = []int32{
-	19, // 0: milvus.proto.streaming.PChannelAssignmentLog.node:type_name -> milvus.proto.streaming.StreamingNodeInfo
-	4,  // 1: milvus.proto.streaming.PChannelMeta.channel:type_name -> milvus.proto.streaming.PChannelInfo
-	19, // 2: milvus.proto.streaming.PChannelMeta.node:type_name -> milvus.proto.streaming.StreamingNodeInfo
-	0,  // 3: milvus.proto.streaming.PChannelMeta.state:type_name -> milvus.proto.streaming.PChannelMetaState
-	5,  // 4: milvus.proto.streaming.PChannelMeta.histories:type_name -> milvus.proto.streaming.PChannelAssignmentLog
-	60, // 5: milvus.proto.streaming.BroadcastTask.message:type_name -> milvus.proto.messages.Message
-	1,  // 6: milvus.proto.streaming.BroadcastTask.state:type_name -> milvus.proto.streaming.BroadcastTaskState
-	60, // 7: milvus.proto.streaming.BroadcastRequest.message:type_name -> milvus.proto.messages.Message
-	59, // 8: milvus.proto.streaming.BroadcastResponse.results:type_name -> milvus.proto.streaming.BroadcastResponse.ResultsEntry
-	14, // 9: milvus.proto.streaming.AssignmentDiscoverRequest.report_error:type_name -> milvus.proto.streaming.ReportAssignmentErrorRequest
-	15, // 10: milvus.proto.streaming.AssignmentDiscoverRequest.close:type_name -> milvus.proto.streaming.CloseAssignmentDiscoverRequest
-	4,  // 11: milvus.proto.streaming.ReportAssignmentErrorRequest.pchannel:type_name -> milvus.proto.streaming.PChannelInfo
-	26, // 12: milvus.proto.streaming.ReportAssignmentErrorRequest.err:type_name -> milvus.proto.streaming.StreamingError
-	17, // 13: milvus.proto.streaming.AssignmentDiscoverResponse.full_assignment:type_name -> milvus.proto.streaming.FullStreamingNodeAssignmentWithVersion
-	18, // 14: milvus.proto.streaming.AssignmentDiscoverResponse.close:type_name -> milvus.proto.streaming.CloseAssignmentDiscoverResponse
-	7,  // 15: milvus.proto.streaming.FullStreamingNodeAssignmentWithVersion.version:type_name -> milvus.proto.streaming.VersionPair
-	20, // 16: milvus.proto.streaming.FullStreamingNodeAssignmentWithVersion.assignments:type_name -> milvus.proto.streaming.StreamingNodeAssignment
-	19, // 17: milvus.proto.streaming.StreamingNodeAssignment.node:type_name -> milvus.proto.streaming.StreamingNodeInfo
-	4,  // 18: milvus.proto.streaming.StreamingNodeAssignment.channels:type_name -> milvus.proto.streaming.PChannelInfo
-	61, // 19: milvus.proto.streaming.DeliverPolicy.all:type_name -> google.protobuf.Empty
-	61, // 20: milvus.proto.streaming.DeliverPolicy.latest:type_name -> google.protobuf.Empty
-	62, // 21: milvus.proto.streaming.DeliverPolicy.start_from:type_name -> milvus.proto.messages.MessageID
-	62, // 22: milvus.proto.streaming.DeliverPolicy.start_after:type_name -> milvus.proto.messages.MessageID
-	23, // 23: milvus.proto.streaming.DeliverFilter.time_tick_gt:type_name -> milvus.proto.streaming.DeliverFilterTimeTickGT
-	24, // 24: milvus.proto.streaming.DeliverFilter.time_tick_gte:type_name -> milvus.proto.streaming.DeliverFilterTimeTickGTE
-	25, // 25: milvus.proto.streaming.DeliverFilter.message_type:type_name -> milvus.proto.streaming.DeliverFilterMessageType
-	63, // 26: milvus.proto.streaming.DeliverFilterMessageType.message_types:type_name -> milvus.proto.messages.MessageType
-	2,  // 27: milvus.proto.streaming.StreamingError.code:type_name -> milvus.proto.streaming.StreamingCode
-	29, // 28: milvus.proto.streaming.ProduceRequest.produce:type_name -> milvus.proto.streaming.ProduceMessageRequest
-	30, // 29: milvus.proto.streaming.ProduceRequest.close:type_name -> milvus.proto.streaming.CloseProducerRequest
-	4,  // 30: milvus.proto.streaming.CreateProducerRequest.pchannel:type_name -> milvus.proto.streaming.PChannelInfo
-	60, // 31: milvus.proto.streaming.ProduceMessageRequest.message:type_name -> milvus.proto.messages.Message
-	32, // 32: milvus.proto.streaming.ProduceResponse.create:type_name -> milvus.proto.streaming.CreateProducerResponse
-	33, // 33: milvus.proto.streaming.ProduceResponse.produce:type_name -> milvus.proto.streaming.ProduceMessageResponse
-	35, // 34: milvus.proto.streaming.ProduceResponse.close:type_name -> milvus.proto.streaming.CloseProducerResponse
-	34, // 35: milvus.proto.streaming.ProduceMessageResponse.result:type_name -> milvus.proto.streaming.ProduceMessageResponseResult
-	26, // 36: milvus.proto.streaming.ProduceMessageResponse.error:type_name -> milvus.proto.streaming.StreamingError
-	62, // 37: milvus.proto.streaming.ProduceMessageResponseResult.id:type_name -> milvus.proto.messages.MessageID
-	64, // 38: milvus.proto.streaming.ProduceMessageResponseResult.txnContext:type_name -> milvus.proto.messages.TxnContext
-	65, // 39: milvus.proto.streaming.ProduceMessageResponseResult.extra:type_name -> google.protobuf.Any
-	40, // 40: milvus.proto.streaming.ConsumeRequest.create_vchannel_consumer:type_name -> milvus.proto.streaming.CreateVChannelConsumerRequest
-	39, // 41: milvus.proto.streaming.ConsumeRequest.create_vchannel_consumers:type_name -> milvus.proto.streaming.CreateVChannelConsumersRequest
-	43, // 42: milvus.proto.streaming.ConsumeRequest.close_vchannel:type_name -> milvus.proto.streaming.CloseVChannelConsumerRequest
-	37, // 43: milvus.proto.streaming.ConsumeRequest.close:type_name -> milvus.proto.streaming.CloseConsumerRequest
-	4,  // 44: milvus.proto.streaming.CreateConsumerRequest.pchannel:type_name -> milvus.proto.streaming.PChannelInfo
-	40, // 45: milvus.proto.streaming.CreateVChannelConsumersRequest.create_vchannels:type_name -> milvus.proto.streaming.CreateVChannelConsumerRequest
-	21, // 46: milvus.proto.streaming.CreateVChannelConsumerRequest.deliver_policy:type_name -> milvus.proto.streaming.DeliverPolicy
-	22, // 47: milvus.proto.streaming.CreateVChannelConsumerRequest.deliver_filters:type_name -> milvus.proto.streaming.DeliverFilter
-	42, // 48: milvus.proto.streaming.CreateVChannelConsumersResponse.create_vchannels:type_name -> milvus.proto.streaming.CreateVChannelConsumerResponse
-	26, // 49: milvus.proto.streaming.CreateVChannelConsumerResponse.error:type_name -> milvus.proto.streaming.StreamingError
-	46, // 50: milvus.proto.streaming.ConsumeResponse.create:type_name -> milvus.proto.streaming.CreateConsumerResponse
-	47, // 51: milvus.proto.streaming.ConsumeResponse.consume:type_name -> milvus.proto.streaming.ConsumeMessageReponse
-	42, // 52: milvus.proto.streaming.ConsumeResponse.create_vchannel:type_name -> milvus.proto.streaming.CreateVChannelConsumerResponse
-	41, // 53: milvus.proto.streaming.ConsumeResponse.create_vchannels:type_name -> milvus.proto.streaming.CreateVChannelConsumersResponse
-	44, // 54: milvus.proto.streaming.ConsumeResponse.close_vchannel:type_name -> milvus.proto.streaming.CloseVChannelConsumerResponse
-	48, // 55: milvus.proto.streaming.ConsumeResponse.close:type_name -> milvus.proto.streaming.CloseConsumerResponse
-	66, // 56: milvus.proto.streaming.ConsumeMessageReponse.message:type_name -> milvus.proto.messages.ImmutableMessage
-	4,  // 57: milvus.proto.streaming.StreamingNodeManagerAssignRequest.pchannel:type_name -> milvus.proto.streaming.PChannelInfo
-	4,  // 58: milvus.proto.streaming.StreamingNodeManagerRemoveRequest.pchannel:type_name -> milvus.proto.streaming.PChannelInfo
-	54, // 59: milvus.proto.streaming.StreamingNodeManagerCollectStatusResponse.balance_attributes:type_name -> milvus.proto.streaming.StreamingNodeBalanceAttributes
-	3,  // 60: milvus.proto.streaming.SegmentAssignmentMeta.state:type_name -> milvus.proto.streaming.SegmentAssignmentState
-	57, // 61: milvus.proto.streaming.SegmentAssignmentMeta.stat:type_name -> milvus.proto.streaming.SegmentAssignmentStat
-	62, // 62: milvus.proto.streaming.WALCheckpoint.messageID:type_name -> milvus.proto.messages.MessageID
-	34, // 63: milvus.proto.streaming.BroadcastResponse.ResultsEntry.value:type_name -> milvus.proto.streaming.ProduceMessageResponseResult
-	67, // 64: milvus.proto.streaming.StreamingNodeStateService.GetComponentStates:input_type -> milvus.proto.milvus.GetComponentStatesRequest
-	9,  // 65: milvus.proto.streaming.StreamingCoordBroadcastService.Broadcast:input_type -> milvus.proto.streaming.BroadcastRequest
-	11, // 66: milvus.proto.streaming.StreamingCoordBroadcastService.Ack:input_type -> milvus.proto.streaming.BroadcastAckRequest
-	13, // 67: milvus.proto.streaming.StreamingCoordAssignmentService.AssignmentDiscover:input_type -> milvus.proto.streaming.AssignmentDiscoverRequest
-	27, // 68: milvus.proto.streaming.StreamingNodeHandlerService.Produce:input_type -> milvus.proto.streaming.ProduceRequest
-	36, // 69: milvus.proto.streaming.StreamingNodeHandlerService.Consume:input_type -> milvus.proto.streaming.ConsumeRequest
-	49, // 70: milvus.proto.streaming.StreamingNodeManagerService.Assign:input_type -> milvus.proto.streaming.StreamingNodeManagerAssignRequest
-	51, // 71: milvus.proto.streaming.StreamingNodeManagerService.Remove:input_type -> milvus.proto.streaming.StreamingNodeManagerRemoveRequest
-	53, // 72: milvus.proto.streaming.StreamingNodeManagerService.CollectStatus:input_type -> milvus.proto.streaming.StreamingNodeManagerCollectStatusRequest
-	68, // 73: milvus.proto.streaming.StreamingNodeStateService.GetComponentStates:output_type -> milvus.proto.milvus.ComponentStates
-	10, // 74: milvus.proto.streaming.StreamingCoordBroadcastService.Broadcast:output_type -> milvus.proto.streaming.BroadcastResponse
-	12, // 75: milvus.proto.streaming.StreamingCoordBroadcastService.Ack:output_type -> milvus.proto.streaming.BroadcastAckResponse
-	16, // 76: milvus.proto.streaming.StreamingCoordAssignmentService.AssignmentDiscover:output_type -> milvus.proto.streaming.AssignmentDiscoverResponse
-	31, // 77: milvus.proto.streaming.StreamingNodeHandlerService.Produce:output_type -> milvus.proto.streaming.ProduceResponse
-	45, // 78: milvus.proto.streaming.StreamingNodeHandlerService.Consume:output_type -> milvus.proto.streaming.ConsumeResponse
-	50, // 79: milvus.proto.streaming.StreamingNodeManagerService.Assign:output_type -> milvus.proto.streaming.StreamingNodeManagerAssignResponse
-	52, // 80: milvus.proto.streaming.StreamingNodeManagerService.Remove:output_type -> milvus.proto.streaming.StreamingNodeManagerRemoveResponse
-	55, // 81: milvus.proto.streaming.StreamingNodeManagerService.CollectStatus:output_type -> milvus.proto.streaming.StreamingNodeManagerCollectStatusResponse
+	20, // 0: milvus.proto.streaming.PChannelAssignmentLog.node:type_name -> milvus.proto.streaming.StreamingNodeInfo
+	5,  // 1: milvus.proto.streaming.PChannelMeta.channel:type_name -> milvus.proto.streaming.PChannelInfo
+	20, // 2: milvus.proto.streaming.PChannelMeta.node:type_name -> milvus.proto.streaming.StreamingNodeInfo
+	1,  // 3: milvus.proto.streaming.PChannelMeta.state:type_name -> milvus.proto.streaming.PChannelMetaState
+	6,  // 4: milvus.proto.streaming.PChannelMeta.histories:type_name -> milvus.proto.streaming.PChannelAssignmentLog
+	61, // 5: milvus.proto.streaming.BroadcastTask.message:type_name -> milvus.proto.messages.Message
+	2,  // 6: milvus.proto.streaming.BroadcastTask.state:type_name -> milvus.proto.streaming.BroadcastTaskState
+	61, // 7: milvus.proto.streaming.BroadcastRequest.message:type_name -> milvus.proto.messages.Message
+	60, // 8: milvus.proto.streaming.BroadcastResponse.results:type_name -> milvus.proto.streaming.BroadcastResponse.ResultsEntry
+	15, // 9: milvus.proto.streaming.AssignmentDiscoverRequest.report_error:type_name -> milvus.proto.streaming.ReportAssignmentErrorRequest
+	16, // 10: milvus.proto.streaming.AssignmentDiscoverRequest.close:type_name -> milvus.proto.streaming.CloseAssignmentDiscoverRequest
+	5,  // 11: milvus.proto.streaming.ReportAssignmentErrorRequest.pchannel:type_name -> milvus.proto.streaming.PChannelInfo
+	27, // 12: milvus.proto.streaming.ReportAssignmentErrorRequest.err:type_name -> milvus.proto.streaming.StreamingError
+	18, // 13: milvus.proto.streaming.AssignmentDiscoverResponse.full_assignment:type_name -> milvus.proto.streaming.FullStreamingNodeAssignmentWithVersion
+	19, // 14: milvus.proto.streaming.AssignmentDiscoverResponse.close:type_name -> milvus.proto.streaming.CloseAssignmentDiscoverResponse
+	8,  // 15: milvus.proto.streaming.FullStreamingNodeAssignmentWithVersion.version:type_name -> milvus.proto.streaming.VersionPair
+	21, // 16: milvus.proto.streaming.FullStreamingNodeAssignmentWithVersion.assignments:type_name -> milvus.proto.streaming.StreamingNodeAssignment
+	20, // 17: milvus.proto.streaming.StreamingNodeAssignment.node:type_name -> milvus.proto.streaming.StreamingNodeInfo
+	5,  // 18: milvus.proto.streaming.StreamingNodeAssignment.channels:type_name -> milvus.proto.streaming.PChannelInfo
+	62, // 19: milvus.proto.streaming.DeliverPolicy.all:type_name -> google.protobuf.Empty
+	62, // 20: milvus.proto.streaming.DeliverPolicy.latest:type_name -> google.protobuf.Empty
+	63, // 21: milvus.proto.streaming.DeliverPolicy.start_from:type_name -> milvus.proto.messages.MessageID
+	63, // 22: milvus.proto.streaming.DeliverPolicy.start_after:type_name -> milvus.proto.messages.MessageID
+	24, // 23: milvus.proto.streaming.DeliverFilter.time_tick_gt:type_name -> milvus.proto.streaming.DeliverFilterTimeTickGT
+	25, // 24: milvus.proto.streaming.DeliverFilter.time_tick_gte:type_name -> milvus.proto.streaming.DeliverFilterTimeTickGTE
+	26, // 25: milvus.proto.streaming.DeliverFilter.message_type:type_name -> milvus.proto.streaming.DeliverFilterMessageType
+	64, // 26: milvus.proto.streaming.DeliverFilterMessageType.message_types:type_name -> milvus.proto.messages.MessageType
+	3,  // 27: milvus.proto.streaming.StreamingError.code:type_name -> milvus.proto.streaming.StreamingCode
+	30, // 28: milvus.proto.streaming.ProduceRequest.produce:type_name -> milvus.proto.streaming.ProduceMessageRequest
+	31, // 29: milvus.proto.streaming.ProduceRequest.close:type_name -> milvus.proto.streaming.CloseProducerRequest
+	5,  // 30: milvus.proto.streaming.CreateProducerRequest.pchannel:type_name -> milvus.proto.streaming.PChannelInfo
+	61, // 31: milvus.proto.streaming.ProduceMessageRequest.message:type_name -> milvus.proto.messages.Message
+	33, // 32: milvus.proto.streaming.ProduceResponse.create:type_name -> milvus.proto.streaming.CreateProducerResponse
+	34, // 33: milvus.proto.streaming.ProduceResponse.produce:type_name -> milvus.proto.streaming.ProduceMessageResponse
+	36, // 34: milvus.proto.streaming.ProduceResponse.close:type_name -> milvus.proto.streaming.CloseProducerResponse
+	35, // 35: milvus.proto.streaming.ProduceMessageResponse.result:type_name -> milvus.proto.streaming.ProduceMessageResponseResult
+	27, // 36: milvus.proto.streaming.ProduceMessageResponse.error:type_name -> milvus.proto.streaming.StreamingError
+	63, // 37: milvus.proto.streaming.ProduceMessageResponseResult.id:type_name -> milvus.proto.messages.MessageID
+	65, // 38: milvus.proto.streaming.ProduceMessageResponseResult.txnContext:type_name -> milvus.proto.messages.TxnContext
+	66, // 39: milvus.proto.streaming.ProduceMessageResponseResult.extra:type_name -> google.protobuf.Any
+	41, // 40: milvus.proto.streaming.ConsumeRequest.create_vchannel_consumer:type_name -> milvus.proto.streaming.CreateVChannelConsumerRequest
+	40, // 41: milvus.proto.streaming.ConsumeRequest.create_vchannel_consumers:type_name -> milvus.proto.streaming.CreateVChannelConsumersRequest
+	44, // 42: milvus.proto.streaming.ConsumeRequest.close_vchannel:type_name -> milvus.proto.streaming.CloseVChannelConsumerRequest
+	38, // 43: milvus.proto.streaming.ConsumeRequest.close:type_name -> milvus.proto.streaming.CloseConsumerRequest
+	5,  // 44: milvus.proto.streaming.CreateConsumerRequest.pchannel:type_name -> milvus.proto.streaming.PChannelInfo
+	41, // 45: milvus.proto.streaming.CreateVChannelConsumersRequest.create_vchannels:type_name -> milvus.proto.streaming.CreateVChannelConsumerRequest
+	22, // 46: milvus.proto.streaming.CreateVChannelConsumerRequest.deliver_policy:type_name -> milvus.proto.streaming.DeliverPolicy
+	23, // 47: milvus.proto.streaming.CreateVChannelConsumerRequest.deliver_filters:type_name -> milvus.proto.streaming.DeliverFilter
+	43, // 48: milvus.proto.streaming.CreateVChannelConsumersResponse.create_vchannels:type_name -> milvus.proto.streaming.CreateVChannelConsumerResponse
+	27, // 49: milvus.proto.streaming.CreateVChannelConsumerResponse.error:type_name -> milvus.proto.streaming.StreamingError
+	47, // 50: milvus.proto.streaming.ConsumeResponse.create:type_name -> milvus.proto.streaming.CreateConsumerResponse
+	48, // 51: milvus.proto.streaming.ConsumeResponse.consume:type_name -> milvus.proto.streaming.ConsumeMessageReponse
+	43, // 52: milvus.proto.streaming.ConsumeResponse.create_vchannel:type_name -> milvus.proto.streaming.CreateVChannelConsumerResponse
+	42, // 53: milvus.proto.streaming.ConsumeResponse.create_vchannels:type_name -> milvus.proto.streaming.CreateVChannelConsumersResponse
+	45, // 54: milvus.proto.streaming.ConsumeResponse.close_vchannel:type_name -> milvus.proto.streaming.CloseVChannelConsumerResponse
+	49, // 55: milvus.proto.streaming.ConsumeResponse.close:type_name -> milvus.proto.streaming.CloseConsumerResponse
+	67, // 56: milvus.proto.streaming.ConsumeMessageReponse.message:type_name -> milvus.proto.messages.ImmutableMessage
+	5,  // 57: milvus.proto.streaming.StreamingNodeManagerAssignRequest.pchannel:type_name -> milvus.proto.streaming.PChannelInfo
+	5,  // 58: milvus.proto.streaming.StreamingNodeManagerRemoveRequest.pchannel:type_name -> milvus.proto.streaming.PChannelInfo
+	55, // 59: milvus.proto.streaming.StreamingNodeManagerCollectStatusResponse.balance_attributes:type_name -> milvus.proto.streaming.StreamingNodeBalanceAttributes
+	4,  // 60: milvus.proto.streaming.SegmentAssignmentMeta.state:type_name -> milvus.proto.streaming.SegmentAssignmentState
+	58, // 61: milvus.proto.streaming.SegmentAssignmentMeta.stat:type_name -> milvus.proto.streaming.SegmentAssignmentStat
+	63, // 62: milvus.proto.streaming.WALCheckpoint.messageID:type_name -> milvus.proto.messages.MessageID
+	35, // 63: milvus.proto.streaming.BroadcastResponse.ResultsEntry.value:type_name -> milvus.proto.streaming.ProduceMessageResponseResult
+	68, // 64: milvus.proto.streaming.StreamingNodeStateService.GetComponentStates:input_type -> milvus.proto.milvus.GetComponentStatesRequest
+	10, // 65: milvus.proto.streaming.StreamingCoordBroadcastService.Broadcast:input_type -> milvus.proto.streaming.BroadcastRequest
+	12, // 66: milvus.proto.streaming.StreamingCoordBroadcastService.Ack:input_type -> milvus.proto.streaming.BroadcastAckRequest
+	14, // 67: milvus.proto.streaming.StreamingCoordAssignmentService.AssignmentDiscover:input_type -> milvus.proto.streaming.AssignmentDiscoverRequest
+	28, // 68: milvus.proto.streaming.StreamingNodeHandlerService.Produce:input_type -> milvus.proto.streaming.ProduceRequest
+	37, // 69: milvus.proto.streaming.StreamingNodeHandlerService.Consume:input_type -> milvus.proto.streaming.ConsumeRequest
+	50, // 70: milvus.proto.streaming.StreamingNodeManagerService.Assign:input_type -> milvus.proto.streaming.StreamingNodeManagerAssignRequest
+	52, // 71: milvus.proto.streaming.StreamingNodeManagerService.Remove:input_type -> milvus.proto.streaming.StreamingNodeManagerRemoveRequest
+	54, // 72: milvus.proto.streaming.StreamingNodeManagerService.CollectStatus:input_type -> milvus.proto.streaming.StreamingNodeManagerCollectStatusRequest
+	69, // 73: milvus.proto.streaming.StreamingNodeStateService.GetComponentStates:output_type -> milvus.proto.milvus.ComponentStates
+	11, // 74: milvus.proto.streaming.StreamingCoordBroadcastService.Broadcast:output_type -> milvus.proto.streaming.BroadcastResponse
+	13, // 75: milvus.proto.streaming.StreamingCoordBroadcastService.Ack:output_type -> milvus.proto.streaming.BroadcastAckResponse
+	17, // 76: milvus.proto.streaming.StreamingCoordAssignmentService.AssignmentDiscover:output_type -> milvus.proto.streaming.AssignmentDiscoverResponse
+	32, // 77: milvus.proto.streaming.StreamingNodeHandlerService.Produce:output_type -> milvus.proto.streaming.ProduceResponse
+	46, // 78: milvus.proto.streaming.StreamingNodeHandlerService.Consume:output_type -> milvus.proto.streaming.ConsumeResponse
+	51, // 79: milvus.proto.streaming.StreamingNodeManagerService.Assign:output_type -> milvus.proto.streaming.StreamingNodeManagerAssignResponse
+	53, // 80: milvus.proto.streaming.StreamingNodeManagerService.Remove:output_type -> milvus.proto.streaming.StreamingNodeManagerRemoveResponse
+	56, // 81: milvus.proto.streaming.StreamingNodeManagerService.CollectStatus:output_type -> milvus.proto.streaming.StreamingNodeManagerCollectStatusResponse
 	73, // [73:82] is the sub-list for method output_type
 	64, // [64:73] is the sub-list for method input_type
 	64, // [64:64] is the sub-list for extension type_name
@@ -5149,7 +5207,7 @@ func file_streaming_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_streaming_proto_rawDesc,
-			NumEnums:      4,
+			NumEnums:      5,
 			NumMessages:   56,
 			NumExtensions: 0,
 			NumServices:   5,
