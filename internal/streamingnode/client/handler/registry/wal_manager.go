@@ -19,6 +19,8 @@ var (
 	ErrNoStreamingNodeDeployed = errors.New("no streaming node deployed")
 )
 
+type AccessOption = wal.AccessOption
+
 // RegisterLocalWALManager registers the local wal manager.
 // When the streaming node is started, it should call this function to register the wal manager.
 func RegisterLocalWALManager(manager WALManager) {
@@ -30,11 +32,11 @@ func RegisterLocalWALManager(manager WALManager) {
 }
 
 // GetLocalAvailableWAL returns a available wal instance for the channel.
-func GetLocalAvailableWAL(channel types.PChannelInfo) (wal.WAL, error) {
+func GetLocalAvailableWAL(opt AccessOption) (wal.WAL, error) {
 	if !paramtable.IsLocalComponentEnabled(typeutil.StreamingNodeRole) {
 		return nil, ErrNoStreamingNodeDeployed
 	}
-	l, err := registry.Get().GetAvailableWAL(channel)
+	l, err := registry.Get().GetAvailableWAL(opt)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +48,7 @@ func GetLocalAvailableWAL(channel types.PChannelInfo) (wal.WAL, error) {
 type WALManager interface {
 	// GetAvailableWAL returns a available wal instance for the channel.
 	// Return nil if the wal instance is not found.
-	GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error)
+	GetAvailableWAL(opt wal.AccessOption) (wal.WAL, error)
 }
 
 // localWAL is a hint type for local wal.

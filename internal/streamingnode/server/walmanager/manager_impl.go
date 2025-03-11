@@ -57,7 +57,7 @@ type managerImpl struct {
 }
 
 // Open opens a wal instance for the channel on this Manager.
-func (m *managerImpl) Open(ctx context.Context, channel types.PChannelInfo) (err error) {
+func (m *managerImpl) Open(ctx context.Context, opt wal.OpenOption) (err error) {
 	// reject operation if manager is closing.
 	if !m.lifetime.AddIf(isOpenable) {
 		return errWALManagerClosed
@@ -65,13 +65,13 @@ func (m *managerImpl) Open(ctx context.Context, channel types.PChannelInfo) (err
 	defer func() {
 		m.lifetime.Done()
 		if err != nil {
-			m.logger.Warn("open wal failed", zap.Error(err), zap.String("channel", channel.Name), zap.Int64("term", channel.Term))
+			m.logger.Warn("open wal failed", zap.Error(err), zap.String("channel", opt.Channel.Name), zap.Int64("term", opt.Channel.Term))
 			return
 		}
-		m.logger.Info("open wal success", zap.String("channel", channel.Name), zap.Int64("term", channel.Term))
+		m.logger.Info("open wal success", zap.String("channel", opt.Channel.Name), zap.Int64("term", opt.Channel.Term))
 	}()
 
-	return m.getWALLifetime(channel.Name).Open(ctx, channel)
+	return m.getWALLifetime(opt.Channel.Name).Open(ctx, opt)
 }
 
 // Remove removes the wal instance for the channel.
@@ -94,22 +94,27 @@ func (m *managerImpl) Remove(ctx context.Context, channel types.PChannelInfo) (e
 
 // GetAvailableWAL returns a available wal instance for the channel.
 // Return nil if the wal instance is not found.
-func (m *managerImpl) GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error) {
+func (m *managerImpl) GetAvailableWAL(opt wal.AccessOption) (wal.WAL, error) {
 	// reject operation if manager is closing.
 	if !m.lifetime.AddIf(isGetable) {
 		return nil, errWALManagerClosed
 	}
 	defer m.lifetime.Done()
 
-	l := m.getWALLifetime(channel.Name).GetWAL()
+	l := m.getWALLifetime(opt.Channel.Name).GetWAL()
 	if l == nil {
-		return nil, status.NewChannelNotExist(channel.Name)
+		return nil, status.NewChannelNotExist(opt.Channel.Name)
 	}
 
 	currentTerm := l.Channel().Term
-	if currentTerm != channel.Term {
-		return nil, status.NewUnmatchedChannelTerm(channel.Name, channel.Term, currentTerm)
+	if currentTerm != opt.Channel.Term {
+		return nil, status.NewUnmatchedChannelTerm(opt.Channel.Name, opt.Channel.Term, currentTerm)
 	}
+
+	if !l.AccessMode().Match(opt.AccessMode) {
+		return nil, status.NewAccessModeNotMtach(opt.Channel.Name, opt.AccessMode, l.AccessMode())
+	}
+
 	// wal's lifetime is fully managed by wal manager,
 	// so wrap the wal instance to prevent it from being closed by other components.
 	return nopCloseWAL{l}, nil

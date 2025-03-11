@@ -30,7 +30,10 @@ func CreateProduceServer(walManager walmanager.Manager, streamServer streamingpb
 	if err != nil {
 		return nil, status.NewInvaildArgument("create producer request is required")
 	}
-	l, err := walManager.GetAvailableWAL(types.NewPChannelInfoFromProto(createReq.GetPchannel()))
+	l, err := walManager.GetAvailableWAL(wal.AccessOption{
+		Channel:    types.NewPChannelInfoFromProto(createReq.GetPchannel()),
+		AccessMode: types.AccessModeRW,
+	})
 	if err != nil {
 		return nil, err
 	}

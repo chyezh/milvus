@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/milvus-io/milvus/internal/mocks/streamingnode/server/mock_wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
@@ -21,8 +22,11 @@ func TestStatePair(t *testing.T) {
 	assert.Equal(t, initialExpectedWALState, expectedState)
 	assert.Nil(t, statePair.GetWAL())
 
-	statePair.SetExpectedState(newAvailableExpectedState(context.Background(), types.PChannelInfo{
-		Term: 1,
+	statePair.SetExpectedState(newAvailableExpectedState(context.Background(), wal.OpenOption{
+		Channel: types.PChannelInfo{
+			Term: 1,
+		},
+		AccessMode: types.AccessModeRW,
 	}))
 	assert.Equal(t, "(1,true)", toStateString(statePair.GetExpectedState()))
 
@@ -39,8 +43,11 @@ func TestStatePair(t *testing.T) {
 	statePair.SetCurrentState(newUnavailableCurrentState(1, nil))
 	assert.Equal(t, "(1,false)", toStateString(statePair.GetCurrentState()))
 
-	assert.NoError(t, statePair.WaitExpectedStateChanged(context.Background(), newAvailableExpectedState(context.Background(), types.PChannelInfo{
-		Term: 1,
+	assert.NoError(t, statePair.WaitExpectedStateChanged(context.Background(), newAvailableExpectedState(context.Background(), wal.OpenOption{
+		Channel: types.PChannelInfo{
+			Term: 1,
+		},
+		AccessMode: types.AccessModeRW,
 	})))
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()

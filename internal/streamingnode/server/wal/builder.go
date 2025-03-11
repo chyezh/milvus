@@ -20,6 +20,12 @@ type OpenOption struct {
 	AccessMode types.AccessMode
 }
 
+// AccessOption is the option for accessing wal instance.
+type AccessOption struct {
+	Channel    types.PChannelInfo
+	AccessMode types.AccessMode
+}
+
 // Opener is the interface for build wal instance.
 type Opener interface {
 	// Open open a wal instance.

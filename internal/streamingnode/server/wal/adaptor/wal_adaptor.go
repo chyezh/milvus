@@ -87,6 +87,10 @@ func (w *walAdaptorImpl) Channel() types.PChannelInfo {
 	return w.inner.Channel()
 }
 
+func (w *walAdaptorImpl) AccessMode() types.AccessMode {
+	return w.inner.AccessMode()
+}
+
 // GetLatestMVCCTimestamp get the latest mvcc timestamp of the wal at vchannel.
 func (w *walAdaptorImpl) GetLatestMVCCTimestamp(ctx context.Context, vchannel string) (uint64, error) {
 	if !w.lifetime.Add(typeutil.LifetimeStateWorking) {

@@ -31,6 +31,7 @@ func TestScannerAdaptorReadError(t *testing.T) {
 	err := errors.New("read error")
 	l := mock_walimpls.NewMockWALImpls(t)
 	l.EXPECT().Read(mock.Anything, mock.Anything).Return(nil, err)
+	l.EXPECT().AccessMode().Return(types.AccessModeRW)
 	l.EXPECT().Channel().Return(types.PChannelInfo{})
 
 	s := newScannerAdaptor("scanner", l,

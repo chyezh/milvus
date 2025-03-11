@@ -42,7 +42,10 @@ func CreateConsumeServer(walManager walmanager.Manager, streamServer streamingpb
 		return nil, status.NewInvaildArgument("create consumer request is required")
 	}
 
-	l, err := walManager.GetAvailableWAL(types.NewPChannelInfoFromProto(createReq.GetPchannel()))
+	l, err := walManager.GetAvailableWAL(wal.AccessOption{
+		Channel:    types.NewPChannelInfoFromProto(createReq.GetPchannel()),
+		AccessMode: types.AccessModeRO,
+	})
 	if err != nil {
 		return nil, err
 	}

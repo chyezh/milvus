@@ -113,9 +113,9 @@ func (_c *MockManager_GetAllAvailableChannels_Call) RunAndReturn(run func() ([]t
 	return _c
 }
 
-// GetAvailableWAL provides a mock function with given fields: channel
-func (_m *MockManager) GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error) {
-	ret := _m.Called(channel)
+// GetAvailableWAL provides a mock function with given fields: opt
+func (_m *MockManager) GetAvailableWAL(opt wal.AccessOption) (wal.WAL, error) {
+	ret := _m.Called(opt)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetAvailableWAL")
@@ -123,19 +123,19 @@ func (_m *MockManager) GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, err
 
 	var r0 wal.WAL
 	var r1 error
-	if rf, ok := ret.Get(0).(func(types.PChannelInfo) (wal.WAL, error)); ok {
-		return rf(channel)
+	if rf, ok := ret.Get(0).(func(wal.AccessOption) (wal.WAL, error)); ok {
+		return rf(opt)
 	}
-	if rf, ok := ret.Get(0).(func(types.PChannelInfo) wal.WAL); ok {
-		r0 = rf(channel)
+	if rf, ok := ret.Get(0).(func(wal.AccessOption) wal.WAL); ok {
+		r0 = rf(opt)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(wal.WAL)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(types.PChannelInfo) error); ok {
-		r1 = rf(channel)
+	if rf, ok := ret.Get(1).(func(wal.AccessOption) error); ok {
+		r1 = rf(opt)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -149,14 +149,14 @@ type MockManager_GetAvailableWAL_Call struct {
 }
 
 // GetAvailableWAL is a helper method to define mock.On call
-//   - channel types.PChannelInfo
-func (_e *MockManager_Expecter) GetAvailableWAL(channel interface{}) *MockManager_GetAvailableWAL_Call {
-	return &MockManager_GetAvailableWAL_Call{Call: _e.mock.On("GetAvailableWAL", channel)}
+//   - opt wal.AccessOption
+func (_e *MockManager_Expecter) GetAvailableWAL(opt interface{}) *MockManager_GetAvailableWAL_Call {
+	return &MockManager_GetAvailableWAL_Call{Call: _e.mock.On("GetAvailableWAL", opt)}
 }
 
-func (_c *MockManager_GetAvailableWAL_Call) Run(run func(channel types.PChannelInfo)) *MockManager_GetAvailableWAL_Call {
+func (_c *MockManager_GetAvailableWAL_Call) Run(run func(opt wal.AccessOption)) *MockManager_GetAvailableWAL_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(types.PChannelInfo))
+		run(args[0].(wal.AccessOption))
 	})
 	return _c
 }
@@ -166,22 +166,22 @@ func (_c *MockManager_GetAvailableWAL_Call) Return(_a0 wal.WAL, _a1 error) *Mock
 	return _c
 }
 
-func (_c *MockManager_GetAvailableWAL_Call) RunAndReturn(run func(types.PChannelInfo) (wal.WAL, error)) *MockManager_GetAvailableWAL_Call {
+func (_c *MockManager_GetAvailableWAL_Call) RunAndReturn(run func(wal.AccessOption) (wal.WAL, error)) *MockManager_GetAvailableWAL_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// Open provides a mock function with given fields: ctx, channel
-func (_m *MockManager) Open(ctx context.Context, channel types.PChannelInfo) error {
-	ret := _m.Called(ctx, channel)
+// Open provides a mock function with given fields: ctx, opt
+func (_m *MockManager) Open(ctx context.Context, opt wal.OpenOption) error {
+	ret := _m.Called(ctx, opt)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Open")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, types.PChannelInfo) error); ok {
-		r0 = rf(ctx, channel)
+	if rf, ok := ret.Get(0).(func(context.Context, wal.OpenOption) error); ok {
+		r0 = rf(ctx, opt)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -196,14 +196,14 @@ type MockManager_Open_Call struct {
 
 // Open is a helper method to define mock.On call
 //   - ctx context.Context
-//   - channel types.PChannelInfo
-func (_e *MockManager_Expecter) Open(ctx interface{}, channel interface{}) *MockManager_Open_Call {
-	return &MockManager_Open_Call{Call: _e.mock.On("Open", ctx, channel)}
+//   - opt wal.OpenOption
+func (_e *MockManager_Expecter) Open(ctx interface{}, opt interface{}) *MockManager_Open_Call {
+	return &MockManager_Open_Call{Call: _e.mock.On("Open", ctx, opt)}
 }
 
-func (_c *MockManager_Open_Call) Run(run func(ctx context.Context, channel types.PChannelInfo)) *MockManager_Open_Call {
+func (_c *MockManager_Open_Call) Run(run func(ctx context.Context, opt wal.OpenOption)) *MockManager_Open_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(types.PChannelInfo))
+		run(args[0].(context.Context), args[1].(wal.OpenOption))
 	})
 	return _c
 }
@@ -213,7 +213,7 @@ func (_c *MockManager_Open_Call) Return(_a0 error) *MockManager_Open_Call {
 	return _c
 }
 
-func (_c *MockManager_Open_Call) RunAndReturn(run func(context.Context, types.PChannelInfo) error) *MockManager_Open_Call {
+func (_c *MockManager_Open_Call) RunAndReturn(run func(context.Context, wal.OpenOption) error) *MockManager_Open_Call {
 	_c.Call.Return(run)
 	return _c
 }

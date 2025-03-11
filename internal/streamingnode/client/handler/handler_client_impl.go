@@ -55,7 +55,10 @@ func (hc *handlerClientImpl) GetLatestMVCCTimestampIfLocal(ctx context.Context, 
 	}
 
 	// Get the wal at local registry.
-	w, err := registry.GetLocalAvailableWAL(assign.Channel)
+	w, err := registry.GetLocalAvailableWAL(registry.AccessOption{
+		Channel:    assign.Channel,
+		AccessMode: types.AccessModeRW,
+	})
 	if err != nil {
 		return 0, err
 	}
@@ -72,7 +75,10 @@ func (hc *handlerClientImpl) CreateProducer(ctx context.Context, opts *ProducerO
 	logger := log.With(zap.String("pchannel", opts.PChannel), zap.String("handler", "producer"))
 	p, err := hc.createHandlerAfterStreamingNodeReady(ctx, logger, opts.PChannel, func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
 		// Check if the localWAL is assigned at local
-		localWAL, err := registry.GetLocalAvailableWAL(assign.Channel)
+		localWAL, err := registry.GetLocalAvailableWAL(registry.AccessOption{
+			Channel:    assign.Channel,
+			AccessMode: types.AccessModeRW,
+		})
 		if err == nil {
 			return localWAL, nil
 		}
@@ -108,7 +114,10 @@ func (hc *handlerClientImpl) CreateConsumer(ctx context.Context, opts *ConsumerO
 	logger := log.With(zap.String("pchannel", opts.PChannel), zap.String("vchannel", opts.VChannel), zap.String("handler", "consumer"))
 	c, err := hc.createHandlerAfterStreamingNodeReady(ctx, logger, opts.PChannel, func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
 		// Check if the localWAL is assigned at local
-		localWAL, err := registry.GetLocalAvailableWAL(assign.Channel)
+		localWAL, err := registry.GetLocalAvailableWAL(registry.AccessOption{
+			Channel:    assign.Channel,
+			AccessMode: types.AccessModeRO,
+		})
 		if err == nil {
 			localScanner, err := localWAL.Read(ctx, wal.ReadOption{
 				VChannel:       opts.VChannel,

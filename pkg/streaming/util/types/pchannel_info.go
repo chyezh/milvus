@@ -14,6 +14,15 @@ const (
 
 type AccessMode streamingpb.PChannelAccessMode
 
+// Match checks if the access mode m can satisfy the access mode m2.
+func (m AccessMode) Match(m2 AccessMode) bool {
+	if m == AccessModeRW {
+		return true
+	}
+	// if m is read only, the m2 must be read only.
+	return m2 != AccessModeRW
+}
+
 func (m AccessMode) String() string {
 	switch m {
 	case AccessModeRO:

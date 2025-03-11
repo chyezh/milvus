@@ -43,6 +43,7 @@ func (o *openerAdaptorImpl) Open(ctx context.Context, opt *wal.OpenOption) (wal.
 		return nil, status.NewOnShutdownError("wal opener is on shutdown")
 	}
 	defer o.lifetime.Done()
+	// TODO: support to open a read only wal.
 
 	id := o.idAllocator.Allocate()
 	logger := o.logger.With(zap.Any("channel", opt.Channel), zap.Int64("id", id))

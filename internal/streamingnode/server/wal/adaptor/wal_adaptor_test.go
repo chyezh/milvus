@@ -36,6 +36,7 @@ func TestWalAdaptorReadFail(t *testing.T) {
 	l.EXPECT().WALName().Return("test")
 	l.EXPECT().Channel().Return(types.PChannelInfo{})
 	cnt := atomic.NewInt64(2)
+	l.EXPECT().AccessMode().Return(types.AccessModeRW)
 	l.EXPECT().Read(mock.Anything, mock.Anything).RunAndReturn(
 		func(ctx context.Context, ro walimpls.ReadOption) (walimpls.ScannerImpls, error) {
 			if cnt.Dec() < 0 {
@@ -83,6 +84,7 @@ func TestWALAdaptor(t *testing.T) {
 	l := mock_walimpls.NewMockWALImpls(t)
 	l.EXPECT().WALName().Return("test")
 	l.EXPECT().Channel().Return(types.PChannelInfo{})
+	l.EXPECT().AccessMode().Return(types.AccessModeRW)
 	l.EXPECT().Append(mock.Anything, mock.Anything).RunAndReturn(
 		func(ctx context.Context, mm message.MutableMessage) (message.MessageID, error) {
 			return walimplstest.NewTestMessageID(1), nil

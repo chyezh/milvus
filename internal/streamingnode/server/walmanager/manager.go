@@ -14,11 +14,11 @@ type Manager interface {
 	// Open opens a wal instance for the channel on this Manager.
 	// Return `IgnoreOperation` error if the channel is not found.
 	// Return `UnmatchedChannelTerm` error if the channel term is not matched.
-	Open(ctx context.Context, channel types.PChannelInfo) error
+	Open(ctx context.Context, opt wal.OpenOption) error
 
 	// GetAvailableWAL returns a available wal instance for the channel.
 	// Return nil if the wal instance is not found.
-	GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error)
+	GetAvailableWAL(opt wal.AccessOption) (wal.WAL, error)
 
 	// GetAllAvailableWALInfo returns all available channel info.
 	GetAllAvailableChannels() ([]types.PChannelInfo, error)

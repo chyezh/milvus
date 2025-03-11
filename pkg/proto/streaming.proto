@@ -244,6 +244,7 @@ enum StreamingCode {
     STREAMING_CODE_INVALID_TRANSACTION_STATE = 10;  // invalid transaction state
     STREAMING_CODE_UNRECOVERABLE          = 11;  // unrecoverable error
     STREAMING_CODE_RESOURCE_ACQUIRED      = 12; // resource is acquired by other operation
+    STREAMING_CODE_ACCESS_MODE_NOT_MATCH  = 13; // access mode not match
     STREAMING_CODE_UNKNOWN                   = 999;  // unknown error
 }
 
@@ -466,6 +467,7 @@ service StreamingNodeManagerService {
 // StreamingManagerAssignRequest is the request message of Assign RPC.
 message StreamingNodeManagerAssignRequest {
     PChannelInfo pchannel = 1;
+    PChannelAccessMode access_mode = 2;
 }
 
 message StreamingNodeManagerAssignResponse {}

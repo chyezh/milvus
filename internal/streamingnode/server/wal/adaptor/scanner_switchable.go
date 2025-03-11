@@ -144,7 +144,9 @@ func (s *catchupScanner) consumeWithScanner(ctx context.Context, scanner walimpl
 			if err := s.HandleMessage(ctx, msg); err != nil {
 				return nil, err
 			}
-			if msg.MessageType() != message.MessageTypeTimeTick {
+			if msg.MessageType() != message.MessageTypeTimeTick || s.writeAheadBuffer == nil {
+				// Only time tick message can be used to catchup the writeahead buffer.
+				// Only there's a writeahead buffer, we can switch to tailing mode.
 				continue
 			}
 			// Here's a timetick message from the scanner, make tailing read if we catch up the writeahead buffer.

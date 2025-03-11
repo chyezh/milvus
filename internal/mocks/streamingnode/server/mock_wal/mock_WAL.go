@@ -26,6 +26,51 @@ func (_m *MockWAL) EXPECT() *MockWAL_Expecter {
 	return &MockWAL_Expecter{mock: &_m.Mock}
 }
 
+// AccessMode provides a mock function with given fields:
+func (_m *MockWAL) AccessMode() types.AccessMode {
+	ret := _m.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for AccessMode")
+	}
+
+	var r0 types.AccessMode
+	if rf, ok := ret.Get(0).(func() types.AccessMode); ok {
+		r0 = rf()
+	} else {
+		r0 = ret.Get(0).(types.AccessMode)
+	}
+
+	return r0
+}
+
+// MockWAL_AccessMode_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AccessMode'
+type MockWAL_AccessMode_Call struct {
+	*mock.Call
+}
+
+// AccessMode is a helper method to define mock.On call
+func (_e *MockWAL_Expecter) AccessMode() *MockWAL_AccessMode_Call {
+	return &MockWAL_AccessMode_Call{Call: _e.mock.On("AccessMode")}
+}
+
+func (_c *MockWAL_AccessMode_Call) Run(run func()) *MockWAL_AccessMode_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockWAL_AccessMode_Call) Return(_a0 types.AccessMode) *MockWAL_AccessMode_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockWAL_AccessMode_Call) RunAndReturn(run func() types.AccessMode) *MockWAL_AccessMode_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Append provides a mock function with given fields: ctx, msg
 func (_m *MockWAL) Append(ctx context.Context, msg message.MutableMessage) (*types.AppendResult, error) {
 	ret := _m.Called(ctx, msg)

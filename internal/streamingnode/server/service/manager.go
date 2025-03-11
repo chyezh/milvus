@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/walmanager"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
@@ -32,7 +33,10 @@ type managerServiceImpl struct {
 // After assign returns, the wal instance is ready to use.
 func (ms *managerServiceImpl) Assign(ctx context.Context, req *streamingpb.StreamingNodeManagerAssignRequest) (*streamingpb.StreamingNodeManagerAssignResponse, error) {
 	pchannelInfo := types.NewPChannelInfoFromProto(req.GetPchannel())
-	if err := ms.walManager.Open(ctx, pchannelInfo); err != nil {
+	if err := ms.walManager.Open(ctx, wal.OpenOption{
+		Channel:    pchannelInfo,
+		AccessMode: types.AccessMode(req.AccessMode),
+	}); err != nil {
 		return nil, err
 	}
 	return &streamingpb.StreamingNodeManagerAssignResponse{}, nil

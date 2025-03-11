@@ -9,7 +9,34 @@ import (
 
 type AppendResult = types.AppendResult
 
-// WAL is the WAL framework interface.
+// ROWAL is the read-only WAL interface.
+// ROWAL only supports reading records from the wal but not writing.
+// !!! Don't implement it directly, implement walimpls.WAL instead.
+type ROWAL interface {
+	// WALName returns the name of the wal.
+	WALName() string
+
+	// AccessMode return the access mode of the wal.
+	AccessMode() types.AccessMode
+
+	// Channel returns the channel assignment info of the wal.
+	Channel() types.PChannelInfo
+
+	// Available return a channel that will be closed when the wal is available.
+	Available() <-chan struct{}
+
+	// IsAvailable returns if the wal is available.
+	IsAvailable() bool
+
+	// Read returns a scanner for reading records from the wal.
+	Read(ctx context.Context, deliverPolicy ReadOption) (Scanner, error)
+
+	// Close closes the wal instance.
+	Close()
+}
+
+// WAL is the read-write WAL interface.
+// WAL supports both reading and writing records from the wal.
 // !!! Don't implement it directly, implement walimpls.WAL instead.
 type WAL interface {
 	ROWAL
@@ -22,27 +49,4 @@ type WAL interface {
 
 	// Append a record to the log asynchronously.
 	AppendAsync(ctx context.Context, msg message.MutableMessage, cb func(*AppendResult, error))
-}
-
-// ROWAL is the read-only WAL interface.
-// ROWAL only supports reading records from the wal but not writing.
-// !!! Don't implement it directly, implement walimpls.WAL instead.
-type ROWAL interface {
-	// WALName returns the name of the wal.
-	WALName() string
-
-	// Channel returns the channel assignment info of the wal.
-	Channel() types.PChannelInfo
-
-	// Read returns a scanner for reading records from the wal.
-	Read(ctx context.Context, deliverPolicy ReadOption) (Scanner, error)
-
-	// Available return a channel that will be closed when the wal is available.
-	Available() <-chan struct{}
-
-	// IsAvailable returns if the wal is available.
-	IsAvailable() bool
-
-	// Close closes the wal instance.
-	Close()
 }

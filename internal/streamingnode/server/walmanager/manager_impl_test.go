@@ -42,6 +42,7 @@ func TestManager(t *testing.T) {
 	opener.EXPECT().Open(mock.Anything, mock.Anything).RunAndReturn(
 		func(ctx context.Context, oo *wal.OpenOption) (wal.WAL, error) {
 			l := mock_wal.NewMockWAL(t)
+			l.EXPECT().AccessMode().Return(types.AccessModeRW).Maybe()
 			l.EXPECT().Channel().Return(oo.Channel)
 			l.EXPECT().Close().Return()
 			return l, nil
@@ -51,7 +52,10 @@ func TestManager(t *testing.T) {
 	m := newManager(opener)
 	channelName := "ch1"
 
-	l, err := m.GetAvailableWAL(types.PChannelInfo{Name: channelName, Term: 1})
+	l, err := m.GetAvailableWAL(wal.AccessOption{
+		Channel:    types.PChannelInfo{Name: channelName, Term: 1},
+		AccessMode: types.AccessModeRW,
+	})
 	assertErrorChannelNotExist(t, err)
 	assert.Nil(t, l)
 
@@ -62,30 +66,45 @@ func TestManager(t *testing.T) {
 	err = m.Remove(context.Background(), types.PChannelInfo{Name: channelName, Term: 1})
 	assert.NoError(t, err)
 
-	l, err = m.GetAvailableWAL(types.PChannelInfo{Name: channelName, Term: 1})
+	l, err = m.GetAvailableWAL(wal.AccessOption{
+		Channel:    types.PChannelInfo{Name: channelName, Term: 1},
+		AccessMode: types.AccessModeRW,
+	})
 	assertErrorChannelNotExist(t, err)
 	assert.Nil(t, l)
 
-	err = m.Open(context.Background(), types.PChannelInfo{
-		Name: channelName,
-		Term: 1,
+	err = m.Open(context.Background(), wal.OpenOption{
+		Channel: types.PChannelInfo{
+			Name: channelName,
+			Term: 1,
+		},
+		AccessMode: types.AccessModeRW,
 	})
 	assertErrorOperationIgnored(t, err)
 
-	err = m.Open(context.Background(), types.PChannelInfo{
-		Name: channelName,
-		Term: 2,
+	err = m.Open(context.Background(), wal.OpenOption{
+		Channel: types.PChannelInfo{
+			Name: channelName,
+			Term: 2,
+		},
+		AccessMode: types.AccessModeRW,
 	})
 	assert.NoError(t, err)
 
 	err = m.Remove(context.Background(), types.PChannelInfo{Name: channelName, Term: 1})
 	assertErrorOperationIgnored(t, err)
 
-	l, err = m.GetAvailableWAL(types.PChannelInfo{Name: channelName, Term: 1})
+	l, err = m.GetAvailableWAL(wal.AccessOption{
+		Channel:    types.PChannelInfo{Name: channelName, Term: 1},
+		AccessMode: types.AccessModeRW,
+	})
 	assertErrorTermExpired(t, err)
 	assert.Nil(t, l)
 
-	l, err = m.GetAvailableWAL(types.PChannelInfo{Name: channelName, Term: 2})
+	l, err = m.GetAvailableWAL(wal.AccessOption{
+		Channel:    types.PChannelInfo{Name: channelName, Term: 2},
+		AccessMode: types.AccessModeRW,
+	})
 	assert.NoError(t, err)
 	assert.NotNil(t, l)
 
@@ -93,9 +112,12 @@ func TestManager(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, h, 1)
 
-	err = m.Open(context.Background(), types.PChannelInfo{
-		Name: "term2",
-		Term: 3,
+	err = m.Open(context.Background(), wal.OpenOption{
+		Channel: types.PChannelInfo{
+			Name: "term2",
+			Term: 3,
+		},
+		AccessMode: types.AccessModeRW,
 	})
 	assert.NoError(t, err)
 
@@ -109,16 +131,22 @@ func TestManager(t *testing.T) {
 	assertShutdownError(t, err)
 	assert.Len(t, h, 0)
 
-	err = m.Open(context.Background(), types.PChannelInfo{
-		Name: "term2",
-		Term: 4,
+	err = m.Open(context.Background(), wal.OpenOption{
+		Channel: types.PChannelInfo{
+			Name: "term2",
+			Term: 4,
+		},
+		AccessMode: types.AccessModeRW,
 	})
 	assertShutdownError(t, err)
 
 	err = m.Remove(context.Background(), types.PChannelInfo{Name: channelName, Term: 2})
 	assertShutdownError(t, err)
 
-	l, err = m.GetAvailableWAL(types.PChannelInfo{Name: channelName, Term: 2})
+	l, err = m.GetAvailableWAL(wal.AccessOption{
+		Channel:    types.PChannelInfo{Name: channelName, Term: 2},
+		AccessMode: types.AccessModeRW,
+	})
 	assertShutdownError(t, err)
 	assert.Nil(t, l)
 }

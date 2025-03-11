@@ -16,6 +16,9 @@ type ROWALImpls interface {
 	// Should be read-only.
 	Channel() types.PChannelInfo
 
+	// AccessMode return the access mode of the wal.
+	AccessMode() types.AccessMode
+
 	// Close closes the wal instance.
 	Close()
 

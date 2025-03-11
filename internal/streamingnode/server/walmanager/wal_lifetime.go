@@ -9,7 +9,6 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v2/log"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 )
 
 // newWALLifetime create a WALLifetime with opener.
@@ -52,11 +51,11 @@ func (w *walLifetime) GetWAL() wal.WAL {
 }
 
 // Open opens a wal instance for the channel on this Manager.
-func (w *walLifetime) Open(ctx context.Context, channel types.PChannelInfo) error {
+func (w *walLifetime) Open(ctx context.Context, opt wal.OpenOption) error {
 	// Set expected WAL state to available at given term.
-	expected := newAvailableExpectedState(ctx, channel)
+	expected := newAvailableExpectedState(ctx, opt)
 	if !w.statePair.SetExpectedState(expected) {
-		return status.NewIgnoreOperation("channel %s with expired term %d, cannot change expected state for open", channel.Name, channel.Term)
+		return status.NewIgnoreOperation("channel %s with expired term %d, cannot change expected state for open", opt.Channel.Name, opt.Channel.Term)
 	}
 
 	// Wait until the WAL state is ready or term expired or error occurs.
@@ -157,7 +156,7 @@ func (w *walLifetime) doLifetimeChanged(expectedState expectedWALState) {
 	// TODO: merge the expectedState and expected state context together.
 	l, err := w.opener.Open(expectedState.Context(), &wal.OpenOption{
 		Channel:    expectedState.GetPChannelInfo(),
-		AccessMode: types.AccessModeRW, // TODO: support read only mode in future.
+		AccessMode: expectedState.AccessMode(),
 	})
 	if err != nil {
 		logger.Warn("open new wal fail", zap.Error(err))

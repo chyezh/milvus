@@ -20,7 +20,7 @@ type mockWALManager struct {
 	t *testing.T
 }
 
-func (m *mockWALManager) GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error) {
+func (m *mockWALManager) GetAvailableWAL(opt AccessOption) (wal.WAL, error) {
 	l := mock_wal.NewMockWAL(m.t)
 	l.EXPECT().Append(mock.Anything, mock.Anything).Return(&types.AppendResult{}, nil)
 	l.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).Return()
@@ -35,7 +35,7 @@ func TestGetLocalAvailableWAL(t *testing.T) {
 	manager := &mockWALManager{t: t}
 	RegisterLocalWALManager(manager)
 
-	walInstance, err := GetLocalAvailableWAL(types.PChannelInfo{})
+	walInstance, err := GetLocalAvailableWAL(AccessOption{})
 	assert.NoError(t, err)
 	assert.NotNil(t, walInstance)
 	assert.True(t, IsLocal(walInstance))

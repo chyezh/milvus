@@ -8,6 +8,7 @@ import (
 
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 )
 
 var _ error = (*StreamingError)(nil)
@@ -89,6 +90,11 @@ func NewChannelNotExist(channel string) *StreamingError {
 // NewUnmatchedChannelTerm creates a new StreamingError with code StreamingCode_STREAMING_CODE_UNMATCHED_CHANNEL_TERM.
 func NewUnmatchedChannelTerm(channel string, expectedTerm int64, currentTerm int64) *StreamingError {
 	return New(streamingpb.StreamingCode_STREAMING_CODE_UNMATCHED_CHANNEL_TERM, "channel %s at term %d is expected, but current term is %d", channel, expectedTerm, currentTerm)
+}
+
+// NewAccessModeNotMtach creates a new StreamingError with code STREAMING_CODE_ACCESS_MODE_NOT_MATCH.
+func NewAccessModeNotMtach(channel string, expectMode types.AccessMode, currentMode types.AccessMode) *StreamingError {
+	return New(streamingpb.StreamingCode_STREAMING_CODE_ACCESS_MODE_NOT_MATCH, "channel %s access mode expect %s, current %s", channel, expectMode, currentMode)
 }
 
 // NewIgnoreOperation creates a new StreamingError with code STREAMING_CODE_IGNORED_OPERATION.

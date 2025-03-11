@@ -145,6 +145,8 @@ func (c *managerClientImpl) Assign(ctx context.Context, pchannel types.PChannelI
 	ctx = contextutil.WithPickServerID(ctx, pchannel.Node.ServerID)
 	_, err = manager.Assign(ctx, &streamingpb.StreamingNodeManagerAssignRequest{
 		Pchannel: types.NewProtoFromPChannelInfo(pchannel.Channel),
+		// TODO: support read only mode at streaming coord.
+		AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
 	})
 	return err
 }

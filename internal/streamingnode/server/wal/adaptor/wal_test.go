@@ -344,7 +344,7 @@ func (f *testOneWALFramework) testAppend(ctx context.Context, w wal.WAL) ([]mess
 	return messages, nil
 }
 
-func (f *testOneWALFramework) testRead(ctx context.Context, w wal.WAL) ([]message.ImmutableMessage, error) {
+func (f *testOneWALFramework) testRead(ctx context.Context, w wal.ROWAL) ([]message.ImmutableMessage, error) {
 	s, err := w.Read(ctx, wal.ReadOption{
 		VChannel:      testVChannel,
 		DeliverPolicy: options.DeliverPolicyAll(),
@@ -386,7 +386,7 @@ func (f *testOneWALFramework) testRead(ctx context.Context, w wal.WAL) ([]messag
 	return msgs, nil
 }
 
-func (f *testOneWALFramework) testReadWithOption(ctx context.Context, w wal.WAL) {
+func (f *testOneWALFramework) testReadWithOption(ctx context.Context, w wal.ROWAL) {
 	loopCount := 5
 	wg := sync.WaitGroup{}
 	wg.Add(loopCount)

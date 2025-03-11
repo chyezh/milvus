@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/milvus-io/milvus/internal/mocks/streamingnode/server/mock_wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 )
 
@@ -60,7 +61,7 @@ func TestUnavailableCurrentWALState(t *testing.T) {
 
 func TestAvailableExpectedWALState(t *testing.T) {
 	channel := types.PChannelInfo{}
-	state := newAvailableExpectedState(context.Background(), channel)
+	state := newAvailableExpectedState(context.Background(), wal.OpenOption{})
 
 	assert.Equal(t, int64(0), state.Term())
 	assert.True(t, state.Available())
@@ -94,8 +95,11 @@ func TestIsStateBefore(t *testing.T) {
 	cases := []walState{
 		newAvailableCurrentState(l),
 		newUnavailableCurrentState(1, nil),
-		newAvailableExpectedState(context.Background(), types.PChannelInfo{
-			Term: 3,
+		newAvailableExpectedState(context.Background(), wal.OpenOption{
+			Channel: types.PChannelInfo{
+				Term: 3,
+			},
+			AccessMode: types.AccessModeRW,
 		}),
 		newUnavailableExpectedState(5),
 	}

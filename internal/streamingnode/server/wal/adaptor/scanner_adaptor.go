@@ -8,6 +8,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/wab"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v2/log"
@@ -37,6 +38,7 @@ func newScannerAdaptor(
 		log.FieldComponent("scanner"),
 		zap.String("name", name),
 		zap.String("channel", l.Channel().Name),
+		zap.String("walAccessMode", l.AccessMode().String()),
 	)
 	s := &scannerAdaptorImpl{
 		logger:        logger,
@@ -122,10 +124,15 @@ func (s *scannerAdaptorImpl) execute() {
 
 // produceEventLoop produces the message from the wal and write ahead buffer.
 func (s *scannerAdaptorImpl) produceEventLoop(msgChan chan<- message.ImmutableMessage) error {
-	wb, err := resource.Resource().TimeTickInspector().MustGetOperator(s.Channel()).WriteAheadBuffer(s.Context())
-	if err != nil {
-		return err
+	var wb wab.ROWriteAheadBuffer
+	var err error
+	if s.innerWAL.AccessMode() == types.AccessModeRW {
+		// If the access mode is RW, the write ahead buffer can be used.
+		if wb, err = resource.Resource().TimeTickInspector().MustGetOperator(s.Channel()).WriteAheadBuffer(s.Context()); err != nil {
+			return err
+		}
 	}
+	// TODO: Enable the read ahead buffer if the access mode is RO.
 
 	scanner := newSwithableScanner(s.Name(), s.logger, s.innerWAL, wb, s.readOption.DeliverPolicy, msgChan)
 	s.logger.Info("start produce loop of scanner at model", zap.String("model", getScannerModel(scanner)))

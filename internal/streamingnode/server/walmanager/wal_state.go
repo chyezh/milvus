@@ -41,10 +41,10 @@ func newUnavailableCurrentState(term int64, err error) currentWALState {
 }
 
 // newAvailableExpectedState creates a new available expected state.
-func newAvailableExpectedState(ctx context.Context, channel types.PChannelInfo) expectedWALState {
+func newAvailableExpectedState(ctx context.Context, opt wal.OpenOption) expectedWALState {
 	return availableExpectedWALState{
-		ctx:     ctx,
-		channel: channel,
+		ctx: ctx,
+		opt: opt,
 	}
 }
 
@@ -83,6 +83,9 @@ type expectedWALState interface {
 	// GetPChannelInfo returns the expected pchannel info of the wal.
 	// Return nil if the expected wal state is unavailable.
 	GetPChannelInfo() types.PChannelInfo
+
+	// AccessMode returns the access mode of the expected wal state.
+	AccessMode() types.AccessMode
 
 	// Context returns the context of the expected wal state.
 	Context() context.Context
@@ -132,12 +135,16 @@ func (s unavailableCurrentWALState) GetLastError() error {
 }
 
 type availableExpectedWALState struct {
-	ctx     context.Context
-	channel types.PChannelInfo
+	ctx context.Context
+	opt wal.OpenOption
 }
 
 func (s availableExpectedWALState) Term() int64 {
-	return s.channel.Term
+	return s.opt.Channel.Term
+}
+
+func (s availableExpectedWALState) AccessMode() types.AccessMode {
+	return s.opt.AccessMode
 }
 
 func (s availableExpectedWALState) Available() bool {
@@ -149,7 +156,7 @@ func (s availableExpectedWALState) Context() context.Context {
 }
 
 func (s availableExpectedWALState) GetPChannelInfo() types.PChannelInfo {
-	return s.channel
+	return s.opt.Channel
 }
 
 type unavailableExpectedWALState struct {
@@ -165,7 +172,11 @@ func (s unavailableExpectedWALState) Available() bool {
 }
 
 func (s unavailableExpectedWALState) GetPChannelInfo() types.PChannelInfo {
-	return types.PChannelInfo{}
+	panic("unavailable expected wal state should not have pchannel info")
+}
+
+func (s unavailableExpectedWALState) AccessMode() types.AccessMode {
+	panic("unavailable expected wal state should not have access mode")
 }
 
 func (s unavailableExpectedWALState) Context() context.Context {

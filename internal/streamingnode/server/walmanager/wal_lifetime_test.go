@@ -46,9 +46,12 @@ func TestWALLifetime(t *testing.T) {
 	assert.Nil(t, wlt.GetWAL())
 
 	// Test open.
-	err := wlt.Open(context.Background(), types.PChannelInfo{
-		Name: channel,
-		Term: 2,
+	err := wlt.Open(context.Background(), wal.OpenOption{
+		Channel: types.PChannelInfo{
+			Name: channel,
+			Term: 2,
+		},
+		AccessMode: types.AccessModeRW,
 	})
 	assert.NoError(t, err)
 	assert.NotNil(t, wlt.GetWAL())
@@ -68,17 +71,23 @@ func TestWALLifetime(t *testing.T) {
 	assert.Nil(t, wlt.GetWAL())
 
 	// Test expired term open.
-	err = wlt.Open(context.Background(), types.PChannelInfo{
-		Name: channel,
-		Term: 1,
+	err = wlt.Open(context.Background(), wal.OpenOption{
+		Channel: types.PChannelInfo{
+			Name: channel,
+			Term: 1,
+		},
+		AccessMode: types.AccessModeRW,
 	})
 	assertErrorOperationIgnored(t, err)
 	assert.Nil(t, wlt.GetWAL())
 
 	// Test open after close.
-	err = wlt.Open(context.Background(), types.PChannelInfo{
-		Name: channel,
-		Term: 5,
+	err = wlt.Open(context.Background(), wal.OpenOption{
+		Channel: types.PChannelInfo{
+			Name: channel,
+			Term: 5,
+		},
+		AccessMode: types.AccessModeRW,
 	})
 	assert.NoError(t, err)
 	assert.NotNil(t, wlt.GetWAL())
@@ -86,9 +95,12 @@ func TestWALLifetime(t *testing.T) {
 	assert.Equal(t, int64(5), wlt.GetWAL().Channel().Term)
 
 	// Test overwrite open.
-	err = wlt.Open(context.Background(), types.PChannelInfo{
-		Name: channel,
-		Term: 10,
+	err = wlt.Open(context.Background(), wal.OpenOption{
+		Channel: types.PChannelInfo{
+			Name: channel,
+			Term: 10,
+		},
+		AccessMode: types.AccessModeRW,
 	})
 	assert.NoError(t, err)
 	assert.NotNil(t, wlt.GetWAL())
@@ -98,24 +110,33 @@ func TestWALLifetime(t *testing.T) {
 	// Test context canceled.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err = wlt.Open(ctx, types.PChannelInfo{
-		Name: channel,
-		Term: 11,
+	err = wlt.Open(ctx, wal.OpenOption{
+		Channel: types.PChannelInfo{
+			Name: channel,
+			Term: 11,
+		},
+		AccessMode: types.AccessModeRW,
 	})
 	assert.ErrorIs(t, err, context.Canceled)
 
 	err = wlt.Remove(ctx, 11)
 	assert.ErrorIs(t, err, context.Canceled)
 
-	err = wlt.Open(context.Background(), types.PChannelInfo{
-		Name: channel,
-		Term: 11,
+	err = wlt.Open(context.Background(), wal.OpenOption{
+		Channel: types.PChannelInfo{
+			Name: channel,
+			Term: 11,
+		},
+		AccessMode: types.AccessModeRW,
 	})
 	assertErrorOperationIgnored(t, err)
 
-	wlt.Open(context.Background(), types.PChannelInfo{
-		Name: channel,
-		Term: 12,
+	wlt.Open(context.Background(), wal.OpenOption{
+		Channel: types.PChannelInfo{
+			Name: channel,
+			Term: 12,
+		},
+		AccessMode: types.AccessModeRW,
 	})
 	assert.NotNil(t, wlt.GetWAL())
 	assert.Equal(t, channel, wlt.GetWAL().Channel().Name)
