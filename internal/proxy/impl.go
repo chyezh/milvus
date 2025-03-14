@@ -34,6 +34,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
@@ -3880,6 +3881,8 @@ func (node *Proxy) Query(ctx context.Context, request *milvuspb.QueryRequest) (*
 	})
 	SetReportValue(res.Status, v)
 	metrics.ProxyReportValue.WithLabelValues(nodeID, hookutil.OpTypeQuery, request.DbName, username).Add(float64(v))
+	r, _ := protojson.Marshal(res)
+	log.Ctx(ctx).Debug("Query result", zap.String("result", string(r)))
 	return res, nil
 }
 

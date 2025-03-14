@@ -326,7 +326,6 @@ func (t *l0CompactionTask) BuildCompactionRequest() (*datapb.CompactionPlan, err
 		log.Info("l0Compaction available non-L0 Segments is empty ")
 		return nil, errors.Errorf("Selected zero L1/L2 segments for the position=%v", taskProto.GetPos())
 	}
-
 	segments = append(segments, sealedSegments...)
 	logIDRange, err := PreAllocateBinlogIDs(t.allocator, segments)
 	if err != nil {
