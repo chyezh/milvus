@@ -38,6 +38,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
@@ -596,7 +597,8 @@ func (s *LocalSegment) Retrieve(ctx context.Context, plan *segcore.RetrievePlan)
 		log.Warn("unmarshal retrieve result failed", zap.Error(err))
 		return nil, err
 	}
-	log.Debug("retrieve segment done", zap.Int("resultNum", len(retrieveResult.Offset)))
+	r, _ := protojson.Marshal(retrieveResult)
+	log.Debug("retrieve segment done", zap.Int("resultNum", len(retrieveResult.Offset)), zap.String("result", string(r)))
 	return retrieveResult, nil
 }
 
