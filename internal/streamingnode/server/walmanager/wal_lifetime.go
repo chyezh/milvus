@@ -1,28 +1,23 @@
 package walmanager
 
 import (
-	"context"
-
-	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
+	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
 
 // newWALLifetime create a WALLifetime with opener.
 func newWALLifetime(opener wal.Opener, channel string, logger *log.MLogger) *walLifetime {
-	ctx, cancel := context.WithCancel(context.Background())
 	l := &walLifetime{
-		ctx:       ctx,
-		cancel:    cancel,
-		channel:   channel,
-		finish:    make(chan struct{}),
-		opener:    opener,
-		statePair: newWALStatePair(),
-		logger:    logger.With(zap.String("channel", channel)),
+		backgroundNotifier: syncutil.NewAsyncTaskNotifier[struct{}](),
+		channel:            channel,
+		applyWALCh:         make(chan applyWALState),
+		opener:             opener,
+		logger:             logger.With(zap.String("channel", channel)),
 	}
 	go l.backgroundTask()
 	return l
@@ -35,63 +30,46 @@ func newWALLifetime(opener wal.Opener, channel string, logger *log.MLogger) *wal
 // term is always increasing, available is always before unavailable in same term, such as:
 // (-1, false) -> (0, true) -> (1, true) -> (2, true) -> (3, false) -> (7, true) -> ...
 type walLifetime struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	channel string
+	backgroundNotifier *syncutil.AsyncTaskNotifier[struct{}]
+	channel            string
 
-	finish    chan struct{}
-	opener    wal.Opener
-	statePair *walStatePair
-	logger    *log.MLogger
+	applyWALCh chan applyWALState
+	opener     wal.Opener
+	logger     *log.MLogger
+
+	currentState currentWALState
 }
 
 // GetWAL returns a available wal instance for the channel.
 // Return nil if the wal is not available now.
 func (w *walLifetime) GetWAL() wal.WAL {
-	return w.statePair.GetWAL()
+	return w.currentState.GetWAL()
 }
 
-// Open opens a wal instance for the channel on this Manager.
-func (w *walLifetime) Open(ctx context.Context, channel types.PChannelInfo) error {
-	// Set expected WAL state to available at given term.
-	expected := newAvailableExpectedState(ctx, channel)
-	if !w.statePair.SetExpectedState(expected) {
-		return status.NewIgnoreOperation("channel %s with expired term %d, cannot change expected state for open", channel.Name, channel.Term)
-	}
-
-	// Wait until the WAL state is ready or term expired or error occurs.
-	return w.statePair.WaitCurrentStateReachExpected(ctx, expected)
+// applyWALState is the request for apply wal operation.
+type applyWALState struct {
+	types.PChannelAssignState
+	Reporter Reporter
 }
 
-// Remove removes the wal instance for the channel on this Manager.
-func (w *walLifetime) Remove(ctx context.Context, term int64) error {
-	// Set expected WAL state to unavailable at given term.
-	expected := newUnavailableExpectedState(term)
-	if !w.statePair.SetExpectedState(expected) {
-		return status.NewIgnoreOperation("expired term %d, cannot change expected state for remove", term)
+// Apply applies the wal operation.
+func (w *walLifetime) Apply(state applyWALState) {
+	select {
+	case <-w.backgroundNotifier.Context().Done():
+		w.logger.Info("apply wal request ignored, because lifetime is closed", zap.String("request", state.String()))
+	case w.applyWALCh <- state:
 	}
-
-	// Wait until the WAL state is ready or term expired or error occurs.
-	err := w.statePair.WaitCurrentStateReachExpected(ctx, expected)
-	if errors.IsAny(err, context.Canceled, context.DeadlineExceeded) {
-		return err
-	}
-	if err != nil {
-		w.logger.Info("remove wal success because that previous open operation is failure", zap.NamedError("previousOpenError", err))
-	}
-	return nil
 }
 
 // Close closes the wal lifetime.
 func (w *walLifetime) Close() {
 	// Close all background task.
-	w.cancel()
-	<-w.finish
+	w.backgroundNotifier.Cancel()
+	w.backgroundNotifier.BlockUntilFinish()
 
 	// No background task is running now, close current wal if needed.
-	currentState := w.statePair.GetCurrentState()
-	logger := log.With(zap.String("current", toStateString(currentState)))
-	if oldWAL := currentState.GetWAL(); oldWAL != nil {
+	logger := log.With(zap.String("current", w.currentState.String()))
+	if oldWAL := w.currentState.GetWAL(); oldWAL != nil {
 		oldWAL.Close()
 		logger.Info("close current term wal done at wal life time close")
 	}
@@ -103,69 +81,65 @@ func (w *walLifetime) Close() {
 func (w *walLifetime) backgroundTask() {
 	defer func() {
 		w.logger.Info("wal lifetime background task exit")
-		close(w.finish)
+		w.backgroundNotifier.Finish(struct{}{})
 	}()
 
-	// wait for expectedState change.
-	expectedState := initialExpectedWALState
 	for {
-		// single wal open/close operation should be serialized.
-		if err := w.statePair.WaitExpectedStateChanged(w.ctx, expectedState); err != nil {
-			// context canceled. break the background task.
+		select {
+		case <-w.backgroundNotifier.Context().Done():
 			return
+		case req := <-w.applyWALCh:
+			w.doLifetimeChanged(req)
 		}
-		expectedState = w.statePair.GetExpectedState()
-		w.logger.Info("expected state changed, do a life cycle", zap.String("expected", toStateString(expectedState)))
-		w.doLifetimeChanged(expectedState)
 	}
 }
 
 // doLifetimeChanged executes the wal open/close operation once.
-func (w *walLifetime) doLifetimeChanged(expectedState expectedWALState) {
-	currentState := w.statePair.GetCurrentState()
-	logger := w.logger.With(zap.String("expected", toStateString(expectedState)), zap.String("current", toStateString(currentState)))
+func (w *walLifetime) doLifetimeChanged(expectedState applyWALState) {
+	logger := w.logger.With(zap.String("expected", expectedState.String()), zap.String("current", w.currentState.String()))
+	logger.Info("do lifetime changed")
 
-	// Filter the expired expectedState.
-	if !isStateBefore(currentState, expectedState) {
+	if !w.currentState.Before(expectedState.PChannelAssignState) {
 		// Happen at: the unavailable expected state at current term, but current wal open operation is failed.
 		logger.Info("current state is not before expected state, do nothing")
+		expectedState.Reporter.Report(SyncResponse{
+			States: []AssignWithError{{
+				Channel: expectedState.PChannelAssignState,
+				Err:     status.NewIgnoreOperation("current state %s is not before expected state %s", w.currentState.String(), expectedState.String()),
+			}},
+		})
 		return
 	}
 
-	// !!! Even if the expected state is canceled (context.Context.Err()), following operation must be executed.
-	// Otherwise a dead lock may be caused by unexpected rpc sequence.
-	// because new Current state after these operation must be same or greater than expected state.
-
 	// term must be increasing or available -> unavailable, close current term wal is always applied.
-	term := currentState.Term()
-	if oldWAL := currentState.GetWAL(); oldWAL != nil {
+	if oldWAL := w.currentState.GetWAL(); oldWAL != nil {
 		oldWAL.Close()
 		logger.Info("close current term wal done")
 		// Push term to current state unavailable and open a new wal.
 		// -> (currentTerm,false)
-		w.statePair.SetCurrentState(newUnavailableCurrentState(term, nil))
+		w.currentState.MarkAsUnavailable()
 	}
 
-	// If expected state is unavailable, change term to expected state and return.
-	if !expectedState.Available() {
-		// -> (expectedTerm,false)
-		w.statePair.SetCurrentState(newUnavailableCurrentState(expectedState.Term(), nil))
+	w.currentState.SetCurrentState(expectedState.PChannelAssignState)
+	if !expectedState.Available {
+		expectedState.Reporter.Report(SyncResponse{
+			States: []AssignWithError{{Channel: expectedState.PChannelAssignState, Err: nil}},
+		})
 		return
 	}
 
 	// If expected state is available, open a new wal.
-	// TODO: merge the expectedState and expected state context together.
-	l, err := w.opener.Open(expectedState.Context(), &wal.OpenOption{
-		Channel: expectedState.GetPChannelInfo(),
-	})
+	l, err := w.opener.Open(w.backgroundNotifier.Context(), &wal.OpenOption{Channel: expectedState.Channel})
 	if err != nil {
 		logger.Warn("open new wal fail", zap.Error(err))
 		// Open new wal at expected term failed, push expected term to current state unavailable.
 		// -> (expectedTerm,false)
-		w.statePair.SetCurrentState(newUnavailableCurrentState(expectedState.Term(), err))
+		w.currentState.MarkAsUnavailable()
+		expectedState.Reporter.Report(SyncResponse{States: []AssignWithError{{Channel: expectedState.PChannelAssignState, Err: err}}})
 		return
 	}
 	logger.Info("open new wal done")
 	// -> (expectedTerm,true)
-	w.statePair.SetCurrentState(newAvailableCurrentState(l))
+	w.currentState.MarkAsAvailable(l)
+	expectedState.Reporter.Report(SyncResponse{States: []AssignWithError{{Channel: expectedState.PChannelAssignState, Err: nil}}})
 }

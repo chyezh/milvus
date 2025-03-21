@@ -3,9 +3,11 @@ package service
 import (
 	"context"
 
+	"github.com/milvus-io/milvus/internal/streamingnode/server/service/manager"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/walmanager"
+	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
+	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
 var _ ManagerService = (*managerServiceImpl)(nil)
@@ -13,45 +15,42 @@ var _ ManagerService = (*managerServiceImpl)(nil)
 // NewManagerService create a streamingnode manager service.
 func NewManagerService(m walmanager.Manager) ManagerService {
 	return &managerServiceImpl{
-		m,
+		lifetime:   typeutil.NewLifetime(),
+		walManager: m,
 	}
 }
 
 type ManagerService interface {
 	streamingpb.StreamingNodeManagerServiceServer
+
+	Close()
 }
 
 // managerServiceImpl implements ManagerService.
 // managerServiceImpl is just a rpc level to handle incoming grpc.
 // all manager logic should be done in wal.Manager.
 type managerServiceImpl struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	lifetime   *typeutil.Lifetime
 	walManager walmanager.Manager
 }
 
-// Assign assigns a wal instance for the channel on this Manager.
-// After assign returns, the wal instance is ready to use.
-func (ms *managerServiceImpl) Assign(ctx context.Context, req *streamingpb.StreamingNodeManagerAssignRequest) (*streamingpb.StreamingNodeManagerAssignResponse, error) {
-	pchannelInfo := types.NewPChannelInfoFromProto(req.GetPchannel())
-	if err := ms.walManager.Open(ctx, pchannelInfo); err != nil {
-		return nil, err
+// Sync syncs the assignment.
+func (m *managerServiceImpl) Sync(svr streamingpb.StreamingNodeManagerService_SyncServer) error {
+	if !m.lifetime.Add(typeutil.LifetimeStateWorking) {
+		return status.NewOnShutdownError("manager grpc service is closed")
 	}
-	return &streamingpb.StreamingNodeManagerAssignResponse{}, nil
+	defer m.lifetime.Done()
+
+	s := manager.NewAssignmentSyncServer(m.ctx, svr, m.walManager)
+	return s.Execute()
 }
 
-// Remove removes the wal instance for the channel.
-// After remove returns, the wal instance is removed and all underlying read write operation should be rejected.
-func (ms *managerServiceImpl) Remove(ctx context.Context, req *streamingpb.StreamingNodeManagerRemoveRequest) (*streamingpb.StreamingNodeManagerRemoveResponse, error) {
-	pchannelInfo := types.NewPChannelInfoFromProto(req.GetPchannel())
-	if err := ms.walManager.Remove(ctx, pchannelInfo); err != nil {
-		return nil, err
-	}
-	return &streamingpb.StreamingNodeManagerRemoveResponse{}, nil
-}
-
-// CollectStatus collects the status of all wal instances in these streamingnode.
-func (ms *managerServiceImpl) CollectStatus(ctx context.Context, req *streamingpb.StreamingNodeManagerCollectStatusRequest) (*streamingpb.StreamingNodeManagerCollectStatusResponse, error) {
-	// TODO: collect traffic metric for load balance.
-	return &streamingpb.StreamingNodeManagerCollectStatusResponse{
-		BalanceAttributes: &streamingpb.StreamingNodeBalanceAttributes{},
-	}, nil
+// Close closes the manager service.
+func (m *managerServiceImpl) Close() {
+	m.lifetime.SetState(typeutil.LifetimeStateStopped)
+	m.cancel()
+	m.lifetime.Wait()
 }

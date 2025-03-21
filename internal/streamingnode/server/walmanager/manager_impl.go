@@ -1,8 +1,6 @@
 package walmanager
 
 import (
-	"context"
-
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
@@ -56,40 +54,16 @@ type managerImpl struct {
 	logger *log.MLogger
 }
 
-// Open opens a wal instance for the channel on this Manager.
-func (m *managerImpl) Open(ctx context.Context, channel types.PChannelInfo) (err error) {
-	// reject operation if manager is closing.
-	if !m.lifetime.AddIf(isOpenable) {
-		return errWALManagerClosed
-	}
-	defer func() {
-		m.lifetime.Done()
-		if err != nil {
-			m.logger.Warn("open wal failed", zap.Error(err), zap.String("channel", channel.String()))
-			return
+// Sync syncs the assignment.
+func (m *managerImpl) Sync(req SyncRequest) {
+	for _, channel := range req.States {
+		if channel.Available {
 		}
-		m.logger.Info("open wal success", zap.String("channel", channel.String()))
-	}()
-
-	return m.getWALLifetime(channel.Name).Open(ctx, channel)
-}
-
-// Remove removes the wal instance for the channel.
-func (m *managerImpl) Remove(ctx context.Context, channel types.PChannelInfo) (err error) {
-	// reject operation if manager is closing.
-	if !m.lifetime.AddIf(isRemoveable) {
-		return errWALManagerClosed
+		m.getWALLifetime(channel.Channel.Name).Apply(applyWALState{
+			PChannelAssignState: channel,
+			Reporter:            req.Reporter,
+		})
 	}
-	defer func() {
-		m.lifetime.Done()
-		if err != nil {
-			m.logger.Warn("remove wal failed", zap.Error(err), zap.String("channel", channel.Name), zap.Int64("term", channel.Term))
-			return
-		}
-		m.logger.Info("remove wal success", zap.String("channel", channel.Name), zap.Int64("term", channel.Term))
-	}()
-
-	return m.getWALLifetime(channel.Name).Remove(ctx, channel.Term)
 }
 
 // GetAvailableWAL returns a available wal instance for the channel.

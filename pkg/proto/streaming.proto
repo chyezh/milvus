@@ -22,9 +22,9 @@ enum PChannelAccessMode {
 // PChannelInfo is the information of a pchannel info, should only keep the
 // basic info of a pchannel. It's used in many rpc and meta, so keep it simple.
 message PChannelInfo {
-    string name = 1;  // channel name
+    string name = 1;  // channel name, immutable attribute.
     int64 term  = 2;  // A monotonic increasing term, every time the channel is
-                      // recovered or moved to another streamingnode, the term
+                      // recovered or moved to another streamingnode or the access mode is changed, the term
                       // will increase by meta server.
     PChannelAccessMode access_mode = 3;  // access mode of the channel.
 }
@@ -440,51 +440,67 @@ message CloseConsumerResponse {}
 // Client: log coord. There should be only one client globally to call this
 // service on all streamingnode.
 service StreamingNodeManagerService {
-    // Assign is a unary RPC to assign a channel on a log node.
-    // Block until the channel assignd is ready to read or write on the log
-    // node. Error: If the channel already exists, return error with code
-    // CHANNEL_EXIST.
-    rpc Assign(StreamingNodeManagerAssignRequest)
-        returns (StreamingNodeManagerAssignResponse) {};
-
-    // Remove is unary RPC to remove a channel on a log node.
-    // Data of the channel on flying would be sent or flused as much as
-    // possible. Block until the resource of channel is released on the log
-    // node. New incoming request of handler of this channel will be rejected
-    // with special error. Error: If the channel does not exist, return error
-    // with code CHANNEL_NOT_EXIST.
-    rpc Remove(StreamingNodeManagerRemoveRequest)
-        returns (StreamingNodeManagerRemoveResponse) {};
-
-    // rpc CollectStatus() ...
-    // CollectStatus is unary RPC to collect all avaliable channel info and load
-    // balance info on a log node. Used to recover channel info on log coord,
-    // collect balance info and health check.
-    rpc CollectStatus(StreamingNodeManagerCollectStatusRequest)
-        returns (StreamingNodeManagerCollectStatusResponse) {};
+    // Sync is a streaming RPC to sync up the channel assignment info between
+    // Streaming node and coordinator. 
+    // The sync operation will be called if the assignment change or the sync rpc is broken.
+    // The streaming node should make an idempotent operation to keep state sync consistency with streaming coord.
+    // Every assigned or unassigned channel request should always be replied by the streaming node.
+    rpc Sync(stream StreamingNodeManagerSyncRequest)
+        returns (stream StreamingNodeManagerSyncResponse) {};
 }
 
-// StreamingManagerAssignRequest is the request message of Assign RPC.
-message StreamingNodeManagerAssignRequest {
-    PChannelInfo pchannel = 1;
+// PChannelAssignmentState is the state of a pchannel assignment.
+message PChannelAssignmentState {
+    PChannelInfo channel = 1;
+    bool available = 2; // channel should be closed if not available.
 }
 
-message StreamingNodeManagerAssignResponse {}
-
-message StreamingNodeManagerRemoveRequest {
-    PChannelInfo pchannel = 1;
+// SyncAssignmentRequest is the sync request message of Sync RPC.
+// The assigned and unassigned should not repeated for single channel.
+message SyncAssignmentRequest {
+    repeated PChannelAssignmentState assignment_states = 1;
 }
 
-message StreamingNodeManagerRemoveResponse {}
+// SyncCloseRequest is the close request message of Sync RPC.
+message SyncCloseRequest {
+}
 
-message StreamingNodeManagerCollectStatusRequest {}
+// StreamingNodeManagerSyncRequest is the request message of Sync RPC.
+message StreamingNodeManagerSyncRequest {
+    oneof request {
+        SyncAssignmentRequest assignment = 1;
+        SyncCloseRequest close = 2;
+    }
+}
 
+
+// StreamingNodeBalanceAttributes is the balance attributes of a streaming node.
 message StreamingNodeBalanceAttributes {
     // TODO: traffic of pchannel or other things.
 }
 
-message StreamingNodeManagerCollectStatusResponse {
-    StreamingNodeBalanceAttributes balance_attributes = 1;
+// StreamingNodeManagerSyncResponse is the response message of Sync RPC.
+message StreamingNodeManagerSyncResponse {
+    oneof response {
+        SyncAssignmentResponse assignment = 1;
+        SyncCloseResponse close = 2;
+    }
+}
+
+// SyncCloseResponse is the close response message of Sync RPC.
+message SyncCloseResponse {
+}
+
+// SyncAssignmentResponse is the sync response message of Sync RPC.
+message SyncAssignmentResponse {
+    repeated SyncAssignmentResult assigned = 1;
+    StreamingNodeBalanceAttributes balance_attributes = 3; 
+}
+
+// SyncAssignmentResult is the result of the sync assignment.
+message SyncAssignmentResult {
+    PChannelAssignmentState assignment_states = 1;
+    StreamingError error = 2;
 }
 
 ///

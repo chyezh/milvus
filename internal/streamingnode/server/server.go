@@ -52,6 +52,7 @@ func (s *Server) init() {
 // Stop stops the streamingnode server.
 func (s *Server) Stop() {
 	log.Info("stopping streamingnode server...")
+	s.managerService.Close()
 	log.Info("close wal manager...")
 	s.walManager.Close()
 	log.Info("release streamingnode resources...")

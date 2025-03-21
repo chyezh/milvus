@@ -580,32 +580,19 @@ var StreamingNodeHandlerService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	StreamingNodeManagerService_Assign_FullMethodName        = "/milvus.proto.streaming.StreamingNodeManagerService/Assign"
-	StreamingNodeManagerService_Remove_FullMethodName        = "/milvus.proto.streaming.StreamingNodeManagerService/Remove"
-	StreamingNodeManagerService_CollectStatus_FullMethodName = "/milvus.proto.streaming.StreamingNodeManagerService/CollectStatus"
+	StreamingNodeManagerService_Sync_FullMethodName = "/milvus.proto.streaming.StreamingNodeManagerService/Sync"
 )
 
 // StreamingNodeManagerServiceClient is the client API for StreamingNodeManagerService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type StreamingNodeManagerServiceClient interface {
-	// Assign is a unary RPC to assign a channel on a log node.
-	// Block until the channel assignd is ready to read or write on the log
-	// node. Error: If the channel already exists, return error with code
-	// CHANNEL_EXIST.
-	Assign(ctx context.Context, in *StreamingNodeManagerAssignRequest, opts ...grpc.CallOption) (*StreamingNodeManagerAssignResponse, error)
-	// Remove is unary RPC to remove a channel on a log node.
-	// Data of the channel on flying would be sent or flused as much as
-	// possible. Block until the resource of channel is released on the log
-	// node. New incoming request of handler of this channel will be rejected
-	// with special error. Error: If the channel does not exist, return error
-	// with code CHANNEL_NOT_EXIST.
-	Remove(ctx context.Context, in *StreamingNodeManagerRemoveRequest, opts ...grpc.CallOption) (*StreamingNodeManagerRemoveResponse, error)
-	// rpc CollectStatus() ...
-	// CollectStatus is unary RPC to collect all avaliable channel info and load
-	// balance info on a log node. Used to recover channel info on log coord,
-	// collect balance info and health check.
-	CollectStatus(ctx context.Context, in *StreamingNodeManagerCollectStatusRequest, opts ...grpc.CallOption) (*StreamingNodeManagerCollectStatusResponse, error)
+	// Sync is a streaming RPC to sync up the channel assignment info between
+	// Streaming node and coordinator.
+	// The sync operation will be called if the assignment change or the sync rpc is broken.
+	// The streaming node should make an idempotent operation to keep state sync consistency with streaming coord.
+	// Every assigned or unassigned channel request should always be replied by the streaming node.
+	Sync(ctx context.Context, opts ...grpc.CallOption) (StreamingNodeManagerService_SyncClient, error)
 }
 
 type streamingNodeManagerServiceClient struct {
@@ -616,68 +603,55 @@ func NewStreamingNodeManagerServiceClient(cc grpc.ClientConnInterface) Streaming
 	return &streamingNodeManagerServiceClient{cc}
 }
 
-func (c *streamingNodeManagerServiceClient) Assign(ctx context.Context, in *StreamingNodeManagerAssignRequest, opts ...grpc.CallOption) (*StreamingNodeManagerAssignResponse, error) {
-	out := new(StreamingNodeManagerAssignResponse)
-	err := c.cc.Invoke(ctx, StreamingNodeManagerService_Assign_FullMethodName, in, out, opts...)
+func (c *streamingNodeManagerServiceClient) Sync(ctx context.Context, opts ...grpc.CallOption) (StreamingNodeManagerService_SyncClient, error) {
+	stream, err := c.cc.NewStream(ctx, &StreamingNodeManagerService_ServiceDesc.Streams[0], StreamingNodeManagerService_Sync_FullMethodName, opts...)
 	if err != nil {
 		return nil, err
 	}
-	return out, nil
+	x := &streamingNodeManagerServiceSyncClient{stream}
+	return x, nil
 }
 
-func (c *streamingNodeManagerServiceClient) Remove(ctx context.Context, in *StreamingNodeManagerRemoveRequest, opts ...grpc.CallOption) (*StreamingNodeManagerRemoveResponse, error) {
-	out := new(StreamingNodeManagerRemoveResponse)
-	err := c.cc.Invoke(ctx, StreamingNodeManagerService_Remove_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
+type StreamingNodeManagerService_SyncClient interface {
+	Send(*StreamingNodeManagerSyncRequest) error
+	Recv() (*StreamingNodeManagerSyncResponse, error)
+	grpc.ClientStream
 }
 
-func (c *streamingNodeManagerServiceClient) CollectStatus(ctx context.Context, in *StreamingNodeManagerCollectStatusRequest, opts ...grpc.CallOption) (*StreamingNodeManagerCollectStatusResponse, error) {
-	out := new(StreamingNodeManagerCollectStatusResponse)
-	err := c.cc.Invoke(ctx, StreamingNodeManagerService_CollectStatus_FullMethodName, in, out, opts...)
-	if err != nil {
+type streamingNodeManagerServiceSyncClient struct {
+	grpc.ClientStream
+}
+
+func (x *streamingNodeManagerServiceSyncClient) Send(m *StreamingNodeManagerSyncRequest) error {
+	return x.ClientStream.SendMsg(m)
+}
+
+func (x *streamingNodeManagerServiceSyncClient) Recv() (*StreamingNodeManagerSyncResponse, error) {
+	m := new(StreamingNodeManagerSyncResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
-	return out, nil
+	return m, nil
 }
 
 // StreamingNodeManagerServiceServer is the server API for StreamingNodeManagerService service.
 // All implementations should embed UnimplementedStreamingNodeManagerServiceServer
 // for forward compatibility
 type StreamingNodeManagerServiceServer interface {
-	// Assign is a unary RPC to assign a channel on a log node.
-	// Block until the channel assignd is ready to read or write on the log
-	// node. Error: If the channel already exists, return error with code
-	// CHANNEL_EXIST.
-	Assign(context.Context, *StreamingNodeManagerAssignRequest) (*StreamingNodeManagerAssignResponse, error)
-	// Remove is unary RPC to remove a channel on a log node.
-	// Data of the channel on flying would be sent or flused as much as
-	// possible. Block until the resource of channel is released on the log
-	// node. New incoming request of handler of this channel will be rejected
-	// with special error. Error: If the channel does not exist, return error
-	// with code CHANNEL_NOT_EXIST.
-	Remove(context.Context, *StreamingNodeManagerRemoveRequest) (*StreamingNodeManagerRemoveResponse, error)
-	// rpc CollectStatus() ...
-	// CollectStatus is unary RPC to collect all avaliable channel info and load
-	// balance info on a log node. Used to recover channel info on log coord,
-	// collect balance info and health check.
-	CollectStatus(context.Context, *StreamingNodeManagerCollectStatusRequest) (*StreamingNodeManagerCollectStatusResponse, error)
+	// Sync is a streaming RPC to sync up the channel assignment info between
+	// Streaming node and coordinator.
+	// The sync operation will be called if the assignment change or the sync rpc is broken.
+	// The streaming node should make an idempotent operation to keep state sync consistency with streaming coord.
+	// Every assigned or unassigned channel request should always be replied by the streaming node.
+	Sync(StreamingNodeManagerService_SyncServer) error
 }
 
 // UnimplementedStreamingNodeManagerServiceServer should be embedded to have forward compatible implementations.
 type UnimplementedStreamingNodeManagerServiceServer struct {
 }
 
-func (UnimplementedStreamingNodeManagerServiceServer) Assign(context.Context, *StreamingNodeManagerAssignRequest) (*StreamingNodeManagerAssignResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Assign not implemented")
-}
-func (UnimplementedStreamingNodeManagerServiceServer) Remove(context.Context, *StreamingNodeManagerRemoveRequest) (*StreamingNodeManagerRemoveResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Remove not implemented")
-}
-func (UnimplementedStreamingNodeManagerServiceServer) CollectStatus(context.Context, *StreamingNodeManagerCollectStatusRequest) (*StreamingNodeManagerCollectStatusResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method CollectStatus not implemented")
+func (UnimplementedStreamingNodeManagerServiceServer) Sync(StreamingNodeManagerService_SyncServer) error {
+	return status.Errorf(codes.Unimplemented, "method Sync not implemented")
 }
 
 // UnsafeStreamingNodeManagerServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -691,58 +665,30 @@ func RegisterStreamingNodeManagerServiceServer(s grpc.ServiceRegistrar, srv Stre
 	s.RegisterService(&StreamingNodeManagerService_ServiceDesc, srv)
 }
 
-func _StreamingNodeManagerService_Assign_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(StreamingNodeManagerAssignRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(StreamingNodeManagerServiceServer).Assign(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: StreamingNodeManagerService_Assign_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StreamingNodeManagerServiceServer).Assign(ctx, req.(*StreamingNodeManagerAssignRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+func _StreamingNodeManagerService_Sync_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(StreamingNodeManagerServiceServer).Sync(&streamingNodeManagerServiceSyncServer{stream})
 }
 
-func _StreamingNodeManagerService_Remove_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(StreamingNodeManagerRemoveRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(StreamingNodeManagerServiceServer).Remove(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: StreamingNodeManagerService_Remove_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StreamingNodeManagerServiceServer).Remove(ctx, req.(*StreamingNodeManagerRemoveRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+type StreamingNodeManagerService_SyncServer interface {
+	Send(*StreamingNodeManagerSyncResponse) error
+	Recv() (*StreamingNodeManagerSyncRequest, error)
+	grpc.ServerStream
 }
 
-func _StreamingNodeManagerService_CollectStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(StreamingNodeManagerCollectStatusRequest)
-	if err := dec(in); err != nil {
+type streamingNodeManagerServiceSyncServer struct {
+	grpc.ServerStream
+}
+
+func (x *streamingNodeManagerServiceSyncServer) Send(m *StreamingNodeManagerSyncResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
+func (x *streamingNodeManagerServiceSyncServer) Recv() (*StreamingNodeManagerSyncRequest, error) {
+	m := new(StreamingNodeManagerSyncRequest)
+	if err := x.ServerStream.RecvMsg(m); err != nil {
 		return nil, err
 	}
-	if interceptor == nil {
-		return srv.(StreamingNodeManagerServiceServer).CollectStatus(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: StreamingNodeManagerService_CollectStatus_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(StreamingNodeManagerServiceServer).CollectStatus(ctx, req.(*StreamingNodeManagerCollectStatusRequest))
-	}
-	return interceptor(ctx, in, info, handler)
+	return m, nil
 }
 
 // StreamingNodeManagerService_ServiceDesc is the grpc.ServiceDesc for StreamingNodeManagerService service.
@@ -751,20 +697,14 @@ func _StreamingNodeManagerService_CollectStatus_Handler(srv interface{}, ctx con
 var StreamingNodeManagerService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "milvus.proto.streaming.StreamingNodeManagerService",
 	HandlerType: (*StreamingNodeManagerServiceServer)(nil),
-	Methods: []grpc.MethodDesc{
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
 		{
-			MethodName: "Assign",
-			Handler:    _StreamingNodeManagerService_Assign_Handler,
-		},
-		{
-			MethodName: "Remove",
-			Handler:    _StreamingNodeManagerService_Remove_Handler,
-		},
-		{
-			MethodName: "CollectStatus",
-			Handler:    _StreamingNodeManagerService_CollectStatus_Handler,
+			StreamName:    "Sync",
+			Handler:       _StreamingNodeManagerService_Sync_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
 	Metadata: "streaming.proto",
 }

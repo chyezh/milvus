@@ -74,3 +74,26 @@ type PChannelInfoAssigned struct {
 	Channel PChannelInfo
 	Node    StreamingNodeInfo
 }
+
+// PchannelAssignState is the state of pchannel assignment.
+type PChannelAssignState struct {
+	Channel   PChannelInfo
+	Available bool // Channel should be closed if it's not available.
+}
+
+// String returns the string representation of the applyWALRequest.
+func (state PChannelAssignState) String() string {
+	return fmt.Sprintf("(%s,%t)", state.Channel.String(), state.Available)
+}
+
+// Before returns whether the state is before other state.
+func (state PChannelAssignState) Before(other PChannelAssignState) bool {
+	// w1 is before w2 if term of w1 is less than w2.
+	// or w1 is available and w2 is not available in same term.
+	// because wal should always be available before unavailable in same term.
+	// (1, true) -> (1, false) is allowed.
+	// (1, true) -> (2, false) is allowed.
+	// (1, false) -> (2, true) is allowed.
+	// (1, false) -> (1, true) is not allowed.
+	return state.Channel.Term < other.Channel.Term || (state.Channel.Term == other.Channel.Term && state.Available && !other.Available)
+}
