@@ -2,9 +2,11 @@ package manager
 
 import (
 	"context"
+	"math/rand"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc"
@@ -14,7 +16,6 @@ import (
 	"github.com/milvus-io/milvus/internal/mocks/streamingnode/server/mock_wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/segment/inspector"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/segment/stats"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/txn"
 	internaltypes "github.com/milvus-io/milvus/internal/types"
@@ -22,6 +23,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/impls/rmq"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -34,10 +36,15 @@ func TestSegmentAllocManager(t *testing.T) {
 	initializeTestState(t)
 
 	w := mock_wal.NewMockWAL(t)
-	w.EXPECT().Append(mock.Anything, mock.Anything).Return(&wal.AppendResult{
-		MessageID: rmq.NewRmqID(1),
-		TimeTick:  2,
-	}, nil)
+	w.EXPECT().Append(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, mm message.MutableMessage) (*types.AppendResult, error) {
+		if mm.MessageType() == message.MessageTypeFlush && rand.Int31n(2) != 0 {
+			return nil, errors.New("error")
+		}
+		return &wal.AppendResult{
+			MessageID: rmq.NewRmqID(1),
+			TimeTick:  2,
+		}, nil
+	})
 	f := syncutil.NewFuture[wal.WAL]()
 	f.Set(w)
 
@@ -86,11 +93,6 @@ func TestSegmentAllocManager(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, result2)
 
-	// Ask for seal segment.
-	// Here already have a sealed segment, and a growing segment wait for seal, but the result is not acked.
-	m.TryToSealSegments(ctx)
-	assert.False(t, m.IsNoWaitSeal())
-
 	// The following segment assign will trigger a reach limit, so new seal segment will be created.
 	result3, err := m.AssignSegment(ctx, &AssignSegmentRequest{
 		CollectionID: 1,
@@ -103,14 +105,10 @@ func TestSegmentAllocManager(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.NotNil(t, result3)
-	m.TryToSealSegments(ctx)
-	assert.False(t, m.IsNoWaitSeal()) // result2 is not acked, so new seal segment will not be sealed right away.
 
 	result.Ack()
 	result2.Ack()
 	result3.Ack()
-	m.TryToSealWaitedSegment(ctx)
-	assert.True(t, m.IsNoWaitSeal()) // result2 is acked, so new seal segment will be sealed right away.
 
 	// interactive with txn
 	txnManager := txn.NewTxnManager(types.PChannelInfo{Name: "test"})
@@ -132,25 +130,10 @@ func TestSegmentAllocManager(t *testing.T) {
 		assert.NoError(t, err)
 		result.Ack()
 	}
-	// because of there's a txn session uncommitted, so the segment will not be sealed.
-	m.TryToSealSegments(ctx)
-	assert.False(t, m.IsNoWaitSeal())
 
 	err = txn.RequestCommitAndWait(context.Background(), 0)
 	assert.NoError(t, err)
 	txn.CommitDone()
-	m.TryToSealSegments(ctx)
-	assert.True(t, m.IsNoWaitSeal())
-
-	// Try to seal a partition.
-	m.TryToSealSegments(ctx, stats.SegmentBelongs{
-		CollectionID: 1,
-		VChannel:     "v1",
-		PartitionID:  2,
-		PChannel:     "v1",
-		SegmentID:    3,
-	})
-	assert.True(t, m.IsNoWaitSeal())
 
 	// Try to seal with a policy
 	resource.Resource().SegmentAssignStatsManager().UpdateOnSync(6000, stats.SyncOperationMetrics{
@@ -169,25 +152,13 @@ func TestSegmentAllocManager(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
-	// Should be collected but not sealed.
-	m.TryToSealSegments(ctx)
-	assert.False(t, m.IsNoWaitSeal())
 	result.Ack()
-	// Should be sealed.
-	m.TryToSealSegments(ctx)
-	assert.True(t, m.IsNoWaitSeal())
 
 	// Test fence
 	ts := tsoutil.GetCurrentTime()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
-	defer cancel()
 	ids, err := m.SealAndFenceSegmentUntil(ctx, 1, ts)
-	assert.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.Empty(t, ids)
-	assert.False(t, m.IsNoWaitSeal())
-	m.TryToSealSegments(ctx)
-	assert.True(t, m.IsNoWaitSeal())
+	assert.NoError(t, err)
+	assert.NotEmpty(t, ids)
 
 	result, err = m.AssignSegment(ctx, &AssignSegmentRequest{
 		CollectionID: 1,
@@ -201,7 +172,7 @@ func TestSegmentAllocManager(t *testing.T) {
 	assert.ErrorIs(t, err, ErrFencedAssign)
 	assert.Nil(t, result)
 
-	m.Close(ctx)
+	m.Close()
 }
 
 func TestCreateAndDropCollection(t *testing.T) {
@@ -218,17 +189,6 @@ func TestCreateAndDropCollection(t *testing.T) {
 	m, err := RecoverPChannelSegmentAllocManager(context.Background(), types.PChannelInfo{Name: "v1"}, f)
 	assert.NoError(t, err)
 	assert.NotNil(t, m)
-
-	m.MustSealSegments(context.Background(), stats.SegmentBelongs{
-		PChannel:     "v1",
-		VChannel:     "v1",
-		CollectionID: 1,
-		PartitionID:  2,
-		SegmentID:    4000,
-	})
-
-	inspector.GetSegmentSealedInspector().RegisterPChannelManager(m)
-
 	ctx := context.Background()
 
 	testRequest := &AssignSegmentRequest{
@@ -263,14 +223,12 @@ func TestCreateAndDropCollection(t *testing.T) {
 	resp.Ack()
 
 	m.RemovePartition(ctx, 100, 104)
-	assert.True(t, m.IsNoWaitSeal())
 	resp, err = m.AssignSegment(ctx, testRequest)
 	assert.Error(t, err)
 	assert.Nil(t, resp)
 
 	m.RemoveCollection(ctx, 100)
 	resp, err = m.AssignSegment(ctx, testRequest)
-	assert.True(t, m.IsNoWaitSeal())
 	assert.Error(t, err)
 	assert.Nil(t, resp)
 }
