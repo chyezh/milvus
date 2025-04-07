@@ -84,6 +84,12 @@ func (t MessageType) IsSystem() bool {
 	return ok
 }
 
+// IsData checks if the MessageType is a data type.
+func (t MessageType) IsData() bool {
+	_, ok := dataMessageType[t]
+	return ok
+}
+
 // unmarshalMessageType unmarshal MessageType from string.
 func unmarshalMessageType(s string) MessageType {
 	i, err := strconv.ParseInt(s, 10, 32)

@@ -5765,6 +5765,12 @@ type streamingConfig struct {
 
 	WALTruncateSampleInterval    ParamItem `refreshable:"true"`
 	WALTruncateRetentionInterval ParamItem `refreshable:"true"`
+
+	FlowControlThrottlingHwmMemoryThreshold ParamItem `refreshable:"true"`
+	FlowControlDenyMemoryThreshold          ParamItem `refreshable:"true"`
+	FlowControlThrottlingLwmMemoryThreshold ParamItem `refreshable:"true"`
+	FlowControlDefaultWriteRate             ParamItem `refreshable:"true"`
+	FlowControlThrottlingWriteRate          ParamItem `refreshable:"true"`
 }
 
 func (p *streamingConfig) init(base *BaseTable) {
@@ -6023,6 +6029,52 @@ because the wal truncate operation is implemented by pulsar consumer.`,
 		Export:       true,
 	}
 	p.WALTruncateRetentionInterval.Init(base.mgr)
+
+	p.FlowControlThrottlingHwmMemoryThreshold = ParamItem{
+		Key:     "streaming.flowControl.throttlingHwmMemoryThreshold",
+		Version: "2.6.0",
+		Doc: `The threshold of memory usage for throttling append,
+If the memory usage is higher than this threshold, the node will throttle append requests
+until the memory usage is less than the lwm threshold given by throttlingLwmMemoryThreshold. 0.85 by default`,
+		DefaultValue: "0.85",
+		Export:       true,
+	}
+	p.FlowControlThrottlingHwmMemoryThreshold.Init(base.mgr)
+	p.FlowControlDenyMemoryThreshold = ParamItem{
+		Key:     "streaming.flowControl.denyMemoryThreshold",
+		Version: "2.6.0",
+		Doc: `The threshold of memory usage for deny append,
+If the memory usage is higher than this threshold, the node will deny the append requests
+until the memory usage is less than the lwm threshold given by throttlingLwmMemoryThreshold. 0.95 by default`,
+		DefaultValue: "0.95",
+		Export:       true,
+	}
+	p.FlowControlDenyMemoryThreshold.Init(base.mgr)
+	p.FlowControlThrottlingLwmMemoryThreshold = ParamItem{
+		Key:     "streaming.flowControl.throttlingLwmMemoryThreshold",
+		Version: "2.6.0",
+		Doc: `The recover threshold of memory usage for throttling or deny append,
+Once the memory usage is less than this threshold, the node will stop throttling or denying append requests. 0.8 by default`,
+		DefaultValue: "0.8",
+		Export:       true,
+	}
+	p.FlowControlThrottlingLwmMemoryThreshold.Init(base.mgr)
+	p.FlowControlDefaultWriteRate = ParamItem{
+		Key:          "streaming.flowControl.defaultWriteRate",
+		Version:      "2.6.0",
+		Doc:          `The default write rate of append requests every seconds, unlimited if less than zero, -1 by default`,
+		DefaultValue: "-1",
+		Export:       true,
+	}
+	p.FlowControlDefaultWriteRate.Init(base.mgr)
+	p.FlowControlThrottlingWriteRate = ParamItem{
+		Key:          "streaming.flowControl.throttlingWriteRate",
+		Version:      "2.6.0",
+		Doc:          `The throttling write rate of append requests every seconds, 2m by default`,
+		DefaultValue: "2m",
+		Export:       true,
+	}
+	p.FlowControlThrottlingWriteRate.Init(base.mgr)
 }
 
 // runtimeConfig is just a private environment value table.
