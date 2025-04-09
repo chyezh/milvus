@@ -20,6 +20,52 @@ func (_m *MockMessageID) EXPECT() *MockMessageID_Expecter {
 	return &MockMessageID_Expecter{mock: &_m.Mock}
 }
 
+// DistanceHint provides a mock function with given fields: _a0
+func (_m *MockMessageID) DistanceHint(_a0 message.MessageID) int64 {
+	ret := _m.Called(_a0)
+
+	if len(ret) == 0 {
+		panic("no return value specified for DistanceHint")
+	}
+
+	var r0 int64
+	if rf, ok := ret.Get(0).(func(message.MessageID) int64); ok {
+		r0 = rf(_a0)
+	} else {
+		r0 = ret.Get(0).(int64)
+	}
+
+	return r0
+}
+
+// MockMessageID_DistanceHint_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'DistanceHint'
+type MockMessageID_DistanceHint_Call struct {
+	*mock.Call
+}
+
+// DistanceHint is a helper method to define mock.On call
+//   - _a0 message.MessageID
+func (_e *MockMessageID_Expecter) DistanceHint(_a0 interface{}) *MockMessageID_DistanceHint_Call {
+	return &MockMessageID_DistanceHint_Call{Call: _e.mock.On("DistanceHint", _a0)}
+}
+
+func (_c *MockMessageID_DistanceHint_Call) Run(run func(_a0 message.MessageID)) *MockMessageID_DistanceHint_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(message.MessageID))
+	})
+	return _c
+}
+
+func (_c *MockMessageID_DistanceHint_Call) Return(_a0 int64) *MockMessageID_DistanceHint_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockMessageID_DistanceHint_Call) RunAndReturn(run func(message.MessageID) int64) *MockMessageID_DistanceHint_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // EQ provides a mock function with given fields: _a0
 func (_m *MockMessageID) EQ(_a0 message.MessageID) bool {
 	ret := _m.Called(_a0)

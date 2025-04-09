@@ -58,6 +58,13 @@ type MessageID interface {
 	// EQ Equal to.
 	EQ(MessageID) bool
 
+	// DistanceHint returns the distance hint of message id.
+	// The distance hint is not accurate.
+	// less than 0 means the message id is before the other message id.
+	// greater than 0 means the message id is after the other message id.
+	// equal to 0 means the message id is equal to the other message id.
+	DistanceHint(MessageID) int64
+
 	// Marshal marshal the message id.
 	Marshal() string
 

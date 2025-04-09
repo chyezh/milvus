@@ -82,6 +82,20 @@ func (id pulsarID) EQ(other message.MessageID) bool {
 		id.BatchIdx() == id2.BatchIdx()
 }
 
+func (id pulsarID) DistanceHint(other message.MessageID) int64 {
+	id2 := other.(pulsarID)
+	if id.LedgerID() != id2.LedgerID() {
+		return (id.LedgerID() - id2.LedgerID()) * 100000
+	}
+	if id.EntryID() != id2.EntryID() {
+		return (id.EntryID() - id2.EntryID()) * 2
+	}
+	if id.BatchIdx() != id2.BatchIdx() {
+		return int64(id.BatchIdx()) - int64(id2.BatchIdx())
+	}
+	return 0
+}
+
 func (id pulsarID) Marshal() string {
 	return base64.StdEncoding.EncodeToString(id.Serialize())
 }

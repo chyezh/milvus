@@ -1,4 +1,4 @@
-package adaptor
+package scanner
 
 import (
 	"testing"
@@ -33,7 +33,7 @@ func TestScannerAdaptorReadError(t *testing.T) {
 	l.EXPECT().Read(mock.Anything, mock.Anything).Return(nil, err)
 	l.EXPECT().Channel().Return(types.PChannelInfo{})
 
-	s := newScannerAdaptor("scanner", l,
+	s := NewScannerAdaptor("scanner", l,
 		wal.ReadOption{
 			VChannel:      "test",
 			DeliverPolicy: options.DeliverPolicyAll(),

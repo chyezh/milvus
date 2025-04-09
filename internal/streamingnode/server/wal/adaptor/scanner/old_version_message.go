@@ -1,4 +1,4 @@
-package adaptor
+package scanner
 
 import (
 	"context"

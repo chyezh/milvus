@@ -1,4 +1,4 @@
-package adaptor
+package scanner
 
 import (
 	"context"
@@ -22,8 +22,8 @@ import (
 
 var _ wal.Scanner = (*scannerAdaptorImpl)(nil)
 
-// newScannerAdaptor creates a new scanner adaptor.
-func newScannerAdaptor(
+// NewScannerAdaptor creates a new scanner adaptor.
+func NewScannerAdaptor(
 	name string,
 	l walimpls.ROWALImpls,
 	readOption wal.ReadOption,

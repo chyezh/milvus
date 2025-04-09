@@ -31,9 +31,6 @@ type ScannerImpls interface {
 	// Will block until scanner is closed or Chan is dry out.
 	Error() error
 
-	// Done returns a channel which will be closed when scanner is finished or closed.
-	Done() <-chan struct{}
-
 	// Close the scanner, release the underlying resources.
 	// Return the error same with `Error`
 	Close() error

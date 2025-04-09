@@ -58,6 +58,11 @@ func (id kafkaID) EQ(other message.MessageID) bool {
 	return id == other.(kafkaID)
 }
 
+// DistanceHint returns the distance hint between two message ids.
+func (id kafkaID) DistanceHint(other message.MessageID) int64 {
+	return int64(id) - int64(other.(kafkaID))
+}
+
 // Marshal marshal the message id.
 func (id kafkaID) Marshal() string {
 	return message.EncodeInt64(int64(id))

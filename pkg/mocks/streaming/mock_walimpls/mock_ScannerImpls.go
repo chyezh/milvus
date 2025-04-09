@@ -112,53 +112,6 @@ func (_c *MockScannerImpls_Close_Call) RunAndReturn(run func() error) *MockScann
 	return _c
 }
 
-// Done provides a mock function with given fields:
-func (_m *MockScannerImpls) Done() <-chan struct{} {
-	ret := _m.Called()
-
-	if len(ret) == 0 {
-		panic("no return value specified for Done")
-	}
-
-	var r0 <-chan struct{}
-	if rf, ok := ret.Get(0).(func() <-chan struct{}); ok {
-		r0 = rf()
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(<-chan struct{})
-		}
-	}
-
-	return r0
-}
-
-// MockScannerImpls_Done_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Done'
-type MockScannerImpls_Done_Call struct {
-	*mock.Call
-}
-
-// Done is a helper method to define mock.On call
-func (_e *MockScannerImpls_Expecter) Done() *MockScannerImpls_Done_Call {
-	return &MockScannerImpls_Done_Call{Call: _e.mock.On("Done")}
-}
-
-func (_c *MockScannerImpls_Done_Call) Run(run func()) *MockScannerImpls_Done_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run()
-	})
-	return _c
-}
-
-func (_c *MockScannerImpls_Done_Call) Return(_a0 <-chan struct{}) *MockScannerImpls_Done_Call {
-	_c.Call.Return(_a0)
-	return _c
-}
-
-func (_c *MockScannerImpls_Done_Call) RunAndReturn(run func() <-chan struct{}) *MockScannerImpls_Done_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
 // Error provides a mock function with given fields:
 func (_m *MockScannerImpls) Error() error {
 	ret := _m.Called()

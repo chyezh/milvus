@@ -6,6 +6,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/adaptor/scanner"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v2/log"
@@ -65,7 +66,7 @@ func (w *roWALAdaptorImpl) Read(ctx context.Context, opts wal.ReadOption) (wal.S
 	}
 	// wrap the scanner with cleanup function.
 	id := w.idAllocator.Allocate()
-	s := newScannerAdaptor(
+	s := scanner.NewScannerAdaptor(
 		name,
 		w.roWALImpls,
 		opts,

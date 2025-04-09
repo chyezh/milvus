@@ -64,6 +64,11 @@ func (id rmqID) EQ(other message.MessageID) bool {
 	return id == other.(rmqID)
 }
 
+// DistanceHint returns the distance hint of message id.
+func (id rmqID) DistanceHint(other message.MessageID) int64 {
+	return int64(id) - int64(other.(rmqID))
+}
+
 // Marshal marshal the message id.
 func (id rmqID) Marshal() string {
 	return message.EncodeInt64(int64(id))
