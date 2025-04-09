@@ -5213,8 +5213,8 @@ the value should be in the range of (0, 1), 0.6 by default.`,
 		Version: "2.6.0",
 		Doc: `The high watermark of total growing segment bytes for one streaming node,
 If the total bytes of growing segment is greater than this threshold,
-a flush process will be triggered to decrease total bytes of growing segment until growingSegmentBytesLwmThreshold, 0.4 by default`,
-		DefaultValue: "0.4",
+a flush process will be triggered to decrease total bytes of growing segment until growingSegmentBytesLwmThreshold, 0.15 by default`,
+		DefaultValue: "0.15",
 		Export:       true,
 	}
 	p.FlushGrowingSegmentBytesHwmThreshold.Init(base.mgr)
@@ -5224,8 +5224,8 @@ a flush process will be triggered to decrease total bytes of growing segment unt
 		Version: "2.6.0",
 		Doc: `The lower watermark of total growing segment bytes for one streaming node,
 growing segment flush process will try to flush some growing segment into sealed 
-until the total bytes of growing segment is less than this threshold, 0.2 by default.`,
-		DefaultValue: "0.2",
+until the total bytes of growing segment is less than this threshold, 0.08 by default.`,
+		DefaultValue: "0.08",
 		Export:       true,
 	}
 	p.FlushGrowingSegmentBytesLwmThreshold.Init(base.mgr)

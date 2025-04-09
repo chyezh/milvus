@@ -1170,12 +1170,12 @@ streaming:
     memoryThreshold: 0.6
     # The high watermark of total growing segment bytes for one streaming node,
     # If the total bytes of growing segment is greater than this threshold,
-    # a flush process will be triggered to decrease total bytes of growing segment until growingSegmentBytesLwmThreshold, 0.4 by default
-    growingSegmentBytesHwmThreshold: 0.4
+    # a flush process will be triggered to decrease total bytes of growing segment until growingSegmentBytesLwmThreshold, 0.15 by default
+    growingSegmentBytesHwmThreshold: 0.15
     # The lower watermark of total growing segment bytes for one streaming node,
     # growing segment flush process will try to flush some growing segment into sealed 
-    # until the total bytes of growing segment is less than this threshold, 0.2 by default.
-    growingSegmentBytesLwmThreshold: 0.2
+    # until the total bytes of growing segment is less than this threshold, 0.08 by default.
+    growingSegmentBytesLwmThreshold: 0.08
 
 # Any configuration related to the knowhere vector search engine
 knowhere:
