@@ -141,6 +141,65 @@ func (_c *MockStreamingNodeCataLog_ListSegmentAssignment_Call) RunAndReturn(run 
 	return _c
 }
 
+// ListVChannel provides a mock function with given fields: ctx, pchannelName
+func (_m *MockStreamingNodeCataLog) ListVChannel(ctx context.Context, pchannelName string) ([]*streamingpb.VChannelMeta, error) {
+	ret := _m.Called(ctx, pchannelName)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListVChannel")
+	}
+
+	var r0 []*streamingpb.VChannelMeta
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string) ([]*streamingpb.VChannelMeta, error)); ok {
+		return rf(ctx, pchannelName)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string) []*streamingpb.VChannelMeta); ok {
+		r0 = rf(ctx, pchannelName)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]*streamingpb.VChannelMeta)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = rf(ctx, pchannelName)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MockStreamingNodeCataLog_ListVChannel_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListVChannel'
+type MockStreamingNodeCataLog_ListVChannel_Call struct {
+	*mock.Call
+}
+
+// ListVChannel is a helper method to define mock.On call
+//   - ctx context.Context
+//   - pchannelName string
+func (_e *MockStreamingNodeCataLog_Expecter) ListVChannel(ctx interface{}, pchannelName interface{}) *MockStreamingNodeCataLog_ListVChannel_Call {
+	return &MockStreamingNodeCataLog_ListVChannel_Call{Call: _e.mock.On("ListVChannel", ctx, pchannelName)}
+}
+
+func (_c *MockStreamingNodeCataLog_ListVChannel_Call) Run(run func(ctx context.Context, pchannelName string)) *MockStreamingNodeCataLog_ListVChannel_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string))
+	})
+	return _c
+}
+
+func (_c *MockStreamingNodeCataLog_ListVChannel_Call) Return(_a0 []*streamingpb.VChannelMeta, _a1 error) *MockStreamingNodeCataLog_ListVChannel_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MockStreamingNodeCataLog_ListVChannel_Call) RunAndReturn(run func(context.Context, string) ([]*streamingpb.VChannelMeta, error)) *MockStreamingNodeCataLog_ListVChannel_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // SaveConsumeCheckpoint provides a mock function with given fields: ctx, pChannelName, checkpoint
 func (_m *MockStreamingNodeCataLog) SaveConsumeCheckpoint(ctx context.Context, pChannelName string, checkpoint *streamingpb.WALCheckpoint) error {
 	ret := _m.Called(ctx, pChannelName, checkpoint)
@@ -233,6 +292,54 @@ func (_c *MockStreamingNodeCataLog_SaveSegmentAssignments_Call) Return(_a0 error
 }
 
 func (_c *MockStreamingNodeCataLog_SaveSegmentAssignments_Call) RunAndReturn(run func(context.Context, string, []*streamingpb.SegmentAssignmentMeta) error) *MockStreamingNodeCataLog_SaveSegmentAssignments_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SaveVChannels provides a mock function with given fields: ctx, pchannelName, vchannels
+func (_m *MockStreamingNodeCataLog) SaveVChannels(ctx context.Context, pchannelName string, vchannels []*streamingpb.VChannelMeta) error {
+	ret := _m.Called(ctx, pchannelName, vchannels)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SaveVChannels")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, []*streamingpb.VChannelMeta) error); ok {
+		r0 = rf(ctx, pchannelName, vchannels)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MockStreamingNodeCataLog_SaveVChannels_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SaveVChannels'
+type MockStreamingNodeCataLog_SaveVChannels_Call struct {
+	*mock.Call
+}
+
+// SaveVChannels is a helper method to define mock.On call
+//   - ctx context.Context
+//   - pchannelName string
+//   - vchannels []*streamingpb.VChannelMeta
+func (_e *MockStreamingNodeCataLog_Expecter) SaveVChannels(ctx interface{}, pchannelName interface{}, vchannels interface{}) *MockStreamingNodeCataLog_SaveVChannels_Call {
+	return &MockStreamingNodeCataLog_SaveVChannels_Call{Call: _e.mock.On("SaveVChannels", ctx, pchannelName, vchannels)}
+}
+
+func (_c *MockStreamingNodeCataLog_SaveVChannels_Call) Run(run func(ctx context.Context, pchannelName string, vchannels []*streamingpb.VChannelMeta)) *MockStreamingNodeCataLog_SaveVChannels_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].([]*streamingpb.VChannelMeta))
+	})
+	return _c
+}
+
+func (_c *MockStreamingNodeCataLog_SaveVChannels_Call) Return(_a0 error) *MockStreamingNodeCataLog_SaveVChannels_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockStreamingNodeCataLog_SaveVChannels_Call) RunAndReturn(run func(context.Context, string, []*streamingpb.VChannelMeta) error) *MockStreamingNodeCataLog_SaveVChannels_Call {
 	_c.Call.Return(run)
 	return _c
 }

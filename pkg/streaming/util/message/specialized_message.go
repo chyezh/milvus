@@ -278,6 +278,15 @@ func (m *specializedImmutableMessageImpl[H, B]) Body() (B, error) {
 	return unmarshalProtoB[B](m.Payload())
 }
 
+// Must Body returns the message body.
+func (m *specializedImmutableMessageImpl[H, B]) MustBody() B {
+	b, err := m.Body()
+	if err != nil {
+		panic(fmt.Sprintf("failed to unmarshal specialized body, %s, %s", m.MessageID().String(), err.Error()))
+	}
+	return b
+}
+
 func unmarshalProtoB[B proto.Message](data []byte) (B, error) {
 	var nilBody B
 	// Decode the specialized header.

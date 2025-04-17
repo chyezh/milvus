@@ -173,4 +173,7 @@ type specializedImmutableMessage[H proto.Message, B proto.Message] interface {
 	// Body returns the message body.
 	// !!! Do these will trigger a unmarshal operation, so it should be used with caution.
 	Body() (B, error)
+
+	// MustBody return the message body, panic if error occurs.
+	MustBody() B
 }

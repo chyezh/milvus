@@ -226,6 +226,12 @@ type StreamingNodeCataLog interface {
 	// WAL select the wal related recovery infos.
 	// Which must give the pchannel name.
 
+	// ListVChannel list all vchannels on current pchannel.
+	ListVChannel(ctx context.Context, pchannelName string) ([]*streamingpb.VChannelMeta, error)
+
+	// SaveVChannels save vchannel on current pchannel.
+	SaveVChannels(ctx context.Context, pchannelName string, vchannels []*streamingpb.VChannelMeta) error
+
 	// ListSegmentAssignment list all segment assignments for the wal.
 	ListSegmentAssignment(ctx context.Context, pChannelName string) ([]*streamingpb.SegmentAssignmentMeta, error)
 

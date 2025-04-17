@@ -14,9 +14,30 @@ type (
 	Append = func(ctx context.Context, msg message.MutableMessage) (message.MessageID, error)
 )
 
+// InterceptorBuildParam is the parameter to build a interceptor.
 type InterceptorBuildParam struct {
-	WALImpls walimpls.WALImpls         // The underlying walimpls implementation, can be used anytime.
-	WAL      *syncutil.Future[wal.WAL] // The wal final object, can be used after interceptor is ready.
+	WALImpls                       walimpls.WALImpls                                // The underlying walimpls implementation, can be used anytime.
+	WAL                            *syncutil.Future[wal.WAL]                        // The wal final object, can be used after interceptor is ready.
+	WriteAheadRecoverStreamBuilder *syncutil.Future[WriteAheadRecoverStreamBuilder] // The builder to build the write ahead recover stream.
+}
+
+// WriteAheadRecoverStreamBuilder is the interface that is used to recover the write ahead components.
+type WriteAheadRecoverStreamBuilder interface {
+	// CreateWriteAheadRecoverStream create a stream to recover the write ahead components.
+	// The stream is verify short, so it can be used fast recover the write ahead components.
+	// !!! The message order is message-id based, not timestamp based.
+	// !!! The recovery process should be idempotent, otherwise the recovery process may be false.
+	// Most components should be able to use this stream to recover based on message-id-order.
+	Build(ctx context.Context) (WriteAheadRecoveryReader, error)
+}
+
+// WriteAheadRecoveryReader is the interface that is used to make recovery.
+type WriteAheadRecoveryReader interface {
+	// Next returns the next message in the stream.
+	Next(ctx context.Context) (message.ImmutableMessage, error)
+
+	// Close the stream
+	Close()
 }
 
 // InterceptorBuilder is the interface to build a interceptor.
