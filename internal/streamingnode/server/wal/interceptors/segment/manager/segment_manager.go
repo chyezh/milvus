@@ -228,8 +228,8 @@ func (s *segmentAllocManager) persistStatsIfTooDirty(ctx context.Context) {
 	if s.dirtyBytes < dirtyThreshold {
 		return
 	}
-	if err := resource.Resource().StreamingNodeCatalog().SaveSegmentAssignments(ctx, s.pchannel.Name, []*streamingpb.SegmentAssignmentMeta{
-		s.Snapshot(),
+	if err := resource.Resource().StreamingNodeCatalog().SaveSegmentAssignments(ctx, s.pchannel.Name, map[int64]*streamingpb.SegmentAssignmentMeta{
+		s.GetSegmentID(): s.Snapshot(),
 	}); err != nil {
 		log.Warn("failed to persist stats of segment", zap.Int64("segmentID", s.GetSegmentID()), zap.Error(err))
 	}
@@ -293,8 +293,8 @@ func (m *mutableSegmentAssignmentMeta) IntoFlushed() {
 
 // Commit commits the modification.
 func (m *mutableSegmentAssignmentMeta) Commit(ctx context.Context) error {
-	if err := resource.Resource().StreamingNodeCatalog().SaveSegmentAssignments(ctx, m.original.pchannel.Name, []*streamingpb.SegmentAssignmentMeta{
-		m.modifiedCopy,
+	if err := resource.Resource().StreamingNodeCatalog().SaveSegmentAssignments(ctx, m.original.pchannel.Name, map[int64]*streamingpb.SegmentAssignmentMeta{
+		m.modifiedCopy.SegmentId: m.modifiedCopy,
 	}); err != nil {
 		return err
 	}
