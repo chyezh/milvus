@@ -39,7 +39,7 @@ func TestFlushMsgHandler_HandleFlush(t *testing.T) {
 		WithVChannel(vchannel).
 		WithHeader(&message.FlushMessageHeader{
 			CollectionId: 0,
-			SegmentIds:   []int64{1, 2, 3},
+			SegmentId:    1,
 		}).
 		WithBody(&message.FlushMessageBody{}).
 		BuildMutable()
@@ -49,7 +49,7 @@ func TestFlushMsgHandler_HandleFlush(t *testing.T) {
 	msgID := mock_message.NewMockMessageID(t)
 	im, err := message.AsImmutableFlushMessageV2(msg.IntoImmutableMessage(msgID))
 	assert.NoError(t, err)
-	err = handler.HandleFlush(vchannel, im)
+	err = handler.HandleFlush(im)
 	assert.Error(t, err)
 
 	// test normal
@@ -57,7 +57,7 @@ func TestFlushMsgHandler_HandleFlush(t *testing.T) {
 	wbMgr.EXPECT().SealSegments(mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	handler = newMsgHandler(wbMgr)
-	err = handler.HandleFlush(vchannel, im)
+	err = handler.HandleFlush(im)
 	assert.NoError(t, err)
 }
 
@@ -82,7 +82,7 @@ func TestFlushMsgHandler_HandleManualFlush(t *testing.T) {
 	msgID := mock_message.NewMockMessageID(t)
 	im, err := message.AsImmutableManualFlushMessageV2(msg.IntoImmutableMessage(msgID))
 	assert.NoError(t, err)
-	err = handler.HandleManualFlush(vchannel, im)
+	err = handler.HandleManualFlush(im)
 	assert.Error(t, err)
 
 	// test normal
@@ -90,6 +90,6 @@ func TestFlushMsgHandler_HandleManualFlush(t *testing.T) {
 	wbMgr.EXPECT().FlushChannel(mock.Anything, mock.Anything, mock.Anything).Return(nil)
 
 	handler = newMsgHandler(wbMgr)
-	err = handler.HandleManualFlush(vchannel, im)
+	err = handler.HandleManualFlush(im)
 	assert.NoError(t, err)
 }
