@@ -18,7 +18,6 @@ import (
 	"github.com/milvus-io/milvus/internal/mocks/streamingnode/server/mock_wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
 	internaltypes "github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
 	"github.com/milvus-io/milvus/pkg/v2/common"
@@ -67,8 +66,10 @@ func TestWALFlusher(t *testing.T) {
 		resource.OptChunkManager(mock_storage.NewMockChunkManager(t)),
 	)
 	l := newMockWAL(t, false)
-	param := &interceptors.InterceptorBuildParam{
-		WAL: syncutil.NewFuture[wal.WAL](),
+	param := &RecoverWALFlusherParam{
+		ChannelInfo: l.Channel(),
+		WAL:         syncutil.NewFuture[wal.WAL](),
+		// TODO:
 	}
 	param.WAL.Set(l)
 	flusher := RecoverWALFlusher(param)

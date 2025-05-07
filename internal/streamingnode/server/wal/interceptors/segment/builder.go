@@ -1,15 +1,7 @@
 package segment
 
 import (
-	"context"
-
-	"go.uber.org/zap"
-
-	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/segment/manager"
-	"github.com/milvus-io/milvus/pkg/v2/log"
-	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
 
 func NewInterceptorBuilder() interceptors.InterceptorBuilder {
@@ -19,17 +11,9 @@ func NewInterceptorBuilder() interceptors.InterceptorBuilder {
 type interceptorBuilder struct{}
 
 func (b *interceptorBuilder) Build(param *interceptors.InterceptorBuildParam) interceptors.Interceptor {
-	assignManager := syncutil.NewFuture[*manager.PChannelSegmentAllocManager]()
-	ctx, cancel := context.WithCancel(context.Background())
 	segmentInterceptor := &segmentInterceptor{
-		ctx:    ctx,
-		cancel: cancel,
-		logger: resource.Resource().Logger().With(
-			log.FieldComponent("segment-assigner"),
-			zap.Any("pchannel", param.ChannelInfo),
-		),
-		assignManager: assignManager,
+		shardManager: param.ShardManager,
 	}
-	go segmentInterceptor.recoverPChannelManager(param)
+	segmentInterceptor.initOpTable()
 	return segmentInterceptor
 }
