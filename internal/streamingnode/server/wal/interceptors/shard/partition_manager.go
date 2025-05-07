@@ -121,7 +121,7 @@ func (m *partitionManager) FlushPartition(policy policy.SealPolicy) []int64 {
 		segment.Flush(policy)
 		segmentIDs = append(segmentIDs, segment.GetSegmentID())
 	}
-	m.segments = nil
+	m.segments = make(map[int64]*segmentAllocManager)
 	return segmentIDs
 }
 
@@ -138,7 +138,7 @@ func (m *partitionManager) FlushAndFenceSegmentUntil(timeTick uint64) []int64 {
 		segment.Flush(policy.PolicyFenced(timeTick))
 		segmentIDs = append(segmentIDs, segment.GetSegmentID())
 	}
-	m.segments = nil
+	m.segments = make(map[int64]*segmentAllocManager)
 
 	// fence the assign operation until the incoming time tick or latest assigned timetick.
 	// The new incoming assignment request will be fenced.
