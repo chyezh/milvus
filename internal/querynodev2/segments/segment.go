@@ -566,7 +566,7 @@ func (s *LocalSegment) retrieve(ctx context.Context, plan *segcore.RetrievePlan,
 	tr := timerecord.NewTimeRecorder("cgoRetrieve")
 	result, err := s.csegment.Retrieve(ctx, plan)
 	if err != nil {
-		log.Warn("Retrieve failed")
+		log.Warn("Retrieve failed", zap.Error(err))
 		return nil, err
 	}
 	metrics.QueryNodeSQSegmentLatencyInCore.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()),

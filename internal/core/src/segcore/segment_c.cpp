@@ -13,6 +13,9 @@
 
 #include <memory>
 #include <limits>
+#include <execinfo.h>    // backtrace, backtrace_symbols
+#include <cxxabi.h>      // abi::__cxa_demangle
+#include <fmt/format.h>  // fmt::format
 
 #include "pb/cgo_msg.pb.h"
 #include "pb/index_cgo_msg.pb.h"
@@ -194,17 +197,86 @@ AsyncRetrieve(CTraceContext c_trace,
                 c_trace.traceID, c_trace.spanID, c_trace.traceFlags};
             milvus::tracer::AutoSpan span("SegCoreRetrieve", &trace_ctx, true);
 
-            segment->LazyCheckSchema(plan->schema_);
+            try {
+                segment->LazyCheckSchema(plan->schema_);
 
-            auto retrieve_result = segment->Retrieve(&trace_ctx,
-                                                     plan,
-                                                     timestamp,
-                                                     limit_size,
-                                                     ignore_non_pk,
-                                                     consistency_level);
+                auto retrieve_result = segment->Retrieve(&trace_ctx,
+                                                         plan,
+                                                         timestamp,
+                                                         limit_size,
+                                                         ignore_non_pk,
+                                                         consistency_level);
 
-            return CreateLeakedCRetrieveResultFromProto(
-                std::move(retrieve_result));
+                return CreateLeakedCRetrieveResultFromProto(
+                    std::move(retrieve_result));
+            } catch (const std::out_of_range& e) {
+                // 捕获异常并打印详细信息
+                LOG_ERROR("St12out_of_range caught: {} at AsyncRetrieve",
+                          e.what());
+
+                // 获取并打印完整调用栈
+                const int max_frames = 100;
+                void* callstack[max_frames];
+                int nFrames = backtrace(callstack, max_frames);
+                char** symbols = backtrace_symbols(callstack, nFrames);
+
+                std::string stacktrace = "Callstack:\n";
+                for (int i = 0; i < nFrames; i++) {
+                    stacktrace += fmt::format("  #{} {}\n", i, symbols[i]);
+
+                    // 尝试解码 C++ 符号以获得更可读的输出
+                    char* begin_name = nullptr;
+                    char* begin_offset = nullptr;
+                    char* end_offset = nullptr;
+
+                    // 查找符号名称的起始位置
+                    for (char* p = symbols[i]; *p; ++p) {
+                        if (*p == '(') {
+                            begin_name = p;
+                        } else if (*p == '+') {
+                            begin_offset = p;
+                        } else if (*p == ')' && begin_offset) {
+                            end_offset = p;
+                            break;
+                        }
+                    }
+
+                    if (begin_name && begin_offset && end_offset &&
+                        begin_name < begin_offset) {
+                        *begin_name++ = '\0';
+                        *begin_offset++ = '\0';
+                        *end_offset = '\0';
+
+                        int status;
+                        char* demangled = abi::__cxa_demangle(
+                            begin_name, nullptr, nullptr, &status);
+                        if (status == 0 && demangled) {
+                            stacktrace +=
+                                fmt::format("      demangled: {} + {}\n",
+                                            demangled,
+                                            begin_offset);
+                            free(demangled);
+                        }
+                    }
+                }
+
+                if (symbols != nullptr) {
+                    free(symbols);
+                }
+
+                LOG_ERROR("{}", stacktrace);
+
+                // 记录 plan 相关信息，帮助调试
+                LOG_ERROR("Plan details: plan->field_ids_ size: {}",
+                          plan->field_ids_.size());
+                for (size_t i = 0; i < plan->field_ids_.size(); i++) {
+                    LOG_ERROR(
+                        "  field_id[{}]: {}", i, plan->field_ids_[i].get());
+                }
+
+                // 重新抛出异常以保持原有行为
+                throw;
+            }
         });
     return static_cast<CFuture*>(static_cast<void*>(
         static_cast<milvus::futures::IFuture*>(future.release())));
