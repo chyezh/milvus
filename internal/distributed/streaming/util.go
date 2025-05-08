@@ -4,7 +4,10 @@ import (
 	"context"
 	"sync"
 
+	"go.uber.org/zap"
+
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 )
@@ -109,6 +112,7 @@ func (u *walAccesserImpl) appendToVChannel(ctx context.Context, vchannel string,
 			// if the transaction is expired,
 			// there may be wal is transferred to another streaming node,
 			// retry it with new transaction.
+			log.Warn("transaction expired, retrying", zap.String("vchannel", vchannel), zap.Error(err))
 			continue
 		}
 		return resp
