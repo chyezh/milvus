@@ -223,6 +223,11 @@ class Schema {
         AssertInfo(fields_.find(field_id) != fields_.end(),
                    "Cannot find field with field_id: " +
                        std::to_string(field_id.get()));
+        for (const auto& field : fields_) {
+            LOG_INFO("Retrieve schema operator [] with schema fieldID: {}",
+                     field.first.get());
+        }
+        LOG_INFO("Retrieve schema operator [] with field {}", field_id.get());
         return fields_.at(field_id);
     }
 

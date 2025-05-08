@@ -60,6 +60,9 @@ SegmentInternalInterface::FillTargetEntry(const query::Plan* plan,
     std::unique_ptr<DataArray> field_data;
     // fill other entries except primary key by result_offset
     for (auto field_id : plan->target_entries_) {
+        LOG_INFO("Retrieve FillTargetEntry {} with field {}",
+                 this->get_segment_id(),
+                 field_id.get());
         auto& field_meta = plan->schema_[field_id];
         if (plan->schema_.get_dynamic_field_id().has_value() &&
             plan->schema_.get_dynamic_field_id().value() == field_id &&
@@ -76,6 +79,9 @@ SegmentInternalInterface::FillTargetEntry(const query::Plan* plan,
                 bulk_subscript(field_id, results.seg_offsets_.data(), size);
         }
         results.output_fields_data_[field_id] = std::move(field_data);
+        LOG_INFO("Retrieve FillTargetEntry done {} with field {}",
+                 this->get_segment_id(),
+                 field_id.get());
     }
 }
 
@@ -103,6 +109,7 @@ SegmentInternalInterface::Retrieve(tracer::TraceContext* trace_ctx,
                                    int64_t limit_size,
                                    bool ignore_non_pk,
                                    int32_t consistency_level) const {
+    LOG_INFO("Retrieve start with segment {}", this->get_segment_id());
     std::shared_lock lck(mutex_);
     tracer::AutoSpan span("Retrieve", tracer::GetRootSpan());
     auto results = std::make_unique<proto::segcore::RetrieveResults>();
@@ -112,6 +119,9 @@ SegmentInternalInterface::Retrieve(tracer::TraceContext* trace_ctx,
     results->set_has_more_result(retrieve_results.has_more_result);
 
     auto result_rows = retrieve_results.result_offsets_.size();
+    LOG_INFO("Retrieve start with segment {} 111111111111",
+             this->get_segment_id());
+
     int64_t output_data_size = 0;
     for (auto field_id : plan->field_ids_) {
         output_data_size += get_field_avg_size(field_id) * result_rows;
@@ -129,6 +139,8 @@ SegmentInternalInterface::Retrieve(tracer::TraceContext* trace_ctx,
         *results->add_fields_data() = retrieve_results.field_data_[0];
         return results;
     }
+
+    LOG_INFO("Retrieve start with segment {} 22222222", this->get_segment_id());
 
     results->mutable_offset()->Add(retrieve_results.result_offsets_.begin(),
                                    retrieve_results.result_offsets_.end());
@@ -172,6 +184,9 @@ SegmentInternalInterface::FillTargetEntry(
     };
 
     for (auto field_id : plan->field_ids_) {
+        LOG_INFO("Retrieve start with segment {} with field {}",
+                 this->get_segment_id(),
+                 field_id.get());
         if (SystemProperty::Instance().IsSystem(field_id)) {
             auto system_type =
                 SystemProperty::Instance().GetSystemFieldType(field_id);
@@ -190,6 +205,9 @@ SegmentInternalInterface::FillTargetEntry(
             fields_data->AddAllocated(data_array.release());
             continue;
         }
+        LOG_INFO(
+            "Retrieve start with segment {} bulk_subscript system field done",
+            this->get_segment_id());
 
         if (ignore_non_pk && !is_pk_field(field_id)) {
             continue;
@@ -204,12 +222,25 @@ SegmentInternalInterface::FillTargetEntry(
             fields_data->AddAllocated(col.release());
             continue;
         }
+        LOG_INFO(
+            "Retrieve start with segment {} bulk_subscript dynamic field done",
+            this->get_segment_id());
         std::unique_ptr<DataArray> col;
         auto& field_meta = plan->schema_[field_id];
         if (!is_field_exist(field_id)) {
             col = std::move(bulk_subscript_not_exist_field(field_meta, size));
         } else {
-            col = bulk_subscript(field_id, offsets, size);
+            try {
+                col = bulk_subscript(field_id, offsets, size);
+            } catch (const std::exception& e) {
+                LOG_ERROR(
+                    "Retrieve segment {} bulk_subscript failed with field {}, "
+                    "error: {}",
+                    this->get_segment_id(),
+                    field_id.get(),
+                    e.what());
+                throw e;
+            }
         }
         if (field_meta.get_data_type() == DataType::ARRAY) {
             col->mutable_scalars()->mutable_array_data()->set_element_type(
@@ -252,6 +283,8 @@ SegmentInternalInterface::FillTargetEntry(
             fields_data->AddAllocated(col.release());
         }
     }
+    LOG_INFO("Retrieve segment {} FillTargetEntry done",
+             this->get_segment_id());
 }
 
 std::unique_ptr<proto::segcore::RetrieveResults>
@@ -320,20 +353,31 @@ SegmentInternalInterface::get_field_avg_size(FieldId field_id) const {
         PanicInfo(FieldIDInvalid, "unsupported system field id");
     }
 
+    LOG_INFO(" get field_id: {}", field_id.get());
     auto schema = get_schema();
-    auto& field_meta = schema[field_id];
-    auto data_type = field_meta.get_data_type();
+    for (auto fieldID : schema.get_field_ids()) {
+        LOG_INFO(" schema field_id: {}", fieldID.get());
+    }
+    try {
+        auto& field_meta = schema[field_id];
+        auto data_type = field_meta.get_data_type();
 
-    std::shared_lock lck(mutex_);
-    if (IsVariableDataType(data_type)) {
-        if (variable_fields_avg_size_.find(field_id) ==
-            variable_fields_avg_size_.end()) {
-            return 0;
+        std::shared_lock lck(mutex_);
+        if (IsVariableDataType(data_type)) {
+            if (variable_fields_avg_size_.find(field_id) ==
+                variable_fields_avg_size_.end()) {
+                return 0;
+            }
+
+            return variable_fields_avg_size_.at(field_id).second;
+        } else {
+            return field_meta.get_sizeof();
         }
-
-        return variable_fields_avg_size_.at(field_id).second;
-    } else {
-        return field_meta.get_sizeof();
+    } catch (const std::exception& e) {
+        LOG_ERROR("Exception while calculating size for field_id {}: {}",
+                  field_id.get(),
+                  e.what());
+        throw e;  // 重新抛出异常
     }
 }
 
