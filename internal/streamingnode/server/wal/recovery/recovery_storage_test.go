@@ -19,6 +19,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/impls/rmq"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -179,6 +180,10 @@ func (b *streamBuilder) segmentNum() int {
 		}
 	}
 	return segmentNum
+}
+
+func (b *streamBuilder) RWWALImpls() walimpls.WALImpls {
+	return nil
 }
 
 type testRecoveryStream struct {

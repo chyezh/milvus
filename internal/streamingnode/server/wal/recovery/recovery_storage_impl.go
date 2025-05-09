@@ -45,6 +45,8 @@ func RecoverRecoveryStorage(
 		log.FieldComponent(componentRecoveryStorage),
 		zap.String("channel", recoveryStreamBuilder.Channel().String()),
 		zap.String("state", recoveryStorageStateWorking)))
+	rs.truncator = newSamplingTruncator(snapshot.Checkpoint.Clone(), recoveryStreamBuilder.RWWALImpls())
+	rs.truncator.SetLogger(rs.Logger())
 	go rs.backgroundTask()
 	return rs, snapshot, nil
 }
@@ -76,6 +78,7 @@ type RecoveryStorage struct {
 	dirtyCounter           int // records the message count since last persist snapshot.
 	// used to trigger the recovery persist operation.
 	persistNotifier chan struct{}
+	truncator       *samplingTruncator
 }
 
 // ObserveMessage is called when a new message is observed.
@@ -90,6 +93,8 @@ func (r *RecoveryStorage) ObserveMessage(msg message.ImmutableMessage) {
 func (r *RecoveryStorage) Close() {
 	r.backgroundTaskNotifier.Cancel()
 	r.backgroundTaskNotifier.BlockUntilFinish()
+	// Stop the truncator.
+	r.truncator.Close()
 }
 
 // notifyPersist notifies a persist operation.

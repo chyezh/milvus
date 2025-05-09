@@ -4,6 +4,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/recovery"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
 
@@ -13,15 +14,17 @@ var (
 )
 
 // newRecoveryStreamBuilder creates a new recovery stream builder.
-func newRecoveryStreamBuilder(roWALImpls *roWALAdaptorImpl) *recoveryStreamBuilderImpl {
+func newRecoveryStreamBuilder(roWALImpls *roWALAdaptorImpl, basicWAL walimpls.WALImpls) *recoveryStreamBuilderImpl {
 	return &recoveryStreamBuilderImpl{
 		roWALAdaptorImpl: roWALImpls,
+		basicWAL:         basicWAL,
 	}
 }
 
 // recoveryStreamBuilerImpl is the implementation of RecoveryStreamBuilder.
 type recoveryStreamBuilderImpl struct {
 	*roWALAdaptorImpl
+	basicWAL walimpls.WALImpls
 }
 
 // Build builds a recovery stream.
@@ -36,6 +39,10 @@ func (b *recoveryStreamBuilderImpl) Build(param recovery.BuildRecoveryStreamPara
 	}
 	go recoveryStream.execute()
 	return recoveryStream
+}
+
+func (b *recoveryStreamBuilderImpl) RWWALImpls() walimpls.WALImpls {
+	return b.basicWAL
 }
 
 // recoveryStreamImpl is the implementation of RecoveryStream.

@@ -105,10 +105,16 @@ func (rs *RecoveryStorage) persistDirtySnapshot(ctx context.Context, snapshot *R
 	}
 
 	// checkpoint updates should always be persisted after other updates success.
-	return rs.retryOperationWithBackoff(ctx, rs.Logger().With(zap.String("op", "persistCheckpoint")), func(ctx context.Context) error {
+	if err := rs.retryOperationWithBackoff(ctx, rs.Logger().With(zap.String("op", "persistCheckpoint")), func(ctx context.Context) error {
 		return resource.Resource().StreamingNodeCatalog().
 			SaveConsumeCheckpoint(ctx, rs.channel.Name, snapshot.Checkpoint.IntoProto())
-	})
+	}); err != nil {
+		return err
+	}
+
+	// sample the checkpoint for truncator to make wal truncation.
+	rs.truncator.SampleCheckpoint(snapshot.Checkpoint)
+	return
 }
 
 // dropAllVirtualChannel drops all virtual channels that are in the dropped state.

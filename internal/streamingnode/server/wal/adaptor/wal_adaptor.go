@@ -63,7 +63,7 @@ func adaptImplsToWAL(
 	if err != nil {
 		return nil, err
 	}
-	rs, snapshot, err := recovery.RecoverRecoveryStorage(ctx, newRecoveryStreamBuilder(roWAL), param.LastTimeTickMessage)
+	rs, snapshot, err := recovery.RecoverRecoveryStorage(ctx, newRecoveryStreamBuilder(roWAL, basicWAL), param.LastTimeTickMessage)
 	if err != nil {
 		return nil, err
 	}
