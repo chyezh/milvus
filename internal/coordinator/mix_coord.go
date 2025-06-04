@@ -759,7 +759,7 @@ func (s *mixCoordImpl) ListCheckers(ctx context.Context, req *querypb.ListChecke
 }
 
 func (s *mixCoordImpl) ShowLoadCollections(ctx context.Context, req *querypb.ShowCollectionsRequest) (*querypb.ShowCollectionsResponse, error) {
-	return s.queryCoordServer.ShowLoadCollections(ctx, req)
+	return s.queryCoordServer.ShowCollections(ctx, req)
 }
 
 func (s *mixCoordImpl) LoadCollection(ctx context.Context, req *querypb.LoadCollectionRequest) (*commonpb.Status, error) {
@@ -771,7 +771,7 @@ func (s *mixCoordImpl) ReleaseCollection(ctx context.Context, req *querypb.Relea
 }
 
 func (s *mixCoordImpl) ShowLoadPartitions(ctx context.Context, req *querypb.ShowPartitionsRequest) (*querypb.ShowPartitionsResponse, error) {
-	return s.queryCoordServer.ShowLoadPartitions(ctx, req)
+	return s.queryCoordServer.ShowPartitions(ctx, req)
 }
 
 func (s *mixCoordImpl) LoadPartitions(ctx context.Context, req *querypb.LoadPartitionsRequest) (*commonpb.Status, error) {
@@ -791,7 +791,7 @@ func (s *mixCoordImpl) GetPartitionStates(ctx context.Context, req *querypb.GetP
 }
 
 func (s *mixCoordImpl) GetLoadSegmentInfo(ctx context.Context, req *querypb.GetSegmentInfoRequest) (*querypb.GetSegmentInfoResponse, error) {
-	return s.queryCoordServer.GetLoadSegmentInfo(ctx, req)
+	return s.queryCoordServer.GetSegmentInfo(ctx, req)
 }
 
 func (s *mixCoordImpl) LoadBalance(ctx context.Context, req *querypb.LoadBalanceRequest) (*commonpb.Status, error) {

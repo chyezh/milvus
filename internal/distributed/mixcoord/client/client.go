@@ -1427,7 +1427,7 @@ func (c *Client) ShowLoadCollections(ctx context.Context, req *querypb.ShowColle
 		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.grpcClient.GetNodeID())),
 	)
 	return wrapGrpcCall(ctx, c, func(client MixCoordClient) (*querypb.ShowCollectionsResponse, error) {
-		return client.ShowLoadCollections(ctx, req)
+		return client.QueryCoordClient.ShowCollections(ctx, req)
 	})
 }
 
@@ -1463,7 +1463,7 @@ func (c *Client) ShowLoadPartitions(ctx context.Context, req *querypb.ShowPartit
 		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.grpcClient.GetNodeID())),
 	)
 	return wrapGrpcCall(ctx, c, func(client MixCoordClient) (*querypb.ShowPartitionsResponse, error) {
-		return client.ShowLoadPartitions(ctx, req)
+		return client.QueryCoordClient.ShowPartitions(ctx, req)
 	})
 }
 
@@ -1523,7 +1523,7 @@ func (c *Client) GetLoadSegmentInfo(ctx context.Context, req *querypb.GetSegment
 		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.grpcClient.GetNodeID())),
 	)
 	return wrapGrpcCall(ctx, c, func(client MixCoordClient) (*querypb.GetSegmentInfoResponse, error) {
-		return client.GetLoadSegmentInfo(ctx, req)
+		return client.QueryCoordClient.GetSegmentInfo(ctx, req)
 	})
 }
 

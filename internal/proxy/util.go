@@ -1918,7 +1918,7 @@ func getPartitionKeyFieldData(fieldSchema *schemapb.FieldSchema, insertMsg *msgs
 
 func getCollectionProgress(
 	ctx context.Context,
-	queryCoord types.QueryCoordClient,
+	queryCoord types.MixCoordClient,
 	msgBase *commonpb.MsgBase,
 	collectionID int64,
 ) (loadProgress int64, refreshProgress int64, err error) {
@@ -1955,7 +1955,7 @@ func getCollectionProgress(
 
 func getPartitionProgress(
 	ctx context.Context,
-	queryCoord types.QueryCoordClient,
+	queryCoord types.MixCoordClient,
 	msgBase *commonpb.MsgBase,
 	partitionNames []string,
 	collectionName string,

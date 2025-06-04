@@ -309,7 +309,7 @@ func (g *getStatisticsTask) getStatisticsShard(ctx context.Context, nodeID int64
 
 // checkFullLoaded check if collection / partition was fully loaded into QueryNode
 // return loaded partitions, unloaded partitions and error
-func checkFullLoaded(ctx context.Context, qc types.QueryCoordClient, dbName string, collectionName string, collectionID int64, searchPartitionIDs []UniqueID) ([]UniqueID, []UniqueID, error) {
+func checkFullLoaded(ctx context.Context, qc types.MixCoordClient, dbName string, collectionName string, collectionID int64, searchPartitionIDs []UniqueID) ([]UniqueID, []UniqueID, error) {
 	var loadedPartitionIDs []UniqueID
 	var unloadPartitionIDs []UniqueID
 
