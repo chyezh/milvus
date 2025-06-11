@@ -132,7 +132,7 @@ func (b *brokerMetaWriter) UpdateSync(ctx context.Context, pack *SyncTask) error
 		// meta error, datanode handles a virtual channel does not belong here
 		if errors.IsAny(err, merr.ErrSegmentNotFound, merr.ErrChannelNotFound) {
 			log.Warn("meta error found, skip sync and start to drop virtual channel", zap.String("channel", pack.channelName))
-			return false, nil
+			return false, err
 		}
 
 		if err != nil {

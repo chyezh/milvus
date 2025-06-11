@@ -590,7 +590,14 @@ func (s *LocalSegment) Retrieve(ctx context.Context, plan *segcore.RetrievePlan)
 		log.Warn("unmarshal retrieve result failed", zap.Error(err))
 		return nil, err
 	}
-	log.Debug("retrieve segment done", zap.Int("resultNum", len(retrieveResult.Offset)))
+	allRetrieveCount := retrieveResult.AllRetrieveCount
+	countRet := retrieveResult.GetFieldsData()[0].GetScalars().GetLongData().GetData()[0]
+	if allRetrieveCount != countRet {
+		log.Debug("retrieve segment done with delete", zap.Int64("allRetrieveCount", allRetrieveCount), zap.Int64("countRet", countRet))
+	} else {
+		log.Debug("retrieve segment done", zap.Int64("allRetrieveCount", allRetrieveCount), zap.Int64("countRet", countRet))
+	}
+
 	return retrieveResult, nil
 }
 

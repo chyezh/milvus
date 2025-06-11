@@ -248,9 +248,11 @@ func (d *Dispatcher) work() {
 				continue
 			}
 			d.curTs.Store(pack.EndPositions[0].GetTimestamp())
+			log.Info("dispatcher on current ts", zap.Uint64("ts", d.curTs.Load()), zap.Int("targetNum", d.targets.Len()))
 
 			targetPacks := d.groupAndParseMsgs(pack, d.stream.GetUnmarshalDispatcher())
 			for vchannel, p := range targetPacks {
+
 				var err error
 				t, _ := d.targets.Get(vchannel)
 				isReplicateChannel := strings.Contains(vchannel, paramtable.Get().CommonCfg.ReplicateMsgChannel.GetValue())
@@ -258,6 +260,13 @@ func (d *Dispatcher) work() {
 				// so for each target, msg before the target position must be filtered out.
 				//
 				// From 2.6.0, every message has a unique timetick, so we can filter out the msg by < but not <=.
+				log.Info("found msg",
+					zap.String("vchannel", vchannel),
+					zap.Int("msgCount", len(p.Msgs)),
+					zap.Uint64("packBeginTs", p.BeginTs),
+					zap.Uint64("packEndTs", p.EndTs),
+					zap.Uint64("posTs", t.pos.GetTimestamp()),
+				)
 				if ((d.includeSkipWhenSplit && p.EndTs < t.pos.GetTimestamp()) ||
 					(!d.includeSkipWhenSplit && p.EndTs <= t.pos.GetTimestamp())) &&
 					!isReplicateChannel {

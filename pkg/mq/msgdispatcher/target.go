@@ -126,6 +126,7 @@ func (t *target) send(pack *MsgPack) error {
 		if len(pack.EndPositions) > 0 {
 			t.latestTimeTick = pack.EndPositions[0].GetTimestamp()
 		}
+		log.Info("send target success", zap.String("vchannel", t.vchannel), zap.Uint64("beginTs", pack.BeginTs), zap.Uint64("endTs", pack.EndTs))
 		return nil
 	}
 }
