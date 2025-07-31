@@ -53,6 +53,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/crypto"
 	"github.com/milvus-io/milvus/pkg/v2/util/interceptor"
 	"github.com/milvus-io/milvus/pkg/v2/util/lifetime"
+	"github.com/milvus-io/milvus/pkg/v2/util/mcontext"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -515,7 +516,7 @@ func DailGRPClient(ctx context.Context, addr string, rootPath string, nodeID int
 // clusterInjectionUnaryClientInterceptor returns a new unary client interceptor that injects `cluster` into outgoing context.
 func clusterInjectionUnaryClientInterceptor(clusterKey string) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		ctx = metadata.AppendToOutgoingContext(ctx, interceptor.ClusterKey, clusterKey)
+		ctx = metadata.AppendToOutgoingContext(ctx, mcontext.DestinationClusterKey, clusterKey)
 		return invoker(ctx, method, req, reply, cc, opts...)
 	}
 }
@@ -523,7 +524,7 @@ func clusterInjectionUnaryClientInterceptor(clusterKey string) grpc.UnaryClientI
 // clusterInjectionStreamClientInterceptor returns a new streaming client interceptor that injects `cluster` into outgoing context.
 func clusterInjectionStreamClientInterceptor(clusterKey string) grpc.StreamClientInterceptor {
 	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-		ctx = metadata.AppendToOutgoingContext(ctx, interceptor.ClusterKey, clusterKey)
+		ctx = metadata.AppendToOutgoingContext(ctx, mcontext.DestinationClusterKey, clusterKey)
 		return streamer(ctx, desc, cc, method, opts...)
 	}
 }

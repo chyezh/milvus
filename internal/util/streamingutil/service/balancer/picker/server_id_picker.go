@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
-	"github.com/milvus-io/milvus/pkg/v2/util/interceptor"
+	"github.com/milvus-io/milvus/pkg/v2/util/mcontext"
 )
 
 var _ balancer.Picker = &serverIDPicker{}
@@ -75,7 +75,7 @@ func (p *serverIDPicker) Pick(pickInfo balancer.PickInfo) (balancer.PickResult, 
 		// Add the server id to the metadata.
 		// See interceptor.ServerIDValidationUnaryServerInterceptor
 		Metadata: metadata.Pairs(
-			interceptor.ServerIDKey,
+			mcontext.DestinationServerIDKey,
 			strconv.FormatInt(conn.serverID, 10),
 		),
 	}, nil

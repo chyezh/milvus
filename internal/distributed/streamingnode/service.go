@@ -346,12 +346,18 @@ func (s *Server) initGRPCServer() {
 		grpc.MaxRecvMsgSize(cfg.ServerMaxRecvSize.GetAsInt()),
 		grpc.MaxSendMsgSize(cfg.ServerMaxSendSize.GetAsInt()),
 		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
+			interceptor.NewMilvusContextUnaryServerInterceptor(),
+			interceptor.NewMetricsServerUnaryInterceptor(),
+			interceptor.NewLogUnaryServerInterceptor(),
 			logutil.UnaryTraceLoggerInterceptor,
 			streamingserviceinterceptor.NewStreamingServiceUnaryServerInterceptor(),
 			interceptor.ClusterValidationUnaryServerInterceptor(),
 			interceptor.ServerIDValidationUnaryServerInterceptor(serverIDGetter),
 		)),
 		grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(
+			interceptor.NewMilvusContextStreamServerInterceptor(),
+			interceptor.NewMetricsStreamServerInterceptor(),
+			interceptor.NewLogStreamServerInterceptor(),
 			logutil.StreamTraceLoggerInterceptor,
 			streamingserviceinterceptor.NewStreamingServiceStreamServerInterceptor(),
 			interceptor.ClusterValidationStreamServerInterceptor(),

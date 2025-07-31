@@ -68,7 +68,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/etcd"
 	"github.com/milvus-io/milvus/pkg/v2/util/interceptor"
-	"github.com/milvus-io/milvus/pkg/v2/util/logutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -238,12 +237,14 @@ func (s *Server) startExternalGrpc(errChan chan error) {
 	var unaryServerOption grpc.ServerOption
 	if enableCustomInterceptor {
 		unaryServerOption = grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
+			interceptor.NewMilvusContextUnaryServerInterceptor(),
+			interceptor.NewMetricsServerUnaryInterceptor(),
+			interceptor.NewLogUnaryServerInterceptor(),
 			accesslog.UnaryAccessLogInterceptor,
 			proxy.GrpcAuthInterceptor(proxy.AuthenticationInterceptor),
 			proxy.DatabaseInterceptor(),
 			proxy.UnaryServerHookInterceptor(),
 			proxy.UnaryServerInterceptor(proxy.PrivilegeInterceptor),
-			logutil.UnaryTraceLoggerInterceptor,
 			proxy.RateLimitInterceptor(limiter),
 			accesslog.UnaryUpdateAccessInfoInterceptor,
 			proxy.TraceLogInterceptor,
@@ -352,8 +353,10 @@ func (s *Server) startInternalGrpc(errChan chan error) {
 		grpc.MaxRecvMsgSize(Params.ServerMaxRecvSize.GetAsInt()),
 		grpc.MaxSendMsgSize(Params.ServerMaxSendSize.GetAsInt()),
 		grpc.UnaryInterceptor(grpc_middleware.ChainUnaryServer(
+			interceptor.NewMilvusContextUnaryServerInterceptor(),
+			interceptor.NewMetricsServerUnaryInterceptor(),
+			interceptor.NewLogUnaryServerInterceptor(),
 			otelgrpc.UnaryServerInterceptor(opts...),
-			logutil.UnaryTraceLoggerInterceptor,
 			interceptor.ClusterValidationUnaryServerInterceptor(),
 			interceptor.ServerIDValidationUnaryServerInterceptor(func() int64 {
 				if s.serverID.Load() == 0 {
@@ -363,6 +366,9 @@ func (s *Server) startInternalGrpc(errChan chan error) {
 			}),
 		)),
 		grpc.StreamInterceptor(grpc_middleware.ChainStreamServer(
+			interceptor.NewMilvusContextStreamServerInterceptor(),
+			interceptor.NewMetricsStreamServerInterceptor(),
+			interceptor.NewLogStreamServerInterceptor(),
 			interceptor.ClusterValidationStreamServerInterceptor(),
 			interceptor.ServerIDValidationStreamServerInterceptor(func() int64 {
 				if s.serverID.Load() == 0 {
@@ -384,7 +390,6 @@ func (s *Server) startInternalGrpc(errChan chan error) {
 	log.Info("create Proxy internal grpc server",
 		zap.Any("enforcement policy", kaep),
 		zap.Any("server parameters", kasp))
-
 	if err := s.grpcInternalServer.Serve(s.listenerManager.InternalGrpcListener()); err != nil {
 		log.Error("failed to internal serve on Proxy's listener", zap.Error(err))
 		errChan <- err
