@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
+	"github.com/milvus-io/milvus/pkg/v2/util/mcontext"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -41,14 +42,14 @@ func TestServerIDInterceptor(t *testing.T) {
 			incomingContext = ctx
 			return nil
 		}
-		interceptor := ServerIDInjectionUnaryClientInterceptor(serverID)
+		interceptor := NewMilvusContextUnaryClientInterceptor()
 		ctx := metadata.NewOutgoingContext(context.Background(), metadata.New(make(map[string]string)))
 		err := interceptor(ctx, method, req, nil, nil, invoker)
 		assert.NoError(t, err)
 
 		md, ok := metadata.FromOutgoingContext(incomingContext)
 		assert.True(t, ok)
-		assert.Equal(t, fmt.Sprint(serverID), md.Get(ServerIDKey)[0])
+		assert.Equal(t, fmt.Sprint(serverID), md.Get(mcontext.DestinationServerIDKey)[0])
 	})
 
 	t.Run("test ServerIDInjectionStreamClientInterceptor", func(t *testing.T) {
@@ -60,14 +61,14 @@ func TestServerIDInterceptor(t *testing.T) {
 			incomingContext = ctx
 			return nil, nil
 		}
-		interceptor := ServerIDInjectionStreamClientInterceptor(serverID)
+		interceptor := NewMilvusContextStreamClientInterceptor()
 		ctx := metadata.NewOutgoingContext(context.Background(), metadata.New(make(map[string]string)))
 		_, err := interceptor(ctx, nil, nil, method, streamer)
 		assert.NoError(t, err)
 
 		md, ok := metadata.FromOutgoingContext(incomingContext)
 		assert.True(t, ok)
-		assert.Equal(t, fmt.Sprint(serverID), md.Get(ServerIDKey)[0])
+		assert.Equal(t, fmt.Sprint(serverID), md.Get(mcontext.DestinationServerIDKey)[0])
 	})
 
 	t.Run("test ServerIDValidationUnaryServerInterceptor", func(t *testing.T) {
@@ -78,7 +79,7 @@ func TestServerIDInterceptor(t *testing.T) {
 			return nil, nil
 		}
 		serverInfo := &grpc.UnaryServerInfo{FullMethod: method}
-		interceptor := ServerIDValidationUnaryServerInterceptor(paramtable.GetNodeID)
+		interceptor := NewMilvusContextUnaryServerInterceptor()
 
 		// no md in context
 		_, err := interceptor(context.Background(), req, serverInfo, handler)
@@ -90,19 +91,19 @@ func TestServerIDInterceptor(t *testing.T) {
 		assert.NoError(t, err)
 
 		// with invalid ServerID
-		md := metadata.Pairs(ServerIDKey, "@$#$%")
+		md := metadata.Pairs(mcontext.DestinationServerIDKey, "@$#$%")
 		ctx = metadata.NewIncomingContext(context.Background(), md)
 		_, err = interceptor(ctx, req, serverInfo, handler)
 		assert.NoError(t, err)
 
 		// with mismatch ServerID
-		md = metadata.Pairs(ServerIDKey, "1234")
+		md = metadata.Pairs(mcontext.DestinationServerIDKey, "1234")
 		ctx = metadata.NewIncomingContext(context.Background(), md)
 		_, err = interceptor(ctx, req, serverInfo, handler)
 		assert.ErrorIs(t, err, merr.ErrNodeNotMatch)
 
 		// with same ServerID
-		md = metadata.Pairs(ServerIDKey, fmt.Sprint(paramtable.GetNodeID()))
+		md = metadata.Pairs(mcontext.DestinationServerIDKey, fmt.Sprint(paramtable.GetNodeID()))
 		ctx = metadata.NewIncomingContext(context.Background(), md)
 		_, err = interceptor(ctx, req, serverInfo, handler)
 		assert.NoError(t, err)
@@ -112,7 +113,7 @@ func TestServerIDInterceptor(t *testing.T) {
 		handler := func(srv interface{}, stream grpc.ServerStream) error {
 			return nil
 		}
-		interceptor := ServerIDValidationStreamServerInterceptor(paramtable.GetNodeID)
+		interceptor := NewMilvusContextStreamServerInterceptor()
 
 		// no md in context
 		err := interceptor(nil, newMockSS(context.Background()), nil, handler)
@@ -124,19 +125,19 @@ func TestServerIDInterceptor(t *testing.T) {
 		assert.NoError(t, err)
 
 		// with invalid ServerID
-		md := metadata.Pairs(ServerIDKey, "@$#$%")
+		md := metadata.Pairs(mcontext.DestinationServerIDKey, "@$#$%")
 		ctx = metadata.NewIncomingContext(context.Background(), md)
 		err = interceptor(nil, newMockSS(ctx), nil, handler)
 		assert.NoError(t, err)
 
 		// with mismatch ServerID
-		md = metadata.Pairs(ServerIDKey, "1234")
+		md = metadata.Pairs(mcontext.DestinationServerIDKey, "1234")
 		ctx = metadata.NewIncomingContext(context.Background(), md)
 		err = interceptor(nil, newMockSS(ctx), nil, handler)
 		assert.ErrorIs(t, err, merr.ErrNodeNotMatch)
 
 		// with same ServerID
-		md = metadata.Pairs(ServerIDKey, fmt.Sprint(paramtable.GetNodeID()))
+		md = metadata.Pairs(mcontext.DestinationServerIDKey, fmt.Sprint(paramtable.GetNodeID()))
 		ctx = metadata.NewIncomingContext(context.Background(), md)
 		err = interceptor(nil, newMockSS(ctx), nil, handler)
 		assert.NoError(t, err)
