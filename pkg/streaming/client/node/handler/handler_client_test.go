@@ -9,15 +9,16 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/milvus-io/milvus/pkg/v2/mocks/proto/mock_streamingpb"
-	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/node/client/handler/mock_assignment"
-	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/node/client/handler/mock_consumer"
-	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/node/client/handler/mock_producer"
+	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/client/node/handler/mock_assignment"
+	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/client/node/handler/mock_consumer"
+	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/client/node/handler/mock_producer"
 	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/util/mock_types"
 	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/util/service/mock_lazygrpc"
 	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/util/service/mock_resolver"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/consumer"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/producer"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/internal/util"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler/consumer"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler/producer"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message/adaptor"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/status"
@@ -135,7 +136,7 @@ func TestDial(t *testing.T) {
 			return context.Canceled
 		},
 	)
-	handler := NewHandlerClient(w)
+	handler := NewHandlerClient(w, &util.Config{})
 	assert.NotNil(t, handler)
 	time.Sleep(100 * time.Millisecond)
 	handler.Close()

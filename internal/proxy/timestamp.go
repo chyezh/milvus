@@ -28,7 +28,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 )
 
@@ -61,7 +61,7 @@ func (ta *timestampAllocator) alloc(ctx context.Context, count uint32) ([]Timest
 
 	resp, err := ta.tso.AllocTimestamp(ctx, req)
 	defer func() {
-		metrics.ProxyApplyTimestampLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10)).Observe(float64(tr.ElapseSpan().Milliseconds()))
+		metrics.ProxyApplyTimestampLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10)).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	}()
 
 	if err != nil {

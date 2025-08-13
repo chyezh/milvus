@@ -46,6 +46,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/parameterutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -1551,7 +1552,7 @@ func CheckLimiter(ctx context.Context, req interface{}, pxy types.ProxyComponent
 		return nil, err
 	}
 	err = limiter.Check(dbID, collectionIDToPartIDs, rt, n)
-	nodeID := strconv.FormatInt(paramtable.GetNodeID(), 10)
+	nodeID := strconv.FormatInt(menv.GetNodeID(), 10)
 	metrics.ProxyRateLimitReqCount.WithLabelValues(nodeID, rt.String(), metrics.TotalLabel).Inc()
 	if err != nil {
 		metrics.ProxyRateLimitReqCount.WithLabelValues(nodeID, rt.String(), metrics.FailLabel).Inc()
@@ -1696,11 +1697,11 @@ func getElementTypeParams(param interface{}) (string, error) {
 func MetricsHandlerFunc(c *gin.Context) {
 	path := c.Request.URL.Path
 	metrics.RestfulFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10), path,
+		strconv.FormatInt(menv.GetNodeID(), 10), path,
 	).Inc()
 	if c.Request.ContentLength >= 0 {
 		metrics.RestfulReceiveBytes.WithLabelValues(
-			strconv.FormatInt(paramtable.GetNodeID(), 10), path,
+			strconv.FormatInt(menv.GetNodeID(), 10), path,
 		).Add(float64(c.Request.ContentLength))
 	}
 	start := time.Now()
@@ -1710,14 +1711,14 @@ func MetricsHandlerFunc(c *gin.Context) {
 
 	latency := time.Since(start)
 	metrics.RestfulReqLatency.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10), path,
+		strconv.FormatInt(menv.GetNodeID(), 10), path,
 	).Observe(float64(latency.Milliseconds()))
 
 	// see https://github.com/milvus-io/milvus/issues/35767, counter cannot add negative value
 	// when response is not written(say timeout/network broken), panicking may happen if not check
 	if size := c.Writer.Size(); size > 0 {
 		metrics.RestfulSendBytes.WithLabelValues(
-			strconv.FormatInt(paramtable.GetNodeID(), 10), path,
+			strconv.FormatInt(menv.GetNodeID(), 10), path,
 		).Add(float64(c.Writer.Size()))
 	}
 }

@@ -3,6 +3,7 @@ package streamingutil
 import (
 	"github.com/cockroachdb/errors"
 
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -24,7 +25,7 @@ type walEnable struct {
 
 // MustSelectWALName select wal name.
 func MustSelectWALName() string {
-	standalone := paramtable.GetRole() == typeutil.StandaloneRole
+	standalone := menv.GetRole() == typeutil.StandaloneRole
 	params := paramtable.Get()
 	return mustSelectWALName(standalone, params.MQCfg.Type.GetValue(), walEnable{
 		params.RocksmqEnable(),

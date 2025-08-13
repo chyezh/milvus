@@ -45,6 +45,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/expr"
 	"github.com/milvus-io/milvus/pkg/v2/util/lifetime"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/sessionutil"
@@ -180,7 +181,7 @@ func (node *DataNode) GetNodeID() int64 {
 	if node.session != nil {
 		return node.session.ServerID
 	}
-	return paramtable.GetNodeID()
+	return menv.GetNodeID()
 }
 
 func (node *DataNode) Init() error {

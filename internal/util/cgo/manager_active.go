@@ -7,7 +7,7 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 )
 
 const (
@@ -24,7 +24,7 @@ var (
 // initCGO initializes the cgo caller and future manager.
 func initCGO() {
 	initOnce.Do(func() {
-		nodeID := paramtable.GetStringNodeID()
+		nodeID := menv.GetStringNodeID()
 		initCaller(nodeID)
 		initExecutor()
 		futureManager = newActiveFutureManager(nodeID)

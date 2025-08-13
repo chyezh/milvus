@@ -60,6 +60,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/expr"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/sessionutil"
@@ -369,7 +370,7 @@ func (s *Server) initQueryCoord() error {
 	// Init load status cache
 	meta.GlobalFailedLoadCache = meta.NewFailedLoadCache()
 
-	log.Info("init querycoord done", zap.Int64("nodeID", paramtable.GetNodeID()), zap.String("Address", s.address))
+	log.Info("init querycoord done", zap.Int64("nodeID", menv.GetNodeID()), zap.String("Address", s.address))
 	return err
 }
 
@@ -651,7 +652,7 @@ func (s *Server) watchNodes(revision int64) {
 		case event, ok := <-eventChan:
 			if !ok {
 				// ErrCompacted is handled inside SessionWatcher
-				log.Warn("Session Watcher channel closed", zap.Int64("serverID", paramtable.GetNodeID()))
+				log.Warn("Session Watcher channel closed", zap.Int64("serverID", menv.GetNodeID()))
 				go s.Stop()
 				if s.session.IsTriggerKill() {
 					if p, err := os.FindProcess(os.Getpid()); err == nil {

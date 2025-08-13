@@ -46,6 +46,7 @@ import (
 	streaming "github.com/milvus-io/milvus/pkg/v2/streaming/client"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/lifetime"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -450,7 +451,7 @@ func (s *DelegatorSuite) initSegments() {
 
 func (s *DelegatorSuite) TestSearch() {
 	s.delegator.Start()
-	paramtable.SetNodeID(1)
+	menv.SetNodeID(1)
 	s.initSegments()
 	s.Run("normal", func() {
 		defer func() {
@@ -671,7 +672,7 @@ func (s *DelegatorSuite) TestSearch() {
 
 func (s *DelegatorSuite) TestQuery() {
 	s.delegator.Start()
-	paramtable.SetNodeID(1)
+	menv.SetNodeID(1)
 	s.initSegments()
 	s.Run("normal", func() {
 		defer func() {
@@ -856,7 +857,7 @@ func (s *DelegatorSuite) TestQuery() {
 
 func (s *DelegatorSuite) TestQueryStream() {
 	s.delegator.Start()
-	paramtable.SetNodeID(1)
+	menv.SetNodeID(1)
 	s.initSegments()
 
 	s.Run("normal", func() {
@@ -1144,7 +1145,7 @@ func (s *DelegatorSuite) TestGetStats() {
 	// 1 => sealed segment 1000, 1001
 	// 1 => growing segment 1004
 	// 2 => sealed segment 1002, 1003
-	paramtable.SetNodeID(1)
+	menv.SetNodeID(1)
 	s.initSegments()
 
 	s.Run("normal", func() {
@@ -1312,7 +1313,7 @@ func (s *DelegatorSuite) TestGetStats() {
 
 func (s *DelegatorSuite) TestUpdateSchema() {
 	s.delegator.Start()
-	paramtable.SetNodeID(1)
+	menv.SetNodeID(1)
 	s.initSegments()
 
 	s.Run("normal", func() {

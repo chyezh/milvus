@@ -13,6 +13,7 @@ import (
 
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -25,7 +26,7 @@ func exitWhenStopTimeout(stop func() error, timeout time.Duration) error {
 		start := time.Now()
 		dumpPprof()
 		log.Info("stop progress timeout, force exit",
-			zap.String("component", paramtable.GetRole()),
+			zap.String("component", menv.GetRole()),
 			zap.Duration("cost", time.Since(start)),
 			zap.Error(err))
 		os.Exit(1)
@@ -82,7 +83,7 @@ func dumpPprof() {
 	baseFilePath := filepath.Join(
 		pprofDir,
 		fmt.Sprintf("%s_pprof_%s",
-			paramtable.GetRole(),
+			menv.GetRole(),
 			time.Now().Format("20060102_150405"),
 		),
 	)

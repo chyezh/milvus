@@ -27,7 +27,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
 )
 
@@ -35,7 +35,7 @@ func MergeMetaSegmentIntoSegmentInfo(info *querypb.SegmentInfo, segments ...*met
 	first := segments[0]
 	if info.GetSegmentID() == 0 {
 		*info = querypb.SegmentInfo{
-			NodeID:       paramtable.GetNodeID(),
+			NodeID:       menv.GetNodeID(),
 			SegmentID:    first.GetID(),
 			CollectionID: first.GetCollectionID(),
 			PartitionID:  first.GetPartitionID(),

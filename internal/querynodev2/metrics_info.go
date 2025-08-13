@@ -34,6 +34,7 @@ import (
 	streaming "github.com/milvus-io/milvus/pkg/v2/streaming/client"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/ratelimitutil"
@@ -291,8 +292,8 @@ func getSystemInfoMetrics(ctx context.Context, req *milvuspb.GetMetricsRequest, 
 			Name:          metricsinfo.ConstructComponentName(typeutil.QueryNodeRole, node.GetNodeID()),
 			HardwareInfos: hardwareInfos,
 			SystemInfo:    metricsinfo.DeployMetrics{},
-			CreatedTime:   paramtable.GetCreateTime().String(),
-			UpdatedTime:   paramtable.GetUpdateTime().String(),
+			CreatedTime:   menv.GetCreateTime().String(),
+			UpdatedTime:   menv.GetUpdateTime().String(),
 			Type:          typeutil.QueryNodeRole,
 			ID:            node.session.ServerID,
 		},

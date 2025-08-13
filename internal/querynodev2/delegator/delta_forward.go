@@ -39,6 +39,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
@@ -222,7 +223,7 @@ func (sd *shardDelegator) forwardStreamingByBF(ctx context.Context, deleteData [
 			worker, err := sd.workerManager.GetWorker(ctx, entry.NodeID)
 			if err != nil {
 				log.Warn("failed to get worker",
-					zap.Int64("nodeID", paramtable.GetNodeID()),
+					zap.Int64("nodeID", menv.GetNodeID()),
 					zap.Error(err),
 				)
 				// skip if node down
@@ -238,16 +239,16 @@ func (sd *shardDelegator) forwardStreamingByBF(ctx context.Context, deleteData [
 	}
 	if len(growing) > 0 {
 		eg.Go(func() error {
-			worker, err := sd.workerManager.GetWorker(ctx, paramtable.GetNodeID())
+			worker, err := sd.workerManager.GetWorker(ctx, menv.GetNodeID())
 			if err != nil {
 				log.Error("failed to get worker(local)",
-					zap.Int64("nodeID", paramtable.GetNodeID()),
+					zap.Int64("nodeID", menv.GetNodeID()),
 					zap.Error(err),
 				)
 				// panic here, local worker shall not have error
 				panic(err)
 			}
-			offlineSegments.Upsert(sd.applyDelete(ctx, paramtable.GetNodeID(), worker, func(segmentID int64) (DeleteData, bool) {
+			offlineSegments.Upsert(sd.applyDelete(ctx, menv.GetNodeID(), worker, func(segmentID int64) (DeleteData, bool) {
 				data, ok := delRecords[segmentID]
 				return data, ok
 			}, growing, querypb.DataScope_Streaming)...)
@@ -265,8 +266,8 @@ func (sd *shardDelegator) forwardStreamingByBF(ctx context.Context, deleteData [
 		sd.markSegmentOffline(offlineSegIDs...)
 	}
 
-	metrics.QueryNodeApplyBFCost.WithLabelValues("ProcessDelete", fmt.Sprint(paramtable.GetNodeID())).Observe(float64(bfCost.Milliseconds()))
-	metrics.QueryNodeForwardDeleteCost.WithLabelValues("ProcessDelete", fmt.Sprint(paramtable.GetNodeID())).Observe(float64(forwardDeleteCost.Milliseconds()))
+	metrics.QueryNodeApplyBFCost.WithLabelValues("ProcessDelete", fmt.Sprint(menv.GetNodeID())).Observe(float64(bfCost.Milliseconds()))
+	metrics.QueryNodeForwardDeleteCost.WithLabelValues("ProcessDelete", fmt.Sprint(menv.GetNodeID())).Observe(float64(forwardDeleteCost.Milliseconds()))
 }
 
 func (sd *shardDelegator) forwardStreamingDirect(ctx context.Context, deleteData []*DeleteData) {
@@ -316,17 +317,17 @@ func (sd *shardDelegator) forwardStreamingDirect(ctx context.Context, deleteData
 			}
 
 			if len(growing) > 0 {
-				worker, err := sd.workerManager.GetWorker(ctx, paramtable.GetNodeID())
+				worker, err := sd.workerManager.GetWorker(ctx, menv.GetNodeID())
 				if err != nil {
 					log.Error("failed to get worker(local)",
-						zap.Int64("nodeID", paramtable.GetNodeID()),
+						zap.Int64("nodeID", menv.GetNodeID()),
 						zap.Error(err),
 					)
 					// panic here, local worker shall not have error
 					panic(err)
 				}
 				eg.Go(func() error {
-					offlineSegments.Upsert(sd.applyDeleteBatch(ctx, paramtable.GetNodeID(), worker, group, growing, querypb.DataScope_Streaming)...)
+					offlineSegments.Upsert(sd.applyDeleteBatch(ctx, menv.GetNodeID(), worker, group, growing, querypb.DataScope_Streaming)...)
 					return nil
 				})
 			}
@@ -343,7 +344,7 @@ func (sd *shardDelegator) forwardStreamingDirect(ctx context.Context, deleteData
 		sd.markSegmentOffline(offlineSegIDs...)
 	}
 
-	metrics.QueryNodeForwardDeleteCost.WithLabelValues("ProcessDelete", fmt.Sprint(paramtable.GetNodeID())).Observe(float64(forwardDeleteCost.Milliseconds()))
+	metrics.QueryNodeForwardDeleteCost.WithLabelValues("ProcessDelete", fmt.Sprint(menv.GetNodeID())).Observe(float64(forwardDeleteCost.Milliseconds()))
 }
 
 // applyDeleteBatch handles delete record and apply them to corresponding workers in batch.

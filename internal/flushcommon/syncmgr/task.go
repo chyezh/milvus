@@ -35,8 +35,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
@@ -102,9 +102,9 @@ func (t *SyncTask) HandleError(err error) {
 		t.failureCallback(err)
 	}
 
-	metrics.DataNodeFlushBufferCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.FailLabel, t.level.String()).Inc()
+	metrics.DataNodeFlushBufferCount.WithLabelValues(fmt.Sprint(menv.GetNodeID()), metrics.FailLabel, t.level.String()).Inc()
 	if !t.pack.isFlush {
-		metrics.DataNodeAutoFlushBufferCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.FailLabel, t.level.String()).Inc()
+		metrics.DataNodeAutoFlushBufferCount.WithLabelValues(fmt.Sprint(menv.GetNodeID()), metrics.FailLabel, t.level.String()).Inc()
 	}
 }
 
@@ -156,13 +156,13 @@ func (t *SyncTask) Run(ctx context.Context) (err error) {
 		}
 		return count
 	}
-	metrics.DataNodeWriteDataCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), t.dataSource, metrics.InsertLabel, fmt.Sprint(t.collectionID)).Add(float64(t.batchRows))
-	metrics.DataNodeWriteDataCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), t.dataSource, metrics.DeleteLabel, fmt.Sprint(t.collectionID)).Add(float64(getDataCount(t.deltaBinlog)))
-	metrics.DataNodeFlushedSize.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), t.dataSource, t.level.String()).Add(float64(t.flushedSize))
+	metrics.DataNodeWriteDataCount.WithLabelValues(fmt.Sprint(menv.GetNodeID()), t.dataSource, metrics.InsertLabel, fmt.Sprint(t.collectionID)).Add(float64(t.batchRows))
+	metrics.DataNodeWriteDataCount.WithLabelValues(fmt.Sprint(menv.GetNodeID()), t.dataSource, metrics.DeleteLabel, fmt.Sprint(t.collectionID)).Add(float64(getDataCount(t.deltaBinlog)))
+	metrics.DataNodeFlushedSize.WithLabelValues(fmt.Sprint(menv.GetNodeID()), t.dataSource, t.level.String()).Add(float64(t.flushedSize))
 
-	metrics.DataNodeFlushedRows.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), t.dataSource).Add(float64(t.batchRows))
+	metrics.DataNodeFlushedRows.WithLabelValues(fmt.Sprint(menv.GetNodeID()), t.dataSource).Add(float64(t.batchRows))
 
-	metrics.DataNodeSave2StorageLatency.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), t.level.String()).Observe(float64(t.tr.RecordSpan().Milliseconds()))
+	metrics.DataNodeSave2StorageLatency.WithLabelValues(fmt.Sprint(menv.GetNodeID()), t.level.String()).Observe(float64(t.tr.RecordSpan().Milliseconds()))
 
 	if t.metaWriter != nil {
 		err = t.writeMeta(ctx)
@@ -189,9 +189,9 @@ func (t *SyncTask) Run(ctx context.Context) (err error) {
 	log.Info("task done", zap.Int64("flushedSize", t.flushedSize), zap.Duration("timeTaken", t.execTime))
 
 	if !t.pack.isFlush {
-		metrics.DataNodeAutoFlushBufferCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.SuccessLabel, t.level.String()).Inc()
+		metrics.DataNodeAutoFlushBufferCount.WithLabelValues(fmt.Sprint(menv.GetNodeID()), metrics.SuccessLabel, t.level.String()).Inc()
 	}
-	metrics.DataNodeFlushBufferCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.SuccessLabel, t.level.String()).Inc()
+	metrics.DataNodeFlushBufferCount.WithLabelValues(fmt.Sprint(menv.GetNodeID()), metrics.SuccessLabel, t.level.String()).Inc()
 
 	return nil
 }
@@ -239,6 +239,6 @@ func (t *SyncTask) MarshalJSON() ([]byte, error) {
 		DeltaRowCount: deltaRowCount,
 		FlushSize:     t.flushedSize,
 		RunningTime:   t.execTime.String(),
-		NodeID:        paramtable.GetNodeID(),
+		NodeID:        menv.GetNodeID(),
 	})
 }

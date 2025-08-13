@@ -51,6 +51,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -1204,7 +1205,7 @@ func (node *QueryNode) GetMetrics(ctx context.Context, req *milvuspb.GetMetricsR
 
 	resp := &milvuspb.GetMetricsResponse{
 		Status:        merr.Success(),
-		ComponentName: metricsinfo.ConstructComponentName(typeutil.QueryNodeRole, paramtable.GetNodeID()),
+		ComponentName: metricsinfo.ConstructComponentName(typeutil.QueryNodeRole, menv.GetNodeID()),
 	}
 
 	ret, err := node.metricsRequest.ExecuteMetricsRequest(ctx, req)

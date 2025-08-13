@@ -53,6 +53,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/gc"
 	"github.com/milvus-io/milvus/pkg/v2/util/generic"
 	"github.com/milvus-io/milvus/pkg/v2/util/logutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	_ "github.com/milvus-io/milvus/pkg/v2/util/symbolizer" // support symbolizer and crash dump
@@ -230,8 +231,8 @@ func (mr *MilvusRoles) setupLogger() {
 			MaxBackups: params.LogCfg.MaxBackups.GetAsInt(),
 		},
 	}
-	id := paramtable.GetNodeID()
-	roleName := paramtable.GetRole()
+	id := menv.GetNodeID()
+	roleName := menv.GetRole()
 	rootPath := logConfig.File.RootPath
 	if rootPath != "" {
 		logConfig.File.Filename = fmt.Sprintf("%s-%d.log", roleName, id)
@@ -342,14 +343,14 @@ func (mr *MilvusRoles) Run() {
 				params.EtcdCfg.EtcdLogLevel.GetValue())
 			defer etcd.StopEtcdServer()
 		}
-		paramtable.SetRole(typeutil.StandaloneRole)
+		menv.SetRole(typeutil.StandaloneRole)
 		defer stopRocksmqIfUsed()
 	} else {
 		if err := os.Setenv(metricsinfo.DeployModeEnvKey, metricsinfo.ClusterDeployMode); err != nil {
 			log.Error("Failed to set deploy mode: ", zap.Error(err))
 		}
 		paramtable.Init()
-		paramtable.SetRole(mr.ServerType)
+		menv.SetRole(mr.ServerType)
 	}
 
 	internalmetrics.InitHolmes()
@@ -362,7 +363,14 @@ func (mr *MilvusRoles) Run() {
 
 	if mr.ServerType == typeutil.StandaloneRole || !mr.EnableDataNode {
 		// only datanode does not init streaming service
-		streaming.Init()
+		etcdcli, _ := kvfactory.GetEtcdAndPath()
+		cfg := &streaming.Config{
+			ETCDClient:      etcdcli,
+			RootPath:        paramtable.Get().EtcdCfg.MetaRootPath.GetValue(),
+			DialTimeout:     paramtable.Get().StreamingNodeGrpcClientCfg.DialTimeout.GetAsDuration(time.Millisecond),
+			GRPCRetryPolicy: map[string]interface{}{},
+		}
+		streaming.Init(etcdcli, streaming.OptClientRootPath(paramtable.Get().EtcdCfg.MetaRootPath.GetValue()))
 		defer streaming.Release()
 	}
 
@@ -407,32 +415,32 @@ func (mr *MilvusRoles) Run() {
 	var proxy, dataNode, queryNode, streamingNode component
 
 	if (mr.EnableRootCoord && mr.EnableDataCoord && mr.EnableQueryCoord) || mr.EnableMixCoord {
-		paramtable.SetLocalComponentEnabled(typeutil.MixCoordRole)
+		menv.SetLocalComponentEnabled(typeutil.MixCoordRole)
 		mixCoord = mr.runMixCoord(ctx, local, &wg)
 		componentMap[typeutil.MixCoordRole] = mixCoord
 	}
 
 	if mr.EnableQueryNode {
-		paramtable.SetLocalComponentEnabled(typeutil.QueryNodeRole)
+		menv.SetLocalComponentEnabled(typeutil.QueryNodeRole)
 		queryNode = mr.runQueryNode(ctx, local, &wg)
 		componentMap[typeutil.QueryNodeRole] = queryNode
 	}
 
 	if mr.EnableDataNode {
-		paramtable.SetLocalComponentEnabled(typeutil.DataNodeRole)
+		menv.SetLocalComponentEnabled(typeutil.DataNodeRole)
 		dataNode = mr.runDataNode(ctx, local, &wg)
 		componentMap[typeutil.DataNodeRole] = dataNode
 	}
 
 	if mr.EnableProxy {
-		paramtable.SetLocalComponentEnabled(typeutil.ProxyRole)
+		menv.SetLocalComponentEnabled(typeutil.ProxyRole)
 		proxy = mr.runProxy(ctx, local, &wg)
 		componentMap[typeutil.ProxyRole] = proxy
 	}
 
 	if mr.EnableStreamingNode {
 		// Before initializing the local streaming node, make sure the local registry is ready.
-		paramtable.SetLocalComponentEnabled(typeutil.StreamingNodeRole)
+		menv.SetLocalComponentEnabled(typeutil.StreamingNodeRole)
 		streamingNode = mr.runStreamingNode(ctx, local, &wg)
 		componentMap[typeutil.StreamingNodeRole] = streamingNode
 	}
@@ -484,14 +492,14 @@ func (mr *MilvusRoles) Run() {
 
 		tracer.NotifyTracerProviderUpdated()
 
-		if paramtable.GetRole() == typeutil.QueryNodeRole || paramtable.GetRole() == typeutil.StandaloneRole {
+		if menv.GetRole() == typeutil.QueryNodeRole || menv.GetRole() == typeutil.StandaloneRole {
 			initcore.ResetTraceConfig(params)
 			log.Info("Reset segcore tracer finished", zap.String("Exporter", params.TraceCfg.Exporter.GetValue()))
 		}
 	}))
 
-	paramtable.SetCreateTime(time.Now())
-	paramtable.SetUpdateTime(time.Now())
+	menv.SetCreateTime(time.Now())
+	menv.SetUpdateTime(time.Now())
 
 	<-mr.closed
 

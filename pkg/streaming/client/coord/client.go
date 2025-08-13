@@ -1,27 +1,25 @@
-package client
+package coord
 
 import (
 	"context"
-	"time"
 
-	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/milvus-io/milvus/pkg/v2/json"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/coord/client/assignment"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/coord/client/broadcast"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/coord/assignment"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/coord/broadcast"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/internal/util"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/service/balancer/picker"
 	streamingserviceinterceptor "github.com/milvus-io/milvus/pkg/v2/streaming/util/service/interceptor"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/service/lazygrpc"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/service/resolver"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/util/streamingutil"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/tracer"
 	"github.com/milvus-io/milvus/pkg/v2/util/interceptor"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/sessionutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -59,17 +57,20 @@ type Client interface {
 	Close()
 }
 
+type Config = util.Config
+
 // NewClient creates a new client.
-func NewClient(etcdCli *clientv3.Client, opts ...ClientOption) Client {
-	cfg := newConfig(opts...)
+func NewClient(cfg *Config) (Client, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 
 	// StreamingCoord is deployed on DataCoord node.
 	role := sessionutil.GetSessionPrefixByRoleWithRootPath(cfg.RootPath, typeutil.MixCoordRole)
-	rb := resolver.NewSessionExclusiveBuilder(etcdCli, role, ">=2.6.0-dev")
-	dialTimeout := paramtable.Get().StreamingCoordGrpcClientCfg.DialTimeout.GetAsDuration(time.Millisecond)
-	dialOptions := getDialOptions(rb)
+	rb := resolver.NewSessionExclusiveBuilder(cfg.ETCDClient, role, ">=2.6.0-dev")
+	dialOptions := getDialOptions(rb, cfg)
 	conn := lazygrpc.NewConn(func(ctx context.Context) (*grpc.ClientConn, error) {
-		ctx, cancel := context.WithTimeout(ctx, dialTimeout)
+		ctx, cancel := context.WithTimeout(ctx, cfg.DialTimeout)
 		defer cancel()
 		return grpc.DialContext(
 			ctx,
@@ -84,15 +85,16 @@ func NewClient(etcdCli *clientv3.Client, opts ...ClientOption) Client {
 		conn:              conn,
 		rb:                rb,
 		assignmentService: assignmentServiceImpl,
-		broadcastService:  broadcast.NewGRPCBroadcastService(streamingutil.MustSelectWALName(), broadcastService),
-	}
+		broadcastService:  broadcast.NewGRPCBroadcastService(cfg.WALName, broadcastService),
+	}, nil
 }
 
 // getDialOptions returns grpc dial options.
-func getDialOptions(rb resolver.Builder) []grpc.DialOption {
-	cfg := &paramtable.Get().StreamingCoordGrpcClientCfg
-	tlsCfg := &paramtable.Get().InternalTLSCfg
-	retryPolicy := cfg.GetDefaultRetryPolicy()
+func getDialOptions(rb resolver.Builder, cfg *Config) []grpc.DialOption {
+	retryPolicy := make(map[string]interface{}, len(cfg.GRPCRetryPolicy)+1)
+	for k, v := range cfg.GRPCRetryPolicy {
+		retryPolicy[k] = v
+	}
 	retryPolicy["retryableStatusCodes"] = []string{"UNAVAILABLE"}
 	defaultServiceConfig := map[string]interface{}{
 		"loadBalancingConfig": []map[string]interface{}{
@@ -112,27 +114,26 @@ func getDialOptions(rb resolver.Builder) []grpc.DialOption {
 	if err != nil {
 		panic(err)
 	}
-	creds, err := tlsCfg.GetClientCreds(context.Background())
-	if err != nil {
-		panic(err)
-	}
-	dialOptions := cfg.GetDialOptionsFromConfig()
+	dialOptions := make([]grpc.DialOption, 0, len(cfg.ExtraGRPCDialOptions)+10)
 	dialOptions = append(dialOptions,
 		grpc.WithBlock(),
 		grpc.WithResolvers(rb),
-		grpc.WithTransportCredentials(creds),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithChainUnaryInterceptor(
 			otelgrpc.UnaryClientInterceptor(tracer.GetInterceptorOpts()...),
-			interceptor.ClusterInjectionUnaryClientInterceptor(),
+			interceptor.ClusterInjectionUnaryClientInterceptor(cfg.ClusterPrefix),
 			streamingserviceinterceptor.NewStreamingServiceUnaryClientInterceptor(),
 		),
 		grpc.WithChainStreamInterceptor(
 			otelgrpc.StreamClientInterceptor(tracer.GetInterceptorOpts()...),
-			interceptor.ClusterInjectionStreamClientInterceptor(),
+			interceptor.ClusterInjectionStreamClientInterceptor(cfg.ClusterPrefix),
 			streamingserviceinterceptor.NewStreamingServiceStreamClientInterceptor(),
 		),
 		grpc.WithReturnConnectionError(),
 		grpc.WithDefaultServiceConfig(string(defaultServiceConfigJSON)),
 	)
+	for _, opt := range cfg.ExtraGRPCDialOptions {
+		dialOptions = append(dialOptions, opt)
+	}
 	return dialOptions
 }

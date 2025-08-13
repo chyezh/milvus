@@ -47,6 +47,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/lock"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metautil"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
@@ -298,7 +299,7 @@ func (m *meta) reloadFromKV(ctx context.Context, broker broker.Broker) error {
 		if pos.Timestamp != math.MaxUint64 {
 			// Should not be set as metric since it's a tombstone value.
 			ts, _ := tsoutil.ParseTS(pos.Timestamp)
-			metrics.DataCoordCheckpointUnixSeconds.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), vChannel).
+			metrics.DataCoordCheckpointUnixSeconds.WithLabelValues(fmt.Sprint(menv.GetNodeID()), vChannel).
 				Set(float64(ts.Unix()))
 		}
 	}
@@ -1910,7 +1911,7 @@ func (m *meta) UpdateChannelCheckpoint(ctx context.Context, vChannel string, pos
 			zap.Uint64("ts", pos.GetTimestamp()),
 			zap.ByteString("msgID", pos.GetMsgID()),
 			zap.Time("time", ts))
-		metrics.DataCoordCheckpointUnixSeconds.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), vChannel).
+		metrics.DataCoordCheckpointUnixSeconds.WithLabelValues(fmt.Sprint(menv.GetNodeID()), vChannel).
 			Set(float64(ts.Unix()))
 	}
 	return nil
@@ -1934,7 +1935,7 @@ func (m *meta) MarkChannelCheckpointDropped(ctx context.Context, channel string)
 
 	m.channelCPs.checkpoints[channel] = cp
 
-	metrics.DataCoordCheckpointUnixSeconds.DeleteLabelValues(fmt.Sprint(paramtable.GetNodeID()), channel)
+	metrics.DataCoordCheckpointUnixSeconds.DeleteLabelValues(fmt.Sprint(menv.GetNodeID()), channel)
 	return nil
 }
 
@@ -1963,7 +1964,7 @@ func (m *meta) UpdateChannelCheckpoints(ctx context.Context, positions []*msgpb.
 			zap.Uint64("ts", pos.GetTimestamp()),
 			zap.Time("time", tsoutil.PhysicalTime(pos.GetTimestamp())))
 		ts, _ := tsoutil.ParseTS(pos.Timestamp)
-		metrics.DataCoordCheckpointUnixSeconds.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), channel).Set(float64(ts.Unix()))
+		metrics.DataCoordCheckpointUnixSeconds.WithLabelValues(fmt.Sprint(menv.GetNodeID()), channel).Set(float64(ts.Unix()))
 	}
 	return nil
 }
@@ -1986,7 +1987,7 @@ func (m *meta) DropChannelCheckpoint(vChannel string) error {
 		return err
 	}
 	delete(m.channelCPs.checkpoints, vChannel)
-	metrics.DataCoordCheckpointUnixSeconds.DeleteLabelValues(fmt.Sprint(paramtable.GetNodeID()), vChannel)
+	metrics.DataCoordCheckpointUnixSeconds.DeleteLabelValues(fmt.Sprint(menv.GetNodeID()), vChannel)
 	log.Ctx(context.TODO()).Info("DropChannelCheckpoint done", zap.String("vChannel", vChannel))
 	return nil
 }
@@ -2287,7 +2288,7 @@ func (m *meta) getSegmentsMetrics(collectionID int64) []*metricsinfo.Segment {
 				IsImporting:  s.IsImporting,
 				Compacted:    s.Compacted,
 				IsSorted:     s.IsSorted,
-				NodeID:       paramtable.GetNodeID(),
+				NodeID:       menv.GetNodeID(),
 			})
 		}
 	}

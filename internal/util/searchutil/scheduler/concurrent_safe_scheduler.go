@@ -12,6 +12,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/lifetime"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -68,7 +69,7 @@ func (s *scheduler) Add(task Task) (err error) {
 	errCh := make(chan error, 1)
 
 	// TODO: add operation should be fast, is UnsolveLen metric unnesscery?
-	metrics.QueryNodeReadTaskUnsolveLen.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Inc()
+	metrics.QueryNodeReadTaskUnsolveLen.WithLabelValues(fmt.Sprint(menv.GetNodeID())).Inc()
 
 	// start a new in queue span and send task to add chan
 	s.receiveChan <- addTaskReq{
@@ -77,7 +78,7 @@ func (s *scheduler) Add(task Task) (err error) {
 	}
 	err = <-errCh
 
-	metrics.QueryNodeReadTaskUnsolveLen.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Dec()
+	metrics.QueryNodeReadTaskUnsolveLen.WithLabelValues(fmt.Sprint(menv.GetNodeID())).Dec()
 	return
 }
 
@@ -237,13 +238,13 @@ func (s *scheduler) exec() {
 
 		s.getPool(t).Submit(func() (any, error) {
 			// Update concurrency metric and notify task done.
-			metrics.QueryNodeReadTaskConcurrency.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Inc()
+			metrics.QueryNodeReadTaskConcurrency.WithLabelValues(fmt.Sprint(menv.GetNodeID())).Inc()
 			collector.Counter.Inc(metricsinfo.ExecuteQueueType)
 
 			err := t.Execute()
 
 			// Update all metric after task finished.
-			metrics.QueryNodeReadTaskConcurrency.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Dec()
+			metrics.QueryNodeReadTaskConcurrency.WithLabelValues(fmt.Sprint(menv.GetNodeID())).Dec()
 			collector.Counter.Dec(metricsinfo.ExecuteQueueType)
 
 			// Notify task done.
@@ -285,7 +286,7 @@ func (s *scheduler) setupReadyLenMetric() {
 	// Update the ReadyQueue counter for quota.
 	collector.Counter.Set(metricsinfo.ReadyQueueType, waitingTaskCount)
 	// Record the waiting task length of policy as ready task metric.
-	metrics.QueryNodeReadTaskReadyLen.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Set(float64(waitingTaskCount))
+	metrics.QueryNodeReadTaskReadyLen.WithLabelValues(fmt.Sprint(menv.GetNodeID())).Set(float64(waitingTaskCount))
 }
 
 // scheduler counter implement, concurrent safe.

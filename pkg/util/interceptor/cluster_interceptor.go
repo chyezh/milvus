@@ -71,17 +71,17 @@ func ClusterValidationStreamServerInterceptor() grpc.StreamServerInterceptor {
 }
 
 // ClusterInjectionUnaryClientInterceptor returns a new unary client interceptor that injects `cluster` into outgoing context.
-func ClusterInjectionUnaryClientInterceptor() grpc.UnaryClientInterceptor {
+func ClusterInjectionUnaryClientInterceptor(clusterKey string) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		ctx = metadata.AppendToOutgoingContext(ctx, ClusterKey, paramtable.Get().CommonCfg.ClusterPrefix.GetValue())
+		ctx = metadata.AppendToOutgoingContext(ctx, ClusterKey, clusterKey)
 		return invoker(ctx, method, req, reply, cc, opts...)
 	}
 }
 
 // ClusterInjectionStreamClientInterceptor returns a new streaming client interceptor that injects `cluster` into outgoing context.
-func ClusterInjectionStreamClientInterceptor() grpc.StreamClientInterceptor {
+func ClusterInjectionStreamClientInterceptor(clusterKey string) grpc.StreamClientInterceptor {
 	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
-		ctx = metadata.AppendToOutgoingContext(ctx, ClusterKey, paramtable.Get().CommonCfg.ClusterPrefix.GetValue())
+		ctx = metadata.AppendToOutgoingContext(ctx, ClusterKey, clusterKey)
 		return streamer(ctx, desc, cc, method, opts...)
 	}
 }

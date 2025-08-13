@@ -15,6 +15,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/wal"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -70,7 +71,7 @@ func sendFirstTimeTick(ctx context.Context, underlyingWALImpls walimpls.WALImpls
 	backoffTimer.EnableBackoff()
 
 	var lastErr error
-	sourceID := paramtable.GetNodeID()
+	sourceID := menv.GetNodeID()
 	// Send first timetick message to wal before interceptor is ready.
 	for count := 0; ; count++ {
 		if count > 0 {

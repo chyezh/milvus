@@ -30,6 +30,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/hook"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -181,7 +182,7 @@ func initCipher() error {
 	}
 
 	initConfigs := paramtable.Get().EtcdCfg.GetAll()
-	initConfigs[CipherConfigMilvusRoleName] = paramtable.GetRole()
+	initConfigs[CipherConfigMilvusRoleName] = menv.GetRole()
 	if err = cipherVal.Init(initConfigs); err != nil {
 		return fmt.Errorf("fail to init configs for the cipher plugin, error: %s", err.Error())
 	}

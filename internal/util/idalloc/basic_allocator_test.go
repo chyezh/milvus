@@ -14,6 +14,7 @@ import (
 	"github.com/milvus-io/milvus/internal/mocks"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
@@ -62,7 +63,7 @@ func TestLocalAllocator(t *testing.T) {
 
 func TestRemoteTSOAllocator(t *testing.T) {
 	paramtable.Init()
-	paramtable.SetNodeID(1)
+	menv.SetNodeID(1)
 
 	client := NewMockRootCoordClient(t)
 	f := syncutil.NewFuture[types.MixCoordClient]()
@@ -108,7 +109,7 @@ func TestRemoteTSOAllocator(t *testing.T) {
 
 func TestRemoteIDAllocator(t *testing.T) {
 	paramtable.Init()
-	paramtable.SetNodeID(1)
+	menv.SetNodeID(1)
 
 	client := NewMockRootCoordClient(t)
 	f := syncutil.NewFuture[types.MixCoordClient]()

@@ -10,7 +10,9 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
+	kvfactory "github.com/milvus-io/milvus/pkg/v2/dependency/kv"
 	streaming "github.com/milvus-io/milvus/pkg/v2/streaming/client"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/internal/util"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message/adaptor"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"
@@ -36,7 +38,11 @@ func TestMain(m *testing.M) {
 func TestStreamingBroadcast(t *testing.T) {
 	t.Skip("cat not running without streaming service at background")
 	streamingutil.SetStreamingServiceEnabled()
-	streaming.Init()
+	c, _ := kvfactory.GetEtcdAndPath()
+	streaming.Init(&util.Config{
+		ETCDClient: c,
+		RootPath:   paramtable.Get().EtcdCfg.MetaRootPath.GetValue(),
+	})
 	defer streaming.Release()
 
 	msg, _ := message.NewCreateCollectionMessageBuilderV1().
@@ -70,7 +76,11 @@ func TestStreamingBroadcast(t *testing.T) {
 func TestStreamingProduce(t *testing.T) {
 	t.Skip("cat not running without streaming service at background")
 	streamingutil.SetStreamingServiceEnabled()
-	streaming.Init()
+	c, _ := kvfactory.GetEtcdAndPath()
+	streaming.Init(&util.Config{
+		ETCDClient: c,
+		RootPath:   paramtable.Get().EtcdCfg.MetaRootPath.GetValue(),
+	})
 	defer streaming.Release()
 	msg, _ := message.NewCreateCollectionMessageBuilderV1().
 		WithHeader(&message.CreateCollectionMessageHeader{
@@ -151,7 +161,11 @@ func TestStreamingProduce(t *testing.T) {
 
 func TestStreamingConsume(t *testing.T) {
 	t.Skip("cat not running without streaming service at background")
-	streaming.Init()
+	c, _ := kvfactory.GetEtcdAndPath()
+	streaming.Init(&util.Config{
+		ETCDClient: c,
+		RootPath:   paramtable.Get().EtcdCfg.MetaRootPath.GetValue(),
+	})
 	defer streaming.Release()
 	ch := make(adaptor.ChanMessageHandler, 10)
 	s := streaming.WAL().Read(context.Background(), streaming.ReadOption{

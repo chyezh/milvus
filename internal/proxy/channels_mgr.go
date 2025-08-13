@@ -31,8 +31,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
 // channelsMgr manages the pchans, vchans and related message stream of collections.
@@ -165,13 +165,13 @@ func (mgr *singleTypeChannelsMgr) getVChannels(collectionID UniqueID) ([]vChan, 
 
 func incPChansMetrics(pchans []pChan) {
 	for _, pc := range pchans {
-		metrics.ProxyMsgStreamObjectsForPChan.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), pc).Inc()
+		metrics.ProxyMsgStreamObjectsForPChan.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), pc).Inc()
 	}
 }
 
 func decPChanMetrics(pchans []pChan) {
 	for _, pc := range pchans {
-		metrics.ProxyMsgStreamObjectsForPChan.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), pc).Dec()
+		metrics.ProxyMsgStreamObjectsForPChan.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), pc).Dec()
 	}
 }
 

@@ -15,8 +15,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -94,7 +94,7 @@ func (it *insertTask) OnEnqueue() error {
 		it.insertMsg.Base = commonpbutil.NewMsgBase()
 	}
 	it.insertMsg.Base.MsgType = commonpb.MsgType_Insert
-	it.insertMsg.Base.SourceID = paramtable.GetNodeID()
+	it.insertMsg.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -181,7 +181,7 @@ func (it *insertTask) PreExecute(ctx context.Context) error {
 	var rowIDEnd UniqueID
 	tr := timerecord.NewTimeRecorder("applyPK")
 	rowIDBegin, rowIDEnd, _ = it.idAllocator.Alloc(rowNums)
-	metrics.ProxyApplyPrimaryKeyLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10)).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyApplyPrimaryKeyLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10)).Observe(float64(tr.ElapseSpan().Milliseconds()))
 
 	it.insertMsg.RowIDs = make([]UniqueID, rowNums)
 	for i := rowIDBegin; i < rowIDEnd; i++ {

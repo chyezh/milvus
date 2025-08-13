@@ -4,7 +4,7 @@ import (
 	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer/channel"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
-	registry2 "github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/registry"
+	registry2 "github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler/registry"
 )
 
 func ResetEnvironment() {

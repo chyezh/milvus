@@ -13,8 +13,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
 type createDatabaseTask struct {
@@ -63,7 +63,7 @@ func (cdt *createDatabaseTask) OnEnqueue() error {
 		cdt.Base = commonpbutil.NewMsgBase()
 	}
 	cdt.Base.MsgType = commonpb.MsgType_CreateDatabase
-	cdt.Base.SourceID = paramtable.GetNodeID()
+	cdt.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -128,7 +128,7 @@ func (ddt *dropDatabaseTask) OnEnqueue() error {
 		ddt.Base = commonpbutil.NewMsgBase()
 	}
 	ddt.Base.MsgType = commonpb.MsgType_DropDatabase
-	ddt.Base.SourceID = paramtable.GetNodeID()
+	ddt.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -195,7 +195,7 @@ func (ldt *listDatabaseTask) SetTs(ts Timestamp) {
 func (ldt *listDatabaseTask) OnEnqueue() error {
 	ldt.Base = commonpbutil.NewMsgBase()
 	ldt.Base.MsgType = commonpb.MsgType_ListDatabases
-	ldt.Base.SourceID = paramtable.GetNodeID()
+	ldt.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -260,7 +260,7 @@ func (t *alterDatabaseTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_AlterDatabase
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -366,7 +366,7 @@ func (t *describeDatabaseTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_DescribeDatabase
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 

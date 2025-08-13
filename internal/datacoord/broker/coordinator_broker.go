@@ -29,6 +29,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -61,7 +62,7 @@ func (b *coordinatorBroker) DescribeCollectionInternal(ctx context.Context, coll
 	resp, err := b.mixCoord.DescribeCollectionInternal(ctx, &milvuspb.DescribeCollectionRequest{
 		Base: commonpbutil.NewMsgBase(
 			commonpbutil.WithMsgType(commonpb.MsgType_DescribeCollection),
-			commonpbutil.WithSourceID(paramtable.GetNodeID()),
+			commonpbutil.WithSourceID(menv.GetNodeID()),
 		),
 		// please do not specify the collection name alone after database feature.
 		CollectionID: collectionID,
@@ -82,7 +83,7 @@ func (b *coordinatorBroker) ShowPartitionsInternal(ctx context.Context, collecti
 	resp, err := b.mixCoord.ShowPartitionsInternal(ctx, &milvuspb.ShowPartitionsRequest{
 		Base: commonpbutil.NewMsgBase(
 			commonpbutil.WithMsgType(commonpb.MsgType_ShowPartitions),
-			commonpbutil.WithSourceID(paramtable.GetNodeID()),
+			commonpbutil.WithSourceID(menv.GetNodeID()),
 		),
 		// please do not specify the collection name alone after database feature.
 		CollectionID: collectionID,
@@ -158,7 +159,7 @@ func (b *coordinatorBroker) HasCollection(ctx context.Context, collectionID int6
 	resp, err := b.mixCoord.DescribeCollection(ctx, &milvuspb.DescribeCollectionRequest{
 		Base: commonpbutil.NewMsgBase(
 			commonpbutil.WithMsgType(commonpb.MsgType_DescribeCollection),
-			commonpbutil.WithSourceID(paramtable.GetNodeID()),
+			commonpbutil.WithSourceID(menv.GetNodeID()),
 		),
 		// please do not specify the collection name alone after database feature.
 		CollectionID: collectionID,

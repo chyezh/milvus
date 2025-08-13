@@ -25,6 +25,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -90,7 +91,7 @@ func getProxyMetrics(ctx context.Context, request *milvuspb.GetMetricsRequest, n
 		return nil, err
 	}
 	proxyMetricInfo := getProxyMetricInfo(ctx, node, quotaMetrics)
-	proxyRoleName := metricsinfo.ConstructComponentName(typeutil.ProxyRole, paramtable.GetNodeID())
+	proxyRoleName := metricsinfo.ConstructComponentName(typeutil.ProxyRole, menv.GetNodeID())
 
 	resp, err := metricsinfo.MarshalComponentInfos(proxyMetricInfo)
 	if err != nil {
@@ -131,15 +132,15 @@ func getProxyMetricInfo(ctx context.Context, node *Proxy, quotaMetrics *metricsi
 		quotaMetrics.Hms = hardwareMetrics
 	}
 
-	proxyRoleName := metricsinfo.ConstructComponentName(typeutil.ProxyRole, paramtable.GetNodeID())
+	proxyRoleName := metricsinfo.ConstructComponentName(typeutil.ProxyRole, menv.GetNodeID())
 	return &metricsinfo.ProxyInfos{
 		BaseComponentInfos: metricsinfo.BaseComponentInfos{
 			HasError:      false,
 			Name:          proxyRoleName,
 			HardwareInfos: hardwareMetrics,
 			SystemInfo:    metricsinfo.DeployMetrics{},
-			CreatedTime:   paramtable.GetCreateTime().String(),
-			UpdatedTime:   paramtable.GetUpdateTime().String(),
+			CreatedTime:   menv.GetCreateTime().String(),
+			UpdatedTime:   menv.GetUpdateTime().String(),
 			Type:          typeutil.ProxyRole,
 			ID:            node.session.ServerID,
 		},
@@ -164,7 +165,7 @@ func getSystemInfoMetrics(
 
 	identifierMap := make(map[string]int)
 
-	proxyRoleName := metricsinfo.ConstructComponentName(typeutil.ProxyRole, paramtable.GetNodeID())
+	proxyRoleName := metricsinfo.ConstructComponentName(typeutil.ProxyRole, menv.GetNodeID())
 	identifierMap[proxyRoleName] = int(node.session.ServerID)
 
 	proxyInfo := getProxyMetricInfo(ctx, node, nil)

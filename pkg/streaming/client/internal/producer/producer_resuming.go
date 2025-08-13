@@ -7,7 +7,7 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/pkg/v2/streaming/client/internal/errs"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
 

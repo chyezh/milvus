@@ -37,9 +37,9 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -851,7 +851,7 @@ func (s *Server) GetMetrics(ctx context.Context, req *milvuspb.GetMetricsRequest
 	resp := &milvuspb.GetMetricsResponse{
 		Status: merr.Success(),
 		ComponentName: metricsinfo.ConstructComponentName(typeutil.QueryCoordRole,
-			paramtable.GetNodeID()),
+			menv.GetNodeID()),
 	}
 
 	ret, err := s.metricsRequest.ExecuteMetricsRequest(ctx, req)

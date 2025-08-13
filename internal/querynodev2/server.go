@@ -76,6 +76,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
 	"github.com/milvus-io/milvus/pkg/v2/util/lifetime"
 	"github.com/milvus-io/milvus/pkg/v2/util/lock"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/sessionutil"
@@ -174,7 +175,7 @@ func (node *QueryNode) initSession() error {
 	}
 	node.session.Init(typeutil.QueryNodeRole, node.address, false, true)
 	sessionutil.SaveServerInfo(typeutil.QueryNodeRole, node.session.ServerID)
-	paramtable.SetNodeID(node.session.ServerID)
+	menv.SetNodeID(node.session.ServerID)
 	node.serverID = node.session.ServerID
 	log.Ctx(node.ctx).Info("QueryNode init session", zap.Int64("nodeID", node.GetNodeID()), zap.String("node address", node.session.Address))
 	return nil
@@ -186,7 +187,7 @@ func (node *QueryNode) Register() error {
 	// start liveness check
 	metrics.NumNodes.WithLabelValues(fmt.Sprint(node.GetNodeID()), typeutil.QueryNodeRole).Inc()
 	node.session.LivenessCheck(node.ctx, func() {
-		log.Ctx(node.ctx).Error("Query Node disconnected from etcd, process will exit", zap.Int64("Server Id", paramtable.GetNodeID()))
+		log.Ctx(node.ctx).Error("Query Node disconnected from etcd, process will exit", zap.Int64("Server Id", menv.GetNodeID()))
 		os.Exit(1)
 	})
 	return nil
@@ -559,8 +560,8 @@ func (node *QueryNode) Start() error {
 	node.startOnce.Do(func() {
 		node.scheduler.Start()
 
-		paramtable.SetCreateTime(time.Now())
-		paramtable.SetUpdateTime(time.Now())
+		menv.SetCreateTime(time.Now())
+		menv.SetUpdateTime(time.Now())
 		mmapEnabled := paramtable.Get().QueryNodeCfg.MmapEnabled.GetAsBool()
 		growingmmapEnable := paramtable.Get().QueryNodeCfg.GrowingMmapEnabled.GetAsBool()
 		mmapVectorIndex := paramtable.Get().QueryNodeCfg.MmapVectorIndex.GetAsBool()

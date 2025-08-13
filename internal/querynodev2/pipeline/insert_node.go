@@ -30,7 +30,7 @@ import (
 	base "github.com/milvus-io/milvus/internal/util/pipeline"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
@@ -88,7 +88,7 @@ func (iNode *insertNode) addInsertData(insertDatas map[UniqueID]*delegator.Inser
 
 // Insert task
 func (iNode *insertNode) Operate(in Msg) Msg {
-	metrics.QueryNodeWaitProcessingMsgCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.InsertLabel).Dec()
+	metrics.QueryNodeWaitProcessingMsgCount.WithLabelValues(fmt.Sprint(menv.GetNodeID()), metrics.InsertLabel).Dec()
 	nodeMsg := in.(*insertNodeMsg)
 
 	if len(nodeMsg.insertMsgs) > 0 {
@@ -113,7 +113,7 @@ func (iNode *insertNode) Operate(in Msg) Msg {
 
 		iNode.delegator.ProcessInsert(nodeMsg.insertDatas)
 	}
-	metrics.QueryNodeWaitProcessingMsgCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.DeleteLabel).Inc()
+	metrics.QueryNodeWaitProcessingMsgCount.WithLabelValues(fmt.Sprint(menv.GetNodeID()), metrics.DeleteLabel).Inc()
 
 	return &deleteNodeMsg{
 		deleteMsgs:    nodeMsg.deleteMsgs,

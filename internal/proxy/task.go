@@ -39,6 +39,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -232,7 +233,7 @@ func (t *createCollectionTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_CreateCollection
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -344,7 +345,7 @@ func (t *createCollectionTask) validateClusteringKey(ctx context.Context) error 
 
 func (t *createCollectionTask) PreExecute(ctx context.Context) error {
 	t.Base.MsgType = commonpb.MsgType_CreateCollection
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 
 	t.schema = &schemapb.CollectionSchema{}
 	err := proto.Unmarshal(t.Schema, t.schema)
@@ -506,7 +507,7 @@ func (t *addCollectionFieldTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_AddCollectionField
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -626,7 +627,7 @@ func (t *dropCollectionTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_DropCollection
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -693,7 +694,7 @@ func (t *hasCollectionTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_HasCollection
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -770,7 +771,7 @@ func (t *describeCollectionTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_DescribeCollection
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -934,7 +935,7 @@ func (t *showCollectionsTask) SetTs(ts Timestamp) {
 func (t *showCollectionsTask) OnEnqueue() error {
 	t.Base = commonpbutil.NewMsgBase()
 	t.Base.MsgType = commonpb.MsgType_ShowCollections
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -1088,7 +1089,7 @@ func (t *alterCollectionTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_AlterCollection
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -1317,7 +1318,7 @@ func (t *alterCollectionFieldTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_AlterCollectionField
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -1544,7 +1545,7 @@ func (t *createPartitionTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_CreatePartition
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -1643,7 +1644,7 @@ func (t *dropPartitionTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_DropPartition
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -1750,7 +1751,7 @@ func (t *hasPartitionTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_HasPartition
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -1822,7 +1823,7 @@ func (t *showPartitionsTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_ShowPartitions
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -1973,7 +1974,7 @@ func (t *loadCollectionTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_LoadCollection
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -2144,7 +2145,7 @@ func (t *releaseCollectionTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_ReleaseCollection
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -2233,7 +2234,7 @@ func (t *loadPartitionsTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_LoadPartitions
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -2408,7 +2409,7 @@ func (t *releasePartitionsTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_ReleasePartitions
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -2510,7 +2511,7 @@ func (t *CreateResourceGroupTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_CreateResourceGroup
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -2574,7 +2575,7 @@ func (t *UpdateResourceGroupsTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_UpdateResourceGroups
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -2641,7 +2642,7 @@ func (t *DropResourceGroupTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_DropResourceGroup
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -2705,7 +2706,7 @@ func (t *DescribeResourceGroupTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_DescribeResourceGroup
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -2830,7 +2831,7 @@ func (t *TransferNodeTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_TransferNode
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -2894,7 +2895,7 @@ func (t *TransferReplicaTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_TransferReplica
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -2967,7 +2968,7 @@ func (t *ListResourceGroupsTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_ListResourceGroups
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -3035,7 +3036,7 @@ func (t *RunAnalyzerTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_RunAnalyzer
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 

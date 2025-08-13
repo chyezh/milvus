@@ -53,6 +53,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/dependency"
 	"github.com/milvus-io/milvus/internal/util/testutil"
 	"github.com/milvus-io/milvus/pkg/v2/common"
+	kvfactory "github.com/milvus-io/milvus/pkg/v2/dependency/kv"
 	"github.com/milvus-io/milvus/pkg/v2/json"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
@@ -65,8 +66,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/tracer"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/crypto"
-	"github.com/milvus-io/milvus/pkg/v2/util/etcd"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
@@ -300,7 +301,7 @@ func TestProxy(t *testing.T) {
 	paramtable.Init()
 	params := paramtable.Get()
 	testutil.ResetEnvironment()
-	paramtable.SetLocalComponentEnabled(typeutil.StreamingNodeRole)
+	menv.SetLocalComponentEnabled(typeutil.StreamingNodeRole)
 	streamingutil.SetStreamingServiceEnabled()
 	defer streamingutil.UnsetStreamingServiceEnabled()
 
@@ -337,25 +338,12 @@ func TestProxy(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	streaming.Init()
+	etcdcli, _ := kvfactory.GetEtcdAndPath()
+	streaming.Init(etcdcli, streaming.OptClientRootPath(paramtable.Get().EtcdCfg.MetaRootPath.GetValue()))
 
 	proxy, err := NewProxy(ctx, factory)
 	assert.NoError(t, err)
 	assert.NotNil(t, proxy)
-
-	etcdcli, err := etcd.GetEtcdClient(
-		Params.EtcdCfg.UseEmbedEtcd.GetAsBool(),
-		Params.EtcdCfg.EtcdUseSSL.GetAsBool(),
-		Params.EtcdCfg.Endpoints.GetAsStrings(),
-		Params.EtcdCfg.EtcdTLSCert.GetValue(),
-		Params.EtcdCfg.EtcdTLSKey.GetValue(),
-		Params.EtcdCfg.EtcdTLSCACert.GetValue(),
-		Params.EtcdCfg.EtcdTLSMinVersion.GetValue())
-	if err != nil {
-		panic(err)
-	}
-	defer etcdcli.Close()
-	assert.NoError(t, err)
 
 	testServer := newProxyTestServer(proxy)
 	wg.Add(1)
@@ -422,7 +410,7 @@ func TestProxy(t *testing.T) {
 		states, err := proxy.GetComponentStates(ctx, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_Success, states.GetStatus().GetErrorCode())
-		assert.Equal(t, paramtable.GetNodeID(), states.State.NodeID)
+		assert.Equal(t, menv.GetNodeID(), states.State.NodeID)
 		assert.Equal(t, typeutil.ProxyRole, states.State.Role)
 		assert.Equal(t, proxy.GetStateCode(), states.State.StateCode)
 	})
@@ -4999,7 +4987,7 @@ func TestProxy_GetLoadState(t *testing.T) {
 	{
 		mixCoord := getMixCoordClient()
 		mixCoord.EXPECT().ShowLoadCollections(mock.Anything, mock.Anything).Return(&querypb.ShowCollectionsResponse{
-			Status:              merr.Status(merr.WrapErrServiceNotReady(paramtable.GetRole(), paramtable.GetNodeID(), "initialization")),
+			Status:              merr.Status(merr.WrapErrServiceNotReady(menv.GetRole(), menv.GetNodeID(), "initialization")),
 			CollectionIDs:       nil,
 			InMemoryPercentages: []int64{},
 		}, nil)

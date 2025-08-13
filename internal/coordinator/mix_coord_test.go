@@ -34,6 +34,7 @@ import (
 	kvfactory "github.com/milvus-io/milvus/pkg/v2/dependency/kv"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/etcd"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/tikv"
@@ -89,7 +90,7 @@ func TestMixcoord_EnableActiveStandby(t *testing.T) {
 			MsgType:   commonpb.MsgType_DescribeCollection,
 			MsgID:     0,
 			Timestamp: 0,
-			SourceID:  paramtable.GetNodeID(),
+			SourceID:  menv.GetNodeID(),
 		},
 		CollectionName: "unexist",
 	})
@@ -144,7 +145,7 @@ func TestMixcoord_DisableActiveStandby(t *testing.T) {
 			MsgType:   commonpb.MsgType_DescribeCollection,
 			MsgID:     0,
 			Timestamp: 0,
-			SourceID:  paramtable.GetNodeID(),
+			SourceID:  menv.GetNodeID(),
 		},
 		CollectionName: "unexist",
 	})

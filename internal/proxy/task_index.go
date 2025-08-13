@@ -36,6 +36,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/indexparams"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -111,7 +112,7 @@ func (cit *createIndexTask) OnEnqueue() error {
 		cit.req.Base = commonpbutil.NewMsgBase()
 	}
 	cit.req.Base.MsgType = commonpb.MsgType_CreateIndex
-	cit.req.Base.SourceID = paramtable.GetNodeID()
+	cit.req.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -632,7 +633,7 @@ func (t *alterIndexTask) OnEnqueue() error {
 		t.req.Base = commonpbutil.NewMsgBase()
 	}
 	t.req.Base.MsgType = commonpb.MsgType_AlterIndex
-	t.req.Base.SourceID = paramtable.GetNodeID()
+	t.req.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -758,7 +759,7 @@ func (dit *describeIndexTask) SetTs(ts Timestamp) {
 func (dit *describeIndexTask) OnEnqueue() error {
 	dit.Base = commonpbutil.NewMsgBase()
 	dit.Base.MsgType = commonpb.MsgType_DescribeIndex
-	dit.Base.SourceID = paramtable.GetNodeID()
+	dit.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -898,7 +899,7 @@ func (dit *getIndexStatisticsTask) SetTs(ts Timestamp) {
 func (dit *getIndexStatisticsTask) OnEnqueue() error {
 	dit.Base = commonpbutil.NewMsgBase()
 	dit.Base.MsgType = commonpb.MsgType_GetIndexStatistics
-	dit.Base.SourceID = paramtable.GetNodeID()
+	dit.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -1010,7 +1011,7 @@ func (dit *dropIndexTask) OnEnqueue() error {
 		dit.Base = commonpbutil.NewMsgBase()
 	}
 	dit.Base.MsgType = commonpb.MsgType_DropIndex
-	dit.Base.SourceID = paramtable.GetNodeID()
+	dit.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -1118,7 +1119,7 @@ func (gibpt *getIndexBuildProgressTask) SetTs(ts Timestamp) {
 func (gibpt *getIndexBuildProgressTask) OnEnqueue() error {
 	gibpt.Base = commonpbutil.NewMsgBase()
 	gibpt.Base.MsgType = commonpb.MsgType_GetIndexBuildProgress
-	gibpt.Base.SourceID = paramtable.GetNodeID()
+	gibpt.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -1206,7 +1207,7 @@ func (gist *getIndexStateTask) SetTs(ts Timestamp) {
 func (gist *getIndexStateTask) OnEnqueue() error {
 	gist.Base = commonpbutil.NewMsgBase()
 	gist.Base.MsgType = commonpb.MsgType_GetIndexState
-	gist.Base.SourceID = paramtable.GetNodeID()
+	gist.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 

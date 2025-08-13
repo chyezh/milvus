@@ -58,6 +58,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/segcorepb"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/indexparams"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metautil"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -546,7 +547,7 @@ func (s *LocalSegment) Search(ctx context.Context, searchReq *segcore.SearchRequ
 		log.Warn("Search failed")
 		return nil, err
 	}
-	metrics.QueryNodeSQSegmentLatencyInCore.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.SearchLabel).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.QueryNodeSQSegmentLatencyInCore.WithLabelValues(fmt.Sprint(menv.GetNodeID()), metrics.SearchLabel).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	log.Debug("search segment done")
 	return result, nil
 }
@@ -566,7 +567,7 @@ func (s *LocalSegment) retrieve(ctx context.Context, plan *segcore.RetrievePlan,
 		log.Warn("Retrieve failed")
 		return nil, err
 	}
-	metrics.QueryNodeSQSegmentLatencyInCore.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()),
+	metrics.QueryNodeSQSegmentLatencyInCore.WithLabelValues(fmt.Sprint(menv.GetNodeID()),
 		metrics.QueryLabel).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return result, nil
 }
@@ -612,7 +613,7 @@ func (s *LocalSegment) retrieveByOffsets(ctx context.Context, plan *segcore.Retr
 		log.Warn("RetrieveByOffsets failed")
 		return nil, err
 	}
-	metrics.QueryNodeSQSegmentLatencyInCore.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()),
+	metrics.QueryNodeSQSegmentLatencyInCore.WithLabelValues(fmt.Sprint(menv.GetNodeID()),
 		metrics.QueryLabel).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return result, nil
 }
@@ -659,7 +660,7 @@ func (s *LocalSegment) Insert(ctx context.Context, rowIDs []int64, timestamps []
 		start := time.Now()
 		defer func() {
 			metrics.QueryNodeCGOCallLatency.WithLabelValues(
-				fmt.Sprint(paramtable.GetNodeID()),
+				fmt.Sprint(menv.GetNodeID()),
 				"Insert",
 				"Sync",
 			).Observe(float64(time.Since(start).Milliseconds()))
@@ -705,7 +706,7 @@ func (s *LocalSegment) Delete(ctx context.Context, primaryKeys storage.PrimaryKe
 		start := time.Now()
 		defer func() {
 			metrics.QueryNodeCGOCallLatency.WithLabelValues(
-				fmt.Sprint(paramtable.GetNodeID()),
+				fmt.Sprint(menv.GetNodeID()),
 				"Delete",
 				"Sync",
 			).Observe(float64(time.Since(start).Milliseconds()))
@@ -759,7 +760,7 @@ func (s *LocalSegment) LoadMultiFieldData(ctx context.Context) error {
 		start := time.Now()
 		defer func() {
 			metrics.QueryNodeCGOCallLatency.WithLabelValues(
-				fmt.Sprint(paramtable.GetNodeID()),
+				fmt.Sprint(menv.GetNodeID()),
 				"LoadFieldData",
 				"Sync",
 			).Observe(float64(time.Since(start).Milliseconds()))
@@ -815,7 +816,7 @@ func (s *LocalSegment) LoadFieldData(ctx context.Context, fieldID int64, rowCoun
 		start := time.Now()
 		defer func() {
 			metrics.QueryNodeCGOCallLatency.WithLabelValues(
-				fmt.Sprint(paramtable.GetNodeID()),
+				fmt.Sprint(menv.GetNodeID()),
 				"LoadFieldData",
 				"Sync",
 			).Observe(float64(time.Since(start).Milliseconds()))
@@ -912,7 +913,7 @@ func (s *LocalSegment) LoadDeltaData(ctx context.Context, deltaData *storage.Del
 		start := time.Now()
 		defer func() {
 			metrics.QueryNodeCGOCallLatency.WithLabelValues(
-				fmt.Sprint(paramtable.GetNodeID()),
+				fmt.Sprint(menv.GetNodeID()),
 				"LoadDeletedRecord",
 				"Sync",
 			).Observe(float64(time.Since(start).Milliseconds()))

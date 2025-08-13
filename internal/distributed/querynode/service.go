@@ -44,6 +44,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/interceptor"
 	"github.com/milvus-io/milvus/pkg/v2/util/logutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/netutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -189,7 +190,7 @@ func (s *Server) startGrpcLoop() {
 			interceptor.ClusterValidationUnaryServerInterceptor(),
 			interceptor.ServerIDValidationUnaryServerInterceptor(func() int64 {
 				if s.serverID.Load() == 0 {
-					s.serverID.Store(paramtable.GetNodeID())
+					s.serverID.Store(menv.GetNodeID())
 				}
 				return s.serverID.Load()
 			}),
@@ -200,7 +201,7 @@ func (s *Server) startGrpcLoop() {
 			interceptor.ClusterValidationStreamServerInterceptor(),
 			interceptor.ServerIDValidationStreamServerInterceptor(func() int64 {
 				if s.serverID.Load() == 0 {
-					s.serverID.Store(paramtable.GetNodeID())
+					s.serverID.Store(menv.GetNodeID())
 				}
 				return s.serverID.Load()
 			}),

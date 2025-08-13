@@ -35,6 +35,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/lock"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
@@ -275,7 +276,7 @@ func (c *DataNodeManagerImpl) GetCompactionPlansResults() (map[int64]*typeutil.P
 			resp, err := cli.GetCompactionState(ctx, &datapb.CompactionStateRequest{
 				Base: commonpbutil.NewMsgBase(
 					commonpbutil.WithMsgType(commonpb.MsgType_GetSystemConfigs),
-					commonpbutil.WithSourceID(paramtable.GetNodeID()),
+					commonpbutil.WithSourceID(menv.GetNodeID()),
 				),
 			})
 
@@ -326,7 +327,7 @@ func (c *DataNodeManagerImpl) GetCompactionPlanResult(nodeID int64, planID int64
 	defer cancel()
 	resp, err2 := cli.GetCompactionState(ctx, &datapb.CompactionStateRequest{
 		Base: commonpbutil.NewMsgBase(
-			commonpbutil.WithSourceID(paramtable.GetNodeID()),
+			commonpbutil.WithSourceID(menv.GetNodeID()),
 		),
 		PlanID: planID,
 	})

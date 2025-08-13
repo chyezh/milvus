@@ -48,6 +48,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -149,7 +150,7 @@ func TestSearchTask_PostExecute(t *testing.T) {
 				SearchRequest: &internalpb.SearchRequest{
 					Base: &commonpb.MsgBase{
 						MsgType:  commonpb.MsgType_Search,
-						SourceID: paramtable.GetNodeID(),
+						SourceID: menv.GetNodeID(),
 					},
 					Nq: 1,
 				},
@@ -1397,7 +1398,7 @@ func TestSearchTaskWithInvalidRoundDecimal(t *testing.T) {
 	//         MsgType:   commonpb.MsgType_LoadCollection,
 	//         MsgID:     0,
 	//         Timestamp: 0,
-	//         SourceID:  paramtable.GetNodeID(),
+	//         SourceID:  menv.GetNodeID(),
 	//     },
 	//     DbID:         0,
 	//     CollectionID: collectionID,
@@ -1418,9 +1419,9 @@ func TestSearchTaskWithInvalidRoundDecimal(t *testing.T) {
 	//             MsgType:   commonpb.MsgType_Search,
 	//             MsgID:     0,
 	//             Timestamp: 0,
-	//             SourceID:  paramtable.GetNodeID(),
+	//             SourceID:  menv.GetNodeID(),
 	//         },
-	//         ResultChannelID:    strconv.FormatInt(paramtable.GetNodeID(), 10),
+	//         ResultChannelID:    strconv.FormatInt(menv.GetNodeID(), 10),
 	//         DbID:               0,
 	//         CollectionID:       0,
 	//         PartitionIDs:       nil,
@@ -1640,7 +1641,7 @@ func TestSearchTaskV2_all(t *testing.T) {
 	//         MsgType:   commonpb.MsgType_LoadCollection,
 	//         MsgID:     0,
 	//         Timestamp: 0,
-	//         SourceID:  paramtable.GetNodeID(),
+	//         SourceID:  menv.GetNodeID(),
 	//     },
 	//     DbID:         0,
 	//     CollectionID: collectionID,
@@ -1661,9 +1662,9 @@ func TestSearchTaskV2_all(t *testing.T) {
 	//             MsgType:   commonpb.MsgType_Search,
 	//             MsgID:     0,
 	//             Timestamp: 0,
-	//             SourceID:  paramtable.GetNodeID(),
+	//             SourceID:  menv.GetNodeID(),
 	//         },
-	//         ResultChannelID:    strconv.FormatInt(paramtable.GetNodeID(), 10),
+	//         ResultChannelID:    strconv.FormatInt(menv.GetNodeID(), 10),
 	//         DbID:               0,
 	//         CollectionID:       0,
 	//         PartitionIDs:       nil,
@@ -1877,7 +1878,7 @@ func TestSearchTaskV2_7803_reduce(t *testing.T) {
 	//         MsgType:   commonpb.MsgType_LoadCollection,
 	//         MsgID:     0,
 	//         Timestamp: 0,
-	//         SourceID:  paramtable.GetNodeID(),
+	//         SourceID:  menv.GetNodeID(),
 	//     },
 	//     DbID:         0,
 	//     CollectionID: collectionID,
@@ -1898,9 +1899,9 @@ func TestSearchTaskV2_7803_reduce(t *testing.T) {
 	//             MsgType:   commonpb.MsgType_Search,
 	//             MsgID:     0,
 	//             Timestamp: 0,
-	//             SourceID:  paramtable.GetNodeID(),
+	//             SourceID:  menv.GetNodeID(),
 	//         },
-	//         ResultChannelID:    strconv.FormatInt(paramtable.GetNodeID(), 10),
+	//         ResultChannelID:    strconv.FormatInt(menv.GetNodeID(), 10),
 	//         DbID:               0,
 	//         CollectionID:       0,
 	//         PartitionIDs:       nil,
@@ -2995,7 +2996,7 @@ func TestSearchTask_ErrExecute(t *testing.T) {
 	status, err := rc.LoadCollection(ctx, &querypb.LoadCollectionRequest{
 		Base: &commonpb.MsgBase{
 			MsgType:  commonpb.MsgType_LoadCollection,
-			SourceID: paramtable.GetNodeID(),
+			SourceID: menv.GetNodeID(),
 		},
 		CollectionID: collectionID,
 	})
@@ -3008,7 +3009,7 @@ func TestSearchTask_ErrExecute(t *testing.T) {
 		SearchRequest: &internalpb.SearchRequest{
 			Base: &commonpb.MsgBase{
 				MsgType:  commonpb.MsgType_Retrieve,
-				SourceID: paramtable.GetNodeID(),
+				SourceID: menv.GetNodeID(),
 			},
 			CollectionID:   collectionID,
 			OutputFieldsId: make([]int64, len(fieldName2Types)),
@@ -3020,7 +3021,7 @@ func TestSearchTask_ErrExecute(t *testing.T) {
 		request: &milvuspb.SearchRequest{
 			Base: &commonpb.MsgBase{
 				MsgType:  commonpb.MsgType_Retrieve,
-				SourceID: paramtable.GetNodeID(),
+				SourceID: menv.GetNodeID(),
 			},
 			CollectionName: collectionName,
 			Nq:             2,
@@ -3674,7 +3675,7 @@ func TestSearchTask_Requery(t *testing.T) {
 			SearchRequest: &internalpb.SearchRequest{
 				Base: &commonpb.MsgBase{
 					MsgType:  commonpb.MsgType_Search,
-					SourceID: paramtable.GetNodeID(),
+					SourceID: menv.GetNodeID(),
 				},
 			},
 			request: &milvuspb.SearchRequest{
@@ -3713,7 +3714,7 @@ func TestSearchTask_Requery(t *testing.T) {
 			SearchRequest: &internalpb.SearchRequest{
 				Base: &commonpb.MsgBase{
 					MsgType:  commonpb.MsgType_Search,
-					SourceID: paramtable.GetNodeID(),
+					SourceID: menv.GetNodeID(),
 				},
 			},
 			request: &milvuspb.SearchRequest{},
@@ -3745,7 +3746,7 @@ func TestSearchTask_Requery(t *testing.T) {
 			SearchRequest: &internalpb.SearchRequest{
 				Base: &commonpb.MsgBase{
 					MsgType:  commonpb.MsgType_Search,
-					SourceID: paramtable.GetNodeID(),
+					SourceID: menv.GetNodeID(),
 				},
 			},
 			request: &milvuspb.SearchRequest{
@@ -3789,7 +3790,7 @@ func TestSearchTask_Requery(t *testing.T) {
 			SearchRequest: &internalpb.SearchRequest{
 				Base: &commonpb.MsgBase{
 					MsgType:  commonpb.MsgType_Search,
-					SourceID: paramtable.GetNodeID(),
+					SourceID: menv.GetNodeID(),
 				},
 			},
 			request: &milvuspb.SearchRequest{

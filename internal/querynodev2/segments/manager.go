@@ -41,6 +41,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/cache"
 	"github.com/milvus-io/milvus/pkg/v2/util/lock"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metautil"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -454,7 +455,7 @@ func (mgr *segmentManager) Put(ctx context.Context, segmentType SegmentType, seg
 
 		eventlog.Record(eventlog.NewRawEvt(eventlog.Level_Info, fmt.Sprintf("Segment %d[%d] loaded", segment.ID(), segment.Collection())))
 		metrics.QueryNodeNumSegments.WithLabelValues(
-			fmt.Sprint(paramtable.GetNodeID()),
+			fmt.Sprint(menv.GetNodeID()),
 			fmt.Sprint(segment.Collection()),
 			segment.Type().String(),
 			segment.Level().String(),
@@ -779,7 +780,7 @@ func (mgr *segmentManager) release(ctx context.Context, segment Segment) {
 	segment.Release(ctx)
 
 	metrics.QueryNodeNumSegments.WithLabelValues(
-		fmt.Sprint(paramtable.GetNodeID()),
+		fmt.Sprint(menv.GetNodeID()),
 		fmt.Sprint(segment.Collection()),
 		segment.Type().String(),
 		segment.Level().String(),

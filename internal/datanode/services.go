@@ -41,9 +41,9 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/workerpb"
 	"github.com/milvus-io/milvus/pkg/v2/taskcommon"
 	"github.com/milvus-io/milvus/pkg/v2/tracer"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
@@ -145,7 +145,7 @@ func (node *DataNode) GetMetrics(ctx context.Context, req *milvuspb.GetMetricsRe
 	resp := &milvuspb.GetMetricsResponse{
 		Status: merr.Success(),
 		ComponentName: metricsinfo.ConstructComponentName(typeutil.DataNodeRole,
-			paramtable.GetNodeID()),
+			menv.GetNodeID()),
 	}
 
 	ret, err := node.metricsRequest.ExecuteMetricsRequest(ctx, req)

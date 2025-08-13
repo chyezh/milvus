@@ -37,6 +37,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message/adaptor"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/streamingutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -191,15 +192,15 @@ func (ddn *ddNode) Operate(in []Msg) []Msg {
 			util.GetRateCollector().Add(metricsinfo.InsertConsumeThroughput, float64(proto.Size(imsg.InsertRequest)))
 
 			metrics.DataNodeConsumeBytesCount.
-				WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.InsertLabel).
+				WithLabelValues(fmt.Sprint(menv.GetNodeID()), metrics.InsertLabel).
 				Add(float64(proto.Size(imsg.InsertRequest)))
 
 			metrics.DataNodeConsumeMsgCount.
-				WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.InsertLabel, fmt.Sprint(ddn.collectionID)).
+				WithLabelValues(fmt.Sprint(menv.GetNodeID()), metrics.InsertLabel, fmt.Sprint(ddn.collectionID)).
 				Inc()
 
 			metrics.DataNodeConsumeMsgRowsCount.
-				WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.InsertLabel).
+				WithLabelValues(fmt.Sprint(menv.GetNodeID()), metrics.InsertLabel).
 				Add(float64(imsg.GetNumRows()))
 
 			log.Debug("DDNode receive insert messages",
@@ -230,15 +231,15 @@ func (ddn *ddNode) Operate(in []Msg) []Msg {
 			util.GetRateCollector().Add(metricsinfo.DeleteConsumeThroughput, float64(proto.Size(dmsg.DeleteRequest)))
 
 			metrics.DataNodeConsumeBytesCount.
-				WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.DeleteLabel).
+				WithLabelValues(fmt.Sprint(menv.GetNodeID()), metrics.DeleteLabel).
 				Add(float64(proto.Size(dmsg.DeleteRequest)))
 
 			metrics.DataNodeConsumeMsgCount.
-				WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.DeleteLabel, fmt.Sprint(ddn.collectionID)).
+				WithLabelValues(fmt.Sprint(menv.GetNodeID()), metrics.DeleteLabel, fmt.Sprint(ddn.collectionID)).
 				Inc()
 
 			metrics.DataNodeConsumeMsgRowsCount.
-				WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.DeleteLabel).
+				WithLabelValues(fmt.Sprint(menv.GetNodeID()), metrics.DeleteLabel).
 				Add(float64(dmsg.GetNumRows()))
 			fgMsg.DeleteMessages = append(fgMsg.DeleteMessages, dmsg)
 		case commonpb.MsgType_CreateSegment:

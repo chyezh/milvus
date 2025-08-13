@@ -6,12 +6,12 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 )
 
 func NewScanMetrics(pchannel types.PChannelInfo) *ScanMetrics {
 	constLabel := prometheus.Labels{
-		metrics.NodeIDLabelName:     paramtable.GetStringNodeID(),
+		metrics.NodeIDLabelName:     menv.GetStringNodeID(),
 		metrics.WALChannelLabelName: pchannel.Name,
 	}
 	catchupLabel, tailingLabel := make(prometheus.Labels), make(prometheus.Labels)

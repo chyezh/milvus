@@ -1467,7 +1467,7 @@ func TestCore_startTimeTickLoop(t *testing.T) {
 // 			MsgType:   commonpb.MsgType_DescribeCollection,
 // 			MsgID:     0,
 // 			Timestamp: 0,
-// 			SourceID:  paramtable.GetNodeID(),
+// 			SourceID:  menv.GetNodeID(),
 // 		},
 // 		CollectionName: "unexist",
 // 	})

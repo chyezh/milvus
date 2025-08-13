@@ -45,6 +45,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/interceptor"
 	"github.com/milvus-io/milvus/pkg/v2/util/logutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/netutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -74,7 +75,7 @@ func NewServer(ctx context.Context, factory dependency.Factory) (*Server, error)
 		grpcErrChan: make(chan error),
 	}
 
-	s.serverID.Store(paramtable.GetNodeID())
+	s.serverID.Store(menv.GetNodeID())
 	s.datanode = dn.NewDataNode(s.ctx)
 	return s, nil
 }
@@ -128,7 +129,7 @@ func (s *Server) startGrpcLoop() {
 			interceptor.ClusterValidationUnaryServerInterceptor(),
 			interceptor.ServerIDValidationUnaryServerInterceptor(func() int64 {
 				if s.serverID.Load() == 0 {
-					s.serverID.Store(paramtable.GetNodeID())
+					s.serverID.Store(menv.GetNodeID())
 				}
 				return s.serverID.Load()
 			}),
@@ -138,7 +139,7 @@ func (s *Server) startGrpcLoop() {
 			interceptor.ClusterValidationStreamServerInterceptor(),
 			interceptor.ServerIDValidationStreamServerInterceptor(func() int64 {
 				if s.serverID.Load() == 0 {
-					s.serverID.Store(paramtable.GetNodeID())
+					s.serverID.Store(menv.GetNodeID())
 				}
 				return s.serverID.Load()
 			}),

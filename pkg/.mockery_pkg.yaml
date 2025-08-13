@@ -15,26 +15,26 @@ packages:
       Broadcast:
       Local:
       Scanner:
-  github.com/milvus-io/milvus/pkg/v2/streaming/coord/client:
+  github.com/milvus-io/milvus/pkg/v2/streaming/client/coord:
     interfaces:
       Client:
       BroadcastService:
-  github.com/milvus-io/milvus/pkg/v2/streaming/coord/client/broadcast:
+  github.com/milvus-io/milvus/pkg/v2/streaming/client/coord/broadcast:
     interfaces:
       Watcher:
-  github.com/milvus-io/milvus/pkg/v2/streaming/node/client/manager:
+  github.com/milvus-io/milvus/pkg/v2/streaming/client/node/manager:
     interfaces:
       ManagerClient:
-  github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler:
+  github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler:
     interfaces:
       HandlerClient:
-  github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/assignment:
+  github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler/assignment:
     interfaces:
       Watcher:
-  github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/producer:
+  github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler/producer:
     interfaces:
       Producer:
-  github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/consumer:
+  github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler/consumer:
     interfaces:
       Consumer:
   github.com/milvus-io/milvus/pkg/v2/streaming/util/message:

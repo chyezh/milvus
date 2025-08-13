@@ -5,13 +5,12 @@ import (
 	"sync"
 	"time"
 
-	clientv3 "go.etcd.io/etcd/client/v3"
-
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/coord"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/client/internal/consumer"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/client/internal/producer"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/coord/client"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/internal/util"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/status"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/streamingutil"
@@ -23,14 +22,20 @@ import (
 
 var ErrWALAccesserClosed = status.NewOnShutdownError("wal accesser closed")
 
-// NewClient creates a new wal accesser.
-func NewClient(c *clientv3.Client, opts ...ClientOption) Client {
-	cfg := newConfig(opts...)
+type Config = util.Config
 
+// NewClient creates a new wal accesser.
+func NewClient(cfg *Config) (Client, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	// Create a new streaming coord client.
-	streamingCoordClient := client.NewClient(c, client.OptClientRootPath(cfg.RootPath))
+	streamingCoordClient, err := coord.NewClient(cfg)
+	if err != nil {
+		return nil, err
+	}
 	// Create a new streamingnode handler client.
-	handlerClient := handler.NewHandlerClient(streamingCoordClient.Assignment())
+	handlerClient := handler.NewHandlerClient(streamingCoordClient.Assignment(), cfg)
 	w := &walAccesserImpl{
 		lifetime:             typeutil.NewLifetime(),
 		streamingCoordClient: streamingCoordClient,
@@ -43,7 +48,7 @@ func NewClient(c *clientv3.Client, opts ...ClientOption) Client {
 		dispatchExecutionPool: conc.NewPool[struct{}](0),
 	}
 	w.SetLogger(log.With(log.FieldComponent("wal-accesser")))
-	return w
+	return w, nil
 }
 
 // walAccesserImpl is the implementation of WALAccesser.
@@ -52,7 +57,7 @@ type walAccesserImpl struct {
 	lifetime *typeutil.Lifetime
 
 	// All services
-	streamingCoordClient client.Client
+	streamingCoordClient coord.Client
 	handlerClient        handler.HandlerClient
 
 	producerMutex         sync.Mutex

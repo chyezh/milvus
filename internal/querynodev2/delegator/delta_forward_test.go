@@ -37,6 +37,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/segcorepb"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -63,7 +64,7 @@ type StreamingForwardSuite struct {
 
 func (s *StreamingForwardSuite) SetupSuite() {
 	paramtable.Init()
-	paramtable.SetNodeID(1)
+	menv.SetNodeID(1)
 }
 
 func (s *StreamingForwardSuite) SetupTest() {
@@ -301,7 +302,7 @@ type GrowingMergeL0Suite struct {
 
 func (s *GrowingMergeL0Suite) SetupSuite() {
 	paramtable.Init()
-	paramtable.SetNodeID(1)
+	menv.SetNodeID(1)
 }
 
 func (s *GrowingMergeL0Suite) SetupTest() {

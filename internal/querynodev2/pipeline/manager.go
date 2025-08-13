@@ -26,9 +26,9 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgdispatcher"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -91,9 +91,9 @@ func (m *manager) Add(collectionID UniqueID, channel string) (Pipeline, error) {
 	}
 
 	m.channel2Pipeline[channel] = newPipeLine
-	metrics.QueryNodeNumFlowGraphs.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Inc()
-	metrics.QueryNodeNumDmlChannels.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Inc()
-	metrics.QueryNodeWatchDmlChannelLatency.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.QueryNodeNumFlowGraphs.WithLabelValues(fmt.Sprint(menv.GetNodeID())).Inc()
+	metrics.QueryNodeNumDmlChannels.WithLabelValues(fmt.Sprint(menv.GetNodeID())).Inc()
+	metrics.QueryNodeWatchDmlChannelLatency.WithLabelValues(fmt.Sprint(menv.GetNodeID())).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return newPipeLine, nil
 }
 
@@ -125,8 +125,8 @@ func (m *manager) Remove(channels ...string) {
 			log.Warn("pipeline to be removed doesn't existed", zap.String("channel", channel))
 		}
 	}
-	metrics.QueryNodeNumFlowGraphs.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Dec()
-	metrics.QueryNodeNumDmlChannels.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Dec()
+	metrics.QueryNodeNumFlowGraphs.WithLabelValues(fmt.Sprint(menv.GetNodeID())).Dec()
+	metrics.QueryNodeNumDmlChannels.WithLabelValues(fmt.Sprint(menv.GetNodeID())).Dec()
 }
 
 // Start pipeline by channel
@@ -173,7 +173,7 @@ func (m *manager) GetChannelStats(collectionID int64) []*metricsinfo.Channel {
 				Name:           ch,
 				WatchState:     p.Status(),
 				LatestTimeTick: tsoutil.PhysicalTimeFormat(tt),
-				NodeID:         paramtable.GetNodeID(),
+				NodeID:         menv.GetNodeID(),
 				CollectionID:   p.GetCollectionID(),
 			})
 		}

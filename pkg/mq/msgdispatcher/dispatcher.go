@@ -32,6 +32,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
@@ -148,7 +149,7 @@ func NewDispatcher(
 		includeSkipWhenSplit: includeSkipWhenSplit,
 	}
 
-	metrics.NumConsumers.WithLabelValues(paramtable.GetRole(), fmt.Sprint(paramtable.GetNodeID())).Inc()
+	metrics.NumConsumers.WithLabelValues(menv.GetRole(), fmt.Sprint(menv.GetNodeID())).Inc()
 	return d, nil
 }
 
@@ -226,7 +227,7 @@ func (d *Dispatcher) Handle(signal signal) {
 		d.cancel()
 		d.wg.Wait()
 		d.once.Do(func() {
-			metrics.NumConsumers.WithLabelValues(paramtable.GetRole(), fmt.Sprint(paramtable.GetNodeID())).Dec()
+			metrics.NumConsumers.WithLabelValues(menv.GetRole(), fmt.Sprint(menv.GetNodeID())).Dec()
 			d.stream.Close()
 		})
 	}

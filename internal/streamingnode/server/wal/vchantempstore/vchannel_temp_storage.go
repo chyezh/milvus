@@ -11,8 +11,8 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
@@ -78,7 +78,7 @@ func (ts *VChannelTempStorage) updateVChannelByPChannelOfCollectionIfNotExist(ct
 		resp, err := mix.DescribeCollectionInternal(ctx, &milvuspb.DescribeCollectionRequest{
 			Base: commonpbutil.NewMsgBase(
 				commonpbutil.WithMsgType(commonpb.MsgType_DescribeCollection),
-				commonpbutil.WithSourceID(paramtable.GetNodeID()),
+				commonpbutil.WithSourceID(menv.GetNodeID()),
 			),
 			CollectionID: collectionID,
 		})

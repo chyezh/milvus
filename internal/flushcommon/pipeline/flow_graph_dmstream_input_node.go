@@ -33,6 +33,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgdispatcher"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -67,7 +68,7 @@ func createNewInputFromDispatcher(initCtx context.Context,
 	schema *schemapb.CollectionSchema,
 	dbProperties []*commonpb.KeyValuePair,
 ) (<-chan *msgstream.MsgPack, error) {
-	log := log.With(zap.Int64("nodeID", paramtable.GetNodeID()),
+	log := log.With(zap.Int64("nodeID", menv.GetNodeID()),
 		zap.String("vchannel", vchannel))
 
 	var (

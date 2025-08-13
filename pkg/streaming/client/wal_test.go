@@ -11,10 +11,10 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
-	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/coord/mock_client"
-	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/node/client/handler/mock_consumer"
-	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/node/client/handler/mock_producer"
-	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/node/client/mock_handler"
+	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/client/mock_coord"
+	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/client/node/handler/mock_consumer"
+	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/client/node/handler/mock_producer"
+	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/client/node/mock_handler"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/client/internal/producer"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/status"
@@ -32,13 +32,13 @@ const (
 
 func createMockWAL(t *testing.T) (
 	*walAccesserImpl,
-	*mock_client.MockClient,
-	*mock_client.MockBroadcastService,
+	*mock_coord.MockClient,
+	*mock_coord.MockBroadcastService,
 	*mock_handler.MockHandlerClient,
 ) {
-	coordClient := mock_client.NewMockClient(t)
+	coordClient := mock_coord.NewMockClient(t)
 	coordClient.EXPECT().Close().Return().Maybe()
-	broadcastServce := mock_client.NewMockBroadcastService(t)
+	broadcastServce := mock_coord.NewMockBroadcastService(t)
 	broadcastServce.EXPECT().Broadcast(mock.Anything, mock.Anything).RunAndReturn(
 		func(ctx context.Context, bmm message.BroadcastMutableMessage) (*types.BroadcastAppendResult, error) {
 			bmm = bmm.WithBroadcastID(1)

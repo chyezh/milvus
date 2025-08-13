@@ -9,7 +9,7 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
@@ -52,7 +52,7 @@ func getGlobalObserver() *segmentsObserver {
 // Used to check if a segment is hot or cold.
 func newSegmentsObserver() *segmentsObserver {
 	return &segmentsObserver{
-		nodeID:   strconv.FormatInt(paramtable.GetNodeID(), 10),
+		nodeID:   strconv.FormatInt(menv.GetNodeID(), 10),
 		segments: typeutil.NewConcurrentMap[SegmentLabel, *segmentObserver](),
 	}
 }

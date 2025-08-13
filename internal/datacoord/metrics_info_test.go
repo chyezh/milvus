@@ -35,9 +35,9 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/v2/json"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -564,9 +564,9 @@ func TestGetChannelsJSON(t *testing.T) {
 
 func TestGetDistJSON(t *testing.T) {
 	svr := Server{}
-	nodeID := paramtable.GetNodeID()
-	paramtable.SetNodeID(1)
-	defer paramtable.SetNodeID(nodeID)
+	nodeID := menv.GetNodeID()
+	menv.SetNodeID(1)
+	defer menv.SetNodeID(nodeID)
 
 	t.Run("ReturnsCorrectJSON", func(t *testing.T) {
 		req := &milvuspb.GetMetricsRequest{}

@@ -9,8 +9,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/pkg/v2/log"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/consumer"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler/consumer"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"

@@ -5,13 +5,13 @@ package mock_handler
 import (
 	context "context"
 
-	consumer "github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/consumer"
+	consumer "github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler/consumer"
 
-	handler "github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler"
+	handler "github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler"
 
 	mock "github.com/stretchr/testify/mock"
 
-	producer "github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/producer"
+	producer "github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler/producer"
 
 	types "github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 )

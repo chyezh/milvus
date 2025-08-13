@@ -7,18 +7,18 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/registry"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler/registry"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/status"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 )
 
 // newResumingProducerMetrics creates a new producer metrics.
 func newResumingProducerMetrics(pchannel string) *resumingProducerMetrics {
 	constLabel := prometheus.Labels{
-		metrics.NodeIDLabelName:     paramtable.GetStringNodeID(),
+		metrics.NodeIDLabelName:     menv.GetStringNodeID(),
 		metrics.WALChannelLabelName: pchannel,
 	}
 	m := &resumingProducerMetrics{
@@ -70,7 +70,7 @@ func newProducerMetrics(pchannel string, isLocal bool) *producerMetrics {
 		accessModel = metrics.WALAccessModelLocal
 	}
 	constLabel := prometheus.Labels{
-		metrics.NodeIDLabelName:         paramtable.GetStringNodeID(),
+		metrics.NodeIDLabelName:         menv.GetStringNodeID(),
 		metrics.WALChannelLabelName:     pchannel,
 		metrics.WALAccessModelLabelName: accessModel,
 	}

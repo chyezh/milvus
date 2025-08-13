@@ -7,13 +7,13 @@ import (
 
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
 )
 
 func newRecoveryStorageMetrics(channelInfo types.PChannelInfo) *recoveryMetrics {
 	constLabels := prometheus.Labels{
-		metrics.NodeIDLabelName:         paramtable.GetStringNodeID(),
+		metrics.NodeIDLabelName:         menv.GetStringNodeID(),
 		metrics.WALChannelLabelName:     channelInfo.Name,
 		metrics.WALChannelTermLabelName: strconv.FormatInt(channelInfo.Term, 10),
 	}

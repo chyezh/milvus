@@ -29,7 +29,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 )
 
 // Cluster provides interfaces to interact with datanode cluster
@@ -125,7 +125,7 @@ func (c *ClusterImpl) Flush(ctx context.Context, nodeID int64, channel string, s
 	req := &datapb.FlushSegmentsRequest{
 		Base: commonpbutil.NewMsgBase(
 			commonpbutil.WithMsgType(commonpb.MsgType_Flush),
-			commonpbutil.WithSourceID(paramtable.GetNodeID()),
+			commonpbutil.WithSourceID(menv.GetNodeID()),
 			commonpbutil.WithTargetID(nodeID),
 		),
 		CollectionID: ch.GetCollectionID(),
@@ -150,7 +150,7 @@ func (c *ClusterImpl) FlushChannels(ctx context.Context, nodeID int64, flushTs T
 
 	req := &datapb.FlushChannelsRequest{
 		Base: commonpbutil.NewMsgBase(
-			commonpbutil.WithSourceID(paramtable.GetNodeID()),
+			commonpbutil.WithSourceID(menv.GetNodeID()),
 			commonpbutil.WithTargetID(nodeID),
 		),
 		FlushTs:  flushTs,

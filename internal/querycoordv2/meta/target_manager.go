@@ -33,8 +33,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -116,7 +116,7 @@ func (mgr *TargetManager) UpdateCollectionCurrentTarget(ctx context.Context, col
 	for channelName, dmlChannel := range newTarget.dmChannels {
 		ts, _ := tsoutil.ParseTS(dmlChannel.GetSeekPosition().GetTimestamp())
 		metrics.QueryCoordCurrentTargetCheckpointUnixSeconds.WithLabelValues(
-			fmt.Sprint(paramtable.GetNodeID()),
+			fmt.Sprint(menv.GetNodeID()),
 			channelName,
 		).Set(float64(ts.Unix()))
 		partStatsVersionInfo += fmt.Sprintf("%s:[", channelName)
@@ -218,7 +218,7 @@ func (mgr *TargetManager) RemoveCollection(ctx context.Context, collectionID int
 	if current != nil {
 		for channelName := range current.GetAllDmChannels() {
 			metrics.QueryCoordCurrentTargetCheckpointUnixSeconds.DeleteLabelValues(
-				fmt.Sprint(paramtable.GetNodeID()),
+				fmt.Sprint(menv.GetNodeID()),
 				channelName,
 			)
 		}

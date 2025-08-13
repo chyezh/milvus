@@ -17,6 +17,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/crypto"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -57,7 +58,7 @@ func TestCreateDatabaseTask(t *testing.T) {
 		task.Base = nil
 		err = task.OnEnqueue()
 		assert.NoError(t, err)
-		assert.Equal(t, paramtable.GetNodeID(), task.GetBase().GetSourceID())
+		assert.Equal(t, menv.GetNodeID(), task.GetBase().GetSourceID())
 		assert.Equal(t, UniqueID(0), task.ID())
 	})
 
@@ -111,7 +112,7 @@ func TestDropDatabaseTask(t *testing.T) {
 		task.Base = nil
 		err = task.OnEnqueue()
 		assert.NoError(t, err)
-		assert.Equal(t, paramtable.GetNodeID(), task.GetBase().GetSourceID())
+		assert.Equal(t, menv.GetNodeID(), task.GetBase().GetSourceID())
 		assert.Equal(t, UniqueID(0), task.ID())
 	})
 
@@ -156,7 +157,7 @@ func TestListDatabaseTask(t *testing.T) {
 
 		err = task.OnEnqueue()
 		assert.NoError(t, err)
-		assert.Equal(t, paramtable.GetNodeID(), task.GetBase().GetSourceID())
+		assert.Equal(t, menv.GetNodeID(), task.GetBase().GetSourceID())
 		assert.Equal(t, UniqueID(0), task.ID())
 
 		taskCtx := AppendUserInfoForRPC(ctx)

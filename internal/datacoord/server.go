@@ -63,6 +63,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/expr"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/logutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -331,7 +332,7 @@ func (s *Server) initDataCoord() error {
 
 	s.serverLoopCtx, s.serverLoopCancel = context.WithCancel(s.ctx)
 
-	log.Info("init datacoord done", zap.Int64("nodeID", paramtable.GetNodeID()), zap.String("Address", s.address))
+	log.Info("init datacoord done", zap.Int64("nodeID", menv.GetNodeID()), zap.String("Address", s.address))
 
 	s.initMessageCallback()
 	return nil
@@ -428,7 +429,7 @@ func (s *Server) GetServerID() int64 {
 	if s.session != nil {
 		return s.session.GetServerID()
 	}
-	return paramtable.GetNodeID()
+	return menv.GetNodeID()
 }
 
 func (s *Server) afterStart() {}
@@ -768,7 +769,7 @@ func (s *Server) startWatchService(ctx context.Context) {
 
 func (s *Server) stopServiceWatch() {
 	// ErrCompacted is handled inside SessionWatcher, which means there is some other error occurred, closing server.
-	log.Ctx(s.ctx).Error("watch service channel closed", zap.Int64("serverID", paramtable.GetNodeID()))
+	log.Ctx(s.ctx).Error("watch service channel closed", zap.Int64("serverID", menv.GetNodeID()))
 	go s.Stop()
 	if s.session.IsTriggerKill() {
 		if p, err := os.FindProcess(os.Getpid()); err == nil {

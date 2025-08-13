@@ -42,6 +42,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/expr"
 	"github.com/milvus-io/milvus/pkg/v2/util/logutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/ratelimitutil"
@@ -157,7 +158,7 @@ func (node *Proxy) GetStateCode() commonpb.StateCode {
 // Register registers proxy at etcd
 func (node *Proxy) Register() error {
 	node.session.Register()
-	metrics.NumNodes.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), typeutil.ProxyRole).Inc()
+	metrics.NumNodes.WithLabelValues(fmt.Sprint(menv.GetNodeID()), typeutil.ProxyRole).Inc()
 	log.Info("Proxy Register Finished")
 	node.session.LivenessCheck(node.ctx, func() {
 		log.Error("Proxy disconnected from etcd, process will exit", zap.Int64("Server Id", node.session.ServerID))
@@ -209,27 +210,27 @@ func (node *Proxy) Init() error {
 	if err != nil {
 		return err
 	}
-	log.Info("Proxy init rateCollector done", zap.Int64("nodeID", paramtable.GetNodeID()))
+	log.Info("Proxy init rateCollector done", zap.Int64("nodeID", menv.GetNodeID()))
 
-	idAllocator, err := allocator.NewIDAllocator(node.ctx, node.mixCoord, paramtable.GetNodeID())
+	idAllocator, err := allocator.NewIDAllocator(node.ctx, node.mixCoord, menv.GetNodeID())
 	if err != nil {
 		log.Warn("failed to create id allocator",
-			zap.String("role", typeutil.ProxyRole), zap.Int64("ProxyID", paramtable.GetNodeID()),
+			zap.String("role", typeutil.ProxyRole), zap.Int64("ProxyID", menv.GetNodeID()),
 			zap.Error(err))
 		return err
 	}
 	node.rowIDAllocator = idAllocator
-	log.Debug("create id allocator done", zap.String("role", typeutil.ProxyRole), zap.Int64("ProxyID", paramtable.GetNodeID()))
+	log.Debug("create id allocator done", zap.String("role", typeutil.ProxyRole), zap.Int64("ProxyID", menv.GetNodeID()))
 
-	tsoAllocator, err := newTimestampAllocator(node.mixCoord, paramtable.GetNodeID())
+	tsoAllocator, err := newTimestampAllocator(node.mixCoord, menv.GetNodeID())
 	if err != nil {
 		log.Warn("failed to create timestamp allocator",
-			zap.String("role", typeutil.ProxyRole), zap.Int64("ProxyID", paramtable.GetNodeID()),
+			zap.String("role", typeutil.ProxyRole), zap.Int64("ProxyID", menv.GetNodeID()),
 			zap.Error(err))
 		return err
 	}
 	node.tsoAllocator = tsoAllocator
-	log.Debug("create timestamp allocator done", zap.String("role", typeutil.ProxyRole), zap.Int64("ProxyID", paramtable.GetNodeID()))
+	log.Debug("create timestamp allocator done", zap.String("role", typeutil.ProxyRole), zap.Int64("ProxyID", menv.GetNodeID()))
 
 	dmlChannelsFunc := getDmlChannelsFunc(node.ctx, node.mixCoord)
 	chMgr := newChannelsMgrImpl(dmlChannelsFunc, defaultInsertRepackFunc)
@@ -262,7 +263,7 @@ func (node *Proxy) Init() error {
 	uuid.EnableRandPool()
 	log.Debug("enable rand pool for UUIDv4 generation")
 
-	log.Info("init proxy done", zap.Int64("nodeID", paramtable.GetNodeID()), zap.String("Address", node.address))
+	log.Info("init proxy done", zap.Int64("nodeID", menv.GetNodeID()), zap.String("Address", node.address))
 	return nil
 }
 
@@ -292,7 +293,7 @@ func (node *Proxy) Start() error {
 
 	hookutil.GetExtension().Report(map[string]any{
 		hookutil.OpTypeKey: hookutil.OpTypeNodeID,
-		hookutil.NodeIDKey: paramtable.GetNodeID(),
+		hookutil.NodeIDKey: menv.GetNodeID(),
 	})
 
 	log.Debug("update state code", zap.String("role", typeutil.ProxyRole), zap.String("State", commonpb.StateCode_Healthy.String()))

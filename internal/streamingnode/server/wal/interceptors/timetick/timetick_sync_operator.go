@@ -17,7 +17,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 )
 
 // timeTickSyncOperator is a time tick sync operator.
@@ -34,7 +34,7 @@ func newTimeTickSyncOperator(param *interceptors.InterceptorBuildParam) *timeTic
 		interceptorBuildParam: param,
 		ackManager:            ack.NewAckManager(param.LastTimeTickMessage.TimeTick(), param.LastTimeTickMessage.LastConfirmedMessageID(), metrics),
 		ackDetails:            ack.NewAckDetails(),
-		sourceID:              paramtable.GetNodeID(),
+		sourceID:              menv.GetNodeID(),
 		metrics:               metrics,
 	}
 }

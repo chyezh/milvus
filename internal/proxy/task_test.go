@@ -49,6 +49,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -1512,7 +1513,7 @@ func TestHasCollectionTask(t *testing.T) {
 	assert.Equal(t, UniqueID(100), task.ID())
 	assert.Equal(t, Timestamp(100), task.BeginTs())
 	assert.Equal(t, Timestamp(100), task.EndTs())
-	assert.Equal(t, paramtable.GetNodeID(), task.GetBase().GetSourceID())
+	assert.Equal(t, menv.GetNodeID(), task.GetBase().GetSourceID())
 	// missing collectionID in globalMetaCache
 	err = task.Execute(ctx)
 	assert.NoError(t, err)
@@ -1588,7 +1589,7 @@ func TestDescribeCollectionTask(t *testing.T) {
 	assert.Equal(t, UniqueID(100), task.ID())
 	assert.Equal(t, Timestamp(100), task.BeginTs())
 	assert.Equal(t, Timestamp(100), task.EndTs())
-	assert.Equal(t, paramtable.GetNodeID(), task.GetBase().GetSourceID())
+	assert.Equal(t, menv.GetNodeID(), task.GetBase().GetSourceID())
 	// missing collectionID in globalMetaCache
 	err := task.Execute(ctx)
 	assert.NoError(t, err)
@@ -1835,7 +1836,7 @@ func TestCreatePartitionTask(t *testing.T) {
 	assert.Equal(t, UniqueID(100), task.ID())
 	assert.Equal(t, Timestamp(100), task.BeginTs())
 	assert.Equal(t, Timestamp(100), task.EndTs())
-	assert.Equal(t, paramtable.GetNodeID(), task.GetBase().GetSourceID())
+	assert.Equal(t, menv.GetNodeID(), task.GetBase().GetSourceID())
 
 	// setup global meta cache
 	mockCache.EXPECT().GetCollectionID(mock.Anything, mock.Anything, mock.Anything).Return(100, nil).Once()
@@ -1905,7 +1906,7 @@ func TestDropPartitionTask(t *testing.T) {
 	assert.Equal(t, UniqueID(100), task.ID())
 	assert.Equal(t, Timestamp(100), task.BeginTs())
 	assert.Equal(t, Timestamp(100), task.EndTs())
-	assert.Equal(t, paramtable.GetNodeID(), task.GetBase().GetSourceID())
+	assert.Equal(t, menv.GetNodeID(), task.GetBase().GetSourceID())
 	err := task.Execute(ctx)
 	assert.Error(t, err)
 
@@ -2023,7 +2024,7 @@ func TestHasPartitionTask(t *testing.T) {
 	assert.Equal(t, UniqueID(100), task.ID())
 	assert.Equal(t, Timestamp(100), task.BeginTs())
 	assert.Equal(t, Timestamp(100), task.EndTs())
-	assert.Equal(t, paramtable.GetNodeID(), task.GetBase().GetSourceID())
+	assert.Equal(t, menv.GetNodeID(), task.GetBase().GetSourceID())
 	err := task.Execute(ctx)
 	assert.Error(t, err)
 
@@ -2071,7 +2072,7 @@ func TestShowPartitionsTask(t *testing.T) {
 	assert.Equal(t, UniqueID(100), task.ID())
 	assert.Equal(t, Timestamp(100), task.BeginTs())
 	assert.Equal(t, Timestamp(100), task.EndTs())
-	assert.Equal(t, paramtable.GetNodeID(), task.GetBase().GetSourceID())
+	assert.Equal(t, menv.GetNodeID(), task.GetBase().GetSourceID())
 	err := task.Execute(ctx)
 	assert.Error(t, err)
 
@@ -2150,7 +2151,7 @@ func TestTask_Int64PrimaryKey(t *testing.T) {
 			MsgType:   commonpb.MsgType_CreatePartition,
 			MsgID:     0,
 			Timestamp: 0,
-			SourceID:  paramtable.GetNodeID(),
+			SourceID:  menv.GetNodeID(),
 		},
 		DbName:         dbName,
 		CollectionName: collectionName,
@@ -2172,7 +2173,7 @@ func TestTask_Int64PrimaryKey(t *testing.T) {
 	_ = ticker.start()
 	defer ticker.close()
 
-	idAllocator, err := allocator.NewIDAllocator(ctx, qc, paramtable.GetNodeID())
+	idAllocator, err := allocator.NewIDAllocator(ctx, qc, menv.GetNodeID())
 	assert.NoError(t, err)
 	_ = idAllocator.Start()
 	defer idAllocator.Close()
@@ -2188,7 +2189,7 @@ func TestTask_Int64PrimaryKey(t *testing.T) {
 					Base: &commonpb.MsgBase{
 						MsgType:  commonpb.MsgType_Insert,
 						MsgID:    0,
-						SourceID: paramtable.GetNodeID(),
+						SourceID: menv.GetNodeID(),
 					},
 					DbName:         dbName,
 					CollectionName: collectionName,
@@ -2380,7 +2381,7 @@ func TestTask_VarCharPrimaryKey(t *testing.T) {
 			MsgType:   commonpb.MsgType_CreatePartition,
 			MsgID:     0,
 			Timestamp: 0,
-			SourceID:  paramtable.GetNodeID(),
+			SourceID:  menv.GetNodeID(),
 		},
 		DbName:         dbName,
 		CollectionName: collectionName,
@@ -2402,7 +2403,7 @@ func TestTask_VarCharPrimaryKey(t *testing.T) {
 	_ = ticker.start()
 	defer ticker.close()
 
-	idAllocator, err := allocator.NewIDAllocator(ctx, mixc, paramtable.GetNodeID())
+	idAllocator, err := allocator.NewIDAllocator(ctx, mixc, menv.GetNodeID())
 	assert.NoError(t, err)
 	_ = idAllocator.Start()
 	defer idAllocator.Close()
@@ -2418,7 +2419,7 @@ func TestTask_VarCharPrimaryKey(t *testing.T) {
 					Base: &commonpb.MsgBase{
 						MsgType:  commonpb.MsgType_Insert,
 						MsgID:    0,
-						SourceID: paramtable.GetNodeID(),
+						SourceID: menv.GetNodeID(),
 					},
 					DbName:         dbName,
 					CollectionName: collectionName,
@@ -2472,7 +2473,7 @@ func TestTask_VarCharPrimaryKey(t *testing.T) {
 						Base: &commonpb.MsgBase{
 							MsgType:  commonpb.MsgType_Insert,
 							MsgID:    0,
-							SourceID: paramtable.GetNodeID(),
+							SourceID: menv.GetNodeID(),
 						},
 						DbName:         dbName,
 						CollectionName: collectionName,
@@ -2490,7 +2491,7 @@ func TestTask_VarCharPrimaryKey(t *testing.T) {
 							MsgType:   commonpb.MsgType_Delete,
 							MsgID:     0,
 							Timestamp: 0,
-							SourceID:  paramtable.GetNodeID(),
+							SourceID:  menv.GetNodeID(),
 						},
 						DbName:         dbName,
 						CollectionName: collectionName,
@@ -2504,7 +2505,7 @@ func TestTask_VarCharPrimaryKey(t *testing.T) {
 				Base: &commonpb.MsgBase{
 					MsgType:  commonpb.MsgType_Insert,
 					MsgID:    0,
-					SourceID: paramtable.GetNodeID(),
+					SourceID: menv.GetNodeID(),
 				},
 				DbName:         dbName,
 				CollectionName: collectionName,
@@ -3181,7 +3182,7 @@ func TestCreateResourceGroupTask(t *testing.T) {
 	assert.Equal(t, UniqueID(1), task.ID())
 	assert.Equal(t, Timestamp(2), task.BeginTs())
 	assert.Equal(t, Timestamp(2), task.EndTs())
-	assert.Equal(t, paramtable.GetNodeID(), task.Base.GetSourceID())
+	assert.Equal(t, menv.GetNodeID(), task.Base.GetSourceID())
 	assert.Equal(t, UniqueID(3), task.Base.GetTargetID())
 
 	err := task.Execute(ctx)
@@ -3219,7 +3220,7 @@ func TestDropResourceGroupTask(t *testing.T) {
 	assert.Equal(t, UniqueID(1), task.ID())
 	assert.Equal(t, Timestamp(2), task.BeginTs())
 	assert.Equal(t, Timestamp(2), task.EndTs())
-	assert.Equal(t, paramtable.GetNodeID(), task.Base.GetSourceID())
+	assert.Equal(t, menv.GetNodeID(), task.Base.GetSourceID())
 	assert.Equal(t, UniqueID(3), task.Base.GetTargetID())
 
 	err := task.Execute(ctx)
@@ -3258,7 +3259,7 @@ func TestTransferNodeTask(t *testing.T) {
 	assert.Equal(t, UniqueID(1), task.ID())
 	assert.Equal(t, Timestamp(2), task.BeginTs())
 	assert.Equal(t, Timestamp(2), task.EndTs())
-	assert.Equal(t, paramtable.GetNodeID(), task.Base.GetSourceID())
+	assert.Equal(t, menv.GetNodeID(), task.Base.GetSourceID())
 	assert.Equal(t, UniqueID(3), task.Base.GetTargetID())
 
 	err := task.Execute(ctx)
@@ -3299,7 +3300,7 @@ func TestTransferReplicaTask(t *testing.T) {
 	assert.Equal(t, UniqueID(1), task.ID())
 	assert.Equal(t, Timestamp(2), task.BeginTs())
 	assert.Equal(t, Timestamp(2), task.EndTs())
-	assert.Equal(t, paramtable.GetNodeID(), task.Base.GetSourceID())
+	assert.Equal(t, menv.GetNodeID(), task.Base.GetSourceID())
 	assert.Equal(t, UniqueID(3), task.Base.GetTargetID())
 
 	err := task.Execute(ctx)
@@ -3341,7 +3342,7 @@ func TestListResourceGroupsTask(t *testing.T) {
 	assert.Equal(t, UniqueID(1), task.ID())
 	assert.Equal(t, Timestamp(2), task.BeginTs())
 	assert.Equal(t, Timestamp(2), task.EndTs())
-	assert.Equal(t, paramtable.GetNodeID(), task.Base.GetSourceID())
+	assert.Equal(t, menv.GetNodeID(), task.Base.GetSourceID())
 	assert.Equal(t, UniqueID(3), task.Base.GetTargetID())
 
 	err := task.Execute(ctx)
@@ -3395,7 +3396,7 @@ func TestDescribeResourceGroupTask(t *testing.T) {
 	assert.Equal(t, UniqueID(1), task.ID())
 	assert.Equal(t, Timestamp(2), task.BeginTs())
 	assert.Equal(t, Timestamp(2), task.EndTs())
-	assert.Equal(t, paramtable.GetNodeID(), task.Base.GetSourceID())
+	assert.Equal(t, menv.GetNodeID(), task.Base.GetSourceID())
 	assert.Equal(t, UniqueID(3), task.Base.GetTargetID())
 
 	err := task.Execute(ctx)
@@ -3445,7 +3446,7 @@ func TestDescribeResourceGroupTaskFailed(t *testing.T) {
 	assert.Equal(t, UniqueID(1), task.ID())
 	assert.Equal(t, Timestamp(2), task.BeginTs())
 	assert.Equal(t, Timestamp(2), task.EndTs())
-	assert.Equal(t, paramtable.GetNodeID(), task.Base.GetSourceID())
+	assert.Equal(t, menv.GetNodeID(), task.Base.GetSourceID())
 	assert.Equal(t, UniqueID(3), task.Base.GetTargetID())
 
 	err := task.Execute(ctx)
@@ -3802,7 +3803,7 @@ func TestPartitionKey(t *testing.T) {
 	_ = ticker.start()
 	defer ticker.close()
 
-	idAllocator, err := allocator.NewIDAllocator(ctx, qc, paramtable.GetNodeID())
+	idAllocator, err := allocator.NewIDAllocator(ctx, qc, menv.GetNodeID())
 	assert.NoError(t, err)
 	_ = idAllocator.Start()
 	defer idAllocator.Close()
@@ -3829,7 +3830,7 @@ func TestPartitionKey(t *testing.T) {
 					Base: &commonpb.MsgBase{
 						MsgType:  commonpb.MsgType_Insert,
 						MsgID:    0,
-						SourceID: paramtable.GetNodeID(),
+						SourceID: menv.GetNodeID(),
 					},
 					CollectionName: collectionName,
 					FieldsData:     fieldDatas,
@@ -3880,7 +3881,7 @@ func TestPartitionKey(t *testing.T) {
 			req: &milvuspb.UpsertRequest{
 				Base: commonpbutil.NewMsgBase(
 					commonpbutil.WithMsgType(commonpb.MsgType_Upsert),
-					commonpbutil.WithSourceID(paramtable.GetNodeID()),
+					commonpbutil.WithSourceID(menv.GetNodeID()),
 				),
 				CollectionName: collectionName,
 				FieldsData:     fieldDatas,
@@ -4032,7 +4033,7 @@ func TestDefaultPartition(t *testing.T) {
 	_ = ticker.start()
 	defer ticker.close()
 
-	idAllocator, err := allocator.NewIDAllocator(ctx, qc, paramtable.GetNodeID())
+	idAllocator, err := allocator.NewIDAllocator(ctx, qc, menv.GetNodeID())
 	assert.NoError(t, err)
 	_ = idAllocator.Start()
 	defer idAllocator.Close()
@@ -4055,7 +4056,7 @@ func TestDefaultPartition(t *testing.T) {
 					Base: &commonpb.MsgBase{
 						MsgType:  commonpb.MsgType_Insert,
 						MsgID:    0,
-						SourceID: paramtable.GetNodeID(),
+						SourceID: menv.GetNodeID(),
 					},
 					CollectionName: collectionName,
 					FieldsData:     fieldDatas,
@@ -4102,7 +4103,7 @@ func TestDefaultPartition(t *testing.T) {
 			req: &milvuspb.UpsertRequest{
 				Base: commonpbutil.NewMsgBase(
 					commonpbutil.WithMsgType(commonpb.MsgType_Upsert),
-					commonpbutil.WithSourceID(paramtable.GetNodeID()),
+					commonpbutil.WithSourceID(menv.GetNodeID()),
 				),
 				CollectionName: collectionName,
 				FieldsData:     fieldDatas,

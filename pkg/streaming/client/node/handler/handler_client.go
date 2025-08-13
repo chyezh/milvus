@@ -2,17 +2,18 @@ package handler
 
 import (
 	"context"
-	"time"
 
 	"github.com/cockroachdb/errors"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/milvus-io/milvus/pkg/v2/json"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/assignment"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/consumer"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/producer"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/internal/util"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler/assignment"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler/consumer"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler/producer"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/service/balancer/picker"
@@ -22,7 +23,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/tracer"
 	"github.com/milvus-io/milvus/pkg/v2/util/interceptor"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
@@ -93,10 +93,10 @@ type HandlerClient interface {
 }
 
 // NewHandlerClient creates a new handler client.
-func NewHandlerClient(w types.AssignmentDiscoverWatcher) HandlerClient {
+func NewHandlerClient(w types.AssignmentDiscoverWatcher, cfg *util.Config) HandlerClient {
 	rb := resolver.NewChannelAssignmentBuilder(w)
-	dialTimeout := paramtable.Get().StreamingNodeGrpcClientCfg.DialTimeout.GetAsDuration(time.Millisecond)
-	dialOptions := getDialOptions(rb)
+	dialTimeout := cfg.DialTimeout
+	dialOptions := getDialOptions(rb, cfg)
 	conn := lazygrpc.NewConn(func(ctx context.Context) (*grpc.ClientConn, error) {
 		ctx, cancel := context.WithTimeout(ctx, dialTimeout)
 		defer cancel()
@@ -119,10 +119,11 @@ func NewHandlerClient(w types.AssignmentDiscoverWatcher) HandlerClient {
 }
 
 // getDialOptions returns grpc dial options.
-func getDialOptions(rb resolver.Builder) []grpc.DialOption {
-	cfg := &paramtable.Get().StreamingNodeGrpcClientCfg
-	tlsCfg := &paramtable.Get().InternalTLSCfg
-	retryPolicy := cfg.GetDefaultRetryPolicy()
+func getDialOptions(rb resolver.Builder, cfg *util.Config) []grpc.DialOption {
+	retryPolicy := make(map[string]interface{}, len(cfg.GRPCRetryPolicy)+1)
+	for k, v := range cfg.GRPCRetryPolicy {
+		retryPolicy[k] = v
+	}
 	retryPolicy["retryableStatusCodes"] = []string{"UNAVAILABLE"}
 	defaultServiceConfig := map[string]interface{}{
 		"loadBalancingConfig": []map[string]interface{}{
@@ -142,27 +143,26 @@ func getDialOptions(rb resolver.Builder) []grpc.DialOption {
 	if err != nil {
 		panic(err)
 	}
-	creds, err := tlsCfg.GetClientCreds(context.Background())
-	if err != nil {
-		panic(err)
-	}
-	dialOptions := cfg.GetDialOptionsFromConfig()
+	dialOptions := make([]grpc.DialOption, 0, len(cfg.ExtraGRPCDialOptions)+10)
 	dialOptions = append(dialOptions,
 		grpc.WithBlock(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithResolvers(rb),
-		grpc.WithTransportCredentials(creds),
 		grpc.WithChainUnaryInterceptor(
 			otelgrpc.UnaryClientInterceptor(tracer.GetInterceptorOpts()...),
-			interceptor.ClusterInjectionUnaryClientInterceptor(),
+			interceptor.ClusterInjectionUnaryClientInterceptor(cfg.ClusterPrefix),
 			streamingserviceinterceptor.NewStreamingServiceUnaryClientInterceptor(),
 		),
 		grpc.WithChainStreamInterceptor(
 			otelgrpc.StreamClientInterceptor(tracer.GetInterceptorOpts()...),
-			interceptor.ClusterInjectionStreamClientInterceptor(),
+			interceptor.ClusterInjectionStreamClientInterceptor(cfg.ClusterPrefix),
 			streamingserviceinterceptor.NewStreamingServiceStreamClientInterceptor(),
 		),
 		grpc.WithReturnConnectionError(),
 		grpc.WithDefaultServiceConfig(string(defaultServiceConfigJSON)),
 	)
+	for _, opt := range cfg.ExtraGRPCDialOptions {
+		dialOptions = append(dialOptions, opt)
+	}
 	return dialOptions
 }

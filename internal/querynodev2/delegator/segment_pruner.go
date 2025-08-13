@@ -23,8 +23,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/distance"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -170,14 +170,14 @@ func PruneSegments(ctx context.Context,
 			bias = float64(maxSegmentCount) / float64(minSegmentCount)
 		}
 		metrics.QueryNodeSegmentPruneBias.
-			WithLabelValues(fmt.Sprint(paramtable.GetNodeID()),
+			WithLabelValues(fmt.Sprint(menv.GetNodeID()),
 				fmt.Sprint(collectionID),
 				pruneType,
 			).Set(bias)
 
 		filterRatio := float32(realFilteredSegments) / float32(totalSegNum)
 		metrics.QueryNodeSegmentPruneRatio.
-			WithLabelValues(fmt.Sprint(paramtable.GetNodeID()),
+			WithLabelValues(fmt.Sprint(menv.GetNodeID()),
 				fmt.Sprint(collectionID),
 				pruneType,
 			).Set(float64(filterRatio))
@@ -190,7 +190,7 @@ func PruneSegments(ctx context.Context,
 	}
 
 	metrics.QueryNodeSegmentPruneLatency.WithLabelValues(
-		fmt.Sprint(paramtable.GetNodeID()),
+		fmt.Sprint(menv.GetNodeID()),
 		fmt.Sprint(collectionID),
 		pruneType).
 		Observe(float64(tr.ElapseSpan().Milliseconds()))

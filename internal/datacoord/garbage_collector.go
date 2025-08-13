@@ -40,6 +40,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metautil"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -325,7 +326,7 @@ func (gc *garbageCollector) recycleUnusedBinlogFiles(ctx context.Context) {
 	for _, task := range scanTasks {
 		gc.recycleUnusedBinLogWithChecker(ctx, task.prefix, task.label, task.checker)
 	}
-	metrics.GarbageCollectorRunCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Add(1)
+	metrics.GarbageCollectorRunCount.WithLabelValues(fmt.Sprint(menv.GetNodeID())).Add(1)
 }
 
 // recycleUnusedBinLogWithChecker scans the prefix and checks the path with checker.
@@ -405,7 +406,7 @@ func (gc *garbageCollector) recycleUnusedBinLogWithChecker(ctx context.Context, 
 		zap.Error(err))
 
 	metrics.GarbageCollectorFileScanDuration.
-		WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), label).
+		WithLabelValues(fmt.Sprint(menv.GetNodeID()), label).
 		Observe(float64(cost.Milliseconds()))
 }
 
@@ -986,7 +987,7 @@ func (gc *garbageCollector) recycleUnusedTextIndexFiles(ctx context.Context) {
 	}
 	log.Info("text index files recycle done")
 
-	metrics.GarbageCollectorRunCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Add(1)
+	metrics.GarbageCollectorRunCount.WithLabelValues(fmt.Sprint(menv.GetNodeID())).Add(1)
 }
 
 // recycleUnusedJSONIndexFiles load meta file info and compares OSS keys
@@ -1047,5 +1048,5 @@ func (gc *garbageCollector) recycleUnusedJSONIndexFiles(ctx context.Context) {
 	}
 	log.Info("json index files recycle done")
 
-	metrics.GarbageCollectorRunCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Add(1)
+	metrics.GarbageCollectorRunCount.WithLabelValues(fmt.Sprint(menv.GetNodeID())).Add(1)
 }

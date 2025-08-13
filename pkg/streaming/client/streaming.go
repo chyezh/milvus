@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	kvfactory "github.com/milvus-io/milvus/pkg/v2/dependency/kv"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
@@ -14,9 +13,11 @@ var singleton Client = nil
 
 // Init initializes the wal accesser with the given etcd client.
 // should be called before any other operations.
-func Init() {
-	c, _ := kvfactory.GetEtcdAndPath()
-	singleton = NewClient(c)
+func Init(cfg *Config) {
+	var err error
+	if singleton, err = NewClient(cfg); err != nil {
+		panic(err)
+	}
 }
 
 // Release releases the resources of the wal accesser.

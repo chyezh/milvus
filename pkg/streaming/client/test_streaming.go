@@ -26,9 +26,11 @@ import (
 
 	kvfactory "github.com/milvus-io/milvus/pkg/v2/dependency/kv"
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/internal/util"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/impls/rmq"
+	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
 var expectErr = make(chan error, 10)
@@ -40,7 +42,13 @@ func SetWALForTest(w Client) {
 
 func RecoverWALForTest() {
 	c, _ := kvfactory.GetEtcdAndPath()
-	singleton = NewClient(c)
+	var err error
+	if singleton, err = NewClient(&util.Config{
+		ETCDClient: c,
+		RootPath:   paramtable.Get().EtcdCfg.MetaRootPath.GetValue(),
+	}); err != nil {
+		panic(err)
+	}
 }
 
 func ExpectErrorOnce(err error) {

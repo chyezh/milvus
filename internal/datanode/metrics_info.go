@@ -25,6 +25,7 @@ import (
 	"github.com/milvus-io/milvus/internal/flushcommon/util"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/ratelimitutil"
@@ -100,11 +101,11 @@ func (node *DataNode) getSystemInfoMetrics(ctx context.Context, _ *milvuspb.GetM
 
 	nodeInfos := metricsinfo.DataNodeInfos{
 		BaseComponentInfos: metricsinfo.BaseComponentInfos{
-			Name:          metricsinfo.ConstructComponentName(typeutil.DataNodeRole, paramtable.GetNodeID()),
+			Name:          metricsinfo.ConstructComponentName(typeutil.DataNodeRole, menv.GetNodeID()),
 			HardwareInfos: hardwareMetrics,
 			SystemInfo:    metricsinfo.DeployMetrics{},
-			CreatedTime:   paramtable.GetCreateTime().String(),
-			UpdatedTime:   paramtable.GetUpdateTime().String(),
+			CreatedTime:   menv.GetCreateTime().String(),
+			UpdatedTime:   menv.GetUpdateTime().String(),
 			Type:          typeutil.DataNodeRole,
 			ID:            node.GetSession().ServerID,
 		},

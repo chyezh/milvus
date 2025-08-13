@@ -58,6 +58,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/lifetime"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metautil"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
@@ -414,7 +415,7 @@ func (sd *shardDelegator) Search(ctx context.Context, req *querypb.SearchRequest
 	}
 
 	metrics.QueryNodeSQLatencyWaitTSafe.WithLabelValues(
-		fmt.Sprint(paramtable.GetNodeID()), metrics.SearchLabel).
+		fmt.Sprint(menv.GetNodeID()), metrics.SearchLabel).
 		Observe(float64(waitTr.ElapseSpan().Milliseconds()))
 
 	sealed, growing, sealedRowCount, version, err := sd.distribution.PinReadableSegments(partialResultRequiredDataRatio, req.GetReq().GetPartitionIDs()...)
@@ -533,7 +534,7 @@ func (sd *shardDelegator) QueryStream(ctx context.Context, req *querypb.QueryReq
 		req.Req.MvccTimestamp = tSafe
 	}
 	metrics.QueryNodeSQLatencyWaitTSafe.WithLabelValues(
-		fmt.Sprint(paramtable.GetNodeID()), metrics.QueryLabel).
+		fmt.Sprint(menv.GetNodeID()), metrics.QueryLabel).
 		Observe(float64(waitTr.ElapseSpan().Milliseconds()))
 
 	sealed, growing, sealedRowCount, version, err := sd.distribution.PinReadableSegments(float64(1.0), req.GetReq().GetPartitionIDs()...)
@@ -619,7 +620,7 @@ func (sd *shardDelegator) Query(ctx context.Context, req *querypb.QueryRequest) 
 	}
 
 	metrics.QueryNodeSQLatencyWaitTSafe.WithLabelValues(
-		fmt.Sprint(paramtable.GetNodeID()), metrics.QueryLabel).
+		fmt.Sprint(menv.GetNodeID()), metrics.QueryLabel).
 		Observe(float64(waitTr.ElapseSpan().Milliseconds()))
 
 	sealed, growing, sealedRowCount, version, err := sd.distribution.PinReadableSegments(partialResultRequiredDataRatio, req.GetReq().GetPartitionIDs()...)
@@ -796,7 +797,7 @@ func organizeSubTask[T any](ctx context.Context,
 		}
 	}
 
-	packSubTask(growing, paramtable.GetNodeID(), querypb.DataScope_Streaming)
+	packSubTask(growing, menv.GetNodeID(), querypb.DataScope_Streaming)
 
 	return result, nil
 }
@@ -1031,7 +1032,7 @@ func (sd *shardDelegator) UpdateSchema(ctx context.Context, schema *schemapb.Col
 
 	tasks, err := organizeSubTask(ctx, &querypb.UpdateSchemaRequest{
 		Base: commonpbutil.NewMsgBase(
-			commonpbutil.WithSourceID(paramtable.GetNodeID()),
+			commonpbutil.WithSourceID(menv.GetNodeID()),
 		),
 		CollectionID: sd.collectionID,
 		Schema:       schema,
@@ -1088,8 +1089,8 @@ func (sd *shardDelegator) Close() {
 	sd.deleteBuffer.Clear()
 	log.Info("unregister all l0 segments", zap.Duration("cost", time.Since(start)))
 
-	metrics.QueryNodeDeleteBufferSize.DeleteLabelValues(fmt.Sprint(paramtable.GetNodeID()), sd.vchannelName)
-	metrics.QueryNodeDeleteBufferRowNum.DeleteLabelValues(fmt.Sprint(paramtable.GetNodeID()), sd.vchannelName)
+	metrics.QueryNodeDeleteBufferSize.DeleteLabelValues(fmt.Sprint(menv.GetNodeID()), sd.vchannelName)
+	metrics.QueryNodeDeleteBufferRowNum.DeleteLabelValues(fmt.Sprint(menv.GetNodeID()), sd.vchannelName)
 }
 
 // As partition stats is an optimization for search/query which is not mandatory for milvus instance,
@@ -1175,7 +1176,7 @@ func NewShardDelegator(ctx context.Context, collectionID UniqueID, replicaID Uni
 		lifetime:       lifetime.NewLifetime(lifetime.Initializing),
 		distribution:   NewDistribution(channel, queryView),
 		deleteBuffer: deletebuffer.NewListDeleteBuffer[*deletebuffer.Item](startTs, sizePerBlock,
-			[]string{fmt.Sprint(paramtable.GetNodeID()), channel}),
+			[]string{fmt.Sprint(menv.GetNodeID()), channel}),
 		pkOracle:         pkoracle.NewPkOracle(),
 		latestTsafe:      atomic.NewUint64(startTs),
 		loader:           loader,

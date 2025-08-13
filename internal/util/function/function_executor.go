@@ -33,8 +33,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 )
 
@@ -126,7 +126,7 @@ func (executor *FunctionExecutor) processSingleFunction(ctx context.Context, run
 		return nil, err
 	}
 
-	metrics.ProxyFunctionlatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), runner.GetCollectionName(), runner.GetFunctionTypeName(), runner.GetFunctionProvider(), runner.GetFunctionName()).Observe(float64(tr.RecordSpan().Milliseconds()))
+	metrics.ProxyFunctionlatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), runner.GetCollectionName(), runner.GetFunctionTypeName(), runner.GetFunctionProvider(), runner.GetFunctionName()).Observe(float64(tr.RecordSpan().Milliseconds()))
 	tr.CtxElapse(ctx, "function ProcessInsert done")
 	return outputs, nil
 }
@@ -188,7 +188,7 @@ func (executor *FunctionExecutor) processSingleSearch(ctx context.Context, runne
 	if err != nil {
 		return nil, err
 	}
-	metrics.ProxyFunctionlatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), runner.GetCollectionName(), runner.GetFunctionTypeName(), runner.GetFunctionProvider(), runner.GetFunctionName()).Observe(float64(tr.RecordSpan().Milliseconds()))
+	metrics.ProxyFunctionlatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), runner.GetCollectionName(), runner.GetFunctionTypeName(), runner.GetFunctionProvider(), runner.GetFunctionName()).Observe(float64(tr.RecordSpan().Milliseconds()))
 	tr.CtxElapse(ctx, "function ProcessSearch done")
 	return proto.Marshal(res)
 }

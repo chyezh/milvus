@@ -6,7 +6,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
 )
@@ -32,7 +32,7 @@ type TimeTickMetrics struct {
 // NewTimeTickMetrics creates a new time tick metrics.
 func NewTimeTickMetrics(pchannel string) *TimeTickMetrics {
 	constLabel := prometheus.Labels{
-		metrics.NodeIDLabelName:     paramtable.GetStringNodeID(),
+		metrics.NodeIDLabelName:     menv.GetStringNodeID(),
 		metrics.WALChannelLabelName: pchannel,
 	}
 	return &TimeTickMetrics{

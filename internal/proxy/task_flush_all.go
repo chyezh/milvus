@@ -24,7 +24,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 )
 
 type flushAllTask struct {
@@ -74,7 +74,7 @@ func (t *flushAllTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_Flush
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 

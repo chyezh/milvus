@@ -58,6 +58,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/etcd"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metautil"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
@@ -1141,7 +1142,7 @@ func (suite *ServiceSuite) TestReleaseSegments_Transfer() {
 			CollectionID: suite.collectionID,
 			SegmentIDs:   suite.validSegmentIDs,
 			NeedTransfer: true,
-			NodeID:       paramtable.GetNodeID(),
+			NodeID:       menv.GetNodeID(),
 		}
 
 		status, err := suite.node.ReleaseSegments(ctx, req)
@@ -1163,7 +1164,7 @@ func (suite *ServiceSuite) TestReleaseSegments_Transfer() {
 			CollectionID: suite.collectionID,
 			SegmentIDs:   suite.validSegmentIDs,
 			NeedTransfer: true,
-			NodeID:       paramtable.GetNodeID(),
+			NodeID:       menv.GetNodeID(),
 		}
 
 		status, err := suite.node.ReleaseSegments(ctx, req)
@@ -1193,7 +1194,7 @@ func (suite *ServiceSuite) TestReleaseSegments_Transfer() {
 			CollectionID: suite.collectionID,
 			SegmentIDs:   suite.validSegmentIDs,
 			NeedTransfer: true,
-			NodeID:       paramtable.GetNodeID(),
+			NodeID:       menv.GetNodeID(),
 		}
 
 		status, err := suite.node.ReleaseSegments(ctx, req)

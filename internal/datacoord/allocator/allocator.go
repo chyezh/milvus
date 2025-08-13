@@ -24,8 +24,8 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
@@ -57,7 +57,7 @@ func (alloc *rootCoordAllocator) AllocTimestamp(ctx context.Context) (typeutil.T
 	resp, err := alloc.mixCoord.AllocTimestamp(ctx, &rootcoordpb.AllocTimestampRequest{
 		Base: commonpbutil.NewMsgBase(
 			commonpbutil.WithMsgType(commonpb.MsgType_RequestTSO),
-			commonpbutil.WithSourceID(paramtable.GetNodeID()),
+			commonpbutil.WithSourceID(menv.GetNodeID()),
 		),
 		Count: 1,
 	})
@@ -72,7 +72,7 @@ func (alloc *rootCoordAllocator) AllocID(ctx context.Context) (typeutil.UniqueID
 	resp, err := alloc.mixCoord.AllocID(ctx, &rootcoordpb.AllocIDRequest{
 		Base: commonpbutil.NewMsgBase(
 			commonpbutil.WithMsgType(commonpb.MsgType_RequestID),
-			commonpbutil.WithSourceID(paramtable.GetNodeID()),
+			commonpbutil.WithSourceID(menv.GetNodeID()),
 		),
 		Count: 1,
 	})
@@ -94,7 +94,7 @@ func (alloc *rootCoordAllocator) AllocN(n int64) (typeutil.UniqueID, typeutil.Un
 	resp, err := alloc.mixCoord.AllocID(ctx, &rootcoordpb.AllocIDRequest{
 		Base: commonpbutil.NewMsgBase(
 			commonpbutil.WithMsgType(commonpb.MsgType_RequestID),
-			commonpbutil.WithSourceID(paramtable.GetNodeID()),
+			commonpbutil.WithSourceID(menv.GetNodeID()),
 		),
 		Count: uint32(n),
 	})

@@ -34,6 +34,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/proxypb"
 	"github.com/milvus-io/milvus/pkg/v2/util"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/ratelimitutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
@@ -283,7 +284,7 @@ func (m *SimpleLimiter) updateLimiterNode(req *proxypb.Limiter, node *rlinternal
 			return fmt.Errorf("unregister rateLimiter for rateType %s", rate.GetRt().String())
 		}
 		limit.SetLimit(ratelimitutil.Limit(rate.GetR()))
-		setRateGaugeByRateType(rate.GetRt(), paramtable.GetNodeID(), sourceID, rate.GetR())
+		setRateGaugeByRateType(rate.GetRt(), menv.GetNodeID(), sourceID, rate.GetR())
 	}
 	quotaStates := typeutil.NewConcurrentMap[milvuspb.QuotaState, commonpb.ErrorCode]()
 	states := req.GetStates()

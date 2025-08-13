@@ -36,6 +36,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -236,7 +237,7 @@ func (s *Server) getSystemInfoMetrics(
 	coordTopology := metricsinfo.DataCoordTopology{
 		Cluster: clusterTopology,
 		Connections: metricsinfo.ConnTopology{
-			Name: metricsinfo.ConstructComponentName(typeutil.DataCoordRole, paramtable.GetNodeID()),
+			Name: metricsinfo.ConstructComponentName(typeutil.DataCoordRole, menv.GetNodeID()),
 			// TODO(dragondriver): fill ConnectedComponents if necessary
 			ConnectedComponents: []metricsinfo.ConnectionInfo{},
 		},
@@ -263,7 +264,7 @@ func (s *Server) getDataCoordMetrics(ctx context.Context) metricsinfo.DataCoordI
 
 	ret := metricsinfo.DataCoordInfos{
 		BaseComponentInfos: metricsinfo.BaseComponentInfos{
-			Name: metricsinfo.ConstructComponentName(typeutil.DataCoordRole, paramtable.GetNodeID()),
+			Name: metricsinfo.ConstructComponentName(typeutil.DataCoordRole, menv.GetNodeID()),
 			HardwareInfos: metricsinfo.HardwareMetrics{
 				IP:               s.session.GetAddress(),
 				CPUCoreCount:     hardware.GetCPUNum(),
@@ -275,10 +276,10 @@ func (s *Server) getDataCoordMetrics(ctx context.Context) metricsinfo.DataCoordI
 				IOWaitPercentage: ioWait,
 			},
 			SystemInfo:  metricsinfo.DeployMetrics{},
-			CreatedTime: paramtable.GetCreateTime().String(),
-			UpdatedTime: paramtable.GetUpdateTime().String(),
+			CreatedTime: menv.GetCreateTime().String(),
+			UpdatedTime: menv.GetUpdateTime().String(),
 			Type:        typeutil.DataCoordRole,
-			ID:          paramtable.GetNodeID(),
+			ID:          menv.GetNodeID(),
 		},
 		SystemConfigurations: metricsinfo.DataCoordConfiguration{
 			SegmentMaxSize: Params.DataCoordCfg.SegmentMaxSize.GetAsFloat(),

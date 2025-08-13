@@ -18,7 +18,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/wal"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
 
@@ -147,7 +147,7 @@ func (impl *WALFlusherImpl) buildFlusherComponents(ctx context.Context, l wal.WA
 	impl.logger.Info("data coord client ready")
 
 	// build all components.
-	broker := broker.NewCoordBroker(mixc, paramtable.GetNodeID())
+	broker := broker.NewCoordBroker(mixc, menv.GetNodeID())
 	chunkManager := resource.Resource().ChunkManager()
 
 	cpUpdater := util.NewChannelCheckpointUpdaterWithCallback(broker, func(mp *msgpb.MsgPosition) {

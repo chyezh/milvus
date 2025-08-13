@@ -47,6 +47,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/proxypb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/ratelimitutil"
@@ -732,7 +733,7 @@ func TestProxy_Connect(t *testing.T) {
 			mock.Anything,
 			mock.Anything,
 		).Return(&milvuspb.ListDatabasesResponse{
-			Status: merr.Status(merr.WrapErrServiceNotReady(paramtable.GetRole(), paramtable.GetNodeID(), "initialization")),
+			Status: merr.Status(merr.WrapErrServiceNotReady(menv.GetRole(), menv.GetNodeID(), "initialization")),
 		}, nil)
 
 		node := &Proxy{mixCoord: r}

@@ -1,6 +1,8 @@
 package client
 
-import "github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+import (
+	"github.com/cockroachdb/errors"
+)
 
 // OptClientRootPath is the option to set the root path of the client.
 func OptClientRootPath(rootPath string) ClientOption {
@@ -24,13 +26,21 @@ type config struct {
 	RootPath string
 }
 
-// newConfig create a new config with the given options
-func newConfig(opts ...ClientOption) *config {
-	cfg := &config{
-		RootPath: paramtable.Get().EtcdCfg.MetaRootPath.GetValue(),
+func (cfg *config) Validate() error {
+	if cfg.RootPath == "" {
+		return errors.New("root path is empty")
 	}
+	return nil
+}
+
+// newConfig create a new config with the given options
+func newConfig(opts ...ClientOption) (*config, error) {
+	cfg := &config{}
 	for _, opt := range opts {
 		opt.apply(cfg)
 	}
-	return cfg
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
 }

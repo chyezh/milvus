@@ -36,6 +36,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/pkg/v2/util"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -102,7 +103,7 @@ func (s *mixCoordImpl) Register() error {
 	log := log.Ctx(s.ctx)
 	s.session.Register()
 	afterRegister := func() {
-		metrics.NumNodes.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), typeutil.MixCoordRole).Inc()
+		metrics.NumNodes.WithLabelValues(fmt.Sprint(menv.GetNodeID()), typeutil.MixCoordRole).Inc()
 		log.Info("MixCoord Register Finished")
 		s.session.LivenessCheck(s.ctx, func() {
 			log.Error("MixCoord disconnected from etcd, process will exit", zap.Int64("serverID", s.session.GetServerID()))
@@ -297,7 +298,7 @@ func (s *mixCoordImpl) SetMixCoordClient(client types.MixCoordClient) {
 }
 
 func (s *mixCoordImpl) GetServerID() int64 {
-	return paramtable.GetNodeID()
+	return menv.GetNodeID()
 }
 
 func (s *mixCoordImpl) UpdateStateCode(code commonpb.StateCode) {
@@ -735,14 +736,14 @@ func (s *mixCoordImpl) GetMetrics(ctx context.Context, in *milvuspb.GetMetricsRe
 		return &milvuspb.GetMetricsResponse{
 			Status:        merr.Status(err),
 			Response:      "",
-			ComponentName: metricsinfo.ConstructComponentName(typeutil.MixCoordRole, paramtable.GetNodeID()),
+			ComponentName: metricsinfo.ConstructComponentName(typeutil.MixCoordRole, menv.GetNodeID()),
 		}, nil
 	}
 
 	return &milvuspb.GetMetricsResponse{
 		Status:        merr.Success(),
 		Response:      resp,
-		ComponentName: metricsinfo.ConstructComponentName(typeutil.MixCoordRole, paramtable.GetNodeID()),
+		ComponentName: metricsinfo.ConstructComponentName(typeutil.MixCoordRole, menv.GetNodeID()),
 	}, nil
 }
 

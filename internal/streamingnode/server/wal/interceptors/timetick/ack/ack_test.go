@@ -20,6 +20,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/util/mock_message"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/impls/walimplstest"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
@@ -27,7 +28,7 @@ import (
 
 func TestAck(t *testing.T) {
 	paramtable.Init()
-	paramtable.SetNodeID(1)
+	menv.SetNodeID(1)
 
 	ctx := context.Background()
 
@@ -146,7 +147,7 @@ func TestAck(t *testing.T) {
 
 func TestAckManager(t *testing.T) {
 	paramtable.Init()
-	paramtable.SetNodeID(1)
+	menv.SetNodeID(1)
 
 	ctx := context.Background()
 

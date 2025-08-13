@@ -1,4 +1,4 @@
-package client
+package coord
 
 import (
 	"testing"
@@ -15,7 +15,11 @@ func TestDial(t *testing.T) {
 	c, _ := kvfactory.GetEtcdAndPath()
 	assert.NotNil(t, c)
 
-	client := NewClient(c)
+	client, err := NewClient(&Config{
+		ETCDClient: c,
+		RootPath:   "/test",
+	})
+	assert.NoError(t, err)
 	assert.NotNil(t, client)
 	client.Close()
 }

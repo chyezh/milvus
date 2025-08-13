@@ -33,6 +33,7 @@ import (
 	"unsafe"
 
 	"github.com/milvus-io/milvus/internal/util/initcore"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -67,7 +68,7 @@ func InitSegcore() {
 	C.InitCpuNum(cCPUNum)
 
 	cKnowhereThreadPoolSize := C.uint32_t(hardware.GetCPUNum() * paramtable.DefaultKnowhereThreadPoolNumRatioInBuild)
-	if paramtable.GetRole() == typeutil.StandaloneRole {
+	if menv.GetRole() == typeutil.StandaloneRole {
 		threadPoolSize := int(float64(hardware.GetCPUNum()) * paramtable.Get().CommonCfg.BuildIndexThreadPoolRatio.GetAsFloat())
 		if threadPoolSize < 1 {
 			threadPoolSize = 1

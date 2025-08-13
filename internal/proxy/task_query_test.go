@@ -37,6 +37,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/testutils"
@@ -104,7 +105,7 @@ func TestQueryTask_all(t *testing.T) {
 	status, err := qc.LoadCollection(ctx, &querypb.LoadCollectionRequest{
 		Base: &commonpb.MsgBase{
 			MsgType:  commonpb.MsgType_LoadCollection,
-			SourceID: paramtable.GetNodeID(),
+			SourceID: menv.GetNodeID(),
 		},
 		CollectionID: collectionID,
 	})
@@ -117,7 +118,7 @@ func TestQueryTask_all(t *testing.T) {
 			RetrieveRequest: &internalpb.RetrieveRequest{
 				Base: &commonpb.MsgBase{
 					MsgType:  commonpb.MsgType_Retrieve,
-					SourceID: paramtable.GetNodeID(),
+					SourceID: menv.GetNodeID(),
 				},
 				CollectionID:   collectionID,
 				OutputFieldsId: make([]int64, len(fieldName2Types)),
@@ -130,7 +131,7 @@ func TestQueryTask_all(t *testing.T) {
 			request: &milvuspb.QueryRequest{
 				Base: &commonpb.MsgBase{
 					MsgType:  commonpb.MsgType_Retrieve,
-					SourceID: paramtable.GetNodeID(),
+					SourceID: menv.GetNodeID(),
 				},
 				CollectionName: collectionName,
 				Expr:           expr,
@@ -262,7 +263,7 @@ func TestQueryTask_all(t *testing.T) {
 			RetrieveRequest: &internalpb.RetrieveRequest{
 				Base: &commonpb.MsgBase{
 					MsgType:  commonpb.MsgType_Retrieve,
-					SourceID: paramtable.GetNodeID(),
+					SourceID: menv.GetNodeID(),
 				},
 				CollectionID:   collectionID,
 				OutputFieldsId: make([]int64, len(fieldName2Types)),
@@ -275,7 +276,7 @@ func TestQueryTask_all(t *testing.T) {
 			request: &milvuspb.QueryRequest{
 				Base: &commonpb.MsgBase{
 					MsgType:  commonpb.MsgType_Retrieve,
-					SourceID: paramtable.GetNodeID(),
+					SourceID: menv.GetNodeID(),
 				},
 				CollectionName: collectionName,
 				Expr:           expr,
@@ -312,7 +313,7 @@ func TestQueryTask_all(t *testing.T) {
 			RetrieveRequest: &internalpb.RetrieveRequest{
 				Base: &commonpb.MsgBase{
 					MsgType:  commonpb.MsgType_Retrieve,
-					SourceID: paramtable.GetNodeID(),
+					SourceID: menv.GetNodeID(),
 				},
 				CollectionID:   collectionID,
 				OutputFieldsId: make([]int64, len(fieldName2Types)),
@@ -325,7 +326,7 @@ func TestQueryTask_all(t *testing.T) {
 			request: &milvuspb.QueryRequest{
 				Base: &commonpb.MsgBase{
 					MsgType:  commonpb.MsgType_Retrieve,
-					SourceID: paramtable.GetNodeID(),
+					SourceID: menv.GetNodeID(),
 				},
 				CollectionName: collectionName,
 				Expr:           expr,

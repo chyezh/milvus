@@ -26,8 +26,8 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
 func TestServerIDInterceptor(t *testing.T) {
@@ -78,7 +78,7 @@ func TestServerIDInterceptor(t *testing.T) {
 			return nil, nil
 		}
 		serverInfo := &grpc.UnaryServerInfo{FullMethod: method}
-		interceptor := ServerIDValidationUnaryServerInterceptor(paramtable.GetNodeID)
+		interceptor := ServerIDValidationUnaryServerInterceptor(menv.GetNodeID)
 
 		// no md in context
 		_, err := interceptor(context.Background(), req, serverInfo, handler)
@@ -102,7 +102,7 @@ func TestServerIDInterceptor(t *testing.T) {
 		assert.ErrorIs(t, err, merr.ErrNodeNotMatch)
 
 		// with same ServerID
-		md = metadata.Pairs(ServerIDKey, fmt.Sprint(paramtable.GetNodeID()))
+		md = metadata.Pairs(ServerIDKey, fmt.Sprint(menv.GetNodeID()))
 		ctx = metadata.NewIncomingContext(context.Background(), md)
 		_, err = interceptor(ctx, req, serverInfo, handler)
 		assert.NoError(t, err)
@@ -112,7 +112,7 @@ func TestServerIDInterceptor(t *testing.T) {
 		handler := func(srv interface{}, stream grpc.ServerStream) error {
 			return nil
 		}
-		interceptor := ServerIDValidationStreamServerInterceptor(paramtable.GetNodeID)
+		interceptor := ServerIDValidationStreamServerInterceptor(menv.GetNodeID)
 
 		// no md in context
 		err := interceptor(nil, newMockSS(context.Background()), nil, handler)
@@ -136,7 +136,7 @@ func TestServerIDInterceptor(t *testing.T) {
 		assert.ErrorIs(t, err, merr.ErrNodeNotMatch)
 
 		// with same ServerID
-		md = metadata.Pairs(ServerIDKey, fmt.Sprint(paramtable.GetNodeID()))
+		md = metadata.Pairs(ServerIDKey, fmt.Sprint(menv.GetNodeID()))
 		ctx = metadata.NewIncomingContext(context.Background(), md)
 		err = interceptor(nil, newMockSS(ctx), nil, handler)
 		assert.NoError(t, err)

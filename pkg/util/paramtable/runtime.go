@@ -18,14 +18,12 @@ package paramtable
 
 import (
 	"os"
-	"strconv"
 	"sync"
 	"time"
 
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/pkg/v2/log"
-	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
 const (
@@ -35,9 +33,6 @@ const (
 var (
 	once         sync.Once
 	params       ComponentParam
-	runtimeParam = runtimeConfig{
-		components: typeutil.ConcurrentSet[string]{},
-	}
 	hookParams   hookConfig
 	cipherParams cipherConfig
 )
@@ -86,48 +81,4 @@ func GetHookParams() *hookConfig {
 
 func GetCipherParams() *cipherConfig {
 	return &cipherParams
-}
-
-func SetNodeID(newID UniqueID) {
-	runtimeParam.nodeID.Store(newID)
-}
-
-func GetNodeID() UniqueID {
-	return runtimeParam.nodeID.Load()
-}
-
-func GetStringNodeID() string {
-	return strconv.FormatInt(GetNodeID(), 10)
-}
-
-func SetRole(role string) {
-	runtimeParam.role.Store(role)
-}
-
-func GetRole() string {
-	return runtimeParam.role.Load()
-}
-
-func SetCreateTime(d time.Time) {
-	runtimeParam.createTime.Store(d)
-}
-
-func GetCreateTime() time.Time {
-	return runtimeParam.createTime.Load()
-}
-
-func SetUpdateTime(d time.Time) {
-	runtimeParam.updateTime.Store(d)
-}
-
-func GetUpdateTime() time.Time {
-	return runtimeParam.updateTime.Load()
-}
-
-func SetLocalComponentEnabled(component string) {
-	runtimeParam.components.Insert(component)
-}
-
-func IsLocalComponentEnabled(component string) bool {
-	return runtimeParam.components.Contain(component)
 }

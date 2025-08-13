@@ -33,6 +33,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -133,7 +134,7 @@ func (s *StatisticTaskSuite) loadCollection() {
 	status, err := s.mixc.LoadCollection(ctx, &querypb.LoadCollectionRequest{
 		Base: &commonpb.MsgBase{
 			MsgType:  commonpb.MsgType_LoadCollection,
-			SourceID: paramtable.GetNodeID(),
+			SourceID: menv.GetNodeID(),
 		},
 		CollectionID: collectionID,
 	})
@@ -174,7 +175,7 @@ func (s *StatisticTaskSuite) getStatisticsTask(ctx context.Context) *getStatisti
 		request: &milvuspb.GetStatisticsRequest{
 			Base: &commonpb.MsgBase{
 				MsgType:  commonpb.MsgType_Retrieve,
-				SourceID: paramtable.GetNodeID(),
+				SourceID: menv.GetNodeID(),
 			},
 			CollectionName: s.collectionName,
 		},

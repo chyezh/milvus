@@ -46,9 +46,9 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/streamingutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
@@ -797,7 +797,7 @@ func (s *Server) DropVirtualChannel(ctx context.Context, req *datapb.DropVirtual
 	}
 	s.segmentManager.DropSegmentsOfChannel(ctx, channel)
 	s.compactionInspector.removeTasksByChannel(channel)
-	metrics.DataCoordCheckpointUnixSeconds.DeleteLabelValues(fmt.Sprint(paramtable.GetNodeID()), channel)
+	metrics.DataCoordCheckpointUnixSeconds.DeleteLabelValues(fmt.Sprint(menv.GetNodeID()), channel)
 	s.meta.MarkChannelCheckpointDropped(ctx, channel)
 
 	// no compaction triggered in Drop procedure
@@ -1264,7 +1264,7 @@ func (s *Server) GetMetrics(ctx context.Context, req *milvuspb.GetMetricsRequest
 	resp := &milvuspb.GetMetricsResponse{
 		Status: merr.Success(),
 		ComponentName: metricsinfo.ConstructComponentName(typeutil.DataCoordRole,
-			paramtable.GetNodeID()),
+			menv.GetNodeID()),
 	}
 
 	ret, err := s.metricsRequest.ExecuteMetricsRequest(ctx, req)
@@ -1649,7 +1649,7 @@ func (s *Server) ReportDataNodeTtMsgs(ctx context.Context, req *datapb.ReportDat
 	for _, ttMsg := range req.GetMsgs() {
 		sub := tsoutil.SubByNow(ttMsg.GetTimestamp())
 		metrics.DataCoordConsumeDataNodeTimeTickLag.
-			WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), ttMsg.GetChannelName()).
+			WithLabelValues(fmt.Sprint(menv.GetNodeID()), ttMsg.GetChannelName()).
 			Set(float64(sub))
 		err := s.handleDataNodeTtMsg(ctx, ttMsg)
 		if err != nil {
@@ -1690,7 +1690,7 @@ func (s *Server) handleDataNodeTtMsg(ctx context.Context, ttMsg *msgpb.DataNodeT
 	sub := tsoutil.SubByNow(ts)
 	pChannelName := funcutil.ToPhysicalChannel(channel)
 	metrics.DataCoordConsumeDataNodeTimeTickLag.
-		WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), pChannelName).
+		WithLabelValues(fmt.Sprint(menv.GetNodeID()), pChannelName).
 		Set(float64(sub))
 
 	s.segmentManager.ExpireAllocations(ctx, channel, ts)

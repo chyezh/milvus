@@ -42,6 +42,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/streamingutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -55,7 +56,7 @@ type DataSyncService struct {
 	collectionID typeutil.UniqueID // collection id of vchan for which this data sync service serves
 	vchannelName string
 
-	// TODO: should be equal to paramtable.GetNodeID(), but intergrationtest has 1 paramtable for a minicluster, the NodeID
+	// TODO: should be equal to menv.GetNodeID(), but intergrationtest has 1 paramtable for a minicluster, the NodeID
 	// varies, will cause savebinglogpath check fail. So we pass ServerID into DataSyncService to aviod it failure.
 	serverID typeutil.UniqueID
 
@@ -125,7 +126,7 @@ func (dsService *DataSyncService) close() {
 
 		// clean up metrics
 		pChan := funcutil.ToPhysicalChannel(dsService.vchannelName)
-		metrics.CleanupDataNodeCollectionMetrics(paramtable.GetNodeID(), dsService.collectionID, pChan)
+		metrics.CleanupDataNodeCollectionMetrics(menv.GetNodeID(), dsService.collectionID, pChan)
 
 		log.Info("dataSyncService closed")
 	})
@@ -231,7 +232,7 @@ func getServiceWithChannel(initCtx context.Context, params *util.PipelineParams,
 		channelName  = info.GetVchan().GetChannelName()
 		collectionID = info.GetVchan().GetCollectionID()
 	)
-	serverID := paramtable.GetNodeID()
+	serverID := menv.GetNodeID()
 	if params.Session != nil {
 		serverID = params.Session.ServerID
 	}

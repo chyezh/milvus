@@ -18,8 +18,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/segcorepb"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -67,7 +67,7 @@ func (t *QueryTask) IsGpuIndex() bool {
 // PreExecute the task, only call once.
 func (t *QueryTask) PreExecute() error {
 	// Update task wait time metric before execute
-	nodeID := strconv.FormatInt(paramtable.GetNodeID(), 10)
+	nodeID := strconv.FormatInt(menv.GetNodeID(), 10)
 	inQueueDuration := t.tr.ElapseSpan()
 	inQueueDurationMS := inQueueDuration.Seconds() * 1000
 
@@ -135,7 +135,7 @@ func (t *QueryTask) Execute() error {
 	reducedResult, err := reducer.Reduce(t.ctx, reduceResults, querySegments, retrievePlan)
 
 	metrics.QueryNodeReduceLatency.WithLabelValues(
-		fmt.Sprint(paramtable.GetNodeID()),
+		fmt.Sprint(menv.GetNodeID()),
 		metrics.QueryLabel,
 		metrics.ReduceSegments,
 		metrics.BatchReduce).Observe(float64(time.Since(beforeReduce).Milliseconds()))
@@ -149,7 +149,7 @@ func (t *QueryTask) Execute() error {
 
 	t.result = &internalpb.RetrieveResults{
 		Base: &commonpb.MsgBase{
-			SourceID: paramtable.GetNodeID(),
+			SourceID: menv.GetNodeID(),
 		},
 		Status:     merr.Success(),
 		Ids:        reducedResult.Ids,

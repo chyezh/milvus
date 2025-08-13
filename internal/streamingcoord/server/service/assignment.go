@@ -7,7 +7,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/service/discover"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
 
@@ -19,7 +19,7 @@ func NewAssignmentService(
 ) streamingpb.StreamingCoordAssignmentServiceServer {
 	return &assignmentServiceImpl{
 		balancer:      balancer,
-		listenerTotal: metrics.StreamingCoordAssignmentListenerTotal.WithLabelValues(paramtable.GetStringNodeID()),
+		listenerTotal: metrics.StreamingCoordAssignmentListenerTotal.WithLabelValues(menv.GetStringNodeID()),
 	}
 }
 

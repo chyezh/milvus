@@ -164,9 +164,6 @@ func TestComponentParam(t *testing.T) {
 		assert.Equal(t, "{}", Params.DefaultDBProperties.GetValue())
 		params.Save("rootCoord.defaultDBProperties", "{\"key\":\"value\"}")
 		assert.Equal(t, "{\"key\":\"value\"}", Params.DefaultDBProperties.GetValue())
-
-		SetCreateTime(time.Now())
-		SetUpdateTime(time.Now())
 	})
 
 	t.Run("test proxyConfig", func(t *testing.T) {
@@ -574,11 +571,6 @@ func TestComponentParam(t *testing.T) {
 
 	t.Run("test dataNodeConfig", func(t *testing.T) {
 		Params := &params.DataNodeCfg
-
-		SetNodeID(2)
-
-		id := GetNodeID()
-		t.Logf("NodeID: %d", id)
 
 		length := Params.FlowGraphMaxQueueLength.GetAsInt()
 		t.Logf("flowGraphMaxQueueLength: %d", length)

@@ -34,6 +34,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	streaming "github.com/milvus-io/milvus/pkg/v2/streaming/client"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
@@ -70,7 +71,7 @@ func TestGetPipelineJSON(t *testing.T) {
 			Name:           ch,
 			WatchState:     "Healthy",
 			LatestTimeTick: tsoutil.PhysicalTimeFormat(0),
-			NodeID:         paramtable.GetNodeID(),
+			NodeID:         menv.GetNodeID(),
 			CollectionID:   1,
 		},
 	}

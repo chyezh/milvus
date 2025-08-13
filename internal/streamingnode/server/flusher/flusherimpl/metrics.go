@@ -7,7 +7,7 @@ import (
 
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
 )
 
@@ -21,7 +21,7 @@ type flusherState = string
 
 func newFlusherMetrics(pchannel types.PChannelInfo) *flusherMetrics {
 	constLabels := prometheus.Labels{
-		metrics.NodeIDLabelName:         paramtable.GetStringNodeID(),
+		metrics.NodeIDLabelName:         menv.GetStringNodeID(),
 		metrics.WALChannelLabelName:     pchannel.Name,
 		metrics.WALChannelTermLabelName: strconv.FormatInt(pchannel.Term, 10),
 	}

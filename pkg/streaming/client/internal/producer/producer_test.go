@@ -8,11 +8,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/node/client/handler/mock_producer"
+	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/client/node/handler/mock_producer"
 	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/util/mock_message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/client/internal/errs"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/producer"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler/producer"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 )

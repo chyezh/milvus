@@ -827,7 +827,7 @@ func (c *MockMixCoordClientInterface) LoadBalance(ctx context.Context, req *quer
 // 	req = typeutil.Clone(req)
 // 	commonpbutil.UpdateMsgBase(
 // 		req.GetBase(),
-// 		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.grpcClient.GetNodeID())),
+// 		commonpbutil.FillMsgBaseFromClient(menv.GetNodeID(), commonpbutil.WithTargetID(c.grpcClient.GetNodeID())),
 // 	)
 // 	return wrapGrpcCall(ctx, c, func(client MixCoordClient) (*internalpb.ShowConfigurationsResponse, error) {
 // 		return client.ShowConfigurations(ctx, req)

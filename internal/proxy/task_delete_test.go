@@ -23,8 +23,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
 	streaming "github.com/milvus-io/milvus/pkg/v2/streaming/client"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
@@ -158,7 +158,7 @@ func TestDeleteTask_Execute(t *testing.T) {
 
 		mockMgr := NewMockChannelsMgr(t)
 		rc := mocks.NewMockRootCoordClient(t)
-		allocator, err := allocator.NewIDAllocator(ctx, rc, paramtable.GetNodeID())
+		allocator, err := allocator.NewIDAllocator(ctx, rc, menv.GetNodeID())
 		assert.NoError(t, err)
 		allocator.Close()
 
@@ -191,7 +191,7 @@ func TestDeleteTask_Execute(t *testing.T) {
 				ID:     0,
 				Count:  1,
 			}, nil)
-		allocator, err := allocator.NewIDAllocator(ctx, rc, paramtable.GetNodeID())
+		allocator, err := allocator.NewIDAllocator(ctx, rc, menv.GetNodeID())
 		allocator.Start()
 		assert.NoError(t, err)
 

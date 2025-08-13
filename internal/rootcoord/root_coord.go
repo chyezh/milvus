@@ -64,6 +64,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/crypto"
 	"github.com/milvus-io/milvus/pkg/v2/util/expr"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -466,7 +467,7 @@ func (c *Core) initInternal() error {
 		return err
 	}
 
-	log.Info("init rootcoord done", zap.Int64("nodeID", paramtable.GetNodeID()), zap.String("Address", c.address))
+	log.Info("init rootcoord done", zap.Int64("nodeID", menv.GetNodeID()), zap.String("Address", c.address))
 	return nil
 }
 
@@ -1893,7 +1894,7 @@ func (c *Core) GetMetrics(ctx context.Context, in *milvuspb.GetMetricsRequest) (
 
 	resp := &milvuspb.GetMetricsResponse{
 		Status:        merr.Success(),
-		ComponentName: metricsinfo.ConstructComponentName(typeutil.RootCoordRole, paramtable.GetNodeID()),
+		ComponentName: metricsinfo.ConstructComponentName(typeutil.RootCoordRole, menv.GetNodeID()),
 	}
 
 	ret, err := c.metricsRequest.ExecuteMetricsRequest(ctx, in)

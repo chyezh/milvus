@@ -27,7 +27,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/pkg/v2/log"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 )
 
 const InputErrorFlagKey string = "is_input_error"
@@ -270,7 +270,7 @@ func SegcoreError(code int32, msg string) error {
 // otherwise returns ErrServiceNotReady wrapped with current state
 func CheckHealthy(state commonpb.StateCode) error {
 	if state != commonpb.StateCode_Healthy {
-		return WrapErrServiceNotReady(paramtable.GetRole(), paramtable.GetNodeID(), state.String())
+		return WrapErrServiceNotReady(menv.GetRole(), menv.GetNodeID(), state.String())
 	}
 
 	return nil

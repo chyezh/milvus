@@ -38,6 +38,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -338,7 +339,7 @@ func (s *Server) getSystemInfoMetrics(
 	clusterTopology := metricsinfo.QueryClusterTopology{
 		Self: metricsinfo.QueryCoordInfos{
 			BaseComponentInfos: metricsinfo.BaseComponentInfos{
-				Name: metricsinfo.ConstructComponentName(typeutil.QueryCoordRole, paramtable.GetNodeID()),
+				Name: metricsinfo.ConstructComponentName(typeutil.QueryCoordRole, menv.GetNodeID()),
 				HardwareInfos: metricsinfo.HardwareMetrics{
 					IP:               s.session.GetAddress(),
 					CPUCoreCount:     hardware.GetCPUNum(),
@@ -350,10 +351,10 @@ func (s *Server) getSystemInfoMetrics(
 					IOWaitPercentage: ioWait,
 				},
 				SystemInfo:  metricsinfo.DeployMetrics{},
-				CreatedTime: paramtable.GetCreateTime().String(),
-				UpdatedTime: paramtable.GetUpdateTime().String(),
+				CreatedTime: menv.GetCreateTime().String(),
+				UpdatedTime: menv.GetUpdateTime().String(),
 				Type:        typeutil.QueryCoordRole,
-				ID:          paramtable.GetNodeID(),
+				ID:          menv.GetNodeID(),
 			},
 			SystemConfigurations: metricsinfo.QueryCoordConfiguration{},
 		},
@@ -366,7 +367,7 @@ func (s *Server) getSystemInfoMetrics(
 	coordTopology := metricsinfo.QueryCoordTopology{
 		Cluster: clusterTopology,
 		Connections: metricsinfo.ConnTopology{
-			Name: metricsinfo.ConstructComponentName(typeutil.QueryCoordRole, paramtable.GetNodeID()),
+			Name: metricsinfo.ConstructComponentName(typeutil.QueryCoordRole, menv.GetNodeID()),
 			// TODO(dragondriver): fill ConnectedComponents if necessary
 			ConnectedComponents: []metricsinfo.ConnectionInfo{},
 		},

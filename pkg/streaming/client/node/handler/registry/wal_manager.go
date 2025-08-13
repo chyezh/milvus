@@ -9,7 +9,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/wal"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -22,7 +22,7 @@ var (
 // RegisterLocalWALManager registers the local wal manager.
 // When the streaming node is started, it should call this function to register the wal manager.
 func RegisterLocalWALManager(manager WALManager) {
-	if !paramtable.IsLocalComponentEnabled(typeutil.StreamingNodeRole) {
+	if !menv.IsLocalComponentEnabled(typeutil.StreamingNodeRole) {
 		panic("unreachable: streaming node is not enabled but wal setup")
 	}
 	registry.Set(manager)
@@ -31,7 +31,7 @@ func RegisterLocalWALManager(manager WALManager) {
 
 // GetLocalAvailableWAL returns a available wal instance for the channel.
 func GetLocalAvailableWAL(channel types.PChannelInfo) (wal.WAL, error) {
-	if !paramtable.IsLocalComponentEnabled(typeutil.StreamingNodeRole) {
+	if !menv.IsLocalComponentEnabled(typeutil.StreamingNodeRole) {
 		return nil, ErrNoStreamingNodeDeployed
 	}
 	l, err := registry.Get().GetAvailableWAL(channel)
@@ -44,7 +44,7 @@ func GetLocalAvailableWAL(channel types.PChannelInfo) (wal.WAL, error) {
 
 // GetLocalWALMetrics returns all the metrics of current wal manager.
 func GetLocalWALMetrics() (*types.StreamingNodeMetrics, error) {
-	if !paramtable.IsLocalComponentEnabled(typeutil.StreamingNodeRole) {
+	if !menv.IsLocalComponentEnabled(typeutil.StreamingNodeRole) {
 		return nil, ErrNoStreamingNodeDeployed
 	}
 	return registry.Get().Metrics()

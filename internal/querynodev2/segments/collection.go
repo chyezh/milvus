@@ -33,8 +33,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/segcorepb"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
@@ -135,7 +135,7 @@ func (m *collectionManager) UpdateSchema(collectionID int64, schema *schemapb.Co
 }
 
 func (m *collectionManager) updateMetric() {
-	metrics.QueryNodeNumCollections.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Set(float64(len(m.collections)))
+	metrics.QueryNodeNumCollections.WithLabelValues(fmt.Sprint(menv.GetNodeID())).Set(float64(len(m.collections)))
 }
 
 func (m *collectionManager) Ref(collectionID int64, count uint32) bool {
@@ -157,11 +157,11 @@ func (m *collectionManager) Unref(collectionID int64, count uint32) bool {
 	if collection, ok := m.collections[collectionID]; ok {
 		if collection.Unref(count) == 0 {
 			log.Info("release collection due to ref count to 0",
-				zap.Int64("nodeID", paramtable.GetNodeID()), zap.Int64("collectionID", collectionID))
+				zap.Int64("nodeID", menv.GetNodeID()), zap.Int64("collectionID", collectionID))
 			delete(m.collections, collectionID)
 			DeleteCollection(collection)
 
-			metrics.CleanupQueryNodeCollectionMetrics(paramtable.GetNodeID(), collectionID)
+			metrics.CleanupQueryNodeCollectionMetrics(menv.GetNodeID(), collectionID)
 			m.updateMetric()
 			return true
 		}
@@ -260,7 +260,7 @@ func (c *Collection) GetLoadType() querypb.LoadType {
 func (c *Collection) Ref(count uint32) uint32 {
 	refCount := c.refCount.Add(count)
 	log.Debug("collection ref increment",
-		zap.Int64("nodeID", paramtable.GetNodeID()),
+		zap.Int64("nodeID", menv.GetNodeID()),
 		zap.Int64("collectionID", c.ID()),
 		zap.Uint32("refCount", refCount),
 	)
@@ -270,7 +270,7 @@ func (c *Collection) Ref(count uint32) uint32 {
 func (c *Collection) Unref(count uint32) uint32 {
 	refCount := c.refCount.Sub(count)
 	log.Debug("collection ref decrement",
-		zap.Int64("nodeID", paramtable.GetNodeID()),
+		zap.Int64("nodeID", menv.GetNodeID()),
 		zap.Int64("collectionID", c.ID()),
 		zap.Uint32("refCount", refCount),
 	)

@@ -23,8 +23,8 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
 // CreateAliasTask contains task information of CreateAlias
@@ -83,7 +83,7 @@ func (t *CreateAliasTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_CreateAlias
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -168,7 +168,7 @@ func (t *DropAliasTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_DropAlias
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -239,7 +239,7 @@ func (t *AlterAliasTask) OnEnqueue() error {
 		t.Base = commonpbutil.NewMsgBase()
 	}
 	t.Base.MsgType = commonpb.MsgType_AlterAlias
-	t.Base.SourceID = paramtable.GetNodeID()
+	t.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 

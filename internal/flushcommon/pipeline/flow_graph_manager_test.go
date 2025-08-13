@@ -40,6 +40,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgdispatcher"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/sessionutil"
@@ -177,14 +178,14 @@ func newFlowGraphManager(t *testing.T) (string, FlowgraphManager) {
 }
 
 func TestGetChannelsJSON(t *testing.T) {
-	paramtable.SetNodeID(1)
+	menv.SetNodeID(1)
 	_, fm := newFlowGraphManager(t)
 	obj := []*metricsinfo.Channel{
 		{
 			Name:           "fake-ch-_1",
 			WatchState:     "Healthy",
 			LatestTimeTick: tsoutil.PhysicalTimeFormat(0),
-			NodeID:         paramtable.GetNodeID(),
+			NodeID:         menv.GetNodeID(),
 			CollectionID:   1,
 		},
 	}
@@ -208,9 +209,9 @@ func TestGetSegmentJSON(t *testing.T) {
 	ds, ok := fm.GetFlowgraphService(ch)
 	assert.True(t, ok)
 
-	nodeID := paramtable.GetNodeID()
-	paramtable.SetNodeID(1)
-	defer paramtable.SetNodeID(nodeID)
+	nodeID := menv.GetNodeID()
+	menv.SetNodeID(1)
+	defer menv.SetNodeID(nodeID)
 
 	pkStatsFactory := func(*datapb.SegmentInfo) pkoracle.PkStat {
 		return pkoracle.NewBloomFilterSet()

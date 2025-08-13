@@ -33,6 +33,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/v2/common"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -91,7 +92,7 @@ func CalculateNodeSlots() int64 {
 	}
 
 	totalSlot := max(slot, 1) * paramtable.Get().DataNodeCfg.WorkerSlotUnit.GetAsInt64() * paramtable.Get().DataNodeCfg.BuildParallel.GetAsInt64()
-	if paramtable.GetRole() == typeutil.StandaloneRole {
+	if menv.GetRole() == typeutil.StandaloneRole {
 		totalSlot = max(int64(float64(totalSlot)*paramtable.Get().DataNodeCfg.StandaloneSlotRatio.GetAsFloat()), 1)
 	}
 	return totalSlot

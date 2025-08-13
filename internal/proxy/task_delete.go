@@ -27,8 +27,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -105,7 +105,7 @@ func (dt *deleteTask) OnEnqueue() error {
 		dt.req.Base = commonpbutil.NewMsgBase()
 	}
 	dt.req.Base.MsgType = commonpb.MsgType_Delete
-	dt.req.Base.SourceID = paramtable.GetNodeID()
+	dt.req.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -132,7 +132,7 @@ func (dt *deleteTask) PreExecute(ctx context.Context) error {
 
 func (dt *deleteTask) PostExecute(ctx context.Context) error {
 	metrics.ProxyDeleteVectors.WithLabelValues(
-		paramtable.GetStringNodeID(),
+		menv.GetStringNodeID(),
 		dt.req.GetDbName(),
 		dt.req.GetCollectionName(),
 	).Add(float64(dt.count))
@@ -173,7 +173,7 @@ func repackDeleteMsgByHash(
 					// msgid of delete msg must be set later
 					// or it will be seen as duplicated msg in mq
 					commonpbutil.WithTimeStamp(ts),
-					commonpbutil.WithSourceID(paramtable.GetNodeID()),
+					commonpbutil.WithSourceID(menv.GetNodeID()),
 				),
 				ShardName:      vchannel,
 				CollectionName: collectionName,
@@ -294,10 +294,10 @@ func (dr *deleteRunner) Init(ctx context.Context) error {
 	start := time.Now()
 	dr.plan, err = planparserv2.CreateRetrievePlan(dr.schema.schemaHelper, dr.req.GetExpr(), dr.req.GetExprTemplateValues())
 	if err != nil {
-		metrics.ProxyParseExpressionLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), "delete", metrics.FailLabel).Observe(float64(time.Since(start).Milliseconds()))
+		metrics.ProxyParseExpressionLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), "delete", metrics.FailLabel).Observe(float64(time.Since(start).Milliseconds()))
 		return merr.WrapErrAsInputError(merr.WrapErrParameterInvalidMsg("failed to create delete plan: %v", err))
 	}
-	metrics.ProxyParseExpressionLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), "delete", metrics.SuccessLabel).Observe(float64(time.Since(start).Milliseconds()))
+	metrics.ProxyParseExpressionLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), "delete", metrics.SuccessLabel).Observe(float64(time.Since(start).Milliseconds()))
 
 	if planparserv2.IsAlwaysTruePlan(dr.plan) {
 		return merr.WrapErrAsInputError(merr.WrapErrParameterInvalidMsg("delete plan can't be empty or always true : %s", dr.req.GetExpr()))
@@ -418,11 +418,11 @@ func (dr *deleteRunner) getStreamingQueryAndDelteFunc(plan *planpb.PlanNode) exe
 				Base: commonpbutil.NewMsgBase(
 					commonpbutil.WithMsgType(commonpb.MsgType_Retrieve),
 					commonpbutil.WithMsgID(dr.msgID),
-					commonpbutil.WithSourceID(paramtable.GetNodeID()),
+					commonpbutil.WithSourceID(menv.GetNodeID()),
 					commonpbutil.WithTargetID(nodeID),
 				),
 				MvccTimestamp:      dr.ts,
-				ReqID:              paramtable.GetNodeID(),
+				ReqID:              menv.GetNodeID(),
 				DbID:               0, // TODO
 				CollectionID:       dr.collectionID,
 				PartitionIDs:       dr.partitionIDs,

@@ -6,11 +6,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 )
 
 func newPChannelMetrics() *channelMetrics {
-	constLabel := prometheus.Labels{metrics.NodeIDLabelName: paramtable.GetStringNodeID()}
+	constLabel := prometheus.Labels{metrics.NodeIDLabelName: menv.GetStringNodeID()}
 	return &channelMetrics{
 		pchannelInfo:      metrics.StreamingCoordPChannelInfo.MustCurryWith(constLabel),
 		vchannelTotal:     metrics.StreamingCoordVChannelTotal.MustCurryWith(constLabel),

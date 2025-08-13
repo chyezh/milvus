@@ -39,6 +39,7 @@ import (
 	kvfactory "github.com/milvus-io/milvus/pkg/v2/dependency/kv"
 	"github.com/milvus-io/milvus/pkg/v2/json"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
@@ -334,7 +335,7 @@ func (s *Session) getServerID() (int64, error) {
 	log.Ctx(s.ctx).Debug("getServerID", zap.Bool("reuse", s.reuseNodeID))
 	if s.reuseNodeID {
 		// Notice, For standalone, all process share the same nodeID.
-		if nodeID := paramtable.GetNodeID(); nodeID != 0 {
+		if nodeID := menv.GetNodeID(); nodeID != 0 {
 			return nodeID, nil
 		}
 	}
@@ -343,7 +344,7 @@ func (s *Session) getServerID() (int64, error) {
 		return nodeID, err
 	}
 	if s.reuseNodeID {
-		paramtable.SetNodeID(nodeID)
+		menv.SetNodeID(nodeID)
 	}
 	return nodeID, nil
 }

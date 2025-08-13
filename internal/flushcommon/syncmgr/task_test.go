@@ -41,6 +41,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/json"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
@@ -425,7 +426,7 @@ func (s *SyncTaskSuite) TestSyncTask_MarshalJSON() {
 		TSTo:         tsoutil.PhysicalTimeFormat(t.tsTo),
 		FlushSize:    t.flushedSize,
 		RunningTime:  t.execTime.String(),
-		NodeID:       paramtable.GetNodeID(),
+		NodeID:       menv.GetNodeID(),
 	}
 	expectedBytes, err := json.Marshal(tm)
 	s.NoError(err)

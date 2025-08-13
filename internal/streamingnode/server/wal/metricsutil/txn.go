@@ -7,7 +7,7 @@ import (
 
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
 
@@ -15,7 +15,7 @@ const labelExpired = "expired"
 
 func NewTxnMetrics(pchannel string) *TxnMetrics {
 	constLabel := prometheus.Labels{
-		metrics.NodeIDLabelName:     paramtable.GetStringNodeID(),
+		metrics.NodeIDLabelName:     menv.GetStringNodeID(),
 		metrics.WALChannelLabelName: pchannel,
 	}
 	return &TxnMetrics{

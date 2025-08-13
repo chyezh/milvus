@@ -17,8 +17,8 @@
 package lifetime
 
 import (
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
 // Singal alias for chan struct{}.
@@ -58,12 +58,12 @@ func NotStopped(state State) error {
 	if state != Stopped {
 		return nil
 	}
-	return merr.WrapErrServiceNotReady(paramtable.GetRole(), paramtable.GetNodeID(), state.String())
+	return merr.WrapErrServiceNotReady(menv.GetRole(), menv.GetNodeID(), state.String())
 }
 
 func IsWorking(state State) error {
 	if state == Working {
 		return nil
 	}
-	return merr.WrapErrServiceNotReady(paramtable.GetRole(), paramtable.GetNodeID(), state.String())
+	return merr.WrapErrServiceNotReady(menv.GetRole(), menv.GetNodeID(), state.String())
 }

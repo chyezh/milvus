@@ -12,13 +12,14 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
 
 func TestTimestampAllocator(t *testing.T) {
 	paramtable.Init()
-	paramtable.SetNodeID(1)
+	menv.SetNodeID(1)
 
 	client := NewMockRootCoordClient(t)
 	f := syncutil.NewFuture[types.MixCoordClient]()
@@ -58,7 +59,7 @@ func TestTimestampAllocator(t *testing.T) {
 
 func TestIDAllocator(t *testing.T) {
 	paramtable.Init()
-	paramtable.SetNodeID(1)
+	menv.SetNodeID(1)
 
 	client := NewMockRootCoordClient(t)
 	f := syncutil.NewFuture[types.MixCoordClient]()

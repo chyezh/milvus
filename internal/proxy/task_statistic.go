@@ -19,8 +19,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -95,7 +95,7 @@ func (g *getStatisticsTask) OnEnqueue() error {
 	}
 
 	g.Base.MsgType = commonpb.MsgType_GetPartitionStatistics
-	g.Base.SourceID = paramtable.GetNodeID()
+	g.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -328,7 +328,7 @@ func checkFullLoaded(ctx context.Context, qc types.QueryCoordClient, dbName stri
 		resp, err := qc.ShowLoadPartitions(ctx, &querypb.ShowPartitionsRequest{
 			Base: commonpbutil.NewMsgBase(
 				commonpbutil.WithMsgType(commonpb.MsgType_ShowPartitions),
-				commonpbutil.WithSourceID(paramtable.GetNodeID()),
+				commonpbutil.WithSourceID(menv.GetNodeID()),
 			),
 			CollectionID: info.collID,
 			PartitionIDs: searchPartitionIDs,
@@ -354,7 +354,7 @@ func checkFullLoaded(ctx context.Context, qc types.QueryCoordClient, dbName stri
 	resp, err := qc.ShowLoadPartitions(ctx, &querypb.ShowPartitionsRequest{
 		Base: commonpbutil.NewMsgBase(
 			commonpbutil.WithMsgType(commonpb.MsgType_ShowPartitions),
-			commonpbutil.WithSourceID(paramtable.GetNodeID()),
+			commonpbutil.WithSourceID(menv.GetNodeID()),
 		),
 		CollectionID: info.collID,
 	})
@@ -633,7 +633,7 @@ func (g *getCollectionStatisticsTask) SetTs(ts Timestamp) {
 func (g *getCollectionStatisticsTask) OnEnqueue() error {
 	g.Base = commonpbutil.NewMsgBase()
 	g.Base.MsgType = commonpb.MsgType_GetCollectionStatistics
-	g.Base.SourceID = paramtable.GetNodeID()
+	g.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -716,7 +716,7 @@ func (g *getPartitionStatisticsTask) SetTs(ts Timestamp) {
 func (g *getPartitionStatisticsTask) OnEnqueue() error {
 	g.Base = commonpbutil.NewMsgBase()
 	g.Base.MsgType = commonpb.MsgType_GetPartitionStatistics
-	g.Base.SourceID = paramtable.GetNodeID()
+	g.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 

@@ -46,6 +46,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
@@ -150,15 +151,15 @@ func (sd *shardDelegator) ProcessInsert(insertRecords map[int64]*InsertData) {
 				continue
 			}
 
-			if !sd.pkOracle.Exists(growing, paramtable.GetNodeID()) {
+			if !sd.pkOracle.Exists(growing, menv.GetNodeID()) {
 				// register created growing segment after insert, avoid to add empty growing to delegator
-				sd.pkOracle.Register(growing, paramtable.GetNodeID())
+				sd.pkOracle.Register(growing, menv.GetNodeID())
 				if sd.idfOracle != nil {
 					sd.idfOracle.Register(segmentID, insertData.BM25Stats, segments.SegmentTypeGrowing)
 				}
 				sd.segmentManager.Put(context.Background(), segments.SegmentTypeGrowing, growing)
 				sd.addGrowing(SegmentEntry{
-					NodeID:        paramtable.GetNodeID(),
+					NodeID:        menv.GetNodeID(),
 					SegmentID:     segmentID,
 					PartitionID:   insertData.PartitionID,
 					Version:       0,
@@ -177,7 +178,7 @@ func (sd *shardDelegator) ProcessInsert(insertRecords map[int64]*InsertData) {
 			zap.Uint64("maxTimestamp", insertData.Timestamps[len(insertData.Timestamps)-1]),
 		)
 	}
-	metrics.QueryNodeProcessCost.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.InsertLabel).
+	metrics.QueryNodeProcessCost.WithLabelValues(fmt.Sprint(menv.GetNodeID()), metrics.InsertLabel).
 		Observe(float64(tr.ElapseSpan().Milliseconds()))
 }
 
@@ -214,7 +215,7 @@ func (sd *shardDelegator) ProcessDelete(deleteData []*DeleteData, ts uint64) {
 
 	sd.forwardStreamingDeletion(context.Background(), deleteData)
 
-	metrics.QueryNodeProcessCost.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.DeleteLabel).
+	metrics.QueryNodeProcessCost.WithLabelValues(fmt.Sprint(menv.GetNodeID()), metrics.DeleteLabel).
 		Observe(float64(tr.ElapseSpan().Milliseconds()))
 }
 
@@ -376,14 +377,14 @@ func (sd *shardDelegator) LoadGrowing(ctx context.Context, infos []*querypb.Segm
 	log.Info("load growing segments done", zap.Int64s("segmentIDs", segmentIDs))
 
 	for _, segment := range loaded {
-		sd.pkOracle.Register(segment, paramtable.GetNodeID())
+		sd.pkOracle.Register(segment, menv.GetNodeID())
 		if sd.idfOracle != nil {
 			sd.idfOracle.Register(segment.ID(), segment.GetBM25Stats(), segments.SegmentTypeGrowing)
 		}
 	}
 	sd.addGrowing(lo.Map(loaded, func(segment segments.Segment, _ int) SegmentEntry {
 		return SegmentEntry{
-			NodeID:        paramtable.GetNodeID(),
+			NodeID:        menv.GetNodeID(),
 			SegmentID:     segment.ID(),
 			PartitionID:   segment.Partition(),
 			Version:       version,
@@ -644,14 +645,14 @@ func (sd *shardDelegator) RefreshLevel0DeletionStats() {
 	}
 
 	metrics.QueryNodeNumSegments.WithLabelValues(
-		fmt.Sprint(paramtable.GetNodeID()),
+		fmt.Sprint(menv.GetNodeID()),
 		fmt.Sprint(sd.Collection()),
 		commonpb.SegmentState_Sealed.String(),
 		datapb.SegmentLevel_L0.String(),
 	).Set(float64(len(level0Segments)))
 
 	metrics.QueryNodeLevelZeroSize.WithLabelValues(
-		fmt.Sprint(paramtable.GetNodeID()),
+		fmt.Sprint(menv.GetNodeID()),
 		fmt.Sprint(sd.collectionID),
 		sd.vchannelName,
 	).Set(float64(totalSize))
@@ -980,7 +981,7 @@ func (sd *shardDelegator) buildBM25IDF(req *internalpb.SearchRequest) (float64, 
 	}
 
 	for _, idf := range idfSparseVector {
-		metrics.QueryNodeSearchFTSNumTokens.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), fmt.Sprint(sd.collectionID), fmt.Sprint(req.GetFieldId())).Observe(float64(typeutil.SparseFloatRowElementCount(idf)))
+		metrics.QueryNodeSearchFTSNumTokens.WithLabelValues(fmt.Sprint(menv.GetNodeID()), fmt.Sprint(sd.collectionID), fmt.Sprint(req.GetFieldId())).Observe(float64(typeutil.SparseFloatRowElementCount(idf)))
 	}
 
 	err = SetBM25Params(req, avgdl)

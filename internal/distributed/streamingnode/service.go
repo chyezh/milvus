@@ -52,6 +52,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/interceptor"
 	"github.com/milvus-io/milvus/pkg/v2/util/logutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/netutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
@@ -263,8 +264,8 @@ func (s *Server) initSession() error {
 		return errors.New("session is nil, the etcd client connection may have failed")
 	}
 	s.session.Init(typeutil.StreamingNodeRole, s.listener.Address(), false, true)
-	paramtable.SetNodeID(s.session.ServerID)
-	log.Ctx(s.ctx).Info("StreamingNode init session", zap.Int64("nodeID", paramtable.GetNodeID()), zap.String("node address", s.listener.Address()))
+	menv.SetNodeID(s.session.ServerID)
+	log.Ctx(s.ctx).Info("StreamingNode init session", zap.Int64("nodeID", menv.GetNodeID()), zap.String("node address", s.listener.Address()))
 	return nil
 }
 
@@ -388,7 +389,7 @@ func (s *Server) registerSessionToETCD() {
 	s.session.Register()
 	// start liveness check
 	s.session.LivenessCheck(context.Background(), func() {
-		log.Ctx(s.ctx).Error("StreamingNode disconnected from etcd, process will exit", zap.Int64("Server Id", paramtable.GetNodeID()))
+		log.Ctx(s.ctx).Error("StreamingNode disconnected from etcd, process will exit", zap.Int64("Server Id", menv.GetNodeID()))
 		os.Exit(1)
 	})
 }

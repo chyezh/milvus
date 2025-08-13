@@ -35,6 +35,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -69,8 +70,8 @@ func SetTracerProvider(exp sdk.SpanExporter, traceIDRatio float64) {
 		sdk.WithBatcher(exp),
 		sdk.WithResource(resource.NewWithAttributes(
 			semconv.SchemaURL,
-			semconv.ServiceNameKey.String(paramtable.GetRole()),
-			attribute.Int64("NodeID", paramtable.GetNodeID()),
+			semconv.ServiceNameKey.String(menv.GetRole()),
+			attribute.Int64("NodeID", menv.GetNodeID()),
 		)),
 		sdk.WithSampler(sdk.ParentBased(
 			sdk.TraceIDRatioBased(traceIDRatio),

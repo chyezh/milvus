@@ -4,15 +4,15 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/consumer"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/registry"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler/consumer"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler/registry"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 )
 
 // newConsumerMetrics creates a new producer metrics.
 func newConsumerMetrics(pchannel string) *resumingConsumerMetrics {
 	constLabel := prometheus.Labels{
-		metrics.NodeIDLabelName:     paramtable.GetStringNodeID(),
+		metrics.NodeIDLabelName:     menv.GetStringNodeID(),
 		metrics.WALChannelLabelName: pchannel,
 	}
 	m := &resumingConsumerMetrics{
@@ -82,7 +82,7 @@ func newConsumerWithMetrics(pchannel string, c consumer.Consumer) consumer.Consu
 		accessModel = metrics.WALAccessModelLocal
 	}
 	constLabel := prometheus.Labels{
-		metrics.NodeIDLabelName:         paramtable.GetStringNodeID(),
+		metrics.NodeIDLabelName:         menv.GetStringNodeID(),
 		metrics.WALChannelLabelName:     pchannel,
 		metrics.WALAccessModelLabelName: accessModel,
 	}

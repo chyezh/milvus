@@ -12,6 +12,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/wal"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -34,7 +35,7 @@ func (m *mockWALManager) GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, e
 
 func TestGetLocalAvailableWAL(t *testing.T) {
 	paramtable.Init()
-	paramtable.SetLocalComponentEnabled(typeutil.StreamingNodeRole)
+	menv.SetLocalComponentEnabled(typeutil.StreamingNodeRole)
 
 	manager := &mockWALManager{t: t}
 	RegisterLocalWALManager(manager)

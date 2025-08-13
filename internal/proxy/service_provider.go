@@ -15,6 +15,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
@@ -76,7 +77,7 @@ func (i *InterceptorImpl[Req, Resp]) Call(ctx context.Context, request Req,
 	ctx, sp := otel.Tracer(typeutil.ProxyRole).Start(ctx, fmt.Sprintf("Proxy-%s", i.method))
 	defer sp.End()
 	tr := timerecord.NewTimeRecorder(i.method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), i.method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), i.method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	resp, err := i.onCall(ctx, request)
@@ -84,9 +85,9 @@ func (i *InterceptorImpl[Req, Resp]) Call(ctx context.Context, request Req,
 		return i.onError(err)
 	}
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), i.method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), i.method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), i.method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), i.method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 
 	return resp, err
 }
@@ -201,7 +202,7 @@ func (node *RemoteProxyServiceProvider) DescribeCollection(ctx context.Context,
 		log.Warn("DescribeCollection failed to enqueue",
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return nil, err
 	}
@@ -216,7 +217,7 @@ func (node *RemoteProxyServiceProvider) DescribeCollection(ctx context.Context,
 			zap.Uint64("BeginTS", dct.BeginTs()),
 			zap.Uint64("EndTS", dct.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return nil, err

@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/testutils"
 )
 
@@ -50,7 +50,7 @@ func TestRepackInsertData(t *testing.T) {
 	cache := NewMockCache(t)
 	globalMetaCache = cache
 
-	idAllocator, err := allocator.NewIDAllocator(ctx, mix, paramtable.GetNodeID())
+	idAllocator, err := allocator.NewIDAllocator(ctx, mix, menv.GetNodeID())
 	assert.NoError(t, err)
 	_ = idAllocator.Start()
 	defer idAllocator.Close()
@@ -69,7 +69,7 @@ func TestRepackInsertData(t *testing.T) {
 				MsgType:   commonpb.MsgType_CreatePartition,
 				MsgID:     0,
 				Timestamp: 0,
-				SourceID:  paramtable.GetNodeID(),
+				SourceID:  menv.GetNodeID(),
 			},
 			DbName:         dbName,
 			CollectionName: collectionName,
@@ -88,7 +88,7 @@ func TestRepackInsertData(t *testing.T) {
 			Base: &commonpb.MsgBase{
 				MsgType:  commonpb.MsgType_Insert,
 				MsgID:    0,
-				SourceID: paramtable.GetNodeID(),
+				SourceID: menv.GetNodeID(),
 			},
 			DbName:         dbName,
 			CollectionName: collectionName,
@@ -122,7 +122,7 @@ func TestRepackInsertDataWithPartitionKey(t *testing.T) {
 	err := InitMetaCache(ctx, mix, nil)
 	assert.NoError(t, err)
 
-	idAllocator, err := allocator.NewIDAllocator(ctx, mix, paramtable.GetNodeID())
+	idAllocator, err := allocator.NewIDAllocator(ctx, mix, menv.GetNodeID())
 	assert.NoError(t, err)
 	_ = idAllocator.Start()
 	defer idAllocator.Close()
@@ -165,7 +165,7 @@ func TestRepackInsertDataWithPartitionKey(t *testing.T) {
 			Base: &commonpb.MsgBase{
 				MsgType:  commonpb.MsgType_Insert,
 				MsgID:    0,
-				SourceID: paramtable.GetNodeID(),
+				SourceID: menv.GetNodeID(),
 			},
 			DbName:         dbName,
 			CollectionName: collectionName,

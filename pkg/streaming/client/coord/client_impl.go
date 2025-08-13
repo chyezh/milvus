@@ -1,8 +1,8 @@
-package client
+package coord
 
 import (
-	"github.com/milvus-io/milvus/pkg/v2/streaming/coord/client/assignment"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/coord/client/broadcast"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/coord/assignment"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/coord/broadcast"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/service/lazygrpc"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/service/resolver"
 )

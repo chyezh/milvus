@@ -58,6 +58,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/crypto"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/logutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -192,13 +193,13 @@ func (node *Proxy) InvalidateCollectionMetaCache(ctx context.Context, request *p
 		// no need to handle error, since this Proxy may not create dml stream for the collection.
 		node.chMgr.removeDMLStream(request.GetCollectionID())
 		// clean up collection level metrics
-		metrics.CleanupProxyCollectionMetrics(paramtable.GetNodeID(), collectionName)
+		metrics.CleanupProxyCollectionMetrics(menv.GetNodeID(), collectionName)
 		for _, alias := range aliasName {
-			metrics.CleanupProxyCollectionMetrics(paramtable.GetNodeID(), alias)
+			metrics.CleanupProxyCollectionMetrics(menv.GetNodeID(), alias)
 		}
 		DeregisterSubLabel(ratelimitutil.GetCollectionSubLabel(request.GetDbName(), request.GetCollectionName()))
 	} else if msgType == commonpb.MsgType_DropDatabase {
-		metrics.CleanupProxyDBMetrics(paramtable.GetNodeID(), request.GetDbName())
+		metrics.CleanupProxyDBMetrics(menv.GetNodeID(), request.GetDbName())
 		DeregisterSubLabel(ratelimitutil.GetDBSubLabel(request.GetDbName()))
 	}
 	log.Info("complete to invalidate collection meta cache")
@@ -241,7 +242,7 @@ func (node *Proxy) CreateDatabase(ctx context.Context, request *milvuspb.CreateD
 	tr := timerecord.NewTimeRecorder(method)
 
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.TotalLabel,
 		request.GetDbName(),
@@ -265,7 +266,7 @@ func (node *Proxy) CreateDatabase(ctx context.Context, request *milvuspb.CreateD
 		log.Warn(rpcFailedToEnqueue(method), zap.Error(err))
 
 		metrics.ProxyFunctionCall.
-			WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), "").
+			WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), "").
 			Inc()
 		return merr.Status(err), nil
 	}
@@ -275,14 +276,14 @@ func (node *Proxy) CreateDatabase(ctx context.Context, request *milvuspb.CreateD
 		log.Warn(rpcFailedToWaitToFinish(method), zap.Error(err))
 
 		metrics.ProxyFunctionCall.
-			WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), "").
+			WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), "").
 			Inc()
 		return merr.Status(err), nil
 	}
 
 	log.Info(rpcDone(method))
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.SuccessLabel,
 		request.GetDbName(),
@@ -290,7 +291,7 @@ func (node *Proxy) CreateDatabase(ctx context.Context, request *milvuspb.CreateD
 	).Inc()
 
 	metrics.ProxyReqLatency.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 	).Observe(float64(tr.ElapseSpan().Milliseconds()))
 
@@ -308,7 +309,7 @@ func (node *Proxy) DropDatabase(ctx context.Context, request *milvuspb.DropDatab
 	method := "DropDatabase"
 	tr := timerecord.NewTimeRecorder(method)
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.TotalLabel,
 		request.GetDbName(),
@@ -331,7 +332,7 @@ func (node *Proxy) DropDatabase(ctx context.Context, request *milvuspb.DropDatab
 	if err := node.sched.ddQueue.Enqueue(dct); err != nil {
 		log.Warn(rpcFailedToEnqueue(method), zap.Error(err))
 		metrics.ProxyFunctionCall.
-			WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), "").
+			WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), "").
 			Inc()
 		return merr.Status(err), nil
 	}
@@ -340,7 +341,7 @@ func (node *Proxy) DropDatabase(ctx context.Context, request *milvuspb.DropDatab
 	if err := dct.WaitToFinish(); err != nil {
 		log.Warn(rpcFailedToWaitToFinish(method), zap.Error(err))
 		metrics.ProxyFunctionCall.
-			WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), "").
+			WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), "").
 			Inc()
 		return merr.Status(err), nil
 	}
@@ -348,7 +349,7 @@ func (node *Proxy) DropDatabase(ctx context.Context, request *milvuspb.DropDatab
 	log.Info(rpcDone(method))
 	DeregisterSubLabel(ratelimitutil.GetDBSubLabel(request.GetDbName()))
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.SuccessLabel,
 		request.GetDbName(),
@@ -356,7 +357,7 @@ func (node *Proxy) DropDatabase(ctx context.Context, request *milvuspb.DropDatab
 	).Inc()
 
 	metrics.ProxyReqLatency.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 	).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return dct.result, nil
@@ -375,7 +376,7 @@ func (node *Proxy) ListDatabases(ctx context.Context, request *milvuspb.ListData
 	method := "ListDatabases"
 	tr := timerecord.NewTimeRecorder(method)
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.TotalLabel,
 		"",
@@ -398,7 +399,7 @@ func (node *Proxy) ListDatabases(ctx context.Context, request *milvuspb.ListData
 	if err := node.sched.ddQueue.Enqueue(dct); err != nil {
 		log.Warn(rpcFailedToEnqueue(method), zap.Error(err))
 		metrics.ProxyFunctionCall.
-			WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.AbandonLabel, "", "").
+			WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.AbandonLabel, "", "").
 			Inc()
 		resp.Status = merr.Status(err)
 		return resp, nil
@@ -408,7 +409,7 @@ func (node *Proxy) ListDatabases(ctx context.Context, request *milvuspb.ListData
 	if err := dct.WaitToFinish(); err != nil {
 		log.Warn(rpcFailedToWaitToFinish(method), zap.Error(err))
 		metrics.ProxyFunctionCall.
-			WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, "", "").
+			WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, "", "").
 			Inc()
 		resp.Status = merr.Status(err)
 		return resp, nil
@@ -416,7 +417,7 @@ func (node *Proxy) ListDatabases(ctx context.Context, request *milvuspb.ListData
 
 	log.Info(rpcDone(method), zap.Int("num of db", len(dct.result.DbNames)))
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.SuccessLabel,
 		"",
@@ -424,7 +425,7 @@ func (node *Proxy) ListDatabases(ctx context.Context, request *milvuspb.ListData
 	).Inc()
 
 	metrics.ProxyReqLatency.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 	).Observe(float64(tr.ElapseSpan().Milliseconds()))
 
@@ -441,7 +442,7 @@ func (node *Proxy) AlterDatabase(ctx context.Context, request *milvuspb.AlterDat
 	method := "AlterDatabase"
 	tr := timerecord.NewTimeRecorder(method)
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), "").Inc()
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), "").Inc()
 
 	act := &alterDatabaseTask{
 		ctx:                  ctx,
@@ -461,7 +462,7 @@ func (node *Proxy) AlterDatabase(ctx context.Context, request *milvuspb.AlterDat
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), "").Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), "").Inc()
 		return merr.Status(err), nil
 	}
 
@@ -476,7 +477,7 @@ func (node *Proxy) AlterDatabase(ctx context.Context, request *milvuspb.AlterDat
 			zap.Uint64("BeginTs", act.BeginTs()),
 			zap.Uint64("EndTs", act.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), "").Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), "").Inc()
 		return merr.Status(err), nil
 	}
 
@@ -484,8 +485,8 @@ func (node *Proxy) AlterDatabase(ctx context.Context, request *milvuspb.AlterDat
 		zap.Uint64("BeginTs", act.BeginTs()),
 		zap.Uint64("EndTs", act.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), "").Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), "").Inc()
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return act.result, nil
 }
 
@@ -501,7 +502,7 @@ func (node *Proxy) DescribeDatabase(ctx context.Context, request *milvuspb.Descr
 	method := "DescribeDatabase"
 	tr := timerecord.NewTimeRecorder(method)
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), "").Inc()
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), "").Inc()
 
 	act := &describeDatabaseTask{
 		ctx:                     ctx,
@@ -519,7 +520,7 @@ func (node *Proxy) DescribeDatabase(ctx context.Context, request *milvuspb.Descr
 	if err := node.sched.ddQueue.Enqueue(act); err != nil {
 		log.Warn(rpcFailedToEnqueue(method), zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), "").Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), "").Inc()
 		resp.Status = merr.Status(err)
 		return resp, nil
 	}
@@ -535,7 +536,7 @@ func (node *Proxy) DescribeDatabase(ctx context.Context, request *milvuspb.Descr
 			zap.Uint64("BeginTs", act.BeginTs()),
 			zap.Uint64("EndTs", act.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), "").Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), "").Inc()
 		resp.Status = merr.Status(err)
 		return resp, nil
 	}
@@ -544,8 +545,8 @@ func (node *Proxy) DescribeDatabase(ctx context.Context, request *milvuspb.Descr
 		zap.Uint64("BeginTs", act.BeginTs()),
 		zap.Uint64("EndTs", act.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), "").Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), "").Inc()
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return act.result, nil
 }
 
@@ -562,7 +563,7 @@ func (node *Proxy) CreateCollection(ctx context.Context, request *milvuspb.Creat
 	tr := timerecord.NewTimeRecorder(method)
 
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.TotalLabel,
 		request.GetDbName(),
@@ -595,7 +596,7 @@ func (node *Proxy) CreateCollection(ctx context.Context, request *milvuspb.Creat
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return merr.Status(err), nil
 	}
 
@@ -613,7 +614,7 @@ func (node *Proxy) CreateCollection(ctx context.Context, request *milvuspb.Creat
 			zap.Uint64("BeginTs", cct.BeginTs()),
 			zap.Uint64("EndTs", cct.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return merr.Status(err), nil
 	}
 
@@ -624,14 +625,14 @@ func (node *Proxy) CreateCollection(ctx context.Context, request *milvuspb.Creat
 	)
 
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.SuccessLabel,
 		request.GetDbName(),
 		request.GetCollectionName(),
 	).Inc()
 	metrics.ProxyReqLatency.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 	).Observe(float64(tr.ElapseSpan().Milliseconds()))
 
@@ -649,7 +650,7 @@ func (node *Proxy) DropCollection(ctx context.Context, request *milvuspb.DropCol
 	method := "DropCollection"
 	tr := timerecord.NewTimeRecorder(method)
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.TotalLabel,
 		request.GetDbName(),
@@ -676,7 +677,7 @@ func (node *Proxy) DropCollection(ctx context.Context, request *milvuspb.DropCol
 		log.Warn("DropCollection failed to enqueue",
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return merr.Status(err), nil
 	}
 
@@ -692,7 +693,7 @@ func (node *Proxy) DropCollection(ctx context.Context, request *milvuspb.DropCol
 			zap.Uint64("BeginTs", dct.BeginTs()),
 			zap.Uint64("EndTs", dct.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return merr.Status(err), nil
 	}
 
@@ -704,14 +705,14 @@ func (node *Proxy) DropCollection(ctx context.Context, request *milvuspb.DropCol
 	DeregisterSubLabel(ratelimitutil.GetCollectionSubLabel(request.GetDbName(), request.GetCollectionName()))
 
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.SuccessLabel,
 		request.GetDbName(),
 		request.GetCollectionName(),
 	).Inc()
 	metrics.ProxyReqLatency.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 	).Observe(float64(tr.ElapseSpan().Milliseconds()))
 
@@ -731,7 +732,7 @@ func (node *Proxy) HasCollection(ctx context.Context, request *milvuspb.HasColle
 	method := "HasCollection"
 	tr := timerecord.NewTimeRecorder(method)
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.TotalLabel,
 		request.GetDbName(),
@@ -757,7 +758,7 @@ func (node *Proxy) HasCollection(ctx context.Context, request *milvuspb.HasColle
 		log.Warn("HasCollection failed to enqueue",
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return &milvuspb.BoolResponse{
 			Status: merr.Status(err),
@@ -776,7 +777,7 @@ func (node *Proxy) HasCollection(ctx context.Context, request *milvuspb.HasColle
 			zap.Uint64("BeginTS", hct.BeginTs()),
 			zap.Uint64("EndTS", hct.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return &milvuspb.BoolResponse{
 			Status: merr.Status(err),
@@ -790,14 +791,14 @@ func (node *Proxy) HasCollection(ctx context.Context, request *milvuspb.HasColle
 	)
 
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.SuccessLabel,
 		request.GetDbName(),
 		request.GetCollectionName(),
 	).Inc()
 	metrics.ProxyReqLatency.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 	).Observe(float64(tr.ElapseSpan().Milliseconds()))
 
@@ -815,7 +816,7 @@ func (node *Proxy) LoadCollection(ctx context.Context, request *milvuspb.LoadCol
 	method := "LoadCollection"
 	tr := timerecord.NewTimeRecorder(method)
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.TotalLabel,
 		request.GetDbName(),
@@ -842,7 +843,7 @@ func (node *Proxy) LoadCollection(ctx context.Context, request *milvuspb.LoadCol
 		log.Warn("LoadCollection failed to enqueue",
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return merr.Status(err), nil
 	}
@@ -858,7 +859,7 @@ func (node *Proxy) LoadCollection(ctx context.Context, request *milvuspb.LoadCol
 			zap.Error(err),
 			zap.Uint64("BeginTS", lct.BeginTs()),
 			zap.Uint64("EndTS", lct.EndTs()))
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return merr.Status(err), nil
 	}
@@ -870,14 +871,14 @@ func (node *Proxy) LoadCollection(ctx context.Context, request *milvuspb.LoadCol
 	)
 
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.SuccessLabel,
 		request.GetDbName(),
 		request.GetCollectionName(),
 	).Inc()
 	metrics.ProxyReqLatency.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 	).Observe(float64(tr.ElapseSpan().Milliseconds()))
 
@@ -894,7 +895,7 @@ func (node *Proxy) ReleaseCollection(ctx context.Context, request *milvuspb.Rele
 	defer sp.End()
 	method := "ReleaseCollection"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 	rct := &releaseCollectionTask{
 		ctx:                      ctx,
@@ -915,7 +916,7 @@ func (node *Proxy) ReleaseCollection(ctx context.Context, request *milvuspb.Rele
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return merr.Status(err), nil
 	}
@@ -932,7 +933,7 @@ func (node *Proxy) ReleaseCollection(ctx context.Context, request *milvuspb.Rele
 			zap.Uint64("BeginTS", rct.BeginTs()),
 			zap.Uint64("EndTS", rct.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return merr.Status(err), nil
 	}
@@ -942,9 +943,9 @@ func (node *Proxy) ReleaseCollection(ctx context.Context, request *milvuspb.Rele
 		zap.Uint64("BeginTS", rct.BeginTs()),
 		zap.Uint64("EndTS", rct.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return rct.result, nil
 }
 
@@ -983,7 +984,7 @@ func (node *Proxy) AddCollectionField(ctx context.Context, request *milvuspb.Add
 
 	method := "AddCollectionField"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	log := log.Ctx(ctx).With(
@@ -998,7 +999,7 @@ func (node *Proxy) AddCollectionField(ctx context.Context, request *milvuspb.Add
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
@@ -1016,7 +1017,7 @@ func (node *Proxy) AddCollectionField(ctx context.Context, request *milvuspb.Add
 			zap.Uint64("BeginTs", task.BeginTs()),
 			zap.Uint64("EndTs", task.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
@@ -1027,9 +1028,9 @@ func (node *Proxy) AddCollectionField(ctx context.Context, request *milvuspb.Add
 		zap.Uint64("BeginTs", task.BeginTs()),
 		zap.Uint64("EndTs", task.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return task.result, nil
 }
 
@@ -1046,7 +1047,7 @@ func (node *Proxy) GetStatistics(ctx context.Context, request *milvuspb.GetStati
 	defer sp.End()
 	method := "GetStatistics"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 	g := &getStatisticsTask{
 		request:   request,
@@ -1072,7 +1073,7 @@ func (node *Proxy) GetStatistics(ctx context.Context, request *milvuspb.GetStati
 			zap.Error(err),
 			zap.Strings("partitions", request.PartitionNames))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.GetStatisticsResponse{
@@ -1094,7 +1095,7 @@ func (node *Proxy) GetStatistics(ctx context.Context, request *milvuspb.GetStati
 			zap.Uint64("EndTS", g.EndTs()),
 			zap.Strings("partitions", request.PartitionNames))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.GetStatisticsResponse{
@@ -1107,9 +1108,9 @@ func (node *Proxy) GetStatistics(ctx context.Context, request *milvuspb.GetStati
 		zap.Uint64("BeginTS", g.BeginTs()),
 		zap.Uint64("EndTS", g.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return g.result, nil
 }
 
@@ -1125,7 +1126,7 @@ func (node *Proxy) GetCollectionStatistics(ctx context.Context, request *milvusp
 	defer sp.End()
 	method := "GetCollectionStatistics"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 	g := &getCollectionStatisticsTask{
 		ctx:                            ctx,
@@ -1146,7 +1147,7 @@ func (node *Proxy) GetCollectionStatistics(ctx context.Context, request *milvusp
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.GetCollectionStatisticsResponse{
@@ -1166,7 +1167,7 @@ func (node *Proxy) GetCollectionStatistics(ctx context.Context, request *milvusp
 			zap.Uint64("BeginTS", g.BeginTs()),
 			zap.Uint64("EndTS", g.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.GetCollectionStatisticsResponse{
@@ -1179,9 +1180,9 @@ func (node *Proxy) GetCollectionStatistics(ctx context.Context, request *milvusp
 		zap.Uint64("BeginTS", g.BeginTs()),
 		zap.Uint64("EndTS", g.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return g.result, nil
 }
 
@@ -1197,7 +1198,7 @@ func (node *Proxy) ShowCollections(ctx context.Context, request *milvuspb.ShowCo
 	method := "ShowCollections"
 	tr := timerecord.NewTimeRecorder(method)
 	metrics.ProxyFunctionCall.
-		WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), "").
+		WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), "").
 		Inc()
 
 	sct := &showCollectionsTask{
@@ -1222,7 +1223,7 @@ func (node *Proxy) ShowCollections(ctx context.Context, request *milvuspb.ShowCo
 			zap.Error(err),
 			zap.Any("CollectionNames", request.CollectionNames))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), "").Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), "").Inc()
 		return &milvuspb.ShowCollectionsResponse{
 			Status: merr.Status(err),
 		}, nil
@@ -1237,7 +1238,7 @@ func (node *Proxy) ShowCollections(ctx context.Context, request *milvuspb.ShowCo
 			zap.Error(err),
 			zap.Any("CollectionNames", request.CollectionNames))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), "").Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), "").Inc()
 
 		return &milvuspb.ShowCollectionsResponse{
 			Status: merr.Status(err),
@@ -1248,8 +1249,8 @@ func (node *Proxy) ShowCollections(ctx context.Context, request *milvuspb.ShowCo
 		zap.Int("len(CollectionNames)", len(request.CollectionNames)),
 		zap.Int("num_collections", len(sct.result.CollectionNames)))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), "").Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), "").Inc()
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return sct.result, nil
 }
 
@@ -1263,7 +1264,7 @@ func (node *Proxy) AlterCollection(ctx context.Context, request *milvuspb.AlterC
 	method := "AlterCollection"
 	tr := timerecord.NewTimeRecorder(method)
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	act := &alterCollectionTask{
 		ctx:                    ctx,
@@ -1286,7 +1287,7 @@ func (node *Proxy) AlterCollection(ctx context.Context, request *milvuspb.AlterC
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return merr.Status(err), nil
 	}
 
@@ -1303,7 +1304,7 @@ func (node *Proxy) AlterCollection(ctx context.Context, request *milvuspb.AlterC
 			zap.Uint64("BeginTs", act.BeginTs()),
 			zap.Uint64("EndTs", act.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return merr.Status(err), nil
 	}
 
@@ -1312,8 +1313,8 @@ func (node *Proxy) AlterCollection(ctx context.Context, request *milvuspb.AlterC
 		zap.Uint64("BeginTs", act.BeginTs()),
 		zap.Uint64("EndTs", act.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return act.result, nil
 }
 
@@ -1327,7 +1328,7 @@ func (node *Proxy) AlterCollectionField(ctx context.Context, request *milvuspb.A
 	method := "AlterCollectionField"
 	tr := timerecord.NewTimeRecorder(method)
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	act := &alterCollectionFieldTask{
 		ctx:                         ctx,
@@ -1350,7 +1351,7 @@ func (node *Proxy) AlterCollectionField(ctx context.Context, request *milvuspb.A
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return merr.Status(err), nil
 	}
 
@@ -1367,7 +1368,7 @@ func (node *Proxy) AlterCollectionField(ctx context.Context, request *milvuspb.A
 			zap.Uint64("BeginTs", act.BeginTs()),
 			zap.Uint64("EndTs", act.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return merr.Status(err), nil
 	}
 
@@ -1376,8 +1377,8 @@ func (node *Proxy) AlterCollectionField(ctx context.Context, request *milvuspb.A
 		zap.Uint64("BeginTs", act.BeginTs()),
 		zap.Uint64("EndTs", act.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return act.result, nil
 }
 
@@ -1391,7 +1392,7 @@ func (node *Proxy) CreatePartition(ctx context.Context, request *milvuspb.Create
 	defer sp.End()
 	method := "CreatePartition"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	cpt := &createPartitionTask{
 		ctx:                    ctx,
@@ -1414,7 +1415,7 @@ func (node *Proxy) CreatePartition(ctx context.Context, request *milvuspb.Create
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
 	}
@@ -1431,7 +1432,7 @@ func (node *Proxy) CreatePartition(ctx context.Context, request *milvuspb.Create
 			zap.Uint64("BeginTS", cpt.BeginTs()),
 			zap.Uint64("EndTS", cpt.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
 	}
@@ -1441,8 +1442,8 @@ func (node *Proxy) CreatePartition(ctx context.Context, request *milvuspb.Create
 		zap.Uint64("BeginTS", cpt.BeginTs()),
 		zap.Uint64("EndTS", cpt.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return cpt.result, nil
 }
 
@@ -1456,7 +1457,7 @@ func (node *Proxy) DropPartition(ctx context.Context, request *milvuspb.DropPart
 	defer sp.End()
 	method := "DropPartition"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	dpt := &dropPartitionTask{
 		ctx:                  ctx,
@@ -1479,7 +1480,7 @@ func (node *Proxy) DropPartition(ctx context.Context, request *milvuspb.DropPart
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
 	}
@@ -1496,7 +1497,7 @@ func (node *Proxy) DropPartition(ctx context.Context, request *milvuspb.DropPart
 			zap.Uint64("BeginTS", dpt.BeginTs()),
 			zap.Uint64("EndTS", dpt.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
 	}
@@ -1506,8 +1507,8 @@ func (node *Proxy) DropPartition(ctx context.Context, request *milvuspb.DropPart
 		zap.Uint64("BeginTS", dpt.BeginTs()),
 		zap.Uint64("EndTS", dpt.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return dpt.result, nil
 }
 
@@ -1524,7 +1525,7 @@ func (node *Proxy) HasPartition(ctx context.Context, request *milvuspb.HasPartit
 	method := "HasPartition"
 	tr := timerecord.NewTimeRecorder(method)
 	// TODO: use collectionID instead of collectionName
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	hpt := &hasPartitionTask{
@@ -1548,7 +1549,7 @@ func (node *Proxy) HasPartition(ctx context.Context, request *milvuspb.HasPartit
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.BoolResponse{
@@ -1569,7 +1570,7 @@ func (node *Proxy) HasPartition(ctx context.Context, request *milvuspb.HasPartit
 			zap.Uint64("BeginTS", hpt.BeginTs()),
 			zap.Uint64("EndTS", hpt.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.BoolResponse{
@@ -1583,9 +1584,9 @@ func (node *Proxy) HasPartition(ctx context.Context, request *milvuspb.HasPartit
 		zap.Uint64("BeginTS", hpt.BeginTs()),
 		zap.Uint64("EndTS", hpt.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return hpt.result, nil
 }
 
@@ -1599,7 +1600,7 @@ func (node *Proxy) LoadPartitions(ctx context.Context, request *milvuspb.LoadPar
 	defer sp.End()
 	method := "LoadPartitions"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 	lpt := &loadPartitionsTask{
 		ctx:                   ctx,
@@ -1622,7 +1623,7 @@ func (node *Proxy) LoadPartitions(ctx context.Context, request *milvuspb.LoadPar
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
@@ -1640,7 +1641,7 @@ func (node *Proxy) LoadPartitions(ctx context.Context, request *milvuspb.LoadPar
 			zap.Uint64("BeginTS", lpt.BeginTs()),
 			zap.Uint64("EndTS", lpt.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
@@ -1651,9 +1652,9 @@ func (node *Proxy) LoadPartitions(ctx context.Context, request *milvuspb.LoadPar
 		zap.Uint64("BeginTS", lpt.BeginTs()),
 		zap.Uint64("EndTS", lpt.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return lpt.result, nil
 }
 
@@ -1675,7 +1676,7 @@ func (node *Proxy) ReleasePartitions(ctx context.Context, request *milvuspb.Rele
 
 	method := "ReleasePartitions"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	log := log.Ctx(ctx).With(
@@ -1691,7 +1692,7 @@ func (node *Proxy) ReleasePartitions(ctx context.Context, request *milvuspb.Rele
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
@@ -1709,7 +1710,7 @@ func (node *Proxy) ReleasePartitions(ctx context.Context, request *milvuspb.Rele
 			zap.Uint64("BeginTS", rpt.BeginTs()),
 			zap.Uint64("EndTS", rpt.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
@@ -1720,9 +1721,9 @@ func (node *Proxy) ReleasePartitions(ctx context.Context, request *milvuspb.Rele
 		zap.Uint64("BeginTS", rpt.BeginTs()),
 		zap.Uint64("EndTS", rpt.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return rpt.result, nil
 }
 
@@ -1738,7 +1739,7 @@ func (node *Proxy) GetPartitionStatistics(ctx context.Context, request *milvuspb
 	defer sp.End()
 	method := "GetPartitionStatistics"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	g := &getPartitionStatisticsTask{
@@ -1761,7 +1762,7 @@ func (node *Proxy) GetPartitionStatistics(ctx context.Context, request *milvuspb
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.GetPartitionStatisticsResponse{
@@ -1781,7 +1782,7 @@ func (node *Proxy) GetPartitionStatistics(ctx context.Context, request *milvuspb
 			zap.Uint64("BeginTS", g.BeginTs()),
 			zap.Uint64("EndTS", g.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.GetPartitionStatisticsResponse{
@@ -1794,9 +1795,9 @@ func (node *Proxy) GetPartitionStatistics(ctx context.Context, request *milvuspb
 		zap.Uint64("BeginTS", g.BeginTs()),
 		zap.Uint64("EndTS", g.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return g.result, nil
 }
 
@@ -1822,7 +1823,7 @@ func (node *Proxy) ShowPartitions(ctx context.Context, request *milvuspb.ShowPar
 	method := "ShowPartitions"
 	tr := timerecord.NewTimeRecorder(method)
 	// TODO: use collectionID instead of collectionName
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	log := log.Ctx(ctx).With(zap.String("role", typeutil.ProxyRole))
@@ -1837,7 +1838,7 @@ func (node *Proxy) ShowPartitions(ctx context.Context, request *milvuspb.ShowPar
 			zap.Error(err),
 			zap.Any("request", request))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.ShowPartitionsResponse{
@@ -1863,7 +1864,7 @@ func (node *Proxy) ShowPartitions(ctx context.Context, request *milvuspb.ShowPar
 			zap.String("collection", spt.ShowPartitionsRequest.CollectionName),
 			zap.Any("partitions", spt.ShowPartitionsRequest.PartitionNames))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.ShowPartitionsResponse{
@@ -1879,9 +1880,9 @@ func (node *Proxy) ShowPartitions(ctx context.Context, request *milvuspb.ShowPar
 		zap.String("collection", spt.ShowPartitionsRequest.CollectionName),
 		zap.Any("partitions", spt.ShowPartitionsRequest.PartitionNames))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return spt.result, nil
 }
 
@@ -1893,7 +1894,7 @@ func (node *Proxy) GetLoadingProgress(ctx context.Context, request *milvuspb.Get
 	tr := timerecord.NewTimeRecorder(method)
 	ctx, sp := otel.Tracer(typeutil.ProxyRole).Start(ctx, "Proxy-GetLoadingProgress")
 	defer sp.End()
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 	log := log.Ctx(ctx)
 
 	log.Debug(
@@ -1905,7 +1906,7 @@ func (node *Proxy) GetLoadingProgress(ctx context.Context, request *milvuspb.Get
 			zap.String("collectionName", request.CollectionName),
 			zap.Strings("partitionName", request.PartitionNames),
 			zap.Error(err))
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		if errors.Is(err, merr.ErrServiceMemoryLimitExceeded) {
 			return &milvuspb.GetLoadingProgressResponse{
 				Status: merr.Status(err),
@@ -1925,7 +1926,7 @@ func (node *Proxy) GetLoadingProgress(ctx context.Context, request *milvuspb.Get
 
 	msgBase := commonpbutil.NewMsgBase(
 		commonpbutil.WithMsgType(commonpb.MsgType_SystemInfo),
-		commonpbutil.WithSourceID(paramtable.GetNodeID()),
+		commonpbutil.WithSourceID(menv.GetNodeID()),
 	)
 	if request.Base == nil {
 		request.Base = msgBase
@@ -1955,8 +1956,8 @@ func (node *Proxy) GetLoadingProgress(ctx context.Context, request *milvuspb.Get
 		zap.Any("request", request),
 		zap.Int64("loadProgress", loadProgress),
 		zap.Int64("refreshProgress", refreshProgress))
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return &milvuspb.GetLoadingProgressResponse{
 		Status:          merr.Success(),
 		Progress:        loadProgress,
@@ -1972,7 +1973,7 @@ func (node *Proxy) GetLoadState(ctx context.Context, request *milvuspb.GetLoadSt
 	tr := timerecord.NewTimeRecorder(method)
 	ctx, sp := otel.Tracer(typeutil.ProxyRole).Start(ctx, "Proxy-GetLoadState")
 	defer sp.End()
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 	log := log.Ctx(ctx)
 
 	log.Debug(
@@ -1984,7 +1985,7 @@ func (node *Proxy) GetLoadState(ctx context.Context, request *milvuspb.GetLoadSt
 			zap.String("collection_name", request.CollectionName),
 			zap.Strings("partition_name", request.PartitionNames),
 			zap.Error(err))
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return &milvuspb.GetLoadStateResponse{
 			Status: merr.Status(err),
 		}
@@ -2001,8 +2002,8 @@ func (node *Proxy) GetLoadState(ctx context.Context, request *milvuspb.GetLoadSt
 		log.Debug(
 			rpcDone(method),
 			zap.Any("request", request))
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-		metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	}()
 
 	collectionID, err := globalMetaCache.GetCollectionID(ctx, request.GetDbName(), request.CollectionName)
@@ -2017,7 +2018,7 @@ func (node *Proxy) GetLoadState(ctx context.Context, request *milvuspb.GetLoadSt
 
 	msgBase := commonpbutil.NewMsgBase(
 		commonpbutil.WithMsgType(commonpb.MsgType_SystemInfo),
-		commonpbutil.WithSourceID(paramtable.GetNodeID()),
+		commonpbutil.WithSourceID(menv.GetNodeID()),
 	)
 	if request.Base == nil {
 		request.Base = msgBase
@@ -2078,7 +2079,7 @@ func (node *Proxy) CreateIndex(ctx context.Context, request *milvuspb.CreateInde
 
 	method := "CreateIndex"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	log := log.Ctx(ctx).With(
@@ -2095,7 +2096,7 @@ func (node *Proxy) CreateIndex(ctx context.Context, request *milvuspb.CreateInde
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
@@ -2113,7 +2114,7 @@ func (node *Proxy) CreateIndex(ctx context.Context, request *milvuspb.CreateInde
 			zap.Uint64("BeginTs", cit.BeginTs()),
 			zap.Uint64("EndTs", cit.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
@@ -2124,9 +2125,9 @@ func (node *Proxy) CreateIndex(ctx context.Context, request *milvuspb.CreateInde
 		zap.Uint64("BeginTs", cit.BeginTs()),
 		zap.Uint64("EndTs", cit.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return cit.result, nil
 }
 
@@ -2147,7 +2148,7 @@ func (node *Proxy) AlterIndex(ctx context.Context, request *milvuspb.AlterIndexR
 
 	method := "AlterIndex"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	log := log.Ctx(ctx).With(
@@ -2164,7 +2165,7 @@ func (node *Proxy) AlterIndex(ctx context.Context, request *milvuspb.AlterIndexR
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
@@ -2182,7 +2183,7 @@ func (node *Proxy) AlterIndex(ctx context.Context, request *milvuspb.AlterIndexR
 			zap.Uint64("BeginTs", task.BeginTs()),
 			zap.Uint64("EndTs", task.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
@@ -2193,9 +2194,9 @@ func (node *Proxy) AlterIndex(ctx context.Context, request *milvuspb.AlterIndexR
 		zap.Uint64("BeginTs", task.BeginTs()),
 		zap.Uint64("EndTs", task.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return task.result, nil
 }
 
@@ -2220,7 +2221,7 @@ func (node *Proxy) DescribeIndex(ctx context.Context, request *milvuspb.Describe
 	method := "DescribeIndex"
 	// avoid data race
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	log := log.Ctx(ctx).With(
@@ -2237,7 +2238,7 @@ func (node *Proxy) DescribeIndex(ctx context.Context, request *milvuspb.Describe
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.DescribeIndexResponse{
@@ -2257,7 +2258,7 @@ func (node *Proxy) DescribeIndex(ctx context.Context, request *milvuspb.Describe
 			zap.Uint64("BeginTs", dit.BeginTs()),
 			zap.Uint64("EndTs", dit.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.DescribeIndexResponse{
@@ -2270,9 +2271,9 @@ func (node *Proxy) DescribeIndex(ctx context.Context, request *milvuspb.Describe
 		zap.Uint64("BeginTs", dit.BeginTs()),
 		zap.Uint64("EndTs", dit.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return dit.result, nil
 }
 
@@ -2364,7 +2365,7 @@ func (node *Proxy) DropIndex(ctx context.Context, request *milvuspb.DropIndexReq
 
 	method := "DropIndex"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	log := log.Ctx(ctx).With(
@@ -2380,7 +2381,7 @@ func (node *Proxy) DropIndex(ctx context.Context, request *milvuspb.DropIndexReq
 		log.Warn(
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
@@ -2398,7 +2399,7 @@ func (node *Proxy) DropIndex(ctx context.Context, request *milvuspb.DropIndexReq
 			zap.Uint64("BeginTs", dit.BeginTs()),
 			zap.Uint64("EndTs", dit.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
@@ -2409,9 +2410,9 @@ func (node *Proxy) DropIndex(ctx context.Context, request *milvuspb.DropIndexReq
 		zap.Uint64("BeginTs", dit.BeginTs()),
 		zap.Uint64("EndTs", dit.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return dit.result, nil
 }
 
@@ -2437,7 +2438,7 @@ func (node *Proxy) GetIndexBuildProgress(ctx context.Context, request *milvuspb.
 
 	method := "GetIndexBuildProgress"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	log := log.Ctx(ctx).With(
@@ -2453,7 +2454,7 @@ func (node *Proxy) GetIndexBuildProgress(ctx context.Context, request *milvuspb.
 		log.Warn(
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.GetIndexBuildProgressResponse{
@@ -2472,7 +2473,7 @@ func (node *Proxy) GetIndexBuildProgress(ctx context.Context, request *milvuspb.
 			zap.Error(err),
 			zap.Uint64("BeginTs", gibpt.BeginTs()),
 			zap.Uint64("EndTs", gibpt.EndTs()))
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.GetIndexBuildProgressResponse{
@@ -2485,9 +2486,9 @@ func (node *Proxy) GetIndexBuildProgress(ctx context.Context, request *milvuspb.
 		zap.Uint64("BeginTs", gibpt.BeginTs()),
 		zap.Uint64("EndTs", gibpt.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return gibpt.result, nil
 }
 
@@ -2512,7 +2513,7 @@ func (node *Proxy) GetIndexState(ctx context.Context, request *milvuspb.GetIndex
 
 	method := "GetIndexState"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	log := log.Ctx(ctx).With(
@@ -2529,7 +2530,7 @@ func (node *Proxy) GetIndexState(ctx context.Context, request *milvuspb.GetIndex
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.GetIndexStateResponse{
@@ -2548,7 +2549,7 @@ func (node *Proxy) GetIndexState(ctx context.Context, request *milvuspb.GetIndex
 			zap.Error(err),
 			zap.Uint64("BeginTs", dipt.BeginTs()),
 			zap.Uint64("EndTs", dipt.EndTs()))
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.GetIndexStateResponse{
@@ -2561,9 +2562,9 @@ func (node *Proxy) GetIndexState(ctx context.Context, request *milvuspb.GetIndex
 		zap.Uint64("BeginTs", dipt.BeginTs()),
 		zap.Uint64("EndTs", dipt.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return dipt.result, nil
 }
 
@@ -2589,10 +2590,10 @@ func (node *Proxy) Insert(ctx context.Context, request *milvuspb.InsertRequest) 
 	method := "Insert"
 	tr := timerecord.NewTimeRecorder(method)
 	metrics.GetStats(ctx).
-		SetNodeID(paramtable.GetNodeID()).
+		SetNodeID(menv.GetNodeID()).
 		SetInboundLabel(metrics.InsertLabel).
 		SetCollectionName(request.GetCollectionName())
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	it := &insertTask{
 		ctx:       ctx,
@@ -2604,7 +2605,7 @@ func (node *Proxy) Insert(ctx context.Context, request *milvuspb.InsertRequest) 
 			InsertRequest: &msgpb.InsertRequest{
 				Base: commonpbutil.NewMsgBase(
 					commonpbutil.WithMsgType(commonpb.MsgType_Insert),
-					commonpbutil.WithSourceID(paramtable.GetNodeID()),
+					commonpbutil.WithSourceID(menv.GetNodeID()),
 				),
 				DbName:         request.GetDbName(),
 				CollectionName: request.CollectionName,
@@ -2636,7 +2637,7 @@ func (node *Proxy) Insert(ctx context.Context, request *milvuspb.InsertRequest) 
 
 	if err := node.sched.dmQueue.Enqueue(it); err != nil {
 		log.Warn("Failed to enqueue insert task: " + err.Error())
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return constructFailedResponse(merr.WrapErrAsInputErrorWhen(err, merr.ErrCollectionNotFound, merr.ErrDatabaseNotFound)), nil
 	}
@@ -2645,7 +2646,7 @@ func (node *Proxy) Insert(ctx context.Context, request *milvuspb.InsertRequest) 
 
 	if err := it.WaitToFinish(); err != nil {
 		log.Warn("Failed to execute insert task in task scheduler: " + err.Error())
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return constructFailedResponse(err), nil
 	}
@@ -2669,11 +2670,11 @@ func (node *Proxy) Insert(ctx context.Context, request *milvuspb.InsertRequest) 
 
 	rateCol.Add(internalpb.RateType_DMLInsert.String(), float64(it.insertMsg.Size()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 	successCnt := it.result.InsertCnt - int64(len(it.result.ErrIndex))
 	username := GetCurUserFromContextOrDefault(ctx)
-	nodeID := paramtable.GetStringNodeID()
+	nodeID := menv.GetStringNodeID()
 	dbName := request.DbName
 	collectionName := request.CollectionName
 
@@ -2717,7 +2718,7 @@ func (node *Proxy) Delete(ctx context.Context, request *milvuspb.DeleteRequest) 
 	method := "Delete"
 
 	metrics.GetStats(ctx).
-		SetNodeID(paramtable.GetNodeID()).
+		SetNodeID(menv.GetNodeID()).
 		SetInboundLabel(metrics.DeleteLabel).
 		SetCollectionName(request.GetCollectionName())
 
@@ -2729,7 +2730,7 @@ func (node *Proxy) Delete(ctx context.Context, request *milvuspb.DeleteRequest) 
 
 	tr := timerecord.NewTimeRecorder(method)
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	var limiter types.Limiter
@@ -2750,7 +2751,7 @@ func (node *Proxy) Delete(ctx context.Context, request *milvuspb.DeleteRequest) 
 	log.Debug("init delete runner in Proxy")
 	if err := dr.Init(ctx); err != nil {
 		log.Error("Failed to enqueue delete task: " + err.Error())
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.MutationResult{
@@ -2762,7 +2763,7 @@ func (node *Proxy) Delete(ctx context.Context, request *milvuspb.DeleteRequest) 
 
 	if err := dr.Run(ctx); err != nil {
 		log.Error("Failed to run delete task: " + err.Error())
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return &milvuspb.MutationResult{
@@ -2776,7 +2777,7 @@ func (node *Proxy) Delete(ctx context.Context, request *milvuspb.DeleteRequest) 
 	successCnt := dr.result.GetDeleteCnt()
 
 	dbName := request.DbName
-	nodeID := paramtable.GetStringNodeID()
+	nodeID := menv.GetStringNodeID()
 
 	username := GetCurUserFromContextOrDefault(ctx)
 	collectionName := request.CollectionName
@@ -2824,15 +2825,15 @@ func (node *Proxy) Upsert(ctx context.Context, request *milvuspb.UpsertRequest) 
 	tr := timerecord.NewTimeRecorder(method)
 
 	metrics.GetStats(ctx).
-		SetNodeID(paramtable.GetNodeID()).
+		SetNodeID(menv.GetNodeID()).
 		SetInboundLabel(metrics.UpsertLabel).
 		SetCollectionName(request.GetCollectionName())
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	request.Base = commonpbutil.NewMsgBase(
 		commonpbutil.WithMsgType(commonpb.MsgType_Upsert),
-		commonpbutil.WithSourceID(paramtable.GetNodeID()),
+		commonpbutil.WithSourceID(menv.GetNodeID()),
 	)
 
 	it := &upsertTask{
@@ -2861,7 +2862,7 @@ func (node *Proxy) Upsert(ctx context.Context, request *milvuspb.UpsertRequest) 
 	if err := node.sched.dmQueue.Enqueue(it); err != nil {
 		log.Info("Failed to enqueue upsert task",
 			zap.Error(err))
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return &milvuspb.MutationResult{
 			Status: merr.Status(err),
@@ -2875,7 +2876,7 @@ func (node *Proxy) Upsert(ctx context.Context, request *milvuspb.UpsertRequest) 
 	if err := it.WaitToFinish(); err != nil {
 		log.Info("Failed to execute insert task in task scheduler",
 			zap.Error(err))
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		// Not every error case changes the status internally
 		// change status there to handle it
@@ -2911,7 +2912,7 @@ func (node *Proxy) Upsert(ctx context.Context, request *milvuspb.UpsertRequest) 
 	it.result.UpsertCnt = int64(request.NumRows)
 
 	username := GetCurUserFromContextOrDefault(ctx)
-	nodeID := paramtable.GetStringNodeID()
+	nodeID := menv.GetStringNodeID()
 	dbName := request.DbName
 	collectionName := request.CollectionName
 	v := hookutil.GetExtension().Report(map[string]any{
@@ -2976,14 +2977,14 @@ func (node *Proxy) Search(ctx context.Context, request *milvuspb.SearchRequest) 
 			optimizedSearch = false
 			rsp, resultSizeInsufficient, isTopkReduce, isRecallEvaluation, err = node.search(ctx, request, optimizedSearch, false)
 			metrics.ProxyRetrySearchCount.WithLabelValues(
-				strconv.FormatInt(paramtable.GetNodeID(), 10),
+				strconv.FormatInt(menv.GetNodeID(), 10),
 				metrics.SearchLabel,
 				request.GetCollectionName(),
 			).Inc()
 			// result size still insufficient
 			if resultSizeInsufficient {
 				metrics.ProxyRetrySearchResultInsufficientCount.WithLabelValues(
-					strconv.FormatInt(paramtable.GetNodeID(), 10),
+					strconv.FormatInt(menv.GetNodeID(), 10),
 					metrics.SearchLabel,
 					request.GetCollectionName(),
 				).Inc()
@@ -2997,7 +2998,7 @@ func (node *Proxy) Search(ctx context.Context, request *milvuspb.SearchRequest) 
 			var rspGT *milvuspb.SearchResults
 			rspGT, _, _, _, err = node.search(ctx, request, false, true)
 			metrics.ProxyRecallSearchCount.WithLabelValues(
-				strconv.FormatInt(paramtable.GetNodeID(), 10),
+				strconv.FormatInt(menv.GetNodeID(), 10),
 				metrics.SearchLabel,
 				request.GetCollectionName(),
 			).Inc()
@@ -3021,12 +3022,12 @@ func (node *Proxy) Search(ctx context.Context, request *milvuspb.SearchRequest) 
 
 func (node *Proxy) search(ctx context.Context, request *milvuspb.SearchRequest, optimizedSearch bool, isRecallEvaluation bool) (*milvuspb.SearchResults, bool, bool, bool, error) {
 	metrics.GetStats(ctx).
-		SetNodeID(paramtable.GetNodeID()).
+		SetNodeID(menv.GetNodeID()).
 		SetInboundLabel(metrics.SearchLabel).
 		SetCollectionName(request.GetCollectionName())
 
 	metrics.ProxyReceivedNQ.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		metrics.SearchLabel,
 		request.GetCollectionName(),
 	).Add(float64(request.GetNq()))
@@ -3040,7 +3041,7 @@ func (node *Proxy) search(ctx context.Context, request *milvuspb.SearchRequest, 
 	method := "Search"
 	tr := timerecord.NewTimeRecorder(method)
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.TotalLabel,
 		request.GetDbName(),
@@ -3067,9 +3068,9 @@ func (node *Proxy) search(ctx context.Context, request *milvuspb.SearchRequest, 
 		SearchRequest: &internalpb.SearchRequest{
 			Base: commonpbutil.NewMsgBase(
 				commonpbutil.WithMsgType(commonpb.MsgType_Search),
-				commonpbutil.WithSourceID(paramtable.GetNodeID()),
+				commonpbutil.WithSourceID(menv.GetNodeID()),
 			),
-			ReqID:              paramtable.GetNodeID(),
+			ReqID:              menv.GetNodeID(),
 			IsTopkReduce:       optimizedSearch,
 			IsRecallEvaluation: isRecallEvaluation,
 		},
@@ -3116,7 +3117,7 @@ func (node *Proxy) search(ctx context.Context, request *milvuspb.SearchRequest, 
 		}
 		if span >= paramtable.Get().ProxyCfg.SlowQuerySpanInSeconds.GetAsDuration(time.Second) {
 			metrics.ProxySlowQueryCount.WithLabelValues(
-				strconv.FormatInt(paramtable.GetNodeID(), 10),
+				strconv.FormatInt(menv.GetNodeID(), 10),
 				metrics.SearchLabel,
 			).Inc()
 		}
@@ -3131,7 +3132,7 @@ func (node *Proxy) search(ctx context.Context, request *milvuspb.SearchRequest, 
 		)
 
 		metrics.ProxyFunctionCall.WithLabelValues(
-			strconv.FormatInt(paramtable.GetNodeID(), 10),
+			strconv.FormatInt(menv.GetNodeID(), 10),
 			method,
 			metrics.AbandonLabel,
 			request.GetDbName(),
@@ -3157,7 +3158,7 @@ func (node *Proxy) search(ctx context.Context, request *milvuspb.SearchRequest, 
 		)
 
 		metrics.ProxyFunctionCall.WithLabelValues(
-			strconv.FormatInt(paramtable.GetNodeID(), 10),
+			strconv.FormatInt(menv.GetNodeID(), 10),
 			method,
 			metrics.FailLabel,
 			request.GetDbName(),
@@ -3170,7 +3171,7 @@ func (node *Proxy) search(ctx context.Context, request *milvuspb.SearchRequest, 
 	}
 
 	span := tr.CtxRecord(ctx, "wait search result")
-	nodeID := paramtable.GetStringNodeID()
+	nodeID := menv.GetStringNodeID()
 	dbName := request.DbName
 	collectionName := request.CollectionName
 	metrics.ProxyWaitForSearchResultLatency.WithLabelValues(
@@ -3241,14 +3242,14 @@ func (node *Proxy) HybridSearch(ctx context.Context, request *milvuspb.HybridSea
 			optimizedSearch = false
 			rsp, resultSizeInsufficient, isTopkReduce, err = node.hybridSearch(ctx, request, optimizedSearch)
 			metrics.ProxyRetrySearchCount.WithLabelValues(
-				strconv.FormatInt(paramtable.GetNodeID(), 10),
+				strconv.FormatInt(menv.GetNodeID(), 10),
 				metrics.HybridSearchLabel,
 				request.GetCollectionName(),
 			).Inc()
 			// result size still insufficient
 			if resultSizeInsufficient {
 				metrics.ProxyRetrySearchResultInsufficientCount.WithLabelValues(
-					strconv.FormatInt(paramtable.GetNodeID(), 10),
+					strconv.FormatInt(menv.GetNodeID(), 10),
 					metrics.HybridSearchLabel,
 					request.GetCollectionName(),
 				).Inc()
@@ -3282,7 +3283,7 @@ func (l *hybridSearchRequestExprLogger) String() string {
 
 func (node *Proxy) hybridSearch(ctx context.Context, request *milvuspb.HybridSearchRequest, optimizedSearch bool) (*milvuspb.SearchResults, bool, bool, error) {
 	metrics.GetStats(ctx).
-		SetNodeID(paramtable.GetNodeID()).
+		SetNodeID(menv.GetNodeID()).
 		SetInboundLabel(metrics.HybridSearchLabel).
 		SetCollectionName(request.GetCollectionName())
 
@@ -3295,7 +3296,7 @@ func (node *Proxy) hybridSearch(ctx context.Context, request *milvuspb.HybridSea
 	method := "HybridSearch"
 	tr := timerecord.NewTimeRecorder(method)
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.TotalLabel,
 		request.GetDbName(),
@@ -3311,9 +3312,9 @@ func (node *Proxy) hybridSearch(ctx context.Context, request *milvuspb.HybridSea
 		SearchRequest: &internalpb.SearchRequest{
 			Base: commonpbutil.NewMsgBase(
 				commonpbutil.WithMsgType(commonpb.MsgType_Search),
-				commonpbutil.WithSourceID(paramtable.GetNodeID()),
+				commonpbutil.WithSourceID(menv.GetNodeID()),
 			),
-			ReqID:        paramtable.GetNodeID(),
+			ReqID:        menv.GetNodeID(),
 			IsTopkReduce: optimizedSearch,
 		},
 		request:             newSearchReq,
@@ -3351,7 +3352,7 @@ func (node *Proxy) hybridSearch(ctx context.Context, request *milvuspb.HybridSea
 		}
 		if span >= paramtable.Get().ProxyCfg.SlowQuerySpanInSeconds.GetAsDuration(time.Second) {
 			metrics.ProxySlowQueryCount.WithLabelValues(
-				strconv.FormatInt(paramtable.GetNodeID(), 10),
+				strconv.FormatInt(menv.GetNodeID(), 10),
 				metrics.HybridSearchLabel,
 			).Inc()
 		}
@@ -3366,7 +3367,7 @@ func (node *Proxy) hybridSearch(ctx context.Context, request *milvuspb.HybridSea
 		)
 
 		metrics.ProxyFunctionCall.WithLabelValues(
-			strconv.FormatInt(paramtable.GetNodeID(), 10),
+			strconv.FormatInt(menv.GetNodeID(), 10),
 			method,
 			metrics.AbandonLabel,
 			request.GetDbName(),
@@ -3391,7 +3392,7 @@ func (node *Proxy) hybridSearch(ctx context.Context, request *milvuspb.HybridSea
 		)
 
 		metrics.ProxyFunctionCall.WithLabelValues(
-			strconv.FormatInt(paramtable.GetNodeID(), 10),
+			strconv.FormatInt(menv.GetNodeID(), 10),
 			method,
 			metrics.FailLabel,
 			request.GetDbName(),
@@ -3404,7 +3405,7 @@ func (node *Proxy) hybridSearch(ctx context.Context, request *milvuspb.HybridSea
 	}
 
 	span := tr.CtxRecord(ctx, "wait hybrid search result")
-	nodeID := paramtable.GetStringNodeID()
+	nodeID := menv.GetStringNodeID()
 	dbName := request.DbName
 	collectionName := request.CollectionName
 	metrics.ProxyWaitForSearchResultLatency.WithLabelValues(
@@ -3538,7 +3539,7 @@ func (node *Proxy) Flush(ctx context.Context, request *milvuspb.FlushRequest) (*
 
 	method := "Flush"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), "").Inc()
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), "").Inc()
 
 	log := log.Ctx(ctx).With(
 		zap.String("role", typeutil.ProxyRole),
@@ -3551,7 +3552,7 @@ func (node *Proxy) Flush(ctx context.Context, request *milvuspb.FlushRequest) (*
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), "").Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), "").Inc()
 
 		resp.Status = merr.Status(err)
 		return resp, nil
@@ -3569,7 +3570,7 @@ func (node *Proxy) Flush(ctx context.Context, request *milvuspb.FlushRequest) (*
 			zap.Uint64("BeginTs", ft.BeginTs()),
 			zap.Uint64("EndTs", ft.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), "").Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), "").Inc()
 
 		resp.Status = merr.Status(err)
 		return resp, nil
@@ -3580,8 +3581,8 @@ func (node *Proxy) Flush(ctx context.Context, request *milvuspb.FlushRequest) (*
 		zap.Uint64("BeginTs", ft.BeginTs()),
 		zap.Uint64("EndTs", ft.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), "").Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), "").Inc()
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return ft.result, nil
 }
 
@@ -3637,7 +3638,7 @@ func (node *Proxy) query(ctx context.Context, qt *queryTask, sp trace.Span) (*mi
 		}
 		if span >= paramtable.Get().ProxyCfg.SlowQuerySpanInSeconds.GetAsDuration(time.Second) {
 			metrics.ProxySlowQueryCount.WithLabelValues(
-				strconv.FormatInt(paramtable.GetNodeID(), 10),
+				strconv.FormatInt(menv.GetNodeID(), 10),
 				metrics.QueryLabel,
 			).Inc()
 		}
@@ -3651,7 +3652,7 @@ func (node *Proxy) query(ctx context.Context, qt *queryTask, sp trace.Span) (*mi
 
 		if !qt.reQuery {
 			metrics.ProxyFunctionCall.WithLabelValues(
-				strconv.FormatInt(paramtable.GetNodeID(), 10),
+				strconv.FormatInt(menv.GetNodeID(), 10),
 				method,
 				metrics.AbandonLabel,
 				request.GetDbName(),
@@ -3673,7 +3674,7 @@ func (node *Proxy) query(ctx context.Context, qt *queryTask, sp trace.Span) (*mi
 			zap.Error(err))
 
 		if !qt.reQuery {
-			metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+			metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 				metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		}
 
@@ -3685,19 +3686,19 @@ func (node *Proxy) query(ctx context.Context, qt *queryTask, sp trace.Span) (*mi
 	if !qt.reQuery {
 		span := tr.CtxRecord(ctx, "wait query result")
 		metrics.ProxyWaitForSearchResultLatency.WithLabelValues(
-			strconv.FormatInt(paramtable.GetNodeID(), 10),
+			strconv.FormatInt(menv.GetNodeID(), 10),
 			metrics.QueryLabel,
 		).Observe(float64(span.Milliseconds()))
 
 		metrics.ProxySQLatency.WithLabelValues(
-			strconv.FormatInt(paramtable.GetNodeID(), 10),
+			strconv.FormatInt(menv.GetNodeID(), 10),
 			metrics.QueryLabel,
 			request.GetDbName(),
 			request.GetCollectionName(),
 		).Observe(float64(tr.ElapseSpan().Milliseconds()))
 
 		metrics.ProxyCollectionSQLatency.WithLabelValues(
-			strconv.FormatInt(paramtable.GetNodeID(), 10),
+			strconv.FormatInt(menv.GetNodeID(), 10),
 			metrics.QueryLabel,
 			request.CollectionName,
 		).Observe(float64(tr.ElapseSpan().Milliseconds()))
@@ -3714,9 +3715,9 @@ func (node *Proxy) Query(ctx context.Context, request *milvuspb.QueryRequest) (*
 		RetrieveRequest: &internalpb.RetrieveRequest{
 			Base: commonpbutil.NewMsgBase(
 				commonpbutil.WithMsgType(commonpb.MsgType_Retrieve),
-				commonpbutil.WithSourceID(paramtable.GetNodeID()),
+				commonpbutil.WithSourceID(menv.GetNodeID()),
 			),
-			ReqID:            paramtable.GetNodeID(),
+			ReqID:            menv.GetNodeID(),
 			ConsistencyLevel: request.ConsistencyLevel,
 		},
 		request:             request,
@@ -3727,11 +3728,11 @@ func (node *Proxy) Query(ctx context.Context, request *milvuspb.QueryRequest) (*
 
 	subLabel := GetCollectionRateSubLabel(request)
 	metrics.GetStats(ctx).
-		SetNodeID(paramtable.GetNodeID()).
+		SetNodeID(menv.GetNodeID()).
 		SetInboundLabel(metrics.QueryLabel).
 		SetCollectionName(request.GetCollectionName())
 	metrics.ProxyReceivedNQ.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		metrics.QueryLabel,
 		request.GetCollectionName(),
 	).Add(float64(1))
@@ -3749,7 +3750,7 @@ func (node *Proxy) Query(ctx context.Context, request *milvuspb.QueryRequest) (*
 	method := "Query"
 
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.TotalLabel,
 		request.GetDbName(),
@@ -3764,7 +3765,7 @@ func (node *Proxy) Query(ctx context.Context, request *milvuspb.QueryRequest) (*
 	log.Ctx(ctx).Debug(rpcDone(method))
 
 	metrics.ProxyFunctionCall.WithLabelValues(
-		strconv.FormatInt(paramtable.GetNodeID(), 10),
+		strconv.FormatInt(menv.GetNodeID(), 10),
 		method,
 		metrics.SuccessLabel,
 		request.GetDbName(),
@@ -3772,7 +3773,7 @@ func (node *Proxy) Query(ctx context.Context, request *milvuspb.QueryRequest) (*
 	).Inc()
 
 	username := GetCurUserFromContextOrDefault(ctx)
-	nodeID := paramtable.GetStringNodeID()
+	nodeID := menv.GetStringNodeID()
 	v := hookutil.GetExtension().Report(map[string]any{
 		hookutil.OpTypeKey:          hookutil.OpTypeQuery,
 		hookutil.DatabaseKey:        request.DbName,
@@ -3809,7 +3810,7 @@ func (node *Proxy) CreateAlias(ctx context.Context, request *milvuspb.CreateAlia
 
 	method := "CreateAlias"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	log := log.Ctx(ctx).With(
 		zap.String("role", typeutil.ProxyRole),
@@ -3824,7 +3825,7 @@ func (node *Proxy) CreateAlias(ctx context.Context, request *milvuspb.CreateAlia
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
 	}
@@ -3840,7 +3841,7 @@ func (node *Proxy) CreateAlias(ctx context.Context, request *milvuspb.CreateAlia
 			zap.Error(err),
 			zap.Uint64("BeginTs", cat.BeginTs()),
 			zap.Uint64("EndTs", cat.EndTs()))
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
 	}
@@ -3850,8 +3851,8 @@ func (node *Proxy) CreateAlias(ctx context.Context, request *milvuspb.CreateAlia
 		zap.Uint64("BeginTs", cat.BeginTs()),
 		zap.Uint64("EndTs", cat.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return cat.result, nil
 }
 
@@ -4000,7 +4001,7 @@ func (node *Proxy) DropAlias(ctx context.Context, request *milvuspb.DropAliasReq
 
 	method := "DropAlias"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), "").Inc()
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), "").Inc()
 
 	log := log.Ctx(ctx).With(
 		zap.String("role", typeutil.ProxyRole),
@@ -4013,7 +4014,7 @@ func (node *Proxy) DropAlias(ctx context.Context, request *milvuspb.DropAliasReq
 		log.Warn(
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), "").Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), "").Inc()
 
 		return merr.Status(err), nil
 	}
@@ -4030,7 +4031,7 @@ func (node *Proxy) DropAlias(ctx context.Context, request *milvuspb.DropAliasReq
 			zap.Uint64("BeginTs", dat.BeginTs()),
 			zap.Uint64("EndTs", dat.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), "").Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), "").Inc()
 
 		return merr.Status(err), nil
 	}
@@ -4040,8 +4041,8 @@ func (node *Proxy) DropAlias(ctx context.Context, request *milvuspb.DropAliasReq
 		zap.Uint64("BeginTs", dat.BeginTs()),
 		zap.Uint64("EndTs", dat.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), "").Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), "").Inc()
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return dat.result, nil
 }
 
@@ -4063,7 +4064,7 @@ func (node *Proxy) AlterAlias(ctx context.Context, request *milvuspb.AlterAliasR
 
 	method := "AlterAlias"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 	log := log.Ctx(ctx).With(
 		zap.String("role", typeutil.ProxyRole),
@@ -4077,7 +4078,7 @@ func (node *Proxy) AlterAlias(ctx context.Context, request *milvuspb.AlterAliasR
 		log.Warn(
 			rpcFailedToEnqueue(method),
 			zap.Error(err))
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
 	}
@@ -4094,7 +4095,7 @@ func (node *Proxy) AlterAlias(ctx context.Context, request *milvuspb.AlterAliasR
 			zap.Uint64("BeginTs", aat.BeginTs()),
 			zap.Uint64("EndTs", aat.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 
 		return merr.Status(err), nil
 	}
@@ -4104,8 +4105,8 @@ func (node *Proxy) AlterAlias(ctx context.Context, request *milvuspb.AlterAliasR
 		zap.Uint64("BeginTs", aat.BeginTs()),
 		zap.Uint64("EndTs", aat.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return aat.result, nil
 }
 
@@ -4139,7 +4140,7 @@ func (node *Proxy) FlushAll(ctx context.Context, request *milvuspb.FlushAllReque
 
 	method := "FlushAll"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), "").Inc()
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.TotalLabel, request.GetDbName(), "").Inc()
 
 	log := log.Ctx(ctx).With(
 		zap.String("role", typeutil.ProxyRole),
@@ -4149,7 +4150,7 @@ func (node *Proxy) FlushAll(ctx context.Context, request *milvuspb.FlushAllReque
 
 	if err := node.sched.dcQueue.Enqueue(ft); err != nil {
 		log.Warn(rpcFailedToEnqueue(method), zap.Error(err))
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), "").Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.AbandonLabel, request.GetDbName(), "").Inc()
 		resp.Status = merr.Status(err)
 		return resp, nil
 	}
@@ -4165,7 +4166,7 @@ func (node *Proxy) FlushAll(ctx context.Context, request *milvuspb.FlushAllReque
 			zap.Uint64("BeginTs", ft.BeginTs()),
 			zap.Uint64("EndTs", ft.EndTs()))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), "").Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, request.GetDbName(), "").Inc()
 		resp.Status = merr.Status(err)
 		return resp, nil
 	}
@@ -4176,8 +4177,8 @@ func (node *Proxy) FlushAll(ctx context.Context, request *milvuspb.FlushAllReque
 		zap.Uint64("BeginTs", ft.BeginTs()),
 		zap.Uint64("EndTs", ft.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), "").Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.SuccessLabel, request.GetDbName(), "").Inc()
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return &milvuspb.FlushAllResponse{
 		Status:     merr.Success(),
 		FlushAllTs: ft.result.GetFlushTs(),
@@ -4212,13 +4213,13 @@ func (node *Proxy) GetPersistentSegmentInfo(ctx context.Context, req *milvuspb.G
 	}
 	method := "GetPersistentSegmentInfo"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, req.GetDbName(), req.GetCollectionName()).Inc()
 
 	// list segments
 	collectionID, err := globalMetaCache.GetCollectionID(ctx, req.GetDbName(), req.GetCollectionName())
 	if err != nil {
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, req.GetDbName(), req.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, req.GetDbName(), req.GetCollectionName()).Inc()
 		resp.Status = merr.Status(err)
 		return resp, nil
 	}
@@ -4230,7 +4231,7 @@ func (node *Proxy) GetPersistentSegmentInfo(ctx context.Context, req *milvuspb.G
 		States:      []commonpb.SegmentState{commonpb.SegmentState_Flushing, commonpb.SegmentState_Flushed, commonpb.SegmentState_Sealed},
 	})
 	if err != nil {
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, req.GetDbName(), req.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, req.GetDbName(), req.GetCollectionName()).Inc()
 		resp.Status = merr.Status(err)
 		return resp, nil
 	}
@@ -4239,12 +4240,12 @@ func (node *Proxy) GetPersistentSegmentInfo(ctx context.Context, req *milvuspb.G
 	infoResp, err := node.mixCoord.GetSegmentInfo(ctx, &datapb.GetSegmentInfoRequest{
 		Base: commonpbutil.NewMsgBase(
 			commonpbutil.WithMsgType(commonpb.MsgType_SegmentInfo),
-			commonpbutil.WithSourceID(paramtable.GetNodeID()),
+			commonpbutil.WithSourceID(menv.GetNodeID()),
 		),
 		SegmentIDs: getSegmentsByStatesResponse.Segments,
 	})
 	if err != nil {
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, req.GetDbName(), req.GetCollectionName()).Inc()
 		log.Warn("GetPersistentSegmentInfo fail",
 			zap.Error(err))
@@ -4253,7 +4254,7 @@ func (node *Proxy) GetPersistentSegmentInfo(ctx context.Context, req *milvuspb.G
 	}
 	err = merr.Error(infoResp.GetStatus())
 	if err != nil {
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, req.GetDbName(), req.GetCollectionName()).Inc()
 		resp.Status = merr.Status(err)
 		return resp, nil
@@ -4274,9 +4275,9 @@ func (node *Proxy) GetPersistentSegmentInfo(ctx context.Context, req *milvuspb.G
 			StorageVersion: info.GetStorageVersion(),
 		}
 	}
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, req.GetDbName(), req.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	resp.Infos = persistentInfos
 	return resp, nil
 }
@@ -4301,7 +4302,7 @@ func (node *Proxy) GetSegmentsInfo(ctx context.Context, req *internalpb.GetSegme
 	}
 	method := "GetSegmentsInfo"
 	tr := timerecord.NewTimeRecorder(method)
-	nodeID := fmt.Sprint(paramtable.GetNodeID())
+	nodeID := fmt.Sprint(menv.GetNodeID())
 	collection := fmt.Sprint(req.GetCollectionID())
 	defer func() {
 		metrics.ProxyFunctionCall.WithLabelValues(nodeID, method, metrics.TotalLabel, req.GetDbName(), collection).Inc()
@@ -4311,7 +4312,7 @@ func (node *Proxy) GetSegmentsInfo(ctx context.Context, req *internalpb.GetSegme
 		} else {
 			metrics.ProxyFunctionCall.WithLabelValues(nodeID, method, metrics.SuccessLabel, req.GetDbName(), collection).Inc()
 		}
-		metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+		metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	}()
 
 	infoResp, err := node.mixCoord.GetSegmentInfo(ctx, &datapb.GetSegmentInfoRequest{
@@ -4389,19 +4390,19 @@ func (node *Proxy) GetQuerySegmentInfo(ctx context.Context, req *milvuspb.GetQue
 
 	method := "GetQuerySegmentInfo"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, req.GetDbName(), req.GetCollectionName()).Inc()
 
 	collID, err := globalMetaCache.GetCollectionID(ctx, req.GetDbName(), req.CollectionName)
 	if err != nil {
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, req.GetDbName(), req.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, req.GetDbName(), req.GetCollectionName()).Inc()
 		resp.Status = merr.Status(err)
 		return resp, nil
 	}
 	infoResp, err := node.mixCoord.GetLoadSegmentInfo(ctx, &querypb.GetSegmentInfoRequest{
 		Base: commonpbutil.NewMsgBase(
 			commonpbutil.WithMsgType(commonpb.MsgType_SegmentInfo),
-			commonpbutil.WithSourceID(paramtable.GetNodeID()),
+			commonpbutil.WithSourceID(menv.GetNodeID()),
 		),
 		CollectionID: collID,
 	})
@@ -4409,7 +4410,7 @@ func (node *Proxy) GetQuerySegmentInfo(ctx context.Context, req *milvuspb.GetQue
 		err = merr.Error(infoResp.GetStatus())
 	}
 	if err != nil {
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, req.GetDbName(), req.GetCollectionName()).Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, req.GetDbName(), req.GetCollectionName()).Inc()
 		log.Error("Failed to get segment info from QueryCoord",
 			zap.Error(err))
 		resp.Status = merr.Status(err)
@@ -4436,8 +4437,8 @@ func (node *Proxy) GetQuerySegmentInfo(ctx context.Context, req *milvuspb.GetQue
 		}
 	}
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.SuccessLabel, req.GetDbName(), req.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.SuccessLabel, req.GetDbName(), req.GetCollectionName()).Inc()
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	resp.Infos = queryInfos
 	return resp, nil
 }
@@ -4511,7 +4512,7 @@ func (node *Proxy) RegisterLink(ctx context.Context, req *milvuspb.RegisterLinkR
 			Status: merr.Status(err),
 		}, nil
 	}
-	// metrics.ProxyLinkedSDKs.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10)).Inc()
+	// metrics.ProxyLinkedSDKs.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10)).Inc()
 	return &milvuspb.RegisterLinkResponse{
 		Status: merr.Success(os.Getenv(metricsinfo.DeployModeEnvKey)),
 	}, nil
@@ -4526,12 +4527,12 @@ func (node *Proxy) GetMetrics(ctx context.Context, req *milvuspb.GetMetricsReque
 	log := log.Ctx(ctx)
 
 	log.RatedDebug(60, "Proxy.GetMetrics",
-		zap.Int64("nodeID", paramtable.GetNodeID()),
+		zap.Int64("nodeID", menv.GetNodeID()),
 		zap.String("req", req.Request))
 
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
 		log.Warn("Proxy.GetMetrics failed",
-			zap.Int64("nodeID", paramtable.GetNodeID()),
+			zap.Int64("nodeID", menv.GetNodeID()),
 			zap.String("req", req.Request),
 			zap.Error(err))
 
@@ -4544,7 +4545,7 @@ func (node *Proxy) GetMetrics(ctx context.Context, req *milvuspb.GetMetricsReque
 	metricType, err := metricsinfo.ParseMetricRequestType(ret)
 	if err != nil {
 		log.Warn("Proxy.GetMetrics failed to parse metric type",
-			zap.Int64("nodeID", paramtable.GetNodeID()),
+			zap.Int64("nodeID", menv.GetNodeID()),
 			zap.String("req", req.Request),
 			zap.Error(err))
 
@@ -4555,7 +4556,7 @@ func (node *Proxy) GetMetrics(ctx context.Context, req *milvuspb.GetMetricsReque
 
 	req.Base = commonpbutil.NewMsgBase(
 		commonpbutil.WithMsgType(commonpb.MsgType_SystemInfo),
-		commonpbutil.WithSourceID(paramtable.GetNodeID()),
+		commonpbutil.WithSourceID(menv.GetNodeID()),
 	)
 	if metricType == metricsinfo.SystemInfoMetrics {
 		metrics, err := node.metricsCacheManager.GetSystemInfoMetrics()
@@ -4564,7 +4565,7 @@ func (node *Proxy) GetMetrics(ctx context.Context, req *milvuspb.GetMetricsReque
 		}
 
 		log.RatedDebug(60, "Proxy.GetMetrics",
-			zap.Int64("nodeID", paramtable.GetNodeID()),
+			zap.Int64("nodeID", menv.GetNodeID()),
 			zap.String("req", req.Request),
 			zap.String("metricType", metricType),
 			zap.Any("metrics", metrics), // TODO(dragondriver): necessary? may be very large
@@ -4576,7 +4577,7 @@ func (node *Proxy) GetMetrics(ctx context.Context, req *milvuspb.GetMetricsReque
 	}
 
 	log.RatedWarn(60, "Proxy.GetMetrics failed, request metric type is not implemented yet",
-		zap.Int64("nodeID", paramtable.GetNodeID()),
+		zap.Int64("nodeID", menv.GetNodeID()),
 		zap.String("req", req.Request),
 		zap.String("metricType", metricType))
 
@@ -4592,7 +4593,7 @@ func (node *Proxy) GetProxyMetrics(ctx context.Context, req *milvuspb.GetMetrics
 	defer sp.End()
 
 	log := log.Ctx(ctx).With(
-		zap.Int64("nodeID", paramtable.GetNodeID()),
+		zap.Int64("nodeID", menv.GetNodeID()),
 		zap.String("req", req.Request))
 
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
@@ -4617,7 +4618,7 @@ func (node *Proxy) GetProxyMetrics(ctx context.Context, req *milvuspb.GetMetrics
 
 	req.Base = commonpbutil.NewMsgBase(
 		commonpbutil.WithMsgType(commonpb.MsgType_SystemInfo),
-		commonpbutil.WithSourceID(paramtable.GetNodeID()),
+		commonpbutil.WithSourceID(menv.GetNodeID()),
 	)
 
 	if metricType == metricsinfo.SystemInfoMetrics {
@@ -4653,7 +4654,7 @@ func (node *Proxy) LoadBalance(ctx context.Context, req *milvuspb.LoadBalanceReq
 	log := log.Ctx(ctx)
 
 	log.Debug("Proxy.LoadBalance",
-		zap.Int64("proxy_id", paramtable.GetNodeID()),
+		zap.Int64("proxy_id", menv.GetNodeID()),
 		zap.Any("req", req))
 
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
@@ -4673,7 +4674,7 @@ func (node *Proxy) LoadBalance(ctx context.Context, req *milvuspb.LoadBalanceReq
 	infoResp, err := node.mixCoord.LoadBalance(ctx, &querypb.LoadBalanceRequest{
 		Base: commonpbutil.NewMsgBase(
 			commonpbutil.WithMsgType(commonpb.MsgType_LoadBalanceSegments),
-			commonpbutil.WithSourceID(paramtable.GetNodeID()),
+			commonpbutil.WithSourceID(menv.GetNodeID()),
 		),
 		SourceNodeIDs:    []int64{req.SrcNodeID},
 		DstNodeIDs:       req.DstNodeIDs,
@@ -4718,7 +4719,7 @@ func (node *Proxy) GetReplicas(ctx context.Context, req *milvuspb.GetReplicasReq
 
 	req.Base = commonpbutil.NewMsgBase(
 		commonpbutil.WithMsgType(commonpb.MsgType_GetReplicas),
-		commonpbutil.WithSourceID(paramtable.GetNodeID()),
+		commonpbutil.WithSourceID(menv.GetNodeID()),
 	)
 
 	if req.GetCollectionName() != "" {
@@ -5831,7 +5832,7 @@ func (node *Proxy) RenameCollection(ctx context.Context, req *milvuspb.RenameCol
 
 	req.Base = commonpbutil.NewMsgBase(
 		commonpbutil.WithMsgType(commonpb.MsgType_RenameCollection),
-		commonpbutil.WithSourceID(paramtable.GetNodeID()),
+		commonpbutil.WithSourceID(menv.GetNodeID()),
 	)
 	resp, err := node.mixCoord.RenameCollection(ctx, req)
 	if err != nil {
@@ -5857,7 +5858,7 @@ func (node *Proxy) CreateResourceGroup(ctx context.Context, request *milvuspb.Cr
 	ctx, sp := otel.Tracer(typeutil.ProxyRole).Start(ctx, "Proxy-CreateResourceGroup")
 	defer sp.End()
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, "", "").Inc()
 	t := &CreateResourceGroupTask{
 		ctx:                        ctx,
@@ -5894,9 +5895,9 @@ func (node *Proxy) CreateResourceGroup(ctx context.Context, request *milvuspb.Cr
 		zap.Uint64("BeginTS", t.BeginTs()),
 		zap.Uint64("EndTS", t.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, "", "").Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return t.result, nil
 }
 
@@ -5918,7 +5919,7 @@ func (node *Proxy) UpdateResourceGroups(ctx context.Context, request *milvuspb.U
 	ctx, sp := otel.Tracer(typeutil.ProxyRole).Start(ctx, "Proxy-UpdateResourceGroups")
 	defer sp.End()
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.TotalLabel, "", "").Inc()
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.TotalLabel, "", "").Inc()
 	t := &UpdateResourceGroupsTask{
 		ctx:                         ctx,
 		Condition:                   NewTaskCondition(ctx),
@@ -5954,14 +5955,14 @@ func (node *Proxy) UpdateResourceGroups(ctx context.Context, request *milvuspb.U
 		zap.Uint64("BeginTS", t.BeginTs()),
 		zap.Uint64("EndTS", t.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.SuccessLabel, "", "").Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.SuccessLabel, "", "").Inc()
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return t.result, nil
 }
 
 func getErrResponse(err error, method string, dbName string, collectionName string) *commonpb.Status {
 	metrics.ProxyFunctionCall.
-		WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, dbName, collectionName).Inc()
+		WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, dbName, collectionName).Inc()
 	return merr.Status(err)
 }
 
@@ -5974,7 +5975,7 @@ func (node *Proxy) DropResourceGroup(ctx context.Context, request *milvuspb.Drop
 	ctx, sp := otel.Tracer(typeutil.ProxyRole).Start(ctx, "Proxy-DropResourceGroup")
 	defer sp.End()
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, "", "").Inc()
 	t := &DropResourceGroupTask{
 		ctx:                      ctx,
@@ -6012,9 +6013,9 @@ func (node *Proxy) DropResourceGroup(ctx context.Context, request *milvuspb.Drop
 		zap.Uint64("BeginTS", t.BeginTs()),
 		zap.Uint64("EndTS", t.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, "", "").Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return t.result, nil
 }
 
@@ -6041,7 +6042,7 @@ func (node *Proxy) TransferNode(ctx context.Context, request *milvuspb.TransferN
 	ctx, sp := otel.Tracer(typeutil.ProxyRole).Start(ctx, "Proxy-TransferNode")
 	defer sp.End()
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, "", "").Inc()
 	t := &TransferNodeTask{
 		ctx:                 ctx,
@@ -6079,9 +6080,9 @@ func (node *Proxy) TransferNode(ctx context.Context, request *milvuspb.TransferN
 		zap.Uint64("BeginTS", t.BeginTs()),
 		zap.Uint64("EndTS", t.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, "", "").Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return t.result, nil
 }
 
@@ -6108,7 +6109,7 @@ func (node *Proxy) TransferReplica(ctx context.Context, request *milvuspb.Transf
 	ctx, sp := otel.Tracer(typeutil.ProxyRole).Start(ctx, "Proxy-TransferReplica")
 	defer sp.End()
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 	t := &TransferReplicaTask{
 		ctx:                    ctx,
@@ -6146,9 +6147,9 @@ func (node *Proxy) TransferReplica(ctx context.Context, request *milvuspb.Transf
 		zap.Uint64("BeginTS", t.BeginTs()),
 		zap.Uint64("EndTS", t.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, request.GetDbName(), request.GetCollectionName()).Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return t.result, nil
 }
 
@@ -6163,7 +6164,7 @@ func (node *Proxy) ListResourceGroups(ctx context.Context, request *milvuspb.Lis
 	defer sp.End()
 	method := "ListResourceGroups"
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, "", "").Inc()
 	t := &ListResourceGroupsTask{
 		ctx:                       ctx,
@@ -6182,7 +6183,7 @@ func (node *Proxy) ListResourceGroups(ctx context.Context, request *milvuspb.Lis
 		log.Warn("ListResourceGroups failed to enqueue",
 			zap.Error(err))
 
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.AbandonLabel, "", "").Inc()
 		return &milvuspb.ListResourceGroupsResponse{
 			Status: merr.Status(err),
@@ -6198,7 +6199,7 @@ func (node *Proxy) ListResourceGroups(ctx context.Context, request *milvuspb.Lis
 			zap.Error(err),
 			zap.Uint64("BeginTS", t.BeginTs()),
 			zap.Uint64("EndTS", t.EndTs()))
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 			metrics.FailLabel, "", "").Inc()
 		return &milvuspb.ListResourceGroupsResponse{
 			Status: merr.Status(err),
@@ -6209,9 +6210,9 @@ func (node *Proxy) ListResourceGroups(ctx context.Context, request *milvuspb.Lis
 		zap.Uint64("BeginTS", t.BeginTs()),
 		zap.Uint64("EndTS", t.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, "", "").Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return t.result, nil
 }
 
@@ -6224,7 +6225,7 @@ func (node *Proxy) DescribeResourceGroup(ctx context.Context, request *milvuspb.
 
 	method := "DescribeResourceGroup"
 	GetErrResponse := func(err error) *milvuspb.DescribeResourceGroupResponse {
-		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method, metrics.FailLabel, "", "").Inc()
+		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method, metrics.FailLabel, "", "").Inc()
 
 		return &milvuspb.DescribeResourceGroupResponse{
 			Status: merr.Status(err),
@@ -6234,7 +6235,7 @@ func (node *Proxy) DescribeResourceGroup(ctx context.Context, request *milvuspb.
 	ctx, sp := otel.Tracer(typeutil.ProxyRole).Start(ctx, "Proxy-DescribeResourceGroup")
 	defer sp.End()
 	tr := timerecord.NewTimeRecorder(method)
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.TotalLabel, "", "").Inc()
 	t := &DescribeResourceGroupTask{
 		ctx:                          ctx,
@@ -6272,9 +6273,9 @@ func (node *Proxy) DescribeResourceGroup(ctx context.Context, request *milvuspb.
 		zap.Uint64("BeginTS", t.BeginTs()),
 		zap.Uint64("EndTS", t.EndTs()))
 
-	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
+	metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method,
 		metrics.SuccessLabel, "", "").Inc()
-	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyReqLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return t.result, nil
 }
 
@@ -6419,7 +6420,7 @@ func (node *Proxy) ImportV2(ctx context.Context, req *internalpb.ImportRequest) 
 	method := "ImportV2"
 	tr := timerecord.NewTimeRecorder(method)
 	log.Info(rpcReceived(method))
-	nodeID := fmt.Sprint(paramtable.GetNodeID())
+	nodeID := fmt.Sprint(menv.GetNodeID())
 	metrics.ProxyFunctionCall.WithLabelValues(nodeID, method, metrics.TotalLabel, req.GetDbName(), req.GetCollectionName()).Inc()
 
 	it := &importTask{
@@ -6474,7 +6475,7 @@ func (node *Proxy) GetImportProgress(ctx context.Context, req *internalpb.GetImp
 	tr := timerecord.NewTimeRecorder(method)
 	log.Info(rpcReceived(method))
 
-	nodeID := fmt.Sprint(paramtable.GetNodeID())
+	nodeID := fmt.Sprint(menv.GetNodeID())
 	resp, err := node.mixCoord.GetImportProgress(ctx, req)
 	if resp.GetStatus().GetCode() != 0 || err != nil {
 		log.Warn("get import progress failed", zap.String("reason", resp.GetStatus().GetReason()), zap.Error(err))
@@ -6505,7 +6506,7 @@ func (node *Proxy) ListImports(ctx context.Context, req *internalpb.ListImportsR
 	tr := timerecord.NewTimeRecorder(method)
 	log.Info(rpcReceived(method))
 
-	nodeID := fmt.Sprint(paramtable.GetNodeID())
+	nodeID := fmt.Sprint(menv.GetNodeID())
 	metrics.ProxyFunctionCall.WithLabelValues(nodeID, method, metrics.TotalLabel, req.GetDbName(), req.GetCollectionName()).Inc()
 
 	var (
@@ -6794,7 +6795,7 @@ func (node *Proxy) RunAnalyzer(ctx context.Context, req *milvuspb.RunAnalyzerReq
 		)
 
 		metrics.ProxyFunctionCall.WithLabelValues(
-			strconv.FormatInt(paramtable.GetNodeID(), 10),
+			strconv.FormatInt(menv.GetNodeID(), 10),
 			method,
 			metrics.AbandonLabel,
 			req.GetDbName(),
@@ -6813,7 +6814,7 @@ func (node *Proxy) RunAnalyzer(ctx context.Context, req *milvuspb.RunAnalyzerReq
 		)
 
 		metrics.ProxyFunctionCall.WithLabelValues(
-			strconv.FormatInt(paramtable.GetNodeID(), 10),
+			strconv.FormatInt(menv.GetNodeID(), 10),
 			method,
 			metrics.FailLabel,
 			req.GetDbName(),

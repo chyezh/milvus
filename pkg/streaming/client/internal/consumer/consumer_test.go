@@ -10,9 +10,9 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/node/client/handler/mock_consumer"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/consumer"
+	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/client/node/handler/mock_consumer"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/node/handler/consumer"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message/adaptor"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"

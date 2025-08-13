@@ -30,6 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
 	util2 "github.com/milvus-io/milvus/internal/flushcommon/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/etcd"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/sessionutil"
@@ -83,7 +84,7 @@ func TestDataNode(t *testing.T) {
 	assert.Equal(t, "address", node.GetAddress())
 
 	defer node.Stop()
-	paramtable.SetNodeID(1)
+	menv.SetNodeID(1)
 
 	defer cancel()
 

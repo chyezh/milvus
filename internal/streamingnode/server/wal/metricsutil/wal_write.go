@@ -13,17 +13,18 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/status"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/impls/wp"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
 // NewWriteMetrics creates a new WriteMetrics.
 func NewWriteMetrics(pchannel types.PChannelInfo, walName string) *WriteMetrics {
 	constLabel := prometheus.Labels{
-		metrics.NodeIDLabelName:     paramtable.GetStringNodeID(),
+		metrics.NodeIDLabelName:     menv.GetStringNodeID(),
 		metrics.WALChannelLabelName: pchannel.Name,
 	}
 	metrics.WALInfo.WithLabelValues(
-		paramtable.GetStringNodeID(),
+		menv.GetStringNodeID(),
 		pchannel.Name,
 		strconv.FormatInt(pchannel.Term, 10),
 		walName).Set(1)
@@ -124,7 +125,7 @@ func (m *WriteMetrics) Close() {
 	metrics.WALImplsAppendRetryTotal.DeletePartialMatch(m.constLabel)
 	metrics.WALImplsAppendMessageDurationSeconds.DeletePartialMatch(m.constLabel)
 	metrics.WALInfo.DeleteLabelValues(
-		paramtable.GetStringNodeID(),
+		menv.GetStringNodeID(),
 		m.pchannel.Name,
 		strconv.FormatInt(m.pchannel.Term, 10),
 		m.walName,

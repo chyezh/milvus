@@ -42,6 +42,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -53,7 +54,7 @@ func InitLocalChunkManager(path string) {
 
 func InitTraceConfig(params *paramtable.ComponentParam) {
 	sampleFraction := C.float(params.TraceCfg.SampleFraction.GetAsFloat())
-	nodeID := C.int(paramtable.GetNodeID())
+	nodeID := C.int(menv.GetNodeID())
 	exporter := C.CString(params.TraceCfg.Exporter.GetValue())
 	jaegerURL := C.CString(params.TraceCfg.JaegerURL.GetValue())
 	otlpMethod := C.CString(params.TraceCfg.OtlpMethod.GetValue())
@@ -87,7 +88,7 @@ func InitTraceConfig(params *paramtable.ComponentParam) {
 
 func ResetTraceConfig(params *paramtable.ComponentParam) {
 	sampleFraction := C.float(params.TraceCfg.SampleFraction.GetAsFloat())
-	nodeID := C.int(paramtable.GetNodeID())
+	nodeID := C.int(menv.GetNodeID())
 	exporter := C.CString(params.TraceCfg.Exporter.GetValue())
 	jaegerURL := C.CString(params.TraceCfg.JaegerURL.GetValue())
 	endpoint := C.CString(params.TraceCfg.OtlpEndpoint.GetValue())

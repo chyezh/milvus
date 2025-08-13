@@ -20,8 +20,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
 // recoverRecoveryInfoFromMeta retrieves the recovery info for the given channel.
@@ -115,7 +115,7 @@ func (r *recoveryStorageImpl) initializeRecoverInfo(ctx context.Context, channel
 				return nil, err
 			}
 			resp, err := coordClient.DropVirtualChannel(ctx, &datapb.DropVirtualChannelRequest{
-				Base:        commonpbutil.NewMsgBase(commonpbutil.WithSourceID(paramtable.GetNodeID())),
+				Base:        commonpbutil.NewMsgBase(commonpbutil.WithSourceID(menv.GetNodeID())),
 				ChannelName: collection.Vchannel,
 			})
 			if err = merr.CheckRPCCall(resp, err); err != nil {
@@ -190,7 +190,7 @@ func (r *recoveryStorageImpl) fetchLatestSchemaFromCoord(ctx context.Context, re
 			resp, err := rc.DescribeCollectionInternal(ctx, &milvuspb.DescribeCollectionRequest{
 				Base: commonpbutil.NewMsgBase(
 					commonpbutil.WithMsgType(commonpb.MsgType_DescribeCollection),
-					commonpbutil.WithSourceID(paramtable.GetNodeID()),
+					commonpbutil.WithSourceID(menv.GetNodeID()),
 				),
 				CollectionID: collection.CollectionId,
 			})

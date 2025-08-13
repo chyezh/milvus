@@ -29,7 +29,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querynodev2/segments/metricsutil"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 )
 
@@ -52,9 +52,9 @@ func searchSegments(ctx context.Context, mgr *Manager, segments []Segment, segTy
 		resultCh <- searchResult
 		// update metrics
 		elapsed := tr.ElapseSpan().Milliseconds()
-		metrics.QueryNodeSQSegmentLatency.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()),
+		metrics.QueryNodeSQSegmentLatency.WithLabelValues(fmt.Sprint(menv.GetNodeID()),
 			metrics.SearchLabel, searchLabel).Observe(float64(elapsed))
-		metrics.QueryNodeSegmentSearchLatencyPerVector.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()),
+		metrics.QueryNodeSegmentSearchLatencyPerVector.WithLabelValues(fmt.Sprint(menv.GetNodeID()),
 			metrics.SearchLabel, searchLabel).Observe(float64(elapsed) / float64(searchReq.GetNumOfQuery()))
 		return nil
 	}
@@ -145,9 +145,9 @@ func searchSegmentsStreamly(ctx context.Context,
 		}
 		sumReduceDuration.Add(reduceDuration)
 		// update metrics
-		metrics.QueryNodeSQSegmentLatency.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()),
+		metrics.QueryNodeSQSegmentLatency.WithLabelValues(fmt.Sprint(menv.GetNodeID()),
 			metrics.SearchLabel, searchLabel).Observe(float64(searchDuration))
-		metrics.QueryNodeSegmentSearchLatencyPerVector.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()),
+		metrics.QueryNodeSegmentSearchLatencyPerVector.WithLabelValues(fmt.Sprint(menv.GetNodeID()),
 			metrics.SearchLabel, searchLabel).Observe(float64(searchDuration) / float64(searchReq.GetNumOfQuery()))
 		return nil
 	}
@@ -191,7 +191,7 @@ func searchSegmentsStreamly(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	metrics.QueryNodeReduceLatency.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()),
+	metrics.QueryNodeReduceLatency.WithLabelValues(fmt.Sprint(menv.GetNodeID()),
 		metrics.SearchLabel,
 		metrics.ReduceSegments,
 		metrics.StreamReduce).Observe(float64(sumReduceDuration.Load().Milliseconds()))

@@ -8,13 +8,13 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 )
 
 // newBroadcasterMetrics creates a new broadcaster metrics.
 func newBroadcasterMetrics() *broadcasterMetrics {
 	constLabel := prometheus.Labels{
-		metrics.NodeIDLabelName: paramtable.GetStringNodeID(),
+		metrics.NodeIDLabelName: menv.GetStringNodeID(),
 	}
 	return &broadcasterMetrics{
 		taskTotal:         metrics.StreamingCoordBroadcasterTaskTotal.MustCurryWith(constLabel),

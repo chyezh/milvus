@@ -26,8 +26,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/json"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -67,7 +67,7 @@ func NewFlowgraphManager() *fgManagerImpl {
 
 func (fm *fgManagerImpl) AddFlowgraph(ds *DataSyncService) {
 	fm.flowgraphs.Insert(ds.vchannelName, ds)
-	metrics.DataNodeNumFlowGraphs.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Inc()
+	metrics.DataNodeNumFlowGraphs.WithLabelValues(fmt.Sprint(menv.GetNodeID())).Inc()
 }
 
 func (fm *fgManagerImpl) RemoveFlowgraph(channel string) {
@@ -75,7 +75,7 @@ func (fm *fgManagerImpl) RemoveFlowgraph(channel string) {
 		fg.close()
 		fm.flowgraphs.Remove(channel)
 
-		metrics.DataNodeNumFlowGraphs.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Dec()
+		metrics.DataNodeNumFlowGraphs.WithLabelValues(fmt.Sprint(menv.GetNodeID())).Dec()
 		util.GetRateCollector().RemoveFlowGraphChannel(channel)
 	}
 }
@@ -132,7 +132,7 @@ func (fm *fgManagerImpl) GetChannelsJSON(collectionID int64) string {
 			Name:           ch,
 			WatchState:     ds.fg.Status(),
 			LatestTimeTick: tsoutil.PhysicalTimeFormat(latestTimeTick),
-			NodeID:         paramtable.GetNodeID(),
+			NodeID:         menv.GetNodeID(),
 			CollectionID:   ds.metacache.Collection(),
 		})
 		return true
@@ -162,7 +162,7 @@ func (fm *fgManagerImpl) GetSegmentsJSON(collectionID int64) string {
 				Channel:        ch,
 				State:          segment.State().String(),
 				Level:          segment.Level().String(),
-				NodeID:         paramtable.GetNodeID(),
+				NodeID:         menv.GetNodeID(),
 				NumOfRows:      segment.NumOfRows(),
 				FlushedRows:    segment.FlushedRows(),
 				SyncBufferRows: segment.BufferRows(),

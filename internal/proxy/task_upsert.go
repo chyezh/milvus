@@ -34,8 +34,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -141,7 +141,7 @@ func (it *upsertTask) OnEnqueue() error {
 		it.req.Base = commonpbutil.NewMsgBase()
 	}
 	it.req.Base.MsgType = commonpb.MsgType_Upsert
-	it.req.Base.SourceID = paramtable.GetNodeID()
+	it.req.Base.SourceID = menv.GetNodeID()
 	return nil
 }
 
@@ -172,7 +172,7 @@ func (it *upsertTask) insertPreExecute(ctx context.Context) error {
 	// set upsertTask.insertRequest.rowIDs
 	tr := timerecord.NewTimeRecorder("applyPK")
 	rowIDBegin, rowIDEnd, _ := it.idAllocator.Alloc(rowNums)
-	metrics.ProxyApplyPrimaryKeyLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10)).Observe(float64(tr.ElapseSpan().Milliseconds()))
+	metrics.ProxyApplyPrimaryKeyLatency.WithLabelValues(strconv.FormatInt(menv.GetNodeID(), 10)).Observe(float64(tr.ElapseSpan().Milliseconds()))
 
 	it.upsertMsg.InsertMsg.RowIDs = make([]UniqueID, rowNums)
 	it.rowIDs = make([]UniqueID, rowNums)
@@ -395,7 +395,7 @@ func (it *upsertTask) PreExecute(ctx context.Context) error {
 			InsertRequest: &msgpb.InsertRequest{
 				Base: commonpbutil.NewMsgBase(
 					commonpbutil.WithMsgType(commonpb.MsgType_Insert),
-					commonpbutil.WithSourceID(paramtable.GetNodeID()),
+					commonpbutil.WithSourceID(menv.GetNodeID()),
 				),
 				CollectionName: it.req.CollectionName,
 				PartitionName:  it.req.PartitionName,
@@ -409,7 +409,7 @@ func (it *upsertTask) PreExecute(ctx context.Context) error {
 			DeleteRequest: &msgpb.DeleteRequest{
 				Base: commonpbutil.NewMsgBase(
 					commonpbutil.WithMsgType(commonpb.MsgType_Delete),
-					commonpbutil.WithSourceID(paramtable.GetNodeID()),
+					commonpbutil.WithSourceID(menv.GetNodeID()),
 				),
 				DbName:         it.req.DbName,
 				CollectionName: it.req.CollectionName,

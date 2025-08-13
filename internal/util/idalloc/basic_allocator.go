@@ -11,7 +11,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
-	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	"github.com/milvus-io/milvus/pkg/v2/util/menv"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
 
@@ -67,7 +67,7 @@ type tsoAllocator struct {
 // newTSOAllocator creates a new remote allocator.
 func newTSOAllocator(mix *syncutil.Future[types.MixCoordClient]) *tsoAllocator {
 	a := &tsoAllocator{
-		nodeID: paramtable.GetNodeID(),
+		nodeID: menv.GetNodeID(),
 		mix:    mix,
 	}
 	return a
@@ -112,7 +112,7 @@ type idAllocator struct {
 // newIDAllocator creates a new remote allocator.
 func newIDAllocator(mix *syncutil.Future[types.MixCoordClient]) *idAllocator {
 	a := &idAllocator{
-		nodeID: paramtable.GetNodeID(),
+		nodeID: menv.GetNodeID(),
 		mix:    mix,
 	}
 	return a
