@@ -8,6 +8,35 @@ packages:
   github.com/milvus-io/milvus/pkg/v2/kv:
     interfaces:
       MetaKv:
+  github.com/milvus-io/milvus/pkg/v2/streaming/client:
+    interfaces:
+      WALAccesser:
+      Utility:
+      Broadcast:
+      Local:
+      Scanner:
+  github.com/milvus-io/milvus/pkg/v2/streaming/coord/client:
+    interfaces:
+      Client:
+      BroadcastService:
+  github.com/milvus-io/milvus/pkg/v2/streaming/coord/client/broadcast:
+    interfaces:
+      Watcher:
+  github.com/milvus-io/milvus/pkg/v2/streaming/node/client/manager:
+    interfaces:
+      ManagerClient:
+  github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler:
+    interfaces:
+      HandlerClient:
+  github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/assignment:
+    interfaces:
+      Watcher:
+  github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/producer:
+    interfaces:
+      Producer:
+  github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/consumer:
+    interfaces:
+      Consumer:
   github.com/milvus-io/milvus/pkg/v2/streaming/util/message:
     interfaces:
       MessageID:
@@ -15,6 +44,12 @@ packages:
       ImmutableTxnMessage:
       MutableMessage:
       BroadcastMutableMessage:
+  github.com/milvus-io/milvus/pkg/v2/streaming/wal:
+    interfaces:
+      OpenerBuilder:
+      Opener:
+      Scanner:
+      WAL:
   github.com/milvus-io/milvus/pkg/v2/streaming/walimpls:
     interfaces:
       OpenerBuilderImpls:

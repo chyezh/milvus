@@ -5,13 +5,13 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/registry"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/service"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/walmanager"
 	"github.com/milvus-io/milvus/internal/util/initcore"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/node/client/handler/registry"
 	_ "github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/impls/kafka"
 	_ "github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/impls/pulsar"
 	_ "github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/impls/rmq"

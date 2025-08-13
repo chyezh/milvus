@@ -24,9 +24,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/metastore/model"
-	"github.com/milvus-io/milvus/internal/mocks/distributed/mock_streaming"
+	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/mock_streaming"
+	streaming "github.com/milvus-io/milvus/pkg/v2/streaming/client"
 )
 
 func restoreConfirmGCInterval() {

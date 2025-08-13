@@ -6,13 +6,6 @@ mockname: "Mock{{.InterfaceName}}"
 outpkg: "mock_{{.PackageName}}"
 resolve-type-alias: False
 packages:
-  github.com/milvus-io/milvus/internal/distributed/streaming:
-    interfaces:
-      WALAccesser:
-      Utility:
-      Broadcast:
-      Local:
-      Scanner:
   github.com/milvus-io/milvus/internal/streamingcoord/server/balancer:
     interfaces:
       Balancer:
@@ -20,34 +13,6 @@ packages:
     interfaces:
       AppendOperator:
       Watcher:
-  github.com/milvus-io/milvus/internal/streamingcoord/client:
-    interfaces:
-      Client:
-      BroadcastService:
-  github.com/milvus-io/milvus/internal/streamingcoord/client/broadcast:
-    interfaces:
-      Watcher:
-  github.com/milvus-io/milvus/internal/streamingnode/client/manager:
-    interfaces:
-      ManagerClient:
-  github.com/milvus-io/milvus/internal/streamingnode/client/handler:
-    interfaces:
-      HandlerClient:
-  github.com/milvus-io/milvus/internal/streamingnode/client/handler/assignment:
-    interfaces:
-      Watcher:
-  github.com/milvus-io/milvus/internal/streamingnode/client/handler/producer:
-    interfaces:
-      Producer:
-  github.com/milvus-io/milvus/internal/streamingnode/client/handler/consumer:
-    interfaces:
-      Consumer:
-  github.com/milvus-io/milvus/internal/streamingnode/server/wal:
-    interfaces:
-      OpenerBuilder:
-      Opener:
-      Scanner:
-      WAL:
   github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors:
     interfaces:
       Interceptor:
