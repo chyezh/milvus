@@ -1,8 +1,8 @@
 package adaptor
 
 import (
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/wal"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls"
 )
 

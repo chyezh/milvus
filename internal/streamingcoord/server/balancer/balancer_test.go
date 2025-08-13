@@ -13,14 +13,14 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/milvus-io/milvus/internal/mocks/mock_metastore"
-	"github.com/milvus-io/milvus/internal/mocks/streamingnode/client/mock_manager"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer/channel"
 	_ "github.com/milvus-io/milvus/internal/streamingcoord/server/balancer/policy"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/resource"
+	kvfactory "github.com/milvus-io/milvus/pkg/v2/dependency/kv"
+	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/node/client/mock_manager"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
-	"github.com/milvus-io/milvus/pkg/v2/util/etcd"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/sessionutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
@@ -30,12 +30,7 @@ import (
 
 func TestBalancer(t *testing.T) {
 	paramtable.Init()
-	err := etcd.InitEtcdServer(true, "", t.TempDir(), "stdout", "info")
-	assert.NoError(t, err)
-	defer etcd.StopEtcdServer()
-
-	etcdClient, err := etcd.GetEmbedEtcdClient()
-	assert.NoError(t, err)
+	etcdClient, _ := kvfactory.GetEtcdAndPath()
 	channel.ResetStaticPChannelStatsManager()
 	channel.RecoverPChannelStatsManager([]string{})
 
@@ -190,12 +185,7 @@ func TestBalancer(t *testing.T) {
 
 func TestBalancer_WithRecoveryLag(t *testing.T) {
 	paramtable.Init()
-	err := etcd.InitEtcdServer(true, "", t.TempDir(), "stdout", "info")
-	assert.NoError(t, err)
-	defer etcd.StopEtcdServer()
-
-	etcdClient, err := etcd.GetEmbedEtcdClient()
-	assert.NoError(t, err)
+	etcdClient, _ := kvfactory.GetEtcdAndPath()
 	channel.ResetStaticPChannelStatsManager()
 	channel.RecoverPChannelStatsManager([]string{})
 

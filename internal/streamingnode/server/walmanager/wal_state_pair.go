@@ -3,8 +3,8 @@ package walmanager
 import (
 	"context"
 
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/status"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/wal"
 )
 
 // newWALStatePair create a new walStatePair
