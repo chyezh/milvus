@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	"github.com/milvus-io/milvus/internal/metastore/model"
-	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/mock_streaming"
+	mock_streaming "github.com/milvus-io/milvus/pkg/v2/mocks/streaming/mock_client"
 	streaming "github.com/milvus-io/milvus/pkg/v2/streaming/client"
 )
 
@@ -101,7 +101,7 @@ func TestSkip(t *testing.T) {
 }
 
 func TestBroadcastCreatePartitionMsgStep(t *testing.T) {
-	wal := mock_streaming.NewMockWALAccesser(t)
+	wal := mock_streaming.NewMockClient(t)
 	wal.EXPECT().AppendMessagesWithOption(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(streaming.AppendResponses{})
 	streaming.SetWALForTest(wal)
 

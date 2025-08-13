@@ -1305,5 +1305,10 @@ func SaveServerInfo(role string, serverID int64) {
 
 // GetSessionPrefixByRole get session prefix by role
 func GetSessionPrefixByRole(role string) string {
-	return path.Join(paramtable.Get().EtcdCfg.MetaRootPath.GetValue(), DefaultServiceRoot, role)
+	return GetSessionPrefixByRoleWithRootPath(paramtable.Get().EtcdCfg.MetaRootPath.GetValue(), role)
+}
+
+// GetSessionPrefixByRoleWithRootPath get session prefix by role with root path
+func GetSessionPrefixByRoleWithRootPath(rootPath string, role string) string {
+	return path.Join(rootPath, DefaultServiceRoot, role)
 }

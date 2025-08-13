@@ -47,7 +47,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/json"
 	"github.com/milvus-io/milvus/pkg/v2/log"
-	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/mock_streaming"
+	mock_streaming "github.com/milvus-io/milvus/pkg/v2/mocks/streaming/mock_client"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
@@ -2415,7 +2415,7 @@ func (suite *ServiceSuite) TestRunAnalyzer() {
 }
 
 func TestQueryNodeService(t *testing.T) {
-	wal := mock_streaming.NewMockWALAccesser(t)
+	wal := mock_streaming.NewMockClient(t)
 	local := mock_streaming.NewMockLocal(t)
 	local.EXPECT().GetLatestMVCCTimestampIfLocal(mock.Anything, mock.Anything).Return(0, nil).Maybe()
 	local.EXPECT().GetMetricsIfLocal(mock.Anything).Return(&types.StreamingNodeMetrics{}, nil).Maybe()

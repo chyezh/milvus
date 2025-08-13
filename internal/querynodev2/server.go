@@ -69,7 +69,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgdispatcher"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
-	streaming "github.com/milvus-io/milvus/pkg/v2/streaming/client"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client/adaptor"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/streamingutil"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/impls/rmq"
 	"github.com/milvus-io/milvus/pkg/v2/util/expr"
@@ -533,7 +533,7 @@ func (node *QueryNode) Init() error {
 		node.manager = segments.NewManager()
 		node.loader = segments.NewLoader(node.ctx, node.manager, node.chunkManager)
 		node.manager.SetLoader(node.loader)
-		node.dispClient = msgdispatcher.NewClientWithIncludeSkipWhenSplit(streaming.NewDelegatorMsgstreamFactory(), typeutil.QueryNodeRole, node.GetNodeID())
+		node.dispClient = msgdispatcher.NewClientWithIncludeSkipWhenSplit(adaptor.NewDelegatorMsgstreamFactory(), typeutil.QueryNodeRole, node.GetNodeID())
 		// init pipeline manager
 		node.pipelineManager = pipeline.NewManager(node.manager, node.dispClient, node.delegators)
 

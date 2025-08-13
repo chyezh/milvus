@@ -31,7 +31,7 @@ import (
 	mockrootcoord "github.com/milvus-io/milvus/internal/rootcoord/mocks"
 	mocktso "github.com/milvus-io/milvus/internal/tso/mocks"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/mock_streaming"
+	mock_streaming "github.com/milvus-io/milvus/pkg/v2/mocks/streaming/mock_client"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	streaming "github.com/milvus-io/milvus/pkg/v2/streaming/client"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/streamingutil"
@@ -560,7 +560,7 @@ func TestGcPartitionData(t *testing.T) {
 	})
 	snmanager.StaticStreamingNodeManager.SetBalancerReady(b)
 
-	wal := mock_streaming.NewMockWALAccesser(t)
+	wal := mock_streaming.NewMockClient(t)
 	broadcast := mock_streaming.NewMockBroadcast(t)
 	broadcast.EXPECT().Append(mock.Anything, mock.Anything).Return(&types.BroadcastAppendResult{
 		BroadcastID: 0,

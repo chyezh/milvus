@@ -23,10 +23,12 @@ import (
 
 var ErrWALAccesserClosed = status.NewOnShutdownError("wal accesser closed")
 
-// newWALAccesser creates a new wal accesser.
-func newWALAccesser(c *clientv3.Client) *walAccesserImpl {
+// NewClient creates a new wal accesser.
+func NewClient(c *clientv3.Client, opts ...ClientOption) Client {
+	cfg := newConfig(opts...)
+
 	// Create a new streaming coord client.
-	streamingCoordClient := client.NewClient(c)
+	streamingCoordClient := client.NewClient(c, client.OptClientRootPath(cfg.RootPath))
 	// Create a new streamingnode handler client.
 	handlerClient := handler.NewHandlerClient(streamingCoordClient.Assignment())
 	w := &walAccesserImpl{

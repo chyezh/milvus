@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	mockrootcoord "github.com/milvus-io/milvus/internal/rootcoord/mocks"
-	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/mock_streaming"
+	mock_streaming "github.com/milvus-io/milvus/pkg/v2/mocks/streaming/mock_client"
 	streaming "github.com/milvus-io/milvus/pkg/v2/streaming/client"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -78,7 +78,7 @@ func Test_AddCollectionFieldTask_Prepare(t *testing.T) {
 
 func Test_AddCollectionFieldTask_Execute(t *testing.T) {
 	b := mock_streaming.NewMockBroadcast(t)
-	wal := mock_streaming.NewMockWALAccesser(t)
+	wal := mock_streaming.NewMockClient(t)
 	wal.EXPECT().Broadcast().Return(b).Maybe()
 	streaming.SetWALForTest(wal)
 

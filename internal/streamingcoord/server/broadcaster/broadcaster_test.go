@@ -17,7 +17,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/resource"
 	internaltypes "github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/idalloc"
-	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/mock_streaming"
+	mock_streaming "github.com/milvus-io/milvus/pkg/v2/mocks/streaming/mock_client"
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	streaming "github.com/milvus-io/milvus/pkg/v2/streaming/client"
@@ -139,7 +139,7 @@ func ack(broadcaster Broadcaster, broadcastID uint64, vchannel string) {
 func createOpeartor(t *testing.T, broadcaster *syncutil.Future[Broadcaster]) *atomic.Int64 {
 	id := atomic.NewInt64(1)
 	appended := atomic.NewInt64(0)
-	operator := mock_streaming.NewMockWALAccesser(t)
+	operator := mock_streaming.NewMockClient(t)
 	f := func(ctx context.Context, msgs ...message.MutableMessage) types.AppendResponses {
 		resps := types.AppendResponses{
 			Responses: make([]types.AppendResponse, len(msgs)),

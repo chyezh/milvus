@@ -29,7 +29,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querynodev2/pipeline"
 	"github.com/milvus-io/milvus/internal/querynodev2/segments"
 	"github.com/milvus-io/milvus/pkg/v2/json"
-	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/mock_streaming"
+	mock_streaming "github.com/milvus-io/milvus/pkg/v2/mocks/streaming/mock_client"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgdispatcher"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	streaming "github.com/milvus-io/milvus/pkg/v2/streaming/client"
@@ -138,7 +138,7 @@ func TestGetSegmentJSON(t *testing.T) {
 func TestStreamingQuotaMetrics(t *testing.T) {
 	paramtable.Init()
 
-	wal := mock_streaming.NewMockWALAccesser(t)
+	wal := mock_streaming.NewMockClient(t)
 	local := mock_streaming.NewMockLocal(t)
 	now := time.Now()
 	local.EXPECT().GetMetricsIfLocal(mock.Anything).Return(&types.StreamingNodeMetrics{

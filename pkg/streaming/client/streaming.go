@@ -10,13 +10,13 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 )
 
-var singleton WALAccesser = nil
+var singleton Client = nil
 
 // Init initializes the wal accesser with the given etcd client.
 // should be called before any other operations.
 func Init() {
 	c, _ := kvfactory.GetEtcdAndPath()
-	singleton = newWALAccesser(c)
+	singleton = NewClient(c)
 }
 
 // Release releases the resources of the wal accesser.
@@ -27,7 +27,7 @@ func Release() {
 }
 
 // WAL is the entrance to interact with the milvus write ahead log.
-func WAL() WALAccesser {
+func WAL() Client {
 	return singleton
 }
 
@@ -81,8 +81,8 @@ type Scanner interface {
 	Close()
 }
 
-// WALAccesser is the interfaces to interact with the milvus write ahead log.
-type WALAccesser interface {
+// Client is the interfaces to interact with the milvus write ahead log.
+type Client interface {
 	// WALName returns the name of the wal.
 	WALName() string
 
@@ -117,6 +117,9 @@ type WALAccesser interface {
 	// AppendMessagesWithOption appends messages to the wal with the given option.
 	// Same with AppendMessages, but with the given option.
 	AppendMessagesWithOption(ctx context.Context, opts AppendOption, msgs ...message.MutableMessage) AppendResponses
+
+	// Close closes the client.
+	Close()
 }
 
 type Local interface {

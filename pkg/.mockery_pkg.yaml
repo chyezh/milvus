@@ -10,7 +10,7 @@ packages:
       MetaKv:
   github.com/milvus-io/milvus/pkg/v2/streaming/client:
     interfaces:
-      WALAccesser:
+      Client:
       Utility:
       Broadcast:
       Local:

@@ -34,13 +34,13 @@ import (
 var expectErr = make(chan error, 10)
 
 // SetWALForTest initializes the singleton of wal for test.
-func SetWALForTest(w WALAccesser) {
+func SetWALForTest(w Client) {
 	singleton = w
 }
 
 func RecoverWALForTest() {
 	c, _ := kvfactory.GetEtcdAndPath()
-	singleton = newWALAccesser(c)
+	singleton = NewClient(c)
 }
 
 func ExpectErrorOnce(err error) {
@@ -162,6 +162,8 @@ func (n *noopWALAccesser) AppendMessages(ctx context.Context, msgs ...message.Mu
 func (n *noopWALAccesser) AppendMessagesWithOption(ctx context.Context, opts AppendOption, msgs ...message.MutableMessage) AppendResponses {
 	return AppendResponses{}
 }
+
+func (n *noopWALAccesser) Close() {}
 
 type noopScanner struct{}
 

@@ -1,4 +1,4 @@
-package client
+package adaptor
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/client"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message/adaptor"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"
@@ -41,7 +42,7 @@ func (f *delegatorMsgstreamFactory) NewMsgStreamDisposer(ctx context.Context) fu
 
 // Only for delegator.
 type delegatorMsgstreamAdaptor struct {
-	scanner Scanner
+	scanner client.Scanner
 	ch      <-chan *msgstream.ConsumeMsgPack
 }
 
@@ -95,7 +96,7 @@ func (m *delegatorMsgstreamAdaptor) Seek(ctx context.Context, msgPositions []*ms
 		panic("should never be called if len(msgPositions) is not 1")
 	}
 	position := msgPositions[0]
-	startFrom := adaptor.MustGetMessageIDFromMQWrapperIDBytes(WAL().WALName(), position.MsgID)
+	startFrom := adaptor.MustGetMessageIDFromMQWrapperIDBytes(client.WAL().WALName(), position.MsgID)
 	log.Info(
 		"delegator msgstream adaptor seeks from position with scanner",
 		zap.String("channel", position.GetChannelName()),
@@ -104,7 +105,7 @@ func (m *delegatorMsgstreamAdaptor) Seek(ctx context.Context, msgPositions []*ms
 	)
 	handler := adaptor.NewMsgPackAdaptorHandler()
 	pchannel := funcutil.ToPhysicalChannel(position.GetChannelName())
-	m.scanner = WAL().Read(ctx, ReadOption{
+	m.scanner = client.WAL().Read(ctx, client.ReadOption{
 		PChannel:      pchannel,
 		DeliverPolicy: options.DeliverPolicyStartFrom(startFrom),
 		DeliverFilters: []options.DeliverFilter{

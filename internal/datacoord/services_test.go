@@ -32,7 +32,7 @@ import (
 	"github.com/milvus-io/milvus/internal/tso"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/v2/log"
-	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/mock_streaming"
+	mock_streaming "github.com/milvus-io/milvus/pkg/v2/mocks/streaming/mock_client"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
@@ -1621,7 +1621,7 @@ func TestImportV2(t *testing.T) {
 		catalog.EXPECT().ListPreImportTasks(mock.Anything).Return(nil, nil)
 		catalog.EXPECT().ListImportTasks(mock.Anything).Return(nil, nil)
 		catalog.EXPECT().SaveImportJob(mock.Anything, mock.Anything).Return(nil)
-		wal := mock_streaming.NewMockWALAccesser(t)
+		wal := mock_streaming.NewMockClient(t)
 		b := mock_streaming.NewMockBroadcast(t)
 		wal.EXPECT().Broadcast().Return(b).Maybe()
 		// streaming.SetWALForTest(wal)
