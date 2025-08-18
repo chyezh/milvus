@@ -265,10 +265,14 @@ build-3rdparty:
 generated-proto-without-cpp: download-milvus-proto get-proto-deps
 	@echo "Generate proto ..."
 	@(env bash $(PWD)/scripts/generate_proto.sh ${INSTALL_PATH})
+	@echo "Generating message codegen ..."
+	@(cd pkg/streaming/util/message/codegen && PATH=$(PWD)/bin:$(PATH) go generate .)
 
 generated-proto: download-milvus-proto build-3rdparty get-proto-deps
 	@echo "Generate proto ..."
 	@(env bash $(PWD)/scripts/generate_proto.sh ${INSTALL_PATH})
+	@echo "Generating message codegen ..."
+	@(cd pkg/streaming/util/message/codegen && PATH=$(PWD)/bin:$(PATH) go generate .)
 
 build-cpp: generated-proto
 	@echo "Building Milvus cpp library ..."
@@ -548,10 +552,6 @@ generate-mockery: generate-mockery-types generate-mockery-kv generate-mockery-ro
 generate-yaml: milvus-tools
 	@echo "Updating milvus config yaml"
 	@$(PWD)/bin/tools/config gen-yaml && mv milvus.yaml configs/milvus.yaml
-
-generate-message-codegen: getdeps
-	@echo "Generating message codegen ..."
-	@(cd pkg/streaming/util/message/codegen && PATH=$(PWD)/bin:$(PATH) go generate .)
 
 MMAP_MIGRATION_PATH = $(PWD)/cmd/tools/migration/mmap/tool
 mmap-migration:

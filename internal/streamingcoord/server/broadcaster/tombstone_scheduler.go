@@ -4,9 +4,10 @@ import (
 	"sort"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
-	"go.uber.org/zap"
 )
 
 const (

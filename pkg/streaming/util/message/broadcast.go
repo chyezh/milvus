@@ -1,9 +1,11 @@
 package message
 
 import (
-	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
-	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
+	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
 // newBroadcastHeaderFromProto creates a BroadcastHeader from proto.
@@ -29,6 +31,17 @@ type BroadcastHeader struct {
 type BroadcastResult[H proto.Message, B proto.Message] struct {
 	Message SpecializedBroadcastMessage[H, B]
 	Results map[string]*AppendResult
+}
+
+// GetControlChannelResult returns the append result of the control channel.
+// Return nil if the control channel is not found.
+func (br *BroadcastResult[H, B]) GetControlChannelResult() *AppendResult {
+	for vchannel, result := range br.Results {
+		if funcutil.IsControlChannel(vchannel) {
+			return result
+		}
+	}
+	return nil
 }
 
 // AppendResult is the result of append operation.
