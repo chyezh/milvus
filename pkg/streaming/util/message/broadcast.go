@@ -5,6 +5,7 @@ import (
 
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
+	"google.golang.org/protobuf/proto"
 )
 
 // newBroadcastHeaderFromProto creates a BroadcastHeader from proto.
@@ -66,4 +67,17 @@ func NewCollectionNameResourceKey(collectionName string) ResourceKey {
 		Domain: messagespb.ResourceDomain_ResourceDomainCollectionName,
 		Key:    collectionName,
 	}
+}
+
+// BroadcastResult is the result of broadcast operation.
+type BroadcastResult[H proto.Message, B proto.Message] struct {
+	Message SpecializedBroadcastMessage[H, B]
+	Results map[string]*AppendResult
+}
+
+// AppendResult is the result of append operation.
+type AppendResult struct {
+	MessageID              MessageID
+	LastConfirmedMessageID MessageID
+	TimeTick               uint64
 }
