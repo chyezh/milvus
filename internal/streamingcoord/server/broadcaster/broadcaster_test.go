@@ -57,17 +57,16 @@ func TestBroadcaster(t *testing.T) {
 					createNewBroadcastMsg([]string{"v1", "v2", "v3"},
 						message.NewCollectionNameResourceKey("c3"),
 						message.NewCollectionNameResourceKey("c4")).WithBroadcastID(7),
-					streamingpb.BroadcastTaskState_BROADCAST_TASK_STATE_WAIT_ACK,
+					streamingpb.BroadcastTaskState_BROADCAST_TASK_STATE_REPLICATED,
 					[]byte{0x00, 0x00, 0x00}),
 			}, nil
 		}).Times(1)
 	done := typeutil.NewConcurrentSet[uint64]()
 	meta.EXPECT().SaveBroadcastTask(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, broadcastID uint64, bt *streamingpb.BroadcastTask) error {
-		// may failure
-		if rand.Int31n(10) < 3 {
-			return errors.New("save task failed")
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
-		if bt.State == streamingpb.BroadcastTaskState_BROADCAST_TASK_STATE_DONE {
+		if bt.State == streamingpb.BroadcastTaskState_BROADCAST_TASK_STATE_TOMBSTONE {
 			done.Insert(broadcastID)
 		}
 		return nil
@@ -84,7 +83,7 @@ func TestBroadcaster(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, bc)
 	assert.Eventually(t, func() bool {
-		return appended.Load() == 9 && len(done.Collect()) == 6 // only one task is done,
+		return appended.Load() == 9 && len(done.Collect()) == 6
 	}, 30*time.Second, 10*time.Millisecond)
 
 	// only task 7 is not done.
@@ -103,13 +102,10 @@ func TestBroadcaster(t *testing.T) {
 	// Test broadcast here.
 	broadcastWithSameRK := func() {
 		var result *types.BroadcastAppendResult
-		for {
-			var err error
-			result, err = bc.Broadcast(context.Background(), createNewBroadcastMsg([]string{"v1", "v2", "v3"}, message.NewCollectionNameResourceKey("c7")))
-			if err == nil {
-				break
-			}
-		}
+		var err error
+		b, err := bc.WithResourceKeys(context.Background(), message.NewCollectionNameResourceKey("c7"))
+		assert.NoError(t, err)
+		result, err = b.Broadcast(context.Background(), createNewBroadcastMsg([]string{"v1", "v2", "v3"}, message.NewCollectionNameResourceKey("c7")))
 		assert.Equal(t, len(result.AppendResults), 3)
 	}
 	go broadcastWithSameRK()
@@ -120,7 +116,9 @@ func TestBroadcaster(t *testing.T) {
 	}, 30*time.Second, 10*time.Millisecond)
 
 	bc.Close()
-	_, err = bc.Broadcast(context.Background(), nil)
+	broadcastAPI, err := bc.WithResourceKeys(context.Background())
+	assert.NoError(t, err)
+	_, err = broadcastAPI.Broadcast(context.Background(), nil)
 	assert.Error(t, err)
 	err = bc.Ack(context.Background(), mock_message.NewMockImmutableMessage(t))
 	assert.Error(t, err)
@@ -129,11 +127,14 @@ func TestBroadcaster(t *testing.T) {
 func ack(t *testing.T, broadcaster Broadcaster, broadcastID uint64, vchannel string) {
 	for {
 		msg := mock_message.NewMockImmutableMessage(t)
-		msg.EXPECT().VChannel().Return(vchannel)
-		msg.EXPECT().MessageTypeWithVersion().Return(message.MessageTypeTimeTickV1)
+		msg.EXPECT().VChannel().Return(vchannel).Maybe()
+		msg.EXPECT().MessageTypeWithVersion().Return(message.MessageTypeTimeTickV1).Maybe()
 		msg.EXPECT().BroadcastHeader().Return(&message.BroadcastHeader{
 			BroadcastID: broadcastID,
-		})
+		}).Maybe()
+		msg.EXPECT().MessageID().Return(walimplstest.NewTestMessageID(1)).Maybe()
+		msg.EXPECT().LastConfirmedMessageID().Return(walimplstest.NewTestMessageID(1)).Maybe()
+		msg.EXPECT().TimeTick().Return(100).Maybe()
 		msg.EXPECT().MarshalLogObject(mock.Anything).Return(nil).Maybe()
 		if err := broadcaster.Ack(context.Background(), msg); err == nil {
 			break
@@ -215,6 +216,18 @@ func createNewWaitAckBroadcastTaskFromMessage(
 	bitmap []byte,
 ) *streamingpb.BroadcastTask {
 	pb := msg.IntoMessageProto()
+	acks := make([]*streamingpb.AckedCheckpoint, len(bitmap))
+	for i := 0; i < len(bitmap); i++ {
+		if bitmap[i] != 0 {
+			messageID := walimplstest.NewTestMessageID(int64(i))
+			lastConfirmedMessageID := walimplstest.NewTestMessageID(int64(i))
+			acks[i] = &streamingpb.AckedCheckpoint{
+				MessageId:              messageID.IntoProto(),
+				LastConfirmedMessageId: lastConfirmedMessageID.IntoProto(),
+				TimeTick:               1,
+			}
+		}
+	}
 	return &streamingpb.BroadcastTask{
 		Message: &messagespb.Message{
 			Payload:    pb.Payload,
@@ -222,5 +235,6 @@ func createNewWaitAckBroadcastTaskFromMessage(
 		},
 		State:               state,
 		AckedVchannelBitmap: bitmap,
+		AckedCheckpoints:    acks,
 	}
 }

@@ -79,9 +79,10 @@ type (
 
 // Type aliases for TimeTickMessageV1
 type (
-	MutableTimeTickMessageV1   = specializedMutableMessage[*TimeTickMessageHeader, *TimeTickMsg]
-	ImmutableTimeTickMessageV1 = SpecializedImmutableMessage[*TimeTickMessageHeader, *TimeTickMsg]
-	BroadcastTimeTickMessageV1 = SpecializedBroadcastMessage[*TimeTickMessageHeader, *TimeTickMsg]
+	MutableTimeTickMessageV1         = specializedMutableMessage[*TimeTickMessageHeader, *TimeTickMsg]
+	ImmutableTimeTickMessageV1       = SpecializedImmutableMessage[*TimeTickMessageHeader, *TimeTickMsg]
+	BroadcastTimeTickMessageV1       = SpecializedBroadcastMessage[*TimeTickMessageHeader, *TimeTickMsg]
+	BroadcastResultTimeTickMessageV1 = BroadcastResult[*TimeTickMessageHeader, *TimeTickMsg]
 )
 
 // MessageTypeWithVersion for TimeTickMessageV1
@@ -119,9 +120,10 @@ var NewTimeTickMessageBuilderV1 = newMutableMessageBuilder[*TimeTickMessageHeade
 
 // Type aliases for InsertMessageV1
 type (
-	MutableInsertMessageV1   = specializedMutableMessage[*InsertMessageHeader, *InsertRequest]
-	ImmutableInsertMessageV1 = SpecializedImmutableMessage[*InsertMessageHeader, *InsertRequest]
-	BroadcastInsertMessageV1 = SpecializedBroadcastMessage[*InsertMessageHeader, *InsertRequest]
+	MutableInsertMessageV1         = specializedMutableMessage[*InsertMessageHeader, *InsertRequest]
+	ImmutableInsertMessageV1       = SpecializedImmutableMessage[*InsertMessageHeader, *InsertRequest]
+	BroadcastInsertMessageV1       = SpecializedBroadcastMessage[*InsertMessageHeader, *InsertRequest]
+	BroadcastResultInsertMessageV1 = BroadcastResult[*InsertMessageHeader, *InsertRequest]
 )
 
 // MessageTypeWithVersion for InsertMessageV1
@@ -159,9 +161,10 @@ var NewInsertMessageBuilderV1 = newMutableMessageBuilder[*InsertMessageHeader, *
 
 // Type aliases for DeleteMessageV1
 type (
-	MutableDeleteMessageV1   = specializedMutableMessage[*DeleteMessageHeader, *DeleteRequest]
-	ImmutableDeleteMessageV1 = SpecializedImmutableMessage[*DeleteMessageHeader, *DeleteRequest]
-	BroadcastDeleteMessageV1 = SpecializedBroadcastMessage[*DeleteMessageHeader, *DeleteRequest]
+	MutableDeleteMessageV1         = specializedMutableMessage[*DeleteMessageHeader, *DeleteRequest]
+	ImmutableDeleteMessageV1       = SpecializedImmutableMessage[*DeleteMessageHeader, *DeleteRequest]
+	BroadcastDeleteMessageV1       = SpecializedBroadcastMessage[*DeleteMessageHeader, *DeleteRequest]
+	BroadcastResultDeleteMessageV1 = BroadcastResult[*DeleteMessageHeader, *DeleteRequest]
 )
 
 // MessageTypeWithVersion for DeleteMessageV1
@@ -199,9 +202,10 @@ var NewDeleteMessageBuilderV1 = newMutableMessageBuilder[*DeleteMessageHeader, *
 
 // Type aliases for CreateCollectionMessageV1
 type (
-	MutableCreateCollectionMessageV1   = specializedMutableMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
-	ImmutableCreateCollectionMessageV1 = SpecializedImmutableMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
-	BroadcastCreateCollectionMessageV1 = SpecializedBroadcastMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
+	MutableCreateCollectionMessageV1         = specializedMutableMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
+	ImmutableCreateCollectionMessageV1       = SpecializedImmutableMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
+	BroadcastCreateCollectionMessageV1       = SpecializedBroadcastMessage[*CreateCollectionMessageHeader, *CreateCollectionRequest]
+	BroadcastResultCreateCollectionMessageV1 = BroadcastResult[*CreateCollectionMessageHeader, *CreateCollectionRequest]
 )
 
 // MessageTypeWithVersion for CreateCollectionMessageV1
@@ -239,9 +243,10 @@ var NewCreateCollectionMessageBuilderV1 = newMutableMessageBuilder[*CreateCollec
 
 // Type aliases for DropCollectionMessageV1
 type (
-	MutableDropCollectionMessageV1   = specializedMutableMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
-	ImmutableDropCollectionMessageV1 = SpecializedImmutableMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
-	BroadcastDropCollectionMessageV1 = SpecializedBroadcastMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
+	MutableDropCollectionMessageV1         = specializedMutableMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
+	ImmutableDropCollectionMessageV1       = SpecializedImmutableMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
+	BroadcastDropCollectionMessageV1       = SpecializedBroadcastMessage[*DropCollectionMessageHeader, *DropCollectionRequest]
+	BroadcastResultDropCollectionMessageV1 = BroadcastResult[*DropCollectionMessageHeader, *DropCollectionRequest]
 )
 
 // MessageTypeWithVersion for DropCollectionMessageV1
@@ -279,9 +284,10 @@ var NewDropCollectionMessageBuilderV1 = newMutableMessageBuilder[*DropCollection
 
 // Type aliases for CreatePartitionMessageV1
 type (
-	MutableCreatePartitionMessageV1   = specializedMutableMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
-	ImmutableCreatePartitionMessageV1 = SpecializedImmutableMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
-	BroadcastCreatePartitionMessageV1 = SpecializedBroadcastMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
+	MutableCreatePartitionMessageV1         = specializedMutableMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
+	ImmutableCreatePartitionMessageV1       = SpecializedImmutableMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
+	BroadcastCreatePartitionMessageV1       = SpecializedBroadcastMessage[*CreatePartitionMessageHeader, *CreatePartitionRequest]
+	BroadcastResultCreatePartitionMessageV1 = BroadcastResult[*CreatePartitionMessageHeader, *CreatePartitionRequest]
 )
 
 // MessageTypeWithVersion for CreatePartitionMessageV1
@@ -319,9 +325,10 @@ var NewCreatePartitionMessageBuilderV1 = newMutableMessageBuilder[*CreatePartiti
 
 // Type aliases for DropPartitionMessageV1
 type (
-	MutableDropPartitionMessageV1   = specializedMutableMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
-	ImmutableDropPartitionMessageV1 = SpecializedImmutableMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
-	BroadcastDropPartitionMessageV1 = SpecializedBroadcastMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
+	MutableDropPartitionMessageV1         = specializedMutableMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
+	ImmutableDropPartitionMessageV1       = SpecializedImmutableMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
+	BroadcastDropPartitionMessageV1       = SpecializedBroadcastMessage[*DropPartitionMessageHeader, *DropPartitionRequest]
+	BroadcastResultDropPartitionMessageV1 = BroadcastResult[*DropPartitionMessageHeader, *DropPartitionRequest]
 )
 
 // MessageTypeWithVersion for DropPartitionMessageV1
@@ -359,9 +366,10 @@ var NewDropPartitionMessageBuilderV1 = newMutableMessageBuilder[*DropPartitionMe
 
 // Type aliases for ImportMessageV1
 type (
-	MutableImportMessageV1   = specializedMutableMessage[*ImportMessageHeader, *ImportMsg]
-	ImmutableImportMessageV1 = SpecializedImmutableMessage[*ImportMessageHeader, *ImportMsg]
-	BroadcastImportMessageV1 = SpecializedBroadcastMessage[*ImportMessageHeader, *ImportMsg]
+	MutableImportMessageV1         = specializedMutableMessage[*ImportMessageHeader, *ImportMsg]
+	ImmutableImportMessageV1       = SpecializedImmutableMessage[*ImportMessageHeader, *ImportMsg]
+	BroadcastImportMessageV1       = SpecializedBroadcastMessage[*ImportMessageHeader, *ImportMsg]
+	BroadcastResultImportMessageV1 = BroadcastResult[*ImportMessageHeader, *ImportMsg]
 )
 
 // MessageTypeWithVersion for ImportMessageV1
@@ -399,9 +407,10 @@ var NewImportMessageBuilderV1 = newMutableMessageBuilder[*ImportMessageHeader, *
 
 // Type aliases for CreateSegmentMessageV2
 type (
-	MutableCreateSegmentMessageV2   = specializedMutableMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
-	ImmutableCreateSegmentMessageV2 = SpecializedImmutableMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
-	BroadcastCreateSegmentMessageV2 = SpecializedBroadcastMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
+	MutableCreateSegmentMessageV2         = specializedMutableMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
+	ImmutableCreateSegmentMessageV2       = SpecializedImmutableMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
+	BroadcastCreateSegmentMessageV2       = SpecializedBroadcastMessage[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
+	BroadcastResultCreateSegmentMessageV2 = BroadcastResult[*CreateSegmentMessageHeader, *CreateSegmentMessageBody]
 )
 
 // MessageTypeWithVersion for CreateSegmentMessageV2
@@ -439,9 +448,10 @@ var NewCreateSegmentMessageBuilderV2 = newMutableMessageBuilder[*CreateSegmentMe
 
 // Type aliases for FlushMessageV2
 type (
-	MutableFlushMessageV2   = specializedMutableMessage[*FlushMessageHeader, *FlushMessageBody]
-	ImmutableFlushMessageV2 = SpecializedImmutableMessage[*FlushMessageHeader, *FlushMessageBody]
-	BroadcastFlushMessageV2 = SpecializedBroadcastMessage[*FlushMessageHeader, *FlushMessageBody]
+	MutableFlushMessageV2         = specializedMutableMessage[*FlushMessageHeader, *FlushMessageBody]
+	ImmutableFlushMessageV2       = SpecializedImmutableMessage[*FlushMessageHeader, *FlushMessageBody]
+	BroadcastFlushMessageV2       = SpecializedBroadcastMessage[*FlushMessageHeader, *FlushMessageBody]
+	BroadcastResultFlushMessageV2 = BroadcastResult[*FlushMessageHeader, *FlushMessageBody]
 )
 
 // MessageTypeWithVersion for FlushMessageV2
@@ -479,9 +489,10 @@ var NewFlushMessageBuilderV2 = newMutableMessageBuilder[*FlushMessageHeader, *Fl
 
 // Type aliases for ManualFlushMessageV2
 type (
-	MutableManualFlushMessageV2   = specializedMutableMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
-	ImmutableManualFlushMessageV2 = SpecializedImmutableMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
-	BroadcastManualFlushMessageV2 = SpecializedBroadcastMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
+	MutableManualFlushMessageV2         = specializedMutableMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
+	ImmutableManualFlushMessageV2       = SpecializedImmutableMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
+	BroadcastManualFlushMessageV2       = SpecializedBroadcastMessage[*ManualFlushMessageHeader, *ManualFlushMessageBody]
+	BroadcastResultManualFlushMessageV2 = BroadcastResult[*ManualFlushMessageHeader, *ManualFlushMessageBody]
 )
 
 // MessageTypeWithVersion for ManualFlushMessageV2
@@ -519,9 +530,10 @@ var NewManualFlushMessageBuilderV2 = newMutableMessageBuilder[*ManualFlushMessag
 
 // Type aliases for PutReplicateConfigMessageV2
 type (
-	MutablePutReplicateConfigMessageV2   = specializedMutableMessage[*PutReplicateConfigMessageHeader, *PutReplicateConfigMessageBody]
-	ImmutablePutReplicateConfigMessageV2 = SpecializedImmutableMessage[*PutReplicateConfigMessageHeader, *PutReplicateConfigMessageBody]
-	BroadcastPutReplicateConfigMessageV2 = SpecializedBroadcastMessage[*PutReplicateConfigMessageHeader, *PutReplicateConfigMessageBody]
+	MutablePutReplicateConfigMessageV2         = specializedMutableMessage[*PutReplicateConfigMessageHeader, *PutReplicateConfigMessageBody]
+	ImmutablePutReplicateConfigMessageV2       = SpecializedImmutableMessage[*PutReplicateConfigMessageHeader, *PutReplicateConfigMessageBody]
+	BroadcastPutReplicateConfigMessageV2       = SpecializedBroadcastMessage[*PutReplicateConfigMessageHeader, *PutReplicateConfigMessageBody]
+	BroadcastResultPutReplicateConfigMessageV2 = BroadcastResult[*PutReplicateConfigMessageHeader, *PutReplicateConfigMessageBody]
 )
 
 // MessageTypeWithVersion for PutReplicateConfigMessageV2
@@ -559,9 +571,10 @@ var NewPutReplicateConfigMessageBuilderV2 = newMutableMessageBuilder[*PutReplica
 
 // Type aliases for BeginTxnMessageV2
 type (
-	MutableBeginTxnMessageV2   = specializedMutableMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
-	ImmutableBeginTxnMessageV2 = SpecializedImmutableMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
-	BroadcastBeginTxnMessageV2 = SpecializedBroadcastMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
+	MutableBeginTxnMessageV2         = specializedMutableMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
+	ImmutableBeginTxnMessageV2       = SpecializedImmutableMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
+	BroadcastBeginTxnMessageV2       = SpecializedBroadcastMessage[*BeginTxnMessageHeader, *BeginTxnMessageBody]
+	BroadcastResultBeginTxnMessageV2 = BroadcastResult[*BeginTxnMessageHeader, *BeginTxnMessageBody]
 )
 
 // MessageTypeWithVersion for BeginTxnMessageV2
@@ -599,9 +612,10 @@ var NewBeginTxnMessageBuilderV2 = newMutableMessageBuilder[*BeginTxnMessageHeade
 
 // Type aliases for CommitTxnMessageV2
 type (
-	MutableCommitTxnMessageV2   = specializedMutableMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
-	ImmutableCommitTxnMessageV2 = SpecializedImmutableMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
-	BroadcastCommitTxnMessageV2 = SpecializedBroadcastMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
+	MutableCommitTxnMessageV2         = specializedMutableMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
+	ImmutableCommitTxnMessageV2       = SpecializedImmutableMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
+	BroadcastCommitTxnMessageV2       = SpecializedBroadcastMessage[*CommitTxnMessageHeader, *CommitTxnMessageBody]
+	BroadcastResultCommitTxnMessageV2 = BroadcastResult[*CommitTxnMessageHeader, *CommitTxnMessageBody]
 )
 
 // MessageTypeWithVersion for CommitTxnMessageV2
@@ -639,9 +653,10 @@ var NewCommitTxnMessageBuilderV2 = newMutableMessageBuilder[*CommitTxnMessageHea
 
 // Type aliases for RollbackTxnMessageV2
 type (
-	MutableRollbackTxnMessageV2   = specializedMutableMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
-	ImmutableRollbackTxnMessageV2 = SpecializedImmutableMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
-	BroadcastRollbackTxnMessageV2 = SpecializedBroadcastMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
+	MutableRollbackTxnMessageV2         = specializedMutableMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
+	ImmutableRollbackTxnMessageV2       = SpecializedImmutableMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
+	BroadcastRollbackTxnMessageV2       = SpecializedBroadcastMessage[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
+	BroadcastResultRollbackTxnMessageV2 = BroadcastResult[*RollbackTxnMessageHeader, *RollbackTxnMessageBody]
 )
 
 // MessageTypeWithVersion for RollbackTxnMessageV2
@@ -679,9 +694,10 @@ var NewRollbackTxnMessageBuilderV2 = newMutableMessageBuilder[*RollbackTxnMessag
 
 // Type aliases for TxnMessageV2
 type (
-	MutableTxnMessageV2   = specializedMutableMessage[*TxnMessageHeader, *TxnMessageBody]
-	ImmutableTxnMessageV2 = SpecializedImmutableMessage[*TxnMessageHeader, *TxnMessageBody]
-	BroadcastTxnMessageV2 = SpecializedBroadcastMessage[*TxnMessageHeader, *TxnMessageBody]
+	MutableTxnMessageV2         = specializedMutableMessage[*TxnMessageHeader, *TxnMessageBody]
+	ImmutableTxnMessageV2       = SpecializedImmutableMessage[*TxnMessageHeader, *TxnMessageBody]
+	BroadcastTxnMessageV2       = SpecializedBroadcastMessage[*TxnMessageHeader, *TxnMessageBody]
+	BroadcastResultTxnMessageV2 = BroadcastResult[*TxnMessageHeader, *TxnMessageBody]
 )
 
 // MessageTypeWithVersion for TxnMessageV2
@@ -698,9 +714,10 @@ var SpecializedTypeTxnV2 = MessageSpecializedType{
 
 // Type aliases for SchemaChangeMessageV2
 type (
-	MutableSchemaChangeMessageV2   = specializedMutableMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
-	ImmutableSchemaChangeMessageV2 = SpecializedImmutableMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
-	BroadcastSchemaChangeMessageV2 = SpecializedBroadcastMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
+	MutableSchemaChangeMessageV2         = specializedMutableMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
+	ImmutableSchemaChangeMessageV2       = SpecializedImmutableMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
+	BroadcastSchemaChangeMessageV2       = SpecializedBroadcastMessage[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
+	BroadcastResultSchemaChangeMessageV2 = BroadcastResult[*SchemaChangeMessageHeader, *SchemaChangeMessageBody]
 )
 
 // MessageTypeWithVersion for SchemaChangeMessageV2

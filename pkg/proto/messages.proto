@@ -295,8 +295,11 @@ message ReplicateHeader {
 // ResourceDomain is the domain of resource hold.
 enum ResourceDomain {
     ResourceDomainUnknown = 0; // should never be used.
-    ResourceDomainImportJobID = 1; // the domain of import job id.
+    ResourceDomainImportJobID = 1 [deprecated = true]; // the domain of import job id.
     ResourceDomainCollectionName = 2; // the domain of collection name.
+    ResourceDomainDBName = 3; // the domain of db name.
+    ResourceDomainPrivilege = 4; // the domain of privilege.
+    ResourceDomainCluster = 127; // the domain of full cluster.
 }
 
 // ResourceKey is the key for resource hold.
@@ -305,6 +308,9 @@ enum ResourceDomain {
 message ResourceKey {
     ResourceDomain domain = 1;
     string key = 2;
+    bool shared = 3; // whether the resource is shared, 
+    // if true, the resource is shared by multiple broadcast message,
+    // otherwise, the resource is exclusive to the broadcast message.
 }
 
 // CipherHeader is the header of a message that is encrypted.
