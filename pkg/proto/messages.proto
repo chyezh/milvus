@@ -305,6 +305,9 @@ enum ResourceDomain {
 message ResourceKey {
     ResourceDomain domain = 1;
     string key = 2;
+    bool shared = 3; // whether the resource is shared, 
+    // if true, the resource is shared by multiple broadcast message,
+    // otherwise, the resource is exclusive to the broadcast message.
 }
 
 // CipherHeader is the header of a message that is encrypted.

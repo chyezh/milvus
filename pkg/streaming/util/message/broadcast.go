@@ -1,10 +1,12 @@
 package message
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
+	"google.golang.org/protobuf/proto"
 )
 
 // newBroadcastHeaderFromProto creates a BroadcastHeader from proto.
@@ -31,6 +33,7 @@ func NewResourceKeyFromProto(proto *messagespb.ResourceKey) ResourceKey {
 	return ResourceKey{
 		Domain: proto.Domain,
 		Key:    proto.Key,
+		Shared: proto.Shared,
 	}
 }
 
@@ -42,6 +45,7 @@ func newProtoFromResourceKey(keys ...ResourceKey) []*messagespb.ResourceKey {
 		protos = append(protos, &messagespb.ResourceKey{
 			Domain: key.Domain,
 			Key:    key.Key,
+			Shared: key.Shared,
 		})
 	}
 	return protos
@@ -50,6 +54,14 @@ func newProtoFromResourceKey(keys ...ResourceKey) []*messagespb.ResourceKey {
 type ResourceKey struct {
 	Domain messagespb.ResourceDomain
 	Key    string
+	Shared bool
+}
+
+func (r ResourceKey) String() string {
+	if r.Shared {
+		return fmt.Sprintf("%s:%s@R", r.Domain.String(), r.Key)
+	}
+	return fmt.Sprintf("%s:%s@X", r.Domain.String(), r.Key)
 }
 
 // NewImportJobIDResourceKey creates a key for import job resource.
@@ -66,4 +78,17 @@ func NewCollectionNameResourceKey(collectionName string) ResourceKey {
 		Domain: messagespb.ResourceDomain_ResourceDomainCollectionName,
 		Key:    collectionName,
 	}
+}
+
+// BroadcastResult is the result of broadcast operation.
+type BroadcastResult[H proto.Message, B proto.Message] struct {
+	Message SpecializedBroadcastMessage[H, B]
+	Results map[string]*AppendResult
+}
+
+// AppendResult is the result of append operation.
+type AppendResult struct {
+	MessageID              MessageID
+	LastConfirmedMessageID MessageID
+	TimeTick               uint64
 }
