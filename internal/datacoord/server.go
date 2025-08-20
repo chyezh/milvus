@@ -340,38 +340,43 @@ func (s *Server) initDataCoord() error {
 // initMessageCallback initializes the message callback.
 // TODO: we should build a ddl framework to handle the message ack callback for ddl messages
 func (s *Server) initMessageCallback() {
-	registry.RegisterDropPartitionMessageV1AckCallback(func(ctx context.Context, msg message.ImmutableDropPartitionMessageV1) error {
-		return s.NotifyDropPartition(ctx, msg.VChannel(), []int64{msg.Header().PartitionId})
+	registry.RegisterDropPartitionMessageV1AckCallback(func(ctx context.Context, msgs ...message.ImmutableDropPartitionMessageV1) error {
+		for _, msg := range msgs {
+			return s.NotifyDropPartition(ctx, msg.VChannel(), []int64{msg.Header().PartitionId})
+		}
+		return nil
 	})
 
-	registry.RegisterImportMessageV1AckCallback(func(ctx context.Context, msg message.ImmutableImportMessageV1) error {
-		body := msg.MustBody()
-		importResp, err := s.ImportV2(ctx, &internalpb.ImportRequestInternal{
-			CollectionID:   body.GetCollectionID(),
-			CollectionName: body.GetCollectionName(),
-			PartitionIDs:   body.GetPartitionIDs(),
-			ChannelNames:   []string{msg.VChannel()},
-			Schema:         body.GetSchema(),
-			Files: lo.Map(body.GetFiles(), func(file *msgpb.ImportFile, _ int) *internalpb.ImportFile {
-				return &internalpb.ImportFile{
-					Id:    file.GetId(),
-					Paths: file.GetPaths(),
-				}
-			}),
-			Options:       funcutil.Map2KeyValuePair(body.GetOptions()),
-			DataTimestamp: body.GetBase().GetTimestamp(),
-			JobID:         body.GetJobID(),
-		})
-		err = merr.CheckRPCCall(importResp, err)
-		if errors.Is(err, merr.ErrCollectionNotFound) {
-			log.Ctx(ctx).Warn("import message failed because of collection not found, skip it", zap.String("job_id", importResp.GetJobID()), zap.Error(err))
-			return nil
+	registry.RegisterImportMessageV1AckCallback(func(ctx context.Context, msgs ...message.ImmutableImportMessageV1) error {
+		for _, msg := range msgs {
+			body := msg.MustBody()
+			importResp, err := s.ImportV2(ctx, &internalpb.ImportRequestInternal{
+				CollectionID:   body.GetCollectionID(),
+				CollectionName: body.GetCollectionName(),
+				PartitionIDs:   body.GetPartitionIDs(),
+				ChannelNames:   []string{msg.VChannel()},
+				Schema:         body.GetSchema(),
+				Files: lo.Map(body.GetFiles(), func(file *msgpb.ImportFile, _ int) *internalpb.ImportFile {
+					return &internalpb.ImportFile{
+						Id:    file.GetId(),
+						Paths: file.GetPaths(),
+					}
+				}),
+				Options:       funcutil.Map2KeyValuePair(body.GetOptions()),
+				DataTimestamp: body.GetBase().GetTimestamp(),
+				JobID:         body.GetJobID(),
+			})
+			err = merr.CheckRPCCall(importResp, err)
+			if errors.Is(err, merr.ErrCollectionNotFound) {
+				log.Ctx(ctx).Warn("import message failed because of collection not found, skip it", zap.String("job_id", importResp.GetJobID()), zap.Error(err))
+				return nil
+			}
+			if err != nil {
+				log.Ctx(ctx).Warn("import message failed", zap.String("job_id", importResp.GetJobID()), zap.Error(err))
+				return err
+			}
+			log.Ctx(ctx).Info("import message handled", zap.String("job_id", importResp.GetJobID()))
 		}
-		if err != nil {
-			log.Ctx(ctx).Warn("import message failed", zap.String("job_id", importResp.GetJobID()), zap.Error(err))
-			return err
-		}
-		log.Ctx(ctx).Info("import message handled", zap.String("job_id", importResp.GetJobID()))
 		return nil
 	})
 
