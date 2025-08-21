@@ -67,3 +67,11 @@ func NewCollectionNameResourceKey(collectionName string) ResourceKey {
 		Key:    collectionName,
 	}
 }
+
+// NewRBACResourceKey creates a key for RBAC resource.
+func NewRBACResourceKey() ResourceKey {
+	return ResourceKey{
+		Domain: messagespb.ResourceDomain_ResourceDomainRBAC,
+		Key:    "",
+	}
+}

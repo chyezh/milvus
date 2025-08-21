@@ -38,6 +38,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
+	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
 	"github.com/milvus-io/milvus/internal/kv/tikv"
 	"github.com/milvus-io/milvus/internal/metastore"
@@ -59,10 +60,10 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/proxypb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/contextutil"
-	"github.com/milvus-io/milvus/pkg/v2/util/crypto"
 	"github.com/milvus-io/milvus/pkg/v2/util/expr"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -495,22 +496,7 @@ func (c *Core) Init() error {
 }
 
 func (c *Core) initCredentials(initCtx context.Context) error {
-	credInfo, _ := c.meta.GetCredential(initCtx, util.UserRoot)
-	if credInfo == nil {
-		encryptedRootPassword, err := crypto.PasswordEncrypt(Params.CommonCfg.DefaultRootPassword.GetValue())
-		if err != nil {
-			log.Ctx(initCtx).Warn("RootCoord init user root failed", zap.Error(err))
-			return err
-		}
-		log.Ctx(initCtx).Info("RootCoord init user root")
-		err = c.meta.AddCredential(initCtx, &internalpb.CredentialInfo{Username: util.UserRoot, EncryptedPassword: encryptedRootPassword})
-		if err != nil {
-			log.Ctx(initCtx).Warn("RootCoord init user root failed", zap.Error(err))
-			return err
-		}
-		return nil
-	}
-	return nil
+	return c.meta.InitCredential(initCtx)
 }
 
 func (c *Core) initRbac(initCtx context.Context) error {
@@ -690,6 +676,7 @@ func (c *Core) startInternal() error {
 	}()
 
 	c.startServerLoop()
+	c.registerBroadcastDDLCallbacks()
 	c.UpdateStateCode(commonpb.StateCode_Healthy)
 	sessionutil.SaveServerInfo(typeutil.MixCoordRole, c.session.GetServerID())
 	log.Info("rootcoord startup successfully")
@@ -2182,20 +2169,22 @@ func (c *Core) CreateCredential(ctx context.Context, credInfo *internalpb.Creden
 		return merr.Status(err), nil
 	}
 
-	// insert to db
-	err := c.meta.AddCredential(ctx, credInfo)
+	msg := message.NewPutUserMessageBuilderV2().
+		WithHeader(&message.PutUserMessageHeader{
+			UserEntity: &milvuspb.UserEntity{Name: credInfo.Username},
+		}).
+		WithBody(&message.PutUserMessageBody{
+			CredentialInfo: credInfo,
+		}).
+		WithBroadcast([]string{message.ControlChannel}, message.NewRBACResourceKey()).
+		MustBuildBroadcast()
+
+	_, err := streaming.WAL().Broadcast().Append(ctx, msg)
 	if err != nil {
-		ctxLog.Warn("CreateCredential save credential failed", zap.Error(err))
+		ctxLog.Warn("CreateCredential append message failed", zap.Error(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_CreateCredentialFailure), nil
 	}
-	// update proxy's local cache
-	err = c.UpdateCredCache(ctx, credInfo)
-	if err != nil {
-		ctxLog.Warn("CreateCredential add cache failed", zap.Error(err))
-		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
-	}
-	ctxLog.Debug("CreateCredential success")
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
@@ -2243,21 +2232,24 @@ func (c *Core) UpdateCredential(ctx context.Context, credInfo *internalpb.Creden
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.Status(err), nil
 	}
-	// update data on storage
-	err := c.meta.AlterCredential(ctx, credInfo)
+
+	msg := message.NewPutUserMessageBuilderV2().
+		WithHeader(&message.PutUserMessageHeader{
+			UserEntity: &milvuspb.UserEntity{Name: credInfo.Username},
+			IsUpdate:   true,
+		}).
+		WithBody(&message.PutUserMessageBody{
+			CredentialInfo: credInfo,
+		}).
+		WithBroadcast([]string{message.ControlChannel}, message.NewRBACResourceKey()).
+		MustBuildBroadcast()
+
+	_, err := streaming.WAL().Broadcast().Append(ctx, msg)
 	if err != nil {
-		ctxLog.Warn("UpdateCredential save credential failed", zap.Error(err))
+		ctxLog.Warn("UpdateCredential append message failed", zap.Error(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_UpdateCredentialFailure), nil
 	}
-	// update proxy's local cache
-	err = c.UpdateCredCache(ctx, credInfo)
-	if err != nil {
-		ctxLog.Warn("UpdateCredential update cache failed", zap.Error(err))
-		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
-		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_UpdateCredentialFailure), nil
-	}
-	ctxLog.Debug("UpdateCredential success")
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
@@ -2274,27 +2266,27 @@ func (c *Core) DeleteCredential(ctx context.Context, in *milvuspb.DeleteCredenti
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.Status(err), nil
 	}
-	var status *commonpb.Status
-	defer func() {
-		if status.Code != 0 {
-			metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
-		}
-	}()
 
-	err := executeDeleteCredentialTaskSteps(ctx, c, in.Username)
+	msg := message.NewDropUserMessageBuilderV2().
+		WithHeader(&message.DropUserMessageHeader{
+			UserName: in.Username,
+		}).
+		WithBody(&message.DropUserMessageBody{}).
+		WithBroadcast([]string{message.ControlChannel}, message.NewRBACResourceKey()).
+		MustBuildBroadcast()
+
+	_, err := streaming.WAL().Broadcast().Append(ctx, msg)
 	if err != nil {
-		errMsg := "fail to execute task when deleting the user"
-		ctxLog.Warn(errMsg, zap.Error(err))
-		status = merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_DeleteCredentialFailure)
-		return status, nil
+		ctxLog.Warn("DeleteCredential append message failed", zap.Error(err))
+		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
+		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_DeleteCredentialFailure), nil
 	}
-	ctxLog.Debug("DeleteCredential success")
 
+	ctxLog.Debug("DeleteCredential success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	metrics.RootCoordNumOfCredentials.Dec()
-	status = merr.Success()
-	return status, nil
+	return merr.Success(), nil
 }
 
 // ListCredUsers list all usernames
@@ -2341,12 +2333,20 @@ func (c *Core) CreateRole(ctx context.Context, in *milvuspb.CreateRoleRequest) (
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.Status(err), nil
 	}
-	entity := in.Entity
 
-	err := c.meta.CreateRole(ctx, util.DefaultTenant, &milvuspb.RoleEntity{Name: entity.Name})
+	msg := message.NewPutRoleMessageBuilderV2().
+		WithHeader(&message.PutRoleMessageHeader{
+			RoleEntity: in.Entity,
+		}).
+		WithBody(&message.PutRoleMessageBody{}).
+		WithBroadcast([]string{message.ControlChannel}, message.NewRBACResourceKey()).
+		MustBuildBroadcast()
+
+	_, err := streaming.WAL().Broadcast().Append(ctx, msg)
 	if err != nil {
 		errMsg := "fail to create role"
 		ctxLog.Warn(errMsg, zap.Error(err))
+		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_CreateRoleFailure), nil
 	}
 
@@ -2354,7 +2354,6 @@ func (c *Core) CreateRole(ctx context.Context, in *milvuspb.CreateRoleRequest) (
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	metrics.RootCoordNumOfRoles.Inc()
-
 	return merr.Success(), nil
 }
 
@@ -2375,32 +2374,19 @@ func (c *Core) DropRole(ctx context.Context, in *milvuspb.DropRoleRequest) (*com
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.Status(err), nil
 	}
-	for util.IsBuiltinRole(in.GetRoleName()) {
-		err := merr.WrapErrPrivilegeNotPermitted("the role[%s] is a builtin role, which can't be dropped", in.GetRoleName())
-		return merr.Status(err), nil
-	}
-	if _, err := c.meta.SelectRole(ctx, util.DefaultTenant, &milvuspb.RoleEntity{Name: in.RoleName}, false); err != nil {
-		errMsg := "not found the role, maybe the role isn't existed or internal system error"
-		ctxLog.Warn(errMsg, zap.Error(err))
-		return merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_DropRoleFailure), nil
-	}
+	msg := message.NewDropRoleMessageBuilderV2().
+		WithHeader(&message.DropRoleMessageHeader{
+			RoleName: in.RoleName,
+		}).
+		WithBody(&message.DropRoleMessageBody{}).
+		WithBroadcast([]string{message.ControlChannel}, message.NewRBACResourceKey()).
+		MustBuildBroadcast()
 
-	if !in.ForceDrop {
-		grantEntities, err := c.meta.SelectGrant(ctx, util.DefaultTenant, &milvuspb.GrantEntity{
-			Role:   &milvuspb.RoleEntity{Name: in.RoleName},
-			DbName: "*",
-		})
-		if len(grantEntities) != 0 {
-			errMsg := "fail to drop the role that it has privileges. Use REVOKE API to revoke privileges"
-			ctxLog.Warn(errMsg, zap.Any("grants", grantEntities), zap.Error(err))
-			return merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_DropRoleFailure), nil
-		}
-	}
-	err := executeDropRoleTaskSteps(ctx, c, in.RoleName, in.ForceDrop)
+	_, err := streaming.WAL().Broadcast().Append(ctx, msg)
 	if err != nil {
-		errMsg := "fail to execute task when dropping the role"
+		errMsg := "fail to drop role"
 		ctxLog.Warn(errMsg, zap.Error(err))
-		return merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_DropRoleFailure), nil
+		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_DropRoleFailure), nil
 	}
 
 	ctxLog.Debug(method+" success", zap.String("role_name", in.RoleName))

@@ -173,9 +173,6 @@ func (b *broadcastTask) FastAckAll(ctx context.Context) error {
 
 // getAllBroadcastedImmutableMessages gets all the broadcasted immutable messages.
 func (b *broadcastTask) getAllBroadcastedImmutableMessages() []message.ImmutableMessage {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
 	msgs := make([]message.ImmutableMessage, 0, len(b.result))
 	for vchannel := range b.result {
 		msgs = append(msgs, b.getImmutableMessageFromVChannel(vchannel))

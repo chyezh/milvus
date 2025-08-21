@@ -35,68 +35,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
-func executeDeleteCredentialTaskSteps(ctx context.Context, core *Core, username string) error {
-	redoTask := newBaseRedoTask(core.stepExecutor)
-	redoTask.AddSyncStep(NewSimpleStep("delete credential meta data", func(ctx context.Context) ([]nestedStep, error) {
-		err := core.meta.DeleteCredential(ctx, username)
-		if err != nil {
-			log.Ctx(ctx).Warn("delete credential meta data failed", zap.String("username", username), zap.Error(err))
-		}
-		return nil, err
-	}))
-	redoTask.AddAsyncStep(NewSimpleStep("delete credential cache", func(ctx context.Context) ([]nestedStep, error) {
-		err := core.ExpireCredCache(ctx, username)
-		if err != nil {
-			log.Ctx(ctx).Warn("delete credential cache failed", zap.String("username", username), zap.Error(err))
-		}
-		return nil, err
-	}))
-	redoTask.AddAsyncStep(NewSimpleStep("delete user role cache for the user", func(ctx context.Context) ([]nestedStep, error) {
-		err := core.proxyClientManager.RefreshPolicyInfoCache(ctx, &proxypb.RefreshPolicyInfoCacheRequest{
-			OpType: int32(typeutil.CacheDeleteUser),
-			OpKey:  username,
-		})
-		if err != nil {
-			log.Ctx(ctx).Warn("delete user role cache failed for the user", zap.String("username", username), zap.Error(err))
-		}
-		return nil, err
-	}))
-
-	return redoTask.Execute(ctx)
-}
-
-func executeDropRoleTaskSteps(ctx context.Context, core *Core, roleName string, foreDrop bool) error {
-	redoTask := newBaseRedoTask(core.stepExecutor)
-	redoTask.AddSyncStep(NewSimpleStep("drop role meta data", func(ctx context.Context) ([]nestedStep, error) {
-		err := core.meta.DropRole(ctx, util.DefaultTenant, roleName)
-		if err != nil {
-			log.Ctx(ctx).Warn("drop role mata data failed", zap.String("role_name", roleName), zap.Error(err))
-		}
-		return nil, err
-	}))
-	redoTask.AddAsyncStep(NewSimpleStep("drop the privilege list of this role", func(ctx context.Context) ([]nestedStep, error) {
-		if !foreDrop {
-			return nil, nil
-		}
-		err := core.meta.DropGrant(ctx, util.DefaultTenant, &milvuspb.RoleEntity{Name: roleName})
-		if err != nil {
-			log.Ctx(ctx).Warn("drop the privilege list failed for the role", zap.String("role_name", roleName), zap.Error(err))
-		}
-		return nil, err
-	}))
-	redoTask.AddAsyncStep(NewSimpleStep("drop role cache", func(ctx context.Context) ([]nestedStep, error) {
-		err := core.proxyClientManager.RefreshPolicyInfoCache(ctx, &proxypb.RefreshPolicyInfoCacheRequest{
-			OpType: int32(typeutil.CacheDropRole),
-			OpKey:  roleName,
-		})
-		if err != nil {
-			log.Ctx(ctx).Warn("delete user role cache failed for the role", zap.String("role_name", roleName), zap.Error(err))
-		}
-		return nil, err
-	}))
-	return redoTask.Execute(ctx)
-}
-
 func executeOperateUserRoleTaskSteps(ctx context.Context, core *Core, in *milvuspb.OperateUserRoleRequest) error {
 	username := in.Username
 	roleName := in.RoleName

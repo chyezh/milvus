@@ -315,6 +315,7 @@ message DropAliasMessageBody {}
 // PutUserMessageHeader is the header of put user message.
 message PutUserMessageHeader {
     milvus.UserEntity user_entity = 1;
+    bool is_update = 2; // if true, the user is updated, otherwise, the user is created.
 }
 
 // PutUserMessageBody is the body of put user message.
@@ -342,6 +343,7 @@ message PutRoleMessageBody {
 // DropRoleMessageHeader is the header of drop role message.
 message DropRoleMessageHeader {
     string role_name = 1;
+    bool force_drop  = 2; // if true, the role will be dropped even if it has privileges.
 }
 
 // DropRoleMessageBody is the body of drop role message.
@@ -478,6 +480,7 @@ enum ResourceDomain {
     ResourceDomainUnknown = 0; // should never be used.
     ResourceDomainImportJobID = 1; // the domain of import job id.
     ResourceDomainCollectionName = 2; // the domain of collection name.
+    ResourceDomainRBAC = 3; // the domain of RBAC.
 }
 
 // ResourceKey is the key for resource hold.
