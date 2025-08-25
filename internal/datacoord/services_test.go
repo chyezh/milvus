@@ -24,7 +24,6 @@ import (
 	globalIDAllocator "github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/datacoord/broker"
-	"github.com/milvus-io/milvus/internal/datacoord/session"
 	"github.com/milvus-io/milvus/internal/metastore/mocks"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	mocks2 "github.com/milvus-io/milvus/internal/mocks"
@@ -49,28 +48,10 @@ type ServerSuite struct {
 	suite.Suite
 
 	testServer *Server
-	mockChMgr  *MockChannelManager
-}
-
-func WithChannelManager(cm ChannelManager) Option {
-	return func(svr *Server) {
-		svr.sessionManager = session.NewDataNodeManagerImpl(session.WithDataNodeCreator(svr.dataNodeCreator))
-		svr.channelManager = cm
-		svr.cluster = NewClusterImpl(svr.sessionManager, svr.channelManager)
-		svr.nodeManager = session.NewNodeManager(svr.dataNodeCreator)
-		svr.cluster2 = session.NewCluster(svr.nodeManager)
-	}
 }
 
 func (s *ServerSuite) SetupTest() {
-	s.mockChMgr = NewMockChannelManager(s.T())
-	s.mockChMgr.EXPECT().Startup(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	s.mockChMgr.EXPECT().Close().Maybe()
-
-	s.testServer = newTestServer(s.T(), WithChannelManager(s.mockChMgr))
-	if s.testServer.channelManager != nil {
-		s.testServer.channelManager.Close()
-	}
+	s.testServer = newTestServer(s.T())
 }
 
 func (s *ServerSuite) TearDownTest() {
