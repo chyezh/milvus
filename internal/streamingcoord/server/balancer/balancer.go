@@ -18,6 +18,7 @@ var (
 )
 
 type (
+	AllocVChannelParam                   = channel.AllocVChannelParam
 	WatchChannelAssignmentsCallbackParam = channel.WatchChannelAssignmentsCallbackParam
 	WatchChannelAssignmentsCallback      = channel.WatchChannelAssignmentsCallback
 )
@@ -32,6 +33,9 @@ type Balancer interface {
 
 	// GetAllStreamingNodes fetches all streaming node info.
 	GetAllStreamingNodes(ctx context.Context) (map[int64]*types.StreamingNodeInfo, error)
+
+	// AllocVirtualChannels allocates virtual channels for a collection.
+	AllocVirtualChannels(ctx context.Context, param AllocVChannelParam) ([]string, error)
 
 	// UpdateBalancePolicy update the balance policy.
 	UpdateBalancePolicy(ctx context.Context, req *streamingpb.UpdateWALBalancePolicyRequest) (*streamingpb.UpdateWALBalancePolicyResponse, error)

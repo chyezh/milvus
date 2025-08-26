@@ -192,11 +192,13 @@ message ManualFlushMessageHeader {
 message CreateCollectionMessageHeader {
     int64 collection_id          = 1;
     repeated int64 partition_ids = 2;
+    int64 db_id                  = 3;
 }
 
 // DropCollectionMessageHeader is the header of drop collection message.
 message DropCollectionMessageHeader {
     int64 collection_id = 1;
+    int64 db_id = 2;
 }
 
 // CreatePartitionMessageHeader is the header of create partition message.
@@ -517,6 +519,7 @@ enum ResourceDomain {
     ResourceDomainUnknown = 0; // should never be used.
     ResourceDomainImportJobID = 1; // the domain of import job id.
     ResourceDomainCollectionName = 2; // the domain of collection name.
+    ResourceDomainDatabaseName = 3; // the domain of database name.
 }
 
 // ResourceKey is the key for resource hold.

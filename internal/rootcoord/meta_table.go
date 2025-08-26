@@ -30,6 +30,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/model"
+	"github.com/milvus-io/milvus/internal/rootcoord/meta"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer/channel"
 	"github.com/milvus-io/milvus/internal/tso"
 	"github.com/milvus-io/milvus/internal/util/hookutil"
@@ -48,74 +49,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
-//go:generate mockery --name=IMetaTable --structname=MockIMetaTable --output=./  --filename=mock_meta_table.go --with-expecter --inpackage
-type IMetaTable interface {
-	GetDatabaseByID(ctx context.Context, dbID int64, ts Timestamp) (*model.Database, error)
-	GetDatabaseByName(ctx context.Context, dbName string, ts Timestamp) (*model.Database, error)
-	CreateDatabase(ctx context.Context, db *model.Database, ts typeutil.Timestamp) error
-	DropDatabase(ctx context.Context, dbName string, ts typeutil.Timestamp) error
-	ListDatabases(ctx context.Context, ts typeutil.Timestamp) ([]*model.Database, error)
-	AlterDatabase(ctx context.Context, oldDB *model.Database, newDB *model.Database, ts typeutil.Timestamp) error
-
-	AddCollection(ctx context.Context, coll *model.Collection) error
-	ChangeCollectionState(ctx context.Context, collectionID UniqueID, state pb.CollectionState, ts Timestamp) error
-	RemoveCollection(ctx context.Context, collectionID UniqueID, ts Timestamp) error
-	// GetCollectionID retrieves the corresponding collectionID based on the collectionName.
-	// If the collection does not exist, it will return InvalidCollectionID.
-	// Please use the function with caution.
-	GetCollectionID(ctx context.Context, dbName string, collectionName string) UniqueID
-	GetCollectionByName(ctx context.Context, dbName string, collectionName string, ts Timestamp) (*model.Collection, error)
-	GetCollectionByID(ctx context.Context, dbName string, collectionID UniqueID, ts Timestamp, allowUnavailable bool) (*model.Collection, error)
-	GetCollectionByIDWithMaxTs(ctx context.Context, collectionID UniqueID) (*model.Collection, error)
-	ListCollections(ctx context.Context, dbName string, ts Timestamp, onlyAvail bool) ([]*model.Collection, error)
-	ListAllAvailCollections(ctx context.Context) map[int64][]int64
-	// ListAllAvailPartitions returns the partition ids of all available collections.
-	// The key of the map is the database id, and the value is a map of collection id to partition ids.
-	ListAllAvailPartitions(ctx context.Context) map[int64]map[int64][]int64
-	ListCollectionPhysicalChannels(ctx context.Context) map[typeutil.UniqueID][]string
-	GetCollectionVirtualChannels(ctx context.Context, colID int64) []string
-	GetPChannelInfo(ctx context.Context, pchannel string) *rootcoordpb.GetPChannelInfoResponse
-	AddPartition(ctx context.Context, partition *model.Partition) error
-	ChangePartitionState(ctx context.Context, collectionID UniqueID, partitionID UniqueID, state pb.PartitionState, ts Timestamp) error
-	RemovePartition(ctx context.Context, dbID int64, collectionID UniqueID, partitionID UniqueID, ts Timestamp) error
-	CreateAlias(ctx context.Context, dbName string, alias string, collectionName string, ts Timestamp) error
-	DropAlias(ctx context.Context, dbName string, alias string, ts Timestamp) error
-	AlterAlias(ctx context.Context, dbName string, alias string, collectionName string, ts Timestamp) error
-	DescribeAlias(ctx context.Context, dbName string, alias string, ts Timestamp) (string, error)
-	ListAliases(ctx context.Context, dbName string, collectionName string, ts Timestamp) ([]string, error)
-	AlterCollection(ctx context.Context, oldColl *model.Collection, newColl *model.Collection, ts Timestamp, fieldModify bool) error
-	RenameCollection(ctx context.Context, dbName string, oldName string, newDBName string, newName string, ts Timestamp) error
-	GetGeneralCount(ctx context.Context) int
-
-	// TODO: it'll be a big cost if we handle the time travel logic, since we should always list all aliases in catalog.
-	IsAlias(ctx context.Context, db, name string) bool
-	ListAliasesByID(ctx context.Context, collID UniqueID) []string
-
-	AddCredential(ctx context.Context, credInfo *internalpb.CredentialInfo) error
-	GetCredential(ctx context.Context, username string) (*internalpb.CredentialInfo, error)
-	DeleteCredential(ctx context.Context, username string) error
-	AlterCredential(ctx context.Context, credInfo *internalpb.CredentialInfo) error
-	ListCredentialUsernames(ctx context.Context) (*milvuspb.ListCredUsersResponse, error)
-
-	CreateRole(ctx context.Context, tenant string, entity *milvuspb.RoleEntity) error
-	DropRole(ctx context.Context, tenant string, roleName string) error
-	OperateUserRole(ctx context.Context, tenant string, userEntity *milvuspb.UserEntity, roleEntity *milvuspb.RoleEntity, operateType milvuspb.OperateUserRoleType) error
-	SelectRole(ctx context.Context, tenant string, entity *milvuspb.RoleEntity, includeUserInfo bool) ([]*milvuspb.RoleResult, error)
-	SelectUser(ctx context.Context, tenant string, entity *milvuspb.UserEntity, includeRoleInfo bool) ([]*milvuspb.UserResult, error)
-	OperatePrivilege(ctx context.Context, tenant string, entity *milvuspb.GrantEntity, operateType milvuspb.OperatePrivilegeType) error
-	SelectGrant(ctx context.Context, tenant string, entity *milvuspb.GrantEntity) ([]*milvuspb.GrantEntity, error)
-	DropGrant(ctx context.Context, tenant string, role *milvuspb.RoleEntity) error
-	ListPolicy(ctx context.Context, tenant string) ([]*milvuspb.GrantEntity, error)
-	ListUserRole(ctx context.Context, tenant string) ([]string, error)
-	BackupRBAC(ctx context.Context, tenant string) (*milvuspb.RBACMeta, error)
-	RestoreRBAC(ctx context.Context, tenant string, meta *milvuspb.RBACMeta) error
-	IsCustomPrivilegeGroup(ctx context.Context, groupName string) (bool, error)
-	CreatePrivilegeGroup(ctx context.Context, groupName string) error
-	DropPrivilegeGroup(ctx context.Context, groupName string) error
-	ListPrivilegeGroups(ctx context.Context) ([]*milvuspb.PrivilegeGroupInfo, error)
-	OperatePrivilegeGroup(ctx context.Context, groupName string, privileges []*milvuspb.PrivilegeEntity, operateType milvuspb.OperatePrivilegeGroupType) error
-	GetPrivilegeGroupRoles(ctx context.Context, groupName string) ([]*milvuspb.RoleEntity, error)
-}
+type IMetaTable = meta.IMetaTable
 
 // MetaTable is a persistent meta set of all databases, collections and partitions.
 type MetaTable struct {
@@ -458,23 +392,34 @@ func (mt *MetaTable) AddCollection(ctx context.Context, coll *model.Collection) 
 	// Note:
 	// 1, idempotency check was already done outside;
 	// 2, no need to check time travel logic, since ts should always be the latest;
-
-	db, err := mt.getDatabaseByIDInternal(ctx, coll.DBID, typeutil.MaxTimestamp)
-	if err != nil {
-		return err
+	if coll.State != pb.CollectionState_CollectionCreated && coll.State != pb.CollectionState_CollectionCreating {
+		return fmt.Errorf("collection state should be creating or created, collection name: %s, collection id: %d, state: %s", coll.Name, coll.CollectionID, coll.State)
 	}
 
-	if coll.State != pb.CollectionState_CollectionCreating {
-		return fmt.Errorf("collection state should be creating, collection name: %s, collection id: %d, state: %s", coll.Name, coll.CollectionID, coll.State)
+	// check if there's a collection meta with the same collection id.
+	// merge the collection meta together.
+	if existCollInfo, ok := mt.collID2Meta[coll.CollectionID]; ok {
+		if existCollInfo.State != pb.CollectionState_CollectionCreating {
+			log.Ctx(ctx).Info("collection already created, skip add collection to meta table", zap.Int64("collectionID", coll.CollectionID))
+			return nil
+		}
+		coll = mergeCollectionModel(existCollInfo.Clone(), coll)
 	}
+
 	ctx1 := contextutil.WithTenantID(ctx, Params.CommonCfg.ClusterName.GetValue())
 	if err := mt.catalog.CreateCollection(ctx1, coll, coll.CreateTime); err != nil {
 		return err
 	}
 
 	mt.collID2Meta[coll.CollectionID] = coll.Clone()
-	mt.names.insert(db.Name, coll.Name, coll.CollectionID)
+	mt.names.insert(coll.DBName, coll.Name, coll.CollectionID)
 
+	if coll.State == pb.CollectionState_CollectionCreated {
+		pn := coll.GetPartitionNum(true)
+		mt.generalCnt += pn * int(coll.ShardsNum)
+		metrics.RootCoordNumOfCollections.WithLabelValues(coll.DBName).Inc()
+		metrics.RootCoordNumOfPartitions.WithLabelValues().Add(float64(pn))
+	}
 	channel.StaticPChannelStatsManager.MustGet().AddVChannel(coll.VirtualChannelNames...)
 	log.Ctx(ctx).Info("add collection to meta table",
 		zap.Int64("dbID", coll.DBID),
@@ -485,7 +430,7 @@ func (mt *MetaTable) AddCollection(ctx context.Context, coll *model.Collection) 
 	return nil
 }
 
-func (mt *MetaTable) ChangeCollectionState(ctx context.Context, collectionID UniqueID, state pb.CollectionState, ts Timestamp) error {
+func (mt *MetaTable) DropCollection(ctx context.Context, collectionID UniqueID, ts Timestamp) error {
 	mt.ddLock.Lock()
 	defer mt.ddLock.Unlock()
 
@@ -493,8 +438,12 @@ func (mt *MetaTable) ChangeCollectionState(ctx context.Context, collectionID Uni
 	if !ok {
 		return nil
 	}
+	if coll.State == pb.CollectionState_CollectionDropping {
+		return nil
+	}
+
 	clone := coll.Clone()
-	clone.State = state
+	clone.State = pb.CollectionState_CollectionDropping
 	ctx1 := contextutil.WithTenantID(ctx, Params.CommonCfg.ClusterName.GetValue())
 	if err := mt.catalog.AlterCollection(ctx1, coll, clone, metastore.MODIFY, ts, false); err != nil {
 		return err
@@ -508,21 +457,13 @@ func (mt *MetaTable) ChangeCollectionState(ctx context.Context, collectionID Uni
 
 	pn := coll.GetPartitionNum(true)
 
-	switch state {
-	case pb.CollectionState_CollectionCreated:
-		mt.generalCnt += pn * int(coll.ShardsNum)
-		metrics.RootCoordNumOfCollections.WithLabelValues(db.Name).Inc()
-		metrics.RootCoordNumOfPartitions.WithLabelValues().Add(float64(pn))
-	case pb.CollectionState_CollectionDropping:
-		mt.generalCnt -= pn * int(coll.ShardsNum)
-		channel.StaticPChannelStatsManager.MustGet().RemoveVChannel(coll.VirtualChannelNames...)
-		metrics.RootCoordNumOfCollections.WithLabelValues(db.Name).Dec()
-		metrics.RootCoordNumOfPartitions.WithLabelValues().Sub(float64(pn))
-	}
+	mt.generalCnt -= pn * int(coll.ShardsNum)
+	channel.StaticPChannelStatsManager.MustGet().RemoveVChannel(coll.VirtualChannelNames...)
+	metrics.RootCoordNumOfCollections.WithLabelValues(db.Name).Dec()
+	metrics.RootCoordNumOfPartitions.WithLabelValues().Sub(float64(pn))
 
 	log.Ctx(ctx).Info("change collection state", zap.Int64("collection", collectionID),
-		zap.String("state", state.String()), zap.Uint64("ts", ts))
-
+		zap.String("state", coll.State.String()), zap.Uint64("ts", ts))
 	return nil
 }
 
