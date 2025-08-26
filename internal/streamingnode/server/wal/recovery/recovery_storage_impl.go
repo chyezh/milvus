@@ -149,6 +149,9 @@ func (r *recoveryStorageImpl) ObserveMessage(ctx context.Context, msg message.Im
 			return err
 		}
 	}
+	if msg.VChannel() == message.ControlChannel {
+		return nil
+	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()

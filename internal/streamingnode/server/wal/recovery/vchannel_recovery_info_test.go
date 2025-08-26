@@ -48,7 +48,7 @@ func TestNewVChannelRecoveryInfoFromCreateCollectionMessage(t *testing.T) {
 			CollectionName: "test-collection",
 			CollectionID:   100,
 			PartitionIDs:   []int64{101, 102},
-			Schema:         schema1Bytes,
+			SchemaBytes:    schema1Bytes,
 		}).
 		WithVChannel("vchannel-1").
 		MustBuildMutable()

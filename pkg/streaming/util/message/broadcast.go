@@ -1,6 +1,7 @@
 package message
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
@@ -61,9 +62,17 @@ func NewImportJobIDResourceKey(importJobID int64) ResourceKey {
 }
 
 // NewCollectionNameResourceKey creates a key for collection name resource.
-func NewCollectionNameResourceKey(collectionName string) ResourceKey {
+func NewCollectionNameResourceKey(dbName string, collectionName string) ResourceKey {
 	return ResourceKey{
 		Domain: messagespb.ResourceDomain_ResourceDomainCollectionName,
-		Key:    collectionName,
+		Key:    fmt.Sprintf("%s/%s", dbName, collectionName),
+	}
+}
+
+// NewDatabaseNameResourceKey creates a key for database name resource.
+func NewDatabaseNameResourceKey(dbName string) ResourceKey {
+	return ResourceKey{
+		Domain: messagespb.ResourceDomain_ResourceDomainDatabaseName,
+		Key:    dbName,
 	}
 }

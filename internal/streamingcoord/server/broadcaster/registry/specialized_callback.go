@@ -12,6 +12,8 @@ func init() {
 	resetMessageCheckCallbacks()
 }
 
+var RegisterImportMessageV1CheckCallback = registerMessageCheckCallback[*message.ImportMessageHeader, *msgpb.ImportMsg]
+
 // resetMessageCheckCallbacks resets the message check callbacks.
 func resetMessageCheckCallbacks() {
 	messageCheckCallbacks = map[message.MessageTypeWithVersion]*syncutil.Future[messageInnerCheckCallback]{
@@ -22,6 +24,10 @@ func resetMessageCheckCallbacks() {
 var (
 	RegisterDropPartitionMessageV1AckCallback = registerMessageAckCallback[*message.DropPartitionMessageHeader, *msgpb.DropPartitionRequest]
 	RegisterImportMessageV1AckCallback        = registerMessageAckCallback[*message.ImportMessageHeader, *msgpb.ImportMsg]
+
+	RegisterPutCollectionV2AckCallback    = registerMessageAckCallback[*message.PutCollectionMessageHeader, *message.PutCollectionMessageBody]
+	RegisterCreateCollectionV1AckCallback = registerMessageAckCallback[*message.CreateCollectionMessageHeader, *message.CreateCollectionRequest]
+	RegisterDropCollectionV1AckCallback   = registerMessageAckCallback[*message.DropCollectionMessageHeader, *message.DropCollectionRequest]
 )
 
 // resetMessageAckCallbacks resets the message ack callbacks.
@@ -29,7 +35,9 @@ func resetMessageAckCallbacks() {
 	messageAckCallbacks = map[message.MessageTypeWithVersion]*syncutil.Future[messageInnerAckCallback]{
 		message.MessageTypeDropPartitionV1: syncutil.NewFuture[messageInnerAckCallback](),
 		message.MessageTypeImportV1:        syncutil.NewFuture[messageInnerAckCallback](),
+
+		message.MessageTypePutCollectionV2:    syncutil.NewFuture[messageInnerAckCallback](),
+		message.MessageTypeCreateCollectionV1: syncutil.NewFuture[messageInnerAckCallback](),
+		message.MessageTypeDropCollectionV1:   syncutil.NewFuture[messageInnerAckCallback](),
 	}
 }
-
-var RegisterImportMessageV1CheckCallback = registerMessageCheckCallback[*message.ImportMessageHeader, *msgpb.ImportMsg]

@@ -107,7 +107,7 @@ func (bm *broadcastTaskManager) Ack(ctx context.Context, msg message.ImmutableMe
 	vchannel := msg.VChannel()
 	task, ok := bm.getBroadcastTaskByID(broadcastID)
 	if !ok {
-		bm.Logger().Info("broadcast task not found, it may already acked or not replicate from the different milvus cluster", zap.Uint64("broadcastID", broadcastID), zap.String("vchannel", vchannel))
+		bm.Logger().Info("broadcast task not found, it may already acked or replicate from the different milvus cluster", zap.Uint64("broadcastID", broadcastID), zap.String("vchannel", vchannel))
 		return nil
 	}
 	if err := task.Ack(ctx, msg); err != nil {
