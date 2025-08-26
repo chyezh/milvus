@@ -207,6 +207,9 @@ func (impl *WALFlusherImpl) dispatch(msg message.ImmutableMessage) (err error) {
 			impl.logger.Warn("failed to observe message", zap.Error(err))
 		}
 	}()
+	if msg.VChannel() == message.ControlChannel {
+		return nil
+	}
 
 	// Do the data sync service management here.
 	switch msg.MessageType() {

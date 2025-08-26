@@ -63,7 +63,7 @@ func TestBroadcast(t *testing.T) {
 	msg, err := NewCreateCollectionMessageBuilderV1().
 		WithHeader(&CreateCollectionMessageHeader{}).
 		WithBody(&msgpb.CreateCollectionRequest{}).
-		WithBroadcast([]string{"v1", "v2"}, NewCollectionNameResourceKey("1"), NewImportJobIDResourceKey(1)).
+		WithBroadcast([]string{"v1", "v2"}, NewCollectionNameResourceKey("1", "2"), NewImportJobIDResourceKey(1)).
 		BuildBroadcast()
 	assert.NoError(t, err)
 	assert.NotNil(t, msg)
