@@ -10,6 +10,17 @@ import (
 	messagespb "github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
 )
 
+// Export consts
+const (
+	FieldMaskCollectionConsistencyLevel = "consistency_level"
+	FieldMaskDBID                       = "db_id"
+	FieldMaskDBName                     = "db_name"
+	FieldMaskCollectionName             = "collection_name"
+	FieldMaskCollectionDescription      = "description"
+	FieldMaskCollectionSchema           = "schema"
+	FieldMaskCollectionProperties       = "properties"
+)
+
 // Export message types
 const (
 	MessageTypeUnknown            MessageType = MessageType(messagespb.MessageType_Unknown)

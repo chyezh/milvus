@@ -40,6 +40,7 @@ import (
 	pb "github.com/milvus-io/milvus/pkg/v2/proto/etcdpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/contextutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
@@ -444,6 +445,8 @@ func (mt *MetaTable) DropCollection(ctx context.Context, collectionID UniqueID, 
 
 	clone := coll.Clone()
 	clone.State = pb.CollectionState_CollectionDropping
+	clone.UpdateTimestamp = ts
+
 	ctx1 := contextutil.WithTenantID(ctx, Params.CommonCfg.ClusterName.GetValue())
 	if err := mt.catalog.AlterCollection(ctx1, coll, clone, metastore.MODIFY, ts, false); err != nil {
 		return err
@@ -816,16 +819,35 @@ func (mt *MetaTable) ListCollectionPhysicalChannels(ctx context.Context) map[typ
 	return chanMap
 }
 
-func (mt *MetaTable) AlterCollection(ctx context.Context, oldColl *model.Collection, newColl *model.Collection, ts Timestamp, fieldModify bool) error {
+// AlterCollection is used to alter a collection in the meta table.
+func (mt *MetaTable) AlterCollection(ctx context.Context, msg message.ImmutablePutCollectionMessageV2) error {
 	mt.ddLock.Lock()
 	defer mt.ddLock.Unlock()
 
+	coll, ok := mt.collID2Meta[msg.Header().CollectionId]
+	if !ok {
+		// collection not exists, return directly.
+		return nil
+	}
+
+	oldColl := coll.Clone()
+	newColl := coll.Clone()
+	newColl.ApplyUpdates(msg)
+	fieldModify := false
+	for _, path := range msg.Header().UpdateMask.GetPaths() {
+		if path == message.FieldMaskCollectionSchema {
+			fieldModify = true
+			break
+		}
+	}
+	newColl.UpdateTimestamp = msg.TimeTick()
+
 	ctx1 := contextutil.WithTenantID(ctx, Params.CommonCfg.ClusterName.GetValue())
-	if err := mt.catalog.AlterCollection(ctx1, oldColl, newColl, metastore.MODIFY, ts, fieldModify); err != nil {
+	if err := mt.catalog.AlterCollection(ctx1, oldColl, newColl, metastore.MODIFY, msg.TimeTick(), fieldModify); err != nil {
 		return err
 	}
-	mt.collID2Meta[oldColl.CollectionID] = newColl
-	log.Ctx(ctx).Info("alter collection finished", zap.Int64("collectionID", oldColl.CollectionID), zap.Uint64("ts", ts))
+	mt.collID2Meta[msg.Header().CollectionId] = newColl
+	log.Ctx(ctx).Info("alter collection finished", zap.Int64("collectionID", oldColl.CollectionID), zap.Uint64("ts", msg.TimeTick()))
 	return nil
 }
 

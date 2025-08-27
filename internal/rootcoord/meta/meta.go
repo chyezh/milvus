@@ -8,6 +8,7 @@ import (
 	pb "github.com/milvus-io/milvus/pkg/v2/proto/etcdpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
@@ -26,6 +27,7 @@ type IMetaTable interface {
 	AlterDatabase(ctx context.Context, oldDB *model.Database, newDB *model.Database, ts typeutil.Timestamp) error
 
 	AddCollection(ctx context.Context, coll *model.Collection) error
+	AlterCollection(ctx context.Context, msg message.ImmutablePutCollectionMessageV2) error
 	DropCollection(ctx context.Context, collectionID UniqueID, ts Timestamp) error
 	RemoveCollection(ctx context.Context, collectionID UniqueID, ts Timestamp) error
 	// GetCollectionID retrieves the corresponding collectionID based on the collectionName.
@@ -51,7 +53,6 @@ type IMetaTable interface {
 	AlterAlias(ctx context.Context, dbName string, alias string, collectionName string, ts Timestamp) error
 	DescribeAlias(ctx context.Context, dbName string, alias string, ts Timestamp) (string, error)
 	ListAliases(ctx context.Context, dbName string, collectionName string, ts Timestamp) ([]string, error)
-	AlterCollection(ctx context.Context, oldColl *model.Collection, newColl *model.Collection, ts Timestamp, fieldModify bool) error
 	RenameCollection(ctx context.Context, dbName string, oldName string, newDBName string, newName string, ts Timestamp) error
 	GetGeneralCount(ctx context.Context) int
 

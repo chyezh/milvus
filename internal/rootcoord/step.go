@@ -64,20 +64,6 @@ func (s baseStep) Weight() stepPriority {
 	return stepPriorityLow
 }
 
-type addCollectionMetaStep struct {
-	baseStep
-	coll *model.Collection
-}
-
-func (s *addCollectionMetaStep) Execute(ctx context.Context) ([]nestedStep, error) {
-	err := s.core.meta.AddCollection(ctx, s.coll)
-	return nil, err
-}
-
-func (s *addCollectionMetaStep) Desc() string {
-	return fmt.Sprintf("add collection to meta table, name: %s, id: %d, ts: %d", s.coll.Name, s.coll.CollectionID, s.coll.CreateTime)
-}
-
 type deleteCollectionMetaStep struct {
 	baseStep
 	collectionID UniqueID
@@ -412,22 +398,22 @@ func (s *nullStep) Weight() stepPriority {
 	return stepPriorityLow
 }
 
-type AlterCollectionStep struct {
-	baseStep
-	oldColl     *model.Collection
-	newColl     *model.Collection
-	ts          Timestamp
-	fieldModify bool
-}
-
-func (a *AlterCollectionStep) Execute(ctx context.Context) ([]nestedStep, error) {
-	err := a.core.meta.AlterCollection(ctx, a.oldColl, a.newColl, a.ts, a.fieldModify)
-	return nil, err
-}
-
-func (a *AlterCollectionStep) Desc() string {
-	return fmt.Sprintf("alter collection, collectionID: %d, ts: %d", a.oldColl.CollectionID, a.ts)
-}
+// type AlterCollectionStep struct {
+// 	baseStep
+// 	oldColl     *model.Collection
+// 	newColl     *model.Collection
+// 	ts          Timestamp
+// 	fieldModify bool
+// }
+//
+// func (a *AlterCollectionStep) Execute(ctx context.Context) ([]nestedStep, error) {
+// 	err := a.core.meta.AlterCollection(ctx, a.oldColl, a.newColl, a.ts, a.fieldModify)
+// 	return nil, err
+// }
+//
+// func (a *AlterCollectionStep) Desc() string {
+// 	return fmt.Sprintf("alter collection, collectionID: %d, ts: %d", a.oldColl.CollectionID, a.ts)
+// }
 
 type BroadcastAlteredCollectionStep struct {
 	baseStep
@@ -446,25 +432,25 @@ func (b *BroadcastAlteredCollectionStep) Desc() string {
 	return fmt.Sprintf("broadcast altered collection, collectionID: %d", b.req.CollectionID)
 }
 
-type AddCollectionFieldStep struct {
-	baseStep
-	oldColl           *model.Collection
-	updatedCollection *model.Collection
-	newField          *model.Field
-	ts                Timestamp
-}
-
-func (a *AddCollectionFieldStep) Execute(ctx context.Context) ([]nestedStep, error) {
-	// newColl := a.oldColl.Clone()
-	// newColl.Fields = append(newColl.Fields, a.newField)
-	err := a.core.meta.AlterCollection(ctx, a.oldColl, a.updatedCollection, a.updatedCollection.UpdateTimestamp, true)
-	log.Ctx(ctx).Info("add field done", zap.Int64("collectionID", a.oldColl.CollectionID), zap.Any("new field", a.newField))
-	return nil, err
-}
-
-func (a *AddCollectionFieldStep) Desc() string {
-	return fmt.Sprintf("add field, collectionID: %d, fieldID: %d, ts: %d", a.oldColl.CollectionID, a.newField.FieldID, a.ts)
-}
+// type AddCollectionFieldStep struct {
+// 	baseStep
+// 	oldColl           *model.Collection
+// 	updatedCollection *model.Collection
+// 	newField          *model.Field
+// 	ts                Timestamp
+// }
+//
+// func (a *AddCollectionFieldStep) Execute(ctx context.Context) ([]nestedStep, error) {
+// 	// newColl := a.oldColl.Clone()
+// 	// newColl.Fields = append(newColl.Fields, a.newField)
+// 	err := a.core.meta.AlterCollection(ctx, a.oldColl, a.updatedCollection, a.updatedCollection.UpdateTimestamp, true)
+// 	log.Ctx(ctx).Info("add field done", zap.Int64("collectionID", a.oldColl.CollectionID), zap.Any("new field", a.newField))
+// 	return nil, err
+// }
+//
+// func (a *AddCollectionFieldStep) Desc() string {
+// 	return fmt.Sprintf("add field, collectionID: %d, fieldID: %d, ts: %d", a.oldColl.CollectionID, a.newField.FieldID, a.ts)
+// }
 
 type WriteSchemaChangeWALStep struct {
 	baseStep
