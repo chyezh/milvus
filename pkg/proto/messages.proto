@@ -11,6 +11,7 @@ import "index_coord.proto";
 import "internal.proto";
 import "milvus.proto";
 import "rg.proto";
+import "google/protobuf/field_mask.proto";
 
 // Message is the basic unit of communication between publisher and consumer.
 message Message {
@@ -265,11 +266,25 @@ message SchemaChangeMessageBody{
 message PutCollectionMessageHeader {
     int64 db_id                  = 1;
     int64 collection_id          = 2;
+    google.protobuf.FieldMask update_mask = 5; // update mask for collection info
 }
 
 // PutCollectionMessageBody is the body of put collection message.
 message PutCollectionMessageBody {
-    common.KeyValuePair properties = 1;
+    int64 db_id                               = 1; // collection db id should be updated.
+    string db_name                            = 2; // collection db name should be updated.
+    string collection_name                    = 3; // collection name should be updated.
+    string description                        = 4; // collection description should be updated.
+    schema.CollectionSchema schema            = 5; // collection schema should be updated.
+    common.ConsistencyLevel consistency_level = 6; // consistency level should be updated.
+    repeated common.KeyValuePair properties   = 7; // collection properties should be updated.
+    PutLoadConfigOfPutCollection put_load_config = 8; // put load config of put collection.
+}
+
+// PutLoadConfigOfPutCollection is the body of put load config of put collection message.
+message PutLoadConfigOfPutCollection {
+    int32 replica_number = 1;
+    repeated string resource_groups = 2;
 }
 
 // PutLoadConfigMessageHeader is the header of put load config message.

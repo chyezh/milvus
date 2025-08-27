@@ -10,6 +10,17 @@ import (
 	messagespb "github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
 )
 
+// Export consts
+const (
+	FieldMaskCollectionConsistencyLevel = "consistency_level"
+	FieldMaskDBID                       = "db_id"
+	FieldMaskDBName                     = "db_name"
+	FieldMaskCollectionName             = "collection_name"
+	FieldMaskCollectionDescription      = "description"
+	FieldMaskCollectionSchema           = "schema"
+	FieldMaskCollectionProperties       = "properties"
+)
+
 // Export message types
 const (
 	MessageTypeUnknown            MessageType = MessageType(messagespb.MessageType_Unknown)
@@ -59,11 +70,12 @@ const (
 
 // Export extra message type
 type (
-	PartitionSegmentAssignment = messagespb.PartitionSegmentAssignment
-	SegmentAssignment          = messagespb.SegmentAssignment
-	ManualFlushExtraResponse   = messagespb.ManualFlushExtraResponse
-	RoleBinding                = messagespb.RoleBinding
-	PutLoadConfigOfPutDatabase = messagespb.PutLoadConfigOfPutDatabase
+	PartitionSegmentAssignment   = messagespb.PartitionSegmentAssignment
+	SegmentAssignment            = messagespb.SegmentAssignment
+	ManualFlushExtraResponse     = messagespb.ManualFlushExtraResponse
+	RoleBinding                  = messagespb.RoleBinding
+	PutLoadConfigOfPutDatabase   = messagespb.PutLoadConfigOfPutDatabase
+	PutLoadConfigOfPutCollection = messagespb.PutLoadConfigOfPutCollection
 )
 
 // Export message header and body types

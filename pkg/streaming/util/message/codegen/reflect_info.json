@@ -3,12 +3,22 @@
         "msgpb": "github.com/milvus-io/milvus-proto/go-api/v2/msgpb",
         "messagespb": "github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
     },
+    "consts": {
+        "FieldMaskDBID": "db_id",
+        "FieldMaskDBName": "db_name",
+        "FieldMaskCollectionName": "collection_name",
+        "FieldMaskCollectionDescription": "description",
+        "FieldMaskCollectionSchema": "schema",
+        "FieldMaskCollectionProperties": "properties",
+        "FieldMaskCollectionConsistencyLevel": "consistency_level"
+    },
     "ExtraExportTypes": [
         "messagespb.PartitionSegmentAssignment",
         "messagespb.SegmentAssignment",
         "messagespb.ManualFlushExtraResponse",
         "messagespb.RoleBinding",
-        "messagespb.PutLoadConfigOfPutDatabase"
+        "messagespb.PutLoadConfigOfPutDatabase",
+        "messagespb.PutLoadConfigOfPutCollection"
     ],
     "messageReflectInfoTable": [
         {

@@ -28,6 +28,7 @@ func (c *DDLCallback) registerDatabaseCallbacks() {
 func (c *DDLCallback) registerCollectionCallbacks() {
 	registry.RegisterCreateCollectionV1AckCallback(c.createCollectionV1AckCallback)
 	registry.RegisterDropCollectionV1AckCallback(c.dropCollectionV1AckCallback)
+	registry.RegisterPutCollectionV2AckCallback(c.putCollectionV2AckCallback)
 }
 
 // registerPartitionCallbacks registers the partition callbacks.
