@@ -46,9 +46,10 @@ type WALCheckpoint struct {
 // IntoProto converts the WALCheckpoint to a protobuf message.
 func (c *WALCheckpoint) IntoProto() *streamingpb.WALCheckpoint {
 	cp := &streamingpb.WALCheckpoint{
-		MessageId:     c.MessageID.IntoProto(),
-		TimeTick:      c.TimeTick,
-		RecoveryMagic: c.Magic,
+		MessageId:       c.MessageID.IntoProto(),
+		TimeTick:        c.TimeTick,
+		RecoveryMagic:   c.Magic,
+		ReplicateConfig: c.ReplicateConfig,
 	}
 	if c.ReplicateCheckpoint != nil {
 		cp.ReplicateCheckpoint = c.ReplicateCheckpoint.IntoProto()
@@ -62,6 +63,7 @@ func (c *WALCheckpoint) Clone() *WALCheckpoint {
 		MessageID:           c.MessageID,
 		TimeTick:            c.TimeTick,
 		Magic:               c.Magic,
+		ReplicateConfig:     c.ReplicateConfig,
 		ReplicateCheckpoint: c.ReplicateCheckpoint.Clone(),
 	}
 }
