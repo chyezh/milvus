@@ -710,7 +710,6 @@ message WALCheckpoint {
 // ReplicateConfigurationMeta is the replicate configuration of the wal.
 message ReplicateConfigurationMeta {
     common.ReplicateConfiguration replicate_configuration = 1;
-    AckedResult acked_result = 2; // a acked helper to help managing the consuming of PutReplicateConfigMessageV2 message at coordinator.
 }
 
 message ReplicatePChannelMeta {
