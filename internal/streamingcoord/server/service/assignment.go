@@ -10,12 +10,13 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer/channel"
+	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/broadcast"
+	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/service/discover"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/impls/rmq"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/replicateutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
@@ -31,8 +32,7 @@ func NewAssignmentService(
 		balancer:      balancer,
 		listenerTotal: metrics.StreamingCoordAssignmentListenerTotal.WithLabelValues(paramtable.GetStringNodeID()),
 	}
-	// TODO: after recovering from wal, add it to here.
-	// registry.RegisterPutReplicateConfigV2AckCallback(assignmentService.putReplicateConfiguration)
+	registry.RegisterPutReplicateConfigV2AckCallback(assignmentService.putReplicateConfiguration)
 	return assignmentService
 }
 
@@ -66,24 +66,17 @@ func (s *assignmentServiceImpl) UpdateReplicateConfiguration(ctx context.Context
 
 	log.Ctx(ctx).Info("UpdateReplicateConfiguration received", replicateutil.ConfigLogFields(config)...)
 
-	// TODO: after recovering from wal, do a broadcast operation here.
+	// TODO: here should be a global cluster level resource key.
+	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
 	msg, err := s.validateReplicateConfiguration(ctx, config)
 	if err != nil {
 		return nil, err
 	}
-
-	// TODO: After recovering from wal, we can get the immutable message from wal system.
-	// Now, we just mock the immutable message here.
-	mutableMsg := msg.SplitIntoMutableMessage()
-	mockMessages := make([]message.ImmutablePutReplicateConfigMessageV2, 0)
-	for _, msg := range mutableMsg {
-		mockMessages = append(mockMessages,
-			message.MustAsImmutablePutReplicateConfigMessageV2(msg.WithTimeTick(0).WithLastConfirmedUseMessageID().IntoImmutableMessage(rmq.NewRmqID(1))),
-		)
-	}
-
-	// TODO: After recovering from wal, remove the operation here.
-	if err := s.putReplicateConfiguration(ctx, mockMessages...); err != nil {
+	_, err = broadcaster.Broadcast(ctx, msg)
+	if err != nil {
 		return nil, err
 	}
 	return &streamingpb.UpdateReplicateConfigurationResponse{}, nil
@@ -124,9 +117,6 @@ func (s *assignmentServiceImpl) validateReplicateConfiguration(ctx context.Conte
 		WithBody(&message.PutReplicateConfigMessageBody{}).
 		WithBroadcast(pchannels).
 		MustBuildBroadcast()
-
-	// TODO: After recovering from wal, remove the operation here.
-	b.WithBroadcastID(1)
 	return b, nil
 }
 
