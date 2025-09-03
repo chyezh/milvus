@@ -22,6 +22,8 @@ func resetMessageCheckCallbacks() {
 var (
 	RegisterDropPartitionMessageV1AckCallback = registerMessageAckCallback[*message.DropPartitionMessageHeader, *msgpb.DropPartitionRequest]
 	RegisterImportMessageV1AckCallback        = registerMessageAckCallback[*message.ImportMessageHeader, *msgpb.ImportMsg]
+
+	RegisterPutReplicateConfigV2AckCallback = registerMessageAckCallback[*message.PutReplicateConfigMessageHeader, *message.PutReplicateConfigMessageBody]
 )
 
 // resetMessageAckCallbacks resets the message ack callbacks.
@@ -29,6 +31,8 @@ func resetMessageAckCallbacks() {
 	messageAckCallbacks = map[message.MessageTypeWithVersion]*syncutil.Future[messageInnerAckCallback]{
 		message.MessageTypeDropPartitionV1: syncutil.NewFuture[messageInnerAckCallback](),
 		message.MessageTypeImportV1:        syncutil.NewFuture[messageInnerAckCallback](),
+
+		message.MessageTypePutReplicateConfigV2: syncutil.NewFuture[messageInnerAckCallback](),
 	}
 }
 
