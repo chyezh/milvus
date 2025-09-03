@@ -126,12 +126,15 @@ func recoverFromConfigurationAndMeta(ctx context.Context, streamingVersion *stre
 	return channels, metrics, nil
 }
 
-func recoverReplicateConfiguration(ctx context.Context) (*replicateConfigHelper, error) {
+func recoverReplicateConfiguration(ctx context.Context) (*replicateutil.ConfigHelper, error) {
 	config, err := resource.Resource().StreamingCatalog().GetReplicateConfiguration(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return newReplicateConfigHelper(config), nil
+	return replicateutil.MustNewConfigHelper(
+		paramtable.Get().CommonCfg.ClusterPrefix.GetValue(),
+		config.GetReplicateConfiguration(),
+	), nil
 }
 
 // ChannelManager manages the channels.
@@ -147,7 +150,7 @@ type ChannelManager struct {
 	// null if no streaming service has been run.
 	// 1 if streaming service has been run once.
 	streamingEnableNotifiers []*syncutil.AsyncTaskNotifier[struct{}]
-	replicateConfig          *replicateConfigHelper
+	replicateConfig          *replicateutil.ConfigHelper
 }
 
 // RegisterStreamingEnabledNotifier registers a notifier into the balancer.
@@ -391,49 +394,77 @@ func (cm *ChannelManager) WatchAssignmentResult(ctx context.Context, cb WatchCha
 }
 
 // UpdateReplicateConfiguration updates the in-memory replicate configuration.
-func (cm *ChannelManager) UpdateReplicateConfiguration(ctx context.Context, msgs ...message.ImmutableAlterReplicateConfigMessageV2) error {
-	config := replicateutil.MustNewConfigHelper(paramtable.Get().CommonCfg.ClusterPrefix.GetValue(), msgs[0].Header().ReplicateConfiguration)
-	pchannels := make([]types.AckedCheckpoint, 0, len(msgs))
+func (cm *ChannelManager) UpdateReplicateConfiguration(ctx context.Context, result message.BroadcastResultAlterReplicateConfigMessageV2) error {
+	msg := result.Message
+	config := replicateutil.MustNewConfigHelper(paramtable.Get().CommonCfg.ClusterPrefix.GetValue(), msg.Header().ReplicateConfiguration)
+	pchannels := make([]types.AckedCheckpoint, 0, len(result.Results))
 
-	for _, msg := range msgs {
+	for vchannel, result := range result.Results {
 		pchannels = append(pchannels, types.AckedCheckpoint{
-			Channel:                funcutil.ToPhysicalChannel(msg.VChannel()),
-			MessageID:              msg.LastConfirmedMessageID(),
-			LastConfirmedMessageID: msg.LastConfirmedMessageID(),
-			TimeTick:               msg.TimeTick(),
+			Channel:                funcutil.ToPhysicalChannel(vchannel),
+			MessageID:              result.MessageID,
+			LastConfirmedMessageID: result.LastConfirmedMessageID,
+			TimeTick:               result.TimeTick,
 		})
 	}
 	cm.cond.L.Lock()
 	defer cm.cond.L.Unlock()
 
-	if cm.replicateConfig == nil {
-		cm.replicateConfig = newReplicateConfigHelperFromMessage(msgs[0])
-	} else {
-		// StartUpdating starts the updating process.
-		if !cm.replicateConfig.StartUpdating(config.GetReplicateConfiguration(), msgs[0].BroadcastHeader().VChannels) {
-			return nil
-		}
-	}
-	cm.replicateConfig.Apply(config.GetReplicateConfiguration(), pchannels)
-
-	dirtyConfig, dirtyCDCTasks, dirty := cm.replicateConfig.ConsumeIfDirty(config.GetReplicateConfiguration())
-	if !dirty {
-		// the meta is not dirty, so nothing updated, return it directly.
+	if cm.replicateConfig != nil && proto.Equal(config.GetReplicateConfiguration(), cm.replicateConfig.GetReplicateConfiguration()) {
+		// check if the replicate configuration is changed.
+		// if not changed, return it directly.
 		return nil
 	}
-	if err := resource.Resource().StreamingCatalog().SaveReplicateConfiguration(ctx, dirtyConfig, dirtyCDCTasks); err != nil {
+
+	newIncomingCDCTasks := cm.getNewIncomingTask(config, result.Results)
+	if err := resource.Resource().StreamingCatalog().SaveReplicateConfiguration(ctx,
+		&streamingpb.ReplicateConfigurationMeta{ReplicateConfiguration: config.GetReplicateConfiguration()},
+		newIncomingCDCTasks); err != nil {
 		return err
 	}
 
-	// If the acked result is nil, it means the all the channels are acked,
-	// so we can update the version and push the new replicate configuration into client.
-	if dirtyConfig.AckedResult == nil {
-		// update metrics.
-		cm.cond.UnsafeBroadcast()
-		cm.version.Local++
-		cm.metrics.UpdateAssignmentVersion(cm.version.Local)
-	}
+	cm.replicateConfig = config
+	cm.cond.UnsafeBroadcast()
+	cm.version.Local++
+	cm.metrics.UpdateAssignmentVersion(cm.version.Local)
 	return nil
+}
+
+// getNewIncomingTask gets the new incoming task from replicatingTasks.
+func (cm *ChannelManager) getNewIncomingTask(newConfig *replicateutil.ConfigHelper, appendResults map[string]*message.AppendResult) []*streamingpb.ReplicatePChannelMeta {
+	incoming := newConfig.GetCurrentCluster()
+	var current *replicateutil.MilvusCluster
+	if cm.replicateConfig != nil {
+		current = cm.replicateConfig.GetCurrentCluster()
+	}
+	incomingReplicatingTasks := make([]*streamingpb.ReplicatePChannelMeta, 0, len(incoming.TargetClusters()))
+	for _, targetCluster := range incoming.TargetClusters() {
+		if current != nil && current.TargetCluster(targetCluster.GetClusterId()) != nil {
+			// target already exists, skip it.
+			continue
+		}
+		for _, pchannel := range targetCluster.GetPchannels() {
+			sourceClusterID := targetCluster.SourceCluster().ClusterId
+			sourcePChannel := targetCluster.MustGetSourceChannel(pchannel)
+			incomingReplicatingTasks = append(incomingReplicatingTasks, &streamingpb.ReplicatePChannelMeta{
+				SourceChannelName: sourcePChannel,
+				TargetChannelName: pchannel,
+				TargetCluster:     targetCluster.MilvusCluster,
+				// The checkpoint is set as the initialized checkpoint for one cdc-task,
+				// when the startup of one cdc-task, the checkpoint returned from the target cluster is nil,
+				// so we set the initialized checkpoint here to start operation from here.
+				// the InitializedCheckpoint is always keep same semantic with the checkpoint at target cluster.
+				// so the cluster id is the source cluster id (aka. current cluster id)
+				InitializedCheckpoint: &commonpb.ReplicateCheckpoint{
+					ClusterId: sourceClusterID,
+					Pchannel:  sourcePChannel,
+					MessageId: appendResults[sourcePChannel].LastConfirmedMessageID.IntoProto(),
+					TimeTick:  appendResults[sourcePChannel].TimeTick,
+				},
+			})
+		}
+	}
+	return incomingReplicatingTasks
 }
 
 // applyAssignments applies the assignments.
