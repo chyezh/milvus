@@ -3,36 +3,36 @@ package service
 import (
 	"context"
 
+	"github.com/cockroachdb/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/samber/lo"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
-	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer"
+	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer/balance"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer/channel"
+	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/broadcast"
+	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/service/discover"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/impls/rmq"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/replicateutil"
-	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
 
 var _ streamingpb.StreamingCoordAssignmentServiceServer = (*assignmentServiceImpl)(nil)
 
+var errReplicateConfigurationSame = errors.New("same replicate configuration")
+
 // NewAssignmentService returns a new assignment service.
-func NewAssignmentService(
-	balancer *syncutil.Future[balancer.Balancer],
-) streamingpb.StreamingCoordAssignmentServiceServer {
+func NewAssignmentService() streamingpb.StreamingCoordAssignmentServiceServer {
 	assignmentService := &assignmentServiceImpl{
-		balancer:      balancer,
 		listenerTotal: metrics.StreamingCoordAssignmentListenerTotal.WithLabelValues(paramtable.GetStringNodeID()),
 	}
-	// TODO: after recovering from wal, add it to here.
-	// registry.RegisterPutReplicateConfigV2AckCallback(assignmentService.putReplicateConfiguration)
+	registry.RegisterPutReplicateConfigV2AckCallback(assignmentService.putReplicateConfiguration)
 	return assignmentService
 }
 
@@ -44,7 +44,6 @@ type AssignmentService interface {
 type assignmentServiceImpl struct {
 	streamingpb.UnimplementedStreamingCoordAssignmentServiceServer
 
-	balancer      *syncutil.Future[balancer.Balancer]
 	listenerTotal prometheus.Gauge
 }
 
@@ -53,7 +52,7 @@ func (s *assignmentServiceImpl) AssignmentDiscover(server streamingpb.StreamingC
 	s.listenerTotal.Inc()
 	defer s.listenerTotal.Dec()
 
-	balancer, err := s.balancer.GetWithContext(server.Context())
+	balancer, err := balance.GetWithContext(server.Context())
 	if err != nil {
 		return err
 	}
@@ -66,32 +65,56 @@ func (s *assignmentServiceImpl) UpdateReplicateConfiguration(ctx context.Context
 
 	log.Ctx(ctx).Info("UpdateReplicateConfiguration received", replicateutil.ConfigLogFields(config)...)
 
-	// TODO: after recovering from wal, do a broadcast operation here.
-	msg, err := s.validateReplicateConfiguration(ctx, config)
+	// check if the configuration is same.
+	// so even if current cluster is not primary, we can still make a same return.
+	err := s.checkIfReplicateConfigurationSame(ctx, config)
 	if err != nil {
+		if errors.Is(err, errReplicateConfigurationSame) {
+			log.Ctx(ctx).Info("configuration is same, ignored")
+			return &streamingpb.UpdateReplicateConfigurationResponse{}, nil
+		}
 		return nil, err
 	}
 
-	// TODO: After recovering from wal, we can get the immutable message from wal system.
-	// Now, we just mock the immutable message here.
-	mutableMsg := msg.SplitIntoMutableMessage()
-	mockMessages := make([]message.ImmutablePutReplicateConfigMessageV2, 0)
-	for _, msg := range mutableMsg {
-		mockMessages = append(mockMessages,
-			message.MustAsImmutablePutReplicateConfigMessageV2(msg.WithTimeTick(0).WithLastConfirmedUseMessageID().IntoImmutableMessage(rmq.NewRmqID(1))),
-		)
+	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusiveClusterResourceKey())
+	if err != nil {
+		return nil, err
 	}
-
-	// TODO: After recovering from wal, remove the operation here.
-	if err := s.putReplicateConfiguration(ctx, mockMessages...); err != nil {
+	msg, err := s.validateReplicateConfiguration(ctx, config)
+	if err != nil {
+		if errors.Is(err, errReplicateConfigurationSame) {
+			log.Ctx(ctx).Info("configuration is same after cluster resource key is acquired, ignored")
+			return &streamingpb.UpdateReplicateConfigurationResponse{}, nil
+		}
+		return nil, err
+	}
+	_, err = broadcaster.Broadcast(ctx, msg)
+	if err != nil {
 		return nil, err
 	}
 	return &streamingpb.UpdateReplicateConfigurationResponse{}, nil
 }
 
+// checkIfReplicateConfigurationSame checks if the replicate configuration is the same as the latest assignment.
+// return true if the replicate configuration is the same as the latest assignment.
+func (s *assignmentServiceImpl) checkIfReplicateConfigurationSame(ctx context.Context, config *commonpb.ReplicateConfiguration) error {
+	balancer, err := balance.GetWithContext(ctx)
+	if err != nil {
+		return err
+	}
+	latestAssignment, err := balancer.GetLatestChannelAssignment()
+	if err != nil {
+		return err
+	}
+	if proto.Equal(config, latestAssignment.ReplicateConfiguration) {
+		return errReplicateConfigurationSame
+	}
+	return nil
+}
+
 // validateReplicateConfiguration validates the replicate configuration.
 func (s *assignmentServiceImpl) validateReplicateConfiguration(ctx context.Context, config *commonpb.ReplicateConfiguration) (message.BroadcastMutableMessage, error) {
-	balancer, err := s.balancer.GetWithContext(ctx)
+	balancer, err := balance.GetWithContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -101,6 +124,12 @@ func (s *assignmentServiceImpl) validateReplicateConfiguration(ctx context.Conte
 	if err != nil {
 		return nil, err
 	}
+
+	// double check if the configuration is same after resource key is acquired.
+	if proto.Equal(config, latestAssignment.ReplicateConfiguration) {
+		return nil, errReplicateConfigurationSame
+	}
+
 	pchannels := lo.MapToSlice(latestAssignment.PChannelView.Channels, func(_ channel.ChannelID, channel *channel.PChannelMeta) string {
 		return channel.Name()
 	})
@@ -124,25 +153,22 @@ func (s *assignmentServiceImpl) validateReplicateConfiguration(ctx context.Conte
 		WithBody(&message.PutReplicateConfigMessageBody{}).
 		WithBroadcast(pchannels).
 		MustBuildBroadcast()
-
-	// TODO: After recovering from wal, remove the operation here.
-	b.WithBroadcastID(1)
 	return b, nil
 }
 
 // putReplicateConfiguration puts the replicate configuration into the balancer.
 // It's a callback function of the broadcast service.
-func (s *assignmentServiceImpl) putReplicateConfiguration(ctx context.Context, msgs ...message.ImmutablePutReplicateConfigMessageV2) error {
-	balancer, err := s.balancer.GetWithContext(ctx)
+func (s *assignmentServiceImpl) putReplicateConfiguration(ctx context.Context, result message.BroadcastResultPutReplicateConfigMessageV2) error {
+	balancer, err := balance.GetWithContext(ctx)
 	if err != nil {
 		return err
 	}
-	return balancer.UpdateReplicateConfiguration(ctx, msgs...)
+	return balancer.UpdateReplicateConfiguration(ctx, result)
 }
 
 // UpdateWALBalancePolicy is used to update the WAL balance policy.
 func (s *assignmentServiceImpl) UpdateWALBalancePolicy(ctx context.Context, req *streamingpb.UpdateWALBalancePolicyRequest) (*streamingpb.UpdateWALBalancePolicyResponse, error) {
-	balancer, err := s.balancer.GetWithContext(ctx)
+	balancer, err := balance.GetWithContext(ctx)
 	if err != nil {
 		return nil, err
 	}
