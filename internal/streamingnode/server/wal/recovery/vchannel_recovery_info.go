@@ -32,11 +32,11 @@ func newVChannelRecoveryInfoFromCreateCollectionMessage(msg message.ImmutableCre
 		})
 	}
 	body := msg.MustBody()
-	schema := body.Schema
+	schema := body.CollectionSchema
 	if schema == nil {
 		// compatible before 2.6.1
 		schema = &schemapb.CollectionSchema{}
-		if err := proto.Unmarshal(body.SchemaBytes, schema); err != nil {
+		if err := proto.Unmarshal(body.Schema, schema); err != nil {
 			panic("failed to unmarshal collection schema, err: " + err.Error())
 		}
 	}

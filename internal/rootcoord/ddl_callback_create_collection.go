@@ -55,9 +55,9 @@ func (c *Core) broadcastCreateCollectionV1(ctx context.Context, req *milvuspb.Cr
 		Req:    req,
 		header: &message.CreateCollectionMessageHeader{},
 		body: &message.CreateCollectionRequest{
-			DbName:         req.GetDbName(),
-			CollectionName: req.GetCollectionName(),
-			Schema:         schema,
+			DbName:           req.GetDbName(),
+			CollectionName:   req.GetCollectionName(),
+			CollectionSchema: schema,
 		},
 	}
 	if err := createCollectionTask.Prepare(ctx); err != nil {
@@ -125,7 +125,7 @@ func (c *DDLCallback) createCollectionShard(ctx context.Context, msg message.Imm
 		CollectionID:    header.CollectionId,
 		ChannelNames:    []string{msg.VChannel()},
 		StartPositions:  []*commonpb.KeyDataPair{{Key: msg.VChannel(), Data: startPosition}},
-		Schema:          body.Schema,
+		Schema:          body.CollectionSchema,
 		CreateTimestamp: msg.TimeTick(),
 	})
 	if err != nil {
@@ -202,17 +202,17 @@ func newCollectionModel(header *message.CreateCollectionMessageHeader, body *mes
 			State:                     etcdpb.PartitionState_PartitionCreated,
 		})
 	}
-	_, consistencyLevel := getConsistencyLevel(body.Schema.Properties...)
+	_, consistencyLevel := getConsistencyLevel(body.CollectionSchema.Properties...)
 	return &model.Collection{
 		CollectionID:         header.CollectionId,
 		DBID:                 header.DbId,
-		Name:                 body.Schema.Name,
+		Name:                 body.CollectionSchema.Name,
 		DBName:               body.DbName,
-		Description:          body.Schema.Description,
-		AutoID:               body.Schema.AutoID,
-		Fields:               model.UnmarshalFieldModels(body.Schema.Fields),
-		StructArrayFields:    model.UnmarshalStructArrayFieldModels(body.Schema.StructArrayFields),
-		Functions:            model.UnmarshalFunctionModels(body.Schema.Functions),
+		Description:          body.CollectionSchema.Description,
+		AutoID:               body.CollectionSchema.AutoID,
+		Fields:               model.UnmarshalFieldModels(body.CollectionSchema.Fields),
+		StructArrayFields:    model.UnmarshalStructArrayFieldModels(body.CollectionSchema.StructArrayFields),
+		Functions:            model.UnmarshalFunctionModels(body.CollectionSchema.Functions),
 		VirtualChannelNames:  body.VirtualChannelNames,
 		PhysicalChannelNames: body.PhysicalChannelNames,
 		ShardsNum:            int32(len(body.VirtualChannelNames)),
@@ -220,8 +220,8 @@ func newCollectionModel(header *message.CreateCollectionMessageHeader, body *mes
 		CreateTime:           ts,
 		State:                etcdpb.CollectionState_CollectionCreating,
 		Partitions:           partitions,
-		Properties:           body.Schema.Properties,
-		EnableDynamicField:   body.Schema.EnableDynamicField,
+		Properties:           body.CollectionSchema.Properties,
+		EnableDynamicField:   body.CollectionSchema.EnableDynamicField,
 		UpdateTimestamp:      ts,
 	}
 }

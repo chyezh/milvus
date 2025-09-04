@@ -139,6 +139,9 @@ func (r *channelReplicator) replicateLoop() error {
 			logger.Info("replicate channel stopped")
 			return nil
 		case msg := <-ch:
+			if msg.MessageType().IsSelfControlled() {
+				continue
+			}
 			err := rsc.Replicate(msg)
 			if err != nil {
 				panic(fmt.Sprintf("replicate message failed due to unrecoverable error: %v", err))
@@ -174,7 +177,7 @@ func (r *channelReplicator) getReplicateStartMessageID() (message.MessageID, err
 			break
 		}
 	}
-	if checkpoint == nil {
+	if checkpoint == nil || checkpoint.MessageId == nil {
 		logger.Info("channel not found in replicate info, will start from the beginning")
 		return nil, nil
 	}

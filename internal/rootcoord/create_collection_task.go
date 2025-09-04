@@ -326,21 +326,21 @@ func (t *createCollectionTask) appendSysFields(schema *schemapb.CollectionSchema
 }
 
 func (t *createCollectionTask) prepareSchema(ctx context.Context) error {
-	if err := t.validateSchema(ctx, t.body.Schema); err != nil {
+	if err := t.validateSchema(ctx, t.body.CollectionSchema); err != nil {
 		return err
 	}
-	t.appendDynamicField(ctx, t.body.Schema)
-	if err := t.handleNamespaceField(ctx, t.body.Schema); err != nil {
+	t.appendDynamicField(ctx, t.body.CollectionSchema)
+	if err := t.handleNamespaceField(ctx, t.body.CollectionSchema); err != nil {
 		return err
 	}
 
-	if err := t.assignFieldAndFunctionID(t.body.Schema); err != nil {
+	if err := t.assignFieldAndFunctionID(t.body.CollectionSchema); err != nil {
 		return err
 	}
 
 	// Set properties for persistent
-	t.body.Schema.Properties = t.Req.GetProperties()
-	t.appendSysFields(t.body.Schema)
+	t.body.CollectionSchema.Properties = t.Req.GetProperties()
+	t.appendSysFields(t.body.CollectionSchema)
 	return nil
 }
 
@@ -368,7 +368,7 @@ func (t *createCollectionTask) assignPartitionIDs(ctx context.Context) error {
 	t.body.PartitionNames = make([]string, 0, t.Req.GetNumPartitions())
 	defaultPartitionName := Params.CommonCfg.DefaultPartitionName.GetValue()
 
-	if _, err := typeutil.GetPartitionKeyFieldSchema(t.body.Schema); err == nil {
+	if _, err := typeutil.GetPartitionKeyFieldSchema(t.body.CollectionSchema); err == nil {
 		partitionNums := t.Req.GetNumPartitions()
 		// double check, default num of physical partitions should be greater than 0
 		if partitionNums <= 0 {

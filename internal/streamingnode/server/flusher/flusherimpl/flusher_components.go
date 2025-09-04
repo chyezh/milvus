@@ -65,11 +65,11 @@ func (impl *flusherComponents) WhenCreateCollection(createCollectionMsg message.
 	}
 	msgChan := make(chan *msgstream.MsgPack, 10)
 
-	schema := createCollectionRequest.GetSchema()
+	schema := createCollectionRequest.GetCollectionSchema()
 	if schema == nil {
 		// compatible before 2.6.1
 		schema = &schemapb.CollectionSchema{}
-		if err := proto.Unmarshal(createCollectionRequest.GetSchemaBytes(), schema); err != nil {
+		if err := proto.Unmarshal(createCollectionRequest.GetSchema(), schema); err != nil {
 			panic("failed to unmarshal collection schema")
 		}
 	}
