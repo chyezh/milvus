@@ -88,6 +88,11 @@ func (m *TxnManager) BeginNewTxn(ctx context.Context, msg message.MutableBeginTx
 	if keepalive < 1*time.Millisecond {
 		return nil, status.NewInvaildArgument("keepalive must be greater than 1ms")
 	}
+	if msg.ReplicateHeader() != nil {
+		// If the message is replicated, it should never be expired.
+		// So we set the keepalive to infinite.
+		keepalive = message.TxnKeepaliveInfinite
+	}
 	id, err := resource.Resource().IDAllocator().Allocate(ctx)
 	if err != nil {
 		return nil, err
