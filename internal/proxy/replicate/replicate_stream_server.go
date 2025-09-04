@@ -3,7 +3,9 @@ package replicate
 import (
 	"io"
 	"sync"
+	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
 
@@ -118,6 +120,12 @@ func (p *ReplicateStreamServer) handleReplicateMessage(req *milvuspb.ReplicateRe
 		log.FieldMessage(msg),
 	)
 
+	backoff := backoff.NewExponentialBackOff()
+	backoff.InitialInterval = 100 * time.Millisecond
+	backoff.MaxInterval = 10 * time.Second
+	backoff.MaxElapsedTime = 0
+	backoff.Reset()
+
 	// Append message to wal.
 	// Keep retrying until the message is appended successfully or the stream is closed.
 	for {
@@ -129,6 +137,7 @@ func (p *ReplicateStreamServer) handleReplicateMessage(req *milvuspb.ReplicateRe
 			appendResult, err := streaming.WAL().Replicate().Append(p.streamServer.Context(), msg)
 			if err != nil {
 				log.Warn("append replicate message to wal failed", zap.Error(err))
+				time.Sleep(backoff.NextBackOff())
 				continue
 			}
 			p.sendReplicateResult(appendResult)
