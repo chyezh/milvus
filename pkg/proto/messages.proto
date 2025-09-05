@@ -299,6 +299,13 @@ message LoadReplicaConfig {
     common.LoadPriority priority = 3;
 }
 
+message DropLoadConfigMessageHeader {
+    int64 db_id = 1;
+    int64 collection_id = 2;
+}
+
+message DropLoadConfigMessageBody {}
+
 // CreateDatabaseMessageHeader is the header of create database message.
 message CreateDatabaseMessageHeader {
     string db_name = 1;

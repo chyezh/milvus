@@ -32,6 +32,7 @@ const (
 	MessageTypeSchemaChange       MessageType = MessageType(messagespb.MessageType_SchemaChange)
 	MessageTypePutCollection      MessageType = MessageType(messagespb.MessageType_PutCollection)
 	MessageTypePutLoadConfig      MessageType = MessageType(messagespb.MessageType_PutLoadConfig)
+	MessageTypeDropLoadConfig     MessageType = MessageType(messagespb.MessageType_DropLoadConfig)
 	MessageTypeCreateDatabase     MessageType = MessageType(messagespb.MessageType_CreateDatabase)
 	MessageTypePutDatabase        MessageType = MessageType(messagespb.MessageType_PutDatabase)
 	MessageTypeDropDatabase       MessageType = MessageType(messagespb.MessageType_DropDatabase)
@@ -103,6 +104,8 @@ type (
 	PutCollectionMessageBody        = messagespb.PutCollectionMessageBody
 	PutLoadConfigMessageHeader      = messagespb.PutLoadConfigMessageHeader
 	PutLoadConfigMessageBody        = messagespb.PutLoadConfigMessageBody
+	DropLoadConfigMessageHeader     = messagespb.DropLoadConfigMessageHeader
+	DropLoadConfigMessageBody       = messagespb.DropLoadConfigMessageBody
 	CreateDatabaseMessageHeader     = messagespb.CreateDatabaseMessageHeader
 	CreateDatabaseMessageBody       = messagespb.CreateDatabaseMessageBody
 	PutDatabaseMessageHeader        = messagespb.PutDatabaseMessageHeader
@@ -904,6 +907,46 @@ var MustAsBroadcastPutLoadConfigMessageV2 = MustAsSpecializedBroadcastMessage[*P
 
 // NewPutLoadConfigMessageBuilderV2 creates a new message builder for PutLoadConfigMessageV2
 var NewPutLoadConfigMessageBuilderV2 = newMutableMessageBuilder[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
+
+// Type aliases for DropLoadConfigMessageV2
+type (
+	MutableDropLoadConfigMessageV2   = specializedMutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+	ImmutableDropLoadConfigMessageV2 = SpecializedImmutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+	BroadcastDropLoadConfigMessageV2 = SpecializedBroadcastMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+)
+
+// MessageTypeWithVersion for DropLoadConfigMessageV2
+var MessageTypeDropLoadConfigV2 = MessageTypeWithVersion{
+	MessageType: MessageTypeDropLoadConfig,
+	Version:     VersionV2,
+}
+
+// MessageSpecializedType for DropLoadConfigMessageV2
+var SpecializedTypeDropLoadConfigV2 = MessageSpecializedType{
+	BodyType:   reflect.TypeOf((*DropLoadConfigMessageBody)(nil)),
+	HeaderType: reflect.TypeOf((*DropLoadConfigMessageHeader)(nil)),
+}
+
+// AsMutableDropLoadConfigMessageV2 converts a BasicMessage to MutableDropLoadConfigMessageV2
+var AsMutableDropLoadConfigMessageV2 = asSpecializedMutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+
+// MustAsMutableDropLoadConfigMessageV2 converts a BasicMessage to MutableDropLoadConfigMessageV2, panics on error
+var MustAsMutableDropLoadConfigMessageV2 = mustAsSpecializedMutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+
+// AsImmutableDropLoadConfigMessageV2 converts an ImmutableMessage to ImmutableDropLoadConfigMessageV2
+var AsImmutableDropLoadConfigMessageV2 = asSpecializedImmutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+
+// MustAsImmutableDropLoadConfigMessageV2 converts an ImmutableMessage to ImmutableDropLoadConfigMessageV2, panics on error
+var MustAsImmutableDropLoadConfigMessageV2 = MustAsSpecializedImmutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+
+// AsBroadcastDropLoadConfigMessageV2 converts a BasicMessage to BroadcastDropLoadConfigMessageV2
+var AsBroadcastDropLoadConfigMessageV2 = asSpecializedBroadcastMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+
+// MustAsBroadcastDropLoadConfigMessageV2 converts a BasicMessage to BroadcastDropLoadConfigMessageV2, panics on error
+var MustAsBroadcastDropLoadConfigMessageV2 = MustAsSpecializedBroadcastMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+
+// NewDropLoadConfigMessageBuilderV2 creates a new message builder for DropLoadConfigMessageV2
+var NewDropLoadConfigMessageBuilderV2 = newMutableMessageBuilder[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
 
 // Type aliases for CreateDatabaseMessageV2
 type (
@@ -1802,6 +1845,7 @@ var messageTypeMap = map[reflect.Type]MessageType{
 	reflect.TypeOf(&messagespb.DropCollectionMessageHeader{}):     MessageTypeDropCollection,
 	reflect.TypeOf(&messagespb.DropDatabaseMessageHeader{}):       MessageTypeDropDatabase,
 	reflect.TypeOf(&messagespb.DropIndexMessageHeader{}):          MessageTypeDropIndex,
+	reflect.TypeOf(&messagespb.DropLoadConfigMessageHeader{}):     MessageTypeDropLoadConfig,
 	reflect.TypeOf(&messagespb.DropPartitionMessageHeader{}):      MessageTypeDropPartition,
 	reflect.TypeOf(&messagespb.DropPrivilegeGroupMessageHeader{}): MessageTypeDropPrivilegeGroup,
 	reflect.TypeOf(&messagespb.DropResourceGroupMessageHeader{}):  MessageTypeDropResourceGroup,
@@ -1863,6 +1907,7 @@ var messageTypeVersionSpecializedMap = map[MessageTypeWithVersion]MessageSpecial
 	MessageTypeDropCollectionV1:     SpecializedTypeDropCollectionV1,
 	MessageTypeDropDatabaseV2:       SpecializedTypeDropDatabaseV2,
 	MessageTypeDropIndexV2:          SpecializedTypeDropIndexV2,
+	MessageTypeDropLoadConfigV2:     SpecializedTypeDropLoadConfigV2,
 	MessageTypeDropPartitionV1:      SpecializedTypeDropPartitionV1,
 	MessageTypeDropPrivilegeGroupV2: SpecializedTypeDropPrivilegeGroupV2,
 	MessageTypeDropResourceGroupV2:  SpecializedTypeDropResourceGroupV2,
@@ -1908,6 +1953,7 @@ var messageSpecializedTypeVersionMap = map[MessageSpecializedType]MessageTypeWit
 	SpecializedTypeDropCollectionV1:     MessageTypeDropCollectionV1,
 	SpecializedTypeDropDatabaseV2:       MessageTypeDropDatabaseV2,
 	SpecializedTypeDropIndexV2:          MessageTypeDropIndexV2,
+	SpecializedTypeDropLoadConfigV2:     MessageTypeDropLoadConfigV2,
 	SpecializedTypeDropPartitionV1:      MessageTypeDropPartitionV1,
 	SpecializedTypeDropPrivilegeGroupV2: MessageTypeDropPrivilegeGroupV2,
 	SpecializedTypeDropResourceGroupV2:  MessageTypeDropResourceGroupV2,

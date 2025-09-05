@@ -29,6 +29,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
+	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/querycoordv2/job"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
@@ -336,9 +337,49 @@ func (s *Server) ReleaseCollection(ctx context.Context, req *querypb.ReleaseColl
 		metrics.QueryCoordReleaseCount.WithLabelValues(metrics.FailLabel).Inc()
 		return merr.Status(errors.Wrap(err, msg)), nil
 	}
+	coll, err := s.broker.DescribeCollection(ctx, req.GetCollectionID())
+	if err != nil {
+		metrics.QueryCoordReleaseCount.WithLabelValues(metrics.FailLabel).Inc()
+		return merr.Status(err), nil
+	}
 
+	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewCollectionNameResourceKey(coll.GetDbName(), coll.GetCollectionName()))
+	if err != nil {
+		metrics.QueryCoordReleaseCount.WithLabelValues(metrics.FailLabel).Inc()
+		return merr.Status(err), nil
+	}
+	defer broadcaster.Close()
+
+	if !s.meta.CollectionManager.Exist(ctx, req.GetCollectionID()) {
+		log.Info("collection is not loaded, so skip collection releasing")
+		return merr.Success(), nil
+	}
+
+	msg := message.NewDropLoadConfigMessageBuilderV2().
+		WithHeader(&message.DropLoadConfigMessageHeader{
+			DbId:         coll.DbId,
+			CollectionId: coll.CollectionID,
+		}).
+		WithBody(&message.DropLoadConfigMessageBody{}).
+		WithBroadcast([]string{streaming.WAL().ControlChannel()}). // TODO: after we support query view in 3.0, we should broadcast the drop load config message to all vchannels.
+		MustBuildBroadcast()
+
+	_, err = broadcaster.Broadcast(ctx, msg)
+	if err != nil {
+		msg := "failed to release collection"
+		log.Warn(msg, zap.Error(err))
+		metrics.QueryCoordReleaseCount.WithLabelValues(metrics.FailLabel).Inc()
+		return merr.Status(err), nil
+	}
+	log.Info("collection released")
+	metrics.QueryCoordReleaseLatency.WithLabelValues().Observe(float64(tr.ElapseSpan().Milliseconds()))
+	return merr.Success(), nil
+}
+
+func (s *Server) dropLoadConfigCollectionV2AckCallback(ctx context.Context, msgs ...message.ImmutableDropLoadConfigMessageV2) error {
+	msg := msgs[0]
 	releaseJob := job.NewReleaseCollectionJob(ctx,
-		req,
+		msg,
 		s.dist,
 		s.meta,
 		s.broker,
@@ -348,19 +389,11 @@ func (s *Server) ReleaseCollection(ctx context.Context, req *querypb.ReleaseColl
 		s.proxyClientManager,
 	)
 	s.jobScheduler.Add(releaseJob)
-	err := releaseJob.Wait()
-	if err != nil {
-		msg := "failed to release collection"
-		log.Warn(msg, zap.Error(err))
-		metrics.QueryCoordReleaseCount.WithLabelValues(metrics.FailLabel).Inc()
-		return merr.Status(errors.Wrap(err, msg)), nil
+	if err := releaseJob.Wait(); err != nil {
+		return err
 	}
-
-	log.Info("collection released")
-	metrics.QueryCoordReleaseLatency.WithLabelValues().Observe(float64(tr.ElapseSpan().Milliseconds()))
-	meta.GlobalFailedLoadCache.Remove(req.GetCollectionID())
-
-	return merr.Success(), nil
+	meta.GlobalFailedLoadCache.Remove(msg.Header().GetCollectionId())
+	return nil
 }
 
 func (s *Server) LoadPartitions(ctx context.Context, req *querypb.LoadPartitionsRequest) (*commonpb.Status, error) {

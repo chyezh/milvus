@@ -202,6 +202,16 @@
         },
         {
             "MessageSpecializedType": {
+                "HeaderType": "messagespb.DropLoadConfigMessageHeader",
+                "BodyType": "messagespb.DropLoadConfigMessageBody"
+            },
+            "MessageTypeWithVersion": {
+                "MessageType": "MessageTypeDropLoadConfig",
+                "Version": 2
+            }
+        },
+        {
+            "MessageSpecializedType": {
                 "HeaderType": "messagespb.CreateDatabaseMessageHeader",
                 "BodyType": "messagespb.CreateDatabaseMessageBody"
             },

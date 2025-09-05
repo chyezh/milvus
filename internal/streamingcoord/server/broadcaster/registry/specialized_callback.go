@@ -25,10 +25,11 @@ var (
 	RegisterDropPartitionMessageV1AckCallback = registerMessageAckCallback[*message.DropPartitionMessageHeader, *msgpb.DropPartitionRequest]
 	RegisterImportMessageV1AckCallback        = registerMessageAckCallback[*message.ImportMessageHeader, *msgpb.ImportMsg]
 
-	RegisterPutCollectionV2AckCallback        = registerMessageAckCallback[*message.PutCollectionMessageHeader, *message.PutCollectionMessageBody]
-	RegisterCreateCollectionV1AckCallback     = registerMessageAckCallback[*message.CreateCollectionMessageHeader, *message.CreateCollectionRequest]
-	RegisterDropCollectionV1AckCallback       = registerMessageAckCallback[*message.DropCollectionMessageHeader, *message.DropCollectionRequest]
-	RegisterPutLoadConfigMessageV2AckCallback = registerMessageAckCallback[*message.PutLoadConfigMessageHeader, *message.PutLoadConfigMessageBody]
+	RegisterPutCollectionV2AckCallback         = registerMessageAckCallback[*message.PutCollectionMessageHeader, *message.PutCollectionMessageBody]
+	RegisterCreateCollectionV1AckCallback      = registerMessageAckCallback[*message.CreateCollectionMessageHeader, *message.CreateCollectionRequest]
+	RegisterDropCollectionV1AckCallback        = registerMessageAckCallback[*message.DropCollectionMessageHeader, *message.DropCollectionRequest]
+	RegisterPutLoadConfigMessageV2AckCallback  = registerMessageAckCallback[*message.PutLoadConfigMessageHeader, *message.PutLoadConfigMessageBody]
+	RegisterDropLoadConfigMessageV2AckCallback = registerMessageAckCallback[*message.DropLoadConfigMessageHeader, *message.DropLoadConfigMessageBody]
 
 	RegisterPutReplicateConfigV2AckCallback = registerMessageAckCallback[*message.PutReplicateConfigMessageHeader, *message.PutReplicateConfigMessageBody]
 
@@ -45,6 +46,7 @@ func resetMessageAckCallbacks() {
 		message.MessageTypeCreateCollectionV1: syncutil.NewFuture[messageInnerAckCallback](),
 		message.MessageTypeDropCollectionV1:   syncutil.NewFuture[messageInnerAckCallback](),
 		message.MessageTypePutLoadConfigV2:    syncutil.NewFuture[messageInnerAckCallback](),
+		message.MessageTypeDropLoadConfigV2:   syncutil.NewFuture[messageInnerAckCallback](),
 
 		message.MessageTypePutReplicateConfigV2: syncutil.NewFuture[messageInnerAckCallback](),
 
