@@ -51,6 +51,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/params"
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
+	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/proxyutil"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
@@ -143,6 +144,10 @@ func NewQueryCoord(ctx context.Context) (*Server, error) {
 	server.queryNodeCreator = session.DefaultQueryNodeCreator
 	expr.Register("querycoord", server)
 	return server, nil
+}
+
+func (s *Server) RegisterDDLCallbacks() {
+	registry.RegisterPutLoadConfigMessageV2AckCallback(s.putLoadConfigCollectionV2AckCallback)
 }
 
 func (s *Server) Register() error {
@@ -377,6 +382,7 @@ func (s *Server) initQueryCoord() error {
 	// Init load status cache
 	meta.GlobalFailedLoadCache = meta.NewFailedLoadCache()
 
+	s.RegisterDDLCallbacks()
 	log.Info("init querycoord done", zap.Int64("nodeID", paramtable.GetNodeID()), zap.String("Address", s.address))
 	return err
 }

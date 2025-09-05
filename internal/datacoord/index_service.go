@@ -26,7 +26,9 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
+	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/metastore/model"
+	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/broadcast"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/indexparamcheck"
 	typeutil2 "github.com/milvus-io/milvus/internal/util/typeutil"
@@ -37,6 +39,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metautil"
@@ -133,6 +136,18 @@ func (s *Server) CreateIndex(ctx context.Context, req *indexpb.CreateIndexReques
 	}
 	metrics.IndexRequestCounter.WithLabelValues(metrics.TotalLabel).Inc()
 
+	// Create a new broadcaster for the collection.
+	coll, err := s.broker.DescribeCollectionInternal(ctx, req.GetCollectionID())
+	if err != nil {
+		return merr.Status(err), nil
+	}
+	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewCollectionNameResourceKey(coll.GetDbName(), coll.GetCollectionName()))
+	if err != nil {
+		log.Warn("start broadcast failed", zap.Error(err))
+		return merr.Status(err), nil
+	}
+	defer broadcaster.Close()
+
 	schema, err := s.getSchema(ctx, req.GetCollectionID())
 	if err != nil {
 		return merr.Status(err), nil
@@ -198,26 +213,60 @@ func (s *Server) CreateIndex(ctx context.Context, req *indexpb.CreateIndexReques
 		metrics.IndexRequestCounter.WithLabelValues(metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
+	if _, err := s.meta.indexMeta.CanCreateIndex(req, isJson); err != nil {
+		log.Error("Check CanCreateIndex fail", zap.Error(err))
+		metrics.IndexRequestCounter.WithLabelValues(metrics.FailLabel).Inc()
+		return merr.Status(err), nil
+	}
+
+	if _, err = broadcaster.Broadcast(ctx, message.NewCreateIndexMessageBuilderV2().
+		WithHeader(&message.CreateIndexMessageHeader{
+			DbId:         coll.GetDbId(),
+			CollectionId: req.GetCollectionID(),
+			FieldId:      req.GetFieldID(),
+			IndexId:      allocateIndexID,
+			IndexName:    req.GetIndexName(),
+		}).
+		WithBody(&message.CreateIndexMessageBody{
+			CreateIndexRequest: req,
+		}).
+		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
+		MustBuildBroadcast(),
+	); err != nil {
+		log.Error("CreateIndex fail", zap.Error(err))
+		metrics.IndexRequestCounter.WithLabelValues(metrics.FailLabel).Inc()
+		return merr.Status(err), nil
+	}
+	metrics.IndexRequestCounter.WithLabelValues(metrics.SuccessLabel).Inc()
+	return merr.Success(), nil
+}
+
+func (s *Server) createIndexV2AckCallback(ctx context.Context, msgs ...message.ImmutableCreateIndexMessageV2) error {
+	msg := msgs[0]
+	req := msg.MustBody().CreateIndexRequest
+
+	schema, err := s.getSchema(ctx, req.GetCollectionID())
+	if err != nil {
+		return err
+	}
+	isJson := isJsonField(schema, req.GetFieldID())
 
 	// Get flushed segments and create index
-	indexID, err := s.meta.indexMeta.CreateIndex(ctx, req, allocateIndexID, isJson)
+	indexID, err := s.meta.indexMeta.CreateIndex(ctx, req, msg.Header().IndexId, isJson)
 	if err != nil {
 		log.Error("CreateIndex fail",
 			zap.Int64("fieldID", req.GetFieldID()), zap.String("indexName", req.GetIndexName()), zap.Error(err))
-		metrics.IndexRequestCounter.WithLabelValues(metrics.FailLabel).Inc()
-		return merr.Status(err), nil
+		return err
 	}
 
 	select {
 	case s.notifyIndexChan <- req.GetCollectionID():
 	default:
 	}
-
 	log.Info("CreateIndex successfully",
 		zap.String("IndexName", req.GetIndexName()), zap.Int64("fieldID", req.GetFieldID()),
 		zap.Int64("IndexID", indexID))
-	metrics.IndexRequestCounter.WithLabelValues(metrics.SuccessLabel).Inc()
-	return merr.Success(), nil
+	return nil
 }
 
 func ValidateIndexParams(index *model.Index) error {

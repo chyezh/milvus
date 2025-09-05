@@ -31,6 +31,7 @@ const (
 	MessageTypeTxn                MessageType = MessageType(messagespb.MessageType_Txn)
 	MessageTypeSchemaChange       MessageType = MessageType(messagespb.MessageType_SchemaChange)
 	MessageTypePutCollection      MessageType = MessageType(messagespb.MessageType_PutCollection)
+	MessageTypePutLoadConfig      MessageType = MessageType(messagespb.MessageType_PutLoadConfig)
 	MessageTypeCreateDatabase     MessageType = MessageType(messagespb.MessageType_CreateDatabase)
 	MessageTypePutDatabase        MessageType = MessageType(messagespb.MessageType_PutDatabase)
 	MessageTypeDropDatabase       MessageType = MessageType(messagespb.MessageType_DropDatabase)
@@ -50,6 +51,9 @@ const (
 	MessageTypeDropPrivilegeGroup MessageType = MessageType(messagespb.MessageType_DropPrivilegeGroup)
 	MessageTypePutResourceGroup   MessageType = MessageType(messagespb.MessageType_PutResourceGroup)
 	MessageTypeDropResourceGroup  MessageType = MessageType(messagespb.MessageType_DropResourceGroup)
+	MessageTypeCreateIndex        MessageType = MessageType(messagespb.MessageType_CreateIndex)
+	MessageTypeAlterIndex         MessageType = MessageType(messagespb.MessageType_AlterIndex)
+	MessageTypeDropIndex          MessageType = MessageType(messagespb.MessageType_DropIndex)
 )
 
 // Export extra message type
@@ -97,6 +101,8 @@ type (
 	SchemaChangeMessageBody         = messagespb.SchemaChangeMessageBody
 	PutCollectionMessageHeader      = messagespb.PutCollectionMessageHeader
 	PutCollectionMessageBody        = messagespb.PutCollectionMessageBody
+	PutLoadConfigMessageHeader      = messagespb.PutLoadConfigMessageHeader
+	PutLoadConfigMessageBody        = messagespb.PutLoadConfigMessageBody
 	CreateDatabaseMessageHeader     = messagespb.CreateDatabaseMessageHeader
 	CreateDatabaseMessageBody       = messagespb.CreateDatabaseMessageBody
 	PutDatabaseMessageHeader        = messagespb.PutDatabaseMessageHeader
@@ -135,6 +141,12 @@ type (
 	PutResourceGroupMessageBody     = messagespb.PutResourceGroupMessageBody
 	DropResourceGroupMessageHeader  = messagespb.DropResourceGroupMessageHeader
 	DropResourceGroupMessageBody    = messagespb.DropResourceGroupMessageBody
+	CreateIndexMessageHeader        = messagespb.CreateIndexMessageHeader
+	CreateIndexMessageBody          = messagespb.CreateIndexMessageBody
+	AlterIndexMessageHeader         = messagespb.AlterIndexMessageHeader
+	AlterIndexMessageBody           = messagespb.AlterIndexMessageBody
+	DropIndexMessageHeader          = messagespb.DropIndexMessageHeader
+	DropIndexMessageBody            = messagespb.DropIndexMessageBody
 )
 
 // Type aliases for TimeTickMessageV1
@@ -852,6 +864,46 @@ var MustAsBroadcastPutCollectionMessageV2 = MustAsSpecializedBroadcastMessage[*P
 
 // NewPutCollectionMessageBuilderV2 creates a new message builder for PutCollectionMessageV2
 var NewPutCollectionMessageBuilderV2 = newMutableMessageBuilder[*PutCollectionMessageHeader, *PutCollectionMessageBody]
+
+// Type aliases for PutLoadConfigMessageV2
+type (
+	MutablePutLoadConfigMessageV2   = specializedMutableMessage[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
+	ImmutablePutLoadConfigMessageV2 = SpecializedImmutableMessage[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
+	BroadcastPutLoadConfigMessageV2 = SpecializedBroadcastMessage[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
+)
+
+// MessageTypeWithVersion for PutLoadConfigMessageV2
+var MessageTypePutLoadConfigV2 = MessageTypeWithVersion{
+	MessageType: MessageTypePutLoadConfig,
+	Version:     VersionV2,
+}
+
+// MessageSpecializedType for PutLoadConfigMessageV2
+var SpecializedTypePutLoadConfigV2 = MessageSpecializedType{
+	BodyType:   reflect.TypeOf((*PutLoadConfigMessageBody)(nil)),
+	HeaderType: reflect.TypeOf((*PutLoadConfigMessageHeader)(nil)),
+}
+
+// AsMutablePutLoadConfigMessageV2 converts a BasicMessage to MutablePutLoadConfigMessageV2
+var AsMutablePutLoadConfigMessageV2 = asSpecializedMutableMessage[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
+
+// MustAsMutablePutLoadConfigMessageV2 converts a BasicMessage to MutablePutLoadConfigMessageV2, panics on error
+var MustAsMutablePutLoadConfigMessageV2 = mustAsSpecializedMutableMessage[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
+
+// AsImmutablePutLoadConfigMessageV2 converts an ImmutableMessage to ImmutablePutLoadConfigMessageV2
+var AsImmutablePutLoadConfigMessageV2 = asSpecializedImmutableMessage[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
+
+// MustAsImmutablePutLoadConfigMessageV2 converts an ImmutableMessage to ImmutablePutLoadConfigMessageV2, panics on error
+var MustAsImmutablePutLoadConfigMessageV2 = MustAsSpecializedImmutableMessage[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
+
+// AsBroadcastPutLoadConfigMessageV2 converts a BasicMessage to BroadcastPutLoadConfigMessageV2
+var AsBroadcastPutLoadConfigMessageV2 = asSpecializedBroadcastMessage[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
+
+// MustAsBroadcastPutLoadConfigMessageV2 converts a BasicMessage to BroadcastPutLoadConfigMessageV2, panics on error
+var MustAsBroadcastPutLoadConfigMessageV2 = MustAsSpecializedBroadcastMessage[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
+
+// NewPutLoadConfigMessageBuilderV2 creates a new message builder for PutLoadConfigMessageV2
+var NewPutLoadConfigMessageBuilderV2 = newMutableMessageBuilder[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
 
 // Type aliases for CreateDatabaseMessageV2
 type (
@@ -1613,12 +1665,134 @@ var MustAsBroadcastDropResourceGroupMessageV2 = MustAsSpecializedBroadcastMessag
 // NewDropResourceGroupMessageBuilderV2 creates a new message builder for DropResourceGroupMessageV2
 var NewDropResourceGroupMessageBuilderV2 = newMutableMessageBuilder[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
 
+// Type aliases for CreateIndexMessageV2
+type (
+	MutableCreateIndexMessageV2   = specializedMutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+	ImmutableCreateIndexMessageV2 = SpecializedImmutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+	BroadcastCreateIndexMessageV2 = SpecializedBroadcastMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+)
+
+// MessageTypeWithVersion for CreateIndexMessageV2
+var MessageTypeCreateIndexV2 = MessageTypeWithVersion{
+	MessageType: MessageTypeCreateIndex,
+	Version:     VersionV2,
+}
+
+// MessageSpecializedType for CreateIndexMessageV2
+var SpecializedTypeCreateIndexV2 = MessageSpecializedType{
+	BodyType:   reflect.TypeOf((*CreateIndexMessageBody)(nil)),
+	HeaderType: reflect.TypeOf((*CreateIndexMessageHeader)(nil)),
+}
+
+// AsMutableCreateIndexMessageV2 converts a BasicMessage to MutableCreateIndexMessageV2
+var AsMutableCreateIndexMessageV2 = asSpecializedMutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+
+// MustAsMutableCreateIndexMessageV2 converts a BasicMessage to MutableCreateIndexMessageV2, panics on error
+var MustAsMutableCreateIndexMessageV2 = mustAsSpecializedMutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+
+// AsImmutableCreateIndexMessageV2 converts an ImmutableMessage to ImmutableCreateIndexMessageV2
+var AsImmutableCreateIndexMessageV2 = asSpecializedImmutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+
+// MustAsImmutableCreateIndexMessageV2 converts an ImmutableMessage to ImmutableCreateIndexMessageV2, panics on error
+var MustAsImmutableCreateIndexMessageV2 = MustAsSpecializedImmutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+
+// AsBroadcastCreateIndexMessageV2 converts a BasicMessage to BroadcastCreateIndexMessageV2
+var AsBroadcastCreateIndexMessageV2 = asSpecializedBroadcastMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+
+// MustAsBroadcastCreateIndexMessageV2 converts a BasicMessage to BroadcastCreateIndexMessageV2, panics on error
+var MustAsBroadcastCreateIndexMessageV2 = MustAsSpecializedBroadcastMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+
+// NewCreateIndexMessageBuilderV2 creates a new message builder for CreateIndexMessageV2
+var NewCreateIndexMessageBuilderV2 = newMutableMessageBuilder[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+
+// Type aliases for AlterIndexMessageV2
+type (
+	MutableAlterIndexMessageV2   = specializedMutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+	ImmutableAlterIndexMessageV2 = SpecializedImmutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+	BroadcastAlterIndexMessageV2 = SpecializedBroadcastMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+)
+
+// MessageTypeWithVersion for AlterIndexMessageV2
+var MessageTypeAlterIndexV2 = MessageTypeWithVersion{
+	MessageType: MessageTypeAlterIndex,
+	Version:     VersionV2,
+}
+
+// MessageSpecializedType for AlterIndexMessageV2
+var SpecializedTypeAlterIndexV2 = MessageSpecializedType{
+	BodyType:   reflect.TypeOf((*AlterIndexMessageBody)(nil)),
+	HeaderType: reflect.TypeOf((*AlterIndexMessageHeader)(nil)),
+}
+
+// AsMutableAlterIndexMessageV2 converts a BasicMessage to MutableAlterIndexMessageV2
+var AsMutableAlterIndexMessageV2 = asSpecializedMutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+
+// MustAsMutableAlterIndexMessageV2 converts a BasicMessage to MutableAlterIndexMessageV2, panics on error
+var MustAsMutableAlterIndexMessageV2 = mustAsSpecializedMutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+
+// AsImmutableAlterIndexMessageV2 converts an ImmutableMessage to ImmutableAlterIndexMessageV2
+var AsImmutableAlterIndexMessageV2 = asSpecializedImmutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+
+// MustAsImmutableAlterIndexMessageV2 converts an ImmutableMessage to ImmutableAlterIndexMessageV2, panics on error
+var MustAsImmutableAlterIndexMessageV2 = MustAsSpecializedImmutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+
+// AsBroadcastAlterIndexMessageV2 converts a BasicMessage to BroadcastAlterIndexMessageV2
+var AsBroadcastAlterIndexMessageV2 = asSpecializedBroadcastMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+
+// MustAsBroadcastAlterIndexMessageV2 converts a BasicMessage to BroadcastAlterIndexMessageV2, panics on error
+var MustAsBroadcastAlterIndexMessageV2 = MustAsSpecializedBroadcastMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+
+// NewAlterIndexMessageBuilderV2 creates a new message builder for AlterIndexMessageV2
+var NewAlterIndexMessageBuilderV2 = newMutableMessageBuilder[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+
+// Type aliases for DropIndexMessageV2
+type (
+	MutableDropIndexMessageV2   = specializedMutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
+	ImmutableDropIndexMessageV2 = SpecializedImmutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
+	BroadcastDropIndexMessageV2 = SpecializedBroadcastMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
+)
+
+// MessageTypeWithVersion for DropIndexMessageV2
+var MessageTypeDropIndexV2 = MessageTypeWithVersion{
+	MessageType: MessageTypeDropIndex,
+	Version:     VersionV2,
+}
+
+// MessageSpecializedType for DropIndexMessageV2
+var SpecializedTypeDropIndexV2 = MessageSpecializedType{
+	BodyType:   reflect.TypeOf((*DropIndexMessageBody)(nil)),
+	HeaderType: reflect.TypeOf((*DropIndexMessageHeader)(nil)),
+}
+
+// AsMutableDropIndexMessageV2 converts a BasicMessage to MutableDropIndexMessageV2
+var AsMutableDropIndexMessageV2 = asSpecializedMutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
+
+// MustAsMutableDropIndexMessageV2 converts a BasicMessage to MutableDropIndexMessageV2, panics on error
+var MustAsMutableDropIndexMessageV2 = mustAsSpecializedMutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
+
+// AsImmutableDropIndexMessageV2 converts an ImmutableMessage to ImmutableDropIndexMessageV2
+var AsImmutableDropIndexMessageV2 = asSpecializedImmutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
+
+// MustAsImmutableDropIndexMessageV2 converts an ImmutableMessage to ImmutableDropIndexMessageV2, panics on error
+var MustAsImmutableDropIndexMessageV2 = MustAsSpecializedImmutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
+
+// AsBroadcastDropIndexMessageV2 converts a BasicMessage to BroadcastDropIndexMessageV2
+var AsBroadcastDropIndexMessageV2 = asSpecializedBroadcastMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
+
+// MustAsBroadcastDropIndexMessageV2 converts a BasicMessage to BroadcastDropIndexMessageV2, panics on error
+var MustAsBroadcastDropIndexMessageV2 = MustAsSpecializedBroadcastMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
+
+// NewDropIndexMessageBuilderV2 creates a new message builder for DropIndexMessageV2
+var NewDropIndexMessageBuilderV2 = newMutableMessageBuilder[*DropIndexMessageHeader, *DropIndexMessageBody]
+
 // messageTypeMap make the contriants that one header type can only be used for one message type.
 var messageTypeMap = map[reflect.Type]MessageType{
+	reflect.TypeOf(&messagespb.AlterIndexMessageHeader{}):         MessageTypeAlterIndex,
 	reflect.TypeOf(&messagespb.BeginTxnMessageHeader{}):           MessageTypeBeginTxn,
 	reflect.TypeOf(&messagespb.CommitTxnMessageHeader{}):          MessageTypeCommitTxn,
 	reflect.TypeOf(&messagespb.CreateCollectionMessageHeader{}):   MessageTypeCreateCollection,
 	reflect.TypeOf(&messagespb.CreateDatabaseMessageHeader{}):     MessageTypeCreateDatabase,
+	reflect.TypeOf(&messagespb.CreateIndexMessageHeader{}):        MessageTypeCreateIndex,
 	reflect.TypeOf(&messagespb.CreatePartitionMessageHeader{}):    MessageTypeCreatePartition,
 	reflect.TypeOf(&messagespb.CreateRoleMessageHeader{}):         MessageTypeCreateRole,
 	reflect.TypeOf(&messagespb.CreateSegmentMessageHeader{}):      MessageTypeCreateSegment,
@@ -1627,6 +1801,7 @@ var messageTypeMap = map[reflect.Type]MessageType{
 	reflect.TypeOf(&messagespb.DropAliasMessageHeader{}):          MessageTypeDropAlias,
 	reflect.TypeOf(&messagespb.DropCollectionMessageHeader{}):     MessageTypeDropCollection,
 	reflect.TypeOf(&messagespb.DropDatabaseMessageHeader{}):       MessageTypeDropDatabase,
+	reflect.TypeOf(&messagespb.DropIndexMessageHeader{}):          MessageTypeDropIndex,
 	reflect.TypeOf(&messagespb.DropPartitionMessageHeader{}):      MessageTypeDropPartition,
 	reflect.TypeOf(&messagespb.DropPrivilegeGroupMessageHeader{}): MessageTypeDropPrivilegeGroup,
 	reflect.TypeOf(&messagespb.DropResourceGroupMessageHeader{}):  MessageTypeDropResourceGroup,
@@ -1641,6 +1816,7 @@ var messageTypeMap = map[reflect.Type]MessageType{
 	reflect.TypeOf(&messagespb.PutAliasMessageHeader{}):           MessageTypePutAlias,
 	reflect.TypeOf(&messagespb.PutCollectionMessageHeader{}):      MessageTypePutCollection,
 	reflect.TypeOf(&messagespb.PutDatabaseMessageHeader{}):        MessageTypePutDatabase,
+	reflect.TypeOf(&messagespb.PutLoadConfigMessageHeader{}):      MessageTypePutLoadConfig,
 	reflect.TypeOf(&messagespb.PutPrivilegeGroupMessageHeader{}):  MessageTypePutPrivilegeGroup,
 	reflect.TypeOf(&messagespb.PutReplicateConfigMessageHeader{}): MessageTypePutReplicateConfig,
 	reflect.TypeOf(&messagespb.PutResourceGroupMessageHeader{}):   MessageTypePutResourceGroup,
@@ -1672,10 +1848,12 @@ type MessageSpecializedType struct {
 
 // messageTypeVersionSpecializedMap maps MessageTypeWithVersion to MessageSpecializedType
 var messageTypeVersionSpecializedMap = map[MessageTypeWithVersion]MessageSpecializedType{
+	MessageTypeAlterIndexV2:         SpecializedTypeAlterIndexV2,
 	MessageTypeBeginTxnV2:           SpecializedTypeBeginTxnV2,
 	MessageTypeCommitTxnV2:          SpecializedTypeCommitTxnV2,
 	MessageTypeCreateCollectionV1:   SpecializedTypeCreateCollectionV1,
 	MessageTypeCreateDatabaseV2:     SpecializedTypeCreateDatabaseV2,
+	MessageTypeCreateIndexV2:        SpecializedTypeCreateIndexV2,
 	MessageTypeCreatePartitionV1:    SpecializedTypeCreatePartitionV1,
 	MessageTypeCreateRoleV2:         SpecializedTypeCreateRoleV2,
 	MessageTypeCreateSegmentV2:      SpecializedTypeCreateSegmentV2,
@@ -1684,6 +1862,7 @@ var messageTypeVersionSpecializedMap = map[MessageTypeWithVersion]MessageSpecial
 	MessageTypeDropAliasV2:          SpecializedTypeDropAliasV2,
 	MessageTypeDropCollectionV1:     SpecializedTypeDropCollectionV1,
 	MessageTypeDropDatabaseV2:       SpecializedTypeDropDatabaseV2,
+	MessageTypeDropIndexV2:          SpecializedTypeDropIndexV2,
 	MessageTypeDropPartitionV1:      SpecializedTypeDropPartitionV1,
 	MessageTypeDropPrivilegeGroupV2: SpecializedTypeDropPrivilegeGroupV2,
 	MessageTypeDropResourceGroupV2:  SpecializedTypeDropResourceGroupV2,
@@ -1698,6 +1877,7 @@ var messageTypeVersionSpecializedMap = map[MessageTypeWithVersion]MessageSpecial
 	MessageTypePutAliasV2:           SpecializedTypePutAliasV2,
 	MessageTypePutCollectionV2:      SpecializedTypePutCollectionV2,
 	MessageTypePutDatabaseV2:        SpecializedTypePutDatabaseV2,
+	MessageTypePutLoadConfigV2:      SpecializedTypePutLoadConfigV2,
 	MessageTypePutPrivilegeGroupV2:  SpecializedTypePutPrivilegeGroupV2,
 	MessageTypePutReplicateConfigV2: SpecializedTypePutReplicateConfigV2,
 	MessageTypePutResourceGroupV2:   SpecializedTypePutResourceGroupV2,
@@ -1713,10 +1893,12 @@ var messageTypeVersionSpecializedMap = map[MessageTypeWithVersion]MessageSpecial
 
 // messageSpecializedTypeVersionMap maps MessageSpecializedType to MessageTypeWithVersion
 var messageSpecializedTypeVersionMap = map[MessageSpecializedType]MessageTypeWithVersion{
+	SpecializedTypeAlterIndexV2:         MessageTypeAlterIndexV2,
 	SpecializedTypeBeginTxnV2:           MessageTypeBeginTxnV2,
 	SpecializedTypeCommitTxnV2:          MessageTypeCommitTxnV2,
 	SpecializedTypeCreateCollectionV1:   MessageTypeCreateCollectionV1,
 	SpecializedTypeCreateDatabaseV2:     MessageTypeCreateDatabaseV2,
+	SpecializedTypeCreateIndexV2:        MessageTypeCreateIndexV2,
 	SpecializedTypeCreatePartitionV1:    MessageTypeCreatePartitionV1,
 	SpecializedTypeCreateRoleV2:         MessageTypeCreateRoleV2,
 	SpecializedTypeCreateSegmentV2:      MessageTypeCreateSegmentV2,
@@ -1725,6 +1907,7 @@ var messageSpecializedTypeVersionMap = map[MessageSpecializedType]MessageTypeWit
 	SpecializedTypeDropAliasV2:          MessageTypeDropAliasV2,
 	SpecializedTypeDropCollectionV1:     MessageTypeDropCollectionV1,
 	SpecializedTypeDropDatabaseV2:       MessageTypeDropDatabaseV2,
+	SpecializedTypeDropIndexV2:          MessageTypeDropIndexV2,
 	SpecializedTypeDropPartitionV1:      MessageTypeDropPartitionV1,
 	SpecializedTypeDropPrivilegeGroupV2: MessageTypeDropPrivilegeGroupV2,
 	SpecializedTypeDropResourceGroupV2:  MessageTypeDropResourceGroupV2,
@@ -1739,6 +1922,7 @@ var messageSpecializedTypeVersionMap = map[MessageSpecializedType]MessageTypeWit
 	SpecializedTypePutAliasV2:           MessageTypePutAliasV2,
 	SpecializedTypePutCollectionV2:      MessageTypePutCollectionV2,
 	SpecializedTypePutDatabaseV2:        MessageTypePutDatabaseV2,
+	SpecializedTypePutLoadConfigV2:      MessageTypePutLoadConfigV2,
 	SpecializedTypePutPrivilegeGroupV2:  MessageTypePutPrivilegeGroupV2,
 	SpecializedTypePutReplicateConfigV2: MessageTypePutReplicateConfigV2,
 	SpecializedTypePutResourceGroupV2:   MessageTypePutResourceGroupV2,

@@ -3,9 +3,11 @@ package rootcoord
 import (
 	"context"
 
+	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/broadcast"
+	"github.com/milvus-io/milvus/internal/util/proxyutil"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
@@ -74,6 +76,16 @@ func (c *DDLCallback) dropCollectionV1AckCallback(ctx context.Context, msgs ...m
 		if err := merr.CheckRPCCall(resp, err); err != nil {
 			return err
 		}
+	}
+	// cleanup the proxy cache.
+	if err := c.Core.ExpireMetaCache(ctx,
+		msgs[0].MustBody().DbName,
+		[]string{msgs[0].MustBody().CollectionName},
+		msgs[0].Header().CollectionId,
+		"",
+		msgs[0].TimeTick(),
+		proxyutil.SetMsgType(commonpb.MsgType_DropCollection)); err != nil {
+		return err
 	}
 	return nil
 }

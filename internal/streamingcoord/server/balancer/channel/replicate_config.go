@@ -38,6 +38,13 @@ func newReplicateConfigHelper(replicateConfig *streamingpb.ReplicateConfiguratio
 	}
 }
 
+func (rc *replicateConfigHelper) GetReplicateConfiguration() *commonpb.ReplicateConfiguration {
+	if rc.ConfigHelper != nil {
+		return rc.ConfigHelper.GetReplicateConfiguration()
+	}
+	return nil
+}
+
 // StartUpdating starts the updating process.
 // return true if the replicate configuration is changed, false otherwise.
 func (rc *replicateConfigHelper) StartUpdating(config *commonpb.ReplicateConfiguration, pchannels []string) bool {
