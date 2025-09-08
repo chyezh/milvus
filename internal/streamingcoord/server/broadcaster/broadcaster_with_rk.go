@@ -8,14 +8,13 @@ import (
 )
 
 type broadcasterWithRK struct {
-	broadcaster *broadcasterImpl
+	broadcaster *broadcastTaskManager
+	broadcastID uint64
 	guards      *lockGuards
 }
 
 func (b *broadcasterWithRK) Broadcast(ctx context.Context, msg message.BroadcastMutableMessage) (*types.BroadcastAppendResult, error) {
-	guards := b.guards
-	b.guards = nil
-	return b.broadcaster.Broadcast(ctx, msg, guards)
+	return b.broadcaster.broadcast(ctx, msg, b)
 }
 
 func (b *broadcasterWithRK) Close() {

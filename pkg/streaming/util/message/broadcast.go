@@ -1,6 +1,7 @@
 package message
 
 import (
+	"fmt"
 	"strconv"
 
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
@@ -50,6 +51,14 @@ func newProtoFromResourceKey(keys ...ResourceKey) []*messagespb.ResourceKey {
 type ResourceKey struct {
 	Domain messagespb.ResourceDomain
 	Key    string
+	Shared bool
+}
+
+func (r ResourceKey) String() string {
+	if r.Shared {
+		return fmt.Sprintf("%s:%s@R", r.Domain.String(), r.Key)
+	}
+	return fmt.Sprintf("%s:%s@X", r.Domain.String(), r.Key)
 }
 
 // NewImportJobIDResourceKey creates a key for import job resource.

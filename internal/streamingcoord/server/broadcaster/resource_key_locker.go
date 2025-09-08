@@ -1,43 +1,49 @@
 package broadcaster
 
 import (
-	"context"
 	"sort"
-	"sync"
 
 	"github.com/cockroachdb/errors"
 
+	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
-	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
+	"github.com/milvus-io/milvus/pkg/v2/util/lock"
 )
+
+// errFastLockFailed is the error for fast lock failed.
+var errFastLockFailed = errors.New("fast lock failed")
 
 // newResourceKeyLocker creates a new resource key locker.
 func newResourceKeyLocker(metrics *broadcasterMetrics) *resourceKeyLocker {
 	return &resourceKeyLocker{
-		cond:    syncutil.NewContextCond(&sync.Mutex{}),
-		sem:     make(map[message.ResourceKey]uint64),
-		metrics: metrics,
+		inner: lock.NewKeyLock[resourceLockKey](),
 	}
+}
+
+// newResourceLockKey creates a new resource lock key.
+func newResourceLockKey(key message.ResourceKey) resourceLockKey {
+	return resourceLockKey{
+		Domain: key.Domain,
+		Key:    key.Key,
+	}
+}
+
+// resourceLockKey is the key for the resource lock.
+type resourceLockKey struct {
+	Domain messagespb.ResourceDomain
+	Key    string
 }
 
 // resourceKeyLocker is the locker for the resource keys.
 // It's a low performance implementation, but the broadcaster is only used at low frequency of ddl.
 // So it's acceptable to use this implementation.
 type resourceKeyLocker struct {
-	cond    *syncutil.ContextCond
-	sem     map[message.ResourceKey]uint64
-	metrics *broadcasterMetrics
+	inner *lock.KeyLock[resourceLockKey]
 }
 
 // lockGuards is the guards for multiple resource keys.
 type lockGuards struct {
-	broadcastID uint64
-	guards      []*lockGuard
-}
-
-// BroadcastID returns the broadcast id.
-func (l *lockGuards) BroadcastID() uint64 {
-	return l.broadcastID
+	guards []*lockGuard
 }
 
 // ResourceKeys returns the resource keys.
@@ -65,94 +71,61 @@ func (l *lockGuards) Unlock() {
 
 // lockGuard is the guard for the resource key.
 type lockGuard struct {
-	locker      *resourceKeyLocker
-	broadcastID uint64
-	key         message.ResourceKey
+	locker *resourceKeyLocker
+	key    message.ResourceKey
 }
 
 // Unlock unlocks the resource key.
 func (l *lockGuard) Unlock() {
-	l.locker.unlockWithKey(l.broadcastID, l.key)
+	l.locker.unlockWithKey(l.key)
 }
 
 // FastLock locks the resource keys without waiting.
 // return error if the resource key is already locked.
-func (r *resourceKeyLocker) FastLock(broadcastID uint64, keys ...message.ResourceKey) (*lockGuards, error) {
+func (r *resourceKeyLocker) FastLock(keys ...message.ResourceKey) (*lockGuards, error) {
 	sortResourceKeys(keys)
 
 	g := &lockGuards{}
 	for _, key := range keys {
-		if guard := r.fastLockWithKey(broadcastID, key); guard != nil {
-			g.append(guard)
+		var locked bool
+		if key.Shared {
+			locked = r.inner.TryRLock(newResourceLockKey(key))
+		} else {
+			locked = r.inner.TryLock(newResourceLockKey(key))
+		}
+		if locked {
+			g.append(&lockGuard{locker: r, key: key})
 			continue
 		}
 		g.Unlock()
-		return nil, errors.Errorf(
-			"unreachable: dirty recovery info in metastore, broadcast ids: [%d, %d]",
-			broadcastID,
-			r.sem[key],
-		)
+		return nil, errors.Wrapf(errFastLockFailed, "fast lock failed at resource key: %s", key)
 	}
 	return g, nil
 }
 
 // Lock locks the resource keys.
-func (r *resourceKeyLocker) Lock(ctx context.Context, broadcastID uint64, keys ...message.ResourceKey) (*lockGuards, error) {
+func (r *resourceKeyLocker) Lock(keys ...message.ResourceKey) (*lockGuards, error) {
 	// lock the keys in order to avoid deadlock.
 	sortResourceKeys(keys)
-
-	g := &lockGuards{
-		broadcastID: broadcastID,
-	}
+	g := &lockGuards{}
 	for _, key := range keys {
-		guard, err := r.lockWithKey(ctx, broadcastID, key)
-		if err != nil {
-			g.Unlock()
-			return nil, err
+		if key.Shared {
+			r.inner.RLock(newResourceLockKey(key))
+		} else {
+			r.inner.Lock(newResourceLockKey(key))
 		}
-		g.append(guard)
+		g.append(&lockGuard{locker: r, key: key})
 	}
 	return g, nil
 }
 
-// lockWithKey locks the resource key.
-func (r *resourceKeyLocker) lockWithKey(ctx context.Context, broadcastID uint64, key message.ResourceKey) (*lockGuard, error) {
-	r.cond.L.Lock()
-	for {
-		if guard := r.fastLockWithKey(broadcastID, key); guard != nil {
-			r.cond.L.Unlock()
-			return guard, nil
-		}
-		if err := r.cond.Wait(ctx); err != nil {
-			return nil, err
-		}
-	}
-}
-
-// fastLockWithKey locks the resource key without waiting.
-// return nil if the resource key is already locked.
-func (r *resourceKeyLocker) fastLockWithKey(broadcastID uint64, key message.ResourceKey) *lockGuard {
-	if _, ok := r.sem[key]; !ok {
-		r.sem[key] = broadcastID
-		r.metrics.IncomingResourceKey(key.Domain)
-		return &lockGuard{
-			locker:      r,
-			broadcastID: broadcastID,
-			key:         key,
-		}
-	}
-	return nil
-}
-
 // unlockWithKey unlocks the resource key.
-func (r *resourceKeyLocker) unlockWithKey(broadcastID uint64, key message.ResourceKey) {
-	r.cond.LockAndBroadcast()
-	defer r.cond.L.Unlock()
-
-	if bid, ok := r.sem[key]; ok && bid == broadcastID {
-		delete(r.sem, key)
-		r.metrics.GoneResourceKey(key.Domain)
+func (r *resourceKeyLocker) unlockWithKey(key message.ResourceKey) {
+	if key.Shared {
+		r.inner.RUnlock(newResourceLockKey(key))
+		return
 	}
+	r.inner.Unlock(newResourceLockKey(key))
 }
 
 // sortResourceKeys sorts the resource keys.

@@ -1,7 +1,6 @@
 package broadcaster
 
 import (
-	"context"
 	"fmt"
 	"math/rand"
 	"testing"
@@ -48,7 +47,7 @@ func TestResourceKeyLocker(t *testing.T) {
 					n := rand.Intn(5)
 					if n < 3 {
 						// Lock the keys
-						guards, err := locker.Lock(context.Background(), id, keysToLock...)
+						guards, err := locker.Lock(keysToLock...)
 						if err != nil {
 							t.Errorf("Failed to lock keys: %v", err)
 							return
@@ -59,9 +58,7 @@ func TestResourceKeyLocker(t *testing.T) {
 						// Unlock the keys
 						guards.Unlock()
 					} else {
-						ctx, cancel := context.WithTimeout(context.Background(), 100*time.Nanosecond)
-						defer cancel()
-						guards, err := locker.Lock(ctx, id, keysToLock...)
+						guards, err := locker.Lock(keysToLock...)
 						if err == nil {
 							guards.Unlock()
 						}
@@ -87,7 +84,7 @@ func TestResourceKeyLocker(t *testing.T) {
 		go func() {
 			for i := 0; i < 100; i++ {
 				// Lock key1 then key2
-				guards, err := locker.Lock(context.Background(), 1, key1, key2)
+				guards, err := locker.Lock(key1, key2)
 				if err != nil {
 					t.Errorf("Failed to lock keys in order 1->2: %v", err)
 					return
@@ -101,7 +98,7 @@ func TestResourceKeyLocker(t *testing.T) {
 		go func() {
 			for i := 0; i < 100; i++ {
 				// Lock key2 then key1
-				guards, err := locker.Lock(context.Background(), 2, key2, key1)
+				guards, err := locker.Lock(key2, key1)
 				if err != nil {
 					t.Errorf("Failed to lock keys in order 2->1: %v", err)
 					return
@@ -128,20 +125,20 @@ func TestResourceKeyLocker(t *testing.T) {
 		key := message.NewCollectionNameResourceKey("test_collection")
 
 		// First fast lock should succeed
-		guards1, err := locker.FastLock(1, key)
+		guards1, err := locker.FastLock(key)
 		if err != nil {
 			t.Fatalf("First FastLock failed: %v", err)
 		}
 
 		// Second fast lock should fail
-		_, err = locker.FastLock(2, key)
+		_, err = locker.FastLock(key)
 		if err == nil {
 			t.Fatal("Second FastLock should have failed")
 		}
 
 		// After unlock, fast lock should succeed again
 		guards1.Unlock()
-		guards2, err := locker.FastLock(2, key)
+		guards2, err := locker.FastLock(key)
 		if err != nil {
 			t.Fatalf("FastLock after unlock failed: %v", err)
 		}
