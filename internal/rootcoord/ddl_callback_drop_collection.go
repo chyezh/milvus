@@ -7,6 +7,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/broadcast"
+	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
 	"github.com/milvus-io/milvus/internal/util/proxyutil"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
@@ -55,7 +56,22 @@ func (c *DDLCallback) dropCollectionV1AckCallback(ctx context.Context, msgs ...m
 		collectionID := msg.Header().CollectionId
 		if funcutil.IsControlChannel(msg.VChannel()) {
 			// when the control channel is acknowledged, we should do the following steps:
-			if err := c.broker.ReleaseCollection(ctx, collectionID); err != nil {
+
+			// 1. release the collection from querycoord first.
+			dropLoadConfigMsg := message.NewDropLoadConfigMessageBuilderV2().
+				WithHeader(&message.DropLoadConfigMessageHeader{
+					DbId:         msg.Header().DbId,
+					CollectionId: collectionID,
+				}).
+				WithBody(&message.DropLoadConfigMessageBody{}).
+				WithBroadcast([]string{streaming.WAL().ControlChannel()}).
+				MustBuildBroadcast().
+				WithBroadcastID(msg.BroadcastHeader().BroadcastID).
+				SplitIntoMutableMessage()[0].
+				WithTimeTick(msg.TimeTick()).
+				WithLastConfirmed(msg.MessageID()).
+				IntoImmutableMessage(msg.MessageID())
+			if err := registry.CallMessageAckCallback(ctx, dropLoadConfigMsg); err != nil {
 				return err
 			}
 			if err := c.meta.DropCollection(ctx, collectionID, msg.TimeTick()); err != nil {
