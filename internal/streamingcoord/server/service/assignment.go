@@ -80,6 +80,8 @@ func (s *assignmentServiceImpl) UpdateReplicateConfiguration(ctx context.Context
 	if err != nil {
 		return nil, err
 	}
+	defer broadcaster.Close()
+
 	msg, err := s.validateReplicateConfiguration(ctx, config)
 	if err != nil {
 		if errors.Is(err, errReplicateConfigurationSame) {
