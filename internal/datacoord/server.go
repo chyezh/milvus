@@ -342,6 +342,10 @@ func (s *Server) initDataCoord() error {
 // initMessageCallback initializes the message callback.
 // TODO: we should build a ddl framework to handle the message ack callback for ddl messages
 func (s *Server) initMessageCallback() {
+	registry.RegisterCreateIndexV2AckCallback(s.createIndexV2AckCallback)
+	registry.RegisterAlterIndexV2AckCallback(s.alterIndexV2AckCallback)
+	registry.RegisterDropIndexV2AckCallback(s.dropIndexV2Callback)
+
 	registry.RegisterDropPartitionV1AckCallback(func(ctx context.Context, result message.BroadcastResultDropPartitionMessageV1) error {
 		partitionID := result.Message.Header().PartitionId
 		for vchannel := range result.Results {
@@ -383,7 +387,7 @@ func (s *Server) initMessageCallback() {
 		return nil
 	})
 
-	registry.RegisterImportMessageV1CheckCallback(func(ctx context.Context, msg message.BroadcastImportMessageV1) (message.BroadcastMutableMessage, error) {
+	registry.RegisterImportV1CheckCallback(func(ctx context.Context, msg message.BroadcastImportMessageV1) (message.BroadcastMutableMessage, error) {
 		b := msg.MustBody()
 		options := funcutil.Map2KeyValuePair(b.GetOptions())
 		_, err := importutilv2.GetTimeoutTs(options)
