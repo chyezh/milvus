@@ -53,6 +53,39 @@ func (_c *MockReplicateManagerClient_CreateReplicator_Call) RunAndReturn(run fun
 	return _c
 }
 
+// RemoveOutOfTargetReplicators provides a mock function with given fields: targetReplicatePChannels
+func (_m *MockReplicateManagerClient) RemoveOutOfTargetReplicators(targetReplicatePChannels []*streamingpb.ReplicatePChannelMeta) {
+	_m.Called(targetReplicatePChannels)
+}
+
+// MockReplicateManagerClient_RemoveOutOfTargetReplicators_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RemoveOutOfTargetReplicators'
+type MockReplicateManagerClient_RemoveOutOfTargetReplicators_Call struct {
+	*mock.Call
+}
+
+// RemoveOutOfTargetReplicators is a helper method to define mock.On call
+//   - targetReplicatePChannels []*streamingpb.ReplicatePChannelMeta
+func (_e *MockReplicateManagerClient_Expecter) RemoveOutOfTargetReplicators(targetReplicatePChannels interface{}) *MockReplicateManagerClient_RemoveOutOfTargetReplicators_Call {
+	return &MockReplicateManagerClient_RemoveOutOfTargetReplicators_Call{Call: _e.mock.On("RemoveOutOfTargetReplicators", targetReplicatePChannels)}
+}
+
+func (_c *MockReplicateManagerClient_RemoveOutOfTargetReplicators_Call) Run(run func(targetReplicatePChannels []*streamingpb.ReplicatePChannelMeta)) *MockReplicateManagerClient_RemoveOutOfTargetReplicators_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].([]*streamingpb.ReplicatePChannelMeta))
+	})
+	return _c
+}
+
+func (_c *MockReplicateManagerClient_RemoveOutOfTargetReplicators_Call) Return() *MockReplicateManagerClient_RemoveOutOfTargetReplicators_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockReplicateManagerClient_RemoveOutOfTargetReplicators_Call) RunAndReturn(run func([]*streamingpb.ReplicatePChannelMeta)) *MockReplicateManagerClient_RemoveOutOfTargetReplicators_Call {
+	_c.Run(run)
+	return _c
+}
+
 // NewMockReplicateManagerClient creates a new instance of MockReplicateManagerClient. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewMockReplicateManagerClient(t interface {
