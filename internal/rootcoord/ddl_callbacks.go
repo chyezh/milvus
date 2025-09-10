@@ -17,6 +17,9 @@ func RegisterDDLCallbacks(core *Core) {
 		Core: core,
 	}
 
+	registry.RegisterCreateCollectionV1AckCallback(ddlCallback.createCollectionV1AckCallback)
+	registry.RegisterDropCollectionV1AckCallback(ddlCallback.dropCollectionV1AckCallback)
+
 	// RBAC
 	ddlCallback.registerRBACCallbacks()
 }
