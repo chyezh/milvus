@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
@@ -140,22 +139,18 @@ func CreateTestCreateCollectionMessage(t *testing.T, collectionID int64, timetic
 			{FieldID: 101, Name: "Vector", DataType: schemapb.DataType_FloatVector},
 		},
 	}
-	schemaBytes, err := proto.Marshal(schema)
-	if err != nil {
-		panic(err)
-	}
 	payload := &msgpb.CreateCollectionRequest{
 		Base: &commonpb.MsgBase{
 			MsgType:   commonpb.MsgType_CreateCollection,
 			MsgID:     collectionID,
 			Timestamp: 100,
 		},
-		DbName:         "db",
-		CollectionName: "collection",
-		PartitionName:  "partition",
-		DbID:           1,
-		CollectionID:   collectionID,
-		Schema:         schemaBytes,
+		DbName:           "db",
+		CollectionName:   "collection",
+		PartitionName:    "partition",
+		DbID:             1,
+		CollectionID:     collectionID,
+		CollectionSchema: schema,
 	}
 
 	msg, err := NewCreateCollectionMessageBuilderV1().
