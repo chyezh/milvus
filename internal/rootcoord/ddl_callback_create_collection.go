@@ -86,48 +86,44 @@ func (c *Core) broadcastCreateCollectionV1(ctx context.Context, req *milvuspb.Cr
 	return nil
 }
 
-func (c *DDLCallback) createCollectionV1AckCallback(ctx context.Context, msgs ...message.ImmutableCreateCollectionMessageV1) error {
-	var collInfos []*model.Collection
-	for _, msg := range msgs {
-		collInfos = append(collInfos, newCollectionModelWithMessage(msg))
-		if funcutil.IsControlChannel(msg.VChannel()) {
+func (c *DDLCallback) createCollectionV1AckCallback(ctx context.Context, result message.BroadcastResultCreateCollectionMessageV1) error {
+	msg := result.Message
+	header := msg.Header()
+	body := msg.MustBody()
+	for vchannel, result := range result.Results {
+		if funcutil.IsControlChannel(vchannel) {
 			// create shard info when virtual channel is created.
-			if err := c.createCollectionShard(ctx, msg); err != nil {
+			if err := c.createCollectionShard(ctx, header, body, vchannel, result); err != nil {
 				return err
 			}
 		}
 	}
-
-	// Put the merged collection info into meta.
-	mergedCollInfo := mergeCollectionModel(collInfos...)
-	if err := c.meta.AddCollection(ctx, mergedCollInfo); err != nil {
+	newCollInfo := newCollectionModelWithMessage(header, body, result)
+	if err := c.meta.AddCollection(ctx, newCollInfo); err != nil {
 		return err
 	}
 
 	// cleanup the proxy cache.
 	if err := c.Core.ExpireMetaCache(ctx,
-		msgs[0].MustBody().DbName,
-		[]string{msgs[0].MustBody().CollectionName},
-		msgs[0].Header().CollectionId,
+		body.DbName,
+		[]string{body.CollectionName},
+		header.CollectionId,
 		"",
-		msgs[0].TimeTick(),
+		newCollInfo.UpdateTimestamp,
 		proxyutil.SetMsgType(commonpb.MsgType_DropCollection)); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (c *DDLCallback) createCollectionShard(ctx context.Context, msg message.ImmutableCreateCollectionMessageV1) error {
-	header := msg.Header()
-	body := msg.MustBody()
-
-	startPosition := adaptor.MustGetMQWrapperIDFromMessage(msg.LastConfirmedMessageID()).Serialize()
+func (c *DDLCallback) createCollectionShard(ctx context.Context, header *message.CreateCollectionMessageHeader, body *message.CreateCollectionRequest, vchannel string, appendResult *message.AppendResult) error {
+	startPosition := adaptor.MustGetMQWrapperIDFromMessage(appendResult.LastConfirmedMessageID).Serialize()
 	resp, err := c.mixCoord.WatchChannels(ctx, &datapb.WatchChannelsRequest{
 		CollectionID:    header.CollectionId,
-		ChannelNames:    []string{msg.VChannel()},
-		StartPositions:  []*commonpb.KeyDataPair{{Key: msg.VChannel(), Data: startPosition}},
+		ChannelNames:    []string{vchannel},
+		StartPositions:  []*commonpb.KeyDataPair{{Key: vchannel, Data: startPosition}},
 		Schema:          body.CollectionSchema,
-		CreateTimestamp: msg.TimeTick(),
+		CreateTimestamp: appendResult.TimeTick,
 	})
 	if err != nil {
 		return err
@@ -174,19 +170,24 @@ func mergeCollectionModel(models ...*model.Collection) *model.Collection {
 }
 
 // newCollectionModelWithMessage creates a collection model with the given message.
-func newCollectionModelWithMessage(msg message.ImmutableCreateCollectionMessageV1) *model.Collection {
-	header := msg.Header()
-	body := msg.MustBody()
-
-	if funcutil.IsControlChannel(msg.VChannel()) {
-		// Set the global timetick with the cchannel timetick.
-		return newCollectionModel(header, body, msg.TimeTick())
-	}
+func newCollectionModelWithMessage(header *message.CreateCollectionMessageHeader, body *message.CreateCollectionRequest, result message.BroadcastResultCreateCollectionMessageV1) *model.Collection {
+	timetick := result.GetControlChannelResult().TimeTick
 
 	// Setup the start position for the vchannels
-	newCollInfo := newCollectionModel(header, body, 0)
+	newCollInfo := newCollectionModel(header, body, timetick)
 	startPosition := make(map[string][]byte, len(body.PhysicalChannelNames))
-	startPosition[funcutil.ToPhysicalChannel(msg.VChannel())] = adaptor.MustGetMQWrapperIDFromMessage(msg.MessageID()).Serialize()
+	for vchannel, appendResult := range result.Results {
+		if funcutil.IsControlChannel(vchannel) {
+			// use control channel timetick to setup the create time and update timestamp
+			newCollInfo.CreateTime = appendResult.TimeTick
+			newCollInfo.UpdateTimestamp = appendResult.TimeTick
+			for _, partition := range newCollInfo.Partitions {
+				partition.PartitionCreatedTimestamp = appendResult.TimeTick
+			}
+			continue
+		}
+		startPosition[funcutil.ToPhysicalChannel(vchannel)] = adaptor.MustGetMQWrapperIDFromMessage(appendResult.LastConfirmedMessageID).Serialize()
+	}
 	newCollInfo.StartPositions = toKeyDataPairs(startPosition)
 	return newCollInfo
 }
@@ -219,7 +220,7 @@ func newCollectionModel(header *message.CreateCollectionMessageHeader, body *mes
 		ShardsNum:            int32(len(body.VirtualChannelNames)),
 		ConsistencyLevel:     consistencyLevel,
 		CreateTime:           ts,
-		State:                etcdpb.CollectionState_CollectionCreating,
+		State:                etcdpb.CollectionState_CollectionCreated,
 		Partitions:           partitions,
 		Properties:           body.CollectionSchema.Properties,
 		EnableDynamicField:   body.CollectionSchema.EnableDynamicField,

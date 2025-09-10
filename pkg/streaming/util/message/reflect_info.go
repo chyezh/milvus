@@ -830,9 +830,10 @@ var NewSchemaChangeMessageBuilderV2 = newMutableMessageBuilder[*SchemaChangeMess
 
 // Type aliases for PutCollectionMessageV2
 type (
-	MutablePutCollectionMessageV2   = specializedMutableMessage[*PutCollectionMessageHeader, *PutCollectionMessageBody]
-	ImmutablePutCollectionMessageV2 = SpecializedImmutableMessage[*PutCollectionMessageHeader, *PutCollectionMessageBody]
-	BroadcastPutCollectionMessageV2 = SpecializedBroadcastMessage[*PutCollectionMessageHeader, *PutCollectionMessageBody]
+	MutablePutCollectionMessageV2         = specializedMutableMessage[*PutCollectionMessageHeader, *PutCollectionMessageBody]
+	ImmutablePutCollectionMessageV2       = SpecializedImmutableMessage[*PutCollectionMessageHeader, *PutCollectionMessageBody]
+	BroadcastPutCollectionMessageV2       = SpecializedBroadcastMessage[*PutCollectionMessageHeader, *PutCollectionMessageBody]
+	BroadcastResultPutCollectionMessageV2 = BroadcastResult[*PutCollectionMessageHeader, *PutCollectionMessageBody]
 )
 
 // MessageTypeWithVersion for PutCollectionMessageV2
@@ -870,9 +871,10 @@ var NewPutCollectionMessageBuilderV2 = newMutableMessageBuilder[*PutCollectionMe
 
 // Type aliases for PutLoadConfigMessageV2
 type (
-	MutablePutLoadConfigMessageV2   = specializedMutableMessage[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
-	ImmutablePutLoadConfigMessageV2 = SpecializedImmutableMessage[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
-	BroadcastPutLoadConfigMessageV2 = SpecializedBroadcastMessage[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
+	MutablePutLoadConfigMessageV2         = specializedMutableMessage[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
+	ImmutablePutLoadConfigMessageV2       = SpecializedImmutableMessage[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
+	BroadcastPutLoadConfigMessageV2       = SpecializedBroadcastMessage[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
+	BroadcastResultPutLoadConfigMessageV2 = BroadcastResult[*PutLoadConfigMessageHeader, *PutLoadConfigMessageBody]
 )
 
 // MessageTypeWithVersion for PutLoadConfigMessageV2
@@ -910,9 +912,10 @@ var NewPutLoadConfigMessageBuilderV2 = newMutableMessageBuilder[*PutLoadConfigMe
 
 // Type aliases for DropLoadConfigMessageV2
 type (
-	MutableDropLoadConfigMessageV2   = specializedMutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
-	ImmutableDropLoadConfigMessageV2 = SpecializedImmutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
-	BroadcastDropLoadConfigMessageV2 = SpecializedBroadcastMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+	MutableDropLoadConfigMessageV2         = specializedMutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+	ImmutableDropLoadConfigMessageV2       = SpecializedImmutableMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+	BroadcastDropLoadConfigMessageV2       = SpecializedBroadcastMessage[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
+	BroadcastResultDropLoadConfigMessageV2 = BroadcastResult[*DropLoadConfigMessageHeader, *DropLoadConfigMessageBody]
 )
 
 // MessageTypeWithVersion for DropLoadConfigMessageV2
@@ -950,9 +953,10 @@ var NewDropLoadConfigMessageBuilderV2 = newMutableMessageBuilder[*DropLoadConfig
 
 // Type aliases for CreateDatabaseMessageV2
 type (
-	MutableCreateDatabaseMessageV2   = specializedMutableMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
-	ImmutableCreateDatabaseMessageV2 = SpecializedImmutableMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
-	BroadcastCreateDatabaseMessageV2 = SpecializedBroadcastMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
+	MutableCreateDatabaseMessageV2         = specializedMutableMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
+	ImmutableCreateDatabaseMessageV2       = SpecializedImmutableMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
+	BroadcastCreateDatabaseMessageV2       = SpecializedBroadcastMessage[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
+	BroadcastResultCreateDatabaseMessageV2 = BroadcastResult[*CreateDatabaseMessageHeader, *CreateDatabaseMessageBody]
 )
 
 // MessageTypeWithVersion for CreateDatabaseMessageV2
@@ -990,9 +994,10 @@ var NewCreateDatabaseMessageBuilderV2 = newMutableMessageBuilder[*CreateDatabase
 
 // Type aliases for PutDatabaseMessageV2
 type (
-	MutablePutDatabaseMessageV2   = specializedMutableMessage[*PutDatabaseMessageHeader, *PutDatabaseMessageBody]
-	ImmutablePutDatabaseMessageV2 = SpecializedImmutableMessage[*PutDatabaseMessageHeader, *PutDatabaseMessageBody]
-	BroadcastPutDatabaseMessageV2 = SpecializedBroadcastMessage[*PutDatabaseMessageHeader, *PutDatabaseMessageBody]
+	MutablePutDatabaseMessageV2         = specializedMutableMessage[*PutDatabaseMessageHeader, *PutDatabaseMessageBody]
+	ImmutablePutDatabaseMessageV2       = SpecializedImmutableMessage[*PutDatabaseMessageHeader, *PutDatabaseMessageBody]
+	BroadcastPutDatabaseMessageV2       = SpecializedBroadcastMessage[*PutDatabaseMessageHeader, *PutDatabaseMessageBody]
+	BroadcastResultPutDatabaseMessageV2 = BroadcastResult[*PutDatabaseMessageHeader, *PutDatabaseMessageBody]
 )
 
 // MessageTypeWithVersion for PutDatabaseMessageV2
@@ -1030,9 +1035,10 @@ var NewPutDatabaseMessageBuilderV2 = newMutableMessageBuilder[*PutDatabaseMessag
 
 // Type aliases for DropDatabaseMessageV2
 type (
-	MutableDropDatabaseMessageV2   = specializedMutableMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
-	ImmutableDropDatabaseMessageV2 = SpecializedImmutableMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
-	BroadcastDropDatabaseMessageV2 = SpecializedBroadcastMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
+	MutableDropDatabaseMessageV2         = specializedMutableMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
+	ImmutableDropDatabaseMessageV2       = SpecializedImmutableMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
+	BroadcastDropDatabaseMessageV2       = SpecializedBroadcastMessage[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
+	BroadcastResultDropDatabaseMessageV2 = BroadcastResult[*DropDatabaseMessageHeader, *DropDatabaseMessageBody]
 )
 
 // MessageTypeWithVersion for DropDatabaseMessageV2
@@ -1070,9 +1076,10 @@ var NewDropDatabaseMessageBuilderV2 = newMutableMessageBuilder[*DropDatabaseMess
 
 // Type aliases for PutAliasMessageV2
 type (
-	MutablePutAliasMessageV2   = specializedMutableMessage[*PutAliasMessageHeader, *PutAliasMessageBody]
-	ImmutablePutAliasMessageV2 = SpecializedImmutableMessage[*PutAliasMessageHeader, *PutAliasMessageBody]
-	BroadcastPutAliasMessageV2 = SpecializedBroadcastMessage[*PutAliasMessageHeader, *PutAliasMessageBody]
+	MutablePutAliasMessageV2         = specializedMutableMessage[*PutAliasMessageHeader, *PutAliasMessageBody]
+	ImmutablePutAliasMessageV2       = SpecializedImmutableMessage[*PutAliasMessageHeader, *PutAliasMessageBody]
+	BroadcastPutAliasMessageV2       = SpecializedBroadcastMessage[*PutAliasMessageHeader, *PutAliasMessageBody]
+	BroadcastResultPutAliasMessageV2 = BroadcastResult[*PutAliasMessageHeader, *PutAliasMessageBody]
 )
 
 // MessageTypeWithVersion for PutAliasMessageV2
@@ -1110,9 +1117,10 @@ var NewPutAliasMessageBuilderV2 = newMutableMessageBuilder[*PutAliasMessageHeade
 
 // Type aliases for DropAliasMessageV2
 type (
-	MutableDropAliasMessageV2   = specializedMutableMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
-	ImmutableDropAliasMessageV2 = SpecializedImmutableMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
-	BroadcastDropAliasMessageV2 = SpecializedBroadcastMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
+	MutableDropAliasMessageV2         = specializedMutableMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
+	ImmutableDropAliasMessageV2       = SpecializedImmutableMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
+	BroadcastDropAliasMessageV2       = SpecializedBroadcastMessage[*DropAliasMessageHeader, *DropAliasMessageBody]
+	BroadcastResultDropAliasMessageV2 = BroadcastResult[*DropAliasMessageHeader, *DropAliasMessageBody]
 )
 
 // MessageTypeWithVersion for DropAliasMessageV2
@@ -1150,9 +1158,10 @@ var NewDropAliasMessageBuilderV2 = newMutableMessageBuilder[*DropAliasMessageHea
 
 // Type aliases for CreateUserMessageV2
 type (
-	MutableCreateUserMessageV2   = specializedMutableMessage[*CreateUserMessageHeader, *CreateUserMessageBody]
-	ImmutableCreateUserMessageV2 = SpecializedImmutableMessage[*CreateUserMessageHeader, *CreateUserMessageBody]
-	BroadcastCreateUserMessageV2 = SpecializedBroadcastMessage[*CreateUserMessageHeader, *CreateUserMessageBody]
+	MutableCreateUserMessageV2         = specializedMutableMessage[*CreateUserMessageHeader, *CreateUserMessageBody]
+	ImmutableCreateUserMessageV2       = SpecializedImmutableMessage[*CreateUserMessageHeader, *CreateUserMessageBody]
+	BroadcastCreateUserMessageV2       = SpecializedBroadcastMessage[*CreateUserMessageHeader, *CreateUserMessageBody]
+	BroadcastResultCreateUserMessageV2 = BroadcastResult[*CreateUserMessageHeader, *CreateUserMessageBody]
 )
 
 // MessageTypeWithVersion for CreateUserMessageV2
@@ -1190,9 +1199,10 @@ var NewCreateUserMessageBuilderV2 = newMutableMessageBuilder[*CreateUserMessageH
 
 // Type aliases for PutUserMessageV2
 type (
-	MutablePutUserMessageV2   = specializedMutableMessage[*PutUserMessageHeader, *PutUserMessageBody]
-	ImmutablePutUserMessageV2 = SpecializedImmutableMessage[*PutUserMessageHeader, *PutUserMessageBody]
-	BroadcastPutUserMessageV2 = SpecializedBroadcastMessage[*PutUserMessageHeader, *PutUserMessageBody]
+	MutablePutUserMessageV2         = specializedMutableMessage[*PutUserMessageHeader, *PutUserMessageBody]
+	ImmutablePutUserMessageV2       = SpecializedImmutableMessage[*PutUserMessageHeader, *PutUserMessageBody]
+	BroadcastPutUserMessageV2       = SpecializedBroadcastMessage[*PutUserMessageHeader, *PutUserMessageBody]
+	BroadcastResultPutUserMessageV2 = BroadcastResult[*PutUserMessageHeader, *PutUserMessageBody]
 )
 
 // MessageTypeWithVersion for PutUserMessageV2
@@ -1230,9 +1240,10 @@ var NewPutUserMessageBuilderV2 = newMutableMessageBuilder[*PutUserMessageHeader,
 
 // Type aliases for DropUserMessageV2
 type (
-	MutableDropUserMessageV2   = specializedMutableMessage[*DropUserMessageHeader, *DropUserMessageBody]
-	ImmutableDropUserMessageV2 = SpecializedImmutableMessage[*DropUserMessageHeader, *DropUserMessageBody]
-	BroadcastDropUserMessageV2 = SpecializedBroadcastMessage[*DropUserMessageHeader, *DropUserMessageBody]
+	MutableDropUserMessageV2         = specializedMutableMessage[*DropUserMessageHeader, *DropUserMessageBody]
+	ImmutableDropUserMessageV2       = SpecializedImmutableMessage[*DropUserMessageHeader, *DropUserMessageBody]
+	BroadcastDropUserMessageV2       = SpecializedBroadcastMessage[*DropUserMessageHeader, *DropUserMessageBody]
+	BroadcastResultDropUserMessageV2 = BroadcastResult[*DropUserMessageHeader, *DropUserMessageBody]
 )
 
 // MessageTypeWithVersion for DropUserMessageV2
@@ -1270,9 +1281,10 @@ var NewDropUserMessageBuilderV2 = newMutableMessageBuilder[*DropUserMessageHeade
 
 // Type aliases for CreateRoleMessageV2
 type (
-	MutableCreateRoleMessageV2   = specializedMutableMessage[*CreateRoleMessageHeader, *CreateRoleMessageBody]
-	ImmutableCreateRoleMessageV2 = SpecializedImmutableMessage[*CreateRoleMessageHeader, *CreateRoleMessageBody]
-	BroadcastCreateRoleMessageV2 = SpecializedBroadcastMessage[*CreateRoleMessageHeader, *CreateRoleMessageBody]
+	MutableCreateRoleMessageV2         = specializedMutableMessage[*CreateRoleMessageHeader, *CreateRoleMessageBody]
+	ImmutableCreateRoleMessageV2       = SpecializedImmutableMessage[*CreateRoleMessageHeader, *CreateRoleMessageBody]
+	BroadcastCreateRoleMessageV2       = SpecializedBroadcastMessage[*CreateRoleMessageHeader, *CreateRoleMessageBody]
+	BroadcastResultCreateRoleMessageV2 = BroadcastResult[*CreateRoleMessageHeader, *CreateRoleMessageBody]
 )
 
 // MessageTypeWithVersion for CreateRoleMessageV2
@@ -1310,9 +1322,10 @@ var NewCreateRoleMessageBuilderV2 = newMutableMessageBuilder[*CreateRoleMessageH
 
 // Type aliases for PutRoleMessageV2
 type (
-	MutablePutRoleMessageV2   = specializedMutableMessage[*PutRoleMessageHeader, *PutRoleMessageBody]
-	ImmutablePutRoleMessageV2 = SpecializedImmutableMessage[*PutRoleMessageHeader, *PutRoleMessageBody]
-	BroadcastPutRoleMessageV2 = SpecializedBroadcastMessage[*PutRoleMessageHeader, *PutRoleMessageBody]
+	MutablePutRoleMessageV2         = specializedMutableMessage[*PutRoleMessageHeader, *PutRoleMessageBody]
+	ImmutablePutRoleMessageV2       = SpecializedImmutableMessage[*PutRoleMessageHeader, *PutRoleMessageBody]
+	BroadcastPutRoleMessageV2       = SpecializedBroadcastMessage[*PutRoleMessageHeader, *PutRoleMessageBody]
+	BroadcastResultPutRoleMessageV2 = BroadcastResult[*PutRoleMessageHeader, *PutRoleMessageBody]
 )
 
 // MessageTypeWithVersion for PutRoleMessageV2
@@ -1350,9 +1363,10 @@ var NewPutRoleMessageBuilderV2 = newMutableMessageBuilder[*PutRoleMessageHeader,
 
 // Type aliases for DropRoleMessageV2
 type (
-	MutableDropRoleMessageV2   = specializedMutableMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
-	ImmutableDropRoleMessageV2 = SpecializedImmutableMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
-	BroadcastDropRoleMessageV2 = SpecializedBroadcastMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
+	MutableDropRoleMessageV2         = specializedMutableMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
+	ImmutableDropRoleMessageV2       = SpecializedImmutableMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
+	BroadcastDropRoleMessageV2       = SpecializedBroadcastMessage[*DropRoleMessageHeader, *DropRoleMessageBody]
+	BroadcastResultDropRoleMessageV2 = BroadcastResult[*DropRoleMessageHeader, *DropRoleMessageBody]
 )
 
 // MessageTypeWithVersion for DropRoleMessageV2
@@ -1390,9 +1404,10 @@ var NewDropRoleMessageBuilderV2 = newMutableMessageBuilder[*DropRoleMessageHeade
 
 // Type aliases for PutUserRoleMessageV2
 type (
-	MutablePutUserRoleMessageV2   = specializedMutableMessage[*PutUserRoleMessageHeader, *PutUserRoleMessageBody]
-	ImmutablePutUserRoleMessageV2 = SpecializedImmutableMessage[*PutUserRoleMessageHeader, *PutUserRoleMessageBody]
-	BroadcastPutUserRoleMessageV2 = SpecializedBroadcastMessage[*PutUserRoleMessageHeader, *PutUserRoleMessageBody]
+	MutablePutUserRoleMessageV2         = specializedMutableMessage[*PutUserRoleMessageHeader, *PutUserRoleMessageBody]
+	ImmutablePutUserRoleMessageV2       = SpecializedImmutableMessage[*PutUserRoleMessageHeader, *PutUserRoleMessageBody]
+	BroadcastPutUserRoleMessageV2       = SpecializedBroadcastMessage[*PutUserRoleMessageHeader, *PutUserRoleMessageBody]
+	BroadcastResultPutUserRoleMessageV2 = BroadcastResult[*PutUserRoleMessageHeader, *PutUserRoleMessageBody]
 )
 
 // MessageTypeWithVersion for PutUserRoleMessageV2
@@ -1430,9 +1445,10 @@ var NewPutUserRoleMessageBuilderV2 = newMutableMessageBuilder[*PutUserRoleMessag
 
 // Type aliases for DropUserRoleMessageV2
 type (
-	MutableDropUserRoleMessageV2   = specializedMutableMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
-	ImmutableDropUserRoleMessageV2 = SpecializedImmutableMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
-	BroadcastDropUserRoleMessageV2 = SpecializedBroadcastMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
+	MutableDropUserRoleMessageV2         = specializedMutableMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
+	ImmutableDropUserRoleMessageV2       = SpecializedImmutableMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
+	BroadcastDropUserRoleMessageV2       = SpecializedBroadcastMessage[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
+	BroadcastResultDropUserRoleMessageV2 = BroadcastResult[*DropUserRoleMessageHeader, *DropUserRoleMessageBody]
 )
 
 // MessageTypeWithVersion for DropUserRoleMessageV2
@@ -1470,9 +1486,10 @@ var NewDropUserRoleMessageBuilderV2 = newMutableMessageBuilder[*DropUserRoleMess
 
 // Type aliases for GrantPrivilegeMessageV2
 type (
-	MutableGrantPrivilegeMessageV2   = specializedMutableMessage[*GrantPrivilegeMessageHeader, *GrantPrivilegeMessageBody]
-	ImmutableGrantPrivilegeMessageV2 = SpecializedImmutableMessage[*GrantPrivilegeMessageHeader, *GrantPrivilegeMessageBody]
-	BroadcastGrantPrivilegeMessageV2 = SpecializedBroadcastMessage[*GrantPrivilegeMessageHeader, *GrantPrivilegeMessageBody]
+	MutableGrantPrivilegeMessageV2         = specializedMutableMessage[*GrantPrivilegeMessageHeader, *GrantPrivilegeMessageBody]
+	ImmutableGrantPrivilegeMessageV2       = SpecializedImmutableMessage[*GrantPrivilegeMessageHeader, *GrantPrivilegeMessageBody]
+	BroadcastGrantPrivilegeMessageV2       = SpecializedBroadcastMessage[*GrantPrivilegeMessageHeader, *GrantPrivilegeMessageBody]
+	BroadcastResultGrantPrivilegeMessageV2 = BroadcastResult[*GrantPrivilegeMessageHeader, *GrantPrivilegeMessageBody]
 )
 
 // MessageTypeWithVersion for GrantPrivilegeMessageV2
@@ -1510,9 +1527,10 @@ var NewGrantPrivilegeMessageBuilderV2 = newMutableMessageBuilder[*GrantPrivilege
 
 // Type aliases for RevokePrivilegeMessageV2
 type (
-	MutableRevokePrivilegeMessageV2   = specializedMutableMessage[*RevokePrivilegeMessageHeader, *RevokePrivilegeMessageBody]
-	ImmutableRevokePrivilegeMessageV2 = SpecializedImmutableMessage[*RevokePrivilegeMessageHeader, *RevokePrivilegeMessageBody]
-	BroadcastRevokePrivilegeMessageV2 = SpecializedBroadcastMessage[*RevokePrivilegeMessageHeader, *RevokePrivilegeMessageBody]
+	MutableRevokePrivilegeMessageV2         = specializedMutableMessage[*RevokePrivilegeMessageHeader, *RevokePrivilegeMessageBody]
+	ImmutableRevokePrivilegeMessageV2       = SpecializedImmutableMessage[*RevokePrivilegeMessageHeader, *RevokePrivilegeMessageBody]
+	BroadcastRevokePrivilegeMessageV2       = SpecializedBroadcastMessage[*RevokePrivilegeMessageHeader, *RevokePrivilegeMessageBody]
+	BroadcastResultRevokePrivilegeMessageV2 = BroadcastResult[*RevokePrivilegeMessageHeader, *RevokePrivilegeMessageBody]
 )
 
 // MessageTypeWithVersion for RevokePrivilegeMessageV2
@@ -1550,9 +1568,10 @@ var NewRevokePrivilegeMessageBuilderV2 = newMutableMessageBuilder[*RevokePrivile
 
 // Type aliases for PutPrivilegeGroupMessageV2
 type (
-	MutablePutPrivilegeGroupMessageV2   = specializedMutableMessage[*PutPrivilegeGroupMessageHeader, *PutPrivilegeGroupMessageBody]
-	ImmutablePutPrivilegeGroupMessageV2 = SpecializedImmutableMessage[*PutPrivilegeGroupMessageHeader, *PutPrivilegeGroupMessageBody]
-	BroadcastPutPrivilegeGroupMessageV2 = SpecializedBroadcastMessage[*PutPrivilegeGroupMessageHeader, *PutPrivilegeGroupMessageBody]
+	MutablePutPrivilegeGroupMessageV2         = specializedMutableMessage[*PutPrivilegeGroupMessageHeader, *PutPrivilegeGroupMessageBody]
+	ImmutablePutPrivilegeGroupMessageV2       = SpecializedImmutableMessage[*PutPrivilegeGroupMessageHeader, *PutPrivilegeGroupMessageBody]
+	BroadcastPutPrivilegeGroupMessageV2       = SpecializedBroadcastMessage[*PutPrivilegeGroupMessageHeader, *PutPrivilegeGroupMessageBody]
+	BroadcastResultPutPrivilegeGroupMessageV2 = BroadcastResult[*PutPrivilegeGroupMessageHeader, *PutPrivilegeGroupMessageBody]
 )
 
 // MessageTypeWithVersion for PutPrivilegeGroupMessageV2
@@ -1590,9 +1609,10 @@ var NewPutPrivilegeGroupMessageBuilderV2 = newMutableMessageBuilder[*PutPrivileg
 
 // Type aliases for DropPrivilegeGroupMessageV2
 type (
-	MutableDropPrivilegeGroupMessageV2   = specializedMutableMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
-	ImmutableDropPrivilegeGroupMessageV2 = SpecializedImmutableMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
-	BroadcastDropPrivilegeGroupMessageV2 = SpecializedBroadcastMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
+	MutableDropPrivilegeGroupMessageV2         = specializedMutableMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
+	ImmutableDropPrivilegeGroupMessageV2       = SpecializedImmutableMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
+	BroadcastDropPrivilegeGroupMessageV2       = SpecializedBroadcastMessage[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
+	BroadcastResultDropPrivilegeGroupMessageV2 = BroadcastResult[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
 )
 
 // MessageTypeWithVersion for DropPrivilegeGroupMessageV2
@@ -1630,9 +1650,10 @@ var NewDropPrivilegeGroupMessageBuilderV2 = newMutableMessageBuilder[*DropPrivil
 
 // Type aliases for PutResourceGroupMessageV2
 type (
-	MutablePutResourceGroupMessageV2   = specializedMutableMessage[*PutResourceGroupMessageHeader, *PutResourceGroupMessageBody]
-	ImmutablePutResourceGroupMessageV2 = SpecializedImmutableMessage[*PutResourceGroupMessageHeader, *PutResourceGroupMessageBody]
-	BroadcastPutResourceGroupMessageV2 = SpecializedBroadcastMessage[*PutResourceGroupMessageHeader, *PutResourceGroupMessageBody]
+	MutablePutResourceGroupMessageV2         = specializedMutableMessage[*PutResourceGroupMessageHeader, *PutResourceGroupMessageBody]
+	ImmutablePutResourceGroupMessageV2       = SpecializedImmutableMessage[*PutResourceGroupMessageHeader, *PutResourceGroupMessageBody]
+	BroadcastPutResourceGroupMessageV2       = SpecializedBroadcastMessage[*PutResourceGroupMessageHeader, *PutResourceGroupMessageBody]
+	BroadcastResultPutResourceGroupMessageV2 = BroadcastResult[*PutResourceGroupMessageHeader, *PutResourceGroupMessageBody]
 )
 
 // MessageTypeWithVersion for PutResourceGroupMessageV2
@@ -1670,9 +1691,10 @@ var NewPutResourceGroupMessageBuilderV2 = newMutableMessageBuilder[*PutResourceG
 
 // Type aliases for DropResourceGroupMessageV2
 type (
-	MutableDropResourceGroupMessageV2   = specializedMutableMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
-	ImmutableDropResourceGroupMessageV2 = SpecializedImmutableMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
-	BroadcastDropResourceGroupMessageV2 = SpecializedBroadcastMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
+	MutableDropResourceGroupMessageV2         = specializedMutableMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
+	ImmutableDropResourceGroupMessageV2       = SpecializedImmutableMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
+	BroadcastDropResourceGroupMessageV2       = SpecializedBroadcastMessage[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
+	BroadcastResultDropResourceGroupMessageV2 = BroadcastResult[*DropResourceGroupMessageHeader, *DropResourceGroupMessageBody]
 )
 
 // MessageTypeWithVersion for DropResourceGroupMessageV2
@@ -1710,9 +1732,10 @@ var NewDropResourceGroupMessageBuilderV2 = newMutableMessageBuilder[*DropResourc
 
 // Type aliases for CreateIndexMessageV2
 type (
-	MutableCreateIndexMessageV2   = specializedMutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
-	ImmutableCreateIndexMessageV2 = SpecializedImmutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
-	BroadcastCreateIndexMessageV2 = SpecializedBroadcastMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+	MutableCreateIndexMessageV2         = specializedMutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+	ImmutableCreateIndexMessageV2       = SpecializedImmutableMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+	BroadcastCreateIndexMessageV2       = SpecializedBroadcastMessage[*CreateIndexMessageHeader, *CreateIndexMessageBody]
+	BroadcastResultCreateIndexMessageV2 = BroadcastResult[*CreateIndexMessageHeader, *CreateIndexMessageBody]
 )
 
 // MessageTypeWithVersion for CreateIndexMessageV2
@@ -1750,9 +1773,10 @@ var NewCreateIndexMessageBuilderV2 = newMutableMessageBuilder[*CreateIndexMessag
 
 // Type aliases for AlterIndexMessageV2
 type (
-	MutableAlterIndexMessageV2   = specializedMutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
-	ImmutableAlterIndexMessageV2 = SpecializedImmutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
-	BroadcastAlterIndexMessageV2 = SpecializedBroadcastMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+	MutableAlterIndexMessageV2         = specializedMutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+	ImmutableAlterIndexMessageV2       = SpecializedImmutableMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+	BroadcastAlterIndexMessageV2       = SpecializedBroadcastMessage[*AlterIndexMessageHeader, *AlterIndexMessageBody]
+	BroadcastResultAlterIndexMessageV2 = BroadcastResult[*AlterIndexMessageHeader, *AlterIndexMessageBody]
 )
 
 // MessageTypeWithVersion for AlterIndexMessageV2
@@ -1790,9 +1814,10 @@ var NewAlterIndexMessageBuilderV2 = newMutableMessageBuilder[*AlterIndexMessageH
 
 // Type aliases for DropIndexMessageV2
 type (
-	MutableDropIndexMessageV2   = specializedMutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
-	ImmutableDropIndexMessageV2 = SpecializedImmutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
-	BroadcastDropIndexMessageV2 = SpecializedBroadcastMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
+	MutableDropIndexMessageV2         = specializedMutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
+	ImmutableDropIndexMessageV2       = SpecializedImmutableMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
+	BroadcastDropIndexMessageV2       = SpecializedBroadcastMessage[*DropIndexMessageHeader, *DropIndexMessageBody]
+	BroadcastResultDropIndexMessageV2 = BroadcastResult[*DropIndexMessageHeader, *DropIndexMessageBody]
 )
 
 // MessageTypeWithVersion for DropIndexMessageV2

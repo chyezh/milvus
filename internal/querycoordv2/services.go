@@ -306,11 +306,10 @@ func (s *Server) LoadCollection(ctx context.Context, req *querypb.LoadCollection
 }
 
 // putLoadConfigCollectionV2AckCallback is called when the put load config message is acknowledged
-func (s *Server) putLoadConfigCollectionV2AckCallback(ctx context.Context, msgs ...message.ImmutablePutLoadConfigMessageV2) error {
+func (s *Server) putLoadConfigCollectionV2AckCallback(ctx context.Context, result message.BroadcastResultPutLoadConfigMessageV2) error {
 	// currently, we only sent the put load config message to the control channel
 	// TODO: after we support query view in 3.0, we should broadcast the put load config message to all vchannels.
-	msg := msgs[0]
-	job := job.NewLoadCollectionJob(ctx, msg, s.dist, s.meta, s.broker, s.targetMgr, s.targetObserver, s.collectionObserver, s.nodeMgr)
+	job := job.NewLoadCollectionJob(ctx, result, s.dist, s.meta, s.broker, s.targetMgr, s.targetObserver, s.collectionObserver, s.nodeMgr)
 	s.jobScheduler.Add(job)
 	err := job.Wait()
 	if err != nil {
@@ -376,10 +375,9 @@ func (s *Server) ReleaseCollection(ctx context.Context, req *querypb.ReleaseColl
 	return merr.Success(), nil
 }
 
-func (s *Server) dropLoadConfigCollectionV2AckCallback(ctx context.Context, msgs ...message.ImmutableDropLoadConfigMessageV2) error {
-	msg := msgs[0]
+func (s *Server) dropLoadConfigCollectionV2AckCallback(ctx context.Context, result message.BroadcastResultDropLoadConfigMessageV2) error {
 	releaseJob := job.NewReleaseCollectionJob(ctx,
-		msg,
+		result,
 		s.dist,
 		s.meta,
 		s.broker,
@@ -392,7 +390,7 @@ func (s *Server) dropLoadConfigCollectionV2AckCallback(ctx context.Context, msgs
 	if err := releaseJob.Wait(); err != nil {
 		return err
 	}
-	meta.GlobalFailedLoadCache.Remove(msg.Header().GetCollectionId())
+	meta.GlobalFailedLoadCache.Remove(result.Message.Header().GetCollectionId())
 	return nil
 }
 

@@ -38,7 +38,7 @@ import (
 
 type ReleaseCollectionJob struct {
 	*BaseJob
-	msg               message.ImmutableDropLoadConfigMessageV2
+	result            message.BroadcastResultDropLoadConfigMessageV2
 	dist              *meta.DistributionManager
 	meta              *meta.Meta
 	broker            meta.Broker
@@ -50,7 +50,7 @@ type ReleaseCollectionJob struct {
 }
 
 func NewReleaseCollectionJob(ctx context.Context,
-	msg message.ImmutableDropLoadConfigMessageV2,
+	result message.BroadcastResultDropLoadConfigMessageV2,
 	dist *meta.DistributionManager,
 	meta *meta.Meta,
 	broker meta.Broker,
@@ -60,8 +60,8 @@ func NewReleaseCollectionJob(ctx context.Context,
 	proxyManager proxyutil.ProxyClientManagerInterface,
 ) *ReleaseCollectionJob {
 	return &ReleaseCollectionJob{
-		BaseJob:           NewBaseJob(ctx, 0, msg.Header().GetCollectionId()),
-		msg:               msg,
+		BaseJob:           NewBaseJob(ctx, 0, result.Message.Header().GetCollectionId()),
+		result:            result,
 		dist:              dist,
 		meta:              meta,
 		broker:            broker,
@@ -73,7 +73,7 @@ func NewReleaseCollectionJob(ctx context.Context,
 }
 
 func (job *ReleaseCollectionJob) Execute() error {
-	collectionID := job.msg.Header().GetCollectionId()
+	collectionID := job.result.Message.Header().GetCollectionId()
 	log := log.Ctx(job.ctx).With(zap.Int64("collectionID", collectionID))
 
 	if !job.meta.CollectionManager.Exist(job.ctx, collectionID) {

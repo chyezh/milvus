@@ -241,8 +241,8 @@ func (s *Server) CreateIndex(ctx context.Context, req *indexpb.CreateIndexReques
 	return merr.Success(), nil
 }
 
-func (s *Server) createIndexV2AckCallback(ctx context.Context, msgs ...message.ImmutableCreateIndexMessageV2) error {
-	msg := msgs[0]
+func (s *Server) createIndexV2AckCallback(ctx context.Context, result message.BroadcastResultCreateIndexMessageV2) error {
+	msg := result.Message
 	req := msg.MustBody().CreateIndexRequest
 
 	schema, err := s.getSchema(ctx, req.GetCollectionID())

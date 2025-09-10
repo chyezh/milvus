@@ -51,10 +51,13 @@ func (c *Core) broadcastDropCollectionV1(ctx context.Context, req *milvuspb.Drop
 }
 
 // dropCollectionV1AckCallback is called when the drop collection message is acknowledged
-func (c *DDLCallback) dropCollectionV1AckCallback(ctx context.Context, msgs ...message.ImmutableDropCollectionMessageV1) error {
-	for _, msg := range msgs {
+func (c *DDLCallback) dropCollectionV1AckCallback(ctx context.Context, result message.BroadcastResultDropCollectionMessageV1) error {
+	msg := result.Message
+	header := msg.Header()
+	body := msg.MustBody()
+	for vchannel, result := range result.Results {
 		collectionID := msg.Header().CollectionId
-		if funcutil.IsControlChannel(msg.VChannel()) {
+		if funcutil.IsControlChannel(vchannel) {
 			// when the control channel is acknowledged, we should do the following steps:
 
 			// 1. release the collection from querycoord first.
@@ -66,15 +69,14 @@ func (c *DDLCallback) dropCollectionV1AckCallback(ctx context.Context, msgs ...m
 				WithBody(&message.DropLoadConfigMessageBody{}).
 				WithBroadcast([]string{streaming.WAL().ControlChannel()}).
 				MustBuildBroadcast().
-				WithBroadcastID(msg.BroadcastHeader().BroadcastID).
-				SplitIntoMutableMessage()[0].
-				WithTimeTick(msg.TimeTick()).
-				WithLastConfirmed(msg.MessageID()).
-				IntoImmutableMessage(msg.MessageID())
-			if err := registry.CallMessageAckCallback(ctx, dropLoadConfigMsg); err != nil {
+				WithBroadcastID(msg.BroadcastHeader().BroadcastID)
+			if err := registry.CallMessageAckCallback(ctx, dropLoadConfigMsg, map[string]*message.AppendResult{
+				streaming.WAL().ControlChannel(): result,
+			}); err != nil {
 				return err
 			}
-			if err := c.meta.DropCollection(ctx, collectionID, msg.TimeTick()); err != nil {
+
+			if err := c.meta.DropCollection(ctx, collectionID, result.TimeTick); err != nil {
 				return err
 			}
 			if err := c.broker.DropCollectionIndex(ctx, collectionID, nil); err != nil {
@@ -87,7 +89,7 @@ func (c *DDLCallback) dropCollectionV1AckCallback(ctx context.Context, msgs ...m
 			Base: commonpbutil.NewMsgBase(
 				commonpbutil.WithSourceID(paramtable.GetNodeID()),
 			),
-			ChannelName: msg.VChannel(),
+			ChannelName: vchannel,
 		})
 		if err := merr.CheckRPCCall(resp, err); err != nil {
 			return err
@@ -95,11 +97,11 @@ func (c *DDLCallback) dropCollectionV1AckCallback(ctx context.Context, msgs ...m
 	}
 	// cleanup the proxy cache.
 	if err := c.Core.ExpireMetaCache(ctx,
-		msgs[0].MustBody().DbName,
-		[]string{msgs[0].MustBody().CollectionName},
-		msgs[0].Header().CollectionId,
+		body.DbName,
+		[]string{body.CollectionName},
+		header.CollectionId,
 		"",
-		msgs[0].TimeTick(),
+		result.GetControlChannelResult().TimeTick,
 		proxyutil.SetMsgType(commonpb.MsgType_DropCollection)); err != nil {
 		return err
 	}

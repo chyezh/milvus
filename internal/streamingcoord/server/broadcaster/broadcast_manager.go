@@ -221,7 +221,7 @@ func (bm *broadcastTaskManager) getOrCreateBroadcastTask(msg message.ImmutableMe
 	if ok {
 		return t, t.State() != streamingpb.BroadcastTaskState_BROADCAST_TASK_STATE_TOMBSTONE
 	}
-	if msg.ReplicateHeader() != nil {
+	if msg.ReplicateHeader() == nil {
 		bm.Logger().Warn("try to recover task from the wal from non-replicate message, ignore it")
 		return nil, false
 	}

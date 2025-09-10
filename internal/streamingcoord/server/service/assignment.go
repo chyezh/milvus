@@ -122,12 +122,12 @@ func (s *assignmentServiceImpl) validateReplicateConfiguration(ctx context.Conte
 
 // putReplicateConfiguration puts the replicate configuration into the balancer.
 // It's a callback function of the broadcast service.
-func (s *assignmentServiceImpl) putReplicateConfiguration(ctx context.Context, msgs ...message.ImmutablePutReplicateConfigMessageV2) error {
+func (s *assignmentServiceImpl) putReplicateConfiguration(ctx context.Context, result message.BroadcastResultPutReplicateConfigMessageV2) error {
 	balancer, err := s.balancer.GetWithContext(ctx)
 	if err != nil {
 		return err
 	}
-	return balancer.UpdateReplicateConfiguration(ctx, msgs...)
+	return balancer.UpdateReplicateConfiguration(ctx, result)
 }
 
 // UpdateWALBalancePolicy is used to update the WAL balance policy.

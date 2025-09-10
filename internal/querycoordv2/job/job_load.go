@@ -67,8 +67,8 @@ func NewLoadCollectionJobGenerator(
 
 type LoadCollectionJob struct {
 	*BaseJob
-	msg message.ImmutablePutLoadConfigMessageV2
 
+	result             message.BroadcastResultPutLoadConfigMessageV2
 	undo               *UndoList
 	dist               *meta.DistributionManager
 	meta               *meta.Meta
@@ -81,7 +81,7 @@ type LoadCollectionJob struct {
 
 func NewLoadCollectionJob(
 	ctx context.Context,
-	msg message.ImmutablePutLoadConfigMessageV2,
+	result message.BroadcastResultPutLoadConfigMessageV2,
 	dist *meta.DistributionManager,
 	meta *meta.Meta,
 	broker meta.Broker,
@@ -91,8 +91,8 @@ func NewLoadCollectionJob(
 	nodeMgr *session.NodeManager,
 ) *LoadCollectionJob {
 	return &LoadCollectionJob{
-		BaseJob:            NewBaseJob(ctx, 0, msg.Header().GetCollectionId()),
-		msg:                msg,
+		BaseJob:            NewBaseJob(ctx, 0, result.Message.Header().GetCollectionId()),
+		result:             result,
 		undo:               NewUndoList(ctx, meta, targetMgr, targetObserver),
 		dist:               dist,
 		meta:               meta,
@@ -202,7 +202,7 @@ func (job *LoadCollectionJob) PreExecute() error {
 }
 
 func (job *LoadCollectionJob) Execute() error {
-	req := job.msg.Header()
+	req := job.result.Message.Header()
 
 	log := log.Ctx(job.ctx).With(zap.Int64("collectionID", req.GetCollectionId()))
 	meta.GlobalFailedLoadCache.Remove(req.GetCollectionId())
