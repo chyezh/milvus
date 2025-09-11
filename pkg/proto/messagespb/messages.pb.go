@@ -3748,7 +3748,7 @@ type PutPrivilegeGroupMessageHeader struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	PrivilegeGroupInfo *milvuspb.PrivilegeGroupInfo `protobuf:"bytes,1,opt,name=privilege_group_info,json=privilegeGroupInfo,proto3" json:"privilege_group_info,omitempty"`
+	PrivilegeGroupInfo *milvuspb.PrivilegeGroupInfo `protobuf:"bytes,1,opt,name=privilege_group_info,json=privilegeGroupInfo,proto3" json:"privilege_group_info,omitempty"` // if privileges is empty, new privilege group will be created.
 }
 
 func (x *PutPrivilegeGroupMessageHeader) Reset() {
@@ -3835,7 +3835,7 @@ type DropPrivilegeGroupMessageHeader struct {
 	sizeCache     protoimpl.SizeCache
 	unknownFields protoimpl.UnknownFields
 
-	PrivilegeGroupInfo *milvuspb.PrivilegeGroupInfo `protobuf:"bytes,1,opt,name=privilege_group_info,json=privilegeGroupInfo,proto3" json:"privilege_group_info,omitempty"`
+	PrivilegeGroupInfo *milvuspb.PrivilegeGroupInfo `protobuf:"bytes,1,opt,name=privilege_group_info,json=privilegeGroupInfo,proto3" json:"privilege_group_info,omitempty"` // if privileges is empty, privilege group will be dropped.
 }
 
 func (x *DropPrivilegeGroupMessageHeader) Reset() {
