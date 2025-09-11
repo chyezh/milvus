@@ -6,7 +6,8 @@
     "ExtraExportTypes": [
         "messagespb.PartitionSegmentAssignment",
         "messagespb.SegmentAssignment",
-        "messagespb.ManualFlushExtraResponse"
+        "messagespb.ManualFlushExtraResponse",
+        "messagespb.RoleBinding"
     ],
     "messageReflectInfoTable": [
         {

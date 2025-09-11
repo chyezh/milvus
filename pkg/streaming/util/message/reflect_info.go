@@ -62,6 +62,7 @@ type (
 	PartitionSegmentAssignment = messagespb.PartitionSegmentAssignment
 	SegmentAssignment          = messagespb.SegmentAssignment
 	ManualFlushExtraResponse   = messagespb.ManualFlushExtraResponse
+	RoleBinding                = messagespb.RoleBinding
 )
 
 // Export message header and body types

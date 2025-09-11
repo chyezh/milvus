@@ -3,12 +3,13 @@ package broadcaster
 import (
 	"sort"
 
+	"go.uber.org/zap"
+
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
-	"go.uber.org/zap"
 )
 
 // newAckCallbackScheduler creates a new ack callback scheduler.

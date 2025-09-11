@@ -1,10 +1,11 @@
 package message
 
 import (
+	"google.golang.org/protobuf/proto"
+
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
-	"google.golang.org/protobuf/proto"
 )
 
 // newBroadcastHeaderFromProto creates a BroadcastHeader from proto.
