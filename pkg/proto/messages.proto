@@ -370,6 +370,7 @@ message CreateUserMessageBody {
 // PutUserMessageHeader is the header of put user message.
 message PutUserMessageHeader {
     milvus.UserEntity user_entity = 1;
+    bool is_update = 2; // if true, the user is updated, otherwise, the user is created.
 }
 
 // PutUserMessageBody is the body of put user message.
@@ -404,6 +405,7 @@ message PutRoleMessageBody {
 // DropRoleMessageHeader is the header of drop role message.
 message DropRoleMessageHeader {
     string role_name = 1;
+    bool force_drop  = 2; // if true, the role will be dropped even if it has privileges.
 }
 
 // DropRoleMessageBody is the body of drop role message.
@@ -450,7 +452,7 @@ message RevokePrivilegeMessageBody {}
 
 // PutPrivilegeGroupMessageHeader is the header of put privilege group message.
 message PutPrivilegeGroupMessageHeader {
-    milvus.PrivilegeGroupInfo privilege_group_info = 1;
+    milvus.PrivilegeGroupInfo privilege_group_info = 1; // if privileges is empty, new privilege group will be created.
 }
 
 // PutPrivilegeGroupMessageBody is the body of put privilege group message.
@@ -458,7 +460,7 @@ message PutPrivilegeGroupMessageBody {}
 
 // DropPrivilegeGroupMessageHeader is the header of drop privilege group message.
 message DropPrivilegeGroupMessageHeader {
-    string privilege_group_name = 1;
+    milvus.PrivilegeGroupInfo privilege_group_info = 1; // if privileges is empty, privilege group will be dropped.
 }
 
 // DropPrivilegeGroupMessageBody is the body of drop privilege group message.

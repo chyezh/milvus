@@ -1,6 +1,8 @@
 package rootcoord
 
-import "github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
+import (
+	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
+)
 
 // RegisterDDLCallbacks registers the ddl callbacks.
 func RegisterDDLCallbacks(core *Core) {
@@ -9,6 +11,9 @@ func RegisterDDLCallbacks(core *Core) {
 	}
 	registry.RegisterCreateCollectionV1AckCallback(ddlCallback.createCollectionV1AckCallback)
 	registry.RegisterDropCollectionV1AckCallback(ddlCallback.dropCollectionV1AckCallback)
+
+	// RBAC
+	ddlCallback.registerRBACCallbacks()
 }
 
 // DDLCallback is the callback of ddl.
