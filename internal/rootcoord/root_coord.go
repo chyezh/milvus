@@ -1877,43 +1877,61 @@ func (c *Core) CreateAlias(ctx context.Context, in *milvuspb.CreateAliasRequest)
 		zap.String("alias", in.GetAlias()),
 		zap.String("collection", in.GetCollectionName()))
 
-	t := &createAliasTask{
-		baseTask: newBaseTask(ctx, c),
-		Req:      in,
+	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx,
+		message.NewSharedDBNameResourceKey(in.GetDbName()),
+		message.NewExclusiveCollectionNameResourceKey(in.GetDbName(), in.GetCollectionName()),
+		message.NewExclusiveCollectionNameResourceKey(in.GetDbName(), in.GetAlias()))
+	if err != nil {
+		return merr.Status(err), nil
 	}
+	defer broadcaster.Close()
 
-	if err := c.scheduler.AddTask(t); err != nil {
-		log.Ctx(ctx).Info("failed to enqueue request to create alias",
-			zap.String("role", typeutil.RootCoordRole),
-			zap.Error(err),
-			zap.String("alias", in.GetAlias()),
-			zap.String("collection", in.GetCollectionName()))
-
+	if err := c.meta.CheckIfAliasCreatable(ctx, in.GetDbName(), in.GetAlias(), in.GetCollectionName()); err != nil {
 		metrics.RootCoordDDLReqCounter.WithLabelValues("CreateAlias", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
-	if err := t.WaitToFinish(); err != nil {
+	db, err := c.meta.GetDatabaseByName(ctx, in.GetDbName(), typeutil.MaxTimestamp)
+	if err != nil {
+		metrics.RootCoordDDLReqCounter.WithLabelValues("CreateAlias", metrics.FailLabel).Inc()
+		return merr.Status(err), nil
+	}
+	collection, err := c.meta.GetCollectionByName(ctx, in.GetDbName(), in.GetCollectionName(), typeutil.MaxTimestamp)
+	if err != nil {
+		metrics.RootCoordDDLReqCounter.WithLabelValues("CreateAlias", metrics.FailLabel).Inc()
+		return merr.Status(err), nil
+	}
+
+	msg := message.NewPutAliasMessageBuilderV2().
+		WithHeader(&message.PutAliasMessageHeader{
+			DbId:           db.ID,
+			DbName:         in.GetDbName(),
+			CollectionId:   collection.CollectionID,
+			Alias:          in.GetAlias(),
+			CollectionName: in.GetCollectionName(),
+		}).
+		WithBody(&message.PutAliasMessageBody{}).
+		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
+		MustBuildBroadcast()
+
+	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
 		log.Ctx(ctx).Info("failed to create alias",
 			zap.String("role", typeutil.RootCoordRole),
 			zap.Error(err),
 			zap.String("alias", in.GetAlias()),
-			zap.String("collection", in.GetCollectionName()),
-			zap.Uint64("ts", t.GetTs()))
-
+			zap.String("collection", in.GetCollectionName()))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("CreateAlias", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("CreateAlias", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("CreateAlias").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	metrics.RootCoordDDLReqLatencyInQueue.WithLabelValues("CreateAlias").Observe(float64(t.queueDur.Milliseconds()))
+	// metrics.RootCoordDDLReqLatencyInQueue.WithLabelValues("CreateAlias").Observe(float64(t.queueDur.Milliseconds()))
 
 	log.Ctx(ctx).Info("done to create alias",
 		zap.String("role", typeutil.RootCoordRole),
 		zap.String("alias", in.GetAlias()),
-		zap.String("collection", in.GetCollectionName()),
-		zap.Uint64("ts", t.GetTs()))
+		zap.String("collection", in.GetCollectionName()))
 	return merr.Success(), nil
 }
 
@@ -1930,13 +1948,31 @@ func (c *Core) DropAlias(ctx context.Context, in *milvuspb.DropAliasRequest) (*c
 		zap.String("role", typeutil.RootCoordRole),
 		zap.String("alias", in.GetAlias()))
 
-	t := &dropAliasTask{
-		baseTask: newBaseTask(ctx, c),
-		Req:      in,
+	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx,
+		message.NewSharedDBNameResourceKey(in.GetDbName()),
+		message.NewExclusiveCollectionNameResourceKey(in.GetDbName(), in.GetAlias()))
+	if err != nil {
+		return merr.Status(err), nil
+	}
+	defer broadcaster.Close()
+
+	db, err := c.meta.GetDatabaseByName(ctx, in.GetDbName(), typeutil.MaxTimestamp)
+	if err != nil {
+		metrics.RootCoordDDLReqCounter.WithLabelValues("DropAlias", metrics.FailLabel).Inc()
+		return merr.Status(err), nil
 	}
 
-	if err := c.scheduler.AddTask(t); err != nil {
-		log.Ctx(ctx).Info("failed to enqueue request to drop alias",
+	msg := message.NewDropAliasMessageBuilderV2().
+		WithHeader(&message.DropAliasMessageHeader{
+			DbId:   db.ID,
+			DbName: in.GetDbName(),
+			Alias:  in.GetAlias(),
+		}).
+		WithBody(&message.DropAliasMessageBody{}).
+		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
+		MustBuildBroadcast()
+	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
+		log.Ctx(ctx).Info("failed to drop alias",
 			zap.String("role", typeutil.RootCoordRole),
 			zap.Error(err),
 			zap.String("alias", in.GetAlias()))
@@ -1945,25 +1981,13 @@ func (c *Core) DropAlias(ctx context.Context, in *milvuspb.DropAliasRequest) (*c
 		return merr.Status(err), nil
 	}
 
-	if err := t.WaitToFinish(); err != nil {
-		log.Ctx(ctx).Info("failed to drop alias",
-			zap.String("role", typeutil.RootCoordRole),
-			zap.Error(err),
-			zap.String("alias", in.GetAlias()),
-			zap.Uint64("ts", t.GetTs()))
-
-		metrics.RootCoordDDLReqCounter.WithLabelValues("DropAlias", metrics.FailLabel).Inc()
-		return merr.Status(err), nil
-	}
-
 	metrics.RootCoordDDLReqCounter.WithLabelValues("DropAlias", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("DropAlias").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	metrics.RootCoordDDLReqLatencyInQueue.WithLabelValues("DropAlias").Observe(float64(t.queueDur.Milliseconds()))
+	// metrics.RootCoordDDLReqLatencyInQueue.WithLabelValues("DropAlias").Observe(float64(t.queueDur.Milliseconds()))
 
 	log.Ctx(ctx).Info("done to drop alias",
 		zap.String("role", typeutil.RootCoordRole),
-		zap.String("alias", in.GetAlias()),
-		zap.Uint64("ts", t.GetTs()))
+		zap.String("alias", in.GetAlias()))
 	return merr.Success(), nil
 }
 
@@ -1981,43 +2005,61 @@ func (c *Core) AlterAlias(ctx context.Context, in *milvuspb.AlterAliasRequest) (
 		zap.String("alias", in.GetAlias()),
 		zap.String("collection", in.GetCollectionName()))
 
-	t := &alterAliasTask{
-		baseTask: newBaseTask(ctx, c),
-		Req:      in,
+	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx,
+		message.NewSharedDBNameResourceKey(in.GetDbName()),
+		message.NewExclusiveCollectionNameResourceKey(in.GetDbName(), in.GetCollectionName()),
+		message.NewExclusiveCollectionNameResourceKey(in.GetDbName(), in.GetAlias()))
+	if err != nil {
+		return merr.Status(err), nil
 	}
+	defer broadcaster.Close()
 
-	if err := c.scheduler.AddTask(t); err != nil {
-		log.Ctx(ctx).Info("failed to enqueue request to alter alias",
-			zap.String("role", typeutil.RootCoordRole),
-			zap.Error(err),
-			zap.String("alias", in.GetAlias()),
-			zap.String("collection", in.GetCollectionName()))
-
+	if err := c.meta.CheckIfAliasAlterable(ctx, in.GetDbName(), in.GetAlias(), in.GetCollectionName()); err != nil {
 		metrics.RootCoordDDLReqCounter.WithLabelValues("AlterAlias", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
-	if err := t.WaitToFinish(); err != nil {
+	db, err := c.meta.GetDatabaseByName(ctx, in.GetDbName(), typeutil.MaxTimestamp)
+	if err != nil {
+		metrics.RootCoordDDLReqCounter.WithLabelValues("AlterAlias", metrics.FailLabel).Inc()
+		return merr.Status(err), nil
+	}
+	collection, err := c.meta.GetCollectionByName(ctx, in.GetDbName(), in.GetCollectionName(), typeutil.MaxTimestamp)
+	if err != nil {
+		metrics.RootCoordDDLReqCounter.WithLabelValues("AlterAlias", metrics.FailLabel).Inc()
+		return merr.Status(err), nil
+	}
+
+	msg := message.NewPutAliasMessageBuilderV2().
+		WithHeader(&message.PutAliasMessageHeader{
+			DbId:           db.ID,
+			DbName:         in.GetDbName(),
+			CollectionId:   collection.CollectionID,
+			Alias:          in.GetAlias(),
+			CollectionName: in.GetCollectionName(),
+		}).
+		WithBody(&message.PutAliasMessageBody{}).
+		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
+		MustBuildBroadcast()
+
+	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
 		log.Ctx(ctx).Info("failed to alter alias",
 			zap.String("role", typeutil.RootCoordRole),
 			zap.Error(err),
 			zap.String("alias", in.GetAlias()),
-			zap.String("collection", in.GetCollectionName()),
-			zap.Uint64("ts", t.GetTs()))
-
+			zap.String("collection", in.GetCollectionName()))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("AlterAlias", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("AlterAlias", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("AlterAlias").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	metrics.RootCoordDDLReqLatencyInQueue.WithLabelValues("AlterAlias").Observe(float64(t.queueDur.Milliseconds()))
+	// metrics.RootCoordDDLReqLatencyInQueue.WithLabelValues("AlterAlias").Observe(float64(t.queueDur.Milliseconds()))
 
 	log.Info("done to alter alias",
 		zap.String("role", typeutil.RootCoordRole),
 		zap.String("alias", in.GetAlias()),
-		zap.String("collection", in.GetCollectionName()),
-		zap.Uint64("ts", t.GetTs()))
+		zap.String("collection", in.GetCollectionName()))
 	return merr.Success(), nil
 }
 
