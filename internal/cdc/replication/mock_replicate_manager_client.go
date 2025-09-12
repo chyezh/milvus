@@ -20,6 +20,38 @@ func (_m *MockReplicateManagerClient) EXPECT() *MockReplicateManagerClient_Expec
 	return &MockReplicateManagerClient_Expecter{mock: &_m.Mock}
 }
 
+// Close provides a mock function with no fields
+func (_m *MockReplicateManagerClient) Close() {
+	_m.Called()
+}
+
+// MockReplicateManagerClient_Close_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Close'
+type MockReplicateManagerClient_Close_Call struct {
+	*mock.Call
+}
+
+// Close is a helper method to define mock.On call
+func (_e *MockReplicateManagerClient_Expecter) Close() *MockReplicateManagerClient_Close_Call {
+	return &MockReplicateManagerClient_Close_Call{Call: _e.mock.On("Close")}
+}
+
+func (_c *MockReplicateManagerClient_Close_Call) Run(run func()) *MockReplicateManagerClient_Close_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockReplicateManagerClient_Close_Call) Return() *MockReplicateManagerClient_Close_Call {
+	_c.Call.Return()
+	return _c
+}
+
+func (_c *MockReplicateManagerClient_Close_Call) RunAndReturn(run func()) *MockReplicateManagerClient_Close_Call {
+	_c.Run(run)
+	return _c
+}
+
 // CreateReplicator provides a mock function with given fields: replicateInfo
 func (_m *MockReplicateManagerClient) CreateReplicator(replicateInfo *streamingpb.ReplicatePChannelMeta) {
 	_m.Called(replicateInfo)

@@ -90,3 +90,9 @@ func (r *replicateManager) RemoveOutOfTargetReplicators(targetReplicatePChannels
 		}
 	}
 }
+
+func (r *replicateManager) Close() {
+	for _, replicator := range r.replicators {
+		replicator.StopReplicate()
+	}
+}
