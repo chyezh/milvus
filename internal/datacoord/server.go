@@ -346,14 +346,6 @@ func (s *Server) initMessageCallback() {
 	registry.RegisterAlterIndexV2AckCallback(s.alterIndexV2AckCallback)
 	registry.RegisterDropIndexV2AckCallback(s.dropIndexV2Callback)
 
-	registry.RegisterDropPartitionV1AckCallback(func(ctx context.Context, result message.BroadcastResultDropPartitionMessageV1) error {
-		partitionID := result.Message.Header().PartitionId
-		for vchannel := range result.Results {
-			return s.NotifyDropPartition(ctx, vchannel, []int64{partitionID})
-		}
-		return nil
-	})
-
 	registry.RegisterImportV1AckCallback(func(ctx context.Context, result message.BroadcastResultImportMessageV1) error {
 		body := result.Message.MustBody()
 		for vchannel := range result.Results {
