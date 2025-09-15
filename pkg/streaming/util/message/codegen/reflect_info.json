@@ -394,6 +394,16 @@
         },
         {
             "MessageSpecializedType": {
+                "HeaderType": "messagespb.RestoreRBACMessageHeader",
+                "BodyType": "messagespb.RestoreRBACMessageBody"
+            },
+            "MessageTypeWithVersion": {
+                "MessageType": "MessageTypeRestoreRBAC",
+                "Version": 2
+            }
+        },
+        {
+            "MessageSpecializedType": {
                 "HeaderType": "messagespb.PutResourceGroupMessageHeader",
                 "BodyType": "messagespb.PutResourceGroupMessageBody"
             },

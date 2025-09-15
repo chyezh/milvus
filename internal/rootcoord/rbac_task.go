@@ -144,26 +144,18 @@ func executeOperatePrivilegeTaskSteps(ctx context.Context, core *Core, entity *m
 	return nil
 }
 
-func executeRestoreRBACTaskSteps(ctx context.Context, core *Core, in *milvuspb.RestoreRBACMetaRequest) error {
-	redoTask := newBaseRedoTask(core.stepExecutor)
-	redoTask.AddSyncStep(NewSimpleStep("restore rbac meta data", func(ctx context.Context) ([]nestedStep, error) {
-		if err := core.meta.RestoreRBAC(ctx, util.DefaultTenant, in.RBACMeta); err != nil {
-			log.Ctx(ctx).Warn("fail to restore rbac meta data", zap.Any("in", in), zap.Error(err))
-			return nil, err
-		}
-		return nil, nil
-	}))
-	redoTask.AddAsyncStep(NewSimpleStep("operate privilege cache", func(ctx context.Context) ([]nestedStep, error) {
-		if err := core.proxyClientManager.RefreshPolicyInfoCache(ctx, &proxypb.RefreshPolicyInfoCacheRequest{
-			OpType: int32(typeutil.CacheRefresh),
-		}); err != nil {
-			log.Ctx(ctx).Warn("fail to refresh policy info cache", zap.Any("in", in), zap.Error(err))
-			return nil, err
-		}
-		return nil, nil
-	}))
-
-	return redoTask.Execute(ctx)
+func executeRestoreRBACTaskSteps(ctx context.Context, c *Core, meta *milvuspb.RBACMeta) error {
+	if err := c.meta.RestoreRBAC(ctx, util.DefaultTenant, meta); err != nil {
+		log.Ctx(ctx).Warn("fail to restore rbac meta data", zap.Any("in", meta), zap.Error(err))
+		return err
+	}
+	if err := c.proxyClientManager.RefreshPolicyInfoCache(ctx, &proxypb.RefreshPolicyInfoCacheRequest{
+		OpType: int32(typeutil.CacheRefresh),
+	}); err != nil {
+		log.Ctx(ctx).Warn("fail to refresh policy info cache", zap.Any("in", meta), zap.Error(err))
+		return err
+	}
+	return nil
 }
 
 func executeOperatePrivilegeGroupTaskSteps(ctx context.Context, core *Core, in *milvuspb.PrivilegeGroupInfo, operateType milvuspb.OperatePrivilegeGroupType) error {

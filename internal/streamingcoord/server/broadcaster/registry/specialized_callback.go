@@ -63,6 +63,7 @@ var (
 	RegisterRevokePrivilegeV2AckCallback    = registerMessageAckCallback[*message.RevokePrivilegeMessageHeader, *message.RevokePrivilegeMessageBody]
 	RegisterPutPrivilegeGroupV2AckCallback  = registerMessageAckCallback[*message.PutPrivilegeGroupMessageHeader, *message.PutPrivilegeGroupMessageBody]
 	RegisterDropPrivilegeGroupV2AckCallback = registerMessageAckCallback[*message.DropPrivilegeGroupMessageHeader, *message.DropPrivilegeGroupMessageBody]
+	RegisterRestoreRBACV2AckCallback        = registerMessageAckCallback[*message.RestoreRBACMessageHeader, *message.RestoreRBACMessageBody]
 
 	// Resource Group
 	RegisterPutResourceGroupV2AckCallback  = registerMessageAckCallback[*message.PutResourceGroupMessageHeader, *message.PutResourceGroupMessageBody]
@@ -113,6 +114,7 @@ func resetMessageAckCallbacks() {
 		message.MessageTypeRevokePrivilegeV2:    syncutil.NewFuture[messageInnerAckCallback](),
 		message.MessageTypePutPrivilegeGroupV2:  syncutil.NewFuture[messageInnerAckCallback](),
 		message.MessageTypeDropPrivilegeGroupV2: syncutil.NewFuture[messageInnerAckCallback](),
+		message.MessageTypeRestoreRBACV2:        syncutil.NewFuture[messageInnerAckCallback](),
 
 		// Resource Group
 		message.MessageTypePutResourceGroupV2:  syncutil.NewFuture[messageInnerAckCallback](),

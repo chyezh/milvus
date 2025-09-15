@@ -2029,27 +2029,7 @@ func (c *Core) CreateCredential(ctx context.Context, credInfo *internalpb.Creden
 		return merr.Status(err), nil
 	}
 
-	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusivePrivilegeResourceKey())
-	if err != nil {
-		return merr.Status(err), nil
-	}
-	defer broadcaster.Close()
-
-	if err := c.checkCreateCredential(ctx, credInfo); err != nil {
-		return merr.Status(err), nil
-	}
-
-	msg := message.NewPutUserMessageBuilderV2().
-		WithHeader(&message.PutUserMessageHeader{
-			UserEntity: &milvuspb.UserEntity{Name: credInfo.Username},
-		}).
-		WithBody(&message.PutUserMessageBody{
-			CredentialInfo: credInfo,
-		}).
-		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
-		MustBuildBroadcast()
-
-	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
+	if err := c.broadcastCreateCredential(ctx, credInfo); err != nil {
 		ctxLog.Warn("CreateCredential append message failed", zap.Error(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_CreateCredentialFailure), nil
@@ -2059,32 +2039,6 @@ func (c *Core) CreateCredential(ctx context.Context, credInfo *internalpb.Creden
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	metrics.RootCoordNumOfCredentials.Inc()
 	return merr.Success(), nil
-}
-
-// checkCreateCredential check if the credential can be created.
-func (c *Core) checkCreateCredential(ctx context.Context, in *internalpb.CredentialInfo) error {
-	if in.GetUsername() == "" {
-		return errors.New("username is empty")
-	}
-
-	// check if the number of roles has reached the limit.
-	resp, err := c.meta.ListCredentialUsernames(ctx)
-	if err != nil {
-		return err
-	}
-	if len(resp.Usernames) >= Params.ProxyCfg.MaxUserNum.GetAsInt() {
-		errMsg := "unable to add user because the number of users has reached the limit"
-		log.Ctx(ctx).Error(errMsg, zap.Int("max_user_num", Params.ProxyCfg.MaxUserNum.GetAsInt()))
-		return errors.New(errMsg)
-	}
-
-	// check if the username already exists.
-	for _, username := range resp.Usernames {
-		if username == in.GetUsername() {
-			return fmt.Errorf("user already exists: %s", in.GetUsername())
-		}
-	}
-	return nil
 }
 
 // GetCredential get credential by username
@@ -2128,28 +2082,7 @@ func (c *Core) UpdateCredential(ctx context.Context, credInfo *internalpb.Creden
 		return merr.Status(err), nil
 	}
 
-	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusivePrivilegeResourceKey())
-	if err != nil {
-		return merr.Status(err), nil
-	}
-	defer broadcaster.Close()
-
-	if err := c.checkUpdateCredential(ctx, credInfo); err != nil {
-		return merr.Status(err), nil
-	}
-
-	msg := message.NewPutUserMessageBuilderV2().
-		WithHeader(&message.PutUserMessageHeader{
-			UserEntity: &milvuspb.UserEntity{Name: credInfo.Username},
-			IsUpdate:   true,
-		}).
-		WithBody(&message.PutUserMessageBody{
-			CredentialInfo: credInfo,
-		}).
-		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
-		MustBuildBroadcast()
-
-	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
+	if err := c.broadcastUpdateCredential(ctx, credInfo); err != nil {
 		ctxLog.Warn("UpdateCredential append message failed", zap.Error(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_UpdateCredentialFailure), nil
@@ -2158,18 +2091,6 @@ func (c *Core) UpdateCredential(ctx context.Context, credInfo *internalpb.Creden
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return merr.Success(), nil
-}
-
-// checkUpdateCredential check if the credential can be updated.
-func (c *Core) checkUpdateCredential(ctx context.Context, in *internalpb.CredentialInfo) error {
-	if in.GetUsername() == "" {
-		return errors.New("username is empty")
-	}
-	// check if the number of credential exists.
-	if _, err := c.meta.GetCredential(ctx, in.GetUsername()); err != nil {
-		return err
-	}
-	return nil
 }
 
 // DeleteCredential delete a user
@@ -2182,25 +2103,8 @@ func (c *Core) DeleteCredential(ctx context.Context, in *milvuspb.DeleteCredenti
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.Status(err), nil
 	}
-	if in.Username == "" {
-		return merr.Status(merr.WrapErrParameterMissing("username", "empty username")), nil
-	}
 
-	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusivePrivilegeResourceKey())
-	if err != nil {
-		return merr.Status(err), nil
-	}
-	defer broadcaster.Close()
-
-	msg := message.NewDropUserMessageBuilderV2().
-		WithHeader(&message.DropUserMessageHeader{
-			UserName: in.Username,
-		}).
-		WithBody(&message.DropUserMessageBody{}).
-		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
-		MustBuildBroadcast()
-
-	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
+	if err := c.broadcastDropCredential(ctx, in); err != nil {
 		ctxLog.Warn("DeleteCredential append message failed", zap.Error(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_DeleteCredentialFailure), nil
@@ -2258,25 +2162,7 @@ func (c *Core) CreateRole(ctx context.Context, in *milvuspb.CreateRoleRequest) (
 		return merr.Status(err), nil
 	}
 
-	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusivePrivilegeResourceKey())
-	if err != nil {
-		return merr.Status(err), nil
-	}
-	defer broadcaster.Close()
-
-	if err := c.checkCreateRole(ctx, in); err != nil {
-		return merr.Status(err), nil
-	}
-
-	msg := message.NewPutRoleMessageBuilderV2().
-		WithHeader(&message.PutRoleMessageHeader{
-			RoleEntity: in.GetEntity(),
-		}).
-		WithBody(&message.PutRoleMessageBody{}).
-		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
-		MustBuildBroadcast()
-
-	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
+	if err := c.broadcastCreateRole(ctx, in); err != nil {
 		errMsg := "fail to create role"
 		ctxLog.Warn(errMsg, zap.Error(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
@@ -2288,30 +2174,6 @@ func (c *Core) CreateRole(ctx context.Context, in *milvuspb.CreateRoleRequest) (
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	metrics.RootCoordNumOfRoles.Inc()
 	return merr.Success(), nil
-}
-
-// checkCreateRole check if the role can be created.
-func (c *Core) checkCreateRole(ctx context.Context, in *milvuspb.CreateRoleRequest) error {
-	if in.GetEntity().GetName() == "" {
-		return errors.New("role name is empty")
-	}
-	results, err := c.meta.SelectRole(ctx, util.DefaultTenant, nil, false)
-	if err != nil {
-		log.Ctx(ctx).Warn("fail to list roles", zap.Error(err))
-		return err
-	}
-	if len(results) >= Params.ProxyCfg.MaxRoleNum.GetAsInt() {
-		errMsg := "unable to create role because the number of roles has reached the limit"
-		log.Ctx(ctx).Warn(errMsg, zap.Int("max_role_num", Params.ProxyCfg.MaxRoleNum.GetAsInt()))
-		return errors.New(errMsg)
-	}
-	for _, result := range results {
-		if result.GetRole().GetName() == in.GetEntity().GetName() {
-			log.Ctx(ctx).Info("role already exists", zap.String("role", in.GetEntity().GetName()))
-			return common.NewIgnorableError(errors.Newf("role [%s] already exists", in.GetEntity().GetName()))
-		}
-	}
-	return nil
 }
 
 // DropRole drop role
@@ -2332,25 +2194,7 @@ func (c *Core) DropRole(ctx context.Context, in *milvuspb.DropRoleRequest) (*com
 		return merr.Status(err), nil
 	}
 
-	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusivePrivilegeResourceKey())
-	if err != nil {
-		return merr.Status(err), nil
-	}
-	defer broadcaster.Close()
-
-	if err := c.checkDropRole(ctx, in); err != nil {
-		return merr.Status(err), nil
-	}
-
-	msg := message.NewDropRoleMessageBuilderV2().
-		WithHeader(&message.DropRoleMessageHeader{
-			RoleName: in.RoleName,
-		}).
-		WithBody(&message.DropRoleMessageBody{}).
-		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
-		MustBuildBroadcast()
-
-	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
+	if err := c.broadcastDropRole(ctx, in); err != nil {
 		errMsg := "fail to drop role"
 		ctxLog.Warn(errMsg, zap.Error(err))
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_DropRoleFailure), nil
@@ -2361,38 +2205,6 @@ func (c *Core) DropRole(ctx context.Context, in *milvuspb.DropRoleRequest) (*com
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	metrics.RootCoordNumOfRoles.Dec()
 	return merr.Success(), nil
-}
-
-// checkDropRole check if the role can be dropped.
-func (c *Core) checkDropRole(ctx context.Context, in *milvuspb.DropRoleRequest) error {
-	if util.IsBuiltinRole(in.GetRoleName()) {
-		return merr.WrapErrPrivilegeNotPermitted("the role[%s] is a builtin role, which can't be dropped", in.GetRoleName())
-	}
-
-	if in.GetRoleName() == "" {
-		return errors.New("role name is empty")
-	}
-
-	if _, err := c.meta.SelectRole(ctx, util.DefaultTenant, &milvuspb.RoleEntity{Name: in.GetRoleName()}, false); err != nil {
-		errMsg := "not found the role, maybe the role isn't existed or internal system error"
-		return errors.New(errMsg)
-	}
-	if in.GetForceDrop() {
-		return nil
-	}
-
-	grantEntities, err := c.meta.SelectGrant(ctx, util.DefaultTenant, &milvuspb.GrantEntity{
-		Role:   &milvuspb.RoleEntity{Name: in.GetRoleName()},
-		DbName: "*",
-	})
-	if err != nil {
-		return err
-	}
-	if len(grantEntities) != 0 {
-		errMsg := "fail to drop the role that it has privileges. Use REVOKE API to revoke privileges"
-		return errors.New(errMsg)
-	}
-	return nil
 }
 
 // OperateUserRole operate the relationship between a user and a role
@@ -2412,61 +2224,7 @@ func (c *Core) OperateUserRole(ctx context.Context, in *milvuspb.OperateUserRole
 		return merr.Status(err), nil
 	}
 
-	if funcutil.IsEmptyString(in.Username) {
-		return merr.Status(errors.New("username in the user entity is empty")), nil
-	}
-	if funcutil.IsEmptyString(in.RoleName) {
-		return merr.Status(errors.New("role name in the role entity is empty")), nil
-	}
-
-	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusivePrivilegeResourceKey())
-	if err != nil {
-		return merr.Status(err), nil
-	}
-	defer broadcaster.Close()
-
-	if _, err := c.meta.SelectRole(ctx, util.DefaultTenant, &milvuspb.RoleEntity{Name: in.RoleName}, false); err != nil {
-		errMsg := "not found the role, maybe the role isn't existed or internal system error"
-		ctxLog.Warn(errMsg, zap.Error(err))
-		return merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_OperateUserRoleFailure), nil
-	}
-	if in.Type != milvuspb.OperateUserRoleType_RemoveUserFromRole {
-		if _, err := c.meta.SelectUser(ctx, util.DefaultTenant, &milvuspb.UserEntity{Name: in.Username}, false); err != nil {
-			errMsg := "not found the user, maybe the user isn't existed or internal system error"
-			ctxLog.Warn(errMsg, zap.Error(err))
-			return merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_OperateUserRoleFailure), nil
-		}
-	}
-
-	var msg message.BroadcastMutableMessage
-	switch in.Type {
-	case milvuspb.OperateUserRoleType_AddUserToRole:
-		msg = message.NewPutUserRoleMessageBuilderV2().
-			WithHeader(&message.PutUserRoleMessageHeader{
-				RoleBinding: &message.RoleBinding{
-					UserEntity: &milvuspb.UserEntity{Name: in.Username},
-					RoleEntity: &milvuspb.RoleEntity{Name: in.RoleName},
-				},
-			}).
-			WithBody(&message.PutUserRoleMessageBody{}).
-			WithBroadcast([]string{streaming.WAL().ControlChannel()}).
-			MustBuildBroadcast()
-	case milvuspb.OperateUserRoleType_RemoveUserFromRole:
-		msg = message.NewDropUserRoleMessageBuilderV2().
-			WithHeader(&message.DropUserRoleMessageHeader{
-				RoleBinding: &message.RoleBinding{
-					UserEntity: &milvuspb.UserEntity{Name: in.Username},
-					RoleEntity: &milvuspb.RoleEntity{Name: in.RoleName},
-				},
-			}).
-			WithBody(&message.DropUserRoleMessageBody{}).
-			WithBroadcast([]string{streaming.WAL().ControlChannel()}).
-			MustBuildBroadcast()
-	default:
-		return merr.StatusWithErrorCode(errors.New("invalid operate user role type"), commonpb.ErrorCode_OperateUserRoleFailure), nil
-	}
-
-	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
+	if err := c.broadcastOperateUserRole(ctx, in); err != nil {
 		errMsg := "fail to execute task when operate the user and role"
 		ctxLog.Warn(errMsg, zap.Error(err))
 		return merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_OperateUserRoleFailure), nil
@@ -2656,62 +2414,7 @@ func (c *Core) OperatePrivilege(ctx context.Context, in *milvuspb.OperatePrivile
 	ctxLog := log.Ctx(ctx).With(zap.String("role", typeutil.RootCoordRole), zap.Any("in", in))
 	ctxLog.Debug(method)
 
-	if err := c.operatePrivilegeCommonCheck(ctx, in); err != nil {
-		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_OperatePrivilegeFailure), nil
-	}
-
-	privName := in.Entity.Grantor.Privilege.Name
-	switch in.Version {
-	case "v2":
-		if err := c.isValidPrivilegeV2(ctx, privName); err != nil {
-			ctxLog.Error("", zap.Error(err))
-			return merr.StatusWithErrorCode(err, commonpb.ErrorCode_OperatePrivilegeFailure), nil
-		}
-		if err := c.validatePrivilegeGroupParams(ctx, privName, in.Entity.DbName, in.Entity.ObjectName); err != nil {
-			ctxLog.Error("", zap.Error(err))
-			return merr.StatusWithErrorCode(err, commonpb.ErrorCode_OperatePrivilegeFailure), nil
-		}
-		// set up object type for metastore, to be compatible with v1 version
-		in.Entity.Object.Name = util.GetObjectType(privName)
-	default:
-		if err := c.isValidPrivilege(ctx, privName, in.Entity.Object.Name); err != nil {
-			ctxLog.Error("", zap.Error(err))
-			return merr.StatusWithErrorCode(err, commonpb.ErrorCode_OperatePrivilegeFailure), nil
-		}
-		// set up object name if it is global object type and not built in privilege group
-		if in.Entity.Object.Name == commonpb.ObjectType_Global.String() && !util.IsBuiltinPrivilegeGroup(in.Entity.Grantor.Privilege.Name) {
-			in.Entity.ObjectName = util.AnyWord
-		}
-	}
-	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusivePrivilegeResourceKey())
-	if err != nil {
-		return merr.Status(err), nil
-	}
-	defer broadcaster.Close()
-
-	var msg message.BroadcastMutableMessage
-	switch in.Type {
-	case milvuspb.OperatePrivilegeType_Grant:
-		msg = message.NewGrantPrivilegeMessageBuilderV2().
-			WithHeader(&message.GrantPrivilegeMessageHeader{
-				Entity: in.Entity,
-			}).
-			WithBody(&message.GrantPrivilegeMessageBody{}).
-			WithBroadcast([]string{streaming.WAL().ControlChannel()}).
-			MustBuildBroadcast()
-	case milvuspb.OperatePrivilegeType_Revoke:
-		msg = message.NewRevokePrivilegeMessageBuilderV2().
-			WithHeader(&message.RevokePrivilegeMessageHeader{
-				Entity: in.Entity,
-			}).
-			WithBody(&message.RevokePrivilegeMessageBody{}).
-			WithBroadcast([]string{streaming.WAL().ControlChannel()}).
-			MustBuildBroadcast()
-	default:
-		return merr.StatusWithErrorCode(errors.New("invalid operate privilege type"), commonpb.ErrorCode_OperatePrivilegeFailure), nil
-	}
-
-	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
+	if err := c.broadcastOperatePrivilege(ctx, in); err != nil {
 		errMsg := "fail to execute task when operating the privilege"
 		ctxLog.Warn(errMsg, zap.Error(err))
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_OperatePrivilegeFailure), nil
@@ -2979,8 +2682,7 @@ func (c *Core) RestoreRBAC(ctx context.Context, in *milvuspb.RestoreRBACMetaRequ
 		return merr.Status(err), nil
 	}
 
-	err := executeRestoreRBACTaskSteps(ctx, c, in)
-	if err != nil {
+	if err := c.broadcastRestoreRBACV2(ctx, in.RBACMeta); err != nil {
 		errMsg := "fail to execute task when restore rbac meta data"
 		ctxLog.Warn(errMsg, zap.Error(err))
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_OperatePrivilegeFailure), nil
@@ -3132,23 +2834,7 @@ func (c *Core) CreatePrivilegeGroup(ctx context.Context, in *milvuspb.CreatePriv
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_CreatePrivilegeGroupFailure), nil
 	}
 
-	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusivePrivilegeResourceKey())
-	if err != nil {
-		return merr.Status(err), nil
-	}
-	defer broadcaster.Close()
-
-	msg := message.NewPutPrivilegeGroupMessageBuilderV2().
-		WithHeader(&message.PutPrivilegeGroupMessageHeader{
-			PrivilegeGroupInfo: &milvuspb.PrivilegeGroupInfo{
-				GroupName: in.GroupName,
-			},
-		}).
-		WithBody(&message.PutPrivilegeGroupMessageBody{}).
-		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
-		MustBuildBroadcast()
-
-	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
+	if err := c.broadcastCreatePrivilegeGroup(ctx, in); err != nil {
 		ctxLog.Warn("fail to create privilege group", zap.Error(err))
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_CreatePrivilegeGroupFailure), nil
 	}
@@ -3170,23 +2856,8 @@ func (c *Core) DropPrivilegeGroup(ctx context.Context, in *milvuspb.DropPrivileg
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_DropPrivilegeGroupFailure), nil
 	}
-	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusivePrivilegeResourceKey())
-	if err != nil {
-		return merr.Status(err), nil
-	}
-	defer broadcaster.Close()
 
-	msg := message.NewDropPrivilegeGroupMessageBuilderV2().
-		WithHeader(&message.DropPrivilegeGroupMessageHeader{
-			PrivilegeGroupInfo: &milvuspb.PrivilegeGroupInfo{
-				GroupName: in.GroupName,
-			},
-		}).
-		WithBody(&message.DropPrivilegeGroupMessageBody{}).
-		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
-		MustBuildBroadcast()
-
-	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
+	if err := c.broadcastDropPrivilegeGroup(ctx, in); err != nil {
 		ctxLog.Warn("fail to drop privilege group", zap.Error(err))
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_DropPrivilegeGroupFailure), nil
 	}
@@ -3242,41 +2913,7 @@ func (c *Core) OperatePrivilegeGroup(ctx context.Context, in *milvuspb.OperatePr
 		return merr.Status(err), nil
 	}
 
-	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusivePrivilegeResourceKey())
-	if err != nil {
-		return merr.Status(err), nil
-	}
-	defer broadcaster.Close()
-
-	var msg message.BroadcastMutableMessage
-	switch in.Type {
-	case milvuspb.OperatePrivilegeGroupType_AddPrivilegesToGroup:
-		msg = message.NewPutPrivilegeGroupMessageBuilderV2().
-			WithHeader(&message.PutPrivilegeGroupMessageHeader{
-				PrivilegeGroupInfo: &milvuspb.PrivilegeGroupInfo{
-					GroupName:  in.GroupName,
-					Privileges: in.Privileges,
-				},
-			}).
-			WithBody(&message.PutPrivilegeGroupMessageBody{}).
-			WithBroadcast([]string{streaming.WAL().ControlChannel()}).
-			MustBuildBroadcast()
-	case milvuspb.OperatePrivilegeGroupType_RemovePrivilegesFromGroup:
-		msg = message.NewDropPrivilegeGroupMessageBuilderV2().
-			WithHeader(&message.DropPrivilegeGroupMessageHeader{
-				PrivilegeGroupInfo: &milvuspb.PrivilegeGroupInfo{
-					GroupName:  in.GroupName,
-					Privileges: in.Privileges,
-				},
-			}).
-			WithBody(&message.DropPrivilegeGroupMessageBody{}).
-			WithBroadcast([]string{streaming.WAL().ControlChannel()}).
-			MustBuildBroadcast()
-	default:
-		return merr.StatusWithErrorCode(errors.New("invalid operate privilege group type"), commonpb.ErrorCode_OperatePrivilegeGroupFailure), nil
-	}
-
-	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
+	if err := c.broadcastOperatePrivilegeGroup(ctx, in); err != nil {
 		errMsg := "fail to execute task when operate privilege group"
 		ctxLog.Warn(errMsg, zap.Error(err))
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_OperatePrivilegeGroupFailure), nil

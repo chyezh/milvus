@@ -59,6 +59,7 @@ enum MessageType {
     CreateIndex          = 35;
     AlterIndex           = 36;
     DropIndex            = 37;
+    RestoreRBAC          = 38;
 
     // PutReplicateConfig is used to put the replicate configuration to the current cluster.
     // When the PutReplicateConfig message is received, the replication topology is changed.
@@ -456,6 +457,15 @@ message DropUserRoleMessageHeader {
 
 // DropUserRoleMessageBody is the body of drop user role message.
 message DropUserRoleMessageBody {}
+
+// RestoreRBACMessageHeader is the header of restore rbac message.
+message RestoreRBACMessageHeader {
+}
+
+// RestoreRBACMessageBody is the body of restore rbac message.
+message RestoreRBACMessageBody {
+    milvus.RBACMeta rbac_meta = 1;
+}
 
 // GrantPrivilegeMessageHeader is the header of grant privilege message.
 message GrantPrivilegeMessageHeader {

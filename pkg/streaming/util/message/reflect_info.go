@@ -61,6 +61,7 @@ const (
 	MessageTypeRevokePrivilege    MessageType = MessageType(messagespb.MessageType_RevokePrivilege)
 	MessageTypePutPrivilegeGroup  MessageType = MessageType(messagespb.MessageType_PutPrivilegeGroup)
 	MessageTypeDropPrivilegeGroup MessageType = MessageType(messagespb.MessageType_DropPrivilegeGroup)
+	MessageTypeRestoreRBAC        MessageType = MessageType(messagespb.MessageType_RestoreRBAC)
 	MessageTypePutResourceGroup   MessageType = MessageType(messagespb.MessageType_PutResourceGroup)
 	MessageTypeDropResourceGroup  MessageType = MessageType(messagespb.MessageType_DropResourceGroup)
 	MessageTypeCreateIndex        MessageType = MessageType(messagespb.MessageType_CreateIndex)
@@ -154,6 +155,8 @@ type (
 	PutPrivilegeGroupMessageBody    = messagespb.PutPrivilegeGroupMessageBody
 	DropPrivilegeGroupMessageHeader = messagespb.DropPrivilegeGroupMessageHeader
 	DropPrivilegeGroupMessageBody   = messagespb.DropPrivilegeGroupMessageBody
+	RestoreRBACMessageHeader        = messagespb.RestoreRBACMessageHeader
+	RestoreRBACMessageBody          = messagespb.RestoreRBACMessageBody
 	PutResourceGroupMessageHeader   = messagespb.PutResourceGroupMessageHeader
 	PutResourceGroupMessageBody     = messagespb.PutResourceGroupMessageBody
 	DropResourceGroupMessageHeader  = messagespb.DropResourceGroupMessageHeader
@@ -1662,6 +1665,47 @@ var MustAsBroadcastDropPrivilegeGroupMessageV2 = MustAsSpecializedBroadcastMessa
 // NewDropPrivilegeGroupMessageBuilderV2 creates a new message builder for DropPrivilegeGroupMessageV2
 var NewDropPrivilegeGroupMessageBuilderV2 = newMutableMessageBuilder[*DropPrivilegeGroupMessageHeader, *DropPrivilegeGroupMessageBody]
 
+// Type aliases for RestoreRBACMessageV2
+type (
+	MutableRestoreRBACMessageV2         = specializedMutableMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
+	ImmutableRestoreRBACMessageV2       = SpecializedImmutableMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
+	BroadcastRestoreRBACMessageV2       = SpecializedBroadcastMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
+	BroadcastResultRestoreRBACMessageV2 = BroadcastResult[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
+)
+
+// MessageTypeWithVersion for RestoreRBACMessageV2
+var MessageTypeRestoreRBACV2 = MessageTypeWithVersion{
+	MessageType: MessageTypeRestoreRBAC,
+	Version:     VersionV2,
+}
+
+// MessageSpecializedType for RestoreRBACMessageV2
+var SpecializedTypeRestoreRBACV2 = MessageSpecializedType{
+	BodyType:   reflect.TypeOf((*RestoreRBACMessageBody)(nil)),
+	HeaderType: reflect.TypeOf((*RestoreRBACMessageHeader)(nil)),
+}
+
+// AsMutableRestoreRBACMessageV2 converts a BasicMessage to MutableRestoreRBACMessageV2
+var AsMutableRestoreRBACMessageV2 = asSpecializedMutableMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
+
+// MustAsMutableRestoreRBACMessageV2 converts a BasicMessage to MutableRestoreRBACMessageV2, panics on error
+var MustAsMutableRestoreRBACMessageV2 = mustAsSpecializedMutableMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
+
+// AsImmutableRestoreRBACMessageV2 converts an ImmutableMessage to ImmutableRestoreRBACMessageV2
+var AsImmutableRestoreRBACMessageV2 = asSpecializedImmutableMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
+
+// MustAsImmutableRestoreRBACMessageV2 converts an ImmutableMessage to ImmutableRestoreRBACMessageV2, panics on error
+var MustAsImmutableRestoreRBACMessageV2 = MustAsSpecializedImmutableMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
+
+// AsBroadcastRestoreRBACMessageV2 converts a BasicMessage to BroadcastRestoreRBACMessageV2
+var AsBroadcastRestoreRBACMessageV2 = asSpecializedBroadcastMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
+
+// MustAsBroadcastRestoreRBACMessageV2 converts a BasicMessage to BroadcastRestoreRBACMessageV2, panics on error
+var MustAsBroadcastRestoreRBACMessageV2 = MustAsSpecializedBroadcastMessage[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
+
+// NewRestoreRBACMessageBuilderV2 creates a new message builder for RestoreRBACMessageV2
+var NewRestoreRBACMessageBuilderV2 = newMutableMessageBuilder[*RestoreRBACMessageHeader, *RestoreRBACMessageBody]
+
 // Type aliases for PutResourceGroupMessageV2
 type (
 	MutablePutResourceGroupMessageV2         = specializedMutableMessage[*PutResourceGroupMessageHeader, *PutResourceGroupMessageBody]
@@ -1906,6 +1950,7 @@ var messageTypeMap = map[reflect.Type]MessageType{
 	reflect.TypeOf(&messagespb.PutRoleMessageHeader{}):            MessageTypePutRole,
 	reflect.TypeOf(&messagespb.PutUserMessageHeader{}):            MessageTypePutUser,
 	reflect.TypeOf(&messagespb.PutUserRoleMessageHeader{}):        MessageTypePutUserRole,
+	reflect.TypeOf(&messagespb.RestoreRBACMessageHeader{}):        MessageTypeRestoreRBAC,
 	reflect.TypeOf(&messagespb.RevokePrivilegeMessageHeader{}):    MessageTypeRevokePrivilege,
 	reflect.TypeOf(&messagespb.RollbackTxnMessageHeader{}):        MessageTypeRollbackTxn,
 	reflect.TypeOf(&messagespb.SchemaChangeMessageHeader{}):       MessageTypeSchemaChange,
@@ -1968,6 +2013,7 @@ var messageTypeVersionSpecializedMap = map[MessageTypeWithVersion]MessageSpecial
 	MessageTypePutRoleV2:            SpecializedTypePutRoleV2,
 	MessageTypePutUserRoleV2:        SpecializedTypePutUserRoleV2,
 	MessageTypePutUserV2:            SpecializedTypePutUserV2,
+	MessageTypeRestoreRBACV2:        SpecializedTypeRestoreRBACV2,
 	MessageTypeRevokePrivilegeV2:    SpecializedTypeRevokePrivilegeV2,
 	MessageTypeRollbackTxnV2:        SpecializedTypeRollbackTxnV2,
 	MessageTypeSchemaChangeV2:       SpecializedTypeSchemaChangeV2,
@@ -2014,6 +2060,7 @@ var messageSpecializedTypeVersionMap = map[MessageSpecializedType]MessageTypeWit
 	SpecializedTypePutRoleV2:            MessageTypePutRoleV2,
 	SpecializedTypePutUserRoleV2:        MessageTypePutUserRoleV2,
 	SpecializedTypePutUserV2:            MessageTypePutUserV2,
+	SpecializedTypeRestoreRBACV2:        MessageTypeRestoreRBACV2,
 	SpecializedTypeRevokePrivilegeV2:    MessageTypeRevokePrivilegeV2,
 	SpecializedTypeRollbackTxnV2:        MessageTypeRollbackTxnV2,
 	SpecializedTypeSchemaChangeV2:       MessageTypeSchemaChangeV2,
