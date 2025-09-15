@@ -34,8 +34,7 @@ func resetMessageCheckCallbacks() {
 }
 
 var (
-	RegisterDropPartitionMessageV1AckCallback = registerMessageAckCallback[*message.DropPartitionMessageHeader, *msgpb.DropPartitionRequest]
-	RegisterImportMessageV1AckCallback        = registerMessageAckCallback[*message.ImportMessageHeader, *msgpb.ImportMsg]
+	RegisterImportMessageV1AckCallback = registerMessageAckCallback[*message.ImportMessageHeader, *msgpb.ImportMsg]
 
 	// Cluster
 	RegisterPutReplicateConfigV2AckCallback = registerMessageAckCallback[*message.PutReplicateConfigMessageHeader, *message.PutReplicateConfigMessageBody]
@@ -46,6 +45,10 @@ var (
 	RegisterDropCollectionV1AckCallback        = registerMessageAckCallback[*message.DropCollectionMessageHeader, *message.DropCollectionRequest]
 	RegisterPutLoadConfigMessageV2AckCallback  = registerMessageAckCallback[*message.PutLoadConfigMessageHeader, *message.PutLoadConfigMessageBody]
 	RegisterDropLoadConfigMessageV2AckCallback = registerMessageAckCallback[*message.DropLoadConfigMessageHeader, *message.DropLoadConfigMessageBody]
+
+	// Partition
+	RegisterCreatePartitionV1AckCallback = registerMessageAckCallback[*message.CreatePartitionMessageHeader, *message.CreatePartitionRequest]
+	RegisterDropPartitionV1AckCallback   = registerMessageAckCallback[*message.DropPartitionMessageHeader, *message.DropPartitionRequest]
 
 	// Database
 	RegisterCreateDatabaseV2AckCallback = registerMessageAckCallback[*message.CreateDatabaseMessageHeader, *message.CreateDatabaseMessageBody]
@@ -77,8 +80,7 @@ var (
 // resetMessageAckCallbacks resets the message ack callbacks.
 func resetMessageAckCallbacks() {
 	messageAckCallbacks = map[message.MessageTypeWithVersion]*syncutil.Future[messageInnerAckCallback]{
-		message.MessageTypeDropPartitionV1: syncutil.NewFuture[messageInnerAckCallback](),
-		message.MessageTypeImportV1:        syncutil.NewFuture[messageInnerAckCallback](),
+		message.MessageTypeImportV1: syncutil.NewFuture[messageInnerAckCallback](),
 
 		// Cluster
 		message.MessageTypePutReplicateConfigV2: syncutil.NewFuture[messageInnerAckCallback](),
@@ -89,6 +91,10 @@ func resetMessageAckCallbacks() {
 		message.MessageTypeDropCollectionV1:   syncutil.NewFuture[messageInnerAckCallback](),
 		message.MessageTypePutLoadConfigV2:    syncutil.NewFuture[messageInnerAckCallback](),
 		message.MessageTypeDropLoadConfigV2:   syncutil.NewFuture[messageInnerAckCallback](),
+
+		// Partition
+		message.MessageTypeCreatePartitionV1: syncutil.NewFuture[messageInnerAckCallback](),
+		message.MessageTypeDropPartitionV1:   syncutil.NewFuture[messageInnerAckCallback](),
 
 		// Database
 		message.MessageTypeCreateDatabaseV2: syncutil.NewFuture[messageInnerAckCallback](),
