@@ -18,18 +18,6 @@ var RegisterImportMessageV1CheckCallback = registerMessageCheckCallback[*message
 func resetMessageCheckCallbacks() {
 	messageCheckCallbacks = map[message.MessageTypeWithVersion]*syncutil.Future[messageInnerCheckCallback]{
 		message.MessageTypeImportV1: syncutil.NewFuture[messageInnerCheckCallback](),
-
-		// RBAC
-		message.MessageTypePutUserV2:            syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypeDropUserV2:           syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypePutRoleV2:            syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypeDropRoleV2:           syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypePutUserRoleV2:        syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypeDropUserRoleV2:       syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypeGrantPrivilegeV2:     syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypeRevokePrivilegeV2:    syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypePutPrivilegeGroupV2:  syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypeDropPrivilegeGroupV2: syncutil.NewFuture[messageInnerCheckCallback](),
 	}
 }
 
