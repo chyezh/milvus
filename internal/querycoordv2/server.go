@@ -147,6 +147,7 @@ func NewQueryCoord(ctx context.Context) (*Server, error) {
 }
 
 func (s *Server) RegisterDDLCallbacks() {
+	RegisterDDLCallbacks(s)
 	registry.RegisterPutLoadConfigMessageV2AckCallback(s.putLoadConfigCollectionV2AckCallback)
 	registry.RegisterDropLoadConfigMessageV2AckCallback(s.dropLoadConfigCollectionV2AckCallback)
 }

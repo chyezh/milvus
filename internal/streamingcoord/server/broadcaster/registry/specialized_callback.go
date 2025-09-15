@@ -18,18 +18,6 @@ var RegisterImportMessageV1CheckCallback = registerMessageCheckCallback[*message
 func resetMessageCheckCallbacks() {
 	messageCheckCallbacks = map[message.MessageTypeWithVersion]*syncutil.Future[messageInnerCheckCallback]{
 		message.MessageTypeImportV1: syncutil.NewFuture[messageInnerCheckCallback](),
-
-		// RBAC
-		message.MessageTypePutUserV2:            syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypeDropUserV2:           syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypePutRoleV2:            syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypeDropRoleV2:           syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypePutUserRoleV2:        syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypeDropUserRoleV2:       syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypeGrantPrivilegeV2:     syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypeRevokePrivilegeV2:    syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypePutPrivilegeGroupV2:  syncutil.NewFuture[messageInnerCheckCallback](),
-		message.MessageTypeDropPrivilegeGroupV2: syncutil.NewFuture[messageInnerCheckCallback](),
 	}
 }
 
@@ -75,6 +63,10 @@ var (
 	RegisterRevokePrivilegeV2AckCallback    = registerMessageAckCallback[*message.RevokePrivilegeMessageHeader, *message.RevokePrivilegeMessageBody]
 	RegisterPutPrivilegeGroupV2AckCallback  = registerMessageAckCallback[*message.PutPrivilegeGroupMessageHeader, *message.PutPrivilegeGroupMessageBody]
 	RegisterDropPrivilegeGroupV2AckCallback = registerMessageAckCallback[*message.DropPrivilegeGroupMessageHeader, *message.DropPrivilegeGroupMessageBody]
+
+	// Resource Group
+	RegisterPutResourceGroupV2AckCallback  = registerMessageAckCallback[*message.PutResourceGroupMessageHeader, *message.PutResourceGroupMessageBody]
+	RegisterDropResourceGroupV2AckCallback = registerMessageAckCallback[*message.DropResourceGroupMessageHeader, *message.DropResourceGroupMessageBody]
 )
 
 // resetMessageAckCallbacks resets the message ack callbacks.
@@ -121,5 +113,9 @@ func resetMessageAckCallbacks() {
 		message.MessageTypeRevokePrivilegeV2:    syncutil.NewFuture[messageInnerAckCallback](),
 		message.MessageTypePutPrivilegeGroupV2:  syncutil.NewFuture[messageInnerAckCallback](),
 		message.MessageTypeDropPrivilegeGroupV2: syncutil.NewFuture[messageInnerAckCallback](),
+
+		// Resource Group
+		message.MessageTypePutResourceGroupV2:  syncutil.NewFuture[messageInnerAckCallback](),
+		message.MessageTypeDropResourceGroupV2: syncutil.NewFuture[messageInnerAckCallback](),
 	}
 }

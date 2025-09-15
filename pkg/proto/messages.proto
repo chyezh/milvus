@@ -477,8 +477,7 @@ message DropPrivilegeGroupMessageBody {}
 
 // PutResourceGroupMessageHeader is the header of put resource group message.
 message PutResourceGroupMessageHeader {
-    string resource_group_name = 1;
-    rg.ResourceGroupConfig resource_group_config = 2;
+    map<string, rg.ResourceGroupConfig> resource_group_configs = 3;
 }
 
 // PutResourceGroupMessageBody is the body of put resource group message.
