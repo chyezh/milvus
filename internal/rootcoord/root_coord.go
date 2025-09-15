@@ -822,28 +822,12 @@ func (c *Core) CreateDatabase(ctx context.Context, in *milvuspb.CreateDatabaseRe
 	log.Ctx(ctx).Info("received request to create database", zap.String("role", typeutil.RootCoordRole),
 		zap.String("dbName", in.GetDbName()), zap.Int64("msgID", in.GetBase().GetMsgID()))
 
-	t := &createDatabaseTask{
-		baseTask: newBaseTask(ctx, c),
-		Req:      in,
-	}
-
-	if err := c.scheduler.AddTask(t); err != nil {
-		log.Ctx(ctx).Info("failed to enqueue request to create database",
-			zap.String("role", typeutil.RootCoordRole),
-			zap.Error(err),
-			zap.String("dbName", in.GetDbName()), zap.Int64("msgID", in.GetBase().GetMsgID()))
-
-		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
-		return merr.Status(err), nil
-	}
-
-	if err := t.WaitToFinish(); err != nil {
+	if err := c.broadcastCreateDatabase(ctx, in); err != nil {
 		log.Ctx(ctx).Info("failed to create database",
 			zap.String("role", typeutil.RootCoordRole),
 			zap.Error(err),
 			zap.String("dbName", in.GetDbName()),
-			zap.Int64("msgID", in.GetBase().GetMsgID()), zap.Uint64("ts", t.GetTs()))
-
+			zap.Int64("msgID", in.GetBase().GetMsgID()))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
@@ -852,7 +836,7 @@ func (c *Core) CreateDatabase(ctx context.Context, in *milvuspb.CreateDatabaseRe
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	log.Ctx(ctx).Info("done to create database", zap.String("role", typeutil.RootCoordRole),
 		zap.String("dbName", in.GetDbName()),
-		zap.Int64("msgID", in.GetBase().GetMsgID()), zap.Uint64("ts", t.GetTs()))
+		zap.Int64("msgID", in.GetBase().GetMsgID()))
 	return merr.Success(), nil
 }
 
@@ -868,26 +852,11 @@ func (c *Core) DropDatabase(ctx context.Context, in *milvuspb.DropDatabaseReques
 	log.Ctx(ctx).Info("received request to drop database", zap.String("role", typeutil.RootCoordRole),
 		zap.String("dbName", in.GetDbName()), zap.Int64("msgID", in.GetBase().GetMsgID()))
 
-	t := &dropDatabaseTask{
-		baseTask: newBaseTask(ctx, c),
-		Req:      in,
-	}
-
-	if err := c.scheduler.AddTask(t); err != nil {
-		log.Ctx(ctx).Info("failed to enqueue request to drop database", zap.String("role", typeutil.RootCoordRole),
-			zap.Error(err),
-			zap.String("dbName", in.GetDbName()), zap.Int64("msgID", in.GetBase().GetMsgID()))
-
-		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
-		return merr.Status(err), nil
-	}
-
-	if err := t.WaitToFinish(); err != nil {
+	if err := c.broadcastDropDatabase(ctx, in); err != nil {
 		log.Ctx(ctx).Info("failed to drop database", zap.String("role", typeutil.RootCoordRole),
 			zap.Error(err),
 			zap.String("dbName", in.GetDbName()),
-			zap.Int64("msgID", in.GetBase().GetMsgID()), zap.Uint64("ts", t.GetTs()))
-
+			zap.Int64("msgID", in.GetBase().GetMsgID()))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
@@ -896,8 +865,7 @@ func (c *Core) DropDatabase(ctx context.Context, in *milvuspb.DropDatabaseReques
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	metrics.CleanupRootCoordDBMetrics(in.GetDbName())
 	log.Ctx(ctx).Info("done to drop database", zap.String("role", typeutil.RootCoordRole),
-		zap.String("dbName", in.GetDbName()), zap.Int64("msgID", in.GetBase().GetMsgID()),
-		zap.Uint64("ts", t.GetTs()))
+		zap.String("dbName", in.GetDbName()), zap.Int64("msgID", in.GetBase().GetMsgID()))
 	return merr.Success(), nil
 }
 
@@ -1503,27 +1471,11 @@ func (c *Core) AlterDatabase(ctx context.Context, in *rootcoordpb.AlterDatabaseR
 		zap.String("name", in.GetDbName()),
 		zap.Any("props", in.Properties))
 
-	t := &alterDatabaseTask{
-		baseTask: newBaseTask(ctx, c),
-		Req:      in,
-	}
-
-	if err := c.scheduler.AddTask(t); err != nil {
-		log.Warn("failed to enqueue request to alter database",
-			zap.String("role", typeutil.RootCoordRole),
-			zap.String("name", in.GetDbName()),
-			zap.Error(err))
-
-		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
-		return merr.Status(err), nil
-	}
-
-	if err := t.WaitToFinish(); err != nil {
+	if err := c.broadcastAlterDatabase(ctx, in); err != nil {
 		log.Warn("failed to alter database",
 			zap.String("role", typeutil.RootCoordRole),
 			zap.Error(err),
-			zap.String("name", in.GetDbName()),
-			zap.Uint64("ts", t.GetTs()))
+			zap.String("name", in.GetDbName()))
 
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return merr.Status(err), nil
@@ -1531,12 +1483,11 @@ func (c *Core) AlterDatabase(ctx context.Context, in *rootcoordpb.AlterDatabaseR
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
-	metrics.RootCoordDDLReqLatencyInQueue.WithLabelValues(method).Observe(float64(t.queueDur.Milliseconds()))
+	// metrics.RootCoordDDLReqLatencyInQueue.WithLabelValues(method).Observe(float64(t.queueDur.Milliseconds()))
 
 	log.Ctx(ctx).Info("done to alter database",
 		zap.String("role", typeutil.RootCoordRole),
-		zap.String("name", in.GetDbName()),
-		zap.Uint64("ts", t.GetTs()))
+		zap.String("name", in.GetDbName()))
 	return merr.Success(), nil
 }
 
