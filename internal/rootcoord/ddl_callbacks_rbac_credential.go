@@ -82,7 +82,6 @@ func (c *Core) broadcastUpdateCredential(ctx context.Context, credInfo *internal
 	msg := message.NewPutUserMessageBuilderV2().
 		WithHeader(&message.PutUserMessageHeader{
 			UserEntity: &milvuspb.UserEntity{Name: credInfo.Username},
-			IsUpdate:   true,
 		}).
 		WithBody(&message.PutUserMessageBody{
 			CredentialInfo: credInfo,

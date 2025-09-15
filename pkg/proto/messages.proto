@@ -42,24 +42,22 @@ enum MessageType {
     DropDatabase         = 18;
     PutAlias             = 19;
     DropAlias            = 20;
-    CreateUser           = 21;
+    RestoreRBAC          = 21;
     PutUser              = 22;
     DropUser             = 23;
-    CreateRole           = 24;
-    PutRole              = 25;
-    DropRole             = 26;
-    PutUserRole          = 27;
-    DropUserRole         = 28;
-    GrantPrivilege       = 29;
-    RevokePrivilege      = 30;
-    PutPrivilegeGroup    = 31;
-    DropPrivilegeGroup   = 32;
-    PutResourceGroup     = 33;
-    DropResourceGroup    = 34;
-    CreateIndex          = 35;
-    AlterIndex           = 36;
-    DropIndex            = 37;
-    RestoreRBAC          = 38;
+    PutRole              = 24;
+    DropRole             = 25;
+    PutUserRole          = 26;
+    DropUserRole         = 27;
+    GrantPrivilege       = 28;
+    RevokePrivilege      = 29;
+    PutPrivilegeGroup    = 30;
+    DropPrivilegeGroup   = 31;
+    PutResourceGroup     = 32;
+    DropResourceGroup    = 33;
+    CreateIndex          = 34;
+    AlterIndex           = 35;
+    DropIndex            = 36;
 
     // PutReplicateConfig is used to put the replicate configuration to the current cluster.
     // When the PutReplicateConfig message is received, the replication topology is changed.
@@ -395,7 +393,6 @@ message CreateUserMessageBody {
 // PutUserMessageHeader is the header of put user message.
 message PutUserMessageHeader {
     milvus.UserEntity user_entity = 1;
-    bool is_update = 2; // if true, the user is updated, otherwise, the user is created.
 }
 
 // PutUserMessageBody is the body of put user message.
@@ -410,13 +407,6 @@ message DropUserMessageHeader {
 
 // DropUserMessageBody is the body of drop user message.
 message DropUserMessageBody {}
-
-message CreateRoleMessageHeader {
-    milvus.RoleEntity role_entity = 1;
-}
-
-message CreateRoleMessageBody {
-}
 
 // PutRoleMessageHeader is the header of put role message.
 message PutRoleMessageHeader {

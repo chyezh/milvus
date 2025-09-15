@@ -12,13 +12,13 @@ import (
 
 // Export consts
 const (
-	FieldMaskCollectionConsistencyLevel = "consistency_level"
 	FieldMaskDBID                       = "db_id"
 	FieldMaskDBName                     = "db_name"
 	FieldMaskCollectionName             = "collection_name"
 	FieldMaskCollectionDescription      = "description"
 	FieldMaskCollectionSchema           = "schema"
 	FieldMaskCollectionProperties       = "properties"
+	FieldMaskCollectionConsistencyLevel = "consistency_level"
 )
 
 // Export message types
@@ -49,10 +49,8 @@ const (
 	MessageTypeDropDatabase       MessageType = MessageType(messagespb.MessageType_DropDatabase)
 	MessageTypePutAlias           MessageType = MessageType(messagespb.MessageType_PutAlias)
 	MessageTypeDropAlias          MessageType = MessageType(messagespb.MessageType_DropAlias)
-	MessageTypeCreateUser         MessageType = MessageType(messagespb.MessageType_CreateUser)
 	MessageTypePutUser            MessageType = MessageType(messagespb.MessageType_PutUser)
 	MessageTypeDropUser           MessageType = MessageType(messagespb.MessageType_DropUser)
-	MessageTypeCreateRole         MessageType = MessageType(messagespb.MessageType_CreateRole)
 	MessageTypePutRole            MessageType = MessageType(messagespb.MessageType_PutRole)
 	MessageTypeDropRole           MessageType = MessageType(messagespb.MessageType_DropRole)
 	MessageTypePutUserRole        MessageType = MessageType(messagespb.MessageType_PutUserRole)
@@ -131,14 +129,10 @@ type (
 	PutAliasMessageBody             = messagespb.PutAliasMessageBody
 	DropAliasMessageHeader          = messagespb.DropAliasMessageHeader
 	DropAliasMessageBody            = messagespb.DropAliasMessageBody
-	CreateUserMessageHeader         = messagespb.CreateUserMessageHeader
-	CreateUserMessageBody           = messagespb.CreateUserMessageBody
 	PutUserMessageHeader            = messagespb.PutUserMessageHeader
 	PutUserMessageBody              = messagespb.PutUserMessageBody
 	DropUserMessageHeader           = messagespb.DropUserMessageHeader
 	DropUserMessageBody             = messagespb.DropUserMessageBody
-	CreateRoleMessageHeader         = messagespb.CreateRoleMessageHeader
-	CreateRoleMessageBody           = messagespb.CreateRoleMessageBody
 	PutRoleMessageHeader            = messagespb.PutRoleMessageHeader
 	PutRoleMessageBody              = messagespb.PutRoleMessageBody
 	DropRoleMessageHeader           = messagespb.DropRoleMessageHeader
@@ -1173,47 +1167,6 @@ var MustAsBroadcastDropAliasMessageV2 = MustAsSpecializedBroadcastMessage[*DropA
 // NewDropAliasMessageBuilderV2 creates a new message builder for DropAliasMessageV2
 var NewDropAliasMessageBuilderV2 = newMutableMessageBuilder[*DropAliasMessageHeader, *DropAliasMessageBody]
 
-// Type aliases for CreateUserMessageV2
-type (
-	MutableCreateUserMessageV2         = specializedMutableMessage[*CreateUserMessageHeader, *CreateUserMessageBody]
-	ImmutableCreateUserMessageV2       = SpecializedImmutableMessage[*CreateUserMessageHeader, *CreateUserMessageBody]
-	BroadcastCreateUserMessageV2       = SpecializedBroadcastMessage[*CreateUserMessageHeader, *CreateUserMessageBody]
-	BroadcastResultCreateUserMessageV2 = BroadcastResult[*CreateUserMessageHeader, *CreateUserMessageBody]
-)
-
-// MessageTypeWithVersion for CreateUserMessageV2
-var MessageTypeCreateUserV2 = MessageTypeWithVersion{
-	MessageType: MessageTypeCreateUser,
-	Version:     VersionV2,
-}
-
-// MessageSpecializedType for CreateUserMessageV2
-var SpecializedTypeCreateUserV2 = MessageSpecializedType{
-	BodyType:   reflect.TypeOf((*CreateUserMessageBody)(nil)),
-	HeaderType: reflect.TypeOf((*CreateUserMessageHeader)(nil)),
-}
-
-// AsMutableCreateUserMessageV2 converts a BasicMessage to MutableCreateUserMessageV2
-var AsMutableCreateUserMessageV2 = asSpecializedMutableMessage[*CreateUserMessageHeader, *CreateUserMessageBody]
-
-// MustAsMutableCreateUserMessageV2 converts a BasicMessage to MutableCreateUserMessageV2, panics on error
-var MustAsMutableCreateUserMessageV2 = mustAsSpecializedMutableMessage[*CreateUserMessageHeader, *CreateUserMessageBody]
-
-// AsImmutableCreateUserMessageV2 converts an ImmutableMessage to ImmutableCreateUserMessageV2
-var AsImmutableCreateUserMessageV2 = asSpecializedImmutableMessage[*CreateUserMessageHeader, *CreateUserMessageBody]
-
-// MustAsImmutableCreateUserMessageV2 converts an ImmutableMessage to ImmutableCreateUserMessageV2, panics on error
-var MustAsImmutableCreateUserMessageV2 = MustAsSpecializedImmutableMessage[*CreateUserMessageHeader, *CreateUserMessageBody]
-
-// AsBroadcastCreateUserMessageV2 converts a BasicMessage to BroadcastCreateUserMessageV2
-var AsBroadcastCreateUserMessageV2 = asSpecializedBroadcastMessage[*CreateUserMessageHeader, *CreateUserMessageBody]
-
-// MustAsBroadcastCreateUserMessageV2 converts a BasicMessage to BroadcastCreateUserMessageV2, panics on error
-var MustAsBroadcastCreateUserMessageV2 = MustAsSpecializedBroadcastMessage[*CreateUserMessageHeader, *CreateUserMessageBody]
-
-// NewCreateUserMessageBuilderV2 creates a new message builder for CreateUserMessageV2
-var NewCreateUserMessageBuilderV2 = newMutableMessageBuilder[*CreateUserMessageHeader, *CreateUserMessageBody]
-
 // Type aliases for PutUserMessageV2
 type (
 	MutablePutUserMessageV2         = specializedMutableMessage[*PutUserMessageHeader, *PutUserMessageBody]
@@ -1295,47 +1248,6 @@ var MustAsBroadcastDropUserMessageV2 = MustAsSpecializedBroadcastMessage[*DropUs
 
 // NewDropUserMessageBuilderV2 creates a new message builder for DropUserMessageV2
 var NewDropUserMessageBuilderV2 = newMutableMessageBuilder[*DropUserMessageHeader, *DropUserMessageBody]
-
-// Type aliases for CreateRoleMessageV2
-type (
-	MutableCreateRoleMessageV2         = specializedMutableMessage[*CreateRoleMessageHeader, *CreateRoleMessageBody]
-	ImmutableCreateRoleMessageV2       = SpecializedImmutableMessage[*CreateRoleMessageHeader, *CreateRoleMessageBody]
-	BroadcastCreateRoleMessageV2       = SpecializedBroadcastMessage[*CreateRoleMessageHeader, *CreateRoleMessageBody]
-	BroadcastResultCreateRoleMessageV2 = BroadcastResult[*CreateRoleMessageHeader, *CreateRoleMessageBody]
-)
-
-// MessageTypeWithVersion for CreateRoleMessageV2
-var MessageTypeCreateRoleV2 = MessageTypeWithVersion{
-	MessageType: MessageTypeCreateRole,
-	Version:     VersionV2,
-}
-
-// MessageSpecializedType for CreateRoleMessageV2
-var SpecializedTypeCreateRoleV2 = MessageSpecializedType{
-	BodyType:   reflect.TypeOf((*CreateRoleMessageBody)(nil)),
-	HeaderType: reflect.TypeOf((*CreateRoleMessageHeader)(nil)),
-}
-
-// AsMutableCreateRoleMessageV2 converts a BasicMessage to MutableCreateRoleMessageV2
-var AsMutableCreateRoleMessageV2 = asSpecializedMutableMessage[*CreateRoleMessageHeader, *CreateRoleMessageBody]
-
-// MustAsMutableCreateRoleMessageV2 converts a BasicMessage to MutableCreateRoleMessageV2, panics on error
-var MustAsMutableCreateRoleMessageV2 = mustAsSpecializedMutableMessage[*CreateRoleMessageHeader, *CreateRoleMessageBody]
-
-// AsImmutableCreateRoleMessageV2 converts an ImmutableMessage to ImmutableCreateRoleMessageV2
-var AsImmutableCreateRoleMessageV2 = asSpecializedImmutableMessage[*CreateRoleMessageHeader, *CreateRoleMessageBody]
-
-// MustAsImmutableCreateRoleMessageV2 converts an ImmutableMessage to ImmutableCreateRoleMessageV2, panics on error
-var MustAsImmutableCreateRoleMessageV2 = MustAsSpecializedImmutableMessage[*CreateRoleMessageHeader, *CreateRoleMessageBody]
-
-// AsBroadcastCreateRoleMessageV2 converts a BasicMessage to BroadcastCreateRoleMessageV2
-var AsBroadcastCreateRoleMessageV2 = asSpecializedBroadcastMessage[*CreateRoleMessageHeader, *CreateRoleMessageBody]
-
-// MustAsBroadcastCreateRoleMessageV2 converts a BasicMessage to BroadcastCreateRoleMessageV2, panics on error
-var MustAsBroadcastCreateRoleMessageV2 = MustAsSpecializedBroadcastMessage[*CreateRoleMessageHeader, *CreateRoleMessageBody]
-
-// NewCreateRoleMessageBuilderV2 creates a new message builder for CreateRoleMessageV2
-var NewCreateRoleMessageBuilderV2 = newMutableMessageBuilder[*CreateRoleMessageHeader, *CreateRoleMessageBody]
 
 // Type aliases for PutRoleMessageV2
 type (
@@ -1920,9 +1832,7 @@ var messageTypeMap = map[reflect.Type]MessageType{
 	reflect.TypeOf(&messagespb.CreateDatabaseMessageHeader{}):     MessageTypeCreateDatabase,
 	reflect.TypeOf(&messagespb.CreateIndexMessageHeader{}):        MessageTypeCreateIndex,
 	reflect.TypeOf(&messagespb.CreatePartitionMessageHeader{}):    MessageTypeCreatePartition,
-	reflect.TypeOf(&messagespb.CreateRoleMessageHeader{}):         MessageTypeCreateRole,
 	reflect.TypeOf(&messagespb.CreateSegmentMessageHeader{}):      MessageTypeCreateSegment,
-	reflect.TypeOf(&messagespb.CreateUserMessageHeader{}):         MessageTypeCreateUser,
 	reflect.TypeOf(&messagespb.DeleteMessageHeader{}):             MessageTypeDelete,
 	reflect.TypeOf(&messagespb.DropAliasMessageHeader{}):          MessageTypeDropAlias,
 	reflect.TypeOf(&messagespb.DropCollectionMessageHeader{}):     MessageTypeDropCollection,
@@ -1983,9 +1893,7 @@ var messageTypeVersionSpecializedMap = map[MessageTypeWithVersion]MessageSpecial
 	MessageTypeCreateDatabaseV2:     SpecializedTypeCreateDatabaseV2,
 	MessageTypeCreateIndexV2:        SpecializedTypeCreateIndexV2,
 	MessageTypeCreatePartitionV1:    SpecializedTypeCreatePartitionV1,
-	MessageTypeCreateRoleV2:         SpecializedTypeCreateRoleV2,
 	MessageTypeCreateSegmentV2:      SpecializedTypeCreateSegmentV2,
-	MessageTypeCreateUserV2:         SpecializedTypeCreateUserV2,
 	MessageTypeDeleteV1:             SpecializedTypeDeleteV1,
 	MessageTypeDropAliasV2:          SpecializedTypeDropAliasV2,
 	MessageTypeDropCollectionV1:     SpecializedTypeDropCollectionV1,
@@ -2030,9 +1938,7 @@ var messageSpecializedTypeVersionMap = map[MessageSpecializedType]MessageTypeWit
 	SpecializedTypeCreateDatabaseV2:     MessageTypeCreateDatabaseV2,
 	SpecializedTypeCreateIndexV2:        MessageTypeCreateIndexV2,
 	SpecializedTypeCreatePartitionV1:    MessageTypeCreatePartitionV1,
-	SpecializedTypeCreateRoleV2:         MessageTypeCreateRoleV2,
 	SpecializedTypeCreateSegmentV2:      MessageTypeCreateSegmentV2,
-	SpecializedTypeCreateUserV2:         MessageTypeCreateUserV2,
 	SpecializedTypeDeleteV1:             MessageTypeDeleteV1,
 	SpecializedTypeDropAliasV2:          MessageTypeDropAliasV2,
 	SpecializedTypeDropCollectionV1:     MessageTypeDropCollectionV1,

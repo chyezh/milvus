@@ -274,16 +274,6 @@
         },
         {
             "MessageSpecializedType": {
-                "HeaderType": "messagespb.CreateUserMessageHeader",
-                "BodyType": "messagespb.CreateUserMessageBody"
-            },
-            "MessageTypeWithVersion": {
-                "MessageType": "MessageTypeCreateUser",
-                "Version": 2
-            }
-        },
-        {
-            "MessageSpecializedType": {
                 "HeaderType": "messagespb.PutUserMessageHeader",
                 "BodyType": "messagespb.PutUserMessageBody"
             },
@@ -299,16 +289,6 @@
             },
             "MessageTypeWithVersion": {
                 "MessageType": "MessageTypeDropUser",
-                "Version": 2
-            }
-        },
-        {
-            "MessageSpecializedType": {
-                "HeaderType": "messagespb.CreateRoleMessageHeader",
-                "BodyType": "messagespb.CreateRoleMessageBody"
-            },
-            "MessageTypeWithVersion": {
-                "MessageType": "MessageTypeCreateRole",
                 "Version": 2
             }
         },
