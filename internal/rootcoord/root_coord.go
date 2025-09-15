@@ -38,14 +38,12 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
-	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
 	"github.com/milvus-io/milvus/internal/kv/tikv"
 	"github.com/milvus-io/milvus/internal/metastore"
 	kvmetastore "github.com/milvus-io/milvus/internal/metastore/kv/rootcoord"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	streamingcoord "github.com/milvus-io/milvus/internal/streamingcoord/server"
-	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/broadcast"
 	tso2 "github.com/milvus-io/milvus/internal/tso"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/dependency"
@@ -61,7 +59,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/proxypb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/contextutil"
@@ -1725,44 +1722,7 @@ func (c *Core) CreateAlias(ctx context.Context, in *milvuspb.CreateAliasRequest)
 		zap.String("alias", in.GetAlias()),
 		zap.String("collection", in.GetCollectionName()))
 
-	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx,
-		message.NewSharedDBNameResourceKey(in.GetDbName()),
-		message.NewExclusiveCollectionNameResourceKey(in.GetDbName(), in.GetCollectionName()),
-		message.NewExclusiveCollectionNameResourceKey(in.GetDbName(), in.GetAlias()))
-	if err != nil {
-		return merr.Status(err), nil
-	}
-	defer broadcaster.Close()
-
-	if err := c.meta.CheckIfAliasCreatable(ctx, in.GetDbName(), in.GetAlias(), in.GetCollectionName()); err != nil {
-		metrics.RootCoordDDLReqCounter.WithLabelValues("CreateAlias", metrics.FailLabel).Inc()
-		return merr.Status(err), nil
-	}
-
-	db, err := c.meta.GetDatabaseByName(ctx, in.GetDbName(), typeutil.MaxTimestamp)
-	if err != nil {
-		metrics.RootCoordDDLReqCounter.WithLabelValues("CreateAlias", metrics.FailLabel).Inc()
-		return merr.Status(err), nil
-	}
-	collection, err := c.meta.GetCollectionByName(ctx, in.GetDbName(), in.GetCollectionName(), typeutil.MaxTimestamp)
-	if err != nil {
-		metrics.RootCoordDDLReqCounter.WithLabelValues("CreateAlias", metrics.FailLabel).Inc()
-		return merr.Status(err), nil
-	}
-
-	msg := message.NewPutAliasMessageBuilderV2().
-		WithHeader(&message.PutAliasMessageHeader{
-			DbId:           db.ID,
-			DbName:         in.GetDbName(),
-			CollectionId:   collection.CollectionID,
-			Alias:          in.GetAlias(),
-			CollectionName: in.GetCollectionName(),
-		}).
-		WithBody(&message.PutAliasMessageBody{}).
-		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
-		MustBuildBroadcast()
-
-	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
+	if err := c.broadcastCreateAlias(ctx, in); err != nil {
 		log.Ctx(ctx).Info("failed to create alias",
 			zap.String("role", typeutil.RootCoordRole),
 			zap.Error(err),
@@ -1796,30 +1756,7 @@ func (c *Core) DropAlias(ctx context.Context, in *milvuspb.DropAliasRequest) (*c
 		zap.String("role", typeutil.RootCoordRole),
 		zap.String("alias", in.GetAlias()))
 
-	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx,
-		message.NewSharedDBNameResourceKey(in.GetDbName()),
-		message.NewExclusiveCollectionNameResourceKey(in.GetDbName(), in.GetAlias()))
-	if err != nil {
-		return merr.Status(err), nil
-	}
-	defer broadcaster.Close()
-
-	db, err := c.meta.GetDatabaseByName(ctx, in.GetDbName(), typeutil.MaxTimestamp)
-	if err != nil {
-		metrics.RootCoordDDLReqCounter.WithLabelValues("DropAlias", metrics.FailLabel).Inc()
-		return merr.Status(err), nil
-	}
-
-	msg := message.NewDropAliasMessageBuilderV2().
-		WithHeader(&message.DropAliasMessageHeader{
-			DbId:   db.ID,
-			DbName: in.GetDbName(),
-			Alias:  in.GetAlias(),
-		}).
-		WithBody(&message.DropAliasMessageBody{}).
-		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
-		MustBuildBroadcast()
-	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
+	if err := c.broadcastDropAlias(ctx, in); err != nil {
 		log.Ctx(ctx).Info("failed to drop alias",
 			zap.String("role", typeutil.RootCoordRole),
 			zap.Error(err),
@@ -1853,44 +1790,7 @@ func (c *Core) AlterAlias(ctx context.Context, in *milvuspb.AlterAliasRequest) (
 		zap.String("alias", in.GetAlias()),
 		zap.String("collection", in.GetCollectionName()))
 
-	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx,
-		message.NewSharedDBNameResourceKey(in.GetDbName()),
-		message.NewExclusiveCollectionNameResourceKey(in.GetDbName(), in.GetCollectionName()),
-		message.NewExclusiveCollectionNameResourceKey(in.GetDbName(), in.GetAlias()))
-	if err != nil {
-		return merr.Status(err), nil
-	}
-	defer broadcaster.Close()
-
-	if err := c.meta.CheckIfAliasAlterable(ctx, in.GetDbName(), in.GetAlias(), in.GetCollectionName()); err != nil {
-		metrics.RootCoordDDLReqCounter.WithLabelValues("AlterAlias", metrics.FailLabel).Inc()
-		return merr.Status(err), nil
-	}
-
-	db, err := c.meta.GetDatabaseByName(ctx, in.GetDbName(), typeutil.MaxTimestamp)
-	if err != nil {
-		metrics.RootCoordDDLReqCounter.WithLabelValues("AlterAlias", metrics.FailLabel).Inc()
-		return merr.Status(err), nil
-	}
-	collection, err := c.meta.GetCollectionByName(ctx, in.GetDbName(), in.GetCollectionName(), typeutil.MaxTimestamp)
-	if err != nil {
-		metrics.RootCoordDDLReqCounter.WithLabelValues("AlterAlias", metrics.FailLabel).Inc()
-		return merr.Status(err), nil
-	}
-
-	msg := message.NewPutAliasMessageBuilderV2().
-		WithHeader(&message.PutAliasMessageHeader{
-			DbId:           db.ID,
-			DbName:         in.GetDbName(),
-			CollectionId:   collection.CollectionID,
-			Alias:          in.GetAlias(),
-			CollectionName: in.GetCollectionName(),
-		}).
-		WithBody(&message.PutAliasMessageBody{}).
-		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
-		MustBuildBroadcast()
-
-	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
+	if err := c.broadcastAlterAlias(ctx, in); err != nil {
 		log.Ctx(ctx).Info("failed to alter alias",
 			zap.String("role", typeutil.RootCoordRole),
 			zap.Error(err),

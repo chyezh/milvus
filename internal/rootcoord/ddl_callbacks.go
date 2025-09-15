@@ -52,6 +52,12 @@ func (c *DDLCallback) registerRBACCallbacks() {
 	registry.RegisterRestoreRBACV2AckCallback(c.restoreRBACV2AckCallback)
 }
 
+// registerAliasCallbacks registers the alias callbacks.
+func (c *DDLCallback) registerAliasCallbacks() {
+	registry.RegisterPutAliasMessageV2AckCallback(c.putAliasMessageV2AckCallback)
+	registry.RegisterDropAliasMessageV2AckCallback(c.dropAliasMessageV2AckCallback)
+}
+
 // DDLCallback is the callback of ddl.
 type DDLCallback struct {
 	*Core
