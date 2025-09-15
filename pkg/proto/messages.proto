@@ -314,7 +314,7 @@ message CreateDatabaseMessageHeader {
 
 // CreateDatabaseMessageBody is the body of create database message.
 message CreateDatabaseMessageBody {
-    common.KeyValuePair properties = 1;
+    repeated common.KeyValuePair properties = 1;
 }
 
 // PutDatabaseMessageHeader is the header of put database message.
@@ -325,7 +325,16 @@ message PutDatabaseMessageHeader {
 
 // PutDatabaseMessageBody is the body of put database message.
 message PutDatabaseMessageBody {
-    common.KeyValuePair properties = 1;
+    repeated common.KeyValuePair properties = 1;
+    PutLoadConfigOfPutDatabase put_load_config = 2;
+}
+
+// PutLoadConfigOfPutDatabase is the body of put load config of put database message.
+// When the database's resource group or replica number is changed, the load config of all collection in database will be updated.
+message PutLoadConfigOfPutDatabase {
+    repeated int64 collection_ids = 1;
+    int32 replica_number = 2;
+    repeated string resource_groups = 3;
 }
 
 // DropDatabaseMessageHeader is the header of drop database message.

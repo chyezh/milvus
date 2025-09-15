@@ -47,6 +47,11 @@ var (
 	RegisterPutLoadConfigMessageV2AckCallback  = registerMessageAckCallback[*message.PutLoadConfigMessageHeader, *message.PutLoadConfigMessageBody]
 	RegisterDropLoadConfigMessageV2AckCallback = registerMessageAckCallback[*message.DropLoadConfigMessageHeader, *message.DropLoadConfigMessageBody]
 
+	// Database
+	RegisterCreateDatabaseV2AckCallback = registerMessageAckCallback[*message.CreateDatabaseMessageHeader, *message.CreateDatabaseMessageBody]
+	RegisterPutDatabaseV2AckCallback    = registerMessageAckCallback[*message.PutDatabaseMessageHeader, *message.PutDatabaseMessageBody]
+	RegisterDropDatabaseV2AckCallback   = registerMessageAckCallback[*message.DropDatabaseMessageHeader, *message.DropDatabaseMessageBody]
+
 	// Alias
 	RegisterPutAliasMessageV2AckCallback  = registerMessageAckCallback[*message.PutAliasMessageHeader, *message.PutAliasMessageBody]
 	RegisterDropAliasMessageV2AckCallback = registerMessageAckCallback[*message.DropAliasMessageHeader, *message.DropAliasMessageBody]
@@ -84,6 +89,11 @@ func resetMessageAckCallbacks() {
 		message.MessageTypeDropCollectionV1:   syncutil.NewFuture[messageInnerAckCallback](),
 		message.MessageTypePutLoadConfigV2:    syncutil.NewFuture[messageInnerAckCallback](),
 		message.MessageTypeDropLoadConfigV2:   syncutil.NewFuture[messageInnerAckCallback](),
+
+		// Database
+		message.MessageTypeCreateDatabaseV2: syncutil.NewFuture[messageInnerAckCallback](),
+		message.MessageTypePutDatabaseV2:    syncutil.NewFuture[messageInnerAckCallback](),
+		message.MessageTypeDropDatabaseV2:   syncutil.NewFuture[messageInnerAckCallback](),
 
 		// Alias
 		message.MessageTypePutAliasV2:  syncutil.NewFuture[messageInnerAckCallback](),

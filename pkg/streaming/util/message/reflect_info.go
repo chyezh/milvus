@@ -63,6 +63,7 @@ type (
 	SegmentAssignment          = messagespb.SegmentAssignment
 	ManualFlushExtraResponse   = messagespb.ManualFlushExtraResponse
 	RoleBinding                = messagespb.RoleBinding
+	PutLoadConfigOfPutDatabase = messagespb.PutLoadConfigOfPutDatabase
 )
 
 // Export message header and body types
