@@ -68,6 +68,11 @@ func (c *Core) broadcastPutCollectionV2ForAddField(ctx context.Context, req *mil
 	}
 	schema.Fields = append(schema.Fields, fieldSchema)
 
+	cacheExpirations, err := c.getCacheExpireForCollection(ctx, req.GetDbName(), req.GetCollectionName())
+	if err != nil {
+		return err
+	}
+
 	channels := make([]string, 0, len(coll.VirtualChannelNames)+1)
 	channels = append(channels, streaming.WAL().ControlChannel())
 	for _, vchannel := range coll.VirtualChannelNames {
@@ -81,6 +86,7 @@ func (c *Core) broadcastPutCollectionV2ForAddField(ctx context.Context, req *mil
 			UpdateMask: &fieldmaskpb.FieldMask{
 				Paths: []string{message.FieldMaskCollectionSchema},
 			},
+			CacheExpirations: cacheExpirations,
 		}).
 		WithBody(&messagespb.PutCollectionMessageBody{
 			Updates: &messagespb.PutCollectionMessageUpdates{

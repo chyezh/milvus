@@ -8,7 +8,7 @@ import (
 func NewBuilder() *CacheExpirationsBuilder {
 	return &CacheExpirationsBuilder{
 		cacheExpirations: &message.CacheExpirations{
-			CacheExpirations: make([]*message.CacheExpiration, 1),
+			CacheExpirations: make([]*message.CacheExpiration, 0, 1),
 		},
 	}
 }

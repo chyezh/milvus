@@ -17,6 +17,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message/ce"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 	"github.com/samber/lo"
@@ -65,12 +66,17 @@ func (c *Core) broadcastPutCollectionV2ForAlterCollection(ctx context.Context, r
 		return errors.Errorf("collection is not created, can not alter collection, state: %s", coll.State.String())
 	}
 
+	cacheExpirations, err := c.getCacheExpireForCollection(ctx, req.GetDbName(), req.GetCollectionName())
+	if err != nil {
+		return err
+	}
 	header := &messagespb.PutCollectionMessageHeader{
 		DbId:         coll.DBID,
 		CollectionId: coll.CollectionID,
 		UpdateMask: &fieldmaskpb.FieldMask{
 			Paths: []string{},
 		},
+		CacheExpirations: cacheExpirations,
 	}
 	udpates := &messagespb.PutCollectionMessageUpdates{}
 
@@ -193,6 +199,10 @@ func (c *Core) broadcastPutCollectionV2ForAlterDynamicField(ctx context.Context,
 	for _, vchannel := range coll.VirtualChannelNames {
 		channels = append(channels, vchannel)
 	}
+	cacheExpirations, err := c.getCacheExpireForCollection(ctx, req.GetDbName(), req.GetCollectionName())
+	if err != nil {
+		return err
+	}
 	// broadcast the put collection v2 message.
 	msg := message.NewPutCollectionMessageBuilderV2().
 		WithHeader(&messagespb.PutCollectionMessageHeader{
@@ -201,6 +211,7 @@ func (c *Core) broadcastPutCollectionV2ForAlterDynamicField(ctx context.Context,
 			UpdateMask: &fieldmaskpb.FieldMask{
 				Paths: []string{message.FieldMaskCollectionSchema},
 			},
+			CacheExpirations: cacheExpirations,
 		}).
 		WithBody(&messagespb.PutCollectionMessageBody{
 			Updates: &messagespb.PutCollectionMessageUpdates{
@@ -213,6 +224,34 @@ func (c *Core) broadcastPutCollectionV2ForAlterDynamicField(ctx context.Context,
 		return err
 	}
 	return nil
+}
+
+// getCacheExpireForCollection gets the cache expirations for collection.
+func (c *Core) getCacheExpireForCollection(ctx context.Context, dbName string, collectionName string) (*message.CacheExpirations, error) {
+	coll, err := c.meta.GetCollectionByName(ctx, dbName, collectionName, typeutil.MaxTimestamp)
+	if err != nil {
+		return nil, err
+	}
+	aliases, err := c.meta.ListAliases(ctx, dbName, collectionName, typeutil.MaxTimestamp)
+	if err != nil {
+		return nil, err
+	}
+	builder := ce.NewBuilder()
+	builder.WithLegacyProxyCollectionMetaCache(
+		ce.OptLPCMDBName(dbName),
+		ce.OptLPCMCollectionName(collectionName),
+		ce.OptLPCMCollectionID(coll.CollectionID),
+		ce.OptLPCMMsgType(commonpb.MsgType_AlterCollection),
+	)
+	for _, alias := range aliases {
+		builder.WithLegacyProxyCollectionMetaCache(
+			ce.OptLPCMDBName(dbName),
+			ce.OptLPCMCollectionName(alias),
+			ce.OptLPCMCollectionID(coll.CollectionID),
+			ce.OptLPCMMsgType(commonpb.MsgType_AlterAlias),
+		)
+	}
+	return builder.Build(), nil
 }
 
 // getPutLoadConfigOfPutCollection gets the put load config of put collection.
@@ -248,6 +287,9 @@ func (c *DDLCallback) putCollectionV2AckCallback(ctx context.Context, result mes
 			ResourceGroups: body.Updates.PutLoadConfig.ResourceGroups,
 		})
 		return merr.CheckRPCCall(resp, err)
+	}
+	if err := c.ExpireCaches(ctx, header, result.GetControlChannelResult().TimeTick); err != nil {
+		return err
 	}
 	return nil
 }

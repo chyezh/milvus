@@ -69,6 +69,10 @@ func (c *Core) broadcastPutCollectionV2ForAlterCollectionField(ctx context.Conte
 			break
 		}
 	}
+	cacheExpirations, err := c.getCacheExpireForCollection(ctx, req.GetDbName(), req.GetCollectionName())
+	if err != nil {
+		return err
+	}
 
 	header := &messagespb.PutCollectionMessageHeader{
 		DbId:         coll.DBID,
@@ -76,6 +80,7 @@ func (c *Core) broadcastPutCollectionV2ForAlterCollectionField(ctx context.Conte
 		UpdateMask: &fieldmaskpb.FieldMask{
 			Paths: []string{message.FieldMaskCollectionSchema},
 		},
+		CacheExpirations: cacheExpirations,
 	}
 	body := &messagespb.PutCollectionMessageBody{
 		Updates: &messagespb.PutCollectionMessageUpdates{

@@ -85,11 +85,18 @@ func (c *Core) broadcastRenameCollection(ctx context.Context, req *milvuspb.Rena
 		channels = append(channels, vchannel)
 	}
 
+	// TODO: add cache expirations for new name.
+	cacheExpirations, err := c.getCacheExpireForCollection(ctx, req.GetDbName(), req.GetOldName())
+	if err != nil {
+		return err
+	}
+
 	msg := message.NewPutCollectionMessageBuilderV2().
 		WithHeader(&message.PutCollectionMessageHeader{
-			DbId:         coll.DBID,
-			CollectionId: coll.CollectionID,
-			UpdateMask:   updateMask,
+			DbId:             coll.DBID,
+			CollectionId:     coll.CollectionID,
+			UpdateMask:       updateMask,
+			CacheExpirations: cacheExpirations,
 		}).
 		WithBody(&message.PutCollectionMessageBody{
 			Updates: updates,
