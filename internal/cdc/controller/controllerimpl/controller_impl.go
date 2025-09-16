@@ -64,9 +64,9 @@ func (c *controller) Start() {
 func (c *controller) Stop() {
 	c.stopOnce.Do(func() {
 		log.Ctx(c.ctx).Info("CDC controller stopping...")
-		// TODO: sheep, gracefully stop the replicators
 		close(c.stopChan)
 		c.wg.Wait()
+		resource.Resource().ReplicateManagerClient().Close()
 		log.Ctx(c.ctx).Info("CDC controller stopped")
 	})
 }
