@@ -265,14 +265,10 @@ build-3rdparty:
 generated-proto-without-cpp: download-milvus-proto get-proto-deps
 	@echo "Generate proto ..."
 	@(env bash $(PWD)/scripts/generate_proto.sh ${INSTALL_PATH})
-	@echo "Generating message codegen ..."
-	@(cd pkg/streaming/util/message/codegen && PATH=$(PWD)/bin:$(PATH) go generate .)
 
 generated-proto: download-milvus-proto build-3rdparty get-proto-deps
 	@echo "Generate proto ..."
 	@(env bash $(PWD)/scripts/generate_proto.sh ${INSTALL_PATH})
-	@echo "Generating message codegen ..."
-	@(cd pkg/streaming/util/message/codegen && PATH=$(PWD)/bin:$(PATH) go generate .)
 
 build-cpp: generated-proto
 	@echo "Building Milvus cpp library ..."
@@ -293,6 +289,14 @@ build-cpp-with-coverage: generated-proto
 check-proto-product: generated-proto
 	 @(env bash $(PWD)/scripts/check_proto_product.sh)
 
+generate-message-codegen:
+	@if [ -z "$(INSTALL_GOFUMPT)" ]; then \
+		echo "Installing gofumpt v$(GOFUMPT_VERSION) to ./bin/" && GOBIN=$(INSTALL_PATH) go install mvdan.cc/gofumpt@v$(GOFUMPT_VERSION); \
+	else \
+		echo "gofumpt v$(GOFUMPT_VERSION) already installed"; \
+	fi
+	@echo "Generating message codegen ..."
+	@(cd pkg/streaming/util/message/codegen && PATH=$(INSTALL_PATH):$(PATH) go generate .)
 
 # Run the tests.
 unittest: test-cpp test-go
