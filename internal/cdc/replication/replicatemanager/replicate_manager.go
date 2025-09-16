@@ -21,13 +21,12 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/samber/lo"
 	"go.uber.org/zap"
-	"mosn.io/pkg/registry/dubbo/common/logger"
 
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
-	"github.com/samber/lo"
 )
 
 // replicateManager is the implementation of ReplicateManagerClient.
@@ -83,7 +82,7 @@ func (r *replicateManager) RemoveOutOfTargetReplicators(targetReplicatePChannels
 			replicator.StopReplicate()
 			delete(r.replicators, replicatorKey)
 			delete(r.replicatorPChannels, replicatorKey)
-			logger.Info("removed replicator due to out of target",
+			log.Info("removed replicator due to out of target",
 				zap.String("sourceChannel", pchannelMeta.GetSourceChannelName()),
 				zap.String("targetChannel", pchannelMeta.GetTargetChannelName()),
 			)
