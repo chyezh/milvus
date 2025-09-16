@@ -25,4 +25,7 @@ type ReplicateManagerClient interface {
 
 	// RemoveOutOfTargetReplicators removes replicators that are not in the target replicate pchannels.
 	RemoveOutOfTargetReplicators(targetReplicatePChannels []*streamingpb.ReplicatePChannelMeta)
+
+	// Close closes the replicate manager client.
+	Close()
 }

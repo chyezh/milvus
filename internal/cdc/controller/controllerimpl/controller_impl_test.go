@@ -30,6 +30,7 @@ import (
 
 func TestController_StartAndStop(t *testing.T) {
 	mockReplicateManagerClient := replication.NewMockReplicateManagerClient(t)
+	mockReplicateManagerClient.EXPECT().Close().Return()
 	resource.InitForTest(t,
 		resource.OptReplicateManagerClient(mockReplicateManagerClient),
 	)
@@ -45,6 +46,7 @@ func TestController_StartAndStop(t *testing.T) {
 
 func TestController_Run(t *testing.T) {
 	mockReplicateManagerClient := replication.NewMockReplicateManagerClient(t)
+	mockReplicateManagerClient.EXPECT().Close().Return()
 
 	replicatePChannels := []*streamingpb.ReplicatePChannelMeta{
 		{
@@ -69,6 +71,7 @@ func TestController_Run(t *testing.T) {
 
 func TestController_RunError(t *testing.T) {
 	mockReplicateManagerClient := replication.NewMockReplicateManagerClient(t)
+	mockReplicateManagerClient.EXPECT().Close().Return()
 
 	mockReplicationCatalog := mock_metastore.NewMockReplicationCatalog(t)
 	mockReplicationCatalog.EXPECT().ListReplicatePChannels(mock.Anything).Return(nil, assert.AnError)

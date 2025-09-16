@@ -313,18 +313,20 @@ func (r *replicateStreamClient) handlePutReplicateConfigMessage(msg message.Immu
 	replicateConfig := prcMsg.Header().ReplicateConfiguration
 	currentClusterID := paramtable.Get().CommonCfg.ClusterPrefix.GetValue()
 	currentCluster := replicateutil.MustNewConfigHelper(currentClusterID, replicateConfig).GetCurrentCluster()
-	if currentCluster.Role() == replicateutil.RolePrimary {
-		logger.Info("primary cluster, skip handle PutReplicateConfigMessage")
-		return false
-	}
-	// Current cluster role changed, not primary cluster,
-	// we need to remove the replicate pchannel.
-	err := resource.Resource().ReplicationCatalog().RemoveReplicatePChannel(r.ctx, r.replicateInfo)
+	_, err := currentCluster.GetTargetChannel(r.replicateInfo.GetSourceChannelName(),
+		r.replicateInfo.GetTargetCluster().GetClusterId())
 	if err != nil {
-		panic(fmt.Sprintf("failed to remove replicate pchannel: %v", err))
+		// Cannot find the target channel, it means that the `current->target` topology edge is removed,
+		// so we need to remove the replicate pchannel and stop replicate.
+		err := resource.Resource().ReplicationCatalog().RemoveReplicatePChannel(r.ctx, r.replicateInfo)
+		if err != nil {
+			panic(fmt.Sprintf("failed to remove replicate pchannel: %v", err))
+		}
+		logger.Info("handle PutReplicateConfigMessage done, replicate pchannel removed")
+		return true
 	}
-	logger.Info("handle PutReplicateConfigMessage done, replicate pchannel removed")
-	return true
+	logger.Info("target channel found, skip handle PutReplicateConfigMessage")
+	return false
 }
 
 func (r *replicateStreamClient) Close() {
