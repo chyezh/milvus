@@ -147,7 +147,7 @@ func (impl *replicatesManagerImpl) GetReplicateCheckpoint() (*utility.ReplicateC
 	impl.mu.Lock()
 	defer impl.mu.Unlock()
 
-	if impl.checkpoint == nil {
+	if impl.isPrimaryRole() {
 		return nil, status.NewReplicateViolation("wal is not on replicating mode")
 	}
 	return impl.checkpoint, nil
