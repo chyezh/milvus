@@ -14,8 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/zap"
-	"google.golang.org/grpc/codes"
-	grpcStatus "google.golang.org/grpc/status"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
@@ -138,9 +136,6 @@ func (s *ServerSuite) TestGetFlushState_ByFlushTs() {
 }
 
 func (s *ServerSuite) TestGetFlushState_BySegment() {
-	s.mockChMgr.EXPECT().GetChannelsByCollectionID(mock.Anything).
-		Return([]RWChannel{&channelMeta{Name: "ch1", CollectionID: 0}}).Times(3)
-
 	tests := []struct {
 		description string
 		segID       int64
@@ -191,7 +186,6 @@ func (s *ServerSuite) TestSaveBinlogPath_ClosedServer() {
 }
 
 func (s *ServerSuite) TestSaveBinlogPath_ChannelNotMatch() {
-	s.mockChMgr.EXPECT().Match(mock.Anything, mock.Anything).Return(false)
 	resp, err := s.testServer.SaveBinlogPaths(context.Background(), &datapb.SaveBinlogPathsRequest{
 		SegmentID: 1,
 		Channel:   "test",
@@ -201,7 +195,6 @@ func (s *ServerSuite) TestSaveBinlogPath_ChannelNotMatch() {
 }
 
 func (s *ServerSuite) TestSaveBinlogPath_SaveUnhealthySegment() {
-	s.mockChMgr.EXPECT().Match(int64(0), "ch1").Return(true)
 	s.testServer.meta.AddCollection(&collectionInfo{ID: 0})
 
 	segments := map[int64]commonpb.SegmentState{
@@ -246,7 +239,6 @@ func (s *ServerSuite) TestSaveBinlogPath_SaveUnhealthySegment() {
 }
 
 func (s *ServerSuite) TestSaveBinlogPath_SaveDroppedSegment() {
-	s.mockChMgr.EXPECT().Match(int64(0), "ch1").Return(true)
 	s.testServer.meta.AddCollection(&collectionInfo{ID: 0})
 
 	segments := map[int64]commonpb.SegmentState{
@@ -313,7 +305,6 @@ func (s *ServerSuite) TestSaveBinlogPath_SaveDroppedSegment() {
 }
 
 func (s *ServerSuite) TestSaveBinlogPath_L0Segment() {
-	s.mockChMgr.EXPECT().Match(int64(0), "ch1").Return(true)
 	s.testServer.meta.AddCollection(&collectionInfo{ID: 0})
 
 	segment := s.testServer.meta.GetHealthySegment(context.TODO(), 1)
@@ -366,7 +357,6 @@ func (s *ServerSuite) TestSaveBinlogPath_L0Segment() {
 }
 
 func (s *ServerSuite) TestSaveBinlogPath_NormalCase() {
-	s.mockChMgr.EXPECT().Match(int64(0), "ch1").Return(true)
 	s.testServer.meta.AddCollection(&collectionInfo{ID: 0})
 
 	segments := map[int64]int64{
@@ -678,16 +668,6 @@ func (s *ServerSuite) TestFlush_NormalCase() {
 		CollectionID: 0,
 	}
 
-	s.mockChMgr.EXPECT().GetNodeChannelsByCollectionID(mock.Anything).Return(map[int64][]string{
-		1: {"channel-1"},
-	})
-
-	mockCluster := NewMockCluster(s.T())
-	mockCluster.EXPECT().FlushChannels(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(nil)
-	mockCluster.EXPECT().Close().Maybe()
-	s.testServer.cluster = mockCluster
-
 	schema := newTestSchema()
 	s.testServer.meta.AddCollection(&collectionInfo{ID: 0, Schema: schema, Partitions: []int64{}, VChannelNames: []string{"channel-1"}})
 	allocations, err := s.testServer.segmentManager.AllocSegment(context.TODO(), 0, 1, "channel-1", 1, storage.StorageV1)
@@ -772,15 +752,7 @@ func (s *ServerSuite) TestFlush_RollingUpgrade() {
 		DbID:         0,
 		CollectionID: 0,
 	}
-	mockCluster := NewMockCluster(s.T())
-	mockCluster.EXPECT().FlushChannels(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
-		Return(merr.WrapErrServiceUnimplemented(grpcStatus.Error(codes.Unimplemented, "mock grpc unimplemented error")))
-	mockCluster.EXPECT().Close().Maybe()
-	s.testServer.cluster = mockCluster
 	s.testServer.meta.AddCollection(&collectionInfo{ID: 0})
-	s.mockChMgr.EXPECT().GetNodeChannelsByCollectionID(mock.Anything).Return(map[int64][]string{
-		1: {"channel-1"},
-	}).Once()
 
 	resp, err := s.testServer.Flush(context.TODO(), req)
 	s.NoError(err)
@@ -1114,10 +1086,6 @@ func TestGetRecoveryInfoV2(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		ch := &channelMeta{Name: "vchan1", CollectionID: 0}
-		svr.channelManager.AddNode(0)
-		svr.channelManager.Watch(context.Background(), ch)
-
 		req := &datapb.GetRecoveryInfoRequestV2{
 			CollectionID: 0,
 		}
@@ -1191,10 +1159,6 @@ func TestGetRecoveryInfoV2(t *testing.T) {
 		assert.NoError(t, err)
 		err = svr.meta.AddSegment(context.TODO(), NewSegmentInfo(seg2))
 		assert.NoError(t, err)
-
-		ch := &channelMeta{Name: "vchan1", CollectionID: 0}
-		svr.channelManager.AddNode(0)
-		svr.channelManager.Watch(context.Background(), ch)
 
 		req := &datapb.GetRecoveryInfoRequestV2{
 			CollectionID: 0,
@@ -1284,11 +1248,6 @@ func TestGetRecoveryInfoV2(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		err = svr.channelManager.AddNode(0)
-		assert.NoError(t, err)
-		err = svr.channelManager.Watch(context.Background(), &channelMeta{Name: "vchan1", CollectionID: 0})
-		assert.NoError(t, err)
-
 		paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
 		defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
 
@@ -1335,10 +1294,6 @@ func TestGetRecoveryInfoV2(t *testing.T) {
 		err = svr.meta.AddSegment(context.TODO(), NewSegmentInfo(seg2))
 		assert.NoError(t, err)
 
-		ch := &channelMeta{Name: "vchan1", CollectionID: 0}
-		svr.channelManager.AddNode(0)
-		svr.channelManager.Watch(context.Background(), ch)
-
 		req := &datapb.GetRecoveryInfoRequestV2{
 			CollectionID: 0,
 		}
@@ -1379,10 +1334,6 @@ func TestGetRecoveryInfoV2(t *testing.T) {
 		assert.NoError(t, err)
 		err = svr.meta.AddSegment(context.TODO(), NewSegmentInfo(seg2))
 		assert.NoError(t, err)
-
-		ch := &channelMeta{Name: "vchan1", CollectionID: 0}
-		svr.channelManager.AddNode(0)
-		svr.channelManager.Watch(context.Background(), ch)
 
 		req := &datapb.GetRecoveryInfoRequestV2{
 			CollectionID: 0,
@@ -1456,10 +1407,6 @@ func TestGetRecoveryInfoV2(t *testing.T) {
 			IndexFileKeys:       nil,
 			IndexSerializedSize: 0,
 		})
-
-		ch := &channelMeta{Name: "vchan1", CollectionID: 0}
-		svr.channelManager.AddNode(0)
-		svr.channelManager.Watch(context.Background(), ch)
 
 		req := &datapb.GetRecoveryInfoRequestV2{
 			CollectionID: 0,
