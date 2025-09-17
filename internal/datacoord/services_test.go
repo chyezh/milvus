@@ -24,7 +24,7 @@ import (
 	globalIDAllocator "github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/datacoord/broker"
-	"github.com/milvus-io/milvus/internal/datacoord/session"
+	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
 	"github.com/milvus-io/milvus/internal/metastore/mocks"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	mocks2 "github.com/milvus-io/milvus/internal/mocks"
@@ -32,6 +32,7 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/tso"
 	"github.com/milvus-io/milvus/internal/types"
+	"github.com/milvus-io/milvus/pkg/v2/kv"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
@@ -48,29 +49,14 @@ import (
 type ServerSuite struct {
 	suite.Suite
 
-	testServer *Server
-	mockChMgr  *MockChannelManager
-}
-
-func WithChannelManager(cm ChannelManager) Option {
-	return func(svr *Server) {
-		svr.sessionManager = session.NewDataNodeManagerImpl(session.WithDataNodeCreator(svr.dataNodeCreator))
-		svr.channelManager = cm
-		svr.cluster = NewClusterImpl(svr.sessionManager, svr.channelManager)
-		svr.nodeManager = session.NewNodeManager(svr.dataNodeCreator)
-		svr.cluster2 = session.NewCluster(svr.nodeManager)
-	}
+	testServer   *Server
+	mockMixCoord *mocks2.MixCoord
 }
 
 func (s *ServerSuite) SetupTest() {
-	s.mockChMgr = NewMockChannelManager(s.T())
-	s.mockChMgr.EXPECT().Startup(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
-	s.mockChMgr.EXPECT().Close().Maybe()
-
-	s.testServer = newTestServer(s.T(), WithChannelManager(s.mockChMgr))
-	if s.testServer.channelManager != nil {
-		s.testServer.channelManager.Close()
-	}
+	s.testServer = newTestServer(s.T())
+	s.mockMixCoord = mocks2.NewMixCoord(s.T())
+	s.testServer.mixCoord = s.mockMixCoord
 }
 
 func (s *ServerSuite) TearDownTest() {
@@ -103,10 +89,19 @@ func genMsg(msgType commonpb.MsgType, ch string, t Timestamp, sourceID int64) *m
 }
 
 func (s *ServerSuite) TestGetFlushState_ByFlushTs() {
-	s.mockChMgr.EXPECT().GetChannelsByCollectionID(int64(0)).
-		Return([]RWChannel{&channelMeta{Name: "ch1", CollectionID: 0}}).Times(3)
-
-	s.mockChMgr.EXPECT().GetChannelsByCollectionID(int64(1)).Return(nil).Times(1)
+	s.mockMixCoord.EXPECT().DescribeCollectionInternal(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, req *milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error) {
+		if req.CollectionID == 0 {
+			return &milvuspb.DescribeCollectionResponse{
+				Status:              merr.Success(),
+				CollectionID:        0,
+				VirtualChannelNames: []string{"ch1"},
+			}, nil
+		}
+		return &milvuspb.DescribeCollectionResponse{
+			Status:       merr.Success(),
+			CollectionID: 1,
+		}, nil
+	})
 	tests := []struct {
 		description string
 		inTs        Timestamp
@@ -2310,4 +2305,12 @@ func TestServer_ListFileResources(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Error(t, merr.Error(resp.GetStatus()))
 	})
+}
+
+func getWatchKV(t *testing.T) kv.WatchKV {
+	rootPath := "/etcd/test/root/" + t.Name()
+	kv, err := etcdkv.NewWatchKVFactory(rootPath, &Params.EtcdCfg)
+	require.NoError(t, err)
+
+	return kv
 }
