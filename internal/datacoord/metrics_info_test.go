@@ -43,17 +43,16 @@ import (
 )
 
 func TestGetDataNodeMetrics(t *testing.T) {
-	svr := newTestServer(t)
+	mockNodeManager := session.NewMockNodeManager(t)
+	svr := newTestServer(t, func(svr *Server) {
+		svr.nodeManager = mockNodeManager
+	})
 	defer closeTestServer(t, svr)
 
 	ctx := context.Background()
 	req := &milvuspb.GetMetricsRequest{}
 	// nil node
-	_, err := svr.getDataNodeMetrics(ctx, req, nil)
-	assert.Error(t, err)
-
-	// nil client node
-	_, err = svr.getDataNodeMetrics(ctx, req, session.NewSession(&session.NodeInfo{}, nil))
+	_, err := svr.getDataNodeMetrics(ctx, req, 0)
 	assert.Error(t, err)
 
 	creator := func(ctx context.Context, addr string, nodeID int64) (types.DataNodeClient, error) {
@@ -86,48 +85,49 @@ func TestGetDataNodeMetrics(t *testing.T) {
 		return dn, nil
 	}
 
+	mockNodeManager.EXPECT().GetClient(mock.Anything).RunAndReturn(func(nodeID int64) (types.DataNodeClient, error) {
+		switch nodeID {
+		case 100:
+			return creator(ctx, "127.0.0.1:10086", nodeID)
+		case 101:
+			dn := mocks.NewMockDataNodeClient(t)
+			dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(nil, errors.New("mocked fail"))
+			return dn, nil
+		case 102:
+			dn := mocks.NewMockDataNodeClient(t)
+			dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(&milvuspb.GetMetricsResponse{
+				Status: merr.Status(errors.New("mocked error")),
+			}, nil)
+			return dn, nil
+		case 103:
+			dn := mocks.NewMockDataNodeClient(t)
+			dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(&milvuspb.GetMetricsResponse{
+				Status:   merr.Success(),
+				Response: `{"error_reason": 1}`,
+			}, nil)
+			return dn, nil
+
+		default:
+			return nil, errors.New("node not found")
+		}
+	})
+
 	// mock datanode client
-	sess := session.NewSession(&session.NodeInfo{}, creator)
-	info, err := svr.getDataNodeMetrics(ctx, req, sess)
+	info, err := svr.getDataNodeMetrics(ctx, req, 100)
 	assert.NoError(t, err)
 	assert.False(t, info.HasError)
 	assert.Equal(t, metricsinfo.ConstructComponentName(typeutil.DataNodeRole, 100), info.BaseComponentInfos.Name)
 
-	mockFailClientCreator := func(ctx context.Context, addr string, nodeID int64) (types.DataNodeClient, error) {
-		dn := mocks.NewMockDataNodeClient(t)
-		dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(nil, errors.New("mocked fail"))
-		return dn, nil
-	}
-
-	info, err = svr.getDataNodeMetrics(ctx, req, session.NewSession(&session.NodeInfo{}, mockFailClientCreator))
+	info, err = svr.getDataNodeMetrics(ctx, req, 101)
 	assert.NoError(t, err)
 	assert.True(t, info.HasError)
 
-	// mock status not success
-	mockFailClientCreator = func(ctx context.Context, addr string, nodeID int64) (types.DataNodeClient, error) {
-		dn := mocks.NewMockDataNodeClient(t)
-		dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(&milvuspb.GetMetricsResponse{
-			Status: merr.Status(errors.New("mocked error")),
-		}, nil)
-		return dn, nil
-	}
-
-	info, err = svr.getDataNodeMetrics(ctx, req, session.NewSession(&session.NodeInfo{}, mockFailClientCreator))
+	info, err = svr.getDataNodeMetrics(ctx, req, 102)
 	assert.NoError(t, err)
 	assert.True(t, info.HasError)
 	assert.Equal(t, "mocked error", info.ErrorReason)
 
-	// mock parse error
-	mockFailClientCreator = func(ctx context.Context, addr string, nodeID int64) (types.DataNodeClient, error) {
-		dn := mocks.NewMockDataNodeClient(t)
-		dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(&milvuspb.GetMetricsResponse{
-			Status:   merr.Success(),
-			Response: `{"error_reason": 1}`,
-		}, nil)
-		return dn, nil
-	}
-
-	info, err = svr.getDataNodeMetrics(ctx, req, session.NewSession(&session.NodeInfo{}, mockFailClientCreator))
+	info, err = svr.getDataNodeMetrics(ctx, req, 103)
 	assert.NoError(t, err)
 	assert.True(t, info.HasError)
 }
@@ -235,13 +235,9 @@ func TestGetSyncTaskMetrics(t *testing.T) {
 		dn := mocks.NewMockDataNodeClient(t)
 		dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(mockResp, nil)
 
-		dataNodeCreator := func(ctx context.Context, addr string, nodeID int64) (types.DataNodeClient, error) {
-			return dn, nil
-		}
-
-		mockSession := session.NewMockDataNodeManager(t)
-		mockSession.EXPECT().GetSessions().Return([]*session.Session{session.NewSession(&session.NodeInfo{NodeID: 1}, dataNodeCreator)})
-		svr.sessionManager = mockSession
+		nodeManager := session.NewMockNodeManager(t)
+		nodeManager.EXPECT().GetClient(mock.Anything).Return(dn, nil)
+		svr.nodeManager = nodeManager
 
 		actualJSON, err := svr.getSyncTaskJSON(ctx, req)
 		assert.NoError(t, err)
@@ -255,13 +251,9 @@ func TestGetSyncTaskMetrics(t *testing.T) {
 		dn := mocks.NewMockDataNodeClient(t)
 		dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(nil, errors.New("request failed"))
 
-		dataNodeCreator := func(ctx context.Context, addr string, nodeID int64) (types.DataNodeClient, error) {
-			return dn, nil
-		}
-
-		mockSession := session.NewMockDataNodeManager(t)
-		mockSession.EXPECT().GetSessions().Return([]*session.Session{session.NewSession(&session.NodeInfo{NodeID: 1}, dataNodeCreator)})
-		svr.sessionManager = mockSession
+		nodeManager := session.NewMockNodeManager(t)
+		nodeManager.EXPECT().GetClient(mock.Anything).Return(dn, nil)
+		svr.nodeManager = nodeManager
 
 		actualJSON, err := svr.getSyncTaskJSON(ctx, req)
 		assert.Error(t, err)
@@ -280,13 +272,9 @@ func TestGetSyncTaskMetrics(t *testing.T) {
 		dn := mocks.NewMockDataNodeClient(t)
 		dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(mockResp, nil)
 
-		dataNodeCreator := func(ctx context.Context, addr string, nodeID int64) (types.DataNodeClient, error) {
-			return dn, nil
-		}
-
-		mockSession := session.NewMockDataNodeManager(t)
-		mockSession.EXPECT().GetSessions().Return([]*session.Session{session.NewSession(&session.NodeInfo{NodeID: 1}, dataNodeCreator)})
-		svr.sessionManager = mockSession
+		nodeManager := session.NewMockNodeManager(t)
+		nodeManager.EXPECT().GetClient(mock.Anything).Return(dn, nil)
+		svr.nodeManager = nodeManager
 
 		actualJSON, err := svr.getSyncTaskJSON(ctx, req)
 		assert.Error(t, err)
@@ -305,13 +293,9 @@ func TestGetSyncTaskMetrics(t *testing.T) {
 		dn := mocks.NewMockDataNodeClient(t)
 		dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(mockResp, nil)
 
-		dataNodeCreator := func(ctx context.Context, addr string, nodeID int64) (types.DataNodeClient, error) {
-			return dn, nil
-		}
-
-		mockSession := session.NewMockDataNodeManager(t)
-		mockSession.EXPECT().GetSessions().Return([]*session.Session{session.NewSession(&session.NodeInfo{NodeID: 1}, dataNodeCreator)})
-		svr.sessionManager = mockSession
+		nodeManager := session.NewMockNodeManager(t)
+		nodeManager.EXPECT().GetClient(mock.Anything).Return(dn, nil)
+		svr.nodeManager = nodeManager
 
 		expectedJSON := "null"
 		actualJSON, err := svr.getSyncTaskJSON(ctx, req)
@@ -347,13 +331,9 @@ func TestGetSegmentsJSON(t *testing.T) {
 		dn := mocks.NewMockDataNodeClient(t)
 		dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(mockResp, nil)
 
-		dataNodeCreator := func(ctx context.Context, addr string, nodeID int64) (types.DataNodeClient, error) {
-			return dn, nil
-		}
-
-		mockSession := session.NewMockDataNodeManager(t)
-		mockSession.EXPECT().GetSessions().Return([]*session.Session{session.NewSession(&session.NodeInfo{NodeID: 1}, dataNodeCreator)})
-		svr.sessionManager = mockSession
+		nodeManager := session.NewMockNodeManager(t)
+		nodeManager.EXPECT().GetClient(mock.Anything).Return(dn, nil)
+		svr.nodeManager = nodeManager
 
 		actualJSON, err := svr.getDataNodeSegmentsJSON(ctx, req)
 		assert.NoError(t, err)
@@ -367,13 +347,9 @@ func TestGetSegmentsJSON(t *testing.T) {
 		dn := mocks.NewMockDataNodeClient(t)
 		dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(nil, errors.New("request failed"))
 
-		dataNodeCreator := func(ctx context.Context, addr string, nodeID int64) (types.DataNodeClient, error) {
-			return dn, nil
-		}
-
-		mockSession := session.NewMockDataNodeManager(t)
-		mockSession.EXPECT().GetSessions().Return([]*session.Session{session.NewSession(&session.NodeInfo{NodeID: 1}, dataNodeCreator)})
-		svr.sessionManager = mockSession
+		nodeManager := session.NewMockNodeManager(t)
+		nodeManager.EXPECT().GetClient(mock.Anything).Return(dn, nil)
+		svr.nodeManager = nodeManager
 
 		actualJSON, err := svr.getDataNodeSegmentsJSON(ctx, req)
 		assert.Error(t, err)
@@ -392,13 +368,9 @@ func TestGetSegmentsJSON(t *testing.T) {
 		dn := mocks.NewMockDataNodeClient(t)
 		dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(mockResp, nil)
 
-		dataNodeCreator := func(ctx context.Context, addr string, nodeID int64) (types.DataNodeClient, error) {
-			return dn, nil
-		}
-
-		mockSession := session.NewMockDataNodeManager(t)
-		mockSession.EXPECT().GetSessions().Return([]*session.Session{session.NewSession(&session.NodeInfo{NodeID: 1}, dataNodeCreator)})
-		svr.sessionManager = mockSession
+		nodeManager := session.NewMockNodeManager(t)
+		nodeManager.EXPECT().GetClient(mock.Anything).Return(dn, nil)
+		svr.nodeManager = nodeManager
 
 		actualJSON, err := svr.getDataNodeSegmentsJSON(ctx, req)
 		assert.Error(t, err)
@@ -417,13 +389,9 @@ func TestGetSegmentsJSON(t *testing.T) {
 		dn := mocks.NewMockDataNodeClient(t)
 		dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(mockResp, nil)
 
-		dataNodeCreator := func(ctx context.Context, addr string, nodeID int64) (types.DataNodeClient, error) {
-			return dn, nil
-		}
-
-		mockSession := session.NewMockDataNodeManager(t)
-		mockSession.EXPECT().GetSessions().Return([]*session.Session{session.NewSession(&session.NodeInfo{NodeID: 1}, dataNodeCreator)})
-		svr.sessionManager = mockSession
+		nodeManager := session.NewMockNodeManager(t)
+		nodeManager.EXPECT().GetClient(mock.Anything).Return(dn, nil)
+		svr.nodeManager = nodeManager
 
 		expectedJSON := "null"
 		actualJSON, err := svr.getDataNodeSegmentsJSON(ctx, req)
@@ -456,13 +424,9 @@ func TestGetChannelsJSON(t *testing.T) {
 		dn := mocks.NewMockDataNodeClient(t)
 		dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(mockResp, nil)
 
-		dataNodeCreator := func(ctx context.Context, addr string, nodeID int64) (types.DataNodeClient, error) {
-			return dn, nil
-		}
-
-		mockSession := session.NewMockDataNodeManager(t)
-		mockSession.EXPECT().GetSessions().Return([]*session.Session{session.NewSession(&session.NodeInfo{NodeID: 1}, dataNodeCreator)})
-		svr.sessionManager = mockSession
+		nodeManager := session.NewMockNodeManager(t)
+		nodeManager.EXPECT().GetClient(mock.Anything).Return(dn, nil)
+		svr.nodeManager = nodeManager
 
 		svr.meta = &meta{channelCPs: newChannelCps()}
 		svr.meta.channelCPs.checkpoints["channel1"] = &msgpb.MsgPosition{Timestamp: 1000}
@@ -492,13 +456,9 @@ func TestGetChannelsJSON(t *testing.T) {
 		dn := mocks.NewMockDataNodeClient(t)
 		dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(nil, errors.New("request failed"))
 
-		dataNodeCreator := func(ctx context.Context, addr string, nodeID int64) (types.DataNodeClient, error) {
-			return dn, nil
-		}
-		mockSession := session.NewMockDataNodeManager(t)
-
-		mockSession.EXPECT().GetSessions().Return([]*session.Session{session.NewSession(&session.NodeInfo{NodeID: 1}, dataNodeCreator)})
-		svr.sessionManager = mockSession
+		nodeManager := session.NewMockNodeManager(t)
+		nodeManager.EXPECT().GetClient(mock.Anything).Return(dn, nil)
+		svr.nodeManager = nodeManager
 
 		svr.meta = &meta{channelCPs: newChannelCps()}
 
@@ -519,13 +479,9 @@ func TestGetChannelsJSON(t *testing.T) {
 		dn := mocks.NewMockDataNodeClient(t)
 		dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(mockResp, nil)
 
-		dataNodeCreator := func(ctx context.Context, addr string, nodeID int64) (types.DataNodeClient, error) {
-			return dn, nil
-		}
-
-		mockSession := session.NewMockDataNodeManager(t)
-		mockSession.EXPECT().GetSessions().Return([]*session.Session{session.NewSession(&session.NodeInfo{NodeID: 1}, dataNodeCreator)})
-		svr.sessionManager = mockSession
+		nodeManager := session.NewMockNodeManager(t)
+		nodeManager.EXPECT().GetClient(mock.Anything).Return(dn, nil)
+		svr.nodeManager = nodeManager
 
 		svr.meta = &meta{channelCPs: newChannelCps()}
 
@@ -546,13 +502,10 @@ func TestGetChannelsJSON(t *testing.T) {
 		dn := mocks.NewMockDataNodeClient(t)
 		dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(mockResp, nil)
 
-		dataNodeCreator := func(ctx context.Context, addr string, nodeID int64) (types.DataNodeClient, error) {
-			return dn, nil
-		}
+		nodeManager := session.NewMockNodeManager(t)
+		nodeManager.EXPECT().GetClient(mock.Anything).Return(dn, nil)
+		svr.nodeManager = nodeManager
 
-		mockSession := session.NewMockDataNodeManager(t)
-		mockSession.EXPECT().GetSessions().Return([]*session.Session{session.NewSession(&session.NodeInfo{NodeID: 1}, dataNodeCreator)})
-		svr.sessionManager = mockSession
 		svr.meta = &meta{channelCPs: newChannelCps()}
 
 		expectedJSON := "null"
@@ -711,13 +664,9 @@ func TestServer_getSegmentsJSON(t *testing.T) {
 		dn := mocks.NewMockDataNodeClient(t)
 		dn.EXPECT().GetMetrics(mock.Anything, mock.Anything).Return(mockResp, nil)
 
-		dataNodeCreator := func(ctx context.Context, addr string, nodeID int64) (types.DataNodeClient, error) {
-			return dn, nil
-		}
-
-		mockSession := session.NewMockDataNodeManager(t)
-		mockSession.EXPECT().GetSessions().Return([]*session.Session{session.NewSession(&session.NodeInfo{NodeID: 1}, dataNodeCreator)})
-		s.sessionManager = mockSession
+		nodeManager := session.NewMockNodeManager(t)
+		nodeManager.EXPECT().GetClient(mock.Anything).Return(dn, nil)
+		s.nodeManager = nodeManager
 
 		jsonReq := gjson.Parse(`{"in": "dn"}`)
 		result, err := s.getSegmentsJSON(ctx, req, jsonReq)
