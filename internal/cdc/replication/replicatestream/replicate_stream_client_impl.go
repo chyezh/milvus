@@ -88,9 +88,9 @@ func (r *replicateStreamClient) startInternal() {
 	backoff.MaxElapsedTime = 0
 	backoff.Reset()
 
-	disconnect := func(stopCh chan struct{}, err error) (reconnect bool) {
+	disconnect := func(connCancel context.CancelFunc, err error) (reconnect bool) {
 		r.metrics.OnDisconnect()
-		close(stopCh)
+		connCancel() // Cancel the connection context to stop send/recv loops
 		r.client.CloseSend()
 		r.wg.Wait()
 		time.Sleep(backoff.NextBackOff())
@@ -124,22 +124,25 @@ func (r *replicateStreamClient) startInternal() {
 			r.client = client
 			r.pendingMessages.SeekToHead()
 
-			stopCh := make(chan struct{})
-			sendErrCh := r.startSendLoop(stopCh)
-			recvErrCh := r.startRecvLoop(stopCh)
+			// Create a local context for this connection that can be cancelled
+			// when we need to stop the send/recv loops
+			connCtx, connCancel := context.WithCancel(r.ctx)
+			sendErrCh := r.startSendLoop(connCtx)
+			recvErrCh := r.startRecvLoop(connCtx)
 
 			select {
 			case <-r.ctx.Done():
+				connCancel() // Cancel the connection context
 				r.client.CloseSend()
 				r.wg.Wait()
 				return
 			case err := <-sendErrCh:
-				reconnect := disconnect(stopCh, err)
+				reconnect := disconnect(connCancel, err)
 				if !reconnect {
 					return
 				}
 			case err := <-recvErrCh:
-				reconnect := disconnect(stopCh, err)
+				reconnect := disconnect(connCancel, err)
 				if !reconnect {
 					return
 				}
@@ -160,41 +163,38 @@ func (r *replicateStreamClient) Replicate(msg message.ImmutableMessage) error {
 	}
 }
 
-func (r *replicateStreamClient) startSendLoop(stopCh <-chan struct{}) <-chan error {
+func (r *replicateStreamClient) startSendLoop(ctx context.Context) <-chan error {
 	errCh := make(chan error, 1)
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
-		errCh <- r.sendLoop(stopCh)
+		errCh <- r.sendLoop(ctx)
 	}()
 	return errCh
 }
 
-func (r *replicateStreamClient) startRecvLoop(stopCh <-chan struct{}) <-chan error {
+func (r *replicateStreamClient) startRecvLoop(ctx context.Context) <-chan error {
 	errCh := make(chan error, 1)
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
-		errCh <- r.recvLoop(stopCh)
+		errCh <- r.recvLoop(ctx)
 	}()
 	return errCh
 }
 
-func (r *replicateStreamClient) sendLoop(stopCh <-chan struct{}) error {
+func (r *replicateStreamClient) sendLoop(ctx context.Context) error {
 	logger := log.With(
 		zap.String("sourceChannel", r.replicateInfo.GetSourceChannelName()),
 		zap.String("targetChannel", r.replicateInfo.GetTargetChannelName()),
 	)
 	for {
 		select {
-		case <-r.ctx.Done():
+		case <-ctx.Done():
 			logger.Info("send loop closed by ctx done")
 			return nil
-		case <-stopCh:
-			logger.Info("send loop closed by stopCh")
-			return nil
 		default:
-			msg, err := r.pendingMessages.Dequeue(r.ctx)
+			msg, err := r.pendingMessages.Dequeue(ctx)
 			if err != nil {
 				// context canceled, return nil
 				return nil
@@ -266,18 +266,15 @@ func (r *replicateStreamClient) sendMessage(msg message.ImmutableMessage) (err e
 	return r.client.Send(req)
 }
 
-func (r *replicateStreamClient) recvLoop(stopCh <-chan struct{}) error {
+func (r *replicateStreamClient) recvLoop(ctx context.Context) error {
 	logger := log.With(
 		zap.String("sourceChannel", r.replicateInfo.GetSourceChannelName()),
 		zap.String("targetChannel", r.replicateInfo.GetTargetChannelName()),
 	)
 	for {
 		select {
-		case <-r.ctx.Done():
+		case <-ctx.Done():
 			logger.Info("recv loop closed by ctx done")
-			return nil
-		case <-stopCh:
-			logger.Info("recv loop closed by stopCh")
 			return nil
 		default:
 			resp, err := r.client.Recv()
