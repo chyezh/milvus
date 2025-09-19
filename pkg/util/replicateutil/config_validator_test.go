@@ -792,7 +792,7 @@ func TestReplicateConfigValidator_validateConfigComparison(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	t.Run("success - only ConnectionParam changed", func(t *testing.T) {
+	t.Run("error - ConnectionParam changed", func(t *testing.T) {
 		currentConfig := createConfigWithClusters([]*commonpb.MilvusCluster{
 			{
 				ClusterId: "cluster-1",
@@ -809,15 +809,20 @@ func TestReplicateConfigValidator_validateConfigComparison(t *testing.T) {
 				ClusterId: "cluster-1",
 				ConnectionParam: &commonpb.ConnectionParam{
 					Uri:   "localhost:19530",
-					Token: "new-token", // Only token changed
+					Token: "new-token", // Token changed - should fail
 				},
 				Pchannels: []string{"cluster-1-channel-1", "cluster-1-channel-2"},
 			},
 		})
 
-		validator := NewReplicateConfigValidator(incomingConfig, currentConfig, "cluster-1", []string{"cluster-1-channel-1", "cluster-1-channel-2"})
-		err := validator.Validate()
-		assert.NoError(t, err)
+		// Test the config comparison validation directly
+		validator := &ReplicateConfigValidator{
+			incomingConfig: incomingConfig,
+			currentConfig:  currentConfig,
+		}
+		err := validator.validateConfigComparison()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "connection_param.token cannot be changed")
 	})
 
 	t.Run("error - pchannels changed", func(t *testing.T) {
@@ -853,6 +858,39 @@ func TestReplicateConfigValidator_validateConfigComparison(t *testing.T) {
 		assert.Contains(t, err.Error(), "pchannels cannot be changed")
 	})
 
+	t.Run("error - ConnectionParam URI changed", func(t *testing.T) {
+		currentConfig := createConfigWithClusters([]*commonpb.MilvusCluster{
+			{
+				ClusterId: "cluster-1",
+				ConnectionParam: &commonpb.ConnectionParam{
+					Uri:   "localhost:19530",
+					Token: "test-token",
+				},
+				Pchannels: []string{"cluster-1-channel-1", "cluster-1-channel-2"},
+			},
+		})
+
+		incomingConfig := createConfigWithClusters([]*commonpb.MilvusCluster{
+			{
+				ClusterId: "cluster-1",
+				ConnectionParam: &commonpb.ConnectionParam{
+					Uri:   "localhost:19531", // URI changed - should fail
+					Token: "test-token",
+				},
+				Pchannels: []string{"cluster-1-channel-1", "cluster-1-channel-2"},
+			},
+		})
+
+		// Test the config comparison validation directly
+		validator := &ReplicateConfigValidator{
+			incomingConfig: incomingConfig,
+			currentConfig:  currentConfig,
+		}
+		err := validator.validateConfigComparison()
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "connection_param.uri cannot be changed")
+	})
+
 	t.Run("success - same cluster with no changes", func(t *testing.T) {
 		currentConfig := createConfigWithClusters([]*commonpb.MilvusCluster{
 			{
@@ -883,80 +921,5 @@ func TestReplicateConfigValidator_validateConfigComparison(t *testing.T) {
 		}
 		err := validator.validateConfigComparison()
 		assert.NoError(t, err) // This should pass since it's the same cluster
-	})
-}
-
-func TestReplicateConfigValidator_validateClusterConsistency(t *testing.T) {
-	validator := &ReplicateConfigValidator{}
-
-	t.Run("success - only ConnectionParam changed", func(t *testing.T) {
-		current := &commonpb.MilvusCluster{
-			ClusterId: "cluster-1",
-			ConnectionParam: &commonpb.ConnectionParam{
-				Uri:   "localhost:19530",
-				Token: "old-token",
-			},
-			Pchannels: []string{"cluster-1-channel-1", "cluster-1-channel-2"},
-		}
-
-		incoming := &commonpb.MilvusCluster{
-			ClusterId: "cluster-1",
-			ConnectionParam: &commonpb.ConnectionParam{
-				Uri:   "localhost:19530",
-				Token: "new-token", // Only token changed
-			},
-			Pchannels: []string{"cluster-1-channel-1", "cluster-1-channel-2"},
-		}
-
-		err := validator.validateClusterConsistency(current, incoming)
-		assert.NoError(t, err)
-	})
-
-	t.Run("error - pchannels changed", func(t *testing.T) {
-		current := &commonpb.MilvusCluster{
-			ClusterId: "cluster-1",
-			ConnectionParam: &commonpb.ConnectionParam{
-				Uri:   "localhost:19530",
-				Token: "test-token",
-			},
-			Pchannels: []string{"cluster-1-channel-1", "cluster-1-channel-2"},
-		}
-
-		incoming := &commonpb.MilvusCluster{
-			ClusterId: "cluster-1",
-			ConnectionParam: &commonpb.ConnectionParam{
-				Uri:   "localhost:19530",
-				Token: "test-token",
-			},
-			Pchannels: []string{"cluster-1-channel-1", "cluster-1-channel-3"}, // Different pchannels
-		}
-
-		err := validator.validateClusterConsistency(current, incoming)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "pchannels cannot be changed")
-	})
-
-	t.Run("error - pchannels order changed", func(t *testing.T) {
-		current := &commonpb.MilvusCluster{
-			ClusterId: "cluster-1",
-			ConnectionParam: &commonpb.ConnectionParam{
-				Uri:   "localhost:19530",
-				Token: "test-token",
-			},
-			Pchannels: []string{"cluster-1-channel-1", "cluster-1-channel-2"},
-		}
-
-		incoming := &commonpb.MilvusCluster{
-			ClusterId: "cluster-1",
-			ConnectionParam: &commonpb.ConnectionParam{
-				Uri:   "localhost:19530",
-				Token: "new-token", // Token changed
-			},
-			Pchannels: []string{"cluster-1-channel-2", "cluster-1-channel-1"}, // Same channels, different order
-		}
-
-		err := validator.validateClusterConsistency(current, incoming)
-		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "pchannels cannot be changed")
 	})
 }

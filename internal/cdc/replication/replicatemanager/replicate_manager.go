@@ -18,12 +18,12 @@ package replicatemanager
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/samber/lo"
 	"go.uber.org/zap"
 
+	"github.com/milvus-io/milvus/internal/metastore/kv/streamingcoord"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -46,10 +46,6 @@ func NewReplicateManager() *replicateManager {
 	}
 }
 
-func bindReplicatorKey(replicateInfo *streamingpb.ReplicatePChannelMeta) string {
-	return fmt.Sprintf("%s_%s", replicateInfo.GetSourceChannelName(), replicateInfo.GetTargetChannelName())
-}
-
 func (r *replicateManager) CreateReplicator(replicateInfo *streamingpb.ReplicatePChannelMeta) {
 	logger := log.With(
 		zap.String("sourceChannel", replicateInfo.GetSourceChannelName()),
@@ -60,7 +56,7 @@ func (r *replicateManager) CreateReplicator(replicateInfo *streamingpb.Replicate
 		// current cluster is not source cluster, skip create replicator
 		return
 	}
-	replicatorKey := bindReplicatorKey(replicateInfo)
+	replicatorKey := streamingcoord.BuildReplicatePChannelMetaKey(replicateInfo)
 	_, ok := r.replicators[replicatorKey]
 	if ok {
 		logger.Debug("replicator already exists, skip create replicator")
@@ -74,32 +70,16 @@ func (r *replicateManager) CreateReplicator(replicateInfo *streamingpb.Replicate
 }
 
 func (r *replicateManager) RemoveOutOfTargetReplicators(targetReplicatePChannels []*streamingpb.ReplicatePChannelMeta) {
-	targets := lo.KeyBy(targetReplicatePChannels, bindReplicatorKey)
-	stopReplicate := func(replicatorKey string) {
-		replicator := r.replicators[replicatorKey]
-		pchannelMeta := r.replicatorPChannels[replicatorKey]
-		replicator.StopReplicate()
-		delete(r.replicators, replicatorKey)
-		delete(r.replicatorPChannels, replicatorKey)
-		log.Info("removed replicator due to out of target",
-			zap.String("sourceChannel", pchannelMeta.GetSourceChannelName()),
-			zap.String("targetChannel", pchannelMeta.GetTargetChannelName()),
-		)
-	}
-	for replicatorKey := range r.replicators {
-		_, ok := targets[replicatorKey]
-		if !ok {
-			stopReplicate(replicatorKey)
-		} else {
-			// check if connection param changed, if changed, stop replicate
-			currentMeta := r.replicatorPChannels[replicatorKey]
-			targetMeta := targets[replicatorKey]
-			currentConnParam := currentMeta.GetTargetCluster().GetConnectionParam()
-			targetConnParam := targetMeta.GetTargetCluster().GetConnectionParam()
-			if currentConnParam.GetUri() != targetConnParam.GetUri() ||
-				currentConnParam.GetToken() != targetConnParam.GetToken() {
-				stopReplicate(replicatorKey)
-			}
+	targets := lo.KeyBy(targetReplicatePChannels, streamingcoord.BuildReplicatePChannelMetaKey)
+	for replicatorKey, replicator := range r.replicators {
+		if pchannelMeta, ok := targets[replicatorKey]; !ok {
+			replicator.StopReplicate()
+			delete(r.replicators, replicatorKey)
+			delete(r.replicatorPChannels, replicatorKey)
+			log.Info("removed replicator due to out of target",
+				zap.String("sourceChannel", pchannelMeta.GetSourceChannelName()),
+				zap.String("targetChannel", pchannelMeta.GetTargetChannelName()),
+			)
 		}
 	}
 }

@@ -235,7 +235,7 @@ func (v *ReplicateConfigValidator) validateTopologyTypeConstraint(topologies []*
 }
 
 // validateConfigComparison validates that for clusters with the same ClusterID,
-// only ConnectionParam can change, other parameters must remain the same
+// no cluster attributes can be changed
 func (v *ReplicateConfigValidator) validateConfigComparison() error {
 	currentClusters := v.currentConfig.GetClusters()
 	currentClusterMap := make(map[string]*commonpb.MilvusCluster)
@@ -263,7 +263,7 @@ func (v *ReplicateConfigValidator) validateConfigComparison() error {
 	return nil
 }
 
-// validateClusterConsistency validates that only ConnectionParam can change between current and incoming cluster
+// validateClusterConsistency validates that no cluster attributes can be changed between current and incoming cluster
 func (v *ReplicateConfigValidator) validateClusterConsistency(current, incoming *commonpb.MilvusCluster) error {
 	// Check Pchannels consistency
 	if !slices.Equal(current.GetPchannels(), incoming.GetPchannels()) {
@@ -271,8 +271,18 @@ func (v *ReplicateConfigValidator) validateClusterConsistency(current, incoming 
 			current.GetClusterId(), current.GetPchannels(), incoming.GetPchannels())
 	}
 
-	// ConnectionParam can change, so we don't validate it here
-	// This is the only field that's allowed to change
+	// Check ConnectionParam consistency
+	currentConn := current.GetConnectionParam()
+	incomingConn := incoming.GetConnectionParam()
+
+	if currentConn.GetUri() != incomingConn.GetUri() {
+		return fmt.Errorf("cluster '%s' connection_param.uri cannot be changed: current=%s, incoming=%s",
+			current.GetClusterId(), currentConn.GetUri(), incomingConn.GetUri())
+	}
+	if currentConn.GetToken() != incomingConn.GetToken() {
+		return fmt.Errorf("cluster '%s' connection_param.token cannot be changed",
+			current.GetClusterId())
+	}
 
 	return nil
 }
