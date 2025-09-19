@@ -2,13 +2,13 @@ package channel
 
 import (
 	"context"
-	"fmt"
 	"sync"
 
 	"github.com/cockroachdb/errors"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
+	"github.com/milvus-io/milvus/internal/metastore/kv/streamingcoord"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/resource"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
@@ -148,10 +148,6 @@ func recoverReplicateConfiguration(ctx context.Context) (*replicateutil.ConfigHe
 	), nil
 }
 
-func bindReplicatePChannelMetaKey(sourceChannel, targetChannel string) string {
-	return fmt.Sprintf("%s_%s", sourceChannel, targetChannel)
-}
-
 func recoverReplicatePChannels(ctx context.Context) (map[string]*streamingpb.ReplicatePChannelMeta, error) {
 	replicatePChannels, err := resource.Resource().StreamingCatalog().ListReplicatePChannels(ctx)
 	if err != nil {
@@ -159,9 +155,8 @@ func recoverReplicatePChannels(ctx context.Context) (map[string]*streamingpb.Rep
 	}
 	replicatePChannelsMap := make(map[string]*streamingpb.ReplicatePChannelMeta, len(replicatePChannels))
 	for _, replicatePChannel := range replicatePChannels {
-		sourceChannel := replicatePChannel.GetSourceChannelName()
-		targetChannel := replicatePChannel.GetTargetChannelName()
-		replicatePChannelsMap[bindReplicatePChannelMetaKey(sourceChannel, targetChannel)] = replicatePChannel
+		key := streamingcoord.BuildReplicatePChannelMetaKey(replicatePChannel)
+		replicatePChannelsMap[key] = replicatePChannel
 	}
 	return replicatePChannelsMap, nil
 }
@@ -471,7 +466,7 @@ func (cm *ChannelManager) UpdateReplicateConfiguration(ctx context.Context, resu
 
 	// update the replicate pchannels in-memory.
 	for _, pchannelMeta := range newIncomingCDCTasks {
-		key := bindReplicatePChannelMetaKey(pchannelMeta.GetSourceChannelName(), pchannelMeta.GetTargetChannelName())
+		key := streamingcoord.BuildReplicatePChannelMetaKey(pchannelMeta)
 		cm.replicatePChannels[key] = pchannelMeta
 	}
 
@@ -491,30 +486,29 @@ func (cm *ChannelManager) getNewIncomingTask(newConfig *replicateutil.ConfigHelp
 			sourceClusterID := targetCluster.SourceCluster().ClusterId
 			sourcePChannel := targetCluster.MustGetSourceChannel(pchannel)
 
-			var initializedCheckpoint *commonpb.ReplicateCheckpoint
-			key := bindReplicatePChannelMetaKey(sourcePChannel, pchannel)
+			incomingPChannelMeta := &streamingpb.ReplicatePChannelMeta{
+				SourceChannelName: sourcePChannel,
+				TargetChannelName: pchannel,
+				TargetCluster:     targetCluster.MilvusCluster,
+			}
+			key := streamingcoord.BuildReplicatePChannelMetaKey(incomingPChannelMeta)
 			if _, ok := cm.replicatePChannels[key]; ok {
 				// if the pchannel meta already exists, don't change the initialized checkpoint.
-				initializedCheckpoint = cm.replicatePChannels[key].InitializedCheckpoint
+				incomingPChannelMeta.InitializedCheckpoint = cm.replicatePChannels[key].InitializedCheckpoint
 			} else {
 				// The checkpoint is set as the initialized checkpoint for one cdc-task,
 				// when the startup of one cdc-task, the checkpoint returned from the target cluster is nil,
 				// so we set the initialized checkpoint here to start operation from here.
 				// the InitializedCheckpoint is always keep same semantic with the checkpoint at target cluster.
 				// so the cluster id is the source cluster id (aka. current cluster id)
-				initializedCheckpoint = &commonpb.ReplicateCheckpoint{
+				incomingPChannelMeta.InitializedCheckpoint = &commonpb.ReplicateCheckpoint{
 					ClusterId: sourceClusterID,
 					Pchannel:  sourcePChannel,
 					MessageId: appendResults[sourcePChannel].LastConfirmedMessageID.IntoProto(),
 					TimeTick:  appendResults[sourcePChannel].TimeTick,
 				}
 			}
-			incomingReplicatingTasks = append(incomingReplicatingTasks, &streamingpb.ReplicatePChannelMeta{
-				SourceChannelName:     sourcePChannel,
-				TargetChannelName:     pchannel,
-				TargetCluster:         targetCluster.MilvusCluster,
-				InitializedCheckpoint: initializedCheckpoint,
-			})
+			incomingReplicatingTasks = append(incomingReplicatingTasks, incomingPChannelMeta)
 		}
 	}
 	return incomingReplicatingTasks
