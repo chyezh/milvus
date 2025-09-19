@@ -33,6 +33,7 @@ func TestChannelManager(t *testing.T) {
 	}, nil)
 	catalog.EXPECT().ListPChannel(mock.Anything).Return(nil, errors.New("recover failure"))
 	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	catalog.EXPECT().ListReplicatePChannels(mock.Anything).Return(nil, nil)
 	m, err := RecoverChannelManager(ctx)
 	assert.Nil(t, m)
 	assert.Error(t, err)
@@ -133,6 +134,7 @@ func TestStreamingEnableChecker(t *testing.T) {
 	catalog.EXPECT().SaveVersion(mock.Anything, mock.Anything).Return(nil)
 	catalog.EXPECT().ListPChannel(mock.Anything).Return(nil, nil)
 	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	catalog.EXPECT().ListReplicatePChannels(mock.Anything).Return(nil, nil)
 
 	m, err := RecoverChannelManager(ctx, "test-channel")
 	assert.NoError(t, err)
@@ -186,6 +188,7 @@ func TestChannelManagerWatch(t *testing.T) {
 	})
 	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).Return(nil)
 	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	catalog.EXPECT().ListReplicatePChannels(mock.Anything).Return(nil, nil)
 
 	manager, err := RecoverChannelManager(context.Background())
 	assert.NoError(t, err)
