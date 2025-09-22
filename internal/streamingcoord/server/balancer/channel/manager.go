@@ -480,8 +480,16 @@ func (cm *ChannelManager) UpdateReplicateConfiguration(ctx context.Context, resu
 // getNewIncomingTask gets the new incoming task from replicatingTasks.
 func (cm *ChannelManager) getNewIncomingTask(newConfig *replicateutil.ConfigHelper, appendResults map[string]*message.AppendResult) []*streamingpb.ReplicatePChannelMeta {
 	incoming := newConfig.GetCurrentCluster()
+	var current *replicateutil.MilvusCluster
+	if cm.replicateConfig != nil {
+		current = cm.replicateConfig.GetCurrentCluster()
+	}
 	incomingReplicatingTasks := make([]*streamingpb.ReplicatePChannelMeta, 0, len(incoming.TargetClusters()))
 	for _, targetCluster := range incoming.TargetClusters() {
+		if current != nil && current.TargetCluster(targetCluster.GetClusterId()) != nil {
+			// target already exists, skip it.
+			continue
+		}
 		for _, pchannel := range targetCluster.GetPchannels() {
 			sourceClusterID := targetCluster.SourceCluster().ClusterId
 			sourcePChannel := targetCluster.MustGetSourceChannel(pchannel)
