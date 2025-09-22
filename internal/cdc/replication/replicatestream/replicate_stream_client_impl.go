@@ -187,7 +187,6 @@ func (r *replicateStreamClient) sendLoop(ctx context.Context) (err error) {
 			msg, err := r.pendingMessages.ReadNext(ctx)
 			if err != nil {
 				// context canceled, return nil
-				logger.Info("sheep debug")
 				return nil
 			}
 			if msg.MessageType() == message.MessageTypeTxn {
