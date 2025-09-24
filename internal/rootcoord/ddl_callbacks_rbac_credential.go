@@ -3,6 +3,7 @@ package rootcoord
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"go.uber.org/zap"
 
@@ -14,11 +15,13 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/proxypb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
-func (c *Core) broadcastCreateCredential(ctx context.Context, credInfo *internalpb.CredentialInfo) error {
-	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusivePrivilegeResourceKey())
+// broadcastAlterUserForCreateCredential broadcasts the alter user message for create credential.
+func (c *Core) broadcastAlterUserForCreateCredential(ctx context.Context, credInfo *internalpb.CredentialInfo) error {
+	broadcaster, err := startBroadcastWithRBACLock(ctx)
 	if err != nil {
 		return err
 	}
@@ -44,6 +47,8 @@ func (c *Core) broadcastCreateCredential(ctx context.Context, credInfo *internal
 
 // checkCreateCredential check if the credential can be created.
 func (c *Core) checkCreateCredential(ctx context.Context, in *internalpb.CredentialInfo) error {
+	// check if the username is empty.
+	in.Username = strings.TrimSpace(in.Username)
 	if in.GetUsername() == "" {
 		return errors.New("username is empty")
 	}
@@ -53,23 +58,25 @@ func (c *Core) checkCreateCredential(ctx context.Context, in *internalpb.Credent
 	if err != nil {
 		return err
 	}
-	if len(resp.Usernames) >= Params.ProxyCfg.MaxUserNum.GetAsInt() {
+	// check if the number of users has reached the limit.
+	maxUserNum := Params.ProxyCfg.MaxUserNum.GetAsInt()
+	if len(resp.Usernames) >= maxUserNum {
 		errMsg := "unable to add user because the number of users has reached the limit"
-		log.Ctx(ctx).Error(errMsg, zap.Int("max_user_num", Params.ProxyCfg.MaxUserNum.GetAsInt()))
+		log.Ctx(ctx).Error(errMsg, zap.Int("maxUserNum", maxUserNum))
 		return errors.New(errMsg)
 	}
-
 	// check if the username already exists.
 	for _, username := range resp.Usernames {
 		if username == in.GetUsername() {
-			return fmt.Errorf("user already exists: %s", in.GetUsername())
+			return fmt.Errorf("user already exists: %s", in.Username)
 		}
 	}
 	return nil
 }
 
-func (c *Core) broadcastUpdateCredential(ctx context.Context, credInfo *internalpb.CredentialInfo) error {
-	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusivePrivilegeResourceKey())
+// broadcastAlterUserForUpdateCredential broadcasts the alter user message for update credential.
+func (c *Core) broadcastAlterUserForUpdateCredential(ctx context.Context, credInfo *internalpb.CredentialInfo) error {
+	broadcaster, err := startBroadcastWithRBACLock(ctx)
 	if err != nil {
 		return err
 	}
@@ -95,11 +102,15 @@ func (c *Core) broadcastUpdateCredential(ctx context.Context, credInfo *internal
 
 // checkUpdateCredential check if the credential can be updated.
 func (c *Core) checkUpdateCredential(ctx context.Context, in *internalpb.CredentialInfo) error {
+	in.Username = strings.TrimSpace(in.Username)
 	if in.GetUsername() == "" {
 		return errors.New("username is empty")
 	}
 	// check if the number of credential exists.
 	if _, err := c.meta.GetCredential(ctx, in.GetUsername()); err != nil {
+		if errors.Is(err, merr.ErrIoKeyNotFound) {
+			return fmt.Errorf("user not exists: %s", in.Username)
+		}
 		return err
 	}
 	return nil
@@ -118,18 +129,18 @@ func (c *DDLCallback) alterUserV2AckCallback(ctx context.Context, result message
 	return nil
 }
 
-func (c *Core) broadcastDropCredential(ctx context.Context, in *milvuspb.DeleteCredentialRequest) error {
-	if in.Username == "" {
+// broadcastDropUserForDeleteCredential broadcasts the drop user message for delete credential.
+func (c *Core) broadcastDropUserForDeleteCredential(ctx context.Context, in *milvuspb.DeleteCredentialRequest) error {
+	in.Username = strings.TrimSpace(in.Username)
+	if len(in.GetUsername()) == 0 {
 		return errors.New("username is empty")
 	}
 
-	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusivePrivilegeResourceKey())
+	broadcaster, err := startBroadcastWithRBACLock(ctx)
 	if err != nil {
 		return err
 	}
 	defer broadcaster.Close()
-
-	// TODO: check if the credential can be dropped.
 
 	msg := message.NewDropUserMessageBuilderV2().
 		WithHeader(&message.DropUserMessageHeader{
@@ -138,7 +149,6 @@ func (c *Core) broadcastDropCredential(ctx context.Context, in *milvuspb.DeleteC
 		WithBody(&message.DropUserMessageBody{}).
 		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
 		MustBuildBroadcast()
-
 	_, err = broadcaster.Broadcast(ctx, msg)
 	return err
 }

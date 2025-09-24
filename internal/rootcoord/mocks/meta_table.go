@@ -2924,8 +2924,7 @@ func (_c *IMetaTable_SelectUser_Call) RunAndReturn(run func(context.Context, str
 func NewIMetaTable(t interface {
 	mock.TestingT
 	Cleanup(func())
-},
-) *IMetaTable {
+}) *IMetaTable {
 	mock := &IMetaTable{}
 	mock.Mock.Test(t)
 

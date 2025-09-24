@@ -2177,8 +2177,8 @@ func (c *Core) CreateCredential(ctx context.Context, credInfo *internalpb.Creden
 		return merr.Status(err), nil
 	}
 
-	if err := c.broadcastCreateCredential(ctx, credInfo); err != nil {
-		ctxLog.Warn("CreateCredential append message failed", zap.Error(err))
+	if err := c.broadcastAlterUserForCreateCredential(ctx, credInfo); err != nil {
+		ctxLog.Warn("CreateCredential failed", zap.Error(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_CreateCredentialFailure), nil
 	}
@@ -2230,7 +2230,7 @@ func (c *Core) UpdateCredential(ctx context.Context, credInfo *internalpb.Creden
 		return merr.Status(err), nil
 	}
 
-	if err := c.broadcastUpdateCredential(ctx, credInfo); err != nil {
+	if err := c.broadcastAlterUserForUpdateCredential(ctx, credInfo); err != nil {
 		ctxLog.Warn("UpdateCredential append message failed", zap.Error(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_UpdateCredentialFailure), nil

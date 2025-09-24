@@ -38,8 +38,8 @@ import (
 	pb "github.com/milvus-io/milvus/pkg/v2/proto/etcdpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/impls/rmq"
 	"github.com/milvus-io/milvus/pkg/v2/util"
+	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -49,9 +49,8 @@ func generateMetaTable(t *testing.T) *MetaTable {
 	return &MetaTable{catalog: rootcoord.NewCatalog(memkv.NewMemoryKV(), nil)}
 }
 
-func buildAlterUserMessage(credInfo *internalpb.CredentialInfo) message.ImmutablePutUserMessageV2 {
+func buildAlterUserMessage(credInfo *internalpb.CredentialInfo) message.BroadcastResultAlterUserMessageV2 {
 	msg := message.NewAlterUserMessageBuilderV2().
-		WithVChannel(message.ControlChannel).
 		WithHeader(&message.AlterUserMessageHeader{
 			UserEntity: &milvuspb.UserEntity{
 				Name: credInfo.Username,
@@ -60,16 +59,20 @@ func buildAlterUserMessage(credInfo *internalpb.CredentialInfo) message.Immutabl
 		WithBody(&message.AlterUserMessageBody{
 			CredentialInfo: credInfo,
 		}).
-		MustBuildMutable().
-		WithTimeTick(1).
-		IntoImmutableMessage(rmq.NewRmqID(1))
-	return message.MustAsImmutableAlterUserMessageV2(msg)
+		WithBroadcast([]string{funcutil.GetControlChannel("by-dev-rootcoord-dml_1")}).
+		MustBuildBroadcast()
+	return message.BroadcastResultAlterUserMessageV2{
+		Message: message.MustAsBroadcastAlterUserMessageV2(msg),
+		Results: map[string]*message.AppendResult{
+			funcutil.GetControlChannel("by-dev-rootcoord-dml_1"): {TimeTick: 1},
+		},
+	}
 }
 
 func TestRbacAddCredential(t *testing.T) {
 	mt := generateMetaTable(t)
 
-	err := mt.AlterCredential(context.TODO(), buildPutUserMessage(&internalpb.CredentialInfo{
+	err := mt.AlterCredential(context.TODO(), buildAlterUserMessage(&internalpb.CredentialInfo{
 		Username: "user1",
 		Tenant:   util.DefaultTenant,
 	}))
@@ -94,7 +97,7 @@ func TestRbacAddCredential(t *testing.T) {
 				paramtable.Get().Save(Params.ProxyCfg.MaxUserNum.Key, "3")
 			}
 			defer paramtable.Get().Reset(Params.ProxyCfg.MaxUserNum.Key)
-			err := mt.AlterCredential(context.TODO(), buildPutUserMessage(test.info))
+			err := mt.AlterCredential(context.TODO(), buildAlterUserMessage(test.info))
 			assert.Error(t, err)
 		})
 	}
