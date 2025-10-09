@@ -151,6 +151,8 @@ func (r *recoveryStorageImpl) ObserveMessage(ctx context.Context, msg message.Im
 		}
 	}
 	if funcutil.IsControlChannel(msg.VChannel()) {
+		// control channel message is just used to determine the DDL/DCL order,
+		// will not affect the recovery storage, so skip it.
 		return nil
 	}
 
