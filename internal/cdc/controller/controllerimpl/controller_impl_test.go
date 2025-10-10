@@ -19,6 +19,7 @@ package controllerimpl
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/stretchr/testify/assert"
@@ -39,7 +40,7 @@ func TestController_StartAndStop_WithEvents(t *testing.T) {
 	mockReplicateManagerClient.EXPECT().Close().Return()
 
 	mockReplicationCatalog := mock_metastore.NewMockReplicationCatalog(t)
-	mockReplicationCatalog.EXPECT().ListReplicatePChannels(mock.Anything).Return([]*streamingpb.ReplicatePChannelMeta{}, nil)
+	mockReplicationCatalog.EXPECT().ListReplicatePChannels(mock.Anything).Return([]*streamingpb.ReplicatePChannelMeta{}, []int64{}, nil)
 
 	// Create test data
 	replicateMeta := &streamingpb.ReplicatePChannelMeta{
@@ -52,13 +53,7 @@ func TestController_StartAndStop_WithEvents(t *testing.T) {
 	putEvent := &clientv3.Event{
 		Type: mvccpb.PUT,
 		Kv: &mvccpb.KeyValue{
-			Value: metaBytes,
-		},
-	}
-
-	deleteEvent := &clientv3.Event{
-		Type: mvccpb.DELETE,
-		Kv: &mvccpb.KeyValue{
+			Key:   []byte(streamingcoord.BuildReplicatePChannelMetaKey(replicateMeta)),
 			Value: metaBytes,
 		},
 	}
@@ -72,19 +67,13 @@ func TestController_StartAndStop_WithEvents(t *testing.T) {
 			eventCh <- clientv3.WatchResponse{
 				Events: []*clientv3.Event{putEvent},
 			}
-			eventCh <- clientv3.WatchResponse{
-				Events: []*clientv3.Event{deleteEvent},
-			}
 		}()
 
 		return eventCh
 	})
 
-	notifyCh := make(chan struct{}, 2)
-	mockReplicateManagerClient.EXPECT().CreateReplicator(replicateMeta).RunAndReturn(func(replicate *streamingpb.ReplicatePChannelMeta) {
-		notifyCh <- struct{}{}
-	})
-	mockReplicateManagerClient.EXPECT().RemoveReplicator(replicateMeta).RunAndReturn(func(replicate *streamingpb.ReplicatePChannelMeta) {
+	notifyCh := make(chan struct{}, 1)
+	mockReplicateManagerClient.EXPECT().CreateReplicator(mock.Anything, mock.Anything).RunAndReturn(func(replicateKey string, repCtx *replication.ReplicateContext) {
 		notifyCh <- struct{}{}
 	})
 
@@ -97,10 +86,12 @@ func TestController_StartAndStop_WithEvents(t *testing.T) {
 	ctrl := NewController()
 	go ctrl.Start()
 
-	// Wait for events to be processed
-	<-notifyCh
-	<-notifyCh
-
+	// Wait for put event to be processed
+	select {
+	case <-notifyCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for put event")
+	}
 	ctrl.Stop()
 }
 
@@ -109,7 +100,7 @@ func TestController_StartAndStop_WithCompactError(t *testing.T) {
 	mockReplicateManagerClient.EXPECT().Close().Return()
 
 	mockReplicationCatalog := mock_metastore.NewMockReplicationCatalog(t)
-	mockReplicationCatalog.EXPECT().ListReplicatePChannels(mock.Anything).Return([]*streamingpb.ReplicatePChannelMeta{}, nil)
+	mockReplicationCatalog.EXPECT().ListReplicatePChannels(mock.Anything).Return([]*streamingpb.ReplicatePChannelMeta{}, []int64{}, nil)
 
 	// Create test data
 	replicateMeta := &streamingpb.ReplicatePChannelMeta{
@@ -122,6 +113,7 @@ func TestController_StartAndStop_WithCompactError(t *testing.T) {
 	putEvent := &clientv3.Event{
 		Type: mvccpb.PUT,
 		Kv: &mvccpb.KeyValue{
+			Key:   []byte(streamingcoord.BuildReplicatePChannelMetaKey(replicateMeta)),
 			Value: metaBytes,
 		},
 	}
@@ -152,7 +144,7 @@ func TestController_StartAndStop_WithCompactError(t *testing.T) {
 		return eventCh
 	})
 
-	mockReplicateManagerClient.EXPECT().CreateReplicator(replicateMeta).RunAndReturn(func(replicate *streamingpb.ReplicatePChannelMeta) {
+	mockReplicateManagerClient.EXPECT().CreateReplicator(mock.Anything, mock.Anything).RunAndReturn(func(replicateKey string, repCtx *replication.ReplicateContext) {
 		notifyCh <- struct{}{}
 	})
 
@@ -166,7 +158,11 @@ func TestController_StartAndStop_WithCompactError(t *testing.T) {
 	go ctrl.Start()
 
 	// Wait for the event to be processed after recovery
-	<-notifyCh
+	select {
+	case <-notifyCh:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for put event")
+	}
 
 	// Verify that WatchWithPrefix was called twice (once for initial watch, once after compact error)
 	assert.Equal(t, 2, watchCallCount)

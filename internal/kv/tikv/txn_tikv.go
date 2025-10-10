@@ -31,6 +31,8 @@ import (
 	"github.com/tikv/client-go/v2/txnkv"
 	"github.com/tikv/client-go/v2/txnkv/transaction"
 	"github.com/tikv/client-go/v2/txnkv/txnsnapshot"
+	"go.etcd.io/etcd/api/v3/mvccpb"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/pkg/v2/kv"
@@ -272,6 +274,11 @@ func (kv *txnTiKV) MultiLoad(ctx context.Context, keys []string) ([]string, erro
 	return validValues, loggingErr
 }
 
+// LoadKVsWithPrefix returns all the keys and values with the given key prefix.
+func (kv *txnTiKV) LoadKVsWithPrefix(ctx context.Context, key string) ([]*mvccpb.KeyValue, error) {
+	panic("LoadKVsWithPrefix is not supported in txnTiKV")
+}
+
 // LoadWithPrefix returns all the keys and values for the given key prefix.
 func (kv *txnTiKV) LoadWithPrefix(ctx context.Context, prefix string) ([]string, []string, error) {
 	start := time.Now()
@@ -378,6 +385,11 @@ func (kv *txnTiKV) Remove(ctx context.Context, key string) error {
 
 	loggingErr = kv.removeTiKVMeta(ctx, key)
 	return loggingErr
+}
+
+// RemoveWithCmps removes the key with given cmps.
+func (kv *txnTiKV) RemoveWithCmps(ctx context.Context, key string, cmps ...clientv3.Cmp) (bool, error) {
+	panic("RemoveWithCmps is not supported in txnTiKV")
 }
 
 // MultiRemove removes the input keys in transaction manner.

@@ -208,14 +208,23 @@ type QueryCoordCatalog interface {
 // ReplicationCatalog is the interface for replication catalog
 // it's used by CDC component.
 type ReplicationCatalog interface {
-	// RemoveReplicatePChannel removes the replicate pchannel from metastore.
+	// RemoveReplicatePChannelWithVersion removes the replicate pchannel from metastore.
 	// Remove the task of CDC replication task of current cluster, should be called when a CDC replication task is finished.
-	RemoveReplicatePChannel(ctx context.Context, meta *streamingpb.ReplicatePChannelMeta) error
+	// Because CDC removes the replicate pchannel meta asynchronously, there may be ordering conflicts
+	// during primary-secondary switches. For example:
+	// 1. Init: A -> B, Save key
+	// 2. Switch: B -> A, Delete key asynchronously
+	// 3. Switch again: A -> B, Save key
+	// Expected meta op order: [Save, Delete, Save]
+	// Actual meta op may be: [Save, Save, Delete]
+	// To avoid ordering conflicts, we need to pass the key’s version
+	// and only remove the KV when the version matches.
+	RemoveReplicatePChannelWithVersion(ctx context.Context, meta *streamingpb.ReplicatePChannelMeta, Version int64) (bool, error)
 
-	// ListReplicatePChannels lists all replicate pchannels from metastore.
+	// ListReplicatePChannels lists all replicate pchannels and their versions from metastore.
 	// every ReplicatePChannelMeta is a task of CDC replication task of current cluster which is a source cluster in replication topology.
 	// the task is written by streaming coord, SaveReplicateConfiguration operation.
-	ListReplicatePChannels(ctx context.Context) ([]*streamingpb.ReplicatePChannelMeta, error)
+	ListReplicatePChannels(ctx context.Context) ([]*streamingpb.ReplicatePChannelMeta, []int64, error)
 }
 
 // StreamingCoordCataLog is the interface for streamingcoord catalog

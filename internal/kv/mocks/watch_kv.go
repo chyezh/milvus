@@ -9,6 +9,8 @@ import (
 
 	mock "github.com/stretchr/testify/mock"
 
+	mvccpb "go.etcd.io/etcd/api/v3/mvccpb"
+
 	predicates "github.com/milvus-io/milvus/pkg/v2/kv/predicates"
 )
 
@@ -329,6 +331,65 @@ func (_c *WatchKV_Load_Call) Return(_a0 string, _a1 error) *WatchKV_Load_Call {
 }
 
 func (_c *WatchKV_Load_Call) RunAndReturn(run func(context.Context, string) (string, error)) *WatchKV_Load_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// LoadKVsWithPrefix provides a mock function with given fields: ctx, key
+func (_m *WatchKV) LoadKVsWithPrefix(ctx context.Context, key string) ([]*mvccpb.KeyValue, error) {
+	ret := _m.Called(ctx, key)
+
+	if len(ret) == 0 {
+		panic("no return value specified for LoadKVsWithPrefix")
+	}
+
+	var r0 []*mvccpb.KeyValue
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string) ([]*mvccpb.KeyValue, error)); ok {
+		return rf(ctx, key)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string) []*mvccpb.KeyValue); ok {
+		r0 = rf(ctx, key)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]*mvccpb.KeyValue)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = rf(ctx, key)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// WatchKV_LoadKVsWithPrefix_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'LoadKVsWithPrefix'
+type WatchKV_LoadKVsWithPrefix_Call struct {
+	*mock.Call
+}
+
+// LoadKVsWithPrefix is a helper method to define mock.On call
+//   - ctx context.Context
+//   - key string
+func (_e *WatchKV_Expecter) LoadKVsWithPrefix(ctx interface{}, key interface{}) *WatchKV_LoadKVsWithPrefix_Call {
+	return &WatchKV_LoadKVsWithPrefix_Call{Call: _e.mock.On("LoadKVsWithPrefix", ctx, key)}
+}
+
+func (_c *WatchKV_LoadKVsWithPrefix_Call) Run(run func(ctx context.Context, key string)) *WatchKV_LoadKVsWithPrefix_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string))
+	})
+	return _c
+}
+
+func (_c *WatchKV_LoadKVsWithPrefix_Call) Return(_a0 []*mvccpb.KeyValue, _a1 error) *WatchKV_LoadKVsWithPrefix_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *WatchKV_LoadKVsWithPrefix_Call) RunAndReturn(run func(context.Context, string) ([]*mvccpb.KeyValue, error)) *WatchKV_LoadKVsWithPrefix_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -723,6 +784,78 @@ func (_c *WatchKV_Remove_Call) Return(_a0 error) *WatchKV_Remove_Call {
 }
 
 func (_c *WatchKV_Remove_Call) RunAndReturn(run func(context.Context, string) error) *WatchKV_Remove_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// RemoveWithCmps provides a mock function with given fields: ctx, key, cmps
+func (_m *WatchKV) RemoveWithCmps(ctx context.Context, key string, cmps ...clientv3.Cmp) (bool, error) {
+	_va := make([]interface{}, len(cmps))
+	for _i := range cmps {
+		_va[_i] = cmps[_i]
+	}
+	var _ca []interface{}
+	_ca = append(_ca, ctx, key)
+	_ca = append(_ca, _va...)
+	ret := _m.Called(_ca...)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RemoveWithCmps")
+	}
+
+	var r0 bool
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, ...clientv3.Cmp) (bool, error)); ok {
+		return rf(ctx, key, cmps...)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string, ...clientv3.Cmp) bool); ok {
+		r0 = rf(ctx, key, cmps...)
+	} else {
+		r0 = ret.Get(0).(bool)
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, string, ...clientv3.Cmp) error); ok {
+		r1 = rf(ctx, key, cmps...)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// WatchKV_RemoveWithCmps_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RemoveWithCmps'
+type WatchKV_RemoveWithCmps_Call struct {
+	*mock.Call
+}
+
+// RemoveWithCmps is a helper method to define mock.On call
+//   - ctx context.Context
+//   - key string
+//   - cmps ...clientv3.Cmp
+func (_e *WatchKV_Expecter) RemoveWithCmps(ctx interface{}, key interface{}, cmps ...interface{}) *WatchKV_RemoveWithCmps_Call {
+	return &WatchKV_RemoveWithCmps_Call{Call: _e.mock.On("RemoveWithCmps",
+		append([]interface{}{ctx, key}, cmps...)...)}
+}
+
+func (_c *WatchKV_RemoveWithCmps_Call) Run(run func(ctx context.Context, key string, cmps ...clientv3.Cmp)) *WatchKV_RemoveWithCmps_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		variadicArgs := make([]clientv3.Cmp, len(args)-2)
+		for i, a := range args[2:] {
+			if a != nil {
+				variadicArgs[i] = a.(clientv3.Cmp)
+			}
+		}
+		run(args[0].(context.Context), args[1].(string), variadicArgs...)
+	})
+	return _c
+}
+
+func (_c *WatchKV_RemoveWithCmps_Call) Return(_a0 bool, _a1 error) *WatchKV_RemoveWithCmps_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *WatchKV_RemoveWithCmps_Call) RunAndReturn(run func(context.Context, string, ...clientv3.Cmp) (bool, error)) *WatchKV_RemoveWithCmps_Call {
 	_c.Call.Return(run)
 	return _c
 }

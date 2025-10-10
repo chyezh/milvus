@@ -19,6 +19,7 @@ package kv
 import (
 	"context"
 
+	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/milvus-io/milvus/pkg/v2/kv/predicates"
@@ -44,10 +45,12 @@ func NewCompareFailedError(err error) error {
 type BaseKV interface {
 	Load(ctx context.Context, key string) (string, error)
 	MultiLoad(ctx context.Context, keys []string) ([]string, error)
+	LoadKVsWithPrefix(ctx context.Context, key string) ([]*mvccpb.KeyValue, error)
 	LoadWithPrefix(ctx context.Context, key string) ([]string, []string, error)
 	Save(ctx context.Context, key, value string) error
 	MultiSave(ctx context.Context, kvs map[string]string) error
 	Remove(ctx context.Context, key string) error
+	RemoveWithCmps(ctx context.Context, key string, cmps ...clientv3.Cmp) (bool, error)
 	MultiRemove(ctx context.Context, keys []string) error
 	RemoveWithPrefix(ctx context.Context, key string) error
 	Has(ctx context.Context, key string) (bool, error)

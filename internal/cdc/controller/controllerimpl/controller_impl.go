@@ -28,6 +28,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/milvus-io/milvus/internal/cdc/replication"
 	"github.com/milvus-io/milvus/internal/cdc/resource"
 	"github.com/milvus-io/milvus/internal/metastore/kv/streamingcoord"
 	"github.com/milvus-io/milvus/pkg/v2/log"
@@ -57,13 +58,17 @@ func (c *controller) Start() error {
 	return nil
 }
 
+func buildReplicateKey(replicate *streamingpb.ReplicatePChannelMeta, version int64) string {
+	return fmt.Sprintf("%s/%d", streamingcoord.BuildReplicatePChannelMetaKey(replicate), version)
+}
+
 func (c *controller) recoverReplicatePChannelMeta() error {
-	replicataMetas, err := resource.Resource().ReplicationCatalog().ListReplicatePChannels(c.ctx)
+	replicataMetas, versions, err := resource.Resource().ReplicationCatalog().ListReplicatePChannels(c.ctx)
 	if err != nil {
 		return err
 	}
 	currentClusterID := paramtable.Get().CommonCfg.ClusterPrefix.GetValue()
-	for _, replicate := range replicataMetas {
+	for i, replicate := range replicataMetas {
 		if !strings.Contains(replicate.GetSourceChannelName(), currentClusterID) {
 			// current cluster is not source cluster, skip create replicator
 			continue
@@ -72,7 +77,17 @@ func (c *controller) recoverReplicatePChannelMeta() error {
 			zap.String("sourceChannel", replicate.GetSourceChannelName()),
 			zap.String("targetChannel", replicate.GetTargetChannelName()),
 		)
-		resource.Resource().ReplicateManagerClient().CreateReplicator(replicate)
+		version := versions[i]
+		repKey := buildReplicateKey(replicate, version)
+		repCtx := &replication.ReplicateContext{
+			RepKey:  repKey,
+			RepMeta: replicate,
+			Version: version,
+			CallbackOnClose: func() {
+				resource.Resource().ReplicateManagerClient().RemoveReplicator(repKey)
+			},
+		}
+		resource.Resource().ReplicateManagerClient().CreateReplicator(repKey, repCtx)
 	}
 	return nil
 }
@@ -102,21 +117,27 @@ func (c *controller) startWatchLoop() {
 					panic(fmt.Sprintf("failed to handle etcd event: %v", err))
 				}
 				for _, e := range event.Events {
-					replicate := c.mustParseReplicatePChannelMeta(e)
 					log.Info("handle replicate pchannel event",
-						zap.String("sourceChannel", replicate.GetSourceChannelName()),
-						zap.String("targetChannel", replicate.GetTargetChannelName()),
+						zap.String("key", string(e.Kv.Key)),
 						zap.String("eventType", e.Type.String()),
 					)
 					switch e.Type {
 					case mvccpb.PUT:
+						replicate := c.mustParseReplicatePChannelMeta(e)
 						if !strings.Contains(replicate.GetSourceChannelName(), currentClusterID) {
 							// current cluster is not source cluster, skip create replicator
 							continue
 						}
-						resource.Resource().ReplicateManagerClient().CreateReplicator(replicate)
-					case mvccpb.DELETE:
-						resource.Resource().ReplicateManagerClient().RemoveReplicator(replicate)
+						repKey := buildReplicateKey(replicate, e.Kv.Version)
+						repCtx := &replication.ReplicateContext{
+							RepKey:  repKey,
+							RepMeta: replicate,
+							Version: e.Kv.Version,
+							CallbackOnClose: func() {
+								resource.Resource().ReplicateManagerClient().RemoveReplicator(repKey)
+							},
+						}
+						resource.Resource().ReplicateManagerClient().CreateReplicator(repKey, repCtx)
 					}
 				}
 			}

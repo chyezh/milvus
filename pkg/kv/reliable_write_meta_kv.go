@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/pkg/v2/kv/predicates"
@@ -48,6 +49,16 @@ func (kv *ReliableWriteMetaKv) Remove(ctx context.Context, key string) error {
 	return kv.retryWithBackoff(ctx, func(ctx context.Context) error {
 		return kv.MetaKv.Remove(ctx, key)
 	})
+}
+
+func (kv *ReliableWriteMetaKv) RemoveWithCmps(ctx context.Context, key string, cmps ...clientv3.Cmp) (bool, error) {
+	var result bool
+	resErr := kv.retryWithBackoff(ctx, func(ctx context.Context) error {
+		var err error
+		result, err = kv.MetaKv.RemoveWithCmps(ctx, key, cmps...)
+		return err
+	})
+	return result, resErr
 }
 
 func (kv *ReliableWriteMetaKv) MultiRemove(ctx context.Context, keys []string) error {

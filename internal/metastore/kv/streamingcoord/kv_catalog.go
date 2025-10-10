@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/cockroachdb/errors"
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/metastore"
@@ -219,26 +220,29 @@ func (c *catalog) GetReplicateConfiguration(ctx context.Context) (*streamingpb.R
 	return config, nil
 }
 
-func (c *catalog) RemoveReplicatePChannel(ctx context.Context, task *streamingpb.ReplicatePChannelMeta) error {
+func (c *catalog) RemoveReplicatePChannelWithVersion(ctx context.Context, task *streamingpb.ReplicatePChannelMeta, version int64) (bool, error) {
 	key := buildReplicatePChannelPath(task.GetTargetCluster().GetClusterId(), task.GetSourceChannelName())
-	return c.metaKV.Remove(ctx, key)
+	result, err := c.metaKV.RemoveWithCmps(ctx, key, clientv3.Compare(clientv3.Version(key), "=", version))
+	return result, err
 }
 
-func (c *catalog) ListReplicatePChannels(ctx context.Context) ([]*streamingpb.ReplicatePChannelMeta, error) {
-	keys, values, err := c.metaKV.LoadWithPrefix(ctx, ReplicatePChannelMetaPrefix)
+func (c *catalog) ListReplicatePChannels(ctx context.Context) ([]*streamingpb.ReplicatePChannelMeta, []int64, error) {
+	kvs, err := c.metaKV.LoadKVsWithPrefix(ctx, ReplicatePChannelMetaPrefix)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	infos := make([]*streamingpb.ReplicatePChannelMeta, 0, len(values))
-	for k, value := range values {
+	infos := make([]*streamingpb.ReplicatePChannelMeta, 0, len(kvs))
+	versions := make([]int64, 0, len(kvs))
+	for _, kv := range kvs {
 		info := &streamingpb.ReplicatePChannelMeta{}
-		err = proto.Unmarshal([]byte(value), info)
+		err = proto.Unmarshal([]byte(kv.Value), info)
 		if err != nil {
-			return nil, errors.Wrapf(err, "unmarshal replicate pchannel meta %s failed", keys[k])
+			return nil, nil, errors.Wrapf(err, "unmarshal replicate pchannel meta %s failed", kv.Key)
 		}
 		infos = append(infos, info)
+		versions = append(versions, kv.Version)
 	}
-	return infos, nil
+	return infos, versions, nil
 }
 
 func BuildReplicatePChannelMetaKey(meta *streamingpb.ReplicatePChannelMeta) string {

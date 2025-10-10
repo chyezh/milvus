@@ -23,6 +23,8 @@ import (
 
 	"github.com/google/btree"
 	"github.com/samber/lo"
+	"go.etcd.io/etcd/api/v3/mvccpb"
+	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/milvus-io/milvus/pkg/v2/kv"
 	"github.com/milvus-io/milvus/pkg/v2/kv/predicates"
@@ -170,6 +172,11 @@ func (kv *MemoryKV) Remove(ctx context.Context, key string) error {
 	return nil
 }
 
+// RemoveWithCmps removes the key with given cmps.
+func (kv *MemoryKV) RemoveWithCmps(ctx context.Context, key string, cmps ...clientv3.Cmp) (bool, error) {
+	panic("RemoveWithCmps is not supported in MemoryKV")
+}
+
 // MultiLoad loads objects with multi @keys.
 func (kv *MemoryKV) MultiLoad(ctx context.Context, keys []string) ([]string, error) {
 	kv.RLock()
@@ -257,6 +264,11 @@ func (kv *MemoryKV) MultiSaveBytesAndRemove(ctx context.Context, saves map[strin
 		kv.tree.Delete(memoryKVItem{key: key})
 	}
 	return nil
+}
+
+// LoadKVsWithPrefix returns all the keys and values with the given key prefix.
+func (kv *MemoryKV) LoadKVsWithPrefix(ctx context.Context, key string) ([]*mvccpb.KeyValue, error) {
+	panic("LoadKVsWithPrefix is not supported in MemoryKV")
 }
 
 // LoadWithPrefix returns all keys & values with given prefix.

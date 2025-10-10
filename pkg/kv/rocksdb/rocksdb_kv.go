@@ -23,6 +23,8 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
 	"github.com/tecbot/gorocksdb"
+	"go.etcd.io/etcd/api/v3/mvccpb"
+	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/milvus-io/milvus/pkg/v2/kv"
 	"github.com/milvus-io/milvus/pkg/v2/kv/predicates"
@@ -137,6 +139,11 @@ func (kv *RocksdbKV) LoadBytes(ctx context.Context, key string) ([]byte, error) 
 	v := make([]byte, len(data))
 	copy(v, data)
 	return v, nil
+}
+
+// LoadKVsWithPrefix returns all the keys and values with the given key prefix.
+func (kv *RocksdbKV) LoadKVsWithPrefix(ctx context.Context, key string) ([]*mvccpb.KeyValue, error) {
+	panic("LoadKVsWithPrefix is not supported in RocksdbKV")
 }
 
 // LoadWithPrefix returns a batch values of keys with a prefix
@@ -376,6 +383,11 @@ func (kv *RocksdbKV) Remove(ctx context.Context, key string) error {
 	}
 	err := kv.DB.Delete(kv.WriteOptions, []byte(key))
 	return err
+}
+
+// RemoveWithCmps removes the key with given cmps.
+func (kv *RocksdbKV) RemoveWithCmps(ctx context.Context, key string, cmps ...clientv3.Cmp) (bool, error) {
+	panic("RemoveWithCmps is not supported in RocksdbKV")
 }
 
 // MultiRemove is used to remove a batch of key-values

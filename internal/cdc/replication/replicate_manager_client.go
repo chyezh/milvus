@@ -18,13 +18,20 @@ package replication
 
 import "github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 
+type ReplicateContext struct {
+	RepKey          string
+	RepMeta         *streamingpb.ReplicatePChannelMeta
+	Version         int64
+	CallbackOnClose func()
+}
+
 // ReplicateManagerClient is the client that manages the replicate configuration.
 type ReplicateManagerClient interface {
 	// CreateReplicator creates a new replicator for the replicate pchannel.
-	CreateReplicator(replicateInfo *streamingpb.ReplicatePChannelMeta)
+	CreateReplicator(replicateKey string, repCtx *ReplicateContext)
 
 	// RemoveReplicator removes a replicator for the replicate pchannel.
-	RemoveReplicator(replicateInfo *streamingpb.ReplicatePChannelMeta)
+	RemoveReplicator(replicateKey string)
 
 	// Close closes the replicate manager client.
 	Close()

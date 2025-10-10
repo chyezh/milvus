@@ -25,6 +25,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
+	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/server/v3/embed"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/v3client"
@@ -157,8 +158,8 @@ func (kv *EmbedEtcdKV) WalkWithPrefix(ctx context.Context, prefix string, pagina
 	return nil
 }
 
-// LoadWithPrefix returns all the keys and values with the given key prefix
-func (kv *EmbedEtcdKV) LoadWithPrefix(ctx context.Context, key string) ([]string, []string, error) {
+// LoadKVsWithPrefix returns all the etcd KeyValues with the given key prefix.
+func (kv *EmbedEtcdKV) LoadKVsWithPrefix(ctx context.Context, key string) ([]*mvccpb.KeyValue, error) {
 	key = path.Join(kv.rootPath, key)
 	log.Debug("LoadWithPrefix ", zap.String("prefix", key))
 	ctx, cancel := context.WithTimeout(ctx, kv.requestTimeout)
@@ -166,12 +167,21 @@ func (kv *EmbedEtcdKV) LoadWithPrefix(ctx context.Context, key string) ([]string
 	resp, err := kv.client.Get(ctx, key, clientv3.WithPrefix(),
 		clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
-	keys := make([]string, 0, resp.Count)
-	values := make([]string, 0, resp.Count)
-	for _, kv := range resp.Kvs {
+	return resp.Kvs, nil
+}
+
+// LoadWithPrefix returns all the keys and values with the given key prefix
+func (kv *EmbedEtcdKV) LoadWithPrefix(ctx context.Context, key string) ([]string, []string, error) {
+	kvs, err := kv.LoadKVsWithPrefix(ctx, key)
+	if err != nil {
+		return nil, nil, err
+	}
+	keys := make([]string, 0, len(kvs))
+	values := make([]string, 0, len(kvs))
+	for _, kv := range kvs {
 		keys = append(keys, string(kv.Key))
 		values = append(values, string(kv.Value))
 	}
@@ -444,6 +454,21 @@ func (kv *EmbedEtcdKV) Remove(ctx context.Context, key string) error {
 
 	_, err := kv.client.Delete(ctx, key)
 	return err
+}
+
+// RemoveWithCmps removes the key with given cmps.
+func (kv *EmbedEtcdKV) RemoveWithCmps(ctx context.Context, key string, cmps ...clientv3.Cmp) (bool, error) {
+	key = path.Join(kv.rootPath, key)
+	ctx, cancel := context.WithTimeout(ctx, kv.requestTimeout)
+	defer cancel()
+
+	delOp := clientv3.OpDelete(key)
+	txn := kv.client.Txn(ctx).If(cmps...).Then(delOp)
+	resp, err := txn.Commit()
+	if err != nil {
+		return false, err
+	}
+	return resp.Succeeded, nil
 }
 
 // MultiRemove removes the keys in a transaction.

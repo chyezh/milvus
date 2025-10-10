@@ -24,7 +24,7 @@ func (_m *MockReplicationCatalog) EXPECT() *MockReplicationCatalog_Expecter {
 }
 
 // ListReplicatePChannels provides a mock function with given fields: ctx
-func (_m *MockReplicationCatalog) ListReplicatePChannels(ctx context.Context) ([]*streamingpb.ReplicatePChannelMeta, error) {
+func (_m *MockReplicationCatalog) ListReplicatePChannels(ctx context.Context) ([]*streamingpb.ReplicatePChannelMeta, []int64, error) {
 	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
@@ -32,8 +32,9 @@ func (_m *MockReplicationCatalog) ListReplicatePChannels(ctx context.Context) ([
 	}
 
 	var r0 []*streamingpb.ReplicatePChannelMeta
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context) ([]*streamingpb.ReplicatePChannelMeta, error)); ok {
+	var r1 []int64
+	var r2 error
+	if rf, ok := ret.Get(0).(func(context.Context) ([]*streamingpb.ReplicatePChannelMeta, []int64, error)); ok {
 		return rf(ctx)
 	}
 	if rf, ok := ret.Get(0).(func(context.Context) []*streamingpb.ReplicatePChannelMeta); ok {
@@ -44,13 +45,21 @@ func (_m *MockReplicationCatalog) ListReplicatePChannels(ctx context.Context) ([
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context) error); ok {
+	if rf, ok := ret.Get(1).(func(context.Context) []int64); ok {
 		r1 = rf(ctx)
 	} else {
-		r1 = ret.Error(1)
+		if ret.Get(1) != nil {
+			r1 = ret.Get(1).([]int64)
+		}
 	}
 
-	return r0, r1
+	if rf, ok := ret.Get(2).(func(context.Context) error); ok {
+		r2 = rf(ctx)
+	} else {
+		r2 = ret.Error(2)
+	}
+
+	return r0, r1, r2
 }
 
 // MockReplicationCatalog_ListReplicatePChannels_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListReplicatePChannels'
@@ -71,59 +80,70 @@ func (_c *MockReplicationCatalog_ListReplicatePChannels_Call) Run(run func(ctx c
 	return _c
 }
 
-func (_c *MockReplicationCatalog_ListReplicatePChannels_Call) Return(_a0 []*streamingpb.ReplicatePChannelMeta, _a1 error) *MockReplicationCatalog_ListReplicatePChannels_Call {
-	_c.Call.Return(_a0, _a1)
+func (_c *MockReplicationCatalog_ListReplicatePChannels_Call) Return(_a0 []*streamingpb.ReplicatePChannelMeta, _a1 []int64, _a2 error) *MockReplicationCatalog_ListReplicatePChannels_Call {
+	_c.Call.Return(_a0, _a1, _a2)
 	return _c
 }
 
-func (_c *MockReplicationCatalog_ListReplicatePChannels_Call) RunAndReturn(run func(context.Context) ([]*streamingpb.ReplicatePChannelMeta, error)) *MockReplicationCatalog_ListReplicatePChannels_Call {
+func (_c *MockReplicationCatalog_ListReplicatePChannels_Call) RunAndReturn(run func(context.Context) ([]*streamingpb.ReplicatePChannelMeta, []int64, error)) *MockReplicationCatalog_ListReplicatePChannels_Call {
 	_c.Call.Return(run)
 	return _c
 }
 
-// RemoveReplicatePChannel provides a mock function with given fields: ctx, meta
-func (_m *MockReplicationCatalog) RemoveReplicatePChannel(ctx context.Context, meta *streamingpb.ReplicatePChannelMeta) error {
-	ret := _m.Called(ctx, meta)
+// RemoveReplicatePChannelWithVersion provides a mock function with given fields: ctx, meta, Version
+func (_m *MockReplicationCatalog) RemoveReplicatePChannelWithVersion(ctx context.Context, meta *streamingpb.ReplicatePChannelMeta, Version int64) (bool, error) {
+	ret := _m.Called(ctx, meta, Version)
 
 	if len(ret) == 0 {
-		panic("no return value specified for RemoveReplicatePChannel")
+		panic("no return value specified for RemoveReplicatePChannelWithVersion")
 	}
 
-	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *streamingpb.ReplicatePChannelMeta) error); ok {
-		r0 = rf(ctx, meta)
+	var r0 bool
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, *streamingpb.ReplicatePChannelMeta, int64) (bool, error)); ok {
+		return rf(ctx, meta, Version)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, *streamingpb.ReplicatePChannelMeta, int64) bool); ok {
+		r0 = rf(ctx, meta, Version)
 	} else {
-		r0 = ret.Error(0)
+		r0 = ret.Get(0).(bool)
 	}
 
-	return r0
+	if rf, ok := ret.Get(1).(func(context.Context, *streamingpb.ReplicatePChannelMeta, int64) error); ok {
+		r1 = rf(ctx, meta, Version)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
 }
 
-// MockReplicationCatalog_RemoveReplicatePChannel_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RemoveReplicatePChannel'
-type MockReplicationCatalog_RemoveReplicatePChannel_Call struct {
+// MockReplicationCatalog_RemoveReplicatePChannelWithVersion_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RemoveReplicatePChannelWithVersion'
+type MockReplicationCatalog_RemoveReplicatePChannelWithVersion_Call struct {
 	*mock.Call
 }
 
-// RemoveReplicatePChannel is a helper method to define mock.On call
+// RemoveReplicatePChannelWithVersion is a helper method to define mock.On call
 //   - ctx context.Context
 //   - meta *streamingpb.ReplicatePChannelMeta
-func (_e *MockReplicationCatalog_Expecter) RemoveReplicatePChannel(ctx interface{}, meta interface{}) *MockReplicationCatalog_RemoveReplicatePChannel_Call {
-	return &MockReplicationCatalog_RemoveReplicatePChannel_Call{Call: _e.mock.On("RemoveReplicatePChannel", ctx, meta)}
+//   - Version int64
+func (_e *MockReplicationCatalog_Expecter) RemoveReplicatePChannelWithVersion(ctx interface{}, meta interface{}, Version interface{}) *MockReplicationCatalog_RemoveReplicatePChannelWithVersion_Call {
+	return &MockReplicationCatalog_RemoveReplicatePChannelWithVersion_Call{Call: _e.mock.On("RemoveReplicatePChannelWithVersion", ctx, meta, Version)}
 }
 
-func (_c *MockReplicationCatalog_RemoveReplicatePChannel_Call) Run(run func(ctx context.Context, meta *streamingpb.ReplicatePChannelMeta)) *MockReplicationCatalog_RemoveReplicatePChannel_Call {
+func (_c *MockReplicationCatalog_RemoveReplicatePChannelWithVersion_Call) Run(run func(ctx context.Context, meta *streamingpb.ReplicatePChannelMeta, Version int64)) *MockReplicationCatalog_RemoveReplicatePChannelWithVersion_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(*streamingpb.ReplicatePChannelMeta))
+		run(args[0].(context.Context), args[1].(*streamingpb.ReplicatePChannelMeta), args[2].(int64))
 	})
 	return _c
 }
 
-func (_c *MockReplicationCatalog_RemoveReplicatePChannel_Call) Return(_a0 error) *MockReplicationCatalog_RemoveReplicatePChannel_Call {
-	_c.Call.Return(_a0)
+func (_c *MockReplicationCatalog_RemoveReplicatePChannelWithVersion_Call) Return(_a0 bool, _a1 error) *MockReplicationCatalog_RemoveReplicatePChannelWithVersion_Call {
+	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *MockReplicationCatalog_RemoveReplicatePChannel_Call) RunAndReturn(run func(context.Context, *streamingpb.ReplicatePChannelMeta) error) *MockReplicationCatalog_RemoveReplicatePChannel_Call {
+func (_c *MockReplicationCatalog_RemoveReplicatePChannelWithVersion_Call) RunAndReturn(run func(context.Context, *streamingpb.ReplicatePChannelMeta, int64) (bool, error)) *MockReplicationCatalog_RemoveReplicatePChannelWithVersion_Call {
 	_c.Call.Return(run)
 	return _c
 }

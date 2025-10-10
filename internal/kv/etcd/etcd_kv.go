@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/samber/lo"
+	"go.etcd.io/etcd/api/v3/mvccpb"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
 
@@ -117,8 +118,8 @@ func (kv *etcdKV) WalkWithPrefix(ctx context.Context, prefix string, paginationS
 	return nil
 }
 
-// LoadWithPrefix returns all the keys and values with the given key prefix.
-func (kv *etcdKV) LoadWithPrefix(ctx context.Context, key string) ([]string, []string, error) {
+// LoadKVsWithPrefix returns all the etcd KeyValues with the given key prefix.
+func (kv *etcdKV) LoadKVsWithPrefix(ctx context.Context, key string) ([]*mvccpb.KeyValue, error) {
 	start := time.Now()
 	key = path.Join(kv.rootPath, key)
 	ctx, cancel := context.WithTimeout(ctx, kv.requestTimeout)
@@ -126,15 +127,24 @@ func (kv *etcdKV) LoadWithPrefix(ctx context.Context, key string) ([]string, []s
 	resp, err := kv.getEtcdMeta(ctx, key, clientv3.WithPrefix(),
 		clientv3.WithSort(clientv3.SortByKey, clientv3.SortAscend))
 	if err != nil {
+		return nil, err
+	}
+	CheckElapseAndWarn(start, "Slow etcd operation load with prefix", zap.String("key", key))
+	return resp.Kvs, nil
+}
+
+// LoadWithPrefix returns all the keys and values with the given key prefix.
+func (kv *etcdKV) LoadWithPrefix(ctx context.Context, key string) ([]string, []string, error) {
+	kvs, err := kv.LoadKVsWithPrefix(ctx, key)
+	if err != nil {
 		return nil, nil, err
 	}
-	keys := make([]string, 0, resp.Count)
-	values := make([]string, 0, resp.Count)
-	for _, kv := range resp.Kvs {
+	keys := make([]string, 0, len(kvs))
+	values := make([]string, 0, len(kvs))
+	for _, kv := range kvs {
 		keys = append(keys, string(kv.Key))
 		values = append(values, string(kv.Value))
 	}
-	CheckElapseAndWarn(start, "Slow etcd operation load with prefix", zap.Strings("keys", keys))
 	return keys, values, nil
 }
 
@@ -439,6 +449,21 @@ func (kv *etcdKV) Remove(ctx context.Context, key string) error {
 	_, err := kv.removeEtcdMeta(ctx, key)
 	CheckElapseAndWarn(start, "Slow etcd operation remove", zap.String("key", key))
 	return err
+}
+
+// RemoveWithCmps removes the key with given cmps.
+func (kv *etcdKV) RemoveWithCmps(ctx context.Context, key string, cmps ...clientv3.Cmp) (bool, error) {
+	key = path.Join(kv.rootPath, key)
+	ctx, cancel := context.WithTimeout(ctx, kv.requestTimeout)
+	defer cancel()
+
+	delOp := clientv3.OpDelete(key)
+	txn := kv.client.Txn(ctx).If(cmps...).Then(delOp)
+	resp, err := txn.Commit()
+	if err != nil {
+		return false, err
+	}
+	return resp.Succeeded, nil
 }
 
 // MultiRemove removes the keys in a transaction.
