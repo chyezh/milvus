@@ -1934,7 +1934,7 @@ func TestAlterDatabase(t *testing.T) {
 				Value: "value1",
 			},
 		}
-		err := meta.AlterDatabase(context.TODO(), db, newDB, typeutil.ZeroTimestamp)
+		err := meta.AlterDatabase(context.TODO(), newDB, typeutil.ZeroTimestamp)
 		assert.NoError(t, err)
 	})
 
@@ -1964,7 +1964,7 @@ func TestAlterDatabase(t *testing.T) {
 				Value: "value1",
 			},
 		}
-		err := meta.AlterDatabase(context.TODO(), db, newDB, typeutil.ZeroTimestamp)
+		err := meta.AlterDatabase(context.TODO(), newDB, typeutil.ZeroTimestamp)
 		assert.ErrorIs(t, err, mockErr)
 	})
 
@@ -1988,7 +1988,7 @@ func TestAlterDatabase(t *testing.T) {
 				Value: "value1",
 			},
 		}
-		err := meta.AlterDatabase(context.TODO(), db, newDB, typeutil.ZeroTimestamp)
+		err := meta.AlterDatabase(context.TODO(), newDB, typeutil.ZeroTimestamp)
 		assert.Error(t, err)
 	})
 }

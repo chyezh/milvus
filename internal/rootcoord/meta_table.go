@@ -48,13 +48,18 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
+type MetaChecker interface {
+	CheckIfDatabaseCreatable(ctx context.Context, dbName string) error
+	CheckIfDatabaseDroppable(ctx context.Context, dbName string) error
+}
+
 //go:generate mockery --name=IMetaTable --structname=MockIMetaTable --output=./  --filename=mock_meta_table.go --with-expecter --inpackage
 type IMetaTable interface {
+	MetaChecker
+
 	GetDatabaseByID(ctx context.Context, dbID int64, ts Timestamp) (*model.Database, error)
 	GetDatabaseByName(ctx context.Context, dbName string, ts Timestamp) (*model.Database, error)
-	CheckIfDatabaseCreatable(ctx context.Context, dbName string) error
 	CreateDatabase(ctx context.Context, db *model.Database, ts typeutil.Timestamp) error
-	CheckIfDatabaseDroppable(ctx context.Context, dbName string) error
 	DropDatabase(ctx context.Context, dbName string, ts typeutil.Timestamp) error
 	ListDatabases(ctx context.Context, ts typeutil.Timestamp) ([]*model.Database, error)
 	AlterDatabase(ctx context.Context, newDB *model.Database, ts typeutil.Timestamp) error

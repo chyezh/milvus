@@ -20,6 +20,8 @@ import (
 	"context"
 
 	"github.com/cockroachdb/errors"
+	"github.com/samber/lo"
+
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/metastore/model"
@@ -34,7 +36,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message/ce"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
-	"github.com/samber/lo"
 )
 
 func (c *Core) broadcastAlterDatabase(ctx context.Context, in *rootcoordpb.AlterDatabaseRequest) error {

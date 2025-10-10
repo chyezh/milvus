@@ -30,8 +30,13 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
+	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/metastore/model"
+	"github.com/milvus-io/milvus/internal/mocks/distributed/mock_streaming"
+	"github.com/milvus-io/milvus/internal/mocks/streamingcoord/server/mock_broadcaster"
 	mockrootcoord "github.com/milvus-io/milvus/internal/rootcoord/mocks"
+	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/broadcast"
+	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
 	"github.com/milvus-io/milvus/internal/util/proxyutil"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/pkg/v2/common"
@@ -39,6 +44,9 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/proxypb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/impls/walimplstest"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -51,13 +59,37 @@ import (
 func TestMain(m *testing.M) {
 	paramtable.Init()
 	rand.Seed(time.Now().UnixNano())
-	parameters := []string{"tikv", "etcd"}
-	var code int
-	for _, v := range parameters {
-		paramtable.Get().Save(paramtable.Get().MetaStoreCfg.MetaStoreType.Key, v)
-		code = m.Run()
-	}
+	code := m.Run()
 	os.Exit(code)
+}
+
+func initStreamingSystem() {
+	t := common.NewEmptyMockT()
+	wal := mock_streaming.NewMockWALAccesser(t)
+	wal.EXPECT().ControlChannel().Return(funcutil.GetControlChannel("by-dev-rootcoord-dml_0"))
+	streaming.SetWALForTest(wal)
+
+	bapi := mock_broadcaster.NewMockBroadcastAPI(t)
+	bapi.EXPECT().Broadcast(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, msg message.BroadcastMutableMessage) (*types.BroadcastAppendResult, error) {
+		results := make(map[string]*message.AppendResult)
+		for _, vchannel := range msg.BroadcastHeader().VChannels {
+			results[vchannel] = &message.AppendResult{
+				MessageID:              walimplstest.NewTestMessageID(1),
+				TimeTick:               tsoutil.ComposeTSByTime(time.Now(), 0),
+				LastConfirmedMessageID: walimplstest.NewTestMessageID(1),
+			}
+		}
+		registry.CallMessageAckCallback(context.Background(), msg, results)
+		return &types.BroadcastAppendResult{}, nil
+	})
+	bapi.EXPECT().Close().Return()
+
+	mb := mock_broadcaster.NewMockBroadcaster(t)
+	mb.EXPECT().WithResourceKeys(mock.Anything, mock.Anything).Return(bapi, nil)
+	mb.EXPECT().Close().Return()
+	broadcast.Release()
+	broadcast.ResetBroadcaster()
+	broadcast.Register(mb)
 }
 
 func TestRootCoord_CreateDatabase(t *testing.T) {
