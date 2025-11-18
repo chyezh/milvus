@@ -1,6 +1,8 @@
 package recovery
 
 import (
+	"sync"
+
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
@@ -151,4 +153,29 @@ func (info *segmentRecoveryInfo) ConsumeDirtyAndGetSnapshot() (dirtySnapshot *st
 	}
 	info.dirty = false
 	return proto.Clone(info.meta).(*streamingpb.SegmentAssignmentMeta), info.meta.State == streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED
+}
+
+type l1SegmentRecoveryInfo struct {
+	mu             sync.Mutex
+	meta           *streamingpb.SegmentAssignmentMeta
+	pendingInserts []message.ImmutableInsertMessageV1
+	dirty          bool
+}
+
+func (info *l1SegmentRecoveryInfo) IsDirty() bool {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+
+	return info.dirty
+}
+
+func (info *l1SegmentRecoveryInfo) ObserveInsert(insert message.ImmutableInsertMessageV1) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+
+	if insert.TimeTick() < info.meta.CheckpointTimeTick {
+		return
+	}
+
+	info.pendingInserts = append(info.pendingInserts, insert)
 }
