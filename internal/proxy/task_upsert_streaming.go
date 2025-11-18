@@ -98,6 +98,9 @@ func (ut *upsertTask) packInsertMessage(ctx context.Context, ez *message.CipherC
 
 func (ut *upsertTask) packDeleteMessage(ctx context.Context, ez *message.CipherConfig) ([]message.MutableMessage, error) {
 	tr := timerecord.NewTimeRecorder(fmt.Sprintf("proxy deleteExecute upsert %d", ut.ID()))
+	if typeutil.GetSizeOfIDs(ut.upsertMsg.DeleteMsg.PrimaryKeys) == 0 {
+		return nil, nil
+	}
 	collID := ut.upsertMsg.DeleteMsg.CollectionID
 	if ut.upsertMsg.DeleteMsg.PrimaryKeys == nil {
 		// if primary keys are not set by queryPreExecute, use oldIDs to delete all given records
