@@ -791,3 +791,78 @@ func PrepareInsert(collSchema *schemapb.CollectionSchema, pkField *schemapb.Fiel
 
 	return result, nil
 }
+
+func PrepareInsertForOneSegment(collSchema *schemapb.CollectionSchema, pkField *schemapb.FieldSchema, msgs []message.ImmutableInsertMessageV1) (*InsertData, error) {
+	partitionID := msgs[0].Header().Partitions[0].PartitionId
+	segmentID := msgs[0].Header().Partitions[0].SegmentAssignment.SegmentId
+
+	inData := &InsertData{
+		segmentID:   segmentID,
+		partitionID: partitionID,
+		data:        make([]*storage.InsertData, 0, len(msgs)),
+		pkField:     make([]storage.FieldData, 0, len(msgs)),
+	}
+	switch pkField.GetDataType() {
+	case schemapb.DataType_Int64:
+		inData.intPKTs = make(map[int64]int64)
+	case schemapb.DataType_VarChar:
+		inData.strPKTs = make(map[string]int64)
+	}
+	for _, msg := range msgs {
+		request := msg.MustBody()
+		// recover the timetick from the message.
+		timetick := msg.TimeTick()
+		request.Timestamps = make([]uint64, request.NumRows)
+		for i := range request.NumRows {
+			request.Timestamps[i] = timetick
+		}
+		data, err := storage.ColumnBasedInsertRequestToInsertData(request, collSchema)
+		if err != nil {
+			log.Warn("failed to transfer insert msg to insert data", zap.Error(err))
+			return nil, err
+		}
+
+		pkFieldData, err := storage.GetPkFromInsertData(collSchema, data)
+		if err != nil {
+			return nil, err
+		}
+		if pkFieldData.RowNum() != data.GetRowNum() {
+			return nil, merr.WrapErrServiceInternal("pk column row num not match")
+		}
+
+		tsFieldData, err := storage.GetTimestampFromInsertData(data)
+		if err != nil {
+			return nil, err
+		}
+		if tsFieldData.RowNum() != data.GetRowNum() {
+			return nil, merr.WrapErrServiceInternal("timestamp column row num not match")
+		}
+
+		timestamps := tsFieldData.GetDataRows().([]int64)
+
+		switch pkField.GetDataType() {
+		case schemapb.DataType_Int64:
+			pks := pkFieldData.GetDataRows().([]int64)
+			for idx, pk := range pks {
+				ts, ok := inData.intPKTs[pk]
+				if !ok || timestamps[idx] < ts {
+					inData.intPKTs[pk] = timestamps[idx]
+				}
+			}
+		case schemapb.DataType_VarChar:
+			pks := pkFieldData.GetDataRows().([]string)
+			for idx, pk := range pks {
+				ts, ok := inData.strPKTs[pk]
+				if !ok || timestamps[idx] < ts {
+					inData.strPKTs[pk] = timestamps[idx]
+				}
+			}
+		}
+
+		inData.data = append(inData.data, data)
+		inData.pkField = append(inData.pkField, pkFieldData)
+		inData.tsField = append(inData.tsField, tsFieldData)
+		inData.rowNum += int64(data.GetRowNum())
+	}
+	return inData, nil
+}

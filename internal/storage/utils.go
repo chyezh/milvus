@@ -35,6 +35,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/log"
@@ -528,6 +529,10 @@ func RowBasedInsertMsgToInsertData(msg *msgstream.InsertMsg, collSchema *schemap
 	return idata, nil
 }
 
+func ColumnBasedInsertMsgToInsertData(msg *msgstream.InsertMsg, collSchema *schemapb.CollectionSchema) (idata *InsertData, err error) {
+	return ColumnBasedInsertRequestToInsertData(msg.InsertRequest, collSchema)
+}
+
 // ColumnBasedInsertMsgToInsertData converts an InsertMsg msg into InsertData based
 // on provided CollectionSchema collSchema.
 //
@@ -537,7 +542,7 @@ func RowBasedInsertMsgToInsertData(msg *msgstream.InsertMsg, collSchema *schemap
 // This funcion also checks the length of each column. All columns shall have the same length.
 // Also, the InsertData.Infos shall have BlobInfo with this length returned.
 // When the length is not aligned, an error will be returned.
-func ColumnBasedInsertMsgToInsertData(msg *msgstream.InsertMsg, collSchema *schemapb.CollectionSchema) (idata *InsertData, err error) {
+func ColumnBasedInsertRequestToInsertData(msg *msgpb.InsertRequest, collSchema *schemapb.CollectionSchema) (idata *InsertData, err error) {
 	srcFields := make(map[FieldID]*schemapb.FieldData)
 	for _, field := range msg.FieldsData {
 		if _, ok := field.Field.(*schemapb.FieldData_StructArrays); ok {

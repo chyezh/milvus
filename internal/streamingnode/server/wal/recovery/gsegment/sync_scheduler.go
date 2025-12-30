@@ -17,11 +17,12 @@ type SyncScheduler struct {
 	cpuLimit *atomic.Int32
 	ioLimit  *atomic.Int32
 
-	cond       *sync.Cond
-	cpuTasks   *list.List
-	ioTasks    *list.List
-	cpuRunning int32
-	ioRunning  int32
+	cond         *sync.Cond
+	incomingTask *list.List
+	cpuTasks     *list.List
+	ioTasks      *list.List
+	cpuRunning   int32
+	ioRunning    int32
 }
 
 // NewSyncScheduler creates a new SyncScheduler.
@@ -42,7 +43,7 @@ func NewSyncScheduler(cpuLimit, ioLimit int) *SyncScheduler {
 }
 
 // AddTask adds a task to the scheduler.
-func (s *SyncScheduler) AddTask(task SaveChunkTask) {
+func (s *SyncScheduler) AddTask(task SyncChunkTask) {
 	s.cond.L.Lock()
 	defer s.cond.L.Unlock()
 
@@ -84,7 +85,7 @@ func (s *SyncScheduler) scheduleLoop() {
 		for s.cpuRunning < s.cpuLimit.Load() && s.cpuTasks.Len() > 0 {
 			element := s.cpuTasks.Front()
 			s.cpuTasks.Remove(element)
-			task := element.Value.(SaveChunkTask)
+			task := element.Value.(SyncChunkTask)
 			s.cpuRunning++
 			s.wg.Add(1)
 			go s.executeTask(task, true)
@@ -94,7 +95,7 @@ func (s *SyncScheduler) scheduleLoop() {
 		for s.ioRunning < s.ioLimit.Load() && s.ioTasks.Len() > 0 {
 			element := s.ioTasks.Front()
 			s.ioTasks.Remove(element)
-			task := element.Value.(SaveChunkTask)
+			task := element.Value.(SyncChunkTask)
 			s.ioRunning++
 			s.wg.Add(1)
 			go s.executeTask(task, false)
@@ -104,7 +105,7 @@ func (s *SyncScheduler) scheduleLoop() {
 }
 
 // executeTask executes a task.
-func (s *SyncScheduler) executeTask(task SaveChunkTask, wasCPU bool) {
+func (s *SyncScheduler) executeTask(task SyncChunkTask, wasCPU bool) {
 	defer s.wg.Done()
 
 	err := task.Poll(s.ctx)

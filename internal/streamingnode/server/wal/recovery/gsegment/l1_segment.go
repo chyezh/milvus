@@ -19,6 +19,7 @@ package gsegment
 import (
 	"sync"
 
+	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -30,10 +31,11 @@ type L1Segment struct {
 	mu sync.Mutex
 
 	meta         *streamingpb.SegmentAssignmentMeta
-	sealed       bool           // whether the segment is sealed.
-	sealedChunks []*InsertChunk // sealed chunks for insert messages, the data in the chunk will never be changed.
-	growingChunk *InsertChunk   // growing chunk for insert messages, the data in the chunk can be changed.
-	dirty        bool           // whether the segment recovery info is dirty.
+	sealed       bool                       // whether the segment is sealed.
+	sealedChunks []*InsertChunk             // sealed chunks for insert messages, the data in the chunk will never be changed.
+	growingChunk *InsertChunk               // growing chunk for insert messages, the data in the chunk can be changed.
+	dirty        bool                       // whether the segment recovery info is dirty.
+	schema       *schemapb.CollectionSchema // schema for current segment.
 }
 
 // ObserveInsert observes an insert message.
