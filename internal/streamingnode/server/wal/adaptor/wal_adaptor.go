@@ -13,6 +13,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/flusher/flusherimpl"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/adaptor/rate"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
@@ -41,6 +42,8 @@ func adaptImplsToROWAL(
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	roWAL := &roWALAdaptorImpl{
+		WALRateLimitComponent: rate.NewWALRateLimitComponent(basicWAL.Channel()),
+
 		roWALImpls:      basicWAL,
 		lifetime:        typeutil.NewLifetime(),
 		availableCtx:    ctx,
@@ -82,6 +85,7 @@ func adaptImplsToRWWAL(
 	}
 	wal.writeMetrics.SetLogger(wal.roWALAdaptorImpl.Logger())
 	interceptorParam.WAL.Set(wal)
+	wal.WALRateLimitComponent.RegisterMemoryObserver()
 	return wal
 }
 
@@ -143,6 +147,11 @@ func (w *walAdaptorImpl) Append(ctx context.Context, msg message.MutableMessage)
 	if w.isFenced.Load() {
 		// if the wal is fenced, we should reject all append operations.
 		return nil, status.NewChannelFenced(w.Channel().String())
+	}
+
+	if msg.MessageType().IsDMLMessageType() && w.WALRateLimitComponent.IsRejected() {
+		// if the wal is rate limit rejected, we reject all the DML operation to protect the wal from being overloaded.
+		return nil, status.NewRateLimitRejected("")
 	}
 
 	// Check if interceptor is ready.

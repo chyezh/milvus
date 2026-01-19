@@ -1,9 +1,26 @@
+// Licensed to the LF AI & Data foundation under one
+// or more contributor license agreements. See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership. The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package adaptor
 
 import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"go.uber.org/atomic"
@@ -195,7 +212,21 @@ func (s *scannerAdaptorImpl) produceEventLoop(msgChan chan<- message.ImmutableMe
 
 	scanner := newSwithableScanner(s.Name(), s.logger, s.innerWAL, wb, s.readOption.DeliverPolicy, msgChan)
 	s.logger.Info("start produce loop of scanner at model", zap.String("model", getScannerModel(scanner)))
+	startupDelay := 10 * time.Second
 	for {
+		if s.readOption.RateLimitControl != nil {
+			// if the scanner is working with rate limit control,
+			// 1. when the scanner is working at catchup mode, the write operation is fast than the consume operation,
+			// so we need to enter slowdown mode to protect the wal from being overloaded.
+			// 2. when the scanner is working at tailing mode, the write operation is slow than the consume operation,
+			// so we enter into recovery mode to speed up the rate limit.
+			if _, ok := scanner.(*catchupScanner); ok {
+				s.readOption.RateLimitControl.EnterSlowdownMode(startupDelay)
+			} else {
+				s.readOption.RateLimitControl.EnterRecoveryMode()
+			}
+			startupDelay = 0
+		}
 		if scanner, err = scanner.Do(s.Context()); err != nil {
 			return err
 		}

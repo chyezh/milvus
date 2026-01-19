@@ -15,6 +15,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/util/ratelimit"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 )
 
@@ -44,7 +45,7 @@ func CreateProduceServer(walManager walmanager.Manager, streamServer streamingpb
 		return nil, errors.Wrap(err, "at send created")
 	}
 	metrics := newProducerMetrics(l.Channel())
-	return &ProduceServer{
+	p := &ProduceServer{
 		wal:           l,
 		produceServer: produceServer,
 		logger: resource.Resource().Logger().With(
@@ -54,17 +55,20 @@ func CreateProduceServer(walManager walmanager.Manager, streamServer streamingpb
 		produceMessageCh: make(chan *streamingpb.ProduceMessageResponse),
 		appendWG:         sync.WaitGroup{},
 		metrics:          metrics,
-	}, nil
+	}
+	l.Register(p)
+	return p, nil
 }
 
 // ProduceServer is a ProduceServer of log messages.
 type ProduceServer struct {
-	wal              wal.WAL
-	produceServer    *produceGrpcServerHelper
-	logger           *log.MLogger
-	produceMessageCh chan *streamingpb.ProduceMessageResponse // All processing messages result should sent from theses channel.
-	appendWG         sync.WaitGroup
-	metrics          *producerMetrics
+	wal                wal.WAL
+	produceServer      *produceGrpcServerHelper
+	logger             *log.MLogger
+	produceMessageCh   chan *streamingpb.ProduceMessageResponse // All processing messages result should sent from theses channel.
+	rateLimitMessageCh chan ratelimit.RateLimitState            // All rate limit messages should sent from theses channel.
+	appendWG           sync.WaitGroup
+	metrics            *producerMetrics
 }
 
 // Execute starts the producer.
@@ -83,6 +87,7 @@ func (p *ProduceServer) Execute() error {
 	// 2. recv arm recv closed and all response is sent.
 	err := p.sendLoop()
 	p.metrics.Close()
+	p.wal.Unregister(p)
 	return err
 }
 
@@ -118,6 +123,10 @@ func (p *ProduceServer) sendLoop() (err error) {
 				return nil
 			}
 			if err := p.produceServer.SendProduceMessage(resp); err != nil {
+				return err
+			}
+		case state := <-p.rateLimitMessageCh:
+			if err := p.produceServer.SendProduceRateLimitMessage(state); err != nil {
 				return err
 			}
 		case <-p.produceServer.Context().Done():
@@ -208,6 +217,15 @@ func (p *ProduceServer) validateMessage(msg message.MutableMessage) error {
 		return status.NewInvaildArgument("unsupported message type")
 	}
 	return nil
+}
+
+// UpdateRateLimitState updates the rate limit state.
+func (p *ProduceServer) UpdateRateLimitState(state ratelimit.RateLimitState) {
+	select {
+	case <-p.produceServer.Context().Done():
+		p.logger.Warn("stream closed before rate limit state updated", zap.Any("state", state))
+	case p.rateLimitMessageCh <- state:
+	}
 }
 
 // sendProduceResult sends the produce result to client.

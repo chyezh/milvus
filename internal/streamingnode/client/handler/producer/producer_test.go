@@ -9,9 +9,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
+	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v2/mocks/proto/mock_streamingpb"
+	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/util/mock_ratelimit"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/util/ratelimit"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/impls/walimplstest"
 )
@@ -66,6 +69,10 @@ func TestProducer(t *testing.T) {
 		msgID, err = producer.Append(ctx, msg)
 		assert.NoError(t, err)
 		assert.NotNil(t, msgID)
+
+		msg = message.CreateTestEmptyInsertMesage(1, nil)
+		_, err = producer.Append(ctx, msg)
+		assert.True(t, status.AsStreamingError(err).IsRateLimitRejected())
 		close(ch)
 	}()
 	<-sendCh
@@ -93,7 +100,47 @@ func TestProducer(t *testing.T) {
 			},
 		},
 	}
+	<-sendCh
+	recvCh <- &streamingpb.ProduceResponse{
+		Response: &streamingpb.ProduceResponse_Produce{
+			Produce: &streamingpb.ProduceMessageResponse{
+				RequestId: 3,
+				Response: &streamingpb.ProduceMessageResponse_Error{
+					Error: &streamingpb.StreamingError{
+						Code: streamingpb.StreamingCode_STREAMING_CODE_RATE_LIMIT_REJECTED,
+					},
+				},
+			},
+		},
+	}
 	<-ch
+	stateUpdateCh := make(chan struct{}, 1)
+	ob := mock_ratelimit.NewMockRateLimitObserver(t)
+	ob.EXPECT().UpdateRateLimitState(mock.Anything).Run(func(state ratelimit.RateLimitState) {
+		assert.Equal(t, streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_REJECT, state.State)
+		stateUpdateCh <- struct{}{}
+	})
+	producer.Register(ob)
+	<-stateUpdateCh
+	producer.Unregister(ob)
+
+	recvCh <- &streamingpb.ProduceResponse{
+		Response: &streamingpb.ProduceResponse_RateLimit{
+			RateLimit: &streamingpb.ProduceRateLimitResponse{
+				State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN,
+				Rate:  1024 * 1024,
+			},
+		},
+	}
+
+	ob = mock_ratelimit.NewMockRateLimitObserver(t)
+	ob.EXPECT().UpdateRateLimitState(mock.Anything).Run(func(state ratelimit.RateLimitState) {
+		assert.Equal(t, streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN, state.State)
+		assert.Equal(t, int64(1024*1024), state.Rate)
+		stateUpdateCh <- struct{}{}
+	})
+	producer.Register(ob)
+	<-stateUpdateCh
 
 	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()

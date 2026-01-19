@@ -26,6 +26,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/util/ratelimit"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/impls/walimplstest"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -63,6 +64,8 @@ func TestCreateProduceServer(t *testing.T) {
 	l.EXPECT().WALName().Return(message.WALNameTest)
 	manager.ExpectedCalls = nil
 	l.EXPECT().WALName().Return(message.WALNameTest)
+	l.EXPECT().Register(mock.Anything).Return()
+	l.EXPECT().Unregister(mock.Anything).Return().Maybe()
 	manager.EXPECT().GetAvailableWAL(types.PChannelInfo{Name: "test", Term: 1}).Return(l, nil)
 	grpcProduceServer.EXPECT().Send(mock.Anything).Return(errors.New("send created failed"))
 	assertCreateProduceServerFail(t, manager, grpcProduceServer)
@@ -304,4 +307,479 @@ func testChannelShouldBeBlocked[T any](t *testing.T, ch <-chan T, d time.Duratio
 		t.Errorf("should be block")
 	case <-ctx.Done():
 	}
+}
+
+func TestProduceServerSendLoop_RateLimitMessage(t *testing.T) {
+	grpcProduceServer := mock_streamingpb.NewMockStreamingNodeHandlerService_ProduceServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	grpcProduceServer.EXPECT().Context().Return(ctx)
+
+	rateLimitSent := atomic.NewBool(false)
+	grpcProduceServer.EXPECT().Send(mock.Anything).RunAndReturn(func(pr *streamingpb.ProduceResponse) error {
+		if pr.GetRateLimit() != nil {
+			rateLimitSent.Store(true)
+		}
+		return nil
+	})
+
+	wal := mock_wal.NewMockWAL(t)
+	wal.EXPECT().Available().Return(make(<-chan struct{}))
+
+	p := &ProduceServer{
+		wal: wal,
+		produceServer: &produceGrpcServerHelper{
+			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
+		},
+		logger:             log.With(),
+		produceMessageCh:   make(chan *streamingpb.ProduceMessageResponse, 10),
+		rateLimitMessageCh: make(chan ratelimit.RateLimitState, 10),
+		appendWG:           sync.WaitGroup{},
+	}
+
+	ch := make(chan error)
+	go func() {
+		ch <- p.sendLoop()
+	}()
+
+	// Send rate limit message
+	p.rateLimitMessageCh <- ratelimit.RateLimitState{
+		State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN,
+		Rate:  1024,
+	}
+
+	// Wait a bit for processing
+	time.Sleep(50 * time.Millisecond)
+	assert.True(t, rateLimitSent.Load())
+
+	close(p.produceMessageCh)
+	assert.NoError(t, <-ch)
+}
+
+func TestProduceServerSendLoop_RateLimitMessageError(t *testing.T) {
+	grpcProduceServer := mock_streamingpb.NewMockStreamingNodeHandlerService_ProduceServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	grpcProduceServer.EXPECT().Context().Return(ctx)
+
+	grpcProduceServer.EXPECT().Send(mock.Anything).RunAndReturn(func(pr *streamingpb.ProduceResponse) error {
+		if pr.GetRateLimit() != nil {
+			return errors.New("rate limit send error")
+		}
+		return nil
+	})
+
+	wal := mock_wal.NewMockWAL(t)
+	wal.EXPECT().Available().Return(make(<-chan struct{}))
+
+	p := &ProduceServer{
+		wal: wal,
+		produceServer: &produceGrpcServerHelper{
+			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
+		},
+		logger:             log.With(),
+		produceMessageCh:   make(chan *streamingpb.ProduceMessageResponse, 10),
+		rateLimitMessageCh: make(chan ratelimit.RateLimitState, 10),
+		appendWG:           sync.WaitGroup{},
+	}
+
+	ch := make(chan error)
+	go func() {
+		ch <- p.sendLoop()
+	}()
+
+	// Send rate limit message
+	p.rateLimitMessageCh <- ratelimit.RateLimitState{
+		State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN,
+		Rate:  1024,
+	}
+
+	err := <-ch
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "rate limit send error")
+}
+
+func TestProduceServerSendLoop_WALUnavailable(t *testing.T) {
+	grpcProduceServer := mock_streamingpb.NewMockStreamingNodeHandlerService_ProduceServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	grpcProduceServer.EXPECT().Context().Return(ctx)
+
+	closedSent := atomic.NewBool(false)
+	grpcProduceServer.EXPECT().Send(mock.Anything).RunAndReturn(func(pr *streamingpb.ProduceResponse) error {
+		if pr.GetClose() != nil {
+			closedSent.Store(true)
+		}
+		return nil
+	})
+
+	availableCh := make(chan struct{})
+	wal := mock_wal.NewMockWAL(t)
+	wal.EXPECT().Available().Return(availableCh)
+
+	p := &ProduceServer{
+		wal: wal,
+		produceServer: &produceGrpcServerHelper{
+			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
+		},
+		logger:           log.With(),
+		produceMessageCh: make(chan *streamingpb.ProduceMessageResponse, 10),
+		appendWG:         sync.WaitGroup{},
+	}
+
+	ch := make(chan error)
+	go func() {
+		ch <- p.sendLoop()
+	}()
+
+	// Signal WAL unavailable
+	close(availableCh)
+
+	// Wait for graceful shutdown
+	err := <-ch
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "send loop is stopped for close of wal")
+	assert.True(t, closedSent.Load())
+}
+
+func TestProduceServerRecvLoop_InvalidMessage(t *testing.T) {
+	grpcProduceServer := mock_streamingpb.NewMockStreamingNodeHandlerService_ProduceServer(t)
+	recvCh := make(chan *streamingpb.ProduceRequest)
+	grpcProduceServer.EXPECT().Recv().RunAndReturn(func() (*streamingpb.ProduceRequest, error) {
+		req, ok := <-recvCh
+		if ok {
+			return req, nil
+		}
+		return nil, io.EOF
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	grpcProduceServer.EXPECT().Context().Return(ctx)
+
+	l := mock_wal.NewMockWAL(t)
+	l.EXPECT().Channel().Return(types.PChannelInfo{
+		Name: "test",
+		Term: 1,
+	})
+	l.EXPECT().IsAvailable().Return(true)
+
+	p := &ProduceServer{
+		wal: l,
+		produceServer: &produceGrpcServerHelper{
+			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
+		},
+		logger:           log.With(),
+		produceMessageCh: make(chan *streamingpb.ProduceMessageResponse, 10),
+		appendWG:         sync.WaitGroup{},
+		metrics:          newProducerMetrics(l.Channel()),
+	}
+
+	ch := make(chan error)
+	go func() {
+		ch <- p.recvLoop()
+	}()
+
+	// Send message with invalid type (no properties means invalid type)
+	req := &streamingpb.ProduceRequest{
+		Request: &streamingpb.ProduceRequest_Produce{
+			Produce: &streamingpb.ProduceMessageRequest{
+				RequestId: 1,
+				Message: &messagespb.Message{
+					Payload:    []byte("test"),
+					Properties: map[string]string{}, // Empty properties means no message type
+				},
+			},
+		},
+	}
+	recvCh <- req
+
+	msg := <-p.produceMessageCh
+	assert.Equal(t, int64(1), msg.RequestId)
+	assert.NotNil(t, msg.Response.(*streamingpb.ProduceMessageResponse_Error).Error)
+
+	close(recvCh)
+	err := <-ch
+	assert.NoError(t, err)
+}
+
+func TestProduceServerRecvLoop_UnknownRequestType(t *testing.T) {
+	grpcProduceServer := mock_streamingpb.NewMockStreamingNodeHandlerService_ProduceServer(t)
+	recvCh := make(chan *streamingpb.ProduceRequest)
+	grpcProduceServer.EXPECT().Recv().RunAndReturn(func() (*streamingpb.ProduceRequest, error) {
+		req, ok := <-recvCh
+		if ok {
+			return req, nil
+		}
+		return nil, io.EOF
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	grpcProduceServer.EXPECT().Context().Return(ctx).Maybe()
+
+	l := mock_wal.NewMockWAL(t)
+	l.EXPECT().Channel().Return(types.PChannelInfo{
+		Name: "test",
+		Term: 1,
+	})
+
+	p := &ProduceServer{
+		wal: l,
+		produceServer: &produceGrpcServerHelper{
+			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
+		},
+		logger:           log.With(),
+		produceMessageCh: make(chan *streamingpb.ProduceMessageResponse, 10),
+		appendWG:         sync.WaitGroup{},
+		metrics:          newProducerMetrics(l.Channel()),
+	}
+
+	ch := make(chan error)
+	go func() {
+		ch <- p.recvLoop()
+	}()
+
+	// Send unknown request type (nil Request is treated as unknown)
+	req := &streamingpb.ProduceRequest{
+		Request: nil,
+	}
+	recvCh <- req
+
+	// Should skip without error
+	close(recvCh)
+	err := <-ch
+	assert.NoError(t, err)
+}
+
+func TestProduceServerRecvLoop_WALUnavailable(t *testing.T) {
+	grpcProduceServer := mock_streamingpb.NewMockStreamingNodeHandlerService_ProduceServer(t)
+	recvCh := make(chan *streamingpb.ProduceRequest)
+	grpcProduceServer.EXPECT().Recv().RunAndReturn(func() (*streamingpb.ProduceRequest, error) {
+		req, ok := <-recvCh
+		if ok {
+			return req, nil
+		}
+		return nil, io.EOF
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	grpcProduceServer.EXPECT().Context().Return(ctx).Maybe()
+
+	l := mock_wal.NewMockWAL(t)
+	l.EXPECT().Channel().Return(types.PChannelInfo{
+		Name: "test",
+		Term: 1,
+	})
+	l.EXPECT().IsAvailable().Return(false) // WAL is unavailable
+	l.EXPECT().Register(mock.Anything).Return().Maybe()
+	l.EXPECT().Unregister(mock.Anything).Return().Maybe()
+
+	p := &ProduceServer{
+		wal: l,
+		produceServer: &produceGrpcServerHelper{
+			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
+		},
+		logger:           log.With(),
+		produceMessageCh: make(chan *streamingpb.ProduceMessageResponse, 10),
+		appendWG:         sync.WaitGroup{},
+		metrics:          newProducerMetrics(l.Channel()),
+	}
+
+	ch := make(chan error)
+	go func() {
+		ch <- p.recvLoop()
+	}()
+
+	// Send produce request when WAL is unavailable
+	req := &streamingpb.ProduceRequest{
+		Request: &streamingpb.ProduceRequest_Produce{
+			Produce: &streamingpb.ProduceMessageRequest{
+				RequestId: 1,
+				Message: &messagespb.Message{
+					Payload: []byte("test"),
+					Properties: map[string]string{
+						"_v": "1",
+						"_t": strconv.FormatInt(int64(message.MessageTypeTimeTick), 10),
+					},
+				},
+			},
+		},
+	}
+	recvCh <- req
+
+	// Should not send any response since handleProduce returns early
+	close(recvCh)
+	err := <-ch
+	assert.NoError(t, err)
+
+	// produceMessageCh should be empty (closed by recvLoop)
+	_, ok := <-p.produceMessageCh
+	assert.False(t, ok)
+}
+
+func TestProduceServerUpdateRateLimitState(t *testing.T) {
+	grpcProduceServer := mock_streamingpb.NewMockStreamingNodeHandlerService_ProduceServer(t)
+	grpcProduceServer.EXPECT().Context().Return(context.Background())
+
+	l := mock_wal.NewMockWAL(t)
+	l.EXPECT().Channel().Return(types.PChannelInfo{
+		Name: "test",
+		Term: 1,
+	})
+	l.EXPECT().Register(mock.Anything).Return().Maybe()
+	l.EXPECT().Unregister(mock.Anything).Return().Maybe()
+
+	p := &ProduceServer{
+		wal: l,
+		produceServer: &produceGrpcServerHelper{
+			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
+		},
+		logger:             log.With(),
+		produceMessageCh:   make(chan *streamingpb.ProduceMessageResponse, 10),
+		rateLimitMessageCh: make(chan ratelimit.RateLimitState, 10),
+		appendWG:           sync.WaitGroup{},
+		metrics:            newProducerMetrics(l.Channel()),
+	}
+
+	// Test successful update
+	state := ratelimit.RateLimitState{
+		State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN,
+		Rate:  1024,
+	}
+	p.UpdateRateLimitState(state)
+
+	select {
+	case receivedState := <-p.rateLimitMessageCh:
+		assert.Equal(t, state, receivedState)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("rate limit state not received")
+	}
+}
+
+func TestProduceServerSendProduceResult_ContextCanceled(t *testing.T) {
+	grpcProduceServer := mock_streamingpb.NewMockStreamingNodeHandlerService_ProduceServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	grpcProduceServer.EXPECT().Context().Return(ctx)
+
+	l := mock_wal.NewMockWAL(t)
+	l.EXPECT().Channel().Return(types.PChannelInfo{
+		Name: "test",
+		Term: 1,
+	})
+
+	p := &ProduceServer{
+		wal: l,
+		produceServer: &produceGrpcServerHelper{
+			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
+		},
+		logger:           log.With(),
+		produceMessageCh: make(chan *streamingpb.ProduceMessageResponse), // unbuffered
+		appendWG:         sync.WaitGroup{},
+		metrics:          newProducerMetrics(l.Channel()),
+	}
+
+	// Cancel context before sending
+	cancel()
+	time.Sleep(10 * time.Millisecond)
+
+	// This should not block and should log warning
+	msgID := walimplstest.NewTestMessageID(1)
+	p.sendProduceResult(1, &wal.AppendResult{
+		MessageID:              msgID,
+		LastConfirmedMessageID: msgID,
+		TimeTick:               100,
+	}, nil)
+
+	// Channel should not receive the message
+	select {
+	case <-p.produceMessageCh:
+		t.Fatal("should not receive message after context canceled")
+	case <-time.After(100 * time.Millisecond):
+		// Expected
+	}
+}
+
+func TestProduceServerExecute(t *testing.T) {
+	grpcProduceServer := mock_streamingpb.NewMockStreamingNodeHandlerService_ProduceServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	grpcProduceServer.EXPECT().Context().Return(ctx)
+
+	recvCh := make(chan *streamingpb.ProduceRequest)
+	grpcProduceServer.EXPECT().Recv().RunAndReturn(func() (*streamingpb.ProduceRequest, error) {
+		req, ok := <-recvCh
+		if ok {
+			return req, nil
+		}
+		return nil, io.EOF
+	})
+
+	sendCallCount := atomic.NewInt32(0)
+	grpcProduceServer.EXPECT().Send(mock.Anything).RunAndReturn(func(pr *streamingpb.ProduceResponse) error {
+		sendCallCount.Inc()
+		return nil
+	})
+
+	l := mock_wal.NewMockWAL(t)
+	l.EXPECT().Channel().Return(types.PChannelInfo{
+		Name: "test",
+		Term: 1,
+	})
+	l.EXPECT().Available().Return(make(<-chan struct{}))
+	l.EXPECT().Register(mock.Anything).Return().Maybe()
+	l.EXPECT().Unregister(mock.Anything).Return().Maybe()
+	l.EXPECT().IsAvailable().Return(true)
+	l.EXPECT().AppendAsync(mock.Anything, mock.Anything, mock.Anything).Run(func(ctx context.Context, mm message.MutableMessage, f func(*wal.AppendResult, error)) {
+		msgID := walimplstest.NewTestMessageID(1)
+		f(&wal.AppendResult{
+			MessageID:              msgID,
+			LastConfirmedMessageID: msgID,
+			TimeTick:               100,
+		}, nil)
+	})
+
+	p := &ProduceServer{
+		wal: l,
+		produceServer: &produceGrpcServerHelper{
+			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
+		},
+		logger:           log.With(),
+		produceMessageCh: make(chan *streamingpb.ProduceMessageResponse, 10),
+		appendWG:         sync.WaitGroup{},
+		metrics:          newProducerMetrics(l.Channel()),
+	}
+
+	ch := make(chan error)
+	go func() {
+		ch <- p.Execute()
+	}()
+
+	// Send a produce request
+	req := &streamingpb.ProduceRequest{
+		Request: &streamingpb.ProduceRequest_Produce{
+			Produce: &streamingpb.ProduceMessageRequest{
+				RequestId: 1,
+				Message: &messagespb.Message{
+					Payload: []byte("test"),
+					Properties: map[string]string{
+						"_v": "1",
+						"_t": strconv.FormatInt(int64(message.MessageTypeTimeTick), 10),
+					},
+				},
+			},
+		},
+	}
+	recvCh <- req
+
+	// Wait for response processing
+	time.Sleep(100 * time.Millisecond)
+
+	// Close the recv channel to trigger EOF
+	close(recvCh)
+
+	// Wait for Execute to complete
+	err := <-ch
+	assert.NoError(t, err)
+
+	// Should have sent at least 2 messages: produce response + close response
+	assert.GreaterOrEqual(t, sendCallCount.Load(), int32(2))
 }

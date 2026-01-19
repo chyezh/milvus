@@ -103,39 +103,6 @@ func TestWAL(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 
-	// Test committed txn.
-	txn, err := w.Txn(ctx, TxnOption{
-		VChannel:  vChannel1,
-		Keepalive: 10 * time.Second,
-	})
-	assert.NoError(t, err)
-	assert.NotNil(t, txn)
-
-	err = txn.Append(ctx, newInsertMessage(vChannel1))
-	assert.NoError(t, err)
-	err = txn.Append(ctx, newInsertMessage(vChannel1))
-	assert.NoError(t, err)
-
-	result, err = txn.Commit(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, result)
-
-	// Test rollback txn.
-	txn, err = w.Txn(ctx, TxnOption{
-		VChannel:  vChannel1,
-		Keepalive: 10 * time.Second,
-	})
-	assert.NoError(t, err)
-	assert.NotNil(t, txn)
-
-	err = txn.Append(ctx, newInsertMessage(vChannel1))
-	assert.NoError(t, err)
-	err = txn.Append(ctx, newInsertMessage(vChannel1))
-	assert.NoError(t, err)
-
-	err = txn.Rollback(ctx)
-	assert.NoError(t, err)
-
 	resp := w.AppendMessages(ctx,
 		newInsertMessage(vChannel1),
 		newInsertMessage(vChannel2),

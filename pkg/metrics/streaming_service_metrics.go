@@ -21,27 +21,29 @@ const (
 	WALStatusCancel                         = "cancel"
 	WALStatusError                          = "error"
 
-	BroadcasterTaskStateLabelName     = "state"
-	ResourceKeyLockLabelName          = "rk_lock"
-	WALAccessModelLabelName           = "access_model"
-	WALScannerModelLabelName          = "scanner_model"
-	TimeTickSyncTypeLabelName         = "type"
-	TimeTickAckTypeLabelName          = "type"
-	WALInterceptorLabelName           = "interceptor_name"
-	WALTxnStateLabelName              = "state"
-	WALFlusherStateLabelName          = "state"
-	WALRecoveryStorageStateLabelName  = "state"
-	WALStateLabelName                 = "state"
-	WALChannelLabelName               = channelNameLabelName
-	WALSegmentLevelLabelName          = "lv"
-	WALSegmentSealPolicyNameLabelName = "policy"
-	WALMessageTypeLabelName           = "message_type"
-	WALChannelTermLabelName           = "term"
-	WALNameLabelName                  = "wal_name"
-	WALTxnTypeLabelName               = "txn_type"
-	StatusLabelName                   = statusLabelName
-	StreamingNodeLabelName            = "streaming_node"
-	NodeIDLabelName                   = nodeIDLabelName
+	BroadcasterTaskStateLabelName         = "state"
+	ResourceKeyLockLabelName              = "rk_lock"
+	WALAccessModelLabelName               = "access_model"
+	WALScannerModelLabelName              = "scanner_model"
+	TimeTickSyncTypeLabelName             = "type"
+	TimeTickAckTypeLabelName              = "type"
+	WALInterceptorLabelName               = "interceptor_name"
+	WALTxnStateLabelName                  = "state"
+	WALFlusherStateLabelName              = "state"
+	WALRecoveryStorageStateLabelName      = "state"
+	WALStateLabelName                     = "state"
+	WALRateLimitControllerSourceLabelName = "source"
+	WALRateLimitStateLabelName            = "state"
+	WALChannelLabelName                   = channelNameLabelName
+	WALSegmentLevelLabelName              = "lv"
+	WALSegmentSealPolicyNameLabelName     = "policy"
+	WALMessageTypeLabelName               = "message_type"
+	WALChannelTermLabelName               = "term"
+	WALNameLabelName                      = "wal_name"
+	WALTxnTypeLabelName                   = "txn_type"
+	StatusLabelName                       = statusLabelName
+	StreamingNodeLabelName                = "streaming_node"
+	NodeIDLabelName                       = nodeIDLabelName
 )
 
 var (
@@ -101,6 +103,11 @@ var (
 		Help:    "Bytes of consumed message",
 		Buckets: messageBytesBuckets,
 	}, WALChannelLabelName)
+
+	StreamingServiceClientRateLimitState = newStreamingServiceClientGaugeVec(prometheus.GaugeOpts{
+		Name: "rate_limit_state",
+		Help: "Current rate limit state of streaming service client",
+	}, WALChannelLabelName, WALRateLimitStateLabelName)
 
 	// StreamingCoord metrics
 	StreamingCoordPChannelInfo = newStreamingCoordGaugeVec(prometheus.GaugeOpts{
@@ -481,6 +488,16 @@ var (
 		Name: "flusher_empty_time_tick_filtered_total",
 		Help: "Total of empty time tick filtered",
 	}, WALChannelLabelName)
+
+	WALRateLimitControllerState = newWALGaugeVec(prometheus.GaugeOpts{
+		Name: "rate_limit_controller_state",
+		Help: "Current state of adaptive rate limit controller",
+	}, WALChannelLabelName, WALRateLimitControllerSourceLabelName, WALRateLimitStateLabelName)
+
+	WALRateLimitState = newWALGaugeVec(prometheus.GaugeOpts{
+		Name: "rate_limit_state",
+		Help: "Current rate limit state of wal",
+	}, WALChannelLabelName, WALRateLimitStateLabelName)
 )
 
 // RegisterStreamingServiceClient registers streaming service client metrics
@@ -495,6 +512,7 @@ func RegisterStreamingServiceClient(registry *prometheus.Registry) {
 		registry.MustRegister(StreamingServiceClientResumingConsumerTotal)
 		registry.MustRegister(StreamingServiceClientConsumerTotal)
 		registry.MustRegister(StreamingServiceClientConsumeBytes)
+		registry.MustRegister(StreamingServiceClientRateLimitState)
 	})
 }
 
@@ -586,6 +604,8 @@ func registerWAL(registry *prometheus.Registry) {
 	registry.MustRegister(WALDelegatorEmptyTimeTickFilteredTotal)
 	registry.MustRegister(WALDelegatorTsafeTimeTickUnfilteredTotal)
 	registry.MustRegister(WALFlusherEmptyTimeTickFilteredTotal)
+	registry.MustRegister(WALRateLimitControllerState)
+	registry.MustRegister(WALRateLimitState)
 }
 
 func newStreamingCoordGaugeVec(opts prometheus.GaugeOpts, extra ...string) *prometheus.GaugeVec {
