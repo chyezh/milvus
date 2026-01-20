@@ -57,6 +57,15 @@ func (f *adaptiveRateLimitControllerConfigFetcher) FetchRecoveryConfig() ratelim
 			zap.Duration("increaseDelayInterval", newConfig.IncreaseDelayInterval))
 		return f.lastRecovery
 	}
+	if f.lastRecovery != newConfig {
+		f.lastRecovery = newConfig
+		log.Info("recovery config changed",
+			zap.Int64("hwm", newConfig.HWM),
+			zap.Int64("lwm", newConfig.LWM),
+			zap.Duration("normalInterval", newConfig.NormalInterval),
+			zap.Int64("incremental", newConfig.Incremental),
+			zap.Duration("increaseDelayInterval", newConfig.IncreaseDelayInterval))
+	}
 	f.lastRecovery = newConfig
 	return newConfig
 }
@@ -66,6 +75,7 @@ func (f *adaptiveRateLimitControllerConfigFetcher) FetchSlowdownConfig() ratelim
 	defer f.mu.Unlock()
 
 	newConfig := ratelimit.SlowdownConfig{
+		FirstSlowdownDelay:  f.config.SlowdownStartupDelayInterval.GetAsDurationByParse(),
 		HWM:                 f.config.SlowdownHWM.GetAsSize(),
 		LWM:                 f.config.SlowdownLWM.GetAsSize(),
 		DecreaseInterval:    f.config.SlowdownDecreaseInterval.GetAsDurationByParse(),
@@ -73,8 +83,9 @@ func (f *adaptiveRateLimitControllerConfigFetcher) FetchSlowdownConfig() ratelim
 		RejectDelayInterval: f.config.SlowdownRejectDelayInterval.GetAsDurationByParse(),
 	}
 
-	if newConfig.HWM < newConfig.LWM || newConfig.DecreaseInterval < 0 || newConfig.DecreaseRatio <= 0 || newConfig.DecreaseRatio >= 1 || newConfig.RejectDelayInterval < 0 {
+	if newConfig.FirstSlowdownDelay < 0 || newConfig.HWM < newConfig.LWM || newConfig.DecreaseInterval < 0 || newConfig.DecreaseRatio <= 0 || newConfig.DecreaseRatio >= 1 || newConfig.RejectDelayInterval < 0 {
 		log.Warn("illegal slowdown config, fallback to previous one",
+			zap.Duration("firstSlowdownDelay", newConfig.FirstSlowdownDelay),
 			zap.Int64("hwm", newConfig.HWM),
 			zap.Int64("lwm", newConfig.LWM),
 			zap.Duration("decreaseInterval", newConfig.DecreaseInterval),
@@ -82,7 +93,16 @@ func (f *adaptiveRateLimitControllerConfigFetcher) FetchSlowdownConfig() ratelim
 			zap.Duration("rejectDelayInterval", newConfig.RejectDelayInterval))
 		return f.lastSlowdown
 	}
-	f.lastSlowdown = newConfig
+	if f.lastSlowdown != newConfig {
+		f.lastSlowdown = newConfig
+		log.Info("slowdown config changed",
+			zap.Duration("firstSlowdownDelay", newConfig.FirstSlowdownDelay),
+			zap.Int64("hwm", newConfig.HWM),
+			zap.Int64("lwm", newConfig.LWM),
+			zap.Duration("decreaseInterval", newConfig.DecreaseInterval),
+			zap.Float64("decreaseRatio", newConfig.DecreaseRatio),
+			zap.Duration("rejectDelayInterval", newConfig.RejectDelayInterval))
+	}
 	return newConfig
 }
 

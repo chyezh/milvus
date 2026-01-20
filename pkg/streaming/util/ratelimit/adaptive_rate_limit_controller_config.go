@@ -41,6 +41,7 @@ type SlowdownConfig struct {
 	DecreaseInterval    time.Duration
 	DecreaseRatio       float64
 	RejectDelayInterval time.Duration
+	FirstSlowdownDelay  time.Duration
 }
 
 type RecoveryConfig struct {

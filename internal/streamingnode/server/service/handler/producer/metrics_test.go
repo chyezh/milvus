@@ -1,9 +1,9 @@
 package producer
 
 import (
-	"errors"
 	"testing"
 
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"

@@ -32,7 +32,9 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/producer"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/util/mock_message"
+	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/util/ratelimit"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 )
 
@@ -159,6 +161,29 @@ func TestResumableProducer_BeginProduce(t *testing.T) {
 			rp.BeginProduce(context.Background(), msg1, msg2)
 		})
 	})
+}
+
+func TestResumableProducer_BeginProduce_RateLimitDelay(t *testing.T) {
+	rp := NewResumableProducer(func(ctx context.Context, opts *handler.ProducerOptions) (producer.Producer, error) {
+		return nil, context.Canceled
+	}, &ProducerOptions{PChannel: "test-rate-limit"})
+	defer rp.Close()
+
+	// Set a low rate limit to trigger delay
+	rp.rateLimiter.UpdateRateLimitState(ratelimit.RateLimitState{
+		State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN,
+		Rate:  100, // Very low rate to ensure delay
+	})
+
+	msg := createRealInsertMessage(t, "v1")
+
+	// First produce should have some delay
+	guard, err := rp.BeginProduce(context.Background(), msg)
+	assert.NoError(t, err)
+	assert.NotNil(t, guard)
+
+	// Verify the reservation has a delay
+	assert.True(t, guard.r.Delay() >= 0)
 }
 
 func TestResumableProducer_ProduceInternalErrors(t *testing.T) {

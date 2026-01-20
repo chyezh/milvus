@@ -25,8 +25,10 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
+	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
 // BatchCommitProduce commits the produce tasks concurrently.
@@ -82,16 +84,22 @@ func waitForReservationOK(ctx context.Context, tasks ...*ProduceGuard) error {
 	}
 
 	var maxDelay time.Duration
+	var pchannel string
 	now := time.Now()
 	for _, task := range tasks {
 		if delay := task.r.DelayFrom(now); delay > maxDelay {
 			maxDelay = delay
+			pchannel = task.producer.opts.PChannel
 		}
 	}
 	if maxDelay == 0 {
 		// all reservations are OK now.
 		return nil
 	}
+
+	// Record the rate limit delay
+	metrics.StreamingServiceClientProduceRateLimitDelaySeconds.WithLabelValues(paramtable.GetStringNodeID(), pchannel).Observe(maxDelay.Seconds())
+
 	select {
 	case <-ctx.Done():
 		return ctx.Err()

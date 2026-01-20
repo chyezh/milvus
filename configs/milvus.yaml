@@ -1383,12 +1383,14 @@ streaming:
     # If that persist operation exceeds this timeout, the wal recovery module will close right now.
     gracefulCloseTimeout: 3s
   walRateLimit:
+    defaultBurst: 20m # The default burst size for the WAL rate limiter, 20MB by default. The burst size determines the maximum number of bytes that can be consumed at once.
     nodeMemory:
       slowdownThreshold: 0.9 # When the memory usage is greater than this threshold, the node memory rate limiter will enter slowdown mode, 0.9 by default.
       rejectThreshold: 0.95 # When the memory usage is greater than this threshold, the node memory rate limiter will enter reject mode, 0.95 by default.
       recoverThreshold: 0.85 # When the memory usage is less than this threshold, the node memory rate limiter will enter recovery mode, 0.85 by default.
       adaptiveRateLimit:
         slowdown:
+          startupDelayInterval: 0 # The startup delay interval for adaptive rate limit slowdown, when the first time the rate limit enters slowdown mode, it will wait for this interval to take effect, 0 by default.
           hwm: 32mb # The high watermark of adaptive rate limit slowdown, the rate limit will be set to this value when slowdown mode is triggered, 32mb/s by default.
           lwm: 1mb # The low watermark of adaptive rate limit slowdown, the rate limit will decrease until this value if slowdown mode is kept, 1mb/s by default.
           decreaseInterval: 1m # The interval of adaptive rate limit slowdown decrease, the rate limit will decrease every this interval, 1m by default.
@@ -1403,6 +1405,7 @@ streaming:
     recoveryStorage:
       adaptiveRateLimit:
         slowdown:
+          startupDelayInterval: 15s # The startup delay interval for adaptive rate limit slowdown, when the first time the rate limit enters slowdown mode, it will wait for this interval to take effect, 15s by default.
           hwm: 32mb # The high watermark of adaptive rate limit slowdown, the rate limit will be set to this value when slowdown mode is triggered, 32mb/s by default.
           lwm: 2mb # The low watermark of adaptive rate limit slowdown, the rate limit will decrease until this value if slowdown mode is kept, 2mb/s by default.
           decreaseInterval: 30s # The interval of adaptive rate limit slowdown decrease, the rate limit will decrease every this interval, 30s by default.

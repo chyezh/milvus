@@ -129,7 +129,10 @@ func TestWaitForReservationOK(t *testing.T) {
 
 		// This one should have delay
 		res := limiter.ReserveN(time.Now(), 10)
-		task := &ProduceGuard{r: res}
+		task := &ProduceGuard{
+			r:        res,
+			producer: &ResumableProducer{opts: &ProducerOptions{PChannel: "test"}},
+		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()

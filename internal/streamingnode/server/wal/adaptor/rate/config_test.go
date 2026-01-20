@@ -51,6 +51,7 @@ func TestAdaptiveRateLimitControllerConfigFetcher(t *testing.T) {
 		params.Save(params.StreamingCfg.WALRateLimitNodeMemoryAdaptiveRateLimit.SlowdownDecreaseInterval.Key, "5s")
 		params.Save(params.StreamingCfg.WALRateLimitNodeMemoryAdaptiveRateLimit.SlowdownDecreaseRatio.Key, "0.8")
 		params.Save(params.StreamingCfg.WALRateLimitNodeMemoryAdaptiveRateLimit.SlowdownRejectDelayInterval.Key, "1m")
+		params.Save(params.StreamingCfg.WALRateLimitNodeMemoryAdaptiveRateLimit.SlowdownStartupDelayInterval.Key, "10s")
 
 		slowdownConfig := fetcher.FetchSlowdownConfig()
 		assert.Equal(t, int64(50*1024*1024), slowdownConfig.HWM)

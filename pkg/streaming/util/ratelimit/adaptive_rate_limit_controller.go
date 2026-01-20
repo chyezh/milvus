@@ -113,7 +113,7 @@ func (c *AdaptiveRateLimitController) EnterRejectMode() {
 
 // EnterSlowdownMode is called when the scanner enters slowdown mode.
 // Sets rate to high watermark and starts the decreasing timer.
-func (c *AdaptiveRateLimitController) EnterSlowdownMode(startupDelay time.Duration) {
+func (c *AdaptiveRateLimitController) EnterSlowdownMode() {
 	if c.getMode() == adaptiveRateLimitModeSlowdown || c.getMode() == adaptiveRateLimitModeReject {
 		return
 	}
@@ -122,14 +122,16 @@ func (c *AdaptiveRateLimitController) EnterSlowdownMode(startupDelay time.Durati
 	c.setMode(adaptiveRateLimitModeSlowdown)
 	cfg := c.configFetcher.FetchSlowdownConfig()
 	c.currentRate = math.MaxInt64
+	firstSlowdownDelay := cfg.FirstSlowdownDelay
+	cfg.FirstSlowdownDelay = 0
 
 	c.wg.Add(1)
 	c.stopBackground = make(chan struct{})
 	go func() {
 		defer c.wg.Done()
-		if startupDelay > 0 {
+		if firstSlowdownDelay > 0 {
 			select {
-			case <-time.After(startupDelay):
+			case <-time.After(firstSlowdownDelay):
 			case <-c.stopBackground:
 				return
 			}

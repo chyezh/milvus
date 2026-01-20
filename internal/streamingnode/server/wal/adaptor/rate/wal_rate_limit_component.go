@@ -72,7 +72,7 @@ func (c *WALRateLimitComponent) RegisterMemoryObserver() {
 func (c *WALRateLimitComponent) hardwardCallback(sm hardware.SystemMetrics, _ *hardware.SystemMetricsListener) {
 	usedRatio := sm.UsedRatio()
 	if usedRatio > paramtable.Get().StreamingCfg.WALRateLimitNodeMemorySlowdownThreshold.GetAsFloat() {
-		c.NodeMemory.EnterSlowdownMode(0)
+		c.NodeMemory.EnterSlowdownMode()
 	}
 	if usedRatio < paramtable.Get().StreamingCfg.WALRateLimitNodeMemoryRecoverThreshold.GetAsFloat() {
 		c.NodeMemory.EnterRecoveryMode()

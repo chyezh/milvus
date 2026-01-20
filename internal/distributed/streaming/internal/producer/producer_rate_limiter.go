@@ -33,14 +33,18 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
 
-const defaultBurst = 20 * 1024 * 1024 // 20MB
-
 var ErrSlowDown = merr.WrapErrServiceRateLimit(0, "reach the limit of request, please slowdown and retry later")
+
+// getDefaultBurst returns the default burst size from configuration.
+func getDefaultBurst() int {
+	return int(paramtable.Get().StreamingCfg.WALRateLimitDefaultBurst.GetAsSize())
+}
 
 // newProduceRateLimiter creates a new rate limiter.
 func newProduceRateLimiter(channel string) *produceRateLimiter {
+	defaultBurst := getDefaultBurst()
 	return &produceRateLimiter{
-		limiter: rate.NewLimiter(rate.Inf, 1000),
+		limiter: rate.NewLimiter(rate.Inf, defaultBurst),
 		cond:    syncutil.NewContextCond(&sync.Mutex{}),
 		state:   ratelimit.NewNormalRateLimitState(),
 		channel: channel,
@@ -79,6 +83,7 @@ func (arl *produceRateLimiter) UpdateRateLimitState(state ratelimit.RateLimitSta
 	}
 
 	arl.cond.UnsafeBroadcast()
+	defaultBurst := getDefaultBurst()
 	switch state.State {
 	case streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN:
 		arl.limiter.SetLimit(rate.Limit(state.Rate))

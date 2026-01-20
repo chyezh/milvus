@@ -45,7 +45,7 @@ func TestProduceRateLimiter(t *testing.T) {
 		}
 		rl.UpdateRateLimitState(state)
 		assert.Equal(t, rate.Limit(1024*1024), rl.limiter.Limit())
-		assert.Equal(t, defaultBurst, rl.limiter.Burst())
+		assert.Equal(t, getDefaultBurst(), rl.limiter.Burst())
 		assert.Equal(t, state, rl.state)
 	})
 
@@ -67,7 +67,7 @@ func TestProduceRateLimiter(t *testing.T) {
 		}
 		rl.UpdateRateLimitState(state)
 		assert.Equal(t, rate.Limit(rate.Inf), rl.limiter.Limit())
-		assert.Equal(t, defaultBurst, rl.limiter.Burst())
+		assert.Equal(t, getDefaultBurst(), rl.limiter.Burst())
 		assert.Equal(t, state, rl.state)
 	})
 

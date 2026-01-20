@@ -2,7 +2,6 @@ package flusherimpl
 
 import (
 	"context"
-	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -87,7 +86,7 @@ func (impl *WALFlusherImpl) Execute(recoverSnapshot *recovery.RecoverySnapshot) 
 	// because current flusher is build asynchronously,
 	// so we need to enter slowdown mode to protect the wal from being overloaded before the recovery-storage scanner is started.
 	// recovery-storage scanner will protect the wal from being overloaded after the recovery-storage is started.
-	impl.rateLimitComponent.FlusherRecovering.EnterSlowdownMode(5 * time.Second)
+	impl.rateLimitComponent.FlusherRecovering.EnterSlowdownMode()
 
 	impl.logger.Info("wal flusher start to recovery...")
 	l, err := impl.wal.GetWithContext(impl.notifier.Context())

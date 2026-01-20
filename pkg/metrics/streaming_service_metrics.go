@@ -87,6 +87,12 @@ var (
 		Buckets: secondsBuckets,
 	}, WALChannelLabelName, WALAccessModelLabelName)
 
+	StreamingServiceClientProduceRateLimitDelaySeconds = newStreamingServiceClientHistogramVec(prometheus.HistogramOpts{
+		Name:    "produce_rate_limit_delay_seconds",
+		Help:    "Rate limit delay duration when beginning produce operation",
+		Buckets: secondsBuckets,
+	}, WALChannelLabelName)
+
 	// Streaming Service Client Consumer Metrics.
 	StreamingServiceClientResumingConsumerTotal = newStreamingServiceClientGaugeVec(prometheus.GaugeOpts{
 		Name: "resuming_consumer_total",
@@ -509,6 +515,7 @@ func RegisterStreamingServiceClient(registry *prometheus.Registry) {
 		registry.MustRegister(StreamingServiceClientProduceBytes)
 		registry.MustRegister(StreamingServiceClientSuccessProduceBytes)
 		registry.MustRegister(StreamingServiceClientSuccessProduceDurationSeconds)
+		registry.MustRegister(StreamingServiceClientProduceRateLimitDelaySeconds)
 		registry.MustRegister(StreamingServiceClientResumingConsumerTotal)
 		registry.MustRegister(StreamingServiceClientConsumerTotal)
 		registry.MustRegister(StreamingServiceClientConsumeBytes)

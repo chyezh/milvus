@@ -13,7 +13,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/util/ratelimit"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -55,12 +54,11 @@ type switchableScanner interface {
 }
 
 type switchableScannerImpl struct {
-	scannerName         string
-	logger              *log.MLogger
-	innerWAL            walimpls.ROWALImpls
-	msgChan             chan<- message.ImmutableMessage
-	writeAheadBuffer    wab.ROWriteAheadBuffer
-	rateLimitController *ratelimit.AdaptiveRateLimitController
+	scannerName      string
+	logger           *log.MLogger
+	innerWAL         walimpls.ROWALImpls
+	msgChan          chan<- message.ImmutableMessage
+	writeAheadBuffer wab.ROWriteAheadBuffer
 }
 
 func (s *switchableScannerImpl) HandleMessage(ctx context.Context, msg message.ImmutableMessage) error {

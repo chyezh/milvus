@@ -48,9 +48,9 @@ func TestMuxRateLimitObserverRegistry(t *testing.T) {
 	observer.AssertExpectations(t)
 
 	// Notify source 1: Less restrictive Slowdown (should still be s2)
-	s1_new := RateLimitState{State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN, Rate: 3000}
+	s1New := RateLimitState{State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN, Rate: 3000}
 	// No observer update expected because the merged state is still s2
-	mux.NotifySourceRateLimitState("source1", s1_new)
+	mux.NotifySourceRateLimitState("source1", s1New)
 	assert.False(t, mux.IsRejected())
 	observer.AssertExpectations(t)
 
@@ -68,7 +68,7 @@ func TestMuxRateLimitObserverRegistry(t *testing.T) {
 	observer.AssertExpectations(t)
 
 	// Notify source 2: Normal (revert to s1_new)
-	observer.On("UpdateRateLimitState", s1_new).Once()
+	observer.On("UpdateRateLimitState", s1New).Once()
 	mux.NotifySourceRateLimitState("source2", NewNormalRateLimitState())
 	assert.False(t, mux.IsRejected())
 	observer.AssertExpectations(t)

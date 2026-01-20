@@ -90,7 +90,7 @@ func TestAdaptiveRateLimitController_ModeTransition(t *testing.T) {
 		case 0:
 			controller.EnterRejectMode()
 		case 1:
-			controller.EnterSlowdownMode(0)
+			controller.EnterSlowdownMode()
 		case 2:
 			controller.EnterRecoveryMode()
 		}
@@ -139,7 +139,7 @@ func TestAdaptiveRateLimitController_EnterSlowdownMode(t *testing.T) {
 	observer.On("UpdateRateLimitState", RateLimitState{State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN, Rate: 50}).Once()
 	observer.On("UpdateRateLimitState", RateLimitState{State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_REJECT, Rate: 0}).Once()
 
-	controller.EnterSlowdownMode(0)
+	controller.EnterSlowdownMode()
 	controller.wg.Wait()
 	assert.Eventually(t, func() bool {
 		return controller.getMode() == adaptiveRateLimitModeReject
@@ -213,22 +213,22 @@ func TestAdaptiveRateLimitController_SlowdownWithStartupDelay(t *testing.T) {
 		DecreaseInterval:    100 * time.Millisecond,
 		DecreaseRatio:       0.5,
 		RejectDelayInterval: 0,
+		FirstSlowdownDelay:  100 * time.Millisecond,
 	}
 	fetcher.On("FetchSlowdownConfig").Return(slowdownCfg)
 
-	delay := 100 * time.Millisecond
 	observer.On("UpdateRateLimitState", RateLimitState{State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN, Rate: 200}).Once()
 	observer.On("UpdateRateLimitState", mock.Anything).Maybe()
 
 	start := time.Now()
-	controller.EnterSlowdownMode(delay)
-	controller.EnterSlowdownMode(delay)
+	controller.EnterSlowdownMode()
+	controller.EnterSlowdownMode()
 
 	controller.wg.Wait()
 	assert.Eventually(t, func() bool {
 		return controller.currentRate == 100
 	}, 2*time.Second, 10*time.Millisecond)
 
-	assert.True(t, time.Since(start) >= delay)
+	assert.True(t, time.Since(start) >= slowdownCfg.FirstSlowdownDelay)
 	observer.AssertExpectations(t)
 }

@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/cockroachdb/errors"
 	"go.uber.org/atomic"
@@ -212,7 +211,6 @@ func (s *scannerAdaptorImpl) produceEventLoop(msgChan chan<- message.ImmutableMe
 
 	scanner := newSwithableScanner(s.Name(), s.logger, s.innerWAL, wb, s.readOption.DeliverPolicy, msgChan)
 	s.logger.Info("start produce loop of scanner at model", zap.String("model", getScannerModel(scanner)))
-	startupDelay := 10 * time.Second
 	for {
 		if s.readOption.RateLimitControl != nil {
 			// if the scanner is working with rate limit control,
@@ -221,11 +219,10 @@ func (s *scannerAdaptorImpl) produceEventLoop(msgChan chan<- message.ImmutableMe
 			// 2. when the scanner is working at tailing mode, the write operation is slow than the consume operation,
 			// so we enter into recovery mode to speed up the rate limit.
 			if _, ok := scanner.(*catchupScanner); ok {
-				s.readOption.RateLimitControl.EnterSlowdownMode(startupDelay)
+				s.readOption.RateLimitControl.EnterSlowdownMode()
 			} else {
 				s.readOption.RateLimitControl.EnterRecoveryMode()
 			}
-			startupDelay = 0
 		}
 		if scanner, err = scanner.Do(s.Context()); err != nil {
 			return err
