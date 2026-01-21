@@ -43,8 +43,8 @@ func TestAdaptiveRateLimitControllerConfigFetcher(t *testing.T) {
 		assert.Equal(t, int64(100*1024*1024), recoveryConfig.HWM)
 		assert.Equal(t, int64(10*1024*1024), recoveryConfig.LWM)
 		assert.Equal(t, int64(1*1024*1024), recoveryConfig.Incremental)
-		assert.Equal(t, 10*time.Second, recoveryConfig.NormalInterval)
-		assert.Equal(t, 1*time.Second, recoveryConfig.IncreaseDelayInterval)
+		assert.Equal(t, 10*time.Second, recoveryConfig.NormalDelayInterval)
+		assert.Equal(t, 1*time.Second, recoveryConfig.IncreaseInterval)
 
 		params.Save(params.StreamingCfg.WALRateLimitNodeMemoryAdaptiveRateLimit.SlowdownHWM.Key, "50mb")
 		params.Save(params.StreamingCfg.WALRateLimitNodeMemoryAdaptiveRateLimit.SlowdownLWM.Key, "5mb")

@@ -312,3 +312,146 @@ func TestResumableProducer_WaitUntilUnavailable_Branches(t *testing.T) {
 
 	rp.Close()
 }
+
+func TestResumableProducer_RateLimitRejected_ContextCanceled(t *testing.T) {
+	p := mock_producer.NewMockProducer(t)
+	p.EXPECT().Available().Return(make(chan struct{})).Maybe()
+	p.EXPECT().IsAvailable().Return(true).Maybe()
+	p.EXPECT().Close().Return().Maybe()
+
+	// First call returns rate limit rejected, then WaitUntilAvailable will be called
+	p.EXPECT().Append(mock.Anything, mock.Anything).Return(nil, status.NewRateLimitRejected("rejected")).Once()
+
+	rp := NewResumableProducer(func(ctx context.Context, opts *handler.ProducerOptions) (producer.Producer, error) {
+		return p, nil
+	}, &ProducerOptions{PChannel: "test-rate-limit-ctx"})
+	defer rp.Close()
+
+	// Set the rate limiter to REJECT state so WaitUntilAvailable will block
+	rp.rateLimiter.UpdateRateLimitState(ratelimit.RateLimitState{
+		State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_REJECT,
+		Rate:  0,
+	})
+
+	msg := createRealInsertMessage(t, "test-v")
+
+	// Use a context with short timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := rp.produceInternal(ctx, msg)
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, errs.ErrCanceledOrDeadlineExceed))
+}
+
+func TestResumableProducer_RateLimitRejected_ThenAvailable(t *testing.T) {
+	p := mock_producer.NewMockProducer(t)
+	p.EXPECT().Available().Return(make(chan struct{})).Maybe()
+	p.EXPECT().IsAvailable().Return(true).Maybe()
+	p.EXPECT().Close().Return().Maybe()
+
+	msgID := mock_message.NewMockMessageID(t)
+	// First call returns rate limit rejected, second call succeeds
+	p.EXPECT().Append(mock.Anything, mock.Anything).Return(nil, status.NewRateLimitRejected("rejected")).Once()
+	p.EXPECT().Append(mock.Anything, mock.Anything).Return(&types.AppendResult{
+		MessageID: msgID,
+		TimeTick:  100,
+	}, nil).Once()
+
+	rp := NewResumableProducer(func(ctx context.Context, opts *handler.ProducerOptions) (producer.Producer, error) {
+		return p, nil
+	}, &ProducerOptions{PChannel: "test-rate-limit-retry"})
+	defer rp.Close()
+
+	// Set the rate limiter to REJECT state initially
+	rp.rateLimiter.UpdateRateLimitState(ratelimit.RateLimitState{
+		State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_REJECT,
+		Rate:  0,
+	})
+
+	msg := createRealInsertMessage(t, "test-v")
+
+	// Start produce in background
+	resultCh := make(chan struct {
+		result *types.AppendResult
+		err    error
+	}, 1)
+	go func() {
+		result, err := rp.produceInternal(context.Background(), msg)
+		resultCh <- struct {
+			result *types.AppendResult
+			err    error
+		}{result, err}
+	}()
+
+	// Wait a bit then change state to NORMAL
+	time.Sleep(50 * time.Millisecond)
+	rp.rateLimiter.UpdateRateLimitState(ratelimit.RateLimitState{
+		State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_NORMAL,
+		Rate:  0,
+	})
+
+	// Should succeed after state change
+	select {
+	case res := <-resultCh:
+		assert.NoError(t, res.err)
+		assert.NotNil(t, res.result)
+	case <-time.After(2 * time.Second):
+		t.Fatal("produce should complete after rate limit is lifted")
+	}
+}
+
+func TestResumableProducer_ConcurrentProduce(t *testing.T) {
+	p := mock_producer.NewMockProducer(t)
+	p.EXPECT().Available().Return(make(chan struct{})).Maybe()
+	p.EXPECT().IsAvailable().Return(true).Maybe()
+	p.EXPECT().Close().Return().Maybe()
+
+	msgID := mock_message.NewMockMessageID(t)
+	p.EXPECT().Append(mock.Anything, mock.Anything).Return(&types.AppendResult{
+		MessageID: msgID,
+		TimeTick:  100,
+	}, nil).Maybe()
+
+	rp := NewResumableProducer(func(ctx context.Context, opts *handler.ProducerOptions) (producer.Producer, error) {
+		return p, nil
+	}, &ProducerOptions{PChannel: "test-concurrent"})
+	defer rp.Close()
+
+	// Start multiple concurrent produce operations
+	const numProducers = 10
+	errCh := make(chan error, numProducers)
+	for i := 0; i < numProducers; i++ {
+		go func() {
+			msg := createRealInsertMessage(t, "test-v")
+			_, err := rp.produceInternal(context.Background(), msg)
+			errCh <- err
+		}()
+	}
+
+	// All should succeed
+	for i := 0; i < numProducers; i++ {
+		err := <-errCh
+		assert.NoError(t, err)
+	}
+}
+
+func TestResumableProducer_ProduceAfterClose(t *testing.T) {
+	p := mock_producer.NewMockProducer(t)
+	p.EXPECT().Available().Return(make(chan struct{})).Maybe()
+	p.EXPECT().IsAvailable().Return(true).Maybe()
+	p.EXPECT().Close().Return().Maybe()
+
+	rp := NewResumableProducer(func(ctx context.Context, opts *handler.ProducerOptions) (producer.Producer, error) {
+		return p, nil
+	}, &ProducerOptions{PChannel: "test-after-close"})
+
+	// Close the producer
+	rp.Close()
+
+	// Produce should fail with ErrClosed
+	msg := createRealInsertMessage(t, "test-v")
+	_, err := rp.produceInternal(context.Background(), msg)
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, errs.ErrClosed))
+}

@@ -20,11 +20,11 @@ import "time"
 
 var (
 	defaultRecoveryConfig = RecoveryConfig{
-		IncreaseDelayInterval: 5 * time.Second,
-		Incremental:           1 * 1024 * 1024,
-		HWM:                   64 * 1024 * 1024,
-		LWM:                   4 * 1024 * 1024,
-		NormalInterval:        60 * time.Second,
+		IncreaseInterval:    5 * time.Second,
+		Incremental:         1 * 1024 * 1024,
+		HWM:                 64 * 1024 * 1024,
+		LWM:                 4 * 1024 * 1024,
+		NormalDelayInterval: 60 * time.Second,
 	}
 	defaultSlowdownConfig = SlowdownConfig{
 		HWM:                 32 * 1024 * 1024,
@@ -45,11 +45,11 @@ type SlowdownConfig struct {
 }
 
 type RecoveryConfig struct {
-	HWM                   int64
-	LWM                   int64
-	NormalInterval        time.Duration
-	Incremental           int64
-	IncreaseDelayInterval time.Duration
+	HWM                 int64
+	LWM                 int64
+	IncreaseInterval    time.Duration
+	Incremental         int64
+	NormalDelayInterval time.Duration
 }
 
 type AdaptiveRateLimitControllerConfigFetcher interface {

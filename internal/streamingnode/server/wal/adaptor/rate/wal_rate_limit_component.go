@@ -17,6 +17,7 @@
 package rate
 
 import (
+	"sync"
 	"time"
 
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/ratelimit"
@@ -72,7 +73,9 @@ func (c *WALRateLimitComponent) RegisterMemoryObserver() {
 func (c *WALRateLimitComponent) hardwardCallback(sm hardware.SystemMetrics, _ *hardware.SystemMetricsListener) {
 	usedRatio := sm.UsedRatio()
 	if usedRatio > paramtable.Get().StreamingCfg.WALRateLimitNodeMemorySlowdownThreshold.GetAsFloat() {
-		c.NodeMemory.EnterSlowdownMode()
+		// Create checker that stops slowdown when memory usage decreases.
+		checker := newMemorySlowdownChecker(usedRatio)
+		c.NodeMemory.EnterSlowdownMode(checker)
 	}
 	if usedRatio < paramtable.Get().StreamingCfg.WALRateLimitNodeMemoryRecoverThreshold.GetAsFloat() {
 		c.NodeMemory.EnterRecoveryMode()
@@ -80,6 +83,47 @@ func (c *WALRateLimitComponent) hardwardCallback(sm hardware.SystemMetrics, _ *h
 	if usedRatio > paramtable.Get().StreamingCfg.WALRateLimitNodeMemoryRejectThreshold.GetAsFloat() {
 		c.NodeMemory.EnterRejectMode()
 	}
+}
+
+// memorySlowdownChecker implements ratelimit.SlowdownChecker for memory-based slowdown.
+// It returns false when current memory usage is lower than the previous usage,
+// indicating that memory pressure is reducing and slowdown should stop.
+type memorySlowdownChecker struct {
+	mu                sync.Mutex
+	previousUsedRatio float64
+}
+
+// newMemorySlowdownChecker creates a new memory slowdown checker with the initial used ratio.
+func newMemorySlowdownChecker(initialUsedRatio float64) *memorySlowdownChecker {
+	return &memorySlowdownChecker{
+		previousUsedRatio: initialUsedRatio,
+	}
+}
+
+// Check returns true if slowdown should continue, false if it should stop.
+// Returns false when current memory usage is lower than previous (memory pressure reducing).
+func (c *memorySlowdownChecker) Check() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	totalMemory := hardware.GetMemoryCount()
+	if totalMemory == 0 {
+		return true // Continue slowdown if we can't get memory info
+	}
+	currentUsedRatio := float64(hardware.GetUsedMemoryCount()) / float64(totalMemory)
+
+	// If current memory usage is lower than previous, stop slowdown
+	if currentUsedRatio < c.previousUsedRatio {
+		return false
+	}
+	// Update previous usage for next check
+	c.previousUsedRatio = currentUsedRatio
+	return true
+}
+
+// SlowdownStartupHWM returns 0 to use the default HWM from config.
+func (c *memorySlowdownChecker) SlowdownStartupHWM() int64 {
+	return 0
 }
 
 // Close closes the WAL rate limit component.

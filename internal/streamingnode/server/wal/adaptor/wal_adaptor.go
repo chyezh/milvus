@@ -82,6 +82,7 @@ func adaptImplsToRWWAL(
 		flusher:                flusher,
 		writeMetrics:           metricsutil.NewWriteMetrics(roWAL.Channel(), roWAL.WALName()),
 		isFenced:               atomic.NewBool(false),
+		appendRateCounter:      utility.NewRateCounter(10 * time.Second), // 10 second sliding window
 	}
 	wal.writeMetrics.SetLogger(wal.roWALAdaptorImpl.Logger())
 	interceptorParam.WAL.Set(wal)
@@ -100,6 +101,7 @@ type walAdaptorImpl struct {
 	flusher                *flusherimpl.WALFlusherImpl
 	writeMetrics           *metricsutil.WriteMetrics
 	isFenced               *atomic.Bool
+	appendRateCounter      *utility.RateCounter // tracks append rate (bytes/sec)
 }
 
 // Metrics returns the metrics of the wal.
@@ -213,6 +215,8 @@ func (w *walAdaptorImpl) Append(ctx context.Context, msg message.MutableMessage)
 		w.forceCancelAfterGracefulTimeout()
 		w.Logger().Info("WAL marked as fenced for WAL switch, all append operations will be rejected")
 	}
+	w.appendRateCounter.Add(int64(msg.EstimateSize()))
+
 	var extra *anypb.Any
 	if extraAppendResult.Extra != nil {
 		var err error
@@ -231,6 +235,13 @@ func (w *walAdaptorImpl) Append(ctx context.Context, msg message.MutableMessage)
 	}
 	appendMetrics.Done(r, nil)
 	return r, nil
+}
+
+// Read overrides the roWALAdaptorImpl.Read to automatically add the append rate counter.
+func (w *walAdaptorImpl) Read(ctx context.Context, opts wal.ReadOption) (wal.Scanner, error) {
+	// Automatically add the append rate counter to the read options.
+	opts.AppendRateCounter = w.appendRateCounter
+	return w.roWALAdaptorImpl.Read(ctx, opts)
 }
 
 // retryAppendWhenRecoverableError retries the append operation when recoverable error occurs.

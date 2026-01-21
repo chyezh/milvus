@@ -167,3 +167,144 @@ func TestProduceRateLimiter(t *testing.T) {
 		assert.Equal(t, ErrSlowDown, err)
 	})
 }
+
+func TestProduceRateLimiter_ConcurrentUpdates(t *testing.T) {
+	rl := newProduceRateLimiter("test-channel-concurrent")
+
+	// Test concurrent state updates don't cause race conditions
+	t.Run("ConcurrentStateUpdates", func(t *testing.T) {
+		done := make(chan struct{})
+		states := []ratelimit.RateLimitState{
+			{State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_NORMAL, Rate: 0},
+			{State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN, Rate: 1024},
+			{State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_REJECT, Rate: 0},
+		}
+
+		// Start multiple goroutines updating state concurrently
+		for i := 0; i < 10; i++ {
+			go func(idx int) {
+				for j := 0; j < 100; j++ {
+					state := states[(idx+j)%len(states)]
+					rl.UpdateRateLimitState(state)
+				}
+			}(i)
+		}
+
+		// Also start a goroutine that waits for available
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			_ = rl.WaitUntilAvailable(ctx)
+		}()
+
+		// Wait a bit for all goroutines to complete
+		time.Sleep(200 * time.Millisecond)
+		close(done)
+	})
+}
+
+func TestProduceRateLimiter_RapidStateChanges(t *testing.T) {
+	rl := newProduceRateLimiter("test-channel-rapid")
+
+	// Rapidly change states and verify the final state is correct
+	for i := 0; i < 100; i++ {
+		state := ratelimit.RateLimitState{
+			State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN,
+			Rate:  int64(i * 100),
+		}
+		rl.UpdateRateLimitState(state)
+	}
+
+	// Final state should have Rate = 9900
+	assert.Equal(t, int64(9900), rl.state.Rate)
+	assert.Equal(t, streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN, rl.state.State)
+}
+
+func TestProduceRateLimiter_WaitUntilAvailable_MultipleBroadcasts(t *testing.T) {
+	rl := newProduceRateLimiter("test-channel-broadcast")
+
+	// Set initial state to REJECT
+	rl.UpdateRateLimitState(ratelimit.RateLimitState{
+		State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_REJECT,
+		Rate:  0,
+	})
+
+	// Start multiple waiters
+	const numWaiters = 5
+	errChs := make([]chan error, numWaiters)
+	for i := 0; i < numWaiters; i++ {
+		errChs[i] = make(chan error, 1)
+		go func(ch chan error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			ch <- rl.WaitUntilAvailable(ctx)
+		}(errChs[i])
+	}
+
+	// Wait a bit, then change state to Normal - this should wake up all waiters
+	time.Sleep(50 * time.Millisecond)
+	rl.UpdateRateLimitState(ratelimit.RateLimitState{
+		State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_NORMAL,
+		Rate:  0,
+	})
+
+	// All waiters should complete without error
+	for i := 0; i < numWaiters; i++ {
+		err := <-errChs[i]
+		assert.NoError(t, err, "waiter %d should complete without error", i)
+	}
+}
+
+func TestProduceRateLimiter_WaitUntilAvailable_StateTransitions(t *testing.T) {
+	rl := newProduceRateLimiter("test-channel-transitions")
+
+	t.Run("RejectToSlowdown", func(t *testing.T) {
+		rl.UpdateRateLimitState(ratelimit.RateLimitState{
+			State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_REJECT,
+			Rate:  0,
+		})
+
+		errCh := make(chan error, 1)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+			errCh <- rl.WaitUntilAvailable(ctx)
+		}()
+
+		time.Sleep(50 * time.Millisecond)
+		// Transition to SLOWDOWN should also wake up waiters
+		rl.UpdateRateLimitState(ratelimit.RateLimitState{
+			State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN,
+			Rate:  1024,
+		})
+
+		err := <-errCh
+		assert.NoError(t, err)
+	})
+
+	t.Run("AlreadyNormal", func(t *testing.T) {
+		rl.UpdateRateLimitState(ratelimit.RateLimitState{
+			State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_NORMAL,
+			Rate:  0,
+		})
+
+		// Should return immediately
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		err := rl.WaitUntilAvailable(ctx)
+		assert.NoError(t, err)
+	})
+
+	t.Run("AlreadySlowdown", func(t *testing.T) {
+		rl.UpdateRateLimitState(ratelimit.RateLimitState{
+			State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN,
+			Rate:  1024,
+		})
+
+		// Should return immediately (not REJECT state)
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		err := rl.WaitUntilAvailable(ctx)
+		assert.NoError(t, err)
+	})
+}

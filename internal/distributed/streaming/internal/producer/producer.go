@@ -85,10 +85,21 @@ func (p *ResumableProducer) BeginProduce(ctx context.Context, msgs ...message.Mu
 		panic("begin produce with no messages")
 	}
 	vchannel := msgs[0].VChannel()
+	isNotDML := false
 	for i := 1; i < len(msgs); i++ {
 		if msgs[i].VChannel() != vchannel {
 			panic("begin produce with messages of different vchannels")
 		}
+		if !msgs[i].MessageType().IsDMLMessageType() {
+			isNotDML = true
+		}
+	}
+	if isNotDML {
+		return &ProduceGuard{
+			producer: p,
+			msgs:     msgs,
+			r:        nil,
+		}, nil
 	}
 
 	r, err := p.rateLimiter.RequestReservation(ctx, msgs...)

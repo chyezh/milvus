@@ -124,6 +124,19 @@ func TestProducer(t *testing.T) {
 	<-stateUpdateCh
 	producer.Unregister(ob)
 
+	// Register observer BEFORE sending the RateLimit response to avoid race condition.
+	// The observer will first receive the current cached state (REJECT), then the new SLOWDOWN state.
+	ob = mock_ratelimit.NewMockRateLimitObserver(t)
+	slowdownReceived := make(chan struct{})
+	ob.EXPECT().UpdateRateLimitState(mock.Anything).Run(func(state ratelimit.RateLimitState) {
+		if state.State == streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN {
+			assert.Equal(t, int64(1024*1024), state.Rate)
+			close(slowdownReceived)
+		}
+	})
+	producer.Register(ob)
+
+	// Now send the RateLimit response
 	recvCh <- &streamingpb.ProduceResponse{
 		Response: &streamingpb.ProduceResponse_RateLimit{
 			RateLimit: &streamingpb.ProduceRateLimitResponse{
@@ -132,15 +145,7 @@ func TestProducer(t *testing.T) {
 			},
 		},
 	}
-
-	ob = mock_ratelimit.NewMockRateLimitObserver(t)
-	ob.EXPECT().UpdateRateLimitState(mock.Anything).Run(func(state ratelimit.RateLimitState) {
-		assert.Equal(t, streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN, state.State)
-		assert.Equal(t, int64(1024*1024), state.Rate)
-		stateUpdateCh <- struct{}{}
-	})
-	producer.Register(ob)
-	<-stateUpdateCh
+	<-slowdownReceived
 
 	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()

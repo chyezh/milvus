@@ -52,9 +52,10 @@ func CreateProduceServer(walManager walmanager.Manager, streamServer streamingpb
 			log.FieldComponent("producer-server"),
 			zap.String("channel", l.Channel().Name),
 			zap.Int64("term", l.Channel().Term)),
-		produceMessageCh: make(chan *streamingpb.ProduceMessageResponse),
-		appendWG:         sync.WaitGroup{},
-		metrics:          metrics,
+		produceMessageCh:   make(chan *streamingpb.ProduceMessageResponse),
+		rateLimitMessageCh: make(chan ratelimit.RateLimitState, 1),
+		appendWG:           sync.WaitGroup{},
+		metrics:            metrics,
 	}
 	l.Register(p)
 	return p, nil
@@ -220,10 +221,35 @@ func (p *ProduceServer) validateMessage(msg message.MutableMessage) error {
 }
 
 // UpdateRateLimitState updates the rate limit state.
+// This function is non-blocking and only keeps the latest state.
 func (p *ProduceServer) UpdateRateLimitState(state ratelimit.RateLimitState) {
-	select {
-	case <-p.produceServer.Context().Done():
+	if p.produceServer.Context().Err() != nil {
 		p.logger.Warn("stream closed before rate limit state updated", zap.Any("state", state))
+		return
+	}
+	done := p.produceServer.Context().Done()
+
+	// Non-blocking send, only keep the latest state
+	select {
+	case <-done:
+		p.logger.Warn("stream closed before rate limit state updated", zap.Any("state", state))
+		return
+	case p.rateLimitMessageCh <- state:
+		return
+	default:
+	}
+
+	// Channel is full, drain it
+	select {
+	case <-p.rateLimitMessageCh:
+	default:
+	}
+
+	// Try to send the new state
+	select {
+	case <-done:
+		p.logger.Warn("stream closed before rate limit state updated", zap.Any("state", state))
+		return
 	case p.rateLimitMessageCh <- state:
 	}
 }

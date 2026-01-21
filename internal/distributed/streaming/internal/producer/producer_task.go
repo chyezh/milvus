@@ -87,6 +87,9 @@ func waitForReservationOK(ctx context.Context, tasks ...*ProduceGuard) error {
 	var pchannel string
 	now := time.Now()
 	for _, task := range tasks {
+		if task.r == nil {
+			continue
+		}
 		if delay := task.r.DelayFrom(now); delay > maxDelay {
 			maxDelay = delay
 			pchannel = task.producer.opts.PChannel

@@ -29,7 +29,8 @@ import (
 var _ ratelimit.AdaptiveRateLimitControllerConfigFetcher = (*adaptiveRateLimitControllerConfigFetcher)(nil)
 
 type adaptiveRateLimitControllerConfigFetcher struct {
-	config *paramtable.AdaptiveRateLimitConfig
+	sourceName string
+	config     *paramtable.AdaptiveRateLimitConfig
 
 	mu           sync.Mutex
 	lastRecovery ratelimit.RecoveryConfig
@@ -41,30 +42,32 @@ func (f *adaptiveRateLimitControllerConfigFetcher) FetchRecoveryConfig() ratelim
 	defer f.mu.Unlock()
 
 	newConfig := ratelimit.RecoveryConfig{
-		HWM:                   f.config.RecoveryHWM.GetAsSize(),
-		LWM:                   f.config.RecoveryLWM.GetAsSize(),
-		NormalInterval:        f.config.RecoveryNormalDelayInterval.GetAsDurationByParse(),
-		Incremental:           f.config.RecoveryIncremental.GetAsSize(),
-		IncreaseDelayInterval: f.config.RecoveryIncreaseInterval.GetAsDurationByParse(),
+		HWM:                 f.config.RecoveryHWM.GetAsSize(),
+		LWM:                 f.config.RecoveryLWM.GetAsSize(),
+		NormalDelayInterval: f.config.RecoveryNormalDelayInterval.GetAsDurationByParse(),
+		Incremental:         f.config.RecoveryIncremental.GetAsSize(),
+		IncreaseInterval:    f.config.RecoveryIncreaseInterval.GetAsDurationByParse(),
 	}
 
-	if newConfig.HWM < newConfig.LWM || newConfig.Incremental <= 0 || newConfig.NormalInterval < 0 || newConfig.IncreaseDelayInterval < 0 {
+	if newConfig.HWM < newConfig.LWM || newConfig.Incremental <= 0 || newConfig.NormalDelayInterval < 0 || newConfig.IncreaseInterval < 0 {
 		log.Warn("illegal recovery config, fallback to previous one",
+			zap.String("sourceName", f.sourceName),
 			zap.Int64("hwm", newConfig.HWM),
 			zap.Int64("lwm", newConfig.LWM),
 			zap.Int64("incremental", newConfig.Incremental),
-			zap.Duration("normalInterval", newConfig.NormalInterval),
-			zap.Duration("increaseDelayInterval", newConfig.IncreaseDelayInterval))
+			zap.Duration("normalInterval", newConfig.NormalDelayInterval),
+			zap.Duration("increaseDelayInterval", newConfig.IncreaseInterval))
 		return f.lastRecovery
 	}
 	if f.lastRecovery != newConfig {
 		f.lastRecovery = newConfig
 		log.Info("recovery config changed",
+			zap.String("sourceName", f.sourceName),
 			zap.Int64("hwm", newConfig.HWM),
 			zap.Int64("lwm", newConfig.LWM),
-			zap.Duration("normalInterval", newConfig.NormalInterval),
+			zap.Duration("normalInterval", newConfig.NormalDelayInterval),
 			zap.Int64("incremental", newConfig.Incremental),
-			zap.Duration("increaseDelayInterval", newConfig.IncreaseDelayInterval))
+			zap.Duration("increaseDelayInterval", newConfig.IncreaseInterval))
 	}
 	f.lastRecovery = newConfig
 	return newConfig
@@ -85,6 +88,7 @@ func (f *adaptiveRateLimitControllerConfigFetcher) FetchSlowdownConfig() ratelim
 
 	if newConfig.FirstSlowdownDelay < 0 || newConfig.HWM < newConfig.LWM || newConfig.DecreaseInterval < 0 || newConfig.DecreaseRatio <= 0 || newConfig.DecreaseRatio >= 1 || newConfig.RejectDelayInterval < 0 {
 		log.Warn("illegal slowdown config, fallback to previous one",
+			zap.String("sourceName", f.sourceName),
 			zap.Duration("firstSlowdownDelay", newConfig.FirstSlowdownDelay),
 			zap.Int64("hwm", newConfig.HWM),
 			zap.Int64("lwm", newConfig.LWM),
@@ -96,6 +100,7 @@ func (f *adaptiveRateLimitControllerConfigFetcher) FetchSlowdownConfig() ratelim
 	if f.lastSlowdown != newConfig {
 		f.lastSlowdown = newConfig
 		log.Info("slowdown config changed",
+			zap.String("sourceName", f.sourceName),
 			zap.Duration("firstSlowdownDelay", newConfig.FirstSlowdownDelay),
 			zap.Int64("hwm", newConfig.HWM),
 			zap.Int64("lwm", newConfig.LWM),
@@ -120,6 +125,7 @@ func newAdaptiveRateLimitControllerConfigFetcher(sourceName string) ratelimit.Ad
 	}
 	defaultFetcher := ratelimit.DefaultAdaptiveRateLimitControllerConfigFetcher{}
 	f := &adaptiveRateLimitControllerConfigFetcher{
+		sourceName:   sourceName,
 		config:       config,
 		lastRecovery: defaultFetcher.FetchRecoveryConfig(),
 		lastSlowdown: defaultFetcher.FetchSlowdownConfig(),

@@ -86,7 +86,7 @@ func (impl *WALFlusherImpl) Execute(recoverSnapshot *recovery.RecoverySnapshot) 
 	// because current flusher is build asynchronously,
 	// so we need to enter slowdown mode to protect the wal from being overloaded before the recovery-storage scanner is started.
 	// recovery-storage scanner will protect the wal from being overloaded after the recovery-storage is started.
-	impl.rateLimitComponent.FlusherRecovering.EnterSlowdownMode()
+	impl.rateLimitComponent.FlusherRecovering.EnterSlowdownMode(nil)
 
 	impl.logger.Info("wal flusher start to recovery...")
 	l, err := impl.wal.GetWithContext(impl.notifier.Context())

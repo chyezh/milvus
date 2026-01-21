@@ -655,6 +655,236 @@ func TestProduceServerUpdateRateLimitState(t *testing.T) {
 	}
 }
 
+func TestProduceServerUpdateRateLimitState_NonBlocking(t *testing.T) {
+	grpcProduceServer := mock_streamingpb.NewMockStreamingNodeHandlerService_ProduceServer(t)
+	grpcProduceServer.EXPECT().Context().Return(context.Background())
+
+	l := mock_wal.NewMockWAL(t)
+	l.EXPECT().Channel().Return(types.PChannelInfo{
+		Name: "test",
+		Term: 1,
+	})
+
+	// Use channel with buffer size 1 to test non-blocking behavior
+	rateLimitCh := make(chan ratelimit.RateLimitState, 1)
+
+	p := &ProduceServer{
+		wal: l,
+		produceServer: &produceGrpcServerHelper{
+			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
+		},
+		logger:             log.With(),
+		produceMessageCh:   make(chan *streamingpb.ProduceMessageResponse, 10),
+		rateLimitMessageCh: rateLimitCh,
+		appendWG:           sync.WaitGroup{},
+		metrics:            newProducerMetrics(l.Channel()),
+	}
+
+	// Fill the channel first
+	oldState := ratelimit.RateLimitState{
+		State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN,
+		Rate:  512,
+	}
+	rateLimitCh <- oldState
+
+	// Test non-blocking: this call should not block even though channel is full
+	done := make(chan struct{})
+	go func() {
+		newState := ratelimit.RateLimitState{
+			State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_REJECT,
+			Rate:  2048,
+		}
+		p.UpdateRateLimitState(newState)
+		close(done)
+	}()
+
+	// Should complete without blocking
+	select {
+	case <-done:
+		// Expected: non-blocking
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("UpdateRateLimitState should be non-blocking")
+	}
+
+	// The channel should contain the latest state
+	select {
+	case receivedState := <-p.rateLimitMessageCh:
+		assert.Equal(t, streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_REJECT, receivedState.State)
+		assert.Equal(t, int64(2048), receivedState.Rate)
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("should receive the latest state")
+	}
+}
+
+func TestProduceServerUpdateRateLimitState_OnlyKeepLatest(t *testing.T) {
+	grpcProduceServer := mock_streamingpb.NewMockStreamingNodeHandlerService_ProduceServer(t)
+	grpcProduceServer.EXPECT().Context().Return(context.Background())
+
+	l := mock_wal.NewMockWAL(t)
+	l.EXPECT().Channel().Return(types.PChannelInfo{
+		Name: "test",
+		Term: 1,
+	})
+
+	// Use channel with buffer size 1
+	rateLimitCh := make(chan ratelimit.RateLimitState, 1)
+
+	p := &ProduceServer{
+		wal: l,
+		produceServer: &produceGrpcServerHelper{
+			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
+		},
+		logger:             log.With(),
+		produceMessageCh:   make(chan *streamingpb.ProduceMessageResponse, 10),
+		rateLimitMessageCh: rateLimitCh,
+		appendWG:           sync.WaitGroup{},
+		metrics:            newProducerMetrics(l.Channel()),
+	}
+
+	// Rapidly send multiple states
+	for i := 0; i < 10; i++ {
+		state := ratelimit.RateLimitState{
+			State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN,
+			Rate:  int64(i * 100),
+		}
+		p.UpdateRateLimitState(state)
+	}
+
+	// Should only have one state in the channel (the latest one)
+	receivedCount := 0
+	var lastState ratelimit.RateLimitState
+	for {
+		select {
+		case state := <-p.rateLimitMessageCh:
+			lastState = state
+			receivedCount++
+		default:
+			goto done
+		}
+	}
+done:
+	// Should only receive 1 state since channel buffer is 1
+	assert.Equal(t, 1, receivedCount)
+	// The state should be the latest (rate = 900)
+	assert.Equal(t, int64(900), lastState.Rate)
+}
+
+func TestProduceServerUpdateRateLimitState_ContextCanceled(t *testing.T) {
+	grpcProduceServer := mock_streamingpb.NewMockStreamingNodeHandlerService_ProduceServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+	grpcProduceServer.EXPECT().Context().Return(ctx)
+
+	l := mock_wal.NewMockWAL(t)
+	l.EXPECT().Channel().Return(types.PChannelInfo{
+		Name: "test",
+		Term: 1,
+	})
+
+	rateLimitCh := make(chan ratelimit.RateLimitState, 1)
+
+	p := &ProduceServer{
+		wal: l,
+		produceServer: &produceGrpcServerHelper{
+			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
+		},
+		logger:             log.With(),
+		produceMessageCh:   make(chan *streamingpb.ProduceMessageResponse, 10),
+		rateLimitMessageCh: rateLimitCh,
+		appendWG:           sync.WaitGroup{},
+		metrics:            newProducerMetrics(l.Channel()),
+	}
+
+	// Should return early when context is canceled
+	done := make(chan struct{})
+	go func() {
+		state := ratelimit.RateLimitState{
+			State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN,
+			Rate:  1024,
+		}
+		p.UpdateRateLimitState(state)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Expected: should return immediately
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("UpdateRateLimitState should return immediately when context is canceled")
+	}
+
+	// Channel should be empty since context was canceled
+	select {
+	case <-p.rateLimitMessageCh:
+		t.Fatal("should not receive state when context is canceled")
+	default:
+		// Expected
+	}
+}
+
+func TestProduceServerUpdateRateLimitState_ContextCanceledDuringDrain(t *testing.T) {
+	grpcProduceServer := mock_streamingpb.NewMockStreamingNodeHandlerService_ProduceServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	grpcProduceServer.EXPECT().Context().Return(ctx)
+
+	l := mock_wal.NewMockWAL(t)
+	l.EXPECT().Channel().Return(types.PChannelInfo{
+		Name: "test",
+		Term: 1,
+	})
+
+	// Use channel with buffer size 1
+	rateLimitCh := make(chan ratelimit.RateLimitState, 1)
+
+	p := &ProduceServer{
+		wal: l,
+		produceServer: &produceGrpcServerHelper{
+			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
+		},
+		logger:             log.With(),
+		produceMessageCh:   make(chan *streamingpb.ProduceMessageResponse, 10),
+		rateLimitMessageCh: rateLimitCh,
+		appendWG:           sync.WaitGroup{},
+		metrics:            newProducerMetrics(l.Channel()),
+	}
+
+	// Fill the channel first
+	oldState := ratelimit.RateLimitState{
+		State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_SLOWDOWN,
+		Rate:  512,
+	}
+	rateLimitCh <- oldState
+
+	// Cancel context - this will trigger the second done check after draining
+	cancel()
+
+	// This call should still be non-blocking and should exit at second done check
+	done := make(chan struct{})
+	go func() {
+		newState := ratelimit.RateLimitState{
+			State: streamingpb.WALRateLimitState_WAL_RATE_LIMIT_STATE_REJECT,
+			Rate:  2048,
+		}
+		p.UpdateRateLimitState(newState)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// Expected: should return
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("UpdateRateLimitState should not block")
+	}
+
+	// Channel should be empty since old state was drained and context was canceled before new state could be sent
+	select {
+	case state := <-p.rateLimitMessageCh:
+		assert.Equal(t, oldState, state)
+	default:
+		t.Fatal("should not have state in channel")
+	}
+}
+
 func TestProduceServerSendProduceResult_ContextCanceled(t *testing.T) {
 	grpcProduceServer := mock_streamingpb.NewMockStreamingNodeHandlerService_ProduceServer(t)
 	ctx, cancel := context.WithCancel(context.Background())
