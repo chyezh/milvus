@@ -276,7 +276,7 @@ func (c *AdaptiveRateLimitController) notify() {
 		paramtable.GetStringNodeID(),
 		c.channel.Name,
 		c.sourceName,
-		c.mode.String(),
+		c.getMode().String(),
 	).Set(float64(c.currentRate))
 }
 

@@ -30,12 +30,18 @@ func (w *walAccesserImpl) AppendMessages(ctx context.Context, msgs ...message.Mu
 	defer w.lifetime.Done()
 
 	// dispatch the messages into different vchannel.
-	dispatchedMessages, _ := w.dispatchMessages(msgs...)
+	dispatchedMessages, indexes := w.dispatchMessages(msgs...)
 
-	guards := make([]*producer.ProduceGuard, 0)
+	// Use a slice to maintain the order of vchannels and their corresponding indexes.
+	type vchannelTask struct {
+		vchannel string
+		indexes  []int
+	}
+	tasks := make([]vchannelTask, 0, len(dispatchedMessages))
+	guards := make([]*producer.ProduceGuard, 0, len(dispatchedMessages))
 	resp := types.NewAppendResponseN(len(msgs))
-	for vchannel, msgs := range dispatchedMessages {
-		g, err := w.getProducer(vchannel).BeginProduce(ctx, msgs...)
+	for vchannel, vchannelMsgs := range dispatchedMessages {
+		g, err := w.getProducer(vchannel).BeginProduce(ctx, vchannelMsgs...)
 		if err != nil {
 			for _, guard := range guards {
 				guard.Cancel()
@@ -44,9 +50,24 @@ func (w *walAccesserImpl) AppendMessages(ctx context.Context, msgs ...message.Mu
 			return resp
 		}
 		guards = append(guards, g)
+		tasks = append(tasks, vchannelTask{
+			vchannel: vchannel,
+			indexes:  indexes[vchannel],
+		})
 	}
 
-	return producer.BatchCommitProduce(ctx, guards...)
+	// Batch commit and get responses per vchannel.
+	guardResps := producer.BatchCommitProduce(ctx, guards...)
+
+	// Map the responses back to the original order using indexes.
+	for i, task := range tasks {
+		guardResp := guardResps.Responses[i]
+		for _, origIdx := range task.indexes {
+			resp.FillResponseAtIdx(guardResp, origIdx)
+		}
+	}
+
+	return resp
 }
 
 // dispatchMessages dispatches the messages into different vchannel.
