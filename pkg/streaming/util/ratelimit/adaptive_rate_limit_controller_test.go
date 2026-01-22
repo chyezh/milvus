@@ -42,6 +42,8 @@ func (m *MockConfigFetcher) FetchSlowdownConfig() SlowdownConfig {
 	return args.Get(0).(SlowdownConfig)
 }
 
+func (m *MockConfigFetcher) Close() {}
+
 func setupTest(_ *testing.T) (types.PChannelInfo, string, *MuxRateLimitObserverRegistryImpl, *MockRateLimitObserver, *MockConfigFetcher) {
 	channel := types.PChannelInfo{Name: "test-channel"}
 	sourceName := "test-source"
