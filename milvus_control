@@ -1,0 +1,848 @@
+#!/bin/bash
+
+# obtain the script installed path.
+SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Start Milvus server
+if [[ -z "${MILVUS_DEV_PATH}" ]]; then
+    echo "MILVUS_DEV_PATH is not set or is empty"
+    exit 1
+fi
+echo "MILVUS_DEV_PATH: ${MILVUS_DEV_PATH}"
+
+if [[ -z "${MILVUS_VOLUME_DIRECTORY}" ]]; then
+    echo "MILVUS_VOLUME_DIRECTORY is not set or is empty"
+    exit 1
+fi
+echo "MILVUS_VOLUME_DIRECTORY: ${MILVUS_VOLUME_DIRECTORY}"
+
+# Function to display usage
+usage() {
+    echo "Usage: $0 [OPTIONS] COMMAND"
+    echo ""
+    echo "OPTIONS:"
+    echo "  -f    Force stop"
+    echo "  -a    Enable ASAN (AddressSanitizer) debugging"
+    echo "  -c    Start Milvus in cluster mode"
+    echo "  -m    Start multiple Milvus clusters"
+    echo "  -k    Use Kafka as message queue (default: Pulsar)"
+    echo "  -r    Use RocksMQ as message queue (default: Pulsar)"
+    echo "  -u    Reuse the last volume directory instead of creating a new one"
+    echo "  --streaming   Enable streaming nodes in cluster mode"
+    echo ""
+    echo "COMMANDS:"
+    echo "  start_milvus        Start Milvus server (standalone or cluster mode)"
+    echo "  stop_milvus         Stop Milvus server"
+    echo "  start_milvus_inf    Start Milvus infrastructure (Pulsar/Kafka/RMQ + etcd + minio)"
+    echo "  stop_milvus_inf     Stop Milvus infrastructure"
+    echo "  start_milvus_full   Start both infrastructure and Milvus server"
+    echo "  stop_milvus_full    Stop both Milvus server and infrastructure"
+    echo ""
+    echo "NODE MANAGEMENT COMMANDS:"
+    echo "  add_node <type> [env_file]     Add a new node (querynode, datanode, streamingnode, proxy, mixcoord, standalone, cdc)"
+    echo "  pause_node <node_id>           Pause a running node"
+    echo "  resume_node <node_id>          Resume a paused node"
+    echo "  stop_node <node_id>            Stop and remove a node"
+    echo "  list_nodes                     List all managed nodes in current workspace"
+    echo "  show_node <node_id>            Show detailed info about a node"
+    echo "  stop_all_nodes                 Stop all managed nodes in current workspace"
+    echo ""
+    echo "EXAMPLES:"
+    echo "  # Add a querynode with custom config"
+    echo "  $0 add_node querynode /path/to/env_file"
+    echo ""
+    echo "  # Add a querynode with inline environment variables"
+    echo "  METRICS_PORT=19999 LOCALSTORAGE_PATH=/tmp/qn1 $0 add_node querynode"
+    echo ""
+    echo "  # Pause a node"
+    echo "  $0 pause_node querynode-1"
+    echo ""
+    echo "  # Resume a node"
+    echo "  $0 resume_node querynode-1"
+    echo ""
+    echo "  # List all nodes in current workspace"
+    echo "  $0 list_nodes"
+    echo ""
+    exit 1
+}
+
+# Get node state directory for current workspace
+get_node_state_dir() {
+    if [[ -z "${NEW_VOLUME_DIRECTORY}" ]]; then
+        echo "Error: NEW_VOLUME_DIRECTORY not set. Please run setup_volume_directory first." >&2
+        return 1
+    fi
+    echo "${NEW_VOLUME_DIRECTORY}/.milvus_nodes"
+}
+
+# Initialize node state directory
+init_node_state() {
+    local node_state_dir=$(get_node_state_dir)
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+    mkdir -p "${node_state_dir}"
+}
+
+# Generate next node ID for a given type
+get_next_node_id() {
+    local node_type=$1
+    local node_state_dir=$(get_node_state_dir)
+    local max_id=0
+
+    shopt -s nullglob
+    for state_file in "${node_state_dir}"/${node_type}-*.state; do
+        if [[ -f "$state_file" ]]; then
+            local basename=$(basename "$state_file" .state)
+            local id=${basename#${node_type}-}
+            if [[ $id =~ ^[0-9]+$ ]] && [[ $id -gt $max_id ]]; then
+                max_id=$id
+            fi
+        fi
+    done
+    shopt -u nullglob
+
+    echo $((max_id + 1))
+}
+
+# Save node state
+save_node_state() {
+    local node_id=$1
+    local pid=$2
+    local node_type=$3
+    local metrics_port=$4
+    local status=$5
+    local log_file=$6
+    local env_file=$7
+    local extra_info=$8  # Additional info like proxy_port, etc.
+
+    local node_state_dir=$(get_node_state_dir)
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+
+    cat > "${node_state_dir}/${node_id}.state" <<EOF
+NODE_ID=${node_id}
+PID=${pid}
+NODE_TYPE=${node_type}
+METRICS_PORT=${metrics_port}
+STATUS=${status}
+LOG_FILE=${log_file}
+ENV_FILE=${env_file}
+EXTRA_INFO=${extra_info}
+CREATED_AT=$(date +%s)
+WORKSPACE=${NEW_VOLUME_DIRECTORY}
+EOF
+}
+
+# Load node state
+load_node_state() {
+    local node_id=$1
+    local node_state_dir=$(get_node_state_dir)
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+    local state_file="${node_state_dir}/${node_id}.state"
+
+    if [[ ! -f "$state_file" ]]; then
+        echo "Node ${node_id} not found in current workspace"
+        return 1
+    fi
+
+    source "$state_file"
+    return 0
+}
+
+# Update node state field
+update_node_state() {
+    local node_id=$1
+    local field=$2
+    local value=$3
+    local node_state_dir=$(get_node_state_dir)
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+    local state_file="${node_state_dir}/${node_id}.state"
+
+    if [[ ! -f "$state_file" ]]; then
+        echo "Node ${node_id} not found"
+        return 1
+    fi
+
+    # Use sed to update the field
+    sed -i "s/^${field}=.*/${field}=${value}/" "$state_file"
+}
+
+# Delete node state
+delete_node_state() {
+    local node_id=$1
+    local node_state_dir=$(get_node_state_dir)
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+    rm -f "${node_state_dir}/${node_id}.state"
+}
+
+# Find available port starting from base_port
+find_available_port() {
+    local base_port=$1
+    local port=$base_port
+
+    while lsof -ti:$port >/dev/null 2>&1; do
+        port=$((port + 1))
+    done
+
+    echo $port
+}
+
+# Start a node with given configuration
+# This is the unified function for starting any type of node
+start_node_internal() {
+    local node_type=$1
+    local node_id=$2
+    local env_file=$3
+    local extra_env_vars=$4  # Additional environment variables as string
+
+    if ! init_node_state; then
+        return 1
+    fi
+
+    # Determine base metrics port for each node type
+    local base_metrics_port
+    case "$node_type" in
+        querynode)
+            base_metrics_port=19094
+            ;;
+        datanode)
+            base_metrics_port=19095
+            ;;
+        streamingnode)
+            base_metrics_port=19097
+            ;;
+        proxy)
+            base_metrics_port=19093
+            ;;
+        mixcoord|mixture)
+            base_metrics_port=19092
+            ;;
+        standalone)
+            base_metrics_port=19091
+            ;;
+        cdc)
+            base_metrics_port=19096
+            ;;
+        *)
+            base_metrics_port=19090
+            ;;
+    esac
+
+    # Find available metrics port
+    local metrics_port=${METRICS_PORT:-$(find_available_port $base_metrics_port)}
+
+    LOG_PATH="${NEW_VOLUME_DIRECTORY}/milvus-logs/"
+    mkdir -p "${LOG_PATH}" || exit 1
+
+    local log_file="${LOG_PATH}/${node_id}.log"
+
+    pushd "$MILVUS_DEV_PATH" >/dev/null || exit 1
+    source "./scripts/setenv.sh"
+
+    # Set common environment variables
+    export LOG_LEVEL=${LOG_LEVEL:-debug}
+    export COMMON_SECURITY_AUTHORIZATIONENABLED=${COMMON_SECURITY_AUTHORIZATIONENABLED:-false}
+    export MALLOC_CONF=${MALLOC_CONF:-"prof:true,background_thread:true"}
+    export COMMON_SESSION_TTL=${COMMON_SESSION_TTL:-"3600"}
+
+    if [[ -n "${ASAN_ENABLED}" ]]; then
+        export LD_PRELOAD=""
+    fi
+
+    export MILVUS_STREAMING_SERVICE_ENABLED=${MILVUS_STREAMING_SERVICE_ENABLED:-1}
+
+    export MQ_TYPE=${MQ_TYPE:-"pulsar"}
+    if [[ "${USE_KAFKA}" ]]; then
+        export MQ_TYPE="kafka"
+    elif [[ -n "${USE_RMQ}" ]]; then
+        export MQ_TYPE="rocksmq"
+        export ROCKSMQ_PATH="${NEW_VOLUME_DIRECTORY}/rocksmq/rdb_data"
+    fi
+
+    # Load custom environment variables from file if provided
+    if [[ -n "$env_file" && -f "$env_file" ]]; then
+        echo "Loading environment variables from: $env_file"
+        source "$env_file"
+    fi
+
+    # Apply extra environment variables if provided
+    if [[ -n "$extra_env_vars" ]]; then
+        eval "export $extra_env_vars"
+    fi
+
+    # Set node-specific environment variables
+    export METRICS_PORT=$metrics_port
+
+    if [[ "$node_type" == "querynode" || "$node_type" == "streamingnode" ]]; then
+        export LOCALSTORAGE_PATH="${LOCALSTORAGE_PATH:-${NEW_VOLUME_DIRECTORY}/${node_id}/data/}"
+        mkdir -p "${LOCALSTORAGE_PATH}"
+    fi
+
+    echo "Starting ${node_type} as ${node_id}..."
+    echo "  Metrics Port: ${metrics_port}"
+    echo "  Log File: ${log_file}"
+
+    # Determine the run command based on node type
+    local run_cmd="./bin/milvus run ${node_type}"
+    if [[ "$node_type" == "mixcoord" || "$node_type" == "mixture" ]]; then
+        run_cmd="./bin/milvus run mixture -rootcoord -querycoord -datacoord -indexcoord"
+    fi
+
+    # Start the node in background
+    eval "${run_cmd} 1>>${log_file} 2>&1 &"
+    local pid=$!
+
+    # Capture extra info for special node types
+    local extra_info=""
+    if [[ "$node_type" == "proxy" && -n "${PROXY_PORT}" ]]; then
+        extra_info="PROXY_PORT=${PROXY_PORT}"
+    elif [[ "$node_type" == "standalone" && -n "${PROXY_PORT}" ]]; then
+        extra_info="PROXY_PORT=${PROXY_PORT}"
+    fi
+
+    # Save node state
+    save_node_state "$node_id" "$pid" "$node_type" "$metrics_port" "running" "$log_file" "${env_file:-}" "$extra_info"
+
+    echo "Node ${node_id} started with PID ${pid}"
+    echo "Monitor logs: tail -f ${log_file}"
+
+    popd >/dev/null || exit 1
+}
+
+# Add a new node
+add_node() {
+    local node_type=$1
+    local env_file=$2
+
+    if [[ -z "$node_type" ]]; then
+        echo "Error: Node type is required"
+        echo "Valid types: querynode, datanode, streamingnode, proxy, mixcoord, standalone, cdc"
+        return 1
+    fi
+
+    # Validate node type
+    case "$node_type" in
+        querynode|datanode|streamingnode|proxy|mixcoord|standalone|cdc)
+            ;;
+        *)
+            echo "Error: Invalid node type: $node_type"
+            echo "Valid types: querynode, datanode, streamingnode, proxy, mixcoord, standalone, cdc"
+            return 1
+            ;;
+    esac
+
+    setup_volume_directory
+
+    local node_id="${node_type}-$(get_next_node_id $node_type)"
+
+    start_node_internal "$node_type" "$node_id" "$env_file" ""
+}
+
+# Pause a node
+pause_node() {
+    local node_id=$1
+
+    if [[ -z "$node_id" ]]; then
+        echo "Error: Node ID is required"
+        return 1
+    fi
+
+    if ! load_node_state "$node_id"; then
+        return 1
+    fi
+
+    if [[ "$STATUS" != "running" ]]; then
+        echo "Error: Node ${node_id} is not running (current status: ${STATUS})"
+        return 1
+    fi
+
+    if ! ps -p $PID > /dev/null 2>&1; then
+        echo "Error: Process ${PID} not found for node ${node_id}"
+        update_node_state "$node_id" "STATUS" "stopped"
+        return 1
+    fi
+
+    echo "Pausing node ${node_id} (PID: ${PID})..."
+    kill -STOP $PID
+
+    if [[ $? -eq 0 ]]; then
+        update_node_state "$node_id" "STATUS" "paused"
+        echo "Node ${node_id} paused successfully"
+    else
+        echo "Failed to pause node ${node_id}"
+        return 1
+    fi
+}
+
+# Resume a node
+resume_node() {
+    local node_id=$1
+
+    if [[ -z "$node_id" ]]; then
+        echo "Error: Node ID is required"
+        return 1
+    fi
+
+    if ! load_node_state "$node_id"; then
+        return 1
+    fi
+
+    if [[ "$STATUS" != "paused" ]]; then
+        echo "Error: Node ${node_id} is not paused (current status: ${STATUS})"
+        return 1
+    fi
+
+    if ! ps -p $PID > /dev/null 2>&1; then
+        echo "Error: Process ${PID} not found for node ${node_id}"
+        update_node_state "$node_id" "STATUS" "stopped"
+        return 1
+    fi
+
+    echo "Resuming node ${node_id} (PID: ${PID})..."
+    kill -CONT $PID
+
+    if [[ $? -eq 0 ]]; then
+        update_node_state "$node_id" "STATUS" "running"
+        echo "Node ${node_id} resumed successfully"
+    else
+        echo "Failed to resume node ${node_id}"
+        return 1
+    fi
+}
+
+# Stop a node
+stop_node() {
+    local node_id=$1
+    local force=${2:-0}
+
+    if [[ -z "$node_id" ]]; then
+        echo "Error: Node ID is required"
+        return 1
+    fi
+
+    if ! load_node_state "$node_id"; then
+        return 1
+    fi
+
+    if ! ps -p $PID > /dev/null 2>&1; then
+        echo "Process ${PID} not found for node ${node_id}, removing state..."
+        delete_node_state "$node_id"
+        return 0
+    fi
+
+    if [[ "$force" == "1" ]]; then
+        echo "Force stopping node ${node_id} (PID: ${PID})..."
+        kill -9 $PID
+    else
+        echo "Gracefully stopping node ${node_id} (PID: ${PID})..."
+        kill $PID
+    fi
+
+    # Wait for process to exit
+    local count=0
+    while ps -p $PID > /dev/null 2>&1 && [[ $count -lt 30 ]]; do
+        sleep 1
+        count=$((count + 1))
+    done
+
+    if ps -p $PID > /dev/null 2>&1; then
+        echo "Process still running, force killing..."
+        kill -9 $PID
+    fi
+
+    delete_node_state "$node_id"
+    echo "Node ${node_id} stopped and removed"
+}
+
+# Stop all managed nodes
+stop_all_nodes() {
+    local force=${1:-0}
+    local node_state_dir=$(get_node_state_dir)
+
+    if [[ ! -d "$node_state_dir" ]]; then
+        echo "No managed nodes found in current workspace"
+        return 0
+    fi
+
+    echo "Stopping all managed nodes in current workspace..."
+    local count=0
+
+    shopt -s nullglob
+    for state_file in "${node_state_dir}"/*.state; do
+        if [[ -f "$state_file" ]]; then
+            source "$state_file"
+            count=$((count + 1))
+
+            if ps -p $PID > /dev/null 2>&1; then
+                if [[ "$force" == "1" ]]; then
+                    echo "Force stopping ${NODE_ID} (PID: ${PID})..."
+                    kill -9 $PID
+                else
+                    echo "Gracefully stopping ${NODE_ID} (PID: ${PID})..."
+                    kill $PID
+                fi
+            else
+                echo "Node ${NODE_ID} already stopped (PID: ${PID} not found)"
+            fi
+
+            rm -f "$state_file"
+        fi
+    done
+    shopt -u nullglob
+
+    if [[ $count -eq 0 ]]; then
+        echo "No managed nodes found"
+    else
+        echo "Stopped ${count} node(s)"
+    fi
+}
+
+# List all nodes
+list_nodes() {
+    local node_state_dir=$(get_node_state_dir)
+
+    if [[ ! -d "$node_state_dir" ]]; then
+        echo "No workspace initialized. Please start milvus first or use -u to reuse last workspace."
+        return 0
+    fi
+
+    echo "Managed Nodes in Workspace: ${NEW_VOLUME_DIRECTORY}"
+    echo "=============================================================================="
+    printf "%-20s %-15s %-10s %-12s %-10s\n" "NODE_ID" "TYPE" "STATUS" "METRICS_PORT" "PID"
+    echo "------------------------------------------------------------------------------"
+
+    local has_nodes=0
+    shopt -s nullglob
+    for state_file in "${node_state_dir}"/*.state; do
+        if [[ -f "$state_file" ]]; then
+            has_nodes=1
+            source "$state_file"
+
+            # Check if process is still running
+            local actual_status=$STATUS
+            if [[ "$STATUS" != "stopped" ]] && ! ps -p $PID > /dev/null 2>&1; then
+                actual_status="dead"
+                # Update state file
+                update_node_state "$NODE_ID" "STATUS" "dead"
+            fi
+
+            printf "%-20s %-15s %-10s %-12s %-10s\n" "$NODE_ID" "$NODE_TYPE" "$actual_status" "$METRICS_PORT" "$PID"
+        fi
+    done
+    shopt -u nullglob
+
+    if [[ $has_nodes -eq 0 ]]; then
+        echo "No managed nodes found"
+    fi
+    echo "=============================================================================="
+}
+
+# Show detailed node info
+show_node() {
+    local node_id=$1
+
+    if [[ -z "$node_id" ]]; then
+        echo "Error: Node ID is required"
+        return 1
+    fi
+
+    if ! load_node_state "$node_id"; then
+        return 1
+    fi
+
+    echo "Node Details: ${node_id}"
+    echo "=============================================================================="
+    echo "Node ID:       $NODE_ID"
+    echo "Node Type:     $NODE_TYPE"
+    echo "PID:           $PID"
+    echo "Status:        $STATUS"
+    echo "Metrics Port:  $METRICS_PORT"
+    echo "Log File:      $LOG_FILE"
+    if [[ -n "$ENV_FILE" ]]; then
+        echo "Env File:      $ENV_FILE"
+    fi
+    if [[ -n "$EXTRA_INFO" ]]; then
+        echo "Extra Info:    $EXTRA_INFO"
+    fi
+    echo "Workspace:     $WORKSPACE"
+    echo "Created At:    $(date -d @$CREATED_AT 2>/dev/null || date -r $CREATED_AT)"
+
+    # Check if process is still running
+    if ps -p $PID > /dev/null 2>&1; then
+        echo "Process:       Running"
+        echo ""
+        echo "Process Info:"
+        ps -p $PID -o pid,ppid,user,%cpu,%mem,vsz,rss,stat,start,time,cmd
+    else
+        echo "Process:       Not Running"
+    fi
+    echo "=============================================================================="
+
+    # Show last 20 lines of log
+    if [[ -f "$LOG_FILE" ]]; then
+        echo ""
+        echo "Last 20 log lines:"
+        echo "------------------------------------------------------------------------------"
+        tail -n 20 "$LOG_FILE"
+        echo "=============================================================================="
+    fi
+}
+
+# Handle all options including long options
+while [[ $# -gt 0 ]]; do
+    case $1 in
+    -f)
+        FORCED=1
+        shift
+        ;;
+    -m)
+        CLUSTERS=1
+        shift
+        ;;
+    -c)
+        CLUSTER=1
+        shift
+        ;;
+    -a)
+        ASAN_ENABLED=1
+        shift
+        ;;
+    -k)
+        USE_KAFKA=1
+        shift
+        ;;
+    -r)
+        USE_RMQ=1
+        shift
+        ;;
+    -u)
+        REUSE_LAST_VOLUME=1
+        shift
+        ;;
+    --streaming)
+        STREAMING=1
+        shift
+        ;;
+    -*)
+        echo "Unknown option: $1"
+        usage
+        ;;
+    *)
+        break
+        ;;
+    esac
+done
+
+# Function to find the last milvus volume directory
+find_last_milvus_volume() {
+    if [[ -z "$MILVUS_VOLUME_DIRECTORY" || ! -d "$MILVUS_VOLUME_DIRECTORY" ]]; then
+        echo "MILVUS_VOLUME_DIRECTORY is not set or not a directory" >&2
+        return 1
+    fi
+
+    LAST_VOLUME=$(find "$MILVUS_VOLUME_DIRECTORY" -mindepth 1 -maxdepth 1 -type d ! -name '.' ! -name '.milvus_nodes' -printf '%T@ %p\n' | sort -k1,1nr | head -n 1 | cut -d' ' -f2-)
+    if [ -n "$LAST_VOLUME" ]; then
+        echo "${LAST_VOLUME}"
+        return 0
+    else
+        echo "No volume found" >&2
+        return 1
+    fi
+}
+
+function generate_new_volume_directory() {
+    if [[ -z "${WORKSPACE_TAG}" ]]; then
+        WORKSPACE_TAG=$(date +%F-%H-%M-%S)
+        echo "WORKSPACE_TAG is not set, use current time as tag: ${WORKSPACE_TAG}"
+    fi
+    NEW_VOLUME_DIRECTORY="${MILVUS_VOLUME_DIRECTORY}/${WORKSPACE_TAG}"
+    mkdir -p "${NEW_VOLUME_DIRECTORY}" || exit 1
+    echo "NEW_VOLUME_DIRECTORY: ${NEW_VOLUME_DIRECTORY}"
+}
+
+function setup_volume_directory() {
+    if [[ -z "${NEW_VOLUME_DIRECTORY}" ]]; then
+        if [[ -n "${REUSE_LAST_VOLUME}" ]]; then
+            echo "Reusing last volume directory..."
+            NEW_VOLUME_DIRECTORY=$(find_last_milvus_volume)
+            if [[ $? -ne 0 || -z "${NEW_VOLUME_DIRECTORY}" ]]; then
+                echo "Failed to find last volume directory, creating new one..."
+                generate_new_volume_directory
+            else
+                echo "Reusing volume directory: ${NEW_VOLUME_DIRECTORY}"
+            fi
+        else
+            generate_new_volume_directory
+        fi
+    fi
+}
+
+function start_milvus_inf() {
+    setup_volume_directory
+    DOCKER_COMPOSE_FILE="docker-compose-pulsar.yml"
+    if [[ "${USE_KAFKA}" ]]; then
+        echo "Use Kafka..."
+        DOCKER_COMPOSE_FILE="docker-compose-kafka.yml"
+    fi
+    if [[ -n "${USE_RMQ}" ]]; then
+        echo "Use RMQ..."
+        DOCKER_COMPOSE_FILE="docker-compose-rmq.yml"
+    fi
+    pushd "$SCRIPT_PATH" || exit 1
+    MILVUS_INF_VOLUME_DIRECTORY="${NEW_VOLUME_DIRECTORY}/docker-volumes/" docker compose -f "${DOCKER_COMPOSE_FILE}" up -d
+    popd || exit 1
+}
+
+function stop_milvus_inf() {
+    pushd "$SCRIPT_PATH" || exit 1
+    DOCKER_COMPOSE_FILE="docker-compose-pulsar.yml"
+    if [[ "${USE_KAFKA}" ]]; then
+        echo "Use Kafka..."
+        DOCKER_COMPOSE_FILE="docker-compose-kafka.yml"
+    fi
+    if [[ "${USE_RMQ}" ]]; then
+        echo "Use RMQ..."
+        DOCKER_COMPOSE_FILE="docker-compose-rmq.yml"
+    fi
+    docker compose -f "${DOCKER_COMPOSE_FILE}" down
+    popd || exit 1
+}
+
+function start_milvus() {
+    setup_volume_directory
+
+    if [[ -n "${CLUSTERS}" ]]; then
+        # Multi-cluster mode (by-dev1 and by-dev2)
+        echo "Starting milvus multi-cluster mode..."
+
+        # Primary cluster (by-dev1)
+        ETCD_ROOTPATH=by-dev1 MINIO_rootPath=by-dev1 msgChannel_CHANNAMEPREFIX_CLUSTER=by-dev1 \
+        PROXY_PORT=19530 \
+        start_node_internal "standalone" "standalone-primary" "" ""
+
+        ETCD_ROOTPATH=by-dev1 MINIO_rootPath=by-dev1 msgChannel_CHANNAMEPREFIX_CLUSTER=by-dev1 \
+        PROXY_PORT=19530 \
+        start_node_internal "cdc" "cdc-primary" "" ""
+
+        # Standby cluster (by-dev2)
+        ETCD_ROOTPATH=by-dev2 MINIO_rootPath=by-dev2 msgChannel_CHANNAMEPREFIX_CLUSTER=by-dev2 \
+        PROXY_PORT=19531 PROXY_INTERNAL_PORT=19528 ROOTCOORD_PORT=53101 \
+        start_node_internal "standalone" "standalone-standby" "" ""
+
+        ETCD_ROOTPATH=by-dev2 MINIO_rootPath=by-dev2 msgChannel_CHANNAMEPREFIX_CLUSTER=by-dev2 \
+        PROXY_PORT=19531 PROXY_INTERNAL_PORT=19528 ROOTCOORD_PORT=53101 \
+        start_node_internal "cdc" "cdc-standby" "" ""
+
+    elif [[ -z "${CLUSTER}" ]]; then
+        # Standalone mode
+        echo "Starting milvus standalone mode..."
+        start_node_internal "standalone" "standalone-1" "" ""
+
+    else
+        # Cluster mode
+        echo "Starting milvus cluster mode..."
+
+        # Start mixcoord (coordinator nodes)
+        start_node_internal "mixcoord" "mixcoord-1" "" ""
+
+        # Start proxy
+        start_node_internal "proxy" "proxy-1" "" ""
+
+        # Start querynode
+        start_node_internal "querynode" "querynode-1" "" ""
+
+        # Start datanode
+        start_node_internal "datanode" "datanode-1" "" ""
+
+        # Start streamingnode if enabled
+        if [[ -n "${STREAMING}" ]]; then
+            start_node_internal "streamingnode" "streamingnode-1" "" ""
+        fi
+    fi
+
+    echo ""
+    echo "Milvus started. Use './milvus_control list_nodes' to see all running nodes."
+}
+
+function stop_milvus() {
+    setup_volume_directory
+
+    if [[ -n "${FORCED}" ]]; then
+        echo "Force stopping all Milvus nodes..."
+        stop_all_nodes 1
+    else
+        echo "Gracefully stopping all Milvus nodes..."
+        stop_all_nodes 0
+    fi
+}
+
+# Handle options
+case "$1" in
+start_milvus_inf)
+    start_milvus_inf
+    ;;
+stop_milvus_inf)
+    stop_milvus_inf
+    ;;
+start_milvus)
+    start_milvus
+    ;;
+stop_milvus)
+    stop_milvus
+    ;;
+start_milvus_full)
+    start_milvus_inf
+    start_milvus
+    ;;
+stop_milvus_full)
+    stop_milvus
+    stop_milvus_inf
+    ;;
+add_node)
+    add_node "$2" "$3"
+    ;;
+pause_node)
+    pause_node "$2"
+    ;;
+resume_node)
+    resume_node "$2"
+    ;;
+stop_node)
+    if [[ -n "${FORCED}" ]]; then
+        stop_node "$2" 1
+    else
+        stop_node "$2" 0
+    fi
+    ;;
+stop_all_nodes)
+    if [[ -n "${FORCED}" ]]; then
+        stop_all_nodes 1
+    else
+        stop_all_nodes 0
+    fi
+    ;;
+list_nodes)
+    setup_volume_directory
+    list_nodes
+    ;;
+show_node)
+    setup_volume_directory
+    show_node "$2"
+    ;;
+*)
+    usage
+    ;;
+esac
+
+# Check if no option was provided
+if [ $# -eq 0 ]; then
+    usage
+fi

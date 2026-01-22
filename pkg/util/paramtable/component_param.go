@@ -2538,13 +2538,14 @@ type queryCoordConfig struct {
 	StoppingBalanceAssignPolicy    ParamItem `refreshable:"true"`
 	ChannelExclusiveNodeFactor     ParamItem `refreshable:"true"`
 
-	CollectionObserverInterval         ParamItem `refreshable:"false"`
-	CheckExecutedFlagInterval          ParamItem `refreshable:"false"`
-	CollectionBalanceSegmentBatchSize  ParamItem `refreshable:"true"`
-	CollectionBalanceChannelBatchSize  ParamItem `refreshable:"true"`
-	UpdateCollectionLoadStatusInterval ParamItem `refreshable:"false"`
-	ClusterLevelLoadReplicaNumber      ParamItem `refreshable:"true"`
-	ClusterLevelLoadResourceGroups     ParamItem `refreshable:"true"`
+	CollectionObserverInterval              ParamItem `refreshable:"false"`
+	CheckExecutedFlagInterval               ParamItem `refreshable:"false"`
+	CollectionBalanceSegmentBatchSize       ParamItem `refreshable:"true"`
+	CollectionBalanceChannelBatchSize       ParamItem `refreshable:"true"`
+	UpdateCollectionLoadStatusInterval      ParamItem `refreshable:"false"`
+	ClusterLevelLoadReplicaNumber           ParamItem `refreshable:"true"`
+	ClusterLevelLoadResourceGroups          ParamItem `refreshable:"true"`
+	ClusterLevelLoadStreamingResourceGroups ParamItem `refreshable:"true"`
 
 	// balance batch size in one trigger
 	BalanceSegmentBatchSize            ParamItem `refreshable:"true"`
@@ -3152,6 +3153,15 @@ If this parameter is set false, Milvus simply searches the growing segments with
 		Export:       false,
 	}
 	p.ClusterLevelLoadResourceGroups.Init(base.mgr)
+
+	p.ClusterLevelLoadStreamingResourceGroups = ParamItem{
+		Key:          "queryCoord.clusterLevelLoadStreamingResourceGroups",
+		Version:      "2.6.0",
+		DefaultValue: "",
+		Doc:          "streaming resource group names for load collection, replicas will use streaming nodes from these resource groups, separate with commas",
+		Export:       false,
+	}
+	p.ClusterLevelLoadStreamingResourceGroups.Init(base.mgr)
 
 	p.AutoBalanceInterval = ParamItem{
 		Key:          "queryCoord.autoBalanceInterval",
