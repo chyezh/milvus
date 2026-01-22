@@ -87,6 +87,7 @@ func adaptImplsToRWWAL(
 	wal.writeMetrics.SetLogger(wal.roWALAdaptorImpl.Logger())
 	interceptorParam.WAL.Set(wal)
 	wal.WALRateLimitComponent.RegisterMemoryObserver()
+	wal.WALRateLimitComponent.RegisterAppendRateObserver(wal.appendRateCounter)
 	return wal
 }
 

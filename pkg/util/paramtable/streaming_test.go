@@ -70,6 +70,24 @@ func TestStreamingParam(t *testing.T) {
 	assert.Equal(t, 0.95, params.StreamingCfg.WALRateLimitNodeMemoryRejectThreshold.GetAsFloat())
 	assert.Equal(t, 0.85, params.StreamingCfg.WALRateLimitNodeMemoryRecoverThreshold.GetAsFloat())
 
+	// append rate limit
+	assert.Equal(t, false, params.StreamingCfg.WALRateLimitAppendRateEnabled.GetAsBool())
+	assert.Equal(t, int64(64*1024*1024), params.StreamingCfg.WALRateLimitAppendRateSlowdownThreshold.GetAsSize())
+	assert.Equal(t, int64(60*1024*1024), params.StreamingCfg.WALRateLimitAppendRateRecoverThreshold.GetAsSize())
+
+	// append rate adaptive rate limit
+	assert.Equal(t, 0*time.Second, params.StreamingCfg.WALRateLimitAppendRateAdaptiveRateLimit.SlowdownStartupDelayInterval.GetAsDurationByParse())
+	assert.Equal(t, int64(64*1024*1024), params.StreamingCfg.WALRateLimitAppendRateAdaptiveRateLimit.SlowdownHWM.GetAsSize())
+	assert.Equal(t, int64(4*1024*1024), params.StreamingCfg.WALRateLimitAppendRateAdaptiveRateLimit.SlowdownLWM.GetAsSize())
+	assert.Equal(t, 10*time.Second, params.StreamingCfg.WALRateLimitAppendRateAdaptiveRateLimit.SlowdownDecreaseInterval.GetAsDurationByParse())
+	assert.Equal(t, 0.9, params.StreamingCfg.WALRateLimitAppendRateAdaptiveRateLimit.SlowdownDecreaseRatio.GetAsFloat())
+	assert.Equal(t, 0*time.Second, params.StreamingCfg.WALRateLimitAppendRateAdaptiveRateLimit.SlowdownRejectDelayInterval.GetAsDurationByParse())
+	assert.Equal(t, int64(64*1024*1024), params.StreamingCfg.WALRateLimitAppendRateAdaptiveRateLimit.RecoveryHWM.GetAsSize())
+	assert.Equal(t, int64(8*1024*1024), params.StreamingCfg.WALRateLimitAppendRateAdaptiveRateLimit.RecoveryLWM.GetAsSize())
+	assert.Equal(t, 10*time.Second, params.StreamingCfg.WALRateLimitAppendRateAdaptiveRateLimit.RecoveryNormalDelayInterval.GetAsDurationByParse())
+	assert.Equal(t, int64(512*1024), params.StreamingCfg.WALRateLimitAppendRateAdaptiveRateLimit.RecoveryIncremental.GetAsSize())
+	assert.Equal(t, 1*time.Second, params.StreamingCfg.WALRateLimitAppendRateAdaptiveRateLimit.RecoveryIncreaseInterval.GetAsDurationByParse())
+
 	assert.Equal(t, 0*time.Second, params.StreamingCfg.WALRateLimitNodeMemoryAdaptiveRateLimit.SlowdownStartupDelayInterval.GetAsDurationByParse())
 	assert.Equal(t, int64(32*1024*1024), params.StreamingCfg.WALRateLimitRecoveryStorageAdaptiveRateLimit.SlowdownHWM.GetAsSize())
 	assert.Equal(t, int64(2*1024*1024), params.StreamingCfg.WALRateLimitRecoveryStorageAdaptiveRateLimit.SlowdownLWM.GetAsSize())
@@ -130,6 +148,9 @@ func TestStreamingParam(t *testing.T) {
 	params.Save(params.StreamingCfg.FlushGrowingSegmentBytesHwmThreshold.Key, "0.25")
 	params.Save(params.StreamingCfg.FlushGrowingSegmentBytesLwmThreshold.Key, "0.15")
 	params.Save(params.StreamingCfg.WALRateLimitDefaultBurst.Key, "10485760") // 10MB
+	params.Save(params.StreamingCfg.WALRateLimitAppendRateEnabled.Key, "true")
+	params.Save(params.StreamingCfg.WALRateLimitAppendRateSlowdownThreshold.Key, "128m")
+	params.Save(params.StreamingCfg.WALRateLimitAppendRateRecoverThreshold.Key, "100m")
 	assert.Equal(t, 50*time.Second, params.StreamingCfg.WALBalancerTriggerInterval.GetAsDurationByParse())
 	assert.Equal(t, 50*time.Second, params.StreamingCfg.WALBalancerBackoffInitialInterval.GetAsDurationByParse())
 	assert.Equal(t, 3.5, params.StreamingCfg.WALBalancerBackoffMultiplier.GetAsFloat())
@@ -154,4 +175,7 @@ func TestStreamingParam(t *testing.T) {
 	assert.Equal(t, float64(0.25), params.StreamingCfg.FlushGrowingSegmentBytesHwmThreshold.GetAsFloat())
 	assert.Equal(t, float64(0.15), params.StreamingCfg.FlushGrowingSegmentBytesLwmThreshold.GetAsFloat())
 	assert.Equal(t, 10*1024*1024, params.StreamingCfg.WALRateLimitDefaultBurst.GetAsInt())
+	assert.Equal(t, true, params.StreamingCfg.WALRateLimitAppendRateEnabled.GetAsBool())
+	assert.Equal(t, int64(128*1024*1024), params.StreamingCfg.WALRateLimitAppendRateSlowdownThreshold.GetAsSize())
+	assert.Equal(t, int64(100*1024*1024), params.StreamingCfg.WALRateLimitAppendRateRecoverThreshold.GetAsSize())
 }

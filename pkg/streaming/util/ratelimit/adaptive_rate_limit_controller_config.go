@@ -55,6 +55,7 @@ type RecoveryConfig struct {
 type AdaptiveRateLimitControllerConfigFetcher interface {
 	FetchRecoveryConfig() RecoveryConfig
 	FetchSlowdownConfig() SlowdownConfig
+	Close()
 }
 
 type DefaultAdaptiveRateLimitControllerConfigFetcher struct{}
@@ -66,3 +67,5 @@ func (f DefaultAdaptiveRateLimitControllerConfigFetcher) FetchRecoveryConfig() R
 func (f DefaultAdaptiveRateLimitControllerConfigFetcher) FetchSlowdownConfig() SlowdownConfig {
 	return defaultSlowdownConfig
 }
+
+func (f DefaultAdaptiveRateLimitControllerConfigFetcher) Close() {}

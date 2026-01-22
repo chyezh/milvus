@@ -504,6 +504,55 @@ var (
 		Name: "rate_limit_state",
 		Help: "Current rate limit state of wal",
 	}, WALChannelLabelName, WALRateLimitStateLabelName)
+
+	// Rate Limit Controller Config Metrics - Recovery
+	WALRateLimitConfigRecoveryHWM = newWALGaugeVec(prometheus.GaugeOpts{
+		Name: "rate_limit_config_recovery_hwm_bytes",
+		Help: "High watermark bytes for rate limit recovery config",
+	}, WALChannelLabelName, WALRateLimitControllerSourceLabelName)
+
+	WALRateLimitConfigRecoveryLWM = newWALGaugeVec(prometheus.GaugeOpts{
+		Name: "rate_limit_config_recovery_lwm_bytes",
+		Help: "Low watermark bytes for rate limit recovery config",
+	}, WALChannelLabelName, WALRateLimitControllerSourceLabelName)
+
+	// Rate Limit Controller Config Metrics - Slowdown
+	WALRateLimitConfigSlowdownHWM = newWALGaugeVec(prometheus.GaugeOpts{
+		Name: "rate_limit_config_slowdown_hwm_bytes",
+		Help: "High watermark bytes for rate limit slowdown config",
+	}, WALChannelLabelName, WALRateLimitControllerSourceLabelName)
+
+	WALRateLimitConfigSlowdownLWM = newWALGaugeVec(prometheus.GaugeOpts{
+		Name: "rate_limit_config_slowdown_lwm_bytes",
+		Help: "Low watermark bytes for rate limit slowdown config",
+	}, WALChannelLabelName, WALRateLimitControllerSourceLabelName)
+
+	// Rate Limit Threshold Config Metrics - Node Memory
+	WALRateLimitNodeMemorySlowdownThreshold = newWALGaugeVec(prometheus.GaugeOpts{
+		Name: "rate_limit_node_memory_slowdown_threshold",
+		Help: "Memory usage ratio threshold to trigger slowdown",
+	}, WALChannelLabelName)
+
+	WALRateLimitNodeMemoryRejectThreshold = newWALGaugeVec(prometheus.GaugeOpts{
+		Name: "rate_limit_node_memory_reject_threshold",
+		Help: "Memory usage ratio threshold to trigger reject",
+	}, WALChannelLabelName)
+
+	WALRateLimitNodeMemoryRecoverThreshold = newWALGaugeVec(prometheus.GaugeOpts{
+		Name: "rate_limit_node_memory_recover_threshold",
+		Help: "Memory usage ratio threshold to trigger recovery",
+	}, WALChannelLabelName)
+
+	// Rate Limit Threshold Config Metrics - Append Rate
+	WALRateLimitAppendRateSlowdownThreshold = newWALGaugeVec(prometheus.GaugeOpts{
+		Name: "rate_limit_append_rate_slowdown_threshold_bytes",
+		Help: "Append rate bytes threshold to trigger slowdown",
+	}, WALChannelLabelName)
+
+	WALRateLimitAppendRateRecoverThreshold = newWALGaugeVec(prometheus.GaugeOpts{
+		Name: "rate_limit_append_rate_recover_threshold_bytes",
+		Help: "Append rate bytes threshold to trigger recovery",
+	}, WALChannelLabelName)
 )
 
 // RegisterStreamingServiceClient registers streaming service client metrics
@@ -613,6 +662,15 @@ func registerWAL(registry *prometheus.Registry) {
 	registry.MustRegister(WALFlusherEmptyTimeTickFilteredTotal)
 	registry.MustRegister(WALRateLimitControllerState)
 	registry.MustRegister(WALRateLimitState)
+	registry.MustRegister(WALRateLimitConfigRecoveryHWM)
+	registry.MustRegister(WALRateLimitConfigRecoveryLWM)
+	registry.MustRegister(WALRateLimitConfigSlowdownHWM)
+	registry.MustRegister(WALRateLimitConfigSlowdownLWM)
+	registry.MustRegister(WALRateLimitNodeMemorySlowdownThreshold)
+	registry.MustRegister(WALRateLimitNodeMemoryRejectThreshold)
+	registry.MustRegister(WALRateLimitNodeMemoryRecoverThreshold)
+	registry.MustRegister(WALRateLimitAppendRateSlowdownThreshold)
+	registry.MustRegister(WALRateLimitAppendRateRecoverThreshold)
 }
 
 func newStreamingCoordGaugeVec(opts prometheus.GaugeOpts, extra ...string) *prometheus.GaugeVec {

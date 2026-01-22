@@ -165,6 +165,7 @@ func (c *AdaptiveRateLimitController) EnterRecoveryMode() {
 func (c *AdaptiveRateLimitController) Close() {
 	close(c.stopCh)
 	c.wg.Wait()
+	c.configFetcher.Close()
 }
 
 // backgroundLoop runs in a goroutine and handles all mode transitions and ticker logic.

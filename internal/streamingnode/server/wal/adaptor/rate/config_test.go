@@ -22,6 +22,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
+	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -29,8 +30,9 @@ func TestAdaptiveRateLimitControllerConfigFetcher(t *testing.T) {
 	paramtable.Init()
 	params := paramtable.Get()
 
+	channel := types.PChannelInfo{Name: "test-channel"}
 	sourceName := SourceNodeMemory
-	fetcher := newAdaptiveRateLimitControllerConfigFetcher(sourceName)
+	fetcher := newAdaptiveRateLimitControllerConfigFetcher(channel, sourceName)
 
 	t.Run("test normal fetch", func(t *testing.T) {
 		params.Save(params.StreamingCfg.WALRateLimitNodeMemoryAdaptiveRateLimit.RecoveryHWM.Key, "100mb")

@@ -82,6 +82,10 @@ type streamingConfig struct {
 	WALRateLimitNodeMemoryAdaptiveRateLimit      AdaptiveRateLimitConfig
 	WALRateLimitFlusherAdaptiveRateLimit         AdaptiveRateLimitConfig
 	WALRateLimitRecoveryStorageAdaptiveRateLimit AdaptiveRateLimitConfig
+	WALRateLimitAppendRateEnabled                ParamItem `refreshable:"true"`
+	WALRateLimitAppendRateSlowdownThreshold      ParamItem `refreshable:"true"`
+	WALRateLimitAppendRateRecoverThreshold       ParamItem `refreshable:"true"`
+	WALRateLimitAppendRateAdaptiveRateLimit      AdaptiveRateLimitConfig
 
 	// Empty TimeTick Filtering configration
 	DelegatorEmptyTimeTickMaxFilterInterval ParamItem `refreshable:"true"`
@@ -532,6 +536,48 @@ If the schema is older than (the channel checkpoint - tolerance), it will be rem
 		RecoveryIncremental:          "5mb",
 		RecoveryIncreaseInterval:     "1s",
 		Export:                       false,
+	})
+
+	p.WALRateLimitAppendRateEnabled = ParamItem{
+		Key:          "streaming.walRateLimit.appendRate.enabled",
+		Version:      "2.6.10",
+		Doc:          "Whether to enable the append rate limiter, false by default. When enabled, the rate limiter will throttle writes based on append rate thresholds.",
+		DefaultValue: "false",
+		Export:       true,
+	}
+	p.WALRateLimitAppendRateEnabled.Init(base.mgr)
+
+	p.WALRateLimitAppendRateSlowdownThreshold = ParamItem{
+		Key:          "streaming.walRateLimit.appendRate.slowdownThreshold",
+		Version:      "2.6.10",
+		Doc:          "When the append rate (bytes/sec) is greater than this threshold, the append rate limiter will enter slowdown mode, 64MB/s by default.",
+		DefaultValue: "64m",
+		Export:       true,
+	}
+	p.WALRateLimitAppendRateSlowdownThreshold.Init(base.mgr)
+
+	p.WALRateLimitAppendRateRecoverThreshold = ParamItem{
+		Key:          "streaming.walRateLimit.appendRate.recoverThreshold",
+		Version:      "2.6.10",
+		Doc:          "When the append rate (bytes/sec) is less than this threshold, the append rate limiter will enter recovery mode, 60MB/s by default.",
+		DefaultValue: "60m",
+		Export:       true,
+	}
+	p.WALRateLimitAppendRateRecoverThreshold.Init(base.mgr)
+
+	p.WALRateLimitAppendRateAdaptiveRateLimit.init(base, "streaming.walRateLimit.appendRate.adaptiveRateLimit", AdaptiveRateLimitConfigDefaultValue{
+		SlowdownStartupDelayInterval: "0",
+		SlowdownHWM:                  "64mb",
+		SlowdownLWM:                  "4mb",
+		SlowdownDecreaseInterval:     "10s",
+		SlowdownDecreaseRatio:        "0.9",
+		SlowdownRejectDelayInterval:  "0",
+		RecoveryHWM:                  "64mb",
+		RecoveryLWM:                  "8mb",
+		RecoveryNormalDelayInterval:  "10s",
+		RecoveryIncremental:          "512kb",
+		RecoveryIncreaseInterval:     "1s",
+		Export:                       true,
 	})
 
 	p.DelegatorEmptyTimeTickMaxFilterInterval = ParamItem{

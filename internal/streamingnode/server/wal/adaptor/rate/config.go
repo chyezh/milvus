@@ -22,13 +22,16 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/ratelimit"
+	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
 var _ ratelimit.AdaptiveRateLimitControllerConfigFetcher = (*adaptiveRateLimitControllerConfigFetcher)(nil)
 
 type adaptiveRateLimitControllerConfigFetcher struct {
+	channel    types.PChannelInfo
 	sourceName string
 	config     *paramtable.AdaptiveRateLimitConfig
 
@@ -70,7 +73,18 @@ func (f *adaptiveRateLimitControllerConfigFetcher) FetchRecoveryConfig() ratelim
 			zap.Duration("increaseDelayInterval", newConfig.IncreaseInterval))
 	}
 	f.lastRecovery = newConfig
+	f.reportRecoveryConfigMetrics(newConfig)
 	return newConfig
+}
+
+// reportRecoveryConfigMetrics reports the recovery config metrics.
+func (f *adaptiveRateLimitControllerConfigFetcher) reportRecoveryConfigMetrics(config ratelimit.RecoveryConfig) {
+	metrics.WALRateLimitConfigRecoveryHWM.WithLabelValues(
+		paramtable.GetStringNodeID(), f.channel.Name, f.sourceName,
+	).Set(float64(config.HWM))
+	metrics.WALRateLimitConfigRecoveryLWM.WithLabelValues(
+		paramtable.GetStringNodeID(), f.channel.Name, f.sourceName,
+	).Set(float64(config.LWM))
 }
 
 func (f *adaptiveRateLimitControllerConfigFetcher) FetchSlowdownConfig() ratelimit.SlowdownConfig {
@@ -108,10 +122,37 @@ func (f *adaptiveRateLimitControllerConfigFetcher) FetchSlowdownConfig() ratelim
 			zap.Float64("decreaseRatio", newConfig.DecreaseRatio),
 			zap.Duration("rejectDelayInterval", newConfig.RejectDelayInterval))
 	}
+	f.reportSlowdownConfigMetrics(newConfig)
 	return newConfig
 }
 
-func newAdaptiveRateLimitControllerConfigFetcher(sourceName string) ratelimit.AdaptiveRateLimitControllerConfigFetcher {
+// reportSlowdownConfigMetrics reports the slowdown config metrics.
+func (f *adaptiveRateLimitControllerConfigFetcher) reportSlowdownConfigMetrics(config ratelimit.SlowdownConfig) {
+	metrics.WALRateLimitConfigSlowdownHWM.WithLabelValues(
+		paramtable.GetStringNodeID(), f.channel.Name, f.sourceName,
+	).Set(float64(config.HWM))
+	metrics.WALRateLimitConfigSlowdownLWM.WithLabelValues(
+		paramtable.GetStringNodeID(), f.channel.Name, f.sourceName,
+	).Set(float64(config.LWM))
+}
+
+// Close closes the adaptive rate limit controller config fetcher.
+func (f *adaptiveRateLimitControllerConfigFetcher) Close() {
+	metrics.WALRateLimitConfigRecoveryHWM.DeleteLabelValues(
+		paramtable.GetStringNodeID(), f.channel.Name, f.sourceName,
+	)
+	metrics.WALRateLimitConfigRecoveryLWM.DeleteLabelValues(
+		paramtable.GetStringNodeID(), f.channel.Name, f.sourceName,
+	)
+	metrics.WALRateLimitConfigSlowdownHWM.DeleteLabelValues(
+		paramtable.GetStringNodeID(), f.channel.Name, f.sourceName,
+	)
+	metrics.WALRateLimitConfigSlowdownLWM.DeleteLabelValues(
+		paramtable.GetStringNodeID(), f.channel.Name, f.sourceName,
+	)
+}
+
+func newAdaptiveRateLimitControllerConfigFetcher(channel types.PChannelInfo, sourceName string) ratelimit.AdaptiveRateLimitControllerConfigFetcher {
 	var config *paramtable.AdaptiveRateLimitConfig
 	switch sourceName {
 	case SourceNodeMemory:
@@ -120,11 +161,14 @@ func newAdaptiveRateLimitControllerConfigFetcher(sourceName string) ratelimit.Ad
 		config = &paramtable.Get().StreamingCfg.WALRateLimitFlusherAdaptiveRateLimit
 	case SourceRecoveryStorage:
 		config = &paramtable.Get().StreamingCfg.WALRateLimitRecoveryStorageAdaptiveRateLimit
+	case SourceAppendRate:
+		config = &paramtable.Get().StreamingCfg.WALRateLimitAppendRateAdaptiveRateLimit
 	default:
 		panic("unknown source name")
 	}
 	defaultFetcher := ratelimit.DefaultAdaptiveRateLimitControllerConfigFetcher{}
 	f := &adaptiveRateLimitControllerConfigFetcher{
+		channel:      channel,
 		sourceName:   sourceName,
 		config:       config,
 		lastRecovery: defaultFetcher.FetchRecoveryConfig(),

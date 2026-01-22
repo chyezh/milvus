@@ -121,5 +121,9 @@ WARP.md
 
 # Gocache
 **/.gocache/
-claude.md
 docs/plans/
+
+# Claude
+claude.md
+CLAUDE.md
+.claude/
