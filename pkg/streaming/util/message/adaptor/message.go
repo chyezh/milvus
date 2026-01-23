@@ -1,6 +1,8 @@
 package adaptor
 
 import (
+	"fmt"
+
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
@@ -93,6 +95,20 @@ func parseTxnMsg(msg message.ImmutableMessage) ([]msgstream.TsMsg, error) {
 
 	tsMsgs := make([]msgstream.TsMsg, 0, txnMsg.Size())
 	err := txnMsg.RangeOver(func(im message.ImmutableMessage) error {
+		// Special handling for Upsert messages in Txn
+		// When upsert data is too large, proxy splits it into multiple upsert messages
+		// and wraps them in a Txn message
+		if im.MessageType() == message.MessageTypeUpsert {
+			// Parse upsert into delete + insert messages
+			upsertTsMsgs, err := parseUpsertMsg(im)
+			if err != nil {
+				return err
+			}
+			tsMsgs = append(tsMsgs, upsertTsMsgs...)
+			return nil
+		}
+
+		// For other message types, parse as single message
 		var tsMsg msgstream.TsMsg
 		tsMsg, err := parseSingleMsg(im)
 		if err != nil {
@@ -149,12 +165,23 @@ func parseUpsertMsg(msg message.ImmutableMessage) ([]msgstream.TsMsg, error) {
 		deleteMsg.SetTs(timetick)
 		deleteMsg.SetPosition(msgPosition)
 
-		// Set timestamps for all delete operations
-		timestamps := make([]uint64, len(deleteMsg.Timestamps))
+		// Set timestamps for delete operations
+		// NumRows should already be set in the DeleteRequest from proxy
+		numRows := int(deleteReq.GetNumRows())
+		if numRows == 0 {
+			// Fallback: calculate from primary keys if not set
+			if deleteReq.GetPrimaryKeys().GetIntId() != nil {
+				numRows = len(deleteReq.GetPrimaryKeys().GetIntId().GetData())
+			} else if deleteReq.GetPrimaryKeys().GetStrId() != nil {
+				numRows = len(deleteReq.GetPrimaryKeys().GetStrId().GetData())
+			}
+		}
+		timestamps := make([]uint64, numRows)
 		for i := range timestamps {
 			timestamps[i] = timetick
 		}
 		deleteMsg.Timestamps = timestamps
+		deleteMsg.NumRows = int64(numRows)
 		deleteMsg.ShardName = vchannel
 
 		tsMsgs = append(tsMsgs, deleteMsg)
@@ -169,7 +196,7 @@ func parseUpsertMsg(msg message.ImmutableMessage) ([]msgstream.TsMsg, error) {
 		insertMsg.SetTs(timetick)
 		insertMsg.SetPosition(msgPosition)
 
-		// Find the partition assignment for insert
+		// Find the partition assignment for insert from header
 		var assignment *message.PartitionSegmentAssignment
 		for _, p := range header.Partitions {
 			if p.GetPartitionId() == insertMsg.GetPartitionID() {
@@ -177,12 +204,22 @@ func parseUpsertMsg(msg message.ImmutableMessage) ([]msgstream.TsMsg, error) {
 				break
 			}
 		}
-		if assignment == nil || assignment.GetSegmentAssignment().GetSegmentId() == 0 {
-			return nil, errors.New("partition assignment not found or segment id is 0")
+
+		// Segment assignment must exist after going through shard interceptor
+		if assignment == nil {
+			return nil, errors.Errorf("partition assignment not found for partition %d in upsert message", insertMsg.GetPartitionID())
+		}
+		if assignment.GetSegmentAssignment() == nil {
+			return nil, errors.Errorf("segment assignment not found for partition %d in upsert message", insertMsg.GetPartitionID())
+		}
+		if assignment.GetSegmentAssignment().GetSegmentId() == 0 {
+			return nil, errors.Errorf("segment id is 0 for partition %d in upsert message", insertMsg.GetPartitionID())
 		}
 
-		// Set insert message fields from header
+		// Set segment ID from header (added by shard interceptor)
 		insertMsg.SegmentID = assignment.GetSegmentAssignment().GetSegmentId()
+
+		// Set insert message fields
 		timestamps := make([]uint64, insertMsg.GetNumRows())
 		for i := range timestamps {
 			timestamps[i] = timetick
@@ -250,7 +287,7 @@ func fromMessageToTsMsgV2(msg message.ImmutableMessage) (msgstream.TsMsg, error)
 	case message.MessageTypeAlterWAL:
 		tsMsg, err = NewAlterWALMessageBody(msg)
 	default:
-		panic("unsupported message type")
+		panic(fmt.Sprintf("unsupported message type: %v", msg.MessageType()))
 	}
 	if err != nil {
 		return nil, err

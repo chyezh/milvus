@@ -278,6 +278,9 @@ func (impl *shardInterceptor) handleUpsertMessage(ctx context.Context, msg messa
 		impl.shardManager.ApplyDelete(message.MustAsMutableDeleteMessageV1(tempDeleteMsg))
 	}
 
+	// Overwrite header with segment assignment
+	upsertMsg.OverwriteHeader(header)
+
 	return appendOp(ctx, msg)
 }
 
