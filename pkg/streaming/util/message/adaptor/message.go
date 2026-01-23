@@ -34,6 +34,19 @@ func NewMsgPackFromMessage(msgs ...message.ImmutableMessage) (*msgstream.MsgPack
 			continue
 		}
 
+		// Parse an upsert message into delete + insert messages.
+		// Upsert semantically equals to a Txn(Delete, Insert), but packed in a single message for efficiency.
+		// We unpack it here so downstream components (DataNode) only see Delete and Insert messages.
+		if msg.MessageType() == message.MessageTypeUpsert {
+			tsMsgs, err := parseUpsertMsg(msg)
+			if err != nil {
+				finalErr = errors.CombineErrors(finalErr, errors.Wrapf(err, "Failed to convert upsert message to msgpack, %v", msg.MessageID()))
+				continue
+			}
+			allTsMsgs = append(allTsMsgs, tsMsgs...)
+			continue
+		}
+
 		tsMsg, err := parseSingleMsg(msg)
 		if err != nil {
 			finalErr = errors.CombineErrors(finalErr, errors.Wrapf(err, "Failed to convert message to msgpack, %v", msg.MessageID()))
@@ -91,6 +104,96 @@ func parseTxnMsg(msg message.ImmutableMessage) ([]msgstream.TsMsg, error) {
 	if err != nil {
 		return nil, err
 	}
+	return tsMsgs, nil
+}
+
+// parseUpsertMsg converts an upsert message to delete + insert ts message list.
+// Upsert message is unpacked into Delete followed by Insert to maintain semantic consistency
+// with the original Txn-wrapped Delete+Insert approach.
+func parseUpsertMsg(msg message.ImmutableMessage) ([]msgstream.TsMsg, error) {
+	// Upsert is V2 message, convert to ImmutableUpsertMessageV2
+	upsertMsg, err := message.AsImmutableUpsertMessageV2(msg)
+	if err != nil {
+		return nil, errors.Wrap(err, "Failed to convert message to upsert message")
+	}
+
+	// Get the message body which contains InsertRequest and DeleteRequest
+	body, err := upsertMsg.Body()
+	if err != nil {
+		return nil, errors.Wrap(err, "Failed to get upsert message body")
+	}
+
+	header := upsertMsg.Header()
+	timetick := upsertMsg.TimeTick()
+	vchannel := upsertMsg.VChannel()
+
+	// Create msgPosition for both delete and insert messages
+	msgPosition := &msgpb.MsgPosition{
+		ChannelName: vchannel,
+		MsgID:       MustGetMQWrapperIDFromMessage(msg.LastConfirmedMessageID()).Serialize(),
+		MsgGroup:    "",
+		Timestamp:   timetick,
+		WALName:     commonpb.WALName(msg.WALName()),
+	}
+
+	// Unpack into Delete + Insert messages
+	// Order: Delete first, then Insert (same as original Txn behavior)
+	tsMsgs := make([]msgstream.TsMsg, 0, 2)
+
+	// Parse delete part
+	if body.GetDeleteRequest() != nil {
+		deleteReq := body.GetDeleteRequest()
+		deleteMsg := &msgstream.DeleteMsg{
+			DeleteRequest: deleteReq,
+		}
+		deleteMsg.SetTs(timetick)
+		deleteMsg.SetPosition(msgPosition)
+
+		// Set timestamps for all delete operations
+		timestamps := make([]uint64, len(deleteMsg.Timestamps))
+		for i := range timestamps {
+			timestamps[i] = timetick
+		}
+		deleteMsg.Timestamps = timestamps
+		deleteMsg.ShardName = vchannel
+
+		tsMsgs = append(tsMsgs, deleteMsg)
+	}
+
+	// Parse insert part
+	if body.GetInsertRequest() != nil {
+		insertReq := body.GetInsertRequest()
+		insertMsg := &msgstream.InsertMsg{
+			InsertRequest: insertReq,
+		}
+		insertMsg.SetTs(timetick)
+		insertMsg.SetPosition(msgPosition)
+
+		// Find the partition assignment for insert
+		var assignment *message.PartitionSegmentAssignment
+		for _, p := range header.Partitions {
+			if p.GetPartitionId() == insertMsg.GetPartitionID() {
+				assignment = p
+				break
+			}
+		}
+		if assignment == nil || assignment.GetSegmentAssignment().GetSegmentId() == 0 {
+			return nil, errors.New("partition assignment not found or segment id is 0")
+		}
+
+		// Set insert message fields from header
+		insertMsg.SegmentID = assignment.GetSegmentAssignment().GetSegmentId()
+		timestamps := make([]uint64, insertMsg.GetNumRows())
+		for i := range timestamps {
+			timestamps[i] = timetick
+		}
+		insertMsg.Timestamps = timestamps
+		insertMsg.Base.Timestamp = timetick
+		insertMsg.ShardName = vchannel
+
+		tsMsgs = append(tsMsgs, insertMsg)
+	}
+
 	return tsMsgs, nil
 }
 
@@ -181,6 +284,12 @@ func recoverMessageFromHeader(tsMsg msgstream.TsMsg, msg message.ImmutableMessag
 			return nil, errors.Wrap(err, "Failed to convert message to delete message")
 		}
 		return recoverDeleteMsgFromHeader(tsMsg.(*msgstream.DeleteMsg), deleteMessage)
+	case message.MessageTypeUpsert:
+		upsertMessage, err := message.AsImmutableUpsertMessageV2(msg)
+		if err != nil {
+			return nil, errors.Wrap(err, "Failed to convert message to upsert message")
+		}
+		return recoverUpsertMsgFromHeader(tsMsg.(*msgstream.UpsertMsg), upsertMessage)
 	case message.MessageTypeImport:
 		importMessage, err := message.AsImmutableImportMessageV1(msg)
 		if err != nil {
@@ -244,4 +353,64 @@ func recoverDeleteMsgFromHeader(deleteMsg *msgstream.DeleteMsg, msg message.Immu
 func recoverImportMsgFromHeader(importMsg *msgstream.ImportMsg, _ *message.ImportMessageHeader, timetick uint64) (msgstream.TsMsg, error) {
 	importMsg.Base.Timestamp = timetick
 	return importMsg, nil
+}
+
+// recoverUpsertMsgFromHeader recovers upsert message from header.
+// Upsert contains both insert and delete operations, need to recover both parts.
+func recoverUpsertMsgFromHeader(upsertMsg *msgstream.UpsertMsg, msg message.ImmutableUpsertMessageV2) (msgstream.TsMsg, error) {
+	header := msg.Header()
+	timetick := msg.TimeTick()
+	vchannel := msg.VChannel()
+
+	// Recover insert part
+	insertMsg := upsertMsg.InsertMsg
+	if insertMsg == nil {
+		return nil, errors.New("upsert message insert part is nil")
+	}
+
+	if insertMsg.GetCollectionID() != header.GetCollectionId() {
+		panic("unreachable code, collection id is not equal")
+	}
+
+	// Find the partition assignment for insert
+	var assignment *message.PartitionSegmentAssignment
+	for _, p := range header.Partitions {
+		if p.GetPartitionId() == insertMsg.GetPartitionID() {
+			assignment = p
+			break
+		}
+	}
+	if assignment == nil || assignment.GetSegmentAssignment().GetSegmentId() == 0 {
+		panic("unreachable code, partition id is not exist or segment id is 0")
+	}
+
+	// Set insert message fields from header
+	insertMsg.SegmentID = assignment.GetSegmentAssignment().GetSegmentId()
+	insertTimestamps := make([]uint64, insertMsg.GetNumRows())
+	for i := 0; i < len(insertTimestamps); i++ {
+		insertTimestamps[i] = timetick
+	}
+	insertMsg.Timestamps = insertTimestamps
+	insertMsg.Base.Timestamp = timetick
+	insertMsg.ShardName = vchannel
+
+	// Recover delete part
+	deleteMsg := upsertMsg.DeleteMsg
+	if deleteMsg == nil {
+		return nil, errors.New("upsert message delete part is nil")
+	}
+
+	if deleteMsg.GetCollectionID() != header.GetCollectionId() {
+		panic("unreachable code, collection id is not equal")
+	}
+
+	// Set delete message fields
+	deleteTimestamps := make([]uint64, len(deleteMsg.Timestamps))
+	for i := 0; i < len(deleteTimestamps); i++ {
+		deleteTimestamps[i] = timetick
+	}
+	deleteMsg.Timestamps = deleteTimestamps
+	deleteMsg.ShardName = vchannel
+
+	return upsertMsg, nil
 }
