@@ -448,6 +448,16 @@ type InsertData struct {
 	strPKTs map[string]int64
 }
 
+// GetData returns the underlying storage.InsertData slice
+func (i *InsertData) GetData() []*storage.InsertData {
+	return i.data
+}
+
+// GetBM25Stats returns the BM25 stats map
+func (i *InsertData) GetBM25Stats() map[int64]*storage.BM25Stats {
+	return i.bm25Stats
+}
+
 func NewInsertData(segmentID, partitionID int64, cap int, pkType schemapb.DataType) *InsertData {
 	data := &InsertData{
 		segmentID:   segmentID,
@@ -550,16 +560,6 @@ func (wb *writeBufferBase) CreateNewGrowingSegment(msg message.ImmutableCreateSe
 	_, ok := wb.metaCache.GetSegmentByID(h.SegmentId)
 	// new segment
 	if !ok {
-		storageVersion := storage.StorageV2
-		manifestPath := ""
-		if paramtable.Get().CommonCfg.UseLoonFFI.GetAsBool() {
-			storageVersion = storage.StorageV3
-			// set manifest path when creating segment
-			k := metautil.JoinIDPath(wb.collectionID, partitionID, segmentID)
-			basePath := path.Join(paramtable.Get().ServiceParam.MinioCfg.RootPath.GetValue(), common.SegmentInsertLogPath, k)
-			// -1 for first write
-			manifestPath = packed.MarshalManifestPath(basePath, -1)
-		}
 		segmentInfo := &datapb.SegmentInfo{
 			ID:             h.SegmentId,
 			PartitionID:    h.PartitionId,
@@ -567,7 +567,6 @@ func (wb *writeBufferBase) CreateNewGrowingSegment(msg message.ImmutableCreateSe
 			InsertChannel:  msg.VChannel(),
 			StartPosition:  nil, // start position will be set in insert data.
 			State:          commonpb.SegmentState_Growing,
-			ManifestPath:   manifestPath,
 			StorageVersion: h.StorageVersion,
 			Level:          h.Level,
 		}
