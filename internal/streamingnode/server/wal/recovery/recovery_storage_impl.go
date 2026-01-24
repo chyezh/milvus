@@ -552,6 +552,16 @@ func (r *recoveryStorageImpl) handleFlushAll(msg message.ImmutableFlushAllMessag
 		return struct{}{}
 	})
 	r.flushSegments(msg, segments)
+
+	// Also flush through SegmentManager if we have it
+	if r.segmentManager != nil {
+		for segmentID := range segments {
+			// Flush L0 segments
+			r.segmentManager.FlushL0Segment(segmentID, msg.TimeTick())
+			// Flush L1 segments
+			r.segmentManager.FlushL1Segment(segmentID, msg.TimeTick())
+		}
+	}
 }
 
 // flushSegments flushes the segments in the recovery storage.
@@ -707,6 +717,16 @@ func (r *recoveryStorageImpl) handleTruncateCollection(msg message.ImmutableTrun
 		segments[segmentID] = struct{}{}
 	}
 	r.flushSegments(msg, segments)
+
+	// Also flush through SegmentManager if we have it
+	if r.segmentManager != nil {
+		for segmentID := range segments {
+			// Flush L0 segments
+			r.segmentManager.FlushL0Segment(segmentID, msg.TimeTick())
+			// Flush L1 segments
+			r.segmentManager.FlushL1Segment(segmentID, msg.TimeTick())
+		}
+	}
 }
 
 // detectInconsistency detects the inconsistency in the recovery storage.
