@@ -9,10 +9,9 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/recovery"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 )
@@ -227,11 +226,11 @@ func (m *SegmentManager) waitForInsertTaskCompletion(segment *L1Segment, task *N
 			// Task completed successfully
 			// Create field binlogs
 			fieldBinlogs := make([]*datapb.FieldBinlog, 0)
-			for fieldID, blob := range task.binlogs {
+			for fieldID := range task.binlogs {
 				fieldBinlogs = append(fieldBinlogs, &datapb.FieldBinlog{
 					FieldID: fieldID,
 					Binlogs: []*datapb.Binlog{{
-						LogPath:       task.uploadedPaths[string(fieldID)],
+						LogPath:       task.uploadedPaths[fmt.Sprintf("%d", fieldID)],
 						TimestampFrom: task.chunk.startFromTimeTick,
 						TimestampTo:   task.chunk.endToTimeTick,
 					}},
@@ -327,25 +326,37 @@ func (m *SegmentManager) GetDirtySnapshots() map[int64]*streamingpb.SegmentAssig
 }
 
 // RecoverFromSnapshot recovers segment state from a recovery snapshot.
-func (m *SegmentManager) RecoverFromSnapshot(snapshot *recovery.RecoverySnapshot) {
+// The snapshot parameter contains SegmentAssignments map[int64]*streamingpb.SegmentAssignmentMeta
+func (m *SegmentManager) RecoverFromSnapshot(segmentAssignments map[int64]*streamingpb.SegmentAssignmentMeta) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Recover segments from snapshot
-	for segmentID, meta := range snapshot.SegmentAssignments {
+	for segmentID, meta := range segmentAssignments {
 		switch meta.PersistedStorage.(type) {
 		case *streamingpb.SegmentAssignmentMeta_L0:
+			clonedMeta := proto.Clone(meta).(*streamingpb.SegmentAssignmentMeta)
+			// Ensure Stat is initialized if nil
+			if clonedMeta.Stat == nil {
+				clonedMeta.Stat = &streamingpb.SegmentAssignmentStat{}
+			}
 			segment := &L0Segment{
-				meta:  proto.Clone(meta).(*streamingpb.SegmentAssignmentMeta),
+				meta:  clonedMeta,
 				dirty: false,
 			}
 			m.l0Segments[segmentID] = segment
 
 		case *streamingpb.SegmentAssignmentMeta_L1:
-			// TODO: need schema recovery
+			// TODO: need schema recovery from vchannel metadata
+			clonedMeta := proto.Clone(meta).(*streamingpb.SegmentAssignmentMeta)
+			// Ensure Stat is initialized if nil
+			if clonedMeta.Stat == nil {
+				clonedMeta.Stat = &streamingpb.SegmentAssignmentStat{}
+			}
 			segment := &L1Segment{
-				meta:  proto.Clone(meta).(*streamingpb.SegmentAssignmentMeta),
-				dirty: false,
+				meta:   clonedMeta,
+				dirty:  false,
+				schema: nil, // Schema needs to be recovered from vchannel metadata
 			}
 			m.l1Segments[segmentID] = segment
 		}

@@ -11,6 +11,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/recovery/gsegment"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
@@ -43,6 +44,11 @@ func RecoverRecoveryStorage(
 		rs.Logger().Warn("recovery storage failed", zap.Error(err))
 		return nil, nil, err
 	}
+
+	// Recover segment manager with existing segments
+	// This restores any buffered but not yet persisted data
+	rs.segmentManager.RecoverFromSnapshot(rs.getSegmentAssignmentsCopy())
+
 	// recover the state from wal and start the background task to persist the state.
 	snapshot, err := rs.recoverFromStream(ctx, recoveryStreamBuilder, lastTimeTickMessage)
 	if err != nil {
@@ -64,6 +70,9 @@ func RecoverRecoveryStorage(
 // newRecoveryStorage creates a new recovery storage.
 func newRecoveryStorage(channel types.PChannelInfo, cp *utility.WALCheckpoint) *recoveryStorageImpl {
 	cfg := newConfig()
+	// Get chunk manager from resource - it's already initialized by the server
+	cm := resource.Resource().ChunkManager()
+
 	return &recoveryStorageImpl{
 		backgroundTaskNotifier: syncutil.NewAsyncTaskNotifier[struct{}](),
 		cfg:                    cfg,
@@ -75,6 +84,7 @@ func newRecoveryStorage(channel types.PChannelInfo, cp *utility.WALCheckpoint) *
 		persistNotifier:        make(chan struct{}, 1),
 		gracefulClosed:         false,
 		metrics:                newRecoveryStorageMetrics(channel),
+		segmentManager:         gsegment.NewSegmentManager(cm),
 	}
 }
 
@@ -99,6 +109,8 @@ type recoveryStorageImpl struct {
 	pendingPersistSnapshot *RecoverySnapshot
 	// used to mark switch MQ msg found
 	alterWALInfo *AlterWALInfo
+	// segment manager for L0/L1 segment buffering and persistence
+	segmentManager *gsegment.SegmentManager
 }
 
 // Metrics gets the metrics of the wal.
@@ -109,6 +121,15 @@ func (r *recoveryStorageImpl) Metrics() RecoveryMetrics {
 	return RecoveryMetrics{
 		RecoveryTimeTick: r.checkpoint.TimeTick,
 	}
+}
+
+// getSegmentAssignmentsCopy returns a copy of segment assignments for recovery
+func (r *recoveryStorageImpl) getSegmentAssignmentsCopy() map[int64]*streamingpb.SegmentAssignmentMeta {
+	assignments := make(map[int64]*streamingpb.SegmentAssignmentMeta)
+	for segmentID, segment := range r.segments {
+		assignments[segmentID] = segment.meta
+	}
+	return assignments
 }
 
 // UpdateFlusherCheckpoint updates the checkpoint of flusher.
@@ -166,6 +187,9 @@ func (r *recoveryStorageImpl) Close() {
 	r.backgroundTaskNotifier.Cancel()
 	r.backgroundTaskNotifier.BlockUntilFinish()
 	r.metrics.Close()
+	if r.segmentManager != nil {
+		r.segmentManager.Close()
+	}
 }
 
 // notifyPersist notifies a persist operation.
@@ -181,19 +205,34 @@ func (r *recoveryStorageImpl) notifyPersist() {
 func (r *recoveryStorageImpl) consumeDirtySnapshot() *RecoverySnapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.dirtyCounter == 0 {
+
+	// Get dirty snapshots from SegmentManager
+	managerSnapshots := r.segmentManager.GetDirtySnapshots()
+	hasManagerSnapshots := len(managerSnapshots) > 0
+
+	if r.dirtyCounter == 0 && !hasManagerSnapshots {
 		return nil
 	}
 
 	segments := make(map[int64]*streamingpb.SegmentAssignmentMeta)
 	vchannels := make(map[string]*streamingpb.VChannelMeta)
+
+	// Merge segment snapshots from SegmentManager
+	for segmentID, snapshot := range managerSnapshots {
+		segments[segmentID] = snapshot
+	}
+
+	// Also collect from existing recovery info
 	for _, segment := range r.segments {
 		dirtySnapshot, shouldBeRemoved := segment.ConsumeDirtyAndGetSnapshot()
 		if shouldBeRemoved {
 			delete(r.segments, segment.meta.SegmentId)
 		}
 		if dirtySnapshot != nil {
-			segments[segment.meta.SegmentId] = dirtySnapshot
+			// SegmentManager snapshots take precedence
+			if _, ok := segments[segment.meta.SegmentId]; !ok {
+				segments[segment.meta.SegmentId] = dirtySnapshot
+			}
 		}
 	}
 	for _, vchannel := range r.vchannels {
@@ -405,6 +444,7 @@ func (r *recoveryStorageImpl) handleAlterWAL(msg message.ImmutableAlterWALMessag
 
 // handleInsert handles the insert message.
 func (r *recoveryStorageImpl) handleInsert(msg message.ImmutableInsertMessageV1) {
+	// Update existing recovery info
 	for _, partition := range msg.Header().GetPartitions() {
 		if segment, ok := r.segments[partition.SegmentAssignment.SegmentId]; ok && segment.IsGrowing() {
 			segment.ObserveModified(msg.TimeTick(), partition.Rows, partition.BinarySize)
@@ -412,6 +452,9 @@ func (r *recoveryStorageImpl) handleInsert(msg message.ImmutableInsertMessageV1)
 			r.detectInconsistency(msg, "L1 segment not found")
 		}
 	}
+
+	// Also send to SegmentManager for buffering and persistence
+	r.segmentManager.ObserveInsert(msg)
 }
 
 // handleDelete handles the delete message.
@@ -424,12 +467,56 @@ func (r *recoveryStorageImpl) handleDelete(msg message.ImmutableDeleteMessageV1)
 			r.detectInconsistency(msg, "L0 segment not found")
 		}
 	}
+
+	// Also send to SegmentManager for buffering and persistence
+	r.segmentManager.ObserveDelete(msg)
 }
 
 // handleCreateSegment handles the create segment message.
 func (r *recoveryStorageImpl) handleCreateSegment(msg message.ImmutableCreateSegmentMessageV2) {
 	segment := newSegmentRecoveryInfoFromCreateSegmentMessage(msg)
 	r.segments[segment.meta.SegmentId] = segment
+
+	// Create segment in SegmentManager based on its type
+	header := msg.Header()
+	segmentMeta := &streamingpb.SegmentAssignmentMeta{
+		SegmentId:          header.SegmentId,
+		CollectionId:       header.CollectionId,
+		PartitionId:        header.PartitionId,
+		Vchannel:           msg.VChannel(),
+		State:              streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING,
+		CheckpointTimeTick: msg.TimeTick(),
+		Stat: &streamingpb.SegmentAssignmentStat{
+			BeginTimeTick: msg.TimeTick(),
+			EndTimeTick:   msg.TimeTick(),
+		},
+	}
+
+	// Determine if this is L0 or L1 segment based on segment type
+	if segment.IsL0() {
+		segmentMeta.PersistedStorage = &streamingpb.SegmentAssignmentMeta_L0{
+			L0: &streamingpb.L0SegmentPersistedStorage{
+				DeltaBinlog: nil,
+			},
+		}
+		r.segmentManager.CreateL0Segment(segmentMeta)
+	} else {
+		segmentMeta.PersistedStorage = &streamingpb.SegmentAssignmentMeta_L1{
+			L1: &streamingpb.L1SegmentPersistedStorage{
+				ManifestPath: "",
+				Binlogs:      nil,
+			},
+		}
+
+		// Get schema for the collection
+		if vchannelInfo, ok := r.vchannels[msg.VChannel()]; ok {
+			_, schema := vchannelInfo.GetSchema(msg.TimeTick())
+			if schema != nil {
+				r.segmentManager.CreateL1Segment(segmentMeta, schema)
+			}
+		}
+	}
+
 	r.Logger().Info("create segment", log.FieldMessage(msg))
 }
 
@@ -438,6 +525,14 @@ func (r *recoveryStorageImpl) handleFlush(msg message.ImmutableFlushMessageV2) {
 	header := msg.Header()
 	if segment, ok := r.segments[header.SegmentId]; ok {
 		r.observeFlush(segment, msg.TimeTick())
+
+		// Also flush in SegmentManager
+		if segment.IsL0() {
+			r.segmentManager.FlushL0Segment(header.SegmentId, msg.TimeTick())
+		} else {
+			r.segmentManager.FlushL1Segment(header.SegmentId, msg.TimeTick())
+		}
+
 		r.Logger().Info("flush segment", log.FieldMessage(msg), zap.Uint64("rows", segment.Rows()), zap.Uint64("binarySize", segment.BinarySize()))
 	}
 }

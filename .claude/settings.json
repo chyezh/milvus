@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_FILE_PATHS\" | grep -qE '(\\.pb\\.go|mock_.*\\.go)$'; then echo 'BLOCKED: Do not edit generated files (*.pb.go, mock_*.go). Regenerate with make generated-proto or make generate-mockery.' && exit 1; fi"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_FILE_PATHS\" | grep -qE '\\.go$' && ! echo \"$CLAUDE_FILE_PATHS\" | grep -qE '(\\.pb\\.go|mock_.*\\.go)$'; then cd /home/chyezh/repository/chyezh/milvus && ./bin/gofumpt -w $CLAUDE_FILE_PATHS 2>/dev/null || true; fi"
+          }
+        ]
+      }
+    ]
+  }
+}
