@@ -120,7 +120,7 @@ func (info *segmentRecoveryInfo) ObserveModified(timetick uint64, rows uint64, b
 	info.meta.Stat.ModifiedBinarySize += binarySize
 	info.meta.Stat.ModifiedRows += rows
 	info.meta.Stat.LastModifiedTimestamp = tsoutil.PhysicalTime(timetick).Unix()
-	info.meta.Stat.LastModifiedTimeTick = timetick
+	info.meta.Stat.EndTimeTick = timetick
 	info.meta.CheckpointTimeTick = timetick
 	info.dirty = true
 }
@@ -140,7 +140,7 @@ func (info *segmentRecoveryInfo) ObserveFlush(timetick uint64) {
 	}
 	info.meta.State = streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED
 	info.meta.Stat.LastModifiedTimestamp = tsoutil.PhysicalTime(timetick).Unix()
-	info.meta.Stat.LastModifiedTimeTick = timetick
+	info.meta.Stat.EndTimeTick = timetick
 	info.meta.CheckpointTimeTick = timetick
 	info.dirty = true
 }

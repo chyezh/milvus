@@ -79,7 +79,7 @@ func NewSegmentStatFromProto(statProto *streamingpb.SegmentAssignmentStat) *Segm
 		CreateTime:       tsoutil.PhysicalTime(statProto.CreateSegmentTimeTick),
 		CreateTimeTick:   statProto.CreateSegmentTimeTick,
 		BinLogCounter:    statProto.BinlogCounter,
-		LastModifiedTime: tsoutil.PhysicalTime(statProto.LastModifiedTimeTick),
+		LastModifiedTime: tsoutil.PhysicalTime(statProto.GetEndTimeTick()),
 		Level:            lv,
 	}
 }

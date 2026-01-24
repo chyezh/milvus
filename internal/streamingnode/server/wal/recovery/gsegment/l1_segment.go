@@ -19,6 +19,8 @@ package gsegment
 import (
 	"sync"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
@@ -141,4 +143,54 @@ func (s *L1Segment) sealGrowingChunk() {
 	}
 	s.sealedChunks = append(s.sealedChunks, s.growingChunk)
 	s.growingChunk = nil
+}
+
+// IsDirty returns whether the segment has dirty data.
+func (s *L1Segment) IsDirty() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dirty
+}
+
+// ConsumeSnapshot consumes the dirty data and returns a snapshot.
+// Returns nil if the segment is not dirty.
+func (s *L1Segment) ConsumeSnapshot() *streamingpb.SegmentAssignmentMeta {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.dirty {
+		return nil
+	}
+
+	s.dirty = false
+	// Return a deep copy of the meta using proto.Clone
+	return proto.Clone(s.meta).(*streamingpb.SegmentAssignmentMeta)
+}
+
+// GetMeta returns the segment metadata.
+func (s *L1Segment) GetMeta() *streamingpb.SegmentAssignmentMeta {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.meta
+}
+
+// IsSealed returns whether the segment is sealed.
+func (s *L1Segment) IsSealed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sealed
+}
+
+// GetSealedChunks returns the sealed chunks.
+func (s *L1Segment) GetSealedChunks() []*InsertChunk {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sealedChunks
+}
+
+// GetSchema returns the collection schema.
+func (s *L1Segment) GetSchema() *schemapb.CollectionSchema {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.schema
 }

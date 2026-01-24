@@ -3,7 +3,6 @@ package writebuffer
 import (
 	"context"
 	"fmt"
-	"path"
 	"sync"
 	"time"
 
@@ -21,7 +20,6 @@ import (
 	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
-	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
@@ -29,7 +27,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"github.com/milvus-io/milvus/pkg/v2/util/metautil"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -448,6 +445,16 @@ type InsertData struct {
 	strPKTs map[string]int64
 }
 
+// GetData returns the underlying storage.InsertData slice
+func (i *InsertData) GetData() []*storage.InsertData {
+	return i.data
+}
+
+// GetBM25Stats returns the BM25 stats map
+func (i *InsertData) GetBM25Stats() map[int64]*storage.BM25Stats {
+	return i.bm25Stats
+}
+
 func NewInsertData(segmentID, partitionID int64, cap int, pkType schemapb.DataType) *InsertData {
 	data := &InsertData{
 		segmentID:   segmentID,
@@ -550,16 +557,6 @@ func (wb *writeBufferBase) CreateNewGrowingSegment(msg message.ImmutableCreateSe
 	_, ok := wb.metaCache.GetSegmentByID(h.SegmentId)
 	// new segment
 	if !ok {
-		manifestPath := ""
-		if paramtable.Get().CommonCfg.UseLoonFFI.GetAsBool() {
-			k := metautil.JoinIDPath(wb.collectionID, h.PartitionId, h.SegmentId)
-			basePath := path.Join(paramtable.Get().ServiceParam.MinioCfg.RootPath.GetValue(), common.SegmentInsertLogPath, k)
-			if paramtable.Get().CommonCfg.StorageType.GetValue() != "local" {
-				basePath = path.Join(paramtable.Get().ServiceParam.MinioCfg.BucketName.GetValue(), basePath)
-			}
-			// ManifestEarliest for first write
-			manifestPath = packed.MarshalManifestPath(basePath, packed.ManifestEarliest)
-		}
 		segmentInfo := &datapb.SegmentInfo{
 			ID:             h.SegmentId,
 			PartitionID:    h.PartitionId,
@@ -567,7 +564,6 @@ func (wb *writeBufferBase) CreateNewGrowingSegment(msg message.ImmutableCreateSe
 			InsertChannel:  msg.VChannel(),
 			StartPosition:  nil, // start position will be set in insert data.
 			State:          commonpb.SegmentState_Growing,
-			ManifestPath:   manifestPath,
 			StorageVersion: h.StorageVersion,
 			Level:          h.Level,
 		}
