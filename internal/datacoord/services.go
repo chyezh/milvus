@@ -48,6 +48,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
@@ -1817,8 +1818,60 @@ func (s *Server) ImportV2(ctx context.Context, in *internalpb.ImportRequestInter
 	log := log.Ctx(ctx).With(zap.Int64("collection", in.GetCollectionID()),
 		zap.Int64s("partitions", in.GetPartitionIDs()),
 		zap.Strings("channels", in.GetChannelNames()))
-	log.Info("receive import request", zap.Int("fileNum", len(in.GetFiles())),
-		zap.Any("files", in.GetFiles()), zap.Any("options", in.GetOptions()))
+
+	// Differentiate between proxy call (broadcast needed) vs ack callback (job creation only)
+	// Ack callback sets DataTimestamp from broadcast message, proxy doesn't have it yet
+	isFromAckCallback := in.GetDataTimestamp() > 0
+
+	if !isFromAckCallback {
+		// This is a new import request from proxy - need to broadcast first
+		log.Info("receive import request from proxy, will broadcast",
+			zap.Int("fileNum", len(in.GetFiles())),
+			zap.Any("files", in.GetFiles()),
+			zap.Any("options", in.GetOptions()))
+
+		// Allocate job ID
+		jobID, _, err := s.allocator.AllocN(1)
+		if err != nil {
+			resp.Status = merr.Status(merr.WrapErrImportFailed(fmt.Sprintf("failed to allocate job ID: %v", err)))
+			return resp, nil
+		}
+
+		// Extract database name from schema, use default if empty
+		dbName := in.GetSchema().GetDbName()
+		if dbName == "" {
+			dbName = util.DefaultDBName
+		}
+
+		// Broadcast the import message
+		err = s.broadcastImport(
+			ctx,
+			dbName,
+			in.GetCollectionName(),
+			in.GetCollectionID(),
+			in.GetPartitionIDs(),
+			in.GetFiles(),
+			in.GetOptions(),
+			in.GetSchema(),
+			jobID,
+			in.GetChannelNames(),
+		)
+		if err != nil {
+			log.Warn("failed to broadcast import message", zap.Error(err))
+			resp.Status = merr.Status(merr.WrapErrImportFailed(fmt.Sprintf("failed to broadcast import: %v", err)))
+			return resp, nil
+		}
+
+		resp.JobID = fmt.Sprint(jobID)
+		log.Info("import request broadcasted successfully", zap.String("jobID", resp.JobID))
+		return resp, nil
+	}
+
+	// This is from ack callback - create the import job
+	log.Info("receive import request from ack callback, creating job",
+		zap.Int("fileNum", len(in.GetFiles())),
+		zap.Any("files", in.GetFiles()),
+		zap.Any("options", in.GetOptions()))
 
 	timeoutTs, err := importutilv2.GetTimeoutTs(in.GetOptions())
 	if err != nil {
