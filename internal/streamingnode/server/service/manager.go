@@ -58,3 +58,29 @@ func (ms *managerServiceImpl) CollectStatus(ctx context.Context, req *streamingp
 		Metrics: types.NewProtoFromStreamingNodeMetrics(*metrics),
 	}, nil
 }
+
+// AssignWithStateReport assigns a wal instance for the channel on this Manager with state reporting.
+// Unlike Assign, this method uses server streaming to report progress during recovery.
+func (ms *managerServiceImpl) AssignWithStateReport(
+	req *streamingpb.StreamingNodeManagerAssignRequest,
+	stream streamingpb.StreamingNodeManagerService_AssignWithStateReportServer,
+) error {
+	reporter := NewAssignmentStateReporter(stream)
+	pchannelInfo := types.NewPChannelInfoFromProto(req.GetPchannel())
+
+	// Report initial fencing state
+	if err := reporter.ReportProgress(streamingpb.AssignmentState_ASSIGNMENT_STATE_FENCING, nil); err != nil {
+		return nil // Stream error, close gracefully
+	}
+
+	// Open the WAL - this may take a long time during recovery
+	if err := ms.walManager.Open(stream.Context(), pchannelInfo); err != nil {
+		// Report error and close stream gracefully
+		_ = reporter.ReportError(err)
+		return nil
+	}
+
+	// Report ready and close stream gracefully
+	_ = reporter.ReportReady()
+	return nil
+}
