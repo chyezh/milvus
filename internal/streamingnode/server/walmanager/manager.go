@@ -14,7 +14,8 @@ type Manager interface {
 	// Open opens a wal instance for the channel on this Manager.
 	// Return `IgnoreOperation` error if the channel is not found.
 	// Return `UnmatchedChannelTerm` error if the channel term is not matched.
-	Open(ctx context.Context, channel types.PChannelInfo) error
+	// The opt parameter is optional; if nil, default options are used.
+	Open(ctx context.Context, channel types.PChannelInfo, opt *OpenOption) error
 
 	// GetAvailableWAL returns a available wal instance for the channel.
 	// Return nil if the wal instance is not found.

@@ -59,7 +59,7 @@ type managerImpl struct {
 }
 
 // Open opens a wal instance for the channel on this Manager.
-func (m *managerImpl) Open(ctx context.Context, channel types.PChannelInfo) (err error) {
+func (m *managerImpl) Open(ctx context.Context, channel types.PChannelInfo, opt *OpenOption) (err error) {
 	// reject operation if manager is closing.
 	if !m.lifetime.AddIf(isOpenable) {
 		return errWALManagerClosed
@@ -72,6 +72,15 @@ func (m *managerImpl) Open(ctx context.Context, channel types.PChannelInfo) (err
 		}
 		m.logger.Info("open wal success", zap.String("channel", channel.String()))
 	}()
+
+	// Use noop reporter if opt is nil or opt.StateReporter is nil.
+	// The actual progress reporting will be added in Task 9 (WAL opener changes).
+	if opt == nil {
+		opt = &OpenOption{}
+	}
+	if opt.StateReporter == nil {
+		opt.StateReporter = NoopStateReporter()
+	}
 
 	return m.getWALLifetime(channel.Name).Open(ctx, channel)
 }
