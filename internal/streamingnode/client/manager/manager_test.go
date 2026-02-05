@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"fmt"
+	"io"
 	"testing"
 	"time"
 
@@ -24,6 +25,22 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
+
+// mockAssignWithStateReportClientForManager is a mock implementation for manager tests
+type mockAssignWithStateReportClientForManager struct {
+	grpc.ClientStream
+	responses []*streamingpb.AssignmentStateResponse
+	index     int
+}
+
+func (m *mockAssignWithStateReportClientForManager) Recv() (*streamingpb.AssignmentStateResponse, error) {
+	if m.index >= len(m.responses) {
+		return nil, io.EOF
+	}
+	resp := m.responses[m.index]
+	m.index++
+	return resp, nil
+}
 
 func TestManager(t *testing.T) {
 	rb := mock_resolver.NewMockBuilder(t)
@@ -94,14 +111,23 @@ func TestManager(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, nodeInfos, 2)
 
-	// Test Assign
+	// Test Assign (now uses AssignWithStateReport)
 	serverID := int64(2)
-	managerServiceClient.EXPECT().Assign(mock.Anything, mock.Anything).RunAndReturn(
-		func(ctx context.Context, snmcsr *streamingpb.StreamingNodeManagerAssignRequest, co ...grpc.CallOption) (*streamingpb.StreamingNodeManagerAssignResponse, error) {
+	managerServiceClient.EXPECT().AssignWithStateReport(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, snmcsr *streamingpb.StreamingNodeManagerAssignRequest, co ...grpc.CallOption) (streamingpb.StreamingNodeManagerService_AssignWithStateReportClient, error) {
 			pickedServerID, ok := contextutil.GetPickServerID(ctx)
 			assert.True(t, ok)
 			assert.Equal(t, serverID, pickedServerID)
-			return nil, nil
+			// Return mock stream that immediately sends Ready
+			return &mockAssignWithStateReportClientForManager{
+				responses: []*streamingpb.AssignmentStateResponse{
+					{
+						Response: &streamingpb.AssignmentStateResponse_Ready{
+							Ready: &streamingpb.AssignmentReady{},
+						},
+					},
+				},
+			}, nil
 		})
 	err = m.Assign(context.Background(), types.PChannelInfoAssigned{
 		Channel: types.PChannelInfo{Name: "p", Term: 1},
