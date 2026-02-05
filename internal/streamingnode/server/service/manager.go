@@ -32,7 +32,8 @@ type managerServiceImpl struct {
 // After assign returns, the wal instance is ready to use.
 func (ms *managerServiceImpl) Assign(ctx context.Context, req *streamingpb.StreamingNodeManagerAssignRequest) (*streamingpb.StreamingNodeManagerAssignResponse, error) {
 	pchannelInfo := types.NewPChannelInfoFromProto(req.GetPchannel())
-	if err := ms.walManager.Open(ctx, pchannelInfo); err != nil {
+	// Pass nil for OpenOption - legacy Assign doesn't need state reporting
+	if err := ms.walManager.Open(ctx, pchannelInfo, nil); err != nil {
 		return nil, err
 	}
 	return &streamingpb.StreamingNodeManagerAssignResponse{}, nil
@@ -73,8 +74,11 @@ func (ms *managerServiceImpl) AssignWithStateReport(
 		return nil // Stream error, close gracefully
 	}
 
-	// Open the WAL - this may take a long time during recovery
-	if err := ms.walManager.Open(stream.Context(), pchannelInfo); err != nil {
+	// Open the WAL with state reporting - this may take a long time during recovery
+	opt := &walmanager.OpenOption{
+		StateReporter: reporter,
+	}
+	if err := ms.walManager.Open(stream.Context(), pchannelInfo, opt); err != nil {
 		// Report error and close stream gracefully
 		_ = reporter.ReportError(err)
 		return nil
