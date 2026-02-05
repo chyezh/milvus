@@ -572,6 +572,13 @@ service StreamingNodeManagerService {
     // collect balance info and health check.
     rpc CollectStatus(StreamingNodeManagerCollectStatusRequest)
         returns (StreamingNodeManagerCollectStatusResponse) {};
+
+    // AssignWithStateReport is a server streaming RPC to assign a channel on a log node.
+    // Unlike the legacy Assign RPC, this returns a stream of state updates during recovery.
+    // The stream ends with either AssignmentReady (success) or StreamingError (failure).
+    // This RPC is not affected by RPC timeout during long recovery operations.
+    rpc AssignWithStateReport(StreamingNodeManagerAssignRequest)
+        returns (stream AssignmentStateResponse) {};
 }
 
 // StreamingManagerAssignRequest is the request message of Assign RPC.
@@ -613,8 +620,42 @@ message StreamingNodeManagerCollectStatusResponse {
     StreamingNodeMetrics metrics = 1;
 }
 
+// AssignmentState represents the state of WAL assignment process.
+enum AssignmentState {
+    ASSIGNMENT_STATE_UNKNOWN = 0;
+    ASSIGNMENT_STATE_FENCING = 1;              // Fencing old WAL Owner
+    ASSIGNMENT_STATE_PERSIST_RECOVERING = 2;   // Loading metadata from Catalog
+    ASSIGNMENT_STATE_STREAM_RECOVERING = 3;    // Replaying messages from WAL stream
+}
+
+// StreamRecoveringProgress contains progress information during stream recovery.
+message StreamRecoveringProgress {
+    int64 recovered_bytes = 1;
+    int64 total_bytes = 2;           // -1 if unknown
+    int64 recovered_messages = 3;
+    int64 total_messages = 4;        // -1 if unknown
+}
+
+// AssignmentProgress reports the current state and progress of WAL assignment.
+message AssignmentProgress {
+    AssignmentState state = 1;
+    StreamRecoveringProgress stream_recovering_progress = 2;  // Valid only in STREAM_RECOVERING
+}
+
+// AssignmentReady indicates the WAL assignment has completed successfully.
+message AssignmentReady {}
+
+// AssignmentStateResponse is the response message for AssignWithStateReport RPC.
+message AssignmentStateResponse {
+    oneof response {
+        AssignmentProgress progress = 1;  // Intermediate state: recovery progress
+        StreamingError error = 2;         // Terminal state: failed
+        AssignmentReady ready = 3;        // Terminal state: ready
+    }
+}
+
 ///
-/// VChannelMeta 
+/// VChannelMeta
 ///
 // VChannelMeta is the meta information of a vchannel.
 // We need to add vchannel meta in wal meta, so the wal can recover the information of it.

@@ -724,9 +724,10 @@ var StreamingNodeHandlerService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	StreamingNodeManagerService_Assign_FullMethodName        = "/milvus.proto.streaming.StreamingNodeManagerService/Assign"
-	StreamingNodeManagerService_Remove_FullMethodName        = "/milvus.proto.streaming.StreamingNodeManagerService/Remove"
-	StreamingNodeManagerService_CollectStatus_FullMethodName = "/milvus.proto.streaming.StreamingNodeManagerService/CollectStatus"
+	StreamingNodeManagerService_Assign_FullMethodName                = "/milvus.proto.streaming.StreamingNodeManagerService/Assign"
+	StreamingNodeManagerService_Remove_FullMethodName                = "/milvus.proto.streaming.StreamingNodeManagerService/Remove"
+	StreamingNodeManagerService_CollectStatus_FullMethodName         = "/milvus.proto.streaming.StreamingNodeManagerService/CollectStatus"
+	StreamingNodeManagerService_AssignWithStateReport_FullMethodName = "/milvus.proto.streaming.StreamingNodeManagerService/AssignWithStateReport"
 )
 
 // StreamingNodeManagerServiceClient is the client API for StreamingNodeManagerService service.
@@ -750,6 +751,11 @@ type StreamingNodeManagerServiceClient interface {
 	// balance info on a log node. Used to recover channel info on log coord,
 	// collect balance info and health check.
 	CollectStatus(ctx context.Context, in *StreamingNodeManagerCollectStatusRequest, opts ...grpc.CallOption) (*StreamingNodeManagerCollectStatusResponse, error)
+	// AssignWithStateReport is a server streaming RPC to assign a channel on a log node.
+	// Unlike the legacy Assign RPC, this returns a stream of state updates during recovery.
+	// The stream ends with either AssignmentReady (success) or StreamingError (failure).
+	// This RPC is not affected by RPC timeout during long recovery operations.
+	AssignWithStateReport(ctx context.Context, in *StreamingNodeManagerAssignRequest, opts ...grpc.CallOption) (StreamingNodeManagerService_AssignWithStateReportClient, error)
 }
 
 type streamingNodeManagerServiceClient struct {
@@ -787,6 +793,38 @@ func (c *streamingNodeManagerServiceClient) CollectStatus(ctx context.Context, i
 	return out, nil
 }
 
+func (c *streamingNodeManagerServiceClient) AssignWithStateReport(ctx context.Context, in *StreamingNodeManagerAssignRequest, opts ...grpc.CallOption) (StreamingNodeManagerService_AssignWithStateReportClient, error) {
+	stream, err := c.cc.NewStream(ctx, &StreamingNodeManagerService_ServiceDesc.Streams[0], StreamingNodeManagerService_AssignWithStateReport_FullMethodName, opts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &streamingNodeManagerServiceAssignWithStateReportClient{stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+type StreamingNodeManagerService_AssignWithStateReportClient interface {
+	Recv() (*AssignmentStateResponse, error)
+	grpc.ClientStream
+}
+
+type streamingNodeManagerServiceAssignWithStateReportClient struct {
+	grpc.ClientStream
+}
+
+func (x *streamingNodeManagerServiceAssignWithStateReportClient) Recv() (*AssignmentStateResponse, error) {
+	m := new(AssignmentStateResponse)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
 // StreamingNodeManagerServiceServer is the server API for StreamingNodeManagerService service.
 // All implementations should embed UnimplementedStreamingNodeManagerServiceServer
 // for forward compatibility
@@ -808,6 +846,11 @@ type StreamingNodeManagerServiceServer interface {
 	// balance info on a log node. Used to recover channel info on log coord,
 	// collect balance info and health check.
 	CollectStatus(context.Context, *StreamingNodeManagerCollectStatusRequest) (*StreamingNodeManagerCollectStatusResponse, error)
+	// AssignWithStateReport is a server streaming RPC to assign a channel on a log node.
+	// Unlike the legacy Assign RPC, this returns a stream of state updates during recovery.
+	// The stream ends with either AssignmentReady (success) or StreamingError (failure).
+	// This RPC is not affected by RPC timeout during long recovery operations.
+	AssignWithStateReport(*StreamingNodeManagerAssignRequest, StreamingNodeManagerService_AssignWithStateReportServer) error
 }
 
 // UnimplementedStreamingNodeManagerServiceServer should be embedded to have forward compatible implementations.
@@ -822,6 +865,9 @@ func (UnimplementedStreamingNodeManagerServiceServer) Remove(context.Context, *S
 }
 func (UnimplementedStreamingNodeManagerServiceServer) CollectStatus(context.Context, *StreamingNodeManagerCollectStatusRequest) (*StreamingNodeManagerCollectStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CollectStatus not implemented")
+}
+func (UnimplementedStreamingNodeManagerServiceServer) AssignWithStateReport(*StreamingNodeManagerAssignRequest, StreamingNodeManagerService_AssignWithStateReportServer) error {
+	return status.Errorf(codes.Unimplemented, "method AssignWithStateReport not implemented")
 }
 
 // UnsafeStreamingNodeManagerServiceServer may be embedded to opt out of forward compatibility for this service.
@@ -889,6 +935,27 @@ func _StreamingNodeManagerService_CollectStatus_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _StreamingNodeManagerService_AssignWithStateReport_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StreamingNodeManagerAssignRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(StreamingNodeManagerServiceServer).AssignWithStateReport(m, &streamingNodeManagerServiceAssignWithStateReportServer{stream})
+}
+
+type StreamingNodeManagerService_AssignWithStateReportServer interface {
+	Send(*AssignmentStateResponse) error
+	grpc.ServerStream
+}
+
+type streamingNodeManagerServiceAssignWithStateReportServer struct {
+	grpc.ServerStream
+}
+
+func (x *streamingNodeManagerServiceAssignWithStateReportServer) Send(m *AssignmentStateResponse) error {
+	return x.ServerStream.SendMsg(m)
+}
+
 // StreamingNodeManagerService_ServiceDesc is the grpc.ServiceDesc for StreamingNodeManagerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -909,6 +976,12 @@ var StreamingNodeManagerService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _StreamingNodeManagerService_CollectStatus_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "AssignWithStateReport",
+			Handler:       _StreamingNodeManagerService_AssignWithStateReport_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "streaming.proto",
 }
