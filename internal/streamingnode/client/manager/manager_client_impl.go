@@ -170,9 +170,29 @@ func (c *managerClientImpl) Assign(ctx context.Context, pchannel types.PChannelI
 		return err
 	}
 
-	// Select a log node to assign the wal instance.
+	// Try new streaming RPC first
+	handler := newAssignHandler(manager, pchannel)
+	err = handler.Execute(ctx)
+
+	// If Unimplemented, fallback to legacy Assign
+	if isUnimplemented(err) {
+		log.Ctx(ctx).Info("AssignWithStateReport not implemented, falling back to legacy Assign",
+			zap.String("channel", pchannel.Channel.Name),
+		)
+		return c.assignLegacy(ctx, manager, pchannel)
+	}
+
+	return err
+}
+
+// assignLegacy uses the legacy Assign Unary RPC.
+func (c *managerClientImpl) assignLegacy(
+	ctx context.Context,
+	manager streamingpb.StreamingNodeManagerServiceClient,
+	pchannel types.PChannelInfoAssigned,
+) error {
 	ctx = contextutil.WithPickServerID(ctx, pchannel.Node.ServerID)
-	_, err = manager.Assign(ctx, &streamingpb.StreamingNodeManagerAssignRequest{
+	_, err := manager.Assign(ctx, &streamingpb.StreamingNodeManagerAssignRequest{
 		Pchannel: types.NewProtoFromPChannelInfo(pchannel.Channel),
 	})
 	return err
