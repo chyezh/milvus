@@ -15,6 +15,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
+	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
 const (
@@ -91,6 +92,13 @@ func (h *assignHandler) Execute(ctx context.Context) error {
 	}
 }
 
+// progressState tracks the last known progress for timeout detection.
+type progressState struct {
+	state             streamingpb.AssignmentState
+	recoveredBytes    int64
+	recoveredMessages int64
+}
+
 // executeOnce executes a single assignment attempt.
 func (h *assignHandler) executeOnce(ctx context.Context) error {
 	// Add server ID to context for load balancer
@@ -104,8 +112,26 @@ func (h *assignHandler) executeOnce(ctx context.Context) error {
 		return errors.Wrap(err, "failed to create assign stream")
 	}
 
+	// Get progress timeout from configuration
+	progressTimeout := paramtable.Get().StreamingCfg.WALAssignProgressTimeout.GetAsDurationByParse()
+
+	// Track last progress for timeout detection
+	lastProgressTime := time.Now()
+	lastProgress := progressState{}
+
 	// Process stream messages
 	for {
+		// Check for progress timeout
+		if time.Since(lastProgressTime) > progressTimeout {
+			h.logger.Warn("assignment progress timeout",
+				zap.Duration("timeout", progressTimeout),
+				zap.Stringer("lastState", lastProgress.state),
+				zap.Int64("lastRecoveredBytes", lastProgress.recoveredBytes),
+				zap.Int64("lastRecoveredMessages", lastProgress.recoveredMessages),
+			)
+			return errors.Errorf("assignment progress timeout: no progress for %v", progressTimeout)
+		}
+
 		resp, err := stream.Recv()
 		if err == io.EOF {
 			// Stream closed without Ready/Error - treat as abnormal disconnect
@@ -117,8 +143,24 @@ func (h *assignHandler) executeOnce(ctx context.Context) error {
 
 		switch r := resp.Response.(type) {
 		case *streamingpb.AssignmentStateResponse_Progress:
+			currentProgress := progressState{
+				state: r.Progress.State,
+			}
+			if r.Progress.StreamRecoveringProgress != nil {
+				currentProgress.recoveredBytes = r.Progress.StreamRecoveringProgress.RecoveredBytes
+				currentProgress.recoveredMessages = r.Progress.StreamRecoveringProgress.RecoveredMessages
+			}
+
+			// Check if progress has changed
+			if hasProgressChanged(lastProgress, currentProgress) {
+				lastProgressTime = time.Now()
+				lastProgress = currentProgress
+			}
+
 			h.logger.Debug("received progress",
 				zap.Stringer("state", r.Progress.State),
+				zap.Int64("recoveredBytes", currentProgress.recoveredBytes),
+				zap.Int64("recoveredMessages", currentProgress.recoveredMessages),
 			)
 			// Continue receiving
 
@@ -132,6 +174,24 @@ func (h *assignHandler) executeOnce(ctx context.Context) error {
 			return streamingErr
 		}
 	}
+}
+
+// hasProgressChanged checks if progress has changed between two states.
+// Progress is considered changed if:
+// - The state has changed
+// - The recovered bytes has increased
+// - The recovered messages has increased
+func hasProgressChanged(old, new progressState) bool {
+	if old.state != new.state {
+		return true
+	}
+	if new.recoveredBytes > old.recoveredBytes {
+		return true
+	}
+	if new.recoveredMessages > old.recoveredMessages {
+		return true
+	}
+	return false
 }
 
 // shouldRetry determines if the error is retryable.

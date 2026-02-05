@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/milvus-io/milvus/internal/mocks/streamingnode/server/mock_wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 )
 
@@ -60,14 +61,14 @@ func TestUnavailableCurrentWALState(t *testing.T) {
 
 func TestAvailableExpectedWALState(t *testing.T) {
 	channel := types.PChannelInfo{}
-	// Test with nil reporter (should use noop)
-	state := newAvailableExpectedState(context.Background(), channel, nil)
+	stateStore := utility.NewStateProgressStore()
+	state := newAvailableExpectedState(context.Background(), channel, stateStore)
 
 	assert.Equal(t, int64(0), state.Term())
 	assert.True(t, state.Available())
 	assert.Equal(t, context.Background(), state.Context())
 	assert.Equal(t, channel, state.GetPChannelInfo())
-	assert.NotNil(t, state.GetStateReporter())
+	assert.Equal(t, stateStore, state.GetStateStore())
 
 	assert.Equal(t, toStateString(state), "(0,true)")
 }
@@ -98,7 +99,7 @@ func TestIsStateBefore(t *testing.T) {
 		newUnavailableCurrentState(1, nil),
 		newAvailableExpectedState(context.Background(), types.PChannelInfo{
 			Term: 3,
-		}, nil),
+		}, utility.NewStateProgressStore()),
 		newUnavailableExpectedState(5),
 	}
 	for _, s := range cases {

@@ -3,7 +3,7 @@ package wal
 import (
 	"context"
 
-	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 )
@@ -16,37 +16,20 @@ type OpenerBuilder interface {
 	Build() (Opener, error)
 }
 
-// StateProgressReporter is the interface for reporting state progress during WAL opening.
-type StateProgressReporter interface {
-	// ReportProgress reports the current state and optional progress.
-	ReportProgress(state streamingpb.AssignmentState, progress *streamingpb.StreamRecoveringProgress) error
-}
-
-// noopStateReporter is a no-op implementation of StateProgressReporter.
-type noopStateReporter struct{}
-
-func (n *noopStateReporter) ReportProgress(_ streamingpb.AssignmentState, _ *streamingpb.StreamRecoveringProgress) error {
-	return nil
-}
-
-// NoopStateReporter returns a no-op state reporter.
-func NoopStateReporter() StateProgressReporter {
-	return &noopStateReporter{}
-}
-
 // OpenOption is the option for allocating wal instance.
 type OpenOption struct {
 	Channel        types.PChannelInfo
-	DisableFlusher bool                  // disable flusher for test, only use in test.
-	StateReporter  StateProgressReporter // optional state reporter for progress updates
+	DisableFlusher bool                        // disable flusher for test, only use in test.
+	StateStore     *utility.StateProgressStore // optional state store for progress tracking
 }
 
-// GetStateReporter returns the state reporter, or a noop reporter if nil.
-func (o *OpenOption) GetStateReporter() StateProgressReporter {
-	if o.StateReporter != nil {
-		return o.StateReporter
+// GetStateStore returns the state store, or a new noop store if nil.
+func (o *OpenOption) GetStateStore() *utility.StateProgressStore {
+	if o.StateStore != nil {
+		return o.StateStore
 	}
-	return NoopStateReporter()
+	// Return a new store that won't be watched - acts as noop
+	return utility.NewStateProgressStore()
 }
 
 // Opener is the interface for build wal instance.

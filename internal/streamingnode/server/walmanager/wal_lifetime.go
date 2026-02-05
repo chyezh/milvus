@@ -7,8 +7,10 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 )
 
@@ -52,15 +54,31 @@ func (w *walLifetime) GetWAL() wal.WAL {
 }
 
 // Open opens a wal instance for the channel on this Manager.
-func (w *walLifetime) Open(ctx context.Context, channel types.PChannelInfo, stateReporter wal.StateProgressReporter) error {
+// Returns the StateProgressStore that can be used to track progress.
+// The store is valid until the WAL is closed.
+func (w *walLifetime) Open(ctx context.Context, channel types.PChannelInfo) (*utility.StateProgressStore, error) {
+	// Create a StateProgressStore for this WAL opening.
+	stateStore := utility.NewStateProgressStore()
+
+	// Report initial FENCING state.
+	stateStore.UpdateState(streamingpb.AssignmentState_ASSIGNMENT_STATE_FENCING)
+
 	// Set expected WAL state to available at given term.
-	expected := newAvailableExpectedState(ctx, channel, stateReporter)
+	expected := newAvailableExpectedState(ctx, channel, stateStore)
 	if !w.statePair.SetExpectedState(expected) {
-		return status.NewIgnoreOperation("channel %s with expired term %d, cannot change expected state for open", channel.Name, channel.Term)
+		stateStore.SetError(status.NewIgnoreOperation("channel %s with expired term %d, cannot change expected state for open", channel.Name, channel.Term))
+		return stateStore, stateStore.Get().Error
 	}
 
 	// Wait until the WAL state is ready or term expired or error occurs.
-	return w.statePair.WaitCurrentStateReachExpected(ctx, expected)
+	err := w.statePair.WaitCurrentStateReachExpected(ctx, expected)
+	if err != nil {
+		stateStore.SetError(err)
+		return stateStore, err
+	}
+
+	stateStore.SetReady()
+	return stateStore, nil
 }
 
 // Remove removes the wal instance for the channel on this Manager.
@@ -157,8 +175,8 @@ func (w *walLifetime) doLifetimeChanged(expectedState expectedWALState) {
 	// If expected state is available, open a new wal.
 	// TODO: merge the expectedState and expected state context together.
 	l, err := w.opener.Open(expectedState.Context(), &wal.OpenOption{
-		Channel:       expectedState.GetPChannelInfo(),
-		StateReporter: expectedState.GetStateReporter(),
+		Channel:    expectedState.GetPChannelInfo(),
+		StateStore: expectedState.GetStateStore(),
 	})
 	if err != nil {
 		logger.Warn("open new wal fail", zap.Error(err))

@@ -6719,6 +6719,9 @@ type streamingConfig struct {
 
 	// Replication filtering configuration
 	ReplicationSkipMessageTypes ParamItem `refreshable:"false"`
+
+	// assignment configuration
+	WALAssignProgressTimeout ParamItem `refreshable:"true"`
 }
 
 func (p *streamingConfig) init(base *BaseTable) {
@@ -7126,6 +7129,18 @@ so we set 1 second here as a threshold.`,
 		Export:       false,
 	}
 	p.ReplicationSkipMessageTypes.Init(base.mgr)
+
+	p.WALAssignProgressTimeout = ParamItem{
+		Key:     "streaming.walAssign.progressTimeout",
+		Version: "2.6.9",
+		Doc: `The timeout for WAL assignment progress. If no progress is made within this duration,
+the assignment will be considered stalled and will timeout with an error.
+Progress is measured by state changes or recovery bytes/messages increase.
+Default is 30 seconds.`,
+		DefaultValue: "30s",
+		Export:       true,
+	}
+	p.WALAssignProgressTimeout.Init(base.mgr)
 }
 
 // runtimeConfig is just a private environment value table.

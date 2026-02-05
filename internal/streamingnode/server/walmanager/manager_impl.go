@@ -14,6 +14,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/replicate"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
@@ -59,10 +60,10 @@ type managerImpl struct {
 }
 
 // Open opens a wal instance for the channel on this Manager.
-func (m *managerImpl) Open(ctx context.Context, channel types.PChannelInfo, opt *OpenOption) (err error) {
+func (m *managerImpl) Open(ctx context.Context, channel types.PChannelInfo) (stateStore *utility.StateProgressStore, err error) {
 	// reject operation if manager is closing.
 	if !m.lifetime.AddIf(isOpenable) {
-		return errWALManagerClosed
+		return nil, errWALManagerClosed
 	}
 	defer func() {
 		m.lifetime.Done()
@@ -73,16 +74,7 @@ func (m *managerImpl) Open(ctx context.Context, channel types.PChannelInfo, opt 
 		m.logger.Info("open wal success", zap.String("channel", channel.String()))
 	}()
 
-	// Use noop reporter if opt is nil or opt.StateReporter is nil.
-	if opt == nil {
-		opt = &OpenOption{}
-	}
-	var walReporter wal.StateProgressReporter
-	if opt.StateReporter != nil {
-		walReporter = opt.StateReporter
-	}
-
-	return m.getWALLifetime(channel.Name).Open(ctx, channel, walReporter)
+	return m.getWALLifetime(channel.Name).Open(ctx, channel)
 }
 
 // Remove removes the wal instance for the channel.

@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
@@ -41,14 +42,11 @@ func newUnavailableCurrentState(term int64, err error) currentWALState {
 }
 
 // newAvailableExpectedState creates a new available expected state.
-func newAvailableExpectedState(ctx context.Context, channel types.PChannelInfo, reporter wal.StateProgressReporter) expectedWALState {
-	if reporter == nil {
-		reporter = wal.NoopStateReporter()
-	}
+func newAvailableExpectedState(ctx context.Context, channel types.PChannelInfo, stateStore *utility.StateProgressStore) expectedWALState {
 	return availableExpectedWALState{
-		ctx:           ctx,
-		channel:       channel,
-		stateReporter: reporter,
+		ctx:        ctx,
+		channel:    channel,
+		stateStore: stateStore,
 	}
 }
 
@@ -91,9 +89,9 @@ type expectedWALState interface {
 	// Context returns the context of the expected wal state.
 	Context() context.Context
 
-	// GetStateReporter returns the state reporter for progress reporting.
-	// Returns a noop reporter if not available.
-	GetStateReporter() wal.StateProgressReporter
+	// GetStateStore returns the state store for progress tracking.
+	// Returns nil if not available.
+	GetStateStore() *utility.StateProgressStore
 }
 
 // availableCurrentWALState is a available wal state of current wal.
@@ -140,9 +138,9 @@ func (s unavailableCurrentWALState) GetLastError() error {
 }
 
 type availableExpectedWALState struct {
-	ctx           context.Context
-	channel       types.PChannelInfo
-	stateReporter wal.StateProgressReporter
+	ctx        context.Context
+	channel    types.PChannelInfo
+	stateStore *utility.StateProgressStore
 }
 
 func (s availableExpectedWALState) Term() int64 {
@@ -161,8 +159,8 @@ func (s availableExpectedWALState) GetPChannelInfo() types.PChannelInfo {
 	return s.channel
 }
 
-func (s availableExpectedWALState) GetStateReporter() wal.StateProgressReporter {
-	return s.stateReporter
+func (s availableExpectedWALState) GetStateStore() *utility.StateProgressStore {
+	return s.stateStore
 }
 
 type unavailableExpectedWALState struct {
@@ -185,8 +183,8 @@ func (s unavailableExpectedWALState) Context() context.Context {
 	return context.Background()
 }
 
-func (s unavailableExpectedWALState) GetStateReporter() wal.StateProgressReporter {
-	return wal.NoopStateReporter()
+func (s unavailableExpectedWALState) GetStateStore() *utility.StateProgressStore {
+	return nil
 }
 
 // newWALStateWithCond creates new walStateWithCond.

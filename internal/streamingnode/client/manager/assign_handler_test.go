@@ -34,7 +34,13 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/mocks/proto/mock_streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
+	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
+
+func TestMain(m *testing.M) {
+	paramtable.Init()
+	m.Run()
+}
 
 // mockAssignWithStateReportClient is a mock implementation of StreamingNodeManagerService_AssignWithStateReportClient
 type mockAssignWithStateReportClient struct {
@@ -366,4 +372,69 @@ func TestAssignHandler_CreateStreamError(t *testing.T) {
 
 	err := handler.Execute(ctx)
 	assert.Error(t, err)
+}
+
+func TestHasProgressChanged(t *testing.T) {
+	tests := []struct {
+		name     string
+		old      progressState
+		new      progressState
+		expected bool
+	}{
+		{
+			name:     "same state and progress",
+			old:      progressState{state: streamingpb.AssignmentState_ASSIGNMENT_STATE_FENCING},
+			new:      progressState{state: streamingpb.AssignmentState_ASSIGNMENT_STATE_FENCING},
+			expected: false,
+		},
+		{
+			name:     "state changed",
+			old:      progressState{state: streamingpb.AssignmentState_ASSIGNMENT_STATE_FENCING},
+			new:      progressState{state: streamingpb.AssignmentState_ASSIGNMENT_STATE_STREAM_RECOVERING},
+			expected: true,
+		},
+		{
+			name: "recovered bytes increased",
+			old: progressState{
+				state:          streamingpb.AssignmentState_ASSIGNMENT_STATE_STREAM_RECOVERING,
+				recoveredBytes: 100,
+			},
+			new: progressState{
+				state:          streamingpb.AssignmentState_ASSIGNMENT_STATE_STREAM_RECOVERING,
+				recoveredBytes: 200,
+			},
+			expected: true,
+		},
+		{
+			name: "recovered messages increased",
+			old: progressState{
+				state:             streamingpb.AssignmentState_ASSIGNMENT_STATE_STREAM_RECOVERING,
+				recoveredMessages: 10,
+			},
+			new: progressState{
+				state:             streamingpb.AssignmentState_ASSIGNMENT_STATE_STREAM_RECOVERING,
+				recoveredMessages: 20,
+			},
+			expected: true,
+		},
+		{
+			name: "bytes decreased - not progress",
+			old: progressState{
+				state:          streamingpb.AssignmentState_ASSIGNMENT_STATE_STREAM_RECOVERING,
+				recoveredBytes: 200,
+			},
+			new: progressState{
+				state:          streamingpb.AssignmentState_ASSIGNMENT_STATE_STREAM_RECOVERING,
+				recoveredBytes: 100,
+			},
+			expected: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := hasProgressChanged(tc.old, tc.new)
+			assert.Equal(t, tc.expected, result)
+		})
+	}
 }

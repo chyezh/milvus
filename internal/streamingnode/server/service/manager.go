@@ -2,10 +2,21 @@ package service
 
 import (
 	"context"
+	"time"
 
+	"go.uber.org/zap"
+
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/walmanager"
+	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
+)
+
+const (
+	// defaultStateReportInterval is the default interval for reporting state.
+	defaultStateReportInterval = 1 * time.Second
 )
 
 var _ ManagerService = (*managerServiceImpl)(nil)
@@ -32,8 +43,9 @@ type managerServiceImpl struct {
 // After assign returns, the wal instance is ready to use.
 func (ms *managerServiceImpl) Assign(ctx context.Context, req *streamingpb.StreamingNodeManagerAssignRequest) (*streamingpb.StreamingNodeManagerAssignResponse, error) {
 	pchannelInfo := types.NewPChannelInfoFromProto(req.GetPchannel())
-	// Pass nil for OpenOption - legacy Assign doesn't need state reporting
-	if err := ms.walManager.Open(ctx, pchannelInfo, nil); err != nil {
+	// Open the WAL - we don't need state reporting for legacy Assign
+	_, err := ms.walManager.Open(ctx, pchannelInfo)
+	if err != nil {
 		return nil, err
 	}
 	return &streamingpb.StreamingNodeManagerAssignResponse{}, nil
@@ -66,25 +78,104 @@ func (ms *managerServiceImpl) AssignWithStateReport(
 	req *streamingpb.StreamingNodeManagerAssignRequest,
 	stream streamingpb.StreamingNodeManagerService_AssignWithStateReportServer,
 ) error {
-	reporter := NewAssignmentStateReporter(stream)
 	pchannelInfo := types.NewPChannelInfoFromProto(req.GetPchannel())
+	logger := log.With(zap.String("channel", pchannelInfo.Name), zap.Int64("term", pchannelInfo.Term))
 
-	// Report initial fencing state
-	if err := reporter.ReportProgress(streamingpb.AssignmentState_ASSIGNMENT_STATE_FENCING, nil); err != nil {
-		return nil // Stream error, close gracefully
-	}
-
-	// Open the WAL with state reporting - this may take a long time during recovery
-	opt := &walmanager.OpenOption{
-		StateReporter: reporter,
-	}
-	if err := ms.walManager.Open(stream.Context(), pchannelInfo, opt); err != nil {
-		// Report error and close stream gracefully
-		_ = reporter.ReportError(err)
+	// Open the WAL - this returns a StateProgressStore that we can watch
+	stateStore, err := ms.walManager.Open(stream.Context(), pchannelInfo)
+	if err != nil {
+		// Open failed immediately, report error and close stream gracefully
+		_ = sendError(stream, err)
 		return nil
 	}
 
-	// Report ready and close stream gracefully
-	_ = reporter.ReportReady()
-	return nil
+	// Watch the state store and report progress to the gRPC stream
+	return watchAndReportState(stream.Context(), stateStore, stream, logger)
+}
+
+// watchAndReportState watches the state store and reports progress to the gRPC stream.
+// It blocks until the state becomes terminal (Ready or Error) or the context is canceled.
+func watchAndReportState(
+	ctx context.Context,
+	store *utility.StateProgressStore,
+	stream streamingpb.StreamingNodeManagerService_AssignWithStateReportServer,
+	logger *log.MLogger,
+) error {
+	ticker := time.NewTicker(defaultStateReportInterval)
+	defer ticker.Stop()
+
+	progress := store.Get()
+	lastVersion := progress.Version
+
+	// Send initial state
+	if err := sendProgress(stream, progress); err != nil {
+		logger.Warn("failed to send initial progress", zap.Error(err))
+		return nil // Stream error, close gracefully
+	}
+
+	for {
+		// Check if we've reached a terminal state
+		if progress.Ready {
+			_ = sendReady(stream)
+			logger.Info("assignment ready")
+			return nil
+		}
+		if progress.Error != nil {
+			_ = sendError(stream, progress.Error)
+			logger.Info("assignment error", zap.Error(progress.Error))
+			return nil
+		}
+
+		// Wait for state change or timeout
+		select {
+		case <-ctx.Done():
+			// Context canceled, close stream
+			logger.Info("context canceled during state watching")
+			return nil
+		case <-ticker.C:
+			// Periodic check - get current state and send if changed
+			progress = store.Get()
+			if progress.Version != lastVersion {
+				lastVersion = progress.Version
+				if err := sendProgress(stream, progress); err != nil {
+					logger.Warn("failed to send progress", zap.Error(err))
+					return nil
+				}
+			}
+		}
+	}
+}
+
+// sendProgress sends a progress update to the gRPC stream.
+func sendProgress(stream streamingpb.StreamingNodeManagerService_AssignWithStateReportServer, progress utility.StateProgress) error {
+	resp := &streamingpb.AssignmentStateResponse{
+		Response: &streamingpb.AssignmentStateResponse_Progress{
+			Progress: &streamingpb.AssignmentProgress{
+				State:                    progress.State,
+				StreamRecoveringProgress: progress.GetProtoProgress(),
+			},
+		},
+	}
+	return stream.Send(resp)
+}
+
+// sendReady sends a ready signal to the gRPC stream.
+func sendReady(stream streamingpb.StreamingNodeManagerService_AssignWithStateReportServer) error {
+	resp := &streamingpb.AssignmentStateResponse{
+		Response: &streamingpb.AssignmentStateResponse_Ready{
+			Ready: &streamingpb.AssignmentReady{},
+		},
+	}
+	return stream.Send(resp)
+}
+
+// sendError sends an error to the gRPC stream.
+func sendError(stream streamingpb.StreamingNodeManagerService_AssignWithStateReportServer, err error) error {
+	streamingErr := status.AsStreamingError(err)
+	resp := &streamingpb.AssignmentStateResponse{
+		Response: &streamingpb.AssignmentStateResponse_Error{
+			Error: streamingErr.AsPBError(),
+		},
+	}
+	return stream.Send(resp)
 }

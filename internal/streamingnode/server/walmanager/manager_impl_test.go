@@ -65,16 +65,16 @@ func TestManager(t *testing.T) {
 	assertErrorChannelNotExist(t, err)
 	assert.Nil(t, l)
 
-	err = m.Open(context.Background(), types.PChannelInfo{
+	_, err = m.Open(context.Background(), types.PChannelInfo{
 		Name: channelName,
 		Term: 1,
-	}, nil)
+	})
 	assertErrorOperationIgnored(t, err)
 
-	err = m.Open(context.Background(), types.PChannelInfo{
+	_, err = m.Open(context.Background(), types.PChannelInfo{
 		Name: channelName,
 		Term: 2,
-	}, nil)
+	})
 	assert.NoError(t, err)
 
 	err = m.Remove(context.Background(), types.PChannelInfo{Name: channelName, Term: 1})
@@ -92,10 +92,10 @@ func TestManager(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, h.WALMetrics, 1)
 
-	err = m.Open(context.Background(), types.PChannelInfo{
+	_, err = m.Open(context.Background(), types.PChannelInfo{
 		Name: "term2",
 		Term: 3,
-	}, nil)
+	})
 	assert.NoError(t, err)
 
 	h, err = m.Metrics()
@@ -108,10 +108,10 @@ func TestManager(t *testing.T) {
 	assertShutdownError(t, err)
 	assert.Nil(t, h)
 
-	err = m.Open(context.Background(), types.PChannelInfo{
+	_, err = m.Open(context.Background(), types.PChannelInfo{
 		Name: "term2",
 		Term: 4,
-	}, nil)
+	})
 	assertShutdownError(t, err)
 
 	err = m.Remove(context.Background(), types.PChannelInfo{Name: channelName, Term: 2})
