@@ -187,10 +187,16 @@ func (o *openerAdaptorImpl) getOrCreateOpenerImpl(ctx context.Context, walName m
 
 // openRWWAL opens a read write wal instance for the channel.
 func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, opt *wal.OpenOption) (wal.WAL, error) {
+	reporter := opt.GetStateReporter()
+
 	id := o.idAllocator.Allocate()
 	roWAL := adaptImplsToROWAL(l, func() {
 		o.walInstances.Remove(id)
 	})
+
+	// Report PERSIST_RECOVERING state: loading metadata from catalog
+	_ = reporter.ReportProgress(streamingpb.AssignmentState_ASSIGNMENT_STATE_PERSIST_RECOVERING, nil)
+
 	cpProto, err := resource.Resource().StreamingNodeCatalog().GetConsumeCheckpoint(ctx, opt.Channel.Name)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to get checkpoint from catalog")
@@ -203,6 +209,10 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 		roWAL.Close()
 		return nil, errors.Wrap(err, "when building interceptor params")
 	}
+
+	// Report STREAM_RECOVERING state: replaying messages from WAL stream
+	_ = reporter.ReportProgress(streamingpb.AssignmentState_ASSIGNMENT_STATE_STREAM_RECOVERING, nil)
+
 	rs, snapshot, err := recovery.RecoverRecoveryStorage(ctx, newRecoveryStreamBuilder(roWAL), cp, param.LastTimeTickMessage)
 	if err != nil {
 		param.Clear()

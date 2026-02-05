@@ -60,12 +60,14 @@ func TestUnavailableCurrentWALState(t *testing.T) {
 
 func TestAvailableExpectedWALState(t *testing.T) {
 	channel := types.PChannelInfo{}
-	state := newAvailableExpectedState(context.Background(), channel)
+	// Test with nil reporter (should use noop)
+	state := newAvailableExpectedState(context.Background(), channel, nil)
 
 	assert.Equal(t, int64(0), state.Term())
 	assert.True(t, state.Available())
 	assert.Equal(t, context.Background(), state.Context())
 	assert.Equal(t, channel, state.GetPChannelInfo())
+	assert.NotNil(t, state.GetStateReporter())
 
 	assert.Equal(t, toStateString(state), "(0,true)")
 }
@@ -96,7 +98,7 @@ func TestIsStateBefore(t *testing.T) {
 		newUnavailableCurrentState(1, nil),
 		newAvailableExpectedState(context.Background(), types.PChannelInfo{
 			Term: 3,
-		}),
+		}, nil),
 		newUnavailableExpectedState(5),
 	}
 	for _, s := range cases {

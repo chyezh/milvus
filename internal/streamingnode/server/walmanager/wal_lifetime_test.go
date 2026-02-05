@@ -43,7 +43,7 @@ func TestWALLifetime(t *testing.T) {
 	err := wlt.Open(context.Background(), types.PChannelInfo{
 		Name: channel,
 		Term: 2,
-	})
+	}, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, wlt.GetWAL())
 	assert.Equal(t, channel, wlt.GetWAL().Channel().Name)
@@ -65,7 +65,7 @@ func TestWALLifetime(t *testing.T) {
 	err = wlt.Open(context.Background(), types.PChannelInfo{
 		Name: channel,
 		Term: 1,
-	})
+	}, nil)
 	assertErrorOperationIgnored(t, err)
 	assert.Nil(t, wlt.GetWAL())
 
@@ -73,7 +73,7 @@ func TestWALLifetime(t *testing.T) {
 	err = wlt.Open(context.Background(), types.PChannelInfo{
 		Name: channel,
 		Term: 5,
-	})
+	}, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, wlt.GetWAL())
 	assert.Equal(t, channel, wlt.GetWAL().Channel().Name)
@@ -83,7 +83,7 @@ func TestWALLifetime(t *testing.T) {
 	err = wlt.Open(context.Background(), types.PChannelInfo{
 		Name: channel,
 		Term: 10,
-	})
+	}, nil)
 	assert.NoError(t, err)
 	assert.NotNil(t, wlt.GetWAL())
 	assert.Equal(t, channel, wlt.GetWAL().Channel().Name)
@@ -95,7 +95,7 @@ func TestWALLifetime(t *testing.T) {
 	err = wlt.Open(ctx, types.PChannelInfo{
 		Name: channel,
 		Term: 11,
-	})
+	}, nil)
 	assert.ErrorIs(t, err, context.Canceled)
 
 	err = wlt.Remove(ctx, 11)
@@ -104,13 +104,13 @@ func TestWALLifetime(t *testing.T) {
 	err = wlt.Open(context.Background(), types.PChannelInfo{
 		Name: channel,
 		Term: 11,
-	})
+	}, nil)
 	assertErrorOperationIgnored(t, err)
 
 	wlt.Open(context.Background(), types.PChannelInfo{
 		Name: channel,
 		Term: 12,
-	})
+	}, nil)
 	assert.NotNil(t, wlt.GetWAL())
 	assert.Equal(t, channel, wlt.GetWAL().Channel().Name)
 	assert.Equal(t, int64(12), wlt.GetWAL().Channel().Term)

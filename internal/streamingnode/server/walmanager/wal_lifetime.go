@@ -52,9 +52,9 @@ func (w *walLifetime) GetWAL() wal.WAL {
 }
 
 // Open opens a wal instance for the channel on this Manager.
-func (w *walLifetime) Open(ctx context.Context, channel types.PChannelInfo) error {
+func (w *walLifetime) Open(ctx context.Context, channel types.PChannelInfo, stateReporter wal.StateProgressReporter) error {
 	// Set expected WAL state to available at given term.
-	expected := newAvailableExpectedState(ctx, channel)
+	expected := newAvailableExpectedState(ctx, channel, stateReporter)
 	if !w.statePair.SetExpectedState(expected) {
 		return status.NewIgnoreOperation("channel %s with expired term %d, cannot change expected state for open", channel.Name, channel.Term)
 	}
@@ -157,7 +157,8 @@ func (w *walLifetime) doLifetimeChanged(expectedState expectedWALState) {
 	// If expected state is available, open a new wal.
 	// TODO: merge the expectedState and expected state context together.
 	l, err := w.opener.Open(expectedState.Context(), &wal.OpenOption{
-		Channel: expectedState.GetPChannelInfo(),
+		Channel:       expectedState.GetPChannelInfo(),
+		StateReporter: expectedState.GetStateReporter(),
 	})
 	if err != nil {
 		logger.Warn("open new wal fail", zap.Error(err))

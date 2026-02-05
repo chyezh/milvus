@@ -41,10 +41,14 @@ func newUnavailableCurrentState(term int64, err error) currentWALState {
 }
 
 // newAvailableExpectedState creates a new available expected state.
-func newAvailableExpectedState(ctx context.Context, channel types.PChannelInfo) expectedWALState {
+func newAvailableExpectedState(ctx context.Context, channel types.PChannelInfo, reporter wal.StateProgressReporter) expectedWALState {
+	if reporter == nil {
+		reporter = wal.NoopStateReporter()
+	}
 	return availableExpectedWALState{
-		ctx:     ctx,
-		channel: channel,
+		ctx:           ctx,
+		channel:       channel,
+		stateReporter: reporter,
 	}
 }
 
@@ -86,6 +90,10 @@ type expectedWALState interface {
 
 	// Context returns the context of the expected wal state.
 	Context() context.Context
+
+	// GetStateReporter returns the state reporter for progress reporting.
+	// Returns a noop reporter if not available.
+	GetStateReporter() wal.StateProgressReporter
 }
 
 // availableCurrentWALState is a available wal state of current wal.
@@ -132,8 +140,9 @@ func (s unavailableCurrentWALState) GetLastError() error {
 }
 
 type availableExpectedWALState struct {
-	ctx     context.Context
-	channel types.PChannelInfo
+	ctx           context.Context
+	channel       types.PChannelInfo
+	stateReporter wal.StateProgressReporter
 }
 
 func (s availableExpectedWALState) Term() int64 {
@@ -150,6 +159,10 @@ func (s availableExpectedWALState) Context() context.Context {
 
 func (s availableExpectedWALState) GetPChannelInfo() types.PChannelInfo {
 	return s.channel
+}
+
+func (s availableExpectedWALState) GetStateReporter() wal.StateProgressReporter {
+	return s.stateReporter
 }
 
 type unavailableExpectedWALState struct {
@@ -170,6 +183,10 @@ func (s unavailableExpectedWALState) GetPChannelInfo() types.PChannelInfo {
 
 func (s unavailableExpectedWALState) Context() context.Context {
 	return context.Background()
+}
+
+func (s unavailableExpectedWALState) GetStateReporter() wal.StateProgressReporter {
+	return wal.NoopStateReporter()
 }
 
 // newWALStateWithCond creates new walStateWithCond.

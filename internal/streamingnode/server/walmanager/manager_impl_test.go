@@ -68,13 +68,13 @@ func TestManager(t *testing.T) {
 	err = m.Open(context.Background(), types.PChannelInfo{
 		Name: channelName,
 		Term: 1,
-	})
+	}, nil)
 	assertErrorOperationIgnored(t, err)
 
 	err = m.Open(context.Background(), types.PChannelInfo{
 		Name: channelName,
 		Term: 2,
-	})
+	}, nil)
 	assert.NoError(t, err)
 
 	err = m.Remove(context.Background(), types.PChannelInfo{Name: channelName, Term: 1})
@@ -95,7 +95,7 @@ func TestManager(t *testing.T) {
 	err = m.Open(context.Background(), types.PChannelInfo{
 		Name: "term2",
 		Term: 3,
-	})
+	}, nil)
 	assert.NoError(t, err)
 
 	h, err = m.Metrics()
@@ -111,7 +111,7 @@ func TestManager(t *testing.T) {
 	err = m.Open(context.Background(), types.PChannelInfo{
 		Name: "term2",
 		Term: 4,
-	})
+	}, nil)
 	assertShutdownError(t, err)
 
 	err = m.Remove(context.Background(), types.PChannelInfo{Name: channelName, Term: 2})

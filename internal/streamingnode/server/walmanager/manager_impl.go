@@ -74,15 +74,15 @@ func (m *managerImpl) Open(ctx context.Context, channel types.PChannelInfo, opt 
 	}()
 
 	// Use noop reporter if opt is nil or opt.StateReporter is nil.
-	// The actual progress reporting will be added in Task 9 (WAL opener changes).
 	if opt == nil {
 		opt = &OpenOption{}
 	}
-	if opt.StateReporter == nil {
-		opt.StateReporter = NoopStateReporter()
+	var walReporter wal.StateProgressReporter
+	if opt.StateReporter != nil {
+		walReporter = opt.StateReporter
 	}
 
-	return m.getWALLifetime(channel.Name).Open(ctx, channel)
+	return m.getWALLifetime(channel.Name).Open(ctx, channel, walReporter)
 }
 
 // Remove removes the wal instance for the channel.

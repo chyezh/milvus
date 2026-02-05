@@ -23,7 +23,7 @@ func TestStatePair(t *testing.T) {
 
 	statePair.SetExpectedState(newAvailableExpectedState(context.Background(), types.PChannelInfo{
 		Term: 1,
-	}))
+	}, nil))
 	assert.Equal(t, "(1,true)", toStateString(statePair.GetExpectedState()))
 
 	statePair.SetExpectedState(newUnavailableExpectedState(1))
@@ -41,7 +41,7 @@ func TestStatePair(t *testing.T) {
 
 	assert.NoError(t, statePair.WaitExpectedStateChanged(context.Background(), newAvailableExpectedState(context.Background(), types.PChannelInfo{
 		Term: 1,
-	})))
+	}, nil)))
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 	assert.ErrorIs(t, statePair.WaitExpectedStateChanged(ctx, newUnavailableExpectedState(1)), context.DeadlineExceeded)
