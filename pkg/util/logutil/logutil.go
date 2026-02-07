@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/grpclog"
 
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 )
 
 const (
@@ -144,6 +145,8 @@ func SetupLogger(cfg *log.Config) {
 		logger, p, err := log.InitLogger(cfg, zap.AddStacktrace(zap.ErrorLevel))
 		if err == nil {
 			log.ReplaceGlobals(logger, p)
+			mlog.Init(logger)
+			mlog.SetLevel(p.Level.Level())
 		} else {
 			log.Fatal("initialize logger error", zap.Error(err))
 		}
@@ -172,7 +175,7 @@ func Logger(ctx context.Context) *zap.Logger {
 }
 
 func WithModule(ctx context.Context, module string) context.Context {
-	return log.WithModule(ctx, module)
+	return mlog.WithFields(ctx, mlog.FieldModule(module))
 }
 
 // keeps only 2 decimal places

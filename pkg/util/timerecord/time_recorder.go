@@ -17,9 +17,8 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/trace"
-	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 )
 
 // TimeRecorder provides methods to record time duration
@@ -93,11 +92,10 @@ func (tr *TimeRecorder) CtxElapse(ctx context.Context, msg string) time.Duration
 func (tr *TimeRecorder) printTimeRecord(ctx context.Context, msg string, span time.Duration) {
 	ts := trace.SpanFromContext(ctx)
 	ts.AddEvent(fmt.Sprintf("%s, cost %s", msg, span.String()))
-	log.Ctx(ctx).WithOptions(zap.AddCallerSkip(2)).
-		Debug(fmt.Sprintf("tr/%s", tr.header),
-			zap.String("msg", msg),
-			zap.Duration("duration", span),
-		)
+	mlog.Debug(ctx, fmt.Sprintf("tr/%s", tr.header),
+		mlog.String("msg", msg),
+		mlog.Duration("duration", span),
+	)
 }
 
 // LongTermChecker checks we receive at least one msg in d duration. If not, checker
@@ -128,10 +126,10 @@ func (c *LongTermChecker) Start() {
 		for {
 			select {
 			case <-c.ch:
-				log.Warn(fmt.Sprintf("long term checker [%s] shutdown", c.name))
+				mlog.Warn(context.TODO(), fmt.Sprintf("long term checker [%s] shutdown", c.name))
 				return
 			case <-c.t.C:
-				log.Warn(c.warn)
+				mlog.Warn(context.TODO(), c.warn)
 			}
 		}
 	}()

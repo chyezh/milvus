@@ -5,12 +5,11 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/errors"
-	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/resource"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
@@ -67,7 +66,7 @@ func newBroadcastTaskFromBroadcastMessage(msg message.BroadcastMutableMessage, m
 	m := metrics.NewBroadcastTask(msg.MessageType(), streamingpb.BroadcastTaskState_BROADCAST_TASK_STATE_PENDING, msg.BroadcastHeader().ResourceKeys.Collect())
 	header := msg.BroadcastHeader()
 	bt := &broadcastTask{
-		Binder:           log.Binder{},
+		Binder:           mlog.Binder{},
 		taskMetricsGuard: m,
 		mu:               sync.Mutex{},
 		msg:              msg,
@@ -98,7 +97,7 @@ func newBroadcastTaskFromImmutableMessage(msg message.ImmutableMessage, metrics 
 
 // broadcastTask is the state of the broadcast task.
 type broadcastTask struct {
-	log.Binder
+	mlog.Binder
 	*taskMetricsGuard
 
 	mu                       sync.Mutex
@@ -114,8 +113,8 @@ type broadcastTask struct {
 }
 
 // SetLogger sets the logger of the broadcast task.
-func (b *broadcastTask) SetLogger(logger *log.MLogger) {
-	b.Binder.SetLogger(logger.With(log.FieldMessage(b.msg)))
+func (b *broadcastTask) SetLogger(logger *mlog.Logger) {
+	b.Binder.SetLogger(logger.With(mlog.FieldMessage(b.msg)))
 }
 
 // WithResourceKeyLockGuards sets the lock guards for the broadcast task.
@@ -452,20 +451,20 @@ func (b *broadcastTask) MarkAckCallbackDone(ctx context.Context) error {
 }
 
 // saveTaskIfDirty saves the broadcast task recovery info if the task is dirty.
-func (b *broadcastTask) saveTaskIfDirty(ctx context.Context, logger *log.MLogger) error {
+func (b *broadcastTask) saveTaskIfDirty(ctx context.Context, logger *mlog.Logger) error {
 	if !b.dirty {
 		return nil
 	}
 	b.dirty = false
-	logger = logger.With(zap.String("state", b.task.State.String()), zap.Int("ackedVChannelCount", ackedCount(b.task)))
+	logger = logger.With(mlog.String("state", b.task.State.String()), mlog.Int("ackedVChannelCount", ackedCount(b.task)))
 	if err := resource.Resource().StreamingCatalog().SaveBroadcastTask(ctx, b.Header().BroadcastID, b.task); err != nil {
-		logger.Warn("save broadcast task failed", zap.Error(err))
+		logger.Warn(context.TODO(), "save broadcast task failed", mlog.Err(err))
 		if ctx.Err() == nil {
 			panic("critical error: the save broadcast task is failed before the context is done")
 		}
 		return err
 	}
 	b.ObserveStateChanged(b.task.State)
-	logger.Info("save broadcast task done")
+	logger.Info(context.TODO(), "save broadcast task done")
 	return nil
 }

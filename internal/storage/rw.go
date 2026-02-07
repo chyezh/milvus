@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/storagecommon"
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
 	"github.com/milvus-io/milvus/internal/util/hookutil"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexcgopb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
@@ -77,7 +77,7 @@ type rwOptions struct {
 
 func (o *rwOptions) validate() error {
 	if o.collectionID == 0 {
-		log.Warn("storage config collection id is empty when init BinlogReader")
+		mlog.Warn(context.TODO(), "storage config collection id is empty when init BinlogReader")
 		// return merr.WrapErrServiceInternal("storage config collection id is empty")
 	}
 	if o.op == OpWrite && o.uploader == nil {

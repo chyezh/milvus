@@ -17,20 +17,19 @@
 package vralloc
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
-
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
+	"github.com/stretchr/testify/assert"
 )
 
 func inspect[T comparable](a Allocator[T]) {
 	m := a.Inspect()
-	log.Info("Allocation", zap.Any("allocations", m), zap.Any("used", a.Used()))
+	mlog.Info(context.TODO(), "Allocation", mlog.Any("allocations", m), mlog.Any("used", a.Used()))
 }
 
 func TestFixedSizeAllocator(t *testing.T) {

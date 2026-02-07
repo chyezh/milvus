@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
-	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
@@ -33,7 +32,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proxy/shardclient"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
@@ -315,9 +314,9 @@ func (t *createCollectionTask) validatePartitionKey(ctx context.Context) error {
 			return errors.New("num_partitions should only be specified with partition key field enabled")
 		}
 	} else {
-		log.Ctx(ctx).Info("create collection with partition key mode",
-			zap.String("collectionName", t.CollectionName),
-			zap.Int64("numDefaultPartitions", t.GetNumPartitions()))
+		mlog.Info(ctx, "create collection with partition key mode",
+			mlog.String("collectionName", t.CollectionName),
+			mlog.Int64("numDefaultPartitions", t.GetNumPartitions()))
 	}
 
 	return nil
@@ -349,9 +348,9 @@ func (t *createCollectionTask) validateClusteringKey(ctx context.Context) error 
 		}
 	}
 	if idx != -1 {
-		log.Ctx(ctx).Info("create collection with clustering key",
-			zap.String("collectionName", t.CollectionName),
-			zap.String("clusteringKeyField", t.schema.Fields[idx].Name))
+		mlog.Info(ctx, "create collection with clustering key",
+			mlog.String("collectionName", t.CollectionName),
+			mlog.String("clusteringKeyField", t.schema.Fields[idx].Name))
 	}
 	return nil
 }
@@ -694,7 +693,7 @@ func (t *addCollectionFieldTask) PreExecute(ctx context.Context) error {
 		return merr.WrapErrParameterInvalidMsg(fmt.Sprintf("duplicate field name: %s", t.fieldSchema.GetName()))
 	}
 
-	log.Info("PreExecute addField task done", zap.Any("field schema", t.fieldSchema))
+	mlog.Info(context.TODO(), "PreExecute addField task done", mlog.Any("field schema", t.fieldSchema))
 	return nil
 }
 
@@ -767,7 +766,7 @@ func (t *dropCollectionTask) PreExecute(ctx context.Context) error {
 	if err != nil {
 		if errors.Is(err, merr.ErrCollectionNotFound) || errors.Is(err, merr.ErrDatabaseNotFound) {
 			// make dropping collection idempotent.
-			log.Ctx(ctx).Warn("drop non-existent collection", zap.String("collection", t.DropCollectionRequest.GetCollectionName()), zap.String("database", t.DropCollectionRequest.GetDbName()))
+			mlog.Warn(ctx, "drop non-existent collection", mlog.String("collection", t.DropCollectionRequest.GetCollectionName()), mlog.String("database", t.DropCollectionRequest.GetDbName()))
 			return nil
 		}
 		return err
@@ -1180,8 +1179,8 @@ func (t *showCollectionsTask) Execute(ctx context.Context) error {
 		for _, collectionName := range t.CollectionNames {
 			collectionID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), collectionName)
 			if err != nil {
-				log.Ctx(ctx).Debug("Failed to get collection id.", zap.String("collectionName", collectionName),
-					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showCollections"))
+				mlog.Debug(ctx, "Failed to get collection id.", mlog.String("collectionName", collectionName),
+					mlog.Int64("requestID", t.Base.MsgID), mlog.String("requestType", "showCollections"))
 				return err
 			}
 			collectionIDs = append(collectionIDs, collectionID)
@@ -1227,15 +1226,15 @@ func (t *showCollectionsTask) Execute(ctx context.Context) error {
 		for offset, id := range resp.CollectionIDs {
 			collectionName, ok := IDs2Names[id]
 			if !ok {
-				log.Ctx(ctx).Debug("Failed to get collection info. This collection may be not released",
-					zap.Int64("collectionID", id),
-					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showCollections"))
+				mlog.Debug(ctx, "Failed to get collection info. This collection may be not released",
+					mlog.Int64("collectionID", id),
+					mlog.Int64("requestID", t.Base.MsgID), mlog.String("requestType", "showCollections"))
 				continue
 			}
 			collectionInfo, err := globalMetaCache.GetCollectionInfo(ctx, t.GetDbName(), collectionName, id)
 			if err != nil {
-				log.Ctx(ctx).Debug("Failed to get collection info.", zap.String("collectionName", collectionName),
-					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showCollections"))
+				mlog.Debug(ctx, "Failed to get collection info.", mlog.String("collectionName", collectionName),
+					mlog.Int64("requestID", t.Base.MsgID), mlog.String("requestType", "showCollections"))
 				return err
 			}
 			t.result.CollectionIds = append(t.result.CollectionIds, id)
@@ -1382,7 +1381,7 @@ func validatePartitionKeyIsolation(ctx context.Context, colName string, isPartit
 			"partition key isolation mode is enabled but current Milvus does not support it. Please contact us")
 	}
 
-	log.Ctx(ctx).Info("validated with partition key isolation", zap.String("collectionName", colName))
+	mlog.Info(ctx, "validated with partition key isolation", mlog.String("collectionName", colName))
 
 	return true, nil
 }
@@ -1498,11 +1497,11 @@ func (t *alterCollectionTask) PreExecute(ctx context.Context) error {
 	}
 	oldIsoValue := collBasicInfo.partitionKeyIsolation
 
-	log.Ctx(ctx).Info("alter collection pre check with partition key isolation",
-		zap.String("collectionName", t.CollectionName),
-		zap.Bool("isPartitionKeyMode", isPartitionKeyMode),
-		zap.Bool("newIsoValue", newIsoValue),
-		zap.Bool("oldIsoValue", oldIsoValue))
+	mlog.Info(ctx, "alter collection pre check with partition key isolation",
+		mlog.String("collectionName", t.CollectionName),
+		mlog.Bool("isPartitionKeyMode", isPartitionKeyMode),
+		mlog.Bool("newIsoValue", newIsoValue),
+		mlog.Bool("oldIsoValue", oldIsoValue))
 
 	// if the isolation flag in properties is not set, meta cache will assign partitionKeyIsolation in collection info to false
 	//   - None|false -> false, skip
@@ -2160,8 +2159,8 @@ func (t *showPartitionsTask) Execute(ctx context.Context) error {
 		collectionName := t.CollectionName
 		collectionID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), collectionName)
 		if err != nil {
-			log.Ctx(ctx).Debug("Failed to get collection id.", zap.String("collectionName", collectionName),
-				zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showPartitions"))
+			mlog.Debug(ctx, "Failed to get collection id.", mlog.String("collectionName", collectionName),
+				mlog.Int64("requestID", t.Base.MsgID), mlog.String("requestType", "showPartitions"))
 			return err
 		}
 		IDs2Names := make(map[UniqueID]string)
@@ -2173,8 +2172,8 @@ func (t *showPartitionsTask) Execute(ctx context.Context) error {
 		for _, partitionName := range t.PartitionNames {
 			partitionID, err := globalMetaCache.GetPartitionID(ctx, t.GetDbName(), collectionName, partitionName)
 			if err != nil {
-				log.Ctx(ctx).Debug("Failed to get partition id.", zap.String("partitionName", partitionName),
-					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showPartitions"))
+				mlog.Debug(ctx, "Failed to get partition id.", mlog.String("partitionName", partitionName),
+					mlog.Int64("requestID", t.Base.MsgID), mlog.String("requestType", "showPartitions"))
 				return err
 			}
 			partitionIDs = append(partitionIDs, partitionID)
@@ -2204,14 +2203,14 @@ func (t *showPartitionsTask) Execute(ctx context.Context) error {
 		for offset, id := range resp.PartitionIDs {
 			partitionName, ok := IDs2Names[id]
 			if !ok {
-				log.Ctx(ctx).Debug("Failed to get partition id.", zap.String("partitionName", partitionName),
-					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showPartitions"))
+				mlog.Debug(ctx, "Failed to get partition id.", mlog.String("partitionName", partitionName),
+					mlog.Int64("requestID", t.Base.MsgID), mlog.String("requestType", "showPartitions"))
 				return errors.New("failed to show partitions")
 			}
 			partitionInfo, err := globalMetaCache.GetPartitionInfo(ctx, t.GetDbName(), collectionName, partitionName)
 			if err != nil {
-				log.Ctx(ctx).Debug("Failed to get partition id.", zap.String("partitionName", partitionName),
-					zap.Int64("requestID", t.Base.MsgID), zap.String("requestType", "showPartitions"))
+				mlog.Debug(ctx, "Failed to get partition id.", mlog.String("partitionName", partitionName),
+					mlog.Int64("requestID", t.Base.MsgID), mlog.String("requestType", "showPartitions"))
 				return err
 			}
 			t.result.PartitionIDs = append(t.result.PartitionIDs, id)
@@ -2286,8 +2285,8 @@ func (t *loadCollectionTask) OnEnqueue() error {
 }
 
 func (t *loadCollectionTask) PreExecute(ctx context.Context) error {
-	log.Ctx(ctx).Debug("loadCollectionTask PreExecute",
-		zap.String("role", typeutil.ProxyRole))
+	mlog.Debug(ctx, "loadCollectionTask PreExecute",
+		mlog.String("role", typeutil.ProxyRole))
 
 	collName := t.CollectionName
 
@@ -2310,11 +2309,10 @@ func (t *loadCollectionTask) GetLoadPriority() commonpb.LoadPriority {
 func (t *loadCollectionTask) Execute(ctx context.Context) (err error) {
 	collID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), t.CollectionName)
 
-	log := log.Ctx(ctx).With(
-		zap.String("role", typeutil.ProxyRole),
-		zap.Int64("collectionID", collID))
+	ctx = mlog.WithFields(ctx, mlog.String("role", typeutil.ProxyRole),
+		mlog.Int64("collectionID", collID))
 
-	log.Debug("loadCollectionTask Execute")
+	mlog.Debug(ctx, "loadCollectionTask Execute")
 	if err != nil {
 		return err
 	}
@@ -2364,7 +2362,7 @@ func (t *loadCollectionTask) Execute(ctx context.Context) (err error) {
 
 	if len(unindexedVecFields) != 0 {
 		errMsg := fmt.Sprintf("there is no vector index on field: %v, please create index firstly", unindexedVecFields)
-		log.Debug(errMsg)
+		mlog.Debug(context.TODO(), errMsg)
 		return errors.New(errMsg)
 	}
 	request := &querypb.LoadCollectionRequest{
@@ -2382,9 +2380,9 @@ func (t *loadCollectionTask) Execute(ctx context.Context) (err error) {
 		LoadFields:     loadFields,
 		Priority:       t.GetLoadPriority(),
 	}
-	log.Info("send LoadCollectionRequest to query coordinator",
-		zap.Any("schema", request.Schema),
-		zap.Int32("priority", int32(request.GetPriority())))
+	mlog.Info(context.TODO(), "send LoadCollectionRequest to query coordinator",
+		mlog.Any("schema", request.Schema),
+		mlog.Int32("priority", int32(request.GetPriority())))
 	t.result, err = t.mixCoord.LoadCollection(ctx, request)
 	if err = merr.CheckRPCCall(t.result, err); err != nil {
 		return fmt.Errorf("call query coordinator LoadCollection: %s", err)
@@ -2394,9 +2392,9 @@ func (t *loadCollectionTask) Execute(ctx context.Context) (err error) {
 
 func (t *loadCollectionTask) PostExecute(ctx context.Context) error {
 	collID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), t.CollectionName)
-	log.Ctx(ctx).Debug("loadCollectionTask PostExecute",
-		zap.String("role", typeutil.ProxyRole),
-		zap.Int64("collectionID", collID))
+	mlog.Debug(ctx, "loadCollectionTask PostExecute",
+		mlog.String("role", typeutil.ProxyRole),
+		mlog.Int64("collectionID", collID))
 	if err != nil {
 		return err
 	}
@@ -2621,7 +2619,7 @@ func (t *loadPartitionsTask) Execute(ctx context.Context) error {
 
 	if len(unindexedVecFields) != 0 {
 		errMsg := fmt.Sprintf("there is no vector index on field: %v, please create index firstly", unindexedVecFields)
-		log.Ctx(ctx).Debug(errMsg)
+		mlog.Debug(ctx, errMsg)
 		return errors.New(errMsg)
 	}
 
@@ -2651,9 +2649,9 @@ func (t *loadPartitionsTask) Execute(ctx context.Context) error {
 		LoadFields:     loadFields,
 		Priority:       t.GetLoadPriority(),
 	}
-	log.Info("send LoadPartitionRequest to query coordinator",
-		zap.Any("schema", request.Schema),
-		zap.Int32("priority", int32(request.GetPriority())))
+	mlog.Info(context.TODO(), "send LoadPartitionRequest to query coordinator",
+		mlog.Any("schema", request.Schema),
+		mlog.Int32("priority", int32(request.GetPriority())))
 	t.result, err = t.mixCoord.LoadPartitions(ctx, request)
 	if err = merr.CheckRPCCall(t.result, err); err != nil {
 		return err
@@ -3033,9 +3031,9 @@ func (t *DescribeResourceGroupTask) Execute(ctx context.Context) error {
 		for key, value := range collections {
 			name, err := globalMetaCache.GetCollectionName(ctx, "", key)
 			if err != nil {
-				log.Ctx(ctx).Warn("failed to get collection name",
-					zap.Int64("collectionID", key),
-					zap.Error(err))
+				mlog.Warn(ctx, "failed to get collection name",
+					mlog.Int64("collectionID", key),
+					mlog.Err(err))
 
 				// if collection has been dropped, skip it
 				if errors.Is(err, merr.ErrCollectionNotFound) {

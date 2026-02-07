@@ -7,7 +7,6 @@ import (
 
 	"github.com/apache/arrow/go/v17/arrow/array"
 	"go.opentelemetry.io/otel"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/allocator"
@@ -15,8 +14,8 @@ import (
 	"github.com/milvus-io/milvus/internal/flushcommon/io"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -38,8 +37,6 @@ func mergeSortMultipleSegments(ctx context.Context,
 	ctx, span := otel.Tracer(typeutil.DataNodeRole).Start(ctx, "mergeSortMultipleSegments")
 	defer span.End()
 
-	log := log.With(zap.Int64("planID", plan.GetPlanID()))
-
 	segIDAlloc := allocator.NewLocalAllocator(plan.GetPreAllocatedSegmentIDs().GetBegin(), plan.GetPreAllocatedSegmentIDs().GetEnd())
 	logIDAlloc := allocator.NewLocalAllocator(plan.GetPreAllocatedLogIDs().GetBegin(), plan.GetPreAllocatedLogIDs().GetEnd())
 	compAlloc := NewCompactionAllocator(segIDAlloc, logIDAlloc)
@@ -53,7 +50,7 @@ func mergeSortMultipleSegments(ctx context.Context,
 
 	pkField, err := typeutil.GetPrimaryFieldSchema(plan.GetSchema())
 	if err != nil {
-		log.Warn("failed to get pk field from schema")
+		mlog.Warn(ctx, "failed to get pk field from schema")
 		return nil, err
 	}
 
@@ -135,7 +132,7 @@ func mergeSortMultipleSegments(ctx context.Context,
 			return !segmentFilters[ri].Filtered(pk, uint64(ts), expireTs)
 		}
 	default:
-		log.Warn("compaction only support int64 and varchar pk field")
+		mlog.Warn(context.TODO(), "compaction only support int64 and varchar pk field")
 	}
 
 	if _, err = storage.MergeSort(compactionParams.BinLogMaxSize, plan.GetSchema(), segmentReaders, writer, predicate, sortByFields); err != nil {
@@ -144,7 +141,7 @@ func mergeSortMultipleSegments(ctx context.Context,
 	}
 
 	if err := writer.Close(); err != nil {
-		log.Warn("compact wrong, failed to finish writer", zap.Error(err))
+		mlog.Warn(context.TODO(), "compact wrong, failed to finish writer", mlog.Err(err))
 		return nil, err
 	}
 
@@ -168,11 +165,11 @@ func mergeSortMultipleSegments(ctx context.Context,
 	}
 
 	totalElapse := tr.RecordSpan()
-	log.Info("compact mergeSortMultipleSegments end",
-		zap.Int("deleted row count", deletedRowCount),
-		zap.Int("expired entities", expiredRowCount),
-		zap.Int("missing deletes", missingDeleteCount),
-		zap.Duration("total elapse", totalElapse))
+	mlog.Info(context.TODO(), "compact mergeSortMultipleSegments end",
+		mlog.Int("deleted row count", deletedRowCount),
+		mlog.Int("expired entities", expiredRowCount),
+		mlog.Int("missing deletes", missingDeleteCount),
+		mlog.Duration("total elapse", totalElapse))
 
 	metrics.DataNodeCompactionDeleteCount.WithLabelValues(fmt.Sprint(collectionID)).Add(float64(deltalogDeleteEntriesCount))
 	metrics.DataNodeCompactionMissingDeleteCount.WithLabelValues(fmt.Sprint(collectionID)).Add(float64(missingDeleteCount))

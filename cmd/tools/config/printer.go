@@ -1,21 +1,20 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sort"
 
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/spf13/viper"
-	"go.uber.org/zap"
-
-	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 func ShowYaml(filepath string) {
 	reader := viper.New()
 	reader.SetConfigFile(filepath)
 	if err := reader.ReadInConfig(); err != nil {
-		log.Warn("read config failed", zap.Error(err))
+		mlog.Warn(context.TODO(), "read config failed", mlog.Err(err))
 		os.Exit(-3)
 	}
 	keys := reader.AllKeys()

@@ -1,6 +1,7 @@
 package vchannelfair
 
 import (
+	"context"
 	"math"
 
 	"github.com/cockroachdb/errors"
@@ -8,7 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 )
 
@@ -18,7 +19,7 @@ var _ balancer.Policy = &policy{}
 // It will try to make the vchannel count of each streaming node is closed to average as much as possible and
 // the vchannel belong to same collection will be assigned to the different streaming node as much as possible.
 type policy struct {
-	log.Binder
+	mlog.Binder
 	cfg policyConfig
 }
 
@@ -98,12 +99,12 @@ func (p *policy) Balance(currentLayout balancer.CurrentLayout) (layout balancer.
 	p.assignChannels(expectedLayout, reassignChannelIDs, &greatestSnapshot)
 	if greatestSnapshot.GlobalUnbalancedScore < snapshot.GlobalUnbalancedScore-p.cfg.RebalanceTolerance {
 		if p.Logger().Level().Enabled(zap.DebugLevel) {
-			p.Logger().Debug(
+			p.Logger().Debug(context.TODO(),
 				"vchannel fair policy rebalance result found",
-				zap.Stringers("reassignChannelIDs", reassignChannelIDs),
-				zap.Float64("current", snapshot.GlobalUnbalancedScore),
-				zap.Float64("greatest", greatestSnapshot.GlobalUnbalancedScore),
-				zap.Float64("tolerance", p.cfg.RebalanceTolerance),
+				mlog.Any("reassignChannelIDs", reassignChannelIDs),
+				mlog.Float64("current", snapshot.GlobalUnbalancedScore),
+				mlog.Float64("greatest", greatestSnapshot.GlobalUnbalancedScore),
+				mlog.Float64("tolerance", p.cfg.RebalanceTolerance),
 			)
 		}
 		return balancer.ExpectedLayout{
@@ -111,12 +112,12 @@ func (p *policy) Balance(currentLayout balancer.CurrentLayout) (layout balancer.
 		}, nil
 	}
 	if p.Logger().Level().Enabled(zap.DebugLevel) {
-		p.Logger().Debug(
+		p.Logger().Debug(context.TODO(),
 			"vchannel fair policy rebalance result ignored with rebalance tolerance",
-			zap.Stringers("reassignChannelIDs", reassignChannelIDs),
-			zap.Float64("current", snapshot.GlobalUnbalancedScore),
-			zap.Float64("greatest", greatestSnapshot.GlobalUnbalancedScore),
-			zap.Float64("tolerance", p.cfg.RebalanceTolerance),
+			mlog.Any("reassignChannelIDs", reassignChannelIDs),
+			mlog.Float64("current", snapshot.GlobalUnbalancedScore),
+			mlog.Float64("greatest", greatestSnapshot.GlobalUnbalancedScore),
+			mlog.Float64("tolerance", p.cfg.RebalanceTolerance),
 		)
 	}
 	return balancer.ExpectedLayout{
@@ -129,9 +130,9 @@ func (p *policy) updatePolicyConfiguration() {
 	// try to fetch latest configuration.
 	newCfg := newVChannelFairPolicyConfig()
 	if err := newCfg.Validate(); err != nil {
-		p.Logger().Warn("invalid new incoming vchannel fair policy config", zap.Any("new", newCfg))
+		p.Logger().Warn(context.TODO(), "invalid new incoming vchannel fair policy config", mlog.Any("new", newCfg))
 	} else if p.cfg != newCfg {
-		p.Logger().Info("vchannel fair policy config updated", zap.Any("old", p.cfg), zap.Any("new", newCfg))
+		p.Logger().Info(context.TODO(), "vchannel fair policy config updated", mlog.Any("old", p.cfg), mlog.Any("new", newCfg))
 		p.cfg = newCfg
 	}
 }

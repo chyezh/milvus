@@ -818,6 +818,66 @@ func TestLoggerLogComponentMoreFieldsWithCtxAndExtra(t *testing.T) {
 	assert.Equal(t, float64(42), entry["count"])
 }
 
+func TestPanicFunction(t *testing.T) {
+	buf := &bytes.Buffer{}
+	logger := createTestLogger(buf)
+	Init(logger)
+	defer resetLogger()
+
+	ctx := context.Background()
+	assert.Panics(t, func() {
+		Panic(ctx, "panic message", String("key", "val"))
+	})
+
+	var entry map[string]interface{}
+	err := json.Unmarshal(buf.Bytes(), &entry)
+	require.NoError(t, err)
+	assert.Equal(t, "panic message", entry["msg"])
+	assert.Equal(t, "val", entry["key"])
+}
+
+func TestLoggerPanicMethod(t *testing.T) {
+	buf := &bytes.Buffer{}
+	logger := createTestLogger(buf)
+	Init(logger)
+	defer resetLogger()
+
+	componentLogger := With(String("module", "test"))
+	ctx := context.Background()
+	assert.Panics(t, func() {
+		componentLogger.Panic(ctx, "logger panic", String("extra", "data"))
+	})
+
+	var entry map[string]interface{}
+	err := json.Unmarshal(buf.Bytes(), &entry)
+	require.NoError(t, err)
+	assert.Equal(t, "logger panic", entry["msg"])
+	assert.Equal(t, "test", entry["module"])
+	assert.Equal(t, "data", entry["extra"])
+}
+
+func TestSyncFlushesLogger(t *testing.T) {
+	buf := &bytes.Buffer{}
+	logger := createTestLogger(buf)
+	Init(logger)
+	defer resetLogger()
+
+	ctx := context.Background()
+	Info(ctx, "before sync")
+	err := Sync()
+	assert.NoError(t, err)
+}
+
+func TestGetZapLoggerReturnsNonNil(t *testing.T) {
+	buf := &bytes.Buffer{}
+	logger := createTestLogger(buf)
+	Init(logger)
+	defer resetLogger()
+
+	zapLogger := GetZapLogger()
+	assert.NotNil(t, zapLogger)
+}
+
 // Test global log function with context that has fields but uses FieldsFromContext path
 // This tests the branch where ctx != nil, loggerFromContext returns nil, and ctxFields > 0
 func TestGlobalLogWithContextFieldsNoCache(t *testing.T) {

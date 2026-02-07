@@ -19,11 +19,9 @@ package job
 import (
 	"context"
 
-	"go.uber.org/zap"
-
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/observers"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 )
 
 type UndoList struct {
@@ -52,15 +50,13 @@ func NewUndoList(ctx context.Context, meta *meta.Meta,
 }
 
 func (u *UndoList) RollBack() {
-	log := log.Ctx(u.ctx).With(
-		zap.Int64("collectionID", u.CollectionID),
-		zap.Int64s("partitionIDs", u.LackPartitions),
-	)
+	u.ctx = mlog.WithFields(u.ctx, mlog.Int64("collectionID", u.CollectionID),
+		mlog.Int64s("partitionIDs", u.LackPartitions))
 
-	log.Warn("rollback failed loading request...",
-		zap.Bool("isNewCollection", u.IsNewCollection),
-		zap.Bool("isReplicaCreated", u.IsReplicaCreated),
-		zap.Bool("isTargetUpdated", u.IsTargetUpdated),
+	mlog.Warn(context.TODO(), "rollback failed loading request...",
+		mlog.Bool("isNewCollection", u.IsNewCollection),
+		mlog.Bool("isReplicaCreated", u.IsReplicaCreated),
+		mlog.Bool("isTargetUpdated", u.IsTargetUpdated),
 	)
 
 	var err error
@@ -70,7 +66,7 @@ func (u *UndoList) RollBack() {
 		err = u.meta.CollectionManager.RemovePartition(u.ctx, u.CollectionID, u.LackPartitions...)
 	}
 	if err != nil {
-		log.Warn("failed to rollback collection from meta", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to rollback collection from meta", mlog.Err(err))
 	}
 
 	if u.IsTargetUpdated {

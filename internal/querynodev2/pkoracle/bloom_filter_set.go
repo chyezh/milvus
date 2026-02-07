@@ -24,16 +24,15 @@ package pkoracle
 import "C"
 
 import (
+	"context"
 	"sync"
-
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/bloomfilter"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -137,7 +136,7 @@ func (s *BloomFilterSet) UpdateBloomFilter(pks []storage.PrimaryKey) {
 			stringValue := pk.(*storage.VarCharPrimaryKey).Value
 			s.currentStat.PkFilter.AddString(stringValue)
 		default:
-			log.Error("failed to update bloomfilter", zap.Any("PK type", pk.Type()))
+			mlog.Error(context.TODO(), "failed to update bloomfilter", mlog.Any("PK type", pk.Type()))
 			panic("failed to update bloomfilter")
 		}
 	}
@@ -187,9 +186,9 @@ func (s *BloomFilterSet) Charge() {
 		})
 		s.trackedSize = size
 		s.resourceCharged = true
-		log.Debug("charged bloom filter resource",
-			zap.Int64("segmentID", s.segmentID),
-			zap.Int64("size", size))
+		mlog.Debug(context.TODO(), "charged bloom filter resource",
+			mlog.Int64("segmentID", s.segmentID),
+			mlog.Int64("size", size))
 	}
 }
 
@@ -206,9 +205,9 @@ func (s *BloomFilterSet) Refund() {
 		memory_bytes: C.int64_t(s.trackedSize),
 		disk_bytes:   0,
 	})
-	log.Debug("refunded bloom filter resource",
-		zap.Int64("segmentID", s.segmentID),
-		zap.Int64("size", s.trackedSize))
+	mlog.Debug(context.TODO(), "refunded bloom filter resource",
+		mlog.Int64("segmentID", s.segmentID),
+		mlog.Int64("size", s.trackedSize))
 	s.trackedSize = 0
 	s.resourceCharged = false
 }

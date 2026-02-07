@@ -21,10 +21,9 @@ import (
 	"fmt"
 	"sync"
 
-	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
@@ -128,7 +127,7 @@ func (m *ExternalCollectionManager) Close() {
 		if m.pool != nil {
 			m.pool.Release()
 		}
-		log.Info("external collection manager closed")
+		mlog.Info(context.TODO(), "external collection manager closed")
 	})
 }
 
@@ -239,17 +238,17 @@ func (m *ExternalCollectionManager) SubmitTask(
 	// Submit to pool
 	m.pool.Submit(func() (any, error) {
 		defer cancel()
-		log.Info("executing external collection task in pool",
-			zap.Int64("taskID", taskID),
-			zap.Int64("collectionID", req.GetCollectionID()))
+		mlog.Info(context.TODO(), "executing external collection task in pool",
+			mlog.Int64("taskID", taskID),
+			mlog.Int64("collectionID", req.GetCollectionID()))
 
 		// Execute the task
 		resp, err := taskFunc(taskCtx)
 		if err != nil {
 			m.UpdateResult(clusterID, taskID, indexpb.JobState_JobStateFailed, err.Error(), info.KeptSegments, nil)
-			log.Warn("external collection task failed",
-				zap.Int64("taskID", taskID),
-				zap.Error(err))
+			mlog.Warn(context.TODO(), "external collection task failed",
+				mlog.Int64("taskID", taskID),
+				mlog.Err(err))
 			return nil, err
 		}
 
@@ -263,8 +262,8 @@ func (m *ExternalCollectionManager) SubmitTask(
 			kept = info.KeptSegments
 		}
 		m.UpdateResult(clusterID, taskID, state, failReason, kept, resp.GetUpdatedSegments())
-		log.Info("external collection task completed",
-			zap.Int64("taskID", taskID))
+		mlog.Info(context.TODO(), "external collection task completed",
+			mlog.Int64("taskID", taskID))
 		return nil, nil
 	})
 

@@ -109,6 +109,32 @@ func Error(ctx context.Context, msg string, fields ...Field) {
 	logger.Error(msg, fields...)
 }
 
+// Fatal logs a message at fatal level then calls os.Exit(1).
+// Fatal always executes regardless of the global level.
+func Fatal(ctx context.Context, msg string, fields ...Field) {
+	logger, fields := prepareLog(ctx, fields)
+	logger.Fatal(msg, fields...)
+}
+
+// Panic logs a message at panic level then panics.
+// Panic always executes regardless of the global level.
+func Panic(ctx context.Context, msg string, fields ...Field) {
+	logger, fields := prepareLog(ctx, fields)
+	logger.Panic(msg, fields...)
+}
+
+// Sync flushes any buffered log entries.
+func Sync() error {
+	return getLogger().Sync()
+}
+
+// GetZapLogger returns the underlying *zap.Logger for infrastructure integration.
+// This is intended for bridging with systems that require a raw zap.Logger (e.g., CGO cores).
+// Callers should NOT use this for general logging — use mlog functions instead.
+func GetZapLogger() *zap.Logger {
+	return getLogger()
+}
+
 // Logger is a component-level logger with pre-configured fields.
 // It optimizes logging by selecting the logger with more pre-encoded fields
 // when combining with context fields.
@@ -175,6 +201,13 @@ func (l *Logger) WithLazy(fields ...Field) *Logger {
 		logger: l.logger.WithLazy(fields...),
 		fields: newFields,
 	}
+}
+
+// RawLogger returns the underlying *zap.Logger for infrastructure integration.
+// This is intended for bridging with external libraries that require a raw zap.Logger
+// (e.g., Pulsar log adapter). Callers should NOT use this for general logging.
+func (l *Logger) RawLogger() *zap.Logger {
+	return l.logger
 }
 
 // Level returns the current global log level.
@@ -273,4 +306,18 @@ func (l *Logger) Error(ctx context.Context, msg string, fields ...Field) {
 	}
 	logger, fields := l.prepareLog(ctx, fields)
 	logger.Error(msg, fields...)
+}
+
+// Fatal logs a message at fatal level then calls os.Exit(1).
+// Fatal always executes regardless of the global level.
+func (l *Logger) Fatal(ctx context.Context, msg string, fields ...Field) {
+	logger, fields := l.prepareLog(ctx, fields)
+	logger.Fatal(msg, fields...)
+}
+
+// Panic logs a message at panic level then panics.
+// Panic always executes regardless of the global level.
+func (l *Logger) Panic(ctx context.Context, msg string, fields ...Field) {
+	logger, fields := l.prepareLog(ctx, fields)
+	logger.Panic(msg, fields...)
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick/mvcc"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/wab"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -63,18 +64,18 @@ func buildInterceptorParams(ctx context.Context, underlyingWALImpls walimpls.WAL
 // 2. get position of wal to determine the end of current wal.
 // 3. make all un-synced messages synced by the timetick message, so the un-synced messages can be seen by the recovery storage.
 func sendFirstTimeTick(ctx context.Context, underlyingWALImpls walimpls.WALImpls, lastConfirmedMessageID message.MessageID) (msg message.ImmutableMessage, err error) {
-	logger := resource.Resource().Logger().With(zap.String("channel", underlyingWALImpls.Channel().String()))
+	logger := resource.Resource().Logger().With(mlog.String("channel", underlyingWALImpls.Channel().String()))
 	if lastConfirmedMessageID != nil {
 		logger = logger.With(zap.Stringer("lastConfirmedMessageID", lastConfirmedMessageID))
 	}
 
-	logger.Info("start to sync first time tick")
+	logger.Info(context.TODO(), "start to sync first time tick")
 	defer func() {
 		if err != nil {
-			logger.Error("sync first time tick failed", zap.Error(err))
+			logger.Error(context.TODO(), "sync first time tick failed", mlog.Err(err))
 			return
 		}
-		logger.Info("sync first time tick done", zap.String("msgID", msg.MessageID().String()), zap.Uint64("timetick", msg.TimeTick()))
+		logger.Info(context.TODO(), "sync first time tick done", mlog.String("msgID", msg.MessageID().String()), mlog.Uint64("timetick", msg.TimeTick()))
 	}()
 
 	backoffTimer := typeutil.NewBackoffTimer(typeutil.BackoffTimerConfig{
@@ -93,11 +94,11 @@ func sendFirstTimeTick(ctx context.Context, underlyingWALImpls walimpls.WALImpls
 	for count := 0; ; count++ {
 		if count > 0 {
 			nextTimer, nextBalanceInterval := backoffTimer.NextTimer()
-			logger.Warn(
+			logger.Warn(ctx,
 				"send first time tick failed",
-				zap.Duration("nextBalanceInterval", nextBalanceInterval),
-				zap.Int("retryCount", count),
-				zap.Error(lastErr),
+				mlog.Duration("nextBalanceInterval", nextBalanceInterval),
+				mlog.Int("retryCount", count),
+				mlog.Err(lastErr),
 			)
 			select {
 			case <-ctx.Done():

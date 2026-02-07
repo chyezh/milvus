@@ -22,11 +22,10 @@ import (
 	"time"
 
 	"go.uber.org/atomic"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/util/segcore"
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -53,15 +52,14 @@ func (d *diskUsageFetcher) GetDiskUsage() (int64, error) {
 func (d *diskUsageFetcher) fetch() {
 	diskUsage, err := segcore.GetLocalUsedSize(d.path)
 	if err != nil {
-		log.Warn("failed to get disk usage", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to get disk usage", mlog.Err(err))
 		d.err.Store(err)
 		return
 	}
 	d.usage.Store(diskUsage)
 	d.err.Store(nil)
 	metrics.QueryNodeDiskUsedSize.WithLabelValues(fmt.Sprint(paramtable.GetNodeID())).Set(float64(diskUsage) / 1024 / 1024) // in MB
-	log.Ctx(d.ctx).WithRateGroup("diskUsageFetcher", 1, 300).
-		RatedInfo(300, "querynode disk usage", zap.Int64("size", diskUsage), zap.Int64("nodeID", paramtable.GetNodeID()))
+	mlog.RatedInfo(d.ctx, 1.0/300, "querynode disk usage", mlog.Int64("size", diskUsage), mlog.Int64("nodeID", paramtable.GetNodeID()))
 }
 
 func (d *diskUsageFetcher) Start() {

@@ -24,7 +24,6 @@ import (
 	"math"
 
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/querycoordv2/assign"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
@@ -32,7 +31,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -72,14 +71,9 @@ func (b *RoundRobinBalancer) GetAssignPolicy() assign.AssignPolicy {
 // It first attempts to balance channels if AutoBalanceChannel is enabled, then balances segments
 // if no channel plans were generated.
 func (b *RoundRobinBalancer) BalanceReplica(ctx context.Context, replica *meta.Replica) (segmentPlans []assign.SegmentAssignPlan, channelPlans []assign.ChannelAssignPlan) {
-	log := log.Ctx(ctx).WithRateGroup("qcv2.RoundRobinBalancer", 1, 60).With(
-		zap.Int64("collectionID", replica.GetCollectionID()),
-		zap.Int64("replicaID", replica.GetID()),
-		zap.String("resourceGroup", replica.GetResourceGroup()),
-	)
 
 	if replica.NodesCount() < 2 {
-		log.RatedDebug(60, "replica has less than 2 querynodes, skip balance")
+		mlog.RatedDebug(ctx, 1.0/60, "replica has less than 2 querynodes, skip balance")
 		return nil, nil
 	}
 
@@ -91,9 +85,9 @@ func (b *RoundRobinBalancer) BalanceReplica(ctx context.Context, replica *meta.R
 	}
 
 	if len(segmentPlans) > 0 || len(channelPlans) > 0 {
-		log.Info("balance plan generated",
-			zap.Int("segmentPlans", len(segmentPlans)),
-			zap.Int("channelPlans", len(channelPlans)))
+		mlog.Info(ctx, "balance plan generated",
+			mlog.Int("segmentPlans", len(segmentPlans)),
+			mlog.Int("channelPlans", len(channelPlans)))
 	}
 	return
 }

@@ -3,11 +3,10 @@ package segments
 import (
 	"context"
 
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/milvus-io/milvus/internal/querynodev2/segments/metricsutil"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 )
 
@@ -30,7 +29,7 @@ func doOnSegment(ctx context.Context, mgr *Manager, seg Segment, do doOnSegmentF
 			accessRecord.CacheMissing()
 		}
 		if err != nil {
-			log.Ctx(ctx).Warn("failed to do query disk cache", zap.Int64("segID", seg.ID()), zap.Error(err))
+			mlog.Warn(ctx, "failed to do query disk cache", mlog.Int64("segID", seg.ID()), mlog.Err(err))
 		}
 		return err
 	}

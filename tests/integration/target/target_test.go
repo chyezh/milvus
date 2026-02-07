@@ -23,13 +23,12 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/suite"
-	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
@@ -71,11 +70,11 @@ func (s *TargetTestSuit) initCollection(collectionName string, replica int, chan
 	s.NoError(err)
 	s.True(merr.Ok(createCollectionStatus))
 
-	log.Info("CreateCollection result", zap.Any("createCollectionStatus", createCollectionStatus))
+	mlog.Info(context.TODO(), "CreateCollection result", mlog.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := s.Cluster.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.True(merr.Ok(showCollectionsResp.Status))
-	log.Info("ShowCollections result", zap.Any("showCollectionsResp", showCollectionsResp))
+	mlog.Info(context.TODO(), "ShowCollections result", mlog.Any("showCollectionsResp", showCollectionsResp))
 
 	for i := 0; i < segmentNum; i++ {
 		s.insertToCollection(ctx, dbName, collectionName, segmentRowNum, dim)
@@ -106,7 +105,7 @@ func (s *TargetTestSuit) initCollection(collectionName string, replica int, chan
 	s.Equal(commonpb.ErrorCode_Success, loadStatus.GetErrorCode())
 	s.True(merr.Ok(loadStatus))
 	s.WaitForLoad(ctx, collectionName)
-	log.Info("initCollection Done")
+	mlog.Info(context.TODO(), "initCollection Done")
 }
 
 func (s *TargetTestSuit) insertToCollection(ctx context.Context, dbName string, collectionName string, rowCount int, dim int) {
@@ -174,11 +173,11 @@ func (s *TargetTestSuit) TestQueryCoordRestart() {
 		for {
 			select {
 			case <-closeInsertCh:
-				log.Info("insert to collection finished")
+				mlog.Info(context.TODO(), "insert to collection finished")
 				return
 			case <-time.After(time.Second):
 				s.insertToCollection(ctx, dbName, name, 2000, dim)
-				log.Info("insert 2000 rows to collection finished")
+				mlog.Info(context.TODO(), "insert 2000 rows to collection finished")
 			}
 		}
 	}()
@@ -198,7 +197,7 @@ func (s *TargetTestSuit) TestQueryCoordRestart() {
 				Base:         commonpbutil.NewMsgBase(),
 				CollectionID: collectionID,
 			})
-			log.Info("resp", zap.Any("status", resp.GetStatus()), zap.Any("shards", resp.Shards))
+			mlog.Info(context.TODO(), "resp", mlog.Any("status", resp.GetStatus()), mlog.Any("shards", resp.Shards))
 			s.NoError(err)
 			s.True(merr.Ok(resp.GetStatus()))
 

@@ -5,12 +5,10 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/lifetime"
@@ -49,8 +47,8 @@ func NewTxnManager(pchannel types.PChannelInfo, uncommittedTxnBuilders map[messa
 		metrics:                   m,
 	}
 	txnManager.notifyRecoverDone()
-	txnManager.SetLogger(resource.Resource().Logger().With(log.FieldComponent("txn-manager")))
-	txnManager.Logger().Info("txn manager recovered with txn", zap.Int64s("txnIDs", sessionIDs))
+	txnManager.SetLogger(resource.Resource().Logger().With(mlog.FieldComponent("txn-manager")))
+	txnManager.Logger().Info(context.TODO(), "txn manager recovered with txn", mlog.Int64s("txnIDs", sessionIDs))
 	return txnManager
 }
 
@@ -58,7 +56,7 @@ func NewTxnManager(pchannel types.PChannelInfo, uncommittedTxnBuilders map[messa
 // We don't support cross wal transaction by now and
 // We don't support the transaction lives after the wal transferred to another streaming node.
 type TxnManager struct {
-	log.Binder
+	mlog.Binder
 
 	mu                        sync.Mutex
 	recoveredSessions         map[message.TxnID]struct{}
@@ -142,7 +140,7 @@ func (m *TxnManager) FailTxnAtVChannel(vchannel string) {
 		}
 	}
 	if len(ids) > 0 {
-		m.Logger().Info("transaction interrupted", zap.String("vchannel", vchannel), zap.Int64s("txnIDs", ids))
+		m.Logger().Info(context.TODO(), "transaction interrupted", mlog.String("vchannel", vchannel), mlog.Int64s("txnIDs", ids))
 	}
 	m.notifyRecoverDone()
 }
@@ -199,7 +197,7 @@ func (m *TxnManager) GracefulClose(ctx context.Context) error {
 			m.closed.Close()
 		}
 	}
-	m.Logger().Info("graceful close txn manager", zap.Int("activeTxnCount", len(m.sessions)))
+	m.Logger().Info(context.TODO(), "graceful close txn manager", mlog.Int("activeTxnCount", len(m.sessions)))
 	m.mu.Unlock()
 
 	select {

@@ -21,12 +21,11 @@ import (
 	"fmt"
 	"time"
 
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
 )
@@ -58,7 +57,7 @@ func WaitForComponentStates[T interface {
 				serviceName,
 				resp.State.StateCode.String())
 		}
-		log.Info("WaitForComponentStates success", zap.String("current state", resp.State.StateCode.String()))
+		mlog.Info(context.TODO(), "WaitForComponentStates success", mlog.String("current state", resp.State.StateCode.String()))
 		return nil
 	}
 	return retry.Do(ctx, checkFunc, retry.Attempts(attempts), retry.Sleep(sleep))

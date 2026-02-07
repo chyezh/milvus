@@ -37,10 +37,8 @@ import (
 	"sync"
 	"unsafe"
 
-	"go.uber.org/zap"
-
 	"github.com/milvus-io/milvus/internal/util/pathutil"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -107,7 +105,7 @@ func doInitQueryNodeOnce(ctx context.Context) error {
 	if knowhereBuildPoolSize < uint32(1) {
 		knowhereBuildPoolSize = uint32(1)
 	}
-	log.Ctx(ctx).Info("set up knowhere build pool size", zap.Uint32("pool_size", knowhereBuildPoolSize))
+	mlog.Info(ctx, "set up knowhere build pool size", mlog.Uint32("pool_size", knowhereBuildPoolSize))
 	cKnowhereBuildPoolSize := C.uint32_t(knowhereBuildPoolSize)
 	C.SegcoreSetKnowhereBuildThreadPoolNum(cKnowhereBuildPoolSize)
 

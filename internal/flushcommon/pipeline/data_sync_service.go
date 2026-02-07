@@ -21,8 +21,6 @@ import (
 	"fmt"
 	"sync"
 
-	"go.uber.org/zap"
-
 	"github.com/milvus-io/milvus/internal/compaction"
 	"github.com/milvus-io/milvus/internal/flushcommon/broker"
 	"github.com/milvus-io/milvus/internal/flushcommon/io"
@@ -34,8 +32,8 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/flowgraph"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgdispatcher"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
@@ -83,18 +81,18 @@ type nodeConfig struct {
 // Start the flow graph in dataSyncService
 func (dsService *DataSyncService) Start() {
 	if dsService.fg != nil {
-		log.Info("dataSyncService starting flow graph", zap.Int64("collectionID", dsService.collectionID),
-			zap.String("vChanName", dsService.vchannelName))
+		mlog.Info(context.TODO(), "dataSyncService starting flow graph", mlog.Int64("collectionID", dsService.collectionID),
+			mlog.String("vChanName", dsService.vchannelName))
 		dsService.fg.Start()
 	} else {
-		log.Warn("dataSyncService starting flow graph is nil", zap.Int64("collectionID", dsService.collectionID),
-			zap.String("vChanName", dsService.vchannelName))
+		mlog.Warn(context.TODO(), "dataSyncService starting flow graph is nil", mlog.Int64("collectionID", dsService.collectionID),
+			mlog.String("vChanName", dsService.vchannelName))
 	}
 }
 
 func (dsService *DataSyncService) GracefullyClose() {
 	if dsService.fg != nil {
-		log.Info("dataSyncService gracefully closing flowgraph")
+		mlog.Info(context.TODO(), "dataSyncService gracefully closing flowgraph")
 		dsService.fg.SetCloseMethod(flowgraph.CloseGracefully)
 		dsService.close()
 	}
@@ -106,17 +104,15 @@ func (dsService *DataSyncService) GetOpID() int64 {
 
 func (dsService *DataSyncService) close() {
 	dsService.stopOnce.Do(func() {
-		log := log.Ctx(dsService.ctx).With(
-			zap.Int64("collectionID", dsService.collectionID),
-			zap.String("vChanName", dsService.vchannelName),
-		)
+		dsService.ctx = mlog.WithFields(dsService.ctx, mlog.Int64("collectionID", dsService.collectionID),
+			mlog.String("vChanName", dsService.vchannelName))
 		if dsService.fg != nil {
-			log.Info("dataSyncService closing flowgraph")
+			mlog.Info(context.TODO(), "dataSyncService closing flowgraph")
 			if dsService.dispClient != nil {
 				dsService.dispClient.Deregister(dsService.vchannelName)
 			}
 			dsService.fg.Close()
-			log.Info("dataSyncService flowgraph closed")
+			mlog.Info(context.TODO(), "dataSyncService flowgraph closed")
 		}
 
 		dsService.cancelFn()
@@ -125,7 +121,7 @@ func (dsService *DataSyncService) close() {
 		pChan := funcutil.ToPhysicalChannel(dsService.vchannelName)
 		metrics.CleanupDataNodeCollectionMetrics(paramtable.GetNodeID(), dsService.collectionID, pChan)
 
-		log.Info("dataSyncService closed")
+		mlog.Info(context.TODO(), "dataSyncService closed")
 	})
 }
 
@@ -151,11 +147,11 @@ func initMetaCache(initCtx context.Context, chunkManager storage.ChunkManager, i
 
 	loadSegmentStats := func(segType string, segments []*datapb.SegmentInfo) {
 		for _, item := range segments {
-			log.Info("recover segments from checkpoints",
-				zap.String("vChannelName", item.GetInsertChannel()),
-				zap.Int64("segmentID", item.GetID()),
-				zap.Int64("numRows", item.GetNumOfRows()),
-				zap.String("segmentType", segType),
+			mlog.Info(context.TODO(), "recover segments from checkpoints",
+				mlog.String("vChannelName", item.GetInsertChannel()),
+				mlog.Int64("segmentID", item.GetID()),
+				mlog.Int64("numRows", item.GetNumOfRows()),
+				mlog.String("segmentType", segType),
 			)
 			segment := item
 			future := io.GetOrCreateStatsPool().Submit(func() (any, error) {
@@ -312,7 +308,7 @@ func getServiceWithChannel(initCtx context.Context, params *util.PipelineParams,
 		writebuffer.WithIDAllocator(params.Allocator),
 		writebuffer.WithTaskObserverCallback(wbTaskObserverCallback))
 	if err != nil {
-		log.Warn("failed to register channel buffer", zap.String("channel", channelName), zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to register channel buffer", mlog.String("channel", channelName), mlog.Err(err))
 		return nil, err
 	}
 

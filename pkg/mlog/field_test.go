@@ -516,6 +516,32 @@ func TestFieldHelperFunctions(t *testing.T) {
 	assert.Equal(t, KeyMessage, f.Key)
 }
 
+func TestFieldComponent(t *testing.T) {
+	f := FieldComponent("querynode")
+	assert.Equal(t, KeyComponent, f.Key)
+	assert.Equal(t, "querynode", f.String)
+}
+
+func TestFieldMessages(t *testing.T) {
+	msgs := []testObjectMarshaler{
+		{value: "msg1"},
+		{value: "msg2"},
+	}
+	f := FieldMessages(msgs)
+	assert.Equal(t, KeyMessages, f.Key)
+}
+
+func TestObjectsField(t *testing.T) {
+	objs := []testObjectMarshaler{
+		{value: "obj1"},
+		{value: "obj2"},
+	}
+	f := Objects("items", objs)
+	assert.Equal(t, "items", f.Key)
+	expected := zap.Objects("items", objs)
+	assert.Equal(t, expected, f)
+}
+
 func TestWellKnownKeysFormat(t *testing.T) {
 	// All well-known keys should be lowercase with underscores for readability
 	// and gRPC metadata compatibility

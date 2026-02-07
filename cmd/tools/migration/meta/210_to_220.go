@@ -1,12 +1,11 @@
 package meta
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
-
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/cmd/tools/migration/allocator"
@@ -14,7 +13,7 @@ import (
 	"github.com/milvus-io/milvus/cmd/tools/migration/versions"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	pb "github.com/milvus-io/milvus/pkg/v2/proto/etcdpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
@@ -303,7 +302,7 @@ func combineToLoadInfo220(collectionLoadInfo CollectionLoadInfo220, partitionLoa
 	}
 
 	for _, collectionID := range toBeReleased {
-		log.Warn("release the collection without index", zap.Int64("collectionID", collectionID))
+		mlog.Warn(context.TODO(), "release the collection without index", mlog.Int64("collectionID", collectionID))
 		delete(collectionLoadInfo, collectionID)
 	}
 }

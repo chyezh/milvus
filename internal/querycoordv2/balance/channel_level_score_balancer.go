@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -67,19 +67,12 @@ func NewChannelLevelScoreBalancer(scheduler task.Scheduler,
 // In exclusive mode, it balances segments and channels per channel among the channel's assigned nodes.
 // If exclusive mode cannot be achieved, it delegates to ScoreBasedBalancer.
 func (b *ChannelLevelScoreBalancer) BalanceReplica(ctx context.Context, replica *meta.Replica) (segmentPlans []assign.SegmentAssignPlan, channelPlans []assign.ChannelAssignPlan) {
-	log := log.With(
-		zap.Int64("collection", replica.GetCollectionID()),
-		zap.Int64("replica id", replica.GetID()),
-		zap.String("replica group", replica.GetResourceGroup()),
-	)
-
 	br := NewBalanceReport()
 	defer func() {
 		if len(segmentPlans) == 0 && len(channelPlans) == 0 {
-			log.WithRateGroup(fmt.Sprintf("scorebasedbalance-noplan-%d", replica.GetID()), 1, 60).
-				RatedDebug(60, "no plan generated, balance report", zap.Stringers("records", br.detailRecords))
+			mlog.RatedDebug(ctx, 1.0/60, "no plan generated, balance report", zap.Stringers("records", br.detailRecords))
 		} else {
-			log.Info("balance plan generated", zap.Stringers("report details", br.records))
+			mlog.Info(ctx, "balance plan generated", zap.Stringers("report details", br.records))
 		}
 	}()
 
@@ -201,9 +194,9 @@ func (b *ChannelLevelScoreBalancer) genSegmentPlan(ctx context.Context, br *bala
 	// Delegate to the assign policy's implementation with safe type assertion
 	policy, ok := b.assignPolicy.(*assign.ScoreBasedAssignPolicy)
 	if !ok {
-		log.Error("invalid policy type for ScoreBasedBalancer",
-			zap.String("expected", "*assign.ScoreBasedAssignPolicy"),
-			zap.String("actual", fmt.Sprintf("%T", b.assignPolicy)))
+		mlog.Error(ctx, "invalid policy type for ScoreBasedBalancer",
+			mlog.String("expected", "*assign.ScoreBasedAssignPolicy"),
+			mlog.String("actual", fmt.Sprintf("%T", b.assignPolicy)))
 		return nil
 	}
 	nodeItemsMap := policy.ConvertToNodeItemsBySegment(replica.GetCollectionID(), onlineNodes)
@@ -214,11 +207,10 @@ func (b *ChannelLevelScoreBalancer) genSegmentPlan(ctx context.Context, br *bala
 		return nil
 	}
 
-	log.Ctx(ctx).WithRateGroup(fmt.Sprintf("genSegmentPlan-%d-%d", replica.GetCollectionID(), replica.GetID()), 1, 60).
-		RatedInfo(30, "node segment workload status",
-			zap.Int64("collectionID", replica.GetCollectionID()),
-			zap.Int64("replicaID", replica.GetID()),
-			zap.Stringers("nodes", lo.Values(nodeItemsMap)))
+	mlog.RatedInfo(ctx, 1.0/30, "node segment workload status",
+		mlog.Int64("collectionID", replica.GetCollectionID()),
+		mlog.Int64("replicaID", replica.GetID()),
+		mlog.Any("nodes", lo.Values(nodeItemsMap)))
 
 	segmentDist := make(map[int64][]*meta.Segment)
 	// list all segment which could be balanced, and calculate node's score

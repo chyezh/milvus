@@ -22,19 +22,17 @@ import (
 	"time"
 
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
 func LoadBM25Stats(ctx context.Context, chunkManager storage.ChunkManager, segmentID int64, statsBinlogs []*datapb.FieldBinlog) (map[int64]*storage.BM25Stats, error) {
 	startTs := time.Now()
-	log := log.With(zap.Int64("segmentID", segmentID))
-	log.Info("begin to reload history BM25 stats", zap.Int("statsBinLogsLen", len(statsBinlogs)))
+	mlog.Info(ctx, "begin to reload history BM25 stats", mlog.Int("statsBinLogsLen", len(statsBinlogs)))
 
 	fieldList, fieldOffset := make([]int64, len(statsBinlogs)), make([]int, len(statsBinlogs))
 	logpaths := make([]string, 0)
@@ -45,13 +43,13 @@ func LoadBM25Stats(ctx context.Context, chunkManager storage.ChunkManager, segme
 	}
 
 	if len(logpaths) == 0 {
-		log.Warn("no BM25 stats to load")
+		mlog.Warn(ctx, "no BM25 stats to load")
 		return nil, nil
 	}
 
 	values, err := chunkManager.MultiRead(ctx, logpaths)
 	if err != nil {
-		log.Warn("failed to load BM25 stats files", zap.Error(err))
+		mlog.Warn(ctx, "failed to load BM25 stats files", mlog.Err(err))
 		return nil, err
 	}
 
@@ -73,14 +71,13 @@ func LoadBM25Stats(ctx context.Context, chunkManager storage.ChunkManager, segme
 	}
 
 	// TODO ADD METRIC FOR LOAD BM25 TIME
-	log.Info("Successfully load BM25 stats", zap.Any("time", time.Since(startTs)))
+	mlog.Info(ctx, "Successfully load BM25 stats", mlog.Any("time", time.Since(startTs)))
 	return result, nil
 }
 
 func LoadStats(ctx context.Context, chunkManager storage.ChunkManager, schema *schemapb.CollectionSchema, segmentID int64, statsBinlogs []*datapb.FieldBinlog) ([]*storage.PkStatistics, error) {
 	startTs := time.Now()
-	log := log.With(zap.Int64("segmentID", segmentID))
-	log.Info("begin to init pk bloom filter", zap.Int("statsBinLogsLen", len(statsBinlogs)))
+	mlog.Info(ctx, "begin to init pk bloom filter", mlog.Int("statsBinLogsLen", len(statsBinlogs)))
 
 	pkField, err := typeutil.GetPrimaryFieldSchema(schema)
 	if err != nil {
@@ -113,14 +110,14 @@ func LoadStats(ctx context.Context, chunkManager storage.ChunkManager, schema *s
 
 	// no stats log to parse, initialize a new BF
 	if len(bloomFilterFiles) == 0 {
-		log.Warn("no stats files to load")
+		mlog.Warn(ctx, "no stats files to load")
 		return nil, nil
 	}
 
 	// read historical PK filter
 	values, err := chunkManager.MultiRead(ctx, bloomFilterFiles)
 	if err != nil {
-		log.Warn("failed to load bloom filter files", zap.Error(err))
+		mlog.Warn(ctx, "failed to load bloom filter files", mlog.Err(err))
 		return nil, err
 	}
 	blobs := make([]*storage.Blob, 0)
@@ -132,13 +129,13 @@ func LoadStats(ctx context.Context, chunkManager storage.ChunkManager, schema *s
 	if logType == storage.CompoundStatsType {
 		stats, err = storage.DeserializeStatsList(blobs[0])
 		if err != nil {
-			log.Warn("failed to deserialize stats list", zap.Error(err))
+			mlog.Warn(context.TODO(), "failed to deserialize stats list", mlog.Err(err))
 			return nil, err
 		}
 	} else {
 		stats, err = storage.DeserializeStats(blobs)
 		if err != nil {
-			log.Warn("failed to deserialize stats", zap.Error(err))
+			mlog.Warn(context.TODO(), "failed to deserialize stats", mlog.Err(err))
 			return nil, err
 		}
 	}
@@ -155,6 +152,6 @@ func LoadStats(ctx context.Context, chunkManager storage.ChunkManager, schema *s
 		result = append(result, pkStat)
 	}
 
-	log.Info("Successfully load pk stats", zap.Any("time", time.Since(startTs)), zap.Uint("size", size))
+	mlog.Info(context.TODO(), "Successfully load pk stats", mlog.Any("time", time.Since(startTs)), mlog.Uint("size", size))
 	return result, nil
 }

@@ -40,7 +40,7 @@ func ExampleClient_Search_basic() {
 		APIKey:  token,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -53,7 +53,7 @@ func ExampleClient_Search_basic() {
 		[]entity.Vector{entity.FloatVector(queryVector)},
 	))
 	if err != nil {
-		log.Fatal("failed to perform basic ANN search collection: ", err.Error())
+		mlog.Fatal("failed to perform basic ANN search collection: ", err.Error())
 	}
 
 	for _, resultSet := range resultSets {
@@ -74,7 +74,7 @@ func ExampleClient_Search_multivectors() {
 		APIKey:  token,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -90,7 +90,7 @@ func ExampleClient_Search_multivectors() {
 		queryVectors,
 	))
 	if err != nil {
-		log.Fatal("failed to perform basic ANN search collection: ", err.Error())
+		mlog.Fatal("failed to perform basic ANN search collection: ", err.Error())
 	}
 
 	for _, resultSet := range resultSets {
@@ -111,7 +111,7 @@ func ExampleClient_Search_partition() {
 		APIKey:  token,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -124,7 +124,7 @@ func ExampleClient_Search_partition() {
 		[]entity.Vector{entity.FloatVector(queryVector)},
 	).WithPartitions("partitionA"))
 	if err != nil {
-		log.Fatal("failed to perform basic ANN search collection: ", err.Error())
+		mlog.Fatal("failed to perform basic ANN search collection: ", err.Error())
 	}
 
 	for _, resultSet := range resultSets {
@@ -145,7 +145,7 @@ func ExampleClient_Search_outputFields() {
 		APIKey:  token,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -158,7 +158,7 @@ func ExampleClient_Search_outputFields() {
 		[]entity.Vector{entity.FloatVector(queryVector)},
 	).WithOutputFields("color"))
 	if err != nil {
-		log.Fatal("failed to perform basic ANN search collection: ", err.Error())
+		mlog.Fatal("failed to perform basic ANN search collection: ", err.Error())
 	}
 
 	for _, resultSet := range resultSets {
@@ -180,7 +180,7 @@ func ExampleClient_Search_offsetLimit() {
 		APIKey:  token,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -193,7 +193,7 @@ func ExampleClient_Search_offsetLimit() {
 		[]entity.Vector{entity.FloatVector(queryVector)},
 	).WithOffset(10))
 	if err != nil {
-		log.Fatal("failed to perform basic ANN search collection: ", err.Error())
+		mlog.Fatal("failed to perform basic ANN search collection: ", err.Error())
 	}
 
 	for _, resultSet := range resultSets {
@@ -210,7 +210,7 @@ func ExampleClient_Search_jsonExpr() {
 		Address: milvusAddr,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -225,7 +225,7 @@ func ExampleClient_Search_jsonExpr() {
 		[]entity.Vector{entity.FloatVector(queryVector)},
 	).WithOutputFields("metadata").WithAnnParam(annParam))
 	if err != nil {
-		log.Fatal("failed to perform basic ANN search collection: ", err.Error())
+		mlog.Fatal("failed to perform basic ANN search collection: ", err.Error())
 	}
 
 	for _, resultSet := range resultSets {
@@ -246,7 +246,7 @@ func ExampleClient_Search_binaryVector() {
 		APIKey:  token,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -261,7 +261,7 @@ func ExampleClient_Search_binaryVector() {
 		[]entity.Vector{entity.BinaryVector(queryVector)},
 	).WithOutputFields("pk").WithAnnParam(annSearchParams))
 	if err != nil {
-		log.Fatal("failed to perform basic ANN search collection: ", err.Error())
+		mlog.Fatal("failed to perform basic ANN search collection: ", err.Error())
 	}
 
 	for _, resultSet := range resultSets {
@@ -281,7 +281,7 @@ func ExampleClient_Get() {
 		Address: milvusAddr,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -305,7 +305,7 @@ func ExampleClient_Query() {
 		Address: milvusAddr,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -328,7 +328,7 @@ func ExampleClient_Query_jsonExpr_notnull() {
 		Address: milvusAddr,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -352,7 +352,7 @@ func ExampleClient_Query_jsonExpr_leafChild() {
 		Address: milvusAddr,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -380,7 +380,7 @@ func ExampleClient_HybridSearch() {
 		APIKey:  token,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -395,7 +395,7 @@ func ExampleClient_HybridSearch() {
 		milvusclient.NewAnnRequest("sparse_vector", 10, sparseVector),
 	).WithReranker(milvusclient.NewRRFReranker()))
 	if err != nil {
-		log.Fatal("failed to perform basic ANN search collection: ", err.Error())
+		mlog.Fatal("failed to perform basic ANN search collection: ", err.Error())
 	}
 
 	for _, resultSet := range resultSets {
@@ -419,7 +419,7 @@ func ExampleClient_Search_textMatch() {
 		Address: milvusAddr,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 	defer cli.Close(ctx)
 
@@ -443,7 +443,7 @@ func ExampleClient_Search_textMatch() {
 
 	err = cli.CreateCollection(ctx, milvusclient.NewCreateCollectionOption(collectionName, schema).WithIndexOptions(idxOpts...))
 	if err != nil {
-		log.Fatal("failed to create collection: ", err.Error())
+		mlog.Fatal("failed to create collection: ", err.Error())
 	}
 
 	_, err = cli.Insert(ctx, milvusclient.NewColumnBasedInsertOption(collectionName).
@@ -458,12 +458,12 @@ func ExampleClient_Search_textMatch() {
 			"Machine learning is a subset of artificial intelligence.",
 		}))
 	if err != nil {
-		log.Fatal("failed to insert data: ", err.Error())
+		mlog.Fatal("failed to insert data: ", err.Error())
 	}
 
 	task, err := cli.LoadCollection(ctx, milvusclient.NewLoadCollectionOption(collectionName))
 	if err != nil {
-		log.Fatal("failed to load collection: ", err.Error())
+		mlog.Fatal("failed to load collection: ", err.Error())
 	}
 	_ = task.Await(ctx)
 
@@ -484,7 +484,7 @@ func ExampleClient_Search_textMatch() {
 		WithOutputFields("id", titleField, textField).
 		WithFunctionReranker(boost))
 	if err != nil {
-		log.Fatal("failed to search: ", err.Error())
+		mlog.Fatal("failed to search: ", err.Error())
 	}
 
 	for _, r := range rs {

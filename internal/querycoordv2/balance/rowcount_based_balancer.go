@@ -18,7 +18,6 @@ package balance
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"sort"
 
@@ -31,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -57,18 +56,12 @@ func (b *RowCountBasedBalancer) GetAssignPolicy() assign.AssignPolicy {
 // It first attempts to balance channels if AutoBalanceChannel is enabled, then balances segments
 // if no channel plans were generated.
 func (b *RowCountBasedBalancer) BalanceReplica(ctx context.Context, replica *meta.Replica) (segmentPlans []assign.SegmentAssignPlan, channelPlans []assign.ChannelAssignPlan) {
-	log := log.Ctx(context.TODO()).WithRateGroup("qcv2.RowCountBasedBalancer", 1, 60).With(
-		zap.Int64("collectionID", replica.GetCollectionID()),
-		zap.Int64("replicaID", replica.GetID()),
-		zap.String("resourceGroup", replica.GetResourceGroup()),
-	)
 	br := NewBalanceReport()
 	defer func() {
 		if len(segmentPlans) == 0 && len(channelPlans) == 0 {
-			log.WithRateGroup(fmt.Sprintf("scorebasedbalance-noplan-%d", replica.GetID()), 1, 60).
-				RatedDebug(60, "no plan generated, balance report", zap.Stringers("records", br.detailRecords))
+			mlog.RatedDebug(ctx, 1.0/60, "no plan generated, balance report", zap.Stringers("records", br.detailRecords))
 		} else {
-			log.Info("balance plan generated", zap.Stringers("report details", br.records))
+			mlog.Info(ctx, "balance plan generated", zap.Stringers("report details", br.records))
 		}
 	}()
 

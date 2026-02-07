@@ -26,7 +26,6 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
@@ -39,7 +38,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster"
 	"github.com/milvus-io/milvus/internal/util/hookutil"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util"
@@ -337,8 +336,8 @@ func (sm *snapshotManager) CreateSnapshot(
 	sm.createSnapshotMu.Lock()
 	defer sm.createSnapshotMu.Unlock()
 
-	log := log.Ctx(ctx).With(zap.Int64("collectionID", collectionID), zap.String("name", name))
-	log.Info("create snapshot request received", zap.String("description", description))
+	ctx = mlog.WithFields(ctx, mlog.Int64("collectionID", collectionID), mlog.String("name", name))
+	mlog.Info(ctx, "create snapshot request received", mlog.String("description", description))
 
 	// Validate snapshot name uniqueness (protected by createSnapshotMu)
 	if _, err := sm.snapshotMeta.GetSnapshot(ctx, name); err == nil {
@@ -348,14 +347,14 @@ func (sm *snapshotManager) CreateSnapshot(
 	// Allocate snapshot ID
 	snapshotID, err := sm.allocator.AllocID(ctx)
 	if err != nil {
-		log.Error("failed to allocate snapshot ID", zap.Error(err))
+		mlog.Error(ctx, "failed to allocate snapshot ID", mlog.Err(err))
 		return 0, err
 	}
 
 	// Generate snapshot data
 	snapshotData, err := sm.handler.GenSnapshot(ctx, collectionID)
 	if err != nil {
-		log.Error("failed to generate snapshot", zap.Error(err))
+		mlog.Error(ctx, "failed to generate snapshot", mlog.Err(err))
 		return 0, err
 	}
 
@@ -366,33 +365,33 @@ func (sm *snapshotManager) CreateSnapshot(
 
 	// Save to storage
 	if err := sm.snapshotMeta.SaveSnapshot(ctx, snapshotData); err != nil {
-		log.Error("failed to save snapshot", zap.Error(err))
+		mlog.Error(ctx, "failed to save snapshot", mlog.Err(err))
 		return 0, err
 	}
 
-	log.Info("snapshot created successfully", zap.Int64("snapshotID", snapshotID))
+	mlog.Info(ctx, "snapshot created successfully", mlog.Int64("snapshotID", snapshotID))
 	return snapshotID, nil
 }
 
 // DropSnapshot deletes an existing snapshot by name.
 // This operation is idempotent - if the snapshot doesn't exist, it returns nil.
 func (sm *snapshotManager) DropSnapshot(ctx context.Context, name string) error {
-	log := log.Ctx(ctx).With(zap.String("snapshot", name))
-	log.Info("drop snapshot request received")
+	ctx = mlog.WithFields(ctx, mlog.String("snapshot", name))
+	mlog.Info(ctx, "drop snapshot request received")
 
 	// Check if snapshot exists first (idempotent)
 	if _, err := sm.snapshotMeta.GetSnapshot(ctx, name); err != nil {
-		log.Info("snapshot not found, skip drop (idempotent)")
+		mlog.Info(ctx, "snapshot not found, skip drop (idempotent)")
 		return nil
 	}
 
 	// Delete snapshot
 	if err := sm.snapshotMeta.DropSnapshot(ctx, name); err != nil {
-		log.Error("failed to drop snapshot", zap.Error(err))
+		mlog.Error(ctx, "failed to drop snapshot", mlog.Err(err))
 		return err
 	}
 
-	log.Info("snapshot dropped successfully")
+	mlog.Info(ctx, "snapshot dropped successfully")
 	return nil
 }
 
@@ -403,13 +402,13 @@ func (sm *snapshotManager) GetSnapshot(ctx context.Context, name string) (*datap
 
 // DescribeSnapshot retrieves detailed information about a snapshot.
 func (sm *snapshotManager) DescribeSnapshot(ctx context.Context, name string) (*SnapshotData, error) {
-	log := log.Ctx(ctx).With(zap.String("snapshotName", name))
-	log.Info("describe snapshot request received")
+	ctx = mlog.WithFields(ctx, mlog.String("snapshotName", name))
+	mlog.Info(ctx, "describe snapshot request received")
 
 	// Read snapshot data with full segment information
 	snapshotData, err := sm.snapshotMeta.ReadSnapshotData(ctx, name, false)
 	if err != nil {
-		log.Error("failed to read snapshot data", zap.Error(err))
+		mlog.Error(ctx, "failed to read snapshot data", mlog.Err(err))
 		return nil, err
 	}
 
@@ -418,13 +417,13 @@ func (sm *snapshotManager) DescribeSnapshot(ctx context.Context, name string) (*
 
 // ListSnapshots returns a list of snapshot names for the specified collection/partition.
 func (sm *snapshotManager) ListSnapshots(ctx context.Context, collectionID, partitionID int64) ([]string, error) {
-	log := log.Ctx(ctx).With(zap.Int64("collectionID", collectionID))
-	log.Info("list snapshots request received")
+	ctx = mlog.WithFields(ctx, mlog.Int64("collectionID", collectionID))
+	mlog.Info(ctx, "list snapshots request received")
 
 	// List snapshots
 	snapshots, err := sm.snapshotMeta.ListSnapshots(ctx, collectionID, partitionID)
 	if err != nil {
-		log.Error("failed to list snapshots", zap.Error(err))
+		mlog.Error(ctx, "failed to list snapshots", mlog.Err(err))
 		return nil, err
 	}
 
@@ -509,25 +508,23 @@ func (sm *snapshotManager) RestoreSnapshot(
 	rollback RollbackFunc,
 	validateResources ValidateResourcesFunc,
 ) (int64, error) {
-	log := log.Ctx(ctx).With(
-		zap.String("snapshotName", snapshotName),
-		zap.String("targetCollection", targetCollectionName),
-		zap.String("targetDb", targetDbName),
-	)
+	ctx = mlog.WithFields(ctx, mlog.String("snapshotName", snapshotName),
+		mlog.String("targetCollection", targetCollectionName),
+		mlog.String("targetDb", targetDbName))
 
 	// Phase 1: Read snapshot data
 	snapshotData, err := sm.ReadSnapshotData(ctx, snapshotName)
 	if err != nil {
 		return 0, fmt.Errorf("failed to read snapshot data: %w", err)
 	}
-	log.Info("snapshot data loaded",
-		zap.Int("segmentCount", len(snapshotData.Segments)),
-		zap.Int("indexCount", len(snapshotData.Indexes)))
+	mlog.Info(ctx, "snapshot data loaded",
+		mlog.Int("segmentCount", len(snapshotData.Segments)),
+		mlog.Int("indexCount", len(snapshotData.Indexes)))
 
 	// Phase 1.5: Validate CMEK compatibility
 	// CMEK-encrypted collections can only be restored to databases with matching encryption zone
 	if err := sm.validateCMEKCompatibility(ctx, snapshotData, targetDbName); err != nil {
-		log.Warn("CMEK compatibility validation failed", zap.Error(err))
+		mlog.Warn(ctx, "CMEK compatibility validation failed", mlog.Err(err))
 		return 0, err
 	}
 
@@ -536,24 +533,24 @@ func (sm *snapshotManager) RestoreSnapshot(
 	if err != nil {
 		return 0, fmt.Errorf("failed to restore collection: %w", err)
 	}
-	log.Info("collection and partitions restored", zap.Int64("collectionID", collectionID))
+	mlog.Info(ctx, "collection and partitions restored", mlog.Int64("collectionID", collectionID))
 
 	// Phase 3: Restore indexes
 	// Note: Each broadcaster can only be used once, so we pass the factory function
 	if err := sm.RestoreIndexes(ctx, snapshotData, collectionID, startBroadcaster, snapshotName); err != nil {
-		log.Error("failed to restore indexes, rolling back", zap.Error(err))
+		mlog.Error(ctx, "failed to restore indexes, rolling back", mlog.Err(err))
 		if rollbackErr := rollback(ctx, targetDbName, targetCollectionName); rollbackErr != nil {
-			log.Error("rollback failed", zap.Error(rollbackErr))
+			mlog.Error(ctx, "rollback failed", mlog.Err(rollbackErr))
 		}
 		return 0, fmt.Errorf("failed to restore indexes: %w", err)
 	}
-	log.Info("indexes restored", zap.Int("indexCount", len(snapshotData.Indexes)))
+	mlog.Info(ctx, "indexes restored", mlog.Int("indexCount", len(snapshotData.Indexes)))
 
 	// Phase 4: Validate resources
 	if err := validateResources(ctx, collectionID, snapshotData); err != nil {
-		log.Error("resource validation failed, rolling back", zap.Error(err))
+		mlog.Error(context.TODO(), "resource validation failed, rolling back", mlog.Err(err))
 		if rollbackErr := rollback(ctx, targetDbName, targetCollectionName); rollbackErr != nil {
-			log.Error("rollback failed", zap.Error(rollbackErr))
+			mlog.Error(context.TODO(), "rollback failed", mlog.Err(rollbackErr))
 		}
 		return 0, fmt.Errorf("resource validation failed: %w", err)
 	}
@@ -562,20 +559,20 @@ func (sm *snapshotManager) RestoreSnapshot(
 	// Pre-allocating jobID ensures idempotency when WAL is replayed after restart
 	jobID, err := sm.allocator.AllocID(ctx)
 	if err != nil {
-		log.Error("failed to allocate job ID, rolling back", zap.Error(err))
+		mlog.Error(context.TODO(), "failed to allocate job ID, rolling back", mlog.Err(err))
 		if rollbackErr := rollback(ctx, targetDbName, targetCollectionName); rollbackErr != nil {
-			log.Error("rollback failed", zap.Error(rollbackErr))
+			mlog.Error(context.TODO(), "rollback failed", mlog.Err(rollbackErr))
 		}
 		return 0, fmt.Errorf("failed to allocate job ID: %w", err)
 	}
-	log.Info("pre-allocated job ID for restore", zap.Int64("jobID", jobID))
+	mlog.Info(context.TODO(), "pre-allocated job ID for restore", mlog.Int64("jobID", jobID))
 
 	// Create broadcaster for restore message
 	restoreBroadcaster, err := startBroadcaster(ctx, collectionID, snapshotName)
 	if err != nil {
-		log.Error("failed to start broadcaster for restore message, rolling back", zap.Error(err))
+		mlog.Error(context.TODO(), "failed to start broadcaster for restore message, rolling back", mlog.Err(err))
 		if rollbackErr := rollback(ctx, targetDbName, targetCollectionName); rollbackErr != nil {
-			log.Error("rollback failed", zap.Error(rollbackErr))
+			mlog.Error(context.TODO(), "rollback failed", mlog.Err(rollbackErr))
 		}
 		return 0, fmt.Errorf("failed to start broadcaster for restore message: %w", err)
 	}
@@ -592,14 +589,14 @@ func (sm *snapshotManager) RestoreSnapshot(
 		MustBuildBroadcast()
 
 	if _, err := restoreBroadcaster.Broadcast(ctx, msg); err != nil {
-		log.Error("failed to broadcast restore message, rolling back", zap.Error(err))
+		mlog.Error(context.TODO(), "failed to broadcast restore message, rolling back", mlog.Err(err))
 		if rollbackErr := rollback(ctx, targetDbName, targetCollectionName); rollbackErr != nil {
-			log.Error("rollback failed", zap.Error(rollbackErr))
+			mlog.Error(context.TODO(), "rollback failed", mlog.Err(rollbackErr))
 		}
 		return 0, fmt.Errorf("failed to broadcast restore message: %w", err)
 	}
 
-	log.Info("restore snapshot completed", zap.Int64("collectionID", collectionID), zap.Int64("jobID", jobID))
+	mlog.Info(context.TODO(), "restore snapshot completed", mlog.Int64("collectionID", collectionID), mlog.Int64("jobID", jobID))
 	return jobID, nil
 }
 
@@ -733,10 +730,10 @@ func (sm *snapshotManager) RestoreIndexes(
 			return fmt.Errorf("failed to broadcast create index %s: %w", indexInfo.GetIndexName(), err)
 		}
 
-		log.Ctx(ctx).Info("index restored via DDL WAL broadcast",
-			zap.String("indexName", indexInfo.GetIndexName()),
-			zap.Int64("fieldID", indexInfo.GetFieldID()),
-			zap.Int64("indexID", indexID))
+		mlog.Info(ctx, "index restored via DDL WAL broadcast",
+			mlog.String("indexName", indexInfo.GetIndexName()),
+			mlog.Int64("fieldID", indexInfo.GetFieldID()),
+			mlog.Int64("indexID", indexID))
 	}
 	return nil
 }
@@ -756,52 +753,50 @@ func (sm *snapshotManager) RestoreData(
 	collectionID int64,
 	jobID int64,
 ) (int64, error) {
-	log := log.Ctx(ctx).With(
-		zap.String("snapshot", snapshotName),
-		zap.Int64("collectionID", collectionID),
-		zap.Int64("jobID", jobID),
-	)
-	log.Info("restore data started")
+	ctx = mlog.WithFields(ctx, mlog.String("snapshot", snapshotName),
+		mlog.Int64("collectionID", collectionID),
+		mlog.Int64("jobID", jobID))
+	mlog.Info(ctx, "restore data started")
 
 	// ========== Phase 1: Idempotency check ==========
 	// Check if job already exists (WAL replay scenario)
 	existingJob := sm.copySegmentMeta.GetJob(ctx, jobID)
 	if existingJob != nil {
-		log.Info("job already exists, skip creation (idempotent)")
+		mlog.Info(ctx, "job already exists, skip creation (idempotent)")
 		return jobID, nil
 	}
 
 	snapshotData, err := sm.ReadSnapshotData(ctx, snapshotName)
 	if err != nil {
-		log.Error("failed to read snapshot data", zap.Error(err))
+		mlog.Error(ctx, "failed to read snapshot data", mlog.Err(err))
 		return 0, fmt.Errorf("failed to read snapshot data: %w", err)
 	}
 
 	// ========== Phase 2: Build partition mapping ==========
 	partitionMapping, err := sm.buildPartitionMapping(ctx, snapshotData, collectionID)
 	if err != nil {
-		log.Error("failed to build partition mapping", zap.Error(err))
+		mlog.Error(ctx, "failed to build partition mapping", mlog.Err(err))
 		return 0, fmt.Errorf("partition mapping failed: %w", err)
 	}
-	log.Info("partition mapping built", zap.Any("partitionMapping", partitionMapping))
+	mlog.Info(ctx, "partition mapping built", mlog.Any("partitionMapping", partitionMapping))
 
 	// ========== Phase 3: Build channel mapping ==========
 	channelMapping, err := sm.buildChannelMapping(ctx, snapshotData, collectionID)
 	if err != nil {
-		log.Error("failed to build channel mapping", zap.Error(err))
+		mlog.Error(ctx, "failed to build channel mapping", mlog.Err(err))
 		return 0, fmt.Errorf("channel mapping failed: %w", err)
 	}
 
 	// ========== Phase 4: Create copy segment job ==========
 	// Use the pre-allocated jobID from the WAL message
 	if err := sm.createRestoreJob(ctx, collectionID, channelMapping, partitionMapping, snapshotData, jobID); err != nil {
-		log.Error("failed to create restore job", zap.Error(err))
+		mlog.Error(ctx, "failed to create restore job", mlog.Err(err))
 		return 0, fmt.Errorf("restore job creation failed: %w", err)
 	}
 
-	log.Info("restore data completed successfully",
-		zap.Int64("jobID", jobID),
-		zap.Int64("collectionID", collectionID))
+	mlog.Info(ctx, "restore data completed successfully",
+		mlog.Int64("jobID", jobID),
+		mlog.Int64("collectionID", collectionID))
 
 	return jobID, nil
 }
@@ -899,7 +894,7 @@ func (sm *snapshotManager) buildChannelMapping(
 	// Get target collection channels
 	targetChannels, err := sm.getChannelsByCollectionID(ctx, targetCollectionID)
 	if err != nil {
-		log.Ctx(ctx).Error("failed to get channels by collection ID", zap.Error(err))
+		mlog.Error(ctx, "failed to get channels by collection ID", mlog.Err(err))
 		return nil, err
 	}
 
@@ -938,13 +933,11 @@ func (sm *snapshotManager) createRestoreJob(
 	snapshotData *SnapshotData,
 	jobID int64,
 ) error {
-	log := log.Ctx(ctx).With(
-		zap.String("snapshotName", snapshotData.SnapshotInfo.GetName()),
-		zap.Int64("targetCollectionID", targetCollection),
-		zap.Int64("jobID", jobID),
-		zap.Any("channelMapping", channelMapping),
-		zap.Any("partitionMapping", partitionMapping),
-	)
+	ctx = mlog.WithFields(ctx, mlog.String("snapshotName", snapshotData.SnapshotInfo.GetName()),
+		mlog.Int64("targetCollectionID", targetCollection),
+		mlog.Int64("jobID", jobID),
+		mlog.Any("channelMapping", channelMapping),
+		mlog.Any("partitionMapping", partitionMapping))
 
 	// Validate which segments exist in meta
 	validSegments := make([]*datapb.SegmentDescription, 0, len(snapshotData.Segments))
@@ -952,8 +945,8 @@ func (sm *snapshotManager) createRestoreJob(
 		sourceSegmentID := segDesc.GetSegmentId()
 		segInfo := sm.meta.GetSegment(ctx, sourceSegmentID)
 		if segInfo == nil {
-			log.Warn("source segment not found in meta, skipping",
-				zap.Int64("sourceSegmentID", sourceSegmentID))
+			mlog.Warn(ctx, "source segment not found in meta, skipping",
+				mlog.Int64("sourceSegmentID", sourceSegmentID))
 			continue
 		}
 		validSegments = append(validSegments, segDesc)
@@ -963,7 +956,7 @@ func (sm *snapshotManager) createRestoreJob(
 	// AllocN returns (start, end, error), where end = start + count
 	targetSegmentIDStart, _, err := sm.allocator.AllocN(int64(len(validSegments)))
 	if err != nil {
-		log.Error("failed to allocate segment IDs", zap.Error(err))
+		mlog.Error(ctx, "failed to allocate segment IDs", mlog.Err(err))
 		return err
 	}
 
@@ -987,7 +980,7 @@ func (sm *snapshotManager) createRestoreJob(
 				err := merr.WrapErrServiceInternal(
 					fmt.Sprintf("partition mapping not found for segment: sourceSegmentID=%d, sourcePartitionID=%d",
 						sourceSegmentID, sourcePartitionID))
-				log.Error("partition mapping missing", zap.Error(err))
+				mlog.Error(context.TODO(), "partition mapping missing", mlog.Err(err))
 				return err
 			}
 		}
@@ -1003,7 +996,7 @@ func (sm *snapshotManager) createRestoreJob(
 		if !ok {
 			err := merr.WrapErrServiceInternal(
 				fmt.Sprintf("channel mapping missing for channel: %s", segDesc.GetChannelName()))
-			log.Error("channel mapping not found", zap.Error(err))
+			mlog.Error(context.TODO(), "channel mapping not found", mlog.Err(err))
 			return err
 		}
 
@@ -1042,7 +1035,7 @@ func (sm *snapshotManager) createRestoreJob(
 	// Pre-register all target segments in meta to ensure they exist when copy tasks run
 	for _, targetSegment := range targetSegments {
 		if err := sm.meta.AddSegment(ctx, targetSegment); err != nil {
-			log.Error("failed to pre-register target segment", zap.Error(err))
+			mlog.Error(context.TODO(), "failed to pre-register target segment", mlog.Err(err))
 			return err
 		}
 	}
@@ -1050,13 +1043,13 @@ func (sm *snapshotManager) createRestoreJob(
 	// Pre-register channel's checkpoint
 	collection, err := sm.handler.GetCollection(ctx, targetCollection)
 	if err != nil {
-		log.Error("failed to get collection", zap.Error(err))
+		mlog.Error(context.TODO(), "failed to get collection", mlog.Err(err))
 		return err
 	}
 	for _, channel := range channelMapping {
 		startPosition := toMsgPosition(channel, collection.StartPositions)
 		if err := sm.meta.UpdateChannelCheckpoint(ctx, channel, startPosition); err != nil {
-			log.Error("failed to pre-register channel checkpoint", zap.Error(err))
+			mlog.Error(context.TODO(), "failed to pre-register channel checkpoint", mlog.Err(err))
 			return err
 		}
 	}
@@ -1084,13 +1077,13 @@ func (sm *snapshotManager) createRestoreJob(
 
 	// Save job to metadata
 	if err := sm.copySegmentMeta.AddJob(ctx, copyJob); err != nil {
-		log.Error("failed to save copy segment job", zap.Error(err))
+		mlog.Error(context.TODO(), "failed to save copy segment job", mlog.Err(err))
 		return err
 	}
 
-	log.Info("copy segment job created successfully",
-		zap.Int64("jobID", jobID),
-		zap.Int("totalSegments", len(idMappings)))
+	mlog.Info(context.TODO(), "copy segment job created successfully",
+		mlog.Int64("jobID", jobID),
+		mlog.Int("totalSegments", len(idMappings)))
 
 	return nil
 }
@@ -1107,22 +1100,22 @@ func (sm *snapshotManager) ReadSnapshotData(ctx context.Context, snapshotName st
 
 // GetRestoreState retrieves the current state of a restore job.
 func (sm *snapshotManager) GetRestoreState(ctx context.Context, jobID int64) (*datapb.RestoreSnapshotInfo, error) {
-	log := log.Ctx(ctx).With(zap.Int64("jobID", jobID))
+	ctx = mlog.WithFields(ctx, mlog.Int64("jobID", jobID))
 
 	// Get job
 	job := sm.copySegmentMeta.GetJob(ctx, jobID)
 	if job == nil {
 		err := merr.WrapErrImportFailed(fmt.Sprintf("restore job not found: jobID=%d", jobID))
-		log.Warn("restore job not found")
+		mlog.Warn(ctx, "restore job not found")
 		return nil, err
 	}
 
 	// Build restore info using centralized helper
 	restoreInfo := sm.buildRestoreInfo(job)
 
-	log.Info("get restore state completed",
-		zap.String("state", restoreInfo.GetState().String()),
-		zap.Int32("progress", restoreInfo.GetProgress()))
+	mlog.Info(ctx, "get restore state completed",
+		mlog.String("state", restoreInfo.GetState().String()),
+		mlog.Int32("progress", restoreInfo.GetProgress()))
 
 	return restoreInfo, nil
 }
@@ -1145,9 +1138,9 @@ func (sm *snapshotManager) ListRestoreJobs(
 		restoreInfos = append(restoreInfos, sm.buildRestoreInfo(job))
 	}
 
-	log.Ctx(ctx).Info("list restore jobs completed",
-		zap.Int("totalJobs", len(restoreInfos)),
-		zap.Int64("filterCollectionId", collectionIDFilter))
+	mlog.Info(ctx, "list restore jobs completed",
+		mlog.Int("totalJobs", len(restoreInfos)),
+		mlog.Int64("filterCollectionId", collectionIDFilter))
 
 	return restoreInfos, nil
 }

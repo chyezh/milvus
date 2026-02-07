@@ -6,7 +6,6 @@ import (
 	"math"
 
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
@@ -14,7 +13,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
@@ -69,9 +68,8 @@ func (policy *forceMergeCompactionPolicy) triggerOneCollection(
 	collectionID int64,
 	targetSize int64,
 ) ([]CompactionView, int64, error) {
-	log := log.Ctx(ctx).With(
-		zap.Int64("collectionID", collectionID),
-		zap.Int64("targetSize", targetSize))
+	ctx = mlog.WithFields(ctx, mlog.Int64("collectionID", collectionID),
+		mlog.Int64("targetSize", targetSize))
 	collection, err := policy.handler.GetCollection(ctx, collectionID)
 	if err != nil {
 		return nil, 0, err
@@ -83,7 +81,7 @@ func (policy *forceMergeCompactionPolicy) triggerOneCollection(
 
 	collectionTTL, err := common.GetCollectionTTLFromMap(collection.Properties)
 	if err != nil {
-		log.Warn("failed to get collection ttl, use default", zap.Error(err))
+		mlog.Warn(ctx, "failed to get collection ttl, use default", mlog.Err(err))
 		collectionTTL = 0
 	}
 
@@ -110,7 +108,7 @@ func (policy *forceMergeCompactionPolicy) triggerOneCollection(
 	}))
 
 	if len(segments) == 0 {
-		log.Info("no eligible segments for force merge")
+		mlog.Info(ctx, "no eligible segments for force merge")
 		return nil, 0, nil
 	}
 
@@ -135,7 +133,7 @@ func (policy *forceMergeCompactionPolicy) triggerOneCollection(
 		views = append(views, view)
 	}
 
-	log.Info("force merge triggered", zap.Int("viewCount", len(views)))
+	mlog.Info(context.TODO(), "force merge triggered", mlog.Int("viewCount", len(views)))
 	return views, triggerID, nil
 }
 
@@ -180,7 +178,7 @@ func newMetricsNodeMemoryQuerier(nodeManager session.NodeManager, mixCoord types
 var _ CollectionTopologyQuerier = (*metricsNodeMemoryQuerier)(nil)
 
 func (q *metricsNodeMemoryQuerier) GetCollectionTopology(ctx context.Context, collectionID int64) (*CollectionTopology, error) {
-	log := log.Ctx(ctx).With(zap.Int64("collectionID", collectionID))
+	ctx = mlog.WithFields(ctx, mlog.Int64("collectionID", collectionID))
 	if q.mixCoord == nil {
 		return nil, fmt.Errorf("mixCoord not available for topology query")
 	}
@@ -203,7 +201,7 @@ func (q *metricsNodeMemoryQuerier) GetCollectionTopology(ctx context.Context, co
 	// Get QueryNode sessions from etcd to filter out embedded nodes
 	sessions, _, err := q.session.GetSessions(ctx, typeutil.QueryNodeRole)
 	if err != nil {
-		log.Warn("failed to get QueryNode sessions", zap.Error(err))
+		mlog.Warn(ctx, "failed to get QueryNode sessions", mlog.Err(err))
 		return nil, err
 	}
 
@@ -218,7 +216,7 @@ func (q *metricsNodeMemoryQuerier) GetCollectionTopology(ctx context.Context, co
 		}
 	}
 
-	log.Info("excluding embedded QueryNode", zap.Int64s("nodeIDs", lo.Keys(embeddedNodeIDs)))
+	mlog.Info(ctx, "excluding embedded QueryNode", mlog.Int64s("nodeIDs", lo.Keys(embeddedNodeIDs)))
 	rsp, err := q.mixCoord.GetQcMetrics(ctx, req)
 	if err = merr.CheckRPCCall(rsp, err); err != nil {
 		return nil, err
@@ -263,21 +261,21 @@ func (q *metricsNodeMemoryQuerier) GetCollectionTopology(ctx context.Context, co
 			// Pooling DataNode returns 0 from GetMetrics
 			// Use default fallback: 32GB
 			isPooling = true
-			log.Warn("DataNode returned 0 memory (pooling mode?), using default",
-				zap.Int64("nodeID", nodeID),
-				zap.Uint64("defaultMemory", defaultPoolingDataNodeMemory))
+			mlog.Warn(context.TODO(), "DataNode returned 0 memory (pooling mode?), using default",
+				mlog.Int64("nodeID", nodeID),
+				mlog.Uint64("defaultMemory", defaultPoolingDataNodeMemory))
 			dataNodeMemory[nodeID] = defaultPoolingDataNodeMemory
 		}
 	}
 
 	isStandaloneMode := paramtable.GetRole() == typeutil.StandaloneRole
-	log.Info("Collection topology",
-		zap.Int64("collectionID", collectionID),
-		zap.Int("numReplicas", numReplicas),
-		zap.Any("querynodes", queryNodeMemory),
-		zap.Any("datanodes", dataNodeMemory),
-		zap.Bool("isStandaloneMode", isStandaloneMode),
-		zap.Bool("isPooling", isPooling))
+	mlog.Info(context.TODO(), "Collection topology",
+		mlog.Int64("collectionID", collectionID),
+		mlog.Int("numReplicas", numReplicas),
+		mlog.Any("querynodes", queryNodeMemory),
+		mlog.Any("datanodes", dataNodeMemory),
+		mlog.Bool("isStandaloneMode", isStandaloneMode),
+		mlog.Bool("isPooling", isPooling))
 
 	return &CollectionTopology{
 		CollectionID:     collectionID,

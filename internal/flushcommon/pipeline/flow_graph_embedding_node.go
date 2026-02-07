@@ -17,18 +17,18 @@
 package pipeline
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/flushcommon/metacache"
 	"github.com/milvus-io/milvus/internal/flushcommon/writebuffer"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/function"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -210,13 +210,13 @@ func (eNode *embeddingNode) Operate(in []Msg) []Msg {
 	if len(fgMsg.InsertMessages) > 0 {
 		var err error
 		if insertData, err = writebuffer.PrepareInsert(eNode.metaCache.GetSchema(fgMsg.TimeTick()), eNode.pkField, fgMsg.InsertMessages); err != nil {
-			log.Error("failed to prepare insert data", zap.Error(err))
+			mlog.Error(context.TODO(), "failed to prepare insert data", mlog.Err(err))
 			panic(err)
 		}
 	}
 
 	if err := eNode.Embedding(insertData); err != nil {
-		log.Warn("failed to embedding insert data", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to embedding insert data", mlog.Err(err))
 		panic(err)
 	}
 

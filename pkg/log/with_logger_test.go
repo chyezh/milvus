@@ -10,10 +10,10 @@ func TestLoggerBinder(t *testing.T) {
 	}
 
 	bb := b{}
-	bb.Logger().Debug("test")
+	bb.Logger().Debug(context.TODO(), "test")
 
 	bb.SetLogger(With(FieldModule("test"), FieldComponent("test"), FieldMessage(username("123"))))
-	bb.Logger().Debug("test")
+	bb.Logger().Debug(context.TODO(), "test")
 	bb.SetLogger(nil)
-	bb.Logger().Debug("test")
+	bb.Logger().Debug(context.TODO(), "test")
 }

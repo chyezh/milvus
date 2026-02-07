@@ -6,12 +6,11 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/lazygrpc"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/replicateutil"
@@ -31,7 +30,7 @@ func NewAssignmentService(service lazygrpc.Service[streamingpb.StreamingCoordAss
 		resumingExitCh: make(chan struct{}),
 		cond:           syncutil.NewContextCond(&sync.Mutex{}),
 		discoverer:     nil,
-		logger:         log.With(),
+		logger:         mlog.With(),
 	}
 	go s.resumeLoop()
 	return s
@@ -46,7 +45,7 @@ type AssignmentServiceImpl struct {
 	resumingExitCh chan struct{}
 	cond           *syncutil.ContextCond
 	discoverer     *assignmentDiscoverClient
-	logger         *log.MLogger
+	logger         *mlog.Logger
 }
 
 // GetLatestStreamingVersion returns the version of the streaming service.
@@ -218,9 +217,9 @@ func (c *AssignmentServiceImpl) getAssignmentDiscoverOrWait(ctx context.Context)
 func (c *AssignmentServiceImpl) resumeLoop() (err error) {
 	defer func() {
 		if err != nil {
-			c.logger.Warn("stop resuming", zap.Error(err))
+			c.logger.Warn(context.TODO(), "stop resuming", mlog.Err(err))
 		} else {
-			c.logger.Info("stop resuming")
+			c.logger.Info(context.TODO(), "stop resuming")
 		}
 		close(c.resumingExitCh)
 	}()
@@ -248,11 +247,11 @@ func (c *AssignmentServiceImpl) swapAssignmentDiscoverClient() (*assignmentDisco
 	c.discoverer = adc
 	c.cond.L.Unlock()
 
-	c.logger.Info("swap assignment discover client")
+	c.logger.Info(context.TODO(), "swap assignment discover client")
 	if oldADC != nil {
 		oldADC.Close()
 	}
-	c.logger.Info("old assignment discover client closed")
+	c.logger.Info(context.TODO(), "old assignment discover client closed")
 	return adc, nil
 }
 
@@ -269,7 +268,7 @@ func (c *AssignmentServiceImpl) createNewAssignmentDiscoverClient() (*assignment
 			return nil, err
 		}
 		if err != nil {
-			c.logger.Warn("create a assignment discover stream failed", zap.Error(err))
+			c.logger.Warn(context.TODO(), "create a assignment discover stream failed", mlog.Err(err))
 			// TODO: backoff
 			time.Sleep(50 * time.Millisecond)
 			continue
@@ -281,7 +280,7 @@ func (c *AssignmentServiceImpl) createNewAssignmentDiscoverClient() (*assignment
 func (c *AssignmentServiceImpl) waitUntilUnavailable(adc *assignmentDiscoverClient) error {
 	select {
 	case <-adc.Available():
-		c.logger.Warn("assignment discover client is unavailable, try to resuming...")
+		c.logger.Warn(context.TODO(), "assignment discover client is unavailable, try to resuming...")
 		return nil
 	case <-c.ctx.Done():
 		return c.ctx.Err()

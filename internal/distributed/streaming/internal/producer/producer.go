@@ -7,13 +7,12 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/cockroachdb/errors"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/distributed/streaming/internal/errs"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/producer"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
@@ -37,7 +36,7 @@ func NewResumableProducer(f factory, opts *ProducerOptions) *ResumableProducer {
 		stopResumingCh: make(chan struct{}),
 		resumingExitCh: make(chan struct{}),
 		lifetime:       typeutil.NewLifetime(),
-		logger:         log.With(zap.String("pchannel", opts.PChannel)),
+		logger:         mlog.With(mlog.String("pchannel", opts.PChannel)),
 		opts:           opts,
 		producer:       newProducerWithResumingError(opts.PChannel), // lazy initialized.
 		cond:           syncutil.NewContextCond(&sync.Mutex{}),
@@ -64,7 +63,7 @@ type ResumableProducer struct {
 	// Use producer Close is better way to stop producer.
 
 	lifetime *typeutil.Lifetime
-	logger   *log.MLogger
+	logger   *mlog.Logger
 	opts     *ProducerOptions
 
 	producer producerWithResumingError
@@ -115,7 +114,7 @@ func (p *ResumableProducer) Produce(ctx context.Context, msg message.MutableMess
 // resumeLoop is used to resume producer from error.
 func (p *ResumableProducer) resumeLoop() {
 	defer func() {
-		p.logger.Info("stop resuming")
+		p.logger.Info(context.TODO(), "stop resuming")
 		p.metrics.IntoUnavailable()
 		close(p.resumingExitCh)
 	}()
@@ -146,7 +145,7 @@ func (p *ResumableProducer) waitUntilUnavailable(producer handler.Producer) erro
 		return p.ctx.Err()
 	case <-producer.Available():
 		// Wait old producer unavailable, trigger a new resuming operation.
-		p.logger.Warn("producer encounter error, try to resume...")
+		p.logger.Warn(context.TODO(), "producer encounter error, try to resume...")
 		return nil
 	}
 }
@@ -177,7 +176,7 @@ func (p *ResumableProducer) createNewProducer() (producer.Producer, error) {
 		// Otherwise, perform a resuming operation.
 		if err != nil {
 			nextBackoff := backoff.NextBackOff()
-			p.logger.Warn("create producer failed, retry...", zap.Error(err), zap.Duration("nextRetryInterval", nextBackoff))
+			p.logger.Warn(context.TODO(), "create producer failed, retry...", mlog.Err(err), mlog.Duration("nextRetryInterval", nextBackoff))
 			time.Sleep(nextBackoff)
 			continue
 		}
@@ -203,7 +202,7 @@ func (p *ResumableProducer) gracefulClose() error {
 // Close close the producer.
 func (p *ResumableProducer) Close() {
 	if err := p.gracefulClose(); err != nil {
-		p.logger.Warn("graceful close a producer fail, force close is applied")
+		p.logger.Warn(context.TODO(), "graceful close a producer fail, force close is applied")
 	}
 
 	// cancel is always need to be called, even graceful close is success.

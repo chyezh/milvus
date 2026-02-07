@@ -4,7 +4,6 @@ package balance
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"math/rand"
 	"sort"
@@ -20,7 +19,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -530,18 +529,12 @@ type MultiTargetBalancer struct {
 // It first attempts to balance channels if AutoBalanceChannel is enabled, then balances segments
 // using multiple optimization strategies in sequence.
 func (b *MultiTargetBalancer) BalanceReplica(ctx context.Context, replica *meta.Replica) (segmentPlans []assign.SegmentAssignPlan, channelPlans []assign.ChannelAssignPlan) {
-	log := log.With(
-		zap.Int64("collection", replica.GetCollectionID()),
-		zap.Int64("replica id", replica.GetID()),
-		zap.String("replica group", replica.GetResourceGroup()),
-	)
 	br := NewBalanceReport()
 	defer func() {
 		if len(segmentPlans) == 0 && len(channelPlans) == 0 {
-			log.WithRateGroup(fmt.Sprintf("scorebasedbalance-noplan-%d", replica.GetID()), 1, 60).
-				RatedDebug(60, "no plan generated, balance report", zap.Stringers("records", br.detailRecords))
+			mlog.RatedDebug(ctx, 1.0/60, "no plan generated, balance report", zap.Stringers("records", br.detailRecords))
 		} else {
-			log.Info("balance plan generated", zap.Stringers("report details", br.records))
+			mlog.Info(ctx, "balance plan generated", zap.Stringers("report details", br.records))
 		}
 	}()
 

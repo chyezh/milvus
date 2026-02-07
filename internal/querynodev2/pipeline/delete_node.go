@@ -21,13 +21,12 @@ import (
 	"fmt"
 
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/querynodev2/delegator"
 	"github.com/milvus-io/milvus/internal/storage"
 	base "github.com/milvus-io/milvus/internal/util/pipeline"
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -54,12 +53,12 @@ func (dNode *deleteNode) addDeleteData(deleteDatas map[UniqueID]*delegator.Delet
 	deleteData.Timestamps = append(deleteData.Timestamps, msg.Timestamps...)
 	deleteData.RowCount += int64(len(pks))
 
-	log.Info("pipeline fetch delete msg",
-		zap.Int64("collectionID", dNode.collectionID),
-		zap.Int64("partitionID", msg.PartitionID),
-		zap.Int("deleteRowNum", len(pks)),
-		zap.Uint64("timestampMin", msg.BeginTimestamp),
-		zap.Uint64("timestampMax", msg.EndTimestamp))
+	mlog.Info(context.TODO(), "pipeline fetch delete msg",
+		mlog.Int64("collectionID", dNode.collectionID),
+		mlog.Int64("partitionID", msg.PartitionID),
+		mlog.Int("deleteRowNum", len(pks)),
+		mlog.Uint64("timestampMin", msg.BeginTimestamp),
+		mlog.Uint64("timestampMax", msg.EndTimestamp))
 }
 
 func (dNode *deleteNode) Operate(in Msg) Msg {

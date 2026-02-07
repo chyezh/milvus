@@ -28,11 +28,10 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/kv"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/etcd"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -213,8 +212,8 @@ func (ss *SuffixSnapshot) loadLatestTS(ctx context.Context, key string) error {
 	prefix := ss.composeSnapshotPrefix(key)
 	keys, _, err := ss.MetaKv.LoadWithPrefix(ctx, prefix)
 	if err != nil {
-		log.Warn("SuffixSnapshot MetaKv LoadWithPrefix failed", zap.String("key", key),
-			zap.Error(err))
+		mlog.Warn(ctx, "SuffixSnapshot MetaKv LoadWithPrefix failed", mlog.String("key", key),
+			mlog.Err(err))
 		return err
 	}
 	tss := make([]typeutil.Timestamp, 0, len(keys))
@@ -255,7 +254,7 @@ func binarySearchRecords(records []tsv, ts typeutil.Timestamp) (string, bool) {
 	i, j := 0, len(records)
 	for i+1 < j {
 		k := (i + j) / 2
-		// log.Warn("", zap.Int("i", i), zap.Int("j", j), zap.Int("k", k))
+		// mlog.Warn(context.TODO(), "", mlog.Int("i", i), mlog.Int("j", j), mlog.Int("k", k))
 		if records[k].ts == ts {
 			return records[k].value, true
 		}
@@ -340,7 +339,7 @@ func (ss *SuffixSnapshot) Load(ctx context.Context, key string, ts typeutil.Time
 	// 1. load all tsKey with key/ prefix
 	keys, values, err := ss.MetaKv.LoadWithPrefix(ctx, ss.composeSnapshotPrefix(key))
 	if err != nil {
-		log.Warn("prefixSnapshot MetaKv LoadWithPrefix failed", zap.String("key", key), zap.Error(err))
+		mlog.Warn(ctx, "prefixSnapshot MetaKv LoadWithPrefix failed", mlog.String("key", key), mlog.Err(err))
 		return "", err
 	}
 
@@ -366,12 +365,12 @@ func (ss *SuffixSnapshot) Load(ctx context.Context, key string, ts typeutil.Time
 	// binary search
 	value, found := binarySearchRecords(records, ts)
 	if !found {
-		log.Warn("not found")
+		mlog.Warn(context.TODO(), "not found")
 		return "", errors.New("no value found")
 	}
 	// check whether value is tombstone
 	if ss.isTombstone(value) {
-		log.Warn("tombstone", zap.String("value", value))
+		mlog.Warn(context.TODO(), "tombstone", mlog.String("value", value))
 		return "", errors.New("not value found")
 	}
 	return value, nil
@@ -489,7 +488,7 @@ func (ss *SuffixSnapshot) LoadWithPrefix(ctx context.Context, key string, ts typ
 
 		targetTs, ok := ss.isTSKey(snapshotKey)
 		if !ok {
-			log.Warn("skip key because it doesn't contain ts", zap.String("key", key))
+			mlog.Warn(context.TODO(), "skip key because it doesn't contain ts", mlog.String("key", key))
 			return nil
 		}
 
@@ -531,7 +530,7 @@ func (ss *SuffixSnapshot) MultiSaveAndRemove(ctx context.Context, saves map[stri
 		}
 		value, err := ss.MetaKv.Load(ctx, removal)
 		if err != nil {
-			log.Warn("SuffixSnapshot MetaKv Load failed", zap.String("key", removal), zap.Error(err))
+			mlog.Warn(ctx, "SuffixSnapshot MetaKv Load failed", mlog.String("key", removal), mlog.Err(err))
 			if errors.Is(err, merr.ErrIoKeyNotFound) {
 				continue
 			}
@@ -580,7 +579,7 @@ func (ss *SuffixSnapshot) MultiSaveAndRemoveWithPrefix(ctx context.Context, save
 	for _, removal := range removals {
 		keys, values, err := ss.MetaKv.LoadWithPrefix(ctx, removal)
 		if err != nil {
-			log.Warn("SuffixSnapshot MetaKv LoadwithPrefix failed", zap.String("key", removal), zap.Error(err))
+			mlog.Warn(ctx, "SuffixSnapshot MetaKv LoadwithPrefix failed", mlog.String("key", removal), mlog.Err(err))
 			return err
 		}
 
@@ -612,20 +611,19 @@ func (ss *SuffixSnapshot) Close() {
 
 // startBackgroundGC the data will clean up if key ts!=0 and expired
 func (ss *SuffixSnapshot) startBackgroundGC(ctx context.Context) {
-	log := log.Ctx(ctx)
-	log.Debug("suffix snapshot GC goroutine start!")
+	mlog.Debug(ctx, "suffix snapshot GC goroutine start!")
 	ticker := time.NewTicker(60 * time.Minute)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ss.closeGC:
-			log.Warn("quit suffix snapshot GC goroutine!")
+			mlog.Warn(ctx, "quit suffix snapshot GC goroutine!")
 			return
 		case now := <-ticker.C:
 			err := ss.removeExpiredKvs(ctx, now)
 			if err != nil {
-				log.Warn("remove expired data fail during GC", zap.Error(err))
+				mlog.Warn(ctx, "remove expired data fail during GC", mlog.Err(err))
 			}
 		}
 	}
@@ -666,7 +664,6 @@ func (ss *SuffixSnapshot) batchRemoveExpiredKvs(ctx context.Context, keyGroup []
 // It walks through all keys with the snapshot prefix, groups them by original key,
 // and removes expired versions or all versions if the original key has been deleted
 func (ss *SuffixSnapshot) removeExpiredKvs(ctx context.Context, now time.Time) error {
-	log := log.Ctx(ctx)
 	ttlTime := paramtable.Get().ServiceParam.MetaStoreCfg.SnapshotTTLSeconds.GetAsDuration(time.Second)
 	reserveTime := paramtable.Get().ServiceParam.MetaStoreCfg.SnapshotReserveTimeSeconds.GetAsDuration(time.Second)
 
@@ -705,13 +702,13 @@ func (ss *SuffixSnapshot) removeExpiredKvs(ctx context.Context, now time.Time) e
 		key := ss.hideRootPrefix(string(k))
 		ts, ok := ss.isTSKey(key)
 		if !ok {
-			log.Warn("Skip key because it doesn't contain ts", zap.String("key", key))
+			mlog.Warn(ctx, "Skip key because it doesn't contain ts", mlog.String("key", key))
 			return nil
 		}
 
 		curOriginalKey, err := ss.getOriginalKey(key)
 		if err != nil {
-			log.Error("Failed to parse the original key for GC", zap.String("key", key), zap.Error(err))
+			mlog.Error(ctx, "Failed to parse the original key for GC", mlog.String("key", key), mlog.Err(err))
 			return err
 		}
 
@@ -738,7 +735,7 @@ func (ss *SuffixSnapshot) removeExpiredKvs(ctx context.Context, now time.Time) e
 		return nil
 	})
 	if err != nil {
-		log.Error("Error occurred during WalkWithPrefix", zap.Error(err))
+		mlog.Error(context.TODO(), "Error occurred during WalkWithPrefix", mlog.Err(err))
 		return err
 	}
 

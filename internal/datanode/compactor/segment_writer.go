@@ -25,7 +25,6 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
 	"go.uber.org/atomic"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/allocator"
@@ -34,7 +33,7 @@ import (
 	"github.com/milvus-io/milvus/internal/flushcommon/writebuffer"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/etcdpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -135,13 +134,13 @@ func (w *MultiSegmentWriter) closeWriter() error {
 
 		w.res = append(w.res, result)
 
-		log.Info("created new segment",
-			zap.Int64("segmentID", w.currentSegmentID),
-			zap.String("channel", w.channel),
-			zap.Int64("totalRows", w.writer.GetRowNum()),
-			zap.Uint64("totalSize", w.writer.GetWrittenUncompressed()),
-			zap.Int64("expected segment size", w.segmentSize),
-			zap.Int64("storageVersion", w.storageVersion))
+		mlog.Info(context.TODO(), "created new segment",
+			mlog.Int64("segmentID", w.currentSegmentID),
+			mlog.String("channel", w.channel),
+			mlog.Int64("totalRows", w.writer.GetRowNum()),
+			mlog.Uint64("totalSize", w.writer.GetWrittenUncompressed()),
+			mlog.Int64("expected segment size", w.segmentSize),
+			mlog.Int64("storageVersion", w.storageVersion))
 	}
 	return nil
 }
@@ -521,7 +520,7 @@ func NewSegmentWriter(sch *schemapb.CollectionSchema, maxCount int64, batchSize 
 
 	pkField, err := typeutil.GetPrimaryFieldSchema(sch)
 	if err != nil {
-		log.Warn("failed to get pk field from schema")
+		mlog.Warn(context.TODO(), "failed to get pk field from schema")
 		return nil, err
 	}
 

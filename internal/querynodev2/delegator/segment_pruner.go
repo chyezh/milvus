@@ -8,7 +8,6 @@ import (
 	"strconv"
 
 	"go.opentelemetry.io/otel"
-	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
@@ -17,8 +16,8 @@ import (
 	"github.com/milvus-io/milvus/internal/util/clustering"
 	"github.com/milvus-io/milvus/internal/util/exprutil"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/distance"
@@ -95,19 +94,19 @@ func PruneSegments(ctx context.Context,
 		plan := planpb.PlanNode{}
 		err := proto.Unmarshal(expr, &plan)
 		if err != nil {
-			log.Ctx(ctx).Error("failed to unmarshall serialized expr from bytes, failed the operation")
+			mlog.Error(ctx, "failed to unmarshall serialized expr from bytes, failed the operation")
 			return
 		}
 		exprPb, err := exprutil.ParseExprFromPlan(&plan)
 		if err != nil {
-			log.Ctx(ctx).Error("failed to parse expr from plan, failed the operation")
+			mlog.Error(ctx, "failed to parse expr from plan, failed the operation")
 			return
 		}
 
 		// 1. parse expr for prune
 		expr, err := ParseExpr(exprPb, NewParseContext(clusteringKeyField.GetFieldID(), clusteringKeyField.GetDataType()))
 		if err != nil {
-			log.Ctx(ctx).RatedWarn(10, "failed to parse expr for segment prune, fallback to common search/query", zap.Error(err))
+			mlog.RatedWarn(ctx, 1.0/10, "failed to parse expr for segment prune, fallback to common search/query", mlog.Err(err))
 			return
 		}
 
@@ -181,11 +180,11 @@ func PruneSegments(ctx context.Context,
 				fmt.Sprint(collectionID),
 				pruneType,
 			).Set(float64(filterRatio))
-		log.Ctx(ctx).Debug("Pruned segment for search/query",
-			zap.Int("filtered_segment_num[stats]", len(filteredSegments)),
-			zap.Int("filtered_segment_num[excluded]", realFilteredSegments),
-			zap.Int("total_segment_num", totalSegNum),
-			zap.Float32("filtered_ratio", filterRatio),
+		mlog.Debug(ctx, "Pruned segment for search/query",
+			mlog.Int("filtered_segment_num[stats]", len(filteredSegments)),
+			mlog.Int("filtered_segment_num[excluded]", realFilteredSegments),
+			mlog.Int("total_segment_num", totalSegNum),
+			mlog.Float32("filtered_ratio", filterRatio),
 		)
 	}
 
@@ -194,8 +193,8 @@ func PruneSegments(ctx context.Context,
 		fmt.Sprint(collectionID),
 		pruneType).
 		Observe(float64(tr.ElapseSpan().Milliseconds()))
-	log.Ctx(ctx).Debug("Pruned segment for search/query",
-		zap.Duration("duration", tr.ElapseSpan()))
+	mlog.Debug(ctx, "Pruned segment for search/query",
+		mlog.Duration("duration", tr.ElapseSpan()))
 }
 
 type segmentDisStruct struct {
@@ -240,7 +239,7 @@ func FilterSegmentsByVector(partitionStats *storage.PartitionStatsSnapshot,
 					}
 					// currently, we only support float vector and only one center one segment
 					if disErr != nil {
-						log.Error("calculate distance error", zap.Error(disErr))
+						mlog.Error(context.TODO(), "calculate distance error", mlog.Err(disErr))
 						neededSegments[segId] = struct{}{}
 						break
 					}
@@ -269,10 +268,10 @@ func FilterSegmentsByVector(partitionStats *storage.PartitionStatsSnapshot,
 		segmentCount := len(segmentsToSearch)
 		targetSegNum := int(math.Sqrt(float64(segmentCount)) * filterRatio)
 		if targetSegNum > segmentCount {
-			log.Ctx(context.TODO()).Debug("Warn! targetSegNum is larger or equal than segmentCount, no prune effect at all",
-				zap.Int("targetSegNum", targetSegNum),
-				zap.Int("segmentCount", segmentCount),
-				zap.Float64("filterRatio", filterRatio))
+			mlog.Debug(context.TODO(), "Warn! targetSegNum is larger or equal than segmentCount, no prune effect at all",
+				mlog.Int("targetSegNum", targetSegNum),
+				mlog.Int("segmentCount", segmentCount),
+				mlog.Float64("filterRatio", filterRatio))
 			targetSegNum = segmentCount
 		}
 		optimizedRowCount := 0

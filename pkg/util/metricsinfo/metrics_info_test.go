@@ -12,14 +12,13 @@
 package metricsinfo
 
 import (
+	"context"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
-
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestBaseComponentInfos_Codec(t *testing.T) {
@@ -50,8 +49,8 @@ func TestBaseComponentInfos_Codec(t *testing.T) {
 	}
 	s, err := MarshalComponentInfos(infos1)
 	assert.Equal(t, nil, err)
-	log.Info("TestBaseComponentInfos_Codec",
-		zap.String("marshaled_result", s))
+	mlog.Info(context.TODO(), "TestBaseComponentInfos_Codec",
+		mlog.String("marshaled_result", s))
 	var infos2 BaseComponentInfos
 	err = UnmarshalComponentInfos(s, &infos2)
 	assert.Equal(t, nil, err)
@@ -91,8 +90,8 @@ func TestQueryNodeInfos_Codec(t *testing.T) {
 	}
 	s, err := MarshalComponentInfos(infos1)
 	assert.Equal(t, nil, err)
-	log.Info("TestQueryNodeInfos_Codec",
-		zap.String("marshaled_result", s))
+	mlog.Info(context.TODO(), "TestQueryNodeInfos_Codec",
+		mlog.String("marshaled_result", s))
 	var infos2 QueryNodeInfos
 	err = UnmarshalComponentInfos(s, &infos2)
 	assert.Equal(t, nil, err)
@@ -133,8 +132,8 @@ func TestQueryCoordInfos_Codec(t *testing.T) {
 	}
 	s, err := MarshalComponentInfos(infos1)
 	assert.Equal(t, nil, err)
-	log.Info("TestQueryCoordInfos_Codec",
-		zap.String("marshaled_result", s))
+	mlog.Info(context.TODO(), "TestQueryCoordInfos_Codec",
+		mlog.String("marshaled_result", s))
 	var infos2 QueryCoordInfos
 	err = UnmarshalComponentInfos(s, &infos2)
 	assert.Equal(t, nil, err)
@@ -174,8 +173,8 @@ func TestDataNodeInfos_Codec(t *testing.T) {
 	}
 	s, err := MarshalComponentInfos(infos1)
 	assert.Equal(t, nil, err)
-	log.Info("TestDataNodeInfos_Codec",
-		zap.String("marshaled_result", s))
+	mlog.Info(context.TODO(), "TestDataNodeInfos_Codec",
+		mlog.String("marshaled_result", s))
 	var infos2 DataNodeInfos
 	err = UnmarshalComponentInfos(s, &infos2)
 	assert.Equal(t, nil, err)
@@ -215,8 +214,8 @@ func TestDataCoordInfos_Codec(t *testing.T) {
 	}
 	s, err := MarshalComponentInfos(infos1)
 	assert.Equal(t, nil, err)
-	log.Info("TestDataCoordInfos_Codec",
-		zap.String("marshaled_result", s))
+	mlog.Info(context.TODO(), "TestDataCoordInfos_Codec",
+		mlog.String("marshaled_result", s))
 	var infos2 DataCoordInfos
 	err = UnmarshalComponentInfos(s, &infos2)
 	assert.Equal(t, nil, err)
@@ -256,8 +255,8 @@ func TestRootCoordInfos_Codec(t *testing.T) {
 	}
 	s, err := MarshalComponentInfos(infos1)
 	assert.Equal(t, nil, err)
-	log.Info("TestRootCoordInfos_Codec",
-		zap.String("marshaled_result", s))
+	mlog.Info(context.TODO(), "TestRootCoordInfos_Codec",
+		mlog.String("marshaled_result", s))
 	var infos2 RootCoordInfos
 	err = UnmarshalComponentInfos(s, &infos2)
 	assert.Equal(t, nil, err)

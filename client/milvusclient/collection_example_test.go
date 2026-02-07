@@ -378,7 +378,7 @@ func ExampleClient_ListCollections() {
 		Address: milvusAddr,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -401,7 +401,7 @@ func ExampleClient_DescribeCollection() {
 		Address: milvusAddr,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -424,7 +424,7 @@ func ExampleClient_RenameCollection() {
 		Address: milvusAddr,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -445,7 +445,7 @@ func ExampleClient_AlterCollectionProperties_setTTL() {
 		Address: milvusAddr,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -466,7 +466,7 @@ func ExampleClient_LoadCollection() {
 		Address: milvusAddr,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -493,7 +493,7 @@ func ExampleClient_ReleaseCollection() {
 		Address: milvusAddr,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -514,7 +514,7 @@ func ExampleClient_DropCollection() {
 		Address: milvusAddr,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -535,7 +535,7 @@ func ExampleClient_AddCollectionField() {
 		Address: milvusAddr,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 
 	defer cli.Close(ctx)
@@ -561,7 +561,7 @@ func ExampleClient_RunAnalyzer() {
 		Address: milvusAddr,
 	})
 	if err != nil {
-		log.Fatal("failed to connect to milvus server: ", err.Error())
+		mlog.Fatal("failed to connect to milvus server: ", err.Error())
 	}
 	defer cli.Close(ctx)
 
@@ -574,7 +574,7 @@ func ExampleClient_RunAnalyzer() {
 
 	err = cli.CreateCollection(ctx, milvusclient.NewCreateCollectionOption(collectionName, schema))
 	if err != nil {
-		log.Fatal("failed to connect to create test collection: ", err.Error())
+		mlog.Fatal("failed to connect to create test collection: ", err.Error())
 	}
 
 	cli.CreateIndex(ctx, milvusclient.NewCreateIndexOption(collectionName, "sparse", index.NewAutoIndex(entity.BM25)).WithIndexName("bm25"))
@@ -583,7 +583,7 @@ func ExampleClient_RunAnalyzer() {
 	// Run analyzer with loaded collection field (Must be bm25 function input)
 	result, err := cli.RunAnalyzer(ctx, milvusclient.NewRunAnalyzerOption("test milvus").WithField(collectionName, "text"))
 	if err != nil {
-		log.Fatal("failed to run analyzer with loaded collection field: ", err)
+		mlog.Fatal("failed to run analyzer with loaded collection field: ", err)
 	}
 
 	println("Run analyzer result with loaded collection field")
@@ -601,7 +601,7 @@ func ExampleClient_RunAnalyzer() {
 	// Run analyzer with new analyzer params
 	result, err = cli.RunAnalyzer(ctx, milvusclient.NewRunAnalyzerOption("test milvus").WithAnalyzerParams(params))
 	if err != nil {
-		log.Fatal("failed to run analyzer with new analyzer params: ", err)
+		mlog.Fatal("failed to run analyzer with new analyzer params: ", err)
 	}
 
 	println("Run analyzer with new analyzer params")

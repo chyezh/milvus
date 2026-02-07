@@ -17,15 +17,15 @@
 package datacoord
 
 import (
+	"context"
 	"time"
 
-	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/util/importutilv2"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
@@ -81,8 +81,8 @@ func UpdateJobState(state internalpb.ImportJobState) UpdateJobAction {
 			cleanupTime := time.Now().Add(dur)
 			cleanupTs := tsoutil.ComposeTSByTime(cleanupTime, 0)
 			job.(*importJob).ImportJob.CleanupTs = cleanupTs
-			log.Info("set import job cleanup ts", zap.Int64("jobID", job.GetJobID()),
-				zap.Time("cleanupTime", cleanupTime), zap.Uint64("cleanupTs", cleanupTs))
+			mlog.Info(context.TODO(), "set import job cleanup ts", mlog.Int64("jobID", job.GetJobID()),
+				mlog.Time("cleanupTime", cleanupTime), mlog.Uint64("cleanupTs", cleanupTs))
 		}
 	}
 }

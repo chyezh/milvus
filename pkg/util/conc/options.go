@@ -17,12 +17,11 @@
 package conc
 
 import (
+	"context"
 	"time"
 
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	ants "github.com/panjf2000/ants/v2"
-	"go.uber.org/zap"
-
-	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 type poolOption struct {
@@ -51,7 +50,7 @@ func (opt *poolOption) antsOptions() []ants.Option {
 	// ants recovers panic by default
 	// however the error is not returned
 	result = append(result, ants.WithPanicHandler(func(v any) {
-		log.Error("Conc pool panicked", zap.Any("panic", v))
+		mlog.Error(context.TODO(), "Conc pool panicked", mlog.Any("panic", v))
 		if !opt.concealPanic {
 			panic(v)
 		}

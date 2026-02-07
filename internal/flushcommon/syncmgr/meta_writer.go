@@ -5,13 +5,12 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/flushcommon/broker"
 	"github.com/milvus-io/milvus/internal/flushcommon/metacache"
 	storage "github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -82,18 +81,18 @@ func (b *brokerMetaWriter) UpdateSync(ctx context.Context, pack *SyncTask) error
 	}
 
 	getBinlogNum := func(fBinlog *datapb.FieldBinlog) int { return len(fBinlog.GetBinlogs()) }
-	log.Info("SaveBinlogPath",
-		zap.Int64("SegmentID", pack.segmentID),
-		zap.Int64("CollectionID", pack.collectionID),
-		zap.Int64("ParitionID", pack.partitionID),
-		zap.Any("startPos", startPos),
-		zap.Any("checkPoints", checkPoints),
-		zap.Int("binlogNum", lo.SumBy(insertFieldBinlogs, getBinlogNum)),
-		zap.Int("statslogNum", lo.SumBy(statsFieldBinlogs, getBinlogNum)),
-		zap.Int("deltalogNum", lo.SumBy(deltaFieldBinlogs, getBinlogNum)),
-		zap.Int("bm25logNum", lo.SumBy(deltaBm25StatsBinlogs, getBinlogNum)),
-		zap.String("manifestPath", pack.manifestPath),
-		zap.String("vChannelName", pack.channelName),
+	mlog.Info(ctx, "SaveBinlogPath",
+		mlog.Int64("SegmentID", pack.segmentID),
+		mlog.Int64("CollectionID", pack.collectionID),
+		mlog.Int64("ParitionID", pack.partitionID),
+		mlog.Any("startPos", startPos),
+		mlog.Any("checkPoints", checkPoints),
+		mlog.Int("binlogNum", lo.SumBy(insertFieldBinlogs, getBinlogNum)),
+		mlog.Int("statslogNum", lo.SumBy(statsFieldBinlogs, getBinlogNum)),
+		mlog.Int("deltalogNum", lo.SumBy(deltaFieldBinlogs, getBinlogNum)),
+		mlog.Int("bm25logNum", lo.SumBy(deltaBm25StatsBinlogs, getBinlogNum)),
+		mlog.String("manifestPath", pack.manifestPath),
+		mlog.String("vChannelName", pack.channelName),
 	)
 
 	req := &datapb.SaveBinlogPathsRequest{
@@ -126,16 +125,16 @@ func (b *brokerMetaWriter) UpdateSync(ctx context.Context, pack *SyncTask) error
 		// Segment not found during stale segment flush. Segment might get compacted already.
 		// Stop retry and still proceed to the end, ignoring this error.
 		if !pack.pack.isFlush && errors.Is(err, merr.ErrSegmentNotFound) {
-			log.Warn("stale segment not found, could be compacted",
-				zap.Int64("segmentID", pack.segmentID))
-			log.Warn("failed to SaveBinlogPaths",
-				zap.Int64("segmentID", pack.segmentID),
-				zap.Error(err))
+			mlog.Warn(context.TODO(), "stale segment not found, could be compacted",
+				mlog.Int64("segmentID", pack.segmentID))
+			mlog.Warn(context.TODO(), "failed to SaveBinlogPaths",
+				mlog.Int64("segmentID", pack.segmentID),
+				mlog.Err(err))
 			return false, nil
 		}
 		// meta error, datanode handles a virtual channel does not belong here
 		if errors.IsAny(err, merr.ErrSegmentNotFound, merr.ErrChannelNotFound) {
-			log.Warn("meta error found, skip sync and start to drop virtual channel", zap.String("channel", pack.channelName))
+			mlog.Warn(context.TODO(), "meta error found, skip sync and start to drop virtual channel", mlog.String("channel", pack.channelName))
 			return false, nil
 		}
 
@@ -146,9 +145,9 @@ func (b *brokerMetaWriter) UpdateSync(ctx context.Context, pack *SyncTask) error
 		return false, nil
 	}, b.opts...)
 	if err != nil {
-		log.Warn("failed to SaveBinlogPaths",
-			zap.Int64("segmentID", pack.segmentID),
-			zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to SaveBinlogPaths",
+			mlog.Int64("segmentID", pack.segmentID),
+			mlog.Err(err))
 		return err
 	}
 
@@ -177,9 +176,9 @@ func (b *brokerMetaWriter) DropChannel(ctx context.Context, channelName string) 
 		return false, nil
 	}, b.opts...)
 	if err != nil {
-		log.Warn("failed to DropChannel",
-			zap.String("channel", channelName),
-			zap.Error(err))
+		mlog.Warn(ctx, "failed to DropChannel",
+			mlog.String("channel", channelName),
+			mlog.Err(err))
 	}
 	return err
 }

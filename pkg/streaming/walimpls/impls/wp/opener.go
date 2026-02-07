@@ -3,12 +3,10 @@ package wp
 import (
 	"context"
 
-	"github.com/zilliztech/woodpecker/woodpecker"
-	"go.uber.org/zap"
-
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/helper"
+	"github.com/zilliztech/woodpecker/woodpecker"
 )
 
 var _ walimpls.OpenerImpls = (*openerImpl)(nil)
@@ -22,26 +20,26 @@ type openerImpl struct {
 func (o *openerImpl) Open(ctx context.Context, opt *walimpls.OpenOption) (walimpls.WALImpls, error) {
 	exists, err := o.c.LogExists(ctx, opt.Channel.Name)
 	if err != nil {
-		log.Ctx(ctx).Error("failed to check log exists", zap.String("log_name", opt.Channel.Name), zap.Error(err))
+		mlog.Error(ctx, "failed to check log exists", mlog.String("log_name", opt.Channel.Name), mlog.Err(err))
 		return nil, err
 	}
 	if !exists {
 		if err := o.c.CreateLog(ctx, opt.Channel.Name); err != nil {
-			log.Ctx(ctx).Error("failed to create log", zap.String("log_name", opt.Channel.Name), zap.Error(err))
+			mlog.Error(ctx, "failed to create log", mlog.String("log_name", opt.Channel.Name), mlog.Err(err))
 			return nil, err
 		}
 	}
 	l, err := o.c.OpenLog(ctx, opt.Channel.Name)
 	if err != nil {
-		log.Ctx(ctx).Error("failed to open log", zap.String("log_name", opt.Channel.Name), zap.Error(err))
+		mlog.Error(ctx, "failed to open log", mlog.String("log_name", opt.Channel.Name), mlog.Err(err))
 		return nil, err
 	}
 	p, err := l.OpenLogWriter(ctx)
 	if err != nil {
-		log.Ctx(ctx).Error("failed to open log writer", zap.String("log_name", opt.Channel.Name), zap.Error(err))
+		mlog.Error(ctx, "failed to open log writer", mlog.String("log_name", opt.Channel.Name), mlog.Err(err))
 		return nil, err
 	}
-	log.Ctx(ctx).Info("finish to open log writer", zap.String("log_name", opt.Channel.Name), zap.Error(err))
+	mlog.Info(ctx, "finish to open log writer", mlog.String("log_name", opt.Channel.Name), mlog.Err(err))
 	return &walImpl{
 		WALHelper: helper.NewWALHelper(opt),
 		p:         p,
@@ -54,6 +52,6 @@ func (o *openerImpl) Close() {
 	ctx := context.Background()
 	err := o.c.Close(ctx)
 	if err != nil {
-		log.Ctx(ctx).Error("failed to close woodpecker client", zap.Error(err))
+		mlog.Error(context.TODO(), "failed to close woodpecker client", mlog.Err(err))
 	}
 }

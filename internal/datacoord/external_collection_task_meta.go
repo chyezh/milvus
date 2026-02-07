@@ -21,11 +21,10 @@ import (
 	"fmt"
 	"strconv"
 
-	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/metastore"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/lock"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -63,7 +62,7 @@ func (ectm *externalCollectionTaskMeta) reloadFromKV() error {
 	record := timerecord.NewTimeRecorder("externalCollectionTaskMeta-reloadFromKV")
 	tasks, err := ectm.catalog.ListUpdateExternalCollectionTasks(ectm.ctx)
 	if err != nil {
-		log.Error("externalCollectionTaskMeta reloadFromKV load tasks failed", zap.Error(err))
+		mlog.Error(context.TODO(), "externalCollectionTaskMeta reloadFromKV load tasks failed", mlog.Err(err))
 		return err
 	}
 	for _, t := range tasks {
@@ -71,7 +70,7 @@ func (ectm *externalCollectionTaskMeta) reloadFromKV() error {
 		ectm.collectionID2Tasks.Insert(t.GetCollectionID(), t)
 	}
 
-	log.Info("externalCollectionTaskMeta reloadFromKV done", zap.Duration("duration", record.ElapseSpan()))
+	mlog.Info(context.TODO(), "externalCollectionTaskMeta reloadFromKV done", mlog.Duration("duration", record.ElapseSpan()))
 	return nil
 }
 
@@ -80,33 +79,33 @@ func (ectm *externalCollectionTaskMeta) AddTask(t *indexpb.UpdateExternalCollect
 	ectm.keyLock.Lock(t.GetCollectionID())
 	defer ectm.keyLock.Unlock(t.GetCollectionID())
 
-	log.Ctx(ectm.ctx).Info("add update external collection task",
-		zap.Int64("taskID", t.GetTaskID()),
-		zap.Int64("collectionID", t.GetCollectionID()))
+	mlog.Info(ectm.ctx, "add update external collection task",
+		mlog.Int64("taskID", t.GetTaskID()),
+		mlog.Int64("collectionID", t.GetCollectionID()))
 
 	// Check if a task already exists for this collection
 	if existingTask, ok := ectm.collectionID2Tasks.Get(t.GetCollectionID()); ok {
-		log.Warn("update external collection task already exists for collection",
-			zap.Int64("existingTaskID", existingTask.GetTaskID()),
-			zap.Int64("newTaskID", t.GetTaskID()),
-			zap.Int64("collectionID", t.GetCollectionID()))
+		mlog.Warn(context.TODO(), "update external collection task already exists for collection",
+			mlog.Int64("existingTaskID", existingTask.GetTaskID()),
+			mlog.Int64("newTaskID", t.GetTaskID()),
+			mlog.Int64("collectionID", t.GetCollectionID()))
 		return merr.WrapErrTaskDuplicate(strconv.FormatInt(t.GetCollectionID(), 10))
 	}
 
 	if err := ectm.catalog.SaveUpdateExternalCollectionTask(ectm.ctx, t); err != nil {
-		log.Warn("save update external collection task failed",
-			zap.Int64("taskID", t.GetTaskID()),
-			zap.Int64("collectionID", t.GetCollectionID()),
-			zap.Error(err))
+		mlog.Warn(context.TODO(), "save update external collection task failed",
+			mlog.Int64("taskID", t.GetTaskID()),
+			mlog.Int64("collectionID", t.GetCollectionID()),
+			mlog.Err(err))
 		return err
 	}
 
 	ectm.tasks.Insert(t.GetTaskID(), t)
 	ectm.collectionID2Tasks.Insert(t.GetCollectionID(), t)
 
-	log.Info("add update external collection task success",
-		zap.Int64("taskID", t.GetTaskID()),
-		zap.Int64("collectionID", t.GetCollectionID()))
+	mlog.Info(context.TODO(), "add update external collection task success",
+		mlog.Int64("taskID", t.GetTaskID()),
+		mlog.Int64("collectionID", t.GetCollectionID()))
 	return nil
 }
 
@@ -114,7 +113,7 @@ func (ectm *externalCollectionTaskMeta) DropTask(ctx context.Context, taskID int
 	// First get the task to find its collectionID
 	t, ok := ectm.tasks.Get(taskID)
 	if !ok {
-		log.Ctx(ctx).Info("remove update external collection task success, task already not exist", zap.Int64("taskID", taskID))
+		mlog.Info(ctx, "remove update external collection task success, task already not exist", mlog.Int64("taskID", taskID))
 		return nil
 	}
 
@@ -122,31 +121,31 @@ func (ectm *externalCollectionTaskMeta) DropTask(ctx context.Context, taskID int
 	ectm.keyLock.Lock(t.GetCollectionID())
 	defer ectm.keyLock.Unlock(t.GetCollectionID())
 
-	log.Ctx(ctx).Info("drop update external collection task by taskID",
-		zap.Int64("taskID", taskID),
-		zap.Int64("collectionID", t.GetCollectionID()))
+	mlog.Info(ctx, "drop update external collection task by taskID",
+		mlog.Int64("taskID", taskID),
+		mlog.Int64("collectionID", t.GetCollectionID()))
 
 	// Double-check task still exists after acquiring lock
 	t, ok = ectm.tasks.Get(taskID)
 	if !ok {
-		log.Ctx(ctx).Info("remove update external collection task success, task already not exist", zap.Int64("taskID", taskID))
+		mlog.Info(ctx, "remove update external collection task success, task already not exist", mlog.Int64("taskID", taskID))
 		return nil
 	}
 
 	if err := ectm.catalog.DropUpdateExternalCollectionTask(ctx, taskID); err != nil {
-		log.Warn("drop update external collection task failed",
-			zap.Int64("taskID", taskID),
-			zap.Int64("collectionID", t.GetCollectionID()),
-			zap.Error(err))
+		mlog.Warn(ctx, "drop update external collection task failed",
+			mlog.Int64("taskID", taskID),
+			mlog.Int64("collectionID", t.GetCollectionID()),
+			mlog.Err(err))
 		return err
 	}
 
 	ectm.tasks.Remove(taskID)
 	ectm.collectionID2Tasks.Remove(t.GetCollectionID())
 
-	log.Info("remove update external collection task success",
-		zap.Int64("taskID", taskID),
-		zap.Int64("collectionID", t.GetCollectionID()))
+	mlog.Info(ctx, "remove update external collection task success",
+		mlog.Int64("taskID", taskID),
+		mlog.Int64("collectionID", t.GetCollectionID()))
 	return nil
 }
 
@@ -171,18 +170,18 @@ func (ectm *externalCollectionTaskMeta) UpdateVersion(taskID, nodeID int64) erro
 	cloneT.NodeID = nodeID
 
 	if err := ectm.catalog.SaveUpdateExternalCollectionTask(ectm.ctx, cloneT); err != nil {
-		log.Warn("update external collection task version failed",
-			zap.Int64("taskID", t.GetTaskID()),
-			zap.Int64("collectionID", t.GetCollectionID()),
-			zap.Int64("nodeID", nodeID),
-			zap.Error(err))
+		mlog.Warn(context.TODO(), "update external collection task version failed",
+			mlog.Int64("taskID", t.GetTaskID()),
+			mlog.Int64("collectionID", t.GetCollectionID()),
+			mlog.Int64("nodeID", nodeID),
+			mlog.Err(err))
 		return err
 	}
 
 	ectm.tasks.Insert(taskID, cloneT)
 	ectm.collectionID2Tasks.Insert(t.GetCollectionID(), cloneT)
-	log.Info("update external collection task version success", zap.Int64("taskID", taskID), zap.Int64("nodeID", nodeID),
-		zap.Int64("newVersion", cloneT.GetVersion()))
+	mlog.Info(context.TODO(), "update external collection task version success", mlog.Int64("taskID", taskID), mlog.Int64("nodeID", nodeID),
+		mlog.Int64("newVersion", cloneT.GetVersion()))
 	return nil
 }
 
@@ -207,9 +206,9 @@ func (ectm *externalCollectionTaskMeta) UpdateTaskState(taskID int64, state inde
 	cloneT.FailReason = failReason
 
 	if err := ectm.catalog.SaveUpdateExternalCollectionTask(ectm.ctx, cloneT); err != nil {
-		log.Warn("update external collection task state failed",
-			zap.Int64("taskID", t.GetTaskID()),
-			zap.Error(err))
+		mlog.Warn(context.TODO(), "update external collection task state failed",
+			mlog.Int64("taskID", t.GetTaskID()),
+			mlog.Err(err))
 		return err
 	}
 

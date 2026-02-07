@@ -25,14 +25,13 @@ import (
 	"github.com/apache/arrow/go/v17/arrow"
 	"github.com/apache/arrow/go/v17/arrow/array"
 	"github.com/apache/arrow/go/v17/arrow/memory"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/internal/flushcommon/metacache"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/metautil"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
@@ -78,19 +77,19 @@ func (bw *BulkPackWriter) Write(ctx context.Context, pack *SyncPack) (
 	err error,
 ) {
 	if inserts, err = bw.writeInserts(ctx, pack); err != nil {
-		log.Error("failed to write insert data", zap.Error(err))
+		mlog.Error(ctx, "failed to write insert data", mlog.Err(err))
 		return
 	}
 	if stats, err = bw.writeStats(ctx, pack); err != nil {
-		log.Error("failed to process stats blob", zap.Error(err))
+		mlog.Error(ctx, "failed to process stats blob", mlog.Err(err))
 		return
 	}
 	if deltas, err = bw.writeDelta(ctx, pack); err != nil {
-		log.Error("failed to process delta blob", zap.Error(err))
+		mlog.Error(ctx, "failed to process delta blob", mlog.Err(err))
 		return
 	}
 	if bm25Stats, err = bw.writeBM25Stasts(ctx, pack); err != nil {
-		log.Error("failed to process bm25 stats blob", zap.Error(err))
+		mlog.Error(ctx, "failed to process bm25 stats blob", mlog.Err(err))
 		return
 	}
 

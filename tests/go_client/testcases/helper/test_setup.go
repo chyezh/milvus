@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc"
 
 	client "github.com/milvus-io/milvus/client/v2/milvusclient"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/tests/go_client/base"
 	"github.com/milvus-io/milvus/tests/go_client/common"
 )
@@ -64,26 +64,26 @@ func GetTEIModelDim() int {
 }
 
 func parseLogConfig() {
-	log.Info("Parser Log Level", zap.String("logLevel", *logLevel))
+	mlog.Info(context.TODO(), "Parser Log Level", mlog.String("logLevel", *logLevel))
 	switch *logLevel {
 	case "debug", "DEBUG", "Debug":
-		log.SetLevel(zap.DebugLevel)
+		mlog.SetLevel(zap.DebugLevel)
 	case "info", "INFO", "Info":
-		log.SetLevel(zap.InfoLevel)
+		mlog.SetLevel(zap.InfoLevel)
 	case "warn", "WARN", "Warn":
-		log.SetLevel(zap.WarnLevel)
+		mlog.SetLevel(zap.WarnLevel)
 	case "error", "ERROR", "Error":
-		log.SetLevel(zap.ErrorLevel)
+		mlog.SetLevel(zap.ErrorLevel)
 	default:
-		log.SetLevel(zap.InfoLevel)
+		mlog.SetLevel(zap.InfoLevel)
 	}
 }
 
 func setup() {
-	log.Info("Start to setup all......")
+	mlog.Info(context.TODO(), "Start to setup all......")
 	flag.Parse()
 	parseLogConfig()
-	log.Info("Parser Milvus address", zap.String("address", *addr))
+	mlog.Info(context.TODO(), "Parser Milvus address", mlog.String("address", *addr))
 
 	// set default milvus client config
 	setDefaultClientConfig(&client.ClientConfig{Address: *addr})
@@ -91,12 +91,12 @@ func setup() {
 
 // Teardown teardown
 func teardown() {
-	log.Info("Start to tear down all.....")
+	mlog.Info(context.TODO(), "Start to tear down all.....")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*common.DefaultTimeout)
 	defer cancel()
 	mc, err := base.NewMilvusClient(ctx, &client.ClientConfig{Address: GetAddr(), Username: GetUser(), Password: GetPassword()})
 	if err != nil {
-		log.Error("teardown failed to connect milvus with error", zap.Error(err))
+		mlog.Error(context.TODO(), "teardown failed to connect milvus with error", mlog.Err(err))
 	}
 	defer mc.Close(ctx)
 
@@ -118,7 +118,7 @@ func RunTests(m *testing.M) int {
 	setup()
 	code := m.Run()
 	if code != 0 {
-		log.Error("Tests failed and exited", zap.Int("code", code))
+		mlog.Error(context.TODO(), "Tests failed and exited", mlog.Int("code", code))
 	}
 	teardown()
 	return code

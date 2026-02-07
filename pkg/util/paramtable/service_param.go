@@ -17,6 +17,7 @@
 package paramtable
 
 import (
+	"context"
 	"encoding/json"
 	"net/url"
 	"os"
@@ -25,10 +26,8 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
-
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/etcd"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
@@ -1050,7 +1049,7 @@ Default value applies when Pulsar is running on the same network with Milvus.`,
 		Formatter: func(add string) string {
 			pulsarURL, err := url.ParseRequestURI(p.Address.GetValue())
 			if err != nil {
-				log.Info("failed to parse pulsar config, assume pulsar not used", zap.Error(err))
+				mlog.Info(context.TODO(), "failed to parse pulsar config, assume pulsar not used", mlog.Err(err))
 				return ""
 			}
 			return "http://" + pulsarURL.Hostname() + ":" + p.WebPort.GetValue()

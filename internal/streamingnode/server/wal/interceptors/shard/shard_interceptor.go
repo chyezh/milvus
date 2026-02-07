@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/cockroachdb/errors"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/redo"
@@ -13,7 +12,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/txn"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message/messageutil"
@@ -71,7 +70,7 @@ func (impl *shardInterceptor) handleCreateCollection(ctx context.Context, msg me
 	createCollectionMsg := message.MustAsMutableCreateCollectionMessageV1(msg)
 	header := createCollectionMsg.Header()
 	if err := impl.shardManager.CheckIfCollectionCanBeCreated(header.GetCollectionId()); err != nil {
-		impl.shardManager.Logger().Warn("collection already exists when creating collection", zap.Int64("collectionID", header.GetCollectionId()))
+		impl.shardManager.Logger().Warn(context.TODO(), "collection already exists when creating collection", mlog.Int64("collectionID", header.GetCollectionId()))
 		// The collection can not be created at current shard, ignored
 		// TODO: idompotent for wal is required in future, but current milvus state is not recovered from wal.
 		// return nil, status.NewUnrecoverableError(err.Error())
@@ -89,7 +88,7 @@ func (impl *shardInterceptor) handleCreateCollection(ctx context.Context, msg me
 func (impl *shardInterceptor) handleDropCollection(ctx context.Context, msg message.MutableMessage, appendOp interceptors.Append) (message.MessageID, error) {
 	dropCollectionMessage := message.MustAsMutableDropCollectionMessageV1(msg)
 	if err := impl.shardManager.CheckIfCollectionExists(dropCollectionMessage.Header().GetCollectionId()); err != nil {
-		impl.shardManager.Logger().Warn("collection not found when dropping collection", zap.Int64("collectionID", dropCollectionMessage.Header().GetCollectionId()))
+		impl.shardManager.Logger().Warn(context.TODO(), "collection not found when dropping collection", mlog.Int64("collectionID", dropCollectionMessage.Header().GetCollectionId()))
 		// The collection can not be dropped at current shard, ignored
 		// TODO: idompotent for wal is required in future, but current milvus state is not recovered from wal.
 		// return nil, status.NewUnrecoverableError(err.Error())
@@ -108,7 +107,7 @@ func (impl *shardInterceptor) handleCreatePartition(ctx context.Context, msg mes
 	createPartitionMessage := message.MustAsMutableCreatePartitionMessageV1(msg)
 	h := createPartitionMessage.Header()
 	if err := impl.shardManager.CheckIfPartitionCanBeCreated(shards.PartitionUniqueKey{CollectionID: h.GetCollectionId(), PartitionID: h.GetPartitionId()}); err != nil {
-		impl.shardManager.Logger().Warn("partition already exists when creating partition", zap.Int64("collectionID", h.GetCollectionId()), zap.Int64("partitionID", h.GetPartitionId()))
+		impl.shardManager.Logger().Warn(context.TODO(), "partition already exists when creating partition", mlog.Int64("collectionID", h.GetCollectionId()), mlog.Int64("partitionID", h.GetPartitionId()))
 		// TODO: idompotent for wal is required in future, but current milvus state is not recovered from wal.
 		// return nil, status.NewUnrecoverableError(err.Error())
 	}
@@ -126,7 +125,7 @@ func (impl *shardInterceptor) handleDropPartition(ctx context.Context, msg messa
 	dropPartitionMessage := message.MustAsMutableDropPartitionMessageV1(msg)
 	h := dropPartitionMessage.Header()
 	if err := impl.shardManager.CheckIfPartitionExists(shards.PartitionUniqueKey{CollectionID: h.GetCollectionId(), PartitionID: h.GetPartitionId()}); err != nil {
-		impl.shardManager.Logger().Warn("partition not found when dropping partition", zap.Int64("collectionID", h.GetCollectionId()), zap.Int64("partitionID", h.GetPartitionId()))
+		impl.shardManager.Logger().Warn(context.TODO(), "partition not found when dropping partition", mlog.Int64("collectionID", h.GetCollectionId()), mlog.Int64("partitionID", h.GetPartitionId()))
 		// The partition can not be dropped at current shard, ignored
 		// TODO: idompotent for wal is required in future, but current milvus state is not recovered from wal.
 		// return nil, status.NewUnrecoverableError(err.Error())
@@ -176,7 +175,7 @@ func (impl *shardInterceptor) handleInsertMessage(ctx context.Context, msg messa
 		}
 		if errors.IsAny(err, shards.ErrTooLargeInsert, shards.ErrPartitionNotFound, shards.ErrCollectionNotFound) {
 			// Message is too large, so retry operation is unrecoverable, can't be retry at client side.
-			impl.shardManager.Logger().Warn("unrecoverable insert operation", zap.Object("message", msg), zap.Error(err))
+			impl.shardManager.Logger().Warn(context.TODO(), "unrecoverable insert operation", mlog.Object("message", msg), mlog.Err(err))
 			return nil, status.NewUnrecoverableError("fail to assign segment, %s", err.Error())
 		}
 		if err != nil {
@@ -286,7 +285,7 @@ func (impl *shardInterceptor) handleFlushSegment(ctx context.Context, msg messag
 	if utility.GetFlushFromOldArch(ctx) {
 		// The flush message come from old arch, so it's not managed by shard manager.
 		// We need to flush it into wal directly.
-		impl.shardManager.Logger().Info("flush segment from old arch, skip checking of shard manager", log.FieldMessage(msg))
+		impl.shardManager.Logger().Info(context.TODO(), "flush segment from old arch, skip checking of shard manager", mlog.FieldMessage(msg))
 		return appendOp(ctx, msg)
 	}
 

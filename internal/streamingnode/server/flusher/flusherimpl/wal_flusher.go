@@ -6,7 +6,6 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/internal/flushcommon/broker"
@@ -15,8 +14,8 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/recovery"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message/adaptor"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"
@@ -43,8 +42,8 @@ func RecoverWALFlusher(param *RecoverWALFlusherParam) *WALFlusherImpl {
 		notifier: syncutil.NewAsyncTaskNotifier[struct{}](),
 		wal:      param.WAL,
 		logger: resource.Resource().Logger().With(
-			log.FieldComponent("flusher"),
-			zap.String("pchannel", param.ChannelInfo.String())),
+			mlog.FieldComponent("flusher"),
+			mlog.String("pchannel", param.ChannelInfo.String())),
 		metrics:              newFlusherMetrics(param.ChannelInfo),
 		emptyTimeTickCounter: metrics.WALFlusherEmptyTimeTickFilteredTotal.WithLabelValues(paramtable.GetStringNodeID(), param.ChannelInfo.Name),
 		RecoveryStorage:      param.RecoveryStorage,
@@ -57,7 +56,7 @@ type WALFlusherImpl struct {
 	notifier             *syncutil.AsyncTaskNotifier[struct{}]
 	wal                  *syncutil.Future[wal.WAL]
 	flusherComponents    *flusherComponents
-	logger               *log.MLogger
+	logger               *mlog.Logger
 	metrics              *flusherMetrics
 	lastDispatchTimeTick uint64 // The last time tick that the message is dispatched.
 	emptyTimeTickCounter prometheus.Counter
@@ -69,22 +68,22 @@ func (impl *WALFlusherImpl) Execute(recoverSnapshot *recovery.RecoverySnapshot) 
 	defer func() {
 		impl.notifier.Finish(struct{}{})
 		if err == nil {
-			impl.logger.Info("wal flusher stop")
+			impl.logger.Info(context.TODO(), "wal flusher stop")
 			return
 		}
 		if !errors.Is(err, context.Canceled) {
-			impl.logger.DPanic("wal flusher stop to executing with unexpected error", zap.Error(err))
+			impl.logger.Warn(context.TODO(), "wal flusher stop to executing with unexpected error", mlog.Err(err))
 			return
 		}
-		impl.logger.Warn("wal flusher is canceled before executing", zap.Error(err))
+		impl.logger.Warn(context.TODO(), "wal flusher is canceled before executing", mlog.Err(err))
 	}()
 
-	impl.logger.Info("wal flusher start to recovery...")
+	impl.logger.Info(context.TODO(), "wal flusher start to recovery...")
 	l, err := impl.wal.GetWithContext(impl.notifier.Context())
 	if err != nil {
 		return errors.Wrap(err, "when get wal from future")
 	}
-	impl.logger.Info("wal ready for flusher recovery")
+	impl.logger.Info(context.TODO(), "wal ready for flusher recovery")
 
 	var checkpoint message.MessageID
 	impl.flusherComponents, checkpoint, err = impl.buildFlusherComponents(impl.notifier.Context(), l, recoverSnapshot)
@@ -99,7 +98,7 @@ func (impl *WALFlusherImpl) Execute(recoverSnapshot *recovery.RecoverySnapshot) 
 	}
 	defer scanner.Close()
 
-	impl.logger.Info("wal flusher start to work")
+	impl.logger.Info(context.TODO(), "wal flusher start to work")
 	impl.metrics.IntoState(flusherStateInWorking)
 	defer impl.metrics.IntoState(flusherStateOnClosing)
 
@@ -109,7 +108,7 @@ func (impl *WALFlusherImpl) Execute(recoverSnapshot *recovery.RecoverySnapshot) 
 			return nil
 		case msg, ok := <-scanner.Chan():
 			if !ok {
-				impl.logger.Warn("wal flusher is closing for closed scanner channel, which is unexpected at graceful way")
+				impl.logger.Warn(context.TODO(), "wal flusher is closing for closed scanner channel, which is unexpected at graceful way")
 				return nil
 			}
 			impl.metrics.ObserveMetrics(msg.TimeTick())
@@ -126,9 +125,9 @@ func (impl *WALFlusherImpl) Close() {
 	impl.notifier.Cancel()
 	impl.notifier.BlockUntilFinish()
 
-	impl.logger.Info("wal flusher start to close the recovery storage...")
+	impl.logger.Info(context.TODO(), "wal flusher start to close the recovery storage...")
 	impl.RecoveryStorage.Close()
-	impl.logger.Info("recovery storage closed")
+	impl.logger.Info(context.TODO(), "recovery storage closed")
 
 	impl.metrics.Close()
 }
@@ -137,26 +136,26 @@ func (impl *WALFlusherImpl) Close() {
 func (impl *WALFlusherImpl) buildFlusherComponents(ctx context.Context, l wal.WAL, snapshot *recovery.RecoverySnapshot) (*flusherComponents, message.MessageID, error) {
 	// Get all existed vchannels of the pchannel.
 	vchannels := lo.Keys(snapshot.VChannels)
-	impl.logger.Info("fetch vchannel done", zap.Int("vchannelNum", len(vchannels)))
+	impl.logger.Info(context.TODO(), "fetch vchannel done", mlog.Int("vchannelNum", len(vchannels)))
 
 	// Get all the recovery info of the recoverable vchannels.
 	recoverInfos, checkpoint, err := impl.getRecoveryInfos(ctx, vchannels)
 	if err != nil {
-		impl.logger.Warn("get recovery info failed", zap.Error(err))
+		impl.logger.Warn(context.TODO(), "get recovery info failed", mlog.Err(err))
 		return nil, nil, err
 	}
-	impl.logger.Info("fetch recovery info done", zap.Int("recoveryInfoNum", len(recoverInfos)))
+	impl.logger.Info(context.TODO(), "fetch recovery info done", mlog.Int("recoveryInfoNum", len(recoverInfos)))
 	if len(vchannels) == 0 && checkpoint == nil {
-		impl.logger.Info("no vchannel to recover, use the snapshot checkpoint", zap.Stringer("checkpoint", snapshot.Checkpoint.MessageID))
+		impl.logger.Info(context.TODO(), "no vchannel to recover, use the snapshot checkpoint", mlog.Stringer("checkpoint", snapshot.Checkpoint.MessageID))
 		checkpoint = snapshot.Checkpoint.MessageID
 	}
 
 	mixc, err := resource.Resource().MixCoordClient().GetWithContext(ctx)
 	if err != nil {
-		impl.logger.Warn("flusher recovery is canceled before data coord client ready", zap.Error(err))
+		impl.logger.Warn(context.TODO(), "flusher recovery is canceled before data coord client ready", mlog.Err(err))
 		return nil, nil, err
 	}
-	impl.logger.Info("data coord client ready")
+	impl.logger.Info(context.TODO(), "data coord client ready")
 
 	// build all components.
 	broker := broker.NewCoordBroker(mixc, paramtable.GetNodeID())
@@ -182,14 +181,14 @@ func (impl *WALFlusherImpl) buildFlusherComponents(ctx context.Context, l wal.WA
 		recoveryCheckPointTimeTick: snapshot.Checkpoint.TimeTick,
 		rs:                         impl.RecoveryStorage,
 	}
-	impl.logger.Info("flusher components intiailizing done")
+	impl.logger.Info(context.TODO(), "flusher components intiailizing done")
 	if err := fc.recover(ctx, recoverInfos); err != nil {
-		impl.logger.Warn("flusher recovery is canceled before recovery done, recycle the resource", zap.Error(err))
+		impl.logger.Warn(context.TODO(), "flusher recovery is canceled before recovery done, recycle the resource", mlog.Err(err))
 		fc.Close()
-		impl.logger.Info("flusher recycle the resource done")
+		impl.logger.Info(context.TODO(), "flusher recycle the resource done")
 		return nil, nil, err
 	}
-	impl.logger.Info("flusher recovery done")
+	impl.logger.Info(context.TODO(), "flusher recovery done")
 	return fc, checkpoint, nil
 }
 
@@ -202,10 +201,10 @@ func (impl *WALFlusherImpl) generateScanner(ctx context.Context, l wal.WAL, chec
 		DeliverPolicy:  options.DeliverPolicyAll(),
 	}
 	if checkpoint != nil {
-		impl.logger.Info("wal start to scan from minimum checkpoint", zap.Stringer("checkpointMessageID", checkpoint))
+		impl.logger.Info(context.TODO(), "wal start to scan from minimum checkpoint", mlog.Stringer("checkpointMessageID", checkpoint))
 		readOpt.DeliverPolicy = options.DeliverPolicyStartFrom(checkpoint)
 	} else {
-		impl.logger.Info("wal start to scan from the earliest checkpoint")
+		impl.logger.Info(context.TODO(), "wal start to scan from the earliest checkpoint")
 	}
 	return l.Read(ctx, readOpt)
 }
@@ -234,7 +233,7 @@ func (impl *WALFlusherImpl) dispatch(msg message.ImmutableMessage) (err error) {
 	// only for truncate api now.
 	if bh := msg.BroadcastHeader(); bh != nil && bh.AckSyncUp {
 		if err := impl.RecoveryStorage.ObserveMessage(impl.notifier.Context(), msg); err != nil {
-			impl.logger.Warn("failed to observe message", zap.Error(err))
+			impl.logger.Warn(context.TODO(), "failed to observe message", mlog.Err(err))
 			return err
 		}
 	} else {
@@ -242,7 +241,7 @@ func (impl *WALFlusherImpl) dispatch(msg message.ImmutableMessage) (err error) {
 		// Currently, flusher works as a separate component.
 		defer func() {
 			if err = impl.RecoveryStorage.ObserveMessage(impl.notifier.Context(), msg); err != nil {
-				impl.logger.Warn("failed to observe message", zap.Error(err))
+				impl.logger.Warn(context.TODO(), "failed to observe message", mlog.Err(err))
 			}
 		}()
 	}
@@ -257,7 +256,7 @@ func (impl *WALFlusherImpl) dispatch(msg message.ImmutableMessage) (err error) {
 	case message.MessageTypeCreateCollection:
 		createCollectionMsg, err := message.AsImmutableCreateCollectionMessageV1(msg)
 		if err != nil {
-			impl.logger.DPanic("the message type is not CreateCollectionMessage", zap.Error(err))
+			impl.logger.Warn(context.TODO(), "the message type is not CreateCollectionMessage", mlog.Err(err))
 			return nil
 		}
 		impl.flusherComponents.WhenCreateCollection(createCollectionMsg)

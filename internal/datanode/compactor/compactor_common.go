@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/allocator"
@@ -31,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore/kv/binlog"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -123,18 +122,17 @@ func (filter *EntityFilter) isEntityExpired(entityTs typeutil.Timestamp) bool {
 func mergeDeltalogs(ctx context.Context, io io.BinlogIO, paths []string) (map[interface{}]typeutil.Timestamp, error) {
 	pk2Ts := make(map[interface{}]typeutil.Timestamp)
 
-	log := log.Ctx(ctx)
 	if len(paths) == 0 {
-		log.Debug("compact with no deltalogs, skip merge deltalogs")
+		mlog.Debug(ctx, "compact with no deltalogs, skip merge deltalogs")
 		return pk2Ts, nil
 	}
 
 	blobs := make([]*storage.Blob, 0)
 	binaries, err := io.Download(ctx, paths)
 	if err != nil {
-		log.Warn("compact wrong, fail to download deltalogs",
-			zap.Strings("path", paths),
-			zap.Error(err))
+		mlog.Warn(ctx, "compact wrong, fail to download deltalogs",
+			mlog.Strings("path", paths),
+			mlog.Err(err))
 		return nil, err
 	}
 
@@ -143,7 +141,7 @@ func mergeDeltalogs(ctx context.Context, io io.BinlogIO, paths []string) (map[in
 	}
 	reader, err := storage.CreateDeltalogReader(blobs)
 	if err != nil {
-		log.Error("malformed delta file", zap.Error(err))
+		mlog.Error(ctx, "malformed delta file", mlog.Err(err))
 		return nil, err
 	}
 	defer reader.Close()
@@ -154,7 +152,7 @@ func mergeDeltalogs(ctx context.Context, io io.BinlogIO, paths []string) (map[in
 			if err == sio.EOF {
 				break
 			}
-			log.Error("compact wrong, fail to read deltalogs", zap.Error(err))
+			mlog.Error(ctx, "compact wrong, fail to read deltalogs", mlog.Err(err))
 			return nil, err
 		}
 
@@ -164,7 +162,7 @@ func mergeDeltalogs(ctx context.Context, io io.BinlogIO, paths []string) (map[in
 		pk2Ts[(*dl).Pk.GetValue()] = (*dl).Ts
 	}
 
-	log.Info("compact mergeDeltalogs end", zap.Int("delete entries counts", len(pk2Ts)))
+	mlog.Info(ctx, "compact mergeDeltalogs end", mlog.Int("delete entries counts", len(pk2Ts)))
 
 	return pk2Ts, nil
 }

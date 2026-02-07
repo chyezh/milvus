@@ -20,29 +20,26 @@ import (
 	"context"
 	sio "io"
 
-	"go.uber.org/zap"
-
 	"github.com/milvus-io/milvus/internal/flushcommon/io"
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
 func ComposeDeleteFromDeltalogs(ctx context.Context, io io.BinlogIO, paths []string) (map[interface{}]typeutil.Timestamp, error) {
 	pk2Ts := make(map[interface{}]typeutil.Timestamp)
 
-	log := log.Ctx(ctx)
 	if len(paths) == 0 {
-		log.Debug("input deltalog paths is empty, skip")
+		mlog.Debug(ctx, "input deltalog paths is empty, skip")
 		return pk2Ts, nil
 	}
 
 	blobs := make([]*storage.Blob, 0)
 	binaries, err := io.Download(ctx, paths)
 	if err != nil {
-		log.Warn("compose delete wrong, fail to download deltalogs",
-			zap.Strings("path", paths),
-			zap.Error(err))
+		mlog.Warn(ctx, "compose delete wrong, fail to download deltalogs",
+			mlog.Strings("path", paths),
+			mlog.Err(err))
 		return nil, err
 	}
 
@@ -51,7 +48,7 @@ func ComposeDeleteFromDeltalogs(ctx context.Context, io io.BinlogIO, paths []str
 	}
 	reader, err := storage.CreateDeltalogReader(blobs)
 	if err != nil {
-		log.Error("compose delete wrong, malformed delta file", zap.Error(err))
+		mlog.Error(ctx, "compose delete wrong, malformed delta file", mlog.Err(err))
 		return nil, err
 	}
 	defer reader.Close()
@@ -62,7 +59,7 @@ func ComposeDeleteFromDeltalogs(ctx context.Context, io io.BinlogIO, paths []str
 			if err == sio.EOF {
 				break
 			}
-			log.Error("compose delete wrong, failed to read deltalogs", zap.Error(err))
+			mlog.Error(ctx, "compose delete wrong, failed to read deltalogs", mlog.Err(err))
 			return nil, err
 		}
 
@@ -72,6 +69,6 @@ func ComposeDeleteFromDeltalogs(ctx context.Context, io io.BinlogIO, paths []str
 		pk2Ts[(*dl).Pk.GetValue()] = (*dl).Ts
 	}
 
-	log.Info("compose delete end", zap.Int("delete entries counts", len(pk2Ts)))
+	mlog.Info(ctx, "compose delete end", mlog.Int("delete entries counts", len(pk2Ts)))
 	return pk2Ts, nil
 }

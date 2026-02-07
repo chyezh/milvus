@@ -37,7 +37,7 @@ func ExampleClient_UpdateReplicateConfiguration() {
 		Address: exampleMilvusAddr,
 	})
 	if err != nil {
-		log.Fatal(err)
+		mlog.Fatal(err)
 	}
 
 	// Use builder pattern to create cluster configuration (chained calls)
@@ -78,7 +78,7 @@ func ExampleClient_GetReplicateInfo() {
 		Address: exampleMilvusAddr,
 	})
 	if err != nil {
-		log.Fatal(err)
+		mlog.Fatal(err)
 	}
 
 	// Get replicate information for a specific source cluster
@@ -102,7 +102,7 @@ func ExampleClient_CreateReplicateStream() {
 		Address: exampleMilvusAddr,
 	})
 	if err != nil {
-		log.Fatal(err)
+		mlog.Fatal(err)
 	}
 
 	// Create replicate stream

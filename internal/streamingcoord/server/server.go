@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer"
@@ -15,14 +14,14 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/service"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/util"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 )
 
 // Server is the streamingcoord server.
 type Server struct {
-	logger *log.MLogger
+	logger *mlog.Logger
 
 	// session of current server.
 	session sessionutil.SessionInterface
@@ -34,14 +33,14 @@ type Server struct {
 
 // Init initializes the streamingcoord server.
 func (s *Server) Start(ctx context.Context, checker balancer.FileResourceChecker) (err error) {
-	s.logger.Info("init streamingcoord...")
+	s.logger.Info(context.TODO(), "init streamingcoord...")
 	if err := s.initBasicComponent(ctx); err != nil {
-		s.logger.Warn("init basic component of streamingcoord failed", zap.Error(err))
+		s.logger.Warn(context.TODO(), "init basic component of streamingcoord failed", mlog.Err(err))
 		return err
 	}
 	balance.SetFileResourceChecker(checker)
 	// Init all grpc service of streamingcoord server.
-	s.logger.Info("streamingcoord initialized")
+	s.logger.Info(context.TODO(), "streamingcoord initialized")
 	return nil
 }
 
@@ -49,29 +48,29 @@ func (s *Server) Start(ctx context.Context, checker balancer.FileResourceChecker
 func (s *Server) initBasicComponent(ctx context.Context) (err error) {
 	futures := make([]*conc.Future[struct{}], 0)
 	futures = append(futures, conc.Go(func() (struct{}, error) {
-		s.logger.Info("start recovery balancer...")
+		s.logger.Info(context.TODO(), "start recovery balancer...")
 		// Read new incoming topics from configuration, and register it into balancer.
 		newIncomingTopics := util.GetAllTopicsFromConfiguration()
 		balancer, err := balancer.RecoverBalancer(ctx, newIncomingTopics.Collect()...)
 		if err != nil {
-			s.logger.Warn("recover balancer failed", zap.Error(err))
+			s.logger.Warn(context.TODO(), "recover balancer failed", mlog.Err(err))
 			return struct{}{}, err
 		}
 		balance.Register(balancer)
-		s.logger.Info("recover balancer done")
+		s.logger.Info(context.TODO(), "recover balancer done")
 		return struct{}{}, nil
 	}))
 	// The broadcaster of msgstream is implemented on current streamingcoord to reduce the development complexity.
 	// So we need to recover it.
 	futures = append(futures, conc.Go(func() (struct{}, error) {
-		s.logger.Info("start recovery broadcaster...")
+		s.logger.Info(context.TODO(), "start recovery broadcaster...")
 		broadcaster, err := broadcaster.RecoverBroadcaster(ctx)
 		if err != nil {
-			s.logger.Warn("recover broadcaster failed", zap.Error(err))
+			s.logger.Warn(context.TODO(), "recover broadcaster failed", mlog.Err(err))
 			return struct{}{}, err
 		}
 		broadcast.Register(broadcaster)
-		s.logger.Info("recover broadcaster done")
+		s.logger.Info(context.TODO(), "recover broadcaster done")
 		return struct{}{}, nil
 	}))
 	return conc.AwaitAll(futures...)
@@ -85,11 +84,11 @@ func (s *Server) RegisterGRPCService(grpcServer *grpc.Server) {
 
 // Close closes the streamingcoord server.
 func (s *Server) Stop() {
-	s.logger.Info("start close balancer...")
+	s.logger.Info(context.TODO(), "start close balancer...")
 	balance.Release()
-	s.logger.Info("start close broadcaster...")
+	s.logger.Info(context.TODO(), "start close broadcaster...")
 	broadcast.Release()
-	s.logger.Info("release streamingcoord resource...")
+	s.logger.Info(context.TODO(), "release streamingcoord resource...")
 	resource.Release()
-	s.logger.Info("streamingcoord server stopped")
+	s.logger.Info(context.TODO(), "streamingcoord server stopped")
 }

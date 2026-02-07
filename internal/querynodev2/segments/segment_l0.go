@@ -21,11 +21,10 @@ import (
 	"sync"
 
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 
 	storage "github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/segcore"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/segcorepb"
@@ -53,11 +52,11 @@ func NewL0Segment(collection *Collection,
 		NewSegment(CCollection collection, uint64_t segment_id, SegmentType seg_type);
 	*/
 
-	log.Info("create L0 segment",
-		zap.Int64("collectionID", loadInfo.GetCollectionID()),
-		zap.Int64("partitionID", loadInfo.GetPartitionID()),
-		zap.Int64("segmentID", loadInfo.GetSegmentID()),
-		zap.String("segmentType", segmentType.String()))
+	mlog.Info(context.TODO(), "create L0 segment",
+		mlog.Int64("collectionID", loadInfo.GetCollectionID()),
+		mlog.Int64("partitionID", loadInfo.GetPartitionID()),
+		mlog.Int64("segmentID", loadInfo.GetSegmentID()),
+		mlog.String("segmentType", segmentType.String()))
 
 	base, err := newBaseSegment(collection, segmentType, version, loadInfo)
 	if err != nil {
@@ -193,11 +192,11 @@ func (s *L0Segment) Release(ctx context.Context, opts ...releaseOption) {
 	s.pks = nil
 	s.tss = nil
 
-	log.Ctx(ctx).Info("release L0 segment from memory",
-		zap.Int64("collectionID", s.Collection()),
-		zap.Int64("partitionID", s.Partition()),
-		zap.Int64("segmentID", s.ID()),
-		zap.String("segmentType", s.segmentType.String()),
+	mlog.Info(ctx, "release L0 segment from memory",
+		mlog.Int64("collectionID", s.Collection()),
+		mlog.Int64("partitionID", s.Partition()),
+		mlog.Int64("segmentID", s.ID()),
+		mlog.String("segmentType", s.segmentType.String()),
 	)
 }
 

@@ -4,13 +4,11 @@ import (
 	"context"
 
 	"github.com/cockroachdb/errors"
-	woodpecker "github.com/zilliztech/woodpecker/woodpecker/log"
-	"go.uber.org/zap"
-
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/helper"
+	woodpecker "github.com/zilliztech/woodpecker/woodpecker/log"
 )
 
 var _ walimpls.ScannerImpls = (*scannerImpl)(nil)
@@ -38,12 +36,12 @@ func (s *scannerImpl) Chan() <-chan message.ImmutableMessage {
 func (s *scannerImpl) Close() error {
 	err := s.ScannerHelper.Close()
 	if err != nil {
-		log.Ctx(s.Context()).Warn("failed to close wp scanner", zap.Error(err))
+		mlog.Warn(s.Context(), "failed to close wp scanner", mlog.Err(err))
 	}
 	if s.reader != nil {
 		err = s.reader.Close(context.Background())
 		if err != nil {
-			log.Ctx(s.Context()).Warn("failed to close wp reader", zap.Error(err))
+			mlog.Warn(s.Context(), "failed to close wp reader", mlog.Err(err))
 		}
 	}
 	return err
@@ -63,7 +61,7 @@ func (s *scannerImpl) executeConsumer() {
 				s.Finish(errors.Wrap(err, "wp readNext Timeout"))
 				return
 			}
-			log.Ctx(s.Context()).Error("wp readNext msg exception", zap.Error(err))
+			mlog.Error(s.Context(), "wp readNext msg exception", mlog.Err(err))
 			s.Finish(err)
 			return
 		}

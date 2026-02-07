@@ -22,14 +22,13 @@ import (
 	"context"
 	"fmt"
 
-	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
 	"github.com/milvus-io/milvus/tests/integration"
@@ -68,7 +67,7 @@ func (s *HelloMilvusSuite) TestPartitionKey() {
 	})
 	s.NoError(err)
 	if createCollectionStatus.GetErrorCode() != commonpb.ErrorCode_Success {
-		log.Warn("createCollectionStatus fail reason", zap.String("reason", createCollectionStatus.GetReason()))
+		mlog.Warn(context.TODO(), "createCollectionStatus fail reason", mlog.String("reason", createCollectionStatus.GetReason()))
 	}
 	s.Equal(createCollectionStatus.GetErrorCode(), commonpb.ErrorCode_Success)
 
@@ -137,7 +136,7 @@ func (s *HelloMilvusSuite) TestPartitionKey() {
 	s.NoError(err)
 	s.NotEmpty(segments)
 	for _, segment := range segments {
-		log.Info("ShowSegments result", zap.String("segment", segment.String()))
+		mlog.Info(context.TODO(), "ShowSegments result", mlog.String("segment", segment.String()))
 	}
 
 	// create index
@@ -148,7 +147,7 @@ func (s *HelloMilvusSuite) TestPartitionKey() {
 		ExtraParams:    integration.ConstructIndexParam(dim, integration.IndexFaissIvfFlat, metric.L2),
 	})
 	if createIndexStatus.GetErrorCode() != commonpb.ErrorCode_Success {
-		log.Warn("createIndexStatus fail reason", zap.String("reason", createIndexStatus.GetReason()))
+		mlog.Warn(context.TODO(), "createIndexStatus fail reason", mlog.String("reason", createIndexStatus.GetReason()))
 	}
 	s.NoError(err)
 	s.Equal(commonpb.ErrorCode_Success, createIndexStatus.GetErrorCode())
@@ -162,7 +161,7 @@ func (s *HelloMilvusSuite) TestPartitionKey() {
 	})
 	s.NoError(err)
 	if loadStatus.GetErrorCode() != commonpb.ErrorCode_Success {
-		log.Warn("loadStatus fail reason", zap.String("reason", loadStatus.GetReason()))
+		mlog.Warn(context.TODO(), "loadStatus fail reason", mlog.String("reason", loadStatus.GetReason()))
 	}
 	s.Equal(commonpb.ErrorCode_Success, loadStatus.GetErrorCode())
 	s.WaitForLoad(ctx, collectionName)
@@ -181,7 +180,7 @@ func (s *HelloMilvusSuite) TestPartitionKey() {
 		searchResult, err := c.MilvusClient.Search(ctx, searchReq)
 
 		if searchResult.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-			log.Warn("searchResult fail reason", zap.String("reason", searchResult.GetStatus().GetReason()))
+			mlog.Warn(context.TODO(), "searchResult fail reason", mlog.String("reason", searchResult.GetStatus().GetReason()))
 		}
 		s.NoError(err)
 		s.Equal(commonpb.ErrorCode_Success, searchResult.GetStatus().GetErrorCode())
@@ -201,7 +200,7 @@ func (s *HelloMilvusSuite) TestPartitionKey() {
 		searchResult, err := c.MilvusClient.Search(ctx, searchReq)
 
 		if searchResult.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-			log.Warn("searchResult fail reason", zap.String("reason", searchResult.GetStatus().GetReason()))
+			mlog.Warn(context.TODO(), "searchResult fail reason", mlog.String("reason", searchResult.GetStatus().GetReason()))
 		}
 		s.NoError(err)
 		s.Equal(commonpb.ErrorCode_Success, searchResult.GetStatus().GetErrorCode())
@@ -215,7 +214,7 @@ func (s *HelloMilvusSuite) TestPartitionKey() {
 			OutputFields:   []string{"count(*)"},
 		})
 		if queryResult.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-			log.Warn("searchResult fail reason", zap.String("reason", queryResult.GetStatus().GetReason()))
+			mlog.Warn(context.TODO(), "searchResult fail reason", mlog.String("reason", queryResult.GetStatus().GetReason()))
 		}
 		s.NoError(err)
 		s.Equal(commonpb.ErrorCode_Success, queryResult.GetStatus().GetErrorCode())
@@ -229,7 +228,7 @@ func (s *HelloMilvusSuite) TestPartitionKey() {
 			OutputFields:   []string{"count(*)"},
 		})
 		if queryResult.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-			log.Warn("searchResult fail reason", zap.String("reason", queryResult.GetStatus().GetReason()))
+			mlog.Warn(context.TODO(), "searchResult fail reason", mlog.String("reason", queryResult.GetStatus().GetReason()))
 		}
 		s.NoError(err)
 		s.Equal(commonpb.ErrorCode_Success, queryResult.GetStatus().GetErrorCode())
@@ -242,7 +241,7 @@ func (s *HelloMilvusSuite) TestPartitionKey() {
 			Expr:           integration.Int64Field + " < 1000",
 		})
 		if deleteResult.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-			log.Warn("deleteResult fail reason", zap.String("reason", deleteResult.GetStatus().GetReason()))
+			mlog.Warn(context.TODO(), "deleteResult fail reason", mlog.String("reason", deleteResult.GetStatus().GetReason()))
 		}
 		s.NoError(err)
 		s.Equal(commonpb.ErrorCode_Success, deleteResult.GetStatus().GetErrorCode())
@@ -255,7 +254,7 @@ func (s *HelloMilvusSuite) TestPartitionKey() {
 			Expr:           integration.Int64Field + " < 2000 && pid == 10",
 		})
 		if deleteResult.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-			log.Warn("deleteResult fail reason", zap.String("reason", deleteResult.GetStatus().GetReason()))
+			mlog.Warn(context.TODO(), "deleteResult fail reason", mlog.String("reason", deleteResult.GetStatus().GetReason()))
 		}
 		s.NoError(err)
 		s.Equal(commonpb.ErrorCode_Success, deleteResult.GetStatus().GetErrorCode())

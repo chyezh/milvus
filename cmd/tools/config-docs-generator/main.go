@@ -24,7 +24,7 @@ func main() {
 	log.Printf("start generating input[%s], output[%s]", inputFile, outputPath)
 	err := run()
 	if err != nil {
-		log.Fatal(err)
+		mlog.Fatal(err)
 	}
 	log.Print("generate successed")
 }

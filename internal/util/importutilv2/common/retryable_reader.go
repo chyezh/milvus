@@ -21,10 +21,9 @@ import (
 	"io"
 
 	"github.com/cockroachdb/errors"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
@@ -65,9 +64,9 @@ func (r *retryableReader) Read(p []byte) (int, error) {
 		if errors.Is(err, io.EOF) {
 			return false, err
 		}
-		log.Ctx(r.ctx).Warn("retryable reader read failed",
-			zap.String("path", r.path),
-			zap.Error(err),
+		mlog.Warn(r.ctx, "retryable reader read failed",
+			mlog.String("path", r.path),
+			mlog.Err(err),
 		)
 		err = storage.ToMilvusIoError(r.path, err)
 		if merr.IsRetryableErr(err) {

@@ -23,12 +23,11 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/milvus-io/milvus/internal/querycoordv2/params"
 	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -134,16 +133,14 @@ func (lb *LBPolicyImpl) GetShardLeaderList(ctx context.Context, dbName string, c
 
 // try to select the best node from the available nodes
 func (lb *LBPolicyImpl) selectNode(ctx context.Context, balancer LBBalancer, workload ChannelWorkload, excludeNodes *typeutil.UniqueSet) (NodeInfo, error) {
-	log := log.Ctx(ctx).With(
-		zap.Int64("collectionID", workload.CollectionID),
-		zap.String("channelName", workload.Channel),
-	)
+	ctx = mlog.WithFields(ctx, mlog.Int64("collectionID", workload.CollectionID),
+		mlog.String("channelName", workload.Channel))
 	// Select node using specified nodes
 	trySelectNode := func(withCache bool) (NodeInfo, error) {
 		shardLeaders, err := lb.GetShard(ctx, workload.Db, workload.CollectionName, workload.CollectionID, workload.Channel, withCache)
 		if err != nil {
-			log.Warn("failed to get shard delegator",
-				zap.Error(err))
+			mlog.Warn(ctx, "failed to get shard delegator",
+				mlog.Err(err))
 			return NodeInfo{}, err
 		}
 
@@ -158,7 +155,7 @@ func (lb *LBPolicyImpl) selectNode(ctx context.Context, balancer LBBalancer, wor
 				}
 			}
 			if allReplicaExcluded {
-				log.Warn("all replicas are excluded after refresh shard leader cache, clear it and try to select node")
+				mlog.Warn(ctx, "all replicas are excluded after refresh shard leader cache, clear it and try to select node")
 				excludeNodes.Clear()
 			}
 		}
@@ -173,11 +170,11 @@ func (lb *LBPolicyImpl) selectNode(ctx context.Context, balancer LBBalancer, wor
 				serviceableNodesInStr := lo.Map(lo.Values(serviceableNodes), func(node NodeInfo, _ int) string {
 					return node.String()
 				})
-				log.Warn("failed to select shard",
-					zap.Int64s("excluded", excludeNodes.Collect()),
-					zap.String("candidates", strings.Join(candidatesInStr, ", ")),
-					zap.String("serviceableNodes", strings.Join(serviceableNodesInStr, ", ")),
-					zap.Error(err))
+				mlog.Warn(ctx, "failed to select shard",
+					mlog.Int64s("excluded", excludeNodes.Collect()),
+					mlog.String("candidates", strings.Join(candidatesInStr, ", ")),
+					mlog.String("serviceableNodes", strings.Join(serviceableNodesInStr, ", ")),
+					mlog.Err(err))
 			}
 		}()
 
@@ -232,10 +229,8 @@ func (lb *LBPolicyImpl) selectNode(ctx context.Context, balancer LBBalancer, wor
 
 // ExecuteWithRetry will choose a qn to execute the workload, and retry if failed, until reach the max retryTimes.
 func (lb *LBPolicyImpl) ExecuteWithRetry(ctx context.Context, workload ChannelWorkload) error {
-	log := log.Ctx(ctx).With(
-		zap.Int64("collectionID", workload.CollectionID),
-		zap.String("channelName", workload.Channel),
-	)
+	ctx = mlog.WithFields(ctx, mlog.Int64("collectionID", workload.CollectionID),
+		mlog.String("channelName", workload.Channel))
 	var lastErr error
 	tryExecute := func() (bool, error) {
 		// Get fresh blacklist on each retry to include newly blacklisted nodes
@@ -244,10 +239,10 @@ func (lb *LBPolicyImpl) ExecuteWithRetry(ctx context.Context, workload ChannelWo
 		balancer := lb.getBalancer()
 		targetNode, err := lb.selectNode(ctx, balancer, workload, &excludeNodes)
 		if err != nil {
-			log.Warn("failed to select node for shard",
-				zap.Int64("nodeID", targetNode.NodeID),
-				zap.Int64s("excluded", excludeNodes.Collect()),
-				zap.Error(err),
+			mlog.Warn(ctx, "failed to select node for shard",
+				mlog.Int64("nodeID", targetNode.NodeID),
+				mlog.Int64s("excluded", excludeNodes.Collect()),
+				mlog.Err(err),
 			)
 			if lastErr != nil {
 				return true, lastErr
@@ -259,9 +254,9 @@ func (lb *LBPolicyImpl) ExecuteWithRetry(ctx context.Context, workload ChannelWo
 
 		client, err := lb.clientMgr.GetClient(ctx, targetNode)
 		if err != nil {
-			log.Warn("search/query channel failed, node not available",
-				zap.Int64("nodeID", targetNode.NodeID),
-				zap.Error(err))
+			mlog.Warn(ctx, "search/query channel failed, node not available",
+				mlog.Int64("nodeID", targetNode.NodeID),
+				mlog.Err(err))
 			lb.blacklist.Add(workload.Channel, targetNode.NodeID)
 
 			lastErr = errors.Wrapf(err, "failed to get delegator %d for channel %s", targetNode.NodeID, workload.Channel)
@@ -270,9 +265,9 @@ func (lb *LBPolicyImpl) ExecuteWithRetry(ctx context.Context, workload ChannelWo
 
 		err = workload.Exec(ctx, targetNode.NodeID, client, workload.Channel)
 		if err != nil {
-			log.Warn("search/query channel failed",
-				zap.Int64("nodeID", targetNode.NodeID),
-				zap.Error(err))
+			mlog.Warn(ctx, "search/query channel failed",
+				mlog.Int64("nodeID", targetNode.NodeID),
+				mlog.Err(err))
 			lb.blacklist.Add(workload.Channel, targetNode.NodeID)
 			lastErr = errors.Wrapf(err, "failed to search/query delegator %d for channel %s", targetNode.NodeID, workload.Channel)
 			return true, lastErr
@@ -283,15 +278,15 @@ func (lb *LBPolicyImpl) ExecuteWithRetry(ctx context.Context, workload ChannelWo
 
 	shardLeaders, err := lb.GetShard(ctx, workload.Db, workload.CollectionName, workload.CollectionID, workload.Channel, true)
 	if err != nil {
-		log.Warn("failed to get shard leaders", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to get shard leaders", mlog.Err(err))
 		return err
 	}
 	retryTimes := max(lb.retryOnReplica, len(shardLeaders))
 	err = retry.Handle(ctx, tryExecute, retry.Attempts(uint(retryTimes)))
 	if err != nil {
-		log.Warn("failed to execute",
-			zap.String("channel", workload.Channel),
-			zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to execute",
+			mlog.String("channel", workload.Channel),
+			mlog.Err(err))
 	}
 
 	return err
@@ -299,17 +294,15 @@ func (lb *LBPolicyImpl) ExecuteWithRetry(ctx context.Context, workload ChannelWo
 
 // Execute will execute collection workload in parallel
 func (lb *LBPolicyImpl) Execute(ctx context.Context, workload CollectionWorkLoad) error {
-	log := log.Ctx(ctx).With(
-		zap.Int64("collectionID", workload.CollectionID),
-	)
+	ctx = mlog.WithFields(ctx, mlog.Int64("collectionID", workload.CollectionID))
 	channelList, err := lb.GetShardLeaderList(ctx, workload.Db, workload.CollectionName, workload.CollectionID, true)
 	if err != nil {
-		log.Warn("failed to get shards", zap.Error(err))
+		mlog.Warn(ctx, "failed to get shards", mlog.Err(err))
 		return err
 	}
 
 	if len(channelList) == 0 {
-		log.Info("no shard leaders found", zap.Int64("collectionID", workload.CollectionID))
+		mlog.Info(ctx, "no shard leaders found", mlog.Int64("collectionID", workload.CollectionID))
 		return merr.WrapErrCollectionNotLoaded(workload.CollectionID)
 	}
 
@@ -334,7 +327,7 @@ func (lb *LBPolicyImpl) Execute(ctx context.Context, workload CollectionWorkLoad
 func (lb *LBPolicyImpl) ExecuteOneChannel(ctx context.Context, workload CollectionWorkLoad) error {
 	channelList, err := lb.GetShardLeaderList(ctx, workload.Db, workload.CollectionName, workload.CollectionID, true)
 	if err != nil {
-		log.Ctx(ctx).Warn("failed to get shards", zap.Error(err))
+		mlog.Warn(ctx, "failed to get shards", mlog.Err(err))
 		return err
 	}
 

@@ -38,8 +38,8 @@ import (
 	"github.com/milvus-io/milvus/internal/util/hookutil"
 	"github.com/milvus-io/milvus/internal/util/importutilv2"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
@@ -70,7 +70,7 @@ func importStateV2ToCopySegmentTaskState(state datapb.ImportTaskStateV2) datapb.
 
 // WatchDmChannels is not in use
 func (node *DataNode) WatchDmChannels(ctx context.Context, in *datapb.WatchDmChannelsRequest) (*commonpb.Status, error) {
-	log.Ctx(ctx).Warn("DataNode WatchDmChannels is not in use")
+	mlog.Warn(ctx, "DataNode WatchDmChannels is not in use")
 
 	// TODO ERROR OF GRPC NOT IN USE
 	return merr.Success(), nil
@@ -80,7 +80,7 @@ func (node *DataNode) WatchDmChannels(ctx context.Context, in *datapb.WatchDmCha
 func (node *DataNode) GetComponentStates(ctx context.Context, req *milvuspb.GetComponentStatesRequest) (*milvuspb.ComponentStates, error) {
 	nodeID := common.NotRegisteredID
 	state := node.GetStateCode()
-	log.Ctx(ctx).Debug("DataNode current state", zap.String("State", state.String()))
+	mlog.Debug(ctx, "DataNode current state", mlog.String("State", state.String()))
 	if node.GetSession() != nil && node.session.Registered() {
 		nodeID = node.GetSession().ServerID
 	}
@@ -99,7 +99,7 @@ func (node *DataNode) GetComponentStates(ctx context.Context, req *milvuspb.GetC
 
 // Deprecated after v2.6.0
 func (node *DataNode) FlushSegments(ctx context.Context, req *datapb.FlushSegmentsRequest) (*commonpb.Status, error) {
-	log.Ctx(ctx).Info("FlushSegments was deprecated after v2.6.0, return success")
+	mlog.Info(ctx, "FlushSegments was deprecated after v2.6.0, return success")
 	return merr.Success(), nil
 }
 
@@ -129,9 +129,9 @@ func (node *DataNode) GetStatisticsChannel(ctx context.Context, req *internalpb.
 
 // ShowConfigurations returns the configurations of DataNode matching req.Pattern
 func (node *DataNode) ShowConfigurations(ctx context.Context, req *internalpb.ShowConfigurationsRequest) (*internalpb.ShowConfigurationsResponse, error) {
-	log.Ctx(ctx).Debug("DataNode.ShowConfigurations", zap.String("pattern", req.Pattern))
+	mlog.Debug(ctx, "DataNode.ShowConfigurations", mlog.String("pattern", req.Pattern))
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
-		log.Ctx(ctx).Warn("DataNode.ShowConfigurations failed", zap.Int64("nodeId", node.GetNodeID()), zap.Error(err))
+		mlog.Warn(ctx, "DataNode.ShowConfigurations failed", mlog.Int64("nodeId", node.GetNodeID()), mlog.Err(err))
 
 		return &internalpb.ShowConfigurationsResponse{
 			Status:        merr.Status(err),
@@ -156,7 +156,7 @@ func (node *DataNode) ShowConfigurations(ctx context.Context, req *internalpb.Sh
 // GetMetrics return datanode metrics
 func (node *DataNode) GetMetrics(ctx context.Context, req *milvuspb.GetMetricsRequest) (*milvuspb.GetMetricsResponse, error) {
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
-		log.Ctx(ctx).Warn("DataNode.GetMetrics failed", zap.Int64("nodeId", node.GetNodeID()), zap.Error(err))
+		mlog.Warn(ctx, "DataNode.GetMetrics failed", mlog.Int64("nodeId", node.GetNodeID()), mlog.Err(err))
 
 		return &milvuspb.GetMetricsResponse{
 			Status: merr.Status(err),
@@ -182,14 +182,14 @@ func (node *DataNode) GetMetrics(ctx context.Context, req *milvuspb.GetMetricsRe
 // CompactionV2 handles compaction request from DataCoord
 // returns status as long as compaction task enqueued or invalid
 func (node *DataNode) CompactionV2(ctx context.Context, req *datapb.CompactionPlan) (*commonpb.Status, error) {
-	log := log.Ctx(ctx).With(zap.Int64("planID", req.GetPlanID()))
+	ctx = mlog.WithFields(ctx, mlog.Int64("planID", req.GetPlanID()))
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
-		log.Warn("DataNode.Compaction failed", zap.Int64("nodeId", node.GetNodeID()), zap.Error(err))
+		mlog.Warn(ctx, "DataNode.Compaction failed", mlog.Int64("nodeId", node.GetNodeID()), mlog.Err(err))
 		return merr.Status(err), nil
 	}
 
 	if len(req.GetSegmentBinlogs()) == 0 {
-		log.Info("no segments to compact")
+		mlog.Info(ctx, "no segments to compact")
 		return merr.Success(), nil
 	}
 
@@ -212,10 +212,10 @@ func (node *DataNode) CompactionV2(ctx context.Context, req *datapb.CompactionPl
 	}
 	cm, err := node.storageFactory.NewChunkManager(node.ctx, compactionParams.StorageConfig)
 	if err != nil {
-		log.Error("create chunk manager failed",
-			zap.String("bucket", compactionParams.StorageConfig.GetBucketName()),
-			zap.String("ROOTPATH", compactionParams.StorageConfig.GetRootPath()),
-			zap.Error(err),
+		mlog.Error(ctx, "create chunk manager failed",
+			mlog.String("bucket", compactionParams.StorageConfig.GetBucketName()),
+			mlog.String("ROOTPATH", compactionParams.StorageConfig.GetRootPath()),
+			mlog.Err(err),
 		)
 		return merr.Status(err), err
 	}
@@ -288,7 +288,7 @@ func (node *DataNode) CompactionV2(ctx context.Context, req *datapb.CompactionPl
 	case datapb.CompactionType_ClusteringPartitionKeySortCompaction:
 		// TODO
 	default:
-		log.Warn("Unknown compaction type", zap.String("type", req.GetType().String()))
+		mlog.Warn(context.TODO(), "Unknown compaction type", mlog.String("type", req.GetType().String()))
 		return merr.Status(merr.WrapErrParameterInvalidMsg("Unknown compaction type: %v", req.GetType().String())), nil
 	}
 
@@ -304,7 +304,7 @@ func (node *DataNode) CompactionV2(ctx context.Context, req *datapb.CompactionPl
 // Deprecated after v2.6.0
 func (node *DataNode) GetCompactionState(ctx context.Context, req *datapb.CompactionStateRequest) (*datapb.CompactionStateResponse, error) {
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
-		log.Ctx(ctx).Warn("DataNode.GetCompactionState failed", zap.Int64("nodeId", node.GetNodeID()), zap.Error(err))
+		mlog.Warn(ctx, "DataNode.GetCompactionState failed", mlog.Int64("nodeId", node.GetNodeID()), mlog.Err(err))
 		return &datapb.CompactionStateResponse{
 			Status: merr.Status(err),
 		}, nil
@@ -320,19 +320,19 @@ func (node *DataNode) GetCompactionState(ctx context.Context, req *datapb.Compac
 // SyncSegments called by DataCoord, sync the compacted segments' meta between DC and DN
 // Deprecated after v2.6.0
 func (node *DataNode) SyncSegments(ctx context.Context, req *datapb.SyncSegmentsRequest) (*commonpb.Status, error) {
-	log.Ctx(ctx).Info("DataNode deprecated SyncSegments after v2.6.0, return success")
+	mlog.Info(ctx, "DataNode deprecated SyncSegments after v2.6.0, return success")
 	return merr.Success(), nil
 }
 
 // Deprecated after v2.6.0
 func (node *DataNode) NotifyChannelOperation(ctx context.Context, req *datapb.ChannelOperationsRequest) (*commonpb.Status, error) {
-	log.Ctx(ctx).Info("DataNode deprecated NotifyChannelOperation after v2.6.0, return success")
+	mlog.Info(ctx, "DataNode deprecated NotifyChannelOperation after v2.6.0, return success")
 	return merr.Success(), nil
 }
 
 // Deprecated after v2.6.0
 func (node *DataNode) CheckChannelOperationProgress(ctx context.Context, req *datapb.ChannelWatchInfo) (*datapb.ChannelOperationProgressResponse, error) {
-	log.Ctx(ctx).Info("DataNode deprecated CheckChannelOperationProgress after v2.6.0, return success")
+	mlog.Info(ctx, "DataNode deprecated CheckChannelOperationProgress after v2.6.0, return success")
 	return &datapb.ChannelOperationProgressResponse{
 		Status: merr.Success(),
 	}, nil
@@ -340,20 +340,20 @@ func (node *DataNode) CheckChannelOperationProgress(ctx context.Context, req *da
 
 // Deprecated after v2.6.0
 func (node *DataNode) FlushChannels(ctx context.Context, req *datapb.FlushChannelsRequest) (*commonpb.Status, error) {
-	log.Ctx(ctx).Info("DataNode deprecated FlushChannels after v2.6.0, return success")
+	mlog.Info(ctx, "DataNode deprecated FlushChannels after v2.6.0, return success")
 	return merr.Success(), nil
 }
 
 func (node *DataNode) PreImport(ctx context.Context, req *datapb.PreImportRequest) (*commonpb.Status, error) {
-	log := log.Ctx(ctx).With(zap.Int64("taskID", req.GetTaskID()),
-		zap.Int64("jobID", req.GetJobID()),
-		zap.Int64("taskSlot", req.GetTaskSlot()),
-		zap.Int64("collectionID", req.GetCollectionID()),
-		zap.Int64s("partitionIDs", req.GetPartitionIDs()),
-		zap.Strings("vchannels", req.GetVchannels()),
-		zap.Any("files", req.GetImportFiles()))
+	ctx = mlog.WithFields(ctx, mlog.Int64("taskID", req.GetTaskID()),
+		mlog.Int64("jobID", req.GetJobID()),
+		mlog.Int64("taskSlot", req.GetTaskSlot()),
+		mlog.Int64("collectionID", req.GetCollectionID()),
+		mlog.Int64s("partitionIDs", req.GetPartitionIDs()),
+		mlog.Strings("vchannels", req.GetVchannels()),
+		mlog.Any("files", req.GetImportFiles()))
 
-	log.Info("datanode receive preimport request")
+	mlog.Info(ctx, "datanode receive preimport request")
 
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
 		return merr.Status(err), nil
@@ -361,9 +361,9 @@ func (node *DataNode) PreImport(ctx context.Context, req *datapb.PreImportReques
 
 	cm, err := node.storageFactory.NewChunkManager(node.ctx, req.GetStorageConfig())
 	if err != nil {
-		log.Error("create chunk manager failed", zap.String("bucket", req.GetStorageConfig().GetBucketName()),
-			zap.String("accessKey", req.GetStorageConfig().GetAccessKeyID()),
-			zap.Error(err),
+		mlog.Error(ctx, "create chunk manager failed", mlog.String("bucket", req.GetStorageConfig().GetBucketName()),
+			mlog.String("accessKey", req.GetStorageConfig().GetAccessKeyID()),
+			mlog.Err(err),
 		)
 		return merr.Status(err), nil
 	}
@@ -376,24 +376,24 @@ func (node *DataNode) PreImport(ctx context.Context, req *datapb.PreImportReques
 	}
 	node.importTaskMgr.Add(task)
 
-	log.Info("datanode added preimport task")
+	mlog.Info(ctx, "datanode added preimport task")
 	return merr.Success(), nil
 }
 
 func (node *DataNode) ImportV2(ctx context.Context, req *datapb.ImportRequest) (*commonpb.Status, error) {
-	log := log.Ctx(ctx).With(zap.Int64("taskID", req.GetTaskID()),
-		zap.Int64("jobID", req.GetJobID()),
-		zap.Int64("taskSlot", req.GetTaskSlot()),
-		zap.Int64("collectionID", req.GetCollectionID()),
-		zap.Int64s("partitionIDs", req.GetPartitionIDs()),
-		zap.Strings("vchannels", req.GetVchannels()),
-		zap.Uint64("ts", req.GetTs()),
-		zap.Int64("idBegin", req.GetIDRange().GetBegin()),
-		zap.Int64("idEnd", req.GetIDRange().GetEnd()),
-		zap.Any("segments", req.GetRequestSegments()),
-		zap.Any("files", req.GetFiles()))
+	ctx = mlog.WithFields(ctx, mlog.Int64("taskID", req.GetTaskID()),
+		mlog.Int64("jobID", req.GetJobID()),
+		mlog.Int64("taskSlot", req.GetTaskSlot()),
+		mlog.Int64("collectionID", req.GetCollectionID()),
+		mlog.Int64s("partitionIDs", req.GetPartitionIDs()),
+		mlog.Strings("vchannels", req.GetVchannels()),
+		mlog.Uint64("ts", req.GetTs()),
+		mlog.Int64("idBegin", req.GetIDRange().GetBegin()),
+		mlog.Int64("idEnd", req.GetIDRange().GetEnd()),
+		mlog.Any("segments", req.GetRequestSegments()),
+		mlog.Any("files", req.GetFiles()))
 
-	log.Info("datanode receive import request")
+	mlog.Info(ctx, "datanode receive import request")
 
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
 		return merr.Status(err), nil
@@ -401,9 +401,9 @@ func (node *DataNode) ImportV2(ctx context.Context, req *datapb.ImportRequest) (
 
 	cm, err := node.storageFactory.NewChunkManager(node.ctx, req.GetStorageConfig())
 	if err != nil {
-		log.Error("create chunk manager failed", zap.String("bucket", req.GetStorageConfig().GetBucketName()),
-			zap.String("accessKey", req.GetStorageConfig().GetAccessKeyID()),
-			zap.Error(err),
+		mlog.Error(ctx, "create chunk manager failed", mlog.String("bucket", req.GetStorageConfig().GetBucketName()),
+			mlog.String("accessKey", req.GetStorageConfig().GetAccessKeyID()),
+			mlog.Err(err),
 		)
 		return merr.Status(err), nil
 	}
@@ -415,12 +415,11 @@ func (node *DataNode) ImportV2(ctx context.Context, req *datapb.ImportRequest) (
 	}
 	node.importTaskMgr.Add(task)
 
-	log.Info("datanode added import task")
+	mlog.Info(ctx, "datanode added import task")
 	return merr.Success(), nil
 }
 
 func (node *DataNode) QueryPreImport(ctx context.Context, req *datapb.QueryPreImportRequest) (*datapb.QueryPreImportResponse, error) {
-	log := log.Ctx(ctx).WithRateGroup("datanode.QueryPreImport", 1, 60)
 
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
 		return &datapb.QueryPreImportResponse{Status: merr.Status(err)}, nil
@@ -435,17 +434,17 @@ func (node *DataNode) QueryPreImport(ctx context.Context, req *datapb.QueryPreIm
 		GetFileStats() []*datapb.ImportFileStats
 	}).GetFileStats()
 	logFields := []zap.Field{
-		zap.Int64("taskID", task.GetTaskID()),
-		zap.Int64("jobID", task.GetJobID()),
-		zap.String("state", task.GetState().String()),
-		zap.String("reason", task.GetReason()),
-		zap.Int64("nodeID", node.GetNodeID()),
-		zap.Any("fileStats", fileStats),
+		mlog.Int64("taskID", task.GetTaskID()),
+		mlog.Int64("jobID", task.GetJobID()),
+		mlog.String("state", task.GetState().String()),
+		mlog.String("reason", task.GetReason()),
+		mlog.Int64("nodeID", node.GetNodeID()),
+		mlog.Any("fileStats", fileStats),
 	}
 	if task.GetState() == datapb.ImportTaskStateV2_InProgress {
-		log.RatedInfo(30, "datanode query preimport", logFields...)
+		mlog.RatedInfo(ctx, 1.0/30, "datanode query preimport", logFields...)
 	} else {
-		log.Info("datanode query preimport", logFields...)
+		mlog.Info(ctx, "datanode query preimport", logFields...)
 	}
 
 	return &datapb.QueryPreImportResponse{
@@ -458,7 +457,6 @@ func (node *DataNode) QueryPreImport(ctx context.Context, req *datapb.QueryPreIm
 }
 
 func (node *DataNode) QueryImport(ctx context.Context, req *datapb.QueryImportRequest) (*datapb.QueryImportResponse, error) {
-	log := log.Ctx(ctx).WithRateGroup("datanode.QueryImport", 1, 60)
 
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
 		return &datapb.QueryImportResponse{Status: merr.Status(err)}, nil
@@ -483,17 +481,17 @@ func (node *DataNode) QueryImport(ctx context.Context, req *datapb.QueryImportRe
 		GetSegmentsInfo() []*datapb.ImportSegmentInfo
 	}).GetSegmentsInfo()
 	logFields := []zap.Field{
-		zap.Int64("taskID", task.GetTaskID()),
-		zap.Int64("jobID", task.GetJobID()),
-		zap.String("state", task.GetState().String()),
-		zap.String("reason", task.GetReason()),
-		zap.Int64("nodeID", node.GetNodeID()),
-		zap.Any("segmentsInfo", segmentsInfo),
+		mlog.Int64("taskID", task.GetTaskID()),
+		mlog.Int64("jobID", task.GetJobID()),
+		mlog.String("state", task.GetState().String()),
+		mlog.String("reason", task.GetReason()),
+		mlog.Int64("nodeID", node.GetNodeID()),
+		mlog.Any("segmentsInfo", segmentsInfo),
 	}
 	if task.GetState() == datapb.ImportTaskStateV2_InProgress {
-		log.RatedInfo(30, "datanode query import", logFields...)
+		mlog.RatedInfo(ctx, 1.0/30, "datanode query import", logFields...)
 	} else {
-		log.Info("datanode query import", logFields...)
+		mlog.Info(ctx, "datanode query import", logFields...)
 	}
 	return &datapb.QueryImportResponse{
 		Status:             merr.Success(),
@@ -505,9 +503,9 @@ func (node *DataNode) QueryImport(ctx context.Context, req *datapb.QueryImportRe
 }
 
 func (node *DataNode) DropImport(ctx context.Context, req *datapb.DropImportRequest) (*commonpb.Status, error) {
-	log := log.Ctx(ctx).With(zap.Int64("taskID", req.GetTaskID()),
-		zap.Int64("jobID", req.GetJobID()),
-		zap.Int64("nodeID", node.GetNodeID()))
+	ctx = mlog.WithFields(ctx, mlog.Int64("taskID", req.GetTaskID()),
+		mlog.Int64("jobID", req.GetJobID()),
+		mlog.Int64("nodeID", node.GetNodeID()))
 
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
 		return merr.Status(err), nil
@@ -515,7 +513,7 @@ func (node *DataNode) DropImport(ctx context.Context, req *datapb.DropImportRequ
 
 	node.importTaskMgr.Remove(req.GetTaskID())
 
-	log.Info("datanode drop import done")
+	mlog.Info(ctx, "datanode drop import done")
 
 	return merr.Success(), nil
 }
@@ -527,15 +525,13 @@ func (node *DataNode) CopySegment(ctx context.Context, req *datapb.CopySegmentRe
 		collectionID = req.GetTargets()[0].GetCollectionId()
 	}
 
-	log := log.Ctx(ctx).With(
-		zap.Int64("taskID", req.GetTaskID()),
-		zap.Int64("jobID", req.GetJobID()),
-		zap.Int64("collectionID", collectionID),
-		zap.Int("sourceSegmentCount", len(req.GetSources())),
-		zap.Int("targetSegmentCount", len(req.GetTargets())),
-	)
+	ctx = mlog.WithFields(ctx, mlog.Int64("taskID", req.GetTaskID()),
+		mlog.Int64("jobID", req.GetJobID()),
+		mlog.Int64("collectionID", collectionID),
+		mlog.Int("sourceSegmentCount", len(req.GetSources())),
+		mlog.Int("targetSegmentCount", len(req.GetTargets())))
 
-	log.Info("datanode receive copy segment request")
+	mlog.Info(ctx, "datanode receive copy segment request")
 
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
 		return merr.Status(err), nil
@@ -543,10 +539,10 @@ func (node *DataNode) CopySegment(ctx context.Context, req *datapb.CopySegmentRe
 
 	cm, err := node.storageFactory.NewChunkManager(node.ctx, req.GetStorageConfig())
 	if err != nil {
-		log.Error("create chunk manager failed",
-			zap.String("bucket", req.GetStorageConfig().GetBucketName()),
-			zap.String("accessKey", req.GetStorageConfig().GetAccessKeyID()),
-			zap.Error(err),
+		mlog.Error(ctx, "create chunk manager failed",
+			mlog.String("bucket", req.GetStorageConfig().GetBucketName()),
+			mlog.String("accessKey", req.GetStorageConfig().GetAccessKeyID()),
+			mlog.Err(err),
 		)
 		return merr.Status(err), nil
 	}
@@ -554,12 +550,11 @@ func (node *DataNode) CopySegment(ctx context.Context, req *datapb.CopySegmentRe
 	task := importv2.NewCopySegmentTask(req, node.importTaskMgr, cm)
 	node.importTaskMgr.Add(task)
 
-	log.Info("datanode added copy segment task")
+	mlog.Info(ctx, "datanode added copy segment task")
 	return merr.Success(), nil
 }
 
 func (node *DataNode) QueryCopySegment(ctx context.Context, req *datapb.QueryCopySegmentRequest) (*datapb.QueryCopySegmentResponse, error) {
-	log := log.Ctx(ctx).WithRateGroup("datanode.QueryCopySegment", 1, 60)
 
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
 		return &datapb.QueryCopySegmentResponse{Status: merr.Status(err)}, nil
@@ -573,17 +568,17 @@ func (node *DataNode) QueryCopySegment(ctx context.Context, req *datapb.QueryCop
 	}
 
 	logFields := []zap.Field{
-		zap.Int64("taskID", task.GetTaskID()),
-		zap.Int64("jobID", task.GetJobID()),
-		zap.String("state", task.GetState().String()),
-		zap.String("reason", task.GetReason()),
-		zap.Int64("nodeID", node.GetNodeID()),
+		mlog.Int64("taskID", task.GetTaskID()),
+		mlog.Int64("jobID", task.GetJobID()),
+		mlog.String("state", task.GetState().String()),
+		mlog.String("reason", task.GetReason()),
+		mlog.Int64("nodeID", node.GetNodeID()),
 	}
 
 	if task.GetState() == datapb.ImportTaskStateV2_InProgress {
-		log.RatedInfo(30, "datanode query copy segment", logFields...)
+		mlog.RatedInfo(ctx, 1.0/30, "datanode query copy segment", logFields...)
 	} else {
-		log.Info("datanode query copy segment", logFields...)
+		mlog.Info(ctx, "datanode query copy segment", logFields...)
 	}
 
 	// Collect segment results from CopySegmentTask
@@ -605,11 +600,9 @@ func (node *DataNode) QueryCopySegment(ctx context.Context, req *datapb.QueryCop
 }
 
 func (node *DataNode) DropCopySegment(ctx context.Context, req *datapb.DropCopySegmentRequest) (*commonpb.Status, error) {
-	log := log.Ctx(ctx).With(
-		zap.Int64("taskID", req.GetTaskID()),
-		zap.Int64("jobID", req.GetJobID()),
-		zap.Int64("nodeID", node.GetNodeID()),
-	)
+	ctx = mlog.WithFields(ctx, mlog.Int64("taskID", req.GetTaskID()),
+		mlog.Int64("jobID", req.GetJobID()),
+		mlog.Int64("nodeID", node.GetNodeID()))
 
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
 		return merr.Status(err), nil
@@ -622,9 +615,9 @@ func (node *DataNode) DropCopySegment(ctx context.Context, req *datapb.DropCopyS
 		if copyTask, ok := task.(*importv2.CopySegmentTask); ok {
 			taskState := copyTask.GetState()
 			if taskState == datapb.ImportTaskStateV2_Failed {
-				log.Info("task failed, triggering cleanup of copied files",
-					zap.String("state", taskState.String()),
-					zap.String("reason", copyTask.GetReason()))
+				mlog.Info(ctx, "task failed, triggering cleanup of copied files",
+					mlog.String("state", taskState.String()),
+					mlog.String("reason", copyTask.GetReason()))
 
 				// Call task's cleanup method
 				copyTask.CleanupCopiedFiles()
@@ -635,7 +628,7 @@ func (node *DataNode) DropCopySegment(ctx context.Context, req *datapb.DropCopyS
 	// Remove task from manager
 	node.importTaskMgr.Remove(req.GetTaskID())
 
-	log.Info("datanode drop copy segment done")
+	mlog.Info(ctx, "datanode drop copy segment done")
 
 	return merr.Success(), nil
 }
@@ -659,12 +652,12 @@ func (node *DataNode) QuerySlot(ctx context.Context, req *datapb.QuerySlotReques
 		availableSlots = 0
 	}
 
-	log.Ctx(ctx).Info("query slots done",
-		zap.Int64("totalSlots", totalSlots),
-		zap.Int64("availableSlots", availableSlots),
-		zap.Int64("indexStatsUsed", indexStatsUsed),
-		zap.Int64("compactionUsed", compactionUsed),
-		zap.Int64("importUsed", importUsed),
+	mlog.Info(ctx, "query slots done",
+		mlog.Int64("totalSlots", totalSlots),
+		mlog.Int64("availableSlots", availableSlots),
+		mlog.Int64("indexStatsUsed", indexStatsUsed),
+		mlog.Int64("compactionUsed", compactionUsed),
+		mlog.Int64("importUsed", importUsed),
 	)
 
 	metrics.DataNodeSlot.WithLabelValues(fmt.Sprint(node.GetNodeID()), "available").Set(float64(availableSlots))
@@ -686,13 +679,13 @@ func (node *DataNode) DropCompactionPlan(ctx context.Context, req *datapb.DropCo
 	}
 
 	node.compactionExecutor.RemoveTask(req.GetPlanID())
-	log.Ctx(ctx).Info("DropCompactionPlans success", zap.Int64("planID", req.GetPlanID()))
+	mlog.Info(ctx, "DropCompactionPlans success", mlog.Int64("planID", req.GetPlanID()))
 	return merr.Success(), nil
 }
 
 // CreateTask creates different types of tasks based on task type
 func (node *DataNode) CreateTask(ctx context.Context, request *workerpb.CreateTaskRequest) (*commonpb.Status, error) {
-	log.Ctx(ctx).Info("CreateTask received", zap.Any("properties", request.GetProperties()))
+	mlog.Info(ctx, "CreateTask received", mlog.Any("properties", request.GetProperties()))
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
 		return merr.Status(err), nil
 	}
@@ -770,7 +763,7 @@ func (node *DataNode) CreateTask(ctx context.Context, request *workerpb.CreateTa
 		return node.CopySegment(ctx, req)
 	default:
 		err := fmt.Errorf("unrecognized task type '%s', properties=%v", taskType, request.GetProperties())
-		log.Ctx(ctx).Warn("CreateTask failed", zap.Error(err))
+		mlog.Warn(ctx, "CreateTask failed", mlog.Err(err))
 		return merr.Status(err), nil
 	}
 }
@@ -917,7 +910,7 @@ func (node *DataNode) QueryTask(ctx context.Context, request *workerpb.QueryTask
 		return wrapQueryTaskResult(resp, resProperties)
 	default:
 		err := fmt.Errorf("unrecognized task type '%s', properties=%v", taskType, request.GetProperties())
-		log.Ctx(ctx).Warn("QueryTask failed", zap.Error(err))
+		mlog.Warn(ctx, "QueryTask failed", mlog.Err(err))
 		return &workerpb.QueryTaskResponse{
 			Status: merr.Status(err),
 		}, nil
@@ -926,7 +919,7 @@ func (node *DataNode) QueryTask(ctx context.Context, request *workerpb.QueryTask
 
 // DropTask deletes specified type of task
 func (node *DataNode) DropTask(ctx context.Context, request *workerpb.DropTaskRequest) (*commonpb.Status, error) {
-	log.Ctx(ctx).Info("DropTask received", zap.Any("properties", request.GetProperties()))
+	mlog.Info(ctx, "DropTask received", mlog.Any("properties", request.GetProperties()))
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
 		return merr.Status(err), nil
 	}
@@ -971,23 +964,23 @@ func (node *DataNode) DropTask(ctx context.Context, request *workerpb.DropTaskRe
 		if !cancelled && info != nil && info.Cancel != nil {
 			info.Cancel()
 		}
-		log.Ctx(ctx).Info("DropTask for external collection completed",
-			zap.Int64("taskID", taskID),
-			zap.String("clusterID", clusterID))
+		mlog.Info(ctx, "DropTask for external collection completed",
+			mlog.Int64("taskID", taskID),
+			mlog.String("clusterID", clusterID))
 		return merr.Success(), nil
 	default:
 		err := fmt.Errorf("unrecognized task type '%s', properties=%v", taskType, request.GetProperties())
-		log.Ctx(ctx).Warn("DropTask failed", zap.Error(err))
+		mlog.Warn(ctx, "DropTask failed", mlog.Err(err))
 		return merr.Status(err), nil
 	}
 }
 
 func (node *DataNode) SyncFileResource(ctx context.Context, req *internalpb.SyncFileResourceRequest) (*commonpb.Status, error) {
-	log := log.Ctx(ctx).With(zap.Uint64("version", req.GetVersion()))
-	log.Info("sync file resource", zap.Any("resources", req.Resources))
+	ctx = mlog.WithFields(ctx, mlog.Uint64("version", req.GetVersion()))
+	mlog.Info(ctx, "sync file resource", mlog.Any("resources", req.Resources))
 
 	if !node.isHealthy() {
-		log.Warn("failed to sync file resource, DataNode is not healthy")
+		mlog.Warn(ctx, "failed to sync file resource, DataNode is not healthy")
 		return merr.Status(merr.ErrServiceNotReady), nil
 	}
 
@@ -1001,14 +994,12 @@ func (node *DataNode) SyncFileResource(ctx context.Context, req *internalpb.Sync
 // createExternalCollectionTask handles updating external collection segments
 // This submits the task to the external collection manager for async execution
 func (node *DataNode) createExternalCollectionTask(ctx context.Context, req *datapb.UpdateExternalCollectionRequest) (*commonpb.Status, error) {
-	log := log.Ctx(ctx).With(
-		zap.Int64("taskID", req.GetTaskID()),
-		zap.Int64("collectionID", req.GetCollectionID()),
-	)
+	ctx = mlog.WithFields(ctx, mlog.Int64("taskID", req.GetTaskID()),
+		mlog.Int64("collectionID", req.GetCollectionID()))
 
-	log.Info("createExternalCollectionTask received",
-		zap.Int("currentSegments", len(req.GetCurrentSegments())),
-		zap.String("externalSource", req.GetExternalSource()))
+	mlog.Info(ctx, "createExternalCollectionTask received",
+		mlog.Int("currentSegments", len(req.GetCurrentSegments())),
+		mlog.String("externalSource", req.GetExternalSource()))
 
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
 		return merr.Status(err), nil
@@ -1023,22 +1014,22 @@ func (node *DataNode) createExternalCollectionTask(ctx context.Context, req *dat
 		task := external.NewUpdateExternalTask(taskCtx, func() {}, req)
 
 		if err := task.PreExecute(taskCtx); err != nil {
-			log.Warn("external collection task PreExecute failed", zap.Error(err))
+			mlog.Warn(ctx, "external collection task PreExecute failed", mlog.Err(err))
 			return nil, err
 		}
 
 		if err := task.Execute(taskCtx); err != nil {
-			log.Warn("external collection task Execute failed", zap.Error(err))
+			mlog.Warn(ctx, "external collection task Execute failed", mlog.Err(err))
 			return nil, err
 		}
 
 		if err := task.PostExecute(taskCtx); err != nil {
-			log.Warn("external collection task PostExecute failed", zap.Error(err))
+			mlog.Warn(ctx, "external collection task PostExecute failed", mlog.Err(err))
 			return nil, err
 		}
 
-		log.Info("external collection task completed successfully",
-			zap.Int("updatedSegments", len(task.GetUpdatedSegments())))
+		mlog.Info(ctx, "external collection task completed successfully",
+			mlog.Int("updatedSegments", len(task.GetUpdatedSegments())))
 
 		resp := &datapb.UpdateExternalCollectionResponse{
 			Status:          merr.Success(),
@@ -1050,11 +1041,11 @@ func (node *DataNode) createExternalCollectionTask(ctx context.Context, req *dat
 		return resp, nil
 	})
 	if err != nil {
-		log.Warn("failed to submit external collection task", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to submit external collection task", mlog.Err(err))
 		return merr.Status(err), nil
 	}
 
-	log.Info("external collection task submitted to manager")
+	mlog.Info(context.TODO(), "external collection task submitted to manager")
 	return merr.Success(), nil
 }
 

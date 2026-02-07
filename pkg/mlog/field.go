@@ -105,6 +105,12 @@ func Array(key string, val zapcore.ArrayMarshaler) Field   { return zap.Array(ke
 func Inline(val zapcore.ObjectMarshaler) Field             { return zap.Inline(val) }
 func Namespace(key string) Field                           { return zap.Namespace(key) }
 
+// Objects constructs a field with the given key, holding a list of objects
+// that can each be marshaled by zap's JSON encoder.
+func Objects[T zapcore.ObjectMarshaler](key string, vals []T) Field {
+	return zap.Objects(key, vals)
+}
+
 // Stack and skip
 func Stack(key string) Field               { return zap.Stack(key) }
 func StackSkip(key string, skip int) Field { return zap.StackSkip(key, skip) }

@@ -1,12 +1,16 @@
 package mlog
 
-import "go.uber.org/zap/zapcore"
+import (
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+)
 
 // Well-known field keys for consistent logging across Milvus components.
 // All keys use lowercase with underscores for readability and gRPC metadata compatibility.
 const (
 	KeyNodeID         = "node_id"
 	KeyModule         = "module"
+	KeyComponent      = "component"
 	KeyTraceID        = "trace_id"
 	KeySpanID         = "span_id"
 	KeyDbID           = "db_id"
@@ -20,6 +24,7 @@ const (
 	KeyPChannel       = "pchannel"
 	KeyMessageID      = "message_id"
 	KeyMessage        = "message"
+	KeyMessages       = "messages"
 )
 
 // Well-known field constructors for consistent logging across Milvus components.
@@ -30,6 +35,9 @@ func FieldNodeID(val int64) Field { return Int64(KeyNodeID, val) }
 
 // FieldModule creates a field for module name.
 func FieldModule(val string) Field { return String(KeyModule, val) }
+
+// FieldComponent creates a field for component name.
+func FieldComponent(val string) Field { return String(KeyComponent, val) }
 
 // FieldTraceID creates a field for trace ID.
 func FieldTraceID(val string) Field { return String(KeyTraceID, val) }
@@ -69,3 +77,8 @@ func FieldMessageID(val zapcore.ObjectMarshaler) Field { return Object(KeyMessag
 
 // FieldMessage creates a field for message content.
 func FieldMessage(val zapcore.ObjectMarshaler) Field { return Object(KeyMessage, val) }
+
+// FieldMessages creates a field for an array of message objects.
+func FieldMessages[T zapcore.ObjectMarshaler](msgs []T) Field {
+	return zap.Objects(KeyMessages, msgs)
+}

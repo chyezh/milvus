@@ -8,7 +8,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 )
@@ -22,15 +22,15 @@ func (r *recoveryStorageImpl) recoverFromStream(
 	r.metrics.ObserveStateChange(recoveryStorageStateStreamRecovering)
 	r.metrics.ObServePersistedMetrics(r.checkpoint.TimeTick)
 	r.SetLogger(resource.Resource().Logger().With(
-		log.FieldComponent(componentRecoveryStorage),
-		zap.String("channel", recoveryStreamBuilder.Channel().String()),
-		zap.String("startMessageID", r.checkpoint.MessageID.String()),
-		zap.Uint64("fromTimeTick", r.checkpoint.TimeTick),
-		zap.Uint64("toTimeTick", lastTimeTickMessage.TimeTick()),
-		zap.String("state", recoveryStorageStateStreamRecovering),
+		mlog.FieldComponent(componentRecoveryStorage),
+		mlog.String("channel", recoveryStreamBuilder.Channel().String()),
+		mlog.String("startMessageID", r.checkpoint.MessageID.String()),
+		mlog.Uint64("fromTimeTick", r.checkpoint.TimeTick),
+		mlog.Uint64("toTimeTick", lastTimeTickMessage.TimeTick()),
+		mlog.String("state", recoveryStorageStateStreamRecovering),
 	))
 
-	r.Logger().Info("recover from wal stream...")
+	r.Logger().Info(context.TODO(), "recover from wal stream...")
 	rs := recoveryStreamBuilder.Build(BuildRecoveryStreamParam{
 		StartCheckpoint: r.checkpoint.MessageID,
 		EndTimeTick:     lastTimeTickMessage.TimeTick(),
@@ -38,7 +38,7 @@ func (r *recoveryStorageImpl) recoverFromStream(
 	defer func() {
 		rs.Close()
 		if err != nil {
-			r.Logger().Warn("recovery from wal stream failed", zap.Error(err))
+			r.Logger().Warn(context.TODO(), "recovery from wal stream failed", mlog.Err(err))
 			return
 		}
 	}()
@@ -61,19 +61,19 @@ L:
 	snapshot = r.getSnapshot()
 	snapshot.TxnBuffer = rs.TxnBuffer()
 	logFields := []zap.Field{
-		zap.String("channel", recoveryStreamBuilder.Channel().String()),
-		zap.Int("vchannels", len(snapshot.VChannels)),
-		zap.Int("segments", len(snapshot.SegmentAssignments)),
-		zap.String("checkpoint", snapshot.Checkpoint.MessageID.String()),
-		zap.Uint64("checkpointTimeTick", snapshot.Checkpoint.TimeTick),
+		mlog.String("channel", recoveryStreamBuilder.Channel().String()),
+		mlog.Int("vchannels", len(snapshot.VChannels)),
+		mlog.Int("segments", len(snapshot.SegmentAssignments)),
+		mlog.String("checkpoint", snapshot.Checkpoint.MessageID.String()),
+		mlog.Uint64("checkpointTimeTick", snapshot.Checkpoint.TimeTick),
 	}
 	if snapshot.AlterWALInfo != nil {
 		logFields = append(logFields,
-			zap.Bool("foundAlterWALMsg", snapshot.AlterWALInfo.FoundAlterWALMsg),
-			zap.Stringer("targetWALName", snapshot.AlterWALInfo.TargetWALName),
+			mlog.Bool("foundAlterWALMsg", snapshot.AlterWALInfo.FoundAlterWALMsg),
+			mlog.Stringer("targetWALName", snapshot.AlterWALInfo.TargetWALName),
 		)
 	}
-	r.Logger().Info("recovery from wal stream done", logFields...)
+	r.Logger().Info(context.TODO(), "recovery from wal stream done", logFields...)
 	return snapshot, nil
 }
 

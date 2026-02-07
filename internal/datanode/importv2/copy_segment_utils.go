@@ -29,7 +29,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore/kv/binlog"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 )
 
@@ -92,7 +92,7 @@ func CopySegmentAndIndexFiles(
 	target *datapb.CopySegmentTarget,
 	logFields []zap.Field,
 ) (*datapb.CopySegmentResult, []string, error) {
-	log.Info("start copying segment and index files")
+	mlog.Info(ctx, "start copying segment and index files")
 
 	// Step 1: Collect all copy tasks (both segment binlogs and index files)
 	mappings, err := createFileMappings(source, target)
@@ -103,14 +103,14 @@ func CopySegmentAndIndexFiles(
 	// Step 2: Execute all copy operations and track successfully copied files
 	copiedFiles := make([]string, 0, len(mappings))
 	for src, dst := range mappings {
-		log.Info("execute copy file",
-			zap.String("sourcePath", src),
-			zap.String("targetPath", dst))
+		mlog.Info(ctx, "execute copy file",
+			mlog.String("sourcePath", src),
+			mlog.String("targetPath", dst))
 		if err := cm.Copy(ctx, src, dst); err != nil {
-			log.Warn("failed to copy file", append(logFields,
-				zap.String("sourcePath", src),
-				zap.String("targetPath", dst),
-				zap.Error(err))...)
+			mlog.Warn(ctx, "failed to copy file", append(logFields,
+				mlog.String("sourcePath", src),
+				mlog.String("targetPath", dst),
+				mlog.Err(err))...)
 			// Return the list of files that were successfully copied before this failure
 			return nil, copiedFiles, fmt.Errorf("failed to copy file from %s to %s: %w", src, dst, err)
 		}
@@ -118,8 +118,8 @@ func CopySegmentAndIndexFiles(
 		copiedFiles = append(copiedFiles, dst)
 	}
 
-	log.Info("all files copied successfully", append(logFields,
-		zap.Int("fileCount", len(mappings)))...)
+	mlog.Info(ctx, "all files copied successfully", append(logFields,
+		mlog.Int("fileCount", len(mappings)))...)
 
 	// Step 3: Build index metadata from source
 	indexInfos, textIndexInfos, jsonKeyIndexInfos := buildIndexInfoFromSource(source, target, mappings)
@@ -148,10 +148,10 @@ func CopySegmentAndIndexFiles(
 	// Compress JSON stats paths to keep only key suffix
 	jsonKeyIndexInfos = shortenJsonStatsPath(jsonKeyIndexInfos)
 
-	log.Info("path compression completed",
-		zap.Int("binlogFields", len(segmentInfo.GetBinlogs())),
-		zap.Int("indexCount", len(indexInfos)),
-		zap.Int("jsonStatsCount", len(jsonKeyIndexInfos)))
+	mlog.Info(context.TODO(), "path compression completed",
+		mlog.Int("binlogFields", len(segmentInfo.GetBinlogs())),
+		mlog.Int("indexCount", len(indexInfos)),
+		mlog.Int("jsonStatsCount", len(jsonKeyIndexInfos)))
 
 	// Step 6: Build complete result combining segment info and index metadata
 	result := &datapb.CopySegmentResult{
@@ -166,8 +166,8 @@ func CopySegmentAndIndexFiles(
 		JsonKeyIndexInfos: jsonKeyIndexInfos,
 	}
 
-	log.Info("copy segment and index files completed successfully",
-		zap.Int64("importedRows", result.ImportedRows))
+	mlog.Info(context.TODO(), "copy segment and index files completed successfully",
+		mlog.Int64("importedRows", result.ImportedRows))
 	return result, copiedFiles, nil
 }
 

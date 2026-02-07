@@ -41,7 +41,6 @@ import (
 	"github.com/samber/lo"
 	"github.com/tidwall/gjson"
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
@@ -67,8 +66,8 @@ import (
 	"github.com/milvus-io/milvus/internal/util/streamingutil/util"
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgdispatcher"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
@@ -174,7 +173,7 @@ func (node *QueryNode) initSession() error {
 	sessionutil.SaveServerInfo(typeutil.QueryNodeRole, node.session.ServerID)
 	paramtable.SetNodeID(node.session.ServerID)
 	node.serverID = node.session.ServerID
-	log.Ctx(node.ctx).Info("QueryNode init session", zap.Int64("nodeID", node.GetNodeID()), zap.String("node address", node.session.Address))
+	mlog.Info(node.ctx, "QueryNode init session", mlog.Int64("nodeID", node.GetNodeID()), mlog.String("node address", node.session.Address))
 	return nil
 }
 
@@ -197,19 +196,19 @@ func ResizeHighPriorityPool(evt *config.Event) {
 func (node *QueryNode) ReconfigDiskFileWriterParams(evt *config.Event) {
 	if evt.HasUpdated {
 		if err := initcore.InitDiskFileWriterConfig(paramtable.Get()); err != nil {
-			log.Ctx(node.ctx).Warn("QueryNode failed to reconfigure file writer params", zap.Error(err))
+			mlog.Warn(node.ctx, "QueryNode failed to reconfigure file writer params", mlog.Err(err))
 			return
 		}
-		log.Ctx(node.ctx).Info("QueryNode reconfig file writer params successfully",
-			zap.String("mode", paramtable.Get().CommonCfg.DiskWriteMode.GetValue()),
-			zap.Uint64("bufferSize", paramtable.Get().CommonCfg.DiskWriteBufferSizeKb.GetAsUint64()),
-			zap.Int("nrThreads", paramtable.Get().CommonCfg.DiskWriteNumThreads.GetAsInt()),
-			zap.Uint64("refillPeriodUs", paramtable.Get().CommonCfg.DiskWriteRateLimiterRefillPeriodUs.GetAsUint64()),
-			zap.Uint64("maxBurstKBps", paramtable.Get().CommonCfg.DiskWriteRateLimiterMaxBurstKBps.GetAsUint64()),
-			zap.Uint64("avgKBps", paramtable.Get().CommonCfg.DiskWriteRateLimiterAvgKBps.GetAsUint64()),
-			zap.Int("highPriorityRatio", paramtable.Get().CommonCfg.DiskWriteRateLimiterHighPriorityRatio.GetAsInt()),
-			zap.Int("middlePriorityRatio", paramtable.Get().CommonCfg.DiskWriteRateLimiterMiddlePriorityRatio.GetAsInt()),
-			zap.Int("lowPriorityRatio", paramtable.Get().CommonCfg.DiskWriteRateLimiterLowPriorityRatio.GetAsInt()))
+		mlog.Info(node.ctx, "QueryNode reconfig file writer params successfully",
+			mlog.String("mode", paramtable.Get().CommonCfg.DiskWriteMode.GetValue()),
+			mlog.Uint64("bufferSize", paramtable.Get().CommonCfg.DiskWriteBufferSizeKb.GetAsUint64()),
+			mlog.Int("nrThreads", paramtable.Get().CommonCfg.DiskWriteNumThreads.GetAsInt()),
+			mlog.Uint64("refillPeriodUs", paramtable.Get().CommonCfg.DiskWriteRateLimiterRefillPeriodUs.GetAsUint64()),
+			mlog.Uint64("maxBurstKBps", paramtable.Get().CommonCfg.DiskWriteRateLimiterMaxBurstKBps.GetAsUint64()),
+			mlog.Uint64("avgKBps", paramtable.Get().CommonCfg.DiskWriteRateLimiterAvgKBps.GetAsUint64()),
+			mlog.Int("highPriorityRatio", paramtable.Get().CommonCfg.DiskWriteRateLimiterHighPriorityRatio.GetAsInt()),
+			mlog.Int("middlePriorityRatio", paramtable.Get().CommonCfg.DiskWriteRateLimiterMiddlePriorityRatio.GetAsInt()),
+			mlog.Int("lowPriorityRatio", paramtable.Get().CommonCfg.DiskWriteRateLimiterLowPriorityRatio.GetAsInt()))
 	}
 }
 
@@ -269,20 +268,19 @@ func (node *QueryNode) registerMetricsRequest() {
 			collectionID := metricsinfo.GetCollectionIDFromRequest(jsonReq)
 			return getChannelJSON(node, collectionID), nil
 		})
-	log.Ctx(node.ctx).Info("register metrics actions finished")
+	mlog.Info(node.ctx, "register metrics actions finished")
 }
 
 // Init function init historical and streaming module to manage segments
 func (node *QueryNode) Init() error {
-	log := log.Ctx(node.ctx)
 	var initError error
 	node.initOnce.Do(func() {
 		node.registerMetricsRequest()
 		// ctx := context.Background()
-		log.Info("QueryNode session info", zap.String("metaPath", paramtable.Get().EtcdCfg.MetaRootPath.GetValue()))
+		mlog.Info(context.TODO(), "QueryNode session info", mlog.String("metaPath", paramtable.Get().EtcdCfg.MetaRootPath.GetValue()))
 		err := node.initSession()
 		if err != nil {
-			log.Error("QueryNode init session failed", zap.Error(err))
+			mlog.Error(context.TODO(), "QueryNode init session failed", mlog.Err(err))
 			initError = err
 			return
 		}
@@ -291,7 +289,7 @@ func (node *QueryNode) Init() error {
 		if err != nil {
 			// auto index cannot work if hook init failed
 			if paramtable.Get().AutoIndexConfig.Enable.GetAsBool() {
-				log.Error("QueryNode init hook failed", zap.Error(err))
+				mlog.Error(context.TODO(), "QueryNode init hook failed", mlog.Err(err))
 				initError = err
 				return
 			}
@@ -304,7 +302,7 @@ func (node *QueryNode) Init() error {
 		localRootPath := paramtable.Get().LocalStorageCfg.Path.GetValue()
 		localUsedSize, err := segcore.GetLocalUsedSize(localRootPath)
 		if err != nil {
-			log.Warn("get local used size failed", zap.Error(err))
+			mlog.Warn(context.TODO(), "get local used size failed", mlog.Err(err))
 			initError = err
 			return
 		}
@@ -312,7 +310,7 @@ func (node *QueryNode) Init() error {
 
 		node.chunkManager, err = node.factory.NewPersistentStorageChunkManager(node.ctx)
 		if err != nil {
-			log.Error("QueryNode init vector storage failed", zap.Error(err))
+			mlog.Error(context.TODO(), "QueryNode init vector storage failed", mlog.Err(err))
 			initError = err
 			return
 		}
@@ -322,7 +320,7 @@ func (node *QueryNode) Init() error {
 			schedulePolicy,
 		)
 
-		log.Info("queryNode init scheduler", zap.String("policy", schedulePolicy))
+		mlog.Info(context.TODO(), "queryNode init scheduler", mlog.String("policy", schedulePolicy))
 		node.clusterManager = cluster.NewWorkerManager(func(ctx context.Context, nodeID int64) (cluster.Worker, error) {
 			if nodeID == node.GetNodeID() {
 				return NewLocalWorker(node), nil
@@ -359,15 +357,15 @@ func (node *QueryNode) Init() error {
 
 		err = initcore.InitQueryNode(node.ctx)
 		if err != nil {
-			log.Error("QueryNode init segcore failed", zap.Error(err))
+			mlog.Error(context.TODO(), "QueryNode init segcore failed", mlog.Err(err))
 			initError = err
 			return
 		}
 		node.RegisterSegcoreConfigWatcher()
 
-		log.Info("query node init successfully",
-			zap.Int64("queryNodeID", node.GetNodeID()),
-			zap.String("Address", node.address),
+		mlog.Info(context.TODO(), "query node init successfully",
+			mlog.Int64("queryNodeID", node.GetNodeID()),
+			mlog.String("Address", node.address),
 		)
 	})
 
@@ -376,7 +374,6 @@ func (node *QueryNode) Init() error {
 
 // Start mainly start QueryNode's query service.
 func (node *QueryNode) Start() error {
-	log := log.Ctx(node.ctx)
 	node.startOnce.Do(func() {
 		node.scheduler.Start()
 
@@ -392,15 +389,15 @@ func (node *QueryNode) Start() error {
 		node.UpdateStateCode(commonpb.StateCode_Healthy)
 
 		registry.GetInMemoryResolver().RegisterQueryNode(node.GetNodeID(), node)
-		log.Info("query node start successfully",
-			zap.Int64("queryNodeID", node.GetNodeID()),
-			zap.String("Address", node.address),
-			zap.Bool("mmapEnabled", mmapEnabled),
-			zap.Bool("growingmmapEnable", growingmmapEnable),
-			zap.Bool("mmapVectorIndex", mmapVectorIndex),
-			zap.Bool("mmapVectorField", mmapVectorField),
-			zap.Bool("mmapScalarIndex", mmapScalarIndex),
-			zap.Bool("mmapScalarField", mmapScalarField),
+		mlog.Info(context.TODO(), "query node start successfully",
+			mlog.Int64("queryNodeID", node.GetNodeID()),
+			mlog.String("Address", node.address),
+			mlog.Bool("mmapEnabled", mmapEnabled),
+			mlog.Bool("growingmmapEnable", growingmmapEnable),
+			mlog.Bool("mmapVectorIndex", mmapVectorIndex),
+			mlog.Bool("mmapVectorField", mmapVectorField),
+			mlog.Bool("mmapScalarIndex", mmapScalarIndex),
+			mlog.Bool("mmapScalarField", mmapScalarField),
 		)
 	})
 
@@ -409,12 +406,11 @@ func (node *QueryNode) Start() error {
 
 // Stop mainly stop QueryNode's query service, historical loop and streaming loop.
 func (node *QueryNode) Stop() error {
-	log := log.Ctx(node.ctx)
 	node.stopOnce.Do(func() {
-		log.Info("Query node stop...")
+		mlog.Info(context.TODO(), "Query node stop...")
 		err := node.session.GoingStop()
 		if err != nil {
-			log.Warn("session fail to go stopping state", zap.Error(err))
+			mlog.Warn(context.TODO(), "session fail to go stopping state", mlog.Err(err))
 		} else if util.MustSelectWALName() != message.WALNameRocksmq { // rocksmq cannot support querynode graceful stop because of using local storage.
 			metrics.StoppingBalanceNodeNum.WithLabelValues().Set(1)
 			// TODO: Redundant timeout control, graceful stop timeout is controlled by outside by `component`.
@@ -442,27 +438,27 @@ func (node *QueryNode) Stop() error {
 
 				select {
 				case <-timeoutCh:
-					log.Warn("migrate data timed out", zap.Int64("ServerID", node.GetNodeID()),
-						zap.Int64s("sealedSegments", lo.Map(sealedSegments, func(s segments.Segment, i int) int64 {
+					mlog.Warn(context.TODO(), "migrate data timed out", mlog.Int64("ServerID", node.GetNodeID()),
+						mlog.Int64s("sealedSegments", lo.Map(sealedSegments, func(s segments.Segment, i int) int64 {
 							return s.ID()
 						})),
-						zap.Int64s("growingSegments", lo.Map(growingSegments, func(t segments.Segment, i int) int64 {
+						mlog.Int64s("growingSegments", lo.Map(growingSegments, func(t segments.Segment, i int) int64 {
 							return t.ID()
 						})),
-						zap.Int("channelNum", channelNum),
+						mlog.Int("channelNum", channelNum),
 					)
 					break outer
 				case <-time.After(time.Second):
 					metrics.StoppingBalanceSegmentNum.WithLabelValues(fmt.Sprint(node.GetNodeID())).Set(float64(len(sealedSegments)))
 					metrics.StoppingBalanceChannelNum.WithLabelValues(fmt.Sprint(node.GetNodeID())).Set(float64(channelNum))
-					log.Info("migrate data...", zap.Int64("ServerID", node.GetNodeID()),
-						zap.Int64s("sealedSegments", lo.Map(sealedSegments, func(s segments.Segment, i int) int64 {
+					mlog.Info(context.TODO(), "migrate data...", mlog.Int64("ServerID", node.GetNodeID()),
+						mlog.Int64s("sealedSegments", lo.Map(sealedSegments, func(s segments.Segment, i int) int64 {
 							return s.ID()
 						})),
-						zap.Int64s("growingSegments", lo.Map(growingSegments, func(t segments.Segment, i int) int64 {
+						mlog.Int64s("growingSegments", lo.Map(growingSegments, func(t segments.Segment, i int) int64 {
 							return t.ID()
 						})),
-						zap.Int("channelNum", channelNum),
+						mlog.Int("channelNum", channelNum),
 					)
 				}
 			}
@@ -519,12 +515,11 @@ func (node *QueryNode) SetAddress(address string) {
 
 // initHook initializes parameter tuning hook.
 func (node *QueryNode) initHook() error {
-	log := log.Ctx(node.ctx)
 	path := paramtable.Get().QueryNodeCfg.SoPath.GetValue()
 	if path == "" {
 		return errors.New("fail to set the plugin path")
 	}
-	log.Info("start to load plugin", zap.String("path", path))
+	mlog.Info(context.TODO(), "start to load plugin", mlog.String("path", path))
 
 	hookutil.LockHookInit()
 	defer hookutil.UnlockHookInit()
@@ -532,7 +527,7 @@ func (node *QueryNode) initHook() error {
 	if err != nil {
 		return fmt.Errorf("fail to open the plugin, error: %s", err.Error())
 	}
-	log.Info("plugin open")
+	mlog.Info(context.TODO(), "plugin open")
 
 	h, err := p.Lookup("QueryNodePlugin")
 	if err != nil {
@@ -557,11 +552,10 @@ func (node *QueryNode) initHook() error {
 }
 
 func (node *QueryNode) handleQueryHookEvent() {
-	log := log.Ctx(node.ctx)
 	onEvent := func(event *config.Event) {
 		if node.queryHook != nil {
 			if err := node.queryHook.Init(event.Value); err != nil {
-				log.Error("failed to refresh hook config", zap.Error(err))
+				mlog.Error(context.TODO(), "failed to refresh hook config", mlog.Err(err))
 			}
 		}
 	}
@@ -570,11 +564,11 @@ func (node *QueryNode) handleQueryHookEvent() {
 			realKey := strings.TrimPrefix(event.Key, paramtable.Get().AutoIndexConfig.AutoIndexTuningConfig.KeyPrefix)
 			if event.EventType == config.CreateType || event.EventType == config.UpdateType {
 				if err := node.queryHook.InitTuningConfig(map[string]string{realKey: event.Value}); err != nil {
-					log.Warn("failed to refresh hook tuning config", zap.Error(err))
+					mlog.Warn(context.TODO(), "failed to refresh hook tuning config", mlog.Err(err))
 				}
 			} else if event.EventType == config.DeleteType {
 				if err := node.queryHook.DeleteTuningConfig(realKey); err != nil {
-					log.Warn("failed to delete hook tuning config", zap.Error(err))
+					mlog.Warn(context.TODO(), "failed to delete hook tuning config", mlog.Err(err))
 				}
 			}
 		}

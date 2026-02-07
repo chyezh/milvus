@@ -1,10 +1,10 @@
 package shards
 
 import (
-	"go.uber.org/zap"
+	"context"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/policy"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 )
 
@@ -48,13 +48,13 @@ func (m *shardManagerImpl) CreateCollection(msg message.ImmutableCreateCollectio
 	partitionIDs := msg.Header().PartitionIds
 	vchannel := msg.VChannel()
 	timetick := msg.TimeTick()
-	logger := m.Logger().With(log.FieldMessage(msg))
+	logger := m.Logger().With(mlog.FieldMessage(msg))
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if err := m.checkIfCollectionCanBeCreated(collectionID); err != nil {
-		logger.Warn("collection already exists")
+		logger.Warn(context.TODO(), "collection already exists")
 		return
 	}
 
@@ -62,7 +62,7 @@ func (m *shardManagerImpl) CreateCollection(msg message.ImmutableCreateCollectio
 	for partitionID := range m.collections[collectionID].PartitionIDs {
 		uniqueKey := PartitionUniqueKey{CollectionID: collectionID, PartitionID: partitionID}
 		if _, ok := m.partitionManagers[uniqueKey]; ok {
-			logger.Warn("partition already exists", zap.Int64("partitionID", partitionID))
+			logger.Warn(context.TODO(), "partition already exists", mlog.Int64("partitionID", partitionID))
 			continue
 		}
 		m.partitionManagers[uniqueKey] = newPartitionSegmentManager(
@@ -79,7 +79,7 @@ func (m *shardManagerImpl) CreateCollection(msg message.ImmutableCreateCollectio
 			m.metrics,
 		)
 	}
-	logger.Info("collection created in segment assignment service", zap.Int64s("partitionIDs", partitionIDs))
+	logger.Info(context.TODO(), "collection created in segment assignment service", mlog.Int64s("partitionIDs", partitionIDs))
 	m.updateMetrics()
 }
 
@@ -88,13 +88,13 @@ func (m *shardManagerImpl) CreateCollection(msg message.ImmutableCreateCollectio
 // Any dml and ddl for the collection will be rejected.
 func (m *shardManagerImpl) DropCollection(msg message.ImmutableDropCollectionMessageV1) {
 	collectionID := msg.Header().CollectionId
-	logger := m.Logger().With(log.FieldMessage(msg))
+	logger := m.Logger().With(mlog.FieldMessage(msg))
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if err := m.checkIfCollectionExists(collectionID); err != nil {
-		logger.Warn("collection not exists")
+		logger.Warn(context.TODO(), "collection not exists")
 		return
 	}
 
@@ -107,7 +107,7 @@ func (m *shardManagerImpl) DropCollection(msg message.ImmutableDropCollectionMes
 		uniqueKey := PartitionUniqueKey{CollectionID: collectionID, PartitionID: partitionID}
 		pm, ok := m.partitionManagers[uniqueKey]
 		if !ok {
-			logger.Warn("partition not exists", zap.Int64("partitionID", partitionID))
+			logger.Warn(context.TODO(), "partition not exists", mlog.Int64("partitionID", partitionID))
 			continue
 		}
 		// Flush all segments and fence assign to the partition manager.
@@ -116,6 +116,6 @@ func (m *shardManagerImpl) DropCollection(msg message.ImmutableDropCollectionMes
 		segmentIDs = append(segmentIDs, segments...)
 		delete(m.partitionManagers, uniqueKey)
 	}
-	logger.Info("collection removed", zap.Int64s("partitionIDs", partitionIDs), zap.Int64s("segmentIDs", segmentIDs))
+	logger.Info(context.TODO(), "collection removed", mlog.Int64s("partitionIDs", partitionIDs), mlog.Int64s("segmentIDs", segmentIDs))
 	m.updateMetrics()
 }

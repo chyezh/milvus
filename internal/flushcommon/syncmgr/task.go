@@ -34,8 +34,8 @@ import (
 	"github.com/milvus-io/milvus/internal/storagecommon"
 	"github.com/milvus-io/milvus/internal/storagev2"
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
@@ -92,13 +92,13 @@ type SyncTask struct {
 	storageConfig *indexpb.StorageConfig
 }
 
-func (t *SyncTask) getLogger() *log.MLogger {
-	return log.Ctx(context.Background()).With(
-		zap.Int64("collectionID", t.collectionID),
-		zap.Int64("partitionID", t.partitionID),
-		zap.Int64("segmentID", t.segmentID),
-		zap.String("channel", t.channelName),
-		zap.String("level", t.level.String()),
+func (t *SyncTask) getLogger() *mlog.Logger {
+	return mlog.With(
+		mlog.Int64("collectionID", t.collectionID),
+		mlog.Int64("partitionID", t.partitionID),
+		mlog.Int64("segmentID", t.segmentID),
+		mlog.String("channel", t.channelName),
+		mlog.String("level", t.level.String()),
 	)
 }
 
@@ -116,7 +116,6 @@ func (t *SyncTask) HandleError(err error) {
 func (t *SyncTask) Run(ctx context.Context) (err error) {
 	t.tr = timerecord.NewTimeRecorder("syncTask")
 
-	log := t.getLogger()
 	defer func() {
 		if err != nil {
 			t.HandleError(err)
@@ -126,10 +125,10 @@ func (t *SyncTask) Run(ctx context.Context) (err error) {
 	segmentInfo, has := t.metacache.GetSegmentByID(t.segmentID)
 	if !has {
 		if t.pack.isDrop {
-			log.Info("segment dropped, discard sync task")
+			mlog.Info(ctx, "segment dropped, discard sync task")
 			return nil
 		}
-		log.Warn("segment not found in metacache, may be already synced")
+		mlog.Warn(ctx, "segment not found in metacache, may be already synced")
 		return nil
 	}
 
@@ -151,7 +150,7 @@ func (t *SyncTask) Run(ctx context.Context) (err error) {
 	}
 
 	if err != nil {
-		log.Warn("failed to write sync data with storage v2 format", zap.Error(err))
+		mlog.Warn(ctx, "failed to write sync data with storage v2 format", mlog.Err(err))
 		return err
 	}
 
@@ -175,7 +174,7 @@ func (t *SyncTask) Run(ctx context.Context) (err error) {
 	if t.metaWriter != nil {
 		err = t.writeMeta(ctx)
 		if err != nil {
-			log.Warn("failed to save serialized data into storage", zap.Error(err))
+			mlog.Warn(context.TODO(), "failed to save serialized data into storage", mlog.Err(err))
 			return err
 		}
 	}
@@ -193,11 +192,11 @@ func (t *SyncTask) Run(ctx context.Context) (err error) {
 
 	if t.pack.isDrop {
 		t.metacache.RemoveSegments(metacache.WithSegmentIDs(t.segmentID))
-		log.Info("segment removed", zap.Int64("segmentID", t.segmentID), zap.String("channel", t.channelName))
+		mlog.Info(context.TODO(), "segment removed", mlog.Int64("segmentID", t.segmentID), mlog.String("channel", t.channelName))
 	}
 
 	t.execTime = t.tr.ElapseSpan()
-	log.Info("task done", zap.Int64("flushedSize", t.flushedSize), zap.Duration("timeTaken", t.execTime))
+	mlog.Info(context.TODO(), "task done", mlog.Int64("flushedSize", t.flushedSize), mlog.Duration("timeTaken", t.execTime))
 
 	if !t.pack.isFlush {
 		metrics.DataNodeAutoFlushBufferCount.WithLabelValues(fmt.Sprint(paramtable.GetNodeID()), metrics.SuccessLabel, t.level.String()).Inc()
@@ -229,7 +228,7 @@ func (t *SyncTask) getColumnGroups(segmentInfo *metacache.SegmentInfo) []storage
 			// legacy split found, use legacy policy
 			if len(cg.Fields) == 0 {
 				result := storagecommon.SplitColumns(allFields, map[int64]storagecommon.ColumnStats{}, storagecommon.NewSelectedDataTypePolicy(), storagecommon.NewRemanentShortPolicy(-1))
-				log.Info("use legacy split policy", zap.Int64("segmentID", t.segmentID), zap.Stringers("columnGroups", result))
+				mlog.Info(context.TODO(), "use legacy split policy", mlog.Int64("segmentID", t.segmentID), zap.Stringers("columnGroups", result))
 				return result
 			}
 		}
@@ -248,7 +247,7 @@ func (t *SyncTask) getColumnGroups(segmentInfo *metacache.SegmentInfo) []storage
 
 	policies := storagecommon.DefaultPolicies()
 	result := storagecommon.SplitColumns(allFields, t.calcColumnStats(), policies...)
-	log.Info("sync new split columns", zap.Int64("segmentID", t.segmentID), zap.Stringers("columnGroups", result))
+	mlog.Info(context.TODO(), "sync new split columns", mlog.Int64("segmentID", t.segmentID), zap.Stringers("columnGroups", result))
 	return result
 }
 

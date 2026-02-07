@@ -22,13 +22,12 @@ import (
 	"sync"
 
 	"go.uber.org/atomic"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/querynodev2/segments/metricsutil"
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
@@ -89,7 +88,7 @@ func searchSegments(ctx context.Context, mgr *Manager, segments []Segment, segTy
 					accessRecord.CacheMissing()
 				}
 				if err != nil {
-					log.Warn("failed to do search for disk cache", zap.Int64("segID", seg.ID()), zap.Error(err))
+					mlog.Warn(context.TODO(), "failed to do search for disk cache", mlog.Int64("segID", seg.ID()), mlog.Err(err))
 				}
 				return err
 			}
@@ -110,7 +109,7 @@ func searchSegments(ctx context.Context, mgr *Manager, segments []Segment, segTy
 	}
 
 	if len(segmentsWithoutIndex) > 0 {
-		log.Ctx(ctx).Debug("search growing/sealed segments without indexes", zap.Int64s("segmentIDs", segmentsWithoutIndex))
+		mlog.Debug(ctx, "search growing/sealed segments without indexes", mlog.Int64s("segmentIDs", segmentsWithoutIndex))
 	}
 
 	return searchResults, nil
@@ -155,7 +154,6 @@ func searchSegmentsStreamly(ctx context.Context,
 
 	// calling segment search in goroutines
 	errGroup, ctx := errgroup.WithContext(ctx)
-	log := log.Ctx(ctx)
 	for _, segment := range segments {
 		seg := segment
 		errGroup.Go(func() error {
@@ -169,7 +167,7 @@ func searchSegmentsStreamly(ctx context.Context,
 				accessRecord.Finish(err)
 			}()
 			if seg.IsLazyLoad() {
-				log.Debug("before doing stream search in DiskCache", zap.Int64("segID", seg.ID()))
+				mlog.Debug(context.TODO(), "before doing stream search in DiskCache", mlog.Int64("segID", seg.ID()))
 				ctx, cancel := withLazyLoadTimeoutContext(ctx)
 				defer cancel()
 
@@ -179,9 +177,9 @@ func searchSegmentsStreamly(ctx context.Context,
 					accessRecord.CacheMissing()
 				}
 				if err != nil {
-					log.Warn("failed to do search for disk cache", zap.Int64("segID", seg.ID()), zap.Error(err))
+					mlog.Warn(context.TODO(), "failed to do search for disk cache", mlog.Int64("segID", seg.ID()), mlog.Err(err))
 				}
-				log.Debug("after doing stream search in DiskCache", zap.Int64("segID", seg.ID()), zap.Error(err))
+				mlog.Debug(context.TODO(), "after doing stream search in DiskCache", mlog.Int64("segID", seg.ID()), mlog.Err(err))
 				return err
 			}
 			return searcher(ctx, seg)
@@ -196,7 +194,7 @@ func searchSegmentsStreamly(ctx context.Context,
 		metrics.SearchLabel,
 		metrics.ReduceSegments,
 		metrics.StreamReduce).Observe(float64(sumReduceDuration.Load().Milliseconds()))
-	log.Debug("stream reduce sum duration:", zap.Duration("duration", sumReduceDuration.Load()))
+	mlog.Debug(context.TODO(), "stream reduce sum duration:", mlog.Duration("duration", sumReduceDuration.Load()))
 	return nil
 }
 

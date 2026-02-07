@@ -21,14 +21,12 @@ import (
 	"fmt"
 	"time"
 
-	"go.uber.org/zap"
-
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/datacoord/session"
 	globalTask "github.com/milvus-io/milvus/internal/datacoord/task"
 	"github.com/milvus-io/milvus/internal/metastore"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/taskcommon"
@@ -110,10 +108,10 @@ func (t *updateExternalCollectionTask) SetState(state indexpb.JobState, failReas
 	// If transitioning to finished state, validate source first
 	if state == indexpb.JobState_JobStateFinished {
 		if err := t.validateSource(); err != nil {
-			log.Warn("Task source validation failed, marking as failed instead",
-				zap.Int64("taskID", t.GetTaskID()),
-				zap.Int64("collectionID", t.GetCollectionID()),
-				zap.Error(err))
+			mlog.Warn(context.TODO(), "Task source validation failed, marking as failed instead",
+				mlog.Int64("taskID", t.GetTaskID()),
+				mlog.Int64("collectionID", t.GetCollectionID()),
+				mlog.Err(err))
 			t.State = indexpb.JobState_JobStateFailed
 			t.FailReason = fmt.Sprintf("source mismatch: %s", err.Error())
 			return
@@ -126,11 +124,11 @@ func (t *updateExternalCollectionTask) SetState(state indexpb.JobState, failReas
 
 func (t *updateExternalCollectionTask) UpdateStateWithMeta(state indexpb.JobState, failReason string) error {
 	if err := t.meta.externalCollectionTaskMeta.UpdateTaskState(t.GetTaskID(), state, failReason); err != nil {
-		log.Warn("update external collection task state failed",
-			zap.Int64("taskID", t.GetTaskID()),
-			zap.String("state", state.String()),
-			zap.String("failReason", failReason),
-			zap.Error(err))
+		mlog.Warn(context.TODO(), "update external collection task state failed",
+			mlog.Int64("taskID", t.GetTaskID()),
+			mlog.String("state", state.String()),
+			mlog.String("failReason", failReason),
+			mlog.Err(err))
 		return err
 	}
 	t.SetState(state, failReason)
@@ -139,17 +137,15 @@ func (t *updateExternalCollectionTask) UpdateStateWithMeta(state indexpb.JobStat
 
 // SetJobInfo processes the task response and updates segment information atomically
 func (t *updateExternalCollectionTask) SetJobInfo(ctx context.Context, resp *datapb.UpdateExternalCollectionResponse) error {
-	log := log.Ctx(ctx).With(
-		zap.Int64("taskID", t.GetTaskID()),
-		zap.Int64("collectionID", t.GetCollectionID()),
-	)
+	ctx = mlog.WithFields(ctx, mlog.Int64("taskID", t.GetTaskID()),
+		mlog.Int64("collectionID", t.GetCollectionID()))
 
 	keptSegmentIDs := resp.GetKeptSegments()
 	updatedSegments := resp.GetUpdatedSegments()
 
-	log.Info("processing external collection update response",
-		zap.Int("keptSegments", len(keptSegmentIDs)),
-		zap.Int("updatedSegments", len(updatedSegments)))
+	mlog.Info(ctx, "processing external collection update response",
+		mlog.Int("keptSegments", len(keptSegmentIDs)),
+		mlog.Int("updatedSegments", len(updatedSegments)))
 
 	// Build kept segments map for fast lookup
 	keptSegmentMap := make(map[int64]bool)
@@ -161,12 +157,12 @@ func (t *updateExternalCollectionTask) SetJobInfo(ctx context.Context, resp *dat
 	for _, seg := range updatedSegments {
 		newSegmentID, err := t.allocator.AllocID(ctx)
 		if err != nil {
-			log.Warn("failed to allocate segment ID", zap.Error(err))
+			mlog.Warn(ctx, "failed to allocate segment ID", mlog.Err(err))
 			return err
 		}
-		log.Info("allocated new segment ID",
-			zap.Int64("oldID", seg.GetID()),
-			zap.Int64("newID", newSegmentID))
+		mlog.Info(ctx, "allocated new segment ID",
+			mlog.Int64("oldID", seg.GetID()),
+			mlog.Int64("newID", newSegmentID))
 		seg.ID = newSegmentID
 		seg.State = commonpb.SegmentState_Flushed
 	}
@@ -195,9 +191,9 @@ func (t *updateExternalCollectionTask) SetJobInfo(ctx context.Context, resp *dat
 					updateSegStateAndPrepareMetrics(segment, commonpb.SegmentState_Dropped, modPack.metricMutation)
 					segment.DroppedAt = uint64(time.Now().UnixNano())
 					modPack.segments[seg.GetID()] = segment
-					log.Info("marking segment as dropped",
-						zap.Int64("segmentID", seg.GetID()),
-						zap.Int64("numRows", seg.GetNumOfRows()))
+					mlog.Info(context.TODO(), "marking segment as dropped",
+						mlog.Int64("segmentID", seg.GetID()),
+						mlog.Int64("numRows", seg.GetNumOfRows()))
 				}
 			}
 		}
@@ -226,9 +222,9 @@ func (t *updateExternalCollectionTask) SetJobInfo(ctx context.Context, resp *dat
 				newSeg.GetNumOfRows(),
 			)
 
-			log.Info("adding new segment",
-				zap.Int64("segmentID", newSeg.GetID()),
-				zap.Int64("numRows", newSeg.GetNumOfRows()))
+			mlog.Info(context.TODO(), "adding new segment",
+				mlog.Int64("segmentID", newSeg.GetID()),
+				mlog.Int64("numRows", newSeg.GetNumOfRows()))
 			return true
 		}
 		operators = append(operators, addOperator)
@@ -236,34 +232,32 @@ func (t *updateExternalCollectionTask) SetJobInfo(ctx context.Context, resp *dat
 
 	// Execute all operators atomically
 	if err := t.meta.UpdateSegmentsInfo(ctx, operators...); err != nil {
-		log.Warn("failed to update segments atomically", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to update segments atomically", mlog.Err(err))
 		return err
 	}
 
-	log.Info("external collection segments updated successfully",
-		zap.Int("updatedSegments", len(updatedSegments)),
-		zap.Int("keptSegments", len(keptSegmentIDs)))
+	mlog.Info(context.TODO(), "external collection segments updated successfully",
+		mlog.Int("updatedSegments", len(updatedSegments)),
+		mlog.Int("keptSegments", len(keptSegmentIDs)))
 
 	return nil
 }
 
 func (t *updateExternalCollectionTask) CreateTaskOnWorker(nodeID int64, cluster session.Cluster) {
 	ctx := context.Background()
-	log := log.Ctx(ctx).With(
-		zap.Int64("taskID", t.GetTaskID()),
-		zap.Int64("collectionID", t.GetCollectionID()),
-		zap.Int64("nodeID", nodeID),
-	)
+	ctx = mlog.WithFields(ctx, mlog.Int64("taskID", t.GetTaskID()),
+		mlog.Int64("collectionID", t.GetCollectionID()),
+		mlog.Int64("nodeID", nodeID))
 
 	var err error
 	defer func() {
 		if err != nil {
-			log.Warn("failed to create external collection update task on worker", zap.Error(err))
+			mlog.Warn(context.TODO(), "failed to create external collection update task on worker", mlog.Err(err))
 			t.UpdateStateWithMeta(indexpb.JobState_JobStateFailed, err.Error())
 		}
 	}()
 
-	log.Info("creating external collection update task on worker")
+	mlog.Info(context.TODO(), "creating external collection update task on worker")
 
 	// Set node ID for this task
 	t.NodeID = nodeID
@@ -276,7 +270,7 @@ func (t *updateExternalCollectionTask) CreateTaskOnWorker(nodeID int64, cluster 
 		currentSegments = append(currentSegments, seg.SegmentInfo)
 	}
 
-	log.Info("collected current segments", zap.Int("segmentCount", len(currentSegments)))
+	mlog.Info(context.TODO(), "collected current segments", mlog.Int("segmentCount", len(currentSegments)))
 
 	// Build request
 	req := &datapb.UpdateExternalCollectionRequest{
@@ -291,31 +285,29 @@ func (t *updateExternalCollectionTask) CreateTaskOnWorker(nodeID int64, cluster 
 	// Task will execute asynchronously in worker's goroutine pool
 	err = cluster.CreateExternalCollectionTask(nodeID, req)
 	if err != nil {
-		log.Warn("failed to create external collection task on worker", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to create external collection task on worker", mlog.Err(err))
 		return
 	}
 
 	// Mark task as in progress - QueryTaskOnWorker will check completion
 	if err = t.UpdateStateWithMeta(indexpb.JobState_JobStateInProgress, ""); err != nil {
-		log.Warn("failed to update task state to InProgress", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to update task state to InProgress", mlog.Err(err))
 		return
 	}
 
-	log.Info("external collection update task submitted successfully")
+	mlog.Info(context.TODO(), "external collection update task submitted successfully")
 }
 
 func (t *updateExternalCollectionTask) QueryTaskOnWorker(cluster session.Cluster) {
 	ctx := context.Background()
-	log := log.Ctx(ctx).With(
-		zap.Int64("taskID", t.GetTaskID()),
-		zap.Int64("collectionID", t.GetCollectionID()),
-		zap.Int64("nodeID", t.GetNodeID()),
-	)
+	ctx = mlog.WithFields(ctx, mlog.Int64("taskID", t.GetTaskID()),
+		mlog.Int64("collectionID", t.GetCollectionID()),
+		mlog.Int64("nodeID", t.GetNodeID()))
 
 	// Query task status from worker
 	resp, err := cluster.QueryExternalCollectionTask(t.GetNodeID(), t.GetTaskID())
 	if err != nil {
-		log.Warn("query external collection task result failed", zap.Error(err))
+		mlog.Warn(context.TODO(), "query external collection task result failed", mlog.Err(err))
 		// If query fails, mark task as failed
 		t.UpdateStateWithMeta(indexpb.JobState_JobStateFailed, fmt.Sprintf("query task failed: %v", err))
 		return
@@ -324,65 +316,63 @@ func (t *updateExternalCollectionTask) QueryTaskOnWorker(cluster session.Cluster
 	state := resp.GetState()
 	failReason := resp.GetFailReason()
 
-	log.Info("queried external collection task status",
-		zap.String("state", state.String()),
-		zap.String("failReason", failReason))
+	mlog.Info(context.TODO(), "queried external collection task status",
+		mlog.String("state", state.String()),
+		mlog.String("failReason", failReason))
 
 	// Handle different task states
 	switch state {
 	case indexpb.JobState_JobStateFinished:
 		// Process the response and update segment info
 		if err := t.SetJobInfo(ctx, resp); err != nil {
-			log.Warn("failed to process job info", zap.Error(err))
+			mlog.Warn(context.TODO(), "failed to process job info", mlog.Err(err))
 			t.UpdateStateWithMeta(indexpb.JobState_JobStateFailed, fmt.Sprintf("failed to process job info: %v", err))
 			return
 		}
 
 		// Task completed successfully
 		if err := t.UpdateStateWithMeta(state, ""); err != nil {
-			log.Warn("failed to update task state to Finished", zap.Error(err))
+			mlog.Warn(context.TODO(), "failed to update task state to Finished", mlog.Err(err))
 			return
 		}
-		log.Info("external collection task completed successfully")
+		mlog.Info(context.TODO(), "external collection task completed successfully")
 
 	case indexpb.JobState_JobStateFailed:
 		// Task failed
 		if err := t.UpdateStateWithMeta(state, failReason); err != nil {
-			log.Warn("failed to update task state to Failed", zap.Error(err))
+			mlog.Warn(context.TODO(), "failed to update task state to Failed", mlog.Err(err))
 			return
 		}
-		log.Warn("external collection task failed", zap.String("reason", failReason))
+		mlog.Warn(context.TODO(), "external collection task failed", mlog.String("reason", failReason))
 
 	case indexpb.JobState_JobStateInProgress:
 		// Task still in progress, no action needed
-		log.Info("external collection task still in progress")
+		mlog.Info(context.TODO(), "external collection task still in progress")
 
 	case indexpb.JobState_JobStateNone, indexpb.JobState_JobStateRetry:
 		// Task not found or needs retry - mark as failed
-		log.Warn("external collection task in unexpected state, marking as failed",
-			zap.String("state", state.String()))
+		mlog.Warn(context.TODO(), "external collection task in unexpected state, marking as failed",
+			mlog.String("state", state.String()))
 		t.UpdateStateWithMeta(indexpb.JobState_JobStateFailed, fmt.Sprintf("task in unexpected state: %s", state.String()))
 
 	default:
-		log.Warn("external collection task in unknown state",
-			zap.String("state", state.String()))
+		mlog.Warn(context.TODO(), "external collection task in unknown state",
+			mlog.String("state", state.String()))
 	}
 }
 
 func (t *updateExternalCollectionTask) DropTaskOnWorker(cluster session.Cluster) {
 	ctx := context.Background()
-	log := log.Ctx(ctx).With(
-		zap.Int64("taskID", t.GetTaskID()),
-		zap.Int64("collectionID", t.GetCollectionID()),
-		zap.Int64("nodeID", t.GetNodeID()),
-	)
+	ctx = mlog.WithFields(ctx, mlog.Int64("taskID", t.GetTaskID()),
+		mlog.Int64("collectionID", t.GetCollectionID()),
+		mlog.Int64("nodeID", t.GetNodeID()))
 
 	// Drop task on worker to cancel execution and clean up resources
 	err := cluster.DropExternalCollectionTask(t.GetNodeID(), t.GetTaskID())
 	if err != nil {
-		log.Warn("failed to drop external collection task on worker", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to drop external collection task on worker", mlog.Err(err))
 		return
 	}
 
-	log.Info("external collection task dropped successfully")
+	mlog.Info(context.TODO(), "external collection task dropped successfully")
 }

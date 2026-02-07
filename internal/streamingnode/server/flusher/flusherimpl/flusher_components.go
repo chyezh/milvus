@@ -3,8 +3,6 @@ package flusherimpl
 import (
 	"context"
 
-	"go.uber.org/zap"
-
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/internal/flushcommon/broker"
@@ -18,7 +16,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/recovery"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/util/idalloc"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
@@ -35,7 +33,7 @@ type flusherComponents struct {
 	cpUpdater                  *util.ChannelCheckpointUpdater
 	chunkManager               storage.ChunkManager
 	dataServices               map[string]*dataSyncServiceWrapper
-	logger                     *log.MLogger
+	logger                     *mlog.Logger
 	recoveryCheckPointTimeTick uint64 // The time tick of the recovery storage.
 	rs                         recovery.RecoveryStorage
 }
@@ -45,7 +43,7 @@ func (impl *flusherComponents) WhenCreateCollection(createCollectionMsg message.
 	// because we need to get the schema from the recovery storage, we need to observe the message at recovery storage first.
 	impl.rs.ObserveMessage(context.Background(), createCollectionMsg)
 	if _, ok := impl.dataServices[createCollectionMsg.VChannel()]; ok {
-		impl.logger.Info("the data sync service of current vchannel is built, skip it", zap.String("vchannel", createCollectionMsg.VChannel()))
+		impl.logger.Info(context.TODO(), "the data sync service of current vchannel is built, skip it", mlog.String("vchannel", createCollectionMsg.VChannel()))
 		// May repeated consumed, so we ignore the message.
 		return
 	}
@@ -53,10 +51,10 @@ func (impl *flusherComponents) WhenCreateCollection(createCollectionMsg message.
 		// It should already be recovered from the recovery storage.
 		// if it's not in recovery storage, it means the createCollection is already dropped.
 		// so we can skip it.
-		impl.logger.Info("the create collection message is older than the recovery checkpoint, skip it",
-			zap.String("vchannel", createCollectionMsg.VChannel()),
-			zap.Uint64("timeTick", createCollectionMsg.TimeTick()),
-			zap.Uint64("recoveryCheckPointTimeTick", impl.recoveryCheckPointTimeTick))
+		impl.logger.Info(context.TODO(), "the create collection message is older than the recovery checkpoint, skip it",
+			mlog.String("vchannel", createCollectionMsg.VChannel()),
+			mlog.Uint64("timeTick", createCollectionMsg.TimeTick()),
+			mlog.Uint64("recoveryCheckPointTimeTick", impl.recoveryCheckPointTimeTick))
 		return
 	}
 
@@ -110,7 +108,7 @@ func (impl *flusherComponents) WhenDropCollection(vchannel string) {
 	if ds, ok := impl.dataServices[vchannel]; ok {
 		ds.Close()
 		delete(impl.dataServices, vchannel)
-		impl.logger.Info("drop data sync service", zap.String("vchannel", vchannel))
+		impl.logger.Info(context.TODO(), "drop data sync service", mlog.String("vchannel", vchannel))
 	}
 }
 
@@ -145,14 +143,14 @@ func (impl *flusherComponents) addNewDataSyncService(
 	newDS := newDataSyncServiceWrapper(createCollectionMsg.VChannel(), input, ds, createCollectionMsg.TimeTick())
 	newDS.Start()
 	impl.dataServices[createCollectionMsg.VChannel()] = newDS
-	impl.logger.Info("create data sync service done", zap.String("vchannel", createCollectionMsg.VChannel()))
+	impl.logger.Info(context.TODO(), "create data sync service done", mlog.String("vchannel", createCollectionMsg.VChannel()))
 }
 
 // Close release all the resources of components.
 func (impl *flusherComponents) Close() {
 	for vchannel, ds := range impl.dataServices {
 		ds.Close()
-		impl.logger.Info("data sync service closed for flusher closing", zap.String("vchannel", vchannel))
+		impl.logger.Info(context.TODO(), "data sync service closed for flusher closing", mlog.String("vchannel", vchannel))
 	}
 	impl.cpUpdater.Close()
 }
@@ -183,13 +181,13 @@ func (impl *flusherComponents) recover(ctx context.Context, recoverInfos map[str
 		for _, ds := range dataServices {
 			ds.Close()
 		}
-		impl.logger.Warn("failed to build data sync service, may be canceled when recovering", zap.Error(lastErr))
+		impl.logger.Warn(context.TODO(), "failed to build data sync service, may be canceled when recovering", mlog.Err(lastErr))
 		return lastErr
 	}
 	impl.dataServices = dataServices
 	for vchannel, ds := range dataServices {
 		ds.Start()
-		impl.logger.Info("start data sync service when recovering", zap.String("vchannel", vchannel))
+		impl.logger.Info(context.TODO(), "start data sync service when recovering", mlog.String("vchannel", vchannel))
 	}
 	return nil
 }
@@ -199,10 +197,10 @@ func (impl *flusherComponents) buildDataSyncServiceWithRetry(ctx context.Context
 	// Flush all the growing segment that is not created by streaming.
 	for _, segment := range recoverInfo.SegmentsNotCreatedByStreaming {
 		logger := impl.logger.With(
-			zap.Int64("collectionID", segment.CollectionId),
-			zap.String("vchannel", recoverInfo.GetInfo().GetChannelName()),
-			zap.Int64("partitionID", segment.PartitionId),
-			zap.Int64("segmentID", segment.SegmentId),
+			mlog.Int64("collectionID", segment.CollectionId),
+			mlog.String("vchannel", recoverInfo.GetInfo().GetChannelName()),
+			mlog.Int64("partitionID", segment.PartitionId),
+			mlog.Int64("segmentID", segment.SegmentId),
 		)
 		if err := retry.Do(ctx, func() error {
 			msg := message.NewFlushMessageBuilderV2().
@@ -215,10 +213,10 @@ func (impl *flusherComponents) buildDataSyncServiceWithRetry(ctx context.Context
 				WithBody(&message.FlushMessageBody{}).MustBuildMutable()
 			appendResult, err := impl.wal.Append(utility.WithFlushFromOldArch(ctx), msg)
 			if err != nil {
-				logger.Warn("fail to append flush message for segments that not created by streaming service into wal", zap.Error(err))
+				logger.Warn(context.TODO(), "fail to append flush message for segments that not created by streaming service into wal", mlog.Err(err))
 				return err
 			}
-			logger.Info("append flush message for segments that not created by streaming service into wal", zap.Stringer("msgID", appendResult.MessageID), zap.Uint64("timeTick", appendResult.TimeTick))
+			logger.Info(context.TODO(), "append flush message for segments that not created by streaming service into wal", mlog.Stringer("msgID", appendResult.MessageID), mlog.Uint64("timeTick", appendResult.TimeTick))
 			return nil
 		}, retry.AttemptAlways()); err != nil {
 			return nil, err

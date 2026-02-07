@@ -23,11 +23,10 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/datacoord/task"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 )
@@ -94,7 +93,7 @@ func (i *externalCollectionInspector) reloadFromMeta() {
 }
 
 func (i *externalCollectionInspector) triggerUpdateTaskLoop() {
-	log.Info("start external collection inspector loop...")
+	mlog.Info(context.TODO(), "start external collection inspector loop...")
 	defer i.loopWg.Done()
 
 	ticker := time.NewTicker(Params.DataCoordCfg.TaskCheckInterval.GetAsDuration(time.Second))
@@ -103,7 +102,7 @@ func (i *externalCollectionInspector) triggerUpdateTaskLoop() {
 	for {
 		select {
 		case <-i.ctx.Done():
-			log.Warn("DataCoord context done, exit external collection inspector loop...")
+			mlog.Warn(context.TODO(), "DataCoord context done, exit external collection inspector loop...")
 			return
 		case <-ticker.C:
 			i.triggerUpdateTasks()
@@ -122,9 +121,9 @@ func (i *externalCollectionInspector) triggerUpdateTasks() {
 		// Check if we should trigger a task based on source changes
 		if shouldTrigger := i.shouldTriggerTask(collection); shouldTrigger {
 			if err := i.SubmitUpdateTask(collection.ID); err != nil {
-				log.Warn("failed to submit update task for external collection",
-					zap.Int64("collectionID", collection.ID),
-					zap.Error(err))
+				mlog.Warn(context.TODO(), "failed to submit update task for external collection",
+					mlog.Int64("collectionID", collection.ID),
+					mlog.Err(err))
 			}
 		}
 	}
@@ -161,11 +160,11 @@ func (i *externalCollectionInspector) shouldTriggerTask(collection *collectionIn
 		// Task is running
 		if sourceChanged {
 			// Source changed while task running - abort and replace
-			log.Info("External source changed, replacing running task",
-				zap.Int64("collectionID", collection.ID),
-				zap.Int64("taskID", existingTask.GetTaskID()),
-				zap.String("oldSource", taskSource),
-				zap.String("newSource", externalSource))
+			mlog.Info(context.TODO(), "External source changed, replacing running task",
+				mlog.Int64("collectionID", collection.ID),
+				mlog.Int64("taskID", existingTask.GetTaskID()),
+				mlog.String("oldSource", taskSource),
+				mlog.String("newSource", externalSource))
 
 			// Abort old task from scheduler
 			i.scheduler.AbortAndRemoveTask(existingTask.GetTaskID())
@@ -181,10 +180,10 @@ func (i *externalCollectionInspector) shouldTriggerTask(collection *collectionIn
 		// Task completed
 		if sourceChanged {
 			// Source changed after completion, create new task
-			log.Info("External source changed after completion, creating new task",
-				zap.Int64("collectionID", collection.ID),
-				zap.String("oldSource", taskSource),
-				zap.String("newSource", externalSource))
+			mlog.Info(context.TODO(), "External source changed after completion, creating new task",
+				mlog.Int64("collectionID", collection.ID),
+				mlog.String("oldSource", taskSource),
+				mlog.String("newSource", externalSource))
 
 			// Drop old completed task, create new one
 			i.mt.externalCollectionTaskMeta.DropTask(context.Background(), existingTask.GetTaskID())
@@ -196,10 +195,10 @@ func (i *externalCollectionInspector) shouldTriggerTask(collection *collectionIn
 	case indexpb.JobState_JobStateFailed:
 		if sourceChanged {
 			// Source changed after failure - worth retrying with new source
-			log.Info("External source changed after failure, creating new task",
-				zap.Int64("collectionID", collection.ID),
-				zap.String("oldSource", taskSource),
-				zap.String("newSource", externalSource))
+			mlog.Info(context.TODO(), "External source changed after failure, creating new task",
+				mlog.Int64("collectionID", collection.ID),
+				mlog.String("oldSource", taskSource),
+				mlog.String("newSource", externalSource))
 
 			i.mt.externalCollectionTaskMeta.DropTask(context.Background(), existingTask.GetTaskID())
 			return true
@@ -213,19 +212,19 @@ func (i *externalCollectionInspector) shouldTriggerTask(collection *collectionIn
 }
 
 func (i *externalCollectionInspector) SubmitUpdateTask(collectionID int64) error {
-	log := log.Ctx(i.ctx).With(zap.Int64("collectionID", collectionID))
+	i.ctx = mlog.WithFields(i.ctx, mlog.Int64("collectionID", collectionID))
 
 	// Get collection info to retrieve external source and spec
 	collection := i.mt.GetCollection(collectionID)
 	if collection == nil {
-		log.Warn("collection not found")
+		mlog.Warn(context.TODO(), "collection not found")
 		return fmt.Errorf("collection %d not found", collectionID)
 	}
 
 	// Allocate task ID
 	taskID, err := i.allocator.AllocID(context.Background())
 	if err != nil {
-		log.Warn("failed to allocate task ID", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to allocate task ID", mlog.Err(err))
 		return err
 	}
 
@@ -244,11 +243,11 @@ func (i *externalCollectionInspector) SubmitUpdateTask(collectionID int64) error
 	// Add task to meta
 	if err = i.mt.externalCollectionTaskMeta.AddTask(t); err != nil {
 		if errors.Is(err, merr.ErrTaskDuplicate) {
-			log.Info("external collection update task already exists",
-				zap.Int64("collectionID", collectionID))
+			mlog.Info(context.TODO(), "external collection update task already exists",
+				mlog.Int64("collectionID", collectionID))
 			return nil
 		}
-		log.Warn("failed to add task to meta", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to add task to meta", mlog.Err(err))
 		return err
 	}
 
@@ -256,10 +255,10 @@ func (i *externalCollectionInspector) SubmitUpdateTask(collectionID int64) error
 	updateTask := newUpdateExternalCollectionTask(t, i.mt, i.allocator)
 	i.scheduler.Enqueue(updateTask)
 
-	log.Info("external collection update task submitted",
-		zap.Int64("taskID", taskID),
-		zap.Int64("collectionID", collectionID),
-		zap.String("externalSource", collection.Schema.GetExternalSource()))
+	mlog.Info(context.TODO(), "external collection update task submitted",
+		mlog.Int64("taskID", taskID),
+		mlog.Int64("collectionID", collectionID),
+		mlog.String("externalSource", collection.Schema.GetExternalSource()))
 
 	return nil
 }

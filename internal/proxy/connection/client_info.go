@@ -6,6 +6,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 )
 
 type clientInfo struct {
@@ -17,7 +18,7 @@ type clientInfo struct {
 func (c *clientInfo) GetLogger() []zap.Field {
 	fields := ZapClientInfo(c.ClientInfo)
 	fields = append(fields,
-		zap.Int64("identifier", c.identifier),
+		mlog.Int64("identifier", c.identifier),
 		zap.Time("last_active_time", c.lastActiveTime),
 	)
 	return fields
