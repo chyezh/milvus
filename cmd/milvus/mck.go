@@ -19,7 +19,6 @@ import (
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/kv"
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	pb "github.com/milvus-io/milvus/pkg/v2/proto/etcdpb"
@@ -76,9 +75,9 @@ func (c *mck) execute(args []string, flags *flag.FlagSet) {
 		fmt.Fprintln(os.Stderr, mckLine)
 	}
 
-	logutil.SetupLogger(&log.Config{
+	logutil.SetupLogger(&mlog.Config{
 		Level: "info",
-		File: log.FileLogConfig{
+		File: mlog.FileLogConfig{
 			Filename: fmt.Sprintf("mck-%s.log", time.Now().Format("20060102150405.99")),
 		},
 	})

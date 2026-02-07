@@ -17,6 +17,7 @@
 package compactor
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"strconv"
@@ -24,21 +25,20 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
 func testSegmentWriterBatchSize(b *testing.B, batchSize int) {
-	orgLevel := log.GetLevel()
-	log.SetLevel(zapcore.InfoLevel)
-	defer log.SetLevel(orgLevel)
+	orgLevel := mlog.GetLevel()
+	mlog.SetLevel(zapcore.InfoLevel)
+	defer mlog.SetLevel(orgLevel)
 	paramtable.Init()
 
 	const (
@@ -88,7 +88,7 @@ func testSegmentWriterBatchSize(b *testing.B, batchSize int) {
 		value.Value = m
 		values[i] = value
 	}
-	log.Info("prepare data done", zap.Int("len", len(values)), zap.Duration("dur", time.Since(start)))
+	mlog.Info(context.TODO(), "prepare data done", mlog.Int("len", len(values)), mlog.Duration("dur", time.Since(start)))
 
 	writer, err := NewSegmentWriter(schema, numRows, batchSize, 1, 2, 3, nil)
 	assert.NoError(b, err)
@@ -101,7 +101,7 @@ func testSegmentWriterBatchSize(b *testing.B, batchSize int) {
 			err = writer.Write(v)
 			assert.NoError(b, err)
 		}
-		log.Info("write done", zap.Int("len", len(values)), zap.Duration("dur", time.Since(start)))
+		mlog.Info(context.TODO(), "write done", mlog.Int("len", len(values)), mlog.Duration("dur", time.Since(start)))
 	}
 	b.StopTimer()
 }

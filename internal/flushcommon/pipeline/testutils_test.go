@@ -23,7 +23,6 @@ import (
 	"math"
 
 	"github.com/cockroachdb/errors"
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
@@ -35,7 +34,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/dependency"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/etcdpb"
@@ -466,7 +465,7 @@ func GenRowData() (rawData []byte) {
 		panic(err)
 	}
 	rawData = append(rawData, bfloat64.Bytes()...)
-	log.Ctx(context.TODO()).Debug("Rawdata length:", zap.Int("Length of rawData", len(rawData)))
+	mlog.LegacyCtx(context.TODO()).Debug("Rawdata length:", mlog.Int("Length of rawData", len(rawData)))
 	return
 }
 

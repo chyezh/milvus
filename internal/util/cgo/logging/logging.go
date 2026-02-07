@@ -30,7 +30,6 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"go.uber.org/zap/zapcore"
 )
@@ -60,9 +59,9 @@ func goZapLogExt(sev C.int,
 		return
 	}
 	core := mlog.GetZapLogger().Core()
-	if c, ok := core.(log.CEntryTextIOCore); ok {
+	if c, ok := core.(mlog.CEntryTextIOCore); ok {
 		// if async log is enabled, we use CEntry to write the log, avoid to copy the log message to the heap.
-		c.WriteWithCEntry(log.CEntry{
+		c.WriteWithCEntry(mlog.CEntry{
 			Time:        time.Now(),
 			Level:       lv,
 			Filename:    unsafe.Pointer(file),

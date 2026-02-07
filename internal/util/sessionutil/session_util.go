@@ -39,7 +39,6 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	kvfactory "github.com/milvus-io/milvus/internal/util/dependency/kv"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -634,19 +633,19 @@ func (s *Session) checkKeepaliveTTL(nextKeepaliveInstant time.Time) error {
 	if err != nil {
 		if errors.Is(err, v3rpc.ErrLeaseNotFound) {
 			s.Logger().Error(context.TODO(), "confirm the lease is not found, the session is expired without activing closing", mlog.Err(err))
-			log.Cleanup()
+			mlog.Cleanup()
 			os.Exit(exitCodeSessionLeaseExpired)
 		}
 		if ctx.Err() != nil && errors.Is(context.Cause(ctx), errSessionExpiredAtClientSide) {
 			s.Logger().Error(context.TODO(), "session expired at client side, the session is expired without activing closing", mlog.Err(err))
-			log.Cleanup()
+			mlog.Cleanup()
 			os.Exit(exitCodeSessionLeaseExpired)
 		}
 		return errors.Wrap(err, "failed to check TTL")
 	}
 	if ttlResp.TTL <= 0 {
 		s.Logger().Error(context.TODO(), "confirm the lease is expired, the session is expired without activing closing", mlog.Err(err))
-		log.Cleanup()
+		mlog.Cleanup()
 		os.Exit(exitCodeSessionLeaseExpired)
 	}
 	s.Logger().Info(context.TODO(), "check TTL success, try to keep alive...", mlog.Int64("ttl", ttlResp.TTL))

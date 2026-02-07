@@ -10,7 +10,6 @@ import (
 
 	"github.com/cockroachdb/errors"
 
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -28,7 +27,7 @@ func exitWhenStopTimeout(stop func() error, timeout time.Duration) error {
 			mlog.String("component", paramtable.GetRole()),
 			mlog.Duration("cost", time.Since(start)),
 			mlog.Err(err))
-		log.Cleanup()
+		mlog.Cleanup()
 		os.Exit(1)
 	}
 	return err

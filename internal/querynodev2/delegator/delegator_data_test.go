@@ -29,7 +29,6 @@ import (
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
-	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
@@ -44,7 +43,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/function"
 	"github.com/milvus-io/milvus/internal/util/initcore"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
@@ -1184,7 +1183,7 @@ func (s *DelegatorDataSuite) TestBuildBM25IDF() {
 		}
 		_, err = s.delegator.buildBM25IDF(req)
 		s.Error(err)
-		log.Info("test", zap.Error(err))
+		mlog.Info(context.TODO(), "test", mlog.Err(err))
 	})
 
 	s.Run("set avgdl failed", func() {

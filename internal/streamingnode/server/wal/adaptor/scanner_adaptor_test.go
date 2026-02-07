@@ -17,7 +17,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/mock_walimpls"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"
@@ -78,7 +78,7 @@ func TestPauseConsumption(t *testing.T) {
 	defer paramtable.Get().Reset(configKey)
 
 	scanner := &scannerAdaptorImpl{
-		logger: log.With(),
+		logger: mlog.With(),
 		readOption: wal.ReadOption{
 			IgnorePauseConsumption: false,
 		},

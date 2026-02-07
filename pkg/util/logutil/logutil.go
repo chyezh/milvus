@@ -26,7 +26,6 @@ import (
 	"golang.org/x/exp/constraints"
 	"google.golang.org/grpc/grpclog"
 
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mlog"
 )
 
@@ -132,23 +131,22 @@ func (w *zapWrapper) V(l int) bool {
 // Commonly used with a `defer`.
 func LogPanic() {
 	if e := recover(); e != nil {
-		log.Fatal("panic", zap.Reflect("recover", e))
+		mlog.Fatal(context.TODO(), "panic", mlog.Reflect("recover", e))
 	}
 }
 
 var once sync.Once
 
 // SetupLogger is used to initialize the log with config.
-func SetupLogger(cfg *log.Config) {
+func SetupLogger(cfg *mlog.Config) {
 	once.Do(func() {
 		// Initialize logger.
-		logger, p, err := log.InitLogger(cfg, zap.AddStacktrace(zap.ErrorLevel))
+		logger, p, err := mlog.InitLogger(cfg, zap.AddStacktrace(zap.ErrorLevel))
 		if err == nil {
-			log.ReplaceGlobals(logger, p)
-			mlog.Init(logger)
-			mlog.SetLevel(p.Level.Level())
+			// ReplaceGlobals updates both pkg/log globals and mlog globals
+			mlog.ReplaceGlobals(logger, p)
 		} else {
-			log.Fatal("initialize logger error", zap.Error(err))
+			mlog.Fatal(context.TODO(), "initialize logger error", mlog.Err(err))
 		}
 
 		// Initialize grpc log wrapper
@@ -165,13 +163,13 @@ func SetupLogger(cfg *log.Config) {
 		wrapper := &zapWrapper{logger, logLevel}
 		grpclog.SetLoggerV2(wrapper)
 
-		log.Info("Log directory", zap.String("configDir", cfg.File.RootPath))
-		log.Info("Set log file to ", zap.String("path", cfg.File.Filename))
+		mlog.Info(context.TODO(), "Log directory", mlog.String("configDir", cfg.File.RootPath))
+		mlog.Info(context.TODO(), "Set log file to ", mlog.String("path", cfg.File.Filename))
 	})
 }
 
 func Logger(ctx context.Context) *zap.Logger {
-	return log.Ctx(ctx).Logger
+	return mlog.LegacyCtx(ctx).Logger
 }
 
 func WithModule(ctx context.Context, module string) context.Context {

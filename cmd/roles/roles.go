@@ -32,7 +32,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
@@ -47,7 +46,6 @@ import (
 	"github.com/milvus-io/milvus/internal/util/pathutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/util"
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	rocksmqimpl "github.com/milvus-io/milvus/pkg/v2/mq/mqimpl/rocksmq/server"
@@ -270,12 +268,12 @@ func (mr *MilvusRoles) waitForAllComponentsReady(cancel context.CancelFunc, comp
 
 func (mr *MilvusRoles) setupLogger() {
 	params := paramtable.Get()
-	logConfig := log.Config{
+	logConfig := mlog.Config{
 		Level:     params.LogCfg.Level.GetValue(),
 		GrpcLevel: params.LogCfg.GrpcLogLevel.GetValue(),
 		Format:    params.LogCfg.Format.GetValue(),
 		Stdout:    params.LogCfg.Stdout.GetAsBool(),
-		File: log.FileLogConfig{
+		File: mlog.FileLogConfig{
 			RootPath:   params.LogCfg.RootPath.GetValue(),
 			MaxSize:    params.LogCfg.MaxSize.GetAsInt(),
 			MaxDays:    params.LogCfg.MaxAge.GetAsInt(),
@@ -314,7 +312,7 @@ func (mr *MilvusRoles) setupLogger() {
 			mlog.Warn(context.TODO(), "failed to parse log level", mlog.Err(err))
 			return
 		}
-		log.SetLevel(logLevel)
+		mlog.LegacySetLevel(logLevel)
 		mlog.SetLevel(logLevel)
 		mlog.Info(context.TODO(), "log level changed", mlog.String("level", event.Value))
 	}))
@@ -454,7 +452,7 @@ func (mr *MilvusRoles) Run() {
 	expr.Init()
 	expr.Register("param", paramtable.Get())
 	mr.setupLogger()
-	defer log.Cleanup()
+	defer mlog.Cleanup()
 
 	http.ServeHTTP()
 	setupPrometheusHTTPServer(Registry)
@@ -566,7 +564,7 @@ func (mr *MilvusRoles) Run() {
 		}
 
 		tracer.SetTracerProvider(exp, params.TraceCfg.SampleFraction.GetAsFloat())
-		mlog.Info(context.TODO(), "Reset tracer finished", mlog.String("Exporter", params.TraceCfg.Exporter.GetValue()), zap.Float64("SampleFraction", params.TraceCfg.SampleFraction.GetAsFloat()))
+		mlog.Info(context.TODO(), "Reset tracer finished", mlog.String("Exporter", params.TraceCfg.Exporter.GetValue()), mlog.Float64("SampleFraction", params.TraceCfg.SampleFraction.GetAsFloat()))
 
 		tracer.NotifyTracerProviderUpdated()
 
@@ -593,7 +591,7 @@ func (mr *MilvusRoles) Run() {
 	for idx, coord := range coordinators {
 		mlog.Warn(context.TODO(), "stop processing")
 		if coord != nil {
-			mlog.Info(context.TODO(), "stop coord", zap.Int("idx", idx), mlog.Any("coord", coord))
+			mlog.Info(context.TODO(), "stop coord", mlog.Int("idx", idx), mlog.Any("coord", coord))
 			coord.Stop()
 		}
 	}

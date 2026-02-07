@@ -12,7 +12,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 )
 
 const (
@@ -50,15 +50,15 @@ func withLevelAndTrace(ctx context.Context) context.Context {
 			} else {
 				switch level {
 				case zapcore.DebugLevel:
-					newctx = log.WithDebugLevel(ctx)
+					newctx = mlog.WithDebugLevel(ctx)
 				case zapcore.InfoLevel:
-					newctx = log.WithInfoLevel(ctx)
+					newctx = mlog.WithInfoLevel(ctx)
 				case zapcore.WarnLevel:
-					newctx = log.WithWarnLevel(ctx)
+					newctx = mlog.WithWarnLevel(ctx)
 				case zapcore.ErrorLevel:
-					newctx = log.WithErrorLevel(ctx)
+					newctx = mlog.WithErrorLevel(ctx)
 				case zapcore.FatalLevel:
-					newctx = log.WithFatalLevel(ctx)
+					newctx = mlog.WithFatalLevel(ctx)
 				default:
 					newctx = ctx
 				}
@@ -76,14 +76,14 @@ func withLevelAndTrace(ctx context.Context) context.Context {
 			traceID, err = trace.TraceIDFromHex(requestID[0])
 			if err != nil {
 				// set request id to custom field
-				newctx = log.WithFields(newctx, zap.String(clientRequestIDKey, requestID[0]))
+				newctx = mlog.LegacyWithFields(newctx, zap.String(clientRequestIDKey, requestID[0]))
 			}
 		}
 	}
 	// client request unixsecs
 	requestUnixmsec, ok := GetClientReqUnixmsecGrpc(newctx)
 	if ok {
-		newctx = log.WithFields(newctx, zap.Int64("clientRequestUnixmsec", requestUnixmsec))
+		newctx = mlog.LegacyWithFields(newctx, zap.Int64("clientRequestUnixmsec", requestUnixmsec))
 	}
 
 	// traceID not valid, generate a new one
@@ -91,7 +91,7 @@ func withLevelAndTrace(ctx context.Context) context.Context {
 		traceID = trace.SpanContextFromContext(newctx).TraceID()
 	}
 	if traceID.IsValid() {
-		newctx = log.WithTraceID(newctx, traceID.String())
+		newctx = mlog.WithTraceID(newctx, traceID.String())
 	}
 	return newctx
 }
