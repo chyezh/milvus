@@ -53,10 +53,10 @@ func (w *walLifetime) GetWAL() wal.WAL {
 	return w.statePair.GetWAL()
 }
 
-// Open opens a wal instance for the channel on this Manager.
-// Returns the StateProgressStore that can be used to track progress.
-// The store is valid until the WAL is closed.
-func (w *walLifetime) Open(ctx context.Context, channel types.PChannelInfo) (*utility.StateProgressStore, error) {
+// AsyncOpen starts opening a wal instance for the channel asynchronously.
+// Returns a StateProgressStore immediately that can be watched for progress updates.
+// All results (Ready/Error) are reported through the store.
+func (w *walLifetime) AsyncOpen(ctx context.Context, channel types.PChannelInfo) *utility.StateProgressStore {
 	// Create a StateProgressStore for this WAL opening.
 	stateStore := utility.NewStateProgressStore()
 
@@ -67,18 +67,9 @@ func (w *walLifetime) Open(ctx context.Context, channel types.PChannelInfo) (*ut
 	expected := newAvailableExpectedState(ctx, channel, stateStore)
 	if !w.statePair.SetExpectedState(expected) {
 		stateStore.SetError(status.NewIgnoreOperation("channel %s with expired term %d, cannot change expected state for open", channel.Name, channel.Term))
-		return stateStore, stateStore.Get().Error
 	}
 
-	// Wait until the WAL state is ready or term expired or error occurs.
-	err := w.statePair.WaitCurrentStateReachExpected(ctx, expected)
-	if err != nil {
-		stateStore.SetError(err)
-		return stateStore, err
-	}
-
-	stateStore.SetReady()
-	return stateStore, nil
+	return stateStore
 }
 
 // Remove removes the wal instance for the channel on this Manager.
@@ -183,9 +174,17 @@ func (w *walLifetime) doLifetimeChanged(expectedState expectedWALState) {
 		// Open new wal at expected term failed, push expected term to current state unavailable.
 		// -> (expectedTerm,false)
 		w.statePair.SetCurrentState(newUnavailableCurrentState(expectedState.Term(), err))
+		// Report error to the state store so watchers are notified.
+		if stateStore := expectedState.GetStateStore(); stateStore != nil {
+			stateStore.SetError(err)
+		}
 		return
 	}
 	logger.Info("open new wal done")
 	// -> (expectedTerm,true)
 	w.statePair.SetCurrentState(newAvailableCurrentState(l))
+	// Report ready to the state store so watchers are notified.
+	if stateStore := expectedState.GetStateStore(); stateStore != nil {
+		stateStore.SetReady()
+	}
 }

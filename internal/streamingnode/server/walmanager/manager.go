@@ -12,11 +12,11 @@ var _ Manager = (*managerImpl)(nil)
 
 // Manager is the interface for managing the wal instances.
 type Manager interface {
-	// Open opens a wal instance for the channel on this Manager.
-	// Return `IgnoreOperation` error if the channel is not found.
-	// Return `UnmatchedChannelTerm` error if the channel term is not matched.
-	// Returns a StateProgressStore that can be used to track the progress of the WAL opening.
-	Open(ctx context.Context, channel types.PChannelInfo) (*utility.StateProgressStore, error)
+	// AsyncOpen starts opening a wal instance for the channel on this Manager asynchronously.
+	// Returns a StateProgressStore immediately that can be watched for progress updates.
+	// The caller should monitor the store for Ready/Error terminal states.
+	// All errors are reported through the store (including manager closed, expired term, etc.).
+	AsyncOpen(ctx context.Context, channel types.PChannelInfo) *utility.StateProgressStore
 
 	// GetAvailableWAL returns a available wal instance for the channel.
 	// Return nil if the wal instance is not found.

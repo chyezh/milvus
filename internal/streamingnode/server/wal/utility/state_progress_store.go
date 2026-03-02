@@ -172,3 +172,17 @@ func (s *StateProgressStore) Watch(ctx context.Context, version uint64) (StatePr
 func (p *StateProgress) IsTerminal() bool {
 	return p.Ready || p.Error != nil
 }
+
+// BlockUntilReady blocks until the state reaches a terminal state (Ready or Error).
+// Returns nil if Ready, or the error if Error, or ctx.Err() if context is canceled.
+func (s *StateProgressStore) BlockUntilReady(ctx context.Context) error {
+	progress := s.Get()
+	for !progress.IsTerminal() {
+		var err error
+		progress, err = s.Watch(ctx, progress.Version)
+		if err != nil {
+			return err
+		}
+	}
+	return progress.Error
+}

@@ -30,6 +30,10 @@ func TestWALLifetime(t *testing.T) {
 	opener := mock_wal.NewMockOpener(t)
 	opener.EXPECT().Open(mock.Anything, mock.Anything).RunAndReturn(
 		func(ctx context.Context, oo *wal.OpenOption) (wal.WAL, error) {
+			// Respect context cancellation like the real opener does.
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			l := mock_wal.NewMockWAL(t)
 			l.EXPECT().Channel().Return(oo.Channel)
 			l.EXPECT().Close().Return()
@@ -40,10 +44,11 @@ func TestWALLifetime(t *testing.T) {
 	assert.Nil(t, wlt.GetWAL())
 
 	// Test open.
-	_, err := wlt.Open(context.Background(), types.PChannelInfo{
+	store := wlt.AsyncOpen(context.Background(), types.PChannelInfo{
 		Name: channel,
 		Term: 2,
 	})
+	err := store.BlockUntilReady(context.Background())
 	assert.NoError(t, err)
 	assert.NotNil(t, wlt.GetWAL())
 	assert.Equal(t, channel, wlt.GetWAL().Channel().Name)
@@ -62,55 +67,62 @@ func TestWALLifetime(t *testing.T) {
 	assert.Nil(t, wlt.GetWAL())
 
 	// Test expired term open.
-	_, err = wlt.Open(context.Background(), types.PChannelInfo{
+	store = wlt.AsyncOpen(context.Background(), types.PChannelInfo{
 		Name: channel,
 		Term: 1,
 	})
-	assertErrorOperationIgnored(t, err)
+	progress := store.Get()
+	assertErrorOperationIgnored(t, progress.Error)
 	assert.Nil(t, wlt.GetWAL())
 
 	// Test open after close.
-	_, err = wlt.Open(context.Background(), types.PChannelInfo{
+	store = wlt.AsyncOpen(context.Background(), types.PChannelInfo{
 		Name: channel,
 		Term: 5,
 	})
+	err = store.BlockUntilReady(context.Background())
 	assert.NoError(t, err)
 	assert.NotNil(t, wlt.GetWAL())
 	assert.Equal(t, channel, wlt.GetWAL().Channel().Name)
 	assert.Equal(t, int64(5), wlt.GetWAL().Channel().Term)
 
 	// Test overwrite open.
-	_, err = wlt.Open(context.Background(), types.PChannelInfo{
+	store = wlt.AsyncOpen(context.Background(), types.PChannelInfo{
 		Name: channel,
 		Term: 10,
 	})
+	err = store.BlockUntilReady(context.Background())
 	assert.NoError(t, err)
 	assert.NotNil(t, wlt.GetWAL())
 	assert.Equal(t, channel, wlt.GetWAL().Channel().Name)
 	assert.Equal(t, int64(10), wlt.GetWAL().Channel().Term)
 
-	// Test context canceled.
+	// Test context canceled - AsyncOpen itself doesn't block, but the background open uses the context.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = wlt.Open(ctx, types.PChannelInfo{
+	store = wlt.AsyncOpen(ctx, types.PChannelInfo{
 		Name: channel,
 		Term: 11,
 	})
-	assert.ErrorIs(t, err, context.Canceled)
+	err = store.BlockUntilReady(context.Background())
+	assert.Error(t, err)
 
 	err = wlt.Remove(ctx, 11)
 	assert.ErrorIs(t, err, context.Canceled)
 
-	_, err = wlt.Open(context.Background(), types.PChannelInfo{
+	store = wlt.AsyncOpen(context.Background(), types.PChannelInfo{
 		Name: channel,
 		Term: 11,
 	})
-	assertErrorOperationIgnored(t, err)
+	progress = store.Get()
+	assertErrorOperationIgnored(t, progress.Error)
 
-	_, _ = wlt.Open(context.Background(), types.PChannelInfo{
+	store = wlt.AsyncOpen(context.Background(), types.PChannelInfo{
 		Name: channel,
 		Term: 12,
 	})
+	err = store.BlockUntilReady(context.Background())
+	assert.NoError(t, err)
 	assert.NotNil(t, wlt.GetWAL())
 	assert.Equal(t, channel, wlt.GetWAL().Channel().Name)
 	assert.Equal(t, int64(12), wlt.GetWAL().Channel().Term)

@@ -65,16 +65,18 @@ func TestManager(t *testing.T) {
 	assertErrorChannelNotExist(t, err)
 	assert.Nil(t, l)
 
-	_, err = m.Open(context.Background(), types.PChannelInfo{
+	store := m.AsyncOpen(context.Background(), types.PChannelInfo{
 		Name: channelName,
 		Term: 1,
 	})
-	assertErrorOperationIgnored(t, err)
+	progress := store.Get()
+	assertErrorOperationIgnored(t, progress.Error)
 
-	_, err = m.Open(context.Background(), types.PChannelInfo{
+	store = m.AsyncOpen(context.Background(), types.PChannelInfo{
 		Name: channelName,
 		Term: 2,
 	})
+	err = store.BlockUntilReady(context.Background())
 	assert.NoError(t, err)
 
 	err = m.Remove(context.Background(), types.PChannelInfo{Name: channelName, Term: 1})
@@ -92,10 +94,11 @@ func TestManager(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, h.WALMetrics, 1)
 
-	_, err = m.Open(context.Background(), types.PChannelInfo{
+	store = m.AsyncOpen(context.Background(), types.PChannelInfo{
 		Name: "term2",
 		Term: 3,
 	})
+	err = store.BlockUntilReady(context.Background())
 	assert.NoError(t, err)
 
 	h, err = m.Metrics()
@@ -108,11 +111,12 @@ func TestManager(t *testing.T) {
 	assertShutdownError(t, err)
 	assert.Nil(t, h)
 
-	_, err = m.Open(context.Background(), types.PChannelInfo{
+	store = m.AsyncOpen(context.Background(), types.PChannelInfo{
 		Name: "term2",
 		Term: 4,
 	})
-	assertShutdownError(t, err)
+	progress = store.Get()
+	assertShutdownError(t, progress.Error)
 
 	err = m.Remove(context.Background(), types.PChannelInfo{Name: channelName, Term: 2})
 	assertShutdownError(t, err)

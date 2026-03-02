@@ -59,22 +59,18 @@ type managerImpl struct {
 	logger *log.MLogger
 }
 
-// Open opens a wal instance for the channel on this Manager.
-func (m *managerImpl) Open(ctx context.Context, channel types.PChannelInfo) (stateStore *utility.StateProgressStore, err error) {
+// AsyncOpen starts opening a wal instance for the channel on this Manager asynchronously.
+func (m *managerImpl) AsyncOpen(ctx context.Context, channel types.PChannelInfo) *utility.StateProgressStore {
 	// reject operation if manager is closing.
 	if !m.lifetime.AddIf(isOpenable) {
-		return nil, errWALManagerClosed
+		store := utility.NewStateProgressStore()
+		store.SetError(errWALManagerClosed)
+		return store
 	}
-	defer func() {
-		m.lifetime.Done()
-		if err != nil {
-			m.logger.Warn("open wal failed", zap.Error(err), zap.String("channel", channel.String()))
-			return
-		}
-		m.logger.Info("open wal success", zap.String("channel", channel.String()))
-	}()
+	defer m.lifetime.Done()
 
-	return m.getWALLifetime(channel.Name).Open(ctx, channel)
+	m.logger.Info("async open wal started", zap.String("channel", channel.String()))
+	return m.getWALLifetime(channel.Name).AsyncOpen(ctx, channel)
 }
 
 // Remove removes the wal instance for the channel.

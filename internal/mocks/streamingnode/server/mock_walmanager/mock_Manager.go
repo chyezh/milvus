@@ -26,6 +26,55 @@ func (_m *MockManager) EXPECT() *MockManager_Expecter {
 	return &MockManager_Expecter{mock: &_m.Mock}
 }
 
+// AsyncOpen provides a mock function with given fields: ctx, channel
+func (_m *MockManager) AsyncOpen(ctx context.Context, channel types.PChannelInfo) *utility.StateProgressStore {
+	ret := _m.Called(ctx, channel)
+
+	if len(ret) == 0 {
+		panic("no return value specified for AsyncOpen")
+	}
+
+	var r0 *utility.StateProgressStore
+	if rf, ok := ret.Get(0).(func(context.Context, types.PChannelInfo) *utility.StateProgressStore); ok {
+		r0 = rf(ctx, channel)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(*utility.StateProgressStore)
+		}
+	}
+
+	return r0
+}
+
+// MockManager_AsyncOpen_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'AsyncOpen'
+type MockManager_AsyncOpen_Call struct {
+	*mock.Call
+}
+
+// AsyncOpen is a helper method to define mock.On call
+//   - ctx context.Context
+//   - channel types.PChannelInfo
+func (_e *MockManager_Expecter) AsyncOpen(ctx interface{}, channel interface{}) *MockManager_AsyncOpen_Call {
+	return &MockManager_AsyncOpen_Call{Call: _e.mock.On("AsyncOpen", ctx, channel)}
+}
+
+func (_c *MockManager_AsyncOpen_Call) Run(run func(ctx context.Context, channel types.PChannelInfo)) *MockManager_AsyncOpen_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(types.PChannelInfo))
+	})
+	return _c
+}
+
+func (_c *MockManager_AsyncOpen_Call) Return(_a0 *utility.StateProgressStore) *MockManager_AsyncOpen_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockManager_AsyncOpen_Call) RunAndReturn(run func(context.Context, types.PChannelInfo) *utility.StateProgressStore) *MockManager_AsyncOpen_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Close provides a mock function with no fields
 func (_m *MockManager) Close() {
 	_m.Called()
@@ -169,65 +218,6 @@ func (_c *MockManager_Metrics_Call) Return(_a0 *types.StreamingNodeMetrics, _a1 
 }
 
 func (_c *MockManager_Metrics_Call) RunAndReturn(run func() (*types.StreamingNodeMetrics, error)) *MockManager_Metrics_Call {
-	_c.Call.Return(run)
-	return _c
-}
-
-// Open provides a mock function with given fields: ctx, channel
-func (_m *MockManager) Open(ctx context.Context, channel types.PChannelInfo) (*utility.StateProgressStore, error) {
-	ret := _m.Called(ctx, channel)
-
-	if len(ret) == 0 {
-		panic("no return value specified for Open")
-	}
-
-	var r0 *utility.StateProgressStore
-	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, types.PChannelInfo) (*utility.StateProgressStore, error)); ok {
-		return rf(ctx, channel)
-	}
-	if rf, ok := ret.Get(0).(func(context.Context, types.PChannelInfo) *utility.StateProgressStore); ok {
-		r0 = rf(ctx, channel)
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*utility.StateProgressStore)
-		}
-	}
-
-	if rf, ok := ret.Get(1).(func(context.Context, types.PChannelInfo) error); ok {
-		r1 = rf(ctx, channel)
-	} else {
-		r1 = ret.Error(1)
-	}
-
-	return r0, r1
-}
-
-// MockManager_Open_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'Open'
-type MockManager_Open_Call struct {
-	*mock.Call
-}
-
-// Open is a helper method to define mock.On call
-//   - ctx context.Context
-//   - channel types.PChannelInfo
-func (_e *MockManager_Expecter) Open(ctx interface{}, channel interface{}) *MockManager_Open_Call {
-	return &MockManager_Open_Call{Call: _e.mock.On("Open", ctx, channel)}
-}
-
-func (_c *MockManager_Open_Call) Run(run func(ctx context.Context, channel types.PChannelInfo)) *MockManager_Open_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(types.PChannelInfo))
-	})
-	return _c
-}
-
-func (_c *MockManager_Open_Call) Return(_a0 *utility.StateProgressStore, _a1 error) *MockManager_Open_Call {
-	_c.Call.Return(_a0, _a1)
-	return _c
-}
-
-func (_c *MockManager_Open_Call) RunAndReturn(run func(context.Context, types.PChannelInfo) (*utility.StateProgressStore, error)) *MockManager_Open_Call {
 	_c.Call.Return(run)
 	return _c
 }

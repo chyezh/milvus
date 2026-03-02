@@ -24,7 +24,7 @@ var _ ManagerService = (*managerServiceImpl)(nil)
 // NewManagerService create a streamingnode manager service.
 func NewManagerService(m walmanager.Manager) ManagerService {
 	return &managerServiceImpl{
-		m,
+		walManager: m,
 	}
 }
 
@@ -36,19 +36,8 @@ type ManagerService interface {
 // managerServiceImpl is just a rpc level to handle incoming grpc.
 // all manager logic should be done in wal.Manager.
 type managerServiceImpl struct {
+	streamingpb.UnimplementedStreamingNodeManagerServiceServer
 	walManager walmanager.Manager
-}
-
-// Assign assigns a wal instance for the channel on this Manager.
-// After assign returns, the wal instance is ready to use.
-func (ms *managerServiceImpl) Assign(ctx context.Context, req *streamingpb.StreamingNodeManagerAssignRequest) (*streamingpb.StreamingNodeManagerAssignResponse, error) {
-	pchannelInfo := types.NewPChannelInfoFromProto(req.GetPchannel())
-	// Open the WAL - we don't need state reporting for legacy Assign
-	_, err := ms.walManager.Open(ctx, pchannelInfo)
-	if err != nil {
-		return nil, err
-	}
-	return &streamingpb.StreamingNodeManagerAssignResponse{}, nil
 }
 
 // Remove removes the wal instance for the channel.
@@ -81,13 +70,8 @@ func (ms *managerServiceImpl) AssignWithStateReport(
 	pchannelInfo := types.NewPChannelInfoFromProto(req.GetPchannel())
 	logger := log.With(zap.String("channel", pchannelInfo.Name), zap.Int64("term", pchannelInfo.Term))
 
-	// Open the WAL - this returns a StateProgressStore that we can watch
-	stateStore, err := ms.walManager.Open(stream.Context(), pchannelInfo)
-	if err != nil {
-		// Open failed immediately, report error and close stream gracefully
-		_ = sendError(stream, err)
-		return nil
-	}
+	// Start async open - returns a StateProgressStore immediately
+	stateStore := ms.walManager.AsyncOpen(stream.Context(), pchannelInfo)
 
 	// Watch the state store and report progress to the gRPC stream
 	return watchAndReportState(stream.Context(), stateStore, stream, logger)
