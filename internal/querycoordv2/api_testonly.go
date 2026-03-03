@@ -20,21 +20,19 @@
 package querycoordv2
 
 import (
-	"context"
-
 	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 func (s *Server) StopCheckerForTestOnly() {
 	if s.checkerController != nil {
-		log.Info(context.TODO(), "stop checker controller for integration test...")
+		log.Info(s.ctx, "stop checker controller for integration test...")
 		s.checkerController.Stop()
 	}
 }
 
 func (s *Server) StartCheckerForTestOnly() {
 	if s.checkerController != nil {
-		log.Info(context.TODO(), "start checker controller for integration test...")
+		log.Info(s.ctx, "start checker controller for integration test...")
 		s.checkerController.Start()
 	}
 }

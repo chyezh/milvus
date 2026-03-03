@@ -455,7 +455,7 @@ func SetupCoreConfigChangelCallback() {
 				factor = 32
 			}
 			knowhereThreadPoolSize := uint32(float64(hardware.GetCPUNum()) * factor)
-			log.Info(context.TODO(), "UpdateKnowhereThreadPoolSize", log.Uint32("knowhereThreadPoolSize", knowhereThreadPoolSize))
+			log.Info(ctx, "UpdateKnowhereThreadPoolSize", log.Uint32("knowhereThreadPoolSize", knowhereThreadPoolSize))
 			C.SegcoreSetKnowhereSearchThreadPoolNum(C.uint32_t(knowhereThreadPoolSize))
 			return nil
 		})
@@ -471,7 +471,7 @@ func SetupCoreConfigChangelCallback() {
 				factor = 32
 			}
 			knowhereFetchThreadPoolSize := uint32(float64(hardware.GetCPUNum()) * factor)
-			log.Info(context.TODO(), "UpdateKnowhereFetchThreadPoolSize", log.Uint32("knowhereFetchThreadPoolSize", knowhereFetchThreadPoolSize))
+			log.Info(ctx, "UpdateKnowhereFetchThreadPoolSize", log.Uint32("knowhereFetchThreadPoolSize", knowhereFetchThreadPoolSize))
 			C.SegcoreSetKnowhereFetchThreadPoolNum(C.uint32_t(knowhereFetchThreadPoolSize))
 			return nil
 		})
