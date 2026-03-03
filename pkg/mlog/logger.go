@@ -11,6 +11,9 @@ var (
 	// globalLogger is the package-level logger
 	globalLogger atomic.Pointer[zap.Logger]
 
+	// globalCleanup stores the cleanup function registered by InitLogger
+	globalCleanup atomic.Value
+
 	// nilContextField is added when nil context is passed
 	nilContextField = zap.Bool("_ctx_nil", true)
 )
@@ -42,6 +45,28 @@ func InitNode(logger *zap.Logger, nodeId int64) {
 // getLogger returns the current global logger
 func getLogger() *zap.Logger {
 	return globalLogger.Load()
+}
+
+// Sync flushes any buffered log entries.
+func Sync() error {
+	return getLogger().Sync()
+}
+
+// Cleanup calls the registered cleanup function (e.g., stopping async writer)
+// and syncs the global logger. Call this on process shutdown.
+func Cleanup() {
+	if cleanup := globalCleanup.Load(); cleanup != nil {
+		cleanup.(func())()
+	}
+}
+
+// registerCleanup stores a cleanup function. If a previous cleanup was registered,
+// it is called before being replaced.
+func registerCleanup(cleanup func()) {
+	old := globalCleanup.Swap(cleanup)
+	if old != nil {
+		old.(func())()
+	}
 }
 
 // prepareLog resolves the logger and fields from context for package-level functions.
