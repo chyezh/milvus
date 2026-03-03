@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
@@ -20,14 +20,15 @@ func LoggingUnaryInterceptor() grpc.UnaryClientInterceptor {
 	// Limit debug logging for these methods
 	ratedLogMethods := typeutil.NewSet("GetFlushState", "GetLoadingProgress", "DescribeIndex")
 
-	logWithRateLimit := func(methodShortName string, logFunc func(msg string, fields ...zap.Field),
-		logRateFunc func(cost float64, msg string, fields ...zap.Field) bool,
-		msg string, fields ...zap.Field,
+	logWithRateLimit := func(ctx context.Context, methodShortName string,
+		logFunc func(ctx context.Context, msg string, fields ...log.Field),
+		logRateFunc func(ctx context.Context, limit rate.Limit, msg string, fields ...log.Field),
+		msg string, fields ...log.Field,
 	) {
 		if ratedLogMethods.Contain(methodShortName) {
-			logRateFunc(10, msg, fields...)
+			logRateFunc(ctx, 10, msg, fields...)
 		} else {
-			logFunc(msg, fields...)
+			logFunc(ctx, msg, fields...)
 		}
 	}
 
@@ -51,7 +52,7 @@ func LoggingUnaryInterceptor() grpc.UnaryClientInterceptor {
 		}
 
 		reqStr := marshalWithFallback(req, "could not marshal request")
-		logWithRateLimit(_methodShortName, log.Info, log.RatedInfo, "Request", log.String("method", _methodShortName), log.String("reqs", reqStr))
+		logWithRateLimit(ctx, _methodShortName, log.Info, log.RatedInfo, "Request", log.String("method", _methodShortName), log.String("reqs", reqStr))
 
 		// Invoke the actual method
 		start := time.Now()
@@ -60,8 +61,8 @@ func LoggingUnaryInterceptor() grpc.UnaryClientInterceptor {
 
 		// Marshal response
 		respStr := marshalWithFallback(reply, "could not marshal response")
-		logWithRateLimit(_methodShortName, log.Info, log.RatedInfo, "Response", log.String("method", _methodShortName), log.String("resp", respStr))
-		logWithRateLimit(_methodShortName, log.Debug, log.RatedDebug, "Cost", log.String("method", _methodShortName), log.Duration("cost", cost))
+		logWithRateLimit(ctx, _methodShortName, log.Info, log.RatedInfo, "Response", log.String("method", _methodShortName), log.String("resp", respStr))
+		logWithRateLimit(ctx, _methodShortName, log.Debug, log.RatedDebug, "Cost", log.String("method", _methodShortName), log.Duration("cost", cost))
 
 		return errResp
 	}

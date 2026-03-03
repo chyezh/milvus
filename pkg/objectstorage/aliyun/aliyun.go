@@ -2,6 +2,7 @@ package aliyun
 
 import (
 	"context"
+
 	"github.com/aliyun/credentials-go/credentials" // >= v1.2.6
 	"github.com/cockroachdb/errors"
 	"github.com/minio/minio-go/v7"

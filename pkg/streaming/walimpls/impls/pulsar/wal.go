@@ -1,7 +1,6 @@
 package pulsar
 
 import (
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"context"
 	"time"
 
@@ -9,6 +8,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/cockroachdb/errors"
 
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
@@ -64,10 +64,10 @@ func (w *walImpl) initProducer() error {
 		// ProducerAccessMode: pulsar.ProducerAccessModeExclusiveWithFencing,
 	})
 	if err != nil {
-		w.Log().Warn(nil, "create producer failed", log.Err(err))
+		w.Log().Warn(context.TODO(), "create producer failed", log.Err(err))
 		return err
 	}
-	w.Log().Info(nil, "pulsar create producer done")
+	w.Log().Info(context.TODO(), "pulsar create producer done")
 	w.p.Set(p)
 	return nil
 }
@@ -93,7 +93,7 @@ func (w *walImpl) Append(ctx context.Context, msg message.MutableMessage) (messa
 	// Because if the write is failed, the message may be already written to the pulsar topic.
 	w.backlogClearHelper.ObserveAppend(msg.EstimateSize())
 	if err != nil {
-		w.Log().RatedWarn(nil, log.RateDefault, "send message to pulsar failed", log.Err(err))
+		w.Log().RatedWarn(context.TODO(), log.RateDefault, "send message to pulsar failed", log.Err(err))
 		return nil, err
 	}
 	return pulsarID{id}, nil

@@ -1,6 +1,8 @@
 package pulsarlog
 
 import (
+	"context"
+
 	plog "github.com/apache/pulsar-client-go/pulsar/log"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -75,9 +77,9 @@ func (l *logger) logWithLevel(level zapcore.Level, args ...interface{}) {
 		return
 	}
 	if msg, ok := args[0].(string); ok {
-		l.inner.Log(nil, level, msg)
+		l.inner.Log(context.TODO(), level, msg)
 	} else {
-		l.inner.Log(nil, level, "unknown log message type")
+		l.inner.Log(context.TODO(), level, "unknown log message type")
 	}
 }
 

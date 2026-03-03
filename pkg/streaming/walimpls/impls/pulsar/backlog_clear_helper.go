@@ -1,6 +1,7 @@
 package pulsar
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -62,7 +63,7 @@ func (h *backlogClearHelper) ObserveAppend(size int) {
 func (h *backlogClearHelper) background() {
 	defer func() {
 		h.notifier.Finish(struct{}{})
-		h.Logger().Info(nil, "backlog clear helper exit")
+		h.Logger().Info(context.TODO(), "backlog clear helper exit")
 	}()
 
 	for {
@@ -80,10 +81,10 @@ func (h *backlogClearHelper) background() {
 				return h.notifier.Context().Err()
 			}
 			if err := h.performBacklogClear(); err != nil {
-				h.Logger().Warn(nil, "failed to perform backlog clear", log.Err(err))
+				h.Logger().Warn(context.TODO(), "failed to perform backlog clear", log.Err(err))
 				return err
 			}
-			h.Logger().Debug(nil, "perform backlog clear done")
+			h.Logger().Debug(context.TODO(), "perform backlog clear done")
 			return nil
 		}, retry.AttemptAlways()); err != nil {
 			return
@@ -124,7 +125,7 @@ func (h *backlogClearHelper) getConsumer() (pulsar.Consumer, error) {
 		return nil, errors.Wrap(err, "when create subscription")
 	}
 	h.reusedConsumer = consumer
-	h.Logger().Info(nil, "created a new consumer")
+	h.Logger().Info(context.TODO(), "created a new consumer")
 	return h.reusedConsumer, nil
 }
 
@@ -133,7 +134,7 @@ func (h *backlogClearHelper) closeConsumer() {
 	if h.reusedConsumer != nil {
 		h.reusedConsumer.Close()
 		h.reusedConsumer = nil
-		h.Logger().Info(nil, "closed the reused consumer")
+		h.Logger().Info(context.TODO(), "closed the reused consumer")
 	}
 }
 

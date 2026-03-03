@@ -1,10 +1,9 @@
 package rmq
 
 import (
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"context"
 
-
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/mqimpl/rocksmq/client"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
@@ -40,7 +39,7 @@ func (w *walImpl) Append(ctx context.Context, msg message.MutableMessage) (messa
 		Properties: pb.Properties,
 	})
 	if err != nil {
-		w.Log().RatedWarn(nil, log.RateDefault, "send message to rmq failed", log.Err(err))
+		w.Log().RatedWarn(context.TODO(), log.RateDefault, "send message to rmq failed", log.Err(err))
 		return nil, err
 	}
 	return rmqID(id), nil

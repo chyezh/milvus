@@ -2,6 +2,7 @@ package paramtable
 
 import (
 	"context"
+
 	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 

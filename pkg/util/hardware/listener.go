@@ -1,6 +1,7 @@
 package hardware
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -66,7 +67,7 @@ func getSystemMetricsWatcher() *SystemMericsWatcher {
 				return stats.UsedRatio() > 0.9
 			},
 			Callback: func(sm SystemMetrics, listener *SystemMetricsListener) {
-				logger.Warn(nil, "memory used ratio is extremely high", log.String("memory", sm.String()), log.Float64("usedRatio", sm.UsedRatio()))
+				logger.Warn(context.TODO(), "memory used ratio is extremely high", log.String("memory", sm.String()), log.Float64("usedRatio", sm.UsedRatio()))
 			},
 		}
 		systemMetricsWatcher.RegisterListener(warningLoggerListener)

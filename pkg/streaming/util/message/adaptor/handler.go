@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"context"
 
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
@@ -128,7 +129,7 @@ func (m *BaseMsgPackAdaptorHandler) GenerateMsgPack(msg message.ImmutableMessage
 				m.addMsgPackIntoPending(m.Pendings...)
 				m.Pendings = nil
 			} else if msg.TimeTick() < m.Pendings[0].TimeTick() {
-				m.Logger.Warn(nil, "message time tick is less than pendings",
+				m.Logger.Warn(context.TODO(), "message time tick is less than pendings",
 					log.String("messageID", msg.MessageID().String()),
 					log.String("pendingMessageID", m.Pendings[0].MessageID().String()),
 					log.Uint64("timeTick", msg.TimeTick()),
@@ -168,7 +169,7 @@ func (m *BaseMsgPackAdaptorHandler) addMsgPackIntoPending(msgs ...message.Immuta
 	}
 	newPack, err := NewMsgPackFromMessage(dedupMessages...)
 	if err != nil {
-		m.Logger.Warn(nil, "failed to convert message to msgpack", log.Err(err))
+		m.Logger.Warn(context.TODO(), "failed to convert message to msgpack", log.Err(err))
 	}
 	if newPack != nil {
 		m.PendingMsgPack.AddOne(msgstream.BuildConsumeMsgPack(newPack))

@@ -200,7 +200,7 @@ func (c *client) tryToConsume(consumer *consumer) []*RmqMessage {
 	}
 	msgs, err := consumer.client.server.Consume(consumer.topic, consumer.consumerName, n)
 	if err != nil {
-		log.Warn(context.TODO(), "Consumer's goroutine cannot consume from (" + consumer.topic + "," + consumer.consumerName + "): " + err.Error())
+		log.Warn(context.TODO(), "Consumer's goroutine cannot consume from ("+consumer.topic+","+consumer.consumerName+"): "+err.Error())
 		return nil
 	}
 	rmqMsgs := make([]*RmqMessage, 0, len(msgs))

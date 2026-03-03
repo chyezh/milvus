@@ -287,10 +287,10 @@ func (c *lruCache[K, V]) Unpin(key K) {
 
 	logger := log.With(log.Any("UnPinedKey", key))
 	if item.pinCount.Load() == 0 {
-		logger.Debug(nil, "Unpin item to zero ref, trigger activating waiters")
+		logger.Debug(context.TODO(), "Unpin item to zero ref, trigger activating waiters")
 		c.waitNotifier.NotifyAll()
 	} else {
-		logger.Debug(nil, "Miss to trigger activating waiters", log.Int32("PinCount", item.pinCount.Load()))
+		logger.Debug(context.TODO(), "Miss to trigger activating waiters", log.Int32("PinCount", item.pinCount.Load()))
 	}
 }
 
