@@ -5,9 +5,14 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/time/rate"
 )
+
+// RateDefault is the default rate limit for RatedXxx functions.
+// It allows 1 log entry per minute per call site.
+var RateDefault = rate.Every(time.Minute)
 
 // ratedEntry holds a rate limiter and the count of ignored log entries for a specific call site.
 type ratedEntry struct {
