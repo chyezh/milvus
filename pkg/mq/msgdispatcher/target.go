@@ -22,7 +22,6 @@ import (
 	"sync"
 	"time"
 
-
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/lifetime"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"

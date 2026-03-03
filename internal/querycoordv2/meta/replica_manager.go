@@ -130,7 +130,7 @@ func (m *ReplicaManager) Recover(ctx context.Context, collections []int64) error
 		if collectionSet.Contain(replica.GetCollectionID()) {
 			rep := NewReplicaWithPriority(replica, commonpb.LoadPriority_HIGH)
 			m.putReplicaInMemory(rep)
-			log.Info(context.TODO(), "recover replica",
+			log.Info(ctx, "recover replica",
 				log.Int64("collectionID", replica.GetCollectionID()),
 				log.Int64("replicaID", replica.GetID()),
 				log.Int64s("rwNodes", replica.GetNodes()),
@@ -143,7 +143,7 @@ func (m *ReplicaManager) Recover(ctx context.Context, collections []int64) error
 			if err != nil {
 				return err
 			}
-			log.Info(context.TODO(), "clear stale replica",
+			log.Info(ctx, "clear stale replica",
 				log.Int64("collectionID", replica.GetCollectionID()),
 				log.Int64("replicaID", replica.GetID()),
 				log.Int64s("nodes", replica.GetNodes()),
@@ -361,7 +361,7 @@ func (m *ReplicaManager) MoveReplica(ctx context.Context, dstRGName string, toMo
 		replicas = append(replicas, mutableReplica.IntoReplica())
 		replicaIDs = append(replicaIDs, replica.GetID())
 	}
-	log.Info(context.TODO(), "move replicas to resource group", log.String("dstRGName", dstRGName), log.Int64s("replicas", replicaIDs))
+	log.Info(ctx, "move replicas to resource group", log.String("dstRGName", dstRGName), log.Int64s("replicas", replicaIDs))
 	return m.put(ctx, replicas...)
 }
 
@@ -416,7 +416,7 @@ func (m *ReplicaManager) RemoveReplicas(ctx context.Context, collectionID typeut
 	m.rwmutex.Lock()
 	defer m.rwmutex.Unlock()
 
-	log.Info(context.TODO(), "release replicas", log.Int64("collectionID", collectionID), log.Int64s("replicas", replicas))
+	log.Info(ctx, "release replicas", log.Int64("collectionID", collectionID), log.Int64s("replicas", replicas))
 
 	return m.removeReplicas(ctx, collectionID, replicas...)
 }
@@ -548,7 +548,7 @@ func (m *ReplicaManager) RecoverNodesInCollection(ctx context.Context, collectio
 			mutableReplica.AddRONode(roNodes...)          // rw -> ro
 			mutableReplica.AddRWNode(recoverableNodes...) // ro -> rw
 			mutableReplica.AddRWNode(incomingNode...)     // unused -> rw
-			log.Info(context.TODO(), 
+			log.Info(ctx,
 				"new replica recovery found",
 				log.Int64("collectionID", collectionID),
 				log.Int64("replicaID", assignment.GetReplicaID()),
@@ -675,7 +675,7 @@ func (m *ReplicaManager) GetReplicasJSON(ctx context.Context, meta *Meta) string
 	})
 	ret, err := json.Marshal(replicas)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to marshal replicas", log.Err(err))
+		log.Warn(ctx, "failed to marshal replicas", log.Err(err))
 		return ""
 	}
 	return string(ret)
@@ -715,7 +715,7 @@ func (m *ReplicaManager) RecoverSQNodesInCollection(ctx context.Context, collect
 		mutableReplica.AddROSQNode(roNodes...)          // rw -> ro
 		mutableReplica.AddRWSQNode(recoverableNodes...) // ro -> rw
 		mutableReplica.AddRWSQNode(incomingNode...)     // unused -> rw
-		log.Info(context.TODO(), 
+		log.Info(ctx,
 			"new replica recovery streaming query node found",
 			log.Int64("collectionID", collectionID),
 			log.Int64("replicaID", assignment.GetReplicaID()),

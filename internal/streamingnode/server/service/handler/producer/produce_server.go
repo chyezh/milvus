@@ -1,6 +1,7 @@
 package producer
 
 import (
+	"context"
 	"io"
 	"sync"
 
@@ -89,10 +90,10 @@ func (p *ProduceServer) Execute() error {
 func (p *ProduceServer) sendLoop() (err error) {
 	defer func() {
 		if err != nil {
-			p.logger.Warn(nil, "send arm of stream closed by unexpected error", log.Err(err))
+			p.logger.Warn(context.TODO(), "send arm of stream closed by unexpected error", log.Err(err))
 			return
 		}
-		p.logger.Info(nil, "send arm of stream closed")
+		p.logger.Info(context.TODO(), "send arm of stream closed")
 	}()
 	available := p.wal.Available()
 	var appendWGDoneChan <-chan struct{}
@@ -141,10 +142,10 @@ func (p *ProduceServer) recvLoop() (err error) {
 		p.appendWG.Wait()
 		close(p.produceMessageCh)
 		if err != nil {
-			p.logger.Warn(nil, "recv arm of stream closed by unexpected error", log.Err(err))
+			p.logger.Warn(context.TODO(), "recv arm of stream closed by unexpected error", log.Err(err))
 			return
 		}
-		p.logger.Info(nil, "recv arm of stream closed")
+		p.logger.Info(context.TODO(), "recv arm of stream closed")
 	}()
 
 	for {
@@ -159,11 +160,11 @@ func (p *ProduceServer) recvLoop() (err error) {
 		case *streamingpb.ProduceRequest_Produce:
 			p.handleProduce(req.Produce)
 		case *streamingpb.ProduceRequest_Close:
-			p.logger.Info(nil, "recv arm of stream start to close, waiting for all append request finished...")
+			p.logger.Info(context.TODO(), "recv arm of stream start to close, waiting for all append request finished...")
 			// we will receive io.EOF after that.
 		default:
 			// skip message here, to keep the forward compatibility.
-			p.logger.Warn(nil, "unknown request type", log.Any("request", req))
+			p.logger.Warn(context.TODO(), "unknown request type", log.Any("request", req))
 		}
 	}
 }
@@ -177,12 +178,12 @@ func (p *ProduceServer) handleProduce(req *streamingpb.ProduceMessageRequest) {
 	}
 
 	p.appendWG.Add(1)
-	p.logger.Debug(nil, "recv produce message from client", log.Int64("requestID", req.RequestId))
+	p.logger.Debug(context.TODO(), "recv produce message from client", log.Int64("requestID", req.RequestId))
 	// Update metrics.
 	msg := message.NewMutableMessageBeforeAppend(req.GetMessage().GetPayload(), req.GetMessage().GetProperties())
 	metricsGuard := p.metrics.StartProduce()
 	if err := p.validateMessage(msg); err != nil {
-		p.logger.Warn(nil, "produce message validation failed", log.Int64("requestID", req.RequestId), log.Err(err))
+		p.logger.Warn(context.TODO(), "produce message validation failed", log.Int64("requestID", req.RequestId), log.Err(err))
 		p.sendProduceResult(req.RequestId, nil, err)
 		metricsGuard.Finish(err)
 		p.appendWG.Done()
@@ -215,7 +216,7 @@ func (p *ProduceServer) sendProduceResult(reqID int64, appendResult *wal.AppendR
 		RequestId: reqID,
 	}
 	if err != nil {
-		p.logger.Warn(nil, "append message to wal failed", log.Int64("requestID", reqID), log.Err(err))
+		p.logger.Warn(context.TODO(), "append message to wal failed", log.Int64("requestID", reqID), log.Err(err))
 		resp.Response = &streamingpb.ProduceMessageResponse_Error{Error: status.AsStreamingError(err).AsPBError()}
 	} else {
 		resp.Response = &streamingpb.ProduceMessageResponse_Result{Result: appendResult.IntoProto()}
@@ -225,9 +226,9 @@ func (p *ProduceServer) sendProduceResult(reqID int64, appendResult *wal.AppendR
 	// all pending response message should be dropped, client side will handle it.
 	select {
 	case p.produceMessageCh <- resp:
-		p.logger.Debug(nil, "send produce message response to client", log.Int64("requestID", reqID), log.Any("appendResult", appendResult), log.Err(err))
+		p.logger.Debug(context.TODO(), "send produce message response to client", log.Int64("requestID", reqID), log.Any("appendResult", appendResult), log.Err(err))
 	case <-p.produceServer.Context().Done():
-		p.logger.Warn(nil, "stream closed before produce message response sent", log.Int64("requestID", reqID), log.Any("appendResult", appendResult), log.Err(err))
+		p.logger.Warn(context.TODO(), "stream closed before produce message response sent", log.Int64("requestID", reqID), log.Any("appendResult", appendResult), log.Err(err))
 		return
 	}
 }

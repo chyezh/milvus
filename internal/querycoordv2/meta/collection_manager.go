@@ -32,8 +32,8 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/eventlog"
-	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -168,9 +168,9 @@ func (m *CollectionManager) Recover(ctx context.Context, broker Broker) error {
 		err := m.upgradeLoadFields(ctx, collection, broker)
 		if err != nil {
 			if errors.Is(err, merr.ErrCollectionNotFound) {
-				log.Warn(context.TODO(), "collection not found, skip upgrade logic and wait for release")
+				log.Warn(ctx, "collection not found, skip upgrade logic and wait for release")
 			} else {
-				log.Warn(context.TODO(), "upgrade load field failed", log.Err(err))
+				log.Warn(ctx, "upgrade load field failed", log.Err(err))
 				return err
 			}
 		}

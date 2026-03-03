@@ -44,20 +44,20 @@ func newListenerManager(ctx context.Context) (l *listenerManager, err error) {
 		netutil.OptPort(paramtable.Get().ProxyGrpcServerCfg.Port.GetAsInt()),
 	)
 	if err != nil {
-		log.Warn(context.TODO(), "Proxy fail to create external grpc listener", log.Err(err))
+		log.Warn(ctx, "Proxy fail to create external grpc listener", log.Err(err))
 		return
 	}
-	log.Info(context.TODO(), "Proxy listen on external grpc listener", log.String("address", externalGrpcListener.Address()), log.Int("port", externalGrpcListener.Port()))
+	log.Info(ctx, "Proxy listen on external grpc listener", log.String("address", externalGrpcListener.Address()), log.Int("port", externalGrpcListener.Port()))
 
 	internalGrpcListener, err := netutil.NewListener(
 		netutil.OptIP(paramtable.Get().ProxyGrpcServerCfg.IP),
 		netutil.OptPort(paramtable.Get().ProxyGrpcServerCfg.InternalPort.GetAsInt()),
 	)
 	if err != nil {
-		log.Warn(context.TODO(), "Proxy fail to create internal grpc listener", log.Err(err))
+		log.Warn(ctx, "Proxy fail to create internal grpc listener", log.Err(err))
 		return
 	}
-	log.Info(context.TODO(), "Proxy listen on internal grpc listener", log.String("address", internalGrpcListener.Address()), log.Int("port", internalGrpcListener.Port()))
+	log.Info(ctx, "Proxy listen on internal grpc listener", log.String("address", internalGrpcListener.Address()), log.Int("port", internalGrpcListener.Port()))
 
 	l = &listenerManager{
 		externalGrpcListener: externalGrpcListener,
@@ -74,7 +74,7 @@ func newHTTPListner(ctx context.Context, l *listenerManager) error {
 	HTTPParams := &paramtable.Get().HTTPCfg
 	if !HTTPParams.Enabled.GetAsBool() {
 		// http server is disabled
-		log.Info(context.TODO(), "Proxy server(http) is disabled, skip initialize http listener")
+		log.Info(ctx, "Proxy server(http) is disabled, skip initialize http listener")
 		return nil
 	}
 	tlsMode := paramtable.Get().ProxyGrpcServerCfg.TLSMode.GetAsInt()
@@ -88,10 +88,10 @@ func newHTTPListner(ctx context.Context, l *listenerManager) error {
 	if len(httpPortString) == 0 || externGrpcPort == httpPort {
 		if tlsMode != 0 {
 			err := errors.New("proxy server(http) and external grpc server share the same port, tls mode must be 0")
-			log.Warn(context.TODO(), "can not initialize http listener", log.Err(err))
+			log.Warn(ctx, "can not initialize http listener", log.Err(err))
 			return err
 		}
-		log.Info(context.TODO(), "Proxy server(http) and external grpc server share the same port")
+		log.Info(ctx, "Proxy server(http) and external grpc server share the same port")
 		l.portShareMode = true
 		l.cmux = cmux.New(l.externalGrpcListener)
 		l.cmuxClosed = make(chan struct{})
@@ -100,10 +100,10 @@ func newHTTPListner(ctx context.Context, l *listenerManager) error {
 		go func() {
 			defer close(l.cmuxClosed)
 			if err := l.cmux.Serve(); err != nil && !errors.Is(err, net.ErrClosed) {
-				log.Warn(context.TODO(), "Proxy cmux server closed", log.Err(err))
+				log.Warn(ctx, "Proxy cmux server closed", log.Err(err))
 				return
 			}
-			log.Info(context.TODO(), "Proxy tcp server exited")
+			log.Info(ctx, "Proxy tcp server exited")
 		}()
 		return nil
 	}
@@ -114,24 +114,24 @@ func newHTTPListner(ctx context.Context, l *listenerManager) error {
 	case 1:
 		creds, err := tls.LoadX509KeyPair(Params.ServerPemPath.GetValue(), Params.ServerKeyPath.GetValue())
 		if err != nil {
-			log.Error(context.TODO(), "proxy can't create creds", log.Err(err))
+			log.Error(ctx, "proxy can't create creds", log.Err(err))
 			return err
 		}
 		tlsConf = &tls.Config{Certificates: []tls.Certificate{creds}}
 	case 2:
 		cert, err := tls.LoadX509KeyPair(Params.ServerPemPath.GetValue(), Params.ServerKeyPath.GetValue())
 		if err != nil {
-			log.Error(context.TODO(), "proxy cant load x509 key pair", log.Err(err))
+			log.Error(ctx, "proxy cant load x509 key pair", log.Err(err))
 			return err
 		}
 		certPool := x509.NewCertPool()
 		rootBuf, err := storage.ReadFile(Params.CaPemPath.GetValue())
 		if err != nil {
-			log.Error(context.TODO(), "failed read ca pem", log.Err(err))
+			log.Error(ctx, "failed read ca pem", log.Err(err))
 			return err
 		}
 		if !certPool.AppendCertsFromPEM(rootBuf) {
-			log.Warn(context.TODO(), "fail to append ca to cert")
+			log.Warn(ctx, "fail to append ca to cert")
 			return errors.New("fail to append ca to cert")
 		}
 		tlsConf = &tls.Config{
@@ -146,10 +146,10 @@ func newHTTPListner(ctx context.Context, l *listenerManager) error {
 	l.portShareMode = false
 	l.httpListener, err = netutil.NewListener(netutil.OptIP(Params.IP), netutil.OptPort(httpPort), netutil.OptTLS(tlsConf))
 	if err != nil {
-		log.Warn(context.TODO(), "Proxy server(http) failed to listen on", log.Err(err))
+		log.Warn(ctx, "Proxy server(http) failed to listen on", log.Err(err))
 		return err
 	}
-	log.Info(context.TODO(), "Proxy server(http) listen on", log.Int("port", l.httpListener.Port()))
+	log.Info(ctx, "Proxy server(http) listen on", log.Int("port", l.httpListener.Port()))
 	return nil
 }
 

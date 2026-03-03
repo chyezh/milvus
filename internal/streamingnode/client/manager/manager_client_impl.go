@@ -136,7 +136,7 @@ func (c *managerClientImpl) getAllStreamingNodeStatus(ctx context.Context, state
 			defer mu.Unlock()
 
 			if err != nil {
-				log.Warn(context.TODO(), "collect status failed, skip", log.Int64("serverID", serverID), log.Err(err))
+				log.Warn(ctx, "collect status failed, skip", log.Int64("serverID", serverID), log.Err(err))
 				return err
 			}
 			result[serverID] = &types.StreamingNodeStatus{
@@ -147,7 +147,7 @@ func (c *managerClientImpl) getAllStreamingNodeStatus(ctx context.Context, state
 				Metrics: types.NewStreamingNodeBalanceAttrsFromProto(resp.Metrics),
 				Err:     err,
 			}
-			log.Debug(context.TODO(), "collect status success", log.Int64("serverID", serverID), log.Any("status", resp))
+			log.Debug(ctx, "collect status success", log.Int64("serverID", serverID), log.Any("status", resp))
 			return nil
 		})
 	}

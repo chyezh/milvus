@@ -93,7 +93,7 @@ func (w *walImpl) Append(ctx context.Context, msg message.MutableMessage) (messa
 	// Because if the write is failed, the message may be already written to the pulsar topic.
 	w.backlogClearHelper.ObserveAppend(msg.EstimateSize())
 	if err != nil {
-		w.Log().RatedWarn(context.TODO(), log.RateDefault, "send message to pulsar failed", log.Err(err))
+		w.Log().RatedWarn(ctx, log.RateDefault, "send message to pulsar failed", log.Err(err))
 		return nil, err
 	}
 	return pulsarID{id}, nil

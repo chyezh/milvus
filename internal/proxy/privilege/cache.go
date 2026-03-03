@@ -73,11 +73,11 @@ func InitPrivilegeCache(ctx context.Context, mixCoord types.MixCoordClient) erro
 	cacheInst.Store(privilegeCache)
 	resp, err := mixCoord.ListPolicy(ctx, &internalpb.ListPolicyRequest{})
 	if err = merr.CheckRPCCall(resp, err); err != nil {
-		log.Error(context.TODO(), "fail to init meta cache", log.Err(err))
+		log.Error(ctx, "fail to init meta cache", log.Err(err))
 		return err
 	}
 	privilegeCache.InitPolicyInfo(resp.PolicyInfos, resp.UserRoles)
-	log.Info(context.TODO(), "success to init privilege cache", log.Strings("policy_infos", resp.PolicyInfos))
+	log.Info(ctx, "success to init privilege cache", log.Strings("policy_infos", resp.PolicyInfos))
 	return nil
 }
 

@@ -68,22 +68,22 @@ func (impl *WALFlusherImpl) Execute(recoverSnapshot *recovery.RecoverySnapshot) 
 	defer func() {
 		impl.notifier.Finish(struct{}{})
 		if err == nil {
-			impl.logger.Info(nil, "wal flusher stop")
+			impl.logger.Info(context.TODO(), "wal flusher stop")
 			return
 		}
 		if !errors.Is(err, context.Canceled) {
 			impl.logger.DPanic(nil, "wal flusher stop to executing with unexpected error", log.Err(err))
 			return
 		}
-		impl.logger.Warn(nil, "wal flusher is canceled before executing", log.Err(err))
+		impl.logger.Warn(context.TODO(), "wal flusher is canceled before executing", log.Err(err))
 	}()
 
-	impl.logger.Info(nil, "wal flusher start to recovery...")
+	impl.logger.Info(context.TODO(), "wal flusher start to recovery...")
 	l, err := impl.wal.GetWithContext(impl.notifier.Context())
 	if err != nil {
 		return errors.Wrap(err, "when get wal from future")
 	}
-	impl.logger.Info(nil, "wal ready for flusher recovery")
+	impl.logger.Info(context.TODO(), "wal ready for flusher recovery")
 
 	var checkpoint message.MessageID
 	impl.flusherComponents, checkpoint, err = impl.buildFlusherComponents(impl.notifier.Context(), l, recoverSnapshot)
@@ -98,7 +98,7 @@ func (impl *WALFlusherImpl) Execute(recoverSnapshot *recovery.RecoverySnapshot) 
 	}
 	defer scanner.Close()
 
-	impl.logger.Info(nil, "wal flusher start to work")
+	impl.logger.Info(context.TODO(), "wal flusher start to work")
 	impl.metrics.IntoState(flusherStateInWorking)
 	defer impl.metrics.IntoState(flusherStateOnClosing)
 
@@ -108,7 +108,7 @@ func (impl *WALFlusherImpl) Execute(recoverSnapshot *recovery.RecoverySnapshot) 
 			return nil
 		case msg, ok := <-scanner.Chan():
 			if !ok {
-				impl.logger.Warn(nil, "wal flusher is closing for closed scanner channel, which is unexpected at graceful way")
+				impl.logger.Warn(context.TODO(), "wal flusher is closing for closed scanner channel, which is unexpected at graceful way")
 				return nil
 			}
 			impl.metrics.ObserveMetrics(msg.TimeTick())
@@ -125,9 +125,9 @@ func (impl *WALFlusherImpl) Close() {
 	impl.notifier.Cancel()
 	impl.notifier.BlockUntilFinish()
 
-	impl.logger.Info(nil, "wal flusher start to close the recovery storage...")
+	impl.logger.Info(context.TODO(), "wal flusher start to close the recovery storage...")
 	impl.RecoveryStorage.Close()
-	impl.logger.Info(nil, "recovery storage closed")
+	impl.logger.Info(context.TODO(), "recovery storage closed")
 
 	impl.metrics.Close()
 }
@@ -136,26 +136,26 @@ func (impl *WALFlusherImpl) Close() {
 func (impl *WALFlusherImpl) buildFlusherComponents(ctx context.Context, l wal.WAL, snapshot *recovery.RecoverySnapshot) (*flusherComponents, message.MessageID, error) {
 	// Get all existed vchannels of the pchannel.
 	vchannels := lo.Keys(snapshot.VChannels)
-	impl.logger.Info(nil, "fetch vchannel done", log.Int("vchannelNum", len(vchannels)))
+	impl.logger.Info(ctx, "fetch vchannel done", log.Int("vchannelNum", len(vchannels)))
 
 	// Get all the recovery info of the recoverable vchannels.
 	recoverInfos, checkpoint, err := impl.getRecoveryInfos(ctx, vchannels)
 	if err != nil {
-		impl.logger.Warn(nil, "get recovery info failed", log.Err(err))
+		impl.logger.Warn(ctx, "get recovery info failed", log.Err(err))
 		return nil, nil, err
 	}
-	impl.logger.Info(nil, "fetch recovery info done", log.Int("recoveryInfoNum", len(recoverInfos)))
+	impl.logger.Info(ctx, "fetch recovery info done", log.Int("recoveryInfoNum", len(recoverInfos)))
 	if len(vchannels) == 0 && checkpoint == nil {
-		impl.logger.Info(nil, "no vchannel to recover, use the snapshot checkpoint", log.Stringer("checkpoint", snapshot.Checkpoint.MessageID))
+		impl.logger.Info(ctx, "no vchannel to recover, use the snapshot checkpoint", log.Stringer("checkpoint", snapshot.Checkpoint.MessageID))
 		checkpoint = snapshot.Checkpoint.MessageID
 	}
 
 	mixc, err := resource.Resource().MixCoordClient().GetWithContext(ctx)
 	if err != nil {
-		impl.logger.Warn(nil, "flusher recovery is canceled before data coord client ready", log.Err(err))
+		impl.logger.Warn(ctx, "flusher recovery is canceled before data coord client ready", log.Err(err))
 		return nil, nil, err
 	}
-	impl.logger.Info(nil, "data coord client ready")
+	impl.logger.Info(ctx, "data coord client ready")
 
 	// build all components.
 	broker := broker.NewCoordBroker(mixc, paramtable.GetNodeID())
@@ -181,14 +181,14 @@ func (impl *WALFlusherImpl) buildFlusherComponents(ctx context.Context, l wal.WA
 		recoveryCheckPointTimeTick: snapshot.Checkpoint.TimeTick,
 		rs:                         impl.RecoveryStorage,
 	}
-	impl.logger.Info(nil, "flusher components intiailizing done")
+	impl.logger.Info(ctx, "flusher components intiailizing done")
 	if err := fc.recover(ctx, recoverInfos); err != nil {
-		impl.logger.Warn(nil, "flusher recovery is canceled before recovery done, recycle the resource", log.Err(err))
+		impl.logger.Warn(ctx, "flusher recovery is canceled before recovery done, recycle the resource", log.Err(err))
 		fc.Close()
-		impl.logger.Info(nil, "flusher recycle the resource done")
+		impl.logger.Info(ctx, "flusher recycle the resource done")
 		return nil, nil, err
 	}
-	impl.logger.Info(nil, "flusher recovery done")
+	impl.logger.Info(ctx, "flusher recovery done")
 	return fc, checkpoint, nil
 }
 
@@ -201,10 +201,10 @@ func (impl *WALFlusherImpl) generateScanner(ctx context.Context, l wal.WAL, chec
 		DeliverPolicy:  options.DeliverPolicyAll(),
 	}
 	if checkpoint != nil {
-		impl.logger.Info(nil, "wal start to scan from minimum checkpoint", log.Stringer("checkpointMessageID", checkpoint))
+		impl.logger.Info(ctx, "wal start to scan from minimum checkpoint", log.Stringer("checkpointMessageID", checkpoint))
 		readOpt.DeliverPolicy = options.DeliverPolicyStartFrom(checkpoint)
 	} else {
-		impl.logger.Info(nil, "wal start to scan from the earliest checkpoint")
+		impl.logger.Info(ctx, "wal start to scan from the earliest checkpoint")
 	}
 	return l.Read(ctx, readOpt)
 }
@@ -233,7 +233,7 @@ func (impl *WALFlusherImpl) dispatch(msg message.ImmutableMessage) (err error) {
 	// only for truncate api now.
 	if bh := msg.BroadcastHeader(); bh != nil && bh.AckSyncUp {
 		if err := impl.RecoveryStorage.ObserveMessage(impl.notifier.Context(), msg); err != nil {
-			impl.logger.Warn(nil, "failed to observe message", log.Err(err))
+			impl.logger.Warn(context.TODO(), "failed to observe message", log.Err(err))
 			return err
 		}
 	} else {
@@ -241,7 +241,7 @@ func (impl *WALFlusherImpl) dispatch(msg message.ImmutableMessage) (err error) {
 		// Currently, flusher works as a separate component.
 		defer func() {
 			if err = impl.RecoveryStorage.ObserveMessage(impl.notifier.Context(), msg); err != nil {
-				impl.logger.Warn(nil, "failed to observe message", log.Err(err))
+				impl.logger.Warn(context.TODO(), "failed to observe message", log.Err(err))
 			}
 		}()
 	}

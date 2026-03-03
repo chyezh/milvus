@@ -7,6 +7,9 @@
 package streamingpb
 
 import (
+	reflect "reflect"
+	sync "sync"
+
 	commonpb "github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	milvuspb "github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	schemapb "github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
@@ -17,8 +20,6 @@ import (
 	anypb "google.golang.org/protobuf/types/known/anypb"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
 	fieldmaskpb "google.golang.org/protobuf/types/known/fieldmaskpb"
-	reflect "reflect"
-	sync "sync"
 )
 
 const (

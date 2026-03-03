@@ -88,7 +88,7 @@ func (policy *l0CompactionPolicy) Trigger(ctx context.Context) (events map[Compa
 	activeL0Views, idleL0Views := []CompactionView{}, []CompactionView{}
 	newTriggerID, err := policy.allocator.AllocID(ctx)
 	if err != nil {
-		log.Warn(context.TODO(), "fail to allocate triggerID to trigger l0 compaction", log.Err(err))
+		log.Warn(ctx, "fail to allocate triggerID to trigger l0 compaction", log.Err(err))
 		return nil, err
 	}
 	events = make(map[CompactionTriggerType][]CompactionView)
@@ -132,17 +132,17 @@ func (policy *l0CompactionPolicy) Trigger(ctx context.Context) (events map[Compa
 }
 
 func (policy *l0CompactionPolicy) triggerOneCollection(ctx context.Context, collectionID int64) ([]CompactionView, int64, error) {
-	log.Info(context.TODO(), "start trigger collection l0 compaction")
+	log.Info(ctx, "start trigger collection l0 compaction")
 	if policy.isSkipCollection(collectionID) {
 		return nil, 0, merr.WrapErrCollectionNotLoaded(collectionID, "the collection being paused by importing cannot do force l0 compaction")
 	}
 	collection := policy.meta.GetCollection(collectionID)
 	if collection == nil {
-		log.Warn(context.TODO(), "collection not found in meta")
+		log.Warn(ctx, "collection not found in meta")
 		return nil, 0, merr.WrapErrCollectionNotLoaded(collectionID, "collection not found")
 	}
 	if collection.IsExternal() {
-		log.Info(context.TODO(), "skip trigger l0 compaction for external collection")
+		log.Info(ctx, "skip trigger l0 compaction for external collection")
 		return nil, 0, nil
 	}
 	allL0Segments := policy.meta.SelectSegments(ctx, WithCollection(collectionID), SegmentFilterFunc(func(segment *SegmentInfo) bool {
@@ -159,7 +159,7 @@ func (policy *l0CompactionPolicy) triggerOneCollection(ctx context.Context, coll
 
 	newTriggerID, err := policy.allocator.AllocID(ctx)
 	if err != nil {
-		log.Warn(context.TODO(), "fail to allocate triggerID for l0 compaction", log.Err(err))
+		log.Warn(ctx, "fail to allocate triggerID for l0 compaction", log.Err(err))
 		return nil, 0, err
 	}
 	views := policy.groupL0ViewsByPartChan(collectionID, GetViewsByInfo(allL0Segments...), newTriggerID)

@@ -35,7 +35,7 @@ import (
 // - Retriable errors (transient failures): return error to trigger WAL retry
 func (s *DDLCallbacks) refreshExternalCollectionV2AckCallback(ctx context.Context, result message.BroadcastResultRefreshExternalCollectionMessageV2) error {
 	header := result.Message.Header()
-	log.Info(context.TODO(), "refreshExternalCollectionV2AckCallback received")
+	log.Info(ctx, "refreshExternalCollectionV2AckCallback received")
 
 	// Submit refresh job using the pre-allocated jobID from WAL
 	// This ensures idempotency - if the job already exists, it will be skipped
@@ -53,18 +53,18 @@ func (s *DDLCallbacks) refreshExternalCollectionV2AckCallback(ctx context.Contex
 		// Non-retriable errors: these indicate permanent failures or expected business logic
 		// We return nil to allow WAL to proceed without retrying
 		if isNonRetriableRefreshError(err) {
-			log.Warn(context.TODO(), "non-retriable error in refresh job submission, proceeding without retry",
+			log.Warn(ctx, "non-retriable error in refresh job submission, proceeding without retry",
 				log.Err(err))
 			return nil
 		}
 
 		// Retriable errors: return error to trigger WAL retry
-		log.Error(context.TODO(), "retriable error in refresh job submission, will retry",
+		log.Error(ctx, "retriable error in refresh job submission, will retry",
 			log.Err(err))
 		return err
 	}
 
-	log.Info(context.TODO(), "refresh external collection job submitted via DDL callback", log.Int64("jobID", jobID))
+	log.Info(ctx, "refresh external collection job submitted via DDL callback", log.Int64("jobID", jobID))
 	return nil
 }
 

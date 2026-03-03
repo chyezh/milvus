@@ -27,8 +27,8 @@ import (
 	"github.com/milvus-io/milvus/internal/util/function/rerank"
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
@@ -158,13 +158,13 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 	t.SearchRequest.CollectionID = collID
 	t.schema, err = globalMetaCache.GetCollectionSchema(ctx, t.request.GetDbName(), collectionName)
 	if err != nil {
-		log.Warn(context.TODO(), "get collection schema failed", log.Err(err))
+		log.Warn(ctx, "get collection schema failed", log.Err(err))
 		return err
 	}
 
 	t.partitionKeyMode, err = isPartitionKeyMode(ctx, t.request.GetDbName(), collectionName)
 	if err != nil {
-		log.Warn(context.TODO(), "is partition key mode failed", log.Err(err))
+		log.Warn(ctx, "is partition key mode failed", log.Err(err))
 		return err
 	}
 	if t.partitionKeyMode && len(t.request.GetPartitionNames()) != 0 {
@@ -179,7 +179,7 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 		// translate partition name to partition ids. Use regex-pattern to match partition name.
 		t.SearchRequest.PartitionIDs, err = getPartitionIDs(ctx, t.request.GetDbName(), collectionName, t.request.GetPartitionNames())
 		if err != nil {
-			log.Warn(context.TODO(), "failed to get partition ids", log.Err(err))
+			log.Warn(ctx, "failed to get partition ids", log.Err(err))
 			return err
 		}
 	}
@@ -191,14 +191,14 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 	var aggs []agg.AggregateBase
 	t.translatedOutputFields, t.userOutputFields, t.userDynamicFields, aggs, t.userRequestedPkFieldExplicitly, err = translateOutputFields(t.request.OutputFields, t.schema, true)
 	if err != nil {
-		log.Warn(context.TODO(), "translate output fields failed", log.Err(err), log.Any("schema", t.schema))
+		log.Warn(ctx, "translate output fields failed", log.Err(err), log.Any("schema", t.schema))
 		return err
 	}
 	if len(aggs) > 0 {
-		log.Warn(context.TODO(), "aggregates are not supported in search request", log.Strings("aggregates", lo.Map(aggs, func(agg agg.AggregateBase, _ int) string { return agg.OriginalName() })))
+		log.Warn(ctx, "aggregates are not supported in search request", log.Strings("aggregates", lo.Map(aggs, func(agg agg.AggregateBase, _ int) string { return agg.OriginalName() })))
 		return errors.New("aggregates are not supported in search request")
 	}
-	log.Debug(context.TODO(), "translate output fields",
+	log.Debug(ctx, "translate output fields",
 		log.Strings("output fields", t.translatedOutputFields))
 
 	if t.SearchRequest.GetIsAdvanced() {
@@ -209,7 +209,7 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 
 	nq, err := t.checkNq(ctx)
 	if err != nil {
-		log.Info(context.TODO(), "failed to check nq", log.Err(err))
+		log.Info(ctx, "failed to check nq", log.Err(err))
 		return err
 	}
 	t.SearchRequest.Nq = nq
@@ -220,7 +220,7 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 
 	outputFieldIDs, err := getOutputFieldIDs(t.schema, t.translatedOutputFields)
 	if err != nil {
-		log.Info(context.TODO(), "fail to get output field ids", log.Err(err))
+		log.Info(ctx, "fail to get output field ids", log.Err(err))
 		return err
 	}
 	t.SearchRequest.OutputFieldsId = outputFieldIDs
@@ -233,13 +233,13 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 		err = t.initSearchRequest(ctx)
 	}
 	if err != nil {
-		log.Debug(context.TODO(), "init search request failed", log.Err(err))
+		log.Debug(ctx, "init search request failed", log.Err(err))
 		return err
 	}
 
 	collectionInfo, err2 := globalMetaCache.GetCollectionInfo(ctx, t.request.GetDbName(), collectionName, t.CollectionID)
 	if err2 != nil {
-		log.Warn(context.TODO(), "Proxy::searchTask::PreExecute failed to GetCollectionInfo from cache",
+		log.Warn(ctx, "Proxy::searchTask::PreExecute failed to GetCollectionInfo from cache",
 			log.String("collectionName", collectionName), log.Int64("collectionID", t.CollectionID), log.Err(err2))
 		return err2
 	}
@@ -303,13 +303,13 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 	timezone, exist := funcutil.TryGetAttrByKeyFromRepeatedKV(common.TimezoneKey, t.request.SearchParams)
 	if exist {
 		if !timestamptz.IsTimezoneValid(timezone) {
-			log.Info(context.TODO(), "get invalid timezone from request", log.String("timezone", timezone))
+			log.Info(ctx, "get invalid timezone from request", log.String("timezone", timezone))
 			return merr.WrapErrParameterInvalidMsg("unknown or invalid IANA Time Zone ID: %s", timezone)
 		}
-		log.Debug(context.TODO(), "determine timezone from request", log.String("user defined timezone", timezone))
+		log.Debug(ctx, "determine timezone from request", log.String("user defined timezone", timezone))
 	} else {
 		timezone = getColTimezone(collectionInfo)
-		log.Debug(context.TODO(), "determine timezone from collection", log.Any("collection timezone", timezone))
+		log.Debug(ctx, "determine timezone from collection", log.Any("collection timezone", timezone))
 	}
 	t.resolvedTimezoneStr = timezone
 
@@ -319,7 +319,7 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 		return err
 	}
 
-	log.Debug(context.TODO(), "search PreExecute done.",
+	log.Debug(ctx, "search PreExecute done.",
 		log.Uint64("guarantee_ts", guaranteeTs),
 		log.Bool("use_default_consistency", useDefaultConsistency),
 		log.Any("consistency level", consistencyLevel),
@@ -410,12 +410,12 @@ func (t *searchTask) initAdvancedSearchRequest(ctx context.Context) error {
 	// TODO: Use function score uniformly to implement related logic
 	if t.request.FunctionScore != nil {
 		if t.functionScore, err = rerank.NewFunctionScore(t.schema.CollectionSchema, t.request.FunctionScore, &models.ModelExtraInfo{ClusterID: paramtable.Get().CommonCfg.ClusterPrefix.GetValue(), DBName: t.request.GetDbName()}); err != nil {
-			log.Warn(context.TODO(), "Failed to create function score", log.Err(err))
+			log.Warn(ctx, "Failed to create function score", log.Err(err))
 			return err
 		}
 	} else {
 		if t.functionScore, err = rerank.NewFunctionScoreWithlegacy(t.schema.CollectionSchema, t.request.GetSearchParams()); err != nil {
-			log.Warn(context.TODO(), "Failed to create function by legacy info", log.Err(err))
+			log.Warn(ctx, "Failed to create function by legacy info", log.Err(err))
 			return err
 		}
 	}
@@ -426,13 +426,13 @@ func (t *searchTask) initAdvancedSearchRequest(ctx context.Context) error {
 	})
 
 	if t.rankParams, err = parseRankParams(t.request.GetSearchParams(), t.schema.CollectionSchema); err != nil {
-		log.Error(context.TODO(), "parseRankParams failed", log.Err(err))
+		log.Error(ctx, "parseRankParams failed", log.Err(err))
 		return err
 	}
 
 	// Parse order_by_fields from main search params
 	if t.orderByFields, err = parseOrderByFields(t.request.GetSearchParams(), t.schema.CollectionSchema); err != nil {
-		log.Error(context.TODO(), "parseOrderByFields failed", log.Err(err))
+		log.Error(ctx, "parseOrderByFields failed", log.Err(err))
 		return err
 	}
 
@@ -548,7 +548,7 @@ func (t *searchTask) initAdvancedSearchRequest(ctx context.Context) error {
 		}
 		t.SearchRequest.SubReqs[index] = internalSubReq
 		t.queryInfos[index] = queryInfo
-		log.Debug(context.TODO(), "proxy init search request",
+		log.Debug(ctx, "proxy init search request",
 			log.Int64s("plan.OutputFieldIds", plan.GetOutputFieldIds()),
 			log.Stringer("plan", plan)) // may be very large if large term passed.
 	}
@@ -668,7 +668,7 @@ func (t *searchTask) initSearchRequest(ctx context.Context) error {
 
 	if t.request.FunctionScore != nil {
 		if t.functionScore, err = rerank.NewFunctionScore(t.schema.CollectionSchema, t.request.FunctionScore, &models.ModelExtraInfo{ClusterID: paramtable.Get().CommonCfg.ClusterPrefix.GetValue(), DBName: t.request.GetDbName()}); err != nil {
-			log.Warn(context.TODO(), "Failed to create function score", log.Err(err))
+			log.Warn(ctx, "Failed to create function score", log.Err(err))
 			return err
 		}
 
@@ -777,7 +777,7 @@ func (t *searchTask) initSearchRequest(ctx context.Context) error {
 		sp.AddEvent("Call-function-udf")
 	}
 
-	log.Debug(context.TODO(), "proxy init search request",
+	log.Debug(ctx, "proxy init search request",
 		log.Int64s("plan.OutputFieldIds", plan.GetOutputFieldIds()),
 		log.Stringer("plan", plan)) // may be very large if large term passed.
 
@@ -876,11 +876,11 @@ func (t *searchTask) Execute(ctx context.Context) error {
 		Exec:           t.searchShard,
 	})
 	if err != nil {
-		log.Warn(context.TODO(), "search execute failed", log.Err(err))
+		log.Warn(ctx, "search execute failed", log.Err(err))
 		return errors.Wrap(err, "failed to search")
 	}
 
-	log.Debug(context.TODO(), "Search Execute done.",
+	log.Debug(ctx, "Search Execute done.",
 		log.Int64("collection", t.GetCollectionID()),
 		log.Int64s("partitionIDs", t.GetPartitionIDs()))
 	return nil
@@ -915,7 +915,7 @@ func (t *searchTask) PostExecute(ctx context.Context) error {
 
 	toReduceResults, err := t.collectSearchResults(ctx)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to collect search results", log.Err(err))
+		log.Warn(ctx, "failed to collect search results", log.Err(err))
 		return err
 	}
 
@@ -945,7 +945,7 @@ func (t *searchTask) PostExecute(ctx context.Context) error {
 	// call pipeline
 	pipeline, err := newSearchPipeline(t)
 	if err != nil {
-		log.Warn(context.TODO(), "Faild to create post process pipeline")
+		log.Warn(ctx, "Faild to create post process pipeline")
 		return err
 	}
 	if t.result, t.storageCost, err = pipeline.Run(ctx, sp, toReduceResults, storageCost); err != nil {
@@ -998,7 +998,7 @@ func (t *searchTask) PostExecute(ctx context.Context) error {
 	for i, fieldData := range fieldsData {
 		if fieldData.Type == schemapb.DataType_Geometry {
 			if err := validateGeometryFieldSearchResult(&fieldsData[i]); err != nil {
-				log.Warn(context.TODO(), "fail to validate geometry field search result", log.Err(err))
+				log.Warn(ctx, "fail to validate geometry field search result", log.Err(err))
 				return err
 			}
 		}
@@ -1006,7 +1006,7 @@ func (t *searchTask) PostExecute(ctx context.Context) error {
 	if t.result.GetResults().GetGroupByFieldValue() != nil &&
 		t.result.GetResults().GetGroupByFieldValue().GetType() == schemapb.DataType_Geometry {
 		if err := validateGeometryFieldSearchResult(&t.result.Results.GroupByFieldValue); err != nil {
-			log.Warn(context.TODO(), "fail to validate geometry field search result", log.Err(err))
+			log.Warn(ctx, "fail to validate geometry field search result", log.Err(err))
 			return err
 		}
 	}
@@ -1020,21 +1020,21 @@ func (t *searchTask) PostExecute(ctx context.Context) error {
 
 	timeFields := parseTimeFields(t.request.SearchParams)
 	if timeFields != nil {
-		log.Debug(context.TODO(), "extracting fields for timestamptz", log.Strings("fields", timeFields))
+		log.Debug(ctx, "extracting fields for timestamptz", log.Strings("fields", timeFields))
 		err = extractFieldsFromResults(t.result.GetResults().GetFieldsData(), t.resolvedTimezoneStr, timeFields)
 		if err != nil {
-			log.Warn(context.TODO(), "fail to extract fields for timestamptz", log.Err(err))
+			log.Warn(ctx, "fail to extract fields for timestamptz", log.Err(err))
 			return err
 		}
 	} else {
 		err = timestamptzUTC2IsoStr(t.result.GetResults().GetFieldsData(), t.resolvedTimezoneStr)
 		if err != nil {
-			log.Warn(context.TODO(), "fail to translate timestamp", log.Err(err))
+			log.Warn(ctx, "fail to translate timestamp", log.Err(err))
 			return err
 		}
 	}
 
-	log.Debug(context.TODO(), "Search post execute done",
+	log.Debug(ctx, "Search post execute done",
 		log.Int64("collection", t.GetCollectionID()),
 		log.Int64s("partitionIDs", t.GetPartitionIDs()))
 	return nil
@@ -1055,18 +1055,18 @@ func (t *searchTask) searchShard(ctx context.Context, nodeID int64, qn types.Que
 
 	result, err = qn.Search(ctx, req)
 	if err != nil {
-		log.Warn(context.TODO(), "QueryNode search return error", log.Err(err))
+		log.Warn(ctx, "QueryNode search return error", log.Err(err))
 		// globalMetaCache.DeprecateShardCache(t.request.GetDbName(), t.collectionName)
 		t.shardClientMgr.DeprecateShardCache(t.request.GetDbName(), t.collectionName)
 		return err
 	}
 	if result.GetStatus().GetErrorCode() == commonpb.ErrorCode_NotShardLeader {
-		log.Warn(context.TODO(), "QueryNode is not shardLeader")
+		log.Warn(ctx, "QueryNode is not shardLeader")
 		t.shardClientMgr.DeprecateShardCache(t.request.GetDbName(), t.collectionName)
 		return merr.Error(result.GetStatus())
 	}
 	if result.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-		log.Warn(context.TODO(), "QueryNode search result error",
+		log.Warn(ctx, "QueryNode search result error",
 			log.String("reason", result.GetStatus().GetReason()))
 		return errors.Wrapf(merr.Error(result.GetStatus()), "fail to search on QueryNode %d", nodeID)
 	}

@@ -76,7 +76,7 @@ func (s *Server) getCollectionSegmentInfo(ctx context.Context, collection int64)
 			// sdk insert three segments:A, B, D, then A + B----compact--> C
 			// In this scenario, we promise that clients see either 2 segments(C,D) or 3 segments(A, B, D)
 			// rather than 4 segments(A, B, C, D), in which query nodes are loading C but have completed loading process
-			log.Info(context.TODO(), "filtered segment being in the intermediate status",
+			log.Info(ctx, "filtered segment being in the intermediate status",
 				log.Int64("segmentID", segment.GetID()))
 			continue
 		}
@@ -260,7 +260,7 @@ func getMetrics[T any](ctx context.Context, s *Server, req *milvuspb.GetMetricsR
 		errorGroup.Go(func() error {
 			resp, err := s.cluster.GetMetrics(ctx, node.ID(), req)
 			if err := merr.CheckRPCCall(resp, err); err != nil {
-				log.Warn(context.TODO(), "failed to get metric from QueryNode", log.Int64("nodeID", node.ID()))
+				log.Warn(ctx, "failed to get metric from QueryNode", log.Int64("nodeID", node.ID()))
 				return err
 			}
 
@@ -271,7 +271,7 @@ func getMetrics[T any](ctx context.Context, s *Server, req *milvuspb.GetMetricsR
 			infos := make([]T, 0)
 			err = json.Unmarshal([]byte(resp.Response), &infos)
 			if err != nil {
-				log.Warn(context.TODO(), "invalid metrics of query node was found", log.Err(err))
+				log.Warn(ctx, "invalid metrics of query node was found", log.Err(err))
 				return err
 			}
 
@@ -314,7 +314,7 @@ func (s *Server) getSegmentsJSON(ctx context.Context, req *milvuspb.GetMetricsRe
 		filteredSegments := s.dist.SegmentDistManager.GetSegmentDist(collectionID)
 		bs, err := json.Marshal(filteredSegments)
 		if err != nil {
-			log.Warn(context.TODO(), "marshal segment value failed", log.Int64("collectionID", collectionID), log.String("err", err.Error()))
+			log.Warn(ctx, "marshal segment value failed", log.Int64("collectionID", collectionID), log.String("err", err.Error()))
 			return "", nil
 		}
 		return string(bs), nil
@@ -450,7 +450,7 @@ func (s *Server) tryGetNodesMetrics(ctx context.Context, req *milvuspb.GetMetric
 
 			resp, err := s.cluster.GetMetrics(ctx, node.ID(), req)
 			if err != nil {
-				log.Warn(context.TODO(), "failed to get metric from QueryNode",
+				log.Warn(ctx, "failed to get metric from QueryNode",
 					log.Int64("nodeID", node.ID()))
 				return
 			}
@@ -479,7 +479,7 @@ func (s *Server) fillReplicaInfo(ctx context.Context, replica *meta.Replica, wit
 
 	channels := s.targetMgr.GetDmChannelsByCollection(ctx, replica.GetCollectionID(), meta.CurrentTarget)
 	if len(channels) == 0 {
-		log.Warn(context.TODO(), "failed to get channels, collection may be not loaded or in recovering", log.Int64("collectionID", replica.GetCollectionID()))
+		log.Warn(ctx, "failed to get channels, collection may be not loaded or in recovering", log.Int64("collectionID", replica.GetCollectionID()))
 		return info
 	}
 	shardReplicas := make([]*milvuspb.ShardReplica, 0, len(channels))
@@ -496,7 +496,7 @@ func (s *Server) fillReplicaInfo(ctx context.Context, replica *meta.Replica, wit
 			leaderInfo = s.nodeMgr.Get(leader.Node)
 		}
 		if leaderInfo == nil {
-			log.Warn(context.TODO(), "failed to get shard leader for shard",
+			log.Warn(ctx, "failed to get shard leader for shard",
 				log.Int64("collectionID", replica.GetCollectionID()),
 				log.Int64("replica", replica.GetID()),
 				log.String("shard", channel.GetChannelName()))

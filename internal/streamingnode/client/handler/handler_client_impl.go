@@ -177,7 +177,7 @@ func (hc *handlerClientImpl) CreateConsumer(ctx context.Context, opts *ConsumerO
 			// If the error is WALNameMismatch, change deliver policy to DeliverPolicyAll for next retry
 			if err != nil && status.AsStreamingError(err).IsWALNameMismatch() {
 				deliverPolicy = options.DeliverPolicyAll()
-				logger.Info(nil, "change deliver policy to DeliverPolicyAll because of WALNameMismatch", log.Err(err))
+				logger.Info(ctx, "change deliver policy to DeliverPolicyAll because of WALNameMismatch", log.Err(err))
 				return nil, err
 			}
 			if err != nil {
@@ -206,7 +206,7 @@ func (hc *handlerClientImpl) CreateConsumer(ctx context.Context, opts *ConsumerO
 		// If the error is WALNameMismatch, change deliver policy to DeliverPolicyAll for next retry
 		if err != nil && status.AsStreamingError(err).IsWALNameMismatch() {
 			deliverPolicy = options.DeliverPolicyAll()
-			logger.Info(nil, "change deliver policy to DeliverPolicyAll because of WALNameMismatch", log.Err(err))
+			logger.Info(ctx, "change deliver policy to DeliverPolicyAll because of WALNameMismatch", log.Err(err))
 			return nil, err
 		}
 
@@ -241,30 +241,30 @@ func (hc *handlerClientImpl) createHandlerAfterStreamingNodeReady(ctx context.Co
 			ctx = contextutil.WithPickServerID(ctx, assign.Node.ServerID)
 			createResult, err := create(ctx, assign)
 			if err == nil {
-				logger.Info(nil, "create handler success", log.Any("assignment", assign), log.Bool("isLocal", registry.IsLocal(createResult)))
+				logger.Info(ctx, "create handler success", log.Any("assignment", assign), log.Bool("isLocal", registry.IsLocal(createResult)))
 				return createResult, nil
 			}
-			logger.Warn(nil, "create handler failed", log.Any("assignment", assign), log.Err(err))
+			logger.Warn(ctx, "create handler failed", log.Any("assignment", assign), log.Err(err))
 
 			// Check if the error is permanent failure until new assignment.
 			if isPermanentFailureUntilNewAssignment(err) {
 				reportErr := hc.rebalanceTrigger.ReportAssignmentError(ctx, assign.Channel, err)
-				logger.Info(nil, "report assignment error", log.NamedError("assignmentError", err), log.Err(reportErr))
+				logger.Info(ctx, "report assignment error", log.NamedError("assignmentError", err), log.Err(reportErr))
 			}
 		} else {
-			log.Warn(context.TODO(), "assignment not found")
+			log.Warn(ctx, "assignment not found")
 		}
 
 		start := time.Now()
 		nextBackoff := backoff.NextBackOff()
-		logger.Info(nil, "wait for next backoff", log.Duration("nextBackoff", nextBackoff))
+		logger.Info(ctx, "wait for next backoff", log.Duration("nextBackoff", nextBackoff))
 		isAssignemtChange, err := hc.waitForNextBackoff(ctx, pchannel, assign, nextBackoff)
 		cost := time.Since(start)
 		if err != nil {
-			logger.Warn(nil, "wait for next backoff failed", log.Err(err), log.Duration("cost", cost))
+			logger.Warn(ctx, "wait for next backoff failed", log.Err(err), log.Duration("cost", cost))
 			return nil, err
 		}
-		logger.Info(nil, "wait for next backoff done", log.Bool("isAssignmentChange", isAssignemtChange), log.Duration("cost", cost))
+		logger.Info(ctx, "wait for next backoff done", log.Bool("isAssignmentChange", isAssignemtChange), log.Duration("cost", cost))
 	}
 }
 

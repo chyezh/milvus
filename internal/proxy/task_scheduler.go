@@ -500,7 +500,7 @@ func (sched *taskScheduler) processTask(t task, q taskQueue) {
 	}()
 	if err != nil {
 		span.RecordError(err)
-		log.Warn(ctx, "Failed to pre-execute task: " + err.Error())
+		log.Warn(ctx, "Failed to pre-execute task: "+err.Error())
 		return
 	}
 

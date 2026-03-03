@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
@@ -116,7 +115,7 @@ func (w *roWALAdaptorImpl) checkReadOptWALName(opts wal.ReadOption) error {
 		if msgID != nil {
 			msgWALName := message.WALName(msgID.WALName)
 			if msgWALName != currentWALName {
-				w.Logger().Info(nil, "WAL name mismatch", log.String("msgIDWALName", msgWALName.String()), log.String("currentWALName", currentWALName.String()))
+				w.Logger().Info(context.TODO(), "WAL name mismatch", log.String("msgIDWALName", msgWALName.String()), log.String("currentWALName", currentWALName.String()))
 				return status.NewWALNameMismatchError(currentWALName.String(), msgWALName.String())
 			}
 		}
@@ -137,12 +136,12 @@ func (w *roWALAdaptorImpl) Available() <-chan struct{} {
 // Close overrides Scanner Close function.
 func (w *roWALAdaptorImpl) Close() {
 	// begin to close the wal.
-	w.Logger().Info(nil, "wal begin to close...")
+	w.Logger().Info(context.TODO(), "wal begin to close...")
 	w.lifetime.SetState(typeutil.LifetimeStateStopped)
 	w.forceCancelAfterGracefulTimeout()
 	w.lifetime.Wait()
 
-	w.Logger().Info(nil, "wal begin to close scanners...")
+	w.Logger().Info(context.TODO(), "wal begin to close scanners...")
 
 	// close all wal instances.
 	w.scanners.Range(func(id int64, s wal.Scanner) bool {
@@ -151,12 +150,12 @@ func (w *roWALAdaptorImpl) Close() {
 		return true
 	})
 
-	w.Logger().Info(nil, "scanner close done, close inner wal...")
+	w.Logger().Info(context.TODO(), "scanner close done, close inner wal...")
 	w.roWALImpls.Close()
 
-	w.Logger().Info(nil, "call wal cleanup function...")
+	w.Logger().Info(context.TODO(), "call wal cleanup function...")
 	w.cleanup()
-	w.Logger().Info(nil, "wal closed")
+	w.Logger().Info(context.TODO(), "wal closed")
 
 	// close all metrics.
 	w.scanMetrics.Close()

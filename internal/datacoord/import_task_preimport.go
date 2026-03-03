@@ -21,7 +21,6 @@ import (
 	"sync/atomic"
 	"time"
 
-
 	"github.com/milvus-io/milvus/internal/datacoord/session"
 	"github.com/milvus-io/milvus/internal/json"
 	"github.com/milvus-io/milvus/pkg/v2/log"

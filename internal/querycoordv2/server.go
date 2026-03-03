@@ -55,8 +55,8 @@ import (
 	"github.com/milvus-io/milvus/internal/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/v2/config"
 	"github.com/milvus-io/milvus/pkg/v2/kv"
-	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/expr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
@@ -809,7 +809,7 @@ func (s *Server) updateBalanceConfigLoop(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
-				log.Info(context.TODO(), "update balance config loop exit!")
+				log.Info(ctx, "update balance config loop exit!")
 				return
 
 			case <-ticker.C:

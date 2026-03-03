@@ -72,11 +72,11 @@ func (s *BloomFilterTestSuit) initCollection(collectionName string, replica int,
 	s.NoError(err)
 	s.True(merr.Ok(createCollectionStatus))
 
-	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(ctx, "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := s.Cluster.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.True(merr.Ok(showCollectionsResp.Status))
-	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(ctx, "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	for i := 0; i < segmentNum; i++ {
 		// change bf type in real time
@@ -110,7 +110,7 @@ func (s *BloomFilterTestSuit) initCollection(collectionName string, replica int,
 			}
 
 			pks := insertResult.GetIDs().GetIntId().GetData()[:segmentDeleteNum]
-			log.Info(context.TODO(), "========================delete expr==================",
+			log.Info(ctx, "========================delete expr==================",
 				log.Int("length of pk", len(pks)),
 			)
 
@@ -165,7 +165,7 @@ func (s *BloomFilterTestSuit) initCollection(collectionName string, replica int,
 	s.Equal(commonpb.ErrorCode_Success, loadStatus.GetErrorCode())
 	s.True(merr.Ok(loadStatus))
 	s.WaitForLoad(ctx, collectionName)
-	log.Info(context.TODO(), "initCollection Done")
+	log.Info(ctx, "initCollection Done")
 }
 
 func (s *BloomFilterTestSuit) TestLoadAndQuery() {
@@ -180,7 +180,7 @@ func (s *BloomFilterTestSuit) TestLoadAndQuery() {
 		OutputFields:   []string{"count(*)"},
 	})
 	if !merr.Ok(queryResult.GetStatus()) {
-		log.Warn(context.TODO(), "searchResult fail reason", log.String("reason", queryResult.GetStatus().GetReason()))
+		log.Warn(ctx, "searchResult fail reason", log.String("reason", queryResult.GetStatus().GetReason()))
 	}
 	s.NoError(err)
 	s.True(merr.Ok(queryResult.GetStatus()))

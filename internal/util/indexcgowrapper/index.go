@@ -122,7 +122,7 @@ func CreateIndex(ctx context.Context, buildIndexInfo *indexcgopb.BuildIndexInfo)
 
 	runtime.SetFinalizer(index, func(index *CgoIndex) {
 		if index != nil && !index.close {
-			log.Error(context.TODO(), "there is leakage in index object, please check.")
+			log.Error(ctx, "there is leakage in index object, please check.")
 		}
 	})
 

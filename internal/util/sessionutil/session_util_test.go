@@ -522,7 +522,7 @@ func TestSessionProcessActiveStandBy(t *testing.T) {
 	})
 	wg.Add(1)
 	s1.ProcessActiveStandBy(func() error {
-		log.Debug(context.TODO(), "Session 1 become active")
+		log.Debug(ctx, "Session 1 become active")
 		wg.Done()
 		return nil
 	})
@@ -538,7 +538,7 @@ func TestSessionProcessActiveStandBy(t *testing.T) {
 	s2.Register()
 	wg.Add(1)
 	go s2.ProcessActiveStandBy(func() error {
-		log.Debug(context.TODO(), "Session 2 become active")
+		log.Debug(ctx, "Session 2 become active")
 		wg.Done()
 		return nil
 	})
@@ -546,13 +546,13 @@ func TestSessionProcessActiveStandBy(t *testing.T) {
 
 	// assert.True(t, s2.watchingPrimaryKeyLock)
 	// stop session 1, session 2 will take over primary service
-	log.Debug(context.TODO(), "Stop session 1, session 2 will take over primary service")
+	log.Debug(ctx, "Stop session 1, session 2 will take over primary service")
 	assert.False(t, flag)
 
 	s1.Stop()
 
 	wg.Wait()
-	log.Debug(context.TODO(), "session s2 wait done")
+	log.Debug(ctx, "session s2 wait done")
 	assert.False(t, s2.isStandby.Load().(bool))
 	s2.Stop()
 }

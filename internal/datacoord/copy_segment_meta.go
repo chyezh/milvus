@@ -397,7 +397,7 @@ func NewCopySegmentMeta(ctx context.Context, catalog metastore.DataCoordCatalog,
 		}
 		snapshotName := job.GetSnapshotName()
 		copySegmentMeta.IncrementRestoreRef(snapshotName)
-		log.Info(context.TODO(), "rebuilt snapshot restore ref count from active job",
+		log.Info(ctx, "rebuilt snapshot restore ref count from active job",
 			log.String("snapshot", snapshotName),
 			log.Int64("jobID", job.GetJobId()),
 			log.String("state", state.String()))
@@ -537,7 +537,7 @@ func (m *copySegmentMeta) UpdateJobStateAndReleaseRef(ctx context.Context, jobID
 		return err
 	}
 	if prevJob == nil {
-		log.Warn(context.TODO(), "UpdateJobStateAndReleaseRef: job not found", log.Int64("jobID", jobID))
+		log.Warn(ctx, "UpdateJobStateAndReleaseRef: job not found", log.Int64("jobID", jobID))
 		return nil
 	}
 
@@ -552,7 +552,7 @@ func (m *copySegmentMeta) UpdateJobStateAndReleaseRef(ctx context.Context, jobID
 	// This prevents double-decrement when multiple paths try to fail the same job
 	if isTerminal && !wasTerminal {
 		m.restoreRefTracker.DecrementRestoreRef(updatedJob.GetSnapshotName())
-		log.Info(context.TODO(), "released snapshot reference on job completion",
+		log.Info(ctx, "released snapshot reference on job completion",
 			log.Int64("jobID", jobID),
 			log.String("snapshot", updatedJob.GetSnapshotName()),
 			log.String("previousState", previousState.String()),
@@ -590,7 +590,7 @@ func (m *copySegmentMeta) RemoveJob(ctx context.Context, jobID int64) error {
 		// Note: Snapshot restore reference was already decremented when the job
 		// transitioned to a terminal state (Completed/Failed), not here at removal.
 		// This decouples reference lifetime from job metadata cleanup.
-		log.Info(context.TODO(), "removed copy segment job",
+		log.Info(ctx, "removed copy segment job",
 			log.Int64("jobID", jobID))
 
 		// Remove from in-memory cache

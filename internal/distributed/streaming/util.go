@@ -110,7 +110,7 @@ func (u *walAccesserImpl) appendToVChannel(ctx context.Context, vchannel string,
 			// if the transaction is expired,
 			// there may be wal is transferred to another streaming node,
 			// retry it with new transaction.
-			u.Logger().Warn(nil, "transaction expired, retrying", log.String("vchannel", vchannel), log.Err(err))
+			u.Logger().Warn(ctx, "transaction expired, retrying", log.String("vchannel", vchannel), log.Err(err))
 			continue
 		}
 		return resp

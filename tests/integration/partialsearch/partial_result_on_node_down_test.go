@@ -69,7 +69,7 @@ func (s *PartialSearchTestSuit) initCollection(collectionName string, replica in
 	s.Equal(commonpb.ErrorCode_Success, loadStatus.GetErrorCode())
 	s.True(merr.Ok(loadStatus))
 	s.WaitForLoad(ctx, collectionName)
-	log.Info(context.TODO(), "initCollection Done")
+	log.Info(ctx, "initCollection Done")
 }
 
 func (s *PartialSearchTestSuit) executeQuery(collection string) (int, error) {
@@ -83,7 +83,7 @@ func (s *PartialSearchTestSuit) executeQuery(collection string) (int, error) {
 	})
 
 	if err := merr.CheckRPCCall(queryResult.GetStatus(), err); err != nil {
-		log.Info(context.TODO(), "query failed", log.Err(err))
+		log.Info(ctx, "query failed", log.Err(err))
 		return 0, err
 	}
 
@@ -329,16 +329,16 @@ func (s *PartialSearchTestSuit) TestEachReplicaHasNodeDownOnMultiReplica() {
 		for {
 			select {
 			case <-stopSearchCh:
-				log.Info(context.TODO(), "stop search")
+				log.Info(ctx, "stop search")
 				return
 			default:
 				numEntities, err := s.executeQuery(name)
 				if err != nil {
-					log.Info(context.TODO(), "query failed", log.Err(err))
+					log.Info(ctx, "query failed", log.Err(err))
 					failCounter.Inc()
 					continue
 				} else if numEntities < totalEntities {
-					log.Info(context.TODO(), "query return partial result", log.Int("numEntities", numEntities), log.Int("totalEntities", totalEntities))
+					log.Info(ctx, "query return partial result", log.Int("numEntities", numEntities), log.Int("totalEntities", totalEntities))
 					partialResultCounter.Inc()
 					s.True(numEntities >= int((float64(totalEntities) * partialResultRequiredDataRatio)))
 				}

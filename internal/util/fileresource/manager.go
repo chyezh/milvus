@@ -141,7 +141,7 @@ func (m *SyncManager) Sync(version uint64, resourceList []*internalpb.FileResour
 		// remove old file if exist
 		err := os.RemoveAll(localResourcePath)
 		if err != nil {
-			log.Warn(context.TODO(), "remove invalid local resource failed", log.String("path", localResourcePath), log.Err(err))
+			log.Warn(ctx, "remove invalid local resource failed", log.String("path", localResourcePath), log.Err(err))
 		}
 
 		err = os.MkdirAll(localResourcePath, os.ModePerm)
@@ -151,7 +151,7 @@ func (m *SyncManager) Sync(version uint64, resourceList []*internalpb.FileResour
 
 		reader, err := m.downloader.Reader(ctx, resource.GetPath())
 		if err != nil {
-			log.Info(context.TODO(), "download resource failed", log.String("path", resource.GetPath()), log.Err(err))
+			log.Info(ctx, "download resource failed", log.String("path", resource.GetPath()), log.Err(err))
 			return err
 		}
 		defer reader.Close()
@@ -164,10 +164,10 @@ func (m *SyncManager) Sync(version uint64, resourceList []*internalpb.FileResour
 		defer file.Close()
 
 		if _, err = io.Copy(file, reader); err != nil {
-			log.Info(context.TODO(), "download resource failed", log.String("path", resource.GetPath()), log.Err(err))
+			log.Info(ctx, "download resource failed", log.String("path", resource.GetPath()), log.Err(err))
 			return err
 		}
-		log.Info(context.TODO(), "sync file to local", log.String("name", fileName), log.Int64("id", resource.GetId()))
+		log.Info(ctx, "sync file to local", log.String("name", fileName), log.Int64("id", resource.GetId()))
 	}
 
 	for name, id := range m.resourceMap {
@@ -185,7 +185,7 @@ func (m *SyncManager) Sync(version uint64, resourceList []*internalpb.FileResour
 	for _, resourceID := range removes {
 		err := os.RemoveAll(path.Join(m.localPath, fmt.Sprint(resourceID)))
 		if err != nil {
-			log.Warn(context.TODO(), "remove local resource failed", log.Int64("id", resourceID), log.Err(err))
+			log.Warn(ctx, "remove local resource failed", log.Int64("id", resourceID), log.Err(err))
 		}
 	}
 	m.resourceMap = newResourceMap
@@ -249,7 +249,7 @@ func (m *RefManager) Download(ctx context.Context, downloader storage.ChunkManag
 
 			reader, err := downloader.Reader(ctx, resource.GetPath())
 			if err != nil {
-				log.Info(context.TODO(), "download resource failed", log.String("path", resource.GetPath()), log.Err(err))
+				log.Info(ctx, "download resource failed", log.String("path", resource.GetPath()), log.Err(err))
 				return nil, err
 			}
 			defer reader.Close()

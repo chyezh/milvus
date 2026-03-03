@@ -233,7 +233,7 @@ func (s *LoadTestSuite) TestLoadWithPredefineCollectionLevelConfig() {
 		})
 		s.NoError(err)
 		s.True(merr.Ok(resp2.Status))
-		log.Info(context.TODO(), "get replicas", log.Any("replicas", resp2.GetReplicas()))
+		log.Info(ctx, "get replicas", log.Any("replicas", resp2.GetReplicas()))
 		return len(resp2.GetReplicas()) == 2
 	}, 30*time.Second, time.Second)
 
@@ -644,7 +644,7 @@ func (s *LoadTestSuite) TestDynamicUpdateLoadConfigs_WithRGLackOfNode() {
 		s.Equal(5, len(resp3.GetReplicas()))
 		for _, replica := range resp3.GetReplicas() {
 			if len(replica.GetNodeIds()) != 2 { // one sn and one qn at least
-				log.Info(context.TODO(), "get replica info", log.Any("replica", replica))
+				log.Info(ctx, "get replica info", log.Any("replica", replica))
 				return false
 			}
 		}
@@ -718,7 +718,7 @@ func (s *LoadTestSuite) TestDynamicUpdateLoadConfigs_OnLoadingCollection() {
 			segmentNum += len(resp.Segments)
 			channelNum += len(resp.Channels)
 		}
-		log.Info(context.TODO(), "get data distribution", log.Int("segmentNum", segmentNum), log.Int("channelNum", channelNum))
+		log.Info(ctx, "get data distribution", log.Int("segmentNum", segmentNum), log.Int("channelNum", channelNum))
 		return segmentNum == 5 && channelNum == 5
 	}, 30*time.Second, 1*time.Second)
 

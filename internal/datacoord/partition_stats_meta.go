@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sync"
 
-
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"

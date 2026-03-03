@@ -65,7 +65,7 @@ func (policy *singleCompactionPolicy) Trigger(ctx context.Context) (map[Compacti
 		collectionViews, collectionSortViews, _, err := policy.triggerOneCollection(ctx, collection.ID, false)
 		if err != nil {
 			// not throw this error because no need to fail because of one collection
-			log.Warn(context.TODO(), "fail to trigger single compaction", log.Int64("collectionID", collection.ID), log.Err(err))
+			log.Warn(ctx, "fail to trigger single compaction", log.Int64("collectionID", collection.ID), log.Err(err))
 		}
 		views = append(views, collectionViews...)
 		if IsPartitionKeySortCompactionEnabled(collection.Properties) {
@@ -229,38 +229,38 @@ func (policy *singleCompactionPolicy) triggerSortCompaction(
 func (policy *singleCompactionPolicy) triggerOneCollection(ctx context.Context, collectionID int64, manual bool) ([]CompactionView, []CompactionView, int64, error) {
 	collection, err := policy.handler.GetCollection(ctx, collectionID)
 	if err != nil {
-		log.Warn(context.TODO(), "fail to apply singleCompactionPolicy, unable to get collection from handler",
+		log.Warn(ctx, "fail to apply singleCompactionPolicy, unable to get collection from handler",
 			log.Err(err))
 		return nil, nil, 0, err
 	}
 	if collection == nil {
-		log.Warn(context.TODO(), "fail to apply singleCompactionPolicy, collection not exist")
+		log.Warn(ctx, "fail to apply singleCompactionPolicy, collection not exist")
 		return nil, nil, 0, nil
 	}
 	if collection.IsExternal() {
-		log.Info(context.TODO(), "skip single compaction for external collection")
+		log.Info(ctx, "skip single compaction for external collection")
 		return nil, nil, 0, nil
 	}
 
 	collectionTTL, err := common.GetCollectionTTLFromMap(collection.Properties)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to apply singleCompactionPolicy, get collection ttl failed")
+		log.Warn(ctx, "failed to apply singleCompactionPolicy, get collection ttl failed")
 		return nil, nil, 0, err
 	}
 
 	newTriggerID, err := policy.allocator.AllocID(ctx)
 	if err != nil {
-		log.Warn(context.TODO(), "fail to apply singleCompactionPolicy, unable to allocate triggerID", log.Err(err))
+		log.Warn(ctx, "fail to apply singleCompactionPolicy, unable to allocate triggerID", log.Err(err))
 		return nil, nil, 0, err
 	}
 
 	sortViews, err := policy.triggerSortCompaction(ctx, newTriggerID, collectionID, collectionTTL)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to apply singleCompactionPolicy, trigger sort compaction failed", log.Err(err))
+		log.Warn(ctx, "failed to apply singleCompactionPolicy, trigger sort compaction failed", log.Err(err))
 		return nil, nil, 0, err
 	}
 	if !isCollectionAutoCompactionEnabled(collection) {
-		log.RatedInfo(context.TODO(), log.RateDefault, "collection auto compaction disabled")
+		log.RatedInfo(ctx, log.RateDefault, "collection auto compaction disabled")
 		return nil, sortViews, 0, nil
 	}
 
@@ -294,7 +294,7 @@ func (policy *singleCompactionPolicy) triggerOneCollection(ctx context.Context, 
 	}
 
 	if len(views) > 0 {
-		log.Info(context.TODO(), "succeeded to apply singleCompactionPolicy",
+		log.Info(ctx, "succeeded to apply singleCompactionPolicy",
 			log.Int64("triggerID", newTriggerID),
 			log.Int("triggered view num", len(views)))
 	}

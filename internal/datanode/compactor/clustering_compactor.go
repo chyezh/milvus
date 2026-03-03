@@ -468,7 +468,7 @@ func (t *clusteringCompactionTask) getVectorAnalyzeResult(ctx context.Context) e
 	for _, segmentID := range t.plan.AnalyzeSegmentIds {
 		path := path.Join(analyzeResultPath, metautil.JoinIDPath(t.collectionID, t.partitionID, t.clusteringKeyField.FieldID, segmentID), common.OffsetMapping)
 		offsetMappingFiles[segmentID] = path
-		log.Debug(context.TODO(), "read segment offset mapping file", log.Int64("segmentID", segmentID), log.String("path", path))
+		log.Debug(ctx, "read segment offset mapping file", log.Int64("segmentID", segmentID), log.String("path", path))
 	}
 	t.segmentIDOffsetMapping = offsetMappingFiles
 	centroidBytes, err := t.binlogIO.Download(ctx, []string{centroidFilePath})
@@ -480,7 +480,7 @@ func (t *clusteringCompactionTask) getVectorAnalyzeResult(ctx context.Context) e
 	if err != nil {
 		return err
 	}
-	log.Debug(context.TODO(), "read clustering centroids stats", log.String("path", centroidFilePath),
+	log.Debug(ctx, "read clustering centroids stats", log.String("path", centroidFilePath),
 		log.Int("centroidNum", len(centroids.GetCentroids())),
 		log.Any("offsetMappingFiles", t.segmentIDOffsetMapping))
 
@@ -750,7 +750,7 @@ func (t *clusteringCompactionTask) getMemoryBufferHighWatermark() int64 {
 func (t *clusteringCompactionTask) flushLargestBuffers(ctx context.Context) error {
 	currentMemorySize := t.getBufferTotalUsedMemorySize()
 	if currentMemorySize <= t.getMemoryBufferLowWatermark() {
-		log.Info(context.TODO(), "memory low water mark", log.Int64("memoryBufferSize", currentMemorySize))
+		log.Info(ctx, "memory low water mark", log.Int64("memoryBufferSize", currentMemorySize))
 		return nil
 	}
 	_, span := otel.Tracer(typeutil.DataNodeRole).Start(ctx, "flushLargestBuffers")
@@ -764,7 +764,7 @@ func (t *clusteringCompactionTask) flushLargestBuffers(ctx context.Context) erro
 	sort.Slice(bufferIDs, func(i, j int) bool {
 		return bufferSizes[bufferIDs[i]] > bufferSizes[bufferIDs[j]]
 	})
-	log.Info(context.TODO(), "start flushLargestBuffers", log.Ints("bufferIDs", bufferIDs), log.Int64("currentMemorySize", currentMemorySize))
+	log.Info(ctx, "start flushLargestBuffers", log.Ints("bufferIDs", bufferIDs), log.Int64("currentMemorySize", currentMemorySize))
 
 	futures := make([]*conc.Future[any], 0)
 	for _, bufferId := range bufferIDs {
@@ -772,7 +772,7 @@ func (t *clusteringCompactionTask) flushLargestBuffers(ctx context.Context) erro
 		size := buffer.GetBufferSize()
 		currentMemorySize -= int64(size)
 
-		log.Info(context.TODO(), "currentMemorySize after flush buffer binlog",
+		log.Info(ctx, "currentMemorySize after flush buffer binlog",
 			log.Int64("currentMemorySize", currentMemorySize),
 			log.Int("bufferID", bufferId),
 			log.Uint64("WrittenUncompressed", size))
@@ -787,7 +787,7 @@ func (t *clusteringCompactionTask) flushLargestBuffers(ctx context.Context) erro
 		futures = append(futures, future)
 
 		if currentMemorySize <= t.getMemoryBufferLowWatermark() {
-			log.Info(context.TODO(), "reach memory low water mark", log.Int64("memoryBufferSize", t.getBufferTotalUsedMemorySize()))
+			log.Info(ctx, "reach memory low water mark", log.Int64("memoryBufferSize", t.getBufferTotalUsedMemorySize()))
 			break
 		}
 	}
@@ -795,7 +795,7 @@ func (t *clusteringCompactionTask) flushLargestBuffers(ctx context.Context) erro
 		return err
 	}
 
-	log.Info(context.TODO(), "flushLargestBuffers end", log.Int64("currentMemorySize", currentMemorySize))
+	log.Info(ctx, "flushLargestBuffers end", log.Int64("currentMemorySize", currentMemorySize))
 	return nil
 }
 
@@ -835,7 +835,7 @@ func (t *clusteringCompactionTask) uploadPartitionStats(ctx context.Context, col
 	if err != nil {
 		return err
 	}
-	log.Info(context.TODO(), "Finish upload PartitionStats file", log.String("key", newStatsPath), log.Int("length", len(partitionStatsBytes)))
+	log.Info(ctx, "Finish upload PartitionStats file", log.String("key", newStatsPath), log.Int("length", len(partitionStatsBytes)))
 	return nil
 }
 
@@ -877,7 +877,7 @@ func (t *clusteringCompactionTask) scalarAnalyze(ctx context.Context) (map[inter
 	if err := conc.AwaitAll(futures...); err != nil {
 		return nil, err
 	}
-	log.Info(context.TODO(), "analyze end",
+	log.Info(ctx, "analyze end",
 		log.Int64("collectionID", t.GetCollection()),
 		log.Int64("partitionID", t.partitionID),
 		log.Int("segments", len(inputSegments)),

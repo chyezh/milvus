@@ -1,7 +1,6 @@
 package testcases
 
 import (
-	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -838,7 +837,7 @@ func TestNullableQuery(t *testing.T) {
 		{expr: fmt.Sprintf("%s is not null and %d <= %s < %d", common.DefaultVarcharFieldName, common.DefaultNb*3, common.DefaultInt64FieldName, common.DefaultNb*4), count: common.DefaultNb},
 	}
 	for _, exprCount := range exprCounts {
-		log.Info(context.TODO(), "exprCount", log.String("expr", exprCount.expr), log.Int64("count", exprCount.count))
+		log.Info(ctx, "exprCount", log.String("expr", exprCount.expr), log.Int64("count", exprCount.count))
 		countRes, err := mc.Query(ctx, client.NewQueryOption(schema.CollectionName).WithFilter(exprCount.expr).WithOutputFields(common.QueryCountFieldName))
 		common.CheckErr(t, err, true)
 		count, _ := countRes.Fields[0].GetAsInt64(0)
@@ -895,7 +894,7 @@ func TestDefaultValueQuery(t *testing.T) {
 			{expr: fmt.Sprintf("%s == 'test'", common.DefaultVarcharFieldName), count: common.DefaultNb * 3 / 2},
 		}
 		for _, exprCount := range exprCounts {
-			log.Info(context.TODO(), "exprCount", log.String("expr", exprCount.expr), log.Int64("count", exprCount.count))
+			log.Info(ctx, "exprCount", log.String("expr", exprCount.expr), log.Int64("count", exprCount.count))
 			countRes, err := mc.Query(ctx, client.NewQueryOption(schema.CollectionName).WithFilter(exprCount.expr).WithOutputFields(common.QueryCountFieldName))
 			common.CheckErr(t, err, true)
 			count, _ := countRes.Fields[0].GetAsInt64(0)

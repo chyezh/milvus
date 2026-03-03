@@ -458,13 +458,13 @@ func (b *broadcastTask) saveTaskIfDirty(ctx context.Context, logger *log.Logger)
 	b.dirty = false
 	logger = logger.With(log.String("state", b.task.State.String()), log.Int("ackedVChannelCount", ackedCount(b.task)))
 	if err := resource.Resource().StreamingCatalog().SaveBroadcastTask(ctx, b.Header().BroadcastID, b.task); err != nil {
-		logger.Warn(nil, "save broadcast task failed", log.Err(err))
+		logger.Warn(ctx, "save broadcast task failed", log.Err(err))
 		if ctx.Err() == nil {
 			panic("critical error: the save broadcast task is failed before the context is done")
 		}
 		return err
 	}
 	b.ObserveStateChanged(b.task.State)
-	logger.Info(nil, "save broadcast task done")
+	logger.Info(ctx, "save broadcast task done")
 	return nil
 }

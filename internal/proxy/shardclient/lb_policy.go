@@ -137,7 +137,7 @@ func (lb *LBPolicyImpl) selectNode(ctx context.Context, balancer LBBalancer, wor
 	trySelectNode := func(withCache bool) (NodeInfo, error) {
 		shardLeaders, err := lb.GetShard(ctx, workload.Db, workload.CollectionName, workload.CollectionID, workload.Channel, withCache)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to get shard delegator",
+			log.Warn(ctx, "failed to get shard delegator",
 				log.Err(err))
 			return NodeInfo{}, err
 		}
@@ -153,7 +153,7 @@ func (lb *LBPolicyImpl) selectNode(ctx context.Context, balancer LBBalancer, wor
 				}
 			}
 			if allReplicaExcluded {
-				log.Warn(context.TODO(), "all replicas are excluded after refresh shard leader cache, clear it and try to select node")
+				log.Warn(ctx, "all replicas are excluded after refresh shard leader cache, clear it and try to select node")
 				excludeNodes.Clear()
 			}
 		}
@@ -168,7 +168,7 @@ func (lb *LBPolicyImpl) selectNode(ctx context.Context, balancer LBBalancer, wor
 				serviceableNodesInStr := lo.Map(lo.Values(serviceableNodes), func(node NodeInfo, _ int) string {
 					return node.String()
 				})
-				log.Warn(context.TODO(), "failed to select shard",
+				log.Warn(ctx, "failed to select shard",
 					log.Int64s("excluded", excludeNodes.Collect()),
 					log.String("candidates", strings.Join(candidatesInStr, ", ")),
 					log.String("serviceableNodes", strings.Join(serviceableNodesInStr, ", ")),
@@ -235,7 +235,7 @@ func (lb *LBPolicyImpl) ExecuteWithRetry(ctx context.Context, workload ChannelWo
 		balancer := lb.getBalancer()
 		targetNode, err := lb.selectNode(ctx, balancer, workload, &excludeNodes)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to select node for shard",
+			log.Warn(ctx, "failed to select node for shard",
 				log.Int64("nodeID", targetNode.NodeID),
 				log.Int64s("excluded", excludeNodes.Collect()),
 				log.Err(err),
@@ -250,7 +250,7 @@ func (lb *LBPolicyImpl) ExecuteWithRetry(ctx context.Context, workload ChannelWo
 
 		client, err := lb.clientMgr.GetClient(ctx, targetNode)
 		if err != nil {
-			log.Warn(context.TODO(), "search/query channel failed, node not available",
+			log.Warn(ctx, "search/query channel failed, node not available",
 				log.Int64("nodeID", targetNode.NodeID),
 				log.Err(err))
 			lb.blacklist.Add(workload.Channel, targetNode.NodeID)
@@ -261,7 +261,7 @@ func (lb *LBPolicyImpl) ExecuteWithRetry(ctx context.Context, workload ChannelWo
 
 		err = workload.Exec(ctx, targetNode.NodeID, client, workload.Channel)
 		if err != nil {
-			log.Warn(context.TODO(), "search/query channel failed",
+			log.Warn(ctx, "search/query channel failed",
 				log.Int64("nodeID", targetNode.NodeID),
 				log.Err(err))
 			lb.blacklist.Add(workload.Channel, targetNode.NodeID)
@@ -274,13 +274,13 @@ func (lb *LBPolicyImpl) ExecuteWithRetry(ctx context.Context, workload ChannelWo
 
 	shardLeaders, err := lb.GetShard(ctx, workload.Db, workload.CollectionName, workload.CollectionID, workload.Channel, true)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to get shard leaders", log.Err(err))
+		log.Warn(ctx, "failed to get shard leaders", log.Err(err))
 		return err
 	}
 	retryTimes := max(lb.retryOnReplica, len(shardLeaders))
 	err = retry.Handle(ctx, tryExecute, retry.Attempts(uint(retryTimes)))
 	if err != nil {
-		log.Warn(context.TODO(), "failed to execute",
+		log.Warn(ctx, "failed to execute",
 			log.String("channel", workload.Channel),
 			log.Err(err))
 	}
@@ -292,12 +292,12 @@ func (lb *LBPolicyImpl) ExecuteWithRetry(ctx context.Context, workload ChannelWo
 func (lb *LBPolicyImpl) Execute(ctx context.Context, workload CollectionWorkLoad) error {
 	channelList, err := lb.GetShardLeaderList(ctx, workload.Db, workload.CollectionName, workload.CollectionID, true)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to get shards", log.Err(err))
+		log.Warn(ctx, "failed to get shards", log.Err(err))
 		return err
 	}
 
 	if len(channelList) == 0 {
-		log.Info(context.TODO(), "no shard leaders found", log.Int64("collectionID", workload.CollectionID))
+		log.Info(ctx, "no shard leaders found", log.Int64("collectionID", workload.CollectionID))
 		return merr.WrapErrCollectionNotLoaded(workload.CollectionID)
 	}
 

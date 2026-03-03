@@ -25,8 +25,8 @@ package vecindexmgr
 import "C"
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"fmt"
 	"sync"
 	"unsafe"
@@ -132,7 +132,7 @@ func (mgr *vecIndexMgrImpl) init() {
 		mgr.features[key] = vecIndexFeatures[i]
 		featureLog.WriteString(key + " : " + fmt.Sprintf("%d", vecIndexFeatures[i]) + ",")
 	}
-	log.Info(context.TODO(), "init vector indexes with features : " + featureLog.String())
+	log.Info(context.TODO(), "init vector indexes with features : "+featureLog.String())
 }
 
 func (mgr *vecIndexMgrImpl) isVectorTypeSupported(indexType IndexType, vectorFlag uint64, isEmbeddingList bool) bool {

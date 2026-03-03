@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"sync"
 
-
 	"github.com/milvus-io/milvus/internal/querynodev2/delegator"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"

@@ -1,7 +1,6 @@
 package testcases
 
 import (
-	"context"
 	"fmt"
 	"math/rand"
 	"strconv"
@@ -668,7 +667,7 @@ func TestSearchInvalidExpr(t *testing.T) {
 	// search with invalid expr
 	vectors := hp.GenSearchVectors(1, common.DefaultDim, entity.FieldTypeFloatVector)
 	for _, exprStruct := range common.InvalidExpressions {
-		log.Debug(context.TODO(), "TestSearchInvalidExpr", log.String("expr", exprStruct.Expr))
+		log.Debug(ctx, "TestSearchInvalidExpr", log.String("expr", exprStruct.Expr))
 		_, errSearch := mc.Search(ctx, client.NewSearchOption(schema.CollectionName, common.DefaultLimit, vectors).WithConsistencyLevel(entity.ClStrong).
 			WithFilter(exprStruct.Expr).WithANNSField(common.DefaultFloatVecFieldName))
 		common.CheckErr(t, errSearch, exprStruct.ErrNil, exprStruct.ErrMsg)
@@ -712,7 +711,7 @@ func TestSearchJsonFieldExpr(t *testing.T) {
 		// search with jsonField expr key datatype and json data type mismatch
 		for _, expr := range exprs {
 			t.Run(fmt.Sprintf("expr=%s_dynamic-%t", expr, dynamicField), func(t *testing.T) {
-				log.Debug(context.TODO(), "TestSearchJsonFieldExpr", log.String("expr", expr))
+				log.Debug(ctx, "TestSearchJsonFieldExpr", log.String("expr", expr))
 				vectors := hp.GenSearchVectors(common.DefaultNq, common.DefaultDim, entity.FieldTypeFloatVector)
 				searchRes, errSearch := mc.Search(ctx, client.NewSearchOption(schema.CollectionName, common.DefaultLimit, vectors).WithConsistencyLevel(entity.ClStrong).
 					WithFilter(expr).WithANNSField(common.DefaultFloatVecFieldName).WithOutputFields(common.DefaultInt64FieldName, common.DefaultJSONFieldName))
@@ -748,7 +747,7 @@ func TestSearchDynamicFieldExpr(t *testing.T) {
 
 	// search with jsonField expr key datatype and json data type mismatch
 	for _, expr := range exprs {
-		log.Debug(context.TODO(), "TestSearchDynamicFieldExpr", log.String("expr", expr))
+		log.Debug(ctx, "TestSearchDynamicFieldExpr", log.String("expr", expr))
 		vectors := hp.GenSearchVectors(common.DefaultNq, common.DefaultDim, entity.FieldTypeFloatVector)
 		searchRes, errSearch := mc.Search(ctx, client.NewSearchOption(schema.CollectionName, common.DefaultLimit, vectors).WithConsistencyLevel(entity.ClStrong).
 			WithFilter(expr).WithANNSField(common.DefaultFloatVecFieldName).WithOutputFields(common.DefaultInt64FieldName, "dynamicNumber", "number"))
@@ -1121,7 +1120,7 @@ func TestRangeSearchSparseVector(t *testing.T) {
 	common.CheckErr(t, errSearch, true)
 	require.Len(t, resRange, common.DefaultNq)
 	for _, res := range resRange {
-		log.Info(context.TODO(), "default search", log.Any("score", res.Scores))
+		log.Info(ctx, "default search", log.Any("score", res.Scores))
 	}
 
 	annParams := index.NewSparseAnnParam()
@@ -1134,7 +1133,7 @@ func TestRangeSearchSparseVector(t *testing.T) {
 	common.CheckErr(t, errSearch, true)
 	require.Len(t, resRange, common.DefaultNq)
 	for _, res := range resRange {
-		log.Info(context.TODO(), "range search", log.Any("score", res.Scores))
+		log.Info(ctx, "range search", log.Any("score", res.Scores))
 	}
 	for _, res := range resRange {
 		for _, s := range res.Scores {

@@ -102,7 +102,7 @@ func (s *BulkInsertSuite) runTestAutoID() {
 			importResp, err := c.ProxyClient.ImportV2(ctx, importReqs[i])
 			s.NoError(err)
 			s.Equal(int32(0), importResp.GetStatus().GetCode())
-			log.Info(context.TODO(), "Import result", log.Any("importResp", importResp))
+			log.Info(ctx, "Import result", log.Any("importResp", importResp))
 			err = WaitForImportDone(ctx, c, importResp.GetJobID())
 			s.NoError(err)
 		}()

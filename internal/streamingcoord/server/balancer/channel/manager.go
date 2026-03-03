@@ -304,11 +304,11 @@ func (cm *ChannelManager) AddPChannels(ctx context.Context, newChannels []string
 			c := newPChannelMetaFromProto(m, cm.replicateConfig)
 			delete(cm.channels, c.ChannelID())
 		}
-		cm.Logger().Error(nil, "failed to save new pchannels", log.Err(err))
+		cm.Logger().Error(ctx, "failed to save new pchannels", log.Err(err))
 		return err
 	}
 
-	cm.Logger().Info(nil, "dynamically added new pchannels",
+	cm.Logger().Info(ctx, "dynamically added new pchannels",
 		log.Int("count", len(newMetas)),
 		log.Strings("channels", newChannels))
 	return nil
@@ -339,7 +339,7 @@ func (cm *ChannelManager) MarkStreamingHasEnabled(ctx context.Context) error {
 	}
 
 	if err := resource.Resource().StreamingCatalog().SaveVersion(ctx, cm.streamingVersion); err != nil {
-		cm.Logger().Error(nil, "failed to save streaming version", log.Err(err))
+		cm.Logger().Error(ctx, "failed to save streaming version", log.Err(err))
 		return err
 	}
 
@@ -367,7 +367,7 @@ func (cm *ChannelManager) MarkWALBasedDDLEnabled(ctx context.Context) error {
 	}
 	cm.streamingVersion.Version = StreamingVersion265
 	if err := resource.Resource().StreamingCatalog().SaveVersion(ctx, cm.streamingVersion); err != nil {
-		cm.Logger().Error(nil, "failed to save streaming version", log.Err(err))
+		cm.Logger().Error(ctx, "failed to save streaming version", log.Err(err))
 		return err
 	}
 	return nil
@@ -533,7 +533,7 @@ func (cm *ChannelManager) updatePChannelMeta(ctx context.Context, pChannelMetas 
 	}
 
 	if err := resource.Resource().StreamingCatalog().SavePChannels(ctx, pChannelMetas); err != nil {
-		cm.Logger().Error(nil, "failed to save pchannels", log.Err(err))
+		cm.Logger().Error(ctx, "failed to save pchannels", log.Err(err))
 		return err
 	}
 
@@ -612,7 +612,7 @@ func (cm *ChannelManager) UpdateReplicateConfiguration(ctx context.Context, resu
 	if err := resource.Resource().StreamingCatalog().SaveReplicateConfiguration(ctx,
 		&streamingpb.ReplicateConfigurationMeta{ReplicateConfiguration: config.GetReplicateConfiguration()},
 		newIncomingCDCTasks); err != nil {
-		cm.Logger().Error(nil, "failed to save replicate configuration", log.Err(err))
+		cm.Logger().Error(ctx, "failed to save replicate configuration", log.Err(err))
 		return err
 	}
 

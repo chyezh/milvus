@@ -134,7 +134,7 @@ func (sw *sessionDiscoverer) watch(ctx context.Context, cb func(VersionedState) 
 // handleETCDEvent handles the etcd event.
 func (sw *sessionDiscoverer) handleETCDEvent(resp clientv3.WatchResponse) error {
 	if resp.Err() != nil {
-		sw.Logger().Warn(nil, "etcd watch failed with error", log.Err(resp.Err()))
+		sw.Logger().Warn(context.TODO(), "etcd watch failed with error", log.Err(resp.Err()))
 		return resp.Err()
 	}
 
@@ -146,13 +146,13 @@ func (sw *sessionDiscoverer) handleETCDEvent(resp clientv3.WatchResponse) error 
 			logger = logger.With(log.String("sessionValue", string(ev.Kv.Value)))
 			session, err := sw.parseSession(ev.Kv.Value)
 			if err != nil {
-				logger.Warn(nil, "failed to parse session", log.Err(err))
+				logger.Warn(context.TODO(), "failed to parse session", log.Err(err))
 				continue
 			}
-			logger.Info(nil, "new server modification")
+			logger.Info(context.TODO(), "new server modification")
 			sw.peerSessions[string(ev.Kv.Key)] = session
 		case clientv3.EventTypeDelete:
-			logger.Info(nil, "old server removed")
+			logger.Info(context.TODO(), "old server removed")
 			delete(sw.peerSessions, string(ev.Kv.Key))
 		}
 	}
@@ -175,10 +175,10 @@ func (sw *sessionDiscoverer) initDiscover(ctx context.Context) error {
 		logger := sw.Logger().With(log.String("sessionKey", string(kv.Key)), log.String("sessionValue", string(kv.Value)))
 		session, err := sw.parseSession(kv.Value)
 		if err != nil {
-			logger.Warn(nil, "fail to parse session when initializing discoverer", log.Err(err))
+			logger.Warn(ctx, "fail to parse session when initializing discoverer", log.Err(err))
 			continue
 		}
-		logger.Info(nil, "new server initialization", log.Any("session", session))
+		logger.Info(ctx, "new server initialization", log.Any("session", session))
 		sw.peerSessions[string(kv.Key)] = session
 	}
 	sw.revision = resp.Header.Revision
@@ -202,13 +202,13 @@ func (sw *sessionDiscoverer) parseState() VersionedState {
 		session := session
 		v, err := semver.Parse(session.Version)
 		if err != nil {
-			sw.Logger().Error(nil, "failed to parse version for session", log.Int64("serverID", session.ServerID), log.String("version", session.Version), log.Err(err))
+			sw.Logger().Error(context.TODO(), "failed to parse version for session", log.Int64("serverID", session.ServerID), log.String("version", session.Version), log.Err(err))
 			continue
 		}
 		// filter low version.
 		// !!! important, stopping nodes should not be removed here.
 		if !sw.versionRange(v) {
-			sw.Logger().Info(nil, "skip low version node", log.Int64("serverID", session.ServerID), log.String("version", session.Version))
+			sw.Logger().Info(context.TODO(), "skip low version node", log.Int64("serverID", session.ServerID), log.String("version", session.Version))
 			continue
 		}
 		address := session.Address
@@ -216,7 +216,7 @@ func (sw *sessionDiscoverer) parseState() VersionedState {
 			// replace the port with the force port in session address.
 			host, _, err := net.SplitHostPort(address)
 			if err != nil {
-				sw.Logger().Error(nil, "failed to split host and port for session", log.Int64("serverID", session.ServerID), log.String("address", address), log.Err(err))
+				sw.Logger().Error(context.TODO(), "failed to split host and port for session", log.Int64("serverID", session.ServerID), log.String("address", address), log.Err(err))
 				continue
 			}
 			address = net.JoinHostPort(host, strconv.Itoa(sw.forcePort))

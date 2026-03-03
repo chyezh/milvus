@@ -33,14 +33,14 @@ type Server struct {
 
 // Init initializes the streamingcoord server.
 func (s *Server) Start(ctx context.Context, checker balancer.FileResourceChecker) (err error) {
-	s.logger.Info(nil, "init streamingcoord...")
+	s.logger.Info(ctx, "init streamingcoord...")
 	if err := s.initBasicComponent(ctx); err != nil {
-		s.logger.Warn(nil, "init basic component of streamingcoord failed", log.Err(err))
+		s.logger.Warn(ctx, "init basic component of streamingcoord failed", log.Err(err))
 		return err
 	}
 	balance.SetFileResourceChecker(checker)
 	// Init all grpc service of streamingcoord server.
-	s.logger.Info(nil, "streamingcoord initialized")
+	s.logger.Info(ctx, "streamingcoord initialized")
 	return nil
 }
 
@@ -48,31 +48,31 @@ func (s *Server) Start(ctx context.Context, checker balancer.FileResourceChecker
 func (s *Server) initBasicComponent(ctx context.Context) (err error) {
 	futures := make([]*conc.Future[struct{}], 0)
 	futures = append(futures, conc.Go(func() (struct{}, error) {
-		s.logger.Info(nil, "start recovery balancer...")
+		s.logger.Info(ctx, "start recovery balancer...")
 		// Create a provider that reads channel names from configuration
 		// and polls for dynamic changes.
 		provider := util.NewConfigChannelProvider()
 		balancer, err := balancer.RecoverBalancer(ctx, provider)
 		if err != nil {
 			provider.Close()
-			s.logger.Warn(nil, "recover balancer failed", log.Err(err))
+			s.logger.Warn(ctx, "recover balancer failed", log.Err(err))
 			return struct{}{}, err
 		}
 		balance.Register(balancer)
-		s.logger.Info(nil, "recover balancer done")
+		s.logger.Info(ctx, "recover balancer done")
 		return struct{}{}, nil
 	}))
 	// The broadcaster of msgstream is implemented on current streamingcoord to reduce the development complexity.
 	// So we need to recover it.
 	futures = append(futures, conc.Go(func() (struct{}, error) {
-		s.logger.Info(nil, "start recovery broadcaster...")
+		s.logger.Info(ctx, "start recovery broadcaster...")
 		broadcaster, err := broadcaster.RecoverBroadcaster(ctx)
 		if err != nil {
-			s.logger.Warn(nil, "recover broadcaster failed", log.Err(err))
+			s.logger.Warn(ctx, "recover broadcaster failed", log.Err(err))
 			return struct{}{}, err
 		}
 		broadcast.Register(broadcaster)
-		s.logger.Info(nil, "recover broadcaster done")
+		s.logger.Info(ctx, "recover broadcaster done")
 		return struct{}{}, nil
 	}))
 	return conc.AwaitAll(futures...)
@@ -86,11 +86,11 @@ func (s *Server) RegisterGRPCService(grpcServer *grpc.Server) {
 
 // Close closes the streamingcoord server.
 func (s *Server) Stop() {
-	s.logger.Info(nil, "start close balancer...")
+	s.logger.Info(context.TODO(), "start close balancer...")
 	balance.Release()
-	s.logger.Info(nil, "start close broadcaster...")
+	s.logger.Info(context.TODO(), "start close broadcaster...")
 	broadcast.Release()
-	s.logger.Info(nil, "release streamingcoord resource...")
+	s.logger.Info(context.TODO(), "release streamingcoord resource...")
 	resource.Release()
-	s.logger.Info(nil, "streamingcoord server stopped")
+	s.logger.Info(context.TODO(), "streamingcoord server stopped")
 }

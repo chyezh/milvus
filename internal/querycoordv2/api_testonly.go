@@ -21,6 +21,7 @@ package querycoordv2
 
 import (
 	"context"
+
 	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 

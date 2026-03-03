@@ -151,7 +151,7 @@ func (it *indexBuildTask) CreateTaskOnWorker(nodeID int64, cluster session.Clust
 	// Check if task exists in meta
 	segIndex, exist := it.meta.indexMeta.GetIndexJob(it.BuildID)
 	if !exist || segIndex == nil {
-		log.Info(context.TODO(), "index task has not exist in meta table, removing task")
+		log.Info(ctx, "index task has not exist in meta table, removing task")
 		it.SetState(indexpb.JobState_JobStateNone, "index task has not exist in meta table")
 		return
 	}
@@ -159,7 +159,7 @@ func (it *indexBuildTask) CreateTaskOnWorker(nodeID int64, cluster session.Clust
 	// Check segment health and index existence
 	segment := it.meta.GetSegment(ctx, segIndex.SegmentID)
 	if !isSegmentHealthy(segment) || !it.meta.indexMeta.IsIndexExist(segIndex.CollectionID, segIndex.IndexID) {
-		log.Info(context.TODO(), "task is no need to build index, removing it")
+		log.Info(ctx, "task is no need to build index, removing it")
 		it.SetState(indexpb.JobState_JobStateNone, "task is no need to build index")
 		return
 	}
@@ -179,7 +179,7 @@ func (it *indexBuildTask) CreateTaskOnWorker(nodeID int64, cluster session.Clust
 		}
 	}
 	if isNoTrainIndex(indexType) || effectiveRows < Params.DataCoordCfg.MinSegmentNumRowsToEnableIndex.GetAsInt64() {
-		log.Info(context.TODO(), "segment does not need index really, marking as finished", log.Int64("numRows", segIndex.NumRows), log.Int64("effectiveRows", effectiveRows))
+		log.Info(ctx, "segment does not need index really, marking as finished", log.Int64("numRows", segIndex.NumRows), log.Int64("effectiveRows", effectiveRows))
 		now := time.Now()
 		it.SetTaskTime(taskcommon.TimeStart, now)
 		it.SetTaskTime(taskcommon.TimeEnd, now)
@@ -190,13 +190,13 @@ func (it *indexBuildTask) CreateTaskOnWorker(nodeID int64, cluster session.Clust
 	// Create job request
 	req, err := it.prepareJobRequest(ctx, segment, segIndex, indexParams, indexType)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to prepare job request", log.Err(err))
+		log.Warn(ctx, "failed to prepare job request", log.Err(err))
 		return
 	}
 
 	// Update task version
 	if err := it.UpdateTaskVersion(nodeID); err != nil {
-		log.Warn(context.TODO(), "failed to update task version", log.Err(err))
+		log.Warn(ctx, "failed to update task version", log.Err(err))
 		return
 	}
 
@@ -208,17 +208,17 @@ func (it *indexBuildTask) CreateTaskOnWorker(nodeID int64, cluster session.Clust
 
 	// Send request to worker
 	if err = cluster.CreateIndex(nodeID, req); err != nil {
-		log.Warn(context.TODO(), "failed to send job to worker", log.Err(err))
+		log.Warn(ctx, "failed to send job to worker", log.Err(err))
 		return
 	}
 
 	// Update state to in progress
 	if err = it.UpdateStateWithMeta(indexpb.JobState_JobStateInProgress, ""); err != nil {
-		log.Warn(context.TODO(), "failed to update task state", log.Err(err))
+		log.Warn(ctx, "failed to update task state", log.Err(err))
 		return
 	}
 
-	log.Info(context.TODO(), "index task assigned successfully")
+	log.Info(ctx, "index task assigned successfully")
 }
 
 // Helper method to prepare job request

@@ -33,8 +33,8 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
@@ -274,7 +274,7 @@ func (gc *garbageCollector) GetStatus() GcStatus {
 
 func (gc *garbageCollector) Pause(ctx context.Context, collectionID int64, ticket string, pauseDuration time.Duration) error {
 	if !gc.option.enabled {
-		log.Info(context.TODO(), "garbage collection not enabled")
+		log.Info(ctx, "garbage collection not enabled")
 		return nil
 	}
 	done := make(chan error, 1)
@@ -295,7 +295,7 @@ func (gc *garbageCollector) Pause(ctx context.Context, collectionID int64, ticke
 
 func (gc *garbageCollector) Resume(ctx context.Context, collectionID int64, ticket string) error {
 	if !gc.option.enabled {
-		log.Warn(context.TODO(), "garbage collection not enabled, cannot resume")
+		log.Warn(ctx, "garbage collection not enabled, cannot resume")
 		return merr.WrapErrServiceUnavailable("garbage collection not enabled")
 	}
 	done := make(chan error)
@@ -358,7 +358,7 @@ func (gc *garbageCollector) ackSignal(signal <-chan gcCmd) {
 }
 
 // startControlLoop start a control loop for garbageCollector.
-func (gc *garbageCollector) startControlLoop(_ context.Context) {
+func (gc *garbageCollector) startControlLoop(ctx context.Context) {
 	hardware.RegisterSystemMetricsListener(gc.systemMetricsListener)
 	defer hardware.UnregisterSystemMetricsListener(gc.systemMetricsListener)
 
@@ -374,7 +374,7 @@ func (gc *garbageCollector) startControlLoop(_ context.Context) {
 			}
 			close(cmd.done)
 		case <-gc.ctx.Done():
-			log.Warn(context.TODO(), "garbage collector control loop quit")
+			log.Warn(ctx, "garbage collector control loop quit")
 			return
 		}
 	}
@@ -452,13 +452,13 @@ func (gc *garbageCollector) runRecycleTaskWithPauser(ctx context.Context, name s
 		case <-timer.C:
 			globalPauseUntil := gc.pauseUntil.PauseUntil()
 			if time.Now().Before(globalPauseUntil) {
-				logger.Info(nil, "garbage collector paused", log.Time("until", globalPauseUntil))
+				logger.Info(ctx, "garbage collector paused", log.Time("until", globalPauseUntil))
 				continue
 			}
-			logger.Info(nil, "garbage collector recycle task start...")
+			logger.Info(ctx, "garbage collector recycle task start...")
 			start := time.Now()
 			task(ctx, signal)
-			logger.Info(nil, "garbage collector recycle task done", log.Duration("timeCost", time.Since(start)))
+			logger.Info(ctx, "garbage collector recycle task done", log.Duration("timeCost", time.Since(start)))
 		}
 	}
 }
@@ -483,9 +483,9 @@ func (gc *garbageCollector) close() {
 // if missing found, performs gc cleanup
 func (gc *garbageCollector) recycleUnusedBinlogFiles(ctx context.Context) {
 	start := time.Now()
-	log.Info(context.TODO(), "start recycleUnusedBinlogFiles...")
+	log.Info(ctx, "start recycleUnusedBinlogFiles...")
 	defer func() {
-		log.Info(context.TODO(), "recycleUnusedBinlogFiles done", log.Duration("timeCost", time.Since(start)))
+		log.Info(ctx, "recycleUnusedBinlogFiles done", log.Duration("timeCost", time.Since(start)))
 	}()
 
 	type scanTask struct {
@@ -506,7 +506,7 @@ func (gc *garbageCollector) recycleUnusedBinlogFiles(ctx context.Context) {
 			checker: func(objectInfo *storage.ChunkObjectInfo, segment *SegmentInfo) bool {
 				logID, err := binlog.GetLogIDFromBingLogPath(objectInfo.FilePath)
 				if err != nil {
-					log.Warn(context.TODO(), "garbageCollector find dirty stats log", log.String("filePath", objectInfo.FilePath), log.Err(err))
+					log.Warn(ctx, "garbageCollector find dirty stats log", log.String("filePath", objectInfo.FilePath), log.Err(err))
 					return false
 				}
 				return segment != nil && segment.IsStatsLogExists(logID)
@@ -518,7 +518,7 @@ func (gc *garbageCollector) recycleUnusedBinlogFiles(ctx context.Context) {
 			checker: func(objectInfo *storage.ChunkObjectInfo, segment *SegmentInfo) bool {
 				logID, err := binlog.GetLogIDFromBingLogPath(objectInfo.FilePath)
 				if err != nil {
-					log.Warn(context.TODO(), "garbageCollector find dirty dleta log", log.String("filePath", objectInfo.FilePath), log.Err(err))
+					log.Warn(ctx, "garbageCollector find dirty dleta log", log.String("filePath", objectInfo.FilePath), log.Err(err))
 					return false
 				}
 				return segment != nil && segment.IsDeltaLogExists(logID)
@@ -537,7 +537,7 @@ func (gc *garbageCollector) recycleUnusedBinlogFiles(ctx context.Context) {
 // GC the file if checker returns false.
 func (gc *garbageCollector) recycleUnusedBinLogWithChecker(ctx context.Context, prefix string, label string, checker func(objectInfo *storage.ChunkObjectInfo, segment *SegmentInfo) bool) {
 	logger := log.With(log.String("prefix", prefix))
-	logger.Info(nil, "garbageCollector recycleUnusedBinlogFiles start", log.String("prefix", prefix))
+	logger.Info(ctx, "garbageCollector recycleUnusedBinlogFiles start", log.String("prefix", prefix))
 	lastFilePath := ""
 	total := 0
 	valid := 0
@@ -552,7 +552,7 @@ func (gc *garbageCollector) recycleUnusedBinLogWithChecker(ctx context.Context, 
 
 		// Check file tolerance first to avoid unnecessary operation.
 		if time.Since(chunkInfo.ModifyTime) <= gc.option.missingTolerance {
-			logger.Info(nil, "garbageCollector recycleUnusedBinlogFiles skip file since it is not expired", log.String("filePath", chunkInfo.FilePath), log.Time("modifyTime", chunkInfo.ModifyTime))
+			logger.Info(ctx, "garbageCollector recycleUnusedBinlogFiles skip file since it is not expired", log.String("filePath", chunkInfo.FilePath), log.Time("modifyTime", chunkInfo.ModifyTime))
 			return true
 		}
 
@@ -561,7 +561,7 @@ func (gc *garbageCollector) recycleUnusedBinLogWithChecker(ctx context.Context, 
 		segmentID, err := storage.ParseSegmentIDByBinlog(gc.option.cli.RootPath(), chunkInfo.FilePath)
 		if err != nil {
 			unexpectedFailure.Inc()
-			logger.Warn(nil, "garbageCollector recycleUnusedBinlogFiles parse segment id error",
+			logger.Warn(ctx, "garbageCollector recycleUnusedBinlogFiles parse segment id error",
 				log.String("filePath", chunkInfo.FilePath),
 				log.Err(err))
 			return true
@@ -570,7 +570,7 @@ func (gc *garbageCollector) recycleUnusedBinLogWithChecker(ctx context.Context, 
 		segment := gc.meta.GetSegment(ctx, segmentID)
 		if checker(chunkInfo, segment) {
 			valid++
-			logger.Info(nil, "garbageCollector recycleUnusedBinlogFiles skip file since it is valid", log.String("filePath", chunkInfo.FilePath), log.Int64("segmentID", segmentID))
+			logger.Info(ctx, "garbageCollector recycleUnusedBinlogFiles skip file since it is valid", log.String("filePath", chunkInfo.FilePath), log.Int64("segmentID", segmentID))
 			return true
 		}
 
@@ -580,14 +580,14 @@ func (gc *garbageCollector) recycleUnusedBinLogWithChecker(ctx context.Context, 
 			if snapshotMeta != nil {
 				// If RefIndex is not loaded yet, skip to avoid incorrectly deleting snapshot-referenced files
 				if !snapshotMeta.IsRefIndexLoadedForCollection(segment.GetCollectionID()) {
-					logger.Info(nil, "skip GC binlog files since snapshot RefIndex is not loaded yet",
+					logger.Info(ctx, "skip GC binlog files since snapshot RefIndex is not loaded yet",
 						log.Int64("segmentID", segmentID),
 						log.Int64("collectionID", segment.GetCollectionID()))
 					valid++
 					return true
 				}
 				if snapshotIDs := snapshotMeta.GetSnapshotBySegment(ctx, segment.GetCollectionID(), segmentID); len(snapshotIDs) > 0 {
-					logger.Info(nil, "skip GC binlog files since segment is referenced by snapshot",
+					logger.Info(ctx, "skip GC binlog files since segment is referenced by snapshot",
 						log.Int64("segmentID", segmentID),
 						log.Int64s("snapshotIDs", snapshotIDs))
 					valid++
@@ -601,14 +601,14 @@ func (gc *garbageCollector) recycleUnusedBinLogWithChecker(ctx context.Context, 
 
 		future := gc.option.removeObjectPool.Submit(func() (struct{}, error) {
 			logger := logger.With(log.String("file", file))
-			logger.Info(nil, "garbageCollector recycleUnusedBinlogFiles remove file...")
+			logger.Info(ctx, "garbageCollector recycleUnusedBinlogFiles remove file...")
 
 			if err = gc.option.cli.Remove(ctx, file); err != nil {
-				log.Warn(context.TODO(), "garbageCollector recycleUnusedBinlogFiles remove file failed", log.Err(err))
+				log.Warn(ctx, "garbageCollector recycleUnusedBinlogFiles remove file failed", log.Err(err))
 				unexpectedFailure.Inc()
 				return struct{}{}, err
 			}
-			log.Info(context.TODO(), "garbageCollector recycleUnusedBinlogFiles remove file success")
+			log.Info(ctx, "garbageCollector recycleUnusedBinlogFiles remove file success")
 			removed.Inc()
 			return struct{}{}, nil
 		})
@@ -618,11 +618,11 @@ func (gc *garbageCollector) recycleUnusedBinLogWithChecker(ctx context.Context, 
 	// Wait for all remove tasks done.
 	if err := conc.BlockOnAll(futures...); err != nil {
 		// error is logged, and can be ignored here.
-		logger.Warn(nil, "some task failure in remove object pool", log.Err(err))
+		logger.Warn(ctx, "some task failure in remove object pool", log.Err(err))
 	}
 
 	cost := time.Since(start)
-	logger.Info(nil, "garbageCollector recycleUnusedBinlogFiles done",
+	logger.Info(ctx, "garbageCollector recycleUnusedBinlogFiles done",
 		log.Int("total", total),
 		log.Int("valid", valid),
 		log.Int("unexpectedFailure", int(unexpectedFailure.Load())),
@@ -674,9 +674,9 @@ func (gc *garbageCollector) checkDroppedSegmentGC(segment *SegmentInfo,
 // recycleDroppedSegments scans all segments and remove those dropped segments from meta and oss.
 func (gc *garbageCollector) recycleDroppedSegments(ctx context.Context, signal <-chan gcCmd) {
 	start := time.Now()
-	log.Info(context.TODO(), "start clear dropped segments...")
+	log.Info(ctx, "start clear dropped segments...")
 	defer func() {
-		log.Info(context.TODO(), "clear dropped segments done", log.Duration("timeCost", time.Since(start)))
+		log.Info(ctx, "clear dropped segments done", log.Duration("timeCost", time.Since(start)))
 	}()
 
 	all := gc.meta.SelectSegments(ctx)
@@ -720,14 +720,14 @@ func (gc *garbageCollector) recycleDroppedSegments(ctx context.Context, signal <
 	loadedSegments := typeutil.NewSet[int64]()
 	segments, err := gc.handler.ListLoadedSegments(ctx)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to get loaded segments", log.Err(err))
+		log.Warn(ctx, "failed to get loaded segments", log.Err(err))
 		return
 	}
 	for _, segmentID := range segments {
 		loadedSegments.Insert(segmentID)
 	}
 
-	log.Info(context.TODO(), "start to GC segments", log.Int("drop_num", len(drops)))
+	log.Info(ctx, "start to GC segments", log.Int("drop_num", len(drops)))
 	for segmentID, segment := range drops {
 		if ctx.Err() != nil {
 			// process canceled, stop.
@@ -737,13 +737,13 @@ func (gc *garbageCollector) recycleDroppedSegments(ctx context.Context, signal <
 		gc.ackSignal(signal)
 
 		if gc.collectionGCPaused(segment.GetCollectionID()) {
-			log.Info(context.TODO(), "skip GC segment since collection is paused", log.Int64("segmentID", segmentID), log.Int64("collectionID", segment.GetCollectionID()))
+			log.Info(ctx, "skip GC segment since collection is paused", log.Int64("segmentID", segmentID), log.Int64("collectionID", segment.GetCollectionID()))
 			continue
 		}
 
 		segInsertChannel := segment.GetInsertChannel()
 		if loadedSegments.Contain(segmentID) {
-			log.Info(context.TODO(), "skip GC segment since it is loaded", log.Int64("segmentID", segmentID))
+			log.Info(ctx, "skip GC segment since it is loaded", log.Int64("segmentID", segmentID))
 			continue
 		}
 
@@ -752,13 +752,13 @@ func (gc *garbageCollector) recycleDroppedSegments(ctx context.Context, signal <
 		snapshotMeta := gc.meta.GetSnapshotMeta()
 		if snapshotMeta != nil {
 			if !snapshotMeta.IsRefIndexLoadedForCollection(segment.GetCollectionID()) {
-				log.Info(context.TODO(), "skip GC segment since snapshot RefIndex is not loaded yet",
+				log.Info(ctx, "skip GC segment since snapshot RefIndex is not loaded yet",
 					log.Int64("collectionID", segment.GetCollectionID()))
 				continue
 			}
 
 			if snapshotIDs := snapshotMeta.GetSnapshotBySegment(ctx, segment.GetCollectionID(), segmentID); len(snapshotIDs) > 0 {
-				log.Info(context.TODO(), "skip GC segment since it is referenced by snapshot",
+				log.Info(ctx, "skip GC segment since it is referenced by snapshot",
 					log.Int64("collectionID", segment.GetCollectionID()),
 					log.Int64("partitionID", segment.GetPartitionID()),
 					log.String("channel", segInsertChannel),
@@ -784,24 +784,24 @@ func (gc *garbageCollector) recycleDroppedSegments(ctx context.Context, signal <
 			logs[key] = struct{}{}
 		}
 
-		log.Info(context.TODO(), "GC segment start...", log.Int("insert_logs", len(cloned.GetBinlogs())),
+		log.Info(ctx, "GC segment start...", log.Int("insert_logs", len(cloned.GetBinlogs())),
 			log.Int("delta_logs", len(cloned.GetDeltalogs())),
 			log.Int("stats_logs", len(cloned.GetStatslogs())),
 			log.Int("bm25_logs", len(cloned.GetBm25Statslogs())),
 			log.Int("text_logs", len(cloned.GetTextStatsLogs())),
 			log.Int("json_key_logs", len(cloned.GetJsonKeyStats())))
 		if err := gc.removeObjectFiles(ctx, logs); err != nil {
-			log.Warn(context.TODO(), "GC segment remove logs failed", log.Err(err))
+			log.Warn(ctx, "GC segment remove logs failed", log.Err(err))
 			cloned = nil
 			continue
 		}
 
 		if err := gc.meta.DropSegment(ctx, cloned.GetID()); err != nil {
-			log.Warn(context.TODO(), "GC segment meta failed to drop segment", log.Err(err))
+			log.Warn(ctx, "GC segment meta failed to drop segment", log.Err(err))
 			cloned = nil
 			continue
 		}
-		log.Info(context.TODO(), "GC segment meta drop segment done")
+		log.Info(ctx, "GC segment meta drop segment done")
 		cloned = nil // release memory
 	}
 }
@@ -809,14 +809,14 @@ func (gc *garbageCollector) recycleDroppedSegments(ctx context.Context, signal <
 func (gc *garbageCollector) recycleChannelCPMeta(ctx context.Context, signal <-chan gcCmd) {
 	channelCPs, err := gc.meta.catalog.ListChannelCheckpoint(ctx)
 	if err != nil {
-		log.Warn(context.TODO(), "list channel cp fail during GC", log.Err(err))
+		log.Warn(ctx, "list channel cp fail during GC", log.Err(err))
 		return
 	}
 
 	collectionID2GcStatus := make(map[int64]bool)
 	skippedCnt := 0
 
-	log.Info(context.TODO(), "start to GC channel cp", log.Int("vchannelCPCnt", len(channelCPs)))
+	log.Info(ctx, "start to GC channel cp", log.Int("vchannelCPCnt", len(channelCPs)))
 	for vChannel := range channelCPs {
 		collectionID := funcutil.GetCollectionIDFromVChannel(vChannel)
 		if gc.collectionGCPaused(collectionID) {
@@ -828,7 +828,7 @@ func (gc *garbageCollector) recycleChannelCPMeta(ctx context.Context, signal <-c
 		// !!! Skip to GC if vChannel format is illegal, it will lead meta leak in this case
 		if collectionID == -1 {
 			skippedCnt++
-			log.Warn(context.TODO(), "parse collection id fail, skip to gc channel cp", log.String("vchannel", vChannel))
+			log.Warn(ctx, "parse collection id fail, skip to gc channel cp", log.String("vchannel", vChannel))
 			continue
 		}
 
@@ -845,7 +845,7 @@ func (gc *garbageCollector) recycleChannelCPMeta(ctx context.Context, signal <-c
 				collectionID2GcStatus[collectionID] = gc.meta.catalog.GcConfirm(ctx, collectionID, -1)
 			} else {
 				// skip checkpoints GC of this cycle if describe collection fails or the collection state is available.
-				log.Debug(context.TODO(), "skip channel cp GC, the collection state is available",
+				log.Debug(ctx, "skip channel cp GC, the collection state is available",
 					log.Int64("collectionID", collectionID),
 					log.Bool("dropped", has), log.Err(err))
 				collectionID2GcStatus[collectionID] = false
@@ -861,13 +861,13 @@ func (gc *garbageCollector) recycleChannelCPMeta(ctx context.Context, signal <-c
 		err := gc.meta.DropChannelCheckpoint(vChannel)
 		if err != nil {
 			// Try to GC in the next gc cycle if drop channel cp meta fail.
-			log.Warn(context.TODO(), "failed to drop channelcp check point during gc", log.String("vchannel", vChannel), log.Err(err))
+			log.Warn(ctx, "failed to drop channelcp check point during gc", log.String("vchannel", vChannel), log.Err(err))
 		} else {
-			log.Info(context.TODO(), "GC channel cp", log.String("vchannel", vChannel))
+			log.Info(ctx, "GC channel cp", log.String("vchannel", vChannel))
 		}
 	}
 
-	log.Info(context.TODO(), "GC channel cp done", log.Int("skippedChannelCP", skippedCnt))
+	log.Info(ctx, "GC channel cp done", log.Int("skippedChannelCP", skippedCnt))
 }
 
 func (gc *garbageCollector) isExpire(dropts Timestamp) bool {
@@ -951,9 +951,9 @@ func (gc *garbageCollector) removeObjectFiles(ctx context.Context, filePaths map
 // recycleUnusedIndexes is used to delete those indexes that is deleted by collection.
 func (gc *garbageCollector) recycleUnusedIndexes(ctx context.Context, signal <-chan gcCmd) {
 	start := time.Now()
-	log.Info(context.TODO(), "start recycleUnusedIndexes...")
+	log.Info(ctx, "start recycleUnusedIndexes...")
 	defer func() {
-		log.Info(context.TODO(), "recycleUnusedIndexes done", log.Duration("timeCost", time.Since(start)))
+		log.Info(ctx, "recycleUnusedIndexes done", log.Duration("timeCost", time.Since(start)))
 	}()
 
 	deletedIndexes := gc.meta.indexMeta.GetDeletedIndexes()
@@ -968,19 +968,19 @@ func (gc *garbageCollector) recycleUnusedIndexes(ctx context.Context, signal <-c
 		gc.ackSignal(signal)
 
 		if err := gc.meta.indexMeta.RemoveIndex(ctx, index.CollectionID, index.IndexID); err != nil {
-			log.Warn(context.TODO(), "remove index on collection fail", log.Err(err))
+			log.Warn(ctx, "remove index on collection fail", log.Err(err))
 			continue
 		}
-		log.Info(context.TODO(), "remove index on collection done")
+		log.Info(ctx, "remove index on collection done")
 	}
 }
 
 // recycleUnusedSegIndexes remove the index of segment if index is deleted or segment itself is deleted.
 func (gc *garbageCollector) recycleUnusedSegIndexes(ctx context.Context, signal <-chan gcCmd) {
 	start := time.Now()
-	log.Info(context.TODO(), "start recycleUnusedSegIndexes...")
+	log.Info(ctx, "start recycleUnusedSegIndexes...")
 	defer func() {
-		log.Info(context.TODO(), "recycleUnusedSegIndexes done", log.Duration("timeCost", time.Since(start)))
+		log.Info(ctx, "recycleUnusedSegIndexes done", log.Duration("timeCost", time.Since(start)))
 	}()
 
 	segIndexes := gc.meta.indexMeta.GetAllSegIndexes()
@@ -1003,39 +1003,39 @@ func (gc *garbageCollector) recycleUnusedSegIndexes(ctx context.Context, signal 
 			snapshotMeta := gc.meta.GetSnapshotMeta()
 			if snapshotMeta != nil {
 				if !snapshotMeta.IsRefIndexLoadedForCollection(segIdx.CollectionID) {
-					log.Info(context.TODO(), "skip GC segment index since snapshot RefIndex is not loaded yet",
+					log.Info(ctx, "skip GC segment index since snapshot RefIndex is not loaded yet",
 						log.Int64("collectionID", segIdx.CollectionID))
 					continue
 				}
 
 				if snapshotIDs := snapshotMeta.GetSnapshotByIndex(ctx, segIdx.CollectionID, segIdx.IndexID); len(snapshotIDs) > 0 {
-					log.Info(context.TODO(), "skip GC segment index since it is referenced by snapshot",
+					log.Info(ctx, "skip GC segment index since it is referenced by snapshot",
 						log.Int64s("snapshotIDs", snapshotIDs))
 					continue
 				}
 			}
 
-			log.Info(context.TODO(), "GC Segment Index file start...")
+			log.Info(ctx, "GC Segment Index file start...")
 
 			// Remove index files first.
 			if err := gc.removeObjectFiles(ctx, indexFiles); err != nil {
-				log.Warn(context.TODO(), "fail to remove index files for index", log.Err(err))
+				log.Warn(ctx, "fail to remove index files for index", log.Err(err))
 				continue
 			}
 
 			// Remove meta from index meta.
 			if err := gc.meta.indexMeta.RemoveSegmentIndex(ctx, segIdx.BuildID); err != nil {
-				log.Warn(context.TODO(), "delete index meta from etcd failed, wait to retry", log.Err(err))
+				log.Warn(ctx, "delete index meta from etcd failed, wait to retry", log.Err(err))
 				continue
 			}
-			log.Info(context.TODO(), "index meta recycle success")
+			log.Info(ctx, "index meta recycle success")
 		}
 	}
 }
 
 // recycleUnusedIndexFiles is used to delete those index files that no longer exist in the meta.
 func (gc *garbageCollector) recycleUnusedIndexFiles(ctx context.Context) {
-	log.Info(context.TODO(), "start recycleUnusedIndexFiles...")
+	log.Info(ctx, "start recycleUnusedIndexFiles...")
 
 	prefix := path.Join(gc.option.cli.RootPath(), common.SegmentIndexPath) + "/"
 	// list dir first
@@ -1047,27 +1047,27 @@ func (gc *garbageCollector) recycleUnusedIndexFiles(ctx context.Context) {
 
 		buildID, err := parseBuildIDFromFilePath(key)
 		if err != nil {
-			logger.Warn(nil, "garbageCollector recycleUnusedIndexFiles parseIndexFileKey", log.Err(err))
+			logger.Warn(ctx, "garbageCollector recycleUnusedIndexFiles parseIndexFileKey", log.Err(err))
 			return true
 		}
 		logger = logger.With(log.Int64("buildID", buildID))
-		logger.Info(nil, "garbageCollector will recycle index files")
+		logger.Info(ctx, "garbageCollector will recycle index files")
 		canRecycle, segIdx := gc.meta.indexMeta.CheckCleanSegmentIndex(buildID)
 		if !canRecycle {
 			// Even if the index is marked as deleted, the index file will not be recycled, wait for the next gc,
 			// and delete all index files about the buildID at one time.
-			logger.Info(nil, "garbageCollector can not recycle index files")
+			logger.Info(ctx, "garbageCollector can not recycle index files")
 			return true
 		}
 		if segIdx == nil {
 			// buildID no longer exists in meta, remove all index files
-			logger.Info(nil, "garbageCollector recycleUnusedIndexFiles find meta has not exist, remove index files")
+			logger.Info(ctx, "garbageCollector recycleUnusedIndexFiles find meta has not exist, remove index files")
 			err = gc.option.cli.RemoveWithPrefix(ctx, key)
 			if err != nil {
-				logger.Warn(nil, "garbageCollector recycleUnusedIndexFiles remove index files failed", log.Err(err))
+				logger.Warn(ctx, "garbageCollector recycleUnusedIndexFiles remove index files failed", log.Err(err))
 				return true
 			}
-			logger.Info(nil, "garbageCollector recycleUnusedIndexFiles remove index files success")
+			logger.Info(ctx, "garbageCollector recycleUnusedIndexFiles remove index files success")
 			return true
 		}
 
@@ -1076,7 +1076,7 @@ func (gc *garbageCollector) recycleUnusedIndexFiles(ctx context.Context) {
 		snapshotMeta := gc.meta.GetSnapshotMeta()
 		if snapshotMeta != nil {
 			if !snapshotMeta.IsRefIndexLoadedForCollection(segIdx.CollectionID) {
-				logger.Info(nil, "skip GC index files since snapshot RefIndex is not loaded yet",
+				logger.Info(ctx, "skip GC index files since snapshot RefIndex is not loaded yet",
 					log.Int64("collectionID", segIdx.CollectionID))
 				return true
 			}
@@ -1084,7 +1084,7 @@ func (gc *garbageCollector) recycleUnusedIndexFiles(ctx context.Context) {
 			// Check if this index is referenced by any snapshot
 			// If snapshots reference this index, do not delete the index files
 			if snapshotIDs := snapshotMeta.GetSnapshotByIndex(ctx, segIdx.CollectionID, segIdx.IndexID); len(snapshotIDs) > 0 {
-				logger.Info(nil, "skip GC index files since index is referenced by snapshot",
+				logger.Info(ctx, "skip GC index files since index is referenced by snapshot",
 					log.Int64s("snapshotIDs", snapshotIDs))
 				return true
 			}
@@ -1092,7 +1092,7 @@ func (gc *garbageCollector) recycleUnusedIndexFiles(ctx context.Context) {
 
 		filesMap := gc.getAllIndexFilesOfIndex(segIdx)
 
-		logger.Info(nil, "recycle index files", log.Int("meta files num", len(filesMap)))
+		logger.Info(ctx, "recycle index files", log.Int("meta files num", len(filesMap)))
 		deletedFilesNum := atomic.NewInt32(0)
 		fileNum := 0
 
@@ -1103,14 +1103,14 @@ func (gc *garbageCollector) recycleUnusedIndexFiles(ctx context.Context) {
 			if _, ok := filesMap[file]; !ok {
 				future := gc.option.removeObjectPool.Submit(func() (struct{}, error) {
 					logger := logger.With(log.String("file", file))
-					logger.Info(nil, "garbageCollector recycleUnusedIndexFiles remove file...")
+					logger.Info(ctx, "garbageCollector recycleUnusedIndexFiles remove file...")
 
 					if err := gc.option.cli.Remove(ctx, file); err != nil {
-						logger.Warn(nil, "garbageCollector recycleUnusedIndexFiles remove file failed", log.Err(err))
+						logger.Warn(ctx, "garbageCollector recycleUnusedIndexFiles remove file failed", log.Err(err))
 						return struct{}{}, err
 					}
 					deletedFilesNum.Inc()
-					logger.Info(nil, "garbageCollector recycleUnusedIndexFiles remove file success")
+					logger.Info(ctx, "garbageCollector recycleUnusedIndexFiles remove file success")
 					return struct{}{}, nil
 				})
 				futures = append(futures, future)
@@ -1120,22 +1120,22 @@ func (gc *garbageCollector) recycleUnusedIndexFiles(ctx context.Context) {
 		// Wait for all remove tasks done.
 		if err := conc.BlockOnAll(futures...); err != nil {
 			// error is logged, and can be ignored here.
-			logger.Warn(nil, "some task failure in remove object pool", log.Err(err))
+			logger.Warn(ctx, "some task failure in remove object pool", log.Err(err))
 		}
 
 		logger = logger.With(log.Int("deleteIndexFilesNum", int(deletedFilesNum.Load())), log.Int("walkFileNum", fileNum))
 		if err != nil {
-			logger.Warn(nil, "index files recycle failed when walk with prefix", log.Err(err))
+			logger.Warn(ctx, "index files recycle failed when walk with prefix", log.Err(err))
 			return true
 		}
-		logger.Info(nil, "index files recycle done")
+		logger.Info(ctx, "index files recycle done")
 		return true
 	})
 	if err != nil {
-		log.Warn(context.TODO(), "garbageCollector recycleUnusedIndexFiles failed", log.Err(err))
+		log.Warn(ctx, "garbageCollector recycleUnusedIndexFiles failed", log.Err(err))
 		return
 	}
-	log.Info(context.TODO(), "recycleUnusedIndexFiles done")
+	log.Info(ctx, "recycleUnusedIndexFiles done")
 }
 
 // getAllIndexFilesOfIndex returns the all index files of index.
@@ -1151,7 +1151,7 @@ func (gc *garbageCollector) getAllIndexFilesOfIndex(segmentIndex *model.SegmentI
 
 // recycleUnusedAnalyzeFiles is used to delete those analyze stats files that no longer exist in the meta.
 func (gc *garbageCollector) recycleUnusedAnalyzeFiles(ctx context.Context, signal <-chan gcCmd) {
-	log.Info(context.TODO(), "start recycleUnusedAnalyzeFiles")
+	log.Info(ctx, "start recycleUnusedAnalyzeFiles")
 	startTs := time.Now()
 	prefix := path.Join(gc.option.cli.RootPath(), common.AnalyzeStatsPath) + "/"
 	// list dir first
@@ -1161,10 +1161,10 @@ func (gc *garbageCollector) recycleUnusedAnalyzeFiles(ctx context.Context, signa
 		return true
 	})
 	if err != nil {
-		log.Warn(context.TODO(), "garbageCollector recycleUnusedAnalyzeFiles list keys from chunk manager failed", log.Err(err))
+		log.Warn(ctx, "garbageCollector recycleUnusedAnalyzeFiles list keys from chunk manager failed", log.Err(err))
 		return
 	}
-	log.Info(context.TODO(), "recycleUnusedAnalyzeFiles, finish list object", log.Duration("time spent", time.Since(startTs)), log.Int("task ids", len(keys)))
+	log.Info(ctx, "recycleUnusedAnalyzeFiles, finish list object", log.Duration("time spent", time.Since(startTs)), log.Int("task ids", len(keys)))
 	for _, key := range keys {
 		if ctx.Err() != nil {
 			// process canceled
@@ -1173,36 +1173,36 @@ func (gc *garbageCollector) recycleUnusedAnalyzeFiles(ctx context.Context, signa
 		// collection gc pause not affect analyze file for now
 		gc.ackSignal(signal)
 
-		log.Debug(context.TODO(), "analyze keys", log.String("key", key))
+		log.Debug(ctx, "analyze keys", log.String("key", key))
 		taskID, err := parseBuildIDFromFilePath(key)
 		if err != nil {
-			log.Warn(context.TODO(), "garbageCollector recycleUnusedAnalyzeFiles parseAnalyzeResult failed", log.String("key", key), log.Err(err))
+			log.Warn(ctx, "garbageCollector recycleUnusedAnalyzeFiles parseAnalyzeResult failed", log.String("key", key), log.Err(err))
 			continue
 		}
-		log.Info(context.TODO(), "garbageCollector will recycle analyze stats files", log.Int64("taskID", taskID))
+		log.Info(ctx, "garbageCollector will recycle analyze stats files", log.Int64("taskID", taskID))
 		canRecycle, task := gc.meta.analyzeMeta.CheckCleanAnalyzeTask(taskID)
 		if !canRecycle {
 			// Even if the analysis task is marked as deleted, the analysis stats file will not be recycled, wait for the next gc,
 			// and delete all index files about the taskID at one time.
-			log.Info(context.TODO(), "garbageCollector no need to recycle analyze stats files", log.Int64("taskID", taskID))
+			log.Info(ctx, "garbageCollector no need to recycle analyze stats files", log.Int64("taskID", taskID))
 			continue
 		}
 		if task == nil {
 			// taskID no longer exists in meta, remove all analysis files
-			log.Info(context.TODO(), "garbageCollector recycleUnusedAnalyzeFiles find meta has not exist, remove index files",
+			log.Info(ctx, "garbageCollector recycleUnusedAnalyzeFiles find meta has not exist, remove index files",
 				log.Int64("taskID", taskID))
 			err = gc.option.cli.RemoveWithPrefix(ctx, key)
 			if err != nil {
-				log.Warn(context.TODO(), "garbageCollector recycleUnusedAnalyzeFiles remove analyze stats files failed",
+				log.Warn(ctx, "garbageCollector recycleUnusedAnalyzeFiles remove analyze stats files failed",
 					log.Int64("taskID", taskID), log.String("prefix", key), log.Err(err))
 				continue
 			}
-			log.Info(context.TODO(), "garbageCollector recycleUnusedAnalyzeFiles remove analyze stats files success",
+			log.Info(ctx, "garbageCollector recycleUnusedAnalyzeFiles remove analyze stats files success",
 				log.Int64("taskID", taskID), log.String("prefix", key))
 			continue
 		}
 
-		log.Info(context.TODO(), "remove analyze stats files which version is less than current task",
+		log.Info(ctx, "remove analyze stats files which version is less than current task",
 			log.Int64("taskID", taskID), log.Int64("current version", task.Version))
 		var i int64
 		for i = 0; i < task.Version; i++ {
@@ -1212,12 +1212,12 @@ func (gc *garbageCollector) recycleUnusedAnalyzeFiles(ctx context.Context, signa
 			}
 			removePrefix := prefix + fmt.Sprintf("%d/", task.Version)
 			if err := gc.option.cli.RemoveWithPrefix(ctx, removePrefix); err != nil {
-				log.Warn(context.TODO(), "garbageCollector recycleUnusedAnalyzeFiles remove files with prefix failed",
+				log.Warn(ctx, "garbageCollector recycleUnusedAnalyzeFiles remove files with prefix failed",
 					log.Int64("taskID", taskID), log.String("removePrefix", removePrefix))
 				continue
 			}
 		}
-		log.Info(context.TODO(), "analyze stats files recycle success", log.Int64("taskID", taskID))
+		log.Info(ctx, "analyze stats files recycle success", log.Int64("taskID", taskID))
 	}
 }
 
@@ -1225,9 +1225,9 @@ func (gc *garbageCollector) recycleUnusedAnalyzeFiles(ctx context.Context, signa
 // if missing found, performs gc cleanup
 func (gc *garbageCollector) recycleUnusedTextIndexFiles(ctx context.Context, signal <-chan gcCmd) {
 	start := time.Now()
-	log.Info(context.TODO(), "start recycleUnusedTextIndexFiles...")
+	log.Info(ctx, "start recycleUnusedTextIndexFiles...")
 	defer func() {
-		log.Info(context.TODO(), "recycleUnusedTextIndexFiles done", log.Duration("timeCost", time.Since(start)))
+		log.Info(ctx, "recycleUnusedTextIndexFiles done", log.Duration("timeCost", time.Since(start)))
 	}()
 
 	hasTextIndexSegments := gc.meta.SelectSegments(ctx, SegmentFilterFunc(func(info *SegmentInfo) bool {
@@ -1241,7 +1241,7 @@ func (gc *garbageCollector) recycleUnusedTextIndexFiles(ctx context.Context, sig
 			return
 		}
 		if gc.collectionGCPaused(seg.GetCollectionID()) {
-			log.Info(context.TODO(), "skip GC segment since collection is paused", log.Int64("segmentID", seg.GetID()), log.Int64("collectionID", seg.GetCollectionID()))
+			log.Info(ctx, "skip GC segment since collection is paused", log.Int64("segmentID", seg.GetID()), log.Int64("collectionID", seg.GetCollectionID()))
 			continue
 		}
 
@@ -1250,13 +1250,13 @@ func (gc *garbageCollector) recycleUnusedTextIndexFiles(ctx context.Context, sig
 		if snapshotMeta != nil {
 			// If RefIndex is not loaded yet, skip to avoid incorrectly deleting snapshot-referenced files
 			if !snapshotMeta.IsRefIndexLoadedForCollection(seg.GetCollectionID()) {
-				log.Info(context.TODO(), "skip GC text index files since snapshot RefIndex is not loaded yet",
+				log.Info(ctx, "skip GC text index files since snapshot RefIndex is not loaded yet",
 					log.Int64("segmentID", seg.GetID()),
 					log.Int64("collectionID", seg.GetCollectionID()))
 				continue
 			}
 			if snapshotIDs := snapshotMeta.GetSnapshotBySegment(ctx, seg.GetCollectionID(), seg.GetID()); len(snapshotIDs) > 0 {
-				log.Info(context.TODO(), "skip GC text index files since segment is referenced by snapshot",
+				log.Info(ctx, "skip GC text index files since segment is referenced by snapshot",
 					log.Int64("segmentID", seg.GetID()),
 					log.Int64s("snapshotIDs", snapshotIDs))
 				continue
@@ -1275,14 +1275,14 @@ func (gc *garbageCollector) recycleUnusedTextIndexFiles(ctx context.Context, sig
 					file := files.FilePath
 
 					future := gc.option.removeObjectPool.Submit(func() (struct{}, error) {
-						log.Info(context.TODO(), "garbageCollector recycleUnusedTextIndexFiles remove file...")
+						log.Info(ctx, "garbageCollector recycleUnusedTextIndexFiles remove file...")
 
 						if err := gc.option.cli.Remove(ctx, file); err != nil {
-							log.Warn(context.TODO(), "garbageCollector recycleUnusedTextIndexFiles remove file failed", log.Err(err))
+							log.Warn(ctx, "garbageCollector recycleUnusedTextIndexFiles remove file failed", log.Err(err))
 							return struct{}{}, err
 						}
 						deletedFilesNum.Inc()
-						log.Info(context.TODO(), "garbageCollector recycleUnusedTextIndexFiles remove file success")
+						log.Info(ctx, "garbageCollector recycleUnusedTextIndexFiles remove file success")
 						return struct{}{}, nil
 					})
 					futures = append(futures, future)
@@ -1292,17 +1292,17 @@ func (gc *garbageCollector) recycleUnusedTextIndexFiles(ctx context.Context, sig
 				// Wait for all remove tasks done.
 				if err := conc.BlockOnAll(futures...); err != nil {
 					// error is logged, and can be ignored here.
-					log.Warn(context.TODO(), "some task failure in remove object pool", log.Err(err))
+					log.Warn(ctx, "some task failure in remove object pool", log.Err(err))
 				}
 
 				if err != nil {
-					log.Warn(context.TODO(), "text index files recycle failed when walk with prefix", log.Err(err))
+					log.Warn(ctx, "text index files recycle failed when walk with prefix", log.Err(err))
 					return
 				}
 			}
 		}
 	}
-	log.Info(context.TODO(), "text index files recycle done")
+	log.Info(ctx, "text index files recycle done")
 
 	metrics.GarbageCollectorRunCount.WithLabelValues(paramtable.GetStringNodeID()).Add(1)
 }
@@ -1311,9 +1311,9 @@ func (gc *garbageCollector) recycleUnusedTextIndexFiles(ctx context.Context, sig
 // if missing found, performs gc cleanup
 func (gc *garbageCollector) recycleUnusedJSONStatsFiles(ctx context.Context, signal <-chan gcCmd) {
 	start := time.Now()
-	log.Info(context.TODO(), "start recycleUnusedJSONStatsFiles...")
+	log.Info(ctx, "start recycleUnusedJSONStatsFiles...")
 	defer func() {
-		log.Info(context.TODO(), "recycleUnusedJSONStatsFiles done", log.Duration("timeCost", time.Since(start)))
+		log.Info(ctx, "recycleUnusedJSONStatsFiles done", log.Duration("timeCost", time.Since(start)))
 	}()
 
 	hasJSONStatsSegments := gc.meta.SelectSegments(ctx, SegmentFilterFunc(func(info *SegmentInfo) bool {
@@ -1328,7 +1328,7 @@ func (gc *garbageCollector) recycleUnusedJSONStatsFiles(ctx context.Context, sig
 			return
 		}
 		if gc.collectionGCPaused(seg.GetCollectionID()) {
-			log.Info(context.TODO(), "skip GC segment since collection is paused", log.Int64("segmentID", seg.GetID()), log.Int64("collectionID", seg.GetCollectionID()))
+			log.Info(ctx, "skip GC segment since collection is paused", log.Int64("segmentID", seg.GetID()), log.Int64("collectionID", seg.GetCollectionID()))
 			continue
 		}
 		gc.ackSignal(signal)
@@ -1343,14 +1343,14 @@ func (gc *garbageCollector) recycleUnusedJSONStatsFiles(ctx context.Context, sig
 					file := files.FilePath
 
 					future := gc.option.removeObjectPool.Submit(func() (struct{}, error) {
-						log.Info(context.TODO(), "garbageCollector recycleUnusedJSONStatsFiles remove file...")
+						log.Info(ctx, "garbageCollector recycleUnusedJSONStatsFiles remove file...")
 
 						if err := gc.option.cli.Remove(ctx, file); err != nil {
-							log.Warn(context.TODO(), "garbageCollector recycleUnusedJSONStatsFiles remove file failed", log.Err(err))
+							log.Warn(ctx, "garbageCollector recycleUnusedJSONStatsFiles remove file failed", log.Err(err))
 							return struct{}{}, err
 						}
 						deletedFilesNum.Inc()
-						log.Info(context.TODO(), "garbageCollector recycleUnusedJSONStatsFiles remove file success")
+						log.Info(ctx, "garbageCollector recycleUnusedJSONStatsFiles remove file success")
 						return struct{}{}, nil
 					})
 					futures = append(futures, future)
@@ -1360,11 +1360,11 @@ func (gc *garbageCollector) recycleUnusedJSONStatsFiles(ctx context.Context, sig
 				// Wait for all remove tasks done.
 				if err := conc.BlockOnAll(futures...); err != nil {
 					// error is logged, and can be ignored here.
-					log.Warn(context.TODO(), "some task failure in remove object pool", log.Err(err))
+					log.Warn(ctx, "some task failure in remove object pool", log.Err(err))
 				}
 
 				if err != nil {
-					log.Warn(context.TODO(), "json stats files recycle failed when walk with prefix", log.Err(err))
+					log.Warn(ctx, "json stats files recycle failed when walk with prefix", log.Err(err))
 					return
 				}
 			}
@@ -1379,14 +1379,14 @@ func (gc *garbageCollector) recycleUnusedJSONStatsFiles(ctx context.Context, sig
 					file := files.FilePath
 
 					future := gc.option.removeObjectPool.Submit(func() (struct{}, error) {
-						log.Info(context.TODO(), "garbageCollector recycleUnusedJSONStatsFiles remove file...")
+						log.Info(ctx, "garbageCollector recycleUnusedJSONStatsFiles remove file...")
 
 						if err := gc.option.cli.Remove(ctx, file); err != nil {
-							log.Warn(context.TODO(), "garbageCollector recycleUnusedJSONStatsFiles remove file failed", log.Err(err))
+							log.Warn(ctx, "garbageCollector recycleUnusedJSONStatsFiles remove file failed", log.Err(err))
 							return struct{}{}, err
 						}
 						deletedFilesNum.Inc()
-						log.Info(context.TODO(), "garbageCollector recycleUnusedJSONStatsFiles remove file success")
+						log.Info(ctx, "garbageCollector recycleUnusedJSONStatsFiles remove file success")
 						return struct{}{}, nil
 					})
 					futures = append(futures, future)
@@ -1396,17 +1396,17 @@ func (gc *garbageCollector) recycleUnusedJSONStatsFiles(ctx context.Context, sig
 				// Wait for all remove tasks done.
 				if err := conc.BlockOnAll(futures...); err != nil {
 					// error is logged, and can be ignored here.
-					log.Warn(context.TODO(), "some task failure in remove object pool", log.Err(err))
+					log.Warn(ctx, "some task failure in remove object pool", log.Err(err))
 				}
 
 				if err != nil {
-					log.Warn(context.TODO(), "json stats lower data format files recycle failed when walk with prefix", log.Err(err))
+					log.Warn(ctx, "json stats lower data format files recycle failed when walk with prefix", log.Err(err))
 					return
 				}
 			}
 		}
 	}
-	log.Info(context.TODO(), "json stats files recycle done",
+	log.Info(ctx, "json stats files recycle done",
 		log.Int("deleteJSONStatsNum", int(deletedFilesNum.Load())),
 		log.Int("walkFileNum", fileNum))
 
@@ -1416,9 +1416,9 @@ func (gc *garbageCollector) recycleUnusedJSONStatsFiles(ctx context.Context, sig
 // recycleUnusedJSONIndexFiles load meta file info and compares OSS keys
 func (gc *garbageCollector) recycleUnusedJSONIndexFiles(ctx context.Context, signal <-chan gcCmd) {
 	start := time.Now()
-	log.Info(context.TODO(), "start recycleUnusedJSONIndexFiles...")
+	log.Info(ctx, "start recycleUnusedJSONIndexFiles...")
 	defer func() {
-		log.Info(context.TODO(), "recycleUnusedJSONIndexFiles done", log.Duration("timeCost", time.Since(start)))
+		log.Info(ctx, "recycleUnusedJSONIndexFiles done", log.Duration("timeCost", time.Since(start)))
 	}()
 
 	hasJSONIndexSegments := gc.meta.SelectSegments(ctx, SegmentFilterFunc(func(info *SegmentInfo) bool {
@@ -1433,7 +1433,7 @@ func (gc *garbageCollector) recycleUnusedJSONIndexFiles(ctx context.Context, sig
 			return
 		}
 		if gc.collectionGCPaused(seg.GetCollectionID()) {
-			log.Info(context.TODO(), "skip GC segment since collection is paused", log.Int64("segmentID", seg.GetID()), log.Int64("collectionID", seg.GetCollectionID()))
+			log.Info(ctx, "skip GC segment since collection is paused", log.Int64("segmentID", seg.GetID()), log.Int64("collectionID", seg.GetCollectionID()))
 			continue
 		}
 
@@ -1442,13 +1442,13 @@ func (gc *garbageCollector) recycleUnusedJSONIndexFiles(ctx context.Context, sig
 		if snapshotMeta != nil {
 			// If RefIndex is not loaded yet, skip to avoid incorrectly deleting snapshot-referenced files
 			if !snapshotMeta.IsRefIndexLoadedForCollection(seg.GetCollectionID()) {
-				log.Info(context.TODO(), "skip GC JSON index files since snapshot RefIndex is not loaded yet",
+				log.Info(ctx, "skip GC JSON index files since snapshot RefIndex is not loaded yet",
 					log.Int64("segmentID", seg.GetID()),
 					log.Int64("collectionID", seg.GetCollectionID()))
 				continue
 			}
 			if snapshotIDs := snapshotMeta.GetSnapshotBySegment(ctx, seg.GetCollectionID(), seg.GetID()); len(snapshotIDs) > 0 {
-				log.Info(context.TODO(), "skip GC JSON index files since segment is referenced by snapshot",
+				log.Info(ctx, "skip GC JSON index files since segment is referenced by snapshot",
 					log.Int64("segmentID", seg.GetID()),
 					log.Int64s("snapshotIDs", snapshotIDs))
 				continue
@@ -1467,14 +1467,14 @@ func (gc *garbageCollector) recycleUnusedJSONIndexFiles(ctx context.Context, sig
 					file := files.FilePath
 
 					future := gc.option.removeObjectPool.Submit(func() (struct{}, error) {
-						log.Info(context.TODO(), "garbageCollector recycleUnusedJSONIndexFiles remove file...")
+						log.Info(ctx, "garbageCollector recycleUnusedJSONIndexFiles remove file...")
 
 						if err := gc.option.cli.Remove(ctx, file); err != nil {
-							log.Warn(context.TODO(), "garbageCollector recycleUnusedJSONIndexFiles remove file failed", log.Err(err))
+							log.Warn(ctx, "garbageCollector recycleUnusedJSONIndexFiles remove file failed", log.Err(err))
 							return struct{}{}, err
 						}
 						deletedFilesNum.Inc()
-						log.Info(context.TODO(), "garbageCollector recycleUnusedJSONIndexFiles remove file success")
+						log.Info(ctx, "garbageCollector recycleUnusedJSONIndexFiles remove file success")
 						return struct{}{}, nil
 					})
 					futures = append(futures, future)
@@ -1484,17 +1484,17 @@ func (gc *garbageCollector) recycleUnusedJSONIndexFiles(ctx context.Context, sig
 				// Wait for all remove tasks done.
 				if err := conc.BlockOnAll(futures...); err != nil {
 					// error is logged, and can be ignored here.
-					log.Warn(context.TODO(), "some task failure in remove object pool", log.Err(err))
+					log.Warn(ctx, "some task failure in remove object pool", log.Err(err))
 				}
 
 				if err != nil {
-					log.Warn(context.TODO(), "json index files recycle failed when walk with prefix", log.Err(err))
+					log.Warn(ctx, "json index files recycle failed when walk with prefix", log.Err(err))
 					return
 				}
 			}
 		}
 	}
-	log.Info(context.TODO(), "json index files recycle done", log.Int("deleteJSONKeyIndexNum", int(deletedFilesNum.Load())), log.Int("walkFileNum", fileNum))
+	log.Info(ctx, "json index files recycle done", log.Int("deleteJSONKeyIndexNum", int(deletedFilesNum.Load())), log.Int("walkFileNum", fileNum))
 
 	metrics.GarbageCollectorRunCount.WithLabelValues(paramtable.GetStringNodeID()).Add(1)
 }
@@ -1523,14 +1523,14 @@ func (gc *garbageCollector) recycleUnusedJSONIndexFiles(ctx context.Context, sig
 //     artifacts.
 func (gc *garbageCollector) recyclePendingSnapshots(ctx context.Context, signal <-chan gcCmd) {
 	start := time.Now()
-	log.Info(context.TODO(), "start recyclePendingSnapshots...")
+	log.Info(ctx, "start recyclePendingSnapshots...")
 	defer func() {
-		log.Info(context.TODO(), "recyclePendingSnapshots done", log.Duration("timeCost", time.Since(start)))
+		log.Info(ctx, "recyclePendingSnapshots done", log.Duration("timeCost", time.Since(start)))
 	}()
 
 	snapshotMeta := gc.meta.GetSnapshotMeta()
 	if snapshotMeta == nil {
-		log.Warn(context.TODO(), "snapshotMeta is nil, skip recyclePendingSnapshots")
+		log.Warn(ctx, "snapshotMeta is nil, skip recyclePendingSnapshots")
 		return
 	}
 
@@ -1540,7 +1540,7 @@ func (gc *garbageCollector) recyclePendingSnapshots(ctx context.Context, signal 
 	// Get all pending snapshots that have exceeded timeout
 	pendingSnapshots, err := snapshotMeta.GetPendingSnapshots(ctx, pendingTimeout)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to get pending snapshots", log.Err(err))
+		log.Warn(ctx, "failed to get pending snapshots", log.Err(err))
 		return
 	}
 
@@ -1548,7 +1548,7 @@ func (gc *garbageCollector) recyclePendingSnapshots(ctx context.Context, signal 
 		return
 	}
 
-	log.Info(context.TODO(), "found pending snapshots to cleanup", log.Int("count", len(pendingSnapshots)))
+	log.Info(ctx, "found pending snapshots to cleanup", log.Int("count", len(pendingSnapshots)))
 	cleanedCount := 0
 
 	for _, snapshot := range pendingSnapshots {

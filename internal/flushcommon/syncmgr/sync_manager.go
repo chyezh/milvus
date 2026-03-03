@@ -151,7 +151,7 @@ func (mgr *syncManager) submit(ctx context.Context, key int64, task Task, callba
 		return err
 	}
 	callbacks = append([]func(error) error{handler}, callbacks...)
-	log.Info(context.TODO(), "sync mgr sumbit task with key", log.Int64("key", key))
+	log.Info(ctx, "sync mgr sumbit task with key", log.Int64("key", key))
 
 	return mgr.Submit(ctx, key, task, callbacks...)
 }

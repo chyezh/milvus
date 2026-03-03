@@ -77,7 +77,7 @@ func (impl *timeTickSyncOperator) Sync(ctx context.Context, persisted bool) {
 	// Sync operation cannot trigger until isReady.
 	wal, err := impl.interceptorBuildParam.WAL.GetWithContext(ctx)
 	if err != nil {
-		impl.logger.Warn(nil, "unreachable: get wal failed", log.Err(err))
+		impl.logger.Warn(ctx, "unreachable: get wal failed", log.Err(err))
 		return
 	}
 
@@ -89,7 +89,7 @@ func (impl *timeTickSyncOperator) Sync(ctx context.Context, persisted bool) {
 		return appendResult.MessageID, nil
 	}, persisted)
 	if err != nil {
-		impl.logger.Warn(nil, "send time tick sync message failed", log.Err(err))
+		impl.logger.Warn(ctx, "send time tick sync message failed", log.Err(err))
 		if s := status.AsStreamingError(err); s.IsFenced() || s.IsOnShutdown() {
 			impl.walShutdownOrFenced.Store(true)
 		}
@@ -176,7 +176,7 @@ func (impl *timeTickSyncOperator) syncAcknowledgedDetails(ctx context.Context) {
 	// Sync up and get last confirmed timestamp.
 	ackDetails, err := impl.ackManager.SyncAndGetAcknowledged(ctx)
 	if err != nil {
-		impl.logger.Warn(nil, "sync timestamp ack manager failed", log.Err(err))
+		impl.logger.Warn(ctx, "sync timestamp ack manager failed", log.Err(err))
 	}
 
 	// Add ack details to ackDetails.

@@ -64,14 +64,14 @@ func retrieveOnSegments(ctx context.Context, mgr *Manager, segments []Segment, s
 			allRetrieveCount := result.AllRetrieveCount
 			countRet := result.GetFieldsData()[0].GetScalars().GetLongData().GetData()[0]
 			if allRetrieveCount != countRet {
-				log.Debug(context.TODO(), "count segment done with delete",
+				log.Debug(ctx, "count segment done with delete",
 					log.Uint64("mvcc", req.GetReq().GetMvccTimestamp()),
 					log.String("channel", s.LoadInfo().GetInsertChannel()),
 					log.Int64("segmentID", s.ID()),
 					log.Int64("allRetrieveCount", allRetrieveCount),
 					log.Int64("countRet", countRet))
 			} else {
-				log.Debug(context.TODO(), "count segment done",
+				log.Debug(ctx, "count segment done",
 					log.Uint64("mvcc", req.GetReq().GetMvccTimestamp()),
 					log.String("channel", s.LoadInfo().GetInsertChannel()),
 					log.Int64("segmentID", s.ID()),
@@ -166,7 +166,7 @@ func Retrieve(ctx context.Context, manager *Manager, plan *RetrievePlan, req *qu
 
 	segIDs := req.GetSegmentIDs()
 	collID := req.Req.GetCollectionID()
-	log.Debug(context.TODO(), "retrieve on segments", log.Int64s("segmentIDs", segIDs), log.Int64("collectionID", collID))
+	log.Debug(ctx, "retrieve on segments", log.Int64s("segmentIDs", segIDs), log.Int64("collectionID", collID))
 
 	if req.GetScope() == querypb.DataScope_Historical {
 		SegType = SegmentTypeSealed

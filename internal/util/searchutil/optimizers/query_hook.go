@@ -36,7 +36,7 @@ func OptimizeSearchParams(ctx context.Context, req *querypb.SearchRequest, query
 	serializedPlan := req.GetReq().GetSerializedExprPlan()
 	// plan not found
 	if serializedPlan == nil {
-		log.Warn(context.TODO(), "serialized plan not found")
+		log.Warn(ctx, "serialized plan not found")
 		return req, merr.WrapErrParameterInvalid("serialized search plan", "nil")
 	}
 
@@ -49,7 +49,7 @@ func OptimizeSearchParams(ctx context.Context, req *querypb.SearchRequest, query
 	plan := planpb.PlanNode{}
 	err := proto.Unmarshal(serializedPlan, &plan)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to unmarshal plan", log.Err(err))
+		log.Warn(ctx, "failed to unmarshal plan", log.Err(err))
 		return nil, merr.WrapErrParameterInvalid("valid serialized search plan", "no unmarshalable one", err.Error())
 	}
 
@@ -76,7 +76,7 @@ func OptimizeSearchParams(ctx context.Context, req *querypb.SearchRequest, query
 		}
 		err := queryHook.Run(params)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to execute queryHook", log.Err(err))
+			log.Warn(ctx, "failed to execute queryHook", log.Err(err))
 			return nil, merr.WrapErrServiceUnavailable(err.Error(), "queryHook execution failed")
 		}
 		finalTopk := params[common.TopKKey].(int64)
@@ -85,7 +85,7 @@ func OptimizeSearchParams(ctx context.Context, req *querypb.SearchRequest, query
 		queryInfo.SearchParams = params[common.SearchParamKey].(string)
 		serializedExprPlan, err := proto.Marshal(&plan)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to marshal optimized plan", log.Err(err))
+			log.Warn(ctx, "failed to marshal optimized plan", log.Err(err))
 			return nil, merr.WrapErrParameterInvalid("marshalable search plan", "plan with marshal error", err.Error())
 		}
 		req.Req.SerializedExprPlan = serializedExprPlan
@@ -95,9 +95,9 @@ func OptimizeSearchParams(ctx context.Context, req *querypb.SearchRequest, query
 		} else {
 			req.Req.IsRecallEvaluation = false
 		}
-		log.Debug(context.TODO(), "optimized search params done", log.Any("queryInfo", queryInfo))
+		log.Debug(ctx, "optimized search params done", log.Any("queryInfo", queryInfo))
 	default:
-		log.Warn(context.TODO(), "not supported node type", log.String("nodeType", fmt.Sprintf("%T", plan.GetNode())))
+		log.Warn(ctx, "not supported node type", log.String("nodeType", fmt.Sprintf("%T", plan.GetNode())))
 	}
 	return req, nil
 }

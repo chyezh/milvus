@@ -372,7 +372,7 @@ func (c *ClientBase[T]) verifySession(ctx context.Context) error {
 	}
 
 	if time.Since(c.lastSessionCheck.Load()) < c.minSessionCheckInterval {
-		log.Debug(context.TODO(), "skip session check, verify too frequent")
+		log.Debug(ctx, "skip session check, verify too frequent")
 		return nil
 	}
 	c.lastSessionCheck.Store(time.Now())
@@ -380,12 +380,12 @@ func (c *ClientBase[T]) verifySession(ctx context.Context) error {
 		sessions, _, getSessionErr := c.sess.GetSessions(ctx, c.GetRole())
 		if getSessionErr != nil {
 			// Only log but not handle this error as it is an auxiliary logic
-			log.Warn(context.TODO(), "fail to get session", log.Err(getSessionErr))
+			log.Warn(ctx, "fail to get session", log.Err(getSessionErr))
 			return getSessionErr
 		}
 		if coordSess, exist := sessions[c.GetRole()]; exist {
 			if c.GetNodeID() != coordSess.ServerID {
-				log.Warn(context.TODO(), "server id mismatch, may connected to a old server, start to reset connection",
+				log.Warn(ctx, "server id mismatch, may connected to a old server, start to reset connection",
 					log.Int64("client_node", c.GetNodeID()),
 					log.Int64("current_node", coordSess.ServerID))
 				return merr.WrapErrNodeNotMatch(c.GetNodeID(), coordSess.ServerID)
@@ -409,12 +409,12 @@ func (c *ClientBase[T]) needResetCancel() (needReset bool) {
 func (c *ClientBase[T]) checkGrpcErr(ctx context.Context, err error) (needRetry, needReset, forceReset bool, retErr error) {
 	// Unknown err
 	if !funcutil.IsGrpcErr(err) {
-		log.Warn(context.TODO(), "fail to grpc call because of unknown error", log.Err(err))
+		log.Warn(ctx, "fail to grpc call because of unknown error", log.Err(err))
 		return false, false, false, err
 	}
 
 	// grpc err
-	log.Warn(context.TODO(), "call received grpc error", log.Err(err))
+	log.Warn(ctx, "call received grpc error", log.Err(err))
 	switch {
 	case funcutil.IsGrpcErr(err, codes.Canceled, codes.DeadlineExceeded):
 		// canceled or deadline exceeded
@@ -450,7 +450,7 @@ func (c *ClientBase[T]) checkNodeSessionExist(ctx context.Context) bool {
 	if c.isNode {
 		err := c.verifySession(ctx)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to verify node session", log.Err(err))
+			log.Warn(ctx, "failed to verify node session", log.Err(err))
 		}
 		return !errors.Is(err, merr.ErrNodeNotFound)
 	}
@@ -466,14 +466,14 @@ func (c *ClientBase[T]) call(ctx context.Context, caller func(client T) (any, er
 
 	wrapper, clientErr = c.GetGrpcClient(ctx)
 	if clientErr != nil {
-		log.Warn(context.TODO(), "fail to get grpc client", log.Err(clientErr))
+		log.Warn(ctx, "fail to get grpc client", log.Err(clientErr))
 	}
 
 	resetClientFunc := func(forceReset bool) {
 		c.resetConnection(wrapper, forceReset)
 		wrapper, clientErr = c.GetGrpcClient(ctx)
 		if clientErr != nil {
-			log.Warn(context.TODO(), "fail to get grpc client in the retry state", log.Err(clientErr))
+			log.Warn(ctx, "fail to get grpc client in the retry state", log.Err(clientErr))
 		}
 	}
 
@@ -487,7 +487,7 @@ func (c *ClientBase[T]) call(ctx context.Context, caller func(client T) (any, er
 			}
 
 			err := errors.Wrap(clientErr, "empty grpc client")
-			log.Warn(context.TODO(), "grpc client is nil, maybe fail to get client in the retry state", log.Err(err))
+			log.Warn(ctx, "grpc client is nil, maybe fail to get client in the retry state", log.Err(err))
 			resetClientFunc(false)
 			return true, err
 		}
@@ -501,13 +501,13 @@ func (c *ClientBase[T]) call(ctx context.Context, caller func(client T) (any, er
 			var needRetry, needReset, forceReset bool
 			needRetry, needReset, forceReset, err = c.checkGrpcErr(ctx, err)
 			if needReset {
-				log.Warn(context.TODO(), "start to reset connection because of specific reasons", log.Err(err))
+				log.Warn(ctx, "start to reset connection because of specific reasons", log.Err(err))
 				resetClientFunc(forceReset)
 			} else {
 				// err occurs but no need to reset connection, try to verify session
 				err := c.verifySession(ctx)
 				if err != nil {
-					log.Warn(context.TODO(), "failed to verify session, reset connection", log.Err(err))
+					log.Warn(ctx, "failed to verify session, reset connection", log.Err(err))
 					resetClientFunc(forceReset)
 				}
 			}
@@ -527,12 +527,12 @@ func (c *ClientBase[T]) call(ctx context.Context, caller func(client T) (any, er
 			status = merr.Status(nil)
 		default:
 			// it will directly return the result
-			log.Warn(context.TODO(), "unknown return type", log.Any("return", ret))
+			log.Warn(ctx, "unknown return type", log.Any("return", ret))
 			return false, nil
 		}
 
 		if status == nil {
-			log.Warn(context.TODO(), "status is nil, please fix it", log.Stack("stack"))
+			log.Warn(ctx, "status is nil, please fix it", log.Stack("stack"))
 			return false, nil
 		}
 

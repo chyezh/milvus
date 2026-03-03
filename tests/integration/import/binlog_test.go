@@ -86,13 +86,13 @@ func (s *BulkInsertSuite) PrepareSourceCollection(dim int, dmlGroup *DMLGroup) *
 		CollectionNames: []string{collectionName},
 	})
 	s.NoError(merr.CheckRPCCall(showCollectionsResp, err))
-	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(ctx, "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	showPartitionsResp, err := c.MilvusClient.ShowPartitions(ctx, &milvuspb.ShowPartitionsRequest{
 		CollectionName: collectionName,
 	})
 	s.NoError(merr.CheckRPCCall(showPartitionsResp, err))
-	log.Info(context.TODO(), "ShowPartitions result", log.Any("showPartitionsResp", showPartitionsResp))
+	log.Info(ctx, "ShowPartitions result", log.Any("showPartitionsResp", showPartitionsResp))
 
 	// create index
 	createIndexStatus, err := c.MilvusClient.CreateIndex(ctx, &milvuspb.CreateIndexRequest{
@@ -188,7 +188,7 @@ func (s *BulkInsertSuite) PrepareSourceCollection(dim int, dmlGroup *DMLGroup) *
 		s.NoError(err)
 		s.NotEmpty(segments)
 		for _, segment := range segments {
-			log.Info(context.TODO(), "ShowSegments result", log.String("segment", segment.String()))
+			log.Info(ctx, "ShowSegments result", log.String("segment", segment.String()))
 		}
 	}
 
@@ -381,7 +381,7 @@ func (s *BulkInsertSuite) runBinlogTest(dmlGroup *DMLGroup) {
 		},
 	})
 	s.NoError(merr.CheckRPCCall(importResp, err))
-	log.Info(context.TODO(), "Import result", log.Any("importResp", importResp))
+	log.Info(ctx, "Import result", log.Any("importResp", importResp))
 
 	jobID := importResp.GetJobID()
 	err = WaitForImportDone(ctx, c, jobID)
@@ -393,7 +393,7 @@ func (s *BulkInsertSuite) runBinlogTest(dmlGroup *DMLGroup) {
 	segments = lo.Filter(segments, func(segment *datapb.SegmentInfo, _ int) bool {
 		return segment.GetCollectionID() == newCollectionID
 	})
-	log.Info(context.TODO(), "Show segments", log.Any("segments", segments))
+	log.Info(ctx, "Show segments", log.Any("segments", segments))
 	s.Equal(2, len(segments))
 	segment, ok := lo.Find(segments, func(segment *datapb.SegmentInfo) bool {
 		return segment.GetState() == commonpb.SegmentState_Flushed
@@ -412,7 +412,7 @@ func (s *BulkInsertSuite) runBinlogTest(dmlGroup *DMLGroup) {
 		"L1 segment StartPosition should match actual min timestamp from source binlogs")
 	s.Equal(sourceCollectionInfo.l1MaxTs, segment.GetDmlPosition().GetTimestamp(),
 		"L1 segment DmlPosition should match actual max timestamp from source binlogs")
-	log.Info(context.TODO(), "L1 segment position verification passed")
+	log.Info(ctx, "L1 segment position verification passed")
 
 	// l0 import
 	if totalDeleteRowNum > 0 {
@@ -430,7 +430,7 @@ func (s *BulkInsertSuite) runBinlogTest(dmlGroup *DMLGroup) {
 			},
 		})
 		s.NoError(merr.CheckRPCCall(importResp, err))
-		log.Info(context.TODO(), "Import result", log.Any("importResp", importResp))
+		log.Info(ctx, "Import result", log.Any("importResp", importResp))
 
 		jobID = importResp.GetJobID()
 		err = WaitForImportDone(ctx, c, jobID)
@@ -439,7 +439,7 @@ func (s *BulkInsertSuite) runBinlogTest(dmlGroup *DMLGroup) {
 		segments, err = c.ShowSegments(collectionName)
 		s.NoError(err)
 		s.NotEmpty(segments)
-		log.Info(context.TODO(), "Show segments", log.Any("segments", segments))
+		log.Info(ctx, "Show segments", log.Any("segments", segments))
 		l0Segments := lo.Filter(segments, func(segment *datapb.SegmentInfo, _ int) bool {
 			return segment.GetLevel() == datapb.SegmentLevel_L0
 		})
@@ -457,7 +457,7 @@ func (s *BulkInsertSuite) runBinlogTest(dmlGroup *DMLGroup) {
 			"L0 segment StartPosition should match actual min timestamp from source deltalogs")
 		s.Equal(sourceCollectionInfo.l0MaxTs, segment.GetDmlPosition().GetTimestamp(),
 			"L0 segment DmlPosition should match actual max timestamp from source deltalogs")
-		log.Info(context.TODO(), "L0 segment position verification passed")
+		log.Info(ctx, "L0 segment position verification passed")
 	}
 
 	// load
@@ -567,7 +567,7 @@ func (s *BulkInsertSuite) TestInvalidInput() {
 	err = merr.CheckRPCCall(importResp, err)
 	s.True(strings.Contains(err.Error(), "too many input paths for binlog import"))
 	s.Error(err)
-	log.Info(context.TODO(), "Import result", log.Any("importResp", importResp))
+	log.Info(ctx, "Import result", log.Any("importResp", importResp))
 }
 
 func (s *BulkInsertSuite) TestBinlogImport() {

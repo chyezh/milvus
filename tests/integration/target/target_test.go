@@ -70,11 +70,11 @@ func (s *TargetTestSuit) initCollection(collectionName string, replica int, chan
 	s.NoError(err)
 	s.True(merr.Ok(createCollectionStatus))
 
-	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(ctx, "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := s.Cluster.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.True(merr.Ok(showCollectionsResp.Status))
-	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(ctx, "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	for i := 0; i < segmentNum; i++ {
 		s.insertToCollection(ctx, dbName, collectionName, segmentRowNum, dim)
@@ -105,7 +105,7 @@ func (s *TargetTestSuit) initCollection(collectionName string, replica int, chan
 	s.Equal(commonpb.ErrorCode_Success, loadStatus.GetErrorCode())
 	s.True(merr.Ok(loadStatus))
 	s.WaitForLoad(ctx, collectionName)
-	log.Info(context.TODO(), "initCollection Done")
+	log.Info(ctx, "initCollection Done")
 }
 
 func (s *TargetTestSuit) insertToCollection(ctx context.Context, dbName string, collectionName string, rowCount int, dim int) {
@@ -173,11 +173,11 @@ func (s *TargetTestSuit) TestQueryCoordRestart() {
 		for {
 			select {
 			case <-closeInsertCh:
-				log.Info(context.TODO(), "insert to collection finished")
+				log.Info(ctx, "insert to collection finished")
 				return
 			case <-time.After(time.Second):
 				s.insertToCollection(ctx, dbName, name, 2000, dim)
-				log.Info(context.TODO(), "insert 2000 rows to collection finished")
+				log.Info(ctx, "insert 2000 rows to collection finished")
 			}
 		}
 	}()
@@ -197,7 +197,7 @@ func (s *TargetTestSuit) TestQueryCoordRestart() {
 				Base:         commonpbutil.NewMsgBase(),
 				CollectionID: collectionID,
 			})
-			log.Info(context.TODO(), "resp", log.Any("status", resp.GetStatus()), log.Any("shards", resp.Shards))
+			log.Info(ctx, "resp", log.Any("status", resp.GetStatus()), log.Any("shards", resp.Shards))
 			s.NoError(err)
 			s.True(merr.Ok(resp.GetStatus()))
 

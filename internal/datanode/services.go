@@ -38,8 +38,8 @@ import (
 	"github.com/milvus-io/milvus/internal/util/hookutil"
 	"github.com/milvus-io/milvus/internal/util/importutilv2"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
@@ -183,12 +183,12 @@ func (node *DataNode) GetMetrics(ctx context.Context, req *milvuspb.GetMetricsRe
 // returns status as long as compaction task enqueued or invalid
 func (node *DataNode) CompactionV2(ctx context.Context, req *datapb.CompactionPlan) (*commonpb.Status, error) {
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
-		log.Warn(context.TODO(), "DataNode.Compaction failed", log.Int64("nodeId", node.GetNodeID()), log.Err(err))
+		log.Warn(ctx, "DataNode.Compaction failed", log.Int64("nodeId", node.GetNodeID()), log.Err(err))
 		return merr.Status(err), nil
 	}
 
 	if len(req.GetSegmentBinlogs()) == 0 {
-		log.Info(context.TODO(), "no segments to compact")
+		log.Info(ctx, "no segments to compact")
 		return merr.Success(), nil
 	}
 
@@ -211,7 +211,7 @@ func (node *DataNode) CompactionV2(ctx context.Context, req *datapb.CompactionPl
 	}
 	cm, err := node.storageFactory.NewChunkManager(node.ctx, compactionParams.StorageConfig)
 	if err != nil {
-		log.Error(context.TODO(), "create chunk manager failed",
+		log.Error(ctx, "create chunk manager failed",
 			log.String("bucket", compactionParams.StorageConfig.GetBucketName()),
 			log.String("ROOTPATH", compactionParams.StorageConfig.GetRootPath()),
 			log.Err(err),
@@ -287,7 +287,7 @@ func (node *DataNode) CompactionV2(ctx context.Context, req *datapb.CompactionPl
 	case datapb.CompactionType_ClusteringPartitionKeySortCompaction:
 		// TODO
 	default:
-		log.Warn(context.TODO(), "Unknown compaction type", log.String("type", req.GetType().String()))
+		log.Warn(ctx, "Unknown compaction type", log.String("type", req.GetType().String()))
 		return merr.Status(merr.WrapErrParameterInvalidMsg("Unknown compaction type: %v", req.GetType().String())), nil
 	}
 
@@ -344,7 +344,7 @@ func (node *DataNode) FlushChannels(ctx context.Context, req *datapb.FlushChanne
 }
 
 func (node *DataNode) PreImport(ctx context.Context, req *datapb.PreImportRequest) (*commonpb.Status, error) {
-	log.Info(context.TODO(), "datanode receive preimport request")
+	log.Info(ctx, "datanode receive preimport request")
 
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
 		return merr.Status(err), nil
@@ -352,7 +352,7 @@ func (node *DataNode) PreImport(ctx context.Context, req *datapb.PreImportReques
 
 	cm, err := node.storageFactory.NewChunkManager(node.ctx, req.GetStorageConfig())
 	if err != nil {
-		log.Error(context.TODO(), "create chunk manager failed", log.String("bucket", req.GetStorageConfig().GetBucketName()),
+		log.Error(ctx, "create chunk manager failed", log.String("bucket", req.GetStorageConfig().GetBucketName()),
 			log.String("accessKey", req.GetStorageConfig().GetAccessKeyID()),
 			log.Err(err),
 		)
@@ -367,12 +367,12 @@ func (node *DataNode) PreImport(ctx context.Context, req *datapb.PreImportReques
 	}
 	node.importTaskMgr.Add(task)
 
-	log.Info(context.TODO(), "datanode added preimport task")
+	log.Info(ctx, "datanode added preimport task")
 	return merr.Success(), nil
 }
 
 func (node *DataNode) ImportV2(ctx context.Context, req *datapb.ImportRequest) (*commonpb.Status, error) {
-	log.Info(context.TODO(), "datanode receive import request")
+	log.Info(ctx, "datanode receive import request")
 
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
 		return merr.Status(err), nil
@@ -380,7 +380,7 @@ func (node *DataNode) ImportV2(ctx context.Context, req *datapb.ImportRequest) (
 
 	cm, err := node.storageFactory.NewChunkManager(node.ctx, req.GetStorageConfig())
 	if err != nil {
-		log.Error(context.TODO(), "create chunk manager failed", log.String("bucket", req.GetStorageConfig().GetBucketName()),
+		log.Error(ctx, "create chunk manager failed", log.String("bucket", req.GetStorageConfig().GetBucketName()),
 			log.String("accessKey", req.GetStorageConfig().GetAccessKeyID()),
 			log.Err(err),
 		)
@@ -394,7 +394,7 @@ func (node *DataNode) ImportV2(ctx context.Context, req *datapb.ImportRequest) (
 	}
 	node.importTaskMgr.Add(task)
 
-	log.Info(context.TODO(), "datanode added import task")
+	log.Info(ctx, "datanode added import task")
 	return merr.Success(), nil
 }
 
@@ -420,9 +420,9 @@ func (node *DataNode) QueryPreImport(ctx context.Context, req *datapb.QueryPreIm
 		log.Any("fileStats", fileStats),
 	}
 	if task.GetState() == datapb.ImportTaskStateV2_InProgress {
-		log.RatedInfo(context.TODO(), log.RateDefault, "datanode query preimport", logFields...)
+		log.RatedInfo(ctx, log.RateDefault, "datanode query preimport", logFields...)
 	} else {
-		log.Info(context.TODO(), "datanode query preimport", logFields...)
+		log.Info(ctx, "datanode query preimport", logFields...)
 	}
 
 	return &datapb.QueryPreImportResponse{
@@ -466,9 +466,9 @@ func (node *DataNode) QueryImport(ctx context.Context, req *datapb.QueryImportRe
 		log.Any("segmentsInfo", segmentsInfo),
 	}
 	if task.GetState() == datapb.ImportTaskStateV2_InProgress {
-		log.RatedInfo(context.TODO(), log.RateDefault, "datanode query import", logFields...)
+		log.RatedInfo(ctx, log.RateDefault, "datanode query import", logFields...)
 	} else {
-		log.Info(context.TODO(), "datanode query import", logFields...)
+		log.Info(ctx, "datanode query import", logFields...)
 	}
 	return &datapb.QueryImportResponse{
 		Status:             merr.Success(),
@@ -486,7 +486,7 @@ func (node *DataNode) DropImport(ctx context.Context, req *datapb.DropImportRequ
 
 	node.importTaskMgr.Remove(req.GetTaskID())
 
-	log.Info(context.TODO(), "datanode drop import done")
+	log.Info(ctx, "datanode drop import done")
 
 	return merr.Success(), nil
 }
@@ -498,7 +498,7 @@ func (node *DataNode) CopySegment(ctx context.Context, req *datapb.CopySegmentRe
 		collectionID = req.GetTargets()[0].GetCollectionId()
 	}
 
-	log.Info(context.TODO(), "datanode receive copy segment request",
+	log.Info(ctx, "datanode receive copy segment request",
 		log.Int64("collectionID", collectionID))
 
 	if err := merr.CheckHealthy(node.GetStateCode()); err != nil {
@@ -507,7 +507,7 @@ func (node *DataNode) CopySegment(ctx context.Context, req *datapb.CopySegmentRe
 
 	cm, err := node.storageFactory.NewChunkManager(node.ctx, req.GetStorageConfig())
 	if err != nil {
-		log.Error(context.TODO(), "create chunk manager failed",
+		log.Error(ctx, "create chunk manager failed",
 			log.String("bucket", req.GetStorageConfig().GetBucketName()),
 			log.String("accessKey", req.GetStorageConfig().GetAccessKeyID()),
 			log.Err(err),
@@ -518,7 +518,7 @@ func (node *DataNode) CopySegment(ctx context.Context, req *datapb.CopySegmentRe
 	task := importv2.NewCopySegmentTask(req, node.importTaskMgr, cm)
 	node.importTaskMgr.Add(task)
 
-	log.Info(context.TODO(), "datanode added copy segment task")
+	log.Info(ctx, "datanode added copy segment task")
 	return merr.Success(), nil
 }
 
@@ -543,9 +543,9 @@ func (node *DataNode) QueryCopySegment(ctx context.Context, req *datapb.QueryCop
 	}
 
 	if task.GetState() == datapb.ImportTaskStateV2_InProgress {
-		log.RatedInfo(context.TODO(), log.RateDefault, "datanode query copy segment", logFields...)
+		log.RatedInfo(ctx, log.RateDefault, "datanode query copy segment", logFields...)
 	} else {
-		log.Info(context.TODO(), "datanode query copy segment", logFields...)
+		log.Info(ctx, "datanode query copy segment", logFields...)
 	}
 
 	// Collect segment results from CopySegmentTask
@@ -578,7 +578,7 @@ func (node *DataNode) DropCopySegment(ctx context.Context, req *datapb.DropCopyS
 		if copyTask, ok := task.(*importv2.CopySegmentTask); ok {
 			taskState := copyTask.GetState()
 			if taskState == datapb.ImportTaskStateV2_Failed {
-				log.Info(context.TODO(), "task failed, triggering cleanup of copied files",
+				log.Info(ctx, "task failed, triggering cleanup of copied files",
 					log.String("state", taskState.String()),
 					log.String("reason", copyTask.GetReason()))
 
@@ -591,7 +591,7 @@ func (node *DataNode) DropCopySegment(ctx context.Context, req *datapb.DropCopyS
 	// Remove task from manager
 	node.importTaskMgr.Remove(req.GetTaskID())
 
-	log.Info(context.TODO(), "datanode drop copy segment done")
+	log.Info(ctx, "datanode drop copy segment done")
 
 	return merr.Success(), nil
 }
@@ -939,10 +939,10 @@ func (node *DataNode) DropTask(ctx context.Context, request *workerpb.DropTaskRe
 }
 
 func (node *DataNode) SyncFileResource(ctx context.Context, req *internalpb.SyncFileResourceRequest) (*commonpb.Status, error) {
-	log.Info(context.TODO(), "sync file resource", log.Any("resources", req.Resources))
+	log.Info(ctx, "sync file resource", log.Any("resources", req.Resources))
 
 	if !node.isHealthy() {
-		log.Warn(context.TODO(), "failed to sync file resource, DataNode is not healthy")
+		log.Warn(ctx, "failed to sync file resource, DataNode is not healthy")
 		return merr.Status(merr.ErrServiceNotReady), nil
 	}
 
@@ -956,7 +956,7 @@ func (node *DataNode) SyncFileResource(ctx context.Context, req *internalpb.Sync
 // createExternalCollectionTask handles updating external collection segments
 // This submits the task to the external collection manager for async execution
 func (node *DataNode) createExternalCollectionTask(ctx context.Context, req *datapb.UpdateExternalCollectionRequest) (*commonpb.Status, error) {
-	log.Info(context.TODO(), "createExternalCollectionTask received",
+	log.Info(ctx, "createExternalCollectionTask received",
 		log.Int("currentSegments", len(req.GetCurrentSegments())),
 		log.String("externalSource", req.GetExternalSource()))
 
@@ -973,21 +973,21 @@ func (node *DataNode) createExternalCollectionTask(ctx context.Context, req *dat
 		task := external.NewUpdateExternalTask(taskCtx, func() {}, req)
 
 		if err := task.PreExecute(taskCtx); err != nil {
-			log.Warn(context.TODO(), "external collection task PreExecute failed", log.Err(err))
+			log.Warn(taskCtx, "external collection task PreExecute failed", log.Err(err))
 			return nil, err
 		}
 
 		if err := task.Execute(taskCtx); err != nil {
-			log.Warn(context.TODO(), "external collection task Execute failed", log.Err(err))
+			log.Warn(taskCtx, "external collection task Execute failed", log.Err(err))
 			return nil, err
 		}
 
 		if err := task.PostExecute(taskCtx); err != nil {
-			log.Warn(context.TODO(), "external collection task PostExecute failed", log.Err(err))
+			log.Warn(taskCtx, "external collection task PostExecute failed", log.Err(err))
 			return nil, err
 		}
 
-		log.Info(context.TODO(), "external collection task completed successfully",
+		log.Info(taskCtx, "external collection task completed successfully",
 			log.Int("updatedSegments", len(task.GetUpdatedSegments())))
 
 		resp := &datapb.UpdateExternalCollectionResponse{
@@ -1000,11 +1000,11 @@ func (node *DataNode) createExternalCollectionTask(ctx context.Context, req *dat
 		return resp, nil
 	})
 	if err != nil {
-		log.Warn(context.TODO(), "failed to submit external collection task", log.Err(err))
+		log.Warn(ctx, "failed to submit external collection task", log.Err(err))
 		return merr.Status(err), nil
 	}
 
-	log.Info(context.TODO(), "external collection task submitted to manager")
+	log.Info(ctx, "external collection task submitted to manager")
 	return merr.Success(), nil
 }
 

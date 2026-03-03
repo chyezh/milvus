@@ -116,10 +116,10 @@ func (t *LevelZeroCompactionTask) GetCollection() int64 {
 func (t *LevelZeroCompactionTask) Compact() (*datapb.CompactionPlanResult, error) {
 	ctx, span := otel.Tracer(typeutil.DataNodeRole).Start(t.ctx, "L0Compact")
 	defer span.End()
-	log.Info(context.TODO(), "L0 compaction", log.Duration("wait in queue elapse", t.tr.RecordSpan()))
+	log.Info(ctx, "L0 compaction", log.Duration("wait in queue elapse", t.tr.RecordSpan()))
 
 	if !funcutil.CheckCtxValid(ctx) {
-		log.Warn(context.TODO(), "compact wrong, task context done or timeout")
+		log.Warn(ctx, "compact wrong, task context done or timeout")
 		return nil, ctx.Err()
 	}
 
@@ -132,12 +132,12 @@ func (t *LevelZeroCompactionTask) Compact() (*datapb.CompactionPlanResult, error
 		return s.Level != datapb.SegmentLevel_L0
 	})
 	if len(targetSegments) == 0 {
-		log.Warn(context.TODO(), "compact wrong, not target sealed segments")
+		log.Warn(ctx, "compact wrong, not target sealed segments")
 		return nil, errors.New("illegal compaction plan with empty target segments")
 	}
 	err = binlog.DecompressCompactionBinlogsWithRootPath(t.compactionParams.StorageConfig.GetRootPath(), l0Segments)
 	if err != nil {
-		log.Warn(context.TODO(), "DecompressCompactionBinlogs failed", log.Err(err))
+		log.Warn(ctx, "DecompressCompactionBinlogs failed", log.Err(err))
 		return nil, err
 	}
 
@@ -165,7 +165,7 @@ func (t *LevelZeroCompactionTask) Compact() (*datapb.CompactionPlanResult, error
 
 	metrics.DataNodeCompactionLatency.WithLabelValues(paramtable.GetStringNodeID(), t.plan.GetType().String()).
 		Observe(float64(t.tr.ElapseSpan().Milliseconds()))
-	log.Info(context.TODO(), "L0 compaction finished", log.Duration("elapse", t.tr.ElapseSpan()))
+	log.Info(ctx, "L0 compaction finished", log.Duration("elapse", t.tr.ElapseSpan()))
 
 	return result, nil
 }

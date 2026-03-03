@@ -75,14 +75,14 @@ func (s *ManualRollingUpgradeSuite) TestTransfer() {
 
 	err = merr.Error(createCollectionStatus)
 	if err != nil {
-		log.Warn(context.TODO(), "createCollectionStatus fail reason", log.Err(err))
+		log.Warn(ctx, "createCollectionStatus fail reason", log.Err(err))
 	}
 
-	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(ctx, "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := c.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.True(merr.Ok(showCollectionsResp.GetStatus()))
-	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(ctx, "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	// insert data, and flush generate segment
 	vecFieldData := integration.NewFloatVectorFieldData(integration.FloatVecField, rowNum, dim)
@@ -97,7 +97,7 @@ func (s *ManualRollingUpgradeSuite) TestTransfer() {
 		})
 		s.NoError(err)
 		s.True(merr.Ok(insertResult.GetStatus()))
-		log.Info(context.TODO(), "Insert succeed", log.Int("round", i+1))
+		log.Info(ctx, "Insert succeed", log.Int("round", i+1))
 		resp, err := s.Cluster.MilvusClient.Flush(ctx, &milvuspb.FlushRequest{
 			DbName:          dbName,
 			CollectionNames: []string{collectionName},
@@ -124,11 +124,11 @@ func (s *ManualRollingUpgradeSuite) TestTransfer() {
 	s.NoError(err)
 	err = merr.Error(createIndexStatus)
 	if err != nil {
-		log.Warn(context.TODO(), "createIndexStatus fail reason", log.Err(err))
+		log.Warn(ctx, "createIndexStatus fail reason", log.Err(err))
 	}
 
 	s.WaitForIndexBuilt(ctx, collectionName, integration.FloatVecField)
-	log.Info(context.TODO(), "Create index done")
+	log.Info(ctx, "Create index done")
 
 	// load
 	loadStatus, err := c.MilvusClient.LoadCollection(ctx, &milvuspb.LoadCollectionRequest{
@@ -138,10 +138,10 @@ func (s *ManualRollingUpgradeSuite) TestTransfer() {
 	s.NoError(err)
 	err = merr.Error(loadStatus)
 	if err != nil {
-		log.Warn(context.TODO(), "LoadCollection fail reason", log.Err(err))
+		log.Warn(ctx, "LoadCollection fail reason", log.Err(err))
 	}
 	s.WaitForLoad(ctx, collectionName)
-	log.Info(context.TODO(), "Load collection done")
+	log.Info(ctx, "Load collection done")
 
 	defer c.MilvusClient.ReleaseCollection(ctx, &milvuspb.ReleaseCollectionRequest{
 		DbName:         dbName,
@@ -246,11 +246,11 @@ func (s *ManualRollingUpgradeSuite) TestTransfer() {
 		return len(resp.GetSealedSegmentIDs()) > 0 || len(resp2.GetChannelNames()) > 0
 	}, 10*time.Second, 1*time.Second)
 
-	log.Info(context.TODO(), "==================")
-	log.Info(context.TODO(), "==================")
-	log.Info(context.TODO(), "TestManualRollingUpgrade succeed")
-	log.Info(context.TODO(), "==================")
-	log.Info(context.TODO(), "==================")
+	log.Info(ctx, "==================")
+	log.Info(ctx, "==================")
+	log.Info(ctx, "TestManualRollingUpgrade succeed")
+	log.Info(ctx, "==================")
+	log.Info(ctx, "==================")
 }
 
 func (s *ManualRollingUpgradeSuite) TestSuspendNode() {
@@ -279,14 +279,14 @@ func (s *ManualRollingUpgradeSuite) TestSuspendNode() {
 
 	err = merr.Error(createCollectionStatus)
 	if err != nil {
-		log.Warn(context.TODO(), "createCollectionStatus fail reason", log.Err(err))
+		log.Warn(ctx, "createCollectionStatus fail reason", log.Err(err))
 	}
 
-	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(ctx, "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := c.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.True(merr.Ok(showCollectionsResp.GetStatus()))
-	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(ctx, "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	// insert data, and flush generate segment
 	vecFieldData := integration.NewFloatVectorFieldData(integration.FloatVecField, rowNum, dim)
@@ -301,7 +301,7 @@ func (s *ManualRollingUpgradeSuite) TestSuspendNode() {
 		})
 		s.NoError(err)
 		s.True(merr.Ok(insertResult.GetStatus()))
-		log.Info(context.TODO(), "Insert succeed", log.Int("round", i+1))
+		log.Info(ctx, "Insert succeed", log.Int("round", i+1))
 		resp, err := s.Cluster.MilvusClient.Flush(ctx, &milvuspb.FlushRequest{
 			DbName:          dbName,
 			CollectionNames: []string{collectionName},
@@ -328,11 +328,11 @@ func (s *ManualRollingUpgradeSuite) TestSuspendNode() {
 	s.NoError(err)
 	err = merr.Error(createIndexStatus)
 	if err != nil {
-		log.Warn(context.TODO(), "createIndexStatus fail reason", log.Err(err))
+		log.Warn(ctx, "createIndexStatus fail reason", log.Err(err))
 	}
 
 	s.WaitForIndexBuilt(ctx, collectionName, integration.FloatVecField)
-	log.Info(context.TODO(), "Create index done")
+	log.Info(ctx, "Create index done")
 
 	// add new querynode
 	qn2 := s.Cluster.AddQueryNode()
@@ -358,10 +358,10 @@ func (s *ManualRollingUpgradeSuite) TestSuspendNode() {
 	s.NoError(err)
 	err = merr.Error(loadStatus)
 	if err != nil {
-		log.Warn(context.TODO(), "LoadCollection fail reason", log.Err(err))
+		log.Warn(ctx, "LoadCollection fail reason", log.Err(err))
 	}
 	s.WaitForLoad(ctx, collectionName)
-	log.Info(context.TODO(), "Load collection done")
+	log.Info(ctx, "Load collection done")
 
 	defer c.MilvusClient.ReleaseCollection(ctx, &milvuspb.ReleaseCollectionRequest{
 		DbName:         dbName,
@@ -391,11 +391,11 @@ func (s *ManualRollingUpgradeSuite) TestSuspendNode() {
 		return len(resp.GetSealedSegmentIDs()) > 0 || len(resp.GetChannelNames()) > 0
 	}, 10*time.Second, 1*time.Second)
 
-	log.Info(context.TODO(), "==================")
-	log.Info(context.TODO(), "==================")
-	log.Info(context.TODO(), "TestSuspendNode succeed")
-	log.Info(context.TODO(), "==================")
-	log.Info(context.TODO(), "==================")
+	log.Info(ctx, "==================")
+	log.Info(ctx, "==================")
+	log.Info(ctx, "TestSuspendNode succeed")
+	log.Info(ctx, "==================")
+	log.Info(ctx, "==================")
 }
 
 func TestManualRollingUpgrade(t *testing.T) {

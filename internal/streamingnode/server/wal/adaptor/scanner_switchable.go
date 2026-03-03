@@ -89,7 +89,7 @@ func (s *catchupScanner) Do(ctx context.Context) (switchableScanner, error) {
 		}
 		switchedScanner, err := s.consumeWithScanner(ctx, scanner)
 		if err != nil {
-			s.logger.Warn(nil, "scanner consuming was interrpurted with error, start a backoff", log.Err(err))
+			s.logger.Warn(ctx, "scanner consuming was interrpurted with error, start a backoff", log.Err(err))
 			continue
 		}
 		return switchedScanner, nil
@@ -109,7 +109,7 @@ func (s *catchupScanner) consumeWithScanner(ctx context.Context, scanner walimpl
 
 			if msg.Version() == message.VersionOld {
 				if s.lastConfirmedMessageIDForOldVersion == nil {
-					s.logger.Info(nil,
+					s.logger.Info(ctx,
 						"scanner find a old version message, set it as the last confirmed message id for all old version message",
 						log.Stringer("messageID", msg.MessageID()),
 					)
@@ -126,7 +126,7 @@ func (s *catchupScanner) consumeWithScanner(ctx context.Context, scanner walimpl
 				msg, err = newOldVersionImmutableMessage(ctx, s.innerWAL.Channel().Name, s.lastConfirmedMessageIDForOldVersion, msg)
 				if errors.Is(err, vchantempstore.ErrNotFound) {
 					// Skip the message's vchannel is not found in the vchannel temp store.
-					s.logger.Info(nil, "skip the old version message because vchannel not found", log.Stringer("messageID", messageID))
+					s.logger.Info(ctx, "skip the old version message because vchannel not found", log.Stringer("messageID", messageID))
 					continue
 				}
 				if errors.IsAny(err, context.Canceled, context.DeadlineExceeded) {
@@ -152,7 +152,7 @@ func (s *catchupScanner) consumeWithScanner(ctx context.Context, scanner walimpl
 			}
 			// Here's a timetick message from the scanner, make tailing read if we catch up the writeahead buffer.
 			if reader, err := s.writeAheadBuffer.ReadFromExclusiveTimeTick(ctx, msg.TimeTick()); err == nil {
-				s.logger.Info(nil,
+				s.logger.Info(ctx,
 					"scanner consuming was interrpted because catup done",
 					log.Uint64("timetick", msg.TimeTick()),
 					log.Stringer("messageID", msg.MessageID()),
@@ -196,7 +196,7 @@ func (s *catchupScanner) createReaderWithBackoff(ctx context.Context, deliverPol
 			return nil, ctx.Err()
 		}
 		waker, nextInterval := backoffTimer.NextTimer()
-		s.logger.Warn(nil, "create underlying scanner for wal scanner, start a backoff",
+		s.logger.Warn(ctx, "create underlying scanner for wal scanner, start a backoff",
 			log.Duration("nextInterval", nextInterval),
 			log.Err(err),
 		)
@@ -220,7 +220,7 @@ func (s *tailingScanner) Do(ctx context.Context) (switchableScanner, error) {
 		msg, err := s.reader.Next(ctx)
 		if errors.Is(err, wab.ErrEvicted) {
 			// The tailing read is failure, switch into catchup mode.
-			s.logger.Info(nil,
+			s.logger.Info(ctx,
 				"scanner consuming was interrpted because tailing eviction",
 				log.Uint64("timetick", s.lastConsumedMessage.TimeTick()),
 				log.Stringer("messageID", s.lastConsumedMessage.MessageID()),

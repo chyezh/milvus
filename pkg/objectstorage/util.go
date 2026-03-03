@@ -139,15 +139,15 @@ func NewMinioClient(ctx context.Context, c *Config) (*minio.Client, error) {
 	checkBucketFn := func() error {
 		bucketExists, err = minIOClient.BucketExists(ctx, c.BucketName)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to check blob bucket exist", log.String("bucket", c.BucketName), log.Err(err))
+			log.Warn(ctx, "failed to check blob bucket exist", log.String("bucket", c.BucketName), log.Err(err))
 			return err
 		}
 		if !bucketExists {
 			if c.CreateBucket {
-				log.Info(context.TODO(), "blob bucket not exist, create bucket.", log.String("bucket name", c.BucketName))
+				log.Info(ctx, "blob bucket not exist, create bucket.", log.String("bucket name", c.BucketName))
 				err := minIOClient.MakeBucket(ctx, c.BucketName, minio.MakeBucketOptions{})
 				if err != nil {
-					log.Warn(context.TODO(), "failed to create blob bucket", log.String("bucket", c.BucketName), log.Err(err))
+					log.Warn(ctx, "failed to create blob bucket", log.String("bucket", c.BucketName), log.Err(err))
 					return err
 				}
 			} else {
@@ -269,7 +269,7 @@ func NewGcpObjectStorageClient(ctx context.Context, c *Config) (*storage.Client,
 		bucket := client.Bucket(c.BucketName)
 		_, err = bucket.Attrs(ctx)
 		if errors.Is(err, storage.ErrBucketNotExist) && c.CreateBucket {
-			log.Info(context.TODO(), "gcs bucket does not exist, create bucket.", log.String("bucket name", c.BucketName))
+			log.Info(ctx, "gcs bucket does not exist, create bucket.", log.String("bucket name", c.BucketName))
 			err = client.Bucket(c.BucketName).Create(ctx, projectId, nil)
 			if err != nil {
 				return err

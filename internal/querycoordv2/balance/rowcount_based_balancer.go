@@ -62,7 +62,7 @@ func (b *RowCountBasedBalancer) BalanceReplica(ctx context.Context, replica *met
 			log.RatedDebug(ctx, log.RateDefault, "no plan generated, balance report",
 				zap.Stringers("records", br.detailRecords))
 		} else {
-			log.Info(context.TODO(), "balance plan generated", zap.Stringers("report details", br.records))
+			log.Info(ctx, "balance plan generated", zap.Stringers("report details", br.records))
 		}
 	}()
 

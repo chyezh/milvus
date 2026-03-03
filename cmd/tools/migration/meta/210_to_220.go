@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/cmd/tools/migration/allocator"
 	"github.com/milvus-io/milvus/cmd/tools/migration/legacy/legacypb"

@@ -497,7 +497,7 @@ func wrapperProxyWithLimit(ctx context.Context, ginCtx *gin.Context, req any, ch
 	if checkLimit {
 		_, err := CheckLimiter(ctx, req, pxy)
 		if err != nil {
-			log.Warn(context.TODO(), "high level restful api, fail to check limiter", log.Err(err), log.String("method", fullMethod))
+			log.Warn(ctx, "high level restful api, fail to check limiter", log.Err(err), log.String("method", fullMethod))
 			hookutil.GetExtension().ReportRefused(ctx, req, WrapErrorToResponse(merr.ErrHTTPRateLimit), nil, ginCtx.FullPath())
 			HTTPAbortReturn(ginCtx, http.StatusOK, gin.H{
 				HTTPReturnCode:    merr.Code(merr.ErrHTTPRateLimit),

@@ -148,7 +148,7 @@ func (m *YamlMarshaller) writeYamlRecursive(data []DocContent, level int) {
 	for _, key := range keys {
 		contents, ok := topLevels.Get(key)
 		if !ok {
-			log.Debug(context.TODO(), "didnot found config for " + key)
+			log.Debug(context.TODO(), "didnot found config for "+key)
 			continue
 		}
 		content := contents[0]

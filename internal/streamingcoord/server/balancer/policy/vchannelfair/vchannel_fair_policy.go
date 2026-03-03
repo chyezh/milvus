@@ -1,6 +1,7 @@
 package vchannelfair
 
 import (
+	"context"
 	"math"
 
 	"github.com/cockroachdb/errors"
@@ -98,7 +99,7 @@ func (p *policy) Balance(currentLayout balancer.CurrentLayout) (layout balancer.
 	p.assignChannels(expectedLayout, reassignChannelIDs, &greatestSnapshot)
 	if greatestSnapshot.GlobalUnbalancedScore < snapshot.GlobalUnbalancedScore-p.cfg.RebalanceTolerance {
 		if p.Logger().Level().Enabled(zap.DebugLevel) {
-			p.Logger().Debug(nil, 
+			p.Logger().Debug(context.TODO(),
 				"vchannel fair policy rebalance result found",
 				zap.Stringers("reassignChannelIDs", reassignChannelIDs),
 				log.Float64("current", snapshot.GlobalUnbalancedScore),
@@ -111,7 +112,7 @@ func (p *policy) Balance(currentLayout balancer.CurrentLayout) (layout balancer.
 		}, nil
 	}
 	if p.Logger().Level().Enabled(zap.DebugLevel) {
-		p.Logger().Debug(nil, 
+		p.Logger().Debug(context.TODO(),
 			"vchannel fair policy rebalance result ignored with rebalance tolerance",
 			zap.Stringers("reassignChannelIDs", reassignChannelIDs),
 			log.Float64("current", snapshot.GlobalUnbalancedScore),
@@ -129,9 +130,9 @@ func (p *policy) updatePolicyConfiguration() {
 	// try to fetch latest configuration.
 	newCfg := newVChannelFairPolicyConfig()
 	if err := newCfg.Validate(); err != nil {
-		p.Logger().Warn(nil, "invalid new incoming vchannel fair policy config", log.Any("new", newCfg))
+		p.Logger().Warn(context.TODO(), "invalid new incoming vchannel fair policy config", log.Any("new", newCfg))
 	} else if p.cfg != newCfg {
-		p.Logger().Info(nil, "vchannel fair policy config updated", log.Any("old", p.cfg), log.Any("new", newCfg))
+		p.Logger().Info(context.TODO(), "vchannel fair policy config updated", log.Any("old", p.cfg), log.Any("new", newCfg))
 		p.cfg = newCfg
 	}
 }

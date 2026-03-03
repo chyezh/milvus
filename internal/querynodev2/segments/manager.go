@@ -388,7 +388,7 @@ func (mgr *segmentManager) Put(ctx context.Context, segmentType SegmentType, seg
 		oldSegment, ok := mgr.globalSegments.GetWithType(segment.ID(), segmentType)
 		if ok {
 			if oldSegment.Version() >= segment.Version() {
-				log.Warn(context.TODO(), "Invalid segment distribution changed, skip it",
+				log.Warn(ctx, "Invalid segment distribution changed, skip it",
 					log.Int64("segmentID", segment.ID()),
 					log.Int64("oldVersion", oldSegment.Version()),
 					log.Int64("newVersion", segment.Version()),

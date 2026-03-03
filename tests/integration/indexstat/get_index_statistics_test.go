@@ -47,7 +47,7 @@ func (s *GetIndexStatisticsSuite) run() {
 	})
 	s.NoError(err)
 	if createCollectionStatus.GetErrorCode() != commonpb.ErrorCode_Success {
-		log.Warn(context.TODO(), "createCollectionStatus fail reason", log.String("reason", createCollectionStatus.GetReason()))
+		log.Warn(ctx, "createCollectionStatus fail reason", log.String("reason", createCollectionStatus.GetReason()))
 	}
 	s.Equal(createCollectionStatus.GetErrorCode(), commonpb.ErrorCode_Success)
 
@@ -86,7 +86,7 @@ func (s *GetIndexStatisticsSuite) run() {
 		ExtraParams:    integration.ConstructIndexParam(dim, integration.IndexFaissIvfFlat, metric.L2),
 	})
 	if createIndexStatus.GetErrorCode() != commonpb.ErrorCode_Success {
-		log.Warn(context.TODO(), "createIndexStatus fail reason", log.String("reason", createIndexStatus.GetReason()))
+		log.Warn(ctx, "createIndexStatus fail reason", log.String("reason", createIndexStatus.GetReason()))
 	}
 	s.NoError(err)
 	s.Equal(commonpb.ErrorCode_Success, createIndexStatus.GetErrorCode())
@@ -153,7 +153,7 @@ func (s *GetIndexStatisticsSuite) run() {
 		s.Equal(int64(6000), indexInfos2[0].TotalRows)
 	*/
 
-	log.Info(context.TODO(), "TestGetIndexStatistics succeed")
+	log.Info(ctx, "TestGetIndexStatistics succeed")
 }
 
 func (s *GetIndexStatisticsSuite) TestGetIndexStatistics_float() {

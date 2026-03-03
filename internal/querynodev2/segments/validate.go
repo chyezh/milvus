@@ -19,7 +19,6 @@ package segments
 import (
 	"context"
 
-
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"

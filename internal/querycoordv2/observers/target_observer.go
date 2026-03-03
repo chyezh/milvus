@@ -156,7 +156,7 @@ func (ob *TargetObserver) Stop() {
 }
 
 func (ob *TargetObserver) schedule(ctx context.Context) {
-	log.Info(context.TODO(), "Start update next target loop")
+	log.Info(ctx, "Start update next target loop")
 
 	interval := params.Params.QueryCoordCfg.UpdateNextTargetInterval.GetAsDuration(time.Second)
 	ticker := time.NewTicker(interval)
@@ -164,14 +164,14 @@ func (ob *TargetObserver) schedule(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info(context.TODO(), "Close target observer")
+			log.Info(ctx, "Close target observer")
 			return
 
 		case <-ob.initChan:
 			for _, collectionID := range ob.meta.GetAll(ctx) {
 				ob.init(ctx, collectionID)
 			}
-			log.Info(context.TODO(), "target observer init done")
+			log.Info(ctx, "target observer init done")
 
 		case <-ticker.C:
 			ob.clean()
@@ -201,7 +201,7 @@ func (ob *TargetObserver) schedule(ctx context.Context) {
 			}
 
 		case req := <-ob.updateChan:
-			log.Info(context.TODO(), "manually trigger update target",
+			log.Info(ctx, "manually trigger update target",
 				log.Int64("collectionID", req.CollectionID),
 				log.String("opType", req.opType.String()),
 			)
@@ -211,7 +211,7 @@ func (ob *TargetObserver) schedule(ctx context.Context) {
 				err := ob.updateNextTarget(ctx, req.CollectionID)
 				ob.keylocks.Unlock(req.CollectionID)
 				if err != nil {
-					log.Warn(context.TODO(), "failed to manually update next target",
+					log.Warn(ctx, "failed to manually update next target",
 						log.Int64("collectionID", req.CollectionID),
 						log.String("opType", req.opType.String()),
 						log.Err(err))
@@ -240,7 +240,7 @@ func (ob *TargetObserver) schedule(ctx context.Context) {
 				ob.keylocks.Unlock(req.CollectionID)
 				req.Notifier <- nil
 			}
-			log.Info(context.TODO(), "manually trigger update target done",
+			log.Info(ctx, "manually trigger update target done",
 				log.Int64("collectionID", req.CollectionID),
 				log.String("opType", req.opType.String()))
 		}
@@ -375,11 +375,11 @@ func (ob *TargetObserver) isNextTargetExpired(collectionID int64) bool {
 }
 
 func (ob *TargetObserver) updateNextTarget(ctx context.Context, collectionID int64) error {
-	log.RatedInfo(context.TODO(), log.RateDefault, "observer trigger update next target",
+	log.RatedInfo(ctx, log.RateDefault, "observer trigger update next target",
 		log.Int64("collectionID", collectionID))
 	err := ob.targetMgr.UpdateCollectionNextTarget(ctx, collectionID)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to update next target for collection",
+		log.Warn(ctx, "failed to update next target for collection",
 			log.Err(err))
 		return err
 	}
@@ -396,7 +396,7 @@ func (ob *TargetObserver) shouldUpdateCurrentTarget(ctx context.Context, collect
 	channelNames := ob.targetMgr.GetDmChannelsByCollection(ctx, collectionID, meta.NextTarget)
 	if len(channelNames) == 0 {
 		// next target is empty, no need to update
-		log.RatedInfo(context.TODO(), log.RateDefault, "next target is empty, no need to update")
+		log.RatedInfo(ctx, log.RateDefault, "next target is empty, no need to update")
 		return false
 	}
 
@@ -410,7 +410,7 @@ func (ob *TargetObserver) shouldUpdateCurrentTarget(ctx context.Context, collect
 		err := utils.CheckDelegatorDataReady(ob.nodeMgr, ob.targetMgr, channel.View, meta.NextTarget)
 		dataReadyForNextTarget := err == nil
 		if !dataReadyForNextTarget {
-			log.Info(context.TODO(), "check delegator",
+			log.Info(ctx, "check delegator",
 				log.Int64("collectionID", collectionID),
 				log.Int64("replicaID", replica.GetID()),
 				log.Int64("nodeID", channel.Node),
@@ -468,7 +468,7 @@ func (ob *TargetObserver) syncNextTargetToDelegator(ctx context.Context, collect
 		updateVersionAction := ob.genSyncAction(ctx, d.View, newVersion)
 		replica := ob.meta.ReplicaManager.GetByCollectionAndNode(ctx, collectionID, d.Node)
 		if replica == nil {
-			log.Warn(context.TODO(), "replica not found", log.Int64("nodeID", d.Node), log.Int64("collectionID", collectionID))
+			log.Warn(ctx, "replica not found", log.Int64("nodeID", d.Node), log.Int64("collectionID", collectionID))
 			// should not happen, don't update current target if replica not found
 			return false
 		}
@@ -476,14 +476,14 @@ func (ob *TargetObserver) syncNextTargetToDelegator(ctx context.Context, collect
 		if partitions == nil {
 			partitions, err = utils.GetPartitions(ctx, ob.targetMgr, collectionID)
 			if err != nil {
-				log.Warn(context.TODO(), "failed to get partitions", log.Err(err))
+				log.Warn(ctx, "failed to get partitions", log.Err(err))
 				return false
 			}
 
 			// Get collection index info
 			indexInfo, err = ob.broker.ListIndexes(ctx, collectionID)
 			if err != nil {
-				log.Warn(context.TODO(), "fail to get index info of collection", log.Err(err))
+				log.Warn(ctx, "fail to get index info of collection", log.Err(err))
 				return false
 			}
 		}
@@ -573,7 +573,7 @@ func (ob *TargetObserver) genSyncAction(ctx context.Context, leaderView *meta.Le
 }
 
 func (ob *TargetObserver) updateCurrentTarget(ctx context.Context, collectionID int64) {
-	log.RatedInfo(context.TODO(), log.RateDefault, "observer trigger update current target", log.Int64("collectionID", collectionID))
+	log.RatedInfo(ctx, log.RateDefault, "observer trigger update current target", log.Int64("collectionID", collectionID))
 	if ob.targetMgr.UpdateCollectionCurrentTarget(ctx, collectionID) {
 		ob.mut.Lock()
 		defer ob.mut.Unlock()

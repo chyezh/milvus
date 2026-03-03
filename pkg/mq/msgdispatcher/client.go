@@ -20,7 +20,6 @@ import (
 	"context"
 	"time"
 
-
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
@@ -89,7 +88,6 @@ func (c *client) Register(ctx context.Context, streamConfig *StreamConfig) (<-ch
 	vchannel := streamConfig.VChannel
 	pchannel := funcutil.ToPhysicalChannel(vchannel)
 
-
 	c.managerMut.Lock(pchannel)
 	defer c.managerMut.Unlock(pchannel)
 
@@ -104,10 +102,10 @@ func (c *client) Register(ctx context.Context, streamConfig *StreamConfig) (<-ch
 	// Begin to register
 	ch, err := manager.Add(ctx, streamConfig)
 	if err != nil {
-		log.Error(context.TODO(), "register failed", log.Err(err))
+		log.Error(ctx, "register failed", log.Err(err))
 		return nil, err
 	}
-	log.Info(context.TODO(), "register done", log.Duration("dur", time.Since(start)))
+	log.Info(ctx, "register done", log.Duration("dur", time.Since(start)))
 	return ch, nil
 }
 

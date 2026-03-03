@@ -67,13 +67,13 @@ func (s *HelloMilvusSuite) TestHelloStreaming() {
 	})
 	err = merr.CheckRPCCall(createCollectionStatus, err)
 	s.NoError(err)
-	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(ctx, "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 
 	// show collection
 	showCollectionsResp, err := c.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	err = merr.CheckRPCCall(showCollectionsResp, err)
 	s.NoError(err)
-	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(ctx, "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	// insert
 	pkColumn := integration.NewInt64FieldData(integration.Int64Field, rowNum)

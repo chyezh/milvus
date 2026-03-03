@@ -173,13 +173,13 @@ func (job *LoadCollectionJob) Execute() error {
 
 	if err = job.meta.CollectionManager.PutCollection(job.ctx, collection, partitions...); err != nil {
 		msg := "failed to store collection and partitions"
-		log.Warn(context.TODO(), msg, log.Err(err))
+		log.Warn(ctx, msg, log.Err(err))
 		return errors.Wrap(err, msg)
 	}
 	eventlog.Record(eventlog.NewRawEvt(eventlog.Level_Info, fmt.Sprintf("Start load collection %d", collection.CollectionID)))
 	metrics.QueryCoordNumPartitions.WithLabelValues().Add(float64(len(partitions)))
 
-	log.Info(context.TODO(), "put collection and partitions done",
+	log.Info(ctx, "put collection and partitions done",
 		log.Int64("collectionID", req.GetCollectionId()),
 		log.Int64s("partitions", req.GetPartitionIds()),
 		log.Int64s("toReleasePartitions", toReleasePartitions),
@@ -196,16 +196,16 @@ func (job *LoadCollectionJob) Execute() error {
 	// 7. wait for partition released if any partition is released
 	if len(toReleasePartitions) > 0 {
 		if err = WaitCurrentTargetUpdated(ctx, job.targetObserver, req.GetCollectionId()); err != nil {
-			log.Warn(context.TODO(), "failed to wait current target updated", log.Err(err))
+			log.Warn(ctx, "failed to wait current target updated", log.Err(err))
 			// return nil to avoid infinite retry on DDL callback
 			return nil
 		}
 		if err = WaitCollectionReleased(ctx, job.dist, job.checkerController, req.GetCollectionId(), toReleasePartitions...); err != nil {
-			log.Warn(context.TODO(), "failed to wait partition released", log.Err(err))
+			log.Warn(ctx, "failed to wait partition released", log.Err(err))
 			// return nil to avoid infinite retry on DDL callback
 			return nil
 		}
-		log.Info(context.TODO(), "wait for partition released done", log.Int64s("toReleasePartitions", toReleasePartitions))
+		log.Info(ctx, "wait for partition released done", log.Int64s("toReleasePartitions", toReleasePartitions))
 	}
 	return nil
 }

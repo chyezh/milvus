@@ -139,7 +139,7 @@ func (s *ArrayStructDataNodeSuite) loadCollection(collectionName string) {
 	})
 	s.NoError(err)
 	s.True(merr.Ok(insertResult.GetStatus()))
-	log.Info(context.TODO(), "=========================Data insertion finished=========================")
+	log.Info(ctx, "=========================Data insertion finished=========================")
 
 	// flush
 	flushResp, err := c.MilvusClient.Flush(ctx, &milvuspb.FlushRequest{
@@ -158,7 +158,7 @@ func (s *ArrayStructDataNodeSuite) loadCollection(collectionName string) {
 	segments, err := c.ShowSegments(collectionName)
 	s.NoError(err)
 	s.NotEmpty(segments)
-	log.Info(context.TODO(), "=========================Data flush finished=========================")
+	log.Info(ctx, "=========================Data flush finished=========================")
 
 	// create index
 	createIndexStatus, err := c.MilvusClient.CreateIndex(ctx, &milvuspb.CreateIndexRequest{
@@ -171,7 +171,7 @@ func (s *ArrayStructDataNodeSuite) loadCollection(collectionName string) {
 	s.NoError(err)
 	err = merr.Error(createIndexStatus)
 	s.NoError(err)
-	log.Info(context.TODO(), "=========================Index created for float vector=========================")
+	log.Info(ctx, "=========================Index created for float vector=========================")
 	s.WaitForIndexBuilt(ctx, collectionName, integration.FloatVecField)
 
 	subFieldName := typeutil.ConcatStructFieldName(integration.StructArrayField, integration.StructSubFloatVecField)
@@ -186,7 +186,7 @@ func (s *ArrayStructDataNodeSuite) loadCollection(collectionName string) {
 	s.Require().Equal(createIndexResult.GetErrorCode(), commonpb.ErrorCode_Success)
 	s.WaitForIndexBuilt(ctx, collectionName, subFieldName)
 
-	log.Info(context.TODO(), "=========================Index created for array of vector=========================")
+	log.Info(ctx, "=========================Index created for array of vector=========================")
 
 	// load
 	loadStatus, err := c.MilvusClient.LoadCollection(ctx, &milvuspb.LoadCollectionRequest{
@@ -197,7 +197,7 @@ func (s *ArrayStructDataNodeSuite) loadCollection(collectionName string) {
 	err = merr.Error(loadStatus)
 	s.NoError(err)
 	s.WaitForLoad(ctx, collectionName)
-	log.Info(context.TODO(), "=========================Collection loaded=========================")
+	log.Info(ctx, "=========================Collection loaded=========================")
 }
 
 func (s *ArrayStructDataNodeSuite) checkCollections() bool {

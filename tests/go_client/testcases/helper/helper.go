@@ -323,14 +323,14 @@ func (chainTask *CollectionPrepare) CreateIndex(ctx context.Context, t *testing.
 	for _, field := range ip.Schema.Fields {
 		if field.DataType >= 100 {
 			if idx, ok := mFieldIndex[field.Name]; ok {
-				log.Info(context.TODO(), "CreateIndex", log.String("indexName", idx.Name()), log.Any("indexType", idx.IndexType()), log.Any("indexParams", idx.Params()))
+				log.Info(ctx, "CreateIndex", log.String("indexName", idx.Name()), log.Any("indexType", idx.IndexType()), log.Any("indexParams", idx.Params()))
 				createIndexTask, err := mc.CreateIndex(ctx, client.NewCreateIndexOption(collName, field.Name, idx))
 				common.CheckErr(t, err, true)
 				err = createIndexTask.Await(ctx)
 				common.CheckErr(t, err, true)
 			} else {
 				idx := GetDefaultVectorIndex(field.DataType)
-				log.Info(context.TODO(), "CreateIndex", log.String("indexName", idx.Name()), log.Any("indexType", idx.IndexType()), log.Any("indexParams", idx.Params()))
+				log.Info(ctx, "CreateIndex", log.String("indexName", idx.Name()), log.Any("indexType", idx.IndexType()), log.Any("indexParams", idx.Params()))
 				createIndexTask, err := mc.CreateIndex(ctx, client.NewCreateIndexOption(collName, field.Name, idx))
 				common.CheckErr(t, err, true)
 				err = createIndexTask.Await(ctx)

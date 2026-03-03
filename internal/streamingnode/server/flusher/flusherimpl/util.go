@@ -7,13 +7,13 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message/adaptor"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
-	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 var defaultCollectionNotFoundTolerance = 10
@@ -36,7 +36,7 @@ func (impl *WALFlusherImpl) getRecoveryInfos(ctx context.Context, vchannel []str
 			continue
 		}
 		if errors.Is(err, errChannelLifetimeUnrecoverable) {
-			impl.logger.Warn(nil, "channel has been dropped, skip to recover flusher for vchannel", log.String("vchannel", vchannel[i]))
+			impl.logger.Warn(ctx, "channel has been dropped, skip to recover flusher for vchannel", log.String("vchannel", vchannel[i]))
 			continue
 		}
 		return nil, nil, errors.Wrapf(err, "when get recovery info of vchannel %s", vchannel[i])
@@ -67,25 +67,25 @@ func (impl *WALFlusherImpl) getRecoveryInfo(ctx context.Context, vchannel string
 		resp, err = dc.GetChannelRecoveryInfo(ctx, &datapb.GetChannelRecoveryInfoRequest{Vchannel: vchannel})
 		err = merr.CheckRPCCall(resp, err)
 		if errors.Is(err, merr.ErrChannelNotAvailable) {
-			logger.Warn(nil, "channel not available because of collection dropped", log.Err(err))
+			logger.Warn(ctx, "channel not available because of collection dropped", log.Err(err))
 			return retry.Unrecoverable(errChannelLifetimeUnrecoverable)
 		}
 		if errors.Is(err, merr.ErrCollectionNotFound) {
 			if retryCnt >= defaultCollectionNotFoundTolerance {
 				// TODO: It's not strong guarantee to make no resource lost or leak. Should be removed after wal-driven-ddl framework is ready.
-				logger.Warn(nil, "too many collection not found, the create collection may undone by coord", log.Err(err))
+				logger.Warn(ctx, "too many collection not found, the create collection may undone by coord", log.Err(err))
 				return retry.Unrecoverable(errChannelLifetimeUnrecoverable)
 			}
-			logger.Warn(nil, "collection not found, maybe the create collection is not done or create collection undone by coord", log.Err(err))
+			logger.Warn(ctx, "collection not found, maybe the create collection is not done or create collection undone by coord", log.Err(err))
 			return err
 		}
 		if err != nil {
-			logger.Warn(nil, "get channel recovery info failed", log.Err(err))
+			logger.Warn(ctx, "get channel recovery info failed", log.Err(err))
 			return err
 		}
 		// The channel has been dropped, skip to recover it.
 		if isDroppedChannel(resp) {
-			logger.Info(nil, "channel has been dropped, the vchannel can not be recovered")
+			logger.Info(ctx, "channel has been dropped, the vchannel can not be recovered")
 			return retry.Unrecoverable(errChannelLifetimeUnrecoverable)
 		}
 		return nil

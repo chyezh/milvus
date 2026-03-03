@@ -252,7 +252,7 @@ func (s *BulkInsertSuite) runForStructArray() {
 	s.NotNil(importResp)
 	s.Equal(int32(0), importResp.GetStatus().GetCode())
 
-	log.Info(context.TODO(), "Import response", log.Any("resp", importResp))
+	log.Info(ctx, "Import response", log.Any("resp", importResp))
 	jobID := importResp.GetJobID()
 
 	// Wait for import to complete

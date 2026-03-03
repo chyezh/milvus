@@ -45,8 +45,8 @@ import (
 	"github.com/milvus-io/milvus/internal/util/pathutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/util"
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	rocksmqimpl "github.com/milvus-io/milvus/pkg/v2/mq/mqimpl/rocksmq/server"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/tracer"
@@ -383,7 +383,7 @@ func (mr *MilvusRoles) Run() {
 	// only standalone enable localMsg
 	if mr.Local {
 		if err := os.Setenv(metricsinfo.DeployModeEnvKey, metricsinfo.StandaloneDeployMode); err != nil {
-			log.Error(context.TODO(), "Failed to set deploy mode: ", log.Err(err))
+			log.Error(ctx, "Failed to set deploy mode: ", log.Err(err))
 		}
 
 		if mr.Embedded {
@@ -408,7 +408,7 @@ func (mr *MilvusRoles) Run() {
 		defer stopRocksmqIfUsed()
 	} else {
 		if err := os.Setenv(metricsinfo.DeployModeEnvKey, metricsinfo.ClusterDeployMode); err != nil {
-			log.Error(context.TODO(), "Failed to set deploy mode: ", log.Err(err))
+			log.Error(ctx, "Failed to set deploy mode: ", log.Err(err))
 		}
 		paramtable.Init()
 		paramtable.SetRole(mr.ServerType)
@@ -420,7 +420,7 @@ func (mr *MilvusRoles) Run() {
 		util.InitAndSelectWALName()
 		// persist immutable configs if necessary
 		if err := paramtable.GetBaseTable().Manager().ProcessImmutableConfigs(); err != nil {
-			log.Error(context.TODO(), "failed to process immutable configs", log.Err(err))
+			log.Error(ctx, "failed to process immutable configs", log.Err(err))
 			return
 		}
 	}
@@ -516,17 +516,17 @@ func (mr *MilvusRoles) Run() {
 
 	componentMap, err := mr.waitForAllComponentsReady(cancel, componentFutureMap)
 	if err != nil {
-		log.Warn(context.TODO(), "Failed to wait for all components ready", log.Err(err))
+		log.Warn(ctx, "Failed to wait for all components ready", log.Err(err))
 		return
 	}
-	log.Info(context.TODO(), "All components are ready", log.Strings("roles", lo.Keys(componentMap)))
+	log.Info(ctx, "All components are ready", log.Strings("roles", lo.Keys(componentMap)))
 
 	http.RegisterStopComponent(func(role string) error {
 		if len(role) == 0 || componentMap[role] == nil {
 			return fmt.Errorf("stop component [%s] in [%s] is not supported", role, mr.ServerType)
 		}
 
-		log.Info(context.TODO(), "unregister component before stop", log.String("role", role))
+		log.Info(ctx, "unregister component before stop", log.String("role", role))
 		healthz.UnRegister(role)
 		return componentMap[role].Stop()
 	})
@@ -550,25 +550,25 @@ func (mr *MilvusRoles) Run() {
 
 		exp, err := tracer.CreateTracerExporter(params)
 		if err != nil {
-			log.Warn(context.TODO(), "Init tracer failed", log.Err(err))
+			log.Warn(ctx, "Init tracer failed", log.Err(err))
 			return
 		}
 
 		// close old provider
 		err = tracer.CloseTracerProvider(context.Background())
 		if err != nil {
-			log.Warn(context.TODO(), "Close old provider failed, stop reset", log.Err(err))
+			log.Warn(ctx, "Close old provider failed, stop reset", log.Err(err))
 			return
 		}
 
 		tracer.SetTracerProvider(exp, params.TraceCfg.SampleFraction.GetAsFloat())
-		log.Info(context.TODO(), "Reset tracer finished", log.String("Exporter", params.TraceCfg.Exporter.GetValue()), log.Float64("SampleFraction", params.TraceCfg.SampleFraction.GetAsFloat()))
+		log.Info(ctx, "Reset tracer finished", log.String("Exporter", params.TraceCfg.Exporter.GetValue()), log.Float64("SampleFraction", params.TraceCfg.SampleFraction.GetAsFloat()))
 
 		tracer.NotifyTracerProviderUpdated()
 
 		if paramtable.GetRole() == typeutil.QueryNodeRole || paramtable.GetRole() == typeutil.StandaloneRole {
 			initcore.ResetTraceConfig(params)
-			log.Info(context.TODO(), "Reset segcore tracer finished", log.String("Exporter", params.TraceCfg.Exporter.GetValue()))
+			log.Info(ctx, "Reset segcore tracer finished", log.String("Exporter", params.TraceCfg.Exporter.GetValue()))
 		}
 	}))
 
@@ -587,13 +587,13 @@ func (mr *MilvusRoles) Run() {
 	// stop coordinators first
 	coordinators := []component{mixCoord}
 	for idx, coord := range coordinators {
-		log.Warn(context.TODO(), "stop processing")
+		log.Warn(ctx, "stop processing")
 		if coord != nil {
-			log.Info(context.TODO(), "stop coord", log.Int("idx", idx), log.Any("coord", coord))
+			log.Info(ctx, "stop coord", log.Int("idx", idx), log.Any("coord", coord))
 			coord.Stop()
 		}
 	}
-	log.Info(context.TODO(), "All coordinators have stopped")
+	log.Info(ctx, "All coordinators have stopped")
 
 	// stop nodes
 	nodes := []component{streamingNode, queryNode, dataNode, cdc}
@@ -604,25 +604,25 @@ func (mr *MilvusRoles) Run() {
 			go func() {
 				defer func() {
 					stopNodeWG.Done()
-					log.Info(context.TODO(), "stop node done", log.Any("node", node))
+					log.Info(ctx, "stop node done", log.Any("node", node))
 				}()
-				log.Info(context.TODO(), "stop node...", log.Any("node", node))
+				log.Info(ctx, "stop node...", log.Any("node", node))
 				node.Stop()
 			}()
 		}
 	}
 	stopNodeWG.Wait()
-	log.Info(context.TODO(), "All nodes have stopped")
+	log.Info(ctx, "All nodes have stopped")
 
 	if proxy != nil {
 		proxy.Stop()
-		log.Info(context.TODO(), "proxy stopped!")
+		log.Info(ctx, "proxy stopped!")
 	}
 
 	// close reused etcd client
 	kvfactory.CloseEtcdClient()
 
-	log.Info(context.TODO(), "Milvus components graceful stop done")
+	log.Info(ctx, "Milvus components graceful stop done")
 }
 
 func (mr *MilvusRoles) GetRoles() []string {

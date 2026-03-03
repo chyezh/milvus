@@ -19,7 +19,6 @@ package datanode
 import (
 	"context"
 
-
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/flushcommon/util"
 	"github.com/milvus-io/milvus/pkg/v2/log"

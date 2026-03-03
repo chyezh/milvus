@@ -1,7 +1,6 @@
 package testcases
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -38,7 +37,7 @@ func TestLoadCollection(t *testing.T) {
 	common.CheckErr(t, err, true)
 
 	t.Log("https://github.com/milvus-io/milvus/issues/34149")
-	log.Debug(context.TODO(), "collection", log.Bool("loaded", coll.Loaded))
+	log.Debug(ctx, "collection", log.Bool("loaded", coll.Loaded))
 
 	res, err := mc.Query(ctx, clientv2.NewQueryOption(schema.CollectionName).WithConsistencyLevel(entity.ClStrong).WithOutputFields(common.QueryCountFieldName))
 	common.CheckErr(t, err, true)
@@ -125,7 +124,7 @@ func TestLoadCollectionMultiPartitions(t *testing.T) {
 
 	// query from parName -> error
 	_, err = mc.Query(ctx, clientv2.NewQueryOption(schema.CollectionName).WithOutputFields(common.QueryCountFieldName).WithPartitions(parName))
-	log.Debug(context.TODO(), "error", log.Err(err))
+	log.Debug(ctx, "error", log.Err(err))
 	common.CheckErr(t, err, false, "partition not loaded")
 
 	// query count(*) from default partition

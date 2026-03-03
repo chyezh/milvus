@@ -135,20 +135,20 @@ func (g *getStatisticsTask) PreExecute(ctx context.Context) error {
 	if err != nil {
 		g.fromDataCoord = true
 		g.unloadedPartitionIDs = partIDs
-		log.Info(context.TODO(), "checkFullLoaded failed, try get statistics from DataCoord",
+		log.Info(ctx, "checkFullLoaded failed, try get statistics from DataCoord",
 			log.Err(err))
 		return nil
 	}
 	if len(unloaded) > 0 {
 		g.fromDataCoord = true
 		g.unloadedPartitionIDs = unloaded
-		log.Info(context.TODO(), "some partitions has not been loaded, try get statistics from DataCoord",
+		log.Info(ctx, "some partitions has not been loaded, try get statistics from DataCoord",
 			log.Int64s("unloaded partitions", unloaded))
 	}
 	if len(loaded) > 0 {
 		g.fromQueryNode = true
 		g.loadedPartitionIDs = loaded
-		log.Info(context.TODO(), "some partitions has been loaded, try get statistics from QueryNode",
+		log.Info(ctx, "some partitions has been loaded, try get statistics from QueryNode",
 			log.Int64s("loaded partitions", loaded))
 	}
 	return nil

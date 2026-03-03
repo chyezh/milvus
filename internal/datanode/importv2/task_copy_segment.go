@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/log"
@@ -488,13 +487,13 @@ func (t *CopySegmentTask) CleanupCopiedFiles() {
 
 	if err := t.cm.MultiRemove(ctx, files); err != nil {
 		// Cleanup failure is logged but doesn't block task removal
-		log.Error(context.TODO(), "failed to cleanup copied files",
+		log.Error(ctx, "failed to cleanup copied files",
 			log.Int64("taskID", t.taskID),
 			log.Int64("jobID", t.jobID),
 			log.Int("fileCount", len(files)),
 			log.Err(err))
 	} else {
-		log.Info(context.TODO(), "successfully cleaned up copied files",
+		log.Info(ctx, "successfully cleaned up copied files",
 			log.Int64("taskID", t.taskID),
 			log.Int64("jobID", t.jobID),
 			log.Int("fileCount", len(files)))

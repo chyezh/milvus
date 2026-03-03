@@ -96,11 +96,11 @@ func (s *DBPropertiesSuite) prepareCollection(ctx context.Context, dbName string
 	s.NoError(err)
 	err = merr.Error(createIndexStatus)
 	if err != nil {
-		log.Warn(context.TODO(), "createIndexStatus fail reason", log.Err(err))
+		log.Warn(ctx, "createIndexStatus fail reason", log.Err(err))
 	}
 
 	s.WaitForIndexBuiltWithDB(timeoutCtx, dbName, collectionName, integration.FloatVecField)
-	log.Info(context.TODO(), "Create index done")
+	log.Info(ctx, "Create index done")
 
 	// load
 	loadStatus, err := s.Cluster.MilvusClient.LoadCollection(timeoutCtx, &milvuspb.LoadCollectionRequest{
@@ -110,10 +110,10 @@ func (s *DBPropertiesSuite) prepareCollection(ctx context.Context, dbName string
 	s.NoError(err)
 	err = merr.Error(loadStatus)
 	if err != nil {
-		log.Warn(context.TODO(), "LoadCollection fail reason", log.Err(err))
+		log.Warn(ctx, "LoadCollection fail reason", log.Err(err))
 	}
 	s.WaitForLoadWithDB(ctx, dbName, collectionName)
-	log.Info(context.TODO(), "Load collection done")
+	log.Info(ctx, "Load collection done")
 }
 
 func (s *DBPropertiesSuite) insert(ctx context.Context, dbName string, collectionName string,

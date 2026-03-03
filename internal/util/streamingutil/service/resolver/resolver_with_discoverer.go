@@ -138,22 +138,22 @@ func (r *resolverWithDiscoverer) doDiscover() {
 		// Check if all grpc resolver is stopped.
 		for r := range grpcResolvers {
 			if r.State() == typeutil.LifetimeStateWorking {
-				r.Logger().Warn(nil, "resolver is stopped before grpc watcher exist, maybe bug here")
+				r.Logger().Warn(context.TODO(), "resolver is stopped before grpc watcher exist, maybe bug here")
 				break
 			}
 		}
-		r.Logger().Info(nil, "resolver stopped")
+		r.Logger().Info(context.TODO(), "resolver stopped")
 		r.taskNotifier.Finish(struct{}{})
 	}()
 
 	for {
 		ch := r.asyncDiscover(r.taskNotifier.Context())
-		r.Logger().Info(nil, "service discover task started, listening...")
+		r.Logger().Info(context.TODO(), "service discover task started, listening...")
 	L:
 		for {
 			select {
 			case watcher := <-r.registerCh:
-				watcher.Logger().Info(nil, "new grpc resolver registered")
+				watcher.Logger().Info(context.TODO(), "new grpc resolver registered")
 				// New grpc resolver registered.
 				// Trigger the latest state to the new grpc resolver.
 				grpcResolvers[watcher] = struct{}{}
@@ -162,7 +162,7 @@ func (r *resolverWithDiscoverer) doDiscover() {
 					continue
 				}
 				if err := watcher.Update(*state); err != nil {
-					r.Logger().Info(nil, "resolver is closed, ignore the new grpc resolver", log.Err(err))
+					r.Logger().Info(context.TODO(), "resolver is closed, ignore the new grpc resolver", log.Err(err))
 					delete(grpcResolvers, watcher)
 				}
 			case stateWithError := <-ch:
@@ -171,7 +171,7 @@ func (r *resolverWithDiscoverer) doDiscover() {
 						// resolver stopped.
 						return
 					}
-					r.Logger().Warn(nil, "service discover break down", log.Err(stateWithError.err), log.Duration("retryInterval", r.retryInterval))
+					r.Logger().Warn(context.TODO(), "service discover break down", log.Err(stateWithError.err), log.Duration("retryInterval", r.retryInterval))
 					time.Sleep(r.retryInterval)
 					break L
 				}
@@ -181,21 +181,21 @@ func (r *resolverWithDiscoverer) doDiscover() {
 				latestState := r.getLatestState()
 				if latestState != nil && !state.Version.GT(latestState.Version) {
 					// Ignore the old version.
-					r.Logger().Info(nil, "service discover update, ignore old version", log.Stringer("state", state))
+					r.Logger().Info(context.TODO(), "service discover update, ignore old version", log.Stringer("state", state))
 					continue
 				}
 				// Update all grpc resolver.
-				r.Logger().Info(nil, "service discover update, update resolver", log.Stringer("state", state), log.Int("resolver_count", len(grpcResolvers)))
+				r.Logger().Info(context.TODO(), "service discover update, update resolver", log.Stringer("state", state), log.Int("resolver_count", len(grpcResolvers)))
 				for watcher := range grpcResolvers {
 					// Update operation do not block.
 					// Only return error if the resolver is closed, so just print a info log and delete the resolver.
 					if err := watcher.Update(state); err != nil {
 						// updateError is always context.Canceled.
-						r.Logger().Info(nil, "resolver is closed, unregister the resolver", log.NamedError("updateError", err))
+						r.Logger().Info(context.TODO(), "resolver is closed, unregister the resolver", log.NamedError("updateError", err))
 						delete(grpcResolvers, watcher)
 					}
 				}
-				r.Logger().Info(nil, "update resolver done")
+				r.Logger().Info(context.TODO(), "update resolver done")
 				// Update the latest state and notify all resolver watcher should be executed after the all grpc watcher updated.
 				r.latestStateCond.LockAndBroadcast()
 				r.latestState = &state

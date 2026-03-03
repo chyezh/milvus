@@ -88,7 +88,7 @@ func CheckSegmentDataReady(ctx context.Context, collectionID int64, distManager 
 	for segmentID, segmentInfo := range segmentDist {
 		segments := distManager.SegmentDistManager.GetByFilter(meta.WithCollectionID(collectionID), meta.WithSegmentID(segmentID))
 		if len(segments) == 0 {
-			log.RatedInfo(context.TODO(), log.RateDefault, "segment is not available", log.Int64("segmentID", segmentID))
+			log.RatedInfo(ctx, log.RateDefault, "segment is not available", log.Int64("segmentID", segmentID))
 			return merr.WrapErrSegmentLack(segmentID)
 		}
 
@@ -97,7 +97,7 @@ func CheckSegmentDataReady(ctx context.Context, collectionID int64, distManager 
 			// alternative is to compare version, but it's not recommended to add extra info in segmentinfo
 			// we may use data view version in the future
 			if segment.ManifestPath != segmentInfo.GetManifestPath() {
-				log.RatedInfo(context.TODO(), log.RateDefault, "segment is not updated", log.Int64("segmentID", segmentID))
+				log.RatedInfo(ctx, log.RateDefault, "segment is not updated", log.Int64("segmentID", segmentID))
 				return merr.WrapErrSegmentNotLoaded(segmentID)
 			}
 		}

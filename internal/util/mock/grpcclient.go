@@ -128,7 +128,7 @@ func (c *GRPCClientBase[T]) Call(ctx context.Context, caller func(client T) (any
 
 	ret, err := c.callOnce(ctx, caller)
 	if err != nil {
-		log.Error(context.TODO(), "GRPCClientBase[T] Call grpc first call get error ", log.Err(err))
+		log.Error(ctx, "GRPCClientBase[T] Call grpc first call get error ", log.Err(err))
 		return nil, err
 	}
 	return ret, err
@@ -142,7 +142,7 @@ func (c *GRPCClientBase[T]) ReCall(ctx context.Context, caller func(client T) (a
 	}
 
 	traceErr := fmt.Errorf("err: %s\n, %s", err.Error(), tracer.StackTrace())
-	log.Warn(context.TODO(), "GRPCClientBase[T] client grpc first call get error ", log.Err(traceErr))
+	log.Warn(ctx, "GRPCClientBase[T] client grpc first call get error ", log.Err(traceErr))
 
 	if !funcutil.CheckCtxValid(ctx) {
 		return nil, ctx.Err()
@@ -151,7 +151,7 @@ func (c *GRPCClientBase[T]) ReCall(ctx context.Context, caller func(client T) (a
 	ret, err = c.callOnce(ctx, caller)
 	if err != nil {
 		traceErr = fmt.Errorf("err: %s\n, %s", err.Error(), tracer.StackTrace())
-		log.Error(context.TODO(), "GRPCClientBase[T] client grpc second call get error ", log.Err(traceErr))
+		log.Error(ctx, "GRPCClientBase[T] client grpc second call get error ", log.Err(traceErr))
 		return nil, traceErr
 	}
 	return ret, err

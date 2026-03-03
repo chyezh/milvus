@@ -253,7 +253,6 @@ func (node *RemoteProxyServiceProvider) DescribeCollection(ctx context.Context,
 		mixCoord:                  node.mixCoord,
 	}
 
-
 	method := "DescribeCollection"
 	log.Debug(context.TODO(), "DescribeCollection received")
 

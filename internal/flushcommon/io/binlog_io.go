@@ -74,7 +74,7 @@ func (b *BinlogIoImpl) AsyncDownload(ctx context.Context, paths []string) []*con
 			err = retry.Do(ctx, func() error {
 				val, err = b.Read(ctx, path)
 				if err != nil {
-					log.Warn(context.TODO(), "BinlogIO fail to download", log.String("path", path), log.Err(err))
+					log.Warn(ctx, "BinlogIO fail to download", log.String("path", path), log.Err(err))
 				}
 				return err
 			})
@@ -109,7 +109,7 @@ func (b *BinlogIoImpl) AsyncUpload(ctx context.Context, kvs map[string][]byte) [
 			err = retry.Do(ctx, func() error {
 				err = b.Write(ctx, innerK, innerV)
 				if err != nil {
-					log.Warn(context.TODO(), "BinlogIO fail to upload", log.String("paths", innerK), log.Err(err))
+					log.Warn(ctx, "BinlogIO fail to upload", log.String("paths", innerK), log.Err(err))
 				}
 				return err
 			})

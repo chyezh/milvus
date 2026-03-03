@@ -244,7 +244,7 @@ func (it *importTask) Execute(ctx context.Context) error {
 		log.Warn(ctx, "broadcast import msg failed", log.Err(err))
 		return err
 	}
-	log.Info(ctx, 
+	log.Info(ctx,
 		"broadcast import msg success",
 		log.Int64("jobID", jobID),
 		log.Uint64("broadcastID", resp.BroadcastID),

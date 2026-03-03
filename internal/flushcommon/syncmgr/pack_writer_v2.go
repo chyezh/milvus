@@ -175,7 +175,7 @@ func (bw *BulkPackWriterV2) writeInserts(ctx context.Context, pack *SyncPack) (m
 		var err error
 		logs, manifestPath, err = bw.writeInsertsIntoStorage(ctx, pluginContextPtr, pack, rec, tsFrom, tsTo)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to write inserts into storage",
+			log.Warn(ctx, "failed to write inserts into storage",
 				log.Int64("collectionID", pack.collectionID),
 				log.Int64("segmentID", pack.segmentID),
 				log.Err(err))

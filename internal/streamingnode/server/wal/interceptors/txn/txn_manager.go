@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
@@ -49,7 +48,7 @@ func NewTxnManager(pchannel types.PChannelInfo, uncommittedTxnBuilders map[messa
 	}
 	txnManager.notifyRecoverDone()
 	txnManager.SetLogger(resource.Resource().Logger().With(log.FieldComponent("txn-manager")))
-	txnManager.Logger().Info(nil, "txn manager recovered with txn", log.Int64s("txnIDs", sessionIDs))
+	txnManager.Logger().Info(context.TODO(), "txn manager recovered with txn", log.Int64s("txnIDs", sessionIDs))
 	return txnManager
 }
 
@@ -141,7 +140,7 @@ func (m *TxnManager) FailTxnAtVChannel(vchannel string) {
 		}
 	}
 	if len(ids) > 0 {
-		m.Logger().Info(nil, "transaction interrupted", log.String("vchannel", vchannel), log.Int64s("txnIDs", ids))
+		m.Logger().Info(context.TODO(), "transaction interrupted", log.String("vchannel", vchannel), log.Int64s("txnIDs", ids))
 	}
 	m.notifyRecoverDone()
 }
@@ -198,7 +197,7 @@ func (m *TxnManager) GracefulClose(ctx context.Context) error {
 			m.closed.Close()
 		}
 	}
-	m.Logger().Info(nil, "graceful close txn manager", log.Int("activeTxnCount", len(m.sessions)))
+	m.Logger().Info(ctx, "graceful close txn manager", log.Int("activeTxnCount", len(m.sessions)))
 	m.mu.Unlock()
 
 	select {

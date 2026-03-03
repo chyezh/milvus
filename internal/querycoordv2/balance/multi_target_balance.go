@@ -538,7 +538,7 @@ func (b *MultiTargetBalancer) BalanceReplica(ctx context.Context, replica *meta.
 				log.String("replica group", replica.GetResourceGroup()),
 				zap.Stringers("records", br.detailRecords))
 		} else {
-			log.Info(context.TODO(), "balance plan generated", zap.Stringers("report details", br.records))
+			log.Info(ctx, "balance plan generated", zap.Stringers("report details", br.records))
 		}
 	}()
 

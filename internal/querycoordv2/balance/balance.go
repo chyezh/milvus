@@ -73,7 +73,7 @@ func (b *RoundRobinBalancer) GetAssignPolicy() assign.AssignPolicy {
 func (b *RoundRobinBalancer) BalanceReplica(ctx context.Context, replica *meta.Replica) (segmentPlans []assign.SegmentAssignPlan, channelPlans []assign.ChannelAssignPlan) {
 
 	if replica.NodesCount() < 2 {
-		log.RatedDebug(context.TODO(), log.RateDefault, "replica has less than 2 querynodes, skip balance")
+		log.RatedDebug(ctx, log.RateDefault, "replica has less than 2 querynodes, skip balance")
 		return nil, nil
 	}
 
@@ -85,7 +85,7 @@ func (b *RoundRobinBalancer) BalanceReplica(ctx context.Context, replica *meta.R
 	}
 
 	if len(segmentPlans) > 0 || len(channelPlans) > 0 {
-		log.Info(context.TODO(), "balance plan generated",
+		log.Info(ctx, "balance plan generated",
 			log.Int("segmentPlans", len(segmentPlans)),
 			log.Int("channelPlans", len(channelPlans)))
 	}

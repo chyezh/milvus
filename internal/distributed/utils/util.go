@@ -63,7 +63,7 @@ func EnableInternalTLS(NodeType string) grpc.ServerOption {
 }
 
 func CreateCertPoolforClient(caFile string, nodeType string) (*x509.CertPool, error) {
-	log.Info(context.TODO(), "Creating cert pool for " + nodeType)
+	log.Info(context.TODO(), "Creating cert pool for "+nodeType)
 	log.Info(context.TODO(), "Cert file path:", log.String("caFile", caFile))
 	certPool := x509.NewCertPool()
 

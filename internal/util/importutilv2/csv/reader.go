@@ -63,7 +63,7 @@ func NewReader(ctx context.Context, cm storage.ChunkManager, schema *schemapb.Co
 	csvReader.Comma = sep
 
 	header, err := csvReader.Read()
-	log.Info(context.TODO(), "csv header parsed", log.Strings("header", header))
+	log.Info(ctx, "csv header parsed", log.Strings("header", header))
 	if err != nil {
 		return nil, merr.WrapErrImportFailed(fmt.Sprintf("failed to read csv header, error: %v", err))
 	}

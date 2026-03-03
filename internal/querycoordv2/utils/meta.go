@@ -84,17 +84,17 @@ func RecoverReplicaOfCollection(ctx context.Context, m *meta.Meta, collectionID 
 	logger := log.With(log.Int64("collectionID", collectionID))
 	rgNames := m.ReplicaManager.GetResourceGroupByCollection(ctx, collectionID)
 	if rgNames.Len() == 0 {
-		logger.Error(nil, "no resource group found for collection")
+		logger.Error(ctx, "no resource group found for collection")
 		return
 	}
 	rgs, err := m.ResourceManager.GetNodesOfMultiRG(ctx, rgNames.Collect())
 	if err != nil {
-		logger.Error(nil, "unreachable code as expected, fail to get resource group for replica", log.Err(err))
+		logger.Error(ctx, "unreachable code as expected, fail to get resource group for replica", log.Err(err))
 		return
 	}
 
 	if err := m.ReplicaManager.RecoverNodesInCollection(ctx, collectionID, rgs); err != nil {
-		logger.Warn(nil, "fail to set available nodes in replica", log.Err(err))
+		logger.Warn(ctx, "fail to set available nodes in replica", log.Err(err))
 	}
 }
 
@@ -145,7 +145,7 @@ func AssignReplica(ctx context.Context, m *meta.Meta, resourceGroups []string, r
 		}
 
 		if num > len(nodes) {
-			log.Warn(context.TODO(), "failed to check resource group", log.Err(err))
+			log.Warn(ctx, "failed to check resource group", log.Err(err))
 			if checkNodeNum {
 				err := merr.WrapErrResourceGroupNodeNotEnough(rgName, len(nodes), num)
 				return nil, err

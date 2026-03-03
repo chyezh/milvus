@@ -17,6 +17,7 @@
 package meta
 
 import (
+	"context"
 	"sync"
 
 	"github.com/samber/lo"
@@ -388,7 +389,7 @@ func (m *ChannelDistManager) GetShardLeader(channelName string, replica *Replica
 	}
 	if log.LevelEnabled(zap.DebugLevel) {
 		if candidates != nil {
-			log.RatedDebug(nil, log.RateDefault, "ChannelDistManager final",
+			log.RatedDebug(context.TODO(), log.RateDefault, "ChannelDistManager final",
 				log.String("Scope", "ChannelDistManager"),
 				log.String("channelName", channelName),
 				log.Int64("replicaID", replica.GetID()),
@@ -398,7 +399,7 @@ func (m *ChannelDistManager) GetShardLeader(channelName string, replica *Replica
 				log.String("reason", setReason),
 			)
 		} else {
-			log.RatedDebug(nil, log.RateDefault, "ChannelDistManager no candidates found",
+			log.RatedDebug(context.TODO(), log.RateDefault, "ChannelDistManager no candidates found",
 				log.String("Scope", "ChannelDistManager"),
 				log.String("channelName", channelName),
 				log.Int64("replicaID", replica.GetID()),

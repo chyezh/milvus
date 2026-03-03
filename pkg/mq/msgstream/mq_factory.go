@@ -159,7 +159,7 @@ func (f *PmsFactory) NewMsgStreamDisposer(ctx context.Context) func([]string, st
 			}
 			topic, err := utils.GetTopicName(fullTopicName)
 			if err != nil {
-				log.Warn(context.TODO(), "failed to get topic name", log.Err(err))
+				log.Warn(ctx, "failed to get topic name", log.Err(err))
 				return retry.Unrecoverable(err)
 			}
 			err = admin.Subscriptions().Delete(*topic, subname, true)
@@ -171,7 +171,7 @@ func (f *PmsFactory) NewMsgStreamDisposer(ctx context.Context) func([]string, st
 						return nil
 					}
 				}
-				log.Warn(context.TODO(), "failed to clean up subscriptions", log.String("pulsar web", f.PulsarWebAddress),
+				log.Warn(ctx, "failed to clean up subscriptions", log.String("pulsar web", f.PulsarWebAddress),
 					log.String("topic", channel), log.String("subname", subname), log.Err(err))
 			}
 		}

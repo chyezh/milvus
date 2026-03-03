@@ -172,7 +172,7 @@ func listReplicas(cli *clientv3.Client, prefix string) ([]*querypb.Replica, erro
 	for _, kv := range resp.Kvs {
 		replica := &querypb.Replica{}
 		if err := proto.Unmarshal(kv.Value, replica); err != nil {
-			log.Warn(context.TODO(), "failed to unmarshal replica info", log.Err(err))
+			log.Warn(ctx, "failed to unmarshal replica info", log.Err(err))
 			continue
 		}
 		replicas = append(replicas, replica)

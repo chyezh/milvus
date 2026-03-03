@@ -67,13 +67,13 @@ func sendFirstTimeTick(ctx context.Context, underlyingWALImpls walimpls.WALImpls
 		logger = logger.With(log.Stringer("lastConfirmedMessageID", lastConfirmedMessageID))
 	}
 
-	logger.Info(nil, "start to sync first time tick")
+	logger.Info(ctx, "start to sync first time tick")
 	defer func() {
 		if err != nil {
-			logger.Error(nil, "sync first time tick failed", log.Err(err))
+			logger.Error(ctx, "sync first time tick failed", log.Err(err))
 			return
 		}
-		logger.Info(nil, "sync first time tick done", log.String("msgID", msg.MessageID().String()), log.Uint64("timetick", msg.TimeTick()))
+		logger.Info(ctx, "sync first time tick done", log.String("msgID", msg.MessageID().String()), log.Uint64("timetick", msg.TimeTick()))
 	}()
 
 	backoffTimer := typeutil.NewBackoffTimer(typeutil.BackoffTimerConfig{
@@ -92,7 +92,7 @@ func sendFirstTimeTick(ctx context.Context, underlyingWALImpls walimpls.WALImpls
 	for count := 0; ; count++ {
 		if count > 0 {
 			nextTimer, nextBalanceInterval := backoffTimer.NextTimer()
-			logger.Warn(nil,
+			logger.Warn(ctx,
 				"send first time tick failed",
 				log.Duration("nextBalanceInterval", nextBalanceInterval),
 				log.Int("retryCount", count),

@@ -327,7 +327,7 @@ func (s *Session) String() string {
 func (s *Session) Register() {
 	err := s.registerService()
 	if err != nil {
-		s.Logger().Error(nil, "register failed", log.Err(err))
+		s.Logger().Error(context.TODO(), "register failed", log.Err(err))
 		panic(err)
 	}
 	s.UpdateRegistered(true)
@@ -472,19 +472,19 @@ func (s *Session) registerService() error {
 		s.updateStandby(true)
 	}
 	completeKey := s.getCompleteKey()
-	s.Logger().Info(nil, "service begin to register to etcd")
+	s.Logger().Info(context.TODO(), "service begin to register to etcd")
 
 	registerFn := func() error {
 		resp, err := s.etcdCli.Grant(s.ctx, s.sessionTTL)
 		if err != nil {
-			s.Logger().Error(nil, "register service: failed to grant lease from etcd", log.Err(err))
+			s.Logger().Error(context.TODO(), "register service: failed to grant lease from etcd", log.Err(err))
 			return err
 		}
 		s.LeaseID = &resp.ID
 
 		sessionJSON, err := json.Marshal(s)
 		if err != nil {
-			s.Logger().Error(nil, "register service: failed to marshal session", log.Err(err))
+			s.Logger().Error(context.TODO(), "register service: failed to marshal session", log.Err(err))
 			return err
 		}
 
@@ -505,7 +505,7 @@ func (s *Session) registerService() error {
 
 		txnResp, err := s.etcdCli.Txn(s.ctx).If(compareOps...).Then(ops...).Commit()
 		if err != nil {
-			s.Logger().Warn(nil, "register on etcd error, check the availability of etcd", log.Err(err))
+			s.Logger().Warn(context.TODO(), "register on etcd error, check the availability of etcd", log.Err(err))
 			return err
 		}
 		if txnResp != nil && !txnResp.Succeeded {
@@ -514,7 +514,7 @@ func (s *Session) registerService() error {
 		if !s.enableActiveStandBy {
 			s.registeredRevision.Store(txnResp.Header.GetRevision())
 		}
-		s.Logger().Info(nil, "put session key into etcd, service registered successfully", log.String("key", completeKey), log.String("value", string(sessionJSON)))
+		s.Logger().Info(context.TODO(), "put session key into etcd, service registered successfully", log.String("key", completeKey), log.String("value", string(sessionJSON)))
 		return nil
 	}
 	return retry.Do(s.ctx, registerFn, retry.Attempts(uint(s.sessionRetryTimes)), retry.RetryErr(isNotSessionVersionCheckFailure))
@@ -560,14 +560,14 @@ func (s *Session) getOpsForCoordinator(ops []clientv3.Op, compareOps []clientv3.
 // If keepAlive fails for unexpected error, it will send a signal to the channel.
 func (s *Session) processKeepAliveResponse() {
 	defer func() {
-		s.Logger().Info(nil, "keep alive loop exited successfully, try to revoke lease right away...")
+		s.Logger().Info(context.TODO(), "keep alive loop exited successfully, try to revoke lease right away...")
 		// here the s.ctx may be already done, so we use context.Background() with a timeout to revoke the lease.
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		if _, err := s.etcdCli.Revoke(ctx, *s.LeaseID); err != nil {
-			s.Logger().Error(nil, "failed to revoke lease", log.Err(err), log.Int64("leaseID", int64(*s.LeaseID)))
+			s.Logger().Error(ctx, "failed to revoke lease", log.Err(err), log.Int64("leaseID", int64(*s.LeaseID)))
 		}
-		s.Logger().Info(nil, "lease revoked successfully", log.Int64("leaseID", int64(*s.LeaseID)))
+		s.Logger().Info(ctx, "lease revoked successfully", log.Int64("leaseID", int64(*s.LeaseID)))
 		s.wg.Done()
 	}()
 
@@ -587,7 +587,7 @@ func (s *Session) processKeepAliveResponse() {
 		}
 		if lastErr != nil {
 			nextBackoffInterval := backoff.NextBackOff()
-			s.Logger().Warn(nil, "failed to start keep alive, wait for retry...", log.Err(lastErr), log.Duration("nextBackoffInterval", nextBackoffInterval))
+			s.Logger().Warn(s.ctx, "failed to start keep alive, wait for retry...", log.Err(lastErr), log.Duration("nextBackoffInterval", nextBackoffInterval))
 			select {
 			case <-time.After(nextBackoffInterval):
 			case <-s.ctx.Done():
@@ -602,11 +602,11 @@ func (s *Session) processKeepAliveResponse() {
 			}
 			newCH, err := s.etcdCli.KeepAlive(s.ctx, *s.LeaseID)
 			if err != nil {
-				s.Logger().Error(nil, "failed to keep alive with etcd", log.Err(err))
+				s.Logger().Error(s.ctx, "failed to keep alive with etcd", log.Err(err))
 				lastErr = errors.Wrap(err, "failed to keep alive")
 				continue
 			}
-			s.Logger().Info(nil, "keep alive...", log.Int64("leaseID", int64(*s.LeaseID)))
+			s.Logger().Info(s.ctx, "keep alive...", log.Int64("leaseID", int64(*s.LeaseID)))
 			ch = newCH
 		}
 
@@ -632,23 +632,23 @@ func (s *Session) checkKeepaliveTTL(nextKeepaliveInstant time.Time) error {
 	ttlResp, err := s.etcdCli.TimeToLive(ctx, *s.LeaseID)
 	if err != nil {
 		if errors.Is(err, v3rpc.ErrLeaseNotFound) {
-			s.Logger().Error(nil, "confirm the lease is not found, the session is expired without activing closing", log.Err(err))
+			s.Logger().Error(ctx, "confirm the lease is not found, the session is expired without activing closing", log.Err(err))
 			log.Cleanup()
 			os.Exit(exitCodeSessionLeaseExpired)
 		}
 		if ctx.Err() != nil && errors.Is(context.Cause(ctx), errSessionExpiredAtClientSide) {
-			s.Logger().Error(nil, "session expired at client side, the session is expired without activing closing", log.Err(err))
+			s.Logger().Error(ctx, "session expired at client side, the session is expired without activing closing", log.Err(err))
 			log.Cleanup()
 			os.Exit(exitCodeSessionLeaseExpired)
 		}
 		return errors.Wrap(err, "failed to check TTL")
 	}
 	if ttlResp.TTL <= 0 {
-		s.Logger().Error(nil, "confirm the lease is expired, the session is expired without activing closing", log.Err(err))
+		s.Logger().Error(ctx, "confirm the lease is expired, the session is expired without activing closing", log.Err(err))
 		log.Cleanup()
 		os.Exit(exitCodeSessionLeaseExpired)
 	}
-	s.Logger().Info(nil, "check TTL success, try to keep alive...", log.Int64("ttl", ttlResp.TTL))
+	s.Logger().Info(ctx, "check TTL success, try to keep alive...", log.Int64("ttl", ttlResp.TTL))
 	return nil
 }
 
@@ -724,7 +724,7 @@ func (s *Session) GoingStop() error {
 	completeKey := s.getCompleteKey()
 	resp, err := s.etcdCli.Get(s.ctx, completeKey, clientv3.WithCountOnly())
 	if err != nil {
-		s.Logger().Error(nil, "fail to get the session", log.String("key", completeKey), log.Err(err))
+		s.Logger().Error(context.TODO(), "fail to get the session", log.String("key", completeKey), log.Err(err))
 		return err
 	}
 	if resp.Count == 0 {
@@ -733,12 +733,12 @@ func (s *Session) GoingStop() error {
 	s.Stopping = true
 	sessionJSON, err := json.Marshal(s)
 	if err != nil {
-		s.Logger().Error(nil, "fail to marshal the session", log.String("key", completeKey))
+		s.Logger().Error(context.TODO(), "fail to marshal the session", log.String("key", completeKey))
 		return err
 	}
 	_, err = s.etcdCli.Put(s.ctx, completeKey, string(sessionJSON), clientv3.WithLease(*s.LeaseID))
 	if err != nil {
-		s.Logger().Error(nil, "fail to update the session to stopping state", log.String("key", completeKey))
+		s.Logger().Error(context.TODO(), "fail to update the session to stopping state", log.String("key", completeKey))
 		return err
 	}
 	return nil
@@ -782,7 +782,7 @@ func (w *sessionWatcher) start(ctx context.Context) {
 			case wresp, ok := <-w.rch:
 				if !ok {
 					w.closeEventCh()
-					log.Warn(context.TODO(), "session watch channel closed")
+					log.Warn(ctx, "session watch channel closed")
 					return
 				}
 				w.handleWatchResponse(wresp)
@@ -1093,19 +1093,19 @@ func (s *Session) ProcessActiveStandBy(activateFunc func() error) error {
 			for _, event := range wresp.Events {
 				switch event.Type {
 				case mvccpb.PUT:
-					log.Debug(context.TODO(), "watch the ACTIVE key", log.Any("ADD", event.Kv))
+					log.Debug(ctx, "watch the ACTIVE key", log.Any("ADD", event.Kv))
 				case mvccpb.DELETE:
-					log.Debug(context.TODO(), "watch the ACTIVE key", log.Any("DELETE", event.Kv))
+					log.Debug(ctx, "watch the ACTIVE key", log.Any("DELETE", event.Kv))
 					cancel()
 				}
 			}
 		}
 		cancel()
-		log.Info(context.TODO(), fmt.Sprintf("stop watching ACTIVE key %v", s.activeKey))
+		log.Info(ctx, fmt.Sprintf("stop watching ACTIVE key %v", s.activeKey))
 	}
 
 	s.updateStandby(false)
-	log.Info(context.TODO(), fmt.Sprintf("serverName: %v quit STANDBY mode, this node will become ACTIVE, ID: %d", s.ServerName, s.ServerID))
+	log.Info(s.ctx, fmt.Sprintf("serverName: %v quit STANDBY mode, this node will become ACTIVE, ID: %d", s.ServerName, s.ServerID))
 	if activateFunc != nil {
 		return activateFunc()
 	}

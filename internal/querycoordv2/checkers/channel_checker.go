@@ -189,7 +189,7 @@ func (c *ChannelChecker) findRepeatedChannels(ctx context.Context, replicaID int
 	dupChannels := make([]*meta.DmChannel, 0)
 
 	if replica == nil {
-		log.Info(context.TODO(), "replica does not exist, skip it")
+		log.Info(ctx, "replica does not exist, skip it")
 		return dupChannels
 	}
 
@@ -197,7 +197,7 @@ func (c *ChannelChecker) findRepeatedChannels(ctx context.Context, replicaID int
 	for _, delegator := range delegatorList {
 		leader := c.dist.ChannelDistManager.GetShardLeader(delegator.GetChannelName(), replica)
 		if leader == nil {
-			log.Warn(context.TODO(), "channel leader does not exist, skip it", log.String("channel", delegator.GetChannelName()))
+			log.Warn(ctx, "channel leader does not exist, skip it", log.String("channel", delegator.GetChannelName()))
 			continue
 		}
 		// if channel's version is smaller than shard leader's version, it means that the channel is not up to date
@@ -237,7 +237,7 @@ func (c *ChannelChecker) createChannelReduceTasks(ctx context.Context, channels 
 		action := task.NewChannelAction(ch.Node, task.ActionTypeReduce, ch.GetChannelName())
 		task, err := task.NewChannelTask(ctx, Params.QueryCoordCfg.ChannelTaskTimeout.GetAsDuration(time.Millisecond), c.ID(), ch.GetCollectionID(), replica, action)
 		if err != nil {
-			log.Warn(context.TODO(), "create channel reduce task failed",
+			log.Warn(ctx, "create channel reduce task failed",
 				log.Int64("collection", ch.GetCollectionID()),
 				log.Int64("replica", replica.GetID()),
 				log.String("channel", ch.GetChannelName()),

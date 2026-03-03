@@ -198,7 +198,7 @@ func (q *metricsNodeMemoryQuerier) GetCollectionTopology(ctx context.Context, co
 	// Get QueryNode sessions from etcd to filter out embedded nodes
 	sessions, _, err := q.session.GetSessions(ctx, typeutil.QueryNodeRole)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to get QueryNode sessions", log.Err(err))
+		log.Warn(ctx, "failed to get QueryNode sessions", log.Err(err))
 		return nil, err
 	}
 
@@ -213,7 +213,7 @@ func (q *metricsNodeMemoryQuerier) GetCollectionTopology(ctx context.Context, co
 		}
 	}
 
-	log.Info(context.TODO(), "excluding embedded QueryNode", log.Int64s("nodeIDs", lo.Keys(embeddedNodeIDs)))
+	log.Info(ctx, "excluding embedded QueryNode", log.Int64s("nodeIDs", lo.Keys(embeddedNodeIDs)))
 	rsp, err := q.mixCoord.GetQcMetrics(ctx, req)
 	if err = merr.CheckRPCCall(rsp, err); err != nil {
 		return nil, err
@@ -258,7 +258,7 @@ func (q *metricsNodeMemoryQuerier) GetCollectionTopology(ctx context.Context, co
 			// Pooling DataNode returns 0 from GetMetrics
 			// Use default fallback: 32GB
 			isPooling = true
-			log.Warn(context.TODO(), "DataNode returned 0 memory (pooling mode?), using default",
+			log.Warn(ctx, "DataNode returned 0 memory (pooling mode?), using default",
 				log.Int64("nodeID", nodeID),
 				log.Uint64("defaultMemory", defaultPoolingDataNodeMemory))
 			dataNodeMemory[nodeID] = defaultPoolingDataNodeMemory
@@ -266,7 +266,7 @@ func (q *metricsNodeMemoryQuerier) GetCollectionTopology(ctx context.Context, co
 	}
 
 	isStandaloneMode := paramtable.GetRole() == typeutil.StandaloneRole
-	log.Info(context.TODO(), "Collection topology",
+	log.Info(ctx, "Collection topology",
 		log.Int64("collectionID", collectionID),
 		log.Int("numReplicas", numReplicas),
 		log.Any("querynodes", queryNodeMemory),

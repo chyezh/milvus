@@ -17,6 +17,7 @@ package bloomfilter
 
 import (
 	"context"
+
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/cockroachdb/errors"
 	"github.com/greatroar/blobloom"

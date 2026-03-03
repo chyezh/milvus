@@ -407,7 +407,7 @@ func (t *createCollectionTask) prepareSchema(ctx context.Context) error {
 		// filter out system fields
 		for _, field := range t.body.CollectionSchema.Fields {
 			if field.Name != RowIDFieldName && field.GetFieldID() == 0 {
-				log.Info(context.TODO(), "field id 0 is not allowed when preserve field ids", log.String("field", field.Name))
+				log.Info(ctx, "field id 0 is not allowed when preserve field ids", log.String("field", field.Name))
 				return merr.WrapErrParameterInvalidMsg(fmt.Sprintf("field id 0 is not allowed when preserve field ids, field: %s", field.Name))
 			}
 

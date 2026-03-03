@@ -1,6 +1,8 @@
 package resolver
 
 import (
+	"context"
+
 	"github.com/cockroachdb/errors"
 	"google.golang.org/grpc/resolver"
 
@@ -50,10 +52,10 @@ func (r *watchBasedGRPCResolver) Update(state VersionedState) error {
 
 	if err := r.cc.UpdateState(state.State); err != nil {
 		// watch based resolver could ignore the error, just log and return nil
-		r.Logger().Warn(nil, "fail to update resolver state", log.Stringer("state", state), log.Err(err))
+		r.Logger().Warn(context.TODO(), "fail to update resolver state", log.Stringer("state", state), log.Err(err))
 		return nil
 	}
-	r.Logger().Info(nil, "update resolver state success", log.Stringer("state", state))
+	r.Logger().Info(context.TODO(), "update resolver state success", log.Stringer("state", state))
 	return nil
 }
 

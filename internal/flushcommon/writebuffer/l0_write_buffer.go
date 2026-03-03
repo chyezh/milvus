@@ -115,7 +115,7 @@ func (wb *l0WriteBuffer) getL0SegmentID(partitionID int64, startPos *msgpb.MsgPo
 			return err
 		})
 		if err != nil {
-			logger.Error(nil, "failed to allocate l0 segment ID", log.Err(err))
+			logger.Error(context.TODO(), "failed to allocate l0 segment ID", log.Err(err))
 			panic(err)
 		}
 		wb.l0Segments[partitionID] = segmentID
@@ -129,7 +129,7 @@ func (wb *l0WriteBuffer) getL0SegmentID(partitionID int64, startPos *msgpb.MsgPo
 			State:         commonpb.SegmentState_Growing,
 			Level:         datapb.SegmentLevel_L0,
 		}, func(_ *datapb.SegmentInfo) pkoracle.PkStat { return pkoracle.NewBloomFilterSet() }, metacache.NoneBm25StatsFactory, metacache.SetStartPosRecorded(false))
-		logger.Info(nil, "Add a new level zero segment",
+		logger.Info(context.TODO(), "Add a new level zero segment",
 			log.Int64("segmentID", segmentID),
 			log.String("level", datapb.SegmentLevel_L0.String()),
 			log.Any("start position", startPos),

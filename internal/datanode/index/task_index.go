@@ -23,7 +23,6 @@ import (
 	"strings"
 	"time"
 
-
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/datanode/util"
@@ -235,7 +234,7 @@ func (it *indexBuildTask) Execute(ctx context.Context) error {
 	if vecindexmgr.GetVecIndexMgrInstance().IsDiskANN(indexType) {
 		err = indexparams.SetDiskIndexBuildParams(it.newIndexParams, int64(fieldDataSize))
 		if err != nil {
-			log.Warn(context.TODO(), "failed to fill disk index params", log.Err(err))
+			log.Warn(ctx, "failed to fill disk index params", log.Err(err))
 			return err
 		}
 	}
@@ -308,7 +307,7 @@ func (it *indexBuildTask) Execute(ctx context.Context) error {
 			it.req.GetSegmentID())
 		buildIndexParams.Manifest = it.req.GetManifest()
 	}
-	log.Info(context.TODO(), "create index", log.Any("buildIndexParams", buildIndexParams))
+	log.Info(ctx, "create index", log.Any("buildIndexParams", buildIndexParams))
 
 	// set plugin context after logging the indexParams to avoid logging sensitive data
 	if it.pluginContext != nil {
@@ -318,16 +317,16 @@ func (it *indexBuildTask) Execute(ctx context.Context) error {
 	it.index, err = indexcgowrapper.CreateIndex(ctx, buildIndexParams)
 	if err != nil {
 		if it.index != nil && it.index.CleanLocalData() != nil {
-			log.Warn(context.TODO(), "failed to clean cached data on disk after build index failed")
+			log.Warn(ctx, "failed to clean cached data on disk after build index failed")
 		}
-		log.Warn(context.TODO(), "failed to build index", log.Err(err))
+		log.Warn(ctx, "failed to build index", log.Err(err))
 		return err
 	}
 
 	buildIndexLatency := it.tr.RecordSpan()
 	metrics.DataNodeKnowhereBuildIndexLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10)).Observe(buildIndexLatency.Seconds())
 
-	log.Info(context.TODO(), "Successfully build index")
+	log.Info(ctx, "Successfully build index")
 	return nil
 }
 
@@ -335,12 +334,12 @@ func (it *indexBuildTask) PostExecute(ctx context.Context) error {
 
 	gcIndex := func() {
 		if err := it.index.Delete(); err != nil {
-			log.Warn(context.TODO(), "indexBuildTask Execute CIndexDelete failed", log.Err(err))
+			log.Warn(ctx, "indexBuildTask Execute CIndexDelete failed", log.Err(err))
 		}
 	}
 	indexStats, err := it.index.UpLoad()
 	if err != nil {
-		log.Warn(context.TODO(), "failed to upload index", log.Err(err))
+		log.Warn(ctx, "failed to upload index", log.Err(err))
 		gcIndex()
 		return err
 	}
@@ -372,7 +371,7 @@ func (it *indexBuildTask) PostExecute(ctx context.Context) error {
 	saveIndexFileDur := it.tr.RecordSpan()
 	metrics.DataNodeSaveIndexFileLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10)).Observe(saveIndexFileDur.Seconds())
 	it.tr.Elapse("index building all done")
-	log.Info(context.TODO(), "Successfully save index files",
+	log.Info(ctx, "Successfully save index files",
 		log.Uint64("serializedSize", serializedSize),
 		log.Int64("memSize", indexStats.MemSize),
 		log.Strings("indexFiles", saveFileKeys))

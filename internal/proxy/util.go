@@ -2702,10 +2702,10 @@ func GetRequestInfo(ctx context.Context, req proto.Message) (int64, map[int64][]
 			r.GetCollectionID(): {},
 		}, internalpb.RateType_DDLCompaction, 1, nil
 	case *milvuspb.CreateDatabaseRequest:
-		log.Info(context.TODO(), "rate limiter CreateDatabaseRequest")
+		log.Info(ctx, "rate limiter CreateDatabaseRequest")
 		return util.InvalidDBID, map[int64][]int64{}, internalpb.RateType_DDLDB, 1, nil
 	case *milvuspb.DropDatabaseRequest:
-		log.Info(context.TODO(), "rate limiter DropDatabaseRequest")
+		log.Info(ctx, "rate limiter DropDatabaseRequest")
 		return util.InvalidDBID, map[int64][]int64{}, internalpb.RateType_DDLDB, 1, nil
 	case *milvuspb.AlterDatabaseRequest:
 		return util.InvalidDBID, map[int64][]int64{}, internalpb.RateType_DDLDB, 1, nil
@@ -2713,7 +2713,7 @@ func GetRequestInfo(ctx context.Context, req proto.Message) (int64, map[int64][]
 		if req == nil {
 			return util.InvalidDBID, map[int64][]int64{}, 0, 0, errors.New("null request")
 		}
-		log.RatedWarn(context.TODO(), log.RateDefault, "not supported request type for rate limiter", log.String("type", reflect.TypeOf(req).String()))
+		log.RatedWarn(ctx, log.RateDefault, "not supported request type for rate limiter", log.String("type", reflect.TypeOf(req).String()))
 		return util.InvalidDBID, map[int64][]int64{}, 0, 0, nil
 	}
 }

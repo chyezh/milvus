@@ -1302,7 +1302,7 @@ func (kc *Catalog) AlterGrant(ctx context.Context, tenant string, entity *milvus
 	if err != nil {
 		log.Warn(ctx, "fail to load the grantee id", log.String("key", k), log.Err(err))
 		if !errors.Is(err, merr.ErrIoKeyNotFound) {
-			log.Warn(context.TODO(), "fail to load the grantee id", log.String("key", k), log.Err(err))
+			log.Warn(ctx, "fail to load the grantee id", log.String("key", k), log.Err(err))
 			return err
 		}
 		log.Debug(ctx, "not found the grantee id", log.String("key", k))

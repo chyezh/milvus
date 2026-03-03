@@ -375,7 +375,7 @@ func (t *WithLockKeyTask) GetLockerKey() LockerKey {
 }
 
 func (t *WithLockKeyTask) Execute(ctx context.Context) error {
-	log.Info(context.TODO(), "execute task", log.String("name", t.name), log.Duration("duration", time.Since(t.newTime)))
+	log.Info(ctx, "execute task", log.String("name", t.name), log.Duration("duration", time.Since(t.newTime)))
 	time.Sleep(t.workDuration)
 	return nil
 }

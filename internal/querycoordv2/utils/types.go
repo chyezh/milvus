@@ -20,7 +20,6 @@ import (
 	"context"
 	"time"
 
-
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"

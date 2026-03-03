@@ -387,21 +387,21 @@ func (sm *snapshotManager) CreateSnapshot(
 // DropSnapshot deletes an existing snapshot by name.
 // This operation is idempotent - if the snapshot doesn't exist, it returns nil.
 func (sm *snapshotManager) DropSnapshot(ctx context.Context, name string) error {
-	log.Info(context.TODO(), "drop snapshot request received")
+	log.Info(ctx, "drop snapshot request received")
 
 	// Check if snapshot exists first (idempotent)
 	if _, err := sm.snapshotMeta.GetSnapshot(ctx, name); err != nil {
-		log.Info(context.TODO(), "snapshot not found, skip drop (idempotent)")
+		log.Info(ctx, "snapshot not found, skip drop (idempotent)")
 		return nil
 	}
 
 	// Delete snapshot
 	if err := sm.snapshotMeta.DropSnapshot(ctx, name); err != nil {
-		log.Error(context.TODO(), "failed to drop snapshot", log.Err(err))
+		log.Error(ctx, "failed to drop snapshot", log.Err(err))
 		return err
 	}
 
-	log.Info(context.TODO(), "snapshot dropped successfully")
+	log.Info(ctx, "snapshot dropped successfully")
 	return nil
 }
 
@@ -412,12 +412,12 @@ func (sm *snapshotManager) GetSnapshot(ctx context.Context, name string) (*datap
 
 // DescribeSnapshot retrieves detailed information about a snapshot.
 func (sm *snapshotManager) DescribeSnapshot(ctx context.Context, name string) (*SnapshotData, error) {
-	log.Info(context.TODO(), "describe snapshot request received")
+	log.Info(ctx, "describe snapshot request received")
 
 	// Read snapshot data with full segment information
 	snapshotData, err := sm.snapshotMeta.ReadSnapshotData(ctx, name, false)
 	if err != nil {
-		log.Error(context.TODO(), "failed to read snapshot data", log.Err(err))
+		log.Error(ctx, "failed to read snapshot data", log.Err(err))
 		return nil, err
 	}
 
@@ -426,12 +426,12 @@ func (sm *snapshotManager) DescribeSnapshot(ctx context.Context, name string) (*
 
 // ListSnapshots returns a list of snapshot names for the specified collection/partition.
 func (sm *snapshotManager) ListSnapshots(ctx context.Context, collectionID, partitionID int64) ([]string, error) {
-	log.Info(context.TODO(), "list snapshots request received")
+	log.Info(ctx, "list snapshots request received")
 
 	// List snapshots
 	snapshots, err := sm.snapshotMeta.ListSnapshots(ctx, collectionID, partitionID)
 	if err != nil {
-		log.Error(context.TODO(), "failed to list snapshots", log.Err(err))
+		log.Error(ctx, "failed to list snapshots", log.Err(err))
 		return nil, err
 	}
 
@@ -1113,14 +1113,14 @@ func (sm *snapshotManager) GetRestoreState(ctx context.Context, jobID int64) (*d
 	job := sm.copySegmentMeta.GetJob(ctx, jobID)
 	if job == nil {
 		err := merr.WrapErrImportFailed(fmt.Sprintf("restore job not found: jobID=%d", jobID))
-		log.Warn(context.TODO(), "restore job not found")
+		log.Warn(ctx, "restore job not found")
 		return nil, err
 	}
 
 	// Build restore info using centralized helper
 	restoreInfo := sm.buildRestoreInfo(job)
 
-	log.Info(context.TODO(), "get restore state completed",
+	log.Info(ctx, "get restore state completed",
 		log.String("state", restoreInfo.GetState().String()),
 		log.Int32("progress", restoreInfo.GetProgress()))
 

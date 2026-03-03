@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"math"
 
-
 	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 

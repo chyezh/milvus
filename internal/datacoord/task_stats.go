@@ -137,7 +137,6 @@ func (st *statsTask) CreateTaskOnWorker(nodeID int64, cluster session.Cluster) {
 	ctx, cancel := context.WithTimeout(context.Background(), Params.DataCoordCfg.RequestTimeoutSeconds.GetAsDuration(time.Second))
 	defer cancel()
 
-
 	var err error
 	defer func() {
 		if err != nil {
@@ -148,9 +147,9 @@ func (st *statsTask) CreateTaskOnWorker(nodeID int64, cluster session.Cluster) {
 	// Handle empty segment case
 	segment := st.meta.GetHealthySegment(ctx, st.GetSegmentID())
 	if segment == nil {
-		log.Warn(context.TODO(), "segment is not healthy, skipping stats task")
+		log.Warn(ctx, "segment is not healthy, skipping stats task")
 		if err := st.meta.statsTaskMeta.DropStatsTask(ctx, st.GetTaskID()); err != nil {
-			log.Warn(context.TODO(), "remove stats task failed, will retry later", log.Err(err))
+			log.Warn(ctx, "remove stats task failed, will retry later", log.Err(err))
 			return
 		}
 		st.SetState(indexpb.JobState_JobStateNone, "segment is not healthy")
@@ -159,21 +158,21 @@ func (st *statsTask) CreateTaskOnWorker(nodeID int64, cluster session.Cluster) {
 
 	if segment.GetNumOfRows() == 0 {
 		if err := st.handleEmptySegment(ctx); err != nil {
-			log.Warn(context.TODO(), "failed to handle empty segment", log.Err(err))
+			log.Warn(ctx, "failed to handle empty segment", log.Err(err))
 		}
 		return
 	}
 
 	// Update task version
 	if err := st.UpdateTaskVersion(nodeID); err != nil {
-		log.Warn(context.TODO(), "failed to update stats task version", log.Err(err))
+		log.Warn(ctx, "failed to update stats task version", log.Err(err))
 		return
 	}
 
 	// Prepare request
 	req, err := st.prepareJobRequest(ctx, segment)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to prepare stats request", log.Err(err))
+		log.Warn(ctx, "failed to prepare stats request", log.Err(err))
 		return
 	}
 
@@ -185,17 +184,17 @@ func (st *statsTask) CreateTaskOnWorker(nodeID int64, cluster session.Cluster) {
 	}()
 	// Execute task creation
 	if err = cluster.CreateStats(nodeID, req); err != nil {
-		log.Warn(context.TODO(), "failed to create stats task on worker", log.Err(err))
+		log.Warn(ctx, "failed to create stats task on worker", log.Err(err))
 		return
 	}
-	log.Info(context.TODO(), "assign stats task to worker successfully", log.Int64("taskID", st.GetTaskID()))
+	log.Info(ctx, "assign stats task to worker successfully", log.Int64("taskID", st.GetTaskID()))
 
 	if err = st.UpdateStateWithMeta(indexpb.JobState_JobStateInProgress, ""); err != nil {
-		log.Warn(context.TODO(), "failed to update stats task state to InProgress", log.Err(err))
+		log.Warn(ctx, "failed to update stats task state to InProgress", log.Err(err))
 		return
 	}
 
-	log.Info(context.TODO(), "stats task update state to InProgress successfully", log.Int64("task version", st.GetVersion()))
+	log.Info(ctx, "stats task update state to InProgress successfully", log.Int64("task version", st.GetVersion()))
 }
 
 func (st *statsTask) QueryTaskOnWorker(cluster session.Cluster) {
@@ -207,7 +206,7 @@ func (st *statsTask) QueryTaskOnWorker(cluster session.Cluster) {
 		TaskIDs:   []int64{st.GetTaskID()},
 	})
 	if err != nil {
-		log.Warn(context.TODO(), "query stats task result failed", log.Err(err))
+		log.Warn(ctx, "query stats task result failed", log.Err(err))
 		st.dropAndResetTaskOnWorker(ctx, cluster, err.Error())
 		return
 	}
@@ -235,7 +234,7 @@ func (st *statsTask) QueryTaskOnWorker(cluster session.Cluster) {
 		return
 	}
 
-	log.Warn(context.TODO(), "task not found in results")
+	log.Warn(ctx, "task not found in results")
 	st.resetTask(ctx, "task not found in results")
 }
 

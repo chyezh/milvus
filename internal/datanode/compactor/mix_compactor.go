@@ -346,21 +346,21 @@ func (t *mixCompactionTask) Compact() (*datapb.CompactionPlanResult, error) {
 	defer span.End()
 	compactStart := time.Now()
 
-	log.Info(context.TODO(), "compact start", log.Any("compactionParams", t.compactionParams),
+	log.Info(ctx, "compact start", log.Any("compactionParams", t.compactionParams),
 		log.Any("plan", t.plan))
 
 	if err := t.preCompact(); err != nil {
-		log.Warn(context.TODO(), "compact wrong, failed to preCompact", log.Err(err))
+		log.Warn(ctx, "compact wrong, failed to preCompact", log.Err(err))
 		return nil, err
 	}
 
 	ctxTimeout, cancelAll := context.WithCancel(ctx)
 	defer cancelAll()
 
-	log.Info(context.TODO(), "compact start")
+	log.Info(ctx, "compact start")
 	// Decompress compaction binlogs first
 	if err := binlog.DecompressCompactionBinlogsWithRootPath(t.compactionParams.StorageConfig.GetRootPath(), t.plan.SegmentBinlogs); err != nil {
-		log.Warn(context.TODO(), "compact wrong, fail to decompress compaction binlogs", log.Err(err))
+		log.Warn(ctx, "compact wrong, fail to decompress compaction binlogs", log.Err(err))
 		return nil, err
 	}
 	// Unable to deal with all empty segments cases, so return error
@@ -371,7 +371,7 @@ func (t *mixCompactionTask) Compact() (*datapb.CompactionPlanResult, error) {
 	})
 
 	if isEmpty {
-		log.Warn(context.TODO(), "compact wrong, all segments' binlogs are empty")
+		log.Warn(ctx, "compact wrong, all segments' binlogs are empty")
 		return nil, errors.New("illegal compaction plan")
 	}
 
@@ -393,22 +393,22 @@ func (t *mixCompactionTask) Compact() (*datapb.CompactionPlanResult, error) {
 	var res []*datapb.CompactionSegment
 	var err error
 	if sortMergeAppicable {
-		log.Info(context.TODO(), "compact by merge sort")
+		log.Info(ctx, "compact by merge sort")
 		res, err = mergeSortMultipleSegments(ctxTimeout, t.plan, t.collectionID, t.partitionID, t.maxRows, t.binlogIO,
 			t.plan.GetSegmentBinlogs(), t.tr, t.currentTime, t.plan.GetCollectionTtl(), t.compactionParams, t.sortByFieldIDs)
 		if err != nil {
-			log.Warn(context.TODO(), "compact wrong, fail to merge sort segments", log.Err(err))
+			log.Warn(ctx, "compact wrong, fail to merge sort segments", log.Err(err))
 			return nil, err
 		}
 	} else {
 		res, err = t.mergeSplit(ctxTimeout)
 		if err != nil {
-			log.Warn(context.TODO(), "compact wrong, failed to mergeSplit", log.Err(err))
+			log.Warn(ctx, "compact wrong, failed to mergeSplit", log.Err(err))
 			return nil, err
 		}
 	}
 
-	log.Info(context.TODO(), "compact done", log.Duration("compact elapse", time.Since(compactStart)), log.Any("res", res))
+	log.Info(ctx, "compact done", log.Duration("compact elapse", time.Since(compactStart)), log.Any("res", res))
 
 	metrics.DataNodeCompactionLatency.WithLabelValues(paramtable.GetStringNodeID(), t.plan.GetType().String()).Observe(float64(t.tr.ElapseSpan().Milliseconds()))
 	metrics.DataNodeCompactionLatencyInQueue.WithLabelValues(paramtable.GetStringNodeID()).Observe(float64(durInQueue.Milliseconds()))

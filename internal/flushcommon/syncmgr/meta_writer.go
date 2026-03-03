@@ -81,7 +81,7 @@ func (b *brokerMetaWriter) UpdateSync(ctx context.Context, pack *SyncTask) error
 	}
 
 	getBinlogNum := func(fBinlog *datapb.FieldBinlog) int { return len(fBinlog.GetBinlogs()) }
-	log.Info(context.TODO(), "SaveBinlogPath",
+	log.Info(ctx, "SaveBinlogPath",
 		log.Int64("SegmentID", pack.segmentID),
 		log.Int64("CollectionID", pack.collectionID),
 		log.Int64("ParitionID", pack.partitionID),
@@ -125,16 +125,16 @@ func (b *brokerMetaWriter) UpdateSync(ctx context.Context, pack *SyncTask) error
 		// Segment not found during stale segment flush. Segment might get compacted already.
 		// Stop retry and still proceed to the end, ignoring this error.
 		if !pack.pack.isFlush && errors.Is(err, merr.ErrSegmentNotFound) {
-			log.Warn(context.TODO(), "stale segment not found, could be compacted",
+			log.Warn(ctx, "stale segment not found, could be compacted",
 				log.Int64("segmentID", pack.segmentID))
-			log.Warn(context.TODO(), "failed to SaveBinlogPaths",
+			log.Warn(ctx, "failed to SaveBinlogPaths",
 				log.Int64("segmentID", pack.segmentID),
 				log.Err(err))
 			return false, nil
 		}
 		// meta error, datanode handles a virtual channel does not belong here
 		if errors.IsAny(err, merr.ErrSegmentNotFound, merr.ErrChannelNotFound) {
-			log.Warn(context.TODO(), "meta error found, skip sync and start to drop virtual channel", log.String("channel", pack.channelName))
+			log.Warn(ctx, "meta error found, skip sync and start to drop virtual channel", log.String("channel", pack.channelName))
 			return false, nil
 		}
 
@@ -145,7 +145,7 @@ func (b *brokerMetaWriter) UpdateSync(ctx context.Context, pack *SyncTask) error
 		return false, nil
 	}, b.opts...)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to SaveBinlogPaths",
+		log.Warn(ctx, "failed to SaveBinlogPaths",
 			log.Int64("segmentID", pack.segmentID),
 			log.Err(err))
 		return err
@@ -176,7 +176,7 @@ func (b *brokerMetaWriter) DropChannel(ctx context.Context, channelName string) 
 		return false, nil
 	}, b.opts...)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to DropChannel",
+		log.Warn(ctx, "failed to DropChannel",
 			log.String("channel", channelName),
 			log.Err(err))
 	}

@@ -1701,7 +1701,7 @@ func CheckLimiter(ctx context.Context, req interface{}, pxy types.ProxyComponent
 	// apply limiter for http/http2 server
 	limiter, err := pxy.GetRateLimiter()
 	if err != nil {
-		log.Error(context.TODO(), "Get proxy rate limiter for httpV1/V2 server failed", log.Err(err))
+		log.Error(ctx, "Get proxy rate limiter for httpV1/V2 server failed", log.Err(err))
 		return nil, err
 	}
 

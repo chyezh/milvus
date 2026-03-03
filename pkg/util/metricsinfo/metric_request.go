@@ -136,7 +136,7 @@ func (mr *MetricsRequest) ExecuteMetricsRequest(ctx context.Context, req *milvus
 	jsonReq := gjson.Parse(req.Request)
 	reqType, err := ParseMetricRequestType(jsonReq)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to parse metric type", log.Err(err))
+		log.Warn(ctx, "failed to parse metric type", log.Err(err))
 		return "", err
 	}
 
@@ -144,7 +144,7 @@ func (mr *MetricsRequest) ExecuteMetricsRequest(ctx context.Context, req *milvus
 	action, ok := mr.metricsReqType2Action[reqType]
 	if !ok {
 		mr.lock.Unlock()
-		log.Warn(context.TODO(), "unimplemented metric request type", log.String("req_type", reqType))
+		log.Warn(ctx, "unimplemented metric request type", log.String("req_type", reqType))
 		return "", errors.New(MsgUnimplementedMetric)
 	}
 	mr.lock.Unlock()
@@ -152,7 +152,7 @@ func (mr *MetricsRequest) ExecuteMetricsRequest(ctx context.Context, req *milvus
 	actionRet, err := action(ctx, req, jsonReq)
 	if err != nil {
 		msg := fmt.Sprintf("failed to execute %s", reqType)
-		log.Warn(context.TODO(), msg, log.Err(err))
+		log.Warn(ctx, msg, log.Err(err))
 		return "", err
 	}
 	return actionRet, nil

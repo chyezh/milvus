@@ -402,17 +402,17 @@ func TestUpsertAutoID(t *testing.T) {
 	vecColumn := hp.GenColumnData(nb, entity.FieldTypeFloatVector, *hp.TNewDataOption())
 	upsertRes, err := mc.Upsert(ctx, client.NewColumnBasedInsertOption(schema.CollectionName).WithColumns(insertRes.IDs, vecColumn))
 	common.CheckErr(t, err, true)
-	log.Debug(context.TODO(), "upsertRes", log.Any("len", upsertRes.IDs.(*column.ColumnInt64).Data()))
+	log.Debug(ctx, "upsertRes", log.Any("len", upsertRes.IDs.(*column.ColumnInt64).Data()))
 
 	// insertRes pks were deleted
 	expr := fmt.Sprintf("%s <= %d", common.DefaultInt64FieldName, insertRes.IDs.(*column.ColumnInt64).Data()[nb-1])
-	log.Debug(context.TODO(), "expr", log.String("expr", expr))
+	log.Debug(ctx, "expr", log.String("expr", expr))
 	resSet, err := mc.Query(ctx, client.NewQueryOption(schema.CollectionName).WithConsistencyLevel(entity.ClStrong).WithOutputFields(common.DefaultFloatVecFieldName).WithFilter(expr))
 	common.CheckErr(t, err, true)
 	require.EqualValues(t, 0, resSet.ResultCount)
 
 	exprUpsert := fmt.Sprintf("%s <= %d", common.DefaultInt64FieldName, upsertRes.IDs.(*column.ColumnInt64).Data()[nb-1])
-	log.Debug(context.TODO(), "expr", log.String("expr", expr))
+	log.Debug(ctx, "expr", log.String("expr", expr))
 	resSet1, err := mc.Query(ctx, client.NewQueryOption(schema.CollectionName).WithConsistencyLevel(entity.ClStrong).WithOutputFields(common.DefaultFloatVecFieldName).WithFilter(exprUpsert))
 	common.CheckErr(t, err, true)
 	common.EqualColumn(t, vecColumn, resSet1.GetColumn(common.DefaultFloatVecFieldName))
@@ -473,17 +473,17 @@ func TestUpsertAutoIDRows(t *testing.T) {
 	}
 	upsertRes, err := mc.Upsert(ctx, client.NewRowBasedInsertOption(schema.CollectionName, rows...))
 	common.CheckErr(t, err, true)
-	log.Debug(context.TODO(), "upsertRes", log.Any("len", upsertRes.IDs.(*column.ColumnInt64).Data()))
+	log.Debug(ctx, "upsertRes", log.Any("len", upsertRes.IDs.(*column.ColumnInt64).Data()))
 
 	// insertRes pks were deleted
 	expr := fmt.Sprintf("%s <= %d", common.DefaultInt64FieldName, insertRes.IDs.(*column.ColumnInt64).Data()[nb-1])
-	log.Debug(context.TODO(), "expr", log.String("expr", expr))
+	log.Debug(ctx, "expr", log.String("expr", expr))
 	resSet, err := mc.Query(ctx, client.NewQueryOption(schema.CollectionName).WithConsistencyLevel(entity.ClStrong).WithOutputFields(common.DefaultFloatVecFieldName).WithFilter(expr))
 	common.CheckErr(t, err, true)
 	require.EqualValues(t, 0, resSet.ResultCount)
 
 	exprUpsert := fmt.Sprintf("%s <= %d", common.DefaultInt64FieldName, upsertRes.IDs.(*column.ColumnInt64).Data()[nb-1])
-	log.Debug(context.TODO(), "expr", log.String("expr", expr))
+	log.Debug(ctx, "expr", log.String("expr", expr))
 	resSet1, err := mc.Query(ctx, client.NewQueryOption(schema.CollectionName).WithConsistencyLevel(entity.ClStrong).WithOutputFields(common.DefaultFloatVecFieldName).WithFilter(exprUpsert))
 	common.CheckErr(t, err, true)
 	common.EqualColumn(t, vecColumn, resSet1.GetColumn(common.DefaultFloatVecFieldName))

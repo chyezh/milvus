@@ -9,7 +9,6 @@ import (
 	"os/signal"
 	"syscall"
 
-
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"

@@ -46,15 +46,15 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 	if !Params.CommonCfg.AuthorizationEnabled.GetAsBool() {
 		return ctx, nil
 	}
-	log.RatedDebug(context.TODO(), log.RateDefault, "PrivilegeInterceptor", log.String("type", reflect.TypeOf(req).String()))
+	log.RatedDebug(ctx, log.RateDefault, "PrivilegeInterceptor", log.String("type", reflect.TypeOf(req).String()))
 	privilegeExt, err := funcutil.GetPrivilegeExtObj(req)
 	if err != nil {
-		log.RatedInfo(context.TODO(), log.RateDefault, "GetPrivilegeExtObj err", log.Err(err))
+		log.RatedInfo(ctx, log.RateDefault, "GetPrivilegeExtObj err", log.Err(err))
 		return ctx, nil
 	}
 	username, password, err := contextutil.GetAuthInfoFromContext(ctx)
 	if err != nil {
-		log.Warn(context.TODO(), "GetCurUserFromContext fail", log.Err(err))
+		log.Warn(ctx, "GetCurUserFromContext fail", log.Err(err))
 		return ctx, err
 	}
 	if !Params.CommonCfg.RootShouldBindRole.GetAsBool() && username == util.UserRoot {
@@ -62,7 +62,7 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 	}
 	roleNames, err := GetRole(username)
 	if err != nil {
-		log.Warn(context.TODO(), "GetRole fail", log.String("username", username), log.Err(err))
+		log.Warn(ctx, "GetRole fail", log.String("username", username), log.Err(err))
 		return ctx, err
 	}
 	roleNames = append(roleNames, util.RolePublic)
@@ -102,7 +102,7 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 			// handle the api which refers one resource
 			permitObject, err := permitFunc(objectName)
 			if err != nil {
-				log.Warn(context.TODO(), "fail to execute permit func", log.String("name", objectName), log.Err(err))
+				log.Warn(ctx, "fail to execute permit func", log.String("name", objectName), log.Err(err))
 				return ctx, err
 			}
 			if permitObject {
@@ -116,7 +116,7 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 			for _, name := range objectNames {
 				p, err := permitFunc(name)
 				if err != nil {
-					log.Warn(context.TODO(), "fail to execute permit func", log.String("name", name), log.Err(err))
+					log.Warn(ctx, "fail to execute permit func", log.String("name", name), log.Err(err))
 					return ctx, err
 				}
 				if !p {
@@ -130,7 +130,7 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 		}
 	}
 
-	log.Info(context.TODO(), "permission deny", log.Strings("roles", roleNames))
+	log.Info(ctx, "permission deny", log.Strings("roles", roleNames))
 
 	if password == util.PasswordHolder {
 		username = "apikey user"

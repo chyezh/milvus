@@ -17,8 +17,8 @@
 package proxy
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"

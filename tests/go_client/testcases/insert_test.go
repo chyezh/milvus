@@ -1,7 +1,6 @@
 package testcases
 
 import (
-	"context"
 	"math"
 	"strconv"
 	"sync"
@@ -186,7 +185,7 @@ func TestInsertDynamicExtraColumn(t *testing.T) {
 	res, _ := mc.Query(ctx, client.NewQueryOption(schema.CollectionName).WithFilter("int64 == 3000").WithOutputFields("*"))
 	common.CheckOutputFields(t, []string{common.DefaultFloatVecFieldName, common.DefaultInt64FieldName, common.DefaultDynamicFieldName}, res.Fields)
 	for _, c := range res.Fields {
-		log.Debug(context.TODO(), "data", log.Any("data", c.FieldData()))
+		log.Debug(ctx, "data", log.Any("data", c.FieldData()))
 	}
 }
 
@@ -504,7 +503,7 @@ func TestInsertReadSparseEmptyVector(t *testing.T) {
 	resQuery, err := mc.Query(ctx, client.NewQueryOption(schema.CollectionName).WithLimit(10).WithOutputFields(common.DefaultSparseVecFieldName).WithConsistencyLevel(entity.ClStrong))
 	common.CheckErr(t, err, true)
 	require.Equal(t, 1, resQuery.ResultCount)
-	log.Info(context.TODO(), "sparseVec", log.Any("data", resQuery.GetColumn(common.DefaultSparseVecFieldName).(*column.ColumnSparseFloatVector).Data()))
+	log.Info(ctx, "sparseVec", log.Any("data", resQuery.GetColumn(common.DefaultSparseVecFieldName).(*column.ColumnSparseFloatVector).Data()))
 	common.EqualColumn(t, resQuery.GetColumn(common.DefaultSparseVecFieldName), column.NewColumnSparseVectors(common.DefaultSparseVecFieldName, []entity.SparseEmbedding{sparseVec}))
 }
 
@@ -573,11 +572,11 @@ func TestInsertDefaultRows(t *testing.T) {
 	for _, autoId := range []bool{false, true} {
 		cp := hp.NewCreateCollectionParams(hp.Int64Vec)
 		_, schema := hp.CollPrepare.CreateCollection(ctx, t, mc, cp, hp.TNewFieldsOption().TWithAutoID(autoId), hp.TNewSchemaOption())
-		log.Info(context.TODO(), "fields", log.Any("FieldNames", schema.Fields))
+		log.Info(ctx, "fields", log.Any("FieldNames", schema.Fields))
 
 		// insert rows
 		rows := hp.GenInt64VecRows(common.DefaultNb, false, autoId, *hp.TNewDataOption())
-		log.Info(context.TODO(), "rows data", log.Any("rows[8]", rows[8]))
+		log.Info(ctx, "rows data", log.Any("rows[8]", rows[8]))
 		ids, err := mc.Insert(ctx, client.NewRowBasedInsertOption(schema.CollectionName, rows...))
 		common.CheckErr(t, err, true)
 		if !autoId {
@@ -609,13 +608,13 @@ func TestInsertDefaultRowsWithKeepAutoIDPk(t *testing.T) {
 
 	cp := hp.NewCreateCollectionParams(hp.Int64Vec)
 	_, schema := hp.CollPrepare.CreateCollection(ctx, t, mc, cp, hp.TNewFieldsOption().TWithAutoID(true), hp.TNewSchemaOption())
-	log.Info(context.TODO(), "fields", log.Any("FieldNames", schema.Fields))
+	log.Info(ctx, "fields", log.Any("FieldNames", schema.Fields))
 	err := mc.AlterCollectionProperties(ctx, client.NewAlterCollectionPropertiesOption(schema.CollectionName).WithProperty("allow_insert_auto_id", true))
 	common.CheckErr(t, err, true)
 
 	// insert rows
 	rows := hp.GenInt64VecRows(common.DefaultNb, false, false, *hp.TNewDataOption())
-	log.Info(context.TODO(), "rows data", log.Any("rows[8]", rows[8]))
+	log.Info(ctx, "rows data", log.Any("rows[8]", rows[8]))
 	ids, err := mc.Insert(ctx, client.NewRowBasedInsertOption(schema.CollectionName, rows...).WithKeepAutoIDPk(true))
 	common.CheckErr(t, err, true)
 	int64Values := make([]int64, 0, common.DefaultNb)
@@ -647,12 +646,12 @@ func TestInsertAllFieldsRows(t *testing.T) {
 	for _, enableDynamicField := range [2]bool{true, false} {
 		cp := hp.NewCreateCollectionParams(hp.AllFields)
 		_, schema := hp.CollPrepare.CreateCollection(ctx, t, mc, cp, hp.TNewFieldsOption(), hp.TNewSchemaOption().TWithEnableDynamicField(enableDynamicField))
-		log.Info(context.TODO(), "fields", log.Any("FieldNames", schema.Fields))
+		log.Info(ctx, "fields", log.Any("FieldNames", schema.Fields))
 
 		// insert rows
 		rows := hp.GenAllFieldsRows(common.DefaultNb, false, *hp.TNewDataOption())
-		log.Debug(context.TODO(), "", log.Any("row[0]", rows[0]))
-		log.Debug(context.TODO(), "", log.Any("row", rows[1]))
+		log.Debug(ctx, "", log.Any("row[0]", rows[0]))
+		log.Debug(ctx, "", log.Any("row", rows[1]))
 		ids, err := mc.Insert(ctx, client.NewRowBasedInsertOption(schema.CollectionName, rows...))
 		common.CheckErr(t, err, true)
 
@@ -680,7 +679,7 @@ func TestInsertVarcharRows(t *testing.T) {
 	for _, autoId := range []bool{true} {
 		cp := hp.NewCreateCollectionParams(hp.Int64VarcharSparseVec)
 		_, schema := hp.CollPrepare.CreateCollection(ctx, t, mc, cp, hp.TNewFieldsOption(), hp.TNewSchemaOption().TWithAutoID(autoId))
-		log.Info(context.TODO(), "fields", log.Any("FieldNames", schema.Fields))
+		log.Info(ctx, "fields", log.Any("FieldNames", schema.Fields))
 
 		// insert rows
 		rows := hp.GenInt64VarcharSparseRows(common.DefaultNb, false, autoId, *hp.TNewDataOption().TWithSparseMaxLen(1000))
@@ -718,7 +717,7 @@ func TestInsertSparseRows(t *testing.T) {
 	// BaseRow generate insert rows
 	for i := 0; i < common.DefaultNb; i++ {
 		vec := common.GenSparseVector(500)
-		// log.Info(context.TODO(), "", log.Any("SparseVec", vec))
+		// log.Info(ctx, "", log.Any("SparseVec", vec))
 		baseRow := hp.BaseRow{
 			Int64:     int64(i + 1),
 			SparseVec: vec,
@@ -805,7 +804,7 @@ func TestInsertRowMismatchFields(t *testing.T) {
 		}
 		rowsOrder = append(rowsOrder, row)
 	}
-	log.Debug(context.TODO(), "Row data", log.Any("row[0]", rowsOrder[0]))
+	log.Debug(ctx, "Row data", log.Any("row[0]", rowsOrder[0]))
 	_, errInsert = mc.Insert(ctx, client.NewRowBasedInsertOption(schema.CollectionName, rowsOrder...))
 	common.CheckErr(t, errInsert, true)
 }
@@ -859,9 +858,9 @@ func TestInsertEnableAutoIDRow(t *testing.T) {
 
 	// pass pk value -> ignore passed pks
 	rowsWithPk := hp.GenInt64VecRows(10, false, false, *hp.TNewDataOption())
-	log.Debug(context.TODO(), "origin first rowsWithPk", log.Any("rowsWithPk", rowsWithPk[0].(*hp.BaseRow)))
+	log.Debug(ctx, "origin first rowsWithPk", log.Any("rowsWithPk", rowsWithPk[0].(*hp.BaseRow)))
 	idsWithPk, err := mc.Insert(ctx, client.NewRowBasedInsertOption(schema.CollectionName, rowsWithPk...))
-	log.Info(context.TODO(), "write back rowsWithPk", log.Any("rowsWithPk", rowsWithPk[0].(*hp.BaseRow)))
+	log.Info(ctx, "write back rowsWithPk", log.Any("rowsWithPk", rowsWithPk[0].(*hp.BaseRow)))
 	common.CheckErr(t, err, true)
 	require.Contains(t, idsWithPk.IDs.(*column.ColumnInt64).Data(), rowsWithPk[0].(*hp.BaseRow).Int64)
 

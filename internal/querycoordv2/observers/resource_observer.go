@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/params"
 	"github.com/milvus-io/milvus/pkg/v2/log"
@@ -66,14 +65,14 @@ func (ob *ResourceObserver) Stop() {
 
 func (ob *ResourceObserver) schedule(ctx context.Context) {
 	defer ob.wg.Done()
-	log.Info(context.TODO(), "Start check resource group loop")
+	log.Info(ctx, "Start check resource group loop")
 
 	listener := ob.meta.ResourceManager.ListenResourceGroupChanged(ctx)
 	for {
 		ob.waitRGChangedOrTimeout(ctx, listener)
 		// stop if the context is canceled.
 		if ctx.Err() != nil {
-			log.Info(context.TODO(), "Close resource group observer")
+			log.Info(ctx, "Close resource group observer")
 			return
 		}
 
@@ -92,19 +91,19 @@ func (ob *ResourceObserver) checkAndRecoverResourceGroup(ctx context.Context) {
 	manager := ob.meta.ResourceManager
 	rgNames := manager.ListResourceGroups(ctx)
 	enableRGAutoRecover := params.Params.QueryCoordCfg.EnableRGAutoRecover.GetAsBool()
-	log.Debug(context.TODO(), "start to check resource group", log.Bool("enableRGAutoRecover", enableRGAutoRecover), log.Int("resourceGroupNum", len(rgNames)))
+	log.Debug(ctx, "start to check resource group", log.Bool("enableRGAutoRecover", enableRGAutoRecover), log.Int("resourceGroupNum", len(rgNames)))
 
 	// Check if there is any incoming node.
 	if manager.CheckIncomingNodeNum(ctx) > 0 {
-		log.Info(context.TODO(), "new incoming node is ready to be assigned...", log.Int("incomingNodeNum", manager.CheckIncomingNodeNum(ctx)))
+		log.Info(ctx, "new incoming node is ready to be assigned...", log.Int("incomingNodeNum", manager.CheckIncomingNodeNum(ctx)))
 		manager.AssignPendingIncomingNode(ctx)
 	}
 
-	log.Debug(context.TODO(), "recover resource groups...")
+	log.Debug(ctx, "recover resource groups...")
 	// Recover all resource group into expected configuration.
 	for _, rgName := range rgNames {
 		if err := manager.MeetRequirement(ctx, rgName); err != nil {
-			log.Info(context.TODO(), "found resource group need to be recovered",
+			log.Info(ctx, "found resource group need to be recovered",
 				log.String("rgName", rgName),
 				log.String("reason", err.Error()),
 			)
@@ -112,7 +111,7 @@ func (ob *ResourceObserver) checkAndRecoverResourceGroup(ctx context.Context) {
 			if enableRGAutoRecover {
 				err := manager.AutoRecoverResourceGroup(ctx, rgName)
 				if err != nil {
-					log.Warn(context.TODO(), "failed to recover resource group",
+					log.Warn(ctx, "failed to recover resource group",
 						log.String("rgName", rgName),
 						log.Err(err),
 					)
@@ -120,5 +119,5 @@ func (ob *ResourceObserver) checkAndRecoverResourceGroup(ctx context.Context) {
 			}
 		}
 	}
-	log.Debug(context.TODO(), "check resource group done", log.Bool("enableRGAutoRecover", enableRGAutoRecover), log.Int("resourceGroupNum", len(rgNames)))
+	log.Debug(ctx, "check resource group done", log.Bool("enableRGAutoRecover", enableRGAutoRecover), log.Int("resourceGroupNum", len(rgNames)))
 }

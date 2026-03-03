@@ -34,8 +34,8 @@ import (
 	"github.com/milvus-io/milvus/internal/storagecommon"
 	"github.com/milvus-io/milvus/internal/storagev2"
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
-	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
@@ -125,10 +125,10 @@ func (t *SyncTask) Run(ctx context.Context) (err error) {
 	segmentInfo, has := t.metacache.GetSegmentByID(t.segmentID)
 	if !has {
 		if t.pack.isDrop {
-			log.Info(context.TODO(), "segment dropped, discard sync task")
+			log.Info(ctx, "segment dropped, discard sync task")
 			return nil
 		}
-		log.Warn(context.TODO(), "segment not found in metacache, may be already synced")
+		log.Warn(ctx, "segment not found in metacache, may be already synced")
 		return nil
 	}
 
@@ -150,7 +150,7 @@ func (t *SyncTask) Run(ctx context.Context) (err error) {
 	}
 
 	if err != nil {
-		log.Warn(context.TODO(), "failed to write sync data with storage v2 format", log.Err(err))
+		log.Warn(ctx, "failed to write sync data with storage v2 format", log.Err(err))
 		return err
 	}
 
@@ -174,7 +174,7 @@ func (t *SyncTask) Run(ctx context.Context) (err error) {
 	if t.metaWriter != nil {
 		err = t.writeMeta(ctx)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to save serialized data into storage", log.Err(err))
+			log.Warn(ctx, "failed to save serialized data into storage", log.Err(err))
 			return err
 		}
 	}
@@ -192,11 +192,11 @@ func (t *SyncTask) Run(ctx context.Context) (err error) {
 
 	if t.pack.isDrop {
 		t.metacache.RemoveSegments(metacache.WithSegmentIDs(t.segmentID))
-		log.Info(context.TODO(), "segment removed", log.Int64("segmentID", t.segmentID), log.String("channel", t.channelName))
+		log.Info(ctx, "segment removed", log.Int64("segmentID", t.segmentID), log.String("channel", t.channelName))
 	}
 
 	t.execTime = t.tr.ElapseSpan()
-	log.Info(context.TODO(), "task done", log.Int64("flushedSize", t.flushedSize), log.Duration("timeTaken", t.execTime))
+	log.Info(ctx, "task done", log.Int64("flushedSize", t.flushedSize), log.Duration("timeTaken", t.execTime))
 
 	if !t.pack.isFlush {
 		metrics.DataNodeAutoFlushBufferCount.WithLabelValues(paramtable.GetStringNodeID(), metrics.SuccessLabel, t.level.String()).Inc()

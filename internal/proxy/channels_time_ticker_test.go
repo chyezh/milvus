@@ -125,7 +125,7 @@ func TestChannelsTimeTickerImpl_getLastTick(t *testing.T) {
 				for _, pchan := range pchans {
 					ts, err := channelTicker.getLastTick(pchan)
 					assert.Equal(t, nil, err)
-					log.Debug(context.TODO(), "TestChannelsTimeTickerImpl_getLastTick",
+					log.Debug(ctx, "TestChannelsTimeTickerImpl_getLastTick",
 						log.Any("pchan", pchan),
 						log.Any("minTs", ts))
 				}
@@ -173,7 +173,7 @@ func TestChannelsTimeTickerImpl_getMinTsStatistics(t *testing.T) {
 				stats, _, err := channelTicker.getMinTsStatistics()
 				assert.Equal(t, nil, err)
 				for pchan, ts := range stats {
-					log.Debug(context.TODO(), "TestChannelsTimeTickerImpl_getLastTick",
+					log.Debug(ctx, "TestChannelsTimeTickerImpl_getLastTick",
 						log.Any("pchan", pchan),
 						log.Any("minTs", ts))
 				}

@@ -12,9 +12,9 @@
 package main
 
 import (
-	"context"
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"strings"

@@ -41,8 +41,8 @@ import (
 	"github.com/milvus-io/milvus/internal/util/segmentutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
@@ -75,7 +75,7 @@ func (s *Server) GetStatisticsChannel(ctx context.Context, req *internalpb.GetSt
 // this api only guarantees all the segments requested is sealed
 // these segments will be flushed only after the Flush policy is fulfilled
 func (s *Server) Flush(ctx context.Context, req *datapb.FlushRequest) (*datapb.FlushResponse, error) {
-	log.Info(context.TODO(), "receive flush request")
+	log.Info(ctx, "receive flush request")
 	ctx, sp := otel.Tracer(typeutil.DataCoordRole).Start(ctx, "DataCoord-Flush")
 	defer sp.End()
 
@@ -88,7 +88,7 @@ func (s *Server) Flush(ctx context.Context, req *datapb.FlushRequest) (*datapb.F
 	// generate a timestamp timeOfSeal, all data before timeOfSeal is guaranteed to be sealed or flushed
 	ts, err := s.allocator.AllocTimestamp(ctx)
 	if err != nil {
-		log.Warn(context.TODO(), "unable to alloc timestamp", log.Err(err))
+		log.Warn(ctx, "unable to alloc timestamp", log.Err(err))
 		return nil, err
 	}
 	flushResult, err := s.flushCollection(ctx, req.GetCollectionID(), ts, req.GetSegmentIDs())
@@ -114,7 +114,7 @@ func (s *Server) flushCollection(ctx context.Context, collectionID UniqueID, flu
 	channelCPs := make(map[string]*msgpb.MsgPosition, 0)
 	coll, err := s.handler.GetCollection(ctx, collectionID)
 	if err != nil {
-		log.Warn(context.TODO(), "fail to get collection", log.Err(err))
+		log.Warn(ctx, "fail to get collection", log.Err(err))
 		return nil, err
 	}
 	if coll == nil {
@@ -152,7 +152,7 @@ func (s *Server) flushCollection(ctx context.Context, collectionID UniqueID, flu
 		}
 	}
 
-	log.Info(context.TODO(), "flush response with segments",
+	log.Info(ctx, "flush response with segments",
 		log.Int64("collectionID", collectionID),
 		log.Int64s("sealSegments", lo.Keys(sealedSegmentsIDDict)),
 		log.Int("flushedSegmentsCount", len(flushSegmentIDs)),
@@ -238,7 +238,7 @@ func (s *Server) AssignSegmentID(ctx context.Context, req *datapb.AssignSegmentI
 	assigns := make([]*datapb.SegmentIDAssignment, 0, len(req.SegmentIDRequests))
 
 	for _, r := range req.SegmentIDRequests {
-		log.Info(context.TODO(), "handle assign segment request",
+		log.Info(ctx, "handle assign segment request",
 			log.Int64("collectionID", r.GetCollectionID()),
 			log.Int64("partitionID", r.GetPartitionID()),
 			log.String("channelName", r.GetChannelName()),
@@ -249,14 +249,14 @@ func (s *Server) AssignSegmentID(ctx context.Context, req *datapb.AssignSegmentI
 		// Note: this request wouldn't be received if collection didn't exist.
 		_, err := s.handler.GetCollection(ctx, r.GetCollectionID())
 		if err != nil {
-			log.Warn(context.TODO(), "cannot get collection schema", log.Err(err))
+			log.Warn(ctx, "cannot get collection schema", log.Err(err))
 		}
 
 		// Have segment manager allocate and return the segment allocation info.
 		segmentAllocations, err := s.segmentManager.AllocSegment(ctx,
 			r.CollectionID, r.PartitionID, r.ChannelName, int64(r.Count), r.GetStorageVersion())
 		if err != nil {
-			log.Warn(context.TODO(), "failed to alloc segment", log.Any("request", r), log.Err(err))
+			log.Warn(ctx, "failed to alloc segment", log.Any("request", r), log.Err(err))
 			assigns = append(assigns, &datapb.SegmentIDAssignment{
 				ChannelName:  r.ChannelName,
 				CollectionID: r.CollectionID,
@@ -266,7 +266,7 @@ func (s *Server) AssignSegmentID(ctx context.Context, req *datapb.AssignSegmentI
 			continue
 		}
 
-		log.Info(context.TODO(), "success to assign segments", log.Int64("collectionID", r.GetCollectionID()), log.Any("assignments", segmentAllocations))
+		log.Info(ctx, "success to assign segments", log.Int64("collectionID", r.GetCollectionID()), log.Any("assignments", segmentAllocations))
 
 		for _, allocation := range segmentAllocations {
 			result := &datapb.SegmentIDAssignment{
@@ -394,7 +394,7 @@ func (s *Server) GetInsertBinlogPaths(ctx context.Context, req *datapb.GetInsert
 // GetCollectionStatistics returns statistics for collection
 // for now only row count is returned
 func (s *Server) GetCollectionStatistics(ctx context.Context, req *datapb.GetCollectionStatisticsRequest) (*datapb.GetCollectionStatisticsResponse, error) {
-	log.Info(context.TODO(), "received request to get collection statistics")
+	log.Info(ctx, "received request to get collection statistics")
 	if err := merr.CheckHealthy(s.GetStateCode()); err != nil {
 		return &datapb.GetCollectionStatisticsResponse{
 			Status: merr.Status(err),
@@ -406,7 +406,7 @@ func (s *Server) GetCollectionStatistics(ctx context.Context, req *datapb.GetCol
 	}
 	nums := s.meta.GetNumRowsOfCollection(ctx, req.CollectionID)
 	resp.Stats = append(resp.Stats, &commonpb.KeyValuePair{Key: "row_count", Value: strconv.FormatInt(nums, 10)})
-	log.Info(context.TODO(), "success to get collection statistics", log.Any("response", resp))
+	log.Info(ctx, "success to get collection statistics", log.Any("response", resp))
 	return resp, nil
 }
 
@@ -431,7 +431,7 @@ func (s *Server) GetPartitionStatistics(ctx context.Context, req *datapb.GetPart
 		nums += num
 	}
 	resp.Stats = append(resp.Stats, &commonpb.KeyValuePair{Key: "row_count", Value: strconv.FormatInt(nums, 10)})
-	log.Info(context.TODO(), "success to get partition statistics", log.Any("response", resp))
+	log.Info(ctx, "success to get partition statistics", log.Any("response", resp))
 	return resp, nil
 }
 
@@ -463,7 +463,7 @@ func (s *Server) GetSegmentInfo(ctx context.Context, req *datapb.GetSegmentInfoR
 			info = s.meta.GetSegment(ctx, id)
 			// info may be not-nil, but ok is false when the segment is being dropped concurrently.
 			if info == nil {
-				log.Warn(context.TODO(), "failed to get segment, this may have been cleaned", log.Int64("segmentID", id))
+				log.Warn(ctx, "failed to get segment, this may have been cleaned", log.Int64("segmentID", id))
 				err := merr.WrapErrSegmentNotFound(id)
 				resp.Status = merr.Status(err)
 				return resp, nil
@@ -513,7 +513,7 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 		channelName = req.GetChannel()
 	)
 
-	log.Info(context.TODO(), "receive SaveBinlogPaths request",
+	log.Info(ctx, "receive SaveBinlogPaths request",
 		log.Bool("isFlush", req.GetFlushed()),
 		log.Bool("isDropped", req.GetDropped()),
 		log.Any("checkpoints", req.GetCheckPoints()))
@@ -530,7 +530,7 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 		targetID, err := snmanager.StaticStreamingNodeManager.GetLatestWALLocated(ctx, channelName)
 		if err != nil || targetID != nodeID {
 			err := merr.WrapErrChannelNotFound(channelName, fmt.Sprintf("for node %d", nodeID))
-			log.Warn(context.TODO(), "failed to get latest wal allocated", log.Int64("nodeID", nodeID), log.Int64("channel nodeID", targetID), log.Err(err))
+			log.Warn(ctx, "failed to get latest wal allocated", log.Int64("nodeID", nodeID), log.Int64("channel nodeID", targetID), log.Err(err))
 			return merr.Status(err), nil
 		}
 	}
@@ -538,7 +538,7 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 	// try to parse path and fill logid
 	err := binlog.CompressSaveBinlogPaths(req)
 	if err != nil {
-		log.Warn(context.TODO(), "fail to CompressSaveBinlogPaths", log.String("channel", channelName), log.Err(err))
+		log.Warn(ctx, "fail to CompressSaveBinlogPaths", log.String("channel", channelName), log.Err(err))
 		return merr.Status(err), nil
 	}
 
@@ -551,18 +551,18 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 		// validate level one segment
 		if segment == nil {
 			err := merr.WrapErrSegmentNotFound(req.GetSegmentID())
-			log.Warn(context.TODO(), "failed to get segment", log.Err(err))
+			log.Warn(ctx, "failed to get segment", log.Err(err))
 			return merr.Status(err), nil
 		}
 
 		if segment.State == commonpb.SegmentState_Dropped {
-			log.Info(context.TODO(), "save to dropped segment, ignore this request")
+			log.Info(ctx, "save to dropped segment, ignore this request")
 			return merr.Success(), nil
 		}
 
 		if !isSegmentHealthy(segment) {
 			err := merr.WrapErrSegmentNotFound(req.GetSegmentID())
-			log.Warn(context.TODO(), "failed to get segment, the segment not healthy", log.Err(err))
+			log.Warn(ctx, "failed to get segment, the segment not healthy", log.Err(err))
 			return merr.Status(err), nil
 		}
 
@@ -608,14 +608,14 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 	// Update segment info in memory and meta.
 	if err := s.meta.UpdateSegmentsInfo(ctx, operators...); err != nil {
 		if !errors.Is(err, ErrIgnoredSegmentMetaOperation) {
-			log.Error(context.TODO(), "save binlog and checkpoints failed", log.Err(err))
+			log.Error(ctx, "save binlog and checkpoints failed", log.Err(err))
 			return merr.Status(err), nil
 		}
-		log.Info(context.TODO(), "save binlog and checkpoints failed with ignorable error", log.Err(err))
+		log.Info(ctx, "save binlog and checkpoints failed with ignorable error", log.Err(err))
 	}
 
 	s.meta.SetLastWrittenTime(req.GetSegmentID())
-	log.Info(context.TODO(), "SaveBinlogPaths sync segment with meta",
+	log.Info(ctx, "SaveBinlogPaths sync segment with meta",
 		log.Any("checkpoints", req.GetCheckPoints()),
 		log.Strings("binlogs", stringifyBinlogs(req.GetField2BinlogPaths())),
 		log.Strings("deltalogs", stringifyBinlogs(req.GetDeltalogs())),
@@ -643,7 +643,7 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 				WithPartitionID(req.GetPartitionID()).
 				WithChannel(req.GetChannel()))
 		if err != nil {
-			log.Warn(context.TODO(), "failed to trigger single compaction")
+			log.Warn(ctx, "failed to trigger single compaction")
 		}
 	}
 
@@ -663,7 +663,7 @@ func (s *Server) DropVirtualChannel(ctx context.Context, req *datapb.DropVirtual
 	}
 
 	channel := req.GetChannelName()
-	log.Info(context.TODO(), "receive DropVirtualChannel request",
+	log.Info(ctx, "receive DropVirtualChannel request",
 		log.String("channelName", channel))
 
 	segments := make([]*SegmentInfo, 0, len(req.GetSegments()))
@@ -685,7 +685,7 @@ func (s *Server) DropVirtualChannel(ctx context.Context, req *datapb.DropVirtual
 
 	err := s.meta.UpdateDropChannelSegmentInfo(ctx, channel, segments)
 	if err != nil {
-		log.Error(context.TODO(), "Update Drop Channel segment info failed", log.String("channel", channel), log.Err(err))
+		log.Error(ctx, "Update Drop Channel segment info failed", log.String("channel", channel), log.Err(err))
 		resp.Status = merr.Status(err)
 		return resp, nil
 	}
@@ -707,7 +707,7 @@ func (s *Server) SetSegmentState(ctx context.Context, req *datapb.SetSegmentStat
 	}
 	err := s.meta.SetState(ctx, req.GetSegmentId(), req.GetNewState())
 	if err != nil {
-		log.Error(context.TODO(), "failed to updated segment state in dataCoord meta",
+		log.Error(ctx, "failed to updated segment state in dataCoord meta",
 			log.Int64("segmentID", req.SegmentId),
 			log.String("newState", req.GetNewState().String()))
 		return &datapb.SetSegmentStateResponse{
@@ -769,7 +769,7 @@ func (s *Server) GetRecoveryInfo(ctx context.Context, req *datapb.GetRecoveryInf
 
 	dresp, err := s.broker.DescribeCollectionInternal(s.ctx, collectionID)
 	if err != nil {
-		log.Error(context.TODO(), "get collection info from rootcoord failed",
+		log.Error(ctx, "get collection info from rootcoord failed",
 			log.Err(err))
 		resp.Status = merr.Status(err)
 		return resp, nil
@@ -780,7 +780,7 @@ func (s *Server) GetRecoveryInfo(ctx context.Context, req *datapb.GetRecoveryInf
 	for _, c := range channels {
 		channelInfo := s.handler.GetQueryVChanPositions(&channelMeta{Name: c, CollectionID: collectionID}, partitionID)
 		channelInfos = append(channelInfos, channelInfo)
-		log.Info(context.TODO(), "datacoord append channelInfo in GetRecoveryInfo",
+		log.Info(ctx, "datacoord append channelInfo in GetRecoveryInfo",
 			log.String("channel", channelInfo.GetChannelName()),
 			log.Int("# of unflushed segments", len(channelInfo.GetUnflushedSegmentIds())),
 			log.Int("# of flushed segments", len(channelInfo.GetFlushedSegmentIds())),
@@ -801,7 +801,7 @@ func (s *Server) GetRecoveryInfo(ctx context.Context, req *datapb.GetRecoveryInf
 		segment := s.meta.GetSegment(ctx, id)
 		if segment == nil {
 			err := merr.WrapErrSegmentNotFound(id)
-			log.Warn(context.TODO(), "failed to get segment", log.Int64("segmentID", id))
+			log.Warn(ctx, "failed to get segment", log.Int64("segmentID", id))
 			resp.Status = merr.Status(err)
 			return resp, nil
 		}
@@ -835,7 +835,7 @@ func (s *Server) GetRecoveryInfo(ctx context.Context, req *datapb.GetRecoveryInf
 		}
 
 		if newCount := segmentutil.CalcRowCountFromBinLog(segment.SegmentInfo); newCount != segment.NumOfRows && newCount > 0 {
-			log.Warn(context.TODO(), "segment row number meta inconsistent with bin log row count and will be corrected",
+			log.Warn(ctx, "segment row number meta inconsistent with bin log row count and will be corrected",
 				log.Int64("segmentID", segment.GetID()),
 				log.Int64("segment meta row count (wrong)", segment.GetNumOfRows()),
 				log.Int64("segment bin log row count (correct)", newCount))
@@ -908,7 +908,7 @@ func (s *Server) GetRecoveryInfoV2(ctx context.Context, req *datapb.GetRecoveryI
 	for _, ch := range channels {
 		channelInfo := s.handler.GetQueryVChanPositions(ch, partitionIDs...)
 		channelInfos = append(channelInfos, channelInfo)
-		log.Info(context.TODO(), "datacoord append channelInfo in GetRecoveryInfo",
+		log.Info(ctx, "datacoord append channelInfo in GetRecoveryInfo",
 			log.String("channel", channelInfo.GetChannelName()),
 			log.Any("seekPos", channelInfo.GetSeekPosition()),
 			log.Int("# of unflushed segments", len(channelInfo.GetUnflushedSegmentIds())),
@@ -927,7 +927,7 @@ func (s *Server) GetRecoveryInfoV2(ctx context.Context, req *datapb.GetRecoveryI
 		segment := s.meta.GetSegment(ctx, id)
 		if segment == nil {
 			err := merr.WrapErrSegmentNotFound(id)
-			log.Warn(context.TODO(), "failed to get segment", log.Int64("segmentID", id))
+			log.Warn(ctx, "failed to get segment", log.Int64("segmentID", id))
 			resp.Status = merr.Status(err)
 			return resp, nil
 		}
@@ -946,7 +946,7 @@ func (s *Server) GetRecoveryInfoV2(ctx context.Context, req *datapb.GetRecoveryI
 		}
 		rowCount := segmentutil.CalcRowCountFromBinLog(segment.SegmentInfo)
 		if rowCount != segment.NumOfRows && rowCount > 0 {
-			log.Warn(context.TODO(), "segment row number meta inconsistent with bin log row count and will be corrected",
+			log.Warn(ctx, "segment row number meta inconsistent with bin log row count and will be corrected",
 				log.Int64("segmentID", segment.GetID()),
 				log.Int64("segment meta row count (wrong)", segment.GetNumOfRows()),
 				log.Int64("segment bin log row count (correct)", rowCount))
@@ -974,7 +974,7 @@ func (s *Server) GetRecoveryInfoV2(ctx context.Context, req *datapb.GetRecoveryI
 // GetChannelRecoveryInfo get recovery channel info.
 // Called by: StreamingNode.
 func (s *Server) GetChannelRecoveryInfo(ctx context.Context, req *datapb.GetChannelRecoveryInfoRequest) (*datapb.GetChannelRecoveryInfoResponse, error) {
-	log.Info(context.TODO(), "get channel recovery info request received")
+	log.Info(ctx, "get channel recovery info request received")
 	resp := &datapb.GetChannelRecoveryInfoResponse{
 		Status: merr.Success(),
 	}
@@ -989,7 +989,7 @@ func (s *Server) GetChannelRecoveryInfo(ctx context.Context, req *datapb.GetChan
 		CollectionID: collectionID,
 	}, allPartitionID)
 	if channelInfo.SeekPosition == nil {
-		log.Warn(context.TODO(), "channel recovery start position is not found, may collection is on creating")
+		log.Warn(ctx, "channel recovery start position is not found, may collection is on creating")
 		resp.Status = merr.Status(merr.WrapErrChannelNotAvailable(req.GetVchannel(), "start position is nil"))
 		return resp, nil
 	}
@@ -1005,7 +1005,7 @@ func (s *Server) GetChannelRecoveryInfo(ctx context.Context, req *datapb.GetChan
 		}
 	}
 
-	log.Info(context.TODO(), "datacoord get channel recovery info",
+	log.Info(ctx, "datacoord get channel recovery info",
 		log.String("channel", channelInfo.GetChannelName()),
 		log.Int("# of unflushed segments", len(channelInfo.GetUnflushedSegmentIds())),
 		log.Int("# of flushed segments", len(channelInfo.GetFlushedSegmentIds())),
@@ -1029,7 +1029,7 @@ func (s *Server) GetFlushedSegments(ctx context.Context, req *datapb.GetFlushedS
 	}
 	collectionID := req.GetCollectionID()
 	partitionID := req.GetPartitionID()
-	log.Info(context.TODO(), "received get flushed segments request",
+	log.Info(ctx, "received get flushed segments request",
 		log.Int64("collectionID", collectionID),
 		log.Int64("partitionID", partitionID),
 	)
@@ -1073,7 +1073,7 @@ func (s *Server) GetSegmentsByStates(ctx context.Context, req *datapb.GetSegment
 	collectionID := req.GetCollectionID()
 	partitionID := req.GetPartitionID()
 	states := req.GetStates()
-	log.Info(context.TODO(), "received get segments by states request",
+	log.Info(ctx, "received get segments by states request",
 		log.Int64("collectionID", collectionID),
 		log.Int64("partitionID", partitionID),
 		log.Any("states", states))
@@ -1144,7 +1144,7 @@ func (s *Server) ShowConfigurations(ctx context.Context, req *internalpb.ShowCon
 func (s *Server) GetMetrics(ctx context.Context, req *milvuspb.GetMetricsRequest) (*milvuspb.GetMetricsResponse, error) {
 	if err := merr.CheckHealthy(s.GetStateCode()); err != nil {
 		msg := "failed to get metrics"
-		log.Warn(context.TODO(), msg, log.Err(err))
+		log.Warn(ctx, msg, log.Err(err))
 		return &milvuspb.GetMetricsResponse{
 			Status: merr.Status(errors.Wrap(err, msg)),
 		}, nil
@@ -1168,7 +1168,7 @@ func (s *Server) GetMetrics(ctx context.Context, req *milvuspb.GetMetricsRequest
 
 // ManualCompaction triggers a compaction for a collection
 func (s *Server) ManualCompaction(ctx context.Context, req *milvuspb.ManualCompactionRequest) (*milvuspb.ManualCompactionResponse, error) {
-	log.Info(context.TODO(), "received manual compaction", log.Any("request", req))
+	log.Info(ctx, "received manual compaction", log.Any("request", req))
 
 	resp := &milvuspb.ManualCompactionResponse{
 		Status: merr.Success(),
@@ -1199,7 +1199,7 @@ func (s *Server) ManualCompaction(ctx context.Context, req *milvuspb.ManualCompa
 		)
 	}
 	if err != nil {
-		log.Error(context.TODO(), "failed to trigger manual compaction", log.Err(err))
+		log.Error(ctx, "failed to trigger manual compaction", log.Err(err))
 		resp.Status = merr.Status(err)
 		return resp, nil
 	}
@@ -1213,14 +1213,14 @@ func (s *Server) ManualCompaction(ctx context.Context, req *milvuspb.ManualCompa
 		resp.CompactionPlanCount = int32(taskCnt)
 	}
 
-	log.Info(context.TODO(), "success to trigger manual compaction", log.Bool("isL0Compaction", req.GetL0Compaction()),
+	log.Info(ctx, "success to trigger manual compaction", log.Bool("isL0Compaction", req.GetL0Compaction()),
 		log.Bool("isMajorCompaction", req.GetMajorCompaction()), log.Int64("targetSize", req.GetTargetSize()), log.Int64("compactionID", id), log.Int("taskNum", taskCnt))
 	return resp, nil
 }
 
 // GetCompactionState gets the state of a compaction
 func (s *Server) GetCompactionState(ctx context.Context, req *milvuspb.GetCompactionStateRequest) (*milvuspb.GetCompactionStateResponse, error) {
-	log.Info(context.TODO(), "received get compaction state request")
+	log.Info(ctx, "received get compaction state request")
 	resp := &milvuspb.GetCompactionStateResponse{
 		Status: merr.Success(),
 	}
@@ -1243,7 +1243,7 @@ func (s *Server) GetCompactionState(ctx context.Context, req *milvuspb.GetCompac
 	resp.CompletedPlanNo = int64(info.completedCnt)
 	resp.TimeoutPlanNo = int64(info.timeoutCnt)
 	resp.FailedPlanNo = int64(info.failedCnt)
-	log.Info(context.TODO(), "success to get compaction state", log.Any("state", info.state), log.Int("executing", info.executingCnt),
+	log.Info(ctx, "success to get compaction state", log.Any("state", info.state), log.Int("executing", info.executingCnt),
 		log.Int("completed", info.completedCnt), log.Int("failed", info.failedCnt), log.Int("timeout", info.timeoutCnt))
 
 	return resp, nil
@@ -1251,7 +1251,7 @@ func (s *Server) GetCompactionState(ctx context.Context, req *milvuspb.GetCompac
 
 // GetCompactionStateWithPlans returns the compaction state of given plan
 func (s *Server) GetCompactionStateWithPlans(ctx context.Context, req *milvuspb.GetCompactionPlansRequest) (*milvuspb.GetCompactionPlansResponse, error) {
-	log.Info(context.TODO(), "received the request to get compaction state with plans")
+	log.Info(ctx, "received the request to get compaction state with plans")
 
 	if err := merr.CheckHealthy(s.GetStateCode()); err != nil {
 		return &milvuspb.GetCompactionPlansResponse{
@@ -1274,7 +1274,7 @@ func (s *Server) GetCompactionStateWithPlans(ctx context.Context, req *milvuspb.
 	})
 
 	planIDs := lo.MapToSlice[int64, *milvuspb.CompactionMergeInfo](info.mergeInfos, func(planID int64, _ *milvuspb.CompactionMergeInfo) int64 { return planID })
-	log.Info(context.TODO(), "success to get state with plans", log.Any("state", info.state), log.Any("merge infos", resp.MergeInfos),
+	log.Info(ctx, "success to get state with plans", log.Any("state", info.state), log.Any("merge infos", resp.MergeInfos),
 		log.Int64s("plans", planIDs))
 	return resp, nil
 }
@@ -1282,7 +1282,7 @@ func (s *Server) GetCompactionStateWithPlans(ctx context.Context, req *milvuspb.
 // WatchChannels notifies DataCoord to watch vchannels of a collection.
 // Deprecated: Redundant design by now, remove it in future.
 func (s *Server) WatchChannels(ctx context.Context, req *datapb.WatchChannelsRequest) (*datapb.WatchChannelsResponse, error) {
-	log.Info(context.TODO(), "receive watch channels request")
+	log.Info(ctx, "receive watch channels request")
 	resp := &datapb.WatchChannelsResponse{
 		Status: merr.Success(),
 	}
@@ -1296,7 +1296,7 @@ func (s *Server) WatchChannels(ctx context.Context, req *datapb.WatchChannelsReq
 		// TODO: redundant channel mark by now, remove it in future.
 		if err := s.meta.catalog.MarkChannelAdded(ctx, channelName); err != nil {
 			// TODO: add background task to periodically cleanup the orphaned channel add marks.
-			log.Error(context.TODO(), "failed to mark channel added", log.Err(err))
+			log.Error(ctx, "failed to mark channel added", log.Err(err))
 			resp.Status = merr.Status(err)
 			return resp, nil
 		}
@@ -1306,10 +1306,10 @@ func (s *Server) WatchChannels(ctx context.Context, req *datapb.WatchChannelsReq
 		if startPos != nil {
 			startPos.Timestamp = req.GetCreateTimestamp()
 			if err := s.meta.UpdateChannelCheckpoint(ctx, channelName, startPos); err != nil {
-				log.Warn(context.TODO(), "failed to init channel checkpoint, meta update error", log.String("channel", channelName), log.Err(err))
+				log.Warn(ctx, "failed to init channel checkpoint, meta update error", log.String("channel", channelName), log.Err(err))
 			}
 		} else {
-			log.Info(context.TODO(), "skip to init channel checkpoint for nil startPosition", log.String("channel", channelName))
+			log.Info(ctx, "skip to init channel checkpoint for nil startPosition", log.String("channel", channelName))
 		}
 	}
 	return resp, nil
@@ -1338,7 +1338,7 @@ func (s *Server) GetFlushState(ctx context.Context, req *datapb.GetFlushStateReq
 			unflushed = append(unflushed, sid)
 		}
 		if len(unflushed) != 0 {
-			log.RatedInfo(context.TODO(), log.RateDefault, "DataCoord receive GetFlushState request, Flushed is false", log.Int64s("unflushed", unflushed), log.Int("len", len(unflushed)))
+			log.RatedInfo(ctx, log.RateDefault, "DataCoord receive GetFlushState request, Flushed is false", log.Int64s("unflushed", unflushed), log.Int("len", len(unflushed)))
 			resp.Flushed = false
 
 			return resp, nil
@@ -1354,7 +1354,7 @@ func (s *Server) GetFlushState(ctx context.Context, req *datapb.GetFlushStateReq
 	if len(channels) == 0 { // For compatibility with old client
 		resp.Flushed = true
 
-		log.Info(context.TODO(), "GetFlushState all flushed without checking flush ts")
+		log.Info(ctx, "GetFlushState all flushed without checking flush ts")
 		return resp, nil
 	}
 
@@ -1363,7 +1363,7 @@ func (s *Server) GetFlushState(ctx context.Context, req *datapb.GetFlushStateReq
 		if cp == nil || cp.GetTimestamp() < req.GetFlushTs() {
 			resp.Flushed = false
 
-			log.RatedInfo(context.TODO(), log.RateDefault, "GetFlushState failed, channel unflushed", log.String("channel", channel.GetName()),
+			log.RatedInfo(ctx, log.RateDefault, "GetFlushState failed, channel unflushed", log.String("channel", channel.GetName()),
 				log.Time("CP", tsoutil.PhysicalTime(cp.GetTimestamp())),
 				log.Duration("lag", tsoutil.PhysicalTime(req.GetFlushTs()).Sub(tsoutil.PhysicalTime(cp.GetTimestamp()))))
 			return resp, nil
@@ -1371,7 +1371,7 @@ func (s *Server) GetFlushState(ctx context.Context, req *datapb.GetFlushStateReq
 	}
 
 	resp.Flushed = true
-	log.Info(context.TODO(), "GetFlushState all flushed")
+	log.Info(ctx, "GetFlushState all flushed")
 
 	return resp, nil
 }
@@ -1417,7 +1417,7 @@ func (s *Server) GetFlushAllState(ctx context.Context, req *milvuspb.GetFlushAll
 
 	dbsRsp, err := s.broker.ListDatabases(ctx)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to ListDatabases", log.Err(err))
+		log.Warn(ctx, "failed to ListDatabases", log.Err(err))
 		resp.Status = merr.Status(err)
 		return resp, nil
 	}
@@ -1428,7 +1428,7 @@ OUTER:
 	for _, dbName := range targetDbs {
 		showColRsp, err := s.broker.ShowCollections(ctx, dbName)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to ShowCollections", log.String("db", dbName), log.Err(err))
+			log.Warn(ctx, "failed to ShowCollections", log.String("db", dbName), log.Err(err))
 			resp.Status = merr.Status(err)
 			return resp, nil
 		}
@@ -1436,7 +1436,7 @@ OUTER:
 		for _, collectionID := range showColRsp.GetCollectionIds() {
 			describeColRsp, err := s.broker.DescribeCollectionInternal(ctx, collectionID)
 			if err != nil {
-				log.Warn(context.TODO(), "failed to DescribeCollectionInternal", log.Int64("collectionID", collectionID), log.Err(err))
+				log.Warn(ctx, "failed to DescribeCollectionInternal", log.Int64("collectionID", collectionID), log.Err(err))
 				resp.Status = merr.Status(err)
 				return resp, nil
 			}
@@ -1466,7 +1466,7 @@ OUTER:
 	}
 
 	if allFlushed {
-		log.Info(context.TODO(), "GetFlushAllState all flushed", log.Any("flushAllTss", req.GetFlushAllTss()), log.Uint64("FlushAllTs", req.GetFlushAllTs()))
+		log.Info(ctx, "GetFlushAllState all flushed", log.Any("flushAllTss", req.GetFlushAllTss()), log.Uint64("FlushAllTs", req.GetFlushAllTs()))
 	}
 
 	resp.Flushed = allFlushed
@@ -1527,11 +1527,11 @@ func (s *Server) UpdateChannelCheckpoint(ctx context.Context, req *datapb.Update
 		targetID, err := snmanager.StaticStreamingNodeManager.GetLatestWALLocated(ctx, channel)
 		if err != nil || targetID != nodeID {
 			err := merr.WrapErrChannelNotFound(channel, fmt.Sprintf("for node %d", nodeID))
-			log.Warn(context.TODO(), "failed to get latest wal allocated", log.Err(err))
+			log.Warn(ctx, "failed to get latest wal allocated", log.Err(err))
 			return merr.Status(err), nil
 		}
 		if err := s.meta.UpdateChannelCheckpoint(ctx, req.GetVChannel(), req.GetPosition()); err != nil {
-			log.Warn(context.TODO(), "failed to UpdateChannelCheckpoint", log.String("vChannel", req.GetVChannel()), log.Err(err))
+			log.Warn(ctx, "failed to UpdateChannelCheckpoint", log.String("vChannel", req.GetVChannel()), log.Err(err))
 			return merr.Status(err), nil
 		}
 		return merr.Success(), nil
@@ -1542,7 +1542,7 @@ func (s *Server) UpdateChannelCheckpoint(ctx context.Context, req *datapb.Update
 		targetID, err := snmanager.StaticStreamingNodeManager.GetLatestWALLocated(ctx, channel)
 		if err != nil || targetID != nodeID {
 			err := merr.WrapErrChannelNotFound(channel, fmt.Sprintf("for node %d", nodeID))
-			log.Warn(context.TODO(), "failed to get latest wal allocated", log.Err(err))
+			log.Warn(ctx, "failed to get latest wal allocated", log.Err(err))
 			return false
 		}
 		return true
@@ -1550,7 +1550,7 @@ func (s *Server) UpdateChannelCheckpoint(ctx context.Context, req *datapb.Update
 
 	err := s.meta.UpdateChannelCheckpoints(ctx, checkpoints)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to update channel checkpoint", log.Err(err))
+		log.Warn(ctx, "failed to update channel checkpoint", log.Err(err))
 		return merr.Status(err), nil
 	}
 
@@ -1730,7 +1730,7 @@ func (s *Server) ImportV2(ctx context.Context, in *internalpb.ImportRequestInter
 		Status: merr.Success(),
 	}
 
-	log.Info(context.TODO(), "receive import request", log.Int("fileNum", len(in.GetFiles())),
+	log.Info(ctx, "receive import request", log.Int("fileNum", len(in.GetFiles())),
 		log.Any("files", in.GetFiles()), log.Any("options", in.GetOptions()))
 
 	timeoutTs, err := importutilv2.GetTimeoutTs(in.GetOptions())
@@ -1804,7 +1804,7 @@ func (s *Server) ImportV2(ctx context.Context, in *internalpb.ImportRequestInter
 	}
 
 	resp.JobID = fmt.Sprint(job.GetJobID())
-	log.Info(context.TODO(), "add import job done",
+	log.Info(ctx, "add import job done",
 		log.Int64("jobID", job.GetJobID()),
 		log.Int("fileNum", len(files)),
 		log.Any("files", files),
@@ -1844,7 +1844,7 @@ func (s *Server) GetImportProgress(ctx context.Context, in *internalpb.GetImport
 	resp.ImportedRows = importedRows
 	resp.TotalRows = totalRows
 	resp.TaskProgresses = GetTaskProgresses(ctx, jobID, s.importMeta, s.meta)
-	log.Info(context.TODO(), "GetImportProgress done", log.String("jobState", job.GetState().String()), log.Any("resp", resp))
+	log.Info(ctx, "GetImportProgress done", log.String("jobState", job.GetState().String()), log.Any("resp", resp))
 	return resp, nil
 }
 
@@ -1921,7 +1921,7 @@ func (s *Server) DropSegmentsByTime(ctx context.Context, collectionID int64, flu
 		// drop segments that were updated before the flush timestamp
 		err = s.meta.TruncateChannelByTime(ctx, channelName, flushTs)
 		if err != nil {
-			log.Warn(context.TODO(), "TruncateChannelByTime failed", log.Err(err))
+			log.Warn(ctx, "TruncateChannelByTime failed", log.Err(err))
 			return err
 		}
 	}
@@ -1934,19 +1934,19 @@ func (s *Server) CreateSnapshot(ctx context.Context, req *datapb.CreateSnapshotR
 		return merr.Status(err), nil
 	}
 
-	log.Info(context.TODO(), "receive CreateSnapshot request", log.String("name", req.GetName()),
+	log.Info(ctx, "receive CreateSnapshot request", log.String("name", req.GetName()),
 		log.String("description", req.GetDescription()))
 
 	// Check if snapshot name already exists
 	if _, err := s.snapshotManager.GetSnapshot(ctx, req.GetName()); err == nil {
-		log.Warn(context.TODO(), "CreateSnapshot failed: snapshot name already exists")
+		log.Warn(ctx, "CreateSnapshot failed: snapshot name already exists")
 		return merr.Status(merr.WrapErrParameterInvalidMsg("snapshot name %s already exists", req.GetName())), nil
 	}
 
 	// Start broadcast with collection lock (also validates collection existence)
 	coll, err := s.broker.DescribeCollectionInternal(ctx, req.GetCollectionId())
 	if err != nil {
-		log.Warn(context.TODO(), "CreateSnapshot failed to describe collection", log.Err(err))
+		log.Warn(ctx, "CreateSnapshot failed to describe collection", log.Err(err))
 		return merr.Status(err), nil
 	}
 	dbName := coll.GetDbName()
@@ -1957,14 +1957,14 @@ func (s *Server) CreateSnapshot(ctx context.Context, req *datapb.CreateSnapshotR
 		message.NewExclusiveSnapshotNameResourceKey(req.GetName()),
 	)
 	if err != nil {
-		log.Warn(context.TODO(), "CreateSnapshot failed to start broadcast", log.Err(err))
+		log.Warn(ctx, "CreateSnapshot failed to start broadcast", log.Err(err))
 		return merr.Status(err), nil
 	}
 	defer broadcaster.Close()
 
 	// check if snapshot name already exists
 	if _, err := s.snapshotManager.GetSnapshot(ctx, req.GetName()); err == nil {
-		log.Warn(context.TODO(), "CreateSnapshot failed: snapshot name already exists")
+		log.Warn(ctx, "CreateSnapshot failed: snapshot name already exists")
 		return merr.Status(merr.WrapErrParameterInvalidMsg("snapshot name %s already exists", req.GetName())), nil
 	}
 
@@ -1980,11 +1980,11 @@ func (s *Server) CreateSnapshot(ctx context.Context, req *datapb.CreateSnapshotR
 		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
 		MustBuildBroadcast(),
 	); err != nil {
-		log.Error(context.TODO(), "CreateSnapshot broadcast failed", log.Err(err))
+		log.Error(ctx, "CreateSnapshot broadcast failed", log.Err(err))
 		return merr.Status(err), nil
 	}
 
-	log.Info(context.TODO(), "CreateSnapshot completed successfully")
+	log.Info(ctx, "CreateSnapshot completed successfully")
 	return merr.Success(), nil
 }
 
@@ -1993,11 +1993,11 @@ func (s *Server) BatchUpdateManifest(ctx context.Context, req *datapb.BatchUpdat
 		return merr.Status(err), nil
 	}
 
-	log.Info(context.TODO(), "receive BatchUpdateManifest request", log.Int("itemCount", len(req.GetItems())))
+	log.Info(ctx, "receive BatchUpdateManifest request", log.Int("itemCount", len(req.GetItems())))
 
 	coll, err := s.broker.DescribeCollectionInternal(ctx, req.GetCollectionId())
 	if err != nil {
-		log.Warn(context.TODO(), "BatchUpdateManifest failed to describe collection", log.Err(err))
+		log.Warn(ctx, "BatchUpdateManifest failed to describe collection", log.Err(err))
 		return merr.Status(err), nil
 	}
 	dbName := coll.GetDbName()
@@ -2007,7 +2007,7 @@ func (s *Server) BatchUpdateManifest(ctx context.Context, req *datapb.BatchUpdat
 		message.NewSharedCollectionNameResourceKey(dbName, collectionName),
 	)
 	if err != nil {
-		log.Warn(context.TODO(), "BatchUpdateManifest failed to start broadcast", log.Err(err))
+		log.Warn(ctx, "BatchUpdateManifest failed to start broadcast", log.Err(err))
 		return merr.Status(err), nil
 	}
 	defer broadcaster.Close()
@@ -2030,11 +2030,11 @@ func (s *Server) BatchUpdateManifest(ctx context.Context, req *datapb.BatchUpdat
 		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
 		MustBuildBroadcast(),
 	); err != nil {
-		log.Error(context.TODO(), "BatchUpdateManifest broadcast failed", log.Err(err))
+		log.Error(ctx, "BatchUpdateManifest broadcast failed", log.Err(err))
 		return merr.Status(err), nil
 	}
 
-	log.Info(context.TODO(), "BatchUpdateManifest completed successfully")
+	log.Info(ctx, "BatchUpdateManifest completed successfully")
 	return merr.Success(), nil
 }
 
@@ -2042,11 +2042,11 @@ func (s *Server) DropSnapshot(ctx context.Context, req *datapb.DropSnapshotReque
 	if err := merr.CheckHealthy(s.GetStateCode()); err != nil {
 		return merr.Status(err), nil
 	}
-	log.Info(context.TODO(), "receive DropSnapshot request")
+	log.Info(ctx, "receive DropSnapshot request")
 
 	// Check if snapshot exists - if not, return success (idempotent)
 	if _, err := s.snapshotManager.GetSnapshot(ctx, req.GetName()); err != nil {
-		log.Info(context.TODO(), "DropSnapshot: snapshot not found, returning success (idempotent)", log.Err(err))
+		log.Info(ctx, "DropSnapshot: snapshot not found, returning success (idempotent)", log.Err(err))
 		return merr.Success(), nil
 	}
 
@@ -2057,14 +2057,14 @@ func (s *Server) DropSnapshot(ctx context.Context, req *datapb.DropSnapshotReque
 		message.NewExclusiveSnapshotNameResourceKey(req.GetName()),
 	)
 	if err != nil {
-		log.Error(context.TODO(), "DropSnapshot failed to start broadcast", log.Err(err))
+		log.Error(ctx, "DropSnapshot failed to start broadcast", log.Err(err))
 		return merr.Status(err), nil
 	}
 	defer broadcaster.Close()
 
 	// Double-check after acquiring lock - another goroutine may have dropped it
 	if _, err := s.snapshotManager.GetSnapshot(ctx, req.GetName()); err != nil {
-		log.Info(context.TODO(), "DropSnapshot: snapshot not found after lock, returning success (idempotent)", log.Err(err))
+		log.Info(ctx, "DropSnapshot: snapshot not found after lock, returning success (idempotent)", log.Err(err))
 		return merr.Success(), nil
 	}
 
@@ -2073,7 +2073,7 @@ func (s *Server) DropSnapshot(ctx context.Context, req *datapb.DropSnapshotReque
 	if refCount := s.snapshotManager.GetSnapshotRestoreRefCount(snapshotName); refCount > 0 {
 		reason := fmt.Sprintf("snapshot %s is restoring, %d restore operations in progress",
 			snapshotName, refCount)
-		log.Warn(context.TODO(), "cannot drop snapshot with active restore operations",
+		log.Warn(ctx, "cannot drop snapshot with active restore operations",
 			log.String("snapshot", snapshotName),
 			log.Int32("activeRestoreCount", refCount))
 		return merr.Status(merr.WrapErrServiceInternal(reason)), nil
@@ -2088,11 +2088,11 @@ func (s *Server) DropSnapshot(ctx context.Context, req *datapb.DropSnapshotReque
 		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
 		MustBuildBroadcast(),
 	); err != nil {
-		log.Error(context.TODO(), "DropSnapshot broadcast failed", log.Err(err))
+		log.Error(ctx, "DropSnapshot broadcast failed", log.Err(err))
 		return merr.Status(err), nil
 	}
 
-	log.Info(context.TODO(), "DropSnapshot completed successfully")
+	log.Info(ctx, "DropSnapshot completed successfully")
 	return merr.Success(), nil
 }
 
@@ -2102,12 +2102,12 @@ func (s *Server) DescribeSnapshot(ctx context.Context, req *datapb.DescribeSnaps
 			Status: merr.Status(err),
 		}, nil
 	}
-	log.Info(context.TODO(), "receive DescribeSnapshot request")
+	log.Info(ctx, "receive DescribeSnapshot request")
 
 	// Delegate to SnapshotManager
 	snapshotData, err := s.snapshotManager.DescribeSnapshot(ctx, req.GetName())
 	if err != nil {
-		log.Error(context.TODO(), "failed to describe snapshot", log.Err(err))
+		log.Error(ctx, "failed to describe snapshot", log.Err(err))
 		return &datapb.DescribeSnapshotResponse{
 			Status: merr.Status(err),
 		}, nil
@@ -2132,19 +2132,19 @@ func (s *Server) RestoreSnapshot(ctx context.Context, req *datapb.RestoreSnapsho
 			Status: merr.Status(err),
 		}, nil
 	}
-	log.Info(context.TODO(), "receive RestoreSnapshot request")
+	log.Info(ctx, "receive RestoreSnapshot request")
 
 	// Validate parameters
 	if req.GetName() == "" {
 		err := merr.WrapErrParameterInvalidMsg("snapshot name is required")
-		log.Warn(context.TODO(), "invalid request", log.Err(err))
+		log.Warn(ctx, "invalid request", log.Err(err))
 		return &datapb.RestoreSnapshotResponse{
 			Status: merr.Status(err),
 		}, nil
 	}
 	if req.GetCollectionName() == "" {
 		err := merr.WrapErrParameterInvalidMsg("collection name is required")
-		log.Warn(context.TODO(), "invalid request", log.Err(err))
+		log.Warn(ctx, "invalid request", log.Err(err))
 		return &datapb.RestoreSnapshotResponse{
 			Status: merr.Status(err),
 		}, nil
@@ -2161,13 +2161,13 @@ func (s *Server) RestoreSnapshot(ctx context.Context, req *datapb.RestoreSnapsho
 		s.validateRestoreSnapshotResources,
 	)
 	if err != nil {
-		log.Error(context.TODO(), "restore snapshot failed", log.Err(err))
+		log.Error(ctx, "restore snapshot failed", log.Err(err))
 		return &datapb.RestoreSnapshotResponse{
 			Status: merr.Status(err),
 		}, nil
 	}
 
-	log.Info(context.TODO(), "restore snapshot completed", log.Int64("jobID", jobID))
+	log.Info(ctx, "restore snapshot completed", log.Int64("jobID", jobID))
 	return &datapb.RestoreSnapshotResponse{
 		Status: merr.Success(),
 		JobId:  jobID,
@@ -2176,18 +2176,18 @@ func (s *Server) RestoreSnapshot(ctx context.Context, req *datapb.RestoreSnapsho
 
 // rollbackRestoreSnapshot drops the newly created collection when restore fails.
 func (s *Server) rollbackRestoreSnapshot(ctx context.Context, dbName, collectionName string) error {
-	log.Info(context.TODO(), "rolling back restore snapshot, dropping collection")
+	log.Info(ctx, "rolling back restore snapshot, dropping collection")
 
 	if err := s.broker.DropCollection(ctx, dbName, collectionName); err != nil {
 		if errors.Is(err, merr.ErrCollectionNotFound) {
-			log.Debug(context.TODO(), "collection not found, skipping rollback")
+			log.Debug(ctx, "collection not found, skipping rollback")
 			return nil
 		}
-		log.Error(context.TODO(), "failed to drop collection during rollback", log.Err(err))
+		log.Error(ctx, "failed to drop collection during rollback", log.Err(err))
 		return err
 	}
 
-	log.Info(context.TODO(), "rollback completed, collection dropped")
+	log.Info(ctx, "rollback completed, collection dropped")
 	return nil
 }
 
@@ -2201,13 +2201,13 @@ func (s *Server) GetRestoreSnapshotState(ctx context.Context, req *datapb.GetRes
 	// Delegate to SnapshotManager
 	restoreInfo, err := s.snapshotManager.GetRestoreState(ctx, req.GetJobId())
 	if err != nil {
-		log.Warn(context.TODO(), "failed to get restore state", log.Err(err))
+		log.Warn(ctx, "failed to get restore state", log.Err(err))
 		return &datapb.GetRestoreSnapshotStateResponse{
 			Status: merr.Status(err),
 		}, nil
 	}
 
-	log.Info(context.TODO(), "get restore state completed",
+	log.Info(ctx, "get restore state completed",
 		log.String("state", restoreInfo.GetState().String()),
 		log.Int32("progress", restoreInfo.GetProgress()))
 
@@ -2249,12 +2249,12 @@ func (s *Server) ListSnapshots(ctx context.Context, req *datapb.ListSnapshotsReq
 			Status: merr.Status(err),
 		}, nil
 	}
-	log.Info(context.TODO(), "receive ListSnapshots request")
+	log.Info(ctx, "receive ListSnapshots request")
 
 	// Delegate to SnapshotManager
 	snapshots, err := s.snapshotManager.ListSnapshots(ctx, req.GetCollectionId(), req.GetPartitionId())
 	if err != nil {
-		log.Error(context.TODO(), "failed to list snapshots", log.Err(err))
+		log.Error(ctx, "failed to list snapshots", log.Err(err))
 		return &datapb.ListSnapshotsResponse{
 			Status: merr.Status(err),
 		}, nil
@@ -2275,10 +2275,10 @@ func (s *Server) RefreshExternalCollection(ctx context.Context, req *datapb.Refr
 		}, nil
 	}
 
-	log.Info(context.TODO(), "receive RefreshExternalCollection request")
+	log.Info(ctx, "receive RefreshExternalCollection request")
 
 	if s.externalCollectionRefreshManager == nil {
-		log.Warn(context.TODO(), "external collection refresh manager not initialized")
+		log.Warn(ctx, "external collection refresh manager not initialized")
 		return &datapb.RefreshExternalCollectionResponse{
 			Status: merr.Status(merr.WrapErrServiceUnavailable("external collection refresh manager not initialized")),
 		}, nil
@@ -2287,17 +2287,17 @@ func (s *Server) RefreshExternalCollection(ctx context.Context, req *datapb.Refr
 	// Pre-allocate JobID for idempotency (ensures same JobID even if retry after failure)
 	allocatedJobID, err := s.allocator.AllocID(ctx)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to allocate job ID", log.Err(err))
+		log.Warn(ctx, "failed to allocate job ID", log.Err(err))
 		return &datapb.RefreshExternalCollectionResponse{
 			Status: merr.Status(err),
 		}, nil
 	}
-	log.Info(context.TODO(), "pre-allocated job ID for refresh", log.Int64("jobID", allocatedJobID))
+	log.Info(ctx, "pre-allocated job ID for refresh", log.Int64("jobID", allocatedJobID))
 
 	// Start broadcaster with resource lock (shared DB + exclusive collection)
 	b, err := s.startBroadcastWithCollectionID(ctx, req.GetCollectionId())
 	if err != nil {
-		log.Warn(context.TODO(), "failed to start broadcaster", log.Err(err))
+		log.Warn(ctx, "failed to start broadcaster", log.Err(err))
 		return &datapb.RefreshExternalCollectionResponse{
 			Status: merr.Status(err),
 		}, nil
@@ -2318,13 +2318,13 @@ func (s *Server) RefreshExternalCollection(ctx context.Context, req *datapb.Refr
 		MustBuildBroadcast()
 
 	if _, err := b.Broadcast(ctx, msg); err != nil {
-		log.Warn(context.TODO(), "failed to broadcast refresh message", log.Err(err))
+		log.Warn(ctx, "failed to broadcast refresh message", log.Err(err))
 		return &datapb.RefreshExternalCollectionResponse{
 			Status: merr.Status(err),
 		}, nil
 	}
 
-	log.Info(context.TODO(), "refresh external collection job submitted via WAL broadcast", log.Int64("jobID", allocatedJobID))
+	log.Info(ctx, "refresh external collection job submitted via WAL broadcast", log.Int64("jobID", allocatedJobID))
 
 	return &datapb.RefreshExternalCollectionResponse{
 		Status: merr.Success(),
@@ -2340,10 +2340,10 @@ func (s *Server) GetRefreshExternalCollectionProgress(ctx context.Context, req *
 		}, nil
 	}
 
-	log.Info(context.TODO(), "receive GetRefreshExternalCollectionProgress request")
+	log.Info(ctx, "receive GetRefreshExternalCollectionProgress request")
 
 	if s.externalCollectionRefreshManager == nil {
-		log.Warn(context.TODO(), "external collection refresh manager not initialized")
+		log.Warn(ctx, "external collection refresh manager not initialized")
 		return &datapb.GetRefreshExternalCollectionProgressResponse{
 			Status: merr.Status(merr.WrapErrServiceUnavailable("external collection refresh manager not initialized")),
 		}, nil
@@ -2351,13 +2351,13 @@ func (s *Server) GetRefreshExternalCollectionProgress(ctx context.Context, req *
 
 	jobInfo, err := s.externalCollectionRefreshManager.GetJobProgress(ctx, req.GetJobId())
 	if err != nil {
-		log.Warn(context.TODO(), "failed to get job progress", log.Err(err))
+		log.Warn(ctx, "failed to get job progress", log.Err(err))
 		return &datapb.GetRefreshExternalCollectionProgressResponse{
 			Status: merr.Status(err),
 		}, nil
 	}
 
-	log.Info(context.TODO(), "get refresh external collection progress completed",
+	log.Info(ctx, "get refresh external collection progress completed",
 		log.String("state", jobInfo.GetState().String()),
 		log.Int64("progress", jobInfo.GetProgress()))
 
@@ -2375,10 +2375,10 @@ func (s *Server) ListRefreshExternalCollectionJobs(ctx context.Context, req *dat
 		}, nil
 	}
 
-	log.Info(context.TODO(), "receive ListRefreshExternalCollectionJobs request")
+	log.Info(ctx, "receive ListRefreshExternalCollectionJobs request")
 
 	if s.externalCollectionRefreshManager == nil {
-		log.Warn(context.TODO(), "external collection refresh manager not initialized")
+		log.Warn(ctx, "external collection refresh manager not initialized")
 		return &datapb.ListRefreshExternalCollectionJobsResponse{
 			Status: merr.Status(merr.WrapErrServiceUnavailable("external collection refresh manager not initialized")),
 		}, nil
@@ -2386,13 +2386,13 @@ func (s *Server) ListRefreshExternalCollectionJobs(ctx context.Context, req *dat
 
 	jobs, err := s.externalCollectionRefreshManager.ListJobs(ctx, req.GetCollectionId())
 	if err != nil {
-		log.Warn(context.TODO(), "failed to list jobs", log.Err(err))
+		log.Warn(ctx, "failed to list jobs", log.Err(err))
 		return &datapb.ListRefreshExternalCollectionJobsResponse{
 			Status: merr.Status(err),
 		}, nil
 	}
 
-	log.Info(context.TODO(), "list refresh external collection jobs completed", log.Int("jobCount", len(jobs)))
+	log.Info(ctx, "list refresh external collection jobs completed", log.Int("jobCount", len(jobs)))
 
 	return &datapb.ListRefreshExternalCollectionJobsResponse{
 		Status: merr.Success(),

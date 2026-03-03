@@ -252,26 +252,26 @@ func addActiveKeySuffix(ctx context.Context, client *clientv3.Client, sessionPat
 			res := strings.Split(suffix, "-")
 			if len(res) != 2 {
 				// skip illegal keys
-				log.Warn(context.TODO(), "skip illegal key", log.String("suffix", suffix))
+				log.Warn(ctx, "skip illegal key", log.String("suffix", suffix))
 				continue
 			}
 
 			serverType := res[0]
 			targetServerID, err := strconv.ParseInt(res[1], 10, 64)
 			if err != nil {
-				log.Warn(context.TODO(), "get server id failed from key", log.String("suffix", suffix), log.Err(err))
+				log.Warn(ctx, "get server id failed from key", log.String("suffix", suffix), log.Err(err))
 				continue
 			}
 
 			key := path.Join(sessionPathPrefix, serverType)
 			serverID, err := getServerID(ctx, client, key)
 			if err != nil {
-				log.Warn(context.TODO(), "get server id failed from key", log.String("suffix", suffix), log.Err(err))
+				log.Warn(ctx, "get server id failed from key", log.String("suffix", suffix), log.Err(err))
 				continue
 			}
 
 			if serverID == targetServerID {
-				log.Info(context.TODO(), "add active serverID key", log.String("suffix", suffix), log.String("key", key))
+				log.Info(ctx, "add active serverID key", log.String("suffix", suffix), log.String("key", key))
 				suffixSet[serverType] = struct{}{}
 			}
 		}

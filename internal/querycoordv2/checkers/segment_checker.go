@@ -435,7 +435,7 @@ func (c *SegmentChecker) createSegmentReopenTasks(ctx context.Context, segments 
 			action,
 		)
 		if err != nil {
-			log.Warn(context.TODO(), "create segment reopen task failed",
+			log.Warn(ctx, "create segment reopen task failed",
 				log.Int64("collection", s.GetCollectionID()),
 				log.Int64("replica", replica.GetID()),
 				log.String("channel", s.GetInsertChannel()),
@@ -464,7 +464,7 @@ func (c *SegmentChecker) createSegmentReduceTasks(ctx context.Context, segments 
 			action,
 		)
 		if err != nil {
-			log.Warn(context.TODO(), "create segment reduce task failed",
+			log.Warn(ctx, "create segment reduce task failed",
 				log.Int64("collection", s.GetCollectionID()),
 				log.Int64("replica", replica.GetID()),
 				log.String("channel", s.GetInsertChannel()),

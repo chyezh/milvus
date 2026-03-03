@@ -20,7 +20,6 @@ import (
 	"context"
 	"time"
 
-
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -63,9 +62,9 @@ func (s *tombstoneSweeperImpl) AddTombstone(tombstone Tombstone) {
 func (s *tombstoneSweeperImpl) background() {
 	defer func() {
 		s.notifier.Finish(struct{}{})
-		s.Logger().Info(nil, "tombstone sweeper background exit")
+		s.Logger().Info(context.TODO(), "tombstone sweeper background exit")
 	}()
-	s.Logger().Info(nil, "tombstone sweeper background start", log.Duration("interval", s.interval))
+	s.Logger().Info(context.TODO(), "tombstone sweeper background start", log.Duration("interval", s.interval))
 
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
@@ -75,7 +74,7 @@ func (s *tombstoneSweeperImpl) background() {
 		case tombstone := <-s.incoming:
 			if _, ok := s.tombstones[tombstone.ID()]; !ok {
 				s.tombstones[tombstone.ID()] = tombstone
-				s.Logger().Info(nil, "tombstone added", log.String("tombstone", tombstone.ID()))
+				s.Logger().Info(context.TODO(), "tombstone added", log.String("tombstone", tombstone.ID()))
 			}
 		case <-ticker.C:
 			s.triggerGCTombstone(s.notifier.Context())
@@ -98,18 +97,18 @@ func (s *tombstoneSweeperImpl) triggerGCTombstone(ctx context.Context) {
 		tombstoneID := tombstone.ID()
 		confirmed, err := tombstone.ConfirmCanBeRemoved(ctx)
 		if err != nil {
-			s.Logger().Warn(nil, "fail to confirm if tombstone can be removed", log.String("tombstone", tombstoneID), log.Err(err))
+			s.Logger().Warn(ctx, "fail to confirm if tombstone can be removed", log.String("tombstone", tombstoneID), log.Err(err))
 			continue
 		}
 		if !confirmed {
 			continue
 		}
 		if err := tombstone.Remove(ctx); err != nil {
-			s.Logger().Warn(nil, "fail to remove tombstone", log.String("tombstone", tombstoneID), log.Err(err))
+			s.Logger().Warn(ctx, "fail to remove tombstone", log.String("tombstone", tombstoneID), log.Err(err))
 			continue
 		}
 		delete(s.tombstones, tombstoneID)
-		s.Logger().Info(nil, "tombstone removed", log.String("tombstone", tombstoneID))
+		s.Logger().Info(ctx, "tombstone removed", log.String("tombstone", tombstoneID))
 	}
 }
 

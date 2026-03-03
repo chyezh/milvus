@@ -213,7 +213,7 @@ func CreateFieldReaders(ctx context.Context, fileReader *pqarrow.FileReader, sch
 		}
 	}
 
-	log.Info(context.TODO(), "create parquet column readers", log.Any("readFields", readFields))
+	log.Info(ctx, "create parquet column readers", log.Any("readFields", readFields))
 	return crs, nil
 }
 

@@ -118,7 +118,7 @@ func (scr *SearchCommonReduce) ReduceSearchResultData(ctx context.Context, searc
 		}
 
 		// if realTopK != -1 && realTopK != j {
-		// 	log.Warn(context.TODO(), "Proxy Reduce Search Result", log.Err(errors.New("the length (topk) between all result of query is different")))
+		// 	log.Warn(ctx, "Proxy Reduce Search Result", log.Err(errors.New("the length (topk) between all result of query is different")))
 		// 	// return nil, errors.New("the length (topk) between all result of query is different")
 		// }
 		ret.Topks = append(ret.Topks, j)
@@ -128,7 +128,7 @@ func (scr *SearchCommonReduce) ReduceSearchResultData(ctx context.Context, searc
 			return nil, fmt.Errorf("search results exceed the maxOutputSize Limit %d", maxOutputSize)
 		}
 	}
-	log.Debug(context.TODO(), "skip duplicated search result", log.Int64("count", skipDupCnt))
+	log.Debug(ctx, "skip duplicated search result", log.Int64("count", skipDupCnt))
 	return ret, nil
 }
 
@@ -139,7 +139,7 @@ func (sbr *SearchGroupByReduce) ReduceSearchResultData(ctx context.Context, sear
 	defer sp.End()
 
 	if len(searchResultData) == 0 {
-		log.Debug(context.TODO(), "Shortcut return SearchGroupByReduce, directly return empty result", log.Any("result info", info))
+		log.Debug(ctx, "Shortcut return SearchGroupByReduce, directly return empty result", log.Any("result info", info))
 		return &schemapb.SearchResultData{
 			NumQueries: info.GetNq(),
 			TopK:       info.GetTopK(),
@@ -264,12 +264,12 @@ func (sbr *SearchGroupByReduce) ReduceSearchResultData(ctx context.Context, sear
 	}
 	ret.GroupByFieldValue = gpFieldBuilder.Build()
 	if float64(filteredCount) >= 0.3*float64(groupBound) {
-		log.Warn(context.TODO(), "GroupBy reduce filtered too many results, "+
+		log.Warn(ctx, "GroupBy reduce filtered too many results, "+
 			"this may influence the final result seriously",
 			log.Int64("filteredCount", filteredCount),
 			log.Int64("groupBound", groupBound))
 	}
-	log.Debug(context.TODO(), "skip duplicated search result", log.Int64("count", filteredCount))
+	log.Debug(ctx, "skip duplicated search result", log.Int64("count", filteredCount))
 	return ret, nil
 }
 

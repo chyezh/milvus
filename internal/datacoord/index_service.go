@@ -126,7 +126,7 @@ func setIndexParam(indexParams []*commonpb.KeyValuePair, key, value string) {
 // will get all flushed segments from DataCoord and record tasks with these segments. The background process
 // indexBuilder will find this task and assign it to DataNode for execution.
 func (s *Server) CreateIndex(ctx context.Context, req *indexpb.CreateIndexRequest) (*commonpb.Status, error) {
-	log.Info(context.TODO(), "receive CreateIndex request",
+	log.Info(ctx, "receive CreateIndex request",
 		log.String("IndexName", req.GetIndexName()), log.Int64("fieldID", req.GetFieldID()),
 		log.Any("TypeParams", req.GetTypeParams()),
 		log.Any("IndexParams", req.GetIndexParams()),
@@ -134,7 +134,7 @@ func (s *Server) CreateIndex(ctx context.Context, req *indexpb.CreateIndexReques
 	)
 
 	if err := merr.CheckHealthy(s.GetStateCode()); err != nil {
-		log.Warn(context.TODO(), msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
+		log.Warn(ctx, msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
 		return merr.Status(err), nil
 	}
 	metrics.IndexRequestCounter.WithLabelValues(metrics.TotalLabel).Inc()
@@ -161,18 +161,18 @@ func (s *Server) CreateIndex(ctx context.Context, req *indexpb.CreateIndexReques
 		// check json_path and json_cast_type exist
 		jsonPath, err := getIndexParam(req.GetIndexParams(), common.JSONPathKey)
 		if err != nil {
-			log.Warn(context.TODO(), "get json path failed", log.Err(err))
+			log.Warn(ctx, "get json path failed", log.Err(err))
 			return merr.Status(err), nil
 		}
 		_, err = getIndexParam(req.GetIndexParams(), common.JSONCastTypeKey)
 		if err != nil {
-			log.Warn(context.TODO(), "get json cast type failed", log.Err(err))
+			log.Warn(ctx, "get json cast type failed", log.Err(err))
 			return merr.Status(err), nil
 		}
 
 		nestedPath, err := typeutil2.ParseAndVerifyNestedPath(jsonPath, schema, req.GetFieldID())
 		if err != nil {
-			log.Error(context.TODO(), "parse nested path failed", log.Err(err))
+			log.Error(ctx, "parse nested path failed", log.Err(err))
 			return merr.Status(err), nil
 		}
 		// set nested path as json path
@@ -183,7 +183,7 @@ func (s *Server) CreateIndex(ctx context.Context, req *indexpb.CreateIndexReques
 		indexes := s.meta.indexMeta.GetFieldIndexes(req.GetCollectionID(), req.GetFieldID(), req.GetIndexName())
 		fieldName, err := s.defaultIndexNameByID(schema, req.GetFieldID())
 		if err != nil {
-			log.Warn(context.TODO(), "get field name from schema failed", log.Int64("fieldID", req.GetFieldID()))
+			log.Warn(ctx, "get field name from schema failed", log.Int64("fieldID", req.GetFieldID()))
 			return merr.Status(err), nil
 		}
 		defaultIndexName := fieldName
@@ -212,19 +212,19 @@ func (s *Server) CreateIndex(ctx context.Context, req *indexpb.CreateIndexReques
 		// For snapshot restore: use provided index ID instead of allocating a new one
 		indexID = req.GetIndexId()
 		if indexID <= 0 {
-			log.Warn(context.TODO(), "invalid index ID provided for preserve",
+			log.Warn(ctx, "invalid index ID provided for preserve",
 				log.Int64("indexID", indexID))
 			metrics.IndexRequestCounter.WithLabelValues(metrics.FailLabel).Inc()
 			return merr.Status(merr.WrapErrParameterInvalidMsg("index_id must be positive when preserve_index_id is true")), nil
 		}
-		log.Info(context.TODO(), "using preserved index ID for snapshot restore",
+		log.Info(ctx, "using preserved index ID for snapshot restore",
 			log.Int64("indexID", indexID))
 	} else {
 		// Normal path: allocate new index ID
 		var err error
 		indexID, err = s.allocator.AllocID(ctx)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to alloc indexID", log.Err(err))
+			log.Warn(ctx, "failed to alloc indexID", log.Err(err))
 			metrics.IndexRequestCounter.WithLabelValues(metrics.FailLabel).Inc()
 			return merr.Status(err), nil
 		}
@@ -232,21 +232,21 @@ func (s *Server) CreateIndex(ctx context.Context, req *indexpb.CreateIndexReques
 		indexID, err = s.meta.indexMeta.CanCreateIndex(req, isJson)
 		if err != nil {
 			if errors.Is(err, errIndexOperationIgnored) {
-				log.Info(context.TODO(), "index already exists",
+				log.Info(ctx, "index already exists",
 					log.Int64("collectionID", req.GetCollectionID()),
 					log.Int64("fieldID", req.GetFieldID()),
 					log.String("indexName", req.GetIndexName()))
 				metrics.IndexRequestCounter.WithLabelValues(metrics.SuccessLabel).Inc()
 				return merr.Success(), nil
 			}
-			log.Error(context.TODO(), "Check CanCreateIndex fail", log.Err(err))
+			log.Error(ctx, "Check CanCreateIndex fail", log.Err(err))
 			metrics.IndexRequestCounter.WithLabelValues(metrics.FailLabel).Inc()
 			return merr.Status(err), nil
 		}
 	}
 	if indexID == 0 {
 		if indexID, err = s.allocator.AllocID(ctx); err != nil {
-			log.Warn(context.TODO(), "failed to alloc indexID", log.Err(err))
+			log.Warn(ctx, "failed to alloc indexID", log.Err(err))
 			metrics.IndexRequestCounter.WithLabelValues(metrics.FailLabel).Inc()
 			return merr.Status(err), nil
 		}
@@ -286,11 +286,11 @@ func (s *Server) CreateIndex(ctx context.Context, req *indexpb.CreateIndexReques
 		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
 		MustBuildBroadcast(),
 	); err != nil {
-		log.Error(context.TODO(), "CreateIndex fail", log.Err(err))
+		log.Error(ctx, "CreateIndex fail", log.Err(err))
 		metrics.IndexRequestCounter.WithLabelValues(metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
-	log.Info(context.TODO(), "CreateIndex successfully",
+	log.Info(ctx, "CreateIndex successfully",
 		log.String("IndexName", index.IndexName), log.Int64("fieldID", index.FieldID),
 		log.Int64("IndexID", index.IndexID))
 	metrics.IndexRequestCounter.WithLabelValues(metrics.SuccessLabel).Inc()
@@ -375,7 +375,7 @@ func DeleteParams(from []*commonpb.KeyValuePair, deletes []string) []*commonpb.K
 }
 
 func (s *Server) AlterIndex(ctx context.Context, req *indexpb.AlterIndexRequest) (*commonpb.Status, error) {
-	log.Info(context.TODO(), "received AlterIndex request",
+	log.Info(ctx, "received AlterIndex request",
 		log.Any("params", req.GetParams()),
 		log.Any("deletekeys", req.GetDeleteKeys()))
 
@@ -384,7 +384,7 @@ func (s *Server) AlterIndex(ctx context.Context, req *indexpb.AlterIndexRequest)
 	}
 
 	if err := merr.CheckHealthy(s.GetStateCode()); err != nil {
-		log.Warn(context.TODO(), msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
+		log.Warn(ctx, msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
 		return merr.Status(err), nil
 	}
 
@@ -406,12 +406,12 @@ func (s *Server) AlterIndex(ctx context.Context, req *indexpb.AlterIndexRequest)
 
 	collInfo, err := s.handler.GetCollection(ctx, req.GetCollectionID())
 	if err != nil {
-		log.Warn(context.TODO(), "failed to get collection", log.Err(err))
+		log.Warn(ctx, "failed to get collection", log.Err(err))
 		return merr.Status(err), nil
 	}
 	schemaHelper, err := typeutil.CreateSchemaHelper(collInfo.Schema)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to create schema helper", log.Err(err))
+		log.Warn(ctx, "failed to create schema helper", log.Err(err))
 		return merr.Status(err), nil
 	}
 
@@ -421,19 +421,19 @@ func (s *Server) AlterIndex(ctx context.Context, req *indexpb.AlterIndexRequest)
 		if len(req.GetParams()) > 0 {
 			fieldSchema, err := schemaHelper.GetFieldFromID(index.FieldID)
 			if err != nil {
-				log.Warn(context.TODO(), "failed to get field schema", log.Err(err))
+				log.Warn(ctx, "failed to get field schema", log.Err(err))
 				return merr.Status(err), nil
 			}
 			isVecIndex := typeutil.IsVectorType(fieldSchema.DataType)
 			err = pkgcommon.ValidateAutoIndexMmapConfig(Params.AutoIndexConfig.Enable.GetAsBool(), isVecIndex, reqIndexParamMap)
 			if err != nil {
-				log.Warn(context.TODO(), "failed to validate auto index mmap config", log.Err(err))
+				log.Warn(ctx, "failed to validate auto index mmap config", log.Err(err))
 				return merr.Status(err), nil
 			}
 
 			// update user index params
 			newUserIndexParams := UpdateParams(index, index.UserIndexParams, req.GetParams())
-			log.Info(context.TODO(), "alter index user index params",
+			log.Info(ctx, "alter index user index params",
 				log.String("indexName", index.IndexName),
 				log.Any("params", newUserIndexParams),
 			)
@@ -441,7 +441,7 @@ func (s *Server) AlterIndex(ctx context.Context, req *indexpb.AlterIndexRequest)
 
 			// update index params
 			newIndexParams := UpdateParams(index, index.IndexParams, req.GetParams())
-			log.Info(context.TODO(), "alter index index params",
+			log.Info(ctx, "alter index index params",
 				log.String("indexName", index.IndexName),
 				log.Any("params", newIndexParams),
 			)
@@ -449,7 +449,7 @@ func (s *Server) AlterIndex(ctx context.Context, req *indexpb.AlterIndexRequest)
 		} else if len(req.GetDeleteKeys()) > 0 {
 			// delete user index params
 			newUserIndexParams := DeleteParams(index.UserIndexParams, req.GetDeleteKeys())
-			log.Info(context.TODO(), "alter index user deletekeys",
+			log.Info(ctx, "alter index user deletekeys",
 				log.String("indexName", index.IndexName),
 				log.Any("params", newUserIndexParams),
 			)
@@ -457,7 +457,7 @@ func (s *Server) AlterIndex(ctx context.Context, req *indexpb.AlterIndexRequest)
 
 			// delete index params
 			newIndexParams := DeleteParams(index.IndexParams, req.GetDeleteKeys())
-			log.Info(context.TODO(), "alter index index deletekeys",
+			log.Info(ctx, "alter index index deletekeys",
 				log.String("indexName", index.IndexName),
 				log.Any("params", newIndexParams),
 			)
@@ -485,21 +485,21 @@ func (s *Server) AlterIndex(ctx context.Context, req *indexpb.AlterIndexRequest)
 		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
 		MustBuildBroadcast()
 	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
-		log.Warn(context.TODO(), "failed to broadcast alter index message", log.Err(err))
+		log.Warn(ctx, "failed to broadcast alter index message", log.Err(err))
 		return merr.Status(err), nil
 	}
 
-	log.Info(context.TODO(), "broadcast alter index message successfully", log.Int64("collectionID", req.GetCollectionID()), log.Int64s("indexIDs", indexIDs))
+	log.Info(ctx, "broadcast alter index message successfully", log.Int64("collectionID", req.GetCollectionID()), log.Int64s("indexIDs", indexIDs))
 	return merr.Success(), nil
 }
 
 // GetIndexState gets the index state of the index name in the request from Proxy.
 // Deprecated
 func (s *Server) GetIndexState(ctx context.Context, req *indexpb.GetIndexStateRequest) (*indexpb.GetIndexStateResponse, error) {
-	log.Info(context.TODO(), "receive GetIndexState request")
+	log.Info(ctx, "receive GetIndexState request")
 
 	if err := merr.CheckHealthy(s.GetStateCode()); err != nil {
-		log.Warn(context.TODO(), msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
+		log.Warn(ctx, msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
 		return &indexpb.GetIndexStateResponse{
 			Status: merr.Status(err),
 		}, nil
@@ -508,13 +508,13 @@ func (s *Server) GetIndexState(ctx context.Context, req *indexpb.GetIndexStateRe
 	indexes := s.meta.indexMeta.GetIndexesForCollection(req.GetCollectionID(), req.GetIndexName())
 	if len(indexes) == 0 {
 		err := merr.WrapErrIndexNotFound(req.GetIndexName())
-		log.Warn(context.TODO(), "GetIndexState fail", log.Err(err))
+		log.Warn(ctx, "GetIndexState fail", log.Err(err))
 		return &indexpb.GetIndexStateResponse{
 			Status: merr.Status(err),
 		}, nil
 	}
 	if len(indexes) > 1 {
-		log.Warn(context.TODO(), msgAmbiguousIndexName())
+		log.Warn(ctx, msgAmbiguousIndexName())
 		err := merr.WrapErrIndexDuplicate(req.GetIndexName())
 		return &indexpb.GetIndexStateResponse{
 			Status: merr.Status(err),
@@ -535,20 +535,20 @@ func (s *Server) GetIndexState(ctx context.Context, req *indexpb.GetIndexStateRe
 	ret.State = indexInfo.State
 	ret.FailReason = indexInfo.IndexStateFailReason
 
-	log.Info(context.TODO(), "GetIndexState success",
+	log.Info(ctx, "GetIndexState success",
 		log.String("state", ret.GetState().String()),
 	)
 	return ret, nil
 }
 
 func (s *Server) GetSegmentIndexState(ctx context.Context, req *indexpb.GetSegmentIndexStateRequest) (*indexpb.GetSegmentIndexStateResponse, error) {
-	log.Info(context.TODO(), "receive GetSegmentIndexState",
+	log.Info(ctx, "receive GetSegmentIndexState",
 		log.String("IndexName", req.GetIndexName()),
 		log.Int64s("segmentIDs", req.GetSegmentIDs()),
 	)
 
 	if err := merr.CheckHealthy(s.GetStateCode()); err != nil {
-		log.Warn(context.TODO(), msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
+		log.Warn(ctx, msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
 		return &indexpb.GetSegmentIndexStateResponse{
 			Status: merr.Status(err),
 		}, nil
@@ -561,7 +561,7 @@ func (s *Server) GetSegmentIndexState(ctx context.Context, req *indexpb.GetSegme
 	indexID2CreateTs := s.meta.indexMeta.GetIndexIDByName(req.GetCollectionID(), req.GetIndexName())
 	if len(indexID2CreateTs) == 0 {
 		err := merr.WrapErrIndexNotFound(req.GetIndexName())
-		log.Warn(context.TODO(), "GetSegmentIndexState fail", log.String("indexName", req.GetIndexName()), log.Err(err))
+		log.Warn(ctx, "GetSegmentIndexState fail", log.String("indexName", req.GetIndexName()), log.Err(err))
 		return &indexpb.GetSegmentIndexStateResponse{
 			Status: merr.Status(err),
 		}, nil
@@ -572,7 +572,7 @@ func (s *Server) GetSegmentIndexState(ctx context.Context, req *indexpb.GetSegme
 			ret.States = append(ret.States, state)
 		}
 	}
-	log.Info(context.TODO(), "GetSegmentIndexState successfully", log.String("indexName", req.GetIndexName()))
+	log.Info(ctx, "GetSegmentIndexState successfully", log.String("indexName", req.GetIndexName()))
 	return ret, nil
 }
 
@@ -749,10 +749,10 @@ func (s *Server) completeIndexInfo(indexInfo *indexpb.IndexInfo, index *model.In
 // GetIndexBuildProgress get the index building progress by num rows.
 // Deprecated
 func (s *Server) GetIndexBuildProgress(ctx context.Context, req *indexpb.GetIndexBuildProgressRequest) (*indexpb.GetIndexBuildProgressResponse, error) {
-	log.Info(context.TODO(), "receive GetIndexBuildProgress request", log.String("indexName", req.GetIndexName()))
+	log.Info(ctx, "receive GetIndexBuildProgress request", log.String("indexName", req.GetIndexName()))
 
 	if err := merr.CheckHealthy(s.GetStateCode()); err != nil {
-		log.Warn(context.TODO(), msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
+		log.Warn(ctx, msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
 		return &indexpb.GetIndexBuildProgressResponse{
 			Status: merr.Status(err),
 		}, nil
@@ -761,14 +761,14 @@ func (s *Server) GetIndexBuildProgress(ctx context.Context, req *indexpb.GetInde
 	indexes := s.meta.indexMeta.GetIndexesForCollection(req.GetCollectionID(), req.GetIndexName())
 	if len(indexes) == 0 {
 		err := merr.WrapErrIndexNotFound(req.GetIndexName())
-		log.Warn(context.TODO(), "GetIndexBuildProgress fail", log.String("indexName", req.IndexName), log.Err(err))
+		log.Warn(ctx, "GetIndexBuildProgress fail", log.String("indexName", req.IndexName), log.Err(err))
 		return &indexpb.GetIndexBuildProgressResponse{
 			Status: merr.Status(err),
 		}, nil
 	}
 
 	if len(indexes) > 1 {
-		log.Warn(context.TODO(), msgAmbiguousIndexName())
+		log.Warn(ctx, msgAmbiguousIndexName())
 		err := merr.WrapErrIndexDuplicate(req.GetIndexName())
 		return &indexpb.GetIndexBuildProgressResponse{
 			Status: merr.Status(err),
@@ -789,7 +789,7 @@ func (s *Server) GetIndexBuildProgress(ctx context.Context, req *indexpb.GetInde
 	}))
 
 	s.completeIndexInfo(indexInfo, indexes[0], segments, false, indexes[0].CreateTime)
-	log.Info(context.TODO(), "GetIndexBuildProgress success", log.Int64("collectionID", req.GetCollectionID()),
+	log.Info(ctx, "GetIndexBuildProgress success", log.Int64("collectionID", req.GetCollectionID()),
 		log.String("indexName", req.GetIndexName()))
 	return &indexpb.GetIndexBuildProgressResponse{
 		Status:           merr.Success(),
@@ -813,7 +813,7 @@ type indexStats struct {
 // DescribeIndex describe the index info of the collection.
 func (s *Server) DescribeIndex(ctx context.Context, req *indexpb.DescribeIndexRequest) (*indexpb.DescribeIndexResponse, error) {
 	if err := merr.CheckHealthy(s.GetStateCode()); err != nil {
-		log.Warn(context.TODO(), msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
+		log.Warn(ctx, msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
 		return &indexpb.DescribeIndexResponse{
 			Status: merr.Status(err),
 		}, nil
@@ -822,7 +822,7 @@ func (s *Server) DescribeIndex(ctx context.Context, req *indexpb.DescribeIndexRe
 	indexes := s.meta.indexMeta.GetIndexesForCollection(req.GetCollectionID(), req.GetIndexName())
 	if len(indexes) == 0 {
 		err := merr.WrapErrIndexNotFound(req.GetIndexName())
-		log.RatedWarn(context.TODO(), log.RateDefault, "DescribeIndex fail", log.Err(err))
+		log.RatedWarn(ctx, log.RateDefault, "DescribeIndex fail", log.Err(err))
 		return &indexpb.DescribeIndexResponse{
 			Status: merr.Status(err),
 		}, nil
@@ -864,9 +864,9 @@ func (s *Server) DescribeIndex(ctx context.Context, req *indexpb.DescribeIndexRe
 
 // GetIndexStatistics get the statistics of the index. DescribeIndex doesn't contain statistics.
 func (s *Server) GetIndexStatistics(ctx context.Context, req *indexpb.GetIndexStatisticsRequest) (*indexpb.GetIndexStatisticsResponse, error) {
-	log.Info(context.TODO(), "receive GetIndexStatistics request", log.String("indexName", req.GetIndexName()))
+	log.Info(ctx, "receive GetIndexStatistics request", log.String("indexName", req.GetIndexName()))
 	if err := merr.CheckHealthy(s.GetStateCode()); err != nil {
-		log.Warn(context.TODO(), msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
+		log.Warn(ctx, msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
 		return &indexpb.GetIndexStatisticsResponse{
 			Status: merr.Status(err),
 		}, nil
@@ -875,7 +875,7 @@ func (s *Server) GetIndexStatistics(ctx context.Context, req *indexpb.GetIndexSt
 	indexes := s.meta.indexMeta.GetIndexesForCollection(req.GetCollectionID(), req.GetIndexName())
 	if len(indexes) == 0 {
 		err := merr.WrapErrIndexNotFound(req.GetIndexName())
-		log.Warn(context.TODO(), "GetIndexStatistics fail",
+		log.Warn(ctx, "GetIndexStatistics fail",
 			log.String("indexName", req.GetIndexName()),
 			log.Err(err))
 		return &indexpb.GetIndexStatisticsResponse{
@@ -907,7 +907,7 @@ func (s *Server) GetIndexStatistics(ctx context.Context, req *indexpb.GetIndexSt
 		s.completeIndexInfo(indexInfo, index, segments, true, index.CreateTime)
 		indexInfos = append(indexInfos, indexInfo)
 	}
-	log.Debug(context.TODO(), "GetIndexStatisticsResponse success",
+	log.Debug(ctx, "GetIndexStatisticsResponse success",
 		log.String("indexName", req.GetIndexName()))
 	return &indexpb.GetIndexStatisticsResponse{
 		Status:     merr.Success(),
@@ -936,19 +936,19 @@ func isCollectionLoaded(ctx context.Context, mc types.MixCoord, collID int64) (b
 // divided into many segments, and each segment corresponds to an IndexBuildID. DataCoord uses IndexBuildID to record
 // index tasks.
 func (s *Server) DropIndex(ctx context.Context, req *indexpb.DropIndexRequest) (*commonpb.Status, error) {
-	log.Info(context.TODO(), "receive DropIndex request",
+	log.Info(ctx, "receive DropIndex request",
 		log.Int64s("partitionIDs", req.GetPartitionIDs()), log.String("indexName", req.GetIndexName()),
 		log.Bool("drop all indexes", req.GetDropAll()))
 
 	if err := merr.CheckHealthy(s.GetStateCode()); err != nil {
-		log.Warn(context.TODO(), msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
+		log.Warn(ctx, msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
 		return merr.Status(err), nil
 	}
 
 	// Compatibility logic. To prevent the index on the corresponding segments
 	// from being dropped at the same time when dropping_partition in version 2.1
 	if len(req.PartitionIDs) > 0 {
-		log.Warn(context.TODO(), "drop index on partition is deprecated, please use drop index on collection instead",
+		log.Warn(ctx, "drop index on partition is deprecated, please use drop index on collection instead",
 			log.Int64s("partitionIDs", req.GetPartitionIDs()))
 		return merr.Success(), nil
 	}
@@ -962,13 +962,13 @@ func (s *Server) DropIndex(ctx context.Context, req *indexpb.DropIndexRequest) (
 
 	indexes := s.meta.indexMeta.GetIndexesForCollection(req.GetCollectionID(), req.GetIndexName())
 	if len(indexes) == 0 {
-		log.Info(context.TODO(), fmt.Sprintf("there is no index on collection: %d with the index name: %s", req.CollectionID, req.IndexName))
+		log.Info(ctx, fmt.Sprintf("there is no index on collection: %d with the index name: %s", req.CollectionID, req.IndexName))
 		return merr.Success(), nil
 	}
 	// we do not support drop vector index on loaded collection
 	loaded, err := isCollectionLoaded(ctx, s.mixCoord, req.GetCollectionID())
 	if err != nil {
-		log.Warn(context.TODO(), "fail to check if collection is loaded", log.String("indexName", req.IndexName), log.Int64("collectionID", req.GetCollectionID()), log.Err(err))
+		log.Warn(ctx, "fail to check if collection is loaded", log.String("indexName", req.IndexName), log.Int64("collectionID", req.GetCollectionID()), log.Err(err))
 		return merr.Status(err), nil
 	}
 	if loaded {
@@ -980,18 +980,18 @@ func (s *Server) DropIndex(ctx context.Context, req *indexpb.DropIndexRequest) (
 		for _, index := range indexes {
 			field := typeutil.GetField(schema, index.FieldID)
 			if field == nil {
-				log.Warn(context.TODO(), "field not found", log.String("indexName", req.IndexName), log.Int64("collectionID", req.GetCollectionID()), log.Int64("fieldID", index.FieldID))
+				log.Warn(ctx, "field not found", log.String("indexName", req.IndexName), log.Int64("collectionID", req.GetCollectionID()), log.Int64("fieldID", index.FieldID))
 				return merr.Status(merr.WrapErrFieldNotFound(index.FieldID)), nil
 			}
 			if typeutil.IsVectorType(field.GetDataType()) {
-				log.Warn(context.TODO(), "vector index cannot be dropped on loaded collection", log.String("indexName", req.IndexName), log.Int64("collectionID", req.GetCollectionID()), log.Int64("fieldID", index.FieldID))
+				log.Warn(ctx, "vector index cannot be dropped on loaded collection", log.String("indexName", req.IndexName), log.Int64("collectionID", req.GetCollectionID()), log.Int64("fieldID", index.FieldID))
 				return merr.Status(merr.WrapErrParameterInvalidMsg(fmt.Sprintf("vector index cannot be dropped on loaded collection: %d", req.GetCollectionID()))), nil
 			}
 		}
 	}
 
 	if !req.GetDropAll() && len(indexes) > 1 {
-		log.Warn(context.TODO(), msgAmbiguousIndexName())
+		log.Warn(ctx, msgAmbiguousIndexName())
 		err := merr.WrapErrIndexDuplicate(req.GetIndexName())
 		return merr.Status(err), nil
 	}
@@ -1010,10 +1010,10 @@ func (s *Server) DropIndex(ctx context.Context, req *indexpb.DropIndexRequest) (
 		MustBuildBroadcast()
 
 	if _, err := broadcaster.Broadcast(ctx, msg); err != nil {
-		log.Warn(context.TODO(), "failed to broadcast drop index message", log.Err(err))
+		log.Warn(ctx, "failed to broadcast drop index message", log.Err(err))
 		return merr.Status(err), nil
 	}
-	log.Info(context.TODO(), "DropIndex success", log.Int64s("partitionIDs", req.GetPartitionIDs()),
+	log.Info(ctx, "DropIndex success", log.Int64s("partitionIDs", req.GetPartitionIDs()),
 		log.String("indexName", req.GetIndexName()), log.Int64s("indexIDs", indexIDs))
 	return merr.Success(), nil
 }
@@ -1022,7 +1022,7 @@ func (s *Server) DropIndex(ctx context.Context, req *indexpb.DropIndexRequest) (
 func (s *Server) GetIndexInfos(ctx context.Context, req *indexpb.GetIndexInfoRequest) (*indexpb.GetIndexInfoResponse, error) {
 
 	if err := merr.CheckHealthy(s.GetStateCode()); err != nil {
-		log.Warn(context.TODO(), msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
+		log.Warn(ctx, msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
 		return &indexpb.GetIndexInfoResponse{
 			Status: merr.Status(err),
 		}, nil
@@ -1081,7 +1081,7 @@ func (s *Server) GetIndexInfos(ctx context.Context, req *indexpb.GetIndexInfoReq
 		}
 	}
 
-	log.Debug(context.TODO(), "GetIndexInfos successfully", log.String("indexName", req.GetIndexName()))
+	log.Debug(ctx, "GetIndexInfos successfully", log.String("indexName", req.GetIndexName()))
 
 	return ret, nil
 }
@@ -1090,7 +1090,7 @@ func (s *Server) GetIndexInfos(ctx context.Context, req *indexpb.GetIndexInfoReq
 func (s *Server) ListIndexes(ctx context.Context, req *indexpb.ListIndexesRequest) (*indexpb.ListIndexesResponse, error) {
 
 	if err := merr.CheckHealthy(s.GetStateCode()); err != nil {
-		log.Warn(context.TODO(), msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
+		log.Warn(ctx, msgDataCoordIsUnhealthy(paramtable.GetNodeID()), log.Err(err))
 		return &indexpb.ListIndexesResponse{
 			Status: merr.Status(err),
 		}, nil

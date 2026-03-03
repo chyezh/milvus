@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 
-
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/broadcast"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
@@ -122,7 +121,7 @@ func (s *Server) validateRestoreSnapshotResources(ctx context.Context, collectio
 			return fmt.Errorf("partition %s does not exist in collection %d", partName, collectionID)
 		}
 	}
-	log.Info(context.TODO(), "partitions validated", log.Int("count", len(existingPartitions)))
+	log.Info(ctx, "partitions validated", log.Int("count", len(existingPartitions)))
 
 	return nil
 }

@@ -498,7 +498,7 @@ func (kv *etcdKV) MultiSaveAndRemove(ctx context.Context, saves map[string]strin
 	}
 	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi save and remove", log.Strings("keys", keys))
 	if !resp.Succeeded {
-		log.Warn(context.TODO(), "failed to executeTxn", log.Any("resp", resp))
+		log.Warn(ctx, "failed to executeTxn", log.Any("resp", resp))
 		return merr.WrapErrIoFailedReason("failed to execute transaction")
 	}
 	return nil

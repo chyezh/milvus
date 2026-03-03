@@ -562,7 +562,7 @@ func (h *ServerHandler) HasCollection(ctx context.Context, collectionID UniqueID
 	if err := retry.Do(ctx2, func() error {
 		has, err := h.s.broker.HasCollection(ctx2, collectionID)
 		if err != nil {
-			log.RatedInfo(context.TODO(), log.RateDefault, "datacoord ServerHandler HasCollection retry failed", log.Err(err))
+			log.RatedInfo(ctx, log.RateDefault, "datacoord ServerHandler HasCollection retry failed", log.Err(err))
 			return err
 		}
 		hasCollection = has
@@ -589,7 +589,7 @@ func (h *ServerHandler) GetCollection(ctx context.Context, collectionID UniqueID
 	if err := retry.Do(ctx2, func() error {
 		err := h.s.loadCollectionFromRootCoord(ctx2, collectionID)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to load collection from rootcoord", log.Int64("collectionID", collectionID), log.Err(err))
+			log.Warn(ctx, "failed to load collection from rootcoord", log.Int64("collectionID", collectionID), log.Err(err))
 			return err
 		}
 		return nil
@@ -750,7 +750,7 @@ func (h *ServerHandler) GenSnapshot(ctx context.Context, collectionID UniqueID) 
 	}))
 
 	if len(segments) == 0 {
-		log.Info(context.TODO(), "no segments found for collection when generating snapshot",
+		log.Info(ctx, "no segments found for collection when generating snapshot",
 			log.Int64("collectionID", collectionID),
 			log.Uint64("snapshotTs", snapshotTs))
 	}
@@ -761,7 +761,7 @@ func (h *ServerHandler) GenSnapshot(ctx context.Context, collectionID UniqueID) 
 
 	err = binlog.DecompressMultiBinLogs(segmentInfos)
 	if err != nil {
-		log.Error(context.TODO(), "decompress segment binlogs failed when generating snapshot",
+		log.Error(ctx, "decompress segment binlogs failed when generating snapshot",
 			log.Int64("collectionID", collectionID),
 			log.Uint64("snapshotTs", snapshotTs),
 			log.Err(err))
@@ -772,7 +772,7 @@ func (h *ServerHandler) GenSnapshot(ctx context.Context, collectionID UniqueID) 
 	lo.ForEach(segmentInfos, func(segInfo *datapb.SegmentInfo, _ int) {
 		deltalogs, err := h.GetDeltaLogFromCompactTo(ctx, segInfo.GetID())
 		if err != nil {
-			log.Error(context.TODO(), "get delta logs from compactTo failed when generating snapshot",
+			log.Error(ctx, "get delta logs from compactTo failed when generating snapshot",
 				log.Int64("collectionID", collectionID),
 				log.Uint64("snapshotTs", snapshotTs),
 				log.Int64("segmentID", segInfo.GetID()),
@@ -887,7 +887,7 @@ func (h *ServerHandler) GetDeltaLogFromCompactTo(ctx context.Context, segmentID 
 		children, ok := h.s.meta.GetCompactionTo(id)
 		// double-check the segment, maybe the segment is being dropped concurrently.
 		if !ok {
-			log.Warn(context.TODO(), "failed to get segment, this may have been cleaned", log.Int64("segmentID", id))
+			log.Warn(ctx, "failed to get segment, this may have been cleaned", log.Int64("segmentID", id))
 			err := merr.WrapErrSegmentNotFound(id)
 			return nil, err
 		}
@@ -896,7 +896,7 @@ func (h *ServerHandler) GetDeltaLogFromCompactTo(ctx context.Context, segmentID 
 			clonedChild := child.Clone()
 			// child segment should decompress binlog path
 			if err := binlog.DecompressBinLog(storage.DeleteBinlog, clonedChild.GetCollectionID(), clonedChild.GetPartitionID(), clonedChild.GetID(), clonedChild.GetDeltalogs()); err != nil {
-				log.Warn(context.TODO(), "failed to decompress delta binlog", log.Int64("segmentID", clonedChild.GetID()), log.Err(err))
+				log.Warn(ctx, "failed to decompress delta binlog", log.Int64("segmentID", clonedChild.GetID()), log.Err(err))
 				return nil, err
 			}
 			allDeltaLogs = append(allDeltaLogs, clonedChild.GetDeltalogs()...)

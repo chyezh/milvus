@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"sync"
 
-
 	"github.com/milvus-io/milvus/internal/compaction"
 	"github.com/milvus-io/milvus/internal/flushcommon/broker"
 	"github.com/milvus-io/milvus/internal/flushcommon/io"
@@ -146,7 +145,7 @@ func initMetaCache(initCtx context.Context, chunkManager storage.ChunkManager, i
 
 	loadSegmentStats := func(segType string, segments []*datapb.SegmentInfo) {
 		for _, item := range segments {
-			log.Info(context.TODO(), "recover segments from checkpoints",
+			log.Info(initCtx, "recover segments from checkpoints",
 				log.String("vChannelName", item.GetInsertChannel()),
 				log.Int64("segmentID", item.GetID()),
 				log.Int64("numRows", item.GetNumOfRows()),

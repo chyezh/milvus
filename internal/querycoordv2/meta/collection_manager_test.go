@@ -404,7 +404,7 @@ func (suite *CollectionManagerSuite) TestRecoverLoadingCollection() {
 
 	// test recover loading collection reach limit
 	for i := 0; i < int(paramtable.Get().QueryCoordCfg.CollectionRecoverTimesLimit.GetAsInt32()); i++ {
-		log.Info(context.TODO(), "stupid", log.Int("count", i))
+		log.Info(ctx, "stupid", log.Int("count", i))
 		suite.clearMemory()
 		err = mgr.Recover(ctx, suite.broker)
 		suite.NoError(err)

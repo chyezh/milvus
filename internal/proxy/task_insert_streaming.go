@@ -28,7 +28,7 @@ func (it *insertTask) Execute(ctx context.Context) error {
 	collectionName := it.insertMsg.CollectionName
 	collID, err := globalMetaCache.GetCollectionID(it.ctx, it.insertMsg.GetDbName(), collectionName)
 	if err != nil {
-		log.Warn(context.TODO(), "fail to get collection id", log.Err(err))
+		log.Warn(ctx, "fail to get collection id", log.Err(err))
 		return err
 	}
 	it.insertMsg.CollectionID = collID
@@ -36,12 +36,12 @@ func (it *insertTask) Execute(ctx context.Context) error {
 	getCacheDur := tr.RecordSpan()
 	channelNames, err := it.chMgr.getVChannels(collID)
 	if err != nil {
-		log.Warn(context.TODO(), "get vChannels failed", log.Int64("collectionID", collID), log.Err(err))
+		log.Warn(ctx, "get vChannels failed", log.Int64("collectionID", collID), log.Err(err))
 		it.result.Status = merr.Status(err)
 		return err
 	}
 
-	log.Debug(context.TODO(), "send insert request to virtual channels",
+	log.Debug(ctx, "send insert request to virtual channels",
 		log.String("partition", it.insertMsg.GetPartitionName()),
 		log.Int64("collectionID", collID),
 		log.Strings("virtual_channels", channelNames),
@@ -62,13 +62,13 @@ func (it *insertTask) Execute(ctx context.Context) error {
 		msgs, err = repackInsertDataWithPartitionKeyForStreamingService(it.TraceCtx(), channelNames, it.insertMsg, it.result, it.partitionKeys, ez)
 	}
 	if err != nil {
-		log.Warn(context.TODO(), "assign segmentID and repack insert data failed", log.Err(err))
+		log.Warn(ctx, "assign segmentID and repack insert data failed", log.Err(err))
 		it.result.Status = merr.Status(err)
 		return err
 	}
 	resp := streaming.WAL().AppendMessages(ctx, msgs...)
 	if err := resp.UnwrapFirstError(); err != nil {
-		log.Warn(context.TODO(), "append messages to wal failed", log.Err(err))
+		log.Warn(ctx, "append messages to wal failed", log.Err(err))
 		it.result.Status = merr.Status(err)
 	}
 	// Update result.Timestamp for session consistency.

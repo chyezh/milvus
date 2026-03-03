@@ -207,12 +207,11 @@ func (st *statsTask) sort(ctx context.Context) ([]*datapb.FieldBinlog, error) {
 		return nil, err
 	}
 
-
 	deletePKs, err := compaction.ComposeDeleteFromDeltalogsV1(ctx, pkField.DataType, st.req.GetDeltaLogs(),
 		storage.WithDownloader(st.binlogIO.Download),
 		storage.WithStorageConfig(st.req.GetStorageConfig()))
 	if err != nil {
-		log.Warn(context.TODO(), "load deletePKs failed", log.Err(err))
+		log.Warn(ctx, "load deletePKs failed", log.Err(err))
 		return nil, err
 	}
 
@@ -233,7 +232,7 @@ func (st *statsTask) sort(ctx context.Context) ([]*datapb.FieldBinlog, error) {
 			return !entityFilter.Filtered(pk, uint64(ts), -1)
 		}
 	default:
-		log.Warn(context.TODO(), "sort task only support int64 and varchar pk field")
+		log.Warn(ctx, "sort task only support int64 and varchar pk field")
 	}
 
 	rr, err := storage.NewBinlogRecordReader(ctx, st.req.InsertLogs, st.req.Schema,
@@ -243,7 +242,7 @@ func (st *statsTask) sort(ctx context.Context) ([]*datapb.FieldBinlog, error) {
 		storage.WithStorageConfig(st.req.GetStorageConfig()),
 	)
 	if err != nil {
-		log.Warn(context.TODO(), "error creating insert binlog reader", log.Err(err))
+		log.Warn(ctx, "error creating insert binlog reader", log.Err(err))
 		return nil, err
 	}
 	defer rr.Close()
@@ -251,7 +250,7 @@ func (st *statsTask) sort(ctx context.Context) ([]*datapb.FieldBinlog, error) {
 	rrs := []storage.RecordReader{rr}
 	numValidRows, _, err := storage.Sort(st.req.GetBinlogMaxSize(), st.req.GetSchema(), rrs, srw, predicate, []int64{pkField.FieldID})
 	if err != nil {
-		log.Warn(context.TODO(), "sort failed", log.Int64("taskID", st.req.GetTaskID()), log.Err(err))
+		log.Warn(ctx, "sort failed", log.Int64("taskID", st.req.GetTaskID()), log.Err(err))
 		return nil, err
 	}
 	if err := srw.Close(); err != nil {
@@ -284,7 +283,7 @@ func (st *statsTask) sort(ctx context.Context) ([]*datapb.FieldBinlog, error) {
 
 	debug.FreeOSMemory()
 	elapse := st.tr.RecordSpan()
-	log.Info(context.TODO(), "sort segment end",
+	log.Info(ctx, "sort segment end",
 		log.String("clusterID", st.req.GetClusterID()),
 		log.Int64("taskID", st.req.GetTaskID()),
 		log.Int64("collectionID", st.req.GetCollectionID()),
@@ -357,7 +356,7 @@ func (st *statsTask) Execute(ctx context.Context) error {
 			st.req.GetJsonStatsShreddingRatioThreshold(),
 			st.req.GetJsonStatsWriteBatchSize())
 		if err != nil {
-			log.Warn(context.TODO(), "stats wrong, failed to create json index", log.Err(err))
+			log.Warn(ctx, "stats wrong, failed to create json index", log.Err(err))
 			return err
 		}
 	}

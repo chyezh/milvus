@@ -3,7 +3,6 @@ package streaming
 import (
 	"context"
 
-
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
@@ -95,7 +94,7 @@ func (m *delegatorMsgstreamAdaptor) Seek(ctx context.Context, msgPositions []*ms
 	}
 	position := msgPositions[0]
 	startFrom := adaptor.MustGetMessageIDFromMQWrapperIDBytesWithWALName(message.WALName(position.WALName), position.MsgID)
-	log.Info(context.TODO(), 
+	log.Info(ctx,
 		"delegator msgstream adaptor seeks from position with scanner",
 		log.String("channel", position.GetChannelName()),
 		log.Any("startFromMessageID", startFrom),

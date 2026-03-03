@@ -34,7 +34,7 @@ func (kp *kafkaProducer) Send(ctx context.Context, message *mqcommon.ProducerMes
 
 	if kp.isClosed {
 		metrics.MsgStreamOpCounter.WithLabelValues(metrics.SendMsgLabel, metrics.FailLabel).Inc()
-		log.Error(context.TODO(), "kafka produce message fail because the producer has been closed", log.String("topic", kp.topic))
+		log.Error(ctx, "kafka produce message fail because the producer has been closed", log.String("topic", kp.topic))
 		return nil, common.NewIgnorableError(errors.New("kafka producer is closed"))
 	}
 
@@ -59,7 +59,7 @@ func (kp *kafkaProducer) Send(ctx context.Context, message *mqcommon.ProducerMes
 	select {
 	case <-kp.stopCh:
 		metrics.MsgStreamOpCounter.WithLabelValues(metrics.SendMsgLabel, metrics.FailLabel).Inc()
-		log.Error(context.TODO(), "kafka produce message fail because of kafka producer is closed", log.String("topic", kp.topic))
+		log.Error(ctx, "kafka produce message fail because of kafka producer is closed", log.String("topic", kp.topic))
 		return nil, common.NewIgnorableError(errors.New("kafka producer is closed"))
 	case e := <-resultCh:
 		m = e.(*kafka.Message)

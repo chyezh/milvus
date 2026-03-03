@@ -85,7 +85,7 @@ func (wNode *writeNode) Operate(in []Msg) []Msg {
 		if len(fgMsg.InsertMessages) > 0 {
 			var err error
 			if insertData, err = writebuffer.PrepareInsert(wNode.metacache.GetSchema(fgMsg.TimeTick()), wNode.pkField, fgMsg.InsertMessages); err != nil {
-				log.Error(context.TODO(), "failed to prepare data", log.Err(err))
+				log.Error(ctx, "failed to prepare data", log.Err(err))
 				panic(err)
 			}
 		}
@@ -94,7 +94,7 @@ func (wNode *writeNode) Operate(in []Msg) []Msg {
 
 	err := wNode.wbManager.BufferData(wNode.channelName, fgMsg.InsertData, fgMsg.DeleteMessages, start, end)
 	if err != nil {
-		log.Error(context.TODO(), "failed to buffer data", log.Err(err))
+		log.Error(ctx, "failed to buffer data", log.Err(err))
 		panic(err)
 	}
 
@@ -103,7 +103,7 @@ func (wNode *writeNode) Operate(in []Msg) []Msg {
 		func(id int64, _ int) (*commonpb.SegmentStats, bool) {
 			segInfo, ok := wNode.metacache.GetSegmentByID(id)
 			if !ok {
-				log.Warn(context.TODO(), "segment not found for stats", log.Int64("segment", id))
+				log.Warn(ctx, "segment not found for stats", log.Int64("segment", id))
 				return nil, false
 			}
 			return &commonpb.SegmentStats{

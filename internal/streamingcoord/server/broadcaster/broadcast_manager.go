@@ -187,12 +187,12 @@ func (bm *broadcastTaskManager) broadcast(ctx context.Context, msg message.Broad
 func (bm *broadcastTaskManager) LegacyAck(ctx context.Context, broadcastID uint64, vchannel string) error {
 	task, ok := bm.getBroadcastTaskByID(broadcastID)
 	if !ok {
-		bm.Logger().Warn(nil, "broadcast task not found, it may already acked, ignore the request", log.Uint64("broadcastID", broadcastID), log.String("vchannel", vchannel))
+		bm.Logger().Warn(ctx, "broadcast task not found, it may already acked, ignore the request", log.Uint64("broadcastID", broadcastID), log.String("vchannel", vchannel))
 		return nil
 	}
 	msg := task.GetImmutableMessageFromVChannel(vchannel)
 	if msg == nil {
-		task.Logger().Warn(nil, "vchannel is already acked, ignore the ack request", log.String("vchannel", vchannel))
+		task.Logger().Warn(ctx, "vchannel is already acked, ignore the ack request", log.String("vchannel", vchannel))
 		return nil
 	}
 	return bm.Ack(ctx, msg)
@@ -207,7 +207,7 @@ func (bm *broadcastTaskManager) Ack(ctx context.Context, msg message.ImmutableMe
 
 	t, ok := bm.getOrCreateBroadcastTask(msg)
 	if !ok {
-		bm.Logger().Debug(nil, 
+		bm.Logger().Debug(ctx,
 			"task is tombstone, ignored the ack request",
 			log.Uint64("broadcastID", msg.BroadcastHeader().BroadcastID),
 			log.String("vchannel", msg.VChannel()))
@@ -225,7 +225,7 @@ func (bm *broadcastTaskManager) DropTombstone(ctx context.Context, broadcastID u
 
 	t, ok := bm.getBroadcastTaskByID(broadcastID)
 	if !ok {
-		bm.Logger().Debug(nil, "task is not found, ignored the drop tombstone request", log.Uint64("broadcastID", broadcastID))
+		bm.Logger().Debug(ctx, "task is not found, ignored the drop tombstone request", log.Uint64("broadcastID", broadcastID))
 		return nil
 	}
 	if err := t.DropTombstone(ctx); err != nil {
@@ -270,7 +270,7 @@ func (bm *broadcastTaskManager) getOrCreateBroadcastTask(msg message.ImmutableMe
 		return t, t.State() != streamingpb.BroadcastTaskState_BROADCAST_TASK_STATE_TOMBSTONE
 	}
 	if msg.ReplicateHeader() == nil {
-		bm.Logger().Warn(nil, "try to recover task from the wal from non-replicate message, ignore it")
+		bm.Logger().Warn(context.TODO(), "try to recover task from the wal from non-replicate message, ignore it")
 		return nil, false
 	}
 

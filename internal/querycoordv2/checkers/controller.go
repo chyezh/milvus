@@ -141,7 +141,7 @@ func (controller *CheckerController) startChecker(ctx context.Context, checker u
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info(context.TODO(), "Checker stopped",
+			log.Info(ctx, "Checker stopped",
 				log.String("type", checker.String()))
 			return
 

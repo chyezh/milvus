@@ -74,7 +74,7 @@ func (s *CompactionSuite) TestL0Compaction() {
 	})
 	err = merr.CheckRPCCall(createCollectionStatus, err)
 	s.NoError(err)
-	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(ctx, "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 
 	// show collection
 	showCollectionsResp, err := c.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{
@@ -82,7 +82,7 @@ func (s *CompactionSuite) TestL0Compaction() {
 	})
 	err = merr.CheckRPCCall(showCollectionsResp, err)
 	s.NoError(err)
-	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(ctx, "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	// insert
 	pkColumn := integration.NewInt64FieldData(integration.Int64Field, rowNum)
@@ -177,14 +177,14 @@ func (s *CompactionSuite) TestL0Compaction() {
 		segments, err = c.ShowSegments(collectionName)
 		s.NoError(err)
 		s.NotEmpty(segments)
-		log.Info(context.TODO(), "ShowSegments result", log.Any("segments", segments))
+		log.Info(ctx, "ShowSegments result", log.Any("segments", segments))
 		flushed := lo.Filter(segments, func(segment *datapb.SegmentInfo, _ int) bool {
 			return segment.GetState() == commonpb.SegmentState_Flushed
 		})
 		if len(flushed) == 1 &&
 			flushed[0].GetLevel() == datapb.SegmentLevel_L1 &&
 			flushed[0].GetNumOfRows() == rowNum {
-			log.Info(context.TODO(), "l0 compaction done, wait for single compaction")
+			log.Info(ctx, "l0 compaction done, wait for single compaction")
 		}
 		return len(flushed) == 1 &&
 			flushed[0].GetLevel() == datapb.SegmentLevel_L1 &&
@@ -238,5 +238,5 @@ func (s *CompactionSuite) TestL0Compaction() {
 	// err = merr.CheckRPCCall(status, err)
 	// s.NoError(err)
 
-	log.Info(context.TODO(), "Test compaction succeed")
+	log.Info(ctx, "Test compaction succeed")
 }

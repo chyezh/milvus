@@ -491,7 +491,7 @@ func (w *SnapshotWriter) Save(ctx context.Context, snapshot *SnapshotData) (stri
 		manifestPaths = append(manifestPaths, manifestPath)
 	}
 
-	log.Info(context.TODO(), "Successfully wrote segment manifest files",
+	log.Info(ctx, "Successfully wrote segment manifest files",
 		log.Int("numSegments", len(snapshot.Segments)),
 		log.String("manifestDir", manifestDir))
 
@@ -513,7 +513,7 @@ func (w *SnapshotWriter) Save(ctx context.Context, snapshot *SnapshotData) (stri
 		return "", fmt.Errorf("failed to write metadata file: %w", err)
 	}
 
-	log.Info(context.TODO(), "Successfully wrote metadata file",
+	log.Info(ctx, "Successfully wrote metadata file",
 		log.String("metadataPath", metadataPath))
 
 	return metadataPath, nil
@@ -633,7 +633,7 @@ func (w *SnapshotWriter) Drop(ctx context.Context, metadataFilePath string) erro
 		if err := w.chunkManager.MultiRemove(ctx, manifestList); err != nil {
 			return fmt.Errorf("failed to remove manifest files: %w", err)
 		}
-		log.Info(context.TODO(), "Successfully removed manifest files",
+		log.Info(ctx, "Successfully removed manifest files",
 			log.Int("count", len(manifestList)),
 			log.Int64("snapshotID", snapshotID))
 	}
@@ -642,10 +642,10 @@ func (w *SnapshotWriter) Drop(ctx context.Context, metadataFilePath string) erro
 	if err := w.chunkManager.Remove(ctx, metadataFilePath); err != nil {
 		return fmt.Errorf("failed to remove metadata file: %w", err)
 	}
-	log.Info(context.TODO(), "Successfully removed metadata file",
+	log.Info(ctx, "Successfully removed metadata file",
 		log.String("metadataFilePath", metadataFilePath))
 
-	log.Info(context.TODO(), "Successfully dropped snapshot",
+	log.Info(ctx, "Successfully dropped snapshot",
 		log.Int64("snapshotID", snapshotID))
 	return nil
 }
@@ -951,7 +951,7 @@ func (r *SnapshotReader) ListSnapshots(ctx context.Context, collectionID int64) 
 		metadata, err := r.readMetadataFile(ctx, file)
 		if err != nil {
 			// Log warning but continue - don't fail entire list for one bad file
-			log.Warn(context.TODO(), "Failed to parse metadata file, skipping",
+			log.Warn(ctx, "Failed to parse metadata file, skipping",
 				log.String("file", file),
 				log.Err(err))
 			continue

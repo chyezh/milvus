@@ -46,7 +46,7 @@ func newOpUpdateBalancePolicy(ctx context.Context, req *types.UpdateWALBalancePo
 			}
 			// apply the freeze streaming nodes.
 			if len(req.GetNodes().GetFreezeNodeIds()) > 0 || len(req.GetNodes().GetDefreezeNodeIds()) > 0 {
-				impl.Logger().Info(nil, "update freeze nodes", log.Int64s("freezeNodeIDs", req.GetNodes().GetFreezeNodeIds()), log.Int64s("defreezeNodeIDs", req.GetNodes().GetDefreezeNodeIds()))
+				impl.Logger().Info(ctx, "update freeze nodes", log.Int64s("freezeNodeIDs", req.GetNodes().GetFreezeNodeIds()), log.Int64s("defreezeNodeIDs", req.GetNodes().GetDefreezeNodeIds()))
 				impl.freezeNodes.Upsert(req.GetNodes().GetFreezeNodeIds()...)
 				impl.freezeNodes.Remove(req.GetNodes().GetDefreezeNodeIds()...)
 			}
@@ -64,7 +64,7 @@ func newOpUpdateBalancePolicy(ctx context.Context, req *types.UpdateWALBalancePo
 // updateAllowRebalance update the allow rebalance.
 func updateAllowRebalance(impl *balancerImpl, allowRebalance bool) {
 	old := paramtable.Get().StreamingCfg.WALBalancerPolicyAllowRebalance.SwapTempValue(strconv.FormatBool(allowRebalance))
-	impl.Logger().Info(nil, "update allow_rebalance", log.Bool("new", allowRebalance), log.String("old", old))
+	impl.Logger().Info(context.TODO(), "update allow_rebalance", log.Bool("new", allowRebalance), log.String("old", old))
 }
 
 // newOpMarkAsUnavailable is a operation to mark some channels as unavailable.

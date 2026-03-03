@@ -69,13 +69,13 @@ func (s *SealSuite) TestSealByTotalGrowingSegmentsSize() {
 	})
 	err = merr.CheckRPCCall(createCollectionStatus, err)
 	s.NoError(err)
-	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(ctx, "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 
 	// show collection
 	showCollectionsResp, err := c.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	err = merr.CheckRPCCall(showCollectionsResp, err)
 	s.NoError(err)
-	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(ctx, "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	// insert
 	fVecColumn := integration.NewFloatVectorFieldData(integration.FloatVecField, rowNum, dim)
@@ -101,7 +101,7 @@ func (s *SealSuite) TestSealByTotalGrowingSegmentsSize() {
 		flushedSegments := lo.Filter(segments, func(segment *datapb.SegmentInfo, _ int) bool {
 			return segment.GetState() == commonpb.SegmentState_Flushed
 		})
-		log.Info(context.TODO(), "ShowSegments result", log.Int("len(segments)", len(segments)),
+		log.Info(ctx, "ShowSegments result", log.Int("len(segments)", len(segments)),
 			log.Int("len(flushedSegments)", len(flushedSegments)))
 		return len(flushedSegments) >= 1
 	}

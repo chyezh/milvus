@@ -1,7 +1,6 @@
 package testcases
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -484,11 +483,11 @@ func TestDeleteComplexExpr(t *testing.T) {
 		prepare.CreateIndex(ctx, t, mc, hp.TNewIndexParams(schema))
 		prepare.Load(ctx, t, mc, hp.NewLoadParams(schema.CollectionName))
 
-		log.Debug(context.TODO(), "TestDeleteComplexExpr", log.Any("expr", exprLimit.expr))
+		log.Debug(ctx, "TestDeleteComplexExpr", log.Any("expr", exprLimit.expr))
 
 		resDe, err := mc.Delete(ctx, client.NewDeleteOption(schema.CollectionName).WithExpr(exprLimit.expr))
 		common.CheckErr(t, err, true)
-		log.Debug(context.TODO(), "delete count", log.Bool("equal", int64(exprLimit.count) == resDe.DeleteCount))
+		log.Debug(ctx, "delete count", log.Bool("equal", int64(exprLimit.count) == resDe.DeleteCount))
 		// require.Equal(t, int64(exprLimit.count), resDe.DeleteCount)
 
 		resQuery, err := mc.Query(ctx, client.NewQueryOption(schema.CollectionName).WithFilter(exprLimit.expr).WithConsistencyLevel(entity.ClStrong))
@@ -547,11 +546,11 @@ func TestDeleteComplexExprJson(t *testing.T) {
 		prepare.CreateIndex(ctx, t, mc, hp.TNewIndexParams(schema))
 		prepare.Load(ctx, t, mc, hp.NewLoadParams(schema.CollectionName))
 
-		log.Debug(context.TODO(), "TestDeleteComplexExpr", log.Any("expr", exprLimit.expr))
+		log.Debug(ctx, "TestDeleteComplexExpr", log.Any("expr", exprLimit.expr))
 
 		resDe, err := mc.Delete(ctx, client.NewDeleteOption(schema.CollectionName).WithExpr(exprLimit.expr))
 		common.CheckErr(t, err, true)
-		log.Debug(context.TODO(), "delete count", log.Bool("equal", int64(exprLimit.count) == resDe.DeleteCount))
+		log.Debug(ctx, "delete count", log.Bool("equal", int64(exprLimit.count) == resDe.DeleteCount))
 		// require.Equal(t, int64(exprLimit.count), resDe.DeleteCount)
 
 		resQuery, err := mc.Query(ctx, client.NewQueryOption(schema.CollectionName).WithFilter(exprLimit.expr).WithConsistencyLevel(entity.ClStrong))

@@ -100,7 +100,7 @@ func NewMiniClusterV3(
 		opt(client)
 	}
 	client.init()
-	client.Logger().Info(nil, "init mini cluster v3 done")
+	client.Logger().Info(context.TODO(), "init mini cluster v3 done")
 	return client
 }
 
@@ -155,7 +155,7 @@ func (c *MiniClusterV3) init() {
 		log.String("rootPath", c.rootPath)))
 
 	logger := c.Logger().With(log.String("operation", "Init"))
-	logger.Info(nil, "init mini cluster v3...", log.Any("extraEnv", c.extraEnv))
+	logger.Info(context.TODO(), "init mini cluster v3...", log.Any("extraEnv", c.extraEnv))
 	now := time.Now()
 
 	c.defaultMixCoord = c.AddMixCoord(WithoutWaitForReady())
@@ -163,11 +163,11 @@ func (c *MiniClusterV3) init() {
 	c.defaultDataNode = c.AddDataNode(WithoutWaitForReady())
 	c.defaultQueryNode = c.AddQueryNode(WithoutWaitForReady())
 	c.defaultStreamingNode = c.AddStreamingNode(WithoutWaitForReady())
-	c.Logger().Info(nil, "set default node for mini cluster v3 done", log.Duration("cost", time.Since(now)))
+	c.Logger().Info(context.TODO(), "set default node for mini cluster v3 done", log.Duration("cost", time.Since(now)))
 	now = time.Now()
 
 	c.initClients()
-	logger.Info(nil, "wait for all client ready", log.Duration("cost", time.Since(now)))
+	logger.Info(context.TODO(), "wait for all client ready", log.Duration("cost", time.Since(now)))
 	now = time.Now()
 
 	c.metaWatcher = &EtcdMetaWatcher{
@@ -182,7 +182,7 @@ func (c *MiniClusterV3) init() {
 		panic(err)
 	}
 	c.ChunkManager = cli
-	logger.Info(nil, "init mini cluster v3 done", log.Duration("cost", time.Since(now)))
+	logger.Info(context.TODO(), "init mini cluster v3 done", log.Duration("cost", time.Since(now)))
 }
 
 // initClients initializes the clients.
@@ -242,7 +242,7 @@ func (c *MiniClusterV3) MustModifyMilvusConfig(kvs map[string]string) func() {
 		if _, err := c.EtcdCli.Put(c.ctx, key, value); err != nil {
 			panic(fmt.Sprintf("failed to modify milvus config: %v", err))
 		}
-		c.Logger().Info(nil, "modify milvus config done", log.String("key", key), log.String("value", value))
+		c.Logger().Info(context.TODO(), "modify milvus config done", log.String("key", key), log.String("value", value))
 		keys = append(keys, key)
 	}
 	// wait for the config to be refreshed.
@@ -253,7 +253,7 @@ func (c *MiniClusterV3) MustModifyMilvusConfig(kvs map[string]string) func() {
 			if _, err := c.EtcdCli.Delete(c.ctx, key); err != nil {
 				panic(fmt.Sprintf("failed to revert milvus config: %v", err))
 			}
-			c.Logger().Info(nil, "revert milvus config done", log.String("key", key))
+			c.Logger().Info(context.TODO(), "revert milvus config done", log.String("key", key))
 		}
 		// wait for the config to be reverted.
 		time.Sleep(c.configRefreshInterval * 2)
@@ -290,20 +290,20 @@ func (c *MiniClusterV3) GetContext() context.Context {
 func (c *MiniClusterV3) Reset() {
 	logger := c.Logger().With(log.String("operation", "Reset"))
 
-	logger.Info(nil, "reset mini cluster v3...")
+	logger.Info(context.TODO(), "reset mini cluster v3...")
 	now := time.Now()
 
 	c.clearRedundantNodes()
-	logger.Info(nil, "clear redundant nodes done", log.Duration("cost", time.Since(now)))
+	logger.Info(context.TODO(), "clear redundant nodes done", log.Duration("cost", time.Since(now)))
 	now = time.Now()
 
 	c.resetDefaultNodes()
-	logger.Info(nil, "reset default nodes done", log.Duration("cost", time.Since(now)))
+	logger.Info(context.TODO(), "reset default nodes done", log.Duration("cost", time.Since(now)))
 	now = time.Now()
 
 	c.initClients()
 	// wait for all client ready.
-	logger.Info(nil, "wait for all client ready", log.Duration("cost", time.Since(now)))
+	logger.Info(context.TODO(), "wait for all client ready", log.Duration("cost", time.Since(now)))
 }
 
 // clearRedundantNodes clears redundant nodes, only keep one working node for each role.
@@ -497,7 +497,7 @@ func (c *MiniClusterV3) GetAllDataNodes() []*process.DataNodeProcess {
 // AddMixCoord adds a mixcoord to the cluster.
 // Use WithoutWaitForReady to avoid waiting for the node to be ready.
 func (c *MiniClusterV3) AddMixCoord(opts ...ClusterOperationOpt) (mp *process.MixcoordProcess) {
-	c.Logger().Info(nil, "add mixcoord to the cluster")
+	c.Logger().Info(context.TODO(), "add mixcoord to the cluster")
 
 	opt := c.getClusterOperationOpt(opts...)
 	defer func() {
@@ -517,7 +517,7 @@ func (c *MiniClusterV3) AddMixCoord(opts ...ClusterOperationOpt) (mp *process.Mi
 // AddQueryNodes adds multiple query nodes to the cluster.
 // Use WithoutWaitForReady to avoid waiting for the node to be ready.
 func (c *MiniClusterV3) AddQueryNodes(num int, opts ...ClusterOperationOpt) (mps []*process.QueryNodeProcess) {
-	c.Logger().Info(nil, "add query nodes to the cluster", log.Int("num", num))
+	c.Logger().Info(context.TODO(), "add query nodes to the cluster", log.Int("num", num))
 
 	opt := c.getClusterOperationOpt(opts...)
 	defer func() {
@@ -543,7 +543,7 @@ func (c *MiniClusterV3) AddQueryNodes(num int, opts ...ClusterOperationOpt) (mps
 // AddQueryNode adds a query node to the cluster.
 // Use WithoutWaitForReady to avoid waiting for the node to be ready.
 func (c *MiniClusterV3) AddQueryNode(opts ...ClusterOperationOpt) (mp *process.QueryNodeProcess) {
-	c.Logger().Info(nil, "add query node to the cluster")
+	c.Logger().Info(context.TODO(), "add query node to the cluster")
 
 	opt := c.getClusterOperationOpt(opts...)
 	defer func() {
@@ -576,7 +576,7 @@ func (c *MiniClusterV3) StopAllQueryNode(timeout ...time.Duration) {
 // AddDataNode adds a data node to the cluster.
 // Use WithoutWaitForReady to avoid waiting for the node to be ready.
 func (c *MiniClusterV3) AddDataNode(opts ...ClusterOperationOpt) (mp *process.DataNodeProcess) {
-	c.Logger().Info(nil, "add data node to the cluster")
+	c.Logger().Info(context.TODO(), "add data node to the cluster")
 
 	opt := c.getClusterOperationOpt(opts...)
 	defer func() {
@@ -596,7 +596,7 @@ func (c *MiniClusterV3) AddDataNode(opts ...ClusterOperationOpt) (mp *process.Da
 // AddStreamingNode adds a streaming node to the cluster.
 // Use WithoutWaitForReady to avoid waiting for the node to be ready.
 func (c *MiniClusterV3) AddStreamingNode(opts ...ClusterOperationOpt) (mp *process.StreamingNodeProcess) {
-	c.Logger().Info(nil, "add streaming node to the cluster")
+	c.Logger().Info(context.TODO(), "add streaming node to the cluster")
 
 	opt := c.getClusterOperationOpt(opts...)
 	defer func() {
@@ -616,7 +616,7 @@ func (c *MiniClusterV3) AddStreamingNode(opts ...ClusterOperationOpt) (mp *proce
 // AddProxy adds a proxy to the cluster.
 // Use WithoutWaitForReady to avoid waiting for the node to be ready.
 func (c *MiniClusterV3) AddProxy(opts ...ClusterOperationOpt) (mp *process.ProxyProcess) {
-	c.Logger().Info(nil, "add proxy to the cluster")
+	c.Logger().Info(context.TODO(), "add proxy to the cluster")
 
 	opt := c.getClusterOperationOpt(opts...)
 	defer func() {

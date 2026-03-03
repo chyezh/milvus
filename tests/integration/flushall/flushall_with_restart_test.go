@@ -86,14 +86,14 @@ func (s *FlushAllWithRestartSuite) TestFlushAllWithStreamingNodeRestart() {
 	flushAllResp, err := c.MilvusClient.FlushAll(ctx, &milvuspb.FlushAllRequest{})
 	s.NoError(merr.CheckRPCCall(flushAllResp, err))
 	s.WaitForFlushAll(ctx, flushAllResp.GetFlushAllMsgs())
-	log.Info(context.TODO(), "first FlushAll completed")
+	log.Info(ctx, "first FlushAll completed")
 
 	// Step 2: Restart all streaming nodes, then insert another 1000 rows and FlushAll.
 	for _, sn := range c.GetAllStreamingNodes() {
 		sn.Stop()
 	}
 	c.AddStreamingNode()
-	log.Info(context.TODO(), "streaming node restarted")
+	log.Info(ctx, "streaming node restarted")
 
 	// Wait for channel rebalance to complete after streaming node restart,
 	// then insert data with retry.
@@ -114,7 +114,7 @@ func (s *FlushAllWithRestartSuite) TestFlushAllWithStreamingNodeRestart() {
 	flushAllResp2, err := c.MilvusClient.FlushAll(ctx, &milvuspb.FlushAllRequest{})
 	s.NoError(merr.CheckRPCCall(flushAllResp2, err))
 	s.WaitForFlushAll(ctx, flushAllResp2.GetFlushAllMsgs())
-	log.Info(context.TODO(), "second FlushAll completed after streaming node restart")
+	log.Info(ctx, "second FlushAll completed after streaming node restart")
 
 	// Step 3: Create index, load collection, and query count(*) to verify total is 2000.
 	createIndexStatus, err := c.MilvusClient.CreateIndex(ctx, &milvuspb.CreateIndexRequest{
@@ -140,7 +140,7 @@ func (s *FlushAllWithRestartSuite) TestFlushAllWithStreamingNodeRestart() {
 	s.NoError(merr.CheckRPCCall(queryResult, err))
 	count := queryResult.GetFieldsData()[0].GetScalars().GetLongData().GetData()[0]
 	s.Equal(int64(2*rowNum), count)
-	log.Info(context.TODO(), "query count(*) verified: 2000 rows")
+	log.Info(ctx, "query count(*) verified: 2000 rows")
 
 	// Cleanup.
 	dropStatus, err := c.MilvusClient.DropCollection(ctx, &milvuspb.DropCollectionRequest{

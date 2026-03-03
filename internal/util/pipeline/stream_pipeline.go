@@ -97,7 +97,7 @@ func (p *streamPipeline) Status() string {
 func (p *streamPipeline) ConsumeMsgStream(ctx context.Context, position *msgpb.MsgPosition) error {
 	var err error
 	if position == nil {
-		log.Error(context.TODO(), "seek stream to nil position")
+		log.Error(ctx, "seek stream to nil position")
 		return ErrNilPosition
 	}
 
@@ -108,13 +108,13 @@ func (p *streamPipeline) ConsumeMsgStream(ctx context.Context, position *msgpb.M
 		SubPos:   common.SubscriptionPositionUnknown,
 	})
 	if err != nil {
-		log.Error(context.TODO(), "dispatcher register failed after retried", log.String("channel", position.ChannelName), log.Err(err))
+		log.Error(ctx, "dispatcher register failed after retried", log.String("channel", position.ChannelName), log.Err(err))
 		p.dispatcher.Deregister(p.vChannel)
 		return WrapErrRegDispather(err)
 	}
 
 	ts, _ := tsoutil.ParseTS(position.GetTimestamp())
-	log.Info(context.TODO(), "stream pipeline seeks from position with msgDispatcher",
+	log.Info(ctx, "stream pipeline seeks from position with msgDispatcher",
 		log.String("pchannel", position.ChannelName),
 		log.String("vchannel", p.vChannel),
 		log.Time("checkpointTs", ts),

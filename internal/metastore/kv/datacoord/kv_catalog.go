@@ -270,14 +270,14 @@ func (kc *Catalog) AddSegment(ctx context.Context, segment *datapb.SegmentInfo) 
 func (kc *Catalog) LoadFromSegmentPath(ctx context.Context, colID, partID, segID typeutil.UniqueID) (*datapb.SegmentInfo, error) {
 	v, err := kc.MetaKv.Load(ctx, buildSegmentPath(colID, partID, segID))
 	if err != nil {
-		log.Error(context.TODO(), "(testing only) failed to load segment info by segment path")
+		log.Error(ctx, "(testing only) failed to load segment info by segment path")
 		return nil, err
 	}
 
 	segInfo := &datapb.SegmentInfo{}
 	err = proto.Unmarshal([]byte(v), segInfo)
 	if err != nil {
-		log.Error(context.TODO(), "(testing only) failed to unmarshall segment info")
+		log.Error(ctx, "(testing only) failed to unmarshall segment info")
 		return nil, err
 	}
 

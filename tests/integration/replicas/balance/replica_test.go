@@ -81,7 +81,7 @@ func (s *ReplicaTestSuit) initCollection(collectionName string, replica int, cha
 	s.Equal(commonpb.ErrorCode_Success, loadStatus.GetErrorCode())
 	s.True(merr.Ok(loadStatus))
 	s.WaitForLoad(ctx, collectionName)
-	log.Info(context.TODO(), "initCollection Done")
+	log.Info(ctx, "initCollection Done")
 }
 
 func (s *ReplicaTestSuit) TestNodeDownOnSingleReplica() {
@@ -96,7 +96,7 @@ func (s *ReplicaTestSuit) TestNodeDownOnSingleReplica() {
 		for {
 			select {
 			case <-stopSearchCh:
-				log.Info(context.TODO(), "stop search")
+				log.Info(ctx, "stop search")
 				return
 			default:
 				expr := fmt.Sprintf("%s > 0", integration.Int64Field)
@@ -150,7 +150,7 @@ func (s *ReplicaTestSuit) TestNodeDownOnMultiReplica() {
 		for {
 			select {
 			case <-stopSearchCh:
-				log.Info(context.TODO(), "stop search")
+				log.Info(ctx, "stop search")
 				return
 			default:
 				expr := fmt.Sprintf("%s > 0", integration.Int64Field)

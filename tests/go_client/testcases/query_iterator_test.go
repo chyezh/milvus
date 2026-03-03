@@ -1,7 +1,6 @@
 package testcases
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"testing"
@@ -306,7 +305,7 @@ func TestQueryIteratorExpr(t *testing.T) {
 		expectCount, err := rs.GetColumn("count(*)").GetAsInt64(0)
 		common.CheckErr(t, err, true)
 
-		log.Info(context.TODO(), "case expr is", log.String("expr", exprLimit.expr), log.Int64("expectedCount", expectCount))
+		log.Info(ctx, "case expr is", log.String("expr", exprLimit.expr), log.Int64("expectedCount", expectCount))
 		itr, err := mc.QueryIterator(ctx, client.NewQueryIteratorOption(schema.CollectionName).WithBatchSize(batch).WithFilter(exprLimit.expr))
 		common.CheckErr(t, err, true)
 		common.CheckQueryIteratorResult(ctx, t, itr, int(expectCount), common.WithExpBatchSize(hp.GenBatchSizes(int(expectCount), batch)))
@@ -415,7 +414,7 @@ func TestQueryIteratorConsistencyLevel(t *testing.T) {
 				if err == io.EOF {
 					break
 				}
-				log.Error(context.TODO(), "QueryIterator next gets error", log.Err(err))
+				log.Error(ctx, "QueryIterator next gets error", log.Err(err))
 				break
 			}
 			actualLimit = actualLimit + rs.ResultCount

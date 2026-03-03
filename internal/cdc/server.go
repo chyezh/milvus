@@ -19,7 +19,6 @@ package cdc
 import (
 	"context"
 
-
 	"github.com/milvus-io/milvus/internal/cdc/controller"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 )

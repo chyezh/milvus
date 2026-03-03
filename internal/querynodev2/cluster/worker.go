@@ -101,7 +101,7 @@ func (w *remoteWorker) LoadSegments(ctx context.Context, req *querypb.LoadSegmen
 	client := w.getClient()
 	status, err := client.LoadSegments(ctx, req)
 	if err = merr.CheckRPCCall(status, err); err != nil {
-		log.Warn(context.TODO(), "failed to call LoadSegments via grpc worker",
+		log.Warn(ctx, "failed to call LoadSegments via grpc worker",
 			log.Err(err),
 		)
 		return err
@@ -113,7 +113,7 @@ func (w *remoteWorker) ReleaseSegments(ctx context.Context, req *querypb.Release
 	client := w.getClient()
 	status, err := client.ReleaseSegments(ctx, req)
 	if err = merr.CheckRPCCall(status, err); err != nil {
-		log.Warn(context.TODO(), "failed to call ReleaseSegments via grpc worker",
+		log.Warn(ctx, "failed to call ReleaseSegments via grpc worker",
 			log.Err(err),
 		)
 		return err
@@ -126,10 +126,10 @@ func (w *remoteWorker) Delete(ctx context.Context, req *querypb.DeleteRequest) e
 	status, err := client.Delete(ctx, req)
 	if err := merr.CheckRPCCall(status, err); err != nil {
 		if errors.Is(err, merr.ErrServiceUnimplemented) {
-			log.Warn(context.TODO(), "invoke legacy querynode Delete method, ignore error", log.Err(err))
+			log.Warn(ctx, "invoke legacy querynode Delete method, ignore error", log.Err(err))
 			return nil
 		}
-		log.Warn(context.TODO(), "failed to call Delete, worker return error", log.Err(err))
+		log.Warn(ctx, "failed to call Delete, worker return error", log.Err(err))
 		return err
 	}
 	return nil
@@ -140,7 +140,7 @@ func (w *remoteWorker) DeleteBatch(ctx context.Context, req *querypb.DeleteBatch
 	resp, err := client.DeleteBatch(ctx, req)
 	if err := merr.CheckRPCCall(resp, err); err != nil {
 		if errors.Is(err, merr.ErrServiceUnimplemented) {
-			log.Warn(context.TODO(), "invoke legacy querynode DeleteBatch method, fallback to ")
+			log.Warn(ctx, "invoke legacy querynode DeleteBatch method, fallback to ")
 			return w.splitDeleteBatch(ctx, req)
 		}
 		return nil, err
@@ -223,7 +223,7 @@ func (w *remoteWorker) QueryStreamSegments(ctx context.Context, req *querypb.Que
 
 		err = srv.Send(result)
 		if err != nil {
-			log.Warn(context.TODO(), "send stream pks from remote woker failed",
+			log.Warn(ctx, "send stream pks from remote woker failed",
 				log.Int64("collectionID", req.Req.GetCollectionID()),
 				log.Int64s("segmentIDs", req.GetSegmentIDs()),
 			)

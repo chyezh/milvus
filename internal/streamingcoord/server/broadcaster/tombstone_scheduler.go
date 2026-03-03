@@ -1,9 +1,9 @@
 package broadcaster
 
 import (
+	"context"
 	"sort"
 	"time"
-
 
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -71,9 +71,9 @@ func (s *tombstoneScheduler) Close() {
 func (s *tombstoneScheduler) background() {
 	defer func() {
 		s.notifier.Finish(struct{}{})
-		s.Logger().Info(nil, "tombstone scheduler background exit")
+		s.Logger().Info(context.TODO(), "tombstone scheduler background exit")
 	}()
-	s.Logger().Info(nil, "tombstone scheduler background start")
+	s.Logger().Info(context.TODO(), "tombstone scheduler background start")
 
 	tombstoneGCInterval := paramtable.Get().StreamingCfg.WALBroadcasterTombstoneCheckInternal.GetAsDurationByParse()
 	ticker := time.NewTicker(tombstoneGCInterval)
@@ -104,7 +104,7 @@ func (s *tombstoneScheduler) triggerGCTombstone() {
 	if len(s.tombstones) > maxTombstoneCount {
 		expiredOffset = len(s.tombstones) - maxTombstoneCount
 	}
-	s.Logger().Info(nil, "triggerGCTombstone",
+	s.Logger().Info(context.TODO(), "triggerGCTombstone",
 		log.Int("tombstone count", len(s.tombstones)),
 		log.Int("expired offset", expiredOffset),
 		log.Time("expired time", expiredTime))
@@ -115,7 +115,7 @@ func (s *tombstoneScheduler) triggerGCTombstone() {
 			return
 		}
 		if err := s.bm.DropTombstone(s.notifier.Context(), tombstone.broadcastID); err != nil {
-			s.Logger().Error(nil, "failed to drop tombstone", log.Err(err))
+			s.Logger().Error(context.TODO(), "failed to drop tombstone", log.Err(err))
 			s.tombstones = s.tombstones[idx:]
 			return
 		}

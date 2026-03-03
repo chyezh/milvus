@@ -311,12 +311,12 @@ func (s *mixCoordImpl) posixCleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
-	log.Info(context.TODO(), "POSIX directory cleanup task started")
+	log.Info(ctx, "POSIX directory cleanup task started")
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info(context.TODO(), "POSIX directory cleanup task stopped")
+			log.Info(ctx, "POSIX directory cleanup task stopped")
 			return
 		case <-ticker.C:
 			s.checkExpiredPOSIXDIR()

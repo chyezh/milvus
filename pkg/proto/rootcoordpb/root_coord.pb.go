@@ -7,6 +7,9 @@
 package rootcoordpb
 
 import (
+	reflect "reflect"
+	sync "sync"
+
 	commonpb "github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	milvuspb "github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	etcdpb "github.com/milvus-io/milvus/pkg/v2/proto/etcdpb"
@@ -14,8 +17,6 @@ import (
 	proxypb "github.com/milvus-io/milvus/pkg/v2/proto/proxypb"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
-	reflect "reflect"
-	sync "sync"
 )
 
 const (

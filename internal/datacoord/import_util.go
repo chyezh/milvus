@@ -340,7 +340,7 @@ func AssembleImportRequest(task ImportTask, job ImportJob, meta *meta, alloc all
 		return nil, err
 	}
 
-	log.Info(context.TODO(), "pre-allocate ids and ts for import task", WrapTaskLog(task,
+	log.Info(ctx, "pre-allocate ids and ts for import task", WrapTaskLog(task,
 		log.Int64("totalRows", totalRows),
 		log.Int("fieldsNum", fieldsNum),
 		log.Int64("idBegin", idBegin),
@@ -421,7 +421,7 @@ func CheckDiskQuota(ctx context.Context, job ImportJob, meta *meta, importMeta I
 		return 0, nil
 	}
 	if importutilv2.SkipDiskQuotaCheck(job.GetOptions()) {
-		log.Info(context.TODO(), "skip disk quota check for import", log.Int64("jobID", job.GetJobID()))
+		log.Info(ctx, "skip disk quota check for import", log.Int64("jobID", job.GetJobID()))
 		return 0, nil
 	}
 
@@ -450,7 +450,7 @@ func CheckDiskQuota(ctx context.Context, job ImportJob, meta *meta, importMeta I
 
 	totalDiskQuota := Params.QuotaConfig.DiskQuota.GetAsFloat()
 	if float64(totalUsage+requestedTotal+requestSize) > totalDiskQuota {
-		log.Warn(context.TODO(), "global disk quota exceeded", log.Int64("jobID", job.GetJobID()),
+		log.Warn(ctx, "global disk quota exceeded", log.Int64("jobID", job.GetJobID()),
 			log.Bool("enabled", Params.QuotaConfig.DiskProtectionEnabled.GetAsBool()),
 			log.Int64("totalUsage", totalUsage),
 			log.Int64("requestedTotal", requestedTotal),
@@ -461,7 +461,7 @@ func CheckDiskQuota(ctx context.Context, job ImportJob, meta *meta, importMeta I
 	collectionDiskQuota := Params.QuotaConfig.DiskQuotaPerCollection.GetAsFloat()
 	colID := job.GetCollectionID()
 	if float64(collectionsUsage[colID]+requestedCollections[colID]+requestSize) > collectionDiskQuota {
-		log.Warn(context.TODO(), "collection disk quota exceeded", log.Int64("jobID", job.GetJobID()),
+		log.Warn(ctx, "collection disk quota exceeded", log.Int64("jobID", job.GetJobID()),
 			log.Bool("enabled", Params.QuotaConfig.DiskProtectionEnabled.GetAsBool()),
 			log.Int64("collectionsUsage", collectionsUsage[colID]),
 			log.Int64("requestedCollection", requestedCollections[colID]),

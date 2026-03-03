@@ -266,7 +266,7 @@ func WaitForImportDone(ctx context.Context, c *cluster.MiniClusterV3, jobID stri
 		case internalpb.ImportJobState_Failed:
 			return merr.WrapErrImportFailed(resp.GetReason())
 		default:
-			log.Info(context.TODO(), "import progress", log.String("jobID", jobID),
+			log.Info(ctx, "import progress", log.String("jobID", jobID),
 				log.Int64("progress", resp.GetProgress()),
 				log.String("state", resp.GetState().String()))
 			time.Sleep(1 * time.Second)

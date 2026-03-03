@@ -218,7 +218,7 @@ func (suite *ResourceManagerSuite) TestManipulateResourceGroup() {
 	suite.manager.AlterResourceGroups(ctx, map[string]*rgpb.ResourceGroupConfig{
 		"rg2": newResourceGroupConfig(0, 0),
 	})
-	log.Info(context.TODO(), "xxxxx")
+	log.Info(ctx, "xxxxx")
 	// RemoveResourceGroup will remove all nodes from the resource group.
 	err = suite.manager.RemoveResourceGroup(ctx, "rg2")
 	suite.NoError(err)
@@ -857,7 +857,7 @@ func (suite *ResourceManagerSuite) TestNodeLabels_NodeAssign() {
 		},
 	})
 
-	log.Info(context.TODO(), "test swap rg's label")
+	log.Info(ctx, "test swap rg's label")
 	for i := 0; i < 4; i++ {
 		suite.manager.AutoRecoverResourceGroup(ctx, "rg1")
 		suite.manager.AutoRecoverResourceGroup(ctx, "rg2")

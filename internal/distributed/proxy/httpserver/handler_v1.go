@@ -153,7 +153,7 @@ func (h *HandlersV1) describeCollection(ctx context.Context, c *gin.Context, dbN
 	}
 	primaryField, ok := getPrimaryField(response.Schema)
 	if ok && primaryField.AutoID && !primaryField.AutoID {
-		log.Warn(context.TODO(), "primary filed autoID VS schema autoID", log.String("collectionName", collectionName), log.Bool("primary Field", primaryField.AutoID), log.Bool("schema", primaryField.AutoID))
+		log.Warn(ctx, "primary filed autoID VS schema autoID", log.String("collectionName", collectionName), log.Bool("primary Field", primaryField.AutoID), log.Bool("schema", primaryField.AutoID))
 		response.Schema.AutoID = EnableAutoID
 	}
 	return response.Schema, nil
@@ -381,7 +381,7 @@ func (h *HandlersV1) getCollectionDetails(c *gin.Context) {
 	coll := response.(*milvuspb.DescribeCollectionResponse)
 	primaryField, ok := getPrimaryField(coll.Schema)
 	if ok && primaryField.AutoID && !primaryField.AutoID {
-		log.Warn(context.TODO(), "primary filed autoID VS schema autoID", log.String("collectionName", collectionName), log.Bool("primary Field", primaryField.AutoID), log.Bool("schema", primaryField.AutoID))
+		log.Warn(ctx, "primary filed autoID VS schema autoID", log.String("collectionName", collectionName), log.Bool("primary Field", primaryField.AutoID), log.Bool("schema", primaryField.AutoID))
 		coll.Schema.AutoID = EnableAutoID
 	}
 
@@ -394,7 +394,7 @@ func (h *HandlersV1) getCollectionDetails(c *gin.Context) {
 		err = merr.Error(stateResp.GetStatus())
 	}
 	if err != nil {
-		log.Warn(context.TODO(), "get collection load state fail",
+		log.Warn(ctx, "get collection load state fail",
 			log.String("collection", collectionName),
 			log.Err(err),
 		)
@@ -419,7 +419,7 @@ func (h *HandlersV1) getCollectionDetails(c *gin.Context) {
 	var indexDesc []gin.H
 	if err != nil {
 		indexDesc = []gin.H{}
-		log.Warn(context.TODO(), "get indexes description fail",
+		log.Warn(ctx, "get indexes description fail",
 			log.String("collection", collectionName),
 			log.String("vectorField", vectorField),
 			log.Err(err),
@@ -554,7 +554,7 @@ func (h *HandlersV1) query(c *gin.Context) {
 		allowJS, _ := strconv.ParseBool(c.Request.Header.Get(HTTPHeaderAllowInt64))
 		outputData, err := buildQueryResp(int64(0), queryResp.OutputFields, queryResp.FieldsData, nil, nil, allowJS, nil)
 		if err != nil {
-			log.Warn(context.TODO(), "high level restful api, fail to deal with query result", log.Any("response", response), log.Err(err))
+			log.Warn(ctx, "high level restful api, fail to deal with query result", log.Any("response", response), log.Err(err))
 			HTTPReturn(c, http.StatusOK, gin.H{
 				HTTPReturnCode:    merr.Code(merr.ErrInvalidSearchResult),
 				HTTPReturnMessage: merr.ErrInvalidSearchResult.Error() + ", error: " + err.Error(),
@@ -633,7 +633,7 @@ func (h *HandlersV1) get(c *gin.Context) {
 		allowJS, _ := strconv.ParseBool(c.Request.Header.Get(HTTPHeaderAllowInt64))
 		outputData, err := buildQueryResp(int64(0), queryResp.OutputFields, queryResp.FieldsData, nil, nil, allowJS, nil)
 		if err != nil {
-			log.Warn(context.TODO(), "high level restful api, fail to deal with get result", log.Any("response", response), log.Err(err))
+			log.Warn(ctx, "high level restful api, fail to deal with get result", log.Any("response", response), log.Err(err))
 			HTTPReturn(c, http.StatusOK, gin.H{
 				HTTPReturnCode:    merr.Code(merr.ErrInvalidSearchResult),
 				HTTPReturnMessage: merr.ErrInvalidSearchResult.Error() + ", error: " + err.Error(),
@@ -756,7 +756,7 @@ func (h *HandlersV1) insert(c *gin.Context) {
 		body, _ := c.Get(gin.BodyBytesKey)
 		err, httpReq.Data, _ = checkAndSetData(body.([]byte), collSchema, false)
 		if err != nil {
-			log.Warn(context.TODO(), "high level restful api, fail to deal with insert data", log.Any("body", body), log.Err(err))
+			log.Warn(reqCtx, "high level restful api, fail to deal with insert data", log.Any("body", body), log.Err(err))
 			HTTPAbortReturn(c, http.StatusOK, gin.H{
 				HTTPReturnCode:    merr.Code(merr.ErrInvalidInsertData),
 				HTTPReturnMessage: merr.ErrInvalidInsertData.Error() + ", error: " + err.Error(),
@@ -766,7 +766,7 @@ func (h *HandlersV1) insert(c *gin.Context) {
 		insertReq := req.(*milvuspb.InsertRequest)
 		insertReq.FieldsData, err = anyToColumns(httpReq.Data, nil, collSchema, true, false)
 		if err != nil {
-			log.Warn(context.TODO(), "high level restful api, fail to deal with insert data", log.Any("data", httpReq.Data), log.Err(err))
+			log.Warn(reqCtx, "high level restful api, fail to deal with insert data", log.Any("data", httpReq.Data), log.Err(err))
 			HTTPAbortReturn(c, http.StatusOK, gin.H{
 				HTTPReturnCode:    merr.Code(merr.ErrInvalidInsertData),
 				HTTPReturnMessage: merr.ErrInvalidInsertData.Error() + ", error: " + err.Error(),
@@ -864,7 +864,7 @@ func (h *HandlersV1) upsert(c *gin.Context) {
 		body, _ := c.Get(gin.BodyBytesKey)
 		err, httpReq.Data, _ = checkAndSetData(body.([]byte), collSchema, httpReq.PartialUpdate)
 		if err != nil {
-			log.Warn(context.TODO(), "high level restful api, fail to deal with upsert data", log.Any("body", body), log.Err(err))
+			log.Warn(reqCtx, "high level restful api, fail to deal with upsert data", log.Any("body", body), log.Err(err))
 			HTTPAbortReturn(c, http.StatusOK, gin.H{
 				HTTPReturnCode:    merr.Code(merr.ErrInvalidInsertData),
 				HTTPReturnMessage: merr.ErrInvalidInsertData.Error() + ", error: " + err.Error(),
@@ -874,7 +874,7 @@ func (h *HandlersV1) upsert(c *gin.Context) {
 		upsertReq := req.(*milvuspb.UpsertRequest)
 		upsertReq.FieldsData, err = anyToColumns(httpReq.Data, nil, collSchema, false, httpReq.PartialUpdate)
 		if err != nil {
-			log.Warn(context.TODO(), "high level restful api, fail to deal with upsert data", log.Any("data", httpReq.Data), log.Err(err))
+			log.Warn(reqCtx, "high level restful api, fail to deal with upsert data", log.Any("data", httpReq.Data), log.Err(err))
 			HTTPAbortReturn(c, http.StatusOK, gin.H{
 				HTTPReturnCode:    merr.Code(merr.ErrInvalidInsertData),
 				HTTPReturnMessage: merr.ErrInvalidInsertData.Error() + ", error: " + err.Error(),
@@ -962,7 +962,7 @@ func (h *HandlersV1) search(c *gin.Context) {
 		rangeFilter, rangeFilterOk := httpReq.Params[ParamRangeFilter]
 		if rangeFilterOk {
 			if !radiusOk {
-				log.Warn(context.TODO(), "high level restful api, search params invalid, because only " + ParamRangeFilter)
+				log.Warn(context.TODO(), "high level restful api, search params invalid, because only "+ParamRangeFilter)
 				HTTPAbortReturn(c, http.StatusOK, gin.H{
 					HTTPReturnCode:    merr.Code(merr.ErrIncorrectParameterFormat),
 					HTTPReturnMessage: merr.ErrIncorrectParameterFormat.Error() + ", error: invalid search params",
@@ -1011,7 +1011,7 @@ func (h *HandlersV1) search(c *gin.Context) {
 			allowJS, _ := strconv.ParseBool(c.Request.Header.Get(HTTPHeaderAllowInt64))
 			outputData, err := buildQueryResp(searchResp.Results.TopK, searchResp.Results.OutputFields, searchResp.Results.FieldsData, searchResp.Results.Ids, searchResp.Results.Scores, allowJS, nil)
 			if err != nil {
-				log.Warn(context.TODO(), "high level restful api, fail to deal with search result", log.Any("result", searchResp.Results), log.Err(err))
+				log.Warn(ctx, "high level restful api, fail to deal with search result", log.Any("result", searchResp.Results), log.Err(err))
 				HTTPReturn(c, http.StatusOK, gin.H{
 					HTTPReturnCode:    merr.Code(merr.ErrInvalidSearchResult),
 					HTTPReturnMessage: merr.ErrInvalidSearchResult.Error() + ", error: " + err.Error(),

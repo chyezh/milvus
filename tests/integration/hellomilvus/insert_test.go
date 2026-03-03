@@ -58,14 +58,14 @@ func (s *HelloMilvusSuite) TestInsertWithDuplicateField() {
 
 	err = merr.Error(createCollectionStatus)
 	if err != nil {
-		log.Warn(context.TODO(), "createCollectionStatus fail reason", log.Err(err))
+		log.Warn(ctx, "createCollectionStatus fail reason", log.Err(err))
 	}
 
-	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(ctx, "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := c.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.True(merr.Ok(showCollectionsResp.GetStatus()))
-	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(ctx, "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	// create index
 	createIndexStatus, err := c.MilvusClient.CreateIndex(ctx, &milvuspb.CreateIndexRequest{
@@ -77,11 +77,11 @@ func (s *HelloMilvusSuite) TestInsertWithDuplicateField() {
 	s.NoError(err)
 	err = merr.Error(createIndexStatus)
 	if err != nil {
-		log.Warn(context.TODO(), "createIndexStatus fail reason", log.Err(err))
+		log.Warn(ctx, "createIndexStatus fail reason", log.Err(err))
 	}
 
 	s.WaitForIndexBuilt(ctx, collectionName, integration.FloatVecField)
-	log.Info(context.TODO(), "Create index done")
+	log.Info(ctx, "Create index done")
 
 	// load
 	loadStatus, err := c.MilvusClient.LoadCollection(ctx, &milvuspb.LoadCollectionRequest{
@@ -91,10 +91,10 @@ func (s *HelloMilvusSuite) TestInsertWithDuplicateField() {
 	s.NoError(err)
 	err = merr.Error(loadStatus)
 	if err != nil {
-		log.Warn(context.TODO(), "LoadCollection fail reason", log.Err(err))
+		log.Warn(ctx, "LoadCollection fail reason", log.Err(err))
 	}
 	s.WaitForLoad(ctx, collectionName)
-	log.Info(context.TODO(), "Load collection done")
+	log.Info(ctx, "Load collection done")
 
 	pkFieldData := integration.NewInt64FieldData(integration.Int64Field, rowNum)
 	hashKeys := integration.GenerateHashKeys(rowNum)
@@ -108,11 +108,11 @@ func (s *HelloMilvusSuite) TestInsertWithDuplicateField() {
 	s.NoError(err)
 	s.False(merr.Ok(insertResult.GetStatus()))
 
-	log.Info(context.TODO(), "==================")
-	log.Info(context.TODO(), "==================")
-	log.Info(context.TODO(), "TestInsert succeed")
-	log.Info(context.TODO(), "==================")
-	log.Info(context.TODO(), "==================")
+	log.Info(ctx, "==================")
+	log.Info(ctx, "==================")
+	log.Info(ctx, "TestInsert succeed")
+	log.Info(ctx, "==================")
+	log.Info(ctx, "==================")
 }
 
 func (s *HelloMilvusSuite) TestInsertStorageV2() {
@@ -140,14 +140,14 @@ func (s *HelloMilvusSuite) TestInsertStorageV2() {
 
 	err = merr.Error(createCollectionStatus)
 	if err != nil {
-		log.Warn(context.TODO(), "createCollectionStatus fail reason", log.Err(err))
+		log.Warn(ctx, "createCollectionStatus fail reason", log.Err(err))
 	}
 
-	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(ctx, "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := c.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.True(merr.Ok(showCollectionsResp.GetStatus()))
-	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(ctx, "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	pkFieldData := integration.NewInt64FieldData(integration.Int64Field, rowNum)
 	vecFieldData := integration.NewFloatVectorFieldData(integration.FloatVecField, rowNum, dim)

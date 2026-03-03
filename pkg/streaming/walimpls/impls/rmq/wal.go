@@ -39,7 +39,7 @@ func (w *walImpl) Append(ctx context.Context, msg message.MutableMessage) (messa
 		Properties: pb.Properties,
 	})
 	if err != nil {
-		w.Log().RatedWarn(context.TODO(), log.RateDefault, "send message to rmq failed", log.Err(err))
+		w.Log().RatedWarn(ctx, log.RateDefault, "send message to rmq failed", log.Err(err))
 		return nil, err
 	}
 	return rmqID(id), nil

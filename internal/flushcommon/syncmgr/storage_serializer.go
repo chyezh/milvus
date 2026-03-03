@@ -71,7 +71,7 @@ func (s *storageV1Serializer) serializeBinlog(ctx context.Context, pack *SyncPac
 	for _, blob := range blobs {
 		fieldID, err := strconv.ParseInt(blob.GetKey(), 10, 64)
 		if err != nil {
-			log.Error(context.TODO(), "serialize buffer failed ... cannot parse string to fieldID ..", log.Err(err))
+			log.Error(ctx, "serialize buffer failed ... cannot parse string to fieldID ..", log.Err(err))
 			return nil, err
 		}
 

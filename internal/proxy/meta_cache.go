@@ -372,7 +372,7 @@ func InitMetaCache(ctx context.Context, mixCoord types.MixCoordClient) error {
 
 	err = privilege.InitPrivilegeCache(ctx, mixCoord)
 	if err != nil {
-		log.Error(context.TODO(), "failed to init privilege cache", log.Err(err))
+		log.Error(ctx, "failed to init privilege cache", log.Err(err))
 		return err
 	}
 
@@ -949,11 +949,11 @@ func (m *MetaCache) AllocID(ctx context.Context) (int64, error) {
 			Count: 1000000,
 		})
 		if err != nil {
-			log.Warn(context.TODO(), "Refreshing ID cache from rootcoord failed", log.Err(err))
+			log.Warn(ctx, "Refreshing ID cache from rootcoord failed", log.Err(err))
 			return 0, err
 		}
 		if resp.GetStatus().GetCode() != 0 {
-			log.Warn(context.TODO(), "Refreshing ID cache from rootcoord failed", log.String("failed detail", resp.GetStatus().GetDetail()))
+			log.Warn(ctx, "Refreshing ID cache from rootcoord failed", log.String("failed detail", resp.GetStatus().GetDetail()))
 			return 0, merr.WrapErrServiceInternal(resp.GetStatus().GetDetail())
 		}
 		m.IDStart, m.IDCount = resp.GetID(), int64(resp.GetCount())

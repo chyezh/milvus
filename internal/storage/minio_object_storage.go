@@ -58,7 +58,7 @@ func (minioObjectStorage *MinioObjectStorage) GetObject(ctx context.Context, buc
 	if offset > 0 {
 		err := opts.SetRange(offset, offset+size-1)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to set range", log.String("bucket", bucketName), log.String("path", objectName), log.Err(err))
+			log.Warn(ctx, "failed to set range", log.String("bucket", bucketName), log.String("path", objectName), log.Err(err))
 			return nil, checkObjectStorageError(objectName, err)
 		}
 	}

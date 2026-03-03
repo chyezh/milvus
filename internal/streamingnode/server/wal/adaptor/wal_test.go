@@ -434,7 +434,7 @@ func (f *testOneWALFramework) testRead(ctx context.Context, w wal.ROWAL) ([]mess
 	cnt := 5
 	for {
 		msg, ok := <-s.Chan()
-		log.Info(context.TODO(), "read message", log.Uint64("msg", msg.TimeTick()))
+		log.Info(ctx, "read message", log.Uint64("msg", msg.TimeTick()))
 		// make a random slow down to trigger cache expire.
 		if rand.Int31n(10) == 0 && cnt > 0 {
 			cnt--

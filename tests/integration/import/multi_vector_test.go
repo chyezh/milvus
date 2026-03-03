@@ -167,7 +167,7 @@ func (s *BulkInsertSuite) testMultipleVectorFields() {
 	})
 	s.NoError(err)
 	s.Equal(int32(0), importResp.GetStatus().GetCode())
-	log.Info(context.TODO(), "Import result", log.Any("importResp", importResp))
+	log.Info(ctx, "Import result", log.Any("importResp", importResp))
 
 	jobID := importResp.GetJobID()
 	err = WaitForImportDone(ctx, c, jobID)
@@ -184,7 +184,7 @@ func (s *BulkInsertSuite) testMultipleVectorFields() {
 	segments, err := c.ShowSegments(collectionName)
 	s.NoError(err)
 	s.NotEmpty(segments)
-	log.Info(context.TODO(), "Show segments", log.Any("segments", segments))
+	log.Info(ctx, "Show segments", log.Any("segments", segments))
 
 	// load refresh
 	loadStatus, err = c.MilvusClient.LoadCollection(ctx, &milvuspb.LoadCollectionRequest{

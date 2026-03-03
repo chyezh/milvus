@@ -31,8 +31,8 @@ import (
 	"github.com/milvus-io/milvus/internal/querynodev2/segments"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
@@ -117,7 +117,7 @@ func (sd *shardDelegator) addL0GrowingBF(ctx context.Context, segment segments.S
 
 func (sd *shardDelegator) addL0ForGrowingLoad(ctx context.Context, segment segments.Segment) error {
 	deltalogs := sd.getLevel0Deltalogs(segment.Partition())
-	log.Info(context.TODO(), "forwarding L0 via loader...", log.Int64("segmentID", segment.ID()), log.Int("deltalogsNum", len(deltalogs)))
+	log.Info(ctx, "forwarding L0 via loader...", log.Int64("segmentID", segment.ID()), log.Int("deltalogsNum", len(deltalogs)))
 	return sd.loader.LoadDeltaLogs(ctx, segment, deltalogs)
 }
 
@@ -225,7 +225,7 @@ func (sd *shardDelegator) forwardStreamingByBF(ctx context.Context, deleteData [
 		eg.Go(func() error {
 			worker, err := sd.workerManager.GetWorker(ctx, entry.NodeID)
 			if err != nil {
-				log.Warn(context.TODO(), "failed to get worker",
+				log.Warn(ctx, "failed to get worker",
 					log.Int64("nodeID", paramtable.GetNodeID()),
 					log.Err(err),
 				)
@@ -244,7 +244,7 @@ func (sd *shardDelegator) forwardStreamingByBF(ctx context.Context, deleteData [
 		eg.Go(func() error {
 			worker, err := sd.workerManager.GetWorker(ctx, paramtable.GetNodeID())
 			if err != nil {
-				log.Error(context.TODO(), "failed to get worker(local)",
+				log.Error(ctx, "failed to get worker(local)",
 					log.Int64("nodeID", paramtable.GetNodeID()),
 					log.Err(err),
 				)
@@ -265,7 +265,7 @@ func (sd *shardDelegator) forwardStreamingByBF(ctx context.Context, deleteData [
 	sd.distribution.Unpin(version)
 	offlineSegIDs := offlineSegments.Collect()
 	if len(offlineSegIDs) > 0 {
-		log.Warn(context.TODO(), "failed to apply delete, mark segment offline", log.Int64s("offlineSegments", offlineSegIDs))
+		log.Warn(ctx, "failed to apply delete, mark segment offline", log.Int64s("offlineSegments", offlineSegIDs))
 		sd.markSegmentOffline(offlineSegIDs...)
 	}
 
@@ -300,7 +300,7 @@ func (sd *shardDelegator) forwardStreamingDirect(ctx context.Context, deleteData
 				entry := entry
 				worker, err := sd.workerManager.GetWorker(ctx, entry.NodeID)
 				if err != nil {
-					log.Warn(context.TODO(), "failed to get worker",
+					log.Warn(ctx, "failed to get worker",
 						log.Int64("nodeID", entry.NodeID),
 						log.Err(err),
 					)
@@ -322,7 +322,7 @@ func (sd *shardDelegator) forwardStreamingDirect(ctx context.Context, deleteData
 			if len(growing) > 0 {
 				worker, err := sd.workerManager.GetWorker(ctx, paramtable.GetNodeID())
 				if err != nil {
-					log.Error(context.TODO(), "failed to get worker(local)",
+					log.Error(ctx, "failed to get worker(local)",
 						log.Int64("nodeID", paramtable.GetNodeID()),
 						log.Err(err),
 					)
@@ -343,7 +343,7 @@ func (sd *shardDelegator) forwardStreamingDirect(ctx context.Context, deleteData
 
 	offlineSegIDs := offlineSegments.Collect()
 	if len(offlineSegIDs) > 0 {
-		log.Warn(context.TODO(), "failed to apply delete, mark segment offline", log.Int64s("offlineSegments", offlineSegIDs))
+		log.Warn(ctx, "failed to apply delete, mark segment offline", log.Int64s("offlineSegments", offlineSegIDs))
 		sd.markSegmentOffline(offlineSegIDs...)
 	}
 

@@ -134,7 +134,7 @@ func (s *FlushAllSuite) TestFlushAll() {
 	// flush all
 	flushAllResp, err := c.MilvusClient.FlushAll(ctx, &milvuspb.FlushAllRequest{})
 	s.NoError(merr.CheckRPCCall(flushAllResp, err))
-	log.Info(context.TODO(), "FlushAll succeed")
+	log.Info(ctx, "FlushAll succeed")
 	s.WaitForFlushAll(ctx, flushAllResp.GetFlushAllMsgs())
 
 	// show and validate segments
@@ -159,7 +159,7 @@ func (s *FlushAllSuite) TestFlushAll() {
 		s.NoError(merr.CheckRPCCall(status, err))
 	}
 
-	log.Info(context.TODO(), "TestFlushAll succeed")
+	log.Info(ctx, "TestFlushAll succeed")
 }
 
 func TestFlushAll(t *testing.T) {

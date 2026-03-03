@@ -38,12 +38,12 @@ func (rs *recoveryStorageImpl) backgroundTask() {
 	ticker := time.NewTicker(rs.cfg.persistInterval)
 	defer func() {
 		ticker.Stop()
-		rs.Logger().Info(nil, "recovery storage background task, perform a graceful exit...")
+		rs.Logger().Info(context.TODO(), "recovery storage background task, perform a graceful exit...")
 		if err := rs.persistDritySnapshotWhenClosing(); err != nil {
-			rs.Logger().Warn(nil, "failed to persist dirty snapshot when closing", log.Err(err))
+			rs.Logger().Warn(context.TODO(), "failed to persist dirty snapshot when closing", log.Err(err))
 		}
 		rs.backgroundTaskNotifier.Finish(struct{}{})
-		rs.Logger().Info(nil, "recovery storage background task exit")
+		rs.Logger().Info(context.TODO(), "recovery storage background task exit")
 	}()
 
 	for {
@@ -93,16 +93,16 @@ func (rs *recoveryStorageImpl) persistDirtySnapshot(ctx context.Context, lvl zap
 	)
 	defer func() {
 		if err != nil {
-			logger.Warn(nil, "failed to persist dirty snapshot", log.Err(err))
+			logger.Warn(ctx, "failed to persist dirty snapshot", log.Err(err))
 			return
 		}
 		rs.pendingPersistSnapshot = nil
-		logger.Log(nil, lvl, "persist dirty snapshot")
+		logger.Log(ctx, lvl, "persist dirty snapshot")
 		rs.metrics.ObserveIsOnPersisting(false)
 	}()
 
 	if err := rs.dropAllVirtualChannel(ctx, snapshot.VChannels); err != nil {
-		logger.Warn(nil, "failed to drop all virtual channels", log.Err(err))
+		logger.Warn(ctx, "failed to drop all virtual channels", log.Err(err))
 		return err
 	}
 
@@ -212,7 +212,7 @@ func (rs *recoveryStorageImpl) retryOperationWithBackoff(ctx context.Context, lo
 		}
 
 		nextInterval := backoff.NextBackOff()
-		logger.Warn(nil, "failed to persist operation, wait for retry...", log.Duration("nextRetryInterval", nextInterval), log.Err(err))
+		logger.Warn(ctx, "failed to persist operation, wait for retry...", log.Duration("nextRetryInterval", nextInterval), log.Err(err))
 		select {
 		case <-time.After(nextInterval):
 		case <-ctx.Done():

@@ -36,7 +36,7 @@ func (dc *dataCoordBroker) AssignSegmentID(ctx context.Context, reqs ...*datapb.
 	resp, err := dc.client.AssignSegmentID(ctx, req)
 
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Warn(context.TODO(), "failed to call datacoord AssignSegmentID", log.Err(err))
+		log.Warn(ctx, "failed to call datacoord AssignSegmentID", log.Err(err))
 		return nil, err
 	}
 
@@ -57,7 +57,7 @@ func (dc *dataCoordBroker) ReportTimeTick(ctx context.Context, msgs []*msgpb.Dat
 
 	resp, err := dc.client.ReportDataNodeTtMsgs(ctx, req)
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Warn(context.TODO(), "failed to report datanodeTtMsgs", log.Err(err))
+		log.Warn(ctx, "failed to report datanodeTtMsgs", log.Err(err))
 		return err
 	}
 	return nil
@@ -77,13 +77,13 @@ func (dc *dataCoordBroker) GetSegmentInfo(ctx context.Context, ids []int64) ([]*
 			IncludeUnHealthy: true,
 		})
 		if err := merr.CheckRPCCall(infoResp, err); err != nil {
-			log.Warn(context.TODO(), "Fail to get SegmentInfo by ids from datacoord", log.Int64s("segments", ids), log.Err(err))
+			log.Warn(ctx, "Fail to get SegmentInfo by ids from datacoord", log.Int64s("segments", ids), log.Err(err))
 			return nil, err
 		}
 
 		err = binlog.DecompressMultiBinLogs(infoResp.GetInfos())
 		if err != nil {
-			log.Warn(context.TODO(), "Fail to DecompressMultiBinLogs", log.Int64s("segments", ids), log.Err(err))
+			log.Warn(ctx, "Fail to DecompressMultiBinLogs", log.Int64s("segments", ids), log.Err(err))
 			return nil, err
 		}
 		return infoResp, nil
@@ -97,7 +97,7 @@ func (dc *dataCoordBroker) GetSegmentInfo(ctx context.Context, ids []int64) ([]*
 
 		resp, err := getSegmentInfo(ids[startIdx:endIdx])
 		if err != nil {
-			log.Warn(context.TODO(), "Fail to get SegmentInfo", log.Int("total segment num", len(ids)), log.Int("returned num", startIdx))
+			log.Warn(ctx, "Fail to get SegmentInfo", log.Int("total segment num", len(ids)), log.Int("returned num", startIdx))
 			return nil, err
 		}
 		ret = append(ret, resp.GetInfos()...)
@@ -123,7 +123,7 @@ func (dc *dataCoordBroker) UpdateChannelCheckpoint(ctx context.Context, channelC
 		channelTimes := lo.Map(channelCPs, func(pos *msgpb.MsgPosition, _ int) time.Time {
 			return tsoutil.PhysicalTime(pos.GetTimestamp())
 		})
-		log.Warn(context.TODO(), "failed to update channel checkpoint", log.Strings("channelNames", channels),
+		log.Warn(ctx, "failed to update channel checkpoint", log.Strings("channelNames", channels),
 			log.Times("channelCheckpointTimes", channelTimes), log.Err(err))
 		return err
 	}
@@ -134,7 +134,7 @@ func (dc *dataCoordBroker) SaveBinlogPaths(ctx context.Context, req *datapb.Save
 
 	resp, err := dc.client.SaveBinlogPaths(ctx, req)
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Warn(context.TODO(), "failed to SaveBinlogPaths", log.Err(err))
+		log.Warn(ctx, "failed to SaveBinlogPaths", log.Err(err))
 		return err
 	}
 
@@ -145,7 +145,7 @@ func (dc *dataCoordBroker) DropVirtualChannel(ctx context.Context, req *datapb.D
 
 	resp, err := dc.client.DropVirtualChannel(ctx, req)
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Warn(context.TODO(), "failed to DropVirtualChannel", log.Err(err))
+		log.Warn(ctx, "failed to DropVirtualChannel", log.Err(err))
 		return resp, err
 	}
 

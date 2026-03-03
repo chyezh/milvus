@@ -140,13 +140,13 @@ func (lcm *LocalChunkManager) MultiRead(ctx context.Context, filePaths []string)
 
 func (lcm *LocalChunkManager) WalkWithPrefix(ctx context.Context, prefix string, recursive bool, walkFunc ChunkObjectWalkFunc) (err error) {
 	logger := log.With(log.String("prefix", prefix), log.Bool("recursive", recursive))
-	logger.Info(nil, "start walk through objects")
+	logger.Info(ctx, "start walk through objects")
 	defer func() {
 		if err != nil {
-			logger.Warn(nil, "failed to walk through objects", log.Err(err))
+			logger.Warn(ctx, "failed to walk through objects", log.Err(err))
 			return
 		}
-		logger.Info(nil, "finish walk through objects")
+		logger.Info(ctx, "finish walk through objects")
 	}()
 
 	if recursive {
@@ -252,7 +252,7 @@ func (lcm *LocalChunkManager) RemoveWithPrefix(ctx context.Context, prefix strin
 	// MultiRemove() will delete all these files. This is a danger behavior, empty prefix is not allowed.
 	if len(prefix) == 0 {
 		errMsg := "empty prefix is not allowed for ChunkManager remove operation"
-		log.Warn(context.TODO(), errMsg)
+		log.Warn(ctx, errMsg)
 		return merr.WrapErrParameterInvalidMsg(errMsg)
 	}
 	var removeErr error

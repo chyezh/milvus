@@ -73,7 +73,7 @@ func NewReader(ctx context.Context, cm storage.ChunkManager, schema *schemapb.Co
 	if err != nil {
 		return nil, merr.WrapErrImportFailed(fmt.Sprintf("new parquet reader failed, err=%v", err))
 	}
-	log.Info(context.TODO(), "parquet file info", log.Int("row group num", r.NumRowGroups()),
+	log.Info(ctx, "parquet file info", log.Int("row group num", r.NumRowGroups()),
 		log.Int64("num rows", r.NumRows()))
 
 	count, err := common.EstimateReadCountPerBatch(bufferSize, schema)

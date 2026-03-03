@@ -26,19 +26,19 @@ func (ut *upsertTask) Execute(ctx context.Context) error {
 
 	insertMsgs, err := ut.packInsertMessage(ctx, ez)
 	if err != nil {
-		log.Warn(context.TODO(), "pack insert message failed", log.Err(err))
+		log.Warn(ctx, "pack insert message failed", log.Err(err))
 		return err
 	}
 	deleteMsgs, err := ut.packDeleteMessage(ctx, ez)
 	if err != nil {
-		log.Warn(context.TODO(), "pack delete message failed", log.Err(err))
+		log.Warn(ctx, "pack delete message failed", log.Err(err))
 		return err
 	}
 
 	messages := append(insertMsgs, deleteMsgs...)
 	resp := streaming.WAL().AppendMessages(ctx, messages...)
 	if err := resp.UnwrapFirstError(); err != nil {
-		log.Warn(context.TODO(), "append messages to wal failed", log.Err(err))
+		log.Warn(ctx, "append messages to wal failed", log.Err(err))
 		return err
 	}
 	// Update result.Timestamp for session consistency.
@@ -61,13 +61,13 @@ func (ut *upsertTask) packInsertMessage(ctx context.Context, ez *message.CipherC
 	getMsgStreamDur := tr.RecordSpan()
 	channelNames, err := ut.chMgr.getVChannels(collID)
 	if err != nil {
-		log.Warn(context.TODO(), "get vChannels failed when insertExecute",
+		log.Warn(ctx, "get vChannels failed when insertExecute",
 			log.Err(err))
 		ut.result.Status = merr.Status(err)
 		return nil, err
 	}
 
-	log.Debug(context.TODO(), "send insert request to virtual channels when insertExecute",
+	log.Debug(ctx, "send insert request to virtual channels when insertExecute",
 		log.String("collection", ut.req.GetCollectionName()),
 		log.String("partition", ut.req.GetPartitionName()),
 		log.Int64("collection_id", collID),
@@ -84,7 +84,7 @@ func (ut *upsertTask) packInsertMessage(ctx context.Context, ez *message.CipherC
 		msgs, err = repackInsertDataWithPartitionKeyForStreamingService(ut.TraceCtx(), channelNames, ut.upsertMsg.InsertMsg, ut.result, ut.partitionKeys, ez)
 	}
 	if err != nil {
-		log.Warn(context.TODO(), "assign segmentID and repack insert data failed", log.Err(err))
+		log.Warn(ctx, "assign segmentID and repack insert data failed", log.Err(err))
 		ut.result.Status = merr.Status(err)
 		return nil, err
 	}
@@ -101,7 +101,7 @@ func (ut *upsertTask) packDeleteMessage(ctx context.Context, ez *message.CipherC
 	// hash primary keys to channels
 	vChannels, err := ut.chMgr.getVChannels(collID)
 	if err != nil {
-		log.Warn(context.TODO(), "get vChannels failed when deleteExecute", log.Err(err))
+		log.Warn(ctx, "get vChannels failed when deleteExecute", log.Err(err))
 		ut.result.Status = merr.Status(err)
 		return nil, err
 	}
@@ -137,7 +137,7 @@ func (ut *upsertTask) packDeleteMessage(ctx context.Context, ez *message.CipherC
 		}
 	}
 
-	log.Debug(context.TODO(), "Proxy Upsert deleteExecute done",
+	log.Debug(ctx, "Proxy Upsert deleteExecute done",
 		log.Int64("collection_id", collID),
 		log.Strings("virtual_channels", vChannels),
 		log.Int64("taskID", ut.ID()),

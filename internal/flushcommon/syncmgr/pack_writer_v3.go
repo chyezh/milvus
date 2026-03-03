@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 
-
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/internal/flushcommon/metacache"
@@ -112,7 +111,7 @@ func (bw *BulkPackWriterV3) writeInserts(ctx context.Context, pack *SyncPack) (m
 		var err error
 		logs, manifestPath, err = bw.writeInsertsIntoStorage(ctx, pluginContextPtr, rec, tsFrom, tsTo)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to write inserts into storage",
+			log.Warn(ctx, "failed to write inserts into storage",
 				log.Int64("collectionID", pack.collectionID),
 				log.Int64("segmentID", pack.segmentID),
 				log.Err(err))

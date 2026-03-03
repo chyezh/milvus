@@ -22,7 +22,6 @@ import (
 	"sort"
 	"time"
 
-
 	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
 	"github.com/milvus-io/milvus/internal/querycoordv2/assign"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
@@ -62,7 +61,7 @@ func CreateSegmentTasksFromPlans(ctx context.Context, source task.Source, timeou
 			actions...,
 		)
 		if err != nil {
-			log.Warn(context.TODO(), "create segment task from plan failed",
+			log.Warn(ctx, "create segment task from plan failed",
 				log.Int64("collection", p.Segment.GetCollectionID()),
 				log.Int64("segmentID", p.Segment.GetID()),
 				log.Int64("replica", p.Replica.GetID()),
@@ -74,7 +73,7 @@ func CreateSegmentTasksFromPlans(ctx context.Context, source task.Source, timeou
 			continue
 		}
 
-		log.Info(context.TODO(), "create segment task",
+		log.Info(ctx, "create segment task",
 			log.Int64("collection", p.Segment.GetCollectionID()),
 			log.Int64("segmentID", p.Segment.GetID()),
 			log.Int64("replica", p.Replica.GetID()),
@@ -112,7 +111,7 @@ func CreateChannelTasksFromPlans(ctx context.Context, source task.Source, timeou
 		}
 		t, err := task.NewChannelTask(ctx, timeout, source, p.Channel.GetCollectionID(), p.Replica, actions...)
 		if err != nil {
-			log.Warn(context.TODO(), "create channel task failed",
+			log.Warn(ctx, "create channel task failed",
 				log.Int64("collection", p.Channel.GetCollectionID()),
 				log.Int64("replica", p.Replica.GetID()),
 				log.String("channel", p.Channel.GetChannelName()),
@@ -123,7 +122,7 @@ func CreateChannelTasksFromPlans(ctx context.Context, source task.Source, timeou
 			continue
 		}
 
-		log.Info(context.TODO(), "create channel task",
+		log.Info(ctx, "create channel task",
 			log.Int64("collection", p.Channel.GetCollectionID()),
 			log.Int64("replica", p.Replica.GetID()),
 			log.String("channel", p.Channel.GetChannelName()),

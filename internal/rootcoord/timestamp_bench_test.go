@@ -53,7 +53,7 @@ func cleanTestEtcdEnv(cli *clientv3.Client, rootPath string) {
 	if _, err := cli.Delete(ctx, rootPath, clientv3.WithPrefix()); err != nil {
 		panic(err)
 	}
-	log.Debug(context.TODO(), "remove root path on etcd", log.String("rootPath", rootPath))
+	log.Debug(ctx, "remove root path on etcd", log.String("rootPath", rootPath))
 }
 
 func newBenchTSOAllocator(etcdCli *clientv3.Client, rootPath, subPath, key string) *tso.GlobalTSOAllocator {

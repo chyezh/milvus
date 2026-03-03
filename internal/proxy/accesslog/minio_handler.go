@@ -131,15 +131,15 @@ func newMinioClient(ctx context.Context, cfg config) (*minio.Client, error) {
 	checkBucketFn := func() error {
 		bucketExists, err = minioClient.BucketExists(ctx, cfg.bucketName)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to check blob bucket exist", log.String("bucket", cfg.bucketName), log.Err(err))
+			log.Warn(ctx, "failed to check blob bucket exist", log.String("bucket", cfg.bucketName), log.Err(err))
 			return err
 		}
 		if !bucketExists {
 			if cfg.createBucket {
-				log.Info(context.TODO(), "blob bucket not exist, create bucket.", log.String("bucket name", cfg.bucketName))
+				log.Info(ctx, "blob bucket not exist, create bucket.", log.String("bucket name", cfg.bucketName))
 				err := minioClient.MakeBucket(ctx, cfg.bucketName, minio.MakeBucketOptions{})
 				if err != nil {
-					log.Warn(context.TODO(), "failed to create blob bucket", log.String("bucket", cfg.bucketName), log.Err(err))
+					log.Warn(ctx, "failed to create blob bucket", log.String("bucket", cfg.bucketName), log.Err(err))
 					return err
 				}
 			} else {

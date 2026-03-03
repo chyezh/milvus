@@ -111,11 +111,11 @@ func (s *MetaWatcherSuite) TestShowSegments() {
 	s.NoError(err)
 	s.Equal(createCollectionStatus.GetErrorCode(), commonpb.ErrorCode_Success)
 
-	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(ctx, "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := c.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.Equal(showCollectionsResp.GetStatus().GetErrorCode(), commonpb.ErrorCode_Success)
-	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(ctx, "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	fVecColumn := NewFloatVectorFieldData(floatVecField, rowNum, dim)
 	hashKeys := GenerateHashKeys(rowNum)
@@ -148,7 +148,7 @@ func (s *MetaWatcherSuite) TestShowSegments() {
 		s.NoError(err)
 		if len(segments) != 0 {
 			for _, segment := range segments {
-				log.Info(context.TODO(), "ShowSegments result", log.String("segment", segment.String()))
+				log.Info(ctx, "ShowSegments result", log.String("segment", segment.String()))
 			}
 			return true
 		}
@@ -217,15 +217,15 @@ func (s *MetaWatcherSuite) TestShowReplicas() {
 	})
 	s.NoError(err)
 	if createCollectionStatus.GetErrorCode() != commonpb.ErrorCode_Success {
-		log.Warn(context.TODO(), "createCollectionStatus fail reason", log.String("reason", createCollectionStatus.GetReason()))
+		log.Warn(ctx, "createCollectionStatus fail reason", log.String("reason", createCollectionStatus.GetReason()))
 	}
 	s.Equal(createCollectionStatus.GetErrorCode(), commonpb.ErrorCode_Success)
 
-	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(ctx, "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := c.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.Equal(showCollectionsResp.GetStatus().GetErrorCode(), commonpb.ErrorCode_Success)
-	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(ctx, "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	fVecColumn := NewFloatVectorFieldData(floatVecField, rowNum, dim)
 	hashKeys := GenerateHashKeys(rowNum)
@@ -251,7 +251,7 @@ func (s *MetaWatcherSuite) TestShowReplicas() {
 		s.NoError(err)
 		if len(segments) != 0 {
 			for _, segment := range segments {
-				log.Info(context.TODO(), "ShowSegments result", log.String("segment", segment.String()))
+				log.Info(ctx, "ShowSegments result", log.String("segment", segment.String()))
 			}
 			return true
 		}
@@ -291,7 +291,7 @@ func (s *MetaWatcherSuite) TestShowReplicas() {
 	})
 	s.NoError(err)
 	if createIndexStatus.GetErrorCode() != commonpb.ErrorCode_Success {
-		log.Warn(context.TODO(), "createIndexStatus fail reason", log.String("reason", createIndexStatus.GetReason()))
+		log.Warn(ctx, "createIndexStatus fail reason", log.String("reason", createIndexStatus.GetReason()))
 	}
 	s.Equal(commonpb.ErrorCode_Success, createIndexStatus.GetErrorCode())
 
@@ -304,7 +304,7 @@ func (s *MetaWatcherSuite) TestShowReplicas() {
 	})
 	s.NoError(err)
 	if loadStatus.GetErrorCode() != commonpb.ErrorCode_Success {
-		log.Warn(context.TODO(), "loadStatus fail reason", log.String("reason", loadStatus.GetReason()))
+		log.Warn(ctx, "loadStatus fail reason", log.String("reason", loadStatus.GetReason()))
 	}
 	s.Equal(commonpb.ErrorCode_Success, loadStatus.GetErrorCode())
 	for {
@@ -324,10 +324,10 @@ func (s *MetaWatcherSuite) TestShowReplicas() {
 	s.NoError(err)
 	s.NotEmpty(replicas)
 	for _, replica := range replicas {
-		log.Info(context.TODO(), "ShowReplicas result", log.String("replica", cluster.PrettyReplica(replica)))
+		log.Info(ctx, "ShowReplicas result", log.String("replica", cluster.PrettyReplica(replica)))
 	}
 
-	log.Info(context.TODO(), "TestShowReplicas succeed")
+	log.Info(ctx, "TestShowReplicas succeed")
 }
 
 func TestMetaWatcher(t *testing.T) {

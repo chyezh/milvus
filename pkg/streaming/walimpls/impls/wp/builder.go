@@ -171,7 +171,7 @@ func (b *builderImpl) getEtcdClient(ctx context.Context) (*clientv3.Client, erro
 		etcdConfig.EtcdTLSMinVersion.GetValue(),
 		etcdConfig.ClientOptions()...)
 	if err != nil {
-		log.Warn(context.TODO(), "Woodpecker create connection to etcd failed", log.Err(err))
+		log.Warn(ctx, "Woodpecker create connection to etcd failed", log.Err(err))
 		return nil, err
 	}
 	return etcdCli, nil

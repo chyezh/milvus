@@ -183,7 +183,7 @@ func (t *sortCompactionTask) sortSegment(ctx context.Context) (*datapb.Compactio
 		storage.WithUseLoonFFI(t.useLoonFFI),
 	)
 	if err != nil {
-		log.Warn(context.TODO(), "sort segment wrong, unable to init segment writer",
+		log.Warn(ctx, "sort segment wrong, unable to init segment writer",
 			log.Int64("planID", t.plan.GetPlanID()), log.Err(err))
 		return nil, err
 	}
@@ -194,7 +194,7 @@ func (t *sortCompactionTask) sortSegment(ctx context.Context) (*datapb.Compactio
 		storage.WithDownloader(t.binlogIO.Download),
 		storage.WithStorageConfig(t.compactionParams.StorageConfig))
 	if err != nil {
-		log.Warn(context.TODO(), "load deletePKs failed", log.Err(err))
+		log.Warn(ctx, "load deletePKs failed", log.Err(err))
 		return nil, err
 	}
 	loadDeltaCost := time.Since(phaseStart)
@@ -230,7 +230,7 @@ func (t *sortCompactionTask) sortSegment(ctx context.Context) (*datapb.Compactio
 			return !entityFilter.Filtered(pk, uint64(ts), expireTs)
 		}
 	default:
-		log.Warn(context.TODO(), "sort task only support int64 and varchar pk field")
+		log.Warn(ctx, "sort task only support int64 and varchar pk field")
 	}
 
 	phaseStart = time.Now()
@@ -252,7 +252,7 @@ func (t *sortCompactionTask) sortSegment(ctx context.Context) (*datapb.Compactio
 		)
 	}
 	if err != nil {
-		log.Warn(context.TODO(), "error creating insert binlog reader", log.Err(err))
+		log.Warn(ctx, "error creating insert binlog reader", log.Err(err))
 		return nil, err
 	}
 	defer rr.Close()
@@ -261,7 +261,7 @@ func (t *sortCompactionTask) sortSegment(ctx context.Context) (*datapb.Compactio
 	rrs := []storage.RecordReader{rr}
 	numValidRows, sortTimings, err := storage.Sort(t.compactionParams.BinLogMaxSize, t.plan.GetSchema(), rrs, srw, predicate, t.sortByFieldIDs)
 	if err != nil {
-		log.Warn(context.TODO(), "sort failed", log.Err(err))
+		log.Warn(ctx, "sort failed", log.Err(err))
 		return nil, err
 	}
 	if sortTimings == nil {
@@ -295,7 +295,7 @@ func (t *sortCompactionTask) sortSegment(ctx context.Context) (*datapb.Compactio
 	debug.FreeOSMemory()
 
 	if numValidRows != int(numRows)-entityFilter.GetDeletedCount()-entityFilter.GetExpiredCount() {
-		log.Warn(context.TODO(), "unexpected row count after sort compaction",
+		log.Warn(ctx, "unexpected row count after sort compaction",
 			log.Int64("target segmentID", targetSegmentID),
 			log.Int64("old rows", numRows),
 			log.Int("valid rows", numValidRows),
@@ -304,7 +304,7 @@ func (t *sortCompactionTask) sortSegment(ctx context.Context) (*datapb.Compactio
 		return nil, merr.WrapErrServiceInternal("unexpected row count")
 	}
 
-	log.Info(context.TODO(), "sort segment end",
+	log.Info(ctx, "sort segment end",
 		log.Int64("target segmentID", targetSegmentID),
 		log.Int64("old rows", numRows),
 		log.Int("valid rows", numValidRows),
@@ -367,7 +367,7 @@ func (t *sortCompactionTask) Compact() (*datapb.CompactionPlanResult, error) {
 	ctx, span := otel.Tracer(typeutil.DataNodeRole).Start(t.ctx, fmt.Sprintf("MixCompact-%d", t.GetPlanID()))
 	defer span.End()
 	if err := t.preCompact(); err != nil {
-		log.Warn(context.TODO(), "failed to preCompact", log.Err(err))
+		log.Warn(ctx, "failed to preCompact", log.Err(err))
 		return &datapb.CompactionPlanResult{
 			PlanID: t.GetPlanID(),
 			State:  datapb.CompactionTaskState_failed,
@@ -376,13 +376,12 @@ func (t *sortCompactionTask) Compact() (*datapb.CompactionPlanResult, error) {
 
 	compactStart := time.Now()
 
-
-	log.Info(context.TODO(), "compact start")
+	log.Info(ctx, "compact start")
 
 	stepStart := time.Now()
 	res, err := t.sortSegment(ctx)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to sort segment",
+		log.Warn(ctx, "failed to sort segment",
 			log.Err(err))
 		return &datapb.CompactionPlanResult{
 			PlanID: t.GetPlanID(),
@@ -393,7 +392,7 @@ func (t *sortCompactionTask) Compact() (*datapb.CompactionPlanResult, error) {
 	targetSegemntID := res.GetSegments()[0].GetSegmentID()
 	insertLogs := res.GetSegments()[0].GetInsertLogs()
 	if len(insertLogs) == 0 || res.GetSegments()[0].GetNumOfRows() == 0 {
-		log.Info(context.TODO(), "compact done, but target segment is zero num rows",
+		log.Info(ctx, "compact done, but target segment is zero num rows",
 			log.Int64("targetSegmentID", targetSegemntID),
 			log.Duration("sortSegmentCost", sortSegmentCost),
 			log.Duration("compact cost", time.Since(compactStart)))
@@ -404,7 +403,7 @@ func (t *sortCompactionTask) Compact() (*datapb.CompactionPlanResult, error) {
 		t.collectionID, t.partitionID, targetSegemntID, t.GetPlanID(),
 		res.GetSegments()[0].GetInsertLogs())
 	if err != nil {
-		log.Warn(context.TODO(), "failed to create text indexes", log.Int64("targetSegmentID", targetSegemntID),
+		log.Warn(ctx, "failed to create text indexes", log.Int64("targetSegmentID", targetSegemntID),
 			log.Err(err))
 		return &datapb.CompactionPlanResult{
 			PlanID: t.GetPlanID(),
@@ -415,7 +414,7 @@ func (t *sortCompactionTask) Compact() (*datapb.CompactionPlanResult, error) {
 	res.Segments[0].TextStatsLogs = textStatsLogs
 
 	totalCost := time.Since(compactStart)
-	log.Info(context.TODO(), "compact done", log.Int64("targetSegmentID", targetSegemntID),
+	log.Info(ctx, "compact done", log.Int64("targetSegmentID", targetSegemntID),
 		log.Duration("sortSegmentCost", sortSegmentCost),
 		log.Duration("createTextIndexCost", createTextIndexCost),
 		log.Duration("compact cost", totalCost))

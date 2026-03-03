@@ -229,12 +229,12 @@ func (b *LookAsideBalancer) checkQueryNodeHealthLoop(ctx context.Context) {
 	checkHealthInterval := paramtable.Get().ProxyCfg.CheckQueryNodeHealthInterval.GetAsDuration(time.Millisecond)
 	ticker := time.NewTicker(checkHealthInterval)
 	defer ticker.Stop()
-	log.Info(context.TODO(), "Start check query node health loop")
+	log.Info(ctx, "Start check query node health loop")
 	pool := conc.NewDefaultPool[any]()
 	for {
 		select {
 		case <-b.closeCh:
-			log.Info(context.TODO(), "check query node health loop exit")
+			log.Info(ctx, "check query node health loop exit")
 			return
 
 		case <-ticker.C:
@@ -256,20 +256,20 @@ func (b *LookAsideBalancer) checkQueryNodeHealthLoop(ctx context.Context) {
 						if err != nil {
 							// get client from clientMgr failed, which means this qn isn't a shard leader anymore, skip it's health check
 							b.trySetQueryNodeUnReachable(node, err)
-							log.RatedInfo(context.TODO(), log.RateDefault, "get client failed", log.Int64("node", node), log.Err(err))
+							log.RatedInfo(ctx, log.RateDefault, "get client failed", log.Int64("node", node), log.Err(err))
 							return struct{}{}, nil
 						}
 
 						resp, err := qn.GetComponentStates(ctx, &milvuspb.GetComponentStatesRequest{})
 						if err != nil {
 							b.trySetQueryNodeUnReachable(node, err)
-							log.RatedWarn(context.TODO(), log.RateDefault, "get component status failed, set node unreachable", log.Int64("node", node), log.Err(err))
+							log.RatedWarn(ctx, log.RateDefault, "get component status failed, set node unreachable", log.Int64("node", node), log.Err(err))
 							return struct{}{}, nil
 						}
 
 						if resp.GetState().GetStateCode() != commonpb.StateCode_Healthy {
 							b.trySetQueryNodeUnReachable(node, merr.ErrServiceUnavailable)
-							log.RatedWarn(context.TODO(), log.RateDefault, "component status unhealthy, set node unreachable", log.Int64("node", node), log.Err(err))
+							log.RatedWarn(ctx, log.RateDefault, "component status unhealthy, set node unreachable", log.Int64("node", node), log.Err(err))
 
 							return struct{}{}, nil
 						}

@@ -1,6 +1,8 @@
 package utility
 
 import (
+	"context"
+
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
@@ -77,7 +79,7 @@ func (b *TxnBuffer) handleBeginTxn(msg message.ImmutableMessage) {
 	if _, ok := b.builders[beginMsg.TxnContext().TxnID]; ok {
 		// Because the wal on secondary node may replicate the same txn message, so we need to reset the txn from buffer to avoid
 		// the txn body repeated.
-		b.logger.Warn(nil,
+		b.logger.Warn(context.TODO(),
 			"txn id already exist, rollback the txn from buffer",
 			log.Int64("txnID", int64(beginMsg.TxnContext().TxnID)),
 			log.Any("messageID", beginMsg.MessageID()),
@@ -101,7 +103,7 @@ func (b *TxnBuffer) handleCommitTxn(msg message.ImmutableMessage) message.Immuta
 	}
 	builder, ok := b.builders[commitMsg.TxnContext().TxnID]
 	if !ok {
-		b.logger.Warn(nil,
+		b.logger.Warn(context.TODO(),
 			"txn id not exist, it may be a repeated committed message, so ignore it",
 			log.Int64("txnID", int64(commitMsg.TxnContext().TxnID)),
 			log.Any("messageID", commitMsg.MessageID()),
@@ -115,14 +117,14 @@ func (b *TxnBuffer) handleCommitTxn(msg message.ImmutableMessage) message.Immuta
 	delete(b.builders, commitMsg.TxnContext().TxnID)
 	if err != nil {
 		b.metrics.ObserveErrorTxn()
-		b.logger.Warn(nil,
+		b.logger.Warn(context.TODO(),
 			"failed to build txn message, it's a critical error, some data is lost",
 			log.Int64("txnID", int64(commitMsg.TxnContext().TxnID)),
 			log.Any("messageID", commitMsg.MessageID()),
 			log.Err(err))
 		return nil
 	}
-	b.logger.Debug(nil,
+	b.logger.Debug(context.TODO(),
 		"the txn is committed",
 		log.Int64("txnID", int64(commitMsg.TxnContext().TxnID)),
 		log.Any("messageID", commitMsg.MessageID()),
@@ -142,7 +144,7 @@ func (b *TxnBuffer) handleRollbackTxn(msg message.ImmutableMessage) {
 			log.Err(err))
 		return
 	}
-	b.logger.Debug(nil,
+	b.logger.Debug(context.TODO(),
 		"the txn is rollback, so drop the txn from buffer",
 		log.Int64("txnID", int64(rollbackMsg.TxnContext().TxnID)),
 		log.Any("messageID", rollbackMsg.MessageID()),
@@ -163,7 +165,7 @@ func (b *TxnBuffer) rollbackTxn(txnID message.TxnID) {
 func (b *TxnBuffer) handleTxnBodyMessage(msg message.ImmutableMessage) {
 	builder, ok := b.builders[msg.TxnContext().TxnID]
 	if !ok {
-		b.logger.Warn(nil,
+		b.logger.Warn(context.TODO(),
 			"txn id not exist, so ignore the body message",
 			log.Int64("txnID", int64(msg.TxnContext().TxnID)),
 			log.Any("messageID", msg.MessageID()),
@@ -182,7 +184,7 @@ func (b *TxnBuffer) clearExpiredTxn(ts uint64) {
 			b.bytes -= builder.EstimateSize()
 			b.metrics.ObserveExpiredTxn()
 			if b.logger.Level().Enabled(zap.DebugLevel) {
-				b.logger.Debug(nil,
+				b.logger.Debug(context.TODO(),
 					"the txn is expired, so drop the txn from buffer",
 					log.Int64("txnID", int64(txnID)),
 					log.Uint64("expiredTimeTick", builder.ExpiredTimeTick()),

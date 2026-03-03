@@ -22,7 +22,6 @@ import (
 	"strconv"
 	"sync"
 
-
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/types"
@@ -91,12 +90,12 @@ func getDmlChannelsFunc(ctx context.Context, mixc types.MixCoordClient) getChann
 
 		resp, err := mixc.DescribeCollection(ctx, req)
 		if err != nil {
-			log.Error(context.TODO(), "failed to describe collection", log.Err(err), log.Int64("collection", collectionID))
+			log.Error(ctx, "failed to describe collection", log.Err(err), log.Int64("collection", collectionID))
 			return channelInfos{}, err
 		}
 
 		if resp.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-			log.Error(context.TODO(), "failed to describe collection",
+			log.Error(ctx, "failed to describe collection",
 				log.String("error_code", resp.GetStatus().GetErrorCode().String()),
 				log.String("reason", resp.GetStatus().GetReason()))
 			return channelInfos{}, merr.Error(resp.GetStatus())

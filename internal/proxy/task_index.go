@@ -792,7 +792,7 @@ func (t *alterIndexTask) PreExecute(ctx context.Context) error {
 
 func (t *alterIndexTask) Execute(ctx context.Context) error {
 
-	log.Info(context.TODO(), "alter index")
+	log.Info(ctx, "alter index")
 
 	var err error
 	req := &indexpb.AlterIndexRequest{

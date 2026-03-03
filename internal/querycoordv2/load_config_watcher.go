@@ -17,6 +17,7 @@
 package querycoordv2
 
 import (
+	"context"
 	"time"
 
 	"github.com/samber/lo"
@@ -62,9 +63,9 @@ func (w *LoadConfigWatcher) Trigger() {
 func (w *LoadConfigWatcher) background() {
 	defer func() {
 		w.notifier.Finish(struct{}{})
-		w.Logger().Info(nil, "load config watcher stopped")
+		w.Logger().Info(context.TODO(), "load config watcher stopped")
 	}()
-	w.Logger().Info(nil, "load config watcher started")
+	w.Logger().Info(context.TODO(), "load config watcher started")
 
 	balanceTimer := typeutil.NewBackoffTimer(typeutil.BackoffTimerConfig{
 		Default: time.Minute,
@@ -81,7 +82,7 @@ func (w *LoadConfigWatcher) background() {
 		case <-w.notifier.Context().Done():
 			return
 		case <-w.triggerCh:
-			w.Logger().Info(nil, "load config watcher triggered")
+			w.Logger().Info(context.TODO(), "load config watcher triggered")
 		case <-nextTimer:
 		}
 		if err := w.applyLoadConfigChanges(); err != nil {
@@ -103,19 +104,19 @@ func (w *LoadConfigWatcher) applyLoadConfigChanges() error {
 	}
 
 	if newReplicaNum <= 0 || len(newRGs) == 0 {
-		w.Logger().Info(nil, "illegal cluster level load config, skip it", log.Int32("replica_num", newReplicaNum), log.Strings("resource_groups", newRGs))
+		w.Logger().Info(context.TODO(), "illegal cluster level load config, skip it", log.Int32("replica_num", newReplicaNum), log.Strings("resource_groups", newRGs))
 		return nil
 	}
 
 	if len(newRGs) != 1 && len(newRGs) != int(newReplicaNum) {
-		w.Logger().Info(nil, "illegal cluster level load config, skip it", log.Int32("replica_num", newReplicaNum), log.Strings("resource_groups", newRGs))
+		w.Logger().Info(context.TODO(), "illegal cluster level load config, skip it", log.Int32("replica_num", newReplicaNum), log.Strings("resource_groups", newRGs))
 		return nil
 	}
 
 	left, right := lo.Difference(w.previousRGs, newRGs)
 	rgChanged := len(left) > 0 || len(right) > 0
 	if w.previousReplicaNum == newReplicaNum && !rgChanged {
-		w.Logger().Info(nil, "no need to update load config, skip it", log.Int32("replica_num", newReplicaNum), log.Strings("resource_groups", newRGs))
+		w.Logger().Info(context.TODO(), "no need to update load config, skip it", log.Int32("replica_num", newReplicaNum), log.Strings("resource_groups", newRGs))
 		return nil
 	}
 
@@ -124,21 +125,21 @@ func (w *LoadConfigWatcher) applyLoadConfigChanges() error {
 	collectionIDs = lo.Filter(collectionIDs, func(collectionID int64, _ int) bool {
 		collection := w.s.meta.GetCollection(w.notifier.Context(), collectionID)
 		if collection.UserSpecifiedReplicaMode {
-			w.Logger().Info(nil, "collection is user specified replica mode, skip update load config", log.Int64("collectionID", collectionID))
+			w.Logger().Info(context.TODO(), "collection is user specified replica mode, skip update load config", log.Int64("collectionID", collectionID))
 			return false
 		}
 		return true
 	})
 
 	if len(collectionIDs) == 0 {
-		w.Logger().Info(nil, "no collection to update load config, skip it")
+		w.Logger().Info(context.TODO(), "no collection to update load config, skip it")
 	}
 
 	if err := w.s.updateLoadConfig(w.notifier.Context(), collectionIDs, newReplicaNum, newRGs); err != nil {
-		w.Logger().Warn(nil, "failed to update load config", log.Err(err))
+		w.Logger().Warn(context.TODO(), "failed to update load config", log.Err(err))
 		return err
 	}
-	w.Logger().Info(nil, "apply load config changes",
+	w.Logger().Info(context.TODO(), "apply load config changes",
 		log.Int64s("collectionIDs", collectionIDs),
 		log.Int32("previousReplicaNum", w.previousReplicaNum),
 		log.Strings("previousResourceGroups", w.previousRGs),

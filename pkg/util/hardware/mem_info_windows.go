@@ -19,6 +19,7 @@ package hardware
 
 import (
 	"context"
+
 	"github.com/shirou/gopsutil/v3/mem"
 
 	"github.com/milvus-io/milvus/pkg/v2/log"

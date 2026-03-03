@@ -30,7 +30,7 @@ func (r *recoveryStorageImpl) recoverFromStream(
 		log.String("state", recoveryStorageStateStreamRecovering),
 	))
 
-	r.Logger().Info(nil, "recover from wal stream...")
+	r.Logger().Info(context.TODO(), "recover from wal stream...")
 	rs := recoveryStreamBuilder.Build(BuildRecoveryStreamParam{
 		StartCheckpoint: r.checkpoint.MessageID,
 		EndTimeTick:     lastTimeTickMessage.TimeTick(),
@@ -38,7 +38,7 @@ func (r *recoveryStorageImpl) recoverFromStream(
 	defer func() {
 		rs.Close()
 		if err != nil {
-			r.Logger().Warn(nil, "recovery from wal stream failed", log.Err(err))
+			r.Logger().Warn(context.TODO(), "recovery from wal stream failed", log.Err(err))
 			return
 		}
 	}()
@@ -73,7 +73,7 @@ L:
 			log.Stringer("targetWALName", snapshot.AlterWALInfo.TargetWALName),
 		)
 	}
-	r.Logger().Info(nil, "recovery from wal stream done", logFields...)
+	r.Logger().Info(context.TODO(), "recovery from wal stream done", logFields...)
 	return snapshot, nil
 }
 
@@ -102,7 +102,7 @@ func (r *recoveryStorageImpl) getSnapshot() *RecoverySnapshot {
 		// non-atomic etcd persistence or Kafka offset compaction replaying CreateSegment
 		// for dropped collections/partitions.
 		if _, ok := vchannels[segment.meta.Vchannel]; !ok {
-			r.Logger().Warn(nil, "getSnapshot: skipping orphaned growing segment with non-active vchannel",
+			r.Logger().Warn(context.TODO(), "getSnapshot: skipping orphaned growing segment with non-active vchannel",
 				log.Int64("segmentID", segmentID),
 				log.String("vchannel", segment.meta.Vchannel),
 				log.Int64("collectionID", segment.meta.CollectionId),
@@ -110,7 +110,7 @@ func (r *recoveryStorageImpl) getSnapshot() *RecoverySnapshot {
 			continue
 		}
 		if _, ok := activePartitions[segment.meta.PartitionId]; !ok {
-			r.Logger().Warn(nil, "getSnapshot: skipping orphaned growing segment with dropped partition",
+			r.Logger().Warn(context.TODO(), "getSnapshot: skipping orphaned growing segment with dropped partition",
 				log.Int64("segmentID", segmentID),
 				log.String("vchannel", segment.meta.Vchannel),
 				log.Int64("collectionID", segment.meta.CollectionId),

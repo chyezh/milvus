@@ -19,7 +19,6 @@ package querycoordv2
 import (
 	"context"
 
-
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/rgpb"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
@@ -93,7 +92,7 @@ func (s *Server) broadcastTransferNode(ctx context.Context, req *milvuspb.Transf
 	// Move node from source resource group to target resource group.
 	rgs, err := s.meta.ResourceManager.CheckIfTransferNode(ctx, req.GetSourceResourceGroup(), req.GetTargetResourceGroup(), int(req.GetNumNode()))
 	if err != nil {
-		log.Warn(context.TODO(), "failed to transfer node", log.Err(err))
+		log.Warn(ctx, "failed to transfer node", log.Err(err))
 		return err
 	}
 

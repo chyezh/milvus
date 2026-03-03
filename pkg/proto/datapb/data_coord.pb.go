@@ -7,6 +7,9 @@
 package datapb
 
 import (
+	reflect "reflect"
+	sync "sync"
+
 	commonpb "github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	milvuspb "github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	msgpb "github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
@@ -15,8 +18,6 @@ import (
 	internalpb "github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
-	reflect "reflect"
-	sync "sync"
 )
 
 const (

@@ -35,8 +35,8 @@ import (
 	globalTask "github.com/milvus-io/milvus/internal/datacoord/task"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/taskcommon"
@@ -262,18 +262,18 @@ func (t *clusteringCompactionTask) Process() bool {
 		if t.GetTaskProto().State == datapb.CompactionTaskState_completed || t.GetTaskProto().State == datapb.CompactionTaskState_cleaned {
 			updateOps = append(updateOps, setEndTime(ts))
 			elapse := ts - t.GetTaskProto().StartTime
-			log.Info(context.TODO(), "clustering compaction task total elapse", log.Duration("costs", time.Duration(elapse)*time.Second))
+			log.Info(ctx, "clustering compaction task total elapse", log.Duration("costs", time.Duration(elapse)*time.Second))
 			metrics.DataCoordCompactionLatency.
 				WithLabelValues(fmt.Sprint(typeutil.IsVectorType(t.GetTaskProto().GetClusteringKeyField().DataType)), t.GetTaskProto().Channel, datapb.CompactionType_ClusteringCompaction.String(), "total").
 				Observe(float64(elapse * 1000))
 		}
 		err = t.updateAndSaveTaskMeta(updateOps...)
 		if err != nil {
-			log.Warn(context.TODO(), "Failed to updateAndSaveTaskMeta", log.Err(err))
+			log.Warn(ctx, "Failed to updateAndSaveTaskMeta", log.Err(err))
 		}
-		log.Info(context.TODO(), "clustering compaction task state changed", log.String("lastState", lastState), log.String("currentState", currentState), log.Int64("elapse seconds", lastStateDuration))
+		log.Info(ctx, "clustering compaction task state changed", log.String("lastState", lastState), log.String("currentState", currentState), log.Int64("elapse seconds", lastStateDuration))
 	}
-	log.Debug(context.TODO(), "process clustering task", log.String("lastState", lastState), log.String("currentState", currentState))
+	log.Debug(ctx, "process clustering task", log.String("lastState", lastState), log.String("currentState", currentState))
 	return t.GetTaskProto().State == datapb.CompactionTaskState_completed ||
 		t.GetTaskProto().State == datapb.CompactionTaskState_cleaned ||
 		t.GetTaskProto().State == datapb.CompactionTaskState_failed ||
@@ -293,12 +293,12 @@ func (t *clusteringCompactionTask) retryableProcess(ctx context.Context) error {
 	coll, err := t.handler.GetCollection(ctx, t.GetTaskProto().GetCollectionID())
 	if err != nil {
 		// retryable
-		log.Warn(context.TODO(), "fail to get collection", log.Int64("collectionID", t.GetTaskProto().GetCollectionID()), log.Err(err))
+		log.Warn(ctx, "fail to get collection", log.Int64("collectionID", t.GetTaskProto().GetCollectionID()), log.Err(err))
 		return merr.WrapErrClusteringCompactionGetCollectionFail(t.GetTaskProto().GetCollectionID(), err)
 	}
 	if coll == nil {
 		// not-retryable fail fast if collection is dropped
-		log.Warn(context.TODO(), "collection not found, it may be dropped, stop clustering compaction task", log.Int64("collectionID", t.GetTaskProto().GetCollectionID()))
+		log.Warn(ctx, "collection not found, it may be dropped, stop clustering compaction task", log.Int64("collectionID", t.GetTaskProto().GetCollectionID()))
 		return merr.WrapErrCollectionNotFound(t.GetTaskProto().GetCollectionID())
 	}
 
@@ -438,7 +438,7 @@ func (t *clusteringCompactionTask) regeneratePartitionStats(tmpToResultSegments 
 	chunkManagerFactory := storage.NewChunkManagerFactoryWithParam(Params)
 	cli, err := chunkManagerFactory.NewPersistentStorageChunkManager(ctx)
 	if err != nil {
-		log.Error(context.TODO(), "chunk manager init failed", log.Err(err))
+		log.Error(ctx, "chunk manager init failed", log.Err(err))
 		return err
 	}
 	partitionStatsFile := path.Join(cli.RootPath(), common.PartitionStatsPath,
@@ -447,13 +447,13 @@ func (t *clusteringCompactionTask) regeneratePartitionStats(tmpToResultSegments 
 
 	value, err := cli.Read(ctx, partitionStatsFile)
 	if err != nil {
-		log.Warn(context.TODO(), "read partition stats file failed", log.Int64("planID", t.GetTaskProto().GetPlanID()), log.Err(err))
+		log.Warn(ctx, "read partition stats file failed", log.Int64("planID", t.GetTaskProto().GetPlanID()), log.Err(err))
 		return err
 	}
 
 	partitionStats, err := storage.DeserializePartitionsStatsSnapshot(value)
 	if err != nil {
-		log.Warn(context.TODO(), "deserialize partition stats failed", log.Int64("planID", t.GetTaskProto().GetPlanID()), log.Err(err))
+		log.Warn(ctx, "deserialize partition stats failed", log.Int64("planID", t.GetTaskProto().GetPlanID()), log.Err(err))
 		return err
 	}
 
@@ -468,13 +468,13 @@ func (t *clusteringCompactionTask) regeneratePartitionStats(tmpToResultSegments 
 
 	partitionStatsBytes, err := storage.SerializePartitionStatsSnapshot(partitionStats)
 	if err != nil {
-		log.Warn(context.TODO(), "serialize partition stats failed", log.Int64("planID", t.GetTaskProto().GetPlanID()), log.Err(err))
+		log.Warn(ctx, "serialize partition stats failed", log.Int64("planID", t.GetTaskProto().GetPlanID()), log.Err(err))
 		return err
 	}
 
 	err = cli.Write(ctx, partitionStatsFile, partitionStatsBytes)
 	if err != nil {
-		log.Warn(context.TODO(), "save partition stats file failed", log.Int64("planID", t.GetTaskProto().GetPlanID()),
+		log.Warn(ctx, "save partition stats file failed", log.Int64("planID", t.GetTaskProto().GetPlanID()),
 			log.String("path", partitionStatsFile), log.Err(err))
 		return err
 	}

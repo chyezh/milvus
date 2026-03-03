@@ -88,11 +88,11 @@ func (s *BalanceTestSuit) initCollection(collectionName string, replica int, cha
 	s.NoError(err)
 	s.True(merr.Ok(createCollectionStatus))
 
-	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(ctx, "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := s.Cluster.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.True(merr.Ok(showCollectionsResp.Status))
-	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(ctx, "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	for i := 0; i < segmentNum; i++ {
 		fVecColumn := integration.NewFloatVectorFieldData(integration.FloatVecField, segmentRowNum, dim)
@@ -113,7 +113,7 @@ func (s *BalanceTestSuit) initCollection(collectionName string, replica int, cha
 			}
 
 			pks := insertResult.GetIDs().GetIntId().GetData()
-			log.Info(context.TODO(), "========================delete expr==================",
+			log.Info(ctx, "========================delete expr==================",
 				log.Int("length of pk", len(pks)),
 			)
 
@@ -153,7 +153,7 @@ func (s *BalanceTestSuit) initCollection(collectionName string, replica int, cha
 	s.NoError(err)
 	s.True(merr.Ok(createIndexStatus))
 	s.WaitForIndexBuilt(ctx, collectionName, integration.FloatVecField)
-	log.Info(context.TODO(), "index create done")
+	log.Info(ctx, "index create done")
 
 	// load
 	loadStatus, err := s.Cluster.MilvusClient.LoadCollection(ctx, &milvuspb.LoadCollectionRequest{
@@ -165,7 +165,7 @@ func (s *BalanceTestSuit) initCollection(collectionName string, replica int, cha
 	s.Equal(commonpb.ErrorCode_Success, loadStatus.GetErrorCode())
 	s.True(merr.Ok(loadStatus))
 	s.WaitForLoad(ctx, collectionName)
-	log.Info(context.TODO(), "initCollection Done")
+	log.Info(ctx, "initCollection Done")
 }
 
 func (s *BalanceTestSuit) TestBalanceOnSingleReplica() {
@@ -188,7 +188,7 @@ func testBalanceOnSingleReplica(s *BalanceTestSuit) {
 		resp2, err := sn.GetDataDistribution(ctx, &querypb.GetDataDistributionRequest{})
 		s.NoError(err)
 		s.True(merr.Ok(resp.GetStatus()))
-		log.Info(context.TODO(), "balance on single replica", log.Int("channel", len(resp2.Channels)), log.Int("segments", len(resp.Segments)))
+		log.Info(ctx, "balance on single replica", log.Int("channel", len(resp2.Channels)), log.Int("segments", len(resp.Segments)))
 		return len(resp2.Channels) == 1 && len(resp.Segments) == 2
 	}, 30*time.Second, 1*time.Second)
 
@@ -235,7 +235,7 @@ func (s *BalanceTestSuit) TestBalanceOnMultiReplica() {
 		s.NoError(err)
 		resp4, err := sn2.GetDataDistribution(ctx, &querypb.GetDataDistributionRequest{})
 		s.NoError(err)
-		log.Info(context.TODO(), "balance on multi replica",
+		log.Info(ctx, "balance on multi replica",
 			log.Int("channel1", len(resp2.Channels)), log.Int("segments1", len(resp.Segments)),
 			log.Int("channel2", len(resp4.Channels)), log.Int("segments2", len(resp3.Segments)))
 		// TODO:https://github.com/milvus-io/milvus/issues/42966
@@ -253,7 +253,7 @@ func (s *BalanceTestSuit) TestBalanceOnMultiReplica() {
 			s.True(merr.Ok(resp1.GetStatus()))
 			segNum += len(resp1.Segments)
 			chNum += len(resp1.Channels)
-			log.Info(context.TODO(), "balance on multi replica",
+			log.Info(ctx, "balance on multi replica",
 				log.Int("channel", len(resp1.Channels)), log.Int("segments", len(resp1.Segments)))
 		}
 		// TODO:https://github.com/milvus-io/milvus/issues/42966
@@ -286,7 +286,7 @@ func (s *BalanceTestSuit) TestNodeDown() {
 		resp, err := qn1.MustGetClient(ctx).GetDataDistribution(ctx, &querypb.GetDataDistributionRequest{})
 		s.NoError(err)
 		s.True(merr.Ok(resp.GetStatus()))
-		log.Info(context.TODO(), "balance when node down", log.Any("channel", resp.Channels), log.Any("segments", len(resp.Segments)))
+		log.Info(ctx, "balance when node down", log.Any("channel", resp.Channels), log.Any("segments", len(resp.Segments)))
 		return len(resp.Channels) == 0 && len(resp.Segments) >= 10
 	}, 30*time.Second, 1*time.Second)
 
@@ -294,7 +294,7 @@ func (s *BalanceTestSuit) TestNodeDown() {
 		resp, err := qn2.GetDataDistribution(ctx, &querypb.GetDataDistributionRequest{})
 		s.NoError(err)
 		s.True(merr.Ok(resp.GetStatus()))
-		log.Info(context.TODO(), "balance when node down", log.Any("channel", resp.Channels), log.Any("segments", resp.Segments))
+		log.Info(ctx, "balance when node down", log.Any("channel", resp.Channels), log.Any("segments", resp.Segments))
 		return len(resp.Channels) == 0 && len(resp.Segments) >= 10
 	}, 30*time.Second, 1*time.Second)
 
@@ -316,7 +316,7 @@ func (s *BalanceTestSuit) TestNodeDown() {
 		resp, err := qn2.GetDataDistribution(ctx, &querypb.GetDataDistributionRequest{})
 		s.NoError(err)
 		s.True(merr.Ok(resp.GetStatus()))
-		log.Info(context.TODO(), "balance when node down", log.Any("channel", resp.Channels), log.Any("segments", resp.Segments))
+		log.Info(ctx, "balance when node down", log.Any("channel", resp.Channels), log.Any("segments", resp.Segments))
 		return len(resp.Channels) == 0 && len(resp.Segments) == 15
 	}, 30*time.Second, 1*time.Second)
 
@@ -352,7 +352,7 @@ func (s *BalanceTestSuit) TestConcurrentBalanceChannelAndSegment() {
 		for {
 			select {
 			case <-stopSearchCh:
-				log.Info(context.TODO(), "stop search")
+				log.Info(ctx, "stop search")
 				return
 			default:
 				queryResult, err := s.Cluster.MilvusClient.Query(ctx, &milvuspb.QueryRequest{
@@ -363,7 +363,7 @@ func (s *BalanceTestSuit) TestConcurrentBalanceChannelAndSegment() {
 				})
 
 				if err := merr.CheckRPCCall(queryResult.GetStatus(), err); err != nil {
-					log.Info(context.TODO(), "query failed", log.Err(err))
+					log.Info(ctx, "query failed", log.Err(err))
 					failCounter.Inc()
 				}
 			}
@@ -374,13 +374,13 @@ func (s *BalanceTestSuit) TestConcurrentBalanceChannelAndSegment() {
 		resp, err := qn.MustGetClient(ctx).GetDataDistribution(ctx, &querypb.GetDataDistributionRequest{})
 		s.NoError(err)
 		s.True(merr.Ok(resp.GetStatus()))
-		log.Info(context.TODO(), "segments on query node before balance", log.Int64("nodeID", qn.GetNodeID()), log.Int("channel", len(resp.Channels)), log.Int("segments", len(resp.Segments)))
+		log.Info(ctx, "segments on query node before balance", log.Int64("nodeID", qn.GetNodeID()), log.Int("channel", len(resp.Channels)), log.Int("segments", len(resp.Segments)))
 	}
 	for _, sn := range s.Cluster.GetAllStreamingNodes() {
 		resp, err := sn.MustGetClient(ctx).GetDataDistribution(ctx, &querypb.GetDataDistributionRequest{})
 		s.NoError(err)
 		s.True(merr.Ok(resp.GetStatus()))
-		log.Info(context.TODO(), "channel on streaming node before balance", log.Int64("nodeID", sn.GetNodeID()), log.Int("channel", len(resp.Channels)), log.Int("segments", len(resp.Segments)))
+		log.Info(ctx, "channel on streaming node before balance", log.Int64("nodeID", sn.GetNodeID()), log.Int("channel", len(resp.Channels)), log.Int("segments", len(resp.Segments)))
 	}
 
 	// then we add 1 query node, expected segment and channel will be move to new query node concurrently
@@ -393,13 +393,13 @@ func (s *BalanceTestSuit) TestConcurrentBalanceChannelAndSegment() {
 			resp, err := qn.MustGetClient(ctx).GetDataDistribution(ctx, &querypb.GetDataDistributionRequest{})
 			s.NoError(err)
 			s.True(merr.Ok(resp.GetStatus()))
-			log.Info(context.TODO(), "segments on query node", log.Int64("nodeID", qn.GetNodeID()), log.Int("channel", len(resp.Channels)), log.Int("segments", len(resp.Segments)))
+			log.Info(ctx, "segments on query node", log.Int64("nodeID", qn.GetNodeID()), log.Int("channel", len(resp.Channels)), log.Int("segments", len(resp.Segments)))
 		}
 		for _, sn := range s.Cluster.GetAllStreamingNodes() {
 			resp, err := sn.MustGetClient(ctx).GetDataDistribution(ctx, &querypb.GetDataDistributionRequest{})
 			s.NoError(err)
 			s.True(merr.Ok(resp.GetStatus()))
-			log.Info(context.TODO(), "channel on streaming node", log.Int64("nodeID", sn.GetNodeID()), log.Int("channel", len(resp.Channels)), log.Int("segments", len(resp.Segments)))
+			log.Info(ctx, "channel on streaming node", log.Int64("nodeID", sn.GetNodeID()), log.Int("channel", len(resp.Channels)), log.Int("segments", len(resp.Segments)))
 		}
 
 		resp, err := qn1.MustGetClient(ctx).GetDataDistribution(ctx, &querypb.GetDataDistributionRequest{})
@@ -407,7 +407,7 @@ func (s *BalanceTestSuit) TestConcurrentBalanceChannelAndSegment() {
 		resp2, err := sn1.MustGetClient(ctx).GetDataDistribution(ctx, &querypb.GetDataDistributionRequest{})
 		s.NoError(err)
 		s.True(merr.Ok(resp.GetStatus()))
-		log.Info(context.TODO(), "concurrent balance channel and segment", log.Int("channel1", len(resp2.Channels)), log.Int("segments1", len(resp.Segments)))
+		log.Info(ctx, "concurrent balance channel and segment", log.Int("channel1", len(resp2.Channels)), log.Int("segments1", len(resp.Segments)))
 		return len(resp2.Channels) == 2 && len(resp.Segments) >= 20
 	}, 30*time.Second, 1*time.Second)
 

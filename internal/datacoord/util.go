@@ -97,7 +97,7 @@ func FilterInIndexedSegments(ctx context.Context, handler Handler, mt *meta, ski
 		coll, err := handler.GetCollection(timeoutCtx, collection)
 		cancel()
 		if err != nil {
-			log.Warn(context.TODO(), "failed to get collection schema", log.Err(err))
+			log.Warn(ctx, "failed to get collection schema", log.Err(err))
 			continue
 		}
 

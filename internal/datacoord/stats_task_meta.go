@@ -156,11 +156,11 @@ func (stm *statsTaskMeta) DropStatsTask(ctx context.Context, taskID int64) error
 
 	t, ok := stm.tasks.Get(taskID)
 	if !ok {
-		log.Info(context.TODO(), "remove stats task success, task already not exist", log.Int64("taskID", taskID))
+		log.Info(ctx, "remove stats task success, task already not exist", log.Int64("taskID", taskID))
 		return nil
 	}
 	if err := stm.catalog.DropStatsTask(ctx, taskID); err != nil {
-		log.Warn(context.TODO(), "drop stats task failed",
+		log.Warn(ctx, "drop stats task failed",
 			log.Int64("taskID", taskID),
 			log.Int64("segmentID", t.GetSegmentID()),
 			log.Err(err))
@@ -171,7 +171,7 @@ func (stm *statsTaskMeta) DropStatsTask(ctx context.Context, taskID int64) error
 	secondaryKey := createSecondaryIndexKey(t.GetSegmentID(), t.GetSubJobType().String())
 	stm.segmentID2Tasks.Remove(secondaryKey)
 
-	log.Info(context.TODO(), "remove stats task success", log.Int64("taskID", taskID))
+	log.Info(ctx, "remove stats task success", log.Int64("taskID", taskID))
 	return nil
 }
 

@@ -37,10 +37,10 @@ import (
 // unsubscribeChannels create consumer first, and unsubscribe channel through msgStream.close()
 // TODO use streamnative pulsarctl
 func UnsubscribeChannels(ctx context.Context, factory Factory, subName string, channels []string) {
-	log.Info(context.TODO(), "unsubscribe channel", log.String("subname", subName), log.Any("channels", channels))
+	log.Info(ctx, "unsubscribe channel", log.String("subname", subName), log.Any("channels", channels))
 	err := factory.NewMsgStreamDisposer(ctx)(channels, subName)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to unsubscribe channels", log.String("subname", subName), log.Any("channels", channels), log.Err(err))
+		log.Warn(ctx, "failed to unsubscribe channels", log.String("subname", subName), log.Any("channels", channels), log.Err(err))
 		panic(err)
 	}
 }
@@ -48,7 +48,7 @@ func UnsubscribeChannels(ctx context.Context, factory Factory, subName string, c
 func GetChannelLatestMsgID(ctx context.Context, factory Factory, channelName string) ([]byte, error) {
 	dmlStream, err := factory.NewMsgStream(ctx)
 	if err != nil {
-		log.Warn(context.TODO(), "fail to NewMsgStream", log.String("channelName", channelName), log.Err(err))
+		log.Warn(ctx, "fail to NewMsgStream", log.String("channelName", channelName), log.Err(err))
 		return nil, err
 	}
 	defer dmlStream.Close()
@@ -56,12 +56,12 @@ func GetChannelLatestMsgID(ctx context.Context, factory Factory, channelName str
 	subName := fmt.Sprintf("get-latest_msg_id-%s-%d", channelName, rand.Int())
 	err = dmlStream.AsConsumer(ctx, []string{channelName}, subName, common.SubscriptionPositionUnknown)
 	if err != nil {
-		log.Warn(context.TODO(), "fail to AsConsumer", log.String("channelName", channelName), log.Err(err))
+		log.Warn(ctx, "fail to AsConsumer", log.String("channelName", channelName), log.Err(err))
 		return nil, err
 	}
 	id, err := dmlStream.GetLatestMsgID(channelName)
 	if err != nil {
-		log.Error(context.TODO(), "fail to GetLatestMsgID", log.String("channelName", channelName), log.Err(err))
+		log.Error(ctx, "fail to GetLatestMsgID", log.String("channelName", channelName), log.Err(err))
 		return nil, err
 	}
 	return id.Serialize(), nil

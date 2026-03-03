@@ -261,11 +261,11 @@ func (c *lruCache[K, V]) Do(ctx context.Context, key K, doer func(context.Contex
 		} else if err != ErrNotEnoughSpace {
 			return true, err
 		}
-		log.Warn(context.TODO(), "Failed to get disk cache for segment, wait and try again", log.Err(err))
+		log.Warn(ctx, "Failed to get disk cache for segment, wait and try again", log.Err(err))
 
 		// wait for the listener to be notified.
 		if err := listener.Wait(ctx); err != nil {
-			log.Warn(context.TODO(), "failed to get item for key with timeout", log.Err(context.Cause(ctx)))
+			log.Warn(ctx, "failed to get item for key with timeout", log.Err(context.Cause(ctx)))
 			return true, err
 		}
 	}
@@ -317,12 +317,12 @@ func (c *lruCache[K, V]) peekAndPin(ctx context.Context, key K) *cacheItem[K, V]
 		}
 		c.accessList.MoveToFront(e)
 		item.pinCount.Inc()
-		log.Debug(context.TODO(), "peeked item success",
+		log.Debug(ctx, "peeked item success",
 			log.Int32("PinCount", item.pinCount.Load()),
 			log.Any("key", key))
 		return item
 	}
-	log.Debug(context.TODO(), "failed to peek item", log.Any("key", key))
+	log.Debug(ctx, "failed to peek item", log.Any("key", key))
 	return nil
 }
 
@@ -337,7 +337,7 @@ func (c *lruCache[K, V]) getAndPin(ctx context.Context, key K) (*cacheItem[K, V]
 		// Try scavenge if there is room. If not, fail fast.
 		//	Note that the test is not accurate since we are not locking `loader` here.
 		if _, ok := c.tryScavenge(key); !ok {
-			log.Warn(context.TODO(), "getAndPin ran into scavenge failure, return", log.Any("key", key))
+			log.Warn(ctx, "getAndPin ran into scavenge failure, return", log.Any("key", key))
 			return nil, true, ErrNotEnoughSpace
 		}
 		c.loaderKeyLocks.Lock(key)
@@ -356,7 +356,7 @@ func (c *lruCache[K, V]) getAndPin(ctx context.Context, key K) (*cacheItem[K, V]
 
 		if err != nil {
 			c.stats.LoadFailCount.Inc()
-			log.Debug(context.TODO(), "loader failed for key", log.Any("key", key))
+			log.Debug(ctx, "loader failed for key", log.Any("key", key))
 			return nil, true, err
 		}
 
@@ -364,7 +364,7 @@ func (c *lruCache[K, V]) getAndPin(ctx context.Context, key K) (*cacheItem[K, V]
 		c.stats.LoadSuccessCount.Inc()
 		item, err := c.setAndPin(ctx, key, value)
 		if err != nil {
-			log.Debug(context.TODO(), "setAndPin failed for key", log.Any("key", key), log.Err(err))
+			log.Debug(ctx, "setAndPin failed for key", log.Any("key", key), log.Err(err))
 			return nil, true, err
 		}
 		return item, true, nil
@@ -413,7 +413,7 @@ func (c *lruCache[K, V]) setAndPin(ctx context.Context, key K, value V) (*cacheI
 	toEvict, ok := c.lockfreeTryScavenge(key)
 	if !ok {
 		if c.finalizer != nil {
-			log.Warn(context.TODO(), "setAndPin ran into scavenge failure, release data for", log.Any("key", key))
+			log.Warn(ctx, "setAndPin ran into scavenge failure, release data for", log.Any("key", key))
 			c.finalizer(ctx, key, value)
 		}
 		return nil, ErrNotEnoughSpace
@@ -421,13 +421,13 @@ func (c *lruCache[K, V]) setAndPin(ctx context.Context, key K, value V) (*cacheI
 
 	for _, ek := range toEvict {
 		c.evict(ctx, ek)
-		log.Debug(context.TODO(), "cache evicting", log.Any("key", ek), log.Any("by", key))
+		log.Debug(ctx, "cache evicting", log.Any("key", ek), log.Any("by", key))
 	}
 
 	c.scavenger.Collect(key)
 	e := c.accessList.PushFront(item)
 	c.items[item.key] = e
-	log.Debug(context.TODO(), "setAndPin set up item", log.Any("item.key", item.key),
+	log.Debug(ctx, "setAndPin set up item", log.Any("item.key", item.key),
 		log.Int32("pinCount", item.pinCount.Load()))
 	return item, nil
 }
@@ -441,7 +441,7 @@ func (c *lruCache[K, V]) Remove(ctx context.Context, key K) error {
 		}
 
 		if err := listener.Wait(ctx); err != nil {
-			log.Warn(context.TODO(), "failed to remove item for key with timeout", log.Err(err))
+			log.Warn(ctx, "failed to remove item for key with timeout", log.Err(err))
 			return err
 		}
 	}

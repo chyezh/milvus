@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -80,7 +79,7 @@ func (scheduler *Scheduler) schedule(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info(context.TODO(), "JobManager stopped")
+			log.Info(ctx, "JobManager stopped")
 			for _, queue := range scheduler.queues {
 				close(queue)
 			}

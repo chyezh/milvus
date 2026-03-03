@@ -93,7 +93,6 @@ func (o *openerAdaptorImpl) Open(ctx context.Context, opt *wal.OpenOption) (wal.
 		return nil, err
 	}
 
-
 	// Get or create the underlying walimpls.OpenerImpls for this walName
 	openerImpl, err := o.getOrCreateOpenerImpl(ctx, walName)
 	if err != nil {
@@ -504,12 +503,12 @@ func (o *openerAdaptorImpl) Close() {
 	o.lifetime.SetState(typeutil.LifetimeStateStopped)
 	o.lifetime.Wait()
 
-	o.Logger().Info(nil, "wal opener closing...")
+	o.Logger().Info(context.TODO(), "wal opener closing...")
 
 	// close all wal instances.
 	o.walInstances.Range(func(id int64, l wal.WAL) bool {
 		l.Close()
-		o.Logger().Info(nil, "close wal by opener", log.Int64("id", id), log.String("channel", l.Channel().String()))
+		o.Logger().Info(context.TODO(), "close wal by opener", log.Int64("id", id), log.String("channel", l.Channel().String()))
 		return true
 	})
 
@@ -517,10 +516,10 @@ func (o *openerAdaptorImpl) Close() {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	for walName, opener := range o.openerCache {
-		o.Logger().Info(nil, "closing underlying walimpls opener", log.Stringer("walName", walName))
+		o.Logger().Info(context.TODO(), "closing underlying walimpls opener", log.Stringer("walName", walName))
 		opener.Close()
 	}
 	o.openerCache = nil
 
-	o.Logger().Info(nil, "wal opener closed")
+	o.Logger().Info(context.TODO(), "wal opener closed")
 }

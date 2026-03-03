@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -405,7 +406,7 @@ func (m *StatsManager) updateConfig() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.cfg != cfg {
-		m.Logger().Info(nil, "update stats manager config", log.Any("newConfig", cfg), log.Any("oldConfig", m.cfg))
+		m.Logger().Info(context.TODO(), "update stats manager config", log.Any("newConfig", cfg), log.Any("oldConfig", m.cfg))
 		m.cfg = cfg
 	}
 }

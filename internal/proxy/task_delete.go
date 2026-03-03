@@ -21,8 +21,8 @@ import (
 	"github.com/milvus-io/milvus/internal/util/exprutil"
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
@@ -432,10 +432,10 @@ func (dr *deleteRunner) getStreamingQueryAndDelteFunc(plan *planpb.PlanNode) sha
 
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		log.Debug(context.TODO(), "start query for delete", log.Int64("msgID", dr.msgID))
+		log.Debug(ctx, "start query for delete", log.Int64("msgID", dr.msgID))
 		client, err := qn.QueryStream(ctx, queryReq)
 		if err != nil {
-			log.Warn(context.TODO(), "query stream for delete create failed", log.Err(err))
+			log.Warn(ctx, "query stream for delete create failed", log.Err(err))
 			return err
 		}
 

@@ -37,8 +37,8 @@ import (
 	"github.com/milvus-io/milvus/internal/querynodev2/segments"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
@@ -348,17 +348,17 @@ func (sd *shardDelegator) addGrowing(entries ...SegmentEntry) {
 // LoadGrowing load growing segments locally.
 func (sd *shardDelegator) LoadGrowing(ctx context.Context, infos []*querypb.SegmentLoadInfo, version int64) error {
 	segmentIDs := lo.Map(infos, func(info *querypb.SegmentLoadInfo, _ int) int64 { return info.GetSegmentID() })
-	log.Info(context.TODO(), "loading growing segments...", log.Int64s("segmentIDs", segmentIDs))
+	log.Info(ctx, "loading growing segments...", log.Int64s("segmentIDs", segmentIDs))
 	loaded, err := sd.loader.Load(ctx, sd.collectionID, segments.SegmentTypeGrowing, version, infos...)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to load growing segment", log.Err(err))
+		log.Warn(ctx, "failed to load growing segment", log.Err(err))
 		return err
 	}
 
 	for _, segment := range loaded {
 		err = sd.addL0ForGrowing(ctx, segment)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to forward L0 deletions to growing segment",
+			log.Warn(ctx, "failed to forward L0 deletions to growing segment",
 				log.Err(err),
 			)
 
@@ -371,7 +371,7 @@ func (sd *shardDelegator) LoadGrowing(ctx context.Context, infos []*querypb.Segm
 	}
 
 	segmentIDs = lo.Map(loaded, func(segment segments.Segment, _ int) int64 { return segment.ID() })
-	log.Info(context.TODO(), "load growing segments done", log.Int64s("segmentIDs", segmentIDs))
+	log.Info(ctx, "load growing segments done", log.Int64s("segmentIDs", segmentIDs))
 
 	for _, segment := range loaded {
 		if sd.idfOracle != nil {
@@ -402,25 +402,25 @@ func (sd *shardDelegator) loadBM25Stats(ctx context.Context, infos []*querypb.Se
 	future := pool.Submit(func() (any, error) {
 		bm25Stats, err := sd.loader.LoadBM25Stats(ctx, req.GetCollectionID(), infos...)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to load bm25 stats for segment", log.Int64("collectionID", req.GetCollectionID()), log.Err(err))
+			log.Warn(ctx, "failed to load bm25 stats for segment", log.Int64("collectionID", req.GetCollectionID()), log.Err(err))
 			return nil, err
 		}
 
 		if bm25Stats != nil {
 			bm25Stats.Range(func(segmentID int64, stats map[int64]*storage.BM25Stats) bool {
-				log.Info(context.TODO(), "register sealed segment bm25 stats into idforacle",
+				log.Info(ctx, "register sealed segment bm25 stats into idforacle",
 					log.Int64("segmentID", segmentID),
 				)
 				err = sd.idfOracle.RegisterSealed(segmentID, stats)
 				if err != nil {
-					log.Warn(context.TODO(), "failed to register sealed segment bm25 stats into idforacle", log.Err(err))
+					log.Warn(ctx, "failed to register sealed segment bm25 stats into idforacle", log.Err(err))
 					return false
 				}
 				return true
 			})
 
 			if err != nil {
-				log.Warn(context.TODO(), "failed to register sealed segment bm25 stats into idforacle", log.Err(err))
+				log.Warn(ctx, "failed to register sealed segment bm25 stats into idforacle", log.Err(err))
 				return nil, err
 			}
 		}
@@ -430,7 +430,7 @@ func (sd *shardDelegator) loadBM25Stats(ctx context.Context, infos []*querypb.Se
 
 	err := conc.BlockOnAll(future)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to load bm25 stats", log.Err(err))
+		log.Warn(ctx, "failed to load bm25 stats", log.Err(err))
 		return err
 	}
 	return nil
@@ -462,12 +462,12 @@ func (sd *shardDelegator) LoadSegments(ctx context.Context, req *querypb.LoadSeg
 
 	worker, err := sd.workerManager.GetWorker(ctx, targetNodeID)
 	if err != nil {
-		log.Warn(context.TODO(), "delegator failed to find worker", log.Err(err))
+		log.Warn(ctx, "delegator failed to find worker", log.Err(err))
 		return err
 	}
 
 	req.Base.TargetID = targetNodeID
-	log.Debug(context.TODO(), "worker loads segments...")
+	log.Debug(ctx, "worker loads segments...")
 
 	sLoad := func(ctx context.Context, req *querypb.LoadSegmentsRequest) error {
 		segmentID := req.GetInfos()[0].GetSegmentID()
@@ -501,10 +501,10 @@ func (sd *shardDelegator) LoadSegments(ctx context.Context, req *querypb.LoadSeg
 	}
 
 	if err != nil {
-		log.Warn(context.TODO(), "worker failed to load segments", log.Err(err))
+		log.Warn(ctx, "worker failed to load segments", log.Err(err))
 		return err
 	}
-	log.Debug(context.TODO(), "work loads segments done")
+	log.Debug(ctx, "work loads segments done")
 
 	// load index segment need no stream delete and distribution change
 	if req.GetLoadScope() == querypb.LoadScope_Index {
@@ -517,21 +517,21 @@ func (sd *shardDelegator) LoadSegments(ctx context.Context, req *querypb.LoadSeg
 
 	candidates, err := sd.loader.LoadBloomFilterSet(ctx, req.GetCollectionID(), infos...)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to load bloom filter set for segment", log.Err(err))
+		log.Warn(ctx, "failed to load bloom filter set for segment", log.Err(err))
 		return err
 	}
 
 	// Load BM25 stats BEFORE loadStreamDelete so stats are ready before segment becomes visible
 	err = sd.loadBM25Stats(ctx, infos, req)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to load BM25 stats", log.Err(err))
+		log.Warn(ctx, "failed to load BM25 stats", log.Err(err))
 		return err
 	}
 
 	// Build a map from segmentID to BloomFilterSet
 	bfMap := make(map[int64]pkoracle.Candidate)
 	for _, candidate := range candidates {
-		log.Info(context.TODO(), "loaded bloom filter set for sealed segment",
+		log.Info(ctx, "loaded bloom filter set for sealed segment",
 			log.Int64("segmentID", candidate.ID()),
 		)
 		bfMap[candidate.ID()] = candidate
@@ -551,12 +551,12 @@ func (sd *shardDelegator) LoadSegments(ctx context.Context, req *querypb.LoadSeg
 		entries = append(entries, entry)
 	}
 
-	log.Debug(context.TODO(), "load delete...")
+	log.Debug(ctx, "load delete...")
 	// loadStreamDelete now handles distribution add atomically in Phase 3
 	err = sd.loadStreamDelete(ctx, candidates, infos, req, targetNodeID, worker,
 		entries, req.GetLoadMeta().GetSchemaVersion())
 	if err != nil {
-		log.Warn(context.TODO(), "load stream delete failed", log.Err(err))
+		log.Warn(ctx, "load stream delete failed", log.Err(err))
 		// Rollback BM25 stats registered by loadBM25Stats above,
 		// since segment will not be added to distribution.
 		if sd.idfOracle != nil {
@@ -586,7 +586,7 @@ func (sd *shardDelegator) addDistributionIfVersionOK(version uint64, entries ...
 // LoadGrowing load growing segments locally.
 func (sd *shardDelegator) LoadL0(ctx context.Context, infos []*querypb.SegmentLoadInfo, version int64) error {
 	segmentIDs := lo.Map(infos, func(info *querypb.SegmentLoadInfo, _ int) int64 { return info.GetSegmentID() })
-	log.Info(context.TODO(), "loading l0 segments...", log.Int64s("segmentIDs", segmentIDs))
+	log.Info(ctx, "loading l0 segments...", log.Int64s("segmentIDs", segmentIDs))
 
 	loaded := make([]segments.Segment, 0)
 	if sd.l0ForwardPolicy == L0ForwardPolicyRemoteLoad {
@@ -601,13 +601,13 @@ func (sd *shardDelegator) LoadL0(ctx context.Context, infos []*querypb.SegmentLo
 		var err error
 		loaded, err = sd.loader.Load(ctx, sd.collectionID, segments.SegmentTypeSealed, version, infos...)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to load l0 segment", log.Err(err))
+			log.Warn(ctx, "failed to load l0 segment", log.Err(err))
 			return err
 		}
 	}
 
 	segmentIDs = lo.Map(loaded, func(segment segments.Segment, _ int) int64 { return segment.ID() })
-	log.Info(context.TODO(), "load l0 segments done", log.Int64s("segmentIDs", segmentIDs))
+	log.Info(ctx, "load l0 segments done", log.Int64s("segmentIDs", segmentIDs))
 
 	sd.deleteBuffer.RegisterL0(loaded...)
 	// register l0 segment
@@ -895,7 +895,7 @@ func (sd *shardDelegator) ReleaseSegments(ctx context.Context, req *querypb.Rele
 		}
 	}
 
-	log.Info(context.TODO(), "delegator start to release segments")
+	log.Info(ctx, "delegator start to release segments")
 	// alter distribution first
 	var sealed, growing []SegmentEntry
 	convertSealed := func(segmentID int64, _ int) SegmentEntry {
@@ -944,13 +944,13 @@ func (sd *shardDelegator) ReleaseSegments(ctx context.Context, req *querypb.Rele
 	if !force {
 		worker, err := sd.workerManager.GetWorker(ctx, targetNodeID)
 		if err != nil {
-			log.Warn(context.TODO(), "delegator failed to find worker", log.Err(err))
+			log.Warn(ctx, "delegator failed to find worker", log.Err(err))
 			releaseErr = err
 		}
 		req.Base.TargetID = targetNodeID
 		err = worker.ReleaseSegments(ctx, req)
 		if err != nil {
-			log.Warn(context.TODO(), "worker failed to release segments", log.Err(err))
+			log.Warn(ctx, "worker failed to release segments", log.Err(err))
 			releaseErr = err
 		}
 	}

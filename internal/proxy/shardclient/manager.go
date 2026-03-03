@@ -29,8 +29,8 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/registry"
 	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -175,7 +175,7 @@ func (m *shardClientMgrImpl) updateShardLocationCache(ctx context.Context, datab
 	}
 	resp, err := m.mixCoord.GetShardLeaders(ctx, req)
 	if err := merr.CheckRPCCall(resp.GetStatus(), err); err != nil {
-		log.Error(context.TODO(), "failed to get shard locations",
+		log.Error(ctx, "failed to get shard locations",
 			log.Int64("collectionID", collectionID),
 			log.Err(err))
 		return nil, err
@@ -193,7 +193,7 @@ func (m *shardClientMgrImpl) updateShardLocationCache(ctx context.Context, datab
 			}
 			shardStr = append(shardStr, fmt.Sprintf("%s:[%s]", channel, strings.Join(nodeStrs, ", ")))
 		}
-		log.Debug(context.TODO(), "update shard leader cache", log.String("newShardLeaders", strings.Join(shardStr, ", ")))
+		log.Debug(ctx, "update shard leader cache", log.String("newShardLeaders", strings.Join(shardStr, ", ")))
 	}
 
 	newShardLeaders := &shardLeaders{

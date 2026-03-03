@@ -70,7 +70,7 @@ func (s *Server) getChannelsJSON(ctx context.Context, req *milvuspb.GetMetricsRe
 		if cp, ok := channel2Checkpoints[channel.Name]; ok {
 			channel.CheckpointTS = tsoutil.PhysicalTimeFormat(cp.GetTimestamp())
 		} else {
-			log.Warn(context.TODO(), "channel not found in meta cache", log.String("channel", channel.Name))
+			log.Warn(ctx, "channel not found in meta cache", log.String("channel", channel.Name))
 		}
 	}
 	return metricsinfo.MarshalGetMetricsValues(channels, err)
@@ -147,7 +147,7 @@ func (s *Server) getDistJSON(ctx context.Context, req *milvuspb.GetMetricsReques
 
 	bs, err := json.Marshal(dist)
 	if err != nil {
-		log.Warn(context.TODO(), "marshal dist value failed", log.String("err", err.Error()))
+		log.Warn(ctx, "marshal dist value failed", log.String("err", err.Error()))
 		return ""
 	}
 	return string(bs)
@@ -263,7 +263,7 @@ func (s *Server) getDataNodeMetrics(ctx context.Context, req *milvuspb.GetMetric
 
 	metrics, err := cli.GetMetrics(ctx, req)
 	if err != nil {
-		log.Warn(context.TODO(), "invalid metrics of DataNode was found",
+		log.Warn(ctx, "invalid metrics of DataNode was found",
 			log.Err(err))
 		infos.BaseComponentInfos.ErrorReason = err.Error()
 		// err handled, returns nil
@@ -272,7 +272,7 @@ func (s *Server) getDataNodeMetrics(ctx context.Context, req *milvuspb.GetMetric
 	infos.BaseComponentInfos.Name = metrics.GetComponentName()
 
 	if metrics.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-		log.Warn(context.TODO(), "invalid metrics of DataNode was found",
+		log.Warn(ctx, "invalid metrics of DataNode was found",
 			log.Any("error_code", metrics.GetStatus().GetErrorCode()),
 			log.Any("error_reason", metrics.GetStatus().GetReason()))
 		infos.BaseComponentInfos.ErrorReason = metrics.GetStatus().GetReason()
@@ -281,7 +281,7 @@ func (s *Server) getDataNodeMetrics(ctx context.Context, req *milvuspb.GetMetric
 
 	err = metricsinfo.UnmarshalComponentInfos(metrics.GetResponse(), &infos)
 	if err != nil {
-		log.Warn(context.TODO(), "invalid metrics of DataNode found",
+		log.Warn(ctx, "invalid metrics of DataNode found",
 			log.Err(err))
 		infos.BaseComponentInfos.ErrorReason = err.Error()
 		return infos, nil
@@ -303,7 +303,7 @@ func (s *Server) getIndexNodeMetrics(ctx context.Context, req *milvuspb.GetMetri
 
 	metrics, err := node.GetMetrics(ctx, req)
 	if err != nil {
-		log.Warn(context.TODO(), "invalid metrics of IndexNode was found",
+		log.Warn(ctx, "invalid metrics of IndexNode was found",
 			log.Err(err))
 		infos.BaseComponentInfos.ErrorReason = err.Error()
 		// err handled, returns nil
@@ -312,7 +312,7 @@ func (s *Server) getIndexNodeMetrics(ctx context.Context, req *milvuspb.GetMetri
 	infos.BaseComponentInfos.Name = metrics.GetComponentName()
 
 	if metrics.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-		log.Warn(context.TODO(), "invalid metrics of DataNode was found",
+		log.Warn(ctx, "invalid metrics of DataNode was found",
 			log.Any("error_code", metrics.GetStatus().GetErrorCode()),
 			log.Any("error_reason", metrics.GetStatus().GetReason()))
 		infos.BaseComponentInfos.ErrorReason = metrics.GetStatus().GetReason()
@@ -321,7 +321,7 @@ func (s *Server) getIndexNodeMetrics(ctx context.Context, req *milvuspb.GetMetri
 
 	err = metricsinfo.UnmarshalComponentInfos(metrics.GetResponse(), &infos)
 	if err != nil {
-		log.Warn(context.TODO(), "invalid metrics of DataNode found",
+		log.Warn(ctx, "invalid metrics of DataNode found",
 			log.Err(err))
 		infos.BaseComponentInfos.ErrorReason = err.Error()
 		return infos, nil
@@ -345,7 +345,7 @@ func getMetrics[T any](s *Server, ctx context.Context, req *milvuspb.GetMetricsR
 			}
 			resp, err := cli.GetMetrics(ctx, req)
 			if err != nil {
-				log.Warn(context.TODO(), "failed to get metric from DataNode", log.Int64("nodeID", node))
+				log.Warn(ctx, "failed to get metric from DataNode", log.Int64("nodeID", node))
 				return err
 			}
 
@@ -356,7 +356,7 @@ func getMetrics[T any](s *Server, ctx context.Context, req *milvuspb.GetMetricsR
 			var infos []T
 			err = json.Unmarshal([]byte(resp.Response), &infos)
 			if err != nil {
-				log.Warn(context.TODO(), "invalid metrics of data node was found", log.Err(err))
+				log.Warn(ctx, "invalid metrics of data node was found", log.Err(err))
 				return err
 			}
 

@@ -87,14 +87,14 @@ func (c *IndexChecker) Check(ctx context.Context) []task.Task {
 	for _, collectionID := range collectionIDs {
 		indexInfos, err := c.broker.ListIndexes(ctx, collectionID)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to list indexes", log.Int64("collection", collectionID), log.Err(err))
+			log.Warn(ctx, "failed to list indexes", log.Int64("collection", collectionID), log.Err(err))
 			continue
 		}
 
 		collection := c.meta.CollectionManager.GetCollection(ctx, collectionID)
 		schema := c.meta.CollectionManager.GetCollectionSchema(ctx, collectionID)
 		if collection == nil {
-			log.Warn(context.TODO(), "collection released during check index", log.Int64("collection", collectionID))
+			log.Warn(ctx, "collection released during check index", log.Int64("collection", collectionID))
 			continue
 		}
 		if schema == nil && paramtable.Get().CommonCfg.EnabledJSONKeyStats.GetAsBool() {
@@ -152,7 +152,7 @@ func (c *IndexChecker) checkReplica(ctx context.Context, collection *meta.Collec
 	for _, segmentIDs := range lo.Chunk(lo.Keys(idSegments), MaxSegmentNumPerGetIndexInfoRPC) {
 		segmentIndexInfos, err := c.broker.GetIndexInfo(ctx, collection.GetCollectionID(), segmentIDs...)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to get indexInfo for segments", log.Int64s("segmentIDs", segmentIDs), log.Err(err))
+			log.Warn(ctx, "failed to get indexInfo for segments", log.Int64s("segmentIDs", segmentIDs), log.Err(err))
 			continue
 		}
 		for segmentID, segmentIndexInfo := range segmentIndexInfos {
@@ -176,7 +176,7 @@ func (c *IndexChecker) checkReplica(ctx context.Context, collection *meta.Collec
 	for _, segmentIDs := range lo.Chunk(lo.Keys(idSegmentsStats), MaxSegmentNumPerGetIndexInfoRPC) {
 		segmentInfos, err := c.broker.GetSegmentInfo(ctx, segmentIDs...)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to get SegmentInfo for segments", log.Int64s("segmentIDs", segmentIDs), log.Err(err))
+			log.Warn(ctx, "failed to get SegmentInfo for segments", log.Int64s("segmentIDs", segmentIDs), log.Err(err))
 			continue
 		}
 		for _, segmentInfo := range segmentInfos {
@@ -249,7 +249,7 @@ func (c *IndexChecker) createSegmentUpdateTask(ctx context.Context, segment *met
 		action,
 	)
 	if err != nil {
-		log.Warn(context.TODO(), "create segment update task failed",
+		log.Warn(ctx, "create segment update task failed",
 			log.Int64("collection", segment.GetCollectionID()),
 			log.String("channel", segment.GetInsertChannel()),
 			log.Int64("node", segment.Node),
@@ -304,7 +304,7 @@ func (c *IndexChecker) createSegmentStatsUpdateTask(ctx context.Context, segment
 		action,
 	)
 	if err != nil {
-		log.Warn(context.TODO(), "create segment stats update task failed",
+		log.Warn(ctx, "create segment stats update task failed",
 			log.Int64("collection", segment.GetCollectionID()),
 			log.String("channel", segment.GetInsertChannel()),
 			log.Int64("node", segment.Node),

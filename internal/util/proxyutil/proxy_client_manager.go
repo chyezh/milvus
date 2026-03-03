@@ -194,7 +194,7 @@ func (p *ProxyClientManager) InvalidateCollectionMetaCache(ctx context.Context, 
 	c.Apply(request)
 
 	if p.proxyClient.Len() == 0 {
-		log.Warn(context.TODO(), "proxy client is empty, InvalidateCollectionMetaCache will not send to any client")
+		log.Warn(ctx, "proxy client is empty, InvalidateCollectionMetaCache will not send to any client")
 		return nil
 	}
 
@@ -205,7 +205,7 @@ func (p *ProxyClientManager) InvalidateCollectionMetaCache(ctx context.Context, 
 			sta, err := v.InvalidateCollectionMetaCache(ctx, request)
 			if err != nil {
 				if errors.Is(err, merr.ErrNodeNotFound) {
-					log.Warn(context.TODO(), "InvalidateCollectionMetaCache failed due to proxy service not found", log.Err(err))
+					log.Warn(ctx, "InvalidateCollectionMetaCache failed due to proxy service not found", log.Err(err))
 					return nil
 				}
 
@@ -228,7 +228,7 @@ func (p *ProxyClientManager) InvalidateCollectionMetaCache(ctx context.Context, 
 // InvalidateCredentialCache TODO: too many codes similar to InvalidateCollectionMetaCache.
 func (p *ProxyClientManager) InvalidateCredentialCache(ctx context.Context, request *proxypb.InvalidateCredCacheRequest) error {
 	if p.proxyClient.Len() == 0 {
-		log.Warn(context.TODO(), "proxy client is empty, InvalidateCredentialCache will not send to any client")
+		log.Warn(ctx, "proxy client is empty, InvalidateCredentialCache will not send to any client")
 		return nil
 	}
 
@@ -254,7 +254,7 @@ func (p *ProxyClientManager) InvalidateCredentialCache(ctx context.Context, requ
 // UpdateCredentialCache TODO: too many codes similar to InvalidateCollectionMetaCache.
 func (p *ProxyClientManager) UpdateCredentialCache(ctx context.Context, request *proxypb.UpdateCredCacheRequest) error {
 	if p.proxyClient.Len() == 0 {
-		log.Warn(context.TODO(), "proxy client is empty, UpdateCredentialCache will not send to any client")
+		log.Warn(ctx, "proxy client is empty, UpdateCredentialCache will not send to any client")
 		return nil
 	}
 
@@ -279,7 +279,7 @@ func (p *ProxyClientManager) UpdateCredentialCache(ctx context.Context, request 
 // RefreshPolicyInfoCache TODO: too many codes similar to InvalidateCollectionMetaCache.
 func (p *ProxyClientManager) RefreshPolicyInfoCache(ctx context.Context, req *proxypb.RefreshPolicyInfoCacheRequest) error {
 	if p.proxyClient.Len() == 0 {
-		log.Warn(context.TODO(), "proxy client is empty, RefreshPrivilegeInfoCache will not send to any client")
+		log.Warn(ctx, "proxy client is empty, RefreshPrivilegeInfoCache will not send to any client")
 		return nil
 	}
 
@@ -304,7 +304,7 @@ func (p *ProxyClientManager) RefreshPolicyInfoCache(ctx context.Context, req *pr
 // GetProxyMetrics sends requests to proxies to get metrics.
 func (p *ProxyClientManager) GetProxyMetrics(ctx context.Context) ([]*milvuspb.GetMetricsResponse, error) {
 	if p.proxyClient.Len() == 0 {
-		log.Warn(context.TODO(), "proxy client is empty, GetMetrics will not send to any client")
+		log.Warn(ctx, "proxy client is empty, GetMetrics will not send to any client")
 		return nil, nil
 	}
 
@@ -343,7 +343,7 @@ func (p *ProxyClientManager) GetProxyMetrics(ctx context.Context) ([]*milvuspb.G
 // SetRates notifies Proxy to limit rates of requests.
 func (p *ProxyClientManager) SetRates(ctx context.Context, request *proxypb.SetRatesRequest) error {
 	if p.proxyClient.Len() == 0 {
-		log.Warn(context.TODO(), "proxy client is empty, SetRates will not send to any client")
+		log.Warn(ctx, "proxy client is empty, SetRates will not send to any client")
 		return nil
 	}
 
@@ -391,7 +391,7 @@ func (p *ProxyClientManager) GetComponentStates(ctx context.Context) (map[int64]
 
 func (p *ProxyClientManager) InvalidateShardLeaderCache(ctx context.Context, request *proxypb.InvalidateShardLeaderCacheRequest) error {
 	if p.proxyClient.Len() == 0 {
-		log.Warn(context.TODO(), "proxy client is empty, InvalidateShardLeaderCache will not send to any client")
+		log.Warn(ctx, "proxy client is empty, InvalidateShardLeaderCache will not send to any client")
 		return nil
 	}
 
@@ -402,7 +402,7 @@ func (p *ProxyClientManager) InvalidateShardLeaderCache(ctx context.Context, req
 			sta, err := v.InvalidateShardLeaderCache(ctx, request)
 			if err != nil {
 				if errors.Is(err, merr.ErrNodeNotFound) {
-					log.Warn(context.TODO(), "InvalidateShardLeaderCache failed due to proxy service not found", log.Err(err))
+					log.Warn(ctx, "InvalidateShardLeaderCache failed due to proxy service not found", log.Err(err))
 					return nil
 				}
 				return fmt.Errorf("InvalidateShardLeaderCache failed, proxyID = %d, err = %s", k, err)

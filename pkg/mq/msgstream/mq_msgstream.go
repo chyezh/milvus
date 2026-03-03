@@ -866,7 +866,7 @@ func (ms *MqTtMsgStream) Seek(ctx context.Context, msgPositions []*MsgPosition, 
 				// try to use latest message ID first
 				seekMsgID, err = consumer.GetLatestMsgID()
 				if err != nil {
-					log.Warn(context.TODO(), "Ignoring bad message id", log.Err(err))
+					log.Warn(ctx, "Ignoring bad message id", log.Err(err))
 					return false, nil
 				}
 			} else {
@@ -874,17 +874,17 @@ func (ms *MqTtMsgStream) Seek(ctx context.Context, msgPositions []*MsgPosition, 
 			}
 		}
 
-		log.Info(context.TODO(), "MsgStream begin to seek start msg: ", log.String("channel", mp.ChannelName), log.Any("MessageID", mp.MsgID))
+		log.Info(ctx, "MsgStream begin to seek start msg: ", log.String("channel", mp.ChannelName), log.Any("MessageID", mp.MsgID))
 		err = consumer.Seek(seekMsgID, true)
 		if err != nil {
-			log.Warn(context.TODO(), "Failed to seek", log.String("channel", mp.ChannelName), log.Err(err))
+			log.Warn(ctx, "Failed to seek", log.String("channel", mp.ChannelName), log.Err(err))
 			// stop retry if consumer topic not exist
 			if errors.Is(err, merr.ErrMqTopicNotFound) {
 				return false, err
 			}
 			return true, err
 		}
-		log.Info(context.TODO(), "MsgStream seek finished", log.String("channel", mp.ChannelName))
+		log.Info(ctx, "MsgStream seek finished", log.String("channel", mp.ChannelName))
 
 		return false, nil
 	}
@@ -919,7 +919,7 @@ func (ms *MqTtMsgStream) Seek(ctx context.Context, msgPositions []*MsgPosition, 
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-loopTick.C:
-				log.Info(context.TODO(), "seek loop tick", log.Int("loopMsgCnt", loopMsgCnt), log.String("channel", mp.ChannelName))
+				log.Info(ctx, "seek loop tick", log.Int("loopMsgCnt", loopMsgCnt), log.String("channel", mp.ChannelName))
 			case msg, ok := <-consumer.Chan():
 				if !ok {
 					return errors.New("consumer closed")
@@ -934,7 +934,7 @@ func (ms *MqTtMsgStream) Seek(ctx context.Context, msgPositions []*MsgPosition, 
 				if err != nil {
 					packMsg, err = UnmarshalMsg(msg, ms.unmarshal)
 					if err != nil {
-						log.Warn(context.TODO(), "Failed to getTsMsgFromConsumerMsg", log.Err(err))
+						log.Warn(ctx, "Failed to getTsMsgFromConsumerMsg", log.Err(err))
 						continue
 					}
 				}
@@ -942,7 +942,7 @@ func (ms *MqTtMsgStream) Seek(ctx context.Context, msgPositions []*MsgPosition, 
 				if packMsg.GetType() == commonpb.MsgType_TimeTick && packMsg.GetTimestamp() >= mp.Timestamp {
 					runLoop = false
 					if time.Since(loopStarTime) > 30*time.Second {
-						log.Info(context.TODO(), "seek loop finished long time",
+						log.Info(ctx, "seek loop finished long time",
 							log.Int("loopMsgCnt", loopMsgCnt),
 							log.String("channel", mp.ChannelName),
 							log.Duration("cost", time.Since(loopStarTime)))
@@ -957,7 +957,7 @@ func (ms *MqTtMsgStream) Seek(ctx context.Context, msgPositions []*MsgPosition, 
 					})
 					ms.chanMsgBuf[consumer] = append(ms.chanMsgBuf[consumer], packMsg)
 				} else {
-					log.Info(context.TODO(), "skip msg",
+					log.Info(ctx, "skip msg",
 						// log.Int64("source", tsMsg.SourceID()), // TODO SOURCE ID ?
 						log.String("type", packMsg.GetType().String()),
 						log.Int("size", packMsg.GetSize()),

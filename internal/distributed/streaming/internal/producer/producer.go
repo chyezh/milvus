@@ -114,7 +114,7 @@ func (p *ResumableProducer) Produce(ctx context.Context, msg message.MutableMess
 // resumeLoop is used to resume producer from error.
 func (p *ResumableProducer) resumeLoop() {
 	defer func() {
-		p.logger.Info(nil, "stop resuming")
+		p.logger.Info(context.TODO(), "stop resuming")
 		p.metrics.IntoUnavailable()
 		close(p.resumingExitCh)
 	}()
@@ -145,7 +145,7 @@ func (p *ResumableProducer) waitUntilUnavailable(producer handler.Producer) erro
 		return p.ctx.Err()
 	case <-producer.Available():
 		// Wait old producer unavailable, trigger a new resuming operation.
-		p.logger.Warn(nil, "producer encounter error, try to resume...")
+		p.logger.Warn(context.TODO(), "producer encounter error, try to resume...")
 		return nil
 	}
 }
@@ -176,7 +176,7 @@ func (p *ResumableProducer) createNewProducer() (producer.Producer, error) {
 		// Otherwise, perform a resuming operation.
 		if err != nil {
 			nextBackoff := backoff.NextBackOff()
-			p.logger.Warn(nil, "create producer failed, retry...", log.Err(err), log.Duration("nextRetryInterval", nextBackoff))
+			p.logger.Warn(context.TODO(), "create producer failed, retry...", log.Err(err), log.Duration("nextRetryInterval", nextBackoff))
 			time.Sleep(nextBackoff)
 			continue
 		}
@@ -202,7 +202,7 @@ func (p *ResumableProducer) gracefulClose() error {
 // Close close the producer.
 func (p *ResumableProducer) Close() {
 	if err := p.gracefulClose(); err != nil {
-		p.logger.Warn(nil, "graceful close a producer fail, force close is applied")
+		p.logger.Warn(context.TODO(), "graceful close a producer fail, force close is applied")
 	}
 
 	// cancel is always need to be called, even graceful close is success.

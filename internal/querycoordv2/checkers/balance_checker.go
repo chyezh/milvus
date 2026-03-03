@@ -516,7 +516,7 @@ func (b *BalanceChecker) Check(ctx context.Context) []task.Task {
 	defer func() {
 		duration := time.Since(start)
 		if duration > 100*time.Millisecond {
-			log.Info(context.TODO(), "Balance check too slow", log.Duration("duration", duration))
+			log.Info(ctx, "Balance check too slow", log.Duration("duration", duration))
 		}
 	}()
 

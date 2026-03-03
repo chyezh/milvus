@@ -1046,12 +1046,12 @@ func newChanTimeTickSync(packChan chan *msgstream.ConsumeMsgPack) *timetickSync 
 	f.NewMsgStreamFunc = func(ctx context.Context) (msgstream.MsgStream, error) {
 		stream := msgstream.NewWastedMockMsgStream()
 		stream.BroadcastFunc = func(pack *msgstream.MsgPack) error {
-			log.Info(context.TODO(), "mock Broadcast")
+			log.Info(ctx, "mock Broadcast")
 			packChan <- msgstream.BuildConsumeMsgPack(pack)
 			return nil
 		}
 		stream.BroadcastMarkFunc = func(pack *msgstream.MsgPack) (map[string][]msgstream.MessageID, error) {
-			log.Info(context.TODO(), "mock BroadcastMark")
+			log.Info(ctx, "mock BroadcastMark")
 			packChan <- msgstream.BuildConsumeMsgPack(pack)
 			return map[string][]msgstream.MessageID{}, nil
 		}

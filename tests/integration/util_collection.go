@@ -113,11 +113,11 @@ func (s *MiniClusterSuite) CreateCollection(ctx context.Context, cfg *CreateColl
 	s.NoError(err)
 	s.True(merr.Ok(createCollectionStatus))
 
-	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(ctx, "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := s.Cluster.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{DbName: cfg.DBName})
 	s.NoError(err)
 	s.True(merr.Ok(showCollectionsResp.Status))
-	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(ctx, "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	nextStartPK := int64(1)
 	for i := 0; i < cfg.SegmentNum; i++ {

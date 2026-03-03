@@ -1006,11 +1006,11 @@ func Test_batchMultiSaveAndRemove(t *testing.T) {
 	t.Run("normal case", func(t *testing.T) {
 		snapshot := kv.NewMockSnapshotKV()
 		snapshot.MultiSaveFunc = func(ctx context.Context, kvs map[string]string, ts typeutil.Timestamp) error {
-			log.Info(context.TODO(), "multi save", log.Any("len", len(kvs)), log.Any("saves", kvs))
+			log.Info(ctx, "multi save", log.Any("len", len(kvs)), log.Any("saves", kvs))
 			return nil
 		}
 		snapshot.MultiSaveAndRemoveFunc = func(ctx context.Context, saves map[string]string, removals []string, ts typeutil.Timestamp) error {
-			log.Info(context.TODO(), "multi save and remove with prefix", log.Any("len of saves", len(saves)), log.Any("len of removals", len(removals)),
+			log.Info(ctx, "multi save and remove with prefix", log.Any("len of saves", len(saves)), log.Any("len of removals", len(removals)),
 				log.Any("saves", saves), log.Any("removals", removals))
 			return nil
 		}

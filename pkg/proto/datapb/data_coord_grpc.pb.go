@@ -8,6 +8,7 @@ package datapb
 
 import (
 	context "context"
+
 	commonpb "github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	milvuspb "github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	msgpb "github.com/milvus-io/milvus-proto/go-api/v2/msgpb"

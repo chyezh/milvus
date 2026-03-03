@@ -92,7 +92,7 @@ func (p *ProxyWatcher) WatchProxy(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	log.Info(context.TODO(), "succeed to init sessions on etcd", log.Any("sessions", sessions), log.Int64("revision", rev))
+	log.Info(ctx, "succeed to init sessions on etcd", log.Any("sessions", sessions), log.Int64("revision", rev))
 	// all init function should be clear meta firstly.
 	for _, f := range p.initSessionsFunc {
 		f(sessions)
@@ -115,33 +115,33 @@ func (p *ProxyWatcher) WatchProxy(ctx context.Context) error {
 }
 
 func (p *ProxyWatcher) startWatchEtcd(ctx context.Context, eventCh clientv3.WatchChan) {
-	log.Info(context.TODO(), "start to watch etcd")
+	log.Info(ctx, "start to watch etcd")
 	for {
 		select {
 		case <-ctx.Done():
-			log.Warn(context.TODO(), "stop watching etcd loop")
+			log.Warn(ctx, "stop watching etcd loop")
 			return
 
 		case <-p.closeCh.CloseCh():
-			log.Warn(context.TODO(), "stop watching etcd loop")
+			log.Warn(ctx, "stop watching etcd loop")
 			return
 
 		case event, ok := <-eventCh:
 			if !ok {
-				log.Warn(context.TODO(), "stop watching etcd loop due to closed etcd event channel")
+				log.Warn(ctx, "stop watching etcd loop due to closed etcd event channel")
 				panic("stop watching etcd loop due to closed etcd event channel")
 			}
 			if err := event.Err(); err != nil {
 				if err == v3rpc.ErrCompacted {
 					err2 := p.WatchProxy(ctx)
 					if err2 != nil {
-						log.Error(context.TODO(), "re watch proxy fails when etcd has a compaction error",
+						log.Error(ctx, "re watch proxy fails when etcd has a compaction error",
 							log.Err(err), log.Err(err2))
 						panic("failed to handle etcd request, exit..")
 					}
 					return
 				}
-				log.Error(context.TODO(), "Watch proxy service failed", log.Err(err))
+				log.Error(ctx, "Watch proxy service failed", log.Err(err))
 				panic(err)
 			}
 			for _, e := range event.Events {
@@ -153,7 +153,7 @@ func (p *ProxyWatcher) startWatchEtcd(ctx context.Context, eventCh clientv3.Watc
 					err = p.handleDeleteEvent(e)
 				}
 				if err != nil {
-					log.Warn(context.TODO(), "failed to handle proxy event", log.Any("event", e), log.Err(err))
+					log.Warn(ctx, "failed to handle proxy event", log.Any("event", e), log.Err(err))
 				}
 			}
 		}
@@ -208,7 +208,7 @@ func (p *ProxyWatcher) getSessionsOnEtcd(ctx context.Context) ([]*sessionutil.Se
 	for _, v := range resp.Kvs {
 		session, err := p.parseSession(v.Value)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to unmarshal session", log.Err(err))
+			log.Warn(ctx, "failed to unmarshal session", log.Err(err))
 			return nil, 0, err
 		}
 		sessions = append(sessions, session)

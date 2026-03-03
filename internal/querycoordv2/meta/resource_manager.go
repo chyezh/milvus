@@ -106,7 +106,7 @@ func (rm *ResourceManager) Recover(ctx context.Context) error {
 			}
 			rm.nodeIDMap[node] = rg.GetName()
 		}
-		log.Info(context.TODO(), "Recover resource group",
+		log.Info(ctx, "Recover resource group",
 			log.String("rgName", rg.GetName()),
 			log.Int64s("nodes", rm.groups[rg.GetName()].GetNodes()),
 			log.Any("config", rg.GetConfig()),
@@ -116,7 +116,7 @@ func (rm *ResourceManager) Recover(ctx context.Context) error {
 		}
 	}
 	if len(upgrades) > 0 {
-		log.Info(context.TODO(), "upgrade resource group meta into latest", log.Int("num", len(upgrades)))
+		log.Info(ctx, "upgrade resource group meta into latest", log.Int("num", len(upgrades)))
 		return rm.catalog.SaveResourceGroup(ctx, upgrades...)
 	}
 	return nil
@@ -216,7 +216,7 @@ func (rm *ResourceManager) updateResourceGroups(ctx context.Context, rgs map[str
 
 	if err := rm.catalog.SaveResourceGroup(ctx, updates...); err != nil {
 		for rgName, cfg := range rgs {
-			log.Warn(context.TODO(), "failed to update resource group",
+			log.Warn(ctx, "failed to update resource group",
 				log.String("rgName", rgName),
 				log.Any("config", cfg),
 				log.Err(err),
@@ -227,7 +227,7 @@ func (rm *ResourceManager) updateResourceGroups(ctx context.Context, rgs map[str
 
 	// Commit updates to memory.
 	for _, rg := range modifiedRG {
-		log.Info(context.TODO(), "update resource group",
+		log.Info(ctx, "update resource group",
 			log.String("rgName", rg.GetName()),
 			log.Any("config", rg.GetConfig()),
 		)
@@ -324,7 +324,7 @@ func (rm *ResourceManager) CheckIfResourceGroupDropable(ctx context.Context, rgN
 	// recover the resource group from redundant status before remove it.
 	if rm.groups[rgName].NodeNum() > 0 {
 		if err := rm.recoverRedundantNodeRG(ctx, rgName); err != nil {
-			log.Info(context.TODO(), "failed to recover redundant node resource group before remove it",
+			log.Info(ctx, "failed to recover redundant node resource group before remove it",
 				log.String("rgName", rgName),
 				log.Err(err),
 			)
@@ -345,7 +345,7 @@ func (rm *ResourceManager) DropResourceGroup(ctx context.Context, rgName string)
 
 	// Remove it from meta storage.
 	if err := rm.catalog.RemoveResourceGroup(ctx, rgName); err != nil {
-		log.Info(context.TODO(), "failed to remove resource group",
+		log.Info(ctx, "failed to remove resource group",
 			log.String("rgName", rgName),
 			log.Err(err),
 		)
@@ -362,7 +362,7 @@ func (rm *ResourceManager) DropResourceGroup(ctx context.Context, rgName string)
 		metrics.ResourceGroupLabelName: rgName,
 	})
 
-	log.Info(context.TODO(), "remove resource group",
+	log.Info(ctx, "remove resource group",
 		log.String("rgName", rgName),
 	)
 	// notify that resource group has been changed.
@@ -536,14 +536,14 @@ func (rm *ResourceManager) handleNodeUp(ctx context.Context, node int64) {
 		return
 	}
 	if nodeInfo.IsStoppingState() {
-		log.Warn(context.TODO(), "node is stopping, skip handle node up in resource manager", log.Int64("node", node))
+		log.Warn(ctx, "node is stopping, skip handle node up in resource manager", log.Int64("node", node))
 		return
 	}
 	rm.incomingNode.Insert(node)
 	// Trigger assign incoming node right away.
 	// error can be ignored here, because `AssignPendingIncomingNode`` will retry assign node.
 	rgName, err := rm.assignIncomingNodeWithNodeCheck(ctx, node)
-	log.Info(context.TODO(), "HandleNodeUp: add node to resource group",
+	log.Info(ctx, "HandleNodeUp: add node to resource group",
 		log.String("rgName", rgName),
 		log.Int64("node", node),
 		log.Err(err),
@@ -567,7 +567,7 @@ func (rm *ResourceManager) handleNodeDown(ctx context.Context, node int64) {
 
 	// trigger node changes, expected to remove ro node from replica immediately
 	rm.nodeChangedNotifier.NotifyAll()
-	log.Info(context.TODO(), "HandleNodeDown: remove node from resource group",
+	log.Info(ctx, "HandleNodeDown: remove node from resource group",
 		log.String("rgName", rgName),
 		log.Int64("node", node),
 		log.Err(err),
@@ -583,7 +583,7 @@ func (rm *ResourceManager) HandleNodeStopping(ctx context.Context, node int64) {
 func (rm *ResourceManager) handleNodeStopping(ctx context.Context, node int64) {
 	rm.incomingNode.Remove(node)
 	rgName, err := rm.unassignNode(ctx, node)
-	log.Info(context.TODO(), "HandleNodeStopping: remove node from resource group",
+	log.Info(ctx, "HandleNodeStopping: remove node from resource group",
 		log.String("rgName", rgName),
 		log.Int64("node", node),
 		log.Err(err),
@@ -607,7 +607,7 @@ func (rm *ResourceManager) AssignPendingIncomingNode(ctx context.Context) {
 
 	for node := range rm.incomingNode {
 		rgName, err := rm.assignIncomingNodeWithNodeCheck(ctx, node)
-		log.Info(context.TODO(), "Pending HandleNodeUp: add node to resource group",
+		log.Info(ctx, "Pending HandleNodeUp: add node to resource group",
 			log.String("rgName", rgName),
 			log.Int64("node", node),
 			log.Err(err),
@@ -643,20 +643,20 @@ func (rm *ResourceManager) recoverMissingNodeRG(ctx context.Context, rgName stri
 		targetRG := rm.groups[rgName]
 		node, sourceRG := rm.selectNodeForMissingRecover(targetRG)
 		if sourceRG == nil {
-			log.Warn(context.TODO(), "fail to select source resource group", log.String("rgName", targetRG.GetName()))
+			log.Warn(ctx, "fail to select source resource group", log.String("rgName", targetRG.GetName()))
 			return ErrNodeNotEnough
 		}
 
 		err := rm.transferNode(ctx, targetRG.GetName(), node)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to recover missing node by transfer node from other resource group",
+			log.Warn(ctx, "failed to recover missing node by transfer node from other resource group",
 				log.String("sourceRG", sourceRG.GetName()),
 				log.String("targetRG", targetRG.GetName()),
 				log.Int64("nodeID", node),
 				log.Err(err))
 			return err
 		}
-		log.Info(context.TODO(), "recover missing node by transfer node from other resource group",
+		log.Info(ctx, "recover missing node by transfer node from other resource group",
 			log.String("sourceRG", sourceRG.GetName()),
 			log.String("targetRG", targetRG.GetName()),
 			log.Int64("nodeID", node),
@@ -717,20 +717,20 @@ func (rm *ResourceManager) recoverRedundantNodeRG(ctx context.Context, rgName st
 		sourceRG := rm.groups[rgName]
 		node, targetRG := rm.selectNodeForRedundantRecover(sourceRG)
 		if node == -1 {
-			log.Info(context.TODO(), "failed to select redundant recover target resource group, please check resource group configuration if as expected.",
+			log.Info(ctx, "failed to select redundant recover target resource group, please check resource group configuration if as expected.",
 				log.String("rgName", sourceRG.GetName()))
 			return errors.New("all resource group reach limits")
 		}
 
 		if err := rm.transferNode(ctx, targetRG.GetName(), node); err != nil {
-			log.Warn(context.TODO(), "failed to recover redundant node by transfer node to other resource group",
+			log.Warn(ctx, "failed to recover redundant node by transfer node to other resource group",
 				log.String("sourceRG", sourceRG.GetName()),
 				log.String("targetRG", targetRG.GetName()),
 				log.Int64("nodeID", node),
 				log.Err(err))
 			return err
 		}
-		log.Info(context.TODO(), "recover redundant node by transfer node to other resource group",
+		log.Info(ctx, "recover redundant node by transfer node to other resource group",
 			log.String("sourceRG", sourceRG.GetName()),
 			log.String("targetRG", targetRG.GetName()),
 			log.Int64("nodeID", node),
@@ -823,7 +823,7 @@ func (rm *ResourceManager) assignIncomingNode(ctx context.Context, nodeInfo *ses
 	// If node already assign to rg.
 	rg := rm.getResourceGroupByNodeID(node)
 	if rg != nil {
-		log.Info(context.TODO(), "HandleNodeUp: node already assign to resource group",
+		log.Info(ctx, "HandleNodeUp: node already assign to resource group",
 			log.String("rgName", rg.GetName()),
 			log.Int64("node", node),
 		)
@@ -862,10 +862,10 @@ func (rm *ResourceManager) createResourceGroupIfNotExists(ctx context.Context, n
 			},
 		},
 	}); err != nil {
-		log.Warn(context.TODO(), "failed to create resource group from session of new incoming node", log.String("rgName", rgName), log.Int64("nodeID", nodeID), log.Err(err))
+		log.Warn(ctx, "failed to create resource group from session of new incoming node", log.String("rgName", rgName), log.Int64("nodeID", nodeID), log.Err(err))
 		return err
 	}
-	log.Info(context.TODO(), "create resource group from session of new incoming node", log.String("rgName", rgName), log.Int64("nodeID", nodeID))
+	log.Info(ctx, "create resource group from session of new incoming node", log.String("rgName", rgName), log.Int64("nodeID", nodeID))
 	return nil
 }
 
@@ -934,7 +934,7 @@ func (rm *ResourceManager) transferNode(ctx context.Context, rgName string, node
 	if rg := rm.getResourceGroupByNodeID(node); rg != nil {
 		if rg.GetName() == rgName {
 			// node is already assign to rg.
-			log.Info(context.TODO(), "node already assign to resource group",
+			log.Info(ctx, "node already assign to resource group",
 				log.String("rgName", rgName),
 				log.Int64("node", node),
 			)
@@ -959,7 +959,7 @@ func (rm *ResourceManager) transferNode(ctx context.Context, rgName string, node
 
 	// Commit updates to meta storage.
 	if err := rm.catalog.SaveResourceGroup(ctx, updates...); err != nil {
-		log.Warn(context.TODO(), "failed to transfer node to resource group",
+		log.Warn(ctx, "failed to transfer node to resource group",
 			log.String("rgName", rgName),
 			log.String("originalRG", originalRG),
 			log.Int64("node", node),
@@ -973,7 +973,7 @@ func (rm *ResourceManager) transferNode(ctx context.Context, rgName string, node
 		rm.setupInMemResourceGroup(rg)
 	}
 	rm.nodeIDMap[node] = rgName
-	log.Info(context.TODO(), "transfer node to resource group",
+	log.Info(ctx, "transfer node to resource group",
 		log.String("rgName", rgName),
 		log.String("originalRG", originalRG),
 		log.Int64("node", node),
@@ -1003,7 +1003,7 @@ func (rm *ResourceManager) unassignNode(ctx context.Context, node int64) (string
 		// Commit updates to memory.
 		rm.setupInMemResourceGroup(rg)
 		delete(rm.nodeIDMap, node)
-		log.Info(context.TODO(), "unassign node to resource group",
+		log.Info(ctx, "unassign node to resource group",
 			log.String("rgName", rg.GetName()),
 			log.Int64("node", node),
 		)
@@ -1116,7 +1116,7 @@ func (rm *ResourceManager) GetResourceGroupsJSON(ctx context.Context) string {
 	})
 	ret, err := json.Marshal(rgs)
 	if err != nil {
-		log.Error(context.TODO(), "failed to marshal resource groups", log.Err(err))
+		log.Error(ctx, "failed to marshal resource groups", log.Err(err))
 		return ""
 	}
 
@@ -1136,10 +1136,10 @@ func (rm *ResourceManager) CheckNodesInResourceGroup(ctx context.Context) {
 			if info == nil {
 				rm.handleNodeDown(ctx, node)
 			} else if info.GetState() == session.NodeStateStopping {
-				log.Warn(context.TODO(), "node is stopping", log.Int64("node", node))
+				log.Warn(ctx, "node is stopping", log.Int64("node", node))
 				rm.handleNodeStopping(ctx, node)
 			} else if info.IsEmbeddedQueryNodeInStreamingNode() {
-				log.Warn(context.TODO(), "unreachable code, but just for dirty meta clean up", log.Int64("node", node))
+				log.Warn(ctx, "unreachable code, but just for dirty meta clean up", log.Int64("node", node))
 				rm.handleNodeStopping(ctx, node)
 			}
 		}

@@ -294,7 +294,7 @@ func CheckSearchIteratorResult(ctx context.Context, t *testing.T, itr client.Sea
 			if err == io.EOF {
 				break
 			} else {
-				log.Error(context.TODO(), "SearchIterator next gets error", log.Err(err))
+				log.Error(ctx, "SearchIterator next gets error", log.Err(err))
 				break
 			}
 		}
@@ -313,7 +313,7 @@ func CheckSearchIteratorResult(ctx context.Context, t *testing.T, itr client.Sea
 	}
 	require.Equal(t, expLimit, actualLimit)
 	if opt.expBatchSize != nil {
-		log.Debug(context.TODO(), "SearchIterator result len", log.Any("result len", actualBatchSize))
+		log.Debug(ctx, "SearchIterator result len", log.Any("result len", actualBatchSize))
 		require.True(t, EqualIntSlice(opt.expBatchSize, actualBatchSize))
 	}
 }
@@ -332,7 +332,7 @@ func CheckQueryIteratorResult(ctx context.Context, t *testing.T, itr client.Quer
 			if err == io.EOF {
 				break
 			} else {
-				log.Error(context.TODO(), "QueryIterator next gets error", log.Err(err))
+				log.Error(ctx, "QueryIterator next gets error", log.Err(err))
 				break
 			}
 		}
@@ -351,7 +351,7 @@ func CheckQueryIteratorResult(ctx context.Context, t *testing.T, itr client.Quer
 	}
 	require.Equal(t, expLimit, actualLimit)
 	if opt.expBatchSize != nil {
-		log.Debug(context.TODO(), "QueryIterator result len", log.Any("result len", actualBatchSize))
+		log.Debug(ctx, "QueryIterator result len", log.Any("result len", actualBatchSize))
 		require.True(t, EqualIntSlice(opt.expBatchSize, actualBatchSize))
 	}
 }

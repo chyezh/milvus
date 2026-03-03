@@ -20,7 +20,6 @@ import (
 	"context"
 	"time"
 
-
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
@@ -85,7 +84,7 @@ func (c *LeaderChecker) Check(ctx context.Context) []task.Task {
 		}
 		collection := c.meta.CollectionManager.GetCollection(ctx, collectionID)
 		if collection == nil {
-			log.Warn(context.TODO(), "collection released during check leader", log.Int64("collection", collectionID))
+			log.Warn(ctx, "collection released during check leader", log.Int64("collection", collectionID))
 			continue
 		}
 
@@ -171,7 +170,7 @@ func (c *LeaderChecker) findNeedLoadedSegments(ctx context.Context, replica *met
 		// This ensures the routing table remains accurate and up-to-date, reflecting the latest segment distribution.
 		version, ok := leaderView.Segments[s.GetID()]
 		if !ok || version.GetNodeID() != s.Node {
-			log.RatedDebug(context.TODO(), log.RateDefault, "leader checker append a segment to set",
+			log.RatedDebug(ctx, log.RateDefault, "leader checker append a segment to set",
 				log.Int64("segmentID", s.GetID()),
 				log.Int64("nodeID", s.Node))
 
@@ -209,7 +208,7 @@ func (c *LeaderChecker) findNeedRemovedSegments(ctx context.Context, replica *me
 		if ok || existInTarget {
 			continue
 		}
-		log.Debug(context.TODO(), "leader checker append a segment to remove",
+		log.Debug(ctx, "leader checker append a segment to remove",
 			log.Int64("segmentID", sid),
 			log.Int64("nodeID", s.NodeID))
 		// reduce leader action won't be execute on worker, in  order to remove segment from delegator success even when worker done

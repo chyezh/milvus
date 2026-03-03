@@ -40,10 +40,10 @@ func (w *walImpl) Append(ctx context.Context, msg message.MutableMessage) (messa
 	)
 	if r.Err != nil {
 		if werr.ErrLogWriterLockLost.Is(r.Err) {
-			w.Log().RatedWarn(context.TODO(), log.RateDefault, "wp writer fenced", log.Err(r.Err))
+			w.Log().RatedWarn(ctx, log.RateDefault, "wp writer fenced", log.Err(r.Err))
 			return nil, errors.Mark(r.Err, walimpls.ErrFenced)
 		}
-		w.Log().RatedWarn(context.TODO(), log.RateDefault, "write message to woodpecker failed", log.Err(r.Err))
+		w.Log().RatedWarn(ctx, log.RateDefault, "write message to woodpecker failed", log.Err(r.Err))
 		return nil, r.Err
 	}
 	return wpID{r.LogMessageId}, nil

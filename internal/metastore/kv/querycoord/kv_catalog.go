@@ -333,7 +333,7 @@ func (s Catalog) GetCollectionTargets(ctx context.Context) (map[int64]*querypb.C
 		target := &querypb.CollectionTarget{}
 		if err := proto.Unmarshal(decompressed.Bytes(), target); err != nil {
 			// recover target from meta is a optimize policy, skip when failure happens
-			log.Warn(context.TODO(), "failed to unmarshal collection target", log.String("key", string(key)), log.Err(err))
+			log.Warn(ctx, "failed to unmarshal collection target", log.String("key", string(key)), log.Err(err))
 			return nil
 		}
 		ret[target.GetCollectionID()] = target

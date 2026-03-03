@@ -164,7 +164,7 @@ func (csm *compactionTaskMeta) SaveCompactionTask(ctx context.Context, task *dat
 	csm.Lock()
 	defer csm.Unlock()
 	if err := csm.catalog.SaveCompactionTask(ctx, task); err != nil {
-		log.Error(context.TODO(), "meta update: update compaction task fail", log.Err(err))
+		log.Error(ctx, "meta update: update compaction task fail", log.Err(err))
 		return err
 	}
 	csm.saveCompactionTaskMemory(task)
@@ -184,7 +184,7 @@ func (csm *compactionTaskMeta) DropCompactionTask(ctx context.Context, task *dat
 	csm.Lock()
 	defer csm.Unlock()
 	if err := csm.catalog.DropCompactionTask(ctx, task); err != nil {
-		log.Error(context.TODO(), "meta update: drop compaction task fail", log.Int64("triggerID", task.TriggerID), log.Int64("planID", task.PlanID), log.Int64("collectionID", task.CollectionID), log.Err(err))
+		log.Error(ctx, "meta update: drop compaction task fail", log.Int64("triggerID", task.TriggerID), log.Int64("planID", task.PlanID), log.Int64("collectionID", task.CollectionID), log.Err(err))
 		return err
 	}
 	_, triggerIDExist := csm.compactionTasks[task.TriggerID]

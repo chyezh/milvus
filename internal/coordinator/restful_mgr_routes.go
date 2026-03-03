@@ -85,7 +85,7 @@ func (s *mixCoordImpl) GetDatacoordGCStatus(w http.ResponseWriter, req *http.Req
 	logger := log.With(log.String("Scope", "Rolling"))
 	resp, err := s.datacoordServer.GetGcStatus(req.Context())
 	if err != nil {
-		logger.Info(nil, "failed to GetGcStatus", log.Err(err))
+		logger.Info(context.TODO(), "failed to GetGcStatus", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to get garbage collection status: %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
@@ -104,7 +104,7 @@ func (s *mixCoordImpl) GetDatacoordGCStatus(w http.ResponseWriter, req *http.Req
 		jsonResponse.Status = "suspended"
 		jsonResponse.TimeRemaining = resp.GetTimeRemainingSeconds()
 	}
-	logger.Info(nil, "GetGcStatus success", log.Any("resp", jsonResponse))
+	logger.Info(context.TODO(), "GetGcStatus success", log.Any("resp", jsonResponse))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(jsonResponse)
@@ -121,7 +121,7 @@ func (s *mixCoordImpl) ControlDatacoordGC(w http.ResponseWriter, req *http.Reque
 
 	// Parses the JSON from the request body.
 	if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
-		logger.Info(nil, "ControlDataCoordGC failed to decode body", log.Err(err))
+		logger.Info(context.TODO(), "ControlDataCoordGC failed to decode body", log.Err(err))
 		http.Error(w, `{"msg": "Invalid request body"}`, http.StatusBadRequest)
 		return
 	}
@@ -143,7 +143,7 @@ func (s *mixCoordImpl) ControlDatacoordGC(w http.ResponseWriter, req *http.Reque
 	case "resumed", "active":
 		gcCommand = datapb.GcCommand_Resume
 	default:
-		logger.Info(nil, "ControlDataCoordGC invalid status value", log.Any("status", requestBody.Status))
+		logger.Info(context.TODO(), "ControlDataCoordGC invalid status value", log.Any("status", requestBody.Status))
 		http.Error(w, `{"msg": "Invalid status value. Use 'suspended', 'resumed' or 'active'."}`, http.StatusBadRequest)
 		return
 	}
@@ -155,12 +155,12 @@ func (s *mixCoordImpl) ControlDatacoordGC(w http.ResponseWriter, req *http.Reque
 	})
 	err = merr.CheckRPCCall(resp, err)
 	if err != nil {
-		logger.Info(nil, "ControlDataCoordGC GcControl failed", log.Err(err))
+		logger.Info(context.TODO(), "ControlDataCoordGC GcControl failed", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to control garbage collection: %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
 
-	logger.Info(nil, "ControlDataCoordGC GcControl success", log.String("gcCommand", gcCommand.String()))
+	logger.Info(context.TODO(), "ControlDataCoordGC GcControl success", log.String("gcCommand", gcCommand.String()))
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"msg": "OK"}`))
@@ -173,7 +173,7 @@ func (s *mixCoordImpl) HandleStreamingNodes(w http.ResponseWriter, req *http.Req
 	// 1. Fetch data from the streaming service.
 	streamingNodes, err := streaming.WAL().Balancer().ListStreamingNode(req.Context())
 	if err != nil {
-		logger.Info(nil, "HandleStreamingNodes failed to list streaming nodes", log.Err(err))
+		logger.Info(context.TODO(), "HandleStreamingNodes failed to list streaming nodes", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to list streaming nodes, %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
@@ -201,11 +201,11 @@ func (s *mixCoordImpl) HandleStreamingNodes(w http.ResponseWriter, req *http.Req
 	// Call GetFrozenNodeIDs to get the list of suspended nodes.
 	frozenNodeIDs, err := streaming.WAL().Balancer().GetFrozenNodeIDs(req.Context())
 	if err != nil {
-		logger.Info(nil, "HandleStreamingNodes failed to get frozen nodes", log.Err(err))
+		logger.Info(context.TODO(), "HandleStreamingNodes failed to get frozen nodes", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to get frozen nodes, %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
-	logger.Info(nil, "HandleStreamingNodes get frozen nodes", log.Any("frozen nodes", frozenNodeIDs))
+	logger.Info(context.TODO(), "HandleStreamingNodes get frozen nodes", log.Any("frozen nodes", frozenNodeIDs))
 	// Update the state of suspended nodes.
 	for _, nodeID := range frozenNodeIDs {
 		// Check if the node ID exists in the combined map.
@@ -219,7 +219,7 @@ func (s *mixCoordImpl) HandleStreamingNodes(w http.ResponseWriter, req *http.Req
 	// 2. Fetch data from the mixCoord service.
 	queryResp, err := s.getQueryNodes(req.Context())
 	if err != nil {
-		logger.Info(nil, "HandleStreamingNodes failed to get query nodes", log.Err(err))
+		logger.Info(context.TODO(), "HandleStreamingNodes failed to get query nodes", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to list query nodes, %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
@@ -246,7 +246,7 @@ func (s *mixCoordImpl) HandleStreamingNodes(w http.ResponseWriter, req *http.Req
 			if errors.Is(err, merr.ErrNodeNotFound) {
 				continue
 			}
-			logger.Info(nil, "HandleStreamingNodes GetQueryNodeDistribution failed", log.Err(err))
+			logger.Info(context.TODO(), "HandleStreamingNodes GetQueryNodeDistribution failed", log.Err(err))
 			http.Error(w, fmt.Sprintf(`{"msg": "failed to get query node distribution, %s"}`, err.Error()), http.StatusInternalServerError)
 			return
 		}
@@ -282,7 +282,7 @@ func (s *mixCoordImpl) HandleStreamingNodes(w http.ResponseWriter, req *http.Req
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(res); err != nil {
-		logger.Info(nil, "HandleStreamingNodes failed to encode response", log.Err(err))
+		logger.Info(context.TODO(), "HandleStreamingNodes failed to encode response", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to encode response, %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
@@ -306,7 +306,7 @@ func (s *mixCoordImpl) ListBatchQueryNodes(w http.ResponseWriter, req *http.Requ
 	logger := log.With(log.String("Scope", "Rolling"))
 	resp, err := s.getQueryNodes(req.Context())
 	if err != nil {
-		logger.Info(nil, "ListBatchQueryNodes failed to list query nodes", log.Err(err))
+		logger.Info(context.TODO(), "ListBatchQueryNodes failed to list query nodes", log.Err(err))
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(fmt.Sprintf(`{"msg": "failed to list query node, %s"}`, err.Error())))
 		return
@@ -317,12 +317,12 @@ func (s *mixCoordImpl) ListBatchQueryNodes(w http.ResponseWriter, req *http.Requ
 	resp.Status = nil
 	bytes, err := json.Marshal(resp)
 	if err != nil {
-		logger.Info(nil, "ListBatchQueryNodes failed to encode response", log.Err(err))
+		logger.Info(context.TODO(), "ListBatchQueryNodes failed to encode response", log.Err(err))
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(fmt.Sprintf(`{"msg": "failed to list query node, %s"}`, err.Error())))
 		return
 	}
-	logger.Info(nil, "ListBatchQueryNodes success", log.Any("response", string(bytes)))
+	logger.Info(context.TODO(), "ListBatchQueryNodes success", log.Any("response", string(bytes)))
 	w.Write(bytes)
 }
 
@@ -330,14 +330,14 @@ func (s *mixCoordImpl) ListBatchQueryNodes(w http.ResponseWriter, req *http.Requ
 func (s *mixCoordImpl) GetStreamingNodeDistribution(w http.ResponseWriter, req *http.Request) {
 	logger := log.With(log.String("Scope", "Rolling"))
 	if err := req.ParseForm(); err != nil {
-		logger.Info(nil, "GetStreamingNodeDistribution failed to parse form", log.Err(err))
+		logger.Info(context.TODO(), "GetStreamingNodeDistribution failed to parse form", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to parse form data, %s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
 
 	nodeID, err := strconv.ParseInt(req.FormValue("node_id"), 10, 64)
 	if err != nil {
-		logger.Info(nil, "GetStreamingNodeDistribution failed to parse form", log.Err(err))
+		logger.Info(context.TODO(), "GetStreamingNodeDistribution failed to parse form", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to get streaming node distribution, invalid node_id: %s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
@@ -356,7 +356,7 @@ func (s *mixCoordImpl) GetStreamingNodeDistribution(w http.ResponseWriter, req *
 	if streamingErr != nil {
 		// If streaming node is not found, try to get the batch node distribution.
 		if errors.Is(streamingErr, merr.ErrNodeNotFound) {
-			logger.Info(nil, "GetStreamingNodeDistribution default to QueryNode", log.Any("node_id", nodeID))
+			logger.Info(context.TODO(), "GetStreamingNodeDistribution default to QueryNode", log.Any("node_id", nodeID))
 			batchResp, batchErr := s.GetQueryNodeDistribution(req.Context(), &querypb.GetQueryNodeDistributionRequest{
 				Base:   commonpbutil.NewMsgBase(),
 				NodeID: nodeID,
@@ -367,14 +367,14 @@ func (s *mixCoordImpl) GetStreamingNodeDistribution(w http.ResponseWriter, req *
 				// If the status is specifically a node not found error, return an empty distribution.
 				if errors.Is(batchErr, merr.ErrNodeNotFound) {
 					// Both streaming and batch nodes were not found.
-					logger.Info(nil, "GetStreamingNodeDistribution ignore node not found", log.Any("node_id", nodeID))
+					logger.Info(context.TODO(), "GetStreamingNodeDistribution ignore node not found", log.Any("node_id", nodeID))
 					dist = distributionResponse{
 						ChannelNames:     []string{},
 						SealedSegmentIDs: []string{},
 					}
 				} else {
 					// Batch returned an error other than "NodeNotFound".
-					logger.Info(nil, "GetStreamingNodeDistribution GetQueryNodeDistribution failed", log.Err(batchErr))
+					logger.Info(context.TODO(), "GetStreamingNodeDistribution GetQueryNodeDistribution failed", log.Err(batchErr))
 					http.Error(w, fmt.Sprintf(`{"msg": "failed to get query node distribution, %s"}`, batchErr.Error()), http.StatusInternalServerError)
 					return
 				}
@@ -386,7 +386,7 @@ func (s *mixCoordImpl) GetStreamingNodeDistribution(w http.ResponseWriter, req *
 			}
 		} else {
 			// Streaming returned an error other than "NodeNotFound".
-			logger.Error(nil, "GetStreamingNodeDistribution failed to get wal distribution", log.Err(streamingErr))
+			logger.Error(context.TODO(), "GetStreamingNodeDistribution failed to get wal distribution", log.Err(streamingErr))
 			http.Error(w, fmt.Sprintf(`{"msg": "failed to get streaming node distribution, %s"}`, streamingErr.Error()), http.StatusInternalServerError)
 			return
 		}
@@ -400,7 +400,7 @@ func (s *mixCoordImpl) GetStreamingNodeDistribution(w http.ResponseWriter, req *
 			// If batch fails or returns a non-OK status, check the reason.
 			if batchErr != nil {
 				// Batch returned an error other than "NodeNotFound".
-				logger.Info(nil, "GetStreamingNodeDistribution GetQueryNodeDistribution failed", log.Err(batchErr))
+				logger.Info(context.TODO(), "GetStreamingNodeDistribution GetQueryNodeDistribution failed", log.Err(batchErr))
 				http.Error(w, fmt.Sprintf(`{"msg": "failed to get query node distribution, %s"}`, batchErr.Error()), http.StatusInternalServerError)
 				return
 			} else {
@@ -429,7 +429,7 @@ func (s *mixCoordImpl) GetStreamingNodeDistribution(w http.ResponseWriter, req *
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to encode response, %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
-	logger.Info(nil, "GetStreamingNodeDistribution success", log.Any("response", dist))
+	logger.Info(context.TODO(), "GetStreamingNodeDistribution success", log.Any("response", dist))
 }
 
 // GetBatchNodeDistribution handles GET requests to retrieve node distribution.
@@ -437,14 +437,14 @@ func (s *mixCoordImpl) GetStreamingNodeDistribution(w http.ResponseWriter, req *
 func (s *mixCoordImpl) GetBatchNodeDistribution(w http.ResponseWriter, req *http.Request) {
 	logger := log.With(log.String("Scope", "Rolling"))
 	if err := req.ParseForm(); err != nil {
-		logger.Info(nil, "GetBatchNodeDistribution failed to parse form", log.Err(err))
+		logger.Info(context.TODO(), "GetBatchNodeDistribution failed to parse form", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to parse form data, %s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
 
 	nodeID, err := strconv.ParseInt(req.FormValue("node_id"), 10, 64)
 	if err != nil {
-		logger.Info(nil, "GetBatchNodeDistribution failed to parse form", log.Err(err))
+		logger.Info(context.TODO(), "GetBatchNodeDistribution failed to parse form", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to get query node distribution, invalid node_id: %s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
@@ -456,7 +456,7 @@ func (s *mixCoordImpl) GetBatchNodeDistribution(w http.ResponseWriter, req *http
 
 	err = merr.CheckRPCCall(resp, err2)
 	if err != nil {
-		logger.Info(nil, "GetBatchNodeDistribution GetQueryNodeDistribution failed", log.Err(err))
+		logger.Info(context.TODO(), "GetBatchNodeDistribution GetQueryNodeDistribution failed", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to get query node distribution, %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
@@ -477,11 +477,11 @@ func (s *mixCoordImpl) GetBatchNodeDistribution(w http.ResponseWriter, req *http
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(dist); err != nil {
-		logger.Warn(nil, "GetBatchNodeDistribution failed to encode response", log.Err(err))
+		logger.Warn(context.TODO(), "GetBatchNodeDistribution failed to encode response", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to encode response, %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
-	logger.Info(nil, "GetBatchNodeDistribution success", log.Any("response", dist))
+	logger.Info(context.TODO(), "GetBatchNodeDistribution success", log.Any("response", dist))
 }
 
 // HandleBatchBalanceStatus is the main handler for the unified endpoint.
@@ -534,7 +534,7 @@ func (s *mixCoordImpl) getBatchBalanceStatus(w http.ResponseWriter, req *http.Re
 	logger := log.With(log.String("Scope", "Rolling"))
 	isActive, err := s.getQueryCoordBalanceActive(req.Context())
 	if err != nil {
-		logger.Warn(nil, "getBatchBalanceStatus getQueryCoordBalance failed", log.Err(err))
+		logger.Warn(context.TODO(), "getBatchBalanceStatus getQueryCoordBalance failed", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to check balance status, %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
@@ -543,7 +543,7 @@ func (s *mixCoordImpl) getBatchBalanceStatus(w http.ResponseWriter, req *http.Re
 	if isActive {
 		balanceStatus = "active"
 	}
-	logger.Info(nil, "getBatchBalanceStatus success", log.Any("response", balanceStatus))
+	logger.Info(context.TODO(), "getBatchBalanceStatus success", log.Any("response", balanceStatus))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -590,7 +590,7 @@ func (s *mixCoordImpl) controlBatchBalanceStatus(w http.ResponseWriter, req *htt
 
 	// Decode the JSON from the request body.
 	if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
-		logger.Warn(nil, "ControlBatchBalanceStatus failed to decode request", log.Err(err))
+		logger.Warn(context.TODO(), "ControlBatchBalanceStatus failed to decode request", log.Err(err))
 		http.Error(w, `{"msg": "Invalid request body"}`, http.StatusBadRequest)
 		return
 	}
@@ -612,17 +612,17 @@ func (s *mixCoordImpl) controlBatchBalanceStatus(w http.ResponseWriter, req *htt
 		})
 		errMsg = "failed to resume balance"
 	default:
-		logger.Warn(nil, "ControlBatchBalanceStatus invalid status", log.String("status", requestBody.Status))
+		logger.Warn(context.TODO(), "ControlBatchBalanceStatus invalid status", log.String("status", requestBody.Status))
 		http.Error(w, `{"msg": "Invalid status value. Use 'suspended', 'resumed' or 'active'."}`, http.StatusBadRequest)
 		return
 	}
 	err = merr.CheckRPCCall(resp, err)
 	if err != nil {
-		logger.Warn(nil, "ControlBatchBalanceStatus failed", log.Err(err))
+		logger.Warn(context.TODO(), "ControlBatchBalanceStatus failed", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "%s, %s"}`, errMsg, err.Error()), http.StatusInternalServerError)
 		return
 	}
-	logger.Info(nil, "ControlBatchBalanceStatus success")
+	logger.Info(context.TODO(), "ControlBatchBalanceStatus success")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"msg": "OK"}`))
@@ -645,7 +645,7 @@ func (s *mixCoordImpl) getStreamingBalanceStatus(w http.ResponseWriter, req *htt
 	logger := log.With(log.String("Scope", "Rolling"))
 	isSuspended, err := streaming.WAL().Balancer().IsRebalanceSuspended(req.Context())
 	if err != nil && !errors.Is(err, snmanager.ErrStreamingServiceNotReady) {
-		logger.Info(nil, "getStreamingBalanceStatus failed", log.Err(err))
+		logger.Info(context.TODO(), "getStreamingBalanceStatus failed", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to get balance status: %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
@@ -653,14 +653,14 @@ func (s *mixCoordImpl) getStreamingBalanceStatus(w http.ResponseWriter, req *htt
 	if errors.Is(err, snmanager.ErrStreamingServiceNotReady) {
 		isSuspended = true
 	}
-	logger.Info(nil, "getStreamingBalanceStatus", log.Any("suspended", isSuspended), log.Err(err))
+	logger.Info(context.TODO(), "getStreamingBalanceStatus", log.Any("suspended", isSuspended), log.Err(err))
 
 	active, err2 := s.getQueryCoordChannelBalanceActive(req.Context())
 	if err2 == nil {
 		isSuspended = isSuspended && !active
-		logger.Info(nil, "getStreamingBalanceStatus suspended merge with queryCoord channel", log.Any("suspended", isSuspended))
+		logger.Info(context.TODO(), "getStreamingBalanceStatus suspended merge with queryCoord channel", log.Any("suspended", isSuspended))
 	} else {
-		logger.Info(nil, "getStreamingBalanceStatus getQueryCoordChannelBalanceActive failed", log.Err(err))
+		logger.Info(context.TODO(), "getStreamingBalanceStatus getQueryCoordChannelBalanceActive failed", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to get balance status: %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
@@ -674,7 +674,7 @@ func (s *mixCoordImpl) getStreamingBalanceStatus(w http.ResponseWriter, req *htt
 		"msg":    "OK",
 		"status": status,
 	}
-	logger.Info(nil, "getStreamingBalanceStatus success", log.Any("status", status))
+	logger.Info(context.TODO(), "getStreamingBalanceStatus success", log.Any("status", status))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -689,7 +689,7 @@ func (s *mixCoordImpl) controlStreamingBalanceStatus(w http.ResponseWriter, req 
 	logger := log.With(log.String("Scope", "Rolling"))
 
 	if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
-		logger.Info(nil, "controlStreamingBalanceStatus json decoder failed", log.Err(err))
+		logger.Info(context.TODO(), "controlStreamingBalanceStatus json decoder failed", log.Err(err))
 		http.Error(w, `{"msg": "Invalid request body"}`, http.StatusBadRequest)
 		return
 	}
@@ -705,7 +705,7 @@ func (s *mixCoordImpl) controlStreamingBalanceStatus(w http.ResponseWriter, req 
 		err = streaming.WAL().Balancer().ResumeRebalance(req.Context())
 		errMsg = "failed to resume balance"
 	default:
-		logger.Info(nil, "controlStreamingBalanceStatus invalid status value", log.String("status", requestBody.Status))
+		logger.Info(context.TODO(), "controlStreamingBalanceStatus invalid status value", log.String("status", requestBody.Status))
 		http.Error(w, `{"msg": "Invalid status value. Use 'suspended', 'resumed' or 'active'."}`, http.StatusBadRequest)
 		return
 	}
@@ -719,11 +719,11 @@ func (s *mixCoordImpl) controlStreamingBalanceStatus(w http.ResponseWriter, req 
 	// For compatibility, this also forwards to QueryCoord to set the channel's balance status.
 	err2 := s.controlQueryCoordChannelBalanceStatus(req.Context(), requestBody.Status)
 	if err2 != nil {
-		logger.Warn(nil, "controlStreamingBalanceStatus controlQueryCoordChannelBalanceStatus failed", log.Err(err2))
+		logger.Warn(context.TODO(), "controlStreamingBalanceStatus controlQueryCoordChannelBalanceStatus failed", log.Err(err2))
 		http.Error(w, err2.Error(), http.StatusInternalServerError)
 		return
 	}
-	logger.Info(nil, "controlStreamingBalanceStatus success", log.Any("status", requestBody.Status))
+	logger.Info(context.TODO(), "controlStreamingBalanceStatus success", log.Any("status", requestBody.Status))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -748,7 +748,7 @@ func (s *mixCoordImpl) handleGetStreamingNodeStatus(w http.ResponseWriter, req *
 	logger := log.With(log.String("Scope", "Rolling"))
 	// Parse the request form to access URL query parameters.
 	if err := req.ParseForm(); err != nil {
-		logger.Info(nil, "handleGetStreamingNodeStatus parse form failed", log.Err(err))
+		logger.Info(context.TODO(), "handleGetStreamingNodeStatus parse form failed", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to parse form, %s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
@@ -756,14 +756,14 @@ func (s *mixCoordImpl) handleGetStreamingNodeStatus(w http.ResponseWriter, req *
 	// Access the query parameter from the populated req.Form field.
 	nodeIDStr := req.Form.Get("node_id")
 	if nodeIDStr == "" {
-		logger.Info(nil, "handleGetStreamingNodeStatus missing node_id")
+		logger.Info(context.TODO(), "handleGetStreamingNodeStatus missing node_id")
 		http.Error(w, `{"msg": "node_id query parameter is required"}`, http.StatusBadRequest)
 		return
 	}
 
 	nodeID, err := strconv.ParseInt(nodeIDStr, 10, 64)
 	if err != nil {
-		logger.Info(nil, "handleGetStreamingNodeStatus invalid node_id", log.Err(err))
+		logger.Info(context.TODO(), "handleGetStreamingNodeStatus invalid node_id", log.Err(err))
 		http.Error(w, `{"msg": "Invalid node_id parameter"}`, http.StatusBadRequest)
 		return
 	}
@@ -771,11 +771,11 @@ func (s *mixCoordImpl) handleGetStreamingNodeStatus(w http.ResponseWriter, req *
 	// 1. Call GetFrozenNodeIDs to get the list of suspended nodes.
 	frozenNodeIDs, err := streaming.WAL().Balancer().GetFrozenNodeIDs(req.Context())
 	if err != nil {
-		logger.Info(nil, "handleGetStreamingNodeStatus getFrozenNodeIDs failed", log.Err(err))
+		logger.Info(context.TODO(), "handleGetStreamingNodeStatus getFrozenNodeIDs failed", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to get frozen nodes, %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
-	logger.Info(nil, "handleGetStreamingNodeStatus getFrozenNodeIDs", log.Any("frozen nodes", frozenNodeIDs))
+	logger.Info(context.TODO(), "handleGetStreamingNodeStatus getFrozenNodeIDs", log.Any("frozen nodes", frozenNodeIDs))
 
 	// 2. Use lo.Contains to check if the nodeID is in the list.
 	isSuspended := lo.Contains(frozenNodeIDs, nodeID)
@@ -783,16 +783,16 @@ func (s *mixCoordImpl) handleGetStreamingNodeStatus(w http.ResponseWriter, req *
 	// If the node is not in the streaming list, perform a fallback check on the batch service.
 	if !isSuspended {
 		suspended, err := s.queryCoordServer.IsNodeSuspended(req.Context(), nodeID)
-		logger.Info(nil, "handleGetStreamingNodeStatus queryCoord IsNodeSuspended", log.Any("suspended", suspended), log.Err(err))
+		logger.Info(context.TODO(), "handleGetStreamingNodeStatus queryCoord IsNodeSuspended", log.Any("suspended", suspended), log.Err(err))
 		if err != nil && !errors.Is(err, merr.ErrNodeNotFound) {
-			logger.Info(nil, "handleGetStreamingNodeStatus queryCoord suspended failed", log.Err(err))
+			logger.Info(context.TODO(), "handleGetStreamingNodeStatus queryCoord suspended failed", log.Err(err))
 			http.Error(w, fmt.Sprintf(`{"msg": "failed to get batch node status, %s"}`, err.Error()), http.StatusInternalServerError)
 			return
 		}
 		if err == nil {
 			isSuspended = suspended
 		} else {
-			logger.Info(nil, "handleGetStreamingNodeStatus queryCoord complain node not found")
+			logger.Info(context.TODO(), "handleGetStreamingNodeStatus queryCoord complain node not found")
 		}
 	}
 
@@ -808,7 +808,7 @@ func (s *mixCoordImpl) handleGetStreamingNodeStatus(w http.ResponseWriter, req *
 		NodeID: nodeID,
 		Status: status,
 	}
-	logger.Info(nil, "handleGetStreamingNodeStatus success", log.Any("responseBody", responseBody))
+	logger.Info(context.TODO(), "handleGetStreamingNodeStatus success", log.Any("responseBody", responseBody))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(responseBody)
@@ -822,13 +822,13 @@ func (s *mixCoordImpl) handlePutStreamingNodeStatus(w http.ResponseWriter, req *
 	}
 	logger := log.With(log.String("Scope", "Rolling"))
 	if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
-		logger.Info(nil, "handlePutStreamingNodeStatus json decoder failed", log.Err(err))
+		logger.Info(context.TODO(), "handlePutStreamingNodeStatus json decoder failed", log.Err(err))
 		http.Error(w, `{"msg": "Invalid request body"}`, http.StatusBadRequest)
 		return
 	}
 
 	if requestBody.NodeID == 0 {
-		logger.Info(nil, "handlePutStreamingNodeStatus missing node_id")
+		logger.Info(context.TODO(), "handlePutStreamingNodeStatus missing node_id")
 		http.Error(w, `{"msg": "node_id is required"}`, http.StatusBadRequest)
 		return
 	}
@@ -845,26 +845,26 @@ func (s *mixCoordImpl) handlePutStreamingNodeStatus(w http.ResponseWriter, req *
 		err = streaming.WAL().Balancer().DefreezeNodeIDs(req.Context(), nodeIDs)
 		errMsg = "failed to activate streaming node"
 	default:
-		logger.Info(nil, "handlePutStreamingNodeStatus invalid status value", log.Any("status", requestBody.Status))
+		logger.Info(context.TODO(), "handlePutStreamingNodeStatus invalid status value", log.Any("status", requestBody.Status))
 		http.Error(w, `{"msg": "Invalid status value. Use 'suspended' or 'active'."}`, http.StatusBadRequest)
 		return
 	}
 
 	if err != nil {
-		logger.Info(nil, "handlePutStreamingNodeStatus failed", log.Err(err))
+		logger.Info(context.TODO(), "handlePutStreamingNodeStatus failed", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "%s, %s"}`, errMsg, err.Error()), http.StatusInternalServerError)
 		return
 	}
 	err = s.handleQueryNodeStatusUpdate(req.Context(), requestBody.NodeID, requestBody.Status)
 	if err != nil && !errors.Is(err, merr.ErrNodeNotFound) {
-		logger.Info(nil, "handlePutStreamingNodeStatus handleQueryNodeStatusUpdate update failed", log.Err(err))
+		logger.Info(context.TODO(), "handlePutStreamingNodeStatus handleQueryNodeStatusUpdate update failed", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "%s", "%s"}`, errMsg, err.Error()), http.StatusInternalServerError)
 		return
 	}
 	if err != nil {
-		logger.Info(nil, "handlePutStreamingNodeStatus QueryCoord ingore node")
+		logger.Info(context.TODO(), "handlePutStreamingNodeStatus QueryCoord ingore node")
 	}
-	logger.Info(nil, "handlePutStreamingNodeStatus success", log.Any("status", requestBody.Status))
+	logger.Info(context.TODO(), "handlePutStreamingNodeStatus success", log.Any("status", requestBody.Status))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"msg": "OK"}`))
@@ -888,7 +888,7 @@ func (s *mixCoordImpl) handleGetBatchNodeStatus(w http.ResponseWriter, req *http
 	logger := log.With(log.String("Scope", "Rolling"))
 	// Parse the request form to access URL query parameters.
 	if err := req.ParseForm(); err != nil {
-		logger.Warn(nil, "handleGetBatchNodeStatus", log.Err(err))
+		logger.Warn(context.TODO(), "handleGetBatchNodeStatus", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to parse form, %s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
@@ -896,14 +896,14 @@ func (s *mixCoordImpl) handleGetBatchNodeStatus(w http.ResponseWriter, req *http
 	// Access the query parameter from the populated req.Form field.
 	nodeIDStr := req.Form.Get("node_id")
 	if nodeIDStr == "" {
-		logger.Warn(nil, "handleGetBatchNodeStatus missing node_id")
+		logger.Warn(context.TODO(), "handleGetBatchNodeStatus missing node_id")
 		http.Error(w, `{"msg": "node_id query parameter is required"}`, http.StatusBadRequest)
 		return
 	}
 
 	nodeID, err := strconv.ParseInt(nodeIDStr, 10, 64)
 	if err != nil {
-		logger.Info(nil, "handleGetBatchNodeStatus invalid node_id", log.Err(err))
+		logger.Info(context.TODO(), "handleGetBatchNodeStatus invalid node_id", log.Err(err))
 		http.Error(w, `{"msg": "Invalid node_id parameter"}`, http.StatusBadRequest)
 		return
 	}
@@ -911,7 +911,7 @@ func (s *mixCoordImpl) handleGetBatchNodeStatus(w http.ResponseWriter, req *http
 	// Call the gRPC method to check the node's status
 	isSuspended, err := s.queryCoordServer.IsNodeSuspended(req.Context(), nodeID)
 	if err != nil {
-		logger.Info(nil, "handleGetBatchNodeStatus queryCoord IsNodeSuspended", log.Err(err))
+		logger.Info(context.TODO(), "handleGetBatchNodeStatus queryCoord IsNodeSuspended", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to get node status, %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
@@ -928,7 +928,7 @@ func (s *mixCoordImpl) handleGetBatchNodeStatus(w http.ResponseWriter, req *http
 		NodeID: nodeID,
 		Status: status,
 	}
-	logger.Info(nil, "handleGetBatchNodeStatus success", log.Any("responseBody", responseBody))
+	logger.Info(context.TODO(), "handleGetBatchNodeStatus success", log.Any("responseBody", responseBody))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(responseBody)
@@ -972,31 +972,31 @@ func (s *mixCoordImpl) handlePutBatchNodeStatus(w http.ResponseWriter, req *http
 	}
 
 	if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
-		logger.Info(nil, "handlePutBatchNodeStatus json decoder failed", log.Err(err))
+		logger.Info(context.TODO(), "handlePutBatchNodeStatus json decoder failed", log.Err(err))
 		http.Error(w, `{"msg": "Invalid request body"}`, http.StatusBadRequest)
 		return
 	}
 
 	if requestBody.NodeID == 0 {
-		logger.Info(nil, "handlePutBatchNodeStatus missing node_id")
+		logger.Info(context.TODO(), "handlePutBatchNodeStatus missing node_id")
 		http.Error(w, `{"msg": "node_id is required"}`, http.StatusBadRequest)
 		return
 	}
 
 	// Call the new helper function
 	if err := s.handleQueryNodeStatusUpdate(req.Context(), requestBody.NodeID, requestBody.Status); err != nil {
-		logger.Info(nil, "handlePutBatchNodeStatus queryCoord handleQueryNodeStatus", log.Err(err))
+		logger.Info(context.TODO(), "handlePutBatchNodeStatus queryCoord handleQueryNodeStatus", log.Err(err))
 		// Handle errors returned by the helper function
 		if strings.Contains(err.Error(), "invalid status value") {
-			logger.Info(nil, "handlePutBatchNodeStatus invalid status", log.Err(err))
+			logger.Info(context.TODO(), "handlePutBatchNodeStatus invalid status", log.Err(err))
 			http.Error(w, `{"msg": "Invalid status value. Use 'suspended', 'resumed' or 'active'."}`, http.StatusBadRequest)
 			return
 		}
-		logger.Info(nil, "handlePutBatchNodeStatus queryCoord handleQueryNodeStatus", log.Err(err))
+		logger.Info(context.TODO(), "handlePutBatchNodeStatus queryCoord handleQueryNodeStatus", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "%s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
-	logger.Info(nil, "handlePutBatchNodeStatus success", log.Any("status", requestBody.Status))
+	logger.Info(context.TODO(), "handlePutBatchNodeStatus success", log.Any("status", requestBody.Status))
 	// Success response
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -1014,14 +1014,14 @@ func (s *mixCoordImpl) TransferBatchSegment(w http.ResponseWriter, req *http.Req
 	logger := log.With(log.String("Scope", "Rolling"))
 	// Decodes the JSON from the request body.
 	if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
-		logger.Info(nil, "TransferBatchSegment json decoder failed", log.Err(err))
+		logger.Info(context.TODO(), "TransferBatchSegment json decoder failed", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "Invalid request body, %s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
 
 	// Check if the mandatory field is provided.
 	if requestBody.SourceNodeID == 0 {
-		logger.Info(nil, "TransferBatchSegment missing source_node_id")
+		logger.Info(context.TODO(), "TransferBatchSegment missing source_node_id")
 		http.Error(w, `{"msg": "source_node_id is required"}`, http.StatusBadRequest)
 		return
 	}
@@ -1056,11 +1056,11 @@ func (s *mixCoordImpl) TransferBatchSegment(w http.ResponseWriter, req *http.Req
 	resp, err := s.TransferSegment(req.Context(), request)
 	err = merr.CheckRPCCall(resp, err)
 	if err != nil {
-		logger.Info(nil, "TransferBatchSegment failed", log.Err(err))
+		logger.Info(context.TODO(), "TransferBatchSegment failed", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to transfer segment, %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
-	logger.Info(nil, "TransferBatchSegment success")
+	logger.Info(context.TODO(), "TransferBatchSegment success")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"msg": "OK"}`))
@@ -1070,7 +1070,7 @@ func (s *mixCoordImpl) TransferBatchSegment(w http.ResponseWriter, req *http.Req
 func (s *mixCoordImpl) TransferStreamingChannel(w http.ResponseWriter, req *http.Request) {
 	logger := log.With(log.String("Scope", "Rolling"))
 	if req.Method != http.MethodPost {
-		logger.Info(nil, "TransferStreamingChannel invalid method")
+		logger.Info(context.TODO(), "TransferStreamingChannel invalid method")
 		http.Error(w, `{"msg": "Method not allowed"}`, http.StatusMethodNotAllowed)
 		return
 	}
@@ -1083,13 +1083,13 @@ func (s *mixCoordImpl) TransferStreamingChannel(w http.ResponseWriter, req *http
 	}
 
 	if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
-		logger.Info(nil, "TransferStreamingChannel json decoder failed", log.Err(err))
+		logger.Info(context.TODO(), "TransferStreamingChannel json decoder failed", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "Invalid request body, %s"}`, err.Error()), http.StatusBadRequest)
 		return
 	}
 
 	if requestBody.SourceNodeID == 0 {
-		logger.Info(nil, "TransferStreamingChannel missing source_node_id")
+		logger.Info(context.TODO(), "TransferStreamingChannel missing source_node_id")
 		http.Error(w, `{"msg": "source_node_id is required"}`, http.StatusBadRequest)
 		return
 	}
@@ -1118,11 +1118,11 @@ func (s *mixCoordImpl) TransferStreamingChannel(w http.ResponseWriter, req *http
 	resp, err := s.TransferChannel(req.Context(), transferReq)
 	err = merr.CheckRPCCall(resp, err)
 	if err != nil {
-		logger.Info(nil, "TransferStreamingChannel failed", log.Err(err))
+		logger.Info(context.TODO(), "TransferStreamingChannel failed", log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to transfer channel, %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
-	logger.Info(nil, "TransferStreamingChannel success")
+	logger.Info(context.TODO(), "TransferStreamingChannel success")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"msg": "OK"}`))
@@ -1144,20 +1144,20 @@ func (s *mixCoordImpl) HandleAlterWAL(w http.ResponseWriter, req *http.Request) 
 	}
 
 	if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
-		logger.Info(nil, "HandleAlterWAL failed to decode request body", log.Err(err))
+		logger.Info(context.TODO(), "HandleAlterWAL failed to decode request body", log.Err(err))
 		http.Error(w, `{"msg": "Invalid request body"}`, http.StatusBadRequest)
 		return
 	}
 
 	if requestBody.TargetWALName == "" {
-		logger.Info(nil, "HandleAlterWAL missing target_wal_name")
+		logger.Info(context.TODO(), "HandleAlterWAL missing target_wal_name")
 		http.Error(w, `{"msg": "target_wal_name is required"}`, http.StatusBadRequest)
 		return
 	}
 
 	targetWAL := message.NewWALName(strings.ToLower(requestBody.TargetWALName))
 	if targetWAL == message.WALNameUnknown {
-		logger.Info(nil, "HandleAlterWAL unknown target_wal_name")
+		logger.Info(context.TODO(), "HandleAlterWAL unknown target_wal_name")
 		http.Error(w, `{"msg": "unknown target_wal_name"}`, http.StatusBadRequest)
 		return
 	}
@@ -1169,7 +1169,7 @@ func (s *mixCoordImpl) HandleAlterWAL(w http.ResponseWriter, req *http.Request) 
 		// Convert persisted mq.type string to WALName
 		currentWALFromConfig := message.NewWALName(strings.ToLower(currentMQType))
 		if currentWALFromConfig != message.WALNameUnknown && currentWALFromConfig == targetWAL {
-			logger.Info(nil, "HandleAlterWAL target WAL is same as current mq.type",
+			logger.Info(context.TODO(), "HandleAlterWAL target WAL is same as current mq.type",
 				log.String("currentMQType", currentMQType),
 				log.String("targetWAL", requestBody.TargetWALName))
 			w.Header().Set("Content-Type", "application/json")
@@ -1179,19 +1179,19 @@ func (s *mixCoordImpl) HandleAlterWAL(w http.ResponseWriter, req *http.Request) 
 		}
 	}
 
-	logger.Info(nil, "HandleAlterWAL start",
+	logger.Info(context.TODO(), "HandleAlterWAL start",
 		log.String("targetWAL", requestBody.TargetWALName),
 		log.Any("config", requestBody.Config))
 
 	if err := s.broadcastAlterWALMessage(req.Context(), commonpb.WALName(targetWAL), requestBody.Config); err != nil {
-		logger.Info(nil, "HandleAlterWAL failed to broadcast AlterWALMessage",
+		logger.Info(context.TODO(), "HandleAlterWAL failed to broadcast AlterWALMessage",
 			log.String("targetWAL", requestBody.TargetWALName),
 			log.Err(err))
 		http.Error(w, fmt.Sprintf(`{"msg": "failed to broadcast AlterWALMessage, %s"}`, err.Error()), http.StatusInternalServerError)
 		return
 	}
 
-	logger.Info(nil, "HandleAlterWAL success", log.String("targetWAL", requestBody.TargetWALName))
+	logger.Info(context.TODO(), "HandleAlterWAL success", log.String("targetWAL", requestBody.TargetWALName))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"msg": "OK"}`))
@@ -1205,10 +1205,10 @@ func (s *mixCoordImpl) broadcastAlterWALMessage(ctx context.Context, targetWALNa
 	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusiveClusterResourceKey())
 	if err != nil {
 		if errors.Is(err, broadcast.ErrNotPrimary) {
-			logger.Info(nil, "broadcastAlterWALMessage failed, current cluster is not primary", log.Err(err))
+			logger.Info(ctx, "broadcastAlterWALMessage failed, current cluster is not primary", log.Err(err))
 			return errors.Wrap(err, "current cluster is not primary, cannot perform WAL switch")
 		}
-		logger.Info(nil, "broadcastAlterWALMessage failed to start broadcast", log.Err(err))
+		logger.Info(ctx, "broadcastAlterWALMessage failed to start broadcast", log.Err(err))
 		return errors.Wrap(err, "failed to start broadcast")
 	}
 	defer broadcaster.Close()
@@ -1223,18 +1223,18 @@ func (s *mixCoordImpl) broadcastAlterWALMessage(ctx context.Context, targetWALNa
 		WithClusterLevelBroadcast(channel.GetClusterChannels()).
 		BuildBroadcast()
 	if err != nil {
-		logger.Info(nil, "broadcastAlterWALMessage failed to build broadcast message", log.Err(err))
+		logger.Info(ctx, "broadcastAlterWALMessage failed to build broadcast message", log.Err(err))
 		return errors.Wrap(err, "failed to build broadcast message")
 	}
 
 	// Broadcast the message to all pChannels
 	result, err := broadcaster.Broadcast(ctx, broadcastMsg)
 	if err != nil {
-		logger.Info(nil, "broadcastAlterWALMessage failed to broadcast message", log.Err(err))
+		logger.Info(ctx, "broadcastAlterWALMessage failed to broadcast message", log.Err(err))
 		return errors.Wrap(err, "failed to broadcast message")
 	}
 
-	logger.Info(nil, "broadcastAlterWALMessage success",
+	logger.Info(ctx, "broadcastAlterWALMessage success",
 		log.Int("pChannelCount", len(result.AppendResults)),
 		log.Uint64("broadcastID", result.BroadcastID))
 
@@ -1260,19 +1260,19 @@ func (s *mixCoordImpl) HandleAlterConfig(writer http.ResponseWriter, request *ht
 	}
 
 	if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
-		logger.Info(nil, "HandleAlterConfig failed to decode request body", log.Err(err))
+		logger.Info(context.TODO(), "HandleAlterConfig failed to decode request body", log.Err(err))
 		http.Error(writer, `{"msg": "Invalid request body"}`, http.StatusBadRequest)
 		return
 	}
 
 	if requestBody.Key == "" {
-		logger.Info(nil, "HandleAlterConfig missing key")
+		logger.Info(context.TODO(), "HandleAlterConfig missing key")
 		http.Error(writer, `{"msg": "key is required"}`, http.StatusBadRequest)
 		return
 	}
 
 	if requestBody.Value == "" {
-		logger.Info(nil, "HandleAlterConfig missing value")
+		logger.Info(context.TODO(), "HandleAlterConfig missing value")
 		http.Error(writer, `{"msg": "value is required"}`, http.StatusBadRequest)
 		return
 	}
@@ -1280,7 +1280,7 @@ func (s *mixCoordImpl) HandleAlterConfig(writer http.ResponseWriter, request *ht
 	// Check if it's mqtype configuration
 	normalizedKey := strings.ToLower(strings.ReplaceAll(requestBody.Key, "/", "."))
 	if strings.Contains(normalizedKey, "mqtype") || strings.Contains(normalizedKey, "mq.type") {
-		logger.Info(nil, "HandleAlterConfig attempted to modify mqtype",
+		logger.Info(context.TODO(), "HandleAlterConfig attempted to modify mqtype",
 			log.String("key", requestBody.Key))
 		http.Error(writer, `{"msg": "mqtype configuration cannot be modified through this endpoint. Please use the alterWAL endpoint instead"}`, http.StatusBadRequest)
 		return
@@ -1288,7 +1288,7 @@ func (s *mixCoordImpl) HandleAlterConfig(writer http.ResponseWriter, request *ht
 
 	// Check if the configuration is immutable
 	if !paramMgr.IsImmutable(requestBody.Key) {
-		logger.Info(nil, "HandleAlterConfig attempted to modify non-immutable config",
+		logger.Info(context.TODO(), "HandleAlterConfig attempted to modify non-immutable config",
 			log.String("key", requestBody.Key))
 		http.Error(writer, `{"msg": "only immutable configurations can be modified through this endpoint. Non-immutable configurations should be modified directly in the configuration file"}`, http.StatusBadRequest)
 		return
@@ -1297,7 +1297,7 @@ func (s *mixCoordImpl) HandleAlterConfig(writer http.ResponseWriter, request *ht
 	// Get EtcdSource to save the configuration
 	etcdSource, ok := paramMgr.GetEtcdSource()
 	if !ok {
-		logger.Info(nil, "HandleAlterConfig failed, etcd source not enabled")
+		logger.Info(context.TODO(), "HandleAlterConfig failed, etcd source not enabled")
 		http.Error(writer, `{"msg": "etcd source is not enabled"}`, http.StatusInternalServerError)
 		return
 	}
@@ -1305,7 +1305,7 @@ func (s *mixCoordImpl) HandleAlterConfig(writer http.ResponseWriter, request *ht
 	// Save configuration to etcd
 	// Use the original key format, SaveConfigToEtcd will handle normalization internally
 	if err := paramMgr.SaveConfigToEtcd(etcdSource, requestBody.Key, requestBody.Value); err != nil {
-		logger.Info(nil, "HandleAlterConfig failed to save config to etcd",
+		logger.Info(context.TODO(), "HandleAlterConfig failed to save config to etcd",
 			log.String("key", requestBody.Key),
 			log.String("value", requestBody.Value),
 			log.Err(err))
@@ -1313,7 +1313,7 @@ func (s *mixCoordImpl) HandleAlterConfig(writer http.ResponseWriter, request *ht
 		return
 	}
 
-	logger.Info(nil, "HandleAlterConfig success",
+	logger.Info(context.TODO(), "HandleAlterConfig success",
 		log.String("key", requestBody.Key),
 		log.String("value", requestBody.Value))
 

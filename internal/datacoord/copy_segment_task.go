@@ -519,7 +519,7 @@ func AssembleCopySegmentRequest(task CopySegmentTask, job CopySegmentJob) (*data
 	// Read complete snapshot data from S3 to retrieve source segment binlogs
 	snapshotData, err := t.snapshotMeta.ReadSnapshotData(ctx, job.GetSnapshotName(), true)
 	if err != nil {
-		log.Error(context.TODO(), "failed to read snapshot data for copy segment task",
+		log.Error(ctx, "failed to read snapshot data for copy segment task",
 			append(WrapCopySegmentTaskLog(task), log.Err(err))...)
 		return nil, err
 	}
@@ -543,7 +543,7 @@ func AssembleCopySegmentRequest(task CopySegmentTask, job CopySegmentJob) (*data
 		// Get source segment description from snapshot
 		sourceSegDesc, ok := sourceSegmentMap[sourceSegID]
 		if !ok {
-			log.Warn(context.TODO(), "source segment not found in snapshot",
+			log.Warn(ctx, "source segment not found in snapshot",
 				log.Int64("sourceSegmentID", sourceSegID),
 				log.String("snapshotName", job.GetSnapshotName()))
 			continue
@@ -572,7 +572,7 @@ func AssembleCopySegmentRequest(task CopySegmentTask, job CopySegmentJob) (*data
 			PartitionId:  partitionID,
 			SegmentId:    targetSegID,
 		}
-		log.Info(context.TODO(), "prepare copy segment source and target", log.Any("source", sourceSegDesc), log.Any("target", target))
+		log.Info(ctx, "prepare copy segment source and target", log.Any("source", sourceSegDesc), log.Any("target", target))
 		targets = append(targets, target)
 	}
 
@@ -654,7 +654,7 @@ func SyncCopySegmentTask(task CopySegmentTask, resp *datapb.QueryCopySegmentResp
 					UpdateCopyTaskState(datapb.CopySegmentTaskState_CopySegmentTaskFailed),
 					UpdateCopyTaskReason(err.Error()))
 				if updateErr != nil {
-					log.Warn(context.TODO(), "failed to update task state to Failed",
+					log.Warn(ctx, "failed to update task state to Failed",
 						log.Int64("taskID", task.GetTaskId()), log.Err(updateErr))
 				}
 
@@ -662,11 +662,11 @@ func SyncCopySegmentTask(task CopySegmentTask, resp *datapb.QueryCopySegmentResp
 					UpdateCopyJobState(datapb.CopySegmentJobState_CopySegmentJobFailed),
 					UpdateCopyJobReason(err.Error()))
 				if updateErr != nil {
-					log.Warn(context.TODO(), "failed to update job state to Failed",
+					log.Warn(ctx, "failed to update job state to Failed",
 						log.Int64("jobID", task.GetJobId()), log.Err(updateErr))
 				}
 
-				log.Warn(context.TODO(), "update copy segment binlogs failed",
+				log.Warn(ctx, "update copy segment binlogs failed",
 					WrapCopySegmentTaskLog(task, log.String("err", err.Error()))...)
 				return err
 			}
@@ -686,7 +686,7 @@ func SyncCopySegmentTask(task CopySegmentTask, resp *datapb.QueryCopySegmentResp
 				return err
 			}
 
-			log.Info(context.TODO(), "update copy segment info done",
+			log.Info(ctx, "update copy segment info done",
 				WrapCopySegmentTaskLog(task, log.Int64("segmentID", result.GetSegmentId()),
 					log.Any("segmentResult", result))...)
 		}
@@ -698,7 +698,7 @@ func SyncCopySegmentTask(task CopySegmentTask, resp *datapb.QueryCopySegmentResp
 		// Record total latency (from task creation to completion)
 		totalDuration := task.GetTR().ElapseSpan()
 		metrics.CopySegmentTaskLatency.WithLabelValues(metrics.Done).Observe(float64(totalDuration.Milliseconds()))
-		log.Info(context.TODO(), "copy segment task completed",
+		log.Info(ctx, "copy segment task completed",
 			WrapCopySegmentTaskLog(task,
 				log.Duration("taskTimeCost/copying", copyingDuration),
 				log.Duration("taskTimeCost/total", totalDuration))...)

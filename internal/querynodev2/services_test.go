@@ -2059,7 +2059,7 @@ func (suite *ServiceSuite) TestSyncDistribution_Normal() {
 	mockDelegator := delegator.NewMockShardDelegator(suite.T())
 	mockDelegator.EXPECT().LoadSegments(mock.Anything, mock.Anything).
 		RunAndReturn(func(ctx context.Context, req *querypb.LoadSegmentsRequest) error {
-			log.Info(context.TODO(), "version", log.Int64("versionInload", req.GetVersion()))
+			log.Info(ctx, "version", log.Int64("versionInload", req.GetVersion()))
 			versionMatch = req.GetVersion() == segmentVersion
 			return nil
 		})

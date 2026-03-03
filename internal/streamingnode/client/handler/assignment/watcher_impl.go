@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 
-
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/discoverer"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/resolver"
 	"github.com/milvus-io/milvus/pkg/v2/log"

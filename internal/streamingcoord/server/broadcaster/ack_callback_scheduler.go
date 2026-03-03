@@ -87,9 +87,9 @@ func (s *ackCallbackScheduler) Close() {
 func (s *ackCallbackScheduler) background() {
 	defer func() {
 		s.notifier.Finish(struct{}{})
-		s.Logger().Info(nil, "ack scheduler background exit")
+		s.Logger().Info(context.TODO(), "ack scheduler background exit")
 	}()
-	s.Logger().Info(nil, "ack scheduler background start")
+	s.Logger().Info(context.TODO(), "ack scheduler background start")
 
 	// it's weired to find that FastLock may be failure even if there's no resource-key locked,
 	// also see: #45285
@@ -131,7 +131,7 @@ func (s *ackCallbackScheduler) triggerAckCallback() {
 	for _, task := range s.pendingAckedTasks {
 		g, err := s.rkLocker.FastLock(task.Header().ResourceKeys.Collect()...)
 		if err != nil {
-			s.Logger().Warn(nil, "lock is occupied, delay the ack callback", log.Uint64("broadcastID", task.Header().BroadcastID), log.Err(err))
+			s.Logger().Warn(context.TODO(), "lock is occupied, delay the ack callback", log.Uint64("broadcastID", task.Header().BroadcastID), log.Err(err))
 			pendingTasks = append(pendingTasks, task)
 			continue
 		}
@@ -151,16 +151,16 @@ func (s *ackCallbackScheduler) doAckCallback(bt *broadcastTask, g *lockGuards) (
 
 		s.triggerChan <- struct{}{}
 		if err == nil {
-			logger.Info(nil, "execute ack callback done")
+			logger.Info(context.TODO(), "execute ack callback done")
 		} else {
-			logger.Warn(nil, "execute ack callback failed", log.Err(err))
+			logger.Warn(context.TODO(), "execute ack callback failed", log.Err(err))
 		}
 	}()
-	logger.Info(nil, "start to execute ack callback")
+	logger.Info(context.TODO(), "start to execute ack callback")
 	if err := bt.BlockUntilAllAck(s.notifier.Context()); err != nil {
 		return err
 	}
-	logger.Debug(nil, "all vchannels are acked")
+	logger.Debug(context.TODO(), "all vchannels are acked")
 
 	msg, result := bt.BroadcastResult()
 	makeMap := make(map[string]*message.AppendResult, len(result))
@@ -178,7 +178,7 @@ func (s *ackCallbackScheduler) doAckCallback(bt *broadcastTask, g *lockGuards) (
 	}
 	bt.ObserveAckCallbackDone()
 
-	logger.Debug(nil, "ack callback done")
+	logger.Debug(context.TODO(), "ack callback done")
 	if err := bt.MarkAckCallbackDone(s.notifier.Context()); err != nil {
 		// The catalog is reliable to write, so we can mark the ack callback done without retrying.
 		return err
@@ -201,7 +201,7 @@ func (s *ackCallbackScheduler) callMessageAckCallbackUntilDone(ctx context.Conte
 			return nil
 		}
 		nextInterval := backoff.NextBackOff()
-		s.Logger().Warn(nil, "failed to call message ack callback, wait for retry...",
+		s.Logger().Warn(ctx, "failed to call message ack callback, wait for retry...",
 			log.FieldMessage(msg),
 			log.Duration("nextInterval", nextInterval),
 			log.Err(err))

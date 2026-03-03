@@ -47,22 +47,22 @@ func (s *RefreshConfigSuite) TestRefreshPasswordLength() {
 		Username: "test",
 		Password: "1234",
 	})
-	log.Debug(context.TODO(), "first create result", log.Any("state", resp))
+	log.Debug(ctx, "first create result", log.Any("state", resp))
 	s.Require().NoError(err)
 	s.Equal(commonpb.ErrorCode_IllegalArgument, resp.GetErrorCode())
 
 	params := paramtable.Get()
 	key := fmt.Sprintf("%s/config/proxy/minpasswordlength", params.EtcdCfg.RootPath.GetValue())
-	log.Debug(context.TODO(), "etcd key", log.String("key", key), log.Any("endpoints", c.EtcdCli.Endpoints()))
+	log.Debug(ctx, "etcd key", log.String("key", key), log.Any("endpoints", c.EtcdCli.Endpoints()))
 	r, e := c.EtcdCli.KV.Put(ctx, key, "3")
-	log.Debug(context.TODO(), "etcd put result", log.Any("resp", r), log.Err(e))
+	log.Debug(ctx, "etcd put result", log.Any("resp", r), log.Err(e))
 
 	s.Eventually(func() bool {
 		resp, err = c.MilvusClient.CreateCredential(ctx, &milvuspb.CreateCredentialRequest{
 			Username: "test",
 			Password: "1234",
 		})
-		log.Debug(context.TODO(), "second create result", log.Any("state", resp))
+		log.Debug(ctx, "second create result", log.Any("state", resp))
 		return commonpb.ErrorCode_Success == resp.GetErrorCode()
 	}, time.Second*20, time.Millisecond*500)
 }
@@ -95,7 +95,7 @@ func (s *RefreshConfigSuite) TestRefreshDefaultIndexName() {
 	})
 	s.NoError(err)
 	if createCollectionStatus.GetErrorCode() != commonpb.ErrorCode_Success {
-		log.Warn(context.TODO(), "createCollectionStatus fail reason", log.String("reason", createCollectionStatus.GetReason()))
+		log.Warn(ctx, "createCollectionStatus fail reason", log.String("reason", createCollectionStatus.GetReason()))
 	}
 	s.Equal(createCollectionStatus.GetErrorCode(), commonpb.ErrorCode_Success)
 

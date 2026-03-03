@@ -76,7 +76,7 @@ func NewChannelReplicator(channel *meta.ReplicateChannel) Replicator {
 
 func (r *channelReplicator) StartReplication() {
 	logger := log.With(log.String("key", r.channel.Key), log.Int64("modRevision", r.channel.ModRevision))
-	logger.Info(nil, "start replicate channel")
+	logger.Info(context.TODO(), "start replicate channel")
 	go func() {
 		defer func() {
 			if r.streamClient != nil {
@@ -98,7 +98,7 @@ func (r *channelReplicator) StartReplication() {
 			default:
 				err := r.init()
 				if err != nil {
-					logger.Warn(nil, "initialize replicator failed", log.Err(err))
+					logger.Warn(context.TODO(), "initialize replicator failed", log.Err(err))
 					continue
 				}
 				break INIT_LOOP
@@ -119,7 +119,7 @@ func (r *channelReplicator) init() error {
 			return err
 		}
 		r.targetClient = milvusClient
-		logger.Info(nil, "target client initialized")
+		logger.Info(context.TODO(), "target client initialized")
 	}
 	// init msg scanner
 	if r.msgScanner == nil {
@@ -137,12 +137,12 @@ func (r *channelReplicator) init() error {
 		})
 		r.msgScanner = scanner
 		r.msgChan = ch
-		logger.Info(nil, "scanner initialized", log.Any("checkpoint", cp))
+		logger.Info(context.TODO(), "scanner initialized", log.Any("checkpoint", cp))
 	}
 	// init replicate stream client
 	if r.streamClient == nil {
 		r.streamClient = r.createRscFunc(r.asyncNotifier.Context(), r.targetClient, r.channel)
-		logger.Info(nil, "stream client initialized")
+		logger.Info(context.TODO(), "stream client initialized")
 	}
 	return nil
 }
@@ -150,12 +150,12 @@ func (r *channelReplicator) init() error {
 // startConsumeLoop starts the replicate loop.
 func (r *channelReplicator) startConsumeLoop() {
 	logger := log.With(log.String("key", r.channel.Key), log.Int64("modRevision", r.channel.ModRevision))
-	logger.Info(nil, "start consume loop")
+	logger.Info(context.TODO(), "start consume loop")
 
 	for {
 		select {
 		case <-r.asyncNotifier.Context().Done():
-			logger.Info(nil, "consume loop stopped")
+			logger.Info(context.TODO(), "consume loop stopped")
 			return
 		case msg := <-r.msgChan:
 			err := r.streamClient.Replicate(msg)
@@ -165,10 +165,10 @@ func (r *channelReplicator) startConsumeLoop() {
 				}
 				continue
 			}
-			logger.Debug(nil, "replicate message success", log.FieldMessage(msg))
+			logger.Debug(context.TODO(), "replicate message success", log.FieldMessage(msg))
 			if msg.MessageType() == message.MessageTypeAlterReplicateConfig {
 				if util.IsReplicationRemovedByAlterReplicateConfigMessage(msg, r.channel.Value) {
-					logger.Info(nil, "replication removed, stop consume loop")
+					logger.Info(context.TODO(), "replication removed, stop consume loop")
 					r.streamClient.BlockUntilFinish()
 					return
 				}
@@ -184,7 +184,7 @@ func (r *channelReplicator) getReplicateCheckpoint() (*utility.ReplicateCheckpoi
 	// AlterReplicateConfig yet, so GetReplicateInfo would fail. Use InitializedCheckpoint directly.
 	if r.channel.Value.GetSkipGetReplicateCheckpoint() {
 		initializedCheckpoint := utility.NewReplicateCheckpointFromProto(r.channel.Value.InitializedCheckpoint)
-		logger.Info(nil, "skip get replicate checkpoint for pchannel-increasing task, use initialized checkpoint",
+		logger.Info(context.TODO(), "skip get replicate checkpoint for pchannel-increasing task, use initialized checkpoint",
 			log.Stringer("messageID", initializedCheckpoint.MessageID),
 			log.Uint64("timeTick", initializedCheckpoint.TimeTick),
 		)
@@ -207,7 +207,7 @@ func (r *channelReplicator) getReplicateCheckpoint() (*utility.ReplicateCheckpoi
 	checkpoint := replicateInfo.GetCheckpoint()
 	if checkpoint == nil || checkpoint.MessageId == nil {
 		initializedCheckpoint := utility.NewReplicateCheckpointFromProto(r.channel.Value.InitializedCheckpoint)
-		logger.Info(nil, "channel not found in replicate info, will start from the beginning",
+		logger.Info(ctx, "channel not found in replicate info, will start from the beginning",
 			log.Stringer("messageID", initializedCheckpoint.MessageID),
 			log.Uint64("timeTick", initializedCheckpoint.TimeTick),
 		)
@@ -215,7 +215,7 @@ func (r *channelReplicator) getReplicateCheckpoint() (*utility.ReplicateCheckpoi
 	}
 
 	cp := utility.NewReplicateCheckpointFromProto(checkpoint)
-	logger.Info(nil, "replicate messages from position",
+	logger.Info(ctx, "replicate messages from position",
 		log.Stringer("messageID", cp.MessageID),
 		log.Uint64("timeTick", cp.TimeTick),
 	)

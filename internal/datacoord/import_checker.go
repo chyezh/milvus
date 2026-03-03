@@ -27,8 +27,8 @@ import (
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/datacoord/broker"
 	"github.com/milvus-io/milvus/internal/util/importutilv2"
-	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
@@ -367,20 +367,20 @@ func (c *importChecker) checkSortingJob(job ImportJob) {
 			if !isCompacting {
 				compactionTask, err := createSortCompactionTask(c.ctx, task, originSegment, sortSegmentIDs[i], c.meta, c.handler, c.alloc)
 				if err != nil {
-					logger.Warn(nil, "create sort compaction task failed", log.Err(err))
+					logger.Warn(context.TODO(), "create sort compaction task failed", log.Err(err))
 					continue
 				}
 				if compactionTask == nil {
-					logger.Info(nil, "maybe it no need to create sort compaction task")
+					logger.Info(context.TODO(), "maybe it no need to create sort compaction task")
 					doneCnt++
 					continue
 				}
 				err = c.ci.enqueueCompaction(compactionTask)
 				if err != nil {
-					logger.Warn(nil, "sort compaction task enqueue failed", log.Err(err))
+					logger.Warn(context.TODO(), "sort compaction task enqueue failed", log.Err(err))
 					continue
 				}
-				logger.Info(nil, "create sort compaction task and enqueue success")
+				logger.Info(context.TODO(), "create sort compaction task and enqueue success")
 			}
 		}
 	}
@@ -539,7 +539,7 @@ func (c *importChecker) checkCollection(collectionID int64, jobs []ImportJob) {
 	defer cancel()
 	has, err := c.broker.HasCollection(ctx, collectionID)
 	if err != nil {
-		log.Warn(context.TODO(), "verify existence of collection failed", log.Int64("collection", collectionID), log.Err(err))
+		log.Warn(ctx, "verify existence of collection failed", log.Int64("collection", collectionID), log.Err(err))
 		return
 	}
 	if !has {
@@ -550,7 +550,7 @@ func (c *importChecker) checkCollection(collectionID int64, jobs []ImportJob) {
 			err = c.importMeta.UpdateJob(c.ctx, job.GetJobID(), UpdateJobState(internalpb.ImportJobState_Failed),
 				UpdateJobReason(fmt.Sprintf("collection %d dropped", collectionID)))
 			if err != nil {
-				log.Warn(context.TODO(), "failed to update job state to Failed", log.Int64("jobID", job.GetJobID()), log.Err(err))
+				log.Warn(ctx, "failed to update job state to Failed", log.Int64("jobID", job.GetJobID()), log.Err(err))
 			}
 		}
 	}

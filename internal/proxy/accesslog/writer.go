@@ -170,12 +170,12 @@ func NewRotateWriter(logCfg *paramtable.AccessLogConfig, minioCfg *paramtable.Mi
 		maxBackups:  logCfg.MaxBackups.GetAsInt(),
 		closeCh:     make(chan struct{}),
 	}
-	log.Info(context.TODO(), "Access log save to " + logger.dir())
+	log.Info(context.TODO(), "Access log save to "+logger.dir())
 	if logCfg.MinioEnable.GetAsBool() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		log.Info(context.TODO(), "Access log will backup files to minio", log.String("remote", logCfg.RemotePath.GetValue()), log.String("maxBackups", logCfg.MaxBackups.GetValue()))
+		log.Info(ctx, "Access log will backup files to minio", log.String("remote", logCfg.RemotePath.GetValue()), log.String("maxBackups", logCfg.MaxBackups.GetValue()))
 		handler, err := NewMinioHandler(ctx, minioCfg, logCfg.RemotePath.GetValue(), logCfg.MaxBackups.GetAsInt())
 		if err != nil {
 			return nil, err
@@ -297,7 +297,7 @@ func (l *RotateWriter) openNewFile() error {
 		if err := os.Rename(name, newName); err != nil {
 			return fmt.Errorf("can't rename log file: %s", err)
 		}
-		log.Info(context.TODO(), "seal old log to: " + newName)
+		log.Info(context.TODO(), "seal old log to: "+newName)
 		if l.handler != nil {
 			l.handler.Update(newName, path.Base(newName))
 		}

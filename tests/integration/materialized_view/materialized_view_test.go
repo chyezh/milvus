@@ -121,7 +121,7 @@ func (s *MaterializedViewTestSuite) run() {
 	s.NoError(err)
 	s.NotEmpty(segments)
 	for _, segment := range segments {
-		log.Info(context.TODO(), "ShowSegments result", log.String("segment", segment.String()))
+		log.Info(ctx, "ShowSegments result", log.String("segment", segment.String()))
 	}
 
 	// create index

@@ -43,13 +43,13 @@ func LoadBM25Stats(ctx context.Context, chunkManager storage.ChunkManager, segme
 	}
 
 	if len(logpaths) == 0 {
-		log.Warn(context.TODO(), "no BM25 stats to load")
+		log.Warn(ctx, "no BM25 stats to load")
 		return nil, nil
 	}
 
 	values, err := chunkManager.MultiRead(ctx, logpaths)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to load BM25 stats files", log.Err(err))
+		log.Warn(ctx, "failed to load BM25 stats files", log.Err(err))
 		return nil, err
 	}
 
@@ -71,7 +71,7 @@ func LoadBM25Stats(ctx context.Context, chunkManager storage.ChunkManager, segme
 	}
 
 	// TODO ADD METRIC FOR LOAD BM25 TIME
-	log.Info(context.TODO(), "Successfully load BM25 stats", log.Any("time", time.Since(startTs)))
+	log.Info(ctx, "Successfully load BM25 stats", log.Any("time", time.Since(startTs)))
 	return result, nil
 }
 
@@ -110,14 +110,14 @@ func LoadStats(ctx context.Context, chunkManager storage.ChunkManager, schema *s
 
 	// no stats log to parse, initialize a new BF
 	if len(bloomFilterFiles) == 0 {
-		log.Warn(context.TODO(), "no stats files to load")
+		log.Warn(ctx, "no stats files to load")
 		return nil, nil
 	}
 
 	// read historical PK filter
 	values, err := chunkManager.MultiRead(ctx, bloomFilterFiles)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to load bloom filter files", log.Err(err))
+		log.Warn(ctx, "failed to load bloom filter files", log.Err(err))
 		return nil, err
 	}
 	blobs := make([]*storage.Blob, 0)
@@ -129,13 +129,13 @@ func LoadStats(ctx context.Context, chunkManager storage.ChunkManager, schema *s
 	if logType == storage.CompoundStatsType {
 		stats, err = storage.DeserializeStatsList(blobs[0])
 		if err != nil {
-			log.Warn(context.TODO(), "failed to deserialize stats list", log.Err(err))
+			log.Warn(ctx, "failed to deserialize stats list", log.Err(err))
 			return nil, err
 		}
 	} else {
 		stats, err = storage.DeserializeStats(blobs)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to deserialize stats", log.Err(err))
+			log.Warn(ctx, "failed to deserialize stats", log.Err(err))
 			return nil, err
 		}
 	}
@@ -152,6 +152,6 @@ func LoadStats(ctx context.Context, chunkManager storage.ChunkManager, schema *s
 		result = append(result, pkStat)
 	}
 
-	log.Info(context.TODO(), "Successfully load pk stats", log.Any("time", time.Since(startTs)), log.Uint("size", size))
+	log.Info(ctx, "Successfully load pk stats", log.Any("time", time.Since(startTs)), log.Uint("size", size))
 	return result, nil
 }

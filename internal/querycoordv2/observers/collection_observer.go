@@ -109,7 +109,7 @@ func (ob *CollectionObserver) Start() {
 			for {
 				select {
 				case <-ctx.Done():
-					log.Info(context.TODO(), "CollectionObserver stopped")
+					log.Info(ctx, "CollectionObserver stopped")
 					return
 
 				case <-ticker.C:
@@ -176,7 +176,7 @@ func (ob *CollectionObserver) observeTimeout(ctx context.Context) {
 		collection := ob.meta.CollectionManager.GetCollection(ctx, task.CollectionID)
 		// collection released
 		if collection == nil {
-			log.Info(context.TODO(), "Load Collection Task canceled, collection removed from meta", log.Int64("collectionID", task.CollectionID), log.String("traceID", traceID))
+			log.Info(ctx, "Load Collection Task canceled, collection removed from meta", log.Int64("collectionID", task.CollectionID), log.String("traceID", traceID))
 			ob.loadTasks.Remove(traceID)
 			return true
 		}
@@ -185,7 +185,7 @@ func (ob *CollectionObserver) observeTimeout(ctx context.Context) {
 		case querypb.LoadType_LoadCollection:
 			if collection.GetStatus() == querypb.LoadStatus_Loading &&
 				time.Now().After(collection.UpdatedAt.Add(Params.QueryCoordCfg.LoadTimeoutSeconds.GetAsDuration(time.Second))) {
-				log.Info(context.TODO(), "load collection timeout, cancel it",
+				log.Info(ctx, "load collection timeout, cancel it",
 					log.Int64("collectionID", collection.GetCollectionID()),
 					log.Duration("loadTime", time.Since(collection.CreatedAt)))
 				ob.meta.CollectionManager.RemoveCollection(ctx, collection.GetCollectionID())
@@ -202,7 +202,7 @@ func (ob *CollectionObserver) observeTimeout(ctx context.Context) {
 
 			// all partition released
 			if len(partitions) == 0 {
-				log.Info(context.TODO(), "Load Partitions Task canceled, collection removed from meta",
+				log.Info(ctx, "Load Partitions Task canceled, collection removed from meta",
 					log.Int64("collectionID", task.CollectionID),
 					log.Int64s("partitionIDs", task.PartitionIDs),
 					log.String("traceID", traceID))
@@ -219,7 +219,7 @@ func (ob *CollectionObserver) observeTimeout(ctx context.Context) {
 			}
 			// only all partitions timeout means task timeout
 			if !working {
-				log.Info(context.TODO(), "load partitions timeout, cancel it",
+				log.Info(ctx, "load partitions timeout, cancel it",
 					log.Int64("collectionID", task.CollectionID),
 					log.Int64s("partitionIDs", task.PartitionIDs))
 				for _, partition := range partitions {
@@ -229,7 +229,7 @@ func (ob *CollectionObserver) observeTimeout(ctx context.Context) {
 
 				// all partition timeout, remove collection
 				if len(ob.meta.CollectionManager.GetPartitionsByCollection(ctx, task.CollectionID)) == 0 {
-					log.Info(context.TODO(), "collection timeout due to all partition removed", log.Int64("collection", task.CollectionID))
+					log.Info(ctx, "collection timeout due to all partition removed", log.Int64("collection", task.CollectionID))
 
 					ob.meta.CollectionManager.RemoveCollection(ctx, task.CollectionID)
 					ob.meta.ReplicaManager.RemoveCollection(ctx, task.CollectionID)
@@ -302,7 +302,7 @@ func (ob *CollectionObserver) observeLoadStatus(ctx context.Context) {
 
 		// all partition loaded, finish task
 		if len(partitions) > 0 && loaded {
-			log.Info(context.TODO(), "Load task finish",
+			log.Info(ctx, "Load task finish",
 				log.String("traceID", traceID),
 				log.Int64("collectionID", task.CollectionID),
 				log.Int64s("partitionIDs", task.PartitionIDs),
@@ -310,12 +310,12 @@ func (ob *CollectionObserver) observeLoadStatus(ctx context.Context) {
 			ob.loadTasks.Remove(traceID)
 		}
 
-		log.Info(context.TODO(), "observe collection done", log.Int64("collectionID", task.CollectionID), log.Duration("dur", time.Since(start)))
+		log.Info(ctx, "observe collection done", log.Int64("collectionID", task.CollectionID), log.Duration("dur", time.Since(start)))
 		return true
 	})
 
 	if observeTaskNum > 0 {
-		log.Info(context.TODO(), "observe all collections done", log.Int("num", observeTaskNum), log.Duration("dur", time.Since(observeStart)))
+		log.Info(ctx, "observe all collections done", log.Int("num", observeTaskNum), log.Duration("dur", time.Since(observeStart)))
 	}
 
 	// trigger check logic when loading collections/partitions
@@ -329,7 +329,7 @@ func (ob *CollectionObserver) observeChannelStatus(ctx context.Context, collecti
 
 	channelTargetNum := len(channelTargets)
 	if channelTargetNum == 0 {
-		log.Info(context.TODO(), "channels in target is empty, waiting for new target content")
+		log.Info(ctx, "channels in target is empty, waiting for new target content")
 		return 0, 0
 	}
 
@@ -348,7 +348,7 @@ func (ob *CollectionObserver) observePartitionLoadStatus(ctx context.Context, pa
 
 	targetNum := len(segmentTargets) + channelTargetNum
 	if targetNum == 0 {
-		log.Info(context.TODO(), "segments and channels in target are both empty, waiting for new target content")
+		log.Info(ctx, "segments and channels in target are both empty, waiting for new target content")
 		return false
 	}
 
@@ -430,7 +430,7 @@ func (ob *CollectionObserver) invalidateCache(ctx context.Context, collectionID 
 		CollectionID: collectionID,
 	}, proxyutil.SetMsgType(commonpb.MsgType_LoadCollection))
 	if err != nil {
-		log.Warn(context.TODO(), "failed to invalidate proxy's shard leader cache", log.Err(err))
+		log.Warn(ctx, "failed to invalidate proxy's shard leader cache", log.Err(err))
 		return
 	}
 }

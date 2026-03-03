@@ -76,7 +76,7 @@ func (b *ChannelLevelScoreBalancer) BalanceReplica(ctx context.Context, replica 
 				log.String("replica group", replica.GetResourceGroup()),
 				zap.Stringers("records", br.detailRecords))
 		} else {
-			log.Info(context.TODO(), "balance plan generated", zap.Stringers("report details", br.records))
+			log.Info(ctx, "balance plan generated", zap.Stringers("report details", br.records))
 		}
 	}()
 
@@ -198,7 +198,7 @@ func (b *ChannelLevelScoreBalancer) genSegmentPlan(ctx context.Context, br *bala
 	// Delegate to the assign policy's implementation with safe type assertion
 	policy, ok := b.assignPolicy.(*assign.ScoreBasedAssignPolicy)
 	if !ok {
-		log.Error(context.TODO(), "invalid policy type for ScoreBasedBalancer",
+		log.Error(ctx, "invalid policy type for ScoreBasedBalancer",
 			log.String("expected", "*assign.ScoreBasedAssignPolicy"),
 			log.String("actual", fmt.Sprintf("%T", b.assignPolicy)))
 		return nil

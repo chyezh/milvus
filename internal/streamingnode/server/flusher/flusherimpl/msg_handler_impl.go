@@ -48,10 +48,10 @@ func (impl *msgHandlerImpl) HandleCreateSegment(ctx context.Context, createSegme
 	}
 	logger := log.With(log.FieldMessage(createSegmentMsg))
 	if err := impl.wbMgr.CreateNewGrowingSegment(ctx, vchannel, h.PartitionId, h.SegmentId); err != nil {
-		logger.Warn(nil, "fail to create new growing segment")
+		logger.Warn(ctx, "fail to create new growing segment")
 		return err
 	}
-	log.Info(context.TODO(), "create new growing segment")
+	log.Info(ctx, "create new growing segment")
 	return nil
 }
 
@@ -80,10 +80,10 @@ func (impl *msgHandlerImpl) createNewGrowingSegment(ctx context.Context, vchanne
 			IsCreatedByStreaming: true,
 		})
 		if err := merr.CheckRPCCall(resp, err); err != nil {
-			logger.Warn(nil, "failed to alloc growing segment at datacoord")
+			logger.Warn(ctx, "failed to alloc growing segment at datacoord")
 			return errors.Wrap(err, "failed to alloc growing segment at datacoord")
 		}
-		logger.Info(nil, "alloc growing segment at datacoord")
+		logger.Info(ctx, "alloc growing segment at datacoord")
 		return nil
 	}, retry.AttemptAlways())
 }
@@ -149,16 +149,16 @@ func (impl *msgHandlerImpl) HandleAlterWAL(ctx context.Context, alterWALMsg mess
 
 	// Seal all segments in the current vchannel before WAL switch
 	if err := impl.wbMgr.SealAllSegments(ctx, vchannel); err != nil {
-		logger.Warn(nil, "failed to seal all segments for WAL switch", log.Err(err))
+		logger.Warn(ctx, "failed to seal all segments for WAL switch", log.Err(err))
 		return errors.Wrap(err, "failed to seal all segments")
 	}
-	logger.Info(nil, "sealed all segments for WAL switch")
+	logger.Info(ctx, "sealed all segments for WAL switch")
 
 	// Flush channel to persist buffered data before switching WAL
 	if err := impl.wbMgr.FlushChannel(ctx, vchannel, alterWALMsg.TimeTick()); err != nil {
-		logger.Warn(nil, "failed to flush channel for WAL switch", log.Err(err))
+		logger.Warn(ctx, "failed to flush channel for WAL switch", log.Err(err))
 		return errors.Wrap(err, "failed to flush channel")
 	}
-	logger.Info(nil, "flushed channel for WAL switch")
+	logger.Info(ctx, "flushed channel for WAL switch")
 	return nil
 }

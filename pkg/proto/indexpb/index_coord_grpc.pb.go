@@ -8,6 +8,7 @@ package indexpb
 
 import (
 	context "context"
+
 	commonpb "github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	milvuspb "github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	internalpb "github.com/milvus-io/milvus/pkg/v2/proto/internalpb"

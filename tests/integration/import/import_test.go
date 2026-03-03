@@ -163,7 +163,7 @@ func (s *BulkInsertSuite) run() {
 	})
 	s.NoError(err)
 	s.Equal(int32(0), importResp.GetStatus().GetCode())
-	log.Info(context.TODO(), "Import result", log.Any("importResp", importResp))
+	log.Info(ctx, "Import result", log.Any("importResp", importResp))
 
 	jobID := importResp.GetJobID()
 	err = WaitForImportDone(ctx, c, jobID)
@@ -321,7 +321,7 @@ func (s *BulkInsertSuite) TestZeroRowCount() {
 		Files:          files,
 	})
 	s.NoError(err)
-	log.Info(context.TODO(), "Import result", log.Any("importResp", importResp))
+	log.Info(ctx, "Import result", log.Any("importResp", importResp))
 
 	jobID := importResp.GetJobID()
 	err = WaitForImportDone(ctx, c, jobID)

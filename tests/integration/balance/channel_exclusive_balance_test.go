@@ -84,11 +84,11 @@ func (s *ChannelExclusiveBalanceSuit) initCollection(collectionName string, repl
 	s.NoError(err)
 	s.True(merr.Ok(createCollectionStatus))
 
-	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(ctx, "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := s.Cluster.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.True(merr.Ok(showCollectionsResp.Status))
-	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(ctx, "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	for i := 0; i < segmentNum; i++ {
 		fVecColumn := integration.NewFloatVectorFieldData(integration.FloatVecField, segmentRowNum, dim)
@@ -109,7 +109,7 @@ func (s *ChannelExclusiveBalanceSuit) initCollection(collectionName string, repl
 			}
 
 			pks := insertResult.GetIDs().GetIntId().GetData()
-			log.Info(context.TODO(), "========================delete expr==================",
+			log.Info(ctx, "========================delete expr==================",
 				log.Int("length of pk", len(pks)),
 			)
 
@@ -160,7 +160,7 @@ func (s *ChannelExclusiveBalanceSuit) initCollection(collectionName string, repl
 	s.Equal(commonpb.ErrorCode_Success, loadStatus.GetErrorCode())
 	s.True(merr.Ok(loadStatus))
 	s.WaitForLoad(ctx, collectionName)
-	log.Info(context.TODO(), "initCollection Done")
+	log.Info(ctx, "initCollection Done")
 }
 
 func (s *ChannelExclusiveBalanceSuit) TestBalanceOnSingleReplica() {
@@ -186,13 +186,13 @@ func (s *ChannelExclusiveBalanceSuit) TestBalanceOnSingleReplica() {
 			s.NoError(err)
 			s.True(merr.Ok(resp1.GetStatus()))
 
-			log.Info(context.TODO(), "resp", log.Any("segments", resp1.Segments))
+			log.Info(ctx, "resp", log.Any("segments", resp1.Segments))
 			if channel, ok := s.isSameChannel(resp1.GetSegments()); ok {
 				channelNodeCounter[channel] += 1
 			}
 		}
 
-		log.Info(context.TODO(), "dist", log.Any("nodes", channelNodeCounter))
+		log.Info(ctx, "dist", log.Any("nodes", channelNodeCounter))
 		nodeCountMatch := true
 		for _, cnt := range channelNodeCounter {
 			if cnt != channelNodeCount {
@@ -216,14 +216,14 @@ func (s *ChannelExclusiveBalanceSuit) TestBalanceOnSingleReplica() {
 		for _, node := range s.Cluster.GetAllQueryNodes() {
 			resp1, err := node.MustGetClient(ctx).GetDataDistribution(ctx, &querypb.GetDataDistributionRequest{})
 			if err != nil && merr.Ok(resp1.GetStatus()) {
-				log.Info(context.TODO(), "resp", log.Any("segments", resp1.Segments))
+				log.Info(ctx, "resp", log.Any("segments", resp1.Segments))
 				if channel, ok := s.isSameChannel(resp1.GetSegments()); ok {
 					channelNodeCounter[channel] += 1
 				}
 			}
 		}
 
-		log.Info(context.TODO(), "dist", log.Any("nodes", channelNodeCounter))
+		log.Info(ctx, "dist", log.Any("nodes", channelNodeCounter))
 		nodeCountMatch := true
 		for _, cnt := range channelNodeCounter {
 			if cnt != channelNodeCount {

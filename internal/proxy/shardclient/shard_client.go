@@ -111,7 +111,7 @@ func (n *shardClient) initClients(ctx context.Context) error {
 			for _, c := range clients {
 				c.Close()
 			}
-			log.Info(context.TODO(), "failed to create client for node", log.Int64("nodeID", n.info.NodeID), log.Err(err))
+			log.Info(ctx, "failed to create client for node", log.Int64("nodeID", n.info.NodeID), log.Err(err))
 			return errors.Wrap(err, fmt.Sprintf("create client for node=%d failed", n.info.NodeID))
 		}
 		clients = append(clients, client)

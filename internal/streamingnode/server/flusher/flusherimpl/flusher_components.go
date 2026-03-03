@@ -3,7 +3,6 @@ package flusherimpl
 import (
 	"context"
 
-
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/internal/flushcommon/broker"
@@ -43,7 +42,7 @@ func (impl *flusherComponents) WhenCreateCollection(createCollectionMsg message.
 	// because we need to get the schema from the recovery storage, we need to observe the message at recovery storage first.
 	impl.rs.ObserveMessage(context.Background(), createCollectionMsg)
 	if _, ok := impl.dataServices[createCollectionMsg.VChannel()]; ok {
-		impl.logger.Info(nil, "the data sync service of current vchannel is built, skip it", log.String("vchannel", createCollectionMsg.VChannel()))
+		impl.logger.Info(context.TODO(), "the data sync service of current vchannel is built, skip it", log.String("vchannel", createCollectionMsg.VChannel()))
 		// May repeated consumed, so we ignore the message.
 		return
 	}
@@ -51,7 +50,7 @@ func (impl *flusherComponents) WhenCreateCollection(createCollectionMsg message.
 		// It should already be recovered from the recovery storage.
 		// if it's not in recovery storage, it means the createCollection is already dropped.
 		// so we can skip it.
-		impl.logger.Info(nil, "the create collection message is older than the recovery checkpoint, skip it",
+		impl.logger.Info(context.TODO(), "the create collection message is older than the recovery checkpoint, skip it",
 			log.String("vchannel", createCollectionMsg.VChannel()),
 			log.Uint64("timeTick", createCollectionMsg.TimeTick()),
 			log.Uint64("recoveryCheckPointTimeTick", impl.recoveryCheckPointTimeTick))
@@ -108,7 +107,7 @@ func (impl *flusherComponents) WhenDropCollection(vchannel string) {
 	if ds, ok := impl.dataServices[vchannel]; ok {
 		ds.Close()
 		delete(impl.dataServices, vchannel)
-		impl.logger.Info(nil, "drop data sync service", log.String("vchannel", vchannel))
+		impl.logger.Info(context.TODO(), "drop data sync service", log.String("vchannel", vchannel))
 	}
 }
 
@@ -147,14 +146,14 @@ func (impl *flusherComponents) addNewDataSyncService(
 	newDS := newDataSyncServiceWrapper(createCollectionMsg.VChannel(), input, ds, createCollectionMsg.TimeTick())
 	newDS.Start()
 	impl.dataServices[createCollectionMsg.VChannel()] = newDS
-	impl.logger.Info(nil, "create data sync service done", log.String("vchannel", createCollectionMsg.VChannel()))
+	impl.logger.Info(context.TODO(), "create data sync service done", log.String("vchannel", createCollectionMsg.VChannel()))
 }
 
 // Close release all the resources of components.
 func (impl *flusherComponents) Close() {
 	for vchannel, ds := range impl.dataServices {
 		ds.Close()
-		impl.logger.Info(nil, "data sync service closed for flusher closing", log.String("vchannel", vchannel))
+		impl.logger.Info(context.TODO(), "data sync service closed for flusher closing", log.String("vchannel", vchannel))
 	}
 	impl.cpUpdater.Close()
 }
@@ -185,13 +184,13 @@ func (impl *flusherComponents) recover(ctx context.Context, recoverInfos map[str
 		for _, ds := range dataServices {
 			ds.Close()
 		}
-		impl.logger.Warn(nil, "failed to build data sync service, may be canceled when recovering", log.Err(lastErr))
+		impl.logger.Warn(ctx, "failed to build data sync service, may be canceled when recovering", log.Err(lastErr))
 		return lastErr
 	}
 	impl.dataServices = dataServices
 	for vchannel, ds := range dataServices {
 		ds.Start()
-		impl.logger.Info(nil, "start data sync service when recovering", log.String("vchannel", vchannel))
+		impl.logger.Info(ctx, "start data sync service when recovering", log.String("vchannel", vchannel))
 	}
 	return nil
 }
@@ -217,10 +216,10 @@ func (impl *flusherComponents) buildDataSyncServiceWithRetry(ctx context.Context
 				WithBody(&message.FlushMessageBody{}).MustBuildMutable()
 			appendResult, err := impl.wal.Append(utility.WithFlushFromOldArch(ctx), msg)
 			if err != nil {
-				logger.Warn(nil, "fail to append flush message for segments that not created by streaming service into wal", log.Err(err))
+				logger.Warn(ctx, "fail to append flush message for segments that not created by streaming service into wal", log.Err(err))
 				return err
 			}
-			logger.Info(nil, "append flush message for segments that not created by streaming service into wal", log.Stringer("msgID", appendResult.MessageID), log.Uint64("timeTick", appendResult.TimeTick))
+			logger.Info(ctx, "append flush message for segments that not created by streaming service into wal", log.Stringer("msgID", appendResult.MessageID), log.Uint64("timeTick", appendResult.TimeTick))
 			return nil
 		}, retry.AttemptAlways()); err != nil {
 			return nil, err

@@ -1,7 +1,6 @@
 package testcases
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -70,7 +69,7 @@ func TestCreatePartitionInvalid(t *testing.T) {
 	// create partition with invalid name
 	expPars := []string{common.DefaultPartition}
 	for _, invalidName := range common.GenInvalidNames() {
-		log.Debug(context.TODO(), "invalidName", log.String("currentName", invalidName))
+		log.Debug(ctx, "invalidName", log.String("currentName", invalidName))
 		err := mc.CreatePartition(ctx, client.NewCreatePartitionOption(schema.CollectionName, invalidName))
 		if invalidName == "1" {
 			common.CheckErr(t, err, true)

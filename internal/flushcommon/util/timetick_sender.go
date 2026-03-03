@@ -83,7 +83,7 @@ func (m *TimeTickSender) Start() {
 		defer m.wg.Done()
 		m.work(ctx)
 	}()
-	log.Info(context.TODO(), "timeTick sender started")
+	log.Info(ctx, "timeTick sender started")
 }
 
 func (m *TimeTickSender) Stop() {
@@ -99,7 +99,7 @@ func (m *TimeTickSender) work(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info(context.TODO(), "TimeTickSender context done")
+			log.Info(ctx, "TimeTickSender context done")
 			return
 		case <-ticker.C:
 			m.sendReport(ctx)
@@ -186,12 +186,12 @@ func (m *TimeTickSender) cleanStatesCache(lastSentTss map[string]uint64) {
 
 func (m *TimeTickSender) sendReport(ctx context.Context) error {
 	toSendMsgs, sendLastTss := m.assembleDatanodeTtMsg()
-	log.RatedDebug(context.TODO(), log.RateDefault, "TimeTickSender send datanode timetick message", log.Any("toSendMsgs", toSendMsgs), log.Any("sendLastTss", sendLastTss))
+	log.RatedDebug(ctx, log.RateDefault, "TimeTickSender send datanode timetick message", log.Any("toSendMsgs", toSendMsgs), log.Any("sendLastTss", sendLastTss))
 	err := retry.Do(ctx, func() error {
 		return m.broker.ReportTimeTick(ctx, toSendMsgs)
 	}, m.options...)
 	if err != nil {
-		log.Error(context.TODO(), "ReportDataNodeTtMsgs fail after retry", log.Err(err))
+		log.Error(ctx, "ReportDataNodeTtMsgs fail after retry", log.Err(err))
 		return err
 	}
 	m.cleanStatesCache(sendLastTss)

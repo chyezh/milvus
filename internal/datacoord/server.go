@@ -848,7 +848,7 @@ func (s *Server) getFlushableSegmentsInfo(ctx context.Context, flushableIDs []in
 	for _, id := range flushableIDs {
 		sinfo := s.meta.GetHealthySegment(ctx, id)
 		if sinfo == nil {
-			log.Error(context.TODO(), "get segment from meta error", log.Int64("id", id))
+			log.Error(ctx, "get segment from meta error", log.Int64("id", id))
 			continue
 		}
 		res = append(res, sinfo)
@@ -885,7 +885,7 @@ func (s *Server) watchService(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info(context.TODO(), "watch service shutdown")
+			log.Info(ctx, "watch service shutdown")
 			return
 		case event, ok := <-s.dnSessionWatcher.EventChannel():
 			if !ok {
@@ -895,7 +895,7 @@ func (s *Server) watchService(ctx context.Context) {
 			if err := s.handleSessionEvent(ctx, typeutil.DataNodeRole, event); err != nil {
 				go func() {
 					if err := s.Stop(); err != nil {
-						log.Warn(context.TODO(), "DataCoord server stop error", log.Err(err))
+						log.Warn(ctx, "DataCoord server stop error", log.Err(err))
 					}
 				}()
 				return
@@ -908,7 +908,7 @@ func (s *Server) watchService(ctx context.Context) {
 			if err := s.handleSessionEvent(ctx, typeutil.QueryNodeRole, event); err != nil {
 				go func() {
 					if err := s.Stop(); err != nil {
-						log.Warn(context.TODO(), "DataCoord server stop error", log.Err(err))
+						log.Warn(ctx, "DataCoord server stop error", log.Err(err))
 					}
 				}()
 				return
@@ -931,12 +931,12 @@ func (s *Server) handleSessionEvent(ctx context.Context, role string, event *ses
 		}
 		switch event.EventType {
 		case sessionutil.SessionAddEvent:
-			log.Info(context.TODO(), "received datanode register",
+			log.Info(ctx, "received datanode register",
 				log.String("address", info.Address),
 				log.Int64("serverID", info.Version))
 			s.metricsCacheManager.InvalidateSystemInfoMetrics()
 			if Params.DataCoordCfg.BindIndexNodeMode.GetAsBool() {
-				log.Info(context.TODO(), "receive datanode session event, but adding datanode by bind mode, skip it",
+				log.Info(ctx, "receive datanode session event, but adding datanode by bind mode, skip it",
 					log.String("address", event.Session.Address),
 					log.Int64("serverID", event.Session.ServerID),
 					log.String("event type", event.EventType.String()))
@@ -953,12 +953,12 @@ func (s *Server) handleSessionEvent(ctx context.Context, role string, event *ses
 			}
 			return nil
 		case sessionutil.SessionDelEvent:
-			log.Info(context.TODO(), "received datanode unregister",
+			log.Info(ctx, "received datanode unregister",
 				log.String("address", info.Address),
 				log.Int64("serverID", info.Version))
 			s.metricsCacheManager.InvalidateSystemInfoMetrics()
 			if Params.DataCoordCfg.BindIndexNodeMode.GetAsBool() {
-				log.Info(context.TODO(), "receive datanode session event, but adding datanode by bind mode, skip it",
+				log.Info(ctx, "receive datanode session event, but adding datanode by bind mode, skip it",
 					log.String("address", event.Session.Address),
 					log.Int64("serverID", event.Session.ServerID),
 					log.String("event type", event.EventType.String()))
@@ -966,28 +966,28 @@ func (s *Server) handleSessionEvent(ctx context.Context, role string, event *ses
 			}
 			s.nodeManager.RemoveNode(event.Session.ServerID)
 		default:
-			log.Warn(context.TODO(), "receive unknown service event type",
+			log.Warn(ctx, "receive unknown service event type",
 				log.Any("type", event.EventType))
 		}
 	case typeutil.QueryNodeRole:
 		switch event.EventType {
 		case sessionutil.SessionAddEvent:
-			log.Info(context.TODO(), "received querynode register",
+			log.Info(ctx, "received querynode register",
 				log.String("address", event.Session.Address),
 				log.Int64("serverID", event.Session.ServerID),
 				log.Bool("indexNonEncoding", event.Session.IndexNonEncoding))
 			s.indexEngineVersionManager.AddNode(event.Session)
 		case sessionutil.SessionDelEvent:
-			log.Info(context.TODO(), "received querynode unregister",
+			log.Info(ctx, "received querynode unregister",
 				log.String("address", event.Session.Address),
 				log.Int64("serverID", event.Session.ServerID))
 			s.indexEngineVersionManager.RemoveNode(event.Session)
 		case sessionutil.SessionUpdateEvent:
 			serverID := event.Session.ServerID
-			log.Info(context.TODO(), "received querynode SessionUpdateEvent", log.Int64("serverID", serverID))
+			log.Info(ctx, "received querynode SessionUpdateEvent", log.Int64("serverID", serverID))
 			s.indexEngineVersionManager.Update(event.Session)
 		default:
-			log.Warn(context.TODO(), "receive unknown service event type",
+			log.Warn(ctx, "receive unknown service event type",
 				log.Any("type", event.EventType))
 		}
 	}
@@ -1015,7 +1015,7 @@ func (s *Server) startFlushLoop(ctx context.Context) {
 				log.Info(ctx, "flush successfully", log.Any("segmentID", segmentID))
 				err := s.postFlush(ctx, segmentID)
 				if err != nil {
-					log.Warn(context.TODO(), "failed to do post flush", log.Int64("segmentID", segmentID), log.Err(err))
+					log.Warn(ctx, "failed to do post flush", log.Int64("segmentID", segmentID), log.Err(err))
 				}
 			}
 		}
@@ -1062,7 +1062,7 @@ func (s *Server) postFlush(ctx context.Context, segmentID UniqueID) error {
 	}
 	metrics.FlushedSegmentFileNum.WithLabelValues(metrics.DeleteFileLabel).Observe(float64(deleteFileNum))
 
-	log.Info(context.TODO(), "flush segment complete", log.Int64("id", segmentID))
+	log.Info(ctx, "flush segment complete", log.Int64("id", segmentID))
 	return nil
 }
 
@@ -1073,10 +1073,10 @@ func (s *Server) handleFlushingSegments(ctx context.Context) {
 		// The old flushing segment may not be flushed, so we need to flush it again.
 		// It should be retry until success
 		if err := s.flushFlushingSegment(ctx, segment.ID); err != nil {
-			log.Warn(context.TODO(), "flush flushing segment failed", log.Int64("segmentID", segment.ID), log.Err(err))
+			log.Warn(ctx, "flush flushing segment failed", log.Int64("segmentID", segment.ID), log.Err(err))
 			return
 		}
-		log.Info(context.TODO(), "flush flushing segment success", log.Int64("segmentID", segment.ID))
+		log.Info(ctx, "flush flushing segment success", log.Int64("segmentID", segment.ID))
 		select {
 		case <-ctx.Done():
 			return
@@ -1095,7 +1095,7 @@ func (s *Server) flushFlushingSegment(ctx context.Context, segmentID UniqueID) e
 		}
 		operators = append(operators, UpdateStatusOperator(segmentID, commonpb.SegmentState_Flushed))
 		if err := s.meta.UpdateSegmentsInfo(ctx, operators...); err != nil {
-			log.Warn(context.TODO(), "flush segment complete failed", log.Int64("segmentID", segmentID), log.Err(err))
+			log.Warn(ctx, "flush segment complete failed", log.Int64("segmentID", segmentID), log.Err(err))
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}

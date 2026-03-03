@@ -12,8 +12,8 @@ package segments
 import "C"
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"

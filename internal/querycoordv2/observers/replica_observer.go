@@ -79,14 +79,14 @@ func (ob *ReplicaObserver) Stop() {
 
 func (ob *ReplicaObserver) schedule(ctx context.Context) {
 	defer ob.wg.Done()
-	log.Info(context.TODO(), "Start check replica loop")
+	log.Info(ctx, "Start check replica loop")
 
 	listener := ob.meta.ResourceManager.ListenNodeChanged(ctx)
 	for {
 		ob.waitNodeChangedOrTimeout(ctx, listener)
 		// stop if the context is canceled.
 		if ctx.Err() != nil {
-			log.Info(context.TODO(), "Stop check replica observer")
+			log.Info(ctx, "Stop check replica observer")
 			return
 		}
 
@@ -98,13 +98,13 @@ func (ob *ReplicaObserver) schedule(ctx context.Context) {
 // scheduleStreamingQN is used to check streaming query node in replica
 func (ob *ReplicaObserver) scheduleStreamingQN(ctx context.Context) {
 	defer ob.wg.Done()
-	log.Info(context.TODO(), "Start streaming query node check replica loop")
+	log.Info(ctx, "Start streaming query node check replica loop")
 
 	listener := snmanager.StaticStreamingNodeManager.ListenNodeChanged()
 	for {
 		ob.waitNodeChangedOrTimeout(ctx, listener)
 		if ctx.Err() != nil {
-			log.Info(context.TODO(), "Stop streaming query node check replica observer")
+			log.Info(ctx, "Stop streaming query node check replica observer")
 			return
 		}
 
@@ -154,10 +154,10 @@ func (ob *ReplicaObserver) checkStreamingQueryNodesInReplica(sqNodeIDs typeutil.
 				log.Int64s("rwNodes", rwSQNodes),
 			)
 			if err := ob.meta.ReplicaManager.RemoveSQNode(ctx, replica.GetID(), removeNodes...); err != nil {
-				logger.Warn(context.TODO(), "fail to remove streaming query node from replica", log.Err(err))
+				logger.Warn(ctx, "fail to remove streaming query node from replica", log.Err(err))
 				continue
 			}
-			logger.Info(context.TODO(), "all segment/channel has been removed from ro streaming query node, remove it from replica")
+			logger.Info(ctx, "all segment/channel has been removed from ro streaming query node, remove it from replica")
 		}
 	}
 }
@@ -198,7 +198,7 @@ func (ob *ReplicaObserver) checkNodesInReplica() {
 				log.Int64s("rwNodes", rwNodes),
 			)
 
-			log.RatedInfo(context.TODO(), log.RateDefault, "found ro nodes in replica")
+			log.RatedInfo(ctx, log.RateDefault, "found ro nodes in replica")
 			removeNodes := make([]int64, 0, len(roNodes))
 			for _, node := range roNodes {
 				channels := ob.distMgr.ChannelDistManager.GetByCollectionAndFilter(replica.GetCollectionID(), meta.WithNodeID2Channel(node))
@@ -211,13 +211,13 @@ func (ob *ReplicaObserver) checkNodesInReplica() {
 				continue
 			}
 			if err := ob.meta.ReplicaManager.RemoveNode(ctx, replica.GetID(), removeNodes...); err != nil {
-				logger.Warn(context.TODO(), "fail to remove node from replica",
+				logger.Warn(ctx, "fail to remove node from replica",
 					log.Int64s("removedNodes", removeNodes),
 					log.Err(err))
 				continue
 			}
 			hasNodeRemoved = true
-			logger.Info(context.TODO(), "all segment/channel has been removed from ro node, remove it from replica",
+			logger.Info(ctx, "all segment/channel has been removed from ro node, remove it from replica",
 				log.Int64s("removedNodes", removeNodes),
 			)
 		}

@@ -22,7 +22,6 @@ import (
 	"net/http"
 	"sync"
 
-
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/json"
@@ -112,7 +111,7 @@ func (handler *HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 
 	if len(unhealthyComponent) > 0 {
 		resp.State = fmt.Sprintf("Not all components are healthy, %d/%d", handler.indicatorNum-len(unhealthyComponent), handler.indicatorNum)
-		log.Info(context.TODO(), "check health failed", log.Strings("UnhealthyComponent", unhealthyComponent))
+		log.Info(ctx, "check health failed", log.Strings("UnhealthyComponent", unhealthyComponent))
 	}
 
 	if resp.State == "OK" {

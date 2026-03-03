@@ -33,7 +33,7 @@ func HookInterceptor(ctx context.Context, req any, userName, fullMethod string, 
 	)
 
 	if isMock, mockResp, err = hoo.Mock(ctx, req, fullMethod); isMock {
-		log.Info(context.TODO(), "hook mock", log.String("user", userName),
+		log.Info(ctx, "hook mock", log.String("user", userName),
 			log.String("full method", fullMethod), log.Err(err))
 		metrics.ProxyHookFunc.WithLabelValues(metrics.HookMock, fullMethod).Inc()
 		updateProxyFunctionCallMetric(fullMethod)
@@ -45,7 +45,7 @@ func HookInterceptor(ctx context.Context, req any, userName, fullMethod string, 
 	}
 
 	if newCtx, err = hoo.Before(ctx, req, fullMethod); err != nil {
-		log.Warn(context.TODO(), "hook before error", log.String("user", userName), log.String("full method", fullMethod),
+		log.Warn(ctx, "hook before error", log.String("user", userName), log.String("full method", fullMethod),
 			log.Any("request", req), log.Err(err))
 		metrics.ProxyHookFunc.WithLabelValues(metrics.HookBefore, fullMethod).Inc()
 		updateProxyFunctionCallMetric(fullMethod)
@@ -54,7 +54,7 @@ func HookInterceptor(ctx context.Context, req any, userName, fullMethod string, 
 	}
 	realResp, realErr = handler(newCtx, req)
 	if err = hoo.After(newCtx, realResp, realErr, fullMethod); err != nil {
-		log.Warn(context.TODO(), "hook after error", log.String("user", userName), log.String("full method", fullMethod),
+		log.Warn(ctx, "hook after error", log.String("user", userName), log.String("full method", fullMethod),
 			log.Any("request", req), log.Err(err))
 		metrics.ProxyHookFunc.WithLabelValues(metrics.HookAfter, fullMethod).Inc()
 		updateProxyFunctionCallMetric(fullMethod)

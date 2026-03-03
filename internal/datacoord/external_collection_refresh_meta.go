@@ -374,7 +374,7 @@ func (m *externalCollectionRefreshMeta) DropJob(ctx context.Context, jobID int64
 		var dropErr error
 		taskMap.Range(func(taskID int64, _ *datapb.ExternalCollectionRefreshTask) bool {
 			if err := m.catalog.DropExternalCollectionRefreshTask(ctx, taskID); err != nil {
-				log.Warn(context.TODO(), "drop task failed during job drop",
+				log.Warn(ctx, "drop task failed during job drop",
 					log.Int64("jobID", jobID),
 					log.Int64("taskID", taskID),
 					log.Err(err))
@@ -392,7 +392,7 @@ func (m *externalCollectionRefreshMeta) DropJob(ctx context.Context, jobID int64
 
 	// Drop job
 	if err := m.catalog.DropExternalCollectionRefreshJob(ctx, jobID); err != nil {
-		log.Warn(context.TODO(), "drop job failed",
+		log.Warn(ctx, "drop job failed",
 			log.Int64("jobID", jobID),
 			log.Err(err))
 		return err
@@ -401,7 +401,7 @@ func (m *externalCollectionRefreshMeta) DropJob(ctx context.Context, jobID int64
 	m.jobs.Remove(jobID)
 	m.removeFromCollectionJobs(job.GetCollectionId(), jobID)
 
-	log.Info(context.TODO(), "drop job success",
+	log.Info(ctx, "drop job success",
 		log.Int64("jobID", jobID),
 		log.Int64("collectionID", job.GetCollectionId()))
 	return nil
@@ -600,7 +600,7 @@ func (m *externalCollectionRefreshMeta) DropTask(ctx context.Context, taskID int
 	}
 
 	if err := m.catalog.DropExternalCollectionRefreshTask(ctx, taskID); err != nil {
-		log.Warn(context.TODO(), "drop task failed",
+		log.Warn(ctx, "drop task failed",
 			log.Int64("taskID", taskID),
 			log.Err(err))
 		return err
@@ -609,7 +609,7 @@ func (m *externalCollectionRefreshMeta) DropTask(ctx context.Context, taskID int
 	m.tasks.Remove(taskID)
 	m.removeFromJobTasks(task.GetJobId(), taskID)
 
-	log.Info(context.TODO(), "drop task success",
+	log.Info(ctx, "drop task success",
 		log.Int64("taskID", taskID),
 		log.Int64("jobID", task.GetJobId()))
 	return nil

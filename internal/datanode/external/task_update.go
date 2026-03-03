@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"sort"
 
-
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
@@ -358,7 +357,6 @@ func (t *UpdateExternalTask) balanceFragmentsToSegments(ctx context.Context, fra
 		return nil, err
 	}
 
-
 	// Calculate total rows
 	var totalRows int64
 	for _, f := range fragments {
@@ -382,7 +380,7 @@ func (t *UpdateExternalTask) balanceFragmentsToSegments(ctx context.Context, fra
 
 	avgRowsPerSegment := totalRows / numSegments
 
-	log.Info(context.TODO(), "Balancing fragments to segments",
+	log.Info(ctx, "Balancing fragments to segments",
 		log.Int("numFragments", len(fragments)),
 		log.Int64("totalRows", totalRows),
 		log.Int64("numSegments", numSegments),
@@ -443,7 +441,7 @@ func (t *UpdateExternalTask) balanceFragmentsToSegments(ctx context.Context, fra
 		// Compute and store row mapping for new segment
 		t.segmentMappings[segmentID] = NewSegmentRowMapping(segmentID, bin.fragments)
 
-		log.Debug(context.TODO(), "Created new segment from fragments",
+		log.Debug(ctx, "Created new segment from fragments",
 			log.Int64("segmentID placeholder", segmentID),
 			log.Int64("rowCount", bin.rowCount),
 			log.Int("numFragments", len(bin.fragments)))

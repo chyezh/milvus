@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"strconv"
 
-
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -50,7 +49,7 @@ func (m *grpcWorkerManager) GetWorker(ctx context.Context, nodeID int64) (Worker
 		worker, err, _ = m.sf.Do(strconv.FormatInt(nodeID, 10), func() (Worker, error) {
 			worker, err = m.builder(ctx, nodeID)
 			if err != nil {
-				log.Warn(context.TODO(), "failed to build worker",
+				log.Warn(ctx, "failed to build worker",
 					log.Int64("nodeID", nodeID),
 					log.Err(err),
 				)

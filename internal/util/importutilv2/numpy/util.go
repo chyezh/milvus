@@ -116,7 +116,7 @@ func CreateReaders(ctx context.Context, cm storage.ChunkManager, schema *schemap
 		}
 	}
 
-	log.Info(context.TODO(), "create numpy readers", log.Any("readFields", readFields))
+	log.Info(ctx, "create numpy readers", log.Any("readFields", readFields))
 	return readers, nil
 }
 

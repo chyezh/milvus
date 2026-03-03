@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-
 	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 

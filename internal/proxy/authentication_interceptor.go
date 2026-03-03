@@ -67,7 +67,7 @@ func AuthenticationInterceptor(ctx context.Context) (context.Context, error) {
 		authStrArr := md[strings.ToLower(util.HeaderAuthorize)]
 
 		if len(authStrArr) < 1 {
-			log.Warn(context.TODO(), "key not found in header")
+			log.Warn(ctx, "key not found in header")
 			return nil, status.Error(codes.Unauthenticated, "missing authorization in header")
 		}
 
@@ -76,14 +76,14 @@ func AuthenticationInterceptor(ctx context.Context) (context.Context, error) {
 		token := authStrArr[0]
 		rawToken, err := crypto.Base64Decode(token)
 		if err != nil {
-			log.Warn(context.TODO(), "fail to decode the token", log.Err(err))
+			log.Warn(ctx, "fail to decode the token", log.Err(err))
 			return nil, status.Error(codes.Unauthenticated, "invalid token format")
 		}
 
 		if !strings.Contains(rawToken, util.CredentialSeparator) {
 			user, err := VerifyAPIKey(rawToken)
 			if err != nil {
-				log.Warn(context.TODO(), "fail to verify apikey", log.Err(err))
+				log.Warn(ctx, "fail to verify apikey", log.Err(err))
 				return nil, status.Error(codes.Unauthenticated, "auth check failure, please check api key is correct")
 			}
 			metrics.UserRPCCounter.WithLabelValues(user).Inc()
@@ -95,7 +95,7 @@ func AuthenticationInterceptor(ctx context.Context) (context.Context, error) {
 			// username+password authentication
 			username, password := parseMD(rawToken)
 			if !passwordVerify(ctx, username, password, privilege.GetPrivilegeCache()) {
-				log.Warn(context.TODO(), "fail to verify password", log.String("username", username))
+				log.Warn(ctx, "fail to verify password", log.String("username", username))
 				// NOTE: don't use the merr, because it will cause the wrong retry behavior in the sdk
 				return nil, status.Error(codes.Unauthenticated, "auth check failure, please check username and password are correct")
 			}

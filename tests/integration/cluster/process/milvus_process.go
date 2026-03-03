@@ -212,19 +212,19 @@ func (mp *MilvusProcess) background() (err error) {
 			mp.stopCallback(mp)
 		}
 		if err != nil {
-			mp.Logger().Warn(nil, "subprocess fail to exit", log.Err(err))
+			mp.Logger().Warn(context.TODO(), "subprocess fail to exit", log.Err(err))
 		}
 	}()
 
 	// Start the process
-	mp.Logger().Info(nil, "Milvus process start...")
+	mp.Logger().Info(context.TODO(), "Milvus process start...")
 	if err := mp.cmd.Start(); err != nil {
-		mp.Logger().Warn(nil, "failed to start milvus process", log.Err(err))
+		mp.Logger().Warn(context.TODO(), "failed to start milvus process", log.Err(err))
 		return errors.Wrap(err, "when start process")
 	}
 
 	mp.SetLogger(mp.Logger().With(log.Int("pid", mp.cmd.Process.Pid)))
-	mp.Logger().Info(nil, "Milvus process started")
+	mp.Logger().Info(context.TODO(), "Milvus process started")
 
 	// Start monitoring goroutine
 	waitFuture := syncutil.NewFuture[error]()
@@ -239,16 +239,16 @@ func (mp *MilvusProcess) background() (err error) {
 		select {
 		case <-gracefulStop:
 			// graceful stop
-			mp.Logger().Info(nil, "Graceful stop Milvus process", log.Int("pid", mp.cmd.Process.Pid))
+			mp.Logger().Info(context.TODO(), "Graceful stop Milvus process", log.Int("pid", mp.cmd.Process.Pid))
 			gracefulStop = nil
 			mp.cmd.Process.Signal(syscall.SIGTERM)
 		case <-forceStop:
 			// force stop
-			mp.Logger().Info(nil, "Force stop Milvus process", log.Int("pid", mp.cmd.Process.Pid))
+			mp.Logger().Info(context.TODO(), "Force stop Milvus process", log.Int("pid", mp.cmd.Process.Pid))
 			mp.cmd.Process.Signal(syscall.SIGKILL)
 			forceStop = nil
 		case <-waitFuture.Done():
-			mp.Logger().Info(nil, "Milvus process stopped")
+			mp.Logger().Info(context.TODO(), "Milvus process stopped")
 			return waitFuture.Get()
 		}
 	}
@@ -299,9 +299,9 @@ func (mp *MilvusProcess) Stop(gracefulTimeout ...time.Duration) error {
 	}
 
 	now := time.Now()
-	mp.Logger().Info(nil, "stop milvus process...")
+	mp.Logger().Info(context.TODO(), "stop milvus process...")
 	defer func() {
-		mp.Logger().Info(nil, "stop milvus process done", log.Duration("cost", time.Since(now)))
+		mp.Logger().Info(context.TODO(), "stop milvus process done", log.Duration("cost", time.Since(now)))
 	}()
 
 	select {
@@ -315,10 +315,10 @@ func (mp *MilvusProcess) Stop(gracefulTimeout ...time.Duration) error {
 
 // ForceStop forcefully stops the Milvus process
 func (mp *MilvusProcess) ForceStop() error {
-	mp.Logger().Info(nil, "force stop milvus process...")
+	mp.Logger().Info(context.TODO(), "force stop milvus process...")
 	now := time.Now()
 	defer func() {
-		mp.Logger().Info(nil, "force stop milvus process done", log.Duration("cost", time.Since(now)))
+		mp.Logger().Info(context.TODO(), "force stop milvus process done", log.Duration("cost", time.Since(now)))
 	}()
 
 	mp.graceful.Close()
@@ -348,11 +348,11 @@ func (mp *MilvusProcess) asyncGetClient(ctx context.Context) {
 
 	c, err := mp.getClient(ctx)
 	if err != nil {
-		logger.Warn(nil, "failed to get client", log.Err(err))
+		logger.Warn(ctx, "failed to get client", log.Err(err))
 		return
 	}
 
-	logger.Info(nil, "client get", log.Duration("cost", time.Since(now)))
+	logger.Info(ctx, "client get", log.Duration("cost", time.Since(now)))
 	now = time.Now()
 
 	ticker := time.NewTicker(20 * time.Millisecond)
@@ -371,7 +371,7 @@ func (mp *MilvusProcess) asyncGetClient(ctx context.Context) {
 	}
 
 	mp.client.Set(c)
-	logger.Info(nil, "client set", log.Duration("cost", time.Since(now)))
+	logger.Info(ctx, "client set", log.Duration("cost", time.Since(now)))
 }
 
 // asyncGetClient gets the client for the Milvus process in the background.
@@ -383,14 +383,14 @@ func (mp *MilvusProcess) getClient(ctx context.Context) (nodeClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	logger.Info(nil, "get address from etcd", log.Duration("cost", time.Since(now)))
+	logger.Info(ctx, "get address from etcd", log.Duration("cost", time.Since(now)))
 	now = time.Now()
 
 	conn, err := mp.getGrpcClient(ctx, addr)
 	if err != nil {
 		return nil, err
 	}
-	logger.Info(nil, "create grpc client", log.Duration("cost", time.Since(now)))
+	logger.Info(ctx, "create grpc client", log.Duration("cost", time.Since(now)))
 	switch mp.role {
 	case "mixcoord":
 		return newMixCoordClient(conn), nil
@@ -456,7 +456,7 @@ func (mp *MilvusProcess) getGrpcClient(ctx context.Context, addr string) (*grpc.
 		if err != nil {
 			panic(fmt.Errorf("failed to create client tls from file: %w", err))
 		}
-		mp.Logger().Info(nil, "create grpc client with tls")
+		mp.Logger().Info(ctx, "create grpc client with tls")
 		return DailGRPClient(ctx, addr, mp.rootPath, mp.nodeID, grpc.WithTransportCredentials(creds))
 	}
 	return DailGRPClient(ctx, addr, mp.rootPath, mp.nodeID)

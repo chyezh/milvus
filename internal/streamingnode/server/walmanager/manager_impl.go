@@ -3,7 +3,6 @@ package walmanager
 import (
 	"context"
 
-
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/adaptor"
@@ -24,7 +23,7 @@ var errWALManagerClosed = status.NewOnShutdownError("wal manager is closed")
 // OpenManager create a WAL Manager, which now uses dynamic opener that can handle multiple WALNames at runtime.
 // The specific WALName will be determined when opening each channel based on checkpoint's MessageID.WALName
 func OpenManager() (Manager, error) {
-	resource.Resource().Logger().Info(nil, "open wal manager with dynamic opener")
+	resource.Resource().Logger().Info(context.TODO(), "open wal manager with dynamic opener")
 	// Create dynamic opener directly with interceptors
 	opener := adaptor.NewOpenerAdaptor(
 		[]interceptors.InterceptorBuilder{
@@ -66,10 +65,10 @@ func (m *managerImpl) Open(ctx context.Context, channel types.PChannelInfo) (err
 	defer func() {
 		m.lifetime.Done()
 		if err != nil {
-			m.logger.Warn(nil, "open wal failed", log.Err(err), log.String("channel", channel.String()))
+			m.logger.Warn(ctx, "open wal failed", log.Err(err), log.String("channel", channel.String()))
 			return
 		}
-		m.logger.Info(nil, "open wal success", log.String("channel", channel.String()))
+		m.logger.Info(ctx, "open wal success", log.String("channel", channel.String()))
 	}()
 
 	return m.getWALLifetime(channel.Name).Open(ctx, channel)
@@ -84,10 +83,10 @@ func (m *managerImpl) Remove(ctx context.Context, channel types.PChannelInfo) (e
 	defer func() {
 		m.lifetime.Done()
 		if err != nil {
-			m.logger.Warn(nil, "remove wal failed", log.Err(err), log.String("channel", channel.Name), log.Int64("term", channel.Term))
+			m.logger.Warn(ctx, "remove wal failed", log.Err(err), log.String("channel", channel.Name), log.Int64("term", channel.Term))
 			return
 		}
-		m.logger.Info(nil, "remove wal success", log.String("channel", channel.Name), log.Int64("term", channel.Term))
+		m.logger.Info(ctx, "remove wal success", log.String("channel", channel.Name), log.Int64("term", channel.Term))
 	}()
 
 	return m.getWALLifetime(channel.Name).Remove(ctx, channel.Term)

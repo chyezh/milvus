@@ -295,7 +295,7 @@ func (t *compactionTrigger) TriggerCompaction(ctx context.Context, signal *compa
 		select {
 		case signalCh <- signal:
 		default:
-			log.Info(context.TODO(), "no space to send compaction signal",
+			log.Info(ctx, "no space to send compaction signal",
 				log.Int64("collectionID", signal.collectionID),
 				log.Int64s("segmentID", signal.segmentIDs),
 				log.String("channel", signal.channel))

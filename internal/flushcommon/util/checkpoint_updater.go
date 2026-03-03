@@ -133,7 +133,7 @@ func (ccu *ChannelCheckpointUpdater) updateCheckpoints(tasks []*channelCPUpdateT
 				})
 				err := ccu.broker.UpdateChannelCheckpoint(ctx, channelCPs)
 				if err != nil {
-					log.Warn(context.TODO(), "update channel checkpoint failed", log.Err(err))
+					log.Warn(ctx, "update channel checkpoint failed", log.Err(err))
 					return
 				}
 				for _, task := range tasks {

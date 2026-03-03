@@ -62,7 +62,7 @@ func Analyze(ctx context.Context, analyzeInfo *clusteringpb.AnalyzeInfo) (CodecA
 
 	runtime.SetFinalizer(analyze, func(ca *CgoAnalyze) {
 		if ca != nil && !ca.close {
-			log.Error(context.TODO(), "there is leakage in analyze object, please check.")
+			log.Error(ctx, "there is leakage in analyze object, please check.")
 		}
 	})
 

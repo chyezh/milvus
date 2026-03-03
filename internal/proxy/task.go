@@ -693,7 +693,7 @@ func (t *addCollectionFieldTask) PreExecute(ctx context.Context) error {
 		return merr.WrapErrParameterInvalidMsg(fmt.Sprintf("duplicate field name: %s", t.fieldSchema.GetName()))
 	}
 
-	log.Info(context.TODO(), "PreExecute addField task done", log.Any("field schema", t.fieldSchema))
+	log.Info(ctx, "PreExecute addField task done", log.Any("field schema", t.fieldSchema))
 	return nil
 }
 
@@ -2299,8 +2299,7 @@ func (t *loadCollectionTask) GetLoadPriority() commonpb.LoadPriority {
 func (t *loadCollectionTask) Execute(ctx context.Context) (err error) {
 	collID, err := globalMetaCache.GetCollectionID(ctx, t.GetDbName(), t.CollectionName)
 
-
-	log.Debug(context.TODO(), "loadCollectionTask Execute")
+	log.Debug(ctx, "loadCollectionTask Execute")
 	if err != nil {
 		return err
 	}
@@ -2350,7 +2349,7 @@ func (t *loadCollectionTask) Execute(ctx context.Context) (err error) {
 
 	if len(unindexedVecFields) != 0 {
 		errMsg := fmt.Sprintf("there is no vector index on field: %v, please create index firstly", unindexedVecFields)
-		log.Debug(context.TODO(), errMsg)
+		log.Debug(ctx, errMsg)
 		return errors.New(errMsg)
 	}
 	request := &querypb.LoadCollectionRequest{
@@ -2368,7 +2367,7 @@ func (t *loadCollectionTask) Execute(ctx context.Context) (err error) {
 		LoadFields:     loadFields,
 		Priority:       t.GetLoadPriority(),
 	}
-	log.Info(context.TODO(), "send LoadCollectionRequest to query coordinator",
+	log.Info(ctx, "send LoadCollectionRequest to query coordinator",
 		log.Any("schema", request.Schema),
 		log.Int32("priority", int32(request.GetPriority())))
 	t.result, err = t.mixCoord.LoadCollection(ctx, request)
@@ -2637,7 +2636,7 @@ func (t *loadPartitionsTask) Execute(ctx context.Context) error {
 		LoadFields:     loadFields,
 		Priority:       t.GetLoadPriority(),
 	}
-	log.Info(context.TODO(), "send LoadPartitionRequest to query coordinator",
+	log.Info(ctx, "send LoadPartitionRequest to query coordinator",
 		log.Any("schema", request.Schema),
 		log.Int32("priority", int32(request.GetPriority())))
 	t.result, err = t.mixCoord.LoadPartitions(ctx, request)

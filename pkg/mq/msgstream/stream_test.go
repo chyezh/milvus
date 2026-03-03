@@ -198,7 +198,7 @@ func testSendAndRecv(t *testing.T, p mqwrapper.Producer, c mqwrapper.Consumer) {
 	go func() {
 		defer wg.Done()
 		producerIDs = sendMessages(ctx, t, p, msg)
-		log.Debug(context.TODO(), "producing finished", log.Any("id", producerIDs[0].Serialize()), log.Any("ids", producerIDs))
+		log.Debug(ctx, "producing finished", log.Any("id", producerIDs[0].Serialize()), log.Any("ids", producerIDs))
 	}()
 
 	go func() {

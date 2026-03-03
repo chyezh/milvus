@@ -60,11 +60,11 @@ func (s *AssignmentDiscoverServer) recvLoop() (err error) {
 	defer func() {
 		if err != nil {
 			s.cancel(err)
-			s.logger.Warn(nil, "recv arm of stream closed by unexpected error", log.Err(err))
+			s.logger.Warn(context.TODO(), "recv arm of stream closed by unexpected error", log.Err(err))
 			return
 		}
 		s.cancel(errClosedByUser)
-		s.logger.Info(nil, "recv arm of stream closed")
+		s.logger.Info(context.TODO(), "recv arm of stream closed")
 	}()
 
 	for {
@@ -82,7 +82,7 @@ func (s *AssignmentDiscoverServer) recvLoop() (err error) {
 			s.balancer.MarkAsUnavailable(s.ctx, []types.PChannelInfo{channel})
 		case *streamingpb.AssignmentDiscoverRequest_Close:
 		default:
-			s.logger.Warn(nil, "unknown command type", log.Any("command", req))
+			s.logger.Warn(context.TODO(), "unknown command type", log.Any("command", req))
 		}
 	}
 }

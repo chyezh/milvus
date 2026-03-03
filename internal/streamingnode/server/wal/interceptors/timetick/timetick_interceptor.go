@@ -126,12 +126,12 @@ func (impl *timeTickAppendInterceptor) GracefulClose() {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	logger := log.With(log.Any("pchannel", impl.operator.interceptorBuildParam.ChannelInfo))
-	logger.Info(nil, "timeTickAppendInterceptor is closing, try to perform a txn manager graceful shutdown")
+	logger.Info(ctx, "timeTickAppendInterceptor is closing, try to perform a txn manager graceful shutdown")
 	if err := impl.txnManager.GracefulClose(ctx); err != nil {
-		logger.Warn(nil, "timeTickAppendInterceptor is closed", log.Err(err))
+		logger.Warn(ctx, "timeTickAppendInterceptor is closed", log.Err(err))
 		return
 	}
-	logger.Info(nil, "txnManager of timeTickAppendInterceptor is graceful closed")
+	logger.Info(ctx, "txnManager of timeTickAppendInterceptor is graceful closed")
 }
 
 // Close implements AppendInterceptor.

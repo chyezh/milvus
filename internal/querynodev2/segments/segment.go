@@ -49,8 +49,8 @@ import (
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/internal/util/vecindexmgr"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/cgopb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexcgopb"
@@ -357,10 +357,10 @@ func NewSegment(ctx context.Context,
 		})
 		return nil, err
 	}).Await(); err != nil {
-		logger.Warn(nil, "create segment failed", log.Err(err))
+		logger.Warn(context.TODO(), "create segment failed", log.Err(err))
 		return nil, err
 	}
-	logger.Info(nil, "create segment done")
+	logger.Info(context.TODO(), "create segment done")
 
 	segment := &LocalSegment{
 		baseSegment:        base,
@@ -604,11 +604,11 @@ func (s *LocalSegment) Search(ctx context.Context, searchReq *segcore.SearchRequ
 	tr := timerecord.NewTimeRecorder("cgoSearch")
 	result, err := s.csegment.Search(ctx, searchReq)
 	if err != nil {
-		log.Warn(context.TODO(), "Search failed")
+		log.Warn(ctx, "Search failed")
 		return nil, err
 	}
 	metrics.QueryNodeSQSegmentLatencyInCore.WithLabelValues(paramtable.GetStringNodeID(), metrics.SearchLabel).Observe(float64(tr.ElapseSpan().Milliseconds()))
-	log.Debug(context.TODO(), "search segment done")
+	log.Debug(ctx, "search segment done")
 	return result, nil
 }
 
@@ -619,12 +619,12 @@ func (s *LocalSegment) retrieve(ctx context.Context, plan *segcore.RetrievePlan)
 	}
 	defer s.ptrLock.Unpin()
 
-	log.Debug(context.TODO(), "begin to retrieve")
+	log.Debug(ctx, "begin to retrieve")
 
 	tr := timerecord.NewTimeRecorder("cgoRetrieve")
 	result, err := s.csegment.Retrieve(ctx, plan)
 	if err != nil {
-		log.Warn(context.TODO(), "Retrieve failed")
+		log.Warn(ctx, "Retrieve failed")
 		return nil, err
 	}
 	metrics.QueryNodeSQSegmentLatencyInCore.WithLabelValues(paramtable.GetStringNodeID(),
@@ -644,10 +644,10 @@ func (s *LocalSegment) Retrieve(ctx context.Context, plan *segcore.RetrievePlan)
 
 	retrieveResult, err := result.GetResult()
 	if err != nil {
-		log.Warn(context.TODO(), "unmarshal retrieve result failed", log.Err(err))
+		log.Warn(ctx, "unmarshal retrieve result failed", log.Err(err))
 		return nil, err
 	}
-	log.Debug(context.TODO(), "retrieve segment done", log.Int("resultNum", len(retrieveResult.Offset)))
+	log.Debug(ctx, "retrieve segment done", log.Int("resultNum", len(retrieveResult.Offset)))
 	return retrieveResult, nil
 }
 
@@ -658,11 +658,11 @@ func (s *LocalSegment) retrieveByOffsets(ctx context.Context, plan *segcore.Retr
 	}
 	defer s.ptrLock.Unpin()
 
-	log.Debug(context.TODO(), "begin to retrieve by offsets")
+	log.Debug(ctx, "begin to retrieve by offsets")
 	tr := timerecord.NewTimeRecorder("cgoRetrieveByOffsets")
 	result, err := s.csegment.RetrieveByOffsets(ctx, plan)
 	if err != nil {
-		log.Warn(context.TODO(), "RetrieveByOffsets failed")
+		log.Warn(ctx, "RetrieveByOffsets failed")
 		return nil, err
 	}
 	metrics.QueryNodeSQSegmentLatencyInCore.WithLabelValues(paramtable.GetStringNodeID(),
@@ -682,10 +682,10 @@ func (s *LocalSegment) RetrieveByOffsets(ctx context.Context, plan *segcore.Retr
 
 	retrieveResult, err := result.GetResult()
 	if err != nil {
-		log.Warn(context.TODO(), "unmarshal retrieve by offsets result failed", log.Err(err))
+		log.Warn(ctx, "unmarshal retrieve by offsets result failed", log.Err(err))
 		return nil, err
 	}
-	log.Debug(context.TODO(), "retrieve by segment offsets done", log.Int("resultNum", len(retrieveResult.Offset)))
+	log.Debug(ctx, "retrieve by segment offsets done", log.Int("resultNum", len(retrieveResult.Offset)))
 	return retrieveResult, nil
 }
 
@@ -749,7 +749,7 @@ func (s *LocalSegment) Delete(ctx context.Context, primaryKeys storage.PrimaryKe
 	defer s.deltaMut.Unlock()
 
 	if s.lastDeltaTimestamp.Load() >= timestamps[len(timestamps)-1] {
-		log.Info(context.TODO(), "skip delete due to delete record before lastDeltaTimestamp",
+		log.Info(ctx, "skip delete due to delete record before lastDeltaTimestamp",
 			log.Int64("segmentID", s.ID()),
 			log.Uint64("lastDeltaTimestamp", s.lastDeltaTimestamp.Load()))
 		return nil
@@ -791,7 +791,7 @@ func (s *LocalSegment) LoadFieldData(ctx context.Context, fieldID int64, rowCoun
 	ctx, sp := otel.Tracer(typeutil.QueryNodeRole).Start(ctx, fmt.Sprintf("LoadFieldData-%d-%d", s.ID(), fieldID))
 	defer sp.End()
 
-	log.Info(context.TODO(), "start loading field data for field")
+	log.Info(ctx, "start loading field data for field")
 
 	// TODO retrieve_enable should be considered
 	collection := s.collection
@@ -822,15 +822,15 @@ func (s *LocalSegment) LoadFieldData(ctx context.Context, fieldID int64, rowCoun
 			).Observe(float64(time.Since(start).Milliseconds()))
 		}()
 		_, err = s.csegment.LoadFieldData(ctx, req)
-		log.Info(context.TODO(), "submitted loadFieldData task to load pool")
+		log.Info(ctx, "submitted loadFieldData task to load pool")
 		return nil, nil
 	}).Await()
 
 	if err != nil {
-		log.Warn(context.TODO(), "LoadFieldData failed", log.Err(err))
+		log.Warn(ctx, "LoadFieldData failed", log.Err(err))
 		return err
 	}
-	log.Info(context.TODO(), "load field done")
+	log.Info(ctx, "load field done")
 	return nil
 }
 
@@ -851,7 +851,7 @@ func (s *LocalSegment) LoadDeltaData(ctx context.Context, deltaData *storage.Del
 	defer s.deltaMut.Unlock()
 
 	if s.lastDeltaTimestamp.Load() >= tss[len(tss)-1] {
-		log.Info(context.TODO(), "skip load delta data due to delete record before lastDeltaTimestamp",
+		log.Info(ctx, "skip load delta data due to delete record before lastDeltaTimestamp",
 			log.Uint64("lastDeltaTimestamp", s.lastDeltaTimestamp.Load()))
 		return nil
 	}
@@ -900,7 +900,7 @@ func (s *LocalSegment) LoadDeltaData(ctx context.Context, deltaData *storage.Del
 	s.rowNum.Store(-1)
 	s.lastDeltaTimestamp.Store(tss[len(tss)-1])
 
-	log.Info(context.TODO(), "load deleted record done",
+	log.Info(ctx, "load deleted record done",
 		log.Int64("rowNum", rowNum),
 		log.String("segmentType", s.Type().String()))
 	return nil
@@ -986,7 +986,7 @@ func (s *LocalSegment) LoadIndex(ctx context.Context, indexInfo *querypb.FieldIn
 	old := s.GetIndexByID(indexInfo.GetIndexID())
 	// the index loaded
 	if old != nil && old.IsLoaded {
-		log.Warn(context.TODO(), "index already loaded")
+		log.Warn(ctx, "index already loaded")
 		return nil
 	}
 
@@ -1006,7 +1006,7 @@ func (s *LocalSegment) LoadIndex(ctx context.Context, indexInfo *querypb.FieldIn
 
 	// // if segment is pk sorted, user created indexes bring no performance gain but extra memory usage
 	if s.IsSorted() && fieldSchema.GetIsPrimaryKey() {
-		log.Info(context.TODO(), "skip loading index for pk field in sorted segment")
+		log.Info(ctx, "skip loading index for pk field in sorted segment")
 		// set field index, preventing repeated loading index task
 		s.fieldIndexes.Insert(indexInfo.GetFieldID(), &IndexedFieldInfo{
 			FieldBinlog: &datapb.FieldBinlog{
@@ -1085,7 +1085,7 @@ func (s *LocalSegment) LoadJSONKeyIndex(ctx context.Context, jsonKeyStats *datap
 
 	log.Info(ctx, "load json key index", log.Int64("field id", jsonKeyStats.GetFieldID()), log.Any("json key logs", jsonKeyStats))
 	if _, ok := s.fieldJSONStats[jsonKeyStats.GetFieldID()]; ok {
-		log.Warn(context.TODO(), "JsonKeyIndexStats already loaded", log.Int64("field id", jsonKeyStats.GetFieldID()), log.Any("json key logs", jsonKeyStats))
+		log.Warn(ctx, "JsonKeyIndexStats already loaded", log.Int64("field id", jsonKeyStats.GetFieldID()), log.Any("json key logs", jsonKeyStats))
 		return nil
 	}
 
@@ -1163,7 +1163,7 @@ func (s *LocalSegment) UpdateIndexInfo(ctx context.Context, indexInfo *querypb.F
 		IndexInfo: indexInfo,
 		IsLoaded:  true,
 	})
-	log.Info(context.TODO(), "updateSegmentIndex done")
+	log.Info(ctx, "updateSegmentIndex done")
 	return nil
 }
 
@@ -1244,7 +1244,7 @@ func (s *LocalSegment) Release(ctx context.Context, opts ...releaseOption) {
 	ptr := s.ptr
 	if options.Scope == ReleaseScopeData {
 		s.ReleaseSegmentData()
-		log.Info(context.TODO(), "release segment data done and the field indexes info has been set lazy load=true")
+		log.Info(ctx, "release segment data done and the field indexes info has been set lazy load=true")
 		return
 	}
 
@@ -1272,7 +1272,7 @@ func (s *LocalSegment) Release(ctx context.Context, opts ...releaseOption) {
 		s.binlogSize.Store(0)
 	}
 
-	log.Info(context.TODO(), "delete segment from memory")
+	log.Info(ctx, "delete segment from memory")
 }
 
 // ReleaseSegmentData releases the segment data.

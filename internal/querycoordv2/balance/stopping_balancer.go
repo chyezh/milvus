@@ -70,13 +70,13 @@ func (b *StoppingBalancer) BalanceReplica(ctx context.Context, replica *meta.Rep
 			log.RatedDebug(ctx, log.RateDefault, "no stopping balance plan generated",
 				zap.Stringers("records", br.detailRecords))
 		} else {
-			log.Info(context.TODO(), "stopping balance plan generated", zap.Stringers("report details", br.records))
+			log.Info(ctx, "stopping balance plan generated", zap.Stringers("report details", br.records))
 		}
 	}()
 
 	if !paramtable.Get().QueryCoordCfg.EnableStoppingBalance.GetAsBool() {
 		br.AddRecord(StrRecord("stopping balance is disabled"))
-		log.RatedInfo(context.TODO(), log.RateDefault, "stopping balance is disabled")
+		log.RatedInfo(ctx, log.RateDefault, "stopping balance is disabled")
 		return nil, nil
 	}
 

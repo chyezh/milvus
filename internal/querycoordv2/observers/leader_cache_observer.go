@@ -21,7 +21,6 @@ import (
 	"sync"
 	"time"
 
-
 	"github.com/milvus-io/milvus/internal/util/proxyutil"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/proxypb"
@@ -68,14 +67,14 @@ func (o *LeaderCacheObserver) schedule(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info(context.TODO(), "stop leader cache observer due to context done")
+			log.Info(ctx, "stop leader cache observer due to context done")
 			return
 		case <-o.closeCh:
-			log.Info(context.TODO(), "stop leader cache observer")
+			log.Info(ctx, "stop leader cache observer")
 			return
 
 		case event := <-o.eventCh:
-			log.Info(context.TODO(), "receive event, trigger leader cache update", log.Int64("event", event))
+			log.Info(ctx, "receive event, trigger leader cache update", log.Int64("event", event))
 			ret := make([]int64, 0)
 			ret = append(ret, event)
 
@@ -100,7 +99,7 @@ func (o *LeaderCacheObserver) HandleEvent(ctx context.Context, collectionIDs ...
 		CollectionIDs: collectionIDs,
 	})
 	if err != nil {
-		log.Warn(context.TODO(), "failed to invalidate proxy's shard leader cache", log.Err(err))
+		log.Warn(ctx, "failed to invalidate proxy's shard leader cache", log.Err(err))
 		return
 	}
 }

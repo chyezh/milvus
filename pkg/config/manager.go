@@ -567,11 +567,11 @@ func (m *Manager) SaveConfigToEtcd(etcdSource *EtcdSource, key, value string) er
 		return fmt.Errorf("failed to put config to etcd: %w", err)
 	}
 	if !resp.Succeeded {
-		log.Info(context.TODO(), "config already exists in etcd, skip writing",
+		log.Info(ctx, "config already exists in etcd, skip writing",
 			log.String("etcdKey", etcdKey), log.String("configKey", key), log.String("value", value))
 		return nil
 	}
-	log.Info(context.TODO(), "config atomically saved to etcd",
+	log.Info(ctx, "config atomically saved to etcd",
 		log.String("etcdKey", etcdKey), log.String("configKey", key), log.String("value", value))
 
 	return nil
@@ -591,7 +591,7 @@ func (m *Manager) UpdateConfigInEtcd(etcdSource *EtcdSource, key, value string) 
 	if err != nil {
 		return fmt.Errorf("failed to update config in etcd: %w", err)
 	}
-	log.Info(context.TODO(), "config updated in etcd",
+	log.Info(ctx, "config updated in etcd",
 		log.String("etcdKey", etcdKey), log.String("configKey", fmtKey), log.String("value", value))
 
 	return nil

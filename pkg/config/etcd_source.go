@@ -149,7 +149,7 @@ func (es *EtcdSource) refreshConfigurations() error {
 
 	ctx, cancel := context.WithTimeout(es.ctx, ReadConfigTimeout)
 	defer cancel()
-	log.RatedDebug(context.TODO(), log.RateDefault, "etcd refreshConfigurations", log.String("prefix", prefix), log.Any("endpoints", es.etcdCli.Endpoints()))
+	log.RatedDebug(ctx, log.RateDefault, "etcd refreshConfigurations", log.String("prefix", prefix), log.Any("endpoints", es.etcdCli.Endpoints()))
 	response, err := es.etcdCli.Get(ctx, prefix, clientv3.WithPrefix(), clientv3.WithSerializable())
 	if err != nil {
 		return err
@@ -160,7 +160,7 @@ func (es *EtcdSource) refreshConfigurations() error {
 		key = strings.TrimPrefix(key, prefix+"/")
 		newConfig[key] = string(kv.Value)
 		newConfig[formatKey(key)] = string(kv.Value)
-		log.Debug(context.TODO(), "got config from etcd", log.String("key", string(kv.Key)), log.String("value", string(kv.Value)))
+		log.Debug(ctx, "got config from etcd", log.String("key", string(kv.Key)), log.String("value", string(kv.Value)))
 	}
 	return es.update(newConfig)
 }

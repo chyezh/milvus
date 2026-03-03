@@ -34,7 +34,7 @@ func TestUpdatePartialFields(t *testing.T) {
 	prepare.Load(ctx, t, mc, hp.NewLoadParams(schema.CollectionName))
 
 	genPkWithSingleScalarField := func(option *hp.GenDataOption) ([]column.Column, []column.Column) {
-		log.Info(context.TODO(), "genPkWithSingleScalarField")
+		log.Info(ctx, "genPkWithSingleScalarField")
 		columns := make([]column.Column, 0, 2)
 		columns = append(columns, hp.GenColumnDataWithOption(entity.FieldTypeInt64, *option))
 		columns = append(columns, hp.GenColumnDataWithOption(entity.FieldTypeFloat, *option))
@@ -42,7 +42,7 @@ func TestUpdatePartialFields(t *testing.T) {
 	}
 
 	genPkWithSinglVectorField := func(option *hp.GenDataOption) ([]column.Column, []column.Column) {
-		log.Info(context.TODO(), "genPkWithSinglVectorField")
+		log.Info(ctx, "genPkWithSinglVectorField")
 		columns := make([]column.Column, 0, 2)
 		columns = append(columns, hp.GenColumnDataWithOption(entity.FieldTypeInt64, *option))
 		columns = append(columns, hp.GenColumnDataWithOption(entity.FieldTypeFloatVector, *option))

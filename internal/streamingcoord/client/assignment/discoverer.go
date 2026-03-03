@@ -1,6 +1,7 @@
 package assignment
 
 import (
+	"context"
 	"io"
 	"sync"
 
@@ -151,7 +152,7 @@ func (c *assignmentDiscoverClient) recvLoop() (err error) {
 		case *streamingpb.AssignmentDiscoverResponse_FullAssignment:
 			if resp.FullAssignment.VersionByRevision == nil {
 				marshaledFullAssignment, _ := protojson.Marshal(resp.FullAssignment)
-				c.logger.Warn(nil, "VersionByRevision is nil, from legacy mixcoord server, skipping", log.String("assignment", string(marshaledFullAssignment)))
+				c.logger.Warn(context.TODO(), "VersionByRevision is nil, from legacy mixcoord server, skipping", log.String("assignment", string(marshaledFullAssignment)))
 				continue
 			}
 			newIncomingVersion := typeutil.VersionInt64Pair{

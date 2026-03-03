@@ -149,9 +149,9 @@ func (s *scannerAdaptorImpl) execute() {
 	defer func() {
 		s.readOption.MesasgeHandler.Close()
 		s.Finish(nil)
-		s.logger.Info(nil, "scanner is closed")
+		s.logger.Info(context.TODO(), "scanner is closed")
 	}()
-	s.logger.Info(nil, "scanner start background task")
+	s.logger.Info(context.TODO(), "scanner start background task")
 
 	msgChan := make(chan message.ImmutableMessage)
 
@@ -162,18 +162,18 @@ func (s *scannerAdaptorImpl) execute() {
 		defer close(ch)
 		err := s.produceEventLoop(msgChan)
 		if errors.Is(err, context.Canceled) {
-			s.logger.Info(nil, "the produce event loop of scanner is closed")
+			s.logger.Info(context.TODO(), "the produce event loop of scanner is closed")
 			return
 		}
-		s.logger.Warn(nil, "the produce event loop of scanner is closed with unexpected error", log.Err(err))
+		s.logger.Warn(context.TODO(), "the produce event loop of scanner is closed with unexpected error", log.Err(err))
 	}()
 
 	err := s.consumeEventLoop(msgChan)
 	if errors.Is(err, context.Canceled) {
-		s.logger.Info(nil, "the consuming event loop of scanner is closed")
+		s.logger.Info(context.TODO(), "the consuming event loop of scanner is closed")
 		return
 	}
-	s.logger.Warn(nil, "the consuming event loop of scanner is closed with unexpected error", log.Err(err))
+	s.logger.Warn(context.TODO(), "the consuming event loop of scanner is closed with unexpected error", log.Err(err))
 }
 
 // produceEventLoop produces the message from the wal and write ahead buffer.
@@ -193,14 +193,14 @@ func (s *scannerAdaptorImpl) produceEventLoop(msgChan chan<- message.ImmutableMe
 	}
 
 	scanner := newSwithableScanner(s.Name(), s.logger, s.innerWAL, wb, s.readOption.DeliverPolicy, msgChan)
-	s.logger.Info(nil, "start produce loop of scanner at model", log.String("model", getScannerModel(scanner)))
+	s.logger.Info(context.TODO(), "start produce loop of scanner at model", log.String("model", getScannerModel(scanner)))
 	for {
 		if scanner, err = scanner.Do(s.Context()); err != nil {
 			return err
 		}
 		m := getScannerModel(scanner)
 		s.metrics.SwitchModel(m)
-		s.logger.Info(nil, "switch scanner model", log.String("model", m))
+		s.logger.Info(context.TODO(), "switch scanner model", log.String("model", m))
 	}
 }
 
@@ -255,12 +255,12 @@ func (s *scannerAdaptorImpl) waitUntilStartConsumption() {
 		paramtable.Get().Watch(watchKey, handler)
 		defer paramtable.Get().Unwatch(watchKey, handler)
 
-		s.logger.Info(nil, "pause consumption...")
+		s.logger.Info(context.TODO(), "pause consumption...")
 		select {
 		case <-resumeChan:
-			s.logger.Info(nil, "continue to consume messages")
+			s.logger.Info(context.TODO(), "continue to consume messages")
 		case <-s.Context().Done():
-			s.logger.Info(nil, "pause consumption is canceled")
+			s.logger.Info(context.TODO(), "pause consumption is canceled")
 		}
 	}
 }
@@ -291,7 +291,7 @@ func (s *scannerAdaptorImpl) handleUpstream(msg message.ImmutableMessage) {
 			// Push the confirmed messages into pending queue for consuming.
 			if log.LevelEnabled(log.DebugLevel) {
 				for _, m := range msgs {
-					s.logger.Debug(nil,
+					s.logger.Debug(context.TODO(),
 						"push message into pending queue",
 						log.Uint64("committedTimeTick", msg.TimeTick()),
 						log.FieldMessage(m),
@@ -324,7 +324,7 @@ func (s *scannerAdaptorImpl) handleUpstream(msg message.ImmutableMessage) {
 		if errors.Is(err, utility.ErrTimeTickVoilation) {
 			s.metrics.ObserveTimeTickViolation(isTailing, msg.MessageType())
 		}
-		s.logger.Warn(nil, "failed to push message into reorder buffer",
+		s.logger.Warn(context.TODO(), "failed to push message into reorder buffer",
 			log.FieldMessage(msg),
 			log.Bool("tailing", isTailing),
 			log.Err(err))

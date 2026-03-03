@@ -21,8 +21,8 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
@@ -284,11 +284,11 @@ func (wb *writeBufferBase) triggerSync() (segmentIDs []int64) {
 	return segmentsToSync
 }
 
-func (wb *writeBufferBase) sealSegments(_ context.Context, segmentIDs []int64) error {
+func (wb *writeBufferBase) sealSegments(ctx context.Context, segmentIDs []int64) error {
 	for _, segmentID := range segmentIDs {
 		_, ok := wb.metaCache.GetSegmentByID(segmentID)
 		if !ok {
-			log.Warn(context.TODO(), "cannot find segment when sealSegments", log.Int64("segmentID", segmentID), log.String("channel", wb.channelName))
+			log.Warn(ctx, "cannot find segment when sealSegments", log.Int64("segmentID", segmentID), log.String("channel", wb.channelName))
 			return merr.WrapErrSegmentNotFound(segmentID)
 		}
 	}
@@ -323,7 +323,7 @@ func (wb *writeBufferBase) syncSegments(ctx context.Context, segmentIDs []int64)
 		syncTask, err := wb.getSyncTask(ctx, segmentID)
 		if err != nil {
 			if errors.Is(err, merr.ErrSegmentNotFound) {
-				log.Warn(context.TODO(), "segment not found in meta", log.Int64("segmentID", segmentID))
+				log.Warn(ctx, "segment not found in meta", log.Int64("segmentID", segmentID))
 				continue
 			} else {
 				log.Fatal(context.TODO(), "failed to get sync task", log.Int64("segmentID", segmentID), log.Err(err))
@@ -345,7 +345,7 @@ func (wb *writeBufferBase) syncSegments(ctx context.Context, segmentIDs []int64)
 
 			if syncTask.IsFlush() {
 				wb.metaCache.RemoveSegments(metacache.WithSegmentIDs(syncTask.SegmentID()))
-				log.Info(context.TODO(), "flushed segment removed", log.Int64("segmentID", syncTask.SegmentID()), log.String("channel", syncTask.ChannelName()))
+				log.Info(ctx, "flushed segment removed", log.Int64("segmentID", syncTask.SegmentID()), log.String("channel", syncTask.ChannelName()))
 			}
 			return nil
 		})
@@ -557,7 +557,7 @@ func (wb *writeBufferBase) bufferDelete(segmentID int64, pks []storage.PrimaryKe
 func (wb *writeBufferBase) getSyncTask(ctx context.Context, segmentID int64) (syncmgr.Task, error) {
 	segmentInfo, ok := wb.metaCache.GetSegmentByID(segmentID) // wb.metaCache.GetSegmentsBy(metacache.WithSegmentIDs(segmentID))
 	if !ok {
-		log.Warn(context.TODO(), "segment info not found in meta cache", log.Int64("segmentID", segmentID))
+		log.Warn(ctx, "segment info not found in meta cache", log.Int64("segmentID", segmentID))
 		return nil, merr.WrapErrSegmentNotFound(segmentID)
 	}
 	var batchSize int64
@@ -674,13 +674,13 @@ func (wb *writeBufferBase) Close(ctx context.Context, drop bool) {
 
 	err := conc.AwaitAll(futures...)
 	if err != nil {
-		log.Error(context.TODO(), "failed to sink write buffer data", log.Err(err))
+		log.Error(ctx, "failed to sink write buffer data", log.Err(err))
 		// TODO change to remove channel in the future
 		panic(err)
 	}
 	err = wb.metaWriter.DropChannel(ctx, wb.channelName)
 	if err != nil {
-		log.Error(context.TODO(), "failed to drop channel", log.Err(err))
+		log.Error(ctx, "failed to drop channel", log.Err(err))
 		// TODO change to remove channel in the future
 		panic(err)
 	}

@@ -40,8 +40,8 @@ import (
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
 	"github.com/milvus-io/milvus/internal/util/segmentutil"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
@@ -607,15 +607,15 @@ func (m *meta) GetAllCollectionNumRows() map[int64]int64 {
 
 // AddSegment records segment info, persisting info into kv store
 func (m *meta) AddSegment(ctx context.Context, segment *SegmentInfo) error {
-	log.Info(context.TODO(), "meta update: adding segment - Start", log.Int64("segmentID", segment.GetID()))
+	log.Info(ctx, "meta update: adding segment - Start", log.Int64("segmentID", segment.GetID()))
 	m.segMu.Lock()
 	defer m.segMu.Unlock()
 	if info := m.segments.GetSegment(segment.GetID()); info != nil {
-		log.Info(context.TODO(), "segment is already exists, ignore the operation", log.Int64("segmentID", segment.ID))
+		log.Info(ctx, "segment is already exists, ignore the operation", log.Int64("segmentID", segment.ID))
 		return nil
 	}
 	if err := m.catalog.AddSegment(ctx, segment.SegmentInfo); err != nil {
-		log.Error(context.TODO(), "meta update: adding segment failed",
+		log.Error(ctx, "meta update: adding segment failed",
 			log.Int64("segmentID", segment.GetID()),
 			log.Err(err))
 		return err
@@ -623,23 +623,23 @@ func (m *meta) AddSegment(ctx context.Context, segment *SegmentInfo) error {
 	m.segments.SetSegment(segment.GetID(), segment)
 
 	metrics.DataCoordNumSegments.WithLabelValues(segment.GetState().String(), segment.GetLevel().String(), getSortStatus(segment.GetIsSorted()), fmt.Sprint(segment.GetStorageVersion())).Inc()
-	log.Info(context.TODO(), "meta update: adding segment - complete", log.Int64("segmentID", segment.GetID()))
+	log.Info(ctx, "meta update: adding segment - complete", log.Int64("segmentID", segment.GetID()))
 	return nil
 }
 
 // DropSegment remove segment with provided id, etcd persistence also removed
 func (m *meta) DropSegment(ctx context.Context, segmentID UniqueID) error {
-	log.Debug(context.TODO(), "meta update: dropping segment", log.Int64("segmentID", segmentID))
+	log.Debug(ctx, "meta update: dropping segment", log.Int64("segmentID", segmentID))
 	m.segMu.Lock()
 	defer m.segMu.Unlock()
 	segment := m.segments.GetSegment(segmentID)
 	if segment == nil {
-		log.Warn(context.TODO(), "meta update: dropping segment failed - segment not found",
+		log.Warn(ctx, "meta update: dropping segment failed - segment not found",
 			log.Int64("segmentID", segmentID))
 		return nil
 	}
 	if err := m.catalog.DropSegment(ctx, segment.SegmentInfo); err != nil {
-		log.Warn(context.TODO(), "meta update: dropping segment failed",
+		log.Warn(ctx, "meta update: dropping segment failed",
 			log.Int64("segmentID", segmentID),
 			log.Err(err))
 		return err
@@ -647,7 +647,7 @@ func (m *meta) DropSegment(ctx context.Context, segmentID UniqueID) error {
 	metrics.DataCoordNumSegments.WithLabelValues(segment.GetState().String(), segment.GetLevel().String(), getSortStatus(segment.GetIsSorted()), fmt.Sprint(segment.GetStorageVersion())).Dec()
 
 	m.segments.DropSegment(segmentID)
-	log.Info(context.TODO(), "meta update: dropping segment - complete",
+	log.Info(ctx, "meta update: dropping segment - complete",
 		log.Int64("segmentID", segmentID))
 	return nil
 }
@@ -738,14 +738,14 @@ func (m *meta) GetSegmentsChannels(segmentIDs []UniqueID) (map[int64]string, err
 
 // SetState setting segment with provided ID state
 func (m *meta) SetState(ctx context.Context, segmentID UniqueID, targetState commonpb.SegmentState) error {
-	log.Debug(context.TODO(), "meta update: setting segment state",
+	log.Debug(ctx, "meta update: setting segment state",
 		log.Int64("segmentID", segmentID),
 		log.Any("target state", targetState))
 	m.segMu.Lock()
 	defer m.segMu.Unlock()
 	curSegInfo := m.segments.GetSegment(segmentID)
 	if curSegInfo == nil {
-		log.Warn(context.TODO(), "meta update: setting segment state - segment not found",
+		log.Warn(ctx, "meta update: setting segment state - segment not found",
 			log.Int64("segmentID", segmentID),
 			log.Any("target state", targetState))
 		// idempotent drop
@@ -763,7 +763,7 @@ func (m *meta) SetState(ctx context.Context, segmentID UniqueID, targetState com
 		// Update segment state and prepare segment metric update.
 		updateSegStateAndPrepareMetrics(clonedSegment, targetState, metricMutation)
 		if err := m.catalog.AlterSegments(ctx, []*datapb.SegmentInfo{clonedSegment.SegmentInfo}); err != nil {
-			log.Warn(context.TODO(), "meta update: setting segment state - failed to alter segments",
+			log.Warn(ctx, "meta update: setting segment state - failed to alter segments",
 				log.Int64("segmentID", segmentID),
 				log.String("target state", targetState.String()),
 				log.Err(err))
@@ -774,7 +774,7 @@ func (m *meta) SetState(ctx context.Context, segmentID UniqueID, targetState com
 		// Update in-memory meta.
 		m.segments.SetSegment(segmentID, clonedSegment)
 	}
-	log.Info(context.TODO(), "meta update: setting segment state - complete",
+	log.Info(ctx, "meta update: setting segment state - complete",
 		log.Int64("segmentID", segmentID),
 		log.String("target state", targetState.String()))
 	return nil
@@ -1381,7 +1381,7 @@ func (m *meta) UpdateSegmentsInfo(ctx context.Context, operators ...UpdateOperat
 // UpdateDropChannelSegmentInfo updates segment checkpoints and binlogs before drop
 // reusing segment info to pass segment id, binlogs, statslog, deltalog, start position and checkpoint
 func (m *meta) UpdateDropChannelSegmentInfo(ctx context.Context, channel string, segments []*SegmentInfo) error {
-	log.Debug(context.TODO(), "meta update: update drop channel segment info",
+	log.Debug(ctx, "meta update: update drop channel segment info",
 		log.String("channel", channel))
 	m.segMu.Lock()
 	defer m.segMu.Unlock()
@@ -1414,11 +1414,11 @@ func (m *meta) UpdateDropChannelSegmentInfo(ctx context.Context, channel string,
 	}
 	err := m.batchSaveDropSegments(ctx, channel, modSegments)
 	if err != nil {
-		log.Warn(context.TODO(), "meta update: update drop channel segment info failed",
+		log.Warn(ctx, "meta update: update drop channel segment info failed",
 			log.String("channel", channel),
 			log.Err(err))
 	} else {
-		log.Info(context.TODO(), "meta update: update drop channel segment info - complete",
+		log.Info(ctx, "meta update: update drop channel segment info - complete",
 			log.String("channel", channel))
 		// Apply segment metric mutation on successful meta update.
 		metricMutation.commit()
@@ -2058,7 +2058,7 @@ func (m *meta) UpdateChannelCheckpoint(ctx context.Context, vChannel string, pos
 		}
 		m.channelCPs.checkpoints[vChannel] = pos
 		ts, _ := tsoutil.ParseTS(pos.Timestamp)
-		log.Info(context.TODO(), "UpdateChannelCheckpoint done",
+		log.Info(ctx, "UpdateChannelCheckpoint done",
 			log.String("vChannel", vChannel),
 			log.Uint64("ts", pos.GetTimestamp()),
 			log.ByteString("msgID", pos.GetMsgID()),
@@ -2098,7 +2098,7 @@ func (m *meta) UpdateChannelCheckpoints(ctx context.Context, positions []*msgpb.
 	defer m.channelCPs.Unlock()
 	toUpdates := lo.Filter(positions, func(pos *msgpb.MsgPosition, _ int) bool {
 		if pos == nil || (pos.GetMsgID() == nil && pos.GetWALName() != commonpb.WALName_WoodPecker) || pos.GetChannelName() == "" {
-			log.Warn(context.TODO(), "illegal channel cp", log.Any("pos", pos))
+			log.Warn(ctx, "illegal channel cp", log.Any("pos", pos))
 			return false
 		}
 		vChannel := pos.GetChannelName()
@@ -2112,7 +2112,7 @@ func (m *meta) UpdateChannelCheckpoints(ctx context.Context, positions []*msgpb.
 	for _, pos := range toUpdates {
 		channel := pos.GetChannelName()
 		m.channelCPs.checkpoints[channel] = pos
-		log.Info(context.TODO(), "UpdateChannelCheckpoint done", log.String("channel", channel),
+		log.Info(ctx, "UpdateChannelCheckpoint done", log.String("channel", channel),
 			log.Stringer("walName", pos.WALName),
 			log.Uint64("ts", pos.GetTimestamp()),
 			log.Time("time", tsoutil.PhysicalTime(pos.GetTimestamp())))

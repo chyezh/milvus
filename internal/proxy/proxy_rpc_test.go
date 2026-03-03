@@ -37,7 +37,7 @@ func TestProxyRpcLimit(t *testing.T) {
 	base.Save("proxy.grpc.serverMaxRecvSize", "1")
 
 	assert.Equal(t, p.ServerMaxRecvSize.GetAsInt(), 1)
-	log.Info(context.TODO(), "Initialize parameter table of Proxy")
+	log.Info(ctx, "Initialize parameter table of Proxy")
 
 	proxy, err := NewProxy(ctx, factory)
 	assert.NoError(t, err)

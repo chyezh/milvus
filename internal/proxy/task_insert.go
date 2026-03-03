@@ -221,7 +221,7 @@ func (it *insertTask) PreExecute(ctx context.Context) error {
 	// TODO(dragondriver): in fact, NumRows is not trustable, we should check all input fields
 	it.result.IDs, err = checkPrimaryFieldData(allFields, it.schema, it.insertMsg)
 	if err != nil {
-		log.Warn(context.TODO(), "check primary field data and hash primary key failed",
+		log.Warn(ctx, "check primary field data and hash primary key failed",
 			log.Err(err))
 		return err
 	}
@@ -229,32 +229,32 @@ func (it *insertTask) PreExecute(ctx context.Context) error {
 	// check varchar/text with analyzer was utf-8 format
 	err = checkInputUtf8Compatiable(allFields, it.insertMsg)
 	if err != nil {
-		log.Warn(context.TODO(), "check varchar/text format failed", log.Err(err))
+		log.Warn(ctx, "check varchar/text format failed", log.Err(err))
 		return err
 	}
 
 	// Validate and set field ID to insert field data
 	err = validateFieldDataColumns(it.insertMsg.GetFieldsData(), schema)
 	if err != nil {
-		log.Info(context.TODO(), "validate field data columns failed", log.Err(err))
+		log.Info(ctx, "validate field data columns failed", log.Err(err))
 		return err
 	}
 	err = fillFieldPropertiesOnly(it.insertMsg.GetFieldsData(), schema)
 	if err != nil {
-		log.Info(context.TODO(), "fill field properties failed", log.Err(err))
+		log.Info(ctx, "fill field properties failed", log.Err(err))
 		return err
 	}
 
 	partitionKeyMode, err := isPartitionKeyMode(ctx, it.insertMsg.GetDbName(), collectionName)
 	if err != nil {
-		log.Warn(context.TODO(), "check partition key mode failed", log.String("collectionName", collectionName), log.Err(err))
+		log.Warn(ctx, "check partition key mode failed", log.String("collectionName", collectionName), log.Err(err))
 		return err
 	}
 	if partitionKeyMode {
 		fieldSchema, _ := typeutil.GetPartitionKeyFieldSchema(it.schema)
 		it.partitionKeys, err = getPartitionKeyFieldData(fieldSchema, it.insertMsg)
 		if err != nil {
-			log.Warn(context.TODO(), "get partition keys from insert request failed", log.String("collectionName", collectionName), log.Err(err))
+			log.Warn(ctx, "get partition keys from insert request failed", log.String("collectionName", collectionName), log.Err(err))
 			return err
 		}
 	} else {
@@ -264,7 +264,7 @@ func (it *insertTask) PreExecute(ctx context.Context) error {
 		if len(partitionTag) <= 0 {
 			pinfo, err := globalMetaCache.GetPartitionInfo(ctx, it.insertMsg.GetDbName(), collectionName, "")
 			if err != nil {
-				log.Warn(context.TODO(), "get partition info failed", log.String("collectionName", collectionName), log.Err(err))
+				log.Warn(ctx, "get partition info failed", log.String("collectionName", collectionName), log.Err(err))
 				return err
 			}
 			partitionTag = pinfo.name
@@ -272,7 +272,7 @@ func (it *insertTask) PreExecute(ctx context.Context) error {
 		}
 
 		if err := validatePartitionTag(partitionTag, true); err != nil {
-			log.Warn(context.TODO(), "valid partition name failed", log.String("partition name", partitionTag), log.Err(err))
+			log.Warn(ctx, "valid partition name failed", log.String("partition name", partitionTag), log.Err(err))
 			return err
 		}
 	}
@@ -282,7 +282,7 @@ func (it *insertTask) PreExecute(ctx context.Context) error {
 		return merr.WrapErrAsInputError(err)
 	}
 
-	log.Debug(context.TODO(), "Proxy Insert PreExecute done")
+	log.Debug(ctx, "Proxy Insert PreExecute done")
 
 	return nil
 }

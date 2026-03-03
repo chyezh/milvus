@@ -248,7 +248,7 @@ func (mt *MetaTable) reload() error {
 		}
 		for _, collection := range collections {
 			if collection.DBName != "" && collection.DBName != dbName {
-				log.Warn(mt.ctx, 
+				log.Warn(mt.ctx,
 					"collection dbname is not correct, it will be fixed",
 					log.Int64("collection_id", collection.CollectionID),
 					log.String("db_name", dbName),
@@ -733,7 +733,7 @@ func filterUnavailable(coll *model.Collection) *model.Collection {
 func (mt *MetaTable) getLatestCollectionByIDInternal(ctx context.Context, collectionID UniqueID, allowUnavailable bool) (*model.Collection, error) {
 	coll, ok := mt.collID2Meta[collectionID]
 	if !ok || coll == nil {
-		log.Warn(context.TODO(), "not found collection", log.Int64("collectionID", collectionID))
+		log.Warn(ctx, "not found collection", log.Int64("collectionID", collectionID))
 		return nil, merr.WrapErrCollectionNotFound(collectionID)
 	}
 	if allowUnavailable {
@@ -800,7 +800,7 @@ func (mt *MetaTable) GetCollectionID(ctx context.Context, dbName string, collect
 
 	// backward compatibility for rolling  upgrade
 	if dbName == "" {
-		log.Warn(context.TODO(), "db name is empty", log.String("collectionName", collectionName))
+		log.Warn(ctx, "db name is empty", log.String("collectionName", collectionName))
 		dbName = util.DefaultDBName
 	}
 
@@ -1127,31 +1127,31 @@ func (mt *MetaTable) CheckIfCollectionRenamable(ctx context.Context, dbName stri
 	// old collection should not be an alias
 	_, ok = mt.aliases.get(dbName, oldName)
 	if ok {
-		log.Warn(context.TODO(), "unsupported use a alias to rename collection")
+		log.Warn(ctx, "unsupported use a alias to rename collection")
 		return fmt.Errorf("unsupported use an alias to rename collection, alias:%s", oldName)
 	}
 
 	_, ok = mt.aliases.get(newDBName, newName)
 	if ok {
-		log.Warn(context.TODO(), "cannot rename collection to an existing alias")
+		log.Warn(ctx, "cannot rename collection to an existing alias")
 		return fmt.Errorf("cannot rename collection to an existing alias: %s", newName)
 	}
 
 	// check new collection already exists
 	coll, err := mt.getCollectionByNameInternal(ctx, newDBName, newName, typeutil.MaxTimestamp)
 	if coll != nil {
-		log.Warn(context.TODO(), "duplicated new collection name, already taken by another collection or alias.")
+		log.Warn(ctx, "duplicated new collection name, already taken by another collection or alias.")
 		return fmt.Errorf("duplicated new collection name %s:%s with other collection name or alias", newDBName, newName)
 	}
 	if err != nil && !errors.Is(err, merr.ErrCollectionNotFound) {
-		log.Warn(context.TODO(), "fail to check if new collection name is already taken", log.Err(err))
+		log.Warn(ctx, "fail to check if new collection name is already taken", log.Err(err))
 		return err
 	}
 
 	// get old collection meta
 	oldColl, err := mt.getCollectionByNameInternal(ctx, dbName, oldName, typeutil.MaxTimestamp)
 	if err != nil {
-		log.Warn(context.TODO(), "fail to find collection with old name", log.Err(err))
+		log.Warn(ctx, "fail to find collection with old name", log.Err(err))
 		return err
 	}
 

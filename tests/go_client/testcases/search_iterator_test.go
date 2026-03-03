@@ -1,7 +1,6 @@
 package testcases
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"testing"
@@ -41,7 +40,7 @@ func TestSearchIteratorDefault(t *testing.T) {
 			if err == io.EOF {
 				break
 			} else {
-				log.Error(context.TODO(), "SearchIterator next gets error", log.Err(err))
+				log.Error(ctx, "SearchIterator next gets error", log.Err(err))
 				break
 			}
 		}
@@ -121,7 +120,7 @@ func TestSearchIteratorBatchSize(t *testing.T) {
 				if err == io.EOF {
 					break
 				}
-				log.Error(context.TODO(), "SearchIterator next gets error", log.Err(err))
+				log.Error(ctx, "SearchIterator next gets error", log.Err(err))
 				break
 			}
 			actualLimit = actualLimit + rs.ResultCount
@@ -301,7 +300,7 @@ func TestSearchIteratorTemplateKey(t *testing.T) {
 			if err == io.EOF {
 				break
 			}
-			log.Error(context.TODO(), "SearchIterator next gets error", log.Err(err))
+			log.Error(ctx, "SearchIterator next gets error", log.Err(err))
 			break
 		}
 		actualLimit = actualLimit + rs.ResultCount
@@ -359,7 +358,7 @@ func TestSearchIteratorIgnoreGrowing(t *testing.T) {
 			if err == io.EOF {
 				break
 			}
-			log.Error(context.TODO(), "SearchIterator next gets error", log.Err(err))
+			log.Error(ctx, "SearchIterator next gets error", log.Err(err))
 			break
 		}
 		actualLimit = actualLimit + rs.ResultCount
@@ -418,7 +417,7 @@ func TestSearchIteratorNull(t *testing.T) {
 			if err == io.EOF {
 				break
 			}
-			log.Error(context.TODO(), "SearchIterator next gets error", log.Err(err))
+			log.Error(ctx, "SearchIterator next gets error", log.Err(err))
 			break
 		}
 		actualLimit = actualLimit + rs.ResultCount
@@ -484,7 +483,7 @@ func TestSearchIteratorDefaultValue(t *testing.T) {
 			if err == io.EOF {
 				break
 			}
-			log.Error(context.TODO(), "SearchIterator next gets error", log.Err(err))
+			log.Error(ctx, "SearchIterator next gets error", log.Err(err))
 			break
 		}
 		actualLimit = actualLimit + rs.ResultCount

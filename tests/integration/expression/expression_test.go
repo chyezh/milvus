@@ -133,7 +133,7 @@ func (s *ExpressionSuite) insertFlushIndexLoad(ctx context.Context, fieldData []
 	s.NoError(err)
 	s.NotEmpty(segments)
 	for _, segment := range segments {
-		log.Info(context.TODO(), "ShowSegments result", log.String("segment", segment.String()))
+		log.Info(ctx, "ShowSegments result", log.String("segment", segment.String()))
 	}
 
 	// create index
@@ -147,7 +147,7 @@ func (s *ExpressionSuite) insertFlushIndexLoad(ctx context.Context, fieldData []
 	err = merr.Error(createIndexStatus)
 	s.NoError(err)
 	s.WaitForIndexBuilt(context.TODO(), s.collectionName, integration.FloatVecField)
-	log.Info(context.TODO(), "=========================Index created=========================")
+	log.Info(ctx, "=========================Index created=========================")
 
 	// load
 	loadStatus, err := s.Cluster.MilvusClient.LoadCollection(ctx, &milvuspb.LoadCollectionRequest{
@@ -158,7 +158,7 @@ func (s *ExpressionSuite) insertFlushIndexLoad(ctx context.Context, fieldData []
 	err = merr.Error(loadStatus)
 	s.NoError(err)
 	s.WaitForLoad(context.TODO(), s.collectionName)
-	log.Info(context.TODO(), "=========================Collection loaded=========================")
+	log.Info(ctx, "=========================Collection loaded=========================")
 }
 
 func (s *ExpressionSuite) setupData() {
@@ -280,7 +280,7 @@ func (s *ExpressionSuite) TestDivisionByZeroError() {
 					fmt.Sprintf("Error message should contain '%s' for expr: %s",
 						c.expectedInReason, c.expr))
 			}
-			log.Info(context.TODO(), "Got expected error",
+			log.Info(ctx, "Got expected error",
 				log.String("expr", c.expr),
 				log.String("reason", status.GetReason()))
 		} else {

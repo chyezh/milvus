@@ -557,17 +557,17 @@ func reduceResults(ctx context.Context, toReduceResults []*internalpb.SearchResu
 	// Decode all search results
 	validSearchResults, err := decodeSearchResults(ctx, toReduceResults)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to decode search results", log.Err(err))
+		log.Warn(ctx, "failed to decode search results", log.Err(err))
 		return nil, err
 	}
 
 	if len(validSearchResults) <= 0 {
-		log.Debug(context.TODO(), "reduced search results is empty, fill in empty result")
+		log.Debug(ctx, "reduced search results is empty, fill in empty result")
 		return fillInEmptyResult(nq), nil
 	}
 
 	// Reduce all search results
-	log.Debug(context.TODO(), "proxy search post execute reduce",
+	log.Debug(ctx, "proxy search post execute reduce",
 		log.Int64("collection", collectionID),
 		log.Int64s("partitionIDs", partitionIDs),
 		log.Int("number of valid search results", len(validSearchResults)))
@@ -575,7 +575,7 @@ func reduceResults(ctx context.Context, toReduceResults []*internalpb.SearchResu
 	result, err = reduceSearchResult(ctx, validSearchResults, reduce.NewReduceSearchResultInfo(nq, topK).WithMetricType(metricType).WithPkType(pkType).
 		WithOffset(offset).WithGroupByField(queryInfo.GetGroupByFieldId()).WithGroupSize(queryInfo.GetGroupSize()).WithAdvance(isAdvance))
 	if err != nil {
-		log.Warn(context.TODO(), "failed to reduce search results", log.Err(err))
+		log.Warn(ctx, "failed to reduce search results", log.Err(err))
 		return nil, err
 	}
 	return result, nil

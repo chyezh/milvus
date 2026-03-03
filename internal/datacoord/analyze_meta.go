@@ -99,9 +99,9 @@ func (m *analyzeMeta) DropAnalyzeTask(ctx context.Context, taskID int64) error {
 	m.Lock()
 	defer m.Unlock()
 
-	log.Info(context.TODO(), "drop analyze task", log.Int64("taskID", taskID))
+	log.Info(ctx, "drop analyze task", log.Int64("taskID", taskID))
 	if err := m.catalog.DropAnalyzeTask(ctx, taskID); err != nil {
-		log.Warn(context.TODO(), "drop analyze task by catalog failed", log.Int64("taskID", taskID),
+		log.Warn(ctx, "drop analyze task by catalog failed", log.Int64("taskID", taskID),
 			log.Err(err))
 		return err
 	}

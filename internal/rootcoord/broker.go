@@ -93,7 +93,7 @@ func (b *ServerBroker) ReleasePartitions(ctx context.Context, collectionID Uniqu
 	if len(partitionIDs) == 0 {
 		return nil
 	}
-	log.Info(context.TODO(), "releasing partitions")
+	log.Info(ctx, "releasing partitions")
 	resp, err := b.s.mixCoord.ReleasePartitions(ctx, &querypb.ReleasePartitionsRequest{
 		Base:         commonpbutil.NewMsgBase(commonpbutil.WithMsgType(commonpb.MsgType_ReleasePartitions)),
 		CollectionID: collectionID,
@@ -107,12 +107,12 @@ func (b *ServerBroker) ReleasePartitions(ctx context.Context, collectionID Uniqu
 		return fmt.Errorf("release partition failed, reason: %s", resp.GetReason())
 	}
 
-	log.Info(context.TODO(), "release partitions done")
+	log.Info(ctx, "release partitions done")
 	return nil
 }
 
 func (b *ServerBroker) SyncNewCreatedPartition(ctx context.Context, collectionID UniqueID, partitionID UniqueID) error {
-	log.Info(context.TODO(), "begin to sync new partition")
+	log.Info(ctx, "begin to sync new partition")
 	resp, err := b.s.mixCoord.SyncNewCreatedPartition(ctx, &querypb.SyncNewCreatedPartitionRequest{
 		Base:         commonpbutil.NewMsgBase(commonpbutil.WithMsgType(commonpb.MsgType_ReleasePartitions)),
 		CollectionID: collectionID,
@@ -126,7 +126,7 @@ func (b *ServerBroker) SyncNewCreatedPartition(ctx context.Context, collectionID
 		return fmt.Errorf("sync new partition failed, reason: %s", resp.GetReason())
 	}
 
-	log.Info(context.TODO(), "sync new partition done")
+	log.Info(ctx, "sync new partition done")
 	return nil
 }
 
@@ -284,12 +284,12 @@ func (b *ServerBroker) GcConfirm(ctx context.Context, collectionID, partitionID 
 	req := &datapb.GcConfirmRequest{CollectionId: collectionID, PartitionId: partitionID}
 	resp, err := b.s.mixCoord.GcConfirm(ctx, req)
 	if err != nil {
-		log.Warn(context.TODO(), "gc is not finished", log.Err(err))
+		log.Warn(ctx, "gc is not finished", log.Err(err))
 		return false
 	}
 
 	if resp.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-		log.Warn(context.TODO(), "gc is not finished", log.String("code", resp.GetStatus().GetErrorCode().String()),
+		log.Warn(ctx, "gc is not finished", log.String("code", resp.GetStatus().GetErrorCode().String()),
 			log.String("reason", resp.GetStatus().GetReason()))
 		return false
 	}

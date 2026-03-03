@@ -37,7 +37,7 @@ func TestTaskCondition_Ctx(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		<-c.Ctx().Done()
-		log.Debug(context.TODO(), "TestTaskCondition_Ctx", log.Any("exit", c.Ctx().Err()))
+		log.Debug(ctx, "TestTaskCondition_Ctx", log.Any("exit", c.Ctx().Err()))
 	}()
 
 	cancel()

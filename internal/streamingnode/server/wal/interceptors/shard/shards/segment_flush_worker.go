@@ -58,7 +58,7 @@ func (w *segmentFlushWorker) do() {
 	// Otherwise, the flush message may be sent into wal before the txn is done.
 	// Break the wal consistency: All insert message is written into wal before the flush message.
 	if err := w.waitForTxnManagerRecoverDone(); err != nil {
-		w.Logger().Error(nil, "failed to wait for txn manager recover ready", log.Err(err))
+		w.Logger().Error(context.TODO(), "failed to wait for txn manager recover ready", log.Err(err))
 		return
 	}
 
@@ -68,19 +68,19 @@ func (w *segmentFlushWorker) do() {
 			return
 		}
 		if e := status.AsStreamingError(err); e.IsUnrecoverable() {
-			w.Logger().Warn(nil, "flush growing segement with unrecoverable error, stop retrying", log.Err(err))
+			w.Logger().Warn(context.TODO(), "flush growing segement with unrecoverable error, stop retrying", log.Err(err))
 			return
 		}
 
 		nextInterval := backoff.NextBackOff()
-		w.Logger().Info(nil, "failed to flush new growing segment, retrying", log.Duration("nextInterval", nextInterval), log.Err(err))
+		w.Logger().Info(context.TODO(), "failed to flush new growing segment, retrying", log.Duration("nextInterval", nextInterval), log.Err(err))
 		select {
 		case <-w.ctx.Done():
-			w.Logger().Info(nil, "flush segment canceled", log.Err(w.ctx.Err()))
+			w.Logger().Info(context.TODO(), "flush segment canceled", log.Err(w.ctx.Err()))
 			return
 		case <-w.wal.Available():
 			// wal is unavailable, stop the worker.
-			w.Logger().Warn(nil, "wal is unavailable, stop flush segment")
+			w.Logger().Warn(context.TODO(), "wal is unavailable, stop flush segment")
 			return
 		case <-time.After(backoff.NextBackOff()):
 		}
@@ -94,7 +94,7 @@ func (w *segmentFlushWorker) waitForTxnManagerRecoverDone() error {
 		// txn manager is ready, continue to do the flush.
 		return nil
 	case <-w.ctx.Done():
-		w.Logger().Info(nil, "flush segment canceled", log.Err(w.ctx.Err()))
+		w.Logger().Info(context.TODO(), "flush segment canceled", log.Err(w.ctx.Err()))
 		return w.ctx.Err()
 	case <-w.wal.Available():
 		return errors.New("wal is unavailable")
@@ -121,11 +121,11 @@ func (w *segmentFlushWorker) doOnce() error {
 
 	result, err := w.wal.Append(w.ctx, msg)
 	if err != nil {
-		w.Logger().Error(nil, "failed to append flush message", log.FieldMessage(msg), log.Err(err))
+		w.Logger().Error(context.TODO(), "failed to append flush message", log.FieldMessage(msg), log.Err(err))
 		return err
 	}
 	policy := w.segment.SealPolicy()
-	w.Logger().Info(nil, "segment has been flushed",
+	w.Logger().Info(context.TODO(), "segment has been flushed",
 		log.FieldMessage(msg),
 		log.String("policy", string(policy.Policy)),
 		log.Any("extras", policy.Extra),
@@ -139,12 +139,12 @@ func (w *segmentFlushWorker) doOnce() error {
 func (w *segmentFlushWorker) checkIfReady() bool {
 	// if there're flying acks, wait them acked, delay the flush at next retry.
 	if ackSem := w.segment.AckSem(); ackSem > 0 {
-		w.Logger().Info(nil, "segment has flying insert operation, delay it", log.Int32("ackSem", ackSem), log.Int64("segmentID", w.segment.GetSegmentID()))
+		w.Logger().Info(context.TODO(), "segment has flying insert operation, delay it", log.Int32("ackSem", ackSem), log.Int64("segmentID", w.segment.GetSegmentID()))
 		return false
 	}
 	// if there're flying txns, wait them committed, delay the flush at next retry.
 	if txnSem := w.segment.TxnSem(); txnSem > 0 {
-		w.Logger().Info(nil, "segment has flying txns, delay it", log.Int32("txnSem", txnSem), log.Int64("segmentID", w.segment.GetSegmentID()))
+		w.Logger().Info(context.TODO(), "segment has flying txns, delay it", log.Int32("txnSem", txnSem), log.Int64("segmentID", w.segment.GetSegmentID()))
 		return false
 	}
 	return true

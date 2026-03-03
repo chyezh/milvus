@@ -74,11 +74,11 @@ func (s *HelloMilvusSuite) createCollection(ctx context.Context, c *cluster.Mini
 	})
 	s.NoError(err)
 	s.Equal(createCollectionStatus.GetErrorCode(), commonpb.ErrorCode_Success)
-	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(ctx, "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := c.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.Equal(showCollectionsResp.GetStatus().GetErrorCode(), commonpb.ErrorCode_Success)
-	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(ctx, "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 	return collectionName
 }
 
@@ -247,7 +247,7 @@ func (s *HelloMilvusSuite) TestSparse_invalid_index_build() {
 	s.NoError(err)
 	s.NotEmpty(segments)
 	for _, segment := range segments {
-		log.Info(context.TODO(), "ShowSegments result", log.String("segment", segment.String()))
+		log.Info(ctx, "ShowSegments result", log.String("segment", segment.String()))
 	}
 
 	// unsupported index type
@@ -407,7 +407,7 @@ func (s *HelloMilvusSuite) TestSparse_invalid_search_request() {
 	s.NoError(err)
 	s.NotEmpty(segments)
 	for _, segment := range segments {
-		log.Info(context.TODO(), "ShowSegments result", log.String("segment", segment.String()))
+		log.Info(ctx, "ShowSegments result", log.String("segment", segment.String()))
 	}
 
 	indexType := integration.IndexSparseInvertedIndex
@@ -446,7 +446,7 @@ func (s *HelloMilvusSuite) TestSparse_invalid_search_request() {
 	})
 	s.NoError(err)
 	if loadStatus.GetErrorCode() != commonpb.ErrorCode_Success {
-		log.Warn(context.TODO(), "loadStatus fail reason", log.String("reason", loadStatus.GetReason()))
+		log.Warn(ctx, "loadStatus fail reason", log.String("reason", loadStatus.GetReason()))
 	}
 	s.Equal(commonpb.ErrorCode_Success, loadStatus.GetErrorCode())
 	s.WaitForLoad(ctx, collectionName)

@@ -51,7 +51,7 @@ func (s *CompactionSuite) deleteAndFlush(pks []int64, collection string) {
 	ctx := context.Background()
 
 	expr := fmt.Sprintf("%s in [%s]", integration.Int64Field, strings.Join(lo.Map(pks, func(pk int64, _ int) string { return strconv.FormatInt(pk, 10) }), ","))
-	log.Info(context.TODO(), "========================delete expr==================",
+	log.Info(ctx, "========================delete expr==================",
 		log.String("expr", expr),
 	)
 	deleteResp, err := s.Cluster.MilvusClient.Delete(ctx, &milvuspb.DeleteRequest{
@@ -62,7 +62,7 @@ func (s *CompactionSuite) deleteAndFlush(pks []int64, collection string) {
 	s.Require().True(merr.Ok(deleteResp.GetStatus()))
 	s.Require().EqualValues(len(pks), deleteResp.GetDeleteCnt())
 
-	log.Info(context.TODO(), "=========================Data flush=========================")
+	log.Info(ctx, "=========================Data flush=========================")
 
 	flushResp, err := s.Cluster.MilvusClient.Flush(context.TODO(), &milvuspb.FlushRequest{
 		CollectionNames: []string{collection},
@@ -79,9 +79,9 @@ func (s *CompactionSuite) deleteAndFlush(pks []int64, collection string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	log.Info(context.TODO(), "=========================Wait for flush for 2min=========================")
+	log.Info(ctx, "=========================Wait for flush for 2min=========================")
 	s.WaitForFlush(ctx, segmentIDs, flushTs, "", collection)
-	log.Info(context.TODO(), "=========================Data flush done=========================")
+	log.Info(ctx, "=========================Data flush done=========================")
 }
 
 func (s *CompactionSuite) compactAndReboot(collection string) {
@@ -218,9 +218,9 @@ func (s *CompactionSuite) generateSegment(collection string, segmentCount int) [
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		s.WaitForFlush(ctx, segmentIDs, flushTs, "", collection)
-		log.Info(context.TODO(), "=========================Data flush done=========================", log.Any("count", i))
+		log.Info(ctx, "=========================Data flush done=========================", log.Any("count", i))
 	}
-	log.Info(context.TODO(), "=========================Data insertion finished=========================")
+	log.Info(ctx, "=========================Data insertion finished=========================")
 
 	segments, err := c.ShowSegments(collection)
 	s.Require().NoError(err)

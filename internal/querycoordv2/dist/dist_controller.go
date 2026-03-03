@@ -20,7 +20,6 @@ import (
 	"context"
 	"sync"
 
-
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
@@ -50,7 +49,7 @@ func (dc *ControllerImpl) StartDistInstance(ctx context.Context, nodeID int64) {
 	dc.mu.Lock()
 	defer dc.mu.Unlock()
 	if _, ok := dc.handlers[nodeID]; ok {
-		log.Info(context.TODO(), "node has started", log.Int64("nodeID", nodeID))
+		log.Info(ctx, "node has started", log.Int64("nodeID", nodeID))
 		return
 	}
 	h := newDistHandler(ctx, nodeID, dc.client, dc.nodeManager, dc.scheduler, dc.dist, dc.targetMgr, dc.notifyFunc)
@@ -77,7 +76,7 @@ func (dc *ControllerImpl) SyncAll(ctx context.Context) {
 			defer wg.Done()
 			resp, err := handler.getDistribution(ctx)
 			if err != nil {
-				log.Warn(context.TODO(), "SyncAll come across err when getting data distribution", log.Err(err))
+				log.Warn(ctx, "SyncAll come across err when getting data distribution", log.Err(err))
 			} else {
 				handler.handleDistResp(ctx, resp, true)
 			}

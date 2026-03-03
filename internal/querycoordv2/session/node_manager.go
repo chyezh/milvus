@@ -359,7 +359,7 @@ func (m *NodeManager) cleanupLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info(context.TODO(), "cleanupLoop stopped")
+			log.Info(ctx, "cleanupLoop stopped")
 			return
 		case <-ticker.C:
 			m.ClearExpiredResourceExhaustion()
