@@ -23,14 +23,14 @@ package packed
 import "C"
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"unsafe"
 
-	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 )
 
@@ -60,10 +60,10 @@ func AddDeltaLogsToManifest(
 		return "", fmt.Errorf("failed to parse manifest path: %w", err)
 	}
 
-	log.Debug("AddDeltaLogsToManifest",
-		zap.String("basePath", basePath),
-		zap.Int64("version", version),
-		zap.Int("numDeltaLogs", len(deltaLogs)))
+	mlog.Debug(context.TODO(), "AddDeltaLogsToManifest",
+		mlog.String("basePath", basePath),
+		mlog.Int64("version", version),
+		mlog.Int("numDeltaLogs", len(deltaLogs)))
 
 	cProperties, err := MakePropertiesFromStorageConfig(storageConfig, nil)
 	if err != nil {
@@ -95,9 +95,9 @@ func AddDeltaLogsToManifest(
 			return "", fmt.Errorf("failed to add delta log %s: %w", deltaLog.Path, err)
 		}
 
-		log.Debug("Added delta log to transaction",
-			zap.String("relativePath", relativePath),
-			zap.Int64("numEntries", deltaLog.NumEntries))
+		mlog.Debug(context.TODO(), "Added delta log to transaction",
+			mlog.String("relativePath", relativePath),
+			mlog.Int64("numEntries", deltaLog.NumEntries))
 	}
 
 	// Commit transaction
@@ -108,7 +108,7 @@ func AddDeltaLogsToManifest(
 	}
 
 	newManifestPath := MarshalManifestPath(basePath, int64(commitVersion))
-	log.Debug("Delta logs committed to manifest", zap.Int64("newVersion", int64(commitVersion)))
+	mlog.Debug(context.TODO(), "Delta logs committed to manifest", mlog.Int64("newVersion", int64(commitVersion)))
 
 	return newManifestPath, nil
 }

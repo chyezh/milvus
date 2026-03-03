@@ -7,6 +7,7 @@ import "go.uber.org/zap/zapcore"
 const (
 	keyNodeID         = "node_id"
 	keyModule         = "module"
+	keyComponent      = "component"
 	keyTraceID        = "trace_id"
 	keySpanID         = "span_id"
 	keyDbID           = "db_id"
@@ -26,6 +27,7 @@ const (
 	keyPChannel       = "pchannel"
 	keyMessageID      = "message_id"
 	keyMessage        = "message"
+	keyMessages       = "messages"
 )
 
 // FieldOption configures optional behavior for well-known field constructors.
@@ -183,8 +185,16 @@ func FieldPChannel(val string, opts ...FieldOption) Field {
 	return String(keyPChannel, val)
 }
 
+// FieldComponent creates a field for component name.
+func FieldComponent(val string) Field { return String(keyComponent, val) }
+
 // FieldMessageID creates a field for message ID.
 func FieldMessageID(val zapcore.ObjectMarshaler) Field { return Object(keyMessageID, val) }
 
 // FieldMessage creates a field for message content.
 func FieldMessage(val zapcore.ObjectMarshaler) Field { return Object(keyMessage, val) }
+
+// FieldMessages creates a field for an array of message objects.
+func FieldMessages[T zapcore.ObjectMarshaler](msgs []T) Field {
+	return Objects(keyMessages, msgs)
+}

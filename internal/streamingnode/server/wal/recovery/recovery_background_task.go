@@ -10,7 +10,7 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
@@ -38,12 +38,12 @@ func (rs *recoveryStorageImpl) backgroundTask() {
 	ticker := time.NewTicker(rs.cfg.persistInterval)
 	defer func() {
 		ticker.Stop()
-		rs.Logger().Info("recovery storage background task, perform a graceful exit...")
+		rs.Logger().Info(nil, "recovery storage background task, perform a graceful exit...")
 		if err := rs.persistDritySnapshotWhenClosing(); err != nil {
-			rs.Logger().Warn("failed to persist dirty snapshot when closing", zap.Error(err))
+			rs.Logger().Warn(nil, "failed to persist dirty snapshot when closing", mlog.Err(err))
 		}
 		rs.backgroundTaskNotifier.Finish(struct{}{})
-		rs.Logger().Info("recovery storage background task exit")
+		rs.Logger().Info(nil, "recovery storage background task exit")
 	}()
 
 	for {
@@ -86,23 +86,23 @@ func (rs *recoveryStorageImpl) persistDirtySnapshot(ctx context.Context, lvl zap
 	snapshot := rs.pendingPersistSnapshot
 	rs.metrics.ObserveIsOnPersisting(true)
 	logger := rs.Logger().With(
-		zap.String("checkpoint", snapshot.Checkpoint.MessageID.String()),
-		zap.Uint64("checkpointTimeTick", snapshot.Checkpoint.TimeTick),
-		zap.Int("vchannelCount", len(snapshot.VChannels)),
-		zap.Int("segmentCount", len(snapshot.SegmentAssignments)),
+		mlog.String("checkpoint", snapshot.Checkpoint.MessageID.String()),
+		mlog.Uint64("checkpointTimeTick", snapshot.Checkpoint.TimeTick),
+		mlog.Int("vchannelCount", len(snapshot.VChannels)),
+		mlog.Int("segmentCount", len(snapshot.SegmentAssignments)),
 	)
 	defer func() {
 		if err != nil {
-			logger.Warn("failed to persist dirty snapshot", zap.Error(err))
+			logger.Warn(nil, "failed to persist dirty snapshot", mlog.Err(err))
 			return
 		}
 		rs.pendingPersistSnapshot = nil
-		logger.Log(lvl, "persist dirty snapshot")
+		logger.Log(nil, lvl, "persist dirty snapshot")
 		rs.metrics.ObserveIsOnPersisting(false)
 	}()
 
 	if err := rs.dropAllVirtualChannel(ctx, snapshot.VChannels); err != nil {
-		logger.Warn("failed to drop all virtual channels", zap.Error(err))
+		logger.Warn(nil, "failed to drop all virtual channels", mlog.Err(err))
 		return err
 	}
 
@@ -110,7 +110,7 @@ func (rs *recoveryStorageImpl) persistDirtySnapshot(ctx context.Context, lvl zap
 	if len(snapshot.SegmentAssignments) > 0 {
 		future := conc.Go(func() (struct{}, error) {
 			err := rs.retryOperationWithBackoff(ctx,
-				logger.With(zap.String("op", "persistSegmentAssignments"), zap.Int64s("segmentIds", lo.Keys(snapshot.SegmentAssignments))),
+				logger.With(mlog.String("op", "persistSegmentAssignments"), mlog.Int64s("segmentIds", lo.Keys(snapshot.SegmentAssignments))),
 				func(ctx context.Context) error {
 					return resource.Resource().StreamingNodeCatalog().SaveSegmentAssignments(ctx, rs.channel.Name, snapshot.SegmentAssignments)
 				})
@@ -121,7 +121,7 @@ func (rs *recoveryStorageImpl) persistDirtySnapshot(ctx context.Context, lvl zap
 	if len(snapshot.VChannels) > 0 {
 		future := conc.Go(func() (struct{}, error) {
 			err := rs.retryOperationWithBackoff(ctx,
-				logger.With(zap.String("op", "persistVChannels"), zap.Strings("vchannels", lo.Keys(snapshot.VChannels))),
+				logger.With(mlog.String("op", "persistVChannels"), mlog.Strings("vchannels", lo.Keys(snapshot.VChannels))),
 				func(ctx context.Context) error {
 					return resource.Resource().StreamingNodeCatalog().SaveVChannels(ctx, rs.channel.Name, snapshot.VChannels)
 				})
@@ -134,7 +134,7 @@ func (rs *recoveryStorageImpl) persistDirtySnapshot(ctx context.Context, lvl zap
 	}
 
 	// checkpoint updates should always be persisted after other updates success.
-	if err := rs.retryOperationWithBackoff(ctx, rs.Logger().With(zap.String("op", "persistCheckpoint")), func(ctx context.Context) error {
+	if err := rs.retryOperationWithBackoff(ctx, rs.Logger().With(mlog.String("op", "persistCheckpoint")), func(ctx context.Context) error {
 		return resource.Resource().StreamingNodeCatalog().
 			SaveConsumeCheckpoint(ctx, rs.channel.Name, snapshot.Checkpoint.IntoProto())
 	}); err != nil {
@@ -182,7 +182,7 @@ func (rs *recoveryStorageImpl) dropAllVirtualChannel(ctx context.Context, vcs ma
 	}
 
 	for _, channelName := range channels {
-		if err := rs.retryOperationWithBackoff(ctx, rs.Logger().With(zap.String("op", "dropAllVirtualChannel")), func(ctx context.Context) error {
+		if err := rs.retryOperationWithBackoff(ctx, rs.Logger().With(mlog.String("op", "dropAllVirtualChannel")), func(ctx context.Context) error {
 			resp, err := mixCoordClient.DropVirtualChannel(ctx, &datapb.DropVirtualChannelRequest{
 				Base: commonpbutil.NewMsgBase(
 					commonpbutil.WithSourceID(paramtable.GetNodeID()),
@@ -198,7 +198,7 @@ func (rs *recoveryStorageImpl) dropAllVirtualChannel(ctx context.Context, vcs ma
 }
 
 // retryOperationWithBackoff retries the operation with exponential backoff.
-func (rs *recoveryStorageImpl) retryOperationWithBackoff(ctx context.Context, logger *log.MLogger, op func(ctx context.Context) error) error {
+func (rs *recoveryStorageImpl) retryOperationWithBackoff(ctx context.Context, logger *mlog.Logger, op func(ctx context.Context) error) error {
 	backoff := rs.newBackoff()
 	for {
 		err := op(ctx)
@@ -212,7 +212,7 @@ func (rs *recoveryStorageImpl) retryOperationWithBackoff(ctx context.Context, lo
 		}
 
 		nextInterval := backoff.NextBackOff()
-		logger.Warn("failed to persist operation, wait for retry...", zap.Duration("nextRetryInterval", nextInterval), zap.Error(err))
+		logger.Warn(nil, "failed to persist operation, wait for retry...", mlog.Duration("nextRetryInterval", nextInterval), mlog.Err(err))
 		select {
 		case <-time.After(nextInterval):
 		case <-ctx.Done():

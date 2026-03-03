@@ -19,12 +19,11 @@ package proxy
 import (
 	"context"
 
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -109,10 +108,10 @@ func (cst *createSnapshotTask) PreExecute(ctx context.Context) error {
 }
 
 func (cst *createSnapshotTask) Execute(ctx context.Context) error {
-	log.Ctx(ctx).Info("proxy create snapshot",
-		zap.String("snapshotName", cst.req.GetName()),
-		zap.String("collectionName", cst.req.GetCollectionName()),
-		zap.Int64("collectionID", cst.collectionID),
+	mlog.Info(ctx, "proxy create snapshot",
+		mlog.String("snapshotName", cst.req.GetName()),
+		mlog.String("collectionName", cst.req.GetCollectionName()),
+		mlog.Int64("collectionID", cst.collectionID),
 	)
 
 	var err error
@@ -193,8 +192,8 @@ func (dst *dropSnapshotTask) PreExecute(ctx context.Context) error {
 }
 
 func (dst *dropSnapshotTask) Execute(ctx context.Context) error {
-	log.Ctx(ctx).Info("proxy drop snapshot",
-		zap.String("snapshotName", dst.req.GetName()),
+	mlog.Info(ctx, "proxy drop snapshot",
+		mlog.String("snapshotName", dst.req.GetName()),
 	)
 
 	var err error
@@ -273,8 +272,8 @@ func (dst *describeSnapshotTask) PreExecute(ctx context.Context) error {
 }
 
 func (dst *describeSnapshotTask) Execute(ctx context.Context) error {
-	log.Ctx(ctx).Info("proxy describe snapshot",
-		zap.String("snapshotName", dst.req.GetName()),
+	mlog.Info(ctx, "proxy describe snapshot",
+		mlog.String("snapshotName", dst.req.GetName()),
 	)
 
 	result, err := dst.mixCoord.DescribeSnapshot(ctx, &datapb.DescribeSnapshotRequest{
@@ -295,16 +294,16 @@ func (dst *describeSnapshotTask) Execute(ctx context.Context) error {
 
 	collectionName, err := globalMetaCache.GetCollectionName(ctx, "", snapshotInfo.GetCollectionId())
 	if err != nil {
-		log.Ctx(ctx).Warn("DescribeSnapshot fail to get collection name",
-			zap.Error(err))
+		mlog.Warn(ctx, "DescribeSnapshot fail to get collection name",
+			mlog.Err(err))
 		return err
 	}
 	var partitionNames []string
 	for _, partitionID := range snapshotInfo.GetPartitionIds() {
 		partitionName, err := globalMetaCache.GetPartitionName(ctx, "", collectionName, partitionID)
 		if err != nil {
-			log.Ctx(ctx).Warn("DescribeSnapshot fail to get partition name",
-				zap.Error(err))
+			mlog.Warn(ctx, "DescribeSnapshot fail to get partition name",
+				mlog.Err(err))
 		}
 		partitionNames = append(partitionNames, partitionName)
 	}
@@ -395,9 +394,9 @@ func (lst *listSnapshotsTask) PreExecute(ctx context.Context) error {
 }
 
 func (lst *listSnapshotsTask) Execute(ctx context.Context) error {
-	log.Ctx(ctx).Info("proxy list snapshots",
-		zap.String("collectionName", lst.req.GetCollectionName()),
-		zap.Int64("collectionID", lst.collectionID),
+	mlog.Info(ctx, "proxy list snapshots",
+		mlog.String("collectionName", lst.req.GetCollectionName()),
+		mlog.Int64("collectionID", lst.collectionID),
 	)
 
 	result, err := lst.mixCoord.ListSnapshots(ctx, &datapb.ListSnapshotsRequest{
@@ -490,10 +489,10 @@ func (rst *restoreSnapshotTask) PreExecute(ctx context.Context) error {
 }
 
 func (rst *restoreSnapshotTask) Execute(ctx context.Context) error {
-	log.Ctx(ctx).Info("proxy restore snapshot",
-		zap.String("snapshotName", rst.req.GetName()),
-		zap.String("collectionName", rst.req.GetCollectionName()),
-		zap.String("dbName", rst.req.GetDbName()),
+	mlog.Info(ctx, "proxy restore snapshot",
+		mlog.String("snapshotName", rst.req.GetName()),
+		mlog.String("collectionName", rst.req.GetCollectionName()),
+		mlog.String("dbName", rst.req.GetDbName()),
 	)
 
 	// Delegate directly to DataCoord which handles the entire restore process
@@ -506,8 +505,8 @@ func (rst *restoreSnapshotTask) Execute(ctx context.Context) error {
 		CollectionName: rst.req.GetCollectionName(),
 	})
 	if err != nil {
-		log.Ctx(ctx).Warn("RestoreSnapshot failed",
-			zap.Error(err))
+		mlog.Warn(ctx, "RestoreSnapshot failed",
+			mlog.Err(err))
 		rst.result = &milvuspb.RestoreSnapshotResponse{Status: merr.Status(err)}
 		return err
 	}
@@ -582,8 +581,8 @@ func (grst *getRestoreSnapshotStateTask) PreExecute(ctx context.Context) error {
 }
 
 func (grst *getRestoreSnapshotStateTask) Execute(ctx context.Context) error {
-	log.Ctx(ctx).Info("proxy get restore snapshot state",
-		zap.Int64("jobID", grst.req.GetJobId()),
+	mlog.Info(ctx, "proxy get restore snapshot state",
+		mlog.Int64("jobID", grst.req.GetJobId()),
 	)
 
 	result, err := grst.mixCoord.GetRestoreSnapshotState(ctx, &datapb.GetRestoreSnapshotStateRequest{
@@ -609,8 +608,8 @@ func (grst *getRestoreSnapshotStateTask) Execute(ctx context.Context) error {
 			var err error
 			collectionName, err = globalMetaCache.GetCollectionName(ctx, "", info.GetCollectionId())
 			if err != nil {
-				log.Ctx(ctx).Warn("GetRestoreSnapshotState fail to get collection name",
-					zap.Error(err))
+				mlog.Warn(ctx, "GetRestoreSnapshotState fail to get collection name",
+					mlog.Err(err))
 			}
 		}
 
@@ -703,9 +702,9 @@ func (lrst *listRestoreSnapshotJobsTask) PreExecute(ctx context.Context) error {
 }
 
 func (lrst *listRestoreSnapshotJobsTask) Execute(ctx context.Context) error {
-	log.Ctx(ctx).Info("proxy list restore snapshot jobs",
-		zap.String("collectionName", lrst.req.GetCollectionName()),
-		zap.Int64("collectionID", lrst.collectionID),
+	mlog.Info(ctx, "proxy list restore snapshot jobs",
+		mlog.String("collectionName", lrst.req.GetCollectionName()),
+		mlog.Int64("collectionID", lrst.collectionID),
 	)
 
 	result, err := lrst.mixCoord.ListRestoreSnapshotJobs(ctx, &datapb.ListRestoreSnapshotJobsRequest{
@@ -730,8 +729,8 @@ func (lrst *listRestoreSnapshotJobsTask) Execute(ctx context.Context) error {
 			var err error
 			collectionName, err = globalMetaCache.GetCollectionName(ctx, "", job.GetCollectionId())
 			if err != nil {
-				log.Ctx(ctx).Warn("ListRestoreSnapshotJobs fail to get collection name",
-					zap.Error(err))
+				mlog.Warn(ctx, "ListRestoreSnapshotJobs fail to get collection name",
+					mlog.Err(err))
 			}
 		}
 

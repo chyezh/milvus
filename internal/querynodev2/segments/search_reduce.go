@@ -5,11 +5,10 @@ import (
 	"fmt"
 
 	"go.opentelemetry.io/otel"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/util/reduce"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -24,7 +23,6 @@ type SearchCommonReduce struct{}
 func (scr *SearchCommonReduce) ReduceSearchResultData(ctx context.Context, searchResultData []*schemapb.SearchResultData, info *reduce.ResultInfo) (*schemapb.SearchResultData, error) {
 	ctx, sp := otel.Tracer(typeutil.QueryNodeRole).Start(ctx, "ReduceSearchResultData")
 	defer sp.End()
-	log := log.Ctx(ctx)
 
 	if len(searchResultData) == 0 {
 		return &schemapb.SearchResultData{
@@ -120,7 +118,7 @@ func (scr *SearchCommonReduce) ReduceSearchResultData(ctx context.Context, searc
 		}
 
 		// if realTopK != -1 && realTopK != j {
-		// 	log.Warn("Proxy Reduce Search Result", zap.Error(errors.New("the length (topk) between all result of query is different")))
+		// 	mlog.Warn(context.TODO(), "Proxy Reduce Search Result", mlog.Err(errors.New("the length (topk) between all result of query is different")))
 		// 	// return nil, errors.New("the length (topk) between all result of query is different")
 		// }
 		ret.Topks = append(ret.Topks, j)
@@ -130,7 +128,7 @@ func (scr *SearchCommonReduce) ReduceSearchResultData(ctx context.Context, searc
 			return nil, fmt.Errorf("search results exceed the maxOutputSize Limit %d", maxOutputSize)
 		}
 	}
-	log.Debug("skip duplicated search result", zap.Int64("count", skipDupCnt))
+	mlog.Debug(context.TODO(), "skip duplicated search result", mlog.Int64("count", skipDupCnt))
 	return ret, nil
 }
 
@@ -139,10 +137,9 @@ type SearchGroupByReduce struct{}
 func (sbr *SearchGroupByReduce) ReduceSearchResultData(ctx context.Context, searchResultData []*schemapb.SearchResultData, info *reduce.ResultInfo) (*schemapb.SearchResultData, error) {
 	ctx, sp := otel.Tracer(typeutil.QueryNodeRole).Start(ctx, "ReduceSearchResultData")
 	defer sp.End()
-	log := log.Ctx(ctx)
 
 	if len(searchResultData) == 0 {
-		log.Debug("Shortcut return SearchGroupByReduce, directly return empty result", zap.Any("result info", info))
+		mlog.Debug(context.TODO(), "Shortcut return SearchGroupByReduce, directly return empty result", mlog.Any("result info", info))
 		return &schemapb.SearchResultData{
 			NumQueries: info.GetNq(),
 			TopK:       info.GetTopK(),
@@ -267,12 +264,12 @@ func (sbr *SearchGroupByReduce) ReduceSearchResultData(ctx context.Context, sear
 	}
 	ret.GroupByFieldValue = gpFieldBuilder.Build()
 	if float64(filteredCount) >= 0.3*float64(groupBound) {
-		log.Warn("GroupBy reduce filtered too many results, "+
+		mlog.Warn(context.TODO(), "GroupBy reduce filtered too many results, "+
 			"this may influence the final result seriously",
-			zap.Int64("filteredCount", filteredCount),
-			zap.Int64("groupBound", groupBound))
+			mlog.Int64("filteredCount", filteredCount),
+			mlog.Int64("groupBound", groupBound))
 	}
-	log.Debug("skip duplicated search result", zap.Int64("count", filteredCount))
+	mlog.Debug(context.TODO(), "skip duplicated search result", mlog.Int64("count", filteredCount))
 	return ret, nil
 }
 

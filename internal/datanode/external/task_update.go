@@ -21,9 +21,8 @@ import (
 	"fmt"
 	"sort"
 
-	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
@@ -160,9 +159,9 @@ func (t *UpdateExternalTask) Name() string {
 
 func (t *UpdateExternalTask) OnEnqueue(ctx context.Context) error {
 	t.tr.RecordSpan()
-	log.Ctx(ctx).Info("UpdateExternalTask enqueued",
-		zap.Int64("taskID", t.req.GetTaskID()),
-		zap.Int64("collectionID", t.req.GetCollectionID()))
+	mlog.Info(ctx, "UpdateExternalTask enqueued",
+		mlog.Int64("taskID", t.req.GetTaskID()),
+		mlog.Int64("collectionID", t.req.GetCollectionID()))
 	return nil
 }
 
@@ -192,9 +191,9 @@ func (t *UpdateExternalTask) PreExecute(ctx context.Context) error {
 	if err := ensureContext(ctx); err != nil {
 		return err
 	}
-	log.Ctx(ctx).Info("UpdateExternalTask PreExecute",
-		zap.Int64("taskID", t.req.GetTaskID()),
-		zap.Int64("collectionID", t.req.GetCollectionID()))
+	mlog.Info(ctx, "UpdateExternalTask PreExecute",
+		mlog.Int64("taskID", t.req.GetTaskID()),
+		mlog.Int64("collectionID", t.req.GetCollectionID()))
 
 	if t.req == nil {
 		return fmt.Errorf("request is nil")
@@ -206,9 +205,9 @@ func (t *UpdateExternalTask) Execute(ctx context.Context) error {
 	if err := ensureContext(ctx); err != nil {
 		return err
 	}
-	log.Ctx(ctx).Info("UpdateExternalTask Execute",
-		zap.Int64("taskID", t.req.GetTaskID()),
-		zap.Int64("collectionID", t.req.GetCollectionID()))
+	mlog.Info(ctx, "UpdateExternalTask Execute",
+		mlog.Int64("taskID", t.req.GetTaskID()),
+		mlog.Int64("collectionID", t.req.GetCollectionID()))
 
 	// TODO: Fetch fragments from external source
 	// newFragments := fetchFragmentsFromExternalSource(t.req.GetExternalSource(), t.req.GetExternalSpec())
@@ -232,10 +231,10 @@ func (t *UpdateExternalTask) PostExecute(ctx context.Context) error {
 	if err := ensureContext(ctx); err != nil {
 		return err
 	}
-	log.Ctx(ctx).Info("UpdateExternalTask PostExecute",
-		zap.Int64("taskID", t.req.GetTaskID()),
-		zap.Int64("collectionID", t.req.GetCollectionID()),
-		zap.Int("updatedSegments", len(t.updatedSegments)))
+	mlog.Info(ctx, "UpdateExternalTask PostExecute",
+		mlog.Int64("taskID", t.req.GetTaskID()),
+		mlog.Int64("collectionID", t.req.GetCollectionID()),
+		mlog.Int("updatedSegments", len(t.updatedSegments)))
 	return nil
 }
 
@@ -272,7 +271,6 @@ func (t *UpdateExternalTask) organizeSegments(
 	if err := ensureContext(ctx); err != nil {
 		return nil, err
 	}
-	log := log.Ctx(ctx)
 
 	// Build new fragment map for quick lookup
 	newFragmentMap := make(map[int64]Fragment)
@@ -296,9 +294,9 @@ func (t *UpdateExternalTask) organizeSegments(
 		for _, f := range fragments {
 			if _, exists := newFragmentMap[f.FragmentID]; !exists {
 				allFragmentsExist = false
-				log.Info("Fragment removed from segment",
-					zap.Int64("segmentID", seg.GetID()),
-					zap.Int64("fragmentID", f.FragmentID))
+				mlog.Info(context.TODO(), "Fragment removed from segment",
+					mlog.Int64("segmentID", seg.GetID()),
+					mlog.Int64("fragmentID", f.FragmentID))
 				break
 			}
 		}
@@ -314,12 +312,12 @@ func (t *UpdateExternalTask) organizeSegments(
 			}
 			// Compute row mapping for kept segment
 			t.segmentMappings[seg.GetID()] = NewSegmentRowMapping(seg.GetID(), fragments)
-			log.Debug("Segment kept unchanged",
-				zap.Int64("segmentID", seg.GetID()))
+			mlog.Debug(context.TODO(), "Segment kept unchanged",
+				mlog.Int64("segmentID", seg.GetID()))
 		} else {
 			// Segment invalidated - its remaining fragments become orphans
-			log.Info("Segment invalidated due to removed fragments",
-				zap.Int64("segmentID", seg.GetID()))
+			mlog.Info(context.TODO(), "Segment invalidated due to removed fragments",
+				mlog.Int64("segmentID", seg.GetID()))
 		}
 	}
 
@@ -343,10 +341,10 @@ func (t *UpdateExternalTask) organizeSegments(
 	// Combine kept and new segments
 	result := append(keptSegments, newSegments...)
 
-	log.Info("Segment organization complete",
-		zap.Int("keptSegments", len(keptSegments)),
-		zap.Int("newSegments", len(newSegments)),
-		zap.Int("totalSegments", len(result)))
+	mlog.Info(context.TODO(), "Segment organization complete",
+		mlog.Int("keptSegments", len(keptSegments)),
+		mlog.Int("newSegments", len(newSegments)),
+		mlog.Int("totalSegments", len(result)))
 
 	return result, nil
 }
@@ -360,7 +358,6 @@ func (t *UpdateExternalTask) balanceFragmentsToSegments(ctx context.Context, fra
 		return nil, err
 	}
 
-	log := log.Ctx(ctx)
 
 	// Calculate total rows
 	var totalRows int64
@@ -385,11 +382,11 @@ func (t *UpdateExternalTask) balanceFragmentsToSegments(ctx context.Context, fra
 
 	avgRowsPerSegment := totalRows / numSegments
 
-	log.Info("Balancing fragments to segments",
-		zap.Int("numFragments", len(fragments)),
-		zap.Int64("totalRows", totalRows),
-		zap.Int64("numSegments", numSegments),
-		zap.Int64("avgRowsPerSegment", avgRowsPerSegment))
+	mlog.Info(context.TODO(), "Balancing fragments to segments",
+		mlog.Int("numFragments", len(fragments)),
+		mlog.Int64("totalRows", totalRows),
+		mlog.Int64("numSegments", numSegments),
+		mlog.Int64("avgRowsPerSegment", avgRowsPerSegment))
 
 	// Sort fragments by row count descending for better bin-packing
 	sortedFragments := make([]Fragment, len(fragments))
@@ -446,10 +443,10 @@ func (t *UpdateExternalTask) balanceFragmentsToSegments(ctx context.Context, fra
 		// Compute and store row mapping for new segment
 		t.segmentMappings[segmentID] = NewSegmentRowMapping(segmentID, bin.fragments)
 
-		log.Debug("Created new segment from fragments",
-			zap.Int64("segmentID placeholder", segmentID),
-			zap.Int64("rowCount", bin.rowCount),
-			zap.Int("numFragments", len(bin.fragments)))
+		mlog.Debug(context.TODO(), "Created new segment from fragments",
+			mlog.Int64("segmentID placeholder", segmentID),
+			mlog.Int64("rowCount", bin.rowCount),
+			mlog.Int("numFragments", len(bin.fragments)))
 	}
 
 	return result, nil

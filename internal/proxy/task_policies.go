@@ -5,12 +5,11 @@ import (
 	"context"
 
 	"github.com/cockroachdb/errors"
-	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/milvus-io/milvus/internal/proxy/shardclient"
 	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 )
 
@@ -37,21 +36,21 @@ func RoundRobinPolicy(
 		for _, target := range leaders {
 			qn, err := mgr.GetClient(ctx, target)
 			if err != nil {
-				log.Ctx(ctx).Warn("query channel failed, node not available", zap.String("channel", channel), zap.Int64("nodeID", target.nodeID), zap.Error(err))
+				mlog.Warn(ctx, "query channel failed, node not available", mlog.String("channel", channel), mlog.Int64("nodeID", target.nodeID), mlog.Err(err))
 				combineErr = merr.Combine(combineErr, err)
 				continue
 			}
 			err = query(ctx, target.nodeID, qn, channel)
 			if err != nil {
-				log.Ctx(ctx).Warn("query channel failed", zap.String("channel", channel), zap.Int64("nodeID", target.nodeID), zap.Error(err))
+				mlog.Warn(ctx, "query channel failed", mlog.String("channel", channel), mlog.Int64("nodeID", target.nodeID), mlog.Err(err))
 				combineErr = merr.Combine(combineErr, err)
 				continue
 			}
 			return nil
 		}
 
-		log.Ctx(ctx).Error("failed to do query on all shard leader",
-			zap.String("channel", channel), zap.Error(combineErr))
+		mlog.Error(ctx, "failed to do query on all shard leader",
+			mlog.String("channel", channel), mlog.Err(combineErr))
 		return combineErr
 	}
 

@@ -100,10 +100,11 @@ func Binary(key string, val []byte) Field { return zap.Binary(key, val) }
 func Reflect(key string, val any) Field   { return zap.Reflect(key, val) }
 
 // Structured types
-func Object(key string, val zapcore.ObjectMarshaler) Field { return zap.Object(key, val) }
-func Array(key string, val zapcore.ArrayMarshaler) Field   { return zap.Array(key, val) }
-func Inline(val zapcore.ObjectMarshaler) Field             { return zap.Inline(val) }
-func Namespace(key string) Field                           { return zap.Namespace(key) }
+func Object(key string, val zapcore.ObjectMarshaler) Field          { return zap.Object(key, val) }
+func Objects[T zapcore.ObjectMarshaler](key string, vals []T) Field { return zap.Objects(key, vals) }
+func Array(key string, val zapcore.ArrayMarshaler) Field            { return zap.Array(key, val) }
+func Inline(val zapcore.ObjectMarshaler) Field                      { return zap.Inline(val) }
+func Namespace(key string) Field                                    { return zap.Namespace(key) }
 
 // Stack and skip
 func Stack(key string) Field               { return zap.Stack(key) }

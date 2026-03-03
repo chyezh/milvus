@@ -18,6 +18,12 @@ type (
 
 	// ZapProperties records some information about zap.
 	ZapProperties = logcore.ZapProperties
+
+	// CEntry represents a log entry from C/C++ code via CGO.
+	CEntry = logcore.CEntry
+
+	// CEntryTextIOCore is the interface for cores that support writing CEntry directly.
+	CEntryTextIOCore = logcore.CEntryTextIOCore
 )
 
 // InitLogger initializes the global mlog logger from config.

@@ -25,7 +25,6 @@ import (
 
 	"github.com/stretchr/testify/suite"
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
@@ -35,7 +34,7 @@ import (
 	"github.com/milvus-io/milvus/internal/datanode/compactor"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
@@ -385,9 +384,9 @@ func (s *DataNodeServicesSuite) TestGetMetrics() {
 	resp, err = node.GetMetrics(node.ctx, req)
 	s.Assert().NoError(err)
 	s.Assert().True(merr.Ok(resp.GetStatus()))
-	log.Info("Test DataNode.GetMetrics",
-		zap.String("name", resp.ComponentName),
-		zap.String("response", resp.Response))
+	mlog.Info(context.TODO(), "Test DataNode.GetMetrics",
+		mlog.String("name", resp.ComponentName),
+		mlog.String("response", resp.Response))
 }
 
 func (s *DataNodeServicesSuite) TestResendSegmentStats() {

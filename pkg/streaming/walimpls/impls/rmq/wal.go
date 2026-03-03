@@ -1,9 +1,9 @@
 package rmq
 
 import (
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"context"
 
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/mqimpl/rocksmq/client"
@@ -40,7 +40,7 @@ func (w *walImpl) Append(ctx context.Context, msg message.MutableMessage) (messa
 		Properties: pb.Properties,
 	})
 	if err != nil {
-		w.Log().RatedWarn(1, "send message to rmq failed", zap.Error(err))
+		w.Log().RatedWarn(nil, mlog.RateDefault, "send message to rmq failed", mlog.Err(err))
 		return nil, err
 	}
 	return rmqID(id), nil

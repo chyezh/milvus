@@ -22,11 +22,10 @@ import (
 	"time"
 
 	"go.uber.org/atomic"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/internal/tso"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/lock"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -142,7 +141,7 @@ func (s *scheduler) syncTsLoop() {
 func (s *scheduler) updateLatestTsoAsMinDdlTs() {
 	t := newBaseTask(context.Background(), nil)
 	if err := s.AddTask(&t); err != nil {
-		log.Warn("failed to update latest ddl ts", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to update latest ddl ts", mlog.Err(err))
 	}
 }
 

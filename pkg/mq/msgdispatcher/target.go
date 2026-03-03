@@ -17,13 +17,13 @@
 package msgdispatcher
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/lifetime"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -71,7 +71,7 @@ func (t *target) close() {
 		t.closed = true
 		t.timer.Stop()
 		close(t.ch)
-		log.Info("close target chan", zap.String("vchannel", t.vchannel))
+		mlog.Info(context.TODO(), "close target chan", mlog.String("vchannel", t.vchannel))
 	})
 }
 
@@ -87,11 +87,11 @@ func (t *target) send(pack *MsgPack) error {
 			if len(pack.Msgs) > 0 {
 				// only filter out the msg that is only timetick message,
 				// So it's a unexpected behavior if the msgs is not empty
-				log.Warn("some data lost when time tick filtering",
-					zap.String("vchannel", t.vchannel),
-					zap.Uint64("latestTimeTick", t.latestTimeTick),
-					zap.Uint64("packEndTs", pack.EndPositions[0].GetTimestamp()),
-					zap.Int("msgCount", len(pack.Msgs)),
+				mlog.Warn(context.TODO(), "some data lost when time tick filtering",
+					mlog.String("vchannel", t.vchannel),
+					mlog.Uint64("latestTimeTick", t.latestTimeTick),
+					mlog.Uint64("packEndTs", pack.EndPositions[0].GetTimestamp()),
+					mlog.Int("msgCount", len(pack.Msgs)),
 				)
 			}
 			// filter out the msg that is already sent with the same timetick.
@@ -108,7 +108,7 @@ func (t *target) send(pack *MsgPack) error {
 	t.timer.Reset(t.maxLag)
 	select {
 	case <-t.cancelCh.CloseCh():
-		log.Info("target closed", zap.String("vchannel", t.vchannel))
+		mlog.Info(context.TODO(), "target closed", mlog.String("vchannel", t.vchannel))
 		return nil
 	case <-t.timer.C:
 		t.isLagged = true

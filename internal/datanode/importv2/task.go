@@ -23,6 +23,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 )
 
 type TaskType int
@@ -192,10 +193,10 @@ type Task interface {
 
 func WrapLogFields(task Task, fields ...zap.Field) []zap.Field {
 	res := []zap.Field{
-		zap.Int64("taskID", task.GetTaskID()),
-		zap.Int64("jobID", task.GetJobID()),
-		zap.Int64("collectionID", task.GetCollectionID()),
-		zap.String("type", task.GetType().String()),
+		mlog.Int64("taskID", task.GetTaskID()),
+		mlog.Int64("jobID", task.GetJobID()),
+		mlog.Int64("collectionID", task.GetCollectionID()),
+		mlog.String("type", task.GetType().String()),
 	}
 	res = append(res, fields...)
 	return res

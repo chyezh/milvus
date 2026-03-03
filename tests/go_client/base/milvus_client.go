@@ -12,7 +12,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/client/v2/entity"
 	client "github.com/milvus-io/milvus/client/v2/milvusclient"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
@@ -40,7 +40,7 @@ func LoggingUnaryInterceptor() grpc.UnaryClientInterceptor {
 		marshalWithFallback := func(v interface{}, fallbackMsg string) string {
 			dataJSON, err := json.Marshal(v)
 			if err != nil {
-				log.Error("Failed to marshal", zap.Error(err))
+				mlog.Error(context.TODO(), "Failed to marshal", mlog.Err(err))
 				return fallbackMsg
 			}
 			dataStr := string(dataJSON)
@@ -51,7 +51,7 @@ func LoggingUnaryInterceptor() grpc.UnaryClientInterceptor {
 		}
 
 		reqStr := marshalWithFallback(req, "could not marshal request")
-		logWithRateLimit(_methodShortName, log.Info, log.RatedInfo, "Request", zap.String("method", _methodShortName), zap.String("reqs", reqStr))
+		logWithRateLimit(_methodShortName, log.Info, log.RatedInfo, "Request", mlog.String("method", _methodShortName), mlog.String("reqs", reqStr))
 
 		// Invoke the actual method
 		start := time.Now()
@@ -60,8 +60,8 @@ func LoggingUnaryInterceptor() grpc.UnaryClientInterceptor {
 
 		// Marshal response
 		respStr := marshalWithFallback(reply, "could not marshal response")
-		logWithRateLimit(_methodShortName, log.Info, log.RatedInfo, "Response", zap.String("method", _methodShortName), zap.String("resp", respStr))
-		logWithRateLimit(_methodShortName, log.Debug, log.RatedDebug, "Cost", zap.String("method", _methodShortName), zap.Duration("cost", cost))
+		logWithRateLimit(_methodShortName, log.Info, log.RatedInfo, "Response", mlog.String("method", _methodShortName), mlog.String("resp", respStr))
+		logWithRateLimit(_methodShortName, log.Debug, log.RatedDebug, "Cost", mlog.String("method", _methodShortName), mlog.Duration("cost", cost))
 
 		return errResp
 	}

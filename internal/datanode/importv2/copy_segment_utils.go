@@ -29,7 +29,7 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 )
@@ -227,16 +227,16 @@ func collectSegmentFiles(
 
 		// Empty file list is OK for V3 — segment may have only deltas and no insert binlogs
 		files.InsertBinlogs = allFiles
-		log.Info("collected InsertBinlogs from manifest",
-			zap.String("basePath", basePath),
-			zap.Int("fileCount", len(allFiles)),
-			zap.Int64("storageVersion", source.GetStorageVersion()))
+		mlog.Info(context.TODO(), "collected InsertBinlogs from manifest",
+			mlog.String("basePath", basePath),
+			mlog.Int("fileCount", len(allFiles)),
+			mlog.Int64("storageVersion", source.GetStorageVersion()))
 	} else {
 		// StorageV1/V2: use pb paths (traditional non-packed format)
 		files.InsertBinlogs = extractFromPb(source.GetInsertBinlogs())
-		log.Info("using InsertBinlogs from pb",
-			zap.Int("fileCount", len(files.InsertBinlogs)),
-			zap.Int64("storageVersion", source.GetStorageVersion()))
+		mlog.Info(context.TODO(), "using InsertBinlogs from pb",
+			mlog.Int("fileCount", len(files.InsertBinlogs)),
+			mlog.Int64("storageVersion", source.GetStorageVersion()))
 	}
 
 	// Other types always from pb (not yet in manifest)
@@ -320,10 +320,10 @@ func CopySegmentAndIndexFiles(
 	segmentID := source.GetSegmentId()
 	useManifest := source.GetStorageVersion() >= storage.StorageV3
 
-	log.Info("start copying segment and index files",
-		zap.Int64("sourceSegmentID", segmentID),
-		zap.Int64("storageVersion", source.GetStorageVersion()),
-		zap.Bool("useManifest", useManifest))
+	mlog.Info(context.TODO(), "start copying segment and index files",
+		mlog.Int64("sourceSegmentID", segmentID),
+		mlog.Int64("storageVersion", source.GetStorageVersion()),
+		mlog.Bool("useManifest", useManifest))
 
 	// Step 1: Collect all files to copy
 	files, err := collectSegmentFiles(ctx, cm, source)
@@ -340,22 +340,22 @@ func CopySegmentAndIndexFiles(
 	// Step 3: Execute all copy operations
 	copiedFiles := make([]string, 0, len(mappings))
 	for src, dst := range mappings {
-		log.Debug("copying file",
-			zap.String("src", src),
-			zap.String("dst", dst))
+		mlog.Debug(context.TODO(), "copying file",
+			mlog.String("src", src),
+			mlog.String("dst", dst))
 
 		if err := copyFile(ctx, cm, src, dst); err != nil {
 			fields := make([]zap.Field, 0, len(logFields)+3)
 			fields = append(fields, logFields...)
-			fields = append(fields, zap.String("src", src), zap.String("dst", dst), zap.Error(err))
-			log.Warn("failed to copy file", fields...)
+			fields = append(fields, mlog.String("src", src), mlog.String("dst", dst), mlog.Err(err))
+			mlog.Warn(context.TODO(), "failed to copy file", fields...)
 			return nil, copiedFiles, fmt.Errorf("failed to copy file from %s to %s: %w", src, dst, err)
 		}
 		copiedFiles = append(copiedFiles, dst)
 	}
 
-	log.Info("all files copied successfully",
-		zap.Int("fileCount", len(mappings)))
+	mlog.Info(context.TODO(), "all files copied successfully",
+		mlog.Int("fileCount", len(mappings)))
 
 	// Step 3.5: When manifest is used (StorageV3+), InsertBinlogs were collected from manifest
 	// (actual file paths under base_path including _data/ and _metadata/), but
@@ -372,8 +372,8 @@ func CopySegmentAndIndexFiles(
 				mappings[srcPath] = dstPath
 			}
 		}
-		log.Info("added logical insert binlog mappings for manifest segment",
-			zap.Int("pbPathCount", len(pbInsertPaths)))
+		mlog.Info(context.TODO(), "added logical insert binlog mappings for manifest segment",
+			mlog.Int("pbPathCount", len(pbInsertPaths)))
 	}
 
 	// Step 4: Build index metadata from source
@@ -401,10 +401,10 @@ func CopySegmentAndIndexFiles(
 
 	jsonKeyIndexInfos = shortenJsonStatsPath(jsonKeyIndexInfos)
 
-	log.Info("path compression completed",
-		zap.Int("binlogFields", len(segmentInfo.GetBinlogs())),
-		zap.Int("indexCount", len(indexInfos)),
-		zap.Int("jsonStatsCount", len(jsonKeyIndexInfos)))
+	mlog.Info(context.TODO(), "path compression completed",
+		mlog.Int("binlogFields", len(segmentInfo.GetBinlogs())),
+		mlog.Int("indexCount", len(indexInfos)),
+		mlog.Int("jsonStatsCount", len(jsonKeyIndexInfos)))
 
 	// Step 7: Build result
 	result := &datapb.CopySegmentResult{
@@ -428,8 +428,8 @@ func CopySegmentAndIndexFiles(
 		result.ManifestPath = targetManifestPath
 	}
 
-	log.Info("copy segment and index files completed successfully",
-		zap.Int64("importedRows", result.ImportedRows))
+	mlog.Info(context.TODO(), "copy segment and index files completed successfully",
+		mlog.Int64("importedRows", result.ImportedRows))
 
 	return result, copiedFiles, nil
 }

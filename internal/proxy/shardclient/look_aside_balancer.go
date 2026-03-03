@@ -23,11 +23,10 @@ import (
 	"time"
 
 	"go.uber.org/atomic"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -204,14 +203,14 @@ func (b *LookAsideBalancer) calculateScore(node int64, cost *internalpb.CostAggr
 
 	executeSpeed := cost.ResponseTime - cost.ServiceTime
 	if executingNQ < 0 {
-		log.Warn("unexpected executing nq value",
-			zap.Int64("executingNQ", executingNQ))
+		mlog.Warn(context.TODO(), "unexpected executing nq value",
+			mlog.Int64("executingNQ", executingNQ))
 		return executeSpeed
 	}
 
 	if cost.GetTotalNQ() < 0 {
-		log.Warn("unexpected total nq value",
-			zap.Int64("totalNq", cost.GetTotalNQ()))
+		mlog.Warn(context.TODO(), "unexpected total nq value",
+			mlog.Int64("totalNq", cost.GetTotalNQ()))
 		return executeSpeed
 	}
 
@@ -225,18 +224,17 @@ func (b *LookAsideBalancer) calculateScore(node int64, cost *internalpb.CostAggr
 }
 
 func (b *LookAsideBalancer) checkQueryNodeHealthLoop(ctx context.Context) {
-	log := log.Ctx(ctx).WithRateGroup("proxy.LookAsideBalancer", 1, 60)
 	defer b.wg.Done()
 
 	checkHealthInterval := paramtable.Get().ProxyCfg.CheckQueryNodeHealthInterval.GetAsDuration(time.Millisecond)
 	ticker := time.NewTicker(checkHealthInterval)
 	defer ticker.Stop()
-	log.Info("Start check query node health loop")
+	mlog.Info(context.TODO(), "Start check query node health loop")
 	pool := conc.NewDefaultPool[any]()
 	for {
 		select {
 		case <-b.closeCh:
-			log.Info("check query node health loop exit")
+			mlog.Info(context.TODO(), "check query node health loop exit")
 			return
 
 		case <-ticker.C:
@@ -258,20 +256,20 @@ func (b *LookAsideBalancer) checkQueryNodeHealthLoop(ctx context.Context) {
 						if err != nil {
 							// get client from clientMgr failed, which means this qn isn't a shard leader anymore, skip it's health check
 							b.trySetQueryNodeUnReachable(node, err)
-							log.RatedInfo(10, "get client failed", zap.Int64("node", node), zap.Error(err))
+							mlog.RatedInfo(context.TODO(), mlog.RateDefault, "get client failed", mlog.Int64("node", node), mlog.Err(err))
 							return struct{}{}, nil
 						}
 
 						resp, err := qn.GetComponentStates(ctx, &milvuspb.GetComponentStatesRequest{})
 						if err != nil {
 							b.trySetQueryNodeUnReachable(node, err)
-							log.RatedWarn(10, "get component status failed, set node unreachable", zap.Int64("node", node), zap.Error(err))
+							mlog.RatedWarn(context.TODO(), mlog.RateDefault, "get component status failed, set node unreachable", mlog.Int64("node", node), mlog.Err(err))
 							return struct{}{}, nil
 						}
 
 						if resp.GetState().GetStateCode() != commonpb.StateCode_Healthy {
 							b.trySetQueryNodeUnReachable(node, merr.ErrServiceUnavailable)
-							log.RatedWarn(10, "component status unhealthy, set node unreachable", zap.Int64("node", node), zap.Error(err))
+							mlog.RatedWarn(context.TODO(), mlog.RateDefault, "component status unhealthy, set node unreachable", mlog.Int64("node", node), mlog.Err(err))
 
 							return struct{}{}, nil
 						}
@@ -297,10 +295,10 @@ func (b *LookAsideBalancer) trySetQueryNodeUnReachable(node int64, err error) {
 	failures.Inc()
 	b.failedHeartBeatCounter.Insert(node, failures)
 
-	log.Info("get component status failed",
-		zap.Int64("node", node),
-		zap.Int64("times", failures.Load()),
-		zap.Error(err))
+	mlog.Info(context.TODO(), "get component status failed",
+		mlog.Int64("node", node),
+		mlog.Int64("times", failures.Load()),
+		mlog.Err(err))
 
 	if failures.Load() < paramtable.Get().ProxyCfg.RetryTimesOnHealthCheck.GetAsInt64() {
 		return
@@ -310,8 +308,8 @@ func (b *LookAsideBalancer) trySetQueryNodeUnReachable(node int64, err error) {
 	limit := paramtable.Get().CommonCfg.SessionTTL.GetAsDuration(time.Second).Seconds() /
 		paramtable.Get().ProxyCfg.HealthCheckTimeout.GetAsDuration(time.Millisecond).Seconds()
 	if failures.Load() > paramtable.Get().ProxyCfg.RetryTimesOnHealthCheck.GetAsInt64() && float64(failures.Load()) >= limit {
-		log.Info("the heartbeat failures has reach it's upper limit, remove the query node",
-			zap.Int64("nodeID", node))
+		mlog.Info(context.TODO(), "the heartbeat failures has reach it's upper limit, remove the query node",
+			mlog.Int64("nodeID", node))
 		// stop the heartbeat
 		b.metricsMap.Remove(node)
 		b.knownNodeInfos.Remove(node)
@@ -333,6 +331,6 @@ func (b *LookAsideBalancer) trySetQueryNodeReachable(node int64) {
 
 	metrics, ok := b.metricsMap.Get(node)
 	if !ok || metrics.unavailable.CompareAndSwap(true, false) {
-		log.Info("component recuperated, set node reachable", zap.Int64("node", node))
+		mlog.Info(context.TODO(), "component recuperated, set node reachable", mlog.Int64("node", node))
 	}
 }

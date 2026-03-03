@@ -13,14 +13,13 @@ import (
 	"github.com/samber/lo"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
-	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/querynodev2/segments"
 	"github.com/milvus-io/milvus/internal/util/searchutil/scheduler"
 	"github.com/milvus-io/milvus/internal/util/segcore"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
@@ -140,10 +139,6 @@ func (t *SearchTask) PreExecute() error {
 }
 
 func (t *SearchTask) Execute() error {
-	log := log.Ctx(t.ctx).With(
-		zap.Int64("collectionID", t.collection.ID()),
-		zap.String("shard", t.req.GetDmlChannels()[0]),
-	)
 
 	if t.scheduleSpan != nil {
 		t.scheduleSpan.End()
@@ -236,7 +231,7 @@ func (t *SearchTask) Execute() error {
 		t.originTopks,
 	)
 	if err != nil {
-		log.Warn("failed to reduce search results", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to reduce search results", mlog.Err(err))
 		return err
 	}
 	defer segcore.DeleteSearchResultDataBlobs(blobs)

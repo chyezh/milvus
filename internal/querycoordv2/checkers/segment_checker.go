@@ -23,7 +23,6 @@ import (
 
 	"github.com/samber/lo"
 	"go.opentelemetry.io/otel/trace"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/querycoordv2/assign"
@@ -34,7 +33,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
@@ -182,20 +181,17 @@ func (c *SegmentChecker) getGrowingSegmentDiff(ctx context.Context, collectionID
 	replica *meta.Replica,
 	delegatorList []*meta.DmChannel,
 ) (toLoad []*datapb.SegmentInfo, toRelease []*meta.Segment) {
-	log := log.Ctx(context.TODO()).WithRateGroup("qcv2.SegmentChecker", 1, 60).With(
-		zap.Int64("collectionID", collectionID),
-		zap.Int64("replicaID", replica.GetID()))
 
 	for _, d := range delegatorList {
 		view := d.View
 		targetVersion := c.targetMgr.GetCollectionTargetVersion(ctx, collectionID, meta.CurrentTarget)
 		if view.TargetVersion != targetVersion {
 			// before shard delegator update it's readable version, skip release segment
-			log.RatedInfo(20, "before shard delegator update it's readable version, skip release segment",
-				zap.String("channelName", view.Channel),
-				zap.Int64("nodeID", view.ID),
-				zap.Int64("leaderVersion", view.TargetVersion),
-				zap.Int64("currentVersion", targetVersion),
+			mlog.RatedInfo(context.TODO(), mlog.RateDefault, "before shard delegator update it's readable version, skip release segment",
+				mlog.String("channelName", view.Channel),
+				mlog.Int64("nodeID", view.ID),
+				mlog.Int64("leaderVersion", view.TargetVersion),
+				mlog.Int64("currentVersion", targetVersion),
 			)
 			continue
 		}
@@ -213,14 +209,14 @@ func (c *SegmentChecker) getGrowingSegmentDiff(ctx context.Context, collectionID
 					timestampInTarget := channel.GetSeekPosition().GetTimestamp()
 					// release growing segment if in dropped segment list
 					if funcutil.SliceContain(channel.GetDroppedSegmentIds(), segment.GetID()) {
-						log.Info("growing segment exists in dropped segment list, release it", zap.Int64("segmentID", segment.GetID()))
+						mlog.Info(context.TODO(), "growing segment exists in dropped segment list, release it", mlog.Int64("segmentID", segment.GetID()))
 						toRelease = append(toRelease, segment)
 						continue
 					}
 					// filter toRelease which seekPosition is newer than next target dmChannel
 					if timestampInSegment < timestampInTarget {
-						log.Info("growing segment not exist in target, so release it",
-							zap.Int64("segmentID", segment.GetID()),
+						mlog.Info(context.TODO(), "growing segment not exist in target, so release it",
+							mlog.Int64("segmentID", segment.GetID()),
 						)
 						toRelease = append(toRelease, segment)
 					}
@@ -382,10 +378,6 @@ func (c *SegmentChecker) filterOutSegmentInUse(ctx context.Context, replica *met
 }
 
 func (c *SegmentChecker) createSegmentLoadTasks(ctx context.Context, segments []*datapb.SegmentInfo, loadPriorities []commonpb.LoadPriority, replica *meta.Replica) []task.Task {
-	logger := log.Ctx(ctx).WithRateGroup("qcv2.SegmentChecker-createSegmentLoadTasks", 1, 60).With(
-		zap.Int64("collectionID", replica.GetCollectionID()),
-		zap.Int64("replicaID", replica.GetID()),
-	)
 	if len(segments) == 0 {
 		return nil
 	}
@@ -403,8 +395,8 @@ func (c *SegmentChecker) createSegmentLoadTasks(ctx context.Context, segments []
 		// if channel is not subscribed yet, skip load segments
 		leader := c.dist.ChannelDistManager.GetShardLeader(shard, replica)
 		if leader == nil {
-			logger.RatedInfo(10, "no shard leader for replica to load segment",
-				zap.String("shard", shard))
+			mlog.RatedInfo(ctx, mlog.RateDefault, "no shard leader for replica to load segment",
+				mlog.String("shard", shard))
 			continue
 		}
 
@@ -443,12 +435,12 @@ func (c *SegmentChecker) createSegmentReopenTasks(ctx context.Context, segments 
 			action,
 		)
 		if err != nil {
-			log.Warn("create segment reopen task failed",
-				zap.Int64("collection", s.GetCollectionID()),
-				zap.Int64("replica", replica.GetID()),
-				zap.String("channel", s.GetInsertChannel()),
-				zap.Int64("from", s.Node),
-				zap.Error(err),
+			mlog.Warn(context.TODO(), "create segment reopen task failed",
+				mlog.Int64("collection", s.GetCollectionID()),
+				mlog.Int64("replica", replica.GetID()),
+				mlog.String("channel", s.GetInsertChannel()),
+				mlog.Int64("from", s.Node),
+				mlog.Err(err),
 			)
 			continue
 		}
@@ -472,12 +464,12 @@ func (c *SegmentChecker) createSegmentReduceTasks(ctx context.Context, segments 
 			action,
 		)
 		if err != nil {
-			log.Warn("create segment reduce task failed",
-				zap.Int64("collection", s.GetCollectionID()),
-				zap.Int64("replica", replica.GetID()),
-				zap.String("channel", s.GetInsertChannel()),
-				zap.Int64("from", s.Node),
-				zap.Error(err),
+			mlog.Warn(context.TODO(), "create segment reduce task failed",
+				mlog.Int64("collection", s.GetCollectionID()),
+				mlog.Int64("replica", replica.GetID()),
+				mlog.String("channel", s.GetInsertChannel()),
+				mlog.Int64("from", s.Node),
+				mlog.Err(err),
 			)
 			continue
 		}

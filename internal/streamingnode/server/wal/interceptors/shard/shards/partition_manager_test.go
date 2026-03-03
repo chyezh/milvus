@@ -17,7 +17,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/stats"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/utils"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
@@ -62,7 +62,7 @@ func TestPartitionManager(t *testing.T) {
 	f := syncutil.NewFuture[wal.WAL]()
 	f.Set(w)
 	m := newPartitionSegmentManager(ctx,
-		log.With(),
+		mlog.With(),
 		f,
 		types.PChannelInfo{
 			Name: "pchannel",

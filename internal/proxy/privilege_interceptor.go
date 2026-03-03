@@ -7,7 +7,6 @@ import (
 	"sync"
 
 	"github.com/casbin/casbin/v2"
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -15,7 +14,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/proxy/privilege"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/contextutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
@@ -47,16 +46,15 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 	if !Params.CommonCfg.AuthorizationEnabled.GetAsBool() {
 		return ctx, nil
 	}
-	log := log.Ctx(ctx)
-	log.RatedDebug(60, "PrivilegeInterceptor", zap.String("type", reflect.TypeOf(req).String()))
+	mlog.RatedDebug(context.TODO(), mlog.RateDefault, "PrivilegeInterceptor", mlog.String("type", reflect.TypeOf(req).String()))
 	privilegeExt, err := funcutil.GetPrivilegeExtObj(req)
 	if err != nil {
-		log.RatedInfo(60, "GetPrivilegeExtObj err", zap.Error(err))
+		mlog.RatedInfo(context.TODO(), mlog.RateDefault, "GetPrivilegeExtObj err", mlog.Err(err))
 		return ctx, nil
 	}
 	username, password, err := contextutil.GetAuthInfoFromContext(ctx)
 	if err != nil {
-		log.Warn("GetCurUserFromContext fail", zap.Error(err))
+		mlog.Warn(context.TODO(), "GetCurUserFromContext fail", mlog.Err(err))
 		return ctx, err
 	}
 	if !Params.CommonCfg.RootShouldBindRole.GetAsBool() && username == util.UserRoot {
@@ -64,7 +62,7 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 	}
 	roleNames, err := GetRole(username)
 	if err != nil {
-		log.Warn("GetRole fail", zap.String("username", username), zap.Error(err))
+		mlog.Warn(context.TODO(), "GetRole fail", mlog.String("username", username), mlog.Err(err))
 		return ctx, err
 	}
 	roleNames = append(roleNames, util.RolePublic)
@@ -83,12 +81,6 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 	objectNames := funcutil.GetObjectNames(req, objectNameIndexs)
 	objectPrivilege := privilegeExt.ObjectPrivilege.String()
 	dbName := GetCurDBNameFromContextOrDefault(ctx)
-
-	log = log.With(zap.String("username", username), zap.Strings("role_names", roleNames),
-		zap.String("object_type", objectType), zap.String("object_privilege", objectPrivilege),
-		zap.String("db_name", dbName),
-		zap.Int32("object_index", objectNameIndex), zap.String("object_name", objectName),
-		zap.Int32("object_indexs", objectNameIndexs), zap.Strings("object_names", objectNames))
 
 	e := privilege.GetEnforcer()
 	for _, roleName := range roleNames {
@@ -110,7 +102,7 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 			// handle the api which refers one resource
 			permitObject, err := permitFunc(objectName)
 			if err != nil {
-				log.Warn("fail to execute permit func", zap.String("name", objectName), zap.Error(err))
+				mlog.Warn(context.TODO(), "fail to execute permit func", mlog.String("name", objectName), mlog.Err(err))
 				return ctx, err
 			}
 			if permitObject {
@@ -124,7 +116,7 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 			for _, name := range objectNames {
 				p, err := permitFunc(name)
 				if err != nil {
-					log.Warn("fail to execute permit func", zap.String("name", name), zap.Error(err))
+					mlog.Warn(context.TODO(), "fail to execute permit func", mlog.String("name", name), mlog.Err(err))
 					return ctx, err
 				}
 				if !p {
@@ -138,7 +130,7 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 		}
 	}
 
-	log.Info("permission deny", zap.Strings("roles", roleNames))
+	mlog.Info(context.TODO(), "permission deny", mlog.Strings("roles", roleNames))
 
 	if password == util.PasswordHolder {
 		username = "apikey user"

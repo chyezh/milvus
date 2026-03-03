@@ -24,7 +24,6 @@ import (
 	"strconv"
 
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
@@ -32,7 +31,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/importutilv2"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
@@ -215,7 +214,7 @@ func (it *importTask) getChannels() []pChan {
 func (it *importTask) Execute(ctx context.Context) error {
 	jobID, err := it.node.rowIDAllocator.AllocOne()
 	if err != nil {
-		log.Ctx(ctx).Warn("alloc job id failed", zap.Error(err))
+		mlog.Warn(ctx, "alloc job id failed", mlog.Err(err))
 		return err
 	}
 	msg, err := message.NewImportMessageBuilderV1().
@@ -237,19 +236,19 @@ func (it *importTask) Execute(ctx context.Context) error {
 		WithBroadcast(it.vchannels).
 		BuildBroadcast()
 	if err != nil {
-		log.Ctx(ctx).Warn("create import message failed", zap.Error(err))
+		mlog.Warn(ctx, "create import message failed", mlog.Err(err))
 		return err
 	}
 	resp, err := streaming.WAL().Broadcast().Append(ctx, msg)
 	if err != nil {
-		log.Ctx(ctx).Warn("broadcast import msg failed", zap.Error(err))
+		mlog.Warn(ctx, "broadcast import msg failed", mlog.Err(err))
 		return err
 	}
-	log.Ctx(ctx).Info(
+	mlog.Info(ctx, 
 		"broadcast import msg success",
-		zap.Int64("jobID", jobID),
-		zap.Uint64("broadcastID", resp.BroadcastID),
-		zap.Any("appendResults", resp.AppendResults),
+		mlog.Int64("jobID", jobID),
+		mlog.Uint64("broadcastID", resp.BroadcastID),
+		mlog.Any("appendResults", resp.AppendResults),
 	)
 	it.resp.JobID = strconv.FormatInt(jobID, 10)
 	return nil

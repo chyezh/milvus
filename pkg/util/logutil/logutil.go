@@ -22,11 +22,10 @@ import (
 	"sync"
 
 	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"golang.org/x/exp/constraints"
 	"google.golang.org/grpc/grpclog"
 
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 )
 
 const (
@@ -124,28 +123,29 @@ func (w *zapWrapper) V(l int) bool {
 	if l == 3 {
 		zapLevel = 5
 	}
-	return w.logger.Core().Enabled(zapcore.Level(zapLevel))
+	return w.logger.Core().Enabled(mlog.Level(zapLevel))
 }
 
 // LogPanic logs the panic reason and stack, then exit the process.
 // Commonly used with a `defer`.
 func LogPanic() {
 	if e := recover(); e != nil {
-		log.Fatal("panic", zap.Reflect("recover", e))
+		mlog.Fatal(context.TODO(), "panic", mlog.Reflect("recover", e))
 	}
 }
 
 var once sync.Once
 
 // SetupLogger is used to initialize the log with config.
-func SetupLogger(cfg *log.Config) {
+func SetupLogger(cfg *mlog.Config) {
 	once.Do(func() {
 		// Initialize logger.
-		logger, p, err := log.InitLogger(cfg, zap.AddStacktrace(zap.ErrorLevel))
+		logger, _, cleanup, err := mlog.NewLogger(cfg, zap.AddStacktrace(zap.ErrorLevel))
 		if err == nil {
-			log.ReplaceGlobals(logger, p)
+			mlog.Init(logger)
+			_ = cleanup
 		} else {
-			log.Fatal("initialize logger error", zap.Error(err))
+			mlog.Fatal(context.TODO(), "initialize logger error", mlog.Err(err))
 		}
 
 		// Initialize grpc log wrapper
@@ -159,20 +159,16 @@ func SetupLogger(cfg *log.Config) {
 			logLevel = 0
 		}
 
-		wrapper := &zapWrapper{logger, logLevel}
+		wrapper := &zapWrapper{mlog.GetUnderlying(), logLevel}
 		grpclog.SetLoggerV2(wrapper)
 
-		log.Info("Log directory", zap.String("configDir", cfg.File.RootPath))
-		log.Info("Set log file to ", zap.String("path", cfg.File.Filename))
+		mlog.Info(context.TODO(), "Log directory", mlog.String("configDir", cfg.File.RootPath))
+		mlog.Info(context.TODO(), "Set log file to ", mlog.String("path", cfg.File.Filename))
 	})
 }
 
-func Logger(ctx context.Context) *zap.Logger {
-	return log.Ctx(ctx).Logger
-}
-
 func WithModule(ctx context.Context, module string) context.Context {
-	return log.WithModule(ctx, module)
+	return mlog.WithFields(ctx, mlog.FieldModule(module))
 }
 
 // keeps only 2 decimal places

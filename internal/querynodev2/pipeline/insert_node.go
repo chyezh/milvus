@@ -21,14 +21,13 @@ import (
 	"fmt"
 	"sort"
 
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/internal/querynodev2/delegator"
 	"github.com/milvus-io/milvus/internal/querynodev2/segments"
 	"github.com/milvus-io/milvus/internal/storage"
 	base "github.com/milvus-io/milvus/internal/util/pipeline"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -46,7 +45,7 @@ func (iNode *insertNode) addInsertData(insertDatas map[UniqueID]*delegator.Inser
 	insertRecord, err := storage.TransferInsertMsgToInsertRecord(collection.Schema(), msg)
 	if err != nil {
 		err = fmt.Errorf("failed to get primary keys, err = %d", err)
-		log.Error(err.Error(), zap.Int64("collectionID", iNode.collectionID), zap.String("channel", iNode.channel))
+		mlog.Error(context.TODO(), err.Error(), mlog.Int64("collectionID", iNode.collectionID), mlog.String("channel", iNode.channel))
 		panic(err)
 	}
 	iData, ok := insertDatas[msg.SegmentID]
@@ -63,7 +62,7 @@ func (iNode *insertNode) addInsertData(insertDatas map[UniqueID]*delegator.Inser
 	} else {
 		err := typeutil.MergeFieldData(iData.InsertRecord.FieldsData, insertRecord.FieldsData)
 		if err != nil {
-			log.Error("failed to merge field data", zap.String("channel", iNode.channel), zap.Error(err))
+			mlog.Error(context.TODO(), "failed to merge field data", mlog.String("channel", iNode.channel), mlog.Err(err))
 			panic(err)
 		}
 		iData.InsertRecord.NumRows += insertRecord.NumRows
@@ -71,19 +70,19 @@ func (iNode *insertNode) addInsertData(insertDatas map[UniqueID]*delegator.Inser
 
 	pks, err := segments.GetPrimaryKeys(msg, collection.Schema())
 	if err != nil {
-		log.Error("failed to get primary keys from insert message", zap.Error(err))
+		mlog.Error(context.TODO(), "failed to get primary keys from insert message", mlog.Err(err))
 		panic(err)
 	}
 
 	iData.PrimaryKeys = append(iData.PrimaryKeys, pks...)
 	iData.RowIDs = append(iData.RowIDs, msg.RowIDs...)
 	iData.Timestamps = append(iData.Timestamps, msg.Timestamps...)
-	log.Ctx(context.TODO()).Debug("pipeline fetch insert msg",
-		zap.Int64("collectionID", iNode.collectionID),
-		zap.Int64("segmentID", msg.SegmentID),
-		zap.Int("insertRowNum", len(pks)),
-		zap.Uint64("timestampMin", msg.BeginTimestamp),
-		zap.Uint64("timestampMax", msg.EndTimestamp))
+	mlog.Debug(context.TODO(), "pipeline fetch insert msg",
+		mlog.Int64("collectionID", iNode.collectionID),
+		mlog.Int64("segmentID", msg.SegmentID),
+		mlog.Int("insertRowNum", len(pks)),
+		mlog.Uint64("timestampMin", msg.BeginTimestamp),
+		mlog.Uint64("timestampMax", msg.EndTimestamp))
 }
 
 // Insert task
@@ -100,7 +99,7 @@ func (iNode *insertNode) Operate(in Msg) Msg {
 		if nodeMsg.insertDatas == nil {
 			collection := iNode.manager.Collection.Get(iNode.collectionID)
 			if collection == nil {
-				log.Error("insertNode with collection not exist", zap.Int64("collection", iNode.collectionID))
+				mlog.Error(context.TODO(), "insertNode with collection not exist", mlog.Int64("collection", iNode.collectionID))
 				panic("insertNode with collection not exist")
 			}
 

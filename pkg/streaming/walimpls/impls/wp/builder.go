@@ -10,9 +10,8 @@ import (
 	wpStorageClient "github.com/zilliztech/woodpecker/common/objectstorage"
 	"github.com/zilliztech/woodpecker/woodpecker"
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls"
@@ -48,18 +47,18 @@ func (b *builderImpl) Build() (walimpls.OpenerImpls, error) {
 		if err != nil {
 			return nil, err
 		}
-		log.Ctx(context.Background()).Info("create minio handler finish while building wp opener")
+		mlog.Info(context.Background(), "create minio handler finish while building wp opener")
 	}
 	etcdCli, err := b.getEtcdClient(context.TODO())
 	if err != nil {
 		return nil, err
 	}
-	log.Ctx(context.Background()).Info("create etcd client finish while building wp opener")
+	mlog.Info(context.Background(), "create etcd client finish while building wp opener")
 	wpClient, err := woodpecker.NewEmbedClient(context.Background(), cfg, etcdCli, storageClient, true)
 	if err != nil {
 		return nil, err
 	}
-	log.Ctx(context.Background()).Info("build wp opener finish", zap.String("wpClientInstance", fmt.Sprintf("%p", wpClient)))
+	mlog.Info(context.Background(), "build wp opener finish", mlog.String("wpClientInstance", fmt.Sprintf("%p", wpClient)))
 	wpMetrics.RegisterWoodpeckerWithRegisterer(metrics.GetRegisterer())
 	return &openerImpl{
 		c: wpClient,
@@ -158,7 +157,6 @@ func (b *builderImpl) setCustomWpConfig(wpConfig *config.Configuration, cfg *par
 func (b *builderImpl) getEtcdClient(ctx context.Context) (*clientv3.Client, error) {
 	params := paramtable.Get()
 	etcdConfig := &params.EtcdCfg
-	log := log.Ctx(ctx)
 
 	etcdCli, err := etcd.CreateEtcdClient(
 		etcdConfig.UseEmbedEtcd.GetAsBool(),
@@ -173,7 +171,7 @@ func (b *builderImpl) getEtcdClient(ctx context.Context) (*clientv3.Client, erro
 		etcdConfig.EtcdTLSMinVersion.GetValue(),
 		etcdConfig.ClientOptions()...)
 	if err != nil {
-		log.Warn("Woodpecker create connection to etcd failed", zap.Error(err))
+		mlog.Warn(context.TODO(), "Woodpecker create connection to etcd failed", mlog.Err(err))
 		return nil, err
 	}
 	return etcdCli, nil

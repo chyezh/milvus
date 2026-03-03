@@ -23,11 +23,10 @@ import (
 	"math"
 
 	"github.com/apache/arrow/go/v17/arrow/array"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -82,7 +81,7 @@ func NewL0Reader(ctx context.Context,
 		return nil, err
 	}
 	if len(deltaLogs) == 0 {
-		log.Info("no delta logs for l0 segments", zap.String("prefix", path))
+		mlog.Info(context.TODO(), "no delta logs for l0 segments", mlog.String("prefix", path))
 	}
 	r.deltaLogs = deltaLogs
 	return r, nil
@@ -122,7 +121,7 @@ func (r *l0Reader) Read() (*storage.DeleteData, error) {
 				if err == io.EOF {
 					break
 				}
-				log.Error("error on importing L0 segment, fail to read deltalogs", zap.Error(err))
+				mlog.Error(context.TODO(), "error on importing L0 segment, fail to read deltalogs", mlog.Err(err))
 				return nil, err
 			}
 

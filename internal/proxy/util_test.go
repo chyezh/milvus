@@ -27,7 +27,6 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
@@ -40,7 +39,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proxy/privilege"
 	"github.com/milvus-io/milvus/internal/util/function/embedding"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
@@ -1064,7 +1063,7 @@ func Test_isPartitionIsLoaded(t *testing.T) {
 
 func Test_InsertTaskcheckFieldsDataBySchema(t *testing.T) {
 	paramtable.Init()
-	log.Info("InsertTaskcheckFieldsDataBySchema", zap.Bool("enable", Params.ProxyCfg.SkipAutoIDCheck.GetAsBool()))
+	mlog.Info(context.TODO(), "InsertTaskcheckFieldsDataBySchema", mlog.Bool("enable", Params.ProxyCfg.SkipAutoIDCheck.GetAsBool()))
 	var err error
 
 	t.Run("schema is empty, though won't happen in system", func(t *testing.T) {
@@ -2148,7 +2147,7 @@ func Test_GetPartitionProgressFailed(t *testing.T) {
 func TestErrWithLog(t *testing.T) {
 	err := errors.New("test")
 	assert.ErrorIs(t, ErrWithLog(nil, "foo", err), err)
-	assert.ErrorIs(t, ErrWithLog(log.Ctx(context.Background()), "foo", err), err)
+	assert.ErrorIs(t, ErrWithLog(nil, "foo", err), err)
 }
 
 func Test_CheckDynamicFieldData(t *testing.T) {

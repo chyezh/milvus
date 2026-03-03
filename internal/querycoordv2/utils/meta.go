@@ -22,13 +22,12 @@ import (
 	"strings"
 
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -82,20 +81,20 @@ func GroupSegmentsByReplica(ctx context.Context, replicaMgr *meta.ReplicaManager
 
 // RecoverReplicaOfCollection recovers all replica of collection with latest resource group.
 func RecoverReplicaOfCollection(ctx context.Context, m *meta.Meta, collectionID typeutil.UniqueID) {
-	logger := log.With(zap.Int64("collectionID", collectionID))
+	logger := mlog.With(mlog.Int64("collectionID", collectionID))
 	rgNames := m.ReplicaManager.GetResourceGroupByCollection(ctx, collectionID)
 	if rgNames.Len() == 0 {
-		logger.Error("no resource group found for collection")
+		logger.Error(nil, "no resource group found for collection")
 		return
 	}
 	rgs, err := m.ResourceManager.GetNodesOfMultiRG(ctx, rgNames.Collect())
 	if err != nil {
-		logger.Error("unreachable code as expected, fail to get resource group for replica", zap.Error(err))
+		logger.Error(nil, "unreachable code as expected, fail to get resource group for replica", mlog.Err(err))
 		return
 	}
 
 	if err := m.ReplicaManager.RecoverNodesInCollection(ctx, collectionID, rgs); err != nil {
-		logger.Warn("fail to set available nodes in replica", zap.Error(err))
+		logger.Warn(nil, "fail to set available nodes in replica", mlog.Err(err))
 	}
 }
 
@@ -146,7 +145,7 @@ func AssignReplica(ctx context.Context, m *meta.Meta, resourceGroups []string, r
 		}
 
 		if num > len(nodes) {
-			log.Warn("failed to check resource group", zap.Error(err))
+			mlog.Warn(context.TODO(), "failed to check resource group", mlog.Err(err))
 			if checkNodeNum {
 				err := merr.WrapErrResourceGroupNodeNotEnough(rgName, len(nodes), num)
 				return nil, err

@@ -6,9 +6,8 @@ import (
 
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/cockroachdb/errors"
-	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
@@ -20,7 +19,7 @@ const (
 
 // backlogClearHelper is a helper to clear the backlog of pulsar.
 type backlogClearHelper struct {
-	log.Binder
+	mlog.Binder
 
 	notifier       *syncutil.AsyncTaskNotifier[struct{}]
 	cond           *syncutil.ContextCond
@@ -44,7 +43,7 @@ func newBacklogClearHelper(c pulsar.Client, channelName types.PChannelInfo, thre
 		reusedConsumer: nil,
 		tenant:         tenant,
 	}
-	h.SetLogger(log.With(zap.String("channel", channelName.String()), log.FieldComponent("backlog-clear")))
+	h.SetLogger(mlog.With(mlog.String("channel", channelName.String()), mlog.FieldComponent("backlog-clear")))
 	go h.background()
 	return h
 }
@@ -63,7 +62,7 @@ func (h *backlogClearHelper) ObserveAppend(size int) {
 func (h *backlogClearHelper) background() {
 	defer func() {
 		h.notifier.Finish(struct{}{})
-		h.Logger().Info("backlog clear helper exit")
+		h.Logger().Info(nil, "backlog clear helper exit")
 	}()
 
 	for {
@@ -81,10 +80,10 @@ func (h *backlogClearHelper) background() {
 				return h.notifier.Context().Err()
 			}
 			if err := h.performBacklogClear(); err != nil {
-				h.Logger().Warn("failed to perform backlog clear", zap.Error(err))
+				h.Logger().Warn(nil, "failed to perform backlog clear", mlog.Err(err))
 				return err
 			}
-			h.Logger().Debug("perform backlog clear done")
+			h.Logger().Debug(nil, "perform backlog clear done")
 			return nil
 		}, retry.AttemptAlways()); err != nil {
 			return
@@ -125,7 +124,7 @@ func (h *backlogClearHelper) getConsumer() (pulsar.Consumer, error) {
 		return nil, errors.Wrap(err, "when create subscription")
 	}
 	h.reusedConsumer = consumer
-	h.Logger().Info("created a new consumer")
+	h.Logger().Info(nil, "created a new consumer")
 	return h.reusedConsumer, nil
 }
 
@@ -134,7 +133,7 @@ func (h *backlogClearHelper) closeConsumer() {
 	if h.reusedConsumer != nil {
 		h.reusedConsumer.Close()
 		h.reusedConsumer = nil
-		h.Logger().Info("closed the reused consumer")
+		h.Logger().Info(nil, "closed the reused consumer")
 	}
 }
 

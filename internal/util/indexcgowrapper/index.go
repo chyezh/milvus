@@ -16,7 +16,6 @@ import (
 	"runtime"
 	"unsafe"
 
-	"go.uber.org/zap"
 	"google.golang.org/protobuf/encoding/prototext"
 	"google.golang.org/protobuf/proto"
 
@@ -25,7 +24,7 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	_ "github.com/milvus-io/milvus/internal/util/cgo"
 	"github.com/milvus-io/milvus/internal/util/segcore"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/cgopb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexcgopb"
 )
@@ -94,7 +93,7 @@ func NewCgoIndex(dtype schemapb.DataType, typeParams, indexParams map[string]str
 
 	runtime.SetFinalizer(index, func(index *CgoIndex) {
 		if index != nil && !index.close {
-			log.Error("there is leakage in index object, please check.")
+			mlog.Error(context.TODO(), "there is leakage in index object, please check.")
 		}
 	})
 
@@ -104,10 +103,10 @@ func NewCgoIndex(dtype schemapb.DataType, typeParams, indexParams map[string]str
 func CreateIndex(ctx context.Context, buildIndexInfo *indexcgopb.BuildIndexInfo) (CodecIndex, error) {
 	buildIndexInfoBlob, err := proto.Marshal(buildIndexInfo)
 	if err != nil {
-		log.Ctx(ctx).Warn("marshal buildIndexInfo failed",
-			zap.String("clusterID", buildIndexInfo.GetClusterID()),
-			zap.Int64("buildID", buildIndexInfo.GetBuildID()),
-			zap.Error(err))
+		mlog.Warn(ctx, "marshal buildIndexInfo failed",
+			mlog.String("clusterID", buildIndexInfo.GetClusterID()),
+			mlog.Int64("buildID", buildIndexInfo.GetBuildID()),
+			mlog.Err(err))
 		return nil, err
 	}
 	var indexPtr C.CIndex
@@ -123,7 +122,7 @@ func CreateIndex(ctx context.Context, buildIndexInfo *indexcgopb.BuildIndexInfo)
 
 	runtime.SetFinalizer(index, func(index *CgoIndex) {
 		if index != nil && !index.close {
-			log.Error("there is leakage in index object, please check.")
+			mlog.Error(context.TODO(), "there is leakage in index object, please check.")
 		}
 	})
 
@@ -133,10 +132,10 @@ func CreateIndex(ctx context.Context, buildIndexInfo *indexcgopb.BuildIndexInfo)
 func CreateTextIndex(ctx context.Context, buildIndexInfo *indexcgopb.BuildIndexInfo) (map[string]int64, error) {
 	buildIndexInfoBlob, err := proto.Marshal(buildIndexInfo)
 	if err != nil {
-		log.Ctx(ctx).Warn("marshal buildIndexInfo failed",
-			zap.String("clusterID", buildIndexInfo.GetClusterID()),
-			zap.Int64("buildID", buildIndexInfo.GetBuildID()),
-			zap.Error(err))
+		mlog.Warn(ctx, "marshal buildIndexInfo failed",
+			mlog.String("clusterID", buildIndexInfo.GetClusterID()),
+			mlog.Int64("buildID", buildIndexInfo.GetBuildID()),
+			mlog.Err(err))
 		return nil, err
 	}
 	result := C.CreateProtoLayout()
@@ -167,10 +166,10 @@ type JSONKeyStatsResult struct {
 func CreateJSONKeyStats(ctx context.Context, buildIndexInfo *indexcgopb.BuildIndexInfo) (*JSONKeyStatsResult, error) {
 	buildIndexInfoBlob, err := proto.Marshal(buildIndexInfo)
 	if err != nil {
-		log.Ctx(ctx).Warn("marshal buildIndexInfo failed",
-			zap.String("clusterID", buildIndexInfo.GetClusterID()),
-			zap.Int64("buildID", buildIndexInfo.GetBuildID()),
-			zap.Error(err))
+		mlog.Warn(ctx, "marshal buildIndexInfo failed",
+			mlog.String("clusterID", buildIndexInfo.GetClusterID()),
+			mlog.Int64("buildID", buildIndexInfo.GetBuildID()),
+			mlog.Err(err))
 		return nil, err
 	}
 	result := C.CreateProtoLayout()

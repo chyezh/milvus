@@ -7,7 +7,6 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/cockroachdb/errors"
 	"go.uber.org/atomic"
-	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/flusher/flusherimpl"
@@ -17,7 +16,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls"
@@ -36,8 +35,8 @@ func adaptImplsToROWAL(
 	cleanup func(),
 ) *roWALAdaptorImpl {
 	logger := resource.Resource().Logger().With(
-		log.FieldComponent("wal"),
-		zap.String("channel", basicWAL.Channel().String()),
+		mlog.FieldComponent("wal"),
+		mlog.String("channel", basicWAL.Channel().String()),
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	roWAL := &roWALAdaptorImpl{
@@ -190,7 +189,7 @@ func (w *walAdaptorImpl) Append(ctx context.Context, msg message.MutableMessage)
 			// if the append operation of wal is fenced, we should report the error to the client.
 			if w.isFenced.CompareAndSwap(false, true) {
 				w.forceCancelAfterGracefulTimeout()
-				w.Logger().Warn("wal is fenced, mark as unavailable, all append opertions will be rejected", zap.Error(err))
+				w.Logger().Warn(nil, "wal is fenced, mark as unavailable, all append opertions will be rejected", mlog.Err(err))
 			}
 			return nil, status.NewChannelFenced(w.Channel().String())
 		}
@@ -199,10 +198,10 @@ func (w *walAdaptorImpl) Append(ctx context.Context, msg message.MutableMessage)
 	// Mark WAL as fenced if alter WAL message is appended successfully
 	// This prevents further append operations during WAL switch
 	if msg.MessageType() == message.MessageTypeAlterWAL {
-		w.Logger().Info("alter WAL message appended, marking WAL as fenced")
+		w.Logger().Info(nil, "alter WAL message appended, marking WAL as fenced")
 		w.isFenced.CompareAndSwap(false, true)
 		w.forceCancelAfterGracefulTimeout()
-		w.Logger().Info("WAL marked as fenced for WAL switch, all append operations will be rejected")
+		w.Logger().Info(nil, "WAL marked as fenced for WAL switch, all append operations will be rejected")
 	}
 	var extra *anypb.Any
 	if extraAppendResult.Extra != nil {
@@ -238,7 +237,7 @@ func (w *walAdaptorImpl) retryAppendWhenRecoverableError(ctx context.Context, ms
 		if err == nil {
 			if msg.MessageType() == message.MessageTypeAlterWAL {
 				// if the append operation is a alter WAL message, we should log the message
-				w.Logger().Info("append alter WAL message to WAL finish", zap.String("channel", msg.VChannel()), zap.Uint64("timetick", msg.TimeTick()))
+				w.Logger().Info(nil, "append alter WAL message to WAL finish", mlog.String("channel", msg.VChannel()), mlog.Uint64("timetick", msg.TimeTick()))
 			}
 			return msgID, nil
 		}
@@ -247,7 +246,7 @@ func (w *walAdaptorImpl) retryAppendWhenRecoverableError(ctx context.Context, ms
 		}
 		w.writeMetrics.ObserveRetry()
 		nextInterval := backoff.NextBackOff()
-		w.Logger().Warn("append message into wal impls failed, retrying...", log.FieldMessage(msg), zap.Int("retry", i), zap.Duration("nextInterval", nextInterval), zap.Error(err))
+		w.Logger().Warn(nil, "append message into wal impls failed, retrying...", mlog.FieldMessage(msg), mlog.Int("retry", i), mlog.Duration("nextInterval", nextInterval), mlog.Err(err))
 
 		select {
 		case <-ctx.Done():
@@ -278,10 +277,10 @@ func (w *walAdaptorImpl) AppendAsync(ctx context.Context, msg message.MutableMes
 
 // Close overrides Scanner Close function.
 func (w *walAdaptorImpl) Close() {
-	w.Logger().Info("wal begin to close, start graceful close...")
+	w.Logger().Info(nil, "wal begin to close, start graceful close...")
 	// graceful close the interceptors before wal closing.
 	w.interceptorBuildResult.GracefulCloseFunc()
-	w.Logger().Info("wal graceful close done, wait for operation to be finished...")
+	w.Logger().Info(nil, "wal graceful close done, wait for operation to be finished...")
 
 	// begin to close the wal.
 	w.lifetime.SetState(typeutil.LifetimeStateStopped)
@@ -289,37 +288,37 @@ func (w *walAdaptorImpl) Close() {
 	w.lifetime.Wait()
 
 	// close the flusher.
-	w.Logger().Info("wal begin to close flusher...")
+	w.Logger().Info(nil, "wal begin to close flusher...")
 	if w.flusher != nil {
 		// only in test, the flusher is nil.
 		w.flusher.Close()
 	}
 
-	w.Logger().Info("wal begin to close scanners...")
+	w.Logger().Info(nil, "wal begin to close scanners...")
 
 	// close all wal instances.
 	w.scanners.Range(func(id int64, s wal.Scanner) bool {
 		s.Close()
-		log.Info("close scanner by wal adaptor", zap.Int64("id", id), zap.Any("channel", w.Channel()))
+		mlog.Info(context.TODO(), "close scanner by wal adaptor", mlog.Int64("id", id), mlog.Any("channel", w.Channel()))
 		return true
 	})
 
-	w.Logger().Info("scanner close done, close inner wal...")
+	w.Logger().Info(nil, "scanner close done, close inner wal...")
 	w.rwWALImpls.Close()
 
-	w.Logger().Info("wal close done, close interceptors...")
+	w.Logger().Info(nil, "wal close done, close interceptors...")
 	w.interceptorBuildResult.Close()
 	w.appendExecutionPool.Free()
 
-	w.Logger().Info("close the write ahead buffer...")
+	w.Logger().Info(nil, "close the write ahead buffer...")
 	w.param.WriteAheadBuffer.Close()
 
-	w.Logger().Info("close the segment assignment manager...")
+	w.Logger().Info(nil, "close the segment assignment manager...")
 	w.param.ShardManager.Close()
 
-	w.Logger().Info("call wal cleanup function...")
+	w.Logger().Info(nil, "call wal cleanup function...")
 	w.cleanup()
-	w.Logger().Info("wal closed")
+	w.Logger().Info(nil, "wal closed")
 
 	// close all metrics.
 	w.scanMetrics.Close()

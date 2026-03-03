@@ -26,7 +26,6 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
@@ -40,7 +39,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/function/embedding"
 	"github.com/milvus-io/milvus/internal/util/function/models"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
@@ -442,7 +441,7 @@ func FillDynamicData(schema *schemapb.CollectionSchema, data *storage.InsertData
 }
 
 func RunEmbeddingFunction(task *ImportTask, data *storage.InsertData) error {
-	log.Info("start to run embedding function")
+	mlog.Info(context.TODO(), "start to run embedding function")
 	if err := RunDenseEmbedding(task, data); err != nil {
 		return err
 	}
@@ -458,18 +457,18 @@ func RunEmbeddingFunction(task *ImportTask, data *storage.InsertData) error {
 }
 
 func RunDenseEmbedding(task *ImportTask, data *storage.InsertData) error {
-	log.Info("start to run dense embedding")
+	mlog.Info(context.TODO(), "start to run dense embedding")
 	schema := task.GetSchema()
 	allowNonBM25Outputs := common.GetCollectionAllowInsertNonBM25FunctionOutputs(schema.Properties)
-	log.Info("allowNonBM25Outputs", zap.Any("allowNonBM25Outputs", allowNonBM25Outputs))
+	mlog.Info(context.TODO(), "allowNonBM25Outputs", mlog.Any("allowNonBM25Outputs", allowNonBM25Outputs))
 	fieldIDs := lo.Keys(data.Data)
 	needProcessFunctions, err := typeutil.GetNeedProcessFunctions(fieldIDs, schema.Functions, allowNonBM25Outputs, false)
 	if err != nil {
 		return err
 	}
-	log.Info("needProcessFunctions", zap.Any("needProcessFunctions", needProcessFunctions))
+	mlog.Info(context.TODO(), "needProcessFunctions", mlog.Any("needProcessFunctions", needProcessFunctions))
 	if embedding.HasNonBM25AndMinHashFunctions(schema.Functions, []int64{}) {
-		log.Info("has non bm25/minhash functions")
+		mlog.Info(context.TODO(), "has non bm25/minhash functions")
 		extraInfo := &models.ModelExtraInfo{
 			ClusterID: task.req.ClusterID,
 			DBName:    task.req.Schema.DbName,
@@ -481,13 +480,13 @@ func RunDenseEmbedding(task *ImportTask, data *storage.InsertData) error {
 		if err := exec.ProcessBulkInsert(context.Background(), data); err != nil {
 			return err
 		}
-		log.Info("end to run dense embedding")
+		mlog.Info(context.TODO(), "end to run dense embedding")
 	}
 	return nil
 }
 
 func RunBm25Function(task *ImportTask, data *storage.InsertData) error {
-	log.Info("start to run bm25 function")
+	mlog.Info(context.TODO(), "start to run bm25 function")
 	fns := task.GetSchema().GetFunctions()
 	for _, fn := range fns {
 		if fn.GetType() != schemapb.FunctionType_BM25 {
@@ -653,11 +652,11 @@ func LogStats(manager TaskManager) {
 		byState := lo.GroupBy(tasks, func(t Task) datapb.ImportTaskStateV2 {
 			return t.GetState()
 		})
-		log.Info("import task stats", zap.String("type", taskType.String()),
-			zap.Int("pending", len(byState[datapb.ImportTaskStateV2_Pending])),
-			zap.Int("inProgress", len(byState[datapb.ImportTaskStateV2_InProgress])),
-			zap.Int("completed", len(byState[datapb.ImportTaskStateV2_Completed])),
-			zap.Int("failed", len(byState[datapb.ImportTaskStateV2_Failed])))
+		mlog.Info(context.TODO(), "import task stats", mlog.String("type", taskType.String()),
+			mlog.Int("pending", len(byState[datapb.ImportTaskStateV2_Pending])),
+			mlog.Int("inProgress", len(byState[datapb.ImportTaskStateV2_InProgress])),
+			mlog.Int("completed", len(byState[datapb.ImportTaskStateV2_Completed])),
+			mlog.Int("failed", len(byState[datapb.ImportTaskStateV2_Failed])))
 	}
 	tasks := manager.GetBy(WithType(PreImportTaskType))
 	logFunc(tasks, PreImportTaskType)

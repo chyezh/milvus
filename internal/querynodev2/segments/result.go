@@ -23,7 +23,6 @@ import (
 
 	"github.com/samber/lo"
 	"go.opentelemetry.io/otel"
-	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
@@ -31,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	typeutil2 "github.com/milvus-io/milvus/internal/util/typeutil"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/segcorepb"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
@@ -57,7 +56,7 @@ func ReduceSearchResults(ctx context.Context, results []*internalpb.SearchResult
 	})
 
 	if len(results) == 1 {
-		log.Debug("Shortcut return ReduceSearchResults", zap.Any("result info", info))
+		mlog.Debug(context.TODO(), "Shortcut return ReduceSearchResults", mlog.Any("result info", info))
 		return results[0], nil
 	}
 
@@ -82,33 +81,32 @@ func ReduceSearchResults(ctx context.Context, results []*internalpb.SearchResult
 			info.SetMetricType(r.MetricType)
 		}
 	}
-	log := log.Ctx(ctx)
 
 	searchResultData, err := DecodeSearchResults(ctx, results)
 	if err != nil {
-		log.Warn("shard leader decode search results errors", zap.Error(err))
+		mlog.Warn(context.TODO(), "shard leader decode search results errors", mlog.Err(err))
 		return nil, err
 	}
-	log.Debug("shard leader get valid search results", zap.Int("numbers", len(searchResultData)))
+	mlog.Debug(context.TODO(), "shard leader get valid search results", mlog.Int("numbers", len(searchResultData)))
 
 	for i, sData := range searchResultData {
-		log.Debug("reduceSearchResultData",
-			zap.Int("result No.", i),
-			zap.Int64("nq", sData.NumQueries),
-			zap.Int64("topk", sData.TopK),
-			zap.Int("ids.len", typeutil.GetSizeOfIDs(sData.Ids)),
-			zap.Int("fieldsData.len", len(sData.FieldsData)))
+		mlog.Debug(context.TODO(), "reduceSearchResultData",
+			mlog.Int("result No.", i),
+			mlog.Int64("nq", sData.NumQueries),
+			mlog.Int64("topk", sData.TopK),
+			mlog.Int("ids.len", typeutil.GetSizeOfIDs(sData.Ids)),
+			mlog.Int("fieldsData.len", len(sData.FieldsData)))
 	}
 
 	searchReduce := InitSearchReducer(info)
 	reducedResultData, err := searchReduce.ReduceSearchResultData(ctx, searchResultData, info)
 	if err != nil {
-		log.Warn("shard leader reduce errors", zap.Error(err))
+		mlog.Warn(context.TODO(), "shard leader reduce errors", mlog.Err(err))
 		return nil, err
 	}
 	searchResults, err := EncodeSearchResultData(ctx, reducedResultData, info.GetNq(), info.GetTopK(), info.GetMetricType())
 	if err != nil {
-		log.Warn("shard leader encode search result errors", zap.Error(err))
+		mlog.Warn(context.TODO(), "shard leader encode search result errors", mlog.Err(err))
 		return nil, err
 	}
 
@@ -214,7 +212,7 @@ func SelectSearchResultData(dataArray []*schemapb.SearchResultData, resultOffset
 			if sel == -1 {
 				// A bad case happens where knowhere returns distance == +/-maxFloat32
 				// by mistake.
-				log.Warn("a bad distance is found, something is wrong here!", zap.Float32("score", distance))
+				mlog.Warn(context.TODO(), "a bad distance is found, something is wrong here!", mlog.Float32("score", distance))
 			} else if typeutil.ComparePK(
 				typeutil.GetPK(dataArray[i].GetIds(), idx),
 				typeutil.GetPK(dataArray[sel].GetIds(), resultDataIdx)) {
@@ -271,10 +269,9 @@ func EncodeSearchResultData(ctx context.Context, searchResultData *schemapb.Sear
 }
 
 func MergeInternalRetrieveResult(ctx context.Context, retrieveResults []*internalpb.RetrieveResults, param *mergeParam) (*internalpb.RetrieveResults, error) {
-	log := log.Ctx(ctx)
-	log.Debug("mergeInternelRetrieveResults",
-		zap.Int64("limit", param.limit),
-		zap.Int("resultNum", len(retrieveResults)),
+	mlog.Debug(context.TODO(), "mergeInternelRetrieveResults",
+		mlog.Int64("limit", param.limit),
+		mlog.Int("resultNum", len(retrieveResults)),
 	)
 	if len(retrieveResults) == 1 {
 		return retrieveResults[0], nil
@@ -366,7 +363,7 @@ func MergeInternalRetrieveResult(ctx context.Context, retrieveResults []*interna
 	}
 
 	if skipDupCnt > 0 {
-		log.Debug("skip duplicated query result while reducing internal.RetrieveResults", zap.Int64("dupCount", skipDupCnt))
+		mlog.Debug(context.TODO(), "skip duplicated query result while reducing internal.RetrieveResults", mlog.Int64("dupCount", skipDupCnt))
 	}
 
 	return ret, nil
@@ -390,10 +387,9 @@ func MergeSegcoreRetrieveResults(ctx context.Context, retrieveResults []*segcore
 	ctx, span := otel.Tracer(typeutil.QueryNodeRole).Start(ctx, "MergeSegcoreResults")
 	defer span.End()
 
-	log := log.Ctx(ctx)
-	log.Debug("mergeSegcoreRetrieveResults",
-		zap.Int64("limit", param.limit),
-		zap.Int("resultNum", len(retrieveResults)),
+	mlog.Debug(context.TODO(), "mergeSegcoreRetrieveResults",
+		mlog.Int64("limit", param.limit),
+		mlog.Int("resultNum", len(retrieveResults)),
 	)
 	var (
 		ret = &segcorepb.RetrieveResults{
@@ -413,7 +409,7 @@ func MergeSegcoreRetrieveResults(ctx context.Context, retrieveResults []*segcore
 		ret.ScannedRemoteBytes += r.GetScannedRemoteBytes()
 		ret.ScannedTotalBytes += r.GetScannedTotalBytes()
 		if r == nil || len(r.GetOffset()) == 0 || size == 0 {
-			log.Debug("filter out invalid retrieve result")
+			mlog.Debug(context.TODO(), "filter out invalid retrieve result")
 			continue
 		}
 		tr, err := NewTimestampedRetrieveResult(r)
@@ -498,7 +494,7 @@ func MergeSegcoreRetrieveResults(ctx context.Context, retrieveResults []*segcore
 	}
 
 	if skipDupCnt > 0 {
-		log.Debug("skip duplicated query result while reducing segcore.RetrieveResults", zap.Int64("dupCount", skipDupCnt))
+		mlog.Debug(context.TODO(), "skip duplicated query result while reducing segcore.RetrieveResults", mlog.Int64("dupCount", skipDupCnt))
 	}
 
 	if !plan.IsIgnoreNonPk() {

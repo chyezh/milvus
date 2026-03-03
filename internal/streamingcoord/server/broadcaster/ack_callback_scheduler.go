@@ -7,16 +7,15 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
 
 // newAckCallbackScheduler creates a new ack callback scheduler.
-func newAckCallbackScheduler(logger *log.MLogger) *ackCallbackScheduler {
+func newAckCallbackScheduler(logger *mlog.Logger) *ackCallbackScheduler {
 	s := &ackCallbackScheduler{
 		notifier:           syncutil.NewAsyncTaskNotifier[struct{}](),
 		pending:            make(chan *broadcastTask, 16),
@@ -30,7 +29,7 @@ func newAckCallbackScheduler(logger *log.MLogger) *ackCallbackScheduler {
 }
 
 type ackCallbackScheduler struct {
-	log.Binder
+	mlog.Binder
 
 	notifier           *syncutil.AsyncTaskNotifier[struct{}]
 	pending            chan *broadcastTask
@@ -88,9 +87,9 @@ func (s *ackCallbackScheduler) Close() {
 func (s *ackCallbackScheduler) background() {
 	defer func() {
 		s.notifier.Finish(struct{}{})
-		s.Logger().Info("ack scheduler background exit")
+		s.Logger().Info(nil, "ack scheduler background exit")
 	}()
-	s.Logger().Info("ack scheduler background start")
+	s.Logger().Info(nil, "ack scheduler background start")
 
 	// it's weired to find that FastLock may be failure even if there's no resource-key locked,
 	// also see: #45285
@@ -132,7 +131,7 @@ func (s *ackCallbackScheduler) triggerAckCallback() {
 	for _, task := range s.pendingAckedTasks {
 		g, err := s.rkLocker.FastLock(task.Header().ResourceKeys.Collect()...)
 		if err != nil {
-			s.Logger().Warn("lock is occupied, delay the ack callback", zap.Uint64("broadcastID", task.Header().BroadcastID), zap.Error(err))
+			s.Logger().Warn(nil, "lock is occupied, delay the ack callback", mlog.Uint64("broadcastID", task.Header().BroadcastID), mlog.Err(err))
 			pendingTasks = append(pendingTasks, task)
 			continue
 		}
@@ -144,7 +143,7 @@ func (s *ackCallbackScheduler) triggerAckCallback() {
 
 // doAckCallback executes the ack callback.
 func (s *ackCallbackScheduler) doAckCallback(bt *broadcastTask, g *lockGuards) (err error) {
-	logger := s.Logger().With(zap.Uint64("broadcastID", bt.Header().BroadcastID))
+	logger := s.Logger().With(mlog.Uint64("broadcastID", bt.Header().BroadcastID))
 	defer func() {
 		s.rkLockerMu.Lock()
 		g.Unlock()
@@ -152,16 +151,16 @@ func (s *ackCallbackScheduler) doAckCallback(bt *broadcastTask, g *lockGuards) (
 
 		s.triggerChan <- struct{}{}
 		if err == nil {
-			logger.Info("execute ack callback done")
+			logger.Info(nil, "execute ack callback done")
 		} else {
-			logger.Warn("execute ack callback failed", zap.Error(err))
+			logger.Warn(nil, "execute ack callback failed", mlog.Err(err))
 		}
 	}()
-	logger.Info("start to execute ack callback")
+	logger.Info(nil, "start to execute ack callback")
 	if err := bt.BlockUntilAllAck(s.notifier.Context()); err != nil {
 		return err
 	}
-	logger.Debug("all vchannels are acked")
+	logger.Debug(nil, "all vchannels are acked")
 
 	msg, result := bt.BroadcastResult()
 	makeMap := make(map[string]*message.AppendResult, len(result))
@@ -179,7 +178,7 @@ func (s *ackCallbackScheduler) doAckCallback(bt *broadcastTask, g *lockGuards) (
 	}
 	bt.ObserveAckCallbackDone()
 
-	logger.Debug("ack callback done")
+	logger.Debug(nil, "ack callback done")
 	if err := bt.MarkAckCallbackDone(s.notifier.Context()); err != nil {
 		// The catalog is reliable to write, so we can mark the ack callback done without retrying.
 		return err
@@ -202,10 +201,10 @@ func (s *ackCallbackScheduler) callMessageAckCallbackUntilDone(ctx context.Conte
 			return nil
 		}
 		nextInterval := backoff.NextBackOff()
-		s.Logger().Warn("failed to call message ack callback, wait for retry...",
-			log.FieldMessage(msg),
-			zap.Duration("nextInterval", nextInterval),
-			zap.Error(err))
+		s.Logger().Warn(nil, "failed to call message ack callback, wait for retry...",
+			mlog.FieldMessage(msg),
+			mlog.Duration("nextInterval", nextInterval),
+			mlog.Err(err))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

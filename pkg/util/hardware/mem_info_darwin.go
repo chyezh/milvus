@@ -18,10 +18,10 @@
 package hardware
 
 import (
+	"context"
 	"github.com/shirou/gopsutil/v3/mem"
-	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 )
 
 // GetUsedMemoryCount returns the memory usage in bytes.
@@ -29,8 +29,8 @@ func GetUsedMemoryCount() uint64 {
 	// not in container, calculate by `gopsutil`
 	stats, err := mem.VirtualMemory()
 	if err != nil {
-		log.Warn("failed to get memory usage count",
-			zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to get memory usage count",
+			mlog.Err(err))
 		return 0
 	}
 

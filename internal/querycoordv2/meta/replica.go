@@ -1,13 +1,13 @@
 package meta
 
 import (
+	"context"
 	"sort"
 
-	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -534,9 +534,9 @@ func (replica *mutableReplica) allocateInsufficientNodes(channelInfos map[string
 			updatedNodes = append(updatedNodes, allocatedNodes...)
 			replica.replicaPB.ChannelNodeInfos[channelName].RwNodes = updatedNodes
 		}
-		log.Info("channel exclusive node list",
-			zap.String("channelName", channelName),
-			zap.Int64s("nodes", replica.replicaPB.ChannelNodeInfos[channelName].RwNodes))
+		mlog.Info(context.TODO(), "channel exclusive node list",
+			mlog.String("channelName", channelName),
+			mlog.Int64s("nodes", replica.replicaPB.ChannelNodeInfos[channelName].RwNodes))
 	}
 }
 

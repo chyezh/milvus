@@ -17,6 +17,7 @@
 package storage
 
 import (
+	"context"
 	"bytes"
 	"encoding/binary"
 	"fmt"
@@ -29,13 +30,12 @@ import (
 	"github.com/apache/arrow/go/v17/arrow/array"
 	"github.com/apache/arrow/go/v17/arrow/memory"
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/hook"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metautil"
@@ -341,12 +341,12 @@ func (bsw *BinlogStreamWriter) Finalize() (*Blob, error) {
 		if err != nil {
 			return nil, err
 		}
-		log.Debug("Binlog stream writer encrypted cipher text",
-			zap.Int64("collectionID", bsw.collectionID),
-			zap.Int64("segmentID", bsw.segmentID),
-			zap.Int64("fieldID", bsw.fieldSchema.FieldID),
-			zap.Int("plain size", tmpBuf.Len()),
-			zap.Int("cipher size", len(cipherText)),
+		mlog.Debug(context.TODO(), "Binlog stream writer encrypted cipher text",
+			mlog.Int64("collectionID", bsw.collectionID),
+			mlog.Int64("segmentID", bsw.segmentID),
+			mlog.Int64("fieldID", bsw.fieldSchema.FieldID),
+			mlog.Int("plain size", tmpBuf.Len()),
+			mlog.Int("cipher size", len(cipherText)),
 		)
 		if err := binary.Write(&b, common.Endian, cipherText); err != nil {
 			return nil, err

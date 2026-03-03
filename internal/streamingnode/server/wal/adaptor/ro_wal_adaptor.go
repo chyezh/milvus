@@ -4,13 +4,12 @@ import (
 	"context"
 	"time"
 
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
@@ -21,7 +20,7 @@ import (
 var _ wal.WAL = (*roWALAdaptorImpl)(nil)
 
 type roWALAdaptorImpl struct {
-	log.Binder
+	mlog.Binder
 	lifetime        *typeutil.Lifetime
 	availableCtx    context.Context
 	availableCancel context.CancelFunc
@@ -117,7 +116,7 @@ func (w *roWALAdaptorImpl) checkReadOptWALName(opts wal.ReadOption) error {
 		if msgID != nil {
 			msgWALName := message.WALName(msgID.WALName)
 			if msgWALName != currentWALName {
-				w.Logger().Info("WAL name mismatch", zap.String("msgIDWALName", msgWALName.String()), zap.String("currentWALName", currentWALName.String()))
+				w.Logger().Info(nil, "WAL name mismatch", mlog.String("msgIDWALName", msgWALName.String()), mlog.String("currentWALName", currentWALName.String()))
 				return status.NewWALNameMismatchError(currentWALName.String(), msgWALName.String())
 			}
 		}
@@ -138,26 +137,26 @@ func (w *roWALAdaptorImpl) Available() <-chan struct{} {
 // Close overrides Scanner Close function.
 func (w *roWALAdaptorImpl) Close() {
 	// begin to close the wal.
-	w.Logger().Info("wal begin to close...")
+	w.Logger().Info(nil, "wal begin to close...")
 	w.lifetime.SetState(typeutil.LifetimeStateStopped)
 	w.forceCancelAfterGracefulTimeout()
 	w.lifetime.Wait()
 
-	w.Logger().Info("wal begin to close scanners...")
+	w.Logger().Info(nil, "wal begin to close scanners...")
 
 	// close all wal instances.
 	w.scanners.Range(func(id int64, s wal.Scanner) bool {
 		s.Close()
-		log.Info("close scanner by wal adaptor", zap.Int64("id", id), zap.Any("channel", w.Channel()))
+		mlog.Info(context.TODO(), "close scanner by wal adaptor", mlog.Int64("id", id), mlog.Any("channel", w.Channel()))
 		return true
 	})
 
-	w.Logger().Info("scanner close done, close inner wal...")
+	w.Logger().Info(nil, "scanner close done, close inner wal...")
 	w.roWALImpls.Close()
 
-	w.Logger().Info("call wal cleanup function...")
+	w.Logger().Info(nil, "call wal cleanup function...")
 	w.cleanup()
-	w.Logger().Info("wal closed")
+	w.Logger().Info(nil, "wal closed")
 
 	// close all metrics.
 	w.scanMetrics.Close()

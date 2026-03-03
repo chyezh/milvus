@@ -21,11 +21,10 @@ import (
 	"io"
 
 	"github.com/apache/arrow/go/v17/arrow/array"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -98,7 +97,7 @@ func readDeltalogsV1(
 		}
 	}
 
-	log.Ctx(ctx).Info("read V1 deltalogs", zap.Int("entries", len(allPks)))
+	mlog.Info(ctx, "read V1 deltalogs", mlog.Int("entries", len(allPks)))
 	return allPks, allTss, nil
 }
 
@@ -120,7 +119,7 @@ func readDeltalogsV2(
 		return nil, nil, err
 	}
 
-	log.Ctx(ctx).Info("read V2 deltalogs from manifest", zap.Int("entries", len(pks)))
+	mlog.Info(ctx, "read V2 deltalogs from manifest", mlog.Int("entries", len(pks)))
 	return pks, tss, nil
 }
 

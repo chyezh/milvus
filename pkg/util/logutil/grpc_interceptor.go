@@ -6,13 +6,11 @@ import (
 
 	grpc_middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	"go.opentelemetry.io/otel/trace"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 )
 
 const (
@@ -44,24 +42,11 @@ func withLevelAndTrace(ctx context.Context) context.Context {
 		levels := GetMetadata(md, logLevelRPCMetaKey, logLevelRPCMetaKeyLegacy)
 		// get log level
 		if len(levels) >= 1 {
-			level := zapcore.DebugLevel
+			level := mlog.DebugLevel
 			if err := level.UnmarshalText([]byte(levels[0])); err != nil {
 				newctx = ctx
 			} else {
-				switch level {
-				case zapcore.DebugLevel:
-					newctx = log.WithDebugLevel(ctx)
-				case zapcore.InfoLevel:
-					newctx = log.WithInfoLevel(ctx)
-				case zapcore.WarnLevel:
-					newctx = log.WithWarnLevel(ctx)
-				case zapcore.ErrorLevel:
-					newctx = log.WithErrorLevel(ctx)
-				case zapcore.FatalLevel:
-					newctx = log.WithFatalLevel(ctx)
-				default:
-					newctx = ctx
-				}
+				newctx = ctx
 			}
 			// inject log level to outgoing meta
 			newctx = metadata.AppendToOutgoingContext(newctx, logLevelRPCMetaKey, level.String())
@@ -76,14 +61,14 @@ func withLevelAndTrace(ctx context.Context) context.Context {
 			traceID, err = trace.TraceIDFromHex(requestID[0])
 			if err != nil {
 				// set request id to custom field
-				newctx = log.WithFields(newctx, zap.String(clientRequestIDKey, requestID[0]))
+				newctx = mlog.WithFields(newctx, mlog.String(clientRequestIDKey, requestID[0]))
 			}
 		}
 	}
 	// client request unixsecs
 	requestUnixmsec, ok := GetClientReqUnixmsecGrpc(newctx)
 	if ok {
-		newctx = log.WithFields(newctx, zap.Int64("clientRequestUnixmsec", requestUnixmsec))
+		newctx = mlog.WithFields(newctx, mlog.Int64("clientRequestUnixmsec", requestUnixmsec))
 	}
 
 	// traceID not valid, generate a new one
@@ -91,7 +76,7 @@ func withLevelAndTrace(ctx context.Context) context.Context {
 		traceID = trace.SpanContextFromContext(newctx).TraceID()
 	}
 	if traceID.IsValid() {
-		newctx = log.WithTraceID(newctx, traceID.String())
+		newctx = mlog.WithFields(newctx, mlog.FieldTraceID(traceID.String()))
 	}
 	return newctx
 }

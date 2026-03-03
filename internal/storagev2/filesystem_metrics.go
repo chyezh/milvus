@@ -27,12 +27,12 @@ package storagev2
 import "C"
 
 import (
+	"context"
 	"fmt"
 	"unsafe"
 
-	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -196,7 +196,7 @@ func PublishFilesystemMetricsWithConfig(storageConfig *indexpb.StorageConfig) (*
 func PublishCachedFilesystemMetrics(key string) (*FilesystemMetrics, error) {
 	metricSnapshot, err := GetCachedFilesystemMetrics(key)
 	if err != nil {
-		log.Warn("failed to get cached filesystem metrics", zap.String("key", key), zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to get cached filesystem metrics", mlog.String("key", key), mlog.Err(err))
 		return nil, err
 	}
 

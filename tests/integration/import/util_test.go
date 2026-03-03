@@ -34,13 +34,12 @@ import (
 	"github.com/samber/lo"
 	"github.com/sbinet/npyio"
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
 	pq "github.com/milvus-io/milvus/internal/util/importutilv2/parquet"
 	"github.com/milvus-io/milvus/internal/util/testutil"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -267,9 +266,9 @@ func WaitForImportDone(ctx context.Context, c *cluster.MiniClusterV3, jobID stri
 		case internalpb.ImportJobState_Failed:
 			return merr.WrapErrImportFailed(resp.GetReason())
 		default:
-			log.Info("import progress", zap.String("jobID", jobID),
-				zap.Int64("progress", resp.GetProgress()),
-				zap.String("state", resp.GetState().String()))
+			mlog.Info(context.TODO(), "import progress", mlog.String("jobID", jobID),
+				mlog.Int64("progress", resp.GetProgress()),
+				mlog.String("state", resp.GetState().String()))
 			time.Sleep(1 * time.Second)
 		}
 	}

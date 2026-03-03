@@ -5,7 +5,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 )
 
 var _ plog.Logger = (*logger)(nil)
@@ -14,11 +14,11 @@ var _ plog.Logger = (*logger)(nil)
 // TODO: currently, pulsar client will log a huge message when logging,
 // so we only log the first msg without format the log.
 func NewLogger() plog.Logger {
-	return &logger{log.With(zap.String("component", "pulsar"))}
+	return &logger{mlog.With(mlog.String("component", "pulsar"))}
 }
 
 type logger struct {
-	inner *log.MLogger
+	inner *mlog.Logger
 }
 
 func (l *logger) SubLogger(fields plog.Fields) plog.Logger {
@@ -35,7 +35,7 @@ func (l *logger) WithField(name string, value interface{}) plog.Entry {
 }
 
 func (l *logger) WithError(err error) plog.Entry {
-	return &logger{l.inner.With(zap.Error(err))}
+	return &logger{l.inner.With(mlog.Err(err))}
 }
 
 func (l *logger) Debug(args ...interface{}) {
@@ -75,9 +75,9 @@ func (l *logger) logWithLevel(level zapcore.Level, args ...interface{}) {
 		return
 	}
 	if msg, ok := args[0].(string); ok {
-		l.inner.WithOptions(zap.AddCallerSkip(2)).Log(level, msg)
+		l.inner.Log(nil, level, msg)
 	} else {
-		l.inner.WithOptions(zap.AddCallerSkip(2)).Log(level, "unknown log message type")
+		l.inner.Log(nil, level, "unknown log message type")
 	}
 }
 
@@ -86,19 +86,19 @@ func exportFields(fields plog.Fields) []zap.Field {
 	for k, v := range fields {
 		switch v := v.(type) {
 		case string:
-			fs = append(fs, zap.String(k, v))
+			fs = append(fs, mlog.String(k, v))
 		case int:
-			fs = append(fs, zap.Int(k, v))
+			fs = append(fs, mlog.Int(k, v))
 		case bool:
-			fs = append(fs, zap.Bool(k, v))
+			fs = append(fs, mlog.Bool(k, v))
 		case float64:
-			fs = append(fs, zap.Float64(k, v))
+			fs = append(fs, mlog.Float64(k, v))
 		case []byte:
-			fs = append(fs, zap.Binary(k, v))
+			fs = append(fs, mlog.Binary(k, v))
 		case error:
-			fs = append(fs, zap.Error(v))
+			fs = append(fs, mlog.Err(v))
 		default:
-			fs = append(fs, zap.Any(k, v))
+			fs = append(fs, mlog.Any(k, v))
 		}
 	}
 	return fs

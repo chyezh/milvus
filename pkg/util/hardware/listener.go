@@ -5,9 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
-
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 )
 
 // systemMetricsWatcher is a hardware monitor that can be used to monitor hardware information.
@@ -61,14 +59,14 @@ func UnregisterSystemMetricsListener(listener *SystemMetricsListener) {
 func getSystemMetricsWatcher() *SystemMericsWatcher {
 	systemMericsWatcherOnce.Do(func() {
 		systemMetricsWatcher = NewSystemMetricsWatcher(defaultMetricMonitorInterval)
-		logger := log.With(log.FieldComponent("system-metrics"))
+		logger := mlog.With(mlog.FieldComponent("system-metrics"))
 		warningLoggerListener := &SystemMetricsListener{
 			Cooldown: 1 * time.Minute,
 			Condition: func(stats SystemMetrics, listener *SystemMetricsListener) bool {
 				return stats.UsedRatio() > 0.9
 			},
 			Callback: func(sm SystemMetrics, listener *SystemMetricsListener) {
-				logger.Warn("memory used ratio is extremely high", zap.String("memory", sm.String()), zap.Float64("usedRatio", sm.UsedRatio()))
+				logger.Warn(nil, "memory used ratio is extremely high", mlog.String("memory", sm.String()), mlog.Float64("usedRatio", sm.UsedRatio()))
 			},
 		}
 		systemMetricsWatcher.RegisterListener(warningLoggerListener)

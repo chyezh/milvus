@@ -21,9 +21,8 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
@@ -81,7 +80,7 @@ func (scheduler *Scheduler) schedule(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			log.Info("JobManager stopped")
+			mlog.Info(context.TODO(), "JobManager stopped")
 			for _, queue := range scheduler.queues {
 				close(queue)
 			}
@@ -137,28 +136,26 @@ func (scheduler *Scheduler) processQueue(collection int64, queue jobQueue) {
 }
 
 func (scheduler *Scheduler) process(job Job) {
-	log := log.Ctx(job.Context()).With(
-		zap.Int64("collectionID", job.CollectionID()))
 
 	defer func() {
-		log.Info("start to post-execute job")
+		mlog.Info(context.TODO(), "start to post-execute job")
 		job.PostExecute()
-		log.Info("job finished")
+		mlog.Info(context.TODO(), "job finished")
 		job.Done()
 	}()
 
-	log.Info("start to pre-execute job")
+	mlog.Info(context.TODO(), "start to pre-execute job")
 	err := job.PreExecute()
 	if err != nil {
-		log.Warn("failed to pre-execute job", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to pre-execute job", mlog.Err(err))
 		job.SetError(err)
 		return
 	}
 
-	log.Info("start to execute job")
+	mlog.Info(context.TODO(), "start to execute job")
 	err = job.Execute()
 	if err != nil {
-		log.Warn("failed to execute job", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to execute job", mlog.Err(err))
 		job.SetError(err)
 	}
 }

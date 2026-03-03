@@ -23,13 +23,12 @@ import (
 	"time"
 
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/datacoord/broker"
-	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/taskcommon"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
@@ -146,14 +145,14 @@ func NewCopySegmentChecker(
 // Tick interval: Configured by CopySegmentCheckInterval parameter (default: 2 seconds)
 func (c *copySegmentChecker) Start() {
 	checkInterval := Params.DataCoordCfg.CopySegmentCheckInterval.GetAsDuration(time.Second)
-	log.Info("start copy segment checker", zap.Duration("checkInterval", checkInterval))
+	mlog.Info(context.TODO(), "start copy segment checker", mlog.Duration("checkInterval", checkInterval))
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-c.closeChan:
-			log.Info("copy segment checker exited")
+			mlog.Info(context.TODO(), "copy segment checker exited")
 			return
 		case <-ticker.C:
 			// Fetch all jobs from metadata
@@ -218,7 +217,7 @@ func (c *copySegmentChecker) LogJobStats(jobs []CopySegmentJob) {
 		stateNum[state] = num
 		metrics.CopySegmentJobs.WithLabelValues(state).Set(float64(num))
 	}
-	log.Info("copy segment job stats", zap.Any("stateNum", stateNum))
+	mlog.Info(context.TODO(), "copy segment job stats", mlog.Any("stateNum", stateNum))
 }
 
 // LogTaskStats reports task statistics grouped by state.
@@ -244,9 +243,9 @@ func (c *copySegmentChecker) LogTaskStats() {
 	completed := len(byState[datapb.CopySegmentTaskState_CopySegmentTaskCompleted])
 	failed := len(byState[datapb.CopySegmentTaskState_CopySegmentTaskFailed])
 
-	log.Info("copy segment task stats",
-		zap.Int("pending", pending), zap.Int("inProgress", inProgress),
-		zap.Int("completed", completed), zap.Int("failed", failed))
+	mlog.Info(context.TODO(), "copy segment task stats",
+		mlog.Int("pending", pending), mlog.Int("inProgress", inProgress),
+		mlog.Int("completed", completed), mlog.Int("failed", failed))
 
 	// Report metrics
 	metrics.CopySegmentTasks.WithLabelValues(datapb.CopySegmentTaskState_CopySegmentTaskPending.String()).Set(float64(pending))
@@ -289,8 +288,6 @@ func (c *copySegmentChecker) LogTaskStats() {
 //   - Safe to call multiple times - only creates tasks on first call
 //   - Subsequent calls return early if tasks already exist
 func (c *copySegmentChecker) checkPendingJob(job CopySegmentJob) {
-	log := log.With(zap.Int64("jobID", job.GetJobId()))
-
 	// Step 1: Check if tasks already created (idempotent operation)
 	tasks := c.copyMeta.GetTasksByJobID(c.ctx, job.GetJobId())
 	if len(tasks) > 0 {
@@ -300,11 +297,11 @@ func (c *copySegmentChecker) checkPendingJob(job CopySegmentJob) {
 	// Step 2: Validate job has segment mappings
 	idMappings := job.GetIdMappings()
 	if len(idMappings) == 0 {
-		log.Warn("no id mappings to copy, mark job as completed")
+		mlog.Warn(context.TODO(), "no id mappings to copy, mark job as completed")
 		if err := c.copyMeta.UpdateJobStateAndReleaseRef(c.ctx, job.GetJobId(),
 			UpdateCopyJobState(datapb.CopySegmentJobState_CopySegmentJobCompleted),
 			UpdateCopyJobReason("no segments to copy")); err != nil {
-			log.Error("failed to update empty job state to Completed", zap.Error(err))
+			mlog.Error(context.TODO(), "failed to update empty job state to Completed", mlog.Err(err))
 		}
 		return
 	}
@@ -317,7 +314,7 @@ func (c *copySegmentChecker) checkPendingJob(job CopySegmentJob) {
 	for i, group := range groups {
 		taskID, err := c.alloc.AllocID(c.ctx)
 		if err != nil {
-			log.Warn("failed to alloc task ID", zap.Error(err))
+			mlog.Warn(context.TODO(), "failed to alloc task ID", mlog.Err(err))
 			return
 		}
 
@@ -344,16 +341,16 @@ func (c *copySegmentChecker) checkPendingJob(job CopySegmentJob) {
 		// Save task to metadata store
 		err = c.copyMeta.AddTask(c.ctx, task)
 		if err != nil {
-			log.Warn("failed to add copy segment task",
-				zap.Int("groupIndex", i),
-				zap.Int("segmentCount", len(group)),
-				zap.Error(err))
+			mlog.Warn(context.TODO(), "failed to add copy segment task",
+				mlog.Int("groupIndex", i),
+				mlog.Int("segmentCount", len(group)),
+				mlog.Err(err))
 			return
 		}
-		log.Info("created copy segment task",
-			zap.Int64("taskID", taskID),
-			zap.Int("groupIndex", i),
-			zap.Int("segmentCount", len(group)))
+		mlog.Info(context.TODO(), "created copy segment task",
+			mlog.Int64("taskID", taskID),
+			mlog.Int("groupIndex", i),
+			mlog.Int("segmentCount", len(group)))
 	}
 
 	// Step 5: Update job state to Executing
@@ -361,12 +358,12 @@ func (c *copySegmentChecker) checkPendingJob(job CopySegmentJob) {
 		UpdateCopyJobState(datapb.CopySegmentJobState_CopySegmentJobExecuting),
 		UpdateCopyJobProgress(0, int64(len(idMappings))))
 	if err != nil {
-		log.Warn("failed to update job state to Executing", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to update job state to Executing", mlog.Err(err))
 		return
 	}
-	log.Info("copy segment job started",
-		zap.Int("taskCount", len(groups)),
-		zap.Int("totalSegments", len(idMappings)))
+	mlog.Info(context.TODO(), "copy segment job started",
+		mlog.Int("taskCount", len(groups)),
+		mlog.Int("totalSegments", len(idMappings)))
 }
 
 // ============================================================================
@@ -403,8 +400,6 @@ func (c *copySegmentChecker) checkPendingJob(job CopySegmentJob) {
 //   - Updates all target segments to Flushed state (makes them queryable)
 //   - Records completion timestamp and metrics
 func (c *copySegmentChecker) checkCopyingJob(job CopySegmentJob) {
-	log := log.With(zap.Int64("jobID", job.GetJobId()))
-
 	// Step 1: Fetch all tasks for this job
 	tasks := c.copyMeta.GetTasksByJobID(c.ctx, job.GetJobId())
 	totalTasks := len(tasks)
@@ -429,34 +424,34 @@ func (c *copySegmentChecker) checkCopyingJob(job CopySegmentJob) {
 		err := c.copyMeta.UpdateJob(c.ctx, job.GetJobId(),
 			UpdateCopyJobProgress(copiedSegments, totalSegments))
 		if err != nil {
-			log.Warn("failed to update job progress", zap.Error(err))
+			mlog.Warn(context.TODO(), "failed to update job progress", mlog.Err(err))
 		} else {
-			log.Debug("updated job progress",
-				zap.Int64("copiedSegments", copiedSegments),
-				zap.Int64("totalSegments", totalSegments),
-				zap.Int("completedTasks", completedTasks),
-				zap.Int("totalTasks", totalTasks))
+			mlog.Debug(context.TODO(), "updated job progress",
+				mlog.Int64("copiedSegments", copiedSegments),
+				mlog.Int64("totalSegments", totalSegments),
+				mlog.Int("completedTasks", completedTasks),
+				mlog.Int("totalTasks", totalTasks))
 		}
 	}
 
 	// Step 4: Check for failures (fail-fast)
 	if failedTasks > 0 {
-		log.Warn("copy segment job has failed tasks",
-			zap.Int("failedTasks", failedTasks),
-			zap.Int("totalTasks", totalTasks))
+		mlog.Warn(context.TODO(), "copy segment job has failed tasks",
+			mlog.Int("failedTasks", failedTasks),
+			mlog.Int("totalTasks", totalTasks))
 		if err := c.copyMeta.UpdateJobStateAndReleaseRef(c.ctx, job.GetJobId(),
 			UpdateCopyJobState(datapb.CopySegmentJobState_CopySegmentJobFailed),
 			UpdateCopyJobReason(fmt.Sprintf("%d/%d tasks failed", failedTasks, totalTasks))); err != nil {
-			log.Error("failed to update job state to Failed", zap.Error(err))
+			mlog.Error(context.TODO(), "failed to update job state to Failed", mlog.Err(err))
 		}
 		return
 	}
 
 	// Step 5: Wait for all tasks to complete
 	if completedTasks < totalTasks {
-		log.Debug("waiting for copy segment tasks to complete",
-			zap.Int("completed", completedTasks),
-			zap.Int("total", totalTasks))
+		mlog.Debug(context.TODO(), "waiting for copy segment tasks to complete",
+			mlog.Int("completed", completedTasks),
+			mlog.Int("total", totalTasks))
 		return
 	}
 
@@ -473,7 +468,7 @@ func (c *copySegmentChecker) checkCopyingJob(job CopySegmentJob) {
 	}
 
 	c.finishJob(job, totalRows)
-	log.Info("all copy segment tasks completed, job finished")
+	mlog.Info(context.TODO(), "all copy segment tasks completed, job finished")
 }
 
 // finishJob completes the job by updating segments to Flushed and marking job as Completed.
@@ -496,8 +491,6 @@ func (c *copySegmentChecker) checkCopyingJob(job CopySegmentJob) {
 //   - job: The job to finish
 //   - totalRows: Total row count across all copied segments
 func (c *copySegmentChecker) finishJob(job CopySegmentJob, totalRows int64) {
-	log := log.With(zap.Int64("jobID", job.GetJobId()))
-
 	// Step 1: Collect all target segment IDs from task ID mappings
 	tasks := c.copyMeta.GetTasksByJobID(c.ctx, job.GetJobId())
 	targetSegmentIDs := make([]int64, 0)
@@ -515,13 +508,13 @@ func (c *copySegmentChecker) finishJob(job CopySegmentJob, totalRows int64) {
 			if segment != nil && segment.GetState() != commonpb.SegmentState_Flushed {
 				op := UpdateStatusOperator(segID, commonpb.SegmentState_Flushed)
 				if err := c.meta.UpdateSegmentsInfo(c.ctx, op); err != nil {
-					log.Error("failed to update segment state to Flushed",
-						zap.Int64("segmentID", segID),
-						zap.Error(err))
+					mlog.Error(context.TODO(), "failed to update segment state to Flushed",
+						mlog.Int64("segmentID", segID),
+						mlog.Err(err))
 					flushFailures++
 				} else {
-					log.Info("updated segment state to Flushed",
-						zap.Int64("segmentID", segID))
+					mlog.Info(context.TODO(), "updated segment state to Flushed",
+						mlog.Int64("segmentID", segID))
 				}
 			}
 		}
@@ -530,13 +523,13 @@ func (c *copySegmentChecker) finishJob(job CopySegmentJob, totalRows int64) {
 	// Step 3: Fail the job if any segment flush failed (prevents silent data availability issues)
 	if flushFailures > 0 {
 		reason := fmt.Sprintf("%d/%d segments failed to flush to Flushed state", flushFailures, len(targetSegmentIDs))
-		log.Error("finishJob: failing job due to segment flush failures",
-			zap.Int("flushFailures", flushFailures),
-			zap.Int("totalSegments", len(targetSegmentIDs)))
+		mlog.Error(context.TODO(), "finishJob: failing job due to segment flush failures",
+			mlog.Int("flushFailures", flushFailures),
+			mlog.Int("totalSegments", len(targetSegmentIDs)))
 		if err := c.copyMeta.UpdateJobStateAndReleaseRef(c.ctx, job.GetJobId(),
 			UpdateCopyJobState(datapb.CopySegmentJobState_CopySegmentJobFailed),
 			UpdateCopyJobReason(reason)); err != nil {
-			log.Error("failed to update job state to Failed after flush failures", zap.Error(err))
+			mlog.Error(context.TODO(), "failed to update job state to Failed after flush failures", mlog.Err(err))
 		}
 		return
 	}
@@ -548,17 +541,17 @@ func (c *copySegmentChecker) finishJob(job CopySegmentJob, totalRows int64) {
 		UpdateCopyJobCompleteTs(completeTs),
 		UpdateCopyJobTotalRows(totalRows))
 	if err != nil {
-		log.Error("failed to update job state to Completed", zap.Error(err))
+		mlog.Error(context.TODO(), "failed to update job state to Completed", mlog.Err(err))
 		return
 	}
 
 	// Step 4: Record metrics
 	totalDuration := job.GetTR().ElapseSpan()
 	metrics.CopySegmentJobLatency.Observe(float64(totalDuration.Milliseconds()))
-	log.Info("copy segment job completed",
-		zap.Int64("totalRows", totalRows),
-		zap.Int("targetSegments", len(targetSegmentIDs)),
-		zap.Duration("totalDuration", totalDuration))
+	mlog.Info(context.TODO(), "copy segment job completed",
+		mlog.Int64("totalRows", totalRows),
+		mlog.Int("targetSegments", len(targetSegmentIDs)),
+		mlog.Duration("totalDuration", totalDuration))
 }
 
 // ============================================================================
@@ -581,8 +574,6 @@ func (c *copySegmentChecker) finishJob(job CopySegmentJob, totalRows int64) {
 //   - Enables inspector to trigger cleanup (DropCopySegment)
 //   - Maintains consistent state across job and tasks
 func (c *copySegmentChecker) checkFailedJob(job CopySegmentJob) {
-	log := log.With(zap.Int64("jobID", job.GetJobId()))
-
 	// Find all Pending/InProgress tasks
 	allTasks := c.copyMeta.GetTasksByJobID(c.ctx, job.GetJobId())
 	tasks := lo.Filter(allTasks, func(t CopySegmentTask, _ int) bool {
@@ -594,9 +585,9 @@ func (c *copySegmentChecker) checkFailedJob(job CopySegmentJob) {
 		return
 	}
 
-	log.Warn("copy segment job has failed, marking all tasks as failed",
-		zap.String("reason", job.GetReason()),
-		zap.Int("taskCount", len(tasks)))
+	mlog.Warn(context.TODO(), "copy segment job has failed, marking all tasks as failed",
+		mlog.String("reason", job.GetReason()),
+		mlog.Int("taskCount", len(tasks)))
 
 	// Mark each task as failed
 	for _, task := range tasks {
@@ -604,8 +595,8 @@ func (c *copySegmentChecker) checkFailedJob(job CopySegmentJob) {
 			UpdateCopyTaskState(datapb.CopySegmentTaskState_CopySegmentTaskFailed),
 			UpdateCopyTaskReason(job.GetReason()))
 		if err != nil {
-			log.Warn("failed to update task state to failed",
-				WrapCopySegmentTaskLog(task, zap.Error(err))...)
+			mlog.Warn(context.TODO(), "failed to update task state to failed",
+				WrapCopySegmentTaskLog(task, mlog.Err(err))...)
 		}
 	}
 }
@@ -636,14 +627,14 @@ func (c *copySegmentChecker) tryTimeoutJob(job CopySegmentJob) {
 		return
 	}
 
-	log.Warn("copy segment job timeout",
-		zap.Int64("jobID", job.GetJobId()),
-		zap.Time("timeoutTime", timeoutTime))
+	mlog.Warn(context.TODO(), "copy segment job timeout",
+		mlog.Int64("jobID", job.GetJobId()),
+		mlog.Time("timeoutTime", timeoutTime))
 	if err := c.copyMeta.UpdateJobStateAndReleaseRef(c.ctx, job.GetJobId(),
 		UpdateCopyJobState(datapb.CopySegmentJobState_CopySegmentJobFailed),
 		UpdateCopyJobReason("timeout")); err != nil {
-		log.Error("failed to update timed-out job state to Failed",
-			zap.Int64("jobID", job.GetJobId()), zap.Error(err))
+		mlog.Error(context.TODO(), "failed to update timed-out job state to Failed",
+			mlog.Int64("jobID", job.GetJobId()), mlog.Err(err))
 	}
 }
 
@@ -677,10 +668,9 @@ func (c *copySegmentChecker) checkGC(job CopySegmentJob) {
 
 	cleanupTime := tsoutil.PhysicalTime(job.GetCleanupTs())
 	if time.Now().After(cleanupTime) {
-		log := log.With(zap.Int64("jobID", job.GetJobId()))
 		GCRetention := Params.DataCoordCfg.CopySegmentTaskRetention.GetAsDuration(time.Second)
-		log.Info("copy segment job has reached GC retention",
-			zap.Time("cleanupTime", cleanupTime), zap.Duration("GCRetention", GCRetention))
+		mlog.Info(context.TODO(), "copy segment job has reached GC retention",
+			mlog.Time("cleanupTime", cleanupTime), mlog.Duration("GCRetention", GCRetention))
 
 		tasks := c.copyMeta.GetTasksByJobID(c.ctx, job.GetJobId())
 		shouldRemoveJob := true
@@ -713,12 +703,12 @@ func (c *copySegmentChecker) checkGC(job CopySegmentJob) {
 			// Remove task from metadata
 			err := c.copyMeta.RemoveTask(c.ctx, task.GetTaskId())
 			if err != nil {
-				log.Warn("failed to remove copy segment task during GC",
-					WrapCopySegmentTaskLog(task, zap.Error(err))...)
+				mlog.Warn(context.TODO(), "failed to remove copy segment task during GC",
+					WrapCopySegmentTaskLog(task, mlog.Err(err))...)
 				shouldRemoveJob = false
 				continue
 			}
-			log.Info("copy segment task removed", WrapCopySegmentTaskLog(task)...)
+			mlog.Info(context.TODO(), "copy segment task removed", WrapCopySegmentTaskLog(task)...)
 		}
 
 		// Remove job only if all tasks removed
@@ -728,9 +718,9 @@ func (c *copySegmentChecker) checkGC(job CopySegmentJob) {
 
 		err := c.copyMeta.RemoveJob(c.ctx, job.GetJobId())
 		if err != nil {
-			log.Warn("failed to remove copy segment job", zap.Error(err))
+			mlog.Warn(context.TODO(), "failed to remove copy segment job", mlog.Err(err))
 			return
 		}
-		log.Info("copy segment job removed")
+		mlog.Info(context.TODO(), "copy segment job removed")
 	}
 }

@@ -19,9 +19,8 @@ package datacoord
 import (
 	"context"
 
-	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 )
 
@@ -29,36 +28,31 @@ import (
 // ID allocation happens inside SnapshotManager.CreateSnapshot.
 func (s *DDLCallbacks) createSnapshotV2AckCallback(ctx context.Context, result message.BroadcastResultCreateSnapshotMessageV2) error {
 	header := result.Message.Header()
-	log := log.Ctx(ctx).With(
-		zap.Int64("collectionID", header.CollectionId),
-		zap.String("snapshotName", header.Name),
-	)
-	log.Info("createSnapshotV2AckCallback received")
+	mlog.Info(context.TODO(), "createSnapshotV2AckCallback received")
 
 	// Create snapshot - ID is allocated inside CreateSnapshot
 	snapshotID, err := s.snapshotManager.CreateSnapshot(ctx, header.CollectionId, header.Name, header.Description)
 	if err != nil {
-		log.Error("failed to create snapshot via DDL callback", zap.Error(err))
+		mlog.Error(context.TODO(), "failed to create snapshot via DDL callback", mlog.Err(err))
 		return err
 	}
 
-	log.Info("snapshot created successfully via DDL callback", zap.Int64("snapshotID", snapshotID))
+	mlog.Info(context.TODO(), "snapshot created successfully via DDL callback", mlog.Int64("snapshotID", snapshotID))
 	return nil
 }
 
 // dropSnapshotV2AckCallback handles the callback for DropSnapshot DDL message.
 func (s *DDLCallbacks) dropSnapshotV2AckCallback(ctx context.Context, result message.BroadcastResultDropSnapshotMessageV2) error {
 	header := result.Message.Header()
-	log := log.Ctx(ctx).With(zap.String("snapshotName", header.Name))
-	log.Info("dropSnapshotV2AckCallback received")
+	mlog.Info(context.TODO(), "dropSnapshotV2AckCallback received")
 
 	// Delete snapshot using SnapshotManager interface (idempotent)
 	if err := s.snapshotManager.DropSnapshot(ctx, header.Name); err != nil {
-		log.Error("failed to drop snapshot via DDL callback", zap.Error(err))
+		mlog.Error(context.TODO(), "failed to drop snapshot via DDL callback", mlog.Err(err))
 		return err
 	}
 
-	log.Info("snapshot dropped successfully via DDL callback")
+	mlog.Info(context.TODO(), "snapshot dropped successfully via DDL callback")
 	return nil
 }
 
@@ -68,21 +62,16 @@ func (s *DDLCallbacks) dropSnapshotV2AckCallback(ctx context.Context, result mes
 // NOTE: jobID is pre-allocated in RestoreSnapshot and passed via WAL message for idempotency.
 func (s *DDLCallbacks) restoreSnapshotV2AckCallback(ctx context.Context, result message.BroadcastResultRestoreSnapshotMessageV2) error {
 	header := result.Message.Header()
-	log := log.Ctx(ctx).With(
-		zap.String("snapshotName", header.SnapshotName),
-		zap.Int64("collectionID", header.CollectionId),
-		zap.Int64("jobID", header.JobId),
-	)
-	log.Info("restoreSnapshotV2AckCallback received")
+	mlog.Info(context.TODO(), "restoreSnapshotV2AckCallback received")
 
 	// Restore data (create copy segment job)
 	// Use the pre-allocated jobID from the WAL message for idempotency
 	jobID, err := s.snapshotManager.RestoreData(ctx, header.SnapshotName, header.CollectionId, header.JobId)
 	if err != nil {
-		log.Error("failed to restore data", zap.Error(err))
+		mlog.Error(context.TODO(), "failed to restore data", mlog.Err(err))
 		return err
 	}
 
-	log.Info("restore snapshot callback completed, job created for async execution", zap.Int64("jobID", jobID))
+	mlog.Info(context.TODO(), "restore snapshot callback completed, job created for async execution", mlog.Int64("jobID", jobID))
 	return nil
 }

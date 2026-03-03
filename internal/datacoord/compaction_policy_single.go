@@ -22,11 +22,10 @@ import (
 	"time"
 
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 )
@@ -60,13 +59,13 @@ func (policy *singleCompactionPolicy) Trigger(ctx context.Context) (map[Compacti
 			continue
 		}
 		if collection.IsExternal() {
-			log.Ctx(ctx).Info("skip single compaction trigger for external collection", zap.Int64("collectionID", collection.ID))
+			mlog.Info(ctx, "skip single compaction trigger for external collection", mlog.Int64("collectionID", collection.ID))
 			continue
 		}
 		collectionViews, collectionSortViews, _, err := policy.triggerOneCollection(ctx, collection.ID, false)
 		if err != nil {
 			// not throw this error because no need to fail because of one collection
-			log.Warn("fail to trigger single compaction", zap.Int64("collectionID", collection.ID), zap.Error(err))
+			mlog.Warn(context.TODO(), "fail to trigger single compaction", mlog.Int64("collectionID", collection.ID), mlog.Err(err))
 		}
 		views = append(views, collectionViews...)
 		if IsPartitionKeySortCompactionEnabled(collection.Properties) {
@@ -85,52 +84,51 @@ func (policy *singleCompactionPolicy) triggerSegmentSortCompaction(
 	ctx context.Context,
 	segmentID int64,
 ) CompactionView {
-	log := log.With(zap.Int64("segmentID", segmentID))
 	if !Params.DataCoordCfg.EnableSortCompaction.GetAsBool() {
-		log.RatedInfo(20, "stats task disabled, skip sort compaction")
+		mlog.RatedInfo(context.TODO(), mlog.RateDefault, "stats task disabled, skip sort compaction")
 		return nil
 	}
 	segment := policy.meta.GetHealthySegment(ctx, segmentID)
 	if segment == nil {
-		log.Warn("fail to apply triggerSegmentSortCompaction, segment not healthy")
+		mlog.Warn(context.TODO(), "fail to apply triggerSegmentSortCompaction, segment not healthy")
 		return nil
 	}
 
 	collection, err := policy.handler.GetCollection(ctx, segment.GetCollectionID())
 	if err != nil {
-		log.Warn("fail to apply triggerSegmentSortCompaction, unable to get collection from handler",
-			zap.Error(err))
+		mlog.Warn(context.TODO(), "fail to apply triggerSegmentSortCompaction, unable to get collection from handler",
+			mlog.Err(err))
 		return nil
 	}
 	if collection == nil {
-		log.Warn("fail to apply triggerSegmentSortCompaction, collection not exist")
+		mlog.Warn(context.TODO(), "fail to apply triggerSegmentSortCompaction, collection not exist")
 		return nil
 	}
 	if collection.IsExternal() {
-		log.Info("skip sort compaction for external collection", zap.Int64("collectionID", collection.ID))
+		mlog.Info(context.TODO(), "skip sort compaction for external collection", mlog.Int64("collectionID", collection.ID))
 		return nil
 	}
 	isPartitionIsolationEnabled := IsPartitionKeySortCompactionEnabled(collection.Properties)
 	if !canTriggerSortCompaction(segment, isPartitionIsolationEnabled) {
-		log.Warn("fail to apply triggerSegmentSortCompaction",
-			zap.String("state", segment.GetState().String()),
-			zap.String("level", segment.GetLevel().String()),
-			zap.Bool("isSorted", segment.GetIsSorted()),
-			zap.Bool("isImporting", segment.GetIsImporting()),
-			zap.Bool("isCompacting", segment.isCompacting),
-			zap.Bool("isInvisible", segment.GetIsInvisible()))
+		mlog.Warn(context.TODO(), "fail to apply triggerSegmentSortCompaction",
+			mlog.String("state", segment.GetState().String()),
+			mlog.String("level", segment.GetLevel().String()),
+			mlog.Bool("isSorted", segment.GetIsSorted()),
+			mlog.Bool("isImporting", segment.GetIsImporting()),
+			mlog.Bool("isCompacting", segment.isCompacting),
+			mlog.Bool("isInvisible", segment.GetIsInvisible()))
 		return nil
 	}
 
 	collectionTTL, err := common.GetCollectionTTLFromMap(collection.Properties)
 	if err != nil {
-		log.Warn("failed to apply triggerSegmentSortCompaction, get collection ttl failed")
+		mlog.Warn(context.TODO(), "failed to apply triggerSegmentSortCompaction, get collection ttl failed")
 		return nil
 	}
 
 	newTriggerID, err := policy.allocator.AllocID(ctx)
 	if err != nil {
-		log.Warn("fail to apply triggerSegmentSortCompaction, unable to allocate triggerID", zap.Error(err))
+		mlog.Warn(context.TODO(), "fail to apply triggerSegmentSortCompaction, unable to allocate triggerID", mlog.Err(err))
 		return nil
 	}
 
@@ -142,8 +140,8 @@ func (policy *singleCompactionPolicy) triggerSegmentSortCompaction(
 		triggerID:     newTriggerID,
 	}
 
-	log.Info("succeeded to apply triggerSegmentSortCompaction",
-		zap.Int64("triggerID", newTriggerID))
+	mlog.Info(context.TODO(), "succeeded to apply triggerSegmentSortCompaction",
+		mlog.Int64("triggerID", newTriggerID))
 	return view
 }
 
@@ -158,25 +156,24 @@ func (policy *singleCompactionPolicy) triggerSortCompaction(
 	collectionID int64,
 	collectionTTL time.Duration,
 ) ([]CompactionView, error) {
-	log := log.With(zap.Int64("collectionID", collectionID))
 	if !Params.DataCoordCfg.EnableSortCompaction.GetAsBool() {
-		log.RatedInfo(20, "stats task disabled, skip sort compaction")
+		mlog.RatedInfo(context.TODO(), mlog.RateDefault, "stats task disabled, skip sort compaction")
 		return nil, nil
 	}
 	views := make([]CompactionView, 0)
 
 	collection, err := policy.handler.GetCollection(ctx, collectionID)
 	if err != nil {
-		log.Warn("fail to apply triggerSegmentSortCompaction, unable to get collection from handler",
-			zap.Error(err))
+		mlog.Warn(context.TODO(), "fail to apply triggerSegmentSortCompaction, unable to get collection from handler",
+			mlog.Err(err))
 		return nil, err
 	}
 	if collection == nil {
-		log.Warn("fail to apply triggerSegmentSortCompaction, collection not exist")
+		mlog.Warn(context.TODO(), "fail to apply triggerSegmentSortCompaction, collection not exist")
 		return nil, merr.WrapErrCollectionNotFound(collectionID)
 	}
 	if collection.IsExternal() {
-		log.Info("skip triggerSegmentSortCompaction for external collection", zap.Int64("collectionID", collection.ID))
+		mlog.Info(context.TODO(), "skip triggerSegmentSortCompaction for external collection", mlog.Int64("collectionID", collection.ID))
 		return nil, nil
 	}
 	isPartitionIsolationEnabled := IsPartitionKeySortCompactionEnabled(collection.Properties)
@@ -185,7 +182,7 @@ func (policy *singleCompactionPolicy) triggerSortCompaction(
 			return canTriggerSortCompaction(seg, isPartitionIsolationEnabled)
 		}))
 	if len(triggerableSegments) == 0 {
-		log.RatedInfo(20, "no triggerable segments")
+		mlog.RatedInfo(context.TODO(), mlog.RateDefault, "no triggerable segments")
 		return views, nil
 	}
 
@@ -223,48 +220,47 @@ func (policy *singleCompactionPolicy) triggerSortCompaction(
 		}
 	}
 
-	log.Info("succeeded to apply triggerSortCompaction",
-		zap.Int64("triggerID", triggerID),
-		zap.Int("triggered view num", len(views)))
+	mlog.Info(context.TODO(), "succeeded to apply triggerSortCompaction",
+		mlog.Int64("triggerID", triggerID),
+		mlog.Int("triggered view num", len(views)))
 	return views, nil
 }
 
 func (policy *singleCompactionPolicy) triggerOneCollection(ctx context.Context, collectionID int64, manual bool) ([]CompactionView, []CompactionView, int64, error) {
-	log := log.With(zap.Int64("collectionID", collectionID))
 	collection, err := policy.handler.GetCollection(ctx, collectionID)
 	if err != nil {
-		log.Warn("fail to apply singleCompactionPolicy, unable to get collection from handler",
-			zap.Error(err))
+		mlog.Warn(context.TODO(), "fail to apply singleCompactionPolicy, unable to get collection from handler",
+			mlog.Err(err))
 		return nil, nil, 0, err
 	}
 	if collection == nil {
-		log.Warn("fail to apply singleCompactionPolicy, collection not exist")
+		mlog.Warn(context.TODO(), "fail to apply singleCompactionPolicy, collection not exist")
 		return nil, nil, 0, nil
 	}
 	if collection.IsExternal() {
-		log.Info("skip single compaction for external collection")
+		mlog.Info(context.TODO(), "skip single compaction for external collection")
 		return nil, nil, 0, nil
 	}
 
 	collectionTTL, err := common.GetCollectionTTLFromMap(collection.Properties)
 	if err != nil {
-		log.Warn("failed to apply singleCompactionPolicy, get collection ttl failed")
+		mlog.Warn(context.TODO(), "failed to apply singleCompactionPolicy, get collection ttl failed")
 		return nil, nil, 0, err
 	}
 
 	newTriggerID, err := policy.allocator.AllocID(ctx)
 	if err != nil {
-		log.Warn("fail to apply singleCompactionPolicy, unable to allocate triggerID", zap.Error(err))
+		mlog.Warn(context.TODO(), "fail to apply singleCompactionPolicy, unable to allocate triggerID", mlog.Err(err))
 		return nil, nil, 0, err
 	}
 
 	sortViews, err := policy.triggerSortCompaction(ctx, newTriggerID, collectionID, collectionTTL)
 	if err != nil {
-		log.Warn("failed to apply singleCompactionPolicy, trigger sort compaction failed", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to apply singleCompactionPolicy, trigger sort compaction failed", mlog.Err(err))
 		return nil, nil, 0, err
 	}
 	if !isCollectionAutoCompactionEnabled(collection) {
-		log.RatedInfo(20, "collection auto compaction disabled")
+		mlog.RatedInfo(context.TODO(), mlog.RateDefault, "collection auto compaction disabled")
 		return nil, sortViews, 0, nil
 	}
 
@@ -298,9 +294,9 @@ func (policy *singleCompactionPolicy) triggerOneCollection(ctx context.Context, 
 	}
 
 	if len(views) > 0 {
-		log.Info("succeeded to apply singleCompactionPolicy",
-			zap.Int64("triggerID", newTriggerID),
-			zap.Int("triggered view num", len(views)))
+		mlog.Info(context.TODO(), "succeeded to apply singleCompactionPolicy",
+			mlog.Int64("triggerID", newTriggerID),
+			mlog.Int("triggered view num", len(views)))
 	}
 	return views, sortViews, newTriggerID, nil
 }

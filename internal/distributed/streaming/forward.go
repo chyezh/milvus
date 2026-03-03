@@ -25,7 +25,6 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -39,7 +38,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/discoverer"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/lazygrpc"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/resolver"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/contextutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/crypto"
@@ -58,7 +57,7 @@ func newForwardService(streamingCoordClient client.Client) *forwardServiceImpl {
 		isForwardDisabled: false,
 		legacyProxy:       nil,
 	}
-	fs.SetLogger(log.With(log.FieldComponent("forward-service")))
+	fs.SetLogger(mlog.With(mlog.FieldComponent("forward-service")))
 	return fs
 }
 
@@ -83,7 +82,7 @@ type forwardOption struct {
 
 // forwardServiceImpl is the implementation of FallbackService.
 type forwardServiceImpl struct {
-	log.Binder
+	mlog.Binder
 
 	streamingCoordClient client.Client
 	mu                   sync.Mutex
@@ -210,7 +209,7 @@ func (fs *forwardServiceImpl) initLegacyProxy() {
 	})
 	fs.legacyProxy = lazygrpc.WithServiceCreator(conn, milvuspb.NewMilvusServiceClient)
 	fs.rb = rb
-	fs.Logger().Info("streaming service is not ready, legacy proxy is initiated to forward request", zap.Int("proxyPort", port))
+	fs.Logger().Info(nil, "streaming service is not ready, legacy proxy is initiated to forward request", mlog.Int("proxyPort", port))
 }
 
 // getDialOptions returns the dial options for the legacy proxy.
@@ -253,7 +252,7 @@ func getDialOptions(rb resolver.Builder) []grpc.DialOption {
 // markForwardDisabled marks the forward disabled.
 func (fs *forwardServiceImpl) markForwardDisabled() {
 	fs.isForwardDisabled = true
-	fs.Logger().Info("streaming service is ready, forward is disabled")
+	fs.Logger().Info(nil, "streaming service is ready, forward is disabled")
 	if fs.legacyProxy != nil {
 		legacyProxy := fs.legacyProxy
 		fs.legacyProxy = nil
@@ -261,9 +260,9 @@ func (fs *forwardServiceImpl) markForwardDisabled() {
 		fs.rb = nil
 		go func() {
 			legacyProxy.Close()
-			fs.Logger().Info("legacy proxy closed")
+			fs.Logger().Info(nil, "legacy proxy closed")
 			rb.Close()
-			fs.Logger().Info("resolver builder closed")
+			fs.Logger().Info(nil, "resolver builder closed")
 		}()
 	}
 }

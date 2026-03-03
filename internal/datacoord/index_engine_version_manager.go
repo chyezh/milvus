@@ -1,14 +1,14 @@
 package datacoord
 
 import (
+	"context"
 	"math"
 
 	"github.com/blang/semver/v4"
 	"github.com/samber/lo"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/lock"
 )
 
@@ -114,11 +114,11 @@ func (m *versionManagerImpl) Update(session *sessionutil.Session) {
 }
 
 func (m *versionManagerImpl) addOrUpdate(session *sessionutil.Session) {
-	log.Info("addOrUpdate version", zap.Int64("nodeId", session.ServerID),
-		zap.String("sessionVersion", session.Version.String()),
-		zap.Int32("minimal", session.IndexEngineVersion.MinimalIndexVersion),
-		zap.Int32("current", session.IndexEngineVersion.CurrentIndexVersion),
-		zap.Int32("currentScalar", session.ScalarIndexEngineVersion.CurrentIndexVersion))
+	mlog.Info(context.TODO(), "addOrUpdate version", mlog.Int64("nodeId", session.ServerID),
+		mlog.String("sessionVersion", session.Version.String()),
+		mlog.Int32("minimal", session.IndexEngineVersion.MinimalIndexVersion),
+		mlog.Int32("current", session.IndexEngineVersion.CurrentIndexVersion),
+		mlog.Int32("currentScalar", session.ScalarIndexEngineVersion.CurrentIndexVersion))
 	m.versions[session.ServerID] = session.IndexEngineVersion
 	m.scalarIndexVersions[session.ServerID] = session.ScalarIndexEngineVersion
 	m.indexNonEncoding[session.ServerID] = session.IndexNonEncoding
@@ -130,7 +130,7 @@ func (m *versionManagerImpl) GetCurrentIndexEngineVersion() int32 {
 	defer m.mu.Unlock()
 
 	if len(m.versions) == 0 {
-		log.Info("index versions is empty")
+		mlog.Info(context.TODO(), "index versions is empty")
 		return 0
 	}
 
@@ -140,7 +140,7 @@ func (m *versionManagerImpl) GetCurrentIndexEngineVersion() int32 {
 			current = version.CurrentIndexVersion
 		}
 	}
-	log.Info("Merged current version", zap.Int32("current", current))
+	mlog.Info(context.TODO(), "Merged current version", mlog.Int32("current", current))
 	return current
 }
 
@@ -149,7 +149,7 @@ func (m *versionManagerImpl) GetMinimalIndexEngineVersion() int32 {
 	defer m.mu.Unlock()
 
 	if len(m.versions) == 0 {
-		log.Info("index versions is empty")
+		mlog.Info(context.TODO(), "index versions is empty")
 		return 0
 	}
 
@@ -159,7 +159,7 @@ func (m *versionManagerImpl) GetMinimalIndexEngineVersion() int32 {
 			minimal = version.MinimalIndexVersion
 		}
 	}
-	log.Info("Merged minimal version", zap.Int32("minimal", minimal))
+	mlog.Info(context.TODO(), "Merged minimal version", mlog.Int32("minimal", minimal))
 	return minimal
 }
 
@@ -168,7 +168,7 @@ func (m *versionManagerImpl) GetCurrentScalarIndexEngineVersion() int32 {
 	defer m.mu.Unlock()
 
 	if len(m.scalarIndexVersions) == 0 {
-		log.Info("scalar index versions is empty")
+		mlog.Info(context.TODO(), "scalar index versions is empty")
 		return 0
 	}
 
@@ -178,7 +178,7 @@ func (m *versionManagerImpl) GetCurrentScalarIndexEngineVersion() int32 {
 			current = version.CurrentIndexVersion
 		}
 	}
-	log.Info("Merged current scalar index version", zap.Int32("current", current))
+	mlog.Info(context.TODO(), "Merged current scalar index version", mlog.Int32("current", current))
 	return current
 }
 
@@ -187,7 +187,7 @@ func (m *versionManagerImpl) GetMinimalScalarIndexEngineVersion() int32 {
 	defer m.mu.Unlock()
 
 	if len(m.scalarIndexVersions) == 0 {
-		log.Info("scalar index versions is empty")
+		mlog.Info(context.TODO(), "scalar index versions is empty")
 		return 0
 	}
 
@@ -197,7 +197,7 @@ func (m *versionManagerImpl) GetMinimalScalarIndexEngineVersion() int32 {
 			minimal = version.MinimalIndexVersion
 		}
 	}
-	log.Info("Merged minimal scalar index version", zap.Int32("minimal", minimal))
+	mlog.Info(context.TODO(), "Merged minimal scalar index version", mlog.Int32("minimal", minimal))
 	return minimal
 }
 
@@ -205,7 +205,7 @@ func (m *versionManagerImpl) GetIndexNonEncoding() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(m.indexNonEncoding) == 0 {
-		log.Info("indexNonEncoding map is empty")
+		mlog.Info(context.TODO(), "indexNonEncoding map is empty")
 		// by default, we fall back to old index format for safety
 		return false
 	}

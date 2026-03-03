@@ -26,7 +26,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
@@ -34,7 +33,7 @@ import (
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	broker2 "github.com/milvus-io/milvus/internal/datacoord/broker"
 	"github.com/milvus-io/milvus/internal/metastore/mocks"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
@@ -700,7 +699,7 @@ func TestImportCheckerCompaction(t *testing.T) {
 	}
 	err = importMeta.AddJob(context.TODO(), job2)
 	assert.NoError(t, err)
-	log.Info("job ready")
+	mlog.Info(context.TODO(), "job ready")
 
 	// check pending
 	alloc.EXPECT().AllocN(mock.Anything).RunAndReturn(func(n int64) (int64, int64, error) {
@@ -714,10 +713,10 @@ func TestImportCheckerCompaction(t *testing.T) {
 		job := importMeta.GetJob(context.TODO(), jobID)
 		preimportTasks := importMeta.GetTaskBy(context.TODO(), WithJob(job.GetJobID()), WithType(PreImportTaskType))
 		taskLen := len(preimportTasks)
-		log.Info("job pre-importing", zap.Any("taskLen", taskLen), zap.Any("jobState", job.GetState()))
+		mlog.Info(context.TODO(), "job pre-importing", mlog.Any("taskLen", taskLen), mlog.Any("jobState", job.GetState()))
 		return taskLen == 2 && job.GetState() == internalpb.ImportJobState_PreImporting
 	}, 2*time.Second, 500*time.Millisecond)
-	log.Info("job pre-importing")
+	mlog.Info(context.TODO(), "job pre-importing")
 
 	// check pre-importing
 	catalog.EXPECT().SaveImportTask(mock.Anything, mock.Anything).Return(nil).Once()
@@ -739,7 +738,7 @@ func TestImportCheckerCompaction(t *testing.T) {
 		importTasks := importMeta.GetTaskBy(context.TODO(), WithJob(job.GetJobID()), WithType(ImportTaskType))
 		return len(importTasks) == 1 && job.GetState() == internalpb.ImportJobState_Importing
 	}, 2*time.Second, 100*time.Millisecond)
-	log.Info("job importing")
+	mlog.Info(context.TODO(), "job importing")
 
 	// check importing
 	catalog.EXPECT().AddSegment(mock.Anything, mock.Anything).Return(nil)
@@ -772,7 +771,7 @@ func TestImportCheckerCompaction(t *testing.T) {
 		job := importMeta.GetJob(context.TODO(), jobID)
 		return job.GetState() == internalpb.ImportJobState_Sorting
 	}, 2*time.Second, 100*time.Millisecond)
-	log.Info("job stats")
+	mlog.Info(context.TODO(), "job stats")
 
 	// check stats
 	catalog.EXPECT().SaveImportJob(mock.Anything, mock.Anything).Return(nil).Once()
@@ -793,7 +792,7 @@ func TestImportCheckerCompaction(t *testing.T) {
 		job := importMeta.GetJob(context.TODO(), jobID)
 		return job.GetState() == internalpb.ImportJobState_IndexBuilding
 	}, 2*time.Second, 100*time.Millisecond)
-	log.Info("job index building")
+	mlog.Info(context.TODO(), "job index building")
 
 	// wait l0 import task
 	catalog.EXPECT().SaveImportTask(mock.Anything, mock.Anything).Return(nil).Once()
@@ -809,7 +808,7 @@ func TestImportCheckerCompaction(t *testing.T) {
 	time.Sleep(1200 * time.Millisecond)
 	catalog.EXPECT().SaveImportTask(mock.Anything, mock.Anything).Return(nil).Once()
 	importMeta.UpdateTask(context.TODO(), 100000, UpdateState(datapb.ImportTaskStateV2_Completed))
-	log.Info("job l0 compaction")
+	mlog.Info(context.TODO(), "job l0 compaction")
 
 	// check index building
 	catalog.EXPECT().SaveImportJob(mock.Anything, mock.Anything).Return(nil).Once()
@@ -817,5 +816,5 @@ func TestImportCheckerCompaction(t *testing.T) {
 		job := importMeta.GetJob(context.TODO(), jobID)
 		return job.GetState() == internalpb.ImportJobState_Completed
 	}, 2*time.Second, 100*time.Millisecond)
-	log.Info("job completed")
+	mlog.Info(context.TODO(), "job completed")
 }

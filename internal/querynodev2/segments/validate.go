@@ -19,9 +19,8 @@ package segments
 import (
 	"context"
 
-	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -73,10 +72,10 @@ func validateOnHistorical(ctx context.Context, manager *Manager, collectionID in
 		return nil, err
 	}
 
-	log.Ctx(ctx).Debug("sparse filter filtered out segments in historical",
-		zap.Int64("collectionID", collectionID),
-		zap.Int("filtered", filteredCount),
-		zap.Int("remaining", len(segments)))
+	mlog.Debug(ctx, "sparse filter filtered out segments in historical",
+		mlog.Int64("collectionID", collectionID),
+		mlog.Int("filtered", filteredCount),
+		mlog.Int("remaining", len(segments)))
 
 	return segments, nil
 }
@@ -94,10 +93,10 @@ func validateOnStream(ctx context.Context, manager *Manager, collectionID int64,
 		return nil, err
 	}
 
-	log.Ctx(ctx).Debug("sparse filter filtered out segments in streaming",
-		zap.Int64("collectionID", collectionID),
-		zap.Int("filtered", filteredCount),
-		zap.Int("remaining", len(segments)))
+	mlog.Debug(ctx, "sparse filter filtered out segments in streaming",
+		mlog.Int64("collectionID", collectionID),
+		mlog.Int("filtered", filteredCount),
+		mlog.Int("remaining", len(segments)))
 
 	return segments, nil
 }

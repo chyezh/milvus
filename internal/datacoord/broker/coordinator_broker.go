@@ -21,12 +21,11 @@ import (
 	"time"
 
 	"github.com/cockroachdb/errors"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -74,7 +73,6 @@ func NewCoordinatorBroker(mixCoord types.MixCoord) *coordinatorBroker {
 func (b *coordinatorBroker) DescribeCollectionInternal(ctx context.Context, collectionID int64) (*milvuspb.DescribeCollectionResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, paramtable.Get().QueryCoordCfg.BrokerTimeout.GetAsDuration(time.Millisecond))
 	defer cancel()
-	log := log.Ctx(ctx).With(zap.Int64("collectionID", collectionID))
 
 	resp, err := b.mixCoord.DescribeCollectionInternal(ctx, &milvuspb.DescribeCollectionRequest{
 		Base: commonpbutil.NewMsgBase(
@@ -85,7 +83,7 @@ func (b *coordinatorBroker) DescribeCollectionInternal(ctx context.Context, coll
 		CollectionID: collectionID,
 	})
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Warn("DescribeCollectionInternal failed", zap.Error(err))
+		mlog.Warn(context.TODO(), "DescribeCollectionInternal failed", mlog.Err(err))
 		return nil, err
 	}
 
@@ -95,7 +93,6 @@ func (b *coordinatorBroker) DescribeCollectionInternal(ctx context.Context, coll
 func (b *coordinatorBroker) DescribeCollectionByName(ctx context.Context, dbName, collectionName string) (*milvuspb.DescribeCollectionResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, paramtable.Get().QueryCoordCfg.BrokerTimeout.GetAsDuration(time.Millisecond))
 	defer cancel()
-	log := log.Ctx(ctx).With(zap.String("dbName", dbName), zap.String("collectionName", collectionName))
 
 	resp, err := b.mixCoord.DescribeCollectionInternal(ctx, &milvuspb.DescribeCollectionRequest{
 		Base: commonpbutil.NewMsgBase(
@@ -106,7 +103,7 @@ func (b *coordinatorBroker) DescribeCollectionByName(ctx context.Context, dbName
 		CollectionName: collectionName,
 	})
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Warn("DescribeCollectionByName failed", zap.Error(err))
+		mlog.Warn(context.TODO(), "DescribeCollectionByName failed", mlog.Err(err))
 		return nil, err
 	}
 
@@ -125,7 +122,6 @@ func (b *coordinatorBroker) ShowPartitionsInternal(ctx context.Context, collecti
 func (b *coordinatorBroker) ShowPartitions(ctx context.Context, collectionID int64) (*milvuspb.ShowPartitionsResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, paramtable.Get().QueryCoordCfg.BrokerTimeout.GetAsDuration(time.Millisecond))
 	defer cancel()
-	log := log.Ctx(ctx).With(zap.Int64("collectionID", collectionID))
 
 	resp, err := b.mixCoord.ShowPartitionsInternal(ctx, &milvuspb.ShowPartitionsRequest{
 		Base: commonpbutil.NewMsgBase(
@@ -136,9 +132,9 @@ func (b *coordinatorBroker) ShowPartitions(ctx context.Context, collectionID int
 		CollectionID: collectionID,
 	})
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Warn("ShowPartitionsInternal failed",
-			zap.Int64("collectionID", collectionID),
-			zap.Error(err))
+		mlog.Warn(context.TODO(), "ShowPartitionsInternal failed",
+			mlog.Int64("collectionID", collectionID),
+			mlog.Err(err))
 		return nil, err
 	}
 
@@ -148,7 +144,6 @@ func (b *coordinatorBroker) ShowPartitions(ctx context.Context, collectionID int
 func (b *coordinatorBroker) ShowCollections(ctx context.Context, dbName string) (*milvuspb.ShowCollectionsResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, paramtable.Get().QueryCoordCfg.BrokerTimeout.GetAsDuration(time.Millisecond))
 	defer cancel()
-	log := log.Ctx(ctx).With(zap.String("dbName", dbName))
 	resp, err := b.mixCoord.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{
 		Base: commonpbutil.NewMsgBase(
 			commonpbutil.WithMsgType(commonpb.MsgType_ShowCollections),
@@ -157,9 +152,9 @@ func (b *coordinatorBroker) ShowCollections(ctx context.Context, dbName string) 
 	})
 
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Warn("ShowCollections failed",
-			zap.String("dbName", dbName),
-			zap.Error(err))
+		mlog.Warn(context.TODO(), "ShowCollections failed",
+			mlog.String("dbName", dbName),
+			mlog.Err(err))
 		return nil, err
 	}
 
@@ -178,7 +173,7 @@ func (b *coordinatorBroker) ShowCollectionIDs(ctx context.Context, dbNames ...st
 	})
 
 	if err = merr.CheckRPCCall(resp, err); err != nil {
-		log.Ctx(ctx).Warn("ShowCollectionIDs failed", zap.Error(err))
+		mlog.Warn(ctx, "ShowCollectionIDs failed", mlog.Err(err))
 		return nil, err
 	}
 
@@ -188,12 +183,11 @@ func (b *coordinatorBroker) ShowCollectionIDs(ctx context.Context, dbNames ...st
 func (b *coordinatorBroker) ListDatabases(ctx context.Context) (*milvuspb.ListDatabasesResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, paramtable.Get().QueryCoordCfg.BrokerTimeout.GetAsDuration(time.Millisecond))
 	defer cancel()
-	log := log.Ctx(ctx)
 	resp, err := b.mixCoord.ListDatabases(ctx, &milvuspb.ListDatabasesRequest{
 		Base: commonpbutil.NewMsgBase(commonpbutil.WithMsgType(commonpb.MsgType_ListDatabases)),
 	})
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Warn("failed to ListDatabases", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to ListDatabases", mlog.Err(err))
 		return nil, err
 	}
 	return resp, nil
@@ -226,10 +220,6 @@ func (b *coordinatorBroker) HasCollection(ctx context.Context, collectionID int6
 func (b *coordinatorBroker) CreateCollection(ctx context.Context, req *milvuspb.CreateCollectionRequest) error {
 	ctx, cancel := context.WithTimeout(ctx, paramtable.Get().QueryCoordCfg.BrokerTimeout.GetAsDuration(time.Millisecond))
 	defer cancel()
-	log := log.Ctx(ctx).With(
-		zap.String("dbName", req.GetDbName()),
-		zap.String("collectionName", req.GetCollectionName()),
-	)
 
 	if req.Base == nil {
 		req.Base = commonpbutil.NewMsgBase(
@@ -240,11 +230,11 @@ func (b *coordinatorBroker) CreateCollection(ctx context.Context, req *milvuspb.
 
 	resp, err := b.mixCoord.CreateCollection(ctx, req)
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Warn("CreateCollection failed", zap.Error(err))
+		mlog.Warn(context.TODO(), "CreateCollection failed", mlog.Err(err))
 		return err
 	}
 
-	log.Info("CreateCollection succeeded")
+	mlog.Info(context.TODO(), "CreateCollection succeeded")
 	return nil
 }
 
@@ -253,11 +243,6 @@ func (b *coordinatorBroker) CreateCollection(ctx context.Context, req *milvuspb.
 func (b *coordinatorBroker) CreatePartition(ctx context.Context, req *milvuspb.CreatePartitionRequest) error {
 	ctx, cancel := context.WithTimeout(ctx, paramtable.Get().QueryCoordCfg.BrokerTimeout.GetAsDuration(time.Millisecond))
 	defer cancel()
-	log := log.Ctx(ctx).With(
-		zap.String("dbName", req.GetDbName()),
-		zap.String("collectionName", req.GetCollectionName()),
-		zap.String("partitionName", req.GetPartitionName()),
-	)
 
 	if req.Base == nil {
 		req.Base = commonpbutil.NewMsgBase(
@@ -268,11 +253,11 @@ func (b *coordinatorBroker) CreatePartition(ctx context.Context, req *milvuspb.C
 
 	resp, err := b.mixCoord.CreatePartition(ctx, req)
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Warn("CreatePartition failed", zap.Error(err))
+		mlog.Warn(context.TODO(), "CreatePartition failed", mlog.Err(err))
 		return err
 	}
 
-	log.Info("CreatePartition succeeded")
+	mlog.Info(context.TODO(), "CreatePartition succeeded")
 	return nil
 }
 
@@ -281,10 +266,6 @@ func (b *coordinatorBroker) CreatePartition(ctx context.Context, req *milvuspb.C
 func (b *coordinatorBroker) DropCollection(ctx context.Context, dbName, collectionName string) error {
 	ctx, cancel := context.WithTimeout(ctx, paramtable.Get().QueryCoordCfg.BrokerTimeout.GetAsDuration(time.Millisecond))
 	defer cancel()
-	log := log.Ctx(ctx).With(
-		zap.String("dbName", dbName),
-		zap.String("collectionName", collectionName),
-	)
 
 	resp, err := b.mixCoord.DropCollection(ctx, &milvuspb.DropCollectionRequest{
 		Base: commonpbutil.NewMsgBase(
@@ -295,11 +276,11 @@ func (b *coordinatorBroker) DropCollection(ctx context.Context, dbName, collecti
 		CollectionName: collectionName,
 	})
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Warn("DropCollection failed", zap.Error(err))
+		mlog.Warn(context.TODO(), "DropCollection failed", mlog.Err(err))
 		return err
 	}
 
-	log.Info("DropCollection succeeded")
+	mlog.Info(context.TODO(), "DropCollection succeeded")
 	return nil
 }
 
@@ -308,7 +289,6 @@ func (b *coordinatorBroker) DropCollection(ctx context.Context, dbName, collecti
 func (b *coordinatorBroker) DescribeDatabase(ctx context.Context, dbName string) (*rootcoordpb.DescribeDatabaseResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, paramtable.Get().QueryCoordCfg.BrokerTimeout.GetAsDuration(time.Millisecond))
 	defer cancel()
-	log := log.Ctx(ctx).With(zap.String("dbName", dbName))
 
 	resp, err := b.mixCoord.DescribeDatabase(ctx, &rootcoordpb.DescribeDatabaseRequest{
 		Base: commonpbutil.NewMsgBase(
@@ -318,7 +298,7 @@ func (b *coordinatorBroker) DescribeDatabase(ctx context.Context, dbName string)
 		DbName: dbName,
 	})
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Warn("DescribeDatabase failed", zap.Error(err))
+		mlog.Warn(context.TODO(), "DescribeDatabase failed", mlog.Err(err))
 		return nil, err
 	}
 

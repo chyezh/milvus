@@ -47,6 +47,13 @@ func getLogger() *zap.Logger {
 	return globalLogger.Load()
 }
 
+// GetUnderlying returns the raw *zap.Logger for advanced use cases that need
+// direct access (e.g., CGO logging core inspection, zap.WithOptions).
+// Prefer the context-based mlog functions for normal logging.
+func GetUnderlying() *zap.Logger {
+	return globalLogger.Load()
+}
+
 // Sync flushes any buffered log entries.
 func Sync() error {
 	return getLogger().Sync()

@@ -20,11 +20,10 @@ import (
 	"context"
 	"time"
 
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/datacoord/task"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 )
 
@@ -71,7 +70,7 @@ func (i *externalCollectionRefreshInspector) run() {
 
 	// Log inspection interval for observability
 	inspectInterval := Params.DataCoordCfg.ExternalCollectionCheckInterval.GetAsDuration(time.Second)
-	log.Ctx(i.ctx).Info("start external collection inspector", zap.Duration("inspectInterval", inspectInterval))
+	mlog.Info(i.ctx, "start external collection inspector", mlog.Duration("inspectInterval", inspectInterval))
 
 	ticker := time.NewTicker(inspectInterval)
 	defer ticker.Stop()
@@ -79,7 +78,7 @@ func (i *externalCollectionRefreshInspector) run() {
 	for {
 		select {
 		case <-i.closeChan:
-			log.Ctx(i.ctx).Info("external collection inspector exited")
+			mlog.Info(i.ctx, "external collection inspector exited")
 			return
 		case <-ticker.C:
 			i.inspect()

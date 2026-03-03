@@ -2,11 +2,10 @@ package shards
 
 import (
 	"go.uber.org/atomic"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/stats"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/utils"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 )
 
@@ -82,13 +81,13 @@ func (m *shardManagerImpl) checkIfSegmentCanBeFlushed(uniquePartitionKey Partiti
 
 // CreateSegment creates a new segment manager when create segment message is written into wal.
 func (m *shardManagerImpl) CreateSegment(msg message.ImmutableCreateSegmentMessageV2) {
-	logger := m.Logger().With(log.FieldMessage(msg))
+	logger := m.Logger().With(mlog.FieldMessage(msg))
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	uniquePartitionKey := PartitionUniqueKey{CollectionID: msg.Header().CollectionId, PartitionID: msg.Header().PartitionId}
 	if err := m.checkIfSegmentCanBeCreated(uniquePartitionKey, msg.Header().SegmentId); err != nil {
-		logger.Warn("segment already exists")
+		logger.Warn(nil, "segment already exists")
 		return
 	}
 
@@ -105,19 +104,19 @@ func (m *shardManagerImpl) FlushSegment(msg message.ImmutableFlushMessageV2) {
 	collectionID := msg.Header().CollectionId
 	partitionID := msg.Header().PartitionId
 	segmentID := msg.Header().SegmentId
-	logger := m.Logger().With(log.FieldMessage(msg))
+	logger := m.Logger().With(mlog.FieldMessage(msg))
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	uniquePartitionKey := PartitionUniqueKey{CollectionID: collectionID, PartitionID: partitionID}
 	if err := m.checkIfSegmentCanBeFlushed(uniquePartitionKey, segmentID); err != nil {
-		logger.Warn("segment can not be flushed", zap.Error(err))
+		logger.Warn(nil, "segment can not be flushed", mlog.Err(err))
 		return
 	}
 
 	pm, ok := m.partitionManagers[uniquePartitionKey]
 	if !ok {
-		logger.Warn("partition not found when FlushSegment")
+		logger.Warn(nil, "partition not found when FlushSegment")
 		return
 	}
 	pm.MustRemoveFlushedSegment(segmentID)
@@ -166,19 +165,19 @@ func (m *shardManagerImpl) WaitUntilGrowingSegmentReady(uniquePartitionKey Parti
 // !!! The returned segmentIDs may be is on-flushing state(which is on-flushing, a segmentFlushWorker is running, but not send into wal yet)
 // !!! The caller should promise the returned segmentIDs to be flushed.
 func (m *shardManagerImpl) FlushAndFenceSegmentAllocUntil(collectionID int64, timetick uint64) ([]int64, error) {
-	logger := m.Logger().With(zap.Int64("collectionID", collectionID), zap.Uint64("timetick", timetick))
+	logger := m.Logger().With(mlog.Int64("collectionID", collectionID), mlog.Uint64("timetick", timetick))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	segmentIDs, err := m.flushAndFenceSegmentAllocUntil(collectionID, timetick)
 	if err != nil {
 		return nil, err
 	}
-	logger.Info("segments should be flushed when FlushAndFenceSegmentAllocUntil", zap.Int64s("segmentIDs", segmentIDs))
+	logger.Info(nil, "segments should be flushed when FlushAndFenceSegmentAllocUntil", mlog.Int64s("segmentIDs", segmentIDs))
 	return segmentIDs, nil
 }
 
 func (m *shardManagerImpl) FlushAllAndFenceSegmentAllocUntil(timetick uint64) ([]int64, error) {
-	logger := m.Logger().With(zap.Uint64("timetick", timetick))
+	logger := m.Logger().With(mlog.Uint64("timetick", timetick))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -187,15 +186,15 @@ func (m *shardManagerImpl) FlushAllAndFenceSegmentAllocUntil(timetick uint64) ([
 		ids, _ := m.flushAndFenceSegmentAllocUntil(collectionID, timetick)
 		segmentIDs = append(segmentIDs, ids...)
 	}
-	logger.Info("segments should be flushed when FlushAllAndFenceSegmentAllocUntil", zap.Int64s("segmentIDs", segmentIDs))
+	logger.Info(nil, "segments should be flushed when FlushAllAndFenceSegmentAllocUntil", mlog.Int64s("segmentIDs", segmentIDs))
 	return segmentIDs, nil
 }
 
 func (m *shardManagerImpl) flushAndFenceSegmentAllocUntil(collectionID int64, timetick uint64) ([]int64, error) {
-	logger := m.Logger().With(zap.Int64("collectionID", collectionID), zap.Uint64("timetick", timetick))
+	logger := m.Logger().With(mlog.Int64("collectionID", collectionID), mlog.Uint64("timetick", timetick))
 
 	if err := m.checkIfCollectionExists(collectionID); err != nil {
-		logger.Warn("collection not found when FlushAndFenceSegmentAllocUntil", zap.Error(err))
+		logger.Warn(nil, "collection not found when FlushAndFenceSegmentAllocUntil", mlog.Err(err))
 		return nil, err
 	}
 
@@ -207,7 +206,7 @@ func (m *shardManagerImpl) flushAndFenceSegmentAllocUntil(collectionID int64, ti
 		uniqueKey := PartitionUniqueKey{CollectionID: collectionID, PartitionID: partitionID}
 		pm, ok := m.partitionManagers[uniqueKey]
 		if !ok {
-			logger.Warn("partition not found when FlushAndFenceSegmentAllocUntil", zap.Int64("partitionID", partitionID))
+			logger.Warn(nil, "partition not found when FlushAndFenceSegmentAllocUntil", mlog.Int64("partitionID", partitionID))
 			continue
 		}
 		newSealedSegments := pm.FlushAndFenceSegmentUntil(timetick)
@@ -219,19 +218,19 @@ func (m *shardManagerImpl) flushAndFenceSegmentAllocUntil(collectionID int64, ti
 // AsyncFlushSegment triggers the segment to be flushed when flush message is written into wal.
 func (m *shardManagerImpl) AsyncFlushSegment(signal utils.SealSegmentSignal) {
 	logger := m.Logger().With(
-		zap.Int64("collectionID", signal.SegmentBelongs.CollectionID),
-		zap.Int64("partitionID", signal.SegmentBelongs.PartitionID),
-		zap.Int64("segmentID", signal.SegmentBelongs.SegmentID),
+		mlog.Int64("collectionID", signal.SegmentBelongs.CollectionID),
+		mlog.Int64("partitionID", signal.SegmentBelongs.PartitionID),
+		mlog.Int64("segmentID", signal.SegmentBelongs.SegmentID),
 	)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	pm, ok := m.partitionManagers[signal.SegmentBelongs.PartitionUniqueKey()]
 	if !ok {
-		logger.Warn("partition not found when AsyncMustSeal, may be already dropped")
+		logger.Warn(nil, "partition not found when AsyncMustSeal, may be already dropped")
 		return
 	}
 	if err := pm.AsyncFlushSegment(signal); err != nil {
-		logger.Warn("segment not found when AsyncMustSeal, may be already sealed", zap.Error(err))
+		logger.Warn(nil, "segment not found when AsyncMustSeal, may be already sealed", mlog.Err(err))
 	}
 }

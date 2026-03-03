@@ -8,7 +8,6 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/hashicorp/golang-lru/v2/expirable"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
@@ -17,7 +16,7 @@ import (
 	"github.com/milvus-io/milvus/internal/json"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -71,7 +70,7 @@ func NewSyncManager(chunkManager storage.ChunkManager) SyncManager {
 	cpuNum := hardware.GetCPUNum()
 	initPoolSize := cpuNum * params.DataNodeCfg.MaxParallelSyncMgrTasksPerCPUCore.GetAsInt()
 	dispatcher := newKeyLockDispatcher[int64](initPoolSize)
-	log.Info("sync manager initialized", zap.Int("initPoolSize", initPoolSize), zap.Int("cpuNum", cpuNum))
+	mlog.Info(context.TODO(), "sync manager initialized", mlog.Int("initPoolSize", initPoolSize), mlog.Int("cpuNum", cpuNum))
 
 	syncMgr := &syncManager{
 		keyLockDispatcher: dispatcher,
@@ -88,22 +87,18 @@ func NewSyncManager(chunkManager storage.ChunkManager) SyncManager {
 
 func (mgr *syncManager) resizeHandler(evt *config.Event) {
 	if evt.HasUpdated {
-		log := log.Ctx(context.Background()).With(
-			zap.String("key", evt.Key),
-			zap.String("value", evt.Value),
-		)
 		cpuNum := hardware.GetCPUNum()
 		size, err := strconv.ParseInt(evt.Value, 10, 64)
 		if err != nil {
-			log.Warn("failed to parse new datanode syncmgr pool size", zap.Error(err))
+			mlog.Warn(context.TODO(), "failed to parse new datanode syncmgr pool size", mlog.Err(err))
 			return
 		}
 		err = mgr.keyLockDispatcher.workerPool.Resize(cpuNum * int(size))
 		if err != nil {
-			log.Warn("failed to resize datanode syncmgr pool size", zap.String("key", evt.Key), zap.String("value", evt.Value), zap.Error(err))
+			mlog.Warn(context.TODO(), "failed to resize datanode syncmgr pool size", mlog.String("key", evt.Key), mlog.String("value", evt.Value), mlog.Err(err))
 			return
 		}
-		log.Info("sync mgr pool size updated", zap.Int64("newSize", size))
+		mlog.Info(context.TODO(), "sync mgr pool size updated", mlog.Int64("newSize", size))
 	}
 }
 
@@ -156,7 +151,7 @@ func (mgr *syncManager) submit(ctx context.Context, key int64, task Task, callba
 		return err
 	}
 	callbacks = append([]func(error) error{handler}, callbacks...)
-	log.Info("sync mgr sumbit task with key", zap.Int64("key", key))
+	mlog.Info(context.TODO(), "sync mgr sumbit task with key", mlog.Int64("key", key))
 
 	return mgr.Submit(ctx, key, task, callbacks...)
 }
@@ -169,7 +164,7 @@ func (mgr *syncManager) TaskStatsJSON() string {
 
 	ret, err := json.Marshal(tasks)
 	if err != nil {
-		log.Warn("failed to marshal sync task stats", zap.Error(err))
+		mlog.Warn(context.TODO(), "failed to marshal sync task stats", mlog.Err(err))
 		return ""
 	}
 	return string(ret)

@@ -18,7 +18,6 @@ package balance
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/samber/lo"
 	"go.uber.org/zap"
@@ -28,7 +27,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
-	"github.com/milvus-io/milvus/pkg/v2/log"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -65,25 +64,19 @@ func (b *StoppingBalancer) GetAssignPolicy() assign.AssignPolicy {
 // BalanceReplica generates balance plans for segments and channels on stopping nodes (RO nodes)
 // and reassigns them to active nodes (RW nodes).
 func (b *StoppingBalancer) BalanceReplica(ctx context.Context, replica *meta.Replica) (segmentPlans []assign.SegmentAssignPlan, channelPlans []assign.ChannelAssignPlan) {
-	log := log.Ctx(ctx).WithRateGroup("qcv2.StoppingBalancer", 1, 60).With(
-		zap.Int64("collectionID", replica.GetCollectionID()),
-		zap.Int64("replicaID", replica.GetID()),
-		zap.String("resourceGroup", replica.GetResourceGroup()),
-	)
-
 	br := NewBalanceReport()
 	defer func() {
 		if len(segmentPlans) == 0 && len(channelPlans) == 0 {
-			log.WithRateGroup(fmt.Sprintf("stoppingbalance-noplan-%d", replica.GetID()), 1, 60).
-				RatedDebug(60, "no stopping balance plan generated", zap.Stringers("records", br.detailRecords))
+			mlog.RatedDebug(ctx, mlog.RateDefault, "no stopping balance plan generated",
+				zap.Stringers("records", br.detailRecords))
 		} else {
-			log.Info("stopping balance plan generated", zap.Stringers("report details", br.records))
+			mlog.Info(context.TODO(), "stopping balance plan generated", zap.Stringers("report details", br.records))
 		}
 	}()
 
 	if !paramtable.Get().QueryCoordCfg.EnableStoppingBalance.GetAsBool() {
 		br.AddRecord(StrRecord("stopping balance is disabled"))
-		log.RatedInfo(10, "stopping balance is disabled")
+		mlog.RatedInfo(context.TODO(), mlog.RateDefault, "stopping balance is disabled")
 		return nil, nil
 	}
 
