@@ -10,7 +10,7 @@ import (
 	"github.com/samber/lo"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -44,7 +44,7 @@ var (
 func GetPolicyModel(modelString string) model.Model {
 	m, err := model.NewModelFromString(modelString)
 	if err != nil {
-		mlog.Panic(context.TODO(), "NewModelFromString fail", mlog.String("model", ModelStr), mlog.Err(err))
+		log.Panic(context.TODO(), "NewModelFromString fail", log.String("model", ModelStr), log.Err(err))
 	}
 	return m
 }
@@ -75,7 +75,7 @@ func GetEnforcer() *casbin.SyncedEnforcer {
 	initOnce.Do(func() {
 		e, err := casbin.NewSyncedEnforcer()
 		if err != nil {
-			mlog.Panic(context.TODO(), "failed to create casbin enforcer", mlog.Err(err))
+			log.Panic(context.TODO(), "failed to create casbin enforcer", log.Err(err))
 		}
 		casbinModel := GetPolicyModel(ModelStr)
 		adapter := NewMetaCacheCasbinAdapter(func() PrivilegeCache { return GetPrivilegeCache() })

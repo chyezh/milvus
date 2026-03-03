@@ -22,7 +22,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/flushcommon/util"
 	"github.com/milvus-io/milvus/internal/json"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -79,12 +79,12 @@ func (fm *fgManagerImpl) RemoveFlowgraph(channel string) {
 }
 
 func (fm *fgManagerImpl) ClearFlowgraphs() {
-	mlog.Info(context.TODO(), "start drop all flowgraph resources in DataNode")
+	log.Info(context.TODO(), "start drop all flowgraph resources in DataNode")
 	fm.flowgraphs.Range(func(key string, value *DataSyncService) bool {
 		value.GracefullyClose()
 		fm.flowgraphs.GetAndRemove(key)
 
-		mlog.Info(context.TODO(), "successfully dropped flowgraph", mlog.String("vChannelName", key))
+		log.Info(context.TODO(), "successfully dropped flowgraph", log.String("vChannelName", key))
 		return true
 	})
 }
@@ -138,7 +138,7 @@ func (fm *fgManagerImpl) GetChannelsJSON(collectionID int64) string {
 
 	ret, err := json.Marshal(channels)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to marshal channels", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to marshal channels", log.Err(err))
 		return ""
 	}
 	return string(ret)
@@ -172,7 +172,7 @@ func (fm *fgManagerImpl) GetSegmentsJSON(collectionID int64) string {
 
 	ret, err := json.Marshal(segments)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to marshal segments", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to marshal segments", log.Err(err))
 		return ""
 	}
 	return string(ret)

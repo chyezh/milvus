@@ -22,7 +22,7 @@ import (
 	"time"
 
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 )
 
@@ -50,7 +50,7 @@ func (p *pipeline) addNode(node Node) {
 	if p.enableTtChecker {
 		nodeTtInterval := p.nodeTtInterval
 		manager := timerecord.GetCheckerManger("fgNode", nodeTtInterval, func(list []string) {
-			mlog.Warn(context.TODO(), "some node(s) haven't received input", mlog.Strings("list", list), mlog.Duration("duration ", nodeTtInterval))
+			log.Warn(context.TODO(), "some node(s) haven't received input", log.Strings("list", list), log.Duration("duration ", nodeTtInterval))
 		})
 		name := fmt.Sprintf("nodeCtxTtChecker-%s", node.Name())
 		nodeCtx.Checker = timerecord.NewChecker(name, manager)

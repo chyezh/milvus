@@ -28,7 +28,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -102,7 +102,7 @@ func (s *BulkInsertSuite) runTestAutoID() {
 			importResp, err := c.ProxyClient.ImportV2(ctx, importReqs[i])
 			s.NoError(err)
 			s.Equal(int32(0), importResp.GetStatus().GetCode())
-			mlog.Info(context.TODO(), "Import result", mlog.Any("importResp", importResp))
+			log.Info(context.TODO(), "Import result", log.Any("importResp", importResp))
 			err = WaitForImportDone(ctx, c, importResp.GetJobID())
 			s.NoError(err)
 		}()

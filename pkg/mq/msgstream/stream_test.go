@@ -11,7 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream/mqwrapper"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
@@ -198,7 +198,7 @@ func testSendAndRecv(t *testing.T, p mqwrapper.Producer, c mqwrapper.Consumer) {
 	go func() {
 		defer wg.Done()
 		producerIDs = sendMessages(ctx, t, p, msg)
-		mlog.Debug(context.TODO(), "producing finished", mlog.Any("id", producerIDs[0].Serialize()), mlog.Any("ids", producerIDs))
+		log.Debug(context.TODO(), "producing finished", log.Any("id", producerIDs[0].Serialize()), log.Any("ids", producerIDs))
 	}()
 
 	go func() {

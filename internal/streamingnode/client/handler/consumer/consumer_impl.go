@@ -10,7 +10,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"
@@ -73,11 +73,11 @@ func CreateConsumer(
 		opts:             opts,
 		grpcStreamClient: streamClient,
 		handlerClient:    handlerClient,
-		logger: mlog.With(
-			mlog.String("walName", createResp.GetWalName()),
-			mlog.String("pchannel", opts.Assignment.Channel.Name),
-			mlog.Int64("term", opts.Assignment.Channel.Term),
-			mlog.Int64("streamingNodeID", opts.Assignment.Node.ServerID)),
+		logger: log.With(
+			log.String("walName", createResp.GetWalName()),
+			log.String("pchannel", opts.Assignment.Channel.Name),
+			log.Int64("term", opts.Assignment.Channel.Term),
+			log.Int64("streamingNodeID", opts.Assignment.Node.ServerID)),
 		msgHandler: opts.MessageHandler,
 		finishErr:  syncutil.NewFuture[error](),
 	}
@@ -91,7 +91,7 @@ type consumerImpl struct {
 	opts             *ConsumerOptions
 	grpcStreamClient streamingpb.StreamingNodeHandlerService_ConsumeClient
 	handlerClient    streamingpb.StreamingNodeHandlerServiceClient
-	logger           *mlog.Logger
+	logger           *log.Logger
 	msgHandler       message.Handler
 	finishErr        *syncutil.Future[error]
 	txnBuilder       *message.ImmutableTxnMessageBuilder
@@ -103,11 +103,11 @@ func (c *consumerImpl) Close() error {
 	if err := c.grpcStreamClient.Send(&streamingpb.ConsumeRequest{
 		Request: &streamingpb.ConsumeRequest_Close{},
 	}); err != nil {
-		c.logger.Warn(nil, "send close request failed", mlog.Err(err))
+		c.logger.Warn(nil, "send close request failed", log.Err(err))
 	}
 	// close the grpc client stream.
 	if err := c.grpcStreamClient.CloseSend(); err != nil {
-		c.logger.Warn(nil, "close grpc stream failed", mlog.Err(err))
+		c.logger.Warn(nil, "close grpc stream failed", log.Err(err))
 	}
 	return c.finishErr.Get()
 }
@@ -143,7 +143,7 @@ func (c *consumerImpl) execute() {
 func (c *consumerImpl) recvLoop() (err error) {
 	defer func() {
 		if err != nil {
-			c.logger.Warn(nil, "recv arm of stream closed with unexpected error", mlog.Err(err))
+			c.logger.Warn(nil, "recv arm of stream closed with unexpected error", log.Err(err))
 		} else {
 			c.logger.Info(nil, "recv arm of stream closed")
 		}
@@ -184,7 +184,7 @@ func (c *consumerImpl) recvLoop() (err error) {
 					Ctx:     c.ctx,
 					Message: newImmutableMsg,
 				}); result.Error != nil {
-					c.logger.Warn(nil, "message handle canceled", mlog.Err(err))
+					c.logger.Warn(nil, "message handle canceled", log.Err(err))
 					return errors.Wrapf(result.Error, "At Handler")
 				}
 			}
@@ -192,7 +192,7 @@ func (c *consumerImpl) recvLoop() (err error) {
 			// Should receive io.EOF after that.
 			// Do nothing at current implementation.
 		default:
-			c.logger.Warn(nil, "unknown response type", mlog.Any("response", resp))
+			c.logger.Warn(nil, "unknown response type", log.Any("response", resp))
 		}
 	}
 }
@@ -230,7 +230,7 @@ func (c *consumerImpl) handleTxnMessage(msg message.ImmutableMessage) error {
 		}
 		beginMsg, err := message.AsImmutableBeginTxnMessageV2(msg)
 		if err != nil {
-			c.logger.Warn(nil, "failed to convert message to begin txn message", mlog.Any("messageID", beginMsg.MessageID()), mlog.Err(err))
+			c.logger.Warn(nil, "failed to convert message to begin txn message", log.Any("messageID", beginMsg.MessageID()), log.Err(err))
 			return nil
 		}
 		c.txnBuilder = message.NewImmutableTxnMessageBuilder(beginMsg)
@@ -240,21 +240,21 @@ func (c *consumerImpl) handleTxnMessage(msg message.ImmutableMessage) error {
 		}
 		commitMsg, err := message.AsImmutableCommitTxnMessageV2(msg)
 		if err != nil {
-			c.logger.Warn(nil, "failed to convert message to commit txn message", mlog.Any("messageID", commitMsg.MessageID()), mlog.Err(err))
+			c.logger.Warn(nil, "failed to convert message to commit txn message", log.Any("messageID", commitMsg.MessageID()), log.Err(err))
 			c.txnBuilder = nil
 			return nil
 		}
 		msg, err := c.txnBuilder.Build(commitMsg)
 		c.txnBuilder = nil
 		if err != nil {
-			c.logger.Warn(nil, "failed to build txn message", mlog.Any("messageID", commitMsg.MessageID()), mlog.Err(err))
+			c.logger.Warn(nil, "failed to build txn message", log.Any("messageID", commitMsg.MessageID()), log.Err(err))
 			return nil
 		}
 		if result := c.msgHandler.Handle(message.HandleParam{
 			Ctx:     c.ctx,
 			Message: msg,
 		}); result.Error != nil {
-			c.logger.Warn(nil, "message handle canceled at txn", mlog.Err(err))
+			c.logger.Warn(nil, "message handle canceled at txn", log.Err(err))
 			return errors.Wrap(err, "At Handler Of Txn")
 		}
 	default:

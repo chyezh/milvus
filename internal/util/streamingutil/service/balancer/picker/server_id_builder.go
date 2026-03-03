@@ -8,7 +8,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/attributes"
 	bbalancer "github.com/milvus-io/milvus/internal/util/streamingutil/service/balancer"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 const (
@@ -36,7 +36,7 @@ func (b *serverIDPickerBuilder) Build(info bbalancer.PickerBuildInfo) balancer.P
 	for sc, scInfo := range info.ReadySCs {
 		serverID := attributes.GetServerID(scInfo.Address.BalancerAttributes)
 		if serverID == nil {
-			mlog.Warn(context.TODO(), "no server id found in subConn", mlog.String("address", scInfo.Address.Addr))
+			log.Warn(context.TODO(), "no server id found in subConn", log.String("address", scInfo.Address.Addr))
 			continue
 		}
 
@@ -52,7 +52,7 @@ func (b *serverIDPickerBuilder) Build(info bbalancer.PickerBuildInfo) balancer.P
 	for sc, scInfo := range info.UnReadySCs {
 		serverID := attributes.GetServerID(scInfo.Address.BalancerAttributes)
 		if serverID == nil {
-			mlog.Warn(context.TODO(), "no server id found in subConn", mlog.String("address", scInfo.Address.Addr))
+			log.Warn(context.TODO(), "no server id found in subConn", log.String("address", scInfo.Address.Addr))
 			continue
 		}
 		info := subConnInfo{
@@ -64,7 +64,7 @@ func (b *serverIDPickerBuilder) Build(info bbalancer.PickerBuildInfo) balancer.P
 	}
 
 	if len(readyList) == 0 {
-		mlog.Warn(context.TODO(), "no subConn available after serverID filtering")
+		log.Warn(context.TODO(), "no subConn available after serverID filtering")
 		return base.NewErrPicker(balancer.ErrNoSubConnAvailable)
 	}
 	p := &serverIDPicker{

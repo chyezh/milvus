@@ -22,7 +22,7 @@ import (
 	"math"
 
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 const (
@@ -1591,7 +1591,7 @@ When memory usage < memoryLowWaterLevel, no action.`,
 			level := getAsFloat(v)
 			// (0, 1]
 			if level <= 0 || level > 1 {
-				// mlog.Warn(context.TODO(), "MemoryLowWaterLevel must in the range of `(0, 1]`, use default value", mlog.Float64("low", p.DataNodeMemoryHighWaterLevel), mlog.Float64("default", defaultHighWaterLevel))
+				// log.Warn(context.TODO(), "MemoryLowWaterLevel must in the range of `(0, 1]`, use default value", log.Float64("low", p.DataNodeMemoryHighWaterLevel), log.Float64("default", defaultHighWaterLevel))
 				return highWaterLevel
 			}
 			if !p.checkMinMaxLegal(p.DataNodeMemoryLowWaterLevel.GetAsFloat(), getAsFloat(v)) {
@@ -1615,7 +1615,7 @@ When memory usage < memoryLowWaterLevel, no action.`,
 			level := getAsFloat(v)
 			// (0, 1]
 			if level <= 0 || level > 1 {
-				// mlog.Warn(context.TODO(), "MemoryLowWaterLevel must in the range of `(0, 1]`, use default value", mlog.Float64("low", p.QueryNodeMemoryLowWaterLevel), mlog.Float64("default", defaultLowWaterLevel))
+				// log.Warn(context.TODO(), "MemoryLowWaterLevel must in the range of `(0, 1]`, use default value", log.Float64("low", p.QueryNodeMemoryLowWaterLevel), log.Float64("default", defaultLowWaterLevel))
 				return lowWaterLevel
 			}
 			return v
@@ -1636,7 +1636,7 @@ When memory usage < memoryLowWaterLevel, no action.`,
 			level := getAsFloat(v)
 			// (0, 1]
 			if level <= 0 || level > 1 {
-				// mlog.Warn(context.TODO(), "MemoryLowWaterLevel must in the range of `(0, 1]`, use default value", mlog.Float64("low", p.QueryNodeMemoryHighWaterLevel), mlog.Float64("default", defaultHighWaterLevel))
+				// log.Warn(context.TODO(), "MemoryLowWaterLevel must in the range of `(0, 1]`, use default value", log.Float64("low", p.QueryNodeMemoryHighWaterLevel), log.Float64("default", defaultHighWaterLevel))
 				return highWaterLevel
 			}
 			if !p.checkMinMaxLegal(p.QueryNodeMemoryLowWaterLevel.GetAsFloat(), getAsFloat(v)) {
@@ -1952,8 +1952,8 @@ func megaBytes2Bytes(f float64) float64 {
 
 func (p *quotaConfig) checkMinMaxLegal(min, max float64) bool {
 	if min > max {
-		mlog.Warn(context.TODO(), "init QuotaConfig failed, max/high must be greater than or equal to min/low, use default values",
-			mlog.String("msg", fmt.Sprintf("min: %v, max: %v, defaultMin: %v, defaultMax: %v", min, max, defaultMin, defaultMax)))
+		log.Warn(context.TODO(), "init QuotaConfig failed, max/high must be greater than or equal to min/low, use default values",
+			log.String("msg", fmt.Sprintf("min: %v, max: %v, defaultMin: %v, defaultMax: %v", min, max, defaultMin, defaultMax)))
 		return false
 	}
 	return true

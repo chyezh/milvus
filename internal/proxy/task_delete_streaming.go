@@ -8,7 +8,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/util/hookutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
@@ -42,7 +42,7 @@ func (dt *deleteTask) Execute(ctx context.Context) (err error) {
 	if hookutil.IsClusterEncryptionEnabled() {
 		schema, err := globalMetaCache.GetCollectionSchema(ctx, dt.req.GetDbName(), dt.req.GetCollectionName())
 		if err != nil {
-			mlog.Warn(ctx, "get collection schema from global meta cache failed", mlog.String("collectionName", dt.req.GetCollectionName()), mlog.Err(err))
+			log.Warn(ctx, "get collection schema from global meta cache failed", log.String("collectionName", dt.req.GetCollectionName()), log.Err(err))
 			return merr.WrapErrAsInputErrorWhen(err, merr.ErrCollectionNotFound, merr.ErrDatabaseNotFound)
 		}
 
@@ -69,16 +69,16 @@ func (dt *deleteTask) Execute(ctx context.Context) (err error) {
 		}
 	}
 
-	mlog.Debug(ctx, "send delete request to virtual channels",
-		mlog.String("collectionName", dt.req.GetCollectionName()),
-		mlog.Int64("collectionID", dt.collectionID),
-		mlog.Strings("virtual_channels", dt.vChannels),
-		mlog.Int64("taskID", dt.ID()),
-		mlog.Duration("prepare duration", dt.tr.RecordSpan()))
+	log.Debug(ctx, "send delete request to virtual channels",
+		log.String("collectionName", dt.req.GetCollectionName()),
+		log.Int64("collectionID", dt.collectionID),
+		log.Strings("virtual_channels", dt.vChannels),
+		log.Int64("taskID", dt.ID()),
+		log.Duration("prepare duration", dt.tr.RecordSpan()))
 
 	resp := streaming.WAL().AppendMessages(ctx, msgs...)
 	if err := resp.UnwrapFirstError(); err != nil {
-		mlog.Warn(ctx, "append messages to wal failed", mlog.Err(err))
+		log.Warn(ctx, "append messages to wal failed", log.Err(err))
 		return err
 	}
 	dt.sessionTS = resp.MaxTimeTick()

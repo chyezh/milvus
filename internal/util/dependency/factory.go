@@ -9,7 +9,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/objectstorage"
@@ -93,7 +93,7 @@ func (f *DefaultFactory) Init(params *paramtable.ComponentParam) {
 func (f *DefaultFactory) initMQ(standalone bool, params *paramtable.ComponentParam) error {
 	mqType := mustSelectMQType(standalone, params.MQCfg.Type.GetValue(), mqEnable{params.RocksmqEnable(), params.PulsarEnable(), params.KafkaEnable(), params.WoodpeckerEnable()})
 	metrics.RegisterMQType(mqType)
-	mlog.Info(context.TODO(), "try to init mq", mlog.Bool("standalone", standalone), mlog.String("mqType", mqType))
+	log.Info(context.TODO(), "try to init mq", log.Bool("standalone", standalone), log.String("mqType", mqType))
 
 	switch mqType {
 	case mqTypeRocksmq:

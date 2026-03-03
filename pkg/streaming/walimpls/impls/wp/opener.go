@@ -5,7 +5,7 @@ import (
 
 	"github.com/zilliztech/woodpecker/woodpecker"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/helper"
 )
@@ -21,26 +21,26 @@ type openerImpl struct {
 func (o *openerImpl) Open(ctx context.Context, opt *walimpls.OpenOption) (walimpls.WALImpls, error) {
 	exists, err := o.c.LogExists(ctx, opt.Channel.Name)
 	if err != nil {
-		mlog.Error(ctx, "failed to check log exists", mlog.String("log_name", opt.Channel.Name), mlog.Err(err))
+		log.Error(ctx, "failed to check log exists", log.String("log_name", opt.Channel.Name), log.Err(err))
 		return nil, err
 	}
 	if !exists {
 		if err := o.c.CreateLog(ctx, opt.Channel.Name); err != nil {
-			mlog.Error(ctx, "failed to create log", mlog.String("log_name", opt.Channel.Name), mlog.Err(err))
+			log.Error(ctx, "failed to create log", log.String("log_name", opt.Channel.Name), log.Err(err))
 			return nil, err
 		}
 	}
 	l, err := o.c.OpenLog(ctx, opt.Channel.Name)
 	if err != nil {
-		mlog.Error(ctx, "failed to open log", mlog.String("log_name", opt.Channel.Name), mlog.Err(err))
+		log.Error(ctx, "failed to open log", log.String("log_name", opt.Channel.Name), log.Err(err))
 		return nil, err
 	}
 	p, err := l.OpenLogWriter(ctx)
 	if err != nil {
-		mlog.Error(ctx, "failed to open log writer", mlog.String("log_name", opt.Channel.Name), mlog.Err(err))
+		log.Error(ctx, "failed to open log writer", log.String("log_name", opt.Channel.Name), log.Err(err))
 		return nil, err
 	}
-	mlog.Info(ctx, "finish to open log writer", mlog.String("log_name", opt.Channel.Name), mlog.Err(err))
+	log.Info(ctx, "finish to open log writer", log.String("log_name", opt.Channel.Name), log.Err(err))
 	return &walImpl{
 		WALHelper: helper.NewWALHelper(opt),
 		p:         p,
@@ -53,6 +53,6 @@ func (o *openerImpl) Close() {
 	ctx := context.Background()
 	err := o.c.Close(ctx)
 	if err != nil {
-		mlog.Error(ctx, "failed to close woodpecker client", mlog.Err(err))
+		log.Error(ctx, "failed to close woodpecker client", log.Err(err))
 	}
 }

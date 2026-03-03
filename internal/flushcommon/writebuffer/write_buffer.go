@@ -22,7 +22,7 @@ import (
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
@@ -140,7 +140,7 @@ type writeBufferBase struct {
 	taskObserverCallback func(t syncmgr.Task, err error) // execute when a sync task finished, should be concurrent safe.
 
 	// pre build logger
-	logger *mlog.Logger
+	logger *log.Logger
 }
 
 func newWriteBufferBase(channel string, metacache metacache.MetaCache, syncMgr syncmgr.SyncManager, option *writeBufferOption) (*writeBufferBase, error) {
@@ -170,8 +170,8 @@ func newWriteBufferBase(channel string, metacache metacache.MetaCache, syncMgr s
 		taskObserverCallback: option.taskObserverCallback,
 	}
 
-	wb.logger = mlog.With(mlog.Int64("collectionID", wb.collectionID),
-		mlog.String("channel", wb.channelName))
+	wb.logger = log.With(log.Int64("collectionID", wb.collectionID),
+		log.String("channel", wb.channelName))
 
 	return wb, nil
 }
@@ -232,7 +232,7 @@ func (wb *writeBufferBase) EvictBuffer(policies ...SyncPolicy) {
 
 	// need valid checkpoint before triggering syncing
 	if wb.checkpoint == nil {
-		mlog.Warn(context.TODO(), "evict buffer before buffering data")
+		log.Warn(context.TODO(), "evict buffer before buffering data")
 		return
 	}
 
@@ -240,7 +240,7 @@ func (wb *writeBufferBase) EvictBuffer(policies ...SyncPolicy) {
 
 	segmentIDs := wb.getSegmentsToSync(ts, policies...)
 	if len(segmentIDs) > 0 {
-		mlog.Info(context.TODO(), "evict buffer find segments to sync", mlog.Int64s("segmentIDs", segmentIDs))
+		log.Info(context.TODO(), "evict buffer find segments to sync", log.Int64s("segmentIDs", segmentIDs))
 		conc.AwaitAll(wb.syncSegments(context.Background(), segmentIDs)...)
 	}
 }
@@ -262,21 +262,21 @@ func (wb *writeBufferBase) GetCheckpoint() *msgpb.MsgPosition {
 
 	if checkpoint == nil {
 		// all buffer are empty
-		mlog.RatedDebug(context.TODO(), mlog.RateDefault, "checkpoint from latest consumed msg", mlog.Uint64("cpTimestamp", wb.checkpoint.GetTimestamp()))
+		log.RatedDebug(context.TODO(), log.RateDefault, "checkpoint from latest consumed msg", log.Uint64("cpTimestamp", wb.checkpoint.GetTimestamp()))
 		return wb.checkpoint
 	}
 
-	mlog.RatedDebug(context.TODO(), mlog.RateDefault, "checkpoint evaluated",
-		mlog.String("cpSource", checkpoint.source),
-		mlog.Int64("segmentID", checkpoint.segmentID),
-		mlog.Uint64("cpTimestamp", checkpoint.position.GetTimestamp()))
+	log.RatedDebug(context.TODO(), log.RateDefault, "checkpoint evaluated",
+		log.String("cpSource", checkpoint.source),
+		log.Int64("segmentID", checkpoint.segmentID),
+		log.Uint64("cpTimestamp", checkpoint.position.GetTimestamp()))
 	return checkpoint.position
 }
 
 func (wb *writeBufferBase) triggerSync() (segmentIDs []int64) {
 	segmentsToSync := wb.getSegmentsToSync(wb.checkpoint.GetTimestamp(), wb.syncPolicies...)
 	if len(segmentsToSync) > 0 {
-		mlog.Info(context.TODO(), "write buffer get segments to sync", mlog.Int64s("segmentIDs", segmentsToSync))
+		log.Info(context.TODO(), "write buffer get segments to sync", log.Int64s("segmentIDs", segmentsToSync))
 		// ignore future here, use callback to handle error
 		wb.syncSegments(context.Background(), segmentsToSync)
 	}
@@ -288,7 +288,7 @@ func (wb *writeBufferBase) sealSegments(_ context.Context, segmentIDs []int64) e
 	for _, segmentID := range segmentIDs {
 		_, ok := wb.metaCache.GetSegmentByID(segmentID)
 		if !ok {
-			mlog.Warn(context.TODO(), "cannot find segment when sealSegments", mlog.Int64("segmentID", segmentID), mlog.String("channel", wb.channelName))
+			log.Warn(context.TODO(), "cannot find segment when sealSegments", log.Int64("segmentID", segmentID), log.String("channel", wb.channelName))
 			return merr.WrapErrSegmentNotFound(segmentID)
 		}
 	}
@@ -301,7 +301,7 @@ func (wb *writeBufferBase) sealSegments(_ context.Context, segmentIDs []int64) e
 
 func (wb *writeBufferBase) sealAllSegments(ctx context.Context) error {
 	allSegmentIds := wb.metaCache.GetSegmentIDsBy()
-	mlog.Info(ctx, "seal all segments", mlog.Int64s("segmentIDs", allSegmentIds))
+	log.Info(ctx, "seal all segments", log.Int64s("segmentIDs", allSegmentIds))
 	// mark segment flushing if segment was growing
 	wb.metaCache.UpdateSegments(metacache.UpdateState(commonpb.SegmentState_Sealed),
 		metacache.WithSegmentIDs(allSegmentIds...),
@@ -323,10 +323,10 @@ func (wb *writeBufferBase) syncSegments(ctx context.Context, segmentIDs []int64)
 		syncTask, err := wb.getSyncTask(ctx, segmentID)
 		if err != nil {
 			if errors.Is(err, merr.ErrSegmentNotFound) {
-				mlog.Warn(context.TODO(), "segment not found in meta", mlog.Int64("segmentID", segmentID))
+				log.Warn(context.TODO(), "segment not found in meta", log.Int64("segmentID", segmentID))
 				continue
 			} else {
-				mlog.Fatal(context.TODO(), "failed to get sync task", mlog.Int64("segmentID", segmentID), mlog.Err(err))
+				log.Fatal(context.TODO(), "failed to get sync task", log.Int64("segmentID", segmentID), log.Err(err))
 			}
 		}
 
@@ -345,12 +345,12 @@ func (wb *writeBufferBase) syncSegments(ctx context.Context, segmentIDs []int64)
 
 			if syncTask.IsFlush() {
 				wb.metaCache.RemoveSegments(metacache.WithSegmentIDs(syncTask.SegmentID()))
-				mlog.Info(context.TODO(), "flushed segment removed", mlog.Int64("segmentID", syncTask.SegmentID()), mlog.String("channel", syncTask.ChannelName()))
+				log.Info(context.TODO(), "flushed segment removed", log.Int64("segmentID", syncTask.SegmentID()), log.String("channel", syncTask.ChannelName()))
 			}
 			return nil
 		})
 		if err != nil {
-			mlog.Fatal(context.TODO(), "failed to sync data", mlog.Int64("segmentID", segmentID), mlog.Err(err))
+			log.Fatal(context.TODO(), "failed to sync data", log.Int64("segmentID", segmentID), log.Err(err))
 		}
 		result = append(result, future)
 	}
@@ -365,7 +365,7 @@ func (wb *writeBufferBase) getSegmentsToSync(ts typeutil.Timestamp, policies ...
 	for _, policy := range policies {
 		result := policy.SelectSegments(buffers, ts)
 		if len(result) > 0 {
-			mlog.Info(context.TODO(), "SyncPolicy selects segments", mlog.Int64s("segmentIDs", result), mlog.String("reason", policy.Reason()))
+			log.Info(context.TODO(), "SyncPolicy selects segments", log.Int64s("segmentIDs", result), log.String("reason", policy.Reason()))
 			segments.Insert(result...)
 		}
 	}
@@ -543,7 +543,7 @@ func (wb *writeBufferBase) CreateNewGrowingSegment(partitionID int64, segmentID 
 		wb.metaCache.AddSegment(segmentInfo, func(_ *datapb.SegmentInfo) pkoracle.PkStat {
 			return pkoracle.NewBloomFilterSetWithBatchSize(wb.getEstBatchSize())
 		}, metacache.NewBM25StatsFactory, metacache.SetStartPosRecorded(false))
-		mlog.Info(context.TODO(), "add growing segment", mlog.Int64("segmentID", segmentID), mlog.String("channel", wb.channelName), mlog.Int64("storage version", storageVersion))
+		log.Info(context.TODO(), "add growing segment", log.Int64("segmentID", segmentID), log.String("channel", wb.channelName), log.Int64("storage version", storageVersion))
 	}
 }
 
@@ -557,7 +557,7 @@ func (wb *writeBufferBase) bufferDelete(segmentID int64, pks []storage.PrimaryKe
 func (wb *writeBufferBase) getSyncTask(ctx context.Context, segmentID int64) (syncmgr.Task, error) {
 	segmentInfo, ok := wb.metaCache.GetSegmentByID(segmentID) // wb.metaCache.GetSegmentsBy(metacache.WithSegmentIDs(segmentID))
 	if !ok {
-		mlog.Warn(context.TODO(), "segment info not found in meta cache", mlog.Int64("segmentID", segmentID))
+		log.Warn(context.TODO(), "segment info not found in meta cache", log.Int64("segmentID", segmentID))
 		return nil, merr.WrapErrSegmentNotFound(segmentID)
 	}
 	var batchSize int64
@@ -667,20 +667,20 @@ func (wb *writeBufferBase) Close(ctx context.Context, drop bool) {
 			return nil
 		})
 		if err != nil {
-			mlog.Fatal(context.TODO(), "failed to sync segment", mlog.Int64("segmentID", id), mlog.Err(err))
+			log.Fatal(context.TODO(), "failed to sync segment", log.Int64("segmentID", id), log.Err(err))
 		}
 		futures = append(futures, f)
 	}
 
 	err := conc.AwaitAll(futures...)
 	if err != nil {
-		mlog.Error(context.TODO(), "failed to sink write buffer data", mlog.Err(err))
+		log.Error(context.TODO(), "failed to sink write buffer data", log.Err(err))
 		// TODO change to remove channel in the future
 		panic(err)
 	}
 	err = wb.metaWriter.DropChannel(ctx, wb.channelName)
 	if err != nil {
-		mlog.Error(context.TODO(), "failed to drop channel", mlog.Err(err))
+		log.Error(context.TODO(), "failed to drop channel", log.Err(err))
 		// TODO change to remove channel in the future
 		panic(err)
 	}
@@ -710,7 +710,7 @@ func PrepareInsert(collSchema *schemapb.CollectionSchema, pkField *schemapb.Fiel
 		for _, msg := range msgs {
 			data, err := storage.InsertMsgToInsertData(msg, collSchema)
 			if err != nil {
-				mlog.Warn(context.TODO(), "failed to transfer insert msg to insert data", mlog.Err(err))
+				log.Warn(context.TODO(), "failed to transfer insert msg to insert data", log.Err(err))
 				return nil, err
 			}
 

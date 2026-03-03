@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/importutilv2"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
@@ -134,11 +134,11 @@ func (t *PreImportTask) Clone() Task {
 
 func (t *PreImportTask) Execute() []*conc.Future[any] {
 	bufferSize := int(t.GetBufferSize())
-	mlog.Info(context.TODO(), "start to preimport", WrapLogFields(t,
-		mlog.Int("bufferSize", bufferSize),
-		mlog.Int64("taskSlot", t.GetSlots()),
-		mlog.Any("files", t.req.GetImportFiles()),
-		mlog.Any("schema", t.GetSchema()),
+	log.Info(context.TODO(), "start to preimport", WrapLogFields(t,
+		log.Int("bufferSize", bufferSize),
+		log.Int64("taskSlot", t.GetSlots()),
+		log.Any("files", t.req.GetImportFiles()),
+		log.Any("schema", t.GetSchema()),
 	)...)
 	t.manager.Update(t.GetTaskID(), UpdateState(datapb.ImportTaskStateV2_InProgress))
 	files := lo.Map(t.GetFileStats(),
@@ -149,7 +149,7 @@ func (t *PreImportTask) Execute() []*conc.Future[any] {
 	fn := func(i int, file *internalpb.ImportFile) error {
 		reader, err := importutilv2.NewReader(t.ctx, t.cm, t.GetSchema(), file, t.options, bufferSize, t.req.GetStorageConfig())
 		if err != nil {
-			mlog.Warn(context.TODO(), "new reader failed", WrapLogFields(t, mlog.String("file", file.String()), mlog.Err(err))...)
+			log.Warn(context.TODO(), "new reader failed", WrapLogFields(t, log.String("file", file.String()), log.Err(err))...)
 			reason := fmt.Sprintf("error: %v, file: %s", err, file.String())
 			t.manager.Update(t.GetTaskID(), UpdateState(datapb.ImportTaskStateV2_Failed), UpdateReason(reason))
 			return err
@@ -158,13 +158,13 @@ func (t *PreImportTask) Execute() []*conc.Future[any] {
 		start := time.Now()
 		err = t.readFileStat(reader, i)
 		if err != nil {
-			mlog.Warn(context.TODO(), "preimport failed", WrapLogFields(t, mlog.String("file", file.String()), mlog.Err(err))...)
+			log.Warn(context.TODO(), "preimport failed", WrapLogFields(t, log.String("file", file.String()), log.Err(err))...)
 			reason := fmt.Sprintf("error: %v, file: %s", err, file.String())
 			t.manager.Update(t.GetTaskID(), UpdateState(datapb.ImportTaskStateV2_Failed), UpdateReason(reason))
 			return err
 		}
-		mlog.Info(context.TODO(), "read file stat done", WrapLogFields(t, mlog.Strings("files", file.GetPaths()),
-			mlog.Duration("dur", time.Since(start)))...)
+		log.Info(context.TODO(), "read file stat done", WrapLogFields(t, log.Strings("files", file.GetPaths()),
+			log.Duration("dur", time.Since(start)))...)
 		return nil
 	}
 
@@ -220,7 +220,7 @@ func (t *PreImportTask) readFileStat(reader importutilv2.Reader, fileIdx int) er
 		size := data.GetMemorySize()
 		totalRows += rows
 		totalSize += size
-		mlog.Info(context.TODO(), "reading file stat...", WrapLogFields(t, mlog.Int("readRows", rows), mlog.Int("readSize", size))...)
+		log.Info(context.TODO(), "reading file stat...", WrapLogFields(t, log.Int("readRows", rows), log.Int("readSize", size))...)
 	}
 
 	stat := &datapb.ImportFileStats{

@@ -37,7 +37,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -85,7 +85,7 @@ func GetIP(ip string) string {
 	netIP := net.ParseIP(ip)
 	// not a valid ip addr
 	if netIP == nil {
-		mlog.Warn(context.TODO(), "cannot parse input ip, treat it as hostname/service name", mlog.String("ip", ip))
+		log.Warn(context.TODO(), "cannot parse input ip, treat it as hostname/service name", log.String("ip", ip))
 		return ip
 	}
 	// only localhost or unicast is acceptable
@@ -102,7 +102,7 @@ func GetIP(ip string) string {
 func GetLocalIP() string {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
-		mlog.Warn(context.TODO(), "Failed to get interface addresses", mlog.Err(err))
+		log.Warn(context.TODO(), "Failed to get interface addresses", log.Err(err))
 		return "127.0.0.1"
 	}
 
@@ -113,7 +113,7 @@ func GetLocalIP() string {
 		return ip
 	}
 
-	mlog.Warn(context.TODO(), "No valid local IP found, falling back to loopback")
+	log.Warn(context.TODO(), "No valid local IP found, falling back to loopback")
 	return "127.0.0.1"
 }
 
@@ -180,14 +180,14 @@ func getValidLocalIP(addrs []net.Addr, preferIPv6 bool) string {
 	for _, category := range priorities {
 		if ip, exists := candidates[category]; exists {
 			result := formatLocalIP(ip)
-			mlog.Debug(context.TODO(), "Selected IP by priority",
-				mlog.String("ip", result),
-				mlog.String("categoryName", getCategoryName(category)))
+			log.Debug(context.TODO(), "Selected IP by priority",
+				log.String("ip", result),
+				log.String("categoryName", getCategoryName(category)))
 			return result
 		}
 	}
 
-	mlog.Warn(context.TODO(), "No valid IP found in candidates")
+	log.Warn(context.TODO(), "No valid IP found in candidates")
 	return ""
 }
 
@@ -792,7 +792,7 @@ func categorizeLocalIP(ip net.IP) (ipCategory, bool) {
 		return ipCategoryIPv6Public, true
 	}
 
-	mlog.Debug(context.TODO(), "IP categorization: uncategorized IPv6", mlog.String("ip", ip.String()))
+	log.Debug(context.TODO(), "IP categorization: uncategorized IPv6", log.String("ip", ip.String()))
 	return 0, false
 }
 

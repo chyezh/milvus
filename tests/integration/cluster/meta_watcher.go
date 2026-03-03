@@ -28,7 +28,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 )
@@ -172,7 +172,7 @@ func listReplicas(cli *clientv3.Client, prefix string) ([]*querypb.Replica, erro
 	for _, kv := range resp.Kvs {
 		replica := &querypb.Replica{}
 		if err := proto.Unmarshal(kv.Value, replica); err != nil {
-			mlog.Warn(context.TODO(), "failed to unmarshal replica info", mlog.Err(err))
+			log.Warn(context.TODO(), "failed to unmarshal replica info", log.Err(err))
 			continue
 		}
 		replicas = append(replicas, replica)

@@ -33,7 +33,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -447,7 +447,7 @@ func (b *BalanceChecker) processBalanceQueue(
 		pq.Len() > 0 {
 		// Break if balanceOnMultipleCollections is disabled and we already have tasks
 		if !config.balanceOnMultipleCollections && (generatedSegmentTaskNum > 0 || generatedChannelTaskNum > 0) {
-			mlog.Debug(context.TODO(), "Balance on multiple collections disabled, stopping after first collection")
+			log.Debug(context.TODO(), "Balance on multiple collections disabled, stopping after first collection")
 			break
 		}
 
@@ -516,7 +516,7 @@ func (b *BalanceChecker) Check(ctx context.Context) []task.Task {
 	defer func() {
 		duration := time.Since(start)
 		if duration > 100*time.Millisecond {
-			mlog.Info(context.TODO(), "Balance check too slow", mlog.Duration("duration", duration))
+			log.Info(context.TODO(), "Balance check too slow", log.Duration("duration", duration))
 		}
 	}()
 

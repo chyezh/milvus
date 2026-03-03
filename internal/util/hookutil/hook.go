@@ -29,7 +29,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/hook"
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -68,18 +68,18 @@ func initHook() error {
 
 	path := paramtable.Get().ProxyCfg.SoPath.GetValue()
 	if path == "" {
-		mlog.Info(context.TODO(), "empty so path, skip to load plugin")
+		log.Info(context.TODO(), "empty so path, skip to load plugin")
 		return nil
 	}
 
-	mlog.Info(context.TODO(), "start to load plugin", mlog.String("path", path))
+	log.Info(context.TODO(), "start to load plugin", log.String("path", path))
 	LockHookInit()
 	defer UnlockHookInit()
 	p, err := plugin.Open(path)
 	if err != nil {
 		return fmt.Errorf("fail to open the plugin, error: %s", err.Error())
 	}
-	mlog.Info(context.TODO(), "plugin open")
+	log.Info(context.TODO(), "plugin open")
 
 	h, err := p.Lookup("MilvusHook")
 	if err != nil {
@@ -97,13 +97,13 @@ func initHook() error {
 	}
 	storeHook((hookVal))
 	paramtable.GetHookParams().WatchHookWithPrefix("watch_hook", "", func(event *config.Event) {
-		mlog.Info(context.TODO(), "receive the hook refresh event", mlog.Any("event", event))
+		log.Info(context.TODO(), "receive the hook refresh event", log.Any("event", event))
 		go func() {
 			hookVal := GetHook()
 			soConfig := paramtable.GetHookParams().SoConfig.GetValue()
-			mlog.Info(context.TODO(), "refresh hook configs", mlog.Any("config", soConfig))
+			log.Info(context.TODO(), "refresh hook configs", log.Any("config", soConfig))
 			if err = hookVal.Init(soConfig); err != nil {
-				mlog.Panic(context.TODO(), "fail to init configs for the hook when refreshing", mlog.Err(err))
+				log.Panic(context.TODO(), "fail to init configs for the hook when refreshing", log.Err(err))
 			}
 			storeHook(hookVal)
 		}()
@@ -128,13 +128,13 @@ func InitOnceHook() {
 		err := initHook()
 		if err != nil {
 			if paramtable.Get().CommonCfg.PanicWhenPluginFail.GetAsBool() {
-				mlog.Panic(context.TODO(), "fail to init hook",
-					mlog.String("so_path", paramtable.Get().ProxyCfg.SoPath.GetValue()),
-					mlog.Err(err))
+				log.Panic(context.TODO(), "fail to init hook",
+					log.String("so_path", paramtable.Get().ProxyCfg.SoPath.GetValue()),
+					log.Err(err))
 			} else {
-				mlog.Warn(context.TODO(), "fail to init hook",
-					mlog.String("so_path", paramtable.Get().ProxyCfg.SoPath.GetValue()),
-					mlog.Err(err))
+				log.Warn(context.TODO(), "fail to init hook",
+					log.String("so_path", paramtable.Get().ProxyCfg.SoPath.GetValue()),
+					log.Err(err))
 			}
 		}
 	})

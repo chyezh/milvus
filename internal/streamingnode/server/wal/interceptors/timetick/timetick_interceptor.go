@@ -11,7 +11,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick/ack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/txn"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 )
 
@@ -125,10 +125,10 @@ func (impl *timeTickAppendInterceptor) DoAppend(ctx context.Context, msg message
 func (impl *timeTickAppendInterceptor) GracefulClose() {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	logger := mlog.With(mlog.Any("pchannel", impl.operator.interceptorBuildParam.ChannelInfo))
+	logger := log.With(log.Any("pchannel", impl.operator.interceptorBuildParam.ChannelInfo))
 	logger.Info(nil, "timeTickAppendInterceptor is closing, try to perform a txn manager graceful shutdown")
 	if err := impl.txnManager.GracefulClose(ctx); err != nil {
-		logger.Warn(nil, "timeTickAppendInterceptor is closed", mlog.Err(err))
+		logger.Warn(nil, "timeTickAppendInterceptor is closed", log.Err(err))
 		return
 	}
 	logger.Info(nil, "txnManager of timeTickAppendInterceptor is graceful closed")

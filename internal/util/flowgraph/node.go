@@ -24,7 +24,7 @@ import (
 
 	"go.uber.org/atomic"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 )
 
@@ -84,7 +84,7 @@ func (nodeCtxManager *nodeCtxManager) Start() {
 	// tt checker start
 	if enableTtChecker {
 		manager := timerecord.GetCheckerManger("data-fgNode", nodeCtxTtInterval, func(list []string) {
-			mlog.Warn(context.TODO(), "some node(s) haven't received input", mlog.Strings("list", list), mlog.Duration("duration ", nodeCtxTtInterval))
+			log.Warn(context.TODO(), "some node(s) haven't received input", log.Strings("list", list), log.Duration("duration ", nodeCtxTtInterval))
 		})
 		for curNode != nil {
 			name := fmt.Sprintf("nodeCtxTtChecker-%s", curNode.node.Name())
@@ -174,9 +174,9 @@ func (nodeCtx *nodeCtx) Block() {
 		startTs := time.Now()
 		nodeCtx.blockMutex.Lock()
 		if time.Since(startTs) >= blockAllWait {
-			mlog.Warn(context.TODO(), "flow graph wait for long time",
-				mlog.String("name", nodeCtx.node.Name()),
-				mlog.Duration("wait time", time.Since(startTs)))
+			log.Warn(context.TODO(), "flow graph wait for long time",
+				log.String("name", nodeCtx.node.Name()),
+				log.Duration("wait time", time.Since(startTs)))
 		}
 	}
 }
@@ -202,7 +202,7 @@ func (nodeCtx *nodeCtx) Close() {
 			if nodeCtx.checker != nil {
 				nodeCtx.checker.Close()
 			}
-			mlog.Debug(context.TODO(), "flow graph node closed", mlog.String("nodeName", nodeCtx.node.Name()))
+			log.Debug(context.TODO(), "flow graph node closed", log.String("nodeName", nodeCtx.node.Name()))
 			nodeCtx = nodeCtx.downstream
 		}
 	}
@@ -252,7 +252,7 @@ func (node *BaseNode) Operate(in []Msg) []Msg {
 
 func (node *BaseNode) IsValidInMsg(in []Msg) bool {
 	if in == nil {
-		mlog.Info(context.TODO(), "type assertion failed because it's nil")
+		log.Info(context.TODO(), "type assertion failed because it's nil")
 		return false
 	}
 
@@ -262,7 +262,7 @@ func (node *BaseNode) IsValidInMsg(in []Msg) bool {
 	}
 
 	if len(in) != 1 {
-		mlog.Warn(context.TODO(), "Invalid operate message input", mlog.Int("input length", len(in)))
+		log.Warn(context.TODO(), "Invalid operate message input", log.Int("input length", len(in)))
 		return false
 	}
 	return true

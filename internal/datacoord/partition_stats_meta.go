@@ -7,7 +7,7 @@ import (
 
 
 	"github.com/milvus-io/milvus/internal/metastore"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
@@ -63,7 +63,7 @@ func (psm *partitionStatsMeta) reloadFromKV() error {
 		}
 		psm.partitionStatsInfos[info.GetVChannel()][info.GetPartitionID()].infos[info.GetVersion()] = info
 	}
-	mlog.Info(context.TODO(), "DataCoord partitionStatsMeta reloadFromKV done", mlog.Duration("duration", record.ElapseSpan()))
+	log.Info(context.TODO(), "DataCoord partitionStatsMeta reloadFromKV done", log.Duration("duration", record.ElapseSpan()))
 	return nil
 }
 
@@ -107,7 +107,7 @@ func (psm *partitionStatsMeta) SavePartitionStatsInfo(info *datapb.PartitionStat
 	psm.Lock()
 	defer psm.Unlock()
 	if err := psm.catalog.SavePartitionStatsInfo(context.TODO(), info); err != nil {
-		mlog.Error(context.TODO(), "meta update: update PartitionStatsInfo info fail", mlog.Err(err))
+		log.Error(context.TODO(), "meta update: update PartitionStatsInfo info fail", log.Err(err))
 		return err
 	}
 	if _, ok := psm.partitionStatsInfos[info.GetVChannel()]; !ok {
@@ -145,12 +145,12 @@ func (psm *partitionStatsMeta) DropPartitionStatsInfo(ctx context.Context, info 
 	}
 
 	if err := psm.catalog.DropPartitionStatsInfo(ctx, info); err != nil {
-		mlog.Error(ctx, "meta update: drop PartitionStatsInfo info fail",
-			mlog.Int64("collectionID", info.GetCollectionID()),
-			mlog.Int64("partitionID", info.GetPartitionID()),
-			mlog.String("vchannel", info.GetVChannel()),
-			mlog.Int64("version", info.GetVersion()),
-			mlog.Err(err))
+		log.Error(ctx, "meta update: drop PartitionStatsInfo info fail",
+			log.Int64("collectionID", info.GetCollectionID()),
+			log.Int64("partitionID", info.GetPartitionID()),
+			log.String("vchannel", info.GetVChannel()),
+			log.Int64("version", info.GetVersion()),
+			log.Err(err))
 		return err
 	}
 	if _, ok := psm.partitionStatsInfos[info.GetVChannel()]; !ok {
@@ -176,9 +176,9 @@ func (psm *partitionStatsMeta) SaveCurrentPartitionStatsVersion(collectionID, pa
 }
 
 func (psm *partitionStatsMeta) innerSaveCurrentPartitionStatsVersion(collectionID, partitionID int64, vChannel string, currentPartitionStatsVersion int64) error {
-	mlog.Info(context.TODO(), "update current partition stats version", mlog.Int64("collectionID", collectionID),
-		mlog.Int64("partitionID", partitionID),
-		mlog.String("vChannel", vChannel), mlog.Int64("currentPartitionStatsVersion", currentPartitionStatsVersion))
+	log.Info(context.TODO(), "update current partition stats version", log.Int64("collectionID", collectionID),
+		log.Int64("partitionID", partitionID),
+		log.String("vChannel", vChannel), log.Int64("currentPartitionStatsVersion", currentPartitionStatsVersion))
 
 	if _, ok := psm.partitionStatsInfos[vChannel]; !ok {
 		return merr.WrapErrClusteringCompactionMetaError("SaveCurrentPartitionStatsVersion",

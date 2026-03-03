@@ -25,7 +25,7 @@ import (
 
 	"github.com/apache/pulsar-client-go/pulsar"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream/mqwrapper"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
@@ -75,7 +75,7 @@ func (pc *Consumer) Chan() <-chan common.Message {
 					select {
 					case msg, ok := <-pc.c.Chan():
 						if !ok {
-							mlog.Debug(context.TODO(), "pulsar consumer channel closed")
+							log.Debug(context.TODO(), "pulsar consumer channel closed")
 							return
 						}
 
@@ -103,7 +103,7 @@ func (pc *Consumer) Chan() <-chan common.Message {
 func (pc *Consumer) Seek(id common.MessageID, inclusive bool) error {
 	// If it is the earliest message ID, skip the seek to prevent failure.
 	if id.AtEarliestPosition() {
-		mlog.Info(context.TODO(), "seek from earliest position", mlog.String("id", string(id.Serialize())), mlog.String("sub", pc.Subscription()))
+		log.Info(context.TODO(), "seek from earliest position", log.String("id", string(id.Serialize())), log.String("sub", pc.Subscription()))
 		return nil
 	}
 	messageID := id.(*pulsarID).messageID
@@ -131,16 +131,16 @@ func (pc *Consumer) Close() {
 			if err != nil {
 				// this is the hack due to pulsar didn't handle error as expected
 				if strings.Contains(err.Error(), "Consumer not found") {
-					mlog.Warn(context.TODO(), "failed to find consumer, skip unsubscribe",
-						mlog.String("subscription", pc.Subscription()),
-						mlog.Err(err))
+					log.Warn(context.TODO(), "failed to find consumer, skip unsubscribe",
+						log.String("subscription", pc.Subscription()),
+						log.Err(err))
 					return nil
 				}
 				// Pulsar will automatically clean up subscriptions without consumers, so we can ignore this type of error.
 				if strings.Contains(err.Error(), "connection closed") {
-					mlog.Warn(context.TODO(), "connection closed, skip unsubscribe",
-						mlog.String("subscription", pc.Subscription()),
-						mlog.Err(err))
+					log.Warn(context.TODO(), "connection closed, skip unsubscribe",
+						log.String("subscription", pc.Subscription()),
+						log.Err(err))
 					return nil
 				}
 				return err
@@ -152,7 +152,7 @@ func (pc *Consumer) Close() {
 
 		err := retry.Do(context.TODO(), fn, retry.Attempts(20), retry.Sleep(time.Millisecond*200), retry.MaxSleepTime(5*time.Second))
 		if err != nil {
-			mlog.Error(context.TODO(), "failed to unsubscribe", mlog.String("subscription", pc.Subscription()), mlog.Err(err))
+			log.Error(context.TODO(), "failed to unsubscribe", log.String("subscription", pc.Subscription()), log.Err(err))
 			panic(err)
 		}
 		close(pc.closeCh)

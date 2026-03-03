@@ -38,7 +38,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/indexparamcheck"
 	"github.com/milvus-io/milvus/internal/util/vecindexmgr"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/workerpb"
@@ -150,7 +150,7 @@ func (m *indexMeta) reloadFromKV() error {
 	// load field indexes
 	fieldIndexes, err := m.catalog.ListIndexes(m.ctx)
 	if err != nil {
-		mlog.Error(context.TODO(), "indexMeta reloadFromKV load field indexes fail", mlog.Err(err))
+		log.Error(context.TODO(), "indexMeta reloadFromKV load field indexes fail", log.Err(err))
 		return err
 	}
 	for _, fieldIndex := range fieldIndexes {
@@ -158,7 +158,7 @@ func (m *indexMeta) reloadFromKV() error {
 	}
 	segmentIndexes, err := m.catalog.ListSegmentIndexes(m.ctx)
 	if err != nil {
-		mlog.Error(context.TODO(), "indexMeta reloadFromKV load segment indexes fail", mlog.Err(err))
+		log.Error(context.TODO(), "indexMeta reloadFromKV load segment indexes fail", log.Err(err))
 		return err
 	}
 	for _, segIdx := range segmentIndexes {
@@ -170,7 +170,7 @@ func (m *indexMeta) reloadFromKV() error {
 		metrics.DataCoordStoredIndexFilesSize.WithLabelValues("", "",
 			fmt.Sprintf("%d", segIdx.CollectionID)).Add(float64(segIdx.IndexSerializedSize))
 	}
-	mlog.Info(context.TODO(), "indexMeta reloadFromKV done", mlog.Duration("duration", record.ElapseSpan()))
+	log.Info(context.TODO(), "indexMeta reloadFromKV done", log.Duration("duration", record.ElapseSpan()))
 	return nil
 }
 
@@ -197,8 +197,8 @@ func (m *indexMeta) updateSegmentIndex(segIdx *model.SegmentIndex) {
 func (m *indexMeta) alterSegmentIndexes(segIdxes []*model.SegmentIndex) error {
 	err := m.catalog.AlterSegmentIndexes(m.ctx, segIdxes)
 	if err != nil {
-		mlog.Error(context.TODO(), "failed to alter segments index in meta store", mlog.Int("segment indexes num", len(segIdxes)),
-			mlog.Err(err))
+		log.Error(context.TODO(), "failed to alter segments index in meta store", log.Int("segment indexes num", len(segIdxes)),
+			log.Err(err))
 		return err
 	}
 	for _, segIdx := range segIdxes {
@@ -248,7 +248,7 @@ func (m *indexMeta) updateIndexTasksMetrics() {
 	for k, v := range taskMetrics {
 		metrics.IndexStatsTaskNum.WithLabelValues(jobType, k.String()).Set(float64(v))
 	}
-	mlog.Info(m.ctx, "update index metric", mlog.Int("collectionNum", len(taskMetrics)))
+	log.Info(m.ctx, "update index metric", log.Int("collectionNum", len(taskMetrics)))
 }
 
 func checkIdenticalJson(index *model.Index, req *indexpb.CreateIndexRequest) bool {
@@ -313,8 +313,8 @@ func checkParams(fieldIndex *model.Index, req *indexpb.CreateIndexRequest) bool 
 				// if they do not specify metric type, will use autoindex default metric type
 				// when autoindex default config upgraded, remain the old metric type at the very first time for compatibility
 				// warn! replace request metric type
-				mlog.Warn(context.TODO(), "user not specify autoindex metric type, autoindex config has changed, use old metric for compatibility",
-					mlog.String("old metric type", param1.Value), mlog.String("new metric type", param2.Value))
+				log.Warn(context.TODO(), "user not specify autoindex metric type, autoindex config has changed, use old metric for compatibility",
+					log.String("old metric type", param1.Value), log.String("new metric type", param2.Value))
 				req.GetUserIndexParams()[i].Value = param1.Value
 				for j, param := range req.GetIndexParams() {
 					if param.Key == common.MetricTypeKey {
@@ -348,7 +348,7 @@ func checkParams(fieldIndex *model.Index, req *indexpb.CreateIndexRequest) bool 
 			}
 		}
 	}
-	mlog.Info(context.TODO(), "final request", mlog.Any("create index request", req.String()))
+	log.Info(context.TODO(), "final request", log.Any("create index request", req.String()))
 	return !notEq
 }
 
@@ -379,10 +379,10 @@ func (m *indexMeta) canCreateIndex(req *indexpb.CreateIndexRequest, isJson bool)
 				return index.IndexID, errIndexOperationIgnored
 			}
 			errMsg := "at most one distinct index is allowed per field"
-			mlog.Warn(context.TODO(), errMsg,
-				mlog.String("source index", fmt.Sprintf("{index_name: %s, field_id: %d, index_params: %v, user_params: %v, type_params: %v}",
+			log.Warn(context.TODO(), errMsg,
+				log.String("source index", fmt.Sprintf("{index_name: %s, field_id: %d, index_params: %v, user_params: %v, type_params: %v}",
 					index.IndexName, index.FieldID, index.IndexParams, index.UserIndexParams, index.TypeParams)),
-				mlog.String("current index", fmt.Sprintf("{index_name: %s, field_id: %d, index_params: %v, user_params: %v, type_params: %v}",
+				log.String("current index", fmt.Sprintf("{index_name: %s, field_id: %d, index_params: %v, user_params: %v, type_params: %v}",
 					req.GetIndexName(), req.GetFieldID(), req.GetIndexParams(), req.GetUserIndexParams(), req.GetTypeParams())))
 			return 0, fmt.Errorf("CreateIndex failed: %s", errMsg)
 		}
@@ -399,7 +399,7 @@ func (m *indexMeta) canCreateIndex(req *indexpb.CreateIndexRequest, isJson bool)
 			}
 			// creating multiple indexes on same field is not supported
 			errMsg := "CreateIndex failed: creating multiple indexes on same field is not supported"
-			mlog.Warn(context.TODO(), errMsg)
+			log.Warn(context.TODO(), errMsg)
 			return 0, errors.New(errMsg)
 		}
 	}
@@ -421,9 +421,9 @@ func (m *indexMeta) HasSameReq(req *indexpb.CreateIndexRequest) (bool, UniqueID)
 		if !checkParams(fieldIndex, req) {
 			continue
 		}
-		mlog.Debug(context.TODO(), "has same index", mlog.Int64("collectionID", req.CollectionID),
-			mlog.Int64("fieldID", req.FieldID), mlog.String("indexName", req.IndexName),
-			mlog.Int64("indexID", fieldIndex.IndexID))
+		log.Debug(context.TODO(), "has same index", log.Int64("collectionID", req.CollectionID),
+			log.Int64("fieldID", req.FieldID), log.String("indexName", req.IndexName),
+			log.Int64("indexID", fieldIndex.IndexID))
 		return true, fieldIndex.IndexID
 	}
 
@@ -434,19 +434,19 @@ func (m *indexMeta) CreateIndex(ctx context.Context, index *model.Index) error {
 	m.fieldIndexLock.Lock()
 	defer m.fieldIndexLock.Unlock()
 
-	mlog.Info(ctx, "meta update: CreateIndex", mlog.Int64("collectionID", index.CollectionID),
-		mlog.Int64("fieldID", index.FieldID), mlog.Int64("indexID", index.IndexID), mlog.String("indexName", index.IndexName))
+	log.Info(ctx, "meta update: CreateIndex", log.Int64("collectionID", index.CollectionID),
+		log.Int64("fieldID", index.FieldID), log.Int64("indexID", index.IndexID), log.String("indexName", index.IndexName))
 
 	if err := m.catalog.CreateIndex(ctx, index); err != nil {
-		mlog.Error(ctx, "meta update: CreateIndex save meta fail", mlog.Int64("collectionID", index.CollectionID),
-			mlog.Int64("fieldID", index.FieldID), mlog.Int64("indexID", index.IndexID),
-			mlog.String("indexName", index.IndexName), mlog.Err(err))
+		log.Error(ctx, "meta update: CreateIndex save meta fail", log.Int64("collectionID", index.CollectionID),
+			log.Int64("fieldID", index.FieldID), log.Int64("indexID", index.IndexID),
+			log.String("indexName", index.IndexName), log.Err(err))
 		return err
 	}
 
 	m.updateCollectionIndex(index)
-	mlog.Info(ctx, "meta update: CreateIndex success", mlog.Int64("collectionID", index.CollectionID),
-		mlog.Int64("fieldID", index.FieldID), mlog.Int64("indexID", index.IndexID), mlog.String("indexName", index.IndexName))
+	log.Info(ctx, "meta update: CreateIndex success", log.Int64("collectionID", index.CollectionID),
+		log.Int64("fieldID", index.FieldID), log.Int64("indexID", index.IndexID), log.String("indexName", index.IndexName))
 	return nil
 }
 
@@ -473,21 +473,21 @@ func (m *indexMeta) AddSegmentIndex(ctx context.Context, segIndex *model.Segment
 	m.keyLock.Lock(buildID)
 	defer m.keyLock.Unlock(buildID)
 
-	mlog.Info(ctx, "meta update: adding segment index", mlog.Int64("collectionID", segIndex.CollectionID),
-		mlog.Int64("segmentID", segIndex.SegmentID), mlog.Int64("indexID", segIndex.IndexID),
-		mlog.Int64("buildID", buildID), mlog.String("indexType", segIndex.IndexType))
+	log.Info(ctx, "meta update: adding segment index", log.Int64("collectionID", segIndex.CollectionID),
+		log.Int64("segmentID", segIndex.SegmentID), log.Int64("indexID", segIndex.IndexID),
+		log.Int64("buildID", buildID), log.String("indexType", segIndex.IndexType))
 
 	segIndex.IndexState = commonpb.IndexState_Unissued
 	if err := m.catalog.CreateSegmentIndex(ctx, segIndex); err != nil {
-		mlog.Warn(ctx, "meta update: adding segment index failed",
-			mlog.Int64("segmentID", segIndex.SegmentID), mlog.Int64("indexID", segIndex.IndexID),
-			mlog.Int64("buildID", segIndex.BuildID), mlog.String("indexType", segIndex.IndexType), mlog.Err(err))
+		log.Warn(ctx, "meta update: adding segment index failed",
+			log.Int64("segmentID", segIndex.SegmentID), log.Int64("indexID", segIndex.IndexID),
+			log.Int64("buildID", segIndex.BuildID), log.String("indexType", segIndex.IndexType), log.Err(err))
 		return err
 	}
 	m.updateSegmentIndex(segIndex)
-	mlog.Info(ctx, "meta update: adding segment index success", mlog.Int64("collectionID", segIndex.CollectionID),
-		mlog.Int64("segmentID", segIndex.SegmentID), mlog.Int64("indexID", segIndex.IndexID),
-		mlog.Int64("buildID", buildID), mlog.String("indexType", segIndex.IndexType))
+	log.Info(ctx, "meta update: adding segment index success", log.Int64("collectionID", segIndex.CollectionID),
+		log.Int64("segmentID", segIndex.SegmentID), log.Int64("indexID", segIndex.IndexID),
+		log.Int64("buildID", buildID), log.String("indexType", segIndex.IndexType))
 	return nil
 }
 
@@ -644,8 +644,8 @@ func (m *indexMeta) GetFieldIndexes(collID, fieldID UniqueID, indexName string) 
 
 // MarkIndexAsDeleted will mark the corresponding index as deleted, and recycleUnusedIndexFiles will recycle these tasks.
 func (m *indexMeta) MarkIndexAsDeleted(ctx context.Context, collID UniqueID, indexIDs []UniqueID) error {
-	mlog.Info(ctx, "IndexCoord metaTable MarkIndexAsDeleted", mlog.Int64("collectionID", collID),
-		mlog.Int64s("indexIDs", indexIDs))
+	log.Info(ctx, "IndexCoord metaTable MarkIndexAsDeleted", log.Int64("collectionID", collID),
+		log.Int64s("indexIDs", indexIDs))
 
 	m.fieldIndexLock.Lock()
 	defer m.fieldIndexLock.Unlock()
@@ -680,14 +680,14 @@ func (m *indexMeta) MarkIndexAsDeleted(ctx context.Context, collID UniqueID, ind
 	}
 	err := m.catalog.AlterIndexes(ctx, indexes)
 	if err != nil {
-		mlog.Error(ctx, "failed to alter index meta in meta store", mlog.Int("indexes num", len(indexes)), mlog.Err(err))
+		log.Error(ctx, "failed to alter index meta in meta store", log.Int("indexes num", len(indexes)), log.Err(err))
 		return err
 	}
 	for _, index := range indexes {
 		m.indexes[index.CollectionID][index.IndexID] = index
 	}
 
-	mlog.Info(ctx, "IndexCoord metaTable MarkIndexAsDeleted success", mlog.Int64("collectionID", collID), mlog.Int64s("indexIDs", indexIDs))
+	log.Info(ctx, "IndexCoord metaTable MarkIndexAsDeleted success", log.Int64("collectionID", collID), log.Int64s("indexIDs", indexIDs))
 	return nil
 }
 
@@ -855,7 +855,7 @@ func (m *indexMeta) UpdateVersion(buildID, nodeID UniqueID) error {
 	m.keyLock.Lock(buildID)
 	defer m.keyLock.Unlock(buildID)
 
-	mlog.Info(m.ctx, "IndexCoord metaTable UpdateVersion receive", mlog.Int64("buildID", buildID), mlog.Int64("nodeID", nodeID))
+	log.Info(m.ctx, "IndexCoord metaTable UpdateVersion receive", log.Int64("buildID", buildID), log.Int64("nodeID", nodeID))
 	segIdx, ok := m.segmentBuildInfo.Get(buildID)
 	if !ok {
 		return fmt.Errorf("there is no index with buildID: %d", buildID)
@@ -876,7 +876,7 @@ func (m *indexMeta) UpdateIndexState(buildID UniqueID, state commonpb.IndexState
 
 	segIdx, ok := m.segmentBuildInfo.Get(buildID)
 	if !ok {
-		mlog.Warn(m.ctx, "there is no index with buildID", mlog.Int64("buildID", buildID))
+		log.Warn(m.ctx, "there is no index with buildID", log.Int64("buildID", buildID))
 		return fmt.Errorf("there is no index with buildID: %d", buildID)
 	}
 
@@ -887,12 +887,12 @@ func (m *indexMeta) UpdateIndexState(buildID UniqueID, state commonpb.IndexState
 	}
 
 	if err := m.updateSegIndexMeta(segIdx, updateFunc); err != nil {
-		mlog.Warn(m.ctx, "failed to update index meta", mlog.Int64("buildID", buildID), mlog.Err(err))
+		log.Warn(m.ctx, "failed to update index meta", log.Int64("buildID", buildID), log.Err(err))
 		return err
 	}
 
-	mlog.Info(m.ctx, "update index task state success", mlog.Int64("buildID", buildID),
-		mlog.String("state", state.String()), mlog.String("fail reason", failReason))
+	log.Info(m.ctx, "update index task state success", log.Int64("buildID", buildID),
+		log.String("state", state.String()), log.String("fail reason", failReason))
 	return nil
 }
 
@@ -902,7 +902,7 @@ func (m *indexMeta) FinishTask(taskInfo *workerpb.IndexTaskInfo) error {
 
 	segIdx, ok := m.segmentBuildInfo.Get(taskInfo.GetBuildID())
 	if !ok {
-		mlog.Warn(m.ctx, "there is no index with buildID", mlog.Int64("buildID", taskInfo.GetBuildID()))
+		log.Warn(m.ctx, "there is no index with buildID", log.Int64("buildID", taskInfo.GetBuildID()))
 		return nil
 	}
 	updateFunc := func(segIdx *model.SegmentIndex) error {
@@ -921,9 +921,9 @@ func (m *indexMeta) FinishTask(taskInfo *workerpb.IndexTaskInfo) error {
 		return err
 	}
 
-	mlog.Info(m.ctx, "finish index task success", mlog.Int64("buildID", taskInfo.GetBuildID()),
-		mlog.String("state", taskInfo.GetState().String()), mlog.String("fail reason", taskInfo.GetFailReason()),
-		mlog.Int32("current_index_version", taskInfo.GetCurrentIndexVersion()),
+	log.Info(m.ctx, "finish index task success", log.Int64("buildID", taskInfo.GetBuildID()),
+		log.String("state", taskInfo.GetState().String()), log.String("fail reason", taskInfo.GetFailReason()),
+		log.Int32("current_index_version", taskInfo.GetCurrentIndexVersion()),
 	)
 
 	metrics.DataCoordStoredIndexFilesSize.WithLabelValues("", "",
@@ -939,7 +939,7 @@ func (m *indexMeta) DeleteTask(buildID int64) error {
 
 	segIdx, ok := m.segmentBuildInfo.Get(buildID)
 	if !ok {
-		mlog.Warn(m.ctx, "there is no index with buildID", mlog.Int64("buildID", buildID))
+		log.Warn(m.ctx, "there is no index with buildID", log.Int64("buildID", buildID))
 		return nil
 	}
 
@@ -952,7 +952,7 @@ func (m *indexMeta) DeleteTask(buildID int64) error {
 		return err
 	}
 
-	mlog.Info(m.ctx, "delete index task success", mlog.Int64("buildID", buildID))
+	log.Info(m.ctx, "delete index task success", log.Int64("buildID", buildID))
 	return nil
 }
 
@@ -971,7 +971,7 @@ func (m *indexMeta) BuildIndex(buildID UniqueID) error {
 
 		err := m.alterSegmentIndexes([]*model.SegmentIndex{segIdx})
 		if err != nil {
-			mlog.Error(m.ctx, "meta Update: segment index in progress fail", mlog.Int64("buildID", segIdx.BuildID), mlog.Err(err))
+			log.Error(m.ctx, "meta Update: segment index in progress fail", log.Int64("buildID", segIdx.BuildID), log.Err(err))
 			return err
 		}
 		return nil
@@ -979,8 +979,8 @@ func (m *indexMeta) BuildIndex(buildID UniqueID) error {
 	if err := m.updateSegIndexMeta(segIdx, updateFunc); err != nil {
 		return err
 	}
-	mlog.Info(m.ctx, "meta update: segment index in progress success", mlog.Int64("buildID", segIdx.BuildID),
-		mlog.Int64("segmentID", segIdx.SegmentID))
+	log.Info(m.ctx, "meta update: segment index in progress success", log.Int64("buildID", segIdx.BuildID),
+		log.Int64("segmentID", segIdx.SegmentID))
 	return nil
 }
 
@@ -1043,11 +1043,11 @@ func (m *indexMeta) GetDeletedIndexes() []*model.Index {
 func (m *indexMeta) RemoveIndex(ctx context.Context, collID, indexID UniqueID) error {
 	m.fieldIndexLock.Lock()
 	defer m.fieldIndexLock.Unlock()
-	mlog.Info(ctx, "IndexCoord meta table remove index", mlog.Int64("collectionID", collID), mlog.Int64("indexID", indexID))
+	log.Info(ctx, "IndexCoord meta table remove index", log.Int64("collectionID", collID), log.Int64("indexID", indexID))
 	err := m.catalog.DropIndex(ctx, collID, indexID)
 	if err != nil {
-		mlog.Info(ctx, "IndexCoord meta table remove index fail", mlog.Int64("collectionID", collID),
-			mlog.Int64("indexID", indexID), mlog.Err(err))
+		log.Info(ctx, "IndexCoord meta table remove index fail", log.Int64("collectionID", collID),
+			log.Int64("indexID", indexID), log.Err(err))
 		return err
 	}
 
@@ -1059,7 +1059,7 @@ func (m *indexMeta) RemoveIndex(ctx context.Context, collID, indexID UniqueID) e
 		metrics.IndexTaskNum.Delete(prometheus.Labels{"collection_id": strconv.FormatInt(collID, 10), "index_task_status": metrics.FinishedIndexTaskLabel})
 		metrics.IndexTaskNum.Delete(prometheus.Labels{"collection_id": strconv.FormatInt(collID, 10), "index_task_status": metrics.FailedIndexTaskLabel})
 	}
-	mlog.Info(ctx, "IndexCoord meta table remove index success", mlog.Int64("collectionID", collID), mlog.Int64("indexID", indexID))
+	log.Info(ctx, "IndexCoord meta table remove index success", log.Int64("collectionID", collID), log.Int64("indexID", indexID))
 	return nil
 }
 

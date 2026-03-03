@@ -25,7 +25,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/observers"
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 )
 
@@ -87,7 +87,7 @@ func (job *SyncNewCreatedPartitionJob) Execute() error {
 	err := job.meta.CollectionManager.PutPartition(job.ctx, partition)
 	if err != nil {
 		msg := "failed to store partitions"
-		mlog.Warn(context.TODO(), msg, mlog.Err(err))
+		log.Warn(context.TODO(), msg, log.Err(err))
 		return errors.Wrap(err, msg)
 	}
 

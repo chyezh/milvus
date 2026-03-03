@@ -58,7 +58,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/kv"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	pb "github.com/milvus-io/milvus/pkg/v2/proto/etcdpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/proxypb"
@@ -172,7 +172,7 @@ func NewCore(c context.Context, factory dependency.Factory) (*Core, error) {
 // UpdateStateCode update state code
 func (c *Core) UpdateStateCode(code commonpb.StateCode) {
 	c.stateCode.Store(int32(code))
-	mlog.Info(c.ctx, "update rootcoord state", mlog.String("state", code.String()))
+	log.Info(c.ctx, "update rootcoord state", log.String("state", code.String()))
 }
 
 func (c *Core) SetFileResourceObserver(observer FileResourceObserver) {
@@ -213,7 +213,7 @@ func (c *Core) sendTimeTick(t Timestamp, reason string) error {
 func (c *Core) sendMinDdlTsAsTt() {
 	code := c.GetStateCode()
 	if code != commonpb.StateCode_Healthy {
-		mlog.Warn(context.TODO(), "rootCoord is not healthy, skip send timetick")
+		log.Warn(context.TODO(), "rootCoord is not healthy, skip send timetick")
 		return
 	}
 	minBgDdlTs := c.ddlTsLockManager.GetMinDdlTs()
@@ -222,18 +222,18 @@ func (c *Core) sendMinDdlTsAsTt() {
 
 	// zero	-> ddlTsLockManager and scheduler not started.
 	if minDdlTs == typeutil.ZeroTimestamp {
-		mlog.Warn(context.TODO(), "zero ts was met, this should be only occurred in starting state", mlog.Uint64("minBgDdlTs", minBgDdlTs), mlog.Uint64("minNormalDdlTs", minNormalDdlTs))
+		log.Warn(context.TODO(), "zero ts was met, this should be only occurred in starting state", log.Uint64("minBgDdlTs", minBgDdlTs), log.Uint64("minNormalDdlTs", minNormalDdlTs))
 		return
 	}
 
 	// max	-> abnormal case, impossible.
 	if minDdlTs == typeutil.MaxTimestamp {
-		mlog.Warn(context.TODO(), "ddl ts is abnormal, max ts was met", mlog.Uint64("minBgDdlTs", minBgDdlTs), mlog.Uint64("minNormalDdlTs", minNormalDdlTs))
+		log.Warn(context.TODO(), "ddl ts is abnormal, max ts was met", log.Uint64("minBgDdlTs", minBgDdlTs), log.Uint64("minNormalDdlTs", minNormalDdlTs))
 		return
 	}
 
 	if err := c.sendTimeTick(minDdlTs, "timetick loop"); err != nil {
-		mlog.Warn(context.TODO(), "failed to send timetick", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to send timetick", log.Err(err))
 	}
 }
 
@@ -245,11 +245,11 @@ func (c *Core) startTimeTickLoop() {
 
 	if streamingutil.IsStreamingServiceEnabled() {
 		if err := snmanager.StaticStreamingNodeManager.RegisterStreamingEnabledListener(c.ctx, streamingNotifier); err != nil {
-			mlog.Info(context.TODO(), "register streaming enabled listener failed", mlog.Err(err))
+			log.Info(context.TODO(), "register streaming enabled listener failed", log.Err(err))
 			return
 		}
 		if streamingNotifier.IsReady() {
-			mlog.Info(context.TODO(), "streaming service has been enabled, ddl timetick from rootcoord should not start")
+			log.Info(context.TODO(), "streaming service has been enabled, ddl timetick from rootcoord should not start")
 			return
 		}
 	}
@@ -259,10 +259,10 @@ func (c *Core) startTimeTickLoop() {
 	for {
 		select {
 		case <-streamingNotifier.Ready():
-			mlog.Info(context.TODO(), "streaming service has been enabled, ddl timetick from rootcoord should stop")
+			log.Info(context.TODO(), "streaming service has been enabled, ddl timetick from rootcoord should stop")
 			return
 		case <-c.ctx.Done():
-			mlog.Info(context.TODO(), "rootcoord's timetick loop quit!")
+			log.Info(context.TODO(), "rootcoord's timetick loop quit!")
 			return
 		case <-ticker.C:
 			c.sendMinDdlTsAsTt()
@@ -280,14 +280,14 @@ func (c *Core) tsLoop() {
 		select {
 		case <-tsoTicker.C:
 			if err := c.tsoAllocator.UpdateTSO(); err != nil {
-				mlog.Warn(context.TODO(), "failed to update tso", mlog.Err(err))
+				log.Warn(context.TODO(), "failed to update tso", log.Err(err))
 				continue
 			}
 			ts := c.tsoAllocator.GetLastSavedTime()
 			metrics.RootCoordTimestampSaved.Set(float64(ts.Unix()))
 
 		case <-ctx.Done():
-			mlog.Info(context.TODO(), "rootcoord's ts loop quit!")
+			log.Info(context.TODO(), "rootcoord's ts loop quit!")
 			return
 		}
 	}
@@ -352,7 +352,7 @@ func (c *Core) initMetaTable(initCtx context.Context) error {
 
 		switch Params.MetaStoreCfg.MetaStoreType.GetValue() {
 		case util.MetaStoreTypeEtcd:
-			mlog.Info(initCtx, "Using etcd as meta storage.")
+			log.Info(initCtx, "Using etcd as meta storage.")
 			var ss *kvmetastore.SuffixSnapshot
 			var err error
 
@@ -362,7 +362,7 @@ func (c *Core) initMetaTable(initCtx context.Context) error {
 			}
 			catalog = kvmetastore.NewCatalog(metaKV, ss)
 		case util.MetaStoreTypeTiKV:
-			mlog.Info(initCtx, "Using tikv as meta storage.")
+			log.Info(initCtx, "Using tikv as meta storage.")
 			var ss *kvmetastore.SuffixSnapshot
 			var err error
 
@@ -401,10 +401,10 @@ func (c *Core) initIDAllocator(initCtx context.Context) error {
 	}
 	c.idAllocator = idAllocator
 
-	mlog.Info(initCtx, "id allocator initialized",
-		mlog.String("root_path", kvPath),
-		mlog.String("sub_path", globalIDAllocatorSubPath),
-		mlog.String("key", globalIDAllocatorKey))
+	log.Info(initCtx, "id allocator initialized",
+		log.String("root_path", kvPath),
+		log.String("sub_path", globalIDAllocatorSubPath),
+		log.String("key", globalIDAllocatorKey))
 
 	return nil
 }
@@ -425,10 +425,10 @@ func (c *Core) initTSOAllocator(initCtx context.Context) error {
 	}
 	c.tsoAllocator = tsoAllocator
 
-	mlog.Info(initCtx, "tso allocator initialized",
-		mlog.String("root_path", kvPath),
-		mlog.String("sub_path", globalIDAllocatorSubPath),
-		mlog.String("key", globalIDAllocatorKey))
+	log.Info(initCtx, "tso allocator initialized",
+		log.String("root_path", kvPath),
+		log.String("sub_path", globalIDAllocatorSubPath),
+		log.String("key", globalIDAllocatorKey))
 
 	return nil
 }
@@ -456,7 +456,7 @@ func (c *Core) initInternal() error {
 	c.factory.Init(Params)
 	chanMap := c.meta.ListCollectionPhysicalChannels(c.ctx)
 	c.chanTimeTick = newTimeTickSync(initCtx, c.ctx, c.session.GetServerID(), c.factory, chanMap)
-	mlog.Info(context.TODO(), "create TimeTick sync done")
+	log.Info(context.TODO(), "create TimeTick sync done")
 
 	c.proxyClientManager = proxyutil.NewProxyClientManager(c.proxyCreator)
 
@@ -470,26 +470,26 @@ func (c *Core) initInternal() error {
 	)
 	c.proxyWatcher.AddSessionFunc(c.chanTimeTick.addSession, c.proxyClientManager.AddProxyClient)
 	c.proxyWatcher.DelSessionFunc(c.chanTimeTick.delSession, c.proxyClientManager.DelProxyClient)
-	mlog.Info(context.TODO(), "init proxy manager done")
+	log.Info(context.TODO(), "init proxy manager done")
 
 	c.metricsCacheManager = metricsinfo.NewMetricsCacheManager()
 
 	// Initialize telemetry manager for client telemetry collection
 	c.telemetryMgr = telemetry.NewTelemetryManager(c.etcdCli)
-	mlog.Debug(context.TODO(), "init telemetry manager done")
+	log.Debug(context.TODO(), "init telemetry manager done")
 
 	c.quotaCenter = NewQuotaCenter(c.proxyClientManager, c.mixCoord, c.tsoAllocator, c.meta)
-	mlog.Debug(context.TODO(), "RootCoord init QuotaCenter done")
+	log.Debug(context.TODO(), "RootCoord init QuotaCenter done")
 
 	// Initialize KeyManager for KMS key state management
 	c.keyManager = NewKeyManager(c.ctx, c.meta)
 	c.quotaCenter.SetKeyManager(c.keyManager)
-	mlog.Debug(context.TODO(), "RootCoord init KeyManager done")
+	log.Debug(context.TODO(), "RootCoord init KeyManager done")
 
 	if err := c.initCredentials(initCtx); err != nil {
 		return err
 	}
-	mlog.Info(context.TODO(), "init credentials done")
+	log.Info(context.TODO(), "init credentials done")
 
 	if err := c.initRbac(initCtx); err != nil {
 		return err
@@ -505,7 +505,7 @@ func (c *Core) initInternal() error {
 	if c.fileResourceObserver != nil {
 		c.fileResourceObserver.InitMeta(c.meta)
 	}
-	mlog.Info(context.TODO(), "init rootcoord done", mlog.Int64("nodeID", paramtable.GetNodeID()), mlog.String("Address", c.address))
+	log.Info(context.TODO(), "init rootcoord done", log.Int64("nodeID", paramtable.GetNodeID()), log.String("Address", c.address))
 	return nil
 }
 
@@ -514,7 +514,7 @@ func (c *Core) registerMetricsRequest() {
 		func(ctx context.Context, req *milvuspb.GetMetricsRequest, jsonReq gjson.Result) (string, error) {
 			return c.getSystemInfoMetrics(ctx, req)
 		})
-	mlog.Info(c.ctx, "register metrics actions finished")
+	log.Info(c.ctx, "register metrics actions finished")
 }
 
 // Init initialize routine
@@ -528,7 +528,7 @@ func (c *Core) Init() error {
 		initError = c.initInternal()
 		RegisterDDLCallbacks(c)
 	})
-	mlog.Info(context.TODO(), "RootCoord init successfully")
+	log.Info(context.TODO(), "RootCoord init successfully")
 	return initError
 }
 
@@ -608,7 +608,7 @@ func (c *Core) initBuiltinRoles(ctx context.Context) error {
 	for role, privilegesJSON := range rolePrivilegesMap {
 		err := c.meta.CreateRole(ctx, util.DefaultTenant, &milvuspb.RoleEntity{Name: role})
 		if err != nil && !common.IsIgnorableError(err) {
-			mlog.Error(context.TODO(), "create a builtin role fail", mlog.String("roleName", role), mlog.Err(err))
+			log.Error(context.TODO(), "create a builtin role fail", log.String("roleName", role), log.Err(err))
 			return errors.Wrapf(err, "failed to create a builtin role: %s", role)
 		}
 		for _, privilege := range privilegesJSON[util.RoleConfigPrivileges] {
@@ -628,12 +628,12 @@ func (c *Core) initBuiltinRoles(ctx context.Context) error {
 				},
 			}, milvuspb.OperatePrivilegeType_Grant)
 			if err != nil && !common.IsIgnorableError(err) {
-				mlog.Error(context.TODO(), "grant privilege to builtin role fail", mlog.String("roleName", role), mlog.Any("privilege", privilege), mlog.Err(err))
+				log.Error(context.TODO(), "grant privilege to builtin role fail", log.String("roleName", role), log.Any("privilege", privilege), log.Err(err))
 				return errors.Wrapf(err, "failed to grant privilege: <%s, %s, %s> of db: %s to role: %s", privilege[util.RoleConfigObjectType], privilege[util.RoleConfigObjectName], privilege[util.RoleConfigPrivilege], privilege[util.RoleConfigDBName], role)
 			}
 		}
 		util.BuiltinRoles = append(util.BuiltinRoles, role)
-		mlog.Info(context.TODO(), "init a builtin role successfully", mlog.String("roleName", role))
+		log.Info(context.TODO(), "init a builtin role successfully", log.String("roleName", role))
 	}
 	return nil
 }
@@ -670,7 +670,7 @@ func (c *Core) restore(ctx context.Context) error {
 
 func (c *Core) startInternal() error {
 	if err := c.proxyWatcher.WatchProxy(c.ctx); err != nil {
-		mlog.Fatal(context.TODO(), "rootcoord failed to watch proxy", mlog.Err(err))
+		log.Fatal(context.TODO(), "rootcoord failed to watch proxy", log.Err(err))
 		// you can not just stuck here,
 		panic(err)
 	}
@@ -694,19 +694,19 @@ func (c *Core) startInternal() error {
 			if err := c.proxyClientManager.RefreshPolicyInfoCache(c.ctx, &proxypb.RefreshPolicyInfoCacheRequest{
 				OpType: int32(typeutil.CacheRefresh),
 			}); err != nil {
-				mlog.RatedWarn(context.TODO(), mlog.RateDefault, "fail to refresh policy info cache", mlog.Err(err))
+				log.RatedWarn(context.TODO(), log.RateDefault, "fail to refresh policy info cache", log.Err(err))
 				return err
 			}
 			return nil
 		}, retry.Attempts(100), retry.Sleep(time.Second)); err != nil {
-			mlog.Warn(context.TODO(), "fail to refresh policy info cache", mlog.Err(err))
+			log.Warn(context.TODO(), "fail to refresh policy info cache", log.Err(err))
 		}
 	}()
 
 	c.startServerLoop()
 	c.UpdateStateCode(commonpb.StateCode_Healthy)
 	sessionutil.SaveServerInfo(typeutil.MixCoordRole, c.session.GetServerID())
-	mlog.Info(context.TODO(), "rootcoord startup successfully")
+	log.Info(context.TODO(), "rootcoord startup successfully")
 	return nil
 }
 
@@ -730,14 +730,14 @@ func (c *Core) Start() error {
 func (c *Core) stopScheduler() {
 	if c.scheduler != nil {
 		c.scheduler.Stop()
-		mlog.Info(c.ctx, "stop rootcoord scheduler")
+		log.Info(c.ctx, "stop rootcoord scheduler")
 	}
 }
 
 func (c *Core) cancelIfNotNil() {
 	if c.cancel != nil {
 		c.cancel()
-		mlog.Info(c.ctx, "cancel rootcoord goroutines")
+		log.Info(c.ctx, "cancel rootcoord goroutines")
 	}
 }
 
@@ -745,7 +745,7 @@ func (c *Core) revokeSession() {
 	if c.session != nil {
 		// wait at most one second to revoke
 		c.session.Stop()
-		mlog.Info(c.ctx, "rootcoord session stop")
+		log.Info(c.ctx, "rootcoord session stop")
 	}
 }
 
@@ -779,7 +779,7 @@ func (c *Core) Stop() error {
 // GetComponentStates get states of components
 func (c *Core) GetComponentStates(ctx context.Context, req *milvuspb.GetComponentStatesRequest) (*milvuspb.ComponentStates, error) {
 	code := c.GetStateCode()
-	mlog.Debug(ctx, "RootCoord current state", mlog.String("StateCode", code.String()))
+	log.Debug(ctx, "RootCoord current state", log.String("StateCode", code.String()))
 
 	nodeID := common.NotRegisteredID
 	if c.session != nil && c.session.Registered() {
@@ -831,24 +831,24 @@ func (c *Core) CreateDatabase(ctx context.Context, in *milvuspb.CreateDatabaseRe
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("CreateDatabase")
 
-	mlog.Info(ctx, "received request to create database", mlog.String("role", typeutil.RootCoordRole),
-		mlog.String("dbName", in.GetDbName()), mlog.Int64("msgID", in.GetBase().GetMsgID()))
+	log.Info(ctx, "received request to create database", log.String("role", typeutil.RootCoordRole),
+		log.String("dbName", in.GetDbName()), log.Int64("msgID", in.GetBase().GetMsgID()))
 
 	if err := c.broadcastCreateDatabase(ctx, in); err != nil {
-		mlog.Info(ctx, "failed to create database",
-			mlog.String("role", typeutil.RootCoordRole),
-			mlog.Err(err),
-			mlog.String("dbName", in.GetDbName()),
-			mlog.Int64("msgID", in.GetBase().GetMsgID()))
+		log.Info(ctx, "failed to create database",
+			log.String("role", typeutil.RootCoordRole),
+			log.Err(err),
+			log.String("dbName", in.GetDbName()),
+			log.Int64("msgID", in.GetBase().GetMsgID()))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(ctx, "done to create database", mlog.String("role", typeutil.RootCoordRole),
-		mlog.String("dbName", in.GetDbName()),
-		mlog.Int64("msgID", in.GetBase().GetMsgID()))
+	log.Info(ctx, "done to create database", log.String("role", typeutil.RootCoordRole),
+		log.String("dbName", in.GetDbName()),
+		log.Int64("msgID", in.GetBase().GetMsgID()))
 	return merr.Success(), nil
 }
 
@@ -861,18 +861,18 @@ func (c *Core) DropDatabase(ctx context.Context, in *milvuspb.DropDatabaseReques
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("DropDatabase")
 
-	mlog.Info(ctx, "received request to drop database", mlog.String("role", typeutil.RootCoordRole),
-		mlog.String("dbName", in.GetDbName()), mlog.Int64("msgID", in.GetBase().GetMsgID()))
+	log.Info(ctx, "received request to drop database", log.String("role", typeutil.RootCoordRole),
+		log.String("dbName", in.GetDbName()), log.Int64("msgID", in.GetBase().GetMsgID()))
 
 	if err := c.broadcastDropDatabase(ctx, in); err != nil {
 		if errors.Is(err, merr.ErrDatabaseNotFound) {
-			mlog.Info(ctx, "drop a database that not found, ignore it", mlog.String("dbName", in.GetDbName()))
+			log.Info(ctx, "drop a database that not found, ignore it", log.String("dbName", in.GetDbName()))
 			return merr.Success(), nil
 		}
-		mlog.Info(ctx, "failed to drop database", mlog.String("role", typeutil.RootCoordRole),
-			mlog.Err(err),
-			mlog.String("dbName", in.GetDbName()),
-			mlog.Int64("msgID", in.GetBase().GetMsgID()))
+		log.Info(ctx, "failed to drop database", log.String("role", typeutil.RootCoordRole),
+			log.Err(err),
+			log.String("dbName", in.GetDbName()),
+			log.Int64("msgID", in.GetBase().GetMsgID()))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
@@ -880,8 +880,8 @@ func (c *Core) DropDatabase(ctx context.Context, in *milvuspb.DropDatabaseReques
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	metrics.CleanupRootCoordDBMetrics(in.GetDbName())
-	mlog.Info(ctx, "done to drop database", mlog.String("role", typeutil.RootCoordRole),
-		mlog.String("dbName", in.GetDbName()), mlog.Int64("msgID", in.GetBase().GetMsgID()))
+	log.Info(ctx, "done to drop database", log.String("role", typeutil.RootCoordRole),
+		log.String("dbName", in.GetDbName()), log.Int64("msgID", in.GetBase().GetMsgID()))
 	return merr.Success(), nil
 }
 
@@ -894,7 +894,7 @@ func (c *Core) ListDatabases(ctx context.Context, in *milvuspb.ListDatabasesRequ
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("ListDatabases")
 
-	mlog.Info(context.TODO(), "received request to list databases")
+	log.Info(context.TODO(), "received request to list databases")
 
 	t := &listDatabaseTask{
 		baseTask: newBaseTask(ctx, c),
@@ -903,7 +903,7 @@ func (c *Core) ListDatabases(ctx context.Context, in *milvuspb.ListDatabasesRequ
 	}
 
 	if err := c.scheduler.AddTask(t); err != nil {
-		mlog.Info(context.TODO(), "failed to enqueue request to list databases", mlog.Err(err))
+		log.Info(context.TODO(), "failed to enqueue request to list databases", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return &milvuspb.ListDatabasesResponse{
 			Status: merr.Status(err),
@@ -911,7 +911,7 @@ func (c *Core) ListDatabases(ctx context.Context, in *milvuspb.ListDatabasesRequ
 	}
 
 	if err := t.WaitToFinish(); err != nil {
-		mlog.Info(context.TODO(), "failed to list databases", mlog.Err(err))
+		log.Info(context.TODO(), "failed to list databases", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return &milvuspb.ListDatabasesResponse{
 			Status: merr.Status(err),
@@ -920,7 +920,7 @@ func (c *Core) ListDatabases(ctx context.Context, in *milvuspb.ListDatabasesRequ
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(context.TODO(), "done to list databases", mlog.Int("num of databases", len(t.Resp.GetDbNames())))
+	log.Info(context.TODO(), "done to list databases", log.Int("num of databases", len(t.Resp.GetDbNames())))
 	return t.Resp, nil
 }
 
@@ -932,22 +932,22 @@ func (c *Core) CreateCollection(ctx context.Context, in *milvuspb.CreateCollecti
 	metrics.RootCoordDDLReqCounter.WithLabelValues("CreateCollection", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("CreateCollection")
 
-	mlog.Info(ctx, "received request to create collection")
+	log.Info(ctx, "received request to create collection")
 
 	if err := c.broadcastCreateCollectionV1(ctx, in); err != nil {
 		if errors.Is(err, errIgnoredCreateCollection) {
-			mlog.Info(ctx, "create existed collection with same schema, ignore it")
+			log.Info(ctx, "create existed collection with same schema, ignore it")
 			metrics.RootCoordDDLReqCounter.WithLabelValues("CreateCollection", metrics.SuccessLabel).Inc()
 			return merr.Success(), nil
 		}
-		mlog.Info(ctx, "failed to create collection", mlog.Err(err))
+		log.Info(ctx, "failed to create collection", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("CreateCollection", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("CreateCollection", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("CreateCollection").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(ctx, "done to create collection")
+	log.Info(ctx, "done to create collection")
 	return merr.Success(), nil
 }
 
@@ -960,17 +960,17 @@ func (c *Core) AddCollectionField(ctx context.Context, in *milvuspb.AddCollectio
 	metrics.RootCoordDDLReqCounter.WithLabelValues("AddCollectionField", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("AddCollectionField")
 
-	mlog.Info(context.TODO(), "received request to add collection field")
+	log.Info(context.TODO(), "received request to add collection field")
 
 	if err := c.broadcastAlterCollectionForAddField(ctx, in); err != nil {
-		mlog.Info(context.TODO(), "failed to add collection field", mlog.Err(err))
+		log.Info(context.TODO(), "failed to add collection field", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("AddCollectionField", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("AddCollectionField", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("AddCollectionField").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(context.TODO(), "done to add collection field")
+	log.Info(context.TODO(), "done to add collection field")
 	return merr.Success(), nil
 }
 
@@ -982,22 +982,22 @@ func (c *Core) DropCollection(ctx context.Context, in *milvuspb.DropCollectionRe
 	metrics.RootCoordDDLReqCounter.WithLabelValues("DropCollection", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("DropCollection")
 
-	mlog.Info(ctx, "received request to drop collection")
+	log.Info(ctx, "received request to drop collection")
 
 	if err := c.broadcastDropCollectionV1(ctx, in); err != nil {
 		if errors.Is(err, errIgnoredDropCollection) {
-			mlog.Info(ctx, "drop collection that not found, ignore it")
+			log.Info(ctx, "drop collection that not found, ignore it")
 			metrics.RootCoordDDLReqCounter.WithLabelValues("DropCollection", metrics.SuccessLabel).Inc()
 			return merr.Success(), nil
 		}
-		mlog.Info(ctx, "failed to drop collection", mlog.Err(err))
+		log.Info(ctx, "failed to drop collection", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("DropCollection", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("DropCollection", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("DropCollection").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(ctx, "done to drop collection")
+	log.Info(ctx, "done to drop collection")
 	return merr.Success(), nil
 }
 
@@ -1011,10 +1011,10 @@ func (c *Core) TruncateCollection(ctx context.Context, in *milvuspb.TruncateColl
 	metrics.RootCoordDDLReqCounter.WithLabelValues("TruncateCollection", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("TruncateCollection")
 
-	mlog.Info(ctx, "received request to truncate collection")
+	log.Info(ctx, "received request to truncate collection")
 
 	if err := c.broadcastTruncateCollection(ctx, in); err != nil {
-		mlog.Info(ctx, "failed to truncate collection", mlog.Err(err))
+		log.Info(ctx, "failed to truncate collection", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("TruncateCollection", metrics.FailLabel).Inc()
 		return &milvuspb.TruncateCollectionResponse{
 			Status: merr.Status(err),
@@ -1023,7 +1023,7 @@ func (c *Core) TruncateCollection(ctx context.Context, in *milvuspb.TruncateColl
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("TruncateCollection", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("TruncateCollection").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(ctx, "done to truncate collection")
+	log.Info(ctx, "done to truncate collection")
 	return &milvuspb.TruncateCollectionResponse{
 		Status: merr.Success(),
 	}, nil
@@ -1047,7 +1047,7 @@ func (c *Core) HasCollection(ctx context.Context, in *milvuspb.HasCollectionRequ
 	}
 
 	if err := c.scheduler.AddTask(t); err != nil {
-		mlog.Info(context.TODO(), "failed to enqueue request to has collection", mlog.Err(err))
+		log.Info(context.TODO(), "failed to enqueue request to has collection", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("HasCollection", metrics.FailLabel).Inc()
 		return &milvuspb.BoolResponse{
 			Status: merr.Status(err),
@@ -1055,7 +1055,7 @@ func (c *Core) HasCollection(ctx context.Context, in *milvuspb.HasCollectionRequ
 	}
 
 	if err := t.WaitToFinish(); err != nil {
-		mlog.Info(context.TODO(), "failed to has collection", mlog.Err(err))
+		log.Info(context.TODO(), "failed to has collection", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("HasCollection", metrics.FailLabel).Inc()
 		return &milvuspb.BoolResponse{
 			Status: merr.Status(err),
@@ -1153,7 +1153,7 @@ func (c *Core) describeCollectionImpl(ctx context.Context, in *milvuspb.Describe
 	}
 
 	if err := c.scheduler.AddTask(t); err != nil {
-		mlog.Info(context.TODO(), "failed to enqueue request to describe collection", mlog.Err(err))
+		log.Info(context.TODO(), "failed to enqueue request to describe collection", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("DescribeCollection", metrics.FailLabel).Inc()
 		return &milvuspb.DescribeCollectionResponse{
 			Status: merr.Status(err),
@@ -1162,7 +1162,7 @@ func (c *Core) describeCollectionImpl(ctx context.Context, in *milvuspb.Describe
 
 	if err := t.WaitToFinish(); err != nil {
 		if !errors.Is(err, merr.ErrCollectionNotFound) {
-			mlog.Warn(context.TODO(), "failed to describe collection", mlog.Err(err))
+			log.Warn(context.TODO(), "failed to describe collection", log.Err(err))
 		}
 		metrics.RootCoordDDLReqCounter.WithLabelValues("DescribeCollection", metrics.FailLabel).Inc()
 		return &milvuspb.DescribeCollectionResponse{
@@ -1210,7 +1210,7 @@ func (c *Core) ShowCollections(ctx context.Context, in *milvuspb.ShowCollections
 	}
 
 	if err := c.scheduler.AddTask(t); err != nil {
-		mlog.Info(context.TODO(), "failed to enqueue request to show collections", mlog.Err(err))
+		log.Info(context.TODO(), "failed to enqueue request to show collections", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("ShowCollections", metrics.FailLabel).Inc()
 		return &milvuspb.ShowCollectionsResponse{
 			Status: merr.Status(err),
@@ -1218,7 +1218,7 @@ func (c *Core) ShowCollections(ctx context.Context, in *milvuspb.ShowCollections
 	}
 
 	if err := t.WaitToFinish(); err != nil {
-		mlog.Info(context.TODO(), "failed to show collections", mlog.Err(err))
+		log.Info(context.TODO(), "failed to show collections", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("ShowCollections", metrics.FailLabel).Inc()
 		return &milvuspb.ShowCollectionsResponse{
 			Status: merr.Status(err),
@@ -1252,7 +1252,7 @@ func (c *Core) ShowCollectionIDs(ctx context.Context, in *rootcoordpb.ShowCollec
 		// show all collections
 		dbs, err = c.meta.ListDatabases(ctx, ts)
 		if err != nil {
-			mlog.Info(context.TODO(), "failed to ListDatabases", mlog.Err(err))
+			log.Info(context.TODO(), "failed to ListDatabases", log.Err(err))
 			metrics.RootCoordDDLReqCounter.WithLabelValues("ShowCollectionIDs", metrics.FailLabel).Inc()
 			return &rootcoordpb.ShowCollectionIDsResponse{
 				Status: merr.Status(err),
@@ -1263,7 +1263,7 @@ func (c *Core) ShowCollectionIDs(ctx context.Context, in *rootcoordpb.ShowCollec
 		for _, name := range in.GetDbNames() {
 			db, err := c.meta.GetDatabaseByName(ctx, name, ts)
 			if err != nil {
-				mlog.Info(context.TODO(), "failed to GetDatabaseByName", mlog.Err(err))
+				log.Info(context.TODO(), "failed to GetDatabaseByName", log.Err(err))
 				metrics.RootCoordDDLReqCounter.WithLabelValues("ShowCollectionIDs", metrics.FailLabel).Inc()
 				return &rootcoordpb.ShowCollectionIDsResponse{
 					Status: merr.Status(err),
@@ -1276,7 +1276,7 @@ func (c *Core) ShowCollectionIDs(ctx context.Context, in *rootcoordpb.ShowCollec
 	for _, db := range dbs {
 		collections, err := c.meta.ListCollections(ctx, db.Name, ts, !in.GetAllowUnavailable())
 		if err != nil {
-			mlog.Info(context.TODO(), "failed to ListCollections", mlog.Err(err))
+			log.Info(context.TODO(), "failed to ListCollections", log.Err(err))
 			metrics.RootCoordDDLReqCounter.WithLabelValues("ShowCollectionIDs", metrics.FailLabel).Inc()
 			return &rootcoordpb.ShowCollectionIDsResponse{
 				Status: merr.Status(err),
@@ -1292,7 +1292,7 @@ func (c *Core) ShowCollectionIDs(ctx context.Context, in *rootcoordpb.ShowCollec
 	metrics.RootCoordDDLReqCounter.WithLabelValues("ShowCollectionIDs", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("ShowCollectionIDs").Observe(float64(tr.ElapseSpan().Milliseconds()))
 
-	mlog.Info(context.TODO(), "ShowCollectionIDs done", mlog.Any("collectionIDs", dbCollections))
+	log.Info(context.TODO(), "ShowCollectionIDs done", log.Any("collectionIDs", dbCollections))
 
 	return &rootcoordpb.ShowCollectionIDsResponse{
 		Status:        merr.Success(),
@@ -1308,22 +1308,22 @@ func (c *Core) AlterCollection(ctx context.Context, in *milvuspb.AlterCollection
 	metrics.RootCoordDDLReqCounter.WithLabelValues("AlterCollection", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("AlterCollection")
 
-	mlog.Info(context.TODO(), "received request to alter collection")
+	log.Info(context.TODO(), "received request to alter collection")
 
 	if err := c.broadcastAlterCollectionForAlterCollection(ctx, in); err != nil {
 		if errors.Is(err, errIgnoredAlterCollection) {
-			mlog.Info(context.TODO(), "alter collection make no changes, ignore it")
+			log.Info(context.TODO(), "alter collection make no changes, ignore it")
 			metrics.RootCoordDDLReqCounter.WithLabelValues("AlterCollection", metrics.SuccessLabel).Inc()
 			return merr.Success(), nil
 		}
-		mlog.Warn(context.TODO(), "failed to alter collection", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to alter collection", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("AlterCollection", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("AlterCollection", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("AlterCollection").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(context.TODO(), "done to alter collection")
+	log.Info(context.TODO(), "done to alter collection")
 	return merr.Success(), nil
 }
 
@@ -1335,22 +1335,22 @@ func (c *Core) AddCollectionFunction(ctx context.Context, in *milvuspb.AddCollec
 	metrics.RootCoordDDLReqCounter.WithLabelValues("AddCollectionFunction", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("AddCollectionFunction")
 
-	mlog.Info(context.TODO(), "received request to Add collection function")
+	log.Info(context.TODO(), "received request to Add collection function")
 
 	if err := c.broadcastAlterCollectionForAddFunction(ctx, in); err != nil {
 		if errors.Is(err, errIgnoredAlterCollection) {
-			mlog.Info(context.TODO(), "add collection function make no changes, ignore it")
+			log.Info(context.TODO(), "add collection function make no changes, ignore it")
 			metrics.RootCoordDDLReqCounter.WithLabelValues("AddCollectionFunction", metrics.SuccessLabel).Inc()
 			return merr.Success(), nil
 		}
-		mlog.Warn(context.TODO(), "failed to alter collection function", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to alter collection function", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("AddCollectionFunction", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("AddCollectionFunction", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("AddCollectionFunction").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(context.TODO(), "done to add collection function")
+	log.Info(context.TODO(), "done to add collection function")
 	return merr.Success(), nil
 }
 
@@ -1362,22 +1362,22 @@ func (c *Core) AlterCollectionFunction(ctx context.Context, in *milvuspb.AlterCo
 	metrics.RootCoordDDLReqCounter.WithLabelValues("AlterCollectionFunction", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("AlterCollectionFunction")
 
-	mlog.Info(context.TODO(), "received request to alter collection function")
+	log.Info(context.TODO(), "received request to alter collection function")
 
 	if err := c.broadcastAlterCollectionForAlterFunction(ctx, in); err != nil {
 		if errors.Is(err, errIgnoredAlterCollection) {
-			mlog.Info(context.TODO(), "alter collection function make no changes, ignore it")
+			log.Info(context.TODO(), "alter collection function make no changes, ignore it")
 			metrics.RootCoordDDLReqCounter.WithLabelValues("AlterCollectionFunction", metrics.SuccessLabel).Inc()
 			return merr.Success(), nil
 		}
-		mlog.Warn(context.TODO(), "failed to alter collection function", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to alter collection function", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("AlterCollectionFunction", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("AlterCollectionFunction", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("AlterCollectionFunction").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(context.TODO(), "done to alter collection function")
+	log.Info(context.TODO(), "done to alter collection function")
 	return merr.Success(), nil
 }
 
@@ -1389,22 +1389,22 @@ func (c *Core) DropCollectionFunction(ctx context.Context, in *milvuspb.DropColl
 	metrics.RootCoordDDLReqCounter.WithLabelValues("DropCollectionFunction", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("DropCollectionFunction")
 
-	mlog.Info(context.TODO(), "received request to drop collection function")
+	log.Info(context.TODO(), "received request to drop collection function")
 
 	if err := c.broadcastAlterCollectionForDropFunction(ctx, in); err != nil {
 		if errors.Is(err, errIgnoredAlterCollection) {
-			mlog.Info(context.TODO(), "Drop collection function make no changes, ignore it")
+			log.Info(context.TODO(), "Drop collection function make no changes, ignore it")
 			metrics.RootCoordDDLReqCounter.WithLabelValues("DropCollectionFunction", metrics.SuccessLabel).Inc()
 			return merr.Success(), nil
 		}
-		mlog.Warn(context.TODO(), "failed to drop collection function", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to drop collection function", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("DropCollectionFunction", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("DropCollectionFunction", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("DropCollectionFunction").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(context.TODO(), "done to drop collection function")
+	log.Info(context.TODO(), "done to drop collection function")
 	return merr.Success(), nil
 }
 
@@ -1416,22 +1416,22 @@ func (c *Core) AlterCollectionField(ctx context.Context, in *milvuspb.AlterColle
 	metrics.RootCoordDDLReqCounter.WithLabelValues("AlterCollectionField", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("AlterCollectionField")
 
-	mlog.Info(context.TODO(), "received request to alter collection field")
+	log.Info(context.TODO(), "received request to alter collection field")
 
 	if err := c.broadcastAlterCollectionV2ForAlterCollectionField(ctx, in); err != nil {
 		if errors.Is(err, errIgnoredAlterCollection) {
-			mlog.Info(context.TODO(), "alter collection field make no changes, ignore it")
+			log.Info(context.TODO(), "alter collection field make no changes, ignore it")
 			metrics.RootCoordDDLReqCounter.WithLabelValues("AlterCollectionField", metrics.SuccessLabel).Inc()
 			return merr.Success(), nil
 		}
-		mlog.Warn(context.TODO(), "failed to alter collection field", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to alter collection field", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("AlterCollectionField", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("AlterCollectionField", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("AlterCollectionField").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(context.TODO(), "done to alter collection field")
+	log.Info(context.TODO(), "done to alter collection field")
 	return merr.Success(), nil
 }
 
@@ -1443,14 +1443,14 @@ func (c *Core) AlterCollectionSchema(ctx context.Context, in *milvuspb.AlterColl
 	metrics.RootCoordDDLReqCounter.WithLabelValues("AlterCollectionSchema", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("AlterCollectionSchema")
 
-	mlog.Info(context.TODO(), "received request to alter collection schema")
+	log.Info(context.TODO(), "received request to alter collection schema")
 
 	// AlterCollectionSchema is currently a placeholder implementation
 	// The actual logic should handle schema alterations similar to AlterCollection
 	// For now, return success to satisfy the interface
 	metrics.RootCoordDDLReqCounter.WithLabelValues("AlterCollectionSchema", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("AlterCollectionSchema").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(context.TODO(), "done to alter collection schema")
+	log.Info(context.TODO(), "done to alter collection schema")
 	return &milvuspb.AlterCollectionSchemaResponse{}, nil
 }
 
@@ -1463,22 +1463,22 @@ func (c *Core) AlterDatabase(ctx context.Context, in *rootcoordpb.AlterDatabaseR
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
 
-	mlog.Info(context.TODO(), "received request to alter database")
+	log.Info(context.TODO(), "received request to alter database")
 
 	if err := c.broadcastAlterDatabase(ctx, in); err != nil {
 		if errors.Is(err, errIgnoredAlterDatabase) {
-			mlog.Info(context.TODO(), "alter database make no changes, ignore it")
+			log.Info(context.TODO(), "alter database make no changes, ignore it")
 			metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 			return merr.Success(), nil
 		}
-		mlog.Warn(context.TODO(), "failed to alter database", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to alter database", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(context.TODO(), "done to alter database")
+	log.Info(context.TODO(), "done to alter database")
 	return merr.Success(), nil
 }
 
@@ -1490,22 +1490,22 @@ func (c *Core) CreatePartition(ctx context.Context, in *milvuspb.CreatePartition
 	metrics.RootCoordDDLReqCounter.WithLabelValues("CreatePartition", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("CreatePartition")
 
-	mlog.Info(ctx, "received request to create partition")
+	log.Info(ctx, "received request to create partition")
 
 	if err := c.broadcastCreatePartition(ctx, in); err != nil {
 		if errors.Is(err, errIgnoerdCreatePartition) {
-			mlog.Info(ctx, "create partition that already exists, ignore it")
+			log.Info(ctx, "create partition that already exists, ignore it")
 			metrics.RootCoordDDLReqCounter.WithLabelValues("CreatePartition", metrics.SuccessLabel).Inc()
 			return merr.Success(), nil
 		}
-		mlog.Info(ctx, "failed to create partition", mlog.Err(err))
+		log.Info(ctx, "failed to create partition", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("CreatePartition", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("CreatePartition", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("CreatePartition").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(ctx, "done to create partition")
+	log.Info(ctx, "done to create partition")
 	return merr.Success(), nil
 }
 
@@ -1517,22 +1517,22 @@ func (c *Core) DropPartition(ctx context.Context, in *milvuspb.DropPartitionRequ
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("DropPartition", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("DropPartition")
-	mlog.Info(ctx, "received request to drop partition")
+	log.Info(ctx, "received request to drop partition")
 
 	if err := c.broadcastDropPartition(ctx, in); err != nil {
 		if errors.Is(err, errIgnoredDropPartition) {
-			mlog.Info(ctx, "drop partition that not found, ignore it")
+			log.Info(ctx, "drop partition that not found, ignore it")
 			metrics.RootCoordDDLReqCounter.WithLabelValues("DropPartition", metrics.SuccessLabel).Inc()
 			return merr.Success(), nil
 		}
-		mlog.Warn(ctx, "failed to drop partition", mlog.Err(err))
+		log.Warn(ctx, "failed to drop partition", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("DropPartition", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("DropPartition", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("DropPartition").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(ctx, "done to drop partition")
+	log.Info(ctx, "done to drop partition")
 	return merr.Success(), nil
 }
 
@@ -1555,7 +1555,7 @@ func (c *Core) HasPartition(ctx context.Context, in *milvuspb.HasPartitionReques
 	}
 
 	if err := c.scheduler.AddTask(t); err != nil {
-		mlog.Info(context.TODO(), "failed to enqueue request to has partition", mlog.Err(err))
+		log.Info(context.TODO(), "failed to enqueue request to has partition", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("HasPartition", metrics.FailLabel).Inc()
 		return &milvuspb.BoolResponse{
 			Status: merr.Status(err),
@@ -1563,7 +1563,7 @@ func (c *Core) HasPartition(ctx context.Context, in *milvuspb.HasPartitionReques
 	}
 
 	if err := t.WaitToFinish(); err != nil {
-		mlog.Info(context.TODO(), "failed to has partition", mlog.Err(err))
+		log.Info(context.TODO(), "failed to has partition", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("HasPartition", metrics.FailLabel).Inc()
 		return &milvuspb.BoolResponse{
 			Status: merr.Status(err),
@@ -1595,7 +1595,7 @@ func (c *Core) showPartitionsImpl(ctx context.Context, in *milvuspb.ShowPartitio
 	}
 
 	if err := c.scheduler.AddTask(t); err != nil {
-		mlog.Info(context.TODO(), "failed to enqueue request to show partitions", mlog.Err(err))
+		log.Info(context.TODO(), "failed to enqueue request to show partitions", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("ShowPartitions", metrics.FailLabel).Inc()
 		return &milvuspb.ShowPartitionsResponse{
 			Status: merr.Status(err),
@@ -1604,7 +1604,7 @@ func (c *Core) showPartitionsImpl(ctx context.Context, in *milvuspb.ShowPartitio
 	}
 
 	if err := t.WaitToFinish(); err != nil {
-		mlog.Info(context.TODO(), "failed to show partitions", mlog.Err(err))
+		log.Info(context.TODO(), "failed to show partitions", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("ShowPartitions", metrics.FailLabel).Inc()
 		return &milvuspb.ShowPartitionsResponse{
 			Status: merr.Status(err),
@@ -1659,10 +1659,10 @@ func (c *Core) AllocTimestamp(ctx context.Context, in *rootcoordpb.AllocTimestam
 		lastTime := c.tsoAllocator.GetLastSavedTime()
 		deltaDuration := blockTime.Sub(lastTime)
 		if deltaDuration > 0 {
-			mlog.Info(context.TODO(), "wait for block timestamp",
-				mlog.Time("blockTime", blockTime),
-				mlog.Time("lastTime", lastTime),
-				mlog.Duration("delta", deltaDuration))
+			log.Info(context.TODO(), "wait for block timestamp",
+				log.Time("blockTime", blockTime),
+				log.Time("lastTime", lastTime),
+				log.Duration("delta", deltaDuration))
 			time.Sleep(deltaDuration + time.Millisecond*200)
 		}
 	}
@@ -1670,8 +1670,8 @@ func (c *Core) AllocTimestamp(ctx context.Context, in *rootcoordpb.AllocTimestam
 	ts, err := c.tsoAllocator.GenerateTSO(in.GetCount())
 	physicalTs, _ := tsoutil.ParseTS(ts)
 	if err != nil {
-		mlog.Error(ctx, "failed to allocate timestamp", mlog.String("role", typeutil.RootCoordRole),
-			mlog.Err(err))
+		log.Error(ctx, "failed to allocate timestamp", log.String("role", typeutil.RootCoordRole),
+			log.Err(err))
 
 		return &rootcoordpb.AllocTimestampResponse{
 			Status: merr.Status(err),
@@ -1697,9 +1697,9 @@ func (c *Core) AllocID(ctx context.Context, in *rootcoordpb.AllocIDRequest) (*ro
 	}
 	start, _, err := c.idAllocator.Alloc(in.Count)
 	if err != nil {
-		mlog.Error(ctx, "failed to allocate id",
-			mlog.String("role", typeutil.RootCoordRole),
-			mlog.Err(err))
+		log.Error(ctx, "failed to allocate id",
+			log.String("role", typeutil.RootCoordRole),
+			log.Err(err))
 
 		return &rootcoordpb.AllocIDResponse{
 			Status: merr.Status(err),
@@ -1718,18 +1718,18 @@ func (c *Core) AllocID(ctx context.Context, in *rootcoordpb.AllocIDRequest) (*ro
 // UpdateChannelTimeTick used to handle ChannelTimeTickMsg
 func (c *Core) UpdateChannelTimeTick(ctx context.Context, in *internalpb.ChannelTimeTickMsg) (*commonpb.Status, error) {
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
-		mlog.Warn(context.TODO(), "failed to updateTimeTick because rootcoord is not healthy", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to updateTimeTick because rootcoord is not healthy", log.Err(err))
 		return merr.Status(err), nil
 	}
 	if in.Base.MsgType != commonpb.MsgType_TimeTick {
-		mlog.Warn(context.TODO(), "failed to updateTimeTick because base messasge is not timetick, state", mlog.Any("base message type", in.Base.MsgType))
+		log.Warn(context.TODO(), "failed to updateTimeTick because base messasge is not timetick, state", log.Any("base message type", in.Base.MsgType))
 		return merr.Status(merr.WrapErrParameterInvalid(commonpb.MsgType_TimeTick.String(), in.Base.MsgType.String(), "invalid message type")), nil
 	}
 	err := c.chanTimeTick.updateTimeTick(in, "gRPC")
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to updateTimeTick",
-			mlog.String("role", typeutil.RootCoordRole),
-			mlog.Err(err))
+		log.Warn(context.TODO(), "failed to updateTimeTick",
+			log.String("role", typeutil.RootCoordRole),
+			log.Err(err))
 		return merr.Status(err), nil
 	}
 	return merr.Success(), nil
@@ -1803,22 +1803,22 @@ func (c *Core) CreateAlias(ctx context.Context, in *milvuspb.CreateAliasRequest)
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("CreateAlias", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("CreateAlias")
-	mlog.Info(ctx, "received request to create alias")
+	log.Info(ctx, "received request to create alias")
 
 	if err := c.broadcastCreateAlias(ctx, in); err != nil {
 		if errors.Is(err, errIgnoredAlterAlias) {
-			mlog.Info(ctx, "create alias already set on this collection, ignore it")
+			log.Info(ctx, "create alias already set on this collection, ignore it")
 			metrics.RootCoordDDLReqCounter.WithLabelValues("CreateAlias", metrics.SuccessLabel).Inc()
 			return merr.Success(), nil
 		}
-		mlog.Info(ctx, "failed to create alias", mlog.Err(err))
+		log.Info(ctx, "failed to create alias", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("CreateAlias", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("CreateAlias", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("CreateAlias").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(ctx, "done to create alias")
+	log.Info(ctx, "done to create alias")
 	return merr.Success(), nil
 }
 
@@ -1830,22 +1830,22 @@ func (c *Core) DropAlias(ctx context.Context, in *milvuspb.DropAliasRequest) (*c
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("DropAlias", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("DropAlias")
-	mlog.Info(ctx, "received request to drop alias")
+	log.Info(ctx, "received request to drop alias")
 
 	if err := c.broadcastDropAlias(ctx, in); err != nil {
 		if errors.Is(err, merr.ErrAliasNotFound) {
-			mlog.Info(ctx, "drop alias not found, ignore it")
+			log.Info(ctx, "drop alias not found, ignore it")
 			metrics.RootCoordDDLReqCounter.WithLabelValues("DropAlias", metrics.SuccessLabel).Inc()
 			return merr.Success(), nil
 		}
-		mlog.Info(ctx, "failed to drop alias", mlog.Err(err))
+		log.Info(ctx, "failed to drop alias", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("DropAlias", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("DropAlias", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("DropAlias").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(ctx, "done to drop alias")
+	log.Info(ctx, "done to drop alias")
 	return merr.Success(), nil
 }
 
@@ -1857,22 +1857,22 @@ func (c *Core) AlterAlias(ctx context.Context, in *milvuspb.AlterAliasRequest) (
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("DropAlias", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("AlterAlias")
-	mlog.Info(ctx, "received request to alter alias")
+	log.Info(ctx, "received request to alter alias")
 
 	if err := c.broadcastAlterAlias(ctx, in); err != nil {
 		if errors.Is(err, errIgnoredAlterAlias) {
-			mlog.Info(ctx, "alter alias already set on this collection, ignore it")
+			log.Info(ctx, "alter alias already set on this collection, ignore it")
 			metrics.RootCoordDDLReqCounter.WithLabelValues("AlterAlias", metrics.SuccessLabel).Inc()
 			return merr.Success(), nil
 		}
-		mlog.Info(ctx, "failed to alter alias", mlog.Err(err))
+		log.Info(ctx, "failed to alter alias", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("AlterAlias", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("AlterAlias", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("AlterAlias").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(ctx, "done to alter alias")
+	log.Info(ctx, "done to alter alias")
 	return merr.Success(), nil
 }
 
@@ -1888,7 +1888,7 @@ func (c *Core) DescribeAlias(ctx context.Context, in *milvuspb.DescribeAliasRequ
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("DescribeAlias")
 
-	mlog.Info(context.TODO(), "received request to describe alias")
+	log.Info(context.TODO(), "received request to describe alias")
 
 	if in.GetAlias() == "" {
 		return &milvuspb.DescribeAliasResponse{
@@ -1898,7 +1898,7 @@ func (c *Core) DescribeAlias(ctx context.Context, in *milvuspb.DescribeAliasRequ
 
 	collectionName, err := c.meta.DescribeAlias(ctx, in.GetDbName(), in.GetAlias(), 0)
 	if err != nil {
-		mlog.Warn(context.TODO(), "fail to DescribeAlias", mlog.Err(err))
+		log.Warn(context.TODO(), "fail to DescribeAlias", log.Err(err))
 		return &milvuspb.DescribeAliasResponse{
 			Status: merr.Status(err),
 		}, nil
@@ -1906,7 +1906,7 @@ func (c *Core) DescribeAlias(ctx context.Context, in *milvuspb.DescribeAliasRequ
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 
-	mlog.Info(context.TODO(), "done to describe alias")
+	log.Info(context.TODO(), "done to describe alias")
 	return &milvuspb.DescribeAliasResponse{
 		Status:     merr.Status(nil),
 		DbName:     in.GetDbName(),
@@ -1927,11 +1927,11 @@ func (c *Core) ListAliases(ctx context.Context, in *milvuspb.ListAliasesRequest)
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
 
-	mlog.Info(context.TODO(), "received request to list aliases")
+	log.Info(context.TODO(), "received request to list aliases")
 
 	aliases, err := c.meta.ListAliases(ctx, in.GetDbName(), in.GetCollectionName(), 0)
 	if err != nil {
-		mlog.Warn(context.TODO(), "fail to ListAliases", mlog.Err(err))
+		log.Warn(context.TODO(), "fail to ListAliases", log.Err(err))
 		return &milvuspb.ListAliasesResponse{
 			Status: merr.Status(err),
 		}, nil
@@ -1940,7 +1940,7 @@ func (c *Core) ListAliases(ctx context.Context, in *milvuspb.ListAliasesRequest)
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 
-	mlog.Info(context.TODO(), "done to list aliases")
+	log.Info(context.TODO(), "done to list aliases")
 	return &milvuspb.ListAliasesResponse{
 		Status:         merr.Status(nil),
 		DbName:         in.GetDbName(),
@@ -1980,13 +1980,13 @@ func (c *Core) CreateCredential(ctx context.Context, credInfo *internalpb.Creden
 	method := "CreateCredential"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.Status(err), nil
 	}
 
 	if err := c.broadcastAlterUserForCreateCredential(ctx, credInfo); err != nil {
-		mlog.Warn(ctx, "CreateCredential failed", mlog.Err(err))
+		log.Warn(ctx, "CreateCredential failed", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		if errors.Is(err, errUserAlreadyExists) {
 			return merr.StatusWithErrorCode(errors.Errorf("user already exists: %s", credInfo.Username), commonpb.ErrorCode_CreateCredentialFailure), nil
@@ -2005,20 +2005,20 @@ func (c *Core) GetCredential(ctx context.Context, in *rootcoordpb.GetCredentialR
 	method := "GetCredential"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return &rootcoordpb.GetCredentialResponse{Status: merr.Status(err)}, nil
 	}
 
 	credInfo, err := c.meta.GetCredential(ctx, in.Username)
 	if err != nil {
-		mlog.Warn(ctx, "GetCredential query credential failed", mlog.Err(err))
+		log.Warn(ctx, "GetCredential query credential failed", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return &rootcoordpb.GetCredentialResponse{
 			Status: merr.StatusWithErrorCode(err, commonpb.ErrorCode_GetCredentialFailure),
 		}, nil
 	}
-	mlog.Debug(ctx, "GetCredential success")
+	log.Debug(ctx, "GetCredential success")
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
@@ -2034,13 +2034,13 @@ func (c *Core) UpdateCredential(ctx context.Context, credInfo *internalpb.Creden
 	method := "UpdateCredential"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.Status(err), nil
 	}
 
 	if err := c.broadcastAlterUserForUpdateCredential(ctx, credInfo); err != nil {
-		mlog.Warn(ctx, "UpdateCredential append message failed", mlog.Err(err))
+		log.Warn(ctx, "UpdateCredential append message failed", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_UpdateCredentialFailure), nil
 	}
@@ -2055,7 +2055,7 @@ func (c *Core) DeleteCredential(ctx context.Context, in *milvuspb.DeleteCredenti
 	method := "DeleteCredential"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.Status(err), nil
 	}
@@ -2063,17 +2063,17 @@ func (c *Core) DeleteCredential(ctx context.Context, in *milvuspb.DeleteCredenti
 	// user not found will not report to the client to achieve idempotent
 	if err := c.broadcastDropUserForDeleteCredential(ctx, in); err != nil {
 		if errors.Is(err, errUserNotFound) {
-			mlog.Info(ctx, "DeleteCredential user not found, ignored")
+			log.Info(ctx, "DeleteCredential user not found, ignored")
 			metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 			metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 			return merr.Success(), nil
 		}
-		mlog.Warn(ctx, "DeleteCredential append message failed", mlog.Err(err))
+		log.Warn(ctx, "DeleteCredential append message failed", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_DeleteCredentialFailure), nil
 	}
 
-	mlog.Debug(ctx, "DeleteCredential success")
+	log.Debug(ctx, "DeleteCredential success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	metrics.RootCoordNumOfCredentials.Dec()
@@ -2085,20 +2085,20 @@ func (c *Core) ListCredUsers(ctx context.Context, in *milvuspb.ListCredUsersRequ
 	method := "ListCredUsers"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return &milvuspb.ListCredUsersResponse{Status: merr.Status(err)}, nil
 	}
 
 	credInfo, err := c.meta.ListCredentialUsernames(ctx)
 	if err != nil {
-		mlog.Warn(ctx, "ListCredUsers query usernames failed", mlog.Err(err))
+		log.Warn(ctx, "ListCredUsers query usernames failed", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 
 		status := merr.Status(err)
 		return &milvuspb.ListCredUsersResponse{Status: status}, nil
 	}
-	mlog.Debug(ctx, "ListCredUsers success")
+	log.Debug(ctx, "ListCredUsers success")
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
@@ -2117,14 +2117,14 @@ func (c *Core) CreateRole(ctx context.Context, in *milvuspb.CreateRoleRequest) (
 	method := "CreateRole"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method+" begin")
+	log.Debug(ctx, method+" begin")
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.Status(err), nil
 	}
 
 	if err := c.broadcastCreateRole(ctx, in); err != nil {
-		mlog.Warn(ctx, "fail to create role", mlog.Err(err))
+		log.Warn(ctx, "fail to create role", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		if errors.Is(err, errRoleAlreadyExists) {
 			return merr.StatusWithErrorCode(errors.Newf("role [%s] already exists", in.GetEntity()), commonpb.ErrorCode_CreateRoleFailure), nil
@@ -2132,7 +2132,7 @@ func (c *Core) CreateRole(ctx context.Context, in *milvuspb.CreateRoleRequest) (
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_CreateRoleFailure), nil
 	}
 
-	mlog.Debug(ctx, method+" success")
+	log.Debug(ctx, method+" success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	metrics.RootCoordNumOfRoles.Inc()
@@ -2150,21 +2150,21 @@ func (c *Core) DropRole(ctx context.Context, in *milvuspb.DropRoleRequest) (*com
 	method := "DropRole"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.Status(err), nil
 	}
 
 	if err := c.broadcastDropRole(ctx, in); err != nil {
-		mlog.Warn(ctx, "fail to drop role", mlog.Err(err))
+		log.Warn(ctx, "fail to drop role", log.Err(err))
 		if errors.Is(err, errRoleNotExists) {
 			return merr.StatusWithErrorCode(errors.New("not found the role, maybe the role isn't existed or internal system error"), commonpb.ErrorCode_DropRoleFailure), nil
 		}
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_DropRoleFailure), nil
 	}
 
-	mlog.Debug(ctx, method+" success", mlog.String("role_name", in.RoleName))
+	log.Debug(ctx, method+" success", log.String("role_name", in.RoleName))
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	metrics.RootCoordNumOfRoles.Dec()
@@ -2181,21 +2181,21 @@ func (c *Core) OperateUserRole(ctx context.Context, in *milvuspb.OperateUserRole
 	method := "OperateUserRole-" + in.Type.String()
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.Status(err), nil
 	}
 
 	if err := c.broadcastOperateUserRole(ctx, in); err != nil {
-		mlog.Warn(ctx, "fail to operate the user and role", mlog.Err(err))
+		log.Warn(ctx, "fail to operate the user and role", log.Err(err))
 		if errors.Is(err, errRoleNotExists) {
 			return merr.StatusWithErrorCode(errors.New("not found the role, maybe the role isn't existed or internal system error"), commonpb.ErrorCode_OperateUserRoleFailure), nil
 		}
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_OperateUserRoleFailure), nil
 	}
 
-	mlog.Info(ctx, method+" success")
+	log.Info(ctx, method+" success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return merr.Success(), nil
@@ -2209,7 +2209,7 @@ func (c *Core) SelectRole(ctx context.Context, in *milvuspb.SelectRoleRequest) (
 	method := "SelectRole"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return &milvuspb.SelectRoleResponse{Status: merr.Status(err)}, nil
@@ -2223,7 +2223,7 @@ func (c *Core) SelectRole(ctx context.Context, in *milvuspb.SelectRoleRequest) (
 				}, nil
 			}
 			errMsg := "fail to select the role to check the role name"
-			mlog.Warn(ctx, errMsg, mlog.Err(err))
+			log.Warn(ctx, errMsg, log.Err(err))
 			return &milvuspb.SelectRoleResponse{
 				Status: merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_SelectRoleFailure),
 			}, nil
@@ -2232,13 +2232,13 @@ func (c *Core) SelectRole(ctx context.Context, in *milvuspb.SelectRoleRequest) (
 	roleResults, err := c.meta.SelectRole(ctx, util.DefaultTenant, in.Role, in.IncludeUserInfo)
 	if err != nil {
 		errMsg := "fail to select the role"
-		mlog.Warn(ctx, errMsg, mlog.Err(err))
+		log.Warn(ctx, errMsg, log.Err(err))
 		return &milvuspb.SelectRoleResponse{
 			Status: merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_SelectRoleFailure),
 		}, nil
 	}
 
-	mlog.Debug(ctx, method+" success")
+	log.Debug(ctx, method+" success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return &milvuspb.SelectRoleResponse{
@@ -2255,7 +2255,7 @@ func (c *Core) SelectUser(ctx context.Context, in *milvuspb.SelectUserRequest) (
 	method := "SelectUser"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return &milvuspb.SelectUserResponse{Status: merr.Status(err)}, nil
@@ -2269,7 +2269,7 @@ func (c *Core) SelectUser(ctx context.Context, in *milvuspb.SelectUserRequest) (
 				}, nil
 			}
 			errMsg := "fail to select the user to check the username"
-			mlog.Warn(ctx, errMsg, mlog.Any("in", in), mlog.Err(err))
+			log.Warn(ctx, errMsg, log.Any("in", in), log.Err(err))
 			return &milvuspb.SelectUserResponse{
 				Status: merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_SelectUserFailure),
 			}, nil
@@ -2278,13 +2278,13 @@ func (c *Core) SelectUser(ctx context.Context, in *milvuspb.SelectUserRequest) (
 	userResults, err := c.meta.SelectUser(ctx, util.DefaultTenant, in.User, in.IncludeRoleInfo)
 	if err != nil {
 		errMsg := "fail to select the user"
-		mlog.Warn(ctx, errMsg, mlog.Err(err))
+		log.Warn(ctx, errMsg, log.Err(err))
 		return &milvuspb.SelectUserResponse{
 			Status: merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_SelectUserFailure),
 		}, nil
 	}
 
-	mlog.Debug(ctx, method+" success")
+	log.Debug(ctx, method+" success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return &milvuspb.SelectUserResponse{
@@ -2301,7 +2301,7 @@ func (c *Core) isValidRole(ctx context.Context, entity *milvuspb.RoleEntity) err
 		return errors.New("the name in the role entity is empty")
 	}
 	if _, err := c.meta.SelectRole(ctx, util.DefaultTenant, &milvuspb.RoleEntity{Name: entity.Name}, false); err != nil {
-		mlog.Warn(context.TODO(), "fail to select the role", mlog.String("role_name", entity.Name), mlog.Err(err))
+		log.Warn(context.TODO(), "fail to select the role", log.String("role_name", entity.Name), log.Err(err))
 		return errors.New("not found the role, maybe the role isn't existed or internal system error")
 	}
 	return nil
@@ -2374,7 +2374,7 @@ func (c *Core) OperatePrivilege(ctx context.Context, in *milvuspb.OperatePrivile
 	method := "OperatePrivilege"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.Status(err), nil
@@ -2382,11 +2382,11 @@ func (c *Core) OperatePrivilege(ctx context.Context, in *milvuspb.OperatePrivile
 
 	if err := c.broadcastOperatePrivilege(ctx, in); err != nil {
 		errMsg := "fail to execute task when operating the privilege"
-		mlog.Warn(ctx, errMsg, mlog.Err(err))
+		log.Warn(ctx, errMsg, log.Err(err))
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_OperatePrivilegeFailure), nil
 	}
 
-	mlog.Debug(ctx, method+" success")
+	log.Debug(ctx, method+" success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return merr.Success(), nil
@@ -2415,7 +2415,7 @@ func (c *Core) operatePrivilegeCommonCheck(ctx context.Context, in *milvuspb.Ope
 		return errors.New("the user entity in the grantor entity is nil or empty")
 	}
 	if _, err := c.meta.SelectUser(ctx, util.DefaultTenant, &milvuspb.UserEntity{Name: entity.User.Name}, false); err != nil {
-		mlog.Warn(ctx, "fail to select the user", mlog.String("username", entity.User.Name), mlog.Err(err))
+		log.Warn(ctx, "fail to select the user", log.String("username", entity.User.Name), log.Err(err))
 		return errors.New("not found the user, maybe the user isn't existed or internal system error")
 	}
 	if entity.Privilege == nil {
@@ -2489,7 +2489,7 @@ func (c *Core) SelectGrant(ctx context.Context, in *milvuspb.SelectGrantRequest)
 	method := "SelectGrant"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return &milvuspb.SelectGrantResponse{
@@ -2498,20 +2498,20 @@ func (c *Core) SelectGrant(ctx context.Context, in *milvuspb.SelectGrantRequest)
 	}
 	if in.Entity == nil {
 		errMsg := "the grant entity in the request is nil"
-		mlog.Warn(ctx, errMsg)
+		log.Warn(ctx, errMsg)
 		return &milvuspb.SelectGrantResponse{
 			Status: merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_SelectGrantFailure),
 		}, nil
 	}
 	if err := c.isValidRole(ctx, in.Entity.Role); err != nil {
-		mlog.Warn(ctx, "", mlog.Err(err))
+		log.Warn(ctx, "", log.Err(err))
 		return &milvuspb.SelectGrantResponse{
 			Status: merr.StatusWithErrorCode(err, commonpb.ErrorCode_SelectGrantFailure),
 		}, nil
 	}
 	if in.Entity.Object != nil {
 		if err := c.isValidObject(in.Entity.Object); err != nil {
-			mlog.Warn(ctx, "", mlog.Err(err))
+			log.Warn(ctx, "", log.Err(err))
 			return &milvuspb.SelectGrantResponse{
 				Status: merr.StatusWithErrorCode(err, commonpb.ErrorCode_SelectGrantFailure),
 			}, nil
@@ -2527,13 +2527,13 @@ func (c *Core) SelectGrant(ctx context.Context, in *milvuspb.SelectGrantRequest)
 	}
 	if err != nil {
 		errMsg := "fail to select the grant"
-		mlog.Warn(ctx, errMsg, mlog.Err(err))
+		log.Warn(ctx, errMsg, log.Err(err))
 		return &milvuspb.SelectGrantResponse{
 			Status: merr.StatusWithErrorCode(errors.New(errMsg), commonpb.ErrorCode_SelectGrantFailure),
 		}, nil
 	}
 
-	mlog.Debug(ctx, method+" success")
+	log.Debug(ctx, method+" success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return &milvuspb.SelectGrantResponse{
@@ -2546,7 +2546,7 @@ func (c *Core) ListPolicy(ctx context.Context, in *internalpb.ListPolicyRequest)
 	method := "PolicyList"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return &internalpb.ListPolicyResponse{
@@ -2556,7 +2556,7 @@ func (c *Core) ListPolicy(ctx context.Context, in *internalpb.ListPolicyRequest)
 
 	policies, err := c.meta.ListPolicy(ctx, util.DefaultTenant)
 	if err != nil {
-		mlog.Error(ctx, "fail to list policy", mlog.Err(err))
+		log.Error(ctx, "fail to list policy", log.Err(err))
 		return &internalpb.ListPolicyResponse{
 			Status: merr.StatusWithErrorCode(fmt.Errorf("fail to list policy: %s", err.Error()), commonpb.ErrorCode_ListPolicyFailure),
 		}, nil
@@ -2564,7 +2564,7 @@ func (c *Core) ListPolicy(ctx context.Context, in *internalpb.ListPolicyRequest)
 	// expand privilege groups and turn to policies
 	allGroups, err := c.getDefaultAndCustomPrivilegeGroups(ctx)
 	if err != nil {
-		mlog.Error(ctx, "fail to get privilege groups", mlog.Err(err))
+		log.Error(ctx, "fail to get privilege groups", log.Err(err))
 		return &internalpb.ListPolicyResponse{
 			Status: merr.StatusWithErrorCode(fmt.Errorf("fail to get privilege groups: %s", err.Error()), commonpb.ErrorCode_ListPolicyFailure),
 		}, nil
@@ -2574,7 +2574,7 @@ func (c *Core) ListPolicy(ctx context.Context, in *internalpb.ListPolicyRequest)
 	})
 	expandGrants, err := c.expandPrivilegeGroups(ctx, policies, groups)
 	if err != nil {
-		mlog.Error(ctx, "fail to expand privilege groups", mlog.Err(err))
+		log.Error(ctx, "fail to expand privilege groups", log.Err(err))
 		return &internalpb.ListPolicyResponse{
 			Status: merr.StatusWithErrorCode(fmt.Errorf("fail to expand privilege groups: %s", err.Error()), commonpb.ErrorCode_ListPolicyFailure),
 		}, nil
@@ -2585,13 +2585,13 @@ func (c *Core) ListPolicy(ctx context.Context, in *internalpb.ListPolicyRequest)
 
 	userRoles, err := c.meta.ListUserRole(ctx, util.DefaultTenant)
 	if err != nil {
-		mlog.Error(ctx, "fail to list user-role", mlog.Any("in", in), mlog.Err(err))
+		log.Error(ctx, "fail to list user-role", log.Any("in", in), log.Err(err))
 		return &internalpb.ListPolicyResponse{
 			Status: merr.StatusWithErrorCode(fmt.Errorf("fail to list user-role: %s", err.Error()), commonpb.ErrorCode_ListPolicyFailure),
 		}, nil
 	}
 
-	mlog.Debug(ctx, method+" success")
+	log.Debug(ctx, method+" success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return &internalpb.ListPolicyResponse{
@@ -2606,7 +2606,7 @@ func (c *Core) BackupRBAC(ctx context.Context, in *milvuspb.BackupRBACMetaReques
 	method := "BackupRBAC"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return &milvuspb.BackupRBACMetaResponse{
@@ -2621,7 +2621,7 @@ func (c *Core) BackupRBAC(ctx context.Context, in *milvuspb.BackupRBACMetaReques
 		}, nil
 	}
 
-	mlog.Debug(ctx, method+" success")
+	log.Debug(ctx, method+" success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 
@@ -2635,7 +2635,7 @@ func (c *Core) RestoreRBAC(ctx context.Context, in *milvuspb.RestoreRBACMetaRequ
 	method := "RestoreRBAC"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.Status(err), nil
@@ -2643,15 +2643,15 @@ func (c *Core) RestoreRBAC(ctx context.Context, in *milvuspb.RestoreRBACMetaRequ
 
 	if err := c.broadcastRestoreRBACV2(ctx, in); err != nil {
 		if errors.Is(err, errEmptyRBACMeta) {
-			mlog.Info(ctx, "restoring rbac meta is empty, skip restore", mlog.Err(err))
+			log.Info(ctx, "restoring rbac meta is empty, skip restore", log.Err(err))
 			return merr.Success(), nil
 		}
 		errMsg := "fail to execute task when restore rbac meta data"
-		mlog.Warn(ctx, errMsg, mlog.Err(err))
+		log.Warn(ctx, errMsg, log.Err(err))
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_OperatePrivilegeFailure), nil
 	}
 
-	mlog.Debug(ctx, method+" success")
+	log.Debug(ctx, method+" success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return merr.Success(), nil
@@ -2662,24 +2662,24 @@ func (c *Core) RenameCollection(ctx context.Context, req *milvuspb.RenameCollect
 		return merr.Status(err), nil
 	}
 
-	mlog.Info(context.TODO(), "received request to rename collection")
+	log.Info(context.TODO(), "received request to rename collection")
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("RenameCollection", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("RenameCollection")
 
 	if err := c.broadcastAlterCollectionForRenameCollection(ctx, req); err != nil {
 		if errors.Is(err, errIgnoredAlterCollection) {
-			mlog.Info(context.TODO(), "rename collection ignored, collection already uses the new name")
+			log.Info(context.TODO(), "rename collection ignored, collection already uses the new name")
 			return merr.Success(), nil
 		}
-		mlog.Warn(context.TODO(), "failed to rename collection", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to rename collection", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("RenameCollection", metrics.FailLabel).Inc()
 		return merr.Status(err), nil
 	}
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("RenameCollection", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("RenameCollection").Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Info(context.TODO(), "done to rename collection")
+	log.Info(context.TODO(), "done to rename collection")
 	return merr.Success(), nil
 }
 
@@ -2688,7 +2688,7 @@ func (c *Core) DescribeDatabase(ctx context.Context, req *rootcoordpb.DescribeDa
 		return &rootcoordpb.DescribeDatabaseResponse{Status: merr.Status(err)}, nil
 	}
 
-	mlog.Info(context.TODO(), "received request to describe database ")
+	log.Info(context.TODO(), "received request to describe database ")
 
 	metrics.RootCoordDDLReqCounter.WithLabelValues("DescribeDatabase", metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder("DescribeDatabase")
@@ -2698,13 +2698,13 @@ func (c *Core) DescribeDatabase(ctx context.Context, req *rootcoordpb.DescribeDa
 	}
 
 	if err := c.scheduler.AddTask(t); err != nil {
-		mlog.Warn(context.TODO(), "failed to enqueue request to describe database", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to enqueue request to describe database", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("DescribeDatabase", metrics.FailLabel).Inc()
 		return &rootcoordpb.DescribeDatabaseResponse{Status: merr.Status(err)}, nil
 	}
 
 	if err := t.WaitToFinish(); err != nil {
-		mlog.Warn(context.TODO(), "failed to describe database", mlog.Uint64("ts", t.GetTs()), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to describe database", log.Uint64("ts", t.GetTs()), log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues("DescribeDatabase", metrics.FailLabel).Inc()
 		return &rootcoordpb.DescribeDatabaseResponse{Status: merr.Status(err)}, nil
 	}
@@ -2712,7 +2712,7 @@ func (c *Core) DescribeDatabase(ctx context.Context, req *rootcoordpb.DescribeDa
 	metrics.RootCoordDDLReqCounter.WithLabelValues("DescribeDatabase", metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues("DescribeDatabase").Observe(float64(tr.ElapseSpan().Milliseconds()))
 
-	mlog.Info(context.TODO(), "done to describe database", mlog.Uint64("ts", t.GetTs()))
+	log.Info(context.TODO(), "done to describe database", log.Uint64("ts", t.GetTs()))
 	return t.Rsp, nil
 }
 
@@ -2778,18 +2778,18 @@ func (c *Core) CreatePrivilegeGroup(ctx context.Context, in *milvuspb.CreatePriv
 	method := "CreatePrivilegeGroup"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_CreatePrivilegeGroupFailure), nil
 	}
 
 	if err := c.broadcastCreatePrivilegeGroup(ctx, in); err != nil {
-		mlog.Warn(ctx, "fail to create privilege group", mlog.Err(err))
+		log.Warn(ctx, "fail to create privilege group", log.Err(err))
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_CreatePrivilegeGroupFailure), nil
 	}
 
-	mlog.Info(ctx, method+" success")
+	log.Info(ctx, method+" success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	metrics.RootCoordNumOfPrivilegeGroups.Inc()
@@ -2800,7 +2800,7 @@ func (c *Core) DropPrivilegeGroup(ctx context.Context, in *milvuspb.DropPrivileg
 	method := "DropPrivilegeGroup"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_DropPrivilegeGroupFailure), nil
@@ -2808,14 +2808,14 @@ func (c *Core) DropPrivilegeGroup(ctx context.Context, in *milvuspb.DropPrivileg
 
 	if err := c.broadcastDropPrivilegeGroup(ctx, in); err != nil {
 		if errors.Is(err, errNotCustomPrivilegeGroup) {
-			mlog.Info(ctx, "privilege group is not custom privilege group, skip drop", mlog.Err(err))
+			log.Info(ctx, "privilege group is not custom privilege group, skip drop", log.Err(err))
 			return merr.Success(), nil
 		}
-		mlog.Warn(ctx, "fail to drop privilege group", mlog.Err(err))
+		log.Warn(ctx, "fail to drop privilege group", log.Err(err))
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_DropPrivilegeGroupFailure), nil
 	}
 
-	mlog.Info(ctx, method+" success")
+	log.Info(ctx, method+" success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	metrics.RootCoordNumOfPrivilegeGroups.Desc()
@@ -2826,7 +2826,7 @@ func (c *Core) ListPrivilegeGroups(ctx context.Context, in *milvuspb.ListPrivile
 	method := "ListPrivilegeGroups"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return &milvuspb.ListPrivilegeGroupsResponse{
@@ -2836,13 +2836,13 @@ func (c *Core) ListPrivilegeGroups(ctx context.Context, in *milvuspb.ListPrivile
 
 	privGroups, err := c.meta.ListPrivilegeGroups(ctx)
 	if err != nil {
-		mlog.Warn(ctx, "fail to list privilege group", mlog.Err(err))
+		log.Warn(ctx, "fail to list privilege group", log.Err(err))
 		return &milvuspb.ListPrivilegeGroupsResponse{
 			Status: merr.StatusWithErrorCode(err, commonpb.ErrorCode_ListPrivilegeGroupsFailure),
 		}, nil
 	}
 
-	mlog.Debug(ctx, method+" success")
+	log.Debug(ctx, method+" success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 
@@ -2858,7 +2858,7 @@ func (c *Core) OperatePrivilegeGroup(ctx context.Context, in *milvuspb.OperatePr
 	method := "OperatePrivilegeGroup-" + in.Type.String()
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.Status(err), nil
@@ -2866,11 +2866,11 @@ func (c *Core) OperatePrivilegeGroup(ctx context.Context, in *milvuspb.OperatePr
 
 	if err := c.broadcastOperatePrivilegeGroup(ctx, in); err != nil {
 		errMsg := "fail to execute task when operate privilege group"
-		mlog.Warn(ctx, errMsg, mlog.Err(err))
+		log.Warn(ctx, errMsg, log.Err(err))
 		return merr.StatusWithErrorCode(err, commonpb.ErrorCode_OperatePrivilegeGroupFailure), nil
 	}
 
-	mlog.Debug(ctx, method+" success")
+	log.Debug(ctx, method+" success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return merr.Success(), nil
@@ -2881,7 +2881,7 @@ func (c *Core) AddFileResource(ctx context.Context, req *milvuspb.AddFileResourc
 	method := "AddFileResource"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.Status(err), nil
@@ -2915,7 +2915,7 @@ func (c *Core) AddFileResource(ctx context.Context, req *milvuspb.AddFileResourc
 		}
 	}
 
-	mlog.Debug(ctx, method+" success")
+	log.Debug(ctx, method+" success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return merr.Success(), nil
@@ -2926,7 +2926,7 @@ func (c *Core) RemoveFileResource(ctx context.Context, req *milvuspb.RemoveFileR
 	method := "RemoveFileResource"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return merr.Status(err), nil
@@ -2944,7 +2944,7 @@ func (c *Core) RemoveFileResource(ctx context.Context, req *milvuspb.RemoveFileR
 		}
 	}
 
-	mlog.Debug(ctx, method+" success")
+	log.Debug(ctx, method+" success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return merr.Success(), nil
@@ -2955,7 +2955,7 @@ func (c *Core) ListFileResources(ctx context.Context, req *milvuspb.ListFileReso
 	method := "ListFileResource"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return &milvuspb.ListFileResourcesResponse{
@@ -2964,7 +2964,7 @@ func (c *Core) ListFileResources(ctx context.Context, req *milvuspb.ListFileReso
 	}
 
 	resources, _ := c.meta.ListFileResource(ctx)
-	mlog.Debug(ctx, method+" success")
+	log.Debug(ctx, method+" success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 
@@ -3049,7 +3049,7 @@ func (c *Core) getCurrentUserVisibleDatabases(ctx context.Context) (typeutil.Set
 	// it will fail if the inner node server use the list database API
 	if err != nil || (curUser == util.UserRoot && !Params.CommonCfg.RootShouldBindRole.GetAsBool()) {
 		if err != nil {
-			mlog.Warn(ctx, "get current user from context failed", mlog.Err(err))
+			log.Warn(ctx, "get current user from context failed", log.Err(err))
 		}
 		privilegeDatabases.Insert(util.AnyWord)
 		return privilegeDatabases, nil
@@ -3092,7 +3092,7 @@ func (c *Core) newChunkManagerFactory() (storage.ChunkManager, error) {
 	chunkManagerFactory := storage.NewChunkManagerFactoryWithParam(Params)
 	cli, err := chunkManagerFactory.NewPersistentStorageChunkManager(c.ctx)
 	if err != nil {
-		mlog.Error(context.TODO(), "chunk manager init failed", mlog.Err(err))
+		log.Error(context.TODO(), "chunk manager init failed", log.Err(err))
 		return nil, err
 	}
 	return cli, err
@@ -3115,7 +3115,7 @@ func (c *Core) getCurrentUserVisibleCollections(ctx context.Context, databaseNam
 	curUser, err := contextutil.GetCurUserFromContext(ctx)
 	if err != nil || (curUser == util.UserRoot && !Params.CommonCfg.RootShouldBindRole.GetAsBool()) {
 		if err != nil {
-			mlog.Warn(ctx, "get current user from context failed", mlog.Err(err))
+			log.Warn(ctx, "get current user from context failed", log.Err(err))
 		}
 		privilegeColls.Insert(util.AnyWord)
 		return privilegeColls, nil
@@ -3194,7 +3194,7 @@ func (c *Core) BackupEzk(ctx context.Context, req *internalpb.BackupEzkRequest) 
 	method := "BackupEzk"
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.TotalLabel).Inc()
 	tr := timerecord.NewTimeRecorder(method)
-	mlog.Debug(ctx, method)
+	log.Debug(ctx, method)
 
 	if err := merr.CheckHealthy(c.GetStateCode()); err != nil {
 		return &internalpb.BackupEzkResponse{
@@ -3204,7 +3204,7 @@ func (c *Core) BackupEzk(ctx context.Context, req *internalpb.BackupEzkRequest) 
 
 	db, err := c.meta.GetDatabaseByName(ctx, req.GetDbName(), 0)
 	if err != nil {
-		mlog.Warn(ctx, "database not found", mlog.Err(err))
+		log.Warn(ctx, "database not found", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return &internalpb.BackupEzkResponse{
 			Status: merr.Status(err),
@@ -3213,7 +3213,7 @@ func (c *Core) BackupEzk(ctx context.Context, req *internalpb.BackupEzkRequest) 
 
 	ezkJSON, err := hookutil.BackupEZKFromDBProperties(db.Properties)
 	if err != nil {
-		mlog.Warn(ctx, "failed to backup EZK", mlog.Err(err))
+		log.Warn(ctx, "failed to backup EZK", log.Err(err))
 		metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.FailLabel).Inc()
 		return &internalpb.BackupEzkResponse{
 			Status: merr.Status(err),
@@ -3221,7 +3221,7 @@ func (c *Core) BackupEzk(ctx context.Context, req *internalpb.BackupEzkRequest) 
 		}, nil
 	}
 
-	mlog.Debug(ctx, method+" success")
+	log.Debug(ctx, method+" success")
 	metrics.RootCoordDDLReqCounter.WithLabelValues(method, metrics.SuccessLabel).Inc()
 	metrics.RootCoordDDLReqLatency.WithLabelValues(method).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	return &internalpb.BackupEzkResponse{

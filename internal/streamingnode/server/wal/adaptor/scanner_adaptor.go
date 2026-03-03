@@ -14,7 +14,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message/adaptor"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"
@@ -36,10 +36,10 @@ func newRecoveryScannerAdaptor(l walimpls.ROWALImpls,
 ) *scannerAdaptorImpl {
 	name := "recovery"
 	logger := resource.Resource().Logger().With(
-		mlog.FieldComponent("scanner"),
-		mlog.String("name", name),
-		mlog.String("channel", l.Channel().String()),
-		mlog.String("startMessageID", startMessageID.String()),
+		log.FieldComponent("scanner"),
+		log.String("name", name),
+		log.String("channel", l.Channel().String()),
+		log.String("startMessageID", startMessageID.String()),
 	)
 	readOption := wal.ReadOption{
 		DeliverPolicy:          options.DeliverPolicyStartFrom(startMessageID),
@@ -78,9 +78,9 @@ func newScannerAdaptor(
 	}
 	options.GetFilterFunc(readOption.MessageFilter)
 	logger := resource.Resource().Logger().With(
-		mlog.FieldComponent("scanner"),
-		mlog.String("name", name),
-		mlog.String("channel", l.Channel().Name),
+		log.FieldComponent("scanner"),
+		log.String("name", name),
+		log.String("channel", l.Channel().Name),
 	)
 	s := &scannerAdaptorImpl{
 		logger:        logger,
@@ -103,7 +103,7 @@ func newScannerAdaptor(
 type scannerAdaptorImpl struct {
 	*helper.ScannerHelper
 	recovery      bool
-	logger        *mlog.Logger
+	logger        *log.Logger
 	innerWAL      walimpls.ROWALImpls
 	readOption    wal.ReadOption
 	filterFunc    func(message.ImmutableMessage) bool
@@ -165,7 +165,7 @@ func (s *scannerAdaptorImpl) execute() {
 			s.logger.Info(nil, "the produce event loop of scanner is closed")
 			return
 		}
-		s.logger.Warn(nil, "the produce event loop of scanner is closed with unexpected error", mlog.Err(err))
+		s.logger.Warn(nil, "the produce event loop of scanner is closed with unexpected error", log.Err(err))
 	}()
 
 	err := s.consumeEventLoop(msgChan)
@@ -173,7 +173,7 @@ func (s *scannerAdaptorImpl) execute() {
 		s.logger.Info(nil, "the consuming event loop of scanner is closed")
 		return
 	}
-	s.logger.Warn(nil, "the consuming event loop of scanner is closed with unexpected error", mlog.Err(err))
+	s.logger.Warn(nil, "the consuming event loop of scanner is closed with unexpected error", log.Err(err))
 }
 
 // produceEventLoop produces the message from the wal and write ahead buffer.
@@ -193,14 +193,14 @@ func (s *scannerAdaptorImpl) produceEventLoop(msgChan chan<- message.ImmutableMe
 	}
 
 	scanner := newSwithableScanner(s.Name(), s.logger, s.innerWAL, wb, s.readOption.DeliverPolicy, msgChan)
-	s.logger.Info(nil, "start produce loop of scanner at model", mlog.String("model", getScannerModel(scanner)))
+	s.logger.Info(nil, "start produce loop of scanner at model", log.String("model", getScannerModel(scanner)))
 	for {
 		if scanner, err = scanner.Do(s.Context()); err != nil {
 			return err
 		}
 		m := getScannerModel(scanner)
 		s.metrics.SwitchModel(m)
-		s.logger.Info(nil, "switch scanner model", mlog.String("model", m))
+		s.logger.Info(nil, "switch scanner model", log.String("model", m))
 	}
 }
 
@@ -289,12 +289,12 @@ func (s *scannerAdaptorImpl) handleUpstream(msg message.ImmutableMessage) {
 
 		if len(msgs) > 0 {
 			// Push the confirmed messages into pending queue for consuming.
-			if mlog.LevelEnabled(mlog.DebugLevel) {
+			if log.LevelEnabled(log.DebugLevel) {
 				for _, m := range msgs {
 					s.logger.Debug(nil,
 						"push message into pending queue",
-						mlog.Uint64("committedTimeTick", msg.TimeTick()),
-						mlog.FieldMessage(m),
+						log.Uint64("committedTimeTick", msg.TimeTick()),
+						log.FieldMessage(m),
 					)
 				}
 			}
@@ -325,9 +325,9 @@ func (s *scannerAdaptorImpl) handleUpstream(msg message.ImmutableMessage) {
 			s.metrics.ObserveTimeTickViolation(isTailing, msg.MessageType())
 		}
 		s.logger.Warn(nil, "failed to push message into reorder buffer",
-			mlog.FieldMessage(msg),
-			mlog.Bool("tailing", isTailing),
-			mlog.Err(err))
+			log.FieldMessage(msg),
+			log.Bool("tailing", isTailing),
+			log.Err(err))
 	}
 	// Observe the filtered message.
 	s.metrics.UpdateTimeTickBufSize(s.reorderBuffer.Bytes())

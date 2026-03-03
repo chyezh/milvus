@@ -33,7 +33,7 @@ import (
 	sdk "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.4.0"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -42,13 +42,13 @@ func Init() error {
 
 	exp, err := CreateTracerExporter(params)
 	if err != nil {
-		mlog.Warn(context.TODO(), "Init tracer failed", mlog.Err(err))
+		log.Warn(context.TODO(), "Init tracer failed", log.Err(err))
 		return err
 	}
 
 	SetTracerProvider(exp, params.TraceCfg.SampleFraction.GetAsFloat())
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
-	mlog.Info(context.TODO(), "Init tracer finished", mlog.String("Exporter", params.TraceCfg.Exporter.GetValue()))
+	log.Info(context.TODO(), "Init tracer finished", log.String("Exporter", params.TraceCfg.Exporter.GetValue()))
 	return nil
 }
 
@@ -87,13 +87,13 @@ func parseHeaders(headers string) map[string]string {
 	// Try to decode as base64 first
 	decodeheaders, err := base64.StdEncoding.DecodeString(headers)
 	if err != nil {
-		mlog.Warn(context.TODO(), "Failed to decode base64 headers, trying to parse as JSON directly", mlog.Err(err))
+		log.Warn(context.TODO(), "Failed to decode base64 headers, trying to parse as JSON directly", log.Err(err))
 		// Try to parse headers as JSON directly
 		var headersMap map[string]string
 		if jsonErr := json.Unmarshal([]byte(headers), &headersMap); jsonErr == nil {
 			return headersMap
 		}
-		mlog.Warn(context.TODO(), "Failed to parse headers as JSON", mlog.Err(err))
+		log.Warn(context.TODO(), "Failed to parse headers as JSON", log.Err(err))
 		return nil
 	}
 
@@ -102,7 +102,7 @@ func parseHeaders(headers string) map[string]string {
 	if jsonErr := json.Unmarshal(decodeheaders, &headersMap); jsonErr == nil {
 		return headersMap
 	}
-	mlog.Warn(context.TODO(), "Failed to parse decoded headers as JSON", mlog.Err(err))
+	log.Warn(context.TODO(), "Failed to parse decoded headers as JSON", log.Err(err))
 	return nil
 }
 

@@ -39,7 +39,7 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	kvfactory "github.com/milvus-io/milvus/internal/util/dependency/kv"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
@@ -152,7 +152,7 @@ func (s *SessionRaw) IsTriggerKill() bool {
 // because the registration is used by server side, but the discovery is used by client side.
 // we should split the service registration and service diescovery.
 type Session struct {
-	mlog.Binder
+	log.Binder
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -260,7 +260,7 @@ func NewSession(ctx context.Context, opts ...SessionOption) *Session {
 func NewSessionWithEtcd(ctx context.Context, metaRoot string, client *clientv3.Client, opts ...SessionOption) *Session {
 	hostName, hostNameErr := os.Hostname()
 	if hostNameErr != nil {
-		mlog.Error(ctx, "get host name fail", mlog.Err(hostNameErr))
+		log.Error(ctx, "get host name fail", log.Err(hostNameErr))
 	}
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -310,11 +310,11 @@ func (s *Session) Init(serverName, address string, exclusive bool, triggerKill b
 	s.ServerLabels = getServerLabelsFromEnv(serverName)
 	s.versionKey = path.Join(s.metaRoot, DefaultServiceRoot, serverVersionKey)
 
-	s.SetLogger(mlog.With(
-		mlog.FieldComponent("service-registration"),
-		mlog.String("role", serverName),
-		mlog.Int64("serverID", s.ServerID),
-		mlog.String("address", address),
+	s.SetLogger(log.With(
+		log.FieldComponent("service-registration"),
+		log.String("role", serverName),
+		log.Int64("serverID", s.ServerID),
+		log.String("address", address),
 	))
 }
 
@@ -327,7 +327,7 @@ func (s *Session) String() string {
 func (s *Session) Register() {
 	err := s.registerService()
 	if err != nil {
-		s.Logger().Error(nil, "register failed", mlog.Err(err))
+		s.Logger().Error(nil, "register failed", log.Err(err))
 		panic(err)
 	}
 	s.UpdateRegistered(true)
@@ -377,7 +377,7 @@ func (s *Session) getServerID() (int64, error) {
 	serverIDMu.Lock()
 	defer serverIDMu.Unlock()
 
-	mlog.Debug(s.ctx, "getServerID", mlog.Bool("reuse", s.reuseNodeID))
+	log.Debug(s.ctx, "getServerID", log.Bool("reuse", s.reuseNodeID))
 	if s.reuseNodeID {
 		// Notice, For standalone, all process share the same nodeID.
 		if nodeID := paramtable.GetNodeID(); nodeID != 0 {
@@ -405,23 +405,23 @@ func (s *Session) checkIDExist() {
 
 func (s *Session) getServerIDWithKey(key string) (int64, error) {
 	if os.Getenv(MilvusNodeIDForTesting) != "" {
-		mlog.Info(context.TODO(), "use node id for testing", mlog.String("nodeID", os.Getenv(MilvusNodeIDForTesting)))
+		log.Info(context.TODO(), "use node id for testing", log.String("nodeID", os.Getenv(MilvusNodeIDForTesting)))
 		return strconv.ParseInt(os.Getenv(MilvusNodeIDForTesting), 10, 64)
 	}
 	for {
 		getResp, err := s.etcdCli.Get(s.ctx, path.Join(s.metaRoot, DefaultServiceRoot, key))
 		if err != nil {
-			mlog.Warn(context.TODO(), "Session get etcd key error", mlog.String("key", key), mlog.Err(err))
+			log.Warn(context.TODO(), "Session get etcd key error", log.String("key", key), log.Err(err))
 			return -1, err
 		}
 		if getResp.Count <= 0 {
-			mlog.Warn(context.TODO(), "Session there is no value", mlog.String("key", key))
+			log.Warn(context.TODO(), "Session there is no value", log.String("key", key))
 			continue
 		}
 		value := string(getResp.Kvs[0].Value)
 		valueInt, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
-			mlog.Warn(context.TODO(), "Session ParseInt error", mlog.String("value", value), mlog.Err(err))
+			log.Warn(context.TODO(), "Session ParseInt error", log.String("value", value), log.Err(err))
 			continue
 		}
 		txnResp, err := s.etcdCli.Txn(s.ctx).If(
@@ -431,15 +431,15 @@ func (s *Session) getServerIDWithKey(key string) (int64, error) {
 				value)).
 			Then(clientv3.OpPut(path.Join(s.metaRoot, DefaultServiceRoot, key), strconv.FormatInt(valueInt+1, 10))).Commit()
 		if err != nil {
-			mlog.Warn(context.TODO(), "Session Txn failed", mlog.String("key", key), mlog.Err(err))
+			log.Warn(context.TODO(), "Session Txn failed", log.String("key", key), log.Err(err))
 			return -1, err
 		}
 
 		if !txnResp.Succeeded {
-			mlog.Warn(context.TODO(), "Session Txn unsuccessful", mlog.String("key", key))
+			log.Warn(context.TODO(), "Session Txn unsuccessful", log.String("key", key))
 			continue
 		}
-		mlog.Debug(context.TODO(), "Session get serverID success", mlog.String("key", key), mlog.Int64("ServerId", valueInt))
+		log.Debug(context.TODO(), "Session get serverID success", log.String("key", key), log.Int64("ServerId", valueInt))
 		return valueInt, nil
 	}
 }
@@ -477,14 +477,14 @@ func (s *Session) registerService() error {
 	registerFn := func() error {
 		resp, err := s.etcdCli.Grant(s.ctx, s.sessionTTL)
 		if err != nil {
-			s.Logger().Error(nil, "register service: failed to grant lease from etcd", mlog.Err(err))
+			s.Logger().Error(nil, "register service: failed to grant lease from etcd", log.Err(err))
 			return err
 		}
 		s.LeaseID = &resp.ID
 
 		sessionJSON, err := json.Marshal(s)
 		if err != nil {
-			s.Logger().Error(nil, "register service: failed to marshal session", mlog.Err(err))
+			s.Logger().Error(nil, "register service: failed to marshal session", log.Err(err))
 			return err
 		}
 
@@ -505,7 +505,7 @@ func (s *Session) registerService() error {
 
 		txnResp, err := s.etcdCli.Txn(s.ctx).If(compareOps...).Then(ops...).Commit()
 		if err != nil {
-			s.Logger().Warn(nil, "register on etcd error, check the availability of etcd", mlog.Err(err))
+			s.Logger().Warn(nil, "register on etcd error, check the availability of etcd", log.Err(err))
 			return err
 		}
 		if txnResp != nil && !txnResp.Succeeded {
@@ -514,7 +514,7 @@ func (s *Session) registerService() error {
 		if !s.enableActiveStandBy {
 			s.registeredRevision.Store(txnResp.Header.GetRevision())
 		}
-		s.Logger().Info(nil, "put session key into etcd, service registered successfully", mlog.String("key", completeKey), mlog.String("value", string(sessionJSON)))
+		s.Logger().Info(nil, "put session key into etcd, service registered successfully", log.String("key", completeKey), log.String("value", string(sessionJSON)))
 		return nil
 	}
 	return retry.Do(s.ctx, registerFn, retry.Attempts(uint(s.sessionRetryTimes)), retry.RetryErr(isNotSessionVersionCheckFailure))
@@ -565,9 +565,9 @@ func (s *Session) processKeepAliveResponse() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		if _, err := s.etcdCli.Revoke(ctx, *s.LeaseID); err != nil {
-			s.Logger().Error(nil, "failed to revoke lease", mlog.Err(err), mlog.Int64("leaseID", int64(*s.LeaseID)))
+			s.Logger().Error(nil, "failed to revoke lease", log.Err(err), log.Int64("leaseID", int64(*s.LeaseID)))
 		}
-		s.Logger().Info(nil, "lease revoked successfully", mlog.Int64("leaseID", int64(*s.LeaseID)))
+		s.Logger().Info(nil, "lease revoked successfully", log.Int64("leaseID", int64(*s.LeaseID)))
 		s.wg.Done()
 	}()
 
@@ -587,7 +587,7 @@ func (s *Session) processKeepAliveResponse() {
 		}
 		if lastErr != nil {
 			nextBackoffInterval := backoff.NextBackOff()
-			s.Logger().Warn(nil, "failed to start keep alive, wait for retry...", mlog.Err(lastErr), mlog.Duration("nextBackoffInterval", nextBackoffInterval))
+			s.Logger().Warn(nil, "failed to start keep alive, wait for retry...", log.Err(lastErr), log.Duration("nextBackoffInterval", nextBackoffInterval))
 			select {
 			case <-time.After(nextBackoffInterval):
 			case <-s.ctx.Done():
@@ -602,11 +602,11 @@ func (s *Session) processKeepAliveResponse() {
 			}
 			newCH, err := s.etcdCli.KeepAlive(s.ctx, *s.LeaseID)
 			if err != nil {
-				s.Logger().Error(nil, "failed to keep alive with etcd", mlog.Err(err))
+				s.Logger().Error(nil, "failed to keep alive with etcd", log.Err(err))
 				lastErr = errors.Wrap(err, "failed to keep alive")
 				continue
 			}
-			s.Logger().Info(nil, "keep alive...", mlog.Int64("leaseID", int64(*s.LeaseID)))
+			s.Logger().Info(nil, "keep alive...", log.Int64("leaseID", int64(*s.LeaseID)))
 			ch = newCH
 		}
 
@@ -632,23 +632,23 @@ func (s *Session) checkKeepaliveTTL(nextKeepaliveInstant time.Time) error {
 	ttlResp, err := s.etcdCli.TimeToLive(ctx, *s.LeaseID)
 	if err != nil {
 		if errors.Is(err, v3rpc.ErrLeaseNotFound) {
-			s.Logger().Error(nil, "confirm the lease is not found, the session is expired without activing closing", mlog.Err(err))
-			mlog.Cleanup()
+			s.Logger().Error(nil, "confirm the lease is not found, the session is expired without activing closing", log.Err(err))
+			log.Cleanup()
 			os.Exit(exitCodeSessionLeaseExpired)
 		}
 		if ctx.Err() != nil && errors.Is(context.Cause(ctx), errSessionExpiredAtClientSide) {
-			s.Logger().Error(nil, "session expired at client side, the session is expired without activing closing", mlog.Err(err))
-			mlog.Cleanup()
+			s.Logger().Error(nil, "session expired at client side, the session is expired without activing closing", log.Err(err))
+			log.Cleanup()
 			os.Exit(exitCodeSessionLeaseExpired)
 		}
 		return errors.Wrap(err, "failed to check TTL")
 	}
 	if ttlResp.TTL <= 0 {
-		s.Logger().Error(nil, "confirm the lease is expired, the session is expired without activing closing", mlog.Err(err))
-		mlog.Cleanup()
+		s.Logger().Error(nil, "confirm the lease is expired, the session is expired without activing closing", log.Err(err))
+		log.Cleanup()
 		os.Exit(exitCodeSessionLeaseExpired)
 	}
-	s.Logger().Info(nil, "check TTL success, try to keep alive...", mlog.Int64("ttl", ttlResp.TTL))
+	s.Logger().Info(nil, "check TTL success, try to keep alive...", log.Int64("ttl", ttlResp.TTL))
 	return nil
 }
 
@@ -674,10 +674,10 @@ func (s *Session) GetSessions(ctx context.Context, prefix string) (map[string]*S
 			return nil, 0, err
 		}
 		_, mapKey := path.Split(string(kv.Key))
-		mlog.Debug(s.ctx, "SessionUtil GetSessions",
-			mlog.String("prefix", prefix),
-			mlog.String("key", mapKey),
-			mlog.String("address", session.Address))
+		log.Debug(s.ctx, "SessionUtil GetSessions",
+			log.String("prefix", prefix),
+			log.String("key", mapKey),
+			log.String("address", session.Address))
 		res[mapKey] = session
 	}
 	return res, resp.Header.Revision, nil
@@ -700,13 +700,13 @@ func (s *Session) GetSessionsWithVersionRange(prefix string, r semver.Range) (ma
 			return nil, 0, err
 		}
 		if !r(session.Version) {
-			mlog.Debug(context.TODO(), "Session version out of range", mlog.String("version", session.Version.String()), mlog.Int64("serverID", session.ServerID))
+			log.Debug(context.TODO(), "Session version out of range", log.String("version", session.Version.String()), log.Int64("serverID", session.ServerID))
 			continue
 		}
 		_, mapKey := path.Split(string(kv.Key))
-		mlog.Debug(context.TODO(), "SessionUtil GetSessions ", mlog.String("prefix", prefix),
-			mlog.String("key", mapKey),
-			mlog.String("address", session.Address))
+		log.Debug(context.TODO(), "SessionUtil GetSessions ", log.String("prefix", prefix),
+			log.String("key", mapKey),
+			log.String("address", session.Address))
 		res[mapKey] = session
 	}
 	return res, resp.Header.Revision, nil
@@ -724,7 +724,7 @@ func (s *Session) GoingStop() error {
 	completeKey := s.getCompleteKey()
 	resp, err := s.etcdCli.Get(s.ctx, completeKey, clientv3.WithCountOnly())
 	if err != nil {
-		s.Logger().Error(nil, "fail to get the session", mlog.String("key", completeKey), mlog.Err(err))
+		s.Logger().Error(nil, "fail to get the session", log.String("key", completeKey), log.Err(err))
 		return err
 	}
 	if resp.Count == 0 {
@@ -733,12 +733,12 @@ func (s *Session) GoingStop() error {
 	s.Stopping = true
 	sessionJSON, err := json.Marshal(s)
 	if err != nil {
-		s.Logger().Error(nil, "fail to marshal the session", mlog.String("key", completeKey))
+		s.Logger().Error(nil, "fail to marshal the session", log.String("key", completeKey))
 		return err
 	}
 	_, err = s.etcdCli.Put(s.ctx, completeKey, string(sessionJSON), clientv3.WithLease(*s.LeaseID))
 	if err != nil {
-		s.Logger().Error(nil, "fail to update the session to stopping state", mlog.String("key", completeKey))
+		s.Logger().Error(nil, "fail to update the session to stopping state", log.String("key", completeKey))
 		return err
 	}
 	return nil
@@ -782,7 +782,7 @@ func (w *sessionWatcher) start(ctx context.Context) {
 			case wresp, ok := <-w.rch:
 				if !ok {
 					w.closeEventCh()
-					mlog.Warn(context.TODO(), "session watch channel closed")
+					log.Warn(context.TODO(), "session watch channel closed")
 					return
 				}
 				w.handleWatchResponse(wresp)
@@ -858,7 +858,7 @@ func (w *sessionWatcher) handleWatchResponse(wresp clientv3.WatchResponse) {
 	if wresp.Err() != nil {
 		err := w.handleWatchErr(wresp.Err())
 		if err != nil {
-			mlog.Error(context.TODO(), "failed to handle watch session response", mlog.Err(err))
+			log.Error(context.TODO(), "failed to handle watch session response", log.Err(err))
 			panic(err)
 		}
 		return
@@ -868,11 +868,11 @@ func (w *sessionWatcher) handleWatchResponse(wresp clientv3.WatchResponse) {
 		var eventType SessionEventType
 		switch ev.Type {
 		case mvccpb.PUT:
-			mlog.Debug(context.TODO(), "watch services",
-				mlog.Any("add kv", ev.Kv))
+			log.Debug(context.TODO(), "watch services",
+				log.Any("add kv", ev.Kv))
 			err := json.Unmarshal(ev.Kv.Value, session)
 			if err != nil {
-				mlog.Error(context.TODO(), "watch services", mlog.Err(err))
+				log.Error(context.TODO(), "watch services", log.Err(err))
 				continue
 			}
 			if !w.validate(session) {
@@ -884,11 +884,11 @@ func (w *sessionWatcher) handleWatchResponse(wresp clientv3.WatchResponse) {
 				eventType = SessionAddEvent
 			}
 		case mvccpb.DELETE:
-			mlog.Debug(context.TODO(), "watch services",
-				mlog.Any("delete kv", ev.PrevKv))
+			log.Debug(context.TODO(), "watch services",
+				log.Any("delete kv", ev.PrevKv))
 			err := json.Unmarshal(ev.PrevKv.Value, session)
 			if err != nil {
-				mlog.Error(context.TODO(), "watch services", mlog.Err(err))
+				log.Error(context.TODO(), "watch services", log.Err(err))
 				continue
 			}
 			if !w.validate(session) {
@@ -896,7 +896,7 @@ func (w *sessionWatcher) handleWatchResponse(wresp clientv3.WatchResponse) {
 			}
 			eventType = SessionDelEvent
 		}
-		mlog.Debug(context.TODO(), "WatchService", mlog.Any("event type", eventType))
+		log.Debug(context.TODO(), "WatchService", log.Any("event type", eventType))
 		w.eventCh <- &SessionEvent{
 			EventType: eventType,
 			Session:   session,
@@ -908,25 +908,25 @@ func (w *sessionWatcher) handleWatchErr(err error) error {
 	// if not ErrCompacted, just close the channel
 	if err != v3rpc.ErrCompacted {
 		// close event channel
-		mlog.Warn(context.TODO(), "Watch service found error", mlog.Err(err))
+		log.Warn(context.TODO(), "Watch service found error", log.Err(err))
 		w.closeEventCh()
 		return err
 	}
 
 	sessions, revision, err := w.s.GetSessions(w.s.ctx, w.prefix)
 	if err != nil {
-		mlog.Warn(context.TODO(), "GetSession before rewatch failed", mlog.String("prefix", w.prefix), mlog.Err(err))
+		log.Warn(context.TODO(), "GetSession before rewatch failed", log.String("prefix", w.prefix), log.Err(err))
 		w.closeEventCh()
 		return err
 	}
 	// rewatch is nil, no logic to handle
 	if w.rewatch == nil {
-		mlog.Warn(context.TODO(), "Watch service with ErrCompacted but no rewatch logic provided")
+		log.Warn(context.TODO(), "Watch service with ErrCompacted but no rewatch logic provided")
 	} else {
 		err = w.rewatch(sessions)
 	}
 	if err != nil {
-		mlog.Warn(context.TODO(), "WatchServices rewatch failed", mlog.String("prefix", w.prefix), mlog.Err(err))
+		log.Warn(context.TODO(), "WatchServices rewatch failed", log.String("prefix", w.prefix), log.Err(err))
 		w.closeEventCh()
 		return err
 	}
@@ -940,7 +940,7 @@ func (w *sessionWatcher) EventChannel() <-chan *SessionEvent {
 }
 
 func (s *Session) Stop() {
-	mlog.Info(context.TODO(), "session stopping", mlog.String("serverName", s.ServerName))
+	log.Info(context.TODO(), "session stopping", log.String("serverName", s.ServerName))
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -1009,19 +1009,19 @@ func (s *Session) ProcessActiveStandBy(activateFunc func() error) error {
 		for _, role := range oldRoles {
 			sessions, _, err := s.GetSessions(s.ctx, role)
 			if err != nil {
-				mlog.Debug(context.TODO(), "failed to get old sessions", mlog.String("role", role), mlog.Err(err))
+				log.Debug(context.TODO(), "failed to get old sessions", log.String("role", role), log.Err(err))
 				continue
 			}
 			if len(sessions) > 0 {
-				mlog.Info(context.TODO(), "old session exists", mlog.String("role", role))
+				log.Info(context.TODO(), "old session exists", log.String("role", role))
 				return false, -1, merr.ErrOldSessionExists
 			}
 		}
 
-		mlog.Info(context.TODO(), fmt.Sprintf("try to register as ACTIVE %v service...", s.ServerName))
+		log.Info(context.TODO(), fmt.Sprintf("try to register as ACTIVE %v service...", s.ServerName))
 		sessionJSON, err := json.Marshal(s)
 		if err != nil {
-			mlog.Error(context.TODO(), "json marshal error", mlog.Err(err))
+			log.Error(context.TODO(), "json marshal error", log.Err(err))
 			return false, -1, err
 		}
 
@@ -1040,24 +1040,24 @@ func (s *Session) ProcessActiveStandBy(activateFunc func() error) error {
 
 		txnResp, err := s.etcdCli.Txn(s.ctx).If(compareOps...).Then(ops...).Commit()
 		if err != nil {
-			mlog.Error(context.TODO(), "register active key to etcd failed", mlog.Err(err))
+			log.Error(context.TODO(), "register active key to etcd failed", log.Err(err))
 			return false, -1, err
 		}
 		doRegistered := txnResp.Succeeded
 		revision := txnResp.Header.GetRevision()
 		if doRegistered {
 			s.registeredRevision.Store(revision)
-			mlog.Info(context.TODO(), fmt.Sprintf("register ACTIVE %s", s.ServerName), mlog.Int64("revision", revision))
+			log.Info(context.TODO(), fmt.Sprintf("register ACTIVE %s", s.ServerName), log.Int64("revision", revision))
 		} else {
-			mlog.Info(context.TODO(), fmt.Sprintf("ACTIVE %s has already been registered", s.ServerName))
+			log.Info(context.TODO(), fmt.Sprintf("ACTIVE %s has already been registered", s.ServerName))
 		}
 		return doRegistered, revision, nil
 	}
 	s.updateStandby(true)
-	mlog.Info(context.TODO(), fmt.Sprintf("serverName: %v enter STANDBY mode", s.ServerName))
+	log.Info(context.TODO(), fmt.Sprintf("serverName: %v enter STANDBY mode", s.ServerName))
 	go func() {
 		for s.isStandby.Load().(bool) {
-			mlog.Debug(context.TODO(), fmt.Sprintf("serverName: %v is in STANDBY ...", s.ServerName))
+			log.Debug(context.TODO(), fmt.Sprintf("serverName: %v is in STANDBY ...", s.ServerName))
 			time.Sleep(10 * time.Second)
 		}
 	}()
@@ -1077,7 +1077,7 @@ func (s *Session) ProcessActiveStandBy(activateFunc func() error) error {
 		if registered {
 			break
 		}
-		mlog.Info(context.TODO(), fmt.Sprintf("%s start to watch ACTIVE key %s", s.ServerName, s.activeKey))
+		log.Info(context.TODO(), fmt.Sprintf("%s start to watch ACTIVE key %s", s.ServerName, s.activeKey))
 		ctx, cancel := context.WithCancel(s.ctx)
 		watchChan := s.etcdCli.Watch(ctx, s.activeKey, clientv3.WithPrevKV(), clientv3.WithRev(revision))
 		select {
@@ -1093,19 +1093,19 @@ func (s *Session) ProcessActiveStandBy(activateFunc func() error) error {
 			for _, event := range wresp.Events {
 				switch event.Type {
 				case mvccpb.PUT:
-					mlog.Debug(context.TODO(), "watch the ACTIVE key", mlog.Any("ADD", event.Kv))
+					log.Debug(context.TODO(), "watch the ACTIVE key", log.Any("ADD", event.Kv))
 				case mvccpb.DELETE:
-					mlog.Debug(context.TODO(), "watch the ACTIVE key", mlog.Any("DELETE", event.Kv))
+					log.Debug(context.TODO(), "watch the ACTIVE key", log.Any("DELETE", event.Kv))
 					cancel()
 				}
 			}
 		}
 		cancel()
-		mlog.Info(context.TODO(), fmt.Sprintf("stop watching ACTIVE key %v", s.activeKey))
+		log.Info(context.TODO(), fmt.Sprintf("stop watching ACTIVE key %v", s.activeKey))
 	}
 
 	s.updateStandby(false)
-	mlog.Info(context.TODO(), fmt.Sprintf("serverName: %v quit STANDBY mode, this node will become ACTIVE, ID: %d", s.ServerName, s.ServerID))
+	log.Info(context.TODO(), fmt.Sprintf("serverName: %v quit STANDBY mode, this node will become ACTIVE, ID: %d", s.ServerName, s.ServerID))
 	if activateFunc != nil {
 		return activateFunc()
 	}
@@ -1125,13 +1125,13 @@ func filterEmptyStrings(s []string) []string {
 func GetSessions(pid int) []string {
 	fileFullName := GetServerInfoFilePath(pid)
 	if _, err := os.Stat(fileFullName); errors.Is(err, os.ErrNotExist) {
-		mlog.Warn(context.TODO(), "not found server info file path", mlog.String("filePath", fileFullName), mlog.Err(err))
+		log.Warn(context.TODO(), "not found server info file path", log.String("filePath", fileFullName), log.Err(err))
 		return []string{}
 	}
 
 	v, err := storage.ReadFile(fileFullName)
 	if err != nil {
-		mlog.Warn(context.TODO(), "read server info file path failed", mlog.String("filePath", fileFullName), mlog.Err(err))
+		log.Warn(context.TODO(), "read server info file path failed", log.String("filePath", fileFullName), log.Err(err))
 		return []string{}
 	}
 
@@ -1158,7 +1158,7 @@ func saveServerInfoInternal(role string, serverID int64, pid int) {
 	fileFullPath := GetServerInfoFilePath(pid)
 	fd, err := os.OpenFile(fileFullPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o664)
 	if err != nil {
-		mlog.Warn(context.TODO(), "open server info file fail", mlog.String("filePath", fileFullPath), mlog.Err(err))
+		log.Warn(context.TODO(), "open server info file fail", log.String("filePath", fileFullPath), log.Err(err))
 		return
 	}
 	defer fd.Close()
@@ -1166,10 +1166,10 @@ func saveServerInfoInternal(role string, serverID int64, pid int) {
 	data := fmt.Sprintf("%s-%d\n", role, serverID)
 	_, err = fd.WriteString(data)
 	if err != nil {
-		mlog.Warn(context.TODO(), "write server info file fail", mlog.String("filePath", fileFullPath), mlog.Err(err))
+		log.Warn(context.TODO(), "write server info file fail", log.String("filePath", fileFullPath), log.Err(err))
 	}
 
-	mlog.Info(context.TODO(), "save server info into file", mlog.String("content", data), mlog.String("filePath", fileFullPath))
+	log.Info(context.TODO(), "save server info into file", log.String("content", data), log.String("filePath", fileFullPath))
 }
 
 func SaveServerInfo(role string, serverID int64) {

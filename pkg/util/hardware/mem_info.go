@@ -24,7 +24,7 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 	"github.com/sirupsen/logrus"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 var proc *process.Process
@@ -44,7 +44,7 @@ func init() {
 func GetUsedMemoryCount() uint64 {
 	memInfo, err := proc.MemoryInfoEx()
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to get memory info", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get memory info", log.Err(err))
 		return 0
 	}
 

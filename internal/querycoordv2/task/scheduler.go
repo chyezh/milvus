@@ -34,7 +34,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
@@ -181,10 +181,10 @@ func (etd *ExecutingTaskDelta) Add(task Task) {
 	defer etd.mu.Unlock()
 
 	if etd.taskIDRecords.Contain(task.ID()) {
-		mlog.Warn(context.TODO(), "task already exists in delta cache",
-			mlog.Int64("collectionID", task.CollectionID()),
-			mlog.Int64("replicaID", task.ReplicaID()),
-			mlog.Int64("taskID", task.ID()))
+		log.Warn(context.TODO(), "task already exists in delta cache",
+			log.Int64("collectionID", task.CollectionID()),
+			log.Int64("replicaID", task.ReplicaID()),
+			log.Int64("taskID", task.ID()))
 		return
 	}
 	etd.taskIDRecords.Insert(task.ID())
@@ -207,10 +207,10 @@ func (etd *ExecutingTaskDelta) Sub(task Task) {
 	defer etd.mu.Unlock()
 
 	if !etd.taskIDRecords.Contain(task.ID()) {
-		mlog.Warn(context.TODO(), "task already exists in delta cache",
-			mlog.Int64("collectionID", task.CollectionID()),
-			mlog.Int64("replicaID", task.ReplicaID()),
-			mlog.Int64("taskID", task.ID()))
+		log.Warn(context.TODO(), "task already exists in delta cache",
+			log.Int64("collectionID", task.CollectionID()),
+			log.Int64("replicaID", task.ReplicaID()),
+			log.Int64("taskID", task.ID()))
 		return
 	}
 	etd.taskIDRecords.Remove(task.ID())
@@ -265,10 +265,10 @@ func (etd *ExecutingTaskDelta) printDetailInfos() {
 	defer etd.mu.RUnlock()
 
 	if etd.taskIDRecords.Len() > 0 {
-		mlog.Info(context.TODO(), "task delta cache info",
-			mlog.Any("taskIDRecords", etd.taskIDRecords.Collect()),
-			mlog.Any("data", etd.data),
-			mlog.Any("nodeTotalDelta", etd.nodeTotalDelta),
+		log.Info(context.TODO(), "task delta cache info",
+			log.Any("taskIDRecords", etd.taskIDRecords.Collect()),
+			log.Any("data", etd.data),
+			log.Any("nodeTotalDelta", etd.nodeTotalDelta),
 		)
 	}
 }
@@ -391,14 +391,14 @@ func (scheduler *taskScheduler) AddExecutor(nodeID int64) {
 		return
 	}
 	executor.Start(scheduler.ctx)
-	mlog.Info(scheduler.ctx, "add executor for new QueryNode", mlog.Int64("nodeID", nodeID))
+	log.Info(scheduler.ctx, "add executor for new QueryNode", log.Int64("nodeID", nodeID))
 }
 
 func (scheduler *taskScheduler) RemoveExecutor(nodeID int64) {
 	executor, ok := scheduler.executors.GetAndRemove(nodeID)
 	if ok {
 		executor.Stop()
-		mlog.Info(scheduler.ctx, "remove executor of offline QueryNode", mlog.Int64("nodeID", nodeID))
+		log.Info(scheduler.ctx, "remove executor of offline QueryNode", log.Int64("nodeID", nodeID))
 	}
 }
 
@@ -431,7 +431,7 @@ func (scheduler *taskScheduler) Add(task Task) error {
 
 	scheduler.taskStats.Add(task.ID(), task)
 	scheduler.updateTaskMetrics()
-	mlog.Info(task.Context(), "task added", mlog.String("task", task.String()))
+	log.Info(task.Context(), "task added", log.String("task", task.String()))
 	task.RecordStartTs()
 	return nil
 }
@@ -508,11 +508,11 @@ func (scheduler *taskScheduler) preAdd(task Task) error {
 		index := NewReplicaSegmentIndex(task)
 		if old, ok := scheduler.segmentTasks.Get(index); ok {
 			if task.Priority() > old.Priority() {
-				mlog.Info(scheduler.ctx, "replace old task, the new one with higher priority",
-					mlog.Int64("oldID", old.ID()),
-					mlog.String("oldPriority", old.Priority().String()),
-					mlog.Int64("newID", task.ID()),
-					mlog.String("newPriority", task.Priority().String()),
+				log.Info(scheduler.ctx, "replace old task, the new one with higher priority",
+					log.Int64("oldID", old.ID()),
+					log.String("oldPriority", old.Priority().String()),
+					log.Int64("newID", task.ID()),
+					log.String("newPriority", task.Priority().String()),
 				)
 				old.Cancel(merr.WrapErrServiceInternal("replaced with the other one with higher priority"))
 				scheduler.remove(old)
@@ -539,11 +539,11 @@ func (scheduler *taskScheduler) preAdd(task Task) error {
 		index := replicaChannelIndex{task.ReplicaID(), task.Channel()}
 		if old, ok := scheduler.channelTasks.Get(index); ok {
 			if task.Priority() > old.Priority() {
-				mlog.Info(scheduler.ctx, "replace old task, the new one with higher priority",
-					mlog.Int64("oldID", old.ID()),
-					mlog.String("oldPriority", old.Priority().String()),
-					mlog.Int64("newID", task.ID()),
-					mlog.String("newPriority", task.Priority().String()),
+				log.Info(scheduler.ctx, "replace old task, the new one with higher priority",
+					log.Int64("oldID", old.ID()),
+					log.String("oldPriority", old.Priority().String()),
+					log.Int64("newID", task.ID()),
+					log.String("newPriority", task.Priority().String()),
 				)
 				old.Cancel(merr.WrapErrServiceInternal("replaced with the other one with higher priority"))
 				scheduler.remove(old)
@@ -572,11 +572,11 @@ func (scheduler *taskScheduler) preAdd(task Task) error {
 		index := NewReplicaLeaderIndex(task)
 		if old, ok := scheduler.segmentTasks.Get(index); ok {
 			if task.Priority() > old.Priority() {
-				mlog.Info(scheduler.ctx, "replace old task, the new one with higher priority",
-					mlog.Int64("oldID", old.ID()),
-					mlog.String("oldPriority", old.Priority().String()),
-					mlog.Int64("newID", task.ID()),
-					mlog.String("newPriority", task.Priority().String()),
+				log.Info(scheduler.ctx, "replace old task, the new one with higher priority",
+					log.Int64("oldID", old.ID()),
+					log.String("oldPriority", old.Priority().String()),
+					log.Int64("newID", task.ID()),
+					log.String("newPriority", task.Priority().String()),
 				)
 				old.Cancel(merr.WrapErrServiceInternal("replaced with the other one with higher priority"))
 				scheduler.remove(old)
@@ -589,11 +589,11 @@ func (scheduler *taskScheduler) preAdd(task Task) error {
 		index := NewReplicaDropIndex(task)
 		if old, ok := scheduler.segmentTasks.Get(index); ok {
 			if task.Priority() > old.Priority() {
-				mlog.Info(scheduler.ctx, "replace old task, the new one with higher priority",
-					mlog.Int64("oldID", old.ID()),
-					mlog.String("oldPriority", old.Priority().String()),
-					mlog.Int64("newID", task.ID()),
-					mlog.String("newPriority", task.Priority().String()),
+				log.Info(scheduler.ctx, "replace old task, the new one with higher priority",
+					log.Int64("oldID", old.ID()),
+					log.String("oldPriority", old.Priority().String()),
+					log.Int64("newID", task.ID()),
+					log.String("newPriority", task.Priority().String()),
 				)
 				old.Cancel(merr.WrapErrServiceInternal("replaced with the other one with higher priority"))
 				scheduler.remove(old)
@@ -625,9 +625,9 @@ func (scheduler *taskScheduler) tryPromoteAll() {
 		if err != nil {
 			task.Cancel(err)
 			toRemove = append(toRemove, task)
-			mlog.Warn(scheduler.ctx, "failed to promote task",
-				mlog.Int64("taskID", task.ID()),
-				mlog.Err(err),
+			log.Warn(scheduler.ctx, "failed to promote task",
+				log.Int64("taskID", task.ID()),
+				log.Err(err),
 			)
 		} else {
 			toPromote = append(toPromote, task)
@@ -644,15 +644,15 @@ func (scheduler *taskScheduler) tryPromoteAll() {
 	}
 
 	if len(toPromote) > 0 || len(toRemove) > 0 {
-		mlog.Debug(scheduler.ctx, "promoted tasks",
-			mlog.Int("promotedNum", len(toPromote)),
-			mlog.Int("toRemoveNum", len(toRemove)))
+		log.Debug(scheduler.ctx, "promoted tasks",
+			log.Int("promotedNum", len(toPromote)),
+			log.Int("toRemoveNum", len(toRemove)))
 	}
 }
 
 func (scheduler *taskScheduler) promote(task Task) error {
 	if err := scheduler.check(task); err != nil {
-		mlog.Info(context.TODO(), "failed to promote task", mlog.Err(err))
+		log.Info(context.TODO(), "failed to promote task", log.Err(err))
 		return err
 	}
 
@@ -664,7 +664,7 @@ func (scheduler *taskScheduler) promote(task Task) error {
 func (scheduler *taskScheduler) Dispatch(node int64) {
 	select {
 	case <-scheduler.ctx.Done():
-		mlog.Info(scheduler.ctx, "scheduler stopped")
+		log.Info(scheduler.ctx, "scheduler stopped")
 
 	default:
 		scheduler.scheduleMu.Lock()
@@ -774,7 +774,7 @@ func (scheduler *taskScheduler) GetTasksJSON() string {
 	tasks := scheduler.taskStats.Values()
 	ret, err := json.Marshal(tasks)
 	if err != nil {
-		mlog.Warn(scheduler.ctx, "marshal tasks fail", mlog.Err(err))
+		log.Warn(scheduler.ctx, "marshal tasks fail", log.Err(err))
 		return ""
 	}
 	return string(ret)
@@ -794,11 +794,11 @@ func (scheduler *taskScheduler) schedule(node int64) {
 	scheduler.tryPromoteAll()
 	promoteDur := tr.RecordSpan()
 
-	mlog.Debug(context.TODO(), "process tasks related to node",
-		mlog.Int("processingTaskNum", scheduler.processQueue.Len()),
-		mlog.Int("waitingTaskNum", scheduler.waitQueue.Len()),
-		mlog.Int("segmentTaskNum", scheduler.segmentTasks.Len()),
-		mlog.Int("channelTaskNum", scheduler.channelTasks.Len()),
+	log.Debug(context.TODO(), "process tasks related to node",
+		log.Int("processingTaskNum", scheduler.processQueue.Len()),
+		log.Int("waitingTaskNum", scheduler.waitQueue.Len()),
+		log.Int("segmentTaskNum", scheduler.segmentTasks.Len()),
+		log.Int("channelTaskNum", scheduler.channelTasks.Len()),
 	)
 
 	// Process tasks
@@ -833,21 +833,21 @@ func (scheduler *taskScheduler) schedule(node int64) {
 
 	scheduler.updateTaskMetrics()
 
-	mlog.Info(context.TODO(), "processed tasks",
-		mlog.Int("toProcessNum", len(toProcess)),
-		mlog.Int32("committedNum", commmittedNum.Load()),
-		mlog.Int("toRemoveNum", len(toRemove)),
-		mlog.Duration("promoteDur", promoteDur),
-		mlog.Duration("preprocessDUr", preprocessDur),
-		mlog.Duration("processDUr", processDur),
-		mlog.Duration("totalDur", tr.ElapseSpan()),
+	log.Info(context.TODO(), "processed tasks",
+		log.Int("toProcessNum", len(toProcess)),
+		log.Int32("committedNum", commmittedNum.Load()),
+		log.Int("toRemoveNum", len(toRemove)),
+		log.Duration("promoteDur", promoteDur),
+		log.Duration("preprocessDUr", preprocessDur),
+		log.Duration("processDUr", processDur),
+		log.Duration("totalDur", tr.ElapseSpan()),
 	)
 
-	mlog.Info(context.TODO(), "process tasks related to node done",
-		mlog.Int("processingTaskNum", scheduler.processQueue.Len()),
-		mlog.Int("waitingTaskNum", scheduler.waitQueue.Len()),
-		mlog.Int("segmentTaskNum", scheduler.segmentTasks.Len()),
-		mlog.Int("channelTaskNum", scheduler.channelTasks.Len()),
+	log.Info(context.TODO(), "process tasks related to node done",
+		log.Int("processingTaskNum", scheduler.processQueue.Len()),
+		log.Int("waitingTaskNum", scheduler.waitQueue.Len()),
+		log.Int("segmentTaskNum", scheduler.segmentTasks.Len()),
+		log.Int("channelTaskNum", scheduler.channelTasks.Len()),
 	)
 }
 
@@ -900,20 +900,20 @@ func (scheduler *taskScheduler) preProcess(task Task) bool {
 				// wait for new delegator becomes leader, then try to remove old leader
 				task := task.(*ChannelTask)
 				delegator := scheduler.getReplicaShardLeader(task.Shard(), task.ReplicaID())
-				mlog.Debug(scheduler.ctx, "process channelAction", mlog.Bool("delegator is Nil", delegator == nil))
+				log.Debug(scheduler.ctx, "process channelAction", log.Bool("delegator is Nil", delegator == nil))
 				if delegator != nil {
-					mlog.Debug(scheduler.ctx, "process channelAction", mlog.Int64("delegator node", delegator.Node),
-						mlog.Int64("action node", action.Node()))
+					log.Debug(scheduler.ctx, "process channelAction", log.Int64("delegator node", delegator.Node),
+						log.Int64("action node", action.Node()))
 				}
 				newDelegatorReady = delegator != nil && delegator.Node == action.Node()
 			default:
 				newDelegatorReady = true
 			}
 			if !newDelegatorReady {
-				mlog.RatedInfo(scheduler.ctx, rate.Every(30*time.Second), "Blocking reduce action in balance channel task",
-					mlog.Int64("collectionID", task.CollectionID()),
-					mlog.String("channelName", task.Shard()),
-					mlog.Int64("taskID", task.ID()))
+				log.RatedInfo(scheduler.ctx, rate.Every(30*time.Second), "Blocking reduce action in balance channel task",
+					log.Int64("collectionID", task.CollectionID()),
+					log.String("channelName", task.Shard()),
+					log.Int64("taskID", task.ID()))
 
 				break
 			}
@@ -939,9 +939,9 @@ func (scheduler *taskScheduler) process(task Task) bool {
 	actions, step := task.Actions(), task.Step()
 	executor, ok := scheduler.executors.Get(actions[step].Node())
 	if !ok {
-		mlog.Warn(context.TODO(), "no executor for QueryNode",
-			mlog.Int("step", step),
-			mlog.Int64("nodeID", actions[step].Node()))
+		log.Warn(context.TODO(), "no executor for QueryNode",
+			log.Int("step", step),
+			log.Int64("nodeID", actions[step].Node()))
 		return false
 	}
 
@@ -973,20 +973,20 @@ func (scheduler *taskScheduler) RemoveByNode(node int64) {
 }
 
 func (scheduler *taskScheduler) recordSegmentTaskError(task *SegmentTask) {
-	mlog.Warn(scheduler.ctx, "task scheduler recordSegmentTaskError",
-		mlog.Int64("taskID", task.ID()),
-		mlog.Int64("collectionID", task.CollectionID()),
-		mlog.Int64("replicaID", task.ReplicaID()),
-		mlog.Int64("segmentID", task.SegmentID()),
-		mlog.String("status", task.Status()),
-		mlog.Err(task.err),
+	log.Warn(scheduler.ctx, "task scheduler recordSegmentTaskError",
+		log.Int64("taskID", task.ID()),
+		log.Int64("collectionID", task.CollectionID()),
+		log.Int64("replicaID", task.ReplicaID()),
+		log.Int64("segmentID", task.SegmentID()),
+		log.String("status", task.Status()),
+		log.Err(task.err),
 	)
 	meta.GlobalFailedLoadCache.Put(task.collectionID, task.Err())
 }
 
 func (scheduler *taskScheduler) remove(task Task) {
 	if errors.Is(task.Err(), merr.ErrSegmentNotFound) {
-		mlog.Info(context.TODO(), "segment in target has been cleaned, trigger force update next target", mlog.Int64("collectionID", task.CollectionID()))
+		log.Info(context.TODO(), "segment in target has been cleaned, trigger force update next target", log.Int64("collectionID", task.CollectionID()))
 		// Avoid using task.Ctx as it may be canceled before remove is called.
 		scheduler.targetMgr.UpdateCollectionNextTarget(scheduler.ctx, task.CollectionID())
 	}
@@ -1001,7 +1001,7 @@ func (scheduler *taskScheduler) remove(task Task) {
 				nodeID := action.Node()
 				duration := paramtable.Get().QueryCoordCfg.ResourceExhaustionPenaltyDuration.GetAsDuration(time.Second)
 				scheduler.nodeMgr.MarkResourceExhaustion(nodeID, duration)
-				mlog.Info(context.TODO(), "mark resource exhaustion for node", mlog.Int64("nodeID", nodeID), mlog.Duration("duration", duration), mlog.Err(task.Err()))
+				log.Info(context.TODO(), "mark resource exhaustion for node", log.Int64("nodeID", nodeID), log.Duration("duration", duration), log.Err(task.Err()))
 			}
 		}
 	}
@@ -1041,7 +1041,7 @@ func (scheduler *taskScheduler) remove(task Task) {
 		scheduler.segmentTasks.Remove(index)
 	}
 
-	mlog.Info(context.TODO(), "task removed", mlog.Int64("taskID", task.ID()))
+	log.Info(context.TODO(), "task removed", log.Int64("taskID", task.ID()))
 
 	if scheduler.meta.Exist(task.Context(), task.CollectionID()) {
 		metrics.QueryCoordTaskLatency.WithLabelValues(fmt.Sprint(task.CollectionID()),
@@ -1088,10 +1088,10 @@ func (scheduler *taskScheduler) getTaskMetricsLabel(task Task) string {
 
 func WrapTaskLog(task Task, fields ...zap.Field) []zap.Field {
 	res := []zap.Field{
-		mlog.Int64("taskID", task.ID()),
-		mlog.Int64("collectionID", task.CollectionID()),
-		mlog.Int64("replicaID", task.ReplicaID()),
-		mlog.String("source", task.Source().String()),
+		log.Int64("taskID", task.ID()),
+		log.Int64("collectionID", task.CollectionID()),
+		log.Int64("replicaID", task.ReplicaID()),
+		log.String("source", task.Source().String()),
 	}
 	res = append(res, fields...)
 	return res
@@ -1104,7 +1104,7 @@ func (scheduler *taskScheduler) checkStale(task Task) error {
 	if task.ReplicaID() != -1 {
 		replica = scheduler.meta.ReplicaManager.Get(scheduler.ctx, task.ReplicaID())
 		if replica == nil {
-			mlog.Warn(context.TODO(), "task stale due to replica not found")
+			log.Warn(context.TODO(), "task stale due to replica not found")
 			return merr.WrapErrReplicaNotFound(task.ReplicaID())
 		}
 	}
@@ -1127,17 +1127,17 @@ func (scheduler *taskScheduler) checkStale(task Task) error {
 
 		nodeInfo := scheduler.nodeMgr.Get(targetNode)
 		if nodeInfo == nil {
-			mlog.Warn(context.TODO(), "task stale due to node not found", mlog.Int64("nodeID", targetNode))
+			log.Warn(context.TODO(), "task stale due to node not found", log.Int64("nodeID", targetNode))
 			return merr.WrapErrNodeNotFound(targetNode)
 		}
 		if action.Type() == ActionTypeGrow {
 			if nodeInfo.IsStoppingState() {
-				mlog.Warn(context.TODO(), "task stale due to node offline", mlog.Int64("nodeID", targetNode))
+				log.Warn(context.TODO(), "task stale due to node offline", log.Int64("nodeID", targetNode))
 				return merr.WrapErrNodeOffline(targetNode)
 			}
 
 			if replica != nil && (replica.ContainRONode(targetNode) || replica.ContainROSQNode(targetNode)) {
-				mlog.Warn(context.TODO(), "task stale due to node becomes ro node", mlog.Int64("nodeID", targetNode))
+				log.Warn(context.TODO(), "task stale due to node becomes ro node", log.Int64("nodeID", targetNode))
 				return merr.WrapErrNodeStateUnexpected(targetNode, "node becomes ro node")
 			}
 		}

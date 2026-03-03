@@ -24,7 +24,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/tests/integration"
 )
@@ -54,7 +54,7 @@ func (s *HelloMilvusSuite) TestAliasOperations() {
 		Schema:         marshaledSchema1,
 	})
 	s.NoError(err)
-	mlog.Info(context.TODO(), "CreateCollection 1 result", mlog.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(context.TODO(), "CreateCollection 1 result", log.Any("createCollectionStatus", createCollectionStatus))
 
 	schema2 := integration.ConstructSchema(collectionName2, dim, true)
 	marshaledSchema2, err := proto.Marshal(schema2)
@@ -65,7 +65,7 @@ func (s *HelloMilvusSuite) TestAliasOperations() {
 		Schema:         marshaledSchema2,
 	})
 	s.NoError(err)
-	mlog.Info(context.TODO(), "CreateCollection 2 result", mlog.Any("createCollectionStatus", createCollectionStatus2))
+	log.Info(context.TODO(), "CreateCollection 2 result", log.Any("createCollectionStatus", createCollectionStatus2))
 
 	fVecColumn := integration.NewFloatVectorFieldData(integration.FloatVecField, rowNum, dim)
 	hashKeys := integration.GenerateHashKeys(rowNum)
@@ -144,9 +144,9 @@ func (s *HelloMilvusSuite) TestAliasOperations() {
 	s.NoError(err)
 	s.Equal(describeAliasResp1.GetStatus().GetErrorCode(), commonpb.ErrorCode_Success)
 	s.Equal(collectionName1, describeAliasResp1.GetCollection())
-	mlog.Info(context.TODO(), "describeAliasResp1",
-		mlog.String("alias", describeAliasResp1.GetAlias()),
-		mlog.String("collection", describeAliasResp1.GetCollection()))
+	log.Info(context.TODO(), "describeAliasResp1",
+		log.String("alias", describeAliasResp1.GetAlias()),
+		log.String("collection", describeAliasResp1.GetCollection()))
 
 	describeAliasResp2, err := c.MilvusClient.DescribeAlias(ctx, &milvuspb.DescribeAliasRequest{
 		Alias: "alias12",
@@ -154,9 +154,9 @@ func (s *HelloMilvusSuite) TestAliasOperations() {
 	s.NoError(err)
 	s.Equal(describeAliasResp2.GetStatus().GetErrorCode(), commonpb.ErrorCode_Success)
 	s.Equal(collectionName1, describeAliasResp2.GetCollection())
-	mlog.Info(context.TODO(), "describeAliasResp2",
-		mlog.String("alias", describeAliasResp2.GetAlias()),
-		mlog.String("collection", describeAliasResp2.GetCollection()))
+	log.Info(context.TODO(), "describeAliasResp2",
+		log.String("alias", describeAliasResp2.GetAlias()),
+		log.String("collection", describeAliasResp2.GetCollection()))
 
 	describeAliasResp3, err := c.MilvusClient.DescribeAlias(ctx, &milvuspb.DescribeAliasRequest{
 		Alias: "alias21",
@@ -164,16 +164,16 @@ func (s *HelloMilvusSuite) TestAliasOperations() {
 	s.NoError(err)
 	s.Equal(describeAliasResp3.GetStatus().GetErrorCode(), commonpb.ErrorCode_Success)
 	s.Equal(collectionName2, describeAliasResp3.GetCollection())
-	mlog.Info(context.TODO(), "describeAliasResp3",
-		mlog.String("alias", describeAliasResp3.GetAlias()),
-		mlog.String("collection", describeAliasResp3.GetCollection()))
+	log.Info(context.TODO(), "describeAliasResp3",
+		log.String("alias", describeAliasResp3.GetAlias()),
+		log.String("collection", describeAliasResp3.GetCollection()))
 
 	listAliasesResp, err := c.MilvusClient.ListAliases(ctx, &milvuspb.ListAliasesRequest{})
 	s.NoError(err)
 	s.Equal(listAliasesResp.GetStatus().GetErrorCode(), commonpb.ErrorCode_Success)
 	s.Equal(3, len(listAliasesResp.Aliases))
 
-	mlog.Info(context.TODO(), "listAliasesResp", mlog.Strings("aliases", listAliasesResp.Aliases))
+	log.Info(context.TODO(), "listAliasesResp", log.Strings("aliases", listAliasesResp.Aliases))
 
 	dropAliasResp1, err := c.MilvusClient.DropAlias(ctx, &milvuspb.DropAliasRequest{
 		Alias: "alias11",
@@ -191,11 +191,11 @@ func (s *HelloMilvusSuite) TestAliasOperations() {
 	s.NoError(err)
 	s.Equal(listAliasesRespNew.GetStatus().GetErrorCode(), commonpb.ErrorCode_Success)
 	s.Equal(1, len(listAliasesRespNew.Aliases))
-	mlog.Info(context.TODO(), "listAliasesResp after drop", mlog.Strings("aliases", listAliasesResp.Aliases))
+	log.Info(context.TODO(), "listAliasesResp after drop", log.Strings("aliases", listAliasesResp.Aliases))
 
-	mlog.Info(context.TODO(), "======================")
-	mlog.Info(context.TODO(), "======================")
-	mlog.Info(context.TODO(), "TestAliasOperations succeed")
-	mlog.Info(context.TODO(), "======================")
-	mlog.Info(context.TODO(), "======================")
+	log.Info(context.TODO(), "======================")
+	log.Info(context.TODO(), "======================")
+	log.Info(context.TODO(), "TestAliasOperations succeed")
+	log.Info(context.TODO(), "======================")
+	log.Info(context.TODO(), "======================")
 }

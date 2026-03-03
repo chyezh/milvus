@@ -34,7 +34,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/dependency"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/etcdpb"
@@ -465,7 +465,7 @@ func GenRowData() (rawData []byte) {
 		panic(err)
 	}
 	rawData = append(rawData, bfloat64.Bytes()...)
-	mlog.Debug(context.TODO(), "Rawdata length:", mlog.Int("Length of rawData", len(rawData)))
+	log.Debug(context.TODO(), "Rawdata length:", log.Int("Length of rawData", len(rawData)))
 	return
 }
 

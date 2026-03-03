@@ -27,7 +27,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/observers"
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/util/proxyutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/proxypb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 )
@@ -72,21 +72,21 @@ func (job *ReleaseCollectionJob) Execute() error {
 	collectionID := job.result.Message.Header().GetCollectionId()
 
 	if !job.meta.CollectionManager.Exist(job.ctx, collectionID) {
-		mlog.Info(context.TODO(), "release collection end, the collection has not been loaded into QueryNode")
+		log.Info(context.TODO(), "release collection end, the collection has not been loaded into QueryNode")
 		return nil
 	}
 
 	err := job.meta.CollectionManager.RemoveCollection(job.ctx, collectionID)
 	if err != nil {
 		msg := "failed to remove collection"
-		mlog.Warn(context.TODO(), msg, mlog.Err(err))
+		log.Warn(context.TODO(), msg, log.Err(err))
 		return errors.Wrap(err, msg)
 	}
 
 	err = job.meta.ReplicaManager.RemoveCollection(job.ctx, collectionID)
 	if err != nil {
 		msg := "failed to remove replicas"
-		mlog.Warn(context.TODO(), msg, mlog.Err(err))
+		log.Warn(context.TODO(), msg, log.Err(err))
 	}
 
 	job.targetObserver.ReleaseCollection(collectionID)
@@ -105,10 +105,10 @@ func (job *ReleaseCollectionJob) Execute() error {
 	})
 
 	if err = WaitCollectionReleased(job.ctx, job.dist, job.checkerController, collectionID); err != nil {
-		mlog.Warn(context.TODO(), "failed to wait collection released", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to wait collection released", log.Err(err))
 		// return nil to avoid infinite retry on DDL callback
 		return nil
 	}
-	mlog.Info(context.TODO(), "release collection job done", mlog.Int64("collectionID", collectionID))
+	log.Info(context.TODO(), "release collection job done", log.Int64("collectionID", collectionID))
 	return nil
 }

@@ -7,12 +7,12 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 )
 
 // newWALLifetime create a WALLifetime with opener.
-func newWALLifetime(opener wal.Opener, channel string, logger *mlog.Logger) *walLifetime {
+func newWALLifetime(opener wal.Opener, channel string, logger *log.Logger) *walLifetime {
 	ctx, cancel := context.WithCancel(context.Background())
 	l := &walLifetime{
 		ctx:       ctx,
@@ -21,7 +21,7 @@ func newWALLifetime(opener wal.Opener, channel string, logger *mlog.Logger) *wal
 		finish:    make(chan struct{}),
 		opener:    opener,
 		statePair: newWALStatePair(),
-		logger:    logger.With(mlog.String("channel", channel)),
+		logger:    logger.With(log.String("channel", channel)),
 	}
 	go l.backgroundTask()
 	return l
@@ -41,7 +41,7 @@ type walLifetime struct {
 	finish    chan struct{}
 	opener    wal.Opener
 	statePair *walStatePair
-	logger    *mlog.Logger
+	logger    *log.Logger
 }
 
 // GetWAL returns a available wal instance for the channel.
@@ -76,7 +76,7 @@ func (w *walLifetime) Remove(ctx context.Context, term int64) error {
 		return err
 	}
 	if err != nil {
-		w.logger.Info(nil, "remove wal success because that previous open operation is failure", mlog.NamedError("previousOpenError", err))
+		w.logger.Info(nil, "remove wal success because that previous open operation is failure", log.NamedError("previousOpenError", err))
 	}
 	return nil
 }
@@ -89,7 +89,7 @@ func (w *walLifetime) Close() {
 
 	// No background task is running now, close current wal if needed.
 	currentState := w.statePair.GetCurrentState()
-	logger := mlog.With(mlog.String("current", toStateString(currentState)))
+	logger := log.With(log.String("current", toStateString(currentState)))
 	if oldWAL := currentState.GetWAL(); oldWAL != nil {
 		oldWAL.Close()
 		w.statePair.SetCurrentState(newUnavailableCurrentState(currentState.Term(), nil))
@@ -115,7 +115,7 @@ func (w *walLifetime) backgroundTask() {
 			return
 		}
 		expectedState = w.statePair.GetExpectedState()
-		w.logger.Info(nil, "expected state changed, do a life cycle", mlog.String("expected", toStateString(expectedState)))
+		w.logger.Info(nil, "expected state changed, do a life cycle", log.String("expected", toStateString(expectedState)))
 		w.doLifetimeChanged(expectedState)
 	}
 }
@@ -123,7 +123,7 @@ func (w *walLifetime) backgroundTask() {
 // doLifetimeChanged executes the wal open/close operation once.
 func (w *walLifetime) doLifetimeChanged(expectedState expectedWALState) {
 	currentState := w.statePair.GetCurrentState()
-	logger := w.logger.With(mlog.String("expected", toStateString(expectedState)), mlog.String("current", toStateString(currentState)))
+	logger := w.logger.With(log.String("expected", toStateString(expectedState)), log.String("current", toStateString(currentState)))
 
 	// Filter the expired expectedState.
 	if !isStateBefore(currentState, expectedState) {
@@ -159,7 +159,7 @@ func (w *walLifetime) doLifetimeChanged(expectedState expectedWALState) {
 		Channel: expectedState.GetPChannelInfo(),
 	})
 	if err != nil {
-		logger.Warn(nil, "open new wal fail", mlog.Err(err))
+		logger.Warn(nil, "open new wal fail", log.Err(err))
 		// Open new wal at expected term failed, push expected term to current state unavailable.
 		// -> (expectedTerm,false)
 		w.statePair.SetCurrentState(newUnavailableCurrentState(expectedState.Term(), err))

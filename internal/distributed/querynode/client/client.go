@@ -29,7 +29,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/grpcclient"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
@@ -55,7 +55,7 @@ func NewClient(ctx context.Context, addr string, nodeID int64) (types.QueryNodeC
 	sess := sessionutil.NewSession(context.Background())
 	if sess == nil {
 		err := errors.New("new session error, maybe can not connect to etcd")
-		mlog.Debug(ctx, "QueryNodeClient NewClient failed", mlog.Err(err))
+		log.Debug(ctx, "QueryNodeClient NewClient failed", log.Err(err))
 		return nil, err
 	}
 	config := &paramtable.Get().QueryNodeGrpcClientCfg
@@ -75,7 +75,7 @@ func NewClient(ctx context.Context, addr string, nodeID int64) (types.QueryNodeC
 		client.grpcClient.EnableEncryption()
 		cp, err := utils.CreateCertPoolforClient(Params.InternalTLSCfg.InternalTLSCaPemPath.GetValue(), "QueryNode")
 		if err != nil {
-			mlog.Error(ctx, "Failed to create cert pool for QueryNode client")
+			log.Error(ctx, "Failed to create cert pool for QueryNode client")
 			return nil, err
 		}
 		client.grpcClient.SetInternalTLSCertPool(cp)

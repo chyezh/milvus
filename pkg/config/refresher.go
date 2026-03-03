@@ -22,7 +22,7 @@ import (
 
 	"go.uber.org/atomic"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 type refresher struct {
@@ -64,16 +64,16 @@ func (r *refresher) refreshPeriodically(name string) {
 	defer r.wg.Done()
 	ticker := time.NewTicker(r.refreshInterval)
 	defer ticker.Stop()
-	mlog.Debug(context.TODO(), "start refreshing configurations", mlog.String("source", name))
+	log.Debug(context.TODO(), "start refreshing configurations", log.String("source", name))
 	for {
 		select {
 		case <-ticker.C:
 			err := r.fetchFunc()
 			if err != nil {
-				mlog.RatedWarn(context.TODO(), mlog.RateDefault, "can not pull configs", mlog.Err(err))
+				log.RatedWarn(context.TODO(), log.RateDefault, "can not pull configs", log.Err(err))
 			}
 		case <-r.intervalDone:
-			mlog.Info(context.TODO(), "stop refreshing configurations", mlog.String("source", name))
+			log.Info(context.TODO(), "stop refreshing configurations", log.String("source", name))
 			return
 		}
 	}

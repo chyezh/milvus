@@ -20,7 +20,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/mqimpl/rocksmq/server"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -58,11 +58,11 @@ func removePath(rmqPath string) {
 	rocksdbPath := rmqPath
 	err := os.RemoveAll(rocksdbPath)
 	if err != nil {
-		mlog.Error(context.TODO(), "Failed to call os.removeAll.", mlog.String("path", rocksdbPath))
+		log.Error(context.TODO(), "Failed to call os.removeAll.", log.String("path", rocksdbPath))
 	}
 	metaPath := rmqPath + "_meta_kv"
 	err = os.RemoveAll(metaPath)
 	if err != nil {
-		mlog.Error(context.TODO(), "Failed to call os.removeAll.", mlog.String("path", metaPath))
+		log.Error(context.TODO(), "Failed to call os.removeAll.", log.String("path", metaPath))
 	}
 }

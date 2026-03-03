@@ -10,7 +10,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -211,7 +211,7 @@ func newSnapshotMeta(ctx context.Context, catalog metastore.DataCoordCatalog, ch
 	// Reload all snapshots from catalog to populate in-memory cache
 	if err := sm.reload(ctx); err != nil {
 		loaderCancel()
-		mlog.Error(context.TODO(), "failed to reload snapshot meta from kv", mlog.Err(err))
+		log.Error(context.TODO(), "failed to reload snapshot meta from kv", log.Err(err))
 		return nil, err
 	}
 
@@ -245,17 +245,17 @@ func newSnapshotMeta(ctx context.Context, catalog metastore.DataCoordCatalog, ch
 func (sm *snapshotMeta) reload(ctx context.Context) error {
 	snapshots, err := sm.catalog.ListSnapshots(ctx)
 	if err != nil {
-		mlog.Info(context.TODO(), "failed to list snapshots from kv", mlog.Err(err))
+		log.Info(context.TODO(), "failed to list snapshots from kv", log.Err(err))
 		return err
 	}
 
 	for _, snapshot := range snapshots {
 		if snapshot.GetState() == datapb.SnapshotState_SnapshotStatePending ||
 			snapshot.GetState() == datapb.SnapshotState_SnapshotStateDeleting {
-			mlog.Warn(context.TODO(), "skipping snapshot during reload, will be cleaned by GC",
-				mlog.String("name", snapshot.GetName()),
-				mlog.Int64("id", snapshot.GetId()),
-				mlog.String("state", snapshot.GetState().String()))
+			log.Warn(context.TODO(), "skipping snapshot during reload, will be cleaned by GC",
+				log.String("name", snapshot.GetName()),
+				log.Int64("id", snapshot.GetId()),
+				log.String("state", snapshot.GetState().String()))
 			continue
 		}
 
@@ -268,9 +268,9 @@ func (sm *snapshotMeta) reload(ctx context.Context) error {
 		// Build secondary indexes for O(1) lookup
 		sm.addToSecondaryIndexes(snapshot)
 
-		mlog.Info(context.TODO(), "loaded snapshot metadata from catalog",
-			mlog.String("name", snapshot.GetName()),
-			mlog.Int64("id", snapshot.GetId()))
+		log.Info(context.TODO(), "loaded snapshot metadata from catalog",
+			log.String("name", snapshot.GetName()),
+			log.Int64("id", snapshot.GetId()))
 	}
 
 	return nil
@@ -286,8 +286,8 @@ func (sm *snapshotMeta) refIndexLoaderLoop() {
 	getInterval := func() time.Duration {
 		interval := paramtable.Get().DataCoordCfg.SnapshotRefIndexLoadInterval.GetAsDurationByParse()
 		if interval <= 0 {
-			mlog.Warn(context.TODO(), "invalid snapshot RefIndex load interval, fallback to 60s",
-				mlog.Duration("interval", interval))
+			log.Warn(context.TODO(), "invalid snapshot RefIndex load interval, fallback to 60s",
+				log.Duration("interval", interval))
 			return 60 * time.Second
 		}
 		return interval
@@ -302,7 +302,7 @@ func (sm *snapshotMeta) refIndexLoaderLoop() {
 	for {
 		select {
 		case <-sm.loaderCtx.Done():
-			mlog.Info(context.TODO(), "RefIndex loader goroutine stopped")
+			log.Info(context.TODO(), "RefIndex loader goroutine stopped")
 			return
 		case <-timer.C:
 			sm.loadUnloadedRefIndexes()
@@ -326,16 +326,16 @@ func (sm *snapshotMeta) loadUnloadedRefIndexes() {
 
 		snapshotData, err := sm.reader.ReadSnapshot(sm.loaderCtx, info.GetS3Location(), false)
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to load RefIndex from S3",
-				mlog.String("name", info.GetName()),
-				mlog.Int64("id", id),
-				mlog.Err(err))
+			log.Warn(context.TODO(), "failed to load RefIndex from S3",
+				log.String("name", info.GetName()),
+				log.Int64("id", id),
+				log.Err(err))
 			refIndex.SetFailed()
 		} else {
 			refIndex.SetLoaded(snapshotData.SegmentIDs, snapshotData.IndexIDs)
-			mlog.Info(context.TODO(), "loaded RefIndex from S3",
-				mlog.String("name", info.GetName()),
-				mlog.Int64("id", id))
+			log.Info(context.TODO(), "loaded RefIndex from S3",
+				log.String("name", info.GetName()),
+				log.Int64("id", id))
 		}
 
 		return true
@@ -393,21 +393,21 @@ func (sm *snapshotMeta) SaveSnapshot(ctx context.Context, snapshot *SnapshotData
 	snapshot.SnapshotInfo.PendingStartTime = time.Now().UnixMilli()
 
 	if err := sm.catalog.SaveSnapshot(ctx, snapshot.SnapshotInfo); err != nil {
-		mlog.Error(context.TODO(), "failed to save pending snapshot to catalog", mlog.Err(err))
+		log.Error(context.TODO(), "failed to save pending snapshot to catalog", log.Err(err))
 		return fmt.Errorf("failed to save pending snapshot to catalog: %w", err)
 	}
-	mlog.Info(context.TODO(), "saved pending snapshot to catalog")
+	log.Info(context.TODO(), "saved pending snapshot to catalog")
 
 	// Step 3: Write S3 files using snapshot ID for path computation
 	metadataFilePath, err := sm.writer.Save(ctx, snapshot)
 	if err != nil {
 		// S3 write failed, leave PENDING record for GC to clean up
-		mlog.Error(context.TODO(), "failed to save snapshot to S3, pending record left for GC cleanup",
-			mlog.Err(err))
+		log.Error(context.TODO(), "failed to save snapshot to S3, pending record left for GC cleanup",
+			log.Err(err))
 		return fmt.Errorf("failed to save snapshot to S3: %w", err)
 	}
 	snapshot.SnapshotInfo.S3Location = metadataFilePath
-	mlog.Info(context.TODO(), "saved snapshot data to S3", mlog.String("s3Location", metadataFilePath))
+	log.Info(context.TODO(), "saved snapshot data to S3", log.String("s3Location", metadataFilePath))
 
 	// Step 4: Phase 2 (Commit) - Update catalog to COMMITTED state
 	snapshot.SnapshotInfo.State = datapb.SnapshotState_SnapshotStateCommitted
@@ -427,15 +427,15 @@ func (sm *snapshotMeta) SaveSnapshot(ctx context.Context, snapshot *SnapshotData
 		sm.snapshotID2Info.Remove(snapshot.SnapshotInfo.GetId())
 		sm.snapshotID2RefIndex.Remove(snapshot.SnapshotInfo.GetId())
 		sm.removeFromSecondaryIndexes(snapshot.SnapshotInfo)
-		mlog.Error(context.TODO(), "failed to update snapshot to committed state, pending record left for GC cleanup",
-			mlog.Err(err))
+		log.Error(context.TODO(), "failed to update snapshot to committed state, pending record left for GC cleanup",
+			log.Err(err))
 		return fmt.Errorf("failed to update snapshot to committed state: %w", err)
 	}
 
-	mlog.Info(context.TODO(), "snapshot saved successfully with 2PC",
-		mlog.String("s3Location", metadataFilePath),
-		mlog.Int("numSegments", len(snapshot.Segments)),
-		mlog.Int("numIndexes", len(snapshot.Indexes)))
+	log.Info(context.TODO(), "snapshot saved successfully with 2PC",
+		log.String("s3Location", metadataFilePath),
+		log.Int("numSegments", len(snapshot.Segments)),
+		log.Int("numIndexes", len(snapshot.Indexes)))
 
 	return nil
 }
@@ -463,7 +463,7 @@ func (sm *snapshotMeta) DropSnapshot(ctx context.Context, snapshotName string) e
 	// Step 1: Lookup snapshot by name
 	snapshot, err := sm.getSnapshotByName(ctx, snapshotName)
 	if err != nil {
-		mlog.Error(context.TODO(), "failed to get snapshot by name", mlog.Err(err))
+		log.Error(context.TODO(), "failed to get snapshot by name", log.Err(err))
 		return err
 	}
 
@@ -471,7 +471,7 @@ func (sm *snapshotMeta) DropSnapshot(ctx context.Context, snapshotName string) e
 	// This ensures the snapshot can be cleaned up by GC if S3 deletion fails
 	snapshot.State = datapb.SnapshotState_SnapshotStateDeleting
 	if err := sm.catalog.SaveSnapshot(ctx, snapshot); err != nil {
-		mlog.Error(context.TODO(), "failed to mark snapshot as deleting", mlog.Err(err))
+		log.Error(context.TODO(), "failed to mark snapshot as deleting", log.Err(err))
 		return err
 	}
 
@@ -482,9 +482,9 @@ func (sm *snapshotMeta) DropSnapshot(ctx context.Context, snapshotName string) e
 
 	// Step 4: Delete S3 data (may fail, GC will retry)
 	if err := sm.writer.Drop(ctx, snapshot.GetS3Location()); err != nil {
-		mlog.Warn(context.TODO(), "S3 delete failed, will be cleaned by GC",
-			mlog.Int64("snapshotID", snapshot.GetId()),
-			mlog.Err(err))
+		log.Warn(context.TODO(), "S3 delete failed, will be cleaned by GC",
+			log.Int64("snapshotID", snapshot.GetId()),
+			log.Err(err))
 		// Return success - snapshot is already invisible to users
 		// GC will clean up S3 data by finding Deleting state snapshots
 		return nil
@@ -492,15 +492,15 @@ func (sm *snapshotMeta) DropSnapshot(ctx context.Context, snapshotName string) e
 
 	// Step 5: Delete catalog record (final cleanup)
 	if err := sm.catalog.DropSnapshot(ctx, snapshot.GetCollectionId(), snapshot.GetId()); err != nil {
-		mlog.Warn(context.TODO(), "failed to drop snapshot from catalog after S3 cleanup",
-			mlog.Int64("snapshotID", snapshot.GetId()),
-			mlog.Err(err))
+		log.Warn(context.TODO(), "failed to drop snapshot from catalog after S3 cleanup",
+			log.Int64("snapshotID", snapshot.GetId()),
+			log.Err(err))
 		// Return success - S3 data is already deleted
 		// GC will clean up catalog record
 		return nil
 	}
 
-	mlog.Info(context.TODO(), "snapshot deleted successfully", mlog.Int64("snapshotID", snapshot.GetId()))
+	log.Info(context.TODO(), "snapshot deleted successfully", log.Int64("snapshotID", snapshot.GetId()))
 	return nil
 }
 
@@ -621,19 +621,19 @@ func (sm *snapshotMeta) ReadSnapshotData(ctx context.Context, snapshotName strin
 	// Step 1: Get snapshot metadata from memory to find S3 location
 	snapshotInfo, err := sm.getSnapshotByName(ctx, snapshotName)
 	if err != nil {
-		mlog.Error(context.TODO(), "failed to get snapshot by name", mlog.Err(err))
+		log.Error(context.TODO(), "failed to get snapshot by name", log.Err(err))
 		return nil, err
 	}
 
-	mlog.Info(context.TODO(), "got snapshot from memory before ReadSnapshot",
-		mlog.String("name", snapshotInfo.GetName()),
-		mlog.Int64("id", snapshotInfo.GetId()),
-		mlog.String("s3_location_from_memory", snapshotInfo.GetS3Location()))
+	log.Info(context.TODO(), "got snapshot from memory before ReadSnapshot",
+		log.String("name", snapshotInfo.GetName()),
+		log.Int64("id", snapshotInfo.GetId()),
+		log.String("s3_location_from_memory", snapshotInfo.GetS3Location()))
 
 	// Step 2: Read snapshot data from S3 using the known metadata path directly
 	snapshotData, err := sm.reader.ReadSnapshot(ctx, snapshotInfo.GetS3Location(), includeSegments)
 	if err != nil {
-		mlog.Error(context.TODO(), "failed to read snapshot data from S3", mlog.Err(err))
+		log.Error(context.TODO(), "failed to read snapshot data from S3", log.Err(err))
 		return nil, err
 	}
 

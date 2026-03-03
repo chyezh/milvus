@@ -32,7 +32,7 @@ import (
 	"unsafe"
 
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -196,7 +196,7 @@ func PublishFilesystemMetricsWithConfig(storageConfig *indexpb.StorageConfig) (*
 func PublishCachedFilesystemMetrics(key string) (*FilesystemMetrics, error) {
 	metricSnapshot, err := GetCachedFilesystemMetrics(key)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to get cached filesystem metrics", mlog.String("key", key), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get cached filesystem metrics", log.String("key", key), log.Err(err))
 		return nil, err
 	}
 

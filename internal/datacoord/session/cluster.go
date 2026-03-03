@@ -25,7 +25,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/metastore/kv/binlog"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/workerpb"
 	"github.com/milvus-io/milvus/pkg/v2/taskcommon"
@@ -119,13 +119,13 @@ func (c *cluster) createTask(nodeID int64, in proto.Message, properties taskcomm
 	defer cancel()
 	cli, err := c.nm.GetClient(nodeID)
 	if err != nil {
-		mlog.Warn(ctx, "failed to get client", mlog.Err(err))
+		log.Warn(ctx, "failed to get client", log.Err(err))
 		return err
 	}
 
 	payload, err := proto.Marshal(in)
 	if err != nil {
-		mlog.Warn(ctx, "marshal request failed", mlog.Err(err))
+		log.Warn(ctx, "marshal request failed", log.Err(err))
 		return err
 	}
 
@@ -142,7 +142,7 @@ func (c *cluster) queryTask(nodeID int64, properties taskcommon.Properties) (*wo
 	defer cancel()
 	cli, err := c.nm.GetClient(nodeID)
 	if err != nil {
-		mlog.Warn(ctx, "failed to get client", mlog.Err(err))
+		log.Warn(ctx, "failed to get client", log.Err(err))
 		return nil, err
 	}
 
@@ -161,7 +161,7 @@ func (c *cluster) dropTask(nodeID int64, properties taskcommon.Properties) error
 	defer cancel()
 	cli, err := c.nm.GetClient(nodeID)
 	if err != nil {
-		mlog.Warn(ctx, "failed to get client", mlog.Err(err))
+		log.Warn(ctx, "failed to get client", log.Err(err))
 		return err
 	}
 
@@ -187,12 +187,12 @@ func (c *cluster) QuerySlot() map[int64]*WorkerSlots {
 			defer cancel()
 			cli, err := c.nm.GetClient(nodeID)
 			if err != nil {
-				mlog.Warn(ctx, "failed to get client", mlog.Err(err))
+				log.Warn(ctx, "failed to get client", log.Err(err))
 				return
 			}
 			resp, err := cli.QuerySlot(ctx, &datapb.QuerySlotRequest{})
 			if err = merr.CheckRPCCall(resp.GetStatus(), err); err != nil {
-				mlog.Warn(ctx, "failed to get node slot", mlog.Int64("nodeID", nodeID), mlog.Err(err))
+				log.Warn(ctx, "failed to get node slot", log.Int64("nodeID", nodeID), log.Err(err))
 				return
 			}
 			mu.Lock()
@@ -204,7 +204,7 @@ func (c *cluster) QuerySlot() map[int64]*WorkerSlots {
 		}()
 	}
 	wg.Wait()
-	mlog.Debug(context.TODO(), "query slot done", mlog.Any("nodeSlots", availableNodeSlots))
+	log.Debug(context.TODO(), "query slot done", log.Any("nodeSlots", availableNodeSlots))
 	return availableNodeSlots
 }
 
@@ -339,8 +339,8 @@ func (c *cluster) QueryPreImport(nodeID int64, in *datapb.QueryPreImportRequest)
 		if resp.GetPayload() != nil {
 			return payloadResultF()
 		}
-		mlog.Warn(context.TODO(), "the preImport result payload must not be empty",
-			mlog.Int64("taskID", in.GetTaskID()), mlog.String("state", state.String()))
+		log.Warn(context.TODO(), "the preImport result payload must not be empty",
+			log.Int64("taskID", in.GetTaskID()), log.String("state", state.String()))
 		panic("the preImport result payload must not be empty with Finished/Failed state")
 	default:
 		panic("should not happen")
@@ -386,8 +386,8 @@ func (c *cluster) QueryImport(nodeID int64, in *datapb.QueryImportRequest) (*dat
 		if resp.GetPayload() != nil {
 			return payloadResultF()
 		}
-		mlog.Warn(context.TODO(), "the import result payload must not be empty",
-			mlog.Int64("taskID", in.GetTaskID()), mlog.String("state", state.String()))
+		log.Warn(context.TODO(), "the import result payload must not be empty",
+			log.Int64("taskID", in.GetTaskID()), log.String("state", state.String()))
 		panic("the import result payload must not be empty with Finished/Failed state")
 	default:
 		panic("should not happen")
@@ -461,8 +461,8 @@ func (c *cluster) QueryIndex(nodeID int64, in *workerpb.QueryJobsRequest) (*work
 		if resp.GetPayload() != nil {
 			return payloadResultF()
 		}
-		mlog.Warn(context.TODO(), "the index result payload must not be empty",
-			mlog.Int64("taskID", in.GetTaskIDs()[0]), mlog.String("state", state.String()))
+		log.Warn(context.TODO(), "the index result payload must not be empty",
+			log.Int64("taskID", in.GetTaskIDs()[0]), log.String("state", state.String()))
 		panic("the index result payload must not be empty with Finished/Failed state")
 	default:
 		panic("should not happen")
@@ -537,8 +537,8 @@ func (c *cluster) QueryStats(nodeID int64, in *workerpb.QueryJobsRequest) (*work
 		if resp.GetPayload() != nil {
 			return payloadResultF()
 		}
-		mlog.Warn(context.TODO(), "the stats result payload must not be empty",
-			mlog.Int64("taskID", in.GetTaskIDs()[0]), mlog.String("state", state.String()))
+		log.Warn(context.TODO(), "the stats result payload must not be empty",
+			log.Int64("taskID", in.GetTaskIDs()[0]), log.String("state", state.String()))
 		panic("the stats result payload must not be empty with Finished/Failed state")
 	default:
 		panic("should not happen")
@@ -610,8 +610,8 @@ func (c *cluster) QueryAnalyze(nodeID int64, in *workerpb.QueryJobsRequest) (*wo
 		if resp.GetPayload() != nil {
 			return payloadResultF()
 		}
-		mlog.Warn(context.TODO(), "the analyze result payload must not be empty",
-			mlog.Int64("taskID", in.GetTaskIDs()[0]), mlog.String("state", state.String()))
+		log.Warn(context.TODO(), "the analyze result payload must not be empty",
+			log.Int64("taskID", in.GetTaskIDs()[0]), log.String("state", state.String()))
 		panic("the analyze result payload must not be empty with Finished/Failed state")
 	default:
 		panic("should not happen")
@@ -633,7 +633,7 @@ func (c *cluster) CreateExternalCollectionTask(nodeID int64, req *datapb.UpdateE
 
 	cli, err := c.nm.GetClient(nodeID)
 	if err != nil {
-		mlog.Warn(ctx, "failed to get client", mlog.Err(err))
+		log.Warn(ctx, "failed to get client", log.Err(err))
 		return err
 	}
 
@@ -644,7 +644,7 @@ func (c *cluster) CreateExternalCollectionTask(nodeID int64, req *datapb.UpdateE
 
 	payload, err := proto.Marshal(req)
 	if err != nil {
-		mlog.Warn(ctx, "marshal request failed", mlog.Err(err))
+		log.Warn(ctx, "marshal request failed", log.Err(err))
 		return err
 	}
 
@@ -654,12 +654,12 @@ func (c *cluster) CreateExternalCollectionTask(nodeID int64, req *datapb.UpdateE
 		Properties: properties,
 	})
 	if err != nil {
-		mlog.Warn(ctx, "create external collection task failed", mlog.Err(err))
+		log.Warn(ctx, "create external collection task failed", log.Err(err))
 		return err
 	}
 
 	if err := merr.Error(status); err != nil {
-		mlog.Warn(ctx, "create external collection task returned error", mlog.Err(err))
+		log.Warn(ctx, "create external collection task returned error", log.Err(err))
 		return err
 	}
 
@@ -745,8 +745,8 @@ func (c *cluster) QueryCopySegment(nodeID int64, in *datapb.QueryCopySegmentRequ
 		if resp.GetPayload() != nil {
 			return payloadResultF()
 		}
-		mlog.Warn(context.TODO(), "the copy segment result payload must not be empty",
-			mlog.Int64("taskID", in.GetTaskID()), mlog.String("state", state.String()))
+		log.Warn(context.TODO(), "the copy segment result payload must not be empty",
+			log.Int64("taskID", in.GetTaskID()), log.String("state", state.String()))
 		panic("the copy segment result payload must not be empty with Finished/Failed state")
 	default:
 		panic("should not happen")

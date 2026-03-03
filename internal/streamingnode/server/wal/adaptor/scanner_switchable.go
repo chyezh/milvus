@@ -8,7 +8,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/wab"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchantempstore"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"
@@ -25,7 +25,7 @@ var (
 // newSwitchableScanner creates a new switchable scanner.
 func newSwithableScanner(
 	scannerName string,
-	logger *mlog.Logger,
+	logger *log.Logger,
 	innerWAL walimpls.ROWALImpls,
 	writeAheadBuffer wab.ROWriteAheadBuffer,
 	deliverPolicy options.DeliverPolicy,
@@ -54,7 +54,7 @@ type switchableScanner interface {
 
 type switchableScannerImpl struct {
 	scannerName      string
-	logger           *mlog.Logger
+	logger           *log.Logger
 	innerWAL         walimpls.ROWALImpls
 	msgChan          chan<- message.ImmutableMessage
 	writeAheadBuffer wab.ROWriteAheadBuffer
@@ -89,7 +89,7 @@ func (s *catchupScanner) Do(ctx context.Context) (switchableScanner, error) {
 		}
 		switchedScanner, err := s.consumeWithScanner(ctx, scanner)
 		if err != nil {
-			s.logger.Warn(nil, "scanner consuming was interrpurted with error, start a backoff", mlog.Err(err))
+			s.logger.Warn(nil, "scanner consuming was interrpurted with error, start a backoff", log.Err(err))
 			continue
 		}
 		return switchedScanner, nil
@@ -111,7 +111,7 @@ func (s *catchupScanner) consumeWithScanner(ctx context.Context, scanner walimpl
 				if s.lastConfirmedMessageIDForOldVersion == nil {
 					s.logger.Info(nil,
 						"scanner find a old version message, set it as the last confirmed message id for all old version message",
-						mlog.Stringer("messageID", msg.MessageID()),
+						log.Stringer("messageID", msg.MessageID()),
 					)
 					s.lastConfirmedMessageIDForOldVersion = msg.MessageID()
 				}
@@ -126,7 +126,7 @@ func (s *catchupScanner) consumeWithScanner(ctx context.Context, scanner walimpl
 				msg, err = newOldVersionImmutableMessage(ctx, s.innerWAL.Channel().Name, s.lastConfirmedMessageIDForOldVersion, msg)
 				if errors.Is(err, vchantempstore.ErrNotFound) {
 					// Skip the message's vchannel is not found in the vchannel temp store.
-					s.logger.Info(nil, "skip the old version message because vchannel not found", mlog.Stringer("messageID", messageID))
+					s.logger.Info(nil, "skip the old version message because vchannel not found", log.Stringer("messageID", messageID))
 					continue
 				}
 				if errors.IsAny(err, context.Canceled, context.DeadlineExceeded) {
@@ -154,9 +154,9 @@ func (s *catchupScanner) consumeWithScanner(ctx context.Context, scanner walimpl
 			if reader, err := s.writeAheadBuffer.ReadFromExclusiveTimeTick(ctx, msg.TimeTick()); err == nil {
 				s.logger.Info(nil,
 					"scanner consuming was interrpted because catup done",
-					mlog.Uint64("timetick", msg.TimeTick()),
-					mlog.Stringer("messageID", msg.MessageID()),
-					mlog.Stringer("lastConfirmedMessageID", msg.LastConfirmedMessageID()),
+					log.Uint64("timetick", msg.TimeTick()),
+					log.Stringer("messageID", msg.MessageID()),
+					log.Stringer("lastConfirmedMessageID", msg.LastConfirmedMessageID()),
 				)
 				return &tailingScanner{
 					switchableScannerImpl: s.switchableScannerImpl,
@@ -197,8 +197,8 @@ func (s *catchupScanner) createReaderWithBackoff(ctx context.Context, deliverPol
 		}
 		waker, nextInterval := backoffTimer.NextTimer()
 		s.logger.Warn(nil, "create underlying scanner for wal scanner, start a backoff",
-			mlog.Duration("nextInterval", nextInterval),
-			mlog.Err(err),
+			log.Duration("nextInterval", nextInterval),
+			log.Err(err),
 		)
 		select {
 		case <-ctx.Done():
@@ -222,9 +222,9 @@ func (s *tailingScanner) Do(ctx context.Context) (switchableScanner, error) {
 			// The tailing read is failure, switch into catchup mode.
 			s.logger.Info(nil,
 				"scanner consuming was interrpted because tailing eviction",
-				mlog.Uint64("timetick", s.lastConsumedMessage.TimeTick()),
-				mlog.Stringer("messageID", s.lastConsumedMessage.MessageID()),
-				mlog.Stringer("lastConfirmedMessageID", s.lastConsumedMessage.LastConfirmedMessageID()),
+				log.Uint64("timetick", s.lastConsumedMessage.TimeTick()),
+				log.Stringer("messageID", s.lastConsumedMessage.MessageID()),
+				log.Stringer("lastConfirmedMessageID", s.lastConsumedMessage.LastConfirmedMessageID()),
 			)
 			return &catchupScanner{
 				switchableScannerImpl:  s.switchableScannerImpl,

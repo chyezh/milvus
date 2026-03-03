@@ -12,7 +12,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/lazygrpc"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/resolver"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -136,7 +136,7 @@ func (c *managerClientImpl) getAllStreamingNodeStatus(ctx context.Context, state
 			defer mu.Unlock()
 
 			if err != nil {
-				mlog.Warn(context.TODO(), "collect status failed, skip", mlog.Int64("serverID", serverID), mlog.Err(err))
+				log.Warn(context.TODO(), "collect status failed, skip", log.Int64("serverID", serverID), log.Err(err))
 				return err
 			}
 			result[serverID] = &types.StreamingNodeStatus{
@@ -147,7 +147,7 @@ func (c *managerClientImpl) getAllStreamingNodeStatus(ctx context.Context, state
 				Metrics: types.NewStreamingNodeBalanceAttrsFromProto(resp.Metrics),
 				Err:     err,
 			}
-			mlog.Debug(context.TODO(), "collect status success", mlog.Int64("serverID", serverID), mlog.Any("status", resp))
+			log.Debug(context.TODO(), "collect status success", log.Int64("serverID", serverID), log.Any("status", resp))
 			return nil
 		})
 	}

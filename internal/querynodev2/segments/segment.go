@@ -50,7 +50,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/vecindexmgr"
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/cgopb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexcgopb"
@@ -259,7 +259,7 @@ func (s *baseSegment) ResourceUsageEstimate() ResourceUsage {
 	})
 	if err != nil {
 		// Should never failure, if failed, segment should never be loaded.
-		mlog.Warn(context.TODO(), "unreachable: failed to get resource usage estimate of segment", mlog.Err(err), mlog.Int64("collectionID", s.Collection()), mlog.Int64("segmentID", s.ID()))
+		log.Warn(context.TODO(), "unreachable: failed to get resource usage estimate of segment", log.Err(err), log.Int64("collectionID", s.Collection()), log.Int64("segmentID", s.ID()))
 		return ResourceUsage{}
 	}
 	s.resourceUsageCache.Store(usage)
@@ -337,12 +337,12 @@ func NewSegment(ctx context.Context,
 		return nil, fmt.Errorf("illegal segment type %d when create segment %d", segmentType, loadInfo.GetSegmentID())
 	}
 
-	logger := mlog.With(
-		mlog.Int64("collectionID", loadInfo.GetCollectionID()),
-		mlog.Int64("partitionID", loadInfo.GetPartitionID()),
-		mlog.Int64("segmentID", loadInfo.GetSegmentID()),
-		mlog.String("segmentType", segmentType.String()),
-		mlog.String("level", loadInfo.GetLevel().String()),
+	logger := log.With(
+		log.Int64("collectionID", loadInfo.GetCollectionID()),
+		log.Int64("partitionID", loadInfo.GetPartitionID()),
+		log.Int64("segmentID", loadInfo.GetSegmentID()),
+		log.String("segmentType", segmentType.String()),
+		log.String("level", loadInfo.GetLevel().String()),
 	)
 
 	var csegment segcore.CSegment
@@ -357,7 +357,7 @@ func NewSegment(ctx context.Context,
 		})
 		return nil, err
 	}).Await(); err != nil {
-		logger.Warn(nil, "create segment failed", mlog.Err(err))
+		logger.Warn(nil, "create segment failed", log.Err(err))
 		return nil, err
 	}
 	logger.Info(nil, "create segment done")
@@ -593,22 +593,22 @@ func (s *LocalSegment) Search(ctx context.Context, searchReq *segcore.SearchRequ
 	defer s.ptrLock.Unpin()
 
 	hasIndex := s.ExistIndex(searchReq.SearchFieldID())
-	mlog.Debug(ctx, "search segment...",
-		mlog.Uint64("mvcc", searchReq.MVCC()),
-		mlog.Int64("collectionID", s.Collection()),
-		mlog.Int64("segmentID", s.ID()),
-		mlog.String("segmentType", s.segmentType.String()),
-		mlog.Bool("withIndex", hasIndex),
+	log.Debug(ctx, "search segment...",
+		log.Uint64("mvcc", searchReq.MVCC()),
+		log.Int64("collectionID", s.Collection()),
+		log.Int64("segmentID", s.ID()),
+		log.String("segmentType", s.segmentType.String()),
+		log.Bool("withIndex", hasIndex),
 	)
 
 	tr := timerecord.NewTimeRecorder("cgoSearch")
 	result, err := s.csegment.Search(ctx, searchReq)
 	if err != nil {
-		mlog.Warn(context.TODO(), "Search failed")
+		log.Warn(context.TODO(), "Search failed")
 		return nil, err
 	}
 	metrics.QueryNodeSQSegmentLatencyInCore.WithLabelValues(paramtable.GetStringNodeID(), metrics.SearchLabel).Observe(float64(tr.ElapseSpan().Milliseconds()))
-	mlog.Debug(context.TODO(), "search segment done")
+	log.Debug(context.TODO(), "search segment done")
 	return result, nil
 }
 
@@ -619,12 +619,12 @@ func (s *LocalSegment) retrieve(ctx context.Context, plan *segcore.RetrievePlan)
 	}
 	defer s.ptrLock.Unpin()
 
-	mlog.Debug(context.TODO(), "begin to retrieve")
+	log.Debug(context.TODO(), "begin to retrieve")
 
 	tr := timerecord.NewTimeRecorder("cgoRetrieve")
 	result, err := s.csegment.Retrieve(ctx, plan)
 	if err != nil {
-		mlog.Warn(context.TODO(), "Retrieve failed")
+		log.Warn(context.TODO(), "Retrieve failed")
 		return nil, err
 	}
 	metrics.QueryNodeSQSegmentLatencyInCore.WithLabelValues(paramtable.GetStringNodeID(),
@@ -644,10 +644,10 @@ func (s *LocalSegment) Retrieve(ctx context.Context, plan *segcore.RetrievePlan)
 
 	retrieveResult, err := result.GetResult()
 	if err != nil {
-		mlog.Warn(context.TODO(), "unmarshal retrieve result failed", mlog.Err(err))
+		log.Warn(context.TODO(), "unmarshal retrieve result failed", log.Err(err))
 		return nil, err
 	}
-	mlog.Debug(context.TODO(), "retrieve segment done", mlog.Int("resultNum", len(retrieveResult.Offset)))
+	log.Debug(context.TODO(), "retrieve segment done", log.Int("resultNum", len(retrieveResult.Offset)))
 	return retrieveResult, nil
 }
 
@@ -658,11 +658,11 @@ func (s *LocalSegment) retrieveByOffsets(ctx context.Context, plan *segcore.Retr
 	}
 	defer s.ptrLock.Unpin()
 
-	mlog.Debug(context.TODO(), "begin to retrieve by offsets")
+	log.Debug(context.TODO(), "begin to retrieve by offsets")
 	tr := timerecord.NewTimeRecorder("cgoRetrieveByOffsets")
 	result, err := s.csegment.RetrieveByOffsets(ctx, plan)
 	if err != nil {
-		mlog.Warn(context.TODO(), "RetrieveByOffsets failed")
+		log.Warn(context.TODO(), "RetrieveByOffsets failed")
 		return nil, err
 	}
 	metrics.QueryNodeSQSegmentLatencyInCore.WithLabelValues(paramtable.GetStringNodeID(),
@@ -682,10 +682,10 @@ func (s *LocalSegment) RetrieveByOffsets(ctx context.Context, plan *segcore.Retr
 
 	retrieveResult, err := result.GetResult()
 	if err != nil {
-		mlog.Warn(context.TODO(), "unmarshal retrieve by offsets result failed", mlog.Err(err))
+		log.Warn(context.TODO(), "unmarshal retrieve by offsets result failed", log.Err(err))
 		return nil, err
 	}
-	mlog.Debug(context.TODO(), "retrieve by segment offsets done", mlog.Int("resultNum", len(retrieveResult.Offset)))
+	log.Debug(context.TODO(), "retrieve by segment offsets done", log.Int("resultNum", len(retrieveResult.Offset)))
 	return retrieveResult, nil
 }
 
@@ -749,9 +749,9 @@ func (s *LocalSegment) Delete(ctx context.Context, primaryKeys storage.PrimaryKe
 	defer s.deltaMut.Unlock()
 
 	if s.lastDeltaTimestamp.Load() >= timestamps[len(timestamps)-1] {
-		mlog.Info(context.TODO(), "skip delete due to delete record before lastDeltaTimestamp",
-			mlog.Int64("segmentID", s.ID()),
-			mlog.Uint64("lastDeltaTimestamp", s.lastDeltaTimestamp.Load()))
+		log.Info(context.TODO(), "skip delete due to delete record before lastDeltaTimestamp",
+			log.Int64("segmentID", s.ID()),
+			log.Uint64("lastDeltaTimestamp", s.lastDeltaTimestamp.Load()))
 		return nil
 	}
 
@@ -791,7 +791,7 @@ func (s *LocalSegment) LoadFieldData(ctx context.Context, fieldID int64, rowCoun
 	ctx, sp := otel.Tracer(typeutil.QueryNodeRole).Start(ctx, fmt.Sprintf("LoadFieldData-%d-%d", s.ID(), fieldID))
 	defer sp.End()
 
-	mlog.Info(context.TODO(), "start loading field data for field")
+	log.Info(context.TODO(), "start loading field data for field")
 
 	// TODO retrieve_enable should be considered
 	collection := s.collection
@@ -822,15 +822,15 @@ func (s *LocalSegment) LoadFieldData(ctx context.Context, fieldID int64, rowCoun
 			).Observe(float64(time.Since(start).Milliseconds()))
 		}()
 		_, err = s.csegment.LoadFieldData(ctx, req)
-		mlog.Info(context.TODO(), "submitted loadFieldData task to load pool")
+		log.Info(context.TODO(), "submitted loadFieldData task to load pool")
 		return nil, nil
 	}).Await()
 
 	if err != nil {
-		mlog.Warn(context.TODO(), "LoadFieldData failed", mlog.Err(err))
+		log.Warn(context.TODO(), "LoadFieldData failed", log.Err(err))
 		return err
 	}
-	mlog.Info(context.TODO(), "load field done")
+	log.Info(context.TODO(), "load field done")
 	return nil
 }
 
@@ -851,8 +851,8 @@ func (s *LocalSegment) LoadDeltaData(ctx context.Context, deltaData *storage.Del
 	defer s.deltaMut.Unlock()
 
 	if s.lastDeltaTimestamp.Load() >= tss[len(tss)-1] {
-		mlog.Info(context.TODO(), "skip load delta data due to delete record before lastDeltaTimestamp",
-			mlog.Uint64("lastDeltaTimestamp", s.lastDeltaTimestamp.Load()))
+		log.Info(context.TODO(), "skip load delta data due to delete record before lastDeltaTimestamp",
+			log.Uint64("lastDeltaTimestamp", s.lastDeltaTimestamp.Load()))
 		return nil
 	}
 
@@ -891,18 +891,18 @@ func (s *LocalSegment) LoadDeltaData(ctx context.Context, deltaData *storage.Del
 	}).Await()
 
 	if err := HandleCStatus(ctx, &status, "LoadDeletedRecord failed",
-		mlog.Int64("collectionID", s.Collection()),
-		mlog.Int64("partitionID", s.Partition()),
-		mlog.Int64("segmentID", s.ID())); err != nil {
+		log.Int64("collectionID", s.Collection()),
+		log.Int64("partitionID", s.Partition()),
+		log.Int64("segmentID", s.ID())); err != nil {
 		return err
 	}
 
 	s.rowNum.Store(-1)
 	s.lastDeltaTimestamp.Store(tss[len(tss)-1])
 
-	mlog.Info(context.TODO(), "load deleted record done",
-		mlog.Int64("rowNum", rowNum),
-		mlog.String("segmentType", s.Type().String()))
+	log.Info(context.TODO(), "load deleted record done",
+		log.Int64("rowNum", rowNum),
+		log.String("segmentType", s.Type().String()))
 	return nil
 }
 
@@ -943,16 +943,16 @@ func GetCLoadInfoWithFunc(ctx context.Context,
 	// Add warmup policy to index_params if not already present
 	// C++ will pass it to Knowhere for index loading
 	if existingWarmup, exists := indexParams[common.WarmupKey]; exists {
-		mlog.Info(ctx, "warmup policy already in index params (from QueryCoord)",
-			mlog.Int64("segmentID", loadInfo.GetSegmentID()),
-			mlog.Int64("fieldID", indexInfo.GetFieldID()),
-			mlog.String("warmup", existingWarmup))
+		log.Info(ctx, "warmup policy already in index params (from QueryCoord)",
+			log.Int64("segmentID", loadInfo.GetSegmentID()),
+			log.Int64("fieldID", indexInfo.GetFieldID()),
+			log.String("warmup", existingWarmup))
 	} else {
 		warmupPolicy := getIndexWarmupPolicy(fieldSchema, indexInfo)
-		mlog.Info(ctx, "warmup policy from getIndexWarmupPolicy",
-			mlog.Int64("segmentID", loadInfo.GetSegmentID()),
-			mlog.Int64("fieldID", indexInfo.GetFieldID()),
-			mlog.String("warmup", warmupPolicy))
+		log.Info(ctx, "warmup policy from getIndexWarmupPolicy",
+			log.Int64("segmentID", loadInfo.GetSegmentID()),
+			log.Int64("fieldID", indexInfo.GetFieldID()),
+			log.String("warmup", warmupPolicy))
 		if warmupPolicy != "" {
 			indexParams[common.WarmupKey] = warmupPolicy
 		}
@@ -976,7 +976,7 @@ func GetCLoadInfoWithFunc(ctx context.Context,
 
 	// 2.
 	if err := loadIndexInfo.appendLoadIndexInfo(ctx, indexInfoProto); err != nil {
-		mlog.Warn(context.TODO(), "fail to append load index info", mlog.Err(err))
+		log.Warn(context.TODO(), "fail to append load index info", log.Err(err))
 		return err
 	}
 	return f(loadIndexInfo)
@@ -986,7 +986,7 @@ func (s *LocalSegment) LoadIndex(ctx context.Context, indexInfo *querypb.FieldIn
 	old := s.GetIndexByID(indexInfo.GetIndexID())
 	// the index loaded
 	if old != nil && old.IsLoaded {
-		mlog.Warn(context.TODO(), "index already loaded")
+		log.Warn(context.TODO(), "index already loaded")
 		return nil
 	}
 
@@ -1006,7 +1006,7 @@ func (s *LocalSegment) LoadIndex(ctx context.Context, indexInfo *querypb.FieldIn
 
 	// // if segment is pk sorted, user created indexes bring no performance gain but extra memory usage
 	if s.IsSorted() && fieldSchema.GetIsPrimaryKey() {
-		mlog.Info(context.TODO(), "skip loading index for pk field in sorted segment")
+		log.Info(context.TODO(), "skip loading index for pk field in sorted segment")
 		// set field index, preventing repeated loading index task
 		s.fieldIndexes.Insert(indexInfo.GetFieldID(), &IndexedFieldInfo{
 			FieldBinlog: &datapb.FieldBinlog{
@@ -1033,9 +1033,9 @@ func (s *LocalSegment) innerLoadIndex(ctx context.Context,
 
 			if err := loadIndexInfo.loadIndex(ctx); err != nil {
 				if loadIndexInfo.cleanLocalData(ctx) != nil {
-					mlog.Warn(context.TODO(), "failed to clean cached data on disk after append index failed",
-						mlog.Int64("buildID", indexInfo.BuildID),
-						mlog.Int64("index version", indexInfo.IndexVersion))
+					log.Warn(context.TODO(), "failed to clean cached data on disk after append index failed",
+						log.Int64("buildID", indexInfo.BuildID),
+						log.Int64("index version", indexInfo.IndexVersion))
 				}
 				return err
 			}
@@ -1052,15 +1052,15 @@ func (s *LocalSegment) innerLoadIndex(ctx context.Context,
 			}
 			updateIndexInfoSpan := tr.RecordSpan()
 
-			mlog.Info(context.TODO(), "Finish loading index",
-				mlog.Duration("newLoadIndexInfoSpan", newLoadIndexInfoSpan),
-				mlog.Duration("appendLoadIndexInfoSpan", appendLoadIndexInfoSpan),
-				mlog.Duration("updateIndexInfoSpan", updateIndexInfoSpan),
+			log.Info(context.TODO(), "Finish loading index",
+				log.Duration("newLoadIndexInfoSpan", newLoadIndexInfoSpan),
+				log.Duration("appendLoadIndexInfoSpan", appendLoadIndexInfoSpan),
+				log.Duration("updateIndexInfoSpan", updateIndexInfoSpan),
 			)
 			return nil
 		})
 	if err != nil {
-		mlog.Warn(context.TODO(), "load index failed", mlog.Err(err))
+		log.Warn(context.TODO(), "load index failed", log.Err(err))
 	}
 	return err
 }
@@ -1072,20 +1072,20 @@ func (s *LocalSegment) LoadJSONKeyIndex(ctx context.Context, jsonKeyStats *datap
 	defer s.ptrLock.Unpin()
 
 	if !paramtable.Get().CommonCfg.EnabledJSONKeyStats.GetAsBool() {
-		mlog.Warn(ctx, "load json key index failed, json key stats is not enabled")
+		log.Warn(ctx, "load json key index failed, json key stats is not enabled")
 		return nil
 	}
 
 	// for compatibility, we only support load data format version equal to the current data format version
 	// if the data format version is less than the current version, wait for trigger a stats task again
 	if jsonKeyStats.GetJsonKeyStatsDataFormat() != common.JSONStatsDataFormatVersion {
-		mlog.Warn(ctx, "load json key index failed dataformat invalid", mlog.Int64("dataformat", jsonKeyStats.GetJsonKeyStatsDataFormat()), mlog.Int64("field id", jsonKeyStats.GetFieldID()), mlog.Any("json key logs", jsonKeyStats))
+		log.Warn(ctx, "load json key index failed dataformat invalid", log.Int64("dataformat", jsonKeyStats.GetJsonKeyStatsDataFormat()), log.Int64("field id", jsonKeyStats.GetFieldID()), log.Any("json key logs", jsonKeyStats))
 		return nil
 	}
 
-	mlog.Info(ctx, "load json key index", mlog.Int64("field id", jsonKeyStats.GetFieldID()), mlog.Any("json key logs", jsonKeyStats))
+	log.Info(ctx, "load json key index", log.Int64("field id", jsonKeyStats.GetFieldID()), log.Any("json key logs", jsonKeyStats))
 	if _, ok := s.fieldJSONStats[jsonKeyStats.GetFieldID()]; ok {
-		mlog.Warn(context.TODO(), "JsonKeyIndexStats already loaded", mlog.Int64("field id", jsonKeyStats.GetFieldID()), mlog.Any("json key logs", jsonKeyStats))
+		log.Warn(context.TODO(), "JsonKeyIndexStats already loaded", log.Int64("field id", jsonKeyStats.GetFieldID()), log.Any("json key logs", jsonKeyStats))
 		return nil
 	}
 
@@ -1149,10 +1149,10 @@ func (s *LocalSegment) UpdateIndexInfo(ctx context.Context, indexInfo *querypb.F
 	}).Await()
 
 	if err := HandleCStatus(ctx, &status, "UpdateSealedSegmentIndex failed",
-		mlog.Int64("collectionID", s.Collection()),
-		mlog.Int64("partitionID", s.Partition()),
-		mlog.Int64("segmentID", s.ID()),
-		mlog.Int64("fieldID", indexInfo.FieldID)); err != nil {
+		log.Int64("collectionID", s.Collection()),
+		log.Int64("partitionID", s.Partition()),
+		log.Int64("segmentID", s.ID()),
+		log.Int64("fieldID", indexInfo.FieldID)); err != nil {
 		return err
 	}
 
@@ -1163,7 +1163,7 @@ func (s *LocalSegment) UpdateIndexInfo(ctx context.Context, indexInfo *querypb.F
 		IndexInfo: indexInfo,
 		IsLoaded:  true,
 	})
-	mlog.Info(context.TODO(), "updateSegmentIndex done")
+	log.Info(context.TODO(), "updateSegmentIndex done")
 	return nil
 }
 
@@ -1183,7 +1183,7 @@ func (s *LocalSegment) UpdateFieldRawDataSize(ctx context.Context, numRows int64
 		return err
 	}
 
-	mlog.Info(ctx, "updateFieldRawDataSize done", mlog.Int64("segmentID", s.ID()))
+	log.Info(ctx, "updateFieldRawDataSize done", log.Int64("segmentID", s.ID()))
 
 	return nil
 }
@@ -1244,7 +1244,7 @@ func (s *LocalSegment) Release(ctx context.Context, opts ...releaseOption) {
 	ptr := s.ptr
 	if options.Scope == ReleaseScopeData {
 		s.ReleaseSegmentData()
-		mlog.Info(context.TODO(), "release segment data done and the field indexes info has been set lazy load=true")
+		log.Info(context.TODO(), "release segment data done and the field indexes info has been set lazy load=true")
 		return
 	}
 
@@ -1272,7 +1272,7 @@ func (s *LocalSegment) Release(ctx context.Context, opts ...releaseOption) {
 		s.binlogSize.Store(0)
 	}
 
-	mlog.Info(context.TODO(), "delete segment from memory")
+	log.Info(context.TODO(), "delete segment from memory")
 }
 
 // ReleaseSegmentData releases the segment data.

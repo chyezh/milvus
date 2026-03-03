@@ -38,7 +38,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/dependency"
 	_ "github.com/milvus-io/milvus/internal/util/grpcclient"
 	streamingserviceinterceptor "github.com/milvus-io/milvus/internal/util/streamingutil/service/interceptor"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
@@ -100,10 +100,10 @@ func (s *Server) Prepare() error {
 		netutil.OptPort(paramtable.Get().RootCoordGrpcServerCfg.Port.GetAsInt()),
 	)
 	if err != nil {
-		mlog.Warn(context.TODO(), "MixCoord fail to create net listener", mlog.Err(err))
+		log.Warn(context.TODO(), "MixCoord fail to create net listener", log.Err(err))
 		return err
 	}
-	mlog.Info(context.TODO(), "MixCoord listen on", mlog.String("address", listener.Addr().String()), mlog.Int("port", listener.Port()))
+	log.Info(context.TODO(), "MixCoord listen on", log.String("address", listener.Addr().String()), log.Int("port", listener.Port()))
 	s.listener = listener
 	return nil
 }
@@ -113,12 +113,12 @@ func (s *Server) Run() error {
 	if err := s.init(); err != nil {
 		return err
 	}
-	mlog.Info(s.ctx, "MixCoord init done ...")
+	log.Info(s.ctx, "MixCoord init done ...")
 
 	if err := s.start(); err != nil {
 		return err
 	}
-	mlog.Info(s.ctx, "MixCoord start done ...")
+	log.Info(s.ctx, "MixCoord start done ...")
 	return nil
 }
 
@@ -127,7 +127,7 @@ var getTiKVClient = tikv.GetTiKVClient
 func (s *Server) init() error {
 	params := paramtable.Get()
 	etcdConfig := &params.EtcdCfg
-	mlog.Info(context.TODO(), "init params done..")
+	log.Info(context.TODO(), "init params done..")
 
 	etcdCli, err := etcd.CreateEtcdClient(
 		etcdConfig.UseEmbedEtcd.GetAsBool(),
@@ -142,36 +142,36 @@ func (s *Server) init() error {
 		etcdConfig.EtcdTLSMinVersion.GetValue(),
 		etcdConfig.ClientOptions()...)
 	if err != nil {
-		mlog.Warn(context.TODO(), "MixCoord connect to etcd failed", mlog.Err(err))
+		log.Warn(context.TODO(), "MixCoord connect to etcd failed", log.Err(err))
 		return err
 	}
 	s.etcdCli = etcdCli
 	s.mixCoord.SetEtcdClient(s.etcdCli)
 	s.mixCoord.SetAddress(s.listener.Address())
 	s.mixCoord.SetMixCoordClient(s.mixCoordClient)
-	mlog.Info(context.TODO(), "etcd connect done ...")
+	log.Info(context.TODO(), "etcd connect done ...")
 
 	if params.MetaStoreCfg.MetaStoreType.GetValue() == util.MetaStoreTypeTiKV {
-		mlog.Info(context.TODO(), "Connecting to tikv metadata storage.")
+		log.Info(context.TODO(), "Connecting to tikv metadata storage.")
 		s.tikvCli, err = getTiKVClient(&paramtable.Get().TiKVCfg)
 		if err != nil {
-			mlog.Warn(context.TODO(), "MixCoord failed to connect to tikv", mlog.Err(err))
+			log.Warn(context.TODO(), "MixCoord failed to connect to tikv", log.Err(err))
 			return err
 		}
 		s.mixCoord.SetTiKVClient(s.tikvCli)
-		mlog.Info(context.TODO(), "Connected to tikv. Using tikv as metadata storage.")
+		log.Info(context.TODO(), "Connected to tikv. Using tikv as metadata storage.")
 	}
 
 	if err := s.mixCoord.Init(); err != nil {
 		return err
 	}
-	mlog.Info(context.TODO(), "MixCoord init done ...")
+	log.Info(context.TODO(), "MixCoord init done ...")
 
 	err = s.startGrpc()
 	if err != nil {
 		return err
 	}
-	mlog.Info(context.TODO(), "grpc init done ...")
+	log.Info(context.TODO(), "grpc init done ...")
 	return nil
 }
 
@@ -195,7 +195,7 @@ func (s *Server) startGrpcLoop() {
 		Time:    60 * time.Second, // Ping the client if it is idle for 60 seconds to ensure the connection is still active
 		Timeout: 10 * time.Second, // Wait 10 second for the ping ack before assuming the connection is dead
 	}
-	mlog.Info(context.TODO(), "start grpc ", mlog.Int("port", s.listener.Port()))
+	log.Info(context.TODO(), "start grpc ", log.Int("port", s.listener.Port()))
 
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
@@ -243,14 +243,14 @@ func (s *Server) startGrpcLoop() {
 }
 
 func (s *Server) start() error {
-	mlog.Info(context.TODO(), "MixCoord Core start ...")
+	log.Info(context.TODO(), "MixCoord Core start ...")
 	if err := s.mixCoord.Register(); err != nil {
-		mlog.Error(context.TODO(), "MixCoord registers service failed", mlog.Err(err))
+		log.Error(context.TODO(), "MixCoord registers service failed", log.Err(err))
 		return err
 	}
 
 	if err := s.mixCoord.Start(); err != nil {
-		mlog.Error(context.TODO(), "MixCoord start service failed", mlog.Err(err))
+		log.Error(context.TODO(), "MixCoord start service failed", log.Err(err))
 		return err
 	}
 
@@ -258,9 +258,9 @@ func (s *Server) start() error {
 }
 
 func (s *Server) Stop() (err error) {
-	mlog.Info(s.ctx, "MixCoord stopping")
+	log.Info(s.ctx, "MixCoord stopping")
 	defer func() {
-		mlog.Info(s.ctx, "MixCoord stopped", mlog.Err(err))
+		log.Info(s.ctx, "MixCoord stopped", log.Err(err))
 	}()
 
 	if s.etcdCli != nil {
@@ -271,9 +271,9 @@ func (s *Server) Stop() (err error) {
 	}
 
 	if s.mixCoord != nil {
-		mlog.Info(context.TODO(), "graceful stop rootCoord")
+		log.Info(context.TODO(), "graceful stop rootCoord")
 		s.mixCoord.GracefulStop()
-		mlog.Info(context.TODO(), "graceful stop rootCoord done")
+		log.Info(context.TODO(), "graceful stop rootCoord done")
 	}
 
 	if s.grpcServer != nil {
@@ -282,9 +282,9 @@ func (s *Server) Stop() (err error) {
 	s.grpcWG.Wait()
 
 	if s.mixCoord != nil {
-		mlog.Info(s.ctx, "internal server[rootCoord] start to stop")
+		log.Info(s.ctx, "internal server[rootCoord] start to stop")
 		if err := s.mixCoord.Stop(); err != nil {
-			mlog.Error(context.TODO(), "Failed to close rootCoord", mlog.Err(err))
+			log.Error(context.TODO(), "Failed to close rootCoord", log.Err(err))
 		}
 	}
 

@@ -16,7 +16,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/entity"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/tests/go_client/common"
 )
 
@@ -155,7 +155,7 @@ func GenArrayColumnData(nb int, eleType entity.FieldType, option GenDataOption) 
 		if validDataLen > 0 {
 			nullableColumn, err := column.NewNullableColumnBoolArray(fieldName, boolValues, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnBoolArray failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnBoolArray failed", log.Err(err))
 			}
 			return nullableColumn
 		}
@@ -172,7 +172,7 @@ func GenArrayColumnData(nb int, eleType entity.FieldType, option GenDataOption) 
 		if validDataLen > 0 {
 			nullableColumn, err := column.NewNullableColumnInt8Array(fieldName, int8Values, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnInt8Array failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnInt8Array failed", log.Err(err))
 			}
 			return nullableColumn
 		}
@@ -189,7 +189,7 @@ func GenArrayColumnData(nb int, eleType entity.FieldType, option GenDataOption) 
 		if validDataLen > 0 {
 			nullableColumn, err := column.NewNullableColumnInt16Array(fieldName, int16Values, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnInt16Array failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnInt16Array failed", log.Err(err))
 			}
 			return nullableColumn
 		}
@@ -206,7 +206,7 @@ func GenArrayColumnData(nb int, eleType entity.FieldType, option GenDataOption) 
 		if validDataLen > 0 {
 			nullableColumn, err := column.NewNullableColumnInt32Array(fieldName, int32Values, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnInt32Array failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnInt32Array failed", log.Err(err))
 			}
 			return nullableColumn
 		}
@@ -223,7 +223,7 @@ func GenArrayColumnData(nb int, eleType entity.FieldType, option GenDataOption) 
 		if validDataLen > 0 {
 			nullableColumn, err := column.NewNullableColumnInt64Array(fieldName, int64Values, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnInt64Array failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnInt64Array failed", log.Err(err))
 			}
 			return nullableColumn
 		}
@@ -240,7 +240,7 @@ func GenArrayColumnData(nb int, eleType entity.FieldType, option GenDataOption) 
 		if validDataLen > 0 {
 			nullableColumn, err := column.NewNullableColumnFloatArray(fieldName, floatValues, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnFloatArray failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnFloatArray failed", log.Err(err))
 			}
 			return nullableColumn
 		}
@@ -257,7 +257,7 @@ func GenArrayColumnData(nb int, eleType entity.FieldType, option GenDataOption) 
 		if validDataLen > 0 {
 			nullableColumn, err := column.NewNullableColumnDoubleArray(fieldName, doubleValues, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnDoubleArray failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnDoubleArray failed", log.Err(err))
 			}
 			return nullableColumn
 		}
@@ -276,13 +276,13 @@ func GenArrayColumnData(nb int, eleType entity.FieldType, option GenDataOption) 
 		if validDataLen > 0 {
 			nullableColumn, err := column.NewNullableColumnVarCharArray(fieldName, varcharValues, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnVarCharArray failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnVarCharArray failed", log.Err(err))
 			}
 			return nullableColumn
 		}
 		return column.NewColumnVarCharArray(fieldName, varcharValues)
 	default:
-		mlog.Fatal(context.TODO(), "GenArrayColumnData failed", mlog.Any("ElementType", eleType))
+		log.Fatal(context.TODO(), "GenArrayColumnData failed", log.Any("ElementType", eleType))
 		return nil
 	}
 }
@@ -339,7 +339,7 @@ func GenDefaultJSONData(nb int, option GenDataOption) [][]byte {
 		}
 		bs, err := json.Marshal(&m)
 		if err != nil {
-			mlog.Fatal(context.TODO(), "Marshal json field failed", mlog.Err(err))
+			log.Fatal(context.TODO(), "Marshal json field failed", log.Err(err))
 		}
 		jsonValues = append(jsonValues, bs)
 	}
@@ -419,7 +419,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 			validDataLen = nb
 		}
 	}
-	mlog.Debug(context.TODO(), "GenColumnData", mlog.Any("FieldType", fieldType), mlog.Int("nb", nb), mlog.Int("start", start), mlog.Int("validDataLen", validDataLen))
+	log.Debug(context.TODO(), "GenColumnData", log.Any("FieldType", fieldType), log.Int("nb", nb), log.Int("start", start), log.Int("validDataLen", validDataLen))
 
 	if option.fieldName == "" {
 		fieldName = GetFieldNameByFieldType(fieldType, TWithElementType(option.elementType))
@@ -434,7 +434,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 		if validDataLen < nb {
 			nullableColumn, err := column.NewNullableColumnInt64(fieldName, int64Values, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnInt64 failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnInt64 failed", log.Err(err))
 			}
 			return nullableColumn
 		}
@@ -452,7 +452,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 		if validDataLen < nb {
 			nullableColumn, err := column.NewNullableColumnInt8(fieldName, int8Values, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnInt8 failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnInt8 failed", log.Err(err))
 			}
 			return nullableColumn
 		}
@@ -466,7 +466,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 		if validDataLen < nb {
 			nullableColumn, err := column.NewNullableColumnInt16(fieldName, int16Values, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnInt16 failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnInt16 failed", log.Err(err))
 			}
 			return nullableColumn
 		}
@@ -480,7 +480,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 		if validDataLen < nb {
 			nullableColumn, err := column.NewNullableColumnInt32(fieldName, int32Values, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnInt32 failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnInt32 failed", log.Err(err))
 			}
 			return nullableColumn
 		}
@@ -494,7 +494,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 		if validDataLen < nb {
 			nullableColumn, err := column.NewNullableColumnBool(fieldName, boolValues, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnBool failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnBool failed", log.Err(err))
 			}
 			return nullableColumn
 		}
@@ -508,7 +508,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 		if validDataLen < nb {
 			nullableColumn, err := column.NewNullableColumnFloat(fieldName, floatValues, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnFloat failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnFloat failed", log.Err(err))
 			}
 			return nullableColumn
 		}
@@ -522,7 +522,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 		if validDataLen < nb {
 			nullableColumn, err := column.NewNullableColumnDouble(fieldName, floatValues, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnDouble failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnDouble failed", log.Err(err))
 			}
 			return nullableColumn
 		}
@@ -540,7 +540,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 				lang = "zh"
 			default:
 				// Fallback to en for unsupported languages
-				mlog.Warn(context.TODO(), "Unsupported language, fallback to English", mlog.String("language", option.textLang))
+				log.Warn(context.TODO(), "Unsupported language, fallback to English", log.String("language", option.textLang))
 				lang = "en"
 			}
 
@@ -567,7 +567,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 		if validDataLen < nb {
 			nullableColumn, err := column.NewNullableColumnVarChar(fieldName, varcharValues, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnVarChar failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnVarChar failed", log.Err(err))
 			}
 			return nullableColumn
 		}
@@ -581,7 +581,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 		if validDataLen < nb {
 			nullableColumn, err := column.NewNullableColumnJSONBytes(fieldName, jsonValues, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnJSONBytes failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnJSONBytes failed", log.Err(err))
 			}
 			return nullableColumn
 		}
@@ -592,7 +592,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 		if validDataLen < nb {
 			nullableColumn, err := column.NewNullableColumnGeometryWKT(fieldName, geometryValues, option.validData)
 			if err != nil {
-				mlog.Fatal(context.TODO(), "NewNullableColumnGeometryWKT failed", mlog.Err(err))
+				log.Fatal(context.TODO(), "NewNullableColumnGeometryWKT failed", log.Err(err))
 			}
 			return nullableColumn
 		}
@@ -600,7 +600,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 
 	case entity.FieldTypeFloatVector:
 		if validDataLen < nb {
-			mlog.Warn(context.TODO(), "GenColumnData", mlog.String("Note", "fieldType FloatVector not support valid data"))
+			log.Warn(context.TODO(), "GenColumnData", log.String("Note", "fieldType FloatVector not support valid data"))
 		}
 		vecFloatValues := make([][]float32, 0, nb)
 		for i := start; i < start+nb; i++ {
@@ -611,7 +611,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 
 	case entity.FieldTypeBinaryVector:
 		if validDataLen < nb {
-			mlog.Warn(context.TODO(), "GenColumnData", mlog.String("Note", "fieldType FloatVector not support valid data"))
+			log.Warn(context.TODO(), "GenColumnData", log.String("Note", "fieldType FloatVector not support valid data"))
 		}
 		binaryVectors := make([][]byte, 0, nb)
 		for i := 0; i < nb; i++ {
@@ -621,7 +621,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 		return column.NewColumnBinaryVector(fieldName, dim, binaryVectors)
 	case entity.FieldTypeFloat16Vector:
 		if validDataLen < nb {
-			mlog.Warn(context.TODO(), "GenColumnData", mlog.String("Note", "fieldType FloatVector not support valid data"))
+			log.Warn(context.TODO(), "GenColumnData", log.String("Note", "fieldType FloatVector not support valid data"))
 		}
 		fp16Vectors := make([][]byte, 0, nb)
 		for i := start; i < start+nb; i++ {
@@ -632,7 +632,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 
 	case entity.FieldTypeBFloat16Vector:
 		if validDataLen < nb {
-			mlog.Warn(context.TODO(), "GenColumnData", mlog.String("Note", "fieldType FloatVector not support valid data"))
+			log.Warn(context.TODO(), "GenColumnData", log.String("Note", "fieldType FloatVector not support valid data"))
 		}
 		bf16Vectors := make([][]byte, 0, nb)
 		for i := start; i < start+nb; i++ {
@@ -643,7 +643,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 
 	case entity.FieldTypeSparseVector:
 		if validDataLen < nb {
-			mlog.Warn(context.TODO(), "GenColumnData", mlog.String("Note", "fieldType FloatVector not support valid data"))
+			log.Warn(context.TODO(), "GenColumnData", log.String("Note", "fieldType FloatVector not support valid data"))
 		}
 		vectors := make([]entity.SparseEmbedding, 0, nb)
 		for i := start; i < start+nb; i++ {
@@ -653,7 +653,7 @@ func GenColumnData(nb int, fieldType entity.FieldType, option GenDataOption) col
 		return column.NewColumnSparseVectors(fieldName, vectors)
 
 	default:
-		mlog.Fatal(context.TODO(), "GenColumnData failed", mlog.Any("FieldType", fieldType))
+		log.Fatal(context.TODO(), "GenColumnData failed", log.Any("FieldType", fieldType))
 		return nil
 	}
 }
@@ -683,7 +683,7 @@ func GenColumnDataWithFp32VecConversion(nb int, fieldType entity.FieldType, opti
 		return column.NewColumnBFloat16Vector(fieldName, dim, bf16Vectors)
 
 	default:
-		mlog.Fatal(context.TODO(), "GenFp16OrBf16ColumnDataFromFloatVector failed", mlog.Any("FieldType", fieldType))
+		log.Fatal(context.TODO(), "GenFp16OrBf16ColumnDataFromFloatVector failed", log.Any("FieldType", fieldType))
 		return nil
 	}
 }
@@ -712,7 +712,7 @@ func GenDynamicColumnData(start int, nb int) []column.Column {
 		}
 		bs, err := json.Marshal(m)
 		if err != nil {
-			mlog.Fatal(context.TODO(), "Marshal json field failed:", mlog.Err(err))
+			log.Fatal(context.TODO(), "Marshal json field failed:", log.Err(err))
 		}
 		listValues = append(listValues, bs)
 	}
@@ -735,7 +735,7 @@ func MergeColumnsToDynamic(nb int, columns []column.Column, columnName string) *
 		}
 		bs, err := json.Marshal(&m)
 		if err != nil {
-			mlog.Fatal(context.TODO(), "MergeColumnsToDynamic failed:", mlog.Err(err))
+			log.Fatal(context.TODO(), "MergeColumnsToDynamic failed:", log.Err(err))
 		}
 		values = append(values, bs)
 	}
@@ -903,7 +903,7 @@ func (cos ColumnOptions) GetColumnOption(fieldName string) *GenDataOption {
 // GenColumnsBasedSchema generates columns based on schema with field-specific options
 func GenColumnsBasedSchema(schema *entity.Schema, columnOpts ColumnOptions) ([]column.Column, []column.Column) {
 	if nil == schema || schema.CollectionName == "" {
-		mlog.Fatal(context.TODO(), "[GenColumnsBasedSchema] Nil Schema is not expected")
+		log.Fatal(context.TODO(), "[GenColumnsBasedSchema] Nil Schema is not expected")
 	}
 	fields := schema.Fields
 	columns := make([]column.Column, 0, len(fields)+1)
@@ -947,7 +947,7 @@ func GenColumnsBasedSchema(schema *entity.Schema, columnOpts ColumnOptions) ([]c
 
 func GenColumnsBasedSchemaWithFp32VecConversion(schema *entity.Schema, option *GenDataOption) ([]column.Column, []column.Column) {
 	if nil == schema || schema.CollectionName == "" {
-		mlog.Fatal(context.TODO(), "[GenColumnsBasedSchema] Nil Schema is not expected")
+		log.Fatal(context.TODO(), "[GenColumnsBasedSchema] Nil Schema is not expected")
 	}
 	fields := schema.Fields
 	columns := make([]column.Column, 0, len(fields)+1)

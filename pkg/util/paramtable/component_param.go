@@ -30,7 +30,7 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
@@ -4221,12 +4221,12 @@ Max read concurrency must greater than or equal to 1, and less than or equal to 
 				localStoragePath := getLocalStoragePath(base)
 				if _, err := os.Stat(localStoragePath); os.IsNotExist(err) {
 					if err := os.MkdirAll(localStoragePath, os.ModePerm); err != nil {
-						mlog.Fatal(context.TODO(), "failed to mkdir", mlog.String("localStoragePath", localStoragePath), mlog.Err(err))
+						log.Fatal(context.TODO(), "failed to mkdir", log.String("localStoragePath", localStoragePath), log.Err(err))
 					}
 				}
 				diskUsage, err := disk.Usage(localStoragePath)
 				if err != nil {
-					mlog.Fatal(context.TODO(), "failed to get disk usage", mlog.String("localStoragePath", localStoragePath), mlog.Err(err))
+					log.Fatal(context.TODO(), "failed to get disk usage", log.String("localStoragePath", localStoragePath), log.Err(err))
 				}
 				return strconv.FormatUint(diskUsage.Total, 10)
 			}
@@ -6249,7 +6249,7 @@ func (p *dataNodeConfig) init(base *BaseTable) {
 		Formatter: func(v string) string {
 			concurrency := getAsInt(v)
 			if concurrency < 1 {
-				mlog.Warn(context.TODO(), "positive parallel task number, reset to default 16", mlog.String("value", v))
+				log.Warn(context.TODO(), "positive parallel task number, reset to default 16", log.String("value", v))
 				return "16" // MaxParallelSyncMgrTasksPerCPUCore must >= 1
 			}
 			return strconv.FormatInt(int64(concurrency), 10)
@@ -6307,7 +6307,7 @@ Setting this parameter too small causes the system to store a small amount of da
 			Export:       true,
 		}
 	} else {
-		mlog.Info(context.TODO(), "DeployModeEnv is not set, use default", mlog.Float64("default", 0.5))
+		log.Info(context.TODO(), "DeployModeEnv is not set, use default", log.Float64("default", 0.5))
 		p.MemoryForceSyncWatermark = ParamItem{
 			Key:          "dataNode.memory.forceSyncWatermark",
 			Version:      "2.4.0",
@@ -6499,7 +6499,7 @@ if this parameter <= 0, will set it as 10`,
 		Formatter: func(v string) string {
 			percentage := getAsFloat(v)
 			if percentage <= 0 || percentage > 100 {
-				mlog.Warn(context.TODO(), "invalid import memory limit percentage, using default 10%")
+				log.Warn(context.TODO(), "invalid import memory limit percentage, using default 10%")
 				return "10"
 			}
 			return fmt.Sprintf("%f", percentage)
@@ -7174,7 +7174,7 @@ func getLocalStoragePath(base *BaseTable) string {
 	localStoragePath := base.Get("localStorage.path")
 	if len(localStoragePath) == 0 {
 		localStoragePath = defaultLocalStoragePath
-		mlog.Warn(context.TODO(), "localStorage.path is not set, using default value", mlog.String("localStorage.path", localStoragePath))
+		log.Warn(context.TODO(), "localStorage.path is not set, using default value", log.String("localStorage.path", localStoragePath))
 	}
 	return localStoragePath
 }

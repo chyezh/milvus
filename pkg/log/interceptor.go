@@ -1,4 +1,4 @@
-package mlog
+package log
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
-// MetadataPrefix is the prefix for mlog fields in gRPC metadata.
+// MetadataPrefix is the prefix for log fields in gRPC metadata.
 const MetadataPrefix = "mlog-"
 
 // UnaryServerInterceptor extracts propagated fields from incoming metadata
@@ -46,7 +46,7 @@ func StreamClientInterceptor() grpc.StreamClientInterceptor {
 	}
 }
 
-// extractPropagated extracts mlog fields from incoming gRPC metadata and trace context.
+// extractPropagated extracts log fields from incoming gRPC metadata and trace context.
 // Extracted fields are marked as propagated so they will be forwarded in subsequent RPC calls.
 // TraceID and SpanID are extracted from OpenTelemetry span context.
 // Additional fields can be passed to be added in the same WithFields call.

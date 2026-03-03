@@ -22,7 +22,7 @@ import (
 
 
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 type SegmentBM25Stats struct {
@@ -52,7 +52,7 @@ func (s *SegmentBM25Stats) Serialize() (map[int64][]byte, map[int64]int64, error
 	for fieldID, stats := range s.stats {
 		bytes, err := stats.Serialize()
 		if err != nil {
-			mlog.Warn(context.TODO(), "serialize history bm25 stats failed", mlog.Int64("fieldID", fieldID))
+			log.Warn(context.TODO(), "serialize history bm25 stats failed", log.Int64("fieldID", fieldID))
 			return nil, nil, err
 		}
 		result[fieldID] = bytes

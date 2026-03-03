@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/http/healthz"
 	"github.com/milvus-io/milvus/internal/json"
 	"github.com/milvus-io/milvus/pkg/v2/eventlog"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/expr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -78,7 +78,7 @@ func registerDefaults() {
 	Register(&Handler{
 		Path: LogLevelRouterPath,
 		HandlerFunc: func(w http.ResponseWriter, req *http.Request) {
-			mlog.GetAtomicLevel().ServeHTTP(w, req)
+			log.GetAtomicLevel().ServeHTTP(w, req)
 		},
 	})
 	Register(&Handler{
@@ -151,14 +151,14 @@ func RegisterStopComponent(triggerComponentStop func(role string) error) {
 		Path: RouteTriggerStopPath,
 		HandlerFunc: func(w http.ResponseWriter, req *http.Request) {
 			role := req.URL.Query().Get("role")
-			mlog.Info(context.TODO(), "start to trigger component stop", mlog.String("role", role))
+			log.Info(context.TODO(), "start to trigger component stop", log.String("role", role))
 			if err := triggerComponentStop(role); err != nil {
-				mlog.Warn(context.TODO(), "failed to trigger component stop", mlog.Err(err))
+				log.Warn(context.TODO(), "failed to trigger component stop", log.Err(err))
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(fmt.Sprintf(`{"msg": "failed to trigger component stop, %s"}`, err.Error())))
 				return
 			}
-			mlog.Info(context.TODO(), "finish to trigger component stop", mlog.String("role", role))
+			log.Info(context.TODO(), "finish to trigger component stop", log.String("role", role))
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"msg": "OK"}`))
 		},
@@ -171,14 +171,14 @@ func RegisterCheckComponentReady(checkActive func(role string) error) {
 		Path: RouteCheckComponentReady,
 		HandlerFunc: func(w http.ResponseWriter, req *http.Request) {
 			role := req.URL.Query().Get("role")
-			mlog.Info(context.TODO(), "start to check component ready", mlog.String("role", role))
+			log.Info(context.TODO(), "start to check component ready", log.String("role", role))
 			if err := checkActive(role); err != nil {
-				mlog.Warn(context.TODO(), "failed to check component ready", mlog.Err(err))
+				log.Warn(context.TODO(), "failed to check component ready", log.Err(err))
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(fmt.Sprintf(`{"msg": "failed to to check component ready, %s"}`, err.Error())))
 				return
 			}
-			mlog.Info(context.TODO(), "finish to check component ready", mlog.String("role", role))
+			log.Info(context.TODO(), "finish to check component ready", log.String("role", role))
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"msg": "OK"}`))
 		},
@@ -286,7 +286,7 @@ func ServeHTTP() {
 	registerDefaults()
 	go func() {
 		bindAddr := getHTTPAddr()
-		mlog.Info(context.TODO(), "management listen", mlog.String("addr", bindAddr))
+		log.Info(context.TODO(), "management listen", log.String("addr", bindAddr))
 		server = &http.Server{Handler: metricsServer, Addr: bindAddr, ReadTimeout: 10 * time.Second}
 
 		if runtime.GOARCH != "arm64" {
@@ -296,7 +296,7 @@ func ServeHTTP() {
 		}
 
 		if err := server.ListenAndServe(); err != nil {
-			mlog.Error(context.TODO(), "handle metrics failed", mlog.Err(err))
+			log.Error(context.TODO(), "handle metrics failed", log.Err(err))
 		}
 	}()
 }
@@ -334,7 +334,7 @@ func checkExprRootAuth(req *http.Request) error {
 
 	// Only root user can access /expr
 	if username != "root" {
-		mlog.Warn(context.TODO(), "non-root user attempted to access /expr", mlog.String("username", username))
+		log.Warn(context.TODO(), "non-root user attempted to access /expr", log.String("username", username))
 		return fmt.Errorf("only root user can access /expr endpoint")
 	}
 
@@ -343,10 +343,10 @@ func checkExprRootAuth(req *http.Request) error {
 		return fmt.Errorf("password verification not available")
 	}
 	if !passwordVerifyFunc(context.Background(), username, password) {
-		mlog.Warn(context.TODO(), "invalid root password for /expr access")
+		log.Warn(context.TODO(), "invalid root password for /expr access")
 		return fmt.Errorf("invalid root password")
 	}
 
-	mlog.Info(context.TODO(), "root user authenticated for /expr access")
+	log.Info(context.TODO(), "root user authenticated for /expr access")
 	return nil
 }

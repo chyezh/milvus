@@ -6,7 +6,7 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/helper"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
@@ -56,13 +56,13 @@ func (o *openerImpl) execute() {
 			}
 			switch ev := ev.(type) {
 			case kafka.Error:
-				mlog.Error(context.TODO(), "kafka producer error", mlog.Err(ev))
+				log.Error(context.TODO(), "kafka producer error", log.Err(ev))
 				if ev.IsFatal() {
 					panic(fmt.Sprintf("kafka producer error is fatal, %s", ev.Error()))
 				}
 			default:
 				// ignore other events
-				mlog.Debug(context.TODO(), "kafka producer incoming non-message, non-error event", mlog.String("event", ev.String()))
+				log.Debug(context.TODO(), "kafka producer incoming non-message, non-error event", log.String("event", ev.String()))
 			}
 		}
 	}

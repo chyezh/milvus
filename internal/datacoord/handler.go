@@ -34,7 +34,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
@@ -85,10 +85,10 @@ func newServerHandler(s *Server) *ServerHandler {
 // level zero segmentIDs ---> L0 segments
 func (h *ServerHandler) GetDataVChanPositions(channel RWChannel, partitionID UniqueID) *datapb.VchannelInfo {
 	segments := h.s.meta.GetRealSegmentsForChannel(channel.GetName())
-	mlog.Info(context.TODO(), "GetDataVChanPositions",
-		mlog.Int64("collectionID", channel.GetCollectionID()),
-		mlog.String("channel", channel.GetName()),
-		mlog.Int("numOfSegments", len(segments)),
+	log.Info(context.TODO(), "GetDataVChanPositions",
+		log.Int64("collectionID", channel.GetCollectionID()),
+		log.String("channel", channel.GetName()),
+		log.Int("numOfSegments", len(segments)),
 	)
 	var (
 		levelZeroIDs = make(typeutil.UniqueSet)
@@ -226,14 +226,14 @@ func (h *ServerHandler) GetQueryVChanPositions(channel RWChannel, partitionIDs .
 
 	flushedIDs, droppedIDs = retrieveSegment(validSegmentInfos, flushedIDs, droppedIDs, segmentIndexed)
 
-	mlog.Info(context.TODO(), "GetQueryVChanPositions",
-		mlog.Int64("collectionID", channel.GetCollectionID()),
-		mlog.String("channel", channel.GetName()),
-		mlog.Int("numOfSegments", len(segments)),
-		mlog.Int("result flushed", len(flushedIDs)),
-		mlog.Int("result growing", len(growingIDs)),
-		mlog.Int("result L0", len(levelZeroIDs)),
-		mlog.Any("partition stats", partStatsVersionsMap),
+	log.Info(context.TODO(), "GetQueryVChanPositions",
+		log.Int64("collectionID", channel.GetCollectionID()),
+		log.String("channel", channel.GetName()),
+		log.Int("numOfSegments", len(segments)),
+		log.Int("result flushed", len(flushedIDs)),
+		log.Int("result growing", len(growingIDs)),
+		log.Int("result L0", len(levelZeroIDs)),
+		log.Any("partition stats", partStatsVersionsMap),
 	)
 
 	seekPosition := h.GetChannelSeekPosition(channel, partitionIDs...)
@@ -387,14 +387,14 @@ func (h *ServerHandler) GetCurrentSegmentsView(ctx context.Context, channel RWCh
 		return true
 	})
 
-	mlog.Info(ctx, "GetCurrentSegmentsView",
-		mlog.Int64("collectionID", channel.GetCollectionID()),
-		mlog.String("channel", channel.GetName()),
-		mlog.Int("numOfSegments", len(segments)),
-		mlog.Int("result flushed", len(flushedIDs)),
-		mlog.Int("result growing", len(growingIDs)),
-		mlog.Int("result importing", len(importingIDs)),
-		mlog.Int("result L0", len(levelZeroIDs)),
+	log.Info(ctx, "GetCurrentSegmentsView",
+		log.Int64("collectionID", channel.GetCollectionID()),
+		log.String("channel", channel.GetName()),
+		log.Int("numOfSegments", len(segments)),
+		log.Int("result flushed", len(flushedIDs)),
+		log.Int("result growing", len(growingIDs)),
+		log.Int("result importing", len(importingIDs)),
+		log.Int("result L0", len(levelZeroIDs)),
 	)
 
 	return &SegmentsView{
@@ -442,10 +442,10 @@ func (h *ServerHandler) getEarliestSegmentDMLPos(channel string, partitionIDs ..
 		}
 	}
 	if minPos != nil {
-		mlog.Info(context.TODO(), "getEarliestSegmentDMLPos done",
-			mlog.Int64("segmentID", minPosSegID),
-			mlog.Uint64("posTs", minPosTs),
-			mlog.Time("posTime", tsoutil.PhysicalTime(minPosTs)))
+		log.Info(context.TODO(), "getEarliestSegmentDMLPos done",
+			log.Int64("segmentID", minPosSegID),
+			log.Uint64("posTs", minPosTs),
+			log.Time("posTime", tsoutil.PhysicalTime(minPosTs)))
 	}
 	return minPos
 }
@@ -464,9 +464,9 @@ func (h *ServerHandler) getCollectionStartPos(channel RWChannel) *msgpb.MsgPosit
 		// because when using the collection start position, we don't perform any sync operation of data,
 		// so we can just use 0 here without introducing any repeated data to avoid filtering some DML whose timetick is less than collectionInfo.CreatedAt.
 		// And after enabling new DDL framework, the collection start position will have its own timestamp, so we can use it directly.
-		mlog.Info(context.TODO(), "NEITHER segment position or channel start position are found, setting channel seek position to collection start position",
-			mlog.Uint64("posTs", startPosition.GetTimestamp()),
-			mlog.Time("posTime", tsoutil.PhysicalTime(startPosition.GetTimestamp())),
+		log.Info(context.TODO(), "NEITHER segment position or channel start position are found, setting channel seek position to collection start position",
+			log.Uint64("posTs", startPosition.GetTimestamp()),
+			log.Time("posTime", tsoutil.PhysicalTime(startPosition.GetTimestamp())),
 		)
 		return startPosition
 	}
@@ -482,30 +482,30 @@ func (h *ServerHandler) GetChannelSeekPosition(channel RWChannel, partitionIDs .
 	var seekPosition *msgpb.MsgPosition
 	seekPosition = h.s.meta.GetChannelCheckpoint(channel.GetName())
 	if seekPosition != nil {
-		mlog.Info(context.TODO(), "channel seek position set from channel checkpoint meta",
-			mlog.Uint64("posTs", seekPosition.Timestamp),
-			mlog.Stringer("posWALName", seekPosition.WALName),
-			mlog.Time("posTime", tsoutil.PhysicalTime(seekPosition.GetTimestamp())))
+		log.Info(context.TODO(), "channel seek position set from channel checkpoint meta",
+			log.Uint64("posTs", seekPosition.Timestamp),
+			log.Stringer("posWALName", seekPosition.WALName),
+			log.Time("posTime", tsoutil.PhysicalTime(seekPosition.GetTimestamp())))
 		return seekPosition
 	}
 
 	seekPosition = h.getEarliestSegmentDMLPos(channel.GetName(), partitionIDs...)
 	if seekPosition != nil {
-		mlog.Info(context.TODO(), "channel seek position set from earliest segment dml position",
-			mlog.Uint64("posTs", seekPosition.Timestamp),
-			mlog.Time("posTime", tsoutil.PhysicalTime(seekPosition.GetTimestamp())))
+		log.Info(context.TODO(), "channel seek position set from earliest segment dml position",
+			log.Uint64("posTs", seekPosition.Timestamp),
+			log.Time("posTime", tsoutil.PhysicalTime(seekPosition.GetTimestamp())))
 		return seekPosition
 	}
 
 	seekPosition = h.getCollectionStartPos(channel)
 	if seekPosition != nil {
-		mlog.Info(context.TODO(), "channel seek position set from collection start position",
-			mlog.Uint64("posTs", seekPosition.Timestamp),
-			mlog.Time("posTime", tsoutil.PhysicalTime(seekPosition.GetTimestamp())))
+		log.Info(context.TODO(), "channel seek position set from collection start position",
+			log.Uint64("posTs", seekPosition.Timestamp),
+			log.Time("posTime", tsoutil.PhysicalTime(seekPosition.GetTimestamp())))
 		return seekPosition
 	}
 
-	mlog.Warn(context.TODO(), "get channel checkpoint failed, channelCPMeta and earliestSegDMLPos and collStartPos are all invalid")
+	log.Warn(context.TODO(), "get channel checkpoint failed, channelCPMeta and earliestSegDMLPos and collStartPos are all invalid")
 	return nil
 }
 
@@ -562,15 +562,15 @@ func (h *ServerHandler) HasCollection(ctx context.Context, collectionID UniqueID
 	if err := retry.Do(ctx2, func() error {
 		has, err := h.s.broker.HasCollection(ctx2, collectionID)
 		if err != nil {
-			mlog.RatedInfo(context.TODO(), mlog.RateDefault, "datacoord ServerHandler HasCollection retry failed", mlog.Err(err))
+			log.RatedInfo(context.TODO(), log.RateDefault, "datacoord ServerHandler HasCollection retry failed", log.Err(err))
 			return err
 		}
 		hasCollection = has
 		return nil
 	}, retry.Attempts(5)); err != nil {
-		mlog.Error(ctx2, "datacoord ServerHandler HasCollection finally failed",
-			mlog.Int64("collectionID", collectionID),
-			mlog.Err(err))
+		log.Error(ctx2, "datacoord ServerHandler HasCollection finally failed",
+			log.Int64("collectionID", collectionID),
+			log.Err(err))
 		// A workaround for https://github.com/milvus-io/milvus/issues/26863. The collection may be considered as not
 		// dropped when any exception happened, but there are chances that finally the collection will be cleaned.
 		return true, nil
@@ -589,14 +589,14 @@ func (h *ServerHandler) GetCollection(ctx context.Context, collectionID UniqueID
 	if err := retry.Do(ctx2, func() error {
 		err := h.s.loadCollectionFromRootCoord(ctx2, collectionID)
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to load collection from rootcoord", mlog.Int64("collectionID", collectionID), mlog.Err(err))
+			log.Warn(context.TODO(), "failed to load collection from rootcoord", log.Int64("collectionID", collectionID), log.Err(err))
 			return err
 		}
 		return nil
 	}, retry.Attempts(5)); err != nil {
-		mlog.Warn(ctx2, "datacoord ServerHandler GetCollection finally failed",
-			mlog.Int64("collectionID", collectionID),
-			mlog.Err(err))
+		log.Warn(ctx2, "datacoord ServerHandler GetCollection finally failed",
+			log.Int64("collectionID", collectionID),
+			log.Err(err))
 		return nil, err
 	}
 
@@ -614,10 +614,10 @@ func (h *ServerHandler) CheckShouldDropChannel(channel string) bool {
 func (h *ServerHandler) FinishDropChannel(channel string, collectionID int64) error {
 	err := h.s.meta.catalog.DropChannel(h.s.ctx, channel)
 	if err != nil {
-		mlog.Warn(context.TODO(), "DropChannel failed", mlog.String("vChannel", channel), mlog.Err(err))
+		log.Warn(context.TODO(), "DropChannel failed", log.String("vChannel", channel), log.Err(err))
 		return err
 	}
-	mlog.Info(context.TODO(), "DropChannel succeeded", mlog.String("channel", channel))
+	log.Info(context.TODO(), "DropChannel succeeded", log.String("channel", channel))
 	// Channel checkpoints are cleaned up during garbage collection.
 
 	// clean collection info cache when meet drop collection info
@@ -750,9 +750,9 @@ func (h *ServerHandler) GenSnapshot(ctx context.Context, collectionID UniqueID) 
 	}))
 
 	if len(segments) == 0 {
-		mlog.Info(context.TODO(), "no segments found for collection when generating snapshot",
-			mlog.Int64("collectionID", collectionID),
-			mlog.Uint64("snapshotTs", snapshotTs))
+		log.Info(context.TODO(), "no segments found for collection when generating snapshot",
+			log.Int64("collectionID", collectionID),
+			log.Uint64("snapshotTs", snapshotTs))
 	}
 
 	segmentInfos := lo.Map(segments, func(segment *SegmentInfo, _ int) *datapb.SegmentInfo {
@@ -761,10 +761,10 @@ func (h *ServerHandler) GenSnapshot(ctx context.Context, collectionID UniqueID) 
 
 	err = binlog.DecompressMultiBinLogs(segmentInfos)
 	if err != nil {
-		mlog.Error(context.TODO(), "decompress segment binlogs failed when generating snapshot",
-			mlog.Int64("collectionID", collectionID),
-			mlog.Uint64("snapshotTs", snapshotTs),
-			mlog.Err(err))
+		log.Error(context.TODO(), "decompress segment binlogs failed when generating snapshot",
+			log.Int64("collectionID", collectionID),
+			log.Uint64("snapshotTs", snapshotTs),
+			log.Err(err))
 		return nil, err
 	}
 
@@ -772,11 +772,11 @@ func (h *ServerHandler) GenSnapshot(ctx context.Context, collectionID UniqueID) 
 	lo.ForEach(segmentInfos, func(segInfo *datapb.SegmentInfo, _ int) {
 		deltalogs, err := h.GetDeltaLogFromCompactTo(ctx, segInfo.GetID())
 		if err != nil {
-			mlog.Error(context.TODO(), "get delta logs from compactTo failed when generating snapshot",
-				mlog.Int64("collectionID", collectionID),
-				mlog.Uint64("snapshotTs", snapshotTs),
-				mlog.Int64("segmentID", segInfo.GetID()),
-				mlog.Err(err))
+			log.Error(context.TODO(), "get delta logs from compactTo failed when generating snapshot",
+				log.Int64("collectionID", collectionID),
+				log.Uint64("snapshotTs", snapshotTs),
+				log.Int64("segmentID", segInfo.GetID()),
+				log.Err(err))
 			return
 		}
 		segInfo.Deltalogs = append(segInfo.GetDeltalogs(), deltalogs...)
@@ -887,7 +887,7 @@ func (h *ServerHandler) GetDeltaLogFromCompactTo(ctx context.Context, segmentID 
 		children, ok := h.s.meta.GetCompactionTo(id)
 		// double-check the segment, maybe the segment is being dropped concurrently.
 		if !ok {
-			mlog.Warn(context.TODO(), "failed to get segment, this may have been cleaned", mlog.Int64("segmentID", id))
+			log.Warn(context.TODO(), "failed to get segment, this may have been cleaned", log.Int64("segmentID", id))
 			err := merr.WrapErrSegmentNotFound(id)
 			return nil, err
 		}
@@ -896,7 +896,7 @@ func (h *ServerHandler) GetDeltaLogFromCompactTo(ctx context.Context, segmentID 
 			clonedChild := child.Clone()
 			// child segment should decompress binlog path
 			if err := binlog.DecompressBinLog(storage.DeleteBinlog, clonedChild.GetCollectionID(), clonedChild.GetPartitionID(), clonedChild.GetID(), clonedChild.GetDeltalogs()); err != nil {
-				mlog.Warn(context.TODO(), "failed to decompress delta binlog", mlog.Int64("segmentID", clonedChild.GetID()), mlog.Err(err))
+				log.Warn(context.TODO(), "failed to decompress delta binlog", log.Int64("segmentID", clonedChild.GetID()), log.Err(err))
 				return nil, err
 			}
 			allDeltaLogs = append(allDeltaLogs, clonedChild.GetDeltalogs()...)

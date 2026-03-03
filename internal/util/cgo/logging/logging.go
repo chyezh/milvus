@@ -32,7 +32,7 @@ import (
 
 	"go.uber.org/zap/zapcore"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 const cgoLoggerName = "CGO"
@@ -56,13 +56,13 @@ func goZapLogExt(sev C.int,
 	msgLen C.int,
 ) {
 	lv := mapGlogSeverity(int(sev))
-	if !mlog.GetUnderlying().Core().Enabled(lv) {
+	if !log.GetUnderlying().Core().Enabled(lv) {
 		return
 	}
-	core := mlog.GetUnderlying().Core()
-	if c, ok := core.(mlog.CEntryTextIOCore); ok {
+	core := log.GetUnderlying().Core()
+	if c, ok := core.(log.CEntryTextIOCore); ok {
 		// if async log is enabled, we use CEntry to write the log, avoid to copy the log message to the heap.
-		c.WriteWithCEntry(mlog.CEntry{
+		c.WriteWithCEntry(log.CEntry{
 			Time:        time.Now(),
 			Level:       lv,
 			Filename:    unsafe.Pointer(file),
@@ -89,7 +89,7 @@ func goZapLogExt(sev C.int,
 			Line:    int(line),
 		},
 	}
-	if ce := mlog.GetUnderlying().Core().Check(ent, nil); ce != nil {
+	if ce := log.GetUnderlying().Core().Check(ent, nil); ce != nil {
 		ce.Write()
 	}
 }

@@ -19,7 +19,7 @@ import (
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/kv"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	pb "github.com/milvus-io/milvus/pkg/v2/proto/etcdpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
@@ -75,9 +75,9 @@ func (c *mck) execute(args []string, flags *flag.FlagSet) {
 		fmt.Fprintln(os.Stderr, mckLine)
 	}
 
-	logutil.SetupLogger(&mlog.Config{
+	logutil.SetupLogger(&log.Config{
 		Level: "info",
-		File: mlog.FileLogConfig{
+		File: log.FileLogConfig{
 			Filename: fmt.Sprintf("mck-%s.log", time.Now().Format("20060102150405.99")),
 		},
 	})
@@ -108,13 +108,13 @@ func (c *mck) run() {
 
 	_, values, err := c.metaKV.LoadWithPrefix(context.TODO(), segmentPrefix)
 	if err != nil {
-		mlog.Fatal(context.TODO(), "failed to list the segment info", mlog.String("key", segmentPrefix), mlog.Err(err))
+		log.Fatal(context.TODO(), "failed to list the segment info", log.String("key", segmentPrefix), log.Err(err))
 	}
 	for _, value := range values {
 		info := &datapb.SegmentInfo{}
 		err = proto.Unmarshal([]byte(value), info)
 		if err != nil {
-			mlog.Warn(context.TODO(), "fail to unmarshal the segment info", mlog.Err(err))
+			log.Warn(context.TODO(), "fail to unmarshal the segment info", log.Err(err))
 			continue
 		}
 		c.segmentIDMap[info.ID] = info
@@ -122,13 +122,13 @@ func (c *mck) run() {
 
 	_, values, err = c.metaKV.LoadWithPrefix(context.TODO(), collectionPrefix)
 	if err != nil {
-		mlog.Fatal(context.TODO(), "failed to list the collection info", mlog.String("key", collectionPrefix), mlog.Err(err))
+		log.Fatal(context.TODO(), "failed to list the collection info", log.String("key", collectionPrefix), log.Err(err))
 	}
 	for _, value := range values {
 		collInfo := pb.CollectionInfo{}
 		err = proto.Unmarshal([]byte(value), &collInfo)
 		if err != nil {
-			mlog.Warn(context.TODO(), "fail to unmarshal the collection info", mlog.Err(err))
+			log.Warn(context.TODO(), "fail to unmarshal the collection info", log.Err(err))
 			continue
 		}
 		for _, id := range collInfo.PartitionIDs {
@@ -141,31 +141,31 @@ func (c *mck) run() {
 	for id := range c.segmentIDMap {
 		ids = append(ids, id)
 	}
-	mlog.Info(context.TODO(), "segment ids", mlog.Int64s("ids", ids))
+	log.Info(context.TODO(), "segment ids", log.Int64s("ids", ids))
 
 	ids = []int64{}
 	for id := range c.partitionIDMap {
 		ids = append(ids, id)
 	}
-	mlog.Info(context.TODO(), "partition ids", mlog.Int64s("ids", ids))
+	log.Info(context.TODO(), "partition ids", log.Int64s("ids", ids))
 
 	keys, values, err := c.metaKV.LoadWithPrefix(context.TODO(), triggerTaskPrefix)
 	if err != nil {
-		mlog.Fatal(context.TODO(), "failed to list the trigger task info", mlog.Err(err))
+		log.Fatal(context.TODO(), "failed to list the trigger task info", log.Err(err))
 	}
 	c.extractTask(triggerTaskPrefix, keys, values)
 
 	keys, values, err = c.metaKV.LoadWithPrefix(context.TODO(), activeTaskPrefix)
 	if err != nil {
-		mlog.Fatal(context.TODO(), "failed to list the active task info", mlog.Err(err))
+		log.Fatal(context.TODO(), "failed to list the active task info", log.Err(err))
 	}
 	c.extractTask(activeTaskPrefix, keys, values)
 
 	// log all tasks
 	if len(c.taskNameMap) > 0 {
-		mlog.Info(context.TODO(), "all tasks")
+		log.Info(context.TODO(), "all tasks")
 		for taskID, taskName := range c.taskNameMap {
-			mlog.Info(context.TODO(), "task info", mlog.String("name", taskName), mlog.Int64("id", taskID))
+			log.Info(context.TODO(), "task info", log.String("name", taskName), log.Int64("id", taskID))
 		}
 	}
 
@@ -203,9 +203,9 @@ func (c *mck) formatFlags(args []string, flags *flag.FlagSet) {
 	flags.StringVar(&c.minioBucketName, "minioBucketName", "", "Minio bucket name")
 
 	if err := flags.Parse(os.Args[2:]); err != nil {
-		mlog.Fatal(context.TODO(), "failed to parse flags", mlog.Err(err))
+		log.Fatal(context.TODO(), "failed to parse flags", log.Err(err))
 	}
-	mlog.Info(context.TODO(), "args", mlog.Strings("args", args))
+	log.Info(context.TODO(), "args", log.Strings("args", args))
 }
 
 func (c *mck) connectEctd() {
@@ -229,12 +229,12 @@ func (c *mck) connectEctd() {
 			c.params.EtcdCfg.ClientOptions()...)
 	}
 	if err != nil {
-		mlog.Fatal(context.TODO(), "failed to connect to etcd", mlog.Err(err))
+		log.Fatal(context.TODO(), "failed to connect to etcd", log.Err(err))
 	}
 
 	rootPath := getConfigValue(c.ectdRootPath, c.params.EtcdCfg.MetaRootPath.GetValue(), "ectd_root_path")
 	c.metaKV = etcdkv.NewEtcdKV(etcdCli, rootPath)
-	mlog.Info(context.TODO(), "Etcd root path", mlog.String("root_path", rootPath))
+	log.Info(context.TODO(), "Etcd root path", log.String("root_path", rootPath))
 }
 
 func (c *mck) connectMinio() {
@@ -243,7 +243,7 @@ func (c *mck) connectMinio() {
 	var err error
 	c.minioChunkManager, err = chunkManagerFactory.NewPersistentStorageChunkManager(context.Background())
 	if err != nil {
-		mlog.Fatal(context.TODO(), "failed to connect to minio", mlog.Err(err))
+		log.Fatal(context.TODO(), "failed to connect to minio", log.Err(err))
 	}
 }
 
@@ -254,14 +254,14 @@ func getConfigValue(a string, b string, name string) string {
 	if b != "" {
 		return b
 	}
-	mlog.Panic(context.TODO(), fmt.Sprintf("the config '%s' is empty", name))
+	log.Panic(context.TODO(), fmt.Sprintf("the config '%s' is empty", name))
 	return ""
 }
 
 func (c *mck) cleanTrash() {
 	keys, _, err := c.metaKV.LoadWithPrefix(context.TODO(), MckTrash)
 	if err != nil {
-		mlog.Error(context.TODO(), "failed to load backup info", mlog.Err(err))
+		log.Error(context.TODO(), "failed to load backup info", log.Err(err))
 		return
 	}
 	if len(keys) == 0 {
@@ -275,7 +275,7 @@ func (c *mck) cleanTrash() {
 	if deleteAll == "Y" {
 		err = c.metaKV.RemoveWithPrefix(context.TODO(), MckTrash)
 		if err != nil {
-			mlog.Error(context.TODO(), "failed to remove backup infos", mlog.String("key", MckTrash), mlog.Err(err))
+			log.Error(context.TODO(), "failed to remove backup infos", log.String("key", MckTrash), log.Err(err))
 			return
 		}
 	}
@@ -370,13 +370,13 @@ func (c *mck) extractTask(prefix string, keys []string, values []string) {
 	for i := range keys {
 		taskID, err := strconv.ParseInt(filepath.Base(keys[i]), 10, 64)
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to parse int", mlog.String("key", filepath.Base(keys[i])), mlog.String("tasks", filepath.Base(keys[i])))
+			log.Warn(context.TODO(), "failed to parse int", log.String("key", filepath.Base(keys[i])), log.String("tasks", filepath.Base(keys[i])))
 			continue
 		}
 
 		taskName, pids, sids, err := c.unmarshalTask(taskID, values[i])
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to unmarshal task", mlog.Int64("task_id", taskID))
+			log.Warn(context.TODO(), "failed to unmarshal task", log.Int64("task_id", taskID))
 			continue
 		}
 		for _, pid := range pids {
@@ -397,31 +397,31 @@ func (c *mck) removeTask(invalidTask int64) bool {
 	key := c.taskKeyMap[invalidTask]
 	err := c.metaKV.Save(context.TODO(), getTrashKey(taskType, key), c.allTaskInfo[key])
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to backup task", mlog.String("key", getTrashKey(taskType, key)), mlog.Int64("task_id", invalidTask), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to backup task", log.String("key", getTrashKey(taskType, key)), log.Int64("task_id", invalidTask), log.Err(err))
 		return false
 	}
 	fmt.Printf("Back up task successfully, back path: %s\n", getTrashKey(taskType, key))
 	err = c.metaKV.Remove(context.TODO(), key)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to remove task", mlog.Int64("task_id", invalidTask), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to remove task", log.Int64("task_id", invalidTask), log.Err(err))
 		return false
 	}
 
 	key = fmt.Sprintf("%s/%d", taskInfoPrefix, invalidTask)
 	taskInfo, err := c.metaKV.Load(context.TODO(), key)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to load task info", mlog.Int64("task_id", invalidTask), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to load task info", log.Int64("task_id", invalidTask), log.Err(err))
 		return false
 	}
 	err = c.metaKV.Save(context.TODO(), getTrashKey(taskType, key), taskInfo)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to backup task info", mlog.Int64("task_id", invalidTask), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to backup task info", log.Int64("task_id", invalidTask), log.Err(err))
 		return false
 	}
 	fmt.Printf("Back up task info successfully, back path: %s\n", getTrashKey(taskType, key))
 	err = c.metaKV.Remove(context.TODO(), key)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to remove task info", mlog.Int64("task_id", invalidTask), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to remove task info", log.Int64("task_id", invalidTask), log.Err(err))
 	}
 	return true
 }
@@ -533,7 +533,7 @@ func (c *mck) unmarshalTask(taskID int64, t string) (string, []int64, []int64, e
 		if err != nil {
 			return errReturn(taskID, "LoadCollectionRequest", err)
 		}
-		mlog.Info(context.TODO(), "LoadCollection", mlog.String("detail", fmt.Sprintf("+%v", loadReq)))
+		log.Info(context.TODO(), "LoadCollection", log.String("detail", fmt.Sprintf("+%v", loadReq)))
 		return "LoadCollection", emptyInt64(), emptyInt64(), nil
 	case commonpb.MsgType_LoadPartitions:
 		loadReq := &querypb.LoadPartitionsRequest{}
@@ -541,7 +541,7 @@ func (c *mck) unmarshalTask(taskID int64, t string) (string, []int64, []int64, e
 		if err != nil {
 			return errReturn(taskID, "LoadPartitionsRequest", err)
 		}
-		mlog.Info(context.TODO(), "LoadPartitions", mlog.String("detail", fmt.Sprintf("+%v", loadReq)))
+		log.Info(context.TODO(), "LoadPartitions", log.String("detail", fmt.Sprintf("+%v", loadReq)))
 		return "LoadPartitions", loadReq.PartitionIDs, emptyInt64(), nil
 	case commonpb.MsgType_ReleaseCollection:
 		loadReq := &querypb.ReleaseCollectionRequest{}
@@ -549,7 +549,7 @@ func (c *mck) unmarshalTask(taskID int64, t string) (string, []int64, []int64, e
 		if err != nil {
 			return errReturn(taskID, "ReleaseCollectionRequest", err)
 		}
-		mlog.Info(context.TODO(), "ReleaseCollection", mlog.String("detail", fmt.Sprintf("+%v", loadReq)))
+		log.Info(context.TODO(), "ReleaseCollection", log.String("detail", fmt.Sprintf("+%v", loadReq)))
 		return "ReleaseCollection", emptyInt64(), emptyInt64(), nil
 	case commonpb.MsgType_ReleasePartitions:
 		loadReq := &querypb.ReleasePartitionsRequest{}
@@ -557,7 +557,7 @@ func (c *mck) unmarshalTask(taskID int64, t string) (string, []int64, []int64, e
 		if err != nil {
 			return errReturn(taskID, "ReleasePartitionsRequest", err)
 		}
-		mlog.Info(context.TODO(), "ReleasePartitions", mlog.String("detail", fmt.Sprintf("+%v", loadReq)))
+		log.Info(context.TODO(), "ReleasePartitions", log.String("detail", fmt.Sprintf("+%v", loadReq)))
 		return "ReleasePartitions", loadReq.PartitionIDs, emptyInt64(), nil
 	case commonpb.MsgType_LoadSegments:
 		loadReq := &querypb.LoadSegmentsRequest{}
@@ -581,7 +581,7 @@ func (c *mck) unmarshalTask(taskID int64, t string) (string, []int64, []int64, e
 			c.extractFieldBinlog(taskID, info.Deltalogs)
 			c.extractVecFieldIndexInfo(taskID, info.IndexInfos)
 		}
-		mlog.Info(context.TODO(), "LoadSegments", mlog.String("detail", fmt.Sprintf("+%v", loadReq)))
+		log.Info(context.TODO(), "LoadSegments", log.String("detail", fmt.Sprintf("+%v", loadReq)))
 		return "LoadSegments", removeRepeatElement(partitionIDs), removeRepeatElement(segmentIDs), nil
 	case commonpb.MsgType_ReleaseSegments:
 		loadReq := &querypb.ReleaseSegmentsRequest{}
@@ -589,7 +589,7 @@ func (c *mck) unmarshalTask(taskID int64, t string) (string, []int64, []int64, e
 		if err != nil {
 			return errReturn(taskID, "ReleaseSegmentsRequest", err)
 		}
-		mlog.Info(context.TODO(), "ReleaseSegments", mlog.String("detail", fmt.Sprintf("+%v", loadReq)))
+		log.Info(context.TODO(), "ReleaseSegments", log.String("detail", fmt.Sprintf("+%v", loadReq)))
 		return "ReleaseSegments", loadReq.PartitionIDs, loadReq.SegmentIDs, nil
 	case commonpb.MsgType_WatchDmChannels:
 		loadReq := &querypb.WatchDmChannelsRequest{}
@@ -610,13 +610,13 @@ func (c *mck) unmarshalTask(taskID int64, t string) (string, []int64, []int64, e
 		pids, sids = c.extractDataSegmentInfos(taskID, loadReq.ExcludeInfos)
 		partitionIDs = append(partitionIDs, pids...)
 		segmentIDs = append(segmentIDs, sids...)
-		mlog.Info(context.TODO(), "WatchDmChannels", mlog.String("detail", fmt.Sprintf("+%v", loadReq)))
+		log.Info(context.TODO(), "WatchDmChannels", log.String("detail", fmt.Sprintf("+%v", loadReq)))
 		return "WatchDmChannels", removeRepeatElement(partitionIDs), removeRepeatElement(segmentIDs), nil
 	case commonpb.MsgType_WatchDeltaChannels:
-		mlog.Warn(context.TODO(), "legacy WatchDeltaChannels type found, ignore")
+		log.Warn(context.TODO(), "legacy WatchDeltaChannels type found, ignore")
 		return "WatchQueryChannels", emptyInt64(), emptyInt64(), nil
 	case commonpb.MsgType_WatchQueryChannels:
-		mlog.Warn(context.TODO(), "legacy WatchQueryChannels type found, ignore")
+		log.Warn(context.TODO(), "legacy WatchQueryChannels type found, ignore")
 		return "WatchQueryChannels", emptyInt64(), emptyInt64(), nil
 	case commonpb.MsgType_LoadBalanceSegments:
 		loadReq := &querypb.LoadBalanceRequest{}
@@ -624,7 +624,7 @@ func (c *mck) unmarshalTask(taskID int64, t string) (string, []int64, []int64, e
 		if err != nil {
 			return errReturn(taskID, "LoadBalanceRequest", err)
 		}
-		mlog.Info(context.TODO(), "LoadBalanceSegments", mlog.String("detail", fmt.Sprintf("+%v", loadReq)))
+		log.Info(context.TODO(), "LoadBalanceSegments", log.String("detail", fmt.Sprintf("+%v", loadReq)))
 		return "LoadBalanceSegments", emptyInt64(), loadReq.SealedSegmentIDs, nil
 	case commonpb.MsgType_HandoffSegments:
 		handoffReq := &querypb.HandoffSegmentsRequest{}
@@ -633,11 +633,11 @@ func (c *mck) unmarshalTask(taskID int64, t string) (string, []int64, []int64, e
 			return errReturn(taskID, "HandoffSegmentsRequest", err)
 		}
 		pids, sids := c.extractQuerySegmentInfos(taskID, handoffReq.SegmentInfos)
-		mlog.Info(context.TODO(), "HandoffSegments", mlog.String("detail", fmt.Sprintf("+%v", handoffReq)))
+		log.Info(context.TODO(), "HandoffSegments", log.String("detail", fmt.Sprintf("+%v", handoffReq)))
 		return "HandoffSegments", pids, sids, nil
 	default:
 		err = errors.New("inValid msg type when unMarshal task")
-		mlog.Error(context.TODO(), "invalid message task", mlog.Int("type", int(header.Base.MsgType)), mlog.Err(err))
+		log.Error(context.TODO(), "invalid message task", log.Int("type", int(header.Base.MsgType)), log.Err(err))
 		return "", emptyInt64(), emptyInt64(), err
 	}
 }

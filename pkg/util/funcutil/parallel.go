@@ -24,7 +24,7 @@ import (
 	"time"
 
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 // GetFunctionName returns the name of input
@@ -51,7 +51,7 @@ func ProcessFuncParallel(total, maxParallel int, f ProcessFunc, fname string) er
 
 	t := time.Now()
 	defer func() {
-		mlog.Debug(context.TODO(), fname, mlog.Int("total", total), mlog.Any("time cost", time.Since(t)))
+		log.Debug(context.TODO(), fname, log.Int("total", total), log.Any("time cost", time.Since(t)))
 	}()
 
 	nPerBatch := (total + maxParallel - 1) / maxParallel
@@ -85,7 +85,7 @@ func ProcessFuncParallel(total, maxParallel int, f ProcessFunc, fname string) er
 			for idx := begin; idx < end; idx++ {
 				err = f(idx)
 				if err != nil {
-					mlog.Error(context.TODO(), fname, mlog.Err(err), mlog.Int("idx", idx))
+					log.Error(context.TODO(), fname, log.Err(err), log.Int("idx", idx))
 					break
 				}
 			}
@@ -141,13 +141,13 @@ func ProcessTaskParallel(maxParallel int, fname string, tasks ...TaskFunc) error
 
 	t := time.Now()
 	defer func() {
-		mlog.Debug(context.TODO(), fname, mlog.Any("time cost", time.Since(t)))
+		log.Debug(context.TODO(), fname, log.Any("time cost", time.Since(t)))
 	}()
 
 	total := len(tasks)
 	nPerBatch := (total + maxParallel - 1) / maxParallel
-	mlog.Debug(context.TODO(), fname, mlog.Int("total", total))
-	mlog.Debug(context.TODO(), fname, mlog.Int("nPerBatch", nPerBatch))
+	log.Debug(context.TODO(), fname, log.Int("total", total))
+	log.Debug(context.TODO(), fname, log.Int("nPerBatch", nPerBatch))
 
 	quit := make(chan bool)
 	errc := make(chan error)
@@ -188,7 +188,7 @@ func ProcessTaskParallel(maxParallel int, fname string, tasks ...TaskFunc) error
 			for idx := begin; idx < end; idx++ {
 				err = tasks[idx]()
 				if err != nil {
-					mlog.Error(context.TODO(), fname, mlog.Err(err), mlog.Int("idx", idx))
+					log.Error(context.TODO(), fname, log.Err(err), log.Int("idx", idx))
 					break
 				}
 			}
@@ -212,7 +212,7 @@ func ProcessTaskParallel(maxParallel int, fname string, tasks ...TaskFunc) error
 		routineNum++
 	}
 
-	mlog.Debug(context.TODO(), fname, mlog.Int("NumOfGoRoutines", routineNum))
+	log.Debug(context.TODO(), fname, log.Int("NumOfGoRoutines", routineNum))
 
 	if routineNum <= 0 {
 		return nil

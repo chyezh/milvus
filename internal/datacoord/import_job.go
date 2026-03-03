@@ -25,7 +25,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/util/importutilv2"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
@@ -81,8 +81,8 @@ func UpdateJobState(state internalpb.ImportJobState) UpdateJobAction {
 			cleanupTime := time.Now().Add(dur)
 			cleanupTs := tsoutil.ComposeTSByTime(cleanupTime, 0)
 			job.(*importJob).ImportJob.CleanupTs = cleanupTs
-			mlog.Info(context.TODO(), "set import job cleanup ts", mlog.Int64("jobID", job.GetJobID()),
-				mlog.Time("cleanupTime", cleanupTime), mlog.Uint64("cleanupTs", cleanupTs))
+			log.Info(context.TODO(), "set import job cleanup ts", log.Int64("jobID", job.GetJobID()),
+				log.Time("cleanupTime", cleanupTime), log.Uint64("cleanupTs", cleanupTs))
 		}
 	}
 }

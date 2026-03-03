@@ -29,7 +29,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/grpcclient"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/proxypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
@@ -54,7 +54,7 @@ func NewClient(ctx context.Context, addr string, nodeID int64) (types.ProxyClien
 	sess := sessionutil.NewSession(context.Background())
 	if sess == nil {
 		err := errors.New("new session error, maybe can not connect to etcd")
-		mlog.Debug(ctx, "Proxy client new session failed", mlog.Err(err))
+		log.Debug(ctx, "Proxy client new session failed", log.Err(err))
 		return nil, err
 	}
 	config := &Params.ProxyGrpcClientCfg
@@ -72,7 +72,7 @@ func NewClient(ctx context.Context, addr string, nodeID int64) (types.ProxyClien
 		client.grpcClient.EnableEncryption()
 		cp, err := utils.CreateCertPoolforClient(Params.InternalTLSCfg.InternalTLSCaPemPath.GetValue(), "Proxy")
 		if err != nil {
-			mlog.Error(ctx, "Failed to create cert pool for Proxy client")
+			log.Error(ctx, "Failed to create cert pool for Proxy client")
 			return nil, err
 		}
 		client.grpcClient.SetInternalTLSCertPool(cp)

@@ -36,7 +36,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/util/proxyutil"
 	"github.com/milvus-io/milvus/pkg/v2/kv"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/etcd"
@@ -179,7 +179,7 @@ func (suite *CollectionObserverSuite) SetupTest() {
 	// Mocks
 	var err error
 	suite.idAllocator = RandomIncrementIDAllocator()
-	mlog.Debug(context.TODO(), "create embedded etcd KV...")
+	log.Debug(context.TODO(), "create embedded etcd KV...")
 	config := GenerateEtcdConfig()
 	client, err := etcd.GetEtcdClient(
 		config.UseEmbedEtcd.GetAsBool(),
@@ -192,7 +192,7 @@ func (suite *CollectionObserverSuite) SetupTest() {
 	suite.Require().NoError(err)
 	suite.kv = etcdkv.NewEtcdKV(client, Params.EtcdCfg.MetaRootPath.GetValue()+"-"+RandomMetaRootPath())
 	suite.Require().NoError(err)
-	mlog.Debug(context.TODO(), "create meta store...")
+	log.Debug(context.TODO(), "create meta store...")
 	suite.store = querycoord.NewCatalog(suite.kv)
 
 	// Dependencies

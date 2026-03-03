@@ -24,7 +24,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/datacoord/session"
 	"github.com/milvus-io/milvus/internal/json"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
@@ -106,13 +106,13 @@ func (p *preImportTask) GetTaskVersion() int64 {
 }
 
 func (p *preImportTask) CreateTaskOnWorker(nodeID int64, cluster session.Cluster) {
-	mlog.Info(context.TODO(), "processing pending preimport task...", WrapTaskLog(p)...)
+	log.Info(context.TODO(), "processing pending preimport task...", WrapTaskLog(p)...)
 	job := p.importMeta.GetJob(context.TODO(), p.GetJobID())
 	req := AssemblePreImportRequest(p, job)
 
 	err := cluster.CreatePreImport(nodeID, req, p.GetTaskSlot())
 	if err != nil {
-		mlog.Warn(context.TODO(), "preimport failed", WrapTaskLog(p, mlog.Err(err))...)
+		log.Warn(context.TODO(), "preimport failed", WrapTaskLog(p, log.Err(err))...)
 		p.retryTimes++
 		return
 	}
@@ -120,12 +120,12 @@ func (p *preImportTask) CreateTaskOnWorker(nodeID int64, cluster session.Cluster
 		UpdateState(datapb.ImportTaskStateV2_InProgress),
 		UpdateNodeID(nodeID))
 	if err != nil {
-		mlog.Warn(context.TODO(), "update import task failed", WrapTaskLog(p, mlog.Err(err))...)
+		log.Warn(context.TODO(), "update import task failed", WrapTaskLog(p, log.Err(err))...)
 		return
 	}
 	pendingDuration := p.GetTR().RecordSpan()
 	metrics.ImportTaskLatency.WithLabelValues(metrics.ImportStagePending).Observe(float64(pendingDuration.Milliseconds()))
-	mlog.Info(context.TODO(), "preimport task start to execute", WrapTaskLog(p, mlog.Int64("scheduledNodeID", nodeID), mlog.Duration("taskTimeCost/pending", pendingDuration))...)
+	log.Info(context.TODO(), "preimport task start to execute", WrapTaskLog(p, log.Int64("scheduledNodeID", nodeID), log.Duration("taskTimeCost/pending", pendingDuration))...)
 }
 
 func (p *preImportTask) QueryTaskOnWorker(cluster session.Cluster) {
@@ -137,18 +137,18 @@ func (p *preImportTask) QueryTaskOnWorker(cluster session.Cluster) {
 	if err != nil || resp.GetState() == datapb.ImportTaskStateV2_Retry {
 		updateErr := p.importMeta.UpdateTask(context.TODO(), p.GetTaskID(), UpdateState(datapb.ImportTaskStateV2_Pending))
 		if updateErr != nil {
-			mlog.Warn(context.TODO(), "failed to update preimport task state to pending", WrapTaskLog(p, mlog.Err(updateErr))...)
+			log.Warn(context.TODO(), "failed to update preimport task state to pending", WrapTaskLog(p, log.Err(updateErr))...)
 		}
-		mlog.Info(context.TODO(), "reset preimport task state to pending due to error occurs", WrapTaskLog(p, mlog.Err(err), mlog.String("reason", resp.GetReason()))...)
+		log.Info(context.TODO(), "reset preimport task state to pending due to error occurs", WrapTaskLog(p, log.Err(err), log.String("reason", resp.GetReason()))...)
 		return
 	}
 	if resp.GetState() == datapb.ImportTaskStateV2_Failed {
 		err = p.importMeta.UpdateJob(context.TODO(), p.GetJobID(), UpdateJobState(internalpb.ImportJobState_Failed),
 			UpdateJobReason(resp.GetReason()))
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to update job state to Failed", mlog.Int64("jobID", p.GetJobID()), mlog.Err(err))
+			log.Warn(context.TODO(), "failed to update job state to Failed", log.Int64("jobID", p.GetJobID()), log.Err(err))
 		}
-		mlog.Warn(context.TODO(), "preimport failed", WrapTaskLog(p, mlog.String("reason", resp.GetReason()))...)
+		log.Warn(context.TODO(), "preimport failed", WrapTaskLog(p, log.String("reason", resp.GetReason()))...)
 		return
 	}
 	actions := []UpdateAction{}
@@ -165,26 +165,26 @@ func (p *preImportTask) QueryTaskOnWorker(cluster session.Cluster) {
 	if len(actions) > 0 {
 		err = p.importMeta.UpdateTask(context.TODO(), p.GetTaskID(), actions...)
 		if err != nil {
-			mlog.Warn(context.TODO(), "update preimport task failed", WrapTaskLog(p, mlog.Err(err))...)
+			log.Warn(context.TODO(), "update preimport task failed", WrapTaskLog(p, log.Err(err))...)
 			return
 		}
 	}
-	mlog.Info(context.TODO(), "query preimport", WrapTaskLog(p, mlog.String("respState", resp.GetState().String()),
-		mlog.Any("fileStats", resp.GetFileStats()))...)
+	log.Info(context.TODO(), "query preimport", WrapTaskLog(p, log.String("respState", resp.GetState().String()),
+		log.Any("fileStats", resp.GetFileStats()))...)
 	if resp.GetState() == datapb.ImportTaskStateV2_Completed {
 		preimportDuration := p.GetTR().RecordSpan()
 		metrics.ImportTaskLatency.WithLabelValues(metrics.ImportStagePreImport).Observe(float64(preimportDuration.Milliseconds()))
-		mlog.Info(context.TODO(), "preimport done", WrapTaskLog(p, mlog.Duration("taskTimeCost/preimport", preimportDuration))...)
+		log.Info(context.TODO(), "preimport done", WrapTaskLog(p, log.Duration("taskTimeCost/preimport", preimportDuration))...)
 	}
 }
 
 func (p *preImportTask) DropTaskOnWorker(cluster session.Cluster) {
 	err := DropImportTask(p, cluster, p.importMeta)
 	if err != nil {
-		mlog.Warn(context.TODO(), "drop import failed", WrapTaskLog(p, mlog.Err(err))...)
+		log.Warn(context.TODO(), "drop import failed", WrapTaskLog(p, log.Err(err))...)
 		return
 	}
-	mlog.Info(context.TODO(), "drop preimport task done", WrapTaskLog(p, mlog.Int64("nodeID", p.GetNodeID()))...)
+	log.Info(context.TODO(), "drop preimport task done", WrapTaskLog(p, log.Int64("nodeID", p.GetNodeID()))...)
 }
 
 func (p *preImportTask) GetType() TaskType {

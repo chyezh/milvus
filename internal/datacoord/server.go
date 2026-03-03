@@ -54,7 +54,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v2/kv"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
@@ -251,7 +251,7 @@ func (s *Server) Register() error {
 func (s *Server) ServerExist(serverID int64) bool {
 	sessions, _, err := s.session.GetSessions(s.ctx, typeutil.DataNodeRole)
 	if err != nil {
-		mlog.Warn(s.ctx, "failed to get sessions", mlog.Err(err))
+		log.Warn(s.ctx, "failed to get sessions", log.Err(err))
 		return false
 	}
 	sessionMap := lo.MapKeys(sessions, func(s *sessionutil.Session, _ string) int64 {
@@ -277,7 +277,7 @@ func (s *Server) Init() error {
 
 func (s *Server) initDataCoord() error {
 
-	mlog.Info(context.TODO(), "DataCoord try to wait for MixCoord ready")
+	log.Info(context.TODO(), "DataCoord try to wait for MixCoord ready")
 	if err := s.initMixCoord(); err != nil {
 		return err
 	}
@@ -291,7 +291,7 @@ func (s *Server) initDataCoord() error {
 	if err != nil {
 		return err
 	}
-	mlog.Info(context.TODO(), "init chunk manager factory done")
+	log.Info(context.TODO(), "init chunk manager factory done")
 
 	if err = s.initMeta(storageCli); err != nil {
 		return err
@@ -301,7 +301,7 @@ func (s *Server) initDataCoord() error {
 	s.idAllocator = globalIDAllocator.NewGlobalIDAllocator("idTimestamp", s.kv)
 	err = s.idAllocator.Initialize()
 	if err != nil {
-		mlog.Error(context.TODO(), "data coordinator id allocator initialize failed", mlog.Err(err))
+		log.Error(context.TODO(), "data coordinator id allocator initialize failed", log.Err(err))
 		return err
 	}
 
@@ -313,12 +313,12 @@ func (s *Server) initDataCoord() error {
 	if err = s.initCluster(); err != nil {
 		return err
 	}
-	mlog.Info(context.TODO(), "init datanode cluster done")
+	log.Info(context.TODO(), "init datanode cluster done")
 
 	if err = s.initServiceDiscovery(); err != nil {
 		return err
 	}
-	mlog.Info(context.TODO(), "init service discovery done")
+	log.Info(context.TODO(), "init service discovery done")
 
 	s.globalScheduler = task.NewGlobalTaskScheduler(s.ctx, s.cluster2)
 
@@ -327,24 +327,24 @@ func (s *Server) initDataCoord() error {
 		return err
 	}
 	s.initCompaction()
-	mlog.Info(context.TODO(), "init compaction done")
+	log.Info(context.TODO(), "init compaction done")
 
 	s.initAnalyzeInspector()
-	mlog.Info(context.TODO(), "init analyze inspector done")
+	log.Info(context.TODO(), "init analyze inspector done")
 
 	s.initIndexInspector(storageCli)
-	mlog.Info(context.TODO(), "init task scheduler done")
+	log.Info(context.TODO(), "init task scheduler done")
 
 	s.initStatsInspector()
-	mlog.Info(context.TODO(), "init statsJobManager done")
+	log.Info(context.TODO(), "init statsJobManager done")
 
 	s.initExternalCollectionInspector()
-	mlog.Info(context.TODO(), "init external collection inspector done")
+	log.Info(context.TODO(), "init external collection inspector done")
 
 	if err = s.initSegmentManager(); err != nil {
 		return err
 	}
-	mlog.Info(context.TODO(), "init segment manager done")
+	log.Info(context.TODO(), "init segment manager done")
 
 	s.initGarbageCollection(storageCli)
 
@@ -376,7 +376,7 @@ func (s *Server) initDataCoord() error {
 		s.allocator,
 		s.copySegmentMeta,
 	)
-	mlog.Info(context.TODO(), "init copy segment inspector and checker done")
+	log.Info(context.TODO(), "init copy segment inspector and checker done")
 
 	// Initialize snapshot manager
 	s.snapshotManager = NewSnapshotManager(
@@ -388,12 +388,12 @@ func (s *Server) initDataCoord() error {
 		s.broker,
 		s.getChannelsByCollectionID,
 	)
-	mlog.Info(context.TODO(), "init snapshot manager done")
+	log.Info(context.TODO(), "init snapshot manager done")
 
 	s.serverLoopCtx, s.serverLoopCancel = context.WithCancel(s.ctx)
 
 	RegisterDDLCallbacks(s)
-	mlog.Info(context.TODO(), "init datacoord done", mlog.Int64("nodeID", paramtable.GetNodeID()), mlog.String("Address", s.address))
+	log.Info(context.TODO(), "init datacoord done", log.Int64("nodeID", paramtable.GetNodeID()), log.String("Address", s.address))
 
 	s.initMessageCallback()
 	return nil
@@ -426,14 +426,14 @@ func (s *Server) initMessageCallback() {
 		})
 		err = merr.CheckRPCCall(importResp, err)
 		if errors.Is(err, merr.ErrCollectionNotFound) {
-			mlog.Warn(ctx, "import message failed because of collection not found, skip it", mlog.String("job_id", importResp.GetJobID()), mlog.Err(err))
+			log.Warn(ctx, "import message failed because of collection not found, skip it", log.String("job_id", importResp.GetJobID()), log.Err(err))
 			return nil
 		}
 		if err != nil {
-			mlog.Warn(ctx, "import message failed", mlog.String("job_id", importResp.GetJobID()), mlog.Err(err))
+			log.Warn(ctx, "import message failed", log.String("job_id", importResp.GetJobID()), log.Err(err))
 			return err
 		}
-		mlog.Info(ctx, "import message handled", mlog.String("job_id", importResp.GetJobID()))
+		log.Info(ctx, "import message handled", log.String("job_id", importResp.GetJobID()))
 		return nil
 	})
 
@@ -475,11 +475,11 @@ func (s *Server) initMessageCallback() {
 		}
 		if len(operators) > 0 {
 			if err := s.meta.UpdateSegmentsInfo(ctx, operators...); err != nil {
-				mlog.Warn(ctx, "batch update manifest version failed", mlog.Err(err))
+				log.Warn(ctx, "batch update manifest version failed", log.Err(err))
 				return err
 			}
 		}
-		mlog.Info(ctx, "batch update manifest version handled", mlog.Int("itemCount", len(body.GetItems())))
+		log.Info(ctx, "batch update manifest version handled", log.Int("itemCount", len(body.GetItems())))
 		return nil
 	})
 }
@@ -493,7 +493,7 @@ func (s *Server) initMessageCallback() {
 //  4. set server state to Healthy
 func (s *Server) Start() error {
 	s.startDataCoord()
-	mlog.Info(context.TODO(), "DataCoord startup successfully")
+	log.Info(context.TODO(), "DataCoord startup successfully")
 
 	return nil
 }
@@ -559,7 +559,7 @@ func (s *Server) newChunkManagerFactory() (storage.ChunkManager, error) {
 	chunkManagerFactory := storage.NewChunkManagerFactoryWithParam(Params)
 	cli, err := chunkManagerFactory.NewPersistentStorageChunkManager(s.ctx)
 	if err != nil {
-		mlog.Error(context.TODO(), "chunk manager init failed", mlog.Err(err))
+		log.Error(context.TODO(), "chunk manager init failed", log.Err(err))
 		return nil, err
 	}
 	return cli, err
@@ -581,28 +581,28 @@ func (s *Server) initServiceDiscovery() error {
 	r := semver.MustParseRange(">=2.2.3")
 	sessions, rev, err := s.session.GetSessionsWithVersionRange(typeutil.DataNodeRole, r)
 	if err != nil {
-		mlog.Warn(context.TODO(), "DataCoord failed to init service discovery", mlog.Err(err))
+		log.Warn(context.TODO(), "DataCoord failed to init service discovery", log.Err(err))
 		return err
 	}
-	mlog.Info(context.TODO(), "DataCoord success to get DataNode sessions", mlog.Any("sessions", sessions))
+	log.Info(context.TODO(), "DataCoord success to get DataNode sessions", log.Any("sessions", sessions))
 
 	if Params.DataCoordCfg.BindIndexNodeMode.GetAsBool() {
-		mlog.Info(context.TODO(), "initServiceDiscovery adding datanode with bind mode",
-			mlog.Int64("nodeID", Params.DataCoordCfg.IndexNodeID.GetAsInt64()),
-			mlog.String("address", Params.DataCoordCfg.IndexNodeAddress.GetValue()))
+		log.Info(context.TODO(), "initServiceDiscovery adding datanode with bind mode",
+			log.Int64("nodeID", Params.DataCoordCfg.IndexNodeID.GetAsInt64()),
+			log.String("address", Params.DataCoordCfg.IndexNodeAddress.GetValue()))
 		if err := s.nodeManager.AddNode(Params.DataCoordCfg.IndexNodeID.GetAsInt64(),
 			Params.DataCoordCfg.IndexNodeAddress.GetValue()); err != nil {
-			mlog.Warn(context.TODO(), "DataCoord failed to add datanode", mlog.Err(err))
+			log.Warn(context.TODO(), "DataCoord failed to add datanode", log.Err(err))
 			return err
 		}
 		s.dnSessionWatcher = sessionutil.EmptySessionWatcher()
 	} else {
 		err := s.rewatchDataNodes(sessions)
 		if err != nil {
-			mlog.Warn(context.TODO(), "DataCoord failed to rewatch datanode", mlog.Err(err))
+			log.Warn(context.TODO(), "DataCoord failed to rewatch datanode", log.Err(err))
 			return err
 		}
-		mlog.Info(context.TODO(), "DataCoord Cluster Manager start up successfully")
+		log.Info(context.TODO(), "DataCoord Cluster Manager start up successfully")
 
 		s.dnSessionWatcher = s.session.WatchServicesWithVersionRange(typeutil.DataNodeRole, r, rev+1, s.rewatchDataNodes)
 	}
@@ -610,7 +610,7 @@ func (s *Server) initServiceDiscovery() error {
 	s.indexEngineVersionManager = newIndexEngineVersionManager()
 	qnSessions, qnRevision, err := s.session.GetSessions(s.ctx, typeutil.QueryNodeRole)
 	if err != nil {
-		mlog.Warn(context.TODO(), "DataCoord get QueryNode sessions failed", mlog.Err(err))
+		log.Warn(context.TODO(), "DataCoord get QueryNode sessions failed", log.Err(err))
 		return err
 	}
 	s.rewatchQueryNodes(qnSessions)
@@ -631,7 +631,7 @@ func (s *Server) rewatchQueryNodes(sessions map[string]*sessionutil.Session) err
 func (s *Server) rewatchDataNodes(sessions map[string]*sessionutil.Session) error {
 	legacyVersion, err := semver.Parse(paramtable.Get().DataCoordCfg.LegacyVersionWithoutRPCWatch.GetValue())
 	if err != nil {
-		mlog.Warn(context.TODO(), "DataCoord failed to init service discovery", mlog.Err(err))
+		log.Warn(context.TODO(), "DataCoord failed to init service discovery", log.Err(err))
 		return err
 	}
 
@@ -650,7 +650,7 @@ func (s *Server) rewatchDataNodes(sessions map[string]*sessionutil.Session) erro
 	}
 
 	if err := s.nodeManager.Startup(s.ctx, datanodes); err != nil {
-		mlog.Warn(context.TODO(), "DataCoord failed to add datanode", mlog.Err(err))
+		log.Warn(context.TODO(), "DataCoord failed to add datanode", log.Err(err))
 		return err
 	}
 	return nil
@@ -689,7 +689,7 @@ func (s *Server) initKV() error {
 	s.watchClient = etcdkv.NewEtcdKV(s.etcdCli, Params.EtcdCfg.MetaRootPath.GetValue(),
 		etcdkv.WithRequestTimeout(paramtable.Get().ServiceParam.EtcdCfg.RequestTimeout.GetAsDuration(time.Millisecond)))
 	metaType := Params.MetaStoreCfg.MetaStoreType.GetValue()
-	mlog.Info(context.TODO(), "data coordinator connecting to metadata store", mlog.String("metaType", metaType))
+	log.Info(context.TODO(), "data coordinator connecting to metadata store", log.String("metaType", metaType))
 	if metaType == util.MetaStoreTypeTiKV {
 		s.metaRootPath = Params.TiKVCfg.MetaRootPath.GetValue()
 		s.kv = tikv.NewTiKV(s.tikvCli, s.metaRootPath,
@@ -701,7 +701,7 @@ func (s *Server) initKV() error {
 	} else {
 		return retry.Unrecoverable(fmt.Errorf("not supported meta store: %s", metaType))
 	}
-	mlog.Info(context.TODO(), "data coordinator successfully connected to metadata store", mlog.String("metaType", metaType))
+	log.Info(context.TODO(), "data coordinator successfully connected to metadata store", log.String("metaType", metaType))
 	return nil
 }
 
@@ -826,7 +826,7 @@ func (s *Server) collectMetaMetrics(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			mlog.Warn(s.ctx, "collectMetaMetrics ctx done")
+			log.Warn(s.ctx, "collectMetaMetrics ctx done")
 			return
 		case <-ticker.C:
 			s.meta.statsTaskMeta.updateMetrics()
@@ -848,7 +848,7 @@ func (s *Server) getFlushableSegmentsInfo(ctx context.Context, flushableIDs []in
 	for _, id := range flushableIDs {
 		sinfo := s.meta.GetHealthySegment(ctx, id)
 		if sinfo == nil {
-			mlog.Error(context.TODO(), "get segment from meta error", mlog.Int64("id", id))
+			log.Error(context.TODO(), "get segment from meta error", log.Int64("id", id))
 			continue
 		}
 		res = append(res, sinfo)
@@ -869,7 +869,7 @@ func (s *Server) startWatchService(ctx context.Context) {
 
 func (s *Server) stopServiceWatch() {
 	// ErrCompacted is handled inside SessionWatcher, which means there is some other error occurred, closing server.
-	mlog.Error(s.ctx, "watch service channel closed", mlog.Int64("serverID", paramtable.GetNodeID()))
+	log.Error(s.ctx, "watch service channel closed", log.Int64("serverID", paramtable.GetNodeID()))
 	go s.Stop()
 	if s.session.IsTriggerKill() {
 		if p, err := os.FindProcess(os.Getpid()); err == nil {
@@ -885,7 +885,7 @@ func (s *Server) watchService(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			mlog.Info(context.TODO(), "watch service shutdown")
+			log.Info(context.TODO(), "watch service shutdown")
 			return
 		case event, ok := <-s.dnSessionWatcher.EventChannel():
 			if !ok {
@@ -895,7 +895,7 @@ func (s *Server) watchService(ctx context.Context) {
 			if err := s.handleSessionEvent(ctx, typeutil.DataNodeRole, event); err != nil {
 				go func() {
 					if err := s.Stop(); err != nil {
-						mlog.Warn(context.TODO(), "DataCoord server stop error", mlog.Err(err))
+						log.Warn(context.TODO(), "DataCoord server stop error", log.Err(err))
 					}
 				}()
 				return
@@ -908,7 +908,7 @@ func (s *Server) watchService(ctx context.Context) {
 			if err := s.handleSessionEvent(ctx, typeutil.QueryNodeRole, event); err != nil {
 				go func() {
 					if err := s.Stop(); err != nil {
-						mlog.Warn(context.TODO(), "DataCoord server stop error", mlog.Err(err))
+						log.Warn(context.TODO(), "DataCoord server stop error", log.Err(err))
 					}
 				}()
 				return
@@ -931,15 +931,15 @@ func (s *Server) handleSessionEvent(ctx context.Context, role string, event *ses
 		}
 		switch event.EventType {
 		case sessionutil.SessionAddEvent:
-			mlog.Info(context.TODO(), "received datanode register",
-				mlog.String("address", info.Address),
-				mlog.Int64("serverID", info.Version))
+			log.Info(context.TODO(), "received datanode register",
+				log.String("address", info.Address),
+				log.Int64("serverID", info.Version))
 			s.metricsCacheManager.InvalidateSystemInfoMetrics()
 			if Params.DataCoordCfg.BindIndexNodeMode.GetAsBool() {
-				mlog.Info(context.TODO(), "receive datanode session event, but adding datanode by bind mode, skip it",
-					mlog.String("address", event.Session.Address),
-					mlog.Int64("serverID", event.Session.ServerID),
-					mlog.String("event type", event.EventType.String()))
+				log.Info(context.TODO(), "receive datanode session event, but adding datanode by bind mode, skip it",
+					log.String("address", event.Session.Address),
+					log.Int64("serverID", event.Session.ServerID),
+					log.String("event type", event.EventType.String()))
 				return nil
 			}
 			err := s.nodeManager.AddNode(event.Session.ServerID, event.Session.Address)
@@ -953,42 +953,42 @@ func (s *Server) handleSessionEvent(ctx context.Context, role string, event *ses
 			}
 			return nil
 		case sessionutil.SessionDelEvent:
-			mlog.Info(context.TODO(), "received datanode unregister",
-				mlog.String("address", info.Address),
-				mlog.Int64("serverID", info.Version))
+			log.Info(context.TODO(), "received datanode unregister",
+				log.String("address", info.Address),
+				log.Int64("serverID", info.Version))
 			s.metricsCacheManager.InvalidateSystemInfoMetrics()
 			if Params.DataCoordCfg.BindIndexNodeMode.GetAsBool() {
-				mlog.Info(context.TODO(), "receive datanode session event, but adding datanode by bind mode, skip it",
-					mlog.String("address", event.Session.Address),
-					mlog.Int64("serverID", event.Session.ServerID),
-					mlog.String("event type", event.EventType.String()))
+				log.Info(context.TODO(), "receive datanode session event, but adding datanode by bind mode, skip it",
+					log.String("address", event.Session.Address),
+					log.Int64("serverID", event.Session.ServerID),
+					log.String("event type", event.EventType.String()))
 				return nil
 			}
 			s.nodeManager.RemoveNode(event.Session.ServerID)
 		default:
-			mlog.Warn(context.TODO(), "receive unknown service event type",
-				mlog.Any("type", event.EventType))
+			log.Warn(context.TODO(), "receive unknown service event type",
+				log.Any("type", event.EventType))
 		}
 	case typeutil.QueryNodeRole:
 		switch event.EventType {
 		case sessionutil.SessionAddEvent:
-			mlog.Info(context.TODO(), "received querynode register",
-				mlog.String("address", event.Session.Address),
-				mlog.Int64("serverID", event.Session.ServerID),
-				mlog.Bool("indexNonEncoding", event.Session.IndexNonEncoding))
+			log.Info(context.TODO(), "received querynode register",
+				log.String("address", event.Session.Address),
+				log.Int64("serverID", event.Session.ServerID),
+				log.Bool("indexNonEncoding", event.Session.IndexNonEncoding))
 			s.indexEngineVersionManager.AddNode(event.Session)
 		case sessionutil.SessionDelEvent:
-			mlog.Info(context.TODO(), "received querynode unregister",
-				mlog.String("address", event.Session.Address),
-				mlog.Int64("serverID", event.Session.ServerID))
+			log.Info(context.TODO(), "received querynode unregister",
+				log.String("address", event.Session.Address),
+				log.Int64("serverID", event.Session.ServerID))
 			s.indexEngineVersionManager.RemoveNode(event.Session)
 		case sessionutil.SessionUpdateEvent:
 			serverID := event.Session.ServerID
-			mlog.Info(context.TODO(), "received querynode SessionUpdateEvent", mlog.Int64("serverID", serverID))
+			log.Info(context.TODO(), "received querynode SessionUpdateEvent", log.Int64("serverID", serverID))
 			s.indexEngineVersionManager.Update(event.Session)
 		default:
-			mlog.Warn(context.TODO(), "receive unknown service event type",
-				mlog.Any("type", event.EventType))
+			log.Warn(context.TODO(), "receive unknown service event type",
+				log.Any("type", event.EventType))
 		}
 	}
 
@@ -1008,14 +1008,14 @@ func (s *Server) startFlushLoop(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
-				mlog.Info(s.ctx, "flush loop shutdown")
+				log.Info(s.ctx, "flush loop shutdown")
 				return
 			case segmentID := <-s.flushCh:
 				// Ignore return error
-				mlog.Info(ctx, "flush successfully", mlog.Any("segmentID", segmentID))
+				log.Info(ctx, "flush successfully", log.Any("segmentID", segmentID))
 				err := s.postFlush(ctx, segmentID)
 				if err != nil {
-					mlog.Warn(context.TODO(), "failed to do post flush", mlog.Int64("segmentID", segmentID), mlog.Err(err))
+					log.Warn(context.TODO(), "failed to do post flush", log.Int64("segmentID", segmentID), log.Err(err))
 				}
 			}
 		}
@@ -1062,7 +1062,7 @@ func (s *Server) postFlush(ctx context.Context, segmentID UniqueID) error {
 	}
 	metrics.FlushedSegmentFileNum.WithLabelValues(metrics.DeleteFileLabel).Observe(float64(deleteFileNum))
 
-	mlog.Info(context.TODO(), "flush segment complete", mlog.Int64("id", segmentID))
+	log.Info(context.TODO(), "flush segment complete", log.Int64("id", segmentID))
 	return nil
 }
 
@@ -1073,10 +1073,10 @@ func (s *Server) handleFlushingSegments(ctx context.Context) {
 		// The old flushing segment may not be flushed, so we need to flush it again.
 		// It should be retry until success
 		if err := s.flushFlushingSegment(ctx, segment.ID); err != nil {
-			mlog.Warn(context.TODO(), "flush flushing segment failed", mlog.Int64("segmentID", segment.ID), mlog.Err(err))
+			log.Warn(context.TODO(), "flush flushing segment failed", log.Int64("segmentID", segment.ID), log.Err(err))
 			return
 		}
-		mlog.Info(context.TODO(), "flush flushing segment success", mlog.Int64("segmentID", segment.ID))
+		log.Info(context.TODO(), "flush flushing segment success", log.Int64("segmentID", segment.ID))
 		select {
 		case <-ctx.Done():
 			return
@@ -1095,7 +1095,7 @@ func (s *Server) flushFlushingSegment(ctx context.Context, segmentID UniqueID) e
 		}
 		operators = append(operators, UpdateStatusOperator(segmentID, commonpb.SegmentState_Flushed))
 		if err := s.meta.UpdateSegmentsInfo(ctx, operators...); err != nil {
-			mlog.Warn(context.TODO(), "flush segment complete failed", mlog.Int64("segmentID", segmentID), mlog.Err(err))
+			log.Warn(context.TODO(), "flush segment complete failed", log.Int64("segmentID", segmentID), log.Err(err))
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
@@ -1125,17 +1125,17 @@ func (s *Server) Stop() error {
 	if !s.stateCode.CompareAndSwap(commonpb.StateCode_Healthy, commonpb.StateCode_Abnormal) {
 		return nil
 	}
-	mlog.Info(context.TODO(), "datacoord server shutdown")
+	log.Info(context.TODO(), "datacoord server shutdown")
 	s.garbageCollector.close()
-	mlog.Info(context.TODO(), "datacoord garbage collector stopped")
+	log.Info(context.TODO(), "datacoord garbage collector stopped")
 
 	if s.meta != nil {
 		s.meta.GetSnapshotMeta().Close()
-		mlog.Info(context.TODO(), "datacoord snapshot meta closed")
+		log.Info(context.TODO(), "datacoord snapshot meta closed")
 	}
 
 	s.stopServerLoop()
-	mlog.Info(context.TODO(), "datacoord stopServerLoop stopped")
+	log.Info(context.TODO(), "datacoord stopServerLoop stopped")
 
 	s.globalScheduler.Stop()
 	s.importInspector.Close()
@@ -1144,19 +1144,19 @@ func (s *Server) Stop() error {
 	// Stop copy segment components
 	s.copySegmentInspector.Close()
 	s.copySegmentChecker.Close()
-	mlog.Info(context.TODO(), "datacoord copy segment inspector and checker stopped")
+	log.Info(context.TODO(), "datacoord copy segment inspector and checker stopped")
 
 	s.stopCompaction()
-	mlog.Info(context.TODO(), "datacoord compaction stopped")
+	log.Info(context.TODO(), "datacoord compaction stopped")
 
 	s.statsInspector.Stop()
-	mlog.Info(context.TODO(), "datacoord stats inspector stopped")
+	log.Info(context.TODO(), "datacoord stats inspector stopped")
 
 	s.indexInspector.Stop()
-	mlog.Info(context.TODO(), "datacoord index inspector stopped")
+	log.Info(context.TODO(), "datacoord index inspector stopped")
 
 	s.analyzeInspector.Stop()
-	mlog.Info(context.TODO(), "datacoord analyze inspector stopped")
+	log.Info(context.TODO(), "datacoord analyze inspector stopped")
 
 	if s.dnSessionWatcher != nil {
 		s.dnSessionWatcher.Stop()
@@ -1166,7 +1166,7 @@ func (s *Server) Stop() error {
 		s.qnSessionWatcher.Stop()
 	}
 	s.externalCollectionRefreshManager.Stop()
-	mlog.Info(context.TODO(), "datacoord external collection refresh manager stopped")
+	log.Info(context.TODO(), "datacoord external collection refresh manager stopped")
 
 	if s.session != nil {
 		s.session.Stop()
@@ -1177,14 +1177,14 @@ func (s *Server) Stop() error {
 	}
 
 	s.stopServerLoop()
-	mlog.Info(context.TODO(), "datacoord serverloop stopped")
-	mlog.Warn(context.TODO(), "datacoord stop successful")
+	log.Info(context.TODO(), "datacoord serverloop stopped")
+	log.Warn(context.TODO(), "datacoord stop successful")
 	return nil
 }
 
 // CleanMeta only for test
 func (s *Server) CleanMeta() error {
-	mlog.Debug(s.ctx, "clean meta", mlog.Any("kv", s.kv))
+	log.Debug(s.ctx, "clean meta", log.Any("kv", s.kv))
 	err := s.kv.RemoveWithPrefix(s.ctx, "")
 	err2 := s.watchClient.RemoveWithPrefix(s.ctx, "")
 	if err2 != nil {
@@ -1248,7 +1248,7 @@ func (s *Server) registerMetricsRequest() {
 			collectionID := metricsinfo.GetCollectionIDFromRequest(jsonReq)
 			return s.meta.indexMeta.GetIndexJSON(collectionID), nil
 		})
-	mlog.Info(s.ctx, "register metrics actions finished")
+	log.Info(s.ctx, "register metrics actions finished")
 }
 
 // loadCollectionFromRootCoord communicates with RootCoord and asks for collection information.
@@ -1305,7 +1305,7 @@ func (s *Server) updateBalanceConfigLoop(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
-				mlog.Info(ctx, "update balance config loop exit!")
+				log.Info(ctx, "update balance config loop exit!")
 				return
 
 			case <-ticker.C:
@@ -1322,19 +1322,19 @@ func (s *Server) updateBalanceConfig() bool {
 	r := semver.MustParseRange("<2.3.0")
 	sessions, _, err := s.session.GetSessionsWithVersionRange(typeutil.DataNodeRole, r)
 	if err != nil {
-		mlog.Warn(context.TODO(), "check data node version occur error on etcd", mlog.Err(err))
+		log.Warn(context.TODO(), "check data node version occur error on etcd", log.Err(err))
 		return false
 	}
 
 	if len(sessions) == 0 {
 		// only balance channel when all data node's version > 2.3.0
 		Params.Reset(Params.DataCoordCfg.AutoBalance.Key)
-		mlog.Info(context.TODO(), "all old data node down, enable auto balance!")
+		log.Info(context.TODO(), "all old data node down, enable auto balance!")
 		return true
 	}
 
 	Params.Save(Params.DataCoordCfg.AutoBalance.Key, "false")
-	mlog.RatedDebug(context.TODO(), mlog.RateDefault, "old data node exist", mlog.Strings("sessions", lo.Keys(sessions)))
+	log.RatedDebug(context.TODO(), log.RateDefault, "old data node exist", log.Strings("sessions", lo.Keys(sessions)))
 	return false
 }
 

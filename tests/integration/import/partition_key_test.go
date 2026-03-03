@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -120,7 +120,7 @@ func (s *BulkInsertSuite) TestImportWithPartitionKey() {
 	})
 	s.NoError(err)
 	s.Equal(int32(0), importResp.GetStatus().GetCode())
-	mlog.Info(context.TODO(), "Import result", mlog.Any("importResp", importResp))
+	log.Info(context.TODO(), "Import result", log.Any("importResp", importResp))
 
 	jobID := importResp.GetJobID()
 	err = WaitForImportDone(ctx, c, jobID)
@@ -137,7 +137,7 @@ func (s *BulkInsertSuite) TestImportWithPartitionKey() {
 	segments, err := c.ShowSegments(collectionName)
 	s.NoError(err)
 	s.NotEmpty(segments)
-	mlog.Info(context.TODO(), "Show segments", mlog.Any("segments", segments))
+	log.Info(context.TODO(), "Show segments", log.Any("segments", segments))
 
 	// load refresh
 	loadStatus, err = c.MilvusClient.LoadCollection(ctx, &milvuspb.LoadCollectionRequest{
@@ -290,7 +290,7 @@ func (s *BulkInsertSuite) TestImportWithAFewRows() {
 	})
 	s.NoError(err)
 	s.Equal(int32(0), importResp.GetStatus().GetCode())
-	mlog.Info(context.TODO(), "Import result", mlog.Any("importResp", importResp))
+	log.Info(context.TODO(), "Import result", log.Any("importResp", importResp))
 
 	jobID := importResp.GetJobID()
 	err = WaitForImportDone(ctx, c, jobID)
@@ -307,7 +307,7 @@ func (s *BulkInsertSuite) TestImportWithAFewRows() {
 	segments, err := c.ShowSegments(collectionName)
 	s.NoError(err)
 	s.NotEmpty(segments)
-	mlog.Info(context.TODO(), "Show segments", mlog.Any("segments", segments))
+	log.Info(context.TODO(), "Show segments", log.Any("segments", segments))
 
 	// load refresh
 	loadStatus, err = c.MilvusClient.LoadCollection(ctx, &milvuspb.LoadCollectionRequest{

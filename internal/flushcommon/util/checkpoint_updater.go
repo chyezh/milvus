@@ -26,7 +26,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/internal/flushcommon/broker"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -74,13 +74,13 @@ func NewChannelCheckpointUpdaterWithCallback(broker broker.Broker, updateDoneCal
 }
 
 func (ccu *ChannelCheckpointUpdater) Start() {
-	mlog.Info(context.TODO(), "channel checkpoint updater start")
+	log.Info(context.TODO(), "channel checkpoint updater start")
 	ticker := time.NewTicker(paramtable.Get().DataNodeCfg.ChannelCheckpointUpdateTickInSeconds.GetAsDuration(time.Second))
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ccu.closeCh:
-			mlog.Info(context.TODO(), "channel checkpoint updater exit")
+			log.Info(context.TODO(), "channel checkpoint updater exit")
 			return
 		case <-ccu.notifyChan:
 			var tasks []*channelCPUpdateTask
@@ -133,7 +133,7 @@ func (ccu *ChannelCheckpointUpdater) updateCheckpoints(tasks []*channelCPUpdateT
 				})
 				err := ccu.broker.UpdateChannelCheckpoint(ctx, channelCPs)
 				if err != nil {
-					mlog.Warn(context.TODO(), "update channel checkpoint failed", mlog.Err(err))
+					log.Warn(context.TODO(), "update channel checkpoint failed", log.Err(err))
 					return
 				}
 				for _, task := range tasks {
@@ -171,7 +171,7 @@ func (ccu *ChannelCheckpointUpdater) execute() {
 func (ccu *ChannelCheckpointUpdater) AddTask(channelPos *msgpb.MsgPosition, flush bool, callback func()) {
 	// Note: Only earliest msgId of woodpecker can be empty bytes
 	if channelPos == nil || (channelPos.GetMsgID() == nil && channelPos.GetWALName() != commonpb.WALName_WoodPecker) || channelPos.GetChannelName() == "" {
-		mlog.Warn(context.TODO(), "illegal checkpoint", mlog.Any("pos", channelPos))
+		log.Warn(context.TODO(), "illegal checkpoint", log.Any("pos", channelPos))
 		return
 	}
 	if flush {

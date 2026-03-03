@@ -1,6 +1,6 @@
 //go:build test
 
-package mlog
+package log
 
 import (
 	"context"

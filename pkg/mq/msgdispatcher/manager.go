@@ -27,7 +27,7 @@ import (
 	"github.com/samber/lo"
 	"go.uber.org/atomic"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -67,8 +67,8 @@ type dispatcherManager struct {
 }
 
 func NewDispatcherManager(pchannel string, role string, nodeID int64, factory msgstream.Factory, includeSkipWhenSplit bool) DispatcherManager {
-	mlog.Info(context.TODO(), "create new dispatcherManager", mlog.String("role", role),
-		mlog.Int64("nodeID", nodeID), mlog.String("pchannel", pchannel))
+	log.Info(context.TODO(), "create new dispatcherManager", log.String("role", role),
+		log.Int64("nodeID", nodeID), log.String("pchannel", pchannel))
 	c := &dispatcherManager{
 		role:                 role,
 		nodeID:               nodeID,
@@ -87,15 +87,15 @@ func (c *dispatcherManager) Add(ctx context.Context, streamConfig *StreamConfig)
 	if _, ok := c.registeredTargets.GetOrInsert(t.vchannel, t); ok {
 		return nil, fmt.Errorf("vchannel %s already exists in the dispatcher", t.vchannel)
 	}
-	mlog.Info(ctx, "target register done", mlog.String("vchannel", t.vchannel))
+	log.Info(ctx, "target register done", log.String("vchannel", t.vchannel))
 	return t.ch, nil
 }
 
 func (c *dispatcherManager) Remove(vchannel string) {
 	t, ok := c.registeredTargets.GetAndRemove(vchannel)
 	if !ok {
-		mlog.Info(context.TODO(), "the target was not registered before", mlog.String("role", c.role),
-			mlog.Int64("nodeID", c.nodeID), mlog.String("vchannel", vchannel))
+		log.Info(context.TODO(), "the target was not registered before", log.String("role", c.role),
+			log.Int64("nodeID", c.nodeID), log.String("vchannel", vchannel))
 		return
 	}
 	c.removeTargetFromDispatcher(t)
@@ -125,7 +125,7 @@ func (c *dispatcherManager) Close() {
 }
 
 func (c *dispatcherManager) Run() {
-	mlog.Info(context.TODO(), "dispatcherManager is running...")
+	log.Info(context.TODO(), "dispatcherManager is running...")
 	ticker1 := time.NewTicker(30 * time.Second)
 	ticker2 := time.NewTicker(paramtable.Get().MQCfg.CheckInterval.GetAsDuration(time.Second))
 	defer ticker1.Stop()
@@ -133,7 +133,7 @@ func (c *dispatcherManager) Run() {
 	for {
 		select {
 		case <-c.closeChan:
-			mlog.Info(context.TODO(), "dispatcherManager exited")
+			log.Info(context.TODO(), "dispatcherManager exited")
 			return
 		case <-ticker1.C:
 			c.uploadMetric()
@@ -155,7 +155,7 @@ func (c *dispatcherManager) removeTargetFromDispatcher(t *target) {
 			if dispatcher.TargetNum() == 0 {
 				dispatcher.Handle(terminate)
 				delete(c.deputyDispatchers, dispatcher.ID())
-				mlog.Info(context.TODO(), "remove deputy dispatcher done", mlog.Int64("id", dispatcher.ID()))
+				log.Info(context.TODO(), "remove deputy dispatcher done", log.Int64("id", dispatcher.ID()))
 			} else {
 				dispatcher.Handle(resume)
 			}
@@ -256,8 +256,8 @@ OUTER:
 	vchannels := lo.Map(candidateTargets, func(t *target, _ int) string {
 		return t.vchannel
 	})
-	mlog.Info(context.TODO(), "start to build dispatchers", mlog.Int("numTargets", len(vchannels)),
-		mlog.Strings("vchannels", vchannels))
+	log.Info(context.TODO(), "start to build dispatchers", log.Int("numTargets", len(vchannels)),
+		log.Strings("vchannels", vchannels))
 
 	// dispatcher will pull back from the earliest position
 	// to the latest position in lack targets.
@@ -286,17 +286,17 @@ OUTER:
 		pullbackBeginTime = tsoutil.PhysicalTime(pullbackBeginTs)
 		pullbackEndTime   = tsoutil.PhysicalTime(pullbackEndTs)
 	)
-	mlog.Info(context.TODO(), "build dispatcher done",
-		mlog.Int64("id", d.ID()),
-		mlog.Int("numVchannels", len(vchannels)),
-		mlog.Uint64("pullbackBeginTs", pullbackBeginTs),
-		mlog.Uint64("pullbackEndTs", pullbackEndTs),
-		mlog.Duration("lag", pullbackEndTime.Sub(pullbackBeginTime)),
-		mlog.Time("pullbackBeginTime", pullbackBeginTime),
-		mlog.Time("pullbackEndTime", pullbackEndTime),
-		mlog.Duration("buildDur", buildDur),
-		mlog.Duration("pullbackDur", tr.RecordSpan()),
-		mlog.Strings("vchannels", vchannels),
+	log.Info(context.TODO(), "build dispatcher done",
+		log.Int64("id", d.ID()),
+		log.Int("numVchannels", len(vchannels)),
+		log.Uint64("pullbackBeginTs", pullbackBeginTs),
+		log.Uint64("pullbackEndTs", pullbackEndTs),
+		log.Duration("lag", pullbackEndTime.Sub(pullbackBeginTime)),
+		log.Time("pullbackBeginTime", pullbackBeginTime),
+		log.Time("pullbackEndTime", pullbackEndTime),
+		log.Duration("buildDur", buildDur),
+		log.Duration("pullbackDur", tr.RecordSpan()),
+		log.Strings("vchannels", vchannels),
 	)
 
 	c.mu.Lock()
@@ -316,10 +316,10 @@ OUTER:
 	d.Handle(resume)
 	if c.mainDispatcher == nil {
 		c.mainDispatcher = d
-		mlog.Info(context.TODO(), "add main dispatcher", mlog.Int64("id", d.ID()))
+		log.Info(context.TODO(), "add main dispatcher", log.Int64("id", d.ID()))
 	} else {
 		c.deputyDispatchers[d.ID()] = d
-		mlog.Info(context.TODO(), "add deputy dispatcher", mlog.Int64("id", d.ID()))
+		log.Info(context.TODO(), "add deputy dispatcher", log.Int64("id", d.ID()))
 	}
 }
 
@@ -346,7 +346,7 @@ func (c *dispatcherManager) tryMerge() {
 		return d.ID()
 	})
 
-	mlog.Info(context.TODO(), "start merging...", mlog.Int64s("dispatchers", dispatcherIDs))
+	log.Info(context.TODO(), "start merging...", log.Int64s("dispatchers", dispatcherIDs))
 	mergeCandidates := make([]*Dispatcher, 0, len(candidates))
 	c.mainDispatcher.Handle(pause)
 	for _, dispatcher := range candidates {
@@ -368,9 +368,9 @@ func (c *dispatcherManager) tryMerge() {
 		delete(c.deputyDispatchers, dispatcher.ID())
 	}
 	c.mainDispatcher.Handle(resume)
-	mlog.Info(context.TODO(), "merge done", mlog.Int64s("dispatchers", dispatcherIDs),
-		mlog.Uint64("mergeTs", mergeTs),
-		mlog.Duration("dur", time.Since(start)))
+	log.Info(context.TODO(), "merge done", log.Int64s("dispatchers", dispatcherIDs),
+		log.Uint64("mergeTs", mergeTs),
+		log.Duration("dur", time.Since(start)))
 }
 
 func (c *dispatcherManager) uploadMetric() {

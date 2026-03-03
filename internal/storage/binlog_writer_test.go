@@ -26,7 +26,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/util/hookutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 func TestBinlogReaderWriterCipher(t *testing.T) {
@@ -71,7 +71,7 @@ func TestBinlogReaderWriterCipher(t *testing.T) {
 	binlogReader, err := NewBinlogReader(buffer, WithReaderDecryptionContext(1, 1))
 	assert.NoError(t, err)
 
-	mlog.Info(context.TODO(), "binlogReader", mlog.Any("descriptorEvent", binlogReader.descriptorEvent))
+	log.Info(context.TODO(), "binlogReader", log.Any("descriptorEvent", binlogReader.descriptorEvent))
 
 	gotsafeKey, ok := binlogReader.descriptorEvent.GetEdek()
 	assert.True(t, ok)

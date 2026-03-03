@@ -31,7 +31,7 @@ import (
 
 	"github.com/milvus-io/milvus/pkg/v2/kv"
 	"github.com/milvus-io/milvus/pkg/v2/kv/predicates"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -95,7 +95,7 @@ func NewEmbededEtcdKV(cfg *embed.Config, rootPath string, options ...Option) (*E
 	err = retry(defaultRetryCount, defaultRetryInterval, func() error {
 		select {
 		case <-e.Server.ReadyNotify():
-			mlog.Info(context.TODO(), "Embedded etcd is ready!")
+			log.Info(context.TODO(), "Embedded etcd is ready!")
 			return nil
 		case <-time.After(60 * time.Second):
 			e.Server.Stop() // trigger a shutdown
@@ -159,7 +159,7 @@ func (kv *EmbedEtcdKV) WalkWithPrefix(ctx context.Context, prefix string, pagina
 // LoadWithPrefix returns all the keys and values with the given key prefix
 func (kv *EmbedEtcdKV) LoadWithPrefix(ctx context.Context, key string) ([]string, []string, error) {
 	key = path.Join(kv.rootPath, key)
-	mlog.Debug(ctx, "LoadWithPrefix ", mlog.String("prefix", key))
+	log.Debug(ctx, "LoadWithPrefix ", log.String("prefix", key))
 	ctx1, cancel := getContextWithTimeout(ctx, kv.requestTimeout)
 	defer cancel()
 	resp, err := kv.client.Get(ctx1, key, clientv3.WithPrefix(),
@@ -179,7 +179,7 @@ func (kv *EmbedEtcdKV) LoadWithPrefix(ctx context.Context, key string) ([]string
 
 func (kv *EmbedEtcdKV) Has(ctx context.Context, key string) (bool, error) {
 	key = path.Join(kv.rootPath, key)
-	mlog.Debug(ctx, "Has", mlog.String("key", key))
+	log.Debug(ctx, "Has", log.String("key", key))
 	ctx1, cancel := getContextWithTimeout(ctx, kv.requestTimeout)
 	defer cancel()
 	resp, err := kv.client.Get(ctx1, key, clientv3.WithCountOnly())
@@ -191,7 +191,7 @@ func (kv *EmbedEtcdKV) Has(ctx context.Context, key string) (bool, error) {
 
 func (kv *EmbedEtcdKV) HasPrefix(ctx context.Context, prefix string) (bool, error) {
 	prefix = path.Join(kv.rootPath, prefix)
-	mlog.Debug(ctx, "HasPrefix", mlog.String("prefix", prefix))
+	log.Debug(ctx, "HasPrefix", log.String("prefix", prefix))
 
 	ctx1, cancel := getContextWithTimeout(ctx, kv.requestTimeout)
 	defer cancel()
@@ -207,7 +207,7 @@ func (kv *EmbedEtcdKV) HasPrefix(ctx context.Context, prefix string) (bool, erro
 // LoadBytesWithPrefix returns all the keys and values with the given key prefix
 func (kv *EmbedEtcdKV) LoadBytesWithPrefix(ctx context.Context, key string) ([]string, [][]byte, error) {
 	key = path.Join(kv.rootPath, key)
-	mlog.Debug(ctx, "LoadBytesWithPrefix ", mlog.String("prefix", key))
+	log.Debug(ctx, "LoadBytesWithPrefix ", log.String("prefix", key))
 	ctx1, cancel := getContextWithTimeout(ctx, kv.requestTimeout)
 	defer cancel()
 	resp, err := kv.client.Get(ctx1, key, clientv3.WithPrefix(),
@@ -227,7 +227,7 @@ func (kv *EmbedEtcdKV) LoadBytesWithPrefix(ctx context.Context, key string) ([]s
 // LoadBytesWithPrefix2 returns all the keys and values with versions by the given key prefix
 func (kv *EmbedEtcdKV) LoadBytesWithPrefix2(ctx context.Context, key string) ([]string, [][]byte, []int64, error) {
 	key = path.Join(kv.rootPath, key)
-	mlog.Debug(ctx, "LoadBytesWithPrefix2 ", mlog.String("prefix", key))
+	log.Debug(ctx, "LoadBytesWithPrefix2 ", log.String("prefix", key))
 	ctx1, cancel := getContextWithTimeout(ctx, kv.requestTimeout)
 	defer cancel()
 	resp, err := kv.client.Get(ctx1, key, clientv3.WithPrefix(),
@@ -300,14 +300,14 @@ func (kv *EmbedEtcdKV) MultiLoad(ctx context.Context, keys []string) ([]string, 
 			result = append(result, "")
 		}
 		for _, ev := range rp.GetResponseRange().Kvs {
-			mlog.Debug(ctx, "MultiLoad", mlog.ByteString("key", ev.Key),
-				mlog.ByteString("value", ev.Value))
+			log.Debug(ctx, "MultiLoad", log.ByteString("key", ev.Key),
+				log.ByteString("value", ev.Value))
 			result = append(result, string(ev.Value))
 		}
 	}
 	if len(invalid) != 0 {
-		mlog.Debug(ctx, "MultiLoad: there are invalid keys",
-			mlog.Strings("keys", invalid))
+		log.Debug(ctx, "MultiLoad: there are invalid keys",
+			log.Strings("keys", invalid))
 		err = fmt.Errorf("there are invalid keys: %s", invalid)
 		return result, err
 	}
@@ -336,14 +336,14 @@ func (kv *EmbedEtcdKV) MultiLoadBytes(ctx context.Context, keys []string) ([][]b
 			result = append(result, []byte{})
 		}
 		for _, ev := range rp.GetResponseRange().Kvs {
-			mlog.Debug(ctx, "MultiLoadBytes", mlog.ByteString("key", ev.Key),
-				mlog.ByteString("value", ev.Value))
+			log.Debug(ctx, "MultiLoadBytes", log.ByteString("key", ev.Key),
+				log.ByteString("value", ev.Value))
 			result = append(result, ev.Value)
 		}
 	}
 	if len(invalid) != 0 {
-		mlog.Debug(ctx, "MultiLoadBytes: there are invalid keys",
-			mlog.Strings("keys", invalid))
+		log.Debug(ctx, "MultiLoadBytes: there are invalid keys",
+			log.Strings("keys", invalid))
 		err = fmt.Errorf("there are invalid keys: %s", invalid)
 		return result, err
 	}
@@ -353,7 +353,7 @@ func (kv *EmbedEtcdKV) MultiLoadBytes(ctx context.Context, keys []string) ([][]b
 // LoadBytesWithRevision returns keys, values and revision with given key prefix.
 func (kv *EmbedEtcdKV) LoadBytesWithRevision(ctx context.Context, key string) ([]string, [][]byte, int64, error) {
 	key = path.Join(kv.rootPath, key)
-	mlog.Debug(ctx, "LoadBytesWithRevision ", mlog.String("prefix", key))
+	log.Debug(ctx, "LoadBytesWithRevision ", log.String("prefix", key))
 	ctx1, cancel := getContextWithTimeout(ctx, kv.requestTimeout)
 	defer cancel()
 	resp, err := kv.client.Get(ctx1, key, clientv3.WithPrefix(),

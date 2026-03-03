@@ -7,7 +7,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
@@ -50,7 +50,7 @@ func NewWriteMetrics(pchannel types.PChannelInfo, walName message.WALName) *Writ
 }
 
 type WriteMetrics struct {
-	mlog.Binder
+	log.Binder
 
 	walName                      string
 	pchannel                     types.PChannelInfo

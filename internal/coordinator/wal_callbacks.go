@@ -22,7 +22,7 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -53,8 +53,8 @@ func (c *WALCallback) alterWALV2AckCallback(
 	result message.BroadcastResult[*message.AlterWALMessageHeader, *message.AlterWALMessageBody],
 ) error {
 
-	mlog.Info(ctx, "AlterWAL broadcast message acknowledged by all vchannels",
-		mlog.Int("vchannelCount", len(result.Results)))
+	log.Info(ctx, "AlterWAL broadcast message acknowledged by all vchannels",
+		log.Int("vchannelCount", len(result.Results)))
 
 	// Convert WALName enum to string representation
 	targetWALName := result.Message.Header().TargetWalName
@@ -67,23 +67,23 @@ func (c *WALCallback) alterWALV2AckCallback(
 	paramMgr := paramtable.GetBaseTable().Manager()
 	etcdSource, ok := paramMgr.GetEtcdSource()
 	if !ok {
-		mlog.Warn(ctx, "failed to update mq.type config, etcd source not enabled")
+		log.Warn(ctx, "failed to update mq.type config, etcd source not enabled")
 		return errors.New("etcd source is not enabled, cannot update mq.type configuration")
 	}
 
 	// Update mq.type configuration in etcd
 	configKey := paramtable.Get().MQCfg.Type.Key
 	if err := paramMgr.UpdateConfigInEtcd(etcdSource, configKey, mqTypeValue); err != nil {
-		mlog.Error(ctx, "failed to update mq.type config in etcd",
-			mlog.String("configKey", configKey),
-			mlog.String("mqTypeValue", mqTypeValue),
-			mlog.Err(err))
+		log.Error(ctx, "failed to update mq.type config in etcd",
+			log.String("configKey", configKey),
+			log.String("mqTypeValue", mqTypeValue),
+			log.Err(err))
 		return errors.Wrap(err, "failed to update mq.type configuration in etcd")
 	}
 
-	mlog.Info(ctx, "successfully updated mq.type configuration in etcd",
-		mlog.String("configKey", configKey),
-		mlog.String("mqTypeValue", mqTypeValue))
+	log.Info(ctx, "successfully updated mq.type configuration in etcd",
+		log.String("configKey", configKey),
+		log.String("mqTypeValue", mqTypeValue))
 
 	return nil
 }

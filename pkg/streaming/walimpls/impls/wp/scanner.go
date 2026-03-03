@@ -6,7 +6,7 @@ import (
 	"github.com/cockroachdb/errors"
 	woodpecker "github.com/zilliztech/woodpecker/woodpecker/log"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/helper"
@@ -37,12 +37,12 @@ func (s *scannerImpl) Chan() <-chan message.ImmutableMessage {
 func (s *scannerImpl) Close() error {
 	err := s.ScannerHelper.Close()
 	if err != nil {
-		mlog.Warn(s.Context(), "failed to close wp scanner", mlog.Err(err))
+		log.Warn(s.Context(), "failed to close wp scanner", log.Err(err))
 	}
 	if s.reader != nil {
 		err = s.reader.Close(context.Background())
 		if err != nil {
-			mlog.Warn(s.Context(), "failed to close wp reader", mlog.Err(err))
+			log.Warn(s.Context(), "failed to close wp reader", log.Err(err))
 		}
 	}
 	return err
@@ -62,7 +62,7 @@ func (s *scannerImpl) executeConsumer() {
 				s.Finish(errors.Wrap(err, "wp readNext Timeout"))
 				return
 			}
-			mlog.Error(s.Context(), "wp readNext msg exception", mlog.Err(err))
+			log.Error(s.Context(), "wp readNext msg exception", log.Err(err))
 			s.Finish(err)
 			return
 		}

@@ -25,7 +25,7 @@ import (
 	"golang.org/x/exp/constraints"
 	"google.golang.org/grpc/grpclog"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 const (
@@ -123,29 +123,29 @@ func (w *zapWrapper) V(l int) bool {
 	if l == 3 {
 		zapLevel = 5
 	}
-	return w.logger.Core().Enabled(mlog.Level(zapLevel))
+	return w.logger.Core().Enabled(log.Level(zapLevel))
 }
 
 // LogPanic logs the panic reason and stack, then exit the process.
 // Commonly used with a `defer`.
 func LogPanic() {
 	if e := recover(); e != nil {
-		mlog.Fatal(context.TODO(), "panic", mlog.Reflect("recover", e))
+		log.Fatal(context.TODO(), "panic", log.Reflect("recover", e))
 	}
 }
 
 var once sync.Once
 
 // SetupLogger is used to initialize the log with config.
-func SetupLogger(cfg *mlog.Config) {
+func SetupLogger(cfg *log.Config) {
 	once.Do(func() {
 		// Initialize logger.
-		logger, _, cleanup, err := mlog.NewLogger(cfg, zap.AddStacktrace(zap.ErrorLevel))
+		logger, _, cleanup, err := log.NewLogger(cfg, zap.AddStacktrace(zap.ErrorLevel))
 		if err == nil {
-			mlog.Init(logger)
+			log.Init(logger)
 			_ = cleanup
 		} else {
-			mlog.Fatal(context.TODO(), "initialize logger error", mlog.Err(err))
+			log.Fatal(context.TODO(), "initialize logger error", log.Err(err))
 		}
 
 		// Initialize grpc log wrapper
@@ -159,16 +159,16 @@ func SetupLogger(cfg *mlog.Config) {
 			logLevel = 0
 		}
 
-		wrapper := &zapWrapper{mlog.GetUnderlying(), logLevel}
+		wrapper := &zapWrapper{log.GetUnderlying(), logLevel}
 		grpclog.SetLoggerV2(wrapper)
 
-		mlog.Info(context.TODO(), "Log directory", mlog.String("configDir", cfg.File.RootPath))
-		mlog.Info(context.TODO(), "Set log file to ", mlog.String("path", cfg.File.Filename))
+		log.Info(context.TODO(), "Log directory", log.String("configDir", cfg.File.RootPath))
+		log.Info(context.TODO(), "Set log file to ", log.String("path", cfg.File.Filename))
 	})
 }
 
 func WithModule(ctx context.Context, module string) context.Context {
-	return mlog.WithFields(ctx, mlog.FieldModule(module))
+	return log.WithFields(ctx, log.FieldModule(module))
 }
 
 // keeps only 2 decimal places

@@ -1,11 +1,11 @@
-package mlog
+package log
 
 import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"go.uber.org/zap/zaptest"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog/logcore"
+	"github.com/milvus-io/milvus/pkg/v2/log/logcore"
 )
 
 // Re-export config types from logcore for convenience.
@@ -26,14 +26,14 @@ type (
 	CEntryTextIOCore = logcore.CEntryTextIOCore
 )
 
-// InitLogger initializes the global mlog logger from config.
+// InitLogger initializes the global log logger from config.
 // It creates the underlying zap logger with file/stdout outputs and sets it as
 // the global logger. The returned cleanup function should be called on shutdown.
 //
 // Usage:
 //
-//	cfg := &mlog.Config{Level: "info", Stdout: true}
-//	cleanup, err := mlog.InitLogger(cfg)
+//	cfg := &log.Config{Level: "info", Stdout: true}
+//	cleanup, err := log.InitLogger(cfg)
 //	if err != nil {
 //	    panic(err)
 //	}
@@ -43,16 +43,16 @@ func InitLogger(cfg *Config, opts ...zap.Option) (func(), error) {
 	if err != nil {
 		return cleanup, err
 	}
-	// Set the global mlog logger (AddCallerSkip(1) is applied inside Init)
+	// Set the global log logger (AddCallerSkip(1) is applied inside Init)
 	globalLogger.Store(logger)
-	// Sync the atomic level so mlog.SetLevel/GetLevel works with this logger
+	// Sync the atomic level so log.SetLevel/GetLevel works with this logger
 	globalLevel = props.Level
-	// Register cleanup so mlog.Cleanup() works
+	// Register cleanup so log.Cleanup() works
 	registerCleanup(cleanup)
 	return cleanup, nil
 }
 
-// InitLoggerWithWriteSyncer initializes the global mlog logger with a custom write syncer.
+// InitLoggerWithWriteSyncer initializes the global log logger with a custom write syncer.
 // The returned cleanup function should be called on shutdown.
 func InitLoggerWithWriteSyncer(cfg *Config, output zapcore.WriteSyncer, opts ...zap.Option) (func(), error) {
 	logger, props, cleanup, err := logcore.InitLoggerWithWriteSyncer(cfg, output, opts...)
@@ -65,7 +65,7 @@ func InitLoggerWithWriteSyncer(cfg *Config, output zapcore.WriteSyncer, opts ...
 	return cleanup, nil
 }
 
-// InitTestLogger initializes the global mlog logger for unit tests.
+// InitTestLogger initializes the global log logger for unit tests.
 // The returned cleanup function should be called on test cleanup.
 func InitTestLogger(t zaptest.TestingT, cfg *Config, opts ...zap.Option) (func(), error) {
 	logger, props, cleanup, err := logcore.InitTestLogger(t, cfg, opts...)

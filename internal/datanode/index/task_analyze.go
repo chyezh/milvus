@@ -24,7 +24,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/util/analyzecgowrapper"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/clusteringpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/workerpb"
@@ -80,9 +80,9 @@ func (at *analyzeTask) IsVectorIndex() bool {
 
 func (at *analyzeTask) PreExecute(ctx context.Context) error {
 	at.queueDur = at.tr.RecordSpan()
-	mlog.Info(context.TODO(), "Begin to prepare analyze task")
+	log.Info(context.TODO(), "Begin to prepare analyze task")
 
-	mlog.Info(context.TODO(), "Successfully prepare analyze task, nothing to do...")
+	log.Info(context.TODO(), "Successfully prepare analyze task, nothing to do...")
 	return nil
 }
 
@@ -90,7 +90,7 @@ func (at *analyzeTask) Execute(ctx context.Context) error {
 	var err error
 
 
-	mlog.Info(context.TODO(), "Begin to build analyze task")
+	log.Info(context.TODO(), "Begin to build analyze task")
 
 	storageConfig := &clusteringpb.StorageConfig{
 		Address:           at.req.GetStorageConfig().GetAddress(),
@@ -116,7 +116,7 @@ func (at *analyzeTask) Execute(ctx context.Context) error {
 	for segID, stats := range at.req.GetSegmentStats() {
 		numRows := stats.GetNumRows()
 		numRowsMap[segID] = numRows
-		mlog.Info(context.TODO(), "append segment rows", mlog.Int64("segment id", segID), mlog.Int64("rows", numRows))
+		log.Info(context.TODO(), "append segment rows", log.Int64("segment id", segID), log.Int64("rows", numRows))
 		insertFiles := make([]string, 0, len(stats.GetLogIDs()))
 		for _, id := range stats.GetLogIDs() {
 			path := metautil.BuildInsertLogPath(at.req.GetStorageConfig().RootPath,
@@ -155,35 +155,35 @@ func (at *analyzeTask) Execute(ctx context.Context) error {
 
 	at.analyze, err = analyzecgowrapper.Analyze(ctx, analyzeInfo)
 	if err != nil {
-		mlog.Error(context.TODO(), "failed to analyze data", mlog.Err(err))
+		log.Error(context.TODO(), "failed to analyze data", log.Err(err))
 		return err
 	}
 
 	analyzeLatency := at.tr.RecordSpan()
-	mlog.Info(context.TODO(), "analyze done", mlog.Int64("analyze cost", analyzeLatency.Milliseconds()))
+	log.Info(context.TODO(), "analyze done", log.Int64("analyze cost", analyzeLatency.Milliseconds()))
 	return nil
 }
 
 func (at *analyzeTask) PostExecute(ctx context.Context) error {
 	gc := func() {
 		if err := at.analyze.Delete(); err != nil {
-			mlog.Error(context.TODO(), "indexBuildTask Execute CIndexDelete failed", mlog.Err(err))
+			log.Error(context.TODO(), "indexBuildTask Execute CIndexDelete failed", log.Err(err))
 		}
 	}
 	defer gc()
 
 	centroidsFile, _, _, _, err := at.analyze.GetResult(len(at.req.GetSegmentStats()))
 	if err != nil {
-		mlog.Error(context.TODO(), "failed to upload index", mlog.Err(err))
+		log.Error(context.TODO(), "failed to upload index", log.Err(err))
 		return err
 	}
-	mlog.Info(context.TODO(), "analyze result", mlog.String("centroidsFile", centroidsFile))
+	log.Info(context.TODO(), "analyze result", log.String("centroidsFile", centroidsFile))
 
 	at.manager.StoreAnalyzeFilesAndStatistic(at.req.GetClusterID(),
 		at.req.GetTaskID(),
 		centroidsFile)
 	at.tr.Elapse("index building all done")
-	mlog.Info(context.TODO(), "Successfully save analyze files")
+	log.Info(context.TODO(), "Successfully save analyze files")
 	return nil
 }
 
@@ -191,8 +191,8 @@ func (at *analyzeTask) OnEnqueue(ctx context.Context) error {
 	at.queueDur = 0
 	at.tr.RecordSpan()
 
-	mlog.Info(ctx, "analyzeTask enqueued", mlog.String("clusterID", at.req.GetClusterID()),
-		mlog.Int64("TaskID", at.req.GetTaskID()))
+	log.Info(ctx, "analyzeTask enqueued", log.String("clusterID", at.req.GetClusterID()),
+		log.Int64("TaskID", at.req.GetTaskID()))
 	return nil
 }
 

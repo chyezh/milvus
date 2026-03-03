@@ -28,7 +28,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/util/quota"
 	rlinternal "github.com/milvus-io/milvus/internal/util/ratelimitutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/proxypb"
@@ -238,11 +238,11 @@ func initLimiter(source string, rln *rlinternal.RateLimiterNode, rateLimiterConf
 			updated = true
 		}
 		if updated {
-			mlog.Debug(context.TODO(), "RateLimiter register for rateType",
-				mlog.String("source", source),
-				mlog.String("rateType", internalpb.RateType_name[(int32(rt))]),
-				mlog.String("rateLimit", newLimit.String()),
-				mlog.String("burst", fmt.Sprintf("%v", burst)))
+			log.Debug(context.TODO(), "RateLimiter register for rateType",
+				log.String("source", source),
+				log.String("rateType", internalpb.RateType_name[(int32(rt))]),
+				log.String("rateLimit", newLimit.String()),
+				log.String("burst", fmt.Sprintf("%v", burst)))
 		}
 	}
 }
@@ -311,7 +311,7 @@ func (m *SimpleLimiter) updateRateLimiter(reqRootLimiterNode *proxypb.LimiterNod
 	clusterLimiter := m.rateLimiter.GetRootLimiters()
 	err := m.updateLimiterNode(reqClusterLimiter, clusterLimiter, "cluster")
 	if err != nil {
-		mlog.Warn(context.TODO(), "update cluster rate limiters failed", mlog.Err(err))
+		log.Warn(context.TODO(), "update cluster rate limiters failed", log.Err(err))
 		return err
 	}
 
@@ -330,7 +330,7 @@ func (m *SimpleLimiter) updateRateLimiter(reqRootLimiterNode *proxypb.LimiterNod
 		dbRateLimiters := m.rateLimiter.GetOrCreateDatabaseLimiters(dbID, newDatabaseLimiter)
 		err := m.updateLimiterNode(reqDBRateLimiters.GetLimiter(), dbRateLimiters, getDBSourceID(dbID))
 		if err != nil {
-			mlog.Warn(context.TODO(), "update database rate limiters failed", mlog.Err(err))
+			log.Warn(context.TODO(), "update database rate limiters failed", log.Err(err))
 			return err
 		}
 
@@ -341,7 +341,7 @@ func (m *SimpleLimiter) updateRateLimiter(reqRootLimiterNode *proxypb.LimiterNod
 			err := m.updateLimiterNode(reqCollectionRateLimiter.GetLimiter(), collectionRateLimiter,
 				getCollectionSourceID(collectionID))
 			if err != nil {
-				mlog.Warn(context.TODO(), "update collection rate limiters failed", mlog.Err(err))
+				log.Warn(context.TODO(), "update collection rate limiters failed", log.Err(err))
 				return err
 			}
 
@@ -353,7 +353,7 @@ func (m *SimpleLimiter) updateRateLimiter(reqRootLimiterNode *proxypb.LimiterNod
 				err := m.updateLimiterNode(reqPartitionRateLimiters.GetLimiter(), partitionRateLimiter,
 					getPartitionSourceID(partitionID))
 				if err != nil {
-					mlog.Warn(context.TODO(), "update partition rate limiters failed", mlog.Err(err))
+					log.Warn(context.TODO(), "update partition rate limiters failed", log.Err(err))
 					return err
 				}
 			}

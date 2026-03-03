@@ -8,7 +8,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 )
@@ -22,12 +22,12 @@ func (r *recoveryStorageImpl) recoverFromStream(
 	r.metrics.ObserveStateChange(recoveryStorageStateStreamRecovering)
 	r.metrics.ObServePersistedMetrics(r.checkpoint.TimeTick)
 	r.SetLogger(resource.Resource().Logger().With(
-		mlog.FieldComponent(componentRecoveryStorage),
-		mlog.String("channel", recoveryStreamBuilder.Channel().String()),
-		mlog.String("startMessageID", r.checkpoint.MessageID.String()),
-		mlog.Uint64("fromTimeTick", r.checkpoint.TimeTick),
-		mlog.Uint64("toTimeTick", lastTimeTickMessage.TimeTick()),
-		mlog.String("state", recoveryStorageStateStreamRecovering),
+		log.FieldComponent(componentRecoveryStorage),
+		log.String("channel", recoveryStreamBuilder.Channel().String()),
+		log.String("startMessageID", r.checkpoint.MessageID.String()),
+		log.Uint64("fromTimeTick", r.checkpoint.TimeTick),
+		log.Uint64("toTimeTick", lastTimeTickMessage.TimeTick()),
+		log.String("state", recoveryStorageStateStreamRecovering),
 	))
 
 	r.Logger().Info(nil, "recover from wal stream...")
@@ -38,7 +38,7 @@ func (r *recoveryStorageImpl) recoverFromStream(
 	defer func() {
 		rs.Close()
 		if err != nil {
-			r.Logger().Warn(nil, "recovery from wal stream failed", mlog.Err(err))
+			r.Logger().Warn(nil, "recovery from wal stream failed", log.Err(err))
 			return
 		}
 	}()
@@ -61,16 +61,16 @@ L:
 	snapshot = r.getSnapshot()
 	snapshot.TxnBuffer = rs.TxnBuffer()
 	logFields := []zap.Field{
-		mlog.String("channel", recoveryStreamBuilder.Channel().String()),
-		mlog.Int("vchannels", len(snapshot.VChannels)),
-		mlog.Int("segments", len(snapshot.SegmentAssignments)),
-		mlog.String("checkpoint", snapshot.Checkpoint.MessageID.String()),
-		mlog.Uint64("checkpointTimeTick", snapshot.Checkpoint.TimeTick),
+		log.String("channel", recoveryStreamBuilder.Channel().String()),
+		log.Int("vchannels", len(snapshot.VChannels)),
+		log.Int("segments", len(snapshot.SegmentAssignments)),
+		log.String("checkpoint", snapshot.Checkpoint.MessageID.String()),
+		log.Uint64("checkpointTimeTick", snapshot.Checkpoint.TimeTick),
 	}
 	if snapshot.AlterWALInfo != nil {
 		logFields = append(logFields,
-			mlog.Bool("foundAlterWALMsg", snapshot.AlterWALInfo.FoundAlterWALMsg),
-			mlog.Stringer("targetWALName", snapshot.AlterWALInfo.TargetWALName),
+			log.Bool("foundAlterWALMsg", snapshot.AlterWALInfo.FoundAlterWALMsg),
+			log.Stringer("targetWALName", snapshot.AlterWALInfo.TargetWALName),
 		)
 	}
 	r.Logger().Info(nil, "recovery from wal stream done", logFields...)
@@ -103,18 +103,18 @@ func (r *recoveryStorageImpl) getSnapshot() *RecoverySnapshot {
 		// for dropped collections/partitions.
 		if _, ok := vchannels[segment.meta.Vchannel]; !ok {
 			r.Logger().Warn(nil, "getSnapshot: skipping orphaned growing segment with non-active vchannel",
-				mlog.Int64("segmentID", segmentID),
-				mlog.String("vchannel", segment.meta.Vchannel),
-				mlog.Int64("collectionID", segment.meta.CollectionId),
+				log.Int64("segmentID", segmentID),
+				log.String("vchannel", segment.meta.Vchannel),
+				log.Int64("collectionID", segment.meta.CollectionId),
 			)
 			continue
 		}
 		if _, ok := activePartitions[segment.meta.PartitionId]; !ok {
 			r.Logger().Warn(nil, "getSnapshot: skipping orphaned growing segment with dropped partition",
-				mlog.Int64("segmentID", segmentID),
-				mlog.String("vchannel", segment.meta.Vchannel),
-				mlog.Int64("collectionID", segment.meta.CollectionId),
-				mlog.Int64("partitionID", segment.meta.PartitionId),
+				log.Int64("segmentID", segmentID),
+				log.String("vchannel", segment.meta.Vchannel),
+				log.Int64("collectionID", segment.meta.CollectionId),
+				log.Int64("partitionID", segment.meta.PartitionId),
 			)
 			continue
 		}

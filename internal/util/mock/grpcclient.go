@@ -25,7 +25,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/tracer"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/generic"
@@ -128,7 +128,7 @@ func (c *GRPCClientBase[T]) Call(ctx context.Context, caller func(client T) (any
 
 	ret, err := c.callOnce(ctx, caller)
 	if err != nil {
-		mlog.Error(context.TODO(), "GRPCClientBase[T] Call grpc first call get error ", mlog.Err(err))
+		log.Error(context.TODO(), "GRPCClientBase[T] Call grpc first call get error ", log.Err(err))
 		return nil, err
 	}
 	return ret, err
@@ -142,7 +142,7 @@ func (c *GRPCClientBase[T]) ReCall(ctx context.Context, caller func(client T) (a
 	}
 
 	traceErr := fmt.Errorf("err: %s\n, %s", err.Error(), tracer.StackTrace())
-	mlog.Warn(context.TODO(), "GRPCClientBase[T] client grpc first call get error ", mlog.Err(traceErr))
+	log.Warn(context.TODO(), "GRPCClientBase[T] client grpc first call get error ", log.Err(traceErr))
 
 	if !funcutil.CheckCtxValid(ctx) {
 		return nil, ctx.Err()
@@ -151,7 +151,7 @@ func (c *GRPCClientBase[T]) ReCall(ctx context.Context, caller func(client T) (a
 	ret, err = c.callOnce(ctx, caller)
 	if err != nil {
 		traceErr = fmt.Errorf("err: %s\n, %s", err.Error(), tracer.StackTrace())
-		mlog.Error(context.TODO(), "GRPCClientBase[T] client grpc second call get error ", mlog.Err(traceErr))
+		log.Error(context.TODO(), "GRPCClientBase[T] client grpc second call get error ", log.Err(traceErr))
 		return nil, traceErr
 	}
 	return ret, err

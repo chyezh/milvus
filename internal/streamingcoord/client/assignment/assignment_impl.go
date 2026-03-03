@@ -10,7 +10,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/lazygrpc"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/replicateutil"
@@ -30,7 +30,7 @@ func NewAssignmentService(service lazygrpc.Service[streamingpb.StreamingCoordAss
 		resumingExitCh: make(chan struct{}),
 		cond:           syncutil.NewContextCond(&sync.Mutex{}),
 		discoverer:     nil,
-		logger:         mlog.With(),
+		logger:         log.With(),
 	}
 	go s.resumeLoop()
 	return s
@@ -45,7 +45,7 @@ type AssignmentServiceImpl struct {
 	resumingExitCh chan struct{}
 	cond           *syncutil.ContextCond
 	discoverer     *assignmentDiscoverClient
-	logger         *mlog.Logger
+	logger         *log.Logger
 }
 
 // GetLatestStreamingVersion returns the version of the streaming service.
@@ -217,7 +217,7 @@ func (c *AssignmentServiceImpl) getAssignmentDiscoverOrWait(ctx context.Context)
 func (c *AssignmentServiceImpl) resumeLoop() (err error) {
 	defer func() {
 		if err != nil {
-			c.logger.Warn(nil, "stop resuming", mlog.Err(err))
+			c.logger.Warn(nil, "stop resuming", log.Err(err))
 		} else {
 			c.logger.Info(nil, "stop resuming")
 		}
@@ -268,7 +268,7 @@ func (c *AssignmentServiceImpl) createNewAssignmentDiscoverClient() (*assignment
 			return nil, err
 		}
 		if err != nil {
-			c.logger.Warn(nil, "create a assignment discover stream failed", mlog.Err(err))
+			c.logger.Warn(nil, "create a assignment discover stream failed", log.Err(err))
 			// TODO: backoff
 			time.Sleep(50 * time.Millisecond)
 			continue

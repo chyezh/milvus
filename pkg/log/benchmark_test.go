@@ -1,6 +1,6 @@
 //go:build test
 
-package mlog
+package log
 
 import (
 	"context"
@@ -24,7 +24,7 @@ func newBenchLogger() *zap.Logger {
 	return zap.New(core)
 }
 
-// setupBench initializes mlog with a discard logger for benchmarks.
+// setupBench initializes log with a discard logger for benchmarks.
 func setupBench() {
 	SetLevel(DebugLevel)
 	Init(newBenchLogger())

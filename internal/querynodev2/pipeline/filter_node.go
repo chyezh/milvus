@@ -25,7 +25,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/querynodev2/delegator"
 	base "github.com/milvus-io/milvus/internal/util/pipeline"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message/adaptor"
@@ -48,16 +48,16 @@ type filterNode struct {
 
 func (fNode *filterNode) Operate(in Msg) Msg {
 	if in == nil {
-		mlog.Debug(context.TODO(), "type assertion failed for Msg in filterNode because it's nil",
-			mlog.String("name", fNode.Name()))
+		log.Debug(context.TODO(), "type assertion failed for Msg in filterNode because it's nil",
+			log.String("name", fNode.Name()))
 		return nil
 	}
 
 	streamMsgPack, ok := in.(*msgstream.MsgPack)
 	if !ok {
-		mlog.Warn(context.TODO(), "type assertion failed for MsgPack",
-			mlog.String("msgType", reflect.TypeOf(in).Name()),
-			mlog.String("name", fNode.Name()))
+		log.Warn(context.TODO(), "type assertion failed for MsgPack",
+			log.String("msgType", reflect.TypeOf(in).Name()),
+			log.String("name", fNode.Name()))
 		return nil
 	}
 
@@ -72,7 +72,7 @@ func (fNode *filterNode) Operate(in Msg) Msg {
 	// Get collection from collection manager
 	collection := fNode.manager.Collection.Get(fNode.collectionID)
 	if collection == nil {
-		mlog.Fatal(context.TODO(), "collection not found in meta", mlog.Int64("collectionID", fNode.collectionID))
+		log.Fatal(context.TODO(), "collection not found in meta", log.Int64("collectionID", fNode.collectionID))
 	}
 
 	out := &insertNodeMsg{
@@ -88,11 +88,11 @@ func (fNode *filterNode) Operate(in Msg) Msg {
 	for _, msg := range streamMsgPack.Msgs {
 		err := fNode.filtrate(collection, msg)
 		if err != nil {
-			mlog.Debug(context.TODO(), "filter invalid message",
-				mlog.String("message type", msg.Type().String()),
-				mlog.String("channel", fNode.channel),
-				mlog.Int64("collectionID", fNode.collectionID),
-				mlog.Err(err),
+			log.Debug(context.TODO(), "filter invalid message",
+				log.String("message type", msg.Type().String()),
+				log.String("channel", fNode.channel),
+				log.Int64("collectionID", fNode.collectionID),
+				log.Err(err),
 			)
 		} else {
 			out.append(msg)

@@ -9,7 +9,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/policy"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/utils"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -31,7 +31,7 @@ var (
 // It manages the insert stats of all segments, used to check if a segment has enough space to insert or should be sealed.
 // If there will be a lock contention, we can optimize it by apply lock per segment.
 type StatsManager struct {
-	mlog.Binder
+	log.Binder
 	worker        *sealWorker
 	mu            sync.Mutex
 	cfg           statsConfig
@@ -405,7 +405,7 @@ func (m *StatsManager) updateConfig() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.cfg != cfg {
-		m.Logger().Info(nil, "update stats manager config", mlog.Any("newConfig", cfg), mlog.Any("oldConfig", m.cfg))
+		m.Logger().Info(nil, "update stats manager config", log.Any("newConfig", cfg), log.Any("oldConfig", m.cfg))
 		m.cfg = cfg
 	}
 }

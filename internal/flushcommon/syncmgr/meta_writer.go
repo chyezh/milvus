@@ -10,7 +10,7 @@ import (
 	"github.com/milvus-io/milvus/internal/flushcommon/broker"
 	"github.com/milvus-io/milvus/internal/flushcommon/metacache"
 	storage "github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -81,18 +81,18 @@ func (b *brokerMetaWriter) UpdateSync(ctx context.Context, pack *SyncTask) error
 	}
 
 	getBinlogNum := func(fBinlog *datapb.FieldBinlog) int { return len(fBinlog.GetBinlogs()) }
-	mlog.Info(context.TODO(), "SaveBinlogPath",
-		mlog.Int64("SegmentID", pack.segmentID),
-		mlog.Int64("CollectionID", pack.collectionID),
-		mlog.Int64("ParitionID", pack.partitionID),
-		mlog.Any("startPos", startPos),
-		mlog.Any("checkPoints", checkPoints),
-		mlog.Int("binlogNum", lo.SumBy(insertFieldBinlogs, getBinlogNum)),
-		mlog.Int("statslogNum", lo.SumBy(statsFieldBinlogs, getBinlogNum)),
-		mlog.Int("deltalogNum", lo.SumBy(deltaFieldBinlogs, getBinlogNum)),
-		mlog.Int("bm25logNum", lo.SumBy(deltaBm25StatsBinlogs, getBinlogNum)),
-		mlog.String("manifestPath", pack.manifestPath),
-		mlog.String("vChannelName", pack.channelName),
+	log.Info(context.TODO(), "SaveBinlogPath",
+		log.Int64("SegmentID", pack.segmentID),
+		log.Int64("CollectionID", pack.collectionID),
+		log.Int64("ParitionID", pack.partitionID),
+		log.Any("startPos", startPos),
+		log.Any("checkPoints", checkPoints),
+		log.Int("binlogNum", lo.SumBy(insertFieldBinlogs, getBinlogNum)),
+		log.Int("statslogNum", lo.SumBy(statsFieldBinlogs, getBinlogNum)),
+		log.Int("deltalogNum", lo.SumBy(deltaFieldBinlogs, getBinlogNum)),
+		log.Int("bm25logNum", lo.SumBy(deltaBm25StatsBinlogs, getBinlogNum)),
+		log.String("manifestPath", pack.manifestPath),
+		log.String("vChannelName", pack.channelName),
 	)
 
 	req := &datapb.SaveBinlogPathsRequest{
@@ -125,16 +125,16 @@ func (b *brokerMetaWriter) UpdateSync(ctx context.Context, pack *SyncTask) error
 		// Segment not found during stale segment flush. Segment might get compacted already.
 		// Stop retry and still proceed to the end, ignoring this error.
 		if !pack.pack.isFlush && errors.Is(err, merr.ErrSegmentNotFound) {
-			mlog.Warn(context.TODO(), "stale segment not found, could be compacted",
-				mlog.Int64("segmentID", pack.segmentID))
-			mlog.Warn(context.TODO(), "failed to SaveBinlogPaths",
-				mlog.Int64("segmentID", pack.segmentID),
-				mlog.Err(err))
+			log.Warn(context.TODO(), "stale segment not found, could be compacted",
+				log.Int64("segmentID", pack.segmentID))
+			log.Warn(context.TODO(), "failed to SaveBinlogPaths",
+				log.Int64("segmentID", pack.segmentID),
+				log.Err(err))
 			return false, nil
 		}
 		// meta error, datanode handles a virtual channel does not belong here
 		if errors.IsAny(err, merr.ErrSegmentNotFound, merr.ErrChannelNotFound) {
-			mlog.Warn(context.TODO(), "meta error found, skip sync and start to drop virtual channel", mlog.String("channel", pack.channelName))
+			log.Warn(context.TODO(), "meta error found, skip sync and start to drop virtual channel", log.String("channel", pack.channelName))
 			return false, nil
 		}
 
@@ -145,9 +145,9 @@ func (b *brokerMetaWriter) UpdateSync(ctx context.Context, pack *SyncTask) error
 		return false, nil
 	}, b.opts...)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to SaveBinlogPaths",
-			mlog.Int64("segmentID", pack.segmentID),
-			mlog.Err(err))
+		log.Warn(context.TODO(), "failed to SaveBinlogPaths",
+			log.Int64("segmentID", pack.segmentID),
+			log.Err(err))
 		return err
 	}
 
@@ -176,9 +176,9 @@ func (b *brokerMetaWriter) DropChannel(ctx context.Context, channelName string) 
 		return false, nil
 	}, b.opts...)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to DropChannel",
-			mlog.String("channel", channelName),
-			mlog.Err(err))
+		log.Warn(context.TODO(), "failed to DropChannel",
+			log.String("channel", channelName),
+			log.Err(err))
 	}
 	return err
 }

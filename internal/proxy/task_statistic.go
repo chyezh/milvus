@@ -13,7 +13,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/proxy/shardclient"
 	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
@@ -135,21 +135,21 @@ func (g *getStatisticsTask) PreExecute(ctx context.Context) error {
 	if err != nil {
 		g.fromDataCoord = true
 		g.unloadedPartitionIDs = partIDs
-		mlog.Info(context.TODO(), "checkFullLoaded failed, try get statistics from DataCoord",
-			mlog.Err(err))
+		log.Info(context.TODO(), "checkFullLoaded failed, try get statistics from DataCoord",
+			log.Err(err))
 		return nil
 	}
 	if len(unloaded) > 0 {
 		g.fromDataCoord = true
 		g.unloadedPartitionIDs = unloaded
-		mlog.Info(context.TODO(), "some partitions has not been loaded, try get statistics from DataCoord",
-			mlog.Int64s("unloaded partitions", unloaded))
+		log.Info(context.TODO(), "some partitions has not been loaded, try get statistics from DataCoord",
+			log.Int64s("unloaded partitions", unloaded))
 	}
 	if len(loaded) > 0 {
 		g.fromQueryNode = true
 		g.loadedPartitionIDs = loaded
-		mlog.Info(context.TODO(), "some partitions has been loaded, try get statistics from QueryNode",
-			mlog.Int64s("loaded partitions", loaded))
+		log.Info(context.TODO(), "some partitions has been loaded, try get statistics from QueryNode",
+			log.Int64s("loaded partitions", loaded))
 	}
 	return nil
 }
@@ -167,14 +167,14 @@ func (g *getStatisticsTask) Execute(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		mlog.Debug(ctx, "get collection statistics from QueryNode execute done")
+		log.Debug(ctx, "get collection statistics from QueryNode execute done")
 	}
 	if g.fromDataCoord {
 		err := g.getStatisticsFromDataCoord(ctx)
 		if err != nil {
 			return err
 		}
-		mlog.Debug(ctx, "get collection statistics from DataCoord execute done")
+		log.Debug(ctx, "get collection statistics from DataCoord execute done")
 	}
 	return nil
 }
@@ -190,14 +190,14 @@ func (g *getStatisticsTask) PostExecute(ctx context.Context) error {
 	toReduceResults := make([]*internalpb.GetStatisticsResponse, 0)
 	select {
 	case <-g.TraceCtx().Done():
-		mlog.Debug(ctx, "wait to finish timeout!")
+		log.Debug(ctx, "wait to finish timeout!")
 		return nil
 	default:
-		mlog.Debug(ctx, "all get statistics are finished or canceled")
+		log.Debug(ctx, "all get statistics are finished or canceled")
 		g.resultBuf.Range(func(res *internalpb.GetStatisticsResponse) bool {
 			toReduceResults = append(toReduceResults, res)
-			mlog.Debug(ctx, "proxy receives one get statistic response",
-				mlog.Int64("sourceID", res.GetBase().GetSourceID()))
+			log.Debug(ctx, "proxy receives one get statistic response",
+				log.Int64("sourceID", res.GetBase().GetSourceID()))
 			return true
 		})
 	}
@@ -216,7 +216,7 @@ func (g *getStatisticsTask) PostExecute(ctx context.Context) error {
 		Stats:  result,
 	}
 
-	mlog.Debug(ctx, "get statistics post execute done", mlog.Any("result", result))
+	log.Debug(ctx, "get statistics post execute done", log.Any("result", result))
 	return nil
 }
 
@@ -279,24 +279,24 @@ func (g *getStatisticsTask) getStatisticsShard(ctx context.Context, nodeID int64
 	}
 	result, err := qn.GetStatistics(ctx, req)
 	if err != nil {
-		mlog.Warn(ctx, "QueryNode statistic return error",
-			mlog.Int64("nodeID", nodeID),
-			mlog.String("channel", channel),
-			mlog.Err(err))
+		log.Warn(ctx, "QueryNode statistic return error",
+			log.Int64("nodeID", nodeID),
+			log.String("channel", channel),
+			log.Err(err))
 		g.shardclientMgr.DeprecateShardCache(g.request.GetDbName(), g.collectionName)
 		return err
 	}
 	if result.GetStatus().GetErrorCode() == commonpb.ErrorCode_NotShardLeader {
-		mlog.Warn(ctx, "QueryNode is not shardLeader",
-			mlog.Int64("nodeID", nodeID),
-			mlog.String("channel", channel))
+		log.Warn(ctx, "QueryNode is not shardLeader",
+			log.Int64("nodeID", nodeID),
+			log.String("channel", channel))
 		g.shardclientMgr.DeprecateShardCache(g.request.GetDbName(), g.collectionName)
 		return merr.Error(result.GetStatus())
 	}
 	if result.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-		mlog.Warn(ctx, "QueryNode statistic result error",
-			mlog.Int64("nodeID", nodeID),
-			mlog.String("reason", result.GetStatus().GetReason()))
+		log.Warn(ctx, "QueryNode statistic result error",
+			log.Int64("nodeID", nodeID),
+			log.String("reason", result.GetStatus().GetReason()))
 		return errors.Wrapf(merr.Error(result.GetStatus()), "fail to get statistic on QueryNode ID=%d", nodeID)
 	}
 	g.resultBuf.Insert(result)
@@ -440,7 +440,7 @@ func reduceStatisticResponse(results []map[string]string) ([]*commonpb.KeyValueP
 //		if err != nil {
 //			return err
 //		}
-//		mlog.Debug(context.TODO(), "get partition statistics from QueryNode execute done", mlog.Int64("msgID", g.ID()))
+//		log.Debug(context.TODO(), "get partition statistics from QueryNode execute done", log.Int64("msgID", g.ID()))
 //	}
 //	if g.fromDataCoord {
 //		collID := g.CollectionID
@@ -468,7 +468,7 @@ func reduceStatisticResponse(results []map[string]string) ([]*commonpb.KeyValueP
 //			Status: merr.Success(),
 //			Stats:  result.Stats,
 //		})
-//		mlog.Debug(context.TODO(), "get partition statistics from DataCoord execute done", mlog.Int64("msgID", g.ID()))
+//		log.Debug(context.TODO(), "get partition statistics from DataCoord execute done", log.Int64("msgID", g.ID()))
 //		return nil
 //	}
 //	return nil
@@ -511,7 +511,7 @@ func reduceStatisticResponse(results []map[string]string) ([]*commonpb.KeyValueP
 //		if err != nil {
 //			return err
 //		}
-//		mlog.Debug(context.TODO(), "get collection statistics from QueryNode execute done", mlog.Int64("msgID", g.ID()))
+//		log.Debug(context.TODO(), "get collection statistics from QueryNode execute done", log.Int64("msgID", g.ID()))
 //	}
 //	if g.fromDataCoord {
 //		collID := g.CollectionID
@@ -564,7 +564,7 @@ func reduceStatisticResponse(results []map[string]string) ([]*commonpb.KeyValueP
 //				Stats:  result.Stats,
 //			})
 //		}
-//		mlog.Debug(context.TODO(), "get collection statistics from DataCoord execute done", mlog.Int64("msgID", g.ID()))
+//		log.Debug(context.TODO(), "get collection statistics from DataCoord execute done", log.Int64("msgID", g.ID()))
 //		return nil
 //	}
 //	return nil

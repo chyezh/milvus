@@ -32,7 +32,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
@@ -151,7 +151,7 @@ func (c *ChannelChecker) getDmChannelDiff(ctx context.Context, collectionID int6
 ) (toLoad, toRelease []*meta.DmChannel) {
 	replica := c.meta.Get(ctx, replicaID)
 	if replica == nil {
-		mlog.Info(context.TODO(), "replica does not exist, skip it")
+		log.Info(context.TODO(), "replica does not exist, skip it")
 		return
 	}
 
@@ -189,7 +189,7 @@ func (c *ChannelChecker) findRepeatedChannels(ctx context.Context, replicaID int
 	dupChannels := make([]*meta.DmChannel, 0)
 
 	if replica == nil {
-		mlog.Info(context.TODO(), "replica does not exist, skip it")
+		log.Info(context.TODO(), "replica does not exist, skip it")
 		return dupChannels
 	}
 
@@ -197,7 +197,7 @@ func (c *ChannelChecker) findRepeatedChannels(ctx context.Context, replicaID int
 	for _, delegator := range delegatorList {
 		leader := c.dist.ChannelDistManager.GetShardLeader(delegator.GetChannelName(), replica)
 		if leader == nil {
-			mlog.Warn(context.TODO(), "channel leader does not exist, skip it", mlog.String("channel", delegator.GetChannelName()))
+			log.Warn(context.TODO(), "channel leader does not exist, skip it", log.String("channel", delegator.GetChannelName()))
 			continue
 		}
 		// if channel's version is smaller than shard leader's version, it means that the channel is not up to date
@@ -237,12 +237,12 @@ func (c *ChannelChecker) createChannelReduceTasks(ctx context.Context, channels 
 		action := task.NewChannelAction(ch.Node, task.ActionTypeReduce, ch.GetChannelName())
 		task, err := task.NewChannelTask(ctx, Params.QueryCoordCfg.ChannelTaskTimeout.GetAsDuration(time.Millisecond), c.ID(), ch.GetCollectionID(), replica, action)
 		if err != nil {
-			mlog.Warn(context.TODO(), "create channel reduce task failed",
-				mlog.Int64("collection", ch.GetCollectionID()),
-				mlog.Int64("replica", replica.GetID()),
-				mlog.String("channel", ch.GetChannelName()),
-				mlog.Int64("from", ch.Node),
-				mlog.Err(err),
+			log.Warn(context.TODO(), "create channel reduce task failed",
+				log.Int64("collection", ch.GetCollectionID()),
+				log.Int64("replica", replica.GetID()),
+				log.String("channel", ch.GetChannelName()),
+				log.Int64("from", ch.Node),
+				log.Err(err),
 			)
 			continue
 		}

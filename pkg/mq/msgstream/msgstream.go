@@ -26,7 +26,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -224,7 +224,7 @@ func NewMarshaledMsg(msg common.Message, group string) (ConsumeMsg, error) {
 
 	timestamp, err := strconv.ParseUint(tsStr, 10, 64)
 	if err != nil {
-		mlog.Warn(context.TODO(), "parse message properties minTs failed, unknown message", mlog.Err(err))
+		log.Warn(context.TODO(), "parse message properties minTs failed, unknown message", log.Err(err))
 		return nil, errors.New("parse minTs from msg properties failed")
 	}
 
@@ -235,7 +235,7 @@ func NewMarshaledMsg(msg common.Message, group string) (ConsumeMsg, error) {
 
 	id, err := strconv.ParseInt(idStr, 10, 64)
 	if err != nil {
-		mlog.Warn(context.TODO(), "parse message properties minTs failed, unknown message", mlog.Err(err))
+		log.Warn(context.TODO(), "parse message properties minTs failed, unknown message", log.Err(err))
 		return nil, errors.New("parse minTs from msg properties failed")
 	}
 
@@ -295,7 +295,7 @@ type MsgStream interface {
 func GetTimestamp(msg TsMsg) uint64 {
 	msgBase, ok := msg.(interface{ GetBase() *commonpb.MsgBase })
 	if !ok {
-		mlog.Warn(context.TODO(), "fail to get msg base, please check it", mlog.Any("type", msg.Type()))
+		log.Warn(context.TODO(), "fail to get msg base, please check it", log.Any("type", msg.Type()))
 		return 0
 	}
 	return msgBase.GetBase().GetTimestamp()
@@ -340,7 +340,7 @@ func (p *SimpleMsgDispatcher) filterAndParase() {
 			return
 		case marshalPack, ok := <-p.stream.Chan():
 			if !ok {
-				mlog.Warn(context.TODO(), "dispatcher fail to read delta msg")
+				log.Warn(context.TODO(), "dispatcher fail to read delta msg")
 				return
 			}
 
@@ -358,7 +358,7 @@ func (p *SimpleMsgDispatcher) filterAndParase() {
 				// unmarshal message
 				msg, err := marshalMsg.Unmarshal(p.unmarshalDispatcher)
 				if err != nil {
-					mlog.Warn(context.TODO(), "unmarshal message failed, invalid message", mlog.Err(err))
+					log.Warn(context.TODO(), "unmarshal message failed, invalid message", log.Err(err))
 					continue
 				}
 				msgPack.Msgs = append(msgPack.Msgs, msg)

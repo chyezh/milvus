@@ -32,7 +32,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/proxyutil"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
@@ -190,9 +190,9 @@ func getRateLimitConfig(properties map[string]string, configKey string, configVa
 	if ok {
 		rate, err := strconv.ParseFloat(v, 64)
 		if err != nil {
-			mlog.Warn(context.TODO(), "invalid configuration for collection dml rate",
-				mlog.String("config item", configKey),
-				mlog.String("config value", v))
+			log.Warn(context.TODO(), "invalid configuration for collection dml rate",
+				log.String("config item", configKey),
+				log.String("config value", v))
 			return configValue
 		}
 
@@ -451,9 +451,9 @@ func checkFieldSchema(fieldSchemas []*schemapb.FieldSchema) error {
 				defVal := fieldSchema.GetDefaultValue().GetBytesData()
 				jsonData := make(map[string]interface{})
 				if err := json.Unmarshal(defVal, &jsonData); err != nil {
-					mlog.Info(context.TODO(), "invalid default json value, milvus only support json map",
-						mlog.ByteString("data", defVal),
-						mlog.Err(err),
+					log.Info(context.TODO(), "invalid default json value, milvus only support json map",
+						log.ByteString("data", defVal),
+						log.Err(err),
 					)
 					return merr.WrapErrParameterInvalidMsg(err.Error())
 				}

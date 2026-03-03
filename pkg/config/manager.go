@@ -25,7 +25,7 @@ import (
 	"github.com/cockroachdb/errors"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
@@ -342,7 +342,7 @@ func (m *Manager) pullSourceConfigs(source string) error {
 
 	configs, err := configSource.GetConfigurations()
 	if err != nil {
-		mlog.Info(context.TODO(), "Get configuration by items failed", mlog.Err(err))
+		log.Info(context.TODO(), "Get configuration by items failed", log.Err(err))
 		return err
 	}
 
@@ -395,7 +395,7 @@ func (m *Manager) updateEvent(e *Event) error {
 			prioritySrc := m.getHighPrioritySource(sourceName, e.EventSource)
 			if prioritySrc != nil && prioritySrc.GetSourceName() == sourceName {
 				// if event generated from less priority source then ignore
-				mlog.Info(context.TODO(), fmt.Sprintf("the event source %s's priority is less then %s's, ignore",
+				log.Info(context.TODO(), fmt.Sprintf("the event source %s's priority is less then %s's, ignore",
 					e.EventSource, sourceName))
 				return ErrIgnoreChange
 			}
@@ -407,7 +407,7 @@ func (m *Manager) updateEvent(e *Event) error {
 		sourceName, ok := m.keySourceMap.Get(e.Key)
 		if !ok || sourceName != e.EventSource {
 			// if delete event generated from source not maintained ignore it
-			mlog.Info(context.TODO(), fmt.Sprintf("the event source %s (expect %s) is not maintained, ignore",
+			log.Info(context.TODO(), fmt.Sprintf("the event source %s (expect %s) is not maintained, ignore",
 				e.EventSource, sourceName))
 			return ErrIgnoreChange
 		} else if sourceName == e.EventSource {
@@ -422,19 +422,19 @@ func (m *Manager) updateEvent(e *Event) error {
 	}
 
 	e.HasUpdated = true
-	mlog.Info(context.TODO(), "receive update event", mlog.Any("event", e))
+	log.Info(context.TODO(), "receive update event", log.Any("event", e))
 	return nil
 }
 
 // OnEvent Triggers actions when an event is generated
 func (m *Manager) OnEvent(event *Event) {
 	if m.forbiddenKeys.Contain(formatKey(event.Key)) {
-		mlog.Info(context.TODO(), "ignore event for forbidden key", mlog.String("key", event.Key))
+		log.Info(context.TODO(), "ignore event for forbidden key", log.String("key", event.Key))
 		return
 	}
 	err := m.updateEvent(event)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed in updating event with error", mlog.Err(err), mlog.Any("event", event))
+		log.Warn(context.TODO(), "failed in updating event with error", log.Err(err), log.Any("event", event))
 		return
 	}
 
@@ -504,7 +504,7 @@ func (m *Manager) GetEtcdSource() (*EtcdSource, bool) {
 func (m *Manager) ProcessImmutableConfigs() error {
 	etcdSourceImpl, ok := m.GetEtcdSource()
 	if !ok {
-		mlog.Info(context.TODO(), "etcd source not enable,skip processing immutable configs")
+		log.Info(context.TODO(), "etcd source not enable,skip processing immutable configs")
 		return nil
 	}
 
@@ -513,36 +513,36 @@ func (m *Manager) ProcessImmutableConfigs() error {
 	m.immutableKeys.Range(func(key string) bool {
 		confgSourceName, configValue, getConfigErr := m.GetConfig(key)
 		if getConfigErr != nil {
-			mlog.Warn(context.TODO(), "failed to get config", mlog.String("key", key), mlog.Err(getConfigErr))
+			log.Warn(context.TODO(), "failed to get config", log.String("key", key), log.Err(getConfigErr))
 			return true
 		}
 
 		_, getFromEtcdErr := etcdSourceImpl.GetConfigurationByKey(key)
 		if errors.Is(getFromEtcdErr, ErrKeyNotFound) {
-			mlog.Info(context.TODO(), "immutable config not exist in etcd, saving to persistent storage",
-				mlog.String("fromSource", confgSourceName), mlog.String("key", key), mlog.String("value", configValue))
+			log.Info(context.TODO(), "immutable config not exist in etcd, saving to persistent storage",
+				log.String("fromSource", confgSourceName), log.String("key", key), log.String("value", configValue))
 			if err := m.SaveConfigToEtcd(etcdSourceImpl, key, configValue); err != nil {
-				mlog.Error(context.TODO(), "failed to save immutable config to etcd",
-					mlog.String("key", key), mlog.String("value", configValue), mlog.Err(err))
+				log.Error(context.TODO(), "failed to save immutable config to etcd",
+					log.String("key", key), log.String("value", configValue), log.Err(err))
 				saveErrors = append(saveErrors, err)
 			} else {
-				mlog.Info(context.TODO(), "successfully saved immutable config to etcd", mlog.String("key", key), mlog.String("value", configValue))
+				log.Info(context.TODO(), "successfully saved immutable config to etcd", log.String("key", key), log.String("value", configValue))
 				savedConfigs = append(savedConfigs, key)
 			}
 		} else if getFromEtcdErr == nil {
-			mlog.Info(context.TODO(), "immutable config already exists in etcd", mlog.String("key", key), mlog.String("value", configValue))
+			log.Info(context.TODO(), "immutable config already exists in etcd", log.String("key", key), log.String("value", configValue))
 		} else {
-			mlog.Warn(context.TODO(), "failed to check config in etcd", mlog.String("key", key), mlog.Err(getFromEtcdErr))
+			log.Warn(context.TODO(), "failed to check config in etcd", log.String("key", key), log.Err(getFromEtcdErr))
 		}
 		return true
 	})
 
 	if len(savedConfigs) > 0 {
-		mlog.Info(context.TODO(), "triggering etcd source refresh after saving immutable configs", mlog.Strings("savedConfigs", savedConfigs))
+		log.Info(context.TODO(), "triggering etcd source refresh after saving immutable configs", log.Strings("savedConfigs", savedConfigs))
 		if refreshErr := etcdSourceImpl.refreshConfigurations(); refreshErr != nil {
-			mlog.Warn(context.TODO(), "failed to refresh etcd configurations after saving immutable configs", mlog.Err(refreshErr))
+			log.Warn(context.TODO(), "failed to refresh etcd configurations after saving immutable configs", log.Err(refreshErr))
 		} else {
-			mlog.Info(context.TODO(), "successfully refreshed etcd configurations after saving immutable configs")
+			log.Info(context.TODO(), "successfully refreshed etcd configurations after saving immutable configs")
 		}
 	}
 
@@ -567,12 +567,12 @@ func (m *Manager) SaveConfigToEtcd(etcdSource *EtcdSource, key, value string) er
 		return fmt.Errorf("failed to put config to etcd: %w", err)
 	}
 	if !resp.Succeeded {
-		mlog.Info(context.TODO(), "config already exists in etcd, skip writing",
-			mlog.String("etcdKey", etcdKey), mlog.String("configKey", key), mlog.String("value", value))
+		log.Info(context.TODO(), "config already exists in etcd, skip writing",
+			log.String("etcdKey", etcdKey), log.String("configKey", key), log.String("value", value))
 		return nil
 	}
-	mlog.Info(context.TODO(), "config atomically saved to etcd",
-		mlog.String("etcdKey", etcdKey), mlog.String("configKey", key), mlog.String("value", value))
+	log.Info(context.TODO(), "config atomically saved to etcd",
+		log.String("etcdKey", etcdKey), log.String("configKey", key), log.String("value", value))
 
 	return nil
 }
@@ -591,8 +591,8 @@ func (m *Manager) UpdateConfigInEtcd(etcdSource *EtcdSource, key, value string) 
 	if err != nil {
 		return fmt.Errorf("failed to update config in etcd: %w", err)
 	}
-	mlog.Info(context.TODO(), "config updated in etcd",
-		mlog.String("etcdKey", etcdKey), mlog.String("configKey", fmtKey), mlog.String("value", value))
+	log.Info(context.TODO(), "config updated in etcd",
+		log.String("etcdKey", etcdKey), log.String("configKey", fmtKey), log.String("value", value))
 
 	return nil
 }

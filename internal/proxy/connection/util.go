@@ -10,22 +10,22 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 )
 
-func ZapClientInfo(info *commonpb.ClientInfo) []mlog.Field {
-	fields := []mlog.Field{
-		mlog.String("sdk_type", info.GetSdkType()),
-		mlog.String("sdk_version", info.GetSdkVersion()),
-		mlog.String("local_time", info.GetLocalTime()),
-		mlog.String("user", info.GetUser()),
-		mlog.String("host", info.GetHost()),
+func ZapClientInfo(info *commonpb.ClientInfo) []log.Field {
+	fields := []log.Field{
+		log.String("sdk_type", info.GetSdkType()),
+		log.String("sdk_version", info.GetSdkVersion()),
+		log.String("local_time", info.GetLocalTime()),
+		log.String("user", info.GetUser()),
+		log.String("host", info.GetHost()),
 	}
 
 	for k, v := range info.GetReserved() {
-		fields = append(fields, mlog.String(k, v))
+		fields = append(fields, log.String(k, v))
 	}
 
 	return fields

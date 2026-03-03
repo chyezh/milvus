@@ -10,7 +10,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/entity"
 	client "github.com/milvus-io/milvus/client/v2/milvusclient"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/tests/go_client/common"
 	hp "github.com/milvus-io/milvus/tests/go_client/testcases/helper"
 )
@@ -70,7 +70,7 @@ func TestCreatePartitionInvalid(t *testing.T) {
 	// create partition with invalid name
 	expPars := []string{common.DefaultPartition}
 	for _, invalidName := range common.GenInvalidNames() {
-		mlog.Debug(context.TODO(), "invalidName", mlog.String("currentName", invalidName))
+		log.Debug(context.TODO(), "invalidName", log.String("currentName", invalidName))
 		err := mc.CreatePartition(ctx, client.NewCreatePartitionOption(schema.CollectionName, invalidName))
 		if invalidName == "1" {
 			common.CheckErr(t, err, true)

@@ -9,7 +9,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message/adaptor"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 // newDataSyncServiceWrapper creates a new data sync service wrapper.
@@ -53,8 +53,8 @@ func (ds *dataSyncServiceWrapper) HandleMessage(ctx context.Context, msg message
 		// filter out the message less than vchannel level checkpoint.
 		if nextTsMsg.EndTs < ds.channelCheckpointTimeTick {
 			ds.handler.Logger.Debug(nil, "skip the message less than vchannel checkpoint",
-				mlog.Uint64("timestamp", nextTsMsg.EndTs),
-				mlog.Uint64("checkpoint", ds.channelCheckpointTimeTick),
+				log.Uint64("timestamp", nextTsMsg.EndTs),
+				log.Uint64("checkpoint", ds.channelCheckpointTimeTick),
 			)
 			ds.handler.PendingMsgPack.UnsafeAdvance()
 			continue

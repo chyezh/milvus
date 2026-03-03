@@ -26,7 +26,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -81,7 +81,7 @@ func NewL0Reader(ctx context.Context,
 		return nil, err
 	}
 	if len(deltaLogs) == 0 {
-		mlog.Info(context.TODO(), "no delta logs for l0 segments", mlog.String("prefix", path))
+		log.Info(context.TODO(), "no delta logs for l0 segments", log.String("prefix", path))
 	}
 	r.deltaLogs = deltaLogs
 	return r, nil
@@ -121,7 +121,7 @@ func (r *l0Reader) Read() (*storage.DeleteData, error) {
 				if err == io.EOF {
 					break
 				}
-				mlog.Error(context.TODO(), "error on importing L0 segment, fail to read deltalogs", mlog.Err(err))
+				log.Error(context.TODO(), "error on importing L0 segment, fail to read deltalogs", log.Err(err))
 				return nil, err
 			}
 

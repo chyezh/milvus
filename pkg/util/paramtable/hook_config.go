@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 const hookYamlFile = "hook.yaml"
@@ -18,7 +18,7 @@ type hookConfig struct {
 
 func (h *hookConfig) init(base *BaseTable) {
 	h.hookBase = base
-	mlog.Info(context.TODO(), "hook config", mlog.Any("hook", base.FileConfigs()))
+	log.Info(context.TODO(), "hook config", log.Any("hook", base.FileConfigs()))
 
 	h.SoPath = ParamItem{
 		Key:          "soPath",

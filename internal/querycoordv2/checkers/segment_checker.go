@@ -33,7 +33,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
@@ -187,11 +187,11 @@ func (c *SegmentChecker) getGrowingSegmentDiff(ctx context.Context, collectionID
 		targetVersion := c.targetMgr.GetCollectionTargetVersion(ctx, collectionID, meta.CurrentTarget)
 		if view.TargetVersion != targetVersion {
 			// before shard delegator update it's readable version, skip release segment
-			mlog.RatedInfo(context.TODO(), mlog.RateDefault, "before shard delegator update it's readable version, skip release segment",
-				mlog.String("channelName", view.Channel),
-				mlog.Int64("nodeID", view.ID),
-				mlog.Int64("leaderVersion", view.TargetVersion),
-				mlog.Int64("currentVersion", targetVersion),
+			log.RatedInfo(context.TODO(), log.RateDefault, "before shard delegator update it's readable version, skip release segment",
+				log.String("channelName", view.Channel),
+				log.Int64("nodeID", view.ID),
+				log.Int64("leaderVersion", view.TargetVersion),
+				log.Int64("currentVersion", targetVersion),
 			)
 			continue
 		}
@@ -209,14 +209,14 @@ func (c *SegmentChecker) getGrowingSegmentDiff(ctx context.Context, collectionID
 					timestampInTarget := channel.GetSeekPosition().GetTimestamp()
 					// release growing segment if in dropped segment list
 					if funcutil.SliceContain(channel.GetDroppedSegmentIds(), segment.GetID()) {
-						mlog.Info(context.TODO(), "growing segment exists in dropped segment list, release it", mlog.Int64("segmentID", segment.GetID()))
+						log.Info(context.TODO(), "growing segment exists in dropped segment list, release it", log.Int64("segmentID", segment.GetID()))
 						toRelease = append(toRelease, segment)
 						continue
 					}
 					// filter toRelease which seekPosition is newer than next target dmChannel
 					if timestampInSegment < timestampInTarget {
-						mlog.Info(context.TODO(), "growing segment not exist in target, so release it",
-							mlog.Int64("segmentID", segment.GetID()),
+						log.Info(context.TODO(), "growing segment not exist in target, so release it",
+							log.Int64("segmentID", segment.GetID()),
 						)
 						toRelease = append(toRelease, segment)
 					}
@@ -395,8 +395,8 @@ func (c *SegmentChecker) createSegmentLoadTasks(ctx context.Context, segments []
 		// if channel is not subscribed yet, skip load segments
 		leader := c.dist.ChannelDistManager.GetShardLeader(shard, replica)
 		if leader == nil {
-			mlog.RatedInfo(ctx, mlog.RateDefault, "no shard leader for replica to load segment",
-				mlog.String("shard", shard))
+			log.RatedInfo(ctx, log.RateDefault, "no shard leader for replica to load segment",
+				log.String("shard", shard))
 			continue
 		}
 
@@ -435,12 +435,12 @@ func (c *SegmentChecker) createSegmentReopenTasks(ctx context.Context, segments 
 			action,
 		)
 		if err != nil {
-			mlog.Warn(context.TODO(), "create segment reopen task failed",
-				mlog.Int64("collection", s.GetCollectionID()),
-				mlog.Int64("replica", replica.GetID()),
-				mlog.String("channel", s.GetInsertChannel()),
-				mlog.Int64("from", s.Node),
-				mlog.Err(err),
+			log.Warn(context.TODO(), "create segment reopen task failed",
+				log.Int64("collection", s.GetCollectionID()),
+				log.Int64("replica", replica.GetID()),
+				log.String("channel", s.GetInsertChannel()),
+				log.Int64("from", s.Node),
+				log.Err(err),
 			)
 			continue
 		}
@@ -464,12 +464,12 @@ func (c *SegmentChecker) createSegmentReduceTasks(ctx context.Context, segments 
 			action,
 		)
 		if err != nil {
-			mlog.Warn(context.TODO(), "create segment reduce task failed",
-				mlog.Int64("collection", s.GetCollectionID()),
-				mlog.Int64("replica", replica.GetID()),
-				mlog.String("channel", s.GetInsertChannel()),
-				mlog.Int64("from", s.Node),
-				mlog.Err(err),
+			log.Warn(context.TODO(), "create segment reduce task failed",
+				log.Int64("collection", s.GetCollectionID()),
+				log.Int64("replica", replica.GetID()),
+				log.String("channel", s.GetInsertChannel()),
+				log.Int64("from", s.Node),
+				log.Err(err),
 			)
 			continue
 		}

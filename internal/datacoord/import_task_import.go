@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/json"
 	"github.com/milvus-io/milvus/internal/metastore/kv/binlog"
 	"github.com/milvus-io/milvus/internal/util/importutilv2"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
@@ -130,16 +130,16 @@ func (t *importTask) GetTaskSlot() int64 {
 }
 
 func (t *importTask) CreateTaskOnWorker(nodeID int64, cluster session.Cluster) {
-	mlog.Info(context.TODO(), "processing pending import task...", WrapTaskLog(t)...)
+	log.Info(context.TODO(), "processing pending import task...", WrapTaskLog(t)...)
 	job := t.importMeta.GetJob(context.TODO(), t.GetJobID())
 	req, err := AssembleImportRequest(t, job, t.meta, t.alloc)
 	if err != nil {
-		mlog.Warn(context.TODO(), "assemble import request failed", WrapTaskLog(t, mlog.Err(err))...)
+		log.Warn(context.TODO(), "assemble import request failed", WrapTaskLog(t, log.Err(err))...)
 		return
 	}
 	err = cluster.CreateImport(nodeID, req, t.GetTaskSlot())
 	if err != nil {
-		mlog.Warn(context.TODO(), "import failed", WrapTaskLog(t, mlog.Err(err))...)
+		log.Warn(context.TODO(), "import failed", WrapTaskLog(t, log.Err(err))...)
 		t.retryTimes++
 		return
 	}
@@ -147,12 +147,12 @@ func (t *importTask) CreateTaskOnWorker(nodeID int64, cluster session.Cluster) {
 		UpdateState(datapb.ImportTaskStateV2_InProgress),
 		UpdateNodeID(nodeID))
 	if err != nil {
-		mlog.Warn(context.TODO(), "update import task failed", WrapTaskLog(t, mlog.Err(err))...)
+		log.Warn(context.TODO(), "update import task failed", WrapTaskLog(t, log.Err(err))...)
 		return
 	}
 	pendingDuration := t.GetTR().RecordSpan()
 	metrics.ImportTaskLatency.WithLabelValues(metrics.ImportStagePending).Observe(float64(pendingDuration.Milliseconds()))
-	mlog.Info(context.TODO(), "import task start to execute", WrapTaskLog(t, mlog.Int64("scheduledNodeID", nodeID), mlog.Duration("taskTimeCost/pending", pendingDuration))...)
+	log.Info(context.TODO(), "import task start to execute", WrapTaskLog(t, log.Int64("scheduledNodeID", nodeID), log.Duration("taskTimeCost/pending", pendingDuration))...)
 }
 
 func (t *importTask) QueryTaskOnWorker(cluster session.Cluster) {
@@ -164,17 +164,17 @@ func (t *importTask) QueryTaskOnWorker(cluster session.Cluster) {
 	if err != nil || resp.GetState() == datapb.ImportTaskStateV2_Retry {
 		updateErr := t.importMeta.UpdateTask(context.TODO(), t.GetTaskID(), UpdateState(datapb.ImportTaskStateV2_Pending))
 		if updateErr != nil {
-			mlog.Warn(context.TODO(), "failed to update import task state to pending", WrapTaskLog(t, mlog.Err(updateErr))...)
+			log.Warn(context.TODO(), "failed to update import task state to pending", WrapTaskLog(t, log.Err(updateErr))...)
 		}
-		mlog.Info(context.TODO(), "reset import task state to pending due to error occurs", WrapTaskLog(t, mlog.Err(err), mlog.String("reason", resp.GetReason()))...)
+		log.Info(context.TODO(), "reset import task state to pending due to error occurs", WrapTaskLog(t, log.Err(err), log.String("reason", resp.GetReason()))...)
 		return
 	}
 	if resp.GetState() == datapb.ImportTaskStateV2_Failed {
 		err = t.importMeta.UpdateJob(context.TODO(), t.GetJobID(), UpdateJobState(internalpb.ImportJobState_Failed), UpdateJobReason(resp.GetReason()))
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to update job state to Failed", mlog.Int64("jobID", t.GetJobID()), mlog.Err(err))
+			log.Warn(context.TODO(), "failed to update job state to Failed", log.Int64("jobID", t.GetJobID()), log.Err(err))
 		}
-		mlog.Warn(context.TODO(), "import failed", WrapTaskLog(t, mlog.String("reason", resp.GetReason()))...)
+		log.Warn(context.TODO(), "import failed", WrapTaskLog(t, log.String("reason", resp.GetReason()))...)
 		return
 	}
 
@@ -194,10 +194,10 @@ func (t *importTask) QueryTaskOnWorker(cluster session.Cluster) {
 			op := UpdateImportedRows(info.GetSegmentID(), info.GetImportedRows())
 			err = t.meta.UpdateSegmentsInfo(context.TODO(), op)
 			if err != nil {
-				mlog.Warn(context.TODO(), "update import segment rows failed", WrapTaskLog(t, mlog.Err(err))...)
+				log.Warn(context.TODO(), "update import segment rows failed", WrapTaskLog(t, log.Err(err))...)
 				return
 			}
-			mlog.Info(context.TODO(), "update import segment rows done", WrapTaskLog(t, mlog.Int64("segmentID", info.GetSegmentID()), mlog.Int64("importedRows", info.GetImportedRows()))...)
+			log.Info(context.TODO(), "update import segment rows done", WrapTaskLog(t, log.Int64("segmentID", info.GetSegmentID()), log.Int64("importedRows", info.GetImportedRows()))...)
 
 			metrics.DataCoordBulkVectors.WithLabelValues(
 				dbName,
@@ -212,8 +212,8 @@ func (t *importTask) QueryTaskOnWorker(cluster session.Cluster) {
 			// try to parse path and fill logID
 			err = binlog.CompressBinLogs(info.GetBinlogs(), info.GetDeltalogs(), info.GetStatslogs(), info.GetBm25Logs())
 			if err != nil {
-				mlog.Warn(context.TODO(), "fail to CompressBinLogs for import binlogs",
-					WrapTaskLog(t, mlog.Int64("segmentID", info.GetSegmentID()), mlog.Err(err))...)
+				log.Warn(context.TODO(), "fail to CompressBinLogs for import binlogs",
+					WrapTaskLog(t, log.Int64("segmentID", info.GetSegmentID()), log.Err(err))...)
 				return
 			}
 
@@ -234,39 +234,39 @@ func (t *importTask) QueryTaskOnWorker(cluster session.Cluster) {
 			if err != nil {
 				updateErr := t.importMeta.UpdateJob(context.TODO(), t.GetJobID(), UpdateJobState(internalpb.ImportJobState_Failed), UpdateJobReason(err.Error()))
 				if updateErr != nil {
-					mlog.Warn(context.TODO(), "failed to update job state to Failed", mlog.Int64("jobID", t.GetJobID()), mlog.Err(updateErr))
+					log.Warn(context.TODO(), "failed to update job state to Failed", log.Int64("jobID", t.GetJobID()), log.Err(updateErr))
 				}
-				mlog.Warn(context.TODO(), "update import segment binlogs failed", WrapTaskLog(t, mlog.String("err", err.Error()))...)
+				log.Warn(context.TODO(), "update import segment binlogs failed", WrapTaskLog(t, log.String("err", err.Error()))...)
 				return
 			}
-			mlog.Info(context.TODO(), "update import segment info done", WrapTaskLog(t,
-				mlog.Int64("segmentID", info.GetSegmentID()),
-				mlog.Uint64("minTs", minTs),
-				mlog.Uint64("maxTs", maxTs),
-				mlog.Any("segmentInfo", info))...)
+			log.Info(context.TODO(), "update import segment info done", WrapTaskLog(t,
+				log.Int64("segmentID", info.GetSegmentID()),
+				log.Uint64("minTs", minTs),
+				log.Uint64("maxTs", maxTs),
+				log.Any("segmentInfo", info))...)
 			totalRows += info.GetImportedRows()
 		}
 		completeTime := time.Now().Format("2006-01-02T15:04:05Z07:00")
 		err = t.importMeta.UpdateTask(context.TODO(), t.GetTaskID(), UpdateState(datapb.ImportTaskStateV2_Completed), UpdateCompleteTime(completeTime))
 		if err != nil {
-			mlog.Warn(context.TODO(), "update import task failed", WrapTaskLog(t, mlog.Err(err))...)
+			log.Warn(context.TODO(), "update import task failed", WrapTaskLog(t, log.Err(err))...)
 			return
 		}
 		importDuration := t.GetTR().RecordSpan()
 		metrics.ImportTaskLatency.WithLabelValues(metrics.ImportStageImport).Observe(float64(importDuration.Milliseconds()))
-		mlog.Info(context.TODO(), "import done", WrapTaskLog(t, mlog.Int64("totalRows", totalRows), mlog.Duration("taskTimeCost/import", importDuration))...)
+		log.Info(context.TODO(), "import done", WrapTaskLog(t, log.Int64("totalRows", totalRows), log.Duration("taskTimeCost/import", importDuration))...)
 	}
-	mlog.Info(context.TODO(), "query import", WrapTaskLog(t, mlog.String("respState", resp.GetState().String()),
-		mlog.String("reason", resp.GetReason()))...)
+	log.Info(context.TODO(), "query import", WrapTaskLog(t, log.String("respState", resp.GetState().String()),
+		log.String("reason", resp.GetReason()))...)
 }
 
 func (t *importTask) DropTaskOnWorker(cluster session.Cluster) {
 	err := DropImportTask(t, cluster, t.importMeta)
 	if err != nil {
-		mlog.Warn(context.TODO(), "drop import failed", WrapTaskLog(t, mlog.Err(err))...)
+		log.Warn(context.TODO(), "drop import failed", WrapTaskLog(t, log.Err(err))...)
 		return
 	}
-	mlog.Info(context.TODO(), "drop import task done", WrapTaskLog(t, mlog.Int64("nodeID", t.GetNodeID()))...)
+	log.Info(context.TODO(), "drop import task done", WrapTaskLog(t, log.Int64("nodeID", t.GetNodeID()))...)
 }
 
 func (t *importTask) GetType() TaskType {

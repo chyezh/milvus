@@ -9,7 +9,7 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	mqcommon "github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream/mqwrapper"
@@ -34,7 +34,7 @@ func (kp *kafkaProducer) Send(ctx context.Context, message *mqcommon.ProducerMes
 
 	if kp.isClosed {
 		metrics.MsgStreamOpCounter.WithLabelValues(metrics.SendMsgLabel, metrics.FailLabel).Inc()
-		mlog.Error(context.TODO(), "kafka produce message fail because the producer has been closed", mlog.String("topic", kp.topic))
+		log.Error(context.TODO(), "kafka produce message fail because the producer has been closed", log.String("topic", kp.topic))
 		return nil, common.NewIgnorableError(errors.New("kafka producer is closed"))
 	}
 
@@ -59,7 +59,7 @@ func (kp *kafkaProducer) Send(ctx context.Context, message *mqcommon.ProducerMes
 	select {
 	case <-kp.stopCh:
 		metrics.MsgStreamOpCounter.WithLabelValues(metrics.SendMsgLabel, metrics.FailLabel).Inc()
-		mlog.Error(context.TODO(), "kafka produce message fail because of kafka producer is closed", mlog.String("topic", kp.topic))
+		log.Error(context.TODO(), "kafka produce message fail because of kafka producer is closed", log.String("topic", kp.topic))
 		return nil, common.NewIgnorableError(errors.New("kafka producer is closed"))
 	case e := <-resultCh:
 		m = e.(*kafka.Message)
@@ -85,13 +85,13 @@ func (kp *kafkaProducer) Close() {
 		// flush in-flight msg within queue.
 		i := kp.p.Flush(10000)
 		if i > 0 {
-			mlog.Warn(context.TODO(), "There are still un-flushed outstanding events", mlog.Int("event_num", i), mlog.String("topic", kp.topic))
+			log.Warn(context.TODO(), "There are still un-flushed outstanding events", log.Int("event_num", i), log.String("topic", kp.topic))
 		}
 
 		close(kp.stopCh)
 		cost := time.Since(start).Milliseconds()
 		if cost > 500 {
-			mlog.Debug(context.TODO(), "kafka producer is closed", mlog.String("topic", kp.topic), mlog.Int64("time cost(ms)", cost))
+			log.Debug(context.TODO(), "kafka producer is closed", log.String("topic", kp.topic), log.Int64("time cost(ms)", cost))
 		}
 	})
 }

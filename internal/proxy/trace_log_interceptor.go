@@ -26,7 +26,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/requestutil"
 )
 
@@ -36,28 +36,28 @@ func TraceLogInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInf
 		return handler(ctx, req)
 	case 1: // simple info
 		fields := GetRequestBaseInfo(ctx, req, info, false)
-		mlog.Info(ctx, "trace info: simple", fields...)
+		log.Info(ctx, "trace info: simple", fields...)
 		return handler(ctx, req)
 	case 2: // detail info
 		fields := GetRequestBaseInfo(ctx, req, info, true)
 		fields = append(fields, GetRequestFieldWithoutSensitiveInfo(req))
-		mlog.Info(ctx, "trace info: detail", fields...)
+		log.Info(ctx, "trace info: detail", fields...)
 		return handler(ctx, req)
 	case 3: // detail info with request and response
 		fields := GetRequestBaseInfo(ctx, req, info, true)
 		fields = append(fields, GetRequestFieldWithoutSensitiveInfo(req))
-		mlog.Info(ctx, "trace info: all request", fields...)
+		log.Info(ctx, "trace info: all request", fields...)
 		resp, err := handler(ctx, req)
 		if err != nil {
-			mlog.Info(ctx, "trace info: all, error", mlog.Err(err))
+			log.Info(ctx, "trace info: all, error", log.Err(err))
 			return resp, err
 		}
 		if status, ok := requestutil.GetStatusFromResponse(resp); ok {
 			if status.Code != 0 {
-				mlog.Info(ctx, "trace info: all, fail", mlog.Any("resp", resp))
+				log.Info(ctx, "trace info: all, fail", log.Any("resp", resp))
 			}
 		} else {
-			mlog.Info(ctx, "trace info: all, unknown", mlog.Any("resp", resp))
+			log.Info(ctx, "trace info: all, unknown", log.Any("resp", resp))
 		}
 		return resp, nil
 	default:
@@ -69,11 +69,11 @@ func GetRequestBaseInfo(ctx context.Context, req interface{}, info *grpc.UnarySe
 	var fields []zap.Field
 
 	_, requestName := path.Split(info.FullMethod)
-	fields = append(fields, mlog.String("request_name", requestName))
+	fields = append(fields, log.String("request_name", requestName))
 
 	username, err := GetCurUserFromContext(ctx)
 	if err == nil && username != "" {
-		fields = append(fields, mlog.String("username", username))
+		fields = append(fields, log.String("username", username))
 	}
 
 	if !skipBaseRequestInfo {
@@ -82,7 +82,7 @@ func GetRequestBaseInfo(ctx context.Context, req interface{}, info *grpc.UnarySe
 			if !ok {
 				continue
 			}
-			fields = append(fields, mlog.Any(baseInfoName, baseInfo))
+			fields = append(fields, log.Any(baseInfoName, baseInfo))
 		}
 	}
 
@@ -92,7 +92,7 @@ func GetRequestBaseInfo(ctx context.Context, req interface{}, info *grpc.UnarySe
 func GetRequestFieldWithoutSensitiveInfo(req interface{}) zap.Field {
 	createCredentialReq, ok := req.(*milvuspb.CreateCredentialRequest)
 	if ok {
-		return mlog.Any("request", &milvuspb.CreateCredentialRequest{
+		return log.Any("request", &milvuspb.CreateCredentialRequest{
 			Base:                  createCredentialReq.Base,
 			Username:              createCredentialReq.Username,
 			CreatedUtcTimestamps:  createCredentialReq.CreatedUtcTimestamps,
@@ -101,12 +101,12 @@ func GetRequestFieldWithoutSensitiveInfo(req interface{}) zap.Field {
 	}
 	updateCredentialReq, ok := req.(*milvuspb.UpdateCredentialRequest)
 	if ok {
-		return mlog.Any("request", &milvuspb.UpdateCredentialRequest{
+		return log.Any("request", &milvuspb.UpdateCredentialRequest{
 			Base:                  updateCredentialReq.Base,
 			Username:              updateCredentialReq.Username,
 			CreatedUtcTimestamps:  updateCredentialReq.CreatedUtcTimestamps,
 			ModifiedUtcTimestamps: updateCredentialReq.ModifiedUtcTimestamps,
 		})
 	}
-	return mlog.Any("request", req)
+	return log.Any("request", req)
 }

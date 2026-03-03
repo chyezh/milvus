@@ -26,7 +26,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/json"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 // GetComponentStatesInterface defines the interface that get states from component.
@@ -112,7 +112,7 @@ func (handler *HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) 
 
 	if len(unhealthyComponent) > 0 {
 		resp.State = fmt.Sprintf("Not all components are healthy, %d/%d", handler.indicatorNum-len(unhealthyComponent), handler.indicatorNum)
-		mlog.Info(context.TODO(), "check health failed", mlog.Strings("UnhealthyComponent", unhealthyComponent))
+		log.Info(context.TODO(), "check health failed", log.Strings("UnhealthyComponent", unhealthyComponent))
 	}
 
 	if resp.State == "OK" {
@@ -133,7 +133,7 @@ func writeJSON(w http.ResponseWriter, r *http.Request, resp *HealthResponse) {
 	w.Header().Set(ContentTypeHeader, ContentTypeJSON)
 	bs, err := json.Marshal(resp)
 	if err != nil {
-		mlog.Warn(context.TODO(), "faild to send response", mlog.Err(err))
+		log.Warn(context.TODO(), "faild to send response", log.Err(err))
 	}
 	w.Write(bs)
 }
@@ -142,7 +142,7 @@ func writeText(w http.ResponseWriter, r *http.Request, reason string) {
 	w.Header().Set(ContentTypeHeader, ContentTypeText)
 	_, err := fmt.Fprint(w, reason)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to send response",
-			mlog.Err(err))
+		log.Warn(context.TODO(), "failed to send response",
+			log.Err(err))
 	}
 }

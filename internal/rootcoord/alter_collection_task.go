@@ -24,7 +24,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 )
 
@@ -130,11 +130,11 @@ func UpdateFieldPropertyParams(oldProps, updatedProps []*commonpb.KeyValuePair) 
 	for _, prop := range oldProps {
 		props[prop.Key] = prop.Value
 	}
-	mlog.Info(context.TODO(), "UpdateFieldPropertyParams", mlog.Any("oldprops", props), mlog.Any("newprops", updatedProps))
+	log.Info(context.TODO(), "UpdateFieldPropertyParams", log.Any("oldprops", props), log.Any("newprops", updatedProps))
 	for _, prop := range updatedProps {
 		props[prop.Key] = prop.Value
 	}
-	mlog.Info(context.TODO(), "UpdateFieldPropertyParams", mlog.Any("newprops", props))
+	log.Info(context.TODO(), "UpdateFieldPropertyParams", log.Any("newprops", props))
 	propKV := make([]*commonpb.KeyValuePair, 0)
 	for key, value := range props {
 		propKV = append(propKV, &commonpb.KeyValuePair{

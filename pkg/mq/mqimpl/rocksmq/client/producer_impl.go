@@ -14,7 +14,7 @@ package client
 import (
 	"context"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/mqimpl/rocksmq/server"
 )
@@ -94,6 +94,6 @@ func (p *producer) SendForStreamingService(message *common.ProducerMessage) (Uni
 func (p *producer) Close() {
 	err := p.c.server.DestroyTopic(p.topic)
 	if err != nil {
-		mlog.Warn(context.TODO(), "Producer close failed", mlog.String("topicName", p.topic), mlog.Err(err))
+		log.Warn(context.TODO(), "Producer close failed", log.String("topicName", p.topic), log.Err(err))
 	}
 }

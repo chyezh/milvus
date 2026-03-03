@@ -9,7 +9,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/pkg/v2/kv"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
 
@@ -52,7 +52,7 @@ func (s *ServerBuilder) Build() *Server {
 		resource.OptSession(s.session),
 	)
 	return &Server{
-		logger:            resource.Resource().Logger().With(mlog.FieldComponent("server")),
+		logger:            resource.Resource().Logger().With(log.FieldComponent("server")),
 		session:           s.session,
 		assignmentService: service.NewAssignmentService(),
 		broadcastService:  service.NewBroadcastService(),

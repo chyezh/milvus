@@ -31,7 +31,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
@@ -96,7 +96,7 @@ func (s *QueryNodeSuite) loadCollection(collectionName string, dim int) {
 		s.NoError(err)
 		s.True(merr.Ok(insertResult.GetStatus()))
 	}
-	mlog.Info(context.TODO(), "=========================Data insertion finished=========================")
+	log.Info(context.TODO(), "=========================Data insertion finished=========================")
 
 	// flush
 	flushResp, err := c.MilvusClient.Flush(context.TODO(), &milvuspb.FlushRequest{
@@ -115,7 +115,7 @@ func (s *QueryNodeSuite) loadCollection(collectionName string, dim int) {
 	segments, err := c.ShowSegments(collectionName)
 	s.NoError(err)
 	s.NotEmpty(segments)
-	mlog.Info(context.TODO(), "=========================Data flush finished=========================")
+	log.Info(context.TODO(), "=========================Data flush finished=========================")
 
 	// create index
 	createIndexStatus, err := c.MilvusClient.CreateIndex(context.TODO(), &milvuspb.CreateIndexRequest{
@@ -128,7 +128,7 @@ func (s *QueryNodeSuite) loadCollection(collectionName string, dim int) {
 	err = merr.Error(createIndexStatus)
 	s.NoError(err)
 	s.WaitForIndexBuilt(context.TODO(), collectionName, integration.FloatVecField)
-	mlog.Info(context.TODO(), "=========================Index created=========================")
+	log.Info(context.TODO(), "=========================Index created=========================")
 
 	// load
 	loadStatus, err := c.MilvusClient.LoadCollection(context.TODO(), &milvuspb.LoadCollectionRequest{
@@ -139,7 +139,7 @@ func (s *QueryNodeSuite) loadCollection(collectionName string, dim int) {
 	err = merr.Error(loadStatus)
 	s.NoError(err)
 	s.WaitForLoad(context.TODO(), collectionName)
-	mlog.Info(context.TODO(), "=========================Collection loaded=========================")
+	log.Info(context.TODO(), "=========================Collection loaded=========================")
 }
 
 func (s *QueryNodeSuite) checkCollections() bool {
@@ -164,7 +164,7 @@ func (s *QueryNodeSuite) checkCollections() bool {
 			loaded++
 		}
 	}
-	mlog.Info(context.TODO(), fmt.Sprintf("loading status: %d/%d", loaded, len(resp.GetCollectionNames())))
+	log.Info(context.TODO(), fmt.Sprintf("loading status: %d/%d", loaded, len(resp.GetCollectionNames())))
 	return notLoaded == 0
 }
 
@@ -222,8 +222,8 @@ func (s *QueryNodeSuite) setupData() {
 		goRoutineNum = s.numCollections
 	}
 	collectionBatchSize := s.numCollections / goRoutineNum
-	mlog.Info(context.TODO(), fmt.Sprintf("=========================test with s.dim=%d, s.rowsPerCollection=%d, s.numCollections=%d, goRoutineNum=%d==================", s.dim, s.rowsPerCollection, s.numCollections, goRoutineNum))
-	mlog.Info(context.TODO(), "=========================Start to inject data=========================")
+	log.Info(context.TODO(), fmt.Sprintf("=========================test with s.dim=%d, s.rowsPerCollection=%d, s.numCollections=%d, goRoutineNum=%d==================", s.dim, s.rowsPerCollection, s.numCollections, goRoutineNum))
+	log.Info(context.TODO(), "=========================Start to inject data=========================")
 	s.prefix = "TestQueryNodeUtil" + funcutil.GenRandomStr()
 	searchName := s.prefix + "_0"
 	wg := sync.WaitGroup{}
@@ -232,16 +232,16 @@ func (s *QueryNodeSuite) setupData() {
 		go s.insertBatchCollections(s.prefix, collectionBatchSize, idx*collectionBatchSize, s.dim, &wg)
 	}
 	wg.Wait()
-	mlog.Info(context.TODO(), "=========================Data injection finished=========================")
+	log.Info(context.TODO(), "=========================Data injection finished=========================")
 	s.checkCollections()
-	mlog.Info(context.TODO(), fmt.Sprintf("=========================start to search %s=========================", searchName))
+	log.Info(context.TODO(), fmt.Sprintf("=========================start to search %s=========================", searchName))
 	s.search(searchName, s.dim)
-	mlog.Info(context.TODO(), "=========================Search finished=========================")
+	log.Info(context.TODO(), "=========================Search finished=========================")
 	time.Sleep(s.waitTimeInSec)
 	s.checkCollections()
-	mlog.Info(context.TODO(), fmt.Sprintf("=========================start to search2 %s=========================", searchName))
+	log.Info(context.TODO(), fmt.Sprintf("=========================start to search2 %s=========================", searchName))
 	s.search(searchName, s.dim)
-	mlog.Info(context.TODO(), "=========================Search2 finished=========================")
+	log.Info(context.TODO(), "=========================Search2 finished=========================")
 	s.checkAllCollectionsReady()
 }
 

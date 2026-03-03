@@ -26,7 +26,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
@@ -43,7 +43,7 @@ func (t *flushTask) Execute(ctx context.Context) error {
 	channelCps := make(map[string]*msgpb.MsgPosition)
 
 	flushTs := t.BeginTs()
-	mlog.Info(ctx, "flushTaskByStreamingService.Execute", mlog.Int("collectionNum", len(t.CollectionNames)), mlog.Uint64("flushTs", flushTs))
+	log.Info(ctx, "flushTaskByStreamingService.Execute", log.Int("collectionNum", len(t.CollectionNames)), log.Uint64("flushTs", flushTs))
 	timeOfSeal, _ := tsoutil.ParseTS(flushTs)
 	for _, collName := range t.CollectionNames {
 		collID, err := globalMetaCache.GetCollectionID(t.ctx, t.DbName, collName)
@@ -117,7 +117,7 @@ func sendManualFlushToWAL(ctx context.Context, collID int64, vchannel string, fl
 		WithBody(&message.ManualFlushMessageBody{}).
 		BuildMutable()
 	if err != nil {
-		mlog.Warn(ctx, "build manual flush message failed", mlog.Err(err))
+		log.Warn(ctx, "build manual flush message failed", log.Err(err))
 		return nil, err
 	}
 
@@ -125,16 +125,16 @@ func sendManualFlushToWAL(ctx context.Context, collID int64, vchannel string, fl
 		BarrierTimeTick: flushTs,
 	})
 	if err != nil {
-		mlog.Warn(ctx, "append manual flush message to wal failed", mlog.Err(err))
+		log.Warn(ctx, "append manual flush message to wal failed", log.Err(err))
 		return nil, err
 	}
 
 	var flushMsgResponse message.ManualFlushExtraResponse
 	if err := appendResult.GetExtra(&flushMsgResponse); err != nil {
-		mlog.Warn(ctx, "get extra from append result failed", mlog.Err(err))
+		log.Warn(ctx, "get extra from append result failed", log.Err(err))
 		return nil, err
 	}
-	mlog.Info(ctx, "append manual flush message to wal successfully")
+	log.Info(ctx, "append manual flush message to wal successfully")
 
 	return flushMsgResponse.GetSegmentIds(), nil
 }

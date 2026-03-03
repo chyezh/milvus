@@ -10,7 +10,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/walmanager"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
@@ -80,7 +80,7 @@ func CreateConsumeServer(walManager walmanager.Manager, streamServer streamingpb
 	}); err != nil {
 		// release the scanner to avoid resource leak.
 		if err := scanner.Close(); err != nil {
-			resource.Resource().Logger().Warn(nil, "close scanner failed at create consume server", mlog.Err(err))
+			resource.Resource().Logger().Warn(nil, "close scanner failed at create consume server", log.Err(err))
 		}
 		return nil, err
 	}
@@ -90,9 +90,9 @@ func CreateConsumeServer(walManager walmanager.Manager, streamServer streamingpb
 		scanner:       scanner,
 		consumeServer: consumeServer,
 		logger: resource.Resource().Logger().With(
-			mlog.FieldComponent("consumer-server"),
-			mlog.String("channel", l.Channel().Name),
-			mlog.Int64("term", l.Channel().Term)), // Add trace info for all log.
+			log.FieldComponent("consumer-server"),
+			log.String("channel", l.Channel().Name),
+			log.Int64("term", l.Channel().Term)), // Add trace info for all log.
 		closeCh: make(chan struct{}),
 		metrics: metrics,
 	}, nil
@@ -103,7 +103,7 @@ type ConsumeServer struct {
 	consumerID    int64
 	scanner       wal.Scanner
 	consumeServer *consumeGrpcServerHelper
-	logger        *mlog.Logger
+	logger        *log.Logger
 	closeCh       chan struct{}
 	metrics       *consumerMetrics
 }
@@ -129,10 +129,10 @@ func (c *ConsumeServer) Execute() error {
 func (c *ConsumeServer) sendLoop() (err error) {
 	defer func() {
 		if err := c.scanner.Close(); err != nil {
-			c.logger.Warn(nil, "close scanner failed", mlog.Err(err))
+			c.logger.Warn(nil, "close scanner failed", log.Err(err))
 		}
 		if err != nil {
-			c.logger.Warn(nil, "send arm of stream closed by unexpected error", mlog.Err(err))
+			c.logger.Warn(nil, "send arm of stream closed by unexpected error", log.Err(err))
 			return
 		}
 		c.logger.Info(nil, "send arm of stream closed")
@@ -170,7 +170,7 @@ func (c *ConsumeServer) sendLoop() (err error) {
 		case <-c.closeCh:
 			c.logger.Info(nil, "close channel notified")
 			if err := c.consumeServer.SendClosed(); err != nil {
-				c.logger.Warn(nil, "send close failed", mlog.Err(err))
+				c.logger.Warn(nil, "send close failed", log.Err(err))
 				return status.NewInner("close send server failed: %s", err.Error())
 			}
 			return nil
@@ -201,7 +201,7 @@ func (c *ConsumeServer) recvLoop() (err error) {
 	defer func() {
 		close(c.closeCh)
 		if err != nil {
-			c.logger.Warn(nil, "recv arm of stream closed by unexpected error", mlog.Err(err))
+			c.logger.Warn(nil, "recv arm of stream closed by unexpected error", log.Err(err))
 			return
 		}
 		c.logger.Info(nil, "recv arm of stream closed")
@@ -221,7 +221,7 @@ func (c *ConsumeServer) recvLoop() (err error) {
 			// we will receive io.EOF soon, just do nothing here.
 		default:
 			// skip unknown message here, to keep the forward compatibility.
-			c.logger.Warn(nil, "unknown request type", mlog.Any("request", req))
+			c.logger.Warn(nil, "unknown request type", log.Any("request", req))
 		}
 	}
 }

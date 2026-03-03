@@ -24,7 +24,7 @@ import (
 
 	"github.com/shirou/gopsutil/v4/process"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 )
 
@@ -60,7 +60,7 @@ func (thw *threadWatcher) watchThreadNum() {
 	pid := os.Getpid()
 	p, err := process.NewProcess(int32(pid))
 	if err != nil {
-		mlog.Warn(context.TODO(), "thread watcher failed to get milvus process info, quit", mlog.Int("pid", pid), mlog.Err(err))
+		log.Warn(context.TODO(), "thread watcher failed to get milvus process info, quit", log.Int("pid", pid), log.Err(err))
 		return
 	}
 	for {
@@ -68,13 +68,13 @@ func (thw *threadWatcher) watchThreadNum() {
 		case <-ticker.C:
 			threadNum, err := p.NumThreads()
 			if err != nil {
-				mlog.Warn(context.TODO(), "thread watcher failed to get process", mlog.Int("pid", pid), mlog.Err(err))
+				log.Warn(context.TODO(), "thread watcher failed to get process", log.Int("pid", pid), log.Err(err))
 				continue
 			}
-			mlog.Debug(context.TODO(), "thread watcher observe thread num", mlog.Int32("threadNum", threadNum))
+			log.Debug(context.TODO(), "thread watcher observe thread num", log.Int32("threadNum", threadNum))
 			metrics.ThreadNum.Set(float64(threadNum))
 		case <-thw.ch:
-			mlog.Info(context.TODO(), "thread watcher exit")
+			log.Info(context.TODO(), "thread watcher exit")
 			return
 		}
 	}

@@ -27,7 +27,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/json"
 	"github.com/milvus-io/milvus/internal/metastore"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
@@ -130,23 +130,23 @@ func (m *ReplicaManager) Recover(ctx context.Context, collections []int64) error
 		if collectionSet.Contain(replica.GetCollectionID()) {
 			rep := NewReplicaWithPriority(replica, commonpb.LoadPriority_HIGH)
 			m.putReplicaInMemory(rep)
-			mlog.Info(context.TODO(), "recover replica",
-				mlog.Int64("collectionID", replica.GetCollectionID()),
-				mlog.Int64("replicaID", replica.GetID()),
-				mlog.Int64s("rwNodes", replica.GetNodes()),
-				mlog.Int64s("roNodes", replica.GetRoNodes()),
-				mlog.Int64s("rwSQNodes", replica.GetRwSqNodes()),
-				mlog.Int64s("roSQNodes", replica.GetRoNodes()),
+			log.Info(context.TODO(), "recover replica",
+				log.Int64("collectionID", replica.GetCollectionID()),
+				log.Int64("replicaID", replica.GetID()),
+				log.Int64s("rwNodes", replica.GetNodes()),
+				log.Int64s("roNodes", replica.GetRoNodes()),
+				log.Int64s("rwSQNodes", replica.GetRwSqNodes()),
+				log.Int64s("roSQNodes", replica.GetRoNodes()),
 			)
 		} else {
 			err := m.catalog.ReleaseReplica(ctx, replica.GetCollectionID(), replica.GetID())
 			if err != nil {
 				return err
 			}
-			mlog.Info(context.TODO(), "clear stale replica",
-				mlog.Int64("collectionID", replica.GetCollectionID()),
-				mlog.Int64("replicaID", replica.GetID()),
-				mlog.Int64s("nodes", replica.GetNodes()),
+			log.Info(context.TODO(), "clear stale replica",
+				log.Int64("collectionID", replica.GetCollectionID()),
+				log.Int64("replicaID", replica.GetID()),
+				log.Int64s("nodes", replica.GetNodes()),
 			)
 		}
 	}
@@ -195,10 +195,10 @@ func (m *ReplicaManager) SpawnWithReplicaConfig(ctx context.Context, params Spaw
 			replica = mutableReplica.IntoReplica()
 		}
 		replicas = append(replicas, replica)
-		mlog.Info(ctx, "spawn replica for collection",
-			mlog.Int64("collectionID", params.CollectionID),
-			mlog.Int64("replicaID", config.GetReplicaId()),
-			mlog.String("resourceGroup", config.GetResourceGroupName()),
+		log.Info(ctx, "spawn replica for collection",
+			log.Int64("collectionID", params.CollectionID),
+			log.Int64("replicaID", config.GetReplicaId()),
+			log.String("resourceGroup", config.GetResourceGroupName()),
 		)
 	}
 	if err := m.put(ctx, replicas...); err != nil {
@@ -361,7 +361,7 @@ func (m *ReplicaManager) MoveReplica(ctx context.Context, dstRGName string, toMo
 		replicas = append(replicas, mutableReplica.IntoReplica())
 		replicaIDs = append(replicaIDs, replica.GetID())
 	}
-	mlog.Info(context.TODO(), "move replicas to resource group", mlog.String("dstRGName", dstRGName), mlog.Int64s("replicas", replicaIDs))
+	log.Info(context.TODO(), "move replicas to resource group", log.String("dstRGName", dstRGName), log.Int64s("replicas", replicaIDs))
 	return m.put(ctx, replicas...)
 }
 
@@ -416,7 +416,7 @@ func (m *ReplicaManager) RemoveReplicas(ctx context.Context, collectionID typeut
 	m.rwmutex.Lock()
 	defer m.rwmutex.Unlock()
 
-	mlog.Info(context.TODO(), "release replicas", mlog.Int64("collectionID", collectionID), mlog.Int64s("replicas", replicas))
+	log.Info(context.TODO(), "release replicas", log.Int64("collectionID", collectionID), log.Int64s("replicas", replicas))
 
 	return m.removeReplicas(ctx, collectionID, replicas...)
 }
@@ -548,19 +548,19 @@ func (m *ReplicaManager) RecoverNodesInCollection(ctx context.Context, collectio
 			mutableReplica.AddRONode(roNodes...)          // rw -> ro
 			mutableReplica.AddRWNode(recoverableNodes...) // ro -> rw
 			mutableReplica.AddRWNode(incomingNode...)     // unused -> rw
-			mlog.Info(context.TODO(), 
+			log.Info(context.TODO(), 
 				"new replica recovery found",
-				mlog.Int64("collectionID", collectionID),
-				mlog.Int64("replicaID", assignment.GetReplicaID()),
-				mlog.Int64s("newRONodes", roNodes),
-				mlog.Int64s("roToRWNodes", recoverableNodes),
-				mlog.Int64s("newIncomingNodes", incomingNode),
-				mlog.Bool("enableChannelExclusiveMode", mutableReplica.IsChannelExclusiveModeEnabled()),
-				mlog.Any("channelNodeInfos", mutableReplica.replicaPB.GetChannelNodeInfos()),
-				mlog.Int64s("rwNodes", mutableReplica.GetRWNodes()),
-				mlog.Int64s("roNodes", mutableReplica.GetRONodes()),
-				mlog.Int64s("rwSQNodes", mutableReplica.GetRWSQNodes()),
-				mlog.Int64s("roSQNodes", mutableReplica.GetROSQNodes()),
+				log.Int64("collectionID", collectionID),
+				log.Int64("replicaID", assignment.GetReplicaID()),
+				log.Int64s("newRONodes", roNodes),
+				log.Int64s("roToRWNodes", recoverableNodes),
+				log.Int64s("newIncomingNodes", incomingNode),
+				log.Bool("enableChannelExclusiveMode", mutableReplica.IsChannelExclusiveModeEnabled()),
+				log.Any("channelNodeInfos", mutableReplica.replicaPB.GetChannelNodeInfos()),
+				log.Int64s("rwNodes", mutableReplica.GetRWNodes()),
+				log.Int64s("roNodes", mutableReplica.GetRONodes()),
+				log.Int64s("rwSQNodes", mutableReplica.GetRWSQNodes()),
+				log.Int64s("roSQNodes", mutableReplica.GetROSQNodes()),
 			)
 			modifiedReplicas = append(modifiedReplicas, mutableReplica.IntoReplica())
 		})
@@ -658,7 +658,7 @@ func (m *ReplicaManager) GetReplicasJSON(ctx context.Context, meta *Meta) string
 		collectionInfo := meta.GetCollection(ctx, r.GetCollectionID())
 		dbID := util.InvalidDBID
 		if collectionInfo == nil {
-			mlog.Warn(ctx, "failed to get collection info", mlog.Int64("collectionID", r.GetCollectionID()))
+			log.Warn(ctx, "failed to get collection info", log.Int64("collectionID", r.GetCollectionID()))
 		} else {
 			dbID = collectionInfo.GetDbID()
 		}
@@ -675,7 +675,7 @@ func (m *ReplicaManager) GetReplicasJSON(ctx context.Context, meta *Meta) string
 	})
 	ret, err := json.Marshal(replicas)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to marshal replicas", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to marshal replicas", log.Err(err))
 		return ""
 	}
 	return string(ret)
@@ -715,17 +715,17 @@ func (m *ReplicaManager) RecoverSQNodesInCollection(ctx context.Context, collect
 		mutableReplica.AddROSQNode(roNodes...)          // rw -> ro
 		mutableReplica.AddRWSQNode(recoverableNodes...) // ro -> rw
 		mutableReplica.AddRWSQNode(incomingNode...)     // unused -> rw
-		mlog.Info(context.TODO(), 
+		log.Info(context.TODO(), 
 			"new replica recovery streaming query node found",
-			mlog.Int64("collectionID", collectionID),
-			mlog.Int64("replicaID", assignment.GetReplicaID()),
-			mlog.Int64s("newRONodes", roNodes),
-			mlog.Int64s("roToRWNodes", recoverableNodes),
-			mlog.Int64s("newIncomingNodes", incomingNode),
-			mlog.Int64s("rwNodes", mutableReplica.GetRWNodes()),
-			mlog.Int64s("roNodes", mutableReplica.GetRONodes()),
-			mlog.Int64s("rwSQNodes", mutableReplica.GetRWSQNodes()),
-			mlog.Int64s("roSQNodes", mutableReplica.GetROSQNodes()),
+			log.Int64("collectionID", collectionID),
+			log.Int64("replicaID", assignment.GetReplicaID()),
+			log.Int64s("newRONodes", roNodes),
+			log.Int64s("roToRWNodes", recoverableNodes),
+			log.Int64s("newIncomingNodes", incomingNode),
+			log.Int64s("rwNodes", mutableReplica.GetRWNodes()),
+			log.Int64s("roNodes", mutableReplica.GetRONodes()),
+			log.Int64s("rwSQNodes", mutableReplica.GetRWSQNodes()),
+			log.Int64s("roSQNodes", mutableReplica.GetROSQNodes()),
 		)
 		modifiedReplicas = append(modifiedReplicas, mutableReplica.IntoReplica())
 	})

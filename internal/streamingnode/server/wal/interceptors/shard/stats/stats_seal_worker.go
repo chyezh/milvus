@@ -6,7 +6,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/policy"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/utils"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
@@ -29,7 +29,7 @@ func newSealWorker(statsManager *StatsManager) *sealWorker {
 
 // sealWorker is the background task that handles the seal signal from stats manager or timer.
 type sealWorker struct {
-	mlog.Binder
+	log.Binder
 	statsManager            *StatsManager // reference to the stats manager.
 	sealNotifier            chan sealSegmentIDWithPolicy
 	growingBytesNotifier    *syncutil.CooldownNotifier[uint64]
@@ -95,7 +95,7 @@ func (m *sealWorker) loop() {
 func (m *sealWorker) notifyToSealSegmentWithTimePolicy() {
 	sealSegmentIDs := m.statsManager.selectSegmentsWithTimePolicy()
 	if len(sealSegmentIDs) != 0 {
-		m.Logger().Info(nil, "notify to seal segments with time policy", mlog.Int("segmentNum", len(sealSegmentIDs)))
+		m.Logger().Info(nil, "notify to seal segments with time policy", log.Int("segmentNum", len(sealSegmentIDs)))
 		for segmentID, sealPolicy := range sealSegmentIDs {
 			m.asyncMustSealSegment(segmentID, sealPolicy)
 		}
@@ -106,7 +106,7 @@ func (m *sealWorker) notifyToSealSegmentWithTimePolicy() {
 func (m *sealWorker) notifyToSealSegmentUntilLessThanLWM(sealPolicy policy.SealPolicy) {
 	segmentIDs := m.statsManager.selectSegmentsUntilLessThanLWM()
 	if len(segmentIDs) != 0 {
-		m.Logger().Info(nil, "notify to seal segments until less than LWM", mlog.Int("segmentNum", len(segmentIDs)), mlog.String("policy", string(sealPolicy.Policy)))
+		m.Logger().Info(nil, "notify to seal segments until less than LWM", log.Int("segmentNum", len(segmentIDs)), log.String("policy", string(sealPolicy.Policy)))
 		for _, segmentID := range segmentIDs {
 			m.asyncMustSealSegment(segmentID, sealPolicy)
 		}

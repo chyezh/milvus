@@ -31,7 +31,7 @@ import (
 	"github.com/milvus-io/milvus/internal/cdc/resource"
 	"github.com/milvus-io/milvus/internal/cdc/util"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -86,9 +86,9 @@ func NewReplicateStreamClient(ctx context.Context, c cluster.MilvusClient, chann
 
 func (r *replicateStreamClient) startInternal() {
 	defer func() {
-		mlog.Info(context.TODO(), "replicate stream client closed",
-			mlog.String("key", r.channel.Key),
-			mlog.Int64("revision", r.channel.ModRevision))
+		log.Info(context.TODO(), "replicate stream client closed",
+			log.String("key", r.channel.Key),
+			log.Int64("revision", r.channel.ModRevision))
 		r.metrics.OnClose()
 		close(r.finishedCh)
 	}()
@@ -108,7 +108,7 @@ func (r *replicateStreamClient) startInternal() {
 }
 
 func (r *replicateStreamClient) startReplicating(backoff backoff.BackOff) (needRestart bool) {
-	logger := mlog.With(mlog.String("key", r.channel.Key), mlog.Int64("revision", r.channel.ModRevision))
+	logger := log.With(log.String("key", r.channel.Key), log.Int64("revision", r.channel.ModRevision))
 	if r.ctx.Err() != nil {
 		logger.Info(nil, "close replicate stream client due to ctx done")
 		return false
@@ -121,7 +121,7 @@ func (r *replicateStreamClient) startReplicating(backoff backoff.BackOff) (needR
 
 	client, err := r.targetClient.CreateReplicateStream(connCtx)
 	if err != nil {
-		logger.Warn(nil, "create milvus replicate stream failed, retry...", mlog.Err(err))
+		logger.Warn(nil, "create milvus replicate stream failed, retry...", log.Err(err))
 		return true
 	}
 	defer client.CloseSend()
@@ -155,7 +155,7 @@ func (r *replicateStreamClient) startReplicating(backoff backoff.BackOff) (needR
 		logger.Info(nil, "close replicate stream client due to replication removed")
 		return false
 	} else {
-		logger.Warn(nil, "restart replicate stream client due to unexpected error", mlog.Err(chErr))
+		logger.Warn(nil, "restart replicate stream client due to unexpected error", log.Err(chErr))
 		r.metrics.OnDisconnect()
 		return true
 	}
@@ -201,10 +201,10 @@ func (r *replicateStreamClient) startRecvLoop(ctx context.Context) <-chan error 
 }
 
 func (r *replicateStreamClient) sendLoop(ctx context.Context) (err error) {
-	logger := mlog.With(mlog.String("key", r.channel.Key), mlog.Int64("revision", r.channel.ModRevision))
+	logger := log.With(log.String("key", r.channel.Key), log.Int64("revision", r.channel.ModRevision))
 	defer func() {
 		if err != nil {
-			logger.Warn(nil, "send loop closed by unexpected error", mlog.Err(err))
+			logger.Warn(nil, "send loop closed by unexpected error", log.Err(err))
 		} else {
 			logger.Info(nil, "send loop closed")
 		}
@@ -255,12 +255,12 @@ func (r *replicateStreamClient) sendLoop(ctx context.Context) (err error) {
 
 func (r *replicateStreamClient) sendMessage(msg message.ImmutableMessage) (err error) {
 	defer func() {
-		logger := mlog.With(mlog.String("key", r.channel.Key), mlog.Int64("revision", r.channel.ModRevision))
+		logger := log.With(log.String("key", r.channel.Key), log.Int64("revision", r.channel.ModRevision))
 		if err != nil {
-			logger.Warn(nil, "send message failed", mlog.Err(err), mlog.FieldMessage(msg))
+			logger.Warn(nil, "send message failed", log.Err(err), log.FieldMessage(msg))
 		} else {
 			r.metrics.OnSent(msg)
-			logger.Debug(nil, "send message success", mlog.FieldMessage(msg))
+			logger.Debug(nil, "send message success", log.FieldMessage(msg))
 		}
 	}()
 	immutableMessage := msg.IntoImmutableMessageProto()
@@ -280,12 +280,12 @@ func (r *replicateStreamClient) sendMessage(msg message.ImmutableMessage) (err e
 }
 
 func (r *replicateStreamClient) recvLoop(ctx context.Context) (err error) {
-	logger := mlog.With(mlog.String("key", r.channel.Key), mlog.Int64("revision", r.channel.ModRevision))
+	logger := log.With(log.String("key", r.channel.Key), log.Int64("revision", r.channel.ModRevision))
 	defer func() {
 		if err != nil && !errors.Is(err, ErrReplicationRemoved) {
-			logger.Warn(nil, "recv loop closed by unexpected error", mlog.Err(err))
+			logger.Warn(nil, "recv loop closed by unexpected error", log.Err(err))
 		} else {
-			logger.Info(nil, "recv loop closed", mlog.Err(err))
+			logger.Info(nil, "recv loop closed", log.Err(err))
 		}
 	}()
 	for {
@@ -295,7 +295,7 @@ func (r *replicateStreamClient) recvLoop(ctx context.Context) (err error) {
 		default:
 			resp, err := r.client.Recv()
 			if err != nil {
-				logger.Warn(nil, "replicate stream recv failed", mlog.Err(err))
+				logger.Warn(nil, "replicate stream recv failed", log.Err(err))
 				return err
 			}
 			lastConfirmedMessageInfo := resp.GetReplicateConfirmedMessageInfo()
@@ -317,8 +317,8 @@ func (r *replicateStreamClient) recvLoop(ctx context.Context) (err error) {
 }
 
 func (r *replicateStreamClient) handleAlterReplicateConfigMessage(msg message.ImmutableMessage) (replicationRemoved bool) {
-	logger := mlog.With(mlog.String("key", r.channel.Key), mlog.Int64("revision", r.channel.ModRevision))
-	logger.Info(nil, "handle AlterReplicateConfigMessage", mlog.FieldMessage(msg))
+	logger := log.With(log.String("key", r.channel.Key), log.Int64("revision", r.channel.ModRevision))
+	logger.Info(nil, "handle AlterReplicateConfigMessage", log.FieldMessage(msg))
 
 	replicationRemoved = util.IsReplicationRemovedByAlterReplicateConfigMessage(msg, r.channel.Value)
 	if replicationRemoved {
@@ -327,7 +327,7 @@ func (r *replicateStreamClient) handleAlterReplicateConfigMessage(msg message.Im
 		etcdCli := resource.Resource().ETCD()
 		ok, err := meta.RemoveReplicatePChannelWithRevision(r.ctx, etcdCli, r.channel.Key, r.channel.ModRevision)
 		if err != nil {
-			logger.Warn(nil, "failed to remove replicate pchannel", mlog.Err(err))
+			logger.Warn(nil, "failed to remove replicate pchannel", log.Err(err))
 			// When performing delete operation on etcd, the context may be canceled by the delete event
 			// in cdc controller and then return `context.Canceled` error.
 			// Since the delete event is generated after the delete operation is committed in etcd,

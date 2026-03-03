@@ -24,7 +24,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/broadcast"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 )
 
@@ -96,9 +96,9 @@ func (s *Server) startBroadcastForRestoreSnapshot(ctx context.Context, collectio
 		return nil, err
 	}
 
-	mlog.Info(ctx, "broadcast started for restore snapshot",
-		mlog.Int64("collectionID", collectionID),
-		mlog.String("snapshotName", snapshotName))
+	log.Info(ctx, "broadcast started for restore snapshot",
+		log.Int64("collectionID", collectionID),
+		log.String("snapshotName", snapshotName))
 	return b, nil
 }
 
@@ -122,7 +122,7 @@ func (s *Server) validateRestoreSnapshotResources(ctx context.Context, collectio
 			return fmt.Errorf("partition %s does not exist in collection %d", partName, collectionID)
 		}
 	}
-	mlog.Info(context.TODO(), "partitions validated", mlog.Int("count", len(existingPartitions)))
+	log.Info(context.TODO(), "partitions validated", log.Int("count", len(existingPartitions)))
 
 	return nil
 }
@@ -144,9 +144,9 @@ func (s *Server) startBroadcastRestoreSnapshot(
 	}
 	dbName := coll.GetDbName()
 	collectionName := coll.GetCollectionName()
-	mlog.Info(context.TODO(), "collection validated",
-		mlog.String("dbName", dbName),
-		mlog.String("collectionName", collectionName))
+	log.Info(context.TODO(), "collection validated",
+		log.String("dbName", dbName),
+		log.String("collectionName", collectionName))
 
 	// ========== Validate Partitions Exist ==========
 	partitionsResp, err := s.broker.ShowPartitions(ctx, collectionID)
@@ -167,7 +167,7 @@ func (s *Server) startBroadcastRestoreSnapshot(
 				partName, collectionID)
 		}
 	}
-	mlog.Info(context.TODO(), "partitions validated", mlog.Int("count", len(existingPartitions)))
+	log.Info(context.TODO(), "partitions validated", log.Int("count", len(existingPartitions)))
 
 	// ========== Validate Indexes Exist ==========
 	for _, indexInfo := range snapshotData.Indexes {
@@ -186,7 +186,7 @@ func (s *Server) startBroadcastRestoreSnapshot(
 				indexInfo.GetIndexName(), indexInfo.GetFieldID(), collectionID)
 		}
 	}
-	mlog.Info(context.TODO(), "indexes validated", mlog.Int("count", len(snapshotData.Indexes)))
+	log.Info(context.TODO(), "indexes validated", log.Int("count", len(snapshotData.Indexes)))
 
 	// ========== Start Broadcast ==========
 	b, err := broadcast.StartBroadcastWithResourceKeys(
@@ -199,6 +199,6 @@ func (s *Server) startBroadcastRestoreSnapshot(
 		return nil, err
 	}
 
-	mlog.Info(context.TODO(), "broadcast started for restore snapshot")
+	log.Info(context.TODO(), "broadcast started for restore snapshot")
 	return b, nil
 }

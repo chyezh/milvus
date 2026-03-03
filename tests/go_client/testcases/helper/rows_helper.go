@@ -7,7 +7,7 @@ import (
 
 
 	"github.com/milvus-io/milvus/client/v2/entity"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/tests/go_client/common"
 )
 
@@ -195,7 +195,7 @@ func GenNullableScalarRows(nb int, option GenDataOption) []interface{} {
 
 func GenInt64VecRows(nb int, enableDynamicField bool, autoID bool, option GenDataOption) []interface{} {
 	if option.validData != nil {
-		mlog.Fatal(context.TODO(), "GenInt64VecRows with valid data is not yet implemented")
+		log.Fatal(context.TODO(), "GenInt64VecRows with valid data is not yet implemented")
 	}
 	dim := option.dim
 	start := option.start
@@ -221,7 +221,7 @@ func GenInt64VecRows(nb int, enableDynamicField bool, autoID bool, option GenDat
 func GenInt64VarcharSparseRows(nb int, enableDynamicField bool, autoID bool, option GenDataOption) []interface{} {
 	start := option.start
 	if option.validData != nil && len(option.validData) != nb {
-		mlog.Warn(context.TODO(), "GenInt64VarcharSparseRows", mlog.Int("unexpected validData length", len(option.validData)))
+		log.Warn(context.TODO(), "GenInt64VarcharSparseRows", log.Int("unexpected validData length", len(option.validData)))
 	}
 
 	rows := make([]interface{}, 0, nb)
@@ -245,7 +245,7 @@ func GenInt64VarcharSparseRows(nb int, enableDynamicField bool, autoID bool, opt
 
 func GenAllFieldsRows(nb int, enableDynamicField bool, option GenDataOption) []interface{} {
 	if option.validData != nil {
-		mlog.Fatal(context.TODO(), "GenAllFieldsRows with valid data is not yet implemented")
+		log.Fatal(context.TODO(), "GenAllFieldsRows with valid data is not yet implemented")
 	}
 	rows := make([]interface{}, 0, nb)
 
@@ -284,7 +284,7 @@ func GenAllFieldsRows(nb int, enableDynamicField bool, option GenDataOption) []i
 
 func GenAllArrayRow(index int, option GenDataOption) Array {
 	if option.validData != nil {
-		mlog.Fatal(context.TODO(), "GenAllArrayRow with valid data is not yet implemented")
+		log.Fatal(context.TODO(), "GenAllArrayRow with valid data is not yet implemented")
 	}
 
 	capacity := option.maxCapacity

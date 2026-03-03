@@ -27,7 +27,7 @@ import (
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -96,7 +96,7 @@ func alterFunctionGenNewCollection(ctx context.Context, fSchema *schemapb.Functi
 	}
 	if oldFuncSchema == nil {
 		err := fmt.Errorf("Function %s not exists", fSchema.Name)
-		mlog.Error(ctx, "Alter function failed:", mlog.Err(err))
+		log.Error(ctx, "Alter function failed:", log.Err(err))
 		return err
 	}
 
@@ -120,7 +120,7 @@ func alterFunctionGenNewCollection(ctx context.Context, fSchema *schemapb.Functi
 		field, exists := fieldMapping[name]
 		if !exists {
 			err := fmt.Errorf("function's input field %s not exists", name)
-			mlog.Error(ctx, "Incorrect function configuration:", mlog.Err(err))
+			log.Error(ctx, "Incorrect function configuration:", log.Err(err))
 			return err
 		}
 		fSchema.InputFieldIds = append(fSchema.InputFieldIds, field.FieldID)
@@ -129,12 +129,12 @@ func alterFunctionGenNewCollection(ctx context.Context, fSchema *schemapb.Functi
 		field, exists := fieldMapping[name]
 		if !exists {
 			err := fmt.Errorf("function's output field %s not exists", name)
-			mlog.Error(ctx, "Incorrect function configuration:", mlog.Err(err))
+			log.Error(ctx, "Incorrect function configuration:", log.Err(err))
 			return err
 		}
 		if field.IsFunctionOutput {
 			err := fmt.Errorf("function's output field %s is already of other functions", name)
-			mlog.Error(ctx, "Incorrect function configuration: ", mlog.Err(err))
+			log.Error(ctx, "Incorrect function configuration: ", log.Err(err))
 			return err
 		}
 		fSchema.OutputFieldIds = append(fSchema.OutputFieldIds, field.FieldID)
@@ -248,7 +248,7 @@ func (c *Core) broadcastAlterCollectionForAddFunction(ctx context.Context, req *
 		field, exists := fieldMapping[name]
 		if !exists {
 			err := fmt.Errorf("function's input field %s not exists", name)
-			mlog.Error(ctx, "Incorrect function configuration:", mlog.Err(err))
+			log.Error(ctx, "Incorrect function configuration:", log.Err(err))
 			return err
 		}
 		fSchema.InputFieldIds = append(fSchema.InputFieldIds, field.FieldID)
@@ -257,12 +257,12 @@ func (c *Core) broadcastAlterCollectionForAddFunction(ctx context.Context, req *
 		field, exists := fieldMapping[name]
 		if !exists {
 			err := fmt.Errorf("function's output field %s not exists", name)
-			mlog.Error(ctx, "Incorrect function configuration:", mlog.Err(err))
+			log.Error(ctx, "Incorrect function configuration:", log.Err(err))
 			return err
 		}
 		if field.IsFunctionOutput {
 			err := fmt.Errorf("function's output field %s is already of other functions", name)
-			mlog.Error(ctx, "Incorrect function configuration: ", mlog.Err(err))
+			log.Error(ctx, "Incorrect function configuration: ", log.Err(err))
 			return err
 		}
 		fSchema.OutputFieldIds = append(fSchema.OutputFieldIds, field.FieldID)

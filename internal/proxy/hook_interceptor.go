@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/milvus-io/milvus/internal/util/hookutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -33,8 +33,8 @@ func HookInterceptor(ctx context.Context, req any, userName, fullMethod string, 
 	)
 
 	if isMock, mockResp, err = hoo.Mock(ctx, req, fullMethod); isMock {
-		mlog.Info(context.TODO(), "hook mock", mlog.String("user", userName),
-			mlog.String("full method", fullMethod), mlog.Err(err))
+		log.Info(context.TODO(), "hook mock", log.String("user", userName),
+			log.String("full method", fullMethod), log.Err(err))
 		metrics.ProxyHookFunc.WithLabelValues(metrics.HookMock, fullMethod).Inc()
 		updateProxyFunctionCallMetric(fullMethod)
 		if err != nil {
@@ -45,8 +45,8 @@ func HookInterceptor(ctx context.Context, req any, userName, fullMethod string, 
 	}
 
 	if newCtx, err = hoo.Before(ctx, req, fullMethod); err != nil {
-		mlog.Warn(context.TODO(), "hook before error", mlog.String("user", userName), mlog.String("full method", fullMethod),
-			mlog.Any("request", req), mlog.Err(err))
+		log.Warn(context.TODO(), "hook before error", log.String("user", userName), log.String("full method", fullMethod),
+			log.Any("request", req), log.Err(err))
 		metrics.ProxyHookFunc.WithLabelValues(metrics.HookBefore, fullMethod).Inc()
 		updateProxyFunctionCallMetric(fullMethod)
 		// NOTE: don't use the merr, because it will cause the wrong retry behavior in the sdk
@@ -54,8 +54,8 @@ func HookInterceptor(ctx context.Context, req any, userName, fullMethod string, 
 	}
 	realResp, realErr = handler(newCtx, req)
 	if err = hoo.After(newCtx, realResp, realErr, fullMethod); err != nil {
-		mlog.Warn(context.TODO(), "hook after error", mlog.String("user", userName), mlog.String("full method", fullMethod),
-			mlog.Any("request", req), mlog.Err(err))
+		log.Warn(context.TODO(), "hook after error", log.String("user", userName), log.String("full method", fullMethod),
+			log.Any("request", req), log.Err(err))
 		metrics.ProxyHookFunc.WithLabelValues(metrics.HookAfter, fullMethod).Inc()
 		updateProxyFunctionCallMetric(fullMethod)
 		// NOTE: don't use the merr, because it will cause the wrong retry behavior in the sdk

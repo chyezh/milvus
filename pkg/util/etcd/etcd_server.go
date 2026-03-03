@@ -8,7 +8,7 @@ import (
 	"go.etcd.io/etcd/server/v3/embed"
 	"go.etcd.io/etcd/server/v3/etcdserver/api/v3client"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 // EtcdServer is the singleton of embedded etcd server
@@ -51,11 +51,11 @@ func InitEtcdServer(
 			cfg.LogLevel = logLevel
 			e, err := embed.StartEtcd(cfg)
 			if err != nil {
-				mlog.Error(context.TODO(), "failed to init embedded Etcd server", mlog.Err(err))
+				log.Error(context.TODO(), "failed to init embedded Etcd server", log.Err(err))
 				initError = err
 			}
 			etcdServer = e
-			mlog.Info(context.TODO(), "finish init Etcd config", mlog.String("path", path), mlog.String("data", dataDir))
+			log.Info(context.TODO(), "finish init Etcd config", log.String("path", path), log.String("data", dataDir))
 		})
 		return initError
 	}

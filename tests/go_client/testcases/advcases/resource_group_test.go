@@ -13,7 +13,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/entity"
 	client "github.com/milvus-io/milvus/client/v2/milvusclient"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/tests/go_client/base"
 	"github.com/milvus-io/milvus/tests/go_client/common"
 	hp "github.com/milvus-io/milvus/tests/go_client/testcases/helper"
@@ -70,7 +70,7 @@ func setupTest(t *testing.T, ctx context.Context, mc *base.MilvusClient) {
 func checkResourceGroup(t *testing.T, ctx context.Context, mc *base.MilvusClient, expRg *entity.ResourceGroup) {
 	actualRg, err := mc.DescribeResourceGroup(ctx, client.NewDescribeResourceGroupOption(expRg.Name))
 	common.CheckErr(t, err, true)
-	mlog.Info(ctx, "checkResourceGroup", mlog.Any("actualRg", actualRg))
+	log.Info(ctx, "checkResourceGroup", log.Any("actualRg", actualRg))
 	common.CheckResourceGroup(t, actualRg, expRg)
 }
 
@@ -229,7 +229,7 @@ func TestCreateRgWithRequestsLimits(t *testing.T) {
 	common.CheckErr(t, err, true)
 
 	for _, rl := range reqAndLimits {
-		mlog.Info(ctx, "TestCreateRgWithRequestsLimits", mlog.Any("reqAndLimit", rl))
+		log.Info(ctx, "TestCreateRgWithRequestsLimits", log.Any("reqAndLimit", rl))
 		rgName := common.GenRandomString("rg", 6)
 
 		errCreate := mc.CreateResourceGroup(ctx, client.NewCreateResourceGroupOption(rgName).WithNodeRequest(rl.requests).WithNodeLimit(rl.limits))
@@ -401,7 +401,7 @@ func TestUpdateRgWithRequestsLimits(t *testing.T) {
 	common.CheckErr(t, err, false, "limits node num should not less than requests node num")
 
 	for _, rl := range reqAndLimits {
-		mlog.Info(ctx, "TestUpdateRgWithRequestsLimits", mlog.Any("reqAndLimit", rl))
+		log.Info(ctx, "TestUpdateRgWithRequestsLimits", log.Any("reqAndLimit", rl))
 		errCreate := mc.UpdateResourceGroup(ctx, client.NewUpdateResourceGroupOption(rgName, &entity.ResourceGroupConfig{
 			Requests: entity.ResourceGroupLimit{NodeNum: rl.requests},
 			Limits:   entity.ResourceGroupLimit{NodeNum: rl.limits},
@@ -562,7 +562,7 @@ func TestTransferReplicaInvalidReplicaNumber(t *testing.T) {
 
 	for _, invalidReplica := range invalidReplicas {
 		// transfer replica
-		mlog.Info(ctx, "TestTransferReplicaInvalidReplicaNumber", mlog.Int64("replica", invalidReplica.replicaNumber))
+		log.Info(ctx, "TestTransferReplicaInvalidReplicaNumber", log.Int64("replica", invalidReplica.replicaNumber))
 		errTransfer := mc.TransferReplica(ctx, client.NewTransferReplicaOption(schema.CollectionName, rgName, common.DefaultRgName, invalidReplica.replicaNumber))
 		common.CheckErr(t, errTransfer, false, invalidReplica.errMsg)
 	}

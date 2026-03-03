@@ -8,7 +8,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/resource"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 )
@@ -27,7 +27,7 @@ func NewAssignmentDiscoverServer(
 		streamServer: discoverGrpcServerHelper{
 			streamServer,
 		},
-		logger: resource.Resource().Logger().With(mlog.FieldComponent("assignment-discover-server")),
+		logger: resource.Resource().Logger().With(log.FieldComponent("assignment-discover-server")),
 	}
 }
 
@@ -36,7 +36,7 @@ type AssignmentDiscoverServer struct {
 	cancel       context.CancelCauseFunc
 	balancer     balancer.Balancer
 	streamServer discoverGrpcServerHelper
-	logger       *mlog.Logger
+	logger       *log.Logger
 }
 
 func (s *AssignmentDiscoverServer) Execute() error {
@@ -60,7 +60,7 @@ func (s *AssignmentDiscoverServer) recvLoop() (err error) {
 	defer func() {
 		if err != nil {
 			s.cancel(err)
-			s.logger.Warn(nil, "recv arm of stream closed by unexpected error", mlog.Err(err))
+			s.logger.Warn(nil, "recv arm of stream closed by unexpected error", log.Err(err))
 			return
 		}
 		s.cancel(errClosedByUser)
@@ -82,7 +82,7 @@ func (s *AssignmentDiscoverServer) recvLoop() (err error) {
 			s.balancer.MarkAsUnavailable(s.ctx, []types.PChannelInfo{channel})
 		case *streamingpb.AssignmentDiscoverRequest_Close:
 		default:
-			s.logger.Warn(nil, "unknown command type", mlog.Any("command", req))
+			s.logger.Warn(nil, "unknown command type", log.Any("command", req))
 		}
 	}
 }

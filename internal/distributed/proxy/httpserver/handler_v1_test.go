@@ -39,7 +39,7 @@ import (
 	"github.com/milvus-io/milvus/internal/mocks"
 	"github.com/milvus-io/milvus/internal/proxy"
 	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -2009,31 +2009,31 @@ func TestInterceptor(t *testing.T) {
 	v := atomic.NewInt32(0)
 	h.interceptors = []RestRequestInterceptor{
 		func(ctx context.Context, ginCtx *gin.Context, req any, handler func(reqCtx context.Context, req any) (any, error)) (any, error) {
-			mlog.Info(context.TODO(), "pre1")
+			log.Info(context.TODO(), "pre1")
 			v.Add(1)
 			assert.EqualValues(t, 1, v.Load())
 			res, err := handler(ctx, req)
-			mlog.Info(context.TODO(), "post1")
+			log.Info(context.TODO(), "post1")
 			v.Add(1)
 			assert.EqualValues(t, 6, v.Load())
 			return res, err
 		},
 		func(ctx context.Context, ginCtx *gin.Context, req any, handler func(reqCtx context.Context, req any) (any, error)) (any, error) {
-			mlog.Info(context.TODO(), "pre2")
+			log.Info(context.TODO(), "pre2")
 			v.Add(1)
 			assert.EqualValues(t, 2, v.Load())
 			res, err := handler(ctx, req)
-			mlog.Info(context.TODO(), "post2")
+			log.Info(context.TODO(), "post2")
 			v.Add(1)
 			assert.EqualValues(t, 5, v.Load())
 			return res, err
 		},
 		func(ctx context.Context, ginCtx *gin.Context, req any, handler func(reqCtx context.Context, req any) (any, error)) (any, error) {
-			mlog.Info(context.TODO(), "pre3")
+			log.Info(context.TODO(), "pre3")
 			v.Add(1)
 			assert.EqualValues(t, 3, v.Load())
 			res, err := handler(ctx, req)
-			mlog.Info(context.TODO(), "post3")
+			log.Info(context.TODO(), "post3")
 			v.Add(1)
 			assert.EqualValues(t, 4, v.Load())
 			return res, err

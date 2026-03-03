@@ -24,7 +24,7 @@ import (
 
 	"github.com/samber/lo"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -88,22 +88,22 @@ func (v *ForceMergeSegmentView) GetTriggerID() int64 {
 func (v *ForceMergeSegmentView) calculateTargetSizeCount() (maxSafeSize float64, targetCount int64) {
 	maxSafeSize = v.calculateMaxSafeSize()
 	if maxSafeSize < v.configMaxSize {
-		mlog.Info(context.TODO(), "maxSafeSize is less than configMaxSize, set to configMaxSize",
-			mlog.Float64("maxSafeSize", maxSafeSize),
-			mlog.Float64("configMaxSize", v.configMaxSize))
+		log.Info(context.TODO(), "maxSafeSize is less than configMaxSize, set to configMaxSize",
+			log.Float64("maxSafeSize", maxSafeSize),
+			log.Float64("configMaxSize", v.configMaxSize))
 		maxSafeSize = v.configMaxSize
 	}
 
 	if v.expectedTargetSize > 0 {
 		if v.expectedTargetSize <= maxSafeSize {
-			mlog.Info(context.TODO(), "using user-provided target size",
-				mlog.Float64("expectedTargetSize", v.expectedTargetSize),
-				mlog.Float64("maxSafeSize", maxSafeSize))
+			log.Info(context.TODO(), "using user-provided target size",
+				log.Float64("expectedTargetSize", v.expectedTargetSize),
+				log.Float64("maxSafeSize", maxSafeSize))
 			maxSafeSize = v.expectedTargetSize
 		} else {
-			mlog.Warn(context.TODO(), "user-provided target size exceeds maxSafeSize, using maxSafeSize",
-				mlog.Float64("expectedTargetSize", v.expectedTargetSize),
-				mlog.Float64("maxSafeSize", maxSafeSize))
+			log.Warn(context.TODO(), "user-provided target size exceeds maxSafeSize, using maxSafeSize",
+				log.Float64("expectedTargetSize", v.expectedTargetSize),
+				log.Float64("maxSafeSize", maxSafeSize))
 		}
 	}
 
@@ -130,23 +130,23 @@ func (v *ForceMergeSegmentView) calculateTargetSizeCount() (maxSafeSize float64,
 		if totalSize/float64(desiredCount) >= v.configMaxSize {
 			targetCount = desiredCount
 			maxSafeSize = totalSize / float64(targetCount)
-			mlog.Info(context.TODO(), "adjusted target count for parallel loading per shard",
-				mlog.Int64("queryNodeCount", queryNodeCount),
-				mlog.Int64("numReplicas", numReplicas),
-				mlog.Int64("numShards", numShards),
-				mlog.Int64("perShardParallelism", perShardParallelism),
-				mlog.Int64("adjustedTargetCount", targetCount),
-				mlog.Float64("adjustedTargetSize", maxSafeSize))
+			log.Info(context.TODO(), "adjusted target count for parallel loading per shard",
+				log.Int64("queryNodeCount", queryNodeCount),
+				log.Int64("numReplicas", numReplicas),
+				log.Int64("numShards", numShards),
+				log.Int64("perShardParallelism", perShardParallelism),
+				log.Int64("adjustedTargetCount", targetCount),
+				log.Float64("adjustedTargetSize", maxSafeSize))
 		}
 	}
 
-	mlog.Info(context.TODO(), "topology-aware force merge calculation",
-		mlog.Int64("targetSegmentCount", targetCount),
-		mlog.Float64("targetSegmentSize", maxSafeSize),
-		mlog.Int64("queryNodeCount", queryNodeCount),
-		mlog.Int64("numReplicas", numReplicas),
-		mlog.Int64("numShards", numShards),
-		mlog.Int64("perShardParallelism", perShardParallelism))
+	log.Info(context.TODO(), "topology-aware force merge calculation",
+		log.Int64("targetSegmentCount", targetCount),
+		log.Float64("targetSegmentSize", maxSafeSize),
+		log.Int64("queryNodeCount", queryNodeCount),
+		log.Int64("numReplicas", numReplicas),
+		log.Int64("numShards", numShards),
+		log.Int64("perShardParallelism", perShardParallelism))
 	return maxSafeSize, targetCount
 }
 
@@ -187,17 +187,17 @@ func adaptiveGroupSegments(segments []*SegmentView, targetSize float64) [][]*Seg
 	// Use maxFull for small segment counts to maximize full segments
 	// Use larger for large segment counts for O(n) performance
 	if n <= threshold {
-		mlog.Info(context.TODO(), "adaptiveGroupSegments: using maxFullSegmentsGrouping algorithm",
-			mlog.Int("segmentCount", n),
-			mlog.Int("threshold", threshold),
-			mlog.Float64("targetSize", targetSize))
+		log.Info(context.TODO(), "adaptiveGroupSegments: using maxFullSegmentsGrouping algorithm",
+			log.Int("segmentCount", n),
+			log.Int("threshold", threshold),
+			log.Float64("targetSize", targetSize))
 		return maxFullSegmentsGrouping(segments, targetSize)
 	}
 
-	mlog.Info(context.TODO(), "adaptiveGroupSegments: using largerGroupingSegments algorithm",
-		mlog.Int("segmentCount", n),
-		mlog.Int("threshold", threshold),
-		mlog.Float64("targetSize", targetSize))
+	log.Info(context.TODO(), "adaptiveGroupSegments: using largerGroupingSegments algorithm",
+		log.Int("segmentCount", n),
+		log.Int("threshold", threshold),
+		log.Float64("targetSize", targetSize))
 	return largerGroupingSegments(segments, targetSize)
 }
 
@@ -340,7 +340,7 @@ func maxFullSegmentsGrouping(segments []*SegmentView, targetSize float64) [][]*S
 
 func (v *ForceMergeSegmentView) calculateMaxSafeSize() float64 {
 	if len(v.topology.QueryNodeMemory) == 0 || len(v.topology.DataNodeMemory) == 0 {
-		mlog.Warn(context.TODO(), "No querynodes or datanodes in topology, using config size")
+		log.Warn(context.TODO(), "No querynodes or datanodes in topology, using config size")
 		return v.configMaxSize
 	}
 
@@ -354,20 +354,20 @@ func (v *ForceMergeSegmentView) calculateMaxSafeSize() float64 {
 
 	maxSafeSize := min(qnMaxSafeSize, dnMaxSafeSize)
 	if v.topology.IsStandaloneMode && !v.topology.IsPooling {
-		mlog.Info(context.TODO(), "force merge on standalone not pooling mode, half the max size",
-			mlog.Float64("qnMaxSafeSize", qnMaxSafeSize),
-			mlog.Float64("dnMaxSafeSize", dnMaxSafeSize),
-			mlog.Float64("maxSafeSize/2", maxSafeSize/2),
-			mlog.Float64("configMaxSize", v.configMaxSize))
+		log.Info(context.TODO(), "force merge on standalone not pooling mode, half the max size",
+			log.Float64("qnMaxSafeSize", qnMaxSafeSize),
+			log.Float64("dnMaxSafeSize", dnMaxSafeSize),
+			log.Float64("maxSafeSize/2", maxSafeSize/2),
+			log.Float64("configMaxSize", v.configMaxSize))
 		// dn and qn are co-located, half the min
 		return maxSafeSize * 0.5
 	}
 
-	mlog.Info(context.TODO(), "force merge on cluster/pooling mode",
-		mlog.Float64("qnMaxSafeSize", qnMaxSafeSize),
-		mlog.Float64("dnMaxSafeSize", dnMaxSafeSize),
-		mlog.Float64("maxSafeSize", maxSafeSize),
-		mlog.Float64("configMaxSize", v.configMaxSize))
+	log.Info(context.TODO(), "force merge on cluster/pooling mode",
+		log.Float64("qnMaxSafeSize", qnMaxSafeSize),
+		log.Float64("dnMaxSafeSize", dnMaxSafeSize),
+		log.Float64("maxSafeSize", maxSafeSize),
+		log.Float64("configMaxSize", v.configMaxSize))
 	return maxSafeSize
 }
 

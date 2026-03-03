@@ -12,7 +12,7 @@ import (
 	"github.com/x448/float16"
 
 	"github.com/milvus-io/milvus/client/v2/entity"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
@@ -116,7 +116,7 @@ func GenSparseVector(maxLen int) entity.SparseEmbedding {
 	}
 	vector, err := entity.NewSliceSparseEmbedding(positions, values)
 	if err != nil {
-		mlog.Fatal(context.TODO(), "Generate vector failed %s", mlog.Err(err))
+		log.Fatal(context.TODO(), "Generate vector failed %s", log.Err(err))
 	}
 	return vector
 }
@@ -204,7 +204,7 @@ func GenText(lang string) string {
 		return fmt.Sprintf("%s%s%s", topic, verb, object)
 	default:
 		// Fallback to en for unsupported languages
-		mlog.Warn(context.TODO(), "Unsupported language, fallback to English", mlog.String("language", lang))
+		log.Warn(context.TODO(), "Unsupported language, fallback to English", log.String("language", lang))
 		topic = englishTopics[rand.Intn(len(englishTopics))]
 		verb = englishVerbs[rand.Intn(len(englishVerbs))]
 		object = englishObjects[rand.Intn(len(englishObjects))]

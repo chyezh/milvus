@@ -31,7 +31,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/grpcclient"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
@@ -70,7 +70,7 @@ func NewClient(ctx context.Context) (types.MixCoordClient, error) {
 	sess := sessionutil.NewSession(context.Background())
 	if sess == nil {
 		err := errors.New("new session error, maybe can not connect to etcd")
-		mlog.Debug(ctx, "New MixCoord Client failed", mlog.Err(err))
+		log.Debug(ctx, "New MixCoord Client failed", log.Err(err))
 		return nil, err
 	}
 	config := &Params.RootCoordGrpcClientCfg
@@ -88,7 +88,7 @@ func NewClient(ctx context.Context) (types.MixCoordClient, error) {
 		client.grpcClient.EnableEncryption()
 		cp, err := utils.CreateCertPoolforClient(Params.InternalTLSCfg.InternalTLSCaPemPath.GetValue(), "RootCoord")
 		if err != nil {
-			mlog.Error(ctx, "Failed to create cert pool for RootCoord client")
+			log.Error(ctx, "Failed to create cert pool for RootCoord client")
 			return nil, err
 		}
 		client.grpcClient.SetInternalTLSCertPool(cp)
@@ -110,7 +110,7 @@ func (c *Client) getMixCoordAddr() (string, error) {
 	key := c.grpcClient.GetRole()
 	msess, _, err := c.sess.GetSessions(c.ctx, key)
 	if err != nil {
-		mlog.Debug(context.TODO(), "MixCoordClient GetSessions failed", mlog.Any("key", key))
+		log.Debug(context.TODO(), "MixCoordClient GetSessions failed", log.Any("key", key))
 		return "", err
 	}
 	ms, ok := msess[key]
@@ -118,14 +118,14 @@ func (c *Client) getMixCoordAddr() (string, error) {
 		if paramtable.GetRole() == typeutil.StandaloneRole {
 			return c.getCompatibleMixCoordAddr()
 		} else {
-			mlog.Warn(context.TODO(), "MixCoordClient mess key not exist", mlog.Any("key", key))
+			log.Warn(context.TODO(), "MixCoordClient mess key not exist", log.Any("key", key))
 			return "", errors.New("find no available mixcoord, check mixcoord state")
 		}
 	}
-	mlog.Debug(context.TODO(), "MixCoordClient GetSessions success",
-		mlog.String("address", ms.Address),
-		mlog.Int64("serverID", ms.ServerID),
-		mlog.String("role", key))
+	log.Debug(context.TODO(), "MixCoordClient GetSessions success",
+		log.String("address", ms.Address),
+		log.Int64("serverID", ms.ServerID),
+		log.String("role", key))
 	c.grpcClient.SetNodeID(ms.ServerID)
 	return ms.Address, nil
 }
@@ -134,15 +134,15 @@ func (c *Client) getMixCoordAddr() (string, error) {
 func (c *Client) getCompatibleMixCoordAddr() (string, error) {
 	msess, _, err := c.sess.GetSessions(c.ctx, typeutil.RootCoordRole)
 	if err != nil {
-		mlog.Debug(context.TODO(), "mixCoordClient getSessions failed", mlog.Any("key", typeutil.RootCoordRole), mlog.Err(err))
+		log.Debug(context.TODO(), "mixCoordClient getSessions failed", log.Any("key", typeutil.RootCoordRole), log.Err(err))
 		return "", errors.New("find no available mixcoord, check mixcoord state")
 	}
 	ms, ok := msess[typeutil.RootCoordRole]
 	if !ok {
-		mlog.Warn(context.TODO(), "MixCoordClient mess key not exist", mlog.Any("key", typeutil.RootCoordRole))
+		log.Warn(context.TODO(), "MixCoordClient mess key not exist", log.Any("key", typeutil.RootCoordRole))
 		return "", errors.New("find no available mixcoord, check mixcoord state")
 	}
-	mlog.Debug(context.TODO(), "MixCoordClient GetSessions use rootCoord", mlog.Any("key", typeutil.RootCoordRole))
+	log.Debug(context.TODO(), "MixCoordClient GetSessions use rootCoord", log.Any("key", typeutil.RootCoordRole))
 	c.grpcClient.SetNodeID(ms.ServerID)
 	return ms.Address, nil
 }

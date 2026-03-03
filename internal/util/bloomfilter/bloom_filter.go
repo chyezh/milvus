@@ -23,7 +23,7 @@ import (
 	"github.com/zeebo/xxh3"
 
 	"github.com/milvus-io/milvus/internal/json"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 type BFType int
@@ -296,7 +296,7 @@ func NewBloomFilterWithType(capacity uint, fp float64, typeName string) BloomFil
 	case BasicBF:
 		return newBasicBloomFilter(capacity, fp)
 	default:
-		mlog.Info(context.TODO(), "unsupported bloom filter type, using block bloom filter", mlog.String("type", typeName))
+		log.Info(context.TODO(), "unsupported bloom filter type, using block bloom filter", log.String("type", typeName))
 		return newBlockedBloomFilter(capacity, fp)
 	}
 }
@@ -333,7 +333,7 @@ func Locations(data []byte, k uint, bfType BFType) []uint64 {
 	case AlwaysTrueBF:
 		return nil
 	default:
-		mlog.Info(context.TODO(), "unsupported bloom filter type, using block bloom filter", mlog.String("type", bfType.String()))
+		log.Info(context.TODO(), "unsupported bloom filter type, using block bloom filter", log.String("type", bfType.String()))
 		return nil
 	}
 }

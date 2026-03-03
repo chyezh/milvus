@@ -28,7 +28,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore/kv/binlog"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
@@ -77,7 +77,7 @@ func (broker *CoordinatorBroker) DescribeCollection(ctx context.Context, collect
 	}
 	resp, err := broker.mixCoord.DescribeCollection(ctx, req)
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(ctx, "failed to get collection schema", mlog.Err(err))
+		log.Warn(ctx, "failed to get collection schema", log.Err(err))
 		return nil, err
 	}
 	return resp, nil
@@ -95,7 +95,7 @@ func (broker *CoordinatorBroker) DescribeDatabase(ctx context.Context, dbName st
 	}
 	resp, err := broker.mixCoord.DescribeDatabase(ctx, req)
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(ctx, "failed to describe database", mlog.Err(err))
+		log.Warn(ctx, "failed to describe database", log.Err(err))
 		return nil, err
 	}
 	return resp, nil
@@ -110,16 +110,16 @@ func (broker *CoordinatorBroker) GetCollectionLoadInfo(ctx context.Context, coll
 
 	replicaNum, err := common.CollectionLevelReplicaNumber(collectionInfo.GetProperties())
 	if err != nil {
-		mlog.Debug(context.TODO(), "failed to get collection level load info", mlog.Int64("collectionID", collectionID), mlog.Err(err))
+		log.Debug(context.TODO(), "failed to get collection level load info", log.Int64("collectionID", collectionID), log.Err(err))
 	} else if replicaNum > 0 {
-		mlog.Info(context.TODO(), "get collection level load info", mlog.Int64("collectionID", collectionID), mlog.Int64("replica_num", replicaNum))
+		log.Info(context.TODO(), "get collection level load info", log.Int64("collectionID", collectionID), log.Int64("replica_num", replicaNum))
 	}
 
 	rgs, err := common.CollectionLevelResourceGroups(collectionInfo.GetProperties())
 	if err != nil {
-		mlog.Debug(context.TODO(), "failed to get collection level load info", mlog.Int64("collectionID", collectionID), mlog.Err(err))
+		log.Debug(context.TODO(), "failed to get collection level load info", log.Int64("collectionID", collectionID), log.Err(err))
 	} else if len(rgs) > 0 {
-		mlog.Info(context.TODO(), "get collection level load info", mlog.Int64("collectionID", collectionID), mlog.Strings("resource_groups", rgs))
+		log.Info(context.TODO(), "get collection level load info", log.Int64("collectionID", collectionID), log.Strings("resource_groups", rgs))
 	}
 
 	if replicaNum <= 0 || len(rgs) == 0 {
@@ -131,18 +131,18 @@ func (broker *CoordinatorBroker) GetCollectionLoadInfo(ctx context.Context, coll
 		if replicaNum <= 0 {
 			replicaNum, err = common.DatabaseLevelReplicaNumber(dbInfo.GetProperties())
 			if err != nil {
-				mlog.Debug(context.TODO(), "failed to get database level load info", mlog.Int64("collectionID", collectionID), mlog.Err(err))
+				log.Debug(context.TODO(), "failed to get database level load info", log.Int64("collectionID", collectionID), log.Err(err))
 			} else if replicaNum > 0 {
-				mlog.Info(context.TODO(), "get database level load info", mlog.Int64("collectionID", collectionID), mlog.Int64("replica_num", replicaNum))
+				log.Info(context.TODO(), "get database level load info", log.Int64("collectionID", collectionID), log.Int64("replica_num", replicaNum))
 			}
 		}
 
 		if len(rgs) == 0 {
 			rgs, err = common.DatabaseLevelResourceGroups(dbInfo.GetProperties())
 			if err != nil {
-				mlog.Debug(context.TODO(), "failed to get database level load info", mlog.Int64("collectionID", collectionID), mlog.Err(err))
+				log.Debug(context.TODO(), "failed to get database level load info", log.Int64("collectionID", collectionID), log.Err(err))
 			} else if len(rgs) > 0 {
-				mlog.Info(context.TODO(), "get database level load info", mlog.Int64("collectionID", collectionID), mlog.Strings("resource_groups", rgs))
+				log.Info(context.TODO(), "get database level load info", log.Int64("collectionID", collectionID), log.Strings("resource_groups", rgs))
 			}
 		}
 	}
@@ -151,14 +151,14 @@ func (broker *CoordinatorBroker) GetCollectionLoadInfo(ctx context.Context, coll
 		if replicaNum <= 0 {
 			replicaNum = paramtable.Get().QueryCoordCfg.ClusterLevelLoadReplicaNumber.GetAsInt64()
 			if replicaNum > 0 {
-				mlog.Info(context.TODO(), "get cluster level load info", mlog.Int64("collectionID", collectionID), mlog.Int64("replica_num", replicaNum))
+				log.Info(context.TODO(), "get cluster level load info", log.Int64("collectionID", collectionID), log.Int64("replica_num", replicaNum))
 			}
 		}
 
 		if len(rgs) == 0 {
 			rgs = paramtable.Get().QueryCoordCfg.ClusterLevelLoadResourceGroups.GetAsStrings()
 			if len(rgs) > 0 {
-				mlog.Info(context.TODO(), "get cluster level load info", mlog.Int64("collectionID", collectionID), mlog.Strings("resource_groups", rgs))
+				log.Info(context.TODO(), "get cluster level load info", log.Int64("collectionID", collectionID), log.Strings("resource_groups", rgs))
 			}
 		}
 	}
@@ -178,7 +178,7 @@ func (broker *CoordinatorBroker) GetPartitions(ctx context.Context, collectionID
 	}
 	resp, err := broker.mixCoord.ShowPartitions(ctx, req)
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(context.TODO(), "failed to get partitions", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get partitions", log.Err(err))
 		return nil, err
 	}
 
@@ -198,7 +198,7 @@ func (broker *CoordinatorBroker) GetRecoveryInfo(ctx context.Context, collection
 	}
 	recoveryInfo, err := broker.mixCoord.GetRecoveryInfo(ctx, getRecoveryInfoRequest)
 	if err := merr.CheckRPCCall(recoveryInfo, err); err != nil {
-		mlog.Warn(context.TODO(), "get recovery info failed", mlog.Err(err))
+		log.Warn(context.TODO(), "get recovery info failed", log.Err(err))
 		return nil, nil, err
 	}
 
@@ -235,7 +235,7 @@ func (broker *CoordinatorBroker) GetRecoveryInfoV2(ctx context.Context, collecti
 	recoveryInfo, err := broker.mixCoord.GetRecoveryInfoV2(ctx, getRecoveryInfoRequest)
 
 	if err := merr.CheckRPCCall(recoveryInfo, err); err != nil {
-		mlog.Warn(context.TODO(), "get recovery info failed", mlog.Err(err))
+		log.Warn(context.TODO(), "get recovery info failed", log.Err(err))
 		return nil, nil, err
 	}
 
@@ -254,18 +254,18 @@ func (broker *CoordinatorBroker) GetSegmentInfo(ctx context.Context, ids ...Uniq
 		}
 		resp, err := broker.mixCoord.GetSegmentInfo(ctx, req)
 		if err := merr.CheckRPCCall(resp, err); err != nil {
-			mlog.Warn(context.TODO(), "failed to get segment info from DataCoord", mlog.Err(err))
+			log.Warn(context.TODO(), "failed to get segment info from DataCoord", log.Err(err))
 			return nil, err
 		}
 
 		if len(resp.Infos) == 0 {
-			mlog.Warn(context.TODO(), "No such segment in DataCoord")
+			log.Warn(context.TODO(), "No such segment in DataCoord")
 			return nil, errors.New("no such segment in DataCoord")
 		}
 
 		err = binlog.DecompressMultiBinLogs(resp.GetInfos())
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to DecompressMultiBinLogs", mlog.Err(err))
+			log.Warn(context.TODO(), "failed to DecompressMultiBinLogs", log.Err(err))
 			return nil, err
 		}
 
@@ -311,14 +311,14 @@ func (broker *CoordinatorBroker) GetIndexInfo(ctx context.Context, collectionID 
 	})
 
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(context.TODO(), "failed to get segment index info", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get segment index info", log.Err(err))
 		return nil, err
 	}
 
 	if resp.GetSegmentInfo() == nil {
 		err = merr.WrapErrIndexNotFoundForSegments(segmentIDs)
-		mlog.Warn(context.TODO(), "failed to get segments index info",
-			mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get segments index info",
+			log.Err(err))
 		return nil, err
 	}
 
@@ -365,9 +365,9 @@ func (broker *CoordinatorBroker) describeIndex(ctx context.Context, collectionID
 	})
 
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Error(context.TODO(), "failed to fetch index meta",
-			mlog.Int64("collection", collectionID),
-			mlog.Err(err))
+		log.Error(context.TODO(), "failed to fetch index meta",
+			log.Int64("collection", collectionID),
+			log.Err(err))
 		return nil, err
 	}
 	return resp.GetIndexInfos(), nil
@@ -384,10 +384,10 @@ func (broker *CoordinatorBroker) ListIndexes(ctx context.Context, collectionID U
 	err = merr.CheckRPCCall(resp, err)
 	if err != nil {
 		if errors.Is(err, merr.ErrServiceUnimplemented) {
-			mlog.Warn(context.TODO(), "datacoord does not implement ListIndex API fallback to DescribeIndex")
+			log.Warn(context.TODO(), "datacoord does not implement ListIndex API fallback to DescribeIndex")
 			return broker.describeIndex(ctx, collectionID)
 		}
-		mlog.Warn(context.TODO(), "failed to fetch index meta", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to fetch index meta", log.Err(err))
 		return nil, err
 	}
 

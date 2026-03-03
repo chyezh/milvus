@@ -7,7 +7,7 @@ import (
 	"github.com/cenkalti/backoff/v4"
 
 	"github.com/milvus-io/milvus/pkg/v2/kv/predicates"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 var _ MetaKv = (*ReliableWriteMetaKv)(nil)
@@ -18,7 +18,7 @@ func NewReliableWriteMetaKv(kv MetaKv) MetaKv {
 		return kv
 	}
 	return &ReliableWriteMetaKv{
-		Binder: mlog.Binder{},
+		Binder: log.Binder{},
 		MetaKv: kv,
 	}
 }
@@ -27,7 +27,7 @@ func NewReliableWriteMetaKv(kv MetaKv) MetaKv {
 // It will retry the metawrite operation until the data is written successfully or the context is timeout.
 // It's useful to promise the meta data is consistent in memory and underlying meta storage.
 type ReliableWriteMetaKv struct {
-	mlog.Binder
+	log.Binder
 	MetaKv
 }
 
@@ -97,7 +97,7 @@ func (kv *ReliableWriteMetaKv) retryWithBackoff(ctx context.Context, fn func(ctx
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(nextInterval):
-			kv.Logger().Warn(ctx, "failed to persist operation, wait for retry...", mlog.Duration("nextRetryInterval", nextInterval), mlog.Err(err))
+			kv.Logger().Warn(ctx, "failed to persist operation, wait for retry...", log.Duration("nextRetryInterval", nextInterval), log.Err(err))
 		}
 	}
 }

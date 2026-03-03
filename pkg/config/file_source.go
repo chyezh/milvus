@@ -27,7 +27,7 @@ import (
 	"github.com/samber/lo"
 	"gopkg.in/yaml.v2"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 type FileSource struct {
@@ -170,7 +170,7 @@ func (fs *FileSource) update(configs map[string]string) error {
 	events, err := PopulateEvents(fs.GetSourceName(), fs.configs, configs)
 	if err != nil {
 		fs.Unlock()
-		mlog.Warn(context.TODO(), "generating event error", mlog.Err(err))
+		log.Warn(context.TODO(), "generating event error", log.Err(err))
 		return err
 	}
 	fs.configs = configs

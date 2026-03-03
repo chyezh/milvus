@@ -25,7 +25,7 @@ import (
 	"github.com/milvus-io/milvus/internal/flushcommon/metacache/pkoracle"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/storagecommon"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 )
 
@@ -176,7 +176,7 @@ func NewSegmentInfo(info *datapb.SegmentInfo, bfs pkoracle.PkStat, bm25Stats *Se
 				Fields:  group.GetChildFields(),
 			})
 		}
-		mlog.Info(context.TODO(), "recover split info", mlog.Int64("segmentID", info.GetID()), zap.Stringers("columnGroup", currentSplit))
+		log.Info(context.TODO(), "recover split info", log.Int64("segmentID", info.GetID()), zap.Stringers("columnGroup", currentSplit))
 	}
 	return &SegmentInfo{
 		segmentID:        info.GetID(),

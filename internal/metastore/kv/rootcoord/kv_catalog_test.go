@@ -26,7 +26,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	pb "github.com/milvus-io/milvus/pkg/v2/proto/etcdpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util"
@@ -1006,12 +1006,12 @@ func Test_batchMultiSaveAndRemove(t *testing.T) {
 	t.Run("normal case", func(t *testing.T) {
 		snapshot := kv.NewMockSnapshotKV()
 		snapshot.MultiSaveFunc = func(ctx context.Context, kvs map[string]string, ts typeutil.Timestamp) error {
-			mlog.Info(context.TODO(), "multi save", mlog.Any("len", len(kvs)), mlog.Any("saves", kvs))
+			log.Info(context.TODO(), "multi save", log.Any("len", len(kvs)), log.Any("saves", kvs))
 			return nil
 		}
 		snapshot.MultiSaveAndRemoveFunc = func(ctx context.Context, saves map[string]string, removals []string, ts typeutil.Timestamp) error {
-			mlog.Info(context.TODO(), "multi save and remove with prefix", mlog.Any("len of saves", len(saves)), mlog.Any("len of removals", len(removals)),
-				mlog.Any("saves", saves), mlog.Any("removals", removals))
+			log.Info(context.TODO(), "multi save and remove with prefix", log.Any("len of saves", len(saves)), log.Any("len of removals", len(removals)),
+				log.Any("saves", saves), log.Any("removals", removals))
 			return nil
 		}
 		n := 400

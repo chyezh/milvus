@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/function"
 	base "github.com/milvus-io/milvus/internal/util/pipeline"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/util/bm25"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -51,7 +51,7 @@ type embeddingNode struct {
 func newEmbeddingNode(collectionID int64, channelName string, manager *DataManager, maxQueueLength int32) (*embeddingNode, error) {
 	collection := manager.Collection.Get(collectionID)
 	if collection == nil {
-		mlog.Error(context.TODO(), "embeddingNode init failed with collection not exist", mlog.Int64("collection", collectionID))
+		log.Error(context.TODO(), "embeddingNode init failed with collection not exist", log.Int64("collection", collectionID))
 		return nil, merr.WrapErrCollectionNotFound(collectionID)
 	}
 
@@ -100,14 +100,14 @@ func (eNode *embeddingNode) addInsertData(insertDatas map[UniqueID]*delegator.In
 
 	err := eNode.embedding(msg, iData.BM25Stats)
 	if err != nil {
-		mlog.Error(context.TODO(), "failed to function data", mlog.Err(err))
+		log.Error(context.TODO(), "failed to function data", log.Err(err))
 		return err
 	}
 
 	insertRecord, err := storage.TransferInsertMsgToInsertRecord(collection.Schema(), msg)
 	if err != nil {
 		err = fmt.Errorf("failed to get primary keys, err = %v", err)
-		mlog.Error(context.TODO(), err.Error(), mlog.String("channel", eNode.channel))
+		log.Error(context.TODO(), err.Error(), log.String("channel", eNode.channel))
 		return err
 	}
 
@@ -116,7 +116,7 @@ func (eNode *embeddingNode) addInsertData(insertDatas map[UniqueID]*delegator.In
 	} else {
 		err := typeutil.MergeFieldData(iData.InsertRecord.FieldsData, insertRecord.FieldsData)
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to merge field data", mlog.String("channel", eNode.channel), mlog.Err(err))
+			log.Warn(context.TODO(), "failed to merge field data", log.String("channel", eNode.channel), log.Err(err))
 			return err
 		}
 		iData.InsertRecord.NumRows += insertRecord.NumRows
@@ -124,19 +124,19 @@ func (eNode *embeddingNode) addInsertData(insertDatas map[UniqueID]*delegator.In
 
 	pks, err := segments.GetPrimaryKeys(msg, collection.Schema())
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to get primary keys from insert message", mlog.String("channel", eNode.channel), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get primary keys from insert message", log.String("channel", eNode.channel), log.Err(err))
 		return err
 	}
 
 	iData.PrimaryKeys = append(iData.PrimaryKeys, pks...)
 	iData.RowIDs = append(iData.RowIDs, msg.RowIDs...)
 	iData.Timestamps = append(iData.Timestamps, msg.Timestamps...)
-	mlog.Debug(context.TODO(), "pipeline embedding insert msg",
-		mlog.Int64("collectionID", eNode.collectionID),
-		mlog.Int64("segmentID", msg.SegmentID),
-		mlog.Int("insertRowNum", len(pks)),
-		mlog.Uint64("timestampMin", msg.BeginTimestamp),
-		mlog.Uint64("timestampMax", msg.EndTimestamp))
+	log.Debug(context.TODO(), "pipeline embedding insert msg",
+		log.Int64("collectionID", eNode.collectionID),
+		log.Int64("segmentID", msg.SegmentID),
+		log.Int("insertRowNum", len(pks)),
+		log.Uint64("timestampMin", msg.BeginTimestamp),
+		log.Uint64("timestampMax", msg.EndTimestamp))
 	return nil
 }
 
@@ -237,7 +237,7 @@ func (eNode *embeddingNode) embedding(msg *msgstream.InsertMsg, stats map[int64]
 				return err
 			}
 		default:
-			mlog.Warn(context.TODO(), "pipeline embedding with unknown function type", mlog.Any("type", functionSchema.GetType()))
+			log.Warn(context.TODO(), "pipeline embedding with unknown function type", log.Any("type", functionSchema.GetType()))
 			return errors.New("unknown function type")
 		}
 	}
@@ -251,7 +251,7 @@ func (eNode *embeddingNode) Operate(in Msg) Msg {
 
 	collection := eNode.manager.Collection.Get(eNode.collectionID)
 	if collection == nil {
-		mlog.Error(context.TODO(), "embeddingNode with collection not exist", mlog.Int64("collection", eNode.collectionID))
+		log.Error(context.TODO(), "embeddingNode with collection not exist", log.Int64("collection", eNode.collectionID))
 		panic("embeddingNode with collection not exist")
 	}
 

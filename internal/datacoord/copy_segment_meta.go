@@ -24,7 +24,7 @@ import (
 	"golang.org/x/exp/maps"
 
 	"github.com/milvus-io/milvus/internal/metastore"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/taskcommon"
 	"github.com/milvus-io/milvus/pkg/v2/util/lock"
@@ -88,9 +88,9 @@ func (t *SnapshotRestoreRefTracker) IncrementRestoreRef(snapshotName string) {
 
 	// Protect against integer overflow
 	if t.refCount[snapshotName] >= math.MaxInt32 {
-		mlog.Warn(context.TODO(), "snapshot restore ref count reached maximum, cannot increment",
-			mlog.String("snapshot", snapshotName),
-			mlog.Int32("currentCount", t.refCount[snapshotName]))
+		log.Warn(context.TODO(), "snapshot restore ref count reached maximum, cannot increment",
+			log.String("snapshot", snapshotName),
+			log.Int32("currentCount", t.refCount[snapshotName]))
 		return
 	}
 
@@ -107,8 +107,8 @@ func (t *SnapshotRestoreRefTracker) DecrementRestoreRef(snapshotName string) {
 			delete(t.refCount, snapshotName)
 		}
 	} else {
-		mlog.Warn(context.TODO(), "attempted to decrement snapshot restore ref that is already zero or does not exist",
-			mlog.String("snapshot", snapshotName))
+		log.Warn(context.TODO(), "attempted to decrement snapshot restore ref that is already zero or does not exist",
+			log.String("snapshot", snapshotName))
 	}
 }
 
@@ -397,10 +397,10 @@ func NewCopySegmentMeta(ctx context.Context, catalog metastore.DataCoordCatalog,
 		}
 		snapshotName := job.GetSnapshotName()
 		copySegmentMeta.IncrementRestoreRef(snapshotName)
-		mlog.Info(context.TODO(), "rebuilt snapshot restore ref count from active job",
-			mlog.String("snapshot", snapshotName),
-			mlog.Int64("jobID", job.GetJobId()),
-			mlog.String("state", state.String()))
+		log.Info(context.TODO(), "rebuilt snapshot restore ref count from active job",
+			log.String("snapshot", snapshotName),
+			log.Int64("jobID", job.GetJobId()),
+			log.String("state", state.String()))
 	}
 
 	return copySegmentMeta, nil
@@ -537,7 +537,7 @@ func (m *copySegmentMeta) UpdateJobStateAndReleaseRef(ctx context.Context, jobID
 		return err
 	}
 	if prevJob == nil {
-		mlog.Warn(context.TODO(), "UpdateJobStateAndReleaseRef: job not found", mlog.Int64("jobID", jobID))
+		log.Warn(context.TODO(), "UpdateJobStateAndReleaseRef: job not found", log.Int64("jobID", jobID))
 		return nil
 	}
 
@@ -552,11 +552,11 @@ func (m *copySegmentMeta) UpdateJobStateAndReleaseRef(ctx context.Context, jobID
 	// This prevents double-decrement when multiple paths try to fail the same job
 	if isTerminal && !wasTerminal {
 		m.restoreRefTracker.DecrementRestoreRef(updatedJob.GetSnapshotName())
-		mlog.Info(context.TODO(), "released snapshot reference on job completion",
-			mlog.Int64("jobID", jobID),
-			mlog.String("snapshot", updatedJob.GetSnapshotName()),
-			mlog.String("previousState", previousState.String()),
-			mlog.String("newState", newState.String()))
+		log.Info(context.TODO(), "released snapshot reference on job completion",
+			log.Int64("jobID", jobID),
+			log.String("snapshot", updatedJob.GetSnapshotName()),
+			log.String("previousState", previousState.String()),
+			log.String("newState", newState.String()))
 	}
 
 	return nil
@@ -590,8 +590,8 @@ func (m *copySegmentMeta) RemoveJob(ctx context.Context, jobID int64) error {
 		// Note: Snapshot restore reference was already decremented when the job
 		// transitioned to a terminal state (Completed/Failed), not here at removal.
 		// This decouples reference lifetime from job metadata cleanup.
-		mlog.Info(context.TODO(), "removed copy segment job",
-			mlog.Int64("jobID", jobID))
+		log.Info(context.TODO(), "removed copy segment job",
+			log.Int64("jobID", jobID))
 
 		// Remove from in-memory cache
 		delete(m.jobs, jobID)

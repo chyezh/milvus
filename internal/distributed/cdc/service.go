@@ -29,7 +29,7 @@ import (
 	"github.com/milvus-io/milvus/internal/cdc/resource"
 	"github.com/milvus-io/milvus/internal/util/componentutil"
 	kvfactory "github.com/milvus-io/milvus/internal/util/dependency/kv"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
@@ -65,12 +65,12 @@ func (s *Server) Run() error {
 	if err := s.init(); err != nil {
 		return err
 	}
-	mlog.Info(s.ctx, "cdc init done")
+	log.Info(s.ctx, "cdc init done")
 
 	if err := s.start(); err != nil {
 		return err
 	}
-	mlog.Info(s.ctx, "cdc start done")
+	log.Info(s.ctx, "cdc start done")
 	return nil
 }
 
@@ -84,7 +84,7 @@ func (s *Server) Stop() (err error) {
 func (s *Server) stop() {
 	s.componentState.OnStopping()
 
-	mlog.Info(context.TODO(), "stopping cdc...")
+	log.Info(context.TODO(), "stopping cdc...")
 
 	// Stop CDC service.
 	s.cdcServer.Stop()
@@ -92,7 +92,7 @@ func (s *Server) stop() {
 	// Don't close s.etcdCli here because it's a shared instance from kvfactory.
 	// The kvfactory.CloseEtcdClient() will be called in roles.go to close it properly.
 
-	mlog.Info(context.TODO(), "cdc stop done")
+	log.Info(context.TODO(), "cdc stop done")
 }
 
 // Health check the health status of cdc.
@@ -104,10 +104,10 @@ func (s *Server) Health(ctx context.Context) commonpb.StateCode {
 func (s *Server) init() (err error) {
 	defer func() {
 		if err != nil {
-			mlog.Error(context.TODO(), "cdc init failed", mlog.Err(err))
+			log.Error(context.TODO(), "cdc init failed", log.Err(err))
 			return
 		}
-		mlog.Info(context.TODO(), "init cdc server finished")
+		log.Info(context.TODO(), "init cdc server finished")
 	}()
 
 	// Create etcd client.
@@ -125,10 +125,10 @@ func (s *Server) init() (err error) {
 func (s *Server) start() (err error) {
 	defer func() {
 		if err != nil {
-			mlog.Error(context.TODO(), "CDC start failed", mlog.Err(err))
+			log.Error(context.TODO(), "CDC start failed", log.Err(err))
 			return
 		}
-		mlog.Info(context.TODO(), "start CDC server finished")
+		log.Info(context.TODO(), "start CDC server finished")
 	}()
 
 	s.cdcServer.Start()

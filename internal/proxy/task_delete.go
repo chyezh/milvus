@@ -22,7 +22,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
@@ -367,7 +367,7 @@ func (dr *deleteRunner) Run(ctx context.Context) error {
 		// need query from querynode before delete
 		err := dr.complexDelete(ctx, dr.plan)
 		if err != nil {
-			mlog.Warn(ctx, "complex delete failed,but delete some data", mlog.Int64("count", dr.result.DeleteCnt), mlog.String("expr", dr.req.GetExpr()))
+			log.Warn(ctx, "complex delete failed,but delete some data", log.Int64("count", dr.result.DeleteCnt), log.String("expr", dr.req.GetExpr()))
 			return err
 		}
 	}
@@ -388,7 +388,7 @@ func (dr *deleteRunner) produce(ctx context.Context, primaryKeys *schemapb.IDs, 
 		dbID:         dr.dbID,
 	}
 	if err := dr.queue.Enqueue(dt); err != nil {
-		mlog.Error(ctx, "Failed to enqueue delete task: "+err.Error())
+		log.Error(ctx, "Failed to enqueue delete task: "+err.Error())
 		return nil, err
 	}
 
@@ -432,10 +432,10 @@ func (dr *deleteRunner) getStreamingQueryAndDelteFunc(plan *planpb.PlanNode) sha
 
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		mlog.Debug(context.TODO(), "start query for delete", mlog.Int64("msgID", dr.msgID))
+		log.Debug(context.TODO(), "start query for delete", log.Int64("msgID", dr.msgID))
 		client, err := qn.QueryStream(ctx, queryReq)
 		if err != nil {
-			mlog.Warn(context.TODO(), "query stream for delete create failed", mlog.Err(err))
+			log.Warn(context.TODO(), "query stream for delete create failed", log.Err(err))
 			return err
 		}
 
@@ -489,7 +489,7 @@ func (dr *deleteRunner) receiveQueryResult(ctx context.Context, client querypb.Q
 		result, err := client.Recv()
 		if err != nil {
 			if err == io.EOF {
-				mlog.Debug(ctx, "query stream for delete finished", mlog.Int64("msgID", dr.msgID))
+				log.Debug(ctx, "query stream for delete finished", log.Int64("msgID", dr.msgID))
 				return nil
 			}
 			return err
@@ -497,21 +497,21 @@ func (dr *deleteRunner) receiveQueryResult(ctx context.Context, client querypb.Q
 
 		err = merr.Error(result.GetStatus())
 		if err != nil {
-			mlog.Warn(ctx, "query stream for delete get error status", mlog.Int64("msgID", dr.msgID), mlog.Err(err))
+			log.Warn(ctx, "query stream for delete get error status", log.Int64("msgID", dr.msgID), log.Err(err))
 			return err
 		}
 
 		if dr.limiter != nil {
 			err := dr.limiter.Alloc(ctx, dr.dbID, map[int64][]int64{dr.collectionID: dr.partitionIDs}, internalpb.RateType_DMLDelete, proto.Size(result.GetIds()))
 			if err != nil {
-				mlog.Warn(ctx, "query stream for delete failed because rate limiter", mlog.Int64("msgID", dr.msgID), mlog.Err(err))
+				log.Warn(ctx, "query stream for delete failed because rate limiter", log.Int64("msgID", dr.msgID), log.Err(err))
 				return err
 			}
 		}
 
 		task, err := dr.produce(ctx, result.GetIds(), msgPartitionID)
 		if err != nil {
-			mlog.Warn(ctx, "produce delete task failed", mlog.Err(err))
+			log.Warn(ctx, "produce delete task failed", log.Err(err))
 			return err
 		}
 		task.allQueryCnt = result.GetAllRetrieveCount()
@@ -548,14 +548,14 @@ func (dr *deleteRunner) complexDelete(ctx context.Context, plan *planpb.PlanNode
 	dr.result.DeleteCnt = dr.count.Load()
 	dr.result.Timestamp = dr.sessionTS.Load()
 	if err != nil {
-		mlog.Warn(ctx, "fail to execute complex delete",
-			mlog.Int64("deleteCnt", dr.result.GetDeleteCnt()),
-			mlog.Duration("interval", rc.ElapseSpan()),
-			mlog.Err(err))
+		log.Warn(ctx, "fail to execute complex delete",
+			log.Int64("deleteCnt", dr.result.GetDeleteCnt()),
+			log.Duration("interval", rc.ElapseSpan()),
+			log.Err(err))
 		return err
 	}
 
-	mlog.Info(ctx, "complex delete finished", mlog.Int64("deleteCnt", dr.result.GetDeleteCnt()), mlog.Duration("interval", rc.ElapseSpan()))
+	log.Info(ctx, "complex delete finished", log.Int64("deleteCnt", dr.result.GetDeleteCnt()), log.Duration("interval", rc.ElapseSpan()))
 	return nil
 }
 
@@ -564,14 +564,14 @@ func (dr *deleteRunner) simpleDelete(ctx context.Context, pk *schemapb.IDs, numR
 	if len(dr.partitionIDs) == 1 {
 		partitionID = dr.partitionIDs[0]
 	}
-	mlog.Debug(ctx, "get primary keys from expr",
-		mlog.Int64("len of primary keys", numRow),
-		mlog.Int64("collectionID", dr.collectionID),
-		mlog.Int64("partitionID", partitionID))
+	log.Debug(ctx, "get primary keys from expr",
+		log.Int64("len of primary keys", numRow),
+		log.Int64("collectionID", dr.collectionID),
+		log.Int64("partitionID", partitionID))
 
 	task, err := dr.produce(ctx, pk, partitionID)
 	if err != nil {
-		mlog.Warn(ctx, "produce delete task failed")
+		log.Warn(ctx, "produce delete task failed")
 		return err
 	}
 

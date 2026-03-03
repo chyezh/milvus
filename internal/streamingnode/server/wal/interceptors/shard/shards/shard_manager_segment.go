@@ -5,7 +5,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/stats"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/utils"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 )
 
@@ -81,7 +81,7 @@ func (m *shardManagerImpl) checkIfSegmentCanBeFlushed(uniquePartitionKey Partiti
 
 // CreateSegment creates a new segment manager when create segment message is written into wal.
 func (m *shardManagerImpl) CreateSegment(msg message.ImmutableCreateSegmentMessageV2) {
-	logger := m.Logger().With(mlog.FieldMessage(msg))
+	logger := m.Logger().With(log.FieldMessage(msg))
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -104,13 +104,13 @@ func (m *shardManagerImpl) FlushSegment(msg message.ImmutableFlushMessageV2) {
 	collectionID := msg.Header().CollectionId
 	partitionID := msg.Header().PartitionId
 	segmentID := msg.Header().SegmentId
-	logger := m.Logger().With(mlog.FieldMessage(msg))
+	logger := m.Logger().With(log.FieldMessage(msg))
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	uniquePartitionKey := PartitionUniqueKey{CollectionID: collectionID, PartitionID: partitionID}
 	if err := m.checkIfSegmentCanBeFlushed(uniquePartitionKey, segmentID); err != nil {
-		logger.Warn(nil, "segment can not be flushed", mlog.Err(err))
+		logger.Warn(nil, "segment can not be flushed", log.Err(err))
 		return
 	}
 
@@ -165,19 +165,19 @@ func (m *shardManagerImpl) WaitUntilGrowingSegmentReady(uniquePartitionKey Parti
 // !!! The returned segmentIDs may be is on-flushing state(which is on-flushing, a segmentFlushWorker is running, but not send into wal yet)
 // !!! The caller should promise the returned segmentIDs to be flushed.
 func (m *shardManagerImpl) FlushAndFenceSegmentAllocUntil(collectionID int64, timetick uint64) ([]int64, error) {
-	logger := m.Logger().With(mlog.Int64("collectionID", collectionID), mlog.Uint64("timetick", timetick))
+	logger := m.Logger().With(log.Int64("collectionID", collectionID), log.Uint64("timetick", timetick))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	segmentIDs, err := m.flushAndFenceSegmentAllocUntil(collectionID, timetick)
 	if err != nil {
 		return nil, err
 	}
-	logger.Info(nil, "segments should be flushed when FlushAndFenceSegmentAllocUntil", mlog.Int64s("segmentIDs", segmentIDs))
+	logger.Info(nil, "segments should be flushed when FlushAndFenceSegmentAllocUntil", log.Int64s("segmentIDs", segmentIDs))
 	return segmentIDs, nil
 }
 
 func (m *shardManagerImpl) FlushAllAndFenceSegmentAllocUntil(timetick uint64) ([]int64, error) {
-	logger := m.Logger().With(mlog.Uint64("timetick", timetick))
+	logger := m.Logger().With(log.Uint64("timetick", timetick))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -186,15 +186,15 @@ func (m *shardManagerImpl) FlushAllAndFenceSegmentAllocUntil(timetick uint64) ([
 		ids, _ := m.flushAndFenceSegmentAllocUntil(collectionID, timetick)
 		segmentIDs = append(segmentIDs, ids...)
 	}
-	logger.Info(nil, "segments should be flushed when FlushAllAndFenceSegmentAllocUntil", mlog.Int64s("segmentIDs", segmentIDs))
+	logger.Info(nil, "segments should be flushed when FlushAllAndFenceSegmentAllocUntil", log.Int64s("segmentIDs", segmentIDs))
 	return segmentIDs, nil
 }
 
 func (m *shardManagerImpl) flushAndFenceSegmentAllocUntil(collectionID int64, timetick uint64) ([]int64, error) {
-	logger := m.Logger().With(mlog.Int64("collectionID", collectionID), mlog.Uint64("timetick", timetick))
+	logger := m.Logger().With(log.Int64("collectionID", collectionID), log.Uint64("timetick", timetick))
 
 	if err := m.checkIfCollectionExists(collectionID); err != nil {
-		logger.Warn(nil, "collection not found when FlushAndFenceSegmentAllocUntil", mlog.Err(err))
+		logger.Warn(nil, "collection not found when FlushAndFenceSegmentAllocUntil", log.Err(err))
 		return nil, err
 	}
 
@@ -206,7 +206,7 @@ func (m *shardManagerImpl) flushAndFenceSegmentAllocUntil(collectionID int64, ti
 		uniqueKey := PartitionUniqueKey{CollectionID: collectionID, PartitionID: partitionID}
 		pm, ok := m.partitionManagers[uniqueKey]
 		if !ok {
-			logger.Warn(nil, "partition not found when FlushAndFenceSegmentAllocUntil", mlog.Int64("partitionID", partitionID))
+			logger.Warn(nil, "partition not found when FlushAndFenceSegmentAllocUntil", log.Int64("partitionID", partitionID))
 			continue
 		}
 		newSealedSegments := pm.FlushAndFenceSegmentUntil(timetick)
@@ -218,9 +218,9 @@ func (m *shardManagerImpl) flushAndFenceSegmentAllocUntil(collectionID int64, ti
 // AsyncFlushSegment triggers the segment to be flushed when flush message is written into wal.
 func (m *shardManagerImpl) AsyncFlushSegment(signal utils.SealSegmentSignal) {
 	logger := m.Logger().With(
-		mlog.Int64("collectionID", signal.SegmentBelongs.CollectionID),
-		mlog.Int64("partitionID", signal.SegmentBelongs.PartitionID),
-		mlog.Int64("segmentID", signal.SegmentBelongs.SegmentID),
+		log.Int64("collectionID", signal.SegmentBelongs.CollectionID),
+		log.Int64("partitionID", signal.SegmentBelongs.PartitionID),
+		log.Int64("segmentID", signal.SegmentBelongs.SegmentID),
 	)
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -231,6 +231,6 @@ func (m *shardManagerImpl) AsyncFlushSegment(signal utils.SealSegmentSignal) {
 		return
 	}
 	if err := pm.AsyncFlushSegment(signal); err != nil {
-		logger.Warn(nil, "segment not found when AsyncMustSeal, may be already sealed", mlog.Err(err))
+		logger.Warn(nil, "segment not found when AsyncMustSeal, may be already sealed", log.Err(err))
 	}
 }

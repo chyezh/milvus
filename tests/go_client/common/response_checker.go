@@ -17,7 +17,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/index"
 	client "github.com/milvus-io/milvus/client/v2/milvusclient"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 func trace() string {
@@ -42,7 +42,7 @@ func CheckErr(t *testing.T, actualErr error, expErrNil bool, expErrorMsg ...stri
 		require.Error(t, actualErr, trace())
 		switch len(expErrorMsg) {
 		case 0:
-			mlog.Fatal(context.TODO(), "expect error message should not be empty", mlog.String("trace", trace()))
+			log.Fatal(context.TODO(), "expect error message should not be empty", log.String("trace", trace()))
 		case 1:
 			require.ErrorContains(t, actualErr, expErrorMsg[0], trace())
 		default:
@@ -82,8 +82,8 @@ func EqualColumn(t *testing.T, columnA column.Column, columnB column.Column) {
 	case entity.FieldTypeVarChar:
 		require.ElementsMatch(t, columnA.(*column.ColumnVarChar).Data(), columnB.(*column.ColumnVarChar).Data())
 	case entity.FieldTypeJSON:
-		mlog.Debug(context.TODO(), "data", mlog.String("name", columnA.Name()), mlog.Any("type", columnA.Type()), mlog.Any("data", columnA.FieldData()))
-		mlog.Debug(context.TODO(), "data", mlog.String("name", columnB.Name()), mlog.Any("type", columnB.Type()), mlog.Any("data", columnB.FieldData()))
+		log.Debug(context.TODO(), "data", log.String("name", columnA.Name()), log.Any("type", columnA.Type()), log.Any("data", columnA.FieldData()))
+		log.Debug(context.TODO(), "data", log.String("name", columnB.Name()), log.Any("type", columnB.Type()), log.Any("data", columnB.FieldData()))
 		require.Equal(t, reflect.TypeOf(columnA), reflect.TypeOf(columnB))
 		switch _v := columnA.(type) {
 		case *column.ColumnDynamic:
@@ -91,7 +91,7 @@ func EqualColumn(t *testing.T, columnA column.Column, columnB column.Column) {
 		case *column.ColumnJSONBytes:
 			require.ElementsMatch(t, columnA.(*column.ColumnJSONBytes).Data(), columnB.(*column.ColumnJSONBytes).Data())
 		default:
-			mlog.Warn(context.TODO(), "columnA type", mlog.String("name", columnB.Name()), mlog.Any("type", _v))
+			log.Warn(context.TODO(), "columnA type", log.String("name", columnB.Name()), log.Any("type", _v))
 		}
 	// case entity.FieldTypeGeometry:
 	// 	// currently proxy transform wkb to wkt,the query output wkt has different precision with client input(omit trailing zeros),and omit omissible bracket
@@ -118,7 +118,7 @@ func EqualColumn(t *testing.T, columnA column.Column, columnB column.Column) {
 	case entity.FieldTypeArray:
 		EqualArrayColumn(t, columnA, columnB)
 	default:
-		mlog.Info(context.TODO(), "Support column type is:", mlog.Any("FieldType", []entity.FieldType{
+		log.Info(context.TODO(), "Support column type is:", log.Any("FieldType", []entity.FieldType{
 			entity.FieldTypeBool,
 			entity.FieldTypeInt8, entity.FieldTypeInt16, entity.FieldTypeInt32,
 			entity.FieldTypeInt64, entity.FieldTypeFloat, entity.FieldTypeDouble, entity.FieldTypeString,
@@ -150,8 +150,8 @@ func EqualArrayColumn(t *testing.T, columnA column.Column, columnB column.Column
 	case *column.ColumnVarCharArray:
 		require.ElementsMatch(t, columnA.(*column.ColumnVarCharArray).Data(), columnB.(*column.ColumnVarCharArray).Data())
 	default:
-		mlog.Debug(context.TODO(), "columnA type is", mlog.Any("type", _type))
-		mlog.Info(context.TODO(), "Support array element type is:", mlog.Any("FieldType", []entity.FieldType{
+		log.Debug(context.TODO(), "columnA type is", log.Any("type", _type))
+		log.Info(context.TODO(), "Support array element type is:", log.Any("FieldType", []entity.FieldType{
 			entity.FieldTypeBool, entity.FieldTypeInt8, entity.FieldTypeInt16,
 			entity.FieldTypeInt32, entity.FieldTypeInt64, entity.FieldTypeFloat, entity.FieldTypeDouble, entity.FieldTypeVarChar,
 		}))
@@ -172,10 +172,10 @@ func CheckFieldsNullable(t *testing.T, expNullableFields []string, actualSchema 
 // CheckFieldsDefaultValue check schema nullable fields and default value fields
 func CheckFieldsDefaultValue(t *testing.T, expDefaultValueFields map[string]interface{}, actualSchema *entity.Schema) {
 	if len(expDefaultValueFields) == 0 {
-		mlog.Warn(context.TODO(), "expDefaultValueFields is empty")
+		log.Warn(context.TODO(), "expDefaultValueFields is empty")
 		return
 	}
-	mlog.Info(context.TODO(), "CheckFieldsDefaultValue", mlog.Any("expDefaultValueFields", expDefaultValueFields), mlog.Any("actualSchema", actualSchema))
+	log.Info(context.TODO(), "CheckFieldsDefaultValue", log.Any("expDefaultValueFields", expDefaultValueFields), log.Any("actualSchema", actualSchema))
 	actualDefaultValueFields := make([]string, 0)
 	// check expDefaultValueFields is in actualSchema.Fields and default value is equal to expDefaultValueFields
 	for _, field := range actualSchema.Fields {
@@ -196,7 +196,7 @@ func CheckFieldsDefaultValue(t *testing.T, expDefaultValueFields map[string]inte
 				require.Equal(t, expDefaultValueFields[field.Name], field.DefaultValue.GetStringData())
 			}
 		} else {
-			mlog.Warn(context.TODO(), "CheckFieldsDefaultValue: field skip check", mlog.String("fieldName", field.Name))
+			log.Warn(context.TODO(), "CheckFieldsDefaultValue: field skip check", log.String("fieldName", field.Name))
 		}
 	}
 	actualDefaultValueFieldsKeys := make([]string, 0, len(expDefaultValueFields))
@@ -218,7 +218,7 @@ func CheckInsertResult(t *testing.T, expIDs column.Column, insertRes client.Inse
 	case entity.FieldTypeVarChar:
 		require.ElementsMatch(t, actualIDs.(*column.ColumnVarChar).Data(), expIDs.(*column.ColumnVarChar).Data())
 	default:
-		mlog.Info(context.TODO(), "The primary field only support ", mlog.Any("type", []entity.FieldType{entity.FieldTypeInt64, entity.FieldTypeVarChar}))
+		log.Info(context.TODO(), "The primary field only support ", log.Any("type", []entity.FieldType{entity.FieldTypeInt64, entity.FieldTypeVarChar}))
 	}
 }
 
@@ -228,7 +228,7 @@ func CheckOutputFields(t *testing.T, expFields []string, actualColumns []column.
 	for _, actualColumn := range actualColumns {
 		actualFields = append(actualFields, actualColumn.Name())
 	}
-	mlog.Debug(context.TODO(), "CheckOutputFields", mlog.Any("expFields", expFields), mlog.Any("actualFields", actualFields))
+	log.Debug(context.TODO(), "CheckOutputFields", log.Any("expFields", expFields), log.Any("actualFields", actualFields))
 	require.ElementsMatchf(t, expFields, actualFields, fmt.Sprintf("Expected search output fields: %v, actual: %v", expFields, actualFields))
 }
 
@@ -256,7 +256,7 @@ func CheckQueryResult(t *testing.T, expColumns []column.Column, actualColumns []
 			}
 		}
 		if !exist {
-			mlog.Error(context.TODO(), "CheckQueryResult actualColumns no column", mlog.String("name", expColumn.Name()))
+			log.Error(context.TODO(), "CheckQueryResult actualColumns no column", log.String("name", expColumn.Name()))
 		}
 	}
 }
@@ -294,7 +294,7 @@ func CheckSearchIteratorResult(ctx context.Context, t *testing.T, itr client.Sea
 			if err == io.EOF {
 				break
 			} else {
-				mlog.Error(context.TODO(), "SearchIterator next gets error", mlog.Err(err))
+				log.Error(context.TODO(), "SearchIterator next gets error", log.Err(err))
 				break
 			}
 		}
@@ -313,7 +313,7 @@ func CheckSearchIteratorResult(ctx context.Context, t *testing.T, itr client.Sea
 	}
 	require.Equal(t, expLimit, actualLimit)
 	if opt.expBatchSize != nil {
-		mlog.Debug(context.TODO(), "SearchIterator result len", mlog.Any("result len", actualBatchSize))
+		log.Debug(context.TODO(), "SearchIterator result len", log.Any("result len", actualBatchSize))
 		require.True(t, EqualIntSlice(opt.expBatchSize, actualBatchSize))
 	}
 }
@@ -332,7 +332,7 @@ func CheckQueryIteratorResult(ctx context.Context, t *testing.T, itr client.Quer
 			if err == io.EOF {
 				break
 			} else {
-				mlog.Error(context.TODO(), "QueryIterator next gets error", mlog.Err(err))
+				log.Error(context.TODO(), "QueryIterator next gets error", log.Err(err))
 				break
 			}
 		}
@@ -351,7 +351,7 @@ func CheckQueryIteratorResult(ctx context.Context, t *testing.T, itr client.Quer
 	}
 	require.Equal(t, expLimit, actualLimit)
 	if opt.expBatchSize != nil {
-		mlog.Debug(context.TODO(), "QueryIterator result len", mlog.Any("result len", actualBatchSize))
+		log.Debug(context.TODO(), "QueryIterator result len", log.Any("result len", actualBatchSize))
 		require.True(t, EqualIntSlice(opt.expBatchSize, actualBatchSize))
 	}
 }
@@ -367,7 +367,7 @@ func CheckPartialResult(t *testing.T, expColumns []column.Column, actualColumns 
 			}
 		}
 		if !exist {
-			mlog.Error(context.TODO(), "CheckQueryResult actualColumns no column", mlog.String("name", expColumn.Name()))
+			log.Error(context.TODO(), "CheckQueryResult actualColumns no column", log.String("name", expColumn.Name()))
 		}
 	}
 }

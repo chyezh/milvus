@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -25,7 +25,7 @@ func TestSendTimeout(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		err := target.send(&msgstream.MsgPack{})
 		if err != nil {
-			mlog.Error(context.TODO(), "send failed", mlog.Int("idx", i), mlog.Err(err))
+			log.Error(context.TODO(), "send failed", log.Int("idx", i), log.Err(err))
 			counter++
 		}
 	}

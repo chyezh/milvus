@@ -7,7 +7,7 @@ import (
 	"github.com/apache/pulsar-client-go/pulsar"
 	"github.com/cockroachdb/errors"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
@@ -19,7 +19,7 @@ const (
 
 // backlogClearHelper is a helper to clear the backlog of pulsar.
 type backlogClearHelper struct {
-	mlog.Binder
+	log.Binder
 
 	notifier       *syncutil.AsyncTaskNotifier[struct{}]
 	cond           *syncutil.ContextCond
@@ -43,7 +43,7 @@ func newBacklogClearHelper(c pulsar.Client, channelName types.PChannelInfo, thre
 		reusedConsumer: nil,
 		tenant:         tenant,
 	}
-	h.SetLogger(mlog.With(mlog.String("channel", channelName.String()), mlog.FieldComponent("backlog-clear")))
+	h.SetLogger(log.With(log.String("channel", channelName.String()), log.FieldComponent("backlog-clear")))
 	go h.background()
 	return h
 }
@@ -80,7 +80,7 @@ func (h *backlogClearHelper) background() {
 				return h.notifier.Context().Err()
 			}
 			if err := h.performBacklogClear(); err != nil {
-				h.Logger().Warn(nil, "failed to perform backlog clear", mlog.Err(err))
+				h.Logger().Warn(nil, "failed to perform backlog clear", log.Err(err))
 				return err
 			}
 			h.Logger().Debug(nil, "perform backlog clear done")

@@ -11,7 +11,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/walmanager"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
@@ -47,9 +47,9 @@ func CreateProduceServer(walManager walmanager.Manager, streamServer streamingpb
 		wal:           l,
 		produceServer: produceServer,
 		logger: resource.Resource().Logger().With(
-			mlog.FieldComponent("producer-server"),
-			mlog.String("channel", l.Channel().Name),
-			mlog.Int64("term", l.Channel().Term)),
+			log.FieldComponent("producer-server"),
+			log.String("channel", l.Channel().Name),
+			log.Int64("term", l.Channel().Term)),
 		produceMessageCh: make(chan *streamingpb.ProduceMessageResponse),
 		appendWG:         sync.WaitGroup{},
 		metrics:          metrics,
@@ -60,7 +60,7 @@ func CreateProduceServer(walManager walmanager.Manager, streamServer streamingpb
 type ProduceServer struct {
 	wal              wal.WAL
 	produceServer    *produceGrpcServerHelper
-	logger           *mlog.Logger
+	logger           *log.Logger
 	produceMessageCh chan *streamingpb.ProduceMessageResponse // All processing messages result should sent from theses channel.
 	appendWG         sync.WaitGroup
 	metrics          *producerMetrics
@@ -89,7 +89,7 @@ func (p *ProduceServer) Execute() error {
 func (p *ProduceServer) sendLoop() (err error) {
 	defer func() {
 		if err != nil {
-			p.logger.Warn(nil, "send arm of stream closed by unexpected error", mlog.Err(err))
+			p.logger.Warn(nil, "send arm of stream closed by unexpected error", log.Err(err))
 			return
 		}
 		p.logger.Info(nil, "send arm of stream closed")
@@ -141,7 +141,7 @@ func (p *ProduceServer) recvLoop() (err error) {
 		p.appendWG.Wait()
 		close(p.produceMessageCh)
 		if err != nil {
-			p.logger.Warn(nil, "recv arm of stream closed by unexpected error", mlog.Err(err))
+			p.logger.Warn(nil, "recv arm of stream closed by unexpected error", log.Err(err))
 			return
 		}
 		p.logger.Info(nil, "recv arm of stream closed")
@@ -163,7 +163,7 @@ func (p *ProduceServer) recvLoop() (err error) {
 			// we will receive io.EOF after that.
 		default:
 			// skip message here, to keep the forward compatibility.
-			p.logger.Warn(nil, "unknown request type", mlog.Any("request", req))
+			p.logger.Warn(nil, "unknown request type", log.Any("request", req))
 		}
 	}
 }
@@ -177,12 +177,12 @@ func (p *ProduceServer) handleProduce(req *streamingpb.ProduceMessageRequest) {
 	}
 
 	p.appendWG.Add(1)
-	p.logger.Debug(nil, "recv produce message from client", mlog.Int64("requestID", req.RequestId))
+	p.logger.Debug(nil, "recv produce message from client", log.Int64("requestID", req.RequestId))
 	// Update metrics.
 	msg := message.NewMutableMessageBeforeAppend(req.GetMessage().GetPayload(), req.GetMessage().GetProperties())
 	metricsGuard := p.metrics.StartProduce()
 	if err := p.validateMessage(msg); err != nil {
-		p.logger.Warn(nil, "produce message validation failed", mlog.Int64("requestID", req.RequestId), mlog.Err(err))
+		p.logger.Warn(nil, "produce message validation failed", log.Int64("requestID", req.RequestId), log.Err(err))
 		p.sendProduceResult(req.RequestId, nil, err)
 		metricsGuard.Finish(err)
 		p.appendWG.Done()
@@ -215,7 +215,7 @@ func (p *ProduceServer) sendProduceResult(reqID int64, appendResult *wal.AppendR
 		RequestId: reqID,
 	}
 	if err != nil {
-		p.logger.Warn(nil, "append message to wal failed", mlog.Int64("requestID", reqID), mlog.Err(err))
+		p.logger.Warn(nil, "append message to wal failed", log.Int64("requestID", reqID), log.Err(err))
 		resp.Response = &streamingpb.ProduceMessageResponse_Error{Error: status.AsStreamingError(err).AsPBError()}
 	} else {
 		resp.Response = &streamingpb.ProduceMessageResponse_Result{Result: appendResult.IntoProto()}
@@ -225,9 +225,9 @@ func (p *ProduceServer) sendProduceResult(reqID int64, appendResult *wal.AppendR
 	// all pending response message should be dropped, client side will handle it.
 	select {
 	case p.produceMessageCh <- resp:
-		p.logger.Debug(nil, "send produce message response to client", mlog.Int64("requestID", reqID), mlog.Any("appendResult", appendResult), mlog.Err(err))
+		p.logger.Debug(nil, "send produce message response to client", log.Int64("requestID", reqID), log.Any("appendResult", appendResult), log.Err(err))
 	case <-p.produceServer.Context().Done():
-		p.logger.Warn(nil, "stream closed before produce message response sent", mlog.Int64("requestID", reqID), mlog.Any("appendResult", appendResult), mlog.Err(err))
+		p.logger.Warn(nil, "stream closed before produce message response sent", log.Int64("requestID", reqID), log.Any("appendResult", appendResult), log.Err(err))
 		return
 	}
 }

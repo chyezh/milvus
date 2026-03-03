@@ -25,7 +25,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 func TestTaskCondition_Ctx(t *testing.T) {
@@ -37,7 +37,7 @@ func TestTaskCondition_Ctx(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		<-c.Ctx().Done()
-		mlog.Debug(context.TODO(), "TestTaskCondition_Ctx", mlog.Any("exit", c.Ctx().Err()))
+		log.Debug(context.TODO(), "TestTaskCondition_Ctx", log.Any("exit", c.Ctx().Err()))
 	}()
 
 	cancel()

@@ -9,7 +9,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 )
 
@@ -52,7 +52,7 @@ func (s *LevelZeroSegmentsViewSuite) SetupTest() {
 	}
 
 	s.True(label.Equal(targetView.GetGroupLabel()))
-	mlog.Info(context.TODO(), "LevelZeroSegmentsView", mlog.String("view", targetView.String()))
+	log.Info(context.TODO(), "LevelZeroSegmentsView", log.String("view", targetView.String()))
 
 	s.v = targetView
 }
@@ -123,7 +123,7 @@ func (s *LevelZeroSegmentsViewSuite) TestTrigger() {
 					view.DeltaRowCount = 1
 				}
 			}
-			mlog.Info(context.TODO(), "LevelZeroSegmentsView", mlog.String("view", s.v.String()))
+			log.Info(context.TODO(), "LevelZeroSegmentsView", log.String("view", s.v.String()))
 
 			gotView, reason := s.v.Trigger()
 			if len(test.expectedSegs) == 0 {
@@ -137,7 +137,7 @@ func (s *LevelZeroSegmentsViewSuite) TestTrigger() {
 					return v.ID
 				})
 				s.ElementsMatch(gotSegIDs, test.expectedSegs)
-				mlog.Info(context.TODO(), "output view", mlog.String("view", levelZeroView.String()), mlog.String("trigger reason", reason))
+				log.Info(context.TODO(), "output view", log.String("view", levelZeroView.String()), log.String("trigger reason", reason))
 			}
 		})
 	}
@@ -182,7 +182,7 @@ func (s *LevelZeroSegmentsViewSuite) TestMinCountSizeTrigger() {
 				s.NotEmpty(reason)
 			}
 
-			mlog.Info(context.TODO(), "test minCountSizeTrigger", mlog.Any("trigger reason", reason))
+			log.Info(context.TODO(), "test minCountSizeTrigger", log.Any("trigger reason", reason))
 		})
 	}
 }
@@ -221,7 +221,7 @@ func (s *LevelZeroSegmentsViewSuite) TestForceTrigger() {
 			s.ElementsMatch(lo.Map(picked, func(view *SegmentView, _ int) int64 {
 				return view.ID
 			}), test.expectedIDs)
-			mlog.Info(context.TODO(), "test forceTrigger", mlog.Any("trigger reason", reason))
+			log.Info(context.TODO(), "test forceTrigger", log.Any("trigger reason", reason))
 		})
 	}
 }

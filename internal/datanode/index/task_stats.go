@@ -42,7 +42,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/fileresource"
 	"github.com/milvus-io/milvus/internal/util/indexcgowrapper"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexcgopb"
@@ -114,11 +114,11 @@ func (st *statsTask) Name() string {
 func (st *statsTask) OnEnqueue(ctx context.Context) error {
 	st.queueDur = 0
 	st.tr.RecordSpan()
-	mlog.Info(ctx, "statsTask enqueue",
-		mlog.Int64("taskID", st.req.GetTaskID()),
-		mlog.Int64("collectionID", st.req.GetCollectionID()),
-		mlog.Int64("partitionID", st.req.GetPartitionID()),
-		mlog.Int64("segmentID", st.req.GetSegmentID()))
+	log.Info(ctx, "statsTask enqueue",
+		log.Int64("taskID", st.req.GetTaskID()),
+		log.Int64("collectionID", st.req.GetCollectionID()),
+		log.Int64("partitionID", st.req.GetPartitionID()),
+		log.Int64("segmentID", st.req.GetSegmentID()))
 	return nil
 }
 
@@ -143,38 +143,38 @@ func (st *statsTask) PreExecute(ctx context.Context) error {
 	defer span.End()
 
 	st.queueDur = st.tr.RecordSpan()
-	mlog.Info(ctx, "Begin to PreExecute stats task",
-		mlog.String("clusterID", st.req.GetClusterID()),
-		mlog.Int64("taskID", st.req.GetTaskID()),
-		mlog.Int64("collectionID", st.req.GetCollectionID()),
-		mlog.Int64("partitionID", st.req.GetPartitionID()),
-		mlog.Int64("segmentID", st.req.GetSegmentID()),
-		mlog.Int64("queue duration(ms)", st.queueDur.Milliseconds()),
+	log.Info(ctx, "Begin to PreExecute stats task",
+		log.String("clusterID", st.req.GetClusterID()),
+		log.Int64("taskID", st.req.GetTaskID()),
+		log.Int64("collectionID", st.req.GetCollectionID()),
+		log.Int64("partitionID", st.req.GetPartitionID()),
+		log.Int64("segmentID", st.req.GetSegmentID()),
+		log.Int64("queue duration(ms)", st.queueDur.Milliseconds()),
 	)
 
 	if err := binlog.DecompressBinLogWithRootPath(st.req.GetStorageConfig().GetRootPath(), storage.InsertBinlog, st.req.GetCollectionID(), st.req.GetPartitionID(),
 		st.req.GetSegmentID(), st.req.GetInsertLogs()); err != nil {
-		mlog.Warn(ctx, "Decompress insert binlog error", mlog.Err(err))
+		log.Warn(ctx, "Decompress insert binlog error", log.Err(err))
 		return err
 	}
 
 	if err := binlog.DecompressBinLogWithRootPath(st.req.GetStorageConfig().GetRootPath(), storage.DeleteBinlog, st.req.GetCollectionID(), st.req.GetPartitionID(),
 		st.req.GetSegmentID(), st.req.GetDeltaLogs()); err != nil {
-		mlog.Warn(ctx, "Decompress delta binlog error", mlog.Err(err))
+		log.Warn(ctx, "Decompress delta binlog error", log.Err(err))
 		return err
 	}
 
 	preExecuteRecordSpan := st.tr.RecordSpan()
 
-	mlog.Info(ctx, "successfully PreExecute stats task",
-		mlog.String("clusterID", st.req.GetClusterID()),
-		mlog.Int64("taskID", st.req.GetTaskID()),
-		mlog.Int64("collectionID", st.req.GetCollectionID()),
-		mlog.Int64("partitionID", st.req.GetPartitionID()),
-		mlog.Int64("segmentID", st.req.GetSegmentID()),
-		mlog.Int64("storageVersion", st.req.GetStorageVersion()),
-		mlog.Int64("preExecuteRecordSpan(ms)", preExecuteRecordSpan.Milliseconds()),
-		mlog.Any("storageConfig", st.req.StorageConfig),
+	log.Info(ctx, "successfully PreExecute stats task",
+		log.String("clusterID", st.req.GetClusterID()),
+		log.Int64("taskID", st.req.GetTaskID()),
+		log.Int64("collectionID", st.req.GetCollectionID()),
+		log.Int64("partitionID", st.req.GetPartitionID()),
+		log.Int64("segmentID", st.req.GetSegmentID()),
+		log.Int64("storageVersion", st.req.GetStorageVersion()),
+		log.Int64("preExecuteRecordSpan(ms)", preExecuteRecordSpan.Milliseconds()),
+		log.Any("storageConfig", st.req.StorageConfig),
 	)
 	return nil
 }
@@ -202,8 +202,8 @@ func (st *statsTask) sort(ctx context.Context) ([]*datapb.FieldBinlog, error) {
 		storage.WithStorageConfig(st.req.GetStorageConfig()),
 	)
 	if err != nil {
-		mlog.Warn(ctx, "sort segment wrong, unable to init segment writer",
-			mlog.Int64("taskID", st.req.GetTaskID()), mlog.Err(err))
+		log.Warn(ctx, "sort segment wrong, unable to init segment writer",
+			log.Int64("taskID", st.req.GetTaskID()), log.Err(err))
 		return nil, err
 	}
 
@@ -212,7 +212,7 @@ func (st *statsTask) sort(ctx context.Context) ([]*datapb.FieldBinlog, error) {
 		storage.WithDownloader(st.binlogIO.Download),
 		storage.WithStorageConfig(st.req.GetStorageConfig()))
 	if err != nil {
-		mlog.Warn(context.TODO(), "load deletePKs failed", mlog.Err(err))
+		log.Warn(context.TODO(), "load deletePKs failed", log.Err(err))
 		return nil, err
 	}
 
@@ -233,7 +233,7 @@ func (st *statsTask) sort(ctx context.Context) ([]*datapb.FieldBinlog, error) {
 			return !entityFilter.Filtered(pk, uint64(ts), -1)
 		}
 	default:
-		mlog.Warn(context.TODO(), "sort task only support int64 and varchar pk field")
+		log.Warn(context.TODO(), "sort task only support int64 and varchar pk field")
 	}
 
 	rr, err := storage.NewBinlogRecordReader(ctx, st.req.InsertLogs, st.req.Schema,
@@ -243,7 +243,7 @@ func (st *statsTask) sort(ctx context.Context) ([]*datapb.FieldBinlog, error) {
 		storage.WithStorageConfig(st.req.GetStorageConfig()),
 	)
 	if err != nil {
-		mlog.Warn(context.TODO(), "error creating insert binlog reader", mlog.Err(err))
+		log.Warn(context.TODO(), "error creating insert binlog reader", log.Err(err))
 		return nil, err
 	}
 	defer rr.Close()
@@ -251,7 +251,7 @@ func (st *statsTask) sort(ctx context.Context) ([]*datapb.FieldBinlog, error) {
 	rrs := []storage.RecordReader{rr}
 	numValidRows, _, err := storage.Sort(st.req.GetBinlogMaxSize(), st.req.GetSchema(), rrs, srw, predicate, []int64{pkField.FieldID})
 	if err != nil {
-		mlog.Warn(context.TODO(), "sort failed", mlog.Int64("taskID", st.req.GetTaskID()), mlog.Err(err))
+		log.Warn(context.TODO(), "sort failed", log.Int64("taskID", st.req.GetTaskID()), log.Err(err))
 		return nil, err
 	}
 	if err := srw.Close(); err != nil {
@@ -284,17 +284,17 @@ func (st *statsTask) sort(ctx context.Context) ([]*datapb.FieldBinlog, error) {
 
 	debug.FreeOSMemory()
 	elapse := st.tr.RecordSpan()
-	mlog.Info(context.TODO(), "sort segment end",
-		mlog.String("clusterID", st.req.GetClusterID()),
-		mlog.Int64("taskID", st.req.GetTaskID()),
-		mlog.Int64("collectionID", st.req.GetCollectionID()),
-		mlog.Int64("partitionID", st.req.GetPartitionID()),
-		mlog.Int64("segmentID", st.req.GetSegmentID()),
-		mlog.String("subTaskType", st.req.GetSubJobType().String()),
-		mlog.Int64("target segmentID", st.req.GetTargetSegmentID()),
-		mlog.Int64("old rows", numRows),
-		mlog.Int("valid rows", numValidRows),
-		mlog.Duration("elapse", elapse),
+	log.Info(context.TODO(), "sort segment end",
+		log.String("clusterID", st.req.GetClusterID()),
+		log.Int64("taskID", st.req.GetTaskID()),
+		log.Int64("collectionID", st.req.GetCollectionID()),
+		log.Int64("partitionID", st.req.GetPartitionID()),
+		log.Int64("segmentID", st.req.GetSegmentID()),
+		log.String("subTaskType", st.req.GetSubJobType().String()),
+		log.Int64("target segmentID", st.req.GetTargetSegmentID()),
+		log.Int64("old rows", numRows),
+		log.Int("valid rows", numValidRows),
+		log.Duration("elapse", elapse),
 	)
 	return insertLogs, nil
 }
@@ -314,7 +314,7 @@ func (st *statsTask) Execute(ctx context.Context) error {
 	}
 
 	if len(insertLogs) == 0 {
-		mlog.Info(ctx, "there is no insertBinlogs, skip creating text index")
+		log.Info(ctx, "there is no insertBinlogs, skip creating text index")
 		return nil
 	}
 
@@ -328,7 +328,7 @@ func (st *statsTask) Execute(ctx context.Context) error {
 			st.req.GetTaskID(),
 			insertLogs)
 		if err != nil {
-			mlog.Warn(ctx, "stats wrong, failed to create text index", mlog.Err(err))
+			log.Warn(ctx, "stats wrong, failed to create text index", log.Err(err))
 			return err
 		}
 	}
@@ -340,7 +340,7 @@ func (st *statsTask) Execute(ctx context.Context) error {
 		// for compatibility, we only support json data format version 2 and above after 2.6
 		// for old version, we skip creating json key index
 		if st.req.GetJsonKeyStatsDataFormat() < 2 {
-			mlog.Info(ctx, "json data format version is too old, skip creating json key index", mlog.Int64("data format", st.req.GetJsonKeyStatsDataFormat()))
+			log.Info(ctx, "json data format version is too old, skip creating json key index", log.Int64("data format", st.req.GetJsonKeyStatsDataFormat()))
 			return nil
 		}
 
@@ -357,7 +357,7 @@ func (st *statsTask) Execute(ctx context.Context) error {
 			st.req.GetJsonStatsShreddingRatioThreshold(),
 			st.req.GetJsonStatsWriteBatchSize())
 		if err != nil {
-			mlog.Warn(context.TODO(), "stats wrong, failed to create json index", mlog.Err(err))
+			log.Warn(context.TODO(), "stats wrong, failed to create json index", log.Err(err))
 			return err
 		}
 	}
@@ -487,7 +487,7 @@ func (st *statsTask) createTextIndex(ctx context.Context,
 		if !h.EnableMatch() {
 			continue
 		}
-		mlog.Info(context.TODO(), "field enable match, ready to create text index", mlog.Int64("field id", field.GetFieldID()))
+		log.Info(context.TODO(), "field enable match, ready to create text index", log.Int64("field id", field.GetFieldID()))
 
 		eg.Go(func() error {
 			files, err := getInsertFiles(field.GetFieldID(), field.GetNullable())
@@ -521,10 +521,10 @@ func (st *statsTask) createTextIndex(ctx context.Context,
 			}
 			mu.Unlock()
 
-			mlog.Info(context.TODO(), "field enable match, create text index done",
-				mlog.Int64("targetSegmentID", st.req.GetTargetSegmentID()),
-				mlog.Int64("field id", field.GetFieldID()),
-				mlog.Strings("files", lo.Keys(uploaded)),
+			log.Info(context.TODO(), "field enable match, create text index done",
+				log.Int64("targetSegmentID", st.req.GetTargetSegmentID()),
+				log.Int64("field id", field.GetFieldID()),
+				log.Strings("files", lo.Keys(uploaded)),
 			)
 			return nil
 		})
@@ -542,9 +542,9 @@ func (st *statsTask) createTextIndex(ctx context.Context,
 		st.req.GetInsertChannel(),
 		textIndexLogs)
 	totalElapse := st.tr.RecordSpan()
-	mlog.Info(context.TODO(), "create text index done",
-		mlog.Int64("target segmentID", st.req.GetTargetSegmentID()),
-		mlog.Duration("total elapse", totalElapse),
+	log.Info(context.TODO(), "create text index done",
+		log.Int64("target segmentID", st.req.GetTargetSegmentID()),
+		log.Duration("total elapse", totalElapse),
 	)
 	return nil
 }
@@ -564,8 +564,8 @@ func (st *statsTask) createJSONKeyStats(ctx context.Context,
 ) error {
 
 	if jsonKeyStatsDataFormat != common.JSONStatsDataFormatVersion {
-		mlog.Warn(context.TODO(), "create json key index failed dataformat invalid", mlog.Int64("dataformat version", jsonKeyStatsDataFormat),
-			mlog.Int64("code version", common.JSONStatsDataFormatVersion))
+		log.Warn(context.TODO(), "create json key index failed dataformat invalid", log.Int64("dataformat version", jsonKeyStatsDataFormat),
+			log.Int64("code version", common.JSONStatsDataFormatVersion))
 		return nil
 	}
 
@@ -609,7 +609,7 @@ func (st *statsTask) createJSONKeyStats(ctx context.Context,
 		if !h.EnableJSONKeyStatsIndex() {
 			continue
 		}
-		mlog.Info(context.TODO(), "field enable json key index, ready to create json key index", mlog.Int64("field id", field.GetFieldID()))
+		log.Info(context.TODO(), "field enable json key index, ready to create json key index", log.Int64("field id", field.GetFieldID()))
 
 		eg.Go(func() error {
 			files, err := getInsertFiles(field.GetFieldID())
@@ -649,11 +649,11 @@ func (st *statsTask) createJSONKeyStats(ctx context.Context,
 			}
 			mu.Unlock()
 
-			mlog.Info(context.TODO(), "field enable json key index, create json key index done",
-				mlog.Int64("field id", field.GetFieldID()),
-				mlog.Strings("files", lo.Keys(statsResult.Files)),
-				mlog.Int64("memorySize", statsResult.MemSize),
-				mlog.Int64("logSize", logSize),
+			log.Info(context.TODO(), "field enable json key index, create json key index done",
+				log.Int64("field id", field.GetFieldID()),
+				log.Strings("files", lo.Keys(statsResult.Files)),
+				log.Int64("memorySize", statsResult.MemSize),
+				log.Int64("logSize", logSize),
 			)
 			return nil
 		})
@@ -674,9 +674,9 @@ func (st *statsTask) createJSONKeyStats(ctx context.Context,
 		jsonKeyIndexStats)
 
 	metrics.DataNodeBuildJSONStatsLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10)).Observe(totalElapse.Seconds())
-	mlog.Info(context.TODO(), "create json key index done",
-		mlog.Int64("target segmentID", st.req.GetTargetSegmentID()),
-		mlog.Duration("total elapse", totalElapse))
+	log.Info(context.TODO(), "create json key index done",
+		log.Int64("target segmentID", st.req.GetTargetSegmentID()),
+		log.Duration("total elapse", totalElapse))
 	return nil
 }
 
@@ -716,7 +716,7 @@ func buildIndexParams(
 			req.GetPartitionID(),
 			req.GetTargetSegmentID(),
 		)
-		mlog.Info(context.TODO(), "build index params", mlog.Any("segment insert files", params.SegmentInsertFiles))
+		log.Info(context.TODO(), "build index params", log.Any("segment insert files", params.SegmentInsertFiles))
 	}
 
 	return params

@@ -19,7 +19,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/mqimpl/rocksmq/server"
 )
@@ -80,7 +80,7 @@ func (c *client) Subscribe(options ConsumerOptions) (Consumer, error) {
 		return nil, err
 	}
 	if exist {
-		mlog.Debug(context.TODO(), "ConsumerGroup already existed", mlog.Any("topic", options.Topic), mlog.String("SubscriptionName", options.SubscriptionName))
+		log.Debug(context.TODO(), "ConsumerGroup already existed", log.Any("topic", options.Topic), log.String("SubscriptionName", options.SubscriptionName))
 		consumer, err := getExistedConsumer(c, options, con.MsgMutex)
 		if err != nil {
 			return nil, err
@@ -131,7 +131,7 @@ func (c *client) consume(consumer *consumer) {
 	}()
 
 	if err := c.blockUntilInitDone(consumer); err != nil {
-		mlog.Warn(context.TODO(), "consumer init failed", mlog.Err(err))
+		log.Warn(context.TODO(), "consumer init failed", log.Err(err))
 		return
 	}
 
@@ -161,17 +161,17 @@ func (c *client) consume(consumer *consumer) {
 
 		select {
 		case <-consumer.ctx.Done():
-			mlog.Info(context.TODO(), "Consumer is closed, consumer goroutine exit")
+			log.Info(context.TODO(), "Consumer is closed, consumer goroutine exit")
 			return
 		case <-c.closeCh:
-			mlog.Info(context.TODO(), "Client is closed, consumer goroutine exit")
+			log.Info(context.TODO(), "Client is closed, consumer goroutine exit")
 			return
 		case consumerCh <- waitForSent:
 			pendingMsgs = pendingMsgs[1:]
 		case _, ok := <-newIncomingMsgCh:
 			if !ok {
 				// consumer MsgMutex closed, goroutine exit
-				mlog.Info(context.TODO(), "Consumer MsgMutex closed", mlog.String("topic", consumer.topic), mlog.String("groupName", consumer.consumerName))
+				log.Info(context.TODO(), "Consumer MsgMutex closed", log.String("topic", consumer.topic), log.String("groupName", consumer.consumerName))
 				return
 			}
 		case <-timerNotify:
@@ -200,7 +200,7 @@ func (c *client) tryToConsume(consumer *consumer) []*RmqMessage {
 	}
 	msgs, err := consumer.client.server.Consume(consumer.topic, consumer.consumerName, n)
 	if err != nil {
-		mlog.Warn(context.TODO(), "Consumer's goroutine cannot consume from (" + consumer.topic + "," + consumer.consumerName + "): " + err.Error())
+		log.Warn(context.TODO(), "Consumer's goroutine cannot consume from (" + consumer.topic + "," + consumer.consumerName + "): " + err.Error())
 		return nil
 	}
 	rmqMsgs := make([]*RmqMessage, 0, len(msgs))
@@ -211,7 +211,7 @@ func (c *client) tryToConsume(consumer *consumer) []*RmqMessage {
 			continue
 		}
 		if !errors.Is(err, errNotStreamingServiceMessage) {
-			mlog.Warn(context.TODO(), "Consumer's goroutine cannot unmarshal streaming message: ", mlog.Err(err))
+			log.Warn(context.TODO(), "Consumer's goroutine cannot unmarshal streaming message: ", log.Err(err))
 			continue
 		}
 		// then fallback to the legacy message format.

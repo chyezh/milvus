@@ -11,7 +11,7 @@ import (
 
 	"github.com/milvus-io/milvus/client/v2/entity"
 	client "github.com/milvus-io/milvus/client/v2/milvusclient"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/tests/go_client/common"
 	hp "github.com/milvus-io/milvus/tests/go_client/testcases/helper"
 )
@@ -484,11 +484,11 @@ func TestDeleteComplexExpr(t *testing.T) {
 		prepare.CreateIndex(ctx, t, mc, hp.TNewIndexParams(schema))
 		prepare.Load(ctx, t, mc, hp.NewLoadParams(schema.CollectionName))
 
-		mlog.Debug(context.TODO(), "TestDeleteComplexExpr", mlog.Any("expr", exprLimit.expr))
+		log.Debug(context.TODO(), "TestDeleteComplexExpr", log.Any("expr", exprLimit.expr))
 
 		resDe, err := mc.Delete(ctx, client.NewDeleteOption(schema.CollectionName).WithExpr(exprLimit.expr))
 		common.CheckErr(t, err, true)
-		mlog.Debug(context.TODO(), "delete count", mlog.Bool("equal", int64(exprLimit.count) == resDe.DeleteCount))
+		log.Debug(context.TODO(), "delete count", log.Bool("equal", int64(exprLimit.count) == resDe.DeleteCount))
 		// require.Equal(t, int64(exprLimit.count), resDe.DeleteCount)
 
 		resQuery, err := mc.Query(ctx, client.NewQueryOption(schema.CollectionName).WithFilter(exprLimit.expr).WithConsistencyLevel(entity.ClStrong))
@@ -547,11 +547,11 @@ func TestDeleteComplexExprJson(t *testing.T) {
 		prepare.CreateIndex(ctx, t, mc, hp.TNewIndexParams(schema))
 		prepare.Load(ctx, t, mc, hp.NewLoadParams(schema.CollectionName))
 
-		mlog.Debug(context.TODO(), "TestDeleteComplexExpr", mlog.Any("expr", exprLimit.expr))
+		log.Debug(context.TODO(), "TestDeleteComplexExpr", log.Any("expr", exprLimit.expr))
 
 		resDe, err := mc.Delete(ctx, client.NewDeleteOption(schema.CollectionName).WithExpr(exprLimit.expr))
 		common.CheckErr(t, err, true)
-		mlog.Debug(context.TODO(), "delete count", mlog.Bool("equal", int64(exprLimit.count) == resDe.DeleteCount))
+		log.Debug(context.TODO(), "delete count", log.Bool("equal", int64(exprLimit.count) == resDe.DeleteCount))
 		// require.Equal(t, int64(exprLimit.count), resDe.DeleteCount)
 
 		resQuery, err := mc.Query(ctx, client.NewQueryOption(schema.CollectionName).WithFilter(exprLimit.expr).WithConsistencyLevel(entity.ClStrong))

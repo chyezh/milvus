@@ -11,7 +11,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/util/reduce"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -54,16 +54,16 @@ func checkResultDatas(ctx context.Context, subSearchResultData []*schemapb.Searc
 	var hitNum int
 	for i, sData := range subSearchResultData {
 		pkLength := typeutil.GetSizeOfIDs(sData.GetIds())
-		mlog.Debug(ctx, "subSearchResultData",
-			mlog.Int("result No.", i),
-			mlog.Int64("nq", sData.NumQueries),
-			mlog.Int64("topk", sData.TopK),
-			mlog.Int("length of pks", pkLength),
-			mlog.Int("length of FieldsData", len(sData.FieldsData)))
+		log.Debug(ctx, "subSearchResultData",
+			log.Int("result No.", i),
+			log.Int64("nq", sData.NumQueries),
+			log.Int64("topk", sData.TopK),
+			log.Int("length of pks", pkLength),
+			log.Int("length of FieldsData", len(sData.FieldsData)))
 		allSearchCount += sData.GetAllSearchCount()
 		hitNum += pkLength
 		if err := checkSearchResultData(sData, nq, topK, pkLength); err != nil {
-			mlog.Warn(ctx, "invalid search results", mlog.Err(err))
+			log.Warn(ctx, "invalid search results", log.Err(err))
 			return allSearchCount, hitNum, err
 		}
 	}
@@ -73,7 +73,7 @@ func checkResultDatas(ctx context.Context, subSearchResultData []*schemapb.Searc
 func reduceAdvanceGroupBy(ctx context.Context, subSearchResultData []*schemapb.SearchResultData,
 	nq int64, topK int64, pkType schemapb.DataType, metricType string,
 ) (*milvuspb.SearchResults, error) {
-	mlog.Debug(ctx, "reduceAdvanceGroupBY", mlog.Int("len(subSearchResultData)", len(subSearchResultData)), mlog.Int64("nq", nq))
+	log.Debug(ctx, "reduceAdvanceGroupBY", log.Int("len(subSearchResultData)", len(subSearchResultData)), log.Int64("nq", nq))
 	// for advance group by, offset is not applied, so just return when there's only one channel
 	if len(subSearchResultData) == 1 {
 		return &milvuspb.SearchResults{
@@ -95,7 +95,7 @@ func reduceAdvanceGroupBy(ctx context.Context, subSearchResultData []*schemapb.S
 
 	var limit int64
 	if allSearchCount, hitNum, err := checkResultDatas(ctx, subSearchResultData, nq, topK); err != nil {
-		mlog.Warn(ctx, "invalid search results", mlog.Err(err))
+		log.Warn(ctx, "invalid search results", log.Err(err))
 		return ret, err
 	} else {
 		ret.GetResults().AllSearchCount = allSearchCount
@@ -198,12 +198,12 @@ func reduceSearchResultDataWithGroupBy(ctx context.Context, subSearchResultData 
 	}()
 
 	limit := topk - offset
-	mlog.Debug(ctx, "reduceSearchResultData",
-		mlog.Int("len(subSearchResultData)", len(subSearchResultData)),
-		mlog.Int64("nq", nq),
-		mlog.Int64("offset", offset),
-		mlog.Int64("limit", limit),
-		mlog.String("metricType", metricType))
+	log.Debug(ctx, "reduceSearchResultData",
+		log.Int("len(subSearchResultData)", len(subSearchResultData)),
+		log.Int64("nq", nq),
+		log.Int64("offset", offset),
+		log.Int64("limit", limit),
+		log.String("metricType", metricType))
 
 	ret := &milvuspb.SearchResults{
 		Status: merr.Success(),
@@ -222,7 +222,7 @@ func reduceSearchResultDataWithGroupBy(ctx context.Context, subSearchResultData 
 	}
 
 	if allSearchCount, _, err := checkResultDatas(ctx, subSearchResultData, nq, topk); err != nil {
-		mlog.Warn(ctx, "invalid search results", mlog.Err(err))
+		log.Warn(ctx, "invalid search results", log.Err(err))
 		return ret, err
 	} else {
 		ret.GetResults().AllSearchCount = allSearchCount
@@ -342,7 +342,7 @@ func reduceSearchResultDataWithGroupBy(ctx context.Context, subSearchResultData 
 		}
 
 		if realTopK != -1 && realTopK != j {
-			mlog.Warn(ctx, "Proxy Reduce Search Result", mlog.Err(errors.New("the length (topk) between all result of query is different")))
+			log.Warn(ctx, "Proxy Reduce Search Result", log.Err(errors.New("the length (topk) between all result of query is different")))
 		}
 		realTopK = j
 		ret.Results.Topks = append(ret.Results.Topks, realTopK)
@@ -369,12 +369,12 @@ func reduceSearchResultDataNoGroupBy(ctx context.Context, subSearchResultData []
 	}()
 
 	limit := topk - offset
-	mlog.Debug(ctx, "reduceSearchResultData",
-		mlog.Int("len(subSearchResultData)", len(subSearchResultData)),
-		mlog.Int64("nq", nq),
-		mlog.Int64("offset", offset),
-		mlog.Int64("limit", limit),
-		mlog.String("metricType", metricType))
+	log.Debug(ctx, "reduceSearchResultData",
+		log.Int("len(subSearchResultData)", len(subSearchResultData)),
+		log.Int64("nq", nq),
+		log.Int64("offset", offset),
+		log.Int64("limit", limit),
+		log.String("metricType", metricType))
 
 	ret := &milvuspb.SearchResults{
 		Status: merr.Success(),
@@ -393,7 +393,7 @@ func reduceSearchResultDataNoGroupBy(ctx context.Context, subSearchResultData []
 	}
 
 	if allSearchCount, _, err := checkResultDatas(ctx, subSearchResultData, nq, topk); err != nil {
-		mlog.Warn(ctx, "invalid search results", mlog.Err(err))
+		log.Warn(ctx, "invalid search results", log.Err(err))
 		return ret, err
 	} else {
 		ret.GetResults().AllSearchCount = allSearchCount
@@ -488,7 +488,7 @@ func reduceSearchResultDataNoGroupBy(ctx context.Context, subSearchResultData []
 				cursors[subSearchIdx]++
 			}
 			if realTopK != -1 && realTopK != j {
-				mlog.Warn(ctx, "Proxy Reduce Search Result", mlog.Err(errors.New("the length (topk) between all result of query is different")))
+				log.Warn(ctx, "Proxy Reduce Search Result", log.Err(errors.New("the length (topk) between all result of query is different")))
 				// return nil, errors.New("the length (topk) between all result of query is different")
 			}
 			realTopK = j
@@ -557,25 +557,25 @@ func reduceResults(ctx context.Context, toReduceResults []*internalpb.SearchResu
 	// Decode all search results
 	validSearchResults, err := decodeSearchResults(ctx, toReduceResults)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to decode search results", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to decode search results", log.Err(err))
 		return nil, err
 	}
 
 	if len(validSearchResults) <= 0 {
-		mlog.Debug(context.TODO(), "reduced search results is empty, fill in empty result")
+		log.Debug(context.TODO(), "reduced search results is empty, fill in empty result")
 		return fillInEmptyResult(nq), nil
 	}
 
 	// Reduce all search results
-	mlog.Debug(context.TODO(), "proxy search post execute reduce",
-		mlog.Int64("collection", collectionID),
-		mlog.Int64s("partitionIDs", partitionIDs),
-		mlog.Int("number of valid search results", len(validSearchResults)))
+	log.Debug(context.TODO(), "proxy search post execute reduce",
+		log.Int64("collection", collectionID),
+		log.Int64s("partitionIDs", partitionIDs),
+		log.Int("number of valid search results", len(validSearchResults)))
 	var result *milvuspb.SearchResults
 	result, err = reduceSearchResult(ctx, validSearchResults, reduce.NewReduceSearchResultInfo(nq, topK).WithMetricType(metricType).WithPkType(pkType).
 		WithOffset(offset).WithGroupByField(queryInfo.GetGroupByFieldId()).WithGroupSize(queryInfo.GetGroupSize()).WithAdvance(isAdvance))
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to reduce search results", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to reduce search results", log.Err(err))
 		return nil, err
 	}
 	return result, nil
@@ -639,7 +639,7 @@ func selectHighestScoreIndex(ctx context.Context, subSearchResultData []*schemap
 			if subSearchIdx == -1 {
 				// A bad case happens where Knowhere returns distance/score == +/-maxFloat32
 				// by mistake.
-				mlog.Error(ctx, "a bad score is returned, something is wrong here!", mlog.Float32("score", sScore))
+				log.Error(ctx, "a bad score is returned, something is wrong here!", log.Float32("score", sScore))
 			} else if typeutil.ComparePK(
 				typeutil.GetPK(subSearchResultData[i].GetIds(), sIdx),
 				typeutil.GetPK(subSearchResultData[subSearchIdx].GetIds(), resultDataIdx)) {

@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -21,7 +21,7 @@ func GracefulStopGRPCServer(s *grpc.Server) {
 	ch := make(chan struct{})
 	go func() {
 		defer close(ch)
-		mlog.Info(context.TODO(), "try to graceful stop grpc server...")
+		log.Info(context.TODO(), "try to graceful stop grpc server...")
 		// will block until all rpc finished.
 		s.GracefulStop()
 	}()
@@ -29,7 +29,7 @@ func GracefulStopGRPCServer(s *grpc.Server) {
 	case <-ch:
 	case <-time.After(paramtable.Get().ProxyGrpcServerCfg.GracefulStopTimeout.GetAsDuration(time.Second)):
 		// took too long, manually close grpc server
-		mlog.Info(context.TODO(), "force to stop grpc server...")
+		log.Info(context.TODO(), "force to stop grpc server...")
 		s.Stop()
 		// concurrent GracefulStop should be interrupted
 		<-ch
@@ -37,12 +37,12 @@ func GracefulStopGRPCServer(s *grpc.Server) {
 }
 
 func getTLSCreds(certFile string, keyFile string, nodeType string) credentials.TransportCredentials {
-	mlog.Info(context.TODO(), "TLS Server PEM Path", mlog.String("path", certFile))
-	mlog.Info(context.TODO(), "TLS Server Key Path", mlog.String("path", keyFile))
+	log.Info(context.TODO(), "TLS Server PEM Path", log.String("path", certFile))
+	log.Info(context.TODO(), "TLS Server Key Path", log.String("path", keyFile))
 	creds, err := credentials.NewServerTLSFromFile(certFile, keyFile)
 	if err != nil {
-		mlog.Warn(context.TODO(), nodeType+" can't create creds", mlog.Err(err))
-		mlog.Warn(context.TODO(), nodeType+" can't create creds", mlog.Err(err))
+		log.Warn(context.TODO(), nodeType+" can't create creds", log.Err(err))
+		log.Warn(context.TODO(), nodeType+" can't create creds", log.Err(err))
 	}
 	return creds
 }
@@ -53,7 +53,7 @@ func EnableInternalTLS(NodeType string) grpc.ServerOption {
 	keyFile := Params.InternalTLSCfg.InternalTLSServerKeyPath.GetValue()
 	internaltlsEnabled := Params.InternalTLSCfg.InternalTLSEnabled.GetAsBool()
 
-	mlog.Info(context.TODO(), "Internal TLS Enabled", mlog.Bool("value", internaltlsEnabled))
+	log.Info(context.TODO(), "Internal TLS Enabled", log.Bool("value", internaltlsEnabled))
 
 	if internaltlsEnabled {
 		creds := getTLSCreds(certFile, keyFile, NodeType)
@@ -63,18 +63,18 @@ func EnableInternalTLS(NodeType string) grpc.ServerOption {
 }
 
 func CreateCertPoolforClient(caFile string, nodeType string) (*x509.CertPool, error) {
-	mlog.Info(context.TODO(), "Creating cert pool for " + nodeType)
-	mlog.Info(context.TODO(), "Cert file path:", mlog.String("caFile", caFile))
+	log.Info(context.TODO(), "Creating cert pool for " + nodeType)
+	log.Info(context.TODO(), "Cert file path:", log.String("caFile", caFile))
 	certPool := x509.NewCertPool()
 
 	b, err := os.ReadFile(caFile)
 	if err != nil {
-		mlog.Error(context.TODO(), "Error reading cert file in client", mlog.Err(err))
+		log.Error(context.TODO(), "Error reading cert file in client", log.Err(err))
 		return nil, err
 	}
 
 	if !certPool.AppendCertsFromPEM(b) {
-		mlog.Error(context.TODO(), "credentials: failed to append certificates")
+		log.Error(context.TODO(), "credentials: failed to append certificates")
 		return nil, errors.New("failed to append certificates") // Cert pool is invalid, return nil and the error
 	}
 	return certPool, err

@@ -1,4 +1,4 @@
-package mlog
+package log
 
 import "sync/atomic"
 
@@ -23,12 +23,12 @@ type LoggerBinder interface {
 // Usage:
 //
 //	type MyComponent struct {
-//	    mlog.Binder
+//	    log.Binder
 //	    // ...
 //	}
 //
 //	c := &MyComponent{}
-//	c.SetLogger(mlog.With(mlog.FieldModule("my_component")))
+//	c.SetLogger(log.With(log.FieldModule("my_component")))
 //	c.Logger().Info(ctx, "started")
 type Binder struct {
 	logger atomic.Pointer[Logger]

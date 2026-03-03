@@ -22,7 +22,7 @@ import (
 	"net/http"
 
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 const (
@@ -68,7 +68,7 @@ func writeJSON(w http.ResponseWriter, r *http.Request, resp *eventLogResponse) {
 	w.Header().Set(ContentTypeHeader, ContentTypeJSON)
 	bs, err := json.Marshal(resp)
 	if err != nil {
-		mlog.Warn(context.TODO(), "faild to send response", mlog.Err(err))
+		log.Warn(context.TODO(), "faild to send response", log.Err(err))
 	}
 	w.Write(bs)
 }

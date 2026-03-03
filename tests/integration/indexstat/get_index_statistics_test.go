@@ -10,7 +10,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
 	"github.com/milvus-io/milvus/tests/integration"
@@ -47,7 +47,7 @@ func (s *GetIndexStatisticsSuite) run() {
 	})
 	s.NoError(err)
 	if createCollectionStatus.GetErrorCode() != commonpb.ErrorCode_Success {
-		mlog.Warn(context.TODO(), "createCollectionStatus fail reason", mlog.String("reason", createCollectionStatus.GetReason()))
+		log.Warn(context.TODO(), "createCollectionStatus fail reason", log.String("reason", createCollectionStatus.GetReason()))
 	}
 	s.Equal(createCollectionStatus.GetErrorCode(), commonpb.ErrorCode_Success)
 
@@ -86,7 +86,7 @@ func (s *GetIndexStatisticsSuite) run() {
 		ExtraParams:    integration.ConstructIndexParam(dim, integration.IndexFaissIvfFlat, metric.L2),
 	})
 	if createIndexStatus.GetErrorCode() != commonpb.ErrorCode_Success {
-		mlog.Warn(context.TODO(), "createIndexStatus fail reason", mlog.String("reason", createIndexStatus.GetReason()))
+		log.Warn(context.TODO(), "createIndexStatus fail reason", log.String("reason", createIndexStatus.GetReason()))
 	}
 	s.NoError(err)
 	s.Equal(commonpb.ErrorCode_Success, createIndexStatus.GetErrorCode())
@@ -133,7 +133,7 @@ func (s *GetIndexStatisticsSuite) run() {
 			})
 			s.NoError(err)
 			if loadStatus.GetErrorCode() != commonpb.ErrorCode_Success {
-				mlog.Warn(context.TODO(), "loadStatus fail reason", mlog.String("reason", loadStatus.GetReason()))
+				log.Warn(context.TODO(), "loadStatus fail reason", log.String("reason", loadStatus.GetReason()))
 			}
 			s.Equal(commonpb.ErrorCode_Success, loadStatus.GetErrorCode())
 			waitingForLoad(ctx, c, collectionName)
@@ -153,7 +153,7 @@ func (s *GetIndexStatisticsSuite) run() {
 		s.Equal(int64(6000), indexInfos2[0].TotalRows)
 	*/
 
-	mlog.Info(context.TODO(), "TestGetIndexStatistics succeed")
+	log.Info(context.TODO(), "TestGetIndexStatistics succeed")
 }
 
 func (s *GetIndexStatisticsSuite) TestGetIndexStatistics_float() {

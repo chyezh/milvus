@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/internal/util/vecindexmgr"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/segcorepb"
@@ -97,10 +97,10 @@ func (m *collectionManager) PutOrRef(collectionID int64, schema *schemapb.Collec
 			collection.schema.Store(schema)
 			collection.ccollection.UpdateSchema(schema, loadMeta.GetSchemaVersion())
 			collection.schemaVersion = loadMeta.GetSchemaVersion()
-			mlog.Info(context.TODO(), "update collection schema",
-				mlog.Int64("collectionID", collectionID),
-				mlog.Uint64("schemaVersion", loadMeta.GetSchemaVersion()),
-				mlog.Any("schema", schema),
+			log.Info(context.TODO(), "update collection schema",
+				log.Int64("collectionID", collectionID),
+				log.Uint64("schemaVersion", loadMeta.GetSchemaVersion()),
+				log.Any("schema", schema),
 			)
 		}
 		// Always update index meta to ensure newly indexed fields are visible
@@ -114,9 +114,9 @@ func (m *collectionManager) PutOrRef(collectionID int64, schema *schemapb.Collec
 		return nil
 	}
 
-	mlog.Info(context.TODO(), "put new collection", mlog.Int64("collectionID", collectionID), mlog.Any("schema", schema))
+	log.Info(context.TODO(), "put new collection", log.Int64("collectionID", collectionID), log.Any("schema", schema))
 	collection, err := NewCollection(collectionID, schema, meta, loadMeta)
-	mlog.Info(context.TODO(), "new collection created", mlog.Int64("collectionID", collectionID), mlog.Any("schema", schema), mlog.Err(err))
+	log.Info(context.TODO(), "new collection created", log.Int64("collectionID", collectionID), log.Any("schema", schema), log.Err(err))
 	if err != nil {
 		return err
 	}
@@ -165,8 +165,8 @@ func (m *collectionManager) Unref(collectionID int64, count uint32) bool {
 
 	if collection, ok := m.collections[collectionID]; ok {
 		if collection.Unref(count) == 0 {
-			mlog.Info(context.TODO(), "release collection due to ref count to 0",
-				mlog.Int64("nodeID", paramtable.GetNodeID()), mlog.Int64("collectionID", collectionID))
+			log.Info(context.TODO(), "release collection due to ref count to 0",
+				log.Int64("nodeID", paramtable.GetNodeID()), log.Int64("collectionID", collectionID))
 			delete(m.collections, collectionID)
 			DeleteCollection(collection)
 			metrics.CleanupQueryNodeCollectionMetrics(paramtable.GetNodeID(), collectionID)
@@ -251,13 +251,13 @@ func (c *Collection) AddPartition(partitions ...int64) {
 	for i := range partitions {
 		c.partitions.Insert(partitions[i])
 	}
-	mlog.Info(context.TODO(), "add partitions", mlog.Int64("collection", c.ID()), mlog.Int64s("partitions", partitions))
+	log.Info(context.TODO(), "add partitions", log.Int64("collection", c.ID()), log.Int64s("partitions", partitions))
 }
 
 // removePartitionID removes the partition id from partition id list of collection
 func (c *Collection) RemovePartition(partitionID int64) {
 	c.partitions.Remove(partitionID)
-	mlog.Info(context.TODO(), "remove partition", mlog.Int64("collection", c.ID()), mlog.Int64("partition", partitionID))
+	log.Info(context.TODO(), "remove partition", log.Int64("collection", c.ID()), log.Int64("partition", partitionID))
 }
 
 // getLoadType get the loadType of collection, which is loadTypeCollection or loadTypePartition
@@ -317,7 +317,7 @@ func NewCollection(collectionID int64, schema *schemapb.CollectionSchema, indexM
 
 	ccollection, err := segcore.CreateCCollection(req)
 	if err != nil {
-		mlog.Warn(context.TODO(), "create collection failed", mlog.Err(err))
+		log.Warn(context.TODO(), "create collection failed", log.Err(err))
 		return nil, err
 	}
 	coll := &Collection{
@@ -378,7 +378,7 @@ func DeleteCollection(collection *Collection) {
 		ez := hookutil.GetEzByCollProperties(collection.Schema().GetProperties(), collection.ID())
 		if ez != nil {
 			if err := segcore.UnRefPluginContext(ez); err != nil {
-				mlog.Error(context.TODO(), "failed to unref plugin context", mlog.Int64("collectionID", collection.ID()), mlog.Err(err))
+				log.Error(context.TODO(), "failed to unref plugin context", log.Int64("collectionID", collection.ID()), log.Err(err))
 			}
 		}
 	}
@@ -397,7 +397,7 @@ func putOrUpdateStorageContext(properties []*commonpb.KeyValuePair, collectionID
 			key := hookutil.GetCipher().GetUnsafeKey(ez.EzID, ez.CollectionID)
 			err := segcore.PutOrRefPluginContext(ez, base64.StdEncoding.EncodeToString(key))
 			if err != nil {
-				mlog.Error(context.TODO(), "failed to put or update plugin context", mlog.Int64("collectionID", collectionID), mlog.Err(err))
+				log.Error(context.TODO(), "failed to put or update plugin context", log.Int64("collectionID", collectionID), log.Err(err))
 			}
 		}
 	}

@@ -23,7 +23,7 @@ import (
 
 
 	"github.com/milvus-io/milvus/internal/querynodev2/delegator"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgdispatcher"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -65,9 +65,9 @@ func (m *manager) Add(collectionID UniqueID, channel string) (Pipeline, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	mlog.Info(context.TODO(), "start create pipeine",
-		mlog.Int64("collectionID", collectionID),
-		mlog.String("channel", channel),
+	log.Info(context.TODO(), "start create pipeine",
+		log.Int64("collectionID", collectionID),
+		log.String("channel", channel),
 	)
 	tr := timerecord.NewTimeRecorder("add dmChannel")
 	collection := m.dataManager.Collection.Get(collectionID)
@@ -103,8 +103,8 @@ func (m *manager) Get(channel string) Pipeline {
 
 	pipeline, ok := m.channel2Pipeline[channel]
 	if !ok {
-		mlog.Warn(context.TODO(), "pipeline not existed",
-			mlog.String("channel", channel),
+		log.Warn(context.TODO(), "pipeline not existed",
+			log.String("channel", channel),
 		)
 		return nil
 	}
@@ -122,7 +122,7 @@ func (m *manager) Remove(channels ...string) {
 			pipeline.Close()
 			delete(m.channel2Pipeline, channel)
 		} else {
-			mlog.Warn(context.TODO(), "pipeline to be removed doesn't existed", mlog.String("channel", channel))
+			log.Warn(context.TODO(), "pipeline to be removed doesn't existed", log.String("channel", channel))
 		}
 	}
 	metrics.QueryNodeNumFlowGraphs.WithLabelValues(paramtable.GetStringNodeID()).Dec()

@@ -33,7 +33,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/pathutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -173,7 +173,7 @@ func (s *sealedBm25Stats) ToLocal(dirPath string) error {
 	if s.removed {
 		err := os.RemoveAll(s.localDir)
 		if err != nil {
-			mlog.Warn(context.TODO(), "remove local bm25 stats failed", mlog.Err(err), mlog.String("path", s.localDir))
+			log.Warn(context.TODO(), "remove local bm25 stats failed", log.Err(err), log.String("path", s.localDir))
 		}
 	}
 	return nil
@@ -187,7 +187,7 @@ func (s *sealedBm25Stats) Remove() {
 	if !s.inmemory {
 		err := os.RemoveAll(s.localDir)
 		if err != nil {
-			mlog.Warn(context.TODO(), "remove local bm25 stats failed", mlog.Err(err), mlog.String("path", s.localDir))
+			log.Warn(context.TODO(), "remove local bm25 stats failed", log.Err(err), log.String("path", s.localDir))
 		}
 	}
 }
@@ -333,7 +333,7 @@ func (o *idfOracle) RegisterSealed(segmentID int64, stats bm25Stats) error {
 		if o.toDisk {
 			err := segStats.ToLocal(o.dirPath)
 			if err != nil {
-				mlog.Warn(context.TODO(), "idf oracle to local failed, remain in memory", mlog.Err(err))
+				log.Warn(context.TODO(), "idf oracle to local failed, remain in memory", log.Err(err))
 				return nil, err
 			}
 		}
@@ -439,7 +439,7 @@ func (o *idfOracle) syncloop() {
 		case <-o.syncNotify:
 			err := o.SyncDistribution()
 			if err != nil {
-				mlog.Warn(context.TODO(), "idf oracle sync distribution failed", mlog.Err(err))
+				log.Warn(context.TODO(), "idf oracle sync distribution failed", log.Err(err))
 				time.Sleep(time.Second * 10)
 				o.NotifySync()
 			}
@@ -475,7 +475,7 @@ func (o *idfOracle) SyncDistribution() error {
 			case snapshot.targetVersion:
 				targetMap.Insert(segment.SegmentID)
 				if !o.sealed.Contain(segment.SegmentID) {
-					mlog.Warn(context.TODO(), "idf oracle lack some sealed segment", mlog.Int64("segment", segment.SegmentID))
+					log.Warn(context.TODO(), "idf oracle lack some sealed segment", log.Int64("segment", segment.SegmentID))
 				}
 			case unreadableTargetVersion:
 				reserveMap.Insert(segment.SegmentID)
@@ -559,7 +559,7 @@ func (o *idfOracle) SyncDistribution() error {
 
 	o.targetVersion.Store(snapshot.targetVersion)
 	o.NotifyLocal()
-	mlog.Info(context.TODO(), "sync idf distribution finished", mlog.Int64("version", snapshot.targetVersion), mlog.Int64("numrow", o.current.NumRow()), mlog.Int("growing", len(o.growing)), mlog.Int("sealed", o.sealed.Len()))
+	log.Info(context.TODO(), "sync idf distribution finished", log.Int64("version", snapshot.targetVersion), log.Int64("numrow", o.current.NumRow()), log.Int("growing", len(o.growing)), log.Int("sealed", o.sealed.Len()))
 	return nil
 }
 

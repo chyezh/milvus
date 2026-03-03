@@ -24,7 +24,7 @@ import (
 	"time"
 
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
@@ -47,7 +47,7 @@ func Init() {
 		opts := []Option{}
 		if refreshInterval := os.Getenv(MilvusConfigRefreshIntervalEnvKey); refreshInterval != "" {
 			if duration, err := time.ParseDuration(refreshInterval); err == nil {
-				mlog.Info(context.TODO(), "set config refresh interval", mlog.Duration("duration", duration))
+				log.Info(context.TODO(), "set config refresh interval", log.Duration("duration", duration))
 				opts = append(opts, Interval(duration))
 			}
 		}

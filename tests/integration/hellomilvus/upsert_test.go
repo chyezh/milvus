@@ -26,7 +26,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
@@ -59,14 +59,14 @@ func (s *HelloMilvusSuite) TestUpsertAutoIDFalse() {
 
 	err = merr.Error(createCollectionStatus)
 	if err != nil {
-		mlog.Warn(context.TODO(), "createCollectionStatus fail reason", mlog.Err(err))
+		log.Warn(context.TODO(), "createCollectionStatus fail reason", log.Err(err))
 	}
 
-	mlog.Info(context.TODO(), "CreateCollection result", mlog.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := c.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.True(merr.Ok(showCollectionsResp.GetStatus()))
-	mlog.Info(context.TODO(), "ShowCollections result", mlog.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	pkFieldData := integration.NewInt64FieldDataWithStart(integration.Int64Field, rowNum, int64(start))
 	fVecColumn := integration.NewFloatVectorFieldData(integration.FloatVecField, rowNum, dim)
@@ -99,7 +99,7 @@ func (s *HelloMilvusSuite) TestUpsertAutoIDFalse() {
 	s.NoError(err)
 	s.NotEmpty(segments)
 	for _, segment := range segments {
-		mlog.Info(context.TODO(), "ShowSegments result", mlog.String("segment", segment.String()))
+		log.Info(context.TODO(), "ShowSegments result", log.String("segment", segment.String()))
 	}
 
 	// create index
@@ -112,7 +112,7 @@ func (s *HelloMilvusSuite) TestUpsertAutoIDFalse() {
 	s.NoError(err)
 	err = merr.Error(createIndexStatus)
 	if err != nil {
-		mlog.Warn(context.TODO(), "createIndexStatus fail reason", mlog.Err(err))
+		log.Warn(context.TODO(), "createIndexStatus fail reason", log.Err(err))
 	}
 
 	s.WaitForIndexBuilt(ctx, collectionName, integration.FloatVecField)
@@ -125,7 +125,7 @@ func (s *HelloMilvusSuite) TestUpsertAutoIDFalse() {
 	s.NoError(err)
 	err = merr.Error(loadStatus)
 	if err != nil {
-		mlog.Warn(context.TODO(), "LoadCollection fail reason", mlog.Err(err))
+		log.Warn(context.TODO(), "LoadCollection fail reason", log.Err(err))
 	}
 	s.WaitForLoad(ctx, collectionName)
 	// search
@@ -154,15 +154,15 @@ func (s *HelloMilvusSuite) TestUpsertAutoIDFalse() {
 
 	err = merr.Error(searchResult.GetStatus())
 	if err != nil {
-		mlog.Warn(context.TODO(), "searchResult fail reason", mlog.Err(err))
+		log.Warn(context.TODO(), "searchResult fail reason", log.Err(err))
 	}
 	s.NoError(err)
 
-	mlog.Info(context.TODO(), "===========================")
-	mlog.Info(context.TODO(), "===========================")
-	mlog.Info(context.TODO(), "TestUpsertAutoIDFalse succeed")
-	mlog.Info(context.TODO(), "===========================")
-	mlog.Info(context.TODO(), "===========================")
+	log.Info(context.TODO(), "===========================")
+	log.Info(context.TODO(), "===========================")
+	log.Info(context.TODO(), "TestUpsertAutoIDFalse succeed")
+	log.Info(context.TODO(), "===========================")
+	log.Info(context.TODO(), "===========================")
 }
 
 func (s *HelloMilvusSuite) TestUpsertAutoIDTrue() {
@@ -191,14 +191,14 @@ func (s *HelloMilvusSuite) TestUpsertAutoIDTrue() {
 
 	err = merr.Error(createCollectionStatus)
 	if err != nil {
-		mlog.Warn(context.TODO(), "createCollectionStatus fail reason", mlog.Err(err))
+		log.Warn(context.TODO(), "createCollectionStatus fail reason", log.Err(err))
 	}
 
-	mlog.Info(context.TODO(), "CreateCollection result", mlog.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := c.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.True(merr.Ok(showCollectionsResp.GetStatus()))
-	mlog.Info(context.TODO(), "ShowCollections result", mlog.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	pkFieldData := integration.NewInt64FieldDataWithStart(integration.Int64Field, rowNum, 0)
 	fVecColumn := integration.NewFloatVectorFieldData(integration.FloatVecField, rowNum, dim)
@@ -231,7 +231,7 @@ func (s *HelloMilvusSuite) TestUpsertAutoIDTrue() {
 	s.NoError(err)
 	s.NotEmpty(segments)
 	for _, segment := range segments {
-		mlog.Info(context.TODO(), "ShowSegments result", mlog.String("segment", segment.String()))
+		log.Info(context.TODO(), "ShowSegments result", log.String("segment", segment.String()))
 	}
 
 	// create index
@@ -244,7 +244,7 @@ func (s *HelloMilvusSuite) TestUpsertAutoIDTrue() {
 	s.NoError(err)
 	err = merr.Error(createIndexStatus)
 	if err != nil {
-		mlog.Warn(context.TODO(), "createIndexStatus fail reason", mlog.Err(err))
+		log.Warn(context.TODO(), "createIndexStatus fail reason", log.Err(err))
 	}
 
 	s.WaitForIndexBuilt(ctx, collectionName, integration.FloatVecField)
@@ -257,7 +257,7 @@ func (s *HelloMilvusSuite) TestUpsertAutoIDTrue() {
 	s.NoError(err)
 	err = merr.Error(loadStatus)
 	if err != nil {
-		mlog.Warn(context.TODO(), "LoadCollection fail reason", mlog.Err(err))
+		log.Warn(context.TODO(), "LoadCollection fail reason", log.Err(err))
 	}
 	s.WaitForLoad(ctx, collectionName)
 	// search
@@ -286,13 +286,13 @@ func (s *HelloMilvusSuite) TestUpsertAutoIDTrue() {
 
 	err = merr.Error(searchResult.GetStatus())
 	if err != nil {
-		mlog.Warn(context.TODO(), "searchResult fail reason", mlog.Err(err))
+		log.Warn(context.TODO(), "searchResult fail reason", log.Err(err))
 	}
 	s.NoError(err)
 
-	mlog.Info(context.TODO(), "===========================")
-	mlog.Info(context.TODO(), "===========================")
-	mlog.Info(context.TODO(), "TestUpsertAutoIDTrue succeed")
-	mlog.Info(context.TODO(), "===========================")
-	mlog.Info(context.TODO(), "===========================")
+	log.Info(context.TODO(), "===========================")
+	log.Info(context.TODO(), "===========================")
+	log.Info(context.TODO(), "TestUpsertAutoIDTrue succeed")
+	log.Info(context.TODO(), "===========================")
+	log.Info(context.TODO(), "===========================")
 }

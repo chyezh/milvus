@@ -26,7 +26,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/tests/integration"
@@ -75,7 +75,7 @@ func (s *LevelZeroSuite) createCollection(req *milvuspb.CreateCollectionRequest)
 	status, err := s.Cluster.MilvusClient.CreateCollection(context.TODO(), req)
 	s.Require().NoError(err)
 	s.Require().True(merr.Ok(status))
-	mlog.Info(context.TODO(), "CreateCollection result", mlog.Any("status", status))
+	log.Info(context.TODO(), "CreateCollection result", log.Any("status", status))
 }
 
 // For PrimaryKey field, startPK will be the start PK of this generation
@@ -100,7 +100,7 @@ func (s *LevelZeroSuite) buildFieldDataBySchema(schema *schemapb.CollectionSchem
 }
 
 func (s *LevelZeroSuite) generateSegment(collection string, numRows int, startPk int64, seal bool, partitionKey int64) {
-	mlog.Info(context.TODO(), "=========================Start generate one segment=========================")
+	log.Info(context.TODO(), "=========================Start generate one segment=========================")
 	fieldData := s.buildFieldDataBySchema(s.schema, numRows, startPk, partitionKey)
 	hashKeys := integration.GenerateHashKeys(numRows)
 	insertResult, err := s.Cluster.MilvusClient.Insert(context.TODO(), &milvuspb.InsertRequest{
@@ -115,16 +115,16 @@ func (s *LevelZeroSuite) generateSegment(collection string, numRows int, startPk
 	s.Require().EqualValues(numRows, len(insertResult.GetIDs().GetIntId().GetData()))
 
 	if seal {
-		mlog.Info(context.TODO(), "=========================Start to flush =========================",
-			mlog.String("collection", collection),
-			mlog.Int("numRows", numRows),
-			mlog.Int64("startPK", startPk),
+		log.Info(context.TODO(), "=========================Start to flush =========================",
+			log.String("collection", collection),
+			log.Int("numRows", numRows),
+			log.Int64("startPK", startPk),
 		)
 		s.Flush(collection)
-		mlog.Info(context.TODO(), "=========================Finish to generate one segment=========================",
-			mlog.String("collection", collection),
-			mlog.Int("numRows", numRows),
-			mlog.Int64("startPK", startPk),
+		log.Info(context.TODO(), "=========================Finish to generate one segment=========================",
+			log.String("collection", collection),
+			log.Int("numRows", numRows),
+			log.Int64("startPK", startPk),
 		)
 	}
 }

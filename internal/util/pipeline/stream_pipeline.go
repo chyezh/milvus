@@ -26,7 +26,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgdispatcher"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
@@ -60,11 +60,11 @@ func (p *streamPipeline) work() {
 	for {
 		select {
 		case <-p.closeCh:
-			mlog.Debug(context.TODO(), "stream pipeline input closed")
+			log.Debug(context.TODO(), "stream pipeline input closed")
 			return
 		case msg, ok := <-p.input:
 			if !ok {
-				mlog.Debug(context.TODO(), "stream pipeline input closed")
+				log.Debug(context.TODO(), "stream pipeline input closed")
 				return
 			}
 
@@ -77,7 +77,7 @@ func (p *streamPipeline) work() {
 			if p.emptyTimeTickSlowdowner.Filter(msg) {
 				continue
 			}
-			mlog.RatedDebug(context.TODO(), mlog.RateDefault, "stream pipeline fetch msg", mlog.Int("sum", len(msg.Msgs)))
+			log.RatedDebug(context.TODO(), log.RateDefault, "stream pipeline fetch msg", log.Int("sum", len(msg.Msgs)))
 			p.pipeline.inputChannel <- msg
 			p.pipeline.process()
 		}
@@ -97,7 +97,7 @@ func (p *streamPipeline) Status() string {
 func (p *streamPipeline) ConsumeMsgStream(ctx context.Context, position *msgpb.MsgPosition) error {
 	var err error
 	if position == nil {
-		mlog.Error(context.TODO(), "seek stream to nil position")
+		log.Error(context.TODO(), "seek stream to nil position")
 		return ErrNilPosition
 	}
 
@@ -108,19 +108,19 @@ func (p *streamPipeline) ConsumeMsgStream(ctx context.Context, position *msgpb.M
 		SubPos:   common.SubscriptionPositionUnknown,
 	})
 	if err != nil {
-		mlog.Error(context.TODO(), "dispatcher register failed after retried", mlog.String("channel", position.ChannelName), mlog.Err(err))
+		log.Error(context.TODO(), "dispatcher register failed after retried", log.String("channel", position.ChannelName), log.Err(err))
 		p.dispatcher.Deregister(p.vChannel)
 		return WrapErrRegDispather(err)
 	}
 
 	ts, _ := tsoutil.ParseTS(position.GetTimestamp())
-	mlog.Info(context.TODO(), "stream pipeline seeks from position with msgDispatcher",
-		mlog.String("pchannel", position.ChannelName),
-		mlog.String("vchannel", p.vChannel),
-		mlog.Time("checkpointTs", ts),
-		mlog.Stringer("walName", position.WALName),
-		mlog.Duration("tsLag", time.Since(ts)),
-		mlog.Duration("elapse", time.Since(start)),
+	log.Info(context.TODO(), "stream pipeline seeks from position with msgDispatcher",
+		log.String("pchannel", position.ChannelName),
+		log.String("vchannel", p.vChannel),
+		log.Time("checkpointTs", ts),
+		log.Stringer("walName", position.WALName),
+		log.Duration("tsLag", time.Since(ts)),
+		log.Duration("elapse", time.Since(start)),
 	)
 	return nil
 }

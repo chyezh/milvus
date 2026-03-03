@@ -9,7 +9,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/proxy/shardclient"
 	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 )
 
@@ -36,21 +36,21 @@ func RoundRobinPolicy(
 		for _, target := range leaders {
 			qn, err := mgr.GetClient(ctx, target)
 			if err != nil {
-				mlog.Warn(ctx, "query channel failed, node not available", mlog.String("channel", channel), mlog.Int64("nodeID", target.nodeID), mlog.Err(err))
+				log.Warn(ctx, "query channel failed, node not available", log.String("channel", channel), log.Int64("nodeID", target.nodeID), log.Err(err))
 				combineErr = merr.Combine(combineErr, err)
 				continue
 			}
 			err = query(ctx, target.nodeID, qn, channel)
 			if err != nil {
-				mlog.Warn(ctx, "query channel failed", mlog.String("channel", channel), mlog.Int64("nodeID", target.nodeID), mlog.Err(err))
+				log.Warn(ctx, "query channel failed", log.String("channel", channel), log.Int64("nodeID", target.nodeID), log.Err(err))
 				combineErr = merr.Combine(combineErr, err)
 				continue
 			}
 			return nil
 		}
 
-		mlog.Error(ctx, "failed to do query on all shard leader",
-			mlog.String("channel", channel), mlog.Err(combineErr))
+		log.Error(ctx, "failed to do query on all shard leader",
+			log.String("channel", channel), log.Err(combineErr))
 		return combineErr
 	}
 

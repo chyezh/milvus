@@ -13,7 +13,7 @@ import (
 
 
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -27,7 +27,7 @@ func initExecutor() {
 		if evt.HasUpdated {
 			pt := paramtable.Get()
 			newSize := int(math.Ceil(pt.QueryNodeCfg.MaxReadConcurrency.GetAsFloat() * pt.QueryNodeCfg.CGOPoolSizeRatio.GetAsFloat()))
-			mlog.Info(context.TODO(), "reset cgo thread num", mlog.Int("thread_num", newSize))
+			log.Info(context.TODO(), "reset cgo thread num", log.Int("thread_num", newSize))
 			C.executor_set_thread_num(C.int(newSize))
 		}
 	}

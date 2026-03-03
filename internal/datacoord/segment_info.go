@@ -29,7 +29,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -210,7 +210,7 @@ func (s *SegmentsInfo) GetCompactionTo(fromSegmentID int64) ([]*SegmentInfo, boo
 		for _, compactTo := range compactTos {
 			to, ok := s.segments[compactTo]
 			if !ok {
-				mlog.Warn(context.TODO(), "compactionTo relation is broken", mlog.Int64("from", fromSegmentID), mlog.Int64("to", compactTo))
+				log.Warn(context.TODO(), "compactionTo relation is broken", log.Int64("from", fromSegmentID), log.Int64("to", compactTo))
 				return nil, exist
 			}
 			result = append(result, to)
@@ -307,7 +307,7 @@ func (s *SegmentsInfo) SetFlushTime(segmentID UniqueID, t time.Time) {
 // SetIsCompacting sets compaction status for segment
 func (s *SegmentsInfo) SetIsCompacting(segmentID UniqueID, isCompacting bool) {
 	st := fmt.Sprintf("%s", debug.Stack())
-	mlog.Info(context.TODO(), "set compacting", mlog.Int64("segmentID", segmentID), mlog.Bool("isCompacting", isCompacting), mlog.Any("stacktrace", st))
+	log.Info(context.TODO(), "set compacting", log.Int64("segmentID", segmentID), log.Bool("isCompacting", isCompacting), log.Any("stacktrace", st))
 	if segment, ok := s.segments[segmentID]; ok {
 		s.segments[segmentID] = segment.ShadowClone(SetIsCompacting(isCompacting))
 	}

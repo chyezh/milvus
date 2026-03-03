@@ -24,7 +24,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 const (
@@ -254,9 +254,9 @@ func (ta *CachedAllocator) failRemainRequest() {
 		err = errors.New(errMsg)
 	}
 	if len(ta.ToDoReqs) > 0 {
-		mlog.Warn(context.TODO(), "Allocator has some reqs to fail",
-			mlog.String("Role", ta.Role),
-			mlog.Int("reqLen", len(ta.ToDoReqs)))
+		log.Warn(context.TODO(), "Allocator has some reqs to fail",
+			log.String("Role", ta.Role),
+			log.Int("reqLen", len(ta.ToDoReqs)))
 	}
 	for _, req := range ta.ToDoReqs {
 		if req != nil {

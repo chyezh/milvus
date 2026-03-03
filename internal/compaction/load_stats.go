@@ -25,14 +25,14 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
 func LoadBM25Stats(ctx context.Context, chunkManager storage.ChunkManager, segmentID int64, statsBinlogs []*datapb.FieldBinlog) (map[int64]*storage.BM25Stats, error) {
 	startTs := time.Now()
-	mlog.Info(ctx, "begin to reload history BM25 stats", mlog.Int64("segmentID", segmentID), mlog.Int("statsBinLogsLen", len(statsBinlogs)))
+	log.Info(ctx, "begin to reload history BM25 stats", log.Int64("segmentID", segmentID), log.Int("statsBinLogsLen", len(statsBinlogs)))
 
 	fieldList, fieldOffset := make([]int64, len(statsBinlogs)), make([]int, len(statsBinlogs))
 	logpaths := make([]string, 0)
@@ -43,13 +43,13 @@ func LoadBM25Stats(ctx context.Context, chunkManager storage.ChunkManager, segme
 	}
 
 	if len(logpaths) == 0 {
-		mlog.Warn(context.TODO(), "no BM25 stats to load")
+		log.Warn(context.TODO(), "no BM25 stats to load")
 		return nil, nil
 	}
 
 	values, err := chunkManager.MultiRead(ctx, logpaths)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to load BM25 stats files", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to load BM25 stats files", log.Err(err))
 		return nil, err
 	}
 
@@ -71,13 +71,13 @@ func LoadBM25Stats(ctx context.Context, chunkManager storage.ChunkManager, segme
 	}
 
 	// TODO ADD METRIC FOR LOAD BM25 TIME
-	mlog.Info(context.TODO(), "Successfully load BM25 stats", mlog.Any("time", time.Since(startTs)))
+	log.Info(context.TODO(), "Successfully load BM25 stats", log.Any("time", time.Since(startTs)))
 	return result, nil
 }
 
 func LoadStats(ctx context.Context, chunkManager storage.ChunkManager, schema *schemapb.CollectionSchema, segmentID int64, statsBinlogs []*datapb.FieldBinlog) ([]*storage.PkStatistics, error) {
 	startTs := time.Now()
-	mlog.Info(ctx, "begin to init pk bloom filter", mlog.Int64("segmentID", segmentID), mlog.Int("statsBinLogsLen", len(statsBinlogs)))
+	log.Info(ctx, "begin to init pk bloom filter", log.Int64("segmentID", segmentID), log.Int("statsBinLogsLen", len(statsBinlogs)))
 
 	pkField, err := typeutil.GetPrimaryFieldSchema(schema)
 	if err != nil {
@@ -110,14 +110,14 @@ func LoadStats(ctx context.Context, chunkManager storage.ChunkManager, schema *s
 
 	// no stats log to parse, initialize a new BF
 	if len(bloomFilterFiles) == 0 {
-		mlog.Warn(context.TODO(), "no stats files to load")
+		log.Warn(context.TODO(), "no stats files to load")
 		return nil, nil
 	}
 
 	// read historical PK filter
 	values, err := chunkManager.MultiRead(ctx, bloomFilterFiles)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to load bloom filter files", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to load bloom filter files", log.Err(err))
 		return nil, err
 	}
 	blobs := make([]*storage.Blob, 0)
@@ -129,13 +129,13 @@ func LoadStats(ctx context.Context, chunkManager storage.ChunkManager, schema *s
 	if logType == storage.CompoundStatsType {
 		stats, err = storage.DeserializeStatsList(blobs[0])
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to deserialize stats list", mlog.Err(err))
+			log.Warn(context.TODO(), "failed to deserialize stats list", log.Err(err))
 			return nil, err
 		}
 	} else {
 		stats, err = storage.DeserializeStats(blobs)
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to deserialize stats", mlog.Err(err))
+			log.Warn(context.TODO(), "failed to deserialize stats", log.Err(err))
 			return nil, err
 		}
 	}
@@ -152,6 +152,6 @@ func LoadStats(ctx context.Context, chunkManager storage.ChunkManager, schema *s
 		result = append(result, pkStat)
 	}
 
-	mlog.Info(context.TODO(), "Successfully load pk stats", mlog.Any("time", time.Since(startTs)), mlog.Uint("size", size))
+	log.Info(context.TODO(), "Successfully load pk stats", log.Any("time", time.Since(startTs)), log.Uint("size", size))
 	return result, nil
 }

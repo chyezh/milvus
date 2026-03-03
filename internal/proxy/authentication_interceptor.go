@@ -14,7 +14,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/proxy/privilege"
 	"github.com/milvus-io/milvus/internal/util/hookutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/crypto"
@@ -24,7 +24,7 @@ import (
 func parseMD(rawToken string) (username, password string) {
 	secrets := strings.SplitN(rawToken, util.CredentialSeparator, 2)
 	if len(secrets) < 2 {
-		mlog.Warn(context.TODO(), "invalid token format, length of secrets less than 2")
+		log.Warn(context.TODO(), "invalid token format, length of secrets less than 2")
 		return
 	}
 	username = secrets[0]
@@ -67,7 +67,7 @@ func AuthenticationInterceptor(ctx context.Context) (context.Context, error) {
 		authStrArr := md[strings.ToLower(util.HeaderAuthorize)]
 
 		if len(authStrArr) < 1 {
-			mlog.Warn(context.TODO(), "key not found in header")
+			log.Warn(context.TODO(), "key not found in header")
 			return nil, status.Error(codes.Unauthenticated, "missing authorization in header")
 		}
 
@@ -76,14 +76,14 @@ func AuthenticationInterceptor(ctx context.Context) (context.Context, error) {
 		token := authStrArr[0]
 		rawToken, err := crypto.Base64Decode(token)
 		if err != nil {
-			mlog.Warn(context.TODO(), "fail to decode the token", mlog.Err(err))
+			log.Warn(context.TODO(), "fail to decode the token", log.Err(err))
 			return nil, status.Error(codes.Unauthenticated, "invalid token format")
 		}
 
 		if !strings.Contains(rawToken, util.CredentialSeparator) {
 			user, err := VerifyAPIKey(rawToken)
 			if err != nil {
-				mlog.Warn(context.TODO(), "fail to verify apikey", mlog.Err(err))
+				log.Warn(context.TODO(), "fail to verify apikey", log.Err(err))
 				return nil, status.Error(codes.Unauthenticated, "auth check failure, please check api key is correct")
 			}
 			metrics.UserRPCCounter.WithLabelValues(user).Inc()
@@ -95,7 +95,7 @@ func AuthenticationInterceptor(ctx context.Context) (context.Context, error) {
 			// username+password authentication
 			username, password := parseMD(rawToken)
 			if !passwordVerify(ctx, username, password, privilege.GetPrivilegeCache()) {
-				mlog.Warn(context.TODO(), "fail to verify password", mlog.String("username", username))
+				log.Warn(context.TODO(), "fail to verify password", log.String("username", username))
 				// NOTE: don't use the merr, because it will cause the wrong retry behavior in the sdk
 				return nil, status.Error(codes.Unauthenticated, "auth check failure, please check username and password are correct")
 			}

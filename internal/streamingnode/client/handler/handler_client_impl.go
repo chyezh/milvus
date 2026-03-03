@@ -18,7 +18,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/lazygrpc"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/resolver"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
@@ -74,7 +74,7 @@ func (hc *handlerClientImpl) GetReplicateCheckpoint(ctx context.Context, pchanne
 	}
 	defer hc.lifetime.Done()
 
-	logger := mlog.With(mlog.String("pchannel", pchannel), mlog.String("handler", "replicate checkpoint"))
+	logger := log.With(log.String("pchannel", pchannel), log.String("handler", "replicate checkpoint"))
 	cp, err := hc.createHandlerAfterStreamingNodeReady(ctx, logger, pchannel, func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
 		if assign.Channel.AccessMode != types.AccessModeRW {
 			return nil, errors.New("replicate checkpoint can only be read for RW channel")
@@ -121,7 +121,7 @@ func (hc *handlerClientImpl) CreateProducer(ctx context.Context, opts *ProducerO
 	}
 	defer hc.lifetime.Done()
 
-	logger := mlog.With(mlog.String("pchannel", opts.PChannel), mlog.String("handler", "producer"))
+	logger := log.With(log.String("pchannel", opts.PChannel), log.String("handler", "producer"))
 	p, err := hc.createHandlerAfterStreamingNodeReady(ctx, logger, opts.PChannel, func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
 		if assign.Channel.AccessMode != types.AccessModeRW {
 			return nil, errors.New("producer can only be created for RW channel")
@@ -160,7 +160,7 @@ func (hc *handlerClientImpl) CreateConsumer(ctx context.Context, opts *ConsumerO
 	}
 	defer hc.lifetime.Done()
 
-	logger := mlog.With(mlog.String("pchannel", opts.PChannel), mlog.String("vchannel", opts.VChannel), mlog.String("handler", "consumer"))
+	logger := log.With(log.String("pchannel", opts.PChannel), log.String("vchannel", opts.VChannel), log.String("handler", "consumer"))
 	// Use a local variable to track DeliverPolicy, so modifications in the closure don't affect the original opts
 	deliverPolicy := opts.DeliverPolicy
 	c, err := hc.createHandlerAfterStreamingNodeReady(ctx, logger, opts.PChannel, func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
@@ -177,7 +177,7 @@ func (hc *handlerClientImpl) CreateConsumer(ctx context.Context, opts *ConsumerO
 			// If the error is WALNameMismatch, change deliver policy to DeliverPolicyAll for next retry
 			if err != nil && status.AsStreamingError(err).IsWALNameMismatch() {
 				deliverPolicy = options.DeliverPolicyAll()
-				logger.Info(nil, "change deliver policy to DeliverPolicyAll because of WALNameMismatch", mlog.Err(err))
+				logger.Info(nil, "change deliver policy to DeliverPolicyAll because of WALNameMismatch", log.Err(err))
 				return nil, err
 			}
 			if err != nil {
@@ -206,7 +206,7 @@ func (hc *handlerClientImpl) CreateConsumer(ctx context.Context, opts *ConsumerO
 		// If the error is WALNameMismatch, change deliver policy to DeliverPolicyAll for next retry
 		if err != nil && status.AsStreamingError(err).IsWALNameMismatch() {
 			deliverPolicy = options.DeliverPolicyAll()
-			logger.Info(nil, "change deliver policy to DeliverPolicyAll because of WALNameMismatch", mlog.Err(err))
+			logger.Info(nil, "change deliver policy to DeliverPolicyAll because of WALNameMismatch", log.Err(err))
 			return nil, err
 		}
 
@@ -225,7 +225,7 @@ type handlerCreateFunc func(ctx context.Context, assign *types.PChannelInfoAssig
 
 // createHandlerAfterStreamingNodeReady creates a handler until streaming node ready.
 // If streaming node is not ready, it will block until new assignment term is coming or context timeout.
-func (hc *handlerClientImpl) createHandlerAfterStreamingNodeReady(ctx context.Context, logger *mlog.Logger, pchannel string, create handlerCreateFunc) (any, error) {
+func (hc *handlerClientImpl) createHandlerAfterStreamingNodeReady(ctx context.Context, logger *log.Logger, pchannel string, create handlerCreateFunc) (any, error) {
 	// TODO: backoff should be configurable.
 	backoff := backoff.NewExponentialBackOff()
 	backoff.InitialInterval = 100 * time.Millisecond
@@ -241,30 +241,30 @@ func (hc *handlerClientImpl) createHandlerAfterStreamingNodeReady(ctx context.Co
 			ctx = contextutil.WithPickServerID(ctx, assign.Node.ServerID)
 			createResult, err := create(ctx, assign)
 			if err == nil {
-				logger.Info(nil, "create handler success", mlog.Any("assignment", assign), mlog.Bool("isLocal", registry.IsLocal(createResult)))
+				logger.Info(nil, "create handler success", log.Any("assignment", assign), log.Bool("isLocal", registry.IsLocal(createResult)))
 				return createResult, nil
 			}
-			logger.Warn(nil, "create handler failed", mlog.Any("assignment", assign), mlog.Err(err))
+			logger.Warn(nil, "create handler failed", log.Any("assignment", assign), log.Err(err))
 
 			// Check if the error is permanent failure until new assignment.
 			if isPermanentFailureUntilNewAssignment(err) {
 				reportErr := hc.rebalanceTrigger.ReportAssignmentError(ctx, assign.Channel, err)
-				logger.Info(nil, "report assignment error", mlog.NamedError("assignmentError", err), mlog.Err(reportErr))
+				logger.Info(nil, "report assignment error", log.NamedError("assignmentError", err), log.Err(reportErr))
 			}
 		} else {
-			mlog.Warn(context.TODO(), "assignment not found")
+			log.Warn(context.TODO(), "assignment not found")
 		}
 
 		start := time.Now()
 		nextBackoff := backoff.NextBackOff()
-		logger.Info(nil, "wait for next backoff", mlog.Duration("nextBackoff", nextBackoff))
+		logger.Info(nil, "wait for next backoff", log.Duration("nextBackoff", nextBackoff))
 		isAssignemtChange, err := hc.waitForNextBackoff(ctx, pchannel, assign, nextBackoff)
 		cost := time.Since(start)
 		if err != nil {
-			logger.Warn(nil, "wait for next backoff failed", mlog.Err(err), mlog.Duration("cost", cost))
+			logger.Warn(nil, "wait for next backoff failed", log.Err(err), log.Duration("cost", cost))
 			return nil, err
 		}
-		logger.Info(nil, "wait for next backoff done", mlog.Bool("isAssignmentChange", isAssignemtChange), mlog.Duration("cost", cost))
+		logger.Info(nil, "wait for next backoff done", log.Bool("isAssignmentChange", isAssignemtChange), log.Duration("cost", cost))
 	}
 }
 

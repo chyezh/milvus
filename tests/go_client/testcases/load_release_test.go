@@ -12,7 +12,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/index"
 	clientv2 "github.com/milvus-io/milvus/client/v2/milvusclient"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/tests/go_client/common"
 	hp "github.com/milvus-io/milvus/tests/go_client/testcases/helper"
 )
@@ -38,7 +38,7 @@ func TestLoadCollection(t *testing.T) {
 	common.CheckErr(t, err, true)
 
 	t.Log("https://github.com/milvus-io/milvus/issues/34149")
-	mlog.Debug(context.TODO(), "collection", mlog.Bool("loaded", coll.Loaded))
+	log.Debug(context.TODO(), "collection", log.Bool("loaded", coll.Loaded))
 
 	res, err := mc.Query(ctx, clientv2.NewQueryOption(schema.CollectionName).WithConsistencyLevel(entity.ClStrong).WithOutputFields(common.QueryCountFieldName))
 	common.CheckErr(t, err, true)
@@ -125,7 +125,7 @@ func TestLoadCollectionMultiPartitions(t *testing.T) {
 
 	// query from parName -> error
 	_, err = mc.Query(ctx, clientv2.NewQueryOption(schema.CollectionName).WithOutputFields(common.QueryCountFieldName).WithPartitions(parName))
-	mlog.Debug(context.TODO(), "error", mlog.Err(err))
+	log.Debug(context.TODO(), "error", log.Err(err))
 	common.CheckErr(t, err, false, "partition not loaded")
 
 	// query count(*) from default partition

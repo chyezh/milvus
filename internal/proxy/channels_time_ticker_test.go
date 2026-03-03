@@ -25,7 +25,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -125,9 +125,9 @@ func TestChannelsTimeTickerImpl_getLastTick(t *testing.T) {
 				for _, pchan := range pchans {
 					ts, err := channelTicker.getLastTick(pchan)
 					assert.Equal(t, nil, err)
-					mlog.Debug(context.TODO(), "TestChannelsTimeTickerImpl_getLastTick",
-						mlog.Any("pchan", pchan),
-						mlog.Any("minTs", ts))
+					log.Debug(context.TODO(), "TestChannelsTimeTickerImpl_getLastTick",
+						log.Any("pchan", pchan),
+						log.Any("minTs", ts))
 				}
 			}
 		}
@@ -173,9 +173,9 @@ func TestChannelsTimeTickerImpl_getMinTsStatistics(t *testing.T) {
 				stats, _, err := channelTicker.getMinTsStatistics()
 				assert.Equal(t, nil, err)
 				for pchan, ts := range stats {
-					mlog.Debug(context.TODO(), "TestChannelsTimeTickerImpl_getLastTick",
-						mlog.Any("pchan", pchan),
-						mlog.Any("minTs", ts))
+					log.Debug(context.TODO(), "TestChannelsTimeTickerImpl_getLastTick",
+						log.Any("pchan", pchan),
+						log.Any("minTs", ts))
 				}
 			}
 		}

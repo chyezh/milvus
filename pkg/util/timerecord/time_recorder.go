@@ -18,7 +18,7 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 // TimeRecorder provides methods to record time duration
@@ -100,9 +100,9 @@ func (tr *TimeRecorder) printTimeRecord(ctx context.Context, msg string, span ti
 	if ts.IsRecording() {
 		ts.AddEvent(fmt.Sprintf("%s, cost %s", msg, span.String()))
 	}
-	mlog.Debug(ctx, tr.logLabel,
-		mlog.String("msg", msg),
-		mlog.Duration("duration", span),
+	log.Debug(ctx, tr.logLabel,
+		log.String("msg", msg),
+		log.Duration("duration", span),
 	)
 }
 
@@ -134,10 +134,10 @@ func (c *LongTermChecker) Start() {
 		for {
 			select {
 			case <-c.ch:
-				mlog.Warn(context.TODO(), fmt.Sprintf("long term checker [%s] shutdown", c.name))
+				log.Warn(context.TODO(), fmt.Sprintf("long term checker [%s] shutdown", c.name))
 				return
 			case <-c.t.C:
-				mlog.Warn(context.TODO(), c.warn)
+				log.Warn(context.TODO(), c.warn)
 			}
 		}
 	}()

@@ -9,7 +9,7 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -88,7 +88,7 @@ func (policy *l0CompactionPolicy) Trigger(ctx context.Context) (events map[Compa
 	activeL0Views, idleL0Views := []CompactionView{}, []CompactionView{}
 	newTriggerID, err := policy.allocator.AllocID(ctx)
 	if err != nil {
-		mlog.Warn(context.TODO(), "fail to allocate triggerID to trigger l0 compaction", mlog.Err(err))
+		log.Warn(context.TODO(), "fail to allocate triggerID to trigger l0 compaction", log.Err(err))
 		return nil, err
 	}
 	events = make(map[CompactionTriggerType][]CompactionView)
@@ -102,7 +102,7 @@ func (policy *l0CompactionPolicy) Trigger(ctx context.Context) (events map[Compa
 			continue
 		}
 		if collection.IsExternal() {
-			mlog.Info(ctx, "skip l0 compaction for external collection", mlog.Int64("collectionID", collID))
+			log.Info(ctx, "skip l0 compaction for external collection", log.Int64("collectionID", collID))
 			continue
 		}
 
@@ -132,17 +132,17 @@ func (policy *l0CompactionPolicy) Trigger(ctx context.Context) (events map[Compa
 }
 
 func (policy *l0CompactionPolicy) triggerOneCollection(ctx context.Context, collectionID int64) ([]CompactionView, int64, error) {
-	mlog.Info(context.TODO(), "start trigger collection l0 compaction")
+	log.Info(context.TODO(), "start trigger collection l0 compaction")
 	if policy.isSkipCollection(collectionID) {
 		return nil, 0, merr.WrapErrCollectionNotLoaded(collectionID, "the collection being paused by importing cannot do force l0 compaction")
 	}
 	collection := policy.meta.GetCollection(collectionID)
 	if collection == nil {
-		mlog.Warn(context.TODO(), "collection not found in meta")
+		log.Warn(context.TODO(), "collection not found in meta")
 		return nil, 0, merr.WrapErrCollectionNotLoaded(collectionID, "collection not found")
 	}
 	if collection.IsExternal() {
-		mlog.Info(context.TODO(), "skip trigger l0 compaction for external collection")
+		log.Info(context.TODO(), "skip trigger l0 compaction for external collection")
 		return nil, 0, nil
 	}
 	allL0Segments := policy.meta.SelectSegments(ctx, WithCollection(collectionID), SegmentFilterFunc(func(segment *SegmentInfo) bool {
@@ -159,7 +159,7 @@ func (policy *l0CompactionPolicy) triggerOneCollection(ctx context.Context, coll
 
 	newTriggerID, err := policy.allocator.AllocID(ctx)
 	if err != nil {
-		mlog.Warn(context.TODO(), "fail to allocate triggerID for l0 compaction", mlog.Err(err))
+		log.Warn(context.TODO(), "fail to allocate triggerID for l0 compaction", log.Err(err))
 		return nil, 0, err
 	}
 	views := policy.groupL0ViewsByPartChan(collectionID, GetViewsByInfo(allL0Segments...), newTriggerID)
@@ -243,7 +243,7 @@ func (ac *activeCollections) Read(collectionID int64) {
 		ac.collections[collectionID].readCount.Inc()
 		if ac.collections[collectionID].readCount.Load() >= 3 &&
 			time.Since(ac.collections[collectionID].lastRefresh) > 3*paramtable.Get().DataCoordCfg.L0CompactionTriggerInterval.GetAsDuration(time.Second) {
-			mlog.Info(context.TODO(), "Active(of deletions) collections become idle", mlog.Int64("collectionID", collectionID))
+			log.Info(context.TODO(), "Active(of deletions) collections become idle", log.Int64("collectionID", collectionID))
 			delete(ac.collections, collectionID)
 		}
 	}

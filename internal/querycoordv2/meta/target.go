@@ -23,7 +23,7 @@ import (
 	"github.com/samber/lo"
 
 	"github.com/milvus-io/milvus/internal/util/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/lock"
@@ -125,7 +125,7 @@ func FromPbCollectionTarget(target *querypb.CollectionTarget) *CollectionTarget 
 	}
 
 	if lackSegmentInfo {
-		mlog.Info(context.TODO(), "target has lack of segment info", mlog.Int64("collectionID", target.GetCollectionID()))
+		log.Info(context.TODO(), "target has lack of segment info", log.Int64("collectionID", target.GetCollectionID()))
 	}
 
 	return &CollectionTarget{

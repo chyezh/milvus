@@ -26,7 +26,7 @@ import (
 	grpcproxy "github.com/milvus-io/milvus/internal/distributed/proxy"
 	"github.com/milvus-io/milvus/internal/util/dependency"
 	"github.com/milvus-io/milvus/internal/util/indexparamcheck"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -57,10 +57,10 @@ func (n *Proxy) Prepare() error {
 // Run starts service
 func (n *Proxy) Run() error {
 	if err := n.svr.Run(); err != nil {
-		mlog.Error(context.TODO(), "Proxy starts error", mlog.Err(err))
+		log.Error(context.TODO(), "Proxy starts error", log.Err(err))
 		return err
 	}
-	mlog.Info(context.TODO(), "Proxy successfully started")
+	log.Info(context.TODO(), "Proxy successfully started")
 	return nil
 }
 

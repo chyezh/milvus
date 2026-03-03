@@ -11,7 +11,7 @@ import (
 	"github.com/zilliztech/woodpecker/woodpecker"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls"
@@ -47,18 +47,18 @@ func (b *builderImpl) Build() (walimpls.OpenerImpls, error) {
 		if err != nil {
 			return nil, err
 		}
-		mlog.Info(context.Background(), "create minio handler finish while building wp opener")
+		log.Info(context.Background(), "create minio handler finish while building wp opener")
 	}
 	etcdCli, err := b.getEtcdClient(context.TODO())
 	if err != nil {
 		return nil, err
 	}
-	mlog.Info(context.Background(), "create etcd client finish while building wp opener")
+	log.Info(context.Background(), "create etcd client finish while building wp opener")
 	wpClient, err := woodpecker.NewEmbedClient(context.Background(), cfg, etcdCli, storageClient, true)
 	if err != nil {
 		return nil, err
 	}
-	mlog.Info(context.Background(), "build wp opener finish", mlog.String("wpClientInstance", fmt.Sprintf("%p", wpClient)))
+	log.Info(context.Background(), "build wp opener finish", log.String("wpClientInstance", fmt.Sprintf("%p", wpClient)))
 	wpMetrics.RegisterWoodpeckerWithRegisterer(metrics.GetRegisterer())
 	return &openerImpl{
 		c: wpClient,
@@ -171,7 +171,7 @@ func (b *builderImpl) getEtcdClient(ctx context.Context) (*clientv3.Client, erro
 		etcdConfig.EtcdTLSMinVersion.GetValue(),
 		etcdConfig.ClientOptions()...)
 	if err != nil {
-		mlog.Warn(context.TODO(), "Woodpecker create connection to etcd failed", mlog.Err(err))
+		log.Warn(context.TODO(), "Woodpecker create connection to etcd failed", log.Err(err))
 		return nil, err
 	}
 	return etcdCli, nil

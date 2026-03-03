@@ -10,7 +10,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -23,11 +23,11 @@ func exitWhenStopTimeout(stop func() error, timeout time.Duration) error {
 	if errors.Is(err, errStopTimeout) {
 		start := time.Now()
 		dumpPprof()
-		mlog.Info(context.TODO(), "stop progress timeout, force exit",
-			mlog.String("component", paramtable.GetRole()),
-			mlog.Duration("cost", time.Since(start)),
-			mlog.Err(err))
-		mlog.Cleanup()
+		log.Info(context.TODO(), "stop progress timeout, force exit",
+			log.String("component", paramtable.GetRole()),
+			log.Duration("cost", time.Since(start)),
+			log.Err(err))
+		log.Cleanup()
 		os.Exit(1)
 	}
 	return err
@@ -64,17 +64,17 @@ func dumpPprof() {
 	// Clean existing directory if not empty
 	if pprofDir != "" {
 		if err := os.RemoveAll(pprofDir); err != nil {
-			mlog.Error(context.TODO(), "failed to clean pprof directory",
-				mlog.String("path", pprofDir),
-				mlog.Err(err))
+			log.Error(context.TODO(), "failed to clean pprof directory",
+				log.String("path", pprofDir),
+				log.Err(err))
 		}
 	}
 
 	// Recreate directory with proper permissions
 	if err := os.MkdirAll(pprofDir, 0o755); err != nil {
-		mlog.Error(context.TODO(), "failed to create pprof directory",
-			mlog.String("path", pprofDir),
-			mlog.Err(err))
+		log.Error(context.TODO(), "failed to create pprof directory",
+			log.String("path", pprofDir),
+			log.Err(err))
 		return
 	}
 
@@ -124,9 +124,9 @@ func dumpPprof() {
 	for _, p := range profiles {
 		f, err := os.Create(p.filename)
 		if err != nil {
-			mlog.Error(context.TODO(), "could not create profile file",
-				mlog.String("profile", p.name),
-				mlog.Err(err))
+			log.Error(context.TODO(), "could not create profile file",
+				log.String("profile", p.name),
+				log.Err(err))
 			for filename, f := range files {
 				f.Close()
 				os.Remove(filename)
@@ -144,9 +144,9 @@ func dumpPprof() {
 
 	for _, p := range profiles {
 		if err := p.dump(files[p.filename]); err != nil {
-			mlog.Error(context.TODO(), "could not write profile",
-				mlog.String("profile", p.name),
-				mlog.Err(err))
+			log.Error(context.TODO(), "could not write profile",
+				log.String("profile", p.name),
+				log.Err(err))
 		}
 	}
 }

@@ -44,7 +44,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	_ "github.com/milvus-io/milvus/internal/util/cgo"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 // metricSorter is a sortable slice of *dto.Metric.
@@ -149,7 +149,7 @@ func (r *CRegistry) Gather() (res []*dto.MetricFamily, err error) {
 
 	out, err := parser.TextToMetricFamilies(strings.NewReader(metricsStr))
 	if err != nil {
-		mlog.Error(context.TODO(), "fail to parse knowhere prometheus metrics", mlog.Err(err))
+		log.Error(context.TODO(), "fail to parse knowhere prometheus metrics", log.Err(err))
 		return
 	}
 
@@ -159,7 +159,7 @@ func (r *CRegistry) Gather() (res []*dto.MetricFamily, err error) {
 
 	out1, err := parser.TextToMetricFamilies(strings.NewReader(metricsStr))
 	if err != nil {
-		mlog.Error(context.TODO(), "fail to parse storage prometheus metrics", mlog.Err(err))
+		log.Error(context.TODO(), "fail to parse storage prometheus metrics", log.Err(err))
 		return
 	}
 
@@ -183,8 +183,8 @@ func gatherJemallocMetrics() map[string]*dto.MetricFamily {
 	if time.Since(jemallocMetricsCache.timestamp) < jemallocMetricsCacheTTL && jemallocMetricsCache.metrics != nil {
 		cached := jemallocMetricsCache.metrics
 		jemallocMetricsCache.RUnlock()
-		mlog.Debug(context.TODO(), "using cached jemalloc metrics",
-			mlog.Duration("age", time.Since(jemallocMetricsCache.timestamp)))
+		log.Debug(context.TODO(), "using cached jemalloc metrics",
+			log.Duration("age", time.Since(jemallocMetricsCache.timestamp)))
 		return cached
 	}
 	jemallocMetricsCache.RUnlock()
@@ -195,7 +195,7 @@ func gatherJemallocMetrics() map[string]*dto.MetricFamily {
 
 	cStats := C.GetJemallocStats()
 	if !bool(cStats.success) {
-		mlog.Debug(context.TODO(), "jemalloc stats not available (may be running on macOS or jemalloc is disabled)")
+		log.Debug(context.TODO(), "jemalloc stats not available (may be running on macOS or jemalloc is disabled)")
 		return result
 	}
 
@@ -245,8 +245,8 @@ func gatherJemallocMetrics() map[string]*dto.MetricFamily {
 	jemallocMetricsCache.timestamp = time.Now()
 	jemallocMetricsCache.Unlock()
 
-	mlog.Debug(context.TODO(), "refreshed jemalloc metrics cache",
-		mlog.Int("num_metrics", len(result)))
+	log.Debug(context.TODO(), "refreshed jemalloc metrics cache",
+		log.Int("num_metrics", len(result)))
 
 	return result
 }

@@ -12,7 +12,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/producer"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
@@ -36,7 +36,7 @@ func NewResumableProducer(f factory, opts *ProducerOptions) *ResumableProducer {
 		stopResumingCh: make(chan struct{}),
 		resumingExitCh: make(chan struct{}),
 		lifetime:       typeutil.NewLifetime(),
-		logger:         mlog.With(mlog.String("pchannel", opts.PChannel)),
+		logger:         log.With(log.String("pchannel", opts.PChannel)),
 		opts:           opts,
 		producer:       newProducerWithResumingError(opts.PChannel), // lazy initialized.
 		cond:           syncutil.NewContextCond(&sync.Mutex{}),
@@ -63,7 +63,7 @@ type ResumableProducer struct {
 	// Use producer Close is better way to stop producer.
 
 	lifetime *typeutil.Lifetime
-	logger   *mlog.Logger
+	logger   *log.Logger
 	opts     *ProducerOptions
 
 	producer producerWithResumingError
@@ -176,7 +176,7 @@ func (p *ResumableProducer) createNewProducer() (producer.Producer, error) {
 		// Otherwise, perform a resuming operation.
 		if err != nil {
 			nextBackoff := backoff.NextBackOff()
-			p.logger.Warn(nil, "create producer failed, retry...", mlog.Err(err), mlog.Duration("nextRetryInterval", nextBackoff))
+			p.logger.Warn(nil, "create producer failed, retry...", log.Err(err), log.Duration("nextRetryInterval", nextBackoff))
 			time.Sleep(nextBackoff)
 			continue
 		}

@@ -29,7 +29,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/json"
 	"github.com/milvus-io/milvus/internal/metastore"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
@@ -98,17 +98,17 @@ func (csm *compactionTaskMeta) reloadFromKV() error {
 		if !isCompactionTaskFinished(task) &&
 			task.PreAllocatedSegmentIDs == nil &&
 			task.GetType() != datapb.CompactionType_Level0DeleteCompaction {
-			mlog.Warn(context.TODO(), "PreAllocatedSegmentIDs is nil, mark the task as failed",
-				mlog.Int64("taskID", task.GetPlanID()),
-				mlog.String("type", task.GetType().String()),
-				mlog.String("originalState", task.State.String()),
+			log.Warn(context.TODO(), "PreAllocatedSegmentIDs is nil, mark the task as failed",
+				log.Int64("taskID", task.GetPlanID()),
+				log.String("type", task.GetType().String()),
+				log.String("originalState", task.State.String()),
 			)
 			task.State = datapb.CompactionTaskState_failed
 			task.FailReason = fmt.Sprintf("PreAllocatedSegmentIDs is nil, taskID: %v", task.GetPlanID())
 		}
 		csm.saveCompactionTaskMemory(task)
 	}
-	mlog.Info(context.TODO(), "DataCoord compactionTaskMeta reloadFromKV done", mlog.Duration("duration", record.ElapseSpan()))
+	log.Info(context.TODO(), "DataCoord compactionTaskMeta reloadFromKV done", log.Duration("duration", record.ElapseSpan()))
 	return nil
 }
 
@@ -164,7 +164,7 @@ func (csm *compactionTaskMeta) SaveCompactionTask(ctx context.Context, task *dat
 	csm.Lock()
 	defer csm.Unlock()
 	if err := csm.catalog.SaveCompactionTask(ctx, task); err != nil {
-		mlog.Error(context.TODO(), "meta update: update compaction task fail", mlog.Err(err))
+		log.Error(context.TODO(), "meta update: update compaction task fail", log.Err(err))
 		return err
 	}
 	csm.saveCompactionTaskMemory(task)
@@ -184,7 +184,7 @@ func (csm *compactionTaskMeta) DropCompactionTask(ctx context.Context, task *dat
 	csm.Lock()
 	defer csm.Unlock()
 	if err := csm.catalog.DropCompactionTask(ctx, task); err != nil {
-		mlog.Error(context.TODO(), "meta update: drop compaction task fail", mlog.Int64("triggerID", task.TriggerID), mlog.Int64("planID", task.PlanID), mlog.Int64("collectionID", task.CollectionID), mlog.Err(err))
+		log.Error(context.TODO(), "meta update: drop compaction task fail", log.Int64("triggerID", task.TriggerID), log.Int64("planID", task.PlanID), log.Int64("collectionID", task.CollectionID), log.Err(err))
 		return err
 	}
 	_, triggerIDExist := csm.compactionTasks[task.TriggerID]

@@ -24,7 +24,7 @@ import (
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 type ExcludedSegments struct {
@@ -42,7 +42,7 @@ func NewExcludedSegments(cleanInterval time.Duration) *ExcludedSegments {
 }
 
 func (s *ExcludedSegments) Insert(excludeInfo map[int64]uint64) {
-	if mlog.LevelEnabled(zap.DebugLevel) {
+	if log.LevelEnabled(zap.DebugLevel) {
 		defer func() {
 			s.logExcludeInfo(excludeInfo)
 		}()
@@ -63,10 +63,10 @@ func (s *ExcludedSegments) logExcludeInfo(excludeInfo map[int64]uint64) {
 		segmentIDs = append(segmentIDs, segmentID)
 		timeTicks = append(timeTicks, ts)
 	}
-	mlog.Debug(context.TODO(), "add exclude info",
-		mlog.Int("count", len(excludeInfo)),
-		mlog.Int64s("segmentIDs", segmentIDs),
-		mlog.Uint64s("timeTicks", timeTicks),
+	log.Debug(context.TODO(), "add exclude info",
+		log.Int("count", len(excludeInfo)),
+		log.Int64s("segmentIDs", segmentIDs),
+		log.Uint64s("timeTicks", timeTicks),
 	)
 }
 
@@ -82,12 +82,12 @@ func (s *ExcludedSegments) Verify(segmentID int64, ts uint64) bool {
 
 func (s *ExcludedSegments) CleanInvalid(ts uint64) {
 	removedSegmentIDs := make([]int64, 0, 32)
-	if mlog.LevelEnabled(zap.DebugLevel) {
+	if log.LevelEnabled(zap.DebugLevel) {
 		defer func() {
-			mlog.Debug(context.TODO(), "remove segment from exclude info",
-				mlog.Int("count", len(removedSegmentIDs)),
-				mlog.Uint64("ts", ts),
-				mlog.Int64s("segmentIDs", removedSegmentIDs),
+			log.Debug(context.TODO(), "remove segment from exclude info",
+				log.Int("count", len(removedSegmentIDs)),
+				log.Uint64("ts", ts),
+				log.Int64s("segmentIDs", removedSegmentIDs),
 			)
 		}()
 	}

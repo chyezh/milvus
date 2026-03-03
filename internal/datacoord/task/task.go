@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/milvus-io/milvus/internal/datacoord/session"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/taskcommon"
 )
 
@@ -38,11 +38,11 @@ type Task interface {
 	DropTaskOnWorker(cluster session.Cluster)
 }
 
-func WrapTaskLog(task Task, fields ...mlog.Field) []mlog.Field {
-	res := []mlog.Field{
-		mlog.Int64("ID", task.GetTaskID()),
-		mlog.String("type", string(task.GetTaskType())),
-		mlog.String("state", task.GetTaskState().String()),
+func WrapTaskLog(task Task, fields ...log.Field) []log.Field {
+	res := []log.Field{
+		log.Int64("ID", task.GetTaskID()),
+		log.String("type", string(task.GetTaskType())),
+		log.String("state", task.GetTaskState().String()),
 	}
 	res = append(res, fields...)
 	return res

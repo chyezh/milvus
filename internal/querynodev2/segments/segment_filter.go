@@ -21,7 +21,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	storage "github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/metautil"
@@ -192,9 +192,9 @@ func unaryRangeExprWalker(expr *planpb.UnaryRangeExpr, filter filterFunc) bool {
 	case schemapb.DataType_VarChar:
 		pk = storage.NewVarCharPrimaryKey(expr.GetValue().GetStringVal())
 	default:
-		mlog.Warn(context.TODO(), "unknown pk type",
-			mlog.Int("type", int(dt)),
-			mlog.String("expr", expr.String()))
+		log.Warn(context.TODO(), "unknown pk type",
+			log.Int("type", int(dt)),
+			log.String("expr", expr.String()))
 		return true
 	}
 
@@ -224,9 +224,9 @@ func termExprWalker(expr *planpb.TermExpr, filter filterFunc) bool {
 		case schemapb.DataType_VarChar:
 			pk = storage.NewVarCharPrimaryKey(pkval.GetStringVal())
 		default:
-			mlog.Warn(context.TODO(), "unknown pk type",
-				mlog.Int("type", int(dt)),
-				mlog.String("expr", expr.String()))
+			log.Warn(context.TODO(), "unknown pk type",
+				log.Int("type", int(dt)),
+				log.String("expr", expr.String()))
 			return noFilter
 		}
 
@@ -316,7 +316,7 @@ type SegmentSparseFilter SegmentType
 func WithSparseFilter(plan *planpb.PlanNode, filteredCount *int) SegmentFilter {
 	return SegmentFilterFunc(func(segment Segment) bool {
 		if plan == nil {
-			mlog.Debug(context.TODO(), "SparseFilter with nil plan")
+			log.Debug(context.TODO(), "SparseFilter with nil plan")
 			return true
 		}
 
@@ -326,10 +326,10 @@ func WithSparseFilter(plan *planpb.PlanNode, filteredCount *int) SegmentFilter {
 			*filteredCount++
 		}
 
-		mlog.Debug(context.TODO(), "SparseFilter",
-			mlog.Int64("Segment ID", segment.ID()),
-			mlog.Bool("No Filter", rc),
-			mlog.Bool("Exist BF", segment.BloomFilterExist()))
+		log.Debug(context.TODO(), "SparseFilter",
+			log.Int64("Segment ID", segment.ID()),
+			log.Bool("No Filter", rc),
+			log.Bool("Exist BF", segment.BloomFilterExist()))
 		return rc
 	})
 }

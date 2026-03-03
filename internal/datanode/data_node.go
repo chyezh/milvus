@@ -43,7 +43,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/analyzer"
 	"github.com/milvus-io/milvus/internal/util/fileresource"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/expr"
@@ -153,11 +153,11 @@ func (node *DataNode) SetMixCoordClient(mixc types.MixCoordClient) error {
 
 // Register register datanode to etcd
 func (node *DataNode) Register() error {
-	mlog.Debug(context.TODO(), "node begin to register to etcd", mlog.String("serverName", node.session.ServerName), mlog.Int64("ServerID", node.session.ServerID))
+	log.Debug(context.TODO(), "node begin to register to etcd", log.String("serverName", node.session.ServerName), log.Int64("ServerID", node.session.ServerID))
 	node.session.Register()
 
 	metrics.NumNodes.WithLabelValues(fmt.Sprint(node.GetNodeID()), typeutil.DataNodeRole).Inc()
-	mlog.Info(context.TODO(), "DataNode Register Finished")
+	log.Info(context.TODO(), "DataNode Register Finished")
 	return nil
 }
 
@@ -182,15 +182,15 @@ func (node *DataNode) Init() error {
 	var initError error
 	node.initOnce.Do(func() {
 		node.registerMetricsRequest()
-		mlog.Info(node.ctx, "DataNode server initializing")
+		log.Info(node.ctx, "DataNode server initializing")
 		if err := node.initSession(); err != nil {
-			mlog.Error(context.TODO(), "DataNode server init session failed", mlog.Err(err))
+			log.Error(context.TODO(), "DataNode server init session failed", log.Err(err))
 			initError = err
 			return
 		}
 
 		serverID := node.GetNodeID()
-		mlog.Info(context.TODO(), "DataNode server init succeeded")
+		log.Info(context.TODO(), "DataNode server init succeeded")
 
 		syncMgr := syncmgr.NewSyncManager(nil)
 		node.syncMgr = syncMgr
@@ -199,7 +199,7 @@ func (node *DataNode) Init() error {
 		if fileMode == fileresource.SyncMode {
 			cm, err := node.storageFactory.NewChunkManager(node.ctx, compaction.CreateStorageConfig())
 			if err != nil {
-				mlog.Error(context.TODO(), "Init chunk manager for file resource manager failed", mlog.Err(err))
+				log.Error(context.TODO(), "Init chunk manager for file resource manager failed", log.Err(err))
 				initError = err
 				return
 			}
@@ -217,7 +217,7 @@ func (node *DataNode) Init() error {
 		}
 
 		analyzer.InitOptions()
-		mlog.Info(context.TODO(), "init datanode done", mlog.String("Address", node.address))
+		log.Info(context.TODO(), "init datanode done", log.String("Address", node.address))
 	})
 	return initError
 }
@@ -232,7 +232,7 @@ func (node *DataNode) registerMetricsRequest() {
 		func(ctx context.Context, req *milvuspb.GetMetricsRequest, jsonReq gjson.Result) (string, error) {
 			return node.syncMgr.TaskStatsJSON(), nil
 		})
-	mlog.Info(node.ctx, "register metrics actions finished")
+	log.Info(node.ctx, "register metrics actions finished")
 }
 
 // Start will update DataNode state to HEALTHY
@@ -250,7 +250,7 @@ func (node *DataNode) Start() error {
 		}
 
 		node.UpdateStateCode(commonpb.StateCode_Healthy)
-		mlog.Info(context.TODO(), "datanode start successfully")
+		log.Info(context.TODO(), "datanode start successfully")
 	})
 	return startErr
 }
@@ -287,7 +287,7 @@ func (node *DataNode) Stop() error {
 		if node.syncMgr != nil {
 			err := node.syncMgr.Close()
 			if err != nil {
-				mlog.Error(context.TODO(), "sync manager close failed", mlog.Err(err))
+				log.Error(context.TODO(), "sync manager close failed", log.Err(err))
 			}
 		}
 

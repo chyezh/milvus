@@ -25,7 +25,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/metastore/model"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
@@ -70,7 +70,7 @@ func newServerBroker(s *Core) *ServerBroker {
 }
 
 func (b *ServerBroker) ReleaseCollection(ctx context.Context, collectionID UniqueID) error {
-	mlog.Info(ctx, "releasing collection", mlog.Int64("collection", collectionID))
+	log.Info(ctx, "releasing collection", log.Int64("collection", collectionID))
 
 	resp, err := b.s.mixCoord.ReleaseCollection(ctx, &querypb.ReleaseCollectionRequest{
 		Base:         commonpbutil.NewMsgBase(commonpbutil.WithMsgType(commonpb.MsgType_ReleaseCollection)),
@@ -85,7 +85,7 @@ func (b *ServerBroker) ReleaseCollection(ctx context.Context, collectionID Uniqu
 		return fmt.Errorf("failed to release collection, code: %s, reason: %s", resp.GetErrorCode(), resp.GetReason())
 	}
 
-	mlog.Info(ctx, "done to release collection", mlog.Int64("collection", collectionID))
+	log.Info(ctx, "done to release collection", log.Int64("collection", collectionID))
 	return nil
 }
 
@@ -93,7 +93,7 @@ func (b *ServerBroker) ReleasePartitions(ctx context.Context, collectionID Uniqu
 	if len(partitionIDs) == 0 {
 		return nil
 	}
-	mlog.Info(context.TODO(), "releasing partitions")
+	log.Info(context.TODO(), "releasing partitions")
 	resp, err := b.s.mixCoord.ReleasePartitions(ctx, &querypb.ReleasePartitionsRequest{
 		Base:         commonpbutil.NewMsgBase(commonpbutil.WithMsgType(commonpb.MsgType_ReleasePartitions)),
 		CollectionID: collectionID,
@@ -107,12 +107,12 @@ func (b *ServerBroker) ReleasePartitions(ctx context.Context, collectionID Uniqu
 		return fmt.Errorf("release partition failed, reason: %s", resp.GetReason())
 	}
 
-	mlog.Info(context.TODO(), "release partitions done")
+	log.Info(context.TODO(), "release partitions done")
 	return nil
 }
 
 func (b *ServerBroker) SyncNewCreatedPartition(ctx context.Context, collectionID UniqueID, partitionID UniqueID) error {
-	mlog.Info(context.TODO(), "begin to sync new partition")
+	log.Info(context.TODO(), "begin to sync new partition")
 	resp, err := b.s.mixCoord.SyncNewCreatedPartition(ctx, &querypb.SyncNewCreatedPartitionRequest{
 		Base:         commonpbutil.NewMsgBase(commonpbutil.WithMsgType(commonpb.MsgType_ReleasePartitions)),
 		CollectionID: collectionID,
@@ -126,7 +126,7 @@ func (b *ServerBroker) SyncNewCreatedPartition(ctx context.Context, collectionID
 		return fmt.Errorf("sync new partition failed, reason: %s", resp.GetReason())
 	}
 
-	mlog.Info(context.TODO(), "sync new partition done")
+	log.Info(context.TODO(), "sync new partition done")
 	return nil
 }
 
@@ -163,7 +163,7 @@ func toMap(pairs []*commonpb.KeyDataPair) map[string][]byte {
 }
 
 func (b *ServerBroker) WatchChannels(ctx context.Context, info *watchInfo) error {
-	mlog.Info(ctx, "watching channels", mlog.Uint64("ts", info.ts), mlog.Int64("collection", info.collectionID), mlog.Strings("vChannels", info.vChannels))
+	log.Info(ctx, "watching channels", log.Uint64("ts", info.ts), log.Int64("collection", info.collectionID), log.Strings("vChannels", info.vChannels))
 
 	resp, err := b.s.mixCoord.WatchChannels(ctx, &datapb.WatchChannelsRequest{
 		CollectionID:    info.collectionID,
@@ -181,7 +181,7 @@ func (b *ServerBroker) WatchChannels(ctx context.Context, info *watchInfo) error
 		return fmt.Errorf("failed to watch channels, code: %s, reason: %s", resp.GetStatus().GetErrorCode(), resp.GetStatus().GetReason())
 	}
 
-	mlog.Info(ctx, "done to watch channels", mlog.Uint64("ts", info.ts), mlog.Int64("collection", info.collectionID), mlog.Strings("vChannels", info.vChannels))
+	log.Info(ctx, "done to watch channels", log.Uint64("ts", info.ts), log.Int64("collection", info.collectionID), log.Strings("vChannels", info.vChannels))
 	return nil
 }
 
@@ -195,7 +195,7 @@ func (b *ServerBroker) GetSegmentStates(ctx context.Context, req *datapb.GetSegm
 }
 
 func (b *ServerBroker) DropCollectionIndex(ctx context.Context, collID UniqueID, partIDs []UniqueID) error {
-	mlog.Info(ctx, "dropping collection index", mlog.Int64("collection", collID), mlog.Int64s("partitions", partIDs))
+	log.Info(ctx, "dropping collection index", log.Int64("collection", collID), log.Int64s("partitions", partIDs))
 
 	rsp, err := b.s.mixCoord.DropIndex(ctx, &indexpb.DropIndexRequest{
 		CollectionID: collID,
@@ -210,7 +210,7 @@ func (b *ServerBroker) DropCollectionIndex(ctx context.Context, collID UniqueID,
 		return fmt.Errorf("%s", rsp.Reason)
 	}
 
-	mlog.Info(ctx, "done to drop collection index", mlog.Int64("collection", collID), mlog.Int64s("partitions", partIDs))
+	log.Info(ctx, "done to drop collection index", log.Int64("collection", collID), log.Int64s("partitions", partIDs))
 
 	return nil
 }
@@ -232,8 +232,8 @@ func (b *ServerBroker) GetSegmentIndexState(ctx context.Context, collID UniqueID
 }
 
 func (b *ServerBroker) BroadcastAlteredCollection(ctx context.Context, collectionID UniqueID) error {
-	mlog.Info(ctx, "broadcasting request to alter collection",
-		mlog.Int64("collectionID", collectionID))
+	log.Info(ctx, "broadcasting request to alter collection",
+		log.Int64("collectionID", collectionID))
 
 	colMeta, err := b.s.meta.GetCollectionByID(ctx, "", collectionID, typeutil.MaxTimestamp, false)
 	if err != nil {
@@ -275,7 +275,7 @@ func (b *ServerBroker) BroadcastAlteredCollection(ctx context.Context, collectio
 	if resp.ErrorCode != commonpb.ErrorCode_Success {
 		return errors.New(resp.Reason)
 	}
-	mlog.Info(ctx, "done to broadcast request to alter collection", mlog.String("collectionName", colMeta.Name), mlog.Int64("collectionID", collectionID), mlog.Any("props", colMeta.Properties), mlog.Any("field", colMeta.Fields))
+	log.Info(ctx, "done to broadcast request to alter collection", log.String("collectionName", colMeta.Name), log.Int64("collectionID", collectionID), log.Any("props", colMeta.Properties), log.Any("field", colMeta.Fields))
 	return nil
 }
 
@@ -284,13 +284,13 @@ func (b *ServerBroker) GcConfirm(ctx context.Context, collectionID, partitionID 
 	req := &datapb.GcConfirmRequest{CollectionId: collectionID, PartitionId: partitionID}
 	resp, err := b.s.mixCoord.GcConfirm(ctx, req)
 	if err != nil {
-		mlog.Warn(context.TODO(), "gc is not finished", mlog.Err(err))
+		log.Warn(context.TODO(), "gc is not finished", log.Err(err))
 		return false
 	}
 
 	if resp.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-		mlog.Warn(context.TODO(), "gc is not finished", mlog.String("code", resp.GetStatus().GetErrorCode().String()),
-			mlog.String("reason", resp.GetStatus().GetReason()))
+		log.Warn(context.TODO(), "gc is not finished", log.String("code", resp.GetStatus().GetErrorCode().String()),
+			log.String("reason", resp.GetStatus().GetReason()))
 		return false
 	}
 

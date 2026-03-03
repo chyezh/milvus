@@ -21,7 +21,7 @@ import (
 	"time"
 
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -36,14 +36,14 @@ func NewTombstoneSweeper() TombstoneSweeper {
 		tombstones: make(map[string]Tombstone),
 		interval:   5 * time.Minute,
 	}
-	ts.SetLogger(mlog.With(mlog.FieldModule(typeutil.RootCoordRole), mlog.FieldComponent("tombstone_sweeper")))
+	ts.SetLogger(log.With(log.FieldModule(typeutil.RootCoordRole), log.FieldComponent("tombstone_sweeper")))
 	go ts.background()
 	return ts
 }
 
 // TombstoneSweeper is a sweeper for the tombstones.
 type tombstoneSweeperImpl struct {
-	mlog.Binder
+	log.Binder
 
 	notifier   *syncutil.AsyncTaskNotifier[struct{}]
 	incoming   chan Tombstone
@@ -65,7 +65,7 @@ func (s *tombstoneSweeperImpl) background() {
 		s.notifier.Finish(struct{}{})
 		s.Logger().Info(nil, "tombstone sweeper background exit")
 	}()
-	s.Logger().Info(nil, "tombstone sweeper background start", mlog.Duration("interval", s.interval))
+	s.Logger().Info(nil, "tombstone sweeper background start", log.Duration("interval", s.interval))
 
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
@@ -75,7 +75,7 @@ func (s *tombstoneSweeperImpl) background() {
 		case tombstone := <-s.incoming:
 			if _, ok := s.tombstones[tombstone.ID()]; !ok {
 				s.tombstones[tombstone.ID()] = tombstone
-				s.Logger().Info(nil, "tombstone added", mlog.String("tombstone", tombstone.ID()))
+				s.Logger().Info(nil, "tombstone added", log.String("tombstone", tombstone.ID()))
 			}
 		case <-ticker.C:
 			s.triggerGCTombstone(s.notifier.Context())
@@ -98,18 +98,18 @@ func (s *tombstoneSweeperImpl) triggerGCTombstone(ctx context.Context) {
 		tombstoneID := tombstone.ID()
 		confirmed, err := tombstone.ConfirmCanBeRemoved(ctx)
 		if err != nil {
-			s.Logger().Warn(nil, "fail to confirm if tombstone can be removed", mlog.String("tombstone", tombstoneID), mlog.Err(err))
+			s.Logger().Warn(nil, "fail to confirm if tombstone can be removed", log.String("tombstone", tombstoneID), log.Err(err))
 			continue
 		}
 		if !confirmed {
 			continue
 		}
 		if err := tombstone.Remove(ctx); err != nil {
-			s.Logger().Warn(nil, "fail to remove tombstone", mlog.String("tombstone", tombstoneID), mlog.Err(err))
+			s.Logger().Warn(nil, "fail to remove tombstone", log.String("tombstone", tombstoneID), log.Err(err))
 			continue
 		}
 		delete(s.tombstones, tombstoneID)
-		s.Logger().Info(nil, "tombstone removed", mlog.String("tombstone", tombstoneID))
+		s.Logger().Info(nil, "tombstone removed", log.String("tombstone", tombstoneID))
 	}
 }
 

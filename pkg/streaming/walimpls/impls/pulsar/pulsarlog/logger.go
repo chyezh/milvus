@@ -5,7 +5,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 var _ plog.Logger = (*logger)(nil)
@@ -14,11 +14,11 @@ var _ plog.Logger = (*logger)(nil)
 // TODO: currently, pulsar client will log a huge message when logging,
 // so we only log the first msg without format the log.
 func NewLogger() plog.Logger {
-	return &logger{mlog.With(mlog.String("component", "pulsar"))}
+	return &logger{log.With(log.String("component", "pulsar"))}
 }
 
 type logger struct {
-	inner *mlog.Logger
+	inner *log.Logger
 }
 
 func (l *logger) SubLogger(fields plog.Fields) plog.Logger {
@@ -35,7 +35,7 @@ func (l *logger) WithField(name string, value interface{}) plog.Entry {
 }
 
 func (l *logger) WithError(err error) plog.Entry {
-	return &logger{l.inner.With(mlog.Err(err))}
+	return &logger{l.inner.With(log.Err(err))}
 }
 
 func (l *logger) Debug(args ...interface{}) {
@@ -86,19 +86,19 @@ func exportFields(fields plog.Fields) []zap.Field {
 	for k, v := range fields {
 		switch v := v.(type) {
 		case string:
-			fs = append(fs, mlog.String(k, v))
+			fs = append(fs, log.String(k, v))
 		case int:
-			fs = append(fs, mlog.Int(k, v))
+			fs = append(fs, log.Int(k, v))
 		case bool:
-			fs = append(fs, mlog.Bool(k, v))
+			fs = append(fs, log.Bool(k, v))
 		case float64:
-			fs = append(fs, mlog.Float64(k, v))
+			fs = append(fs, log.Float64(k, v))
 		case []byte:
-			fs = append(fs, mlog.Binary(k, v))
+			fs = append(fs, log.Binary(k, v))
 		case error:
-			fs = append(fs, mlog.Err(v))
+			fs = append(fs, log.Err(v))
 		default:
-			fs = append(fs, mlog.Any(k, v))
+			fs = append(fs, log.Any(k, v))
 		}
 	}
 	return fs

@@ -27,7 +27,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
@@ -93,7 +93,7 @@ func NewDispatcher(
 ) (*Dispatcher, error) {
 	subName := fmt.Sprintf("%s-%d-%d", pchannel, id, time.Now().UnixNano())
 
-	mlog.Info(context.TODO(), "creating dispatcher...", mlog.Uint64("pullbackEndTs", pullbackEndTs))
+	log.Info(context.TODO(), "creating dispatcher...", log.Uint64("pullbackEndTs", pullbackEndTs))
 
 	var stream msgstream.MsgStream
 	var err error
@@ -113,25 +113,25 @@ func NewDispatcher(
 		position.ChannelName = funcutil.ToPhysicalChannel(position.ChannelName)
 		err = stream.AsConsumer(ctx, []string{pchannel}, subName, common.SubscriptionPositionUnknown)
 		if err != nil {
-			mlog.Error(context.TODO(), "asConsumer failed", mlog.Err(err))
+			log.Error(context.TODO(), "asConsumer failed", log.Err(err))
 			return nil, err
 		}
-		mlog.Info(context.TODO(), "as consumer done", mlog.Any("position", position))
+		log.Info(context.TODO(), "as consumer done", log.Any("position", position))
 		err = stream.Seek(ctx, []*Pos{position}, true)
 		if err != nil {
-			mlog.Error(context.TODO(), "seek failed", mlog.Err(err))
+			log.Error(context.TODO(), "seek failed", log.Err(err))
 			return nil, err
 		}
 		posTime := tsoutil.PhysicalTime(position.GetTimestamp())
-		mlog.Info(context.TODO(), "seek successfully", mlog.Uint64("posTs", position.GetTimestamp()),
-			mlog.Time("posTime", posTime), mlog.Duration("tsLag", time.Since(posTime)))
+		log.Info(context.TODO(), "seek successfully", log.Uint64("posTs", position.GetTimestamp()),
+			log.Time("posTime", posTime), log.Duration("tsLag", time.Since(posTime)))
 	} else {
 		err = stream.AsConsumer(ctx, []string{pchannel}, subName, subPos)
 		if err != nil {
-			mlog.Error(context.TODO(), "asConsumer failed", mlog.Err(err))
+			log.Error(context.TODO(), "asConsumer failed", log.Err(err))
 			return nil, err
 		}
-		mlog.Info(context.TODO(), "asConsumer successfully")
+		log.Info(context.TODO(), "asConsumer successfully")
 	}
 
 	d := &Dispatcher{
@@ -159,10 +159,10 @@ func (d *Dispatcher) CurTs() typeutil.Timestamp {
 
 func (d *Dispatcher) AddTarget(t *target) {
 	if _, ok := d.targets.GetOrInsert(t.vchannel, t); ok {
-		mlog.Warn(context.TODO(), "target exists")
+		log.Warn(context.TODO(), "target exists")
 		return
 	}
-	mlog.Info(context.TODO(), "add new target")
+	log.Info(context.TODO(), "add new target")
 }
 
 func (d *Dispatcher) GetTarget(vchannel string) (*target, error) {
@@ -182,9 +182,9 @@ func (d *Dispatcher) HasTarget(vchannel string) bool {
 
 func (d *Dispatcher) RemoveTarget(vchannel string) {
 	if _, ok := d.targets.GetAndRemove(vchannel); ok {
-		mlog.Info(context.TODO(), "target removed")
+		log.Info(context.TODO(), "target removed")
 	} else {
-		mlog.Warn(context.TODO(), "target not exist")
+		log.Warn(context.TODO(), "target not exist")
 	}
 }
 
@@ -200,7 +200,7 @@ func (d *Dispatcher) BlockUtilPullbackDone() {
 }
 
 func (d *Dispatcher) Handle(signal signal) {
-	mlog.Debug(context.TODO(), "get signal", mlog.String("signal", signal.String()))
+	log.Debug(context.TODO(), "get signal", log.String("signal", signal.String()))
 	switch signal {
 	case start:
 		d.ctx, d.cancel = context.WithCancel(context.Background())
@@ -223,20 +223,20 @@ func (d *Dispatcher) Handle(signal signal) {
 			d.stream.Close()
 		})
 	}
-	mlog.Info(context.TODO(), "handle signal done")
+	log.Info(context.TODO(), "handle signal done")
 }
 
 func (d *Dispatcher) work() {
-	mlog.Info(context.TODO(), "begin to work")
+	log.Info(context.TODO(), "begin to work")
 	defer d.wg.Done()
 	for {
 		select {
 		case <-d.done:
-			mlog.Info(context.TODO(), "stop working")
+			log.Info(context.TODO(), "stop working")
 			return
 		case pack := <-d.stream.Chan():
 			if pack == nil || len(pack.EndPositions) != 1 {
-				mlog.Error(context.TODO(), "consumed invalid msgPack", mlog.Any("pack", pack))
+				log.Error(context.TODO(), "consumed invalid msgPack", log.Any("pack", pack))
 				continue
 			}
 			d.curTs.Store(pack.EndPositions[0].GetTimestamp())
@@ -251,22 +251,22 @@ func (d *Dispatcher) work() {
 				// From 2.6.0, every message has a unique timetick, so we can filter out the msg by < but not <=.
 				if (d.includeSkipWhenSplit && p.EndTs < t.pos.GetTimestamp()) ||
 					(!d.includeSkipWhenSplit && p.EndTs <= t.pos.GetTimestamp()) {
-					mlog.Info(context.TODO(), "skip msg",
-						mlog.String("vchannel", vchannel),
-						mlog.Int("msgCount", len(p.Msgs)),
-						mlog.Uint64("packBeginTs", p.BeginTs),
-						mlog.Uint64("packEndTs", p.EndTs),
-						mlog.Uint64("posTs", t.pos.GetTimestamp()),
+					log.Info(context.TODO(), "skip msg",
+						log.String("vchannel", vchannel),
+						log.Int("msgCount", len(p.Msgs)),
+						log.Uint64("packBeginTs", p.BeginTs),
+						log.Uint64("packEndTs", p.EndTs),
+						log.Uint64("posTs", t.pos.GetTimestamp()),
 					)
 					for _, msg := range p.Msgs {
-						mlog.Debug(context.TODO(), "skip msg info",
-							mlog.String("vchannel", vchannel),
-							mlog.String("msgType", msg.Type().String()),
-							mlog.Uint64("msgBeginTs", msg.BeginTs()),
-							mlog.Uint64("msgEndTs", msg.EndTs()),
-							mlog.Uint64("packBeginTs", p.BeginTs),
-							mlog.Uint64("packEndTs", p.EndTs),
-							mlog.Uint64("posTs", t.pos.GetTimestamp()),
+						log.Debug(context.TODO(), "skip msg info",
+							log.String("vchannel", vchannel),
+							log.String("msgType", msg.Type().String()),
+							log.Uint64("msgBeginTs", msg.BeginTs()),
+							log.Uint64("msgEndTs", msg.EndTs()),
+							log.Uint64("packBeginTs", p.BeginTs),
+							log.Uint64("packEndTs", p.EndTs),
+							log.Uint64("posTs", t.pos.GetTimestamp()),
 						)
 					}
 					continue
@@ -289,15 +289,15 @@ func (d *Dispatcher) work() {
 					// replace the pChannel with vChannel
 					t.pos.ChannelName = t.vchannel
 					d.targets.GetAndRemove(vchannel)
-					mlog.Warn(context.TODO(), "lag target", mlog.Err(err))
+					log.Warn(context.TODO(), "lag target", log.Err(err))
 				}
 			}
 
 			if !d.pullbackDone && pack.EndPositions[0].GetTimestamp() >= d.pullbackEndTs {
 				d.pullbackDoneNotifier.Finish(struct{}{})
-				mlog.Info(context.TODO(), "dispatcher pullback done",
-					mlog.Uint64("pullbackEndTs", d.pullbackEndTs),
-					mlog.Time("pullbackTime", tsoutil.PhysicalTime(d.pullbackEndTs)),
+				log.Info(context.TODO(), "dispatcher pullback done",
+					log.Uint64("pullbackEndTs", d.pullbackEndTs),
+					log.Time("pullbackTime", tsoutil.PhysicalTime(d.pullbackEndTs)),
 				)
 				d.pullbackDone = true
 			}
@@ -344,7 +344,7 @@ func (d *Dispatcher) groupAndParseMsgs(pack *msgstream.ConsumeMsgPack, unmarshal
 			if len(targets) > 0 {
 				tsMsg, err := msg.Unmarshal(unmarshalDispatcher)
 				if err != nil {
-					mlog.Warn(context.TODO(), "unmarshl message failed", mlog.Err(err))
+					log.Warn(context.TODO(), "unmarshl message failed", log.Err(err))
 					continue
 				}
 				// TODO: There's data race when non-dml msg is sent to different flow graph.
@@ -358,7 +358,7 @@ func (d *Dispatcher) groupAndParseMsgs(pack *msgstream.ConsumeMsgPack, unmarshal
 		if _, ok := targetPacks[vchannel]; ok {
 			tsMsg, err := msg.Unmarshal(unmarshalDispatcher)
 			if err != nil {
-				mlog.Warn(context.TODO(), "unmarshl message failed", mlog.Err(err))
+				log.Warn(context.TODO(), "unmarshl message failed", log.Err(err))
 				continue
 			}
 			targetPacks[vchannel].Msgs = append(targetPacks[vchannel].Msgs, tsMsg)

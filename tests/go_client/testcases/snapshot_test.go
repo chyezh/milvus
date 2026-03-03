@@ -13,7 +13,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/index"
 	client "github.com/milvus-io/milvus/client/v2/milvusclient"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/tests/go_client/base"
 	"github.com/milvus-io/milvus/tests/go_client/common"
 	hp "github.com/milvus-io/milvus/tests/go_client/testcases/helper"
@@ -36,18 +36,18 @@ func waitForRestoreComplete(ctx context.Context, mc *base.MilvusClient, jobID in
 
 		switch info.GetState() {
 		case milvuspb.RestoreSnapshotState_RestoreSnapshotCompleted:
-			mlog.Info(context.TODO(), "restore snapshot completed",
-				mlog.Int64("jobID", jobID),
-				mlog.String("collectionName", info.GetCollectionName()))
+			log.Info(context.TODO(), "restore snapshot completed",
+				log.Int64("jobID", jobID),
+				log.String("collectionName", info.GetCollectionName()))
 			return info, nil
 		case milvuspb.RestoreSnapshotState_RestoreSnapshotFailed:
 			return info, fmt.Errorf("restore snapshot failed: jobID=%d, reason=%s", jobID, info.GetReason())
 		default:
 			// Still pending or executing
-			mlog.Info(context.TODO(), "waiting for restore to complete",
-				mlog.Int64("jobID", jobID),
-				mlog.String("state", info.GetState().String()),
-				mlog.Int32("progress", info.GetProgress()))
+			log.Info(context.TODO(), "waiting for restore to complete",
+				log.Int64("jobID", jobID),
+				log.String("state", info.GetState().String()),
+				log.Int32("progress", info.GetProgress()))
 			time.Sleep(pollInterval)
 		}
 	}
@@ -177,7 +177,7 @@ func TestSnapshotRestoreWithMultiSegment(t *testing.T) {
 	snapshotInfo, err := mc.DescribeSnapshot(ctx, describeOpt)
 	common.CheckErr(t, err, true)
 	require.Equal(t, snapshotName, snapshotInfo.GetName())
-	mlog.Info(context.TODO(), "check snapshot info", mlog.Any("info", snapshotInfo))
+	log.Info(context.TODO(), "check snapshot info", log.Any("info", snapshotInfo))
 
 	// Step 3: Continue inserting more records and delete 1000 records
 	// Insert more records
@@ -315,7 +315,7 @@ func TestSnapshotRestoreWithMultiShardMultiPartition(t *testing.T) {
 	snapshotInfo, err := mc.DescribeSnapshot(ctx, describeOpt)
 	common.CheckErr(t, err, true)
 	require.Equal(t, snapshotName, snapshotInfo.GetName())
-	mlog.Info(context.TODO(), "check snapshot info", mlog.Any("info", snapshotInfo))
+	log.Info(context.TODO(), "check snapshot info", log.Any("info", snapshotInfo))
 
 	// Step 3: Continue inserting more records and delete 1000 records
 	// Insert more records
@@ -426,7 +426,7 @@ func TestSnapshotRestoreWithMultiFields(t *testing.T) {
 	common.CheckErr(t, err, true)
 
 	// Step 2a: Create indexes for vector field (required before loading)
-	mlog.Info(context.TODO(), "Creating index for vector field")
+	log.Info(context.TODO(), "Creating index for vector field")
 	vecIdx := index.NewHNSWIndex(entity.L2, 8, 96)
 	vecIndexTask, err := mc.CreateIndex(ctx, client.NewCreateIndexOption(collName, "float_vec", vecIdx))
 	common.CheckErr(t, err, true)
@@ -434,7 +434,7 @@ func TestSnapshotRestoreWithMultiFields(t *testing.T) {
 	common.CheckErr(t, err, true)
 
 	// Step 2b: Create indexes for scalar fields to accelerate filtering
-	mlog.Info(context.TODO(), "Creating indexes for scalar fields")
+	log.Info(context.TODO(), "Creating indexes for scalar fields")
 	scalarIndexFields := []string{"int64_field", "varchar_field"}
 	for _, fieldName := range scalarIndexFields {
 		scalarIdx := index.NewInvertedIndex()
@@ -445,7 +445,7 @@ func TestSnapshotRestoreWithMultiFields(t *testing.T) {
 	}
 
 	// Step 2c: Create indexes for array fields
-	mlog.Info(context.TODO(), "Creating indexes for array fields")
+	log.Info(context.TODO(), "Creating indexes for array fields")
 	arrayIndexFields := []string{"int64_array", "string_array"}
 	for _, fieldName := range arrayIndexFields {
 		arrayIdx := index.NewInvertedIndex()
@@ -456,7 +456,7 @@ func TestSnapshotRestoreWithMultiFields(t *testing.T) {
 	}
 
 	// Step 2d: Load collection
-	mlog.Info(context.TODO(), "Loading collection")
+	log.Info(context.TODO(), "Loading collection")
 	loadOpt := client.NewLoadCollectionOption(collName).WithReplica(1)
 	loadTask, err := mc.LoadCollection(ctx, loadOpt)
 	common.CheckErr(t, err, true)
@@ -511,7 +511,7 @@ func TestSnapshotRestoreWithMultiFields(t *testing.T) {
 	snapshotInfo, err := mc.DescribeSnapshot(ctx, describeOpt)
 	common.CheckErr(t, err, true)
 	require.Equal(t, snapshotName, snapshotInfo.GetName())
-	mlog.Info(context.TODO(), "Created snapshot for multi-fields test", mlog.Any("info", snapshotInfo))
+	log.Info(context.TODO(), "Created snapshot for multi-fields test", log.Any("info", snapshotInfo))
 
 	// Step 5: Continue inserting more records (3 batches × 10,000 records)
 	// This is to verify that snapshot captures state before these insertions
@@ -625,7 +625,7 @@ func TestSnapshotRestoreEmptyCollection(t *testing.T) {
 	}
 
 	// Step 3: Create indexes for vector field
-	mlog.Info(context.TODO(), "Creating index for vector field")
+	log.Info(context.TODO(), "Creating index for vector field")
 	vecIdx := index.NewHNSWIndex(entity.L2, 8, 96)
 	vecIndexTask, err := mc.CreateIndex(ctx, client.NewCreateIndexOption(collName, "float_vec", vecIdx))
 	common.CheckErr(t, err, true)
@@ -633,7 +633,7 @@ func TestSnapshotRestoreEmptyCollection(t *testing.T) {
 	common.CheckErr(t, err, true)
 
 	// Step 4: Create indexes for scalar fields
-	mlog.Info(context.TODO(), "Creating indexes for scalar fields")
+	log.Info(context.TODO(), "Creating indexes for scalar fields")
 	scalarIndexFields := []string{"int64_field", "varchar_field"}
 	for _, fieldName := range scalarIndexFields {
 		scalarIdx := index.NewInvertedIndex()
@@ -644,7 +644,7 @@ func TestSnapshotRestoreEmptyCollection(t *testing.T) {
 	}
 
 	// Step 5: Create indexes for array fields
-	mlog.Info(context.TODO(), "Creating indexes for array fields")
+	log.Info(context.TODO(), "Creating indexes for array fields")
 	arrayIndexFields := []string{"int64_array", "string_array"}
 	for _, fieldName := range arrayIndexFields {
 		arrayIdx := index.NewInvertedIndex()
@@ -677,7 +677,7 @@ func TestSnapshotRestoreEmptyCollection(t *testing.T) {
 	snapshotInfo, err := mc.DescribeSnapshot(ctx, describeOpt)
 	common.CheckErr(t, err, true)
 	require.Equal(t, snapshotName, snapshotInfo.GetName())
-	mlog.Info(context.TODO(), "Created snapshot for empty collection", mlog.Any("info", snapshotInfo))
+	log.Info(context.TODO(), "Created snapshot for empty collection", log.Any("info", snapshotInfo))
 
 	// Step 8: Restore snapshot to a new collection
 	restoredCollName := fmt.Sprintf("restored_%s", collName)
@@ -699,7 +699,7 @@ func TestSnapshotRestoreEmptyCollection(t *testing.T) {
 	common.CheckErr(t, err, true)
 
 	// Step 11: Verify schema matches
-	mlog.Info(context.TODO(), "Verifying schema consistency")
+	log.Info(context.TODO(), "Verifying schema consistency")
 	require.Equal(t, len(originalColl.Schema.Fields), len(restoredColl.Schema.Fields), "Field count should match")
 	require.Equal(t, originalColl.Schema.EnableDynamicField, restoredColl.Schema.EnableDynamicField, "Dynamic field setting should match")
 
@@ -737,7 +737,7 @@ func TestSnapshotRestoreEmptyCollection(t *testing.T) {
 	}
 
 	// Step 12: Verify partitions match
-	mlog.Info(context.TODO(), "Verifying partition consistency")
+	log.Info(context.TODO(), "Verifying partition consistency")
 	sort.Strings(partitions)
 
 	// Get restored collection partitions
@@ -755,10 +755,10 @@ func TestSnapshotRestoreEmptyCollection(t *testing.T) {
 	require.Equal(t, partitions, filteredRestoredPartitions, "Partitions should match")
 
 	// Step 13: Verify indexes match
-	mlog.Info(context.TODO(), "Verifying index consistency")
+	log.Info(context.TODO(), "Verifying index consistency")
 	originalIndexes, err := mc.ListIndexes(ctx, client.NewListIndexOption(collName))
 	common.CheckErr(t, err, true)
-	mlog.Info(context.TODO(), "original indexes", mlog.Any("indexes", originalIndexes))
+	log.Info(context.TODO(), "original indexes", log.Any("indexes", originalIndexes))
 
 	restoredIndexes, err := mc.ListIndexes(ctx, client.NewListIndexOption(restoredCollName))
 	common.CheckErr(t, err, true)
@@ -783,7 +783,7 @@ func TestSnapshotRestoreEmptyCollection(t *testing.T) {
 	}
 
 	// Step 14: Load both collections and verify they have no data
-	mlog.Info(context.TODO(), "Loading collections to verify data")
+	log.Info(context.TODO(), "Loading collections to verify data")
 	loadTask, err := mc.LoadCollection(ctx, client.NewLoadCollectionOption(collName).WithReplica(1))
 	common.CheckErr(t, err, true)
 	err = loadTask.Await(ctx)
@@ -811,12 +811,12 @@ func TestSnapshotRestoreEmptyCollection(t *testing.T) {
 	restoredCount, _ := restoredQueryRes.Fields[0].GetAsInt64(0)
 	require.Equal(t, int64(0), restoredCount, "Restored collection should have 0 records")
 
-	mlog.Info(context.TODO(), "Empty collection snapshot and restore test completed successfully",
-		mlog.String("original_collection", collName),
-		mlog.String("restored_collection", restoredCollName),
-		mlog.Int("field_count", len(originalColl.Schema.Fields)),
-		mlog.Int("index_count", len(originalIndexes)),
-		mlog.Int("partition_count", len(partitions)))
+	log.Info(context.TODO(), "Empty collection snapshot and restore test completed successfully",
+		log.String("original_collection", collName),
+		log.String("restored_collection", restoredCollName),
+		log.Int("field_count", len(originalColl.Schema.Fields)),
+		log.Int("index_count", len(originalIndexes)),
+		log.Int("partition_count", len(partitions)))
 
 	// Clean up
 	dropOpt := client.NewDropSnapshotOption(snapshotName)
@@ -870,7 +870,7 @@ func TestSnapshotRestoreWithJSONStats(t *testing.T) {
 		WithDynamicFieldEnabled(true)
 
 	// Step 2: Prepare indexes
-	mlog.Info(context.TODO(), "Preparing indexes for collection")
+	log.Info(context.TODO(), "Preparing indexes for collection")
 
 	// Vector index (required for loading)
 	vecIdx := index.NewHNSWIndex(entity.L2, 8, 96)
@@ -889,7 +889,7 @@ func TestSnapshotRestoreWithJSONStats(t *testing.T) {
 	jsonIndexOpt.WithExtraParam("json_cast_type", "varchar")
 
 	// Create collection with all indexes in one go
-	mlog.Info(context.TODO(), "Creating collection with indexes")
+	log.Info(context.TODO(), "Creating collection with indexes")
 	createOpt := client.NewCreateCollectionOption(collName, schema).
 		WithShardNum(3).
 		WithIndexOptions(vecIndexOpt, varcharIndexOpt, jsonIndexOpt)
@@ -897,14 +897,14 @@ func TestSnapshotRestoreWithJSONStats(t *testing.T) {
 	common.CheckErr(t, err, true)
 
 	// Step 3: Load collection
-	mlog.Info(context.TODO(), "Loading collection")
+	log.Info(context.TODO(), "Loading collection")
 	loadTask, err := mc.LoadCollection(ctx, client.NewLoadCollectionOption(collName).WithReplica(1))
 	common.CheckErr(t, err, true)
 	err = loadTask.Await(ctx)
 	common.CheckErr(t, err, true)
 
 	// Step 4: Insert data with JSON content
-	mlog.Info(context.TODO(), "Inserting data with JSON fields")
+	log.Info(context.TODO(), "Inserting data with JSON fields")
 	coll, err := mc.DescribeCollection(ctx, client.NewDescribeCollectionOption(collName))
 	common.CheckErr(t, err, true)
 
@@ -927,7 +927,7 @@ func TestSnapshotRestoreWithJSONStats(t *testing.T) {
 	common.CheckErr(t, err, true)
 	initialCount, _ := queryRes.Fields[0].GetAsInt64(0)
 	require.Equal(t, int64(insertBatchSize*numOfBatch), initialCount)
-	mlog.Info(context.TODO(), "Initial data inserted", mlog.Int64("count", initialCount))
+	log.Info(context.TODO(), "Initial data inserted", log.Int64("count", initialCount))
 
 	// Step 5: Delete some records
 	for i := range numOfBatch {
@@ -951,14 +951,14 @@ func TestSnapshotRestoreWithJSONStats(t *testing.T) {
 	countAfterDelete, _ := queryRes2.Fields[0].GetAsInt64(0)
 	expectedAfterDelete := int64(insertBatchSize*numOfBatch - deleteBatchSize*numOfBatch)
 	require.Equal(t, expectedAfterDelete, countAfterDelete)
-	mlog.Info(context.TODO(), "Data after deletion", mlog.Int64("count", countAfterDelete))
+	log.Info(context.TODO(), "Data after deletion", log.Int64("count", countAfterDelete))
 
 	// Step 6: Create snapshot
 	snapshotName := fmt.Sprintf("json_stats_snapshot_%s", common.GenRandomString(snapshotPrefix, 6))
 	createSnapshotOpt := client.NewCreateSnapshotOption(snapshotName, collName).
 		WithDescription("Snapshot for JSON stats restore testing")
 
-	mlog.Info(context.TODO(), "Creating snapshot with JSON stats")
+	log.Info(context.TODO(), "Creating snapshot with JSON stats")
 	err = mc.CreateSnapshot(ctx, createSnapshotOpt)
 	common.CheckErr(t, err, true)
 
@@ -973,7 +973,7 @@ func TestSnapshotRestoreWithJSONStats(t *testing.T) {
 	snapshotInfo, err := mc.DescribeSnapshot(ctx, describeOpt)
 	common.CheckErr(t, err, true)
 	require.Equal(t, snapshotName, snapshotInfo.GetName())
-	mlog.Info(context.TODO(), "Snapshot created", mlog.Any("info", snapshotInfo))
+	log.Info(context.TODO(), "Snapshot created", log.Any("info", snapshotInfo))
 
 	// Step 7: Insert more data after snapshot (to verify snapshot point-in-time)
 	for i := range 2 {
@@ -986,7 +986,7 @@ func TestSnapshotRestoreWithJSONStats(t *testing.T) {
 	// Step 8: Restore snapshot to a new collection
 	restoredCollName := fmt.Sprintf("restored_%s", collName)
 	restoreOpt := client.NewRestoreSnapshotOption(snapshotName, restoredCollName)
-	mlog.Info(context.TODO(), "Restoring snapshot", mlog.String("target_collection", restoredCollName))
+	log.Info(context.TODO(), "Restoring snapshot", log.String("target_collection", restoredCollName))
 	jobID, err := mc.RestoreSnapshot(ctx, restoreOpt)
 	common.CheckErr(t, err, true)
 
@@ -1000,7 +1000,7 @@ func TestSnapshotRestoreWithJSONStats(t *testing.T) {
 	require.True(t, has)
 
 	// Step 10: Load restored collection
-	mlog.Info(context.TODO(), "Loading restored collection")
+	log.Info(context.TODO(), "Loading restored collection")
 	loadTask2, err := mc.LoadCollection(ctx, client.NewLoadCollectionOption(restoredCollName).WithReplica(1))
 	common.CheckErr(t, err, true)
 	err = loadTask2.Await(ctx)
@@ -1015,7 +1015,7 @@ func TestSnapshotRestoreWithJSONStats(t *testing.T) {
 	restoredCount, _ := queryRes3.Fields[0].GetAsInt64(0)
 	require.Equal(t, countAfterDelete, restoredCount,
 		"Restored collection should have same count as snapshot point-in-time")
-	mlog.Info(context.TODO(), "Restored collection data verified", mlog.Int64("count", restoredCount))
+	log.Info(context.TODO(), "Restored collection data verified", log.Int64("count", restoredCount))
 
 	// Clean up
 	dropOpt2 := client.NewDropSnapshotOption(snapshotName)
@@ -1045,14 +1045,14 @@ func TestSnapshotRestoreAfterDropPartitionAndCollection(t *testing.T) {
 		err := mc.CreatePartition(ctx, client.NewCreatePartitionOption(collName, partName))
 		common.CheckErr(t, err, true)
 	}
-	mlog.Info(context.TODO(), "Created partitions", mlog.Strings("partitions", partitions))
+	log.Info(context.TODO(), "Created partitions", log.Strings("partitions", partitions))
 
 	// Get collection schema
 	coll, err := mc.DescribeCollection(ctx, client.NewDescribeCollectionOption(collName))
 	common.CheckErr(t, err, true)
 
 	// Step 2: Insert data into each partition
-	mlog.Info(context.TODO(), "Inserting data into partitions")
+	log.Info(context.TODO(), "Inserting data into partitions")
 	for i, partName := range partitions {
 		insertOpt := hp.TNewDataOption().TWithNb(insertBatchSize).TWithStart(i * insertBatchSize)
 		_, insertRes := hp.CollPrepare.InsertData(ctx, t, mc, hp.NewInsertParams(coll.Schema).TWithPartitionName(partName), insertOpt)
@@ -1069,14 +1069,14 @@ func TestSnapshotRestoreAfterDropPartitionAndCollection(t *testing.T) {
 	common.CheckErr(t, err, true)
 	count, _ := queryRes.Fields[0].GetAsInt64(0)
 	require.Equal(t, int64(9000), count)
-	mlog.Info(context.TODO(), "Initial data count verified", mlog.Int64("count", count))
+	log.Info(context.TODO(), "Initial data count verified", log.Int64("count", count))
 
 	// Step 3: Create snapshot
 	snapshotName := fmt.Sprintf("drop_test_snapshot_%s", common.GenRandomString(snapshotPrefix, 6))
 	createOpt := client.NewCreateSnapshotOption(snapshotName, collName).
 		WithDescription("Snapshot for testing restore after drop operations")
 
-	mlog.Info(context.TODO(), "Creating snapshot")
+	log.Info(context.TODO(), "Creating snapshot")
 	err = mc.CreateSnapshot(ctx, createOpt)
 	common.CheckErr(t, err, true)
 
@@ -1090,21 +1090,21 @@ func TestSnapshotRestoreAfterDropPartitionAndCollection(t *testing.T) {
 	snapshotInfo, err := mc.DescribeSnapshot(ctx, describeOpt)
 	common.CheckErr(t, err, true)
 	require.Equal(t, snapshotName, snapshotInfo.GetName())
-	mlog.Info(context.TODO(), "Snapshot created", mlog.Any("info", snapshotInfo))
+	log.Info(context.TODO(), "Snapshot created", log.Any("info", snapshotInfo))
 
 	// Step 4: Test scenario 1 - Drop partition and restore
-	mlog.Info(context.TODO(), "Test scenario 1: Drop partition and restore")
+	log.Info(context.TODO(), "Test scenario 1: Drop partition and restore")
 
 	// Release the partition before dropping it
 	dropPartName := "part_0"
 	err = mc.ReleasePartitions(ctx, client.NewReleasePartitionsOptions(collName, dropPartName))
 	common.CheckErr(t, err, true)
-	mlog.Info(context.TODO(), "Released partition", mlog.String("partition", dropPartName))
+	log.Info(context.TODO(), "Released partition", log.String("partition", dropPartName))
 
 	// Drop one partition
 	err = mc.DropPartition(ctx, client.NewDropPartitionOption(collName, dropPartName))
 	common.CheckErr(t, err, true)
-	mlog.Info(context.TODO(), "Dropped partition", mlog.String("partition", dropPartName))
+	log.Info(context.TODO(), "Dropped partition", log.String("partition", dropPartName))
 
 	// Wait for partition drop to take effect
 	time.Sleep(5 * time.Second)
@@ -1114,12 +1114,12 @@ func TestSnapshotRestoreAfterDropPartitionAndCollection(t *testing.T) {
 	common.CheckErr(t, err, true)
 	remainingCount, _ := queryRes2.Fields[0].GetAsInt64(0)
 	require.Equal(t, int64(6000), remainingCount)
-	mlog.Info(context.TODO(), "Data count after dropping partition", mlog.Int64("count", remainingCount))
+	log.Info(context.TODO(), "Data count after dropping partition", log.Int64("count", remainingCount))
 
 	// Restore snapshot to new collection (v1)
 	restoredCollNameV1 := fmt.Sprintf("restored_v1_%s", collName)
 	restoreOptV1 := client.NewRestoreSnapshotOption(snapshotName, restoredCollNameV1)
-	mlog.Info(context.TODO(), "Restoring snapshot after partition drop", mlog.String("target", restoredCollNameV1))
+	log.Info(context.TODO(), "Restoring snapshot after partition drop", log.String("target", restoredCollNameV1))
 	jobIDV1, err := mc.RestoreSnapshot(ctx, restoreOptV1)
 	common.CheckErr(t, err, true)
 
@@ -1146,7 +1146,7 @@ func TestSnapshotRestoreAfterDropPartitionAndCollection(t *testing.T) {
 	common.CheckErr(t, err, true)
 	restoredCountV1, _ := queryResV1.Fields[0].GetAsInt64(0)
 	require.Equal(t, int64(9000), restoredCountV1)
-	mlog.Info(context.TODO(), "Restored collection v1 data verified", mlog.Int64("count", restoredCountV1))
+	log.Info(context.TODO(), "Restored collection v1 data verified", log.Int64("count", restoredCountV1))
 
 	// Verify all partitions are restored
 	restoredPartitionsV1, err := mc.ListPartitions(ctx, client.NewListPartitionOption(restoredCollNameV1))
@@ -1159,15 +1159,15 @@ func TestSnapshotRestoreAfterDropPartitionAndCollection(t *testing.T) {
 	}
 	sort.Strings(filteredPartitionsV1)
 	require.Equal(t, partitions, filteredPartitionsV1)
-	mlog.Info(context.TODO(), "All partitions restored in v1", mlog.Strings("partitions", filteredPartitionsV1))
+	log.Info(context.TODO(), "All partitions restored in v1", log.Strings("partitions", filteredPartitionsV1))
 
 	// Step 5: Test scenario 2 - Drop entire collection and restore
-	mlog.Info(context.TODO(), "Test scenario 2: Drop entire collection and restore")
+	log.Info(context.TODO(), "Test scenario 2: Drop entire collection and restore")
 
 	// Drop the original collection
 	err = mc.DropCollection(ctx, client.NewDropCollectionOption(collName))
 	common.CheckErr(t, err, true)
-	mlog.Info(context.TODO(), "Dropped entire collection", mlog.String("collection", collName))
+	log.Info(context.TODO(), "Dropped entire collection", log.String("collection", collName))
 
 	// Wait for collection drop to take effect
 	time.Sleep(5 * time.Second)
@@ -1176,12 +1176,12 @@ func TestSnapshotRestoreAfterDropPartitionAndCollection(t *testing.T) {
 	hasOriginal, err := mc.HasCollection(ctx, client.NewHasCollectionOption(collName))
 	common.CheckErr(t, err, true)
 	require.False(t, hasOriginal)
-	mlog.Info(context.TODO(), "Verified collection is dropped")
+	log.Info(context.TODO(), "Verified collection is dropped")
 
 	// Restore snapshot to new collection (v2)
 	restoredCollNameV2 := fmt.Sprintf("restored_v2_%s", collName)
 	restoreOptV2 := client.NewRestoreSnapshotOption(snapshotName, restoredCollNameV2)
-	mlog.Info(context.TODO(), "Restoring snapshot after collection drop", mlog.String("target", restoredCollNameV2))
+	log.Info(context.TODO(), "Restoring snapshot after collection drop", log.String("target", restoredCollNameV2))
 	jobIDV2, err := mc.RestoreSnapshot(ctx, restoreOptV2)
 	common.CheckErr(t, err, true)
 
@@ -1208,7 +1208,7 @@ func TestSnapshotRestoreAfterDropPartitionAndCollection(t *testing.T) {
 	common.CheckErr(t, err, true)
 	restoredCountV2, _ := queryResV2.Fields[0].GetAsInt64(0)
 	require.Equal(t, int64(9000), restoredCountV2)
-	mlog.Info(context.TODO(), "Restored collection v2 data verified", mlog.Int64("count", restoredCountV2))
+	log.Info(context.TODO(), "Restored collection v2 data verified", log.Int64("count", restoredCountV2))
 
 	// Verify all partitions are restored
 	restoredPartitionsV2, err := mc.ListPartitions(ctx, client.NewListPartitionOption(restoredCollNameV2))
@@ -1221,12 +1221,12 @@ func TestSnapshotRestoreAfterDropPartitionAndCollection(t *testing.T) {
 	}
 	sort.Strings(filteredPartitionsV2)
 	require.Equal(t, partitions, filteredPartitionsV2)
-	mlog.Info(context.TODO(), "All partitions restored in v2", mlog.Strings("partitions", filteredPartitionsV2))
+	log.Info(context.TODO(), "All partitions restored in v2", log.Strings("partitions", filteredPartitionsV2))
 
-	mlog.Info(context.TODO(), "Test completed successfully",
-		mlog.String("snapshot", snapshotName),
-		mlog.String("restored_v1", restoredCollNameV1),
-		mlog.String("restored_v2", restoredCollNameV2))
+	log.Info(context.TODO(), "Test completed successfully",
+		log.String("snapshot", snapshotName),
+		log.String("restored_v1", restoredCollNameV1),
+		log.String("restored_v2", restoredCollNameV2))
 
 	// Clean up
 	dropSnapshotOpt := client.NewDropSnapshotOption(snapshotName)

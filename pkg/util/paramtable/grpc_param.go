@@ -28,7 +28,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 )
 
@@ -167,9 +167,9 @@ func (p *GrpcServerConfig) Init(domain string, base *BaseTable) {
 			}
 			_, err := strconv.Atoi(v)
 			if err != nil {
-				mlog.Warn(context.TODO(), "Failed to parse grpc.serverMaxSendSize, set to default",
-					mlog.String("role", p.Domain), mlog.String("grpc.serverMaxSendSize", v),
-					mlog.Err(err))
+				log.Warn(context.TODO(), "Failed to parse grpc.serverMaxSendSize, set to default",
+					log.String("role", p.Domain), log.String("grpc.serverMaxSendSize", v),
+					log.Err(err))
 				return maxSendSize
 			}
 			return v
@@ -190,9 +190,9 @@ func (p *GrpcServerConfig) Init(domain string, base *BaseTable) {
 			}
 			_, err := strconv.Atoi(v)
 			if err != nil {
-				mlog.Warn(context.TODO(), "Failed to parse grpc.serverMaxRecvSize, set to default",
-					mlog.String("role", p.Domain), mlog.String("grpc.serverMaxRecvSize", v),
-					mlog.Err(err))
+				log.Warn(context.TODO(), "Failed to parse grpc.serverMaxRecvSize, set to default",
+					log.String("role", p.Domain), log.String("grpc.serverMaxRecvSize", v),
+					log.Err(err))
 				return maxRecvSize
 			}
 			return v
@@ -248,9 +248,9 @@ func (p *GrpcClientConfig) Init(domain string, base *BaseTable) {
 			}
 			_, err := strconv.Atoi(v)
 			if err != nil {
-				mlog.Warn(context.TODO(), "Failed to parse grpc.clientMaxSendSize, set to default",
-					mlog.String("role", p.Domain), mlog.String("grpc.clientMaxSendSize", v),
-					mlog.Err(err))
+				log.Warn(context.TODO(), "Failed to parse grpc.clientMaxSendSize, set to default",
+					log.String("role", p.Domain), log.String("grpc.clientMaxSendSize", v),
+					log.Err(err))
 				return maxSendSize
 			}
 			return v
@@ -271,9 +271,9 @@ func (p *GrpcClientConfig) Init(domain string, base *BaseTable) {
 			}
 			_, err := strconv.Atoi(v)
 			if err != nil {
-				mlog.Warn(context.TODO(), "Failed to parse grpc.clientMaxRecvSize, set to default",
-					mlog.String("role", p.Domain), mlog.String("grpc.clientMaxRecvSize", v),
-					mlog.Err(err))
+				log.Warn(context.TODO(), "Failed to parse grpc.clientMaxRecvSize, set to default",
+					log.String("role", p.Domain), log.String("grpc.clientMaxRecvSize", v),
+					log.Err(err))
 				return maxRecvSize
 			}
 			return v
@@ -293,9 +293,9 @@ func (p *GrpcClientConfig) Init(domain string, base *BaseTable) {
 			}
 			_, err := strconv.Atoi(v)
 			if err != nil {
-				mlog.Warn(context.TODO(), "Failed to convert int when parsing grpc.client.dialTimeout, set to default",
-					mlog.String("role", p.Domain),
-					mlog.String("grpc.client.dialTimeout", v))
+				log.Warn(context.TODO(), "Failed to convert int when parsing grpc.client.dialTimeout, set to default",
+					log.String("role", p.Domain),
+					log.String("grpc.client.dialTimeout", v))
 				return dialTimeout
 			}
 			return v
@@ -314,9 +314,9 @@ func (p *GrpcClientConfig) Init(domain string, base *BaseTable) {
 			}
 			_, err := strconv.Atoi(v)
 			if err != nil {
-				mlog.Warn(context.TODO(), "Failed to convert int when parsing grpc.client.keepAliveTimeout, set to default",
-					mlog.String("role", p.Domain),
-					mlog.String("grpc.client.keepAliveTimeout", v))
+				log.Warn(context.TODO(), "Failed to convert int when parsing grpc.client.keepAliveTimeout, set to default",
+					log.String("role", p.Domain),
+					log.String("grpc.client.keepAliveTimeout", v))
 				return keepAliveTimeout
 			}
 			return v
@@ -335,9 +335,9 @@ func (p *GrpcClientConfig) Init(domain string, base *BaseTable) {
 			}
 			_, err := strconv.Atoi(v)
 			if err != nil {
-				mlog.Warn(context.TODO(), "Failed to convert int when parsing grpc.client.keepAliveTime, set to default",
-					mlog.String("role", p.Domain),
-					mlog.String("grpc.client.keepAliveTime", v))
+				log.Warn(context.TODO(), "Failed to convert int when parsing grpc.client.keepAliveTime, set to default",
+					log.String("role", p.Domain),
+					log.String("grpc.client.keepAliveTime", v))
 				return keepAliveTime
 			}
 			return v
@@ -356,9 +356,9 @@ func (p *GrpcClientConfig) Init(domain string, base *BaseTable) {
 			}
 			_, err := strconv.Atoi(v)
 			if err != nil {
-				mlog.Warn(context.TODO(), "Failed to convert int when parsing grpc.client.maxMaxAttempts, set to default",
-					mlog.String("role", p.Domain),
-					mlog.String("grpc.client.maxMaxAttempts", v))
+				log.Warn(context.TODO(), "Failed to convert int when parsing grpc.client.maxMaxAttempts, set to default",
+					log.String("role", p.Domain),
+					log.String("grpc.client.maxMaxAttempts", v))
 				return maxAttempts
 			}
 			return v
@@ -377,9 +377,9 @@ func (p *GrpcClientConfig) Init(domain string, base *BaseTable) {
 			}
 			_, err := strconv.ParseFloat(v, 64)
 			if err != nil {
-				mlog.Warn(context.TODO(), "Failed to convert int when parsing grpc.client.initialBackoff, set to default",
-					mlog.String("role", p.Domain),
-					mlog.String("grpc.client.initialBackoff", v))
+				log.Warn(context.TODO(), "Failed to convert int when parsing grpc.client.initialBackoff, set to default",
+					log.String("role", p.Domain),
+					log.String("grpc.client.initialBackoff", v))
 				return initialBackoff
 			}
 			return v
@@ -398,9 +398,9 @@ func (p *GrpcClientConfig) Init(domain string, base *BaseTable) {
 			}
 			_, err := strconv.ParseFloat(v, 64)
 			if err != nil {
-				mlog.Warn(context.TODO(), "Failed to convert int when parsing grpc.client.maxBackoff, set to default",
-					mlog.String("role", p.Domain),
-					mlog.String("grpc.client.maxBackoff", v))
+				log.Warn(context.TODO(), "Failed to convert int when parsing grpc.client.maxBackoff, set to default",
+					log.String("role", p.Domain),
+					log.String("grpc.client.maxBackoff", v))
 				return maxBackoff
 			}
 			return v
@@ -427,9 +427,9 @@ func (p *GrpcClientConfig) Init(domain string, base *BaseTable) {
 			}
 			_, err := strconv.ParseBool(v)
 			if err != nil {
-				mlog.Warn(context.TODO(), "Failed to convert int when parsing grpc.client.compressionEnabled, set to default",
-					mlog.String("role", p.Domain),
-					mlog.String("grpc.client.compressionEnabled", v))
+				log.Warn(context.TODO(), "Failed to convert int when parsing grpc.client.compressionEnabled, set to default",
+					log.String("role", p.Domain),
+					log.String("grpc.client.compressionEnabled", v))
 				return compressionEnabled
 			}
 			return v
@@ -447,9 +447,9 @@ func (p *GrpcClientConfig) Init(domain string, base *BaseTable) {
 			}
 			_, err := strconv.Atoi(v)
 			if err != nil {
-				mlog.Warn(context.TODO(), "Failed to parse grpc.client.minResetInterval, set to default",
-					mlog.String("role", p.Domain), mlog.String("grpc.client.minResetInterval", v),
-					mlog.Err(err))
+				log.Warn(context.TODO(), "Failed to parse grpc.client.minResetInterval, set to default",
+					log.String("role", p.Domain), log.String("grpc.client.minResetInterval", v),
+					log.Err(err))
 				return "1000"
 			}
 			return v
@@ -467,9 +467,9 @@ func (p *GrpcClientConfig) Init(domain string, base *BaseTable) {
 			}
 			_, err := strconv.Atoi(v)
 			if err != nil {
-				mlog.Warn(context.TODO(), "Failed to parse grpc.client.minSessionCheckInterval, set to default",
-					mlog.String("role", p.Domain), mlog.String("grpc.client.minSessionCheckInterval", v),
-					mlog.Err(err))
+				log.Warn(context.TODO(), "Failed to parse grpc.client.minSessionCheckInterval, set to default",
+					log.String("role", p.Domain), log.String("grpc.client.minSessionCheckInterval", v),
+					log.Err(err))
 				return "200"
 			}
 			return v
@@ -487,9 +487,9 @@ func (p *GrpcClientConfig) Init(domain string, base *BaseTable) {
 			}
 			_, err := strconv.Atoi(v)
 			if err != nil {
-				mlog.Warn(context.TODO(), "Failed to parse grpc.client.maxCancelError, set to default",
-					mlog.String("role", p.Domain), mlog.String("grpc.client.maxCancelError", v),
-					mlog.Err(err))
+				log.Warn(context.TODO(), "Failed to parse grpc.client.maxCancelError, set to default",
+					log.String("role", p.Domain), log.String("grpc.client.maxCancelError", v),
+					log.Err(err))
 				return "32"
 			}
 			return v
@@ -593,7 +593,7 @@ func (p *InternalTLSConfig) GetClientCreds(ctx context.Context) (credentials.Tra
 	sni := p.InternalTLSSNI.GetValue()
 	creds, err := credentials.NewClientTLSFromFile(caPemPath, sni)
 	if err != nil {
-		mlog.Error(ctx, "Failed to create internal TLS credentials", mlog.Err(err))
+		log.Error(ctx, "Failed to create internal TLS credentials", log.Err(err))
 		return nil, fmt.Errorf("failed to create internal TLS credentials: %w", err)
 	}
 	return creds, nil

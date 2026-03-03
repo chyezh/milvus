@@ -13,7 +13,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/proxy"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
@@ -50,14 +50,14 @@ func (s *HelloMilvusSuite) TestHybridSearch() {
 
 	err = merr.Error(createCollectionStatus)
 	if err != nil {
-		mlog.Warn(context.TODO(), "createCollectionStatus fail reason", mlog.Err(err))
+		log.Warn(context.TODO(), "createCollectionStatus fail reason", log.Err(err))
 	}
 
-	mlog.Info(context.TODO(), "CreateCollection result", mlog.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := c.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.True(merr.Ok(showCollectionsResp.GetStatus()))
-	mlog.Info(context.TODO(), "ShowCollections result", mlog.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	fVecColumn := integration.NewFloatVectorFieldData(integration.FloatVecField, rowNum, dim)
 	bVecColumn := integration.NewBinaryVectorFieldData(integration.BinVecField, rowNum, dim)
@@ -91,7 +91,7 @@ func (s *HelloMilvusSuite) TestHybridSearch() {
 	s.NoError(err)
 	s.NotEmpty(segments)
 	for _, segment := range segments {
-		mlog.Info(context.TODO(), "ShowSegments result", mlog.String("segment", segment.String()))
+		log.Info(context.TODO(), "ShowSegments result", log.String("segment", segment.String()))
 	}
 
 	// load without index on vector fields
@@ -112,7 +112,7 @@ func (s *HelloMilvusSuite) TestHybridSearch() {
 	s.NoError(err)
 	err = merr.Error(createIndexStatus)
 	if err != nil {
-		mlog.Warn(context.TODO(), "createIndexStatus fail reason", mlog.Err(err))
+		log.Warn(context.TODO(), "createIndexStatus fail reason", log.Err(err))
 	}
 	s.WaitForIndexBuilt(ctx, collectionName, integration.FloatVecField)
 
@@ -134,7 +134,7 @@ func (s *HelloMilvusSuite) TestHybridSearch() {
 	s.NoError(err)
 	err = merr.Error(createIndexStatus)
 	if err != nil {
-		mlog.Warn(context.TODO(), "createIndexStatus fail reason", mlog.Err(err))
+		log.Warn(context.TODO(), "createIndexStatus fail reason", log.Err(err))
 	}
 	s.WaitForIndexBuiltWithIndexName(ctx, collectionName, integration.BinVecField, "_default_binary")
 
@@ -156,7 +156,7 @@ func (s *HelloMilvusSuite) TestHybridSearch() {
 	s.NoError(err)
 	err = merr.Error(createIndexStatus)
 	if err != nil {
-		mlog.Warn(context.TODO(), "createIndexStatus fail reason", mlog.Err(err))
+		log.Warn(context.TODO(), "createIndexStatus fail reason", log.Err(err))
 	}
 	s.WaitForIndexBuiltWithIndexName(ctx, collectionName, integration.SparseFloatVecField, "_default_sparse")
 
@@ -168,7 +168,7 @@ func (s *HelloMilvusSuite) TestHybridSearch() {
 	s.NoError(err)
 	err = merr.Error(loadStatus)
 	if err != nil {
-		mlog.Warn(context.TODO(), "LoadCollection fail reason", mlog.Err(err))
+		log.Warn(context.TODO(), "LoadCollection fail reason", log.Err(err))
 	}
 	s.WaitForLoad(ctx, collectionName)
 
@@ -239,7 +239,7 @@ func (s *HelloMilvusSuite) TestHybridSearch() {
 
 	s.NoError(merr.CheckRPCCall(searchResult, err))
 
-	mlog.Info(context.TODO(), "TestHybridSearch succeed")
+	log.Info(context.TODO(), "TestHybridSearch succeed")
 }
 
 // this is special case to verify the correctness of hybrid search reduction
@@ -271,14 +271,14 @@ func (s *HelloMilvusSuite) TestHybridSearchSingleSubReq() {
 
 	err = merr.Error(createCollectionStatus)
 	if err != nil {
-		mlog.Warn(context.TODO(), "createCollectionStatus fail reason", mlog.Err(err))
+		log.Warn(context.TODO(), "createCollectionStatus fail reason", log.Err(err))
 	}
 
-	mlog.Info(context.TODO(), "CreateCollection result", mlog.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := c.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.True(merr.Ok(showCollectionsResp.GetStatus()))
-	mlog.Info(context.TODO(), "ShowCollections result", mlog.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	fVecColumn := integration.NewFloatVectorFieldData(integration.FloatVecField, rowNum, dim)
 	hashKeys := integration.GenerateHashKeys(rowNum)
@@ -310,7 +310,7 @@ func (s *HelloMilvusSuite) TestHybridSearchSingleSubReq() {
 	s.NoError(err)
 	s.NotEmpty(segments)
 	for _, segment := range segments {
-		mlog.Info(context.TODO(), "ShowSegments result", mlog.String("segment", segment.String()))
+		log.Info(context.TODO(), "ShowSegments result", log.String("segment", segment.String()))
 	}
 
 	// load without index on vector fields
@@ -331,7 +331,7 @@ func (s *HelloMilvusSuite) TestHybridSearchSingleSubReq() {
 	s.NoError(err)
 	err = merr.Error(createIndexStatus)
 	if err != nil {
-		mlog.Warn(context.TODO(), "createIndexStatus fail reason", mlog.Err(err))
+		log.Warn(context.TODO(), "createIndexStatus fail reason", log.Err(err))
 	}
 	s.WaitForIndexBuilt(ctx, collectionName, integration.FloatVecField)
 
@@ -406,5 +406,5 @@ func (s *HelloMilvusSuite) TestHybridSearchSingleSubReq() {
 	s.Equal(topk, len(searchResult.GetResults().GetIds().GetIntId().Data))
 	s.Equal(topk, len(searchResult.GetResults().GetScores()))
 	s.Equal(int64(nq), searchResult.GetResults().GetNumQueries())
-	mlog.Info(context.TODO(), "TestHybridSearchSingleSubRequest succeed")
+	log.Info(context.TODO(), "TestHybridSearchSingleSubRequest succeed")
 }

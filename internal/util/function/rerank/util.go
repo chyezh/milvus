@@ -26,7 +26,7 @@ import (
 	"strings"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -539,7 +539,7 @@ func genIdGroupingMap(multipSearchResultData []*schemapb.SearchResultData) (map[
 	idGroupValue := map[any]any{}
 	for _, result := range multipSearchResultData {
 		if result.GetGroupByFieldValue() == nil {
-			mlog.Warn(context.TODO(), "Group value is nil, this is due to empty results in search reduce phase")
+			log.Warn(context.TODO(), "Group value is nil, this is due to empty results in search reduce phase")
 			continue
 		}
 		size := typeutil.GetSizeOfIDs(result.Ids)

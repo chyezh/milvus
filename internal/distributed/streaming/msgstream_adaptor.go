@@ -4,7 +4,7 @@ import (
 	"context"
 
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
@@ -95,11 +95,11 @@ func (m *delegatorMsgstreamAdaptor) Seek(ctx context.Context, msgPositions []*ms
 	}
 	position := msgPositions[0]
 	startFrom := adaptor.MustGetMessageIDFromMQWrapperIDBytesWithWALName(message.WALName(position.WALName), position.MsgID)
-	mlog.Info(context.TODO(), 
+	log.Info(context.TODO(), 
 		"delegator msgstream adaptor seeks from position with scanner",
-		mlog.String("channel", position.GetChannelName()),
-		mlog.Any("startFromMessageID", startFrom),
-		mlog.Uint64("timestamp", position.GetTimestamp()),
+		log.String("channel", position.GetChannelName()),
+		log.Any("startFromMessageID", startFrom),
+		log.Uint64("timestamp", position.GetTimestamp()),
 	)
 	handler := adaptor.NewMsgPackAdaptorHandler()
 	if funcutil.IsControlChannel(position.GetChannelName()) {

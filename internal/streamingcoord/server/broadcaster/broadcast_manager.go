@@ -11,7 +11,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/resource"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
@@ -32,7 +32,7 @@ func RecoverBroadcaster(ctx context.Context) (Broadcaster, error) {
 // newBroadcastTaskManager creates a new broadcast task manager with recovery info.
 // return the manager, the pending broadcast tasks and the pending ack callback tasks.
 func newBroadcastTaskManager(protos []*streamingpb.BroadcastTask) *broadcastTaskManager {
-	logger := resource.Resource().Logger().With(mlog.FieldComponent("broadcaster"))
+	logger := resource.Resource().Logger().With(log.FieldComponent("broadcaster"))
 	metrics := newBroadcasterMetrics()
 	rkLocker := newResourceKeyLocker()
 	ackScheduler := newAckCallbackScheduler(logger)
@@ -94,7 +94,7 @@ func newBroadcastTaskManager(protos []*streamingpb.BroadcastTask) *broadcastTask
 
 // broadcastTaskManager is the manager of the broadcast task.
 type broadcastTaskManager struct {
-	mlog.Binder
+	log.Binder
 
 	lifetime           *typeutil.Lifetime
 	mu                 *sync.Mutex
@@ -187,12 +187,12 @@ func (bm *broadcastTaskManager) broadcast(ctx context.Context, msg message.Broad
 func (bm *broadcastTaskManager) LegacyAck(ctx context.Context, broadcastID uint64, vchannel string) error {
 	task, ok := bm.getBroadcastTaskByID(broadcastID)
 	if !ok {
-		bm.Logger().Warn(nil, "broadcast task not found, it may already acked, ignore the request", mlog.Uint64("broadcastID", broadcastID), mlog.String("vchannel", vchannel))
+		bm.Logger().Warn(nil, "broadcast task not found, it may already acked, ignore the request", log.Uint64("broadcastID", broadcastID), log.String("vchannel", vchannel))
 		return nil
 	}
 	msg := task.GetImmutableMessageFromVChannel(vchannel)
 	if msg == nil {
-		task.Logger().Warn(nil, "vchannel is already acked, ignore the ack request", mlog.String("vchannel", vchannel))
+		task.Logger().Warn(nil, "vchannel is already acked, ignore the ack request", log.String("vchannel", vchannel))
 		return nil
 	}
 	return bm.Ack(ctx, msg)
@@ -209,8 +209,8 @@ func (bm *broadcastTaskManager) Ack(ctx context.Context, msg message.ImmutableMe
 	if !ok {
 		bm.Logger().Debug(nil, 
 			"task is tombstone, ignored the ack request",
-			mlog.Uint64("broadcastID", msg.BroadcastHeader().BroadcastID),
-			mlog.String("vchannel", msg.VChannel()))
+			log.Uint64("broadcastID", msg.BroadcastHeader().BroadcastID),
+			log.String("vchannel", msg.VChannel()))
 		return nil
 	}
 	return t.Ack(ctx, msg)
@@ -225,7 +225,7 @@ func (bm *broadcastTaskManager) DropTombstone(ctx context.Context, broadcastID u
 
 	t, ok := bm.getBroadcastTaskByID(broadcastID)
 	if !ok {
-		bm.Logger().Debug(nil, "task is not found, ignored the drop tombstone request", mlog.Uint64("broadcastID", broadcastID))
+		bm.Logger().Debug(nil, "task is not found, ignored the drop tombstone request", log.Uint64("broadcastID", broadcastID))
 		return nil
 	}
 	if err := t.DropTombstone(ctx); err != nil {

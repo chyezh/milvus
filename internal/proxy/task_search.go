@@ -28,7 +28,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
@@ -123,15 +123,15 @@ func (t *searchTask) CanSkipAllocTimestamp() bool {
 	} else {
 		collID, err := globalMetaCache.GetCollectionID(context.Background(), t.request.GetDbName(), t.request.GetCollectionName())
 		if err != nil { // err is not nil if collection not exists
-			mlog.Warn(t.ctx, "search task get collectionID failed, can't skip alloc timestamp",
-				mlog.String("collectionName", t.request.GetCollectionName()), mlog.Err(err))
+			log.Warn(t.ctx, "search task get collectionID failed, can't skip alloc timestamp",
+				log.String("collectionName", t.request.GetCollectionName()), log.Err(err))
 			return false
 		}
 
 		collectionInfo, err2 := globalMetaCache.GetCollectionInfo(context.Background(), t.request.GetDbName(), t.request.GetCollectionName(), collID)
 		if err2 != nil {
-			mlog.Warn(t.ctx, "search task get collection info failed, can't skip alloc timestamp",
-				mlog.String("collectionName", t.request.GetCollectionName()), mlog.Err(err))
+			log.Warn(t.ctx, "search task get collection info failed, can't skip alloc timestamp",
+				log.String("collectionName", t.request.GetCollectionName()), log.Err(err))
 			return false
 		}
 		consistencyLevel = collectionInfo.consistencyLevel
@@ -158,13 +158,13 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 	t.SearchRequest.CollectionID = collID
 	t.schema, err = globalMetaCache.GetCollectionSchema(ctx, t.request.GetDbName(), collectionName)
 	if err != nil {
-		mlog.Warn(context.TODO(), "get collection schema failed", mlog.Err(err))
+		log.Warn(context.TODO(), "get collection schema failed", log.Err(err))
 		return err
 	}
 
 	t.partitionKeyMode, err = isPartitionKeyMode(ctx, t.request.GetDbName(), collectionName)
 	if err != nil {
-		mlog.Warn(context.TODO(), "is partition key mode failed", mlog.Err(err))
+		log.Warn(context.TODO(), "is partition key mode failed", log.Err(err))
 		return err
 	}
 	if t.partitionKeyMode && len(t.request.GetPartitionNames()) != 0 {
@@ -179,7 +179,7 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 		// translate partition name to partition ids. Use regex-pattern to match partition name.
 		t.SearchRequest.PartitionIDs, err = getPartitionIDs(ctx, t.request.GetDbName(), collectionName, t.request.GetPartitionNames())
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to get partition ids", mlog.Err(err))
+			log.Warn(context.TODO(), "failed to get partition ids", log.Err(err))
 			return err
 		}
 	}
@@ -191,15 +191,15 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 	var aggs []agg.AggregateBase
 	t.translatedOutputFields, t.userOutputFields, t.userDynamicFields, aggs, t.userRequestedPkFieldExplicitly, err = translateOutputFields(t.request.OutputFields, t.schema, true)
 	if err != nil {
-		mlog.Warn(context.TODO(), "translate output fields failed", mlog.Err(err), mlog.Any("schema", t.schema))
+		log.Warn(context.TODO(), "translate output fields failed", log.Err(err), log.Any("schema", t.schema))
 		return err
 	}
 	if len(aggs) > 0 {
-		mlog.Warn(context.TODO(), "aggregates are not supported in search request", mlog.Strings("aggregates", lo.Map(aggs, func(agg agg.AggregateBase, _ int) string { return agg.OriginalName() })))
+		log.Warn(context.TODO(), "aggregates are not supported in search request", log.Strings("aggregates", lo.Map(aggs, func(agg agg.AggregateBase, _ int) string { return agg.OriginalName() })))
 		return errors.New("aggregates are not supported in search request")
 	}
-	mlog.Debug(context.TODO(), "translate output fields",
-		mlog.Strings("output fields", t.translatedOutputFields))
+	log.Debug(context.TODO(), "translate output fields",
+		log.Strings("output fields", t.translatedOutputFields))
 
 	if t.SearchRequest.GetIsAdvanced() {
 		if len(t.request.GetSubReqs()) > defaultMaxSearchRequest {
@@ -209,7 +209,7 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 
 	nq, err := t.checkNq(ctx)
 	if err != nil {
-		mlog.Info(context.TODO(), "failed to check nq", mlog.Err(err))
+		log.Info(context.TODO(), "failed to check nq", log.Err(err))
 		return err
 	}
 	t.SearchRequest.Nq = nq
@@ -220,7 +220,7 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 
 	outputFieldIDs, err := getOutputFieldIDs(t.schema, t.translatedOutputFields)
 	if err != nil {
-		mlog.Info(context.TODO(), "fail to get output field ids", mlog.Err(err))
+		log.Info(context.TODO(), "fail to get output field ids", log.Err(err))
 		return err
 	}
 	t.SearchRequest.OutputFieldsId = outputFieldIDs
@@ -233,14 +233,14 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 		err = t.initSearchRequest(ctx)
 	}
 	if err != nil {
-		mlog.Debug(context.TODO(), "init search request failed", mlog.Err(err))
+		log.Debug(context.TODO(), "init search request failed", log.Err(err))
 		return err
 	}
 
 	collectionInfo, err2 := globalMetaCache.GetCollectionInfo(ctx, t.request.GetDbName(), collectionName, t.CollectionID)
 	if err2 != nil {
-		mlog.Warn(context.TODO(), "Proxy::searchTask::PreExecute failed to GetCollectionInfo from cache",
-			mlog.String("collectionName", collectionName), mlog.Int64("collectionID", t.CollectionID), mlog.Err(err2))
+		log.Warn(context.TODO(), "Proxy::searchTask::PreExecute failed to GetCollectionInfo from cache",
+			log.String("collectionName", collectionName), log.Int64("collectionID", t.CollectionID), log.Err(err2))
 		return err2
 	}
 	guaranteeTs := t.request.GetGuaranteeTimestamp()
@@ -303,13 +303,13 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 	timezone, exist := funcutil.TryGetAttrByKeyFromRepeatedKV(common.TimezoneKey, t.request.SearchParams)
 	if exist {
 		if !timestamptz.IsTimezoneValid(timezone) {
-			mlog.Info(context.TODO(), "get invalid timezone from request", mlog.String("timezone", timezone))
+			log.Info(context.TODO(), "get invalid timezone from request", log.String("timezone", timezone))
 			return merr.WrapErrParameterInvalidMsg("unknown or invalid IANA Time Zone ID: %s", timezone)
 		}
-		mlog.Debug(context.TODO(), "determine timezone from request", mlog.String("user defined timezone", timezone))
+		log.Debug(context.TODO(), "determine timezone from request", log.String("user defined timezone", timezone))
 	} else {
 		timezone = getColTimezone(collectionInfo)
-		mlog.Debug(context.TODO(), "determine timezone from collection", mlog.Any("collection timezone", timezone))
+		log.Debug(context.TODO(), "determine timezone from collection", log.Any("collection timezone", timezone))
 	}
 	t.resolvedTimezoneStr = timezone
 
@@ -319,12 +319,12 @@ func (t *searchTask) PreExecute(ctx context.Context) error {
 		return err
 	}
 
-	mlog.Debug(context.TODO(), "search PreExecute done.",
-		mlog.Uint64("guarantee_ts", guaranteeTs),
-		mlog.Bool("use_default_consistency", useDefaultConsistency),
-		mlog.Any("consistency level", consistencyLevel),
-		mlog.Uint64("timeout_ts", t.SearchRequest.GetTimeoutTimestamp()),
-		mlog.Uint64("collection_ttl_timestamps", t.CollectionTtlTimestamps))
+	log.Debug(context.TODO(), "search PreExecute done.",
+		log.Uint64("guarantee_ts", guaranteeTs),
+		log.Bool("use_default_consistency", useDefaultConsistency),
+		log.Any("consistency level", consistencyLevel),
+		log.Uint64("timeout_ts", t.SearchRequest.GetTimeoutTimestamp()),
+		log.Uint64("collection_ttl_timestamps", t.CollectionTtlTimestamps))
 	return nil
 }
 
@@ -371,20 +371,20 @@ func setQueryInfoIfMvEnable(queryInfo *planpb.QueryInfo, t *searchTask, plan *pl
 	if t.enableMaterializedView {
 		partitionKeyFieldSchema, err := typeutil.GetPartitionKeyFieldSchema(t.schema.CollectionSchema)
 		if err != nil {
-			mlog.Warn(t.ctx, "failed to get partition key field schema", mlog.Err(err))
+			log.Warn(t.ctx, "failed to get partition key field schema", log.Err(err))
 			return err
 		}
 		if typeutil.IsFieldDataTypeSupportMaterializedView(partitionKeyFieldSchema) {
 			collInfo, colErr := globalMetaCache.GetCollectionInfo(t.ctx, t.request.GetDbName(), t.collectionName, t.CollectionID)
 			if colErr != nil {
-				mlog.Warn(t.ctx, "failed to get collection info", mlog.Err(colErr))
+				log.Warn(t.ctx, "failed to get collection info", log.Err(colErr))
 				return err
 			}
 
 			if collInfo.partitionKeyIsolation {
 				expr, err := exprutil.ParseExprFromPlan(plan)
 				if err != nil {
-					mlog.Warn(t.ctx, "failed to parse expr from plan during MV", mlog.Err(err))
+					log.Warn(t.ctx, "failed to parse expr from plan during MV", log.Err(err))
 					return err
 				}
 				err = exprutil.ValidatePartitionKeyIsolation(expr)
@@ -410,12 +410,12 @@ func (t *searchTask) initAdvancedSearchRequest(ctx context.Context) error {
 	// TODO: Use function score uniformly to implement related logic
 	if t.request.FunctionScore != nil {
 		if t.functionScore, err = rerank.NewFunctionScore(t.schema.CollectionSchema, t.request.FunctionScore, &models.ModelExtraInfo{ClusterID: paramtable.Get().CommonCfg.ClusterPrefix.GetValue(), DBName: t.request.GetDbName()}); err != nil {
-			mlog.Warn(context.TODO(), "Failed to create function score", mlog.Err(err))
+			log.Warn(context.TODO(), "Failed to create function score", log.Err(err))
 			return err
 		}
 	} else {
 		if t.functionScore, err = rerank.NewFunctionScoreWithlegacy(t.schema.CollectionSchema, t.request.GetSearchParams()); err != nil {
-			mlog.Warn(context.TODO(), "Failed to create function by legacy info", mlog.Err(err))
+			log.Warn(context.TODO(), "Failed to create function by legacy info", log.Err(err))
 			return err
 		}
 	}
@@ -426,13 +426,13 @@ func (t *searchTask) initAdvancedSearchRequest(ctx context.Context) error {
 	})
 
 	if t.rankParams, err = parseRankParams(t.request.GetSearchParams(), t.schema.CollectionSchema); err != nil {
-		mlog.Error(context.TODO(), "parseRankParams failed", mlog.Err(err))
+		log.Error(context.TODO(), "parseRankParams failed", log.Err(err))
 		return err
 	}
 
 	// Parse order_by_fields from main search params
 	if t.orderByFields, err = parseOrderByFields(t.request.GetSearchParams(), t.schema.CollectionSchema); err != nil {
-		mlog.Error(context.TODO(), "parseOrderByFields failed", mlog.Err(err))
+		log.Error(context.TODO(), "parseOrderByFields failed", log.Err(err))
 		return err
 	}
 
@@ -548,9 +548,9 @@ func (t *searchTask) initAdvancedSearchRequest(ctx context.Context) error {
 		}
 		t.SearchRequest.SubReqs[index] = internalSubReq
 		t.queryInfos[index] = queryInfo
-		mlog.Debug(context.TODO(), "proxy init search request",
-			mlog.Int64s("plan.OutputFieldIds", plan.GetOutputFieldIds()),
-			mlog.Stringer("plan", plan)) // may be very large if large term passed.
+		log.Debug(context.TODO(), "proxy init search request",
+			log.Int64s("plan.OutputFieldIds", plan.GetOutputFieldIds()),
+			log.Stringer("plan", plan)) // may be very large if large term passed.
 	}
 
 	if embedding.HasNonBM25AndMinHashFunctions(t.schema.CollectionSchema.Functions, queryFieldIDs) {
@@ -668,7 +668,7 @@ func (t *searchTask) initSearchRequest(ctx context.Context) error {
 
 	if t.request.FunctionScore != nil {
 		if t.functionScore, err = rerank.NewFunctionScore(t.schema.CollectionSchema, t.request.FunctionScore, &models.ModelExtraInfo{ClusterID: paramtable.Get().CommonCfg.ClusterPrefix.GetValue(), DBName: t.request.GetDbName()}); err != nil {
-			mlog.Warn(context.TODO(), "Failed to create function score", mlog.Err(err))
+			log.Warn(context.TODO(), "Failed to create function score", log.Err(err))
 			return err
 		}
 
@@ -777,9 +777,9 @@ func (t *searchTask) initSearchRequest(ctx context.Context) error {
 		sp.AddEvent("Call-function-udf")
 	}
 
-	mlog.Debug(context.TODO(), "proxy init search request",
-		mlog.Int64s("plan.OutputFieldIds", plan.GetOutputFieldIds()),
-		mlog.Stringer("plan", plan)) // may be very large if large term passed.
+	log.Debug(context.TODO(), "proxy init search request",
+		log.Int64s("plan.OutputFieldIds", plan.GetOutputFieldIds()),
+		log.Stringer("plan", plan)) // may be very large if large term passed.
 
 	return nil
 }
@@ -824,29 +824,29 @@ func (t *searchTask) tryGeneratePlan(params []*commonpb.KeyValuePair, dsl string
 	start := time.Now()
 	plan, planErr := planparserv2.CreateSearchPlanArgs(t.schema.schemaHelper, dsl, annsFieldName, searchInfo.planInfo, exprTemplateValues, t.request.GetFunctionScore(), &planparserv2.ParserVisitorArgs{Timezone: t.resolvedTimezoneStr})
 	if planErr != nil {
-		mlog.Warn(t.ctx, "failed to create query plan", mlog.Err(planErr),
-			mlog.String("dsl", dsl), // may be very large if large term passed.
-			mlog.String("anns field", annsFieldName), mlog.Any("query info", searchInfo.planInfo))
+		log.Warn(t.ctx, "failed to create query plan", log.Err(planErr),
+			log.String("dsl", dsl), // may be very large if large term passed.
+			log.String("anns field", annsFieldName), log.Any("query info", searchInfo.planInfo))
 		metrics.ProxyParseExpressionLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), "search", metrics.FailLabel).Observe(float64(time.Since(start).Milliseconds()))
 		return nil, nil, 0, false, nil, merr.WrapErrParameterInvalidMsg("failed to create query plan: %v", planErr)
 	}
 	metrics.ProxyParseExpressionLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), "search", metrics.SuccessLabel).Observe(float64(time.Since(start).Milliseconds()))
-	mlog.Debug(t.ctx, "create query plan",
-		mlog.String("dsl", t.request.Dsl), // may be very large if large term passed.
-		mlog.String("anns field", annsFieldName), mlog.Any("query info", searchInfo.planInfo))
+	log.Debug(t.ctx, "create query plan",
+		log.String("dsl", t.request.Dsl), // may be very large if large term passed.
+		log.String("anns field", annsFieldName), log.Any("query info", searchInfo.planInfo))
 	return plan, searchInfo.planInfo, searchInfo.offset, searchInfo.isIterator, searchInfo.orderByFields, nil
 }
 
 func (t *searchTask) tryParsePartitionIDsFromPlan(plan *planpb.PlanNode) ([]int64, error) {
 	expr, err := exprutil.ParseExprFromPlan(plan)
 	if err != nil {
-		mlog.Warn(t.ctx, "failed to parse expr", mlog.Err(err))
+		log.Warn(t.ctx, "failed to parse expr", log.Err(err))
 		return nil, err
 	}
 	partitionKeys := exprutil.ParseKeys(expr, exprutil.PartitionKey)
 	hashedPartitionNames, err := assignPartitionKeys(t.ctx, t.request.GetDbName(), t.collectionName, partitionKeys)
 	if err != nil {
-		mlog.Warn(t.ctx, "failed to assign partition keys", mlog.Err(err))
+		log.Warn(t.ctx, "failed to assign partition keys", log.Err(err))
 		return nil, err
 	}
 
@@ -854,7 +854,7 @@ func (t *searchTask) tryParsePartitionIDsFromPlan(plan *planpb.PlanNode) ([]int6
 		// translate partition name to partition ids. Use regex-pattern to match partition name.
 		PartitionIDs, err2 := getPartitionIDs(t.ctx, t.request.GetDbName(), t.collectionName, hashedPartitionNames)
 		if err2 != nil {
-			mlog.Warn(t.ctx, "failed to get partition ids", mlog.Err(err2))
+			log.Warn(t.ctx, "failed to get partition ids", log.Err(err2))
 			return nil, err2
 		}
 		return PartitionIDs, nil
@@ -876,13 +876,13 @@ func (t *searchTask) Execute(ctx context.Context) error {
 		Exec:           t.searchShard,
 	})
 	if err != nil {
-		mlog.Warn(context.TODO(), "search execute failed", mlog.Err(err))
+		log.Warn(context.TODO(), "search execute failed", log.Err(err))
 		return errors.Wrap(err, "failed to search")
 	}
 
-	mlog.Debug(context.TODO(), "Search Execute done.",
-		mlog.Int64("collection", t.GetCollectionID()),
-		mlog.Int64s("partitionIDs", t.GetPartitionIDs()))
+	log.Debug(context.TODO(), "Search Execute done.",
+		log.Int64("collection", t.GetCollectionID()),
+		log.Int64s("partitionIDs", t.GetPartitionIDs()))
 	return nil
 }
 
@@ -915,7 +915,7 @@ func (t *searchTask) PostExecute(ctx context.Context) error {
 
 	toReduceResults, err := t.collectSearchResults(ctx)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to collect search results", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to collect search results", log.Err(err))
 		return err
 	}
 
@@ -945,7 +945,7 @@ func (t *searchTask) PostExecute(ctx context.Context) error {
 	// call pipeline
 	pipeline, err := newSearchPipeline(t)
 	if err != nil {
-		mlog.Warn(context.TODO(), "Faild to create post process pipeline")
+		log.Warn(context.TODO(), "Faild to create post process pipeline")
 		return err
 	}
 	if t.result, t.storageCost, err = pipeline.Run(ctx, sp, toReduceResults, storageCost); err != nil {
@@ -998,7 +998,7 @@ func (t *searchTask) PostExecute(ctx context.Context) error {
 	for i, fieldData := range fieldsData {
 		if fieldData.Type == schemapb.DataType_Geometry {
 			if err := validateGeometryFieldSearchResult(&fieldsData[i]); err != nil {
-				mlog.Warn(context.TODO(), "fail to validate geometry field search result", mlog.Err(err))
+				log.Warn(context.TODO(), "fail to validate geometry field search result", log.Err(err))
 				return err
 			}
 		}
@@ -1006,7 +1006,7 @@ func (t *searchTask) PostExecute(ctx context.Context) error {
 	if t.result.GetResults().GetGroupByFieldValue() != nil &&
 		t.result.GetResults().GetGroupByFieldValue().GetType() == schemapb.DataType_Geometry {
 		if err := validateGeometryFieldSearchResult(&t.result.Results.GroupByFieldValue); err != nil {
-			mlog.Warn(context.TODO(), "fail to validate geometry field search result", mlog.Err(err))
+			log.Warn(context.TODO(), "fail to validate geometry field search result", log.Err(err))
 			return err
 		}
 	}
@@ -1020,23 +1020,23 @@ func (t *searchTask) PostExecute(ctx context.Context) error {
 
 	timeFields := parseTimeFields(t.request.SearchParams)
 	if timeFields != nil {
-		mlog.Debug(context.TODO(), "extracting fields for timestamptz", mlog.Strings("fields", timeFields))
+		log.Debug(context.TODO(), "extracting fields for timestamptz", log.Strings("fields", timeFields))
 		err = extractFieldsFromResults(t.result.GetResults().GetFieldsData(), t.resolvedTimezoneStr, timeFields)
 		if err != nil {
-			mlog.Warn(context.TODO(), "fail to extract fields for timestamptz", mlog.Err(err))
+			log.Warn(context.TODO(), "fail to extract fields for timestamptz", log.Err(err))
 			return err
 		}
 	} else {
 		err = timestamptzUTC2IsoStr(t.result.GetResults().GetFieldsData(), t.resolvedTimezoneStr)
 		if err != nil {
-			mlog.Warn(context.TODO(), "fail to translate timestamp", mlog.Err(err))
+			log.Warn(context.TODO(), "fail to translate timestamp", log.Err(err))
 			return err
 		}
 	}
 
-	mlog.Debug(context.TODO(), "Search post execute done",
-		mlog.Int64("collection", t.GetCollectionID()),
-		mlog.Int64s("partitionIDs", t.GetPartitionIDs()))
+	log.Debug(context.TODO(), "Search post execute done",
+		log.Int64("collection", t.GetCollectionID()),
+		log.Int64s("partitionIDs", t.GetPartitionIDs()))
 	return nil
 }
 
@@ -1055,19 +1055,19 @@ func (t *searchTask) searchShard(ctx context.Context, nodeID int64, qn types.Que
 
 	result, err = qn.Search(ctx, req)
 	if err != nil {
-		mlog.Warn(context.TODO(), "QueryNode search return error", mlog.Err(err))
+		log.Warn(context.TODO(), "QueryNode search return error", log.Err(err))
 		// globalMetaCache.DeprecateShardCache(t.request.GetDbName(), t.collectionName)
 		t.shardClientMgr.DeprecateShardCache(t.request.GetDbName(), t.collectionName)
 		return err
 	}
 	if result.GetStatus().GetErrorCode() == commonpb.ErrorCode_NotShardLeader {
-		mlog.Warn(context.TODO(), "QueryNode is not shardLeader")
+		log.Warn(context.TODO(), "QueryNode is not shardLeader")
 		t.shardClientMgr.DeprecateShardCache(t.request.GetDbName(), t.collectionName)
 		return merr.Error(result.GetStatus())
 	}
 	if result.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-		mlog.Warn(context.TODO(), "QueryNode search result error",
-			mlog.String("reason", result.GetStatus().GetReason()))
+		log.Warn(context.TODO(), "QueryNode search result error",
+			log.String("reason", result.GetStatus().GetReason()))
 		return errors.Wrapf(merr.Error(result.GetStatus()), "fail to search on QueryNode %d", nodeID)
 	}
 	if t.resultBuf != nil {
@@ -1110,15 +1110,15 @@ func (t *searchTask) estimateResultSize(nq int64, topK int64) (int64, error) {
 func (t *searchTask) collectSearchResults(ctx context.Context) ([]*internalpb.SearchResults, error) {
 	select {
 	case <-t.TraceCtx().Done():
-		mlog.Warn(ctx, "search task wait to finish timeout!")
+		log.Warn(ctx, "search task wait to finish timeout!")
 		return nil, fmt.Errorf("search task wait to finish timeout, msgID=%d", t.ID())
 	default:
 		toReduceResults := make([]*internalpb.SearchResults, 0)
-		mlog.Debug(ctx, "all searches are finished or canceled")
+		log.Debug(ctx, "all searches are finished or canceled")
 		t.resultBuf.Range(func(res *internalpb.SearchResults) bool {
 			toReduceResults = append(toReduceResults, res)
-			mlog.Debug(ctx, "proxy receives one search result",
-				mlog.Int64("sourceID", res.GetBase().GetSourceID()))
+			log.Debug(ctx, "proxy receives one search result",
+				log.Int64("sourceID", res.GetBase().GetSourceID()))
 			return true
 		})
 		return toReduceResults, nil

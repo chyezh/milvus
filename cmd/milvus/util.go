@@ -20,7 +20,7 @@ import (
 
 	"github.com/milvus-io/milvus/cmd/roles"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/etcd"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -204,7 +204,7 @@ func getHelp() string {
 
 func CleanSession(metaPath string, etcdEndpoints []string, sessionSuffix []string) error {
 	if len(sessionSuffix) == 0 {
-		mlog.Warn(context.TODO(), "not found session info , skip to clean sessions")
+		log.Warn(context.TODO(), "not found session info , skip to clean sessions")
 		return nil
 	}
 
@@ -225,7 +225,7 @@ func CleanSession(metaPath string, etcdEndpoints []string, sessionSuffix []strin
 	for _, key := range keys {
 		_, _ = etcdCli.Delete(ctx, key)
 	}
-	mlog.Info(ctx, "clean sessions from etcd", mlog.Any("keys", keys))
+	log.Info(ctx, "clean sessions from etcd", log.Any("keys", keys))
 	return nil
 }
 
@@ -252,26 +252,26 @@ func addActiveKeySuffix(ctx context.Context, client *clientv3.Client, sessionPat
 			res := strings.Split(suffix, "-")
 			if len(res) != 2 {
 				// skip illegal keys
-				mlog.Warn(context.TODO(), "skip illegal key", mlog.String("suffix", suffix))
+				log.Warn(context.TODO(), "skip illegal key", log.String("suffix", suffix))
 				continue
 			}
 
 			serverType := res[0]
 			targetServerID, err := strconv.ParseInt(res[1], 10, 64)
 			if err != nil {
-				mlog.Warn(context.TODO(), "get server id failed from key", mlog.String("suffix", suffix), mlog.Err(err))
+				log.Warn(context.TODO(), "get server id failed from key", log.String("suffix", suffix), log.Err(err))
 				continue
 			}
 
 			key := path.Join(sessionPathPrefix, serverType)
 			serverID, err := getServerID(ctx, client, key)
 			if err != nil {
-				mlog.Warn(context.TODO(), "get server id failed from key", mlog.String("suffix", suffix), mlog.Err(err))
+				log.Warn(context.TODO(), "get server id failed from key", log.String("suffix", suffix), log.Err(err))
 				continue
 			}
 
 			if serverID == targetServerID {
-				mlog.Info(context.TODO(), "add active serverID key", mlog.String("suffix", suffix), mlog.String("key", key))
+				log.Info(context.TODO(), "add active serverID key", log.String("suffix", suffix), log.String("key", key))
 				suffixSet[serverType] = struct{}{}
 			}
 		}

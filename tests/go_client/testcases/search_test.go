@@ -15,7 +15,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/client/v2/index"
 	client "github.com/milvus-io/milvus/client/v2/milvusclient"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/tests/go_client/common"
 	hp "github.com/milvus-io/milvus/tests/go_client/testcases/helper"
 )
@@ -668,7 +668,7 @@ func TestSearchInvalidExpr(t *testing.T) {
 	// search with invalid expr
 	vectors := hp.GenSearchVectors(1, common.DefaultDim, entity.FieldTypeFloatVector)
 	for _, exprStruct := range common.InvalidExpressions {
-		mlog.Debug(context.TODO(), "TestSearchInvalidExpr", mlog.String("expr", exprStruct.Expr))
+		log.Debug(context.TODO(), "TestSearchInvalidExpr", log.String("expr", exprStruct.Expr))
 		_, errSearch := mc.Search(ctx, client.NewSearchOption(schema.CollectionName, common.DefaultLimit, vectors).WithConsistencyLevel(entity.ClStrong).
 			WithFilter(exprStruct.Expr).WithANNSField(common.DefaultFloatVecFieldName))
 		common.CheckErr(t, errSearch, exprStruct.ErrNil, exprStruct.ErrMsg)
@@ -712,7 +712,7 @@ func TestSearchJsonFieldExpr(t *testing.T) {
 		// search with jsonField expr key datatype and json data type mismatch
 		for _, expr := range exprs {
 			t.Run(fmt.Sprintf("expr=%s_dynamic-%t", expr, dynamicField), func(t *testing.T) {
-				mlog.Debug(context.TODO(), "TestSearchJsonFieldExpr", mlog.String("expr", expr))
+				log.Debug(context.TODO(), "TestSearchJsonFieldExpr", log.String("expr", expr))
 				vectors := hp.GenSearchVectors(common.DefaultNq, common.DefaultDim, entity.FieldTypeFloatVector)
 				searchRes, errSearch := mc.Search(ctx, client.NewSearchOption(schema.CollectionName, common.DefaultLimit, vectors).WithConsistencyLevel(entity.ClStrong).
 					WithFilter(expr).WithANNSField(common.DefaultFloatVecFieldName).WithOutputFields(common.DefaultInt64FieldName, common.DefaultJSONFieldName))
@@ -748,7 +748,7 @@ func TestSearchDynamicFieldExpr(t *testing.T) {
 
 	// search with jsonField expr key datatype and json data type mismatch
 	for _, expr := range exprs {
-		mlog.Debug(context.TODO(), "TestSearchDynamicFieldExpr", mlog.String("expr", expr))
+		log.Debug(context.TODO(), "TestSearchDynamicFieldExpr", log.String("expr", expr))
 		vectors := hp.GenSearchVectors(common.DefaultNq, common.DefaultDim, entity.FieldTypeFloatVector)
 		searchRes, errSearch := mc.Search(ctx, client.NewSearchOption(schema.CollectionName, common.DefaultLimit, vectors).WithConsistencyLevel(entity.ClStrong).
 			WithFilter(expr).WithANNSField(common.DefaultFloatVecFieldName).WithOutputFields(common.DefaultInt64FieldName, "dynamicNumber", "number"))
@@ -1121,7 +1121,7 @@ func TestRangeSearchSparseVector(t *testing.T) {
 	common.CheckErr(t, errSearch, true)
 	require.Len(t, resRange, common.DefaultNq)
 	for _, res := range resRange {
-		mlog.Info(context.TODO(), "default search", mlog.Any("score", res.Scores))
+		log.Info(context.TODO(), "default search", log.Any("score", res.Scores))
 	}
 
 	annParams := index.NewSparseAnnParam()
@@ -1134,7 +1134,7 @@ func TestRangeSearchSparseVector(t *testing.T) {
 	common.CheckErr(t, errSearch, true)
 	require.Len(t, resRange, common.DefaultNq)
 	for _, res := range resRange {
-		mlog.Info(context.TODO(), "range search", mlog.Any("score", res.Scores))
+		log.Info(context.TODO(), "range search", log.Any("score", res.Scores))
 	}
 	for _, res := range resRange {
 		for _, s := range res.Scores {

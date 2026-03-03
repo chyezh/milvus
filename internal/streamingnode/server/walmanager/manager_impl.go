@@ -14,7 +14,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -44,7 +44,7 @@ func newManager(opener wal.Opener) Manager {
 		lifetime: typeutil.NewGenericLifetime[managerState](managerOpenable | managerRemoveable | managerGetable),
 		wltMap:   typeutil.NewConcurrentMap[string, *walLifetime](),
 		opener:   opener,
-		logger:   resource.Resource().Logger().With(mlog.FieldComponent("wal-manager")),
+		logger:   resource.Resource().Logger().With(log.FieldComponent("wal-manager")),
 	}
 }
 
@@ -54,7 +54,7 @@ type managerImpl struct {
 
 	wltMap *typeutil.ConcurrentMap[string, *walLifetime]
 	opener wal.Opener // wal allocator
-	logger *mlog.Logger
+	logger *log.Logger
 }
 
 // Open opens a wal instance for the channel on this Manager.
@@ -66,10 +66,10 @@ func (m *managerImpl) Open(ctx context.Context, channel types.PChannelInfo) (err
 	defer func() {
 		m.lifetime.Done()
 		if err != nil {
-			m.logger.Warn(nil, "open wal failed", mlog.Err(err), mlog.String("channel", channel.String()))
+			m.logger.Warn(nil, "open wal failed", log.Err(err), log.String("channel", channel.String()))
 			return
 		}
-		m.logger.Info(nil, "open wal success", mlog.String("channel", channel.String()))
+		m.logger.Info(nil, "open wal success", log.String("channel", channel.String()))
 	}()
 
 	return m.getWALLifetime(channel.Name).Open(ctx, channel)
@@ -84,10 +84,10 @@ func (m *managerImpl) Remove(ctx context.Context, channel types.PChannelInfo) (e
 	defer func() {
 		m.lifetime.Done()
 		if err != nil {
-			m.logger.Warn(nil, "remove wal failed", mlog.Err(err), mlog.String("channel", channel.Name), mlog.Int64("term", channel.Term))
+			m.logger.Warn(nil, "remove wal failed", log.Err(err), log.String("channel", channel.Name), log.Int64("term", channel.Term))
 			return
 		}
-		m.logger.Info(nil, "remove wal success", mlog.String("channel", channel.Name), mlog.Int64("term", channel.Term))
+		m.logger.Info(nil, "remove wal success", log.String("channel", channel.Name), log.Int64("term", channel.Term))
 	}()
 
 	return m.getWALLifetime(channel.Name).Remove(ctx, channel.Term)

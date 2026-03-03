@@ -14,8 +14,8 @@ import (
 	"github.com/milvus-io/milvus/internal/flushcommon/io"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -37,7 +37,7 @@ func mergeSortMultipleSegments(ctx context.Context,
 	ctx, span := otel.Tracer(typeutil.DataNodeRole).Start(ctx, "mergeSortMultipleSegments")
 	defer span.End()
 
-	log := mlog.With(mlog.Int64("planID", plan.GetPlanID()))
+	logger := log.With(log.Int64("planID", plan.GetPlanID()))
 
 	segIDAlloc := allocator.NewLocalAllocator(plan.GetPreAllocatedSegmentIDs().GetBegin(), plan.GetPreAllocatedSegmentIDs().GetEnd())
 	logIDAlloc := allocator.NewLocalAllocator(plan.GetPreAllocatedLogIDs().GetBegin(), plan.GetPreAllocatedLogIDs().GetEnd())
@@ -52,7 +52,7 @@ func mergeSortMultipleSegments(ctx context.Context,
 
 	pkField, err := typeutil.GetPrimaryFieldSchema(plan.GetSchema())
 	if err != nil {
-		log.Warn(ctx, "failed to get pk field from schema")
+		logger.Warn(ctx, "failed to get pk field from schema")
 		return nil, err
 	}
 
@@ -130,7 +130,7 @@ func mergeSortMultipleSegments(ctx context.Context,
 			return !segmentFilters[ri].Filtered(pk, uint64(ts), expireTs)
 		}
 	default:
-		log.Warn(ctx, "compaction only support int64 and varchar pk field")
+		logger.Warn(ctx, "compaction only support int64 and varchar pk field")
 	}
 
 	if _, err = storage.MergeSort(compactionParams.BinLogMaxSize, plan.GetSchema(), segmentReaders, writer, predicate, sortByFields); err != nil {
@@ -139,7 +139,7 @@ func mergeSortMultipleSegments(ctx context.Context,
 	}
 
 	if err := writer.Close(); err != nil {
-		log.Warn(ctx, "compact wrong, failed to finish writer", mlog.Err(err))
+		logger.Warn(ctx, "compact wrong, failed to finish writer", log.Err(err))
 		return nil, err
 	}
 
@@ -163,11 +163,11 @@ func mergeSortMultipleSegments(ctx context.Context,
 	}
 
 	totalElapse := tr.RecordSpan()
-	log.Info(ctx, "compact mergeSortMultipleSegments end",
-		mlog.Int("deleted row count", deletedRowCount),
-		mlog.Int("expired entities", expiredRowCount),
-		mlog.Int("missing deletes", missingDeleteCount),
-		mlog.Duration("total elapse", totalElapse))
+	logger.Info(ctx, "compact mergeSortMultipleSegments end",
+		log.Int("deleted row count", deletedRowCount),
+		log.Int("expired entities", expiredRowCount),
+		log.Int("missing deletes", missingDeleteCount),
+		log.Duration("total elapse", totalElapse))
 
 	metrics.DataNodeCompactionDeleteCount.WithLabelValues(fmt.Sprint(collectionID)).Add(float64(deltalogDeleteEntriesCount))
 	metrics.DataNodeCompactionMissingDeleteCount.WithLabelValues(fmt.Sprint(collectionID)).Add(float64(missingDeleteCount))

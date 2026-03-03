@@ -31,7 +31,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
@@ -352,11 +352,11 @@ func autoWarmupForNonPKIsolationCollection(collectionProperties []*commonpb.KeyV
 	}
 	isPKI, isError := common.IsPartitionKeyIsolationKvEnabled(collectionProperties...)
 	if isError != nil {
-		mlog.Warn(context.TODO(), "failed to parse partition key isolation, autowarmup is disabled", mlog.Err(isError))
+		log.Warn(context.TODO(), "failed to parse partition key isolation, autowarmup is disabled", log.Err(isError))
 		return false
 	}
 	if !isPKI {
-		mlog.Info(context.TODO(), "collection is not partition key isolated and autowarmup is enabled, force scalar field/index and vector index warmup to sync")
+		log.Info(context.TODO(), "collection is not partition key isolated and autowarmup is enabled, force scalar field/index and vector index warmup to sync")
 	}
 	return !isPKI
 }

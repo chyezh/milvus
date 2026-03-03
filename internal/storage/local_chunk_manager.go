@@ -27,7 +27,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"golang.org/x/exp/mmap"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/objectstorage"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 )
@@ -139,11 +139,11 @@ func (lcm *LocalChunkManager) MultiRead(ctx context.Context, filePaths []string)
 }
 
 func (lcm *LocalChunkManager) WalkWithPrefix(ctx context.Context, prefix string, recursive bool, walkFunc ChunkObjectWalkFunc) (err error) {
-	logger := mlog.With(mlog.String("prefix", prefix), mlog.Bool("recursive", recursive))
+	logger := log.With(log.String("prefix", prefix), log.Bool("recursive", recursive))
 	logger.Info(nil, "start walk through objects")
 	defer func() {
 		if err != nil {
-			logger.Warn(nil, "failed to walk through objects", mlog.Err(err))
+			logger.Warn(nil, "failed to walk through objects", log.Err(err))
 			return
 		}
 		logger.Info(nil, "finish walk through objects")
@@ -252,7 +252,7 @@ func (lcm *LocalChunkManager) RemoveWithPrefix(ctx context.Context, prefix strin
 	// MultiRemove() will delete all these files. This is a danger behavior, empty prefix is not allowed.
 	if len(prefix) == 0 {
 		errMsg := "empty prefix is not allowed for ChunkManager remove operation"
-		mlog.Warn(context.TODO(), errMsg)
+		log.Warn(context.TODO(), errMsg)
 		return merr.WrapErrParameterInvalidMsg(errMsg)
 	}
 	var removeErr error

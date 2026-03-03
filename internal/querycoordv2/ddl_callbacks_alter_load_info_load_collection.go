@@ -24,7 +24,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/job"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 )
 
@@ -87,7 +87,7 @@ func (s *Server) getDefaultResourceGroupsAndReplicaNumber(ctx context.Context, r
 		// when replica number or resource groups is not set, use pre-defined load config
 		rgs, replicas, err := s.broker.GetCollectionLoadInfo(ctx, collectionID)
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to get pre-defined load info", mlog.Err(err))
+			log.Warn(context.TODO(), "failed to get pre-defined load info", log.Err(err))
 		} else {
 			replicaNumber = int32(replicas)
 			resourceGroups = rgs
@@ -95,11 +95,11 @@ func (s *Server) getDefaultResourceGroupsAndReplicaNumber(ctx context.Context, r
 	}
 	// to be compatible with old sdk, which set replica=1 if replica is not specified
 	if replicaNumber <= 0 {
-		mlog.Info(context.TODO(), "request doesn't indicate the number of replicas, set it to 1")
+		log.Info(context.TODO(), "request doesn't indicate the number of replicas, set it to 1")
 		replicaNumber = 1
 	}
 	if len(resourceGroups) == 0 {
-		mlog.Info(context.TODO(), fmt.Sprintf("request doesn't indicate the resource groups, set it to %s", meta.DefaultResourceGroupName))
+		log.Info(context.TODO(), fmt.Sprintf("request doesn't indicate the resource groups, set it to %s", meta.DefaultResourceGroupName))
 		resourceGroups = []string{meta.DefaultResourceGroupName}
 	}
 	return replicaNumber, resourceGroups, nil

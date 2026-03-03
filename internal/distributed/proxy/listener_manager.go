@@ -26,7 +26,7 @@ import (
 	"github.com/soheilhy/cmux"
 
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/netutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -44,20 +44,20 @@ func newListenerManager(ctx context.Context) (l *listenerManager, err error) {
 		netutil.OptPort(paramtable.Get().ProxyGrpcServerCfg.Port.GetAsInt()),
 	)
 	if err != nil {
-		mlog.Warn(context.TODO(), "Proxy fail to create external grpc listener", mlog.Err(err))
+		log.Warn(context.TODO(), "Proxy fail to create external grpc listener", log.Err(err))
 		return
 	}
-	mlog.Info(context.TODO(), "Proxy listen on external grpc listener", mlog.String("address", externalGrpcListener.Address()), mlog.Int("port", externalGrpcListener.Port()))
+	log.Info(context.TODO(), "Proxy listen on external grpc listener", log.String("address", externalGrpcListener.Address()), log.Int("port", externalGrpcListener.Port()))
 
 	internalGrpcListener, err := netutil.NewListener(
 		netutil.OptIP(paramtable.Get().ProxyGrpcServerCfg.IP),
 		netutil.OptPort(paramtable.Get().ProxyGrpcServerCfg.InternalPort.GetAsInt()),
 	)
 	if err != nil {
-		mlog.Warn(context.TODO(), "Proxy fail to create internal grpc listener", mlog.Err(err))
+		log.Warn(context.TODO(), "Proxy fail to create internal grpc listener", log.Err(err))
 		return
 	}
-	mlog.Info(context.TODO(), "Proxy listen on internal grpc listener", mlog.String("address", internalGrpcListener.Address()), mlog.Int("port", internalGrpcListener.Port()))
+	log.Info(context.TODO(), "Proxy listen on internal grpc listener", log.String("address", internalGrpcListener.Address()), log.Int("port", internalGrpcListener.Port()))
 
 	l = &listenerManager{
 		externalGrpcListener: externalGrpcListener,
@@ -74,7 +74,7 @@ func newHTTPListner(ctx context.Context, l *listenerManager) error {
 	HTTPParams := &paramtable.Get().HTTPCfg
 	if !HTTPParams.Enabled.GetAsBool() {
 		// http server is disabled
-		mlog.Info(context.TODO(), "Proxy server(http) is disabled, skip initialize http listener")
+		log.Info(context.TODO(), "Proxy server(http) is disabled, skip initialize http listener")
 		return nil
 	}
 	tlsMode := paramtable.Get().ProxyGrpcServerCfg.TLSMode.GetAsInt()
@@ -88,10 +88,10 @@ func newHTTPListner(ctx context.Context, l *listenerManager) error {
 	if len(httpPortString) == 0 || externGrpcPort == httpPort {
 		if tlsMode != 0 {
 			err := errors.New("proxy server(http) and external grpc server share the same port, tls mode must be 0")
-			mlog.Warn(context.TODO(), "can not initialize http listener", mlog.Err(err))
+			log.Warn(context.TODO(), "can not initialize http listener", log.Err(err))
 			return err
 		}
-		mlog.Info(context.TODO(), "Proxy server(http) and external grpc server share the same port")
+		log.Info(context.TODO(), "Proxy server(http) and external grpc server share the same port")
 		l.portShareMode = true
 		l.cmux = cmux.New(l.externalGrpcListener)
 		l.cmuxClosed = make(chan struct{})
@@ -100,10 +100,10 @@ func newHTTPListner(ctx context.Context, l *listenerManager) error {
 		go func() {
 			defer close(l.cmuxClosed)
 			if err := l.cmux.Serve(); err != nil && !errors.Is(err, net.ErrClosed) {
-				mlog.Warn(context.TODO(), "Proxy cmux server closed", mlog.Err(err))
+				log.Warn(context.TODO(), "Proxy cmux server closed", log.Err(err))
 				return
 			}
-			mlog.Info(context.TODO(), "Proxy tcp server exited")
+			log.Info(context.TODO(), "Proxy tcp server exited")
 		}()
 		return nil
 	}
@@ -114,24 +114,24 @@ func newHTTPListner(ctx context.Context, l *listenerManager) error {
 	case 1:
 		creds, err := tls.LoadX509KeyPair(Params.ServerPemPath.GetValue(), Params.ServerKeyPath.GetValue())
 		if err != nil {
-			mlog.Error(context.TODO(), "proxy can't create creds", mlog.Err(err))
+			log.Error(context.TODO(), "proxy can't create creds", log.Err(err))
 			return err
 		}
 		tlsConf = &tls.Config{Certificates: []tls.Certificate{creds}}
 	case 2:
 		cert, err := tls.LoadX509KeyPair(Params.ServerPemPath.GetValue(), Params.ServerKeyPath.GetValue())
 		if err != nil {
-			mlog.Error(context.TODO(), "proxy cant load x509 key pair", mlog.Err(err))
+			log.Error(context.TODO(), "proxy cant load x509 key pair", log.Err(err))
 			return err
 		}
 		certPool := x509.NewCertPool()
 		rootBuf, err := storage.ReadFile(Params.CaPemPath.GetValue())
 		if err != nil {
-			mlog.Error(context.TODO(), "failed read ca pem", mlog.Err(err))
+			log.Error(context.TODO(), "failed read ca pem", log.Err(err))
 			return err
 		}
 		if !certPool.AppendCertsFromPEM(rootBuf) {
-			mlog.Warn(context.TODO(), "fail to append ca to cert")
+			log.Warn(context.TODO(), "fail to append ca to cert")
 			return errors.New("fail to append ca to cert")
 		}
 		tlsConf = &tls.Config{
@@ -146,10 +146,10 @@ func newHTTPListner(ctx context.Context, l *listenerManager) error {
 	l.portShareMode = false
 	l.httpListener, err = netutil.NewListener(netutil.OptIP(Params.IP), netutil.OptPort(httpPort), netutil.OptTLS(tlsConf))
 	if err != nil {
-		mlog.Warn(context.TODO(), "Proxy server(http) failed to listen on", mlog.Err(err))
+		log.Warn(context.TODO(), "Proxy server(http) failed to listen on", log.Err(err))
 		return err
 	}
-	mlog.Info(context.TODO(), "Proxy server(http) listen on", mlog.Int("port", l.httpListener.Port()))
+	log.Info(context.TODO(), "Proxy server(http) listen on", log.Int("port", l.httpListener.Port()))
 	return nil
 }
 
@@ -193,39 +193,39 @@ func (l *listenerManager) HTTPListener() net.Listener {
 func (l *listenerManager) Close() {
 	if l.portShareMode {
 		if l.cmux != nil {
-			mlog.Info(context.TODO(), "Proxy close cmux grpc listener")
+			log.Info(context.TODO(), "Proxy close cmux grpc listener")
 			if err := l.cmuxExternGrpcListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-				mlog.Warn(context.TODO(), "Proxy failed to close cmux grpc listener", mlog.Err(err))
+				log.Warn(context.TODO(), "Proxy failed to close cmux grpc listener", log.Err(err))
 			}
-			mlog.Info(context.TODO(), "Proxy close cmux http listener")
+			log.Info(context.TODO(), "Proxy close cmux http listener")
 			if err := l.cmuxExternHTTPListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-				mlog.Warn(context.TODO(), "Proxy failed to close cmux http listener", mlog.Err(err))
+				log.Warn(context.TODO(), "Proxy failed to close cmux http listener", log.Err(err))
 			}
-			mlog.Info(context.TODO(), "Proxy close cmux...")
+			log.Info(context.TODO(), "Proxy close cmux...")
 			l.cmux.Close()
 			<-l.cmuxClosed
-			mlog.Info(context.TODO(), "Proxy cmux closed")
+			log.Info(context.TODO(), "Proxy cmux closed")
 		}
 	} else {
 		if l.httpListener != nil {
-			mlog.Info(context.TODO(), "Proxy close http listener", mlog.String("address", l.httpListener.Address()))
+			log.Info(context.TODO(), "Proxy close http listener", log.String("address", l.httpListener.Address()))
 			if err := l.httpListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-				mlog.Warn(context.TODO(), "Proxy failed to close http listener", mlog.Err(err))
+				log.Warn(context.TODO(), "Proxy failed to close http listener", log.Err(err))
 			}
 		}
 	}
 
 	if l.internalGrpcListener != nil {
-		mlog.Info(context.TODO(), "Proxy close internal grpc listener", mlog.String("address", l.internalGrpcListener.Address()))
+		log.Info(context.TODO(), "Proxy close internal grpc listener", log.String("address", l.internalGrpcListener.Address()))
 		if err := l.internalGrpcListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			mlog.Warn(context.TODO(), "Proxy failed to close internal grpc listener", mlog.Err(err))
+			log.Warn(context.TODO(), "Proxy failed to close internal grpc listener", log.Err(err))
 		}
 	}
 
 	if l.externalGrpcListener != nil {
-		mlog.Info(context.TODO(), "Proxy close external grpc listener", mlog.String("address", l.externalGrpcListener.Address()))
+		log.Info(context.TODO(), "Proxy close external grpc listener", log.String("address", l.externalGrpcListener.Address()))
 		if err := l.externalGrpcListener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			mlog.Warn(context.TODO(), "Proxy failed to close external grpc listener", mlog.Err(err))
+			log.Warn(context.TODO(), "Proxy failed to close external grpc listener", log.Err(err))
 		}
 	}
 }

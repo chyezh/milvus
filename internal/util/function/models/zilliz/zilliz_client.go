@@ -33,7 +33,7 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/modelservicepb"
 )
 
@@ -96,7 +96,7 @@ func (m *clientManager) GetConn(clientConf *clientConfig) (*grpc.ClientConn, err
 		if clientConf.endpoint != m.config.endpoint {
 			err := m.conn.Close()
 			if err != nil {
-				mlog.Warn(context.TODO(), "Close connect failed", mlog.String("endpoint", m.config.endpoint), mlog.Err(err))
+				log.Warn(context.TODO(), "Close connect failed", log.String("endpoint", m.config.endpoint), log.Err(err))
 			}
 			m.conn = nil
 		} else {

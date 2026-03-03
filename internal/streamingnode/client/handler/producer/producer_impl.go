@@ -11,7 +11,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
@@ -59,11 +59,11 @@ func CreateProducer(
 	cli := &producerImpl{
 		assignment: *opts.Assignment,
 		walName:    createResp.GetWalName(),
-		logger: mlog.With(
-			mlog.String("walName", createResp.GetWalName()),
-			mlog.String("pchannel", opts.Assignment.Channel.Name),
-			mlog.Int64("term", opts.Assignment.Channel.Term),
-			mlog.Int64("streamingNodeID", opts.Assignment.Node.ServerID)),
+		logger: log.With(
+			log.String("walName", createResp.GetWalName()),
+			log.String("pchannel", opts.Assignment.Channel.Name),
+			log.Int64("term", opts.Assignment.Channel.Term),
+			log.Int64("streamingNodeID", opts.Assignment.Node.ServerID)),
 		lifetime:         typeutil.NewLifetime(),
 		idAllocator:      typeutil.NewIDAllocator(),
 		grpcStreamClient: produceClient,
@@ -90,7 +90,7 @@ func CreateProducer(
 type producerImpl struct {
 	assignment       types.PChannelInfoAssigned
 	walName          string
-	logger           *mlog.Logger
+	logger           *log.Logger
 	lifetime         *typeutil.Lifetime
 	idAllocator      *typeutil.IDAllocator
 	grpcStreamClient *produceGrpcClient
@@ -152,7 +152,7 @@ func (p *producerImpl) Append(ctx context.Context, msg message.MutableMessage) (
 		if resp.err != nil {
 			if s := status.AsStreamingError(resp.err); s.IsFenced() || s.IsOnShutdown() {
 				if p.isFenced.CompareAndSwap(false, true) {
-					p.logger.Warn(nil, "producer client is fenced or on shutdown", mlog.Err(resp.err))
+					p.logger.Warn(nil, "producer client is fenced or on shutdown", log.Err(resp.err))
 					p.available.Close()
 				}
 			}
@@ -230,12 +230,12 @@ func (p *producerImpl) startRecv() <-chan error {
 func (p *producerImpl) sendLoop() (err error) {
 	defer func() {
 		if err != nil {
-			p.logger.Warn(nil, "send arm of stream closed by unexpected error", mlog.Err(err))
+			p.logger.Warn(nil, "send arm of stream closed by unexpected error", log.Err(err))
 		} else {
 			p.logger.Info(nil, "send arm of stream closed")
 		}
 		if err := p.grpcStreamClient.CloseSend(); err != nil {
-			p.logger.Warn(nil, "failed to close send", mlog.Err(err))
+			p.logger.Warn(nil, "failed to close send", log.Err(err))
 		}
 		close(p.sendExitCh)
 		p.available.Close()
@@ -269,7 +269,7 @@ func (p *producerImpl) sendLoop() (err error) {
 func (p *producerImpl) recvLoop() (err error) {
 	defer func() {
 		if err != nil {
-			p.logger.Warn(nil, "recv arm of stream closed by unexpected error", mlog.Err(err))
+			p.logger.Warn(nil, "recv arm of stream closed by unexpected error", log.Err(err))
 		} else {
 			p.logger.Info(nil, "recv arm of stream closed")
 		}
@@ -318,7 +318,7 @@ func (p *producerImpl) recvLoop() (err error) {
 			// recv io.EOF after this message.
 		default:
 			// skip message here.
-			p.logger.Error(nil, "unknown response type", mlog.Any("response", resp))
+			p.logger.Error(nil, "unknown response type", log.Any("response", resp))
 		}
 	}
 }
@@ -327,7 +327,7 @@ func (p *producerImpl) recvLoop() (err error) {
 func (p *producerImpl) notifyRequest(requestID int64, resp produceResponse) {
 	pendingRequest, loaded := p.pendingRequests.LoadAndDelete(requestID)
 	if loaded {
-		p.logger.Debug(nil, "recv send produce message from server", mlog.Int64("requestID", requestID))
+		p.logger.Debug(nil, "recv send produce message from server", log.Int64("requestID", requestID))
 		pendingRequest.(*produceRequest).respCh <- resp
 	}
 }

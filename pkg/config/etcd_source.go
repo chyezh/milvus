@@ -27,7 +27,7 @@ import (
 	"github.com/samber/lo"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/etcd"
 )
 
@@ -48,7 +48,7 @@ type EtcdSource struct {
 }
 
 func NewEtcdSource(etcdInfo *EtcdInfo) (*EtcdSource, error) {
-	mlog.Debug(context.TODO(), "init etcd source", mlog.Any("etcdInfo", etcdInfo))
+	log.Debug(context.TODO(), "init etcd source", log.Any("etcdInfo", etcdInfo))
 	etcdCli, err := etcd.CreateEtcdClient(
 		etcdInfo.UseEmbed,
 		etcdInfo.EnableAuth,
@@ -149,7 +149,7 @@ func (es *EtcdSource) refreshConfigurations() error {
 
 	ctx, cancel := context.WithTimeout(es.ctx, ReadConfigTimeout)
 	defer cancel()
-	mlog.RatedDebug(context.TODO(), mlog.RateDefault, "etcd refreshConfigurations", mlog.String("prefix", prefix), mlog.Any("endpoints", es.etcdCli.Endpoints()))
+	log.RatedDebug(context.TODO(), log.RateDefault, "etcd refreshConfigurations", log.String("prefix", prefix), log.Any("endpoints", es.etcdCli.Endpoints()))
 	response, err := es.etcdCli.Get(ctx, prefix, clientv3.WithPrefix(), clientv3.WithSerializable())
 	if err != nil {
 		return err
@@ -160,7 +160,7 @@ func (es *EtcdSource) refreshConfigurations() error {
 		key = strings.TrimPrefix(key, prefix+"/")
 		newConfig[key] = string(kv.Value)
 		newConfig[formatKey(key)] = string(kv.Value)
-		mlog.Debug(context.TODO(), "got config from etcd", mlog.String("key", string(kv.Key)), mlog.String("value", string(kv.Value)))
+		log.Debug(context.TODO(), "got config from etcd", log.String("key", string(kv.Key)), log.String("value", string(kv.Value)))
 	}
 	return es.update(newConfig)
 }
@@ -174,7 +174,7 @@ func (es *EtcdSource) update(configs map[string]string) error {
 	events, err := PopulateEvents(es.GetSourceName(), es.currentConfigs, configs)
 	if err != nil {
 		es.Unlock()
-		mlog.Warn(es.ctx, "generating event error", mlog.Err(err))
+		log.Warn(es.ctx, "generating event error", log.Err(err))
 		return err
 	}
 	es.currentConfigs = configs

@@ -19,7 +19,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 )
@@ -51,19 +51,19 @@ func Do(ctx context.Context, fn func() error, opts ...Option) error {
 	for i := uint(0); c.attempts == 0 || i < c.attempts; i++ {
 		if err := fn(); err != nil {
 			if i%4 == 0 {
-				mlog.Warn(context.TODO(), "retry func failed",
-					mlog.Uint("retried", i),
-					mlog.Err(err),
-					mlog.String("caller", getCaller(2)))
+				log.Warn(context.TODO(), "retry func failed",
+					log.Uint("retried", i),
+					log.Err(err),
+					log.String("caller", getCaller(2)))
 			}
 
 			if !IsRecoverable(err) {
 				isContextErr := errors.IsAny(err, context.Canceled, context.DeadlineExceeded)
-				mlog.Warn(context.TODO(), "retry func failed, not be recoverable",
-					mlog.Uint("retried", i),
-					mlog.Uint("attempt", c.attempts),
-					mlog.Bool("isContextErr", isContextErr),
-					mlog.String("caller", getCaller(2)),
+				log.Warn(context.TODO(), "retry func failed, not be recoverable",
+					log.Uint("retried", i),
+					log.Uint("attempt", c.attempts),
+					log.Bool("isContextErr", isContextErr),
+					log.String("caller", getCaller(2)),
 				)
 				if isContextErr && lastErr != nil {
 					return lastErr
@@ -71,10 +71,10 @@ func Do(ctx context.Context, fn func() error, opts ...Option) error {
 				return err
 			}
 			if c.isRetryErr != nil && !c.isRetryErr(err) {
-				mlog.Warn(context.TODO(), "retry func failed, not be retryable",
-					mlog.Uint("retried", i),
-					mlog.Uint("attempt", c.attempts),
-					mlog.String("caller", getCaller(2)),
+				log.Warn(context.TODO(), "retry func failed, not be retryable",
+					log.Uint("retried", i),
+					log.Uint("attempt", c.attempts),
+					log.String("caller", getCaller(2)),
 				)
 				return err
 			}
@@ -82,11 +82,11 @@ func Do(ctx context.Context, fn func() error, opts ...Option) error {
 			deadline, ok := ctx.Deadline()
 			if ok && time.Until(deadline) < c.sleep {
 				isContextErr := errors.IsAny(err, context.Canceled, context.DeadlineExceeded)
-				mlog.Warn(context.TODO(), "retry func failed, deadline",
-					mlog.Uint("retried", i),
-					mlog.Uint("attempt", c.attempts),
-					mlog.Bool("isContextErr", isContextErr),
-					mlog.String("caller", getCaller(2)),
+				log.Warn(context.TODO(), "retry func failed, deadline",
+					log.Uint("retried", i),
+					log.Uint("attempt", c.attempts),
+					log.Bool("isContextErr", isContextErr),
+					log.String("caller", getCaller(2)),
 				)
 				if isContextErr && lastErr != nil {
 					return lastErr
@@ -99,10 +99,10 @@ func Do(ctx context.Context, fn func() error, opts ...Option) error {
 			select {
 			case <-time.After(c.sleep):
 			case <-ctx.Done():
-				mlog.Warn(context.TODO(), "retry func failed, ctx done",
-					mlog.Uint("retried", i),
-					mlog.Uint("attempt", c.attempts),
-					mlog.String("caller", getCaller(2)),
+				log.Warn(context.TODO(), "retry func failed, ctx done",
+					log.Uint("retried", i),
+					log.Uint("attempt", c.attempts),
+					log.String("caller", getCaller(2)),
 				)
 				return lastErr
 			}
@@ -116,8 +116,8 @@ func Do(ctx context.Context, fn func() error, opts ...Option) error {
 		}
 	}
 	if lastErr != nil {
-		mlog.Warn(context.TODO(), "retry func failed, reach max retry",
-			mlog.Uint("attempt", c.attempts),
+		log.Warn(context.TODO(), "retry func failed, reach max retry",
+			log.Uint("attempt", c.attempts),
 		)
 	}
 	return lastErr
@@ -141,20 +141,20 @@ func Handle(ctx context.Context, fn func() (bool, error), opts ...Option) error 
 	for i := uint(0); c.attempts == 0 || i < c.attempts; i++ {
 		if shouldRetry, err := fn(); err != nil {
 			if i%4 == 0 {
-				mlog.Warn(context.TODO(), "retry func failed",
-					mlog.Uint("retried", i),
-					mlog.String("caller", getCaller(2)),
-					mlog.Err(err),
+				log.Warn(context.TODO(), "retry func failed",
+					log.Uint("retried", i),
+					log.String("caller", getCaller(2)),
+					log.Err(err),
 				)
 			}
 
 			if !shouldRetry {
 				isContextErr := errors.IsAny(err, context.Canceled, context.DeadlineExceeded)
-				mlog.Warn(context.TODO(), "retry func failed, not be recoverable",
-					mlog.Uint("retried", i),
-					mlog.Uint("attempt", c.attempts),
-					mlog.Bool("isContextErr", isContextErr),
-					mlog.String("caller", getCaller(2)),
+				log.Warn(context.TODO(), "retry func failed, not be recoverable",
+					log.Uint("retried", i),
+					log.Uint("attempt", c.attempts),
+					log.Bool("isContextErr", isContextErr),
+					log.String("caller", getCaller(2)),
 				)
 				if isContextErr && lastErr != nil {
 					return lastErr
@@ -165,11 +165,11 @@ func Handle(ctx context.Context, fn func() (bool, error), opts ...Option) error 
 			deadline, ok := ctx.Deadline()
 			if ok && time.Until(deadline) < c.sleep {
 				isContextErr := errors.IsAny(err, context.Canceled, context.DeadlineExceeded)
-				mlog.Warn(context.TODO(), "retry func failed, deadline",
-					mlog.Uint("retried", i),
-					mlog.Uint("attempt", c.attempts),
-					mlog.Bool("isContextErr", isContextErr),
-					mlog.String("caller", getCaller(2)),
+				log.Warn(context.TODO(), "retry func failed, deadline",
+					log.Uint("retried", i),
+					log.Uint("attempt", c.attempts),
+					log.Bool("isContextErr", isContextErr),
+					log.String("caller", getCaller(2)),
 				)
 				if isContextErr && lastErr != nil {
 					return lastErr
@@ -182,10 +182,10 @@ func Handle(ctx context.Context, fn func() (bool, error), opts ...Option) error 
 			select {
 			case <-time.After(c.sleep):
 			case <-ctx.Done():
-				mlog.Warn(context.TODO(), "retry func failed, ctx done",
-					mlog.Uint("retried", i),
-					mlog.Uint("attempt", c.attempts),
-					mlog.String("caller", getCaller(2)),
+				log.Warn(context.TODO(), "retry func failed, ctx done",
+					log.Uint("retried", i),
+					log.Uint("attempt", c.attempts),
+					log.String("caller", getCaller(2)),
 				)
 				return lastErr
 			}
@@ -199,9 +199,9 @@ func Handle(ctx context.Context, fn func() (bool, error), opts ...Option) error 
 		}
 	}
 	if lastErr != nil {
-		mlog.Warn(context.TODO(), "retry func failed, reach max retry",
-			mlog.Uint("attempt", c.attempts),
-			mlog.String("caller", getCaller(2)),
+		log.Warn(context.TODO(), "retry func failed, reach max retry",
+			log.Uint("attempt", c.attempts),
+			log.String("caller", getCaller(2)),
 		)
 	}
 	return lastErr

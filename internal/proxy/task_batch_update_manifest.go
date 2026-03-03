@@ -23,7 +23,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -100,10 +100,10 @@ func (bt *batchUpdateManifestTask) PreExecute(ctx context.Context) error {
 }
 
 func (bt *batchUpdateManifestTask) Execute(ctx context.Context) error {
-	mlog.Info(ctx, "proxy batch update manifest",
-		mlog.String("collectionName", bt.req.GetCollectionName()),
-		mlog.Int64("collectionID", bt.collectionID),
-		mlog.Int("itemCount", len(bt.req.GetItems())),
+	log.Info(ctx, "proxy batch update manifest",
+		log.String("collectionName", bt.req.GetCollectionName()),
+		log.Int64("collectionID", bt.collectionID),
+		log.Int("itemCount", len(bt.req.GetItems())),
 	)
 
 	items := make([]*datapb.BatchUpdateManifestItem, 0, len(bt.req.GetItems()))

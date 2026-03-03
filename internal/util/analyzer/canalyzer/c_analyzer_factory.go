@@ -18,7 +18,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/util/analyzer/interfaces"
 	"github.com/milvus-io/milvus/internal/util/pathutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -46,7 +46,7 @@ func UpdateParams() {
 
 	bytes, err := json.Marshal(params)
 	if err != nil {
-		mlog.Panic(context.TODO(), "init analyzer option failed", mlog.Err(err))
+		log.Panic(context.TODO(), "init analyzer option failed", log.Err(err))
 	}
 
 	paramPtr := C.CString(string(bytes))
@@ -54,7 +54,7 @@ func UpdateParams() {
 
 	status := C.set_tokenizer_option(paramPtr)
 	if err := HandleCStatus(&status, "failed to init segcore analyzer option"); err != nil {
-		mlog.Panic(context.TODO(), "init analyzer option failed", mlog.Err(err))
+		log.Panic(context.TODO(), "init analyzer option failed", log.Err(err))
 	}
 }
 

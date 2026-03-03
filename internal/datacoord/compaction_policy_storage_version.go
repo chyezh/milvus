@@ -25,7 +25,7 @@ import (
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -66,13 +66,13 @@ func (policy *storageVersionUpgradePolicy) Trigger(ctx context.Context) (map[Com
 	versionReqStr := paramtable.Get().DataCoordCfg.StorageVersionCompactionSessionVersionRequirement.GetValue()
 	versionRequirement, err := semver.Parse(versionReqStr)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to parse storage version upgrade version requirement", mlog.String("versionStr", versionReqStr), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to parse storage version upgrade version requirement", log.String("versionStr", versionReqStr), log.Err(err))
 		return map[CompactionTriggerType][]CompactionView{}, err
 	}
 
 	minVersion := policy.versionManager.GetMinimalSessionVer()
 	if minVersion.LT(versionRequirement) {
-		mlog.Info(context.TODO(), "storage version upgrade policy skipped due to minimal querynode version does not satisfy requirement", mlog.String("minVersion", minVersion.String()), mlog.String("requirement", versionRequirement.String()))
+		log.Info(context.TODO(), "storage version upgrade policy skipped due to minimal querynode version does not satisfy requirement", log.String("minVersion", minVersion.String()), log.String("requirement", versionRequirement.String()))
 		return map[CompactionTriggerType][]CompactionView{}, nil
 	}
 
@@ -93,7 +93,7 @@ func (policy *storageVersionUpgradePolicy) Trigger(ctx context.Context) (map[Com
 		collectionViews, err := policy.triggerOneCollection(ctx, collection.ID, maxCount)
 		if err != nil {
 			// not throw this error because no need to fail because of one collection
-			mlog.Warn(context.TODO(), "fail to trigger storage version compaction", mlog.Int64("collectionID", collection.ID), mlog.Err(err))
+			log.Warn(context.TODO(), "fail to trigger storage version compaction", log.Int64("collectionID", collection.ID), log.Err(err))
 			continue
 		}
 		views = append(views, collectionViews...)
@@ -104,24 +104,24 @@ func (policy *storageVersionUpgradePolicy) Trigger(ctx context.Context) (map[Com
 func (policy *storageVersionUpgradePolicy) triggerOneCollection(ctx context.Context, collectionID int64, maxCount int) ([]CompactionView, error) {
 	collection, err := policy.handler.GetCollection(ctx, collectionID)
 	if err != nil {
-		mlog.Warn(context.TODO(), "fail to apply storageVersionUpgradePolicy, unable to get collection from handler",
-			mlog.Err(err))
+		log.Warn(context.TODO(), "fail to apply storageVersionUpgradePolicy, unable to get collection from handler",
+			log.Err(err))
 		return nil, err
 	}
 	if collection == nil {
-		mlog.Warn(context.TODO(), "fail to apply storageVersionUpgradePolicy, collection not exist")
+		log.Warn(context.TODO(), "fail to apply storageVersionUpgradePolicy, collection not exist")
 		return nil, nil
 	}
 
 	collectionTTL, err := common.GetCollectionTTLFromMap(collection.Properties)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to apply storageVersionUpgradePolicy, get collection ttl failed")
+		log.Warn(context.TODO(), "failed to apply storageVersionUpgradePolicy, get collection ttl failed")
 		return nil, err
 	}
 
 	newTriggerID, err := policy.allocator.AllocID(ctx)
 	if err != nil {
-		mlog.Warn(context.TODO(), "fail to apply storageVersionUpgradePolicy, unable to allocate triggerID", mlog.Err(err))
+		log.Warn(context.TODO(), "fail to apply storageVersionUpgradePolicy, unable to allocate triggerID", log.Err(err))
 		return nil, err
 	}
 

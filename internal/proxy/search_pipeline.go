@@ -35,7 +35,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/function/rerank"
 	"github.com/milvus-io/milvus/internal/util/segcore"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
@@ -980,8 +980,8 @@ func (op *orderByOperator) sortResultsByOrderByFields(result *milvuspb.SearchRes
 			if field == nil {
 				// This should never happen if validateOrderByFields passed.
 				// Log and skip rather than panic to avoid crashing on edge cases.
-				mlog.Warn(context.TODO(), "order_by field not found in fieldMap after validation, skipping",
-					mlog.String("fieldName", orderBy.FieldName))
+				log.Warn(context.TODO(), "order_by field not found in fieldMap after validation, skipping",
+					log.String("fieldName", orderBy.FieldName))
 				continue
 			}
 			cmp, err := compareOrderByField(field, orderBy, idxI, idxJ, cache)
@@ -1063,8 +1063,8 @@ func (op *orderByOperator) sortGroupsByOrderByFields(result *milvuspb.SearchResu
 			if field == nil {
 				// This should never happen if validateOrderByFields passed.
 				// Log and skip rather than panic to avoid crashing on edge cases.
-				mlog.Warn(context.TODO(), "order_by field not found in fieldMap after validation, skipping",
-					mlog.String("fieldName", orderBy.FieldName))
+				log.Warn(context.TODO(), "order_by field not found in fieldMap after validation, skipping",
+					log.String("fieldName", orderBy.FieldName))
 				continue
 			}
 			cmp, err := compareOrderByField(field, orderBy, dataIdxI, dataIdxJ, cache)
@@ -1588,16 +1588,16 @@ func (p *pipeline) AddNodes(t *searchTask, nodes ...*nodeDef) error {
 }
 
 func (p *pipeline) Run(ctx context.Context, span trace.Span, toReduceResults []*internalpb.SearchResults, storageCost segcore.StorageCost) (*milvuspb.SearchResults, segcore.StorageCost, error) {
-	mlog.Debug(ctx, "SearchPipeline run", mlog.String("pipeline", p.name))
+	log.Debug(ctx, "SearchPipeline run", log.String("pipeline", p.name))
 	msg := opMsg{}
 	msg[pipelineInput] = toReduceResults
 	msg[pipelineStorageCost] = storageCost
 	for _, node := range p.nodes {
 		var err error
-		mlog.Debug(ctx, "SearchPipeline run node", mlog.String("node", node.name))
+		log.Debug(ctx, "SearchPipeline run node", log.String("node", node.name))
 		msg, err = node.Run(ctx, span, msg)
 		if err != nil {
-			mlog.Error(ctx, "Run node failed: ", mlog.String("err", err.Error()))
+			log.Error(ctx, "Run node failed: ", log.String("err", err.Error()))
 			return nil, storageCost, err
 		}
 	}

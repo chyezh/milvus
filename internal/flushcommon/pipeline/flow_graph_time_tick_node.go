@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/flushcommon/util"
 	"github.com/milvus-io/milvus/internal/flushcommon/writebuffer"
 	"github.com/milvus-io/milvus/internal/util/flowgraph"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
 )
@@ -60,7 +60,7 @@ func (ttn *ttNode) IsValidInMsg(in []Msg) bool {
 	}
 	_, ok := in[0].(*FlowGraphMsg)
 	if !ok {
-		mlog.Warn(context.TODO(), "type assertion failed for flowGraphMsg", mlog.String("name", reflect.TypeOf(in[0]).Name()))
+		log.Warn(context.TODO(), "type assertion failed for flowGraphMsg", log.String("name", reflect.TypeOf(in[0]).Name()))
 		return false
 	}
 	return true
@@ -86,7 +86,7 @@ func (ttn *ttNode) Operate(in []Msg) []Msg {
 	// skip updating checkpoint for drop collection
 	// even if its the close msg
 	if ttn.dropMode.Load() {
-		mlog.RatedInfo(context.TODO(), mlog.RateDefault, "ttnode in dropMode", mlog.String("channel", ttn.vChannelName))
+		log.RatedInfo(context.TODO(), log.RateDefault, "ttnode in dropMode", log.String("channel", ttn.vChannelName))
 		return []Msg{}
 	}
 
@@ -99,12 +99,12 @@ func (ttn *ttNode) Operate(in []Msg) []Msg {
 		if len(fgMsg.EndPositions) > 0 {
 			channelPos, _, err := ttn.writeBufferManager.GetCheckpoint(ttn.vChannelName)
 			if err != nil {
-				mlog.Warn(context.TODO(), "channel removed", mlog.String("channel", ttn.vChannelName), mlog.Err(err))
+				log.Warn(context.TODO(), "channel removed", log.String("channel", ttn.vChannelName), log.Err(err))
 				return []Msg{}
 			}
-			mlog.Info(context.TODO(), "flowgraph is closing, force update channel CP",
-				mlog.Time("cpTs", tsoutil.PhysicalTime(channelPos.GetTimestamp())),
-				mlog.String("channel", channelPos.GetChannelName()))
+			log.Info(context.TODO(), "flowgraph is closing, force update channel CP",
+				log.Time("cpTs", tsoutil.PhysicalTime(channelPos.GetTimestamp())),
+				log.String("channel", channelPos.GetChannelName()))
 			ttn.updateChannelCP(channelPos, curTs, false)
 		}
 		return in
@@ -118,7 +118,7 @@ func (ttn *ttNode) Operate(in []Msg) []Msg {
 	}
 
 	if err != nil {
-		mlog.Warn(context.TODO(), "channel removed", mlog.String("channel", ttn.vChannelName), mlog.Err(err))
+		log.Warn(context.TODO(), "channel removed", log.String("channel", ttn.vChannelName), log.Err(err))
 		return []Msg{}
 	}
 
@@ -164,27 +164,27 @@ func (ttn *ttNode) waitForCheckpointUpdate(fgMsg *FlowGraphMsg, curTs time.Time)
 		if channelPos != nil {
 			channelCheckpointTS = channelPos.GetTimestamp()
 		}
-		mlog.Info(ctx, "waiting for checkpoint update, retrying with backoff",
-			mlog.String("channel", ttn.vChannelName),
-			mlog.Uint64("currentCheckpointTS", channelCheckpointTS),
-			mlog.Uint64("requiredTimeTick", fgMsg.TimeTick()),
-			mlog.Uint64("alterWalTimeTick", fgMsg.alterWalTimeTick),
-			mlog.Duration("retryInterval", duration),
+		log.Info(ctx, "waiting for checkpoint update, retrying with backoff",
+			log.String("channel", ttn.vChannelName),
+			log.Uint64("currentCheckpointTS", channelCheckpointTS),
+			log.Uint64("requiredTimeTick", fgMsg.TimeTick()),
+			log.Uint64("alterWalTimeTick", fgMsg.alterWalTimeTick),
+			log.Duration("retryInterval", duration),
 		)
 	}
 
 	backoffCtx := backoff.WithContext(backoffConfig, ctx)
 	if err := backoff.RetryNotify(operation, backoffCtx, notify); err != nil {
-		mlog.Warn(ctx, "failed to wait for checkpoint update",
-			mlog.String("channel", ttn.vChannelName),
-			mlog.Err(err),
+		log.Warn(ctx, "failed to wait for checkpoint update",
+			log.String("channel", ttn.vChannelName),
+			log.Err(err),
 		)
 		return channelPos, needUpdate, err
 	}
 
-	mlog.Info(ctx, "checkpoint update ready",
-		mlog.String("channel", ttn.vChannelName),
-		mlog.Uint64("checkpointTS", channelPos.GetTimestamp()),
+	log.Info(ctx, "checkpoint update ready",
+		log.String("channel", ttn.vChannelName),
+		log.Uint64("checkpointTS", channelPos.GetTimestamp()),
 	)
 	return channelPos, needUpdate, nil
 }
@@ -194,11 +194,11 @@ func (ttn *ttNode) updateChannelCP(channelPos *msgpb.MsgPosition, curTs time.Tim
 		channelCPTs, _ := tsoutil.ParseTS(channelPos.GetTimestamp())
 		// reset flush ts to prevent frequent flush
 		ttn.writeBufferManager.NotifyCheckpointUpdated(ttn.vChannelName, channelPos.GetTimestamp())
-		mlog.Debug(context.TODO(), "UpdateChannelCheckpoint success",
-			mlog.String("channel", ttn.vChannelName),
-			mlog.Uint64("cpTs", channelPos.GetTimestamp()),
-			mlog.Stringer("walName", channelPos.WALName),
-			mlog.Time("cpTime", channelCPTs))
+		log.Debug(context.TODO(), "UpdateChannelCheckpoint success",
+			log.String("channel", ttn.vChannelName),
+			log.Uint64("cpTs", channelPos.GetTimestamp()),
+			log.Stringer("walName", channelPos.WALName),
+			log.Time("cpTime", channelCPTs))
 	}
 	ttn.cpUpdater.AddTask(channelPos, flush, callBack)
 	ttn.lastUpdateTime.Store(curTs)

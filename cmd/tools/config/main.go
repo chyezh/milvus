@@ -6,7 +6,7 @@ import (
 	"os"
 
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 const (
@@ -19,7 +19,7 @@ func main() {
 	args := os.Args
 
 	if len(args) < 2 {
-		mlog.Error(context.TODO(), "len of args should large than 2")
+		log.Error(context.TODO(), "len of args should large than 2")
 		os.Exit(-1)
 	}
 	switch args[1] {
@@ -27,7 +27,7 @@ func main() {
 		f, err := os.Create("configs.csv")
 		defer f.Close()
 		if err != nil {
-			mlog.Error(context.TODO(), "create file failed", mlog.Err(err))
+			log.Error(context.TODO(), "create file failed", log.Err(err))
 			os.Exit(-2)
 		}
 		WriteCsv(f)
@@ -35,7 +35,7 @@ func main() {
 		f, err := os.Create("milvus.yaml")
 		defer f.Close()
 		if err != nil {
-			mlog.Error(context.TODO(), "create file failed", mlog.Err(err))
+			log.Error(context.TODO(), "create file failed", log.Err(err))
 			os.Exit(-2)
 		}
 		WriteYaml(f)
@@ -48,6 +48,6 @@ func main() {
 		}
 		ShowYaml(f)
 	default:
-		mlog.Error(context.TODO(), fmt.Sprintf("unknown argument %s", args[1]))
+		log.Error(context.TODO(), fmt.Sprintf("unknown argument %s", args[1]))
 	}
 }

@@ -12,7 +12,7 @@ import (
 	"github.com/samber/lo"
 	"golang.org/x/exp/slices"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -59,7 +59,7 @@ func collectRecursive(params *paramtable.ComponentParam, data *[]DocContent, val
 	if val.Kind() != reflect.Struct {
 		return
 	}
-	mlog.Debug(context.TODO(), "enter", mlog.Any("variable", val.String()))
+	log.Debug(context.TODO(), "enter", log.Any("variable", val.String()))
 	for j := 0; j < val.NumField(); j++ {
 		subVal := val.Field(j)
 		tag := val.Type().Field(j).Tag
@@ -71,11 +71,11 @@ func collectRecursive(params *paramtable.ComponentParam, data *[]DocContent, val
 			if strings.HasPrefix(item.DefaultValue, "\"") && strings.HasSuffix(item.DefaultValue, "\"") {
 				defaultValue = fmt.Sprintf("\"%s\"", defaultValue)
 			}
-			mlog.Debug(context.TODO(), "got key", mlog.String("key", item.Key), mlog.Any("value", defaultValue), mlog.String("variable", val.Type().Field(j).Name))
+			log.Debug(context.TODO(), "got key", log.String("key", item.Key), log.Any("value", defaultValue), log.String("variable", val.Type().Field(j).Name))
 			*data = append(*data, DocContent{item.Key, defaultValue, item.Version, refreshable, item.Export, item.Doc})
 		} else if t == "paramtable.ParamGroup" {
 			item := subVal.Interface().(paramtable.ParamGroup)
-			mlog.Debug(context.TODO(), "got key", mlog.String("key", item.KeyPrefix), mlog.String("variable", val.Type().Field(j).Name))
+			log.Debug(context.TODO(), "got key", log.String("key", item.KeyPrefix), log.String("variable", val.Type().Field(j).Name))
 			refreshable := tag.Get("refreshable")
 
 			// Sort group items to stablize the output order
@@ -87,7 +87,7 @@ func collectRecursive(params *paramtable.ComponentParam, data *[]DocContent, val
 			sort.Strings(keys)
 			for _, key := range keys {
 				value := m[key]
-				mlog.Debug(context.TODO(), "got group entry", mlog.String("key", key), mlog.String("value", value))
+				log.Debug(context.TODO(), "got group entry", log.String("key", key), log.String("value", value))
 				*data = append(*data, DocContent{fmt.Sprintf("%s%s", item.KeyPrefix, key), quoteIfNeeded(value), item.Version, refreshable, item.Export, item.GetDoc(key)})
 			}
 		} else {
@@ -148,7 +148,7 @@ func (m *YamlMarshaller) writeYamlRecursive(data []DocContent, level int) {
 	for _, key := range keys {
 		contents, ok := topLevels.Get(key)
 		if !ok {
-			mlog.Debug(context.TODO(), "didnot found config for " + key)
+			log.Debug(context.TODO(), "didnot found config for " + key)
 			continue
 		}
 		content := contents[0]

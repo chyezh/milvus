@@ -21,7 +21,7 @@ import (
 	"context"
 	"github.com/shirou/gopsutil/v3/mem"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 // GetUsedMemoryCount returns the memory usage in bytes.
@@ -29,8 +29,8 @@ func GetUsedMemoryCount() uint64 {
 	// not in container, calculate by `gopsutil`
 	stats, err := mem.VirtualMemory()
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to get memory usage count",
-			mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get memory usage count",
+			log.Err(err))
 		return 0
 	}
 

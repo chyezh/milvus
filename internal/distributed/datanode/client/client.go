@@ -29,7 +29,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/grpcclient"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/workerpb"
@@ -61,7 +61,7 @@ func NewClient(ctx context.Context, addr string, serverID int64, encryption bool
 	sess := sessionutil.NewSession(context.Background())
 	if sess == nil {
 		err := errors.New("new session error, maybe can not connect to etcd")
-		mlog.Debug(ctx, "DataNodeClient New Etcd Session failed", mlog.Err(err))
+		log.Debug(ctx, "DataNodeClient New Etcd Session failed", log.Err(err))
 		return nil, err
 	}
 
@@ -86,7 +86,7 @@ func NewClient(ctx context.Context, addr string, serverID int64, encryption bool
 		client.grpcClient.EnableEncryption()
 		cp, err := utils.CreateCertPoolforClient(Params.InternalTLSCfg.InternalTLSCaPemPath.GetValue(), "DataNode")
 		if err != nil {
-			mlog.Error(ctx, "Failed to create cert pool for DataNode client")
+			log.Error(ctx, "Failed to create cert pool for DataNode client")
 			return nil, err
 		}
 		client.grpcClient.SetInternalTLSCertPool(cp)

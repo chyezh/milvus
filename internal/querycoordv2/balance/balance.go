@@ -31,7 +31,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -73,7 +73,7 @@ func (b *RoundRobinBalancer) GetAssignPolicy() assign.AssignPolicy {
 func (b *RoundRobinBalancer) BalanceReplica(ctx context.Context, replica *meta.Replica) (segmentPlans []assign.SegmentAssignPlan, channelPlans []assign.ChannelAssignPlan) {
 
 	if replica.NodesCount() < 2 {
-		mlog.RatedDebug(context.TODO(), mlog.RateDefault, "replica has less than 2 querynodes, skip balance")
+		log.RatedDebug(context.TODO(), log.RateDefault, "replica has less than 2 querynodes, skip balance")
 		return nil, nil
 	}
 
@@ -85,9 +85,9 @@ func (b *RoundRobinBalancer) BalanceReplica(ctx context.Context, replica *meta.R
 	}
 
 	if len(segmentPlans) > 0 || len(channelPlans) > 0 {
-		mlog.Info(context.TODO(), "balance plan generated",
-			mlog.Int("segmentPlans", len(segmentPlans)),
-			mlog.Int("channelPlans", len(channelPlans)))
+		log.Info(context.TODO(), "balance plan generated",
+			log.Int("segmentPlans", len(segmentPlans)),
+			log.Int("channelPlans", len(channelPlans)))
 	}
 	return
 }

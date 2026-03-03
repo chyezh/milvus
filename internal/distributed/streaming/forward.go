@@ -38,7 +38,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/discoverer"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/lazygrpc"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/resolver"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/contextutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/crypto"
@@ -57,7 +57,7 @@ func newForwardService(streamingCoordClient client.Client) *forwardServiceImpl {
 		isForwardDisabled: false,
 		legacyProxy:       nil,
 	}
-	fs.SetLogger(mlog.With(mlog.FieldComponent("forward-service")))
+	fs.SetLogger(log.With(log.FieldComponent("forward-service")))
 	return fs
 }
 
@@ -82,7 +82,7 @@ type forwardOption struct {
 
 // forwardServiceImpl is the implementation of FallbackService.
 type forwardServiceImpl struct {
-	mlog.Binder
+	log.Binder
 
 	streamingCoordClient client.Client
 	mu                   sync.Mutex
@@ -209,7 +209,7 @@ func (fs *forwardServiceImpl) initLegacyProxy() {
 	})
 	fs.legacyProxy = lazygrpc.WithServiceCreator(conn, milvuspb.NewMilvusServiceClient)
 	fs.rb = rb
-	fs.Logger().Info(nil, "streaming service is not ready, legacy proxy is initiated to forward request", mlog.Int("proxyPort", port))
+	fs.Logger().Info(nil, "streaming service is not ready, legacy proxy is initiated to forward request", log.Int("proxyPort", port))
 }
 
 // getDialOptions returns the dial options for the legacy proxy.

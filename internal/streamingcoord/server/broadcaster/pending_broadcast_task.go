@@ -7,7 +7,7 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -49,29 +49,29 @@ type pendingBroadcastTask struct {
 // Same semantics as the `Poll` operation in eventloop.
 func (b *pendingBroadcastTask) Execute(ctx context.Context) error {
 	if err := b.broadcastTask.InitializeRecovery(ctx); err != nil {
-		b.Logger().Warn(nil, "broadcast task initialize recovery failed", mlog.Err(err))
+		b.Logger().Warn(nil, "broadcast task initialize recovery failed", log.Err(err))
 		return err
 	}
 
 	if len(b.pendingMessages) > 0 {
-		b.Logger().Debug(nil, "broadcast task is polling to make sent...", mlog.Int("pendingMessages", len(b.pendingMessages)))
+		b.Logger().Debug(nil, "broadcast task is polling to make sent...", log.Int("pendingMessages", len(b.pendingMessages)))
 		resps := streaming.WAL().AppendMessages(ctx, b.pendingMessages...)
 		newPendings := make([]message.MutableMessage, 0)
 		for idx, resp := range resps.Responses {
 			if resp.Error != nil {
-				b.Logger().Warn(nil, "broadcast task append message failed", mlog.Int("idx", idx), mlog.Err(resp.Error))
+				b.Logger().Warn(nil, "broadcast task append message failed", log.Int("idx", idx), log.Err(resp.Error))
 				newPendings = append(newPendings, b.pendingMessages[idx])
 				continue
 			}
 			b.appendResult[b.pendingMessages[idx].VChannel()] = resp.AppendResult
 		}
 		b.pendingMessages = newPendings
-		b.Logger().Info(nil, "broadcast task make a new broadcast done", mlog.Int("backoffRetryMessages", len(b.pendingMessages)))
+		b.Logger().Info(nil, "broadcast task make a new broadcast done", log.Int("backoffRetryMessages", len(b.pendingMessages)))
 	}
 	if len(b.pendingMessages) == 0 {
 		// trigger a fast ack operation when the broadcast operation is done.
 		if err := b.broadcastTask.FastAck(ctx, b.appendResult); err != nil {
-			b.Logger().Warn(nil, "broadcast task save task failed", mlog.Err(err))
+			b.Logger().Warn(nil, "broadcast task save task failed", log.Err(err))
 			return err
 		}
 		return nil

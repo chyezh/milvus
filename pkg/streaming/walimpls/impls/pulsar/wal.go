@@ -1,7 +1,7 @@
 package pulsar
 
 import (
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"context"
 	"time"
 
@@ -64,7 +64,7 @@ func (w *walImpl) initProducer() error {
 		// ProducerAccessMode: pulsar.ProducerAccessModeExclusiveWithFencing,
 	})
 	if err != nil {
-		w.Log().Warn(nil, "create producer failed", mlog.Err(err))
+		w.Log().Warn(nil, "create producer failed", log.Err(err))
 		return err
 	}
 	w.Log().Info(nil, "pulsar create producer done")
@@ -93,7 +93,7 @@ func (w *walImpl) Append(ctx context.Context, msg message.MutableMessage) (messa
 	// Because if the write is failed, the message may be already written to the pulsar topic.
 	w.backlogClearHelper.ObserveAppend(msg.EstimateSize())
 	if err != nil {
-		w.Log().RatedWarn(nil, mlog.RateDefault, "send message to pulsar failed", mlog.Err(err))
+		w.Log().RatedWarn(nil, log.RateDefault, "send message to pulsar failed", log.Err(err))
 		return nil, err
 	}
 	return pulsarID{id}, nil

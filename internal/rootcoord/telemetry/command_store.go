@@ -31,7 +31,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 )
 
@@ -184,14 +184,14 @@ func (s *CommandStore) loadCache() {
 
 	// Load configs
 	if resp, err := s.kv.Get(ctx, s.configPath, clientv3.WithPrefix()); err != nil {
-		mlog.Warn(ctx, "loadCache: failed to load configs", mlog.Err(err))
+		log.Warn(ctx, "loadCache: failed to load configs", log.Err(err))
 	} else {
 		for _, kv := range resp.Kvs {
 			var cfg storedConfig
 			if err := json.Unmarshal(kv.Value, &cfg); err != nil {
-				mlog.Warn(ctx, "loadCache: failed to unmarshal config",
-					mlog.Err(err),
-					mlog.String("key", string(kv.Key)))
+				log.Warn(ctx, "loadCache: failed to unmarshal config",
+					log.Err(err),
+					log.String("key", string(kv.Key)))
 				continue
 			}
 			s.cache.configs[cfg.ConfigID] = &cfg
@@ -201,9 +201,9 @@ func (s *CommandStore) loadCache() {
 	// Calculate config hash
 	s.cache.configHash = s.computeConfigHash()
 
-	mlog.Info(ctx, "loadCache: completed",
-		mlog.Int("commands", len(s.cache.commands)),
-		mlog.Int("configs", len(s.cache.configs)))
+	log.Info(ctx, "loadCache: completed",
+		log.Int("commands", len(s.cache.commands)),
+		log.Int("configs", len(s.cache.configs)))
 }
 
 // PushCommand stores a command/config in etcd and cache
@@ -257,9 +257,9 @@ func (s *CommandStore) PushCommand(ctx context.Context, req *milvuspb.PushClient
 		failedDeletes := make(map[string]struct{})
 		for _, id := range existingIDs {
 			if err := s.kv.Delete(ctx, s.configPath+id); err != nil {
-				mlog.Warn(ctx, "PushCommand: failed to delete old config",
-					mlog.String("config_id", id),
-					mlog.Err(err))
+				log.Warn(ctx, "PushCommand: failed to delete old config",
+					log.String("config_id", id),
+					log.Err(err))
 				failedDeletes[id] = struct{}{}
 			}
 		}
@@ -449,7 +449,7 @@ func (s *CommandStore) CleanupExpiredCommands(ctx context.Context) {
 	}
 
 	if len(expired) > 0 {
-		mlog.Info(ctx, "CleanupExpiredCommands", mlog.Int("deleted", len(expired)))
+		log.Info(ctx, "CleanupExpiredCommands", log.Int("deleted", len(expired)))
 	}
 }
 

@@ -27,7 +27,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/streamrpc"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -101,8 +101,8 @@ func (w *remoteWorker) LoadSegments(ctx context.Context, req *querypb.LoadSegmen
 	client := w.getClient()
 	status, err := client.LoadSegments(ctx, req)
 	if err = merr.CheckRPCCall(status, err); err != nil {
-		mlog.Warn(context.TODO(), "failed to call LoadSegments via grpc worker",
-			mlog.Err(err),
+		log.Warn(context.TODO(), "failed to call LoadSegments via grpc worker",
+			log.Err(err),
 		)
 		return err
 	}
@@ -113,8 +113,8 @@ func (w *remoteWorker) ReleaseSegments(ctx context.Context, req *querypb.Release
 	client := w.getClient()
 	status, err := client.ReleaseSegments(ctx, req)
 	if err = merr.CheckRPCCall(status, err); err != nil {
-		mlog.Warn(context.TODO(), "failed to call ReleaseSegments via grpc worker",
-			mlog.Err(err),
+		log.Warn(context.TODO(), "failed to call ReleaseSegments via grpc worker",
+			log.Err(err),
 		)
 		return err
 	}
@@ -126,10 +126,10 @@ func (w *remoteWorker) Delete(ctx context.Context, req *querypb.DeleteRequest) e
 	status, err := client.Delete(ctx, req)
 	if err := merr.CheckRPCCall(status, err); err != nil {
 		if errors.Is(err, merr.ErrServiceUnimplemented) {
-			mlog.Warn(context.TODO(), "invoke legacy querynode Delete method, ignore error", mlog.Err(err))
+			log.Warn(context.TODO(), "invoke legacy querynode Delete method, ignore error", log.Err(err))
 			return nil
 		}
-		mlog.Warn(context.TODO(), "failed to call Delete, worker return error", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to call Delete, worker return error", log.Err(err))
 		return err
 	}
 	return nil
@@ -140,7 +140,7 @@ func (w *remoteWorker) DeleteBatch(ctx context.Context, req *querypb.DeleteBatch
 	resp, err := client.DeleteBatch(ctx, req)
 	if err := merr.CheckRPCCall(resp, err); err != nil {
 		if errors.Is(err, merr.ErrServiceUnimplemented) {
-			mlog.Warn(context.TODO(), "invoke legacy querynode DeleteBatch method, fallback to ")
+			log.Warn(context.TODO(), "invoke legacy querynode DeleteBatch method, fallback to ")
 			return w.splitDeleteBatch(ctx, req)
 		}
 		return nil, err
@@ -223,9 +223,9 @@ func (w *remoteWorker) QueryStreamSegments(ctx context.Context, req *querypb.Que
 
 		err = srv.Send(result)
 		if err != nil {
-			mlog.Warn(context.TODO(), "send stream pks from remote woker failed",
-				mlog.Int64("collectionID", req.Req.GetCollectionID()),
-				mlog.Int64s("segmentIDs", req.GetSegmentIDs()),
+			log.Warn(context.TODO(), "send stream pks from remote woker failed",
+				log.Int64("collectionID", req.Req.GetCollectionID()),
+				log.Int64s("segmentIDs", req.GetSegmentIDs()),
 			)
 			return err
 		}
@@ -263,6 +263,6 @@ func (w *remoteWorker) Stop() {
 		return
 	}
 	if err := w.client.Close(); err != nil {
-		mlog.Warn(context.TODO(), "failed to call Close via grpc worker", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to call Close via grpc worker", log.Err(err))
 	}
 }

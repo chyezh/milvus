@@ -29,7 +29,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/util/analyzer"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -48,7 +48,7 @@ func initAnalyzerPool() {
 	cpuNum := hardware.GetCPUNum()
 	initPoolSize := int(float64(cpuNum) * paramtable.Get().FunctionCfg.AnalyzerConcurrencyPerCPUCore.GetAsFloat())
 	if initPoolSize <= 0 {
-		mlog.Warn(context.TODO(), "analyzer pool size is less than 0, set to cpu num", mlog.Int("cpuNum", cpuNum))
+		log.Warn(context.TODO(), "analyzer pool size is less than 0, set to cpu num", log.Int("cpuNum", cpuNum))
 		initPoolSize = cpuNum
 	}
 	analyzerPool = conc.NewPool[struct{}](initPoolSize)

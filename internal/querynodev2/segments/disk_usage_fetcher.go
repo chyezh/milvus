@@ -24,7 +24,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -51,14 +51,14 @@ func (d *diskUsageFetcher) GetDiskUsage() (int64, error) {
 func (d *diskUsageFetcher) fetch() {
 	diskUsage, err := segcore.GetLocalUsedSize(d.path)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to get disk usage", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get disk usage", log.Err(err))
 		d.err.Store(err)
 		return
 	}
 	d.usage.Store(diskUsage)
 	d.err.Store(nil)
 	metrics.QueryNodeDiskUsedSize.WithLabelValues(paramtable.GetStringNodeID()).Set(float64(diskUsage) / 1024 / 1024) // in MB
-	mlog.RatedInfo(d.ctx, mlog.RateDefault, "querynode disk usage", mlog.Int64("size", diskUsage), mlog.Int64("nodeID", paramtable.GetNodeID()))
+	log.RatedInfo(d.ctx, log.RateDefault, "querynode disk usage", log.Int64("size", diskUsage), log.Int64("nodeID", paramtable.GetNodeID()))
 }
 
 func (d *diskUsageFetcher) Start() {

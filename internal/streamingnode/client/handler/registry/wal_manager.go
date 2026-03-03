@@ -6,7 +6,7 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -26,7 +26,7 @@ func RegisterLocalWALManager(manager WALManager) {
 		panic("unreachable: streaming node is not enabled but wal setup")
 	}
 	registry.Set(manager)
-	mlog.Info(context.Background(), "register local wal manager done")
+	log.Info(context.Background(), "register local wal manager done")
 }
 
 // GetLocalAvailableWAL returns a available wal instance for the channel.

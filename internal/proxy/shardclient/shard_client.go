@@ -26,7 +26,7 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -111,7 +111,7 @@ func (n *shardClient) initClients(ctx context.Context) error {
 			for _, c := range clients {
 				c.Close()
 			}
-			mlog.Info(context.TODO(), "failed to create client for node", mlog.Int64("nodeID", n.info.NodeID), mlog.Err(err))
+			log.Info(context.TODO(), "failed to create client for node", log.Int64("nodeID", n.info.NodeID), log.Err(err))
 			return errors.Wrap(err, fmt.Sprintf("create client for node=%d failed", n.info.NodeID))
 		}
 		clients = append(clients, client)
@@ -161,7 +161,7 @@ func (n *shardClient) close() {
 
 	for _, client := range n.clients {
 		if err := client.Close(); err != nil {
-			mlog.Warn(context.TODO(), "close grpc client failed", mlog.Err(err))
+			log.Warn(context.TODO(), "close grpc client failed", log.Err(err))
 		}
 	}
 	n.clients = nil

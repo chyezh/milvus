@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -72,11 +72,11 @@ func (b *ChannelBlacklist) cleanupLoop() {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	mlog.Info(context.TODO(), "Start blacklist cleanup loop")
+	log.Info(context.TODO(), "Start blacklist cleanup loop")
 	for {
 		select {
 		case <-b.closeCh:
-			mlog.Info(context.TODO(), "Blacklist cleanup loop exit")
+			log.Info(context.TODO(), "Blacklist cleanup loop exit")
 			return
 		case <-ticker.C:
 			b.cleanup()

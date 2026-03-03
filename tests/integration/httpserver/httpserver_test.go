@@ -16,7 +16,7 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/milvus-io/milvus/internal/distributed/proxy/httpserver"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/tests/integration"
@@ -121,7 +121,7 @@ func (s *HTTPServerSuite) TestInsertThrottle() {
 		}
 		wg.Wait()
 		// it's expected at least one insert request is rejected for throttle
-		mlog.Info(context.TODO(), "limited thread count", mlog.Int32("limitedThreadCount", limitedThreadCount.Load()))
+		log.Info(context.TODO(), "limited thread count", log.Int32("limitedThreadCount", limitedThreadCount.Load()))
 		s.True(limitedThreadCount.Load() > 0)
 	}
 }

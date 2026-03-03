@@ -66,7 +66,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/streamingutil/util"
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgdispatcher"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
@@ -173,7 +173,7 @@ func (node *QueryNode) initSession() error {
 	sessionutil.SaveServerInfo(typeutil.QueryNodeRole, node.session.ServerID)
 	paramtable.SetNodeID(node.session.ServerID)
 	node.serverID = node.session.ServerID
-	mlog.Info(node.ctx, "QueryNode init session", mlog.Int64("nodeID", node.GetNodeID()), mlog.String("node address", node.session.Address))
+	log.Info(node.ctx, "QueryNode init session", log.Int64("nodeID", node.GetNodeID()), log.String("node address", node.session.Address))
 	return nil
 }
 
@@ -196,19 +196,19 @@ func ResizeHighPriorityPool(evt *config.Event) {
 func (node *QueryNode) ReconfigDiskFileWriterParams(evt *config.Event) {
 	if evt.HasUpdated {
 		if err := initcore.InitDiskFileWriterConfig(paramtable.Get()); err != nil {
-			mlog.Warn(node.ctx, "QueryNode failed to reconfigure file writer params", mlog.Err(err))
+			log.Warn(node.ctx, "QueryNode failed to reconfigure file writer params", log.Err(err))
 			return
 		}
-		mlog.Info(node.ctx, "QueryNode reconfig file writer params successfully",
-			mlog.String("mode", paramtable.Get().CommonCfg.DiskWriteMode.GetValue()),
-			mlog.Uint64("bufferSize", paramtable.Get().CommonCfg.DiskWriteBufferSizeKb.GetAsUint64()),
-			mlog.Int("nrThreads", paramtable.Get().CommonCfg.DiskWriteNumThreads.GetAsInt()),
-			mlog.Uint64("refillPeriodUs", paramtable.Get().CommonCfg.DiskWriteRateLimiterRefillPeriodUs.GetAsUint64()),
-			mlog.Uint64("maxBurstKBps", paramtable.Get().CommonCfg.DiskWriteRateLimiterMaxBurstKBps.GetAsUint64()),
-			mlog.Uint64("avgKBps", paramtable.Get().CommonCfg.DiskWriteRateLimiterAvgKBps.GetAsUint64()),
-			mlog.Int("highPriorityRatio", paramtable.Get().CommonCfg.DiskWriteRateLimiterHighPriorityRatio.GetAsInt()),
-			mlog.Int("middlePriorityRatio", paramtable.Get().CommonCfg.DiskWriteRateLimiterMiddlePriorityRatio.GetAsInt()),
-			mlog.Int("lowPriorityRatio", paramtable.Get().CommonCfg.DiskWriteRateLimiterLowPriorityRatio.GetAsInt()))
+		log.Info(node.ctx, "QueryNode reconfig file writer params successfully",
+			log.String("mode", paramtable.Get().CommonCfg.DiskWriteMode.GetValue()),
+			log.Uint64("bufferSize", paramtable.Get().CommonCfg.DiskWriteBufferSizeKb.GetAsUint64()),
+			log.Int("nrThreads", paramtable.Get().CommonCfg.DiskWriteNumThreads.GetAsInt()),
+			log.Uint64("refillPeriodUs", paramtable.Get().CommonCfg.DiskWriteRateLimiterRefillPeriodUs.GetAsUint64()),
+			log.Uint64("maxBurstKBps", paramtable.Get().CommonCfg.DiskWriteRateLimiterMaxBurstKBps.GetAsUint64()),
+			log.Uint64("avgKBps", paramtable.Get().CommonCfg.DiskWriteRateLimiterAvgKBps.GetAsUint64()),
+			log.Int("highPriorityRatio", paramtable.Get().CommonCfg.DiskWriteRateLimiterHighPriorityRatio.GetAsInt()),
+			log.Int("middlePriorityRatio", paramtable.Get().CommonCfg.DiskWriteRateLimiterMiddlePriorityRatio.GetAsInt()),
+			log.Int("lowPriorityRatio", paramtable.Get().CommonCfg.DiskWriteRateLimiterLowPriorityRatio.GetAsInt()))
 	}
 }
 
@@ -268,7 +268,7 @@ func (node *QueryNode) registerMetricsRequest() {
 			collectionID := metricsinfo.GetCollectionIDFromRequest(jsonReq)
 			return getChannelJSON(node, collectionID), nil
 		})
-	mlog.Info(node.ctx, "register metrics actions finished")
+	log.Info(node.ctx, "register metrics actions finished")
 }
 
 // Init function init historical and streaming module to manage segments
@@ -277,10 +277,10 @@ func (node *QueryNode) Init() error {
 	node.initOnce.Do(func() {
 		node.registerMetricsRequest()
 		// ctx := context.Background()
-		mlog.Info(context.TODO(), "QueryNode session info", mlog.String("metaPath", paramtable.Get().EtcdCfg.MetaRootPath.GetValue()))
+		log.Info(context.TODO(), "QueryNode session info", log.String("metaPath", paramtable.Get().EtcdCfg.MetaRootPath.GetValue()))
 		err := node.initSession()
 		if err != nil {
-			mlog.Error(context.TODO(), "QueryNode init session failed", mlog.Err(err))
+			log.Error(context.TODO(), "QueryNode init session failed", log.Err(err))
 			initError = err
 			return
 		}
@@ -289,7 +289,7 @@ func (node *QueryNode) Init() error {
 		if err != nil {
 			// auto index cannot work if hook init failed
 			if paramtable.Get().AutoIndexConfig.Enable.GetAsBool() {
-				mlog.Error(context.TODO(), "QueryNode init hook failed", mlog.Err(err))
+				log.Error(context.TODO(), "QueryNode init hook failed", log.Err(err))
 				initError = err
 				return
 			}
@@ -302,7 +302,7 @@ func (node *QueryNode) Init() error {
 		localRootPath := paramtable.Get().LocalStorageCfg.Path.GetValue()
 		localUsedSize, err := segcore.GetLocalUsedSize(localRootPath)
 		if err != nil {
-			mlog.Warn(context.TODO(), "get local used size failed", mlog.Err(err))
+			log.Warn(context.TODO(), "get local used size failed", log.Err(err))
 			initError = err
 			return
 		}
@@ -310,7 +310,7 @@ func (node *QueryNode) Init() error {
 
 		node.chunkManager, err = node.factory.NewPersistentStorageChunkManager(node.ctx)
 		if err != nil {
-			mlog.Error(context.TODO(), "QueryNode init vector storage failed", mlog.Err(err))
+			log.Error(context.TODO(), "QueryNode init vector storage failed", log.Err(err))
 			initError = err
 			return
 		}
@@ -320,7 +320,7 @@ func (node *QueryNode) Init() error {
 			schedulePolicy,
 		)
 
-		mlog.Info(context.TODO(), "queryNode init scheduler", mlog.String("policy", schedulePolicy))
+		log.Info(context.TODO(), "queryNode init scheduler", log.String("policy", schedulePolicy))
 		node.clusterManager = cluster.NewWorkerManager(func(ctx context.Context, nodeID int64) (cluster.Worker, error) {
 			if nodeID == node.GetNodeID() {
 				return NewLocalWorker(node), nil
@@ -357,15 +357,15 @@ func (node *QueryNode) Init() error {
 
 		err = initcore.InitQueryNode(node.ctx)
 		if err != nil {
-			mlog.Error(context.TODO(), "QueryNode init segcore failed", mlog.Err(err))
+			log.Error(context.TODO(), "QueryNode init segcore failed", log.Err(err))
 			initError = err
 			return
 		}
 		node.RegisterSegcoreConfigWatcher()
 
-		mlog.Info(context.TODO(), "query node init successfully",
-			mlog.Int64("queryNodeID", node.GetNodeID()),
-			mlog.String("Address", node.address),
+		log.Info(context.TODO(), "query node init successfully",
+			log.Int64("queryNodeID", node.GetNodeID()),
+			log.String("Address", node.address),
 		)
 	})
 
@@ -389,15 +389,15 @@ func (node *QueryNode) Start() error {
 		node.UpdateStateCode(commonpb.StateCode_Healthy)
 
 		registry.GetInMemoryResolver().RegisterQueryNode(node.GetNodeID(), node)
-		mlog.Info(context.TODO(), "query node start successfully",
-			mlog.Int64("queryNodeID", node.GetNodeID()),
-			mlog.String("Address", node.address),
-			mlog.Bool("mmapEnabled", mmapEnabled),
-			mlog.Bool("growingmmapEnable", growingmmapEnable),
-			mlog.Bool("mmapVectorIndex", mmapVectorIndex),
-			mlog.Bool("mmapVectorField", mmapVectorField),
-			mlog.Bool("mmapScalarIndex", mmapScalarIndex),
-			mlog.Bool("mmapScalarField", mmapScalarField),
+		log.Info(context.TODO(), "query node start successfully",
+			log.Int64("queryNodeID", node.GetNodeID()),
+			log.String("Address", node.address),
+			log.Bool("mmapEnabled", mmapEnabled),
+			log.Bool("growingmmapEnable", growingmmapEnable),
+			log.Bool("mmapVectorIndex", mmapVectorIndex),
+			log.Bool("mmapVectorField", mmapVectorField),
+			log.Bool("mmapScalarIndex", mmapScalarIndex),
+			log.Bool("mmapScalarField", mmapScalarField),
 		)
 	})
 
@@ -407,10 +407,10 @@ func (node *QueryNode) Start() error {
 // Stop mainly stop QueryNode's query service, historical loop and streaming loop.
 func (node *QueryNode) Stop() error {
 	node.stopOnce.Do(func() {
-		mlog.Info(context.TODO(), "Query node stop...")
+		log.Info(context.TODO(), "Query node stop...")
 		err := node.session.GoingStop()
 		if err != nil {
-			mlog.Warn(context.TODO(), "session fail to go stopping state", mlog.Err(err))
+			log.Warn(context.TODO(), "session fail to go stopping state", log.Err(err))
 		} else if util.MustSelectWALName() != message.WALNameRocksmq { // rocksmq cannot support querynode graceful stop because of using local storage.
 			metrics.StoppingBalanceNodeNum.WithLabelValues().Set(1)
 			// TODO: Redundant timeout control, graceful stop timeout is controlled by outside by `component`.
@@ -438,27 +438,27 @@ func (node *QueryNode) Stop() error {
 
 				select {
 				case <-timeoutCh:
-					mlog.Warn(context.TODO(), "migrate data timed out", mlog.Int64("ServerID", node.GetNodeID()),
-						mlog.Int64s("sealedSegments", lo.Map(sealedSegments, func(s segments.Segment, i int) int64 {
+					log.Warn(context.TODO(), "migrate data timed out", log.Int64("ServerID", node.GetNodeID()),
+						log.Int64s("sealedSegments", lo.Map(sealedSegments, func(s segments.Segment, i int) int64 {
 							return s.ID()
 						})),
-						mlog.Int64s("growingSegments", lo.Map(growingSegments, func(t segments.Segment, i int) int64 {
+						log.Int64s("growingSegments", lo.Map(growingSegments, func(t segments.Segment, i int) int64 {
 							return t.ID()
 						})),
-						mlog.Int("channelNum", channelNum),
+						log.Int("channelNum", channelNum),
 					)
 					break outer
 				case <-time.After(time.Second):
 					metrics.StoppingBalanceSegmentNum.WithLabelValues(fmt.Sprint(node.GetNodeID())).Set(float64(len(sealedSegments)))
 					metrics.StoppingBalanceChannelNum.WithLabelValues(fmt.Sprint(node.GetNodeID())).Set(float64(channelNum))
-					mlog.Info(context.TODO(), "migrate data...", mlog.Int64("ServerID", node.GetNodeID()),
-						mlog.Int64s("sealedSegments", lo.Map(sealedSegments, func(s segments.Segment, i int) int64 {
+					log.Info(context.TODO(), "migrate data...", log.Int64("ServerID", node.GetNodeID()),
+						log.Int64s("sealedSegments", lo.Map(sealedSegments, func(s segments.Segment, i int) int64 {
 							return s.ID()
 						})),
-						mlog.Int64s("growingSegments", lo.Map(growingSegments, func(t segments.Segment, i int) int64 {
+						log.Int64s("growingSegments", lo.Map(growingSegments, func(t segments.Segment, i int) int64 {
 							return t.ID()
 						})),
-						mlog.Int("channelNum", channelNum),
+						log.Int("channelNum", channelNum),
 					)
 				}
 			}
@@ -519,7 +519,7 @@ func (node *QueryNode) initHook() error {
 	if path == "" {
 		return errors.New("fail to set the plugin path")
 	}
-	mlog.Info(context.TODO(), "start to load plugin", mlog.String("path", path))
+	log.Info(context.TODO(), "start to load plugin", log.String("path", path))
 
 	hookutil.LockHookInit()
 	defer hookutil.UnlockHookInit()
@@ -527,7 +527,7 @@ func (node *QueryNode) initHook() error {
 	if err != nil {
 		return fmt.Errorf("fail to open the plugin, error: %s", err.Error())
 	}
-	mlog.Info(context.TODO(), "plugin open")
+	log.Info(context.TODO(), "plugin open")
 
 	h, err := p.Lookup("QueryNodePlugin")
 	if err != nil {
@@ -555,7 +555,7 @@ func (node *QueryNode) handleQueryHookEvent() {
 	onEvent := func(event *config.Event) {
 		if node.queryHook != nil {
 			if err := node.queryHook.Init(event.Value); err != nil {
-				mlog.Error(context.TODO(), "failed to refresh hook config", mlog.Err(err))
+				log.Error(context.TODO(), "failed to refresh hook config", log.Err(err))
 			}
 		}
 	}
@@ -564,11 +564,11 @@ func (node *QueryNode) handleQueryHookEvent() {
 			realKey := strings.TrimPrefix(event.Key, paramtable.Get().AutoIndexConfig.AutoIndexTuningConfig.KeyPrefix)
 			if event.EventType == config.CreateType || event.EventType == config.UpdateType {
 				if err := node.queryHook.InitTuningConfig(map[string]string{realKey: event.Value}); err != nil {
-					mlog.Warn(context.TODO(), "failed to refresh hook tuning config", mlog.Err(err))
+					log.Warn(context.TODO(), "failed to refresh hook tuning config", log.Err(err))
 				}
 			} else if event.EventType == config.DeleteType {
 				if err := node.queryHook.DeleteTuningConfig(realKey); err != nil {
-					mlog.Warn(context.TODO(), "failed to delete hook tuning config", mlog.Err(err))
+					log.Warn(context.TODO(), "failed to delete hook tuning config", log.Err(err))
 				}
 			}
 		}

@@ -29,7 +29,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/hookutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -117,7 +117,7 @@ func (r *reader) init(paths []string, tsStart, tsEnd uint64) error {
 	r.schema = cloneschema
 
 	validIDs := lo.Keys(r.insertLogs)
-	mlog.Info(context.TODO(), "create binlog reader for these fields", mlog.Any("validIDs", validIDs))
+	log.Info(context.TODO(), "create binlog reader for these fields", log.Any("validIDs", validIDs))
 
 	rwOptions := []storage.RwOption{
 		storage.WithVersion(r.storageVersion),
@@ -164,9 +164,9 @@ func (r *reader) init(paths []string, tsStart, tsEnd uint64) error {
 		return err
 	}
 
-	mlog.Info(context.TODO(), "read delete done",
-		mlog.String("collection", r.schema.GetName()),
-		mlog.Int("deleteRows", len(r.deleteData)),
+	log.Info(context.TODO(), "read delete done",
+		log.String("collection", r.schema.GetName()),
+		log.Int("deleteRows", len(r.deleteData)),
 	)
 
 	deleteFilter, err := FilterWithDelete(r)
@@ -209,7 +209,7 @@ func (r *reader) readDelete(deltaLogs []string, tsStart, tsEnd uint64) (map[any]
 				if err == io.EOF {
 					break
 				}
-				mlog.Error(context.TODO(), "compose delete wrong, failed to read deltalogs", mlog.Err(err))
+				log.Error(context.TODO(), "compose delete wrong, failed to read deltalogs", log.Err(err))
 				return nil, err
 			}
 

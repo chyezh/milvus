@@ -6,7 +6,7 @@ import (
 
 
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -94,8 +94,8 @@ func (p *ConfigChannelProvider) onConfigChange() {
 	})
 	if len(newChannels) > 0 {
 		sort.Strings(newChannels)
-		mlog.Info(context.TODO(), "ConfigChannelProvider detected new channels",
-			mlog.Strings("newChannels", newChannels))
+		log.Info(context.TODO(), "ConfigChannelProvider detected new channels",
+			log.Strings("newChannels", newChannels))
 		select {
 		case p.ch <- newChannels:
 		case <-p.notifier.Context().Done():

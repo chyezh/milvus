@@ -26,7 +26,7 @@ import (
 	"time"
 
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
 	"github.com/milvus-io/milvus/pkg/v2/util/logutil"
 )
@@ -84,22 +84,22 @@ func optimizeGOGC() {
 
 	// currently we assume 20 ms as long gc pause
 	if (m.PauseNs[(m.NumGC+255)%256] / uint64(time.Millisecond)) < 20 {
-		mlog.Debug(context.TODO(), "GC Tune done", mlog.Uint32("previous GOGC", previousGOGC),
-			mlog.Uint64("heapuse ", logutil.ToMB(heapuse)),
-			mlog.Uint64("total memory", logutil.ToMB(totaluse)),
-			mlog.Uint64("next GC", logutil.ToMB(m.NextGC)),
-			mlog.Uint32("new GOGC", newGoGC),
-			mlog.Duration("gc-pause", time.Duration(m.PauseNs[(m.NumGC+255)%256])),
-			mlog.Uint64("gc-pause-end", m.PauseEnd[(m.NumGC+255)%256]),
+		log.Debug(context.TODO(), "GC Tune done", log.Uint32("previous GOGC", previousGOGC),
+			log.Uint64("heapuse ", logutil.ToMB(heapuse)),
+			log.Uint64("total memory", logutil.ToMB(totaluse)),
+			log.Uint64("next GC", logutil.ToMB(m.NextGC)),
+			log.Uint32("new GOGC", newGoGC),
+			log.Duration("gc-pause", time.Duration(m.PauseNs[(m.NumGC+255)%256])),
+			log.Uint64("gc-pause-end", m.PauseEnd[(m.NumGC+255)%256]),
 		)
 	} else {
-		mlog.Warn(context.TODO(), "GC Tune done, and the gc is slow", mlog.Uint32("previous GOGC", previousGOGC),
-			mlog.Uint64("heapuse ", logutil.ToMB(heapuse)),
-			mlog.Uint64("total memory", logutil.ToMB(totaluse)),
-			mlog.Uint64("next GC", logutil.ToMB(m.NextGC)),
-			mlog.Uint32("new GOGC", newGoGC),
-			mlog.Duration("gc-pause", time.Duration(m.PauseNs[(m.NumGC+255)%256])),
-			mlog.Uint64("gc-pause-end", m.PauseEnd[(m.NumGC+255)%256]),
+		log.Warn(context.TODO(), "GC Tune done, and the gc is slow", log.Uint32("previous GOGC", previousGOGC),
+			log.Uint64("heapuse ", logutil.ToMB(heapuse)),
+			log.Uint64("total memory", logutil.ToMB(totaluse)),
+			log.Uint64("next GC", logutil.ToMB(m.NextGC)),
+			log.Uint32("new GOGC", newGoGC),
+			log.Duration("gc-pause", time.Duration(m.PauseNs[(m.NumGC+255)%256])),
+			log.Uint64("gc-pause-end", m.PauseEnd[(m.NumGC+255)%256]),
 		)
 	}
 	previousGOGC = newGoGC
@@ -125,16 +125,16 @@ func NewTuner(targetPercent float64, minimumGOGCConfig uint32, maximumGOGCConfig
 
 		totalMemory := hardware.GetMemoryCount()
 		if totalMemory == 0 {
-			mlog.Warn(context.TODO(), "Failed to get memory count, disable gc auto tune", mlog.Int("Initial GoGC", defaultGOGC))
+			log.Warn(context.TODO(), "Failed to get memory count, disable gc auto tune", log.Int("Initial GoGC", defaultGOGC))
 			// noop
 			action = func(uint32) {}
 			return
 		}
 		memoryThreshold = uint64(float64(totalMemory) * targetPercent)
-		mlog.Info(context.TODO(), "GC Helper initialized.", mlog.Uint32("Initial GoGC", previousGOGC),
-			mlog.Uint32("minimumGOGC", minGOGC),
-			mlog.Uint32("maximumGOGC", maxGOGC),
-			mlog.Uint64("memoryThreshold", memoryThreshold))
+		log.Info(context.TODO(), "GC Helper initialized.", log.Uint32("Initial GoGC", previousGOGC),
+			log.Uint32("minimumGOGC", minGOGC),
+			log.Uint32("maximumGOGC", maxGOGC),
+			log.Uint64("memoryThreshold", memoryThreshold))
 		f := &finalizer{}
 
 		f.ref = &finalizerRef{parent: f}

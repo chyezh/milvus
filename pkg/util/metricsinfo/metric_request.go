@@ -23,7 +23,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -125,7 +125,7 @@ func (mr *MetricsRequest) RegisterMetricsRequest(reqType string, action MetricsR
 	defer mr.lock.Unlock()
 	_, ok := mr.metricsReqType2Action[reqType]
 	if ok {
-		mlog.Info(context.TODO(), "metrics request type already exists", mlog.String("reqType", reqType))
+		log.Info(context.TODO(), "metrics request type already exists", log.String("reqType", reqType))
 		return
 	}
 
@@ -136,7 +136,7 @@ func (mr *MetricsRequest) ExecuteMetricsRequest(ctx context.Context, req *milvus
 	jsonReq := gjson.Parse(req.Request)
 	reqType, err := ParseMetricRequestType(jsonReq)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to parse metric type", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to parse metric type", log.Err(err))
 		return "", err
 	}
 
@@ -144,7 +144,7 @@ func (mr *MetricsRequest) ExecuteMetricsRequest(ctx context.Context, req *milvus
 	action, ok := mr.metricsReqType2Action[reqType]
 	if !ok {
 		mr.lock.Unlock()
-		mlog.Warn(context.TODO(), "unimplemented metric request type", mlog.String("req_type", reqType))
+		log.Warn(context.TODO(), "unimplemented metric request type", log.String("req_type", reqType))
 		return "", errors.New(MsgUnimplementedMetric)
 	}
 	mr.lock.Unlock()
@@ -152,7 +152,7 @@ func (mr *MetricsRequest) ExecuteMetricsRequest(ctx context.Context, req *milvus
 	actionRet, err := action(ctx, req, jsonReq)
 	if err != nil {
 		msg := fmt.Sprintf("failed to execute %s", reqType)
-		mlog.Warn(context.TODO(), msg, mlog.Err(err))
+		log.Warn(context.TODO(), msg, log.Err(err))
 		return "", err
 	}
 	return actionRet, nil

@@ -33,7 +33,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 )
 
@@ -71,11 +71,11 @@ func GetEtcdClient(
 	minVersion string,
 	opts ...ClientOption,
 ) (*clientv3.Client, error) {
-	mlog.Info(context.TODO(), "create etcd client",
-		mlog.Bool("useEmbedEtcd", useEmbedEtcd),
-		mlog.Bool("useSSL", useSSL),
-		mlog.Any("endpoints", endpoints),
-		mlog.String("minVersion", minVersion))
+	log.Info(context.TODO(), "create etcd client",
+		log.Bool("useEmbedEtcd", useEmbedEtcd),
+		log.Bool("useSSL", useSSL),
+		log.Any("endpoints", endpoints),
+		log.String("minVersion", minVersion))
 	if useEmbedEtcd {
 		return GetEmbedEtcdClient()
 	}
@@ -177,10 +177,10 @@ func CreateEtcdClient(
 	if !enableAuth || useEmbedEtcd {
 		return GetEtcdClient(useEmbedEtcd, useSSL, endpoints, certFile, keyFile, caCertFile, minVersion, opts...)
 	}
-	mlog.Info(context.TODO(), "create etcd client(enable auth)",
-		mlog.Bool("useSSL", useSSL),
-		mlog.Any("endpoints", endpoints),
-		mlog.String("minVersion", minVersion))
+	log.Info(context.TODO(), "create etcd client(enable auth)",
+		log.Bool("useSSL", useSSL),
+		log.Any("endpoints", endpoints),
+		log.String("minVersion", minVersion))
 	if useSSL {
 		return GetRemoteEtcdSSLClientWithCfg(endpoints, certFile, keyFile, caCertFile, minVersion, clientv3.Config{Username: userName, Password: password}, opts...)
 	}

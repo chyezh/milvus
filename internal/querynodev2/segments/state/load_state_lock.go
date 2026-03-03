@@ -9,7 +9,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"go.uber.org/atomic"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -203,7 +203,7 @@ func (ls *LoadStateLock) waitOrPanic(ready func(state loadStateEnum) bool, then 
 
 	select {
 	case <-time.After(maxWaitTime):
-		mlog.Error(context.TODO(), "load state lock wait timeout", mlog.Duration("maxWaitTime", maxWaitTime))
+		log.Error(context.TODO(), "load state lock wait timeout", log.Duration("maxWaitTime", maxWaitTime))
 	case <-ch:
 	}
 }

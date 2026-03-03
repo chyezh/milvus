@@ -23,17 +23,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 func TestParseHybridTs(t *testing.T) {
 	var ts uint64 = 426152581543231492
 	physical, logical := ParseHybridTs(ts)
 	physicalTime := time.Unix(physical/1000, physical%1000*time.Millisecond.Nanoseconds())
-	mlog.Debug(context.TODO(), "TestParseHybridTs",
-		mlog.Int64("physical", physical),
-		mlog.Int64("logical", logical),
-		mlog.Any("physical time", physicalTime))
+	log.Debug(context.TODO(), "TestParseHybridTs",
+		log.Int64("physical", physical),
+		log.Int64("logical", logical),
+		log.Any("physical time", physicalTime))
 }
 
 func Test_Tso(t *testing.T) {

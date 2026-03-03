@@ -7,43 +7,43 @@ import (
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 func TestCtxWithLevelAndTrace(t *testing.T) {
 	t.Run("debug level", func(t *testing.T) {
-		ctx := withMetaData(context.TODO(), mlog.DebugLevel)
+		ctx := withMetaData(context.TODO(), log.DebugLevel)
 		newctx := withLevelAndTrace(ctx)
 		assert.NotNil(t, newctx)
 	})
 
 	t.Run("info level", func(t *testing.T) {
-		ctx := withMetaData(context.TODO(), mlog.InfoLevel)
+		ctx := withMetaData(context.TODO(), log.InfoLevel)
 		newctx := withLevelAndTrace(ctx)
 		assert.NotNil(t, newctx)
 	})
 
 	t.Run("warn level", func(t *testing.T) {
-		ctx := withMetaData(context.TODO(), mlog.WarnLevel)
+		ctx := withMetaData(context.TODO(), log.WarnLevel)
 		newctx := withLevelAndTrace(ctx)
 		assert.NotNil(t, newctx)
 	})
 
 	t.Run("error level", func(t *testing.T) {
-		ctx := withMetaData(context.TODO(), mlog.ErrorLevel)
+		ctx := withMetaData(context.TODO(), log.ErrorLevel)
 		newctx := withLevelAndTrace(ctx)
 		assert.NotNil(t, newctx)
 	})
 
 	t.Run("fatal level", func(t *testing.T) {
-		ctx := withMetaData(context.TODO(), mlog.FatalLevel)
+		ctx := withMetaData(context.TODO(), log.FatalLevel)
 		newctx := withLevelAndTrace(ctx)
 		assert.NotNil(t, newctx)
 	})
 
 	t.Run("pass through variables", func(t *testing.T) {
 		md := metadata.New(map[string]string{
-			logLevelRPCMetaKey: mlog.ErrorLevel.String(),
+			logLevelRPCMetaKey: log.ErrorLevel.String(),
 			clientRequestIDKey: "cb1ef460136611f0b3352a4f4aa7d7fd",
 		})
 		ctx := metadata.NewIncomingContext(context.TODO(), md)
@@ -51,11 +51,11 @@ func TestCtxWithLevelAndTrace(t *testing.T) {
 		md, ok := metadata.FromOutgoingContext(newctx)
 		assert.True(t, ok)
 		assert.Equal(t, "cb1ef460136611f0b3352a4f4aa7d7fd", md.Get(clientRequestIDKey)[0])
-		assert.Equal(t, mlog.ErrorLevel.String(), md.Get(logLevelRPCMetaKey)[0])
+		assert.Equal(t, log.ErrorLevel.String(), md.Get(logLevelRPCMetaKey)[0])
 	})
 }
 
-func withMetaData(ctx context.Context, level mlog.Level) context.Context {
+func withMetaData(ctx context.Context, level log.Level) context.Context {
 	md := metadata.New(map[string]string{
 		logLevelRPCMetaKey: level.String(),
 	})

@@ -12,7 +12,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 )
 
@@ -20,17 +20,17 @@ func GetVersion(m interface{}) (string, error) {
 	pbMsg, ok := m.(proto.Message)
 	if !ok {
 		err := errors.New("MessageDescriptorProto result is nil")
-		mlog.RatedInfo(context.TODO(), mlog.RateDefault, "GetVersion failed", mlog.Err(err))
+		log.RatedInfo(context.TODO(), log.RateDefault, "GetVersion failed", log.Err(err))
 		return "", err
 	}
 	if !proto.HasExtension(pbMsg.ProtoReflect().Descriptor().Options(), milvuspb.E_MilvusExtObj) {
 		err := errors.New("Extension not found")
-		mlog.Error(context.TODO(), "GetExtension fail", mlog.Err(err))
+		log.Error(context.TODO(), "GetExtension fail", log.Err(err))
 		return "", err
 	}
 	extObj := proto.GetExtension(pbMsg.ProtoReflect().Descriptor().Options(), milvuspb.E_MilvusExtObj)
 	version := extObj.(*milvuspb.MilvusExt).Version
-	mlog.Debug(context.TODO(), "GetVersion success", mlog.String("version", version))
+	log.Debug(context.TODO(), "GetVersion success", log.String("version", version))
 	return version, nil
 }
 
@@ -38,19 +38,19 @@ func GetPrivilegeExtObj(m interface{}) (commonpb.PrivilegeExt, error) {
 	pbMsg, ok := m.(proto.Message)
 	if !ok {
 		err := errors.New("MessageDescriptorProto result is nil")
-		mlog.RatedInfo(context.TODO(), mlog.RateDefault, "GetPrivilegeExtObj failed", mlog.Err(err))
+		log.RatedInfo(context.TODO(), log.RateDefault, "GetPrivilegeExtObj failed", log.Err(err))
 		return commonpb.PrivilegeExt{}, err
 	}
 
 	if !proto.HasExtension(pbMsg.ProtoReflect().Descriptor().Options(), commonpb.E_PrivilegeExtObj) {
 		err := errors.New("Extension not found")
-		mlog.RatedWarn(context.TODO(), mlog.RateDefault, "GetPrivilegeExtObj failed", mlog.Err(err))
+		log.RatedWarn(context.TODO(), log.RateDefault, "GetPrivilegeExtObj failed", log.Err(err))
 		return commonpb.PrivilegeExt{}, err
 	}
 	extObj := proto.GetExtension(pbMsg.ProtoReflect().Descriptor().Options(), commonpb.E_PrivilegeExtObj)
 
 	privilegeExt := extObj.(*commonpb.PrivilegeExt)
-	mlog.RatedDebug(context.TODO(), mlog.RateDefault, "GetPrivilegeExtObj success", mlog.String("resource_type", privilegeExt.ObjectType.String()), mlog.String("resource_privilege", privilegeExt.ObjectPrivilege.String()))
+	log.RatedDebug(context.TODO(), log.RateDefault, "GetPrivilegeExtObj success", log.String("resource_type", privilegeExt.ObjectType.String()), log.String("resource_privilege", privilegeExt.ObjectPrivilege.String()))
 	return commonpb.PrivilegeExt{
 		ObjectType:       privilegeExt.ObjectType,
 		ObjectPrivilege:  privilegeExt.ObjectPrivilege,
@@ -68,7 +68,7 @@ func GetObjectName(m interface{}, index int32) string {
 	pbMsg, ok := m.(proto.Message)
 	if !ok {
 		err := errors.New("MessageDescriptorProto result is nil")
-		mlog.RatedInfo(context.TODO(), mlog.RateDefault, "GetObjectName fail", mlog.Err(err))
+		log.RatedInfo(context.TODO(), log.RateDefault, "GetObjectName fail", log.Err(err))
 		return util.AnyWord
 	}
 
@@ -94,7 +94,7 @@ func GetObjectNames(m interface{}, index int32) []string {
 	pbMsg, ok := m.(proto.Message)
 	if !ok {
 		err := errors.New("MessageDescriptorProto result is nil")
-		mlog.RatedInfo(context.TODO(), mlog.RateDefault, "GetObjectNames fail", mlog.Err(err))
+		log.RatedInfo(context.TODO(), log.RateDefault, "GetObjectNames fail", log.Err(err))
 		return []string{}
 	}
 

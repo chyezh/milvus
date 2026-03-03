@@ -27,7 +27,7 @@ import (
 	storage "github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/storagecommon"
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexcgopb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
@@ -65,23 +65,23 @@ func (bw *BulkPackWriterV3) Write(ctx context.Context, pack *SyncPack) (
 ) {
 
 	if inserts, manifest, err = bw.writeInserts(ctx, pack); err != nil {
-		mlog.Error(context.TODO(), "failed to write insert data", mlog.Err(err))
+		log.Error(context.TODO(), "failed to write insert data", log.Err(err))
 		return
 	}
 	// Update manifestPath after writeInserts
 	bw.manifestPath = manifest
 
 	if stats, err = bw.writeStats(ctx, pack); err != nil {
-		mlog.Error(context.TODO(), "failed to process stats blob", mlog.Err(err))
+		log.Error(context.TODO(), "failed to process stats blob", log.Err(err))
 		return
 	}
 	// writeDelta for V3 updates manifest and returns nil FieldBinlog
 	if manifest, err = bw.writeDelta(ctx, pack); err != nil {
-		mlog.Error(context.TODO(), "failed to process delta blob", mlog.Err(err))
+		log.Error(context.TODO(), "failed to process delta blob", log.Err(err))
 		return
 	}
 	if bm25Stats, err = bw.writeBM25Stasts(ctx, pack); err != nil {
-		mlog.Error(context.TODO(), "failed to process bm25 stats blob", mlog.Err(err))
+		log.Error(context.TODO(), "failed to process bm25 stats blob", log.Err(err))
 		return
 	}
 
@@ -112,10 +112,10 @@ func (bw *BulkPackWriterV3) writeInserts(ctx context.Context, pack *SyncPack) (m
 		var err error
 		logs, manifestPath, err = bw.writeInsertsIntoStorage(ctx, pluginContextPtr, rec, tsFrom, tsTo)
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to write inserts into storage",
-				mlog.Int64("collectionID", pack.collectionID),
-				mlog.Int64("segmentID", pack.segmentID),
-				mlog.Err(err))
+			log.Warn(context.TODO(), "failed to write inserts into storage",
+				log.Int64("collectionID", pack.collectionID),
+				log.Int64("segmentID", pack.segmentID),
+				log.Err(err))
 			return err
 		}
 		return nil
@@ -138,7 +138,7 @@ func (bw *BulkPackWriterV3) writeInsertsIntoStorage(ctx context.Context,
 	doWrite := func(w storage.RecordWriter) error {
 		if err = w.Write(rec); err != nil {
 			if closeErr := w.Close(); closeErr != nil {
-				mlog.Error(context.TODO(), "failed to close writer after write failed", mlog.Err(closeErr))
+				log.Error(context.TODO(), "failed to close writer after write failed", log.Err(closeErr))
 			}
 			return err
 		}

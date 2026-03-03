@@ -1,4 +1,4 @@
-package mlog
+package log
 
 import (
 	"context"
@@ -11,7 +11,7 @@ type contextKey struct{}
 
 var fieldsKey = contextKey{}
 
-// logContext holds all mlog-related data in context
+// logContext holds all log-related data in context
 type logContext struct {
 	fieldKeys map[string]*Field // key -> Field pointer for deduplication
 	logger    *zap.Logger       // cached logger with fields applied

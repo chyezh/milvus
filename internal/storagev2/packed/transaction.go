@@ -30,7 +30,7 @@ import (
 	"unsafe"
 
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 )
 
@@ -60,10 +60,10 @@ func AddDeltaLogsToManifest(
 		return "", fmt.Errorf("failed to parse manifest path: %w", err)
 	}
 
-	mlog.Debug(context.TODO(), "AddDeltaLogsToManifest",
-		mlog.String("basePath", basePath),
-		mlog.Int64("version", version),
-		mlog.Int("numDeltaLogs", len(deltaLogs)))
+	log.Debug(context.TODO(), "AddDeltaLogsToManifest",
+		log.String("basePath", basePath),
+		log.Int64("version", version),
+		log.Int("numDeltaLogs", len(deltaLogs)))
 
 	cProperties, err := MakePropertiesFromStorageConfig(storageConfig, nil)
 	if err != nil {
@@ -95,9 +95,9 @@ func AddDeltaLogsToManifest(
 			return "", fmt.Errorf("failed to add delta log %s: %w", deltaLog.Path, err)
 		}
 
-		mlog.Debug(context.TODO(), "Added delta log to transaction",
-			mlog.String("relativePath", relativePath),
-			mlog.Int64("numEntries", deltaLog.NumEntries))
+		log.Debug(context.TODO(), "Added delta log to transaction",
+			log.String("relativePath", relativePath),
+			log.Int64("numEntries", deltaLog.NumEntries))
 	}
 
 	// Commit transaction
@@ -108,7 +108,7 @@ func AddDeltaLogsToManifest(
 	}
 
 	newManifestPath := MarshalManifestPath(basePath, int64(commitVersion))
-	mlog.Debug(context.TODO(), "Delta logs committed to manifest", mlog.Int64("newVersion", int64(commitVersion)))
+	log.Debug(context.TODO(), "Delta logs committed to manifest", log.Int64("newVersion", int64(commitVersion)))
 
 	return newManifestPath, nil
 }

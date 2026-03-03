@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 type clientInfo struct {
@@ -13,11 +13,11 @@ type clientInfo struct {
 	lastActiveTime time.Time
 }
 
-func (c *clientInfo) GetLogger() []mlog.Field {
+func (c *clientInfo) GetLogger() []log.Field {
 	fields := ZapClientInfo(c.ClientInfo)
 	fields = append(fields,
-		mlog.Int64("identifier", c.identifier),
-		mlog.Time("last_active_time", c.lastActiveTime),
+		log.Int64("identifier", c.identifier),
+		log.Time("last_active_time", c.lastActiveTime),
 	)
 	return fields
 }

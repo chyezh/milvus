@@ -26,7 +26,7 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/milvus-io/milvus/internal/storagev2"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 )
@@ -127,7 +127,7 @@ func (queue *IndexTaskQueue) AddActiveTask(t Task) {
 	tName := t.Name()
 	_, ok := queue.activeTasks[tName]
 	if ok {
-		mlog.Debug(context.TODO(), "task already in active task list", mlog.String("TaskID", tName))
+		log.Debug(context.TODO(), "task already in active task list", log.String("TaskID", tName))
 	}
 
 	queue.activeTasks[tName] = t
@@ -144,7 +144,7 @@ func (queue *IndexTaskQueue) PopActiveTask(tName string) Task {
 		queue.usingSlot.Sub(t.GetSlot())
 		return t
 	}
-	mlog.Debug(queue.sched.ctx, "task was not found in the active task list", mlog.String("TaskName", tName))
+	log.Debug(queue.sched.ctx, "task was not found in the active task list", log.String("TaskName", tName))
 	return nil
 }
 
@@ -242,11 +242,11 @@ func (sched *TaskScheduler) processTask(t Task) {
 	}()
 	sched.TaskQueue.AddActiveTask(t)
 	defer sched.TaskQueue.PopActiveTask(t.Name())
-	mlog.Debug(t.Ctx(), "process task", mlog.String("task", t.Name()))
+	log.Debug(t.Ctx(), "process task", log.String("task", t.Name()))
 	pipelines := []func(context.Context) error{t.PreExecute, t.Execute, t.PostExecute}
 	for _, fn := range pipelines {
 		if err := wrap(fn); err != nil {
-			mlog.Warn(t.Ctx(), "process task failed", mlog.Err(err))
+			log.Warn(t.Ctx(), "process task failed", log.Err(err))
 			t.SetState(getStateFromError(err), err.Error())
 			return
 		}
@@ -267,7 +267,7 @@ func (sched *TaskScheduler) processTask(t Task) {
 }
 
 func (sched *TaskScheduler) indexBuildLoop() {
-	mlog.Debug(sched.ctx, "TaskScheduler start build loop ...")
+	log.Debug(sched.ctx, "TaskScheduler start build loop ...")
 	defer sched.wg.Done()
 	for {
 		select {

@@ -44,7 +44,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	streamingserviceinterceptor "github.com/milvus-io/milvus/internal/util/streamingutil/service/interceptor"
 	"github.com/milvus-io/milvus/pkg/v2/kv"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/tracer"
 	"github.com/milvus-io/milvus/pkg/v2/util"
@@ -108,11 +108,11 @@ func (s *Server) Prepare() error {
 		netutil.OptHighPriorityToUsePort(paramtable.Get().StreamingNodeGrpcServerCfg.Port.GetAsInt()),
 	)
 	if err != nil {
-		mlog.Warn(s.ctx, "StreamingNode fail to create net listener", mlog.Err(err))
+		log.Warn(s.ctx, "StreamingNode fail to create net listener", log.Err(err))
 		return err
 	}
 	s.listener = listener
-	mlog.Info(s.ctx, "StreamingNode listen on", mlog.String("address", listener.Addr().String()), mlog.Int("port", listener.Port()))
+	log.Info(s.ctx, "StreamingNode listen on", log.String("address", listener.Addr().String()), log.Int("port", listener.Port()))
 	paramtable.Get().Save(
 		paramtable.Get().StreamingNodeGrpcServerCfg.Port.Key,
 		strconv.FormatInt(int64(listener.Port()), 10))
@@ -124,12 +124,12 @@ func (s *Server) Run() error {
 	if err := s.init(); err != nil {
 		return err
 	}
-	mlog.Info(s.ctx, "streamingnode init done ...")
+	log.Info(s.ctx, "streamingnode init done ...")
 
 	if err := s.start(); err != nil {
 		return err
 	}
-	mlog.Info(s.ctx, "streamingnode start done ...")
+	log.Info(s.ctx, "streamingnode start done ...")
 	return nil
 }
 
@@ -143,50 +143,50 @@ func (s *Server) Stop() (err error) {
 func (s *Server) stop() {
 	s.componentState.OnStopping()
 
-	mlog.Info(context.TODO(), "streamingnode stop", mlog.String("Address", s.listener.Address()))
+	log.Info(context.TODO(), "streamingnode stop", log.String("Address", s.listener.Address()))
 
 	// Unregister current server from etcd.
-	mlog.Info(context.TODO(), "streamingnode unregister session from etcd...")
+	log.Info(context.TODO(), "streamingnode unregister session from etcd...")
 	if err := s.session.GoingStop(); err != nil {
-		mlog.Warn(context.TODO(), "streamingnode unregister session failed", mlog.Err(err))
+		log.Warn(context.TODO(), "streamingnode unregister session failed", log.Err(err))
 	}
 
 	// Stop StreamingNode service.
-	mlog.Info(context.TODO(), "streamingnode stop service...")
+	log.Info(context.TODO(), "streamingnode stop service...")
 	s.streamingnode.Stop()
 
 	// Stop grpc server.
-	mlog.Info(context.TODO(), "streamingnode stop grpc server...")
+	log.Info(context.TODO(), "streamingnode stop grpc server...")
 	s.grpcServer.GracefulStop()
 
 	// Stop all session
-	mlog.Info(context.TODO(), "streamingnode stop session...")
+	log.Info(context.TODO(), "streamingnode stop session...")
 	s.session.Stop()
 
 	// Stop rootCoord client.
-	mlog.Info(context.TODO(), "streamingnode stop mixCoord client...")
+	log.Info(context.TODO(), "streamingnode stop mixCoord client...")
 
 	if s.mixCoord.Ready() {
 		if err := s.mixCoord.Get().Close(); err != nil {
-			mlog.Warn(context.TODO(), "streamingnode stop mixCoord client failed", mlog.Err(err))
+			log.Warn(context.TODO(), "streamingnode stop mixCoord client failed", log.Err(err))
 		}
 	}
 
 	// Stop tikv
 	if s.tikvCli != nil {
 		if err := s.tikvCli.Close(); err != nil {
-			mlog.Warn(context.TODO(), "streamingnode stop tikv client failed", mlog.Err(err))
+			log.Warn(context.TODO(), "streamingnode stop tikv client failed", log.Err(err))
 		}
 	}
 
 	// Wait for grpc server to stop.
-	mlog.Info(context.TODO(), "wait for grpc server stop...")
+	log.Info(context.TODO(), "wait for grpc server stop...")
 	<-s.grpcServerChan
-	mlog.Info(context.TODO(), "streamingnode stop done")
+	log.Info(context.TODO(), "streamingnode stop done")
 
 	s.cancel()
 	if err := s.listener.Close(); err != nil {
-		mlog.Warn(context.TODO(), "streamingnode stop listener failed", mlog.Err(err))
+		log.Warn(context.TODO(), "streamingnode stop listener failed", log.Err(err))
 	}
 }
 
@@ -199,10 +199,10 @@ func (s *Server) Health(ctx context.Context) commonpb.StateCode {
 func (s *Server) init() (err error) {
 	defer func() {
 		if err != nil {
-			mlog.Error(context.TODO(), "StreamingNode init failed", mlog.Err(err))
+			log.Error(context.TODO(), "StreamingNode init failed", log.Err(err))
 			return
 		}
-		mlog.Info(context.TODO(), "init StreamingNode server finished")
+		log.Info(context.TODO(), "init StreamingNode server finished")
 	}()
 
 	// Create etcd client.
@@ -235,10 +235,10 @@ func (s *Server) init() (err error) {
 func (s *Server) start() (err error) {
 	defer func() {
 		if err != nil {
-			mlog.Error(context.TODO(), "StreamingNode start failed", mlog.Err(err))
+			log.Error(context.TODO(), "StreamingNode start failed", log.Err(err))
 			return
 		}
-		mlog.Info(context.TODO(), "start StreamingNode server finished")
+		log.Info(context.TODO(), "start StreamingNode server finished")
 	}()
 
 	// Start grpc server.
@@ -259,20 +259,20 @@ func (s *Server) initSession() error {
 	}
 	s.session.Init(typeutil.StreamingNodeRole, s.listener.Address(), false, true)
 	paramtable.SetNodeID(s.session.ServerID)
-	mlog.Info(s.ctx, "StreamingNode init session", mlog.Int64("nodeID", paramtable.GetNodeID()), mlog.String("node address", s.listener.Address()))
+	log.Info(s.ctx, "StreamingNode init session", log.Int64("nodeID", paramtable.GetNodeID()), log.String("node address", s.listener.Address()))
 	return nil
 }
 
 func (s *Server) initMeta() error {
 	params := paramtable.Get()
 	metaType := params.MetaStoreCfg.MetaStoreType.GetValue()
-	mlog.Info(context.TODO(), "data coordinator connecting to metadata store", mlog.String("metaType", metaType))
+	log.Info(context.TODO(), "data coordinator connecting to metadata store", log.String("metaType", metaType))
 	metaRootPath := ""
 	if metaType == util.MetaStoreTypeTiKV {
 		var err error
 		s.tikvCli, err = tikv.GetTiKVClient(&paramtable.Get().TiKVCfg)
 		if err != nil {
-			mlog.Warn(context.TODO(), "Streamingnode init tikv client failed", mlog.Err(err))
+			log.Warn(context.TODO(), "Streamingnode init tikv client failed", log.Err(err))
 			return err
 		}
 		metaRootPath = params.TiKVCfg.MetaRootPath.GetValue()
@@ -289,18 +289,18 @@ func (s *Server) initMeta() error {
 func (s *Server) initMixCoord() {
 	go func() {
 		retry.Do(s.ctx, func() error {
-			mlog.Info(context.TODO(), "StreamingNode connect to mixCoord...")
+			log.Info(context.TODO(), "StreamingNode connect to mixCoord...")
 			mixCoord, err := mix.NewClient(s.ctx)
 			if err != nil {
 				return errors.Wrap(err, "StreamingNode try to new mixCoord client failed")
 			}
 
-			mlog.Info(context.TODO(), "StreamingNode try to wait for mixCoord ready")
+			log.Info(context.TODO(), "StreamingNode try to wait for mixCoord ready")
 			err = componentutil.WaitForComponentHealthy(s.ctx, mixCoord, "mixCoord", 1000000, time.Millisecond*200)
 			if err != nil {
 				return errors.Wrap(err, "StreamingNode wait for mixCoord ready failed")
 			}
-			mlog.Info(context.TODO(), "StreamingNode wait for mixCoord ready")
+			log.Info(context.TODO(), "StreamingNode wait for mixCoord ready")
 			s.mixCoord.Set(mixCoord)
 			return nil
 		}, retry.AttemptAlways())
@@ -308,7 +308,7 @@ func (s *Server) initMixCoord() {
 }
 
 func (s *Server) initChunkManager() (err error) {
-	mlog.Info(s.ctx, "StreamingNode init chunk manager...")
+	log.Info(s.ctx, "StreamingNode init chunk manager...")
 	s.factory.Init(paramtable.Get())
 	manager, err := s.factory.NewPersistentStorageChunkManager(s.ctx)
 	if err != nil {
@@ -319,7 +319,7 @@ func (s *Server) initChunkManager() (err error) {
 }
 
 func (s *Server) initGRPCServer() {
-	mlog.Info(s.ctx, "create StreamingNode server...")
+	log.Info(s.ctx, "create StreamingNode server...")
 	cfg := &paramtable.Get().StreamingNodeGrpcServerCfg
 	kaep := keepalive.EnforcementPolicy{
 		MinTime:             5 * time.Second, // If a client pings more than once every 5 seconds, terminate the connection

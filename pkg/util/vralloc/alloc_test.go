@@ -24,13 +24,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
 )
 
 func inspect[T comparable](a Allocator[T]) {
 	m := a.Inspect()
-	mlog.Info(context.TODO(), "Allocation", mlog.Any("allocations", m), mlog.Any("used", a.Used()))
+	log.Info(context.TODO(), "Allocation", log.Any("allocations", m), log.Any("used", a.Used()))
 }
 
 func TestFixedSizeAllocator(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/entity"
 	client "github.com/milvus-io/milvus/client/v2/milvusclient"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/tests/go_client/common"
 	hp "github.com/milvus-io/milvus/tests/go_client/testcases/helper"
 )
@@ -251,7 +251,7 @@ func TestQueryOutputFields(t *testing.T) {
 		if enableDynamic {
 			common.CheckErr(t, err2, true)
 			for _, c := range res2.Fields {
-				mlog.Info(context.TODO(), "data", mlog.String("name", c.Name()), mlog.Any("type", c.Type()), mlog.Any("data", c.FieldData()))
+				log.Info(context.TODO(), "data", log.String("name", c.Name()), log.Any("type", c.Type()), log.Any("data", c.FieldData()))
 			}
 			common.CheckOutputFields(t, []string{common.DefaultInt64FieldName, fakeName}, res2.Fields)
 			dynamicColumn := hp.MergeColumnsToDynamic(10, []column.Column{}, common.DefaultDynamicFieldName)
@@ -613,7 +613,7 @@ func TestQueryCountJsonDynamicExpr(t *testing.T) {
 	}
 
 	for _, _exprCount := range exprCounts {
-		mlog.Debug(context.TODO(), "TestQueryCountJsonDynamicExpr", mlog.String("expr", _exprCount.expr))
+		log.Debug(context.TODO(), "TestQueryCountJsonDynamicExpr", log.String("expr", _exprCount.expr))
 		countRes, _ := mc.Query(ctx, client.NewQueryOption(schema.CollectionName).WithConsistencyLevel(entity.ClStrong).WithFilter(_exprCount.expr).WithOutputFields(common.QueryCountFieldName))
 		count, _ := countRes.Fields[0].GetAsInt64(0)
 		require.Equal(t, _exprCount.count, count)
@@ -657,7 +657,7 @@ func TestQueryNestedJsonExpr(t *testing.T) {
 		{expr: nestedExpr, count: 500},
 	}
 	for _, _exprCount := range exprCounts {
-		mlog.Info(context.TODO(), "TestQueryCountJsonDynamicExpr", mlog.String("expr", _exprCount.expr))
+		log.Info(context.TODO(), "TestQueryCountJsonDynamicExpr", log.String("expr", _exprCount.expr))
 		countRes, _ := mc.Query(ctx, client.NewQueryOption(schema.CollectionName).WithConsistencyLevel(entity.ClStrong).WithFilter(_exprCount.expr).WithOutputFields(common.QueryCountFieldName))
 		count, _ := countRes.Fields[0].GetAsInt64(0)
 		require.Equal(t, _exprCount.count, count)
@@ -1037,7 +1037,7 @@ func TestQueryArrayFieldExpr(t *testing.T) {
 	}
 
 	for _, _exprCount := range exprCounts {
-		mlog.Debug(context.TODO(), "TestQueryCountJsonDynamicExpr", mlog.String("expr", _exprCount.expr))
+		log.Debug(context.TODO(), "TestQueryCountJsonDynamicExpr", log.String("expr", _exprCount.expr))
 		countRes, _ := mc.Query(ctx, client.NewQueryOption(schema.CollectionName).WithConsistencyLevel(entity.ClStrong).WithFilter(_exprCount.expr).WithOutputFields(common.QueryCountFieldName))
 		count, _ := countRes.Fields[0].GetAsInt64(0)
 		require.Equal(t, _exprCount.count, count)

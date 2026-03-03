@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/contextutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
@@ -15,7 +15,7 @@ import (
 )
 
 // newBroadcasterScheduler creates a new broadcaster scheduler.
-func newBroadcasterScheduler(pendings []*pendingBroadcastTask, logger *mlog.Logger) *broadcasterScheduler {
+func newBroadcasterScheduler(pendings []*pendingBroadcastTask, logger *log.Logger) *broadcasterScheduler {
 	b := &broadcasterScheduler{
 		backgroundTaskNotifier: syncutil.NewAsyncTaskNotifier[struct{}](),
 		pendings:               pendings,
@@ -31,7 +31,7 @@ func newBroadcasterScheduler(pendings []*pendingBroadcastTask, logger *mlog.Logg
 
 // broadcasterScheduler is the implementation of Broadcaster
 type broadcasterScheduler struct {
-	mlog.Binder
+	log.Binder
 
 	backgroundTaskNotifier *syncutil.AsyncTaskNotifier[struct{}]
 	pendings               []*pendingBroadcastTask
@@ -73,7 +73,7 @@ func (b *broadcasterScheduler) execute() {
 	if workers < 1 {
 		workers = 1
 	}
-	b.Logger().Info(nil, "broadcaster start to execute", mlog.Int("workerNum", workers))
+	b.Logger().Info(nil, "broadcaster start to execute", log.Int("workerNum", workers))
 
 	defer func() {
 		b.backgroundTaskNotifier.Finish(struct{}{})
@@ -109,7 +109,7 @@ func (b *broadcasterScheduler) dispatch() {
 		if b.backoffs.Len() > 0 {
 			var nextInterval time.Duration
 			nextBackOff, nextInterval = b.backoffs.Peek().NextTimer()
-			b.Logger().Info(nil, "backoff task", mlog.Duration("nextInterval", nextInterval))
+			b.Logger().Info(nil, "backoff task", log.Duration("nextInterval", nextInterval))
 		}
 
 		select {
@@ -138,7 +138,7 @@ func (b *broadcasterScheduler) dispatch() {
 }
 
 func (b *broadcasterScheduler) worker(no int) {
-	logger := b.Logger().With(mlog.Int("workerNo", no))
+	logger := b.Logger().With(log.Int("workerNo", no))
 	defer func() {
 		logger.Info(nil, "broadcaster worker exit")
 	}()

@@ -18,7 +18,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore/mocks"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -104,7 +104,7 @@ func (s *CompactionTriggerManagerSuite) TestNotifyByViewIDLE() {
 	cView, ok := levelZeroViews[0].(*LevelZeroCompactionView)
 	s.True(ok)
 	s.NotNil(cView)
-	mlog.Info(context.TODO(), "view", mlog.Any("cView", cView))
+	log.Info(context.TODO(), "view", log.Any("cView", cView))
 
 	s.mockAlloc.EXPECT().AllocID(mock.Anything).Return(1, nil)
 	s.inspector.EXPECT().enqueueCompaction(mock.Anything).
@@ -147,7 +147,7 @@ func (s *CompactionTriggerManagerSuite) TestNotifyByViewChange() {
 	cView, ok := levelZeroViews[0].(*LevelZeroCompactionView)
 	s.True(ok)
 	s.NotNil(cView)
-	mlog.Info(context.TODO(), "view", mlog.Any("cView", cView))
+	log.Info(context.TODO(), "view", log.Any("cView", cView))
 
 	s.mockAlloc.EXPECT().AllocID(mock.Anything).Return(1, nil)
 	s.inspector.EXPECT().enqueueCompaction(mock.Anything).

@@ -35,7 +35,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proxy"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
 	"github.com/milvus-io/milvus/pkg/v2/util/requestutil"
@@ -153,7 +153,7 @@ func (h *HandlersV1) describeCollection(ctx context.Context, c *gin.Context, dbN
 	}
 	primaryField, ok := getPrimaryField(response.Schema)
 	if ok && primaryField.AutoID && !primaryField.AutoID {
-		mlog.Warn(context.TODO(), "primary filed autoID VS schema autoID", mlog.String("collectionName", collectionName), mlog.Bool("primary Field", primaryField.AutoID), mlog.Bool("schema", primaryField.AutoID))
+		log.Warn(context.TODO(), "primary filed autoID VS schema autoID", log.String("collectionName", collectionName), log.Bool("primary Field", primaryField.AutoID), log.Bool("schema", primaryField.AutoID))
 		response.Schema.AutoID = EnableAutoID
 	}
 	return response.Schema, nil
@@ -244,7 +244,7 @@ func (h *HandlersV1) createCollection(c *gin.Context) {
 		EnableDynamicField: EnableDynamic,
 	}
 	if err := c.ShouldBindWith(&httpReq, binding.JSON); err != nil {
-		mlog.Warn(context.TODO(), "high level restful api, the parameter of create collection is incorrect", mlog.Any("request", httpReq), mlog.Err(err))
+		log.Warn(context.TODO(), "high level restful api, the parameter of create collection is incorrect", log.Any("request", httpReq), log.Err(err))
 		HTTPAbortReturn(c, http.StatusOK, gin.H{
 			HTTPReturnCode:    merr.Code(merr.ErrIncorrectParameterFormat),
 			HTTPReturnMessage: merr.ErrIncorrectParameterFormat.Error() + ", error: " + err.Error(),
@@ -252,7 +252,7 @@ func (h *HandlersV1) createCollection(c *gin.Context) {
 		return
 	}
 	if httpReq.CollectionName == "" || httpReq.Dimension == 0 {
-		mlog.Warn(context.TODO(), "high level restful api, create collection require parameters: [collectionName, dimension], but miss", mlog.Any("request", httpReq))
+		log.Warn(context.TODO(), "high level restful api, create collection require parameters: [collectionName, dimension], but miss", log.Any("request", httpReq))
 		HTTPAbortReturn(c, http.StatusOK, gin.H{
 			HTTPReturnCode:    merr.Code(merr.ErrMissingRequiredParameters),
 			HTTPReturnMessage: merr.ErrMissingRequiredParameters.Error() + ", required parameters: [collectionName, dimension]",
@@ -295,7 +295,7 @@ func (h *HandlersV1) createCollection(c *gin.Context) {
 		EnableDynamicField: httpReq.EnableDynamicField,
 	})
 	if err != nil {
-		mlog.Warn(context.TODO(), "high level restful api, marshal collection schema fail", mlog.Any("request", httpReq), mlog.Err(err))
+		log.Warn(context.TODO(), "high level restful api, marshal collection schema fail", log.Any("request", httpReq), log.Err(err))
 		HTTPAbortReturn(c, http.StatusOK, gin.H{
 			HTTPReturnCode:    merr.Code(merr.ErrMarshalCollectionSchema),
 			HTTPReturnMessage: merr.ErrMarshalCollectionSchema.Error() + ", error: " + err.Error(),
@@ -350,7 +350,7 @@ func (h *HandlersV1) createCollection(c *gin.Context) {
 func (h *HandlersV1) getCollectionDetails(c *gin.Context) {
 	collectionName := c.Query(HTTPCollectionName)
 	if collectionName == "" {
-		mlog.Warn(context.TODO(), "high level restful api, desc collection require parameter: [collectionName], but miss")
+		log.Warn(context.TODO(), "high level restful api, desc collection require parameter: [collectionName], but miss")
 		HTTPAbortReturn(c, http.StatusOK, gin.H{
 			HTTPReturnCode:    merr.Code(merr.ErrMissingRequiredParameters),
 			HTTPReturnMessage: merr.ErrMissingRequiredParameters.Error() + ", required parameters: [collectionName]",
@@ -381,7 +381,7 @@ func (h *HandlersV1) getCollectionDetails(c *gin.Context) {
 	coll := response.(*milvuspb.DescribeCollectionResponse)
 	primaryField, ok := getPrimaryField(coll.Schema)
 	if ok && primaryField.AutoID && !primaryField.AutoID {
-		mlog.Warn(context.TODO(), "primary filed autoID VS schema autoID", mlog.String("collectionName", collectionName), mlog.Bool("primary Field", primaryField.AutoID), mlog.Bool("schema", primaryField.AutoID))
+		log.Warn(context.TODO(), "primary filed autoID VS schema autoID", log.String("collectionName", collectionName), log.Bool("primary Field", primaryField.AutoID), log.Bool("schema", primaryField.AutoID))
 		coll.Schema.AutoID = EnableAutoID
 	}
 
@@ -394,9 +394,9 @@ func (h *HandlersV1) getCollectionDetails(c *gin.Context) {
 		err = merr.Error(stateResp.GetStatus())
 	}
 	if err != nil {
-		mlog.Warn(context.TODO(), "get collection load state fail",
-			mlog.String("collection", collectionName),
-			mlog.Err(err),
+		log.Warn(context.TODO(), "get collection load state fail",
+			log.String("collection", collectionName),
+			log.Err(err),
 		)
 	} else {
 		collLoadState = stateResp.State.String()
@@ -419,10 +419,10 @@ func (h *HandlersV1) getCollectionDetails(c *gin.Context) {
 	var indexDesc []gin.H
 	if err != nil {
 		indexDesc = []gin.H{}
-		mlog.Warn(context.TODO(), "get indexes description fail",
-			mlog.String("collection", collectionName),
-			mlog.String("vectorField", vectorField),
-			mlog.Err(err),
+		log.Warn(context.TODO(), "get indexes description fail",
+			log.String("collection", collectionName),
+			log.String("vectorField", vectorField),
+			log.Err(err),
 		)
 	} else {
 		indexDesc = printIndexes(indexResp.IndexDescriptions)
@@ -443,7 +443,7 @@ func (h *HandlersV1) dropCollection(c *gin.Context) {
 		DbName: DefaultDbName,
 	}
 	if err := c.ShouldBindWith(&httpReq, binding.JSON); err != nil {
-		mlog.Warn(context.TODO(), "high level restful api, the parameter of drop collection is incorrect", mlog.Any("request", httpReq), mlog.Err(err))
+		log.Warn(context.TODO(), "high level restful api, the parameter of drop collection is incorrect", log.Any("request", httpReq), log.Err(err))
 		HTTPAbortReturn(c, http.StatusOK, gin.H{
 			HTTPReturnCode:    merr.Code(merr.ErrIncorrectParameterFormat),
 			HTTPReturnMessage: merr.ErrIncorrectParameterFormat.Error() + ", error: " + err.Error(),
@@ -451,7 +451,7 @@ func (h *HandlersV1) dropCollection(c *gin.Context) {
 		return
 	}
 	if httpReq.CollectionName == "" {
-		mlog.Warn(context.TODO(), "high level restful api, drop collection require parameter: [collectionName], but miss")
+		log.Warn(context.TODO(), "high level restful api, drop collection require parameter: [collectionName], but miss")
 		HTTPAbortReturn(c, http.StatusOK, gin.H{
 			HTTPReturnCode:    merr.Code(merr.ErrMissingRequiredParameters),
 			HTTPReturnMessage: merr.ErrMissingRequiredParameters.Error() + ", required parameters: [collectionName]",
@@ -499,7 +499,7 @@ func (h *HandlersV1) query(c *gin.Context) {
 		OutputFields: []string{DefaultOutputFields},
 	}
 	if err := c.ShouldBindWith(&httpReq, binding.JSON); err != nil {
-		mlog.Warn(context.TODO(), "high level restful api, the parameter of query is incorrect", mlog.Any("request", httpReq), mlog.Err(err))
+		log.Warn(context.TODO(), "high level restful api, the parameter of query is incorrect", log.Any("request", httpReq), log.Err(err))
 		HTTPAbortReturn(c, http.StatusOK, gin.H{
 			HTTPReturnCode:    merr.Code(merr.ErrIncorrectParameterFormat),
 			HTTPReturnMessage: merr.ErrIncorrectParameterFormat.Error() + ", error: " + err.Error(),
@@ -507,7 +507,7 @@ func (h *HandlersV1) query(c *gin.Context) {
 		return
 	}
 	if httpReq.CollectionName == "" || httpReq.Filter == "" {
-		mlog.Warn(context.TODO(), "high level restful api, query require parameter: [collectionName, filter], but miss")
+		log.Warn(context.TODO(), "high level restful api, query require parameter: [collectionName, filter], but miss")
 		HTTPAbortReturn(c, http.StatusOK, gin.H{
 			HTTPReturnCode:    merr.Code(merr.ErrMissingRequiredParameters),
 			HTTPReturnMessage: merr.ErrMissingRequiredParameters.Error() + ", required parameters: [collectionName, filter]",
@@ -554,7 +554,7 @@ func (h *HandlersV1) query(c *gin.Context) {
 		allowJS, _ := strconv.ParseBool(c.Request.Header.Get(HTTPHeaderAllowInt64))
 		outputData, err := buildQueryResp(int64(0), queryResp.OutputFields, queryResp.FieldsData, nil, nil, allowJS, nil)
 		if err != nil {
-			mlog.Warn(context.TODO(), "high level restful api, fail to deal with query result", mlog.Any("response", response), mlog.Err(err))
+			log.Warn(context.TODO(), "high level restful api, fail to deal with query result", log.Any("response", response), log.Err(err))
 			HTTPReturn(c, http.StatusOK, gin.H{
 				HTTPReturnCode:    merr.Code(merr.ErrInvalidSearchResult),
 				HTTPReturnMessage: merr.ErrInvalidSearchResult.Error() + ", error: " + err.Error(),
@@ -571,7 +571,7 @@ func (h *HandlersV1) get(c *gin.Context) {
 		OutputFields: []string{DefaultOutputFields},
 	}
 	if err := c.ShouldBindBodyWith(&httpReq, binding.JSON); err != nil {
-		mlog.Warn(context.TODO(), "high level restful api, the parameter of get is incorrect", mlog.Any("request", httpReq), mlog.Err(err))
+		log.Warn(context.TODO(), "high level restful api, the parameter of get is incorrect", log.Any("request", httpReq), log.Err(err))
 		HTTPAbortReturn(c, http.StatusOK, gin.H{
 			HTTPReturnCode:    merr.Code(merr.ErrIncorrectParameterFormat),
 			HTTPReturnMessage: merr.ErrIncorrectParameterFormat.Error() + ", error: " + err.Error(),
@@ -579,7 +579,7 @@ func (h *HandlersV1) get(c *gin.Context) {
 		return
 	}
 	if httpReq.CollectionName == "" || httpReq.ID == nil {
-		mlog.Warn(context.TODO(), "high level restful api, get require parameter: [collectionName, id], but miss")
+		log.Warn(context.TODO(), "high level restful api, get require parameter: [collectionName, id], but miss")
 		HTTPAbortReturn(c, http.StatusOK, gin.H{
 			HTTPReturnCode:    merr.Code(merr.ErrMissingRequiredParameters),
 			HTTPReturnMessage: merr.ErrMissingRequiredParameters.Error() + ", required parameters: [collectionName, id]",
@@ -633,7 +633,7 @@ func (h *HandlersV1) get(c *gin.Context) {
 		allowJS, _ := strconv.ParseBool(c.Request.Header.Get(HTTPHeaderAllowInt64))
 		outputData, err := buildQueryResp(int64(0), queryResp.OutputFields, queryResp.FieldsData, nil, nil, allowJS, nil)
 		if err != nil {
-			mlog.Warn(context.TODO(), "high level restful api, fail to deal with get result", mlog.Any("response", response), mlog.Err(err))
+			log.Warn(context.TODO(), "high level restful api, fail to deal with get result", log.Any("response", response), log.Err(err))
 			HTTPReturn(c, http.StatusOK, gin.H{
 				HTTPReturnCode:    merr.Code(merr.ErrInvalidSearchResult),
 				HTTPReturnMessage: merr.ErrInvalidSearchResult.Error() + ", error: " + err.Error(),
@@ -649,7 +649,7 @@ func (h *HandlersV1) delete(c *gin.Context) {
 		DbName: DefaultDbName,
 	}
 	if err := c.ShouldBindBodyWith(&httpReq, binding.JSON); err != nil {
-		mlog.Warn(context.TODO(), "high level restful api, the parameter of delete is incorrect", mlog.Any("request", httpReq), mlog.Err(err))
+		log.Warn(context.TODO(), "high level restful api, the parameter of delete is incorrect", log.Any("request", httpReq), log.Err(err))
 		HTTPAbortReturn(c, http.StatusOK, gin.H{
 			HTTPReturnCode:    merr.Code(merr.ErrIncorrectParameterFormat),
 			HTTPReturnMessage: merr.ErrIncorrectParameterFormat.Error() + ", error: " + err.Error(),
@@ -657,7 +657,7 @@ func (h *HandlersV1) delete(c *gin.Context) {
 		return
 	}
 	if httpReq.CollectionName == "" || (httpReq.ID == nil && httpReq.Filter == "") {
-		mlog.Warn(context.TODO(), "high level restful api, delete require parameter: [collectionName, id/filter], but miss")
+		log.Warn(context.TODO(), "high level restful api, delete require parameter: [collectionName, id/filter], but miss")
 		HTTPAbortReturn(c, http.StatusOK, gin.H{
 			HTTPReturnCode:    merr.Code(merr.ErrMissingRequiredParameters),
 			HTTPReturnMessage: merr.ErrMissingRequiredParameters.Error() + ", required parameters: [collectionName, id/filter]",
@@ -721,7 +721,7 @@ func (h *HandlersV1) insert(c *gin.Context) {
 			DbName: DefaultDbName,
 		}
 		if err = c.ShouldBindBodyWith(&singleInsertReq, binding.JSON); err != nil {
-			mlog.Warn(context.TODO(), "high level restful api, the parameter of insert is incorrect", mlog.Any("request", httpReq), mlog.Err(err))
+			log.Warn(context.TODO(), "high level restful api, the parameter of insert is incorrect", log.Any("request", httpReq), log.Err(err))
 			HTTPAbortReturn(c, http.StatusOK, gin.H{
 				HTTPReturnCode:    merr.Code(merr.ErrIncorrectParameterFormat),
 				HTTPReturnMessage: merr.ErrIncorrectParameterFormat.Error() + ", error: " + err.Error(),
@@ -733,7 +733,7 @@ func (h *HandlersV1) insert(c *gin.Context) {
 		httpReq.Data = []map[string]interface{}{singleInsertReq.Data}
 	}
 	if httpReq.CollectionName == "" || httpReq.Data == nil {
-		mlog.Warn(context.TODO(), "high level restful api, insert require parameter: [collectionName, data], but miss")
+		log.Warn(context.TODO(), "high level restful api, insert require parameter: [collectionName, data], but miss")
 		HTTPAbortReturn(c, http.StatusOK, gin.H{
 			HTTPReturnCode:    merr.Code(merr.ErrMissingRequiredParameters),
 			HTTPReturnMessage: merr.ErrMissingRequiredParameters.Error() + ", required parameters: [collectionName, data]",
@@ -756,7 +756,7 @@ func (h *HandlersV1) insert(c *gin.Context) {
 		body, _ := c.Get(gin.BodyBytesKey)
 		err, httpReq.Data, _ = checkAndSetData(body.([]byte), collSchema, false)
 		if err != nil {
-			mlog.Warn(context.TODO(), "high level restful api, fail to deal with insert data", mlog.Any("body", body), mlog.Err(err))
+			log.Warn(context.TODO(), "high level restful api, fail to deal with insert data", log.Any("body", body), log.Err(err))
 			HTTPAbortReturn(c, http.StatusOK, gin.H{
 				HTTPReturnCode:    merr.Code(merr.ErrInvalidInsertData),
 				HTTPReturnMessage: merr.ErrInvalidInsertData.Error() + ", error: " + err.Error(),
@@ -766,7 +766,7 @@ func (h *HandlersV1) insert(c *gin.Context) {
 		insertReq := req.(*milvuspb.InsertRequest)
 		insertReq.FieldsData, err = anyToColumns(httpReq.Data, nil, collSchema, true, false)
 		if err != nil {
-			mlog.Warn(context.TODO(), "high level restful api, fail to deal with insert data", mlog.Any("data", httpReq.Data), mlog.Err(err))
+			log.Warn(context.TODO(), "high level restful api, fail to deal with insert data", log.Any("data", httpReq.Data), log.Err(err))
 			HTTPAbortReturn(c, http.StatusOK, gin.H{
 				HTTPReturnCode:    merr.Code(merr.ErrInvalidInsertData),
 				HTTPReturnMessage: merr.ErrInvalidInsertData.Error() + ", error: " + err.Error(),
@@ -820,7 +820,7 @@ func (h *HandlersV1) upsert(c *gin.Context) {
 			DbName: DefaultDbName,
 		}
 		if err = c.ShouldBindBodyWith(&singleUpsertReq, binding.JSON); err != nil {
-			mlog.Warn(context.TODO(), "high level restful api, the parameter of upsert is incorrect", mlog.Any("request", httpReq), mlog.Err(err))
+			log.Warn(context.TODO(), "high level restful api, the parameter of upsert is incorrect", log.Any("request", httpReq), log.Err(err))
 			HTTPAbortReturn(c, http.StatusOK, gin.H{
 				HTTPReturnCode:    merr.Code(merr.ErrIncorrectParameterFormat),
 				HTTPReturnMessage: merr.ErrIncorrectParameterFormat.Error() + ", error: " + err.Error(),
@@ -833,7 +833,7 @@ func (h *HandlersV1) upsert(c *gin.Context) {
 		httpReq.PartialUpdate = singleUpsertReq.PartialUpdate
 	}
 	if httpReq.CollectionName == "" || httpReq.Data == nil {
-		mlog.Warn(context.TODO(), "high level restful api, upsert require parameter: [collectionName, data], but miss")
+		log.Warn(context.TODO(), "high level restful api, upsert require parameter: [collectionName, data], but miss")
 		HTTPAbortReturn(c, http.StatusOK, gin.H{
 			HTTPReturnCode:    merr.Code(merr.ErrMissingRequiredParameters),
 			HTTPReturnMessage: merr.ErrMissingRequiredParameters.Error() + ", required parameters: [collectionName, data]",
@@ -864,7 +864,7 @@ func (h *HandlersV1) upsert(c *gin.Context) {
 		body, _ := c.Get(gin.BodyBytesKey)
 		err, httpReq.Data, _ = checkAndSetData(body.([]byte), collSchema, httpReq.PartialUpdate)
 		if err != nil {
-			mlog.Warn(context.TODO(), "high level restful api, fail to deal with upsert data", mlog.Any("body", body), mlog.Err(err))
+			log.Warn(context.TODO(), "high level restful api, fail to deal with upsert data", log.Any("body", body), log.Err(err))
 			HTTPAbortReturn(c, http.StatusOK, gin.H{
 				HTTPReturnCode:    merr.Code(merr.ErrInvalidInsertData),
 				HTTPReturnMessage: merr.ErrInvalidInsertData.Error() + ", error: " + err.Error(),
@@ -874,7 +874,7 @@ func (h *HandlersV1) upsert(c *gin.Context) {
 		upsertReq := req.(*milvuspb.UpsertRequest)
 		upsertReq.FieldsData, err = anyToColumns(httpReq.Data, nil, collSchema, false, httpReq.PartialUpdate)
 		if err != nil {
-			mlog.Warn(context.TODO(), "high level restful api, fail to deal with upsert data", mlog.Any("data", httpReq.Data), mlog.Err(err))
+			log.Warn(context.TODO(), "high level restful api, fail to deal with upsert data", log.Any("data", httpReq.Data), log.Err(err))
 			HTTPAbortReturn(c, http.StatusOK, gin.H{
 				HTTPReturnCode:    merr.Code(merr.ErrInvalidInsertData),
 				HTTPReturnMessage: merr.ErrInvalidInsertData.Error() + ", error: " + err.Error(),
@@ -925,7 +925,7 @@ func (h *HandlersV1) search(c *gin.Context) {
 		Limit:  100,
 	}
 	if err := c.ShouldBindWith(&httpReq, binding.JSON); err != nil {
-		mlog.Warn(context.TODO(), "high level restful api, the parameter of search is incorrect", mlog.Any("request", httpReq), mlog.Err(err))
+		log.Warn(context.TODO(), "high level restful api, the parameter of search is incorrect", log.Any("request", httpReq), log.Err(err))
 		HTTPAbortReturn(c, http.StatusOK, gin.H{
 			HTTPReturnCode:    merr.Code(merr.ErrIncorrectParameterFormat),
 			HTTPReturnMessage: merr.ErrIncorrectParameterFormat.Error() + ", error: " + err.Error(),
@@ -933,7 +933,7 @@ func (h *HandlersV1) search(c *gin.Context) {
 		return
 	}
 	if httpReq.CollectionName == "" || httpReq.Vector == nil {
-		mlog.Warn(context.TODO(), "high level restful api, search require parameter: [collectionName, vector], but miss")
+		log.Warn(context.TODO(), "high level restful api, search require parameter: [collectionName, vector], but miss")
 		HTTPAbortReturn(c, http.StatusOK, gin.H{
 			HTTPReturnCode:    merr.Code(merr.ErrMissingRequiredParameters),
 			HTTPReturnMessage: merr.ErrMissingRequiredParameters.Error() + ", required parameters: [collectionName, vector]",
@@ -962,7 +962,7 @@ func (h *HandlersV1) search(c *gin.Context) {
 		rangeFilter, rangeFilterOk := httpReq.Params[ParamRangeFilter]
 		if rangeFilterOk {
 			if !radiusOk {
-				mlog.Warn(context.TODO(), "high level restful api, search params invalid, because only " + ParamRangeFilter)
+				log.Warn(context.TODO(), "high level restful api, search params invalid, because only " + ParamRangeFilter)
 				HTTPAbortReturn(c, http.StatusOK, gin.H{
 					HTTPReturnCode:    merr.Code(merr.ErrIncorrectParameterFormat),
 					HTTPReturnMessage: merr.ErrIncorrectParameterFormat.Error() + ", error: invalid search params",
@@ -1011,7 +1011,7 @@ func (h *HandlersV1) search(c *gin.Context) {
 			allowJS, _ := strconv.ParseBool(c.Request.Header.Get(HTTPHeaderAllowInt64))
 			outputData, err := buildQueryResp(searchResp.Results.TopK, searchResp.Results.OutputFields, searchResp.Results.FieldsData, searchResp.Results.Ids, searchResp.Results.Scores, allowJS, nil)
 			if err != nil {
-				mlog.Warn(context.TODO(), "high level restful api, fail to deal with search result", mlog.Any("result", searchResp.Results), mlog.Err(err))
+				log.Warn(context.TODO(), "high level restful api, fail to deal with search result", log.Any("result", searchResp.Results), log.Err(err))
 				HTTPReturn(c, http.StatusOK, gin.H{
 					HTTPReturnCode:    merr.Code(merr.ErrInvalidSearchResult),
 					HTTPReturnMessage: merr.ErrInvalidSearchResult.Error() + ", error: " + err.Error(),

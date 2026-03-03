@@ -30,7 +30,7 @@ import (
 	"fmt"
 	"unsafe"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 )
 
@@ -44,12 +44,12 @@ func HandleCStatus(status *C.CStatus, extraInfo string) error {
 	defer C.free(unsafe.Pointer(status.error_msg))
 
 	logMsg := fmt.Sprintf("%s, C Runtime Exception: %s\n", extraInfo, errorMsg)
-	mlog.Warn(context.TODO(), logMsg)
+	log.Warn(context.TODO(), logMsg)
 	if errorCode == 2003 {
 		return merr.WrapErrSegcoreUnsupported(int32(errorCode), logMsg)
 	}
 	if errorCode == 2033 {
-		mlog.Info(context.TODO(), "fake finished the task")
+		log.Info(context.TODO(), "fake finished the task")
 		return merr.ErrSegcorePretendFinished
 	}
 	return merr.WrapErrSegcore(int32(errorCode), logMsg)

@@ -5,14 +5,14 @@ import (
 
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 // SetupSpan add span into ctx values.
 // Also setup logger in context with tracerID field.
 func SetupSpan(ctx context.Context, span trace.Span) context.Context {
 	ctx = trace.ContextWithSpan(ctx, span)
-	ctx = mlog.WithFields(ctx, mlog.Stringer("traceID", span.SpanContext().TraceID()))
+	ctx = log.WithFields(ctx, log.Stringer("traceID", span.SpanContext().TraceID()))
 	return ctx
 }
 
@@ -22,5 +22,5 @@ func Propagate(ctx, newRoot context.Context) context.Context {
 	spanCtx := trace.SpanContextFromContext(ctx)
 
 	newCtx := trace.ContextWithSpanContext(newRoot, spanCtx)
-	return mlog.WithFields(newCtx, mlog.Stringer("traceID", spanCtx.TraceID()))
+	return log.WithFields(newCtx, log.Stringer("traceID", spanCtx.TraceID()))
 }

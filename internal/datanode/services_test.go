@@ -34,7 +34,7 @@ import (
 	"github.com/milvus-io/milvus/internal/datanode/compactor"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
@@ -384,9 +384,9 @@ func (s *DataNodeServicesSuite) TestGetMetrics() {
 	resp, err = node.GetMetrics(node.ctx, req)
 	s.Assert().NoError(err)
 	s.Assert().True(merr.Ok(resp.GetStatus()))
-	mlog.Info(context.TODO(), "Test DataNode.GetMetrics",
-		mlog.String("name", resp.ComponentName),
-		mlog.String("response", resp.Response))
+	log.Info(context.TODO(), "Test DataNode.GetMetrics",
+		log.String("name", resp.ComponentName),
+		log.String("response", resp.Response))
 }
 
 func (s *DataNodeServicesSuite) TestResendSegmentStats() {

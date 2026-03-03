@@ -15,7 +15,7 @@ import (
 	"github.com/milvus-io/milvus/internal/flushcommon/util"
 	"github.com/milvus-io/milvus/internal/flushcommon/writebuffer"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -85,7 +85,7 @@ func (wNode *writeNode) Operate(in []Msg) []Msg {
 		if len(fgMsg.InsertMessages) > 0 {
 			var err error
 			if insertData, err = writebuffer.PrepareInsert(wNode.metacache.GetSchema(fgMsg.TimeTick()), wNode.pkField, fgMsg.InsertMessages); err != nil {
-				mlog.Error(context.TODO(), "failed to prepare data", mlog.Err(err))
+				log.Error(context.TODO(), "failed to prepare data", log.Err(err))
 				panic(err)
 			}
 		}
@@ -94,7 +94,7 @@ func (wNode *writeNode) Operate(in []Msg) []Msg {
 
 	err := wNode.wbManager.BufferData(wNode.channelName, fgMsg.InsertData, fgMsg.DeleteMessages, start, end)
 	if err != nil {
-		mlog.Error(context.TODO(), "failed to buffer data", mlog.Err(err))
+		log.Error(context.TODO(), "failed to buffer data", log.Err(err))
 		panic(err)
 	}
 
@@ -103,7 +103,7 @@ func (wNode *writeNode) Operate(in []Msg) []Msg {
 		func(id int64, _ int) (*commonpb.SegmentStats, bool) {
 			segInfo, ok := wNode.metacache.GetSegmentByID(id)
 			if !ok {
-				mlog.Warn(context.TODO(), "segment not found for stats", mlog.Int64("segment", id))
+				log.Warn(context.TODO(), "segment not found for stats", log.Int64("segment", id))
 				return nil, false
 			}
 			return &commonpb.SegmentStats{

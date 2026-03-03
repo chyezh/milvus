@@ -14,7 +14,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/recovery"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
@@ -52,7 +52,7 @@ func RecoverShardManager(param *ShardManagerRecoverParam) ShardManager {
 	partitionToSegmentManagers, segmentBelongs := newSegmentAllocManagersFromRecovery(param.ChannelInfo, param.InitialRecoverSnapshot, collections)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	logger := resource.Resource().Logger().With(mlog.FieldComponent("shard-manager")).With(mlog.Stringer("pchannel", param.ChannelInfo))
+	logger := resource.Resource().Logger().With(log.FieldComponent("shard-manager")).With(log.Stringer("pchannel", param.ChannelInfo))
 	// create managers list.
 	managers := make(map[PartitionUniqueKey]*partitionManager)
 	segmentTotal := 0
@@ -170,7 +170,7 @@ func newCollectionInfos(recoverInfos *recovery.RecoverySnapshot) map[int64]*Coll
 // It's a in-memory data structure, and will be recovered from recovery stroage of wal and wal itself.
 // !!! Don't add any block operation (such as rpc or meta opration) in this module.
 type shardManagerImpl struct {
-	mlog.Binder
+	log.Binder
 
 	mu                sync.Mutex
 	ctx               context.Context

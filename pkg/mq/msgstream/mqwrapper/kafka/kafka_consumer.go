@@ -8,7 +8,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream/mqwrapper"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -61,16 +61,16 @@ func newKafkaConsumer(config *kafka.ConfigMap, bufSize int64, topic string, grou
 				switch v := err.(type) {
 				case kafka.Error:
 					if v.Code() == kafka.ErrUnknownTopic || v.Code() == kafka.ErrUnknownPartition || v.Code() == kafka.ErrUnknownTopicOrPart {
-						mlog.Warn(context.TODO(), "get latest msg ID failed, topic or partition does not exists!",
-							mlog.String("topic", kc.topic),
-							mlog.String("err msg", v.String()))
+						log.Warn(context.TODO(), "get latest msg ID failed, topic or partition does not exists!",
+							log.String("topic", kc.topic),
+							log.String("err msg", v.String()))
 						offset, err = kafka.NewOffset("earliest")
 						if err != nil {
 							return nil, err
 						}
 					}
 				default:
-					mlog.Error(context.TODO(), "kafka get latest msg ID failed", mlog.String("topic", kc.topic), mlog.Err(err))
+					log.Error(context.TODO(), "kafka get latest msg ID failed", log.String("topic", kc.topic), log.Err(err))
 					return nil, err
 				}
 			} else {
@@ -83,12 +83,12 @@ func newKafkaConsumer(config *kafka.ConfigMap, bufSize int64, topic string, grou
 		topicPartition := []kafka.TopicPartition{{Topic: &topic, Partition: mqwrapper.DefaultPartitionIdx, Offset: offset}}
 		err = kc.c.Assign(topicPartition)
 		if err != nil {
-			mlog.Error(context.TODO(), "kafka consumer assign failed ", mlog.String("topic name", topic), mlog.Any("Msg position", position), mlog.Err(err))
+			log.Error(context.TODO(), "kafka consumer assign failed ", log.String("topic name", topic), log.Any("Msg position", position), log.Err(err))
 			return nil, err
 		}
 		cost := time.Since(start).Milliseconds()
 		if cost > 200 {
-			mlog.Warn(context.TODO(), "kafka consumer assign take too long!", mlog.String("topic name", topic), mlog.Any("Msg position", position), mlog.Int64("time cost(ms)", cost))
+			log.Warn(context.TODO(), "kafka consumer assign take too long!", log.String("topic name", topic), log.Any("Msg position", position), log.Int64("time cost(ms)", cost))
 		}
 
 		kc.hasAssign = true
@@ -101,7 +101,7 @@ func (kc *Consumer) createKafkaConsumer() error {
 	var err error
 	kc.c, err = kafka.NewConsumer(kc.config)
 	if err != nil {
-		mlog.Error(context.TODO(), "create kafka consumer failed", mlog.String("topic", kc.topic), mlog.Err(err))
+		log.Error(context.TODO(), "create kafka consumer failed", log.String("topic", kc.topic), log.Err(err))
 		return err
 	}
 	return nil
@@ -117,7 +117,7 @@ func (kc *Consumer) Subscription() string {
 // https://github.com/confluentinc/confluent-kafka-go.
 func (kc *Consumer) Chan() <-chan common.Message {
 	if !kc.hasAssign {
-		mlog.Error(context.TODO(), "can not chan with not assigned channel", mlog.String("topic", kc.topic), mlog.String("groupID", kc.groupID))
+		log.Error(context.TODO(), "can not chan with not assigned channel", log.String("topic", kc.topic), log.String("groupID", kc.groupID))
 		panic("failed to chan a kafka consumer without assign")
 	}
 	kc.chanOnce.Do(func() {
@@ -136,7 +136,7 @@ func (kc *Consumer) Chan() <-chan common.Message {
 					e, err := kc.c.ReadMessage(readTimeout)
 					if err != nil {
 						// if we failed to read message in 30 Seconds, print out a warn message since there should always be a tt
-						mlog.Warn(context.TODO(), "consume msg failed", mlog.String("topic", kc.topic), mlog.String("groupID", kc.groupID), mlog.Err(err))
+						log.Warn(context.TODO(), "consume msg failed", log.String("topic", kc.topic), log.String("groupID", kc.groupID), log.Err(err))
 					} else {
 						if kc.skipMsg {
 							kc.skipMsg = false
@@ -166,20 +166,20 @@ func (kc *Consumer) Seek(id common.MessageID, inclusive bool) error {
 }
 
 func (kc *Consumer) internalSeek(offset kafka.Offset, inclusive bool) error {
-	mlog.Info(context.TODO(), "kafka consumer seek start", mlog.String("topic name", kc.topic),
-		mlog.Any("Msg offset", offset), mlog.Bool("inclusive", inclusive))
+	log.Info(context.TODO(), "kafka consumer seek start", log.String("topic name", kc.topic),
+		log.Any("Msg offset", offset), log.Bool("inclusive", inclusive))
 
 	start := time.Now()
 	err := kc.c.Assign([]kafka.TopicPartition{{Topic: &kc.topic, Partition: mqwrapper.DefaultPartitionIdx, Offset: offset}})
 	if err != nil {
-		mlog.Warn(context.TODO(), "kafka consumer assign failed ", mlog.String("topic name", kc.topic), mlog.Any("Msg offset", offset), mlog.Err(err))
+		log.Warn(context.TODO(), "kafka consumer assign failed ", log.String("topic name", kc.topic), log.Any("Msg offset", offset), log.Err(err))
 		return err
 	}
 
 	cost := time.Since(start).Milliseconds()
 	if cost > 200 {
-		mlog.Warn(context.TODO(), "kafka consumer assign take too long!", mlog.String("topic name", kc.topic),
-			mlog.Any("Msg offset", offset), mlog.Bool("inclusive", inclusive), mlog.Int64("time cost(ms)", cost))
+		log.Warn(context.TODO(), "kafka consumer assign take too long!", log.String("topic name", kc.topic),
+			log.Any("Msg offset", offset), log.Bool("inclusive", inclusive), log.Int64("time cost(ms)", cost))
 	}
 
 	// If seek timeout is not 0 the call twice will return error isStarted RD_KAFKA_RESP_ERR__STATE.
@@ -193,8 +193,8 @@ func (kc *Consumer) internalSeek(offset kafka.Offset, inclusive bool) error {
 		return err
 	}
 	cost = time.Since(start).Milliseconds()
-	mlog.Info(context.TODO(), "kafka consumer seek finished", mlog.String("topic name", kc.topic),
-		mlog.Any("Msg offset", offset), mlog.Bool("inclusive", inclusive), mlog.Int64("time cost(ms)", cost))
+	log.Info(context.TODO(), "kafka consumer seek finished", log.String("topic name", kc.topic),
+		log.Any("Msg offset", offset), log.Bool("inclusive", inclusive), log.Int64("time cost(ms)", cost))
 
 	kc.hasAssign = true
 	return nil
@@ -218,13 +218,13 @@ func (kc *Consumer) GetLatestMsgID() (common.MessageID, error) {
 		high = high - 1
 	}
 
-	mlog.Info(context.TODO(), "get latest msg ID ", mlog.String("topic", kc.topic), mlog.Int64("oldest offset", low), mlog.Int64("latest offset", high))
+	log.Info(context.TODO(), "get latest msg ID ", log.String("topic", kc.topic), log.Int64("oldest offset", low), log.Int64("latest offset", high))
 	return &KafkaID{MessageID: high}, nil
 }
 
 func (kc *Consumer) CheckTopicValid(topic string) error {
 	_, err := kc.GetLatestMsgID()
-	mlog.With(mlog.String("topic", kc.topic))
+	log.With(log.String("topic", kc.topic))
 	// check topic is existed
 	if err != nil {
 		switch v := err.(type) {
@@ -242,15 +242,15 @@ func (kc *Consumer) CheckTopicValid(topic string) error {
 }
 
 func (kc *Consumer) closeInternal() {
-	mlog.Info(context.TODO(), "close consumer ", mlog.String("topic", kc.topic), mlog.String("groupID", kc.groupID))
+	log.Info(context.TODO(), "close consumer ", log.String("topic", kc.topic), log.String("groupID", kc.groupID))
 	start := time.Now()
 	err := kc.c.Close()
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to close ", mlog.String("topic", kc.topic), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to close ", log.String("topic", kc.topic), log.Err(err))
 	}
 	cost := time.Since(start).Milliseconds()
 	if cost > 200 {
-		mlog.Warn(context.TODO(), "close consumer costs too long time", mlog.String("topic", kc.topic), mlog.String("groupID", kc.groupID), mlog.Int64("time(ms)", cost))
+		log.Warn(context.TODO(), "close consumer costs too long time", log.String("topic", kc.topic), log.String("groupID", kc.groupID), log.Int64("time(ms)", cost))
 	}
 }
 

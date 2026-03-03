@@ -33,7 +33,7 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/flowgraph"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgdispatcher"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
@@ -82,18 +82,18 @@ type nodeConfig struct {
 // Start the flow graph in dataSyncService
 func (dsService *DataSyncService) Start() {
 	if dsService.fg != nil {
-		mlog.Info(context.TODO(), "dataSyncService starting flow graph", mlog.Int64("collectionID", dsService.collectionID),
-			mlog.String("vChanName", dsService.vchannelName))
+		log.Info(context.TODO(), "dataSyncService starting flow graph", log.Int64("collectionID", dsService.collectionID),
+			log.String("vChanName", dsService.vchannelName))
 		dsService.fg.Start()
 	} else {
-		mlog.Warn(context.TODO(), "dataSyncService starting flow graph is nil", mlog.Int64("collectionID", dsService.collectionID),
-			mlog.String("vChanName", dsService.vchannelName))
+		log.Warn(context.TODO(), "dataSyncService starting flow graph is nil", log.Int64("collectionID", dsService.collectionID),
+			log.String("vChanName", dsService.vchannelName))
 	}
 }
 
 func (dsService *DataSyncService) GracefullyClose() {
 	if dsService.fg != nil {
-		mlog.Info(context.TODO(), "dataSyncService gracefully closing flowgraph")
+		log.Info(context.TODO(), "dataSyncService gracefully closing flowgraph")
 		dsService.fg.SetCloseMethod(flowgraph.CloseGracefully)
 		dsService.close()
 	}
@@ -106,12 +106,12 @@ func (dsService *DataSyncService) GetOpID() int64 {
 func (dsService *DataSyncService) close() {
 	dsService.stopOnce.Do(func() {
 		if dsService.fg != nil {
-			mlog.Info(context.TODO(), "dataSyncService closing flowgraph")
+			log.Info(context.TODO(), "dataSyncService closing flowgraph")
 			if dsService.dispClient != nil {
 				dsService.dispClient.Deregister(dsService.vchannelName)
 			}
 			dsService.fg.Close()
-			mlog.Info(context.TODO(), "dataSyncService flowgraph closed")
+			log.Info(context.TODO(), "dataSyncService flowgraph closed")
 		}
 
 		dsService.cancelFn()
@@ -120,7 +120,7 @@ func (dsService *DataSyncService) close() {
 		pChan := funcutil.ToPhysicalChannel(dsService.vchannelName)
 		metrics.CleanupDataNodeCollectionMetrics(paramtable.GetNodeID(), dsService.collectionID, pChan)
 
-		mlog.Info(context.TODO(), "dataSyncService closed")
+		log.Info(context.TODO(), "dataSyncService closed")
 	})
 }
 
@@ -146,11 +146,11 @@ func initMetaCache(initCtx context.Context, chunkManager storage.ChunkManager, i
 
 	loadSegmentStats := func(segType string, segments []*datapb.SegmentInfo) {
 		for _, item := range segments {
-			mlog.Info(context.TODO(), "recover segments from checkpoints",
-				mlog.String("vChannelName", item.GetInsertChannel()),
-				mlog.Int64("segmentID", item.GetID()),
-				mlog.Int64("numRows", item.GetNumOfRows()),
-				mlog.String("segmentType", segType),
+			log.Info(context.TODO(), "recover segments from checkpoints",
+				log.String("vChannelName", item.GetInsertChannel()),
+				log.Int64("segmentID", item.GetID()),
+				log.Int64("numRows", item.GetNumOfRows()),
+				log.String("segmentType", segType),
 			)
 			segment := item
 			future := io.GetOrCreateStatsPool().Submit(func() (any, error) {
@@ -307,7 +307,7 @@ func getServiceWithChannel(initCtx context.Context, params *util.PipelineParams,
 		writebuffer.WithIDAllocator(params.Allocator),
 		writebuffer.WithTaskObserverCallback(wbTaskObserverCallback))
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to register channel buffer", mlog.String("channel", channelName), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to register channel buffer", log.String("channel", channelName), log.Err(err))
 		return nil, err
 	}
 

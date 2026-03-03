@@ -3,7 +3,7 @@ package helper
 import (
 	"context"
 	"github.com/milvus-io/milvus/client/v2/entity"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/tests/go_client/common"
 )
 
@@ -107,7 +107,7 @@ func GenFp16OrBf16VectorsFromFloatVector(nq int, dim int, dataType entity.FieldT
 
 func GenBatchSizes(limit int, batch int) []int {
 	if batch == 0 {
-		mlog.Fatal(context.TODO(), "Batch should be larger than 0")
+		log.Fatal(context.TODO(), "Batch should be larger than 0")
 	}
 	if limit == 0 {
 		return []int{}

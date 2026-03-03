@@ -24,7 +24,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -45,7 +45,7 @@ func MarshalGetMetricsValues[T any](metrics []T, err error) (string, error) {
 
 	bs, err := json.Marshal(metrics)
 	if err != nil {
-		mlog.Warn(context.TODO(), "marshal metrics value failed", mlog.Any("metrics", metrics), mlog.String("err", err.Error()))
+		log.Warn(context.TODO(), "marshal metrics value failed", log.Any("metrics", metrics), log.String("err", err.Error()))
 		return "", nil
 	}
 	return string(bs), nil

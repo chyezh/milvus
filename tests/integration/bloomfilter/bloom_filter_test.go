@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
@@ -72,11 +72,11 @@ func (s *BloomFilterTestSuit) initCollection(collectionName string, replica int,
 	s.NoError(err)
 	s.True(merr.Ok(createCollectionStatus))
 
-	mlog.Info(context.TODO(), "CreateCollection result", mlog.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := s.Cluster.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.True(merr.Ok(showCollectionsResp.Status))
-	mlog.Info(context.TODO(), "ShowCollections result", mlog.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	for i := 0; i < segmentNum; i++ {
 		// change bf type in real time
@@ -110,8 +110,8 @@ func (s *BloomFilterTestSuit) initCollection(collectionName string, replica int,
 			}
 
 			pks := insertResult.GetIDs().GetIntId().GetData()[:segmentDeleteNum]
-			mlog.Info(context.TODO(), "========================delete expr==================",
-				mlog.Int("length of pk", len(pks)),
+			log.Info(context.TODO(), "========================delete expr==================",
+				log.Int("length of pk", len(pks)),
 			)
 
 			expr := fmt.Sprintf("%s in [%s]", integration.Int64Field, strings.Join(lo.Map(pks, func(pk int64, _ int) string { return strconv.FormatInt(pk, 10) }), ","))
@@ -165,7 +165,7 @@ func (s *BloomFilterTestSuit) initCollection(collectionName string, replica int,
 	s.Equal(commonpb.ErrorCode_Success, loadStatus.GetErrorCode())
 	s.True(merr.Ok(loadStatus))
 	s.WaitForLoad(ctx, collectionName)
-	mlog.Info(context.TODO(), "initCollection Done")
+	log.Info(context.TODO(), "initCollection Done")
 }
 
 func (s *BloomFilterTestSuit) TestLoadAndQuery() {
@@ -180,7 +180,7 @@ func (s *BloomFilterTestSuit) TestLoadAndQuery() {
 		OutputFields:   []string{"count(*)"},
 	})
 	if !merr.Ok(queryResult.GetStatus()) {
-		mlog.Warn(context.TODO(), "searchResult fail reason", mlog.String("reason", queryResult.GetStatus().GetReason()))
+		log.Warn(context.TODO(), "searchResult fail reason", log.String("reason", queryResult.GetStatus().GetReason()))
 	}
 	s.NoError(err)
 	s.True(merr.Ok(queryResult.GetStatus()))

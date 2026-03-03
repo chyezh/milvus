@@ -19,7 +19,7 @@ package collector
 import (
 	"context"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/ratelimitutil"
 )
@@ -41,7 +41,7 @@ func init() {
 	var err error
 	Rate, err = ratelimitutil.NewRateCollector(ratelimitutil.DefaultWindow, ratelimitutil.DefaultGranularity, false)
 	if err != nil {
-		mlog.Fatal(context.TODO(), "failed to initialize querynode rate collector", mlog.Err(err))
+		log.Fatal(context.TODO(), "failed to initialize querynode rate collector", log.Err(err))
 	}
 	Average = newAverageCollector()
 	Counter = newCounter()

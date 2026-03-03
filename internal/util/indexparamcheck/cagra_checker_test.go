@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
 )
 
@@ -106,7 +106,7 @@ func Test_cagraChecker_CheckTrain(t *testing.T) {
 
 	c, _ := GetIndexCheckerMgrInstance().GetChecker("GPU_CAGRA")
 	if c == nil {
-		mlog.Error(context.TODO(), "can not get index checker instance, please enable GPU and rerun it")
+		log.Error(context.TODO(), "can not get index checker instance, please enable GPU and rerun it")
 		return
 	}
 	for _, test := range cases {

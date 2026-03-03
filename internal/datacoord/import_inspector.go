@@ -26,7 +26,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/datacoord/task"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 )
 
@@ -62,13 +62,13 @@ func NewImportInspector(ctx context.Context, meta *meta, importMeta ImportMeta, 
 
 func (s *importInspector) Start() {
 	s.reloadFromMeta()
-	mlog.Info(s.ctx, "start import inspector")
+	log.Info(s.ctx, "start import inspector")
 	ticker := time.NewTicker(Params.DataCoordCfg.ImportScheduleInterval.GetAsDuration(time.Second))
 	defer ticker.Stop()
 	for {
 		select {
 		case <-s.closeChan:
-			mlog.Info(s.ctx, "import inspector exited")
+			log.Info(s.ctx, "import inspector exited")
 			return
 		case <-ticker.C:
 			s.inspect()
@@ -137,14 +137,14 @@ func (s *importInspector) processFailed(task ImportTask) {
 			op := UpdateStatusOperator(segment, commonpb.SegmentState_Dropped)
 			err := s.meta.UpdateSegmentsInfo(s.ctx, op)
 			if err != nil {
-				mlog.Warn(s.ctx, "drop import segment failed", WrapTaskLog(task, mlog.Int64("segment", segment), mlog.Err(err))...)
+				log.Warn(s.ctx, "drop import segment failed", WrapTaskLog(task, log.Int64("segment", segment), log.Err(err))...)
 				return
 			}
 		}
 		if len(segments) > 0 {
 			err := s.importMeta.UpdateTask(s.ctx, task.GetTaskID(), UpdateSegmentIDs(nil), UpdateStatsSegmentIDs(nil))
 			if err != nil {
-				mlog.Warn(s.ctx, "update import task segments failed", WrapTaskLog(task, mlog.Err(err))...)
+				log.Warn(s.ctx, "update import task segments failed", WrapTaskLog(task, log.Err(err))...)
 			}
 		}
 	}

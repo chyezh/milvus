@@ -28,7 +28,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -70,7 +70,7 @@ func (s *CompactionSuite) assertMixCompaction(ctx context.Context, collectionNam
 	})
 	err = merr.CheckRPCCall(createCollectionStatus, err)
 	s.NoError(err)
-	mlog.Info(context.TODO(), "CreateCollection result", mlog.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 
 	// create index
 	createIndexStatus, err := c.MilvusClient.CreateIndex(ctx, &milvuspb.CreateIndexRequest{
@@ -89,7 +89,7 @@ func (s *CompactionSuite) assertMixCompaction(ctx context.Context, collectionNam
 	})
 	err = merr.CheckRPCCall(showCollectionsResp, err)
 	s.NoError(err)
-	mlog.Info(context.TODO(), "ShowCollections result", mlog.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	for i := 0; i < rowNum/batch; i++ {
 		// insert
@@ -127,7 +127,7 @@ func (s *CompactionSuite) assertMixCompaction(ctx context.Context, collectionNam
 		s.True(has)
 		s.WaitForFlush(ctx, ids, flushTs, dbName, collectionName)
 
-		mlog.Info(context.TODO(), "insert done", mlog.Int("i", i))
+		log.Info(context.TODO(), "insert done", log.Int("i", i))
 	}
 
 	showSegments := func() {
@@ -139,7 +139,7 @@ func (s *CompactionSuite) assertMixCompaction(ctx context.Context, collectionNam
 		s.True(len(segments) > 0)
 
 		for _, segment := range segments {
-			mlog.Info(context.TODO(), "show segment result", mlog.Any("segment", segment))
+			log.Info(context.TODO(), "show segment result", log.Any("segment", segment))
 		}
 	}
 
@@ -158,8 +158,8 @@ func (s *CompactionSuite) assertMixCompaction(ctx context.Context, collectionNam
 			return segment.GetState() == commonpb.SegmentState_Flushed
 		})
 
-		mlog.Info(context.TODO(), "ShowSegments result", mlog.Int("len(compactFromSegments)", len(compactFromSegments)),
-			mlog.Int("len(compactToSegments)", len(compactToSegments)))
+		log.Info(context.TODO(), "ShowSegments result", log.Int("len(compactFromSegments)", len(compactFromSegments)),
+			log.Int("len(compactToSegments)", len(compactToSegments)))
 
 		// The small segments can be merged based on dataCoord.compaction.min.segment
 		return len(compactToSegments) <= paramtable.Get().DataCoordCfg.MinSegmentToMerge.GetAsInt()
@@ -249,7 +249,7 @@ func (s *CompactionSuite) TestMixCompaction() {
 	// err = merr.CheckRPCCall(status, err)
 	// s.NoError(err)
 
-	mlog.Info(context.TODO(), "Test compaction succeed")
+	log.Info(context.TODO(), "Test compaction succeed")
 }
 
 func (s *CompactionSuite) TestMixCompactionV2() {

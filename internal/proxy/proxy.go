@@ -37,7 +37,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/hookutil"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/expr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
@@ -135,7 +135,7 @@ func NewProxy(ctx context.Context, _ dependency.Factory) (*Proxy, error) {
 	node.UpdateStateCode(commonpb.StateCode_Abnormal)
 	expr.Register("proxy", node)
 	hookutil.InitOnceHook()
-	mlog.Debug(ctx, "create a new Proxy instance", mlog.Any("state", node.stateCode.Load()))
+	log.Debug(ctx, "create a new Proxy instance", log.Any("state", node.stateCode.Load()))
 	return node, nil
 }
 
@@ -152,7 +152,7 @@ func (node *Proxy) GetStateCode() commonpb.StateCode {
 func (node *Proxy) Register() error {
 	node.session.Register()
 	metrics.NumNodes.WithLabelValues(paramtable.GetStringNodeID(), typeutil.ProxyRole).Inc()
-	mlog.Info(context.TODO(), "Proxy Register Finished")
+	log.Info(context.TODO(), "Proxy Register Finished")
 	// TODO Reset the logger
 	// Params.initLogCfg()
 	return nil
@@ -186,60 +186,60 @@ func (node *Proxy) initRateCollector() error {
 
 // Init initialize proxy.
 func (node *Proxy) Init() error {
-	mlog.Info(context.TODO(), "init session for Proxy")
+	log.Info(context.TODO(), "init session for Proxy")
 	if err := node.initSession(); err != nil {
-		mlog.Warn(context.TODO(), "failed to init Proxy's session", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to init Proxy's session", log.Err(err))
 		return err
 	}
-	mlog.Info(context.TODO(), "init session for Proxy done")
+	log.Info(context.TODO(), "init session for Proxy done")
 
 	err := node.initRateCollector()
 	if err != nil {
 		return err
 	}
-	mlog.Info(context.TODO(), "Proxy init rateCollector done", mlog.Int64("nodeID", paramtable.GetNodeID()))
+	log.Info(context.TODO(), "Proxy init rateCollector done", log.Int64("nodeID", paramtable.GetNodeID()))
 
 	idAllocator, err := allocator.NewIDAllocator(node.ctx, node.mixCoord, paramtable.GetNodeID())
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to create id allocator",
-			mlog.String("role", typeutil.ProxyRole), mlog.Int64("ProxyID", paramtable.GetNodeID()),
-			mlog.Err(err))
+		log.Warn(context.TODO(), "failed to create id allocator",
+			log.String("role", typeutil.ProxyRole), log.Int64("ProxyID", paramtable.GetNodeID()),
+			log.Err(err))
 		return err
 	}
 	node.rowIDAllocator = idAllocator
-	mlog.Debug(context.TODO(), "create id allocator done", mlog.String("role", typeutil.ProxyRole), mlog.Int64("ProxyID", paramtable.GetNodeID()))
+	log.Debug(context.TODO(), "create id allocator done", log.String("role", typeutil.ProxyRole), log.Int64("ProxyID", paramtable.GetNodeID()))
 
 	tsoAllocator, err := newTimestampAllocator(node.mixCoord, paramtable.GetNodeID())
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to create timestamp allocator",
-			mlog.String("role", typeutil.ProxyRole), mlog.Int64("ProxyID", paramtable.GetNodeID()),
-			mlog.Err(err))
+		log.Warn(context.TODO(), "failed to create timestamp allocator",
+			log.String("role", typeutil.ProxyRole), log.Int64("ProxyID", paramtable.GetNodeID()),
+			log.Err(err))
 		return err
 	}
 	node.tsoAllocator = tsoAllocator
-	mlog.Debug(context.TODO(), "create timestamp allocator done", mlog.String("role", typeutil.ProxyRole), mlog.Int64("ProxyID", paramtable.GetNodeID()))
+	log.Debug(context.TODO(), "create timestamp allocator done", log.String("role", typeutil.ProxyRole), log.Int64("ProxyID", paramtable.GetNodeID()))
 
 	dmlChannelsFunc := getDmlChannelsFunc(node.ctx, node.mixCoord)
 	chMgr := newChannelsMgrImpl(dmlChannelsFunc, defaultInsertRepackFunc)
 	node.chMgr = chMgr
-	mlog.Debug(context.TODO(), "create channels manager done", mlog.String("role", typeutil.ProxyRole))
+	log.Debug(context.TODO(), "create channels manager done", log.String("role", typeutil.ProxyRole))
 
 	node.sched, err = newTaskScheduler(node.ctx, node.tsoAllocator)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to create task scheduler", mlog.String("role", typeutil.ProxyRole), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to create task scheduler", log.String("role", typeutil.ProxyRole), log.Err(err))
 		return err
 	}
-	mlog.Debug(context.TODO(), "create task scheduler done", mlog.String("role", typeutil.ProxyRole))
+	log.Debug(context.TODO(), "create task scheduler done", log.String("role", typeutil.ProxyRole))
 
 	node.enableComplexDeleteLimit = Params.QuotaConfig.ComplexDeleteLimitEnable.GetAsBool()
 	node.metricsCacheManager = metricsinfo.NewMetricsCacheManager()
-	mlog.Debug(context.TODO(), "create metrics cache manager done", mlog.String("role", typeutil.ProxyRole))
+	log.Debug(context.TODO(), "create metrics cache manager done", log.String("role", typeutil.ProxyRole))
 
 	if err := InitMetaCache(node.ctx, node.mixCoord); err != nil {
-		mlog.Warn(context.TODO(), "failed to init meta cache", mlog.String("role", typeutil.ProxyRole), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to init meta cache", log.String("role", typeutil.ProxyRole), log.Err(err))
 		return err
 	}
-	mlog.Debug(context.TODO(), "init meta cache done", mlog.String("role", typeutil.ProxyRole))
+	log.Debug(context.TODO(), "init meta cache done", log.String("role", typeutil.ProxyRole))
 
 	node.shardMgr = shardclient.NewShardClientMgr(node.mixCoord)
 	node.lbPolicy = shardclient.NewLBPolicyImpl(node.shardMgr)
@@ -251,30 +251,30 @@ func (node *Proxy) Init() error {
 	// there is no possibility that New or any other UUID V4 generation function will be called concurrently
 	// Only proxy generates UUID for now, and one Milvus process only has one proxy
 	uuid.EnableRandPool()
-	mlog.Debug(context.TODO(), "enable rand pool for UUIDv4 generation")
+	log.Debug(context.TODO(), "enable rand pool for UUIDv4 generation")
 
-	mlog.Info(context.TODO(), "init proxy done", mlog.Int64("nodeID", paramtable.GetNodeID()), mlog.String("Address", node.address))
+	log.Info(context.TODO(), "init proxy done", log.Int64("nodeID", paramtable.GetNodeID()), log.String("Address", node.address))
 	return nil
 }
 
 // Start starts a proxy node.
 func (node *Proxy) Start() error {
 	node.shardMgr.Start()
-	mlog.Debug(context.TODO(), "start shard client manager done", mlog.String("role", typeutil.ProxyRole))
+	log.Debug(context.TODO(), "start shard client manager done", log.String("role", typeutil.ProxyRole))
 
 	node.lbPolicy.Start(node.ctx)
 
 	if err := node.sched.Start(); err != nil {
-		mlog.Warn(context.TODO(), "failed to start task scheduler", mlog.String("role", typeutil.ProxyRole), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to start task scheduler", log.String("role", typeutil.ProxyRole), log.Err(err))
 		return err
 	}
-	mlog.Debug(context.TODO(), "start task scheduler done", mlog.String("role", typeutil.ProxyRole))
+	log.Debug(context.TODO(), "start task scheduler done", log.String("role", typeutil.ProxyRole))
 
 	if err := node.rowIDAllocator.Start(); err != nil {
-		mlog.Warn(context.TODO(), "failed to start id allocator", mlog.String("role", typeutil.ProxyRole), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to start id allocator", log.String("role", typeutil.ProxyRole), log.Err(err))
 		return err
 	}
-	mlog.Debug(context.TODO(), "start id allocator done", mlog.String("role", typeutil.ProxyRole))
+	log.Debug(context.TODO(), "start id allocator done", log.String("role", typeutil.ProxyRole))
 
 	// Start callbacks
 	for _, cb := range node.startCallbacks {
@@ -286,7 +286,7 @@ func (node *Proxy) Start() error {
 		hookutil.NodeIDKey: paramtable.GetNodeID(),
 	})
 
-	mlog.Debug(context.TODO(), "update state code", mlog.String("role", typeutil.ProxyRole), mlog.String("State", commonpb.StateCode_Healthy.String()))
+	log.Debug(context.TODO(), "update state code", log.String("role", typeutil.ProxyRole), log.String("State", commonpb.StateCode_Healthy.String()))
 	node.UpdateStateCode(commonpb.StateCode_Healthy)
 
 	// register devops api
@@ -299,12 +299,12 @@ func (node *Proxy) Start() error {
 func (node *Proxy) Stop() error {
 	if node.rowIDAllocator != nil {
 		node.rowIDAllocator.Close()
-		mlog.Info(context.TODO(), "close id allocator", mlog.String("role", typeutil.ProxyRole))
+		log.Info(context.TODO(), "close id allocator", log.String("role", typeutil.ProxyRole))
 	}
 
 	if node.sched != nil {
 		node.sched.Close()
-		mlog.Info(context.TODO(), "close scheduler", mlog.String("role", typeutil.ProxyRole))
+		log.Info(context.TODO(), "close scheduler", log.String("role", typeutil.ProxyRole))
 	}
 
 	for _, cb := range node.closeCallbacks {

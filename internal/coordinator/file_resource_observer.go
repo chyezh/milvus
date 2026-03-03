@@ -27,7 +27,7 @@ import (
 	qcsession "github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/rootcoord"
 	"github.com/milvus-io/milvus/internal/util/fileresource"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -111,10 +111,10 @@ func (m *FileResourceObserver) syncLoop() {
 				m.RetryNotify()
 			}
 		case <-m.closeCh:
-			mlog.Info(context.TODO(), "file resource observer close")
+			log.Info(context.TODO(), "file resource observer close")
 			return
 		case <-m.ctx.Done():
-			mlog.Info(context.TODO(), "file resource observer context done")
+			log.Info(context.TODO(), "file resource observer context done")
 			return
 		}
 	}
@@ -201,13 +201,13 @@ func (m *FileResourceObserver) Sync() error {
 					Version:   targetVersion,
 				})
 				if err != nil {
-					mlog.Warn(context.TODO(), "sync file resource failed", mlog.Int64("nodeID", node.ID()), mlog.Err(err))
+					log.Warn(context.TODO(), "sync file resource failed", log.Int64("nodeID", node.ID()), log.Err(err))
 					syncErr = err
 					continue
 				}
 
 				if err = merr.Error(status); err != nil {
-					mlog.Warn(context.TODO(), "sync file resource failed", mlog.Int64("nodeID", node.ID()), mlog.Err(err))
+					log.Warn(context.TODO(), "sync file resource failed", log.Int64("nodeID", node.ID()), log.Err(err))
 					syncErr = err
 					continue
 				}
@@ -217,7 +217,7 @@ func (m *FileResourceObserver) Sync() error {
 					NodeType: QueryNode,
 					Version:  targetVersion,
 				})
-				mlog.Info(context.TODO(), "finish sync file resource to query node", mlog.Int64("node", node.ID()), mlog.Uint64("version", targetVersion))
+				log.Info(context.TODO(), "finish sync file resource to query node", log.Int64("node", node.ID()), log.Uint64("version", targetVersion))
 			}
 		}
 
@@ -234,7 +234,7 @@ func (m *FileResourceObserver) Sync() error {
 			if info, ok := m.distribution.Get(nodeID); !ok || info.Version < targetVersion {
 				c, err := m.dnManager.GetClient(nodeID)
 				if err != nil {
-					mlog.Warn(context.TODO(), "sync file resource failed, fetch client failed", mlog.Err(err))
+					log.Warn(context.TODO(), "sync file resource failed, fetch client failed", log.Err(err))
 					syncErr = err
 					continue
 				}
@@ -244,12 +244,12 @@ func (m *FileResourceObserver) Sync() error {
 				})
 				if err != nil {
 					syncErr = err
-					mlog.Warn(context.TODO(), "sync file resource failed", mlog.Int64("nodeID", nodeID), mlog.Err(err))
+					log.Warn(context.TODO(), "sync file resource failed", log.Int64("nodeID", nodeID), log.Err(err))
 					continue
 				}
 
 				if err = merr.Error(status); err != nil {
-					mlog.Warn(context.TODO(), "sync file resource failed", mlog.Int64("nodeID", nodeID), mlog.Err(err))
+					log.Warn(context.TODO(), "sync file resource failed", log.Int64("nodeID", nodeID), log.Err(err))
 					syncErr = err
 					continue
 				}
@@ -259,7 +259,7 @@ func (m *FileResourceObserver) Sync() error {
 					NodeType: DataNode,
 					Version:  targetVersion,
 				})
-				mlog.Info(context.TODO(), "finish sync file resource to data node", mlog.Int64("nodeID", nodeID), mlog.Uint64("version", targetVersion))
+				log.Info(context.TODO(), "finish sync file resource to data node", log.Int64("nodeID", nodeID), log.Uint64("version", targetVersion))
 			}
 		}
 

@@ -26,7 +26,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/hook"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 // BinlogType is to distinguish different files saving different data.
@@ -169,10 +169,10 @@ func (writer *baseBinlogWriter) Finish() error {
 		if err != nil {
 			return err
 		}
-		mlog.Debug(context.TODO(), "Binlog writer encrypted plain text",
-			mlog.String("writer type", writer.binlogType.String()),
-			mlog.Int("plain size", eventBuffer.Len()),
-			mlog.Int("cipher size", len(encrypted)))
+		log.Debug(context.TODO(), "Binlog writer encrypted plain text",
+			log.String("writer type", writer.binlogType.String()),
+			log.Int("plain size", eventBuffer.Len()),
+			log.Int("cipher size", len(encrypted)))
 		if err := binary.Write(writer.buffer, common.Endian, encrypted); err != nil {
 			return err
 		}

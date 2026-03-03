@@ -8,7 +8,7 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/discoverer"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -16,7 +16,7 @@ import (
 var _ Resolver = (*resolverWithDiscoverer)(nil)
 
 // newResolverWithDiscoverer creates a new resolver with discoverer.
-func newResolverWithDiscoverer(d discoverer.Discoverer, retryInterval time.Duration, logger *mlog.Logger) *resolverWithDiscoverer {
+func newResolverWithDiscoverer(d discoverer.Discoverer, retryInterval time.Duration, logger *log.Logger) *resolverWithDiscoverer {
 	r := &resolverWithDiscoverer{
 		taskNotifier:    syncutil.NewAsyncTaskNotifier[struct{}](),
 		registerCh:      make(chan *watchBasedGRPCResolver),
@@ -39,7 +39,7 @@ type versionStateWithError struct {
 // resolverWithDiscoverer is the resolver for bkproxy service.
 type resolverWithDiscoverer struct {
 	taskNotifier *syncutil.AsyncTaskNotifier[struct{}]
-	mlog.Binder
+	log.Binder
 
 	registerCh chan *watchBasedGRPCResolver
 
@@ -162,7 +162,7 @@ func (r *resolverWithDiscoverer) doDiscover() {
 					continue
 				}
 				if err := watcher.Update(*state); err != nil {
-					r.Logger().Info(nil, "resolver is closed, ignore the new grpc resolver", mlog.Err(err))
+					r.Logger().Info(nil, "resolver is closed, ignore the new grpc resolver", log.Err(err))
 					delete(grpcResolvers, watcher)
 				}
 			case stateWithError := <-ch:
@@ -171,7 +171,7 @@ func (r *resolverWithDiscoverer) doDiscover() {
 						// resolver stopped.
 						return
 					}
-					r.Logger().Warn(nil, "service discover break down", mlog.Err(stateWithError.err), mlog.Duration("retryInterval", r.retryInterval))
+					r.Logger().Warn(nil, "service discover break down", log.Err(stateWithError.err), log.Duration("retryInterval", r.retryInterval))
 					time.Sleep(r.retryInterval)
 					break L
 				}
@@ -181,17 +181,17 @@ func (r *resolverWithDiscoverer) doDiscover() {
 				latestState := r.getLatestState()
 				if latestState != nil && !state.Version.GT(latestState.Version) {
 					// Ignore the old version.
-					r.Logger().Info(nil, "service discover update, ignore old version", mlog.Stringer("state", state))
+					r.Logger().Info(nil, "service discover update, ignore old version", log.Stringer("state", state))
 					continue
 				}
 				// Update all grpc resolver.
-				r.Logger().Info(nil, "service discover update, update resolver", mlog.Stringer("state", state), mlog.Int("resolver_count", len(grpcResolvers)))
+				r.Logger().Info(nil, "service discover update, update resolver", log.Stringer("state", state), log.Int("resolver_count", len(grpcResolvers)))
 				for watcher := range grpcResolvers {
 					// Update operation do not block.
 					// Only return error if the resolver is closed, so just print a info log and delete the resolver.
 					if err := watcher.Update(state); err != nil {
 						// updateError is always context.Canceled.
-						r.Logger().Info(nil, "resolver is closed, unregister the resolver", mlog.NamedError("updateError", err))
+						r.Logger().Info(nil, "resolver is closed, unregister the resolver", log.NamedError("updateError", err))
 						delete(grpcResolvers, watcher)
 					}
 				}

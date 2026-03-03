@@ -29,7 +29,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/datacoord/task"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
@@ -144,18 +144,18 @@ func summaryCompactionState(triggerID int64, tasks []*datapb.CompactionTask) *co
 		ret.state = commonpb.CompactionState_Completed
 	}
 
-	mlog.Info(context.TODO(), "compaction states",
-		mlog.Int64("triggerID", triggerID),
-		mlog.String("state", ret.state.String()),
-		mlog.Int("executingCnt", executingCnt),
-		mlog.Int("pipeliningCnt", pipeliningCnt),
-		mlog.Int("completedCnt", completedCnt),
-		mlog.Int("failedCnt", failedCnt),
-		mlog.Int("timeoutCnt", timeoutCnt),
-		mlog.Int("analyzingCnt", analyzingCnt),
-		mlog.Int("indexingCnt", indexingCnt),
-		mlog.Int("cleanedCnt", cleanedCnt),
-		mlog.Int("metaSavedCnt", metaSavedCnt))
+	log.Info(context.TODO(), "compaction states",
+		log.Int64("triggerID", triggerID),
+		log.String("state", ret.state.String()),
+		log.Int("executingCnt", executingCnt),
+		log.Int("pipeliningCnt", pipeliningCnt),
+		log.Int("completedCnt", completedCnt),
+		log.Int("failedCnt", failedCnt),
+		log.Int("timeoutCnt", timeoutCnt),
+		log.Int("analyzingCnt", analyzingCnt),
+		log.Int("indexingCnt", indexingCnt),
+		log.Int("cleanedCnt", cleanedCnt),
+		log.Int("metaSavedCnt", metaSavedCnt))
 	return ret
 }
 
@@ -196,7 +196,7 @@ func newCompactionInspector(meta CompactionMeta,
 func (c *compactionInspector) checkSchedule() {
 	err := c.checkCompaction()
 	if err != nil {
-		mlog.Info(context.TODO(), "fail to update compaction", mlog.Err(err))
+		log.Info(context.TODO(), "fail to update compaction", log.Err(err))
 	}
 	c.cleanFailedTasks()
 	c.schedule()
@@ -283,12 +283,12 @@ func (c *compactionInspector) schedule() []CompactionTask {
 		c.executingGuard.Lock()
 		c.executingTasks[t.GetTaskProto().GetPlanID()] = t
 		c.scheduler.Enqueue(t)
-		mlog.Info(context.TODO(), "compaction task enqueued",
-			mlog.Int64("planID", t.GetTaskProto().GetPlanID()),
-			mlog.String("type", t.GetTaskProto().GetType().String()),
-			mlog.String("channel", t.GetTaskProto().GetChannel()),
-			mlog.String("label", t.GetLabel()),
-			mlog.Int64s("inputSegments", t.GetTaskProto().GetInputSegments()),
+		log.Info(context.TODO(), "compaction task enqueued",
+			log.Int64("planID", t.GetTaskProto().GetPlanID()),
+			log.String("type", t.GetTaskProto().GetType().String()),
+			log.String("channel", t.GetTaskProto().GetChannel()),
+			log.String("label", t.GetLabel()),
+			log.Int64s("inputSegments", t.GetTaskProto().GetInputSegments()),
 		)
 		c.executingGuard.Unlock()
 		metrics.DataCoordCompactionTaskNum.WithLabelValues(fmt.Sprintf("%d", NullNodeID), t.GetTaskProto().GetType().String(), metrics.Pending).Dec()
@@ -309,19 +309,19 @@ func (c *compactionInspector) loadMeta() {
 	for _, tasks := range triggers {
 		for _, task := range tasks {
 			if isCompactionTaskCleaned(task) {
-				mlog.Info(context.TODO(), "compactionInspector loadMeta abandon compactionTask",
-					mlog.Int64("planID", task.GetPlanID()),
-					mlog.String("type", task.GetType().String()),
-					mlog.String("state", task.GetState().String()))
+				log.Info(context.TODO(), "compactionInspector loadMeta abandon compactionTask",
+					log.Int64("planID", task.GetPlanID()),
+					log.String("type", task.GetType().String()),
+					log.String("state", task.GetState().String()))
 				continue
 			} else {
 				t, err := c.createCompactTask(task)
 				if err != nil {
-					mlog.Info(context.TODO(), "compactionInspector loadMeta create compactionTask failed, try to clean it",
-						mlog.Int64("planID", task.GetPlanID()),
-						mlog.String("type", task.GetType().String()),
-						mlog.String("state", task.GetState().String()),
-						mlog.Err(err),
+					log.Info(context.TODO(), "compactionInspector loadMeta create compactionTask failed, try to clean it",
+						log.Int64("planID", task.GetPlanID()),
+						log.String("type", task.GetType().String()),
+						log.String("state", task.GetState().String()),
+						log.Err(err),
 					)
 					// ignore the drop error
 					c.meta.DropCompactionTask(context.TODO(), task)
@@ -329,30 +329,30 @@ func (c *compactionInspector) loadMeta() {
 				}
 				if t.NeedReAssignNodeID() {
 					if err = c.submitTask(t); err != nil {
-						mlog.Info(context.TODO(), "compactionInspector loadMeta submit task failed, try to clean it",
-							mlog.Int64("planID", task.GetPlanID()),
-							mlog.String("type", task.GetType().String()),
-							mlog.String("state", task.GetState().String()),
-							mlog.Err(err),
+						log.Info(context.TODO(), "compactionInspector loadMeta submit task failed, try to clean it",
+							log.Int64("planID", task.GetPlanID()),
+							log.String("type", task.GetType().String()),
+							log.String("state", task.GetState().String()),
+							log.Err(err),
 						)
 						// ignore the drop error
 						c.meta.DropCompactionTask(context.Background(), task)
 						continue
 					}
-					mlog.Info(context.TODO(), "compactionInspector loadMeta submitTask",
-						mlog.Int64("planID", t.GetTaskProto().GetPlanID()),
-						mlog.Int64("triggerID", t.GetTaskProto().GetTriggerID()),
-						mlog.Int64("collectionID", t.GetTaskProto().GetCollectionID()),
-						mlog.String("type", task.GetType().String()),
-						mlog.String("state", t.GetTaskProto().GetState().String()))
+					log.Info(context.TODO(), "compactionInspector loadMeta submitTask",
+						log.Int64("planID", t.GetTaskProto().GetPlanID()),
+						log.Int64("triggerID", t.GetTaskProto().GetTriggerID()),
+						log.Int64("collectionID", t.GetTaskProto().GetCollectionID()),
+						log.String("type", task.GetType().String()),
+						log.String("state", t.GetTaskProto().GetState().String()))
 				} else {
 					c.restoreTask(t)
-					mlog.Info(context.TODO(), "compactionInspector loadMeta restoreTask",
-						mlog.Int64("planID", t.GetTaskProto().GetPlanID()),
-						mlog.Int64("triggerID", t.GetTaskProto().GetTriggerID()),
-						mlog.Int64("collectionID", t.GetTaskProto().GetCollectionID()),
-						mlog.String("type", task.GetType().String()),
-						mlog.String("state", t.GetTaskProto().GetState().String()))
+					log.Info(context.TODO(), "compactionInspector loadMeta restoreTask",
+						log.Int64("planID", t.GetTaskProto().GetPlanID()),
+						log.Int64("triggerID", t.GetTaskProto().GetTriggerID()),
+						log.Int64("collectionID", t.GetTaskProto().GetCollectionID()),
+						log.String("type", task.GetType().String()),
+						log.String("state", t.GetTaskProto().GetState().String()))
 				}
 			}
 		}
@@ -361,7 +361,7 @@ func (c *compactionInspector) loadMeta() {
 
 func (c *compactionInspector) loopSchedule() {
 	interval := paramtable.Get().DataCoordCfg.CompactionScheduleInterval.GetAsDuration(time.Millisecond)
-	mlog.Info(context.TODO(), "compactionInspector start loop schedule", mlog.Duration("schedule interval", interval))
+	log.Info(context.TODO(), "compactionInspector start loop schedule", log.Duration("schedule interval", interval))
 	defer c.stopWg.Done()
 
 	scheduleTicker := time.NewTicker(interval)
@@ -369,7 +369,7 @@ func (c *compactionInspector) loopSchedule() {
 	for {
 		select {
 		case <-c.stopCh:
-			mlog.Info(context.TODO(), "compactionInspector quit loop schedule")
+			log.Info(context.TODO(), "compactionInspector quit loop schedule")
 			return
 
 		case <-scheduleTicker.C:
@@ -380,14 +380,14 @@ func (c *compactionInspector) loopSchedule() {
 
 func (c *compactionInspector) loopClean() {
 	interval := Params.DataCoordCfg.CompactionGCIntervalInSeconds.GetAsDuration(time.Second)
-	mlog.Info(context.TODO(), "compactionInspector start clean check loop", mlog.Any("gc interval", interval))
+	log.Info(context.TODO(), "compactionInspector start clean check loop", log.Any("gc interval", interval))
 	defer c.stopWg.Done()
 	cleanTicker := time.NewTicker(interval)
 	defer cleanTicker.Stop()
 	for {
 		select {
 		case <-c.stopCh:
-			mlog.Info(context.TODO(), "Compaction inspector quit loopClean")
+			log.Info(context.TODO(), "Compaction inspector quit loopClean")
 			return
 		case <-cleanTicker.C:
 			c.Clean()
@@ -410,9 +410,9 @@ func (c *compactionInspector) cleanCompactionTaskMeta() {
 				if duration > float64(Params.DataCoordCfg.CompactionDropToleranceInSeconds.GetAsDuration(time.Second).Seconds()) {
 					// try best to delete meta
 					err := c.meta.DropCompactionTask(context.TODO(), task)
-					mlog.Debug(context.TODO(), "drop compaction task meta", mlog.Int64("planID", task.PlanID))
+					log.Debug(context.TODO(), "drop compaction task meta", log.Int64("planID", task.PlanID))
 					if err != nil {
-						mlog.Warn(context.TODO(), "fail to drop task", mlog.Int64("planID", task.PlanID), mlog.Err(err))
+						log.Warn(context.TODO(), "fail to drop task", log.Int64("planID", task.PlanID), log.Err(err))
 					}
 				}
 			}
@@ -421,7 +421,7 @@ func (c *compactionInspector) cleanCompactionTaskMeta() {
 }
 
 func (c *compactionInspector) cleanPartitionStats() error {
-	mlog.Debug(context.TODO(), "start gc partitionStats meta and files")
+	log.Debug(context.TODO(), "start gc partitionStats meta and files")
 	// gc partition stats
 	channelPartitionStatsInfos := make(map[string][]*datapb.PartitionStatsInfo)
 	unusedPartStats := make([]*datapb.PartitionStatsInfo, 0)
@@ -441,13 +441,13 @@ func (c *compactionInspector) cleanPartitionStats() error {
 		}
 		channelPartitionStatsInfos[channel] = append(channelPartitionStatsInfos[channel], info)
 	}
-	mlog.Debug(context.TODO(), "channels with PartitionStats meta", mlog.Int("len", len(channelPartitionStatsInfos)))
+	log.Debug(context.TODO(), "channels with PartitionStats meta", log.Int("len", len(channelPartitionStatsInfos)))
 
 	for _, info := range unusedPartStats {
-		mlog.Debug(context.TODO(), "collection has been dropped, remove partition stats",
-			mlog.Int64("collID", info.GetCollectionID()))
+		log.Debug(context.TODO(), "collection has been dropped, remove partition stats",
+			log.Int64("collID", info.GetCollectionID()))
 		if err := c.meta.CleanPartitionStatsInfo(context.TODO(), info); err != nil {
-			mlog.Warn(context.TODO(), "gcPartitionStatsInfo fail", mlog.Err(err))
+			log.Warn(context.TODO(), "gcPartitionStatsInfo fail", log.Err(err))
 			return err
 		}
 	}
@@ -456,12 +456,12 @@ func (c *compactionInspector) cleanPartitionStats() error {
 		sort.Slice(infos, func(i, j int) bool {
 			return infos[i].Version > infos[j].Version
 		})
-		mlog.Debug(context.TODO(), "PartitionStats in channel", mlog.String("channel", channel), mlog.Int("len", len(infos)))
+		log.Debug(context.TODO(), "PartitionStats in channel", log.String("channel", channel), log.Int("len", len(infos)))
 		if len(infos) > 2 {
 			for i := 2; i < len(infos); i++ {
 				info := infos[i]
 				if err := c.meta.CleanPartitionStatsInfo(context.TODO(), info); err != nil {
-					mlog.Warn(context.TODO(), "gcPartitionStatsInfo fail", mlog.Err(err))
+					log.Warn(context.TODO(), "gcPartitionStatsInfo fail", log.Err(err))
 					return err
 				}
 			}
@@ -478,13 +478,13 @@ func (c *compactionInspector) stop() {
 }
 
 func (c *compactionInspector) removeTasksByChannel(channel string) {
-	mlog.Info(context.TODO(), "removing tasks by channel", mlog.String("channel", channel))
+	log.Info(context.TODO(), "removing tasks by channel", log.String("channel", channel))
 	c.queueTasks.RemoveAll(func(task CompactionTask) bool {
 		if task.GetTaskProto().GetChannel() == channel {
-			mlog.Info(context.TODO(), "Compaction inspector removing tasks by channel",
-				mlog.String("channel", channel),
-				mlog.Int64("planID", task.GetTaskProto().GetPlanID()),
-				mlog.Int64("node", task.GetTaskProto().GetNodeID()),
+			log.Info(context.TODO(), "Compaction inspector removing tasks by channel",
+				log.String("channel", channel),
+				log.Int64("planID", task.GetTaskProto().GetPlanID()),
+				log.Int64("node", task.GetTaskProto().GetNodeID()),
 			)
 			metrics.DataCoordCompactionTaskNum.WithLabelValues(fmt.Sprintf("%d", task.GetTaskProto().GetNodeID()), task.GetTaskProto().GetType().String(), metrics.Pending).Dec()
 			return true
@@ -494,13 +494,13 @@ func (c *compactionInspector) removeTasksByChannel(channel string) {
 
 	c.executingGuard.Lock()
 	for id, task := range c.executingTasks {
-		mlog.Info(context.TODO(), "Compaction inspector removing tasks by channel",
-			mlog.String("channel", channel), mlog.Int64("planID", id), mlog.Any("task_channel", task.GetTaskProto().GetChannel()))
+		log.Info(context.TODO(), "Compaction inspector removing tasks by channel",
+			log.String("channel", channel), log.Int64("planID", id), log.Any("task_channel", task.GetTaskProto().GetChannel()))
 		if task.GetTaskProto().GetChannel() == channel {
-			mlog.Info(context.TODO(), "Compaction inspector removing tasks by channel",
-				mlog.String("channel", channel),
-				mlog.Int64("planID", task.GetTaskProto().GetPlanID()),
-				mlog.Int64("node", task.GetTaskProto().GetNodeID()),
+			log.Info(context.TODO(), "Compaction inspector removing tasks by channel",
+				log.String("channel", channel),
+				log.Int64("planID", task.GetTaskProto().GetPlanID()),
+				log.Int64("node", task.GetTaskProto().GetNodeID()),
 			)
 			delete(c.executingTasks, id)
 			metrics.DataCoordCompactionTaskNum.WithLabelValues(fmt.Sprintf("%d", task.GetTaskProto().GetNodeID()), task.GetTaskProto().GetType().String(), metrics.Executing).Dec()
@@ -549,9 +549,9 @@ func (c *compactionInspector) enqueueCompaction(task *datapb.CompactionTask) err
 	if err != nil {
 		// Conflict is normal
 		if errors.Is(err, merr.ErrCompactionPlanConflict) {
-			mlog.RatedInfo(context.TODO(), mlog.RateDefault, "Failed to create compaction task, compaction plan conflict", mlog.Err(err))
+			log.RatedInfo(context.TODO(), log.RateDefault, "Failed to create compaction task, compaction plan conflict", log.Err(err))
 		} else {
-			mlog.Warn(context.TODO(), "Failed to create compaction task, unable to create compaction task", mlog.Err(err))
+			log.Warn(context.TODO(), "Failed to create compaction task, unable to create compaction task", log.Err(err))
 		}
 		return err
 	}
@@ -560,15 +560,15 @@ func (c *compactionInspector) enqueueCompaction(task *datapb.CompactionTask) err
 	err = t.SaveTaskMeta()
 	if err != nil {
 		c.meta.SetSegmentsCompacting(context.TODO(), t.GetTaskProto().GetInputSegments(), false)
-		mlog.Warn(context.TODO(), "Failed to enqueue compaction task, unable to save task meta", mlog.Err(err))
+		log.Warn(context.TODO(), "Failed to enqueue compaction task, unable to save task meta", log.Err(err))
 		return err
 	}
 	if err = c.submitTask(t); err != nil {
-		mlog.Warn(context.TODO(), "submit compaction task failed", mlog.Err(err))
+		log.Warn(context.TODO(), "submit compaction task failed", log.Err(err))
 		c.meta.SetSegmentsCompacting(context.Background(), t.GetTaskProto().GetInputSegments(), false)
 		return err
 	}
-	mlog.Info(context.TODO(), "Compaction plan submitted")
+	log.Info(context.TODO(), "Compaction plan submitted")
 	return nil
 }
 
@@ -619,15 +619,15 @@ func (c *compactionInspector) checkCompaction() error {
 	c.executingGuard.Lock()
 	for _, t := range finishedTasks {
 		delete(c.executingTasks, t.GetTaskProto().GetPlanID())
-		mlog.Info(context.TODO(), "compaction task finished",
-			mlog.Int64("planID", t.GetTaskProto().GetPlanID()),
-			mlog.String("type", t.GetTaskProto().GetType().String()),
-			mlog.String("state", t.GetTaskProto().GetState().String()),
-			mlog.String("channel", t.GetTaskProto().GetChannel()),
-			mlog.String("label", t.GetLabel()),
-			mlog.Int64("nodeID", t.GetTaskProto().GetNodeID()),
-			mlog.Int64s("inputSegments", t.GetTaskProto().GetInputSegments()),
-			mlog.String("reason", t.GetTaskProto().GetFailReason()),
+		log.Info(context.TODO(), "compaction task finished",
+			log.Int64("planID", t.GetTaskProto().GetPlanID()),
+			log.String("type", t.GetTaskProto().GetType().String()),
+			log.String("state", t.GetTaskProto().GetState().String()),
+			log.String("channel", t.GetTaskProto().GetChannel()),
+			log.String("label", t.GetLabel()),
+			log.Int64("nodeID", t.GetTaskProto().GetNodeID()),
+			log.Int64s("inputSegments", t.GetTaskProto().GetInputSegments()),
+			log.String("reason", t.GetTaskProto().GetFailReason()),
 		)
 		metrics.DataCoordCompactionTaskNum.WithLabelValues(fmt.Sprintf("%d", t.GetTaskProto().GetNodeID()), t.GetTaskProto().GetType().String(), metrics.Executing).Dec()
 		metrics.DataCoordCompactionTaskNum.WithLabelValues(fmt.Sprintf("%d", t.GetTaskProto().GetNodeID()), t.GetTaskProto().GetType().String(), metrics.Done).Inc()
@@ -640,10 +640,10 @@ func (c *compactionInspector) checkCompaction() error {
 		if t.GetTaskProto().GetState() == datapb.CompactionTaskState_failed ||
 			t.GetTaskProto().GetState() == datapb.CompactionTaskState_timeout ||
 			t.GetTaskProto().GetState() == datapb.CompactionTaskState_completed {
-			mlog.Info(context.TODO(), "task need to clean",
-				mlog.Int64("collectionID", t.GetTaskProto().GetCollectionID()),
-				mlog.Int64("planID", t.GetTaskProto().GetPlanID()),
-				mlog.String("state", t.GetTaskProto().GetState().String()))
+			log.Info(context.TODO(), "task need to clean",
+				log.Int64("collectionID", t.GetTaskProto().GetCollectionID()),
+				log.Int64("planID", t.GetTaskProto().GetPlanID()),
+				log.String("state", t.GetTaskProto().GetState().String()))
 			c.cleaningTasks[t.GetTaskProto().GetPlanID()] = t
 		}
 	}
@@ -681,14 +681,14 @@ func (c *compactionInspector) checkDelay(t CompactionTask) {
 	startTime := time.Unix(t.GetTaskProto().GetStartTime(), 0)
 	execDuration := time.Since(startTime)
 	if execDuration >= maxExecDuration {
-		mlog.RatedWarn(context.TODO(), mlog.RateDefault, "compaction task is delay",
-			mlog.Int64("planID", t.GetTaskProto().GetPlanID()),
-			mlog.String("type", t.GetTaskProto().GetType().String()),
-			mlog.String("state", t.GetTaskProto().GetState().String()),
-			mlog.String("vchannel", t.GetTaskProto().GetChannel()),
-			mlog.Int64("nodeID", t.GetTaskProto().GetNodeID()),
-			mlog.Time("startTime", startTime),
-			mlog.Duration("execDuration", execDuration))
+		log.RatedWarn(context.TODO(), log.RateDefault, "compaction task is delay",
+			log.Int64("planID", t.GetTaskProto().GetPlanID()),
+			log.String("type", t.GetTaskProto().GetType().String()),
+			log.String("state", t.GetTaskProto().GetState().String()),
+			log.String("vchannel", t.GetTaskProto().GetChannel()),
+			log.Int64("nodeID", t.GetTaskProto().GetNodeID()),
+			log.Time("startTime", startTime),
+			log.Duration("execDuration", execDuration))
 	}
 }
 

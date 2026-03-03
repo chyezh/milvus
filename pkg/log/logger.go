@@ -1,4 +1,4 @@
-package mlog
+package log
 
 import (
 	"context"
@@ -49,7 +49,7 @@ func getLogger() *zap.Logger {
 
 // GetUnderlying returns the raw *zap.Logger for advanced use cases that need
 // direct access (e.g., CGO logging core inspection, zap.WithOptions).
-// Prefer the context-based mlog functions for normal logging.
+// Prefer the context-based log functions for normal logging.
 func GetUnderlying() *zap.Logger {
 	return globalLogger.Load()
 }
@@ -247,8 +247,8 @@ func (l *Logger) Level() Level {
 // LevelEnabled reports whether a message at the given level would be logged.
 // Use this to guard expensive field construction on hot paths:
 //
-//	if l.LevelEnabled(mlog.DebugLevel) {
-//	    l.Debug(ctx, "details", mlog.String("dump", expensiveDump()))
+//	if l.LevelEnabled(log.DebugLevel) {
+//	    l.Debug(ctx, "details", log.String("dump", expensiveDump()))
 //	}
 func (l *Logger) LevelEnabled(level Level) bool {
 	return globalLevel.Enabled(level)

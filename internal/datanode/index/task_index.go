@@ -31,7 +31,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/indexcgowrapper"
 	"github.com/milvus-io/milvus/internal/util/vecindexmgr"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexcgopb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
@@ -133,8 +133,8 @@ func (it *indexBuildTask) GetState() indexpb.JobState {
 func (it *indexBuildTask) OnEnqueue(ctx context.Context) error {
 	it.queueDur = 0
 	it.tr.RecordSpan()
-	mlog.Info(ctx, "IndexBuilderTask Enqueue", mlog.Int64("buildID", it.req.GetBuildID()),
-		mlog.Int64("segmentID", it.req.GetSegmentID()))
+	log.Info(ctx, "IndexBuilderTask Enqueue", log.Int64("buildID", it.req.GetBuildID()),
+		log.Int64("segmentID", it.req.GetSegmentID()))
 	return nil
 }
 
@@ -149,8 +149,8 @@ func (it *indexBuildTask) IsVectorIndex() bool {
 
 func (it *indexBuildTask) PreExecute(ctx context.Context) error {
 	it.queueDur = it.tr.RecordSpan()
-	mlog.Info(ctx, "Begin to prepare indexBuildTask", mlog.Int64("buildID", it.req.GetBuildID()),
-		mlog.Int64("Collection", it.req.GetCollectionID()), mlog.Int64("SegmentID", it.req.GetSegmentID()))
+	log.Info(ctx, "Begin to prepare indexBuildTask", log.Int64("buildID", it.req.GetBuildID()),
+		log.Int64("Collection", it.req.GetCollectionID()), log.Int64("SegmentID", it.req.GetSegmentID()))
 
 	typeParams := make(map[string]string)
 	indexParams := make(map[string]string)
@@ -198,7 +198,7 @@ func (it *indexBuildTask) PreExecute(ctx context.Context) error {
 			var err error
 			it.req.Dim, err = strconv.ParseInt(dimStr, 10, 64)
 			if err != nil {
-				mlog.Error(ctx, "parse dimension failed", mlog.Err(err))
+				log.Error(ctx, "parse dimension failed", log.Err(err))
 				// ignore error
 			}
 		}
@@ -207,7 +207,7 @@ func (it *indexBuildTask) PreExecute(ctx context.Context) error {
 	if it.req.GetCollectionID() == 0 || it.req.GetField().GetDataType() == schemapb.DataType_None || it.req.GetField().GetFieldID() == 0 {
 		err := it.parseFieldMetaFromBinlog(ctx)
 		if err != nil {
-			mlog.Warn(ctx, "parse field meta from binlog failed", mlog.Err(err))
+			log.Warn(ctx, "parse field meta from binlog failed", log.Err(err))
 			return err
 		}
 	}
@@ -215,11 +215,11 @@ func (it *indexBuildTask) PreExecute(ctx context.Context) error {
 	it.req.CurrentIndexVersion = getCurrentIndexVersion(it.req.GetCurrentIndexVersion())
 	it.req.CurrentScalarIndexVersion = getCurrentScalarIndexVersion(it.req.GetCurrentScalarIndexVersion())
 
-	mlog.Info(ctx, "Successfully prepare indexBuildTask", mlog.Int64("buildID", it.req.GetBuildID()),
-		mlog.Int64("collectionID", it.req.GetCollectionID()), mlog.Int64("segmentID", it.req.GetSegmentID()),
-		mlog.Int64("taskVersion", it.req.GetIndexVersion()),
-		mlog.Int32("currentIndexVersion", it.req.GetCurrentIndexVersion()),
-		mlog.Int32("currentScalarIndexVersion", it.req.GetCurrentScalarIndexVersion()),
+	log.Info(ctx, "Successfully prepare indexBuildTask", log.Int64("buildID", it.req.GetBuildID()),
+		log.Int64("collectionID", it.req.GetCollectionID()), log.Int64("segmentID", it.req.GetSegmentID()),
+		log.Int64("taskVersion", it.req.GetIndexVersion()),
+		log.Int32("currentIndexVersion", it.req.GetCurrentIndexVersion()),
+		log.Int32("currentScalarIndexVersion", it.req.GetCurrentScalarIndexVersion()),
 	)
 	return nil
 }
@@ -235,7 +235,7 @@ func (it *indexBuildTask) Execute(ctx context.Context) error {
 	if vecindexmgr.GetVecIndexMgrInstance().IsDiskANN(indexType) {
 		err = indexparams.SetDiskIndexBuildParams(it.newIndexParams, int64(fieldDataSize))
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to fill disk index params", mlog.Err(err))
+			log.Warn(context.TODO(), "failed to fill disk index params", log.Err(err))
 			return err
 		}
 	}
@@ -308,7 +308,7 @@ func (it *indexBuildTask) Execute(ctx context.Context) error {
 			it.req.GetSegmentID())
 		buildIndexParams.Manifest = it.req.GetManifest()
 	}
-	mlog.Info(context.TODO(), "create index", mlog.Any("buildIndexParams", buildIndexParams))
+	log.Info(context.TODO(), "create index", log.Any("buildIndexParams", buildIndexParams))
 
 	// set plugin context after logging the indexParams to avoid logging sensitive data
 	if it.pluginContext != nil {
@@ -318,16 +318,16 @@ func (it *indexBuildTask) Execute(ctx context.Context) error {
 	it.index, err = indexcgowrapper.CreateIndex(ctx, buildIndexParams)
 	if err != nil {
 		if it.index != nil && it.index.CleanLocalData() != nil {
-			mlog.Warn(context.TODO(), "failed to clean cached data on disk after build index failed")
+			log.Warn(context.TODO(), "failed to clean cached data on disk after build index failed")
 		}
-		mlog.Warn(context.TODO(), "failed to build index", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to build index", log.Err(err))
 		return err
 	}
 
 	buildIndexLatency := it.tr.RecordSpan()
 	metrics.DataNodeKnowhereBuildIndexLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10)).Observe(buildIndexLatency.Seconds())
 
-	mlog.Info(context.TODO(), "Successfully build index")
+	log.Info(context.TODO(), "Successfully build index")
 	return nil
 }
 
@@ -335,12 +335,12 @@ func (it *indexBuildTask) PostExecute(ctx context.Context) error {
 
 	gcIndex := func() {
 		if err := it.index.Delete(); err != nil {
-			mlog.Warn(context.TODO(), "indexBuildTask Execute CIndexDelete failed", mlog.Err(err))
+			log.Warn(context.TODO(), "indexBuildTask Execute CIndexDelete failed", log.Err(err))
 		}
 	}
 	indexStats, err := it.index.UpLoad()
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to upload index", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to upload index", log.Err(err))
 		gcIndex()
 		return err
 	}
@@ -372,10 +372,10 @@ func (it *indexBuildTask) PostExecute(ctx context.Context) error {
 	saveIndexFileDur := it.tr.RecordSpan()
 	metrics.DataNodeSaveIndexFileLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10)).Observe(saveIndexFileDur.Seconds())
 	it.tr.Elapse("index building all done")
-	mlog.Info(context.TODO(), "Successfully save index files",
-		mlog.Uint64("serializedSize", serializedSize),
-		mlog.Int64("memSize", indexStats.MemSize),
-		mlog.Strings("indexFiles", saveFileKeys))
+	log.Info(context.TODO(), "Successfully save index files",
+		log.Uint64("serializedSize", serializedSize),
+		log.Int64("memSize", indexStats.MemSize),
+		log.Strings("indexFiles", saveFileKeys))
 	return nil
 }
 

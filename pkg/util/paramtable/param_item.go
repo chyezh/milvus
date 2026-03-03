@@ -27,7 +27,7 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 )
 
@@ -102,16 +102,16 @@ func (pi *ParamItem) handleConfigChange(event *config.Event) {
 	}
 
 	if err := pi.callback(context.Background(), pi.Key, oldValue, newValue); err != nil {
-		mlog.Error(context.TODO(), "param change callback failed",
-			mlog.String("key", pi.Key),
-			mlog.String("oldValue", oldValue),
-			mlog.String("newValue", newValue),
-			mlog.Err(err))
+		log.Error(context.TODO(), "param change callback failed",
+			log.String("key", pi.Key),
+			log.String("oldValue", oldValue),
+			log.String("newValue", newValue),
+			log.Err(err))
 	} else {
-		mlog.Info(context.TODO(), "param value changed",
-			mlog.String("key", pi.Key),
-			mlog.String("oldValue", oldValue),
-			mlog.String("newValue", newValue))
+		log.Info(context.TODO(), "param value changed",
+			log.String("key", pi.Key),
+			log.String("oldValue", oldValue),
+			log.String("newValue", newValue))
 	}
 
 	pi.lastValue.Store(&newValue)

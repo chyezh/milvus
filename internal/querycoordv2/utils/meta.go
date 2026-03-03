@@ -27,7 +27,7 @@ import (
 	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -81,7 +81,7 @@ func GroupSegmentsByReplica(ctx context.Context, replicaMgr *meta.ReplicaManager
 
 // RecoverReplicaOfCollection recovers all replica of collection with latest resource group.
 func RecoverReplicaOfCollection(ctx context.Context, m *meta.Meta, collectionID typeutil.UniqueID) {
-	logger := mlog.With(mlog.Int64("collectionID", collectionID))
+	logger := log.With(log.Int64("collectionID", collectionID))
 	rgNames := m.ReplicaManager.GetResourceGroupByCollection(ctx, collectionID)
 	if rgNames.Len() == 0 {
 		logger.Error(nil, "no resource group found for collection")
@@ -89,12 +89,12 @@ func RecoverReplicaOfCollection(ctx context.Context, m *meta.Meta, collectionID 
 	}
 	rgs, err := m.ResourceManager.GetNodesOfMultiRG(ctx, rgNames.Collect())
 	if err != nil {
-		logger.Error(nil, "unreachable code as expected, fail to get resource group for replica", mlog.Err(err))
+		logger.Error(nil, "unreachable code as expected, fail to get resource group for replica", log.Err(err))
 		return
 	}
 
 	if err := m.ReplicaManager.RecoverNodesInCollection(ctx, collectionID, rgs); err != nil {
-		logger.Warn(nil, "fail to set available nodes in replica", mlog.Err(err))
+		logger.Warn(nil, "fail to set available nodes in replica", log.Err(err))
 	}
 }
 
@@ -145,7 +145,7 @@ func AssignReplica(ctx context.Context, m *meta.Meta, resourceGroups []string, r
 		}
 
 		if num > len(nodes) {
-			mlog.Warn(context.TODO(), "failed to check resource group", mlog.Err(err))
+			log.Warn(context.TODO(), "failed to check resource group", log.Err(err))
 			if checkNodeNum {
 				err := merr.WrapErrResourceGroupNodeNotEnough(rgName, len(nodes), num)
 				return nil, err

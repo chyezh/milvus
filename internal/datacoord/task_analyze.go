@@ -24,7 +24,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/datacoord/session"
 	globalTask "github.com/milvus-io/milvus/internal/datacoord/task"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/workerpb"
 	"github.com/milvus-io/milvus/pkg/v2/taskcommon"
@@ -125,14 +125,14 @@ func (at *analyzeTask) CreateTaskOnWorker(nodeID int64, cluster session.Cluster)
 	// Check if task still exists in meta
 	task := at.meta.analyzeMeta.GetTask(at.GetTaskID())
 	if task == nil {
-		mlog.Info(context.TODO(), "analyze task has not exist in meta table, remove task")
+		log.Info(context.TODO(), "analyze task has not exist in meta table, remove task")
 		at.SetState(indexpb.JobState_JobStateNone, "analyze task has not exist in meta table")
 		return
 	}
 
 	// Update task version
 	if err := at.UpdateVersion(nodeID); err != nil {
-		mlog.Warn(context.TODO(), "failed to update task version", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to update task version", log.Err(err))
 		return
 	}
 	req := &workerpb.AnalyzeRequest{
@@ -153,22 +153,22 @@ func (at *analyzeTask) CreateTaskOnWorker(nodeID int64, cluster session.Cluster)
 	var err error
 	defer func() {
 		if err != nil {
-			mlog.Warn(context.TODO(), "assign analyze task to worker failed, try drop task on worker", mlog.Err(err))
+			log.Warn(context.TODO(), "assign analyze task to worker failed, try drop task on worker", log.Err(err))
 			at.tryDropTaskOnWorker(cluster)
 		}
 	}()
 
 	err = cluster.CreateAnalyze(nodeID, req)
 	if err != nil {
-		mlog.Warn(context.TODO(), "assign analyze task to worker failed", mlog.Err(err))
+		log.Warn(context.TODO(), "assign analyze task to worker failed", log.Err(err))
 		return
 	}
 
-	mlog.Info(context.TODO(), "analyze task assigned successfully")
+	log.Info(context.TODO(), "analyze task assigned successfully")
 	if err = at.UpdateStateWithMeta(indexpb.JobState_JobStateInProgress, ""); err != nil {
-		mlog.Warn(context.TODO(), "failed to update task state to inProgress", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to update task state to inProgress", log.Err(err))
 	}
-	mlog.Info(context.TODO(), "update task state to inProgress successfully")
+	log.Info(context.TODO(), "update task state to inProgress successfully")
 }
 
 func (at *analyzeTask) QueryTaskOnWorker(cluster session.Cluster) {
@@ -178,7 +178,7 @@ func (at *analyzeTask) QueryTaskOnWorker(cluster session.Cluster) {
 		TaskIDs:   []int64{at.GetTaskID()},
 	})
 	if err != nil {
-		mlog.Warn(context.TODO(), "query analyze task result from worker failed", mlog.Err(err))
+		log.Warn(context.TODO(), "query analyze task result from worker failed", log.Err(err))
 		at.dropAndResetTaskOnWorker(cluster, err.Error())
 		return
 	}
@@ -193,32 +193,32 @@ func (at *analyzeTask) QueryTaskOnWorker(cluster session.Cluster) {
 		// Handle different task states
 		switch state {
 		case indexpb.JobState_JobStateFinished, indexpb.JobState_JobStateFailed:
-			mlog.Info(context.TODO(), "query analyze task result success",
-				mlog.String("state", state.String()),
-				mlog.String("failReason", result.GetFailReason()))
+			log.Info(context.TODO(), "query analyze task result success",
+				log.String("state", state.String()),
+				log.String("failReason", result.GetFailReason()))
 			at.setJobInfo(result)
 		case indexpb.JobState_JobStateRetry, indexpb.JobState_JobStateNone:
-			mlog.Info(context.TODO(), "query analyze task result success",
-				mlog.String("state", state.String()),
-				mlog.String("failReason", result.GetFailReason()))
+			log.Info(context.TODO(), "query analyze task result success",
+				log.String("state", state.String()),
+				log.String("failReason", result.GetFailReason()))
 			at.dropAndResetTaskOnWorker(cluster, result.GetFailReason())
 		}
 		// Otherwise (inProgress or unissued/init), keep current state
 		return
 	}
 
-	mlog.Warn(context.TODO(), "query analyze task info failed, worker does not have task info")
+	log.Warn(context.TODO(), "query analyze task info failed, worker does not have task info")
 	at.UpdateStateWithMeta(indexpb.JobState_JobStateInit, "analyze result is not in info response")
 }
 
 func (at *analyzeTask) tryDropTaskOnWorker(cluster session.Cluster) error {
 
 	if err := cluster.DropAnalyze(at.NodeID, at.GetTaskID()); err != nil {
-		mlog.Warn(context.TODO(), "failed to drop analyze task on worker", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to drop analyze task on worker", log.Err(err))
 		return err
 	}
 
-	mlog.Info(context.TODO(), "dropped analyze task on worker successfully")
+	log.Info(context.TODO(), "dropped analyze task on worker successfully")
 	return nil
 }
 

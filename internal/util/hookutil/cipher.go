@@ -33,7 +33,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/hook"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexcgopb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -202,11 +202,11 @@ func TidyDBCipherProperties(ezID int64, dbProperties []*commonpb.KeyValuePair) (
 					common.EncryptionEnabledKey, property.Value)
 			}
 			defaultEncrypt = value == "true"
-			mlog.Info(context.TODO(), "User explicitly controls encryption", mlog.Int64("ezID", ezID), mlog.Bool("value", defaultEncrypt))
+			log.Info(context.TODO(), "User explicitly controls encryption", log.Int64("ezID", ezID), log.Bool("value", defaultEncrypt))
 
 		case common.EncryptionRootKeyKey:
 			defaultRootKey = property.Value
-			mlog.Info(context.TODO(), "User explicitly set rootKey", mlog.Int64("ezID", ezID), mlog.String("value", property.GetValue()))
+			log.Info(context.TODO(), "User explicitly set rootKey", log.Int64("ezID", ezID), log.String("value", property.GetValue()))
 		}
 	}
 
@@ -307,7 +307,7 @@ func GetStoragePluginContext(collProps []*commonpb.KeyValuePair, collectionID in
 	if ez := GetEzByCollProperties(collProps, collectionID); ez != nil {
 		pluginContext, err := GetPluginContext(ez.EzID, ez.CollectionID)
 		if err != nil {
-			mlog.Error(context.TODO(), "failed to get plugin context", mlog.Err(err))
+			log.Error(context.TODO(), "failed to get plugin context", log.Err(err))
 			return nil
 		}
 		return pluginContext
@@ -319,7 +319,7 @@ func GetStoragePluginContext(collProps []*commonpb.KeyValuePair, collectionID in
 func GetReadStoragePluginContext(importEzk string) []*commonpb.KeyValuePair {
 	readContext, err := ImportEZ(importEzk)
 	if err != nil {
-		mlog.Error(context.TODO(), "failed to import ezk", mlog.Err(err))
+		log.Error(context.TODO(), "failed to import ezk", log.Err(err))
 		return []*commonpb.KeyValuePair{}
 	}
 	return readContext
@@ -422,16 +422,16 @@ func initCipher() error {
 	pathGo := paramtable.GetCipherParams().SoPathGo.GetValue()
 	pathCpp := paramtable.GetCipherParams().SoPathCpp.GetValue()
 	if pathGo == "" || pathCpp == "" {
-		mlog.Info(context.TODO(), "empty so path for cipher plugin, skip to load plugin")
+		log.Info(context.TODO(), "empty so path for cipher plugin, skip to load plugin")
 		return nil
 	}
 
-	mlog.Info(context.TODO(), "start to load cipher go plugin", mlog.String("path", pathGo))
+	log.Info(context.TODO(), "start to load cipher go plugin", log.String("path", pathGo))
 	p, err := plugin.Open(pathGo)
 	if err != nil {
 		return fmt.Errorf("fail to open the cipher plugin, error: %s", err.Error())
 	}
-	mlog.Info(context.TODO(), "cipher plugin opened", mlog.String("path", pathGo))
+	log.Info(context.TODO(), "cipher plugin opened", log.String("path", pathGo))
 
 	h, err := p.Lookup("CipherPlugin")
 	if err != nil {
@@ -457,10 +457,10 @@ func InitOnceCipher() {
 	initCipherOnce.Do(func() {
 		err := initCipher()
 		if err != nil {
-			mlog.Panic(context.TODO(), "fail to init cipher plugin",
-				mlog.String("Go so path", paramtable.GetCipherParams().SoPathGo.GetValue()),
-				mlog.String("Cpp so path", paramtable.GetCipherParams().SoPathCpp.GetValue()),
-				mlog.Err(err))
+			log.Panic(context.TODO(), "fail to init cipher plugin",
+				log.String("Go so path", paramtable.GetCipherParams().SoPathGo.GetValue()),
+				log.String("Cpp so path", paramtable.GetCipherParams().SoPathCpp.GetValue()),
+				log.Err(err))
 		}
 	})
 }
@@ -479,33 +479,33 @@ func registerCallback() {
 	params.KmsAwsExternalID.RegisterCallback(reloadCipherConfig)
 	params.RotationPeriodInHours.RegisterCallback(reloadCipherConfig)
 	params.UpdatePerieldInMinutes.RegisterCallback(reloadCipherConfig)
-	mlog.Info(context.TODO(), "cipher config callbacks registered")
+	log.Info(context.TODO(), "cipher config callbacks registered")
 }
 
 func reloadCipherConfig(ctx context.Context, key, oldValue, newValue string) error {
 	cipher := GetCipher()
 	if cipher == nil {
-		mlog.Warn(context.TODO(), "cipher plugin not loaded, skip config reload", mlog.String("key", key))
+		log.Warn(context.TODO(), "cipher plugin not loaded, skip config reload", log.String("key", key))
 		return nil
 	}
 
 	cipherReloadMutex.Lock()
 	defer cipherReloadMutex.Unlock()
 
-	mlog.Info(context.TODO(), "reloading cipher plugin config",
-		mlog.String("key", key),
-		mlog.String("oldValue", oldValue),
-		mlog.String("newValue", newValue))
+	log.Info(context.TODO(), "reloading cipher plugin config",
+		log.String("key", key),
+		log.String("oldValue", oldValue),
+		log.String("newValue", newValue))
 
 	initConfigs := buildCipherInitConfig()
 	if err := cipher.Init(initConfigs); err != nil {
-		mlog.Error(context.TODO(), "fail to reload cipher plugin config",
-			mlog.String("key", key),
-			mlog.Err(err))
+		log.Error(context.TODO(), "fail to reload cipher plugin config",
+			log.String("key", key),
+			log.Err(err))
 		return err
 	}
 
-	mlog.Info(context.TODO(), "cipher plugin config reloaded successfully", mlog.String("key", key))
+	log.Info(context.TODO(), "cipher plugin config reloaded successfully", log.String("key", key))
 	return nil
 }
 

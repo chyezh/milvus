@@ -30,14 +30,14 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
 func testSegmentWriterBatchSize(b *testing.B, batchSize int) {
-	orgLevel := mlog.GetLevel()
-	mlog.SetLevel(mlog.InfoLevel)
-	defer mlog.SetLevel(orgLevel)
+	orgLevel := log.GetLevel()
+	log.SetLevel(log.InfoLevel)
+	defer log.SetLevel(orgLevel)
 	paramtable.Init()
 
 	const (
@@ -87,7 +87,7 @@ func testSegmentWriterBatchSize(b *testing.B, batchSize int) {
 		value.Value = m
 		values[i] = value
 	}
-	mlog.Info(context.TODO(), "prepare data done", mlog.Int("len", len(values)), mlog.Duration("dur", time.Since(start)))
+	log.Info(context.TODO(), "prepare data done", log.Int("len", len(values)), log.Duration("dur", time.Since(start)))
 
 	writer, err := NewSegmentWriter(schema, numRows, batchSize, 1, 2, 3, nil)
 	assert.NoError(b, err)
@@ -100,7 +100,7 @@ func testSegmentWriterBatchSize(b *testing.B, batchSize int) {
 			err = writer.Write(v)
 			assert.NoError(b, err)
 		}
-		mlog.Info(context.TODO(), "write done", mlog.Int("len", len(values)), mlog.Duration("dur", time.Since(start)))
+		log.Info(context.TODO(), "write done", log.Int("len", len(values)), log.Duration("dur", time.Since(start)))
 	}
 	b.StopTimer()
 }

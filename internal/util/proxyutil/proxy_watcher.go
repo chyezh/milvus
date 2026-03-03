@@ -30,7 +30,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/json"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/lifetime"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -92,7 +92,7 @@ func (p *ProxyWatcher) WatchProxy(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	mlog.Info(context.TODO(), "succeed to init sessions on etcd", mlog.Any("sessions", sessions), mlog.Int64("revision", rev))
+	log.Info(context.TODO(), "succeed to init sessions on etcd", log.Any("sessions", sessions), log.Int64("revision", rev))
 	// all init function should be clear meta firstly.
 	for _, f := range p.initSessionsFunc {
 		f(sessions)
@@ -115,33 +115,33 @@ func (p *ProxyWatcher) WatchProxy(ctx context.Context) error {
 }
 
 func (p *ProxyWatcher) startWatchEtcd(ctx context.Context, eventCh clientv3.WatchChan) {
-	mlog.Info(context.TODO(), "start to watch etcd")
+	log.Info(context.TODO(), "start to watch etcd")
 	for {
 		select {
 		case <-ctx.Done():
-			mlog.Warn(context.TODO(), "stop watching etcd loop")
+			log.Warn(context.TODO(), "stop watching etcd loop")
 			return
 
 		case <-p.closeCh.CloseCh():
-			mlog.Warn(context.TODO(), "stop watching etcd loop")
+			log.Warn(context.TODO(), "stop watching etcd loop")
 			return
 
 		case event, ok := <-eventCh:
 			if !ok {
-				mlog.Warn(context.TODO(), "stop watching etcd loop due to closed etcd event channel")
+				log.Warn(context.TODO(), "stop watching etcd loop due to closed etcd event channel")
 				panic("stop watching etcd loop due to closed etcd event channel")
 			}
 			if err := event.Err(); err != nil {
 				if err == v3rpc.ErrCompacted {
 					err2 := p.WatchProxy(ctx)
 					if err2 != nil {
-						mlog.Error(context.TODO(), "re watch proxy fails when etcd has a compaction error",
-							mlog.Err(err), mlog.Err(err2))
+						log.Error(context.TODO(), "re watch proxy fails when etcd has a compaction error",
+							log.Err(err), log.Err(err2))
 						panic("failed to handle etcd request, exit..")
 					}
 					return
 				}
-				mlog.Error(context.TODO(), "Watch proxy service failed", mlog.Err(err))
+				log.Error(context.TODO(), "Watch proxy service failed", log.Err(err))
 				panic(err)
 			}
 			for _, e := range event.Events {
@@ -153,7 +153,7 @@ func (p *ProxyWatcher) startWatchEtcd(ctx context.Context, eventCh clientv3.Watc
 					err = p.handleDeleteEvent(e)
 				}
 				if err != nil {
-					mlog.Warn(context.TODO(), "failed to handle proxy event", mlog.Any("event", e), mlog.Err(err))
+					log.Warn(context.TODO(), "failed to handle proxy event", log.Any("event", e), log.Err(err))
 				}
 			}
 		}
@@ -165,7 +165,7 @@ func (p *ProxyWatcher) handlePutEvent(e *clientv3.Event) error {
 	if err != nil {
 		return err
 	}
-	mlog.Debug(context.TODO(), "received proxy put event with session", mlog.Any("session", session))
+	log.Debug(context.TODO(), "received proxy put event with session", log.Any("session", session))
 	for _, f := range p.addSessionsFunc {
 		f(session)
 	}
@@ -177,7 +177,7 @@ func (p *ProxyWatcher) handleDeleteEvent(e *clientv3.Event) error {
 	if err != nil {
 		return err
 	}
-	mlog.Debug(context.TODO(), "received proxy delete event with session", mlog.Any("session", session))
+	log.Debug(context.TODO(), "received proxy delete event with session", log.Any("session", session))
 	for _, f := range p.delSessionsFunc {
 		f(session)
 	}
@@ -208,7 +208,7 @@ func (p *ProxyWatcher) getSessionsOnEtcd(ctx context.Context) ([]*sessionutil.Se
 	for _, v := range resp.Kvs {
 		session, err := p.parseSession(v.Value)
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to unmarshal session", mlog.Err(err))
+			log.Warn(context.TODO(), "failed to unmarshal session", log.Err(err))
 			return nil, 0, err
 		}
 		sessions = append(sessions, session)

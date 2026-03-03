@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/json"
 	"github.com/milvus-io/milvus/internal/util/bloomfilter"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -130,7 +130,7 @@ func (stats *PrimaryKeyStats) UnmarshalJSON(data []byte) error {
 	if bfMessage, ok := messageMap["bf"]; ok && bfMessage != nil {
 		bf, err := bloomfilter.UnmarshalJSON(*bfMessage, bfType)
 		if err != nil {
-			mlog.Warn(context.TODO(), "Failed to unmarshal bloom filter, use AlwaysTrueBloomFilter instead of return err", mlog.Err(err))
+			log.Warn(context.TODO(), "Failed to unmarshal bloom filter, use AlwaysTrueBloomFilter instead of return err", log.Err(err))
 			bf = bloomfilter.AlwaysTrueBloomFilter
 		}
 		stats.BF = bf
@@ -184,7 +184,7 @@ func (stats *PrimaryKeyStats) Update(pk PrimaryKey) {
 		data := pk.GetValue().(string)
 		stats.BF.AddString(data)
 	default:
-		mlog.Warn(context.TODO(), "Update pk stats with invalid data type")
+		log.Warn(context.TODO(), "Update pk stats with invalid data type")
 	}
 }
 

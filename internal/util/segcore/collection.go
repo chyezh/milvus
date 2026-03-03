@@ -18,7 +18,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/util/hookutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/segcorepb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 )
@@ -138,9 +138,9 @@ func (c *CCollection) Release() {
 }
 
 func PutOrRefPluginContext(ez *hookutil.EZ, key string) error {
-	mlog.Info(context.TODO(), "PutOrRefPluginContext",
-		mlog.Int64("ez_id", ez.EzID),
-		mlog.Int64("collection_id", ez.CollectionID))
+	log.Info(context.TODO(), "PutOrRefPluginContext",
+		log.Int64("ez_id", ez.EzID),
+		log.Int64("collection_id", ez.CollectionID))
 	ckey := C.CString(key)
 	defer C.free(unsafe.Pointer(ckey))
 	pluginContext := C.CPluginContext{
@@ -156,9 +156,9 @@ func PutOrRefPluginContext(ez *hookutil.EZ, key string) error {
 }
 
 func UnRefPluginContext(ez *hookutil.EZ) error {
-	mlog.Info(context.TODO(), "UnRefPluginContext",
-		mlog.Int64("ez_id", ez.EzID),
-		mlog.Int64("collection_id", ez.CollectionID))
+	log.Info(context.TODO(), "UnRefPluginContext",
+		log.Int64("ez_id", ez.EzID),
+		log.Int64("collection_id", ez.CollectionID))
 	pluginContext := C.CPluginContext{
 		ez_id:         C.int64_t(ez.EzID),
 		collection_id: C.int64_t(ez.CollectionID),

@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/json"
 	"github.com/milvus-io/milvus/internal/util/hookutil"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/etcdpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metautil"
@@ -287,7 +287,7 @@ func (insertCodec *InsertCodec) Serialize(partitionID UniqueID, segmentID Unique
 			if !allMissing {
 				return errors.Newf("segment must not be heterogeneous, all blocks must contain all fields or none, abnormal field %d(%s)", field.GetFieldID(), field.GetName())
 			}
-			mlog.Info(context.TODO(), "Skip field nullable missing field, could be schema change", mlog.Int64("fieldId", field.GetFieldID()), mlog.String("fieldName", field.GetName()))
+			log.Info(context.TODO(), "Skip field nullable missing field, could be schema change", log.Int64("fieldId", field.GetFieldID()), log.String("fieldName", field.GetName()))
 			return nil
 		}
 

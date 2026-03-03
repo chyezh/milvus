@@ -26,7 +26,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/internal/flushcommon/broker"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
@@ -83,7 +83,7 @@ func (m *TimeTickSender) Start() {
 		defer m.wg.Done()
 		m.work(ctx)
 	}()
-	mlog.Info(context.TODO(), "timeTick sender started")
+	log.Info(context.TODO(), "timeTick sender started")
 }
 
 func (m *TimeTickSender) Stop() {
@@ -99,7 +99,7 @@ func (m *TimeTickSender) work(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			mlog.Info(context.TODO(), "TimeTickSender context done")
+			log.Info(context.TODO(), "TimeTickSender context done")
 			return
 		case <-ticker.C:
 			m.sendReport(ctx)
@@ -131,7 +131,7 @@ func (m *TimeTickSender) GetLatestTimestamp(channel string) typeutil.Timestamp {
 	defer m.mu.RUnlock()
 	chStats, ok := m.statsCache[channel]
 	if !ok {
-		mlog.Warn(context.TODO(), "channel not found in TimeTickSender", mlog.String("channel", channel))
+		log.Warn(context.TODO(), "channel not found in TimeTickSender", log.String("channel", channel))
 		return 0
 	}
 	return chStats.lastTs
@@ -181,17 +181,17 @@ func (m *TimeTickSender) cleanStatesCache(lastSentTss map[string]uint64) {
 			}
 		}
 	}
-	mlog.RatedDebug(context.TODO(), mlog.RateDefault, "TimeTickSender stats", mlog.Any("lastSentTss", lastSentTss), mlog.Int("sizeBeforeClean", sizeBeforeClean), mlog.Int("sizeAfterClean", len(m.statsCache)))
+	log.RatedDebug(context.TODO(), log.RateDefault, "TimeTickSender stats", log.Any("lastSentTss", lastSentTss), log.Int("sizeBeforeClean", sizeBeforeClean), log.Int("sizeAfterClean", len(m.statsCache)))
 }
 
 func (m *TimeTickSender) sendReport(ctx context.Context) error {
 	toSendMsgs, sendLastTss := m.assembleDatanodeTtMsg()
-	mlog.RatedDebug(context.TODO(), mlog.RateDefault, "TimeTickSender send datanode timetick message", mlog.Any("toSendMsgs", toSendMsgs), mlog.Any("sendLastTss", sendLastTss))
+	log.RatedDebug(context.TODO(), log.RateDefault, "TimeTickSender send datanode timetick message", log.Any("toSendMsgs", toSendMsgs), log.Any("sendLastTss", sendLastTss))
 	err := retry.Do(ctx, func() error {
 		return m.broker.ReportTimeTick(ctx, toSendMsgs)
 	}, m.options...)
 	if err != nil {
-		mlog.Error(context.TODO(), "ReportDataNodeTtMsgs fail after retry", mlog.Err(err))
+		log.Error(context.TODO(), "ReportDataNodeTtMsgs fail after retry", log.Err(err))
 		return err
 	}
 	m.cleanStatesCache(sendLastTss)

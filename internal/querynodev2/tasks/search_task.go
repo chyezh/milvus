@@ -19,7 +19,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querynodev2/segments"
 	"github.com/milvus-io/milvus/internal/util/searchutil/scheduler"
 	"github.com/milvus-io/milvus/internal/util/segcore"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
@@ -231,7 +231,7 @@ func (t *SearchTask) Execute() error {
 		t.originTopks,
 	)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to reduce search results", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to reduce search results", log.Err(err))
 		return err
 	}
 	defer segcore.DeleteSearchResultDataBlobs(blobs)

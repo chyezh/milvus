@@ -9,7 +9,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
@@ -20,7 +20,7 @@ import (
 var _ wal.WAL = (*roWALAdaptorImpl)(nil)
 
 type roWALAdaptorImpl struct {
-	mlog.Binder
+	log.Binder
 	lifetime        *typeutil.Lifetime
 	availableCtx    context.Context
 	availableCancel context.CancelFunc
@@ -116,7 +116,7 @@ func (w *roWALAdaptorImpl) checkReadOptWALName(opts wal.ReadOption) error {
 		if msgID != nil {
 			msgWALName := message.WALName(msgID.WALName)
 			if msgWALName != currentWALName {
-				w.Logger().Info(nil, "WAL name mismatch", mlog.String("msgIDWALName", msgWALName.String()), mlog.String("currentWALName", currentWALName.String()))
+				w.Logger().Info(nil, "WAL name mismatch", log.String("msgIDWALName", msgWALName.String()), log.String("currentWALName", currentWALName.String()))
 				return status.NewWALNameMismatchError(currentWALName.String(), msgWALName.String())
 			}
 		}
@@ -147,7 +147,7 @@ func (w *roWALAdaptorImpl) Close() {
 	// close all wal instances.
 	w.scanners.Range(func(id int64, s wal.Scanner) bool {
 		s.Close()
-		mlog.Info(context.TODO(), "close scanner by wal adaptor", mlog.Int64("id", id), mlog.Any("channel", w.Channel()))
+		log.Info(context.TODO(), "close scanner by wal adaptor", log.Int64("id", id), log.Any("channel", w.Channel()))
 		return true
 	})
 

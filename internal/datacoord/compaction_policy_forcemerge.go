@@ -13,7 +13,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
@@ -79,7 +79,7 @@ func (policy *forceMergeCompactionPolicy) triggerOneCollection(
 
 	collectionTTL, err := common.GetCollectionTTLFromMap(collection.Properties)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to get collection ttl, use default", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get collection ttl, use default", log.Err(err))
 		collectionTTL = 0
 	}
 
@@ -106,7 +106,7 @@ func (policy *forceMergeCompactionPolicy) triggerOneCollection(
 	}))
 
 	if len(segments) == 0 {
-		mlog.Info(context.TODO(), "no eligible segments for force merge")
+		log.Info(context.TODO(), "no eligible segments for force merge")
 		return nil, 0, nil
 	}
 
@@ -131,7 +131,7 @@ func (policy *forceMergeCompactionPolicy) triggerOneCollection(
 		views = append(views, view)
 	}
 
-	mlog.Info(context.TODO(), "force merge triggered", mlog.Int("viewCount", len(views)))
+	log.Info(context.TODO(), "force merge triggered", log.Int("viewCount", len(views)))
 	return views, triggerID, nil
 }
 
@@ -198,7 +198,7 @@ func (q *metricsNodeMemoryQuerier) GetCollectionTopology(ctx context.Context, co
 	// Get QueryNode sessions from etcd to filter out embedded nodes
 	sessions, _, err := q.session.GetSessions(ctx, typeutil.QueryNodeRole)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to get QueryNode sessions", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get QueryNode sessions", log.Err(err))
 		return nil, err
 	}
 
@@ -213,7 +213,7 @@ func (q *metricsNodeMemoryQuerier) GetCollectionTopology(ctx context.Context, co
 		}
 	}
 
-	mlog.Info(context.TODO(), "excluding embedded QueryNode", mlog.Int64s("nodeIDs", lo.Keys(embeddedNodeIDs)))
+	log.Info(context.TODO(), "excluding embedded QueryNode", log.Int64s("nodeIDs", lo.Keys(embeddedNodeIDs)))
 	rsp, err := q.mixCoord.GetQcMetrics(ctx, req)
 	if err = merr.CheckRPCCall(rsp, err); err != nil {
 		return nil, err
@@ -258,21 +258,21 @@ func (q *metricsNodeMemoryQuerier) GetCollectionTopology(ctx context.Context, co
 			// Pooling DataNode returns 0 from GetMetrics
 			// Use default fallback: 32GB
 			isPooling = true
-			mlog.Warn(context.TODO(), "DataNode returned 0 memory (pooling mode?), using default",
-				mlog.Int64("nodeID", nodeID),
-				mlog.Uint64("defaultMemory", defaultPoolingDataNodeMemory))
+			log.Warn(context.TODO(), "DataNode returned 0 memory (pooling mode?), using default",
+				log.Int64("nodeID", nodeID),
+				log.Uint64("defaultMemory", defaultPoolingDataNodeMemory))
 			dataNodeMemory[nodeID] = defaultPoolingDataNodeMemory
 		}
 	}
 
 	isStandaloneMode := paramtable.GetRole() == typeutil.StandaloneRole
-	mlog.Info(context.TODO(), "Collection topology",
-		mlog.Int64("collectionID", collectionID),
-		mlog.Int("numReplicas", numReplicas),
-		mlog.Any("querynodes", queryNodeMemory),
-		mlog.Any("datanodes", dataNodeMemory),
-		mlog.Bool("isStandaloneMode", isStandaloneMode),
-		mlog.Bool("isPooling", isPooling))
+	log.Info(context.TODO(), "Collection topology",
+		log.Int64("collectionID", collectionID),
+		log.Int("numReplicas", numReplicas),
+		log.Any("querynodes", queryNodeMemory),
+		log.Any("datanodes", dataNodeMemory),
+		log.Bool("isStandaloneMode", isStandaloneMode),
+		log.Bool("isPooling", isPooling))
 
 	return &CollectionTopology{
 		CollectionID:     collectionID,

@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/cdc/util"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message/adaptor"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"
@@ -75,7 +75,7 @@ func NewChannelReplicator(channel *meta.ReplicateChannel) Replicator {
 }
 
 func (r *channelReplicator) StartReplication() {
-	logger := mlog.With(mlog.String("key", r.channel.Key), mlog.Int64("modRevision", r.channel.ModRevision))
+	logger := log.With(log.String("key", r.channel.Key), log.Int64("modRevision", r.channel.ModRevision))
 	logger.Info(nil, "start replicate channel")
 	go func() {
 		defer func() {
@@ -98,7 +98,7 @@ func (r *channelReplicator) StartReplication() {
 			default:
 				err := r.init()
 				if err != nil {
-					logger.Warn(nil, "initialize replicator failed", mlog.Err(err))
+					logger.Warn(nil, "initialize replicator failed", log.Err(err))
 					continue
 				}
 				break INIT_LOOP
@@ -109,7 +109,7 @@ func (r *channelReplicator) StartReplication() {
 }
 
 func (r *channelReplicator) init() error {
-	logger := mlog.With(mlog.String("key", r.channel.Key), mlog.Int64("modRevision", r.channel.ModRevision))
+	logger := log.With(log.String("key", r.channel.Key), log.Int64("modRevision", r.channel.ModRevision))
 	// init target client
 	if r.targetClient == nil {
 		dialCtx, dialCancel := context.WithTimeout(r.asyncNotifier.Context(), 30*time.Second)
@@ -137,7 +137,7 @@ func (r *channelReplicator) init() error {
 		})
 		r.msgScanner = scanner
 		r.msgChan = ch
-		logger.Info(nil, "scanner initialized", mlog.Any("checkpoint", cp))
+		logger.Info(nil, "scanner initialized", log.Any("checkpoint", cp))
 	}
 	// init replicate stream client
 	if r.streamClient == nil {
@@ -149,7 +149,7 @@ func (r *channelReplicator) init() error {
 
 // startConsumeLoop starts the replicate loop.
 func (r *channelReplicator) startConsumeLoop() {
-	logger := mlog.With(mlog.String("key", r.channel.Key), mlog.Int64("modRevision", r.channel.ModRevision))
+	logger := log.With(log.String("key", r.channel.Key), log.Int64("modRevision", r.channel.ModRevision))
 	logger.Info(nil, "start consume loop")
 
 	for {
@@ -165,7 +165,7 @@ func (r *channelReplicator) startConsumeLoop() {
 				}
 				continue
 			}
-			logger.Debug(nil, "replicate message success", mlog.FieldMessage(msg))
+			logger.Debug(nil, "replicate message success", log.FieldMessage(msg))
 			if msg.MessageType() == message.MessageTypeAlterReplicateConfig {
 				if util.IsReplicationRemovedByAlterReplicateConfigMessage(msg, r.channel.Value) {
 					logger.Info(nil, "replication removed, stop consume loop")
@@ -178,15 +178,15 @@ func (r *channelReplicator) startConsumeLoop() {
 }
 
 func (r *channelReplicator) getReplicateCheckpoint() (*utility.ReplicateCheckpoint, error) {
-	logger := mlog.With(mlog.String("key", r.channel.Key), mlog.Int64("modRevision", r.channel.ModRevision))
+	logger := log.With(log.String("key", r.channel.Key), log.Int64("modRevision", r.channel.ModRevision))
 
 	// For pchannel-increasing tasks, the secondary WAL for new pchannels hasn't received the
 	// AlterReplicateConfig yet, so GetReplicateInfo would fail. Use InitializedCheckpoint directly.
 	if r.channel.Value.GetSkipGetReplicateCheckpoint() {
 		initializedCheckpoint := utility.NewReplicateCheckpointFromProto(r.channel.Value.InitializedCheckpoint)
 		logger.Info(nil, "skip get replicate checkpoint for pchannel-increasing task, use initialized checkpoint",
-			mlog.Stringer("messageID", initializedCheckpoint.MessageID),
-			mlog.Uint64("timeTick", initializedCheckpoint.TimeTick),
+			log.Stringer("messageID", initializedCheckpoint.MessageID),
+			log.Uint64("timeTick", initializedCheckpoint.TimeTick),
 		)
 		return initializedCheckpoint, nil
 	}
@@ -208,16 +208,16 @@ func (r *channelReplicator) getReplicateCheckpoint() (*utility.ReplicateCheckpoi
 	if checkpoint == nil || checkpoint.MessageId == nil {
 		initializedCheckpoint := utility.NewReplicateCheckpointFromProto(r.channel.Value.InitializedCheckpoint)
 		logger.Info(nil, "channel not found in replicate info, will start from the beginning",
-			mlog.Stringer("messageID", initializedCheckpoint.MessageID),
-			mlog.Uint64("timeTick", initializedCheckpoint.TimeTick),
+			log.Stringer("messageID", initializedCheckpoint.MessageID),
+			log.Uint64("timeTick", initializedCheckpoint.TimeTick),
 		)
 		return initializedCheckpoint, nil
 	}
 
 	cp := utility.NewReplicateCheckpointFromProto(checkpoint)
 	logger.Info(nil, "replicate messages from position",
-		mlog.Stringer("messageID", cp.MessageID),
-		mlog.Uint64("timeTick", cp.TimeTick),
+		log.Stringer("messageID", cp.MessageID),
+		log.Uint64("timeTick", cp.TimeTick),
 	)
 	return cp, nil
 }

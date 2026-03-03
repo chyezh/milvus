@@ -17,7 +17,7 @@ import (
 	"github.com/milvus-io/milvus/internal/tso"
 	"github.com/milvus-io/milvus/internal/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/v2/kv"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/etcd"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -29,7 +29,7 @@ func main() {
 	flag.Parse()
 
 	if *configPtr == "" {
-		mlog.Error(context.TODO(), "Config file path is required")
+		log.Error(context.TODO(), "Config file path is required")
 		flag.Usage()
 		os.Exit(1)
 	}
@@ -138,7 +138,7 @@ func prepareRootCoordMeta(ctx context.Context, allocator tso.Allocator) (rootcoo
 		}
 		catalog = kvmetestore.NewCatalog(metaKV, ss)
 	case util.MetaStoreTypeTiKV:
-		mlog.Info(ctx, "Using tikv as meta storage.")
+		log.Info(ctx, "Using tikv as meta storage.")
 		var metaKV kv.MetaKv
 		var ss *kvmetestore.SuffixSnapshot
 		var err error

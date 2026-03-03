@@ -31,7 +31,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -134,7 +134,7 @@ func (s *FlushAllSuite) TestFlushAll() {
 	// flush all
 	flushAllResp, err := c.MilvusClient.FlushAll(ctx, &milvuspb.FlushAllRequest{})
 	s.NoError(merr.CheckRPCCall(flushAllResp, err))
-	mlog.Info(context.TODO(), "FlushAll succeed")
+	log.Info(context.TODO(), "FlushAll succeed")
 	s.WaitForFlushAll(ctx, flushAllResp.GetFlushAllMsgs())
 
 	// show and validate segments
@@ -159,7 +159,7 @@ func (s *FlushAllSuite) TestFlushAll() {
 		s.NoError(merr.CheckRPCCall(status, err))
 	}
 
-	mlog.Info(context.TODO(), "TestFlushAll succeed")
+	log.Info(context.TODO(), "TestFlushAll succeed")
 }
 
 func TestFlushAll(t *testing.T) {

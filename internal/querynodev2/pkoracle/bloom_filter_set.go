@@ -33,7 +33,7 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/bloomfilter"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -137,7 +137,7 @@ func (s *BloomFilterSet) UpdateBloomFilter(pks []storage.PrimaryKey) {
 			stringValue := pk.(*storage.VarCharPrimaryKey).Value
 			s.currentStat.PkFilter.AddString(stringValue)
 		default:
-			mlog.Error(context.TODO(), "failed to update bloomfilter", mlog.Any("PK type", pk.Type()))
+			log.Error(context.TODO(), "failed to update bloomfilter", log.Any("PK type", pk.Type()))
 			panic("failed to update bloomfilter")
 		}
 	}
@@ -187,9 +187,9 @@ func (s *BloomFilterSet) Charge() {
 		})
 		s.trackedSize = size
 		s.resourceCharged = true
-		mlog.Debug(context.TODO(), "charged bloom filter resource",
-			mlog.Int64("segmentID", s.segmentID),
-			mlog.Int64("size", size))
+		log.Debug(context.TODO(), "charged bloom filter resource",
+			log.Int64("segmentID", s.segmentID),
+			log.Int64("size", size))
 	}
 }
 
@@ -206,9 +206,9 @@ func (s *BloomFilterSet) Refund() {
 		memory_bytes: C.int64_t(s.trackedSize),
 		disk_bytes:   0,
 	})
-	mlog.Debug(context.TODO(), "refunded bloom filter resource",
-		mlog.Int64("segmentID", s.segmentID),
-		mlog.Int64("size", s.trackedSize))
+	log.Debug(context.TODO(), "refunded bloom filter resource",
+		log.Int64("segmentID", s.segmentID),
+		log.Int64("size", s.trackedSize))
 	s.trackedSize = 0
 	s.resourceCharged = false
 }

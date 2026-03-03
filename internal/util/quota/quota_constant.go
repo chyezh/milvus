@@ -25,7 +25,7 @@ import (
 
 
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -102,7 +102,7 @@ func GetQuotaConfigMap(scope internalpb.RateScope) map[internalpb.RateType]*para
 	initLimitConfigMaps()
 	configMap, ok := limitConfigMap[scope]
 	if !ok {
-		mlog.Warn(context.TODO(), "Unknown rate scope", mlog.Any("scope", scope))
+		log.Warn(context.TODO(), "Unknown rate scope", log.Any("scope", scope))
 		return make(map[internalpb.RateType]*paramtable.ParamItem)
 	}
 	return configMap
@@ -112,7 +112,7 @@ func GetQuotaValue(scope internalpb.RateScope, rateType internalpb.RateType, par
 	configMap := GetQuotaConfigMap(scope)
 	config, ok := configMap[rateType]
 	if !ok {
-		mlog.Warn(context.TODO(), "Unknown rate type", mlog.Any("rateType", rateType))
+		log.Warn(context.TODO(), "Unknown rate type", log.Any("rateType", rateType))
 		return math.MaxFloat64
 	}
 	return config.GetAsFloat()

@@ -23,7 +23,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/flushcommon/writebuffer"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -46,12 +46,12 @@ func (impl *msgHandlerImpl) HandleCreateSegment(ctx context.Context, createSegme
 	if err := impl.createNewGrowingSegment(ctx, vchannel, h); err != nil {
 		return err
 	}
-	logger := mlog.With(mlog.FieldMessage(createSegmentMsg))
+	logger := log.With(log.FieldMessage(createSegmentMsg))
 	if err := impl.wbMgr.CreateNewGrowingSegment(ctx, vchannel, h.PartitionId, h.SegmentId); err != nil {
 		logger.Warn(nil, "fail to create new growing segment")
 		return err
 	}
-	mlog.Info(context.TODO(), "create new growing segment")
+	log.Info(context.TODO(), "create new growing segment")
 	return nil
 }
 
@@ -69,7 +69,7 @@ func (impl *msgHandlerImpl) createNewGrowingSegment(ctx context.Context, vchanne
 	if err != nil {
 		return err
 	}
-	logger := mlog.With(mlog.Int64("collectionID", h.CollectionId), mlog.Int64("partitionID", h.PartitionId), mlog.Int64("segmentID", h.SegmentId))
+	logger := log.With(log.Int64("collectionID", h.CollectionId), log.Int64("partitionID", h.PartitionId), log.Int64("segmentID", h.SegmentId))
 	return retry.Do(ctx, func() (err error) {
 		resp, err := mix.AllocSegment(ctx, &datapb.AllocSegmentRequest{
 			CollectionId:         h.CollectionId,
@@ -141,22 +141,22 @@ func (impl *msgHandlerImpl) HandleTruncateCollection(flushMsg message.ImmutableT
 // This ensures all buffered data is persisted before switching to the new WAL implementation.
 func (impl *msgHandlerImpl) HandleAlterWAL(ctx context.Context, alterWALMsg message.ImmutableAlterWALMessageV2, currentVChannel string) error {
 	vchannel := currentVChannel
-	logger := mlog.With(
-		mlog.String("vchannel", vchannel),
-		mlog.Uint64("alterWALTimeTick", alterWALMsg.TimeTick()),
-		mlog.String("currentWALName", alterWALMsg.WALName().String()),
-		mlog.Stringer("targetWALName", alterWALMsg.Header().TargetWalName))
+	logger := log.With(
+		log.String("vchannel", vchannel),
+		log.Uint64("alterWALTimeTick", alterWALMsg.TimeTick()),
+		log.String("currentWALName", alterWALMsg.WALName().String()),
+		log.Stringer("targetWALName", alterWALMsg.Header().TargetWalName))
 
 	// Seal all segments in the current vchannel before WAL switch
 	if err := impl.wbMgr.SealAllSegments(ctx, vchannel); err != nil {
-		logger.Warn(nil, "failed to seal all segments for WAL switch", mlog.Err(err))
+		logger.Warn(nil, "failed to seal all segments for WAL switch", log.Err(err))
 		return errors.Wrap(err, "failed to seal all segments")
 	}
 	logger.Info(nil, "sealed all segments for WAL switch")
 
 	// Flush channel to persist buffered data before switching WAL
 	if err := impl.wbMgr.FlushChannel(ctx, vchannel, alterWALMsg.TimeTick()); err != nil {
-		logger.Warn(nil, "failed to flush channel for WAL switch", mlog.Err(err))
+		logger.Warn(nil, "failed to flush channel for WAL switch", log.Err(err))
 		return errors.Wrap(err, "failed to flush channel")
 	}
 	logger.Info(nil, "flushed channel for WAL switch")

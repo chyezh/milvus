@@ -22,7 +22,7 @@ import (
 	"github.com/samber/lo"
 
 	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util/lock"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -62,10 +62,10 @@ func NewNodeManager(nodeCreator DataNodeCreatorFunc) NodeManager {
 }
 
 func (m *nodeManager) AddNode(nodeID int64, address string) error {
-	mlog.Info(context.TODO(), "adding node...")
+	log.Info(context.TODO(), "adding node...")
 	nodeClient, err := m.nodeCreator(context.Background(), address, nodeID)
 	if err != nil {
-		mlog.Error(context.TODO(), "create client fail", mlog.Err(err))
+		log.Error(context.TODO(), "create client fail", log.Err(err))
 		return err
 	}
 	m.mu.Lock()
@@ -74,23 +74,23 @@ func (m *nodeManager) AddNode(nodeID int64, address string) error {
 	numNodes := len(m.nodeClients)
 	metrics.IndexNodeNum.WithLabelValues().Set(float64(numNodes))
 	metrics.DataCoordNumDataNodes.WithLabelValues().Set(float64(numNodes))
-	mlog.Info(context.TODO(), "node added", mlog.Int("numNodes", numNodes))
+	log.Info(context.TODO(), "node added", log.Int("numNodes", numNodes))
 	return nil
 }
 
 func (m *nodeManager) RemoveNode(nodeID int64) {
-	mlog.Info(context.TODO(), "removing node...")
+	log.Info(context.TODO(), "removing node...")
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if client, ok := m.nodeClients[nodeID]; ok {
 		if err := client.Close(); err != nil {
-			mlog.Warn(context.TODO(), "failed to close client", mlog.Err(err))
+			log.Warn(context.TODO(), "failed to close client", log.Err(err))
 		}
 		delete(m.nodeClients, nodeID)
 		numNodes := len(m.nodeClients)
 		metrics.IndexNodeNum.WithLabelValues().Set(float64(numNodes))
 		metrics.DataCoordNumDataNodes.WithLabelValues().Set(float64(numNodes))
-		mlog.Info(context.TODO(), "node removed", mlog.Int("numNodes", numNodes))
+		log.Info(context.TODO(), "node removed", log.Int("numNodes", numNodes))
 	}
 }
 

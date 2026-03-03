@@ -34,7 +34,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
@@ -66,7 +66,7 @@ type distHandler struct {
 
 func (dh *distHandler) start(ctx context.Context) {
 	defer dh.wg.Done()
-	mlog.Info(context.TODO(), "start dist handler")
+	log.Info(context.TODO(), "start dist handler")
 	distInterval := Params.QueryCoordCfg.DistPullInterval.GetAsDuration(time.Millisecond)
 	ticker := time.NewTicker(distInterval)
 	defer ticker.Stop()
@@ -77,10 +77,10 @@ func (dh *distHandler) start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			mlog.Info(context.TODO(), "close dist handler due to context done")
+			log.Info(context.TODO(), "close dist handler due to context done")
 			return
 		case <-dh.c:
-			mlog.Info(context.TODO(), "close dist handler")
+			log.Info(context.TODO(), "close dist handler")
 			return
 		case <-checkExecutedFlagTicker.C:
 			executedFlagChan := dh.scheduler.GetExecutedFlag(dh.nodeID)
@@ -124,18 +124,18 @@ func (dh *distHandler) pullDist(ctx context.Context, failures *int, dispatchTask
 	if err != nil {
 		node := dh.nodeManager.Get(dh.nodeID)
 		*failures = *failures + 1
-		fields := []zap.Field{mlog.Int("times", *failures)}
+		fields := []zap.Field{log.Int("times", *failures)}
 		if node != nil {
-			fields = append(fields, mlog.Time("lastHeartbeat", node.LastHeartbeat()))
+			fields = append(fields, log.Time("lastHeartbeat", node.LastHeartbeat()))
 		}
-		fields = append(fields, mlog.Err(err))
-		mlog.RatedWarn(ctx, mlog.RateDefault, "failed to get data distribution", fields...)
+		fields = append(fields, log.Err(err))
+		log.RatedWarn(ctx, log.RateDefault, "failed to get data distribution", fields...)
 	} else {
 		*failures = 0
 		dh.handleDistResp(ctx, resp, dispatchTask)
 	}
-	mlog.RatedInfo(ctx, mlog.RateDefault, "pull and handle distribution done",
-		mlog.Int("respSize", proto.Size(resp)), mlog.Duration("pullDur", d1), mlog.Duration("handleDur", tr.RecordSpan()))
+	log.RatedInfo(ctx, log.RateDefault, "pull and handle distribution done",
+		log.Int("respSize", proto.Size(resp)), log.Duration("pullDur", d1), log.Duration("handleDur", tr.RecordSpan()))
 }
 
 func (dh *distHandler) handleDistResp(ctx context.Context, resp *querypb.GetDataDistributionResponse, dispatchTask bool) {
@@ -145,8 +145,8 @@ func (dh *distHandler) handleDistResp(ctx context.Context, resp *querypb.GetData
 	}
 
 	if time.Since(node.LastHeartbeat()) > paramtable.Get().QueryCoordCfg.HeartBeatWarningLag.GetAsDuration(time.Millisecond) {
-		mlog.Warn(context.TODO(), "node last heart beat time lag too behind", mlog.Time("now", time.Now()),
-			mlog.Time("lastHeartBeatTime", node.LastHeartbeat()), mlog.Int64("nodeID", node.ID()))
+		log.Warn(context.TODO(), "node last heart beat time lag too behind", log.Time("now", time.Now()),
+			log.Time("lastHeartBeatTime", node.LastHeartbeat()), log.Int64("nodeID", node.ID()))
 	}
 	now := time.Now()
 	node.SetLastHeartbeat(now)
@@ -154,7 +154,7 @@ func (dh *distHandler) handleDistResp(ctx context.Context, resp *querypb.GetData
 
 	// skip  update dist if no distribution change happens in query node
 	if resp.GetLastModifyTs() != 0 && resp.GetLastModifyTs() <= dh.lastUpdateTs {
-		mlog.RatedInfo(context.TODO(), mlog.RateDefault, "skip update dist due to no distribution change", mlog.Int64("lastModifyTs", resp.GetLastModifyTs()), mlog.Int64("lastUpdateTs", dh.lastUpdateTs))
+		log.RatedInfo(context.TODO(), log.RateDefault, "skip update dist due to no distribution change", log.Int64("lastModifyTs", resp.GetLastModifyTs()), log.Int64("lastUpdateTs", dh.lastUpdateTs))
 	} else {
 		dh.lastUpdateTs = resp.GetLastModifyTs()
 
@@ -220,9 +220,9 @@ func (dh *distHandler) updateChannelsDistribution(ctx context.Context, resp *que
 		channel, ok := channelMap[lview.GetChannel()]
 		if !ok {
 			// unreachable path, querynode should return leader view and channel dist at same time
-			mlog.RatedInfo(ctx, mlog.RateDefault, "channel not found in distribution",
-				mlog.Int64("collectionID", lview.GetCollection()),
-				mlog.String("channel", lview.GetChannel()))
+			log.RatedInfo(ctx, log.RateDefault, "channel not found in distribution",
+				log.Int64("collectionID", lview.GetCollection()),
+				log.String("channel", lview.GetChannel()))
 			continue
 		}
 		delegatorVersion := channel.GetVersion()
@@ -294,7 +294,7 @@ func (dh *distHandler) updateChannelsDistribution(ctx context.Context, resp *que
 func checkDelegatorServiceable(ctx context.Context, dh *distHandler, view *meta.LeaderView) bool {
 	if status := view.Status; status != nil {
 		if !status.GetServiceable() {
-			mlog.RatedInfo(context.TODO(), mlog.RateDefault, "delegator is not serviceable", mlog.Int64("queryViewVersion", view.TargetVersion))
+			log.RatedInfo(context.TODO(), log.RateDefault, "delegator is not serviceable", log.Int64("queryViewVersion", view.TargetVersion))
 			return false
 		}
 		return true
@@ -302,7 +302,7 @@ func checkDelegatorServiceable(ctx context.Context, dh *distHandler, view *meta.
 
 	// check leader data ready for version before 2.5.8
 	if err := utils.CheckDelegatorDataReady(dh.nodeManager, dh.target, view, meta.CurrentTarget); err != nil {
-		mlog.RatedInfo(context.TODO(), mlog.RateDefault, "delegator is not serviceable due to distribution not ready", mlog.Err(err))
+		log.RatedInfo(context.TODO(), log.RateDefault, "delegator is not serviceable due to distribution not ready", log.Err(err))
 		view.Status = &querypb.LeaderViewStatus{
 			Serviceable: false,
 		}
@@ -313,9 +313,9 @@ func checkDelegatorServiceable(ctx context.Context, dh *distHandler, view *meta.
 	// so shard leader should be unserviceable until target version is synced
 	currentTargetVersion := dh.target.GetCollectionTargetVersion(ctx, view.CollectionID, meta.CurrentTarget)
 	if view.TargetVersion <= 0 {
-		mlog.RatedInfo(context.TODO(), mlog.RateDefault, "delegator is not serviceable due to target version not ready",
-			mlog.Int64("currentTargetVersion", currentTargetVersion),
-			mlog.Int64("leaderTargetVersion", view.TargetVersion))
+		log.RatedInfo(context.TODO(), log.RateDefault, "delegator is not serviceable due to target version not ready",
+			log.Int64("currentTargetVersion", currentTargetVersion),
+			log.Int64("leaderTargetVersion", view.TargetVersion))
 		view.Status = &querypb.LeaderViewStatus{
 			Serviceable: false,
 		}

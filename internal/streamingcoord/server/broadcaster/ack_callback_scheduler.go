@@ -9,13 +9,13 @@ import (
 	"github.com/cenkalti/backoff/v4"
 
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
 
 // newAckCallbackScheduler creates a new ack callback scheduler.
-func newAckCallbackScheduler(logger *mlog.Logger) *ackCallbackScheduler {
+func newAckCallbackScheduler(logger *log.Logger) *ackCallbackScheduler {
 	s := &ackCallbackScheduler{
 		notifier:           syncutil.NewAsyncTaskNotifier[struct{}](),
 		pending:            make(chan *broadcastTask, 16),
@@ -29,7 +29,7 @@ func newAckCallbackScheduler(logger *mlog.Logger) *ackCallbackScheduler {
 }
 
 type ackCallbackScheduler struct {
-	mlog.Binder
+	log.Binder
 
 	notifier           *syncutil.AsyncTaskNotifier[struct{}]
 	pending            chan *broadcastTask
@@ -131,7 +131,7 @@ func (s *ackCallbackScheduler) triggerAckCallback() {
 	for _, task := range s.pendingAckedTasks {
 		g, err := s.rkLocker.FastLock(task.Header().ResourceKeys.Collect()...)
 		if err != nil {
-			s.Logger().Warn(nil, "lock is occupied, delay the ack callback", mlog.Uint64("broadcastID", task.Header().BroadcastID), mlog.Err(err))
+			s.Logger().Warn(nil, "lock is occupied, delay the ack callback", log.Uint64("broadcastID", task.Header().BroadcastID), log.Err(err))
 			pendingTasks = append(pendingTasks, task)
 			continue
 		}
@@ -143,7 +143,7 @@ func (s *ackCallbackScheduler) triggerAckCallback() {
 
 // doAckCallback executes the ack callback.
 func (s *ackCallbackScheduler) doAckCallback(bt *broadcastTask, g *lockGuards) (err error) {
-	logger := s.Logger().With(mlog.Uint64("broadcastID", bt.Header().BroadcastID))
+	logger := s.Logger().With(log.Uint64("broadcastID", bt.Header().BroadcastID))
 	defer func() {
 		s.rkLockerMu.Lock()
 		g.Unlock()
@@ -153,7 +153,7 @@ func (s *ackCallbackScheduler) doAckCallback(bt *broadcastTask, g *lockGuards) (
 		if err == nil {
 			logger.Info(nil, "execute ack callback done")
 		} else {
-			logger.Warn(nil, "execute ack callback failed", mlog.Err(err))
+			logger.Warn(nil, "execute ack callback failed", log.Err(err))
 		}
 	}()
 	logger.Info(nil, "start to execute ack callback")
@@ -202,9 +202,9 @@ func (s *ackCallbackScheduler) callMessageAckCallbackUntilDone(ctx context.Conte
 		}
 		nextInterval := backoff.NextBackOff()
 		s.Logger().Warn(nil, "failed to call message ack callback, wait for retry...",
-			mlog.FieldMessage(msg),
-			mlog.Duration("nextInterval", nextInterval),
-			mlog.Err(err))
+			log.FieldMessage(msg),
+			log.Duration("nextInterval", nextInterval),
+			log.Err(err))
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

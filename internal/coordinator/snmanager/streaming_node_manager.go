@@ -8,7 +8,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/balancer/balance"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
@@ -183,7 +183,7 @@ func (s *StreamingNodeManager) execute() (err error) {
 				s.latestAssignments[relation.Channel.Name] = relation
 			}
 			s.nodeChangedNotifier.NotifyAll()
-			mlog.Info(context.TODO(), "streaming node manager updated", mlog.Any("assignments", s.latestAssignments))
+			log.Info(context.TODO(), "streaming node manager updated", log.Any("assignments", s.latestAssignments))
 			s.cond.L.Unlock()
 			return nil
 		}); err != nil {

@@ -8,7 +8,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
 )
 
@@ -122,7 +122,7 @@ func (p *knowhereConfig) UpdateIndexParams(indexType string, stage string, index
 	overrideIndexType := GetKeyFromSlice(indexParams, OverrideIndexTypeKey)
 	if overrideIndexType != "" {
 		overrideIndexParams := p.getIndexParam(overrideIndexType, stage)
-		mlog.Info(context.TODO(), "override index params", mlog.String("overrideIndexType", overrideIndexType), mlog.Any("overrideIndexParams", overrideIndexParams))
+		log.Info(context.TODO(), "override index params", log.String("overrideIndexType", overrideIndexType), log.Any("overrideIndexParams", overrideIndexParams))
 		for key, val := range overrideIndexParams {
 			indexParams = append(indexParams,
 				&commonpb.KeyValuePair{

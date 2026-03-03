@@ -8,7 +8,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"google.golang.org/grpc"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
 
@@ -60,10 +60,10 @@ func (c *connImpl) initialize() {
 		conn, err := c.dialer(c.initializationNotifier.Context())
 		if err != nil {
 			if c.initializationNotifier.Context().Err() != nil {
-				mlog.Info(context.TODO(), "lazy grpc conn canceled", mlog.Err(c.initializationNotifier.Context().Err()))
+				log.Info(context.TODO(), "lazy grpc conn canceled", log.Err(c.initializationNotifier.Context().Err()))
 				return nil
 			}
-			mlog.Warn(context.TODO(), "async dial failed, wait for retry...", mlog.Err(err))
+			log.Warn(context.TODO(), "async dial failed, wait for retry...", log.Err(err))
 			return err
 		}
 		c.conn.Set(conn)
@@ -93,7 +93,7 @@ func (c *connImpl) Close() {
 
 	if c.conn.Ready() {
 		if err := c.conn.Get().Close(); err != nil {
-			mlog.Warn(context.TODO(), "close underlying grpc conn fail", mlog.Err(err))
+			log.Warn(context.TODO(), "close underlying grpc conn fail", log.Err(err))
 		}
 	}
 }

@@ -25,7 +25,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/datacoord/task"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -182,7 +182,7 @@ func (m *externalCollectionRefreshManager) SubmitRefreshJobWithID(
 	// is mitigated by WAL idempotency (same JobID on retry) and per-collection lock in AddJob.
 	existingJob := m.refreshMeta.GetJob(jobID)
 	if existingJob != nil {
-		mlog.Info(context.TODO(), "job already exists, skip creating")
+		log.Info(context.TODO(), "job already exists, skip creating")
 		return jobID, nil
 	}
 
@@ -192,13 +192,13 @@ func (m *externalCollectionRefreshManager) SubmitRefreshJobWithID(
 	// DataCoord syncs the newly created collection.
 	collection, err := m.collectionGetter(ctx, collectionID)
 	if err != nil || collection == nil {
-		mlog.Warn(context.TODO(), "collection not found", mlog.Err(err))
+		log.Warn(context.TODO(), "collection not found", log.Err(err))
 		return 0, merr.WrapErrCollectionNotFound(collectionID)
 	}
 
 	// Validate it's an external collection
 	if !typeutil.IsExternalCollection(collection.Schema) {
-		mlog.Warn(context.TODO(), "not an external collection")
+		log.Warn(context.TODO(), "not an external collection")
 		return 0, merr.WrapErrCollectionIllegalSchema(collectionName, "not an external collection")
 	}
 
@@ -214,9 +214,9 @@ func (m *externalCollectionRefreshManager) SubmitRefreshJobWithID(
 	// Only one active refresh job is allowed at a time
 	activeJob := m.refreshMeta.GetActiveJobByCollectionID(collectionID)
 	if activeJob != nil {
-		mlog.Warn(context.TODO(), "refresh job already in progress",
-			mlog.Int64("existingJobID", activeJob.GetJobId()),
-			mlog.String("existingJobState", activeJob.GetState().String()))
+		log.Warn(context.TODO(), "refresh job already in progress",
+			log.Int64("existingJobID", activeJob.GetJobId()),
+			log.String("existingJobState", activeJob.GetState().String()))
 		return 0, merr.WrapErrTaskDuplicate("refresh_external_collection", fmt.Sprintf("refresh job %d is already in progress for collection %s, please wait for it to complete or cancel it first",
 			activeJob.GetJobId(), collectionName))
 	}
@@ -237,7 +237,7 @@ func (m *externalCollectionRefreshManager) SubmitRefreshJobWithID(
 	}
 
 	if err := m.refreshMeta.AddJob(job); err != nil {
-		mlog.Warn(context.TODO(), "failed to add job to meta", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to add job to meta", log.Err(err))
 		return 0, err
 	}
 
@@ -246,9 +246,9 @@ func (m *externalCollectionRefreshManager) SubmitRefreshJobWithID(
 	if err != nil {
 		// Rollback: remove the already-persisted job to avoid leaving it stuck in Init state
 		if rollbackErr := m.refreshMeta.DropJob(ctx, jobID); rollbackErr != nil {
-			mlog.Warn(context.TODO(), "failed to rollback job after task creation failure",
-				mlog.Int64("jobID", jobID),
-				mlog.Err(rollbackErr))
+			log.Warn(context.TODO(), "failed to rollback job after task creation failure",
+				log.Int64("jobID", jobID),
+				log.Err(rollbackErr))
 		}
 		return 0, err
 	}
@@ -258,9 +258,9 @@ func (m *externalCollectionRefreshManager) SubmitRefreshJobWithID(
 		m.scheduler.Enqueue(t)
 	}
 
-	mlog.Info(context.TODO(), "external collection refresh job submitted with pre-allocated ID",
-		mlog.String("externalSource", externalSource),
-		mlog.Int("taskCount", len(tasks)))
+	log.Info(context.TODO(), "external collection refresh job submitted with pre-allocated ID",
+		log.String("externalSource", externalSource),
+		log.Int("taskCount", len(tasks)))
 
 	return jobID, nil
 }
@@ -278,7 +278,7 @@ func (m *externalCollectionRefreshManager) createTasksForJob(
 	// Allocate task ID
 	taskID, err := m.allocator.AllocID(ctx)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to allocate task ID", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to allocate task ID", log.Err(err))
 		return nil, err
 	}
 
@@ -297,22 +297,22 @@ func (m *externalCollectionRefreshManager) createTasksForJob(
 
 	// Add task to meta
 	if err = m.refreshMeta.AddTask(task); err != nil {
-		mlog.Warn(context.TODO(), "failed to add task to meta", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to add task to meta", log.Err(err))
 		return nil, err
 	}
 
 	// Add taskID to job
 	if err = m.refreshMeta.AddTaskIDToJob(job.GetJobId(), taskID); err != nil {
-		mlog.Warn(context.TODO(), "failed to add taskID to job", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to add taskID to job", log.Err(err))
 		return nil, err
 	}
 
 	// Create task wrapper
 	taskWrapper := newRefreshExternalCollectionTask(task, m.refreshMeta, m.mt, m.allocator)
 
-	mlog.Info(context.TODO(), "task created for job",
-		mlog.Int64("taskID", taskID),
-		mlog.Int64("jobID", job.GetJobId()))
+	log.Info(context.TODO(), "task created for job",
+		log.Int64("taskID", taskID),
+		log.Int64("jobID", job.GetJobId()))
 
 	return []*refreshExternalCollectionTask{taskWrapper}, nil
 }

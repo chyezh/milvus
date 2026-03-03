@@ -24,7 +24,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/metastore"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/workerpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
@@ -60,14 +60,14 @@ func (m *analyzeMeta) reloadFromKV() error {
 	// load analyze stats
 	analyzeTasks, err := m.catalog.ListAnalyzeTasks(m.ctx)
 	if err != nil {
-		mlog.Warn(context.TODO(), "analyzeMeta reloadFromKV load analyze tasks failed", mlog.Err(err))
+		log.Warn(context.TODO(), "analyzeMeta reloadFromKV load analyze tasks failed", log.Err(err))
 		return err
 	}
 
 	for _, analyzeTask := range analyzeTasks {
 		m.tasks[analyzeTask.TaskID] = analyzeTask
 	}
-	mlog.Info(context.TODO(), "analyzeMeta reloadFromKV done", mlog.Duration("duration", record.ElapseSpan()))
+	log.Info(context.TODO(), "analyzeMeta reloadFromKV done", log.Duration("duration", record.ElapseSpan()))
 	return nil
 }
 
@@ -90,8 +90,8 @@ func (m *analyzeMeta) AddAnalyzeTask(task *indexpb.AnalyzeTask) error {
 	m.Lock()
 	defer m.Unlock()
 
-	mlog.Info(context.TODO(), "add analyze task", mlog.Int64("taskID", task.TaskID),
-		mlog.Int64("collectionID", task.CollectionID), mlog.Int64("partitionID", task.PartitionID))
+	log.Info(context.TODO(), "add analyze task", log.Int64("taskID", task.TaskID),
+		log.Int64("collectionID", task.CollectionID), log.Int64("partitionID", task.PartitionID))
 	return m.saveTask(task)
 }
 
@@ -99,10 +99,10 @@ func (m *analyzeMeta) DropAnalyzeTask(ctx context.Context, taskID int64) error {
 	m.Lock()
 	defer m.Unlock()
 
-	mlog.Info(context.TODO(), "drop analyze task", mlog.Int64("taskID", taskID))
+	log.Info(context.TODO(), "drop analyze task", log.Int64("taskID", taskID))
 	if err := m.catalog.DropAnalyzeTask(ctx, taskID); err != nil {
-		mlog.Warn(context.TODO(), "drop analyze task by catalog failed", mlog.Int64("taskID", taskID),
-			mlog.Err(err))
+		log.Warn(context.TODO(), "drop analyze task by catalog failed", log.Int64("taskID", taskID),
+			log.Err(err))
 		return err
 	}
 
@@ -122,8 +122,8 @@ func (m *analyzeMeta) UpdateVersion(taskID int64, nodeID int64) error {
 	cloneT := proto.Clone(t).(*indexpb.AnalyzeTask)
 	cloneT.Version++
 	cloneT.NodeID = nodeID
-	mlog.Info(context.TODO(), "update task version", mlog.Int64("taskID", taskID), mlog.Int64("newVersion", cloneT.Version),
-		mlog.Int64("nodeID", nodeID))
+	log.Info(context.TODO(), "update task version", log.Int64("taskID", taskID), log.Int64("newVersion", cloneT.Version),
+		log.Int64("nodeID", nodeID))
 	return m.saveTask(cloneT)
 }
 
@@ -138,7 +138,7 @@ func (m *analyzeMeta) BuildingTask(taskID int64) error {
 
 	cloneT := proto.Clone(t).(*indexpb.AnalyzeTask)
 	cloneT.State = indexpb.JobState_JobStateInProgress
-	mlog.Info(context.TODO(), "task will be building", mlog.Int64("taskID", taskID))
+	log.Info(context.TODO(), "task will be building", log.Int64("taskID", taskID))
 
 	return m.saveTask(cloneT)
 }
@@ -155,8 +155,8 @@ func (m *analyzeMeta) UpdateState(taskID int64, state indexpb.JobState, failReas
 	cloneT := proto.Clone(t).(*indexpb.AnalyzeTask)
 	cloneT.State = state
 	cloneT.FailReason = failReason
-	mlog.Info(context.TODO(), "update analyze task state", mlog.Int64("taskID", taskID), mlog.String("state", state.String()),
-		mlog.String("failReason", failReason))
+	log.Info(context.TODO(), "update analyze task state", log.Int64("taskID", taskID), log.String("state", state.String()),
+		log.String("failReason", failReason))
 
 	return m.saveTask(cloneT)
 }
@@ -170,8 +170,8 @@ func (m *analyzeMeta) FinishTask(taskID int64, result *workerpb.AnalyzeResult) e
 		return fmt.Errorf("there is no task with taskID: %d", taskID)
 	}
 
-	mlog.Info(context.TODO(), "finish task meta...", mlog.Int64("taskID", taskID), mlog.String("state", result.GetState().String()),
-		mlog.String("failReason", result.GetFailReason()))
+	log.Info(context.TODO(), "finish task meta...", log.Int64("taskID", taskID), log.String("state", result.GetState().String()),
+		log.String("failReason", result.GetFailReason()))
 
 	cloneT := proto.Clone(t).(*indexpb.AnalyzeTask)
 	cloneT.State = result.GetState()

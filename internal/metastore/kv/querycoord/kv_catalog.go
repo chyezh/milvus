@@ -13,7 +13,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/pkg/v2/kv"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/compressor"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
@@ -333,7 +333,7 @@ func (s Catalog) GetCollectionTargets(ctx context.Context) (map[int64]*querypb.C
 		target := &querypb.CollectionTarget{}
 		if err := proto.Unmarshal(decompressed.Bytes(), target); err != nil {
 			// recover target from meta is a optimize policy, skip when failure happens
-			mlog.Warn(context.TODO(), "failed to unmarshal collection target", mlog.String("key", string(key)), mlog.Err(err))
+			log.Warn(context.TODO(), "failed to unmarshal collection target", log.String("key", string(key)), log.Err(err))
 			return nil
 		}
 		ret[target.GetCollectionID()] = target

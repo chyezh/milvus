@@ -6,7 +6,7 @@ import (
 	"google.golang.org/grpc/resolver"
 
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/attributes"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -75,7 +75,7 @@ func (s *VersionedState) ChannelAssignmentInfo() map[int64]types.StreamingNodeAs
 	for _, v := range s.State.Addresses {
 		assignment := attributes.GetChannelAssignmentInfoFromAttributes(v.BalancerAttributes)
 		if assignment == nil {
-			mlog.Error(context.TODO(), "no assignment found in resolver state, skip it", mlog.String("address", v.Addr))
+			log.Error(context.TODO(), "no assignment found in resolver state, skip it", log.String("address", v.Addr))
 			continue
 		}
 		assignments[assignment.NodeInfo.ServerID] = *assignment

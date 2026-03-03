@@ -25,7 +25,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/logutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -312,7 +312,7 @@ func WrapErrAsInputErrorWhen(err error, targets ...milvusError) error {
 	if merr, ok := err.(milvusError); ok {
 		for _, target := range targets {
 			if target.errCode == merr.errCode {
-				mlog.Info(context.TODO(), "mark error as input error", mlog.Err(err))
+				log.Info(context.TODO(), "mark error as input error", log.Err(err))
 				WithErrorType(InputError)(&merr)
 				return merr
 			}

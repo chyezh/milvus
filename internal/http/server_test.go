@@ -32,7 +32,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/http/healthz"
 	"github.com/milvus-io/milvus/internal/json"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/expr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/stretchr/testify/assert"
@@ -68,13 +68,13 @@ func (suite *HTTPServerTestSuite) TestGetHTTPAddr() {
 }
 
 func (suite *HTTPServerTestSuite) TestDefaultLogHandler() {
-	mlog.SetLevel(mlog.DebugLevel)
-	suite.Equal(mlog.DebugLevel, mlog.GetLevel())
+	log.SetLevel(log.DebugLevel)
+	suite.Equal(log.DebugLevel, log.GetLevel())
 
 	// replace global logger, log change will not be affected.
-	conf := &mlog.Config{Level: "info", File: mlog.FileLogConfig{}, DisableTimestamp: true}
-	_, _ = mlog.InitLogger(conf)
-	suite.Equal(mlog.InfoLevel, mlog.GetLevel())
+	conf := &log.Config{Level: "info", File: log.FileLogConfig{}, DisableTimestamp: true}
+	_, _ = log.InitLogger(conf)
+	suite.Equal(log.InfoLevel, log.GetLevel())
 
 	// change log level through http
 	payload, err := json.Marshal(map[string]any{"level": "error"})
@@ -93,7 +93,7 @@ func (suite *HTTPServerTestSuite) TestDefaultLogHandler() {
 	body, err := io.ReadAll(resp.Body)
 	suite.Require().NoError(err)
 	suite.Equal("{\"level\":\"error\"}\n", string(body))
-	suite.Equal(mlog.ErrorLevel, mlog.GetLevel())
+	suite.Equal(log.ErrorLevel, log.GetLevel())
 }
 
 func (suite *HTTPServerTestSuite) TestHealthzHandler() {

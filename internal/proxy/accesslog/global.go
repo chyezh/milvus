@@ -28,7 +28,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/proxy/accesslog/info"
 	configEvent "github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -86,15 +86,15 @@ func (l *AccessLogger) SetEnable(enable bool) error {
 	}
 
 	if enable {
-		mlog.Info(context.TODO(), "start enable access log")
+		log.Info(context.TODO(), "start enable access log")
 		params := paramtable.Get()
 		err := l.init(params)
 		if err != nil {
-			mlog.Warn(context.TODO(), "enable access log failed", mlog.Err(err))
+			log.Warn(context.TODO(), "enable access log failed", log.Err(err))
 			return err
 		}
 	} else {
-		mlog.Info(context.TODO(), "start close access log")
+		log.Info(context.TODO(), "start close access log")
 		if write, ok := l.writer.(*RotateWriter); ok {
 			write.Close()
 		}
@@ -119,7 +119,7 @@ func (l *AccessLogger) Write(info info.AccessInfo) bool {
 	}
 	_, err := l.writer.Write([]byte(formatter.Format(info)))
 	if err != nil {
-		mlog.Warn(context.TODO(), "write access log failed", mlog.Err(err))
+		log.Warn(context.TODO(), "write access log failed", log.Err(err))
 		return false
 	}
 	return true
@@ -132,7 +132,7 @@ func InitAccessLogger(params *paramtable.ComponentParam) {
 		params.Watch(params.ProxyCfg.AccessLog.Enable.Key, configEvent.NewHandler("enable accesslog", func(event *configEvent.Event) {
 			value, err := strconv.ParseBool(event.Value)
 			if err != nil {
-				mlog.Warn(context.TODO(), "Failed to parse bool value", mlog.String("v", event.Value), mlog.Err(err))
+				log.Warn(context.TODO(), "Failed to parse bool value", log.String("v", event.Value), log.Err(err))
 				return
 			}
 			logger.SetEnable(value)
@@ -140,11 +140,11 @@ func InitAccessLogger(params *paramtable.ComponentParam) {
 
 		err := logger.Init(params)
 		if err != nil {
-			mlog.Warn(context.TODO(), "Init access logger failed", mlog.Err(err))
+			log.Warn(context.TODO(), "Init access logger failed", log.Err(err))
 		}
 		_globalL = logger
 		info.ClusterPrefix.Store(params.CommonCfg.ClusterPrefix.GetValue())
-		mlog.Info(context.TODO(), "Init access logger success")
+		log.Info(context.TODO(), "Init access logger success")
 	})
 }
 

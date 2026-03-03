@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -43,6 +43,6 @@ func GetPath(pathType PathType, nodeID int64) string {
 		path = filepath.Join(path, fmt.Sprintf("%d", nodeID), FileResourcePathPrefix)
 	case RootCachePath:
 	}
-	mlog.Info(context.TODO(), "Get path for", mlog.Any("pathType", pathType), mlog.Int64("nodeID", nodeID), mlog.String("path", path))
+	log.Info(context.TODO(), "Get path for", log.Any("pathType", pathType), log.Int64("nodeID", nodeID), log.String("path", path))
 	return path
 }

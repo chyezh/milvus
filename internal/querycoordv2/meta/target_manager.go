@@ -28,7 +28,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
@@ -101,7 +101,7 @@ func NewTargetManager(broker Broker, meta *Meta) *TargetManager {
 func (mgr *TargetManager) UpdateCollectionCurrentTarget(ctx context.Context, collectionID int64) bool {
 	newTarget := mgr.next.getCollectionTarget(collectionID)
 	if newTarget == nil || newTarget.IsEmpty() {
-		mlog.Info(context.TODO(), "next target does not exist, skip it")
+		log.Info(context.TODO(), "next target does not exist, skip it")
 		return false
 	}
 	mgr.current.updateCollectionTarget(collectionID, newTarget)
@@ -121,11 +121,11 @@ func (mgr *TargetManager) UpdateCollectionCurrentTarget(ctx context.Context, col
 		}
 		partStatsVersionInfo += "],"
 	}
-	mlog.Debug(context.TODO(), "finish to update current target for collection",
-		mlog.Int64s("segments", newTarget.GetAllSegmentIDs()),
-		mlog.Strings("channels", newTarget.GetAllDmChannelNames()),
-		mlog.Int64("version", newTarget.GetTargetVersion()),
-		mlog.String("partStatsVersion", partStatsVersionInfo),
+	log.Debug(context.TODO(), "finish to update current target for collection",
+		log.Int64s("segments", newTarget.GetAllSegmentIDs()),
+		log.Strings("channels", newTarget.GetAllDmChannelNames()),
+		log.Int64("version", newTarget.GetTargetVersion()),
+		log.String("partStatsVersion", partStatsVersionInfo),
 	)
 	return true
 }
@@ -145,7 +145,7 @@ func (mgr *TargetManager) UpdateCollectionNextTarget(ctx context.Context, collec
 		return false, nil
 	}, retry.Attempts(10))
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to get next targets for collection", mlog.Int64("collectionID", collectionID), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get next targets for collection", log.Int64("collectionID", collectionID), log.Err(err))
 		return err
 	}
 
@@ -168,7 +168,7 @@ func (mgr *TargetManager) UpdateCollectionNextTarget(ctx context.Context, collec
 	}
 
 	if len(segments) == 0 && len(dmChannels) == 0 {
-		mlog.Debug(context.TODO(), "skip empty next targets for collection", mlog.Int64("collectionID", collectionID), mlog.Int64s("PartitionIDs", partitionIDs))
+		log.Debug(context.TODO(), "skip empty next targets for collection", log.Int64("collectionID", collectionID), log.Int64s("PartitionIDs", partitionIDs))
 		return nil
 	}
 
@@ -176,9 +176,9 @@ func (mgr *TargetManager) UpdateCollectionNextTarget(ctx context.Context, collec
 
 	mgr.next.updateCollectionTarget(collectionID, allocatedTarget)
 
-	mlog.Debug(context.TODO(), "finish to update next targets for collection",
-		mlog.Int64("collectionID", collectionID),
-		mlog.Int64s("PartitionIDs", partitionIDs))
+	log.Debug(context.TODO(), "finish to update next targets for collection",
+		log.Int64("collectionID", collectionID),
+		log.Int64s("PartitionIDs", partitionIDs))
 
 	return nil
 }
@@ -205,8 +205,8 @@ func mergeDmChannelInfo(infos []*datapb.VchannelInfo) *DmChannel {
 
 // RemoveCollection removes all channels and segments in the given collection
 func (mgr *TargetManager) RemoveCollection(ctx context.Context, collectionID int64) {
-	mlog.Info(context.TODO(), "remove collection from targets",
-		mlog.Int64("collectionID", collectionID))
+	log.Info(context.TODO(), "remove collection from targets",
+		log.Int64("collectionID", collectionID))
 
 	current := mgr.current.getCollectionTarget(collectionID)
 	if current != nil {
@@ -226,7 +226,7 @@ func (mgr *TargetManager) RemoveCollection(ctx context.Context, collectionID int
 // NOTE: this doesn't remove any channel even the given one is the only partition
 // Deprecated: use RemovePartitionFromNextTarget instead @weiliu1031
 func (mgr *TargetManager) RemovePartition(ctx context.Context, collectionID int64, partitionIDs ...int64) {
-	mlog.Info(ctx, "remove partition from targets", mlog.Int64("collectionID", collectionID), mlog.Int64s("PartitionIDs", partitionIDs))
+	log.Info(ctx, "remove partition from targets", log.Int64("collectionID", collectionID), log.Int64s("PartitionIDs", partitionIDs))
 
 	partitionSet := typeutil.NewUniqueSet(partitionIDs...)
 
@@ -235,11 +235,11 @@ func (mgr *TargetManager) RemovePartition(ctx context.Context, collectionID int6
 		newTarget := mgr.removePartitionFromCollectionTarget(oldCurrentTarget, partitionSet)
 		if newTarget != nil {
 			mgr.current.updateCollectionTarget(collectionID, newTarget)
-			mlog.Info(context.TODO(), "finish to remove partition from current target for collection",
-				mlog.Int64s("segments", newTarget.GetAllSegmentIDs()),
-				mlog.Strings("channels", newTarget.GetAllDmChannelNames()))
+			log.Info(context.TODO(), "finish to remove partition from current target for collection",
+				log.Int64s("segments", newTarget.GetAllSegmentIDs()),
+				log.Strings("channels", newTarget.GetAllDmChannelNames()))
 		} else {
-			mlog.Info(context.TODO(), "all partitions have been released, release the collection next target now")
+			log.Info(context.TODO(), "all partitions have been released, release the collection next target now")
 			mgr.current.removeCollectionTarget(collectionID)
 		}
 	}
@@ -249,11 +249,11 @@ func (mgr *TargetManager) RemovePartition(ctx context.Context, collectionID int6
 		newTarget := mgr.removePartitionFromCollectionTarget(oleNextTarget, partitionSet)
 		if newTarget != nil {
 			mgr.next.updateCollectionTarget(collectionID, newTarget)
-			mlog.Info(context.TODO(), "finish to remove partition from next target for collection",
-				mlog.Int64s("segments", newTarget.GetAllSegmentIDs()),
-				mlog.Strings("channels", newTarget.GetAllDmChannelNames()))
+			log.Info(context.TODO(), "finish to remove partition from next target for collection",
+				log.Int64s("segments", newTarget.GetAllSegmentIDs()),
+				log.Strings("channels", newTarget.GetAllDmChannelNames()))
 		} else {
-			mlog.Info(context.TODO(), "all partitions have been released, release the collection current target now")
+			log.Info(context.TODO(), "all partitions have been released, release the collection current target now")
 			mgr.next.removeCollectionTarget(collectionID)
 		}
 	}
@@ -265,17 +265,17 @@ func (mgr *TargetManager) RemovePartition(ctx context.Context, collectionID int6
 func (mgr *TargetManager) RemovePartitionFromNextTarget(ctx context.Context, collectionID int64, partitionIDs ...int64) {
 	partitionSet := typeutil.NewUniqueSet(partitionIDs...)
 
-	mlog.Info(ctx, "remove partition from next target", mlog.Int64("collectionID", collectionID), mlog.Int64s("PartitionIDs", partitionIDs))
+	log.Info(ctx, "remove partition from next target", log.Int64("collectionID", collectionID), log.Int64s("PartitionIDs", partitionIDs))
 	oleNextTarget := mgr.next.getCollectionTarget(collectionID)
 	if oleNextTarget != nil {
 		newTarget := mgr.removePartitionFromCollectionTarget(oleNextTarget, partitionSet)
 		if newTarget != nil {
 			mgr.next.updateCollectionTarget(collectionID, newTarget)
-			mlog.Info(context.TODO(), "finish to remove partition from next target for collection",
-				mlog.Int64s("segments", newTarget.GetAllSegmentIDs()),
-				mlog.Strings("channels", newTarget.GetAllDmChannelNames()))
+			log.Info(context.TODO(), "finish to remove partition from next target for collection",
+				log.Int64s("segments", newTarget.GetAllSegmentIDs()),
+				log.Strings("channels", newTarget.GetAllDmChannelNames()))
 		} else {
-			mlog.Info(context.TODO(), "all partitions have been released, release the collection current target now")
+			log.Info(context.TODO(), "all partitions have been released, release the collection current target now")
 			mgr.current.removeCollectionTarget(collectionID)
 			mgr.next.removeCollectionTarget(collectionID)
 		}
@@ -522,9 +522,9 @@ func (mgr *TargetManager) SaveCurrentTarget(ctx context.Context, catalog metasto
 				if err := catalog.SaveCollectionTargets(ctx, lo.Map(tasks, func(p typeutil.Pair[int64, *querypb.CollectionTarget], _ int) *querypb.CollectionTarget {
 					return p.B
 				})...); err != nil {
-					mlog.Warn(context.TODO(), "failed to save current target for collection", mlog.Int64s("collectionIDs", ids), mlog.Err(err))
+					log.Warn(context.TODO(), "failed to save current target for collection", log.Int64s("collectionIDs", ids), log.Err(err))
 				} else {
-					mlog.Info(context.TODO(), "succeed to save current target for collection", mlog.Int64s("collectionIDs", ids))
+					log.Info(context.TODO(), "succeed to save current target for collection", log.Int64s("collectionIDs", ids))
 				}
 				return nil, nil
 			})
@@ -548,24 +548,24 @@ func (mgr *TargetManager) SaveCurrentTarget(ctx context.Context, catalog metasto
 func (mgr *TargetManager) Recover(ctx context.Context, catalog metastore.QueryCoordCatalog) error {
 	targets, err := catalog.GetCollectionTargets(ctx)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to recover collection target from etcd", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to recover collection target from etcd", log.Err(err))
 		return err
 	}
 
 	for _, t := range targets {
 		newTarget := FromPbCollectionTarget(t)
 		mgr.current.updateCollectionTarget(t.GetCollectionID(), newTarget)
-		mlog.Info(context.TODO(), "recover current target for collection",
-			mlog.Int64("collectionID", t.GetCollectionID()),
-			mlog.Strings("channels", newTarget.GetAllDmChannelNames()),
-			mlog.Int("segmentNum", len(newTarget.GetAllSegmentIDs())),
-			mlog.Int64("version", newTarget.GetTargetVersion()),
+		log.Info(context.TODO(), "recover current target for collection",
+			log.Int64("collectionID", t.GetCollectionID()),
+			log.Strings("channels", newTarget.GetAllDmChannelNames()),
+			log.Int("segmentNum", len(newTarget.GetAllSegmentIDs())),
+			log.Int64("version", newTarget.GetTargetVersion()),
 		)
 
 		// clear target info in meta store
 		err := catalog.RemoveCollectionTarget(ctx, t.GetCollectionID())
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to clear collection target from etcd", mlog.Err(err))
+			log.Warn(context.TODO(), "failed to clear collection target from etcd", log.Err(err))
 		}
 	}
 
@@ -595,7 +595,7 @@ func (mgr *TargetManager) GetTargetJSON(ctx context.Context, scope TargetScope, 
 
 	v, err := json.Marshal(ret.toQueryCoordCollectionTargets(collectionID))
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to marshal target", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to marshal target", log.Err(err))
 		return ""
 	}
 	return string(v)

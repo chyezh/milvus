@@ -24,7 +24,7 @@ import (
 
 	storage "github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/segcore"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/segcorepb"
@@ -52,11 +52,11 @@ func NewL0Segment(collection *Collection,
 		NewSegment(CCollection collection, uint64_t segment_id, SegmentType seg_type);
 	*/
 
-	mlog.Info(context.TODO(), "create L0 segment",
-		mlog.Int64("collectionID", loadInfo.GetCollectionID()),
-		mlog.Int64("partitionID", loadInfo.GetPartitionID()),
-		mlog.Int64("segmentID", loadInfo.GetSegmentID()),
-		mlog.String("segmentType", segmentType.String()))
+	log.Info(context.TODO(), "create L0 segment",
+		log.Int64("collectionID", loadInfo.GetCollectionID()),
+		log.Int64("partitionID", loadInfo.GetPartitionID()),
+		log.Int64("segmentID", loadInfo.GetSegmentID()),
+		log.String("segmentType", segmentType.String()))
 
 	base, err := newBaseSegment(collection, segmentType, version, loadInfo)
 	if err != nil {
@@ -192,11 +192,11 @@ func (s *L0Segment) Release(ctx context.Context, opts ...releaseOption) {
 	s.pks = nil
 	s.tss = nil
 
-	mlog.Info(ctx, "release L0 segment from memory",
-		mlog.Int64("collectionID", s.Collection()),
-		mlog.Int64("partitionID", s.Partition()),
-		mlog.Int64("segmentID", s.ID()),
-		mlog.String("segmentType", s.segmentType.String()),
+	log.Info(ctx, "release L0 segment from memory",
+		log.Int64("collectionID", s.Collection()),
+		log.Int64("partitionID", s.Partition()),
+		log.Int64("segmentID", s.ID()),
+		log.String("segmentType", s.segmentType.String()),
 	)
 }
 

@@ -6,7 +6,7 @@ import (
 
 
 	"github.com/milvus-io/milvus/client/v2/entity"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/tests/go_client/common"
 )
 
@@ -56,7 +56,7 @@ func GetFieldNameByElementType(t entity.FieldType) string {
 	case entity.FieldTypeVarChar:
 		return common.DefaultVarcharArrayField
 	default:
-		mlog.Warn(context.TODO(), "GetFieldNameByElementType", mlog.Any("ElementType", t))
+		log.Warn(context.TODO(), "GetFieldNameByElementType", log.Any("ElementType", t))
 		return common.DefaultArrayFieldName
 	}
 }
@@ -254,7 +254,7 @@ type FieldsFactory struct{}
 
 // Redesign: Create field combinations based on CollectionFieldsType and set properties based on FieldOptions
 func (ff FieldsFactory) GenFieldsForCollection(collectionFieldsType CollectionFieldsType, fieldOpts FieldOptions) []*entity.Field {
-	mlog.Info(context.TODO(), "GenFieldsForCollectionWithOptions", mlog.Any("CollectionFieldsType", collectionFieldsType), mlog.Any("FieldOptions", fieldOpts))
+	log.Info(context.TODO(), "GenFieldsForCollectionWithOptions", log.Any("CollectionFieldsType", collectionFieldsType), log.Any("FieldOptions", fieldOpts))
 
 	switch collectionFieldsType {
 	case Int64Vec:
@@ -623,16 +623,16 @@ func (ff FieldsFactory) applyFieldOptions(field *entity.Field, fieldOpt *GenFiel
 // For example: TWithDefaultValue(int32(2)) instead of TWithDefaultValue(2)
 // This is because Go's interface{} type inference defaults to int, not int32
 func (ff FieldsFactory) applyDefaultValue(field *entity.Field, defaultValue interface{}) {
-	mlog.Info(context.TODO(), "applyDefaultValue", mlog.Any("defaultValue", defaultValue), mlog.String("fieldType", field.DataType.String()))
+	log.Info(context.TODO(), "applyDefaultValue", log.Any("defaultValue", defaultValue), log.String("fieldType", field.DataType.String()))
 	switch field.DataType {
 	case entity.FieldTypeBool:
 		if val, ok := defaultValue.(bool); ok {
 			field.WithDefaultValueBool(val)
 		} else {
-			mlog.Fatal(context.TODO(), "applyDefaultValue failed: type assertion failed",
-				mlog.Any("defaultValue", defaultValue),
-				mlog.String("expectedType", "bool"),
-				mlog.String("actualType", fmt.Sprintf("%T", defaultValue)))
+			log.Fatal(context.TODO(), "applyDefaultValue failed: type assertion failed",
+				log.Any("defaultValue", defaultValue),
+				log.String("expectedType", "bool"),
+				log.String("actualType", fmt.Sprintf("%T", defaultValue)))
 		}
 	case entity.FieldTypeInt8, entity.FieldTypeInt16, entity.FieldTypeInt32:
 		// int8, int16, int32 are all converted to int32
@@ -647,50 +647,50 @@ func (ff FieldsFactory) applyDefaultValue(field *entity.Field, defaultValue inte
 			val = int32(v)
 			field.WithDefaultValueInt(val)
 		} else {
-			mlog.Fatal(context.TODO(), "applyDefaultValue failed: type assertion failed",
-				mlog.Any("defaultValue", defaultValue),
-				mlog.String("expectedType", "int8 or int16 or int32"),
-				mlog.String("actualType", fmt.Sprintf("%T", defaultValue)))
+			log.Fatal(context.TODO(), "applyDefaultValue failed: type assertion failed",
+				log.Any("defaultValue", defaultValue),
+				log.String("expectedType", "int8 or int16 or int32"),
+				log.String("actualType", fmt.Sprintf("%T", defaultValue)))
 		}
 	case entity.FieldTypeInt64:
 		if val, ok := defaultValue.(int64); ok {
 			field.WithDefaultValueLong(val)
 		} else {
-			mlog.Fatal(context.TODO(), "applyDefaultValue failed: type assertion failed",
-				mlog.Any("defaultValue", defaultValue),
-				mlog.String("expectedType", "int64"),
-				mlog.String("actualType", fmt.Sprintf("%T", defaultValue)))
+			log.Fatal(context.TODO(), "applyDefaultValue failed: type assertion failed",
+				log.Any("defaultValue", defaultValue),
+				log.String("expectedType", "int64"),
+				log.String("actualType", fmt.Sprintf("%T", defaultValue)))
 		}
 	case entity.FieldTypeFloat:
 		if val, ok := defaultValue.(float32); ok {
 			field.WithDefaultValueFloat(val)
 		} else {
-			mlog.Fatal(context.TODO(), "applyDefaultValue failed: type assertion failed",
-				mlog.Any("defaultValue", defaultValue),
-				mlog.String("expectedType", "float32"),
-				mlog.String("actualType", fmt.Sprintf("%T", defaultValue)))
+			log.Fatal(context.TODO(), "applyDefaultValue failed: type assertion failed",
+				log.Any("defaultValue", defaultValue),
+				log.String("expectedType", "float32"),
+				log.String("actualType", fmt.Sprintf("%T", defaultValue)))
 		}
 	case entity.FieldTypeDouble:
 		if val, ok := defaultValue.(float64); ok {
 			field.WithDefaultValueDouble(val)
 		} else {
-			mlog.Fatal(context.TODO(), "applyDefaultValue failed: type assertion failed",
-				mlog.Any("defaultValue", defaultValue),
-				mlog.String("expectedType", "float64"),
-				mlog.String("actualType", fmt.Sprintf("%T", defaultValue)))
+			log.Fatal(context.TODO(), "applyDefaultValue failed: type assertion failed",
+				log.Any("defaultValue", defaultValue),
+				log.String("expectedType", "float64"),
+				log.String("actualType", fmt.Sprintf("%T", defaultValue)))
 		}
 	case entity.FieldTypeVarChar:
 		if val, ok := defaultValue.(string); ok {
 			field.WithDefaultValueString(val)
 		} else {
-			mlog.Fatal(context.TODO(), "applyDefaultValue failed: type assertion failed",
-				mlog.Any("defaultValue", defaultValue),
-				mlog.String("expectedType", "string"),
-				mlog.String("actualType", fmt.Sprintf("%T", defaultValue)))
+			log.Fatal(context.TODO(), "applyDefaultValue failed: type assertion failed",
+				log.Any("defaultValue", defaultValue),
+				log.String("expectedType", "string"),
+				log.String("actualType", fmt.Sprintf("%T", defaultValue)))
 		}
 	default:
-		mlog.Fatal(context.TODO(), "applyDefaultValue: unsupported field type for default value",
-			mlog.String("fieldType", field.DataType.String()),
-			mlog.Any("defaultValue", defaultValue))
+		log.Fatal(context.TODO(), "applyDefaultValue: unsupported field type for default value",
+			log.String("fieldType", field.DataType.String()),
+			log.Any("defaultValue", defaultValue))
 	}
 }

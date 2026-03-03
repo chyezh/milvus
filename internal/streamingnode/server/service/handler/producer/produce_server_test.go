@@ -21,7 +21,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/walmanager"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mocks/proto/mock_streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
@@ -104,7 +104,7 @@ func TestProduceSendArm(t *testing.T) {
 		produceServer: &produceGrpcServerHelper{
 			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
 		},
-		logger:           mlog.With(),
+		logger:           log.With(),
 		produceMessageCh: make(chan *streamingpb.ProduceMessageResponse, 10),
 		appendWG:         sync.WaitGroup{},
 	}
@@ -135,7 +135,7 @@ func TestProduceSendArm(t *testing.T) {
 		produceServer: &produceGrpcServerHelper{
 			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
 		},
-		logger:           mlog.With(),
+		logger:           log.With(),
 		produceMessageCh: make(chan *streamingpb.ProduceMessageResponse, 10),
 		appendWG:         sync.WaitGroup{},
 	}
@@ -166,7 +166,7 @@ func TestProduceSendArm(t *testing.T) {
 		produceServer: &produceGrpcServerHelper{
 			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
 		},
-		logger:           mlog.With(),
+		logger:           log.With(),
 		produceMessageCh: make(chan *streamingpb.ProduceMessageResponse, 10),
 		appendWG:         sync.WaitGroup{},
 	}
@@ -213,7 +213,7 @@ func TestProduceServerRecvArm(t *testing.T) {
 		produceServer: &produceGrpcServerHelper{
 			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
 		},
-		logger:           mlog.With(),
+		logger:           log.With(),
 		produceMessageCh: make(chan *streamingpb.ProduceMessageResponse, 10),
 		appendWG:         sync.WaitGroup{},
 		metrics:          newProducerMetrics(l.Channel()),
@@ -275,7 +275,7 @@ func TestProduceServerRecvArm(t *testing.T) {
 		produceServer: &produceGrpcServerHelper{
 			StreamingNodeHandlerService_ProduceServer: grpcProduceServer,
 		},
-		logger:           mlog.With(),
+		logger:           log.With(),
 		produceMessageCh: make(chan *streamingpb.ProduceMessageResponse),
 		appendWG:         sync.WaitGroup{},
 	}

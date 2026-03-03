@@ -13,7 +13,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
@@ -51,8 +51,8 @@ func (s *CompactionSuite) deleteAndFlush(pks []int64, collection string) {
 	ctx := context.Background()
 
 	expr := fmt.Sprintf("%s in [%s]", integration.Int64Field, strings.Join(lo.Map(pks, func(pk int64, _ int) string { return strconv.FormatInt(pk, 10) }), ","))
-	mlog.Info(context.TODO(), "========================delete expr==================",
-		mlog.String("expr", expr),
+	log.Info(context.TODO(), "========================delete expr==================",
+		log.String("expr", expr),
 	)
 	deleteResp, err := s.Cluster.MilvusClient.Delete(ctx, &milvuspb.DeleteRequest{
 		CollectionName: collection,
@@ -62,7 +62,7 @@ func (s *CompactionSuite) deleteAndFlush(pks []int64, collection string) {
 	s.Require().True(merr.Ok(deleteResp.GetStatus()))
 	s.Require().EqualValues(len(pks), deleteResp.GetDeleteCnt())
 
-	mlog.Info(context.TODO(), "=========================Data flush=========================")
+	log.Info(context.TODO(), "=========================Data flush=========================")
 
 	flushResp, err := s.Cluster.MilvusClient.Flush(context.TODO(), &milvuspb.FlushRequest{
 		CollectionNames: []string{collection},
@@ -79,9 +79,9 @@ func (s *CompactionSuite) deleteAndFlush(pks []int64, collection string) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	mlog.Info(context.TODO(), "=========================Wait for flush for 2min=========================")
+	log.Info(context.TODO(), "=========================Wait for flush for 2min=========================")
 	s.WaitForFlush(ctx, segmentIDs, flushTs, "", collection)
-	mlog.Info(context.TODO(), "=========================Data flush done=========================")
+	log.Info(context.TODO(), "=========================Data flush done=========================")
 }
 
 func (s *CompactionSuite) compactAndReboot(collection string) {
@@ -185,7 +185,7 @@ func (s *CompactionSuite) generateSegment(collection string, segmentCount int) [
 	rowNum := 3000
 	pks := []int64{}
 	for i := 0; i < segmentCount; i++ {
-		mlog.Info(context.TODO(), "=========================Data insertion=========================", mlog.Any("count", i))
+		log.Info(context.TODO(), "=========================Data insertion=========================", log.Any("count", i))
 		fVecColumn := integration.NewFloatVectorFieldData(integration.FloatVecField, rowNum, s.dim)
 		hashKeys := integration.GenerateHashKeys(rowNum)
 		insertResult, err := c.MilvusClient.Insert(context.TODO(), &milvuspb.InsertRequest{
@@ -201,7 +201,7 @@ func (s *CompactionSuite) generateSegment(collection string, segmentCount int) [
 
 		pks = append(pks, insertResult.GetIDs().GetIntId().GetData()...)
 
-		mlog.Info(context.TODO(), "=========================Data flush=========================", mlog.Any("count", i))
+		log.Info(context.TODO(), "=========================Data flush=========================", log.Any("count", i))
 		flushResp, err := c.MilvusClient.Flush(context.TODO(), &milvuspb.FlushRequest{
 			CollectionNames: []string{collection},
 		})
@@ -218,9 +218,9 @@ func (s *CompactionSuite) generateSegment(collection string, segmentCount int) [
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		s.WaitForFlush(ctx, segmentIDs, flushTs, "", collection)
-		mlog.Info(context.TODO(), "=========================Data flush done=========================", mlog.Any("count", i))
+		log.Info(context.TODO(), "=========================Data flush done=========================", log.Any("count", i))
 	}
-	mlog.Info(context.TODO(), "=========================Data insertion finished=========================")
+	log.Info(context.TODO(), "=========================Data insertion finished=========================")
 
 	segments, err := c.ShowSegments(collection)
 	s.Require().NoError(err)

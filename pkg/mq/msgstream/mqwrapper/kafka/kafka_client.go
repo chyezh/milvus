@@ -11,7 +11,7 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/kafka"
 	"go.uber.org/atomic"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream/mqwrapper"
@@ -66,9 +66,9 @@ func NewKafkaClientInstance(address string) *kafkaClient {
 }
 
 func NewKafkaClientInstanceWithConfigMap(config kafka.ConfigMap, extraConsumerConfig kafka.ConfigMap, extraProducerConfig kafka.ConfigMap) *kafkaClient {
-	mlog.Info(context.TODO(), "init kafka Config ", mlog.String("commonConfig", ConfigtoString(config)),
-		mlog.String("extraConsumerConfig", ConfigtoString(extraConsumerConfig)),
-		mlog.String("extraProducerConfig", ConfigtoString(extraProducerConfig)),
+	log.Info(context.TODO(), "init kafka Config ", log.String("commonConfig", ConfigtoString(config)),
+		log.String("extraConsumerConfig", ConfigtoString(extraConsumerConfig)),
+		log.String("extraProducerConfig", ConfigtoString(extraProducerConfig)),
 	)
 	return &kafkaClient{basicConfig: config, consumerConfig: extraConsumerConfig, producerConfig: extraProducerConfig}
 }
@@ -151,7 +151,7 @@ func (kc *kafkaClient) getKafkaProducer() (*kafka.Producer, error) {
 		config := kc.newProducerConfig()
 		p, err := kafka.NewProducer(config)
 		if err != nil {
-			mlog.Error(context.TODO(), "create sync kafka producer failed", mlog.Err(err))
+			log.Error(context.TODO(), "create sync kafka producer failed", log.Err(err))
 			return nil, err
 		}
 		go func() {
@@ -162,12 +162,12 @@ func (kc *kafkaClient) getKafkaProducer() (*kafka.Producer, error) {
 					// authentication issues, etc.
 					// After a fatal error has been raised, any subsequent Produce*() calls will fail with
 					// the original error code.
-					mlog.Error(context.TODO(), "kafka error", mlog.String("error msg", ev.Error()))
+					log.Error(context.TODO(), "kafka error", log.String("error msg", ev.Error()))
 					if ev.IsFatal() {
 						panic(ev)
 					}
 				default:
-					mlog.Debug(context.TODO(), "kafka producer event", mlog.Any("event", ev))
+					log.Debug(context.TODO(), "kafka producer event", log.Any("event", ev))
 				}
 			}
 		}()
@@ -258,7 +258,7 @@ func (kc *kafkaClient) StringToMsgID(id string) (common.MessageID, error) {
 func (kc *kafkaClient) specialExtraConfig(current *kafka.ConfigMap, special kafka.ConfigMap) {
 	for k, v := range special {
 		if existingConf, _ := current.Get(k, nil); existingConf != nil {
-			mlog.Warn(context.TODO(), fmt.Sprintf("The existing config :  %v=%v  will be covered by the special kafka config :  %v.", k, v, existingConf))
+			log.Warn(context.TODO(), fmt.Sprintf("The existing config :  %v=%v  will be covered by the special kafka config :  %v.", k, v, existingConf))
 		}
 
 		current.SetKey(k, v)

@@ -27,7 +27,7 @@ import (
 	"github.com/streamnative/pulsarctl/pkg/cli"
 	"github.com/streamnative/pulsarctl/pkg/pulsar/utils"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/mqimpl/rocksmq/server"
@@ -137,9 +137,9 @@ func (f *PmsFactory) NewTtMsgStream(ctx context.Context) (MsgStream, error) {
 func (f *PmsFactory) getAuthentication() (pulsar.Authentication, error) {
 	auth, err := pulsar.NewAuthentication(f.PulsarAuthPlugin, f.PulsarAuthParams)
 	if err != nil {
-		mlog.Error(context.TODO(), "build authencation from config failed, please check it!",
-			mlog.String("authPlugin", f.PulsarAuthPlugin),
-			mlog.Err(err))
+		log.Error(context.TODO(), "build authencation from config failed, please check it!",
+			log.String("authPlugin", f.PulsarAuthPlugin),
+			log.Err(err))
 		return nil, errors.New("build authencation from config failed")
 	}
 	return auth, nil
@@ -159,7 +159,7 @@ func (f *PmsFactory) NewMsgStreamDisposer(ctx context.Context) func([]string, st
 			}
 			topic, err := utils.GetTopicName(fullTopicName)
 			if err != nil {
-				mlog.Warn(context.TODO(), "failed to get topic name", mlog.Err(err))
+				log.Warn(context.TODO(), "failed to get topic name", log.Err(err))
 				return retry.Unrecoverable(err)
 			}
 			err = admin.Subscriptions().Delete(*topic, subname, true)
@@ -171,8 +171,8 @@ func (f *PmsFactory) NewMsgStreamDisposer(ctx context.Context) func([]string, st
 						return nil
 					}
 				}
-				mlog.Warn(context.TODO(), "failed to clean up subscriptions", mlog.String("pulsar web", f.PulsarWebAddress),
-					mlog.String("topic", channel), mlog.String("subname", subname), mlog.Err(err))
+				log.Warn(context.TODO(), "failed to clean up subscriptions", log.String("pulsar web", f.PulsarWebAddress),
+					log.String("topic", channel), log.String("subname", subname), log.Err(err))
 			}
 		}
 		return nil
@@ -227,9 +227,9 @@ func NewKmsFactory(config *paramtable.ServiceParam) Factory {
 // NewRocksmqFactory creates a new message stream factory based on rocksmq.
 func NewRocksmqFactory(path string, cfg *paramtable.ServiceParam) Factory {
 	if err := server.InitRocksMQ(path); err != nil {
-		mlog.Fatal(context.TODO(), "fail to init rocksmq", mlog.Err(err))
+		log.Fatal(context.TODO(), "fail to init rocksmq", log.Err(err))
 	}
-	mlog.Info(context.TODO(), "init rocksmq msgstream success", mlog.String("path", path))
+	log.Info(context.TODO(), "init rocksmq msgstream success", log.String("path", path))
 
 	return &CommonFactory{
 		Newer:             rmq.NewClientWithDefaultOptions,

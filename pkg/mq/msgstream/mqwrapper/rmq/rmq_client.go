@@ -22,7 +22,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/mqimpl/rocksmq/client"
@@ -50,7 +50,7 @@ func NewClientWithDefaultOptions(ctx context.Context) (mqwrapper.Client, error) 
 func NewClient(opts client.Options) (*rmqClient, error) {
 	c, err := client.NewClient(opts)
 	if err != nil {
-		mlog.Error(context.TODO(), "Failed to set rmq client: ", mlog.Err(err))
+		log.Error(context.TODO(), "Failed to set rmq client: ", log.Err(err))
 		return nil, err
 	}
 	return &rmqClient{client: c}, nil
@@ -83,7 +83,7 @@ func (rc *rmqClient) Subscribe(ctx context.Context, options mqwrapper.ConsumerOp
 	if options.BufSize == 0 {
 		metrics.MsgStreamOpCounter.WithLabelValues(metrics.CreateConsumerLabel, metrics.FailLabel).Inc()
 		err := errors.New("subscription bufSize of rmq should never be zero")
-		mlog.Warn(context.TODO(), "unexpected subscription consumer options", mlog.Err(err))
+		log.Warn(context.TODO(), "unexpected subscription consumer options", log.Err(err))
 		return nil, err
 	}
 	receiveChannel := make(chan common.Message, options.BufSize)

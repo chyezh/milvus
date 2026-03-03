@@ -31,7 +31,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -102,7 +102,7 @@ func (s *CoordDownSearch) loadCollection(collectionName string, dim int) {
 		s.NoError(err)
 		s.True(merr.Ok(insertResult.GetStatus()))
 	}
-	mlog.Info(context.TODO(), "=========================Data insertion finished=========================")
+	log.Info(context.TODO(), "=========================Data insertion finished=========================")
 
 	// flush
 	flushResp, err := c.MilvusClient.Flush(context.TODO(), &milvuspb.FlushRequest{
@@ -121,7 +121,7 @@ func (s *CoordDownSearch) loadCollection(collectionName string, dim int) {
 	segments, err := c.ShowSegments(collectionName)
 	s.NoError(err)
 	s.NotEmpty(segments)
-	mlog.Info(context.TODO(), "=========================Data flush finished=========================")
+	log.Info(context.TODO(), "=========================Data flush finished=========================")
 
 	// create index
 	createIndexStatus, err := c.MilvusClient.CreateIndex(context.TODO(), &milvuspb.CreateIndexRequest{
@@ -134,7 +134,7 @@ func (s *CoordDownSearch) loadCollection(collectionName string, dim int) {
 	err = merr.Error(createIndexStatus)
 	s.NoError(err)
 	s.WaitForIndexBuilt(context.TODO(), collectionName, integration.FloatVecField)
-	mlog.Info(context.TODO(), "=========================Index created=========================")
+	log.Info(context.TODO(), "=========================Index created=========================")
 
 	// load
 	loadStatus, err := c.MilvusClient.LoadCollection(context.TODO(), &milvuspb.LoadCollectionRequest{
@@ -145,7 +145,7 @@ func (s *CoordDownSearch) loadCollection(collectionName string, dim int) {
 	err = merr.Error(loadStatus)
 	s.NoError(err)
 	s.WaitForLoad(context.TODO(), collectionName)
-	mlog.Info(context.TODO(), "=========================Collection loaded=========================")
+	log.Info(context.TODO(), "=========================Collection loaded=========================")
 }
 
 func (s *CoordDownSearch) checkCollections() bool {
@@ -171,7 +171,7 @@ func (s *CoordDownSearch) checkCollections() bool {
 			loaded++
 		}
 	}
-	mlog.Info(context.TODO(), fmt.Sprintf("loading status: %d/%d", loaded, len(resp.GetCollectionNames())))
+	log.Info(context.TODO(), fmt.Sprintf("loading status: %d/%d", loaded, len(resp.GetCollectionNames())))
 	return notLoaded == 0
 }
 
@@ -282,8 +282,8 @@ func (s *CoordDownSearch) setupData() {
 	goRoutineNum := maxGoRoutineNum
 
 	collectionBatchSize := numCollections / goRoutineNum
-	mlog.Info(context.TODO(), fmt.Sprintf("=========================test with Dim=%d, rowsPerCollection=%d, numCollections=%d, goRoutineNum=%d==================", Dim, rowsPerCollection, numCollections, goRoutineNum))
-	mlog.Info(context.TODO(), "=========================Start to inject data=========================")
+	log.Info(context.TODO(), fmt.Sprintf("=========================test with Dim=%d, rowsPerCollection=%d, numCollections=%d, goRoutineNum=%d==================", Dim, rowsPerCollection, numCollections, goRoutineNum))
+	log.Info(context.TODO(), "=========================Start to inject data=========================")
 	prefix := "TestCoordSwitch" + funcutil.GenRandomStr()
 	searchName := prefix + "_0"
 	wg := sync.WaitGroup{}
@@ -292,14 +292,14 @@ func (s *CoordDownSearch) setupData() {
 		go s.insertBatchCollections(prefix, collectionBatchSize, idx*collectionBatchSize, Dim, &wg)
 	}
 	wg.Wait()
-	mlog.Info(context.TODO(), "=========================Data injection finished=========================")
+	log.Info(context.TODO(), "=========================Data injection finished=========================")
 	s.checkCollections()
 	s.waitLeaderServiceable()
 	// wait for qc get new distribution
 	time.Sleep(paramtable.Get().QueryCoordCfg.DistPullInterval.GetAsDuration(time.Millisecond) + time.Second)
-	mlog.Info(context.TODO(), fmt.Sprintf("=========================start to search %s=========================", searchName))
+	log.Info(context.TODO(), fmt.Sprintf("=========================start to search %s=========================", searchName))
 	s.search(searchName, Dim, commonpb.ConsistencyLevel_Eventually)
-	mlog.Info(context.TODO(), "=========================Search finished=========================")
+	log.Info(context.TODO(), "=========================Search finished=========================")
 }
 
 func (s *CoordDownSearch) searchAfterCoordDown() float64 {
@@ -309,15 +309,15 @@ func (s *CoordDownSearch) searchAfterCoordDown() float64 {
 
 	// Perform a search first to ensure that the proxy initializes its shard-leader cache.
 	s.search(searchCollectionName, Dim, commonpb.ConsistencyLevel_Bounded)
-	mlog.Info(context.TODO(), "=========================Root Coordinators stopped=========================")
+	log.Info(context.TODO(), "=========================Root Coordinators stopped=========================")
 	c.DefaultMixCoord().Stop()
 	s.search(searchCollectionName, Dim, commonpb.ConsistencyLevel_Bounded)
 	s.search(searchCollectionName, Dim, commonpb.ConsistencyLevel_Eventually)
 	failedStart := time.Now()
 	s.searchFailed(searchCollectionName, Dim, commonpb.ConsistencyLevel_Strong)
-	mlog.Info(context.TODO(), fmt.Sprintf("=========================Failed search cost: %fs=========================", time.Since(failedStart).Seconds()))
+	log.Info(context.TODO(), fmt.Sprintf("=========================Failed search cost: %fs=========================", time.Since(failedStart).Seconds()))
 
-	mlog.Info(context.TODO(), "=========================restart Root Coordinators=========================")
+	log.Info(context.TODO(), "=========================restart Root Coordinators=========================")
 	c.AddMixCoord()
 	s.search(searchCollectionName, Dim, commonpb.ConsistencyLevel_Eventually)
 	s.search(searchCollectionName, Dim, commonpb.ConsistencyLevel_Bounded)
@@ -331,7 +331,7 @@ func (s *CoordDownSearch) TestSearchAfterCoordDown() {
 	s.setupData()
 
 	elapsed := s.searchAfterCoordDown()
-	mlog.Info(context.TODO(), fmt.Sprintf("=========================Search After Coord Down Done in %f seconds=========================", elapsed))
+	log.Info(context.TODO(), fmt.Sprintf("=========================Search After Coord Down Done in %f seconds=========================", elapsed))
 	s.True(elapsed < float64(maxAllowedInitTimeInSeconds))
 }
 

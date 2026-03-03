@@ -31,7 +31,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
@@ -96,11 +96,11 @@ func (s *DBPropertiesSuite) prepareCollection(ctx context.Context, dbName string
 	s.NoError(err)
 	err = merr.Error(createIndexStatus)
 	if err != nil {
-		mlog.Warn(context.TODO(), "createIndexStatus fail reason", mlog.Err(err))
+		log.Warn(context.TODO(), "createIndexStatus fail reason", log.Err(err))
 	}
 
 	s.WaitForIndexBuiltWithDB(timeoutCtx, dbName, collectionName, integration.FloatVecField)
-	mlog.Info(context.TODO(), "Create index done")
+	log.Info(context.TODO(), "Create index done")
 
 	// load
 	loadStatus, err := s.Cluster.MilvusClient.LoadCollection(timeoutCtx, &milvuspb.LoadCollectionRequest{
@@ -110,10 +110,10 @@ func (s *DBPropertiesSuite) prepareCollection(ctx context.Context, dbName string
 	s.NoError(err)
 	err = merr.Error(loadStatus)
 	if err != nil {
-		mlog.Warn(context.TODO(), "LoadCollection fail reason", mlog.Err(err))
+		log.Warn(context.TODO(), "LoadCollection fail reason", log.Err(err))
 	}
 	s.WaitForLoadWithDB(ctx, dbName, collectionName)
-	mlog.Info(context.TODO(), "Load collection done")
+	log.Info(context.TODO(), "Load collection done")
 }
 
 func (s *DBPropertiesSuite) insert(ctx context.Context, dbName string, collectionName string,

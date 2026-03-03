@@ -24,7 +24,7 @@ import (
 
 	"github.com/samber/lo"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 )
@@ -50,7 +50,7 @@ func NewScheduler(manager TaskManager) Scheduler {
 }
 
 func (s *scheduler) Start() {
-	mlog.Info(context.TODO(), "start import scheduler")
+	log.Info(context.TODO(), "start import scheduler")
 
 	var (
 		exeTicker = time.NewTicker(1 * time.Second)
@@ -62,7 +62,7 @@ func (s *scheduler) Start() {
 	for {
 		select {
 		case <-s.closeChan:
-			mlog.Info(context.TODO(), "import scheduler exited")
+			log.Info(context.TODO(), "import scheduler exited")
 			return
 		case <-exeTicker.C:
 			s.scheduleTasks()
@@ -85,7 +85,7 @@ func (s *scheduler) scheduleTasks() {
 	taskIDs := lo.Map(tasks, func(t Task, _ int) int64 {
 		return t.GetTaskID()
 	})
-	mlog.Info(context.TODO(), "processing tasks...", mlog.Int64s("taskIDs", taskIDs))
+	log.Info(context.TODO(), "processing tasks...", log.Int64s("taskIDs", taskIDs))
 
 	futures := make(map[int64][]*conc.Future[any])
 	for _, task := range tasks {
@@ -99,10 +99,10 @@ func (s *scheduler) scheduleTasks() {
 			continue
 		}
 		s.manager.Update(taskID, UpdateState(datapb.ImportTaskStateV2_Completed))
-		mlog.Info(context.TODO(), "preimport/import done", mlog.Int64("taskID", taskID))
+		log.Info(context.TODO(), "preimport/import done", log.Int64("taskID", taskID))
 	}
 
-	mlog.Info(context.TODO(), "all tasks completed", mlog.Int64s("taskIDs", taskIDs))
+	log.Info(context.TODO(), "all tasks completed", log.Int64s("taskIDs", taskIDs))
 }
 
 // Slots returns the used slots for import

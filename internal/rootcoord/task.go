@@ -23,7 +23,7 @@ import (
 
 	"go.uber.org/atomic"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
 )
 
@@ -191,13 +191,13 @@ func NewLockerKeyChain(lockerKeys ...LockerKey) LockerKey {
 		return nil
 	}
 	if lockerKeys[0] == nil || lockerKeys[0].Level() != ClusterLock {
-		mlog.Warn(context.TODO(), "Invalid locker key chain", mlog.Stack("stack"))
+		log.Warn(context.TODO(), "Invalid locker key chain", log.Stack("stack"))
 		return nil
 	}
 
 	for i := 0; i < len(lockerKeys)-1; i++ {
 		if lockerKeys[i] == nil || lockerKeys[i].Level() >= lockerKeys[i+1].Level() {
-			mlog.Warn(context.TODO(), "Invalid locker key chain", mlog.Stack("stack"))
+			log.Warn(context.TODO(), "Invalid locker key chain", log.Stack("stack"))
 			return nil
 		}
 		lockerKeys[i].(*taskLockerKey).next = lockerKeys[i+1]

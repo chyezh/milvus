@@ -29,7 +29,7 @@ import (
 
 	"github.com/milvus-io/milvus/pkg/v2/kv"
 	"github.com/milvus-io/milvus/pkg/v2/kv/predicates"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/timerecord"
@@ -69,7 +69,7 @@ func NewEtcdKV(client *clientv3.Client, rootPath string, options ...Option) *etc
 
 // Close closes the connection to etcd.
 func (kv *etcdKV) Close() {
-	mlog.Debug(context.TODO(), "etcd kv closed", mlog.String("path", kv.rootPath))
+	log.Debug(context.TODO(), "etcd kv closed", log.String("path", kv.rootPath))
 }
 
 // GetPath returns the path of the key.
@@ -113,7 +113,7 @@ func (kv *etcdKV) WalkWithPrefix(ctx context.Context, prefix string, paginationS
 		cancel()
 	}
 
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation(WalkWithPagination)", mlog.String("prefix", prefix))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation(WalkWithPagination)", log.String("prefix", prefix))
 	return nil
 }
 
@@ -134,7 +134,7 @@ func (kv *etcdKV) LoadWithPrefix(ctx context.Context, key string) ([]string, []s
 		keys = append(keys, string(kv.Key))
 		values = append(values, string(kv.Value))
 	}
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation load with prefix", mlog.Strings("keys", keys))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation load with prefix", log.Strings("keys", keys))
 	return keys, values, nil
 }
 
@@ -149,7 +149,7 @@ func (kv *etcdKV) Has(ctx context.Context, key string) (bool, error) {
 		return false, err
 	}
 
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation has", mlog.String("key", key))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation has", log.String("key", key))
 	return resp.Count != 0, nil
 }
 
@@ -164,7 +164,7 @@ func (kv *etcdKV) HasPrefix(ctx context.Context, prefix string) (bool, error) {
 		return false, err
 	}
 
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation has", mlog.String("prefix", prefix))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation has", log.String("prefix", prefix))
 	return resp.Count != 0, nil
 }
 
@@ -185,7 +185,7 @@ func (kv *etcdKV) LoadBytesWithPrefix(ctx context.Context, key string) ([]string
 		keys = append(keys, string(kv.Key))
 		values = append(values, kv.Value)
 	}
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation load with prefix", mlog.Strings("keys", keys))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation load with prefix", log.Strings("keys", keys))
 	return keys, values, nil
 }
 
@@ -208,7 +208,7 @@ func (kv *etcdKV) LoadBytesWithPrefix2(ctx context.Context, key string) ([]strin
 		values = append(values, kv.Value)
 		versions = append(versions, kv.Version)
 	}
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation load with prefix2", mlog.Strings("keys", keys))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation load with prefix2", log.Strings("keys", keys))
 	return keys, values, versions, nil
 }
 
@@ -225,7 +225,7 @@ func (kv *etcdKV) Load(ctx context.Context, key string) (string, error) {
 	if resp.Count <= 0 {
 		return "", merr.WrapErrIoKeyNotFound(key)
 	}
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation load", mlog.String("key", key))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation load", log.String("key", key))
 	return string(resp.Kvs[0].Value), nil
 }
 
@@ -242,7 +242,7 @@ func (kv *etcdKV) LoadBytes(ctx context.Context, key string) ([]byte, error) {
 	if resp.Count <= 0 {
 		return nil, merr.WrapErrIoKeyNotFound(key)
 	}
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation load", mlog.String("key", key))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation load", log.String("key", key))
 	return resp.Kvs[0].Value, nil
 }
 
@@ -273,11 +273,11 @@ func (kv *etcdKV) MultiLoad(ctx context.Context, keys []string) ([]string, error
 		}
 	}
 	if len(invalid) != 0 {
-		mlog.Warn(ctx, "MultiLoad: there are invalid keys", mlog.Strings("keys", invalid))
+		log.Warn(ctx, "MultiLoad: there are invalid keys", log.Strings("keys", invalid))
 		err = fmt.Errorf("there are invalid keys: %s", invalid)
 		return result, err
 	}
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi load", mlog.Any("keys", keys))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi load", log.Any("keys", keys))
 	return result, nil
 }
 
@@ -308,11 +308,11 @@ func (kv *etcdKV) MultiLoadBytes(ctx context.Context, keys []string) ([][]byte, 
 		}
 	}
 	if len(invalid) != 0 {
-		mlog.Warn(ctx, "MultiLoad: there are invalid keys", mlog.Strings("keys", invalid))
+		log.Warn(ctx, "MultiLoad: there are invalid keys", log.Strings("keys", invalid))
 		err = fmt.Errorf("there are invalid keys: %s", invalid)
 		return result, err
 	}
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi load", mlog.Strings("keys", keys))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi load", log.Strings("keys", keys))
 	return result, nil
 }
 
@@ -333,7 +333,7 @@ func (kv *etcdKV) LoadBytesWithRevision(ctx context.Context, key string) ([]stri
 		keys = append(keys, string(kv.Key))
 		values = append(values, kv.Value)
 	}
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation load with revision", mlog.Strings("keys", keys))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation load with revision", log.Strings("keys", keys))
 	return keys, values, resp.Header.Revision, nil
 }
 
@@ -345,7 +345,7 @@ func (kv *etcdKV) Save(ctx context.Context, key, value string) error {
 	defer cancel()
 	CheckValueSizeAndWarn(ctx, key, value)
 	_, err := kv.putEtcdMeta(ctx1, key, value)
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation save", mlog.String("key", key))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation save", log.String("key", key))
 	return err
 }
 
@@ -357,7 +357,7 @@ func (kv *etcdKV) SaveBytes(ctx context.Context, key string, value []byte) error
 	defer cancel()
 	CheckValueSizeAndWarn(ctx, key, value)
 	_, err := kv.putEtcdMeta(ctx1, key, string(value))
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation save", mlog.String("key", key))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation save", log.String("key", key))
 	return err
 }
 
@@ -369,7 +369,7 @@ func (kv *etcdKV) SaveBytesWithLease(ctx context.Context, key string, value []by
 	defer cancel()
 	CheckValueSizeAndWarn(ctx, key, value)
 	_, err := kv.putEtcdMeta(ctx1, key, string(value), clientv3.WithLease(id))
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation save with lease", mlog.String("key", key))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation save with lease", log.String("key", key))
 	return err
 }
 
@@ -389,9 +389,9 @@ func (kv *etcdKV) MultiSave(ctx context.Context, kvs map[string]string) error {
 	CheckTnxStringValueSizeAndWarn(ctx, kvs)
 	_, err := kv.executeTxn(kv.getTxnWithCmp(ctx1), ops...)
 	if err != nil {
-		mlog.Warn(ctx, "Etcd MultiSave error", mlog.Any("kvs", kvs), mlog.Int("len", len(kvs)), mlog.Err(err))
+		log.Warn(ctx, "Etcd MultiSave error", log.Any("kvs", kvs), log.Int("len", len(kvs)), log.Err(err))
 	}
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi save", mlog.Strings("keys", keys))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi save", log.Strings("keys", keys))
 	return err
 }
 
@@ -411,9 +411,9 @@ func (kv *etcdKV) MultiSaveBytes(ctx context.Context, kvs map[string][]byte) err
 	CheckTnxBytesValueSizeAndWarn(ctx, kvs)
 	_, err := kv.executeTxn(kv.getTxnWithCmp(ctx1), ops...)
 	if err != nil {
-		mlog.Warn(ctx, "Etcd MultiSaveBytes err", mlog.Any("kvs", kvs), mlog.Int("len", len(kvs)), mlog.Err(err))
+		log.Warn(ctx, "Etcd MultiSaveBytes err", log.Any("kvs", kvs), log.Int("len", len(kvs)), log.Err(err))
 	}
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi save", mlog.Strings("keys", keys))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi save", log.Strings("keys", keys))
 	return err
 }
 
@@ -425,7 +425,7 @@ func (kv *etcdKV) RemoveWithPrefix(ctx context.Context, prefix string) error {
 	defer cancel()
 
 	_, err := kv.removeEtcdMeta(ctx1, key, clientv3.WithPrefix())
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation remove with prefix", mlog.String("prefix", prefix))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation remove with prefix", log.String("prefix", prefix))
 	return err
 }
 
@@ -437,7 +437,7 @@ func (kv *etcdKV) Remove(ctx context.Context, key string) error {
 	defer cancel()
 
 	_, err := kv.removeEtcdMeta(ctx1, key)
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation remove", mlog.String("key", key))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation remove", log.String("key", key))
 	return err
 }
 
@@ -454,9 +454,9 @@ func (kv *etcdKV) MultiRemove(ctx context.Context, keys []string) error {
 
 	_, err := kv.executeTxn(kv.getTxnWithCmp(ctx1), ops...)
 	if err != nil {
-		mlog.Warn(ctx, "Etcd MultiRemove error", mlog.Strings("keys", keys), mlog.Int("len", len(keys)), mlog.Err(err))
+		log.Warn(ctx, "Etcd MultiRemove error", log.Strings("keys", keys), log.Int("len", len(keys)), log.Err(err))
 	}
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi remove", mlog.Strings("keys", keys))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi remove", log.Strings("keys", keys))
 	return err
 }
 
@@ -488,17 +488,17 @@ func (kv *etcdKV) MultiSaveAndRemove(ctx context.Context, saves map[string]strin
 
 	resp, err := kv.executeTxn(kv.getTxnWithCmp(ctx1, cmps...), ops...)
 	if err != nil {
-		mlog.Warn(ctx, "Etcd MultiSaveAndRemove error",
-			mlog.Any("saves", saves),
-			mlog.Strings("removes", removals),
-			mlog.Int("saveLength", len(saves)),
-			mlog.Int("removeLength", len(removals)),
-			mlog.Err(err))
+		log.Warn(ctx, "Etcd MultiSaveAndRemove error",
+			log.Any("saves", saves),
+			log.Strings("removes", removals),
+			log.Int("saveLength", len(saves)),
+			log.Int("removeLength", len(removals)),
+			log.Err(err))
 		return err
 	}
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi save and remove", mlog.Strings("keys", keys))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi save and remove", log.Strings("keys", keys))
 	if !resp.Succeeded {
-		mlog.Warn(context.TODO(), "failed to executeTxn", mlog.Any("resp", resp))
+		log.Warn(context.TODO(), "failed to executeTxn", log.Any("resp", resp))
 		return merr.WrapErrIoFailedReason("failed to execute transaction")
 	}
 	return nil
@@ -523,14 +523,14 @@ func (kv *etcdKV) MultiSaveBytesAndRemove(ctx context.Context, saves map[string]
 
 	_, err := kv.executeTxn(kv.getTxnWithCmp(ctx1), ops...)
 	if err != nil {
-		mlog.Warn(ctx, "Etcd MultiSaveBytesAndRemove error",
-			mlog.Any("saves", saves),
-			mlog.Strings("removes", removals),
-			mlog.Int("saveLength", len(saves)),
-			mlog.Int("removeLength", len(removals)),
-			mlog.Err(err))
+		log.Warn(ctx, "Etcd MultiSaveBytesAndRemove error",
+			log.Any("saves", saves),
+			log.Strings("removes", removals),
+			log.Int("saveLength", len(saves)),
+			log.Int("removeLength", len(removals)),
+			log.Err(err))
 	}
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi save and remove", mlog.Strings("keys", keys))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi save and remove", log.Strings("keys", keys))
 	return err
 }
 
@@ -539,7 +539,7 @@ func (kv *etcdKV) Watch(ctx context.Context, key string) clientv3.WatchChan {
 	start := time.Now()
 	key = path.Join(kv.rootPath, key)
 	rch := kv.client.Watch(context.Background(), key, clientv3.WithCreatedNotify())
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation watch", mlog.String("key", key))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation watch", log.String("key", key))
 	return rch
 }
 
@@ -548,7 +548,7 @@ func (kv *etcdKV) WatchWithPrefix(ctx context.Context, key string) clientv3.Watc
 	start := time.Now()
 	key = path.Join(kv.rootPath, key)
 	rch := kv.client.Watch(context.Background(), key, clientv3.WithPrefix(), clientv3.WithCreatedNotify())
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation watch with prefix", mlog.String("key", key))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation watch with prefix", log.String("key", key))
 	return rch
 }
 
@@ -557,7 +557,7 @@ func (kv *etcdKV) WatchWithRevision(ctx context.Context, key string, revision in
 	start := time.Now()
 	key = path.Join(kv.rootPath, key)
 	rch := kv.client.Watch(context.Background(), key, clientv3.WithPrefix(), clientv3.WithPrevKV(), clientv3.WithRev(revision))
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation watch with revision", mlog.String("key", key))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation watch with revision", log.String("key", key))
 	return rch
 }
 
@@ -585,15 +585,15 @@ func (kv *etcdKV) MultiSaveAndRemoveWithPrefix(ctx context.Context, saves map[st
 
 	resp, err := kv.executeTxn(kv.getTxnWithCmp(ctx1, cmps...), ops...)
 	if err != nil {
-		mlog.Warn(ctx, "Etcd MultiSaveAndRemoveWithPrefix error",
-			mlog.Any("saves", saves),
-			mlog.Strings("removes", removals),
-			mlog.Int("saveLength", len(saves)),
-			mlog.Int("removeLength", len(removals)),
-			mlog.Err(err))
+		log.Warn(ctx, "Etcd MultiSaveAndRemoveWithPrefix error",
+			log.Any("saves", saves),
+			log.Strings("removes", removals),
+			log.Int("saveLength", len(saves)),
+			log.Int("removeLength", len(removals)),
+			log.Err(err))
 		return err
 	}
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi save and move with prefix", mlog.Strings("keys", keys))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi save and move with prefix", log.Strings("keys", keys))
 	if !resp.Succeeded {
 		return merr.WrapErrIoFailedReason("failed to execute transaction")
 	}
@@ -619,14 +619,14 @@ func (kv *etcdKV) MultiSaveBytesAndRemoveWithPrefix(ctx context.Context, saves m
 
 	_, err := kv.executeTxn(kv.getTxnWithCmp(ctx1), ops...)
 	if err != nil {
-		mlog.Warn(ctx, "Etcd MultiSaveBytesAndRemoveWithPrefix error",
-			mlog.Any("saves", saves),
-			mlog.Strings("removes", removals),
-			mlog.Int("saveLength", len(saves)),
-			mlog.Int("removeLength", len(removals)),
-			mlog.Err(err))
+		log.Warn(ctx, "Etcd MultiSaveBytesAndRemoveWithPrefix error",
+			log.Any("saves", saves),
+			log.Strings("removes", removals),
+			log.Int("saveLength", len(saves)),
+			log.Int("removeLength", len(removals)),
+			log.Err(err))
 	}
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi save and move with prefix", mlog.Strings("keys", keys))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation multi save and move with prefix", log.Strings("keys", keys))
 	return err
 }
 
@@ -642,7 +642,7 @@ func (kv *etcdKV) CompareVersionAndSwap(ctx context.Context, key string, source 
 	if err != nil {
 		return false, err
 	}
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation compare version and swap", mlog.String("key", key))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation compare version and swap", log.String("key", key))
 	return resp.Succeeded, nil
 }
 
@@ -658,7 +658,7 @@ func (kv *etcdKV) CompareVersionAndSwapBytes(ctx context.Context, key string, so
 	if err != nil {
 		return false, err
 	}
-	CheckElapseAndWarn(ctx, start, "Slow etcd operation compare version and swap", mlog.String("key", key))
+	CheckElapseAndWarn(ctx, start, "Slow etcd operation compare version and swap", log.String("key", key))
 	return resp.Succeeded, nil
 }
 
@@ -666,7 +666,7 @@ func (kv *etcdKV) CompareVersionAndSwapBytes(ctx context.Context, key string, so
 func CheckElapseAndWarn(ctx context.Context, start time.Time, message string, fields ...zap.Field) bool {
 	elapsed := time.Since(start)
 	if elapsed.Milliseconds() > 2000 {
-		mlog.Warn(ctx, message, append([]zap.Field{mlog.String("time spent", elapsed.String())}, fields...)...)
+		log.Warn(ctx, message, append([]zap.Field{log.String("time spent", elapsed.String())}, fields...)...)
 		return true
 	}
 	return false
@@ -675,7 +675,7 @@ func CheckElapseAndWarn(ctx context.Context, start time.Time, message string, fi
 func CheckValueSizeAndWarn(ctx context.Context, key string, value interface{}) bool {
 	size := binary.Size(value)
 	if size > 102400 {
-		mlog.Warn(ctx, "value size large than 100kb", mlog.String("key", key), mlog.Int("value_size(kb)", size/1024))
+		log.Warn(ctx, "value size large than 100kb", log.String("key", key), log.Int("value_size(kb)", size/1024))
 		return true
 	}
 	return false

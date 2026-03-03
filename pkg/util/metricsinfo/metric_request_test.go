@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/tidwall/gjson"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
@@ -76,8 +76,8 @@ func Test_ConstructRequestByMetricType(t *testing.T) {
 		got, err := ConstructRequestByMetricType(test.metricType)
 		assert.Equal(t, test.errIsNil, err == nil)
 		if test.errIsNil {
-			mlog.Info(context.TODO(), "TestConstructRequestByMetricType",
-				mlog.String("request", got.Request))
+			log.Info(context.TODO(), "TestConstructRequestByMetricType",
+				log.String("request", got.Request))
 		}
 	}
 }

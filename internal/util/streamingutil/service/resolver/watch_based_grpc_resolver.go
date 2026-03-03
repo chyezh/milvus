@@ -4,7 +4,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"google.golang.org/grpc/resolver"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
@@ -23,7 +23,7 @@ type watchBasedGRPCResolver struct {
 	lifetime *typeutil.Lifetime
 
 	cc resolver.ClientConn
-	mlog.Binder
+	log.Binder
 }
 
 // ResolveNow will be called by gRPC to try to resolve the target name
@@ -50,10 +50,10 @@ func (r *watchBasedGRPCResolver) Update(state VersionedState) error {
 
 	if err := r.cc.UpdateState(state.State); err != nil {
 		// watch based resolver could ignore the error, just log and return nil
-		r.Logger().Warn(nil, "fail to update resolver state", mlog.Stringer("state", state), mlog.Err(err))
+		r.Logger().Warn(nil, "fail to update resolver state", log.Stringer("state", state), log.Err(err))
 		return nil
 	}
-	r.Logger().Info(nil, "update resolver state success", mlog.Stringer("state", state))
+	r.Logger().Info(nil, "update resolver state success", log.Stringer("state", state))
 	return nil
 }
 

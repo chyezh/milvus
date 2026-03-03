@@ -33,7 +33,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/eventlog"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -129,7 +129,7 @@ func (m *CollectionManager) Recover(ctx context.Context, broker Broker) error {
 	if err != nil {
 		return err
 	}
-	mlog.Info(ctx, "recover collections from kv store", mlog.Duration("dur", time.Since(start)))
+	log.Info(ctx, "recover collections from kv store", log.Duration("dur", time.Since(start)))
 
 	start = time.Now()
 	partitions, err := m.catalog.GetPartitions(ctx, lo.Map(collections, func(collection *querypb.CollectionLoadInfo, _ int) int64 {
@@ -139,14 +139,14 @@ func (m *CollectionManager) Recover(ctx context.Context, broker Broker) error {
 		return err
 	}
 
-	ctx = mlog.WithFields(ctx, mlog.FieldTraceID(strconv.FormatInt(time.Now().UnixNano(), 10)))
-	mlog.Info(ctx, "recover partitions from kv store", mlog.Duration("dur", time.Since(start)))
+	ctx = log.WithFields(ctx, log.FieldTraceID(strconv.FormatInt(time.Now().UnixNano(), 10)))
+	log.Info(ctx, "recover partitions from kv store", log.Duration("dur", time.Since(start)))
 
 	for _, collection := range collections {
 		if collection.GetReplicaNumber() <= 0 {
-			mlog.Info(ctx, "skip recovery and release collection due to invalid replica number",
-				mlog.Int64("collectionID", collection.GetCollectionID()),
-				mlog.Int32("replicaNumber", collection.GetReplicaNumber()))
+			log.Info(ctx, "skip recovery and release collection due to invalid replica number",
+				log.Int64("collectionID", collection.GetCollectionID()),
+				log.Int32("replicaNumber", collection.GetReplicaNumber()))
 			m.catalog.ReleaseCollection(ctx, collection.GetCollectionID())
 			continue
 		}
@@ -154,9 +154,9 @@ func (m *CollectionManager) Recover(ctx context.Context, broker Broker) error {
 		if collection.GetStatus() != querypb.LoadStatus_Loaded {
 			if collection.RecoverTimes >= paramtable.Get().QueryCoordCfg.CollectionRecoverTimesLimit.GetAsInt32() {
 				m.catalog.ReleaseCollection(ctx, collection.CollectionID)
-				mlog.Info(ctx, "recover loading collection times reach limit, release collection",
-					mlog.Int64("collectionID", collection.CollectionID),
-					mlog.Int32("recoverTimes", collection.RecoverTimes))
+				log.Info(ctx, "recover loading collection times reach limit, release collection",
+					log.Int64("collectionID", collection.CollectionID),
+					log.Int32("recoverTimes", collection.RecoverTimes))
 				break
 			}
 			// update recoverTimes meta in etcd
@@ -168,9 +168,9 @@ func (m *CollectionManager) Recover(ctx context.Context, broker Broker) error {
 		err := m.upgradeLoadFields(ctx, collection, broker)
 		if err != nil {
 			if errors.Is(err, merr.ErrCollectionNotFound) {
-				mlog.Warn(context.TODO(), "collection not found, skip upgrade logic and wait for release")
+				log.Warn(context.TODO(), "collection not found, skip upgrade logic and wait for release")
 			} else {
-				mlog.Warn(context.TODO(), "upgrade load field failed", mlog.Err(err))
+				log.Warn(context.TODO(), "upgrade load field failed", log.Err(err))
 				return err
 			}
 		}
@@ -188,9 +188,9 @@ func (m *CollectionManager) Recover(ctx context.Context, broker Broker) error {
 			if partition.GetStatus() != querypb.LoadStatus_Loaded {
 				if partition.RecoverTimes >= paramtable.Get().QueryCoordCfg.CollectionRecoverTimesLimit.GetAsInt32() {
 					m.catalog.ReleaseCollection(ctx, collection)
-					mlog.Info(ctx, "recover loading partition times reach limit, release collection",
-						mlog.Int64("collectionID", collection),
-						mlog.Int32("recoverTimes", partition.RecoverTimes))
+					log.Info(ctx, "recover loading partition times reach limit, release collection",
+						log.Int64("collectionID", collection),
+						log.Int32("recoverTimes", partition.RecoverTimes))
 					break
 				}
 

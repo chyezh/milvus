@@ -11,7 +11,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/internal/metastore/kv/binlog"
 	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
@@ -36,7 +36,7 @@ func (dc *dataCoordBroker) AssignSegmentID(ctx context.Context, reqs ...*datapb.
 	resp, err := dc.client.AssignSegmentID(ctx, req)
 
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(context.TODO(), "failed to call datacoord AssignSegmentID", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to call datacoord AssignSegmentID", log.Err(err))
 		return nil, err
 	}
 
@@ -57,7 +57,7 @@ func (dc *dataCoordBroker) ReportTimeTick(ctx context.Context, msgs []*msgpb.Dat
 
 	resp, err := dc.client.ReportDataNodeTtMsgs(ctx, req)
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(context.TODO(), "failed to report datanodeTtMsgs", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to report datanodeTtMsgs", log.Err(err))
 		return err
 	}
 	return nil
@@ -77,13 +77,13 @@ func (dc *dataCoordBroker) GetSegmentInfo(ctx context.Context, ids []int64) ([]*
 			IncludeUnHealthy: true,
 		})
 		if err := merr.CheckRPCCall(infoResp, err); err != nil {
-			mlog.Warn(context.TODO(), "Fail to get SegmentInfo by ids from datacoord", mlog.Int64s("segments", ids), mlog.Err(err))
+			log.Warn(context.TODO(), "Fail to get SegmentInfo by ids from datacoord", log.Int64s("segments", ids), log.Err(err))
 			return nil, err
 		}
 
 		err = binlog.DecompressMultiBinLogs(infoResp.GetInfos())
 		if err != nil {
-			mlog.Warn(context.TODO(), "Fail to DecompressMultiBinLogs", mlog.Int64s("segments", ids), mlog.Err(err))
+			log.Warn(context.TODO(), "Fail to DecompressMultiBinLogs", log.Int64s("segments", ids), log.Err(err))
 			return nil, err
 		}
 		return infoResp, nil
@@ -97,7 +97,7 @@ func (dc *dataCoordBroker) GetSegmentInfo(ctx context.Context, ids []int64) ([]*
 
 		resp, err := getSegmentInfo(ids[startIdx:endIdx])
 		if err != nil {
-			mlog.Warn(context.TODO(), "Fail to get SegmentInfo", mlog.Int("total segment num", len(ids)), mlog.Int("returned num", startIdx))
+			log.Warn(context.TODO(), "Fail to get SegmentInfo", log.Int("total segment num", len(ids)), log.Int("returned num", startIdx))
 			return nil, err
 		}
 		ret = append(ret, resp.GetInfos()...)
@@ -123,8 +123,8 @@ func (dc *dataCoordBroker) UpdateChannelCheckpoint(ctx context.Context, channelC
 		channelTimes := lo.Map(channelCPs, func(pos *msgpb.MsgPosition, _ int) time.Time {
 			return tsoutil.PhysicalTime(pos.GetTimestamp())
 		})
-		mlog.Warn(context.TODO(), "failed to update channel checkpoint", mlog.Strings("channelNames", channels),
-			mlog.Times("channelCheckpointTimes", channelTimes), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to update channel checkpoint", log.Strings("channelNames", channels),
+			log.Times("channelCheckpointTimes", channelTimes), log.Err(err))
 		return err
 	}
 	return nil
@@ -134,7 +134,7 @@ func (dc *dataCoordBroker) SaveBinlogPaths(ctx context.Context, req *datapb.Save
 
 	resp, err := dc.client.SaveBinlogPaths(ctx, req)
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(context.TODO(), "failed to SaveBinlogPaths", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to SaveBinlogPaths", log.Err(err))
 		return err
 	}
 
@@ -145,7 +145,7 @@ func (dc *dataCoordBroker) DropVirtualChannel(ctx context.Context, req *datapb.D
 
 	resp, err := dc.client.DropVirtualChannel(ctx, req)
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(context.TODO(), "failed to DropVirtualChannel", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to DropVirtualChannel", log.Err(err))
 		return resp, err
 	}
 
@@ -155,7 +155,7 @@ func (dc *dataCoordBroker) DropVirtualChannel(ctx context.Context, req *datapb.D
 func (dc *dataCoordBroker) ImportV2(ctx context.Context, in *internalpb.ImportRequestInternal) (*internalpb.ImportResponse, error) {
 	resp, err := dc.client.ImportV2(ctx, in)
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(ctx, "failed to ImportV2", mlog.Err(err))
+		log.Warn(ctx, "failed to ImportV2", log.Err(err))
 		return resp, err
 	}
 

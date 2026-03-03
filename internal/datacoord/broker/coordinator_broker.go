@@ -25,7 +25,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -83,7 +83,7 @@ func (b *coordinatorBroker) DescribeCollectionInternal(ctx context.Context, coll
 		CollectionID: collectionID,
 	})
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(context.TODO(), "DescribeCollectionInternal failed", mlog.Err(err))
+		log.Warn(context.TODO(), "DescribeCollectionInternal failed", log.Err(err))
 		return nil, err
 	}
 
@@ -103,7 +103,7 @@ func (b *coordinatorBroker) DescribeCollectionByName(ctx context.Context, dbName
 		CollectionName: collectionName,
 	})
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(context.TODO(), "DescribeCollectionByName failed", mlog.Err(err))
+		log.Warn(context.TODO(), "DescribeCollectionByName failed", log.Err(err))
 		return nil, err
 	}
 
@@ -132,9 +132,9 @@ func (b *coordinatorBroker) ShowPartitions(ctx context.Context, collectionID int
 		CollectionID: collectionID,
 	})
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(context.TODO(), "ShowPartitionsInternal failed",
-			mlog.Int64("collectionID", collectionID),
-			mlog.Err(err))
+		log.Warn(context.TODO(), "ShowPartitionsInternal failed",
+			log.Int64("collectionID", collectionID),
+			log.Err(err))
 		return nil, err
 	}
 
@@ -152,9 +152,9 @@ func (b *coordinatorBroker) ShowCollections(ctx context.Context, dbName string) 
 	})
 
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(context.TODO(), "ShowCollections failed",
-			mlog.String("dbName", dbName),
-			mlog.Err(err))
+		log.Warn(context.TODO(), "ShowCollections failed",
+			log.String("dbName", dbName),
+			log.Err(err))
 		return nil, err
 	}
 
@@ -173,7 +173,7 @@ func (b *coordinatorBroker) ShowCollectionIDs(ctx context.Context, dbNames ...st
 	})
 
 	if err = merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(ctx, "ShowCollectionIDs failed", mlog.Err(err))
+		log.Warn(ctx, "ShowCollectionIDs failed", log.Err(err))
 		return nil, err
 	}
 
@@ -187,7 +187,7 @@ func (b *coordinatorBroker) ListDatabases(ctx context.Context) (*milvuspb.ListDa
 		Base: commonpbutil.NewMsgBase(commonpbutil.WithMsgType(commonpb.MsgType_ListDatabases)),
 	})
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(context.TODO(), "failed to ListDatabases", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to ListDatabases", log.Err(err))
 		return nil, err
 	}
 	return resp, nil
@@ -230,11 +230,11 @@ func (b *coordinatorBroker) CreateCollection(ctx context.Context, req *milvuspb.
 
 	resp, err := b.mixCoord.CreateCollection(ctx, req)
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(context.TODO(), "CreateCollection failed", mlog.Err(err))
+		log.Warn(context.TODO(), "CreateCollection failed", log.Err(err))
 		return err
 	}
 
-	mlog.Info(context.TODO(), "CreateCollection succeeded")
+	log.Info(context.TODO(), "CreateCollection succeeded")
 	return nil
 }
 
@@ -253,11 +253,11 @@ func (b *coordinatorBroker) CreatePartition(ctx context.Context, req *milvuspb.C
 
 	resp, err := b.mixCoord.CreatePartition(ctx, req)
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(context.TODO(), "CreatePartition failed", mlog.Err(err))
+		log.Warn(context.TODO(), "CreatePartition failed", log.Err(err))
 		return err
 	}
 
-	mlog.Info(context.TODO(), "CreatePartition succeeded")
+	log.Info(context.TODO(), "CreatePartition succeeded")
 	return nil
 }
 
@@ -276,11 +276,11 @@ func (b *coordinatorBroker) DropCollection(ctx context.Context, dbName, collecti
 		CollectionName: collectionName,
 	})
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(context.TODO(), "DropCollection failed", mlog.Err(err))
+		log.Warn(context.TODO(), "DropCollection failed", log.Err(err))
 		return err
 	}
 
-	mlog.Info(context.TODO(), "DropCollection succeeded")
+	log.Info(context.TODO(), "DropCollection succeeded")
 	return nil
 }
 
@@ -298,7 +298,7 @@ func (b *coordinatorBroker) DescribeDatabase(ctx context.Context, dbName string)
 		DbName: dbName,
 	})
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		mlog.Warn(context.TODO(), "DescribeDatabase failed", mlog.Err(err))
+		log.Warn(context.TODO(), "DescribeDatabase failed", log.Err(err))
 		return nil, err
 	}
 

@@ -22,7 +22,7 @@ import (
 
 	"github.com/minio/minio-go/v7"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/objectstorage"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -58,7 +58,7 @@ func (minioObjectStorage *MinioObjectStorage) GetObject(ctx context.Context, buc
 	if offset > 0 {
 		err := opts.SetRange(offset, offset+size-1)
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to set range", mlog.String("bucket", bucketName), mlog.String("path", objectName), mlog.Err(err))
+			log.Warn(context.TODO(), "failed to set range", log.String("bucket", bucketName), log.String("path", objectName), log.Err(err))
 			return nil, checkObjectStorageError(objectName, err)
 		}
 	}

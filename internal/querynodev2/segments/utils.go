@@ -28,7 +28,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/indexparamcheck"
 	"github.com/milvus-io/milvus/internal/util/vecindexmgr"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
@@ -127,7 +127,7 @@ func getPKsFromRowBasedInsertMsg(msg *msgstream.InsertMsg, schema *schemapb.Coll
 		}
 	}
 
-	mlog.Info(context.TODO(), strconv.FormatInt(int64(offset), 10))
+	log.Info(context.TODO(), strconv.FormatInt(int64(offset), 10))
 	blobReaders := make([]io.Reader, len(msg.RowData))
 	for i, blob := range msg.RowData {
 		blobReaders[i] = bytes.NewReader(blob.GetValue()[offset : offset+8])
@@ -138,7 +138,7 @@ func getPKsFromRowBasedInsertMsg(msg *msgstream.InsertMsg, schema *schemapb.Coll
 		var int64PkValue int64
 		err := binary.Read(reader, common.Endian, &int64PkValue)
 		if err != nil {
-			mlog.Warn(context.TODO(), "binary read blob value failed", mlog.Err(err))
+			log.Warn(context.TODO(), "binary read blob value failed", log.Err(err))
 			return nil, err
 		}
 		pks[i] = storage.NewInt64PrimaryKey(int64PkValue)

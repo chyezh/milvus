@@ -23,7 +23,7 @@ import (
 	"sync"
 
 	"github.com/milvus-io/milvus/internal/cdc/meta"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -53,7 +53,7 @@ func (r *replicateManager) CreateReplicator(channel *meta.ReplicateChannel) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	logger := mlog.With(mlog.String("key", channel.Key), mlog.Int64("modRevision", channel.ModRevision))
+	logger := log.With(log.String("key", channel.Key), log.Int64("modRevision", channel.ModRevision))
 	repKey := buildReplicatorKey(channel.Key, channel.ModRevision)
 	currentClusterID := paramtable.Get().CommonCfg.ClusterPrefix.GetValue()
 	if !strings.Contains(channel.Value.GetSourceChannelName(), currentClusterID) {
@@ -78,7 +78,7 @@ func (r *replicateManager) RemoveReplicator(key string, modRevision int64) {
 }
 
 func (r *replicateManager) removeReplicatorInternal(key string, modRevision int64) {
-	logger := mlog.With(mlog.String("key", key), mlog.Int64("modRevision", modRevision))
+	logger := log.With(log.String("key", key), log.Int64("modRevision", modRevision))
 	repKey := buildReplicatorKey(key, modRevision)
 	replicator, ok := r.replicators[repKey]
 	if !ok {

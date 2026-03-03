@@ -25,7 +25,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/internal/tso"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/lock"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -141,7 +141,7 @@ func (s *scheduler) syncTsLoop() {
 func (s *scheduler) updateLatestTsoAsMinDdlTs() {
 	t := newBaseTask(context.Background(), nil)
 	if err := s.AddTask(&t); err != nil {
-		mlog.Warn(context.TODO(), "failed to update latest ddl ts", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to update latest ddl ts", log.Err(err))
 	}
 }
 

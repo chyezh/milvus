@@ -16,7 +16,7 @@ import (
 	"sync"
 
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 )
 
@@ -145,7 +145,7 @@ func (c *consumer) Close() {
 	// TODO should panic?
 	err := c.client.server.DestroyConsumerGroup(c.topic, c.consumerName)
 	if err != nil {
-		mlog.Warn(context.TODO(), "Consumer close failed", mlog.String("topicName", c.topic), mlog.String("groupName", c.consumerName), mlog.Err(err))
+		log.Warn(context.TODO(), "Consumer close failed", log.String("topicName", c.topic), log.String("groupName", c.consumerName), log.Err(err))
 		// TODO: current rocksmq does't promise the msgmutex will be closed in some unittest,
 		// make the consuming goroutine leak.
 		// Here add a dirty way to close it.

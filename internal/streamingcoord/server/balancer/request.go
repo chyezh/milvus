@@ -4,7 +4,7 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -46,7 +46,7 @@ func newOpUpdateBalancePolicy(ctx context.Context, req *types.UpdateWALBalancePo
 			}
 			// apply the freeze streaming nodes.
 			if len(req.GetNodes().GetFreezeNodeIds()) > 0 || len(req.GetNodes().GetDefreezeNodeIds()) > 0 {
-				impl.Logger().Info(nil, "update freeze nodes", mlog.Int64s("freezeNodeIDs", req.GetNodes().GetFreezeNodeIds()), mlog.Int64s("defreezeNodeIDs", req.GetNodes().GetDefreezeNodeIds()))
+				impl.Logger().Info(nil, "update freeze nodes", log.Int64s("freezeNodeIDs", req.GetNodes().GetFreezeNodeIds()), log.Int64s("defreezeNodeIDs", req.GetNodes().GetDefreezeNodeIds()))
 				impl.freezeNodes.Upsert(req.GetNodes().GetFreezeNodeIds()...)
 				impl.freezeNodes.Remove(req.GetNodes().GetDefreezeNodeIds()...)
 			}
@@ -64,7 +64,7 @@ func newOpUpdateBalancePolicy(ctx context.Context, req *types.UpdateWALBalancePo
 // updateAllowRebalance update the allow rebalance.
 func updateAllowRebalance(impl *balancerImpl, allowRebalance bool) {
 	old := paramtable.Get().StreamingCfg.WALBalancerPolicyAllowRebalance.SwapTempValue(strconv.FormatBool(allowRebalance))
-	impl.Logger().Info(nil, "update allow_rebalance", mlog.Bool("new", allowRebalance), mlog.String("old", old))
+	impl.Logger().Info(nil, "update allow_rebalance", log.Bool("new", allowRebalance), log.String("old", old))
 }
 
 // newOpMarkAsUnavailable is a operation to mark some channels as unavailable.

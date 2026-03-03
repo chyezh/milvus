@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/registry"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -175,16 +175,16 @@ func (m *shardClientMgrImpl) updateShardLocationCache(ctx context.Context, datab
 	}
 	resp, err := m.mixCoord.GetShardLeaders(ctx, req)
 	if err := merr.CheckRPCCall(resp.GetStatus(), err); err != nil {
-		mlog.Error(context.TODO(), "failed to get shard locations",
-			mlog.Int64("collectionID", collectionID),
-			mlog.Err(err))
+		log.Error(context.TODO(), "failed to get shard locations",
+			log.Int64("collectionID", collectionID),
+			log.Err(err))
 		return nil, err
 	}
 
 	shards := parseShardLeaderList2QueryNode(resp.GetShards())
 
 	// convert shards map to string for logging
-	if mlog.LevelEnabled(zap.DebugLevel) {
+	if log.LevelEnabled(zap.DebugLevel) {
 		shardStr := make([]string, 0, len(shards))
 		for channel, nodes := range shards {
 			nodeStrs := make([]string, 0, len(nodes))
@@ -193,7 +193,7 @@ func (m *shardClientMgrImpl) updateShardLocationCache(ctx context.Context, datab
 			}
 			shardStr = append(shardStr, fmt.Sprintf("%s:[%s]", channel, strings.Join(nodeStrs, ", ")))
 		}
-		mlog.Debug(context.TODO(), "update shard leader cache", mlog.String("newShardLeaders", strings.Join(shardStr, ", ")))
+		log.Debug(context.TODO(), "update shard leader cache", log.String("newShardLeaders", strings.Join(shardStr, ", ")))
 	}
 
 	newShardLeaders := &shardLeaders{
@@ -254,7 +254,7 @@ func (m *shardClientMgrImpl) RemoveDatabase(database string) {
 
 // DeprecateShardCache clear the shard leader cache of a collection
 func (m *shardClientMgrImpl) DeprecateShardCache(database, collectionName string) {
-	mlog.Info(context.TODO(), "deprecate shard cache for collection", mlog.String("collectionName", collectionName))
+	log.Info(context.TODO(), "deprecate shard cache for collection", log.String("collectionName", collectionName))
 	m.leaderMut.Lock()
 	defer m.leaderMut.Unlock()
 	dbInfo, ok := m.collLeader[database]
@@ -268,7 +268,7 @@ func (m *shardClientMgrImpl) DeprecateShardCache(database, collectionName string
 
 // InvalidateShardLeaderCache called when Shard leader balance happened
 func (m *shardClientMgrImpl) InvalidateShardLeaderCache(collections []int64) {
-	mlog.Info(context.TODO(), "Invalidate shard cache for collections", mlog.Int64s("collectionIDs", collections))
+	log.Info(context.TODO(), "Invalidate shard cache for collections", log.Int64s("collectionIDs", collections))
 	m.leaderMut.Lock()
 	defer m.leaderMut.Unlock()
 	collectionSet := typeutil.NewUniqueSet(collections...)
@@ -307,7 +307,7 @@ func (c *shardClientMgrImpl) PurgeClient() {
 						closed := value.Close(false)
 						if closed {
 							c.clients.Remove(key)
-							mlog.Info(context.TODO(), "remove idle node client", mlog.Int64("nodeID", key))
+							log.Info(context.TODO(), "remove idle node client", log.Int64("nodeID", key))
 						}
 					}
 				}

@@ -14,14 +14,14 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/service"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/util"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 )
 
 // Server is the streamingcoord server.
 type Server struct {
-	logger *mlog.Logger
+	logger *log.Logger
 
 	// session of current server.
 	session sessionutil.SessionInterface
@@ -35,7 +35,7 @@ type Server struct {
 func (s *Server) Start(ctx context.Context, checker balancer.FileResourceChecker) (err error) {
 	s.logger.Info(nil, "init streamingcoord...")
 	if err := s.initBasicComponent(ctx); err != nil {
-		s.logger.Warn(nil, "init basic component of streamingcoord failed", mlog.Err(err))
+		s.logger.Warn(nil, "init basic component of streamingcoord failed", log.Err(err))
 		return err
 	}
 	balance.SetFileResourceChecker(checker)
@@ -55,7 +55,7 @@ func (s *Server) initBasicComponent(ctx context.Context) (err error) {
 		balancer, err := balancer.RecoverBalancer(ctx, provider)
 		if err != nil {
 			provider.Close()
-			s.logger.Warn(nil, "recover balancer failed", mlog.Err(err))
+			s.logger.Warn(nil, "recover balancer failed", log.Err(err))
 			return struct{}{}, err
 		}
 		balance.Register(balancer)
@@ -68,7 +68,7 @@ func (s *Server) initBasicComponent(ctx context.Context) (err error) {
 		s.logger.Info(nil, "start recovery broadcaster...")
 		broadcaster, err := broadcaster.RecoverBroadcaster(ctx)
 		if err != nil {
-			s.logger.Warn(nil, "recover broadcaster failed", mlog.Err(err))
+			s.logger.Warn(nil, "recover broadcaster failed", log.Err(err))
 			return struct{}{}, err
 		}
 		broadcast.Register(broadcaster)

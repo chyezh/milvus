@@ -21,7 +21,7 @@ import (
 	"sync"
 
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v2/util/ratelimitutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -46,7 +46,7 @@ func initGlobalRateCollector() {
 		var err error
 		rateCol, err = newRateCollector()
 		if err != nil {
-			mlog.Warn(context.TODO(), "DataNode server init rateCollector failed", mlog.Err(err))
+			log.Warn(context.TODO(), "DataNode server init rateCollector failed", log.Err(err))
 			panic(err)
 		}
 		rateCol.Register(metricsinfo.InsertConsumeThroughput)

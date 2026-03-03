@@ -25,7 +25,7 @@ import (
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/broadcast"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 )
@@ -93,7 +93,7 @@ func (s *Server) broadcastTransferNode(ctx context.Context, req *milvuspb.Transf
 	// Move node from source resource group to target resource group.
 	rgs, err := s.meta.ResourceManager.CheckIfTransferNode(ctx, req.GetSourceResourceGroup(), req.GetTargetResourceGroup(), int(req.GetNumNode()))
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to transfer node", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to transfer node", log.Err(err))
 		return err
 	}
 

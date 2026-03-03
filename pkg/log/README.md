@@ -1,6 +1,6 @@
-# mlog - Context-Aware Logging Library
+# log - Context-Aware Logging Library
 
-mlog is a context-aware logging library built on [zap](https://github.com/uber-go/zap), designed specifically for Milvus distributed systems.
+log is a context-aware logging library built on [zap](https://github.com/uber-go/zap), designed specifically for Milvus distributed systems.
 
 ## Design Goals
 
@@ -14,7 +14,7 @@ mlog is a context-aware logging library built on [zap](https://github.com/uber-g
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
-│                           mlog Package                           │
+│                           log Package                           │
 ├──────────────────────────────────────────────────────────────────┤
 │  ┌──────────────┐  ┌──────────────┐  ┌────────────────────────┐  │
 │  │  logger.go   │  │  context.go  │  │      field.go          │  │
@@ -38,7 +38,7 @@ mlog is a context-aware logging library built on [zap](https://github.com/uber-g
 │  │ - GetLevel   │                                                │
 │  └──────────────┘                                                │
 ├──────────────────────────────────────────────────────────────────┤
-│                        mlog/grpc Package                         │
+│                        log/grpc Package                         │
 ├──────────────────────────────────────────────────────────────────┤
 │  ┌────────────────────────────────────────────────────────┐      │
 │  │                   interceptor.go                       │      │
@@ -107,11 +107,11 @@ const (
 ```go
 // Option 1: Use custom logger
 logger, _ := zap.NewProduction()
-mlog.Init(logger)
+log.Init(logger)
 
 // Option 2: Initialize with node ID (recommended, nodeId included in all logs)
 logger, _ := zap.NewProduction()
-mlog.InitNode(logger, nodeId)
+log.InitNode(logger, nodeId)
 ```
 
 ### Basic Logging
@@ -119,10 +119,10 @@ mlog.InitNode(logger, nodeId)
 ```go
 ctx := context.Background()
 
-mlog.Debug(ctx, "debug message", mlog.String("key", "value"))
-mlog.Info(ctx, "info message", mlog.Int64("count", 42))
-mlog.Warn(ctx, "warning message", mlog.Duration("latency", time.Second))
-mlog.Error(ctx, "error message", mlog.Err(err))
+log.Debug(ctx, "debug message", log.String("key", "value"))
+log.Info(ctx, "info message", log.Int64("count", 42))
+log.Warn(ctx, "warning message", log.Duration("latency", time.Second))
+log.Error(ctx, "error message", log.Err(err))
 ```
 
 ### Component-Level Logger
@@ -132,14 +132,14 @@ Components can create their own Logger with preset fields. Fields are automatica
 ```go
 // Create component Logger (fields pre-encoded for best performance)
 type QueryNode struct {
-    logger *mlog.Logger
+    logger *log.Logger
 }
 
 func NewQueryNode(nodeID int64) *QueryNode {
     return &QueryNode{
-        logger: mlog.With(
-            mlog.FieldModule("querynode"),
-            mlog.FieldNodeID(nodeID),
+        logger: log.With(
+            log.FieldModule("querynode"),
+            log.FieldNodeID(nodeID),
         ),
     }
 }
@@ -147,7 +147,7 @@ func NewQueryNode(nodeID int64) *QueryNode {
 func (qn *QueryNode) Search(ctx context.Context, req *SearchRequest) {
     // ctx carries request-level fields (traceID, collectionID, etc.)
     // Automatically merges component fields + ctx fields when logging
-    qn.logger.Info(ctx, "search started", mlog.Int64("nq", req.NQ))
+    qn.logger.Info(ctx, "search started", log.Int64("nq", req.NQ))
     // Output: {"module":"querynode", "node_id":123, "trace_id":"xxx", "nq":10, ...}
 }
 ```
@@ -156,8 +156,8 @@ func (qn *QueryNode) Search(ctx context.Context, req *SearchRequest) {
 
 | Method | Description |
 |--------|-------------|
-| `mlog.With(fields...)` | Create new Logger with immediately encoded fields |
-| `mlog.WithLazy(fields...)` | Create new Logger with lazily encoded fields |
+| `log.With(fields...)` | Create new Logger with immediately encoded fields |
+| `log.WithLazy(fields...)` | Create new Logger with lazily encoded fields |
 | `(*Logger) With(fields...)` | Add fields (immediately encoded), returns new Logger |
 | `(*Logger) WithLazy(fields...)` | Add fields (lazily encoded), returns new Logger |
 | `Level()` | Get current log level |
@@ -180,21 +180,21 @@ ctx logger:       5 fields (traceID, spanID, ...) - pre-encoded
 
 ```go
 // Add fields to context (fields accumulate)
-ctx = mlog.WithFields(ctx, mlog.String("request_id", "abc123"))
-ctx = mlog.WithFields(ctx, mlog.Int64("user_id", 42))
+ctx = log.WithFields(ctx, log.String("request_id", "abc123"))
+ctx = log.WithFields(ctx, log.Int64("user_id", 42))
 
 // Subsequent logs automatically include these fields
-mlog.Info(ctx, "processing request")
+log.Info(ctx, "processing request")
 // Output: {"msg":"processing request", "request_id":"abc123", "user_id":42, ...}
 ```
 
 ### Field Deduplication
 
 ```go
-ctx = mlog.WithFields(ctx, mlog.String("status", "pending"))
-ctx = mlog.WithFields(ctx, mlog.String("status", "completed"))  // Overrides previous value
+ctx = log.WithFields(ctx, log.String("status", "pending"))
+ctx = log.WithFields(ctx, log.String("status", "completed"))  // Overrides previous value
 
-mlog.Info(ctx, "task done")
+log.Info(ctx, "task done")
 // Output: {"msg":"task done", "status":"completed", ...}
 ```
 
@@ -202,31 +202,31 @@ mlog.Info(ctx, "task done")
 
 ```go
 // Client: Mark fields for propagation
-ctx = mlog.WithFields(ctx,
-    mlog.PropagatedString(mlog.KeyCollectionName, "my_collection"),
-    mlog.PropagatedInt64(mlog.KeyCollectionID, 12345),
+ctx = log.WithFields(ctx,
+    log.PropagatedString(log.KeyCollectionName, "my_collection"),
+    log.PropagatedInt64(log.KeyCollectionID, 12345),
 )
 
 // Get propagated fields (for manual propagation scenarios)
-props := mlog.GetPropagated(ctx)
+props := log.GetPropagated(ctx)
 // props = map[string]string{"collection_name": "my_collection", "collection_id": "12345"}
 ```
 
 ### gRPC Interceptors
 
 ```go
-import mloggrpc "github.com/milvus-io/milvus/pkg/v2/mlog/grpc"
+import loggrpc "github.com/milvus-io/milvus/pkg/v2/log/grpc"
 
 // Server configuration
 server := grpc.NewServer(
-    grpc.UnaryInterceptor(mloggrpc.UnaryServerInterceptor("querynode")),
-    grpc.StreamInterceptor(mloggrpc.StreamServerInterceptor("querynode")),
+    grpc.UnaryInterceptor(loggrpc.UnaryServerInterceptor("querynode")),
+    grpc.StreamInterceptor(loggrpc.StreamServerInterceptor("querynode")),
 )
 
 // Client configuration
 conn, _ := grpc.Dial(addr,
-    grpc.WithUnaryInterceptor(mloggrpc.UnaryClientInterceptor()),
-    grpc.WithStreamInterceptor(mloggrpc.StreamClientInterceptor()),
+    grpc.WithUnaryInterceptor(loggrpc.UnaryClientInterceptor()),
+    grpc.WithStreamInterceptor(loggrpc.StreamClientInterceptor()),
 )
 ```
 
@@ -243,14 +243,14 @@ conn, _ := grpc.Dial(addr,
 
 ```go
 // Change log level at runtime
-mlog.SetLevel(mlog.DebugLevel)
-mlog.SetLevel(mlog.WarnLevel)
+log.SetLevel(log.DebugLevel)
+log.SetLevel(log.WarnLevel)
 
 // Get current level
-level := mlog.GetLevel()
+level := log.GetLevel()
 
 // Get AtomicLevel (for custom configuration integration)
-atomicLevel := mlog.GetAtomicLevel()
+atomicLevel := log.GetAtomicLevel()
 ```
 
 ## Performance Optimizations
@@ -269,8 +269,8 @@ func Log(ctx context.Context, level Level, msg string, fields ...Field) {
 }
 
 // Caller-side guard for expensive field construction
-if mlog.LevelEnabled(mlog.DebugLevel) {
-    mlog.Debug(ctx, "details", mlog.String("dump", expensiveDump()))
+if log.LevelEnabled(log.DebugLevel) {
+    log.Debug(ctx, "details", log.String("dump", expensiveDump()))
 }
 ```
 
@@ -280,14 +280,14 @@ Context fields use `zap.WithLazy` for deferred encoding, only encoded when log i
 
 ```go
 // WithFields uses WithLazy internally
-ctx = mlog.WithFields(ctx, mlog.String("key", "value"))
+ctx = log.WithFields(ctx, log.String("key", "value"))
 
 // Fields are only encoded when log is written
-mlog.Info(ctx, "message")  // Fields encoded here
+log.Info(ctx, "message")  // Fields encoded here
 
 // If log level is disabled, fields are never encoded
-mlog.SetLevel(mlog.ErrorLevel)
-mlog.Debug(ctx, "message")  // Fields not encoded, zero overhead
+log.SetLevel(log.ErrorLevel)
+log.Debug(ctx, "message")  // Fields not encoded, zero overhead
 ```
 
 Note: Global fields (like nodeId) use `.With()` for immediate encoding since they always need to be output.
@@ -322,19 +322,19 @@ for i := range fields {
 
 ```go
 // Recommended
-mlog.Info(ctx, "message")
+log.Info(ctx, "message")
 
 // Not recommended (adds _ctx_nil warning field)
-mlog.Info(nil, "message")
+log.Info(nil, "message")
 ```
 
 ### 2. Add Request-Level Fields at Entry Points
 
 ```go
 func HandleRequest(ctx context.Context, req *Request) {
-    ctx = mlog.WithFields(ctx,
-        mlog.String("request_id", req.ID),
-        mlog.String("method", req.Method),
+    ctx = log.WithFields(ctx,
+        log.String("request_id", req.ID),
+        log.String("method", req.Method),
     )
     // All subsequent logs automatically include these fields
     processRequest(ctx, req)
@@ -345,9 +345,9 @@ func HandleRequest(ctx context.Context, req *Request) {
 
 ```go
 // Use Propagated version for fields that need cross-service tracing
-ctx = mlog.WithFields(ctx,
-    mlog.PropagatedString(mlog.KeyCollectionName, collectionName),
-    mlog.PropagatedInt64(mlog.KeyCollectionID, collectionId),
+ctx = log.WithFields(ctx,
+    log.PropagatedString(log.KeyCollectionName, collectionName),
+    log.PropagatedInt64(log.KeyCollectionID, collectionId),
 )
 ```
 
@@ -355,24 +355,24 @@ ctx = mlog.WithFields(ctx,
 
 ```go
 // Recommended: Use predefined constants
-mlog.String(mlog.KeyCollectionName, name)
+log.String(log.KeyCollectionName, name)
 
 // Not recommended: Hard-coded strings
-mlog.String("collection_name", name)
+log.String("collection_name", name)
 ```
 
 ### 5. Specify Module Name in Server Interceptors
 
 ```go
 // Each service uses its corresponding module name
-mloggrpc.UnaryServerInterceptor("proxy")
-mloggrpc.UnaryServerInterceptor("querynode")
-mloggrpc.UnaryServerInterceptor("datanode")
+loggrpc.UnaryServerInterceptor("proxy")
+loggrpc.UnaryServerInterceptor("querynode")
+loggrpc.UnaryServerInterceptor("datanode")
 ```
 
 ## API Reference
 
-### mlog Package
+### log Package
 
 **Global Functions:**
 
@@ -421,7 +421,7 @@ mloggrpc.UnaryServerInterceptor("datanode")
 
 Rate-limited functions use per-call-site `rate.Limiter` (lazy-initialized via `sync.Map`). When a log entry is suppressed, an `_ignored` count field is attached to the next allowed entry.
 
-### mlog/grpc Package
+### log/grpc Package
 
 | Function | Description |
 |----------|-------------|
@@ -475,15 +475,15 @@ Predefined field constructors providing type-safe field creation:
 
 ```go
 // Using FieldXXX functions (recommended)
-mlog.Info(ctx, "segment loaded",
-    mlog.FieldCollectionID(12345),
-    mlog.FieldSegmentID(67890),
+log.Info(ctx, "segment loaded",
+    log.FieldCollectionID(12345),
+    log.FieldSegmentID(67890),
 )
 
 // Equivalent to using Key constants
-mlog.Info(ctx, "segment loaded",
-    mlog.Int64(mlog.KeyCollectionID, 12345),
-    mlog.Int64(mlog.KeySegmentID, 67890),
+log.Info(ctx, "segment loaded",
+    log.Int64(log.KeyCollectionID, 12345),
+    log.Int64(log.KeySegmentID, 67890),
 )
 ```
 
@@ -530,8 +530,8 @@ mlog.Info(ctx, "segment loaded",
 
 ### Key Takeaways
 
-1. **mlog vs zap (zero overhead)**: `mlog.Info` achieves 0 allocs and near-identical latency to bare `zap.Info`, with only ~5ns overhead from context lookup and atomic load of the global logger.
+1. **log vs zap (zero overhead)**: `log.Info` achieves 0 allocs and near-identical latency to bare `zap.Info`, with only ~5ns overhead from context lookup and atomic load of the global logger.
 2. **Zero allocation with context fields**: When fields are pre-encoded via `WithFields`, `MlogInfoWithContextFields` achieves 0 allocs at 415ns — faster than native `zap.Info` with 3 fields (598ns, 1 alloc).
-3. **Disabled level is extremely fast**: ~2.7ns with 0 allocs, 2.4x faster than zap's 6.4ns, because mlog returns before calling into zap.
+3. **Disabled level is extremely fast**: ~2.7ns with 0 allocs, 2.4x faster than zap's 6.4ns, because log returns before calling into zap.
 4. **Rate limiting (allowed)**: ~920ns total, with overhead from `runtime.Caller(1)` + `sync.Map` lookup + `rate.Limiter.Allow()`.
 5. **Rate limiting (suppressed)**: ~510ns, skips log encoding entirely, only performs atomic operations and `runtime.Caller`.

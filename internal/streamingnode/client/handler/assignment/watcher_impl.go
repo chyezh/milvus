@@ -7,7 +7,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/discoverer"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/resolver"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
@@ -36,11 +36,11 @@ type watcherImpl struct {
 
 // execute starts the watcher.
 func (w *watcherImpl) execute() {
-	mlog.Info(context.TODO(), "assignment watcher start")
+	log.Info(context.TODO(), "assignment watcher start")
 	var err error
 	defer func() {
 		// error can be ignored here, so use info level log here.
-		mlog.Info(context.TODO(), "assignment watcher close", mlog.Err(err))
+		log.Info(context.TODO(), "assignment watcher close", log.Err(err))
 	}()
 
 	// error can be ignored here, error is always cancel by watcher's close as expected.

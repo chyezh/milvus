@@ -22,7 +22,7 @@ import (
 	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 func assignChannelToWALLocatedFirstForNodeInfo(
@@ -71,7 +71,7 @@ func filterSQNIfStreamingServiceEnabled(nodes []int64) []int64 {
 			}
 		}
 		if len(unexpectedNodes) > 0 {
-			mlog.Warn(context.TODO(), "unexpected streaming querynode found when enable streaming service", mlog.Int64s("unexpectedNodes", unexpectedNodes))
+			log.Warn(context.TODO(), "unexpected streaming querynode found when enable streaming service", log.Int64s("unexpectedNodes", unexpectedNodes))
 		}
 		return expectedSQNs
 	}

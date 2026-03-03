@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc"
 
 	client "github.com/milvus-io/milvus/client/v2/milvusclient"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/tests/go_client/base"
 	"github.com/milvus-io/milvus/tests/go_client/common"
 )
@@ -64,26 +64,26 @@ func GetTEIModelDim() int {
 }
 
 func parseLogConfig() {
-	mlog.Info(context.TODO(), "Parser Log Level", mlog.String("logLevel", *logLevel))
+	log.Info(context.TODO(), "Parser Log Level", log.String("logLevel", *logLevel))
 	switch *logLevel {
 	case "debug", "DEBUG", "Debug":
-		mlog.SetLevel(zap.DebugLevel)
+		log.SetLevel(zap.DebugLevel)
 	case "info", "INFO", "Info":
-		mlog.SetLevel(zap.InfoLevel)
+		log.SetLevel(zap.InfoLevel)
 	case "warn", "WARN", "Warn":
-		mlog.SetLevel(zap.WarnLevel)
+		log.SetLevel(zap.WarnLevel)
 	case "error", "ERROR", "Error":
-		mlog.SetLevel(zap.ErrorLevel)
+		log.SetLevel(zap.ErrorLevel)
 	default:
-		mlog.SetLevel(zap.InfoLevel)
+		log.SetLevel(zap.InfoLevel)
 	}
 }
 
 func setup() {
-	mlog.Info(context.TODO(), "Start to setup all......")
+	log.Info(context.TODO(), "Start to setup all......")
 	flag.Parse()
 	parseLogConfig()
-	mlog.Info(context.TODO(), "Parser Milvus address", mlog.String("address", *addr))
+	log.Info(context.TODO(), "Parser Milvus address", log.String("address", *addr))
 
 	// set default milvus client config
 	setDefaultClientConfig(&client.ClientConfig{Address: *addr})
@@ -91,12 +91,12 @@ func setup() {
 
 // Teardown teardown
 func teardown() {
-	mlog.Info(context.TODO(), "Start to tear down all.....")
+	log.Info(context.TODO(), "Start to tear down all.....")
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*common.DefaultTimeout)
 	defer cancel()
 	mc, err := base.NewMilvusClient(ctx, &client.ClientConfig{Address: GetAddr(), Username: GetUser(), Password: GetPassword()})
 	if err != nil {
-		mlog.Error(context.TODO(), "teardown failed to connect milvus with error", mlog.Err(err))
+		log.Error(context.TODO(), "teardown failed to connect milvus with error", log.Err(err))
 	}
 	defer mc.Close(ctx)
 
@@ -118,7 +118,7 @@ func RunTests(m *testing.M) int {
 	setup()
 	code := m.Run()
 	if code != 0 {
-		mlog.Error(context.TODO(), "Tests failed and exited", mlog.Int("code", code))
+		log.Error(context.TODO(), "Tests failed and exited", log.Int("code", code))
 	}
 	teardown()
 	return code

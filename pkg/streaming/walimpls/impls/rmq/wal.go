@@ -1,7 +1,7 @@
 package rmq
 
 import (
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"context"
 
 
@@ -40,7 +40,7 @@ func (w *walImpl) Append(ctx context.Context, msg message.MutableMessage) (messa
 		Properties: pb.Properties,
 	})
 	if err != nil {
-		w.Log().RatedWarn(nil, mlog.RateDefault, "send message to rmq failed", mlog.Err(err))
+		w.Log().RatedWarn(nil, log.RateDefault, "send message to rmq failed", log.Err(err))
 		return nil, err
 	}
 	return rmqID(id), nil

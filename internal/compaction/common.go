@@ -24,7 +24,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -97,7 +97,7 @@ func readDeltalogsV1(
 		}
 	}
 
-	mlog.Info(ctx, "read V1 deltalogs", mlog.Int("entries", len(allPks)))
+	log.Info(ctx, "read V1 deltalogs", log.Int("entries", len(allPks)))
 	return allPks, allTss, nil
 }
 
@@ -119,7 +119,7 @@ func readDeltalogsV2(
 		return nil, nil, err
 	}
 
-	mlog.Info(ctx, "read V2 deltalogs from manifest", mlog.Int("entries", len(pks)))
+	log.Info(ctx, "read V2 deltalogs from manifest", log.Int("entries", len(pks)))
 	return pks, tss, nil
 }
 

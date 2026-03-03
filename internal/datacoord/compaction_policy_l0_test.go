@@ -27,7 +27,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -150,7 +150,7 @@ func (s *L0CompactionPolicySuite) TestTriggerIdle() {
 	s.NotNil(gotViews)
 	s.Equal(1, len(gotViews))
 
-	mlog.Info(context.TODO(), "cView", mlog.String("string", cView.String()))
+	log.Info(context.TODO(), "cView", log.String("string", cView.String()))
 }
 
 func (s *L0CompactionPolicySuite) TestTriggerViewChange() {

@@ -23,7 +23,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
@@ -89,7 +89,7 @@ func (c *DDLCallback) truncateCollectionV2AckCallback(ctx context.Context, resul
 
 	if err := c.meta.TruncateCollection(ctx, result); err != nil {
 		if errors.Is(err, errAlterCollectionNotFound) {
-			mlog.Warn(ctx, "truncate a non-existent collection, ignore it", mlog.FieldMessage(result.Message))
+			log.Warn(ctx, "truncate a non-existent collection, ignore it", log.FieldMessage(result.Message))
 			return nil
 		}
 		return errors.Wrap(err, "when truncating collection")
@@ -114,7 +114,7 @@ func (c *DDLCallback) truncateCollectionV2AckOnceCallback(ctx context.Context, r
 	collectionID := msg.Header().CollectionId
 	if err := c.meta.BeginTruncateCollection(ctx, collectionID); err != nil {
 		if errors.Is(err, errAlterCollectionNotFound) {
-			mlog.Warn(ctx, "begin to truncate a non-existent collection, ignore it", mlog.FieldMessage(result.Message))
+			log.Warn(ctx, "begin to truncate a non-existent collection, ignore it", log.FieldMessage(result.Message))
 			return nil
 		}
 		return errors.Wrap(err, "when beginning truncate collection")

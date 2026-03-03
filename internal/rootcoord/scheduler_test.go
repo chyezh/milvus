@@ -30,7 +30,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/allocator"
 	mocktso "github.com/milvus-io/milvus/internal/tso/mocks"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -375,7 +375,7 @@ func (t *WithLockKeyTask) GetLockerKey() LockerKey {
 }
 
 func (t *WithLockKeyTask) Execute(ctx context.Context) error {
-	mlog.Info(context.TODO(), "execute task", mlog.String("name", t.name), mlog.Duration("duration", time.Since(t.newTime)))
+	log.Info(context.TODO(), "execute task", log.String("name", t.name), log.Duration("duration", time.Since(t.newTime)))
 	time.Sleep(t.workDuration)
 	return nil
 }

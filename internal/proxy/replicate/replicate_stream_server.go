@@ -11,7 +11,7 @@ import (
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 )
 
@@ -56,10 +56,10 @@ func (p *ReplicateStreamServer) Execute() error {
 func (p *ReplicateStreamServer) sendLoop() (err error) {
 	defer func() {
 		if err != nil {
-			mlog.Warn(context.TODO(), "send arm of stream closed by unexpected error", mlog.Err(err))
+			log.Warn(context.TODO(), "send arm of stream closed by unexpected error", log.Err(err))
 			return
 		}
-		mlog.Info(context.TODO(), "send arm of stream closed")
+		log.Info(context.TODO(), "send arm of stream closed")
 	}()
 
 	for {
@@ -83,10 +83,10 @@ func (p *ReplicateStreamServer) recvLoop() (err error) {
 		p.wg.Wait()
 		close(p.replicateRespCh)
 		if err != nil {
-			mlog.Warn(context.TODO(), "recv arm of stream closed by unexpected error", mlog.Err(err))
+			log.Warn(context.TODO(), "recv arm of stream closed by unexpected error", log.Err(err))
 			return
 		}
-		mlog.Info(context.TODO(), "recv arm of stream closed")
+		log.Info(context.TODO(), "recv arm of stream closed")
 	}()
 
 	for {
@@ -104,7 +104,7 @@ func (p *ReplicateStreamServer) recvLoop() (err error) {
 				return err
 			}
 		default:
-			mlog.Warn(context.TODO(), "unknown request type", mlog.Any("request", req))
+			log.Warn(context.TODO(), "unknown request type", log.Any("request", req))
 		}
 	}
 }
@@ -119,10 +119,10 @@ func (p *ReplicateStreamServer) handleReplicateMessage(req *milvuspb.ReplicateRe
 		return err
 	}
 	sourceTs := msg.ReplicateHeader().TimeTick
-	mlog.Debug(context.TODO(), "recv replicate message from client",
-		mlog.String("messageID", reqMsg.GetId().GetId()),
-		mlog.Uint64("sourceTimeTick", sourceTs),
-		mlog.FieldMessage(msg),
+	log.Debug(context.TODO(), "recv replicate message from client",
+		log.String("messageID", reqMsg.GetId().GetId()),
+		log.Uint64("sourceTimeTick", sourceTs),
+		log.FieldMessage(msg),
 	)
 
 	// Append message to wal.
@@ -132,12 +132,12 @@ func (p *ReplicateStreamServer) handleReplicateMessage(req *milvuspb.ReplicateRe
 		return nil
 	}
 	if status.AsStreamingError(err).IsIgnoredOperation() {
-		mlog.Info(context.TODO(), "append replicate message to wal ignored", mlog.FieldMessage(msg), mlog.Err(err))
+		log.Info(context.TODO(), "append replicate message to wal ignored", log.FieldMessage(msg), log.Err(err))
 		p.sendReplicateResult(sourceTs, msg)
 		return nil
 	}
 	// unexpected error, will close the stream and wait for client to reconnect.
-	mlog.Warn(context.TODO(), "append replicate message to wal failed", mlog.FieldMessage(msg), mlog.Err(err))
+	log.Warn(context.TODO(), "append replicate message to wal failed", log.FieldMessage(msg), log.Err(err))
 	return err
 }
 
@@ -158,9 +158,9 @@ func (p *ReplicateStreamServer) sendReplicateResult(sourceTimeTick uint64, msg m
 	// all pending response message should be dropped, client side will handle it.
 	select {
 	case p.replicateRespCh <- resp:
-		mlog.Debug(context.TODO(), "send replicate message response to client", mlog.Uint64("confirmedTimeTick", sourceTimeTick))
+		log.Debug(context.TODO(), "send replicate message response to client", log.Uint64("confirmedTimeTick", sourceTimeTick))
 	case <-p.streamServer.Context().Done():
-		mlog.Warn(context.TODO(), "stream closed before replicate message response sent", mlog.Uint64("confirmedTimeTick", sourceTimeTick))
+		log.Warn(context.TODO(), "stream closed before replicate message response sent", log.Uint64("confirmedTimeTick", sourceTimeTick))
 		return
 	}
 }

@@ -7,7 +7,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -72,8 +72,8 @@ func (mRWLock *MetricsRWMutex) maybeLogUnlockDuration(source string, lockType st
 			logLock(time.Since(acquireTime), mRWLock.lockName, source, lockType, hold)
 			delete(mRWLock.acquireTimeMap, source)
 		} else {
-			mlog.Error(context.TODO(), "there's no lock history for the source, there may be some defects in codes",
-				mlog.String("source", source))
+			log.Error(context.TODO(), "there's no lock history for the source, there may be some defects in codes",
+				log.String("source", source))
 			return errors.New("unknown source")
 		}
 	}
@@ -82,13 +82,13 @@ func (mRWLock *MetricsRWMutex) maybeLogUnlockDuration(source string, lockType st
 
 func logLock(duration time.Duration, lockName string, source string, lockType string, opType string) {
 	if duration >= paramtable.Get().CommonCfg.LockSlowLogWarnThreshold.GetAsDuration(time.Millisecond) {
-		mlog.Warn(context.TODO(), "lock takes too long", mlog.String("lockName", lockName), mlog.String("lockType", lockType),
-			mlog.String("source", source), mlog.String("opType", opType),
-			mlog.Duration("time_cost", duration))
+		log.Warn(context.TODO(), "lock takes too long", log.String("lockName", lockName), log.String("lockType", lockType),
+			log.String("source", source), log.String("opType", opType),
+			log.Duration("time_cost", duration))
 	} else if duration >= paramtable.Get().CommonCfg.LockSlowLogInfoThreshold.GetAsDuration(time.Millisecond) {
-		mlog.Info(context.TODO(), "lock takes too long", mlog.String("lockName", lockName), mlog.String("lockType", lockType),
-			mlog.String("source", source), mlog.String("opType", opType),
-			mlog.Duration("time_cost", duration))
+		log.Info(context.TODO(), "lock takes too long", log.String("lockName", lockName), log.String("lockType", lockType),
+			log.String("source", source), log.String("opType", opType),
+			log.Duration("time_cost", duration))
 	}
 	metrics.LockCosts.WithLabelValues(lockName, source, lockType, opType).Set(float64(duration.Milliseconds()))
 }

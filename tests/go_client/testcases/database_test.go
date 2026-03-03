@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	client "github.com/milvus-io/milvus/client/v2/milvusclient"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/tests/go_client/base"
 	"github.com/milvus-io/milvus/tests/go_client/common"
 	hp "github.com/milvus-io/milvus/tests/go_client/testcases/helper"
@@ -18,9 +18,9 @@ import (
 
 // teardownTest
 func teardownTest(t *testing.T) func(t *testing.T) {
-	mlog.Info(context.TODO(), "setup test func")
+	log.Info(context.TODO(), "setup test func")
 	return func(t *testing.T) {
-		mlog.Info(context.TODO(), "teardown func drop all non-default db")
+		log.Info(context.TODO(), "teardown func drop all non-default db")
 		// drop all db
 		ctx := hp.CreateContext(t, time.Second*common.DefaultTimeout)
 		mc := hp.CreateDefaultMilvusClient(ctx, t)
@@ -239,7 +239,7 @@ func TestClientWithDb(t *testing.T) {
 	_, defCol1 := hp.CollPrepare.CreateCollection(ctx, t, mcDefault, hp.NewCreateCollectionParams(hp.Int64Vec), hp.TNewFieldsOption(), hp.TNewSchemaOption())
 	defCollections, _ := mcDefault.ListCollections(ctx, listCollOpt)
 	require.Contains(t, defCollections, defCol1.CollectionName)
-	mlog.Debug(context.TODO(), "default db collections:", mlog.Any("default collections", defCollections))
+	log.Debug(context.TODO(), "default db collections:", log.Any("default collections", defCollections))
 
 	// create a db and create collection in db
 	dbName := common.GenRandomString("db", 5)
@@ -255,7 +255,7 @@ func TestClientWithDb(t *testing.T) {
 	_, dbCol1 := hp.CollPrepare.CreateCollection(ctx, t, mcDb, hp.NewCreateCollectionParams(hp.Int64Vec), hp.TNewFieldsOption(), hp.TNewSchemaOption())
 
 	dbCollections, _ := mcDb.ListCollections(ctx, listCollOpt)
-	mlog.Debug(context.TODO(), "db collections:", mlog.Any("db collections", dbCollections))
+	log.Debug(context.TODO(), "db collections:", log.Any("db collections", dbCollections))
 	require.Containsf(t, dbCollections, dbCol1.CollectionName, fmt.Sprintf("The collection %s not in: %v", dbCol1.CollectionName, dbCollections))
 
 	// using default db and collection not in

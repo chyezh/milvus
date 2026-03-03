@@ -27,7 +27,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -67,16 +67,16 @@ func (b *StoppingBalancer) BalanceReplica(ctx context.Context, replica *meta.Rep
 	br := NewBalanceReport()
 	defer func() {
 		if len(segmentPlans) == 0 && len(channelPlans) == 0 {
-			mlog.RatedDebug(ctx, mlog.RateDefault, "no stopping balance plan generated",
+			log.RatedDebug(ctx, log.RateDefault, "no stopping balance plan generated",
 				zap.Stringers("records", br.detailRecords))
 		} else {
-			mlog.Info(context.TODO(), "stopping balance plan generated", zap.Stringers("report details", br.records))
+			log.Info(context.TODO(), "stopping balance plan generated", zap.Stringers("report details", br.records))
 		}
 	}()
 
 	if !paramtable.Get().QueryCoordCfg.EnableStoppingBalance.GetAsBool() {
 		br.AddRecord(StrRecord("stopping balance is disabled"))
-		mlog.RatedInfo(context.TODO(), mlog.RateDefault, "stopping balance is disabled")
+		log.RatedInfo(context.TODO(), log.RateDefault, "stopping balance is disabled")
 		return nil, nil
 	}
 

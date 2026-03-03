@@ -26,7 +26,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -127,7 +127,7 @@ func (queue *baseTaskQueue) AddActiveTask(t task) {
 	tID := t.ID()
 	_, ok := queue.activeTasks[tID]
 	if ok {
-		mlog.Warn(t.TraceCtx(), "Proxy task with tID already in active task list!", mlog.Int64("ID", tID))
+		log.Warn(t.TraceCtx(), "Proxy task with tID already in active task list!", log.Int64("ID", tID))
 	}
 
 	queue.activeTasks[tID] = t
@@ -143,7 +143,7 @@ func (queue *baseTaskQueue) PopActiveTask(taskID UniqueID) task {
 		return t
 	}
 
-	mlog.Warn(context.TODO(), "Proxy task not in active task list! ts", mlog.Int64("taskID", taskID))
+	log.Warn(context.TODO(), "Proxy task not in active task list! ts", log.Int64("taskID", taskID))
 	return t
 }
 
@@ -273,7 +273,7 @@ func (queue *dmTaskQueue) Enqueue(t task) error {
 	dmt := t.(dmlTask)
 	err := dmt.setChannels()
 	if err != nil {
-		mlog.Warn(t.TraceCtx(), "setChannels failed when Enqueue", mlog.Int64("taskID", t.ID()), mlog.Err(err))
+		log.Warn(t.TraceCtx(), "setChannels failed when Enqueue", log.Int64("taskID", t.ID()), log.Err(err))
 		return err
 	}
 
@@ -302,10 +302,10 @@ func (queue *dmTaskQueue) PopActiveTask(taskID UniqueID) task {
 		defer queue.statsLock.Unlock()
 
 		delete(queue.activeTasks, taskID)
-		mlog.Debug(t.TraceCtx(), "Proxy dmTaskQueue popPChanStats", mlog.Int64("taskID", t.ID()))
+		log.Debug(t.TraceCtx(), "Proxy dmTaskQueue popPChanStats", log.Int64("taskID", t.ID()))
 		queue.popPChanStats(t)
 	} else {
-		mlog.Warn(context.TODO(), "Proxy task not in active task list!", mlog.Int64("taskID", taskID))
+		log.Warn(context.TODO(), "Proxy task not in active task list!", log.Int64("taskID", taskID))
 	}
 	return t
 }
@@ -500,7 +500,7 @@ func (sched *taskScheduler) processTask(t task, q taskQueue) {
 	}()
 	if err != nil {
 		span.RecordError(err)
-		mlog.Warn(ctx, "Failed to pre-execute task: " + err.Error())
+		log.Warn(ctx, "Failed to pre-execute task: " + err.Error())
 		return
 	}
 
@@ -508,7 +508,7 @@ func (sched *taskScheduler) processTask(t task, q taskQueue) {
 	err = t.Execute(ctx)
 	if err != nil {
 		span.RecordError(err)
-		mlog.Warn(ctx, "Failed to execute task: ", mlog.Err(err))
+		log.Warn(ctx, "Failed to execute task: ", log.Err(err))
 		return
 	}
 
@@ -516,7 +516,7 @@ func (sched *taskScheduler) processTask(t task, q taskQueue) {
 	err = t.PostExecute(ctx)
 	if err != nil {
 		span.RecordError(err)
-		mlog.Warn(ctx, "Failed to post-execute task: ", mlog.Err(err))
+		log.Warn(ctx, "Failed to post-execute task: ", log.Err(err))
 		return
 	}
 }
@@ -614,7 +614,7 @@ func (sched *taskScheduler) queryLoop() {
 					return struct{}{}, nil
 				})
 			} else {
-				mlog.Debug(context.TODO(), "query queue is empty ...")
+				log.Debug(context.TODO(), "query queue is empty ...")
 			}
 			sched.dqQueue.updateMetrics()
 		}

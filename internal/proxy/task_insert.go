@@ -11,7 +11,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
@@ -112,45 +112,45 @@ func (it *insertTask) PreExecute(ctx context.Context) error {
 
 	collectionName := it.insertMsg.CollectionName
 	if err := validateCollectionName(collectionName); err != nil {
-		mlog.Warn(ctx, "valid collection name failed", mlog.String("collectionName", collectionName), mlog.Err(err))
+		log.Warn(ctx, "valid collection name failed", log.String("collectionName", collectionName), log.Err(err))
 		return err
 	}
 
 	maxInsertSize := Params.QuotaConfig.MaxInsertSize.GetAsInt()
 	if maxInsertSize != -1 && it.insertMsg.Size() > maxInsertSize {
-		mlog.Warn(ctx, "insert request size exceeds maxInsertSize",
-			mlog.Int("request size", it.insertMsg.Size()), mlog.Int("maxInsertSize", maxInsertSize))
+		log.Warn(ctx, "insert request size exceeds maxInsertSize",
+			log.Int("request size", it.insertMsg.Size()), log.Int("maxInsertSize", maxInsertSize))
 		return merr.WrapErrAsInputError(merr.WrapErrParameterTooLarge("insert request size exceeds maxInsertSize"))
 	}
 
 	collID, err := globalMetaCache.GetCollectionID(context.Background(), it.insertMsg.GetDbName(), collectionName)
 	if err != nil {
-		mlog.Warn(ctx, "fail to get collection id", mlog.Err(err))
+		log.Warn(ctx, "fail to get collection id", log.Err(err))
 		return err
 	}
 	it.collectionID = collID
 
 	colInfo, err := globalMetaCache.GetCollectionInfo(ctx, it.insertMsg.GetDbName(), collectionName, collID)
 	if err != nil {
-		mlog.Warn(ctx, "fail to get collection info", mlog.Err(err))
+		log.Warn(ctx, "fail to get collection info", log.Err(err))
 		return err
 	}
 
 	if it.schemaTimestamp != 0 {
 		if it.schemaTimestamp != colInfo.updateTimestamp {
 			err := merr.WrapErrCollectionSchemaMisMatch(collectionName)
-			mlog.Info(ctx, "collection schema mismatch",
-				mlog.String("collectionName", collectionName),
-				mlog.Uint64("requestSchemaTs", it.schemaTimestamp),
-				mlog.Uint64("collectionSchemaTs", colInfo.updateTimestamp),
-				mlog.Err(err))
+			log.Info(ctx, "collection schema mismatch",
+				log.String("collectionName", collectionName),
+				log.Uint64("requestSchemaTs", it.schemaTimestamp),
+				log.Uint64("collectionSchemaTs", colInfo.updateTimestamp),
+				log.Err(err))
 			return err
 		}
 	}
 
 	schema, err := globalMetaCache.GetCollectionSchema(ctx, it.insertMsg.GetDbName(), collectionName)
 	if err != nil {
-		mlog.Warn(ctx, "get collection schema from global meta cache failed", mlog.String("collectionName", collectionName), mlog.Err(err))
+		log.Warn(ctx, "get collection schema from global meta cache failed", log.String("collectionName", collectionName), log.Err(err))
 		return merr.WrapErrAsInputErrorWhen(err, merr.ErrCollectionNotFound, merr.ErrDatabaseNotFound)
 	}
 	it.schema = schema.CollectionSchema
@@ -168,11 +168,11 @@ func (it *insertTask) PreExecute(ctx context.Context) error {
 	rowIDBegin, rowIDEnd, AllocErr := common.AllocAutoID(it.idAllocator.Alloc, rowNums, clusterID)
 	metrics.ProxyApplyPrimaryKeyLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10)).Observe(float64(tr.ElapseSpan().Milliseconds()))
 	if AllocErr != nil {
-		mlog.Warn(ctx, "failed to allocate auto id",
-			mlog.String("collectionName", collectionName),
-			mlog.Int64("collectionID", it.collectionID),
-			mlog.Uint32("rowNums", rowNums),
-			mlog.Err(AllocErr))
+		log.Warn(ctx, "failed to allocate auto id",
+			log.String("collectionName", collectionName),
+			log.Int64("collectionID", it.collectionID),
+			log.Uint32("rowNums", rowNums),
+			log.Err(AllocErr))
 		return AllocErr
 	}
 
@@ -221,40 +221,40 @@ func (it *insertTask) PreExecute(ctx context.Context) error {
 	// TODO(dragondriver): in fact, NumRows is not trustable, we should check all input fields
 	it.result.IDs, err = checkPrimaryFieldData(allFields, it.schema, it.insertMsg)
 	if err != nil {
-		mlog.Warn(context.TODO(), "check primary field data and hash primary key failed",
-			mlog.Err(err))
+		log.Warn(context.TODO(), "check primary field data and hash primary key failed",
+			log.Err(err))
 		return err
 	}
 
 	// check varchar/text with analyzer was utf-8 format
 	err = checkInputUtf8Compatiable(allFields, it.insertMsg)
 	if err != nil {
-		mlog.Warn(context.TODO(), "check varchar/text format failed", mlog.Err(err))
+		log.Warn(context.TODO(), "check varchar/text format failed", log.Err(err))
 		return err
 	}
 
 	// Validate and set field ID to insert field data
 	err = validateFieldDataColumns(it.insertMsg.GetFieldsData(), schema)
 	if err != nil {
-		mlog.Info(context.TODO(), "validate field data columns failed", mlog.Err(err))
+		log.Info(context.TODO(), "validate field data columns failed", log.Err(err))
 		return err
 	}
 	err = fillFieldPropertiesOnly(it.insertMsg.GetFieldsData(), schema)
 	if err != nil {
-		mlog.Info(context.TODO(), "fill field properties failed", mlog.Err(err))
+		log.Info(context.TODO(), "fill field properties failed", log.Err(err))
 		return err
 	}
 
 	partitionKeyMode, err := isPartitionKeyMode(ctx, it.insertMsg.GetDbName(), collectionName)
 	if err != nil {
-		mlog.Warn(context.TODO(), "check partition key mode failed", mlog.String("collectionName", collectionName), mlog.Err(err))
+		log.Warn(context.TODO(), "check partition key mode failed", log.String("collectionName", collectionName), log.Err(err))
 		return err
 	}
 	if partitionKeyMode {
 		fieldSchema, _ := typeutil.GetPartitionKeyFieldSchema(it.schema)
 		it.partitionKeys, err = getPartitionKeyFieldData(fieldSchema, it.insertMsg)
 		if err != nil {
-			mlog.Warn(context.TODO(), "get partition keys from insert request failed", mlog.String("collectionName", collectionName), mlog.Err(err))
+			log.Warn(context.TODO(), "get partition keys from insert request failed", log.String("collectionName", collectionName), log.Err(err))
 			return err
 		}
 	} else {
@@ -264,7 +264,7 @@ func (it *insertTask) PreExecute(ctx context.Context) error {
 		if len(partitionTag) <= 0 {
 			pinfo, err := globalMetaCache.GetPartitionInfo(ctx, it.insertMsg.GetDbName(), collectionName, "")
 			if err != nil {
-				mlog.Warn(context.TODO(), "get partition info failed", mlog.String("collectionName", collectionName), mlog.Err(err))
+				log.Warn(context.TODO(), "get partition info failed", log.String("collectionName", collectionName), log.Err(err))
 				return err
 			}
 			partitionTag = pinfo.name
@@ -272,7 +272,7 @@ func (it *insertTask) PreExecute(ctx context.Context) error {
 		}
 
 		if err := validatePartitionTag(partitionTag, true); err != nil {
-			mlog.Warn(context.TODO(), "valid partition name failed", mlog.String("partition name", partitionTag), mlog.Err(err))
+			log.Warn(context.TODO(), "valid partition name failed", log.String("partition name", partitionTag), log.Err(err))
 			return err
 		}
 	}
@@ -282,7 +282,7 @@ func (it *insertTask) PreExecute(ctx context.Context) error {
 		return merr.WrapErrAsInputError(err)
 	}
 
-	mlog.Debug(context.TODO(), "Proxy Insert PreExecute done")
+	log.Debug(context.TODO(), "Proxy Insert PreExecute done")
 
 	return nil
 }

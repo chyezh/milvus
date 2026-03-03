@@ -37,7 +37,7 @@ import (
 	"github.com/samber/lo"
 
 	"github.com/milvus-io/milvus/internal/storagecommon"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexcgopb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -194,7 +194,7 @@ func (pw *FFIPackedWriter) Close() (string, error) {
 		return "", err
 	}
 
-	mlog.Info(context.TODO(), "FFI writer closed", mlog.Int64("version", int64(cCommitVersion)))
+	log.Info(context.TODO(), "FFI writer closed", log.Int64("version", int64(cCommitVersion)))
 
 	defer C.loon_properties_free(pw.cProperties)
 	return MarshalManifestPath(pw.basePath, int64(cCommitVersion)), nil

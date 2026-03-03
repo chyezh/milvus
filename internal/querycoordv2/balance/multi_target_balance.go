@@ -19,7 +19,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -532,13 +532,13 @@ func (b *MultiTargetBalancer) BalanceReplica(ctx context.Context, replica *meta.
 	br := NewBalanceReport()
 	defer func() {
 		if len(segmentPlans) == 0 && len(channelPlans) == 0 {
-			mlog.RatedDebug(ctx, mlog.RateDefault, "no plan generated, balance report",
-				mlog.Int64("collection", replica.GetCollectionID()),
-				mlog.Int64("replica id", replica.GetID()),
-				mlog.String("replica group", replica.GetResourceGroup()),
+			log.RatedDebug(ctx, log.RateDefault, "no plan generated, balance report",
+				log.Int64("collection", replica.GetCollectionID()),
+				log.Int64("replica id", replica.GetID()),
+				log.String("replica group", replica.GetResourceGroup()),
 				zap.Stringers("records", br.detailRecords))
 		} else {
-			mlog.Info(context.TODO(), "balance plan generated", zap.Stringers("report details", br.records))
+			log.Info(context.TODO(), "balance plan generated", zap.Stringers("report details", br.records))
 		}
 	}()
 

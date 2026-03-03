@@ -35,7 +35,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/allocator"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metautil"
@@ -341,12 +341,12 @@ func (bsw *BinlogStreamWriter) Finalize() (*Blob, error) {
 		if err != nil {
 			return nil, err
 		}
-		mlog.Debug(context.TODO(), "Binlog stream writer encrypted cipher text",
-			mlog.Int64("collectionID", bsw.collectionID),
-			mlog.Int64("segmentID", bsw.segmentID),
-			mlog.Int64("fieldID", bsw.fieldSchema.FieldID),
-			mlog.Int("plain size", tmpBuf.Len()),
-			mlog.Int("cipher size", len(cipherText)),
+		log.Debug(context.TODO(), "Binlog stream writer encrypted cipher text",
+			log.Int64("collectionID", bsw.collectionID),
+			log.Int64("segmentID", bsw.segmentID),
+			log.Int64("fieldID", bsw.fieldSchema.FieldID),
+			log.Int("plain size", tmpBuf.Len()),
+			log.Int("cipher size", len(cipherText)),
 		)
 		if err := binary.Write(&b, common.Endian, cipherText); err != nil {
 			return nil, err

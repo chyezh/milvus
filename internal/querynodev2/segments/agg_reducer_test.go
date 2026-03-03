@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/suite"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/segcorepb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -254,7 +254,7 @@ func (s *AggReduceSuite) TestSegCoreAggReduceMultiColumn() {
 	reducedRes, err := aggReducer.Reduce(context.Background(), results, nil, nil)
 	s.NoError(err)
 	s.NotNil(reducedRes)
-	mlog.Info(context.TODO(), "reduce:", mlog.Any("reducedRes", reducedRes))
+	log.Info(context.TODO(), "reduce:", log.Any("reducedRes", reducedRes))
 	type Pair struct {
 		key1 int32
 		key2 string
@@ -386,7 +386,7 @@ func (s *AggReduceSuite) TestSegCoreAggReduceWrongRowCount() {
 	reducedRes, err := aggReducer.Reduce(context.Background(), results, nil, nil)
 	s.Error(err)
 	s.Nil(reducedRes)
-	mlog.Info(context.TODO(), "err:", mlog.Any("err", err))
+	log.Info(context.TODO(), "err:", log.Any("err", err))
 }
 
 func (s *AggReduceSuite) TestSegCoreAggReduceNilResult() {
@@ -451,7 +451,7 @@ func (s *AggReduceSuite) TestSegCoreAggReduceNilResult() {
 	results[1] = nil
 
 	reducedRes, err := aggReducer.Reduce(context.Background(), results, nil, nil)
-	mlog.Info(context.TODO(), "err:", mlog.Any("err", err))
+	log.Info(context.TODO(), "err:", log.Any("err", err))
 	s.Error(err)
 	s.Nil(reducedRes)
 }
@@ -545,7 +545,7 @@ func (s *AggReduceSuite) TestSegCoreAggReduceInnerNil() {
 		}
 	}
 	reducedRes, err := aggReducer.Reduce(context.Background(), results, nil, nil)
-	mlog.Info(context.TODO(), "err:", mlog.Any("err", err))
+	log.Info(context.TODO(), "err:", log.Any("err", err))
 	s.Error(err)
 	s.Nil(reducedRes)
 }

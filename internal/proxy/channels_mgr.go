@@ -26,7 +26,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
@@ -65,7 +65,7 @@ func removeDuplicate(ss []string) []string {
 
 func newChannels(vchans []vChan, pchans []pChan) (channelInfos, error) {
 	if len(vchans) != len(pchans) {
-		mlog.Error(context.TODO(), "physical channels mismatch virtual channels", mlog.Int("len(VirtualChannelNames)", len(vchans)), mlog.Int("len(PhysicalChannelNames)", len(pchans)))
+		log.Error(context.TODO(), "physical channels mismatch virtual channels", log.Int("len(VirtualChannelNames)", len(vchans)), log.Int("len(PhysicalChannelNames)", len(pchans)))
 		return channelInfos{}, fmt.Errorf("physical channels mismatch virtual channels, len(VirtualChannelNames): %v, len(PhysicalChannelNames): %v", len(vchans), len(pchans))
 	}
 	/*
@@ -91,14 +91,14 @@ func getDmlChannelsFunc(ctx context.Context, mixc types.MixCoordClient) getChann
 
 		resp, err := mixc.DescribeCollection(ctx, req)
 		if err != nil {
-			mlog.Error(context.TODO(), "failed to describe collection", mlog.Err(err), mlog.Int64("collection", collectionID))
+			log.Error(context.TODO(), "failed to describe collection", log.Err(err), log.Int64("collection", collectionID))
 			return channelInfos{}, err
 		}
 
 		if resp.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-			mlog.Error(context.TODO(), "failed to describe collection",
-				mlog.String("error_code", resp.GetStatus().GetErrorCode().String()),
-				mlog.String("reason", resp.GetStatus().GetReason()))
+			log.Error(context.TODO(), "failed to describe collection",
+				log.String("error_code", resp.GetStatus().GetErrorCode().String()),
+				log.String("reason", resp.GetStatus().GetReason()))
 			return channelInfos{}, merr.Error(resp.GetStatus())
 		}
 
@@ -185,7 +185,7 @@ func (mgr *singleTypeChannelsMgr) removeStream(collectionID UniqueID) {
 		decPChanMetrics(info.channelInfos.pchans)
 		delete(mgr.infos, collectionID)
 	}
-	mlog.Info(context.TODO(), "dml stream removed", mlog.Int64("collection_id", collectionID))
+	log.Info(context.TODO(), "dml stream removed", log.Int64("collection_id", collectionID))
 }
 
 func newSingleTypeChannelsMgr(

@@ -25,7 +25,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	mix "github.com/milvus-io/milvus/internal/distributed/mixcoord"
 	"github.com/milvus-io/milvus/internal/util/dependency"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -55,10 +55,10 @@ func (rc *MixCoord) Prepare() error {
 // Run starts service
 func (rc *MixCoord) Run() error {
 	if err := rc.svr.Run(); err != nil {
-		mlog.Error(rc.ctx, "MixCoord starts error", mlog.Err(err))
+		log.Error(rc.ctx, "MixCoord starts error", log.Err(err))
 		return err
 	}
-	mlog.Info(rc.ctx, "MixCoord successfully started")
+	log.Info(rc.ctx, "MixCoord successfully started")
 	return nil
 }
 

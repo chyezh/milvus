@@ -7,7 +7,7 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/milvus-io/milvus/internal/querynodev2/collector"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/lifetime"
@@ -23,7 +23,7 @@ const (
 func newScheduler(policy schedulePolicy) Scheduler {
 	maxReadConcurrency := paramtable.Get().QueryNodeCfg.MaxReadConcurrency.GetAsInt()
 	maxReceiveChanSize := paramtable.Get().QueryNodeCfg.MaxReceiveChanSize.GetAsInt()
-	mlog.Info(context.TODO(), "query node use concurrent safe scheduler", mlog.Int("max_concurrency", maxReadConcurrency))
+	log.Info(context.TODO(), "query node use concurrent safe scheduler", log.Int("max_concurrency", maxReadConcurrency))
 	return &scheduler{
 		policy:           policy,
 		receiveChan:      make(chan addTaskReq, maxReceiveChanSize),
@@ -124,14 +124,14 @@ func (s *scheduler) schedule() {
 		select {
 		case req, ok := <-s.receiveChan:
 			if !ok {
-				mlog.Info(context.TODO(), "receiveChan closed, processing remaining request")
+				log.Info(context.TODO(), "receiveChan closed, processing remaining request")
 				// drain policy maintained task
 				for task != nil {
 					execChan <- task
 					s.updateWaitingTaskCounter(-1, -nq)
 					task = s.produceExecChan()
 				}
-				mlog.Info(context.TODO(), "all task put into exeChan, schedule worker exit")
+				log.Info(context.TODO(), "all task put into exeChan, schedule worker exit")
 				close(s.execChan)
 				return
 			}
@@ -176,7 +176,7 @@ func (s *scheduler) consumeRecvChan(req addTaskReq, limit int) {
 // Return true if the process can be continued.
 func (s *scheduler) handleAddTaskRequest(req addTaskReq, maxWaitTaskNum int64) bool {
 	if err := req.task.Canceled(); err != nil {
-		mlog.Warn(context.TODO(), "task canceled before enqueue", mlog.Err(err))
+		log.Warn(context.TODO(), "task canceled before enqueue", log.Err(err))
 		req.err <- err
 	} else {
 		// Push the task into the policy to schedule and update the counter of the ready queue.
@@ -215,21 +215,21 @@ func (s *scheduler) produceExecChan() Task {
 // exec exec the ready task in background continuously.
 func (s *scheduler) exec() {
 	defer s.wg.Done()
-	mlog.Info(context.TODO(), "start execute loop")
+	log.Info(context.TODO(), "start execute loop")
 	for {
 		t, ok := <-s.execChan
 		if !ok {
-			mlog.Info(context.TODO(), "scheduler execChan closed, worker exit")
+			log.Info(context.TODO(), "scheduler execChan closed, worker exit")
 			return
 		}
 		// Skip this task if task is canceled.
 		if err := t.Canceled(); err != nil {
-			mlog.Warn(context.TODO(), "task canceled before executing", mlog.Err(err))
+			log.Warn(context.TODO(), "task canceled before executing", log.Err(err))
 			t.Done(err)
 			continue
 		}
 		if err := t.PreExecute(); err != nil {
-			mlog.Warn(context.TODO(), "failed to pre-execute task", mlog.Err(err))
+			log.Warn(context.TODO(), "failed to pre-execute task", log.Err(err))
 			t.Done(err)
 			continue
 		}

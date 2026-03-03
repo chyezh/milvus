@@ -33,7 +33,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/pkg/v2/eventlog"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
@@ -56,7 +56,7 @@ func IncreaseVersion(version int64) SegmentAction {
 				return true
 			}
 		}
-		mlog.Warn(context.TODO(), "segment version cannot go backwards, skip update")
+		log.Warn(context.TODO(), "segment version cannot go backwards, skip update")
 		return false
 	}
 }
@@ -322,14 +322,14 @@ func (mgr *segmentManager) SubLogicalResource(usage ResourceUsage) {
 	// avoid overflow of memory and disk size
 	if mgr.logicalResource.MemorySize < usage.MemorySize {
 		mgr.logicalResource.MemorySize = 0
-		mlog.Warn(context.TODO(), "Logical memory size would be negative, setting to 0")
+		log.Warn(context.TODO(), "Logical memory size would be negative, setting to 0")
 	} else {
 		mgr.logicalResource.MemorySize -= usage.MemorySize
 	}
 
 	if mgr.logicalResource.DiskSize < usage.DiskSize {
 		mgr.logicalResource.DiskSize = 0
-		mlog.Warn(context.TODO(), "Logical disk size would be negative, setting to 0")
+		log.Warn(context.TODO(), "Logical disk size would be negative, setting to 0")
 	} else {
 		mgr.logicalResource.DiskSize -= usage.DiskSize
 	}
@@ -356,9 +356,9 @@ func (mgr *segmentManager) SubLoadedBinlogSize(size int64) {
 		}
 		if mgr.loadedBinlogSize.CompareAndSwap(current, newVal) {
 			if current < size {
-				mlog.Warn(context.TODO(), "Loaded binlog size subtraction exceeds current value, clamped to 0",
-					mlog.Int64("current", current),
-					mlog.Int64("subtracted", size))
+				log.Warn(context.TODO(), "Loaded binlog size subtraction exceeds current value, clamped to 0",
+					log.Int64("current", current),
+					log.Int64("subtracted", size))
 			}
 			return
 		}
@@ -369,7 +369,7 @@ func (mgr *segmentManager) SubLoadedBinlogSize(size int64) {
 func (mgr *segmentManager) GetLoadedBinlogSize() int64 {
 	current := mgr.loadedBinlogSize.Load()
 	if current < 0 {
-		mlog.Warn(context.TODO(), "Loaded binlog size is negative, returning 0", mlog.Int64("current", current))
+		log.Warn(context.TODO(), "Loaded binlog size is negative, returning 0", log.Int64("current", current))
 		return 0
 	}
 	return current
@@ -388,10 +388,10 @@ func (mgr *segmentManager) Put(ctx context.Context, segmentType SegmentType, seg
 		oldSegment, ok := mgr.globalSegments.GetWithType(segment.ID(), segmentType)
 		if ok {
 			if oldSegment.Version() >= segment.Version() {
-				mlog.Warn(context.TODO(), "Invalid segment distribution changed, skip it",
-					mlog.Int64("segmentID", segment.ID()),
-					mlog.Int64("oldVersion", oldSegment.Version()),
-					mlog.Int64("newVersion", segment.Version()),
+				log.Warn(context.TODO(), "Invalid segment distribution changed, skip it",
+					log.Int64("segmentID", segment.ID()),
+					log.Int64("oldVersion", oldSegment.Version()),
+					log.Int64("newVersion", segment.Version()),
 				)
 				// delete redundant segment
 				segment.Release(ctx)
@@ -724,7 +724,7 @@ func (mgr *segmentManager) registerReleaseCallback(callback func(s Segment)) {
 func (mgr *segmentManager) release(ctx context.Context, segment Segment) {
 	if mgr.releaseCallback != nil {
 		mgr.releaseCallback(segment)
-		mlog.Info(ctx, "remove segment from cache", mlog.Int64("segmentID", segment.ID()))
+		log.Info(ctx, "remove segment from cache", log.Int64("segmentID", segment.ID()))
 	}
 	segment.Release(ctx)
 

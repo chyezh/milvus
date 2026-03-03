@@ -21,25 +21,25 @@ import (
 	"testing"
 
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
 func TestMsgDataCoordIsUnhealthy(t *testing.T) {
 	nodeIDList := []typeutil.UniqueID{1, 2, 3}
 	for _, nodeID := range nodeIDList {
-		mlog.Info(context.TODO(), "TestMsgDataCoordIsUnhealthy", mlog.String("msg", msgDataCoordIsUnhealthy(nodeID)))
+		log.Info(context.TODO(), "TestMsgDataCoordIsUnhealthy", log.String("msg", msgDataCoordIsUnhealthy(nodeID)))
 	}
 }
 
 func TestErrDataCoordIsUnhealthy(t *testing.T) {
 	nodeIDList := []typeutil.UniqueID{1, 2, 3}
 	for _, nodeID := range nodeIDList {
-		mlog.Info(context.TODO(), "TestErrDataCoordIsUnhealthy", mlog.Err(errDataCoordIsUnhealthy(nodeID)))
+		log.Info(context.TODO(), "TestErrDataCoordIsUnhealthy", log.Err(errDataCoordIsUnhealthy(nodeID)))
 	}
 }
 
 func TestErrSegmentNotFound(t *testing.T) {
 	segID := UniqueID(435846569243121068)
-	mlog.Info(context.TODO(), "TestErrSegmentNotFound", mlog.String("msg", msgSegmentNotFound(segID)))
+	log.Info(context.TODO(), "TestErrSegmentNotFound", log.String("msg", msgSegmentNotFound(segID)))
 }

@@ -14,7 +14,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/broadcast"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/service/discover"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
@@ -62,13 +62,13 @@ func (s *assignmentServiceImpl) AssignmentDiscover(server streamingpb.StreamingC
 func (s *assignmentServiceImpl) UpdateReplicateConfiguration(ctx context.Context, req *streamingpb.UpdateReplicateConfigurationRequest) (*streamingpb.UpdateReplicateConfigurationResponse, error) {
 	config := req.GetConfiguration()
 
-	mlog.Info(ctx, "UpdateReplicateConfiguration received", replicateutil.ConfigLogFields(config)...)
+	log.Info(ctx, "UpdateReplicateConfiguration received", replicateutil.ConfigLogFields(config)...)
 
 	// check if the configuration is same.
 	// so even if current cluster is not primary, we can still make a idempotent success result.
 	if _, err := s.validateReplicateConfiguration(ctx, config); err != nil {
 		if errors.Is(err, errReplicateConfigurationSame) {
-			mlog.Info(ctx, "configuration is same, ignored")
+			log.Info(ctx, "configuration is same, ignored")
 			return &streamingpb.UpdateReplicateConfigurationResponse{}, nil
 		}
 		return nil, err
@@ -92,7 +92,7 @@ func (s *assignmentServiceImpl) UpdateReplicateConfiguration(ctx context.Context
 	msg, err := s.validateReplicateConfiguration(ctx, config)
 	if err != nil {
 		if errors.Is(err, errReplicateConfigurationSame) {
-			mlog.Info(ctx, "configuration is same after cluster resource key is acquired, ignored")
+			log.Info(ctx, "configuration is same after cluster resource key is acquired, ignored")
 			return &streamingpb.UpdateReplicateConfigurationResponse{}, nil
 		}
 		return nil, err
@@ -149,7 +149,7 @@ func (s *assignmentServiceImpl) validateReplicateConfiguration(ctx context.Conte
 	incomingConfig := config
 	validator := replicateutil.NewReplicateConfigValidator(incomingConfig, currentConfig, currentClusterID, cc.Channels)
 	if err := validator.Validate(); err != nil {
-		mlog.Warn(ctx, "UpdateReplicateConfiguration fail", mlog.Err(err))
+		log.Warn(ctx, "UpdateReplicateConfiguration fail", log.Err(err))
 		return nil, err
 	}
 

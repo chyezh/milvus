@@ -22,7 +22,7 @@ import (
 
 
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
@@ -41,7 +41,7 @@ func initVecIndexBuildPool() {
 
 	watchKey := pt.DataNodeCfg.MaxVecIndexBuildConcurrency.Key
 	pt.Watch(watchKey, config.NewHandler(watchKey, resizeVecIndexBuildPool))
-	mlog.Info(context.TODO(), "init vector index building pool done", mlog.Int("size", initPoolSize))
+	log.Info(context.TODO(), "init vector index building pool done", log.Int("size", initPoolSize))
 }
 
 func resizeVecIndexBuildPool(evt *config.Event) {
@@ -50,10 +50,10 @@ func resizeVecIndexBuildPool(evt *config.Event) {
 
 		err := GetVecIndexBuildPool().Resize(newSize)
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to resize pool", mlog.Err(err))
+			log.Warn(context.TODO(), "failed to resize pool", log.Err(err))
 			return
 		}
-		mlog.Info(context.TODO(), "vector index building pool resize successfully")
+		log.Info(context.TODO(), "vector index building pool resize successfully")
 	}
 }
 

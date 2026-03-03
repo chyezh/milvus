@@ -14,7 +14,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/proxy/privilege"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/contextutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
@@ -46,15 +46,15 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 	if !Params.CommonCfg.AuthorizationEnabled.GetAsBool() {
 		return ctx, nil
 	}
-	mlog.RatedDebug(context.TODO(), mlog.RateDefault, "PrivilegeInterceptor", mlog.String("type", reflect.TypeOf(req).String()))
+	log.RatedDebug(context.TODO(), log.RateDefault, "PrivilegeInterceptor", log.String("type", reflect.TypeOf(req).String()))
 	privilegeExt, err := funcutil.GetPrivilegeExtObj(req)
 	if err != nil {
-		mlog.RatedInfo(context.TODO(), mlog.RateDefault, "GetPrivilegeExtObj err", mlog.Err(err))
+		log.RatedInfo(context.TODO(), log.RateDefault, "GetPrivilegeExtObj err", log.Err(err))
 		return ctx, nil
 	}
 	username, password, err := contextutil.GetAuthInfoFromContext(ctx)
 	if err != nil {
-		mlog.Warn(context.TODO(), "GetCurUserFromContext fail", mlog.Err(err))
+		log.Warn(context.TODO(), "GetCurUserFromContext fail", log.Err(err))
 		return ctx, err
 	}
 	if !Params.CommonCfg.RootShouldBindRole.GetAsBool() && username == util.UserRoot {
@@ -62,7 +62,7 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 	}
 	roleNames, err := GetRole(username)
 	if err != nil {
-		mlog.Warn(context.TODO(), "GetRole fail", mlog.String("username", username), mlog.Err(err))
+		log.Warn(context.TODO(), "GetRole fail", log.String("username", username), log.Err(err))
 		return ctx, err
 	}
 	roleNames = append(roleNames, util.RolePublic)
@@ -102,7 +102,7 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 			// handle the api which refers one resource
 			permitObject, err := permitFunc(objectName)
 			if err != nil {
-				mlog.Warn(context.TODO(), "fail to execute permit func", mlog.String("name", objectName), mlog.Err(err))
+				log.Warn(context.TODO(), "fail to execute permit func", log.String("name", objectName), log.Err(err))
 				return ctx, err
 			}
 			if permitObject {
@@ -116,7 +116,7 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 			for _, name := range objectNames {
 				p, err := permitFunc(name)
 				if err != nil {
-					mlog.Warn(context.TODO(), "fail to execute permit func", mlog.String("name", name), mlog.Err(err))
+					log.Warn(context.TODO(), "fail to execute permit func", log.String("name", name), log.Err(err))
 					return ctx, err
 				}
 				if !p {
@@ -130,7 +130,7 @@ func PrivilegeInterceptor(ctx context.Context, req interface{}) (context.Context
 		}
 	}
 
-	mlog.Info(context.TODO(), "permission deny", mlog.Strings("roles", roleNames))
+	log.Info(context.TODO(), "permission deny", log.Strings("roles", roleNames))
 
 	if password == util.PasswordHolder {
 		username = "apikey user"

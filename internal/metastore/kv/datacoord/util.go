@@ -24,7 +24,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/segmentutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/metautil"
@@ -38,9 +38,9 @@ func ValidateSegment(segment *datapb.SegmentInfo) error {
 	if segment.GetLevel() == datapb.SegmentLevel_L0 {
 		// L0 segment should only have delta logs
 		if len(segment.GetBinlogs()) > 0 || len(segment.GetStatslogs()) > 0 {
-			mlog.Warn(context.TODO(), "find invalid segment while L0 segment get more than delta logs",
-				mlog.Any("binlogs", segment.GetBinlogs()),
-				mlog.Any("stats", segment.GetBinlogs()),
+			log.Warn(context.TODO(), "find invalid segment while L0 segment get more than delta logs",
+				log.Any("binlogs", segment.GetBinlogs()),
+				log.Any("stats", segment.GetBinlogs()),
 			)
 			return fmt.Errorf("segment can not be saved because of L0 segment get more than delta logs: collection %v, segment %v",
 				segment.GetCollectionID(), segment.GetID())
@@ -54,9 +54,9 @@ func ValidateSegment(segment *datapb.SegmentInfo) error {
 	}
 
 	if len(segment.GetBinlogs()) == 0 || len(segment.GetStatslogs()) == 0 {
-		mlog.Warn(context.TODO(), "find segment binlog or statslog was empty",
-			mlog.Any("binlogs", segment.GetBinlogs()),
-			mlog.Any("stats", segment.GetBinlogs()),
+		log.Warn(context.TODO(), "find segment binlog or statslog was empty",
+			log.Any("binlogs", segment.GetBinlogs()),
+			log.Any("stats", segment.GetBinlogs()),
 		)
 		return fmt.Errorf("segment can not be saved because of binlog file or stat log file lack: collection %v, segment %v",
 			segment.GetCollectionID(), segment.GetID())
@@ -68,9 +68,9 @@ func ValidateSegment(segment *datapb.SegmentInfo) error {
 	statslogNum := len(segment.GetStatslogs()[0].GetBinlogs())
 
 	if len(segment.GetCompactionFrom()) == 0 && statslogNum != binlogNum && !hasSpecialStatslog(segment) {
-		mlog.Warn(context.TODO(), "find invalid segment while bin log size didn't match stat log size",
-			mlog.Any("binlogs", segment.GetBinlogs()),
-			mlog.Any("stats", segment.GetStatslogs()),
+		log.Warn(context.TODO(), "find invalid segment while bin log size didn't match stat log size",
+			log.Any("binlogs", segment.GetBinlogs()),
+			log.Any("stats", segment.GetStatslogs()),
 		)
 		return fmt.Errorf("segment can not be saved because of binlog file not match stat log number: collection %v, segment %v",
 			segment.GetCollectionID(), segment.GetID())

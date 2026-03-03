@@ -27,7 +27,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
@@ -75,24 +75,24 @@ func (inNode *InputNode) Name() string {
 
 func (inNode *InputNode) SetCloseMethod(gracefully bool) {
 	inNode.closeGracefully.Store(gracefully)
-	mlog.Info(context.TODO(), "input node close method set",
-		mlog.String("node", inNode.Name()),
-		mlog.Int64("collection", inNode.collectionID),
-		mlog.Bool("gracefully", gracefully))
+	log.Info(context.TODO(), "input node close method set",
+		log.String("node", inNode.Name()),
+		log.Int64("collection", inNode.collectionID),
+		log.Bool("gracefully", gracefully))
 }
 
 // Operate consume a message pack from msgstream and return
 func (inNode *InputNode) Operate(in []Msg) []Msg {
 	msgPack, ok := <-inNode.input
 	if !ok {
-		mlog.Info(context.TODO(), "input node message stream closed",
-			mlog.String("node", inNode.Name()),
-			mlog.Int64("collection", inNode.collectionID),
-			mlog.Bool("closeGracefully", inNode.closeGracefully.Load()),
+		log.Info(context.TODO(), "input node message stream closed",
+			log.String("node", inNode.Name()),
+			log.Int64("collection", inNode.collectionID),
+			log.Bool("closeGracefully", inNode.closeGracefully.Load()),
 		)
 		if inNode.lastMsg != nil && inNode.closeGracefully.Load() {
-			mlog.Info(context.TODO(), "input node trigger force sync",
-				mlog.Any("position", inNode.lastMsg.EndPositions))
+			log.Info(context.TODO(), "input node trigger force sync",
+				log.Any("position", inNode.lastMsg.EndPositions))
 			return []Msg{&MsgStreamMsg{
 				BaseMsg:        NewBaseMsg(true),
 				tsMessages:     []msgstream.TsMsg{},

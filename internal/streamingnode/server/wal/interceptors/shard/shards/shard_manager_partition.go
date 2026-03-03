@@ -3,7 +3,7 @@ package shards
 import (
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/policy"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 )
 
@@ -52,14 +52,14 @@ func (m *shardManagerImpl) CreatePartition(msg message.ImmutableCreatePartitionM
 	collectionID := msg.Header().CollectionId
 	partitionID := msg.Header().PartitionId
 	tiemtick := msg.TimeTick()
-	logger := m.Logger().With(mlog.FieldMessage(msg))
+	logger := m.Logger().With(log.FieldMessage(msg))
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	uniquePartitionKey := PartitionUniqueKey{CollectionID: collectionID, PartitionID: partitionID}
 	if err := m.checkIfPartitionCanBeCreated(uniquePartitionKey); err != nil {
-		logger.Warn(nil, "partition can not be created", mlog.Err(err))
+		logger.Warn(nil, "partition can not be created", log.Err(err))
 		return
 	}
 
@@ -90,26 +90,26 @@ func (m *shardManagerImpl) CreatePartition(msg message.ImmutableCreatePartitionM
 func (m *shardManagerImpl) DropPartition(msg message.ImmutableDropPartitionMessageV1) {
 	collectionID := msg.Header().CollectionId
 	partitionID := msg.Header().PartitionId
-	logger := m.Logger().With(mlog.FieldMessage(msg))
+	logger := m.Logger().With(log.FieldMessage(msg))
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	uniquePartitionKey := PartitionUniqueKey{CollectionID: collectionID, PartitionID: partitionID}
 	if err := m.checkIfPartitionExists(uniquePartitionKey); err != nil {
-		logger.Warn(nil, "partition can not be dropped", mlog.Err(err))
+		logger.Warn(nil, "partition can not be dropped", log.Err(err))
 		return
 	}
 	delete(m.collections[collectionID].PartitionIDs, partitionID)
 
 	pm, ok := m.partitionManagers[uniquePartitionKey]
 	if !ok {
-		logger.Warn(nil, "partition not exists", mlog.Int64("collectionID", collectionID), mlog.Int64("partitionID", partitionID))
+		logger.Warn(nil, "partition not exists", log.Int64("collectionID", collectionID), log.Int64("partitionID", partitionID))
 		return
 	}
 
 	delete(m.partitionManagers, uniquePartitionKey)
 	segmentIDs := pm.FlushAndDropPartition(policy.PolicyPartitionRemoved())
-	m.Logger().Info(nil, "partition removed", mlog.Int64s("segmentIDs", segmentIDs))
+	m.Logger().Info(nil, "partition removed", log.Int64s("segmentIDs", segmentIDs))
 	m.updateMetrics()
 }

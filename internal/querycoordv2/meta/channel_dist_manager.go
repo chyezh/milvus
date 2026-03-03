@@ -25,7 +25,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/util/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
@@ -386,22 +386,22 @@ func (m *ChannelDistManager) GetShardLeader(channelName string, replica *Replica
 			}
 		}
 	}
-	if mlog.LevelEnabled(zap.DebugLevel) {
+	if log.LevelEnabled(zap.DebugLevel) {
 		if candidates != nil {
-			mlog.RatedDebug(nil, mlog.RateDefault, "ChannelDistManager final",
-				mlog.String("Scope", "ChannelDistManager"),
-				mlog.String("channelName", channelName),
-				mlog.Int64("replicaID", replica.GetID()),
-				mlog.String("candidates", candidates.GetChannelName()),
-				mlog.Int64("candidates version", candidates.Version),
-				mlog.Int64("candidates node", candidates.Node),
-				mlog.String("reason", setReason),
+			log.RatedDebug(nil, log.RateDefault, "ChannelDistManager final",
+				log.String("Scope", "ChannelDistManager"),
+				log.String("channelName", channelName),
+				log.Int64("replicaID", replica.GetID()),
+				log.String("candidates", candidates.GetChannelName()),
+				log.Int64("candidates version", candidates.Version),
+				log.Int64("candidates node", candidates.Node),
+				log.String("reason", setReason),
 			)
 		} else {
-			mlog.RatedDebug(nil, mlog.RateDefault, "ChannelDistManager no candidates found",
-				mlog.String("Scope", "ChannelDistManager"),
-				mlog.String("channelName", channelName),
-				mlog.Int64("replicaID", replica.GetID()),
+			log.RatedDebug(nil, log.RateDefault, "ChannelDistManager no candidates found",
+				log.String("Scope", "ChannelDistManager"),
+				log.String("channelName", channelName),
+				log.Int64("replicaID", replica.GetID()),
 			)
 		}
 	}

@@ -25,7 +25,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/datacoord/task"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 )
 
@@ -133,7 +133,7 @@ func (s *copySegmentInspector) Start() {
 
 	// Log inspection interval for observability
 	inspectInterval := Params.DataCoordCfg.CopySegmentCheckInterval.GetAsDuration(time.Second)
-	mlog.Info(s.ctx, "start copy segment inspector", mlog.Duration("inspectInterval", inspectInterval))
+	log.Info(s.ctx, "start copy segment inspector", log.Duration("inspectInterval", inspectInterval))
 
 	ticker := time.NewTicker(inspectInterval)
 	defer ticker.Stop()
@@ -141,7 +141,7 @@ func (s *copySegmentInspector) Start() {
 	for {
 		select {
 		case <-s.closeChan:
-			mlog.Info(s.ctx, "copy segment inspector exited")
+			log.Info(s.ctx, "copy segment inspector exited")
 			return
 		case <-ticker.C:
 			s.inspect()
@@ -195,8 +195,8 @@ func (s *copySegmentInspector) reloadFromMeta() {
 			}
 		}
 	}
-	mlog.Info(context.TODO(), "copy segment inspector reloaded tasks from meta",
-		mlog.Int("jobCount", len(jobs)))
+	log.Info(context.TODO(), "copy segment inspector reloaded tasks from meta",
+		log.Int("jobCount", len(jobs)))
 }
 
 // inspect runs a single inspection cycle to process all pending and failed tasks.
@@ -282,11 +282,11 @@ func (s *copySegmentInspector) processFailed(task CopySegmentTask) {
 			op := UpdateStatusOperator(targetSegID, commonpb.SegmentState_Dropped)
 			err := s.meta.UpdateSegmentsInfo(s.ctx, op)
 			if err != nil {
-				mlog.Warn(context.TODO(), "failed to drop target segment after copy task failed",
-					WrapCopySegmentTaskLog(task, mlog.Int64("segmentID", targetSegID), mlog.Err(err))...)
+				log.Warn(context.TODO(), "failed to drop target segment after copy task failed",
+					WrapCopySegmentTaskLog(task, log.Int64("segmentID", targetSegID), log.Err(err))...)
 			} else {
-				mlog.Info(context.TODO(), "dropped target segment after copy task failed",
-					WrapCopySegmentTaskLog(task, mlog.Int64("segmentID", targetSegID))...)
+				log.Info(context.TODO(), "dropped target segment after copy task failed",
+					WrapCopySegmentTaskLog(task, log.Int64("segmentID", targetSegID))...)
 			}
 		}
 	}

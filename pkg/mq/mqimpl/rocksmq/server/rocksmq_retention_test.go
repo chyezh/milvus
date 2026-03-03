@@ -20,7 +20,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -30,7 +30,7 @@ var retentionPath = "/tmp/rmq_retention/"
 func TestRmqRetention_Basic(t *testing.T) {
 	err := os.MkdirAll(retentionPath, os.ModePerm)
 	if err != nil {
-		mlog.Error(context.TODO(), "MkdirAll error for path", mlog.Any("path", retentionPath))
+		log.Error(context.TODO(), "MkdirAll error for path", log.Any("path", retentionPath))
 		return
 	}
 	defer os.RemoveAll(retentionPath)
@@ -124,7 +124,7 @@ func TestRmqRetention_Basic(t *testing.T) {
 func TestRmqRetention_NotConsumed(t *testing.T) {
 	err := os.MkdirAll(retentionPath, os.ModePerm)
 	if err != nil {
-		mlog.Error(context.TODO(), "MkdirAll error for path", mlog.Any("path", retentionPath))
+		log.Error(context.TODO(), "MkdirAll error for path", log.Any("path", retentionPath))
 		return
 	}
 	defer os.RemoveAll(retentionPath)
@@ -231,7 +231,7 @@ func TestRmqRetention_NotConsumed(t *testing.T) {
 func TestRmqRetention_MultipleTopic(t *testing.T) {
 	err := os.MkdirAll(retentionPath, os.ModePerm)
 	if err != nil {
-		mlog.Error(context.TODO(), "MkdirALl error for path", mlog.Any("path", retentionPath))
+		log.Error(context.TODO(), "MkdirALl error for path", log.Any("path", retentionPath))
 		return
 	}
 	defer os.RemoveAll(retentionPath)
@@ -393,7 +393,7 @@ func TestRmqRetention_MultipleTopic(t *testing.T) {
 func TestRetentionInfo_InitRetentionInfo(t *testing.T) {
 	err := os.MkdirAll(retentionPath, os.ModePerm)
 	if err != nil {
-		mlog.Error(context.TODO(), "MkdirALl error for path", mlog.Any("path", retentionPath))
+		log.Error(context.TODO(), "MkdirALl error for path", log.Any("path", retentionPath))
 		return
 	}
 	defer os.RemoveAll(retentionPath)
@@ -444,7 +444,7 @@ func TestRetentionInfo_InitRetentionInfo(t *testing.T) {
 func TestRmqRetention_PageTimeExpire(t *testing.T) {
 	err := os.MkdirAll(retentionPath, os.ModePerm)
 	if err != nil {
-		mlog.Error(context.TODO(), "MkdirALl error for path", mlog.Any("path", retentionPath))
+		log.Error(context.TODO(), "MkdirALl error for path", log.Any("path", retentionPath))
 		return
 	}
 	defer os.RemoveAll(retentionPath)
@@ -567,7 +567,7 @@ func TestRmqRetention_PageTimeExpire(t *testing.T) {
 func TestRmqRetention_PageSizeExpire(t *testing.T) {
 	err := os.MkdirAll(retentionPath, os.ModePerm)
 	if err != nil {
-		mlog.Error(context.TODO(), "MkdirALl error for path", mlog.Any("path", retentionPath))
+		log.Error(context.TODO(), "MkdirALl error for path", log.Any("path", retentionPath))
 		return
 	}
 	defer os.RemoveAll(retentionPath)
@@ -626,7 +626,7 @@ func TestRmqRetention_PageSizeExpire(t *testing.T) {
 		cMsgs = append(cMsgs, cMsg[0])
 	}
 	assert.Equal(t, len(cMsgs), msgNum)
-	mlog.Debug(context.TODO(), "Already consumed, wait for message cleaned by retention")
+	log.Debug(context.TODO(), "Already consumed, wait for message cleaned by retention")
 	// wait for enough time for page expiration
 	time.Sleep(time.Duration(2) * time.Second)
 	err = rmq.ForceSeek(topicName, groupName, ids[0])

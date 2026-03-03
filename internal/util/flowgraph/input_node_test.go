@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/milvus-io/milvus/internal/util/dependency"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -114,7 +114,7 @@ func Test_InputNodeSkipMode(t *testing.T) {
 
 	msgPack := generateMsgPack()
 	produceStream.Produce(context.TODO(), &msgPack)
-	mlog.Info(context.TODO(), "produce empty ttmsg")
+	log.Info(context.TODO(), "produce empty ttmsg")
 	<-outputCh
 	assert.Equal(t, 1, outputCount)
 	assert.Equal(t, false, inputNode.skipMode)
@@ -122,12 +122,12 @@ func Test_InputNodeSkipMode(t *testing.T) {
 	time.Sleep(3 * time.Second)
 	assert.Equal(t, false, inputNode.skipMode)
 	produceStream.Produce(context.TODO(), &msgPack)
-	mlog.Info(context.TODO(), "after 3 seconds with no active msg receive, input node will turn on skip mode")
+	log.Info(context.TODO(), "after 3 seconds with no active msg receive, input node will turn on skip mode")
 	<-outputCh
 	assert.Equal(t, 2, outputCount)
 	assert.Equal(t, true, inputNode.skipMode)
 
-	mlog.Info(context.TODO(), "some ttmsg will be skipped in skip mode")
+	log.Info(context.TODO(), "some ttmsg will be skipped in skip mode")
 	// this msg will be skipped
 	produceStream.Produce(context.TODO(), &msgPack)
 	<-outputCh
@@ -140,14 +140,14 @@ func Test_InputNodeSkipMode(t *testing.T) {
 	assert.Equal(t, 3, outputCount)
 	assert.Equal(t, true, inputNode.skipMode)
 
-	//mlog.Info(context.TODO(), "non empty msg will awake input node, turn off skip mode")
+	//log.Info(context.TODO(), "non empty msg will awake input node, turn off skip mode")
 	//insertMsgPack := generateInsertMsgPack()
 	//produceStream.Produce(&insertMsgPack)
 	//<-outputCh
 	//assert.Equal(t, 3, outputCount)
 	//assert.Equal(t, false, inputNode.skipMode)
 	//
-	//mlog.Info(context.TODO(), "empty msg will be consumed in not-skip mode")
+	//log.Info(context.TODO(), "empty msg will be consumed in not-skip mode")
 	//produceStream.Produce(&msgPack)
 	//<-outputCh
 	//assert.Equal(t, 4, outputCount)

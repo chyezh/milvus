@@ -25,7 +25,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	grpcdatanode "github.com/milvus-io/milvus/internal/distributed/datanode"
 	"github.com/milvus-io/milvus/internal/util/dependency"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -56,10 +56,10 @@ func (d *DataNode) Prepare() error {
 // Run starts service
 func (d *DataNode) Run() error {
 	if err := d.svr.Run(); err != nil {
-		mlog.Error(d.ctx, "DataNode starts error", mlog.Err(err))
+		log.Error(d.ctx, "DataNode starts error", log.Err(err))
 		return err
 	}
-	mlog.Info(d.ctx, "Datanode successfully started")
+	log.Info(d.ctx, "Datanode successfully started")
 	return nil
 }
 

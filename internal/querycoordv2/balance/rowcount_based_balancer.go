@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -59,10 +59,10 @@ func (b *RowCountBasedBalancer) BalanceReplica(ctx context.Context, replica *met
 	br := NewBalanceReport()
 	defer func() {
 		if len(segmentPlans) == 0 && len(channelPlans) == 0 {
-			mlog.RatedDebug(ctx, mlog.RateDefault, "no plan generated, balance report",
+			log.RatedDebug(ctx, log.RateDefault, "no plan generated, balance report",
 				zap.Stringers("records", br.detailRecords))
 		} else {
-			mlog.Info(context.TODO(), "balance plan generated", zap.Stringers("report details", br.records))
+			log.Info(context.TODO(), "balance plan generated", zap.Stringers("report details", br.records))
 		}
 	}()
 

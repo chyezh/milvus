@@ -48,7 +48,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
 	kvfactory "github.com/milvus-io/milvus/internal/util/dependency/kv"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
@@ -649,7 +649,7 @@ func (suite *ServerSuite) hackServer() {
 		}, nil).Maybe()
 		suite.expectGetRecoverInfo(collection)
 	}
-	mlog.Debug(context.TODO(), "server hacked")
+	log.Debug(context.TODO(), "server hacked")
 }
 
 func (suite *ServerSuite) hackBroker(server *Server) {

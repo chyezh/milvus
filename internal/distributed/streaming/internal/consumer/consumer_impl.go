@@ -9,7 +9,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/consumer"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
@@ -25,7 +25,7 @@ func NewResumableConsumer(factory factory, opts *ConsumerOptions) ResumableConsu
 		cancel:         cancel,
 		stopResumingCh: make(chan struct{}),
 		resumingExitCh: make(chan struct{}),
-		logger:         mlog.With(mlog.String("pchannel", opts.PChannel), mlog.Any("initialDeliverPolicy", opts.DeliverPolicy)),
+		logger:         log.With(log.String("pchannel", opts.PChannel), log.Any("initialDeliverPolicy", opts.DeliverPolicy)),
 		opts:           opts,
 		mh: &timeTickOrderMessageHandler{
 			inner:                  opts.MessageHandler,
@@ -45,7 +45,7 @@ func NewResumableConsumer(factory factory, opts *ConsumerOptions) ResumableConsu
 type resumableConsumerImpl struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
-	logger         *mlog.Logger
+	logger         *log.Logger
 	stopResumingCh chan struct{}
 	resumingExitCh chan struct{}
 
@@ -138,7 +138,7 @@ func (rc *resumableConsumerImpl) resumeLoop() {
 }
 
 func (rc *resumableConsumerImpl) createNewConsumer(opts *handler.ConsumerOptions) (consumer.Consumer, error) {
-	logger := rc.logger.With(mlog.Any("deliverPolicy", opts.DeliverPolicy))
+	logger := rc.logger.With(log.Any("deliverPolicy", opts.DeliverPolicy))
 
 	backoff := backoff.NewExponentialBackOff()
 	backoff.InitialInterval = 100 * time.Millisecond
@@ -156,7 +156,7 @@ func (rc *resumableConsumerImpl) createNewConsumer(opts *handler.ConsumerOptions
 		}
 		if err != nil {
 			nextBackoff := backoff.NextBackOff()
-			logger.Warn(nil, "create consumer failed, retry...", mlog.Err(err), mlog.Duration("nextRetryInterval", nextBackoff))
+			logger.Warn(nil, "create consumer failed, retry...", log.Err(err), log.Duration("nextRetryInterval", nextBackoff))
 			time.Sleep(nextBackoff)
 			continue
 		}
@@ -171,7 +171,7 @@ func (rc *resumableConsumerImpl) waitUntilUnavailable(consumer handler.Consumer)
 	defer func() {
 		consumer.Close()
 		if consumer.Error() != nil {
-			rc.logger.Warn(nil, "consumer is closed with error", mlog.Err(consumer.Error()))
+			rc.logger.Warn(nil, "consumer is closed with error", log.Err(consumer.Error()))
 		}
 	}()
 
@@ -182,9 +182,9 @@ func (rc *resumableConsumerImpl) waitUntilUnavailable(consumer handler.Consumer)
 		return rc.ctx.Err()
 	case <-consumer.Done():
 		rc.logger.Warn(nil, "consumer is done or encounter error, try to resume...",
-			mlog.Err(consumer.Error()),
-			mlog.Any("lastConfirmedMessageID", rc.mh.lastConfirmedMessageID),
-			mlog.Uint64("lastTimeTick", rc.mh.lastTimeTick),
+			log.Err(consumer.Error()),
+			log.Any("lastConfirmedMessageID", rc.mh.lastConfirmedMessageID),
+			log.Uint64("lastTimeTick", rc.mh.lastTimeTick),
 		)
 		return nil
 	}

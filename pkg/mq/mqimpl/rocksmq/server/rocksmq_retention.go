@@ -22,7 +22,7 @@ import (
 	"github.com/tecbot/gorocksdb"
 
 	rocksdbkv "github.com/milvus-io/milvus/pkg/v2/kv/rocksdb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -77,7 +77,7 @@ func (ri *retentionInfo) startRetentionInfo() {
 
 // retention do time ticker and trigger retention check and operation for each topic
 func (ri *retentionInfo) retention() error {
-	mlog.Debug(context.TODO(), "Rocksmq retention goroutine start!")
+	log.Debug(context.TODO(), "Rocksmq retention goroutine start!")
 	params := paramtable.Get()
 	// Do retention check every 10 mins
 	ticker := time.NewTicker(params.RocksmqCfg.TickerTimeInSeconds.GetAsDuration(time.Second))
@@ -89,10 +89,10 @@ func (ri *retentionInfo) retention() error {
 	for {
 		select {
 		case <-ri.closeCh:
-			mlog.Warn(context.TODO(), "Rocksmq retention finish!")
+			log.Warn(context.TODO(), "Rocksmq retention finish!")
 			return nil
 		case <-compactionTicker.C:
-			mlog.Info(context.TODO(), "trigger rocksdb compaction, should trigger rocksdb data clean")
+			log.Info(context.TODO(), "trigger rocksdb compaction, should trigger rocksdb data clean")
 			go ri.db.CompactRange(gorocksdb.Range{Start: nil, Limit: nil})
 			go ri.kv.DB.CompactRange(gorocksdb.Range{Start: nil, Limit: nil})
 		case t := <-ticker.C:
@@ -103,7 +103,7 @@ func (ri *retentionInfo) retention() error {
 				if lastRetentionTs+checkTime < timeNow {
 					err := ri.expiredCleanUp(topic)
 					if err != nil {
-						mlog.Warn(context.TODO(), "Retention expired clean failed", mlog.Err(err))
+						log.Warn(context.TODO(), "Retention expired clean failed", log.Err(err))
 					}
 					ri.topicRetetionTime.Insert(topic, timeNow)
 				}
@@ -143,8 +143,8 @@ func (ri *retentionInfo) expiredCleanUp(topic string) error {
 	}
 	// Quick Path, No page to check
 	if totalAckedSize == 0 {
-		mlog.Debug(context.TODO(), "All messages are not expired, skip retention because no ack", mlog.String("topic", topic),
-			mlog.Int64("time taken", time.Since(start).Milliseconds()))
+		log.Debug(context.TODO(), "All messages are not expired, skip retention because no ack", log.String("topic", topic),
+			log.Int64("time taken", time.Since(start).Milliseconds()))
 		return nil
 	}
 	pageReadOpts := gorocksdb.NewDefaultReadOptions()
@@ -197,9 +197,9 @@ func (ri *retentionInfo) expiredCleanUp(topic string) error {
 		return err
 	}
 
-	mlog.Info(context.TODO(), "Expired check by retention time", mlog.String("topic", topic),
-		mlog.Int64("pageEndID", pageEndID), mlog.Int64("deletedAckedSize", deletedAckedSize), mlog.Int64("lastAck", lastAck),
-		mlog.Int64("pageCleaned", pageCleaned), mlog.Int64("time taken", time.Since(start).Milliseconds()))
+	log.Info(context.TODO(), "Expired check by retention time", log.String("topic", topic),
+		log.Int64("pageEndID", pageEndID), log.Int64("deletedAckedSize", deletedAckedSize), log.Int64("lastAck", lastAck),
+		log.Int64("pageCleaned", pageCleaned), log.Int64("time taken", time.Since(start).Milliseconds()))
 
 	for ; pageIter.Valid(); pageIter.Next() {
 		pValue := pageIter.Value()
@@ -232,13 +232,13 @@ func (ri *retentionInfo) expiredCleanUp(topic string) error {
 	}
 
 	if pageEndID == 0 {
-		mlog.Debug(context.TODO(), "All messages are not expired, skip retention", mlog.String("topic", topic), mlog.Int64("time taken", time.Since(start).Milliseconds()))
+		log.Debug(context.TODO(), "All messages are not expired, skip retention", log.String("topic", topic), log.Int64("time taken", time.Since(start).Milliseconds()))
 		return nil
 	}
 	expireTime := time.Since(start).Milliseconds()
-	mlog.Debug(context.TODO(), "Expired check by message size: ", mlog.String("topic", topic),
-		mlog.Int64("pageEndID", pageEndID), mlog.Int64("deletedAckedSize", deletedAckedSize),
-		mlog.Int64("pageCleaned", pageCleaned), mlog.Int64("time taken", expireTime))
+	log.Debug(context.TODO(), "Expired check by message size: ", log.String("topic", topic),
+		log.Int64("pageEndID", pageEndID), log.Int64("deletedAckedSize", deletedAckedSize),
+		log.Int64("pageCleaned", pageCleaned), log.Int64("time taken", expireTime))
 	return ri.cleanData(topic, pageEndID)
 }
 
@@ -350,7 +350,7 @@ func DeleteMessages(db *gorocksdb.DB, topic string, startID, endID UniqueID) err
 	if err != nil {
 		return err
 	}
-	mlog.Debug(context.TODO(), "Delete message for topic", mlog.String("topic", topic), mlog.Int64("startID", startID), mlog.Int64("endID", endID))
+	log.Debug(context.TODO(), "Delete message for topic", log.String("topic", topic), log.Int64("startID", startID), log.Int64("endID", endID))
 	return nil
 }
 

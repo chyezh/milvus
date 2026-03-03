@@ -5,7 +5,7 @@ import (
 	"time"
 
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
@@ -18,7 +18,7 @@ type tombstoneItem struct {
 
 // tombstoneScheduler is a scheduler for the tombstone.
 type tombstoneScheduler struct {
-	mlog.Binder
+	log.Binder
 
 	notifier   *syncutil.AsyncTaskNotifier[struct{}]
 	pending    chan uint64
@@ -27,7 +27,7 @@ type tombstoneScheduler struct {
 }
 
 // newTombstoneScheduler creates a new tombstone scheduler.
-func newTombstoneScheduler(logger *mlog.Logger) *tombstoneScheduler {
+func newTombstoneScheduler(logger *log.Logger) *tombstoneScheduler {
 	ts := &tombstoneScheduler{
 		notifier: syncutil.NewAsyncTaskNotifier[struct{}](),
 		pending:  make(chan uint64),
@@ -105,9 +105,9 @@ func (s *tombstoneScheduler) triggerGCTombstone() {
 		expiredOffset = len(s.tombstones) - maxTombstoneCount
 	}
 	s.Logger().Info(nil, "triggerGCTombstone",
-		mlog.Int("tombstone count", len(s.tombstones)),
-		mlog.Int("expired offset", expiredOffset),
-		mlog.Time("expired time", expiredTime))
+		log.Int("tombstone count", len(s.tombstones)),
+		log.Int("expired offset", expiredOffset),
+		log.Time("expired time", expiredTime))
 	for idx, tombstone := range s.tombstones {
 		// drop tombstone until the expired time or until the expired offset.
 		if idx >= expiredOffset && tombstone.createTime.After(expiredTime) {
@@ -115,7 +115,7 @@ func (s *tombstoneScheduler) triggerGCTombstone() {
 			return
 		}
 		if err := s.bm.DropTombstone(s.notifier.Context(), tombstone.broadcastID); err != nil {
-			s.Logger().Error(nil, "failed to drop tombstone", mlog.Err(err))
+			s.Logger().Error(nil, "failed to drop tombstone", log.Err(err))
 			s.tombstones = s.tombstones[idx:]
 			return
 		}

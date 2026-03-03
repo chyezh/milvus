@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -70,16 +70,16 @@ func getMultiReadPool() *conc.Pool[any] {
 
 func resizePool(pool *conc.Pool[any], newSize int, tag string) {
 	if newSize <= 0 {
-		mlog.Warn(context.TODO(), "cannot set pool size to non-positive value", mlog.String("poolTag", tag), mlog.Int("newSize", newSize))
+		log.Warn(context.TODO(), "cannot set pool size to non-positive value", log.String("poolTag", tag), log.Int("newSize", newSize))
 		return
 	}
 
 	err := pool.Resize(newSize)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to resize pool", mlog.Err(err), mlog.String("poolTag", tag), mlog.Int("newSize", newSize))
+		log.Warn(context.TODO(), "failed to resize pool", log.Err(err), log.String("poolTag", tag), log.Int("newSize", newSize))
 		return
 	}
-	mlog.Info(context.TODO(), "pool resize successfully", mlog.String("poolTag", tag), mlog.Int("newSize", newSize))
+	log.Info(context.TODO(), "pool resize successfully", log.String("poolTag", tag), log.Int("newSize", newSize))
 }
 
 func ResizeBFApplyPool(evt *config.Event) {
@@ -94,7 +94,7 @@ func initBFApplyPool() {
 	bfApplyPoolInitOnce.Do(func() {
 		pt := paramtable.Get()
 		poolSize := hardware.GetCPUNum() * pt.QueryNodeCfg.BloomFilterApplyParallelFactor.GetAsInt()
-		mlog.Info(context.TODO(), "init BFApplyPool", mlog.Int("poolSize", poolSize))
+		log.Info(context.TODO(), "init BFApplyPool", log.Int("poolSize", poolSize))
 		pool := conc.NewPool[any](
 			poolSize,
 		)

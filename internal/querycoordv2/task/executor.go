@@ -35,7 +35,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
@@ -124,7 +124,7 @@ func (ex *Executor) Execute(task Task, step int) bool {
 	}
 
 	go func() {
-		mlog.Info(context.TODO(), "execute the action of task")
+		log.Info(context.TODO(), "execute the action of task")
 		switch task.Actions()[step].(type) {
 		case *SegmentAction:
 			ex.executeSegmentAction(task.(*SegmentTask), step)
@@ -149,10 +149,10 @@ func (ex *Executor) GetExecutedFlag() <-chan struct{} {
 
 func (ex *Executor) removeTask(task Task, step int) {
 	if task.Err() != nil {
-		mlog.Info(context.TODO(), "execute action done, remove it",
-			mlog.Int64("taskID", task.ID()),
-			mlog.Int("step", step),
-			mlog.Err(task.Err()))
+		log.Info(context.TODO(), "execute action done, remove it",
+			log.Int64("taskID", task.ID()),
+			log.Int("step", step),
+			log.Err(task.Err()))
 	} else {
 		select {
 		case ex.executedFlag <- struct{}{}:
@@ -213,14 +213,14 @@ func (ex *Executor) loadSegment(task *SegmentTask, step int) error {
 	if replica == nil {
 		msg := "node doesn't belong to any replica"
 		err := merr.WrapErrNodeNotAvailable(action.Node())
-		mlog.Warn(context.TODO(), msg, mlog.Err(err))
+		log.Warn(context.TODO(), msg, log.Err(err))
 		return err
 	}
 	view := ex.dist.ChannelDistManager.GetShardLeader(task.Shard(), replica)
 	if view == nil {
 		msg := "no shard leader for the segment to execute loading"
 		err = merr.WrapErrChannelNotFound(task.Shard(), "shard delegator not found")
-		mlog.Warn(context.TODO(), msg, mlog.Err(err))
+		log.Warn(context.TODO(), msg, log.Err(err))
 		return err
 	}
 
@@ -230,16 +230,16 @@ func (ex *Executor) loadSegment(task *SegmentTask, step int) error {
 	}
 
 	startTs := time.Now()
-	mlog.Info(context.TODO(), "load segments...")
+	log.Info(context.TODO(), "load segments...")
 	status, err := ex.cluster.LoadSegments(task.Context(), view.Node, req)
 	err = merr.CheckRPCCall(status, err)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to load segment", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to load segment", log.Err(err))
 		return err
 	}
 
 	elapsed := time.Since(startTs)
-	mlog.Info(context.TODO(), "load segments done", mlog.Duration("elapsed", elapsed))
+	log.Info(context.TODO(), "load segments done", log.Duration("elapsed", elapsed))
 
 	return nil
 }
@@ -304,7 +304,7 @@ func (ex *Executor) releaseSegment(task *SegmentTask, step int) {
 			if replica == nil {
 				msg := "node doesn't belong to any replica, try to send release to worker"
 				err := merr.WrapErrNodeNotAvailable(action.Node())
-				mlog.Warn(context.TODO(), msg, mlog.Err(err))
+				log.Warn(context.TODO(), msg, log.Err(err))
 				dstNode = action.Node()
 				req.NeedTransfer = false
 			} else {
@@ -312,14 +312,14 @@ func (ex *Executor) releaseSegment(task *SegmentTask, step int) {
 				if view == nil {
 					msg := "no shard leader for the segment to execute releasing"
 					err = merr.WrapErrChannelNotFound(task.Shard(), "shard delegator not found")
-					mlog.Warn(context.TODO(), msg, mlog.Err(err))
+					log.Warn(context.TODO(), msg, log.Err(err))
 					return
 				}
 				// NOTE: for balance segment task, expected load and release execution on the same shard leader
 				if GetTaskType(task) == TaskTypeMove && task.ShardLeaderID() != view.Node {
 					msg := "shard leader changed, skip release"
 					err = merr.WrapErrServiceInternal(fmt.Sprintf("shard leader changed from %d to %d", task.ShardLeaderID(), view.Node))
-					mlog.Warn(context.TODO(), msg, mlog.Err(err))
+					log.Warn(context.TODO(), msg, log.Err(err))
 					return
 				}
 				dstNode = view.Node
@@ -328,15 +328,15 @@ func (ex *Executor) releaseSegment(task *SegmentTask, step int) {
 		}
 	}
 
-	mlog.Info(context.TODO(), "release segment...")
+	log.Info(context.TODO(), "release segment...")
 	status, err := ex.cluster.ReleaseSegments(ctx, dstNode, req)
 	err = merr.CheckRPCCall(status, err)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to release segment", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to release segment", log.Err(err))
 		return
 	}
 	elapsed := time.Since(startTs)
-	mlog.Info(context.TODO(), "release segment done", mlog.Int64("taskID", task.ID()), mlog.Duration("time taken", elapsed))
+	log.Info(context.TODO(), "release segment done", log.Int64("taskID", task.ID()), log.Duration("time taken", elapsed))
 }
 
 func (ex *Executor) executeDmChannelAction(task *ChannelTask, step int) {
@@ -364,23 +364,23 @@ func (ex *Executor) subscribeChannel(task *ChannelTask, step int) error {
 
 	collectionInfo, err := ex.broker.DescribeCollection(ctx, task.CollectionID())
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to get collection info", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get collection info", log.Err(err))
 		return err
 	}
 	loadFields := ex.meta.GetLoadFields(ctx, task.CollectionID())
 	partitions, err := utils.GetPartitions(ctx, ex.targetMgr, task.CollectionID())
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to get partitions of collection", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get partitions of collection", log.Err(err))
 		return err
 	}
 	indexInfo, err := ex.broker.ListIndexes(ctx, task.CollectionID())
 	if err != nil {
-		mlog.Warn(context.TODO(), "fail to get index meta of collection", mlog.Err(err))
+		log.Warn(context.TODO(), "fail to get index meta of collection", log.Err(err))
 		return err
 	}
 	dbResp, err := ex.broker.DescribeDatabase(ctx, collectionInfo.GetDbName())
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to get database info", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get database info", log.Err(err))
 		return err
 	}
 	loadMeta := packLoadMeta(
@@ -395,13 +395,13 @@ func (ex *Executor) subscribeChannel(task *ChannelTask, step int) error {
 	dmChannel := ex.targetMgr.GetDmChannel(ctx, task.CollectionID(), action.ChannelName(), meta.NextTarget)
 	if dmChannel == nil {
 		msg := "channel does not exist in next target, skip it"
-		mlog.Warn(context.TODO(), msg, mlog.String("channelName", action.ChannelName()))
+		log.Warn(context.TODO(), msg, log.String("channelName", action.ChannelName()))
 		return merr.WrapErrChannelReduplicate(action.ChannelName())
 	}
 
 	partitions, err = utils.GetPartitions(ctx, ex.targetMgr, task.collectionID)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to get partitions", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get partitions", log.Err(err))
 		return merr.WrapErrServiceInternal(fmt.Sprintf("failed to get partitions for collection=%d", task.CollectionID()))
 	}
 
@@ -419,8 +419,8 @@ func (ex *Executor) subscribeChannel(task *ChannelTask, step int) error {
 	)
 	err = fillSubChannelRequest(ctx, req, ex.broker, ex.shouldIncludeFlushedSegmentInfo(action.Node()))
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to subscribe channel, failed to fill the request with segments",
-			mlog.Err(err))
+		log.Warn(context.TODO(), "failed to subscribe channel, failed to fill the request with segments",
+			log.Err(err))
 		return err
 	}
 
@@ -431,22 +431,22 @@ func (ex *Executor) subscribeChannel(task *ChannelTask, step int) error {
 	req.SealedSegmentRowCount = sealedSegmentRowCount
 
 	ts := dmChannel.GetSeekPosition().GetTimestamp()
-	mlog.Info(context.TODO(), "subscribe channel...",
-		mlog.Uint64("checkpoint", ts),
-		mlog.Duration("sinceCheckpoint", time.Since(tsoutil.PhysicalTime(ts))),
+	log.Info(context.TODO(), "subscribe channel...",
+		log.Uint64("checkpoint", ts),
+		log.Duration("sinceCheckpoint", time.Since(tsoutil.PhysicalTime(ts))),
 	)
 	status, err := ex.cluster.WatchDmChannels(ctx, action.Node(), req)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to subscribe channel, it may be a false failure", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to subscribe channel, it may be a false failure", log.Err(err))
 		return err
 	}
 	if !merr.Ok(status) {
 		err = merr.Error(status)
-		mlog.Warn(context.TODO(), "failed to subscribe channel", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to subscribe channel", log.Err(err))
 		return err
 	}
 	elapsed := time.Since(startTs)
-	mlog.Info(context.TODO(), "subscribe channel done", mlog.Int64("taskID", task.ID()), mlog.Duration("time taken", elapsed))
+	log.Info(context.TODO(), "subscribe channel done", log.Int64("taskID", task.ID()), log.Duration("time taken", elapsed))
 	return nil
 }
 
@@ -472,20 +472,20 @@ func (ex *Executor) unsubscribeChannel(task *ChannelTask, step int) error {
 	ctx := task.Context()
 
 	req := packUnsubDmChannelRequest(task, action)
-	mlog.Info(context.TODO(), "unsubscribe channel...")
+	log.Info(context.TODO(), "unsubscribe channel...")
 	status, err := ex.cluster.UnsubDmChannel(ctx, action.Node(), req)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to unsubscribe channel, it may be a false failure", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to unsubscribe channel, it may be a false failure", log.Err(err))
 		return err
 	}
 	if !merr.Ok(status) {
 		err = merr.Error(status)
-		mlog.Warn(context.TODO(), "failed to unsubscribe channel", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to unsubscribe channel", log.Err(err))
 		return err
 	}
 
 	elapsed := time.Since(startTs)
-	mlog.Info(context.TODO(), "unsubscribe channel done", mlog.Int64("taskID", task.ID()), mlog.Duration("time taken", elapsed))
+	log.Info(context.TODO(), "unsubscribe channel done", log.Int64("taskID", task.ID()), log.Duration("time taken", elapsed))
 	return nil
 }
 
@@ -521,13 +521,13 @@ func (ex *Executor) executeDropIndexAction(task *DropIndexTask, step int) {
 	replica := ex.meta.ReplicaManager.Get(ctx, task.ReplicaID())
 	if replica == nil {
 		err = merr.WrapErrNodeNotAvailable(action.Node())
-		mlog.Warn(context.TODO(), "node doesn't belong to any replica", mlog.Err(err))
+		log.Warn(context.TODO(), "node doesn't belong to any replica", log.Err(err))
 		return
 	}
 	view := ex.dist.ChannelDistManager.GetShardLeader(task.Shard(), replica)
 	if view == nil {
 		err = merr.WrapErrChannelNotFound(task.Shard(), "shard delegator not found")
-		mlog.Warn(context.TODO(), "failed to get shard leader", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get shard leader", log.Err(err))
 		return
 	}
 
@@ -543,20 +543,20 @@ func (ex *Executor) executeDropIndexAction(task *DropIndexTask, step int) {
 	}
 
 	startTs := time.Now()
-	mlog.Info(context.TODO(), "drop index...")
+	log.Info(context.TODO(), "drop index...")
 	status, err := ex.cluster.DropIndex(task.Context(), view.Node, req)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to drop index", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to drop index", log.Err(err))
 		return
 	}
 	if !merr.Ok(status) {
 		err = merr.Error(status)
-		mlog.Warn(context.TODO(), "failed to drop index", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to drop index", log.Err(err))
 		return
 	}
 
 	elapsed := time.Since(startTs)
-	mlog.Info(context.TODO(), "drop index done", mlog.Duration("elapsed", elapsed))
+	log.Info(context.TODO(), "drop index done", log.Duration("elapsed", elapsed))
 }
 
 func (ex *Executor) updatePartStatsVersions(task *LeaderTask, step int) error {
@@ -589,16 +589,16 @@ func (ex *Executor) updatePartStatsVersions(task *LeaderTask, step int) error {
 		},
 	}
 	startTs := time.Now()
-	mlog.Debug(context.TODO(), "Update partition stats versions...")
+	log.Debug(context.TODO(), "Update partition stats versions...")
 	status, err := ex.cluster.SyncDistribution(task.Context(), task.leaderID, req)
 	err = merr.CheckRPCCall(status, err)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to update partition stats versions", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to update partition stats versions", log.Err(err))
 		return err
 	}
 
 	elapsed := time.Since(startTs)
-	mlog.Debug(context.TODO(), "update partition stats done", mlog.Duration("elapsed", elapsed))
+	log.Debug(context.TODO(), "update partition stats done", log.Duration("elapsed", elapsed))
 
 	return nil
 }
@@ -650,16 +650,16 @@ func (ex *Executor) setDistribution(task *LeaderTask, step int) error {
 	}
 
 	startTs := time.Now()
-	mlog.Info(context.TODO(), "Sync Distribution...")
+	log.Info(context.TODO(), "Sync Distribution...")
 	status, err := ex.cluster.SyncDistribution(task.Context(), task.leaderID, req)
 	err = merr.CheckRPCCall(status, err)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to sync distribution", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to sync distribution", log.Err(err))
 		return err
 	}
 
 	elapsed := time.Since(startTs)
-	mlog.Info(context.TODO(), "sync distribution done", mlog.Duration("elapsed", elapsed))
+	log.Info(context.TODO(), "sync distribution done", log.Duration("elapsed", elapsed))
 
 	return nil
 }
@@ -694,16 +694,16 @@ func (ex *Executor) removeDistribution(task *LeaderTask, step int) error {
 	}
 
 	startTs := time.Now()
-	mlog.Info(context.TODO(), "Remove Distribution...")
+	log.Info(context.TODO(), "Remove Distribution...")
 	status, err := ex.cluster.SyncDistribution(task.Context(), task.leaderID, req)
 	err = merr.CheckRPCCall(status, err)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to remove distribution", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to remove distribution", log.Err(err))
 		return err
 	}
 
 	elapsed := time.Since(startTs)
-	mlog.Info(context.TODO(), "remove distribution done", mlog.Duration("elapsed", elapsed))
+	log.Info(context.TODO(), "remove distribution done", log.Duration("elapsed", elapsed))
 
 	return nil
 }
@@ -713,13 +713,13 @@ func (ex *Executor) getMetaInfo(ctx context.Context, task Task) (*milvuspb.Descr
 	shard := task.Shard()
 	collectionInfo, err := ex.broker.DescribeCollection(ctx, collectionID)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to get collection info", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get collection info", log.Err(err))
 		return nil, nil, nil, err
 	}
 	loadFields := ex.meta.GetLoadFields(ctx, task.CollectionID())
 	partitions, err := utils.GetPartitions(ctx, ex.targetMgr, collectionID)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to get partitions of collection", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get partitions of collection", log.Err(err))
 		return nil, nil, nil, err
 	}
 
@@ -743,7 +743,7 @@ func (ex *Executor) getMetaInfo(ctx context.Context, task Task) (*milvuspb.Descr
 func (ex *Executor) getLoadInfo(ctx context.Context, collectionID, segmentID int64, channel *meta.DmChannel, priority commonpb.LoadPriority) (*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error) {
 	segmentInfos, err := ex.broker.GetSegmentInfo(ctx, segmentID)
 	if err != nil || len(segmentInfos) == 0 {
-		mlog.Warn(context.TODO(), "failed to get segment info from DataCoord", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to get segment info from DataCoord", log.Err(err))
 		return nil, nil, err
 	}
 	segment := segmentInfos[0]
@@ -751,7 +751,7 @@ func (ex *Executor) getLoadInfo(ctx context.Context, collectionID, segmentID int
 	indexes, err := ex.broker.GetIndexInfo(ctx, collectionID, segment.GetID())
 	if err != nil {
 		if !errors.Is(err, merr.ErrIndexNotFound) {
-			mlog.Warn(context.TODO(), "failed to get index of segment", mlog.Err(err))
+			log.Warn(context.TODO(), "failed to get index of segment", log.Err(err))
 			return nil, nil, err
 		}
 		indexes = nil
@@ -760,7 +760,7 @@ func (ex *Executor) getLoadInfo(ctx context.Context, collectionID, segmentID int
 	// Get collection index info
 	indexInfos, err := ex.broker.ListIndexes(ctx, collectionID)
 	if err != nil {
-		mlog.Warn(context.TODO(), "fail to get index meta of collection", mlog.Err(err))
+		log.Warn(context.TODO(), "fail to get index meta of collection", log.Err(err))
 		return nil, nil, err
 	}
 	// update the field index params
@@ -769,7 +769,7 @@ func (ex *Executor) getLoadInfo(ctx context.Context, collectionID, segmentID int
 			return indexInfo.IndexID == segmentIndex.IndexID
 		})
 		if !found {
-			mlog.Warn(context.TODO(), "no collection index info for the given segment index", mlog.String("indexName", segmentIndex.GetIndexName()))
+			log.Warn(context.TODO(), "no collection index info for the given segment index", log.String("indexName", segmentIndex.GetIndexName()))
 		}
 
 		params := funcutil.KeyValuePair2Map(segmentIndex.GetIndexParams())

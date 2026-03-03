@@ -12,7 +12,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -140,7 +140,7 @@ func (node *CachedProxyServiceProvider) DescribeCollection(ctx context.Context,
 	request *milvuspb.DescribeCollectionRequest,
 ) (resp *milvuspb.DescribeCollectionResponse, err error) {
 
-	mlog.Debug(context.TODO(), "DescribeCollection received")
+	log.Debug(context.TODO(), "DescribeCollection received")
 
 	resp = &milvuspb.DescribeCollectionResponse{
 		Status:         merr.Success(),
@@ -208,13 +208,13 @@ func (node *CachedProxyServiceProvider) DescribeCollection(ctx context.Context,
 
 	// Restore struct field names from internal format (structName[fieldName]) to original format
 	if err := restoreStructFieldNames(resp.Schema); err != nil {
-		mlog.Error(context.TODO(), "failed to restore struct field names", mlog.Err(err))
+		log.Error(context.TODO(), "failed to restore struct field names", log.Err(err))
 		return nil, err
 	}
 
 	err = timestamptz.RewriteTimestampTzDefaultValueToString(resp.Schema)
 	if err != nil {
-		mlog.Info(context.TODO(), "failed to rewrite timestamp value", mlog.Err(err))
+		log.Info(context.TODO(), "failed to rewrite timestamp value", log.Err(err))
 		return nil, err
 	}
 
@@ -231,9 +231,9 @@ func (node *CachedProxyServiceProvider) DescribeCollection(ctx context.Context,
 	resp.Aliases = c.aliases
 	resp.Properties = c.properties
 
-	mlog.Debug(context.TODO(), "DescribeCollection done",
-		mlog.Int64("collectionID", resp.GetCollectionID()),
-		mlog.Any("schema", resp.GetSchema()),
+	log.Debug(context.TODO(), "DescribeCollection done",
+		log.Int64("collectionID", resp.GetCollectionID()),
+		log.Any("schema", resp.GetSchema()),
 	)
 
 	return resp, nil
@@ -255,26 +255,26 @@ func (node *RemoteProxyServiceProvider) DescribeCollection(ctx context.Context,
 
 
 	method := "DescribeCollection"
-	mlog.Debug(context.TODO(), "DescribeCollection received")
+	log.Debug(context.TODO(), "DescribeCollection received")
 
 	if err := node.sched.ddQueue.Enqueue(dct); err != nil {
-		mlog.Warn(context.TODO(), "DescribeCollection failed to enqueue",
-			mlog.Err(err))
+		log.Warn(context.TODO(), "DescribeCollection failed to enqueue",
+			log.Err(err))
 
 		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
 			metrics.AbandonLabel, request.GetDbName(), request.GetCollectionName()).Inc()
 		return nil, err
 	}
 
-	mlog.Debug(context.TODO(), "DescribeCollection enqueued",
-		mlog.Uint64("BeginTS", dct.BeginTs()),
-		mlog.Uint64("EndTS", dct.EndTs()))
+	log.Debug(context.TODO(), "DescribeCollection enqueued",
+		log.Uint64("BeginTS", dct.BeginTs()),
+		log.Uint64("EndTS", dct.EndTs()))
 
 	if err := dct.WaitToFinish(); err != nil {
-		mlog.Warn(context.TODO(), "DescribeCollection failed to WaitToFinish",
-			mlog.Err(err),
-			mlog.Uint64("BeginTS", dct.BeginTs()),
-			mlog.Uint64("EndTS", dct.EndTs()))
+		log.Warn(context.TODO(), "DescribeCollection failed to WaitToFinish",
+			log.Err(err),
+			log.Uint64("BeginTS", dct.BeginTs()),
+			log.Uint64("EndTS", dct.EndTs()))
 
 		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
 			metrics.FailLabel, request.GetDbName(), request.GetCollectionName()).Inc()
@@ -282,9 +282,9 @@ func (node *RemoteProxyServiceProvider) DescribeCollection(ctx context.Context,
 		return nil, err
 	}
 
-	mlog.Debug(context.TODO(), "DescribeCollection done",
-		mlog.Uint64("BeginTS", dct.BeginTs()),
-		mlog.Uint64("EndTS", dct.EndTs()),
+	log.Debug(context.TODO(), "DescribeCollection done",
+		log.Uint64("BeginTS", dct.BeginTs()),
+		log.Uint64("EndTS", dct.EndTs()),
 	)
 
 	return dct.result, nil

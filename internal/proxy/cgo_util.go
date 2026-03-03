@@ -33,7 +33,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	_ "github.com/milvus-io/milvus/internal/util/cgo"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/hardware"
 )
@@ -53,7 +53,7 @@ func initDynamicPool() {
 		)
 
 		dp.Store(pool)
-		mlog.Info(context.TODO(), "init dynamicPool done", mlog.Int("size", hardware.GetCPUNum()))
+		log.Info(context.TODO(), "init dynamicPool done", log.Int("size", hardware.GetCPUNum()))
 	})
 }
 

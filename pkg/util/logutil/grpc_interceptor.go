@@ -10,7 +10,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 const (
@@ -42,7 +42,7 @@ func withLevelAndTrace(ctx context.Context) context.Context {
 		levels := GetMetadata(md, logLevelRPCMetaKey, logLevelRPCMetaKeyLegacy)
 		// get log level
 		if len(levels) >= 1 {
-			level := mlog.DebugLevel
+			level := log.DebugLevel
 			if err := level.UnmarshalText([]byte(levels[0])); err != nil {
 				newctx = ctx
 			} else {
@@ -61,14 +61,14 @@ func withLevelAndTrace(ctx context.Context) context.Context {
 			traceID, err = trace.TraceIDFromHex(requestID[0])
 			if err != nil {
 				// set request id to custom field
-				newctx = mlog.WithFields(newctx, mlog.String(clientRequestIDKey, requestID[0]))
+				newctx = log.WithFields(newctx, log.String(clientRequestIDKey, requestID[0]))
 			}
 		}
 	}
 	// client request unixsecs
 	requestUnixmsec, ok := GetClientReqUnixmsecGrpc(newctx)
 	if ok {
-		newctx = mlog.WithFields(newctx, mlog.Int64("clientRequestUnixmsec", requestUnixmsec))
+		newctx = log.WithFields(newctx, log.Int64("clientRequestUnixmsec", requestUnixmsec))
 	}
 
 	// traceID not valid, generate a new one
@@ -76,7 +76,7 @@ func withLevelAndTrace(ctx context.Context) context.Context {
 		traceID = trace.SpanContextFromContext(newctx).TraceID()
 	}
 	if traceID.IsValid() {
-		newctx = mlog.WithFields(newctx, mlog.FieldTraceID(traceID.String()))
+		newctx = log.WithFields(newctx, log.FieldTraceID(traceID.String()))
 	}
 	return newctx
 }

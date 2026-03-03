@@ -12,7 +12,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick/mvcc"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/wab"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -62,18 +62,18 @@ func buildInterceptorParams(ctx context.Context, underlyingWALImpls walimpls.WAL
 // 2. get position of wal to determine the end of current wal.
 // 3. make all un-synced messages synced by the timetick message, so the un-synced messages can be seen by the recovery storage.
 func sendFirstTimeTick(ctx context.Context, underlyingWALImpls walimpls.WALImpls, lastConfirmedMessageID message.MessageID) (msg message.ImmutableMessage, err error) {
-	logger := resource.Resource().Logger().With(mlog.String("channel", underlyingWALImpls.Channel().String()))
+	logger := resource.Resource().Logger().With(log.String("channel", underlyingWALImpls.Channel().String()))
 	if lastConfirmedMessageID != nil {
-		logger = logger.With(mlog.Stringer("lastConfirmedMessageID", lastConfirmedMessageID))
+		logger = logger.With(log.Stringer("lastConfirmedMessageID", lastConfirmedMessageID))
 	}
 
 	logger.Info(nil, "start to sync first time tick")
 	defer func() {
 		if err != nil {
-			logger.Error(nil, "sync first time tick failed", mlog.Err(err))
+			logger.Error(nil, "sync first time tick failed", log.Err(err))
 			return
 		}
-		logger.Info(nil, "sync first time tick done", mlog.String("msgID", msg.MessageID().String()), mlog.Uint64("timetick", msg.TimeTick()))
+		logger.Info(nil, "sync first time tick done", log.String("msgID", msg.MessageID().String()), log.Uint64("timetick", msg.TimeTick()))
 	}()
 
 	backoffTimer := typeutil.NewBackoffTimer(typeutil.BackoffTimerConfig{
@@ -94,9 +94,9 @@ func sendFirstTimeTick(ctx context.Context, underlyingWALImpls walimpls.WALImpls
 			nextTimer, nextBalanceInterval := backoffTimer.NextTimer()
 			logger.Warn(nil,
 				"send first time tick failed",
-				mlog.Duration("nextBalanceInterval", nextBalanceInterval),
-				mlog.Int("retryCount", count),
-				mlog.Err(lastErr),
+				log.Duration("nextBalanceInterval", nextBalanceInterval),
+				log.Int("retryCount", count),
+				log.Err(lastErr),
 			)
 			select {
 			case <-ctx.Done():

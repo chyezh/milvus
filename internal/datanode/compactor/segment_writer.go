@@ -33,7 +33,7 @@ import (
 	"github.com/milvus-io/milvus/internal/flushcommon/writebuffer"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/etcdpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -134,13 +134,13 @@ func (w *MultiSegmentWriter) closeWriter() error {
 
 		w.res = append(w.res, result)
 
-		mlog.Info(context.TODO(), "created new segment",
-			mlog.Int64("segmentID", w.currentSegmentID),
-			mlog.String("channel", w.channel),
-			mlog.Int64("totalRows", w.writer.GetRowNum()),
-			mlog.Uint64("totalSize", w.writer.GetWrittenUncompressed()),
-			mlog.Int64("expected segment size", w.segmentSize),
-			mlog.Int64("storageVersion", w.storageVersion))
+		log.Info(context.TODO(), "created new segment",
+			log.Int64("segmentID", w.currentSegmentID),
+			log.String("channel", w.channel),
+			log.Int64("totalRows", w.writer.GetRowNum()),
+			log.Uint64("totalSize", w.writer.GetWrittenUncompressed()),
+			log.Int64("expected segment size", w.segmentSize),
+			log.Int64("storageVersion", w.storageVersion))
 	}
 	return nil
 }
@@ -448,7 +448,7 @@ func NewSegmentWriter(sch *schemapb.CollectionSchema, maxCount int64, batchSize 
 
 	pkField, err := typeutil.GetPrimaryFieldSchema(sch)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to get pk field from schema")
+		log.Warn(context.TODO(), "failed to get pk field from schema")
 		return nil, err
 	}
 

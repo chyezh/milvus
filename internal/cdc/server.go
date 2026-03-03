@@ -21,7 +21,7 @@ import (
 
 
 	"github.com/milvus-io/milvus/internal/cdc/controller"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 type CDCServer struct {
@@ -41,16 +41,16 @@ func NewCDCServer(ctx context.Context) *CDCServer {
 func (svr *CDCServer) Start() error {
 	err := svr.controller.Start()
 	if err != nil {
-		mlog.Error(svr.ctx, "start CDC controller failed", mlog.Err(err))
+		log.Error(svr.ctx, "start CDC controller failed", log.Err(err))
 		return err
 	}
-	mlog.Info(svr.ctx, "CDCServer start successfully")
+	log.Info(svr.ctx, "CDCServer start successfully")
 	return nil
 }
 
 // Stop stops CDCServer.
 func (svr *CDCServer) Stop() error {
 	svr.controller.Stop()
-	mlog.Info(svr.ctx, "CDCServer stop successfully")
+	log.Info(svr.ctx, "CDCServer stop successfully")
 	return nil
 }

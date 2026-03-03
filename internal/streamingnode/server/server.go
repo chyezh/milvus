@@ -13,7 +13,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/fileresource"
 	"github.com/milvus-io/milvus/internal/util/initcore"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	_ "github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/impls/kafka"
 	_ "github.com/milvus-io/milvus/pkg/v2/streaming/walimpls/impls/pulsar"
@@ -37,7 +37,7 @@ type Server struct {
 
 // Init initializes the streamingnode server.
 func (s *Server) init() {
-	mlog.Info(context.TODO(), "init streamingnode server...")
+	log.Info(context.TODO(), "init streamingnode server...")
 	// init all basic components.
 	s.initBasicComponent()
 
@@ -47,22 +47,22 @@ func (s *Server) init() {
 	// init file resource manager
 	fileresource.InitManager(resource.Resource().ChunkManager(), fileresource.ParseMode(paramtable.Get().CommonCfg.QNFileResourceMode.GetValue()))
 
-	mlog.Info(context.TODO(), "init query segcore...")
+	log.Info(context.TODO(), "init query segcore...")
 	if err := initcore.InitQueryNode(context.TODO()); err != nil {
 		panic(fmt.Sprintf("init query node segcore failed, %+v", err))
 	}
 
-	mlog.Info(context.TODO(), "streamingnode server initialized")
+	log.Info(context.TODO(), "streamingnode server initialized")
 }
 
 // Stop stops the streamingnode server.
 func (s *Server) Stop() {
-	mlog.Info(context.TODO(), "stopping streamingnode server...")
-	mlog.Info(context.TODO(), "close wal manager...")
+	log.Info(context.TODO(), "stopping streamingnode server...")
+	log.Info(context.TODO(), "close wal manager...")
 	s.walManager.Close()
-	mlog.Info(context.TODO(), "release streamingnode resources...")
+	log.Info(context.TODO(), "release streamingnode resources...")
 	resource.Release()
-	mlog.Info(context.TODO(), "streamingnode server stopped")
+	log.Info(context.TODO(), "streamingnode server stopped")
 }
 
 // initBasicComponent initialize all underlying dependency for streamingnode.

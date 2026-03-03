@@ -9,7 +9,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -81,7 +81,7 @@ type InsertBuffer struct {
 func NewInsertBuffer(sch *schemapb.CollectionSchema) (*InsertBuffer, error) {
 	estSize, err := typeutil.EstimateSizePerRecord(sch)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to estimate size per record", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to estimate size per record", log.Err(err))
 		return nil, err
 	}
 

@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -46,7 +46,7 @@ func (s *connectionManager) checkLoop() {
 	for {
 		select {
 		case <-s.closeSignal:
-			mlog.Info(context.TODO(), "connection manager closed")
+			log.Info(context.TODO(), "connection manager closed")
 			return
 		case <-t.C:
 			s.removeLongInactiveClients()
@@ -65,9 +65,9 @@ func (s *connectionManager) purgeIfNumOfClientsExceed() {
 
 	begin := time.Now()
 
-	mlog.Info(context.TODO(), "number of client infos exceed limit, ready to purge the oldest",
-		mlog.Int64("num", int64(s.clientInfos.Len())),
-		mlog.Int64("limit", paramtable.Get().ProxyCfg.MaxConnectionNum.GetAsInt64()))
+	log.Info(context.TODO(), "number of client infos exceed limit, ready to purge the oldest",
+		log.Int64("num", int64(s.clientInfos.Len())),
+		log.Int64("limit", paramtable.Get().ProxyCfg.MaxConnectionNum.GetAsInt64()))
 	q := newPriorityQueueWithCap(int(diffNum + 1))
 	s.clientInfos.Range(func(identifier int64, info clientInfo) bool {
 		heap.Push(&q, newQueryItem(info.identifier, info.lastActiveTime))
@@ -82,13 +82,13 @@ func (s *connectionManager) purgeIfNumOfClientsExceed() {
 	for _, item := range q {
 		info, exist := s.clientInfos.GetAndRemove(item.identifier)
 		if exist {
-			mlog.Info(context.TODO(), "remove client info", info.GetLogger()...)
+			log.Info(context.TODO(), "remove client info", info.GetLogger()...)
 		}
 	}
 
-	mlog.Info(context.TODO(), "purge client infos done",
-		mlog.Duration("cost", time.Since(begin)),
-		mlog.Int64("num after purge", int64(s.clientInfos.Len())))
+	log.Info(context.TODO(), "purge client infos done",
+		log.Duration("cost", time.Since(begin)),
+		log.Int64("num after purge", int64(s.clientInfos.Len())))
 }
 
 func (s *connectionManager) Register(ctx context.Context, identifier int64, info *commonpb.ClientInfo) {
@@ -99,7 +99,7 @@ func (s *connectionManager) Register(ctx context.Context, identifier int64, info
 	}
 
 	s.clientInfos.Insert(identifier, cli)
-	mlog.Info(ctx, "client register", cli.GetLogger()...)
+	log.Info(ctx, "client register", cli.GetLogger()...)
 }
 
 func (s *connectionManager) KeepActive(identifier int64) {
@@ -151,7 +151,7 @@ func (s *connectionManager) removeLongInactiveClients() {
 	ttl := paramtable.Get().ProxyCfg.ConnectionClientInfoTTLSeconds.GetAsDuration(time.Second)
 	s.clientInfos.Range(func(candidate int64, info clientInfo) bool {
 		if time.Since(info.lastActiveTime) > ttl {
-			mlog.Info(context.TODO(), "client deregister", info.GetLogger()...)
+			log.Info(context.TODO(), "client deregister", info.GetLogger()...)
 			s.clientInfos.Remove(candidate)
 		}
 		return true

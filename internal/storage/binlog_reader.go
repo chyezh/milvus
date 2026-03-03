@@ -27,7 +27,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/util/hookutil"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 // BinlogReader is an object to read binlog file. Binlog file's format can be
@@ -118,7 +118,7 @@ func WithReaderDecryptionContext(ezID, collectionID int64) BinlogReaderOption {
 
 		decryptor, err := hookutil.GetCipher().GetDecryptor(ezID, collectionID, []byte(edek))
 		if err != nil {
-			mlog.Error(context.TODO(), "failed to get decryptor", mlog.Int64("ezID", ezID), mlog.Int64("collectionID", collectionID), mlog.Err(err))
+			log.Error(context.TODO(), "failed to get decryptor", log.Int64("ezID", ezID), log.Int64("collectionID", collectionID), log.Err(err))
 			return err
 		}
 
@@ -127,21 +127,21 @@ func WithReaderDecryptionContext(ezID, collectionID int64) BinlogReaderOption {
 			return err
 		}
 
-		mlog.Debug(context.TODO(), "Binlog reader starts to decypt cipher text",
-			mlog.Int64("collectionID", collectionID),
-			mlog.Int64("fieldID", base.descriptorEvent.FieldID),
-			mlog.Int("cipher size", len(cipherText)),
+		log.Debug(context.TODO(), "Binlog reader starts to decypt cipher text",
+			log.Int64("collectionID", collectionID),
+			log.Int64("fieldID", base.descriptorEvent.FieldID),
+			log.Int("cipher size", len(cipherText)),
 		)
 		decrypted, err := decryptor.Decrypt(cipherText)
 		if err != nil {
-			mlog.Error(context.TODO(), "failed to decrypt", mlog.Int64("ezID", ezID), mlog.Int64("collectionID", collectionID), mlog.Err(err))
+			log.Error(context.TODO(), "failed to decrypt", log.Int64("ezID", ezID), log.Int64("collectionID", collectionID), log.Err(err))
 			return err
 		}
-		mlog.Debug(context.TODO(), "Binlog reader decrypted cipher text",
-			mlog.Int64("collectionID", collectionID),
-			mlog.Int64("fieldID", base.descriptorEvent.FieldID),
-			mlog.Int("cipher size", len(cipherText)),
-			mlog.Int("plain size", len(decrypted)),
+		log.Debug(context.TODO(), "Binlog reader decrypted cipher text",
+			log.Int64("collectionID", collectionID),
+			log.Int64("fieldID", base.descriptorEvent.FieldID),
+			log.Int("cipher size", len(cipherText)),
+			log.Int("plain size", len(decrypted)),
 		)
 		base.buffer = bytes.NewBuffer(decrypted)
 		return nil

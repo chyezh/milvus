@@ -28,7 +28,7 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
 )
@@ -131,15 +131,15 @@ func newMinioClient(ctx context.Context, cfg config) (*minio.Client, error) {
 	checkBucketFn := func() error {
 		bucketExists, err = minioClient.BucketExists(ctx, cfg.bucketName)
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to check blob bucket exist", mlog.String("bucket", cfg.bucketName), mlog.Err(err))
+			log.Warn(context.TODO(), "failed to check blob bucket exist", log.String("bucket", cfg.bucketName), log.Err(err))
 			return err
 		}
 		if !bucketExists {
 			if cfg.createBucket {
-				mlog.Info(context.TODO(), "blob bucket not exist, create bucket.", mlog.String("bucket name", cfg.bucketName))
+				log.Info(context.TODO(), "blob bucket not exist, create bucket.", log.String("bucket name", cfg.bucketName))
 				err := minioClient.MakeBucket(ctx, cfg.bucketName, minio.MakeBucketOptions{})
 				if err != nil {
-					mlog.Warn(context.TODO(), "failed to create blob bucket", mlog.String("bucket", cfg.bucketName), mlog.Err(err))
+					log.Warn(context.TODO(), "failed to create blob bucket", log.String("bucket", cfg.bucketName), log.Err(err))
 					return err
 				}
 			} else {
@@ -160,13 +160,13 @@ func (c *minioHandler) scheduler() {
 	for {
 		select {
 		case task := <-c.taskCh:
-			mlog.Info(context.TODO(), "Update access log file to minIO",
-				mlog.String("object name", task.objectName),
-				mlog.String("file path", task.filePath))
+			log.Info(context.TODO(), "Update access log file to minIO",
+				log.String("object name", task.objectName),
+				log.String("file path", task.filePath))
 			c.update(task.objectName, task.filePath)
 			c.Retention()
 		case <-c.closeCh:
-			mlog.Warn(context.TODO(), "close minio logger handler")
+			log.Warn(context.TODO(), "close minio logger handler")
 			return
 		}
 	}
@@ -189,7 +189,7 @@ func (c *minioHandler) Update(objectName string, filePath string) {
 	}
 	taskNum := len(c.taskCh)
 	if taskNum >= cap(c.taskCh)/2 {
-		mlog.Warn(context.TODO(), "Minio Access log file handler was busy", mlog.Int("task num", taskNum))
+		log.Warn(context.TODO(), "Minio Access log file handler was busy", log.Int("task num", taskNum))
 	}
 }
 
@@ -218,7 +218,7 @@ func (c *minioHandler) Retention() error {
 
 	for rErr := range c.client.RemoveObjects(context.Background(), c.bucketName, removeObjects, minio.RemoveObjectsOptions{GovernanceBypass: false}) {
 		if rErr.Err != nil {
-			mlog.Warn(context.TODO(), "failed to remove retention objects", mlog.Err(rErr.Err))
+			log.Warn(context.TODO(), "failed to remove retention objects", log.Err(rErr.Err))
 			return rErr.Err
 		}
 	}
@@ -229,7 +229,7 @@ func (c *minioHandler) removeWithPrefix(prefix string) error {
 	objects := c.client.ListObjects(context.Background(), c.bucketName, minio.ListObjectsOptions{Prefix: prefix, Recursive: true})
 	for rErr := range c.client.RemoveObjects(context.Background(), c.bucketName, objects, minio.RemoveObjectsOptions{GovernanceBypass: false}) {
 		if rErr.Err != nil {
-			mlog.Warn(context.TODO(), "failed to remove objects", mlog.String("prefix", prefix), mlog.Err(rErr.Err))
+			log.Warn(context.TODO(), "failed to remove objects", log.String("prefix", prefix), log.Err(rErr.Err))
 			return rErr.Err
 		}
 	}
@@ -243,7 +243,7 @@ func (c *minioHandler) listAll() ([]string, error) {
 
 	for object := range objects {
 		if object.Err != nil {
-			mlog.Warn(context.TODO(), "failed to list with rootpath", mlog.String("rootpath", c.rootPath), mlog.Err(object.Err))
+			log.Warn(context.TODO(), "failed to list with rootpath", log.String("rootpath", c.rootPath), log.Err(object.Err))
 			return nil, object.Err
 		}
 		// with tailing "/", object is a "directory"

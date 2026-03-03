@@ -33,7 +33,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proxy/privilege"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/rootcoordpb"
@@ -372,7 +372,7 @@ func InitMetaCache(ctx context.Context, mixCoord types.MixCoordClient) error {
 
 	err = privilege.InitPrivilegeCache(ctx, mixCoord)
 	if err != nil {
-		mlog.Error(context.TODO(), "failed to init privilege cache", mlog.Err(err))
+		log.Error(context.TODO(), "failed to init privilege cache", log.Err(err))
 		return err
 	}
 
@@ -453,7 +453,7 @@ func (m *MetaCache) update(ctx context.Context, database, collectionName string,
 		collectionName = collection.Schema.GetName()
 	}
 	if database == "" {
-		mlog.Warn(ctx, "database is empty, use default database name", mlog.String("collectionName", collectionName), mlog.Stack("stack"))
+		log.Warn(ctx, "database is empty, use default database name", log.String("collectionName", collectionName), log.Stack("stack"))
 	}
 	isolation, err := common.IsPartitionKeyIsolationKvEnabled(collection.Properties...)
 	if err != nil {
@@ -467,9 +467,9 @@ func (m *MetaCache) update(ctx context.Context, database, collectionName string,
 	curVersion := m.collectionCacheVersion[collection.GetCollectionID()]
 	// Compatibility logic: if the rootcoord version is lower(requestTime = 0), update the cache directly.
 	if collection.GetRequestTime() < curVersion && collection.GetRequestTime() != 0 {
-		mlog.Debug(ctx, "describe collection timestamp less than version, don't update cache",
-			mlog.String("collectionName", collectionName),
-			mlog.Uint64("version", collection.GetRequestTime()), mlog.Uint64("cache version", curVersion))
+		log.Debug(ctx, "describe collection timestamp less than version, don't update cache",
+			log.String("collectionName", collectionName),
+			log.Uint64("version", collection.GetRequestTime()), log.Uint64("cache version", curVersion))
 		return &collectionInfo{
 			collID:                collection.CollectionID,
 			schema:                schemaInfo,
@@ -511,10 +511,10 @@ func (m *MetaCache) update(ctx context.Context, database, collectionName string,
 		properties:            collection.Properties,
 	}
 
-	mlog.Info(ctx, "meta update success", mlog.String("database", database), mlog.String("collectionName", collectionName),
-		mlog.String("actual collection Name", collection.Schema.GetName()), mlog.Int64("collectionID", collection.CollectionID),
-		mlog.Strings("partition", partitions.PartitionNames), mlog.Uint64("currentVersion", curVersion),
-		mlog.Uint64("version", collection.GetRequestTime()), mlog.Any("aliases", collection.Aliases),
+	log.Info(ctx, "meta update success", log.String("database", database), log.String("collectionName", collectionName),
+		log.String("actual collection Name", collection.Schema.GetName()), log.Int64("collectionID", collection.CollectionID),
+		log.Strings("partition", partitions.PartitionNames), log.Uint64("currentVersion", curVersion),
+		log.Uint64("version", collection.GetRequestTime()), log.Any("aliases", collection.Aliases),
 	)
 
 	m.collectionCacheVersion[collection.GetCollectionID()] = collection.GetRequestTime()
@@ -632,9 +632,9 @@ func (m *MetaCache) GetCollectionSchema(ctx context.Context, database, collectio
 			return nil, err
 		}
 		metrics.ProxyUpdateCacheLatency.WithLabelValues(paramtable.GetStringNodeID(), method).Observe(float64(tr.ElapseSpan().Milliseconds()))
-		mlog.Debug(ctx, "Reload collection from root coordinator ",
-			mlog.String("collectionName", collectionName),
-			mlog.Int64("time (milliseconds) take ", tr.ElapseSpan().Milliseconds()))
+		log.Debug(ctx, "Reload collection from root coordinator ",
+			log.String("collectionName", collectionName),
+			log.Int64("time (milliseconds) take ", tr.ElapseSpan().Milliseconds()))
 		return collInfo.schema, nil
 	}
 	metrics.ProxyCacheStatsCounter.WithLabelValues(paramtable.GetStringNodeID(), method, metrics.CacheHitLabel).Inc()
@@ -822,12 +822,12 @@ func parsePartitionsInfo(infos []*partitionInfo, hasPartitionKey bool) *partitio
 		partitionName := info.name
 		splits := strings.Split(partitionName, "_")
 		if len(splits) < 2 {
-			mlog.Info(context.TODO(), "partition group not in partitionKey pattern", mlog.String("partitionName", partitionName))
+			log.Info(context.TODO(), "partition group not in partitionKey pattern", log.String("partitionName", partitionName))
 			return result
 		}
 		index, err := strconv.ParseInt(splits[len(splits)-1], 10, 64)
 		if err != nil {
-			mlog.Info(context.TODO(), "partition group not in partitionKey pattern", mlog.String("partitionName", partitionName), mlog.Err(err))
+			log.Info(context.TODO(), "partition group not in partitionKey pattern", log.String("partitionName", partitionName), log.Err(err))
 			return result
 		}
 		partitionNames[index] = partitionName
@@ -853,7 +853,7 @@ func (m *MetaCache) RemoveCollection(ctx context.Context, database, collectionNa
 			}
 		}
 	}
-	mlog.Debug(ctx, "remove collection", mlog.String("db", database), mlog.String("collection", collectionName))
+	log.Debug(ctx, "remove collection", log.String("db", database), log.String("collection", collectionName))
 }
 
 func (m *MetaCache) RemoveCollectionsByID(ctx context.Context, collectionID UniqueID, version uint64, removeVersion bool) []string {
@@ -883,14 +883,14 @@ func (m *MetaCache) removeCollectionByID(ctx context.Context, collectionID Uniqu
 	} else if version != 0 {
 		m.collectionCacheVersion[collectionID] = version
 	}
-	mlog.Debug(ctx, "remove collection by id", mlog.Int64("id", collectionID),
-		mlog.Strings("collection", collNames), mlog.Uint64("currentVersion", curVersion),
-		mlog.Uint64("version", version), mlog.Bool("removeVersion", removeVersion))
+	log.Debug(ctx, "remove collection by id", log.Int64("id", collectionID),
+		log.Strings("collection", collNames), log.Uint64("currentVersion", curVersion),
+		log.Uint64("version", version), log.Bool("removeVersion", removeVersion))
 	return collNames
 }
 
 func (m *MetaCache) RemoveDatabase(ctx context.Context, database string) {
-	mlog.Debug(ctx, "remove database", mlog.String("name", database))
+	log.Debug(ctx, "remove database", log.String("name", database))
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.collInfo, database)
@@ -949,11 +949,11 @@ func (m *MetaCache) AllocID(ctx context.Context) (int64, error) {
 			Count: 1000000,
 		})
 		if err != nil {
-			mlog.Warn(context.TODO(), "Refreshing ID cache from rootcoord failed", mlog.Err(err))
+			log.Warn(context.TODO(), "Refreshing ID cache from rootcoord failed", log.Err(err))
 			return 0, err
 		}
 		if resp.GetStatus().GetCode() != 0 {
-			mlog.Warn(context.TODO(), "Refreshing ID cache from rootcoord failed", mlog.String("failed detail", resp.GetStatus().GetDetail()))
+			log.Warn(context.TODO(), "Refreshing ID cache from rootcoord failed", log.String("failed detail", resp.GetStatus().GetDetail()))
 			return 0, merr.WrapErrServiceInternal(resp.GetStatus().GetDetail())
 		}
 		m.IDStart, m.IDCount = resp.GetID(), int64(resp.GetCount())

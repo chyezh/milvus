@@ -28,7 +28,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/metric"
@@ -80,15 +80,15 @@ func (s *InternaltlsTestSuit) run() {
 	})
 	s.NoError(err)
 	if createCollectionStatus.GetErrorCode() != commonpb.ErrorCode_Success {
-		mlog.Warn(context.TODO(), "createCollectionStatus fail reason", mlog.String("reason", createCollectionStatus.GetReason()))
+		log.Warn(context.TODO(), "createCollectionStatus fail reason", log.String("reason", createCollectionStatus.GetReason()))
 	}
 	s.Equal(createCollectionStatus.GetErrorCode(), commonpb.ErrorCode_Success)
 
-	mlog.Info(context.TODO(), "CreateCollection result", mlog.Any("createCollectionStatus", createCollectionStatus))
+	log.Info(context.TODO(), "CreateCollection result", log.Any("createCollectionStatus", createCollectionStatus))
 	showCollectionsResp, err := c.MilvusClient.ShowCollections(ctx, &milvuspb.ShowCollectionsRequest{})
 	s.NoError(err)
 	s.Equal(showCollectionsResp.GetStatus().GetErrorCode(), commonpb.ErrorCode_Success)
-	mlog.Info(context.TODO(), "ShowCollections result", mlog.Any("showCollectionsResp", showCollectionsResp))
+	log.Info(context.TODO(), "ShowCollections result", log.Any("showCollectionsResp", showCollectionsResp))
 
 	var fVecColumn *schemapb.FieldData
 	if s.vecType == schemapb.DataType_SparseFloatVector {
@@ -126,7 +126,7 @@ func (s *InternaltlsTestSuit) run() {
 	s.NoError(err)
 	s.NotEmpty(segments)
 	for _, segment := range segments {
-		mlog.Info(context.TODO(), "ShowSegments result", mlog.String("segment", segment.String()))
+		log.Info(context.TODO(), "ShowSegments result", log.String("segment", segment.String()))
 	}
 
 	// create index
@@ -137,7 +137,7 @@ func (s *InternaltlsTestSuit) run() {
 		ExtraParams:    integration.ConstructIndexParam(dim, s.indexType, s.metricType),
 	})
 	if createIndexStatus.GetErrorCode() != commonpb.ErrorCode_Success {
-		mlog.Warn(context.TODO(), "createIndexStatus fail reason", mlog.String("reason", createIndexStatus.GetReason()))
+		log.Warn(context.TODO(), "createIndexStatus fail reason", log.String("reason", createIndexStatus.GetReason()))
 	}
 	s.NoError(err)
 	s.Equal(commonpb.ErrorCode_Success, createIndexStatus.GetErrorCode())
@@ -151,7 +151,7 @@ func (s *InternaltlsTestSuit) run() {
 	})
 	s.NoError(err)
 	if loadStatus.GetErrorCode() != commonpb.ErrorCode_Success {
-		mlog.Warn(context.TODO(), "loadStatus fail reason", mlog.String("reason", loadStatus.GetReason()))
+		log.Warn(context.TODO(), "loadStatus fail reason", log.String("reason", loadStatus.GetReason()))
 	}
 	s.Equal(commonpb.ErrorCode_Success, loadStatus.GetErrorCode())
 	s.WaitForLoad(ctx, collectionName)
@@ -177,7 +177,7 @@ func (s *InternaltlsTestSuit) run() {
 		OutputFields:   []string{"count(*)"},
 	})
 	if queryResult.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-		mlog.Warn(context.TODO(), "searchResult fail reason", mlog.String("reason", queryResult.GetStatus().GetReason()))
+		log.Warn(context.TODO(), "searchResult fail reason", log.String("reason", queryResult.GetStatus().GetReason()))
 	}
 	s.NoError(err)
 	s.Equal(commonpb.ErrorCode_Success, queryResult.GetStatus().GetErrorCode())
@@ -188,7 +188,7 @@ func (s *InternaltlsTestSuit) run() {
 		Expr:           integration.Int64Field + " in [1, 2]",
 	})
 	if deleteResult.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-		mlog.Warn(context.TODO(), "deleteResult fail reason", mlog.String("reason", deleteResult.GetStatus().GetReason()))
+		log.Warn(context.TODO(), "deleteResult fail reason", log.String("reason", deleteResult.GetStatus().GetReason()))
 	}
 	s.NoError(err)
 	s.Equal(commonpb.ErrorCode_Success, deleteResult.GetStatus().GetErrorCode())
@@ -205,11 +205,11 @@ func (s *InternaltlsTestSuit) run() {
 	err = merr.CheckRPCCall(status, err)
 	s.NoError(err)
 
-	mlog.Info(context.TODO(), "TestHelloMilvus succeed")
+	log.Info(context.TODO(), "TestHelloMilvus succeed")
 }
 
 func (s *InternaltlsTestSuit) TestHelloMilvus_basic() {
-	mlog.Info(context.TODO(), "Under test Internal TLS hellomilvus...")
+	log.Info(context.TODO(), "Under test Internal TLS hellomilvus...")
 	s.indexType = integration.IndexFaissIvfFlat
 	s.metricType = metric.L2
 	s.vecType = schemapb.DataType_FloatVector

@@ -33,7 +33,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/segmentutil"
 	"github.com/milvus-io/milvus/internal/util/vecindexmgr"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/workerpb"
 	"github.com/milvus-io/milvus/pkg/v2/taskcommon"
@@ -151,7 +151,7 @@ func (it *indexBuildTask) CreateTaskOnWorker(nodeID int64, cluster session.Clust
 	// Check if task exists in meta
 	segIndex, exist := it.meta.indexMeta.GetIndexJob(it.BuildID)
 	if !exist || segIndex == nil {
-		mlog.Info(context.TODO(), "index task has not exist in meta table, removing task")
+		log.Info(context.TODO(), "index task has not exist in meta table, removing task")
 		it.SetState(indexpb.JobState_JobStateNone, "index task has not exist in meta table")
 		return
 	}
@@ -159,7 +159,7 @@ func (it *indexBuildTask) CreateTaskOnWorker(nodeID int64, cluster session.Clust
 	// Check segment health and index existence
 	segment := it.meta.GetSegment(ctx, segIndex.SegmentID)
 	if !isSegmentHealthy(segment) || !it.meta.indexMeta.IsIndexExist(segIndex.CollectionID, segIndex.IndexID) {
-		mlog.Info(context.TODO(), "task is no need to build index, removing it")
+		log.Info(context.TODO(), "task is no need to build index, removing it")
 		it.SetState(indexpb.JobState_JobStateNone, "task is no need to build index")
 		return
 	}
@@ -179,7 +179,7 @@ func (it *indexBuildTask) CreateTaskOnWorker(nodeID int64, cluster session.Clust
 		}
 	}
 	if isNoTrainIndex(indexType) || effectiveRows < Params.DataCoordCfg.MinSegmentNumRowsToEnableIndex.GetAsInt64() {
-		mlog.Info(context.TODO(), "segment does not need index really, marking as finished", mlog.Int64("numRows", segIndex.NumRows), mlog.Int64("effectiveRows", effectiveRows))
+		log.Info(context.TODO(), "segment does not need index really, marking as finished", log.Int64("numRows", segIndex.NumRows), log.Int64("effectiveRows", effectiveRows))
 		now := time.Now()
 		it.SetTaskTime(taskcommon.TimeStart, now)
 		it.SetTaskTime(taskcommon.TimeEnd, now)
@@ -190,13 +190,13 @@ func (it *indexBuildTask) CreateTaskOnWorker(nodeID int64, cluster session.Clust
 	// Create job request
 	req, err := it.prepareJobRequest(ctx, segment, segIndex, indexParams, indexType)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to prepare job request", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to prepare job request", log.Err(err))
 		return
 	}
 
 	// Update task version
 	if err := it.UpdateTaskVersion(nodeID); err != nil {
-		mlog.Warn(context.TODO(), "failed to update task version", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to update task version", log.Err(err))
 		return
 	}
 
@@ -208,17 +208,17 @@ func (it *indexBuildTask) CreateTaskOnWorker(nodeID int64, cluster session.Clust
 
 	// Send request to worker
 	if err = cluster.CreateIndex(nodeID, req); err != nil {
-		mlog.Warn(context.TODO(), "failed to send job to worker", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to send job to worker", log.Err(err))
 		return
 	}
 
 	// Update state to in progress
 	if err = it.UpdateStateWithMeta(indexpb.JobState_JobStateInProgress, ""); err != nil {
-		mlog.Warn(context.TODO(), "failed to update task state", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to update task state", log.Err(err))
 		return
 	}
 
-	mlog.Info(context.TODO(), "index task assigned successfully")
+	log.Info(context.TODO(), "index task assigned successfully")
 }
 
 // Helper method to prepare job request
@@ -279,8 +279,8 @@ func (it *indexBuildTask) prepareJobRequest(ctx context.Context, segment *Segmen
 	}
 	if typeutil.IsFixDimVectorType(dataType) {
 		if dimVal, err := storage.GetDimFromParams(field.GetTypeParams()); err != nil {
-			mlog.Warn(context.TODO(), "failed to get dim from field type params",
-				mlog.String("field type", field.GetDataType().String()), mlog.Err(err))
+			log.Warn(context.TODO(), "failed to get dim from field type params",
+				log.String("field type", field.GetDataType().String()), log.Err(err))
 		} else {
 			dim = dimVal
 		}
@@ -365,7 +365,7 @@ func (it *indexBuildTask) prepareOptionalFields(ctx context.Context, collectionI
 
 			iso, isoErr := common.IsPartitionKeyIsolationPropEnabled(collectionInfo.Properties)
 			if isoErr != nil {
-				mlog.Warn(ctx, "failed to parse partition key isolation", mlog.Err(isoErr))
+				log.Warn(ctx, "failed to parse partition key isolation", log.Err(isoErr))
 			}
 			if iso {
 				partitionKeyIsolation = true
@@ -381,7 +381,7 @@ func (it *indexBuildTask) QueryTaskOnWorker(cluster session.Cluster) {
 	// Check if task exists in meta
 	segIndex, exist := it.meta.indexMeta.GetIndexJob(it.BuildID)
 	if !exist || segIndex == nil {
-		mlog.Info(context.TODO(), "index task has not exist in meta table, removing task")
+		log.Info(context.TODO(), "index task has not exist in meta table, removing task")
 		if it.tryDropTaskOnWorker(cluster) != nil {
 			return
 		}
@@ -394,7 +394,7 @@ func (it *indexBuildTask) QueryTaskOnWorker(cluster session.Cluster) {
 		TaskIDs:   []UniqueID{it.BuildID},
 	})
 	if err != nil {
-		mlog.Warn(context.TODO(), "query index task result from worker failed", mlog.Err(err))
+		log.Warn(context.TODO(), "query index task result from worker failed", log.Err(err))
 		it.dropAndResetTaskOnWorker(cluster, err.Error())
 		return
 	}
@@ -404,14 +404,14 @@ func (it *indexBuildTask) QueryTaskOnWorker(cluster session.Cluster) {
 		if info.GetBuildID() == it.BuildID {
 			switch info.GetState() {
 			case commonpb.IndexState_Finished, commonpb.IndexState_Failed:
-				mlog.Info(context.TODO(), "query task index info successfully",
-					mlog.Int64("taskID", it.BuildID), mlog.String("result state", info.GetState().String()),
-					mlog.String("failReason", info.GetFailReason()))
+				log.Info(context.TODO(), "query task index info successfully",
+					log.Int64("taskID", it.BuildID), log.String("result state", info.GetState().String()),
+					log.String("failReason", info.GetFailReason()))
 				it.setJobInfo(info)
 			case commonpb.IndexState_Retry, commonpb.IndexState_IndexStateNone:
-				mlog.Info(context.TODO(), "query task index info successfully",
-					mlog.Int64("taskID", it.BuildID), mlog.String("result state", info.GetState().String()),
-					mlog.String("failReason", info.GetFailReason()))
+				log.Info(context.TODO(), "query task index info successfully",
+					log.Int64("taskID", it.BuildID), log.String("result state", info.GetState().String()),
+					log.String("failReason", info.GetFailReason()))
 				it.dropAndResetTaskOnWorker(cluster, info.GetFailReason())
 			}
 			// inProgress or unissued, keep InProgress state
@@ -425,11 +425,11 @@ func (it *indexBuildTask) QueryTaskOnWorker(cluster session.Cluster) {
 func (it *indexBuildTask) tryDropTaskOnWorker(cluster session.Cluster) error {
 
 	if err := cluster.DropIndex(it.NodeID, it.BuildID); err != nil && !errors.Is(err, merr.ErrNodeNotFound) {
-		mlog.Warn(context.TODO(), "notify worker drop the index task failed", mlog.Err(err))
+		log.Warn(context.TODO(), "notify worker drop the index task failed", log.Err(err))
 		return err
 	}
 
-	mlog.Info(context.TODO(), "index task dropped successfully")
+	log.Info(context.TODO(), "index task dropped successfully")
 	return nil
 }
 

@@ -38,7 +38,7 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
@@ -110,9 +110,9 @@ func (sd *shardDelegator) ProcessInsert(insertRecords map[int64]*InsertData) {
 				},
 			)
 			if err != nil {
-				mlog.Error(context.TODO(), "failed to create new segment",
-					mlog.Int64("segmentID", segmentID),
-					mlog.Err(err))
+				log.Error(context.TODO(), "failed to create new segment",
+					log.Int64("segmentID", segmentID),
+					log.Err(err))
 				panic(err)
 			}
 			newGrowingSegment = true
@@ -120,12 +120,12 @@ func (sd *shardDelegator) ProcessInsert(insertRecords map[int64]*InsertData) {
 
 		err := growing.Insert(context.Background(), insertData.RowIDs, insertData.Timestamps, insertData.InsertRecord)
 		if err != nil {
-			mlog.Error(context.TODO(), "failed to insert data into growing segment",
-				mlog.Int64("segmentID", segmentID),
-				mlog.Err(err),
+			log.Error(context.TODO(), "failed to insert data into growing segment",
+				log.Int64("segmentID", segmentID),
+				log.Err(err),
 			)
 			if errors.IsAny(err, merr.ErrSegmentNotLoaded, merr.ErrSegmentNotFound) {
-				mlog.Warn(context.TODO(), "try to insert data into released segment, skip it", mlog.Err(err))
+				log.Warn(context.TODO(), "try to insert data into released segment, skip it", log.Err(err))
 				continue
 			}
 			// panic here, insert failure
@@ -143,7 +143,7 @@ func (sd *shardDelegator) ProcessInsert(insertRecords map[int64]*InsertData) {
 			// TODO:
 			//	Use right ts when add excluded segment. And Verify with insert ts here.
 			if ok := sd.VerifyExcludedSegments(segmentID, 0); !ok {
-				mlog.Warn(context.TODO(), "try to insert data into released segment, skip it", mlog.Int64("segmentID", segmentID))
+				log.Warn(context.TODO(), "try to insert data into released segment, skip it", log.Int64("segmentID", segmentID))
 				sd.growingSegmentLock.Unlock()
 				growing.Release(context.Background())
 				continue
@@ -169,11 +169,11 @@ func (sd *shardDelegator) ProcessInsert(insertRecords map[int64]*InsertData) {
 		} else if sd.idfOracle != nil {
 			sd.idfOracle.UpdateGrowing(growing.ID(), insertData.BM25Stats)
 		}
-		mlog.Info(context.TODO(), "insert into growing segment",
-			mlog.Int64("collectionID", growing.Collection()),
-			mlog.Int64("segmentID", segmentID),
-			mlog.Int("rowCount", len(insertData.RowIDs)),
-			mlog.Uint64("maxTimestamp", insertData.Timestamps[len(insertData.Timestamps)-1]),
+		log.Info(context.TODO(), "insert into growing segment",
+			log.Int64("collectionID", growing.Collection()),
+			log.Int64("segmentID", segmentID),
+			log.Int("rowCount", len(insertData.RowIDs)),
+			log.Uint64("maxTimestamp", insertData.Timestamps[len(insertData.Timestamps)-1]),
 		)
 	}
 	metrics.QueryNodeProcessCost.WithLabelValues(paramtable.GetStringNodeID(), metrics.InsertLabel).
@@ -196,7 +196,7 @@ func (sd *shardDelegator) ProcessDelete(deleteData []*DeleteData, ts uint64) {
 	sd.deleteMut.Lock()
 	defer sd.deleteMut.Unlock()
 
-	mlog.Debug(context.TODO(), "start to process delete", mlog.Uint64("ts", ts))
+	log.Debug(context.TODO(), "start to process delete", log.Uint64("ts", ts))
 	// add deleteData into buffer.
 	cacheItems := make([]deletebuffer.BufferItem, 0, len(deleteData))
 	for _, entry := range deleteData {
@@ -289,7 +289,7 @@ func (sd *shardDelegator) applyDelete(ctx context.Context,
 		delRecord, ok := delRecords(segmentEntry.SegmentID)
 		if ok {
 			future := pool.Submit(func() (struct{}, error) {
-				mlog.Debug(context.TODO(), "delegator plan to applyDelete via worker")
+				log.Debug(context.TODO(), "delegator plan to applyDelete via worker")
 				err := retry.Handle(ctx, func() (bool, error) {
 					if sd.Stopped() {
 						return false, merr.WrapErrChannelNotAvailable(sd.vchannelName, "channel is unsubscribing")
@@ -306,21 +306,21 @@ func (sd *shardDelegator) applyDelete(ctx context.Context,
 						Scope:        scope,
 					})
 					if errors.Is(err, merr.ErrNodeNotFound) {
-						mlog.Warn(context.TODO(), "try to delete data on non-exist node")
+						log.Warn(context.TODO(), "try to delete data on non-exist node")
 						// cancel other request
 						cancel()
 						return false, err
 					} else if errors.IsAny(err, merr.ErrSegmentNotFound, merr.ErrSegmentNotLoaded) {
-						mlog.Warn(context.TODO(), "try to delete data of released segment")
+						log.Warn(context.TODO(), "try to delete data of released segment")
 						return false, nil
 					} else if err != nil {
-						mlog.Warn(context.TODO(), "worker failed to delete on segment", mlog.Err(err))
+						log.Warn(context.TODO(), "worker failed to delete on segment", log.Err(err))
 						return true, err
 					}
 					return false, nil
 				}, retry.Attempts(10))
 				if err != nil {
-					mlog.Warn(context.TODO(), "apply delete for segment failed, marking it offline")
+					log.Warn(context.TODO(), "apply delete for segment failed, marking it offline")
 					offlineSegments.Insert(segmentEntry.SegmentID)
 				}
 				return struct{}{}, err
@@ -339,7 +339,7 @@ func (sd *shardDelegator) markSegmentOffline(segmentIDs ...int64) {
 
 // addGrowing add growing segment record for delegator.
 func (sd *shardDelegator) addGrowing(entries ...SegmentEntry) {
-	mlog.Info(context.TODO(), "add growing segments to delegator", mlog.Int64s("segmentIDs", lo.Map(entries, func(entry SegmentEntry, _ int) int64 {
+	log.Info(context.TODO(), "add growing segments to delegator", log.Int64s("segmentIDs", lo.Map(entries, func(entry SegmentEntry, _ int) int64 {
 		return entry.SegmentID
 	})))
 	sd.distribution.AddGrowing(entries...)
@@ -348,18 +348,18 @@ func (sd *shardDelegator) addGrowing(entries ...SegmentEntry) {
 // LoadGrowing load growing segments locally.
 func (sd *shardDelegator) LoadGrowing(ctx context.Context, infos []*querypb.SegmentLoadInfo, version int64) error {
 	segmentIDs := lo.Map(infos, func(info *querypb.SegmentLoadInfo, _ int) int64 { return info.GetSegmentID() })
-	mlog.Info(context.TODO(), "loading growing segments...", mlog.Int64s("segmentIDs", segmentIDs))
+	log.Info(context.TODO(), "loading growing segments...", log.Int64s("segmentIDs", segmentIDs))
 	loaded, err := sd.loader.Load(ctx, sd.collectionID, segments.SegmentTypeGrowing, version, infos...)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to load growing segment", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to load growing segment", log.Err(err))
 		return err
 	}
 
 	for _, segment := range loaded {
 		err = sd.addL0ForGrowing(ctx, segment)
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to forward L0 deletions to growing segment",
-				mlog.Err(err),
+			log.Warn(context.TODO(), "failed to forward L0 deletions to growing segment",
+				log.Err(err),
 			)
 
 			// clear loaded growing segments
@@ -371,7 +371,7 @@ func (sd *shardDelegator) LoadGrowing(ctx context.Context, infos []*querypb.Segm
 	}
 
 	segmentIDs = lo.Map(loaded, func(segment segments.Segment, _ int) int64 { return segment.ID() })
-	mlog.Info(context.TODO(), "load growing segments done", mlog.Int64s("segmentIDs", segmentIDs))
+	log.Info(context.TODO(), "load growing segments done", log.Int64s("segmentIDs", segmentIDs))
 
 	for _, segment := range loaded {
 		if sd.idfOracle != nil {
@@ -402,25 +402,25 @@ func (sd *shardDelegator) loadBM25Stats(ctx context.Context, infos []*querypb.Se
 	future := pool.Submit(func() (any, error) {
 		bm25Stats, err := sd.loader.LoadBM25Stats(ctx, req.GetCollectionID(), infos...)
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to load bm25 stats for segment", mlog.Int64("collectionID", req.GetCollectionID()), mlog.Err(err))
+			log.Warn(context.TODO(), "failed to load bm25 stats for segment", log.Int64("collectionID", req.GetCollectionID()), log.Err(err))
 			return nil, err
 		}
 
 		if bm25Stats != nil {
 			bm25Stats.Range(func(segmentID int64, stats map[int64]*storage.BM25Stats) bool {
-				mlog.Info(context.TODO(), "register sealed segment bm25 stats into idforacle",
-					mlog.Int64("segmentID", segmentID),
+				log.Info(context.TODO(), "register sealed segment bm25 stats into idforacle",
+					log.Int64("segmentID", segmentID),
 				)
 				err = sd.idfOracle.RegisterSealed(segmentID, stats)
 				if err != nil {
-					mlog.Warn(context.TODO(), "failed to register sealed segment bm25 stats into idforacle", mlog.Err(err))
+					log.Warn(context.TODO(), "failed to register sealed segment bm25 stats into idforacle", log.Err(err))
 					return false
 				}
 				return true
 			})
 
 			if err != nil {
-				mlog.Warn(context.TODO(), "failed to register sealed segment bm25 stats into idforacle", mlog.Err(err))
+				log.Warn(context.TODO(), "failed to register sealed segment bm25 stats into idforacle", log.Err(err))
 				return nil, err
 			}
 		}
@@ -430,7 +430,7 @@ func (sd *shardDelegator) loadBM25Stats(ctx context.Context, infos []*querypb.Se
 
 	err := conc.BlockOnAll(future)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to load bm25 stats", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to load bm25 stats", log.Err(err))
 		return err
 	}
 	return nil
@@ -462,12 +462,12 @@ func (sd *shardDelegator) LoadSegments(ctx context.Context, req *querypb.LoadSeg
 
 	worker, err := sd.workerManager.GetWorker(ctx, targetNodeID)
 	if err != nil {
-		mlog.Warn(context.TODO(), "delegator failed to find worker", mlog.Err(err))
+		log.Warn(context.TODO(), "delegator failed to find worker", log.Err(err))
 		return err
 	}
 
 	req.Base.TargetID = targetNodeID
-	mlog.Debug(context.TODO(), "worker loads segments...")
+	log.Debug(context.TODO(), "worker loads segments...")
 
 	sLoad := func(ctx context.Context, req *querypb.LoadSegmentsRequest) error {
 		segmentID := req.GetInfos()[0].GetSegmentID()
@@ -501,10 +501,10 @@ func (sd *shardDelegator) LoadSegments(ctx context.Context, req *querypb.LoadSeg
 	}
 
 	if err != nil {
-		mlog.Warn(context.TODO(), "worker failed to load segments", mlog.Err(err))
+		log.Warn(context.TODO(), "worker failed to load segments", log.Err(err))
 		return err
 	}
-	mlog.Debug(context.TODO(), "work loads segments done")
+	log.Debug(context.TODO(), "work loads segments done")
 
 	// load index segment need no stream delete and distribution change
 	if req.GetLoadScope() == querypb.LoadScope_Index {
@@ -517,22 +517,22 @@ func (sd *shardDelegator) LoadSegments(ctx context.Context, req *querypb.LoadSeg
 
 	candidates, err := sd.loader.LoadBloomFilterSet(ctx, req.GetCollectionID(), infos...)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to load bloom filter set for segment", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to load bloom filter set for segment", log.Err(err))
 		return err
 	}
 
 	// Load BM25 stats BEFORE loadStreamDelete so stats are ready before segment becomes visible
 	err = sd.loadBM25Stats(ctx, infos, req)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to load BM25 stats", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to load BM25 stats", log.Err(err))
 		return err
 	}
 
 	// Build a map from segmentID to BloomFilterSet
 	bfMap := make(map[int64]pkoracle.Candidate)
 	for _, candidate := range candidates {
-		mlog.Info(context.TODO(), "loaded bloom filter set for sealed segment",
-			mlog.Int64("segmentID", candidate.ID()),
+		log.Info(context.TODO(), "loaded bloom filter set for sealed segment",
+			log.Int64("segmentID", candidate.ID()),
 		)
 		bfMap[candidate.ID()] = candidate
 	}
@@ -551,12 +551,12 @@ func (sd *shardDelegator) LoadSegments(ctx context.Context, req *querypb.LoadSeg
 		entries = append(entries, entry)
 	}
 
-	mlog.Debug(context.TODO(), "load delete...")
+	log.Debug(context.TODO(), "load delete...")
 	// loadStreamDelete now handles distribution add atomically in Phase 3
 	err = sd.loadStreamDelete(ctx, candidates, infos, req, targetNodeID, worker,
 		entries, req.GetLoadMeta().GetSchemaVersion())
 	if err != nil {
-		mlog.Warn(context.TODO(), "load stream delete failed", mlog.Err(err))
+		log.Warn(context.TODO(), "load stream delete failed", log.Err(err))
 		// Rollback BM25 stats registered by loadBM25Stats above,
 		// since segment will not be added to distribution.
 		if sd.idfOracle != nil {
@@ -586,7 +586,7 @@ func (sd *shardDelegator) addDistributionIfVersionOK(version uint64, entries ...
 // LoadGrowing load growing segments locally.
 func (sd *shardDelegator) LoadL0(ctx context.Context, infos []*querypb.SegmentLoadInfo, version int64) error {
 	segmentIDs := lo.Map(infos, func(info *querypb.SegmentLoadInfo, _ int) int64 { return info.GetSegmentID() })
-	mlog.Info(context.TODO(), "loading l0 segments...", mlog.Int64s("segmentIDs", segmentIDs))
+	log.Info(context.TODO(), "loading l0 segments...", log.Int64s("segmentIDs", segmentIDs))
 
 	loaded := make([]segments.Segment, 0)
 	if sd.l0ForwardPolicy == L0ForwardPolicyRemoteLoad {
@@ -601,13 +601,13 @@ func (sd *shardDelegator) LoadL0(ctx context.Context, infos []*querypb.SegmentLo
 		var err error
 		loaded, err = sd.loader.Load(ctx, sd.collectionID, segments.SegmentTypeSealed, version, infos...)
 		if err != nil {
-			mlog.Warn(context.TODO(), "failed to load l0 segment", mlog.Err(err))
+			log.Warn(context.TODO(), "failed to load l0 segment", log.Err(err))
 			return err
 		}
 	}
 
 	segmentIDs = lo.Map(loaded, func(segment segments.Segment, _ int) int64 { return segment.ID() })
-	mlog.Info(context.TODO(), "load l0 segments done", mlog.Int64s("segmentIDs", segmentIDs))
+	log.Info(context.TODO(), "load l0 segments done", log.Int64s("segmentIDs", segmentIDs))
 
 	sd.deleteBuffer.RegisterL0(loaded...)
 	// register l0 segment
@@ -655,13 +655,13 @@ func (sd *shardDelegator) rangeHitL0Deletions(partitionID int64, candidate pkora
 		}
 	}
 
-	mlog.Info(context.TODO(), "forward delete from L0 segments to worker",
-		mlog.Int64("targetSegmentID", candidate.ID()),
-		mlog.String("channel", sd.vchannelName),
-		mlog.Int("l0SegmentCount", processedL0Count),
-		mlog.Int("totalDeleteRowsInL0", totalL0Rows),
-		mlog.Int64("totalBfHitRows", totalBfHitRows),
-		mlog.Int64("totalCost", time.Since(start).Milliseconds()),
+	log.Info(context.TODO(), "forward delete from L0 segments to worker",
+		log.Int64("targetSegmentID", candidate.ID()),
+		log.String("channel", sd.vchannelName),
+		log.Int("l0SegmentCount", processedL0Count),
+		log.Int("totalDeleteRowsInL0", totalL0Rows),
+		log.Int64("totalBfHitRows", totalBfHitRows),
+		log.Int64("totalCost", time.Since(start).Milliseconds()),
 	)
 
 	return nil
@@ -823,13 +823,13 @@ func (sd *shardDelegator) loadStreamDelete(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		mlog.Info(context.TODO(), "forward delete to worker (phase 2: snapshot)...",
-			mlog.String("channel", info.InsertChannel),
-			mlog.Int64("segmentID", info.GetSegmentID()),
-			mlog.Time("startPosition", tsoutil.PhysicalTime(info.GetStartPosition().GetTimestamp())),
-			mlog.Int64("tsHitDeleteRowNum", tsHit),
-			mlog.Int64("bfHitDeleteRowNum", bfHit),
-			mlog.Int64("bfCost", time.Since(start).Milliseconds()),
+		log.Info(context.TODO(), "forward delete to worker (phase 2: snapshot)...",
+			log.String("channel", info.InsertChannel),
+			log.Int64("segmentID", info.GetSegmentID()),
+			log.Time("startPosition", tsoutil.PhysicalTime(info.GetStartPosition().GetTimestamp())),
+			log.Int64("tsHitDeleteRowNum", tsHit),
+			log.Int64("bfHitDeleteRowNum", bfHit),
+			log.Int64("bfCost", time.Since(start).Milliseconds()),
 		)
 	}
 
@@ -856,12 +856,12 @@ func (sd *shardDelegator) loadStreamDelete(ctx context.Context,
 			if err != nil {
 				return err
 			}
-			mlog.Info(context.TODO(), "forward delete to worker (phase 3: catch-up)...",
-				mlog.String("channel", info.InsertChannel),
-				mlog.Int64("segmentID", info.GetSegmentID()),
-				mlog.Int64("tsHitDeleteRowNum", tsHit),
-				mlog.Int64("bfHitDeleteRowNum", bfHit),
-				mlog.Int64("bfCost", time.Since(start).Milliseconds()),
+			log.Info(context.TODO(), "forward delete to worker (phase 3: catch-up)...",
+				log.String("channel", info.InsertChannel),
+				log.Int64("segmentID", info.GetSegmentID()),
+				log.Int64("tsHitDeleteRowNum", tsHit),
+				log.Int64("bfHitDeleteRowNum", bfHit),
+				log.Int64("bfCost", time.Since(start).Milliseconds()),
 			)
 		}
 
@@ -877,7 +877,7 @@ func (sd *shardDelegator) loadStreamDelete(ctx context.Context,
 	if err := sd.addDistributionIfVersionOK(schemaVersion, entries...); err != nil {
 		return err
 	}
-	mlog.Info(context.TODO(), "load stream delete done")
+	log.Info(context.TODO(), "load stream delete done")
 	return nil
 }
 
@@ -895,7 +895,7 @@ func (sd *shardDelegator) ReleaseSegments(ctx context.Context, req *querypb.Rele
 		}
 	}
 
-	mlog.Info(context.TODO(), "delegator start to release segments")
+	log.Info(context.TODO(), "delegator start to release segments")
 	// alter distribution first
 	var sealed, growing []SegmentEntry
 	convertSealed := func(segmentID int64, _ int) SegmentEntry {
@@ -944,13 +944,13 @@ func (sd *shardDelegator) ReleaseSegments(ctx context.Context, req *querypb.Rele
 	if !force {
 		worker, err := sd.workerManager.GetWorker(ctx, targetNodeID)
 		if err != nil {
-			mlog.Warn(context.TODO(), "delegator failed to find worker", mlog.Err(err))
+			log.Warn(context.TODO(), "delegator failed to find worker", log.Err(err))
 			releaseErr = err
 		}
 		req.Base.TargetID = targetNodeID
 		err = worker.ReleaseSegments(ctx, req)
 		if err != nil {
-			mlog.Warn(context.TODO(), "worker failed to release segments", mlog.Err(err))
+			log.Warn(context.TODO(), "worker failed to release segments", log.Err(err))
 			releaseErr = err
 		}
 	}
@@ -973,9 +973,9 @@ func (sd *shardDelegator) SyncTargetVersion(action *querypb.SyncAction, partitio
 		if deleteSeekPos == nil {
 			// for compatible with 2.4, we use checkpoint as deleteCP when deleteCP is nil
 			deleteSeekPos = checkpoint
-			mlog.Info(context.TODO(), "use checkpoint as deleteCP",
-				mlog.String("channelName", sd.vchannelName),
-				mlog.Time("deleteSeekPos", tsoutil.PhysicalTime(action.GetCheckpoint().GetTimestamp())))
+			log.Info(context.TODO(), "use checkpoint as deleteCP",
+				log.String("channelName", sd.vchannelName),
+				log.Time("deleteSeekPos", tsoutil.PhysicalTime(action.GetCheckpoint().GetTimestamp())))
 		}
 
 		start := time.Now()
@@ -986,15 +986,15 @@ func (sd *shardDelegator) SyncTargetVersion(action *querypb.SyncAction, partitio
 		l0NumAfterClean := len(sd.deleteBuffer.ListL0())
 
 		if sizeAfterClean < sizeBeforeClean || l0NumAfterClean < l0NumBeforeClean {
-			mlog.Info(context.TODO(), "clean delete buffer",
-				mlog.String("channel", sd.vchannelName),
-				mlog.Time("deleteSeekPos", tsoutil.PhysicalTime(deleteSeekPos.GetTimestamp())),
-				mlog.Time("channelCP", tsoutil.PhysicalTime(checkpoint.GetTimestamp())),
-				mlog.Int64("sizeBeforeClean", sizeBeforeClean),
-				mlog.Int64("sizeAfterClean", sizeAfterClean),
-				mlog.Int("l0NumBeforeClean", l0NumBeforeClean),
-				mlog.Int("l0NumAfterClean", l0NumAfterClean),
-				mlog.Duration("cost", time.Since(start)),
+			log.Info(context.TODO(), "clean delete buffer",
+				log.String("channel", sd.vchannelName),
+				log.Time("deleteSeekPos", tsoutil.PhysicalTime(deleteSeekPos.GetTimestamp())),
+				log.Time("channelCP", tsoutil.PhysicalTime(checkpoint.GetTimestamp())),
+				log.Int64("sizeBeforeClean", sizeBeforeClean),
+				log.Int64("sizeAfterClean", sizeAfterClean),
+				log.Int("l0NumBeforeClean", l0NumBeforeClean),
+				log.Int("l0NumAfterClean", l0NumAfterClean),
+				log.Duration("cost", time.Since(start)),
 			)
 		}
 		sd.RefreshLevel0DeletionStats()

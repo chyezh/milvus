@@ -24,7 +24,7 @@ import (
 	"go.opentelemetry.io/otel"
 
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
 	"github.com/milvus-io/milvus/pkg/v2/util/retry"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -70,17 +70,17 @@ func (b *BinlogIoImpl) AsyncDownload(ctx context.Context, paths []string) []*con
 			var err error
 
 			start := time.Now()
-			mlog.Debug(ctx, "BinlogIO download", mlog.String("path", path))
+			log.Debug(ctx, "BinlogIO download", log.String("path", path))
 			err = retry.Do(ctx, func() error {
 				val, err = b.Read(ctx, path)
 				if err != nil {
-					mlog.Warn(context.TODO(), "BinlogIO fail to download", mlog.String("path", path), mlog.Err(err))
+					log.Warn(context.TODO(), "BinlogIO fail to download", log.String("path", path), log.Err(err))
 				}
 				return err
 			})
 
-			mlog.Debug(ctx, "BinlogIO download success", mlog.String("path", path), mlog.Int64("cost", time.Since(start).Milliseconds()),
-				mlog.Err(err))
+			log.Debug(ctx, "BinlogIO download success", log.String("path", path), log.Int64("cost", time.Since(start).Milliseconds()),
+				log.Err(err))
 
 			return val, err
 		})
@@ -105,15 +105,15 @@ func (b *BinlogIoImpl) AsyncUpload(ctx context.Context, kvs map[string][]byte) [
 		future := b.pool.Submit(func() (any, error) {
 			var err error
 			start := time.Now()
-			mlog.Debug(ctx, "BinlogIO upload", mlog.String("paths", innerK))
+			log.Debug(ctx, "BinlogIO upload", log.String("paths", innerK))
 			err = retry.Do(ctx, func() error {
 				err = b.Write(ctx, innerK, innerV)
 				if err != nil {
-					mlog.Warn(context.TODO(), "BinlogIO fail to upload", mlog.String("paths", innerK), mlog.Err(err))
+					log.Warn(context.TODO(), "BinlogIO fail to upload", log.String("paths", innerK), log.Err(err))
 				}
 				return err
 			})
-			mlog.Debug(ctx, "BinlogIO upload success", mlog.String("paths", innerK), mlog.Int64("cost", time.Since(start).Milliseconds()), mlog.Err(err))
+			log.Debug(ctx, "BinlogIO upload success", log.String("paths", innerK), log.Int64("cost", time.Since(start).Milliseconds()), log.Err(err))
 			return struct{}{}, err
 		})
 		futures = append(futures, future)

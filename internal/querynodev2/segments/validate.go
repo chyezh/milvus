@@ -20,7 +20,7 @@ import (
 	"context"
 
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/planpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -72,10 +72,10 @@ func validateOnHistorical(ctx context.Context, manager *Manager, collectionID in
 		return nil, err
 	}
 
-	mlog.Debug(ctx, "sparse filter filtered out segments in historical",
-		mlog.Int64("collectionID", collectionID),
-		mlog.Int("filtered", filteredCount),
-		mlog.Int("remaining", len(segments)))
+	log.Debug(ctx, "sparse filter filtered out segments in historical",
+		log.Int64("collectionID", collectionID),
+		log.Int("filtered", filteredCount),
+		log.Int("remaining", len(segments)))
 
 	return segments, nil
 }
@@ -93,10 +93,10 @@ func validateOnStream(ctx context.Context, manager *Manager, collectionID int64,
 		return nil, err
 	}
 
-	mlog.Debug(ctx, "sparse filter filtered out segments in streaming",
-		mlog.Int64("collectionID", collectionID),
-		mlog.Int("filtered", filteredCount),
-		mlog.Int("remaining", len(segments)))
+	log.Debug(ctx, "sparse filter filtered out segments in streaming",
+		log.Int64("collectionID", collectionID),
+		log.Int("filtered", filteredCount),
+		log.Int("remaining", len(segments)))
 
 	return segments, nil
 }

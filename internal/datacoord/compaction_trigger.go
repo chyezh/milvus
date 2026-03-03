@@ -30,7 +30,7 @@ import (
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/util/vecindexmgr"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/util/lifetime"
 	"github.com/milvus-io/milvus/pkg/v2/util/logutil"
@@ -180,14 +180,14 @@ func (t *compactionTrigger) schedule() {
 		select {
 		case <-t.closeCh.CloseCh():
 			t.globalTrigger.Stop()
-			mlog.Info(context.TODO(), "global compaction loop exit")
+			log.Info(context.TODO(), "global compaction loop exit")
 			return
 		case <-t.globalTrigger.C:
 			// default signal, all collections withi isGlobal = true
 			_, err := t.TriggerCompaction(context.Background(),
 				NewCompactionSignal())
 			if err != nil {
-				mlog.Warn(context.TODO(), "unable to triggerCompaction", mlog.Err(err))
+				log.Warn(context.TODO(), "unable to triggerCompaction", log.Err(err))
 			}
 		}
 	}
@@ -201,14 +201,14 @@ func (t *compactionTrigger) work() {
 		var signal *compactionSignal
 		select {
 		case <-t.closeCh.CloseCh():
-			mlog.Info(context.TODO(), "compaction trigger quit")
+			log.Info(context.TODO(), "compaction trigger quit")
 			return
 		case signal = <-t.signals:
 		case signal = <-t.manualSignals:
 		}
 		err := t.handleSignal(signal)
 		if err != nil {
-			mlog.Warn(context.TODO(), "unable to handleSignal", mlog.Int64("signalID", signal.id), mlog.Err(err))
+			log.Warn(context.TODO(), "unable to handleSignal", log.Int64("signalID", signal.id), log.Err(err))
 		}
 		signal.Notify(err)
 	}
@@ -234,12 +234,12 @@ func isCollectionAutoCompactionEnabled(coll *collectionInfo) bool {
 		return false
 	}
 	if coll.IsExternal() {
-		mlog.Debug(context.TODO(), "collection auto compaction disabled for external collection", mlog.Int64("collectionID", coll.ID))
+		log.Debug(context.TODO(), "collection auto compaction disabled for external collection", log.Int64("collectionID", coll.ID))
 		return false
 	}
 	enabled, err := getCollectionAutoCompactionEnabled(coll.Properties)
 	if err != nil {
-		mlog.Warn(context.TODO(), "collection properties auto compaction not valid, returning false", mlog.Err(err))
+		log.Warn(context.TODO(), "collection properties auto compaction not valid, returning false", log.Err(err))
 		return false
 	}
 	return enabled
@@ -295,10 +295,10 @@ func (t *compactionTrigger) TriggerCompaction(ctx context.Context, signal *compa
 		select {
 		case signalCh <- signal:
 		default:
-			mlog.Info(context.TODO(), "no space to send compaction signal",
-				mlog.Int64("collectionID", signal.collectionID),
-				mlog.Int64s("segmentID", signal.segmentIDs),
-				mlog.String("channel", signal.channel))
+			log.Info(context.TODO(), "no space to send compaction signal",
+				log.Int64("collectionID", signal.collectionID),
+				log.Int64s("segmentID", signal.segmentIDs),
+				log.String("channel", signal.channel))
 			return -1, merr.WrapErrServiceUnavailable("signal channel is full")
 		}
 		return id, nil
@@ -328,25 +328,25 @@ func (t *compactionTrigger) allocSignalID(ctx context.Context) (UniqueID, error)
 // handleSignal is the internal logic to convert compactionSignal into compaction tasks.
 func (t *compactionTrigger) handleSignal(signal *compactionSignal) error {
 	if !signal.isForce && t.inspector.isFull() {
-		mlog.Warn(context.TODO(), "skip to generate compaction plan due to handler full")
+		log.Warn(context.TODO(), "skip to generate compaction plan due to handler full")
 		return merr.WrapErrServiceQuotaExceeded("compaction handler full")
 	}
 
-	mlog.Info(context.TODO(), "handleSignal receive")
+	log.Info(context.TODO(), "handleSignal receive")
 	groups, err := t.getCandidates(signal)
 	if err != nil {
-		mlog.Warn(context.TODO(), "handle signal failed, get candidates return error", mlog.Err(err))
+		log.Warn(context.TODO(), "handle signal failed, get candidates return error", log.Err(err))
 		return err
 	}
 
 	if len(groups) == 0 {
-		mlog.Info(context.TODO(), "the length of candidate group is 0, skip to handle signal")
+		log.Info(context.TODO(), "the length of candidate group is 0, skip to handle signal")
 		return nil
 	}
 
 	for _, group := range groups {
 		if !signal.isForce && t.inspector.isFull() {
-			mlog.Warn(context.TODO(), "skip to generate compaction plan due to handler full")
+			log.Warn(context.TODO(), "skip to generate compaction plan due to handler full")
 			return merr.WrapErrServiceQuotaExceeded("compaction handler full")
 		}
 
@@ -356,7 +356,7 @@ func (t *compactionTrigger) handleSignal(signal *compactionSignal) error {
 
 		coll, err := t.getCollection(group.collectionID)
 		if err != nil {
-			mlog.Warn(context.TODO(), "get collection info failed, skip handling compaction", mlog.Err(err))
+			log.Warn(context.TODO(), "get collection info failed, skip handling compaction", log.Err(err))
 			if signal.collectionID != 0 {
 				return err
 			}
@@ -364,13 +364,13 @@ func (t *compactionTrigger) handleSignal(signal *compactionSignal) error {
 		}
 
 		if !signal.isForce && !isCollectionAutoCompactionEnabled(coll) {
-			mlog.RatedInfo(context.TODO(), mlog.RateDefault, "collection auto compaction disabled")
+			log.RatedInfo(context.TODO(), log.RateDefault, "collection auto compaction disabled")
 			return nil
 		}
 
 		ct, err := getCompactTime(tsoutil.ComposeTSByTime(time.Now(), 0), coll)
 		if err != nil {
-			mlog.Warn(context.TODO(), "get compact time failed, skip to handle compaction")
+			log.Warn(context.TODO(), "get compact time failed, skip to handle compaction")
 			return err
 		}
 
@@ -378,7 +378,7 @@ func (t *compactionTrigger) handleSignal(signal *compactionSignal) error {
 		plans := t.generatePlans(group.segments, signal, ct, expectedSize)
 		for _, plan := range plans {
 			if !signal.isForce && t.inspector.isFull() {
-				mlog.Warn(context.TODO(), "skip to generate compaction plan due to handler full")
+				log.Warn(context.TODO(), "skip to generate compaction plan due to handler full")
 				return merr.WrapErrServiceQuotaExceeded("compaction handler full")
 			}
 			totalRows, inputSegmentIDs := plan.A, plan.B
@@ -386,7 +386,7 @@ func (t *compactionTrigger) handleSignal(signal *compactionSignal) error {
 			n := 11 * paramtable.Get().DataCoordCfg.CompactionPreAllocateIDExpansionFactor.GetAsInt64()
 			startID, endID, err := t.allocator.AllocN(n)
 			if err != nil {
-				mlog.Warn(context.TODO(), "fail to allocate id", mlog.Err(err))
+				log.Warn(context.TODO(), "fail to allocate id", log.Err(err))
 				return err
 			}
 			start := time.Now()
@@ -413,18 +413,18 @@ func (t *compactionTrigger) handleSignal(signal *compactionSignal) error {
 			}
 			err = t.inspector.enqueueCompaction(task)
 			if err != nil {
-				mlog.Warn(context.TODO(), "failed to execute compaction task",
-					mlog.Int64("planID", task.GetPlanID()),
-					mlog.Int64s("inputSegments", inputSegmentIDs),
-					mlog.Err(err))
+				log.Warn(context.TODO(), "failed to execute compaction task",
+					log.Int64("planID", task.GetPlanID()),
+					log.Int64s("inputSegments", inputSegmentIDs),
+					log.Err(err))
 				continue
 			}
 
-			mlog.Info(context.TODO(), "time cost of generating compaction",
-				mlog.Int64("planID", task.GetPlanID()),
-				mlog.Int64("time cost", time.Since(start).Milliseconds()),
-				mlog.Int64("target size", task.GetMaxSize()),
-				mlog.Int64s("inputSegments", inputSegmentIDs))
+			log.Info(context.TODO(), "time cost of generating compaction",
+				log.Int64("planID", task.GetPlanID()),
+				log.Int64("time cost", time.Since(start).Milliseconds()),
+				log.Int64("target size", task.GetMaxSize()),
+				log.Int64s("inputSegments", inputSegmentIDs))
 		}
 	}
 	return nil
@@ -432,7 +432,7 @@ func (t *compactionTrigger) handleSignal(signal *compactionSignal) error {
 
 func (t *compactionTrigger) generatePlans(segments []*SegmentInfo, signal *compactionSignal, compactTime *compactTime, expectedSize int64) []*typeutil.Pair[int64, []int64] {
 	if len(segments) == 0 {
-		mlog.Warn(context.TODO(), "the number of candidate segments is 0, skip to generate compaction plan")
+		log.Warn(context.TODO(), "the number of candidate segments is 0, skip to generate compaction plan")
 		return []*typeutil.Pair[int64, []int64]{}
 	}
 
@@ -517,19 +517,19 @@ func (t *compactionTrigger) generatePlans(segments []*SegmentInfo, signal *compa
 	}
 
 	if len(tasks) > 0 {
-		mlog.Info(context.TODO(), "generated nontrivial compaction tasks",
-			mlog.Int64("collectionID", signal.collectionID),
-			mlog.Int("prioritizedCandidates", len(prioritizedCandidates)),
-			mlog.Int("smallCandidates", len(smallCandidates)),
-			mlog.Int("nonPlannedSegments", len(nonPlannedSegments)),
-			mlog.Strings("reasons", reasons))
+		log.Info(context.TODO(), "generated nontrivial compaction tasks",
+			log.Int64("collectionID", signal.collectionID),
+			log.Int("prioritizedCandidates", len(prioritizedCandidates)),
+			log.Int("smallCandidates", len(smallCandidates)),
+			log.Int("nonPlannedSegments", len(nonPlannedSegments)),
+			log.Strings("reasons", reasons))
 	}
 	if len(smallRemaining) > 0 {
-		mlog.RatedInfo(context.TODO(), mlog.RateDefault, "remain small segments",
-			mlog.Int64("collectionID", signal.collectionID),
-			mlog.Int64("partitionID", signal.partitionID),
-			mlog.String("channel", signal.channel),
-			mlog.Int("smallRemainingCount", len(smallRemaining)))
+		log.RatedInfo(context.TODO(), log.RateDefault, "remain small segments",
+			log.Int64("collectionID", signal.collectionID),
+			log.Int64("partitionID", signal.partitionID),
+			log.String("channel", signal.channel),
+			log.Int("smallRemainingCount", len(smallRemaining)))
 	}
 	return tasks
 }
@@ -636,32 +636,32 @@ func hasTooManyDeletions(segment *SegmentInfo) bool {
 
 	// Too many deltalog files, accumulates IO count.
 	if deltaLogCount > Params.DataCoordCfg.SingleCompactionDeltalogMaxNum.GetAsInt() {
-		mlog.Info(context.TODO(), "delta logs file count exceeds threshold",
-			mlog.Int64("segmentID", segment.ID),
-			mlog.Int("delta log count", deltaLogCount),
-			mlog.Int("file number threshold", Params.DataCoordCfg.SingleCompactionDeltalogMaxNum.GetAsInt()),
+		log.Info(context.TODO(), "delta logs file count exceeds threshold",
+			log.Int64("segmentID", segment.ID),
+			log.Int("delta log count", deltaLogCount),
+			log.Int("file number threshold", Params.DataCoordCfg.SingleCompactionDeltalogMaxNum.GetAsInt()),
 		)
 		return true
 	}
 
 	// The proportion of deleted rows is too large, int64 PK tends to accumulates deleted row counts.
 	if float64(totalDeletedRows)/float64(segment.GetNumOfRows()) >= Params.DataCoordCfg.SingleCompactionRatioThreshold.GetAsFloat() {
-		mlog.Info(context.TODO(), "deleted entities rows proportion exceeds threshold",
-			mlog.Int64("segmentID", segment.ID),
-			mlog.Int64("number of rows", segment.GetNumOfRows()),
-			mlog.Int("deleted rows", totalDeletedRows),
-			mlog.Float64("proportion threshold", Params.DataCoordCfg.SingleCompactionRatioThreshold.GetAsFloat()),
+		log.Info(context.TODO(), "deleted entities rows proportion exceeds threshold",
+			log.Int64("segmentID", segment.ID),
+			log.Int64("number of rows", segment.GetNumOfRows()),
+			log.Int("deleted rows", totalDeletedRows),
+			log.Float64("proportion threshold", Params.DataCoordCfg.SingleCompactionRatioThreshold.GetAsFloat()),
 		)
 		return true
 	}
 
 	// Delete size is too large, varchar PK tends to accumulates deltalog size.
 	if totalDeleteLogSize > Params.DataCoordCfg.SingleCompactionDeltaLogMaxSize.GetAsInt64() {
-		mlog.Info(context.TODO(), "total delete entries size exceeds threshold",
-			mlog.Int64("segmentID", segment.ID),
-			mlog.Int64("numRows", segment.GetNumOfRows()),
-			mlog.Int64("delete entries size", totalDeleteLogSize),
-			mlog.Int64("size threshold", Params.DataCoordCfg.SingleCompactionDeltaLogMaxSize.GetAsInt64()),
+		log.Info(context.TODO(), "total delete entries size exceeds threshold",
+			log.Int64("segmentID", segment.ID),
+			log.Int64("numRows", segment.GetNumOfRows()),
+			log.Int64("delete entries size", totalDeleteLogSize),
+			log.Int64("size threshold", Params.DataCoordCfg.SingleCompactionDeltaLogMaxSize.GetAsInt64()),
 		)
 		return true
 	}
@@ -676,14 +676,14 @@ func (t *compactionTrigger) ShouldCompactExpiry(fromTs uint64, compactTime *comp
 		earliestTolerance := expireTime.Add(-tolerantDuration)
 		earliestFromTime, _ := tsoutil.ParseTS(fromTs)
 		if earliestFromTime.Before(earliestTolerance) {
-			mlog.Info(context.TODO(), "Trigger strict expiry compaction for segment",
-				mlog.Int64("segmentID", segment.GetID()),
-				mlog.Int64("collectionID", segment.GetCollectionID()),
-				mlog.Int64("partition", segment.GetPartitionID()),
-				mlog.String("channel", segment.GetInsertChannel()),
-				mlog.Time("compaction expire time", expireTime),
-				mlog.Time("earliest tolerance", earliestTolerance),
-				mlog.Time("segment earliest from time", earliestFromTime),
+			log.Info(context.TODO(), "Trigger strict expiry compaction for segment",
+				log.Int64("segmentID", segment.GetID()),
+				log.Int64("collectionID", segment.GetCollectionID()),
+				log.Int64("partition", segment.GetPartitionID()),
+				log.String("channel", segment.GetInsertChannel()),
+				log.Time("compaction expire time", expireTime),
+				log.Time("earliest tolerance", earliestTolerance),
+				log.Time("segment earliest from time", earliestFromTime),
 			)
 			return true
 		}
@@ -735,11 +735,11 @@ func (t *compactionTrigger) ShouldDoSingleCompaction(segment *SegmentInfo, compa
 		for _, l := range binlogs.GetBinlogs() {
 			// TODO, we should probably estimate expired log entries by total rows in binlog and the ralationship of timeTo, timeFrom and expire time
 			if l.TimestampTo < compactTime.expireTime {
-				mlog.RatedDebug(context.TODO(), mlog.RateDefault, "mark binlog as expired",
-					mlog.Int64("segmentID", segment.ID),
-					mlog.Int64("binlogID", l.GetLogID()),
-					mlog.Uint64("binlogTimestampTo", l.TimestampTo),
-					mlog.Uint64("compactExpireTime", compactTime.expireTime))
+				log.RatedDebug(context.TODO(), log.RateDefault, "mark binlog as expired",
+					log.Int64("segmentID", segment.ID),
+					log.Int64("binlogID", l.GetLogID()),
+					log.Uint64("binlogTimestampTo", l.TimestampTo),
+					log.Uint64("compactExpireTime", compactTime.expireTime))
 				totalExpiredRows += int(l.GetEntriesNum())
 				totalExpiredSize += l.GetMemorySize()
 			}
@@ -752,9 +752,9 @@ func (t *compactionTrigger) ShouldDoSingleCompaction(segment *SegmentInfo, compa
 
 	if float64(totalExpiredRows)/float64(segment.GetNumOfRows()) >= Params.DataCoordCfg.SingleCompactionRatioThreshold.GetAsFloat() ||
 		totalExpiredSize > Params.DataCoordCfg.SingleCompactionExpiredLogMaxSize.GetAsInt64() {
-		mlog.Info(context.TODO(), "total expired entities is too much, trigger compaction", mlog.Int64("segmentID", segment.ID),
-			mlog.Int("expiredRows", totalExpiredRows), mlog.Int64("expiredLogSize", totalExpiredSize),
-			mlog.Bool("createdByCompaction", segment.CreatedByCompaction), mlog.Int64s("compactionFrom", segment.CompactionFrom))
+		log.Info(context.TODO(), "total expired entities is too much, trigger compaction", log.Int64("segmentID", segment.ID),
+			log.Int("expiredRows", totalExpiredRows), log.Int64("expiredLogSize", totalExpiredSize),
+			log.Bool("createdByCompaction", segment.CreatedByCompaction), log.Int64s("compactionFrom", segment.CompactionFrom))
 		return true
 	}
 
@@ -768,10 +768,10 @@ func (t *compactionTrigger) ShouldDoSingleCompaction(segment *SegmentInfo, compa
 	}
 
 	if t.ShouldCompactExpiryWithTTLField(compactTime, segment) {
-		mlog.Info(context.TODO(), "ttl field is expired, trigger compaction", mlog.Int64("segmentID", segment.ID),
-			mlog.Int64("collectionID", segment.CollectionID),
-			mlog.Int64("partitionID", segment.PartitionID),
-			mlog.String("channel", segment.InsertChannel))
+		log.Info(context.TODO(), "ttl field is expired, trigger compaction", log.Int64("segmentID", segment.ID),
+			log.Int64("collectionID", segment.CollectionID),
+			log.Int64("partitionID", segment.PartitionID),
+			log.String("channel", segment.InsertChannel))
 		return true
 	}
 
@@ -799,14 +799,14 @@ func (t *compactionTrigger) ShouldRebuildSegmentIndex(segment *SegmentInfo) bool
 			}
 
 			if index.CurrentIndexVersion < currentEngineVersion {
-				mlog.Info(context.TODO(), "index version is too old, trigger compaction",
-					mlog.Int64("segmentID", segment.ID),
-					mlog.Int64("indexID", index.IndexID),
-					mlog.String("indexType", indexType),
-					mlog.Bool("isVectorIndex", isVectorIndex),
-					mlog.Strings("indexFileKeys", index.IndexFileKeys),
-					mlog.Int32("currentIndexVersion", index.CurrentIndexVersion),
-					mlog.Int32("currentEngineVersion", currentEngineVersion))
+				log.Info(context.TODO(), "index version is too old, trigger compaction",
+					log.Int64("segmentID", segment.ID),
+					log.Int64("indexID", index.IndexID),
+					log.String("indexType", indexType),
+					log.Bool("isVectorIndex", isVectorIndex),
+					log.Strings("indexFileKeys", index.IndexFileKeys),
+					log.Int32("currentIndexVersion", index.CurrentIndexVersion),
+					log.Int32("currentEngineVersion", currentEngineVersion))
 				return true
 			}
 		}
@@ -831,13 +831,13 @@ func (t *compactionTrigger) ShouldRebuildSegmentIndex(segment *SegmentInfo) bool
 			}
 
 			if index.CurrentIndexVersion != Params.DataCoordCfg.TargetVecIndexVersion.GetAsInt32() {
-				mlog.Info(context.TODO(), "index version is not equal to target vec index version, trigger compaction",
-					mlog.Int64("segmentID", segment.ID),
-					mlog.Int64("indexID", index.IndexID),
-					mlog.String("indexType", indexType),
-					mlog.Strings("indexFileKeys", index.IndexFileKeys),
-					mlog.Int32("currentIndexVersion", index.CurrentIndexVersion),
-					mlog.Int32("targetIndexVersion", Params.DataCoordCfg.TargetVecIndexVersion.GetAsInt32()))
+				log.Info(context.TODO(), "index version is not equal to target vec index version, trigger compaction",
+					log.Int64("segmentID", segment.ID),
+					log.Int64("indexID", index.IndexID),
+					log.String("indexType", indexType),
+					log.Strings("indexFileKeys", index.IndexFileKeys),
+					log.Int32("currentIndexVersion", index.CurrentIndexVersion),
+					log.Int32("targetIndexVersion", Params.DataCoordCfg.TargetVecIndexVersion.GetAsInt32()))
 				return true
 			}
 		}

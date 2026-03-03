@@ -25,7 +25,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/observers"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 )
@@ -68,7 +68,7 @@ func (job *UpdateLoadConfigJob) Execute() error {
 	if !job.meta.CollectionManager.Exist(job.ctx, job.collectionID) {
 		msg := "modify replica for unloaded collection is not supported"
 		err := merr.WrapErrCollectionNotLoaded(msg)
-		mlog.Warn(context.TODO(), msg, mlog.Err(err))
+		log.Warn(context.TODO(), msg, log.Err(err))
 		return err
 	}
 
@@ -76,7 +76,7 @@ func (job *UpdateLoadConfigJob) Execute() error {
 	if job.newReplicaNumber == 0 {
 		msg := "set replica number to 0 for loaded collection is not supported"
 		err := merr.WrapErrParameterInvalidMsg(msg)
-		mlog.Warn(context.TODO(), msg, mlog.Err(err))
+		log.Warn(context.TODO(), msg, log.Err(err))
 		return err
 	}
 
@@ -88,23 +88,23 @@ func (job *UpdateLoadConfigJob) Execute() error {
 	// 2. reassign
 	toSpawn, toTransfer, toRelease, err := utils.ReassignReplicaToRG(job.ctx, job.meta, job.collectionID, job.newReplicaNumber, job.newResourceGroups)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to reassign replica", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to reassign replica", log.Err(err))
 		return err
 	}
 
-	mlog.Info(context.TODO(), "reassign replica",
-		mlog.Int64("collectionID", job.collectionID),
-		mlog.Int32("replicaNumber", job.newReplicaNumber),
-		mlog.Strings("resourceGroups", job.newResourceGroups),
-		mlog.Any("toSpawn", toSpawn),
-		mlog.Any("toTransfer", toTransfer),
-		mlog.Any("toRelease", toRelease))
+	log.Info(context.TODO(), "reassign replica",
+		log.Int64("collectionID", job.collectionID),
+		log.Int32("replicaNumber", job.newReplicaNumber),
+		log.Strings("resourceGroups", job.newResourceGroups),
+		log.Any("toSpawn", toSpawn),
+		log.Any("toTransfer", toTransfer),
+		log.Any("toRelease", toRelease))
 
 	// 3. try to spawn new replica
 	channels := job.targetMgr.GetDmChannelsByCollection(job.ctx, job.collectionID, meta.CurrentTargetFirst)
 	newReplicas, spawnErr := job.meta.ReplicaManager.Spawn(job.ctx, job.collectionID, toSpawn, lo.Keys(channels), commonpb.LoadPriority_LOW)
 	if spawnErr != nil {
-		mlog.Warn(context.TODO(), "failed to spawn replica", mlog.Err(spawnErr))
+		log.Warn(context.TODO(), "failed to spawn replica", log.Err(spawnErr))
 		err := spawnErr
 		return err
 	}
@@ -114,7 +114,7 @@ func (job *UpdateLoadConfigJob) Execute() error {
 			replicaIDs := lo.Map(newReplicas, func(r *meta.Replica, _ int) int64 { return r.GetID() })
 			err := job.meta.ReplicaManager.RemoveReplicas(job.ctx, job.collectionID, replicaIDs...)
 			if err != nil {
-				mlog.Warn(context.TODO(), "failed to remove replicas", mlog.Int64s("replicaIDs", replicaIDs), mlog.Err(err))
+				log.Warn(context.TODO(), "failed to remove replicas", log.Int64s("replicaIDs", replicaIDs), log.Err(err))
 			}
 		}
 	}()
@@ -129,7 +129,7 @@ func (job *UpdateLoadConfigJob) Execute() error {
 			}
 
 			if transferErr := job.meta.ReplicaManager.MoveReplica(job.ctx, rg, replicas); transferErr != nil {
-				mlog.Warn(context.TODO(), "failed to transfer replica for collection", mlog.Int64("collectionID", collectionID), mlog.Err(transferErr))
+				log.Warn(context.TODO(), "failed to transfer replica for collection", log.Int64("collectionID", collectionID), log.Err(transferErr))
 				err = transferErr
 				return err
 			}
@@ -142,7 +142,7 @@ func (job *UpdateLoadConfigJob) Execute() error {
 					oldRG := replicaOldRG[replica.GetID()]
 					if replica.GetResourceGroup() != oldRG {
 						if err := job.meta.ReplicaManager.TransferReplica(job.ctx, replica.GetID(), replica.GetResourceGroup(), oldRG, 1); err != nil {
-							mlog.Warn(context.TODO(), "failed to roll back replicas", mlog.Int64("replica", replica.GetID()), mlog.Err(err))
+							log.Warn(context.TODO(), "failed to roll back replicas", log.Int64("replica", replica.GetID()), log.Err(err))
 						}
 					}
 				}
@@ -153,7 +153,7 @@ func (job *UpdateLoadConfigJob) Execute() error {
 	// 5. remove replica from meta
 	err = job.meta.ReplicaManager.RemoveReplicas(job.ctx, job.collectionID, toRelease...)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to remove replicas", mlog.Int64s("replicaIDs", toRelease), mlog.Err(err))
+		log.Warn(context.TODO(), "failed to remove replicas", log.Int64s("replicaIDs", toRelease), log.Err(err))
 		return err
 	}
 
@@ -164,7 +164,7 @@ func (job *UpdateLoadConfigJob) Execute() error {
 	err = job.meta.UpdateReplicaNumber(job.ctx, job.collectionID, job.newReplicaNumber, job.userSpecifiedReplicaMode)
 	if err != nil {
 		msg := "failed to update replica number"
-		mlog.Warn(context.TODO(), msg, mlog.Err(err))
+		log.Warn(context.TODO(), msg, log.Err(err))
 		return err
 	}
 
@@ -172,7 +172,7 @@ func (job *UpdateLoadConfigJob) Execute() error {
 	_, err = job.targetObserver.UpdateNextTarget(job.collectionID)
 	if err != nil {
 		msg := "failed to update next target"
-		mlog.Warn(context.TODO(), msg, mlog.Err(err))
+		log.Warn(context.TODO(), msg, log.Err(err))
 	}
 
 	return nil

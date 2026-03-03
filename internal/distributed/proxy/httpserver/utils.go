@@ -41,7 +41,7 @@ import (
 	"github.com/milvus-io/milvus/internal/proxy/accesslog"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/v2/common"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	"github.com/milvus-io/milvus/pkg/v2/util"
 	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
@@ -686,7 +686,7 @@ func checkAndSetData(body []byte, collSchema *schemapb.CollectionSchema, partial
 						case gjson.Null:
 							// skip null
 						default:
-							mlog.Warn(context.TODO(), "unknown json type found", mlog.Int("mapValue.Type", int(mapValue.Type)))
+							log.Warn(context.TODO(), "unknown json type found", log.Int("mapValue.Type", int(mapValue.Type)))
 						}
 					} else {
 						return merr.WrapErrParameterInvalidMsg("has pass more field without dynamic schema, please check it"), nil, nil
@@ -1038,16 +1038,16 @@ func anyToColumns(rows []map[string]interface{}, validDataMap map[string][]bool,
 		if fieldLen[name] == 0 && partialUpdate {
 			// for partial update, skip update for nullable field
 			// cause we cannot distinguish between missing fields and fields explicitly set to null
-			mlog.Info(context.TODO(), "skip empty field for partial update",
-				mlog.String("fieldName", name))
+			log.Info(context.TODO(), "skip empty field for partial update",
+				log.String("fieldName", name))
 			continue
 		}
 		if fieldLen[name] != rowsLen && partialUpdate {
 			// for partial update, if try to update different field in different rows, return error
-			mlog.Info(context.TODO(), "field len is not equal to rows len",
-				mlog.String("fieldName", name),
-				mlog.Int("fieldLen", fieldLen[name]),
-				mlog.Int("rowsLen", rowsLen))
+			log.Info(context.TODO(), "field len is not equal to rows len",
+				log.String("fieldName", name),
+				log.Int("fieldLen", fieldLen[name]),
+				log.Int("rowsLen", rowsLen))
 			return nil, fmt.Errorf("column %s has length %d, expected %d", name, fieldLen[name], rowsLen)
 		}
 
@@ -1634,7 +1634,7 @@ func buildQueryResp(rowsNum int64, needFields []string, fieldDataList []*schemap
 
 						err := json.Unmarshal(fieldDataList[j].GetScalars().GetJsonData().Data[i], &dataMap)
 						if err != nil {
-							mlog.Error(context.TODO(), fmt.Sprintf("[BuildQueryResp] Unmarshal error %s", err.Error()))
+							log.Error(context.TODO(), fmt.Sprintf("[BuildQueryResp] Unmarshal error %s", err.Error()))
 							return nil, err
 						}
 
@@ -1701,7 +1701,7 @@ func CheckLimiter(ctx context.Context, req interface{}, pxy types.ProxyComponent
 	// apply limiter for http/http2 server
 	limiter, err := pxy.GetRateLimiter()
 	if err != nil {
-		mlog.Error(context.TODO(), "Get proxy rate limiter for httpV1/V2 server failed", mlog.Err(err))
+		log.Error(context.TODO(), "Get proxy rate limiter for httpV1/V2 server failed", log.Err(err))
 		return nil, err
 	}
 
@@ -2207,7 +2207,7 @@ func generateSearchParams(reqSearchParams map[string]interface{}) ([]*commonpb.K
 func genFunctionSchema(ctx context.Context, function *FunctionSchema) (*schemapb.FunctionSchema, error) {
 	functionTypeValue, ok := schemapb.FunctionType_value[function.FunctionType]
 	if !ok {
-		mlog.Warn(ctx, "function's data type is invalid(case sensitive).", mlog.Any("function.DataType", function.FunctionType), mlog.Any("function", function))
+		log.Warn(ctx, "function's data type is invalid(case sensitive).", log.Any("function.DataType", function.FunctionType), log.Any("function", function))
 		return nil, merr.WrapErrParameterInvalidMsg("Unsupported function type: %s", function.FunctionType)
 	}
 	functionType := schemapb.FunctionType(functionTypeValue)

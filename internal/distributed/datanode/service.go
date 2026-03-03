@@ -35,7 +35,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/dependency"
 	_ "github.com/milvus-io/milvus/internal/util/grpcclient"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/workerpb"
@@ -84,10 +84,10 @@ func (s *Server) Prepare() error {
 		netutil.OptHighPriorityToUsePort(paramtable.Get().DataNodeGrpcServerCfg.Port.GetAsInt()),
 	)
 	if err != nil {
-		mlog.Warn(s.ctx, "DataNode fail to create net listener", mlog.Err(err))
+		log.Warn(s.ctx, "DataNode fail to create net listener", log.Err(err))
 		return err
 	}
-	mlog.Info(s.ctx, "DataNode listen on", mlog.String("address", listener.Addr().String()), mlog.Int("port", listener.Port()))
+	log.Info(s.ctx, "DataNode listen on", log.String("address", listener.Addr().String()), log.Int("port", listener.Port()))
 	s.listener = listener
 	paramtable.Get().Save(
 		paramtable.Get().DataNodeGrpcServerCfg.Port.Key,
@@ -155,7 +155,7 @@ func (s *Server) startGrpcLoop() {
 
 	go funcutil.CheckGrpcReady(ctx, s.grpcErrChan)
 	if err := s.grpcServer.Serve(s.listener); err != nil {
-		mlog.Warn(s.ctx, "DataNode failed to start gRPC")
+		log.Warn(s.ctx, "DataNode failed to start gRPC")
 		s.grpcErrChan <- err
 	}
 }
@@ -170,26 +170,26 @@ func (s *Server) Run() error {
 		// errors are propagated upstream as panic.
 		return err
 	}
-	mlog.Info(s.ctx, "DataNode gRPC services successfully initialized")
+	log.Info(s.ctx, "DataNode gRPC services successfully initialized")
 	if err := s.start(); err != nil {
 		// errors are propagated upstream as panic.
 		return err
 	}
-	mlog.Info(s.ctx, "DataNode gRPC services successfully started")
+	log.Info(s.ctx, "DataNode gRPC services successfully started")
 	return nil
 }
 
 // Stop stops Datanode's grpc service.
 func (s *Server) Stop() (err error) {
-	var addressField mlog.Field
+	var addressField log.Field
 	if s.listener != nil {
-		addressField = mlog.String("address", s.listener.Address())
+		addressField = log.String("address", s.listener.Address())
 	} else {
-		addressField = mlog.String("address", "unknown")
+		addressField = log.String("address", "unknown")
 	}
-	mlog.Info(s.ctx, "datanode stopping", addressField)
+	log.Info(s.ctx, "datanode stopping", addressField)
 	defer func() {
-		mlog.Info(s.ctx, "datanode stopped", mlog.Err(err))
+		log.Info(s.ctx, "datanode stopped", log.Err(err))
 	}()
 
 	if s.etcdCli != nil {
@@ -200,10 +200,10 @@ func (s *Server) Stop() (err error) {
 	}
 	s.grpcWG.Wait()
 
-	mlog.Info(s.ctx, "internal server[datanode] start to stop")
+	log.Info(s.ctx, "internal server[datanode] start to stop")
 	err = s.datanode.Stop()
 	if err != nil {
-		mlog.Error(s.ctx, "failed to close datanode", mlog.Err(err))
+		log.Error(s.ctx, "failed to close datanode", log.Err(err))
 		return err
 	}
 	s.cancel()
@@ -231,13 +231,13 @@ func (s *Server) init() error {
 		etcdConfig.EtcdTLSMinVersion.GetValue(),
 		etcdConfig.ClientOptions()...)
 	if err != nil {
-		mlog.Error(context.TODO(), "failed to connect to etcd", mlog.Err(err))
+		log.Error(context.TODO(), "failed to connect to etcd", log.Err(err))
 		return err
 	}
 	s.etcdCli = etcdCli
 	s.SetEtcdClient(s.etcdCli)
 	s.datanode.SetAddress(s.listener.Address())
-	mlog.Info(context.TODO(), "DataNode address", mlog.String("address", s.listener.Address()))
+	log.Info(context.TODO(), "DataNode address", log.String("address", s.listener.Address()))
 
 	err = s.startGrpc()
 	if err != nil {
@@ -247,10 +247,10 @@ func (s *Server) init() error {
 	s.datanode.UpdateStateCode(commonpb.StateCode_Initializing)
 
 	if err := s.datanode.Init(); err != nil {
-		mlog.Error(context.TODO(), "failed to init DataNode server", mlog.Err(err))
+		log.Error(context.TODO(), "failed to init DataNode server", log.Err(err))
 		return err
 	}
-	mlog.Info(context.TODO(), "current DataNode state", mlog.Any("state", s.datanode.GetStateCode()))
+	log.Info(context.TODO(), "current DataNode state", log.Any("state", s.datanode.GetStateCode()))
 	return nil
 }
 
@@ -261,7 +261,7 @@ func (s *Server) start() error {
 	}
 	err := s.datanode.Register()
 	if err != nil {
-		mlog.Debug(s.ctx, "failed to register to Etcd", mlog.Err(err))
+		log.Debug(s.ctx, "failed to register to Etcd", log.Err(err))
 		return err
 	}
 	return nil

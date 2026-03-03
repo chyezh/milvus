@@ -24,7 +24,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
 const (
@@ -67,7 +67,7 @@ func InitGlobalAssignPolicyFactory(
 ) {
 	policyFactoryOnce.Do(func() {
 		globalPolicyFactory = NewAssignPolicyFactory(scheduler, nodeManager, dist, meta, targetMgr)
-		mlog.Info(context.TODO(), "Global assign policy factory initialized")
+		log.Info(context.TODO(), "Global assign policy factory initialized")
 	})
 }
 
@@ -113,7 +113,7 @@ func (f *AssignPolicyFactory) GetPolicy(policyType string) AssignPolicy {
 		return policy
 	}
 
-	mlog.Info(context.TODO(), "Creating new assign policy", mlog.String("type", policyType))
+	log.Info(context.TODO(), "Creating new assign policy", log.String("type", policyType))
 
 	switch policyType {
 	case PolicyTypeRoundRobin:
@@ -123,9 +123,9 @@ func (f *AssignPolicyFactory) GetPolicy(policyType string) AssignPolicy {
 	case PolicyTypeScoreBased:
 		policy = newScoreBasedAssignPolicy(f.nodeManager, f.scheduler, f.dist, f.meta)
 	default:
-		mlog.Info(context.TODO(), "Unknown assign policy type, using default",
-			mlog.String("requested", policyType),
-			mlog.String("default", PolicyTypeScoreBased))
+		log.Info(context.TODO(), "Unknown assign policy type, using default",
+			log.String("requested", policyType),
+			log.String("default", PolicyTypeScoreBased))
 		policy = newScoreBasedAssignPolicy(f.nodeManager, f.scheduler, f.dist, f.meta)
 	}
 

@@ -23,7 +23,7 @@ import (
 
 
 	"github.com/milvus-io/milvus/internal/datacoord/session"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	taskcommon "github.com/milvus-io/milvus/pkg/v2/taskcommon"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
@@ -72,7 +72,7 @@ func (s *globalTaskScheduler) Enqueue(task Task) {
 		task.SetTaskTime(taskcommon.TimeStart, time.Now())
 		s.runningTasks.Insert(task.GetTaskID(), task)
 	}
-	mlog.Info(s.ctx, "task enqueued", WrapTaskLog(task)...)
+	log.Info(s.ctx, "task enqueued", WrapTaskLog(task)...)
 }
 
 func (s *globalTaskScheduler) AbortAndRemoveTask(taskID int64) {
@@ -160,7 +160,7 @@ func (s *globalTaskScheduler) schedule() {
 		return
 	}
 	nodeSlots := s.cluster.QuerySlot()
-	mlog.Info(s.ctx, "scheduling pending tasks...", mlog.Int("num", pendingNum), mlog.Any("nodeSlots", nodeSlots))
+	log.Info(s.ctx, "scheduling pending tasks...", log.Int("num", pendingNum), log.Any("nodeSlots", nodeSlots))
 
 	futures := make([]*conc.Future[struct{}], 0)
 	for {
@@ -177,7 +177,7 @@ func (s *globalTaskScheduler) schedule() {
 		future := s.execPool.Submit(func() (struct{}, error) {
 			s.mu.RLock(task.GetTaskID())
 			defer s.mu.RUnlock(task.GetTaskID())
-			mlog.Info(s.ctx, "processing task...", WrapTaskLog(task)...)
+			log.Info(s.ctx, "processing task...", WrapTaskLog(task)...)
 			if task.GetTaskState() == taskcommon.Init {
 				task.CreateTaskOnWorker(nodeID, s.cluster)
 				switch task.GetTaskState() {
@@ -199,7 +199,7 @@ func (s *globalTaskScheduler) check() {
 	if s.runningTasks.Len() <= 0 {
 		return
 	}
-	mlog.Info(s.ctx, "check running tasks", mlog.Int("num", s.runningTasks.Len()))
+	log.Info(s.ctx, "check running tasks", log.Int("num", s.runningTasks.Len()))
 
 	tasks := s.runningTasks.Values()
 	futures := make([]*conc.Future[struct{}], 0, len(tasks))
@@ -250,8 +250,8 @@ func (s *globalTaskScheduler) updateTaskTimeMetrics() {
 
 		queueingTime := time.Since(task.GetTaskTime(taskcommon.TimeQueue))
 		if queueingTime > paramtable.Get().DataCoordCfg.TaskSlowThreshold.GetAsDuration(time.Second) {
-			mlog.Warn(s.ctx, "task queueing time is too long", mlog.Int64("taskID", taskID),
-				mlog.Int64("queueing time(ms)", queueingTime.Milliseconds()))
+			log.Warn(s.ctx, "task queueing time is too long", log.Int64("taskID", taskID),
+				log.Int64("queueing time(ms)", queueingTime.Milliseconds()))
 		}
 
 		maxQueueingTime, ok := maxTaskQueueingTime[taskType]
@@ -271,8 +271,8 @@ func (s *globalTaskScheduler) updateTaskTimeMetrics() {
 
 		runningTime := time.Since(task.GetTaskTime(taskcommon.TimeStart))
 		if runningTime > paramtable.Get().DataCoordCfg.TaskSlowThreshold.GetAsDuration(time.Second) {
-			mlog.Warn(s.ctx, "task running time is too long", mlog.Int64("taskID", task.GetTaskID()),
-				mlog.Int64("running time(ms)", runningTime.Milliseconds()))
+			log.Warn(s.ctx, "task running time is too long", log.Int64("taskID", task.GetTaskID()),
+				log.Int64("running time(ms)", runningTime.Milliseconds()))
 		}
 
 		maxRunningTime, ok := maxTaskRunningTime[taskType]

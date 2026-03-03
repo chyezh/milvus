@@ -24,7 +24,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -64,13 +64,13 @@ func PackSegmentLoadInfo(segment *datapb.SegmentInfo, channelCheckpoint *msgpb.M
 	posTime := tsoutil.PhysicalTime(channelCheckpoint.GetTimestamp())
 	tsLag := time.Since(posTime)
 	if tsLag >= 10*time.Minute {
-		mlog.Warn(context.TODO(), "delta position is quite stale",
-			mlog.Int64("collectionID", segment.GetCollectionID()),
-			mlog.Int64("segmentID", segment.GetID()),
-			mlog.String("channel", segment.InsertChannel),
-			mlog.Uint64("posTs", channelCheckpoint.GetTimestamp()),
-			mlog.Time("posTime", posTime),
-			mlog.Duration("tsLag", tsLag))
+		log.Warn(context.TODO(), "delta position is quite stale",
+			log.Int64("collectionID", segment.GetCollectionID()),
+			log.Int64("segmentID", segment.GetID()),
+			log.String("channel", segment.InsertChannel),
+			log.Uint64("posTs", channelCheckpoint.GetTimestamp()),
+			log.Time("posTime", posTime),
+			log.Duration("tsLag", tsLag))
 	}
 	loadInfo := &querypb.SegmentLoadInfo{
 		SegmentID:        segment.ID,

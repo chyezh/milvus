@@ -24,7 +24,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -62,7 +62,7 @@ func (t *dropCollectionTask) validate(ctx context.Context) error {
 	// Check if all aliases have been dropped.
 	if len(aliases) > 0 {
 		err = fmt.Errorf("unable to drop the collection [%s] because it has associated aliases %v, please remove all aliases before dropping the collection", t.Req.GetCollectionName(), aliases)
-		mlog.Warn(ctx, "drop collection failed", mlog.String("database", t.Req.GetDbName()), mlog.Err(err))
+		log.Warn(ctx, "drop collection failed", log.String("database", t.Req.GetDbName()), log.Err(err))
 		return err
 	}
 

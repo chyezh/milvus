@@ -24,7 +24,7 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/querynodev2/segments"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/tsoutil"
 )
 
@@ -93,9 +93,9 @@ func (c *doubleCacheBuffer[T]) RegisterL0(segmentList ...segments.Segment) {
 	for _, seg := range segmentList {
 		if seg != nil {
 			c.l0Segments = append(c.l0Segments, seg)
-			mlog.Info(context.TODO(), "register l0 from delete buffer",
-				mlog.Int64("segmentID", seg.ID()),
-				mlog.Time("startPosition", tsoutil.PhysicalTime(seg.StartPosition().GetTimestamp())),
+			log.Info(context.TODO(), "register l0 from delete buffer",
+				log.Int64("segmentID", seg.ID()),
+				log.Time("startPosition", tsoutil.PhysicalTime(seg.StartPosition().GetTimestamp())),
 			)
 		}
 	}
@@ -115,10 +115,10 @@ func (c *doubleCacheBuffer[T]) UnRegister(ts uint64) {
 	for _, s := range c.l0Segments {
 		if s.StartPosition().GetTimestamp() < ts {
 			s.Release(context.TODO())
-			mlog.Info(context.TODO(), "unregister l0 from delete buffer",
-				mlog.Int64("segmentID", s.ID()),
-				mlog.Time("startPosition", tsoutil.PhysicalTime(s.StartPosition().GetTimestamp())),
-				mlog.Time("cleanTs", tsoutil.PhysicalTime(ts)),
+			log.Info(context.TODO(), "unregister l0 from delete buffer",
+				log.Int64("segmentID", s.ID()),
+				log.Time("startPosition", tsoutil.PhysicalTime(s.StartPosition().GetTimestamp())),
+				log.Time("cleanTs", tsoutil.PhysicalTime(ts)),
 			)
 			continue
 		}
@@ -273,10 +273,10 @@ func (c *doubleCacheBuffer[T]) Pin(ts uint64, segmentID int64) {
 	}
 	c.pinnedTimestamps[ts][segmentID] = struct{}{}
 
-	mlog.Info(context.TODO(), "pin timestamp for segment",
-		mlog.Uint64("timestamp", ts),
-		mlog.Int64("segmentID", segmentID),
-		mlog.Time("physicalTime", tsoutil.PhysicalTime(ts)),
+	log.Info(context.TODO(), "pin timestamp for segment",
+		log.Uint64("timestamp", ts),
+		log.Int64("segmentID", segmentID),
+		log.Time("physicalTime", tsoutil.PhysicalTime(ts)),
 	)
 }
 
@@ -292,10 +292,10 @@ func (c *doubleCacheBuffer[T]) Unpin(ts uint64, segmentID int64) {
 		}
 	}
 
-	mlog.Info(context.TODO(), "unpin timestamp for segment",
-		mlog.Uint64("timestamp", ts),
-		mlog.Int64("segmentID", segmentID),
-		mlog.Time("physicalTime", tsoutil.PhysicalTime(ts)),
+	log.Info(context.TODO(), "unpin timestamp for segment",
+		log.Uint64("timestamp", ts),
+		log.Int64("segmentID", segmentID),
+		log.Time("physicalTime", tsoutil.PhysicalTime(ts)),
 	)
 	// Note: doubleCacheBuffer doesn't implement cleanup logic in TryDiscard,
 	// so no cleanup is triggered here

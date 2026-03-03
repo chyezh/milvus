@@ -27,7 +27,7 @@ import (
 	pulsarctl "github.com/streamnative/pulsarctl/pkg/pulsar"
 	"github.com/streamnative/pulsarctl/pkg/pulsar/common"
 
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
 	mqcommon "github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream/mqwrapper"
@@ -52,7 +52,7 @@ func NewClient(tenant string, namespace string, opts pulsar.ClientOptions) (*pul
 		var c pulsar.Client
 		c, err = pulsar.NewClient(opts)
 		if err != nil {
-			mlog.Error(context.TODO(), "Failed to set pulsar client: ", mlog.Err(err))
+			log.Error(context.TODO(), "Failed to set pulsar client: ", log.Err(err))
 			return
 		}
 		cli := &pulsarClient{
@@ -139,10 +139,10 @@ func (pc *pulsarClient) Subscribe(ctx context.Context, options mqwrapper.Consume
 
 func GetFullTopicName(tenant string, namespace string, topic string) (string, error) {
 	if len(tenant) == 0 || len(namespace) == 0 || len(topic) == 0 {
-		mlog.Error(context.TODO(), "build full topic name failed",
-			mlog.String("tenant", tenant),
-			mlog.String("namesapce", namespace),
-			mlog.String("topic", topic))
+		log.Error(context.TODO(), "build full topic name failed",
+			log.String("tenant", tenant),
+			log.String("namesapce", namespace),
+			log.String("topic", topic))
 		return "", errors.New("build full topic name failed")
 	}
 

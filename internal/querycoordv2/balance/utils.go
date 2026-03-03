@@ -28,7 +28,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/task"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 )
 
@@ -62,27 +62,27 @@ func CreateSegmentTasksFromPlans(ctx context.Context, source task.Source, timeou
 			actions...,
 		)
 		if err != nil {
-			mlog.Warn(context.TODO(), "create segment task from plan failed",
-				mlog.Int64("collection", p.Segment.GetCollectionID()),
-				mlog.Int64("segmentID", p.Segment.GetID()),
-				mlog.Int64("replica", p.Replica.GetID()),
-				mlog.String("channel", p.Segment.GetInsertChannel()),
-				mlog.Int64("from", p.From),
-				mlog.Int64("to", p.To),
-				mlog.Err(err),
+			log.Warn(context.TODO(), "create segment task from plan failed",
+				log.Int64("collection", p.Segment.GetCollectionID()),
+				log.Int64("segmentID", p.Segment.GetID()),
+				log.Int64("replica", p.Replica.GetID()),
+				log.String("channel", p.Segment.GetInsertChannel()),
+				log.Int64("from", p.From),
+				log.Int64("to", p.To),
+				log.Err(err),
 			)
 			continue
 		}
 
-		mlog.Info(context.TODO(), "create segment task",
-			mlog.Int64("collection", p.Segment.GetCollectionID()),
-			mlog.Int64("segmentID", p.Segment.GetID()),
-			mlog.Int64("replica", p.Replica.GetID()),
-			mlog.String("channel", p.Segment.GetInsertChannel()),
-			mlog.String("level", p.Segment.GetLevel().String()),
-			mlog.Int32("loadPriority", int32(p.LoadPriority)),
-			mlog.Int64("from", p.From),
-			mlog.Int64("to", p.To))
+		log.Info(context.TODO(), "create segment task",
+			log.Int64("collection", p.Segment.GetCollectionID()),
+			log.Int64("segmentID", p.Segment.GetID()),
+			log.Int64("replica", p.Replica.GetID()),
+			log.String("channel", p.Segment.GetInsertChannel()),
+			log.String("level", p.Segment.GetLevel().String()),
+			log.Int32("loadPriority", int32(p.LoadPriority)),
+			log.Int64("from", p.From),
+			log.Int64("to", p.To))
 		if task.GetTaskType(t) == task.TaskTypeMove {
 			// from balance checker
 			t.SetPriority(task.TaskPriorityLow)
@@ -112,23 +112,23 @@ func CreateChannelTasksFromPlans(ctx context.Context, source task.Source, timeou
 		}
 		t, err := task.NewChannelTask(ctx, timeout, source, p.Channel.GetCollectionID(), p.Replica, actions...)
 		if err != nil {
-			mlog.Warn(context.TODO(), "create channel task failed",
-				mlog.Int64("collection", p.Channel.GetCollectionID()),
-				mlog.Int64("replica", p.Replica.GetID()),
-				mlog.String("channel", p.Channel.GetChannelName()),
-				mlog.Int64("from", p.From),
-				mlog.Int64("to", p.To),
-				mlog.Err(err),
+			log.Warn(context.TODO(), "create channel task failed",
+				log.Int64("collection", p.Channel.GetCollectionID()),
+				log.Int64("replica", p.Replica.GetID()),
+				log.String("channel", p.Channel.GetChannelName()),
+				log.Int64("from", p.From),
+				log.Int64("to", p.To),
+				log.Err(err),
 			)
 			continue
 		}
 
-		mlog.Info(context.TODO(), "create channel task",
-			mlog.Int64("collection", p.Channel.GetCollectionID()),
-			mlog.Int64("replica", p.Replica.GetID()),
-			mlog.String("channel", p.Channel.GetChannelName()),
-			mlog.Int64("from", p.From),
-			mlog.Int64("to", p.To))
+		log.Info(context.TODO(), "create channel task",
+			log.Int64("collection", p.Channel.GetCollectionID()),
+			log.Int64("replica", p.Replica.GetID()),
+			log.String("channel", p.Channel.GetChannelName()),
+			log.Int64("from", p.From),
+			log.Int64("to", p.To))
 		t.SetPriority(task.TaskPriorityHigh)
 		ret = append(ret, t)
 	}
@@ -147,7 +147,7 @@ func PrintNewBalancePlans(collectionID int64, replicaID int64, segmentPlans []as
 		balanceInfo += channelPlan.String()
 	}
 	balanceInfo += "}"
-	mlog.Info(context.TODO(), balanceInfo)
+	log.Info(context.TODO(), balanceInfo)
 }
 
 // PrintCurrentReplicaDist logs the current distribution of segments and channels across nodes
@@ -215,7 +215,7 @@ func PrintCurrentReplicaDist(replica *meta.Replica,
 	}
 	distInfo += "]"
 
-	mlog.Info(context.TODO(), distInfo)
+	log.Info(context.TODO(), distInfo)
 }
 
 // sortIfChannelAtWALLocated sorts channels based on WAL location when streaming service is enabled.

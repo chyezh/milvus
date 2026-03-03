@@ -28,7 +28,7 @@ import (
 	"github.com/milvus-io/milvus/internal/flushcommon/writebuffer"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/function"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
@@ -210,13 +210,13 @@ func (eNode *embeddingNode) Operate(in []Msg) []Msg {
 	if len(fgMsg.InsertMessages) > 0 {
 		var err error
 		if insertData, err = writebuffer.PrepareInsert(eNode.metaCache.GetSchema(fgMsg.TimeTick()), eNode.pkField, fgMsg.InsertMessages); err != nil {
-			mlog.Error(context.TODO(), "failed to prepare insert data", mlog.Err(err))
+			log.Error(context.TODO(), "failed to prepare insert data", log.Err(err))
 			panic(err)
 		}
 	}
 
 	if err := eNode.Embedding(insertData); err != nil {
-		mlog.Warn(context.TODO(), "failed to embedding insert data", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to embedding insert data", log.Err(err))
 		panic(err)
 	}
 

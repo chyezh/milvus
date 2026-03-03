@@ -16,7 +16,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/walimpls"
@@ -35,8 +35,8 @@ func adaptImplsToROWAL(
 	cleanup func(),
 ) *roWALAdaptorImpl {
 	logger := resource.Resource().Logger().With(
-		mlog.FieldComponent("wal"),
-		mlog.String("channel", basicWAL.Channel().String()),
+		log.FieldComponent("wal"),
+		log.String("channel", basicWAL.Channel().String()),
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	roWAL := &roWALAdaptorImpl{
@@ -189,7 +189,7 @@ func (w *walAdaptorImpl) Append(ctx context.Context, msg message.MutableMessage)
 			// if the append operation of wal is fenced, we should report the error to the client.
 			if w.isFenced.CompareAndSwap(false, true) {
 				w.forceCancelAfterGracefulTimeout()
-				w.Logger().Warn(nil, "wal is fenced, mark as unavailable, all append opertions will be rejected", mlog.Err(err))
+				w.Logger().Warn(nil, "wal is fenced, mark as unavailable, all append opertions will be rejected", log.Err(err))
 			}
 			return nil, status.NewChannelFenced(w.Channel().String())
 		}
@@ -237,7 +237,7 @@ func (w *walAdaptorImpl) retryAppendWhenRecoverableError(ctx context.Context, ms
 		if err == nil {
 			if msg.MessageType() == message.MessageTypeAlterWAL {
 				// if the append operation is a alter WAL message, we should log the message
-				w.Logger().Info(nil, "append alter WAL message to WAL finish", mlog.String("channel", msg.VChannel()), mlog.Uint64("timetick", msg.TimeTick()))
+				w.Logger().Info(nil, "append alter WAL message to WAL finish", log.String("channel", msg.VChannel()), log.Uint64("timetick", msg.TimeTick()))
 			}
 			return msgID, nil
 		}
@@ -246,7 +246,7 @@ func (w *walAdaptorImpl) retryAppendWhenRecoverableError(ctx context.Context, ms
 		}
 		w.writeMetrics.ObserveRetry()
 		nextInterval := backoff.NextBackOff()
-		w.Logger().Warn(nil, "append message into wal impls failed, retrying...", mlog.FieldMessage(msg), mlog.Int("retry", i), mlog.Duration("nextInterval", nextInterval), mlog.Err(err))
+		w.Logger().Warn(nil, "append message into wal impls failed, retrying...", log.FieldMessage(msg), log.Int("retry", i), log.Duration("nextInterval", nextInterval), log.Err(err))
 
 		select {
 		case <-ctx.Done():
@@ -299,7 +299,7 @@ func (w *walAdaptorImpl) Close() {
 	// close all wal instances.
 	w.scanners.Range(func(id int64, s wal.Scanner) bool {
 		s.Close()
-		mlog.Info(context.TODO(), "close scanner by wal adaptor", mlog.Int64("id", id), mlog.Any("channel", w.Channel()))
+		log.Info(context.TODO(), "close scanner by wal adaptor", log.Int64("id", id), log.Any("channel", w.Channel()))
 		return true
 	})
 

@@ -21,7 +21,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/json"
 	"github.com/milvus-io/milvus/internal/querycoordv2/session"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/metricsinfo"
 )
 
@@ -54,7 +54,7 @@ func (dm *DistributionManager) GetDistributionJSON(collectionID int64) string {
 
 	v, err := json.Marshal(dist)
 	if err != nil {
-		mlog.Warn(context.TODO(), "failed to marshal dist", mlog.Err(err))
+		log.Warn(context.TODO(), "failed to marshal dist", log.Err(err))
 		return ""
 	}
 	return string(v)

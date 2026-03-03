@@ -26,7 +26,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querycoordv2/checkers"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/querycoordv2/observers"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
@@ -77,11 +77,11 @@ func WaitCollectionReleased(ctx context.Context, dist *meta.DistributionManager,
 				collection, currentChannelCount, currentSegmentCount)
 		}
 
-		mlog.Info(ctx, "waitting for release...",
-			mlog.Int64("collection", collection),
-			mlog.Int64s("partitions", partitions),
-			mlog.Int("channel", currentChannelCount),
-			mlog.Int("segments", currentSegmentCount),
+		log.Info(ctx, "waitting for release...",
+			log.Int64("collection", collection),
+			log.Int64s("partitions", partitions),
+			log.Int("channel", currentChannelCount),
+			log.Int("segments", currentSegmentCount),
 		)
 
 		lastChannelCount = currentChannelCount

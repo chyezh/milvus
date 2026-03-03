@@ -15,7 +15,7 @@ import (
 
 	"github.com/milvus-io/milvus/pkg/v2/common"
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	mqcommon "github.com/milvus-io/milvus/pkg/v2/mq/common"
 	"github.com/milvus-io/milvus/pkg/v2/mq/msgstream/mqwrapper"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 
 	broker := mockCluster.BootstrapServers()
 	Params.Save("kafka.brokerList", broker)
-	mlog.Info(context.TODO(), "start testing kafka broker", mlog.String("address", broker))
+	log.Info(context.TODO(), "start testing kafka broker", log.String("address", broker))
 
 	exitCode := m.Run()
 	os.Exit(exitCode)
@@ -43,7 +43,7 @@ func TestMain(m *testing.M) {
 
 func getKafkaBrokerList() string {
 	brokerList := Params.KafkaCfg.Address.GetValue()
-	mlog.Info(context.TODO(), "get kafka broker list.", mlog.String("address", brokerList))
+	log.Info(context.TODO(), "get kafka broker list.", log.String("address", brokerList))
 	return brokerList
 }
 
@@ -77,27 +77,27 @@ func Consume1(ctx context.Context, t *testing.T, kc *kafkaClient, topic string, 
 	rand.Seed(time.Now().UnixNano())
 	cnt := 1 + rand.Int()%5
 
-	mlog.Info(context.TODO(), "Consume1 start")
+	log.Info(context.TODO(), "Consume1 start")
 	var msg mqcommon.Message
 	for i := 0; i < cnt; i++ {
 		select {
 		case <-ctx.Done():
-			mlog.Info(context.TODO(), "Consume1 channel closed")
+			log.Info(context.TODO(), "Consume1 channel closed")
 			return
 		case msg = <-consumer.Chan():
 			if msg == nil {
 				return
 			}
 
-			mlog.Info(context.TODO(), "Consume1 RECV", mlog.Any("v", BytesToInt(msg.Payload())))
+			log.Info(context.TODO(), "Consume1 RECV", log.Any("v", BytesToInt(msg.Payload())))
 			consumer.Ack(msg)
 			(*total)++
 		}
 	}
 
 	c <- msg.ID()
-	mlog.Info(context.TODO(), "Consume1 randomly RECV", mlog.Any("number", cnt))
-	mlog.Info(context.TODO(), "Consume1 done")
+	log.Info(context.TODO(), "Consume1 randomly RECV", log.Any("number", cnt))
+	log.Info(context.TODO(), "Consume1 done")
 }
 
 // Consume2 will consume messages from specified MessageID
@@ -117,20 +117,20 @@ func Consume2(ctx context.Context, t *testing.T, kc *kafkaClient, topic string, 
 
 	mm := <-consumer.Chan()
 	consumer.Ack(mm)
-	mlog.Info(context.TODO(), "skip the last received message", mlog.Any("skip msg", mm.ID()))
+	log.Info(context.TODO(), "skip the last received message", log.Any("skip msg", mm.ID()))
 
-	mlog.Info(context.TODO(), "Consume2 start")
+	log.Info(context.TODO(), "Consume2 start")
 	for {
 		select {
 		case <-ctx.Done():
-			mlog.Info(context.TODO(), "Consume2 channel closed")
+			log.Info(context.TODO(), "Consume2 channel closed")
 			return
 		case msg, ok := <-consumer.Chan():
 			if msg == nil || !ok {
 				return
 			}
 
-			mlog.Info(context.TODO(), "Consume2 RECV", mlog.Any("v", BytesToInt(msg.Payload())))
+			log.Info(context.TODO(), "Consume2 RECV", log.Any("v", BytesToInt(msg.Payload())))
 			consumer.Ack(msg)
 			(*total)++
 		}
@@ -148,11 +148,11 @@ func Consume3(ctx context.Context, t *testing.T, kc *kafkaClient, topic string, 
 	assert.NotNil(t, consumer)
 	defer consumer.Close()
 
-	mlog.Info(context.TODO(), "Consume3 start")
+	log.Info(context.TODO(), "Consume3 start")
 	for {
 		select {
 		case <-ctx.Done():
-			mlog.Info(context.TODO(), "Consume3 channel closed")
+			log.Info(context.TODO(), "Consume3 channel closed")
 			return
 		case msg, ok := <-consumer.Chan():
 			if msg == nil || !ok {
@@ -161,7 +161,7 @@ func Consume3(ctx context.Context, t *testing.T, kc *kafkaClient, topic string, 
 
 			consumer.Ack(msg)
 			(*total)++
-			mlog.Info(context.TODO(), "Consume3 RECV", mlog.Any("v", BytesToInt(msg.Payload())), mlog.Int("total", *total))
+			log.Info(context.TODO(), "Consume3 RECV", log.Any("v", BytesToInt(msg.Payload())), log.Int("total", *total))
 		}
 	}
 }
@@ -195,7 +195,7 @@ func TestKafkaClient_ConsumeWithAck(t *testing.T) {
 	Consume1(ctx1, t, kc, topic, subName, c, &total1)
 
 	lastMsgID := <-c
-	mlog.Info(context.TODO(), "lastMsgID", mlog.Any("lastMsgID", lastMsgID.(*KafkaID).MessageID))
+	log.Info(context.TODO(), "lastMsgID", log.Any("lastMsgID", lastMsgID.(*KafkaID).MessageID))
 
 	ctx2, cancel2 := context.WithTimeout(ctx, 3*time.Second)
 	Consume2(ctx2, t, kc, topic, subName, lastMsgID, &total2)

@@ -32,7 +32,7 @@ import (
 	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/importutilv2"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
+	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/conc"
@@ -162,11 +162,11 @@ func (t *ImportTask) Clone() Task {
 
 func (t *ImportTask) Execute() []*conc.Future[any] {
 	bufferSize := t.GetBufferSize()
-	mlog.Info(context.TODO(), "start to import", WrapLogFields(t,
-		mlog.Int64("bufferSize", bufferSize),
-		mlog.Int64("taskSlot", t.GetSlots()),
-		mlog.Any("files", t.req.GetFiles()),
-		mlog.Any("schema", t.GetSchema()),
+	log.Info(context.TODO(), "start to import", WrapLogFields(t,
+		log.Int64("bufferSize", bufferSize),
+		log.Int64("taskSlot", t.GetSlots()),
+		log.Any("files", t.req.GetFiles()),
+		log.Any("schema", t.GetSchema()),
 	)...)
 	t.manager.Update(t.GetTaskID(), UpdateState(datapb.ImportTaskStateV2_InProgress))
 
@@ -175,7 +175,7 @@ func (t *ImportTask) Execute() []*conc.Future[any] {
 	fn := func(file *internalpb.ImportFile) error {
 		reader, err := importutilv2.NewReader(t.ctx, t.cm, t.GetSchema(), file, req.GetOptions(), int(bufferSize), t.req.GetStorageConfig())
 		if err != nil {
-			mlog.Warn(context.TODO(), "new reader failed", WrapLogFields(t, mlog.String("file", file.String()), mlog.Err(err))...)
+			log.Warn(context.TODO(), "new reader failed", WrapLogFields(t, log.String("file", file.String()), log.Err(err))...)
 			reason := fmt.Sprintf("error: %v, file: %s", err, file.String())
 			t.manager.Update(t.GetTaskID(), UpdateState(datapb.ImportTaskStateV2_Failed), UpdateReason(reason))
 			return err
@@ -184,13 +184,13 @@ func (t *ImportTask) Execute() []*conc.Future[any] {
 		start := time.Now()
 		err = t.importFile(reader)
 		if err != nil {
-			mlog.Warn(context.TODO(), "do import failed", WrapLogFields(t, mlog.String("file", file.String()), mlog.Err(err))...)
+			log.Warn(context.TODO(), "do import failed", WrapLogFields(t, log.String("file", file.String()), log.Err(err))...)
 			reason := fmt.Sprintf("error: %v, file: %s", err, file.String())
 			t.manager.Update(t.GetTaskID(), UpdateState(datapb.ImportTaskStateV2_Failed), UpdateReason(reason))
 			return err
 		}
-		mlog.Info(context.TODO(), "import file done", WrapLogFields(t, mlog.Strings("files", file.GetPaths()),
-			mlog.Duration("dur", time.Since(start)))...)
+		log.Info(context.TODO(), "import file done", WrapLogFields(t, log.Strings("files", file.GetPaths()),
+			log.Duration("dur", time.Since(start)))...)
 		return nil
 	}
 
@@ -225,7 +225,7 @@ func (t *ImportTask) importFile(reader importutilv2.Reader) error {
 		}
 		rowNum, _ := GetInsertDataRowCount(data, t.GetSchema())
 		if rowNum == 0 {
-			mlog.Info(context.TODO(), "0 row was imported, the data may have been deleted", WrapLogFields(t)...)
+			log.Info(context.TODO(), "0 row was imported, the data may have been deleted", WrapLogFields(t)...)
 			continue
 		}
 		err = AppendSystemFieldsData(t, data, rowNum)
@@ -243,7 +243,7 @@ func (t *ImportTask) importFile(reader importutilv2.Reader) error {
 		if !importutilv2.IsBackup(t.req.GetOptions()) {
 			err = RunEmbeddingFunction(t, data)
 			if err != nil {
-				mlog.Warn(context.TODO(), "run embedding function failed", WrapLogFields(t, mlog.Err(err))...)
+				log.Warn(context.TODO(), "run embedding function failed", WrapLogFields(t, log.Err(err))...)
 				return err
 			}
 		}
@@ -268,13 +268,13 @@ func (t *ImportTask) importFile(reader importutilv2.Reader) error {
 			return err
 		}
 		t.manager.Update(t.GetTaskID(), UpdateSegmentInfo(segmentInfo))
-		mlog.Info(context.TODO(), "sync import data done", WrapLogFields(t, mlog.Any("segmentInfo", segmentInfo))...)
+		log.Info(context.TODO(), "sync import data done", WrapLogFields(t, log.Any("segmentInfo", segmentInfo))...)
 	}
 	return nil
 }
 
 func (t *ImportTask) sync(hashedData HashedData) ([]*conc.Future[struct{}], []syncmgr.Task, error) {
-	mlog.Info(context.TODO(), "start to sync import data", WrapLogFields(t)...)
+	log.Info(context.TODO(), "start to sync import data", WrapLogFields(t)...)
 	futures := make([]*conc.Future[struct{}], 0)
 	syncTasks := make([]syncmgr.Task, 0)
 	for channelIdx, datas := range hashedData {
@@ -305,7 +305,7 @@ func (t *ImportTask) sync(hashedData HashedData) ([]*conc.Future[struct{}], []sy
 			}
 			future, err := t.syncMgr.SyncDataWithChunkManager(t.ctx, syncTask, t.cm)
 			if err != nil {
-				mlog.Error(context.TODO(), "sync data failed", WrapLogFields(t, mlog.Err(err))...)
+				log.Error(context.TODO(), "sync data failed", WrapLogFields(t, log.Err(err))...)
 				return nil, nil, err
 			}
 			futures = append(futures, future)
