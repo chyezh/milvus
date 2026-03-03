@@ -220,7 +220,7 @@ func (s *CompactionSuite) generateSegment(collection string, segmentCount int) [
 		s.WaitForFlush(ctx, segmentIDs, flushTs, "", collection)
 		log.Info(ctx, "=========================Data flush done=========================", log.Any("count", i))
 	}
-	log.Info(ctx, "=========================Data insertion finished=========================")
+	log.Info(context.TODO(), "=========================Data insertion finished=========================")
 
 	segments, err := c.ShowSegments(collection)
 	s.Require().NoError(err)
