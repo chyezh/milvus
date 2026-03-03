@@ -115,7 +115,7 @@ func (w *roWALAdaptorImpl) checkReadOptWALName(opts wal.ReadOption) error {
 		if msgID != nil {
 			msgWALName := message.WALName(msgID.WALName)
 			if msgWALName != currentWALName {
-				w.Logger().Info(context.TODO(), "WAL name mismatch", log.String("msgIDWALName", msgWALName.String()), log.String("currentWALName", currentWALName.String()))
+				w.Logger().Info(w.availableCtx, "WAL name mismatch", log.String("msgIDWALName", msgWALName.String()), log.String("currentWALName", currentWALName.String()))
 				return status.NewWALNameMismatchError(currentWALName.String(), msgWALName.String())
 			}
 		}
@@ -136,26 +136,26 @@ func (w *roWALAdaptorImpl) Available() <-chan struct{} {
 // Close overrides Scanner Close function.
 func (w *roWALAdaptorImpl) Close() {
 	// begin to close the wal.
-	w.Logger().Info(context.TODO(), "wal begin to close...")
+	w.Logger().Info(w.availableCtx, "wal begin to close...")
 	w.lifetime.SetState(typeutil.LifetimeStateStopped)
 	w.forceCancelAfterGracefulTimeout()
 	w.lifetime.Wait()
 
-	w.Logger().Info(context.TODO(), "wal begin to close scanners...")
+	w.Logger().Info(w.availableCtx, "wal begin to close scanners...")
 
 	// close all wal instances.
 	w.scanners.Range(func(id int64, s wal.Scanner) bool {
 		s.Close()
-		log.Info(context.TODO(), "close scanner by wal adaptor", log.Int64("id", id), log.Any("channel", w.Channel()))
+		log.Info(w.availableCtx, "close scanner by wal adaptor", log.Int64("id", id), log.Any("channel", w.Channel()))
 		return true
 	})
 
-	w.Logger().Info(context.TODO(), "scanner close done, close inner wal...")
+	w.Logger().Info(w.availableCtx, "scanner close done, close inner wal...")
 	w.roWALImpls.Close()
 
-	w.Logger().Info(context.TODO(), "call wal cleanup function...")
+	w.Logger().Info(w.availableCtx, "call wal cleanup function...")
 	w.cleanup()
-	w.Logger().Info(context.TODO(), "wal closed")
+	w.Logger().Info(w.availableCtx, "wal closed")
 
 	// close all metrics.
 	w.scanMetrics.Close()

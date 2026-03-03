@@ -219,7 +219,7 @@ func (t *clusteringCompactionTask) init() error {
 
 	logIDAlloc := allocator.NewLocalAllocator(t.plan.GetPreAllocatedLogIDs().GetBegin(), t.plan.GetPreAllocatedLogIDs().GetEnd())
 	segIDAlloc := allocator.NewLocalAllocator(t.plan.GetPreAllocatedSegmentIDs().GetBegin(), t.plan.GetPreAllocatedSegmentIDs().GetEnd())
-	log.Info(context.TODO(), "segment ID range", log.Int64("begin", t.plan.GetPreAllocatedSegmentIDs().GetBegin()), log.Int64("end", t.plan.GetPreAllocatedSegmentIDs().GetEnd()))
+	log.Info(t.ctx, "segment ID range", log.Int64("begin", t.plan.GetPreAllocatedSegmentIDs().GetBegin()), log.Int64("end", t.plan.GetPreAllocatedSegmentIDs().GetEnd()))
 	t.logIDAlloc = logIDAlloc
 	t.segIDAlloc = segIDAlloc
 
@@ -251,7 +251,7 @@ func (t *clusteringCompactionTask) init() error {
 	workerPoolSize := t.getWorkerPoolSize()
 	t.mappingPool = conc.NewPool[any](workerPoolSize)
 	t.flushPool = conc.NewPool[any](workerPoolSize)
-	log.Info(context.TODO(), "clustering compaction task initialed", log.Int64("memory_buffer_size", t.memoryLimit), log.Int("worker_pool_size", workerPoolSize))
+	log.Info(t.ctx, "clustering compaction task initialed", log.Int64("memory_buffer_size", t.memoryLimit), log.Int("worker_pool_size", workerPoolSize))
 	return nil
 }
 
@@ -527,7 +527,7 @@ func (t *clusteringCompactionTask) mapping(ctx context.Context,
 	}
 	for _, buffer := range t.clusterBuffers {
 		segments := buffer.GetCompactionSegments()
-		log.Debug(context.TODO(), "compaction segments", log.Any("segments", segments))
+		log.Debug(ctx, "compaction segments", log.Any("segments", segments))
 		resultSegments = append(resultSegments, segments...)
 
 		for _, segment := range segments {
@@ -536,11 +536,11 @@ func (t *clusteringCompactionTask) mapping(ctx context.Context,
 				NumRows:    int(segment.NumOfRows),
 			}
 			resultPartitionStats.SegmentStats[segment.SegmentID] = segmentStats
-			log.Debug(context.TODO(), "compaction segment partitioning stats", log.Int64("segmentID", segment.SegmentID), log.Any("stats", segmentStats))
+			log.Debug(ctx, "compaction segment partitioning stats", log.Int64("segmentID", segment.SegmentID), log.Any("stats", segmentStats))
 		}
 	}
 
-	log.Info(context.TODO(), "mapping end",
+	log.Info(ctx, "mapping end",
 		log.Int64("collectionID", t.GetCollection()),
 		log.Int64("partitionID", t.partitionID),
 		log.Int("segmentFrom", len(inputSegments)),
@@ -998,7 +998,7 @@ func (t *clusteringCompactionTask) iterAndGetScalarAnalyzeResult(pkIter *storage
 				pkIter.Close()
 				break
 			} else {
-				log.Warn(context.TODO(), "compact wrong, failed to iter through data", log.Err(err))
+				log.Warn(t.ctx, "compact wrong, failed to iter through data", log.Err(err))
 				return nil, 0, err
 			}
 		}
@@ -1068,7 +1068,7 @@ func (t *clusteringCompactionTask) generatedScalarPlan(maxRows, preferRows int64
 func (t *clusteringCompactionTask) switchPolicyForScalarPlan(totalRows int64, keys []interface{}, dict map[interface{}]int64) [][]interface{} {
 	bufferNumBySegmentMaxRows := totalRows / t.plan.MaxSegmentRows
 	bufferNumByMemory := t.memoryLimit / expectedBinlogSize
-	log.Info(context.TODO(), "switchPolicyForScalarPlan", log.Int64("totalRows", totalRows),
+	log.Info(t.ctx, "switchPolicyForScalarPlan", log.Int64("totalRows", totalRows),
 		log.Int64("bufferNumBySegmentMaxRows", bufferNumBySegmentMaxRows),
 		log.Int64("bufferNumByMemory", bufferNumByMemory))
 	if bufferNumByMemory > bufferNumBySegmentMaxRows {

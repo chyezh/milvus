@@ -373,7 +373,7 @@ func (sd *shardDelegator) applyDeleteBatch(ctx context.Context,
 			return entry.SegmentID
 		})
 		future := pool.Submit(func() (struct{}, error) {
-			log.Debug(context.TODO(), "delegator plan to applyDelete via worker")
+			log.Debug(ctx, "delegator plan to applyDelete via worker")
 			err := retry.Handle(ctx, func() (bool, error) {
 				if sd.Stopped() {
 					return false, merr.WrapErrChannelNotAvailable(sd.vchannelName, "channel is unsubscribing")
@@ -390,7 +390,7 @@ func (sd *shardDelegator) applyDeleteBatch(ctx context.Context,
 					Scope:        scope,
 				})
 				if errors.Is(err, merr.ErrNodeNotFound) {
-					log.Warn(context.TODO(), "try to delete data on non-exist node")
+					log.Warn(ctx, "try to delete data on non-exist node")
 					// cancel other request
 					cancel()
 					return false, err
@@ -400,10 +400,10 @@ func (sd *shardDelegator) applyDeleteBatch(ctx context.Context,
 					return true, err
 				}
 				if len(resp.GetMissingIds()) > 0 {
-					log.Warn(context.TODO(), "try to delete data of released segment", log.Int64s("ids", resp.GetMissingIds()))
+					log.Warn(ctx, "try to delete data of released segment", log.Int64s("ids", resp.GetMissingIds()))
 				}
 				if len(resp.GetFailedIds()) > 0 {
-					log.Warn(context.TODO(), "apply delete for segment failed, marking it offline")
+					log.Warn(ctx, "apply delete for segment failed, marking it offline")
 					offlineSegments.Upsert(resp.GetFailedIds()...)
 				}
 				return false, nil

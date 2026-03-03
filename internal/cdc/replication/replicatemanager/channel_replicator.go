@@ -119,7 +119,7 @@ func (r *channelReplicator) init() error {
 			return err
 		}
 		r.targetClient = milvusClient
-		logger.Info(context.TODO(), "target client initialized")
+		logger.Info(dialCtx, "target client initialized")
 	}
 	// init msg scanner
 	if r.msgScanner == nil {

@@ -196,7 +196,7 @@ func (ms *mqMsgStream) SetRepackFunc(repackFunc RepackFunc) {
 }
 
 func (ms *mqMsgStream) Close() {
-	log.Info(context.TODO(), "start to close mq msg stream")
+	log.Info(ms.ctx, "start to close mq msg stream")
 	ms.streamCancel()
 	ms.closeRWMutex.Lock()
 	defer ms.closeRWMutex.Unlock()
@@ -216,7 +216,7 @@ func (ms *mqMsgStream) Close() {
 
 	ms.client.Close()
 	close(ms.receiveBuf)
-	log.Info(context.TODO(), "mq msg stream closed")
+	log.Info(ms.ctx, "mq msg stream closed")
 }
 
 func (ms *mqMsgStream) ComputeProduceChannelIndexes(tsMsgs []TsMsg) [][]int32 {

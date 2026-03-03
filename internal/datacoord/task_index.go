@@ -279,7 +279,7 @@ func (it *indexBuildTask) prepareJobRequest(ctx context.Context, segment *Segmen
 	}
 	if typeutil.IsFixDimVectorType(dataType) {
 		if dimVal, err := storage.GetDimFromParams(field.GetTypeParams()); err != nil {
-			log.Warn(context.TODO(), "failed to get dim from field type params",
+			log.Warn(ctx, "failed to get dim from field type params",
 				log.String("field type", field.GetDataType().String()), log.Err(err))
 		} else {
 			dim = dimVal

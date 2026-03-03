@@ -521,7 +521,7 @@ func (t *sortCompactionTask) createTextIndex(ctx context.Context,
 		if !h.EnableMatch() {
 			continue
 		}
-		log.Info(context.TODO(), "field enable match, ready to create text index", log.Int64("field id", field.GetFieldID()))
+		log.Info(ctx, "field enable match, ready to create text index", log.Int64("field id", field.GetFieldID()))
 
 		eg.Go(func() error {
 			files, err := getInsertFiles(field.GetFieldID())
@@ -572,7 +572,7 @@ func (t *sortCompactionTask) createTextIndex(ctx context.Context,
 			}
 			mu.Unlock()
 
-			log.Info(context.TODO(), "field enable match, create text index done",
+			log.Info(ctx, "field enable match, create text index done",
 				log.Int64("segmentID", segmentID),
 				log.Int64("field id", field.GetFieldID()),
 				log.Strings("files", lo.Keys(uploaded)),

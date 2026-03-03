@@ -93,16 +93,16 @@ func (w *walLifetime) Close() {
 	if oldWAL := currentState.GetWAL(); oldWAL != nil {
 		oldWAL.Close()
 		w.statePair.SetCurrentState(newUnavailableCurrentState(currentState.Term(), nil))
-		logger.Info(context.TODO(), "close current term wal done at wal life time close")
+		logger.Info(w.ctx, "close current term wal done at wal life time close")
 	}
-	logger.Info(context.TODO(), "wal lifetime closed")
+	logger.Info(w.ctx, "wal lifetime closed")
 }
 
 // backgroundTask is the background task for wal manager.
 // wal open/close operation is executed in background task with single goroutine.
 func (w *walLifetime) backgroundTask() {
 	defer func() {
-		w.logger.Info(context.TODO(), "wal lifetime background task exit")
+		w.logger.Info(w.ctx, "wal lifetime background task exit")
 		close(w.finish)
 	}()
 
@@ -115,7 +115,7 @@ func (w *walLifetime) backgroundTask() {
 			return
 		}
 		expectedState = w.statePair.GetExpectedState()
-		w.logger.Info(context.TODO(), "expected state changed, do a life cycle", log.String("expected", toStateString(expectedState)))
+		w.logger.Info(w.ctx, "expected state changed, do a life cycle", log.String("expected", toStateString(expectedState)))
 		w.doLifetimeChanged(expectedState)
 	}
 }
@@ -128,7 +128,7 @@ func (w *walLifetime) doLifetimeChanged(expectedState expectedWALState) {
 	// Filter the expired expectedState.
 	if !isStateBefore(currentState, expectedState) {
 		// Happen at: the unavailable expected state at current term, but current wal open operation is failed.
-		logger.Info(context.TODO(), "current state is not before expected state, do nothing")
+		logger.Info(w.ctx, "current state is not before expected state, do nothing")
 		return
 	}
 
@@ -140,7 +140,7 @@ func (w *walLifetime) doLifetimeChanged(expectedState expectedWALState) {
 	term := currentState.Term()
 	if oldWAL := currentState.GetWAL(); oldWAL != nil {
 		oldWAL.Close()
-		logger.Info(context.TODO(), "close current term wal done")
+		logger.Info(w.ctx, "close current term wal done")
 		// Push term to current state unavailable and open a new wal.
 		// -> (currentTerm,false)
 		w.statePair.SetCurrentState(newUnavailableCurrentState(term, nil))
@@ -159,13 +159,13 @@ func (w *walLifetime) doLifetimeChanged(expectedState expectedWALState) {
 		Channel: expectedState.GetPChannelInfo(),
 	})
 	if err != nil {
-		logger.Warn(context.TODO(), "open new wal fail", log.Err(err))
+		logger.Warn(w.ctx, "open new wal fail", log.Err(err))
 		// Open new wal at expected term failed, push expected term to current state unavailable.
 		// -> (expectedTerm,false)
 		w.statePair.SetCurrentState(newUnavailableCurrentState(expectedState.Term(), err))
 		return
 	}
-	logger.Info(context.TODO(), "open new wal done")
+	logger.Info(w.ctx, "open new wal done")
 	// -> (expectedTerm,true)
 	w.statePair.SetCurrentState(newAvailableCurrentState(l))
 }

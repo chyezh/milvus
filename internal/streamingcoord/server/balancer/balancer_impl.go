@@ -252,26 +252,26 @@ func (b *balancerImpl) Close() {
 
 // execute the balancer.
 func (b *balancerImpl) execute(ready260Future *syncutil.Future[error]) {
-	b.Logger().Info(context.TODO(), "balancer start to execute")
+	b.Logger().Info(b.ctx, "balancer start to execute")
 	defer func() {
 		b.backgroundTaskNotifier.Finish(struct{}{})
-		b.Logger().Info(context.TODO(), "balancer execute finished")
+		b.Logger().Info(b.ctx, "balancer execute finished")
 	}()
 
 	if err := b.blockUntilExpectedInitialStreamingNodeNumReached(b.backgroundTaskNotifier.Context()); err != nil {
-		b.Logger().Warn(context.TODO(), "fail to block until expected initial streaming node number reached", log.Err(err))
+		b.Logger().Warn(b.ctx, "fail to block until expected initial streaming node number reached", log.Err(err))
 		return
 	}
 
 	balanceTimer := typeutil.NewBackoffTimer(&backoffConfigFetcher{})
 	nodeChanged, err := resource.Resource().StreamingNodeManagerClient().WatchNodeChanged(b.backgroundTaskNotifier.Context())
 	if err != nil {
-		b.Logger().Warn(context.TODO(), "fail to watch node changed", log.Err(err))
+		b.Logger().Warn(b.ctx, "fail to watch node changed", log.Err(err))
 		return
 	}
 	statsManager, err := channel.StaticPChannelStatsManager.GetWithContext(b.backgroundTaskNotifier.Context())
 	if err != nil {
-		b.Logger().Warn(context.TODO(), "fail to get pchannel stats manager", log.Err(err))
+		b.Logger().Warn(b.ctx, "fail to get pchannel stats manager", log.Err(err))
 		return
 	}
 	channelChanged := statsManager.WatchAtChannelCountChanged()
@@ -285,7 +285,7 @@ func (b *balancerImpl) execute(ready260Future *syncutil.Future[error]) {
 			ready260 = ready260Future.Done()
 		}
 
-		b.Logger().Info(context.TODO(), "balance wait", log.Duration("nextBalanceInterval", nextBalanceInterval))
+		b.Logger().Info(b.ctx, "balance wait", log.Duration("nextBalanceInterval", nextBalanceInterval))
 		select {
 		case <-b.backgroundTaskNotifier.Context().Done():
 			return
@@ -294,10 +294,10 @@ func (b *balancerImpl) execute(ready260Future *syncutil.Future[error]) {
 			b.applyAllRequest()
 		case <-ready260:
 			if err := ready260Future.Get(); err != nil {
-				b.Logger().Warn(context.TODO(), "fail to block until all node is greater than 2.6.0", log.Err(err))
+				b.Logger().Warn(b.ctx, "fail to block until all node is greater than 2.6.0", log.Err(err))
 				return
 			}
-			b.Logger().Info(context.TODO(), "all nodes is greater than 2.6.0, start to open read-write wal")
+			b.Logger().Info(b.ctx, "all nodes is greater than 2.6.0, start to open read-write wal")
 			ready260Future = nil
 		case <-nextTimer:
 			// balance triggered by timer.
@@ -317,7 +317,7 @@ func (b *balancerImpl) execute(ready260Future *syncutil.Future[error]) {
 				return
 			}
 			if err := b.channelMetaManager.AddPChannels(b.backgroundTaskNotifier.Context(), newChannels); err != nil {
-				b.Logger().Warn(context.TODO(), "failed to add dynamic channels", log.Err(err), log.Strings("channels", newChannels))
+				b.Logger().Warn(b.ctx, "failed to add dynamic channels", log.Err(err), log.Strings("channels", newChannels))
 			}
 			// new pchannels added dynamically, trigger rebalance
 		}
@@ -326,11 +326,11 @@ func (b *balancerImpl) execute(ready260Future *syncutil.Future[error]) {
 				// balancer is closed.
 				return
 			}
-			b.Logger().Warn(context.TODO(), "fail to apply balance, start a backoff...", log.Err(err))
+			b.Logger().Warn(b.ctx, "fail to apply balance, start a backoff...", log.Err(err))
 			balanceTimer.EnableBackoff()
 			continue
 		}
-		b.Logger().Info(context.TODO(), "apply balance success")
+		b.Logger().Info(b.ctx, "apply balance success")
 		balanceTimer.DisableBackoff()
 	}
 }

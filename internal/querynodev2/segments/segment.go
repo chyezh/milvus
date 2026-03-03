@@ -357,10 +357,10 @@ func NewSegment(ctx context.Context,
 		})
 		return nil, err
 	}).Await(); err != nil {
-		logger.Warn(context.TODO(), "create segment failed", log.Err(err))
+		logger.Warn(ctx, "create segment failed", log.Err(err))
 		return nil, err
 	}
-	logger.Info(context.TODO(), "create segment done")
+	logger.Info(ctx, "create segment done")
 
 	segment := &LocalSegment{
 		baseSegment:        base,
@@ -976,7 +976,7 @@ func GetCLoadInfoWithFunc(ctx context.Context,
 
 	// 2.
 	if err := loadIndexInfo.appendLoadIndexInfo(ctx, indexInfoProto); err != nil {
-		log.Warn(context.TODO(), "fail to append load index info", log.Err(err))
+		log.Warn(ctx, "fail to append load index info", log.Err(err))
 		return err
 	}
 	return f(loadIndexInfo)
@@ -1033,7 +1033,7 @@ func (s *LocalSegment) innerLoadIndex(ctx context.Context,
 
 			if err := loadIndexInfo.loadIndex(ctx); err != nil {
 				if loadIndexInfo.cleanLocalData(ctx) != nil {
-					log.Warn(context.TODO(), "failed to clean cached data on disk after append index failed",
+					log.Warn(ctx, "failed to clean cached data on disk after append index failed",
 						log.Int64("buildID", indexInfo.BuildID),
 						log.Int64("index version", indexInfo.IndexVersion))
 				}
@@ -1052,7 +1052,7 @@ func (s *LocalSegment) innerLoadIndex(ctx context.Context,
 			}
 			updateIndexInfoSpan := tr.RecordSpan()
 
-			log.Info(context.TODO(), "Finish loading index",
+			log.Info(ctx, "Finish loading index",
 				log.Duration("newLoadIndexInfoSpan", newLoadIndexInfoSpan),
 				log.Duration("appendLoadIndexInfoSpan", appendLoadIndexInfoSpan),
 				log.Duration("updateIndexInfoSpan", updateIndexInfoSpan),
@@ -1060,7 +1060,7 @@ func (s *LocalSegment) innerLoadIndex(ctx context.Context,
 			return nil
 		})
 	if err != nil {
-		log.Warn(context.TODO(), "load index failed", log.Err(err))
+		log.Warn(ctx, "load index failed", log.Err(err))
 	}
 	return err
 }

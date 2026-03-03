@@ -168,7 +168,7 @@ func (t *timetickSync) sendToChannel() bool {
 	if len(idleSessionList) > 0 {
 		// give warning every 2 second if not get ttMsg from source sessions
 		if maxCnt%10 == 0 {
-			log.Warn(context.TODO(), "session idle for long time", log.Any("idle list", idleSessionList),
+			log.Warn(t.ctx, "session idle for long time", log.Any("idle list", idleSessionList),
 				log.Int64("idle time", Params.ProxyCfg.TimeTickInterval.GetAsInt64()*time.Millisecond.Milliseconds()*maxCnt))
 		}
 		return false
@@ -212,7 +212,7 @@ func (t *timetickSync) updateTimeTick(in *internalpb.ChannelTimeTickMsg, reason 
 
 	if in.Base.SourceID == t.sourceID {
 		if prev != nil && in.DefaultTimestamp < prev.defaultTs {
-			log.Warn(context.TODO(), "timestamp go back", log.Int64("source id", in.Base.SourceID),
+			log.Warn(t.ctx, "timestamp go back", log.Int64("source id", in.Base.SourceID),
 				log.Uint64("curr ts", in.DefaultTimestamp),
 				log.Uint64("prev ts", prev.defaultTs),
 				log.String("reason", reason))
@@ -234,14 +234,14 @@ func (t *timetickSync) addSession(sess *sessionutil.Session) {
 	defer t.lock.Unlock()
 	rangeChecker := semver.MustParseRange(">=2.6.0-dev")
 	if rangeChecker(sess.Version) {
-		log.Info(context.TODO(), "new proxy with no timetick join, ignored",
+		log.Info(t.ctx, "new proxy with no timetick join, ignored",
 			log.String("version", sess.Version.String()),
 			log.Int64("serverID", sess.ServerID),
 			log.String("address", sess.Address))
 		return
 	}
 	t.sess2ChanTsMap[sess.ServerID] = nil
-	log.Info(context.TODO(), "Add session for timeticksync", log.Int64("serverID", sess.ServerID))
+	log.Info(t.ctx, "Add session for timeticksync", log.Int64("serverID", sess.ServerID))
 }
 
 func (t *timetickSync) delSession(sess *sessionutil.Session) {
@@ -249,7 +249,7 @@ func (t *timetickSync) delSession(sess *sessionutil.Session) {
 	defer t.lock.Unlock()
 	if _, ok := t.sess2ChanTsMap[sess.ServerID]; ok {
 		delete(t.sess2ChanTsMap, sess.ServerID)
-		log.Info(context.TODO(), "Remove session from timeticksync", log.Int64("serverID", sess.ServerID))
+		log.Info(t.ctx, "Remove session from timeticksync", log.Int64("serverID", sess.ServerID))
 		t.sendToChannel()
 	}
 }
@@ -263,14 +263,14 @@ func (t *timetickSync) initSessions(sess []*sessionutil.Session) {
 	rangeChecker := semver.MustParseRange(">=2.6.0-dev")
 	for _, s := range sess {
 		if rangeChecker(s.Version) {
-			log.Info(context.TODO(), "new proxy with no timetick join, ignored",
+			log.Info(t.ctx, "new proxy with no timetick join, ignored",
 				log.String("version", s.Version.String()),
 				log.Int64("serverID", s.ServerID),
 				log.String("address", s.Address))
 			continue
 		}
 		t.sess2ChanTsMap[s.ServerID] = nil
-		log.Info(context.TODO(), "Init proxy sessions for timeticksync", log.Int64("serverID", s.ServerID))
+		log.Info(t.ctx, "Init proxy sessions for timeticksync", log.Int64("serverID", s.ServerID))
 	}
 }
 
@@ -283,11 +283,11 @@ func (t *timetickSync) startWatch(wg *sync.WaitGroup) {
 
 	if streamingutil.IsStreamingServiceEnabled() {
 		if err := snmanager.StaticStreamingNodeManager.RegisterStreamingEnabledListener(t.ctx, streamingNotifier); err != nil {
-			log.Info(context.TODO(), "register streaming enabled listener failed", log.Err(err))
+			log.Info(t.ctx, "register streaming enabled listener failed", log.Err(err))
 			return
 		}
 		if streamingNotifier.IsReady() {
-			log.Info(context.TODO(), "streaming service has been enabled, proxy timetick from rootcoord should not start")
+			log.Info(t.ctx, "streaming service has been enabled, proxy timetick from rootcoord should not start")
 			return
 		}
 	}
@@ -302,14 +302,14 @@ func (t *timetickSync) startWatch(wg *sync.WaitGroup) {
 	for {
 		select {
 		case <-streamingNotifier.Ready():
-			log.Info(context.TODO(), "streaming service has been enabled, proxy timetick from rootcoord should stop")
+			log.Info(t.ctx, "streaming service has been enabled, proxy timetick from rootcoord should stop")
 			return
 		case <-t.ctx.Done():
-			log.Info(context.TODO(), "rootcoord context done", log.Err(t.ctx.Err()))
+			log.Info(t.ctx, "rootcoord context done", log.Err(t.ctx.Err()))
 			return
 		case sessTimetick, ok := <-t.sendChan:
 			if !ok {
-				log.Info(context.TODO(), "timetickSync sendChan closed")
+				log.Info(t.ctx, "timetickSync sendChan closed")
 				return
 			}
 			if enableTtChecker {
@@ -334,7 +334,7 @@ func (t *timetickSync) startWatch(wg *sync.WaitGroup) {
 						}
 					}
 					if err := t.sendTimeTickToChannel([]string{chanName}, mints); err != nil {
-						log.Warn(context.TODO(), "SendTimeTickToChannel fail", log.Err(err))
+						log.Warn(t.ctx, "SendTimeTickToChannel fail", log.Err(err))
 					} else {
 						t.syncedTtHistogram.update(chanName, mints)
 					}
@@ -346,7 +346,7 @@ func (t *timetickSync) startWatch(wg *sync.WaitGroup) {
 			metrics.RootCoordSyncTimeTickLatency.Observe(float64(span.Milliseconds()))
 			// rootcoord send tt msg to all channels every 200ms by default
 			if span > Params.ProxyCfg.TimeTickInterval.GetAsDuration(time.Millisecond) {
-				log.Warn(context.TODO(), "rootcoord send tt to all channels too slowly",
+				log.Warn(t.ctx, "rootcoord send tt to all channels too slowly",
 					log.Int("chanNum", len(local.chanTsMap)), log.Int64("span", span.Milliseconds()))
 			}
 		}
@@ -412,14 +412,14 @@ func (t *timetickSync) listDmlChannels() []string {
 // AddDmlChannels add dml channels
 func (t *timetickSync) addDmlChannels(names ...string) {
 	t.dmlChannels.addChannels(names...)
-	log.Info(context.TODO(), "add dml channels", log.Strings("channels", names))
+	log.Info(t.ctx, "add dml channels", log.Strings("channels", names))
 }
 
 // RemoveDmlChannels remove dml channels
 func (t *timetickSync) removeDmlChannels(names ...string) {
 	t.dmlChannels.removeChannels(names...)
 	// t.syncedTtHistogram.remove(names...) // channel ts shouldn't go back.
-	log.Info(context.TODO(), "remove dml channels", log.Strings("channels", names))
+	log.Info(t.ctx, "remove dml channels", log.Strings("channels", names))
 }
 
 // BroadcastDmlChannels broadcasts msg pack into dml channels

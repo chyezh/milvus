@@ -147,7 +147,7 @@ func GetShardLeadersWithChannels(
 		for _, replica := range replicas {
 			leader := dist.ChannelDistManager.GetShardLeader(channel.GetChannelName(), replica)
 			if leader == nil || (!withUnserviceableShards && !leader.IsServiceable()) {
-				log.RatedWarn(context.TODO(), log.RateDefault, "leader is not available in replica", log.String("channel", channel.GetChannelName()), log.Int64("replicaID", replica.GetID()))
+				log.RatedWarn(ctx, log.RateDefault, "leader is not available in replica", log.String("channel", channel.GetChannelName()), log.Int64("replicaID", replica.GetID()))
 				continue
 			}
 			info := nodeMgr.Get(leader.Node)
@@ -161,7 +161,7 @@ func GetShardLeadersWithChannels(
 		if len(ids) == 0 && !withUnserviceableShards {
 			err := merr.WrapErrChannelNotAvailable(channel.GetChannelName())
 			msg := fmt.Sprintf("channel %s is not available in any replica", channel.GetChannelName())
-			log.Warn(context.TODO(), msg, log.Err(err))
+			log.Warn(ctx, msg, log.Err(err))
 			return nil, err
 		}
 

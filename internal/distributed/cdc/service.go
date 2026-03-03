@@ -84,7 +84,7 @@ func (s *Server) Stop() (err error) {
 func (s *Server) stop() {
 	s.componentState.OnStopping()
 
-	log.Info(context.TODO(), "stopping cdc...")
+	log.Info(s.ctx, "stopping cdc...")
 
 	// Stop CDC service.
 	s.cdcServer.Stop()
@@ -92,7 +92,7 @@ func (s *Server) stop() {
 	// Don't close s.etcdCli here because it's a shared instance from kvfactory.
 	// The kvfactory.CloseEtcdClient() will be called in roles.go to close it properly.
 
-	log.Info(context.TODO(), "cdc stop done")
+	log.Info(s.ctx, "cdc stop done")
 }
 
 // Health check the health status of cdc.
@@ -104,10 +104,10 @@ func (s *Server) Health(ctx context.Context) commonpb.StateCode {
 func (s *Server) init() (err error) {
 	defer func() {
 		if err != nil {
-			log.Error(context.TODO(), "cdc init failed", log.Err(err))
+			log.Error(s.ctx, "cdc init failed", log.Err(err))
 			return
 		}
-		log.Info(context.TODO(), "init cdc server finished")
+		log.Info(s.ctx, "init cdc server finished")
 	}()
 
 	// Create etcd client.
@@ -125,10 +125,10 @@ func (s *Server) init() (err error) {
 func (s *Server) start() (err error) {
 	defer func() {
 		if err != nil {
-			log.Error(context.TODO(), "CDC start failed", log.Err(err))
+			log.Error(s.ctx, "CDC start failed", log.Err(err))
 			return
 		}
-		log.Info(context.TODO(), "start CDC server finished")
+		log.Info(s.ctx, "start CDC server finished")
 	}()
 
 	s.cdcServer.Start()

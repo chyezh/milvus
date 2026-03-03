@@ -140,7 +140,7 @@ func (node *CachedProxyServiceProvider) DescribeCollection(ctx context.Context,
 	request *milvuspb.DescribeCollectionRequest,
 ) (resp *milvuspb.DescribeCollectionResponse, err error) {
 
-	log.Debug(context.TODO(), "DescribeCollection received")
+	log.Debug(ctx, "DescribeCollection received")
 
 	resp = &milvuspb.DescribeCollectionResponse{
 		Status:         merr.Success(),
@@ -208,13 +208,13 @@ func (node *CachedProxyServiceProvider) DescribeCollection(ctx context.Context,
 
 	// Restore struct field names from internal format (structName[fieldName]) to original format
 	if err := restoreStructFieldNames(resp.Schema); err != nil {
-		log.Error(context.TODO(), "failed to restore struct field names", log.Err(err))
+		log.Error(ctx, "failed to restore struct field names", log.Err(err))
 		return nil, err
 	}
 
 	err = timestamptz.RewriteTimestampTzDefaultValueToString(resp.Schema)
 	if err != nil {
-		log.Info(context.TODO(), "failed to rewrite timestamp value", log.Err(err))
+		log.Info(ctx, "failed to rewrite timestamp value", log.Err(err))
 		return nil, err
 	}
 
@@ -231,7 +231,7 @@ func (node *CachedProxyServiceProvider) DescribeCollection(ctx context.Context,
 	resp.Aliases = c.aliases
 	resp.Properties = c.properties
 
-	log.Debug(context.TODO(), "DescribeCollection done",
+	log.Debug(ctx, "DescribeCollection done",
 		log.Int64("collectionID", resp.GetCollectionID()),
 		log.Any("schema", resp.GetSchema()),
 	)
@@ -254,10 +254,10 @@ func (node *RemoteProxyServiceProvider) DescribeCollection(ctx context.Context,
 	}
 
 	method := "DescribeCollection"
-	log.Debug(context.TODO(), "DescribeCollection received")
+	log.Debug(ctx, "DescribeCollection received")
 
 	if err := node.sched.ddQueue.Enqueue(dct); err != nil {
-		log.Warn(context.TODO(), "DescribeCollection failed to enqueue",
+		log.Warn(ctx, "DescribeCollection failed to enqueue",
 			log.Err(err))
 
 		metrics.ProxyFunctionCall.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10), method,
@@ -265,12 +265,12 @@ func (node *RemoteProxyServiceProvider) DescribeCollection(ctx context.Context,
 		return nil, err
 	}
 
-	log.Debug(context.TODO(), "DescribeCollection enqueued",
+	log.Debug(ctx, "DescribeCollection enqueued",
 		log.Uint64("BeginTS", dct.BeginTs()),
 		log.Uint64("EndTS", dct.EndTs()))
 
 	if err := dct.WaitToFinish(); err != nil {
-		log.Warn(context.TODO(), "DescribeCollection failed to WaitToFinish",
+		log.Warn(ctx, "DescribeCollection failed to WaitToFinish",
 			log.Err(err),
 			log.Uint64("BeginTS", dct.BeginTs()),
 			log.Uint64("EndTS", dct.EndTs()))
@@ -281,7 +281,7 @@ func (node *RemoteProxyServiceProvider) DescribeCollection(ctx context.Context,
 		return nil, err
 	}
 
-	log.Debug(context.TODO(), "DescribeCollection done",
+	log.Debug(ctx, "DescribeCollection done",
 		log.Uint64("BeginTS", dct.BeginTs()),
 		log.Uint64("EndTS", dct.EndTs()),
 	)

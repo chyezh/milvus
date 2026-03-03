@@ -60,14 +60,14 @@ func (m *analyzeMeta) reloadFromKV() error {
 	// load analyze stats
 	analyzeTasks, err := m.catalog.ListAnalyzeTasks(m.ctx)
 	if err != nil {
-		log.Warn(context.TODO(), "analyzeMeta reloadFromKV load analyze tasks failed", log.Err(err))
+		log.Warn(m.ctx, "analyzeMeta reloadFromKV load analyze tasks failed", log.Err(err))
 		return err
 	}
 
 	for _, analyzeTask := range analyzeTasks {
 		m.tasks[analyzeTask.TaskID] = analyzeTask
 	}
-	log.Info(context.TODO(), "analyzeMeta reloadFromKV done", log.Duration("duration", record.ElapseSpan()))
+	log.Info(m.ctx, "analyzeMeta reloadFromKV done", log.Duration("duration", record.ElapseSpan()))
 	return nil
 }
 
@@ -90,7 +90,7 @@ func (m *analyzeMeta) AddAnalyzeTask(task *indexpb.AnalyzeTask) error {
 	m.Lock()
 	defer m.Unlock()
 
-	log.Info(context.TODO(), "add analyze task", log.Int64("taskID", task.TaskID),
+	log.Info(m.ctx, "add analyze task", log.Int64("taskID", task.TaskID),
 		log.Int64("collectionID", task.CollectionID), log.Int64("partitionID", task.PartitionID))
 	return m.saveTask(task)
 }
@@ -122,7 +122,7 @@ func (m *analyzeMeta) UpdateVersion(taskID int64, nodeID int64) error {
 	cloneT := proto.Clone(t).(*indexpb.AnalyzeTask)
 	cloneT.Version++
 	cloneT.NodeID = nodeID
-	log.Info(context.TODO(), "update task version", log.Int64("taskID", taskID), log.Int64("newVersion", cloneT.Version),
+	log.Info(m.ctx, "update task version", log.Int64("taskID", taskID), log.Int64("newVersion", cloneT.Version),
 		log.Int64("nodeID", nodeID))
 	return m.saveTask(cloneT)
 }
@@ -138,7 +138,7 @@ func (m *analyzeMeta) BuildingTask(taskID int64) error {
 
 	cloneT := proto.Clone(t).(*indexpb.AnalyzeTask)
 	cloneT.State = indexpb.JobState_JobStateInProgress
-	log.Info(context.TODO(), "task will be building", log.Int64("taskID", taskID))
+	log.Info(m.ctx, "task will be building", log.Int64("taskID", taskID))
 
 	return m.saveTask(cloneT)
 }
@@ -155,7 +155,7 @@ func (m *analyzeMeta) UpdateState(taskID int64, state indexpb.JobState, failReas
 	cloneT := proto.Clone(t).(*indexpb.AnalyzeTask)
 	cloneT.State = state
 	cloneT.FailReason = failReason
-	log.Info(context.TODO(), "update analyze task state", log.Int64("taskID", taskID), log.String("state", state.String()),
+	log.Info(m.ctx, "update analyze task state", log.Int64("taskID", taskID), log.String("state", state.String()),
 		log.String("failReason", failReason))
 
 	return m.saveTask(cloneT)
@@ -170,7 +170,7 @@ func (m *analyzeMeta) FinishTask(taskID int64, result *workerpb.AnalyzeResult) e
 		return fmt.Errorf("there is no task with taskID: %d", taskID)
 	}
 
-	log.Info(context.TODO(), "finish task meta...", log.Int64("taskID", taskID), log.String("state", result.GetState().String()),
+	log.Info(m.ctx, "finish task meta...", log.Int64("taskID", taskID), log.String("state", result.GetState().String()),
 		log.String("failReason", result.GetFailReason()))
 
 	cloneT := proto.Clone(t).(*indexpb.AnalyzeTask)

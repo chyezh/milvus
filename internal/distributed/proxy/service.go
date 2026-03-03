@@ -234,11 +234,11 @@ func (s *Server) startExternalGrpc(errChan chan error) {
 
 	limiter, err := s.proxy.GetRateLimiter()
 	if err != nil {
-		log.Error(context.TODO(), "Get proxy rate limiter failed", log.Err(err))
+		log.Error(s.ctx, "Get proxy rate limiter failed", log.Err(err))
 		errChan <- err
 		return
 	}
-	log.Debug(context.TODO(), "Get proxy rate limiter done")
+	log.Debug(s.ctx, "Get proxy rate limiter done")
 
 	var unaryServerOption grpc.ServerOption
 	if enableCustomInterceptor {
@@ -283,7 +283,7 @@ func (s *Server) startExternalGrpc(errChan chan error) {
 	if Params.TLSMode.GetAsInt() == 1 {
 		creds, err := credentials.NewServerTLSFromFile(Params.ServerPemPath.GetValue(), Params.ServerKeyPath.GetValue())
 		if err != nil {
-			log.Warn(context.TODO(), "proxy can't create creds", log.Err(err))
+			log.Warn(s.ctx, "proxy can't create creds", log.Err(err))
 			errChan <- err
 			return
 		}
@@ -291,7 +291,7 @@ func (s *Server) startExternalGrpc(errChan chan error) {
 	} else if Params.TLSMode.GetAsInt() == 2 {
 		cert, err := tls.LoadX509KeyPair(Params.ServerPemPath.GetValue(), Params.ServerKeyPath.GetValue())
 		if err != nil {
-			log.Warn(context.TODO(), "proxy cant load x509 key pair", log.Err(err))
+			log.Warn(s.ctx, "proxy cant load x509 key pair", log.Err(err))
 			errChan <- err
 			return
 		}
@@ -299,12 +299,12 @@ func (s *Server) startExternalGrpc(errChan chan error) {
 		certPool := x509.NewCertPool()
 		rootBuf, err := storage.ReadFile(Params.CaPemPath.GetValue())
 		if err != nil {
-			log.Warn(context.TODO(), "failed read ca pem", log.Err(err))
+			log.Warn(s.ctx, "failed read ca pem", log.Err(err))
 			errChan <- err
 			return
 		}
 		if !certPool.AppendCertsFromPEM(rootBuf) {
-			log.Warn(context.TODO(), "fail to append ca to cert")
+			log.Warn(s.ctx, "fail to append ca to cert")
 			errChan <- errors.New("fail to append ca to cert")
 			return
 		}
@@ -328,16 +328,16 @@ func (s *Server) startExternalGrpc(errChan chan error) {
 	grpc_health_v1.RegisterHealthServer(s.grpcExternalServer, s)
 	errChan <- nil
 
-	log.Debug(context.TODO(), "create Proxy grpc server",
+	log.Debug(s.ctx, "create Proxy grpc server",
 		log.Any("enforcement policy", kaep),
 		log.Any("server parameters", kasp))
 
 	if err := s.grpcExternalServer.Serve(s.listenerManager.ExternalGrpcListener()); err != nil && err != cmux.ErrServerClosed {
-		log.Error(context.TODO(), "failed to serve on Proxy's listener", log.Err(err))
+		log.Error(s.ctx, "failed to serve on Proxy's listener", log.Err(err))
 		errChan <- err
 		return
 	}
-	log.Info(context.TODO(), "Proxy external grpc server exited")
+	log.Info(s.ctx, "Proxy external grpc server exited")
 }
 
 func (s *Server) startInternalGrpc(errChan chan error) {
@@ -388,16 +388,16 @@ func (s *Server) startInternalGrpc(errChan chan error) {
 	grpc_health_v1.RegisterHealthServer(s.grpcInternalServer, s)
 	errChan <- nil
 
-	log.Info(context.TODO(), "create Proxy internal grpc server",
+	log.Info(s.ctx, "create Proxy internal grpc server",
 		log.Any("enforcement policy", kaep),
 		log.Any("server parameters", kasp))
 
 	if err := s.grpcInternalServer.Serve(s.listenerManager.InternalGrpcListener()); err != nil {
-		log.Error(context.TODO(), "failed to internal serve on Proxy's listener", log.Err(err))
+		log.Error(s.ctx, "failed to internal serve on Proxy's listener", log.Err(err))
 		errChan <- err
 		return
 	}
-	log.Info(context.TODO(), "Proxy internal grpc server exited")
+	log.Info(s.ctx, "Proxy internal grpc server exited")
 }
 
 func (s *Server) Prepare() error {
@@ -411,32 +411,32 @@ func (s *Server) Prepare() error {
 
 // Start start the Proxy Server
 func (s *Server) Run() error {
-	log.Info(context.TODO(), "init Proxy server")
+	log.Info(s.ctx, "init Proxy server")
 	if err := s.init(); err != nil {
-		log.Warn(context.TODO(), "init Proxy server failed", log.Err(err))
+		log.Warn(s.ctx, "init Proxy server failed", log.Err(err))
 		return err
 	}
-	log.Info(context.TODO(), "init Proxy server done")
+	log.Info(s.ctx, "init Proxy server done")
 
-	log.Info(context.TODO(), "start Proxy server")
+	log.Info(s.ctx, "start Proxy server")
 	if err := s.start(); err != nil {
-		log.Warn(context.TODO(), "start Proxy server failed", log.Err(err))
+		log.Warn(s.ctx, "start Proxy server failed", log.Err(err))
 		return err
 	}
-	log.Info(context.TODO(), "start Proxy server done")
+	log.Info(s.ctx, "start Proxy server done")
 	return nil
 }
 
 func (s *Server) init() error {
 	etcdConfig := &paramtable.Get().EtcdCfg
 	Params := &paramtable.Get().ProxyGrpcServerCfg
-	log.Info(context.TODO(), "Proxy init service's parameter table done")
+	log.Info(s.ctx, "Proxy init service's parameter table done")
 	HTTPParams := &paramtable.Get().HTTPCfg
-	log.Info(context.TODO(), "Proxy init http server's parameter table done")
+	log.Info(s.ctx, "Proxy init http server's parameter table done")
 
 	accesslog.InitAccessLogger(paramtable.Get())
 	serviceName := fmt.Sprintf("Proxy ip: %s, port: %d", Params.IP, Params.Port.GetAsInt())
-	log.Info(context.TODO(), "init Proxy's tracer done", log.String("service name", serviceName))
+	log.Info(s.ctx, "init Proxy's tracer done", log.String("service name", serviceName))
 
 	etcdCli, err := etcd.CreateEtcdClient(
 		etcdConfig.UseEmbedEtcd.GetAsBool(),
@@ -451,7 +451,7 @@ func (s *Server) init() error {
 		etcdConfig.EtcdTLSMinVersion.GetValue(),
 		etcdConfig.ClientOptions()...)
 	if err != nil {
-		log.Debug(context.TODO(), "Proxy connect to etcd failed", log.Err(err))
+		log.Debug(s.ctx, "Proxy connect to etcd failed", log.Err(err))
 		return err
 	}
 	s.etcdCli = etcdCli
@@ -461,56 +461,56 @@ func (s *Server) init() error {
 	{
 		s.startInternalRPCServer(errChan)
 		if err := <-errChan; err != nil {
-			log.Error(context.TODO(), "failed to create internal rpc server", log.Err(err))
+			log.Error(s.ctx, "failed to create internal rpc server", log.Err(err))
 			return err
 		}
 	}
 	{
 		s.startExternalRPCServer(errChan)
 		if err := <-errChan; err != nil {
-			log.Error(context.TODO(), "failed to create external rpc server", log.Err(err))
+			log.Error(s.ctx, "failed to create external rpc server", log.Err(err))
 			return err
 		}
 	}
 
 	if s.mixCoordClient == nil {
 		var err error
-		log.Debug(context.TODO(), "create MixCoordClient client for Proxy")
+		log.Debug(s.ctx, "create MixCoordClient client for Proxy")
 		s.mixCoordClient, err = mix.NewClient(s.ctx)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to create MixCoordClient client for Proxy", log.Err(err))
+			log.Warn(s.ctx, "failed to create MixCoordClient client for Proxy", log.Err(err))
 			return err
 		}
-		log.Debug(context.TODO(), "create MixCoordClient client for Proxy done")
+		log.Debug(s.ctx, "create MixCoordClient client for Proxy done")
 	}
 
-	log.Debug(context.TODO(), "Proxy wait for MixCoordClient to be healthy")
+	log.Debug(s.ctx, "Proxy wait for MixCoordClient to be healthy")
 	if err := componentutil.WaitForComponentHealthy(s.ctx, s.mixCoordClient, "MixCoord", 1000000, time.Millisecond*200); err != nil {
-		log.Warn(context.TODO(), "Proxy failed to wait for MixCoord to be healthy", log.Err(err))
+		log.Warn(s.ctx, "Proxy failed to wait for MixCoord to be healthy", log.Err(err))
 		return err
 	}
-	log.Debug(context.TODO(), "Proxy wait for MixCoord to be healthy done")
+	log.Debug(s.ctx, "Proxy wait for MixCoord to be healthy done")
 
-	log.Debug(context.TODO(), "set MixCoord client for Proxy")
+	log.Debug(s.ctx, "set MixCoord client for Proxy")
 	s.proxy.SetMixCoordClient(s.mixCoordClient)
-	log.Debug(context.TODO(), "set MixCoord client for Proxy done")
+	log.Debug(s.ctx, "set MixCoord client for Proxy done")
 
 	if HTTPParams.Enabled.GetAsBool() {
 		registerHTTPHandlerOnce.Do(func() {
-			log.Info(context.TODO(), "register Proxy http server")
+			log.Info(s.ctx, "register Proxy http server")
 			s.registerHTTPServer()
 		})
 	}
 
-	log.Debug(context.TODO(), fmt.Sprintf("update Proxy's state to %s", commonpb.StateCode_Initializing.String()))
+	log.Debug(s.ctx, fmt.Sprintf("update Proxy's state to %s", commonpb.StateCode_Initializing.String()))
 	s.proxy.UpdateStateCode(commonpb.StateCode_Initializing)
 
-	log.Debug(context.TODO(), "init Proxy")
+	log.Debug(s.ctx, "init Proxy")
 	if err := s.proxy.Init(); err != nil {
-		log.Warn(context.TODO(), "failed to init Proxy", log.Err(err))
+		log.Warn(s.ctx, "failed to init Proxy", log.Err(err))
 		return err
 	}
-	log.Debug(context.TODO(), "init Proxy done")
+	log.Debug(s.ctx, "init Proxy done")
 	// nolint
 	// Intentionally print to stdout, which is usually a sign that Milvus is ready to serve.
 	fmt.Println("---Milvus Proxy successfully initialized and ready to serve!---")
@@ -520,22 +520,22 @@ func (s *Server) init() error {
 
 func (s *Server) start() error {
 	if err := s.proxy.Start(); err != nil {
-		log.Warn(context.TODO(), "failed to start Proxy server", log.Err(err))
+		log.Warn(s.ctx, "failed to start Proxy server", log.Err(err))
 		return err
 	}
 
 	if err := s.proxy.Register(); err != nil {
-		log.Warn(context.TODO(), "failed to register Proxy", log.Err(err))
+		log.Warn(s.ctx, "failed to register Proxy", log.Err(err))
 		return err
 	}
 
 	if s.listenerManager.HTTPListener() != nil {
-		log.Info(context.TODO(), "start Proxy http server")
+		log.Info(s.ctx, "start Proxy http server")
 		errChan := make(chan error, 1)
 		s.wg.Add(1)
 		go s.startHTTPServer(errChan)
 		if err := <-errChan; err != nil {
-			log.Error(context.TODO(), "failed to create http rpc server", log.Err(err))
+			log.Error(s.ctx, "failed to create http rpc server", log.Err(err))
 			return err
 		}
 	}

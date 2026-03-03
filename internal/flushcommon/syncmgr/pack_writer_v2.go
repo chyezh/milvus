@@ -79,19 +79,19 @@ func (bw *BulkPackWriterV2) Write(ctx context.Context, pack *SyncPack) (
 	err error,
 ) {
 	if inserts, manifest, err = bw.writeInserts(ctx, pack); err != nil {
-		log.Error(context.TODO(), "failed to write insert data", log.Err(err))
+		log.Error(ctx, "failed to write insert data", log.Err(err))
 		return
 	}
 	if stats, err = bw.writeStats(ctx, pack); err != nil {
-		log.Error(context.TODO(), "failed to process stats blob", log.Err(err))
+		log.Error(ctx, "failed to process stats blob", log.Err(err))
 		return
 	}
 	if deltas, err = bw.writeDelta(ctx, pack); err != nil {
-		log.Error(context.TODO(), "failed to process delta blob", log.Err(err))
+		log.Error(ctx, "failed to process delta blob", log.Err(err))
 		return
 	}
 	if bm25Stats, err = bw.writeBM25Stasts(ctx, pack); err != nil {
-		log.Error(context.TODO(), "failed to process bm25 stats blob", log.Err(err))
+		log.Error(ctx, "failed to process bm25 stats blob", log.Err(err))
 		return
 	}
 

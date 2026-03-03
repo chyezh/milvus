@@ -30,7 +30,7 @@ func (r *recoveryStorageImpl) recoverFromStream(
 		log.String("state", recoveryStorageStateStreamRecovering),
 	))
 
-	r.Logger().Info(context.TODO(), "recover from wal stream...")
+	r.Logger().Info(ctx, "recover from wal stream...")
 	rs := recoveryStreamBuilder.Build(BuildRecoveryStreamParam{
 		StartCheckpoint: r.checkpoint.MessageID,
 		EndTimeTick:     lastTimeTickMessage.TimeTick(),
@@ -38,7 +38,7 @@ func (r *recoveryStorageImpl) recoverFromStream(
 	defer func() {
 		rs.Close()
 		if err != nil {
-			r.Logger().Warn(context.TODO(), "recovery from wal stream failed", log.Err(err))
+			r.Logger().Warn(ctx, "recovery from wal stream failed", log.Err(err))
 			return
 		}
 	}()
@@ -73,7 +73,7 @@ L:
 			log.Stringer("targetWALName", snapshot.AlterWALInfo.TargetWALName),
 		)
 	}
-	r.Logger().Info(context.TODO(), "recovery from wal stream done", logFields...)
+	r.Logger().Info(ctx, "recovery from wal stream done", logFields...)
 	return snapshot, nil
 }
 

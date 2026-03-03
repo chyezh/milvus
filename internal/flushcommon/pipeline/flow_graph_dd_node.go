@@ -85,7 +85,7 @@ func (ddn *ddNode) IsValidInMsg(in []Msg) bool {
 	}
 	_, ok := in[0].(*MsgStreamMsg)
 	if !ok {
-		log.Warn(context.TODO(), "type assertion failed for MsgStreamMsg", log.String("name", reflect.TypeOf(in[0]).Name()))
+		log.Warn(ddn.ctx, "type assertion failed for MsgStreamMsg", log.String("name", reflect.TypeOf(in[0]).Name()))
 		return false
 	}
 	return true
@@ -95,7 +95,7 @@ func (ddn *ddNode) IsValidInMsg(in []Msg) bool {
 func (ddn *ddNode) Operate(in []Msg) []Msg {
 	msMsg, ok := in[0].(*MsgStreamMsg)
 	if !ok {
-		log.Warn(context.TODO(), "type assertion failed for MsgStreamMsg", log.String("channel", ddn.vChannelName), log.String("name", reflect.TypeOf(in[0]).Name()))
+		log.Warn(ddn.ctx, "type assertion failed for MsgStreamMsg", log.String("channel", ddn.vChannelName), log.String("name", reflect.TypeOf(in[0]).Name()))
 		return []Msg{}
 	}
 
@@ -111,12 +111,12 @@ func (ddn *ddNode) Operate(in []Msg) []Msg {
 			EndPositions:   msMsg.EndPositions(),
 			dropCollection: false,
 		}
-		log.Warn(context.TODO(), "MsgStream closed", log.Any("ddNode node", ddn.Name()), log.String("channel", ddn.vChannelName), log.Int64("collection", ddn.collectionID))
+		log.Warn(ddn.ctx, "MsgStream closed", log.Any("ddNode node", ddn.Name()), log.String("channel", ddn.vChannelName), log.Int64("collection", ddn.collectionID))
 		return []Msg{&fgMsg}
 	}
 
 	if load := ddn.dropMode.Load(); load != nil && load.(bool) {
-		log.RatedInfo(context.TODO(), log.RateDefault, "ddNode in dropMode", log.String("channel", ddn.vChannelName))
+		log.RatedInfo(ddn.ctx, log.RateDefault, "ddNode in dropMode", log.String("channel", ddn.vChannelName))
 		return []Msg{}
 	}
 
@@ -384,7 +384,7 @@ func (ddn *ddNode) isDropped(segID typeutil.UniqueID) bool {
 }
 
 func (ddn *ddNode) Close() {
-	log.Info(context.TODO(), "Flowgraph DD Node closing")
+	log.Info(ddn.ctx, "Flowgraph DD Node closing")
 }
 
 func newDDNode(ctx context.Context, collID typeutil.UniqueID, vChannelName string, droppedSegmentIDs []typeutil.UniqueID,
@@ -414,7 +414,7 @@ func newDDNode(ctx context.Context, collID typeutil.UniqueID, vChannelName strin
 	for _, s := range growingSegments {
 		dd.growingSegInfo[s.GetID()] = s
 	}
-	log.Info(context.TODO(), "ddNode add sealed and growing segments",
+	log.Info(ctx, "ddNode add sealed and growing segments",
 		log.Int64("collectionID", collID),
 		log.Int("No. sealed segments", len(sealedSegments)),
 		log.Int("No. growing segments", len(growingSegments)),

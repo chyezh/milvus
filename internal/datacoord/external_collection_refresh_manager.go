@@ -181,7 +181,7 @@ func (m *externalCollectionRefreshManager) SubmitRefreshJobWithID(
 	// is mitigated by WAL idempotency (same JobID on retry) and per-collection lock in AddJob.
 	existingJob := m.refreshMeta.GetJob(jobID)
 	if existingJob != nil {
-		log.Info(context.TODO(), "job already exists, skip creating")
+		log.Info(ctx, "job already exists, skip creating")
 		return jobID, nil
 	}
 
@@ -191,13 +191,13 @@ func (m *externalCollectionRefreshManager) SubmitRefreshJobWithID(
 	// DataCoord syncs the newly created collection.
 	collection, err := m.collectionGetter(ctx, collectionID)
 	if err != nil || collection == nil {
-		log.Warn(context.TODO(), "collection not found", log.Err(err))
+		log.Warn(ctx, "collection not found", log.Err(err))
 		return 0, merr.WrapErrCollectionNotFound(collectionID)
 	}
 
 	// Validate it's an external collection
 	if !typeutil.IsExternalCollection(collection.Schema) {
-		log.Warn(context.TODO(), "not an external collection")
+		log.Warn(ctx, "not an external collection")
 		return 0, merr.WrapErrCollectionIllegalSchema(collectionName, "not an external collection")
 	}
 
@@ -213,7 +213,7 @@ func (m *externalCollectionRefreshManager) SubmitRefreshJobWithID(
 	// Only one active refresh job is allowed at a time
 	activeJob := m.refreshMeta.GetActiveJobByCollectionID(collectionID)
 	if activeJob != nil {
-		log.Warn(context.TODO(), "refresh job already in progress",
+		log.Warn(ctx, "refresh job already in progress",
 			log.Int64("existingJobID", activeJob.GetJobId()),
 			log.String("existingJobState", activeJob.GetState().String()))
 		return 0, merr.WrapErrTaskDuplicate("refresh_external_collection", fmt.Sprintf("refresh job %d is already in progress for collection %s, please wait for it to complete or cancel it first",
@@ -236,7 +236,7 @@ func (m *externalCollectionRefreshManager) SubmitRefreshJobWithID(
 	}
 
 	if err := m.refreshMeta.AddJob(job); err != nil {
-		log.Warn(context.TODO(), "failed to add job to meta", log.Err(err))
+		log.Warn(ctx, "failed to add job to meta", log.Err(err))
 		return 0, err
 	}
 
@@ -245,7 +245,7 @@ func (m *externalCollectionRefreshManager) SubmitRefreshJobWithID(
 	if err != nil {
 		// Rollback: remove the already-persisted job to avoid leaving it stuck in Init state
 		if rollbackErr := m.refreshMeta.DropJob(ctx, jobID); rollbackErr != nil {
-			log.Warn(context.TODO(), "failed to rollback job after task creation failure",
+			log.Warn(ctx, "failed to rollback job after task creation failure",
 				log.Int64("jobID", jobID),
 				log.Err(rollbackErr))
 		}
@@ -257,7 +257,7 @@ func (m *externalCollectionRefreshManager) SubmitRefreshJobWithID(
 		m.scheduler.Enqueue(t)
 	}
 
-	log.Info(context.TODO(), "external collection refresh job submitted with pre-allocated ID",
+	log.Info(ctx, "external collection refresh job submitted with pre-allocated ID",
 		log.String("externalSource", externalSource),
 		log.Int("taskCount", len(tasks)))
 
@@ -277,7 +277,7 @@ func (m *externalCollectionRefreshManager) createTasksForJob(
 	// Allocate task ID
 	taskID, err := m.allocator.AllocID(ctx)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to allocate task ID", log.Err(err))
+		log.Warn(ctx, "failed to allocate task ID", log.Err(err))
 		return nil, err
 	}
 
@@ -296,20 +296,20 @@ func (m *externalCollectionRefreshManager) createTasksForJob(
 
 	// Add task to meta
 	if err = m.refreshMeta.AddTask(task); err != nil {
-		log.Warn(context.TODO(), "failed to add task to meta", log.Err(err))
+		log.Warn(ctx, "failed to add task to meta", log.Err(err))
 		return nil, err
 	}
 
 	// Add taskID to job
 	if err = m.refreshMeta.AddTaskIDToJob(job.GetJobId(), taskID); err != nil {
-		log.Warn(context.TODO(), "failed to add taskID to job", log.Err(err))
+		log.Warn(ctx, "failed to add taskID to job", log.Err(err))
 		return nil, err
 	}
 
 	// Create task wrapper
 	taskWrapper := newRefreshExternalCollectionTask(task, m.refreshMeta, m.mt, m.allocator)
 
-	log.Info(context.TODO(), "task created for job",
+	log.Info(ctx, "task created for job",
 		log.Int64("taskID", taskID),
 		log.Int64("jobID", job.GetJobId()))
 

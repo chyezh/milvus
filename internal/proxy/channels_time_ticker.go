@@ -91,13 +91,13 @@ func (ticker *channelsTimeTickerImpl) initCurrents(current Timestamp) {
 func (ticker *channelsTimeTickerImpl) tick() error {
 	now, err := ticker.tso.AllocOne(ticker.ctx)
 	if err != nil {
-		log.Warn(context.TODO(), "Proxy channelsTimeTickerImpl failed to get ts from tso", log.Err(err))
+		log.Warn(ticker.ctx, "Proxy channelsTimeTickerImpl failed to get ts from tso", log.Err(err))
 		return err
 	}
 
 	stats, err2 := ticker.getStatisticsFunc()
 	if err2 != nil {
-		log.Warn(context.TODO(), "failed to get tt statistics", log.Err(err))
+		log.Warn(ticker.ctx, "failed to get tt statistics", log.Err(err))
 		return nil
 	}
 
@@ -132,7 +132,7 @@ func (ticker *channelsTimeTickerImpl) tick() error {
 
 	for pchan, value := range stats {
 		if value.minTs == typeutil.ZeroTimestamp {
-			log.Warn(context.TODO(), "channelsTimeTickerImpl.tick, stats contains physical channel which min ts is zero ",
+			log.Warn(ticker.ctx, "channelsTimeTickerImpl.tick, stats contains physical channel which min ts is zero ",
 				log.String("pchan", pchan))
 			continue
 		}
@@ -163,7 +163,7 @@ func (ticker *channelsTimeTickerImpl) tickLoop() {
 		case <-timer.C:
 			err := ticker.tick()
 			if err != nil {
-				log.Warn(context.TODO(), "channelsTimeTickerImpl.tickLoop", log.Err(err))
+				log.Warn(ticker.ctx, "channelsTimeTickerImpl.tickLoop", log.Err(err))
 			}
 		}
 	}

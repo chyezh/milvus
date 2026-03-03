@@ -785,7 +785,7 @@ func syncVectorScalarIndexes(ctx context.Context, result *datapb.CopySegmentResu
 
 		err := meta.indexMeta.AddSegmentIndex(ctx, segIndex)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to add segment index",
+			log.Warn(ctx, "failed to add segment index",
 				WrapCopySegmentTaskLog(task,
 					log.Int64("segmentID", result.GetSegmentId()),
 					log.Int64("fieldID", fieldID),
@@ -797,7 +797,7 @@ func syncVectorScalarIndexes(ctx context.Context, result *datapb.CopySegmentResu
 				UpdateCopyTaskState(datapb.CopySegmentTaskState_CopySegmentTaskFailed),
 				UpdateCopyTaskReason(err.Error()))
 			if updateErr != nil {
-				log.Warn(context.TODO(), "failed to update task state to Failed",
+				log.Warn(ctx, "failed to update task state to Failed",
 					log.Int64("taskID", task.GetTaskId()), log.Err(updateErr))
 			}
 
@@ -805,13 +805,13 @@ func syncVectorScalarIndexes(ctx context.Context, result *datapb.CopySegmentResu
 				UpdateCopyJobState(datapb.CopySegmentJobState_CopySegmentJobFailed),
 				UpdateCopyJobReason(err.Error()))
 			if updateErr != nil {
-				log.Warn(context.TODO(), "failed to update job state to Failed",
+				log.Warn(ctx, "failed to update job state to Failed",
 					log.Int64("jobID", task.GetJobId()), log.Err(updateErr))
 			}
 			return err
 		}
 
-		log.Info(context.TODO(), "synced vector/scalar index",
+		log.Info(ctx, "synced vector/scalar index",
 			WrapCopySegmentTaskLog(task,
 				log.Int64("segmentID", result.GetSegmentId()),
 				log.Int64("fieldID", fieldID),
@@ -856,7 +856,7 @@ func syncTextIndexes(ctx context.Context, result *datapb.CopySegmentResult,
 	err := meta.UpdateSegment(result.GetSegmentId(),
 		SetTextIndexLogs(result.GetTextIndexInfos()))
 	if err != nil {
-		log.Warn(context.TODO(), "failed to update text index",
+		log.Warn(ctx, "failed to update text index",
 			WrapCopySegmentTaskLog(task,
 				log.Int64("segmentID", result.GetSegmentId()),
 				log.Err(err))...)
@@ -866,7 +866,7 @@ func syncTextIndexes(ctx context.Context, result *datapb.CopySegmentResult,
 			UpdateCopyTaskState(datapb.CopySegmentTaskState_CopySegmentTaskFailed),
 			UpdateCopyTaskReason(err.Error()))
 		if updateErr != nil {
-			log.Warn(context.TODO(), "failed to update task state to Failed",
+			log.Warn(ctx, "failed to update task state to Failed",
 				log.Int64("taskID", task.GetTaskId()), log.Err(updateErr))
 		}
 
@@ -874,13 +874,13 @@ func syncTextIndexes(ctx context.Context, result *datapb.CopySegmentResult,
 			UpdateCopyJobState(datapb.CopySegmentJobState_CopySegmentJobFailed),
 			UpdateCopyJobReason(err.Error()))
 		if updateErr != nil {
-			log.Warn(context.TODO(), "failed to update job state to Failed",
+			log.Warn(ctx, "failed to update job state to Failed",
 				log.Int64("jobID", task.GetJobId()), log.Err(updateErr))
 		}
 		return err
 	}
 
-	log.Info(context.TODO(), "synced text indexes",
+	log.Info(ctx, "synced text indexes",
 		WrapCopySegmentTaskLog(task,
 			log.Int64("segmentID", result.GetSegmentId()),
 			log.Int("count", len(result.GetTextIndexInfos())))...)
@@ -922,7 +922,7 @@ func syncJsonKeyIndexes(ctx context.Context, result *datapb.CopySegmentResult,
 	err := meta.UpdateSegment(result.GetSegmentId(),
 		SetJsonKeyIndexLogs(result.GetJsonKeyIndexInfos()))
 	if err != nil {
-		log.Warn(context.TODO(), "failed to update json key index",
+		log.Warn(ctx, "failed to update json key index",
 			WrapCopySegmentTaskLog(task,
 				log.Int64("segmentID", result.GetSegmentId()),
 				log.Err(err))...)
@@ -932,7 +932,7 @@ func syncJsonKeyIndexes(ctx context.Context, result *datapb.CopySegmentResult,
 			UpdateCopyTaskState(datapb.CopySegmentTaskState_CopySegmentTaskFailed),
 			UpdateCopyTaskReason(err.Error()))
 		if updateErr != nil {
-			log.Warn(context.TODO(), "failed to update task state to Failed",
+			log.Warn(ctx, "failed to update task state to Failed",
 				log.Int64("taskID", task.GetTaskId()), log.Err(updateErr))
 		}
 
@@ -940,13 +940,13 @@ func syncJsonKeyIndexes(ctx context.Context, result *datapb.CopySegmentResult,
 			UpdateCopyJobState(datapb.CopySegmentJobState_CopySegmentJobFailed),
 			UpdateCopyJobReason(err.Error()))
 		if updateErr != nil {
-			log.Warn(context.TODO(), "failed to update job state to Failed",
+			log.Warn(ctx, "failed to update job state to Failed",
 				log.Int64("jobID", task.GetJobId()), log.Err(updateErr))
 		}
 		return err
 	}
 
-	log.Info(context.TODO(), "synced json key indexes",
+	log.Info(ctx, "synced json key indexes",
 		WrapCopySegmentTaskLog(task,
 			log.Int64("segmentID", result.GetSegmentId()),
 			log.Int("count", len(result.GetJsonKeyIndexInfos())))...)

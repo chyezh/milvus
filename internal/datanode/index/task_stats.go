@@ -486,7 +486,7 @@ func (st *statsTask) createTextIndex(ctx context.Context,
 		if !h.EnableMatch() {
 			continue
 		}
-		log.Info(context.TODO(), "field enable match, ready to create text index", log.Int64("field id", field.GetFieldID()))
+		log.Info(ctx, "field enable match, ready to create text index", log.Int64("field id", field.GetFieldID()))
 
 		eg.Go(func() error {
 			files, err := getInsertFiles(field.GetFieldID(), field.GetNullable())
@@ -520,7 +520,7 @@ func (st *statsTask) createTextIndex(ctx context.Context,
 			}
 			mu.Unlock()
 
-			log.Info(context.TODO(), "field enable match, create text index done",
+			log.Info(ctx, "field enable match, create text index done",
 				log.Int64("targetSegmentID", st.req.GetTargetSegmentID()),
 				log.Int64("field id", field.GetFieldID()),
 				log.Strings("files", lo.Keys(uploaded)),
@@ -541,7 +541,7 @@ func (st *statsTask) createTextIndex(ctx context.Context,
 		st.req.GetInsertChannel(),
 		textIndexLogs)
 	totalElapse := st.tr.RecordSpan()
-	log.Info(context.TODO(), "create text index done",
+	log.Info(ctx, "create text index done",
 		log.Int64("target segmentID", st.req.GetTargetSegmentID()),
 		log.Duration("total elapse", totalElapse),
 	)
@@ -563,7 +563,7 @@ func (st *statsTask) createJSONKeyStats(ctx context.Context,
 ) error {
 
 	if jsonKeyStatsDataFormat != common.JSONStatsDataFormatVersion {
-		log.Warn(context.TODO(), "create json key index failed dataformat invalid", log.Int64("dataformat version", jsonKeyStatsDataFormat),
+		log.Warn(ctx, "create json key index failed dataformat invalid", log.Int64("dataformat version", jsonKeyStatsDataFormat),
 			log.Int64("code version", common.JSONStatsDataFormatVersion))
 		return nil
 	}
@@ -608,7 +608,7 @@ func (st *statsTask) createJSONKeyStats(ctx context.Context,
 		if !h.EnableJSONKeyStatsIndex() {
 			continue
 		}
-		log.Info(context.TODO(), "field enable json key index, ready to create json key index", log.Int64("field id", field.GetFieldID()))
+		log.Info(ctx, "field enable json key index, ready to create json key index", log.Int64("field id", field.GetFieldID()))
 
 		eg.Go(func() error {
 			files, err := getInsertFiles(field.GetFieldID())
@@ -648,7 +648,7 @@ func (st *statsTask) createJSONKeyStats(ctx context.Context,
 			}
 			mu.Unlock()
 
-			log.Info(context.TODO(), "field enable json key index, create json key index done",
+			log.Info(ctx, "field enable json key index, create json key index done",
 				log.Int64("field id", field.GetFieldID()),
 				log.Strings("files", lo.Keys(statsResult.Files)),
 				log.Int64("memorySize", statsResult.MemSize),
@@ -673,7 +673,7 @@ func (st *statsTask) createJSONKeyStats(ctx context.Context,
 		jsonKeyIndexStats)
 
 	metrics.DataNodeBuildJSONStatsLatency.WithLabelValues(strconv.FormatInt(paramtable.GetNodeID(), 10)).Observe(totalElapse.Seconds())
-	log.Info(context.TODO(), "create json key index done",
+	log.Info(ctx, "create json key index done",
 		log.Int64("target segmentID", st.req.GetTargetSegmentID()),
 		log.Duration("total elapse", totalElapse))
 	return nil

@@ -238,7 +238,7 @@ func (s *Server) SetFileResourceObserver(observer FileResourceObserver) {
 }
 
 func (s *Server) Init() error {
-	log.Info(context.TODO(), "QueryCoord start init",
+	log.Info(s.ctx, "QueryCoord start init",
 		log.String("meta-root-path", Params.EtcdCfg.MetaRootPath.GetValue()),
 		log.String("address", s.address))
 
@@ -263,11 +263,11 @@ func (s *Server) initSession() error {
 
 func (s *Server) initQueryCoord() error {
 	s.UpdateStateCode(commonpb.StateCode_Initializing)
-	log.Info(context.TODO(), "start init querycoord", log.Any("State", commonpb.StateCode_Initializing))
+	log.Info(s.ctx, "start init querycoord", log.Any("State", commonpb.StateCode_Initializing))
 	// Init KV and ID allocator
 	metaType := Params.MetaStoreCfg.MetaStoreType.GetValue()
 	var idAllocatorKV kv.TxnKV
-	log.Info(context.TODO(), fmt.Sprintf("query coordinator connecting to %s.", metaType))
+	log.Info(s.ctx, fmt.Sprintf("query coordinator connecting to %s.", metaType))
 	if metaType == util.MetaStoreTypeTiKV {
 		s.kv = tikv.NewTiKV(s.tikvCli, Params.TiKVCfg.MetaRootPath.GetValue(),
 			tikv.WithRequestTimeout(paramtable.Get().ServiceParam.TiKVCfg.RequestTimeout.GetAsDuration(time.Millisecond)))
@@ -279,18 +279,18 @@ func (s *Server) initQueryCoord() error {
 	} else {
 		return fmt.Errorf("not supported meta store: %s", metaType)
 	}
-	log.Info(context.TODO(), fmt.Sprintf("query coordinator successfully connected to %s.", metaType))
+	log.Info(s.ctx, fmt.Sprintf("query coordinator successfully connected to %s.", metaType))
 
 	idAllocator := allocator.NewGlobalIDAllocator("idTimestamp", idAllocatorKV)
 	err := idAllocator.Initialize()
 	if err != nil {
-		log.Error(context.TODO(), "query coordinator id allocator initialize failed", log.Err(err))
+		log.Error(s.ctx, "query coordinator id allocator initialize failed", log.Err(err))
 		return err
 	}
 	s.idAllocator = func() (int64, error) {
 		return idAllocator.AllocOne()
 	}
-	log.Info(context.TODO(), "init ID allocator done")
+	log.Info(s.ctx, "init ID allocator done")
 
 	// Init metrics cache manager
 	s.metricsCacheManager = metricsinfo.NewMetricsCacheManager()
@@ -303,11 +303,11 @@ func (s *Server) initQueryCoord() error {
 		return err
 	}
 	// Init session
-	log.Info(context.TODO(), "init session")
+	log.Info(s.ctx, "init session")
 	s.cluster = session.NewCluster(s.nodeMgr, s.queryNodeCreator)
 
 	// Init schedulers
-	log.Info(context.TODO(), "init schedulers")
+	log.Info(s.ctx, "init schedulers")
 	s.jobScheduler = job.NewScheduler()
 	s.taskScheduler = task.NewScheduler(
 		s.ctx,
@@ -327,18 +327,18 @@ func (s *Server) initQueryCoord() error {
 	)
 	s.proxyWatcher.AddSessionFunc(s.proxyClientManager.AddProxyClient)
 	s.proxyWatcher.DelSessionFunc(s.proxyClientManager.DelProxyClient)
-	log.Info(context.TODO(), "init proxy manager done")
+	log.Info(s.ctx, "init proxy manager done")
 
 	// Init global assign policy factory
-	log.Info(context.TODO(), "init global assign policy factory")
+	log.Info(s.ctx, "init global assign policy factory")
 	assign.InitGlobalAssignPolicyFactory(s.taskScheduler, s.nodeMgr, s.dist, s.meta, s.targetMgr)
 
 	// Init global balancer factory
-	log.Info(context.TODO(), "init global balancer factory")
+	log.Info(s.ctx, "init global balancer factory")
 	balance.InitGlobalBalancerFactory(s.taskScheduler, s.nodeMgr, s.dist, s.meta, s.targetMgr)
 
 	// Init checker controller
-	log.Info(context.TODO(), "init checker controller")
+	log.Info(s.ctx, "init checker controller")
 	s.checkerController = checkers.NewCheckerController(
 		s.meta,
 		s.dist,
@@ -352,7 +352,7 @@ func (s *Server) initQueryCoord() error {
 	s.initObserver()
 
 	// Init heartbeat
-	log.Info(context.TODO(), "init dist controller")
+	log.Info(s.ctx, "init dist controller")
 	s.distController = dist.NewDistController(
 		s.cluster,
 		s.nodeMgr,
@@ -366,14 +366,14 @@ func (s *Server) initQueryCoord() error {
 	meta.GlobalFailedLoadCache = meta.NewFailedLoadCache()
 
 	RegisterDDLCallbacks(s)
-	log.Info(context.TODO(), "init querycoord done", log.Int64("nodeID", paramtable.GetNodeID()), log.String("Address", s.address))
+	log.Info(s.ctx, "init querycoord done", log.Int64("nodeID", paramtable.GetNodeID()), log.String("Address", s.address))
 	return err
 }
 
 func (s *Server) initMeta() error {
 	record := timerecord.NewTimeRecorder("querycoord")
 
-	log.Info(context.TODO(), "init meta")
+	log.Info(s.ctx, "init meta")
 	s.store = querycoord.NewCatalog(s.kv)
 	s.meta = meta.NewMeta(s.idAllocator, s.store, s.nodeMgr)
 
@@ -381,14 +381,14 @@ func (s *Server) initMeta() error {
 		s.mixCoord,
 	)
 
-	log.Info(context.TODO(), "recover meta...")
+	log.Info(s.ctx, "recover meta...")
 	err := s.meta.CollectionManager.Recover(s.ctx, s.broker)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to recover collections", log.Err(err))
+		log.Warn(s.ctx, "failed to recover collections", log.Err(err))
 		return err
 	}
 	collections := s.meta.GetAll(s.ctx)
-	log.Info(context.TODO(), "recovering collections...", log.Int64s("collections", collections))
+	log.Info(s.ctx, "recovering collections...", log.Int64s("collections", collections))
 
 	// We really update the metric after observers think the collection loaded.
 	metrics.QueryCoordNumCollections.WithLabelValues().Set(0)
@@ -397,13 +397,13 @@ func (s *Server) initMeta() error {
 
 	err = s.meta.ReplicaManager.Recover(s.ctx, collections)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to recover replicas", log.Err(err))
+		log.Warn(s.ctx, "failed to recover replicas", log.Err(err))
 		return err
 	}
 
 	err = s.meta.ResourceManager.Recover(s.ctx)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to recover resource groups", log.Err(err))
+		log.Warn(s.ctx, "failed to recover resource groups", log.Err(err))
 		return err
 	}
 
@@ -411,10 +411,10 @@ func (s *Server) initMeta() error {
 	s.targetMgr = meta.NewTargetManager(s.broker, s.meta)
 	err = s.targetMgr.Recover(s.ctx, s.store)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to recover collection targets", log.Err(err))
+		log.Warn(s.ctx, "failed to recover collection targets", log.Err(err))
 	}
 
-	log.Info(context.TODO(), "QueryCoord server initMeta done", log.Duration("duration", record.ElapseSpan()))
+	log.Info(s.ctx, "QueryCoord server initMeta done", log.Duration("duration", record.ElapseSpan()))
 	return nil
 }
 
@@ -472,7 +472,7 @@ func (s *Server) startQueryCoord() error {
 		return err
 	}
 
-	log.Info(context.TODO(), "rewatch nodes", log.Any("sessions", sessions))
+	log.Info(s.ctx, "rewatch nodes", log.Any("sessions", sessions))
 	err = s.rewatchNodes(sessions)
 	if err != nil {
 		return err
@@ -506,22 +506,22 @@ func (s *Server) startServerLoop() {
 
 	// start the components from inside to outside,
 	// to make the dependencies ready for every component
-	log.Info(context.TODO(), "start cluster...")
+	log.Info(s.ctx, "start cluster...")
 	s.cluster.Start()
 
-	log.Info(context.TODO(), "start observers...")
+	log.Info(s.ctx, "start observers...")
 	s.collectionObserver.Start()
 	s.targetObserver.Start()
 	s.replicaObserver.Start()
 	s.resourceObserver.Start()
 
-	log.Info(context.TODO(), "start task scheduler...")
+	log.Info(s.ctx, "start task scheduler...")
 	s.taskScheduler.Start()
 
-	log.Info(context.TODO(), "start checker controller...")
+	log.Info(s.ctx, "start checker controller...")
 	s.checkerController.Start()
 
-	log.Info(context.TODO(), "start job scheduler...")
+	log.Info(s.ctx, "start job scheduler...")
 	s.jobScheduler.Start()
 }
 
@@ -531,26 +531,26 @@ func (s *Server) Stop() error {
 	// observers -> dist controller
 
 	if s.loadConfigWatcher != nil {
-		log.Info(context.TODO(), "stop load config watcher...")
+		log.Info(s.ctx, "stop load config watcher...")
 		s.loadConfigWatcher.Close()
 	}
 
 	if s.jobScheduler != nil {
-		log.Info(context.TODO(), "stop job scheduler...")
+		log.Info(s.ctx, "stop job scheduler...")
 		s.jobScheduler.Stop()
 	}
 
 	if s.checkerController != nil {
-		log.Info(context.TODO(), "stop checker controller...")
+		log.Info(s.ctx, "stop checker controller...")
 		s.checkerController.Stop()
 	}
 
 	if s.taskScheduler != nil {
-		log.Info(context.TODO(), "stop task scheduler...")
+		log.Info(s.ctx, "stop task scheduler...")
 		s.taskScheduler.Stop()
 	}
 
-	log.Info(context.TODO(), "stop observers...")
+	log.Info(s.ctx, "stop observers...")
 	if s.collectionObserver != nil {
 		s.collectionObserver.Stop()
 	}
@@ -575,12 +575,12 @@ func (s *Server) Stop() error {
 	}
 
 	if s.distController != nil {
-		log.Info(context.TODO(), "stop dist controller...")
+		log.Info(s.ctx, "stop dist controller...")
 		s.distController.Stop()
 	}
 
 	if s.cluster != nil {
-		log.Info(context.TODO(), "stop cluster...")
+		log.Info(s.ctx, "stop cluster...")
 		s.cluster.Stop()
 	}
 
@@ -597,7 +597,7 @@ func (s *Server) Stop() error {
 		s.session.Stop()
 	}
 
-	log.Info(context.TODO(), "QueryCoord stop successfully")
+	log.Info(s.ctx, "QueryCoord stop successfully")
 	return nil
 }
 
@@ -641,13 +641,13 @@ func (s *Server) watchNodes(revision int64) {
 	for {
 		select {
 		case <-s.ctx.Done():
-			log.Info(context.TODO(), "stop watching nodes, QueryCoord stopped")
+			log.Info(s.ctx, "stop watching nodes, QueryCoord stopped")
 			return
 
 		case event, ok := <-s.sessionWatcher.EventChannel():
 			if !ok {
 				// ErrCompacted is handled inside SessionWatcher
-				log.Warn(context.TODO(), "Session Watcher channel closed", log.Int64("serverID", paramtable.GetNodeID()))
+				log.Warn(s.ctx, "Session Watcher channel closed", log.Int64("serverID", paramtable.GetNodeID()))
 				go s.Stop()
 				if s.session.IsTriggerKill() {
 					if p, err := os.FindProcess(os.Getpid()); err == nil {
@@ -675,12 +675,12 @@ func (s *Server) watchNodes(revision int64) {
 				}
 
 			case sessionutil.SessionUpdateEvent:
-				log.Info(context.TODO(), "stopping the node")
+				log.Info(s.ctx, "stopping the node")
 				s.nodeMgr.Stopping(nodeID)
 				s.handleNodeStopping(nodeID)
 
 			case sessionutil.SessionDelEvent:
-				log.Info(context.TODO(), "a node down, remove it")
+				log.Info(s.ctx, "a node down, remove it")
 				s.nodeMgr.Remove(nodeID)
 				s.handleNodeDown(nodeID)
 			}
@@ -705,7 +705,7 @@ func (s *Server) rewatchNodes(sessions map[string]*sessionutil.Session) error {
 		} else {
 			if nodeSession.Stopping && !node.IsStoppingState() {
 				// node in node manager but session is stopping, means it's stopping
-				log.Warn(context.TODO(), "rewatch found old querynode in stopping state", log.Int64("nodeID", nodeSession.ServerID))
+				log.Warn(s.ctx, "rewatch found old querynode in stopping state", log.Int64("nodeID", nodeSession.ServerID))
 				s.nodeMgr.Stopping(node.ID())
 				s.handleNodeStopping(node.ID())
 			}
@@ -730,7 +730,7 @@ func (s *Server) rewatchNodes(sessions map[string]*sessionutil.Session) error {
 			s.handleNodeUp(nodeSession.GetServerID())
 
 			if nodeSession.Stopping {
-				log.Warn(context.TODO(), "rewatch found new querynode in stopping state", log.Int64("nodeID", nodeSession.ServerID))
+				log.Warn(s.ctx, "rewatch found new querynode in stopping state", log.Int64("nodeID", nodeSession.ServerID))
 				s.nodeMgr.Stopping(nodeSession.ServerID)
 				s.handleNodeStopping(nodeSession.ServerID)
 			}
@@ -836,19 +836,19 @@ func (s *Server) updateBalanceConfig() bool {
 	r := semver.MustParseRange("<2.3.0")
 	sessions, _, err := s.session.GetSessionsWithVersionRange(typeutil.QueryNodeRole, r)
 	if err != nil {
-		log.Warn(context.TODO(), "check query node version occur error on etcd", log.Err(err))
+		log.Warn(s.ctx, "check query node version occur error on etcd", log.Err(err))
 		return false
 	}
 
 	if len(sessions) == 0 {
 		// only balance channel when all query node's version >= 2.3.0
 		Params.Reset(Params.QueryCoordCfg.AutoBalance.Key)
-		log.Info(context.TODO(), "all old query node down, enable auto balance!")
+		log.Info(s.ctx, "all old query node down, enable auto balance!")
 		return true
 	}
 
 	Params.Save(Params.QueryCoordCfg.AutoBalance.Key, "false")
-	log.RatedDebug(context.TODO(), log.RateDefault, "old query node exist", log.Strings("sessions", lo.Keys(sessions)))
+	log.RatedDebug(s.ctx, log.RateDefault, "old query node exist", log.Strings("sessions", lo.Keys(sessions)))
 	return false
 }
 

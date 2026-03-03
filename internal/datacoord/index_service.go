@@ -697,7 +697,7 @@ func (s *Server) completeIndexInfo(indexInfo *indexpb.IndexInfo, index *model.In
 		switch segIdx.GetState() {
 		case commonpb.IndexState_IndexStateNone:
 			// can't to here
-			log.Warn(context.TODO(), "receive unexpected index state: IndexStateNone", log.Int64("segmentID", segID))
+			log.Warn(s.ctx, "receive unexpected index state: IndexStateNone", log.Int64("segmentID", segID))
 			cntNone++
 		case commonpb.IndexState_Unissued:
 			cntUnissued++
@@ -739,7 +739,7 @@ func (s *Server) completeIndexInfo(indexInfo *indexpb.IndexInfo, index *model.In
 		indexInfo.State = commonpb.IndexState_Finished
 	}
 
-	log.RatedInfo(context.TODO(), log.RateDefault, "completeIndexInfo success", log.Int64("collectionID", index.CollectionID), log.Int64("indexID", index.IndexID),
+	log.RatedInfo(s.ctx, log.RateDefault, "completeIndexInfo success", log.Int64("collectionID", index.CollectionID), log.Int64("indexID", index.IndexID),
 		log.Int64("totalRows", indexInfo.TotalRows), log.Int64("indexRows", indexInfo.IndexedRows),
 		log.Int64("pendingIndexRows", indexInfo.PendingIndexRows),
 		log.String("state", indexInfo.State.String()), log.String("failReason", indexInfo.IndexStateFailReason),

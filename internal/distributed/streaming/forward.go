@@ -209,7 +209,7 @@ func (fs *forwardServiceImpl) initLegacyProxy() {
 	})
 	fs.legacyProxy = lazygrpc.WithServiceCreator(conn, milvuspb.NewMilvusServiceClient)
 	fs.rb = rb
-	fs.Logger().Info(ctx, "streaming service is not ready, legacy proxy is initiated to forward request", log.Int("proxyPort", port))
+	fs.Logger().Info(context.TODO(), "streaming service is not ready, legacy proxy is initiated to forward request", log.Int("proxyPort", port))
 }
 
 // getDialOptions returns the dial options for the legacy proxy.

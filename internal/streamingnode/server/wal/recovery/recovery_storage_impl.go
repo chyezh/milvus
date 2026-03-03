@@ -40,13 +40,13 @@ func RecoverRecoveryStorage(
 ) (RecoveryStorage, *RecoverySnapshot, error) {
 	rs := newRecoveryStorage(recoveryStreamBuilder.Channel(), cp)
 	if err := rs.recoverRecoveryInfoFromMeta(ctx, recoveryStreamBuilder.Channel(), lastTimeTickMessage); err != nil {
-		rs.Logger().Warn(context.TODO(), "recovery storage failed", log.Err(err))
+		rs.Logger().Warn(ctx, "recovery storage failed", log.Err(err))
 		return nil, nil, err
 	}
 	// recover the state from wal and start the background task to persist the state.
 	snapshot, err := rs.recoverFromStream(ctx, recoveryStreamBuilder, lastTimeTickMessage)
 	if err != nil {
-		rs.Logger().Warn(context.TODO(), "recovery storage failed", log.Err(err))
+		rs.Logger().Warn(ctx, "recovery storage failed", log.Err(err))
 		return nil, nil, err
 	}
 	// recovery storage start work.

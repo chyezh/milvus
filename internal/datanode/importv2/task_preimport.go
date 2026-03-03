@@ -134,7 +134,7 @@ func (t *PreImportTask) Clone() Task {
 
 func (t *PreImportTask) Execute() []*conc.Future[any] {
 	bufferSize := int(t.GetBufferSize())
-	log.Info(context.TODO(), "start to preimport", WrapLogFields(t,
+	log.Info(t.ctx, "start to preimport", WrapLogFields(t,
 		log.Int("bufferSize", bufferSize),
 		log.Int64("taskSlot", t.GetSlots()),
 		log.Any("files", t.req.GetImportFiles()),
@@ -149,7 +149,7 @@ func (t *PreImportTask) Execute() []*conc.Future[any] {
 	fn := func(i int, file *internalpb.ImportFile) error {
 		reader, err := importutilv2.NewReader(t.ctx, t.cm, t.GetSchema(), file, t.options, bufferSize, t.req.GetStorageConfig())
 		if err != nil {
-			log.Warn(context.TODO(), "new reader failed", WrapLogFields(t, log.String("file", file.String()), log.Err(err))...)
+			log.Warn(t.ctx, "new reader failed", WrapLogFields(t, log.String("file", file.String()), log.Err(err))...)
 			reason := fmt.Sprintf("error: %v, file: %s", err, file.String())
 			t.manager.Update(t.GetTaskID(), UpdateState(datapb.ImportTaskStateV2_Failed), UpdateReason(reason))
 			return err
@@ -158,12 +158,12 @@ func (t *PreImportTask) Execute() []*conc.Future[any] {
 		start := time.Now()
 		err = t.readFileStat(reader, i)
 		if err != nil {
-			log.Warn(context.TODO(), "preimport failed", WrapLogFields(t, log.String("file", file.String()), log.Err(err))...)
+			log.Warn(t.ctx, "preimport failed", WrapLogFields(t, log.String("file", file.String()), log.Err(err))...)
 			reason := fmt.Sprintf("error: %v, file: %s", err, file.String())
 			t.manager.Update(t.GetTaskID(), UpdateState(datapb.ImportTaskStateV2_Failed), UpdateReason(reason))
 			return err
 		}
-		log.Info(context.TODO(), "read file stat done", WrapLogFields(t, log.Strings("files", file.GetPaths()),
+		log.Info(t.ctx, "read file stat done", WrapLogFields(t, log.Strings("files", file.GetPaths()),
 			log.Duration("dur", time.Since(start)))...)
 		return nil
 	}
@@ -220,7 +220,7 @@ func (t *PreImportTask) readFileStat(reader importutilv2.Reader, fileIdx int) er
 		size := data.GetMemorySize()
 		totalRows += rows
 		totalSize += size
-		log.Info(context.TODO(), "reading file stat...", WrapLogFields(t, log.Int("readRows", rows), log.Int("readSize", size))...)
+		log.Info(t.ctx, "reading file stat...", WrapLogFields(t, log.Int("readRows", rows), log.Int("readSize", size))...)
 	}
 
 	stat := &datapb.ImportFileStats{

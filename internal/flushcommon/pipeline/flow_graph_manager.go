@@ -78,12 +78,12 @@ func (fm *fgManagerImpl) RemoveFlowgraph(channel string) {
 }
 
 func (fm *fgManagerImpl) ClearFlowgraphs() {
-	log.Info(context.TODO(), "start drop all flowgraph resources in DataNode")
+	log.Info(fm.ctx, "start drop all flowgraph resources in DataNode")
 	fm.flowgraphs.Range(func(key string, value *DataSyncService) bool {
 		value.GracefullyClose()
 		fm.flowgraphs.GetAndRemove(key)
 
-		log.Info(context.TODO(), "successfully dropped flowgraph", log.String("vChannelName", key))
+		log.Info(fm.ctx, "successfully dropped flowgraph", log.String("vChannelName", key))
 		return true
 	})
 }
@@ -137,7 +137,7 @@ func (fm *fgManagerImpl) GetChannelsJSON(collectionID int64) string {
 
 	ret, err := json.Marshal(channels)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to marshal channels", log.Err(err))
+		log.Warn(fm.ctx, "failed to marshal channels", log.Err(err))
 		return ""
 	}
 	return string(ret)
@@ -171,7 +171,7 @@ func (fm *fgManagerImpl) GetSegmentsJSON(collectionID int64) string {
 
 	ret, err := json.Marshal(segments)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to marshal segments", log.Err(err))
+		log.Warn(fm.ctx, "failed to marshal segments", log.Err(err))
 		return ""
 	}
 	return string(ret)

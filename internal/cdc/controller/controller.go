@@ -71,7 +71,7 @@ func (c *controller) recoverReplicatePChannelMeta(channels []*meta.ReplicateChan
 			// current cluster is not source cluster, skip create replicator
 			continue
 		}
-		log.Info(context.TODO(), "recover replicate pchannel meta",
+		log.Info(c.ctx, "recover replicate pchannel meta",
 			log.String("key", channelMeta.Key),
 			log.Int64("revision", channelMeta.ModRevision),
 		)
@@ -128,13 +128,13 @@ func (c *controller) watchLoop(eventCh clientv3.WatchChan) error {
 				panic("etcd event channel closed")
 			}
 			if err := event.Err(); err != nil {
-				log.Warn(context.TODO(), "etcd event error", log.Err(err))
+				log.Warn(c.ctx, "etcd event error", log.Err(err))
 				return err
 			}
 			for _, e := range event.Events {
 				switch e.Type {
 				case mvccpb.PUT:
-					log.Info(context.TODO(), "handle replicate pchannel PUT event",
+					log.Info(c.ctx, "handle replicate pchannel PUT event",
 						log.String("key", string(e.Kv.Key)),
 						log.Int64("modRevision", e.Kv.ModRevision),
 					)
@@ -151,7 +151,7 @@ func (c *controller) watchLoop(eventCh clientv3.WatchChan) error {
 					}
 					resource.Resource().ReplicateManagerClient().CreateReplicator(channel)
 				case mvccpb.DELETE:
-					log.Info(context.TODO(), "handle replicate pchannel DELETE event",
+					log.Info(c.ctx, "handle replicate pchannel DELETE event",
 						log.String("key", string(e.Kv.Key)),
 						log.Int64("prevModRevision", e.PrevKv.ModRevision),
 					)

@@ -125,7 +125,7 @@ func (t *L0PreImportTask) Clone() Task {
 
 func (t *L0PreImportTask) Execute() []*conc.Future[any] {
 	bufferSize := int(t.GetBufferSize())
-	log.Info(context.TODO(), "start to preimport l0", WrapLogFields(t,
+	log.Info(t.ctx, "start to preimport l0", WrapLogFields(t,
 		log.Int("bufferSize", bufferSize),
 		log.Int64("taskSlot", t.GetSlots()),
 		log.Any("files", t.req.GetImportFiles()),
@@ -144,7 +144,7 @@ func (t *L0PreImportTask) Execute() []*conc.Future[any] {
 				if len(t.GetFileStats()) == 1 {
 					reason = fmt.Sprintf("error: %v, file: %s", err, t.GetFileStats()[0].GetImportFile().String())
 				}
-				log.Warn(context.TODO(), "l0 import task execute failed", WrapLogFields(t, log.String("err", reason))...)
+				log.Warn(t.ctx, "l0 import task execute failed", WrapLogFields(t, log.String("err", reason))...)
 				t.manager.Update(t.GetTaskID(), UpdateState(datapb.ImportTaskStateV2_Failed), UpdateReason(reason))
 			}
 		}()
@@ -168,7 +168,7 @@ func (t *L0PreImportTask) Execute() []*conc.Future[any] {
 		if err != nil {
 			return
 		}
-		log.Info(context.TODO(), "l0 preimport done", WrapLogFields(t,
+		log.Info(t.ctx, "l0 preimport done", WrapLogFields(t,
 			log.Strings("l0 prefix", file.GetPaths()),
 			log.Duration("dur", time.Since(start)))...)
 		return nil
@@ -208,7 +208,7 @@ func (t *L0PreImportTask) readL0Stat(reader binlog.L0Reader, fileIdx int) error 
 		size := int(data.Size())
 		totalRows += rows
 		totalSize += size
-		log.Info(context.TODO(), "reading l0 stat...", WrapLogFields(t, log.Int("readRows", rows), log.Int("readSize", size))...)
+		log.Info(t.ctx, "reading l0 stat...", WrapLogFields(t, log.Int("readRows", rows), log.Int("readSize", size))...)
 	}
 
 	stat := &datapb.ImportFileStats{

@@ -86,7 +86,7 @@ func NewReplicateStreamClient(ctx context.Context, c cluster.MilvusClient, chann
 
 func (r *replicateStreamClient) startInternal() {
 	defer func() {
-		log.Info(context.TODO(), "replicate stream client closed",
+		log.Info(r.ctx, "replicate stream client closed",
 			log.String("key", r.channel.Key),
 			log.Int64("revision", r.channel.ModRevision))
 		r.metrics.OnClose()
@@ -110,7 +110,7 @@ func (r *replicateStreamClient) startInternal() {
 func (r *replicateStreamClient) startReplicating(backoff backoff.BackOff) (needRestart bool) {
 	logger := log.With(log.String("key", r.channel.Key), log.Int64("revision", r.channel.ModRevision))
 	if r.ctx.Err() != nil {
-		logger.Info(context.TODO(), "close replicate stream client due to ctx done")
+		logger.Info(r.ctx, "close replicate stream client due to ctx done")
 		return false
 	}
 
@@ -121,12 +121,12 @@ func (r *replicateStreamClient) startReplicating(backoff backoff.BackOff) (needR
 
 	client, err := r.targetClient.CreateReplicateStream(connCtx)
 	if err != nil {
-		logger.Warn(context.TODO(), "create milvus replicate stream failed, retry...", log.Err(err))
+		logger.Warn(connCtx, "create milvus replicate stream failed, retry...", log.Err(err))
 		return true
 	}
 	defer client.CloseSend()
 
-	logger.Info(context.TODO(), "replicate stream client service started")
+	logger.Info(connCtx, "replicate stream client service started")
 	r.metrics.OnConnect()
 	backoff.Reset()
 
@@ -149,13 +149,13 @@ func (r *replicateStreamClient) startReplicating(backoff backoff.BackOff) (needR
 	<-recvCh // wait for send/recv loops to exit
 
 	if r.ctx.Err() != nil {
-		logger.Info(context.TODO(), "close replicate stream client due to ctx done")
+		logger.Info(connCtx, "close replicate stream client due to ctx done")
 		return false
 	} else if errors.Is(chErr, ErrReplicationRemoved) {
-		logger.Info(context.TODO(), "close replicate stream client due to replication removed")
+		logger.Info(connCtx, "close replicate stream client due to replication removed")
 		return false
 	} else {
-		logger.Warn(context.TODO(), "restart replicate stream client due to unexpected error", log.Err(chErr))
+		logger.Warn(connCtx, "restart replicate stream client due to unexpected error", log.Err(chErr))
 		r.metrics.OnDisconnect()
 		return true
 	}
@@ -257,10 +257,10 @@ func (r *replicateStreamClient) sendMessage(msg message.ImmutableMessage) (err e
 	defer func() {
 		logger := log.With(log.String("key", r.channel.Key), log.Int64("revision", r.channel.ModRevision))
 		if err != nil {
-			logger.Warn(context.TODO(), "send message failed", log.Err(err), log.FieldMessage(msg))
+			logger.Warn(r.ctx, "send message failed", log.Err(err), log.FieldMessage(msg))
 		} else {
 			r.metrics.OnSent(msg)
-			logger.Debug(context.TODO(), "send message success", log.FieldMessage(msg))
+			logger.Debug(r.ctx, "send message success", log.FieldMessage(msg))
 		}
 	}()
 	immutableMessage := msg.IntoImmutableMessageProto()
@@ -318,7 +318,7 @@ func (r *replicateStreamClient) recvLoop(ctx context.Context) (err error) {
 
 func (r *replicateStreamClient) handleAlterReplicateConfigMessage(msg message.ImmutableMessage) (replicationRemoved bool) {
 	logger := log.With(log.String("key", r.channel.Key), log.Int64("revision", r.channel.ModRevision))
-	logger.Info(context.TODO(), "handle AlterReplicateConfigMessage", log.FieldMessage(msg))
+	logger.Info(r.ctx, "handle AlterReplicateConfigMessage", log.FieldMessage(msg))
 
 	replicationRemoved = util.IsReplicationRemovedByAlterReplicateConfigMessage(msg, r.channel.Value)
 	if replicationRemoved {
@@ -327,7 +327,7 @@ func (r *replicateStreamClient) handleAlterReplicateConfigMessage(msg message.Im
 		etcdCli := resource.Resource().ETCD()
 		ok, err := meta.RemoveReplicatePChannelWithRevision(r.ctx, etcdCli, r.channel.Key, r.channel.ModRevision)
 		if err != nil {
-			logger.Warn(context.TODO(), "failed to remove replicate pchannel", log.Err(err))
+			logger.Warn(r.ctx, "failed to remove replicate pchannel", log.Err(err))
 			// When performing delete operation on etcd, the context may be canceled by the delete event
 			// in cdc controller and then return `context.Canceled` error.
 			// Since the delete event is generated after the delete operation is committed in etcd,
@@ -338,13 +338,13 @@ func (r *replicateStreamClient) handleAlterReplicateConfigMessage(msg message.Im
 			}
 		}
 		if ok {
-			logger.Info(context.TODO(), "handle AlterReplicateConfigMessage done, replicate pchannel removed")
+			logger.Info(r.ctx, "handle AlterReplicateConfigMessage done, replicate pchannel removed")
 		} else {
-			logger.Info(context.TODO(), "handle AlterReplicateConfigMessage done, revision not match, replicate pchannel not removed")
+			logger.Info(r.ctx, "handle AlterReplicateConfigMessage done, revision not match, replicate pchannel not removed")
 		}
 		return true
 	}
-	logger.Info(context.TODO(), "target channel found, skip handle AlterReplicateConfigMessage")
+	logger.Info(r.ctx, "target channel found, skip handle AlterReplicateConfigMessage")
 	return false
 }
 

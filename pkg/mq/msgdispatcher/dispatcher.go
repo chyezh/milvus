@@ -93,7 +93,7 @@ func NewDispatcher(
 ) (*Dispatcher, error) {
 	subName := fmt.Sprintf("%s-%d-%d", pchannel, id, time.Now().UnixNano())
 
-	log.Info(context.TODO(), "creating dispatcher...", log.Uint64("pullbackEndTs", pullbackEndTs))
+	log.Info(ctx, "creating dispatcher...", log.Uint64("pullbackEndTs", pullbackEndTs))
 
 	var stream msgstream.MsgStream
 	var err error
@@ -113,25 +113,25 @@ func NewDispatcher(
 		position.ChannelName = funcutil.ToPhysicalChannel(position.ChannelName)
 		err = stream.AsConsumer(ctx, []string{pchannel}, subName, common.SubscriptionPositionUnknown)
 		if err != nil {
-			log.Error(context.TODO(), "asConsumer failed", log.Err(err))
+			log.Error(ctx, "asConsumer failed", log.Err(err))
 			return nil, err
 		}
-		log.Info(context.TODO(), "as consumer done", log.Any("position", position))
+		log.Info(ctx, "as consumer done", log.Any("position", position))
 		err = stream.Seek(ctx, []*Pos{position}, true)
 		if err != nil {
-			log.Error(context.TODO(), "seek failed", log.Err(err))
+			log.Error(ctx, "seek failed", log.Err(err))
 			return nil, err
 		}
 		posTime := tsoutil.PhysicalTime(position.GetTimestamp())
-		log.Info(context.TODO(), "seek successfully", log.Uint64("posTs", position.GetTimestamp()),
+		log.Info(ctx, "seek successfully", log.Uint64("posTs", position.GetTimestamp()),
 			log.Time("posTime", posTime), log.Duration("tsLag", time.Since(posTime)))
 	} else {
 		err = stream.AsConsumer(ctx, []string{pchannel}, subName, subPos)
 		if err != nil {
-			log.Error(context.TODO(), "asConsumer failed", log.Err(err))
+			log.Error(ctx, "asConsumer failed", log.Err(err))
 			return nil, err
 		}
-		log.Info(context.TODO(), "asConsumer successfully")
+		log.Info(ctx, "asConsumer successfully")
 	}
 
 	d := &Dispatcher{
@@ -159,10 +159,10 @@ func (d *Dispatcher) CurTs() typeutil.Timestamp {
 
 func (d *Dispatcher) AddTarget(t *target) {
 	if _, ok := d.targets.GetOrInsert(t.vchannel, t); ok {
-		log.Warn(context.TODO(), "target exists")
+		log.Warn(d.ctx, "target exists")
 		return
 	}
-	log.Info(context.TODO(), "add new target")
+	log.Info(d.ctx, "add new target")
 }
 
 func (d *Dispatcher) GetTarget(vchannel string) (*target, error) {
@@ -182,9 +182,9 @@ func (d *Dispatcher) HasTarget(vchannel string) bool {
 
 func (d *Dispatcher) RemoveTarget(vchannel string) {
 	if _, ok := d.targets.GetAndRemove(vchannel); ok {
-		log.Info(context.TODO(), "target removed")
+		log.Info(d.ctx, "target removed")
 	} else {
-		log.Warn(context.TODO(), "target not exist")
+		log.Warn(d.ctx, "target not exist")
 	}
 }
 
@@ -200,7 +200,7 @@ func (d *Dispatcher) BlockUtilPullbackDone() {
 }
 
 func (d *Dispatcher) Handle(signal signal) {
-	log.Debug(context.TODO(), "get signal", log.String("signal", signal.String()))
+	log.Debug(d.ctx, "get signal", log.String("signal", signal.String()))
 	switch signal {
 	case start:
 		d.ctx, d.cancel = context.WithCancel(context.Background())
@@ -223,20 +223,20 @@ func (d *Dispatcher) Handle(signal signal) {
 			d.stream.Close()
 		})
 	}
-	log.Info(context.TODO(), "handle signal done")
+	log.Info(d.ctx, "handle signal done")
 }
 
 func (d *Dispatcher) work() {
-	log.Info(context.TODO(), "begin to work")
+	log.Info(d.ctx, "begin to work")
 	defer d.wg.Done()
 	for {
 		select {
 		case <-d.done:
-			log.Info(context.TODO(), "stop working")
+			log.Info(d.ctx, "stop working")
 			return
 		case pack := <-d.stream.Chan():
 			if pack == nil || len(pack.EndPositions) != 1 {
-				log.Error(context.TODO(), "consumed invalid msgPack", log.Any("pack", pack))
+				log.Error(d.ctx, "consumed invalid msgPack", log.Any("pack", pack))
 				continue
 			}
 			d.curTs.Store(pack.EndPositions[0].GetTimestamp())
@@ -251,7 +251,7 @@ func (d *Dispatcher) work() {
 				// From 2.6.0, every message has a unique timetick, so we can filter out the msg by < but not <=.
 				if (d.includeSkipWhenSplit && p.EndTs < t.pos.GetTimestamp()) ||
 					(!d.includeSkipWhenSplit && p.EndTs <= t.pos.GetTimestamp()) {
-					log.Info(context.TODO(), "skip msg",
+					log.Info(d.ctx, "skip msg",
 						log.String("vchannel", vchannel),
 						log.Int("msgCount", len(p.Msgs)),
 						log.Uint64("packBeginTs", p.BeginTs),
@@ -259,7 +259,7 @@ func (d *Dispatcher) work() {
 						log.Uint64("posTs", t.pos.GetTimestamp()),
 					)
 					for _, msg := range p.Msgs {
-						log.Debug(context.TODO(), "skip msg info",
+						log.Debug(d.ctx, "skip msg info",
 							log.String("vchannel", vchannel),
 							log.String("msgType", msg.Type().String()),
 							log.Uint64("msgBeginTs", msg.BeginTs()),
@@ -289,13 +289,13 @@ func (d *Dispatcher) work() {
 					// replace the pChannel with vChannel
 					t.pos.ChannelName = t.vchannel
 					d.targets.GetAndRemove(vchannel)
-					log.Warn(context.TODO(), "lag target", log.Err(err))
+					log.Warn(d.ctx, "lag target", log.Err(err))
 				}
 			}
 
 			if !d.pullbackDone && pack.EndPositions[0].GetTimestamp() >= d.pullbackEndTs {
 				d.pullbackDoneNotifier.Finish(struct{}{})
-				log.Info(context.TODO(), "dispatcher pullback done",
+				log.Info(d.ctx, "dispatcher pullback done",
 					log.Uint64("pullbackEndTs", d.pullbackEndTs),
 					log.Time("pullbackTime", tsoutil.PhysicalTime(d.pullbackEndTs)),
 				)
@@ -344,7 +344,7 @@ func (d *Dispatcher) groupAndParseMsgs(pack *msgstream.ConsumeMsgPack, unmarshal
 			if len(targets) > 0 {
 				tsMsg, err := msg.Unmarshal(unmarshalDispatcher)
 				if err != nil {
-					log.Warn(context.TODO(), "unmarshl message failed", log.Err(err))
+					log.Warn(d.ctx, "unmarshl message failed", log.Err(err))
 					continue
 				}
 				// TODO: There's data race when non-dml msg is sent to different flow graph.
@@ -358,7 +358,7 @@ func (d *Dispatcher) groupAndParseMsgs(pack *msgstream.ConsumeMsgPack, unmarshal
 		if _, ok := targetPacks[vchannel]; ok {
 			tsMsg, err := msg.Unmarshal(unmarshalDispatcher)
 			if err != nil {
-				log.Warn(context.TODO(), "unmarshl message failed", log.Err(err))
+				log.Warn(d.ctx, "unmarshl message failed", log.Err(err))
 				continue
 			}
 			targetPacks[vchannel].Msgs = append(targetPacks[vchannel].Msgs, tsMsg)

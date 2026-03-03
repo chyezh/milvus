@@ -784,7 +784,7 @@ func organizeSubTask[T any](ctx context.Context,
 		// for partial search, tolerate some worker are offline
 		worker, err := sd.workerManager.GetWorker(ctx, workerID)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to get worker for sub task",
+			log.Warn(ctx, "failed to get worker for sub task",
 				log.Int64("nodeID", workerID),
 				log.Int64s("segments", segmentIDs),
 				log.Err(err),
@@ -855,7 +855,7 @@ func executeSubTasks[T any, R interface {
 			}
 
 			if err != nil {
-				logger.Warn(context.TODO(), "failed to execute sub task",
+				logger.Warn(ctx, "failed to execute sub task",
 					log.String("taskType", taskType),
 					log.Int64("nodeID", task.targetID),
 					log.Err(err),
@@ -881,7 +881,7 @@ func executeSubTasks[T any, R interface {
 
 	// Wait for all tasks to complete
 	if err := wg.Wait(); err != nil {
-		logger.Warn(context.TODO(), "some tasks failed to complete",
+		logger.Warn(ctx, "some tasks failed to complete",
 			log.String("taskType", taskType),
 			log.Err(err),
 		)
@@ -913,7 +913,7 @@ func executeSubTasks[T any, R interface {
 	if evaluator != nil {
 		shouldReturnPartial, accessedDataRatio := evaluator(taskType, successSegmentList, failureSegmentList, errors)
 		if shouldReturnPartial {
-			logger.Info(context.TODO(), "partial result executed successfully",
+			logger.Info(ctx, "partial result executed successfully",
 				log.String("taskType", taskType),
 				log.Float64("accessedDataRatio", accessedDataRatio),
 				log.Int64s("failureSegmentList", failureSegmentList),
@@ -1225,12 +1225,12 @@ func NewShardDelegator(ctx context.Context, collectionID UniqueID, replicaID Uni
 	}
 
 	sizePerBlock := paramtable.Get().QueryNodeCfg.DeleteBufferBlockSize.GetAsInt64()
-	log.Info(context.TODO(), "Init delete cache with list delete buffer", log.Int64("sizePerBlock", sizePerBlock), log.Time("startTime", tsoutil.PhysicalTime(startTs)))
+	log.Info(ctx, "Init delete cache with list delete buffer", log.Int64("sizePerBlock", sizePerBlock), log.Time("startTime", tsoutil.PhysicalTime(startTs)))
 
 	excludedSegments := NewExcludedSegments(paramtable.Get().QueryNodeCfg.CleanExcludeSegInterval.GetAsDuration(time.Second))
 
 	policy := paramtable.Get().QueryNodeCfg.LevelZeroForwardPolicy.GetValue()
-	log.Info(context.TODO(), "shard delegator setup l0 forward policy", log.String("policy", policy))
+	log.Info(ctx, "shard delegator setup l0 forward policy", log.String("policy", policy))
 
 	sd := &shardDelegator{
 		collectionID:   collectionID,
@@ -1301,7 +1301,7 @@ func NewShardDelegator(ctx context.Context, collectionID UniqueID, replicaID Uni
 
 	m := sync.Mutex{}
 	sd.tsCond = sync.NewCond(&m)
-	log.Info(context.TODO(), "finish build new shardDelegator")
+	log.Info(ctx, "finish build new shardDelegator")
 	return sd, nil
 }
 

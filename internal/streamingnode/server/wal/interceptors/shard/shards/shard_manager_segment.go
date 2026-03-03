@@ -1,8 +1,6 @@
 package shards
 
 import (
-	"context"
-
 	"go.uber.org/atomic"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/stats"
@@ -89,7 +87,7 @@ func (m *shardManagerImpl) CreateSegment(msg message.ImmutableCreateSegmentMessa
 	defer m.mu.Unlock()
 	uniquePartitionKey := PartitionUniqueKey{CollectionID: msg.Header().CollectionId, PartitionID: msg.Header().PartitionId}
 	if err := m.checkIfSegmentCanBeCreated(uniquePartitionKey, msg.Header().SegmentId); err != nil {
-		logger.Warn(context.TODO(), "segment already exists")
+		logger.Warn(m.ctx, "segment already exists")
 		return
 	}
 
@@ -112,13 +110,13 @@ func (m *shardManagerImpl) FlushSegment(msg message.ImmutableFlushMessageV2) {
 	defer m.mu.Unlock()
 	uniquePartitionKey := PartitionUniqueKey{CollectionID: collectionID, PartitionID: partitionID}
 	if err := m.checkIfSegmentCanBeFlushed(uniquePartitionKey, segmentID); err != nil {
-		logger.Warn(context.TODO(), "segment can not be flushed", log.Err(err))
+		logger.Warn(m.ctx, "segment can not be flushed", log.Err(err))
 		return
 	}
 
 	pm, ok := m.partitionManagers[uniquePartitionKey]
 	if !ok {
-		logger.Warn(context.TODO(), "partition not found when FlushSegment")
+		logger.Warn(m.ctx, "partition not found when FlushSegment")
 		return
 	}
 	pm.MustRemoveFlushedSegment(segmentID)
@@ -174,7 +172,7 @@ func (m *shardManagerImpl) FlushAndFenceSegmentAllocUntil(collectionID int64, ti
 	if err != nil {
 		return nil, err
 	}
-	logger.Info(context.TODO(), "segments should be flushed when FlushAndFenceSegmentAllocUntil", log.Int64s("segmentIDs", segmentIDs))
+	logger.Info(m.ctx, "segments should be flushed when FlushAndFenceSegmentAllocUntil", log.Int64s("segmentIDs", segmentIDs))
 	return segmentIDs, nil
 }
 
@@ -188,7 +186,7 @@ func (m *shardManagerImpl) FlushAllAndFenceSegmentAllocUntil(timetick uint64) ([
 		ids, _ := m.flushAndFenceSegmentAllocUntil(collectionID, timetick)
 		segmentIDs = append(segmentIDs, ids...)
 	}
-	logger.Info(context.TODO(), "segments should be flushed when FlushAllAndFenceSegmentAllocUntil", log.Int64s("segmentIDs", segmentIDs))
+	logger.Info(m.ctx, "segments should be flushed when FlushAllAndFenceSegmentAllocUntil", log.Int64s("segmentIDs", segmentIDs))
 	return segmentIDs, nil
 }
 
@@ -196,7 +194,7 @@ func (m *shardManagerImpl) flushAndFenceSegmentAllocUntil(collectionID int64, ti
 	logger := m.Logger().With(log.Int64("collectionID", collectionID), log.Uint64("timetick", timetick))
 
 	if err := m.checkIfCollectionExists(collectionID); err != nil {
-		logger.Warn(context.TODO(), "collection not found when FlushAndFenceSegmentAllocUntil", log.Err(err))
+		logger.Warn(m.ctx, "collection not found when FlushAndFenceSegmentAllocUntil", log.Err(err))
 		return nil, err
 	}
 
@@ -208,7 +206,7 @@ func (m *shardManagerImpl) flushAndFenceSegmentAllocUntil(collectionID int64, ti
 		uniqueKey := PartitionUniqueKey{CollectionID: collectionID, PartitionID: partitionID}
 		pm, ok := m.partitionManagers[uniqueKey]
 		if !ok {
-			logger.Warn(context.TODO(), "partition not found when FlushAndFenceSegmentAllocUntil", log.Int64("partitionID", partitionID))
+			logger.Warn(m.ctx, "partition not found when FlushAndFenceSegmentAllocUntil", log.Int64("partitionID", partitionID))
 			continue
 		}
 		newSealedSegments := pm.FlushAndFenceSegmentUntil(timetick)
@@ -229,10 +227,10 @@ func (m *shardManagerImpl) AsyncFlushSegment(signal utils.SealSegmentSignal) {
 
 	pm, ok := m.partitionManagers[signal.SegmentBelongs.PartitionUniqueKey()]
 	if !ok {
-		logger.Warn(context.TODO(), "partition not found when AsyncMustSeal, may be already dropped")
+		logger.Warn(m.ctx, "partition not found when AsyncMustSeal, may be already dropped")
 		return
 	}
 	if err := pm.AsyncFlushSegment(signal); err != nil {
-		logger.Warn(context.TODO(), "segment not found when AsyncMustSeal, may be already sealed", log.Err(err))
+		logger.Warn(m.ctx, "segment not found when AsyncMustSeal, may be already sealed", log.Err(err))
 	}
 }

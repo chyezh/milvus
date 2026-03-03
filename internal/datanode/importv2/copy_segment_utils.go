@@ -227,14 +227,14 @@ func collectSegmentFiles(
 
 		// Empty file list is OK for V3 — segment may have only deltas and no insert binlogs
 		files.InsertBinlogs = allFiles
-		log.Info(context.TODO(), "collected InsertBinlogs from manifest",
+		log.Info(ctx, "collected InsertBinlogs from manifest",
 			log.String("basePath", basePath),
 			log.Int("fileCount", len(allFiles)),
 			log.Int64("storageVersion", source.GetStorageVersion()))
 	} else {
 		// StorageV1/V2: use pb paths (traditional non-packed format)
 		files.InsertBinlogs = extractFromPb(source.GetInsertBinlogs())
-		log.Info(context.TODO(), "using InsertBinlogs from pb",
+		log.Info(ctx, "using InsertBinlogs from pb",
 			log.Int("fileCount", len(files.InsertBinlogs)),
 			log.Int64("storageVersion", source.GetStorageVersion()))
 	}
@@ -320,7 +320,7 @@ func CopySegmentAndIndexFiles(
 	segmentID := source.GetSegmentId()
 	useManifest := source.GetStorageVersion() >= storage.StorageV3
 
-	log.Info(context.TODO(), "start copying segment and index files",
+	log.Info(ctx, "start copying segment and index files",
 		log.Int64("sourceSegmentID", segmentID),
 		log.Int64("storageVersion", source.GetStorageVersion()),
 		log.Bool("useManifest", useManifest))
@@ -340,7 +340,7 @@ func CopySegmentAndIndexFiles(
 	// Step 3: Execute all copy operations
 	copiedFiles := make([]string, 0, len(mappings))
 	for src, dst := range mappings {
-		log.Debug(context.TODO(), "copying file",
+		log.Debug(ctx, "copying file",
 			log.String("src", src),
 			log.String("dst", dst))
 
@@ -348,13 +348,13 @@ func CopySegmentAndIndexFiles(
 			fields := make([]zap.Field, 0, len(logFields)+3)
 			fields = append(fields, logFields...)
 			fields = append(fields, log.String("src", src), log.String("dst", dst), log.Err(err))
-			log.Warn(context.TODO(), "failed to copy file", fields...)
+			log.Warn(ctx, "failed to copy file", fields...)
 			return nil, copiedFiles, fmt.Errorf("failed to copy file from %s to %s: %w", src, dst, err)
 		}
 		copiedFiles = append(copiedFiles, dst)
 	}
 
-	log.Info(context.TODO(), "all files copied successfully",
+	log.Info(ctx, "all files copied successfully",
 		log.Int("fileCount", len(mappings)))
 
 	// Step 3.5: When manifest is used (StorageV3+), InsertBinlogs were collected from manifest
@@ -372,7 +372,7 @@ func CopySegmentAndIndexFiles(
 				mappings[srcPath] = dstPath
 			}
 		}
-		log.Info(context.TODO(), "added logical insert binlog mappings for manifest segment",
+		log.Info(ctx, "added logical insert binlog mappings for manifest segment",
 			log.Int("pbPathCount", len(pbInsertPaths)))
 	}
 
@@ -401,7 +401,7 @@ func CopySegmentAndIndexFiles(
 
 	jsonKeyIndexInfos = shortenJsonStatsPath(jsonKeyIndexInfos)
 
-	log.Info(context.TODO(), "path compression completed",
+	log.Info(ctx, "path compression completed",
 		log.Int("binlogFields", len(segmentInfo.GetBinlogs())),
 		log.Int("indexCount", len(indexInfos)),
 		log.Int("jsonStatsCount", len(jsonKeyIndexInfos)))
@@ -428,7 +428,7 @@ func CopySegmentAndIndexFiles(
 		result.ManifestPath = targetManifestPath
 	}
 
-	log.Info(context.TODO(), "copy segment and index files completed successfully",
+	log.Info(ctx, "copy segment and index files completed successfully",
 		log.Int64("importedRows", result.ImportedRows))
 
 	return result, copiedFiles, nil

@@ -139,7 +139,6 @@ func (t *SearchTask) PreExecute() error {
 }
 
 func (t *SearchTask) Execute() error {
-
 	if t.scheduleSpan != nil {
 		t.scheduleSpan.End()
 	}
@@ -231,7 +230,7 @@ func (t *SearchTask) Execute() error {
 		t.originTopks,
 	)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to reduce search results", log.Err(err))
+		log.Warn(t.ctx, "failed to reduce search results", log.Err(err))
 		return err
 	}
 	defer segcore.DeleteSearchResultDataBlobs(blobs)

@@ -254,7 +254,7 @@ func (ta *CachedAllocator) failRemainRequest() {
 		err = errors.New(errMsg)
 	}
 	if len(ta.ToDoReqs) > 0 {
-		log.Warn(context.TODO(), "Allocator has some reqs to fail",
+		log.Warn(ta.Ctx, "Allocator has some reqs to fail",
 			log.String("Role", ta.Role),
 			log.Int("reqLen", len(ta.ToDoReqs)))
 	}

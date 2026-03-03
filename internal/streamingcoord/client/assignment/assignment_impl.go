@@ -217,9 +217,9 @@ func (c *AssignmentServiceImpl) getAssignmentDiscoverOrWait(ctx context.Context)
 func (c *AssignmentServiceImpl) resumeLoop() (err error) {
 	defer func() {
 		if err != nil {
-			c.logger.Warn(context.TODO(), "stop resuming", log.Err(err))
+			c.logger.Warn(c.ctx, "stop resuming", log.Err(err))
 		} else {
-			c.logger.Info(context.TODO(), "stop resuming")
+			c.logger.Info(c.ctx, "stop resuming")
 		}
 		close(c.resumingExitCh)
 	}()
@@ -247,11 +247,11 @@ func (c *AssignmentServiceImpl) swapAssignmentDiscoverClient() (*assignmentDisco
 	c.discoverer = adc
 	c.cond.L.Unlock()
 
-	c.logger.Info(context.TODO(), "swap assignment discover client")
+	c.logger.Info(c.ctx, "swap assignment discover client")
 	if oldADC != nil {
 		oldADC.Close()
 	}
-	c.logger.Info(context.TODO(), "old assignment discover client closed")
+	c.logger.Info(c.ctx, "old assignment discover client closed")
 	return adc, nil
 }
 
@@ -268,7 +268,7 @@ func (c *AssignmentServiceImpl) createNewAssignmentDiscoverClient() (*assignment
 			return nil, err
 		}
 		if err != nil {
-			c.logger.Warn(context.TODO(), "create a assignment discover stream failed", log.Err(err))
+			c.logger.Warn(c.ctx, "create a assignment discover stream failed", log.Err(err))
 			// TODO: backoff
 			time.Sleep(50 * time.Millisecond)
 			continue
@@ -280,7 +280,7 @@ func (c *AssignmentServiceImpl) createNewAssignmentDiscoverClient() (*assignment
 func (c *AssignmentServiceImpl) waitUntilUnavailable(adc *assignmentDiscoverClient) error {
 	select {
 	case <-adc.Available():
-		c.logger.Warn(context.TODO(), "assignment discover client is unavailable, try to resuming...")
+		c.logger.Warn(c.ctx, "assignment discover client is unavailable, try to resuming...")
 		return nil
 	case <-c.ctx.Done():
 		return c.ctx.Err()

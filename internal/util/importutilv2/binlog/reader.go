@@ -117,7 +117,7 @@ func (r *reader) init(paths []string, tsStart, tsEnd uint64) error {
 	r.schema = cloneschema
 
 	validIDs := lo.Keys(r.insertLogs)
-	log.Info(context.TODO(), "create binlog reader for these fields", log.Any("validIDs", validIDs))
+	log.Info(r.ctx, "create binlog reader for these fields", log.Any("validIDs", validIDs))
 
 	rwOptions := []storage.RwOption{
 		storage.WithVersion(r.storageVersion),
@@ -164,7 +164,7 @@ func (r *reader) init(paths []string, tsStart, tsEnd uint64) error {
 		return err
 	}
 
-	log.Info(context.TODO(), "read delete done",
+	log.Info(r.ctx, "read delete done",
 		log.String("collection", r.schema.GetName()),
 		log.Int("deleteRows", len(r.deleteData)),
 	)
@@ -209,7 +209,7 @@ func (r *reader) readDelete(deltaLogs []string, tsStart, tsEnd uint64) (map[any]
 				if err == io.EOF {
 					break
 				}
-				log.Error(context.TODO(), "compose delete wrong, failed to read deltalogs", log.Err(err))
+				log.Error(r.ctx, "compose delete wrong, failed to read deltalogs", log.Err(err))
 				return nil, err
 			}
 

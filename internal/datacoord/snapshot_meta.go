@@ -285,7 +285,7 @@ func (sm *snapshotMeta) refIndexLoaderLoop() {
 	getInterval := func() time.Duration {
 		interval := paramtable.Get().DataCoordCfg.SnapshotRefIndexLoadInterval.GetAsDurationByParse()
 		if interval <= 0 {
-			log.Warn(context.TODO(), "invalid snapshot RefIndex load interval, fallback to 60s",
+			log.Warn(sm.loaderCtx, "invalid snapshot RefIndex load interval, fallback to 60s",
 				log.Duration("interval", interval))
 			return 60 * time.Second
 		}
@@ -301,7 +301,7 @@ func (sm *snapshotMeta) refIndexLoaderLoop() {
 	for {
 		select {
 		case <-sm.loaderCtx.Done():
-			log.Info(context.TODO(), "RefIndex loader goroutine stopped")
+			log.Info(sm.loaderCtx, "RefIndex loader goroutine stopped")
 			return
 		case <-timer.C:
 			sm.loadUnloadedRefIndexes()
@@ -325,14 +325,14 @@ func (sm *snapshotMeta) loadUnloadedRefIndexes() {
 
 		snapshotData, err := sm.reader.ReadSnapshot(sm.loaderCtx, info.GetS3Location(), false)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to load RefIndex from S3",
+			log.Warn(sm.loaderCtx, "failed to load RefIndex from S3",
 				log.String("name", info.GetName()),
 				log.Int64("id", id),
 				log.Err(err))
 			refIndex.SetFailed()
 		} else {
 			refIndex.SetLoaded(snapshotData.SegmentIDs, snapshotData.IndexIDs)
-			log.Info(context.TODO(), "loaded RefIndex from S3",
+			log.Info(sm.loaderCtx, "loaded RefIndex from S3",
 				log.String("name", info.GetName()),
 				log.Int64("id", id))
 		}

@@ -110,7 +110,7 @@ func (c *Client) getMixCoordAddr() (string, error) {
 	key := c.grpcClient.GetRole()
 	msess, _, err := c.sess.GetSessions(c.ctx, key)
 	if err != nil {
-		log.Debug(context.TODO(), "MixCoordClient GetSessions failed", log.Any("key", key))
+		log.Debug(c.ctx, "MixCoordClient GetSessions failed", log.Any("key", key))
 		return "", err
 	}
 	ms, ok := msess[key]
@@ -118,11 +118,11 @@ func (c *Client) getMixCoordAddr() (string, error) {
 		if paramtable.GetRole() == typeutil.StandaloneRole {
 			return c.getCompatibleMixCoordAddr()
 		} else {
-			log.Warn(context.TODO(), "MixCoordClient mess key not exist", log.Any("key", key))
+			log.Warn(c.ctx, "MixCoordClient mess key not exist", log.Any("key", key))
 			return "", errors.New("find no available mixcoord, check mixcoord state")
 		}
 	}
-	log.Debug(context.TODO(), "MixCoordClient GetSessions success",
+	log.Debug(c.ctx, "MixCoordClient GetSessions success",
 		log.String("address", ms.Address),
 		log.Int64("serverID", ms.ServerID),
 		log.String("role", key))
@@ -134,15 +134,15 @@ func (c *Client) getMixCoordAddr() (string, error) {
 func (c *Client) getCompatibleMixCoordAddr() (string, error) {
 	msess, _, err := c.sess.GetSessions(c.ctx, typeutil.RootCoordRole)
 	if err != nil {
-		log.Debug(context.TODO(), "mixCoordClient getSessions failed", log.Any("key", typeutil.RootCoordRole), log.Err(err))
+		log.Debug(c.ctx, "mixCoordClient getSessions failed", log.Any("key", typeutil.RootCoordRole), log.Err(err))
 		return "", errors.New("find no available mixcoord, check mixcoord state")
 	}
 	ms, ok := msess[typeutil.RootCoordRole]
 	if !ok {
-		log.Warn(context.TODO(), "MixCoordClient mess key not exist", log.Any("key", typeutil.RootCoordRole))
+		log.Warn(c.ctx, "MixCoordClient mess key not exist", log.Any("key", typeutil.RootCoordRole))
 		return "", errors.New("find no available mixcoord, check mixcoord state")
 	}
-	log.Debug(context.TODO(), "MixCoordClient GetSessions use rootCoord", log.Any("key", typeutil.RootCoordRole))
+	log.Debug(c.ctx, "MixCoordClient GetSessions use rootCoord", log.Any("key", typeutil.RootCoordRole))
 	c.grpcClient.SetNodeID(ms.ServerID)
 	return ms.Address, nil
 }

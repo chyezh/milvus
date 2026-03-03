@@ -154,7 +154,7 @@ func (r *reader) Size() (int64, error) {
 func (r *reader) Close() {
 	err := r.r.Close()
 	if err != nil {
-		log.Warn(context.TODO(), "close parquet reader failed", log.Err(err))
+		log.Warn(r.ctx, "close parquet reader failed", log.Err(err))
 	}
 	if r.cmr != nil {
 		r.cmr.Close()

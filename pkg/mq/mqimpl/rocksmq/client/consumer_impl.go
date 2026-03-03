@@ -144,7 +144,7 @@ func (c *consumer) Close() {
 	// TODO should panic?
 	err := c.client.server.DestroyConsumerGroup(c.topic, c.consumerName)
 	if err != nil {
-		log.Warn(context.TODO(), "Consumer close failed", log.String("topicName", c.topic), log.String("groupName", c.consumerName), log.Err(err))
+		log.Warn(c.ctx, "Consumer close failed", log.String("topicName", c.topic), log.String("groupName", c.consumerName), log.Err(err))
 		// TODO: current rocksmq does't promise the msgmutex will be closed in some unittest,
 		// make the consuming goroutine leak.
 		// Here add a dirty way to close it.

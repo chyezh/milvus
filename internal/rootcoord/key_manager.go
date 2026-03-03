@@ -41,10 +41,10 @@ func NewKeyManager(
 	meta IMetaTable,
 ) *KeyManager {
 	if hookutil.GetCipherWithState() == nil {
-		log.Info(context.TODO(), "KeyManager disabled (cipher plugin not loaded)")
+		log.Info(ctx, "KeyManager disabled (cipher plugin not loaded)")
 		return nil
 	}
-	log.Info(context.TODO(), "KeyManager enabled")
+	log.Info(ctx, "KeyManager enabled")
 	return &KeyManager{
 		ctx:  ctx,
 		meta: meta,
@@ -62,7 +62,7 @@ func (km *KeyManager) GetRevokedDatabases() ([]int64, error) {
 		if currentState != hookutil.KeyStateEnabled {
 			db, err := km.getDatabaseByEzID(ezID)
 			if err != nil {
-				log.Warn(context.TODO(), "KeyManager: failed to get database for ezID", log.Int64("ezID", ezID), log.Err(err))
+				log.Warn(km.ctx, "KeyManager: failed to get database for ezID", log.Int64("ezID", ezID), log.Err(err))
 				continue
 			}
 

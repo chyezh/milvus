@@ -251,7 +251,7 @@ func (t *LevelZeroCompactionTask) splitAndWrite(
 			segment := allSeg[segmentID]
 			logID, err := t.allocator.AllocOne()
 			if err != nil {
-				log.Warn(context.TODO(), "L0 compaction allocate log ID fail", log.Int64("segmentID", segmentID), log.Err(err))
+				log.Warn(ctx, "L0 compaction allocate log ID fail", log.Int64("segmentID", segmentID), log.Err(err))
 				return nil, err
 			}
 
@@ -272,30 +272,30 @@ func (t *LevelZeroCompactionTask) splitAndWrite(
 				storage.WithVersion(storageVersion),
 			)
 			if err != nil {
-				log.Warn(context.TODO(), "L0 compaction create deltalog writer fail", log.Int64("segmentID", segmentID), log.Err(err))
+				log.Warn(ctx, "L0 compaction create deltalog writer fail", log.Int64("segmentID", segmentID), log.Err(err))
 				return nil, err
 			}
 
 			// Create Arrow record from collected deletes
 			record, tsFrom, tsTo, err := storage.BuildDeleteRecord(deletes.pks, deletes.tss)
 			if err != nil {
-				log.Warn(context.TODO(), "L0 compaction build delete record fail", log.Int64("segmentID", segmentID), log.Err(err))
+				log.Warn(ctx, "L0 compaction build delete record fail", log.Int64("segmentID", segmentID), log.Err(err))
 				return nil, err
 			}
 			defer record.Release()
 
 			// Write the entire record at once
 			if err := writer.Write(record); err != nil {
-				log.Warn(context.TODO(), "L0 compaction write record fail", log.Int64("segmentID", segmentID), log.Err(err))
+				log.Warn(ctx, "L0 compaction write record fail", log.Int64("segmentID", segmentID), log.Err(err))
 				return nil, err
 			}
 
 			if err := writer.Close(); err != nil {
-				log.Warn(context.TODO(), "L0 compaction close writer fail", log.Int64("segmentID", segmentID), log.Err(err))
+				log.Warn(ctx, "L0 compaction close writer fail", log.Int64("segmentID", segmentID), log.Err(err))
 				return nil, err
 			}
 
-			log.Info(context.TODO(), "L0 compaction write record success", log.String("path", path), log.Int64("entries", int64(len(deletes.pks))))
+			log.Info(ctx, "L0 compaction write record success", log.String("path", path), log.Int64("entries", int64(len(deletes.pks))))
 
 			// Check if this is a V2 segment (has manifest)
 			if segment.GetManifest() != "" {
@@ -306,7 +306,7 @@ func (t *LevelZeroCompactionTask) splitAndWrite(
 					[]packed.DeltaLogEntry{{Path: path, NumEntries: int64(len(deletes.pks))}},
 				)
 				if err != nil {
-					log.Warn(context.TODO(), "L0 compaction update manifest fail", log.Int64("segmentID", segmentID), log.Err(err))
+					log.Warn(ctx, "L0 compaction update manifest fail", log.Int64("segmentID", segmentID), log.Err(err))
 					return nil, err
 				}
 				return &datapb.CompactionSegment{
@@ -411,7 +411,7 @@ func (t *LevelZeroCompactionTask) process(ctx context.Context, l0MemSize int64, 
 		return nil, errors.Newf("L0 compaction failed, not enough memory, request memory size: %v, memory limit: %v", l0MemSize, memLimit)
 	}
 
-	log.Info(context.TODO(), "L0 compaction process start")
+	log.Info(ctx, "L0 compaction process start")
 	pkField, err := typeutil.GetPrimaryFieldSchema(t.plan.GetSchema())
 	if err != nil {
 		return nil, err
@@ -421,7 +421,7 @@ func (t *LevelZeroCompactionTask) process(ctx context.Context, l0MemSize int64, 
 		storage.WithDownloader(t.BinlogIO.Download),
 		storage.WithStorageConfig(t.compactionParams.StorageConfig))
 	if err != nil {
-		log.Warn(context.TODO(), "L0 compaction compose delete data fail", log.Err(err))
+		log.Warn(ctx, "L0 compaction compose delete data fail", log.Err(err))
 		return nil, err
 	}
 
@@ -437,24 +437,24 @@ func (t *LevelZeroCompactionTask) process(ctx context.Context, l0MemSize int64, 
 		batchSegments := targetSegments[left:right]
 		segmentBFs, err := t.loadBF(ctx, batchSegments)
 		if err != nil {
-			log.Warn(context.TODO(), "L0 compaction loadBF fail", log.Err(err))
+			log.Warn(ctx, "L0 compaction loadBF fail", log.Err(err))
 			return nil, err
 		}
 
 		batchResults, err := t.splitAndWrite(ctx, allDelta, segmentBFs)
 		if err != nil {
-			log.Warn(context.TODO(), "L0 compaction splitAndWrite fail", log.Err(err))
+			log.Warn(ctx, "L0 compaction splitAndWrite fail", log.Err(err))
 			return nil, err
 		}
 
-		log.Info(context.TODO(), "L0 compaction finished one batch",
+		log.Info(ctx, "L0 compaction finished one batch",
 			log.Int("batch no.", i),
 			log.Int64("total deltaRowCount", allDelta.RowCount),
 			log.Int("batch segment count", len(batchResults)))
 		results = append(results, batchResults...)
 	}
 
-	log.Info(context.TODO(), "L0 compaction process done")
+	log.Info(ctx, "L0 compaction process done")
 	return results, nil
 }
 
@@ -483,7 +483,7 @@ func (t *LevelZeroCompactionTask) loadBF(ctx context.Context, targetSegments []*
 				segment.GetSegmentID(),
 				segment.GetField2StatslogPaths())
 			if err != nil {
-				log.Warn(context.TODO(), "failed to decompress segment stats log",
+				log.Warn(innerCtx, "failed to decompress segment stats log",
 					log.Int64("planID", t.plan.GetPlanID()),
 					log.String("type", t.plan.GetType().String()),
 					log.Err(err))
@@ -492,7 +492,7 @@ func (t *LevelZeroCompactionTask) loadBF(ctx context.Context, targetSegments []*
 			pks, err := compaction.LoadStats(innerCtx, t.cm,
 				t.plan.GetSchema(), segment.GetSegmentID(), segment.GetField2StatslogPaths())
 			if err != nil {
-				log.Warn(context.TODO(), "failed to load segment stats log",
+				log.Warn(innerCtx, "failed to load segment stats log",
 					log.Int64("planID", t.plan.GetPlanID()),
 					log.String("type", t.plan.GetType().String()),
 					log.Err(err))

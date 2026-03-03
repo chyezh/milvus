@@ -51,7 +51,7 @@ func (d *diskUsageFetcher) GetDiskUsage() (int64, error) {
 func (d *diskUsageFetcher) fetch() {
 	diskUsage, err := segcore.GetLocalUsedSize(d.path)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to get disk usage", log.Err(err))
+		log.Warn(d.ctx, "failed to get disk usage", log.Err(err))
 		d.err.Store(err)
 		return
 	}

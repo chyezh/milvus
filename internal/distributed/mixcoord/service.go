@@ -100,10 +100,10 @@ func (s *Server) Prepare() error {
 		netutil.OptPort(paramtable.Get().RootCoordGrpcServerCfg.Port.GetAsInt()),
 	)
 	if err != nil {
-		log.Warn(context.TODO(), "MixCoord fail to create net listener", log.Err(err))
+		log.Warn(s.ctx, "MixCoord fail to create net listener", log.Err(err))
 		return err
 	}
-	log.Info(context.TODO(), "MixCoord listen on", log.String("address", listener.Addr().String()), log.Int("port", listener.Port()))
+	log.Info(s.ctx, "MixCoord listen on", log.String("address", listener.Addr().String()), log.Int("port", listener.Port()))
 	s.listener = listener
 	return nil
 }
@@ -127,7 +127,7 @@ var getTiKVClient = tikv.GetTiKVClient
 func (s *Server) init() error {
 	params := paramtable.Get()
 	etcdConfig := &params.EtcdCfg
-	log.Info(context.TODO(), "init params done..")
+	log.Info(s.ctx, "init params done..")
 
 	etcdCli, err := etcd.CreateEtcdClient(
 		etcdConfig.UseEmbedEtcd.GetAsBool(),
@@ -142,36 +142,36 @@ func (s *Server) init() error {
 		etcdConfig.EtcdTLSMinVersion.GetValue(),
 		etcdConfig.ClientOptions()...)
 	if err != nil {
-		log.Warn(context.TODO(), "MixCoord connect to etcd failed", log.Err(err))
+		log.Warn(s.ctx, "MixCoord connect to etcd failed", log.Err(err))
 		return err
 	}
 	s.etcdCli = etcdCli
 	s.mixCoord.SetEtcdClient(s.etcdCli)
 	s.mixCoord.SetAddress(s.listener.Address())
 	s.mixCoord.SetMixCoordClient(s.mixCoordClient)
-	log.Info(context.TODO(), "etcd connect done ...")
+	log.Info(s.ctx, "etcd connect done ...")
 
 	if params.MetaStoreCfg.MetaStoreType.GetValue() == util.MetaStoreTypeTiKV {
-		log.Info(context.TODO(), "Connecting to tikv metadata storage.")
+		log.Info(s.ctx, "Connecting to tikv metadata storage.")
 		s.tikvCli, err = getTiKVClient(&paramtable.Get().TiKVCfg)
 		if err != nil {
-			log.Warn(context.TODO(), "MixCoord failed to connect to tikv", log.Err(err))
+			log.Warn(s.ctx, "MixCoord failed to connect to tikv", log.Err(err))
 			return err
 		}
 		s.mixCoord.SetTiKVClient(s.tikvCli)
-		log.Info(context.TODO(), "Connected to tikv. Using tikv as metadata storage.")
+		log.Info(s.ctx, "Connected to tikv. Using tikv as metadata storage.")
 	}
 
 	if err := s.mixCoord.Init(); err != nil {
 		return err
 	}
-	log.Info(context.TODO(), "MixCoord init done ...")
+	log.Info(s.ctx, "MixCoord init done ...")
 
 	err = s.startGrpc()
 	if err != nil {
 		return err
 	}
-	log.Info(context.TODO(), "grpc init done ...")
+	log.Info(s.ctx, "grpc init done ...")
 	return nil
 }
 
@@ -195,7 +195,7 @@ func (s *Server) startGrpcLoop() {
 		Time:    60 * time.Second, // Ping the client if it is idle for 60 seconds to ensure the connection is still active
 		Timeout: 10 * time.Second, // Wait 10 second for the ping ack before assuming the connection is dead
 	}
-	log.Info(context.TODO(), "start grpc ", log.Int("port", s.listener.Port()))
+	log.Info(s.ctx, "start grpc ", log.Int("port", s.listener.Port()))
 
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
@@ -243,14 +243,14 @@ func (s *Server) startGrpcLoop() {
 }
 
 func (s *Server) start() error {
-	log.Info(context.TODO(), "MixCoord Core start ...")
+	log.Info(s.ctx, "MixCoord Core start ...")
 	if err := s.mixCoord.Register(); err != nil {
-		log.Error(context.TODO(), "MixCoord registers service failed", log.Err(err))
+		log.Error(s.ctx, "MixCoord registers service failed", log.Err(err))
 		return err
 	}
 
 	if err := s.mixCoord.Start(); err != nil {
-		log.Error(context.TODO(), "MixCoord start service failed", log.Err(err))
+		log.Error(s.ctx, "MixCoord start service failed", log.Err(err))
 		return err
 	}
 
@@ -271,9 +271,9 @@ func (s *Server) Stop() (err error) {
 	}
 
 	if s.mixCoord != nil {
-		log.Info(context.TODO(), "graceful stop rootCoord")
+		log.Info(s.ctx, "graceful stop rootCoord")
 		s.mixCoord.GracefulStop()
-		log.Info(context.TODO(), "graceful stop rootCoord done")
+		log.Info(s.ctx, "graceful stop rootCoord done")
 	}
 
 	if s.grpcServer != nil {
@@ -284,7 +284,7 @@ func (s *Server) Stop() (err error) {
 	if s.mixCoord != nil {
 		log.Info(s.ctx, "internal server[rootCoord] start to stop")
 		if err := s.mixCoord.Stop(); err != nil {
-			log.Error(context.TODO(), "Failed to close rootCoord", log.Err(err))
+			log.Error(s.ctx, "Failed to close rootCoord", log.Err(err))
 		}
 	}
 

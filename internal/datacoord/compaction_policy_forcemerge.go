@@ -79,7 +79,7 @@ func (policy *forceMergeCompactionPolicy) triggerOneCollection(
 
 	collectionTTL, err := common.GetCollectionTTLFromMap(collection.Properties)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to get collection ttl, use default", log.Err(err))
+		log.Warn(ctx, "failed to get collection ttl, use default", log.Err(err))
 		collectionTTL = 0
 	}
 
@@ -106,7 +106,7 @@ func (policy *forceMergeCompactionPolicy) triggerOneCollection(
 	}))
 
 	if len(segments) == 0 {
-		log.Info(context.TODO(), "no eligible segments for force merge")
+		log.Info(ctx, "no eligible segments for force merge")
 		return nil, 0, nil
 	}
 
@@ -131,7 +131,7 @@ func (policy *forceMergeCompactionPolicy) triggerOneCollection(
 		views = append(views, view)
 	}
 
-	log.Info(context.TODO(), "force merge triggered", log.Int("viewCount", len(views)))
+	log.Info(ctx, "force merge triggered", log.Int("viewCount", len(views)))
 	return views, triggerID, nil
 }
 

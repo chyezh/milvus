@@ -150,7 +150,7 @@ func (m *indexMeta) reloadFromKV() error {
 	// load field indexes
 	fieldIndexes, err := m.catalog.ListIndexes(m.ctx)
 	if err != nil {
-		log.Error(context.TODO(), "indexMeta reloadFromKV load field indexes fail", log.Err(err))
+		log.Error(m.ctx, "indexMeta reloadFromKV load field indexes fail", log.Err(err))
 		return err
 	}
 	for _, fieldIndex := range fieldIndexes {
@@ -158,7 +158,7 @@ func (m *indexMeta) reloadFromKV() error {
 	}
 	segmentIndexes, err := m.catalog.ListSegmentIndexes(m.ctx)
 	if err != nil {
-		log.Error(context.TODO(), "indexMeta reloadFromKV load segment indexes fail", log.Err(err))
+		log.Error(m.ctx, "indexMeta reloadFromKV load segment indexes fail", log.Err(err))
 		return err
 	}
 	for _, segIdx := range segmentIndexes {
@@ -170,7 +170,7 @@ func (m *indexMeta) reloadFromKV() error {
 		metrics.DataCoordStoredIndexFilesSize.WithLabelValues("", "",
 			fmt.Sprintf("%d", segIdx.CollectionID)).Add(float64(segIdx.IndexSerializedSize))
 	}
-	log.Info(context.TODO(), "indexMeta reloadFromKV done", log.Duration("duration", record.ElapseSpan()))
+	log.Info(m.ctx, "indexMeta reloadFromKV done", log.Duration("duration", record.ElapseSpan()))
 	return nil
 }
 
@@ -197,7 +197,7 @@ func (m *indexMeta) updateSegmentIndex(segIdx *model.SegmentIndex) {
 func (m *indexMeta) alterSegmentIndexes(segIdxes []*model.SegmentIndex) error {
 	err := m.catalog.AlterSegmentIndexes(m.ctx, segIdxes)
 	if err != nil {
-		log.Error(context.TODO(), "failed to alter segments index in meta store", log.Int("segment indexes num", len(segIdxes)),
+		log.Error(m.ctx, "failed to alter segments index in meta store", log.Int("segment indexes num", len(segIdxes)),
 			log.Err(err))
 		return err
 	}
@@ -379,7 +379,7 @@ func (m *indexMeta) canCreateIndex(req *indexpb.CreateIndexRequest, isJson bool)
 				return index.IndexID, errIndexOperationIgnored
 			}
 			errMsg := "at most one distinct index is allowed per field"
-			log.Warn(context.TODO(), errMsg,
+			log.Warn(m.ctx, errMsg,
 				log.String("source index", fmt.Sprintf("{index_name: %s, field_id: %d, index_params: %v, user_params: %v, type_params: %v}",
 					index.IndexName, index.FieldID, index.IndexParams, index.UserIndexParams, index.TypeParams)),
 				log.String("current index", fmt.Sprintf("{index_name: %s, field_id: %d, index_params: %v, user_params: %v, type_params: %v}",
@@ -399,7 +399,7 @@ func (m *indexMeta) canCreateIndex(req *indexpb.CreateIndexRequest, isJson bool)
 			}
 			// creating multiple indexes on same field is not supported
 			errMsg := "CreateIndex failed: creating multiple indexes on same field is not supported"
-			log.Warn(context.TODO(), errMsg)
+			log.Warn(m.ctx, errMsg)
 			return 0, errors.New(errMsg)
 		}
 	}
@@ -421,7 +421,7 @@ func (m *indexMeta) HasSameReq(req *indexpb.CreateIndexRequest) (bool, UniqueID)
 		if !checkParams(fieldIndex, req) {
 			continue
 		}
-		log.Debug(context.TODO(), "has same index", log.Int64("collectionID", req.CollectionID),
+		log.Debug(m.ctx, "has same index", log.Int64("collectionID", req.CollectionID),
 			log.Int64("fieldID", req.FieldID), log.String("indexName", req.IndexName),
 			log.Int64("indexID", fieldIndex.IndexID))
 		return true, fieldIndex.IndexID

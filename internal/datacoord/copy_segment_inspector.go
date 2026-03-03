@@ -194,7 +194,7 @@ func (s *copySegmentInspector) reloadFromMeta() {
 			}
 		}
 	}
-	log.Info(context.TODO(), "copy segment inspector reloaded tasks from meta",
+	log.Info(s.ctx, "copy segment inspector reloaded tasks from meta",
 		log.Int("jobCount", len(jobs)))
 }
 
@@ -281,10 +281,10 @@ func (s *copySegmentInspector) processFailed(task CopySegmentTask) {
 			op := UpdateStatusOperator(targetSegID, commonpb.SegmentState_Dropped)
 			err := s.meta.UpdateSegmentsInfo(s.ctx, op)
 			if err != nil {
-				log.Warn(context.TODO(), "failed to drop target segment after copy task failed",
+				log.Warn(s.ctx, "failed to drop target segment after copy task failed",
 					WrapCopySegmentTaskLog(task, log.Int64("segmentID", targetSegID), log.Err(err))...)
 			} else {
-				log.Info(context.TODO(), "dropped target segment after copy task failed",
+				log.Info(s.ctx, "dropped target segment after copy task failed",
 					WrapCopySegmentTaskLog(task, log.Int64("segmentID", targetSegID))...)
 			}
 		}

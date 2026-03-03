@@ -35,11 +35,11 @@ type watcherImpl struct {
 
 // execute starts the watcher.
 func (w *watcherImpl) execute() {
-	log.Info(context.TODO(), "assignment watcher start")
+	log.Info(w.ctx, "assignment watcher start")
 	var err error
 	defer func() {
 		// error can be ignored here, so use info level log here.
-		log.Info(context.TODO(), "assignment watcher close", log.Err(err))
+		log.Info(w.ctx, "assignment watcher close", log.Err(err))
 	}()
 
 	// error can be ignored here, error is always cancel by watcher's close as expected.

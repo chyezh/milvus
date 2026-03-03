@@ -1478,11 +1478,11 @@ func (s *Server) verifyFlushAllStateByChannelFlushAllTs(channel string, flushAll
 	pchannel := funcutil.ToPhysicalChannel(channel)
 	flushAllTs, ok := flushAllTss[pchannel]
 	if !ok || flushAllTs == 0 {
-		log.Warn(context.TODO(), "FlushAllTs not found for pchannel", log.String("pchannel", pchannel), log.Uint64("flushAllTs", flushAllTs))
+		log.Warn(s.ctx, "FlushAllTs not found for pchannel", log.String("pchannel", pchannel), log.Uint64("flushAllTs", flushAllTs))
 		return false, merr.WrapErrParameterInvalidMsg("FlushAllTs not found for pchannel %s", pchannel)
 	}
 	if channelCP == nil || channelCP.GetTimestamp() < flushAllTs {
-		log.RatedInfo(context.TODO(), log.RateDefault, "channel unflushed",
+		log.RatedInfo(s.ctx, log.RateDefault, "channel unflushed",
 			log.String("vchannel", channel),
 			log.Uint64("flushAllTs", flushAllTs),
 			log.Uint64("channelCP", channelCP.GetTimestamp()),
@@ -1495,7 +1495,7 @@ func (s *Server) verifyFlushAllStateByChannelFlushAllTs(channel string, flushAll
 func (s *Server) verifyFlushAllStateByLegacyFlushAllTs(channel string, flushAllTs uint64) bool {
 	channelCP := s.meta.GetChannelCheckpoint(channel)
 	if channelCP == nil || channelCP.GetTimestamp() < flushAllTs {
-		log.RatedInfo(context.TODO(), log.RateDefault, "channel unflushed",
+		log.RatedInfo(s.ctx, log.RateDefault, "channel unflushed",
 			log.String("vchannel", channel),
 			log.Uint64("flushAllTs", flushAllTs),
 			log.Uint64("channelCP", channelCP.GetTimestamp()),

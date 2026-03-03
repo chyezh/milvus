@@ -465,18 +465,18 @@ func SaveBinLog(ctx context.Context,
 		msgLength,
 		schema)
 	if err != nil {
-		log.Warn(context.TODO(), "getStorageBlob return error", log.Err(err))
+		log.Warn(ctx, "getStorageBlob return error", log.Err(err))
 		return nil, nil, err
 	}
 
-	log.Debug(context.TODO(), ".. [query node unittest] Saving bin logs to MinIO ..", log.Int("number", len(binLogs)))
+	log.Debug(ctx, ".. [query node unittest] Saving bin logs to MinIO ..", log.Int("number", len(binLogs)))
 	kvs := make(map[string][]byte, len(binLogs))
 
 	// write insert binlog
 	fieldBinlog := make([]*datapb.FieldBinlog, 0)
 	for _, blob := range binLogs {
 		fieldID, err := strconv.ParseInt(blob.GetKey(), 10, 64)
-		log.Debug(context.TODO(), "[query node unittest] save binlog", log.Int64("fieldID", fieldID))
+		log.Debug(ctx, "[query node unittest] save binlog", log.Int64("fieldID", fieldID))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -492,13 +492,13 @@ func SaveBinLog(ctx context.Context,
 			}},
 		})
 	}
-	log.Debug(context.TODO(), "[query node unittest] save binlog file to MinIO/S3")
+	log.Debug(ctx, "[query node unittest] save binlog file to MinIO/S3")
 
 	// write insert binlog
 	statsBinlog := make([]*datapb.FieldBinlog, 0)
 	for _, blob := range statsLogs {
 		fieldID, err := strconv.ParseInt(blob.GetKey(), 10, 64)
-		log.Debug(context.TODO(), "[query node unittest] save statLog", log.Int64("fieldID", fieldID))
+		log.Debug(ctx, "[query node unittest] save statLog", log.Int64("fieldID", fieldID))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -511,7 +511,7 @@ func SaveBinLog(ctx context.Context,
 			Binlogs: []*datapb.Binlog{{LogPath: key}},
 		})
 	}
-	log.Debug(context.TODO(), "[query node unittest] save statsLog file to MinIO/S3")
+	log.Debug(ctx, "[query node unittest] save statsLog file to MinIO/S3")
 
 	err = chunkManager.MultiWrite(ctx, kvs)
 	return fieldBinlog, statsBinlog, err

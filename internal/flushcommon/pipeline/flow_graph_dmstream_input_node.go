@@ -81,12 +81,12 @@ func createNewInputFromDispatcher(initCtx context.Context,
 			SubPos:   common.SubscriptionPositionUnknown,
 		})
 		if err != nil {
-			logger.Warn(context.TODO(), "datanode consume failed after retried", log.Err(err))
+			logger.Warn(initCtx, "datanode consume failed after retried", log.Err(err))
 			dispatcherClient.Deregister(vchannel)
 			return nil, err
 		}
 
-		logger.Info(context.TODO(), "datanode seek successfully when register to msgDispatcher",
+		logger.Info(initCtx, "datanode seek successfully when register to msgDispatcher",
 			log.ByteString("msgID", seekPos.GetMsgID()),
 			log.Stringer("walName", seekPos.WALName),
 			log.Time("tsTime", tsoutil.PhysicalTime(seekPos.GetTimestamp())),
@@ -101,11 +101,11 @@ func createNewInputFromDispatcher(initCtx context.Context,
 		SubPos:   common.SubscriptionPositionEarliest,
 	})
 	if err != nil {
-		logger.Warn(context.TODO(), "datanode consume failed after retried", log.Err(err))
+		logger.Warn(initCtx, "datanode consume failed after retried", log.Err(err))
 		dispatcherClient.Deregister(vchannel)
 		return nil, err
 	}
 
-	logger.Info(context.TODO(), "datanode consume successfully when register to msgDispatcher")
+	logger.Info(initCtx, "datanode consume successfully when register to msgDispatcher")
 	return input, err
 }

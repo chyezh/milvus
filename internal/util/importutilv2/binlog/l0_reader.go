@@ -81,7 +81,7 @@ func NewL0Reader(ctx context.Context,
 		return nil, err
 	}
 	if len(deltaLogs) == 0 {
-		log.Info(context.TODO(), "no delta logs for l0 segments", log.String("prefix", path))
+		log.Info(ctx, "no delta logs for l0 segments", log.String("prefix", path))
 	}
 	r.deltaLogs = deltaLogs
 	return r, nil
@@ -121,7 +121,7 @@ func (r *l0Reader) Read() (*storage.DeleteData, error) {
 				if err == io.EOF {
 					break
 				}
-				log.Error(context.TODO(), "error on importing L0 segment, fail to read deltalogs", log.Err(err))
+				log.Error(r.ctx, "error on importing L0 segment, fail to read deltalogs", log.Err(err))
 				return nil, err
 			}
 

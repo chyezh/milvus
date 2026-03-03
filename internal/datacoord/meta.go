@@ -387,19 +387,19 @@ func (m *meta) reloadCollectionsFromRootcoord(ctx context.Context, broker broker
 // AddCollection adds a collection into meta
 // Note that collection info is just for caching and will not be set into etcd from datacoord
 func (m *meta) AddCollection(collection *collectionInfo) {
-	log.Info(context.TODO(), "meta update: add collection", log.Int64("collectionID", collection.ID))
+	log.Info(m.ctx, "meta update: add collection", log.Int64("collectionID", collection.ID))
 	m.collections.Insert(collection.ID, collection)
 	metrics.DataCoordNumCollections.WithLabelValues().Set(float64(m.collections.Len()))
-	log.Info(context.TODO(), "meta update: add collection - complete", log.Int64("collectionID", collection.ID))
+	log.Info(m.ctx, "meta update: add collection - complete", log.Int64("collectionID", collection.ID))
 }
 
 // DropCollection drop a collection from meta
 func (m *meta) DropCollection(collectionID int64) {
-	log.Info(context.TODO(), "meta update: drop collection", log.Int64("collectionID", collectionID))
+	log.Info(m.ctx, "meta update: drop collection", log.Int64("collectionID", collectionID))
 	if _, ok := m.collections.GetAndRemove(collectionID); ok {
 		metrics.CleanupDataCoordWithCollectionID(collectionID)
 		metrics.DataCoordNumCollections.WithLabelValues().Set(float64(m.collections.Len()))
-		log.Info(context.TODO(), "meta update: drop collection - complete", log.Int64("collectionID", collectionID))
+		log.Info(m.ctx, "meta update: drop collection - complete", log.Int64("collectionID", collectionID))
 	}
 }
 
@@ -539,7 +539,7 @@ func (m *meta) GetQuotaInfo() *metricsinfo.DataCoordQuotaMetrics {
 				storedBinlogSize[collIDStr][segment.GetState().String()] += segmentSize
 				binlogFileCount[collIDStr] += int64(getBinlogFileCount(segment.SegmentInfo))
 			} else {
-				log.Warn(context.TODO(), "not found database name", log.Int64("collectionID", segment.GetCollectionID()))
+				log.Warn(m.ctx, "not found database name", log.Int64("collectionID", segment.GetCollectionID()))
 			}
 
 			if _, ok := collectionRowsNum[segment.GetCollectionID()]; !ok {
@@ -714,7 +714,7 @@ func (m *meta) GetSegmentsTotalNumRows(segmentIDs []UniqueID) int64 {
 	for _, segmentID := range segmentIDs {
 		segment := m.segments.GetSegment(segmentID)
 		if segment == nil {
-			log.Warn(context.TODO(), "cannot find segment", log.Int64("segmentID", segmentID))
+			log.Warn(m.ctx, "cannot find segment", log.Int64("segmentID", segmentID))
 			continue
 		}
 		sum += segment.GetNumOfRows()
@@ -785,7 +785,7 @@ func (m *meta) UpdateSegment(segmentID int64, operators ...SegmentOperator) erro
 	defer m.segMu.Unlock()
 	info := m.segments.GetSegment(segmentID)
 	if info == nil {
-		log.Warn(context.TODO(), "meta update: UpdateSegment - segment not found",
+		log.Warn(m.ctx, "meta update: UpdateSegment - segment not found",
 			log.Int64("segmentID", segmentID))
 
 		return merr.WrapErrSegmentNotFound(segmentID)
@@ -801,14 +801,14 @@ func (m *meta) UpdateSegment(segmentID int64, operators ...SegmentOperator) erro
 	}
 
 	if !updated {
-		log.Warn(context.TODO(), "meta update:UpdateSegmnt skipped, no update",
+		log.Warn(m.ctx, "meta update:UpdateSegmnt skipped, no update",
 			log.Int64("segmentID", segmentID),
 		)
 		return nil
 	}
 
 	if err := m.catalog.AlterSegments(m.ctx, []*datapb.SegmentInfo{cloned.SegmentInfo}); err != nil {
-		log.Warn(context.TODO(), "meta update: update segment - failed to alter segments",
+		log.Warn(m.ctx, "meta update: update segment - failed to alter segments",
 			log.Int64("segmentID", segmentID),
 			log.Err(err))
 		return err
@@ -816,7 +816,7 @@ func (m *meta) UpdateSegment(segmentID int64, operators ...SegmentOperator) erro
 	// Update in-memory meta.
 	m.segments.SetSegment(segmentID, cloned)
 
-	log.Info(context.TODO(), "meta update: update segment - complete",
+	log.Info(m.ctx, "meta update: update segment - complete",
 		log.Int64("segmentID", segmentID))
 	return nil
 }
@@ -1435,7 +1435,7 @@ func (m *meta) mergeDropSegment(seg2Drop *SegmentInfo) (*SegmentInfo, *segMetric
 	segment := m.segments.GetSegment(seg2Drop.ID)
 	// healthy check makes sure the Idempotence
 	if segment == nil || !isSegmentHealthy(segment) {
-		log.Warn(context.TODO(), "UpdateDropChannel skipping nil or unhealthy", log.Bool("is nil", segment == nil),
+		log.Warn(m.ctx, "UpdateDropChannel skipping nil or unhealthy", log.Bool("is nil", segment == nil),
 			log.Bool("isHealthy", isSegmentHealthy(segment)))
 		return nil, metricMutation
 	}
@@ -1770,7 +1770,7 @@ func (m *meta) completeClusterCompactionMutation(t *datapb.CompactionTask, resul
 		// Re-validate segment health to prevent race condition with drop collection
 		// between ValidateSegmentStateBeforeCompleteCompactionMutation and here
 		if !isSegmentHealthy(segment) {
-			log.Warn(context.TODO(), "input segment was dropped during compaction mutation",
+			log.Warn(m.ctx, "input segment was dropped during compaction mutation",
 				log.Int64("planID", t.GetPlanID()),
 				log.Int64("segmentID", segmentID),
 				log.String("state", segment.GetState().String()))
@@ -1816,7 +1816,7 @@ func (m *meta) completeClusterCompactionMutation(t *datapb.CompactionTask, resul
 		metricMutation.addNewSeg(segment.GetState(), segment.GetLevel(), segment.GetIsSorted(), segment.GetStorageVersion(), segment.GetNumOfRows())
 	}
 
-	log.Debug(context.TODO(), "meta update: prepare for meta mutation - complete")
+	log.Debug(m.ctx, "meta update: prepare for meta mutation - complete")
 
 	compactToInfos := lo.Map(compactToSegInfos, func(info *SegmentInfo, _ int) *datapb.SegmentInfo {
 		return info.SegmentInfo
@@ -1828,13 +1828,13 @@ func (m *meta) completeClusterCompactionMutation(t *datapb.CompactionTask, resul
 	}
 	// only add new segments
 	if err := m.catalog.AlterSegments(m.ctx, compactToInfos, binlogs...); err != nil {
-		log.Warn(context.TODO(), "fail to alter compactTo segments", log.Err(err))
+		log.Warn(m.ctx, "fail to alter compactTo segments", log.Err(err))
 		return nil, nil, err
 	}
 	lo.ForEach(compactToSegInfos, func(info *SegmentInfo, _ int) {
 		m.segments.SetSegment(info.GetID(), info)
 	})
-	log.Info(context.TODO(), "meta update: alter in memory meta after compaction - complete")
+	log.Info(m.ctx, "meta update: alter in memory meta after compaction - complete")
 	return compactToSegInfos, metricMutation, nil
 }
 
@@ -1854,7 +1854,7 @@ func (m *meta) completeMixCompactionMutation(
 		// Re-validate segment health to prevent race condition with drop collection
 		// between ValidateSegmentStateBeforeCompleteCompactionMutation and here
 		if !isSegmentHealthy(segment) {
-			log.Warn(context.TODO(), "input segment was dropped during compaction mutation",
+			log.Warn(m.ctx, "input segment was dropped during compaction mutation",
 				log.Int64("planID", t.GetPlanID()),
 				log.Int64("segmentID", segmentID),
 				log.String("state", segment.GetState().String()))
@@ -1871,7 +1871,7 @@ func (m *meta) completeMixCompactionMutation(
 		// metrics mutation for compaction from segments
 		updateSegStateAndPrepareMetrics(cloned, commonpb.SegmentState_Dropped, metricMutation)
 
-		log.Info(context.TODO(), "compact from segment",
+		log.Info(m.ctx, "compact from segment",
 			log.Int64("segmentID", cloned.GetID()),
 			log.Int64("segment size", cloned.getSegmentSize()),
 			log.Int64("num rows", cloned.GetNumOfRows()),
@@ -1918,7 +1918,7 @@ func (m *meta) completeMixCompactionMutation(
 		// metrics mutation for compactTo segments
 		metricMutation.addNewSeg(compactToSegmentInfo.GetState(), compactToSegmentInfo.GetLevel(), compactToSegmentInfo.GetIsSorted(), compactToSegmentInfo.GetStorageVersion(), compactToSegmentInfo.GetNumOfRows())
 
-		log.Info(context.TODO(), "Add a new compactTo segment",
+		log.Info(m.ctx, "Add a new compactTo segment",
 			log.Int64("compactTo", compactToSegmentInfo.GetID()),
 			log.Int64("compactTo segment numRows", compactToSegmentInfo.GetNumOfRows()),
 			log.Int("binlog count", len(compactToSegmentInfo.GetBinlogs())),
@@ -1930,7 +1930,7 @@ func (m *meta) completeMixCompactionMutation(
 		compactToSegments = append(compactToSegments, compactToSegmentInfo)
 	}
 
-	log.Debug(context.TODO(), "meta update: prepare for meta mutation - complete")
+	log.Debug(m.ctx, "meta update: prepare for meta mutation - complete")
 	compactFromInfos := lo.Map(compactFromSegInfos, func(info *SegmentInfo, _ int) *datapb.SegmentInfo {
 		return info.SegmentInfo
 	})
@@ -1946,11 +1946,11 @@ func (m *meta) completeMixCompactionMutation(
 
 	// alter compactTo before compactFrom segments to avoid data lost if service crash during AlterSegments
 	if err := m.catalog.AlterSegments(m.ctx, compactToInfos, binlogs...); err != nil {
-		log.Warn(context.TODO(), "fail to alter compactTo segments", log.Err(err))
+		log.Warn(m.ctx, "fail to alter compactTo segments", log.Err(err))
 		return nil, nil, err
 	}
 	if err := m.catalog.AlterSegments(m.ctx, compactFromInfos); err != nil {
-		log.Warn(context.TODO(), "fail to alter compactFrom segments", log.Err(err))
+		log.Warn(m.ctx, "fail to alter compactFrom segments", log.Err(err))
 		return nil, nil, err
 	}
 	lo.ForEach(compactFromSegInfos, func(info *SegmentInfo, _ int) {
@@ -1960,7 +1960,7 @@ func (m *meta) completeMixCompactionMutation(
 		m.segments.SetSegment(info.GetID(), info)
 	})
 
-	log.Info(context.TODO(), "meta update: alter in memory meta after compaction - complete")
+	log.Info(m.ctx, "meta update: alter in memory meta after compaction - complete")
 	return compactToSegments, metricMutation, nil
 }
 
@@ -1974,7 +1974,7 @@ func (m *meta) ValidateSegmentStateBeforeCompleteCompactionMutation(t *datapb.Co
 			// SHOULD NOT HAPPEN: input segment was dropped.
 			// This indicates that compaction tasks, which should be mutually exclusive,
 			// may have executed concurrently.
-			log.Warn(context.TODO(), "should not happen! input segment was dropped",
+			log.Warn(m.ctx, "should not happen! input segment was dropped",
 				log.Int64("planID", t.GetPlanID()),
 				log.String("type", t.GetType().String()),
 				log.String("channel", t.GetChannel()),
@@ -2143,7 +2143,7 @@ func (m *meta) DropChannelCheckpoint(vChannel string) error {
 	}
 	delete(m.channelCPs.checkpoints, vChannel)
 	metrics.DataCoordCheckpointUnixSeconds.DeleteLabelValues(paramtable.GetStringNodeID(), vChannel)
-	log.Info(context.TODO(), "DropChannelCheckpoint done", log.String("vChannel", vChannel))
+	log.Info(m.ctx, "DropChannelCheckpoint done", log.String("vChannel", vChannel))
 	return nil
 }
 
@@ -2366,7 +2366,7 @@ func (m *meta) completeSortCompactionMutation(
 	// Re-validate segment health to prevent race condition with drop collection
 	// between ValidateSegmentStateBeforeCompleteCompactionMutation and here
 	if !isSegmentHealthy(oldSegment) {
-		log.Warn(context.TODO(), "input segment was dropped during compaction mutation",
+		log.Warn(m.ctx, "input segment was dropped during compaction mutation",
 			log.Int64("planID", t.GetPlanID()),
 			log.Int64("segmentID", compactFromSegID),
 			log.String("state", oldSegment.GetState().String()))
@@ -2416,7 +2416,7 @@ func (m *meta) completeSortCompactionMutation(
 	} else {
 		segment.State = commonpb.SegmentState_Dropped
 		segment.DroppedAt = uint64(time.Now().UnixNano())
-		log.Info(context.TODO(), "drop segment due to 0 rows", log.Int64("segmentID", segment.GetID()))
+		log.Info(m.ctx, "drop segment due to 0 rows", log.Int64("segmentID", segment.GetID()))
 	}
 
 	cloned := oldSegment.Clone()
@@ -2425,18 +2425,18 @@ func (m *meta) completeSortCompactionMutation(
 
 	updateSegStateAndPrepareMetrics(cloned, commonpb.SegmentState_Dropped, metricMutation)
 
-	log.Info(context.TODO(), "meta update: prepare for complete stats mutation - complete",
+	log.Info(m.ctx, "meta update: prepare for complete stats mutation - complete",
 		log.Int64("num rows", segment.GetNumOfRows()),
 		log.Int64("segment size", segment.getSegmentSize()),
 		log.Int64s("expirQuantiles", segment.GetExpirQuantiles()))
 	if err := m.catalog.AlterSegments(m.ctx, []*datapb.SegmentInfo{cloned.SegmentInfo, segment.SegmentInfo}, metastore.BinlogsIncrement{Segment: segment.SegmentInfo}); err != nil {
-		log.Warn(context.TODO(), "fail to alter segments and new segment", log.Err(err))
+		log.Warn(m.ctx, "fail to alter segments and new segment", log.Err(err))
 		return nil, nil, err
 	}
 
 	m.segments.SetSegment(oldSegment.GetID(), cloned)
 	m.segments.SetSegment(segment.GetID(), segment)
-	log.Info(context.TODO(), "meta update: alter in memory meta after compaction - complete")
+	log.Info(m.ctx, "meta update: alter in memory meta after compaction - complete")
 	return []*SegmentInfo{segment}, metricMutation, nil
 }
 

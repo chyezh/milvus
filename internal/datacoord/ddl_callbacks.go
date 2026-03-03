@@ -143,7 +143,7 @@ func (s *Server) startBroadcastRestoreSnapshot(
 	}
 	dbName := coll.GetDbName()
 	collectionName := coll.GetCollectionName()
-	log.Info(context.TODO(), "collection validated",
+	log.Info(ctx, "collection validated",
 		log.String("dbName", dbName),
 		log.String("collectionName", collectionName))
 
@@ -166,7 +166,7 @@ func (s *Server) startBroadcastRestoreSnapshot(
 				partName, collectionID)
 		}
 	}
-	log.Info(context.TODO(), "partitions validated", log.Int("count", len(existingPartitions)))
+	log.Info(ctx, "partitions validated", log.Int("count", len(existingPartitions)))
 
 	// ========== Validate Indexes Exist ==========
 	for _, indexInfo := range snapshotData.Indexes {
@@ -185,7 +185,7 @@ func (s *Server) startBroadcastRestoreSnapshot(
 				indexInfo.GetIndexName(), indexInfo.GetFieldID(), collectionID)
 		}
 	}
-	log.Info(context.TODO(), "indexes validated", log.Int("count", len(snapshotData.Indexes)))
+	log.Info(ctx, "indexes validated", log.Int("count", len(snapshotData.Indexes)))
 
 	// ========== Start Broadcast ==========
 	b, err := broadcast.StartBroadcastWithResourceKeys(
@@ -198,6 +198,6 @@ func (s *Server) startBroadcastRestoreSnapshot(
 		return nil, err
 	}
 
-	log.Info(context.TODO(), "broadcast started for restore snapshot")
+	log.Info(ctx, "broadcast started for restore snapshot")
 	return b, nil
 }

@@ -62,7 +62,7 @@ func (psm *partitionStatsMeta) reloadFromKV() error {
 		}
 		psm.partitionStatsInfos[info.GetVChannel()][info.GetPartitionID()].infos[info.GetVersion()] = info
 	}
-	log.Info(context.TODO(), "DataCoord partitionStatsMeta reloadFromKV done", log.Duration("duration", record.ElapseSpan()))
+	log.Info(psm.ctx, "DataCoord partitionStatsMeta reloadFromKV done", log.Duration("duration", record.ElapseSpan()))
 	return nil
 }
 
@@ -106,7 +106,7 @@ func (psm *partitionStatsMeta) SavePartitionStatsInfo(info *datapb.PartitionStat
 	psm.Lock()
 	defer psm.Unlock()
 	if err := psm.catalog.SavePartitionStatsInfo(context.TODO(), info); err != nil {
-		log.Error(context.TODO(), "meta update: update PartitionStatsInfo info fail", log.Err(err))
+		log.Error(psm.ctx, "meta update: update PartitionStatsInfo info fail", log.Err(err))
 		return err
 	}
 	if _, ok := psm.partitionStatsInfos[info.GetVChannel()]; !ok {
@@ -175,7 +175,7 @@ func (psm *partitionStatsMeta) SaveCurrentPartitionStatsVersion(collectionID, pa
 }
 
 func (psm *partitionStatsMeta) innerSaveCurrentPartitionStatsVersion(collectionID, partitionID int64, vChannel string, currentPartitionStatsVersion int64) error {
-	log.Info(context.TODO(), "update current partition stats version", log.Int64("collectionID", collectionID),
+	log.Info(psm.ctx, "update current partition stats version", log.Int64("collectionID", collectionID),
 		log.Int64("partitionID", partitionID),
 		log.String("vChannel", vChannel), log.Int64("currentPartitionStatsVersion", currentPartitionStatsVersion))
 

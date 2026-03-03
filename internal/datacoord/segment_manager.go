@@ -312,7 +312,7 @@ func (s *SegmentManager) AllocSegment(ctx context.Context, collectionID UniqueID
 	growing.Range(func(segmentID int64) bool {
 		segment := s.meta.GetHealthySegment(ctx, segmentID)
 		if segment == nil {
-			log.Warn(context.TODO(), "failed to get segment, remove it", log.String("channel", channelName), log.Int64("segmentID", segmentID))
+			log.Warn(ctx, "failed to get segment, remove it", log.String("channel", channelName), log.Int64("segmentID", segmentID))
 			growing.Remove(segmentID)
 			return true
 		}
@@ -339,7 +339,7 @@ func (s *SegmentManager) AllocSegment(ctx context.Context, collectionID UniqueID
 	for _, allocation := range newSegmentAllocations {
 		segment, err := s.openNewSegment(ctx, collectionID, partitionID, channelName, storageVersion)
 		if err != nil {
-			log.Error(context.TODO(), "Failed to open new segment for segment allocation")
+			log.Error(ctx, "Failed to open new segment for segment allocation")
 			return nil, err
 		}
 		allocation.ExpireTime = expireTs
@@ -352,7 +352,7 @@ func (s *SegmentManager) AllocSegment(ctx context.Context, collectionID UniqueID
 	for _, allocation := range existedSegmentAllocations {
 		allocation.ExpireTime = expireTs
 		if err := s.meta.AddAllocation(allocation.SegmentID, allocation); err != nil {
-			log.Error(context.TODO(), "Failed to add allocation to existed segment", log.Int64("segmentID", allocation.SegmentID))
+			log.Error(ctx, "Failed to add allocation to existed segment", log.Int64("segmentID", allocation.SegmentID))
 			return nil, err
 		}
 	}

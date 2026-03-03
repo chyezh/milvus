@@ -153,11 +153,11 @@ func (node *DataNode) SetMixCoordClient(mixc types.MixCoordClient) error {
 
 // Register register datanode to etcd
 func (node *DataNode) Register() error {
-	log.Debug(context.TODO(), "node begin to register to etcd", log.String("serverName", node.session.ServerName), log.Int64("ServerID", node.session.ServerID))
+	log.Debug(node.ctx, "node begin to register to etcd", log.String("serverName", node.session.ServerName), log.Int64("ServerID", node.session.ServerID))
 	node.session.Register()
 
 	metrics.NumNodes.WithLabelValues(fmt.Sprint(node.GetNodeID()), typeutil.DataNodeRole).Inc()
-	log.Info(context.TODO(), "DataNode Register Finished")
+	log.Info(node.ctx, "DataNode Register Finished")
 	return nil
 }
 
@@ -184,13 +184,13 @@ func (node *DataNode) Init() error {
 		node.registerMetricsRequest()
 		log.Info(node.ctx, "DataNode server initializing")
 		if err := node.initSession(); err != nil {
-			log.Error(context.TODO(), "DataNode server init session failed", log.Err(err))
+			log.Error(node.ctx, "DataNode server init session failed", log.Err(err))
 			initError = err
 			return
 		}
 
 		serverID := node.GetNodeID()
-		log.Info(context.TODO(), "DataNode server init succeeded")
+		log.Info(node.ctx, "DataNode server init succeeded")
 
 		syncMgr := syncmgr.NewSyncManager(nil)
 		node.syncMgr = syncMgr
@@ -199,7 +199,7 @@ func (node *DataNode) Init() error {
 		if fileMode == fileresource.SyncMode {
 			cm, err := node.storageFactory.NewChunkManager(node.ctx, compaction.CreateStorageConfig())
 			if err != nil {
-				log.Error(context.TODO(), "Init chunk manager for file resource manager failed", log.Err(err))
+				log.Error(node.ctx, "Init chunk manager for file resource manager failed", log.Err(err))
 				initError = err
 				return
 			}
@@ -217,7 +217,7 @@ func (node *DataNode) Init() error {
 		}
 
 		analyzer.InitOptions()
-		log.Info(context.TODO(), "init datanode done", log.String("Address", node.address))
+		log.Info(node.ctx, "init datanode done", log.String("Address", node.address))
 	})
 	return initError
 }
@@ -250,7 +250,7 @@ func (node *DataNode) Start() error {
 		}
 
 		node.UpdateStateCode(commonpb.StateCode_Healthy)
-		log.Info(context.TODO(), "datanode start successfully")
+		log.Info(node.ctx, "datanode start successfully")
 	})
 	return startErr
 }
@@ -287,7 +287,7 @@ func (node *DataNode) Stop() error {
 		if node.syncMgr != nil {
 			err := node.syncMgr.Close()
 			if err != nil {
-				log.Error(context.TODO(), "sync manager close failed", log.Err(err))
+				log.Error(node.ctx, "sync manager close failed", log.Err(err))
 			}
 		}
 

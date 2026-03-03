@@ -105,11 +105,11 @@ func (si *statsInspector) reloadFromMeta() {
 			continue
 		}
 		if si.isExternalCollection(st.GetCollectionID()) {
-			log.Info(context.TODO(), "skip reloading stats task for external collection",
+			log.Info(si.ctx, "skip reloading stats task for external collection",
 				log.Int64("taskID", st.GetTaskID()),
 				log.Int64("collectionID", st.GetCollectionID()))
 			if err := si.mt.statsTaskMeta.MarkTaskCanRecycle(st.GetTaskID()); err != nil {
-				log.Warn(context.TODO(), "mark stats task can recycle failed",
+				log.Warn(si.ctx, "mark stats task can recycle failed",
 					log.Int64("taskID", st.GetTaskID()),
 					log.Err(err))
 			}
@@ -132,7 +132,7 @@ func (si *statsInspector) reloadFromMeta() {
 }
 
 func (si *statsInspector) triggerStatsTaskLoop() {
-	log.Info(context.TODO(), "start checkStatsTaskLoop...")
+	log.Info(si.ctx, "start checkStatsTaskLoop...")
 	defer si.loopWg.Done()
 
 	ticker := time.NewTicker(Params.DataCoordCfg.TaskCheckInterval.GetAsDuration(time.Second))
@@ -143,7 +143,7 @@ func (si *statsInspector) triggerStatsTaskLoop() {
 	for {
 		select {
 		case <-si.ctx.Done():
-			log.Warn(context.TODO(), "DataCoord context done, exit checkStatsTaskLoop...")
+			log.Warn(si.ctx, "DataCoord context done, exit checkStatsTaskLoop...")
 			return
 		case <-ticker.C:
 			si.triggerTextStatsTask()
@@ -225,14 +225,14 @@ func (si *statsInspector) triggerTextStatsTask() {
 		if fileresource.IsRefMode(paramtable.Get().CommonCfg.DNFileResourceMode.GetValue()) && len(collection.Schema.GetFileResourceIds()) > 0 {
 			resources, err = si.mt.GetFileResources(si.ctx, collection.Schema.GetFileResourceIds()...)
 			if err != nil {
-				log.Warn(context.TODO(), "get file resources for collection failed, wait for retry", log.Int64("collectionID", collection.ID), log.Err(err))
+				log.Warn(si.ctx, "get file resources for collection failed, wait for retry", log.Int64("collectionID", collection.ID), log.Err(err))
 				continue
 			}
 		}
 
 		for _, segment := range segments {
 			if err := si.SubmitStatsTask(segment.GetID(), segment.GetID(), indexpb.StatsSubJob_TextIndexJob, true, resources); err != nil {
-				log.Warn(context.TODO(), "create stats task with text index for segment failed, wait for retry",
+				log.Warn(si.ctx, "create stats task with text index for segment failed, wait for retry",
 					log.Int64("segmentID", segment.GetID()), log.Err(err))
 				continue
 			}
@@ -265,7 +265,7 @@ func (si *statsInspector) triggerJsonKeyIndexStatsTask(lastJSONStatsLastTrigger 
 				break
 			}
 			if err := si.SubmitStatsTask(segment.GetID(), segment.GetID(), indexpb.StatsSubJob_JsonKeyIndexJob, true, nil); err != nil {
-				log.Warn(context.TODO(), "create stats task with json key index for segment failed, wait for retry:",
+				log.Warn(si.ctx, "create stats task with json key index for segment failed, wait for retry:",
 					log.Int64("segmentID", segment.GetID()), log.Err(err))
 				continue
 			}
@@ -294,7 +294,7 @@ func (si *statsInspector) triggerBM25StatsTask() {
 
 		for _, segment := range segments {
 			if err := si.SubmitStatsTask(segment.GetID(), segment.GetID(), indexpb.StatsSubJob_BM25Job, true, nil); err != nil {
-				log.Warn(context.TODO(), "create stats task with bm25 for segment failed, wait for retry",
+				log.Warn(si.ctx, "create stats task with bm25 for segment failed, wait for retry",
 					log.Int64("segmentID", segment.GetID()), log.Err(err))
 				continue
 			}
@@ -304,7 +304,7 @@ func (si *statsInspector) triggerBM25StatsTask() {
 
 // cleanupStatsTasks clean up the finished/failed stats tasks
 func (si *statsInspector) cleanupStatsTasksLoop() {
-	log.Info(context.TODO(), "start cleanupStatsTasksLoop...")
+	log.Info(si.ctx, "start cleanupStatsTasksLoop...")
 	defer si.loopWg.Done()
 
 	ticker := time.NewTicker(Params.DataCoordCfg.GCInterval.GetAsDuration(time.Second))
@@ -313,20 +313,20 @@ func (si *statsInspector) cleanupStatsTasksLoop() {
 	for {
 		select {
 		case <-si.ctx.Done():
-			log.Warn(context.TODO(), "DataCoord context done, exit cleanupStatsTasksLoop...")
+			log.Warn(si.ctx, "DataCoord context done, exit cleanupStatsTasksLoop...")
 			return
 		case <-ticker.C:
 			start := time.Now()
-			log.Info(context.TODO(), "start cleanupUnusedStatsTasks...", log.Time("startAt", start))
+			log.Info(si.ctx, "start cleanupUnusedStatsTasks...", log.Time("startAt", start))
 
 			taskIDs := si.mt.statsTaskMeta.CanCleanedTasks()
 			for _, taskID := range taskIDs {
 				if err := si.mt.statsTaskMeta.DropStatsTask(si.ctx, taskID); err != nil {
 					// ignore err, if remove failed, wait next GC
-					log.Warn(context.TODO(), "clean up stats task failed", log.Int64("taskID", taskID), log.Err(err))
+					log.Warn(si.ctx, "clean up stats task failed", log.Int64("taskID", taskID), log.Err(err))
 				}
 			}
-			log.Info(context.TODO(), "cleanupUnusedStatsTasks done", log.Duration("timeCost", time.Since(start)))
+			log.Info(si.ctx, "cleanupUnusedStatsTasks done", log.Duration("timeCost", time.Since(start)))
 		}
 	}
 }
@@ -373,7 +373,7 @@ func (si *statsInspector) SubmitStatsTask(originSegmentID, targetSegmentID int64
 	}
 	if err = si.mt.statsTaskMeta.AddStatsTask(t); err != nil {
 		if errors.Is(err, merr.ErrTaskDuplicate) {
-			log.RatedInfo(context.TODO(), log.RateDefault, "stats task already exists", log.Int64("taskID", taskID),
+			log.RatedInfo(si.ctx, log.RateDefault, "stats task already exists", log.Int64("taskID", taskID),
 				log.Int64("collectionID", originSegment.GetCollectionID()),
 				log.Int64("segmentID", originSegment.GetID()))
 			return nil
@@ -391,7 +391,7 @@ func (si *statsInspector) SubmitStatsTask(originSegmentID, targetSegmentID int64
 
 func (si *statsInspector) GetStatsTask(originSegmentID int64, subJobType indexpb.StatsSubJob) *indexpb.StatsTask {
 	task := si.mt.statsTaskMeta.GetStatsTaskBySegmentID(originSegmentID, subJobType)
-	log.Info(context.TODO(), "statsJobManager get stats task state", log.Int64("segmentID", originSegmentID),
+	log.Info(si.ctx, "statsJobManager get stats task state", log.Int64("segmentID", originSegmentID),
 		log.String("subJobType", subJobType.String()), log.String("state", task.GetState().String()),
 		log.String("failReason", task.GetFailReason()))
 	return task
@@ -407,7 +407,7 @@ func (si *statsInspector) DropStatsTask(originSegmentID int64, subJobType indexp
 		return err
 	}
 
-	log.Info(context.TODO(), "statsJobManager drop stats task success", log.Int64("segmentID", originSegmentID),
+	log.Info(si.ctx, "statsJobManager drop stats task success", log.Int64("segmentID", originSegmentID),
 		log.Int64("taskID", task.GetTaskID()), log.String("subJobType", subJobType.String()))
 	return nil
 }

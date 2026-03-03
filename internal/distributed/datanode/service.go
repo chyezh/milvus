@@ -231,13 +231,13 @@ func (s *Server) init() error {
 		etcdConfig.EtcdTLSMinVersion.GetValue(),
 		etcdConfig.ClientOptions()...)
 	if err != nil {
-		log.Error(context.TODO(), "failed to connect to etcd", log.Err(err))
+		log.Error(s.ctx, "failed to connect to etcd", log.Err(err))
 		return err
 	}
 	s.etcdCli = etcdCli
 	s.SetEtcdClient(s.etcdCli)
 	s.datanode.SetAddress(s.listener.Address())
-	log.Info(context.TODO(), "DataNode address", log.String("address", s.listener.Address()))
+	log.Info(s.ctx, "DataNode address", log.String("address", s.listener.Address()))
 
 	err = s.startGrpc()
 	if err != nil {
@@ -247,10 +247,10 @@ func (s *Server) init() error {
 	s.datanode.UpdateStateCode(commonpb.StateCode_Initializing)
 
 	if err := s.datanode.Init(); err != nil {
-		log.Error(context.TODO(), "failed to init DataNode server", log.Err(err))
+		log.Error(s.ctx, "failed to init DataNode server", log.Err(err))
 		return err
 	}
-	log.Info(context.TODO(), "current DataNode state", log.Any("state", s.datanode.GetStateCode()))
+	log.Info(s.ctx, "current DataNode state", log.Any("state", s.datanode.GetStateCode()))
 	return nil
 }
 

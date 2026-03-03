@@ -277,10 +277,10 @@ func (node *QueryNode) Init() error {
 	node.initOnce.Do(func() {
 		node.registerMetricsRequest()
 		// ctx := context.Background()
-		log.Info(context.TODO(), "QueryNode session info", log.String("metaPath", paramtable.Get().EtcdCfg.MetaRootPath.GetValue()))
+		log.Info(node.ctx, "QueryNode session info", log.String("metaPath", paramtable.Get().EtcdCfg.MetaRootPath.GetValue()))
 		err := node.initSession()
 		if err != nil {
-			log.Error(context.TODO(), "QueryNode init session failed", log.Err(err))
+			log.Error(node.ctx, "QueryNode init session failed", log.Err(err))
 			initError = err
 			return
 		}
@@ -289,7 +289,7 @@ func (node *QueryNode) Init() error {
 		if err != nil {
 			// auto index cannot work if hook init failed
 			if paramtable.Get().AutoIndexConfig.Enable.GetAsBool() {
-				log.Error(context.TODO(), "QueryNode init hook failed", log.Err(err))
+				log.Error(node.ctx, "QueryNode init hook failed", log.Err(err))
 				initError = err
 				return
 			}
@@ -302,7 +302,7 @@ func (node *QueryNode) Init() error {
 		localRootPath := paramtable.Get().LocalStorageCfg.Path.GetValue()
 		localUsedSize, err := segcore.GetLocalUsedSize(localRootPath)
 		if err != nil {
-			log.Warn(context.TODO(), "get local used size failed", log.Err(err))
+			log.Warn(node.ctx, "get local used size failed", log.Err(err))
 			initError = err
 			return
 		}
@@ -310,7 +310,7 @@ func (node *QueryNode) Init() error {
 
 		node.chunkManager, err = node.factory.NewPersistentStorageChunkManager(node.ctx)
 		if err != nil {
-			log.Error(context.TODO(), "QueryNode init vector storage failed", log.Err(err))
+			log.Error(node.ctx, "QueryNode init vector storage failed", log.Err(err))
 			initError = err
 			return
 		}
@@ -320,7 +320,7 @@ func (node *QueryNode) Init() error {
 			schedulePolicy,
 		)
 
-		log.Info(context.TODO(), "queryNode init scheduler", log.String("policy", schedulePolicy))
+		log.Info(node.ctx, "queryNode init scheduler", log.String("policy", schedulePolicy))
 		node.clusterManager = cluster.NewWorkerManager(func(ctx context.Context, nodeID int64) (cluster.Worker, error) {
 			if nodeID == node.GetNodeID() {
 				return NewLocalWorker(node), nil
@@ -357,13 +357,13 @@ func (node *QueryNode) Init() error {
 
 		err = initcore.InitQueryNode(node.ctx)
 		if err != nil {
-			log.Error(context.TODO(), "QueryNode init segcore failed", log.Err(err))
+			log.Error(node.ctx, "QueryNode init segcore failed", log.Err(err))
 			initError = err
 			return
 		}
 		node.RegisterSegcoreConfigWatcher()
 
-		log.Info(context.TODO(), "query node init successfully",
+		log.Info(node.ctx, "query node init successfully",
 			log.Int64("queryNodeID", node.GetNodeID()),
 			log.String("Address", node.address),
 		)
@@ -389,7 +389,7 @@ func (node *QueryNode) Start() error {
 		node.UpdateStateCode(commonpb.StateCode_Healthy)
 
 		registry.GetInMemoryResolver().RegisterQueryNode(node.GetNodeID(), node)
-		log.Info(context.TODO(), "query node start successfully",
+		log.Info(node.ctx, "query node start successfully",
 			log.Int64("queryNodeID", node.GetNodeID()),
 			log.String("Address", node.address),
 			log.Bool("mmapEnabled", mmapEnabled),
@@ -407,10 +407,10 @@ func (node *QueryNode) Start() error {
 // Stop mainly stop QueryNode's query service, historical loop and streaming loop.
 func (node *QueryNode) Stop() error {
 	node.stopOnce.Do(func() {
-		log.Info(context.TODO(), "Query node stop...")
+		log.Info(node.ctx, "Query node stop...")
 		err := node.session.GoingStop()
 		if err != nil {
-			log.Warn(context.TODO(), "session fail to go stopping state", log.Err(err))
+			log.Warn(node.ctx, "session fail to go stopping state", log.Err(err))
 		} else if util.MustSelectWALName() != message.WALNameRocksmq { // rocksmq cannot support querynode graceful stop because of using local storage.
 			metrics.StoppingBalanceNodeNum.WithLabelValues().Set(1)
 			// TODO: Redundant timeout control, graceful stop timeout is controlled by outside by `component`.
@@ -438,7 +438,7 @@ func (node *QueryNode) Stop() error {
 
 				select {
 				case <-timeoutCh:
-					log.Warn(context.TODO(), "migrate data timed out", log.Int64("ServerID", node.GetNodeID()),
+					log.Warn(node.ctx, "migrate data timed out", log.Int64("ServerID", node.GetNodeID()),
 						log.Int64s("sealedSegments", lo.Map(sealedSegments, func(s segments.Segment, i int) int64 {
 							return s.ID()
 						})),
@@ -451,7 +451,7 @@ func (node *QueryNode) Stop() error {
 				case <-time.After(time.Second):
 					metrics.StoppingBalanceSegmentNum.WithLabelValues(fmt.Sprint(node.GetNodeID())).Set(float64(len(sealedSegments)))
 					metrics.StoppingBalanceChannelNum.WithLabelValues(fmt.Sprint(node.GetNodeID())).Set(float64(channelNum))
-					log.Info(context.TODO(), "migrate data...", log.Int64("ServerID", node.GetNodeID()),
+					log.Info(node.ctx, "migrate data...", log.Int64("ServerID", node.GetNodeID()),
 						log.Int64s("sealedSegments", lo.Map(sealedSegments, func(s segments.Segment, i int) int64 {
 							return s.ID()
 						})),
@@ -519,7 +519,7 @@ func (node *QueryNode) initHook() error {
 	if path == "" {
 		return errors.New("fail to set the plugin path")
 	}
-	log.Info(context.TODO(), "start to load plugin", log.String("path", path))
+	log.Info(node.ctx, "start to load plugin", log.String("path", path))
 
 	hookutil.LockHookInit()
 	defer hookutil.UnlockHookInit()
@@ -527,7 +527,7 @@ func (node *QueryNode) initHook() error {
 	if err != nil {
 		return fmt.Errorf("fail to open the plugin, error: %s", err.Error())
 	}
-	log.Info(context.TODO(), "plugin open")
+	log.Info(node.ctx, "plugin open")
 
 	h, err := p.Lookup("QueryNodePlugin")
 	if err != nil {
@@ -555,7 +555,7 @@ func (node *QueryNode) handleQueryHookEvent() {
 	onEvent := func(event *config.Event) {
 		if node.queryHook != nil {
 			if err := node.queryHook.Init(event.Value); err != nil {
-				log.Error(context.TODO(), "failed to refresh hook config", log.Err(err))
+				log.Error(node.ctx, "failed to refresh hook config", log.Err(err))
 			}
 		}
 	}
@@ -564,11 +564,11 @@ func (node *QueryNode) handleQueryHookEvent() {
 			realKey := strings.TrimPrefix(event.Key, paramtable.Get().AutoIndexConfig.AutoIndexTuningConfig.KeyPrefix)
 			if event.EventType == config.CreateType || event.EventType == config.UpdateType {
 				if err := node.queryHook.InitTuningConfig(map[string]string{realKey: event.Value}); err != nil {
-					log.Warn(context.TODO(), "failed to refresh hook tuning config", log.Err(err))
+					log.Warn(node.ctx, "failed to refresh hook tuning config", log.Err(err))
 				}
 			} else if event.EventType == config.DeleteType {
 				if err := node.queryHook.DeleteTuningConfig(realKey); err != nil {
-					log.Warn(context.TODO(), "failed to delete hook tuning config", log.Err(err))
+					log.Warn(node.ctx, "failed to delete hook tuning config", log.Err(err))
 				}
 			}
 		}

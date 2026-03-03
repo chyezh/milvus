@@ -98,7 +98,7 @@ func (csm *compactionTaskMeta) reloadFromKV() error {
 		if !isCompactionTaskFinished(task) &&
 			task.PreAllocatedSegmentIDs == nil &&
 			task.GetType() != datapb.CompactionType_Level0DeleteCompaction {
-			log.Warn(context.TODO(), "PreAllocatedSegmentIDs is nil, mark the task as failed",
+			log.Warn(csm.ctx, "PreAllocatedSegmentIDs is nil, mark the task as failed",
 				log.Int64("taskID", task.GetPlanID()),
 				log.String("type", task.GetType().String()),
 				log.String("originalState", task.State.String()),
@@ -108,7 +108,7 @@ func (csm *compactionTaskMeta) reloadFromKV() error {
 		}
 		csm.saveCompactionTaskMemory(task)
 	}
-	log.Info(context.TODO(), "DataCoord compactionTaskMeta reloadFromKV done", log.Duration("duration", record.ElapseSpan()))
+	log.Info(csm.ctx, "DataCoord compactionTaskMeta reloadFromKV done", log.Duration("duration", record.ElapseSpan()))
 	return nil
 }
 

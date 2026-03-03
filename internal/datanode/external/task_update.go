@@ -293,7 +293,7 @@ func (t *UpdateExternalTask) organizeSegments(
 		for _, f := range fragments {
 			if _, exists := newFragmentMap[f.FragmentID]; !exists {
 				allFragmentsExist = false
-				log.Info(context.TODO(), "Fragment removed from segment",
+				log.Info(ctx, "Fragment removed from segment",
 					log.Int64("segmentID", seg.GetID()),
 					log.Int64("fragmentID", f.FragmentID))
 				break
@@ -311,11 +311,11 @@ func (t *UpdateExternalTask) organizeSegments(
 			}
 			// Compute row mapping for kept segment
 			t.segmentMappings[seg.GetID()] = NewSegmentRowMapping(seg.GetID(), fragments)
-			log.Debug(context.TODO(), "Segment kept unchanged",
+			log.Debug(ctx, "Segment kept unchanged",
 				log.Int64("segmentID", seg.GetID()))
 		} else {
 			// Segment invalidated - its remaining fragments become orphans
-			log.Info(context.TODO(), "Segment invalidated due to removed fragments",
+			log.Info(ctx, "Segment invalidated due to removed fragments",
 				log.Int64("segmentID", seg.GetID()))
 		}
 	}
@@ -340,7 +340,7 @@ func (t *UpdateExternalTask) organizeSegments(
 	// Combine kept and new segments
 	result := append(keptSegments, newSegments...)
 
-	log.Info(context.TODO(), "Segment organization complete",
+	log.Info(ctx, "Segment organization complete",
 		log.Int("keptSegments", len(keptSegments)),
 		log.Int("newSegments", len(newSegments)),
 		log.Int("totalSegments", len(result)))

@@ -64,23 +64,23 @@ func (bw *BulkPackWriterV3) Write(ctx context.Context, pack *SyncPack) (
 ) {
 
 	if inserts, manifest, err = bw.writeInserts(ctx, pack); err != nil {
-		log.Error(context.TODO(), "failed to write insert data", log.Err(err))
+		log.Error(ctx, "failed to write insert data", log.Err(err))
 		return
 	}
 	// Update manifestPath after writeInserts
 	bw.manifestPath = manifest
 
 	if stats, err = bw.writeStats(ctx, pack); err != nil {
-		log.Error(context.TODO(), "failed to process stats blob", log.Err(err))
+		log.Error(ctx, "failed to process stats blob", log.Err(err))
 		return
 	}
 	// writeDelta for V3 updates manifest and returns nil FieldBinlog
 	if manifest, err = bw.writeDelta(ctx, pack); err != nil {
-		log.Error(context.TODO(), "failed to process delta blob", log.Err(err))
+		log.Error(ctx, "failed to process delta blob", log.Err(err))
 		return
 	}
 	if bm25Stats, err = bw.writeBM25Stasts(ctx, pack); err != nil {
-		log.Error(context.TODO(), "failed to process bm25 stats blob", log.Err(err))
+		log.Error(ctx, "failed to process bm25 stats blob", log.Err(err))
 		return
 	}
 
@@ -137,7 +137,7 @@ func (bw *BulkPackWriterV3) writeInsertsIntoStorage(ctx context.Context,
 	doWrite := func(w storage.RecordWriter) error {
 		if err = w.Write(rec); err != nil {
 			if closeErr := w.Close(); closeErr != nil {
-				log.Error(context.TODO(), "failed to close writer after write failed", log.Err(closeErr))
+				log.Error(ctx, "failed to close writer after write failed", log.Err(closeErr))
 			}
 			return err
 		}

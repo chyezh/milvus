@@ -1453,7 +1453,7 @@ func ReadData[T any, E interface {
 		defer cancel()
 		columnReader, err := fileReader.GetColumn(newCtx, i)
 		if err != nil {
-			log.Warn(context.TODO(), "get column reader failed", log.String("fieldName", field.Name), log.Err(err))
+			log.Warn(newCtx, "get column reader failed", log.String("fieldName", field.Name), log.Err(err))
 			return -1, err
 		}
 		chunked, err := columnReader.NextBatch(numRows)
@@ -1464,7 +1464,7 @@ func ReadData[T any, E interface {
 			dataNums := chunk.Data().Len()
 			reader, ok := chunk.(E)
 			if !ok {
-				log.Warn(context.TODO(), "the column data in parquet is not equal to field", log.String("fieldName", field.Name), log.String("actual type", chunk.DataType().Name()))
+				log.Warn(newCtx, "the column data in parquet is not equal to field", log.String("fieldName", field.Name), log.String("actual type", chunk.DataType().Name()))
 				return -1, merr.WrapErrImportFailed(fmt.Sprintf("the column data in parquet is not equal to field: %s, but: %s", field.Name, chunk.DataType().Name()))
 			}
 			nullBitset := bytesToBoolArray(dataNums, reader.NullBitmapBytes())

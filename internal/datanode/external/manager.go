@@ -127,7 +127,7 @@ func (m *ExternalCollectionManager) Close() {
 		if m.pool != nil {
 			m.pool.Release()
 		}
-		log.Info(context.TODO(), "external collection manager closed")
+		log.Info(m.ctx, "external collection manager closed")
 	})
 }
 
@@ -238,7 +238,7 @@ func (m *ExternalCollectionManager) SubmitTask(
 	// Submit to pool
 	m.pool.Submit(func() (any, error) {
 		defer cancel()
-		log.Info(context.TODO(), "executing external collection task in pool",
+		log.Info(taskCtx, "executing external collection task in pool",
 			log.Int64("taskID", taskID),
 			log.Int64("collectionID", req.GetCollectionID()))
 
@@ -246,7 +246,7 @@ func (m *ExternalCollectionManager) SubmitTask(
 		resp, err := taskFunc(taskCtx)
 		if err != nil {
 			m.UpdateResult(clusterID, taskID, indexpb.JobState_JobStateFailed, err.Error(), info.KeptSegments, nil)
-			log.Warn(context.TODO(), "external collection task failed",
+			log.Warn(taskCtx, "external collection task failed",
 				log.Int64("taskID", taskID),
 				log.Err(err))
 			return nil, err
@@ -262,7 +262,7 @@ func (m *ExternalCollectionManager) SubmitTask(
 			kept = info.KeptSegments
 		}
 		m.UpdateResult(clusterID, taskID, state, failReason, kept, resp.GetUpdatedSegments())
-		log.Info(context.TODO(), "external collection task completed",
+		log.Info(taskCtx, "external collection task completed",
 			log.Int64("taskID", taskID))
 		return nil, nil
 	})

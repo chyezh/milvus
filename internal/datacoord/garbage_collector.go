@@ -239,7 +239,7 @@ func newGarbageCollector(meta *meta, handler Handler, opt GcOption) *garbageColl
 func (gc *garbageCollector) start() {
 	if gc.option.enabled {
 		if gc.option.cli == nil {
-			log.Warn(context.TODO(), "DataCoord gc enabled, but SSO client is not provided")
+			log.Warn(gc.ctx, "DataCoord gc enabled, but SSO client is not provided")
 			return
 		}
 		gc.startOnce.Do(func() {
@@ -385,7 +385,7 @@ func (gc *garbageCollector) pause(cmd gcCmd) error {
 	var err error
 	if cmd.collectionID <= 0 { // legacy pause all
 		err = gc.pauseUntil.Insert(cmd.ticket, reqPauseUntil)
-		log.Info(context.TODO(), "global pause ticket recorded")
+		log.Info(gc.ctx, "global pause ticket recorded")
 	} else {
 		curr, has := gc.pausedCollection.Get(cmd.collectionID)
 		if !has {
@@ -393,7 +393,7 @@ func (gc *garbageCollector) pause(cmd gcCmd) error {
 			gc.pausedCollection.Insert(cmd.collectionID, curr)
 		}
 		err = curr.Insert(cmd.ticket, reqPauseUntil)
-		log.Info(context.TODO(), "collection new pause ticket recorded")
+		log.Info(gc.ctx, "collection new pause ticket recorded")
 	}
 	if err != nil {
 		return err
@@ -432,7 +432,7 @@ func (gc *garbageCollector) resume(cmd gcCmd) {
 		}
 	}
 	stillPaused := time.Now().Before(afterResume)
-	log.Info(context.TODO(), "garbage collection resumed", log.Bool("stillPaused", stillPaused))
+	log.Info(gc.ctx, "garbage collection resumed", log.Bool("stillPaused", stillPaused))
 }
 
 // runRecycleTaskWithPauser is a helper function to create a task with pauser
@@ -650,7 +650,7 @@ func (gc *garbageCollector) checkDroppedSegmentGC(segment *SegmentInfo,
 		// guarantee replacing A, B with C won't downgrade performance
 		// If the child is GC'ed first, then childSegment will be nil.
 		if childSegment != nil && !indexSet.Contain(childSegment.GetID()) {
-			log.RatedInfo(context.TODO(), log.RateDefault, "skipping GC when compact target segment is not indexed",
+			log.RatedInfo(gc.ctx, log.RateDefault, "skipping GC when compact target segment is not indexed",
 				log.Int64("child segment ID", childSegment.GetID()))
 			return false
 		}
@@ -662,7 +662,7 @@ func (gc *garbageCollector) checkDroppedSegmentGC(segment *SegmentInfo,
 	if gc.meta.catalog.ChannelExists(context.Background(), segInsertChannel) &&
 		segment.GetDmlPosition().GetTimestamp() > cpTimestamp {
 		// segment gc shall only happen when channel cp is after segment dml cp.
-		log.RatedInfo(context.TODO(), log.RateDefault, "dropped segment dml position after channel cp, skip meta gc",
+		log.RatedInfo(gc.ctx, log.RateDefault, "dropped segment dml position after channel cp, skip meta gc",
 			log.Uint64("dmlPosTs", segment.GetDmlPosition().GetTimestamp()),
 			log.Uint64("channelCpTs", cpTimestamp),
 		)
@@ -1595,7 +1595,7 @@ func (gc *garbageCollector) recyclePendingSnapshots(ctx context.Context, signal 
 		cleanedCount++
 	}
 
-	log.Info(context.TODO(), "pending snapshots cleanup completed",
+	log.Info(ctx, "pending snapshots cleanup completed",
 		log.Int("totalPending", len(pendingSnapshots)),
 		log.Int("cleanedCount", cleanedCount))
 
@@ -1603,9 +1603,9 @@ func (gc *garbageCollector) recyclePendingSnapshots(ctx context.Context, signal 
 	// These are snapshots that were marked for deletion but S3 cleanup failed
 	deletingSnapshots, err := snapshotMeta.GetDeletingSnapshots(ctx)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to get deleting snapshots", log.Err(err))
+		log.Warn(ctx, "failed to get deleting snapshots", log.Err(err))
 	} else if len(deletingSnapshots) > 0 {
-		log.Info(context.TODO(), "found deleting snapshots to cleanup", log.Int("count", len(deletingSnapshots)))
+		log.Info(ctx, "found deleting snapshots to cleanup", log.Int("count", len(deletingSnapshots)))
 		deletingCleanedCount := 0
 
 		for _, snapshot := range deletingSnapshots {
@@ -1650,7 +1650,7 @@ func (gc *garbageCollector) recyclePendingSnapshots(ctx context.Context, signal 
 			deletingCleanedCount++
 		}
 
-		log.Info(context.TODO(), "deleting snapshots cleanup completed",
+		log.Info(ctx, "deleting snapshots cleanup completed",
 			log.Int("totalDeleting", len(deletingSnapshots)),
 			log.Int("cleanedCount", deletingCleanedCount))
 	}

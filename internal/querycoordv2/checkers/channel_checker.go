@@ -151,7 +151,7 @@ func (c *ChannelChecker) getDmChannelDiff(ctx context.Context, collectionID int6
 ) (toLoad, toRelease []*meta.DmChannel) {
 	replica := c.meta.Get(ctx, replicaID)
 	if replica == nil {
-		log.Info(context.TODO(), "replica does not exist, skip it")
+		log.Info(ctx, "replica does not exist, skip it")
 		return
 	}
 

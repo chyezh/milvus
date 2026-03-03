@@ -143,50 +143,50 @@ func (s *Server) Stop() (err error) {
 func (s *Server) stop() {
 	s.componentState.OnStopping()
 
-	log.Info(context.TODO(), "streamingnode stop", log.String("Address", s.listener.Address()))
+	log.Info(s.ctx, "streamingnode stop", log.String("Address", s.listener.Address()))
 
 	// Unregister current server from etcd.
-	log.Info(context.TODO(), "streamingnode unregister session from etcd...")
+	log.Info(s.ctx, "streamingnode unregister session from etcd...")
 	if err := s.session.GoingStop(); err != nil {
-		log.Warn(context.TODO(), "streamingnode unregister session failed", log.Err(err))
+		log.Warn(s.ctx, "streamingnode unregister session failed", log.Err(err))
 	}
 
 	// Stop StreamingNode service.
-	log.Info(context.TODO(), "streamingnode stop service...")
+	log.Info(s.ctx, "streamingnode stop service...")
 	s.streamingnode.Stop()
 
 	// Stop grpc server.
-	log.Info(context.TODO(), "streamingnode stop grpc server...")
+	log.Info(s.ctx, "streamingnode stop grpc server...")
 	s.grpcServer.GracefulStop()
 
 	// Stop all session
-	log.Info(context.TODO(), "streamingnode stop session...")
+	log.Info(s.ctx, "streamingnode stop session...")
 	s.session.Stop()
 
 	// Stop rootCoord client.
-	log.Info(context.TODO(), "streamingnode stop mixCoord client...")
+	log.Info(s.ctx, "streamingnode stop mixCoord client...")
 
 	if s.mixCoord.Ready() {
 		if err := s.mixCoord.Get().Close(); err != nil {
-			log.Warn(context.TODO(), "streamingnode stop mixCoord client failed", log.Err(err))
+			log.Warn(s.ctx, "streamingnode stop mixCoord client failed", log.Err(err))
 		}
 	}
 
 	// Stop tikv
 	if s.tikvCli != nil {
 		if err := s.tikvCli.Close(); err != nil {
-			log.Warn(context.TODO(), "streamingnode stop tikv client failed", log.Err(err))
+			log.Warn(s.ctx, "streamingnode stop tikv client failed", log.Err(err))
 		}
 	}
 
 	// Wait for grpc server to stop.
-	log.Info(context.TODO(), "wait for grpc server stop...")
+	log.Info(s.ctx, "wait for grpc server stop...")
 	<-s.grpcServerChan
-	log.Info(context.TODO(), "streamingnode stop done")
+	log.Info(s.ctx, "streamingnode stop done")
 
 	s.cancel()
 	if err := s.listener.Close(); err != nil {
-		log.Warn(context.TODO(), "streamingnode stop listener failed", log.Err(err))
+		log.Warn(s.ctx, "streamingnode stop listener failed", log.Err(err))
 	}
 }
 
@@ -199,10 +199,10 @@ func (s *Server) Health(ctx context.Context) commonpb.StateCode {
 func (s *Server) init() (err error) {
 	defer func() {
 		if err != nil {
-			log.Error(context.TODO(), "StreamingNode init failed", log.Err(err))
+			log.Error(s.ctx, "StreamingNode init failed", log.Err(err))
 			return
 		}
-		log.Info(context.TODO(), "init StreamingNode server finished")
+		log.Info(s.ctx, "init StreamingNode server finished")
 	}()
 
 	// Create etcd client.
@@ -235,10 +235,10 @@ func (s *Server) init() (err error) {
 func (s *Server) start() (err error) {
 	defer func() {
 		if err != nil {
-			log.Error(context.TODO(), "StreamingNode start failed", log.Err(err))
+			log.Error(s.ctx, "StreamingNode start failed", log.Err(err))
 			return
 		}
-		log.Info(context.TODO(), "start StreamingNode server finished")
+		log.Info(s.ctx, "start StreamingNode server finished")
 	}()
 
 	// Start grpc server.
@@ -266,13 +266,13 @@ func (s *Server) initSession() error {
 func (s *Server) initMeta() error {
 	params := paramtable.Get()
 	metaType := params.MetaStoreCfg.MetaStoreType.GetValue()
-	log.Info(context.TODO(), "data coordinator connecting to metadata store", log.String("metaType", metaType))
+	log.Info(s.ctx, "data coordinator connecting to metadata store", log.String("metaType", metaType))
 	metaRootPath := ""
 	if metaType == util.MetaStoreTypeTiKV {
 		var err error
 		s.tikvCli, err = tikv.GetTiKVClient(&paramtable.Get().TiKVCfg)
 		if err != nil {
-			log.Warn(context.TODO(), "Streamingnode init tikv client failed", log.Err(err))
+			log.Warn(s.ctx, "Streamingnode init tikv client failed", log.Err(err))
 			return err
 		}
 		metaRootPath = params.TiKVCfg.MetaRootPath.GetValue()
@@ -289,18 +289,18 @@ func (s *Server) initMeta() error {
 func (s *Server) initMixCoord() {
 	go func() {
 		retry.Do(s.ctx, func() error {
-			log.Info(context.TODO(), "StreamingNode connect to mixCoord...")
+			log.Info(s.ctx, "StreamingNode connect to mixCoord...")
 			mixCoord, err := mix.NewClient(s.ctx)
 			if err != nil {
 				return errors.Wrap(err, "StreamingNode try to new mixCoord client failed")
 			}
 
-			log.Info(context.TODO(), "StreamingNode try to wait for mixCoord ready")
+			log.Info(s.ctx, "StreamingNode try to wait for mixCoord ready")
 			err = componentutil.WaitForComponentHealthy(s.ctx, mixCoord, "mixCoord", 1000000, time.Millisecond*200)
 			if err != nil {
 				return errors.Wrap(err, "StreamingNode wait for mixCoord ready failed")
 			}
-			log.Info(context.TODO(), "StreamingNode wait for mixCoord ready")
+			log.Info(s.ctx, "StreamingNode wait for mixCoord ready")
 			s.mixCoord.Set(mixCoord)
 			return nil
 		}, retry.AttemptAlways())

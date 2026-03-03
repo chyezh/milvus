@@ -103,7 +103,7 @@ func (k *KeyLock[K]) Unlock(lockedKey K) {
 	defer k.keyLocksMutex.Unlock()
 	keyLock, ok := k.refLocks[lockedKey]
 	if !ok {
-		log.Warn(context.TODO(), "Unlocking non-existing key", log.Any("key", lockedKey))
+		log.Warn(ctx, "Unlocking non-existing key", log.Any("key", lockedKey))
 		return
 	}
 	keyLock.unref()
@@ -175,7 +175,7 @@ func (k *KeyLock[K]) RUnlock(lockedKey K) {
 	defer k.keyLocksMutex.Unlock()
 	keyLock, ok := k.refLocks[lockedKey]
 	if !ok {
-		log.Warn(context.TODO(), "Unlocking non-existing key", log.Any("key", lockedKey))
+		log.Warn(ctx, "Unlocking non-existing key", log.Any("key", lockedKey))
 		return
 	}
 	keyLock.unref()

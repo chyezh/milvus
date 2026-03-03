@@ -112,7 +112,7 @@ func (s *Server) balanceSegments(ctx context.Context,
 	}
 	tasks := make([]task.Task, 0, len(plans))
 	for _, plan := range plans {
-		log.Info(context.TODO(), "manually balance segment...",
+		log.Info(ctx, "manually balance segment...",
 			log.Int64("replica", plan.Replica.GetID()),
 			log.String("channel", plan.Segment.InsertChannel),
 			log.Int64("from", plan.From),
@@ -137,7 +137,7 @@ func (s *Server) balanceSegments(ctx context.Context,
 			actions...,
 		)
 		if err != nil {
-			log.Warn(context.TODO(), "create segment task for balance failed",
+			log.Warn(ctx, "create segment task for balance failed",
 				log.Int64("replica", plan.Replica.GetID()),
 				log.String("channel", plan.Segment.InsertChannel),
 				log.Int64("from", plan.From),
@@ -153,7 +153,7 @@ func (s *Server) balanceSegments(ctx context.Context,
 		err = s.taskScheduler.Add(t)
 		if err != nil {
 			t.Cancel(err)
-			log.Info(context.TODO(), "skip balance segment task", log.Int64("segmentID", plan.Segment.GetID()), log.Err(err))
+			log.Info(ctx, "skip balance segment task", log.Int64("segmentID", plan.Segment.GetID()), log.Err(err))
 			continue
 		}
 		tasks = append(tasks, t)
@@ -163,7 +163,7 @@ func (s *Server) balanceSegments(ctx context.Context,
 		err := task.Wait(ctx, Params.QueryCoordCfg.SegmentTaskTimeout.GetAsDuration(time.Millisecond), tasks...)
 		if err != nil {
 			msg := "failed to wait all balance task finished"
-			log.Warn(context.TODO(), msg, log.Err(err))
+			log.Warn(ctx, msg, log.Err(err))
 			return errors.Wrap(err, msg)
 		}
 	}
@@ -194,7 +194,7 @@ func (s *Server) balanceChannels(ctx context.Context,
 
 	tasks := make([]task.Task, 0, len(plans))
 	for _, plan := range plans {
-		log.Info(context.TODO(), "manually balance channel...",
+		log.Info(ctx, "manually balance channel...",
 			log.Int64("replica", plan.Replica.GetID()),
 			log.String("channel", plan.Channel.GetChannelName()),
 			log.Int64("from", plan.From),
@@ -217,7 +217,7 @@ func (s *Server) balanceChannels(ctx context.Context,
 			actions...,
 		)
 		if err != nil {
-			log.Warn(context.TODO(), "create channel task for balance failed",
+			log.Warn(ctx, "create channel task for balance failed",
 				log.Int64("replica", plan.Replica.GetID()),
 				log.String("channel", plan.Channel.GetChannelName()),
 				log.Int64("from", plan.From),
@@ -232,7 +232,7 @@ func (s *Server) balanceChannels(ctx context.Context,
 		err = s.taskScheduler.Add(t)
 		if err != nil {
 			t.Cancel(err)
-			log.Info(context.TODO(), "skip balance channel task", log.String("channel", plan.Channel.GetChannelName()), log.Err(err))
+			log.Info(ctx, "skip balance channel task", log.String("channel", plan.Channel.GetChannelName()), log.Err(err))
 			continue
 		}
 		tasks = append(tasks, t)
@@ -242,7 +242,7 @@ func (s *Server) balanceChannels(ctx context.Context,
 		err := task.Wait(ctx, Params.QueryCoordCfg.ChannelTaskTimeout.GetAsDuration(time.Millisecond), tasks...)
 		if err != nil {
 			msg := "failed to wait all balance task finished"
-			log.Warn(context.TODO(), msg, log.Err(err))
+			log.Warn(ctx, msg, log.Err(err))
 			return errors.Wrap(err, msg)
 		}
 	}
@@ -385,7 +385,7 @@ func (s *Server) getSystemInfoMetrics(
 func (s *Server) fillMetricsWithNodes(topo *metricsinfo.QueryClusterTopology, nodeMetrics []*metricResp) {
 	for _, metric := range nodeMetrics {
 		if metric.err != nil {
-			log.Warn(context.TODO(), "invalid metrics of query node was found",
+			log.Warn(s.ctx, "invalid metrics of query node was found",
 				log.Err(metric.err))
 			topo.ConnectedNodes = append(topo.ConnectedNodes, metricsinfo.QueryNodeInfos{
 				BaseComponentInfos: metricsinfo.BaseComponentInfos{
@@ -400,7 +400,7 @@ func (s *Server) fillMetricsWithNodes(topo *metricsinfo.QueryClusterTopology, no
 		}
 
 		if metric.resp.GetStatus().GetErrorCode() != commonpb.ErrorCode_Success {
-			log.Warn(context.TODO(), "invalid metrics of query node was found",
+			log.Warn(s.ctx, "invalid metrics of query node was found",
 				log.Any("error_code", metric.resp.GetStatus().GetErrorCode()),
 				log.Any("error_reason", metric.resp.GetStatus().GetReason()))
 			topo.ConnectedNodes = append(topo.ConnectedNodes, metricsinfo.QueryNodeInfos{
@@ -417,7 +417,7 @@ func (s *Server) fillMetricsWithNodes(topo *metricsinfo.QueryClusterTopology, no
 		infos := metricsinfo.QueryNodeInfos{}
 		err := metricsinfo.UnmarshalComponentInfos(metric.resp.Response, &infos)
 		if err != nil {
-			log.Warn(context.TODO(), "invalid metrics of query node was found",
+			log.Warn(s.ctx, "invalid metrics of query node was found",
 				log.Err(err))
 			topo.ConnectedNodes = append(topo.ConnectedNodes, metricsinfo.QueryNodeInfos{
 				BaseComponentInfos: metricsinfo.BaseComponentInfos{

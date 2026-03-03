@@ -111,10 +111,10 @@ func (m *FileResourceObserver) syncLoop() {
 				m.RetryNotify()
 			}
 		case <-m.closeCh:
-			log.Info(context.TODO(), "file resource observer close")
+			log.Info(m.ctx, "file resource observer close")
 			return
 		case <-m.ctx.Done():
-			log.Info(context.TODO(), "file resource observer context done")
+			log.Info(m.ctx, "file resource observer context done")
 			return
 		}
 	}
@@ -201,13 +201,13 @@ func (m *FileResourceObserver) Sync() error {
 					Version:   targetVersion,
 				})
 				if err != nil {
-					log.Warn(context.TODO(), "sync file resource failed", log.Int64("nodeID", node.ID()), log.Err(err))
+					log.Warn(m.ctx, "sync file resource failed", log.Int64("nodeID", node.ID()), log.Err(err))
 					syncErr = err
 					continue
 				}
 
 				if err = merr.Error(status); err != nil {
-					log.Warn(context.TODO(), "sync file resource failed", log.Int64("nodeID", node.ID()), log.Err(err))
+					log.Warn(m.ctx, "sync file resource failed", log.Int64("nodeID", node.ID()), log.Err(err))
 					syncErr = err
 					continue
 				}
@@ -217,7 +217,7 @@ func (m *FileResourceObserver) Sync() error {
 					NodeType: QueryNode,
 					Version:  targetVersion,
 				})
-				log.Info(context.TODO(), "finish sync file resource to query node", log.Int64("node", node.ID()), log.Uint64("version", targetVersion))
+				log.Info(m.ctx, "finish sync file resource to query node", log.Int64("node", node.ID()), log.Uint64("version", targetVersion))
 			}
 		}
 
@@ -234,7 +234,7 @@ func (m *FileResourceObserver) Sync() error {
 			if info, ok := m.distribution.Get(nodeID); !ok || info.Version < targetVersion {
 				c, err := m.dnManager.GetClient(nodeID)
 				if err != nil {
-					log.Warn(context.TODO(), "sync file resource failed, fetch client failed", log.Err(err))
+					log.Warn(m.ctx, "sync file resource failed, fetch client failed", log.Err(err))
 					syncErr = err
 					continue
 				}
@@ -244,12 +244,12 @@ func (m *FileResourceObserver) Sync() error {
 				})
 				if err != nil {
 					syncErr = err
-					log.Warn(context.TODO(), "sync file resource failed", log.Int64("nodeID", nodeID), log.Err(err))
+					log.Warn(m.ctx, "sync file resource failed", log.Int64("nodeID", nodeID), log.Err(err))
 					continue
 				}
 
 				if err = merr.Error(status); err != nil {
-					log.Warn(context.TODO(), "sync file resource failed", log.Int64("nodeID", nodeID), log.Err(err))
+					log.Warn(m.ctx, "sync file resource failed", log.Int64("nodeID", nodeID), log.Err(err))
 					syncErr = err
 					continue
 				}
@@ -259,7 +259,7 @@ func (m *FileResourceObserver) Sync() error {
 					NodeType: DataNode,
 					Version:  targetVersion,
 				})
-				log.Info(context.TODO(), "finish sync file resource to data node", log.Int64("nodeID", nodeID), log.Uint64("version", targetVersion))
+				log.Info(m.ctx, "finish sync file resource to data node", log.Int64("nodeID", nodeID), log.Uint64("version", targetVersion))
 			}
 		}
 

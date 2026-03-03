@@ -141,7 +141,7 @@ func (s *scheduler) syncTsLoop() {
 func (s *scheduler) updateLatestTsoAsMinDdlTs() {
 	t := newBaseTask(context.Background(), nil)
 	if err := s.AddTask(&t); err != nil {
-		log.Warn(context.TODO(), "failed to update latest ddl ts", log.Err(err))
+		log.Warn(s.ctx, "failed to update latest ddl ts", log.Err(err))
 	}
 }
 

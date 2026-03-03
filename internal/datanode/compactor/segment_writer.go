@@ -134,7 +134,7 @@ func (w *MultiSegmentWriter) closeWriter() error {
 
 		w.res = append(w.res, result)
 
-		log.Info(context.TODO(), "created new segment",
+		log.Info(w.ctx, "created new segment",
 			log.Int64("segmentID", w.currentSegmentID),
 			log.String("channel", w.channel),
 			log.Int64("totalRows", w.writer.GetRowNum()),

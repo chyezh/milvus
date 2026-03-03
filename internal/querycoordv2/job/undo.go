@@ -51,7 +51,7 @@ func NewUndoList(ctx context.Context, meta *meta.Meta,
 
 func (u *UndoList) RollBack() {
 
-	log.Warn(context.TODO(), "rollback failed loading request...",
+	log.Warn(u.ctx, "rollback failed loading request...",
 		log.Bool("isNewCollection", u.IsNewCollection),
 		log.Bool("isReplicaCreated", u.IsReplicaCreated),
 		log.Bool("isTargetUpdated", u.IsTargetUpdated),
@@ -64,7 +64,7 @@ func (u *UndoList) RollBack() {
 		err = u.meta.CollectionManager.RemovePartition(u.ctx, u.CollectionID, u.LackPartitions...)
 	}
 	if err != nil {
-		log.Warn(context.TODO(), "failed to rollback collection from meta", log.Err(err))
+		log.Warn(u.ctx, "failed to rollback collection from meta", log.Err(err))
 	}
 
 	if u.IsTargetUpdated {

@@ -57,7 +57,7 @@ func WaitForComponentStates[T interface {
 				serviceName,
 				resp.State.StateCode.String())
 		}
-		log.Info(context.TODO(), "WaitForComponentStates success", log.String("current state", resp.State.StateCode.String()))
+		log.Info(ctx, "WaitForComponentStates success", log.String("current state", resp.State.StateCode.String()))
 		return nil
 	}
 	return retry.Do(ctx, checkFunc, retry.Attempts(attempts), retry.Sleep(sleep))

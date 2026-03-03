@@ -289,7 +289,7 @@ func (sd *shardDelegator) applyDelete(ctx context.Context,
 		delRecord, ok := delRecords(segmentEntry.SegmentID)
 		if ok {
 			future := pool.Submit(func() (struct{}, error) {
-				log.Debug(context.TODO(), "delegator plan to applyDelete via worker")
+				log.Debug(ctx, "delegator plan to applyDelete via worker")
 				err := retry.Handle(ctx, func() (bool, error) {
 					if sd.Stopped() {
 						return false, merr.WrapErrChannelNotAvailable(sd.vchannelName, "channel is unsubscribing")
@@ -306,21 +306,21 @@ func (sd *shardDelegator) applyDelete(ctx context.Context,
 						Scope:        scope,
 					})
 					if errors.Is(err, merr.ErrNodeNotFound) {
-						log.Warn(context.TODO(), "try to delete data on non-exist node")
+						log.Warn(ctx, "try to delete data on non-exist node")
 						// cancel other request
 						cancel()
 						return false, err
 					} else if errors.IsAny(err, merr.ErrSegmentNotFound, merr.ErrSegmentNotLoaded) {
-						log.Warn(context.TODO(), "try to delete data of released segment")
+						log.Warn(ctx, "try to delete data of released segment")
 						return false, nil
 					} else if err != nil {
-						log.Warn(context.TODO(), "worker failed to delete on segment", log.Err(err))
+						log.Warn(ctx, "worker failed to delete on segment", log.Err(err))
 						return true, err
 					}
 					return false, nil
 				}, retry.Attempts(10))
 				if err != nil {
-					log.Warn(context.TODO(), "apply delete for segment failed, marking it offline")
+					log.Warn(ctx, "apply delete for segment failed, marking it offline")
 					offlineSegments.Insert(segmentEntry.SegmentID)
 				}
 				return struct{}{}, err
@@ -823,7 +823,7 @@ func (sd *shardDelegator) loadStreamDelete(ctx context.Context,
 		if err != nil {
 			return err
 		}
-		log.Info(context.TODO(), "forward delete to worker (phase 2: snapshot)...",
+		log.Info(ctx, "forward delete to worker (phase 2: snapshot)...",
 			log.String("channel", info.InsertChannel),
 			log.Int64("segmentID", info.GetSegmentID()),
 			log.Time("startPosition", tsoutil.PhysicalTime(info.GetStartPosition().GetTimestamp())),
@@ -856,7 +856,7 @@ func (sd *shardDelegator) loadStreamDelete(ctx context.Context,
 			if err != nil {
 				return err
 			}
-			log.Info(context.TODO(), "forward delete to worker (phase 3: catch-up)...",
+			log.Info(ctx, "forward delete to worker (phase 3: catch-up)...",
 				log.String("channel", info.InsertChannel),
 				log.Int64("segmentID", info.GetSegmentID()),
 				log.Int64("tsHitDeleteRowNum", tsHit),
@@ -877,7 +877,7 @@ func (sd *shardDelegator) loadStreamDelete(ctx context.Context,
 	if err := sd.addDistributionIfVersionOK(schemaVersion, entries...); err != nil {
 		return err
 	}
-	log.Info(context.TODO(), "load stream delete done")
+	log.Info(ctx, "load stream delete done")
 	return nil
 }
 

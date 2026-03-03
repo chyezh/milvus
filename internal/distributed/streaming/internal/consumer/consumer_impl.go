@@ -64,7 +64,7 @@ func (rc *resumableConsumerImpl) resumeLoop() {
 		// close the message handler.
 		rc.mh.Close()
 		rc.metrics.IntoUnavailable()
-		rc.logger.Info(context.TODO(), "resumable consumer is closed")
+		rc.logger.Info(rc.ctx, "resumable consumer is closed")
 		close(rc.resumingExitCh)
 	}()
 
@@ -156,12 +156,12 @@ func (rc *resumableConsumerImpl) createNewConsumer(opts *handler.ConsumerOptions
 		}
 		if err != nil {
 			nextBackoff := backoff.NextBackOff()
-			logger.Warn(context.TODO(), "create consumer failed, retry...", log.Err(err), log.Duration("nextRetryInterval", nextBackoff))
+			logger.Warn(rc.ctx, "create consumer failed, retry...", log.Err(err), log.Duration("nextRetryInterval", nextBackoff))
 			time.Sleep(nextBackoff)
 			continue
 		}
 
-		logger.Info(context.TODO(), "resume on new consumer at new start message id")
+		logger.Info(rc.ctx, "resume on new consumer at new start message id")
 		return newConsumerWithMetrics(rc.opts.PChannel, consumer), nil
 	}
 }
@@ -171,7 +171,7 @@ func (rc *resumableConsumerImpl) waitUntilUnavailable(consumer handler.Consumer)
 	defer func() {
 		consumer.Close()
 		if consumer.Error() != nil {
-			rc.logger.Warn(context.TODO(), "consumer is closed with error", log.Err(consumer.Error()))
+			rc.logger.Warn(rc.ctx, "consumer is closed with error", log.Err(consumer.Error()))
 		}
 	}()
 
@@ -181,7 +181,7 @@ func (rc *resumableConsumerImpl) waitUntilUnavailable(consumer handler.Consumer)
 	case <-rc.ctx.Done():
 		return rc.ctx.Err()
 	case <-consumer.Done():
-		rc.logger.Warn(context.TODO(), "consumer is done or encounter error, try to resume...",
+		rc.logger.Warn(rc.ctx, "consumer is done or encounter error, try to resume...",
 			log.Err(consumer.Error()),
 			log.Any("lastConfirmedMessageID", rc.mh.lastConfirmedMessageID),
 			log.Uint64("lastTimeTick", rc.mh.lastTimeTick),
@@ -204,7 +204,7 @@ func (rc *resumableConsumerImpl) gracefulClose() error {
 // Close the scanner, release the underlying resources.
 func (rc *resumableConsumerImpl) Close() {
 	if err := rc.gracefulClose(); err != nil {
-		rc.logger.Warn(context.TODO(), "graceful close a consumer fail, force close is applied")
+		rc.logger.Warn(rc.ctx, "graceful close a consumer fail, force close is applied")
 	}
 
 	// cancel is always need to be called, even graceful close is success.

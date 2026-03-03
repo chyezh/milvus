@@ -69,14 +69,14 @@ func (stm *statsTaskMeta) reloadFromKV() error {
 	// load stats task
 	statsTasks, err := stm.catalog.ListStatsTasks(stm.ctx)
 	if err != nil {
-		log.Error(context.TODO(), "statsTaskMeta reloadFromKV load stats tasks failed", log.Err(err))
+		log.Error(stm.ctx, "statsTaskMeta reloadFromKV load stats tasks failed", log.Err(err))
 		return err
 	}
 	for _, t := range statsTasks {
 		// sort stats task no need to reload
 		if t.GetSubJobType() == indexpb.StatsSubJob_Sort {
 			if err := stm.catalog.DropStatsTask(stm.ctx, t.GetTaskID()); err != nil {
-				log.Warn(context.TODO(), "drop stats task failed",
+				log.Warn(stm.ctx, "drop stats task failed",
 					log.Int64("taskID", t.GetTaskID()),
 					log.Int64("segmentID", t.GetSegmentID()),
 					log.Err(err))
@@ -89,7 +89,7 @@ func (stm *statsTaskMeta) reloadFromKV() error {
 		stm.segmentID2Tasks.Insert(secondaryKey, t)
 	}
 
-	log.Info(context.TODO(), "statsTaskMeta reloadFromKV done", log.Duration("duration", record.ElapseSpan()))
+	log.Info(stm.ctx, "statsTaskMeta reloadFromKV done", log.Duration("duration", record.ElapseSpan()))
 	return nil
 }
 
@@ -120,19 +120,19 @@ func (stm *statsTaskMeta) AddStatsTask(t *indexpb.StatsTask) error {
 	if alreadyExist {
 		msg := fmt.Sprintf("stats task already exist in meta of segment %d with subJobType: %s",
 			t.GetSegmentID(), t.GetSubJobType().String())
-		log.RatedWarn(context.TODO(), log.RateDefault, msg, log.Int64("taskID", t.GetTaskID()), log.Int64("exist taskID", task.GetTaskID()))
+		log.RatedWarn(stm.ctx, log.RateDefault, msg, log.Int64("taskID", t.GetTaskID()), log.Int64("exist taskID", task.GetTaskID()))
 		return merr.WrapErrTaskDuplicate(indexpb.JobType_JobTypeStatsJob.String(), msg)
 	}
 
 	stm.keyLock.Lock(taskID)
 	defer stm.keyLock.Unlock(taskID)
 
-	log.Info(context.TODO(), "add stats task", log.Int64("taskID", t.GetTaskID()), log.Int64("originSegmentID", t.GetSegmentID()),
+	log.Info(stm.ctx, "add stats task", log.Int64("taskID", t.GetTaskID()), log.Int64("originSegmentID", t.GetSegmentID()),
 		log.Int64("targetSegmentID", t.GetTargetSegmentID()), log.String("subJobType", t.GetSubJobType().String()))
 	t.State = indexpb.JobState_JobStateInit
 
 	if err := stm.catalog.SaveStatsTask(stm.ctx, t); err != nil {
-		log.Warn(context.TODO(), "adding stats task failed",
+		log.Warn(stm.ctx, "adding stats task failed",
 			log.Int64("taskID", taskID),
 			log.Int64("segmentID", t.GetSegmentID()),
 			log.String("subJobType", t.GetSubJobType().String()),
@@ -143,7 +143,7 @@ func (stm *statsTaskMeta) AddStatsTask(t *indexpb.StatsTask) error {
 	stm.tasks.Insert(taskID, t)
 	stm.segmentID2Tasks.Insert(secondaryKey, t)
 
-	log.Info(context.TODO(), "add stats task success", log.Int64("taskID", t.GetTaskID()), log.Int64("originSegmentID", t.GetSegmentID()),
+	log.Info(stm.ctx, "add stats task success", log.Int64("taskID", t.GetTaskID()), log.Int64("originSegmentID", t.GetSegmentID()),
 		log.Int64("targetSegmentID", t.GetTargetSegmentID()), log.String("subJobType", t.GetSubJobType().String()))
 	return nil
 }
@@ -189,7 +189,7 @@ func (stm *statsTaskMeta) UpdateVersion(taskID, nodeID int64) error {
 	cloneT.NodeID = nodeID
 
 	if err := stm.catalog.SaveStatsTask(stm.ctx, cloneT); err != nil {
-		log.Warn(context.TODO(), "update stats task version failed",
+		log.Warn(stm.ctx, "update stats task version failed",
 			log.Int64("taskID", t.GetTaskID()),
 			log.Int64("segmentID", t.GetSegmentID()),
 			log.Int64("nodeID", nodeID),
@@ -200,7 +200,7 @@ func (stm *statsTaskMeta) UpdateVersion(taskID, nodeID int64) error {
 	stm.tasks.Insert(taskID, cloneT)
 	secondaryKey := createSecondaryIndexKey(t.GetSegmentID(), t.GetSubJobType().String())
 	stm.segmentID2Tasks.Insert(secondaryKey, cloneT)
-	log.Info(context.TODO(), "update stats task version success", log.Int64("taskID", taskID), log.Int64("nodeID", nodeID),
+	log.Info(stm.ctx, "update stats task version success", log.Int64("taskID", taskID), log.Int64("nodeID", nodeID),
 		log.Int64("newVersion", cloneT.GetVersion()))
 	return nil
 }
@@ -219,7 +219,7 @@ func (stm *statsTaskMeta) UpdateTaskState(taskID int64, state indexpb.JobState, 
 	cloneT.FailReason = failReason
 
 	if err := stm.catalog.SaveStatsTask(stm.ctx, cloneT); err != nil {
-		log.Warn(context.TODO(), "update stats task state failed",
+		log.Warn(stm.ctx, "update stats task state failed",
 			log.Int64("taskID", t.GetTaskID()),
 			log.Err(err))
 		return err
@@ -245,7 +245,7 @@ func (stm *statsTaskMeta) UpdateBuildingTask(taskID int64) error {
 	cloneT.State = indexpb.JobState_JobStateInProgress
 
 	if err := stm.catalog.SaveStatsTask(stm.ctx, cloneT); err != nil {
-		log.Warn(context.TODO(), "update stats task state building failed",
+		log.Warn(stm.ctx, "update stats task state building failed",
 			log.Int64("taskID", t.GetTaskID()),
 			log.Int64("segmentID", t.GetSegmentID()),
 			log.Err(err))
@@ -256,7 +256,7 @@ func (stm *statsTaskMeta) UpdateBuildingTask(taskID int64) error {
 	secondaryKey := createSecondaryIndexKey(t.GetSegmentID(), t.GetSubJobType().String())
 	stm.segmentID2Tasks.Insert(secondaryKey, cloneT)
 
-	log.Info(context.TODO(), "update building stats task success", log.Int64("taskID", taskID))
+	log.Info(stm.ctx, "update building stats task success", log.Int64("taskID", taskID))
 	return nil
 }
 
@@ -274,7 +274,7 @@ func (stm *statsTaskMeta) FinishTask(taskID int64, result *workerpb.StatsResult)
 	cloneT.FailReason = result.GetFailReason()
 
 	if err := stm.catalog.SaveStatsTask(stm.ctx, cloneT); err != nil {
-		log.Warn(context.TODO(), "finish stats task state failed",
+		log.Warn(stm.ctx, "finish stats task state failed",
 			log.Int64("taskID", t.GetTaskID()),
 			log.Int64("segmentID", t.GetSegmentID()),
 			log.Err(err))
@@ -285,7 +285,7 @@ func (stm *statsTaskMeta) FinishTask(taskID int64, result *workerpb.StatsResult)
 	secondaryKey := createSecondaryIndexKey(t.GetSegmentID(), t.GetSubJobType().String())
 	stm.segmentID2Tasks.Insert(secondaryKey, cloneT)
 
-	log.Info(context.TODO(), "finish stats task meta success", log.Int64("taskID", taskID), log.Int64("segmentID", t.SegmentID),
+	log.Info(stm.ctx, "finish stats task meta success", log.Int64("taskID", taskID), log.Int64("segmentID", t.SegmentID),
 		log.String("state", result.GetState().String()), log.String("failReason", t.GetFailReason()))
 	return nil
 }
@@ -340,20 +340,20 @@ func (stm *statsTaskMeta) GetStatsTaskBySegmentID(segmentID int64, subJobType in
 	secondaryKey := createSecondaryIndexKey(segmentID, subJobType.String())
 	t, exists := stm.segmentID2Tasks.Get(secondaryKey)
 	if exists {
-		log.Info(context.TODO(), "get stats task by segmentID success",
+		log.Info(stm.ctx, "get stats task by segmentID success",
 			log.Int64("taskID", t.GetTaskID()),
 			log.Int64("segmentID", segmentID),
 			log.String("subJobType", subJobType.String()))
 		return t
 	}
 
-	log.Info(context.TODO(), "get stats task by segmentID failed, task not exist", log.Int64("segmentID", segmentID),
+	log.Info(stm.ctx, "get stats task by segmentID failed, task not exist", log.Int64("segmentID", segmentID),
 		log.String("subJobType", subJobType.String()))
 	return nil
 }
 
 func (stm *statsTaskMeta) MarkTaskCanRecycle(taskID int64) error {
-	log.Info(context.TODO(), "mark stats task can recycle", log.Int64("taskID", taskID))
+	log.Info(stm.ctx, "mark stats task can recycle", log.Int64("taskID", taskID))
 
 	t, ok := stm.tasks.Get(taskID)
 	if !ok {
@@ -364,7 +364,7 @@ func (stm *statsTaskMeta) MarkTaskCanRecycle(taskID int64) error {
 	cloneT.CanRecycle = true
 
 	if err := stm.catalog.SaveStatsTask(stm.ctx, cloneT); err != nil {
-		log.Warn(context.TODO(), "mark stats task can recycle failed",
+		log.Warn(stm.ctx, "mark stats task can recycle failed",
 			log.Int64("taskID", taskID),
 			log.Int64("segmentID", t.GetSegmentID()),
 			log.Err(err))
@@ -375,7 +375,7 @@ func (stm *statsTaskMeta) MarkTaskCanRecycle(taskID int64) error {
 	secondaryKey := createSecondaryIndexKey(t.GetSegmentID(), t.GetSubJobType().String())
 	stm.segmentID2Tasks.Insert(secondaryKey, cloneT)
 
-	log.Info(context.TODO(), "mark stats task can recycle success", log.Int64("taskID", taskID),
+	log.Info(stm.ctx, "mark stats task can recycle success", log.Int64("taskID", taskID),
 		log.Int64("segmentID", t.SegmentID),
 		log.String("subJobType", t.GetSubJobType().String()))
 	return nil

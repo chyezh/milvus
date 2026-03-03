@@ -1,7 +1,6 @@
 package lock
 
 import (
-	"context"
 	"sync"
 	"time"
 
@@ -72,7 +71,7 @@ func (mRWLock *MetricsRWMutex) maybeLogUnlockDuration(source string, lockType st
 			logLock(time.Since(acquireTime), mRWLock.lockName, source, lockType, hold)
 			delete(mRWLock.acquireTimeMap, source)
 		} else {
-			log.Error(context.TODO(), "there's no lock history for the source, there may be some defects in codes",
+			log.Error(ctx, "there's no lock history for the source, there may be some defects in codes",
 				log.String("source", source))
 			return errors.New("unknown source")
 		}
@@ -82,11 +81,11 @@ func (mRWLock *MetricsRWMutex) maybeLogUnlockDuration(source string, lockType st
 
 func logLock(duration time.Duration, lockName string, source string, lockType string, opType string) {
 	if duration >= paramtable.Get().CommonCfg.LockSlowLogWarnThreshold.GetAsDuration(time.Millisecond) {
-		log.Warn(context.TODO(), "lock takes too long", log.String("lockName", lockName), log.String("lockType", lockType),
+		log.Warn(ctx, "lock takes too long", log.String("lockName", lockName), log.String("lockType", lockType),
 			log.String("source", source), log.String("opType", opType),
 			log.Duration("time_cost", duration))
 	} else if duration >= paramtable.Get().CommonCfg.LockSlowLogInfoThreshold.GetAsDuration(time.Millisecond) {
-		log.Info(context.TODO(), "lock takes too long", log.String("lockName", lockName), log.String("lockType", lockType),
+		log.Info(ctx, "lock takes too long", log.String("lockName", lockName), log.String("lockType", lockType),
 			log.String("source", source), log.String("opType", opType),
 			log.Duration("time_cost", duration))
 	}

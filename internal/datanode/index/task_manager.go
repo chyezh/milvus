@@ -221,7 +221,7 @@ func (m *TaskManager) StoreAnalyzeTaskState(clusterID string, taskID typeutil.Un
 	m.stateLock.Lock()
 	defer m.stateLock.Unlock()
 	if task, ok := m.analyzeTasks[key]; ok {
-		log.Info(context.TODO(), "store analyze task state", log.String("clusterID", clusterID), log.Int64("TaskID", taskID),
+		log.Info(m.ctx, "store analyze task state", log.String("clusterID", clusterID), log.Int64("TaskID", taskID),
 			log.String("state", state.String()), log.String("fail reason", failReason))
 		task.State = state
 		task.FailReason = failReason
@@ -321,15 +321,15 @@ func (m *TaskManager) WaitTaskFinish() {
 				return
 			}
 		case <-timeoutCtx.Done():
-			log.Warn(context.TODO(), "timeout, the index node has some progress task")
+			log.Warn(m.ctx, "timeout, the index node has some progress task")
 			for _, info := range m.indexTasks {
 				if info.State == commonpb.IndexState_InProgress {
-					log.Warn(context.TODO(), "progress task", log.Any("info", info))
+					log.Warn(m.ctx, "progress task", log.Any("info", info))
 				}
 			}
 			for _, info := range m.analyzeTasks {
 				if info.State == indexpb.JobState_JobStateInProgress {
-					log.Warn(context.TODO(), "progress task", log.Any("info", info))
+					log.Warn(m.ctx, "progress task", log.Any("info", info))
 				}
 			}
 			return
@@ -467,7 +467,7 @@ func (m *TaskManager) StoreStatsTaskState(clusterID string, taskID typeutil.Uniq
 	m.stateLock.Lock()
 	defer m.stateLock.Unlock()
 	if task, ok := m.statsTasks[key]; ok {
-		log.Info(context.TODO(), "store stats task state", log.String("clusterID", clusterID), log.Int64("TaskID", taskID),
+		log.Info(m.ctx, "store stats task state", log.String("clusterID", clusterID), log.Int64("TaskID", taskID),
 			log.String("state", state.String()), log.String("fail reason", failReason))
 		task.State = state
 		task.FailReason = failReason

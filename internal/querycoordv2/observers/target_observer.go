@@ -522,12 +522,12 @@ func (ob *TargetObserver) syncToDelegator(ctx context.Context, replica *meta.Rep
 
 	resp, err := ob.cluster.SyncDistribution(ctx, LeaderView.ID, req)
 	if err != nil {
-		log.Warn(context.TODO(), "failed to sync distribution", log.Err(err))
+		log.Warn(ctx, "failed to sync distribution", log.Err(err))
 		return false
 	}
 
 	if resp.ErrorCode != commonpb.ErrorCode_Success {
-		log.Warn(context.TODO(), "failed to sync distribution", log.String("reason", resp.GetReason()))
+		log.Warn(ctx, "failed to sync distribution", log.String("reason", resp.GetReason()))
 		return false
 	}
 

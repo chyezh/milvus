@@ -128,7 +128,7 @@ func (t *mixCompactionTask) preCompact() error {
 	}
 
 	outputSegmentCount := int64(math.Ceil(float64(currSize) / float64(t.targetSize)))
-	log.Info(context.TODO(), "preCompaction analyze",
+	log.Info(t.ctx, "preCompaction analyze",
 		log.Int64("planID", t.GetPlanID()),
 		log.Int64("inputSize", currSize),
 		log.Int64("targetSize", t.targetSize),
@@ -215,7 +215,7 @@ func (t *mixCompactionTask) writeSegment(ctx context.Context,
 		storage.WithDownloader(t.binlogIO.Download),
 		storage.WithStorageConfig(t.compactionParams.StorageConfig))
 	if err != nil {
-		log.Warn(context.TODO(), "compact wrong, fail to merge deltalogs", log.Err(err))
+		log.Warn(ctx, "compact wrong, fail to merge deltalogs", log.Err(err))
 		return
 	}
 	entityFilter := compaction.NewEntityFilter(delta, t.plan.GetCollectionTtl(), t.currentTime)
@@ -241,7 +241,7 @@ func (t *mixCompactionTask) writeSegment(ctx context.Context,
 		)
 	}
 	if err != nil {
-		log.Warn(context.TODO(), "compact wrong, failed to new insert binlogs reader", log.Err(err))
+		log.Warn(ctx, "compact wrong, failed to new insert binlogs reader", log.Err(err))
 		return
 	}
 	defer reader.Close()
@@ -256,7 +256,7 @@ func (t *mixCompactionTask) writeSegment(ctx context.Context,
 				err = nil
 				break
 			} else {
-				log.Warn(context.TODO(), "compact wrong, failed to iter through data", log.Err(err))
+				log.Warn(ctx, "compact wrong, failed to iter through data", log.Err(err))
 				return
 			}
 		}

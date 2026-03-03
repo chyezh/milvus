@@ -447,7 +447,7 @@ func (b *BalanceChecker) processBalanceQueue(
 		pq.Len() > 0 {
 		// Break if balanceOnMultipleCollections is disabled and we already have tasks
 		if !config.balanceOnMultipleCollections && (generatedSegmentTaskNum > 0 || generatedChannelTaskNum > 0) {
-			log.Debug(context.TODO(), "Balance on multiple collections disabled, stopping after first collection")
+			log.Debug(ctx, "Balance on multiple collections disabled, stopping after first collection")
 			break
 		}
 

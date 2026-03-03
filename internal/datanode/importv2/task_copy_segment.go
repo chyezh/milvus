@@ -293,7 +293,7 @@ func (t *CopySegmentTask) GetSegmentResults() map[int64]*datapb.CopySegmentResul
 // Returns:
 //   - []*conc.Future[any]: Futures for all segment copy operations (nil if validation fails)
 func (t *CopySegmentTask) Execute() []*conc.Future[any] {
-	log.Info(context.TODO(), "start copy segment task", WrapLogFields(t)...)
+	log.Info(t.ctx, "start copy segment task", WrapLogFields(t)...)
 
 	// Step 1: Update task state to InProgress
 	t.manager.Update(t.GetTaskID(), UpdateState(datapb.ImportTaskStateV2_InProgress))
@@ -373,12 +373,12 @@ func (t *CopySegmentTask) copySingleSegment(source *datapb.CopySegmentSource, ta
 		log.Int("jsonKeyIndexFieldCount", len(source.GetJsonKeyIndexFiles())),
 	)
 
-	log.Info(context.TODO(), "start copying single segment", logFields...)
+	log.Info(t.ctx, "start copying single segment", logFields...)
 
 	// Step 1: Validate source has required binlogs
 	if len(source.GetInsertBinlogs()) == 0 && len(source.GetDeltaBinlogs()) == 0 {
 		reason := "no insert/delete binlogs for segment"
-		log.Error(context.TODO(), reason, logFields...)
+		log.Error(t.ctx, reason, logFields...)
 		t.manager.Update(t.GetTaskID(), UpdateState(datapb.ImportTaskStateV2_Failed), UpdateReason(reason))
 		return nil, errors.New(reason)
 	}
@@ -399,7 +399,7 @@ func (t *CopySegmentTask) copySingleSegment(source *datapb.CopySegmentSource, ta
 
 	if err != nil {
 		reason := fmt.Sprintf("failed to copy segment files: %v", err)
-		log.Error(context.TODO(), reason, logFields...)
+		log.Error(t.ctx, reason, logFields...)
 		t.manager.Update(t.GetTaskID(), UpdateState(datapb.ImportTaskStateV2_Failed), UpdateReason(reason))
 		return nil, err
 	}
@@ -407,7 +407,7 @@ func (t *CopySegmentTask) copySingleSegment(source *datapb.CopySegmentSource, ta
 	// Step 4: Update segment result in task with complete metadata (binlogs + indexes)
 	t.manager.Update(t.GetTaskID(), UpdateSegmentResult(segmentResult))
 
-	log.Info(context.TODO(), "successfully copied single segment",
+	log.Info(t.ctx, "successfully copied single segment",
 		append(logFields, log.Int("copiedFileCount", len(copiedFiles)))...)
 	return nil, nil
 }
@@ -472,11 +472,11 @@ func (t *CopySegmentTask) CleanupCopiedFiles() {
 
 	// Step 2: Early return if no files to cleanup
 	if len(files) == 0 {
-		log.Info(context.TODO(), "no files to cleanup", log.Int64("taskID", t.taskID))
+		log.Info(t.ctx, "no files to cleanup", log.Int64("taskID", t.taskID))
 		return
 	}
 
-	log.Info(context.TODO(), "cleaning up copied files for failed task",
+	log.Info(t.ctx, "cleaning up copied files for failed task",
 		log.Int64("taskID", t.taskID),
 		log.Int64("jobID", t.jobID),
 		log.Int("fileCount", len(files)))

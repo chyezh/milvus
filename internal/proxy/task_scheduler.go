@@ -614,7 +614,7 @@ func (sched *taskScheduler) queryLoop() {
 					return struct{}{}, nil
 				})
 			} else {
-				log.Debug(context.TODO(), "query queue is empty ...")
+				log.Debug(sched.ctx, "query queue is empty ...")
 			}
 			sched.dqQueue.updateMetrics()
 		}

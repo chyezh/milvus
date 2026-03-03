@@ -71,14 +71,14 @@ func newRefreshChecker(
 // run starts the checker loop.
 func (c *externalCollectionRefreshChecker) run() {
 	checkInterval := Params.DataCoordCfg.ExternalCollectionCheckInterval.GetAsDuration(time.Second)
-	log.Info(context.TODO(), "start external collection checker", log.Duration("checkInterval", checkInterval))
+	log.Info(c.ctx, "start external collection checker", log.Duration("checkInterval", checkInterval))
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 
 	for {
 		select {
 		case <-c.closeChan:
-			log.Info(context.TODO(), "external collection checker exited")
+			log.Info(c.ctx, "external collection checker exited")
 			return
 		case <-ticker.C:
 			// Fetch all jobs from metadata
@@ -138,7 +138,7 @@ func (c *externalCollectionRefreshChecker) aggregateJobState(job *datapb.Externa
 			// This captures the last known progress at failure time
 			if progress != job.GetProgress() {
 				if err := c.refreshMeta.UpdateJobProgress(job.GetJobId(), progress); err != nil {
-					log.Warn(context.TODO(), "failed to update job progress before failure",
+					log.Warn(c.ctx, "failed to update job progress before failure",
 						log.Int64("jobID", job.GetJobId()),
 						log.Err(err))
 				}
@@ -146,7 +146,7 @@ func (c *externalCollectionRefreshChecker) aggregateJobState(job *datapb.Externa
 		}
 
 		if err := c.refreshMeta.UpdateJobState(job.GetJobId(), state, failReason); err != nil {
-			log.Warn(context.TODO(), "failed to update job state from task aggregation",
+			log.Warn(c.ctx, "failed to update job state from task aggregation",
 				log.Int64("jobID", job.GetJobId()),
 				log.Err(err))
 			return
@@ -158,7 +158,7 @@ func (c *externalCollectionRefreshChecker) aggregateJobState(job *datapb.Externa
 		if state != indexpb.JobState_JobStateFailed && state != indexpb.JobState_JobStateFinished {
 			if progress != job.GetProgress() {
 				if err := c.refreshMeta.UpdateJobProgress(job.GetJobId(), progress); err != nil {
-					log.Warn(context.TODO(), "failed to update job progress",
+					log.Warn(c.ctx, "failed to update job progress",
 						log.Int64("jobID", job.GetJobId()),
 						log.Err(err))
 				}
@@ -167,7 +167,7 @@ func (c *externalCollectionRefreshChecker) aggregateJobState(job *datapb.Externa
 	} else if progress != job.GetProgress() {
 		// Only progress changed
 		if err := c.refreshMeta.UpdateJobProgress(job.GetJobId(), progress); err != nil {
-			log.Warn(context.TODO(), "failed to update job progress",
+			log.Warn(c.ctx, "failed to update job progress",
 				log.Int64("jobID", job.GetJobId()),
 				log.Err(err))
 		}
@@ -191,7 +191,7 @@ func (c *externalCollectionRefreshChecker) logJobStats(jobs map[int64]*datapb.Ex
 	}
 
 	if len(jobs) > 0 {
-		log.Info(context.TODO(), "external collection job stats", log.Any("stateNum", stateNum))
+		log.Info(c.ctx, "external collection job stats", log.Any("stateNum", stateNum))
 	}
 }
 
@@ -210,7 +210,7 @@ func (c *externalCollectionRefreshChecker) tryTimeoutJob(job *datapb.ExternalCol
 	age := time.Since(startTime)
 
 	if age > timeout {
-		log.Warn(context.TODO(), "external collection job timeout",
+		log.Warn(c.ctx, "external collection job timeout",
 			log.Int64("jobID", job.GetJobId()),
 			log.Int64("collectionID", job.GetCollectionId()),
 			log.Duration("age", age),
@@ -221,7 +221,7 @@ func (c *externalCollectionRefreshChecker) tryTimeoutJob(job *datapb.ExternalCol
 			indexpb.JobState_JobStateFailed,
 			"timeout")
 		if err != nil {
-			log.Warn(context.TODO(), "failed to mark job as timed out",
+			log.Warn(c.ctx, "failed to mark job as timed out",
 				log.Int64("jobID", job.GetJobId()),
 				log.Err(err))
 			return
@@ -260,7 +260,7 @@ func (c *externalCollectionRefreshChecker) checkGC(job *datapb.ExternalCollectio
 	age := time.Since(endTime)
 
 	if age > retention {
-		log.Info(context.TODO(), "external collection job has reached GC retention",
+		log.Info(c.ctx, "external collection job has reached GC retention",
 			log.Int64("jobID", job.GetJobId()),
 			log.Int64("collectionID", job.GetCollectionId()),
 			log.Duration("age", age),
@@ -270,11 +270,11 @@ func (c *externalCollectionRefreshChecker) checkGC(job *datapb.ExternalCollectio
 		// so the next tick will naturally retry if etcd was temporarily unavailable.
 		err := c.refreshMeta.DropJob(c.ctx, job.GetJobId())
 		if err != nil {
-			log.Warn(context.TODO(), "failed to remove external collection job during GC, will retry on next check",
+			log.Warn(c.ctx, "failed to remove external collection job during GC, will retry on next check",
 				log.Int64("jobID", job.GetJobId()),
 				log.Err(err))
 			return
 		}
-		log.Info(context.TODO(), "external collection job removed", log.Int64("jobID", job.GetJobId()))
+		log.Info(c.ctx, "external collection job removed", log.Int64("jobID", job.GetJobId()))
 	}
 }

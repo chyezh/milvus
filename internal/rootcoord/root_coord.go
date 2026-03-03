@@ -213,7 +213,7 @@ func (c *Core) sendTimeTick(t Timestamp, reason string) error {
 func (c *Core) sendMinDdlTsAsTt() {
 	code := c.GetStateCode()
 	if code != commonpb.StateCode_Healthy {
-		log.Warn(context.TODO(), "rootCoord is not healthy, skip send timetick")
+		log.Warn(c.ctx, "rootCoord is not healthy, skip send timetick")
 		return
 	}
 	minBgDdlTs := c.ddlTsLockManager.GetMinDdlTs()
@@ -222,18 +222,18 @@ func (c *Core) sendMinDdlTsAsTt() {
 
 	// zero	-> ddlTsLockManager and scheduler not started.
 	if minDdlTs == typeutil.ZeroTimestamp {
-		log.Warn(context.TODO(), "zero ts was met, this should be only occurred in starting state", log.Uint64("minBgDdlTs", minBgDdlTs), log.Uint64("minNormalDdlTs", minNormalDdlTs))
+		log.Warn(c.ctx, "zero ts was met, this should be only occurred in starting state", log.Uint64("minBgDdlTs", minBgDdlTs), log.Uint64("minNormalDdlTs", minNormalDdlTs))
 		return
 	}
 
 	// max	-> abnormal case, impossible.
 	if minDdlTs == typeutil.MaxTimestamp {
-		log.Warn(context.TODO(), "ddl ts is abnormal, max ts was met", log.Uint64("minBgDdlTs", minBgDdlTs), log.Uint64("minNormalDdlTs", minNormalDdlTs))
+		log.Warn(c.ctx, "ddl ts is abnormal, max ts was met", log.Uint64("minBgDdlTs", minBgDdlTs), log.Uint64("minNormalDdlTs", minNormalDdlTs))
 		return
 	}
 
 	if err := c.sendTimeTick(minDdlTs, "timetick loop"); err != nil {
-		log.Warn(context.TODO(), "failed to send timetick", log.Err(err))
+		log.Warn(c.ctx, "failed to send timetick", log.Err(err))
 	}
 }
 
@@ -245,11 +245,11 @@ func (c *Core) startTimeTickLoop() {
 
 	if streamingutil.IsStreamingServiceEnabled() {
 		if err := snmanager.StaticStreamingNodeManager.RegisterStreamingEnabledListener(c.ctx, streamingNotifier); err != nil {
-			log.Info(context.TODO(), "register streaming enabled listener failed", log.Err(err))
+			log.Info(c.ctx, "register streaming enabled listener failed", log.Err(err))
 			return
 		}
 		if streamingNotifier.IsReady() {
-			log.Info(context.TODO(), "streaming service has been enabled, ddl timetick from rootcoord should not start")
+			log.Info(c.ctx, "streaming service has been enabled, ddl timetick from rootcoord should not start")
 			return
 		}
 	}
@@ -259,10 +259,10 @@ func (c *Core) startTimeTickLoop() {
 	for {
 		select {
 		case <-streamingNotifier.Ready():
-			log.Info(context.TODO(), "streaming service has been enabled, ddl timetick from rootcoord should stop")
+			log.Info(c.ctx, "streaming service has been enabled, ddl timetick from rootcoord should stop")
 			return
 		case <-c.ctx.Done():
-			log.Info(context.TODO(), "rootcoord's timetick loop quit!")
+			log.Info(c.ctx, "rootcoord's timetick loop quit!")
 			return
 		case <-ticker.C:
 			c.sendMinDdlTsAsTt()
@@ -456,7 +456,7 @@ func (c *Core) initInternal() error {
 	c.factory.Init(Params)
 	chanMap := c.meta.ListCollectionPhysicalChannels(c.ctx)
 	c.chanTimeTick = newTimeTickSync(initCtx, c.ctx, c.session.GetServerID(), c.factory, chanMap)
-	log.Info(context.TODO(), "create TimeTick sync done")
+	log.Info(initCtx, "create TimeTick sync done")
 
 	c.proxyClientManager = proxyutil.NewProxyClientManager(c.proxyCreator)
 
@@ -470,26 +470,26 @@ func (c *Core) initInternal() error {
 	)
 	c.proxyWatcher.AddSessionFunc(c.chanTimeTick.addSession, c.proxyClientManager.AddProxyClient)
 	c.proxyWatcher.DelSessionFunc(c.chanTimeTick.delSession, c.proxyClientManager.DelProxyClient)
-	log.Info(context.TODO(), "init proxy manager done")
+	log.Info(initCtx, "init proxy manager done")
 
 	c.metricsCacheManager = metricsinfo.NewMetricsCacheManager()
 
 	// Initialize telemetry manager for client telemetry collection
 	c.telemetryMgr = telemetry.NewTelemetryManager(c.etcdCli)
-	log.Debug(context.TODO(), "init telemetry manager done")
+	log.Debug(initCtx, "init telemetry manager done")
 
 	c.quotaCenter = NewQuotaCenter(c.proxyClientManager, c.mixCoord, c.tsoAllocator, c.meta)
-	log.Debug(context.TODO(), "RootCoord init QuotaCenter done")
+	log.Debug(initCtx, "RootCoord init QuotaCenter done")
 
 	// Initialize KeyManager for KMS key state management
 	c.keyManager = NewKeyManager(c.ctx, c.meta)
 	c.quotaCenter.SetKeyManager(c.keyManager)
-	log.Debug(context.TODO(), "RootCoord init KeyManager done")
+	log.Debug(initCtx, "RootCoord init KeyManager done")
 
 	if err := c.initCredentials(initCtx); err != nil {
 		return err
 	}
-	log.Info(context.TODO(), "init credentials done")
+	log.Info(initCtx, "init credentials done")
 
 	if err := c.initRbac(initCtx); err != nil {
 		return err
@@ -505,7 +505,7 @@ func (c *Core) initInternal() error {
 	if c.fileResourceObserver != nil {
 		c.fileResourceObserver.InitMeta(c.meta)
 	}
-	log.Info(context.TODO(), "init rootcoord done", log.Int64("nodeID", paramtable.GetNodeID()), log.String("Address", c.address))
+	log.Info(initCtx, "init rootcoord done", log.Int64("nodeID", paramtable.GetNodeID()), log.String("Address", c.address))
 	return nil
 }
 
@@ -528,7 +528,7 @@ func (c *Core) Init() error {
 		initError = c.initInternal()
 		RegisterDDLCallbacks(c)
 	})
-	log.Info(context.TODO(), "RootCoord init successfully")
+	log.Info(c.ctx, "RootCoord init successfully")
 	return initError
 }
 
@@ -694,19 +694,19 @@ func (c *Core) startInternal() error {
 			if err := c.proxyClientManager.RefreshPolicyInfoCache(c.ctx, &proxypb.RefreshPolicyInfoCacheRequest{
 				OpType: int32(typeutil.CacheRefresh),
 			}); err != nil {
-				log.RatedWarn(context.TODO(), log.RateDefault, "fail to refresh policy info cache", log.Err(err))
+				log.RatedWarn(c.ctx, log.RateDefault, "fail to refresh policy info cache", log.Err(err))
 				return err
 			}
 			return nil
 		}, retry.Attempts(100), retry.Sleep(time.Second)); err != nil {
-			log.Warn(context.TODO(), "fail to refresh policy info cache", log.Err(err))
+			log.Warn(c.ctx, "fail to refresh policy info cache", log.Err(err))
 		}
 	}()
 
 	c.startServerLoop()
 	c.UpdateStateCode(commonpb.StateCode_Healthy)
 	sessionutil.SaveServerInfo(typeutil.MixCoordRole, c.session.GetServerID())
-	log.Info(context.TODO(), "rootcoord startup successfully")
+	log.Info(c.ctx, "rootcoord startup successfully")
 	return nil
 }
 
@@ -3092,7 +3092,7 @@ func (c *Core) newChunkManagerFactory() (storage.ChunkManager, error) {
 	chunkManagerFactory := storage.NewChunkManagerFactoryWithParam(Params)
 	cli, err := chunkManagerFactory.NewPersistentStorageChunkManager(c.ctx)
 	if err != nil {
-		log.Error(context.TODO(), "chunk manager init failed", log.Err(err))
+		log.Error(c.ctx, "chunk manager init failed", log.Err(err))
 		return nil, err
 	}
 	return cli, err

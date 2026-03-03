@@ -109,15 +109,15 @@ func (s *mixCoordImpl) Register() error {
 	s.session.Register()
 	afterRegister := func() {
 		metrics.NumNodes.WithLabelValues(paramtable.GetStringNodeID(), typeutil.MixCoordRole).Inc()
-		log.Info(context.TODO(), "MixCoord Register Finished")
+		log.Info(s.ctx, "MixCoord Register Finished")
 	}
 	go func() {
 		if err := s.session.ProcessActiveStandBy(s.activateFunc); err != nil {
 			if s.ctx.Err() == context.Canceled {
-				log.Info(context.TODO(), "standby process canceled due to server shutdown")
+				log.Info(s.ctx, "standby process canceled due to server shutdown")
 				return
 			}
-			log.Error(context.TODO(), "failed to activate standby server", log.Err(err))
+			log.Error(s.ctx, "failed to activate standby server", log.Err(err))
 			panic(err)
 		}
 		afterRegister()
@@ -134,22 +134,22 @@ func (s *mixCoordImpl) Init() error {
 	s.initKVCreator()
 	s.initStreamingCoord()
 	s.UpdateStateCode(commonpb.StateCode_StandBy)
-	log.Info(context.TODO(), "MixCoord enter standby mode successfully")
+	log.Info(s.ctx, "MixCoord enter standby mode successfully")
 	return nil
 }
 
 func (s *mixCoordImpl) activateFunc() error {
-	log.Info(context.TODO(), "mixCoord switch from standby to active, activating")
+	log.Info(s.ctx, "mixCoord switch from standby to active, activating")
 	var err error
 	s.initOnce.Do(func() {
 		if err = s.initInternal(); err != nil {
-			log.Error(context.TODO(), "mixCoord init failed", log.Err(err))
+			log.Error(s.ctx, "mixCoord init failed", log.Err(err))
 		}
 	})
 	if err != nil {
 		return err
 	}
-	log.Info(context.TODO(), "mixCoord startup success", log.String("address", s.session.GetAddress()))
+	log.Info(s.ctx, "mixCoord startup success", log.String("address", s.session.GetAddress()))
 	s.startAndUpdateHealthy()
 	return err
 }
@@ -164,40 +164,40 @@ func (s *mixCoordImpl) initInternal() error {
 	RegisterWALCallbacks(s)
 
 	if err := s.streamingCoord.Start(s.ctx, s.fileResourceObserver); err != nil {
-		log.Error(context.TODO(), "streamCoord start failed", log.Err(err))
+		log.Error(s.ctx, "streamCoord start failed", log.Err(err))
 		return err
 	}
 
 	s.rootcoordServer.SetFileResourceObserver(s.fileResourceObserver)
 	if err := s.rootcoordServer.Init(); err != nil {
-		log.Error(context.TODO(), "rootCoord init failed", log.Err(err))
+		log.Error(s.ctx, "rootCoord init failed", log.Err(err))
 		return err
 	}
 
 	if err := s.rootcoordServer.Start(); err != nil {
-		log.Error(context.TODO(), "rootCoord start failed", log.Err(err))
+		log.Error(s.ctx, "rootCoord start failed", log.Err(err))
 		return err
 	}
 
 	s.datacoordServer.SetFileResourceObserver(s.fileResourceObserver)
 	if err := s.datacoordServer.Init(); err != nil {
-		log.Error(context.TODO(), "dataCoord init failed", log.Err(err))
+		log.Error(s.ctx, "dataCoord init failed", log.Err(err))
 		return err
 	}
 
 	if err := s.datacoordServer.Start(); err != nil {
-		log.Error(context.TODO(), "dataCoord start failed", log.Err(err))
+		log.Error(s.ctx, "dataCoord start failed", log.Err(err))
 		return err
 	}
 
 	s.queryCoordServer.SetFileResourceObserver(s.fileResourceObserver)
 	if err := s.queryCoordServer.Init(); err != nil {
-		log.Error(context.TODO(), "queryCoord init failed", log.Err(err))
+		log.Error(s.ctx, "queryCoord init failed", log.Err(err))
 		return err
 	}
 
 	if err := s.queryCoordServer.Start(); err != nil {
-		log.Error(context.TODO(), "queryCoord start failed", log.Err(err))
+		log.Error(s.ctx, "queryCoord start failed", log.Err(err))
 		return err
 	}
 
@@ -247,7 +247,7 @@ func (s *mixCoordImpl) checkExpiredPOSIXDIR() {
 	var entries []os.DirEntry
 	var err error
 	if entries, err = os.ReadDir(rootCachePath); err != nil {
-		log.Warn(context.TODO(), "failed to read root cache directory", log.String("path", rootCachePath), log.String("error", err.Error()))
+		log.Warn(s.ctx, "failed to read root cache directory", log.String("path", rootCachePath), log.String("error", err.Error()))
 		return
 	}
 	var subdirs []string
@@ -257,17 +257,17 @@ func (s *mixCoordImpl) checkExpiredPOSIXDIR() {
 		if entry.IsDir() {
 			subdirs = append(subdirs, entry.Name())
 			if nodeID, err := strconv.ParseInt(entry.Name(), 10, 64); err != nil {
-				log.Warn(context.TODO(), "invalid node directory name", log.String("dirName", entry.Name()), log.String("error", err.Error()))
+				log.Warn(s.ctx, "invalid node directory name", log.String("dirName", entry.Name()), log.String("error", err.Error()))
 			} else {
 				if !s.IsServerActive(nodeID) {
 					expiredDirPath := filepath.Join(rootCachePath, entry.Name())
 					if err := os.RemoveAll(expiredDirPath); err != nil {
-						log.Error(context.TODO(), "failed to remove expired node directory",
+						log.Error(s.ctx, "failed to remove expired node directory",
 							log.String("path", expiredDirPath),
 							log.Int64("nodeID", nodeID),
 							log.String("error", err.Error()))
 					} else {
-						log.Info(context.TODO(), "removed expired node directory",
+						log.Info(s.ctx, "removed expired node directory",
 							log.String("path", expiredDirPath),
 							log.Int64("nodeID", nodeID))
 						removedDirs = append(removedDirs, entry.Name())
@@ -277,7 +277,7 @@ func (s *mixCoordImpl) checkExpiredPOSIXDIR() {
 		}
 	}
 	if len(removedDirs) > 0 {
-		log.Info(context.TODO(), "root cache directory cleanup completed",
+		log.Info(s.ctx, "root cache directory cleanup completed",
 			log.String("path", rootCachePath),
 			log.Strings("allSubdirectories", subdirs),
 			log.Strings("removedDirectories", removedDirs),
@@ -325,23 +325,23 @@ func (s *mixCoordImpl) posixCleanupLoop(ctx context.Context) {
 }
 
 func (s *mixCoordImpl) Stop() error {
-	log.Info(context.TODO(), "graceful stop")
+	log.Info(s.ctx, "graceful stop")
 
 	s.stopPosixCleanupTask()
 
 	s.GracefulStop()
-	log.Info(context.TODO(), "graceful stop done")
+	log.Info(s.ctx, "graceful stop done")
 
 	if err := s.queryCoordServer.Stop(); err != nil {
-		log.Error(context.TODO(), "Failed to stop queryCoord", log.Err(err))
+		log.Error(s.ctx, "Failed to stop queryCoord", log.Err(err))
 	}
 
 	if err := s.datacoordServer.Stop(); err != nil {
-		log.Error(context.TODO(), "Failed to stop dataCoord", log.Err(err))
+		log.Error(s.ctx, "Failed to stop dataCoord", log.Err(err))
 	}
 
 	if err := s.rootcoordServer.Stop(); err != nil {
-		log.Error(context.TODO(), "Failed to stop rootCoord", log.Err(err))
+		log.Error(s.ctx, "Failed to stop rootCoord", log.Err(err))
 	}
 
 	s.fileResourceObserver.Stop()

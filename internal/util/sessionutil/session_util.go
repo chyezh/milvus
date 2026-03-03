@@ -327,7 +327,7 @@ func (s *Session) String() string {
 func (s *Session) Register() {
 	err := s.registerService()
 	if err != nil {
-		s.Logger().Error(context.TODO(), "register failed", log.Err(err))
+		s.Logger().Error(s.ctx, "register failed", log.Err(err))
 		panic(err)
 	}
 	s.UpdateRegistered(true)
@@ -405,23 +405,23 @@ func (s *Session) checkIDExist() {
 
 func (s *Session) getServerIDWithKey(key string) (int64, error) {
 	if os.Getenv(MilvusNodeIDForTesting) != "" {
-		log.Info(context.TODO(), "use node id for testing", log.String("nodeID", os.Getenv(MilvusNodeIDForTesting)))
+		log.Info(s.ctx, "use node id for testing", log.String("nodeID", os.Getenv(MilvusNodeIDForTesting)))
 		return strconv.ParseInt(os.Getenv(MilvusNodeIDForTesting), 10, 64)
 	}
 	for {
 		getResp, err := s.etcdCli.Get(s.ctx, path.Join(s.metaRoot, DefaultServiceRoot, key))
 		if err != nil {
-			log.Warn(context.TODO(), "Session get etcd key error", log.String("key", key), log.Err(err))
+			log.Warn(s.ctx, "Session get etcd key error", log.String("key", key), log.Err(err))
 			return -1, err
 		}
 		if getResp.Count <= 0 {
-			log.Warn(context.TODO(), "Session there is no value", log.String("key", key))
+			log.Warn(s.ctx, "Session there is no value", log.String("key", key))
 			continue
 		}
 		value := string(getResp.Kvs[0].Value)
 		valueInt, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
-			log.Warn(context.TODO(), "Session ParseInt error", log.String("value", value), log.Err(err))
+			log.Warn(s.ctx, "Session ParseInt error", log.String("value", value), log.Err(err))
 			continue
 		}
 		txnResp, err := s.etcdCli.Txn(s.ctx).If(
@@ -431,15 +431,15 @@ func (s *Session) getServerIDWithKey(key string) (int64, error) {
 				value)).
 			Then(clientv3.OpPut(path.Join(s.metaRoot, DefaultServiceRoot, key), strconv.FormatInt(valueInt+1, 10))).Commit()
 		if err != nil {
-			log.Warn(context.TODO(), "Session Txn failed", log.String("key", key), log.Err(err))
+			log.Warn(s.ctx, "Session Txn failed", log.String("key", key), log.Err(err))
 			return -1, err
 		}
 
 		if !txnResp.Succeeded {
-			log.Warn(context.TODO(), "Session Txn unsuccessful", log.String("key", key))
+			log.Warn(s.ctx, "Session Txn unsuccessful", log.String("key", key))
 			continue
 		}
-		log.Debug(context.TODO(), "Session get serverID success", log.String("key", key), log.Int64("ServerId", valueInt))
+		log.Debug(s.ctx, "Session get serverID success", log.String("key", key), log.Int64("ServerId", valueInt))
 		return valueInt, nil
 	}
 }
@@ -472,19 +472,19 @@ func (s *Session) registerService() error {
 		s.updateStandby(true)
 	}
 	completeKey := s.getCompleteKey()
-	s.Logger().Info(context.TODO(), "service begin to register to etcd")
+	s.Logger().Info(s.ctx, "service begin to register to etcd")
 
 	registerFn := func() error {
 		resp, err := s.etcdCli.Grant(s.ctx, s.sessionTTL)
 		if err != nil {
-			s.Logger().Error(context.TODO(), "register service: failed to grant lease from etcd", log.Err(err))
+			s.Logger().Error(s.ctx, "register service: failed to grant lease from etcd", log.Err(err))
 			return err
 		}
 		s.LeaseID = &resp.ID
 
 		sessionJSON, err := json.Marshal(s)
 		if err != nil {
-			s.Logger().Error(context.TODO(), "register service: failed to marshal session", log.Err(err))
+			s.Logger().Error(s.ctx, "register service: failed to marshal session", log.Err(err))
 			return err
 		}
 
@@ -505,7 +505,7 @@ func (s *Session) registerService() error {
 
 		txnResp, err := s.etcdCli.Txn(s.ctx).If(compareOps...).Then(ops...).Commit()
 		if err != nil {
-			s.Logger().Warn(context.TODO(), "register on etcd error, check the availability of etcd", log.Err(err))
+			s.Logger().Warn(s.ctx, "register on etcd error, check the availability of etcd", log.Err(err))
 			return err
 		}
 		if txnResp != nil && !txnResp.Succeeded {
@@ -514,7 +514,7 @@ func (s *Session) registerService() error {
 		if !s.enableActiveStandBy {
 			s.registeredRevision.Store(txnResp.Header.GetRevision())
 		}
-		s.Logger().Info(context.TODO(), "put session key into etcd, service registered successfully", log.String("key", completeKey), log.String("value", string(sessionJSON)))
+		s.Logger().Info(s.ctx, "put session key into etcd, service registered successfully", log.String("key", completeKey), log.String("value", string(sessionJSON)))
 		return nil
 	}
 	return retry.Do(s.ctx, registerFn, retry.Attempts(uint(s.sessionRetryTimes)), retry.RetryErr(isNotSessionVersionCheckFailure))
@@ -560,7 +560,7 @@ func (s *Session) getOpsForCoordinator(ops []clientv3.Op, compareOps []clientv3.
 // If keepAlive fails for unexpected error, it will send a signal to the channel.
 func (s *Session) processKeepAliveResponse() {
 	defer func() {
-		s.Logger().Info(context.TODO(), "keep alive loop exited successfully, try to revoke lease right away...")
+		s.Logger().Info(s.ctx, "keep alive loop exited successfully, try to revoke lease right away...")
 		// here the s.ctx may be already done, so we use context.Background() with a timeout to revoke the lease.
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -700,11 +700,11 @@ func (s *Session) GetSessionsWithVersionRange(prefix string, r semver.Range) (ma
 			return nil, 0, err
 		}
 		if !r(session.Version) {
-			log.Debug(context.TODO(), "Session version out of range", log.String("version", session.Version.String()), log.Int64("serverID", session.ServerID))
+			log.Debug(s.ctx, "Session version out of range", log.String("version", session.Version.String()), log.Int64("serverID", session.ServerID))
 			continue
 		}
 		_, mapKey := path.Split(string(kv.Key))
-		log.Debug(context.TODO(), "SessionUtil GetSessions ", log.String("prefix", prefix),
+		log.Debug(s.ctx, "SessionUtil GetSessions ", log.String("prefix", prefix),
 			log.String("key", mapKey),
 			log.String("address", session.Address))
 		res[mapKey] = session
@@ -724,7 +724,7 @@ func (s *Session) GoingStop() error {
 	completeKey := s.getCompleteKey()
 	resp, err := s.etcdCli.Get(s.ctx, completeKey, clientv3.WithCountOnly())
 	if err != nil {
-		s.Logger().Error(context.TODO(), "fail to get the session", log.String("key", completeKey), log.Err(err))
+		s.Logger().Error(s.ctx, "fail to get the session", log.String("key", completeKey), log.Err(err))
 		return err
 	}
 	if resp.Count == 0 {
@@ -733,12 +733,12 @@ func (s *Session) GoingStop() error {
 	s.Stopping = true
 	sessionJSON, err := json.Marshal(s)
 	if err != nil {
-		s.Logger().Error(context.TODO(), "fail to marshal the session", log.String("key", completeKey))
+		s.Logger().Error(s.ctx, "fail to marshal the session", log.String("key", completeKey))
 		return err
 	}
 	_, err = s.etcdCli.Put(s.ctx, completeKey, string(sessionJSON), clientv3.WithLease(*s.LeaseID))
 	if err != nil {
-		s.Logger().Error(context.TODO(), "fail to update the session to stopping state", log.String("key", completeKey))
+		s.Logger().Error(s.ctx, "fail to update the session to stopping state", log.String("key", completeKey))
 		return err
 	}
 	return nil
@@ -940,7 +940,7 @@ func (w *sessionWatcher) EventChannel() <-chan *SessionEvent {
 }
 
 func (s *Session) Stop() {
-	log.Info(context.TODO(), "session stopping", log.String("serverName", s.ServerName))
+	log.Info(s.ctx, "session stopping", log.String("serverName", s.ServerName))
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -1009,19 +1009,19 @@ func (s *Session) ProcessActiveStandBy(activateFunc func() error) error {
 		for _, role := range oldRoles {
 			sessions, _, err := s.GetSessions(s.ctx, role)
 			if err != nil {
-				log.Debug(context.TODO(), "failed to get old sessions", log.String("role", role), log.Err(err))
+				log.Debug(s.ctx, "failed to get old sessions", log.String("role", role), log.Err(err))
 				continue
 			}
 			if len(sessions) > 0 {
-				log.Info(context.TODO(), "old session exists", log.String("role", role))
+				log.Info(s.ctx, "old session exists", log.String("role", role))
 				return false, -1, merr.ErrOldSessionExists
 			}
 		}
 
-		log.Info(context.TODO(), fmt.Sprintf("try to register as ACTIVE %v service...", s.ServerName))
+		log.Info(s.ctx, fmt.Sprintf("try to register as ACTIVE %v service...", s.ServerName))
 		sessionJSON, err := json.Marshal(s)
 		if err != nil {
-			log.Error(context.TODO(), "json marshal error", log.Err(err))
+			log.Error(s.ctx, "json marshal error", log.Err(err))
 			return false, -1, err
 		}
 
@@ -1040,24 +1040,24 @@ func (s *Session) ProcessActiveStandBy(activateFunc func() error) error {
 
 		txnResp, err := s.etcdCli.Txn(s.ctx).If(compareOps...).Then(ops...).Commit()
 		if err != nil {
-			log.Error(context.TODO(), "register active key to etcd failed", log.Err(err))
+			log.Error(s.ctx, "register active key to etcd failed", log.Err(err))
 			return false, -1, err
 		}
 		doRegistered := txnResp.Succeeded
 		revision := txnResp.Header.GetRevision()
 		if doRegistered {
 			s.registeredRevision.Store(revision)
-			log.Info(context.TODO(), fmt.Sprintf("register ACTIVE %s", s.ServerName), log.Int64("revision", revision))
+			log.Info(s.ctx, fmt.Sprintf("register ACTIVE %s", s.ServerName), log.Int64("revision", revision))
 		} else {
-			log.Info(context.TODO(), fmt.Sprintf("ACTIVE %s has already been registered", s.ServerName))
+			log.Info(s.ctx, fmt.Sprintf("ACTIVE %s has already been registered", s.ServerName))
 		}
 		return doRegistered, revision, nil
 	}
 	s.updateStandby(true)
-	log.Info(context.TODO(), fmt.Sprintf("serverName: %v enter STANDBY mode", s.ServerName))
+	log.Info(s.ctx, fmt.Sprintf("serverName: %v enter STANDBY mode", s.ServerName))
 	go func() {
 		for s.isStandby.Load().(bool) {
-			log.Debug(context.TODO(), fmt.Sprintf("serverName: %v is in STANDBY ...", s.ServerName))
+			log.Debug(s.ctx, fmt.Sprintf("serverName: %v is in STANDBY ...", s.ServerName))
 			time.Sleep(10 * time.Second)
 		}
 	}()
@@ -1077,7 +1077,7 @@ func (s *Session) ProcessActiveStandBy(activateFunc func() error) error {
 		if registered {
 			break
 		}
-		log.Info(context.TODO(), fmt.Sprintf("%s start to watch ACTIVE key %s", s.ServerName, s.activeKey))
+		log.Info(s.ctx, fmt.Sprintf("%s start to watch ACTIVE key %s", s.ServerName, s.activeKey))
 		ctx, cancel := context.WithCancel(s.ctx)
 		watchChan := s.etcdCli.Watch(ctx, s.activeKey, clientv3.WithPrevKV(), clientv3.WithRev(revision))
 		select {

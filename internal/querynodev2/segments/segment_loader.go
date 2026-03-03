@@ -179,7 +179,7 @@ func NewLoader(
 		ioPoolSize = configPoolSize
 	}
 
-	log.Info(context.TODO(), "SegmentLoader created", log.Int("ioPoolSize", ioPoolSize))
+	log.Info(ctx, "SegmentLoader created", log.Int("ioPoolSize", ioPoolSize))
 	duf := NewDiskUsageFetcher(ctx)
 	go duf.Start()
 
@@ -244,14 +244,14 @@ func (loader *segmentLoader) Load(ctx context.Context,
 	segments ...*querypb.SegmentLoadInfo,
 ) ([]Segment, error) {
 	if len(segments) == 0 {
-		log.Info(context.TODO(), "no segment to load")
+		log.Info(ctx, "no segment to load")
 		return nil, nil
 	}
 
 	collection := loader.manager.Collection.Get(collectionID)
 	if collection == nil {
 		err := merr.WrapErrCollectionNotFound(collectionID)
-		log.Warn(context.TODO(), "failed to get collection", log.Err(err))
+		log.Warn(ctx, "failed to get collection", log.Err(err))
 		return nil, err
 	}
 	// Filter out loaded & loading segments
@@ -259,7 +259,7 @@ func (loader *segmentLoader) Load(ctx context.Context,
 	defer loader.unregister(infos...)
 
 	// continue to wait other task done
-	log.Info(context.TODO(), "start loading...", log.Int("segmentNum", len(segments)), log.Int("afterFilter", len(infos)))
+	log.Info(ctx, "start loading...", log.Int("segmentNum", len(segments)), log.Int("afterFilter", len(infos)))
 
 	var err error
 	var requestResourceResult requestResourceResult
@@ -268,7 +268,7 @@ func (loader *segmentLoader) Load(ctx context.Context,
 	// no need to check resource for lazy load here
 	requestResourceResult, err = loader.requestResource(ctx, infos...)
 	if err != nil {
-		log.Warn(context.TODO(), "request resource failed", log.Err(err))
+		log.Warn(ctx, "request resource failed", log.Err(err))
 		return nil, err
 	}
 	defer loader.freeRequestResource(requestResourceResult)
@@ -277,7 +277,7 @@ func (loader *segmentLoader) Load(ctx context.Context,
 	loaded := typeutil.NewConcurrentMap[int64, Segment]()
 	defer func() {
 		newSegments.Range(func(segmentID int64, s Segment) bool {
-			log.Warn(context.TODO(), "release new segment created due to load failure",
+			log.Warn(ctx, "release new segment created due to load failure",
 				log.Int64("segmentID", segmentID),
 				log.Err(err),
 			)
@@ -321,7 +321,7 @@ func (loader *segmentLoader) Load(ctx context.Context,
 			loadInfo,
 		)
 		if err != nil {
-			log.Warn(context.TODO(), "load segment failed when create new segment",
+			log.Warn(ctx, "load segment failed when create new segment",
 				log.Int64("partitionID", loadInfo.GetPartitionID()),
 				log.Int64("segmentID", loadInfo.GetSegmentID()),
 				log.Err(err),
@@ -345,12 +345,12 @@ func (loader *segmentLoader) Load(ctx context.Context,
 		defer func() {
 			metrics.QueryNodeLoadSegmentConcurrency.WithLabelValues(paramtable.GetStringNodeID(), "LoadSegment").Dec()
 			if err != nil {
-				logger.Warn(context.TODO(), "load segment failed when load data into memory", log.Err(err))
+				logger.Warn(ctx, "load segment failed when load data into memory", log.Err(err))
 			}
-			logger.Info(context.TODO(), "load segment done")
+			logger.Info(ctx, "load segment done")
 		}()
 		tr := timerecord.NewTimeRecorder("loadDurationPerSegment")
-		logger.Info(context.TODO(), "load segment...")
+		logger.Info(ctx, "load segment...")
 
 		// L0 segment has no index or data to be load.
 		if loadInfo.GetLevel() != datapb.SegmentLevel_L0 {
@@ -365,7 +365,7 @@ func (loader *segmentLoader) Load(ctx context.Context,
 		}
 
 		if !segment.BloomFilterExist() {
-			log.Debug(context.TODO(), "loading bloom filter for segment", log.Int64("segmentID", segment.ID()))
+			log.Debug(ctx, "loading bloom filter for segment", log.Int64("segmentID", segment.ID()))
 			bfs, err := loader.loadSingleBloomFilterSet(ctx, loadInfo.GetCollectionID(), loadInfo, segment.Type())
 			if err != nil {
 				return errors.Wrap(err, "At LoadBloomFilter")
@@ -388,25 +388,25 @@ func (loader *segmentLoader) Load(ctx context.Context,
 
 	// Start to load,
 	// Make sure we can always benefit from concurrency, and not spawn too many idle goroutines
-	log.Info(context.TODO(), "start to load segments in parallel",
+	log.Info(ctx, "start to load segments in parallel",
 		log.Int("segmentNum", len(infos)),
 		log.Int("concurrencyLevel", requestResourceResult.ConcurrencyLevel))
 
 	err = funcutil.ProcessFuncParallel(len(infos),
 		requestResourceResult.ConcurrencyLevel, loadSegmentFunc, "loadSegmentFunc")
 	if err != nil {
-		log.Warn(context.TODO(), "failed to load some segments", log.Err(err))
+		log.Warn(ctx, "failed to load some segments", log.Err(err))
 		return nil, err
 	}
 
 	// Wait for all segments loaded
 	segmentIDs := lo.Map(segments, func(info *querypb.SegmentLoadInfo, _ int) int64 { return info.GetSegmentID() })
 	if err := loader.waitSegmentLoadDone(ctx, segmentType, segmentIDs, version); err != nil {
-		log.Warn(context.TODO(), "failed to wait the filtered out segments load done", log.Err(err))
+		log.Warn(ctx, "failed to wait the filtered out segments load done", log.Err(err))
 		return nil, err
 	}
 
-	log.Info(context.TODO(), "all segment load done")
+	log.Info(ctx, "all segment load done")
 	var result []Segment
 	loaded.Range(func(_ int64, s Segment) bool {
 		result = append(result, s)
@@ -962,7 +962,7 @@ func (loader *segmentLoader) LoadSegment(ctx context.Context,
 		return merr.WrapErrParameterInvalid("LocalSegment", fmt.Sprintf("%T", seg))
 	}
 
-	log.Info(context.TODO(), "start loading segment files",
+	log.Info(ctx, "start loading segment files",
 		log.Int64("rowNum", loadInfo.GetNumOfRows()),
 		log.String("segmentType", segment.Type().String()),
 		log.Int32("priority", int32(loadInfo.GetPriority())))
@@ -970,7 +970,7 @@ func (loader *segmentLoader) LoadSegment(ctx context.Context,
 	collection := loader.manager.Collection.Get(segment.Collection())
 	if collection == nil {
 		err := merr.WrapErrCollectionNotFound(segment.Collection())
-		log.Warn(context.TODO(), "failed to get collection while loading segment", log.Err(err))
+		log.Warn(ctx, "failed to get collection while loading segment", log.Err(err))
 		return err
 	}
 	pkField := GetPkField(collection.Schema())
@@ -995,7 +995,7 @@ func (loader *segmentLoader) LoadSegment(ctx context.Context,
 
 	// load statslog if it's growing segment
 	if segment.segmentType == SegmentTypeGrowing {
-		log.Info(context.TODO(), "loading statslog...")
+		log.Info(ctx, "loading statslog...")
 		pkStatsBinlogs, logType := loader.filterPKStatsBinlogs(loadInfo.Statslogs, pkField.GetFieldID())
 		err := loader.loadBloomFilter(ctx, segment.ID(), segment.bloomFilterSet, pkStatsBinlogs, logType)
 		if err != nil {
@@ -1003,7 +1003,7 @@ func (loader *segmentLoader) LoadSegment(ctx context.Context,
 		}
 
 		if len(loadInfo.Bm25Logs) > 0 {
-			log.Info(context.TODO(), "loading bm25 stats...")
+			log.Info(ctx, "loading bm25 stats...")
 			bm25StatsLogs := loader.filterBM25Stats(loadInfo.Bm25Logs)
 
 			err = loader.loadBm25Stats(ctx, segment.ID(), segment.bm25Stats, bm25StatsLogs)
@@ -1094,7 +1094,7 @@ func (loader *segmentLoader) loadFieldsIndex(ctx context.Context,
 			return err
 		}
 
-		log.Info(context.TODO(), "load field binlogs done for sealed segment with index",
+		log.Info(ctx, "load field binlogs done for sealed segment with index",
 			log.Int64("fieldID", fieldID),
 			log.Any("binlog", fieldInfo.FieldBinlog.Binlogs),
 			log.Int32("current_index_version", fieldInfo.IndexInfo.GetCurrentIndexVersion()),
@@ -1186,7 +1186,7 @@ func (loader *segmentLoader) loadBloomFilter(ctx context.Context, segmentID int6
 	binlogPaths []string, logType storage.StatsLogType,
 ) error {
 	if len(binlogPaths) == 0 {
-		log.Info(context.TODO(), "there are no stats logs saved with segment")
+		log.Info(ctx, "there are no stats logs saved with segment")
 		return nil
 	}
 
@@ -1204,13 +1204,13 @@ func (loader *segmentLoader) loadBloomFilter(ctx context.Context, segmentID int6
 	if logType == storage.CompoundStatsType {
 		stats, err = storage.DeserializeStatsList(blobs[0])
 		if err != nil {
-			log.Warn(context.TODO(), "failed to deserialize stats list", log.Err(err))
+			log.Warn(ctx, "failed to deserialize stats list", log.Err(err))
 			return err
 		}
 	} else {
 		stats, err = storage.DeserializeStats(blobs)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to deserialize stats", log.Err(err))
+			log.Warn(ctx, "failed to deserialize stats", log.Err(err))
 			return err
 		}
 	}
@@ -1225,7 +1225,7 @@ func (loader *segmentLoader) loadBloomFilter(ctx context.Context, segmentID int6
 		size += stat.BF.Cap()
 		bfs.AddHistoricalStats(pkStat)
 	}
-	log.Info(context.TODO(), "Successfully load pk stats", log.Duration("time", time.Since(startTs)), log.Uint("size", size))
+	log.Info(ctx, "Successfully load pk stats", log.Duration("time", time.Since(startTs)), log.Uint("size", size))
 	return nil
 }
 
@@ -2107,7 +2107,7 @@ func (loader *segmentLoader) LoadIndex(ctx context.Context,
 	}
 	defer loader.freeRequestResource(requestResourceResult)
 
-	log.Info(context.TODO(), "segment loader start to load index", log.Int("segmentNumAfterFilter", len(infos)))
+	log.Info(ctx, "segment loader start to load index", log.Int("segmentNumAfterFilter", len(infos)))
 	metrics.QueryNodeLoadSegmentConcurrency.WithLabelValues(paramtable.GetStringNodeID(), "LoadIndex").Inc()
 	defer metrics.QueryNodeLoadSegmentConcurrency.WithLabelValues(paramtable.GetStringNodeID(), "LoadIndex").Dec()
 
@@ -2116,13 +2116,13 @@ func (loader *segmentLoader) LoadIndex(ctx context.Context,
 	for _, loadInfo := range infos {
 		for _, info := range loadInfo.GetIndexInfos() {
 			if len(info.GetIndexFilePaths()) == 0 {
-				log.Warn(context.TODO(), "failed to add index for segment, index file list is empty, the segment may be too small")
+				log.Warn(ctx, "failed to add index for segment, index file list is empty, the segment may be too small")
 				return merr.WrapErrIndexNotFound("index file list empty")
 			}
 
 			err := loader.loadFieldIndex(ctx, segment, info)
 			if err != nil {
-				log.Warn(context.TODO(), "failed to load index for segment", log.Err(err))
+				log.Warn(ctx, "failed to load index for segment", log.Err(err))
 				return err
 			}
 		}
@@ -2144,7 +2144,7 @@ func (loader *segmentLoader) ReopenSegments(ctx context.Context,
 	// TODO use calculated resource from segcore after supported
 	requestResourceResult, err := loader.requestResource(ctx, infos...)
 	if err != nil {
-		log.Warn(context.TODO(), "reopen segment request resource failed", log.Err(err))
+		log.Warn(ctx, "reopen segment request resource failed", log.Err(err))
 		return err
 	}
 	defer loader.freeRequestResource(requestResourceResult)
@@ -2152,13 +2152,13 @@ func (loader *segmentLoader) ReopenSegments(ctx context.Context,
 	for _, info := range infos {
 		segment := loader.manager.Segment.GetSealed(info.GetSegmentID())
 		if segment == nil {
-			log.Warn(context.TODO(), "failed to reopen segment, segment not loaded", log.Int64("segmentID", info.GetSegmentID()))
+			log.Warn(ctx, "failed to reopen segment, segment not loaded", log.Int64("segmentID", info.GetSegmentID()))
 			continue
 		}
 
 		err := segment.Reopen(ctx, info)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to reopen segment", log.Int64("segmentID", info.GetSegmentID()), log.Err(err))
+			log.Warn(ctx, "failed to reopen segment", log.Int64("segmentID", info.GetSegmentID()), log.Err(err))
 			return err
 		}
 	}

@@ -108,7 +108,7 @@ func (s *Server) Prepare() error {
 // init initializes QueryNode's grpc service.
 func (s *Server) init() error {
 	etcdConfig := &paramtable.Get().EtcdCfg
-	log.Debug(context.TODO(), "QueryNode", log.Int("port", s.listener.Port()))
+	log.Debug(s.ctx, "QueryNode", log.Int("port", s.listener.Port()))
 
 	etcdCli, err := etcd.CreateEtcdClient(
 		etcdConfig.UseEmbedEtcd.GetAsBool(),
@@ -123,13 +123,13 @@ func (s *Server) init() error {
 		etcdConfig.EtcdTLSMinVersion.GetValue(),
 		etcdConfig.ClientOptions()...)
 	if err != nil {
-		log.Debug(context.TODO(), "QueryNode connect to etcd failed", log.Err(err))
+		log.Debug(s.ctx, "QueryNode connect to etcd failed", log.Err(err))
 		return err
 	}
 	s.etcdCli = etcdCli
 	s.SetEtcdClient(etcdCli)
 	s.querynode.SetAddress(s.listener.Address())
-	log.Debug(context.TODO(), "QueryNode connect to etcd successfully")
+	log.Debug(s.ctx, "QueryNode connect to etcd successfully")
 	s.grpcWG.Add(1)
 	go s.startGrpcLoop()
 	// wait for grpc server loop start
@@ -139,9 +139,9 @@ func (s *Server) init() error {
 	}
 
 	s.querynode.UpdateStateCode(commonpb.StateCode_Initializing)
-	log.Debug(context.TODO(), "QueryNode", log.Any("State", commonpb.StateCode_Initializing))
+	log.Debug(s.ctx, "QueryNode", log.Any("State", commonpb.StateCode_Initializing))
 	if err := s.querynode.Init(); err != nil {
-		log.Error(context.TODO(), "QueryNode init error: ", log.Err(err))
+		log.Error(s.ctx, "QueryNode init error: ", log.Err(err))
 		return err
 	}
 	s.serverID.Store(s.querynode.GetNodeID())
@@ -152,11 +152,11 @@ func (s *Server) init() error {
 // start starts QueryNode's grpc service.
 func (s *Server) start() error {
 	if err := s.querynode.Start(); err != nil {
-		log.Error(context.TODO(), "QueryNode start failed", log.Err(err))
+		log.Error(s.ctx, "QueryNode start failed", log.Err(err))
 		return err
 	}
 	if err := s.querynode.Register(); err != nil {
-		log.Error(context.TODO(), "QueryNode register service failed", log.Err(err))
+		log.Error(s.ctx, "QueryNode register service failed", log.Err(err))
 		return err
 	}
 	return nil

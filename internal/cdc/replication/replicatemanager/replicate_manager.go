@@ -61,14 +61,14 @@ func (r *replicateManager) CreateReplicator(channel *meta.ReplicateChannel) {
 	}
 	_, ok := r.replicators[repKey]
 	if ok {
-		logger.Debug(context.TODO(), "replicator already exists, skip create replicator")
+		logger.Debug(r.ctx, "replicator already exists, skip create replicator")
 		return
 	}
 	replicator := NewChannelReplicator(channel)
 	replicator.StartReplication()
 	r.replicators[repKey] = replicator
 	r.replicatorChannels[repKey] = channel
-	logger.Info(context.TODO(), "created replicator for replicate pchannel")
+	logger.Info(r.ctx, "created replicator for replicate pchannel")
 }
 
 func (r *replicateManager) RemoveReplicator(key string, modRevision int64) {
@@ -82,13 +82,13 @@ func (r *replicateManager) removeReplicatorInternal(key string, modRevision int6
 	repKey := buildReplicatorKey(key, modRevision)
 	replicator, ok := r.replicators[repKey]
 	if !ok {
-		logger.Info(context.TODO(), "replicator not found, skip remove")
+		logger.Info(r.ctx, "replicator not found, skip remove")
 		return
 	}
 	replicator.StopReplication()
 	delete(r.replicators, repKey)
 	delete(r.replicatorChannels, repKey)
-	logger.Info(context.TODO(), "removed replicator for replicate pchannel")
+	logger.Info(r.ctx, "removed replicator for replicate pchannel")
 }
 
 func (r *replicateManager) RemoveOutdatedReplicators(aliveChannels []*meta.ReplicateChannel) {

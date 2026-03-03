@@ -44,7 +44,7 @@ func RateLimitInterceptor(limiter types.Limiter) grpc.UnaryServerInterceptor {
 		}
 		dbID, collectionIDToPartIDs, rt, n, err := GetRequestInfo(ctx, request)
 		if err != nil {
-			log.Warn(context.TODO(), "failed to get request info", log.Err(err))
+			log.Warn(ctx, "failed to get request info", log.Err(err))
 			return handler(ctx, req)
 		}
 		if rt == internalpb.RateType_DMLBulkLoad {
@@ -63,7 +63,7 @@ func RateLimitInterceptor(limiter types.Limiter) grpc.UnaryServerInterceptor {
 			if rsp != nil {
 				return rsp, nil
 			}
-			log.Warn(context.TODO(), "failed to get failed response, please check it!", log.Err(err))
+			log.Warn(ctx, "failed to get failed response, please check it!", log.Err(err))
 			return nil, err
 		}
 		metrics.ProxyRateLimitReqCount.WithLabelValues(nodeID, rt.String(), metrics.SuccessLabel).Inc()

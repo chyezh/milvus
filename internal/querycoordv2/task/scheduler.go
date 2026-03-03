@@ -652,7 +652,7 @@ func (scheduler *taskScheduler) tryPromoteAll() {
 
 func (scheduler *taskScheduler) promote(task Task) error {
 	if err := scheduler.check(task); err != nil {
-		log.Info(context.TODO(), "failed to promote task", log.Err(err))
+		log.Info(scheduler.ctx, "failed to promote task", log.Err(err))
 		return err
 	}
 
@@ -794,7 +794,7 @@ func (scheduler *taskScheduler) schedule(node int64) {
 	scheduler.tryPromoteAll()
 	promoteDur := tr.RecordSpan()
 
-	log.Debug(context.TODO(), "process tasks related to node",
+	log.Debug(scheduler.ctx, "process tasks related to node",
 		log.Int("processingTaskNum", scheduler.processQueue.Len()),
 		log.Int("waitingTaskNum", scheduler.waitQueue.Len()),
 		log.Int("segmentTaskNum", scheduler.segmentTasks.Len()),
@@ -833,7 +833,7 @@ func (scheduler *taskScheduler) schedule(node int64) {
 
 	scheduler.updateTaskMetrics()
 
-	log.Info(context.TODO(), "processed tasks",
+	log.Info(scheduler.ctx, "processed tasks",
 		log.Int("toProcessNum", len(toProcess)),
 		log.Int32("committedNum", commmittedNum.Load()),
 		log.Int("toRemoveNum", len(toRemove)),
@@ -843,7 +843,7 @@ func (scheduler *taskScheduler) schedule(node int64) {
 		log.Duration("totalDur", tr.ElapseSpan()),
 	)
 
-	log.Info(context.TODO(), "process tasks related to node done",
+	log.Info(scheduler.ctx, "process tasks related to node done",
 		log.Int("processingTaskNum", scheduler.processQueue.Len()),
 		log.Int("waitingTaskNum", scheduler.waitQueue.Len()),
 		log.Int("segmentTaskNum", scheduler.segmentTasks.Len()),
@@ -939,7 +939,7 @@ func (scheduler *taskScheduler) process(task Task) bool {
 	actions, step := task.Actions(), task.Step()
 	executor, ok := scheduler.executors.Get(actions[step].Node())
 	if !ok {
-		log.Warn(context.TODO(), "no executor for QueryNode",
+		log.Warn(scheduler.ctx, "no executor for QueryNode",
 			log.Int("step", step),
 			log.Int64("nodeID", actions[step].Node()))
 		return false
@@ -986,7 +986,7 @@ func (scheduler *taskScheduler) recordSegmentTaskError(task *SegmentTask) {
 
 func (scheduler *taskScheduler) remove(task Task) {
 	if errors.Is(task.Err(), merr.ErrSegmentNotFound) {
-		log.Info(context.TODO(), "segment in target has been cleaned, trigger force update next target", log.Int64("collectionID", task.CollectionID()))
+		log.Info(scheduler.ctx, "segment in target has been cleaned, trigger force update next target", log.Int64("collectionID", task.CollectionID()))
 		// Avoid using task.Ctx as it may be canceled before remove is called.
 		scheduler.targetMgr.UpdateCollectionNextTarget(scheduler.ctx, task.CollectionID())
 	}
@@ -1001,7 +1001,7 @@ func (scheduler *taskScheduler) remove(task Task) {
 				nodeID := action.Node()
 				duration := paramtable.Get().QueryCoordCfg.ResourceExhaustionPenaltyDuration.GetAsDuration(time.Second)
 				scheduler.nodeMgr.MarkResourceExhaustion(nodeID, duration)
-				log.Info(context.TODO(), "mark resource exhaustion for node", log.Int64("nodeID", nodeID), log.Duration("duration", duration), log.Err(task.Err()))
+				log.Info(scheduler.ctx, "mark resource exhaustion for node", log.Int64("nodeID", nodeID), log.Duration("duration", duration), log.Err(task.Err()))
 			}
 		}
 	}
@@ -1041,7 +1041,7 @@ func (scheduler *taskScheduler) remove(task Task) {
 		scheduler.segmentTasks.Remove(index)
 	}
 
-	log.Info(context.TODO(), "task removed", log.Int64("taskID", task.ID()))
+	log.Info(scheduler.ctx, "task removed", log.Int64("taskID", task.ID()))
 
 	if scheduler.meta.Exist(task.Context(), task.CollectionID()) {
 		metrics.QueryCoordTaskLatency.WithLabelValues(fmt.Sprint(task.CollectionID()),
@@ -1104,7 +1104,7 @@ func (scheduler *taskScheduler) checkStale(task Task) error {
 	if task.ReplicaID() != -1 {
 		replica = scheduler.meta.ReplicaManager.Get(scheduler.ctx, task.ReplicaID())
 		if replica == nil {
-			log.Warn(context.TODO(), "task stale due to replica not found")
+			log.Warn(scheduler.ctx, "task stale due to replica not found")
 			return merr.WrapErrReplicaNotFound(task.ReplicaID())
 		}
 	}
@@ -1127,17 +1127,17 @@ func (scheduler *taskScheduler) checkStale(task Task) error {
 
 		nodeInfo := scheduler.nodeMgr.Get(targetNode)
 		if nodeInfo == nil {
-			log.Warn(context.TODO(), "task stale due to node not found", log.Int64("nodeID", targetNode))
+			log.Warn(scheduler.ctx, "task stale due to node not found", log.Int64("nodeID", targetNode))
 			return merr.WrapErrNodeNotFound(targetNode)
 		}
 		if action.Type() == ActionTypeGrow {
 			if nodeInfo.IsStoppingState() {
-				log.Warn(context.TODO(), "task stale due to node offline", log.Int64("nodeID", targetNode))
+				log.Warn(scheduler.ctx, "task stale due to node offline", log.Int64("nodeID", targetNode))
 				return merr.WrapErrNodeOffline(targetNode)
 			}
 
 			if replica != nil && (replica.ContainRONode(targetNode) || replica.ContainROSQNode(targetNode)) {
-				log.Warn(context.TODO(), "task stale due to node becomes ro node", log.Int64("nodeID", targetNode))
+				log.Warn(scheduler.ctx, "task stale due to node becomes ro node", log.Int64("nodeID", targetNode))
 				return merr.WrapErrNodeStateUnexpected(targetNode, "node becomes ro node")
 			}
 		}

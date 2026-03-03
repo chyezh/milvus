@@ -187,7 +187,7 @@ func (c *SegmentChecker) getGrowingSegmentDiff(ctx context.Context, collectionID
 		targetVersion := c.targetMgr.GetCollectionTargetVersion(ctx, collectionID, meta.CurrentTarget)
 		if view.TargetVersion != targetVersion {
 			// before shard delegator update it's readable version, skip release segment
-			log.RatedInfo(context.TODO(), log.RateDefault, "before shard delegator update it's readable version, skip release segment",
+			log.RatedInfo(ctx, log.RateDefault, "before shard delegator update it's readable version, skip release segment",
 				log.String("channelName", view.Channel),
 				log.Int64("nodeID", view.ID),
 				log.Int64("leaderVersion", view.TargetVersion),
@@ -209,13 +209,13 @@ func (c *SegmentChecker) getGrowingSegmentDiff(ctx context.Context, collectionID
 					timestampInTarget := channel.GetSeekPosition().GetTimestamp()
 					// release growing segment if in dropped segment list
 					if funcutil.SliceContain(channel.GetDroppedSegmentIds(), segment.GetID()) {
-						log.Info(context.TODO(), "growing segment exists in dropped segment list, release it", log.Int64("segmentID", segment.GetID()))
+						log.Info(ctx, "growing segment exists in dropped segment list, release it", log.Int64("segmentID", segment.GetID()))
 						toRelease = append(toRelease, segment)
 						continue
 					}
 					// filter toRelease which seekPosition is newer than next target dmChannel
 					if timestampInSegment < timestampInTarget {
-						log.Info(context.TODO(), "growing segment not exist in target, so release it",
+						log.Info(ctx, "growing segment not exist in target, so release it",
 							log.Int64("segmentID", segment.GetID()),
 						)
 						toRelease = append(toRelease, segment)

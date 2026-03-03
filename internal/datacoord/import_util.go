@@ -235,7 +235,7 @@ func AllocImportSegment(ctx context.Context,
 ) (*SegmentInfo, error) {
 	id, err := alloc.AllocID(ctx)
 	if err != nil {
-		log.Error(context.TODO(), "failed to alloc id for import segment", log.Err(err))
+		log.Error(ctx, "failed to alloc id for import segment", log.Err(err))
 		return nil, err
 	}
 	ts := dataTimestamp
@@ -261,10 +261,10 @@ func AllocImportSegment(ctx context.Context,
 	segmentInfo.IsImporting = true
 	segment := NewSegmentInfo(segmentInfo)
 	if err = meta.AddSegment(ctx, segment); err != nil {
-		log.Error(context.TODO(), "failed to add import segment", log.Err(err))
+		log.Error(ctx, "failed to add import segment", log.Err(err))
 		return nil, err
 	}
-	log.Info(context.TODO(), "add import segment done",
+	log.Info(ctx, "add import segment done",
 		log.Int64("jobID", jobID),
 		log.Int64("taskID", taskID),
 		log.Int64("collectionID", segmentInfo.CollectionID),
@@ -791,7 +791,7 @@ func ListBinlogImportRequestFiles(ctx context.Context, cm storage.ChunkManager,
 		return nil, merr.WrapErrImportFailed(fmt.Sprintf("The max number of import files should not exceed %d, but got %d",
 			paramtable.Get().DataCoordCfg.MaxFilesPerImportReq.GetAsInt(), len(resFiles)))
 	}
-	log.Info(context.TODO(), "list binlogs prefixes for import done", log.Int("num", len(resFiles)), log.Any("binlog_prefixes", resFiles))
+	log.Info(ctx, "list binlogs prefixes for import done", log.Int("num", len(resFiles)), log.Any("binlog_prefixes", resFiles))
 	return resFiles, nil
 }
 
@@ -860,26 +860,26 @@ func createSortCompactionTask(ctx context.Context,
 		operator := UpdateStatusOperator(originSegment.GetID(), commonpb.SegmentState_Dropped)
 		err := meta.UpdateSegmentsInfo(ctx, operator)
 		if err != nil {
-			log.Warn(context.TODO(), "import zero num row segment, but mark it dropped failed", log.Err(err))
+			log.Warn(ctx, "import zero num row segment, but mark it dropped failed", log.Err(err))
 			return nil, err
 		}
 		return nil, nil
 	}
 	collection, err := handler.GetCollection(ctx, originSegment.GetCollectionID())
 	if err != nil {
-		log.Warn(context.TODO(), "Failed to create sort compaction task because get collection fail", log.Err(err))
+		log.Warn(ctx, "Failed to create sort compaction task because get collection fail", log.Err(err))
 		return nil, err
 	}
 
 	collectionTTL, err := common.GetCollectionTTLFromMap(collection.Properties)
 	if err != nil {
-		log.Warn(context.TODO(), "Failed to create sort compaction task because get collection ttl failed")
+		log.Warn(ctx, "Failed to create sort compaction task because get collection ttl failed")
 		return nil, err
 	}
 
 	startID, _, err := alloc.AllocN(2)
 	if err != nil {
-		log.Warn(context.TODO(), "Failed to create sort compaction task because allocate id fail", log.Err(err))
+		log.Warn(ctx, "Failed to create sort compaction task because allocate id fail", log.Err(err))
 		return nil, err
 	}
 
@@ -906,7 +906,7 @@ func createSortCompactionTask(ctx context.Context,
 		},
 	}
 
-	log.Info(context.TODO(), "create sort compaction task success", log.Int64("segmentID", originSegment.GetID()),
+	log.Info(ctx, "create sort compaction task success", log.Int64("segmentID", originSegment.GetID()),
 		log.Int64("targetSegmentID", targetSegmentID), log.Int64("num rows", originSegment.GetNumOfRows()))
 	return task, nil
 }
