@@ -19,6 +19,10 @@ const (
 	FatalLevel  = zapcore.FatalLevel
 )
 
+// ParseLevel parses a level string into a Level value.
+// It is a re-export of zapcore.ParseLevel.
+var ParseLevel = zapcore.ParseLevel
+
 // globalLevel allows runtime level changes
 var globalLevel = zap.NewAtomicLevelAt(InfoLevel)
 

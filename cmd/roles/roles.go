@@ -45,8 +45,8 @@ import (
 	"github.com/milvus-io/milvus/internal/util/pathutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/util"
 	"github.com/milvus-io/milvus/pkg/v2/config"
-	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	"github.com/milvus-io/milvus/pkg/v2/metrics"
+	"github.com/milvus-io/milvus/pkg/v2/mlog"
 	rocksmqimpl "github.com/milvus-io/milvus/pkg/v2/mq/mqimpl/rocksmq/server"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/tracer"
@@ -306,7 +306,7 @@ func (mr *MilvusRoles) setupLogger() {
 		if strings.EqualFold(v, "trace") {
 			v = "debug"
 		}
-		logLevel, err := zapcore.ParseLevel(v)
+		logLevel, err := mlog.ParseLevel(v)
 		if err != nil {
 			mlog.Warn(context.TODO(), "failed to parse log level", mlog.Err(err))
 			return
