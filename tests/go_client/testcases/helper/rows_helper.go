@@ -1,10 +1,9 @@
 package helper
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"strconv"
-
 
 	"github.com/milvus-io/milvus/client/v2/entity"
 	"github.com/milvus-io/milvus/pkg/v2/log"

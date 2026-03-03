@@ -1,8 +1,8 @@
 package helper
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,7 +12,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-
 
 	"github.com/milvus-io/milvus/client/v2/column"
 	"github.com/milvus-io/milvus/client/v2/entity"
