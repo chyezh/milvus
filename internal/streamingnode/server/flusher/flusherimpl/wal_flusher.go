@@ -72,7 +72,7 @@ func (impl *WALFlusherImpl) Execute(recoverSnapshot *recovery.RecoverySnapshot) 
 			return
 		}
 		if !errors.Is(err, context.Canceled) {
-			impl.logger.DPanic(nil, "wal flusher stop to executing with unexpected error", log.Err(err))
+			impl.logger.DPanic(context.TODO(), "wal flusher stop to executing with unexpected error", log.Err(err))
 			return
 		}
 		impl.logger.Warn(context.TODO(), "wal flusher is canceled before executing", log.Err(err))
@@ -256,7 +256,7 @@ func (impl *WALFlusherImpl) dispatch(msg message.ImmutableMessage) (err error) {
 	case message.MessageTypeCreateCollection:
 		createCollectionMsg, err := message.AsImmutableCreateCollectionMessageV1(msg)
 		if err != nil {
-			impl.logger.DPanic(nil, "the message type is not CreateCollectionMessage", log.Err(err))
+			impl.logger.DPanic(context.TODO(), "the message type is not CreateCollectionMessage", log.Err(err))
 			return nil
 		}
 		impl.flusherComponents.WhenCreateCollection(createCollectionMsg)

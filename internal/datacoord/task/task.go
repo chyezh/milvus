@@ -41,7 +41,7 @@ type Task interface {
 func WrapTaskLog(task Task, fields ...log.Field) []log.Field {
 	res := []log.Field{
 		log.Int64("ID", task.GetTaskID()),
-		log.String("type", string(task.GetTaskType())),
+		log.String("type", task.GetTaskType()),
 		log.String("state", task.GetTaskState().String()),
 	}
 	res = append(res, fields...)

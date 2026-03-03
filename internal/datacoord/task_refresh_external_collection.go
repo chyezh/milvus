@@ -389,7 +389,7 @@ func (t *refreshExternalCollectionTask) QueryTaskOnWorker(cluster session.Cluste
 	// Check if job has been cancelled/superseded before querying worker
 	job := t.refreshMeta.GetJob(t.GetJobId())
 	if job == nil {
-		log.Info(ctx, "job not found, task has been cancelled")
+		log.Info(ctx, "job not found, task has been canceled")
 		// Best-effort cleanup: try to drop task on worker if it was assigned
 		if t.GetNodeId() != 0 {
 			_ = cluster.DropExternalCollectionTask(t.GetNodeId(), t.GetTaskId())
@@ -398,7 +398,7 @@ func (t *refreshExternalCollectionTask) QueryTaskOnWorker(cluster session.Cluste
 		return
 	}
 	if job.GetState() == indexpb.JobState_JobStateFailed {
-		log.Info(ctx, "job has been marked as failed, cancelling task",
+		log.Info(ctx, "job has been marked as failed, canceling task",
 			log.String("jobFailReason", job.GetFailReason()))
 		// Best-effort cleanup: try to drop task on worker if it was assigned
 		if t.GetNodeId() != 0 {

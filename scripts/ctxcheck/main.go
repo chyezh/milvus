@@ -145,7 +145,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "format %s: %v\n", fname, err)
 				continue
 			}
-			if err := os.WriteFile(fname, buf.Bytes(), 0o644); err != nil {
+			if err := os.WriteFile(fname, buf.Bytes(), 0o600); err != nil {
 				fmt.Fprintf(os.Stderr, "write %s: %v\n", fname, err)
 				continue
 			}

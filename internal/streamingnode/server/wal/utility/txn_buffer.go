@@ -69,7 +69,7 @@ func (b *TxnBuffer) HandleImmutableMessages(msgs []message.ImmutableMessage, ts 
 func (b *TxnBuffer) handleBeginTxn(msg message.ImmutableMessage) {
 	beginMsg, err := message.AsImmutableBeginTxnMessageV2(msg)
 	if err != nil {
-		b.logger.DPanic(nil,
+		b.logger.DPanic(context.TODO(),
 			"failed to convert message to begin txn message, it's a critical error",
 			log.Int64("txnID", int64(beginMsg.TxnContext().TxnID)),
 			log.Any("messageID", beginMsg.MessageID()),
@@ -94,7 +94,7 @@ func (b *TxnBuffer) handleBeginTxn(msg message.ImmutableMessage) {
 func (b *TxnBuffer) handleCommitTxn(msg message.ImmutableMessage) message.ImmutableMessage {
 	commitMsg, err := message.AsImmutableCommitTxnMessageV2(msg)
 	if err != nil {
-		b.logger.DPanic(nil,
+		b.logger.DPanic(context.TODO(),
 			"failed to convert message to commit txn message, it's a critical error",
 			log.Int64("txnID", int64(commitMsg.TxnContext().TxnID)),
 			log.Any("messageID", commitMsg.MessageID()),
@@ -137,7 +137,7 @@ func (b *TxnBuffer) handleCommitTxn(msg message.ImmutableMessage) message.Immuta
 func (b *TxnBuffer) handleRollbackTxn(msg message.ImmutableMessage) {
 	rollbackMsg, err := message.AsImmutableRollbackTxnMessageV2(msg)
 	if err != nil {
-		b.logger.DPanic(nil,
+		b.logger.DPanic(context.TODO(),
 			"failed to convert message to rollback txn message, it's a critical error",
 			log.Int64("txnID", int64(rollbackMsg.TxnContext().TxnID)),
 			log.Any("messageID", rollbackMsg.MessageID()),
