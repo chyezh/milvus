@@ -26,17 +26,15 @@ Persisted states: **Preparing**, **Up**, **Down**, **Unrecoverable** (write-ahea
 | Target State | Trigger | Transition Behavior |
 |---|---|---|
 | Ready | All SN and QNs report Ready | None |
-| Unrecoverable | Any node reports Unrecoverable, or Coord detects a QN loss that has segments in this view | Persist Unrecoverable to ETCD |
+| Unrecoverable | Any node reports Unrecoverable | Persist Unrecoverable to ETCD |
 
 **Possible Peer States (and Coord's reaction):**
-- **SN**: Not visible / Preparing / Ready / Unrecoverable / Up
-  - Not visible (push not yet delivered) → Coord re-pushes Preparing.
+- **SN**: Preparing / Ready / Unrecoverable / Up
   - Preparing (async preparation in progress) → Coord waits.
   - Ready → Coord marks SN as ready; checks if all nodes are ready.
   - Unrecoverable → Coord transitions to Unrecoverable.
   - Up (recovery scenario: SN restored an old Up view from persistence) → Coord fast-forwards to Up.
-- **QN**: Not visible / Preparing / Ready / Unrecoverable
-  - Not visible → Coord re-pushes Preparing.
+- **QN**: Preparing / Ready / Unrecoverable
   - Preparing → Coord waits.
   - Ready → Coord marks this QN as ready; checks if all nodes are ready.
   - Unrecoverable → Coord transitions to Unrecoverable.
@@ -54,15 +52,15 @@ Persisted states: **Preparing**, **Up**, **Down**, **Unrecoverable** (write-ahea
 | Target State | Trigger | Transition Behavior |
 |---|---|---|
 | Up | SN confirms Up | Persist Up to ETCD |
-| Unrecoverable | Coord detects a QN loss that has segments in this view | Persist Unrecoverable to ETCD |
+| Unrecoverable | Any node reports Unrecoverable | Persist Unrecoverable to ETCD |
 
 **Possible Peer States (and Coord's reaction):**
 - **SN**: Ready / Up
   - Ready (Up push not yet delivered) → Coord re-pushes Up.
   - Up → Coord transitions to Up.
-- **QN**: Ready / Not visible (node lost)
+- **QN**: Ready / Unrecoverable
   - Ready → Coord does nothing; normal.
-  - Not visible (node lost) → Coord transitions to Unrecoverable.
+  - Unrecoverable → Coord transitions to Unrecoverable.
 
 > Note: Ready is NOT persisted. On Coord crash recovery, ETCD still shows Preparing; Coord re-pushes and catches up from node responses.
 
@@ -81,15 +79,15 @@ Persisted states: **Preparing**, **Up**, **Down**, **Unrecoverable** (write-ahea
 | Target State | Trigger | Transition Behavior |
 |---|---|---|
 | Down | Higher-version view has been Up for the lease period / ReleaseCollection | Persist Down to ETCD; push Down to SN |
-| Unrecoverable | Coord detects a QN loss that has segments in this view, or SN reports Unrecoverable (e.g., UpRecovering failed due to OOM) | Persist Unrecoverable to ETCD |
+| Unrecoverable | Any node reports Unrecoverable (e.g., SN UpRecovering failed due to OOM, or QN node loss translated to Unrecoverable by Node Manager) | Persist Unrecoverable to ETCD |
 
 **Possible Peer States (and Coord's reaction):**
 - **SN**: Up / Unrecoverable
   - Up → Coord does nothing; normal.
-  - Unrecoverable (SN failed during UpRecovering, e.g., OOM) → Coord transitions to Unrecoverable.
-- **QN**: Ready / Not visible (node lost)
+  - Unrecoverable (e.g., SN failed during UpRecovering) → Coord transitions to Unrecoverable.
+- **QN**: Ready / Unrecoverable
   - Ready → Coord does nothing; normal.
-  - Not visible (node lost) → Coord transitions to Unrecoverable.
+  - Unrecoverable → Coord transitions to Unrecoverable.
 
 ### 1.4 Down
 
@@ -118,11 +116,9 @@ Persisted states: **Preparing**, **Up**, **Down**, **Unrecoverable** (write-ahea
 ### 1.5 Unrecoverable
 
 **Entry Conditions:**
-- Any node reports Unrecoverable during Preparing (automatic transition).
-- Coord detects a QN loss while in Preparing, Ready, or Up (the lost QN has segments assigned in this view).
-- SN reports Unrecoverable while in Up (e.g., UpRecovering failed due to OOM after SN crash recovery).
+- Any node reports Unrecoverable while Coord is in Preparing, Ready, or Up (automatic transition).
 
-> Note: SN is bound to the vchannel and never experiences "node lost" from Coord's perspective. SN unavailability is handled at the channel assignment level, not per-view.
+> Note: Node loss (e.g., QN crash) is translated to an Unrecoverable report by the external Node Manager layer before reaching the state machine. SN is bound to the vchannel and never experiences "node lost" from Coord's perspective; SN unavailability is handled at the channel assignment level, not per-view.
 
 **Automatic Behavior:**
 1. Persist Unrecoverable to ETCD (if not already persisted).
@@ -272,7 +268,7 @@ Persisted states: **Up** recovery info only (the latest Up view).
 **Possible Coord States (and this node's reaction):**
 - Coord considers this view to be in Up state (Coord is unaware of UpRecovering).
 - Coord pushes Down → SN transitions to Down directly.
-- Coord pushes Preparing (recovery scenario) → SN responds with Up to allow Coord to fast-forward.
+- Coord pushes Preparing (recovery scenario) → SN waits until WAL catches up and transitions to Up, then reports Up to allow Coord to fast-forward.
 
 > Note: UpRecovering is a transient local state on SN. It does NOT participate in Coord's state machine synchronization.
 
@@ -407,17 +403,7 @@ QueryNode is fully stateless with no persistence and no recovery process. It doe
 
 ---
 
-## 4. Summary Comparison
+## 4. TODO
 
-|  | Coord | StreamingNode | QueryNode |
-|---|---|---|---|
-| State Count | 7 | 7 (incl. UpRecovering) | 4 |
-| Persistence | ETCD (Preparing/Up/Down/Unrecoverable/deletion) | Recovery info (Up only) | None |
-| Unique States | Ready (transient), Dropping | UpRecovering (local transient) | — |
-| Unaware States | — | Dropping (receives Dropped directly) | Up, Down, Dropping |
+1. **Coord Preparing Timeout Eviction**: If a node is stuck in Preparing (neither reporting Ready nor Unrecoverable), Coord's Preparing state blocks indefinitely. This blocks the sole Preparing slot for the shard, preventing new DataVersion views from being generated and preventing lower-version Growing Segments from being released on SN. A Coord-side timeout mechanism should be introduced: after timeout, Coord proactively marks the view as Unrecoverable, releasing the Preparing slot.
 
-## 5. Open Questions
-
-1. **SN Preparing → Dropped**: If Coord aborts a view because some QN reported Unrecoverable, SN may still be in Preparing. SN must accept Dropped from any non-terminal state.
-2. **QN incremental progress reporting during Preparing**: The proto has `ready_segment_id_deltas` to support incremental segment-ready reporting, but the design document does not explicitly describe this behavior. This is useful for Coord to track loading progress.
-3. **UpRecovering receiving Coord's re-push of Preparing (recovery scenario)**: SN should respond with Up directly to allow Coord to fast-forward, rather than re-entering the Preparing flow.
