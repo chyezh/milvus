@@ -104,6 +104,9 @@ message QueryViewMeta {
     QueryViewVersion version = 4;
     QueryViewState state = 5;
     QueryViewSettings settings = 6;
+    // Inherited from DataViewOfShard at the time this query view was created.
+    // Delete data with timetick > this value needs to be applied to segments in this shard.
+    uint64 delete_apply_start_after_timetick = 7;
 }
 
 // QueryViewSettings contains the load configuration for a query view.
