@@ -46,13 +46,10 @@ message DataViewOfShard {
 }
 
 // DataViewOfPartition represents the storage view of a single partition within a shard.
-// Segment IDs use delta encoding for compact wire format:
-//   Encoding: sort IDs ascending, store [base, delta1, delta2, ...]
-//   Decoding: cumulative sum, i.e., id[i] = sum(deltas[0..i])
 message DataViewOfPartition {
     int64 partition_id = 1;
-    // Sealed segment IDs in this partition, delta-encoded and sorted ascending.
-    repeated int64 segment_id_deltas = 2;
+    // Sealed segment IDs in this partition.
+    repeated int64 segment_ids = 2;
 }
 
 //
@@ -140,19 +137,15 @@ message QueryViewVersion {
 }
 
 // QueryViewOfPartition represents a partition's segment list within a query view.
-// Segment IDs use delta encoding for compact wire format:
-//   Encoding: sort IDs ascending, store [base, delta1, delta2, ...]
-//   Decoding: cumulative sum, i.e., id[i] = sum(deltas[0..i])
-// Example: IDs [100, 103, 105, 200] → deltas [100, 3, 2, 95]
 message QueryViewOfPartition {
     int64 partition_id = 1;
-    // All segment IDs in this partition, delta-encoded and sorted ascending.
-    repeated int64 segment_id_deltas = 2;
-    // Subset of segment IDs that are in Ready state, delta-encoded and sorted ascending.
+    // All segment IDs in this partition.
+    repeated int64 segment_ids = 2;
+    // Subset of segment IDs that are in Ready state.
     // Segments not in this list are implicitly NotReady.
     // Coord → Node (Request): this field is empty (all segments start as NotReady).
     // Node → Coord (Response): this field contains the ready subset.
-    repeated int64 ready_segment_id_deltas = 3;
+    repeated int64 ready_segment_ids = 3;
 }
 
 //
