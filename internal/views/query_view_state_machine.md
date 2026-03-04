@@ -247,7 +247,11 @@ Persisted states: **Up** recovery info only (the latest Up view).
 - Coord pushes Down → SN transitions to Down.
 - Other signals → SN ignores.
 
-### 2.4 UpRecovering (Local Transient)
+### 2.4 UpRecovering (StreamingNode-Only Proto State)
+
+UpRecovering is defined in the proto enum (`QueryViewStateUpRecovering = 8`) but is only used by StreamingNode.
+Coord and QueryNode never enter this state. For Coord-visible reporting, UpRecovering maps to Up
+(Coord is unaware of UpRecovering and considers the view to be in Up state).
 
 **Entry Conditions:**
 - SN crash recovery: the highest-version Up view is rebuilt from persisted recovery info.
@@ -269,8 +273,6 @@ Persisted states: **Up** recovery info only (the latest Up view).
 - Coord considers this view to be in Up state (Coord is unaware of UpRecovering).
 - Coord pushes Down → SN transitions to Down directly.
 - Coord pushes Preparing (recovery scenario) → SN waits until WAL catches up and transitions to Up, then reports Up to allow Coord to fast-forward.
-
-> Note: UpRecovering is a transient local state on SN. It does NOT participate in Coord's state machine synchronization.
 
 ### 2.5 Down
 

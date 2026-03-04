@@ -7,16 +7,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/viewpb"
 )
 
-// QNLocalEvent represents a local event on the QueryNode.
-type QNLocalEvent int
-
-const (
-	// QNLocalEventReady indicates all segments have been loaded successfully.
-	QNLocalEventReady QNLocalEvent = iota + 1
-	// QNLocalEventUnrecoverable indicates a fatal error (e.g., OOM during loading).
-	QNLocalEventUnrecoverable
-)
-
 // QNQueryViewStateMachine manages the lifecycle state machine of a single
 // query view on a QueryNode.
 //
@@ -24,17 +14,31 @@ const (
 // The state machine is purely in-memory and non-blocking.
 // I/O (reporting to Coord) is signaled through pending proto consumed via ConsumeReport.
 //
+// The QN only stores its own portion of the view: QueryViewMeta + QueryViewOfQueryNode.
+// It does not have access to the full QueryViewOfShard.
+//
 // State flow:
 //
 //	Normal:  Preparing → Ready → Dropped
 //	Error:   Preparing → Unrecoverable → Dropped
 //
+// The Preparing → Ready transition is automatic: when OnSegmentsReady reports
+// all segments across all partitions as ready, the SM transitions to Ready.
+//
 // QN has no Up/Down states. Once Ready, it serves queries until Dropped.
 //
 // Thread-safety: NOT thread-safe. The caller must serialize access.
 type QNQueryViewStateMachine struct {
-	state qviews.QueryViewState
-	view  *viewpb.QueryViewOfShard
+	state  qviews.QueryViewState
+	meta   *viewpb.QueryViewMeta
+	qnView *viewpb.QueryViewOfQueryNode
+
+	// Per-partition ready segment set, updated incrementally by OnSegmentsReady.
+	readySegments map[int64]map[int64]struct{}
+
+	// Counters for O(1) completion check.
+	totalSegments int
+	readyCount    int
 
 	pendingReport *viewpb.QueryViewOfShard
 }
@@ -43,14 +47,22 @@ type QNQueryViewStateMachine struct {
 // a Preparing push from Coord.
 //
 // After construction:
-//   - ConsumeReport returns Preparing (acknowledge receipt to Coord).
-func NewQNQueryViewStateMachine(view *viewpb.QueryViewOfShard) *QNQueryViewStateMachine {
-	sm := &QNQueryViewStateMachine{
-		state: qviews.QueryViewStatePreparing,
-		view:  view,
+//   - State is Preparing. No pendingReport (subsequent OnSegmentsReady /
+//     OnUnrecoverable will drive progress and generate reports).
+func NewQNQueryViewStateMachine(meta *viewpb.QueryViewMeta, qnView *viewpb.QueryViewOfQueryNode) *QNQueryViewStateMachine {
+	total := 0
+	readySegments := make(map[int64]map[int64]struct{}, len(qnView.Partitions))
+	for _, p := range qnView.Partitions {
+		total += len(p.SegmentIds)
+		readySegments[p.PartitionId] = make(map[int64]struct{})
 	}
-	sm.pendingReport = sm.viewWithState(qviews.QueryViewStatePreparing)
-	return sm
+	return &QNQueryViewStateMachine{
+		state:         qviews.QueryViewStatePreparing,
+		meta:          meta,
+		qnView:        qnView,
+		readySegments: readySegments,
+		totalSegments: total,
+	}
 }
 
 // State returns the current in-memory state of the query view.
@@ -58,25 +70,27 @@ func (sm *QNQueryViewStateMachine) State() qviews.QueryViewState {
 	return sm.state
 }
 
-// View returns the original query view proto definition.
-func (sm *QNQueryViewStateMachine) View() *viewpb.QueryViewOfShard {
-	return sm.view
+// Meta returns the query view meta.
+func (sm *QNQueryViewStateMachine) Meta() *viewpb.QueryViewMeta {
+	return sm.meta
+}
+
+// QNView returns the original QueryViewOfQueryNode.
+func (sm *QNQueryViewStateMachine) QNView() *viewpb.QueryViewOfQueryNode {
+	return sm.qnView
 }
 
 // OnCoordStateDelivered handles a state push from the Coordinator.
 //
-// Valid pushes by current state:
-//   - Preparing: Preparing (re-push), Dropped
-//   - Ready: Dropped
-//   - Unrecoverable: Dropped
-//   - Dropped: ignored
+// In a distributed state machine, any Coord push must produce a response
+// so that Coord can learn the node's current state and fast-forward.
 //
-// Invalid pushes are silently ignored.
+// Coord pushes handled:
+//   - Preparing: if QN has advanced past Preparing, re-report current state
+//     for fast-forward. If still Preparing, no re-report needed (local events
+//     will eventually drive the transition).
+//   - Dropped: transition to Dropped from any state.
 func (sm *QNQueryViewStateMachine) OnCoordStateDelivered(pushedState qviews.QueryViewState) {
-	if sm.state == qviews.QueryViewStateDropped {
-		return
-	}
-
 	switch pushedState {
 	case qviews.QueryViewStatePreparing:
 		sm.handleCoordPreparing()
@@ -85,26 +99,49 @@ func (sm *QNQueryViewStateMachine) OnCoordStateDelivered(pushedState qviews.Quer
 	}
 }
 
-// OnLocalEvent handles a local event on the QueryNode.
+// OnSegmentsReady reports incremental segment loading progress during Preparing.
+// readySegmentIDs maps partition ID to the newly loaded segment IDs (delta).
+// Duplicate segment IDs are deduplicated internally.
 //
-// Valid events by current state:
-//   - Preparing + QNLocalEventReady → Ready
-//   - Preparing + QNLocalEventUnrecoverable → Unrecoverable
+// When all segments across all partitions are ready, the SM automatically
+// transitions to Ready state.
 //
-// Events in other states are silently ignored.
-func (sm *QNQueryViewStateMachine) OnLocalEvent(event QNLocalEvent) {
+// Only valid in Preparing state; ignored in other states.
+func (sm *QNQueryViewStateMachine) OnSegmentsReady(readySegmentIDs map[int64][]int64) {
 	if sm.state != qviews.QueryViewStatePreparing {
 		return
 	}
 
-	switch event {
-	case QNLocalEventReady:
-		sm.state = qviews.QueryViewStateReady
-		sm.pendingReport = sm.viewWithState(qviews.QueryViewStateReady)
-	case QNLocalEventUnrecoverable:
-		sm.state = qviews.QueryViewStateUnrecoverable
-		sm.pendingReport = sm.viewWithState(qviews.QueryViewStateUnrecoverable)
+	for partitionID, segIDs := range readySegmentIDs {
+		pSet := sm.readySegments[partitionID]
+		if pSet == nil {
+			continue
+		}
+		for _, segID := range segIDs {
+			if _, exists := pSet[segID]; !exists {
+				pSet[segID] = struct{}{}
+				sm.readyCount++
+			}
+		}
 	}
+
+	if sm.readyCount >= sm.totalSegments {
+		sm.state = qviews.QueryViewStateReady
+		sm.pendingReport = sm.buildReport()
+	} else {
+		sm.pendingReport = sm.buildReport()
+	}
+}
+
+// OnUnrecoverable reports a fatal error (e.g., OOM during segment loading).
+// Transitions from Preparing to Unrecoverable.
+// Only valid in Preparing state; ignored in other states.
+func (sm *QNQueryViewStateMachine) OnUnrecoverable() {
+	if sm.state != qviews.QueryViewStatePreparing {
+		return
+	}
+	sm.state = qviews.QueryViewStateUnrecoverable
+	sm.pendingReport = sm.buildReport()
 }
 
 // ConsumeReport returns the view to report to the Coordinator and clears the flag.
@@ -118,22 +155,51 @@ func (sm *QNQueryViewStateMachine) ConsumeReport() *viewpb.QueryViewOfShard {
 // --- Coord push handlers ---
 
 func (sm *QNQueryViewStateMachine) handleCoordPreparing() {
-	if sm.state != qviews.QueryViewStatePreparing {
+	if sm.state == qviews.QueryViewStatePreparing {
+		// Still Preparing: local events will drive progress. No re-report needed.
 		return
 	}
-	// Re-push: re-report Preparing to Coord.
-	sm.pendingReport = sm.viewWithState(qviews.QueryViewStatePreparing)
+	// Node has advanced past Preparing: re-report current state so Coord
+	// can fast-forward (e.g., Ready, Unrecoverable, Dropped).
+	sm.pendingReport = sm.buildReport()
 }
 
 func (sm *QNQueryViewStateMachine) handleCoordDropped() {
-	sm.state = qviews.QueryViewStateDropped
-	sm.pendingReport = sm.viewWithState(qviews.QueryViewStateDropped)
+	if sm.state != qviews.QueryViewStateDropped {
+		sm.state = qviews.QueryViewStateDropped
+	}
+	// Always re-report Dropped (handles both transition and re-push in terminal state).
+	sm.pendingReport = sm.buildReport()
 }
 
 // --- Helpers ---
 
-func (sm *QNQueryViewStateMachine) viewWithState(state qviews.QueryViewState) *viewpb.QueryViewOfShard {
-	v := proto.Clone(sm.view).(*viewpb.QueryViewOfShard)
-	v.Meta.State = viewpb.QueryViewState(state)
-	return v
+// readySegmentSlice returns the ready segment IDs for a partition as a slice.
+func (sm *QNQueryViewStateMachine) readySegmentSlice(partitionID int64) []int64 {
+	pSet := sm.readySegments[partitionID]
+	if len(pSet) == 0 {
+		return nil
+	}
+	segs := make([]int64, 0, len(pSet))
+	for segID := range pSet {
+		segs = append(segs, segID)
+	}
+	return segs
+}
+
+// buildReport constructs a QueryViewOfShard report from the QN's current state.
+func (sm *QNQueryViewStateMachine) buildReport() *viewpb.QueryViewOfShard {
+	meta := proto.Clone(sm.meta).(*viewpb.QueryViewMeta)
+	meta.State = viewpb.QueryViewState(sm.state)
+
+	qnView := proto.Clone(sm.qnView).(*viewpb.QueryViewOfQueryNode)
+	// Populate ReadySegmentIds from tracked sets.
+	for _, p := range qnView.Partitions {
+		p.ReadySegmentIds = sm.readySegmentSlice(p.PartitionId)
+	}
+
+	return &viewpb.QueryViewOfShard{
+		Meta:      meta,
+		QueryNode: []*viewpb.QueryViewOfQueryNode{qnView},
+	}
 }

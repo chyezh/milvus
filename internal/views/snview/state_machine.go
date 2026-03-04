@@ -7,45 +7,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/viewpb"
 )
 
-// SNLocalEvent represents a local event on the StreamingNode.
-type SNLocalEvent int
-
-const (
-	// SNLocalEventReady indicates async resource preparation completed successfully.
-	SNLocalEventReady SNLocalEvent = iota + 1
-	// SNLocalEventUnrecoverable indicates a fatal error (e.g., WAL recovery OOM).
-	SNLocalEventUnrecoverable
-	// SNLocalEventWALCaughtUp indicates the WAL has caught up after recovery.
-	SNLocalEventWALCaughtUp
-)
-
-// snState extends QueryViewState with local-only transient states.
-// UpRecovering is not a proto state — it exists only in SN memory.
-type snState int
-
-const (
-	// Map proto states to snState values.
-	snStatePreparing     snState = snState(qviews.QueryViewStatePreparing)
-	snStateReady         snState = snState(qviews.QueryViewStateReady)
-	snStateUp            snState = snState(qviews.QueryViewStateUp)
-	snStateDown          snState = snState(qviews.QueryViewStateDown)
-	snStateUnrecoverable snState = snState(qviews.QueryViewStateUnrecoverable)
-	snStateDropped       snState = snState(qviews.QueryViewStateDropped)
-
-	// Local-only transient state: recovering WAL after SN crash.
-	// Not representable in proto; maps to Up for external reporting.
-	snStateUpRecovering snState = -1
-)
-
-// toQueryViewState converts snState to the externally visible QueryViewState.
-// UpRecovering maps to Up (the persisted/external state).
-func (s snState) toQueryViewState() qviews.QueryViewState {
-	if s == snStateUpRecovering {
-		return qviews.QueryViewStateUp
-	}
-	return qviews.QueryViewState(s)
-}
-
 // SNQueryViewStateMachine manages the lifecycle state machine of a single
 // query view on a StreamingNode.
 //
@@ -54,19 +15,25 @@ func (s snState) toQueryViewState() qviews.QueryViewState {
 // I/O (reporting to Coord, persistence) is signaled through pending protos
 // consumed via ConsumeReport / ConsumePersist.
 //
+// The SN only stores its own portion of the view: QueryViewMeta + QueryViewOfStreamingNode.
+// It does not have access to the full QueryViewOfShard.
+//
 // State flow:
 //
 //	Normal:        Preparing → Ready → Up → Down → Dropped
 //	Error:         Preparing → Unrecoverable → Dropped
+//	Abort:         Preparing → Dropped, Ready → Dropped
 //	Recovery:      UpRecovering → Up (WAL caught up)
 //	Recovery err:  UpRecovering → Unrecoverable → Dropped
 //
-// UpRecovering is a local transient state not visible in proto.
+// UpRecovering is a StreamingNode-only state (defined in proto but only used by SN).
+// Coord sees UpRecovering as Up for state machine synchronization purposes.
 //
 // Thread-safety: NOT thread-safe. The caller must serialize access.
 type SNQueryViewStateMachine struct {
-	state snState
-	view  *viewpb.QueryViewOfShard
+	state  qviews.QueryViewState
+	meta   *viewpb.QueryViewMeta
+	snView *viewpb.QueryViewOfStreamingNode
 
 	pendingReport  *viewpb.QueryViewOfShard
 	pendingPersist *viewpb.QueryViewOfShard
@@ -77,12 +44,13 @@ type SNQueryViewStateMachine struct {
 //
 // After construction:
 //   - ConsumeReport returns Preparing (acknowledge receipt to Coord).
-func NewSNQueryViewStateMachine(view *viewpb.QueryViewOfShard) *SNQueryViewStateMachine {
+func NewSNQueryViewStateMachine(meta *viewpb.QueryViewMeta, snView *viewpb.QueryViewOfStreamingNode) *SNQueryViewStateMachine {
 	sm := &SNQueryViewStateMachine{
-		state: snStatePreparing,
-		view:  view,
+		state:  qviews.QueryViewStatePreparing,
+		meta:   meta,
+		snView: snView,
 	}
-	sm.pendingReport = sm.viewWithState(qviews.QueryViewStatePreparing)
+	sm.pendingReport = sm.buildReport()
 	return sm
 }
 
@@ -93,38 +61,40 @@ func NewSNQueryViewStateMachine(view *viewpb.QueryViewOfShard) *SNQueryViewState
 //   - State is UpRecovering (WAL must catch up before serving).
 //   - No pendingReport (don't report until WAL catches up).
 //   - No pendingPersist (already persisted as Up).
-func RecoverSNQueryViewStateMachine(view *viewpb.QueryViewOfShard) *SNQueryViewStateMachine {
+func RecoverSNQueryViewStateMachine(meta *viewpb.QueryViewMeta, snView *viewpb.QueryViewOfStreamingNode) *SNQueryViewStateMachine {
 	return &SNQueryViewStateMachine{
-		state: snStateUpRecovering,
-		view:  view,
+		state:  qviews.QueryViewStateUpRecovering,
+		meta:   meta,
+		snView: snView,
 	}
 }
 
-// State returns the current externally visible state of the query view.
-// UpRecovering is reported as Up (the external/persisted state).
+// State returns the current state of the query view.
 func (sm *SNQueryViewStateMachine) State() qviews.QueryViewState {
-	return sm.state.toQueryViewState()
+	return sm.state
 }
 
 // IsRecovering returns true if the SN is in UpRecovering state.
 func (sm *SNQueryViewStateMachine) IsRecovering() bool {
-	return sm.state == snStateUpRecovering
+	return sm.state == qviews.QueryViewStateUpRecovering
 }
 
-// View returns the original query view proto definition.
-func (sm *SNQueryViewStateMachine) View() *viewpb.QueryViewOfShard {
-	return sm.view
+// Meta returns the query view meta.
+func (sm *SNQueryViewStateMachine) Meta() *viewpb.QueryViewMeta {
+	return sm.meta
+}
+
+// SNView returns the original QueryViewOfStreamingNode.
+func (sm *SNQueryViewStateMachine) SNView() *viewpb.QueryViewOfStreamingNode {
+	return sm.snView
 }
 
 // OnCoordStateDelivered handles a state push from the Coordinator.
 //
-// Valid pushes vary by current state (see state transition table in design doc).
-// Invalid pushes are silently ignored.
+// In a distributed state machine, any Coord push must produce a response
+// so that Coord can learn the node's current state and fast-forward.
+// See design doc Section 1.1 (fast-forward logic) and Section 1.6 (Dropping).
 func (sm *SNQueryViewStateMachine) OnCoordStateDelivered(pushedState qviews.QueryViewState) {
-	if sm.state == snStateDropped {
-		return
-	}
-
 	switch pushedState {
 	case qviews.QueryViewStatePreparing:
 		sm.handleCoordPreparing()
@@ -137,19 +107,39 @@ func (sm *SNQueryViewStateMachine) OnCoordStateDelivered(pushedState qviews.Quer
 	}
 }
 
-// OnLocalEvent handles a local event on the StreamingNode.
-//
-// Valid events vary by current state (see state transition table in design doc).
-// Events in invalid states are silently ignored.
-func (sm *SNQueryViewStateMachine) OnLocalEvent(event SNLocalEvent) {
-	switch event {
-	case SNLocalEventReady:
-		sm.handleLocalReady()
-	case SNLocalEventUnrecoverable:
-		sm.handleLocalUnrecoverable()
-	case SNLocalEventWALCaughtUp:
-		sm.handleLocalWALCaughtUp()
+// OnReady reports that async resource preparation completed successfully.
+// Only valid in Preparing state; ignored in other states.
+func (sm *SNQueryViewStateMachine) OnReady() {
+	if sm.state != qviews.QueryViewStatePreparing {
+		return
 	}
+	sm.state = qviews.QueryViewStateReady
+	sm.pendingReport = sm.buildReport()
+}
+
+// OnUnrecoverable reports a fatal error (e.g., WAL recovery OOM).
+// Valid in Preparing and UpRecovering states; ignored in other states.
+func (sm *SNQueryViewStateMachine) OnUnrecoverable() {
+	switch sm.state {
+	case qviews.QueryViewStatePreparing:
+		sm.state = qviews.QueryViewStateUnrecoverable
+		sm.pendingReport = sm.buildReport()
+	case qviews.QueryViewStateUpRecovering:
+		sm.state = qviews.QueryViewStateUnrecoverable
+		sm.pendingReport = sm.buildReport()
+		sm.pendingPersist = sm.buildReport()
+	}
+}
+
+// OnRecoveringDone reports that the WAL has caught up after crash recovery.
+// Only valid in UpRecovering state; ignored in other states.
+func (sm *SNQueryViewStateMachine) OnRecoveringDone() {
+	if sm.state != qviews.QueryViewStateUpRecovering {
+		return
+	}
+	sm.state = qviews.QueryViewStateUp
+	sm.pendingReport = sm.buildReport()
+	// No pendingPersist: already persisted as Up before crash.
 }
 
 // ConsumeReport returns the view to report to the Coordinator and clears the flag.
@@ -165,7 +155,7 @@ func (sm *SNQueryViewStateMachine) ConsumeReport() *viewpb.QueryViewOfShard {
 //
 // Persist semantics:
 //   - Meta.State == Up → save/overwrite recovery info.
-//   - Meta.State == Down or Unrecoverable → delete persisted recovery info.
+//   - Meta.State == Down, Unrecoverable, or Dropped → delete persisted recovery info.
 func (sm *SNQueryViewStateMachine) ConsumePersist() *viewpb.QueryViewOfShard {
 	v := sm.pendingPersist
 	sm.pendingPersist = nil
@@ -176,79 +166,84 @@ func (sm *SNQueryViewStateMachine) ConsumePersist() *viewpb.QueryViewOfShard {
 
 func (sm *SNQueryViewStateMachine) handleCoordPreparing() {
 	switch sm.state {
-	case snStatePreparing:
-		// Re-push: re-report Preparing to Coord.
-		sm.pendingReport = sm.viewWithState(qviews.QueryViewStatePreparing)
-	case snStateUpRecovering:
-		// Re-push during recovery: don't report (wait for WAL catch-up).
+	case qviews.QueryViewStatePreparing:
+		// Still Preparing: local events will drive progress. No re-report needed.
+	case qviews.QueryViewStateUpRecovering:
+		// Recovery: don't report yet (wait for WAL catch-up, then report Up
+		// to allow Coord fast-forward). See design doc Section 2.4.
+	default:
+		// Node has advanced past Preparing: re-report current state so Coord
+		// can fast-forward (e.g., Ready, Up, Down, Unrecoverable, Dropped).
+		sm.pendingReport = sm.buildReport()
 	}
 }
 
 func (sm *SNQueryViewStateMachine) handleCoordUp() {
-	if sm.state != snStateReady {
-		return
+	switch sm.state {
+	case qviews.QueryViewStateReady:
+		// Normal transition: Ready → Up.
+		sm.state = qviews.QueryViewStateUp
+		sm.pendingReport = sm.buildReport()
+		sm.pendingPersist = sm.buildReport()
+	default:
+		// Re-push or node has advanced/diverged: re-report current state
+		// so Coord can fast-forward.
+		sm.pendingReport = sm.buildReport()
 	}
-	sm.state = snStateUp
-	sm.pendingReport = sm.viewWithState(qviews.QueryViewStateUp)
-	sm.pendingPersist = sm.viewWithState(qviews.QueryViewStateUp)
 }
 
 func (sm *SNQueryViewStateMachine) handleCoordDown() {
 	switch sm.state {
-	case snStateUp:
-		sm.state = snStateDown
-		sm.pendingReport = sm.viewWithState(qviews.QueryViewStateDown)
-		sm.pendingPersist = sm.viewWithState(qviews.QueryViewStateDown)
-	case snStateUpRecovering:
-		sm.state = snStateDown
-		sm.pendingReport = sm.viewWithState(qviews.QueryViewStateDown)
-		sm.pendingPersist = sm.viewWithState(qviews.QueryViewStateDown)
+	case qviews.QueryViewStateUp:
+		sm.state = qviews.QueryViewStateDown
+		sm.pendingReport = sm.buildReport()
+		sm.pendingPersist = sm.buildReport()
+	case qviews.QueryViewStateUpRecovering:
+		sm.state = qviews.QueryViewStateDown
+		sm.pendingReport = sm.buildReport()
+		sm.pendingPersist = sm.buildReport()
+	default:
+		// Re-push or node has advanced/diverged: re-report current state
+		// so Coord can fast-forward.
+		sm.pendingReport = sm.buildReport()
 	}
 }
 
 func (sm *SNQueryViewStateMachine) handleCoordDropped() {
 	switch sm.state {
-	case snStatePreparing, snStateDown, snStateUnrecoverable:
-		sm.state = snStateDropped
-		sm.pendingReport = sm.viewWithState(qviews.QueryViewStateDropped)
+	case qviews.QueryViewStateUp, qviews.QueryViewStateUpRecovering:
+		// Recovery info is persisted; must delete it.
+		sm.state = qviews.QueryViewStateDropped
+		sm.pendingReport = sm.buildReport()
+		sm.pendingPersist = sm.buildReport()
+	default:
+		// Transition to Dropped (or re-push if already Dropped).
+		// No persistence needed: either no recovery info was persisted,
+		// or it was already deleted in a prior state (e.g., Down).
+		sm.state = qviews.QueryViewStateDropped
+		sm.pendingReport = sm.buildReport()
 	}
-}
-
-// --- Local event handlers ---
-
-func (sm *SNQueryViewStateMachine) handleLocalReady() {
-	if sm.state != snStatePreparing {
-		return
-	}
-	sm.state = snStateReady
-	sm.pendingReport = sm.viewWithState(qviews.QueryViewStateReady)
-}
-
-func (sm *SNQueryViewStateMachine) handleLocalUnrecoverable() {
-	switch sm.state {
-	case snStatePreparing:
-		sm.state = snStateUnrecoverable
-		sm.pendingReport = sm.viewWithState(qviews.QueryViewStateUnrecoverable)
-	case snStateUpRecovering:
-		sm.state = snStateUnrecoverable
-		sm.pendingReport = sm.viewWithState(qviews.QueryViewStateUnrecoverable)
-		sm.pendingPersist = sm.viewWithState(qviews.QueryViewStateUnrecoverable)
-	}
-}
-
-func (sm *SNQueryViewStateMachine) handleLocalWALCaughtUp() {
-	if sm.state != snStateUpRecovering {
-		return
-	}
-	sm.state = snStateUp
-	sm.pendingReport = sm.viewWithState(qviews.QueryViewStateUp)
-	// No pendingPersist: already persisted as Up before crash.
 }
 
 // --- Helpers ---
 
-func (sm *SNQueryViewStateMachine) viewWithState(state qviews.QueryViewState) *viewpb.QueryViewOfShard {
-	v := proto.Clone(sm.view).(*viewpb.QueryViewOfShard)
-	v.Meta.State = viewpb.QueryViewState(state)
-	return v
+// coordVisibleState returns the state visible to Coord.
+// UpRecovering maps to Up (Coord is unaware of UpRecovering).
+func (sm *SNQueryViewStateMachine) coordVisibleState() qviews.QueryViewState {
+	if sm.state == qviews.QueryViewStateUpRecovering {
+		return qviews.QueryViewStateUp
+	}
+	return sm.state
+}
+
+// buildReport constructs a QueryViewOfShard report from the SN's current state.
+// The report uses the Coord-visible state (UpRecovering → Up).
+func (sm *SNQueryViewStateMachine) buildReport() *viewpb.QueryViewOfShard {
+	meta := proto.Clone(sm.meta).(*viewpb.QueryViewMeta)
+	meta.State = viewpb.QueryViewState(sm.coordVisibleState())
+
+	return &viewpb.QueryViewOfShard{
+		Meta:          meta,
+		StreamingNode: proto.Clone(sm.snView).(*viewpb.QueryViewOfStreamingNode),
+	}
 }

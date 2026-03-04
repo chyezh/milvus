@@ -20,356 +20,678 @@ const (
 	testVChannel           = "v0_c0"
 )
 
-func buildTestView() *viewpb.QueryViewOfShard {
-	return &viewpb.QueryViewOfShard{
-		Meta: &viewpb.QueryViewMeta{
-			CollectionId: testCollectionID,
-			ReplicaId:    testReplicaID,
-			Vchannel:     testVChannel,
-			Version: &viewpb.QueryViewVersion{
-				DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 1},
-				QueryVersion: 1,
-			},
-			State: viewpb.QueryViewState_QueryViewStatePreparing,
+func buildTestMeta() *viewpb.QueryViewMeta {
+	return &viewpb.QueryViewMeta{
+		CollectionId: testCollectionID,
+		ReplicaId:    testReplicaID,
+		Vchannel:     testVChannel,
+		Version: &viewpb.QueryViewVersion{
+			DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 1},
+			QueryVersion: 1,
 		},
-		QueryNode: []*viewpb.QueryViewOfQueryNode{
-			{
-				NodeId: 1,
-				Partitions: []*viewpb.QueryViewOfPartition{
-					{PartitionId: 10, SegmentIds: []int64{1000}},
-				},
-			},
+		State: viewpb.QueryViewState_QueryViewStatePreparing,
+	}
+}
+
+// buildTestQNView creates a QN view with two partitions:
+//
+//	partition 10: segments [1000, 1001, 1002]
+//	partition 20: segments [2000, 2001]
+func buildTestQNView() *viewpb.QueryViewOfQueryNode {
+	return &viewpb.QueryViewOfQueryNode{
+		NodeId: 1,
+		Partitions: []*viewpb.QueryViewOfPartition{
+			{PartitionId: 10, SegmentIds: []int64{1000, 1001, 1002}},
+			{PartitionId: 20, SegmentIds: []int64{2000, 2001}},
 		},
 	}
 }
 
-func assertPendingReportState(t *testing.T, sm *QNQueryViewStateMachine, expected qviews.QueryViewState) {
+// allSegments returns a map covering all segments in buildTestQNView.
+func allSegments() map[int64][]int64 {
+	return map[int64][]int64{
+		10: {1000, 1001, 1002},
+		20: {2000, 2001},
+	}
+}
+
+func newTestSM() *QNQueryViewStateMachine {
+	return NewQNQueryViewStateMachine(buildTestMeta(), buildTestQNView())
+}
+
+// newReadySM returns a SM in Ready state with all pending drained.
+func newReadySM() *QNQueryViewStateMachine {
+	sm := newTestSM()
+	sm.OnSegmentsReady(allSegments())
+	sm.ConsumeReport()
+	return sm
+}
+
+// newUnrecoverableSM returns a SM in Unrecoverable state with all pending drained.
+func newUnrecoverableSM() *QNQueryViewStateMachine {
+	sm := newTestSM()
+	sm.OnUnrecoverable()
+	sm.ConsumeReport()
+	return sm
+}
+
+// newDroppedSM returns a SM in Dropped state (from Preparing) with all pending drained.
+func newDroppedSM() *QNQueryViewStateMachine {
+	sm := newTestSM()
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	sm.ConsumeReport()
+	return sm
+}
+
+func assertReportState(t *testing.T, sm *QNQueryViewStateMachine, expected qviews.QueryViewState) {
 	t.Helper()
 	v := sm.ConsumeReport()
 	require.NotNil(t, v, "expected pending report with state %s", expected)
 	assert.Equal(t, viewpb.QueryViewState(expected), v.Meta.State)
 }
 
-func assertNoPendingReport(t *testing.T, sm *QNQueryViewStateMachine) {
+func assertNoReport(t *testing.T, sm *QNQueryViewStateMachine) {
 	t.Helper()
 	assert.Nil(t, sm.ConsumeReport(), "expected no pending report")
 }
 
-func drainPending(sm *QNQueryViewStateMachine) {
-	sm.ConsumeReport()
+// getReadySegments extracts ReadySegmentIds from the report for a given partition.
+func getReadySegments(report *viewpb.QueryViewOfShard, partitionID int64) []int64 {
+	for _, qn := range report.QueryNode {
+		for _, p := range qn.Partitions {
+			if p.PartitionId == partitionID {
+				return p.ReadySegmentIds
+			}
+		}
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
-// Construction tests
+// 1. Construction
 // ---------------------------------------------------------------------------
 
-func TestNewQNQueryViewStateMachine(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
+func TestNew_InitialState(t *testing.T) {
+	sm := newTestSM()
 
 	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
-	assertPendingReportState(t, sm, qviews.QueryViewStatePreparing)
-	// After consume, no more pending.
-	assertNoPendingReport(t, sm)
+	// No pending report on construction; local events drive progress.
+	assertNoReport(t, sm)
 }
 
-func TestNewQNQueryViewStateMachine_ViewPreserved(t *testing.T) {
-	view := buildTestView()
-	sm := NewQNQueryViewStateMachine(view)
-	assert.Equal(t, view, sm.View())
+func TestNew_MetaAndViewPreserved(t *testing.T) {
+	meta := buildTestMeta()
+	qnView := buildTestQNView()
+	sm := NewQNQueryViewStateMachine(meta, qnView)
+	assert.Equal(t, meta, sm.Meta())
+	assert.Equal(t, qnView, sm.QNView())
+}
+
+func TestNew_ReportStructure(t *testing.T) {
+	sm := newTestSM()
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000}})
+
+	report := sm.ConsumeReport()
+	require.NotNil(t, report)
+	assert.NotNil(t, report.Meta)
+	assert.Len(t, report.QueryNode, 1)
+	assert.Nil(t, report.StreamingNode)
+}
+
+func TestNew_ReportMetaIsClone(t *testing.T) {
+	sm := newTestSM()
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000}})
+
+	report := sm.ConsumeReport()
+	require.NotNil(t, report)
+	report.Meta.CollectionId = 999
+	assert.Equal(t, testCollectionID, sm.Meta().CollectionId)
 }
 
 // ---------------------------------------------------------------------------
-// Normal flow: Preparing → Ready → Dropped
+// 2. Normal flow: Preparing → Ready → Dropped
 // ---------------------------------------------------------------------------
 
-func TestNormalFlow_PreparingToReady(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
+func TestNormalFlow_AllSegmentsAtOnce(t *testing.T) {
+	sm := newTestSM()
 
-	sm.OnLocalEvent(QNLocalEventReady)
+	sm.OnSegmentsReady(allSegments())
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
-	assertPendingReportState(t, sm, qviews.QueryViewStateReady)
-	assertNoPendingReport(t, sm)
+	assertReportState(t, sm, qviews.QueryViewStateReady)
+	assertNoReport(t, sm)
 }
 
 func TestNormalFlow_ReadyToDropped(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
-	sm.OnLocalEvent(QNLocalEventReady)
-	drainPending(sm)
+	sm := newReadySM()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
-	assertPendingReportState(t, sm, qviews.QueryViewStateDropped)
-	assertNoPendingReport(t, sm)
+	assertReportState(t, sm, qviews.QueryViewStateDropped)
 }
 
 func TestNormalFlow_FullLifecycle(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
+	sm := newTestSM()
 
-	// Step 1: New → Preparing, report Preparing.
+	// Incremental loading.
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000}})
 	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
-	assertPendingReportState(t, sm, qviews.QueryViewStatePreparing)
+	assertReportState(t, sm, qviews.QueryViewStatePreparing)
 
-	// Step 2: LocalReady → Ready, report Ready.
-	sm.OnLocalEvent(QNLocalEventReady)
+	sm.OnSegmentsReady(map[int64][]int64{10: {1001, 1002}, 20: {2000, 2001}})
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
-	assertPendingReportState(t, sm, qviews.QueryViewStateReady)
+	assertReportState(t, sm, qviews.QueryViewStateReady)
 
-	// Step 3: CoordDropped → Dropped, report Dropped.
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
-	assertPendingReportState(t, sm, qviews.QueryViewStateDropped)
+	assertReportState(t, sm, qviews.QueryViewStateDropped)
 
-	assertNoPendingReport(t, sm)
+	assertNoReport(t, sm)
 }
 
 // ---------------------------------------------------------------------------
-// Error path: Preparing → Unrecoverable → Dropped
+// 3. Error path: Preparing → Unrecoverable → Dropped
 // ---------------------------------------------------------------------------
 
 func TestErrorPath_PreparingToUnrecoverable(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
+	sm := newTestSM()
 
-	sm.OnLocalEvent(QNLocalEventUnrecoverable)
+	sm.OnUnrecoverable()
 	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
-	assertPendingReportState(t, sm, qviews.QueryViewStateUnrecoverable)
-	assertNoPendingReport(t, sm)
+	assertReportState(t, sm, qviews.QueryViewStateUnrecoverable)
+	assertNoReport(t, sm)
 }
 
 func TestErrorPath_UnrecoverableToDropped(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
-	sm.OnLocalEvent(QNLocalEventUnrecoverable)
-	drainPending(sm)
+	sm := newUnrecoverableSM()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
-	assertPendingReportState(t, sm, qviews.QueryViewStateDropped)
-	assertNoPendingReport(t, sm)
+	assertReportState(t, sm, qviews.QueryViewStateDropped)
 }
 
-func TestErrorPath_FullLifecycle(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	assertPendingReportState(t, sm, qviews.QueryViewStatePreparing)
+func TestErrorPath_PartialProgressThenUnrecoverable(t *testing.T) {
+	sm := newTestSM()
 
-	sm.OnLocalEvent(QNLocalEventUnrecoverable)
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000}})
+	sm.ConsumeReport()
+
+	sm.OnUnrecoverable()
 	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
-	assertPendingReportState(t, sm, qviews.QueryViewStateUnrecoverable)
-
-	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
-	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
-	assertPendingReportState(t, sm, qviews.QueryViewStateDropped)
-
-	assertNoPendingReport(t, sm)
+	assertReportState(t, sm, qviews.QueryViewStateUnrecoverable)
 }
 
 // ---------------------------------------------------------------------------
-// Coord re-push Preparing
+// 4. OnSegmentsReady — incremental loading & deduplication
 // ---------------------------------------------------------------------------
 
-func TestCoordRePush_Preparing(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
+func TestSegments_IncrementalProgress(t *testing.T) {
+	sm := newTestSM()
+
+	// Batch 1: partial.
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000}})
+	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	report := sm.ConsumeReport()
+	require.NotNil(t, report)
+	assert.Len(t, getReadySegments(report, 10), 1)
+	assert.Empty(t, getReadySegments(report, 20))
+
+	// Batch 2: more segments.
+	sm.OnSegmentsReady(map[int64][]int64{10: {1001}, 20: {2000}})
+	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	report = sm.ConsumeReport()
+	require.NotNil(t, report)
+	assert.Len(t, getReadySegments(report, 10), 2)
+	assert.Len(t, getReadySegments(report, 20), 1)
+
+	// Batch 3: completes all.
+	sm.OnSegmentsReady(map[int64][]int64{10: {1002}, 20: {2001}})
+	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+}
+
+func TestSegments_DuplicateIdempotent(t *testing.T) {
+	sm := newTestSM()
+
+	// Report same segment twice.
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000}})
+	sm.ConsumeReport()
+
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000}})
+	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	report := sm.ConsumeReport()
+	require.NotNil(t, report)
+	// Still only 1 ready segment — not double-counted.
+	assert.Len(t, getReadySegments(report, 10), 1)
+}
+
+func TestSegments_DuplicateInSameBatch(t *testing.T) {
+	sm := newTestSM()
+
+	// Same segment ID twice in one call.
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000, 1000, 1000}})
+	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	report := sm.ConsumeReport()
+	require.NotNil(t, report)
+	assert.Len(t, getReadySegments(report, 10), 1)
+}
+
+func TestSegments_UnknownPartitionIgnored(t *testing.T) {
+	sm := newTestSM()
+
+	// Partition 99 is not in qnView — should be silently ignored.
+	sm.OnSegmentsReady(map[int64][]int64{99: {9000}})
+	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	// Still generates a progress report.
+	report := sm.ConsumeReport()
+	require.NotNil(t, report)
+}
+
+func TestSegments_EmptyBatch(t *testing.T) {
+	sm := newTestSM()
+
+	sm.OnSegmentsReady(map[int64][]int64{})
+	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	// Generates a progress report even for empty batch.
+	report := sm.ConsumeReport()
+	require.NotNil(t, report)
+}
+
+func TestSegments_IgnoredInReady(t *testing.T) {
+	sm := newReadySM()
+
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000}})
+	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	assertNoReport(t, sm)
+}
+
+func TestSegments_IgnoredInUnrecoverable(t *testing.T) {
+	sm := newUnrecoverableSM()
+
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000}})
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
+	assertNoReport(t, sm)
+}
+
+func TestSegments_IgnoredInDropped(t *testing.T) {
+	sm := newDroppedSM()
+
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000}})
+	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertNoReport(t, sm)
+}
+
+func TestSegments_ReadyReportCarriesAllSegments(t *testing.T) {
+	sm := newTestSM()
+
+	sm.OnSegmentsReady(allSegments())
+	report := sm.ConsumeReport()
+	require.NotNil(t, report)
+
+	assert.Equal(t, viewpb.QueryViewState_QueryViewStateReady, report.Meta.State)
+	assert.ElementsMatch(t, []int64{1000, 1001, 1002}, getReadySegments(report, 10))
+	assert.ElementsMatch(t, []int64{2000, 2001}, getReadySegments(report, 20))
+}
+
+func TestSegments_ZeroSegmentViewReadyImmediately(t *testing.T) {
+	meta := buildTestMeta()
+	qnView := &viewpb.QueryViewOfQueryNode{
+		NodeId:     1,
+		Partitions: []*viewpb.QueryViewOfPartition{},
+	}
+	sm := NewQNQueryViewStateMachine(meta, qnView)
+
+	// totalSegments == 0 → first OnSegmentsReady with empty batch triggers Ready.
+	sm.OnSegmentsReady(map[int64][]int64{})
+	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	assertReportState(t, sm, qviews.QueryViewStateReady)
+}
+
+// ---------------------------------------------------------------------------
+// 5. OnUnrecoverable — idempotency
+// ---------------------------------------------------------------------------
+
+func TestUnrecoverable_IgnoredInReady(t *testing.T) {
+	sm := newReadySM()
+
+	sm.OnUnrecoverable()
+	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	assertNoReport(t, sm)
+}
+
+func TestUnrecoverable_IgnoredInDropped(t *testing.T) {
+	sm := newDroppedSM()
+
+	sm.OnUnrecoverable()
+	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertNoReport(t, sm)
+}
+
+func TestUnrecoverable_IgnoredInUnrecoverable(t *testing.T) {
+	sm := newUnrecoverableSM()
+
+	sm.OnUnrecoverable()
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
+	assertNoReport(t, sm)
+}
+
+// ---------------------------------------------------------------------------
+// 6. Coord re-push Preparing — distributed state recoverability
+//
+// Coord pushes Preparing when it doesn't know the node's current state
+// (e.g., after Coord crash recovery or message loss).
+// If QN has advanced past Preparing, it must re-report its current state
+// so Coord can fast-forward (doc 1.1).
+// If QN is still Preparing, no re-report is needed (local events drive it).
+// ---------------------------------------------------------------------------
+
+func TestCoordPreparing_StillPreparing_NoReport(t *testing.T) {
+	sm := newTestSM()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStatePreparing)
 	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
-	assertPendingReportState(t, sm, qviews.QueryViewStatePreparing)
-	assertNoPendingReport(t, sm)
+	assertNoReport(t, sm)
 }
 
-func TestCoordRePush_PreparingMultipleTimes(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
+func TestCoordPreparing_StillPreparing_MultipleRePush_NoReport(t *testing.T) {
+	sm := newTestSM()
 
-	// Multiple re-pushes should each generate a report.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		sm.OnCoordStateDelivered(qviews.QueryViewStatePreparing)
 		assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
-		assertPendingReportState(t, sm, qviews.QueryViewStatePreparing)
+		assertNoReport(t, sm)
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Coord re-push Preparing is invalid in non-Preparing states
-// ---------------------------------------------------------------------------
-
-func TestCoordRePush_IgnoredInReady(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
-	sm.OnLocalEvent(QNLocalEventReady)
-	drainPending(sm)
+func TestCoordPreparing_Ready_ReReportsReady(t *testing.T) {
+	sm := newReadySM()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStatePreparing)
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
-	assertNoPendingReport(t, sm)
+	assertReportState(t, sm, qviews.QueryViewStateReady)
 }
 
-func TestCoordRePush_IgnoredInUnrecoverable(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
-	sm.OnLocalEvent(QNLocalEventUnrecoverable)
-	drainPending(sm)
+func TestCoordPreparing_Unrecoverable_ReReportsUnrecoverable(t *testing.T) {
+	sm := newUnrecoverableSM()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStatePreparing)
 	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
-	assertNoPendingReport(t, sm)
+	assertReportState(t, sm, qviews.QueryViewStateUnrecoverable)
+}
+
+func TestCoordPreparing_Dropped_ReReportsDropped(t *testing.T) {
+	sm := newDroppedSM()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStatePreparing)
+	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertReportState(t, sm, qviews.QueryViewStateDropped)
 }
 
 // ---------------------------------------------------------------------------
-// Invalid Coord pushes — silently ignored
+// 7. Coord Dropped — transition from any state & re-push in Dropped
+//
+// Coord in Dropping pushes Dropped to all nodes (doc 1.6).
+// QN must accept Dropped from any state.
+// If already Dropped and Coord re-pushes (report was lost), re-report.
 // ---------------------------------------------------------------------------
 
-func TestInvalidCoordPush_PreparingIgnoresUp(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
-
-	sm.OnCoordStateDelivered(qviews.QueryViewStateUp)
-	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
-	assertNoPendingReport(t, sm)
-}
-
-func TestInvalidCoordPush_PreparingIgnoresDown(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
-
-	sm.OnCoordStateDelivered(qviews.QueryViewStateDown)
-	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
-	assertNoPendingReport(t, sm)
-}
-
-func TestInvalidCoordPush_ReadyIgnoresUp(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
-	sm.OnLocalEvent(QNLocalEventReady)
-	drainPending(sm)
-
-	sm.OnCoordStateDelivered(qviews.QueryViewStateUp)
-	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
-	assertNoPendingReport(t, sm)
-}
-
-func TestInvalidCoordPush_UnrecoverableIgnoresDown(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
-	sm.OnLocalEvent(QNLocalEventUnrecoverable)
-	drainPending(sm)
-
-	sm.OnCoordStateDelivered(qviews.QueryViewStateDown)
-	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
-	assertNoPendingReport(t, sm)
-}
-
-// ---------------------------------------------------------------------------
-// Invalid local events — silently ignored
-// ---------------------------------------------------------------------------
-
-func TestInvalidLocalEvent_ReadyIgnoresReady(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
-	sm.OnLocalEvent(QNLocalEventReady)
-	drainPending(sm)
-
-	sm.OnLocalEvent(QNLocalEventReady)
-	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
-	assertNoPendingReport(t, sm)
-}
-
-func TestInvalidLocalEvent_ReadyIgnoresUnrecoverable(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
-	sm.OnLocalEvent(QNLocalEventReady)
-	drainPending(sm)
-
-	sm.OnLocalEvent(QNLocalEventUnrecoverable)
-	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
-	assertNoPendingReport(t, sm)
-}
-
-func TestInvalidLocalEvent_UnrecoverableIgnoresReady(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
-	sm.OnLocalEvent(QNLocalEventUnrecoverable)
-	drainPending(sm)
-
-	sm.OnLocalEvent(QNLocalEventReady)
-	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
-	assertNoPendingReport(t, sm)
-}
-
-// ---------------------------------------------------------------------------
-// Dropped is terminal — all events ignored
-// ---------------------------------------------------------------------------
-
-func TestDroppedTerminal_IgnoresCoordPush(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
-	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
-	drainPending(sm)
-
-	pushes := []qviews.QueryViewState{
-		qviews.QueryViewStatePreparing,
-		qviews.QueryViewStateUp,
-		qviews.QueryViewStateDown,
-		qviews.QueryViewStateDropped,
-	}
-	for _, push := range pushes {
-		sm.OnCoordStateDelivered(push)
-		assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
-		assertNoPendingReport(t, sm)
-	}
-}
-
-func TestDroppedTerminal_IgnoresLocalEvents(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
-	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
-	drainPending(sm)
-
-	events := []QNLocalEvent{QNLocalEventReady, QNLocalEventUnrecoverable}
-	for _, event := range events {
-		sm.OnLocalEvent(event)
-		assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
-		assertNoPendingReport(t, sm)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Idempotency — consume clears pending, no double output
-// ---------------------------------------------------------------------------
-
-func TestIdempotency_ConsumeReportClearsPending(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-
-	// First consume gets the pending report.
-	v := sm.ConsumeReport()
-	require.NotNil(t, v)
-
-	// Second consume returns nil.
-	assertNoPendingReport(t, sm)
-}
-
-func TestIdempotency_CoordDroppedFromPreparingOnce(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
-
-	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
-	assertPendingReportState(t, sm, qviews.QueryViewStateDropped)
-	// No more pending.
-	assertNoPendingReport(t, sm)
-}
-
-// ---------------------------------------------------------------------------
-// Direct Preparing → Dropped shortcut
-// ---------------------------------------------------------------------------
-
-func TestPreparingDirectToDropped(t *testing.T) {
-	sm := NewQNQueryViewStateMachine(buildTestView())
-	drainPending(sm)
+func TestCoordDropped_FromPreparing(t *testing.T) {
+	sm := newTestSM()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
-	assertPendingReportState(t, sm, qviews.QueryViewStateDropped)
-	assertNoPendingReport(t, sm)
+	assertReportState(t, sm, qviews.QueryViewStateDropped)
+}
+
+func TestCoordDropped_FromReady(t *testing.T) {
+	sm := newReadySM()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertReportState(t, sm, qviews.QueryViewStateDropped)
+}
+
+func TestCoordDropped_FromUnrecoverable(t *testing.T) {
+	sm := newUnrecoverableSM()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertReportState(t, sm, qviews.QueryViewStateDropped)
+}
+
+func TestCoordDropped_RePushInDropped_ReReportsDropped(t *testing.T) {
+	sm := newDroppedSM()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertReportState(t, sm, qviews.QueryViewStateDropped)
+}
+
+func TestCoordDropped_RePushMultiple(t *testing.T) {
+	sm := newDroppedSM()
+
+	for range 3 {
+		sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+		assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+		assertReportState(t, sm, qviews.QueryViewStateDropped)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 8. Unrecognized Coord pushes — no handler, no side effect
+//
+// QN only handles Preparing and Dropped. Up/Down/etc. are SN-only
+// and QN has no handler for them.
+// ---------------------------------------------------------------------------
+
+func TestUnrecognizedPush_UpIgnoredInPreparing(t *testing.T) {
+	sm := newTestSM()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStateUp)
+	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	assertNoReport(t, sm)
+}
+
+func TestUnrecognizedPush_DownIgnoredInPreparing(t *testing.T) {
+	sm := newTestSM()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDown)
+	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	assertNoReport(t, sm)
+}
+
+func TestUnrecognizedPush_UpIgnoredInReady(t *testing.T) {
+	sm := newReadySM()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStateUp)
+	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	assertNoReport(t, sm)
+}
+
+func TestUnrecognizedPush_DownIgnoredInDropped(t *testing.T) {
+	sm := newDroppedSM()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDown)
+	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertNoReport(t, sm)
+}
+
+// ---------------------------------------------------------------------------
+// 9. Dropped terminal — local events silently ignored
+// ---------------------------------------------------------------------------
+
+func TestDroppedTerminal_IgnoresOnSegmentsReady(t *testing.T) {
+	sm := newDroppedSM()
+
+	sm.OnSegmentsReady(allSegments())
+	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertNoReport(t, sm)
+}
+
+func TestDroppedTerminal_IgnoresOnUnrecoverable(t *testing.T) {
+	sm := newDroppedSM()
+
+	sm.OnUnrecoverable()
+	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertNoReport(t, sm)
+}
+
+// ---------------------------------------------------------------------------
+// 10. Consume idempotency — double consume returns nil
+// ---------------------------------------------------------------------------
+
+func TestConsume_DoubleConsumeReturnsNil(t *testing.T) {
+	sm := newTestSM()
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000}})
+
+	v := sm.ConsumeReport()
+	require.NotNil(t, v)
+	assertNoReport(t, sm)
+}
+
+func TestConsume_NoEventNoReport(t *testing.T) {
+	sm := newTestSM()
+
+	assertNoReport(t, sm)
+}
+
+// ---------------------------------------------------------------------------
+// 11. Distributed recoverability — Coord crash + re-push scenarios
+//
+// Simulates Coord crash-recovery: Coord re-pushes Preparing to all nodes.
+// QN must re-report its current state so Coord can reconstruct progress.
+// ---------------------------------------------------------------------------
+
+func TestRecoverability_ReadyAfterCoordCrash(t *testing.T) {
+	sm := newTestSM()
+
+	// QN loads all segments.
+	sm.OnSegmentsReady(allSegments())
+	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	// Coord consumed the Ready report, then crashes before persisting.
+	sm.ConsumeReport()
+
+	// Coord recovers from ETCD (still Preparing), re-pushes Preparing.
+	sm.OnCoordStateDelivered(qviews.QueryViewStatePreparing)
+	// QN re-reports Ready so Coord can fast-forward.
+	assertReportState(t, sm, qviews.QueryViewStateReady)
+}
+
+func TestRecoverability_UnrecoverableAfterCoordCrash(t *testing.T) {
+	sm := newTestSM()
+
+	sm.OnUnrecoverable()
+	sm.ConsumeReport()
+
+	// Coord re-pushes Preparing after crash.
+	sm.OnCoordStateDelivered(qviews.QueryViewStatePreparing)
+	assertReportState(t, sm, qviews.QueryViewStateUnrecoverable)
+}
+
+func TestRecoverability_DroppedAfterCoordCrash(t *testing.T) {
+	sm := newReadySM()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	sm.ConsumeReport()
+
+	// Coord re-pushes Dropped (Dropping not persisted, re-executes flow).
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	assertReportState(t, sm, qviews.QueryViewStateDropped)
+}
+
+func TestRecoverability_RepeatedRePushAlwaysProducesReport(t *testing.T) {
+	sm := newReadySM()
+
+	// Simulate multiple Coord re-pushes (e.g., retries due to network issues).
+	for range 5 {
+		sm.OnCoordStateDelivered(qviews.QueryViewStatePreparing)
+		assertReportState(t, sm, qviews.QueryViewStateReady)
+	}
+}
+
+func TestRecoverability_ReadyReportCarriesSegmentProgress(t *testing.T) {
+	sm := newTestSM()
+
+	sm.OnSegmentsReady(allSegments())
+	sm.ConsumeReport()
+
+	// Coord re-pushes after crash.
+	sm.OnCoordStateDelivered(qviews.QueryViewStatePreparing)
+	report := sm.ConsumeReport()
+	require.NotNil(t, report)
+	assert.Equal(t, viewpb.QueryViewState_QueryViewStateReady, report.Meta.State)
+	// All segments should still be reflected in the re-report.
+	assert.ElementsMatch(t, []int64{1000, 1001, 1002}, getReadySegments(report, 10))
+	assert.ElementsMatch(t, []int64{2000, 2001}, getReadySegments(report, 20))
+}
+
+// ---------------------------------------------------------------------------
+// 12. Event ordering edge cases
+// ---------------------------------------------------------------------------
+
+func TestOrdering_CoordDroppedDuringSegmentLoading(t *testing.T) {
+	sm := newTestSM()
+
+	// Partial loading in progress.
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000}})
+	sm.ConsumeReport()
+
+	// Coord aborts view.
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertReportState(t, sm, qviews.QueryViewStateDropped)
+
+	// Further segment loading ignored.
+	sm.OnSegmentsReady(map[int64][]int64{10: {1001, 1002}, 20: {2000, 2001}})
+	assertNoReport(t, sm)
+}
+
+func TestOrdering_UnrecoverableBeforeAnySegments(t *testing.T) {
+	sm := newTestSM()
+
+	// OOM before any segments loaded.
+	sm.OnUnrecoverable()
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
+
+	// Subsequent segment notifications ignored.
+	sm.ConsumeReport()
+	sm.OnSegmentsReady(allSegments())
+	assertNoReport(t, sm)
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
+}
+
+func TestOrdering_SegmentsReadyThenUnrecoverable(t *testing.T) {
+	sm := newTestSM()
+
+	// Some segments loaded, then fatal error.
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000, 1001}})
+	sm.ConsumeReport()
+
+	sm.OnUnrecoverable()
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
+	assertReportState(t, sm, qviews.QueryViewStateUnrecoverable)
+}
+
+// ---------------------------------------------------------------------------
+// 13. Pending report overwrite — latest event wins
+// ---------------------------------------------------------------------------
+
+func TestPendingOverwrite_SegmentsThenDropped(t *testing.T) {
+	sm := newTestSM()
+
+	// OnSegmentsReady sets a Preparing report, then Dropped overwrites it.
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000}})
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+
+	// Only one report: the Dropped one.
+	assertReportState(t, sm, qviews.QueryViewStateDropped)
+	assertNoReport(t, sm)
+}
+
+func TestPendingOverwrite_SegmentsThenUnrecoverable(t *testing.T) {
+	sm := newTestSM()
+
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000}})
+	sm.OnUnrecoverable()
+
+	assertReportState(t, sm, qviews.QueryViewStateUnrecoverable)
+	assertNoReport(t, sm)
 }
