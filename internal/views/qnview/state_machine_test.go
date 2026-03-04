@@ -87,7 +87,25 @@ func assertReportState(t *testing.T, sm *QNQueryViewStateMachine, expected qview
 	t.Helper()
 	v := sm.ConsumeReport()
 	require.NotNil(t, v, "expected pending report with state %s", expected)
+
+	// Verify state.
 	assert.Equal(t, viewpb.QueryViewState(expected), v.Meta.State)
+
+	// Verify meta fields are correctly carried.
+	assert.Equal(t, sm.Meta().CollectionId, v.Meta.CollectionId)
+	assert.Equal(t, sm.Meta().ReplicaId, v.Meta.ReplicaId)
+	assert.Equal(t, sm.Meta().Vchannel, v.Meta.Vchannel)
+	assert.Equal(t, sm.Meta().Version.QueryVersion, v.Meta.Version.QueryVersion)
+	assert.Equal(t, sm.Meta().Version.DataVersion.StreamingVersion, v.Meta.Version.DataVersion.StreamingVersion)
+	assert.Equal(t, sm.Meta().Version.DataVersion.CompactVersion, v.Meta.Version.DataVersion.CompactVersion)
+
+	// Verify report structure: QN report has QueryNode, no StreamingNode.
+	require.Len(t, v.QueryNode, 1)
+	assert.Nil(t, v.StreamingNode)
+
+	// Verify report meta is a clone (mutation doesn't affect SM).
+	v.Meta.CollectionId = -1
+	assert.NotEqual(t, int64(-1), sm.Meta().CollectionId)
 }
 
 func assertNoReport(t *testing.T, sm *QNQueryViewStateMachine) {
