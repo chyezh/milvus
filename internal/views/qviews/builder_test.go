@@ -11,18 +11,18 @@ import (
 )
 
 func TestQueryViewAtCoordBuilder(t *testing.T) {
+	shardView := &viewpb.DataViewOfShard{
+		Vchannel: "v1",
+		Partitions: []*viewpb.DataViewOfPartition{
+			{PartitionId: 1, SegmentIds: []int64{100, 101, 102}},
+			{PartitionId: 2, SegmentIds: []int64{200, 201}},
+		},
+		DeleteApplyStartAfterTimetick: 12345,
+	}
 	dataView := &viewpb.DataViewOfCollection{
 		CollectionId: 10,
 		DataVersion:  &viewpb.DataVersion{StreamingVersion: 2, CompactVersion: 1},
-		Shards: []*viewpb.DataViewOfShard{
-			{
-				Vchannel: "v1",
-				Partitions: []*viewpb.DataViewOfPartition{
-					{PartitionId: 1, SegmentIds: []int64{100, 101, 102}},
-					{PartitionId: 2, SegmentIds: []int64{200, 201}},
-				},
-			},
-		},
+		Shards:       []*viewpb.DataViewOfShard{shardView},
 	}
 
 	settings := &viewpb.QueryViewSettings{
@@ -49,6 +49,7 @@ func TestQueryViewAtCoordBuilder(t *testing.T) {
 	assert.Equal(t, int64(1), result.Meta.Version.DataVersion.CompactVersion)
 	assert.Equal(t, int64(3), result.Meta.Version.QueryVersion)
 	assert.Equal(t, settings, result.Meta.Settings)
+	assert.Equal(t, uint64(12345), result.Meta.DeleteApplyStartAfterTimetick)
 
 	// Verify query nodes are sorted by node ID.
 	assert.Len(t, result.QueryNode, 2)
@@ -86,9 +87,7 @@ func TestQueryViewAtCoordBuilder_Empty(t *testing.T) {
 	dataView := &viewpb.DataViewOfCollection{
 		CollectionId: 10,
 		DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0},
-		Shards: []*viewpb.DataViewOfShard{
-			{Vchannel: "v1"},
-		},
+		Shards:       []*viewpb.DataViewOfShard{{Vchannel: "v1"}},
 	}
 
 	result := NewQueryViewAtCoordBuilder(1, dataView, "v1").Build()
