@@ -80,12 +80,6 @@ func qnReport(view *viewpb.QueryViewOfShard, nodeID int64, state qviews.QueryVie
 	})
 }
 
-// consumeAndClear drains pending persist and sync so they don't carry over.
-func consumeAndClear(sm *CoordQueryViewStateMachine) {
-	sm.ConsumePersist()
-	sm.ConsumeSync()
-}
-
 // assertPendingPersistState checks that ConsumePersist returns a view with the
 // expected state, then clears it.
 func assertPendingPersistState(t *testing.T, sm *CoordQueryViewStateMachine, expected qviews.QueryViewState) {
@@ -116,107 +110,149 @@ func assertNoPendingSync(t *testing.T, sm *CoordQueryViewStateMachine) {
 	assert.Nil(t, sm.ConsumeSync(), "expected no pending sync")
 }
 
+// assertNoPending checks that both ConsumePersist and ConsumeSync return nil.
+func assertNoPending(t *testing.T, sm *CoordQueryViewStateMachine) {
+	t.Helper()
+	assertNoPendingPersist(t, sm)
+	assertNoPendingSync(t, sm)
+}
+
+// drainPending consumes and discards both pending persist and sync.
+func drainPending(sm *CoordQueryViewStateMachine) {
+	sm.ConsumePersist()
+	sm.ConsumeSync()
+}
+
 // ===========================================================================
 // 1. NORMAL STATE TRANSITIONS (Happy Path)
 // ===========================================================================
 
 // TestNormalFlow_SingleQN validates the complete normal lifecycle:
 // Preparing → Ready → Up → Down → Dropping → Dropped
+// Verifies both State() and Consume outputs at every step.
 func TestNormalFlow_SingleQN(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
 
-	// --- Preparing ---
+	// --- Initial: Preparing ---
 	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
 	assertPendingPersistState(t, sm, qviews.QueryViewStatePreparing)
 	assertPendingSyncState(t, sm, qviews.QueryViewStatePreparing)
 
-	// QN1 reports Ready
+	// QN1 reports Ready — SN not ready yet, no transition
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
-	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State(), "SN not ready yet")
+	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	assertNoPending(t, sm)
 
-	// SN reports Ready → all nodes ready → transition to Ready
+	// SN reports Ready → all nodes ready → Preparing→Ready
+	// Ready: pendingSync=Up (push Up to SN), no persist (Ready is ephemeral)
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
 	assertNoPendingPersist(t, sm)
-	assertPendingSyncState(t, sm, qviews.QueryViewStateUp) // push Up to SN
+	assertPendingSyncState(t, sm, qviews.QueryViewStateUp)
 
 	// --- Ready → Up ---
-	// SN reports Up → transition to Up
+	// SN reports Up → Ready→Up
+	// Up: pendingPersist=Up (write-ahead), no sync
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
 	assert.Equal(t, qviews.QueryViewStateUp, sm.State())
 	assertPendingPersistState(t, sm, qviews.QueryViewStateUp)
 	assertNoPendingSync(t, sm)
 
 	// --- Up → Down ---
+	// EnterDown: pendingPersist=Down, pendingSync=Down
 	sm.EnterDown()
 	assert.Equal(t, qviews.QueryViewStateDown, sm.State())
 	assertPendingPersistState(t, sm, qviews.QueryViewStateDown)
 	assertPendingSyncState(t, sm, qviews.QueryViewStateDown)
 
 	// --- Down → Dropping ---
+	// SN reports Down → Down→Dropping
+	// Dropping: pendingSync=Dropped (push Dropped to all), no persist (ephemeral)
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateDown))
 	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
 	assertNoPendingPersist(t, sm)
-	assertPendingSyncState(t, sm, qviews.QueryViewStateDropped) // push Dropped to all
+	assertPendingSyncState(t, sm, qviews.QueryViewStateDropped)
+
+	// --- Dropping: SN Dropped but QN1 not yet ---
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateDropped))
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoPending(t, sm)
 
 	// --- Dropping → Dropped ---
-	// SN reports Dropped
-	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateDropped))
-	assert.Equal(t, qviews.QueryViewStateDropping, sm.State(), "QN1 not Dropped yet")
-
-	// QN1 reports Dropped → all nodes Dropped → Dropped
+	// QN1 Dropped → all nodes Dropped → Dropping→Dropped
+	// Dropped: pendingPersist=Dropped (delete from ETCD), no sync
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateDropped))
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
-	assertPendingPersistState(t, sm, qviews.QueryViewStateDropped) // delete from ETCD
+	assertPendingPersistState(t, sm, qviews.QueryViewStateDropped)
+	assertNoPendingSync(t, sm)
 }
 
 // TestNormalFlow_MultipleQN validates that transition from Preparing to Ready
-// requires ALL QNs to report Ready.
+// requires ALL QNs to report Ready, and verifies Consume at each step.
 func TestNormalFlow_MultipleQN(t *testing.T) {
 	view := buildTestView(3)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// QN1 Ready, QN2 Ready, SN Ready — QN3 still missing
+	// QN1 Ready — no transition, no pending
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
+	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	assertNoPending(t, sm)
+
+	// QN2 Ready — no transition, no pending
 	sm.OnNodeStateReported(qnReport(view, 2, qviews.QueryViewStateReady))
+	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	assertNoPending(t, sm)
+
+	// SN Ready — QN3 still missing, no transition, no pending
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
-	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State(), "QN3 not ready yet")
+	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	assertNoPending(t, sm)
 
 	// QN3 Ready → all ready → Ready
+	// pendingSync=Up, no persist
 	sm.OnNodeStateReported(qnReport(view, 3, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	assertNoPendingPersist(t, sm)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateUp)
 }
 
-// TestNormalFlow_DroppingRequiresAllNodesDropped validates that Dropping → Dropped
+// TestNormalFlow_DroppingRequiresAllNodesDropped validates Dropping → Dropped
 // needs ALL nodes (SN + all QNs) to report Dropped.
 func TestNormalFlow_DroppingRequiresAllNodesDropped(t *testing.T) {
 	view := buildTestView(2)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	// Fast-forward to Dropping state
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
 	sm.OnNodeStateReported(qnReport(view, 2, qviews.QueryViewStateReady))
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.EnterDown()
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateDown))
 	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// Only SN and QN1 Dropped — still Dropping
+	// SN Dropped, QN1 Dropped — QN2 missing, no transition
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateDropped))
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoPending(t, sm)
+
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateDropped))
 	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoPending(t, sm)
 
 	// QN2 Dropped → all Dropped → Dropped
+	// pendingPersist=Dropped, no sync
 	sm.OnNodeStateReported(qnReport(view, 2, qviews.QueryViewStateDropped))
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertPendingPersistState(t, sm, qviews.QueryViewStateDropped)
+	assertNoPendingSync(t, sm)
 }
 
 // ===========================================================================
@@ -224,19 +260,21 @@ func TestNormalFlow_DroppingRequiresAllNodesDropped(t *testing.T) {
 // ===========================================================================
 
 // TestPreparing_SNAlreadyUp_FastForward tests recovery scenario where SN
-// reports Up (from persistence recovery) while Coord is still in Preparing.
-// Should fast-forward directly to Up, skipping Ready.
+// reports Up while Coord is still in Preparing. Fast-forward to Up.
 func TestPreparing_SNAlreadyUp_FastForward(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// QN1 Ready, SN Up (recovery) → fast-forward to Up
+	// QN1 Ready, SN Up → fast-forward to Up
+	// pendingPersist=Up (persist Up), no sync (SN already Up)
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
+	assertNoPending(t, sm)
+
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
 	assert.Equal(t, qviews.QueryViewStateUp, sm.State())
 	assertPendingPersistState(t, sm, qviews.QueryViewStateUp)
-	assertNoPendingSync(t, sm) // no need to push Up, SN already Up
+	assertNoPendingSync(t, sm)
 }
 
 // TestPreparing_SNUpBeforeQNReady_WaitsForQN ensures fast-forward only
@@ -244,169 +282,187 @@ func TestPreparing_SNAlreadyUp_FastForward(t *testing.T) {
 func TestPreparing_SNUpBeforeQNReady_WaitsForQN(t *testing.T) {
 	view := buildTestView(2)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// SN reports Up but QNs are not ready
+	// SN reports Up but QNs not ready — no transition, no pending
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
 	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	assertNoPending(t, sm)
 
+	// QN1 Ready — still waiting for QN2
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	assertNoPending(t, sm)
 
-	// Last QN Ready → fast-forward to Up
+	// QN2 Ready → fast-forward to Up
+	// pendingPersist=Up, no sync
 	sm.OnNodeStateReported(qnReport(view, 2, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStateUp, sm.State())
+	assertPendingPersistState(t, sm, qviews.QueryViewStateUp)
+	assertNoPendingSync(t, sm)
 }
 
 // ===========================================================================
 // 3. UNRECOVERABLE TRANSITIONS (Error Path)
 // ===========================================================================
 
-// TestPreparing_SNUnrecoverable transitions to Unrecoverable when SN reports
-// Unrecoverable during Preparing.
+// TestPreparing_SNUnrecoverable: Preparing → Unrecoverable via SN.
+// pendingPersist=Unrecoverable, no sync.
 func TestPreparing_SNUnrecoverable(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUnrecoverable))
 	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
 	assertPendingPersistState(t, sm, qviews.QueryViewStateUnrecoverable)
+	assertNoPendingSync(t, sm)
 }
 
-// TestPreparing_QNUnrecoverable transitions to Unrecoverable when any QN
-// reports Unrecoverable during Preparing.
+// TestPreparing_QNUnrecoverable: Preparing → Unrecoverable via QN.
 func TestPreparing_QNUnrecoverable(t *testing.T) {
 	view := buildTestView(2)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// QN1 is Ready but QN2 is Unrecoverable → whole view Unrecoverable
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
+	assertNoPending(t, sm)
+
 	sm.OnNodeStateReported(qnReport(view, 2, qviews.QueryViewStateUnrecoverable))
 	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
 	assertPendingPersistState(t, sm, qviews.QueryViewStateUnrecoverable)
+	assertNoPendingSync(t, sm)
 }
 
-// TestReady_SNUnrecoverable transitions to Unrecoverable from Ready state.
+// TestReady_SNUnrecoverable: Ready → Unrecoverable via SN.
 func TestReady_SNUnrecoverable(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	// Advance to Ready
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// SN reports Unrecoverable in Ready
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUnrecoverable))
 	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
 	assertPendingPersistState(t, sm, qviews.QueryViewStateUnrecoverable)
+	assertNoPendingSync(t, sm)
 }
 
-// TestReady_QNUnrecoverable transitions to Unrecoverable from Ready state
-// when a QN fails.
+// TestReady_QNUnrecoverable: Ready → Unrecoverable via QN.
 func TestReady_QNUnrecoverable(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	// Advance to Ready
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// QN reports Unrecoverable in Ready
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateUnrecoverable))
 	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
+	assertPendingPersistState(t, sm, qviews.QueryViewStateUnrecoverable)
+	assertNoPendingSync(t, sm)
 }
 
-// TestUp_SNUnrecoverable transitions to Unrecoverable from Up state.
+// TestUp_SNUnrecoverable: Up → Unrecoverable via SN.
 func TestUp_SNUnrecoverable(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	// Advance to Up
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
 	assert.Equal(t, qviews.QueryViewStateUp, sm.State())
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUnrecoverable))
 	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
 	assertPendingPersistState(t, sm, qviews.QueryViewStateUnrecoverable)
+	assertNoPendingSync(t, sm)
 }
 
-// TestUp_QNUnrecoverable transitions to Unrecoverable from Up when QN fails.
+// TestUp_QNUnrecoverable: Up → Unrecoverable via QN.
 func TestUp_QNUnrecoverable(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	// Advance to Up
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
 	assert.Equal(t, qviews.QueryViewStateUp, sm.State())
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateUnrecoverable))
 	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
+	assertPendingPersistState(t, sm, qviews.QueryViewStateUnrecoverable)
+	assertNoPendingSync(t, sm)
 }
 
-// TestUnrecoverable_EnterDropping_ToDropping validates the Manager-triggered
-// transition from Unrecoverable → Dropping.
+// TestUnrecoverable_EnterDropping_ToDropping validates Manager-triggered
+// Unrecoverable → Dropping. pendingSync=Dropped, no persist.
 func TestUnrecoverable_EnterDropping_ToDropping(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// Drive to Unrecoverable
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUnrecoverable))
-	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// Manager calls EnterDropping
 	sm.EnterDropping()
 	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
 	assertNoPendingPersist(t, sm)
-	assertPendingSyncState(t, sm, qviews.QueryViewStateDropped) // push Dropped to nodes
+	assertPendingSyncState(t, sm, qviews.QueryViewStateDropped)
 }
 
-// TestUnrecoverable_FullCleanupCycle validates the complete error recovery
-// path: Unrecoverable → Dropping → Dropped.
+// TestUnrecoverable_FullCleanupCycle validates complete error recovery path:
+// Unrecoverable → Dropping → Dropped with Consume checks at every step.
 func TestUnrecoverable_FullCleanupCycle(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// Unrecoverable
+	// → Unrecoverable
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUnrecoverable))
-	consumeAndClear(sm)
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
+	assertPendingPersistState(t, sm, qviews.QueryViewStateUnrecoverable)
+	assertNoPendingSync(t, sm)
 
-	// Dropping
+	// → Dropping
 	sm.EnterDropping()
-	consumeAndClear(sm)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoPendingPersist(t, sm)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateDropped)
 
-	// All nodes report Dropped
+	// SN Dropped — QN1 not yet
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateDropped))
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoPending(t, sm)
+
+	// QN1 Dropped → all Dropped → Dropped
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateDropped))
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
 	assertPendingPersistState(t, sm, qviews.QueryViewStateDropped)
+	assertNoPendingSync(t, sm)
 }
 
 // ===========================================================================
 // 4. IDEMPOTENCY TESTS
 // ===========================================================================
 
-// TestIdempotency_EnterDown_NotInUp verifies EnterDown is no-op when not in Up.
+// TestIdempotency_EnterDown_NotInUp verifies EnterDown is no-op when not in Up:
+// no state change, no pending persist, no pending sync.
 func TestIdempotency_EnterDown_NotInUp(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -431,9 +487,9 @@ func TestIdempotency_EnterDown_NotInUp(t *testing.T) {
 			setup: func(sm *CoordQueryViewStateMachine, v *viewpb.QueryViewOfShard) {
 				sm.OnNodeStateReported(qnReport(v, 1, qviews.QueryViewStateReady))
 				sm.OnNodeStateReported(snReport(v, qviews.QueryViewStateReady))
-				consumeAndClear(sm)
+				drainPending(sm)
 				sm.OnNodeStateReported(snReport(v, qviews.QueryViewStateUp))
-				consumeAndClear(sm)
+				drainPending(sm)
 				sm.EnterDown()
 			},
 			state: qviews.QueryViewStateDown,
@@ -451,21 +507,20 @@ func TestIdempotency_EnterDown_NotInUp(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			view := buildTestView(1)
 			sm := NewCoordQueryViewStateMachine(view)
-			consumeAndClear(sm)
+			drainPending(sm)
 			tc.setup(sm, view)
 			assert.Equal(t, tc.state, sm.State())
+			drainPending(sm)
 
-			consumeAndClear(sm)
 			sm.EnterDown()
 			assert.Equal(t, tc.state, sm.State(), "EnterDown should be no-op in %s", tc.state)
-			assertNoPendingPersist(t, sm)
-			assertNoPendingSync(t, sm)
+			assertNoPending(t, sm)
 		})
 	}
 }
 
 // TestIdempotency_EnterDropping_NotInUnrecoverable verifies EnterDropping is
-// no-op when not in Unrecoverable.
+// no-op when not in Unrecoverable: no state change, no pending.
 func TestIdempotency_EnterDropping_NotInUnrecoverable(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -482,7 +537,7 @@ func TestIdempotency_EnterDropping_NotInUnrecoverable(t *testing.T) {
 			setup: func(sm *CoordQueryViewStateMachine, v *viewpb.QueryViewOfShard) {
 				sm.OnNodeStateReported(qnReport(v, 1, qviews.QueryViewStateReady))
 				sm.OnNodeStateReported(snReport(v, qviews.QueryViewStateReady))
-				consumeAndClear(sm)
+				drainPending(sm)
 				sm.OnNodeStateReported(snReport(v, qviews.QueryViewStateUp))
 			},
 			state: qviews.QueryViewStateUp,
@@ -492,9 +547,9 @@ func TestIdempotency_EnterDropping_NotInUnrecoverable(t *testing.T) {
 			setup: func(sm *CoordQueryViewStateMachine, v *viewpb.QueryViewOfShard) {
 				sm.OnNodeStateReported(qnReport(v, 1, qviews.QueryViewStateReady))
 				sm.OnNodeStateReported(snReport(v, qviews.QueryViewStateReady))
-				consumeAndClear(sm)
+				drainPending(sm)
 				sm.OnNodeStateReported(snReport(v, qviews.QueryViewStateUp))
-				consumeAndClear(sm)
+				drainPending(sm)
 				sm.EnterDown()
 			},
 			state: qviews.QueryViewStateDown,
@@ -503,7 +558,7 @@ func TestIdempotency_EnterDropping_NotInUnrecoverable(t *testing.T) {
 			name: "Dropping",
 			setup: func(sm *CoordQueryViewStateMachine, v *viewpb.QueryViewOfShard) {
 				sm.OnNodeStateReported(snReport(v, qviews.QueryViewStateUnrecoverable))
-				consumeAndClear(sm)
+				drainPending(sm)
 				sm.EnterDropping()
 			},
 			state: qviews.QueryViewStateDropping,
@@ -514,90 +569,96 @@ func TestIdempotency_EnterDropping_NotInUnrecoverable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			view := buildTestView(1)
 			sm := NewCoordQueryViewStateMachine(view)
-			consumeAndClear(sm)
+			drainPending(sm)
 			tc.setup(sm, view)
 			assert.Equal(t, tc.state, sm.State())
+			drainPending(sm)
 
-			consumeAndClear(sm)
 			sm.EnterDropping()
 			assert.Equal(t, tc.state, sm.State(), "EnterDropping should be no-op in %s", tc.state)
-			assertNoPendingPersist(t, sm)
-			assertNoPendingSync(t, sm)
+			assertNoPending(t, sm)
 		})
 	}
 }
 
 // TestIdempotency_DuplicateNodeReports validates that processing the same
-// node report multiple times is idempotent and does not corrupt state.
+// node report multiple times produces no spurious pending operations.
 func TestIdempotency_DuplicateNodeReports(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// Report QN Ready three times
-	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
-	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
-	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
-	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State(), "still waiting for SN")
+	// Report QN Ready three times — each time no transition, no pending
+	for i := 0; i < 3; i++ {
+		sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
+		assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+		assertNoPending(t, sm)
+	}
 
-	// Report SN Ready twice → should only transition once
+	// First SN Ready → transition to Ready
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
-	consumeAndClear(sm)
+	assertNoPendingPersist(t, sm)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateUp)
 
+	// Duplicate SN Ready in Ready state → re-push Up (SN not Up yet)
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
-	assert.Equal(t, qviews.QueryViewStateReady, sm.State(), "still Ready, waiting for SN Up")
+	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	assertNoPendingPersist(t, sm)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateUp)
 }
 
-// TestIdempotency_EnterDown_CalledTwice verifies double EnterDown is safe.
+// TestIdempotency_EnterDown_CalledTwice verifies second EnterDown is no-op.
 func TestIdempotency_EnterDown_CalledTwice(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	// Advance to Up
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
-	consumeAndClear(sm)
+	drainPending(sm)
 
+	// First call
 	sm.EnterDown()
 	assert.Equal(t, qviews.QueryViewStateDown, sm.State())
-	consumeAndClear(sm)
+	assertPendingPersistState(t, sm, qviews.QueryViewStateDown)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateDown)
 
-	// Second call is no-op (already Down)
+	// Second call — no-op, no pending
 	sm.EnterDown()
 	assert.Equal(t, qviews.QueryViewStateDown, sm.State())
-	assertNoPendingPersist(t, sm)
-	assertNoPendingSync(t, sm)
+	assertNoPending(t, sm)
 }
 
-// TestIdempotency_EnterDropping_CalledTwice verifies double EnterDropping is safe.
+// TestIdempotency_EnterDropping_CalledTwice verifies second EnterDropping is no-op.
 func TestIdempotency_EnterDropping_CalledTwice(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUnrecoverable))
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	sm.EnterDropping()
-	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
-	consumeAndClear(sm)
-
-	// Second call is no-op (already Dropping)
+	// First call
 	sm.EnterDropping()
 	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
 	assertNoPendingPersist(t, sm)
-	assertNoPendingSync(t, sm)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateDropped)
+
+	// Second call — no-op, no pending
+	sm.EnterDropping()
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoPending(t, sm)
 }
 
 // ===========================================================================
 // 5. COORDINATOR CRASH RECOVERY
 // ===========================================================================
 
-// TestRecovery_Preparing re-pushes Preparing sync, no persist (already persisted).
+// TestRecovery_Preparing: re-push Preparing sync, no persist (already persisted).
 func TestRecovery_Preparing(t *testing.T) {
 	view := buildTestView(1)
 	view.Meta.State = viewpb.QueryViewState_QueryViewStatePreparing
@@ -607,28 +668,33 @@ func TestRecovery_Preparing(t *testing.T) {
 	assertNoPendingPersist(t, sm)
 	assertPendingSyncState(t, sm, qviews.QueryViewStatePreparing)
 
-	// Can proceed normally after recovery
+	// Can proceed normally: all Ready → Ready
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
+	assertNoPending(t, sm)
+
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	assertNoPendingPersist(t, sm)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateUp)
 }
 
-// TestRecovery_Up has no pending operations, waits for events.
+// TestRecovery_Up: no pending, waits for events.
 func TestRecovery_Up(t *testing.T) {
 	view := buildTestView(1)
 	view.Meta.State = viewpb.QueryViewState_QueryViewStateUp
 
 	sm := RecoverCoordQueryViewStateMachine(view)
 	assert.Equal(t, qviews.QueryViewStateUp, sm.State())
-	assertNoPendingPersist(t, sm)
-	assertNoPendingSync(t, sm)
+	assertNoPending(t, sm)
 
-	// Can receive EnterDown after recovery
+	// Can receive EnterDown
 	sm.EnterDown()
 	assert.Equal(t, qviews.QueryViewStateDown, sm.State())
+	assertPendingPersistState(t, sm, qviews.QueryViewStateDown)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateDown)
 }
 
-// TestRecovery_Down re-pushes Down sync to SN.
+// TestRecovery_Down: re-push Down sync to SN, no persist.
 func TestRecovery_Down(t *testing.T) {
 	view := buildTestView(1)
 	view.Meta.State = viewpb.QueryViewState_QueryViewStateDown
@@ -641,24 +707,27 @@ func TestRecovery_Down(t *testing.T) {
 	// SN reports Down → Dropping
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateDown))
 	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoPendingPersist(t, sm)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateDropped)
 }
 
-// TestRecovery_Unrecoverable stays in Unrecoverable, waits for Manager.
+// TestRecovery_Unrecoverable: stays, no pending, waits for Manager.
 func TestRecovery_Unrecoverable(t *testing.T) {
 	view := buildTestView(1)
 	view.Meta.State = viewpb.QueryViewState_QueryViewStateUnrecoverable
 
 	sm := RecoverCoordQueryViewStateMachine(view)
 	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
-	assertNoPendingPersist(t, sm)
-	assertNoPendingSync(t, sm)
+	assertNoPending(t, sm)
 
-	// Manager can call EnterDropping after recovery
+	// Manager calls EnterDropping
 	sm.EnterDropping()
 	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoPendingPersist(t, sm)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateDropped)
 }
 
-// TestRecovery_InvalidState panics on invalid persisted state (Ready, Dropping, Dropped).
+// TestRecovery_InvalidState panics on non-persistable states.
 func TestRecovery_InvalidState(t *testing.T) {
 	invalidStates := []viewpb.QueryViewState{
 		viewpb.QueryViewState_QueryViewStateReady,
@@ -678,140 +747,205 @@ func TestRecovery_InvalidState(t *testing.T) {
 	}
 }
 
-// TestRecovery_Preparing_ThenUnrecoverable validates that after recovering in
-// Preparing, receiving Unrecoverable still works.
+// TestRecovery_Preparing_ThenUnrecoverable: after recovering in Preparing,
+// Unrecoverable works and produces correct pending.
 func TestRecovery_Preparing_ThenUnrecoverable(t *testing.T) {
 	view := buildTestView(1)
 	view.Meta.State = viewpb.QueryViewState_QueryViewStatePreparing
 
 	sm := RecoverCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUnrecoverable))
 	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
 	assertPendingPersistState(t, sm, qviews.QueryViewStateUnrecoverable)
+	assertNoPendingSync(t, sm)
 }
 
-// TestRecovery_Up_ThenUnrecoverable validates that after recovering in Up,
-// receiving Unrecoverable still works.
+// TestRecovery_Up_ThenUnrecoverable: after recovering in Up,
+// QN Unrecoverable works and produces correct pending.
 func TestRecovery_Up_ThenUnrecoverable(t *testing.T) {
 	view := buildTestView(1)
 	view.Meta.State = viewpb.QueryViewState_QueryViewStateUp
 
 	sm := RecoverCoordQueryViewStateMachine(view)
+
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateUnrecoverable))
 	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
+	assertPendingPersistState(t, sm, qviews.QueryViewStateUnrecoverable)
+	assertNoPendingSync(t, sm)
 }
 
 // ===========================================================================
 // 6. PENDING I/O CONSUMPTION SEMANTICS
 // ===========================================================================
 
-// TestConsumePersist_ConsumeOnce verifies persist is only returned once.
+// TestConsumePersist_ConsumeOnce: second ConsumePersist returns nil.
 func TestConsumePersist_ConsumeOnce(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
 
 	v := sm.ConsumePersist()
 	require.NotNil(t, v)
+	assert.Equal(t, viewpb.QueryViewState_QueryViewStatePreparing, v.Meta.State)
 
-	// Second consume returns nil
 	assert.Nil(t, sm.ConsumePersist())
+	assert.Nil(t, sm.ConsumePersist()) // third call also nil
 }
 
-// TestConsumeSync_ConsumeOnce verifies sync is only returned once.
+// TestConsumeSync_ConsumeOnce: second ConsumeSync returns nil.
 func TestConsumeSync_ConsumeOnce(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
 
 	v := sm.ConsumeSync()
 	require.NotNil(t, v)
+	assert.Equal(t, viewpb.QueryViewState_QueryViewStatePreparing, v.Meta.State)
 
-	// Second consume returns nil
 	assert.Nil(t, sm.ConsumeSync())
+	assert.Nil(t, sm.ConsumeSync()) // third call also nil
 }
 
-// TestPendingPersist_Dropped_MeansDelete validates that a pending persist
-// with Dropped state signals ETCD deletion.
+// TestPendingPersist_Dropped_MeansDelete: Dropped persist signals ETCD delete.
 func TestPendingPersist_Dropped_MeansDelete(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	// Drive to Dropped
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUnrecoverable))
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.EnterDropping()
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateDropped))
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateDropped))
 
 	v := sm.ConsumePersist()
 	require.NotNil(t, v)
 	assert.Equal(t, viewpb.QueryViewState_QueryViewStateDropped, v.Meta.State)
+	assertNoPendingSync(t, sm)
+}
+
+// TestPendingOverwrite_LastWins: if multiple events fire before Manager
+// consumes, the last pending value wins.
+func TestPendingOverwrite_LastWins(t *testing.T) {
+	view := buildTestView(1)
+	sm := NewCoordQueryViewStateMachine(view)
+	drainPending(sm)
+
+	// Advance to Ready — sets pendingSync=Up
+	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
+	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	// Don't drain — let it accumulate
+
+	// SN reports Ready again — re-pushes Up, overwriting previous sync
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
+	// Should still have pendingSync=Up (overwritten with same value)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateUp)
+	assertNoPendingPersist(t, sm)
 }
 
 // ===========================================================================
 // 7. RE-PUSH BEHAVIOR (Retries on stale node state)
 // ===========================================================================
 
-// TestReady_SNNotUpYet_RePushUp verifies that when SN reports non-Up state
-// in Ready, Coord re-pushes Up.
+// TestReady_SNNotUpYet_RePushUp: SN reports non-Up in Ready → re-push Up.
 func TestReady_SNNotUpYet_RePushUp(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	// Advance to Ready
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// SN reports Ready again (hasn't picked up Up yet) → re-push Up
+	// SN reports Ready (hasn't picked up Up) → re-push Up
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	assertNoPendingPersist(t, sm)
 	assertPendingSyncState(t, sm, qviews.QueryViewStateUp)
 }
 
-// TestDown_SNNotDownYet_RePushDown verifies re-push of Down when SN reports
-// non-Down state.
+// TestReady_SNReportsPreparing_RePushUp: SN reports Preparing in Ready → re-push Up.
+func TestReady_SNReportsPreparing_RePushUp(t *testing.T) {
+	view := buildTestView(1)
+	sm := NewCoordQueryViewStateMachine(view)
+	drainPending(sm)
+
+	// Advance to Ready
+	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
+	drainPending(sm)
+
+	// SN reports Preparing → re-push Up
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStatePreparing))
+	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	assertNoPendingPersist(t, sm)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateUp)
+}
+
+// TestDown_SNNotDownYet_RePushDown: SN reports non-Down in Down → re-push Down.
 func TestDown_SNNotDownYet_RePushDown(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	// Advance to Down
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.EnterDown()
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// SN reports Up (hasn't received Down yet) → re-push Down
+	// SN reports Up → re-push Down
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
 	assert.Equal(t, qviews.QueryViewStateDown, sm.State())
+	assertNoPendingPersist(t, sm)
 	assertPendingSyncState(t, sm, qviews.QueryViewStateDown)
 }
 
-// TestDropping_NodeNotDropped_RePushDropped verifies re-push of Dropped when
-// a node reports a non-Dropped state.
+// TestDropping_NodeNotDropped_RePushDropped: node reports non-Dropped in
+// Dropping → re-push Dropped.
 func TestDropping_NodeNotDropped_RePushDropped(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	// Drive to Dropping
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUnrecoverable))
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.EnterDropping()
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// SN reports Ready (hasn't received Dropped yet) → re-push Dropped
+	// SN reports Ready → re-push Dropped
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoPendingPersist(t, sm)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateDropped)
+}
+
+// TestDropping_QNNotDropped_RePushDropped: QN reports non-Dropped in
+// Dropping → re-push Dropped.
+func TestDropping_QNNotDropped_RePushDropped(t *testing.T) {
+	view := buildTestView(1)
+	sm := NewCoordQueryViewStateMachine(view)
+	drainPending(sm)
+
+	// Drive to Dropping
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUnrecoverable))
+	drainPending(sm)
+	sm.EnterDropping()
+	drainPending(sm)
+
+	// QN reports Ready → re-push Dropped
+	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoPendingPersist(t, sm)
 	assertPendingSyncState(t, sm, qviews.QueryViewStateDropped)
 }
 
@@ -819,32 +953,32 @@ func TestDropping_NodeNotDropped_RePushDropped(t *testing.T) {
 // 8. UNRECOVERABLE IS A STABLE STATE (ignores node reports)
 // ===========================================================================
 
-// TestUnrecoverable_IgnoresNodeReports validates that no node report can
-// move the state machine out of Unrecoverable.
+// TestUnrecoverable_IgnoresNodeReports: no node report moves out of Unrecoverable,
+// and no spurious pending operations are generated.
 func TestUnrecoverable_IgnoresNodeReports(t *testing.T) {
 	view := buildTestView(2)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUnrecoverable))
 	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// Various node reports should not change state
 	reports := []qviews.QueryViewAtWorkNode{
 		snReport(view, qviews.QueryViewStateReady),
 		snReport(view, qviews.QueryViewStateUp),
 		snReport(view, qviews.QueryViewStateDown),
 		snReport(view, qviews.QueryViewStateDropped),
+		snReport(view, qviews.QueryViewStatePreparing),
 		qnReport(view, 1, qviews.QueryViewStateReady),
 		qnReport(view, 2, qviews.QueryViewStateUnrecoverable),
+		qnReport(view, 1, qviews.QueryViewStateDropped),
 	}
 
 	for _, report := range reports {
 		sm.OnNodeStateReported(report)
 		assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
-		assertNoPendingPersist(t, sm)
-		assertNoPendingSync(t, sm)
+		assertNoPending(t, sm)
 	}
 }
 
@@ -852,94 +986,124 @@ func TestUnrecoverable_IgnoresNodeReports(t *testing.T) {
 // 9. DOWN STATE IGNORES QN REPORTS
 // ===========================================================================
 
-// TestDown_QNReportIgnored verifies that QN reports are ignored in Down state.
-// Only SN Down triggers the transition.
+// TestDown_QNReportIgnored: QN reports in Down state produce no transition
+// and no pending operations.
 func TestDown_QNReportIgnored(t *testing.T) {
 	view := buildTestView(2)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	// Advance to Down
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
 	sm.OnNodeStateReported(qnReport(view, 2, qviews.QueryViewStateReady))
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.EnterDown()
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// QN reports should not affect state
+	// QN reports should not affect state or produce pending
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateDropped))
 	assert.Equal(t, qviews.QueryViewStateDown, sm.State())
-	assertNoPendingPersist(t, sm)
-	assertNoPendingSync(t, sm)
+	assertNoPending(t, sm)
+
+	sm.OnNodeStateReported(qnReport(view, 2, qviews.QueryViewStateReady))
+	assert.Equal(t, qviews.QueryViewStateDown, sm.State())
+	assertNoPending(t, sm)
 }
 
 // ===========================================================================
-// 10. READY STATE IGNORES QN REPORTS (only SN matters)
+// 10. READY STATE IGNORES QN REPORTS
 // ===========================================================================
 
-// TestReady_QNReportIgnored verifies that QN reports in Ready state don't
-// trigger state transitions (only SN Up matters).
+// TestReady_QNReportIgnored: QN reports (non-Unrecoverable) in Ready state
+// don't trigger transitions or pending operations.
 func TestReady_QNReportIgnored(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	// Advance to Ready
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// QN report in Ready state — not SN, so should be ignored (except Unrecoverable)
+	// QN report in Ready state — ignored
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
-	assertNoPendingPersist(t, sm)
-	assertNoPendingSync(t, sm)
+	assertNoPending(t, sm)
 }
 
 // ===========================================================================
-// 11. QN READY SEGMENTS TRACKING
+// 11. UP STATE: NON-UNRECOVERABLE REPORTS PRODUCE NO PENDING
+// ===========================================================================
+
+// TestUp_NormalReports_NoPending: in Up state, non-Unrecoverable node
+// reports produce no state change and no pending operations.
+func TestUp_NormalReports_NoPending(t *testing.T) {
+	view := buildTestView(2)
+	sm := NewCoordQueryViewStateMachine(view)
+	drainPending(sm)
+
+	// Advance to Up
+	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
+	sm.OnNodeStateReported(qnReport(view, 2, qviews.QueryViewStateReady))
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
+	drainPending(sm)
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
+	drainPending(sm)
+
+	// Various non-Unrecoverable reports
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
+	assertNoPending(t, sm)
+
+	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
+	assertNoPending(t, sm)
+
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
+	assertNoPending(t, sm)
+
+	assert.Equal(t, qviews.QueryViewStateUp, sm.State())
+}
+
+// ===========================================================================
+// 12. QN READY SEGMENTS TRACKING
 // ===========================================================================
 
 // TestQNReadySegments_TrackedDuringPreparing validates that ready segments
-// reported by QNs are tracked.
+// reported by QNs are tracked and no spurious pending is generated.
 func TestQNReadySegments_TrackedDuringPreparing(t *testing.T) {
 	view := buildTestView(2)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// QN1 reports Ready with segments
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady, 100, 101))
-	segs := sm.QNReadySegments()
-	assert.Equal(t, []int64{100, 101}, segs[1])
+	assertNoPending(t, sm)
+	assert.Equal(t, []int64{100, 101}, sm.QNReadySegments()[1])
 
-	// QN2 reports Ready with segments
 	sm.OnNodeStateReported(qnReport(view, 2, qviews.QueryViewStateReady, 200))
-	segs = sm.QNReadySegments()
-	assert.Equal(t, []int64{100, 101}, segs[1])
-	assert.Equal(t, []int64{200}, segs[2])
+	assertNoPending(t, sm)
+	assert.Equal(t, []int64{100, 101}, sm.QNReadySegments()[1])
+	assert.Equal(t, []int64{200}, sm.QNReadySegments()[2])
 }
 
-// TestQNReadySegments_UpdatedOnReReport validates that re-reports update
-// the ready segments.
+// TestQNReadySegments_UpdatedOnReReport validates re-reports update segments.
 func TestQNReadySegments_UpdatedOnReReport(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady, 100))
 	assert.Equal(t, []int64{100}, sm.QNReadySegments()[1])
 
-	// Update with new segments
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady, 100, 101, 102))
 	assert.Equal(t, []int64{100, 101, 102}, sm.QNReadySegments()[1])
 }
 
 // ===========================================================================
-// 12. VIEW ACCESSOR
+// 13. VIEW ACCESSOR
 // ===========================================================================
 
 // TestView_ReturnsSameReference ensures View() returns the original proto.
@@ -950,10 +1114,10 @@ func TestView_ReturnsSameReference(t *testing.T) {
 }
 
 // ===========================================================================
-// 13. NEW STATE MACHINE INITIAL STATE
+// 14. NEW STATE MACHINE INITIAL STATE
 // ===========================================================================
 
-// TestNewStateMachine_InitialState validates all initial properties.
+// TestNewStateMachine_InitialState validates all initial properties and pending.
 func TestNewStateMachine_InitialState(t *testing.T) {
 	view := buildTestView(2)
 	sm := NewCoordQueryViewStateMachine(view)
@@ -963,108 +1127,131 @@ func TestNewStateMachine_InitialState(t *testing.T) {
 	assert.NotNil(t, sm.QNReadySegments())
 	assert.Len(t, sm.QNReadySegments(), 0)
 
-	// Both pending operations set
-	persist := sm.ConsumePersist()
-	require.NotNil(t, persist)
-	assert.Equal(t, viewpb.QueryViewState_QueryViewStatePreparing, persist.Meta.State)
+	// Both pending set to Preparing
+	assertPendingPersistState(t, sm, qviews.QueryViewStatePreparing)
+	assertPendingSyncState(t, sm, qviews.QueryViewStatePreparing)
 
-	sync := sm.ConsumeSync()
-	require.NotNil(t, sync)
-	assert.Equal(t, viewpb.QueryViewState_QueryViewStatePreparing, sync.Meta.State)
+	// After consuming, both are nil
+	assertNoPending(t, sm)
 }
 
 // ===========================================================================
-// 14. EDGE CASES
+// 15. EDGE CASES
 // ===========================================================================
 
-// TestNoQN_NormalFlow validates state machine with zero query nodes
-// (SN-only view). Should progress normally through lifecycle.
+// TestNoQN_NormalFlow validates state machine with zero query nodes.
 func TestNoQN_NormalFlow(t *testing.T) {
 	view := buildTestView(0)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// No QNs to wait for, only SN Ready needed
+	// SN Ready → all ready (no QNs to wait for) → Ready
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	assertNoPendingPersist(t, sm)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateUp)
 
+	// SN Up → Up
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
 	assert.Equal(t, qviews.QueryViewStateUp, sm.State())
+	assertPendingPersistState(t, sm, qviews.QueryViewStateUp)
+	assertNoPendingSync(t, sm)
 }
 
-// TestPreparing_QNReportsBeforeSN validates that QN Ready reports are
-// accumulated and state waits for SN.
+// TestNoQN_DroppingOnlySN validates zero QN Dropping→Dropped needs only SN.
+func TestNoQN_DroppingOnlySN(t *testing.T) {
+	view := buildTestView(0)
+	sm := NewCoordQueryViewStateMachine(view)
+	drainPending(sm)
+
+	// Fast path to Dropping
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUnrecoverable))
+	drainPending(sm)
+	sm.EnterDropping()
+	drainPending(sm)
+
+	// SN Dropped → all dropped (no QNs) → Dropped
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateDropped))
+	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertPendingPersistState(t, sm, qviews.QueryViewStateDropped)
+	assertNoPendingSync(t, sm)
+}
+
+// TestPreparing_QNReportsBeforeSN validates QN reports accumulate with no
+// pending until SN is Ready.
 func TestPreparing_QNReportsBeforeSN(t *testing.T) {
 	view := buildTestView(3)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// All QNs Ready, no SN yet
 	for i := 1; i <= 3; i++ {
 		sm.OnNodeStateReported(qnReport(view, int64(i), qviews.QueryViewStateReady))
 		assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+		assertNoPending(t, sm)
 	}
 
-	// SN Ready → transition
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	assertNoPendingPersist(t, sm)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateUp)
 }
 
-// TestDown_UnrecoverableFromSN_NotHandled verifies that in Down state,
-// Unrecoverable reports from nodes do NOT transition (Down doesn't check
-// for Unrecoverable per the implementation).
+// TestDown_UnrecoverableFromSN_NotHandled: Down handler only checks SN Down,
+// so SN Unrecoverable triggers re-push Down (not Unrecoverable transition).
 func TestDown_UnrecoverableFromSN_NotHandled(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	// Advance to Down
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.EnterDown()
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// SN Unrecoverable in Down → handleDown only cares about SN Down
-	// Non-SN reports are ignored, and SN non-Down triggers re-push
+	// SN Unrecoverable → not Down → re-push Down
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUnrecoverable))
 	assert.Equal(t, qviews.QueryViewStateDown, sm.State())
-	// Should re-push Down since SN didn't report Down
+	assertNoPendingPersist(t, sm)
 	assertPendingSyncState(t, sm, qviews.QueryViewStateDown)
 }
 
-// TestDropping_PartialDropped_StaysDropping verifies that Dropping stays until
-// ALL nodes are Dropped.
+// TestDropping_PartialDropped_StaysDropping: verifies incremental Dropped
+// reports produce no pending until last node completes.
 func TestDropping_PartialDropped_StaysDropping(t *testing.T) {
 	view := buildTestView(3)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// Fast-forward to Dropping via Unrecoverable path
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUnrecoverable))
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.EnterDropping()
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// Nodes report Dropped one by one
+	// Each Dropped node — no transition, no pending
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateDropped))
 	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoPending(t, sm)
 
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateDropped))
 	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoPending(t, sm)
 
 	sm.OnNodeStateReported(qnReport(view, 2, qviews.QueryViewStateDropped))
 	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoPending(t, sm)
 
-	// Last node Dropped → Dropped
+	// Last node → Dropped
 	sm.OnNodeStateReported(qnReport(view, 3, qviews.QueryViewStateDropped))
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertPendingPersistState(t, sm, qviews.QueryViewStateDropped)
+	assertNoPendingSync(t, sm)
 }
 
-// TestPendingSync_PreservesMeta validates that pending sync views preserve
-// the original view's metadata (collection, replica, vchannel, version).
+// TestPendingSync_PreservesMeta validates pending sync views preserve metadata.
 func TestPendingSync_PreservesMeta(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
@@ -1077,8 +1264,7 @@ func TestPendingSync_PreservesMeta(t *testing.T) {
 	assert.Equal(t, view.Meta.Version.QueryVersion, sync.Meta.Version.QueryVersion)
 }
 
-// TestPendingPersist_PreservesMeta validates that pending persist views
-// preserve the original view's metadata.
+// TestPendingPersist_PreservesMeta validates pending persist views preserve metadata.
 func TestPendingPersist_PreservesMeta(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
@@ -1090,8 +1276,7 @@ func TestPendingPersist_PreservesMeta(t *testing.T) {
 	assert.Equal(t, view.Meta.Vchannel, persist.Meta.Vchannel)
 }
 
-// TestViewWithState_IsClone verifies that viewWithState returns a clone,
-// not a reference to the original.
+// TestViewWithState_IsClone verifies returned views are clones, not references.
 func TestViewWithState_IsClone(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
@@ -1099,155 +1284,185 @@ func TestViewWithState_IsClone(t *testing.T) {
 	persist := sm.ConsumePersist()
 	require.NotNil(t, persist)
 
-	// Mutating the returned view should not affect the original
 	persist.Meta.CollectionId = 999
 	assert.Equal(t, testCollectionID, sm.View().Meta.CollectionId)
 }
 
 // ===========================================================================
-// 15. COMPLETE LIFECYCLE WITH MULTIPLE QNs (Integration-style)
+// 16. COMPLETE LIFECYCLE INTEGRATION TESTS
 // ===========================================================================
 
-// TestCompleteLifecycle_3QN_ErrorRecovery validates a full cycle with 3 QNs
-// where one QN fails during Preparing, triggering Unrecoverable path.
+// TestCompleteLifecycle_3QN_ErrorRecovery: full cycle with 3 QNs where QN2
+// fails during Preparing, Consume verified at every step.
 func TestCompleteLifecycle_3QN_ErrorRecovery(t *testing.T) {
 	view := buildTestView(3)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// Preparing: QN1 Ready, QN2 Unrecoverable → immediate Unrecoverable
+	// QN1 Ready — no transition
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	assertNoPending(t, sm)
 
+	// QN2 Unrecoverable → Unrecoverable
 	sm.OnNodeStateReported(qnReport(view, 2, qviews.QueryViewStateUnrecoverable))
 	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
 	assertPendingPersistState(t, sm, qviews.QueryViewStateUnrecoverable)
 	assertNoPendingSync(t, sm)
 
-	// Manager generates replacement, then calls EnterDropping
+	// Manager → EnterDropping
 	sm.EnterDropping()
 	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoPendingPersist(t, sm)
 	assertPendingSyncState(t, sm, qviews.QueryViewStateDropped)
 
-	// All nodes report Dropped
+	// SN, QN1, QN2 Dropped — QN3 pending
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateDropped))
+	assertNoPending(t, sm)
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateDropped))
+	assertNoPending(t, sm)
 	sm.OnNodeStateReported(qnReport(view, 2, qviews.QueryViewStateDropped))
-	assert.Equal(t, qviews.QueryViewStateDropping, sm.State()) // QN3 pending
+	assertNoPending(t, sm)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
 
+	// QN3 Dropped → all Dropped → Dropped
 	sm.OnNodeStateReported(qnReport(view, 3, qviews.QueryViewStateDropped))
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
 	assertPendingPersistState(t, sm, qviews.QueryViewStateDropped)
+	assertNoPendingSync(t, sm)
 }
 
-// TestCompleteLifecycle_UpThenRecovery simulates Coord crash recovery from
-// Up state, then normal completion.
+// TestCompleteLifecycle_UpThenRecovery: Coord crash recovery from Up, then
+// normal Down→Dropping→Dropped with Consume at every step.
 func TestCompleteLifecycle_UpThenRecovery(t *testing.T) {
 	view := buildTestView(2)
 	view.Meta.State = viewpb.QueryViewState_QueryViewStateUp
 
 	sm := RecoverCoordQueryViewStateMachine(view)
 	assert.Equal(t, qviews.QueryViewStateUp, sm.State())
-	assertNoPendingPersist(t, sm)
-	assertNoPendingSync(t, sm)
+	assertNoPending(t, sm)
 
-	// Normal Down flow after recovery
+	// EnterDown
 	sm.EnterDown()
 	assert.Equal(t, qviews.QueryViewStateDown, sm.State())
-	consumeAndClear(sm)
+	assertPendingPersistState(t, sm, qviews.QueryViewStateDown)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateDown)
 
+	// SN Down → Dropping
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateDown))
 	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
-	consumeAndClear(sm)
+	assertNoPendingPersist(t, sm)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateDropped)
 
+	// All Dropped
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateDropped))
+	assertNoPending(t, sm)
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateDropped))
+	assertNoPending(t, sm)
+
 	sm.OnNodeStateReported(qnReport(view, 2, qviews.QueryViewStateDropped))
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertPendingPersistState(t, sm, qviews.QueryViewStateDropped)
+	assertNoPendingSync(t, sm)
 }
 
 // ===========================================================================
-// 16. DROPPED STATE IS TERMINAL
+// 17. DROPPED STATE IS TERMINAL
 // ===========================================================================
 
-// TestDropped_IsTerminal verifies no operations change state after Dropped.
+// TestDropped_IsTerminal: no operations produce state change or pending.
 func TestDropped_IsTerminal(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	// Drive to Dropped
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUnrecoverable))
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.EnterDropping()
-	consumeAndClear(sm)
+	drainPending(sm)
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateDropped))
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateDropped))
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
-	consumeAndClear(sm)
+	drainPending(sm)
 
-	// No operations should change state
+	// EnterDown — no-op
 	sm.EnterDown()
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertNoPending(t, sm)
 
+	// EnterDropping — no-op
 	sm.EnterDropping()
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertNoPending(t, sm)
 
+	// Node report — no-op
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertNoPending(t, sm)
 
-	assertNoPendingPersist(t, sm)
-	assertNoPendingSync(t, sm)
+	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
+	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertNoPending(t, sm)
 }
 
 // ===========================================================================
-// 17. SN PREPARING REPORT DOES NOT ADVANCE STATE
+// 18. SN PREPARING DOES NOT ADVANCE STATE
 // ===========================================================================
 
-// TestPreparing_SNPreparing_NoTransition verifies that SN reporting Preparing
-// does not advance the state machine.
+// TestPreparing_SNPreparing_NoTransition: SN Preparing does not advance.
 func TestPreparing_SNPreparing_NoTransition(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
+	assertNoPending(t, sm)
+
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStatePreparing))
 	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	assertNoPending(t, sm)
 }
 
 // ===========================================================================
-// 18. ORDERING OF NODE REPORTS
+// 19. ORDERING OF NODE REPORTS
 // ===========================================================================
 
-// TestPreparing_SNReadyBeforeAllQN verifies SN Ready before all QNs are
-// Ready does not prematurely advance state.
+// TestPreparing_SNReadyBeforeAllQN: SN Ready arrives first.
 func TestPreparing_SNReadyBeforeAllQN(t *testing.T) {
 	view := buildTestView(2)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	assertNoPending(t, sm)
 
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	assertNoPending(t, sm)
 
-	// Last QN Ready triggers transition
+	// Last QN triggers transition
 	sm.OnNodeStateReported(qnReport(view, 2, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	assertNoPendingPersist(t, sm)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateUp)
 }
 
-// TestPreparing_AllQNReadyThenSNReady verifies the reverse ordering also works.
+// TestPreparing_AllQNReadyThenSNReady: all QNs Ready before SN.
 func TestPreparing_AllQNReadyThenSNReady(t *testing.T) {
 	view := buildTestView(2)
 	sm := NewCoordQueryViewStateMachine(view)
-	consumeAndClear(sm)
+	drainPending(sm)
 
 	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
+	assertNoPending(t, sm)
 	sm.OnNodeStateReported(qnReport(view, 2, qviews.QueryViewStateReady))
+	assertNoPending(t, sm)
 	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
 
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	assertNoPendingPersist(t, sm)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateUp)
 }
