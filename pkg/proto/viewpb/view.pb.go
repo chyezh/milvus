@@ -7,10 +7,11 @@
 package viewpb
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -47,6 +48,10 @@ const (
 	QueryViewState_QueryViewStateDropping QueryViewState = 6
 	// View is fully dropped and can be removed from persistent storage.
 	QueryViewState_QueryViewStateDropped QueryViewState = 7
+	// StreamingNode-only: WAL is recovering after SN crash.
+	// Not used by Coord or QueryNode. Maps to Up for Coord-visible state.
+	// See design doc Section 2.4.
+	QueryViewState_QueryViewStateUpRecovering QueryViewState = 8
 )
 
 // Enum value maps for QueryViewState.
@@ -60,6 +65,7 @@ var (
 		5: "QueryViewStateUnrecoverable",
 		6: "QueryViewStateDropping",
 		7: "QueryViewStateDropped",
+		8: "QueryViewStateUpRecovering",
 	}
 	QueryViewState_value = map[string]int32{
 		"QueryViewStateUnknown":       0,
@@ -70,6 +76,7 @@ var (
 		"QueryViewStateUnrecoverable": 5,
 		"QueryViewStateDropping":      6,
 		"QueryViewStateDropped":       7,
+		"QueryViewStateUpRecovering":  8,
 	}
 )
 
@@ -1655,33 +1662,36 @@ func file_view_proto_rawDescGZIP() []byte {
 	return file_view_proto_rawDescData
 }
 
-var file_view_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_view_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
-var file_view_proto_goTypes = []interface{}{
-	(QueryViewState)(0),                    // 0: milvus.proto.view.QueryViewState
-	(*DataVersion)(nil),                    // 1: milvus.proto.view.DataVersion
-	(*DataViewOfCollection)(nil),           // 2: milvus.proto.view.DataViewOfCollection
-	(*DataViewOfShard)(nil),                // 3: milvus.proto.view.DataViewOfShard
-	(*DataViewOfPartition)(nil),            // 4: milvus.proto.view.DataViewOfPartition
-	(*QueryViewOfShard)(nil),               // 5: milvus.proto.view.QueryViewOfShard
-	(*QueryViewMeta)(nil),                  // 6: milvus.proto.view.QueryViewMeta
-	(*QueryViewSettings)(nil),              // 7: milvus.proto.view.QueryViewSettings
-	(*QueryViewOfStreamingNode)(nil),       // 8: milvus.proto.view.QueryViewOfStreamingNode
-	(*QueryViewOfQueryNode)(nil),           // 9: milvus.proto.view.QueryViewOfQueryNode
-	(*QueryViewVersion)(nil),               // 10: milvus.proto.view.QueryViewVersion
-	(*QueryViewOfPartition)(nil),           // 11: milvus.proto.view.QueryViewOfPartition
-	(*SyncRequest)(nil),                    // 12: milvus.proto.view.SyncRequest
-	(*SyncQueryViewsRequest)(nil),          // 13: milvus.proto.view.SyncQueryViewsRequest
-	(*SyncCloseRequest)(nil),               // 14: milvus.proto.view.SyncCloseRequest
-	(*SyncResponse)(nil),                   // 15: milvus.proto.view.SyncResponse
-	(*SyncQueryViewsResponse)(nil),         // 16: milvus.proto.view.SyncQueryViewsResponse
-	(*SyncCloseResponse)(nil),              // 17: milvus.proto.view.SyncCloseResponse
-	(*SyncDataViewRequest)(nil),            // 18: milvus.proto.view.SyncDataViewRequest
-	(*DataViewShardTimeTick)(nil),          // 19: milvus.proto.view.DataViewShardTimeTick
-	(*SyncDataViewResponse)(nil),           // 20: milvus.proto.view.SyncDataViewResponse
-	(*StreamingNodeBalanceAttributes)(nil), // 21: milvus.proto.view.StreamingNodeBalanceAttributes
-	(*QueryNodeBalanceAttributes)(nil),     // 22: milvus.proto.view.QueryNodeBalanceAttributes
-}
+var (
+	file_view_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+	file_view_proto_msgTypes  = make([]protoimpl.MessageInfo, 22)
+	file_view_proto_goTypes   = []interface{}{
+		(QueryViewState)(0),                    // 0: milvus.proto.view.QueryViewState
+		(*DataVersion)(nil),                    // 1: milvus.proto.view.DataVersion
+		(*DataViewOfCollection)(nil),           // 2: milvus.proto.view.DataViewOfCollection
+		(*DataViewOfShard)(nil),                // 3: milvus.proto.view.DataViewOfShard
+		(*DataViewOfPartition)(nil),            // 4: milvus.proto.view.DataViewOfPartition
+		(*QueryViewOfShard)(nil),               // 5: milvus.proto.view.QueryViewOfShard
+		(*QueryViewMeta)(nil),                  // 6: milvus.proto.view.QueryViewMeta
+		(*QueryViewSettings)(nil),              // 7: milvus.proto.view.QueryViewSettings
+		(*QueryViewOfStreamingNode)(nil),       // 8: milvus.proto.view.QueryViewOfStreamingNode
+		(*QueryViewOfQueryNode)(nil),           // 9: milvus.proto.view.QueryViewOfQueryNode
+		(*QueryViewVersion)(nil),               // 10: milvus.proto.view.QueryViewVersion
+		(*QueryViewOfPartition)(nil),           // 11: milvus.proto.view.QueryViewOfPartition
+		(*SyncRequest)(nil),                    // 12: milvus.proto.view.SyncRequest
+		(*SyncQueryViewsRequest)(nil),          // 13: milvus.proto.view.SyncQueryViewsRequest
+		(*SyncCloseRequest)(nil),               // 14: milvus.proto.view.SyncCloseRequest
+		(*SyncResponse)(nil),                   // 15: milvus.proto.view.SyncResponse
+		(*SyncQueryViewsResponse)(nil),         // 16: milvus.proto.view.SyncQueryViewsResponse
+		(*SyncCloseResponse)(nil),              // 17: milvus.proto.view.SyncCloseResponse
+		(*SyncDataViewRequest)(nil),            // 18: milvus.proto.view.SyncDataViewRequest
+		(*DataViewShardTimeTick)(nil),          // 19: milvus.proto.view.DataViewShardTimeTick
+		(*SyncDataViewResponse)(nil),           // 20: milvus.proto.view.SyncDataViewResponse
+		(*StreamingNodeBalanceAttributes)(nil), // 21: milvus.proto.view.StreamingNodeBalanceAttributes
+		(*QueryNodeBalanceAttributes)(nil),     // 22: milvus.proto.view.QueryNodeBalanceAttributes
+	}
+)
+
 var file_view_proto_depIdxs = []int32{
 	3,  // 0: milvus.proto.view.DataViewOfCollection.shards:type_name -> milvus.proto.view.DataViewOfShard
 	1,  // 1: milvus.proto.view.DataViewOfCollection.data_version:type_name -> milvus.proto.view.DataVersion
