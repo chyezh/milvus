@@ -143,11 +143,9 @@ See the definitions of `QueryViewOfShard`, `QueryViewMeta`, `QueryViewSettings`,
 
 ## 7. Query View Lifecycle State Machine
 
-### 7.1 Global State Machine
-
 The query view maintains consistency across Coord / QueryNode / StreamingNode, with Coord as the leader.
 
-State transition flow (note: both online and offline use two-phase commit):
+State transition flow:
 
 ```
 Normal flow:   Preparing → Ready → Up → Down → Dropping → Dropped
@@ -156,51 +154,11 @@ Error flow:    Preparing → Unrecoverable → Dropping → Dropped
 
 ![Global State Machine Transition Diagram](img/state_machine.png)
 
-The diagram above shows the complete state machine transition flow across four swimlanes: ETCD / Coord / StreamingNode / QueryNode (time progresses from top to bottom):
+For detailed per-node, per-state analysis (entry conditions, automatic behavior, transitions, peer state handling, persistence, and recovery), see [QueryView State Machine Per-Node Analysis](query_view_state_machine.md).
 
-**Online Flow (Two-Phase Commit):**
-1. **Coord: Preparing** → Persist Preparing to ETCD (Make A Persist Ahead To Avoid State Lost).
-2. **Coord: Preparing** → Sync state to WorkNodes (Sync The State Into WorkNodes) → StreamingNode: Preparing + QueryNode: Preparing.
-3. StreamingNode and QueryNode each prepare resources asynchronously:
-   - Success path: StreamingNode: Preparing → **Ready**; QueryNode: Preparing → **Ready**.
-   - Failure path: StreamingNode/QueryNode → **Unrecoverable**.
-4. When all nodes are Ready → **Coord: Ready** → Push Up to StreamingNode → StreamingNode: **Up**.
-5. StreamingNode confirms Up → **Coord: Up** → Persist Up to ETCD (Make A Persist Ahead To Avoid State Lost).
-
-**Offline Flow (Two-Phase Commit):**
-6. **Coord: Down** → Persist Down to ETCD (Make A Persist Ahead To Avoid State Lost) → Push to StreamingNode → StreamingNode: **Down**.
-7. **Coord: Dropping** (red) → Push to StreamingNode and QueryNode → StreamingNode: **Dropped** + QueryNode: **Dropped**.
-8. ETCD: Dropping → **Coord: Dropped** → ETCD: **Dropped**.
-
-**Error Flow:**
-- StreamingNode or QueryNode reports **Unrecoverable** → Coord detects → **Coord: Unrecoverable** → ETCD: Unrecoverable.
-- Then proceeds with the Dropping → Dropped flow to clean up resources.
-
-#### State Correspondence Table Across Nodes
-
-| Coord State | Meaning | ETCD | StreamingNode State | QueryNode State |
-|---|---|---|---|---|
-| **Preparing** | View initialization complete, data distribution determined. Needs to be pushed to target QN/SN. At most one Preparing at a time. | Preparing | Not visible / Preparing / Unrecoverable / Ready / Up | Not visible / Preparing / Unrecoverable / Ready |
-| **Ready** | All data is Ready. State needs to be pushed to StreamingNode. | Preparing | Ready / Up | Ready |
-| **Up** | View has been pushed to the corresponding StreamingNode and is active. | Preparing / Up | Up | Ready |
-| **Down** | View is invalidated on StreamingNode. | Down | Up | Ready |
-| **Dropping** | View is deprecated; related Sealed Segments can be released from QN (synchronous release not required). | Down / Dropping | Down / Dropping | Ready |
-| **Unrecoverable** | Preparing failed; view cannot be recovered. | Preparing / Unrecoverable | Preparing / Ready / Unrecoverable | Preparing / Ready / Unrecoverable |
-| **Dropped** | View is permanently deleted. | Not visible | Not visible | Not visible |
-
-#### ETCD Persistence Timing
-
-- **Preparing**: Persist global state to prevent state machine loss.
-- **Up**: The most common state globally; reduces communication cost with WorkNodes during recovery.
-- **Down**: Pre-write for the decommission flow; improves WorkNode sync efficiency after Coord crash.
-- **Unrecoverable**: WorkNode reports that the view cannot reach Ready.
-- **Dropped**: Permanently decommission the state machine.
-
-#### Multi-Version View Workflow
-
-Workflows across multiple view versions are completely independent, but through Coord state machine constraints, each node has at most one view in Preparing state.
-
-**[Enhancement] Preparing Timeout Eviction**: In the current design, a Preparing view is only evicted when a node actively reports Unrecoverable. If a node loads slowly but does not fail, the Preparing view will occupy the sole Preparing slot for an extended period, blocking the generation of views for new DataVersions and preventing the release of lower-version Growing Segments on StreamingNode (the Release condition requires the minimum view version ≥ the corresponding DataVersion). A Coord-side Preparing timeout mechanism should be introduced in the future: after timeout, Coord proactively marks the view as Unrecoverable, releasing the Preparing slot.
+Key constraints:
+- Workflows across multiple view versions are completely independent, but through Coord state machine constraints, each node has at most one view in Preparing state.
+- Node loss (e.g., QN crash) is translated to an Unrecoverable report by the external Node Manager layer before reaching the state machine.
 
 ## 8. Incremental Query Segment Lifecycle
 
@@ -277,80 +235,7 @@ RPC rules:
 
 ## 12. Detailed Node Behavior
 
-### 12.1 Coord Behavior
-
-#### Events That Trigger New View Generation
-
-| Event Type | Possible Causes |
-|---|---|
-| Replica's QueryNode assignment changes | QN goes online/offline (including crashes), ResourceGroup changes |
-| Balance request | Unbalanced QN load |
-| New DataView version appears | Compaction, Flush |
-| Previous Preparing QueryView marked as Unrecoverable | A node cannot achieve the view |
-| Load configuration changes | LoadPartition/ReleasePartition, LoadField/ReleaseField |
-
-#### View Decommission Triggers
-
-- ReleaseCollection
-- A higher-version QueryView has been in Up state for a period of time (e.g., 10s, equivalent to the old version's lease expiry)
-- A QueryView has been marked as unrecoverable; marking it as Dropped is pushed together with the new QueryView
-
-#### Recovery
-
-Load all QueryViews from ETCD, re-push to nodes, and catch up quickly based on the true state in node Responses:
-
-| ETCD State | Coord Recovery Behavior | State Catch-up Logic |
-|---|---|---|
-| Preparing | Re-push Preparing to all Nodes, catch up based on Response | All nodes reply Ready → Coord directly recovers to Ready; StreamingNode replies Up/UpRecovering → Coord directly recovers to Up |
-| Up | Noop | View is confirmed in use |
-| Unrecoverable | Proceed directly with Dropping → Dropped flow to clean up | View is confirmed unrecoverable, resources need cleanup |
-| Down | Trigger invalidation on the corresponding SN | View is marked Down but not yet pushed |
-| Dropping | Re-push to all Nodes | View is Dropping but push is not yet complete |
-
-### 12.2 QueryNode Behavior
-
-QueryNode's state machine does not include Up / Down / Dropping states — Up and Down are only meaningful for StreamingNode, and Dropping is only an in-memory state on Coord. QueryNode can serve query requests in Ready state: query plans are always generated by StreamingNode, and QueryNode only needs data to be ready (Ready) to execute queries.
-
-| State | Async Behavior | Response |
-|---|---|---|
-| **Preparing** | Check Replica info, execute Load, mark completed Segments as ready | All ready → Ready; OOM → Unrecoverable |
-| **Ready** | Can serve queries. Ignores subsequent sync signals | Ignore |
-| **Unrecoverable** | Resource preparation failed (e.g., OOM). Stays in Unrecoverable state, waiting for Coord to notify resource release for reuse | Mark Unrecoverable and return |
-| **Dropped** | Release view-related resources | Mark Dropped and return |
-
-- Load/Release behavior is asynchronous, controlled by the local scheduler.
-- LoadSegment also initiates a pure delete stream subscription to StreamingNode.
-- QueryNode is fully stateless with no recovery process.
-
-### 12.3 StreamingNode Behavior
-
-| State | Async Behavior | Response |
-|---|---|---|
-| **Preparing** | Check Replica info; on first processing, transition Growing Segments to queryable state; check data_version | Ready or Unrecoverable |
-| **Ready** | Ignore | Ignore |
-| **Up** | Mark view as active (write recovery info, only keep the latest Up) | Mark Up and return |
-| **Down** | Release view (delete recovery info) | Mark Down and return |
-| **Dropped** | Ignore | Mark Dropped and return |
-
-- StreamingNode always uses the highest-version Up state QueryView for queries.
-- On first processing of a QueryView, if Flusher's data_version > QueryView's data_version, it means the corresponding Growing Segments on SN have already been flushed to Sealed and released, and can no longer serve data in Growing form. It returns Unrecoverable so Coord can generate a new view using a more recent DataVersion.
-
-#### StreamingNode Recovery and UpRecovering State
-
-After StreamingNode crash recovery, the QueryView with the highest version number in Up state is restored from recovery info. However, at this point WAL consumption has not yet caught up, and some Growing Segments (the [A2] portion, not visible to Coord) may not yet be recovered. Serving queries directly would cause data omission.
-
-To address this, the **UpRecovering** state is introduced: the recovered QueryView first enters UpRecovering state, during which **queries are not served**. The recovery flow is:
-
-1. The Flush module completes recovery and obtains the latest Checkpoint.
-2. WAL is re-consumed from the Checkpoint position to recover corresponding GrowingSegments (including Segments already flushed to Sealed, which are still rebuilt in Growing form during WAL replay).
-3. The recovered QueryView enters the **UpRecovering** state (local state, not reported to Coord).
-4. **Once WAL consumption catches up to the current position** (Growing Segment recovery is complete), UpRecovering → **Up**, and query serving begins.
-
-```
-Recovery state flow:  recovery info → UpRecovering (not queryable) → WAL catches up → Up (queryable)
-```
-
-UpRecovering is a transient local state on StreamingNode and does not participate in Coord's state machine synchronization. From Coord's perspective, the view is always in Up state.
+For detailed per-node state machine analysis (entry conditions, automatic behavior, transitions, peer state handling, and recovery), see [QueryView State Machine Per-Node Analysis](query_view_state_machine.md).
 
 ## 13. Consistency Implementation (Consistency Level)
 
