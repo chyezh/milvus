@@ -122,27 +122,27 @@ Persisted states: **Preparing**, **Up**, **Down**, **Unrecoverable** (write-ahea
 
 **Automatic Behavior:**
 1. Persist Unrecoverable to ETCD (if not already persisted).
-2. Immediately transition to Dropping.
+2. Wait for Manager to advance to Dropping (typically after generating a replacement view).
 
 **Transitions:**
 
 | Target State | Trigger | Transition Behavior |
 |---|---|---|
-| Dropping | Immediate (may be pushed atomically with a new view's Preparing) | None |
+| Dropping | Manager calls EnterDropping (may be pushed atomically with a new view's Preparing) | Push Dropped to all nodes |
 
 **Possible Peer States (and Coord's reaction):**
 - **SN**: Preparing / Ready / Up / Unrecoverable
-  - Coord does not need to handle individually; proceeds directly to Dropping flow.
+  - Coord ignores node reports while in Unrecoverable; waits for Manager to call EnterDropping.
 - **QN**: Preparing / Ready / Unrecoverable
   - Same as SN above.
 
-> Note: Unrecoverable is a transient state; after persistence it immediately transitions to Dropping.
+> Note: Unrecoverable is a stable state. The Manager decides when to advance to Dropping, typically after generating a replacement view so both the old view's Dropping and the new view's Preparing can be pushed atomically.
 
 ### 1.6 Dropping
 
 **Entry Conditions:**
 - SN confirmed Down in the Down phase (automatic transition from Down).
-- Immediate transition from Unrecoverable (which itself can be reached from Preparing, Ready, or Up).
+- Manager calls EnterDropping from Unrecoverable (which itself can be reached from Preparing, Ready, or Up).
 
 **Automatic Behavior:**
 1. Push Dropped to all nodes (SN + all QNs).
