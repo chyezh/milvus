@@ -81,6 +81,10 @@ enum QueryViewState {
     QueryViewStateDropping = 6;
     // View is fully dropped and can be removed from persistent storage.
     QueryViewStateDropped = 7;
+    // StreamingNode-only: WAL is recovering after SN crash.
+    // Not used by Coord or QueryNode. Maps to Up for Coord-visible state.
+    // See design doc Section 2.4.
+    QueryViewStateUpRecovering = 8;
 }
 
 
