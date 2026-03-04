@@ -15,7 +15,10 @@ const (
 	QueryViewStateUnrecoverable = QueryViewState(viewpb.QueryViewState_QueryViewStateUnrecoverable)
 	QueryViewStateDropping      = QueryViewState(viewpb.QueryViewState_QueryViewStateDropping)
 	QueryViewStateDropped       = QueryViewState(viewpb.QueryViewState_QueryViewStateDropped)
-	QueryViewStateNil           = QueryViewState(viewpb.QueryViewState_QueryViewStateUnknown)
+	// StreamingNode-only: WAL is recovering after SN crash.
+	// Not used by Coord or QueryNode.
+	QueryViewStateUpRecovering = QueryViewState(viewpb.QueryViewState_QueryViewStateUpRecovering)
+	QueryViewStateNil          = QueryViewState(viewpb.QueryViewState_QueryViewStateUnknown)
 )
 
 // QueryViewState is the state of a query view.
