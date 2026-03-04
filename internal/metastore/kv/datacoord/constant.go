@@ -40,6 +40,7 @@ const (
 	FileResourceMetaPrefix              = MetaPrefix + "/file_resource_info"
 	FileResourceVersionKey              = MetaPrefix + "/file_resource_version"
 	SnapshotPrefix                      = MetaPrefix + "/snapshot"
+	DataViewPrefix                      = MetaPrefix + "/dataview"
 
 	NonRemoveFlagTomestone = "non-removed"
 	RemoveFlagTomestone    = "removed"
