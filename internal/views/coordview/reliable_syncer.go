@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/pkg/v2/proto/viewpb"
 )
 
 // SyncCallback is invoked when the ReliableSyncer has a response for a synced view.
@@ -66,22 +67,24 @@ type SyncGroup struct {
 //	the ReliableSyncer guarantees that eventually the callback will be invoked
 //	with either:
 //	  (a) The node's real response, OR
-//	  (b) A response built by SyncView.OnNodeLost if the node is declared lost.
+//	  (b) A response built by SyncView.OnNodeLost if the node is declared lost
+//	      (detected via service discovery).
 //
 // The guarantee is achieved through two mechanisms:
 //  1. Re-push on reconnection: when a stream breaks and is re-established,
-//     all outstanding syncs are re-pushed automatically.
-//  2. Node loss handling: when reconnection fails beyond a configurable timeout,
-//     the node is declared lost. For each outstanding entry, OnNodeLost() is
-//     called to build a response, which is then delivered via Callback.
+//     all outstanding syncs are re-pushed automatically via ResumableSyncer.
+//  2. Node loss handling: when service discovery reports a node removal,
+//     the node's ResumableSyncer is closed. For each outstanding entry
+//     targeting that node, OnNodeLost() builds a response, which is then
+//     delivered via Callback.
 //
 // The ReliableSyncer is stateless with respect to state machine semantics.
 // It does not interpret view states or transitions. It simply:
-//   - Tracks outstanding syncs keyed by (node, viewKey).
-//   - Delivers views to nodes and routes responses back via callbacks.
+//   - Tracks outstanding syncs keyed by viewKey in a global Outstanding structure.
+//   - Delivers views to nodes via per-node ResumableSyncers and routes responses
+//     back via callbacks.
 //   - Removes an outstanding entry when its callback returns true.
-//   - Re-pushes outstanding entries on reconnection.
-//   - On node loss, calls OnNodeLost() to build a response and delivers it via Callback.
+//   - On node loss (service discovery), calls OnNodeLost() and delivers via Callback.
 //
 // Thread-safety: All methods are thread-safe.
 type ReliableSyncer interface {
@@ -89,10 +92,10 @@ type ReliableSyncer interface {
 	//
 	// Each SyncView in the group contains a view and its callback. The target
 	// node for each view is extracted from view.WorkNode(). Views targeting
-	// different nodes are routed to their respective per-node streams.
+	// different nodes are routed to their respective per-node ResumableSyncers.
 	//
 	// The views are tracked internally as "outstanding syncs" keyed by
-	// (node, viewKey) where viewKey = (replicaID, vchannel, version).
+	// viewKey = (replicaID, vchannel, version).
 	//
 	// When SyncViews is called for a viewKey that already has an outstanding
 	// entry, the old entry (including its callback) is replaced.
@@ -100,12 +103,31 @@ type ReliableSyncer interface {
 	// Outstanding entry lifecycle:
 	//   - Persists until its callback is invoked and returns true.
 	//   - Re-pushed to the node on stream reconnection.
-	//   - On node loss, OnNodeLost() builds a response, then Callback is invoked.
+	//   - On node loss (service discovery), OnNodeLost() builds a response,
+	//     then Callback is invoked.
 	//
 	// Non-blocking: returns after enqueuing. Returns error only if the
 	// ReliableSyncer is closed or ctx is canceled.
 	SyncViews(ctx context.Context, group SyncGroup) error
 
-	// Close gracefully closes all streams and releases resources.
+	// Close gracefully closes all ResumableSyncers and releases resources.
 	Close() error
+}
+
+// NodeClient provides service discovery and gRPC stream creation for a specific node type.
+// Implemented separately for StreamingNode (via HandlerClient) and QueryNode (via etcd session).
+type NodeClient interface {
+	// WatchNodeChanged returns a channel that signals node membership changes.
+	// The channel receives a value whenever the set of known nodes changes.
+	WatchNodeChanged(ctx context.Context) (<-chan struct{}, error)
+
+	// GetAllNodes returns all currently known nodes as a map from node key
+	// (WorkNode.String()) to the node identity.
+	GetAllNodes(ctx context.Context) (map[string]qviews.WorkNode, error)
+
+	// OpenSyncStream opens a SyncQueryView bidirectional stream to the given node.
+	OpenSyncStream(ctx context.Context, node qviews.WorkNode) (viewpb.ViewSyncService_SyncQueryViewClient, error)
+
+	// Close closes the client and releases resources.
+	Close()
 }
