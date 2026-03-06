@@ -7,26 +7,26 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/viewpb"
 )
 
-// onDispatchingQueryView tracks all query views that have been dispatched to
+// pendingSyncQueryViews tracks all query views that have been dispatched to
 // work nodes but are still waiting for responses.
 // Thread-safe.
 //
 // Views are indexed by WorkNodeKey → QueryViewKey for fast per-node lookups.
 // A view's target node (WorkNode) is immutable for a given QueryViewKey.
-type onDispatchingQueryView struct {
+type pendingSyncQueryViews struct {
 	mu     sync.Mutex
 	byNode map[qviews.WorkNodeKey]map[qviews.QueryViewKey]SyncView
 }
 
-func newOnDispatchingQueryView() *onDispatchingQueryView {
-	return &onDispatchingQueryView{
+func newPendingSyncQueryViews() *pendingSyncQueryViews {
+	return &pendingSyncQueryViews{
 		byNode: make(map[qviews.WorkNodeKey]map[qviews.QueryViewKey]SyncView),
 	}
 }
 
 // Upsert inserts or replaces a dispatching entry for the given view.
 // Returns the proto to send to the node.
-func (d *onDispatchingQueryView) Upsert(sv SyncView) *viewpb.QueryViewOfShard {
+func (d *pendingSyncQueryViews) Upsert(sv SyncView) *viewpb.QueryViewOfShard {
 	key := sv.View.QueryViewKey()
 	nodeKey := sv.View.WorkNode().Key()
 
@@ -46,7 +46,7 @@ func (d *onDispatchingQueryView) Upsert(sv SyncView) *viewpb.QueryViewOfShard {
 // and invokes the callback. If callback returns true, the entry is removed.
 //
 // The callback is invoked without holding the lock (it is concurrent-safe).
-func (d *onDispatchingQueryView) MatchResponse(pb *viewpb.QueryViewOfShard) {
+func (d *pendingSyncQueryViews) MatchResponse(pb *viewpb.QueryViewOfShard) {
 	view := qviews.NewQueryViewAtWorkNodeFromProto(pb)
 	key := view.QueryViewKey()
 	nodeKey := view.WorkNode().Key()
@@ -74,7 +74,7 @@ func (d *onDispatchingQueryView) MatchResponse(pb *viewpb.QueryViewOfShard) {
 // DrainByNode removes all dispatching entries targeting the given node,
 // invokes OnNodeLost() for each, and delivers the result via Callback.
 // This is called when service discovery reports a node removal.
-func (d *onDispatchingQueryView) DrainByNode(node qviews.WorkNode) {
+func (d *pendingSyncQueryViews) DrainByNode(node qviews.WorkNode) {
 	nodeKey := node.Key()
 
 	d.mu.Lock()
@@ -94,7 +94,7 @@ func (d *onDispatchingQueryView) DrainByNode(node qviews.WorkNode) {
 
 // CollectProtosForNode returns the protos of all dispatching entries targeting
 // the given node. Used by ResumableSyncer to re-push on stream reconnection.
-func (d *onDispatchingQueryView) CollectProtosForNode(node qviews.WorkNode) []*viewpb.QueryViewOfShard {
+func (d *pendingSyncQueryViews) CollectProtosForNode(node qviews.WorkNode) []*viewpb.QueryViewOfShard {
 	nodeKey := node.Key()
 
 	d.mu.Lock()

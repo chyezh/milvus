@@ -9,7 +9,6 @@ import (
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v2/log"
-	"github.com/milvus-io/milvus/pkg/v2/proto/viewpb"
 )
 
 var (
@@ -26,7 +25,7 @@ type ReliableSyncerConfig struct {
 }
 
 type reliableSyncer struct {
-	pending  *onDispatchingQueryView
+	pending  *pendingSyncQueryViews
 	snClient NodeClient
 	qnClient NodeClient
 	config   ReliableSyncerConfig
@@ -46,7 +45,7 @@ type reliableSyncer struct {
 func NewReliableSyncer(snClient NodeClient, qnClient NodeClient, config ReliableSyncerConfig) ReliableSyncer {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &reliableSyncer{
-		pending:          newOnDispatchingQueryView(),
+		pending:          newPendingSyncQueryViews(),
 		snClient:         snClient,
 		qnClient:         qnClient,
 		config:           config,
@@ -72,38 +71,32 @@ func (s *reliableSyncer) SyncViews(ctx context.Context, group SyncGroup) error {
 	}
 	s.mu.RUnlock()
 
-	// Group views by target node and enqueue.
-	grouped := make(map[qviews.WorkNodeKey][]*SyncView)
+	// Group views by target node.
+	grouped := make(map[qviews.WorkNodeKey][]SyncView)
 	for i := range group.Views {
-		sv := &group.Views[i]
+		sv := group.Views[i]
 		nodeKey := sv.View.WorkNode().Key()
 		grouped[nodeKey] = append(grouped[nodeKey], sv)
 	}
 
 	for nodeKey, views := range grouped {
-		// Upsert into pending and collect protos.
-		protos := make([]*viewpb.QueryViewOfShard, 0, len(views))
-		for _, sv := range views {
-			proto := s.pending.Upsert(*sv)
-			protos = append(protos, proto)
-		}
-
-		// Find ResumableSyncer for this node and enqueue.
+		// Find ResumableSyncer for this node.
 		s.mu.RLock()
 		rs, ok := s.resumableSyncers[nodeKey]
 		s.mu.RUnlock()
 
 		if !ok {
-			// No ResumableSyncer for this node — node not yet discovered or already lost.
-			// The pending entries are tracked; if the node appears later,
-			// re-push will deliver them. If it never appears, the caller should
-			// handle this via other mechanisms (e.g., reassignment).
+			// No ResumableSyncer for this node — add to pending directly.
+			// If the node appears later, re-push will deliver them.
+			for i := range views {
+				s.pending.Upsert(views[i])
+			}
 			log.Warn("ReliableSyncer: no ResumableSyncer for node, views tracked but not sent",
 				zap.String("node", nodeKey))
 			continue
 		}
 
-		rs.Enqueue(protos)
+		rs.Sync(views)
 	}
 	return nil
 }

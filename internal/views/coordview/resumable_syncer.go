@@ -19,7 +19,7 @@ import (
 type resumableSyncer struct {
 	node    qviews.WorkNode
 	client  NodeClient
-	pending *onDispatchingQueryView
+	pending *pendingSyncQueryViews
 	sendCh  chan []*viewpb.QueryViewOfShard
 
 	ctx    context.Context
@@ -31,7 +31,7 @@ func newResumableSyncer(
 	ctx context.Context,
 	node qviews.WorkNode,
 	client NodeClient,
-	pending *onDispatchingQueryView,
+	pending *pendingSyncQueryViews,
 	sendBufferSize int,
 ) *resumableSyncer {
 	ctx, cancel := context.WithCancel(ctx)
@@ -48,8 +48,13 @@ func newResumableSyncer(
 	return rs
 }
 
-// Enqueue enqueues protos for sending to the node.
-func (rs *resumableSyncer) Enqueue(protos []*viewpb.QueryViewOfShard) {
+// Sync adds views to the pending queue and enqueues the resulting protos for sending.
+// All views MUST target the same work node that this resumableSyncer manages.
+func (rs *resumableSyncer) Sync(views []SyncView) {
+	protos := make([]*viewpb.QueryViewOfShard, 0, len(views))
+	for i := range views {
+		protos = append(protos, rs.pending.Upsert(views[i]))
+	}
 	select {
 	case rs.sendCh <- protos:
 	case <-rs.ctx.Done():
