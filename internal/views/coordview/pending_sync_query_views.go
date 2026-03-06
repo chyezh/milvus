@@ -59,22 +59,23 @@ func (p *pendingSyncQueryViews) DrainUnsent() []*viewpb.QueryViewOfShard {
 // MatchResponse matches a received response proto to pending entries
 // and invokes the callback. If callback returns true, the entry is removed.
 //
-// The callback is invoked without holding the lock (it is concurrent-safe).
+// The callback is invoked while holding the lock to prevent a concurrent
+// Upsert from replacing the entry between the read and delete.
+// OnSyncResponse must not block for long or call back into pendingSyncQueryViews.
 func (p *pendingSyncQueryViews) MatchResponse(pb *viewpb.QueryViewOfShard) {
 	view := qviews.NewQueryViewAtWorkNodeFromProto(pb)
 	key := view.QueryViewKey()
 
 	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	entry, ok := p.entries[key]
-	p.mu.Unlock()
 	if !ok {
 		return
 	}
 
 	if entry.OnSyncResponse(view) {
-		p.mu.Lock()
 		delete(p.entries, key)
-		p.mu.Unlock()
 	}
 }
 

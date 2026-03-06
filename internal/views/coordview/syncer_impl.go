@@ -49,73 +49,51 @@ func (s *reliableSyncer) SyncViews(ctx context.Context, group SyncGroup) error {
 		return ctx.Err()
 	}
 
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return ErrSyncerClosed
-	}
-	s.mu.Unlock()
-
 	for nodeKey, views := range group.ViewsByNode {
-		// Fast path: ResumableSyncer already exists.
-		s.mu.Lock()
-		rs, ok := s.resumableSyncers[nodeKey]
-		s.mu.Unlock()
-
-		if ok {
-			rs.Sync(views)
-			continue
+		rs, closed := s.getOrCreateSyncer(ctx, nodeKey, views)
+		if closed {
+			return ErrSyncerClosed
 		}
-
-		// Slow path: no syncer — try to find the node via service discovery.
-		rs = s.tryCreateSyncer(ctx, nodeKey, views)
 		if rs != nil {
 			rs.Sync(views)
 			continue
 		}
-
-		// Node not found — drain views immediately.
-		drainViews(views)
+		// Node not found — notify views immediately.
+		for _, sv := range views {
+			sv.OnNodeLost()
+		}
 	}
 	return nil
 }
 
-// tryCreateSyncer attempts to find the node via service discovery and create
-// a ResumableSyncer for it. Returns nil if the node does not exist.
-func (s *reliableSyncer) tryCreateSyncer(ctx context.Context, nodeKey qviews.WorkNodeKey, views []SyncView) *resumableSyncer {
-	if len(views) == 0 {
-		return nil
-	}
-
-	node := views[0].View.WorkNode()
-
-	if !s.client.IsNodeAlive(ctx, node) {
-		return nil
-	}
-
-	// Double-check under write lock (another goroutine may have created it).
+// getOrCreateSyncer returns the existing ResumableSyncer for the node,
+// creates one if the node is alive, or returns (nil, false) if the node is not found.
+// Returns (nil, true) if the syncer is closed.
+func (s *reliableSyncer) getOrCreateSyncer(ctx context.Context, nodeKey qviews.WorkNodeKey, views []SyncView) (rs *resumableSyncer, closed bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.closed {
-		return nil
+		return nil, true
 	}
 	if rs, ok := s.resumableSyncers[nodeKey]; ok {
-		return rs
+		return rs, false
+	}
+	if len(views) == 0 {
+		return nil, false
+	}
+
+	// IsNodeAlive is a local cache lookup, safe to call under lock.
+	node := views[0].View.WorkNode()
+	if !s.client.IsNodeAlive(ctx, node) {
+		return nil, false
 	}
 
 	log.Info("ReliableSyncer: node discovered on demand, creating ResumableSyncer",
 		zap.String("node", nodeKey))
-	rs := newResumableSyncer(s.ctx, node, s.client)
+	rs = newResumableSyncer(s.ctx, node, s.client)
 	s.resumableSyncers[nodeKey] = rs
-	return rs
-}
-
-// drainViews immediately invokes OnNodeLost for each view.
-func drainViews(views []SyncView) {
-	for _, sv := range views {
-		sv.OnNodeLost()
-	}
+	return rs, false
 }
 
 func (s *reliableSyncer) Close() error {
