@@ -49,15 +49,13 @@ type SyncView struct {
 	OnNodeLost NodeLostResponseBuilder
 }
 
-// SyncGroup represents a batch of views to sync, grouped as a single unit.
-// Using a struct instead of a bare slice allows future extension with
+// SyncGroup represents a batch of views to sync, pre-grouped by target work node.
+// Using a struct instead of a bare map allows future extension with
 // group-level parameters (e.g., priority, deadline, metadata) without
 // breaking the SyncViews signature.
 type SyncGroup struct {
-	// Views is the list of views to sync in this group.
-	// Each view targets a specific work node (extracted from View.WorkNode()).
-	// Views targeting different nodes are routed to their respective streams.
-	Views []SyncView
+	// ViewsByNode maps each work node to the views targeting it.
+	ViewsByNode map[qviews.WorkNodeKey][]SyncView
 }
 
 // ReliableSyncer manages reliable delivery of QueryView syncs from Coord to work nodes.
@@ -91,9 +89,9 @@ type SyncGroup struct {
 type ReliableSyncer interface {
 	// SyncViews delivers a group of query views to work nodes with delivery guarantee.
 	//
-	// Each SyncView in the group contains a view and its callback. The target
-	// node for each view is extracted from view.WorkNode(). Views targeting
-	// different nodes are routed to their respective per-node ResumableSyncers.
+	// Each SyncView in the group contains a view and its callback. Views are
+	// pre-grouped by target work node in SyncGroup.ViewsByNode and routed to
+	// their respective per-node ResumableSyncers.
 	//
 	// The views are tracked internally as "outstanding syncs" keyed by
 	// viewKey = (replicaID, vchannel, version).
@@ -115,9 +113,9 @@ type ReliableSyncer interface {
 	Close() error
 }
 
-// NodeClient provides service discovery and gRPC stream creation for a specific node type.
+// ViewSyncClient provides service discovery and gRPC stream creation for a specific node type.
 // Implemented separately for StreamingNode (via HandlerClient) and QueryNode (via etcd session).
-type NodeClient interface {
+type ViewSyncClient interface {
 	// WatchNodeChanged returns a channel that signals node membership changes.
 	// The channel receives a value whenever the set of known nodes changes.
 	WatchNodeChanged(ctx context.Context) (<-chan struct{}, error)

@@ -18,17 +18,10 @@ var (
 	ErrSyncerClosed = errors.New("reliable syncer is closed")
 )
 
-// ReliableSyncerConfig holds configuration for the ReliableSyncer.
-type ReliableSyncerConfig struct {
-	// SendBufferSize is the capacity of the per-node send channel.
-	SendBufferSize int
-}
-
 type reliableSyncer struct {
 	pending  *pendingSyncQueryViews
-	snClient NodeClient
-	qnClient NodeClient
-	config   ReliableSyncerConfig
+	snClient ViewSyncClient
+	qnClient ViewSyncClient
 
 	mu               sync.RWMutex
 	resumableSyncers map[qviews.WorkNodeKey]*resumableSyncer
@@ -40,22 +33,21 @@ type reliableSyncer struct {
 }
 
 // NewReliableSyncer creates a new ReliableSyncer.
-// snClient: NodeClient for StreamingNode service discovery and stream creation.
-// qnClient: NodeClient for QueryNode service discovery and stream creation.
-func NewReliableSyncer(snClient NodeClient, qnClient NodeClient, config ReliableSyncerConfig) ReliableSyncer {
+// snClient: ViewSyncClient for StreamingNode service discovery and stream creation.
+// qnClient: ViewSyncClient for QueryNode service discovery and stream creation.
+func NewReliableSyncer(snClient ViewSyncClient, qnClient ViewSyncClient) ReliableSyncer {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &reliableSyncer{
 		pending:          newPendingSyncQueryViews(),
 		snClient:         snClient,
 		qnClient:         qnClient,
-		config:           config,
 		resumableSyncers: make(map[qviews.WorkNodeKey]*resumableSyncer),
 		ctx:              ctx,
 		cancel:           cancel,
 	}
 	s.wg.Add(2)
-	go s.watchNodes(snClient, "SN")
-	go s.watchNodes(qnClient, "QN")
+	go s.watchNodes(snClient, qviews.NodeTypeStreamingNode)
+	go s.watchNodes(qnClient, qviews.NodeTypeQueryNode)
 	return s
 }
 
@@ -71,15 +63,7 @@ func (s *reliableSyncer) SyncViews(ctx context.Context, group SyncGroup) error {
 	}
 	s.mu.RUnlock()
 
-	// Group views by target node.
-	grouped := make(map[qviews.WorkNodeKey][]SyncView)
-	for i := range group.Views {
-		sv := group.Views[i]
-		nodeKey := sv.View.WorkNode().Key()
-		grouped[nodeKey] = append(grouped[nodeKey], sv)
-	}
-
-	for nodeKey, views := range grouped {
+	for nodeKey, views := range group.ViewsByNode {
 		// Find ResumableSyncer for this node.
 		s.mu.RLock()
 		rs, ok := s.resumableSyncers[nodeKey]
@@ -128,8 +112,8 @@ func (s *reliableSyncer) Close() error {
 	return nil
 }
 
-// watchNodes watches node changes from a NodeClient and manages ResumableSyncers.
-func (s *reliableSyncer) watchNodes(client NodeClient, label string) {
+// watchNodes watches node changes from a ViewSyncClient and manages ResumableSyncers.
+func (s *reliableSyncer) watchNodes(client ViewSyncClient, nodeType qviews.NodeType) {
 	defer s.wg.Done()
 
 	for s.ctx.Err() == nil {
@@ -139,12 +123,12 @@ func (s *reliableSyncer) watchNodes(client NodeClient, label string) {
 				return
 			}
 			log.Warn("ReliableSyncer: WatchNodeChanged failed, retrying",
-				zap.String("label", label), zap.Error(err))
+				zap.Int("nodeType", int(nodeType)), zap.Error(err))
 			continue
 		}
 
 		// Initial sync.
-		s.reconcileNodes(client, label)
+		s.reconcileNodes(client, nodeType)
 
 		// Watch for changes.
 		for {
@@ -156,7 +140,7 @@ func (s *reliableSyncer) watchNodes(client NodeClient, label string) {
 					// Channel closed, re-watch.
 					break
 				}
-				s.reconcileNodes(client, label)
+				s.reconcileNodes(client, nodeType)
 				continue
 			}
 			break
@@ -165,14 +149,14 @@ func (s *reliableSyncer) watchNodes(client NodeClient, label string) {
 }
 
 // reconcileNodes fetches the current node set and creates/destroys ResumableSyncers accordingly.
-func (s *reliableSyncer) reconcileNodes(client NodeClient, label string) {
+func (s *reliableSyncer) reconcileNodes(client ViewSyncClient, nodeType qviews.NodeType) {
 	nodes, err := client.GetAllNodes(s.ctx)
 	if err != nil {
 		if s.ctx.Err() != nil {
 			return
 		}
 		log.Warn("ReliableSyncer: GetAllNodes failed",
-			zap.String("label", label), zap.Error(err))
+			zap.Int("nodeType", int(nodeType)), zap.Error(err))
 		return
 	}
 
@@ -186,9 +170,9 @@ func (s *reliableSyncer) reconcileNodes(client NodeClient, label string) {
 	for nodeKey, node := range nodes {
 		if _, exists := s.resumableSyncers[nodeKey]; !exists {
 			log.Info("ReliableSyncer: node discovered, creating ResumableSyncer",
-				zap.String("label", label), zap.String("node", nodeKey))
+				zap.String("node", nodeKey))
 			s.resumableSyncers[nodeKey] = newResumableSyncer(
-				s.ctx, node, client, s.pending, s.config.SendBufferSize,
+				s.ctx, node, client, s.pending,
 			)
 		}
 	}
@@ -196,13 +180,12 @@ func (s *reliableSyncer) reconcileNodes(client NodeClient, label string) {
 	// Find removed nodes — collect ResumableSyncers to close.
 	var removed []removedNode
 	for nodeKey, rs := range s.resumableSyncers {
+		if rs.node.NodeType() != nodeType {
+			continue
+		}
 		if _, exists := nodes[nodeKey]; !exists {
-			// Only remove if this syncer was created by this client type.
-			// Check by seeing if the node key matches the label pattern.
-			if isNodeForClient(nodeKey, label) {
-				removed = append(removed, removedNode{key: nodeKey, syncer: rs})
-				delete(s.resumableSyncers, nodeKey)
-			}
+			removed = append(removed, removedNode{key: nodeKey, syncer: rs})
+			delete(s.resumableSyncers, nodeKey)
 		}
 	}
 	s.mu.Unlock()
@@ -210,7 +193,7 @@ func (s *reliableSyncer) reconcileNodes(client NodeClient, label string) {
 	// Close removed ResumableSyncers and drain pending entries outside the lock.
 	for _, r := range removed {
 		log.Info("ReliableSyncer: node removed, closing ResumableSyncer",
-			zap.String("label", label), zap.String("node", r.key))
+			zap.String("node", r.key))
 		r.syncer.Close()
 		s.pending.DrainByNode(r.syncer.node)
 	}
@@ -219,17 +202,4 @@ func (s *reliableSyncer) reconcileNodes(client NodeClient, label string) {
 type removedNode struct {
 	key    string
 	syncer *resumableSyncer
-}
-
-// isNodeForClient checks if a node key belongs to the given client type.
-// SN node keys start with "sn@", QN node keys start with "qn@".
-func isNodeForClient(nodeKey string, label string) bool {
-	switch label {
-	case "SN":
-		return len(nodeKey) > 3 && nodeKey[:3] == "sn@"
-	case "QN":
-		return len(nodeKey) > 3 && nodeKey[:3] == "qn@"
-	default:
-		return false
-	}
 }

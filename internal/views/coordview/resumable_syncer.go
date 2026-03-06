@@ -18,7 +18,7 @@ import (
 // and on stream break decides to reconnect with exponential backoff.
 type resumableSyncer struct {
 	node    qviews.WorkNode
-	client  NodeClient
+	client  ViewSyncClient
 	pending *pendingSyncQueryViews
 	sendCh  chan []*viewpb.QueryViewOfShard
 
@@ -27,19 +27,20 @@ type resumableSyncer struct {
 	wg     sync.WaitGroup
 }
 
+const defaultSendBufferSize = 64
+
 func newResumableSyncer(
 	ctx context.Context,
 	node qviews.WorkNode,
-	client NodeClient,
+	client ViewSyncClient,
 	pending *pendingSyncQueryViews,
-	sendBufferSize int,
 ) *resumableSyncer {
 	ctx, cancel := context.WithCancel(ctx)
 	rs := &resumableSyncer{
 		node:    node,
 		client:  client,
 		pending: pending,
-		sendCh:  make(chan []*viewpb.QueryViewOfShard, sendBufferSize),
+		sendCh:  make(chan []*viewpb.QueryViewOfShard, defaultSendBufferSize),
 		ctx:     ctx,
 		cancel:  cancel,
 	}
