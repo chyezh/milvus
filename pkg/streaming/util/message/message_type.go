@@ -91,28 +91,46 @@ var messageTypePropertiesMap = map[MessageType]MessageTypeProperties{
 	MessageTypeAlterCollection: {
 		ExclusiveRequired: true,
 	},
-	MessageTypeAlterLoadConfig: {
+	MessageTypeAlterLoadConfig: {},
+	MessageTypeDropLoadConfig:  {},
+	MessageTypeCreateDatabase:  {},
+	MessageTypeAlterDatabase:   {},
+	MessageTypeDropDatabase:    {},
+	MessageTypeAlterAlias:      {},
+	MessageTypeDropAlias:       {},
+	MessageTypeAlterUser: {
 		ReplicationSkippable: true,
 	},
-	MessageTypeDropLoadConfig: {
+	MessageTypeDropUser: {
 		ReplicationSkippable: true,
 	},
-	MessageTypeCreateDatabase:      {},
-	MessageTypeAlterDatabase:       {},
-	MessageTypeDropDatabase:        {},
-	MessageTypeAlterAlias:          {},
-	MessageTypeDropAlias:           {},
-	MessageTypeAlterUser:           {},
-	MessageTypeDropUser:            {},
-	MessageTypeAlterRole:           {},
-	MessageTypeDropRole:            {},
-	MessageTypeAlterUserRole:       {},
-	MessageTypeDropUserRole:        {},
-	MessageTypeAlterPrivilege:      {},
-	MessageTypeDropPrivilege:       {},
-	MessageTypeAlterPrivilegeGroup: {},
-	MessageTypeDropPrivilegeGroup:  {},
-	MessageTypeRestoreRBAC:         {},
+	MessageTypeAlterRole: {
+		ReplicationSkippable: true,
+	},
+	MessageTypeDropRole: {
+		ReplicationSkippable: true,
+	},
+	MessageTypeAlterUserRole: {
+		ReplicationSkippable: true,
+	},
+	MessageTypeDropUserRole: {
+		ReplicationSkippable: true,
+	},
+	MessageTypeAlterPrivilege: {
+		ReplicationSkippable: true,
+	},
+	MessageTypeDropPrivilege: {
+		ReplicationSkippable: true,
+	},
+	MessageTypeAlterPrivilegeGroup: {
+		ReplicationSkippable: true,
+	},
+	MessageTypeDropPrivilegeGroup: {
+		ReplicationSkippable: true,
+	},
+	MessageTypeRestoreRBAC: {
+		ReplicationSkippable: true,
+	},
 	MessageTypeAlterResourceGroup: {
 		ReplicationSkippable: true,
 	},

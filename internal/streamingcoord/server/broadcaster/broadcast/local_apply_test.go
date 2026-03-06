@@ -28,12 +28,23 @@ import (
 func TestIsReplicationSkippable(t *testing.T) {
 	paramtable.Init()
 
-	t.Run("property_based_skippable", func(t *testing.T) {
-		// These types have ReplicationSkippable=true in their properties
+	t.Run("property_based_skippable_resource_group", func(t *testing.T) {
 		assert.True(t, isReplicationSkippable(message.MessageTypeAlterResourceGroup))
 		assert.True(t, isReplicationSkippable(message.MessageTypeDropResourceGroup))
-		assert.True(t, isReplicationSkippable(message.MessageTypeAlterLoadConfig))
-		assert.True(t, isReplicationSkippable(message.MessageTypeDropLoadConfig))
+	})
+
+	t.Run("property_based_skippable_rbac", func(t *testing.T) {
+		assert.True(t, isReplicationSkippable(message.MessageTypeAlterUser))
+		assert.True(t, isReplicationSkippable(message.MessageTypeDropUser))
+		assert.True(t, isReplicationSkippable(message.MessageTypeAlterRole))
+		assert.True(t, isReplicationSkippable(message.MessageTypeDropRole))
+		assert.True(t, isReplicationSkippable(message.MessageTypeAlterUserRole))
+		assert.True(t, isReplicationSkippable(message.MessageTypeDropUserRole))
+		assert.True(t, isReplicationSkippable(message.MessageTypeAlterPrivilege))
+		assert.True(t, isReplicationSkippable(message.MessageTypeDropPrivilege))
+		assert.True(t, isReplicationSkippable(message.MessageTypeAlterPrivilegeGroup))
+		assert.True(t, isReplicationSkippable(message.MessageTypeDropPrivilegeGroup))
+		assert.True(t, isReplicationSkippable(message.MessageTypeRestoreRBAC))
 	})
 
 	t.Run("not_skippable_by_default", func(t *testing.T) {
