@@ -121,6 +121,17 @@ func (dv DataVersion) IntoProto() *viewpb.DataVersion {
 	}
 }
 
+// QueryViewKey uniquely identifies a query view by shard and version.
+type QueryViewKey struct {
+	ShardID          ShardID
+	QueryViewVersion QueryViewVersion
+}
+
+// String returns the string representation of the query view key.
+func (k QueryViewKey) String() string {
+	return fmt.Sprintf("%s-%s", k.ShardID, k.QueryViewVersion)
+}
+
 // QueryViewVersion is the composite version of a query view.
 // Ordered lexicographically by (DataVersion, QueryVersion).
 type QueryViewVersion struct {
