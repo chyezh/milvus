@@ -22,6 +22,8 @@ type QueryViewAtWorkNode interface {
 	State() QueryViewState
 
 	Version() QueryViewVersion
+
+	QueryViewKey() QueryViewKey
 }
 
 type queryViewAtWorkNodeBase struct {
@@ -38,6 +40,13 @@ func (qv *queryViewAtWorkNodeBase) State() QueryViewState {
 
 func (qv *queryViewAtWorkNodeBase) Version() QueryViewVersion {
 	return FromProtoQueryViewVersion(qv.inner.Meta.Version)
+}
+
+func (qv *queryViewAtWorkNodeBase) QueryViewKey() QueryViewKey {
+	return QueryViewKey{
+		ShardID:          qv.ShardID(),
+		QueryViewVersion: qv.Version(),
+	}
 }
 
 func (qv *queryViewAtWorkNodeBase) IntoProto() *viewpb.QueryViewOfShard {
