@@ -13,6 +13,7 @@ import (
 type pendingSyncQueryViews struct {
 	mu      sync.Mutex
 	entries map[qviews.QueryViewKey]SyncView
+	unsent  []*viewpb.QueryViewOfShard // protos accumulated by Upsert, drained by sendLoop
 }
 
 func newPendingSyncQueryViews() *pendingSyncQueryViews {
@@ -21,16 +22,25 @@ func newPendingSyncQueryViews() *pendingSyncQueryViews {
 	}
 }
 
-// Upsert inserts or replaces a pending entry for the given view.
-// Returns the proto to send to the node.
-func (p *pendingSyncQueryViews) Upsert(sv SyncView) *viewpb.QueryViewOfShard {
+// Upsert inserts or replaces a pending entry and accumulates the proto
+// for incremental sending via DrainUnsent.
+func (p *pendingSyncQueryViews) Upsert(sv SyncView) {
 	key := sv.View.QueryViewKey()
 
 	p.mu.Lock()
 	p.entries[key] = sv
+	p.unsent = append(p.unsent, sv.View.IntoProto())
 	p.mu.Unlock()
+}
 
-	return sv.View.IntoProto()
+// DrainUnsent atomically drains and returns protos accumulated by Upsert.
+// Used by sendLoop for incremental sends.
+func (p *pendingSyncQueryViews) DrainUnsent() []*viewpb.QueryViewOfShard {
+	p.mu.Lock()
+	protos := p.unsent
+	p.unsent = nil
+	p.mu.Unlock()
+	return protos
 }
 
 // MatchResponse matches a received response proto to pending entries
@@ -65,6 +75,7 @@ func (p *pendingSyncQueryViews) Drain() {
 		drained = append(drained, sv)
 	}
 	p.entries = make(map[qviews.QueryViewKey]SyncView)
+	p.unsent = nil
 	p.mu.Unlock()
 
 	for _, entry := range drained {

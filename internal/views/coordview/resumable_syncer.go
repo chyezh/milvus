@@ -23,12 +23,7 @@ type resumableSyncer struct {
 	node    qviews.WorkNode
 	client  ViewSyncClient
 	pending *pendingSyncQueryViews
-
-	// Non-blocking outbox: Sync appends to outbox and signals notify.
-	// sendLoop drains outbox on each notification.
-	outboxMu sync.Mutex
-	outbox   []*viewpb.QueryViewOfShard
-	notify   chan struct{}
+	notify  chan struct{}
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -58,14 +53,9 @@ func newResumableSyncer(
 // All views MUST target the same work node that this resumableSyncer manages.
 // Non-blocking: never blocks on backpressure.
 func (rs *resumableSyncer) Sync(views []SyncView) {
-	protos := make([]*viewpb.QueryViewOfShard, 0, len(views))
 	for i := range views {
-		protos = append(protos, rs.pending.Upsert(views[i]))
+		rs.pending.Upsert(views[i])
 	}
-
-	rs.outboxMu.Lock()
-	rs.outbox = append(rs.outbox, protos...)
-	rs.outboxMu.Unlock()
 
 	// Non-blocking notify: if already signaled, send loop will drain all.
 	select {
@@ -136,23 +126,14 @@ func (rs *resumableSyncer) loop() {
 	}
 }
 
-// drainOutbox atomically drains and returns the accumulated outbox protos.
-func (rs *resumableSyncer) drainOutbox() []*viewpb.QueryViewOfShard {
-	rs.outboxMu.Lock()
-	protos := rs.outbox
-	rs.outbox = nil
-	rs.outboxMu.Unlock()
-	return protos
-}
-
-// sendLoop waits for notifications and sends accumulated outbox protos to the stream.
+// sendLoop waits for notifications and sends unsent protos to the stream.
 func (rs *resumableSyncer) sendLoop(ctx context.Context, stream viewpb.ViewSyncService_SyncQueryViewClient) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-rs.notify:
-			protos := rs.drainOutbox()
+			protos := rs.pending.DrainUnsent()
 			if len(protos) == 0 {
 				continue
 			}
