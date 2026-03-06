@@ -7,84 +7,65 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/viewpb"
 )
 
-// pendingSyncQueryViews tracks all query views that have been dispatched to
-// work nodes but are still waiting for responses.
+// pendingSyncQueryViews tracks query views dispatched to a single work node
+// that are still waiting for responses. Owned by a single resumableSyncer.
 // Thread-safe.
-//
-// Views are indexed by WorkNodeKey → QueryViewKey for fast per-node lookups.
-// A view's target node (WorkNode) is immutable for a given QueryViewKey.
 type pendingSyncQueryViews struct {
-	mu     sync.Mutex
-	byNode map[qviews.WorkNodeKey]map[qviews.QueryViewKey]SyncView
+	mu      sync.Mutex
+	entries map[qviews.QueryViewKey]SyncView
 }
 
 func newPendingSyncQueryViews() *pendingSyncQueryViews {
 	return &pendingSyncQueryViews{
-		byNode: make(map[qviews.WorkNodeKey]map[qviews.QueryViewKey]SyncView),
+		entries: make(map[qviews.QueryViewKey]SyncView),
 	}
 }
 
-// Upsert inserts or replaces a dispatching entry for the given view.
+// Upsert inserts or replaces a pending entry for the given view.
 // Returns the proto to send to the node.
-func (d *pendingSyncQueryViews) Upsert(sv SyncView) *viewpb.QueryViewOfShard {
+func (p *pendingSyncQueryViews) Upsert(sv SyncView) *viewpb.QueryViewOfShard {
 	key := sv.View.QueryViewKey()
-	nodeKey := sv.View.WorkNode().Key()
 
-	d.mu.Lock()
-	nodeEntries := d.byNode[nodeKey]
-	if nodeEntries == nil {
-		nodeEntries = make(map[qviews.QueryViewKey]SyncView)
-		d.byNode[nodeKey] = nodeEntries
-	}
-	nodeEntries[key] = sv
-	d.mu.Unlock()
+	p.mu.Lock()
+	p.entries[key] = sv
+	p.mu.Unlock()
 
 	return sv.View.IntoProto()
 }
 
-// MatchResponse matches a received response proto to dispatching entries
+// MatchResponse matches a received response proto to pending entries
 // and invokes the callback. If callback returns true, the entry is removed.
 //
 // The callback is invoked without holding the lock (it is concurrent-safe).
-func (d *pendingSyncQueryViews) MatchResponse(pb *viewpb.QueryViewOfShard) {
+func (p *pendingSyncQueryViews) MatchResponse(pb *viewpb.QueryViewOfShard) {
 	view := qviews.NewQueryViewAtWorkNodeFromProto(pb)
 	key := view.QueryViewKey()
-	nodeKey := view.WorkNode().Key()
 
-	d.mu.Lock()
-	nodeEntries := d.byNode[nodeKey]
-	entry, ok := nodeEntries[key]
-	d.mu.Unlock()
+	p.mu.Lock()
+	entry, ok := p.entries[key]
+	p.mu.Unlock()
 	if !ok {
 		return
 	}
 
 	if entry.Callback(view) {
-		d.mu.Lock()
-		if nodeEntries := d.byNode[nodeKey]; nodeEntries != nil {
-			delete(nodeEntries, key)
-			if len(nodeEntries) == 0 {
-				delete(d.byNode, nodeKey)
-			}
-		}
-		d.mu.Unlock()
+		p.mu.Lock()
+		delete(p.entries, key)
+		p.mu.Unlock()
 	}
 }
 
-// DrainByNode removes all dispatching entries targeting the given node,
-// invokes OnNodeLost() for each, and delivers the result via Callback.
-// This is called when service discovery reports a node removal.
-func (d *pendingSyncQueryViews) DrainByNode(node qviews.WorkNode) {
-	nodeKey := node.Key()
-
-	d.mu.Lock()
-	nodeEntries := d.byNode[nodeKey]
-	drained := make([]SyncView, 0, len(nodeEntries))
-	for _, sv := range nodeEntries {
+// Drain removes all pending entries, invokes OnNodeLost() for each,
+// and delivers the result via Callback.
+// Called when the node is declared lost or the resumableSyncer is closed.
+func (p *pendingSyncQueryViews) Drain() {
+	p.mu.Lock()
+	drained := make([]SyncView, 0, len(p.entries))
+	for _, sv := range p.entries {
 		drained = append(drained, sv)
 	}
-	delete(d.byNode, nodeKey)
-	d.mu.Unlock()
+	p.entries = make(map[qviews.QueryViewKey]SyncView)
+	p.mu.Unlock()
 
 	for _, entry := range drained {
 		resp := entry.OnNodeLost()
@@ -92,21 +73,18 @@ func (d *pendingSyncQueryViews) DrainByNode(node qviews.WorkNode) {
 	}
 }
 
-// CollectProtosForNode returns the protos of all dispatching entries targeting
-// the given node. Used by ResumableSyncer to re-push on stream reconnection.
-func (d *pendingSyncQueryViews) CollectProtosForNode(node qviews.WorkNode) []*viewpb.QueryViewOfShard {
-	nodeKey := node.Key()
+// CollectProtos returns the protos of all pending entries.
+// Used by resumableSyncer to re-push on stream reconnection.
+func (p *pendingSyncQueryViews) CollectProtos() []*viewpb.QueryViewOfShard {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	nodeEntries := d.byNode[nodeKey]
-	if len(nodeEntries) == 0 {
+	if len(p.entries) == 0 {
 		return nil
 	}
 
-	protos := make([]*viewpb.QueryViewOfShard, 0, len(nodeEntries))
-	for _, sv := range nodeEntries {
+	protos := make([]*viewpb.QueryViewOfShard, 0, len(p.entries))
+	for _, sv := range p.entries {
 		protos = append(protos, sv.View.IntoProto())
 	}
 	return protos

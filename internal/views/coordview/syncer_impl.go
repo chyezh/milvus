@@ -19,7 +19,6 @@ var (
 )
 
 type reliableSyncer struct {
-	pending  *pendingSyncQueryViews
 	snClient ViewSyncClient
 	qnClient ViewSyncClient
 
@@ -38,7 +37,6 @@ type reliableSyncer struct {
 func NewReliableSyncer(snClient ViewSyncClient, qnClient ViewSyncClient) ReliableSyncer {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &reliableSyncer{
-		pending:          newPendingSyncQueryViews(),
 		snClient:         snClient,
 		qnClient:         qnClient,
 		resumableSyncers: make(map[qviews.WorkNodeKey]*resumableSyncer),
@@ -64,25 +62,86 @@ func (s *reliableSyncer) SyncViews(ctx context.Context, group SyncGroup) error {
 	s.mu.RUnlock()
 
 	for nodeKey, views := range group.ViewsByNode {
-		// Find ResumableSyncer for this node.
+		// Fast path: ResumableSyncer already exists.
 		s.mu.RLock()
 		rs, ok := s.resumableSyncers[nodeKey]
 		s.mu.RUnlock()
 
-		if !ok {
-			// No ResumableSyncer for this node — add to pending directly.
-			// If the node appears later, re-push will deliver them.
-			for i := range views {
-				s.pending.Upsert(views[i])
-			}
-			log.Warn("ReliableSyncer: no ResumableSyncer for node, views tracked but not sent",
-				zap.String("node", nodeKey))
+		if ok {
+			rs.Sync(views)
 			continue
 		}
 
-		rs.Sync(views)
+		// Slow path: no syncer — try to find the node via service discovery.
+		rs = s.tryCreateSyncer(ctx, nodeKey, views)
+		if rs != nil {
+			rs.Sync(views)
+			continue
+		}
+
+		// Node not found — drain views immediately.
+		drainViews(views)
 	}
 	return nil
+}
+
+// tryCreateSyncer attempts to find the node via service discovery and create
+// a ResumableSyncer for it. Returns nil if the node does not exist.
+func (s *reliableSyncer) tryCreateSyncer(ctx context.Context, nodeKey qviews.WorkNodeKey, views []SyncView) *resumableSyncer {
+	if len(views) == 0 {
+		return nil
+	}
+
+	nodeType := views[0].View.WorkNode().NodeType()
+	client := s.clientForNodeType(nodeType)
+
+	nodes, err := client.GetAllNodes(ctx)
+	if err != nil {
+		log.Warn("ReliableSyncer: GetAllNodes failed during on-demand sync",
+			zap.String("node", nodeKey), zap.Error(err))
+		return nil
+	}
+
+	node, exists := nodes[nodeKey]
+	if !exists {
+		return nil
+	}
+
+	// Double-check under write lock (another goroutine may have created it).
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return nil
+	}
+	if rs, ok := s.resumableSyncers[nodeKey]; ok {
+		return rs
+	}
+
+	log.Info("ReliableSyncer: node discovered on demand, creating ResumableSyncer",
+		zap.String("node", nodeKey))
+	rs := newResumableSyncer(s.ctx, node, client)
+	s.resumableSyncers[nodeKey] = rs
+	return rs
+}
+
+func (s *reliableSyncer) clientForNodeType(nodeType qviews.NodeType) ViewSyncClient {
+	switch nodeType {
+	case qviews.NodeTypeStreamingNode:
+		return s.snClient
+	case qviews.NodeTypeQueryNode:
+		return s.qnClient
+	default:
+		panic("unknown node type")
+	}
+}
+
+// drainViews immediately invokes OnNodeLost + Callback for each view.
+func drainViews(views []SyncView) {
+	for _, sv := range views {
+		resp := sv.OnNodeLost()
+		sv.Callback(resp)
+	}
 }
 
 func (s *reliableSyncer) Close() error {
@@ -97,12 +156,9 @@ func (s *reliableSyncer) Close() error {
 	s.cancel()
 	s.wg.Wait()
 
-	// Close all remaining ResumableSyncers.
+	// Close all remaining ResumableSyncers (each drains its own pending views).
 	s.mu.Lock()
-	syncers := make(map[string]*resumableSyncer, len(s.resumableSyncers))
-	for k, v := range s.resumableSyncers {
-		syncers[k] = v
-	}
+	syncers := s.resumableSyncers
 	s.resumableSyncers = nil
 	s.mu.Unlock()
 
@@ -171,9 +227,7 @@ func (s *reliableSyncer) reconcileNodes(client ViewSyncClient, nodeType qviews.N
 		if _, exists := s.resumableSyncers[nodeKey]; !exists {
 			log.Info("ReliableSyncer: node discovered, creating ResumableSyncer",
 				zap.String("node", nodeKey))
-			s.resumableSyncers[nodeKey] = newResumableSyncer(
-				s.ctx, node, client, s.pending,
-			)
+			s.resumableSyncers[nodeKey] = newResumableSyncer(s.ctx, node, client)
 		}
 	}
 
@@ -190,12 +244,11 @@ func (s *reliableSyncer) reconcileNodes(client ViewSyncClient, nodeType qviews.N
 	}
 	s.mu.Unlock()
 
-	// Close removed ResumableSyncers and drain pending entries outside the lock.
+	// Close removed ResumableSyncers (each drains its own pending views).
 	for _, r := range removed {
 		log.Info("ReliableSyncer: node removed, closing ResumableSyncer",
 			zap.String("node", r.key))
 		r.syncer.Close()
-		s.pending.DrainByNode(r.syncer.node)
 	}
 }
 

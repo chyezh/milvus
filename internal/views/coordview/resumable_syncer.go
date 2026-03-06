@@ -14,8 +14,11 @@ import (
 )
 
 // resumableSyncer manages a single gRPC bidirectional stream to a work node.
-// It runs a single loop that creates a stream, pushes/re-pushes pending views,
-// and on stream break decides to reconnect with exponential backoff.
+// It owns a pendingSyncQueryViews instance that tracks all views dispatched
+// to this node. It runs a single loop that creates a stream, re-pushes all
+// pending views, and on stream break reconnects with exponential backoff.
+//
+// On Close, all remaining pending views are drained (OnNodeLost + Callback).
 type resumableSyncer struct {
 	node    qviews.WorkNode
 	client  ViewSyncClient
@@ -23,9 +26,9 @@ type resumableSyncer struct {
 
 	// Non-blocking outbox: Sync appends to outbox and signals notify.
 	// sendLoop drains outbox on each notification.
-	mu     sync.Mutex
-	outbox []*viewpb.QueryViewOfShard
-	notify chan struct{}
+	outboxMu sync.Mutex
+	outbox   []*viewpb.QueryViewOfShard
+	notify   chan struct{}
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -36,13 +39,12 @@ func newResumableSyncer(
 	ctx context.Context,
 	node qviews.WorkNode,
 	client ViewSyncClient,
-	pending *pendingSyncQueryViews,
 ) *resumableSyncer {
 	ctx, cancel := context.WithCancel(ctx)
 	rs := &resumableSyncer{
 		node:    node,
 		client:  client,
-		pending: pending,
+		pending: newPendingSyncQueryViews(),
 		notify:  make(chan struct{}, 1),
 		ctx:     ctx,
 		cancel:  cancel,
@@ -61,9 +63,9 @@ func (rs *resumableSyncer) Sync(views []SyncView) {
 		protos = append(protos, rs.pending.Upsert(views[i]))
 	}
 
-	rs.mu.Lock()
+	rs.outboxMu.Lock()
 	rs.outbox = append(rs.outbox, protos...)
-	rs.mu.Unlock()
+	rs.outboxMu.Unlock()
 
 	// Non-blocking notify: if already signaled, send loop will drain all.
 	select {
@@ -72,10 +74,12 @@ func (rs *resumableSyncer) Sync(views []SyncView) {
 	}
 }
 
-// Close stops the ResumableSyncer and waits for the goroutine to exit.
+// Close stops the resumableSyncer, waits for the goroutine to exit,
+// and drains all remaining pending views (OnNodeLost + Callback).
 func (rs *resumableSyncer) Close() {
 	rs.cancel()
 	rs.wg.Wait()
+	rs.pending.Drain()
 }
 
 // loop is the single goroutine that manages the stream lifecycle:
@@ -134,10 +138,10 @@ func (rs *resumableSyncer) loop() {
 
 // drainOutbox atomically drains and returns the accumulated outbox protos.
 func (rs *resumableSyncer) drainOutbox() []*viewpb.QueryViewOfShard {
-	rs.mu.Lock()
+	rs.outboxMu.Lock()
 	protos := rs.outbox
 	rs.outbox = nil
-	rs.mu.Unlock()
+	rs.outboxMu.Unlock()
 	return protos
 }
 
@@ -192,7 +196,7 @@ func (rs *resumableSyncer) recvLoop(stream viewpb.ViewSyncService_SyncQueryViewC
 
 // rePush sends all pending entries for this node through the stream.
 func (rs *resumableSyncer) rePush(stream viewpb.ViewSyncService_SyncQueryViewClient) {
-	protos := rs.pending.CollectProtosForNode(rs.node)
+	protos := rs.pending.CollectProtos()
 	if len(protos) == 0 {
 		return
 	}
