@@ -11,24 +11,16 @@ import (
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/viewpb"
-	"github.com/milvus-io/milvus/pkg/v2/util/syncutil"
 )
 
 // resumableSyncer manages a single gRPC bidirectional stream to a work node.
-// It continuously tries to maintain the stream with exponential backoff,
-// and pushes/re-pushes pending views.
-//
-// Modeled after producer_resuming.go.
+// It runs a single loop that creates a stream, pushes/re-pushes pending views,
+// and on stream break decides to reconnect with exponential backoff.
 type resumableSyncer struct {
 	node    qviews.WorkNode
 	client  NodeClient
 	pending *onDispatchingQueryView
 	sendCh  chan []*viewpb.QueryViewOfShard
-
-	// Stream swap using ContextCond (producer_resuming pattern).
-	cond   *syncutil.ContextCond
-	stream viewpb.ViewSyncService_SyncQueryViewClient
-	err    error
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -48,13 +40,11 @@ func newResumableSyncer(
 		client:  client,
 		pending: pending,
 		sendCh:  make(chan []*viewpb.QueryViewOfShard, sendBufferSize),
-		cond:    syncutil.NewContextCond(&sync.Mutex{}),
 		ctx:     ctx,
 		cancel:  cancel,
 	}
-	rs.wg.Add(2)
-	go rs.streamCreatorLoop()
-	go rs.sendRecvLoop()
+	rs.wg.Add(1)
+	go rs.loop()
 	return rs
 }
 
@@ -66,16 +56,15 @@ func (rs *resumableSyncer) Enqueue(protos []*viewpb.QueryViewOfShard) {
 	}
 }
 
-// Close stops the ResumableSyncer and waits for goroutines to exit.
+// Close stops the ResumableSyncer and waits for the goroutine to exit.
 func (rs *resumableSyncer) Close() {
 	rs.cancel()
-	// Broadcast to wake up any goroutine waiting on cond.
-	rs.swapStream(nil, context.Canceled)
 	rs.wg.Wait()
 }
 
-// streamCreatorLoop continuously creates gRPC streams with exponential backoff.
-func (rs *resumableSyncer) streamCreatorLoop() {
+// loop is the single goroutine that manages the stream lifecycle:
+// create stream → re-push pending → send/recv → on break, backoff and retry.
+func (rs *resumableSyncer) loop() {
 	defer rs.wg.Done()
 
 	bo := backoff.NewExponentialBackOff()
@@ -85,6 +74,7 @@ func (rs *resumableSyncer) streamCreatorLoop() {
 	bo.Reset()
 
 	for rs.ctx.Err() == nil {
+		// Create stream.
 		stream, err := rs.client.OpenSyncStream(rs.ctx, rs.node)
 		if err != nil {
 			if rs.ctx.Err() != nil {
@@ -103,45 +93,26 @@ func (rs *resumableSyncer) streamCreatorLoop() {
 		}
 
 		bo.Reset()
-		rs.swapStream(stream, nil)
-
-		// Wait until stream is broken (recv loop will swap it to nil).
-		rs.waitForStreamBroken()
-	}
-}
-
-// sendRecvLoop waits for a stream to become available, then runs send and recv loops.
-func (rs *resumableSyncer) sendRecvLoop() {
-	defer rs.wg.Done()
-
-	for rs.ctx.Err() == nil {
-		stream, err := rs.getStreamAfterAvailable()
-		if err != nil {
-			return
-		}
 
 		// Re-push all pending entries for this node.
-		rs.rePushOutstanding(stream)
+		rs.rePush(stream)
 
-		// Run send and recv in parallel.
-		var wg sync.WaitGroup
+		// Run send and recv in parallel; recv drives the current goroutine.
 		streamCtx, streamCancel := context.WithCancel(rs.ctx)
 
-		wg.Add(1)
+		var sendWg sync.WaitGroup
+		sendWg.Add(1)
 		go func() {
-			defer wg.Done()
+			defer sendWg.Done()
 			rs.sendLoop(streamCtx, stream)
 		}()
 
-		// Recv in current goroutine.
+		// Recv blocks until stream breaks.
 		rs.recvLoop(stream)
 
-		// Stream broke, cancel send loop and swap stream to nil.
+		// Stream broke — cancel send loop and wait.
 		streamCancel()
-		wg.Wait()
-
-		// Signal streamCreatorLoop that the stream is broken.
-		rs.swapStream(nil, nil)
+		sendWg.Wait()
 	}
 }
 
@@ -169,6 +140,7 @@ func (rs *resumableSyncer) sendLoop(ctx context.Context, stream viewpb.ViewSyncS
 }
 
 // recvLoop receives responses and routes them to pending callbacks.
+// Returns when the stream breaks.
 func (rs *resumableSyncer) recvLoop(stream viewpb.ViewSyncService_SyncQueryViewClient) {
 	for {
 		resp, err := stream.Recv()
@@ -189,8 +161,8 @@ func (rs *resumableSyncer) recvLoop(stream viewpb.ViewSyncService_SyncQueryViewC
 	}
 }
 
-// rePushOutstanding sends all pending entries for this node through the stream.
-func (rs *resumableSyncer) rePushOutstanding(stream viewpb.ViewSyncService_SyncQueryViewClient) {
+// rePush sends all pending entries for this node through the stream.
+func (rs *resumableSyncer) rePush(stream viewpb.ViewSyncService_SyncQueryViewClient) {
 	protos := rs.pending.CollectProtosForNode(rs.node)
 	if len(protos) == 0 {
 		return
@@ -207,41 +179,4 @@ func (rs *resumableSyncer) rePushOutstanding(stream viewpb.ViewSyncService_SyncQ
 		log.Warn("ResumableSyncer: re-push pending failed",
 			zap.String("node", rs.node.String()), zap.Error(err))
 	}
-}
-
-// swapStream atomically replaces the stream.
-func (rs *resumableSyncer) swapStream(stream viewpb.ViewSyncService_SyncQueryViewClient, err error) {
-	rs.cond.LockAndBroadcast()
-	rs.stream = stream
-	rs.err = err
-	rs.cond.L.Unlock()
-}
-
-// getStreamAfterAvailable waits until a non-nil stream is available.
-func (rs *resumableSyncer) getStreamAfterAvailable() (viewpb.ViewSyncService_SyncQueryViewClient, error) {
-	rs.cond.L.Lock()
-	for rs.err == nil && rs.stream == nil {
-		if err := rs.cond.Wait(rs.ctx); err != nil {
-			return nil, err
-		}
-	}
-	stream := rs.stream
-	err := rs.err
-	rs.cond.L.Unlock()
-
-	if err != nil {
-		return nil, err
-	}
-	return stream, nil
-}
-
-// waitForStreamBroken waits until the current stream is set to nil (broken).
-func (rs *resumableSyncer) waitForStreamBroken() {
-	rs.cond.L.Lock()
-	for rs.err == nil && rs.stream != nil {
-		if err := rs.cond.Wait(rs.ctx); err != nil {
-			return
-		}
-	}
-	rs.cond.L.Unlock()
 }
