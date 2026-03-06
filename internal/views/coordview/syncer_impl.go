@@ -248,7 +248,7 @@ func (s *reliableSyncer) reconcileNodes(client ViewSyncClient, nodeType qviews.N
 		log.Info("ReliableSyncer: node removed, closing ResumableSyncer",
 			zap.String("node", r.key))
 		r.syncer.Close()
-		r.syncer.DrainPending()
+		r.syncer.DrainPendingIfNodeLost()
 	}
 }
 

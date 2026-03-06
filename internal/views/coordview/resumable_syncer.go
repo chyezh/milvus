@@ -57,15 +57,15 @@ func (rs *resumableSyncer) Sync(views []SyncView) {
 }
 
 // Close stops the resumableSyncer and waits for the goroutine to exit.
-// Does NOT drain pending views — use DrainPending for node loss scenarios.
+// Does NOT drain pending views — use DrainPendingIfNodeLost for node loss scenarios.
 func (rs *resumableSyncer) Close() {
 	rs.cancel()
 	rs.wg.Wait()
 }
 
-// DrainPending drains all remaining pending views (invokes OnNodeLost for each).
+// DrainPendingIfNodeLost drains all remaining pending views (invokes OnNodeLost for each).
 // Must only be called after Close, when the node is declared lost.
-func (rs *resumableSyncer) DrainPending() {
+func (rs *resumableSyncer) DrainPendingIfNodeLost() {
 	rs.pending.Drain()
 }
 
@@ -131,19 +131,7 @@ func (rs *resumableSyncer) sendLoop(ctx context.Context, stream viewpb.ViewSyncS
 			return
 		case <-rs.pending.Ready():
 			protos := rs.pending.DrainUnsent()
-			if len(protos) == 0 {
-				continue
-			}
-			req := &viewpb.SyncRequest{
-				Request: &viewpb.SyncRequest_Views{
-					Views: &viewpb.SyncQueryViewsRequest{
-						QueryViews: protos,
-					},
-				},
-			}
-			if err := stream.Send(req); err != nil {
-				log.Warn("ResumableSyncer: stream send failed",
-					zap.String("node", rs.node.String()), zap.Error(err))
+			if err := rs.sendBatched(stream, protos); err != nil {
 				return
 			}
 		}
@@ -172,22 +160,34 @@ func (rs *resumableSyncer) recvLoop(stream viewpb.ViewSyncService_SyncQueryViewC
 	}
 }
 
-// rePush sends all pending entries for this node through the stream.
+// rePush sends all pending entries for this node through the stream in batches.
 func (rs *resumableSyncer) rePush(stream viewpb.ViewSyncService_SyncQueryViewClient) {
-	protos := rs.pending.CollectProtos()
-	if len(protos) == 0 {
-		return
-	}
+	rs.sendBatched(stream, rs.pending.CollectProtos())
+}
 
-	req := &viewpb.SyncRequest{
-		Request: &viewpb.SyncRequest_Views{
-			Views: &viewpb.SyncQueryViewsRequest{
-				QueryViews: protos,
+const sendBatchSize = 16
+
+// sendBatched sends protos in batches of sendBatchSize.
+func (rs *resumableSyncer) sendBatched(stream viewpb.ViewSyncService_SyncQueryViewClient, protos []*viewpb.QueryViewOfShard) error {
+	for len(protos) > 0 {
+		batch := protos
+		if len(batch) > sendBatchSize {
+			batch = protos[:sendBatchSize]
+		}
+		protos = protos[len(batch):]
+
+		req := &viewpb.SyncRequest{
+			Request: &viewpb.SyncRequest_Views{
+				Views: &viewpb.SyncQueryViewsRequest{
+					QueryViews: batch,
+				},
 			},
-		},
+		}
+		if err := stream.Send(req); err != nil {
+			log.Warn("ResumableSyncer: stream send failed",
+				zap.String("node", rs.node.String()), zap.Error(err))
+			return err
+		}
 	}
-	if err := stream.Send(req); err != nil {
-		log.Warn("ResumableSyncer: re-push pending failed",
-			zap.String("node", rs.node.String()), zap.Error(err))
-	}
+	return nil
 }
