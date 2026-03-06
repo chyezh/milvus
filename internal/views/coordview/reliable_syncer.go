@@ -7,46 +7,31 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/viewpb"
 )
 
-// SyncCallback is invoked when the ReliableSyncer has a response for a synced view.
-//
-// The response may be:
-//
-//	(a) A real response from the work node (normal operation).
-//	(b) A synthetic response built by NodeLostResponseBuilder on node loss.
-//
-// Return value:
-//
-//	true  — the caller no longer needs to monitor this view; the ReliableSyncer
-//	        removes it from the outstanding set and will not invoke the callback again.
-//	false — the view remains in the outstanding set; the ReliableSyncer continues
-//	        tracking it and may invoke the callback again on future responses.
-//
-// Thread-safety: the callback must be safe for concurrent invocation from
-// multiple ReliableSyncer internal goroutines (per-node recv goroutines).
-// Must not block for long.
-type SyncCallback func(resp qviews.QueryViewAtWorkNode) bool
-
-// NodeLostResponseBuilder builds a synthetic QueryViewAtWorkNode to be delivered
-// via SyncCallback when the target node is declared lost.
-//
-// The ReliableSyncer does not interpret view states. The caller defines what
-// response to generate on node loss by providing this builder.
-type NodeLostResponseBuilder func() qviews.QueryViewAtWorkNode
-
-// SyncView pairs a query view with its event callback and node-loss behavior.
+// SyncView pairs a query view with its response callback and node-loss handler.
 type SyncView struct {
 	// View is the query view state to push to the target work node.
 	// The target node is determined by View.WorkNode().
 	View qviews.QueryViewAtWorkNode
 
-	// Callback is invoked when the ReliableSyncer receives a response (real or
-	// synthetic) for this view. See SyncCallback for semantics.
-	Callback SyncCallback
+	// OnSyncResponse is invoked when the ReliableSyncer receives a real response
+	// from the work node for this view.
+	//
+	// Return value:
+	//
+	//	true  — the caller no longer needs to monitor this view; the ReliableSyncer
+	//	        removes it from the pending set and will not invoke the callback again.
+	//	false — the view remains in the pending set; the ReliableSyncer continues
+	//	        tracking it and may invoke the callback again on future responses.
+	//
+	// Thread-safety: must be safe for concurrent invocation from
+	// multiple ReliableSyncer internal goroutines (per-node recv goroutines).
+	// Must not block for long.
+	OnSyncResponse func(resp qviews.QueryViewAtWorkNode) bool
 
-	// OnNodeLost builds the synthetic response to deliver via Callback when
-	// the target node is declared lost. The ReliableSyncer calls OnNodeLost()
-	// to obtain the response, then invokes Callback with it.
-	OnNodeLost NodeLostResponseBuilder
+	// OnNodeLost is called when the target node is declared lost
+	// (detected via service discovery). Pure notification; the ReliableSyncer
+	// removes the view from the pending set after calling this.
+	OnNodeLost func()
 }
 
 // SyncGroup represents a batch of views to sync, pre-grouped by target work node.

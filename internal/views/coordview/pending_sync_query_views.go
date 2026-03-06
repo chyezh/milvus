@@ -14,16 +14,18 @@ type pendingSyncQueryViews struct {
 	mu      sync.Mutex
 	entries map[qviews.QueryViewKey]SyncView
 	unsent  []*viewpb.QueryViewOfShard // protos accumulated by Upsert, drained by sendLoop
+	notify  chan struct{}              // cap 1, signaled by Upsert
 }
 
 func newPendingSyncQueryViews() *pendingSyncQueryViews {
 	return &pendingSyncQueryViews{
 		entries: make(map[qviews.QueryViewKey]SyncView),
+		notify:  make(chan struct{}, 1),
 	}
 }
 
-// Upsert inserts or replaces a pending entry and accumulates the proto
-// for incremental sending via DrainUnsent.
+// Upsert inserts or replaces a pending entry, accumulates the proto
+// for incremental sending, and signals Ready().
 func (p *pendingSyncQueryViews) Upsert(sv SyncView) {
 	key := sv.View.QueryViewKey()
 
@@ -31,6 +33,17 @@ func (p *pendingSyncQueryViews) Upsert(sv SyncView) {
 	p.entries[key] = sv
 	p.unsent = append(p.unsent, sv.View.IntoProto())
 	p.mu.Unlock()
+
+	// Non-blocking notify: if already signaled, sendLoop will drain all.
+	select {
+	case p.notify <- struct{}{}:
+	default:
+	}
+}
+
+// Ready returns a channel that is signaled when new unsent protos are available.
+func (p *pendingSyncQueryViews) Ready() <-chan struct{} {
+	return p.notify
 }
 
 // DrainUnsent atomically drains and returns protos accumulated by Upsert.
@@ -58,7 +71,7 @@ func (p *pendingSyncQueryViews) MatchResponse(pb *viewpb.QueryViewOfShard) {
 		return
 	}
 
-	if entry.Callback(view) {
+	if entry.OnSyncResponse(view) {
 		p.mu.Lock()
 		delete(p.entries, key)
 		p.mu.Unlock()
@@ -79,8 +92,7 @@ func (p *pendingSyncQueryViews) Drain() {
 	p.mu.Unlock()
 
 	for _, entry := range drained {
-		resp := entry.OnNodeLost()
-		entry.Callback(resp)
+		entry.OnNodeLost()
 	}
 }
 

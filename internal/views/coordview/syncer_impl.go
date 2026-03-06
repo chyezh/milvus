@@ -136,11 +136,10 @@ func (s *reliableSyncer) clientForNodeType(nodeType qviews.NodeType) ViewSyncCli
 	}
 }
 
-// drainViews immediately invokes OnNodeLost + Callback for each view.
+// drainViews immediately invokes OnNodeLost for each view.
 func drainViews(views []SyncView) {
 	for _, sv := range views {
-		resp := sv.OnNodeLost()
-		sv.Callback(resp)
+		sv.OnNodeLost()
 	}
 }
 
