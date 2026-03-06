@@ -79,9 +79,8 @@ func (p *pendingSyncQueryViews) MatchResponse(pb *viewpb.QueryViewOfShard) {
 	}
 }
 
-// Drain removes all pending entries, invokes OnNodeLost() for each,
-// and delivers the result via Callback.
-// Called when the node is declared lost or the resumableSyncer is closed.
+// Drain removes all pending entries and invokes OnNodeLost() for each.
+// Called when the node is declared lost.
 func (p *pendingSyncQueryViews) Drain() {
 	p.mu.Lock()
 	drained := make([]SyncView, 0, len(p.entries))

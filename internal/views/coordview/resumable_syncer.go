@@ -18,7 +18,8 @@ import (
 // to this node. It runs a single loop that creates a stream, re-pushes all
 // pending views, and on stream break reconnects with exponential backoff.
 //
-// On Close, all remaining pending views are drained (OnNodeLost + Callback).
+// Close stops the loop but does NOT drain pending views.
+// Use DrainPendingIfNodeLost after Close for node loss scenarios.
 type resumableSyncer struct {
 	node    qviews.WorkNode
 	client  ViewSyncClient
@@ -102,7 +103,9 @@ func (rs *resumableSyncer) loop() {
 		bo.Reset()
 
 		// Re-push all pending entries for this node.
-		rs.rePush(stream)
+		if err := rs.rePush(stream); err != nil {
+			continue
+		}
 
 		// Run send and recv in parallel; recv drives the current goroutine.
 		streamCtx, streamCancel := context.WithCancel(rs.ctx)
@@ -160,9 +163,11 @@ func (rs *resumableSyncer) recvLoop(stream viewpb.ViewSyncService_SyncQueryViewC
 	}
 }
 
-// rePush sends all pending entries for this node through the stream in batches.
-func (rs *resumableSyncer) rePush(stream viewpb.ViewSyncService_SyncQueryViewClient) {
-	rs.sendBatched(stream, rs.pending.CollectProtos())
+// rePush sends all pending entries for this node through the stream in batches
+// and clears any stale unsent protos to avoid duplicate sends after reconnection.
+func (rs *resumableSyncer) rePush(stream viewpb.ViewSyncService_SyncQueryViewClient) error {
+	rs.pending.DrainUnsent() // clear stale unsent protos from before reconnection
+	return rs.sendBatched(stream, rs.pending.CollectProtos())
 }
 
 const sendBatchSize = 16

@@ -58,17 +58,16 @@ type SyncGroup struct {
 //  1. Re-push on reconnection: when a stream breaks and is re-established,
 //     all outstanding syncs are re-pushed automatically via ResumableSyncer.
 //  2. Node loss handling: when service discovery reports a node removal,
-//     the node's ResumableSyncer is closed. For each outstanding entry
-//     targeting that node, OnNodeLost() builds a response, which is then
-//     delivered via Callback.
+//     the node's ResumableSyncer is closed and OnNodeLost() is invoked
+//     for each outstanding entry targeting that node.
 //
 // The ReliableSyncer is stateless with respect to state machine semantics.
 // It does not interpret view states or transitions. It simply:
-//   - Tracks outstanding syncs keyed by viewKey in a global Outstanding structure.
+//   - Tracks outstanding syncs keyed by viewKey in per-node pending sets.
 //   - Delivers views to nodes via per-node ResumableSyncers and routes responses
-//     back via callbacks.
-//   - Removes an outstanding entry when its callback returns true.
-//   - On node loss (service discovery), calls OnNodeLost() and delivers via Callback.
+//     back via OnSyncResponse callbacks.
+//   - Removes an outstanding entry when OnSyncResponse returns true.
+//   - On node loss (service discovery), invokes OnNodeLost() for each entry.
 //
 // Thread-safety: All methods are thread-safe.
 type ReliableSyncer interface {
@@ -85,16 +84,18 @@ type ReliableSyncer interface {
 	// entry, the old entry (including its callback) is replaced.
 	//
 	// Outstanding entry lifecycle:
-	//   - Persists until its callback is invoked and returns true.
+	//   - Persists until OnSyncResponse is invoked and returns true.
 	//   - Re-pushed to the node on stream reconnection.
-	//   - On node loss (service discovery), OnNodeLost() builds a response,
-	//     then Callback is invoked.
+	//   - On node loss (service discovery), OnNodeLost() is invoked.
 	//
 	// Non-blocking: returns after enqueuing. Returns error only if the
 	// ReliableSyncer is closed or ctx is canceled.
 	SyncViews(ctx context.Context, group SyncGroup) error
 
 	// Close gracefully closes all ResumableSyncers and releases resources.
+	// Must only be called during Coordinator shutdown. After Close, the
+	// ReliableSyncer cannot be reused — a new instance must be created
+	// via Coordinator recovery.
 	Close() error
 }
 
