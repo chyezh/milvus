@@ -155,7 +155,7 @@ func (s *reliableSyncer) Close() error {
 	s.cancel()
 	s.wg.Wait()
 
-	// Close all remaining ResumableSyncers (each drains its own pending views).
+	// Close all remaining ResumableSyncers (graceful shutdown, no drain).
 	s.mu.Lock()
 	syncers := s.resumableSyncers
 	s.resumableSyncers = nil
@@ -243,11 +243,12 @@ func (s *reliableSyncer) reconcileNodes(client ViewSyncClient, nodeType qviews.N
 	}
 	s.mu.Unlock()
 
-	// Close removed ResumableSyncers (each drains its own pending views).
+	// Close removed ResumableSyncers and drain pending views (node lost).
 	for _, r := range removed {
 		log.Info("ReliableSyncer: node removed, closing ResumableSyncer",
 			zap.String("node", r.key))
 		r.syncer.Close()
+		r.syncer.DrainPending()
 	}
 }
 

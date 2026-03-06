@@ -23,7 +23,6 @@ type resumableSyncer struct {
 	node    qviews.WorkNode
 	client  ViewSyncClient
 	pending *pendingSyncQueryViews
-	notify  chan struct{}
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -40,7 +39,6 @@ func newResumableSyncer(
 		node:    node,
 		client:  client,
 		pending: newPendingSyncQueryViews(),
-		notify:  make(chan struct{}, 1),
 		ctx:     ctx,
 		cancel:  cancel,
 	}
@@ -56,19 +54,18 @@ func (rs *resumableSyncer) Sync(views []SyncView) {
 	for i := range views {
 		rs.pending.Upsert(views[i])
 	}
-
-	// Non-blocking notify: if already signaled, send loop will drain all.
-	select {
-	case rs.notify <- struct{}{}:
-	default:
-	}
 }
 
-// Close stops the resumableSyncer, waits for the goroutine to exit,
-// and drains all remaining pending views (OnNodeLost + Callback).
+// Close stops the resumableSyncer and waits for the goroutine to exit.
+// Does NOT drain pending views — use DrainPending for node loss scenarios.
 func (rs *resumableSyncer) Close() {
 	rs.cancel()
 	rs.wg.Wait()
+}
+
+// DrainPending drains all remaining pending views (invokes OnNodeLost for each).
+// Must only be called after Close, when the node is declared lost.
+func (rs *resumableSyncer) DrainPending() {
 	rs.pending.Drain()
 }
 
@@ -132,7 +129,7 @@ func (rs *resumableSyncer) sendLoop(ctx context.Context, stream viewpb.ViewSyncS
 		select {
 		case <-ctx.Done():
 			return
-		case <-rs.notify:
+		case <-rs.pending.Ready():
 			protos := rs.pending.DrainUnsent()
 			if len(protos) == 0 {
 				continue
