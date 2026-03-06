@@ -7,6 +7,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
 
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/viewpb"
 )
@@ -25,13 +26,13 @@ type ReliableSyncerConfig struct {
 }
 
 type reliableSyncer struct {
-	outstanding *outstanding
-	snClient    NodeClient
-	qnClient    NodeClient
-	config      ReliableSyncerConfig
+	pending  *onDispatchingQueryView
+	snClient NodeClient
+	qnClient NodeClient
+	config   ReliableSyncerConfig
 
 	mu               sync.RWMutex
-	resumableSyncers map[string]*resumableSyncer
+	resumableSyncers map[qviews.WorkNodeKey]*resumableSyncer
 	closed           bool
 
 	ctx    context.Context
@@ -45,11 +46,11 @@ type reliableSyncer struct {
 func NewReliableSyncer(snClient NodeClient, qnClient NodeClient, config ReliableSyncerConfig) ReliableSyncer {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &reliableSyncer{
-		outstanding:      newOutstanding(),
+		pending:          newOnDispatchingQueryView(),
 		snClient:         snClient,
 		qnClient:         qnClient,
 		config:           config,
-		resumableSyncers: make(map[string]*resumableSyncer),
+		resumableSyncers: make(map[qviews.WorkNodeKey]*resumableSyncer),
 		ctx:              ctx,
 		cancel:           cancel,
 	}
@@ -72,18 +73,18 @@ func (s *reliableSyncer) SyncViews(ctx context.Context, group SyncGroup) error {
 	s.mu.RUnlock()
 
 	// Group views by target node and enqueue.
-	grouped := make(map[string][]*SyncView)
+	grouped := make(map[qviews.WorkNodeKey][]*SyncView)
 	for i := range group.Views {
 		sv := &group.Views[i]
-		nodeKey := sv.View.WorkNode().String()
+		nodeKey := sv.View.WorkNode().Key()
 		grouped[nodeKey] = append(grouped[nodeKey], sv)
 	}
 
 	for nodeKey, views := range grouped {
-		// Upsert into outstanding and collect protos.
+		// Upsert into pending and collect protos.
 		protos := make([]*viewpb.QueryViewOfShard, 0, len(views))
 		for _, sv := range views {
-			proto := s.outstanding.Upsert(*sv)
+			proto := s.pending.Upsert(*sv)
 			protos = append(protos, proto)
 		}
 
@@ -94,7 +95,7 @@ func (s *reliableSyncer) SyncViews(ctx context.Context, group SyncGroup) error {
 
 		if !ok {
 			// No ResumableSyncer for this node — node not yet discovered or already lost.
-			// The outstanding entries are tracked; if the node appears later,
+			// The pending entries are tracked; if the node appears later,
 			// re-push will deliver them. If it never appears, the caller should
 			// handle this via other mechanisms (e.g., reassignment).
 			log.Warn("ReliableSyncer: no ResumableSyncer for node, views tracked but not sent",
@@ -194,7 +195,7 @@ func (s *reliableSyncer) reconcileNodes(client NodeClient, label string) {
 			log.Info("ReliableSyncer: node discovered, creating ResumableSyncer",
 				zap.String("label", label), zap.String("node", nodeKey))
 			s.resumableSyncers[nodeKey] = newResumableSyncer(
-				s.ctx, node, client, s.outstanding, s.config.SendBufferSize,
+				s.ctx, node, client, s.pending, s.config.SendBufferSize,
 			)
 		}
 	}
@@ -213,12 +214,12 @@ func (s *reliableSyncer) reconcileNodes(client NodeClient, label string) {
 	}
 	s.mu.Unlock()
 
-	// Close removed ResumableSyncers and drain outstanding entries outside the lock.
+	// Close removed ResumableSyncers and drain pending entries outside the lock.
 	for _, r := range removed {
 		log.Info("ReliableSyncer: node removed, closing ResumableSyncer",
 			zap.String("label", label), zap.String("node", r.key))
 		r.syncer.Close()
-		s.outstanding.DrainByNode(r.syncer.node)
+		s.pending.DrainByNode(r.syncer.node)
 	}
 }
 

@@ -16,14 +16,14 @@ import (
 
 // resumableSyncer manages a single gRPC bidirectional stream to a work node.
 // It continuously tries to maintain the stream with exponential backoff,
-// and pushes/re-pushes outstanding views.
+// and pushes/re-pushes pending views.
 //
 // Modeled after producer_resuming.go.
 type resumableSyncer struct {
-	node        qviews.WorkNode
-	client      NodeClient
-	outstanding *outstanding
-	sendCh      chan []*viewpb.QueryViewOfShard
+	node    qviews.WorkNode
+	client  NodeClient
+	pending *onDispatchingQueryView
+	sendCh  chan []*viewpb.QueryViewOfShard
 
 	// Stream swap using ContextCond (producer_resuming pattern).
 	cond   *syncutil.ContextCond
@@ -39,18 +39,18 @@ func newResumableSyncer(
 	ctx context.Context,
 	node qviews.WorkNode,
 	client NodeClient,
-	outstanding *outstanding,
+	pending *onDispatchingQueryView,
 	sendBufferSize int,
 ) *resumableSyncer {
 	ctx, cancel := context.WithCancel(ctx)
 	rs := &resumableSyncer{
-		node:        node,
-		client:      client,
-		outstanding: outstanding,
-		sendCh:      make(chan []*viewpb.QueryViewOfShard, sendBufferSize),
-		cond:        syncutil.NewContextCond(&sync.Mutex{}),
-		ctx:         ctx,
-		cancel:      cancel,
+		node:    node,
+		client:  client,
+		pending: pending,
+		sendCh:  make(chan []*viewpb.QueryViewOfShard, sendBufferSize),
+		cond:    syncutil.NewContextCond(&sync.Mutex{}),
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 	rs.wg.Add(2)
 	go rs.streamCreatorLoop()
@@ -120,7 +120,7 @@ func (rs *resumableSyncer) sendRecvLoop() {
 			return
 		}
 
-		// Re-push all outstanding entries for this node.
+		// Re-push all pending entries for this node.
 		rs.rePushOutstanding(stream)
 
 		// Run send and recv in parallel.
@@ -168,7 +168,7 @@ func (rs *resumableSyncer) sendLoop(ctx context.Context, stream viewpb.ViewSyncS
 	}
 }
 
-// recvLoop receives responses and routes them to outstanding callbacks.
+// recvLoop receives responses and routes them to pending callbacks.
 func (rs *resumableSyncer) recvLoop(stream viewpb.ViewSyncService_SyncQueryViewClient) {
 	for {
 		resp, err := stream.Recv()
@@ -184,14 +184,14 @@ func (rs *resumableSyncer) recvLoop(stream viewpb.ViewSyncService_SyncQueryViewC
 		}
 
 		for _, pb := range viewsResp.QueryViews {
-			rs.outstanding.MatchResponse(pb)
+			rs.pending.MatchResponse(pb)
 		}
 	}
 }
 
-// rePushOutstanding sends all outstanding entries for this node through the stream.
+// rePushOutstanding sends all pending entries for this node through the stream.
 func (rs *resumableSyncer) rePushOutstanding(stream viewpb.ViewSyncService_SyncQueryViewClient) {
-	protos := rs.outstanding.CollectProtosForNode(rs.node)
+	protos := rs.pending.CollectProtosForNode(rs.node)
 	if len(protos) == 0 {
 		return
 	}
@@ -204,7 +204,7 @@ func (rs *resumableSyncer) rePushOutstanding(stream viewpb.ViewSyncService_SyncQ
 		},
 	}
 	if err := stream.Send(req); err != nil {
-		log.Warn("ResumableSyncer: re-push outstanding failed",
+		log.Warn("ResumableSyncer: re-push pending failed",
 			zap.String("node", rs.node.String()), zap.Error(err))
 	}
 }

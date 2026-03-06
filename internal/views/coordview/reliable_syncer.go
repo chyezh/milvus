@@ -21,7 +21,8 @@ import (
 //	false — the view remains in the outstanding set; the ReliableSyncer continues
 //	        tracking it and may invoke the callback again on future responses.
 //
-// Called from a ReliableSyncer internal goroutine (per-node recv goroutine).
+// Thread-safety: the callback must be safe for concurrent invocation from
+// multiple ReliableSyncer internal goroutines (per-node recv goroutines).
 // Must not block for long.
 type SyncCallback func(resp qviews.QueryViewAtWorkNode) bool
 
@@ -121,9 +122,9 @@ type NodeClient interface {
 	// The channel receives a value whenever the set of known nodes changes.
 	WatchNodeChanged(ctx context.Context) (<-chan struct{}, error)
 
-	// GetAllNodes returns all currently known nodes as a map from node key
-	// (WorkNode.String()) to the node identity.
-	GetAllNodes(ctx context.Context) (map[string]qviews.WorkNode, error)
+	// GetAllNodes returns all currently known nodes as a map from WorkNodeKey
+	// to the node identity.
+	GetAllNodes(ctx context.Context) (map[qviews.WorkNodeKey]qviews.WorkNode, error)
 
 	// OpenSyncStream opens a SyncQueryView bidirectional stream to the given node.
 	OpenSyncStream(ctx context.Context, node qviews.WorkNode) (viewpb.ViewSyncService_SyncQueryViewClient, error)
