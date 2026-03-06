@@ -1,4 +1,4 @@
-package coordview
+package syncer
 
 import (
 	"context"
