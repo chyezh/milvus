@@ -26,7 +26,6 @@ import (
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/broadcast"
-	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
@@ -35,13 +34,9 @@ import (
 func (s *Server) broadcastCreateResourceGroup(ctx context.Context, req *milvuspb.CreateResourceGroupRequest) error {
 	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusiveClusterResourceKey())
 	if err != nil {
-		if !shouldApplyLocallyOnNonPrimary(err, message.MessageTypeAlterResourceGroup) {
-			return err
-		}
+		return err
 	}
-	if broadcaster != nil {
-		defer broadcaster.Close()
-	}
+	defer broadcaster.Close()
 
 	cfg := req.GetConfig()
 	if cfg == nil {
@@ -59,9 +54,6 @@ func (s *Server) broadcastCreateResourceGroup(ctx context.Context, req *milvuspb
 		WithBody(&message.AlterResourceGroupMessageBody{}).
 		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
 		MustBuildBroadcast()
-	if broadcaster == nil {
-		return registry.CallMessageAckCallback(ctx, msg, nil)
-	}
 	_, err = broadcaster.Broadcast(ctx, msg)
 	return err
 }
@@ -73,13 +65,9 @@ func (s *Server) broadcastUpdateResourceGroups(ctx context.Context, req *querypb
 
 	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusiveClusterResourceKey())
 	if err != nil {
-		if !shouldApplyLocallyOnNonPrimary(err, message.MessageTypeAlterResourceGroup) {
-			return err
-		}
+		return err
 	}
-	if broadcaster != nil {
-		defer broadcaster.Close()
-	}
+	defer broadcaster.Close()
 
 	if err := s.meta.ResourceManager.CheckIfResourceGroupsUpdatable(ctx, req.GetResourceGroups()); err != nil {
 		return err
@@ -92,9 +80,6 @@ func (s *Server) broadcastUpdateResourceGroups(ctx context.Context, req *querypb
 		WithBody(&message.AlterResourceGroupMessageBody{}).
 		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
 		MustBuildBroadcast()
-	if broadcaster == nil {
-		return registry.CallMessageAckCallback(ctx, msg, nil)
-	}
 	_, err = broadcaster.Broadcast(ctx, msg)
 	return err
 }
@@ -102,13 +87,9 @@ func (s *Server) broadcastUpdateResourceGroups(ctx context.Context, req *querypb
 func (s *Server) broadcastTransferNode(ctx context.Context, req *milvuspb.TransferNodeRequest) error {
 	broadcaster, err := broadcast.StartBroadcastWithResourceKeys(ctx, message.NewExclusiveClusterResourceKey())
 	if err != nil {
-		if !shouldApplyLocallyOnNonPrimary(err, message.MessageTypeAlterResourceGroup) {
-			return err
-		}
+		return err
 	}
-	if broadcaster != nil {
-		defer broadcaster.Close()
-	}
+	defer broadcaster.Close()
 
 	// Move node from source resource group to target resource group.
 	rgs, err := s.meta.ResourceManager.CheckIfTransferNode(ctx, req.GetSourceResourceGroup(), req.GetTargetResourceGroup(), int(req.GetNumNode()))
@@ -124,9 +105,6 @@ func (s *Server) broadcastTransferNode(ctx context.Context, req *milvuspb.Transf
 		WithBody(&message.AlterResourceGroupMessageBody{}).
 		WithBroadcast([]string{streaming.WAL().ControlChannel()}).
 		MustBuildBroadcast()
-	if broadcaster == nil {
-		return registry.CallMessageAckCallback(ctx, msg, nil)
-	}
 	_, err = broadcaster.Broadcast(ctx, msg)
 	return err
 }

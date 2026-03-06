@@ -21,6 +21,9 @@ type MessageTypeProperties struct {
 	ExclusiveRequired bool
 	// a cipher enabled message type will be encrypted before appending to the wal if cipher is enabled.
 	CipherEnabled bool
+	// ReplicationSkippable indicates whether this message type can be skipped during replication,
+	// allowing non-primary clusters to apply the operation locally without going through the broadcaster.
+	ReplicationSkippable bool
 }
 
 var messageTypePropertiesMap = map[MessageType]MessageTypeProperties{
@@ -88,8 +91,12 @@ var messageTypePropertiesMap = map[MessageType]MessageTypeProperties{
 	MessageTypeAlterCollection: {
 		ExclusiveRequired: true,
 	},
-	MessageTypeAlterLoadConfig:     {},
-	MessageTypeDropLoadConfig:      {},
+	MessageTypeAlterLoadConfig: {
+		ReplicationSkippable: true,
+	},
+	MessageTypeDropLoadConfig: {
+		ReplicationSkippable: true,
+	},
 	MessageTypeCreateDatabase:      {},
 	MessageTypeAlterDatabase:       {},
 	MessageTypeDropDatabase:        {},
@@ -106,11 +113,15 @@ var messageTypePropertiesMap = map[MessageType]MessageTypeProperties{
 	MessageTypeAlterPrivilegeGroup: {},
 	MessageTypeDropPrivilegeGroup:  {},
 	MessageTypeRestoreRBAC:         {},
-	MessageTypeAlterResourceGroup:  {},
-	MessageTypeDropResourceGroup:   {},
-	MessageTypeCreateIndex:         {},
-	MessageTypeAlterIndex:          {},
-	MessageTypeDropIndex:           {},
+	MessageTypeAlterResourceGroup: {
+		ReplicationSkippable: true,
+	},
+	MessageTypeDropResourceGroup: {
+		ReplicationSkippable: true,
+	},
+	MessageTypeCreateIndex: {},
+	MessageTypeAlterIndex:  {},
+	MessageTypeDropIndex:   {},
 	MessageTypeFlushAll: {
 		ExclusiveRequired: true,
 	},
@@ -156,6 +167,12 @@ func (t MessageType) IsSystem() bool {
 // IsSelfControlled checks if the MessageType is self controlled.
 func (t MessageType) IsSelfControlled() bool {
 	return messageTypePropertiesMap[t].SelfControlled
+}
+
+// IsReplicationSkippable checks if the MessageType can be skipped during replication,
+// allowing non-primary clusters to apply the operation locally.
+func (t MessageType) IsReplicationSkippable() bool {
+	return messageTypePropertiesMap[t].ReplicationSkippable
 }
 
 // LogLevel returns the log level of the MessageType.

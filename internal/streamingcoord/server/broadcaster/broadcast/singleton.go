@@ -27,7 +27,9 @@ func GetWithContext(ctx context.Context) (broadcaster.Broadcaster, error) {
 }
 
 // StartBroadcastWithResourceKeys starts a broadcast with resource keys.
-// Return ErrNotPrimary if the cluster is not primary, so no DDL message can be broadcasted.
+// If the cluster is not primary and the message type is configured to be skippable,
+// returns a localApplyBroadcastAPI that directly calls the ack callback.
+// Return ErrNotPrimary if the cluster is not primary and the message type is not skippable.
 func StartBroadcastWithResourceKeys(ctx context.Context, resourceKeys ...message.ResourceKey) (broadcaster.BroadcastAPI, error) {
 	broadcaster, err := singleton.GetWithContext(ctx)
 	if err != nil {
@@ -40,7 +42,16 @@ func StartBroadcastWithResourceKeys(ctx context.Context, resourceKeys ...message
 	if err := b.WaitUntilWALbasedDDLReady(ctx); err != nil {
 		return nil, errors.Wrap(err, "failed to wait until WAL based DDL ready")
 	}
-	return broadcaster.WithResourceKeys(ctx, resourceKeys...)
+	api, err := broadcaster.WithResourceKeys(ctx, resourceKeys...)
+	if err != nil {
+		if errors.Is(err, ErrNotPrimary) {
+			// Return a local-apply broadcaster for non-primary clusters.
+			// The actual message type check happens at Broadcast() time.
+			return &localApplyBroadcastAPI{}, nil
+		}
+		return nil, err
+	}
+	return api, nil
 }
 
 // Release releases the broadcaster.
