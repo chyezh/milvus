@@ -222,7 +222,7 @@ Example: If view A is unreasonable and causes OOM on a node, it is marked as Unr
 
 ### 11.3 SyncQueryView RPC
 
-The sole RPC that unifies the synchronization layer behavior of StreamingNode and QueryNode. See the definitions of `ViewSyncService`, `SyncRequest`, `SyncResponse`, and related messages in [view.proto](../../pkg/proto/view.proto).
+The sole RPC that unifies the synchronization layer behavior of StreamingNode and QueryNode. See the definitions of `ViewSyncService`, `SyncRequest`, `SyncResponse`, and related messages in [view.proto](../../pkg/proto/view.proto). For the Coord-side transport layer that delivers views over this RPC, see [Syncer Design](syncer.md).
 
 RPC rules:
 - The QueryView list is atomically applied to the local QueryViewManager.
