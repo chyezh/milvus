@@ -98,16 +98,21 @@ type ReliableSyncer interface {
 	Close() error
 }
 
-// ViewSyncClient provides service discovery and gRPC stream creation for a specific node type.
-// Implemented separately for StreamingNode (via HandlerClient) and QueryNode (via etcd session).
+// ViewSyncClient provides service discovery and gRPC stream creation for all work node types.
+// Internally routes to the appropriate backend (StreamingNode via HandlerClient,
+// QueryNode via etcd session) based on the node's NodeType.
 type ViewSyncClient interface {
-	// WatchNodeChanged returns a channel that signals node membership changes.
-	// The channel receives a value whenever the set of known nodes changes.
+	// WatchNodeChanged returns a channel that signals node membership changes
+	// across all node types. The channel receives a value whenever the set of
+	// known nodes (StreamingNode or QueryNode) changes.
 	WatchNodeChanged(ctx context.Context) (<-chan struct{}, error)
 
-	// GetAllNodes returns all currently known nodes as a map from WorkNodeKey
-	// to the node identity.
+	// GetAllNodes returns all currently known nodes (both StreamingNode and QueryNode)
+	// as a map from WorkNodeKey to the node identity.
 	GetAllNodes(ctx context.Context) (map[qviews.WorkNodeKey]qviews.WorkNode, error)
+
+	// IsNodeAlive checks whether the given node is currently alive.
+	IsNodeAlive(ctx context.Context, node qviews.WorkNode) bool
 
 	// OpenSyncStream opens a SyncQueryView bidirectional stream to the given node.
 	OpenSyncStream(ctx context.Context, node qviews.WorkNode) (viewpb.ViewSyncService_SyncQueryViewClient, error)

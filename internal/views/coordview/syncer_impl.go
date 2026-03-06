@@ -19,10 +19,9 @@ var (
 )
 
 type reliableSyncer struct {
-	snClient ViewSyncClient
-	qnClient ViewSyncClient
+	client ViewSyncClient
 
-	mu               sync.RWMutex
+	mu               sync.Mutex
 	resumableSyncers map[qviews.WorkNodeKey]*resumableSyncer
 	closed           bool
 
@@ -32,20 +31,16 @@ type reliableSyncer struct {
 }
 
 // NewReliableSyncer creates a new ReliableSyncer.
-// snClient: ViewSyncClient for StreamingNode service discovery and stream creation.
-// qnClient: ViewSyncClient for QueryNode service discovery and stream creation.
-func NewReliableSyncer(snClient ViewSyncClient, qnClient ViewSyncClient) ReliableSyncer {
+func NewReliableSyncer(client ViewSyncClient) ReliableSyncer {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &reliableSyncer{
-		snClient:         snClient,
-		qnClient:         qnClient,
+		client:           client,
 		resumableSyncers: make(map[qviews.WorkNodeKey]*resumableSyncer),
 		ctx:              ctx,
 		cancel:           cancel,
 	}
-	s.wg.Add(2)
-	go s.watchNodes(snClient, qviews.NodeTypeStreamingNode)
-	go s.watchNodes(qnClient, qviews.NodeTypeQueryNode)
+	s.wg.Add(1)
+	go s.watchNodes()
 	return s
 }
 
@@ -54,18 +49,18 @@ func (s *reliableSyncer) SyncViews(ctx context.Context, group SyncGroup) error {
 		return ctx.Err()
 	}
 
-	s.mu.RLock()
+	s.mu.Lock()
 	if s.closed {
-		s.mu.RUnlock()
+		s.mu.Unlock()
 		return ErrSyncerClosed
 	}
-	s.mu.RUnlock()
+	s.mu.Unlock()
 
 	for nodeKey, views := range group.ViewsByNode {
 		// Fast path: ResumableSyncer already exists.
-		s.mu.RLock()
+		s.mu.Lock()
 		rs, ok := s.resumableSyncers[nodeKey]
-		s.mu.RUnlock()
+		s.mu.Unlock()
 
 		if ok {
 			rs.Sync(views)
@@ -92,18 +87,9 @@ func (s *reliableSyncer) tryCreateSyncer(ctx context.Context, nodeKey qviews.Wor
 		return nil
 	}
 
-	nodeType := views[0].View.WorkNode().NodeType()
-	client := s.clientForNodeType(nodeType)
+	node := views[0].View.WorkNode()
 
-	nodes, err := client.GetAllNodes(ctx)
-	if err != nil {
-		log.Warn("ReliableSyncer: GetAllNodes failed during on-demand sync",
-			zap.String("node", nodeKey), zap.Error(err))
-		return nil
-	}
-
-	node, exists := nodes[nodeKey]
-	if !exists {
+	if !s.client.IsNodeAlive(ctx, node) {
 		return nil
 	}
 
@@ -120,20 +106,9 @@ func (s *reliableSyncer) tryCreateSyncer(ctx context.Context, nodeKey qviews.Wor
 
 	log.Info("ReliableSyncer: node discovered on demand, creating ResumableSyncer",
 		zap.String("node", nodeKey))
-	rs := newResumableSyncer(s.ctx, node, client)
+	rs := newResumableSyncer(s.ctx, node, s.client)
 	s.resumableSyncers[nodeKey] = rs
 	return rs
-}
-
-func (s *reliableSyncer) clientForNodeType(nodeType qviews.NodeType) ViewSyncClient {
-	switch nodeType {
-	case qviews.NodeTypeStreamingNode:
-		return s.snClient
-	case qviews.NodeTypeQueryNode:
-		return s.qnClient
-	default:
-		panic("unknown node type")
-	}
 }
 
 // drainViews immediately invokes OnNodeLost for each view.
@@ -167,23 +142,22 @@ func (s *reliableSyncer) Close() error {
 	return nil
 }
 
-// watchNodes watches node changes from a ViewSyncClient and manages ResumableSyncers.
-func (s *reliableSyncer) watchNodes(client ViewSyncClient, nodeType qviews.NodeType) {
+// watchNodes watches node membership changes and drains ResumableSyncers for removed nodes.
+func (s *reliableSyncer) watchNodes() {
 	defer s.wg.Done()
 
 	for s.ctx.Err() == nil {
-		ch, err := client.WatchNodeChanged(s.ctx)
+		ch, err := s.client.WatchNodeChanged(s.ctx)
 		if err != nil {
 			if s.ctx.Err() != nil {
 				return
 			}
-			log.Warn("ReliableSyncer: WatchNodeChanged failed, retrying",
-				zap.Int("nodeType", int(nodeType)), zap.Error(err))
+			log.Warn("ReliableSyncer: WatchNodeChanged failed, retrying", zap.Error(err))
 			continue
 		}
 
 		// Initial sync.
-		s.reconcileNodes(client, nodeType)
+		s.drainRemovedNodes()
 
 		// Watch for changes.
 		for {
@@ -195,7 +169,7 @@ func (s *reliableSyncer) watchNodes(client ViewSyncClient, nodeType qviews.NodeT
 					// Channel closed, re-watch.
 					break
 				}
-				s.reconcileNodes(client, nodeType)
+				s.drainRemovedNodes()
 				continue
 			}
 			break
@@ -203,15 +177,15 @@ func (s *reliableSyncer) watchNodes(client ViewSyncClient, nodeType qviews.NodeT
 	}
 }
 
-// reconcileNodes fetches the current node set and creates/destroys ResumableSyncers accordingly.
-func (s *reliableSyncer) reconcileNodes(client ViewSyncClient, nodeType qviews.NodeType) {
-	nodes, err := client.GetAllNodes(s.ctx)
+// drainRemovedNodes fetches the current node set and drains ResumableSyncers for removed nodes.
+// It does NOT create ResumableSyncers for new nodes — that is done lazily by tryCreateSyncer.
+func (s *reliableSyncer) drainRemovedNodes() {
+	nodes, err := s.client.GetAllNodes(s.ctx)
 	if err != nil {
 		if s.ctx.Err() != nil {
 			return
 		}
-		log.Warn("ReliableSyncer: GetAllNodes failed",
-			zap.Int("nodeType", int(nodeType)), zap.Error(err))
+		log.Warn("ReliableSyncer: GetAllNodes failed", zap.Error(err))
 		return
 	}
 
@@ -221,21 +195,9 @@ func (s *reliableSyncer) reconcileNodes(client ViewSyncClient, nodeType qviews.N
 		return
 	}
 
-	// Find new nodes — create ResumableSyncers.
-	for nodeKey, node := range nodes {
-		if _, exists := s.resumableSyncers[nodeKey]; !exists {
-			log.Info("ReliableSyncer: node discovered, creating ResumableSyncer",
-				zap.String("node", nodeKey))
-			s.resumableSyncers[nodeKey] = newResumableSyncer(s.ctx, node, client)
-		}
-	}
-
 	// Find removed nodes — collect ResumableSyncers to close.
 	var removed []removedNode
 	for nodeKey, rs := range s.resumableSyncers {
-		if rs.node.NodeType() != nodeType {
-			continue
-		}
 		if _, exists := nodes[nodeKey]; !exists {
 			removed = append(removed, removedNode{key: nodeKey, syncer: rs})
 			delete(s.resumableSyncers, nodeKey)
