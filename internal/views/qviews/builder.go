@@ -50,6 +50,11 @@ func NewQueryViewAtCoordBuilder(
 	}
 }
 
+// DataVersion returns the data version for this builder.
+func (b *QueryViewAtCoordBuilder) DataVersion() DataVersion {
+	return b.dataVersion
+}
+
 // SetQueryVersion sets the query version for load-level redistribution.
 func (b *QueryViewAtCoordBuilder) SetQueryVersion(queryVersion int64) *QueryViewAtCoordBuilder {
 	b.queryVersion = queryVersion
