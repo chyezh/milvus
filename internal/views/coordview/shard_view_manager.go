@@ -5,12 +5,13 @@ import (
 	"sort"
 	"sync"
 
+	"go.uber.org/zap"
+
 	"github.com/milvus-io/milvus/internal/metastore/kv/queryview"
 	"github.com/milvus-io/milvus/internal/views/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/viewpb"
-	"go.uber.org/zap"
 )
 
 // ShardViewManager manages multiple QueryViews for a single shard (vchannel)
@@ -59,8 +60,9 @@ type syncEntry struct {
 //
 // ctx is the lifecycle context used for Catalog calls within callbacks.
 // recoveredViews are views loaded from ETCD during crash recovery.
-// During construction, Unrecoverable views are immediately advanced to Dropping,
-// and all active views are pushed to their target nodes via syncer.
+// Unrecoverable views remain Unrecoverable after construction, waiting for
+// AddPreparing or RequestRelease to advance them to Dropping.
+// Active views in other states are pushed to their target nodes via syncer.
 func NewShardViewManager(
 	ctx context.Context,
 	shardID qviews.ShardID,
@@ -173,7 +175,7 @@ func (m *ShardViewManager) RequestRelease(ctx context.Context) error {
 	if m.upView != nil {
 		m.upView.EnterDown()
 		m.processStateMachine(m.upView)
-		m.upView = nil
+		// processStateMachine's Down case clears m.upView.
 	}
 
 	// Advance all Unrecoverable views (preempted or naturally failed) to Dropping.
@@ -216,6 +218,12 @@ func (m *ShardViewManager) processStateMachine(sm *CoordQueryViewStateMachine) {
 			m.upView = sm
 			return
 
+		case qviews.QueryViewStateDown:
+			if m.upView == sm {
+				m.upView = nil
+			}
+			return
+
 		case qviews.QueryViewStateUnrecoverable:
 			if m.preparingView == sm {
 				m.preparingView = nil
@@ -226,6 +234,9 @@ func (m *ShardViewManager) processStateMachine(sm *CoordQueryViewStateMachine) {
 			// Stay Unrecoverable; wait for AddPreparing or RequestRelease
 			// to advance to Dropping so that Dropped sync and new Preparing
 			// sync can be batched together.
+			return
+
+		case qviews.QueryViewStateDropping:
 			return
 
 		case qviews.QueryViewStateDropped:
@@ -259,7 +270,7 @@ func (m *ShardViewManager) downOlderUpView(newUp *CoordQueryViewStateMachine) {
 	if m.upView != nil && m.upView != newUp {
 		m.upView.EnterDown()
 		m.processStateMachine(m.upView)
-		// upView is overwritten by caller after return (m.upView = sm).
+		// processStateMachine's Down case clears m.upView.
 	}
 }
 
@@ -289,7 +300,7 @@ func (m *ShardViewManager) flush() {
 				viewsByNode[key] = append(viewsByNode[key], syncer.SyncView{
 					View:           view,
 					OnSyncResponse: m.makeOnSyncResponse(version),
-					OnNodeLost:     m.makeOnNodeLost(entry.sm),
+					OnNodeLost:     m.makeOnNodeLost(version),
 				})
 			}
 		}
@@ -330,20 +341,18 @@ func (m *ShardViewManager) makeOnSyncResponse(version qviews.QueryViewVersion) f
 
 // makeOnNodeLost creates a callback invoked when the target node is declared lost.
 // It transitions the view to Unrecoverable directly.
-func (m *ShardViewManager) makeOnNodeLost(sm *CoordQueryViewStateMachine) func() {
-	view := sm.View()
+func (m *ShardViewManager) makeOnNodeLost(version qviews.QueryViewVersion) func() {
 	return func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 
-		version := qviews.FromProtoQueryViewVersion(view.Meta.Version)
-		foundSM := m.findByVersion(version)
-		if foundSM == nil {
+		sm := m.findByVersion(version)
+		if sm == nil {
 			return // view already removed
 		}
 
-		foundSM.EnterUnrecoverable()
-		m.processStateMachine(foundSM)
+		sm.EnterUnrecoverable()
+		m.processStateMachine(sm)
 		m.flush()
 	}
 }
