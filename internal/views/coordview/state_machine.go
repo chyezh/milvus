@@ -287,13 +287,18 @@ func (sm *CoordQueryViewStateMachine) transitionToUnrecoverable() {
 // SN is always included. QNs are included for Preparing and Dropped (states that
 // require all nodes to acknowledge), excluded for Up and Down (SN-only transitions).
 func (sm *CoordQueryViewStateMachine) syncViewsForState(state qviews.QueryViewState) []qviews.QueryViewAtWorkNode {
+	includeQN := state != qviews.QueryViewStateUp && state != qviews.QueryViewStateDown
+
 	meta := proto.Clone(sm.view.Meta).(*viewpb.QueryViewMeta)
 	meta.State = viewpb.QueryViewState(state)
 
-	views := make([]qviews.QueryViewAtWorkNode, 0, 1+len(sm.view.QueryNode))
+	cap := 1
+	if includeQN {
+		cap += len(sm.view.QueryNode)
+	}
+	views := make([]qviews.QueryViewAtWorkNode, 0, cap)
 	views = append(views, qviews.NewQueryViewAtStreamingNode(meta, sm.view.StreamingNode))
-
-	if state != qviews.QueryViewStateUp && state != qviews.QueryViewStateDown {
+	if includeQN {
 		for _, qn := range sm.view.QueryNode {
 			views = append(views, qviews.NewQueryViewAtQueryNode(meta, qn))
 		}
