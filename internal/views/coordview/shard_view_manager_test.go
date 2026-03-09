@@ -503,21 +503,42 @@ func TestNodeLost_TriggersUnrecoverable(t *testing.T) {
 
 	// Invoke OnNodeLost — should inject synthetic Unrecoverable internally.
 	catalog.reset()
+	s.reset()
 	onLost()
 
-	// Should persist Unrecoverable, then advance to Dropping and push Dropped.
+	// Should persist Unrecoverable but NOT advance to Dropping yet.
 	states := catalog.savedStates()
 	require.Len(t, states, 1)
 	assert.Equal(t, viewpb.QueryViewState_QueryViewStateUnrecoverable, states[0])
 
-	// Confirm all nodes Dropped → view removed.
-	simulateNodeResponse(t, s, testSN, ver1, qviews.QueryViewStateDropped)
+	// View stays Unrecoverable, no Dropped sync pushed.
+	mgr.mu.Lock()
+	require.Len(t, mgr.views, 1)
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, mgr.views[0].State())
+	mgr.mu.Unlock()
+	assert.Equal(t, 0, s.syncViewCount())
+
+	// Adding a replacement view advances the old one to Dropping atomically.
 	catalog.reset()
+	s.reset()
+	b2 := testBuilder(2, 1, 1)
+	require.NoError(t, mgr.AddPreparing(context.Background(), b2))
+	ver2 := testVersion(2, 1, 1)
+
+	// Single flush: Preparing(v2) persist + Dropped(v1) sync + Preparing(v2) sync.
+	assert.Equal(t, 1, catalog.numSaveCalls())
+	assert.Equal(t, 1, s.numSyncCalls())
+
+	// Confirm all nodes Dropped for v1 → view removed.
+	simulateNodeResponse(t, s, testSN, ver1, qviews.QueryViewStateDropped)
 	done := simulateNodeResponse(t, s, testQN1, ver1, qviews.QueryViewStateDropped)
 	assert.True(t, done)
 
+	// v2 still active.
 	mgr.mu.Lock()
-	assert.Empty(t, mgr.views)
+	require.Len(t, mgr.views, 1)
+	assert.Equal(t, qviews.QueryViewStatePreparing, mgr.views[0].State())
+	_ = ver2
 	mgr.mu.Unlock()
 }
 
@@ -602,12 +623,11 @@ func TestRequestRelease_MixedViews(t *testing.T) {
 	catalog.reset()
 	require.NoError(t, mgr.RequestRelease(context.Background()))
 
-	// v1 (Up→Down) persisted, v2 (Preparing→Unrecoverable) persisted.
-	// All in a single batch.
+	// v2 (Preparing→Unrecoverable) and v1 (Up→Down) persisted in a single batch.
 	states := catalog.savedStates()
 	require.Len(t, states, 2)
-	assert.Equal(t, viewpb.QueryViewState_QueryViewStateDown, states[0])
-	assert.Equal(t, viewpb.QueryViewState_QueryViewStateUnrecoverable, states[1])
+	assert.Contains(t, states, viewpb.QueryViewState_QueryViewStateDown)
+	assert.Contains(t, states, viewpb.QueryViewState_QueryViewStateUnrecoverable)
 
 	// Should be one SaveQueryViews call for batch atomicity.
 	assert.Equal(t, 1, catalog.numSaveCalls())
@@ -645,14 +665,14 @@ func TestRecovery_UnrecoverableView(t *testing.T) {
 	v1.Meta.State = viewpb.QueryViewState_QueryViewStateUnrecoverable
 	mgr := newTestManager(catalog, s, v1)
 
-	// Unrecoverable → Dropping immediately, pushes Dropped to all.
+	// Stays Unrecoverable, waits for AddPreparing to advance to Dropping.
 	mgr.mu.Lock()
 	require.Len(t, mgr.views, 1)
-	assert.Equal(t, qviews.QueryViewStateDropping, mgr.views[0].State())
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, mgr.views[0].State())
 	mgr.mu.Unlock()
 
-	// Should have synced Dropped.
-	assert.True(t, s.syncViewCount() > 0)
+	// No sync pushed.
+	assert.Equal(t, 0, s.syncViewCount())
 }
 
 func TestRecovery_FastForward_SNReportsUp(t *testing.T) {

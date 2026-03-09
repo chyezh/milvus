@@ -5,8 +5,6 @@ import (
 	"sort"
 	"sync"
 
-	"google.golang.org/protobuf/proto"
-
 	"github.com/milvus-io/milvus/internal/metastore/kv/queryview"
 	"github.com/milvus-io/milvus/internal/views/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
@@ -22,6 +20,10 @@ import (
 // interactions, calling Catalog for ETCD persistence and ReliableSyncer for
 // node sync. Node responses are delivered via callbacks registered with the syncer.
 //
+// Invariants (maintained by all methods):
+//   - At most one view in Preparing or Ready state (tracked by preparingView).
+//   - At most one view in Up state (tracked by upView).
+//
 // Thread-safety: All methods are thread-safe.
 type ShardViewManager struct {
 	ctx     context.Context // lifecycle context for Catalog calls within callbacks
@@ -30,23 +32,27 @@ type ShardViewManager struct {
 	catalog queryview.QueryViewCatalog
 	syncer  syncer.ReliableSyncer
 
-	// Active views ordered by version (ascending).
+	// All active views.
 	views []*CoordQueryViewStateMachine
+
+	// Fast pointers to the unique Preparing/Ready and Up views.
+	// Invariant: at most one of each at any time.
+	preparingView *CoordQueryViewStateMachine // Preparing or Ready state; nil if none
+	upView        *CoordQueryViewStateMachine // Up state; nil if none
+
+	// Accumulates persist and sync operations within a single lock-hold scope.
+	// All persists are flushed in a single SaveQueryViews call, then all syncs
+	// are flushed in a single SyncViews call. This ensures atomicity at the
+	// persistence layer and reduces the number of I/O calls.
+	// Must only be accessed under m.mu.
+	pendingPersists []*viewpb.QueryViewOfShard
+	pendingSyncs    []syncEntry
 }
 
-// ioBatch accumulates persist and sync operations for batch execution.
-// All persists are flushed in a single SaveQueryViews call, then all syncs
-// are flushed in a single SyncViews call. This ensures atomicity at the
-// persistence layer and reduces the number of I/O calls.
-type ioBatch struct {
-	persists []*viewpb.QueryViewOfShard
-	syncs    []syncEntry
-}
-
-// syncEntry pairs a state machine with its sync proto for deferred sync dispatch.
+// syncEntry pairs a state machine with its per-node views for deferred sync dispatch.
 type syncEntry struct {
-	sm        *CoordQueryViewStateMachine
-	syncProto *viewpb.QueryViewOfShard
+	sm    *CoordQueryViewStateMachine
+	views []qviews.QueryViewAtWorkNode
 }
 
 // NewShardViewManager creates a new ShardViewManager for the given shard.
@@ -84,12 +90,11 @@ func NewShardViewManager(
 	})
 
 	// Process each recovered view: handle Unrecoverable and push initial syncs.
-	var batch ioBatch
+	// processStateMachine sets preparingView/upView as views are processed.
 	for _, sm := range m.views {
-		m.processStateMachine(sm, &batch)
+		m.processStateMachine(sm)
 	}
-	m.flush(&batch)
-
+	m.flush()
 	return m
 }
 
@@ -119,16 +124,16 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 		return err
 	}
 
-	var batch ioBatch
-
-	// Find and preempt existing Preparing/Ready view.
-	for _, sm := range m.views {
-		if sm.State() == qviews.QueryViewStatePreparing || sm.State() == qviews.QueryViewStateReady {
-			sm.OnNodeStateReported(m.buildSyntheticUnrecoverable(sm))
-			m.processStateMachine(sm, &batch)
-			break // at most one Preparing/Ready view
-		}
+	// Preempt existing Preparing/Ready view.
+	if m.preparingView != nil {
+		m.preparingView.EnterUnrecoverable()
+		m.processStateMachine(m.preparingView)
+		// preparingView is cleared by processStateMachine (Unrecoverable case).
 	}
+
+	// Advance all Unrecoverable views (preempted or naturally failed) to
+	// Dropping so their Dropped sync is batched with the new Preparing sync.
+	m.advanceUnrecoverableToDropping()
 
 	// Compute and assign QueryVersion.
 	qv := m.nextQueryVersion(newDV)
@@ -138,12 +143,13 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 	view := builder.Build()
 	sm := NewCoordQueryViewStateMachine(view)
 	m.views = append(m.views, sm)
+	m.preparingView = sm
 
 	// Process: persist write-ahead + collect sync.
-	m.processStateMachine(sm, &batch)
+	m.processStateMachine(sm)
 
 	// Flush all accumulated I/O.
-	m.flush(&batch)
+	m.flush()
 	return nil
 }
 
@@ -158,50 +164,69 @@ func (m *ShardViewManager) RequestRelease(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var batch ioBatch
-	for _, sm := range m.views {
-		switch sm.State() {
-		case qviews.QueryViewStatePreparing, qviews.QueryViewStateReady:
-			// Abort: inject synthetic Unrecoverable SN response to trigger teardown.
-			sm.OnNodeStateReported(m.buildSyntheticUnrecoverable(sm))
-			m.processStateMachine(sm, &batch)
-
-		case qviews.QueryViewStateUp:
-			sm.EnterDown()
-			m.processStateMachine(sm, &batch)
-		}
+	if m.preparingView != nil {
+		m.preparingView.EnterUnrecoverable()
+		m.processStateMachine(m.preparingView)
+		// preparingView is cleared by processStateMachine (Unrecoverable case).
 	}
-	m.flush(&batch)
+
+	if m.upView != nil {
+		m.upView.EnterDown()
+		m.processStateMachine(m.upView)
+		m.upView = nil
+	}
+
+	// Advance all Unrecoverable views (preempted or naturally failed) to Dropping.
+	m.advanceUnrecoverableToDropping()
+
+	m.flush()
 	return nil
 }
 
 // processStateMachine consumes pending I/O from a state machine and handles
 // cascading effects (Up-then-Down, Unrecoverable→Dropping, Dropped removal).
-// I/O is collected into the batch for deferred execution.
+// I/O is collected into pendingPersists/pendingSyncs for deferred execution.
+//
+// Also maintains preparingView/upView pointers on state transitions.
 //
 // Must be called under m.mu.
-func (m *ShardViewManager) processStateMachine(sm *CoordQueryViewStateMachine, batch *ioBatch) {
+func (m *ShardViewManager) processStateMachine(sm *CoordQueryViewStateMachine) {
 	for {
-		// 1. ConsumePersist → collect into batch.
+		// 1. ConsumePersist → collect into pending batch.
 		if persist := sm.ConsumePersist(); persist != nil {
-			batch.persists = append(batch.persists, persist)
+			m.pendingPersists = append(m.pendingPersists, persist)
 		}
 
-		// 2. ConsumeSync → collect into batch.
-		if syncProto := sm.ConsumeSync(); syncProto != nil {
-			batch.syncs = append(batch.syncs, syncEntry{sm: sm, syncProto: syncProto})
+		// 2. ConsumeSync → collect into pending batch.
+		if views := sm.ConsumeSync(); len(views) > 0 {
+			m.pendingSyncs = append(m.pendingSyncs, syncEntry{sm: sm, views: views})
 		}
 
 		// 3. Handle cascading effects based on current state.
 		switch sm.State() {
+		case qviews.QueryViewStatePreparing, qviews.QueryViewStateReady:
+			m.preparingView = sm
+			return
+
 		case qviews.QueryViewStateUp:
-			m.downOlderUpViews(sm, batch)
+			if m.preparingView == sm {
+				m.preparingView = nil
+			}
+			m.downOlderUpView(sm)
+			m.upView = sm
 			return
 
 		case qviews.QueryViewStateUnrecoverable:
-			// Immediately advance to Dropping.
-			sm.EnterDropping()
-			continue // loop to process Dropping's pendingSync
+			if m.preparingView == sm {
+				m.preparingView = nil
+			}
+			if m.upView == sm {
+				m.upView = nil
+			}
+			// Stay Unrecoverable; wait for AddPreparing or RequestRelease
+			// to advance to Dropping so that Dropped sync and new Preparing
+			// sync can be batched together.
+			return
 
 		case qviews.QueryViewStateDropped:
 			m.removeView(sm)
@@ -213,46 +238,60 @@ func (m *ShardViewManager) processStateMachine(sm *CoordQueryViewStateMachine, b
 	}
 }
 
-// downOlderUpViews transitions all Up views with version lower than newUp to Down.
+// advanceUnrecoverableToDropping advances all Unrecoverable views to Dropping.
+// This batches the Dropped sync with whatever operation triggered it
+// (AddPreparing or RequestRelease), reducing the number of sync round-trips.
 //
 // Must be called under m.mu.
-func (m *ShardViewManager) downOlderUpViews(newUp *CoordQueryViewStateMachine, batch *ioBatch) {
-	newVersion := qviews.FromProtoQueryViewVersion(newUp.View().Meta.Version)
+func (m *ShardViewManager) advanceUnrecoverableToDropping() {
 	for _, sm := range m.views {
-		if sm == newUp {
-			continue
-		}
-		if sm.State() != qviews.QueryViewStateUp {
-			continue
-		}
-		smVersion := qviews.FromProtoQueryViewVersion(sm.View().Meta.Version)
-		if newVersion.GT(smVersion) {
-			sm.EnterDown()
-			m.processStateMachine(sm, batch)
+		if sm.State() == qviews.QueryViewStateUnrecoverable {
+			sm.EnterDropping()
+			m.processStateMachine(sm)
 		}
 	}
 }
 
-// flush executes all accumulated I/O in the batch: first persist all, then sync all.
+// downOlderUpView transitions the current Up view to Down if it differs from newUp.
 //
 // Must be called under m.mu.
-func (m *ShardViewManager) flush(batch *ioBatch) {
+func (m *ShardViewManager) downOlderUpView(newUp *CoordQueryViewStateMachine) {
+	if m.upView != nil && m.upView != newUp {
+		m.upView.EnterDown()
+		m.processStateMachine(m.upView)
+		// upView is overwritten by caller after return (m.upView = sm).
+	}
+}
+
+// flush executes all accumulated I/O: first persist all, then sync all.
+//
+// Must be called under m.mu.
+func (m *ShardViewManager) flush() {
 	// 1. Persist all in a single call.
-	if len(batch.persists) > 0 {
-		if err := m.catalog.SaveQueryViews(m.ctx, batch.persists); err != nil {
+	if len(m.pendingPersists) > 0 {
+		if err := m.catalog.SaveQueryViews(m.ctx, m.pendingPersists); err != nil {
 			log.Ctx(m.ctx).Warn("failed to persist query views",
 				zap.String("shardID", m.shardID.String()),
-				zap.Int("count", len(batch.persists)),
+				zap.Int("count", len(m.pendingPersists)),
 				zap.Error(err),
 			)
 		}
+		m.pendingPersists = m.pendingPersists[:0]
 	}
 
 	// 2. Sync all in a single call.
-	if len(batch.syncs) > 0 {
+	if len(m.pendingSyncs) > 0 {
 		viewsByNode := make(map[qviews.WorkNodeKey][]syncer.SyncView)
-		for _, entry := range batch.syncs {
-			m.collectSyncViews(entry.sm, entry.syncProto, viewsByNode)
+		for _, entry := range m.pendingSyncs {
+			version := qviews.FromProtoQueryViewVersion(entry.sm.View().Meta.Version)
+			for _, view := range entry.views {
+				key := view.WorkNode().Key()
+				viewsByNode[key] = append(viewsByNode[key], syncer.SyncView{
+					View:           view,
+					OnSyncResponse: m.makeOnSyncResponse(version),
+					OnNodeLost:     m.makeOnNodeLost(entry.sm),
+				})
+			}
 		}
 		if len(viewsByNode) > 0 {
 			if err := m.syncer.SyncViews(m.ctx, syncer.SyncGroup{ViewsByNode: viewsByNode}); err != nil {
@@ -262,52 +301,7 @@ func (m *ShardViewManager) flush(batch *ioBatch) {
 				)
 			}
 		}
-	}
-
-	// Clear batch.
-	batch.persists = nil
-	batch.syncs = nil
-}
-
-// collectSyncViews appends sync views to the shared viewsByNode map based on
-// the sync proto's state and routing rules.
-//
-// Routing table:
-//
-//	Preparing → SN + all QNs
-//	Up        → SN only
-//	Down      → SN only
-//	Dropped   → SN + all QNs
-//
-// Must be called under m.mu.
-func (m *ShardViewManager) collectSyncViews(
-	sm *CoordQueryViewStateMachine,
-	syncProto *viewpb.QueryViewOfShard,
-	viewsByNode map[qviews.WorkNodeKey][]syncer.SyncView,
-) {
-	version := qviews.FromProtoQueryViewVersion(sm.View().Meta.Version)
-	state := qviews.QueryViewState(syncProto.Meta.State)
-
-	// SN is always included.
-	snView := qviews.NewQueryViewAtStreamingNode(syncProto.Meta, syncProto.StreamingNode)
-	snKey := snView.WorkNode().Key()
-	viewsByNode[snKey] = append(viewsByNode[snKey], syncer.SyncView{
-		View:           snView,
-		OnSyncResponse: m.makeOnSyncResponse(version),
-		OnNodeLost:     m.makeOnNodeLost(sm, snView.WorkNode()),
-	})
-
-	// QNs included for Preparing and Dropped only.
-	if state == qviews.QueryViewStatePreparing || state == qviews.QueryViewStateDropped {
-		for _, qn := range syncProto.QueryNode {
-			qnView := qviews.NewQueryViewAtQueryNode(syncProto.Meta, qn)
-			qnKey := qnView.WorkNode().Key()
-			viewsByNode[qnKey] = append(viewsByNode[qnKey], syncer.SyncView{
-				View:           qnView,
-				OnSyncResponse: m.makeOnSyncResponse(version),
-				OnNodeLost:     m.makeOnNodeLost(sm, qnView.WorkNode()),
-			})
-		}
+		m.pendingSyncs = m.pendingSyncs[:0]
 	}
 }
 
@@ -326,10 +320,8 @@ func (m *ShardViewManager) makeOnSyncResponse(version qviews.QueryViewVersion) f
 		}
 
 		sm.OnNodeStateReported(resp)
-
-		var batch ioBatch
-		m.processStateMachine(sm, &batch)
-		m.flush(&batch)
+		m.processStateMachine(sm)
+		m.flush()
 
 		// If the view was removed during processing, stop tracking.
 		return m.findByVersion(version) == nil
@@ -337,8 +329,8 @@ func (m *ShardViewManager) makeOnSyncResponse(version qviews.QueryViewVersion) f
 }
 
 // makeOnNodeLost creates a callback invoked when the target node is declared lost.
-// It injects a synthetic Unrecoverable response into the state machine.
-func (m *ShardViewManager) makeOnNodeLost(sm *CoordQueryViewStateMachine, node qviews.WorkNode) func() {
+// It transitions the view to Unrecoverable directly.
+func (m *ShardViewManager) makeOnNodeLost(sm *CoordQueryViewStateMachine) func() {
 	view := sm.View()
 	return func() {
 		m.mu.Lock()
@@ -350,34 +342,10 @@ func (m *ShardViewManager) makeOnNodeLost(sm *CoordQueryViewStateMachine, node q
 			return // view already removed
 		}
 
-		// Build and inject synthetic Unrecoverable response.
-		meta := proto.Clone(view.Meta).(*viewpb.QueryViewMeta)
-		meta.State = viewpb.QueryViewState_QueryViewStateUnrecoverable
-
-		var resp qviews.QueryViewAtWorkNode
-		switch n := node.(type) {
-		case qviews.StreamingNode:
-			resp = qviews.NewQueryViewAtStreamingNode(meta, &viewpb.QueryViewOfStreamingNode{})
-		case qviews.QueryNode:
-			resp = qviews.NewQueryViewAtQueryNode(meta, &viewpb.QueryViewOfQueryNode{NodeId: n.ID})
-		default:
-			panic("coordview: unknown work node type")
-		}
-
-		foundSM.OnNodeStateReported(resp)
-
-		var batch ioBatch
-		m.processStateMachine(foundSM, &batch)
-		m.flush(&batch)
+		foundSM.EnterUnrecoverable()
+		m.processStateMachine(foundSM)
+		m.flush()
 	}
-}
-
-// buildSyntheticUnrecoverable creates a synthetic Unrecoverable SN response
-// for preemption and RequestRelease to abort Preparing/Ready views.
-func (m *ShardViewManager) buildSyntheticUnrecoverable(sm *CoordQueryViewStateMachine) qviews.QueryViewAtWorkNode {
-	meta := proto.Clone(sm.View().Meta).(*viewpb.QueryViewMeta)
-	meta.State = viewpb.QueryViewState_QueryViewStateUnrecoverable
-	return qviews.NewQueryViewAtStreamingNode(meta, &viewpb.QueryViewOfStreamingNode{})
 }
 
 // findByVersion returns the state machine matching the given version, or nil.
@@ -393,10 +361,17 @@ func (m *ShardViewManager) findByVersion(version qviews.QueryViewVersion) *Coord
 	return nil
 }
 
-// removeView removes the state machine from the views list.
+// removeView removes the state machine from the views list and clears any
+// fast pointers that reference it.
 //
 // Must be called under m.mu.
 func (m *ShardViewManager) removeView(target *CoordQueryViewStateMachine) {
+	if m.preparingView == target {
+		m.preparingView = nil
+	}
+	if m.upView == target {
+		m.upView = nil
+	}
 	for i, sm := range m.views {
 		if sm == target {
 			m.views = append(m.views[:i], m.views[i+1:]...)
