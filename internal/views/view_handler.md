@@ -212,15 +212,16 @@ internal/views/
 ├── coordview/
 │   ├── syncer/                        # Coord-side syncer (existing)
 │   └── state_machine.go              # Coord SM (existing)
-├── handler/
-│   ├── handler.go                    # ApplyView, QueryViewHandler interface
-│   ├── pending_reports.go            # pendingReports dedup data structure
-│   ├── sync_server.go                # ViewSyncServer gRPC handler
-│   └── sync_server_test.go           # Unit tests
-├── qnview/
-│   ├── state_machine.go              # QN SM (existing)
-│   └── handler.go                    # QN QueryViewHandler implementation (new)
-└── snview/
-    ├── state_machine.go              # SN SM (existing)
-    └── handler.go                    # SN QueryViewHandler implementation (new)
+└── nodeview/
+    ├── handler/
+    │   ├── handler.go                # ApplyView, QueryViewHandler interface
+    │   ├── pending_reports.go        # pendingReports dedup data structure
+    │   ├── sync_server.go            # ViewSyncServer gRPC handler
+    │   └── sync_server_test.go       # Unit tests
+    ├── qnview/
+    │   ├── state_machine.go          # QN SM (existing)
+    │   └── handler.go                # QN QueryViewHandler implementation (new)
+    └── snview/
+        ├── state_machine.go          # SN SM (existing)
+        └── handler.go                # SN QueryViewHandler implementation (new)
 ```
