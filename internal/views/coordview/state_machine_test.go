@@ -87,13 +87,15 @@ func assertPendingPersistState(t *testing.T, sm *CoordQueryViewStateMachine, exp
 	assert.Equal(t, viewpb.QueryViewState(expected), v.Meta.State)
 }
 
-// assertPendingSyncState checks that ConsumeSync returns a view with the
+// assertPendingSyncState checks that ConsumeSync returns views all with the
 // expected state, then clears it.
 func assertPendingSyncState(t *testing.T, sm *CoordQueryViewStateMachine, expected qviews.QueryViewState) {
 	t.Helper()
-	v := sm.ConsumeSync()
-	require.NotNil(t, v, "expected pending sync with state %s", expected)
-	assert.Equal(t, viewpb.QueryViewState(expected), v.Meta.State)
+	views := sm.ConsumeSync()
+	require.NotEmpty(t, views, "expected pending sync with state %s", expected)
+	for _, v := range views {
+		assert.Equal(t, expected, v.State(), "sync view state mismatch")
+	}
 }
 
 // assertNoPendingPersist checks that ConsumePersist returns nil.
@@ -102,10 +104,10 @@ func assertNoPendingPersist(t *testing.T, sm *CoordQueryViewStateMachine) {
 	assert.Nil(t, sm.ConsumePersist(), "expected no pending persist")
 }
 
-// assertNoPendingSync checks that ConsumeSync returns nil.
+// assertNoPendingSync checks that ConsumeSync returns nil/empty.
 func assertNoPendingSync(t *testing.T, sm *CoordQueryViewStateMachine) {
 	t.Helper()
-	assert.Nil(t, sm.ConsumeSync(), "expected no pending sync")
+	assert.Empty(t, sm.ConsumeSync(), "expected no pending sync")
 }
 
 // assertNoPending checks that both ConsumePersist and ConsumeSync return nil.
@@ -796,12 +798,14 @@ func TestConsumeSync_ConsumeOnce(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
 
-	v := sm.ConsumeSync()
-	require.NotNil(t, v)
-	assert.Equal(t, viewpb.QueryViewState_QueryViewStatePreparing, v.Meta.State)
+	views := sm.ConsumeSync()
+	require.NotEmpty(t, views)
+	for _, v := range views {
+		assert.Equal(t, qviews.QueryViewStatePreparing, v.State())
+	}
 
-	assert.Nil(t, sm.ConsumeSync())
-	assert.Nil(t, sm.ConsumeSync()) // third call also nil
+	assert.Empty(t, sm.ConsumeSync())
+	assert.Empty(t, sm.ConsumeSync()) // third call also nil
 }
 
 // TestPendingPersist_Dropped_MeansDelete: Dropped persist signals ETCD delete.
@@ -1254,12 +1258,12 @@ func TestPendingSync_PreservesMeta(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
 
-	sync := sm.ConsumeSync()
-	require.NotNil(t, sync)
-	assert.Equal(t, view.Meta.CollectionId, sync.Meta.CollectionId)
-	assert.Equal(t, view.Meta.ReplicaId, sync.Meta.ReplicaId)
-	assert.Equal(t, view.Meta.Vchannel, sync.Meta.Vchannel)
-	assert.Equal(t, view.Meta.Version.QueryVersion, sync.Meta.Version.QueryVersion)
+	views := sm.ConsumeSync()
+	require.NotEmpty(t, views)
+	expectedVersion := qviews.FromProtoQueryViewVersion(view.Meta.Version)
+	for _, v := range views {
+		assert.Equal(t, expectedVersion, v.Version())
+	}
 }
 
 // TestPendingPersist_PreservesMeta validates pending persist views preserve metadata.
