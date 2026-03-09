@@ -48,7 +48,7 @@ func (s *ViewSyncServer) SyncQueryView(stream viewpb.ViewSyncService_SyncQueryVi
 
 // sendLoop is the only goroutine that calls stream.Send.
 // It waits for pending reports to become available and sends them.
-// Exits when ctx is cancelled, a close response is sent, or pending is closed.
+// Exits when ctx is canceled, a close response is sent, or pending is closed.
 func (s *ViewSyncServer) sendLoop(
 	ctx context.Context,
 	stream viewpb.ViewSyncService_SyncQueryViewServer,
