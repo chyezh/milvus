@@ -110,6 +110,11 @@ func (sm *CoordQueryViewStateMachine) View() *viewpb.QueryViewOfShard {
 	return sm.view
 }
 
+// Version returns the parsed QueryViewVersion of this view.
+func (sm *CoordQueryViewStateMachine) Version() qviews.QueryViewVersion {
+	return qviews.FromProtoQueryViewVersion(sm.view.Meta.Version)
+}
+
 // QNReadySegments returns the ready segment IDs reported by each QN.
 // The map is keyed by QN node ID. Used by Balancer/Manager for decisions.
 func (sm *CoordQueryViewStateMachine) QNReadySegments() map[int64][]int64 {

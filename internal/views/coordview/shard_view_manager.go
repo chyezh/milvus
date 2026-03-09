@@ -33,8 +33,8 @@ type ShardViewManager struct {
 	catalog queryview.QueryViewCatalog
 	syncer  syncer.ReliableSyncer
 
-	// All active views.
-	views []*CoordQueryViewStateMachine
+	// All active views keyed by version for O(1) lookup.
+	views map[qviews.QueryViewVersion]*CoordQueryViewStateMachine
 
 	// Fast pointers to the unique Preparing/Ready and Up views.
 	// Invariant: at most one of each at any time.
@@ -75,25 +75,27 @@ func NewShardViewManager(
 		shardID: shardID,
 		catalog: catalog,
 		syncer:  s,
-		views:   make([]*CoordQueryViewStateMachine, 0),
+		views:   make(map[qviews.QueryViewVersion]*CoordQueryViewStateMachine, len(recoveredViews)),
 	}
 
 	// Recover state machines from persisted views.
+	recovered := make([]*CoordQueryViewStateMachine, 0, len(recoveredViews))
 	for _, view := range recoveredViews {
 		sm := RecoverCoordQueryViewStateMachine(view)
-		m.views = append(m.views, sm)
+		recovered = append(recovered, sm)
+		m.views[sm.Version()] = sm
 	}
 
-	// Sort by version ascending.
-	sort.Slice(m.views, func(i, j int) bool {
-		vi := qviews.FromProtoQueryViewVersion(m.views[i].View().Meta.Version)
-		vj := qviews.FromProtoQueryViewVersion(m.views[j].View().Meta.Version)
-		return vj.GT(vi)
+	// Sort by version ascending (older versions first) so that
+	// processStateMachine sees older views before newer ones,
+	// correctly setting preparingView/upView pointers.
+	sort.Slice(recovered, func(i, j int) bool {
+		return recovered[j].Version().GT(recovered[i].Version())
 	})
 
 	// Process each recovered view: handle Unrecoverable and push initial syncs.
 	// processStateMachine sets preparingView/upView as views are processed.
-	for _, sm := range m.views {
+	for _, sm := range recovered {
 		m.processStateMachine(sm)
 	}
 	m.flush()
@@ -144,7 +146,7 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 	// Build the view proto and create the state machine.
 	view := builder.Build()
 	sm := NewCoordQueryViewStateMachine(view)
-	m.views = append(m.views, sm)
+	m.views[sm.Version()] = sm
 	m.preparingView = sm
 
 	// Process: persist write-ahead + collect sync.
@@ -276,11 +278,20 @@ func (m *ShardViewManager) downOlderUpView(newUp *CoordQueryViewStateMachine) {
 
 // flush executes all accumulated I/O: first persist all, then sync all.
 //
+// Both Catalog (ETCD) and ReliableSyncer provide reliable delivery:
+// they only return errors when the Coordinator is shutting down (context
+// canceled). In that case the Coordinator will perform a full recovery
+// on next startup, reconstructing all state machines from ETCD, so
+// transient in-memory / persisted inconsistencies are self-healing.
+//
 // Must be called under m.mu.
 func (m *ShardViewManager) flush() {
 	// 1. Persist all in a single call.
 	if len(m.pendingPersists) > 0 {
 		if err := m.catalog.SaveQueryViews(m.ctx, m.pendingPersists); err != nil {
+			// SaveQueryViews only fails when the Coordinator is shutting down
+			// (ctx canceled). On next startup a full recovery from ETCD will
+			// reconstruct all state machines, so this is safe to log-and-skip.
 			log.Ctx(m.ctx).Warn("failed to persist query views",
 				zap.String("shardID", m.shardID.String()),
 				zap.Int("count", len(m.pendingPersists)),
@@ -294,7 +305,7 @@ func (m *ShardViewManager) flush() {
 	if len(m.pendingSyncs) > 0 {
 		viewsByNode := make(map[qviews.WorkNodeKey][]syncer.SyncView)
 		for _, entry := range m.pendingSyncs {
-			version := qviews.FromProtoQueryViewVersion(entry.sm.View().Meta.Version)
+			version := entry.sm.Version()
 			for _, view := range entry.views {
 				key := view.WorkNode().Key()
 				viewsByNode[key] = append(viewsByNode[key], syncer.SyncView{
@@ -306,6 +317,9 @@ func (m *ShardViewManager) flush() {
 		}
 		if len(viewsByNode) > 0 {
 			if err := m.syncer.SyncViews(m.ctx, syncer.SyncGroup{ViewsByNode: viewsByNode}); err != nil {
+				// SyncViews only fails when the Coordinator is shutting down
+				// (ctx canceled or syncer closed). On next startup a full
+				// recovery will re-push all outstanding syncs.
 				log.Ctx(m.ctx).Warn("failed to sync views to nodes",
 					zap.String("shardID", m.shardID.String()),
 					zap.Error(err),
@@ -325,8 +339,8 @@ func (m *ShardViewManager) makeOnSyncResponse(version qviews.QueryViewVersion) f
 		m.mu.Lock()
 		defer m.mu.Unlock()
 
-		sm := m.findByVersion(version)
-		if sm == nil {
+		sm, ok := m.views[version]
+		if !ok {
 			return true // view already removed, stop tracking
 		}
 
@@ -335,7 +349,8 @@ func (m *ShardViewManager) makeOnSyncResponse(version qviews.QueryViewVersion) f
 		m.flush()
 
 		// If the view was removed during processing, stop tracking.
-		return m.findByVersion(version) == nil
+		_, exists := m.views[version]
+		return !exists
 	}
 }
 
@@ -346,8 +361,8 @@ func (m *ShardViewManager) makeOnNodeLost(version qviews.QueryViewVersion) func(
 		m.mu.Lock()
 		defer m.mu.Unlock()
 
-		sm := m.findByVersion(version)
-		if sm == nil {
+		sm, ok := m.views[version]
+		if !ok {
 			return // view already removed
 		}
 
@@ -357,20 +372,7 @@ func (m *ShardViewManager) makeOnNodeLost(version qviews.QueryViewVersion) func(
 	}
 }
 
-// findByVersion returns the state machine matching the given version, or nil.
-//
-// Must be called under m.mu.
-func (m *ShardViewManager) findByVersion(version qviews.QueryViewVersion) *CoordQueryViewStateMachine {
-	for _, sm := range m.views {
-		v := qviews.FromProtoQueryViewVersion(sm.View().Meta.Version)
-		if v.EQ(version) {
-			return sm
-		}
-	}
-	return nil
-}
-
-// removeView removes the state machine from the views list and clears any
+// removeView removes the state machine from the views map and clears any
 // fast pointers that reference it.
 //
 // Must be called under m.mu.
@@ -381,12 +383,7 @@ func (m *ShardViewManager) removeView(target *CoordQueryViewStateMachine) {
 	if m.upView == target {
 		m.upView = nil
 	}
-	for i, sm := range m.views {
-		if sm == target {
-			m.views = append(m.views[:i], m.views[i+1:]...)
-			return
-		}
-	}
+	delete(m.views, target.Version())
 }
 
 // validateDataVersionLocked checks that the new DataVersion is not lower than
@@ -395,8 +392,7 @@ func (m *ShardViewManager) removeView(target *CoordQueryViewStateMachine) {
 // Must be called under m.mu.
 func (m *ShardViewManager) validateDataVersionLocked(newDV qviews.DataVersion) error {
 	for _, sm := range m.views {
-		existingDV := qviews.FromProtoQueryViewVersion(sm.View().Meta.Version).DataVersion
-		if existingDV.GT(newDV) {
+		if sm.Version().DataVersion.GT(newDV) {
 			return errDataVersionRollback
 		}
 	}
@@ -410,7 +406,7 @@ func (m *ShardViewManager) validateDataVersionLocked(newDV qviews.DataVersion) e
 func (m *ShardViewManager) nextQueryVersion(newDV qviews.DataVersion) int64 {
 	var maxQV int64
 	for _, sm := range m.views {
-		v := qviews.FromProtoQueryViewVersion(sm.View().Meta.Version)
+		v := sm.Version()
 		if v.DataVersion.EQ(newDV) && v.QueryVersion > maxQV {
 			maxQV = v.QueryVersion
 		}

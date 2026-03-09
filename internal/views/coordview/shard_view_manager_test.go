@@ -246,8 +246,10 @@ func TestAddPreparing_Success(t *testing.T) {
 	// QueryVersion should be auto-assigned to 1.
 	mgr.mu.Lock()
 	require.Len(t, mgr.views, 1)
-	v := qviews.FromProtoQueryViewVersion(mgr.views[0].View().Meta.Version)
-	assert.Equal(t, int64(1), v.QueryVersion)
+	ver := testVersion(1, 1, 1)
+	sm, ok := mgr.views[ver]
+	require.True(t, ok)
+	assert.Equal(t, int64(1), sm.Version().QueryVersion)
 	mgr.mu.Unlock()
 }
 
@@ -275,8 +277,7 @@ func TestAddPreparing_SameDataVersionIncrementsQueryVersion(t *testing.T) {
 	// Find the Preparing view.
 	for _, sm := range mgr.views {
 		if sm.State() == qviews.QueryViewStatePreparing {
-			v := qviews.FromProtoQueryViewVersion(sm.View().Meta.Version)
-			assert.Equal(t, int64(2), v.QueryVersion)
+			assert.Equal(t, int64(2), sm.Version().QueryVersion)
 		}
 	}
 	mgr.mu.Unlock()
@@ -327,7 +328,7 @@ func TestAddPreparing_PreemptsReady(t *testing.T) {
 	simulateNodeResponse(t, s, testSN, ver1, qviews.QueryViewStateReady)
 
 	mgr.mu.Lock()
-	require.Equal(t, qviews.QueryViewStateReady, mgr.views[0].State())
+	require.Equal(t, qviews.QueryViewStateReady, mgr.views[ver1].State())
 	mgr.mu.Unlock()
 
 	// Add v2 → should preempt Ready v1.
@@ -514,7 +515,7 @@ func TestNodeLost_TriggersUnrecoverable(t *testing.T) {
 	// View stays Unrecoverable, no Dropped sync pushed.
 	mgr.mu.Lock()
 	require.Len(t, mgr.views, 1)
-	assert.Equal(t, qviews.QueryViewStateUnrecoverable, mgr.views[0].State())
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, mgr.views[ver1].State())
 	mgr.mu.Unlock()
 	assert.Equal(t, 0, s.syncViewCount())
 
@@ -537,8 +538,7 @@ func TestNodeLost_TriggersUnrecoverable(t *testing.T) {
 	// v2 still active.
 	mgr.mu.Lock()
 	require.Len(t, mgr.views, 1)
-	assert.Equal(t, qviews.QueryViewStatePreparing, mgr.views[0].State())
-	_ = ver2
+	assert.Equal(t, qviews.QueryViewStatePreparing, mgr.views[ver2].State())
 	mgr.mu.Unlock()
 }
 
@@ -571,7 +571,7 @@ func TestRequestRelease_UpView(t *testing.T) {
 	// Verify view is in Down state.
 	mgr.mu.Lock()
 	require.Len(t, mgr.views, 1)
-	assert.Equal(t, qviews.QueryViewStateDown, mgr.views[0].State())
+	assert.Equal(t, qviews.QueryViewStateDown, mgr.views[ver1].State())
 	mgr.mu.Unlock()
 }
 
@@ -594,9 +594,10 @@ func TestRequestRelease_PreparingView(t *testing.T) {
 	assert.Equal(t, viewpb.QueryViewState_QueryViewStateUnrecoverable, states[0])
 
 	// View should be in Dropping state (Unrecoverable→Dropping immediate).
+	ver1 := testVersion(1, 1, 1)
 	mgr.mu.Lock()
 	require.Len(t, mgr.views, 1)
-	assert.Equal(t, qviews.QueryViewStateDropping, mgr.views[0].State())
+	assert.Equal(t, qviews.QueryViewStateDropping, mgr.views[ver1].State())
 	mgr.mu.Unlock()
 
 	// Should have pushed Dropped to all nodes.
@@ -650,9 +651,10 @@ func TestRecovery_PreparingView(t *testing.T) {
 	assert.Equal(t, 2, s.syncViewCount()) // SN + QN1
 
 	// Manager has 1 view in Preparing.
+	ver1 := testVersion(1, 1, 1)
 	mgr.mu.Lock()
 	require.Len(t, mgr.views, 1)
-	assert.Equal(t, qviews.QueryViewStatePreparing, mgr.views[0].State())
+	assert.Equal(t, qviews.QueryViewStatePreparing, mgr.views[ver1].State())
 	mgr.mu.Unlock()
 }
 
@@ -666,9 +668,10 @@ func TestRecovery_UnrecoverableView(t *testing.T) {
 	mgr := newTestManager(catalog, s, v1)
 
 	// Stays Unrecoverable, waits for AddPreparing to advance to Dropping.
+	ver1 := testVersion(1, 1, 1)
 	mgr.mu.Lock()
 	require.Len(t, mgr.views, 1)
-	assert.Equal(t, qviews.QueryViewStateUnrecoverable, mgr.views[0].State())
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, mgr.views[ver1].State())
 	mgr.mu.Unlock()
 
 	// No sync pushed.
@@ -695,7 +698,7 @@ func TestRecovery_FastForward_SNReportsUp(t *testing.T) {
 	// Should fast-forward to Up.
 	mgr.mu.Lock()
 	require.Len(t, mgr.views, 1)
-	assert.Equal(t, qviews.QueryViewStateUp, mgr.views[0].State())
+	assert.Equal(t, qviews.QueryViewStateUp, mgr.views[ver1].State())
 	mgr.mu.Unlock()
 
 	// Should persist Up.
