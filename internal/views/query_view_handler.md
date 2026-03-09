@@ -9,8 +9,8 @@ The `QueryViewHandler` interface is the work-node side contract for applying coo
 | Aspect | QN | SN |
 |---|---|---|
 | SM type | `QNQueryViewStateMachine` | `SNQueryViewStateMachine` |
-| Async events | `OnSegmentsReady` | `OnReady`, `OnRecoveringDone`, `OnUnrecoverable` |
-| Persistence | None | Save/Delete via `PersistStore` |
+| Async events | `NotifySegmentsReady` | `NotifyReady`, `NotifyRecoveringDone`, `NotifyUnrecoverable` |
+| Persistence | None | Save/Delete via StreamingNode catalog |
 | Recovery | None | `Recover()` from persisted Up views |
 | External deps | Sealed Segment Manager | Growing Segment Manager, WAL/Flusher |
 
@@ -25,22 +25,21 @@ This ensures that views on different shards can be applied concurrently while SM
 
 ## 3. QN QueryViewHandler
 
-### 3.1 Dependencies
+### 3.1 Interaction with Sealed Segment Manager
 
-```
-SegmentManager interface {
-    // LoadSegments triggers async loading of sealed segments.
-    // Calls onReady when segments are loaded (or partially loaded).
-    LoadSegments(segments []int64, onReady func(readySegments map[int64][]int64))
+QNQueryViewHandler does not inject or call SegmentManager directly. Instead, SegmentManager observes QNQueryViewHandler's state from the outside:
 
-    // ReleaseSegments releases previously loaded sealed segments.
-    ReleaseSegments(segments []int64)
-}
-```
+1. `ApplyViews` creates SMs in Preparing state with the segment assignments visible via accessor methods.
+2. SegmentManager monitors the handler (e.g., by polling or watching) to discover new Preparing views and their required segments.
+3. SegmentManager drives segment loading asynchronously.
+4. When segments are ready, SegmentManager calls `NotifySegmentsReady` on the handler.
+5. When a view is Dropped, SegmentManager observes this and releases the corresponding segments.
+
+This keeps the handler decoupled from segment loading logic.
 
 ### 3.2 Data Structures
 
-- `QNQueryViewHandler`: `mu sync.RWMutex`, `shards map[ShardID]*qnShardState`, `segmentManager SegmentManager`
+- `QNQueryViewHandler`: `mu sync.RWMutex`, `shards map[ShardID]*qnShardState`
 - `qnShardState`: `mu sync.Mutex`, `views map[QueryViewVersion]*qnViewEntry`
 - `qnViewEntry`: `sm *QNQueryViewStateMachine`, `onReport func(QueryViewAtWorkNode)`
 
@@ -53,40 +52,44 @@ For each `ApplyView`:
 3. Lock shard (`shardState.mu.Lock()`).
 4. Look up existing `qnViewEntry` by version:
    - **Exists**: Replace `onReport` callback. Call `sm.OnCoordStateDelivered(pushedState)`. If `sm.ConsumeReport()` is non-nil, invoke new `onReport`.
-   - **New + Preparing**: Create `QNQueryViewStateMachine`. Register `onReport`. Trigger `segmentManager.LoadSegments(segmentIDs, onReadyCallback)`. The `onReadyCallback` locks the shard, calls `sm.OnSegmentsReady`, consumes report, invokes `onReport`.
-   - **Dropped**: Call `sm.OnCoordStateDelivered(Dropped)`. Consume report, invoke `onReport`. Remove entry from map. Call `segmentManager.ReleaseSegments`.
+   - **New + Preparing**: Create `QNQueryViewStateMachine`. Register `onReport`.
+   - **Dropped**: Call `sm.OnCoordStateDelivered(Dropped)`. Consume report, invoke `onReport`. Remove entry from map.
 5. Unlock shard.
 
-### 3.4 Auto-Destroy on Dropped
+### 3.4 Async Event Method
+
+```
+NotifySegmentsReady(shardID ShardID, version QueryViewVersion, readySegments map[int64][]int64)
+```
+
+Called by Sealed Segment Manager when segments are loaded. Flow: find shard → lock → find SM by version → `sm.OnSegmentsReady(readySegments)` → ConsumeReport → onReport.
+
+### 3.5 Auto-Destroy on Dropped
 
 When an SM reaches Dropped (either from a Coord push or async transition through Unrecoverable → Dropped), the entry is removed from the shard's view map after the final report is emitted.
 
-### 3.5 No Persistence, No Recovery
+### 3.6 No Persistence, No Recovery
 
 QN is stateless. On restart, Coord re-pushes all Preparing views.
 
 ## 4. SN QueryViewHandler
 
-### 4.1 Dependencies
+### 4.1 Persistence
+
+SN query view persistence is implemented directly in StreamingNode's catalog layer, not as a standalone interface. The catalog provides:
 
 ```
-PersistStore interface {
-    // Save persists a query view for crash recovery.
-    Save(key string, view *viewpb.QueryViewOfShard) error
-
-    // Delete removes a persisted query view.
-    Delete(key string) error
-
-    // LoadAll returns all persisted query views.
-    LoadAll() ([]*viewpb.QueryViewOfShard, error)
-}
+// In StreamingNode catalog
+Save(key string, view *viewpb.QueryViewOfShard) error
+Delete(key string) error
+List() ([]*viewpb.QueryViewOfShard, error)
 ```
 
-SN also depends on external components (Growing Segment Manager, WAL/Flusher) that drive async state transitions, but these are notified through explicit methods on the handler rather than injected interfaces.
+`List` returns all persisted query views for crash recovery.
 
 ### 4.2 Data Structures
 
-- `SNQueryViewHandler`: `mu sync.RWMutex`, `shards map[ShardID]*snShardState`, `persistStore PersistStore`
+- `SNQueryViewHandler`: `mu sync.RWMutex`, `shards map[ShardID]*snShardState`, `catalog StreamingNodeCatalog`
 - `snShardState`: `mu sync.Mutex`, `views map[QueryViewVersion]*snViewEntry`
 - `snViewEntry`: `sm *SNQueryViewStateMachine`, `onReport func(QueryViewAtWorkNode)`
 
@@ -94,7 +97,7 @@ SN also depends on external components (Growing Segment Manager, WAL/Flusher) th
 
 Same as QN (section 3.3) with two additions:
 
-- After `sm.OnCoordStateDelivered`, also call `sm.ConsumePersist()`. If non-nil, call `persistStore.Save` or `persistStore.Delete` based on the persisted state.
+- After `sm.OnCoordStateDelivered`, also call `sm.ConsumePersist()`. If non-nil, call `catalog.Save` or `catalog.Delete` based on the persisted state.
 - SN SM has richer Coord push handling (Up, Down states) compared to QN.
 
 ### 4.4 Async Event Methods
@@ -115,7 +118,7 @@ Each method: find shard → lock → find SM by version → call SM method → C
 Recover(views []*viewpb.QueryViewOfShard)
 ```
 
-Called once during SN startup, before any `ApplyViews` calls, with views loaded from `PersistStore.LoadAll()`.
+Called once during SN startup, before any `ApplyViews` calls, with views loaded from `catalog.List()`.
 
 For each persisted view (which was in Up state at crash time):
 1. Create SM via `RecoverSNQueryViewStateMachine(meta, snView)` — starts in UpRecovering state.
