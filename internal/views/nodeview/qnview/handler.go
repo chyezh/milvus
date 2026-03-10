@@ -23,6 +23,33 @@ var _ handler.QueryViewHandler = (*QNQueryViewHandler)(nil)
 // view arrives, the handler acquires segments via SegmentManager. The
 // SegmentManager drives SM progress by invoking OnReady/OnUnrecoverable
 // callbacks asynchronously.
+//
+// # Response Guarantee
+//
+// Every view pushed via ApplyViews is guaranteed to eventually produce a
+// response (via OnReport callback), provided the SegmentManager fulfills
+// its liveness contracts (see SegmentManager doc). The response paths are:
+//
+// View does not exist in handler:
+//
+//   - Preparing: creates SM + calls Acquire. No immediate response.
+//     Response depends on SegmentManager calling OnReady or OnUnrecoverable.
+//   - Dropped: responds immediately with the Dropped view (QN restart case).
+//   - Other states: ignored (defensive; Coord only pushes Preparing/Dropped).
+//
+// View already exists in handler:
+//
+//   - Preparing, SM still Preparing: no immediate response.
+//     Response depends on SegmentManager calling OnReady or OnUnrecoverable.
+//   - Preparing, SM past Preparing: responds immediately with current state
+//     (Ready/Unrecoverable/Dropping/Dropped) for Coord fast-forward.
+//   - Dropped, SM in Preparing/Ready/Unrecoverable: transitions to Dropping,
+//     calls Release. No immediate response.
+//     Response depends on SegmentManager calling OnDropped.
+//   - Dropped, SM in Dropping: ignored (Release already in progress).
+//     Response depends on prior Release's OnDropped callback.
+//   - Dropped, SM in Dropped: responds immediately with Dropped re-report.
+//     (In practice unreachable — entry is deleted upon reaching Dropped.)
 type QNQueryViewHandler struct {
 	mu     sync.Mutex
 	shards map[qviews.ShardID]*qnShardView

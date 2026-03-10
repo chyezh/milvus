@@ -41,6 +41,23 @@ type ReleaseSegments struct {
 // SegmentManager manages sealed segment lifecycle on a QueryNode.
 // It handles loading, reference counting, and unloading of segments
 // shared across multiple query views.
+//
+// # Liveness Contracts
+//
+// Implementations MUST guarantee the following callback obligations.
+// Violating these contracts causes the corresponding query views to
+// stall without ever producing a response to the Coordinator.
+//
+//   - Acquire: for every Acquire call, the implementation MUST eventually
+//     invoke exactly one of OnReady (at least once) or OnUnrecoverable.
+//     Failure to do so leaves the view stuck in Preparing with no report.
+//
+//   - Release: for every Release call, the implementation MUST eventually
+//     invoke OnDropped exactly once.
+//     Failure to do so leaves the view stuck in Dropping with no report.
+//
+// All callbacks MUST be invoked asynchronously (not during the Acquire /
+// Release call itself) to avoid deadlocking the caller's mutex.
 type SegmentManager interface {
 	// Acquire creates or updates a segment reference.
 	// First call for a key: increments ref counts, starts loading with given settings.
