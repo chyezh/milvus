@@ -48,8 +48,20 @@ type Client struct {
 	nodeID     int64
 }
 
+// ClientOption is a function that configures the QueryNode client.
+type ClientOption func(*Client)
+
+// WithMaxAttempts overrides the maximum number of gRPC retry attempts.
+// This is useful for delegator workers that should fail fast to allow
+// upper-layer (e.g., Proxy LB) failover across replicas.
+func WithMaxAttempts(n int) ClientOption {
+	return func(c *Client) {
+		c.grpcClient.SetMaxAttempts(n)
+	}
+}
+
 // NewClient creates a new QueryNode client.
-func NewClient(ctx context.Context, addr string, nodeID int64) (types.QueryNodeClient, error) {
+func NewClient(ctx context.Context, addr string, nodeID int64, opts ...ClientOption) (types.QueryNodeClient, error) {
 	if addr == "" {
 		return nil, errors.New("addr is empty")
 	}
@@ -82,6 +94,11 @@ func NewClient(ctx context.Context, addr string, nodeID int64) (types.QueryNodeC
 		client.grpcClient.SetInternalTLSCertPool(cp)
 		client.grpcClient.SetInternalTLSServerName(Params.InternalTLSCfg.InternalTLSSNI.GetValue())
 	}
+
+	for _, opt := range opts {
+		opt(client)
+	}
+
 	return client, nil
 }
 

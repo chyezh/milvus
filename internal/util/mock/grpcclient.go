@@ -178,3 +178,6 @@ func (c *GRPCClientBase[T]) SetNodeID(nodeID int64) {
 func (c *GRPCClientBase[T]) SetSession(sess *sessionutil.Session) {
 	c.sess = sess
 }
+
+func (c *GRPCClientBase[T]) SetMaxAttempts(_ int) {
+}

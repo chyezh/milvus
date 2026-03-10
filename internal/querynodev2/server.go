@@ -342,7 +342,8 @@ func (node *QueryNode) Init() error {
 			}
 
 			return cluster.NewPoolingRemoteWorker(func() (types.QueryNodeClient, error) {
-				return grpcquerynodeclient.NewClient(node.ctx, addr, nodeID)
+				return grpcquerynodeclient.NewClient(node.ctx, addr, nodeID,
+					grpcquerynodeclient.WithMaxAttempts(3))
 			})
 		})
 		node.delegators = typeutil.NewConcurrentMap[string, delegator.ShardDelegator]()
