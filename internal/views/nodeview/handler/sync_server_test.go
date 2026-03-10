@@ -159,7 +159,6 @@ type mockHandler struct {
 	mu         sync.Mutex
 	applyFn    func(views []ApplyView)
 	applyCalls int
-	closed     bool
 }
 
 func newMockHandler() *mockHandler {
@@ -174,12 +173,6 @@ func (h *mockHandler) ApplyViews(views []ApplyView) {
 	if fn != nil {
 		fn(views)
 	}
-}
-
-func (h *mockHandler) Close() {
-	h.mu.Lock()
-	h.closed = true
-	h.mu.Unlock()
 }
 
 func (h *mockHandler) getApplyCalls() int {

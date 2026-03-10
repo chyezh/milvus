@@ -77,12 +77,20 @@ func newUnrecoverableSM() *SNQueryViewStateMachine {
 	return sm
 }
 
+// newDroppingFromPreparingSM returns a SM in Dropping state (from Preparing) with all pending drained.
+func newDroppingFromPreparingSM() *SNQueryViewStateMachine {
+	sm := newTestSM()
+	sm.ConsumeReport()
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	sm.ConsumeRelease()
+	return sm
+}
+
 // newDroppedSM returns a SM in Dropped state with all pending drained.
 func newDroppedSM() *SNQueryViewStateMachine {
-	sm := newDownSM()
-	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	sm := newDroppingFromPreparingSM()
+	sm.OnDropped()
 	sm.ConsumeReport()
-	sm.ConsumePersist() // nil, but drain anyway
 	return sm
 }
 
@@ -151,6 +159,16 @@ func assertNoPersist(t *testing.T, sm *SNQueryViewStateMachine) {
 	assert.Nil(t, sm.ConsumePersist(), "expected no pending persist")
 }
 
+func assertRelease(t *testing.T, sm *SNQueryViewStateMachine) {
+	t.Helper()
+	assert.True(t, sm.ConsumeRelease(), "expected pending release")
+}
+
+func assertNoRelease(t *testing.T, sm *SNQueryViewStateMachine) {
+	t.Helper()
+	assert.False(t, sm.ConsumeRelease(), "expected no pending release")
+}
+
 // ---------------------------------------------------------------------------
 // 1. Construction — NewSNQueryViewStateMachine
 // ---------------------------------------------------------------------------
@@ -171,6 +189,11 @@ func TestNew_PendingReport(t *testing.T) {
 func TestNew_NoPendingPersist(t *testing.T) {
 	sm := newTestSM()
 	assertNoPersist(t, sm)
+}
+
+func TestNew_NoPendingRelease(t *testing.T) {
+	sm := newTestSM()
+	assertNoRelease(t, sm)
 }
 
 func TestNew_MetaAndViewPreserved(t *testing.T) {
@@ -218,8 +241,13 @@ func TestRecover_NoPendingPersist(t *testing.T) {
 	assertNoPersist(t, sm)
 }
 
+func TestRecover_NoPendingRelease(t *testing.T) {
+	sm := newRecoveringSM()
+	assertNoRelease(t, sm)
+}
+
 // ---------------------------------------------------------------------------
-// 3. Normal flow: Preparing → Ready → Up → Down → Dropped
+// 3. Normal flow: Preparing → Ready → Up → Down → Dropping → Dropped
 // ---------------------------------------------------------------------------
 
 func TestNormalFlow_PreparingToReady(t *testing.T) {
@@ -230,6 +258,7 @@ func TestNormalFlow_PreparingToReady(t *testing.T) {
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
 	assertReportState(t, sm, qviews.QueryViewStateReady)
 	assertNoPersist(t, sm)
+	assertNoRelease(t, sm)
 }
 
 func TestNormalFlow_ReadyToUp(t *testing.T) {
@@ -239,6 +268,7 @@ func TestNormalFlow_ReadyToUp(t *testing.T) {
 	assert.Equal(t, qviews.QueryViewStateUp, sm.State())
 	assertReportState(t, sm, qviews.QueryViewStateUp)
 	assertPersistState(t, sm, qviews.QueryViewStateUp)
+	assertNoRelease(t, sm)
 }
 
 func TestNormalFlow_UpToDown(t *testing.T) {
@@ -248,16 +278,28 @@ func TestNormalFlow_UpToDown(t *testing.T) {
 	assert.Equal(t, qviews.QueryViewStateDown, sm.State())
 	assertReportState(t, sm, qviews.QueryViewStateDown)
 	assertPersistState(t, sm, qviews.QueryViewStateDown)
+	assertNoRelease(t, sm)
 }
 
-func TestNormalFlow_DownToDropped(t *testing.T) {
+func TestNormalFlow_DownToDropping(t *testing.T) {
 	sm := newDownSM()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	// No report in Dropping: wait for OnDropped callback.
+	assertNoReport(t, sm)
+	assertNoPersist(t, sm) // Down already deleted recovery info.
+	assertRelease(t, sm)
+}
+
+func TestNormalFlow_DroppingToDropped(t *testing.T) {
+	sm := newDroppingFromPreparingSM()
+
+	sm.OnDropped()
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
 	assertReportState(t, sm, qviews.QueryViewStateDropped)
-	// Down already deleted recovery info; no persist needed.
 	assertNoPersist(t, sm)
+	assertNoRelease(t, sm)
 }
 
 func TestNormalFlow_FullLifecycle(t *testing.T) {
@@ -286,11 +328,19 @@ func TestNormalFlow_FullLifecycle(t *testing.T) {
 	assertReportState(t, sm, qviews.QueryViewStateDown)
 	assertPersistState(t, sm, qviews.QueryViewStateDown)
 
-	// Dropped
+	// Dropping
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoReport(t, sm)
+	assertNoPersist(t, sm)
+	assertRelease(t, sm)
+
+	// Dropped (Release callback)
+	sm.OnDropped()
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
 	assertReportState(t, sm, qviews.QueryViewStateDropped)
 	assertNoPersist(t, sm)
+	assertNoRelease(t, sm)
 
 	// Terminal
 	assertNoReport(t, sm)
@@ -298,7 +348,7 @@ func TestNormalFlow_FullLifecycle(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Error path: Preparing → Unrecoverable → Dropped
+// 4. Error path: Preparing → Unrecoverable → Dropping → Dropped
 // ---------------------------------------------------------------------------
 
 func TestErrorPath_PreparingToUnrecoverable(t *testing.T) {
@@ -310,42 +360,109 @@ func TestErrorPath_PreparingToUnrecoverable(t *testing.T) {
 	assertReportState(t, sm, qviews.QueryViewStateUnrecoverable)
 	// No persist: no recovery info was persisted in Preparing.
 	assertNoPersist(t, sm)
+	assertNoRelease(t, sm)
 }
 
-func TestErrorPath_UnrecoverableToDropped(t *testing.T) {
+func TestErrorPath_UnrecoverableToDropping(t *testing.T) {
 	sm := newUnrecoverableSM()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoReport(t, sm)
+	assertNoPersist(t, sm)
+	assertRelease(t, sm)
+}
+
+func TestErrorPath_UnrecoverableToDroppingToDropped(t *testing.T) {
+	sm := newUnrecoverableSM()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	sm.ConsumeRelease()
+
+	sm.OnDropped()
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
 	assertReportState(t, sm, qviews.QueryViewStateDropped)
 	assertNoPersist(t, sm)
 }
 
 // ---------------------------------------------------------------------------
-// 5. Abort paths: Preparing → Dropped, Ready → Dropped
+// 5. Abort paths: Preparing → Dropping → Dropped, Ready → Dropping → Dropped
 // ---------------------------------------------------------------------------
 
-func TestAbort_PreparingToDropped(t *testing.T) {
+func TestAbort_PreparingToDropping(t *testing.T) {
 	sm := newTestSM()
 	sm.ConsumeReport()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoReport(t, sm)
+	assertNoPersist(t, sm)
+	assertRelease(t, sm)
+}
+
+func TestAbort_PreparingToDroppingToDropped(t *testing.T) {
+	sm := newTestSM()
+	sm.ConsumeReport()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	sm.ConsumeRelease()
+
+	sm.OnDropped()
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
 	assertReportState(t, sm, qviews.QueryViewStateDropped)
 	assertNoPersist(t, sm)
 }
 
-func TestAbort_ReadyToDropped(t *testing.T) {
+func TestAbort_ReadyToDropping(t *testing.T) {
 	sm := newReadySM()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoReport(t, sm)
+	assertNoPersist(t, sm)
+	assertRelease(t, sm)
+}
+
+func TestAbort_ReadyToDroppingToDropped(t *testing.T) {
+	sm := newReadySM()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	sm.ConsumeRelease()
+
+	sm.OnDropped()
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
 	assertReportState(t, sm, qviews.QueryViewStateDropped)
 	assertNoPersist(t, sm)
 }
 
 // ---------------------------------------------------------------------------
-// 6. Recovery flow: UpRecovering → Up / Down / Unrecoverable
+// 6. Dropping from Up/UpRecovering — must delete recovery info
+// ---------------------------------------------------------------------------
+
+func TestDropping_FromUp_DeletesPersist(t *testing.T) {
+	sm := newUpSM()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoReport(t, sm)
+	// Must delete recovery info immediately.
+	assertPersistState(t, sm, qviews.QueryViewStateDropped)
+	assertRelease(t, sm)
+}
+
+func TestDropping_FromUpRecovering_DeletesPersist(t *testing.T) {
+	sm := newRecoveringSM()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoReport(t, sm)
+	// Must delete recovery info immediately.
+	assertPersistState(t, sm, qviews.QueryViewStateDropped)
+	assertRelease(t, sm)
+}
+
+// ---------------------------------------------------------------------------
+// 7. Recovery flow: UpRecovering → Up / Down / Unrecoverable
 // ---------------------------------------------------------------------------
 
 func TestRecovery_RecoveringDone(t *testing.T) {
@@ -380,14 +497,15 @@ func TestRecovery_UpRecoveringToUnrecoverable(t *testing.T) {
 	assertPersistState(t, sm, qviews.QueryViewStateUnrecoverable)
 }
 
-func TestRecovery_UpRecoveringToDropped(t *testing.T) {
+func TestRecovery_UpRecoveringToDropping(t *testing.T) {
 	sm := newRecoveringSM()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
-	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
-	assertReportState(t, sm, qviews.QueryViewStateDropped)
-	// Must delete recovery info.
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoReport(t, sm)
+	// Must delete recovery info immediately.
 	assertPersistState(t, sm, qviews.QueryViewStateDropped)
+	assertRelease(t, sm)
 }
 
 func TestRecovery_FullFlow_RecoveringToUpToDownToDropped(t *testing.T) {
@@ -405,8 +523,14 @@ func TestRecovery_FullFlow_RecoveringToUpToDownToDropped(t *testing.T) {
 	assertReportState(t, sm, qviews.QueryViewStateDown)
 	assertPersistState(t, sm, qviews.QueryViewStateDown)
 
-	// Down → Dropped
+	// Down → Dropping
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoReport(t, sm)
+	assertRelease(t, sm)
+
+	// Dropping → Dropped
+	sm.OnDropped()
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
 	assertReportState(t, sm, qviews.QueryViewStateDropped)
 	assertNoPersist(t, sm)
@@ -420,19 +544,17 @@ func TestRecovery_UnrecoverableToDropped(t *testing.T) {
 	sm.ConsumePersist()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertRelease(t, sm)
+
+	sm.OnDropped()
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
 	assertReportState(t, sm, qviews.QueryViewStateDropped)
 	assertNoPersist(t, sm)
 }
 
 // ---------------------------------------------------------------------------
-// 7. Coord re-push Preparing — distributed state recoverability
-//
-// Coord pushes Preparing when it doesn't know the node's current state
-// (e.g., after Coord crash recovery or message loss).
-// If SN has advanced past Preparing, it must re-report so Coord can fast-forward (doc 1.1).
-// If SN is still Preparing, no re-report needed (local events drive it).
-// If SN is UpRecovering, no report (wait for WAL catch-up, doc 2.4).
+// 8. Coord re-push Preparing — distributed state recoverability
 // ---------------------------------------------------------------------------
 
 func TestCoordPreparing_StillPreparing_NoReport(t *testing.T) {
@@ -495,6 +617,15 @@ func TestCoordPreparing_Dropped_ReReportsDropped(t *testing.T) {
 	assertReportState(t, sm, qviews.QueryViewStateDropped)
 }
 
+func TestCoordPreparing_Dropping_NoReport(t *testing.T) {
+	sm := newDroppingFromPreparingSM()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStatePreparing)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	// Don't report: wait for OnDropped callback.
+	assertNoReport(t, sm)
+}
+
 func TestCoordPreparing_UpRecovering_NoReport(t *testing.T) {
 	sm := newRecoveringSM()
 
@@ -515,7 +646,7 @@ func TestCoordPreparing_UpRecovering_MultipleRePush_NoReport(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Coord re-push Up — fast-forward guarantee
+// 9. Coord re-push Up — fast-forward guarantee
 // ---------------------------------------------------------------------------
 
 func TestCoordUp_Ready_TransitionsToUp(t *testing.T) {
@@ -553,6 +684,15 @@ func TestCoordUp_Dropped_ReReportsDropped(t *testing.T) {
 	assertReportState(t, sm, qviews.QueryViewStateDropped)
 }
 
+func TestCoordUp_Dropping_NoReport(t *testing.T) {
+	sm := newDroppingFromPreparingSM()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStateUp)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	// Don't report: wait for OnDropped callback.
+	assertNoReport(t, sm)
+}
+
 func TestCoordUp_Preparing_ReReportsPreparing(t *testing.T) {
 	sm := newTestSM()
 	sm.ConsumeReport()
@@ -580,7 +720,7 @@ func TestCoordUp_UpRecovering_ReReportsUp(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. Coord re-push Down — fast-forward guarantee
+// 10. Coord re-push Down — fast-forward guarantee
 // ---------------------------------------------------------------------------
 
 func TestCoordDown_Up_TransitionsToDown(t *testing.T) {
@@ -618,6 +758,15 @@ func TestCoordDown_Dropped_ReReportsDropped(t *testing.T) {
 	assertReportState(t, sm, qviews.QueryViewStateDropped)
 }
 
+func TestCoordDown_Dropping_NoReport(t *testing.T) {
+	sm := newDroppingFromPreparingSM()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDown)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	// Don't report: wait for OnDropped callback.
+	assertNoReport(t, sm)
+}
+
 func TestCoordDown_Preparing_ReReportsPreparing(t *testing.T) {
 	sm := newTestSM()
 	sm.ConsumeReport()
@@ -644,7 +793,7 @@ func TestCoordDown_Unrecoverable_ReReportsUnrecoverable(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 10. Coord Dropped — transition from any state
+// 11. Coord Dropped — transitions to Dropping (not directly to Dropped)
 // ---------------------------------------------------------------------------
 
 func TestCoordDropped_FromPreparing(t *testing.T) {
@@ -652,56 +801,73 @@ func TestCoordDropped_FromPreparing(t *testing.T) {
 	sm.ConsumeReport()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
-	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
-	assertReportState(t, sm, qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoReport(t, sm)
 	assertNoPersist(t, sm)
+	assertRelease(t, sm)
 }
 
 func TestCoordDropped_FromReady(t *testing.T) {
 	sm := newReadySM()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
-	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
-	assertReportState(t, sm, qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoReport(t, sm)
 	assertNoPersist(t, sm)
+	assertRelease(t, sm)
 }
 
 func TestCoordDropped_FromUp(t *testing.T) {
 	sm := newUpSM()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
-	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
-	assertReportState(t, sm, qviews.QueryViewStateDropped)
-	// Must delete recovery info.
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoReport(t, sm)
+	// Must delete recovery info immediately.
 	assertPersistState(t, sm, qviews.QueryViewStateDropped)
+	assertRelease(t, sm)
 }
 
 func TestCoordDropped_FromUpRecovering(t *testing.T) {
 	sm := newRecoveringSM()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
-	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
-	assertReportState(t, sm, qviews.QueryViewStateDropped)
-	// Must delete recovery info.
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoReport(t, sm)
+	// Must delete recovery info immediately.
 	assertPersistState(t, sm, qviews.QueryViewStateDropped)
+	assertRelease(t, sm)
 }
 
 func TestCoordDropped_FromDown(t *testing.T) {
 	sm := newDownSM()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
-	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
-	assertReportState(t, sm, qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoReport(t, sm)
 	assertNoPersist(t, sm)
+	assertRelease(t, sm)
 }
 
 func TestCoordDropped_FromUnrecoverable(t *testing.T) {
 	sm := newUnrecoverableSM()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
-	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
-	assertReportState(t, sm, qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoReport(t, sm)
 	assertNoPersist(t, sm)
+	assertRelease(t, sm)
+}
+
+func TestCoordDropped_FromDropping_Ignored(t *testing.T) {
+	sm := newDroppingFromPreparingSM()
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	// No new report, release, or persist — already releasing.
+	assertNoReport(t, sm)
+	assertNoPersist(t, sm)
+	assertNoRelease(t, sm)
 }
 
 func TestCoordDropped_RePushInDropped(t *testing.T) {
@@ -711,6 +877,7 @@ func TestCoordDropped_RePushInDropped(t *testing.T) {
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
 	assertReportState(t, sm, qviews.QueryViewStateDropped)
 	assertNoPersist(t, sm)
+	assertNoRelease(t, sm)
 }
 
 func TestCoordDropped_RePushMultiple(t *testing.T) {
@@ -721,11 +888,12 @@ func TestCoordDropped_RePushMultiple(t *testing.T) {
 		assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
 		assertReportState(t, sm, qviews.QueryViewStateDropped)
 		assertNoPersist(t, sm)
+		assertNoRelease(t, sm)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// 11. Local event idempotency — events ignored in invalid states
+// 12. Local event idempotency — events ignored in invalid states
 // ---------------------------------------------------------------------------
 
 func TestOnReady_IgnoredInReady(t *testing.T) {
@@ -763,6 +931,13 @@ func TestOnReady_IgnoredInDropped(t *testing.T) {
 	assertNoReport(t, sm)
 }
 
+func TestOnReady_IgnoredInDropping(t *testing.T) {
+	sm := newDroppingFromPreparingSM()
+	sm.OnReady()
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoReport(t, sm)
+}
+
 func TestOnReady_IgnoredInUpRecovering(t *testing.T) {
 	sm := newRecoveringSM()
 	sm.OnReady()
@@ -795,6 +970,13 @@ func TestOnUnrecoverable_IgnoredInDropped(t *testing.T) {
 	sm := newDroppedSM()
 	sm.OnUnrecoverable()
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertNoReport(t, sm)
+}
+
+func TestOnUnrecoverable_IgnoredInDropping(t *testing.T) {
+	sm := newDroppingFromPreparingSM()
+	sm.OnUnrecoverable()
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
 	assertNoReport(t, sm)
 }
 
@@ -841,6 +1023,13 @@ func TestOnRecoveringDone_IgnoredInDropped(t *testing.T) {
 	assertNoReport(t, sm)
 }
 
+func TestOnRecoveringDone_IgnoredInDropping(t *testing.T) {
+	sm := newDroppingFromPreparingSM()
+	sm.OnRecoveringDone()
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoReport(t, sm)
+}
+
 func TestOnRecoveringDone_IgnoredInUnrecoverable(t *testing.T) {
 	sm := newUnrecoverableSM()
 	sm.OnRecoveringDone()
@@ -848,8 +1037,58 @@ func TestOnRecoveringDone_IgnoredInUnrecoverable(t *testing.T) {
 	assertNoReport(t, sm)
 }
 
+func TestOnDropped_IgnoredInPreparing(t *testing.T) {
+	sm := newTestSM()
+	sm.ConsumeReport()
+	sm.OnDropped()
+	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
+	assertNoReport(t, sm)
+}
+
+func TestOnDropped_IgnoredInReady(t *testing.T) {
+	sm := newReadySM()
+	sm.OnDropped()
+	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	assertNoReport(t, sm)
+}
+
+func TestOnDropped_IgnoredInUp(t *testing.T) {
+	sm := newUpSM()
+	sm.OnDropped()
+	assert.Equal(t, qviews.QueryViewStateUp, sm.State())
+	assertNoReport(t, sm)
+}
+
+func TestOnDropped_IgnoredInDown(t *testing.T) {
+	sm := newDownSM()
+	sm.OnDropped()
+	assert.Equal(t, qviews.QueryViewStateDown, sm.State())
+	assertNoReport(t, sm)
+}
+
+func TestOnDropped_IgnoredInDropped(t *testing.T) {
+	sm := newDroppedSM()
+	sm.OnDropped()
+	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
+	assertNoReport(t, sm)
+}
+
+func TestOnDropped_IgnoredInUnrecoverable(t *testing.T) {
+	sm := newUnrecoverableSM()
+	sm.OnDropped()
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
+	assertNoReport(t, sm)
+}
+
+func TestOnDropped_IgnoredInUpRecovering(t *testing.T) {
+	sm := newRecoveringSM()
+	sm.OnDropped()
+	assert.Equal(t, qviews.QueryViewStateUpRecovering, sm.State())
+	assertNoReport(t, sm)
+}
+
 // ---------------------------------------------------------------------------
-// 12. Dropped terminal — all events ignored
+// 13. Dropped terminal — all events ignored
 // ---------------------------------------------------------------------------
 
 func TestDroppedTerminal_AllLocalEventsIgnored(t *testing.T) {
@@ -860,6 +1099,8 @@ func TestDroppedTerminal_AllLocalEventsIgnored(t *testing.T) {
 	sm.OnUnrecoverable()
 	assertNoReport(t, sm)
 	sm.OnRecoveringDone()
+	assertNoReport(t, sm)
+	sm.OnDropped()
 	assertNoReport(t, sm)
 
 	assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
@@ -879,11 +1120,12 @@ func TestDroppedTerminal_AllCoordPushesReReportDropped(t *testing.T) {
 		assert.Equal(t, qviews.QueryViewStateDropped, sm.State())
 		assertReportState(t, sm, qviews.QueryViewStateDropped)
 		assertNoPersist(t, sm)
+		assertNoRelease(t, sm)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// 13. Consume idempotency — double consume returns nil
+// 14. Consume idempotency — double consume returns nil/false
 // ---------------------------------------------------------------------------
 
 func TestConsume_DoubleConsumeReportReturnsNil(t *testing.T) {
@@ -901,30 +1143,34 @@ func TestConsume_DoubleConsumePersistReturnsNil(t *testing.T) {
 	assertNoPersist(t, sm)
 }
 
+func TestConsume_DoubleConsumeReleaseReturnsFalse(t *testing.T) {
+	sm := newTestSM()
+	sm.ConsumeReport()
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	assert.True(t, sm.ConsumeRelease())
+	assertNoRelease(t, sm)
+}
+
 func TestConsume_NoEventNoReport(t *testing.T) {
 	sm := newTestSM()
 	sm.ConsumeReport() // drain initial
 	assertNoReport(t, sm)
 	assertNoPersist(t, sm)
+	assertNoRelease(t, sm)
 }
 
 // ---------------------------------------------------------------------------
-// 14. Distributed recoverability — Coord crash + re-push scenarios
-//
-// Simulates Coord crash-recovery: Coord re-pushes Preparing to all nodes.
-// SN must re-report its current state so Coord can reconstruct progress.
+// 15. Distributed recoverability — Coord crash + re-push scenarios
 // ---------------------------------------------------------------------------
 
 func TestRecoverability_ReadyAfterCoordCrash(t *testing.T) {
 	sm := newTestSM()
 	sm.ConsumeReport()
 
-	// SN completes preparation.
 	sm.OnReady()
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
-	sm.ConsumeReport() // Coord consumed, then crashes.
+	sm.ConsumeReport()
 
-	// Coord recovers from ETCD (still Preparing), re-pushes Preparing.
 	sm.OnCoordStateDelivered(qviews.QueryViewStatePreparing)
 	assertReportState(t, sm, qviews.QueryViewStateReady)
 }
@@ -932,7 +1178,6 @@ func TestRecoverability_ReadyAfterCoordCrash(t *testing.T) {
 func TestRecoverability_UpAfterCoordCrash(t *testing.T) {
 	sm := newUpSM()
 
-	// Coord crashes, recovers from ETCD as Preparing, re-pushes.
 	sm.OnCoordStateDelivered(qviews.QueryViewStatePreparing)
 	assertReportState(t, sm, qviews.QueryViewStateUp)
 }
@@ -940,7 +1185,6 @@ func TestRecoverability_UpAfterCoordCrash(t *testing.T) {
 func TestRecoverability_DownAfterCoordCrash(t *testing.T) {
 	sm := newDownSM()
 
-	// Coord crashes, recovers from ETCD as Down, re-pushes Down.
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDown)
 	assertReportState(t, sm, qviews.QueryViewStateDown)
 }
@@ -952,7 +1196,6 @@ func TestRecoverability_UnrecoverableAfterCoordCrash(t *testing.T) {
 	sm.OnUnrecoverable()
 	sm.ConsumeReport()
 
-	// Coord re-pushes Preparing after crash.
 	sm.OnCoordStateDelivered(qviews.QueryViewStatePreparing)
 	assertReportState(t, sm, qviews.QueryViewStateUnrecoverable)
 }
@@ -960,7 +1203,6 @@ func TestRecoverability_UnrecoverableAfterCoordCrash(t *testing.T) {
 func TestRecoverability_DroppedAfterCoordCrash(t *testing.T) {
 	sm := newDroppedSM()
 
-	// Coord re-pushes Dropped (Dropping not persisted, re-executes flow).
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
 	assertReportState(t, sm, qviews.QueryViewStateDropped)
 }
@@ -968,7 +1210,6 @@ func TestRecoverability_DroppedAfterCoordCrash(t *testing.T) {
 func TestRecoverability_RepeatedRePushAlwaysProducesReport(t *testing.T) {
 	sm := newUpSM()
 
-	// Simulate multiple Coord re-pushes (retries due to network issues).
 	for range 5 {
 		sm.OnCoordStateDelivered(qviews.QueryViewStatePreparing)
 		assertReportState(t, sm, qviews.QueryViewStateUp)
@@ -978,34 +1219,25 @@ func TestRecoverability_RepeatedRePushAlwaysProducesReport(t *testing.T) {
 func TestRecoverability_UpRecoveringThenCoordCrash(t *testing.T) {
 	sm := newRecoveringSM()
 
-	// Coord crashes, re-pushes Preparing. SN in UpRecovering waits.
 	sm.OnCoordStateDelivered(qviews.QueryViewStatePreparing)
 	assertNoReport(t, sm)
 
-	// WAL catches up → transitions to Up → reports Up.
 	sm.OnRecoveringDone()
 	assert.Equal(t, qviews.QueryViewStateUp, sm.State())
 	assertReportState(t, sm, qviews.QueryViewStateUp)
-
-	// Coord sees Up and can fast-forward.
 }
 
 func TestRecoverability_SNCrashRecovery_FullFlow(t *testing.T) {
-	// SN was Up, persisted recovery info, then crashed.
-	// On restart, SN reconstructs from persisted Up view.
 	sm := RecoverSNQueryViewStateMachine(buildTestMeta(), buildTestSNView())
 	assert.Equal(t, qviews.QueryViewStateUpRecovering, sm.State())
 	assertNoReport(t, sm)
 	assertNoPersist(t, sm)
 
-	// WAL catches up.
 	sm.OnRecoveringDone()
 	assert.Equal(t, qviews.QueryViewStateUp, sm.State())
 	assertReportState(t, sm, qviews.QueryViewStateUp)
-	// Already persisted as Up — no new persist.
 	assertNoPersist(t, sm)
 
-	// Normal lifecycle resumes.
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDown)
 	assert.Equal(t, qviews.QueryViewStateDown, sm.State())
 	assertReportState(t, sm, qviews.QueryViewStateDown)
@@ -1013,24 +1245,21 @@ func TestRecoverability_SNCrashRecovery_FullFlow(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 15. coordVisibleState — UpRecovering maps to Up in reports
+// 16. coordVisibleState — UpRecovering maps to Up in reports
 // ---------------------------------------------------------------------------
 
 func TestCoordVisibleState_UpRecoveringReportsAsUp(t *testing.T) {
 	sm := newRecoveringSM()
 
-	// Trigger a report via Coord push (Up re-push to UpRecovering).
 	sm.OnCoordStateDelivered(qviews.QueryViewStateUp)
 	report := sm.ConsumeReport()
 	require.NotNil(t, report)
-	// Report shows Up, not UpRecovering.
 	assert.Equal(t, viewpb.QueryViewState_QueryViewStateUp, report.Meta.State)
-	// But internal state is still UpRecovering.
 	assert.Equal(t, qviews.QueryViewStateUpRecovering, sm.State())
 }
 
 // ---------------------------------------------------------------------------
-// 16. Persist semantics — Up persists, Down/Unrecoverable/Dropped deletes
+// 17. Persist semantics — Up persists, Down/Unrecoverable/Dropped deletes
 // ---------------------------------------------------------------------------
 
 func TestPersist_UpSaves(t *testing.T) {
@@ -1057,7 +1286,7 @@ func TestPersist_UnrecoverableFromUpRecoveringDeletes(t *testing.T) {
 	assert.Equal(t, viewpb.QueryViewState_QueryViewStateUnrecoverable, persist.Meta.State)
 }
 
-func TestPersist_DroppedFromUpDeletes(t *testing.T) {
+func TestPersist_DroppingFromUpDeletes(t *testing.T) {
 	sm := newUpSM()
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
 	persist := sm.ConsumePersist()
@@ -1065,7 +1294,7 @@ func TestPersist_DroppedFromUpDeletes(t *testing.T) {
 	assert.Equal(t, viewpb.QueryViewState_QueryViewStateDropped, persist.Meta.State)
 }
 
-func TestPersist_DroppedFromUpRecoveringDeletes(t *testing.T) {
+func TestPersist_DroppingFromUpRecoveringDeletes(t *testing.T) {
 	sm := newRecoveringSM()
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
 	persist := sm.ConsumePersist()
@@ -1090,55 +1319,52 @@ func TestPersist_UnrecoverableFromPreparingNoPersist(t *testing.T) {
 	assertNoPersist(t, sm)
 }
 
-func TestPersist_DroppedFromDownNoPersist(t *testing.T) {
+func TestPersist_DroppingFromDownNoPersist(t *testing.T) {
 	sm := newDownSM()
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
 	assertNoPersist(t, sm)
 }
 
-func TestPersist_DroppedFromPreparingNoPersist(t *testing.T) {
+func TestPersist_DroppingFromPreparingNoPersist(t *testing.T) {
 	sm := newTestSM()
 	sm.ConsumeReport()
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
 	assertNoPersist(t, sm)
 }
 
-func TestPersist_DroppedFromReadyNoPersist(t *testing.T) {
+func TestPersist_DroppingFromReadyNoPersist(t *testing.T) {
 	sm := newReadySM()
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
 	assertNoPersist(t, sm)
 }
 
-func TestPersist_DroppedFromUnrecoverableNoPersist(t *testing.T) {
+func TestPersist_DroppingFromUnrecoverableNoPersist(t *testing.T) {
 	sm := newUnrecoverableSM()
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
 	assertNoPersist(t, sm)
 }
 
 // ---------------------------------------------------------------------------
-// 17. Pending report overwrite — latest event wins
+// 18. Pending report overwrite — latest event wins
 // ---------------------------------------------------------------------------
 
-func TestPendingOverwrite_ReadyThenDropped(t *testing.T) {
+func TestPendingOverwrite_ReadyThenDropping(t *testing.T) {
 	sm := newTestSM()
 	sm.ConsumeReport()
 
 	sm.OnReady()
-	// Before consuming Ready report, Coord pushes Dropped.
+	// Before consuming Ready report, Coord pushes Dropped → Dropping.
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
 
-	// Only the Dropped report should be present.
-	assertReportState(t, sm, qviews.QueryViewStateDropped)
+	// Ready report is cleared by Dropping transition.
 	assertNoReport(t, sm)
+	assertRelease(t, sm)
 }
 
 func TestPendingOverwrite_ReadyThenUnrecoverable(t *testing.T) {
 	sm := newTestSM()
 	sm.ConsumeReport()
 
-	// OnReady is only valid in Preparing, and OnUnrecoverable is only valid in Preparing.
-	// OnReady transitions to Ready, so OnUnrecoverable won't fire.
-	// Instead test: Preparing report overwritten by Unrecoverable.
 	sm.OnUnrecoverable()
 	assertReportState(t, sm, qviews.QueryViewStateUnrecoverable)
 	assertNoReport(t, sm)
@@ -1147,24 +1373,22 @@ func TestPendingOverwrite_ReadyThenUnrecoverable(t *testing.T) {
 func TestPendingOverwrite_CoordUpThenDown(t *testing.T) {
 	sm := newReadySM()
 
-	// Coord pushes Up (transition Ready→Up), then Down (transition Up→Down).
 	sm.OnCoordStateDelivered(qviews.QueryViewStateUp)
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDown)
 
-	// Only the Down report & persist should be present.
 	assertReportState(t, sm, qviews.QueryViewStateDown)
 	assertPersistState(t, sm, qviews.QueryViewStateDown)
 }
 
 // ---------------------------------------------------------------------------
-// 18. Unrecognized Coord pushes — no handler in OnCoordStateDelivered
+// 19. Unrecognized Coord pushes — no handler in OnCoordStateDelivered
 // ---------------------------------------------------------------------------
 
 func TestUnrecognizedPush_DroppingIgnored(t *testing.T) {
 	sm := newTestSM()
 	sm.ConsumeReport()
 
-	// Dropping is a Coord-only state; SN has no handler for it.
+	// Dropping is a local-only state; Coord has no handler for it.
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropping)
 	assert.Equal(t, qviews.QueryViewStatePreparing, sm.State())
 	assertNoReport(t, sm)

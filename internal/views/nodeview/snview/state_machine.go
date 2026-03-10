@@ -12,19 +12,19 @@ import (
 //
 // The SN is a follower: it responds to Coord pushes and local events.
 // The state machine is purely in-memory and non-blocking.
-// I/O (reporting to Coord, persistence) is signaled through pending protos
-// consumed via ConsumeReport / ConsumePersist.
+// I/O (reporting to Coord, persistence, resource release) is signaled through
+// pending protos consumed via ConsumeReport / ConsumePersist / ConsumeRelease.
 //
 // The SN only stores its own portion of the view: QueryViewMeta + QueryViewOfStreamingNode.
 // It does not have access to the full QueryViewOfShard.
 //
 // State flow:
 //
-//	Normal:        Preparing → Ready → Up → Down → Dropped
-//	Error:         Preparing → Unrecoverable → Dropped
-//	Abort:         Preparing → Dropped, Ready → Dropped
+//	Normal:        Preparing → Ready → Up → Down → Dropping → Dropped
+//	Error:         Preparing → Unrecoverable → Dropping → Dropped
+//	Abort:         Preparing → Dropping → Dropped, Ready → Dropping → Dropped
 //	Recovery:      UpRecovering → Up (WAL caught up)
-//	Recovery err:  UpRecovering → Unrecoverable → Dropped
+//	Recovery err:  UpRecovering → Unrecoverable → Dropping → Dropped
 //
 // UpRecovering is a StreamingNode-only state (defined in proto but only used by SN).
 // Coord sees UpRecovering as Up for state machine synchronization purposes.
@@ -37,6 +37,7 @@ type SNQueryViewStateMachine struct {
 
 	pendingReport  *viewpb.QueryViewOfShard
 	pendingPersist *viewpb.QueryViewOfShard
+	pendingRelease bool
 }
 
 // NewSNQueryViewStateMachine creates a state machine when the SN receives
@@ -142,6 +143,17 @@ func (sm *SNQueryViewStateMachine) OnRecoveringDone() {
 	// No pendingPersist: already persisted as Up before crash.
 }
 
+// OnDropped is called by the ResourceManager Release callback when resource
+// release completes. Transitions Dropping → Dropped.
+// Only valid in Dropping state; ignored in other states.
+func (sm *SNQueryViewStateMachine) OnDropped() {
+	if sm.state != qviews.QueryViewStateDropping {
+		return
+	}
+	sm.state = qviews.QueryViewStateDropped
+	sm.pendingReport = sm.buildReport()
+}
+
 // ConsumeReport returns the view to report to the Coordinator and clears the flag.
 // Returns nil if no report is needed.
 func (sm *SNQueryViewStateMachine) ConsumeReport() *viewpb.QueryViewOfShard {
@@ -162,6 +174,14 @@ func (sm *SNQueryViewStateMachine) ConsumePersist() *viewpb.QueryViewOfShard {
 	return v
 }
 
+// ConsumeRelease returns true if the SM has a pending Release operation
+// (i.e., entered Dropping state) and clears the flag.
+func (sm *SNQueryViewStateMachine) ConsumeRelease() bool {
+	v := sm.pendingRelease
+	sm.pendingRelease = false
+	return v
+}
+
 // --- Coord push handlers ---
 
 func (sm *SNQueryViewStateMachine) handleCoordPreparing() {
@@ -171,6 +191,8 @@ func (sm *SNQueryViewStateMachine) handleCoordPreparing() {
 	case qviews.QueryViewStateUpRecovering:
 		// Recovery: don't report yet (wait for WAL catch-up, then report Up
 		// to allow Coord fast-forward). See design doc Section 2.4.
+	case qviews.QueryViewStateDropping:
+		// Already releasing resources, wait for OnDropped callback.
 	default:
 		// Node has advanced past Preparing: re-report current state so Coord
 		// can fast-forward (e.g., Ready, Up, Down, Unrecoverable, Dropped).
@@ -185,6 +207,8 @@ func (sm *SNQueryViewStateMachine) handleCoordUp() {
 		sm.state = qviews.QueryViewStateUp
 		sm.pendingReport = sm.buildReport()
 		sm.pendingPersist = sm.buildReport()
+	case qviews.QueryViewStateDropping:
+		// Already releasing resources, wait for OnDropped callback.
 	default:
 		// Re-push or node has advanced/diverged: re-report current state
 		// so Coord can fast-forward.
@@ -202,6 +226,8 @@ func (sm *SNQueryViewStateMachine) handleCoordDown() {
 		sm.state = qviews.QueryViewStateDown
 		sm.pendingReport = sm.buildReport()
 		sm.pendingPersist = sm.buildReport()
+	case qviews.QueryViewStateDropping:
+		// Already releasing resources, wait for OnDropped callback.
 	default:
 		// Re-push or node has advanced/diverged: re-report current state
 		// so Coord can fast-forward.
@@ -211,17 +237,25 @@ func (sm *SNQueryViewStateMachine) handleCoordDown() {
 
 func (sm *SNQueryViewStateMachine) handleCoordDropped() {
 	switch sm.state {
+	case qviews.QueryViewStateDropping:
+		// Already releasing resources, wait for OnDropped callback.
+		return
+	case qviews.QueryViewStateDropped:
+		// Terminal state: re-report for Coord fast-forward.
+		sm.pendingReport = sm.buildReport()
+		return
 	case qviews.QueryViewStateUp, qviews.QueryViewStateUpRecovering:
 		// Recovery info is persisted; must delete it.
-		sm.state = qviews.QueryViewStateDropped
-		sm.pendingReport = sm.buildReport()
-		sm.pendingPersist = sm.buildReport()
+		sm.state = qviews.QueryViewStateDropping
+		sm.pendingReport = nil
+		sm.pendingRelease = true
+		sm.pendingPersist = sm.buildDroppedPersist()
 	default:
-		// Transition to Dropped (or re-push if already Dropped).
-		// No persistence needed: either no recovery info was persisted,
-		// or it was already deleted in a prior state (e.g., Down).
-		sm.state = qviews.QueryViewStateDropped
-		sm.pendingReport = sm.buildReport()
+		// Transition to Dropping: signal that Release should be called.
+		// Clear any stale pending report.
+		sm.state = qviews.QueryViewStateDropping
+		sm.pendingReport = nil
+		sm.pendingRelease = true
 	}
 }
 
@@ -229,6 +263,7 @@ func (sm *SNQueryViewStateMachine) handleCoordDropped() {
 
 // coordVisibleState returns the state visible to Coord.
 // UpRecovering maps to Up (Coord is unaware of UpRecovering).
+// Dropping maps to Dropping (Coord understands Dropping).
 func (sm *SNQueryViewStateMachine) coordVisibleState() qviews.QueryViewState {
 	if sm.state == qviews.QueryViewStateUpRecovering {
 		return qviews.QueryViewStateUp
@@ -241,6 +276,18 @@ func (sm *SNQueryViewStateMachine) coordVisibleState() qviews.QueryViewState {
 func (sm *SNQueryViewStateMachine) buildReport() *viewpb.QueryViewOfShard {
 	meta := proto.Clone(sm.meta).(*viewpb.QueryViewMeta)
 	meta.State = viewpb.QueryViewState(sm.coordVisibleState())
+
+	return &viewpb.QueryViewOfShard{
+		Meta:          meta,
+		StreamingNode: proto.Clone(sm.snView).(*viewpb.QueryViewOfStreamingNode),
+	}
+}
+
+// buildDroppedPersist constructs a persist proto with Dropped state for deletion.
+// Used when transitioning from Up/UpRecovering to Dropping to delete recovery info.
+func (sm *SNQueryViewStateMachine) buildDroppedPersist() *viewpb.QueryViewOfShard {
+	meta := proto.Clone(sm.meta).(*viewpb.QueryViewMeta)
+	meta.State = viewpb.QueryViewState(qviews.QueryViewStateDropped)
 
 	return &viewpb.QueryViewOfShard{
 		Meta:          meta,

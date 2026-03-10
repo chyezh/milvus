@@ -10,55 +10,97 @@ import (
 
 var _ handler.QueryViewHandler = (*SNQueryViewHandler)(nil)
 
-// StreamingNodeCatalog defines the persistence interface for SN query views,
-// implemented by the streaming node's catalog layer.
-type StreamingNodeCatalog interface {
-	// SaveQueryView persists a query view for crash recovery.
-	SaveQueryView(key string, view *viewpb.QueryViewOfShard) error
-
-	// DeleteQueryView removes a persisted query view.
-	DeleteQueryView(key string) error
-
-	// ListQueryViews returns all persisted query views.
-	ListQueryViews() ([]*viewpb.QueryViewOfShard, error)
-}
-
 // SNQueryViewHandler implements QueryViewHandler for StreamingNode.
 //
 // It manages query view state machines across multiple shards using a
 // two-level locking scheme:
-//   - Outer sync.RWMutex: protects the shard map
+//   - Outer sync.Mutex: protects the shard map
 //   - Per-shard sync.Mutex: serializes SM operations within a shard
 //
 // SN supports crash recovery via persistence. Recovered views start in
 // UpRecovering state and transition to Up once WAL catch-up completes.
+//
+// Resource management is delegated to the StreamingNodeResourceManager.
+// When a new Preparing view arrives, the handler acquires resources via
+// ResourceManager. The ResourceManager drives SM progress by invoking
+// OnReady/OnUnrecoverable callbacks asynchronously.
+//
+// # Response Guarantee
+//
+// Every view pushed via ApplyViews is guaranteed to eventually produce a
+// response (via OnReport callback), provided the StreamingNodeResourceManager
+// fulfills its liveness contracts (see StreamingNodeResourceManager doc).
+// The response paths are:
+//
+// View does not exist in handler:
+//
+//   - Preparing: creates SM + calls Acquire. No immediate response.
+//     Response depends on ResourceManager calling OnReady or OnUnrecoverable.
+//   - Dropped: responds immediately with the Dropped view (SN restart case).
+//   - Other states: responds immediately with Unrecoverable (state lost after restart).
+//
+// View already exists in handler:
+//
+//   - Preparing, SM in Preparing/UpRecovering/Dropping: no immediate response.
+//     Response depends on ResourceManager callbacks.
+//   - Preparing, SM past Preparing/UpRecovering/Dropping: responds immediately with
+//     current state (Ready/Up/Down/Unrecoverable/Dropped) for Coord fast-forward.
+//   - Dropped, SM in Preparing/Ready/Up/Down/Unrecoverable: transitions to Dropping,
+//     calls Release. No immediate response.
+//     Response depends on ResourceManager calling OnDropped.
+//   - Dropped, SM in Dropping: ignored (Release already in progress).
+//     Response depends on prior Release's OnDropped callback.
+//   - Dropped, SM in Dropped: responds immediately with Dropped re-report.
+//     (In practice unreachable — entry is deleted upon reaching Dropped.)
+//   - Other states: SM handles coord push and responds accordingly.
 type SNQueryViewHandler struct {
 	mu      sync.Mutex
 	shards  map[qviews.ShardID]*snShardView
 	catalog StreamingNodeCatalog
+	resMgr  StreamingNodeResourceManager
 }
 
-// NewSNQueryViewHandler creates a new SNQueryViewHandler.
-func NewSNQueryViewHandler(catalog StreamingNodeCatalog) *SNQueryViewHandler {
-	return &SNQueryViewHandler{
+// RecoverSNQueryViewHandler reconstructs the handler from persisted views
+// during SN startup. Pass nil or empty views for a fresh handler.
+func RecoverSNQueryViewHandler(
+	catalog StreamingNodeCatalog,
+	resMgr StreamingNodeResourceManager,
+	views []*viewpb.QueryViewOfShard,
+) *SNQueryViewHandler {
+	h := &SNQueryViewHandler{
 		shards:  make(map[qviews.ShardID]*snShardView),
 		catalog: catalog,
+		resMgr:  resMgr,
 	}
-}
 
-// Recover reconstructs state machines from persisted views during SN startup.
-// Must be called once before any ApplyViews calls.
-func (h *SNQueryViewHandler) Recover(views []*viewpb.QueryViewOfShard) {
+	// Build SMs grouped by shard.
+	type shardRecovery struct {
+		shardID qviews.ShardID
+		views   map[qviews.QueryViewVersion]*SNQueryViewStateMachine
+	}
+	grouped := make(map[qviews.ShardID]*shardRecovery)
+
 	for _, view := range views {
 		meta := view.Meta
 		snView := view.StreamingNode
 		shardID := qviews.NewShardIDFromQVMeta(meta)
 		version := qviews.FromProtoQueryViewVersion(meta.Version)
 
-		shard := h.getOrCreateShard(shardID)
-		sm := RecoverSNQueryViewStateMachine(meta, snView)
-		shard.Recover(version, sm)
+		sr, ok := grouped[shardID]
+		if !ok {
+			sr = &shardRecovery{shardID: shardID, views: make(map[qviews.QueryViewVersion]*SNQueryViewStateMachine)}
+			grouped[shardID] = sr
+		}
+		sr.views[version] = RecoverSNQueryViewStateMachine(meta, snView)
 	}
+
+	// Create shard views and start recovery via ResourceManager.
+	for shardID, sr := range grouped {
+		shard := recoverSnShardView(shardID, sr.views, catalog, resMgr)
+		h.shards[shardID] = shard
+	}
+
+	return h
 }
 
 // ApplyViews applies a batch of coord-pushed views.
@@ -79,42 +121,6 @@ func (h *SNQueryViewHandler) ApplyViews(views []handler.ApplyView) {
 	}
 }
 
-// NotifyReady is called when async resource preparation completes.
-// Transitions SM from Preparing → Ready.
-func (h *SNQueryViewHandler) NotifyReady(key qviews.QueryViewKey) {
-	shard := h.getShard(key.ShardID)
-	if shard == nil {
-		return
-	}
-	shard.NotifyReady(key.QueryViewVersion)
-}
-
-// NotifyRecoveringDone is called after WAL catch-up during crash recovery.
-// Transitions SM from UpRecovering → Up.
-func (h *SNQueryViewHandler) NotifyRecoveringDone(key qviews.QueryViewKey) {
-	shard := h.getShard(key.ShardID)
-	if shard == nil {
-		return
-	}
-	shard.NotifyRecoveringDone(key.QueryViewVersion)
-}
-
-// NotifyUnrecoverable is called when a fatal error occurs.
-func (h *SNQueryViewHandler) NotifyUnrecoverable(key qviews.QueryViewKey) {
-	shard := h.getShard(key.ShardID)
-	if shard == nil {
-		return
-	}
-	shard.NotifyUnrecoverable(key.QueryViewVersion)
-}
-
-// Close releases all resources.
-func (h *SNQueryViewHandler) Close() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.shards = make(map[qviews.ShardID]*snShardView)
-}
-
 func (h *SNQueryViewHandler) getOrCreateShard(shardID qviews.ShardID) *snShardView {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -123,14 +129,9 @@ func (h *SNQueryViewHandler) getOrCreateShard(shardID qviews.ShardID) *snShardVi
 		shard = &snShardView{
 			views:   make(map[qviews.QueryViewVersion]*snViewEntry),
 			catalog: h.catalog,
+			resMgr:  h.resMgr,
 		}
 		h.shards[shardID] = shard
 	}
 	return shard
-}
-
-func (h *SNQueryViewHandler) getShard(shardID qviews.ShardID) *snShardView {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.shards[shardID]
 }

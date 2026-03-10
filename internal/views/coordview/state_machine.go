@@ -249,9 +249,14 @@ func (sm *CoordQueryViewStateMachine) handleUp(report qviews.QueryViewAtWorkNode
 }
 
 // Down: wait for SN to confirm Down.
+//   - Any Unrecoverable → Unrecoverable (persist, wait for Manager).
 //   - SN reports Down → Dropping (push Dropped to all).
 //   - SN not Down → re-push Down.
 func (sm *CoordQueryViewStateMachine) handleDown(report qviews.QueryViewAtWorkNode) {
+	if report.State() == qviews.QueryViewStateUnrecoverable {
+		sm.transitionToUnrecoverable()
+		return
+	}
 	if !sm.isSNReport(report) {
 		return
 	}

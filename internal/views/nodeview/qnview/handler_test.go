@@ -152,7 +152,6 @@ func (c *reportCollector) count() int {
 func TestQNHandler_ApplyViews_NewPreparing(t *testing.T) {
 	mgr := newMockSegmentManager()
 	h := NewQNQueryViewHandler(mgr)
-	defer h.Close()
 
 	rc := &reportCollector{}
 	view := newPreparingQNView(1, 1)
@@ -172,12 +171,11 @@ func TestQNHandler_ApplyViews_NewPreparing(t *testing.T) {
 	assert.NotNil(t, req.OnUnrecoverable)
 }
 
-func TestQNHandler_ApplyViews_NonPreparingNewViewIgnored(t *testing.T) {
+func TestQNHandler_ApplyViews_UnknownViewReportsUnrecoverable(t *testing.T) {
 	mgr := newMockSegmentManager()
 	h := NewQNQueryViewHandler(mgr)
-	defer h.Close()
 
-	// Non-Preparing, non-Dropped state for unknown view → ignored.
+	// Non-Preparing, non-Dropped state for unknown view → Unrecoverable.
 	meta := buildHandlerTestMeta(1)
 	meta.State = viewpb.QueryViewState_QueryViewStateReady
 	view := qviews.NewQueryViewAtQueryNode(meta, buildHandlerTestQNView(1))
@@ -187,14 +185,14 @@ func TestQNHandler_ApplyViews_NonPreparingNewViewIgnored(t *testing.T) {
 		{View: view, OnReport: rc.onReport},
 	})
 
-	assert.Equal(t, 0, rc.count())
+	require.Equal(t, 1, rc.count())
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, rc.last().State())
 	assert.Equal(t, 0, mgr.acquiredCount())
 }
 
 func TestQNHandler_ApplyViews_DroppedOnUnknownViewReportsBack(t *testing.T) {
 	mgr := newMockSegmentManager()
 	h := NewQNQueryViewHandler(mgr)
-	defer h.Close()
 
 	// Coord pushes Dropped for a view QN doesn't know (e.g., after restart).
 	// QN must report Dropped back so Coord can finish cleanup.
@@ -215,7 +213,6 @@ func TestQNHandler_ApplyViews_DroppedOnUnknownViewReportsBack(t *testing.T) {
 func TestQNHandler_SegmentManagerCallback_TransitionToReady(t *testing.T) {
 	mgr := newMockSegmentManager()
 	h := NewQNQueryViewHandler(mgr)
-	defer h.Close()
 
 	rc := &reportCollector{}
 	view := newPreparingQNView(1, 1)
@@ -239,7 +236,6 @@ func TestQNHandler_SegmentManagerCallback_TransitionToReady(t *testing.T) {
 func TestQNHandler_SegmentManagerCallback_IncrementalProgress(t *testing.T) {
 	mgr := newMockSegmentManager()
 	h := NewQNQueryViewHandler(mgr)
-	defer h.Close()
 
 	rc := &reportCollector{}
 	view := newPreparingQNView(1, 1)
@@ -267,7 +263,6 @@ func TestQNHandler_SegmentManagerCallback_IncrementalProgress(t *testing.T) {
 func TestQNHandler_SegmentManagerCallback_StaleCallbackIgnored(t *testing.T) {
 	mgr := newMockSegmentManager()
 	h := NewQNQueryViewHandler(mgr)
-	defer h.Close()
 
 	rc := &reportCollector{}
 	view := newPreparingQNView(1, 1)
@@ -300,7 +295,6 @@ func TestQNHandler_SegmentManagerCallback_StaleCallbackIgnored(t *testing.T) {
 func TestQNHandler_SegmentManagerCallback_Unrecoverable(t *testing.T) {
 	mgr := newMockSegmentManager()
 	h := NewQNQueryViewHandler(mgr)
-	defer h.Close()
 
 	rc := &reportCollector{}
 	view := newPreparingQNView(1, 1)
@@ -324,7 +318,6 @@ func TestQNHandler_SegmentManagerCallback_Unrecoverable(t *testing.T) {
 func TestQNHandler_ApplyViews_CoordDropped(t *testing.T) {
 	mgr := newMockSegmentManager()
 	h := NewQNQueryViewHandler(mgr)
-	defer h.Close()
 
 	rc := &reportCollector{}
 	view := newPreparingQNView(1, 1)
@@ -353,7 +346,6 @@ func TestQNHandler_ApplyViews_CoordDropped(t *testing.T) {
 func TestQNHandler_ApplyViews_CoordDroppedWhileDropping(t *testing.T) {
 	mgr := newMockSegmentManager()
 	h := NewQNQueryViewHandler(mgr)
-	defer h.Close()
 
 	rc := &reportCollector{}
 	view := newPreparingQNView(1, 1)
@@ -389,7 +381,6 @@ func TestQNHandler_ApplyViews_CoordDroppedWhileDropping(t *testing.T) {
 func TestQNHandler_ApplyViews_CallbackReplacement(t *testing.T) {
 	mgr := newMockSegmentManager()
 	h := NewQNQueryViewHandler(mgr)
-	defer h.Close()
 
 	rc1 := &reportCollector{}
 	view := newPreparingQNView(1, 1)
@@ -423,7 +414,6 @@ func TestQNHandler_ApplyViews_CallbackReplacement(t *testing.T) {
 func TestQNHandler_MultipleShards(t *testing.T) {
 	mgr := newMockSegmentManager()
 	h := NewQNQueryViewHandler(mgr)
-	defer h.Close()
 
 	// Shard 1: replica 1, vchannel v0_c0
 	meta1 := buildHandlerTestMeta(1)
@@ -463,7 +453,6 @@ func TestQNHandler_MultipleShards(t *testing.T) {
 func TestQNHandler_MultipleVersions(t *testing.T) {
 	mgr := newMockSegmentManager()
 	h := NewQNQueryViewHandler(mgr)
-	defer h.Close()
 
 	view1 := newPreparingQNView(1, 1)
 	view2 := newPreparingQNView(1, 2)
@@ -488,34 +477,12 @@ func TestQNHandler_MultipleVersions(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 8. Close
-// ---------------------------------------------------------------------------
-
-func TestQNHandler_Close(t *testing.T) {
-	mgr := newMockSegmentManager()
-	h := NewQNQueryViewHandler(mgr)
-
-	view := newPreparingQNView(1, 1)
-	h.ApplyViews([]handler.ApplyView{
-		{View: view, OnReport: func(qviews.QueryViewAtWorkNode) {}},
-	})
-
-	h.Close()
-
-	// After close, stale callbacks are no-ops.
-	key := view.QueryViewKey()
-	req, _ := mgr.getAcquired(key)
-	req.OnReady(map[int64][]int64{10: {1000, 1001}, 20: {2000}})
-}
-
-// ---------------------------------------------------------------------------
-// 9. Concurrency safety
+// 8. Concurrency safety
 // ---------------------------------------------------------------------------
 
 func TestQNHandler_ConcurrentApplyAndCallback(t *testing.T) {
 	mgr := newMockSegmentManager()
 	h := NewQNQueryViewHandler(mgr)
-	defer h.Close()
 
 	const numViews = 20
 	var wg sync.WaitGroup
@@ -559,7 +526,6 @@ func TestQNHandler_ConcurrentApplyAndCallback(t *testing.T) {
 func TestQNHandler_FullLifecycle(t *testing.T) {
 	mgr := newMockSegmentManager()
 	h := NewQNQueryViewHandler(mgr)
-	defer h.Close()
 
 	rc := &reportCollector{}
 	view := newPreparingQNView(1, 1)

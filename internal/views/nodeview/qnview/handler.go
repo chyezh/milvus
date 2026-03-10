@@ -35,7 +35,7 @@ var _ handler.QueryViewHandler = (*QNQueryViewHandler)(nil)
 //   - Preparing: creates SM + calls Acquire. No immediate response.
 //     Response depends on SegmentManager calling OnReady or OnUnrecoverable.
 //   - Dropped: responds immediately with the Dropped view (QN restart case).
-//   - Other states: ignored (defensive; Coord only pushes Preparing/Dropped).
+//   - Other states: responds immediately with Unrecoverable (state lost after restart).
 //
 // View already exists in handler:
 //
@@ -80,13 +80,6 @@ func (h *QNQueryViewHandler) ApplyViews(views []handler.ApplyView) {
 		shard := h.getOrCreateShard(shardID)
 		shard.ApplyViews(shardViews)
 	}
-}
-
-// Close releases all resources.
-func (h *QNQueryViewHandler) Close() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.shards = make(map[qviews.ShardID]*qnShardView)
 }
 
 func (h *QNQueryViewHandler) getOrCreateShard(shardID qviews.ShardID) *qnShardView {

@@ -5,6 +5,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/views/nodeview/handler"
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/pkg/v2/proto/viewpb"
 )
 
 // qnShardView manages all query view state machines for a single shard on a QueryNode.
@@ -78,7 +79,13 @@ func (s *qnShardView) applyOneLocked(av *handler.ApplyView) {
 				av.OnReport(av.View)
 			}
 		default:
-			// Other states on unknown view: ignore.
+			// View unknown to this node (e.g., state lost after restart).
+			// Report Unrecoverable so Coord can generate a replacement view.
+			if av.OnReport != nil {
+				pb := av.View.IntoProto()
+				pb.Meta.State = viewpb.QueryViewState(qviews.QueryViewStateUnrecoverable)
+				av.OnReport(qviews.NewQueryViewAtWorkNodeFromProto(pb))
+			}
 		}
 		return
 	}
