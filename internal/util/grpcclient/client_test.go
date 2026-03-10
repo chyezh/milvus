@@ -368,7 +368,13 @@ func TestClientBase_CheckGrpcError(t *testing.T) {
 	base.MaxAttempts = 1
 
 	ctx := context.Background()
-	retry, reset, forceReset, _ := base.checkGrpcErr(ctx, status.Error(codes.Canceled, "fake context canceled"))
+	// test ErrClientConnClosing: should not retry, should reset and force reset
+	retry, reset, forceReset, _ := base.checkGrpcErr(ctx, grpc.ErrClientConnClosing)
+	assert.False(t, retry)
+	assert.True(t, reset)
+	assert.True(t, forceReset)
+
+	retry, reset, forceReset, _ = base.checkGrpcErr(ctx, status.Error(codes.Canceled, "fake context canceled"))
 	assert.True(t, retry)
 	assert.True(t, reset)
 	assert.False(t, forceReset)

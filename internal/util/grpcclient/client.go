@@ -92,7 +92,6 @@ type GrpcClient[T GrpcComponent] interface {
 	SetNodeID(int64)
 	GetNodeID() int64
 	SetSession(sess *sessionutil.Session)
-	SetMaxAttempts(int)
 }
 
 // ClientBase is a base of grpc client
@@ -139,11 +138,6 @@ type ClientBase[T interface {
 
 	NodeID atomic.Int64
 	sess   sessionutil.SessionInterface
-}
-
-// SetMaxAttempts overrides the maximum number of retry attempts for gRPC calls.
-func (c *ClientBase[T]) SetMaxAttempts(n int) {
-	c.MaxAttempts = n
 }
 
 func NewClientBase[T interface {
@@ -425,9 +419,9 @@ func (c *ClientBase[T]) checkGrpcErr(ctx context.Context, err error) (needRetry,
 	// grpc err
 	log.Warn("call received grpc error", zap.Error(err))
 	switch {
-	case IsConnectionClosingErr(err):
-		// The remote node's gRPC connection is permanently closing (e.g., node shutting down).
-		// Retrying is futile on the same connection; fast-fail to let the upper layer failover.
+	case errors.Is(err, grpc.ErrClientConnClosing):
+		// The gRPC client connection is permanently closing (e.g., node shutting down).
+		// Retrying is futile; fast-fail to let the upper layer failover.
 		return false, true, true, err
 	case funcutil.IsGrpcErr(err, codes.Canceled, codes.DeadlineExceeded):
 		// canceled or deadline exceeded
@@ -634,11 +628,4 @@ func IsServerIDMismatchErr(err error) bool {
 	// GRPC utilizes `status.Status` to encapsulate errors,
 	// hence it is not viable to employ the `errors.Is` for assessment.
 	return strings.Contains(err.Error(), merr.ErrNodeNotMatch.Error())
-}
-
-// IsConnectionClosingErr checks if the error indicates the gRPC client connection is closing.
-// This typically happens when the remote node is shutting down.
-// Such errors should not be retried because the connection is permanently going away.
-func IsConnectionClosingErr(err error) bool {
-	return strings.Contains(err.Error(), "the client connection is closing")
 }

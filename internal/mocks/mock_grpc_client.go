@@ -545,18 +545,12 @@ func (_c *MockGrpcClient_SetSession_Call[T]) RunAndReturn(run func(*sessionutil.
 	return _c
 }
 
-// SetMaxAttempts provides a mock function with given fields: n
-func (_m *MockGrpcClient[T]) SetMaxAttempts(n int) {
-	_m.Called(n)
-}
-
 // NewMockGrpcClient creates a new instance of MockGrpcClient. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewMockGrpcClient[T grpcclient.GrpcComponent](t interface {
 	mock.TestingT
 	Cleanup(func())
-},
-) *MockGrpcClient[T] {
+}) *MockGrpcClient[T] {
 	mock := &MockGrpcClient[T]{}
 	mock.Mock.Test(t)
 
