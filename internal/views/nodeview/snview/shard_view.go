@@ -200,12 +200,14 @@ func (s *snShardView) notifyDropped(version qviews.QueryViewVersion) {
 	s.consumeReportAndCleanup(version, entry)
 }
 
-// consumeReportPersistAndCleanup drains pending report, persist, and release,
+// consumeReportPersistAndCleanup drains pending persist, report, and release,
 // invokes callbacks, and removes the entry if it has reached Dropped state.
+// Persist is done BEFORE report: if SN crashes after reporting but before
+// persisting, Coord would believe the state advanced while SN lost it.
 // Caller must hold s.mu.
 func (s *snShardView) consumeReportPersistAndCleanup(version qviews.QueryViewVersion, entry *snViewEntry) {
-	s.consumeReport(entry)
 	s.consumeAndPersist(entry)
+	s.consumeReport(entry)
 	s.consumeAndRelease(version, entry)
 	if entry.sm.State() == qviews.QueryViewStateDropped {
 		delete(s.views, version)

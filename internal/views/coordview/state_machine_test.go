@@ -911,6 +911,29 @@ func TestDown_SNNotDownYet_RePushDown(t *testing.T) {
 	assertPendingSyncState(t, sm, qviews.QueryViewStateDown)
 }
 
+// TestDown_SNDropped_FastForwardToDropping: SN reports Dropped in Down
+// (e.g., Coord crash recovery regressed from Dropping to Down) → skip to Dropping.
+func TestDown_SNDropped_FastForwardToDropping(t *testing.T) {
+	view := buildTestView(1)
+	sm := NewCoordQueryViewStateMachine(view)
+	drainPending(sm)
+
+	// Advance to Down
+	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
+	drainPending(sm)
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
+	drainPending(sm)
+	sm.EnterDown()
+	drainPending(sm)
+
+	// SN reports Dropped → same as Down, advance to Dropping
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateDropped))
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoPendingPersist(t, sm)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateDropped)
+}
+
 // TestDropping_NodeNotDropped_RePushDropped: node reports non-Dropped in
 // Dropping → re-push Dropped.
 func TestDropping_NodeNotDropped_RePushDropped(t *testing.T) {

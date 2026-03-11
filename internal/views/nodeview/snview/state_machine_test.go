@@ -369,7 +369,9 @@ func TestErrorPath_UnrecoverableToDropping(t *testing.T) {
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
 	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
 	assertNoReport(t, sm)
-	assertNoPersist(t, sm)
+	// Idempotent persist deletion: safe even for Preparing→Unrecoverable
+	// (no persisted data), required for UpRecovering→Unrecoverable (stale Up on disk).
+	assertPersistState(t, sm, qviews.QueryViewStateDropped)
 	assertRelease(t, sm)
 }
 
@@ -377,6 +379,7 @@ func TestErrorPath_UnrecoverableToDroppingToDropped(t *testing.T) {
 	sm := newUnrecoverableSM()
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	sm.ConsumePersist()
 	sm.ConsumeRelease()
 
 	sm.OnDropped()
@@ -492,9 +495,11 @@ func TestRecovery_UpRecoveringToUnrecoverable(t *testing.T) {
 
 	sm.OnUnrecoverable()
 	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
-	assertReportState(t, sm, qviews.QueryViewStateUnrecoverable)
-	// Must delete recovery info.
-	assertPersistState(t, sm, qviews.QueryViewStateUnrecoverable)
+	// No report: Coord is not notified. The query path detects the
+	// unavailable view and triggers replacement.
+	assertNoReport(t, sm)
+	// No persist: recovery info retained for retry on restart.
+	assertNoPersist(t, sm)
 }
 
 func TestRecovery_UpRecoveringToDropping(t *testing.T) {
@@ -540,11 +545,13 @@ func TestRecovery_UnrecoverableToDropped(t *testing.T) {
 	sm := newRecoveringSM()
 
 	sm.OnUnrecoverable()
-	sm.ConsumeReport()
-	sm.ConsumePersist()
+	assertNoReport(t, sm)  // No report for UpRecovering→Unrecoverable
+	assertNoPersist(t, sm) // Recovery info retained
 
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
 	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	// Dropping from Unrecoverable deletes stale recovery info.
+	assertPersistState(t, sm, qviews.QueryViewStateDropped)
 	assertRelease(t, sm)
 
 	sm.OnDropped()
@@ -855,7 +862,9 @@ func TestCoordDropped_FromUnrecoverable(t *testing.T) {
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
 	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
 	assertNoReport(t, sm)
-	assertNoPersist(t, sm)
+	// Idempotent persist deletion (safe for Preparing→Unrecoverable,
+	// required for UpRecovering→Unrecoverable which retains stale Up on disk).
+	assertPersistState(t, sm, qviews.QueryViewStateDropped)
 	assertRelease(t, sm)
 }
 
@@ -1278,12 +1287,25 @@ func TestPersist_DownDeletes(t *testing.T) {
 	assert.Equal(t, viewpb.QueryViewState_QueryViewStateDown, persist.Meta.State)
 }
 
-func TestPersist_UnrecoverableFromUpRecoveringDeletes(t *testing.T) {
+func TestPersist_UnrecoverableFromUpRecoveringRetainsRecoveryInfo(t *testing.T) {
 	sm := newRecoveringSM()
 	sm.OnUnrecoverable()
+	// Must NOT persist: recovery info retained until Coord pushes Dropped.
+	assertNoPersist(t, sm)
+}
+
+func TestPersist_DroppingFromUnrecoverableDeletesStaleRecoveryInfo(t *testing.T) {
+	// UpRecovering → Unrecoverable retains persist (tested above).
+	// Coord then pushes Dropped → Dropping must delete the stale persist.
+	sm := newRecoveringSM()
+	sm.OnUnrecoverable()
+	assertNoPersist(t, sm) // retained
+
+	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
 	persist := sm.ConsumePersist()
 	require.NotNil(t, persist)
-	assert.Equal(t, viewpb.QueryViewState_QueryViewStateUnrecoverable, persist.Meta.State)
+	assert.Equal(t, viewpb.QueryViewState_QueryViewStateDropped, persist.Meta.State)
 }
 
 func TestPersist_DroppingFromUpDeletes(t *testing.T) {
@@ -1338,10 +1360,11 @@ func TestPersist_DroppingFromReadyNoPersist(t *testing.T) {
 	assertNoPersist(t, sm)
 }
 
-func TestPersist_DroppingFromUnrecoverableNoPersist(t *testing.T) {
+func TestPersist_DroppingFromUnrecoverableDeletes(t *testing.T) {
 	sm := newUnrecoverableSM()
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
-	assertNoPersist(t, sm)
+	// Idempotent delete: safe even when no persisted data exists.
+	assertPersistState(t, sm, qviews.QueryViewStateDropped)
 }
 
 // ---------------------------------------------------------------------------

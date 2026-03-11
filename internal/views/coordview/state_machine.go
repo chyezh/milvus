@@ -88,7 +88,8 @@ func RecoverCoordQueryViewStateMachine(view *viewpb.QueryViewOfShard) *CoordQuer
 		// Already persisted; re-push to all nodes.
 		sm.pendingSync = sm.syncViewsForState(qviews.QueryViewStatePreparing)
 	case qviews.QueryViewStateUp:
-		// Active view; wait for events.
+		// Active view; no re-push needed. Up is persisted precisely to
+		// avoid unnecessary Coord↔node communication on recovery.
 	case qviews.QueryViewStateDown:
 		// Re-push Down to SN.
 		sm.pendingSync = sm.syncViewsForState(qviews.QueryViewStateDown)
@@ -250,7 +251,9 @@ func (sm *CoordQueryViewStateMachine) handleUp(report qviews.QueryViewAtWorkNode
 
 // Down: wait for SN to confirm Down.
 //   - Any Unrecoverable → Unrecoverable (persist, wait for Manager).
-//   - SN reports Down → Dropping (push Dropped to all).
+//   - SN reports Down or Dropped → Dropping (push Dropped to all).
+//     Dropped means the SN already advanced past Down (e.g., Coord crash
+//     recovery regressed from Dropping to Down). Treat it the same as Down.
 //   - SN not Down → re-push Down.
 func (sm *CoordQueryViewStateMachine) handleDown(report qviews.QueryViewAtWorkNode) {
 	if report.State() == qviews.QueryViewStateUnrecoverable {
@@ -260,7 +263,7 @@ func (sm *CoordQueryViewStateMachine) handleDown(report qviews.QueryViewAtWorkNo
 	if !sm.isSNReport(report) {
 		return
 	}
-	if report.State() == qviews.QueryViewStateDown {
+	if report.State() == qviews.QueryViewStateDown || report.State() == qviews.QueryViewStateDropped {
 		sm.state = qviews.QueryViewStateDropping
 		sm.pendingSync = sm.syncViewsForState(qviews.QueryViewStateDropped)
 		return

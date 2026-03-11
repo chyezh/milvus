@@ -473,9 +473,11 @@ func TestSNHandler_ResourceManagerCallback_UnrecoverableFromUpRecovering(t *test
 	require.True(t, ok)
 	recoverReq.OnUnrecoverable()
 
-	assert.Equal(t, qviews.QueryViewStateUnrecoverable, rc.last().State())
-	// Recovery info should be deleted.
-	assert.Equal(t, 0, cat.savedCount())
+	// No report: UpRecovering→Unrecoverable is not reported to Coord.
+	// The query path will detect the unavailable view.
+	assert.Equal(t, 0, rc.count())
+	// Recovery info retained — not deleted.
+	assert.Equal(t, 1, cat.savedCount())
 }
 
 // ---------------------------------------------------------------------------

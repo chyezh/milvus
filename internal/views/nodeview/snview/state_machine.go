@@ -120,6 +120,17 @@ func (sm *SNQueryViewStateMachine) OnReady() {
 
 // OnUnrecoverable reports a fatal error (e.g., WAL recovery OOM).
 // Valid in Preparing and UpRecovering states; ignored in other states.
+//
+// Preparing: transitions to Unrecoverable and reports to Coord immediately.
+//
+// UpRecovering: transitions to Unrecoverable but does NOT report to Coord.
+// The view is only marked as locally unavailable. Coord still believes it
+// is Up. Discovery happens through the query path: the query planner
+// detects the unavailable view and reports to Coord to generate a
+// replacement. This avoids dependence on the OnReport callback (which
+// may not be set during SN recovery) and prevents the irreversible
+// cleanup cascade for what may be a transient failure. Persisted Up
+// recovery info is retained for possible retry on SN restart.
 func (sm *SNQueryViewStateMachine) OnUnrecoverable() {
 	switch sm.state {
 	case qviews.QueryViewStatePreparing:
@@ -127,8 +138,9 @@ func (sm *SNQueryViewStateMachine) OnUnrecoverable() {
 		sm.pendingReport = sm.buildReport()
 	case qviews.QueryViewStateUpRecovering:
 		sm.state = qviews.QueryViewStateUnrecoverable
-		sm.pendingReport = sm.buildReport()
-		sm.pendingPersist = sm.buildReport()
+		// No pendingReport: Coord is not notified. The query path will
+		// detect the unavailable view and trigger replacement.
+		// No pendingPersist: persisted Up retained for retry on restart.
 	}
 }
 
@@ -244,13 +256,17 @@ func (sm *SNQueryViewStateMachine) handleCoordDropped() {
 		// Terminal state: re-report for Coord fast-forward.
 		sm.pendingReport = sm.buildReport()
 		return
-	case qviews.QueryViewStateUp, qviews.QueryViewStateUpRecovering:
-		// Recovery info is persisted; must delete it.
+	case qviews.QueryViewStateUp, qviews.QueryViewStateUpRecovering, qviews.QueryViewStateUnrecoverable:
+		// Up/UpRecovering have persisted recovery info that must be deleted.
+		// Unrecoverable may have entered from UpRecovering (persisted Up still
+		// on disk since OnUnrecoverable intentionally retains it). Catalog
+		// delete is idempotent, so safe for Preparing→Unrecoverable too.
 		sm.state = qviews.QueryViewStateDropping
 		sm.pendingReport = nil
 		sm.pendingRelease = true
 		sm.pendingPersist = sm.buildDroppedPersist()
 	default:
+		// Preparing/Ready/Down: no persisted recovery info.
 		// Transition to Dropping: signal that Release should be called.
 		// Clear any stale pending report.
 		sm.state = qviews.QueryViewStateDropping
