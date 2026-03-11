@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"google.golang.org/grpc"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus/internal/mocks"
@@ -32,20 +33,47 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
+// mockServiceImpl implements lazygrpc.Service[proxypb.ProxyClient] for testing.
+type mockServiceImpl struct {
+	client    proxypb.ProxyClient
+	clientErr error
+	closed    bool
+}
+
+func (m *mockServiceImpl) GetService(ctx context.Context) (proxypb.ProxyClient, error) {
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if m.clientErr != nil {
+		return nil, m.clientErr
+	}
+	return m.client, nil
+}
+
+func (m *mockServiceImpl) GetConn(ctx context.Context) (*grpc.ClientConn, error) {
+	return nil, nil
+}
+
+func (m *mockServiceImpl) Close() {
+	m.closed = true
+}
+
+func newTestClient(mockProxy *mocks.MockProxyClient) *Client {
+	return &Client{
+		service: &mockServiceImpl{client: mockProxy},
+		nodeID:  1,
+	}
+}
+
 func Test_NewClient(t *testing.T) {
 	paramtable.Init()
-
-	ctx := context.Background()
-	client, err := NewClient(ctx, "", 1)
-	assert.Nil(t, client)
-	assert.Error(t, err)
-
-	client, err = NewClient(ctx, "test", 2)
-	assert.NoError(t, err)
+	// Test with a mock service directly
+	mockProxy := mocks.NewMockProxyClient(t)
+	client := newTestClient(mockProxy)
 	assert.NotNil(t, client)
 
 	// cleanup
-	err = client.Close()
+	err := client.Close()
 	assert.NoError(t, err)
 }
 
@@ -53,24 +81,15 @@ func Test_GetComponentStates(t *testing.T) {
 	paramtable.Init()
 
 	ctx := context.Background()
-	client, err := NewClient(ctx, "test", 1)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
-	defer client.Close()
-
 	mockProxy := mocks.NewMockProxyClient(t)
-	mockGrpcClient := mocks.NewMockGrpcClient[proxypb.ProxyClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, f func(proxypb.ProxyClient) (interface{}, error)) (interface{}, error) {
-		return f(mockProxy)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
+	client := newTestClient(mockProxy)
+	defer client.Close()
 
 	// test success
 	mockProxy.EXPECT().GetComponentStates(mock.Anything, mock.Anything).Return(&milvuspb.ComponentStates{
 		Status: merr.Success(),
 	}, nil)
-	_, err = client.GetComponentStates(ctx, &milvuspb.GetComponentStatesRequest{})
+	_, err := client.GetComponentStates(ctx, &milvuspb.GetComponentStatesRequest{})
 	assert.Nil(t, err)
 
 	// test return error code
@@ -94,24 +113,15 @@ func Test_GetStatisticsChannel(t *testing.T) {
 	paramtable.Init()
 
 	ctx := context.Background()
-	client, err := NewClient(ctx, "test", 1)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
-	defer client.Close()
-
 	mockProxy := mocks.NewMockProxyClient(t)
-	mockGrpcClient := mocks.NewMockGrpcClient[proxypb.ProxyClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, f func(proxypb.ProxyClient) (interface{}, error)) (interface{}, error) {
-		return f(mockProxy)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
+	client := newTestClient(mockProxy)
+	defer client.Close()
 
 	// test success
 	mockProxy.EXPECT().GetStatisticsChannel(mock.Anything, mock.Anything).Return(&milvuspb.StringResponse{
 		Status: merr.Success(),
 	}, nil)
-	_, err = client.GetStatisticsChannel(ctx, &internalpb.GetStatisticsChannelRequest{})
+	_, err := client.GetStatisticsChannel(ctx, &internalpb.GetStatisticsChannelRequest{})
 	assert.Nil(t, err)
 
 	// test return error code
@@ -135,23 +145,13 @@ func Test_InvalidateCollectionMetaCache(t *testing.T) {
 	paramtable.Init()
 
 	ctx := context.Background()
-	client, err := NewClient(ctx, "test", 1)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
-	defer client.Close()
-
 	mockProxy := mocks.NewMockProxyClient(t)
-	mockGrpcClient := mocks.NewMockGrpcClient[proxypb.ProxyClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, f func(proxypb.ProxyClient) (interface{}, error)) (interface{}, error) {
-		return f(mockProxy)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
+	client := newTestClient(mockProxy)
+	defer client.Close()
 
 	// test success
 	mockProxy.EXPECT().InvalidateCollectionMetaCache(mock.Anything, mock.Anything).Return(merr.Success(), nil)
-	_, err = client.InvalidateCollectionMetaCache(ctx, &proxypb.InvalidateCollMetaCacheRequest{})
+	_, err := client.InvalidateCollectionMetaCache(ctx, &proxypb.InvalidateCollMetaCacheRequest{})
 	assert.Nil(t, err)
 
 	// test return error code
@@ -173,23 +173,13 @@ func Test_InvalidateCredentialCache(t *testing.T) {
 	paramtable.Init()
 
 	ctx := context.Background()
-	client, err := NewClient(ctx, "test", 1)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
-	defer client.Close()
-
 	mockProxy := mocks.NewMockProxyClient(t)
-	mockGrpcClient := mocks.NewMockGrpcClient[proxypb.ProxyClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, f func(proxypb.ProxyClient) (interface{}, error)) (interface{}, error) {
-		return f(mockProxy)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
+	client := newTestClient(mockProxy)
+	defer client.Close()
 
 	// test success
 	mockProxy.EXPECT().InvalidateCredentialCache(mock.Anything, mock.Anything).Return(merr.Success(), nil)
-	_, err = client.InvalidateCredentialCache(ctx, &proxypb.InvalidateCredCacheRequest{})
+	_, err := client.InvalidateCredentialCache(ctx, &proxypb.InvalidateCredCacheRequest{})
 	assert.Nil(t, err)
 
 	// test return error code
@@ -211,23 +201,13 @@ func Test_UpdateCredentialCache(t *testing.T) {
 	paramtable.Init()
 
 	ctx := context.Background()
-	client, err := NewClient(ctx, "test", 1)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
-	defer client.Close()
-
 	mockProxy := mocks.NewMockProxyClient(t)
-	mockGrpcClient := mocks.NewMockGrpcClient[proxypb.ProxyClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, f func(proxypb.ProxyClient) (interface{}, error)) (interface{}, error) {
-		return f(mockProxy)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
+	client := newTestClient(mockProxy)
+	defer client.Close()
 
 	// test success
 	mockProxy.EXPECT().UpdateCredentialCache(mock.Anything, mock.Anything).Return(merr.Success(), nil)
-	_, err = client.UpdateCredentialCache(ctx, &proxypb.UpdateCredCacheRequest{})
+	_, err := client.UpdateCredentialCache(ctx, &proxypb.UpdateCredCacheRequest{})
 	assert.Nil(t, err)
 
 	// test return error code
@@ -249,23 +229,13 @@ func Test_RefreshPolicyInfoCache(t *testing.T) {
 	paramtable.Init()
 
 	ctx := context.Background()
-	client, err := NewClient(ctx, "test", 1)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
-	defer client.Close()
-
 	mockProxy := mocks.NewMockProxyClient(t)
-	mockGrpcClient := mocks.NewMockGrpcClient[proxypb.ProxyClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, f func(proxypb.ProxyClient) (interface{}, error)) (interface{}, error) {
-		return f(mockProxy)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
+	client := newTestClient(mockProxy)
+	defer client.Close()
 
 	// test success
 	mockProxy.EXPECT().RefreshPolicyInfoCache(mock.Anything, mock.Anything).Return(merr.Success(), nil)
-	_, err = client.RefreshPolicyInfoCache(ctx, &proxypb.RefreshPolicyInfoCacheRequest{})
+	_, err := client.RefreshPolicyInfoCache(ctx, &proxypb.RefreshPolicyInfoCacheRequest{})
 	assert.Nil(t, err)
 
 	// test return error code
@@ -287,23 +257,13 @@ func Test_GetProxyMetrics(t *testing.T) {
 	paramtable.Init()
 
 	ctx := context.Background()
-	client, err := NewClient(ctx, "test", 1)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
-	defer client.Close()
-
 	mockProxy := mocks.NewMockProxyClient(t)
-	mockGrpcClient := mocks.NewMockGrpcClient[proxypb.ProxyClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, f func(proxypb.ProxyClient) (interface{}, error)) (interface{}, error) {
-		return f(mockProxy)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
+	client := newTestClient(mockProxy)
+	defer client.Close()
 
 	// test success
 	mockProxy.EXPECT().GetProxyMetrics(mock.Anything, mock.Anything).Return(&milvuspb.GetMetricsResponse{Status: merr.Success()}, nil)
-	_, err = client.GetProxyMetrics(ctx, &milvuspb.GetMetricsRequest{})
+	_, err := client.GetProxyMetrics(ctx, &milvuspb.GetMetricsRequest{})
 	assert.Nil(t, err)
 
 	// test return error code
@@ -325,23 +285,13 @@ func Test_SetRates(t *testing.T) {
 	paramtable.Init()
 
 	ctx := context.Background()
-	client, err := NewClient(ctx, "test", 1)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
-	defer client.Close()
-
 	mockProxy := mocks.NewMockProxyClient(t)
-	mockGrpcClient := mocks.NewMockGrpcClient[proxypb.ProxyClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, f func(proxypb.ProxyClient) (interface{}, error)) (interface{}, error) {
-		return f(mockProxy)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
+	client := newTestClient(mockProxy)
+	defer client.Close()
 
 	// test success
 	mockProxy.EXPECT().SetRates(mock.Anything, mock.Anything).Return(merr.Success(), nil)
-	_, err = client.SetRates(ctx, &proxypb.SetRatesRequest{})
+	_, err := client.SetRates(ctx, &proxypb.SetRatesRequest{})
 	assert.Nil(t, err)
 
 	// test return error code
@@ -363,23 +313,13 @@ func Test_ListClientInfos(t *testing.T) {
 	paramtable.Init()
 
 	ctx := context.Background()
-	client, err := NewClient(ctx, "test", 1)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
-	defer client.Close()
-
 	mockProxy := mocks.NewMockProxyClient(t)
-	mockGrpcClient := mocks.NewMockGrpcClient[proxypb.ProxyClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, f func(proxypb.ProxyClient) (interface{}, error)) (interface{}, error) {
-		return f(mockProxy)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
+	client := newTestClient(mockProxy)
+	defer client.Close()
 
 	// test success
 	mockProxy.EXPECT().ListClientInfos(mock.Anything, mock.Anything).Return(&proxypb.ListClientInfosResponse{Status: merr.Success()}, nil)
-	_, err = client.ListClientInfos(ctx, &proxypb.ListClientInfosRequest{})
+	_, err := client.ListClientInfos(ctx, &proxypb.ListClientInfosRequest{})
 	assert.Nil(t, err)
 
 	// test return error code
@@ -401,22 +341,13 @@ func Test_GetDdChannel(t *testing.T) {
 	paramtable.Init()
 
 	ctx := context.Background()
-	client, err := NewClient(ctx, "test", 1)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
-	defer client.Close()
-
 	mockProxy := mocks.NewMockProxyClient(t)
-	mockGrpcClient := mocks.NewMockGrpcClient[proxypb.ProxyClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, f func(proxypb.ProxyClient) (interface{}, error)) (interface{}, error) {
-		return f(mockProxy)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
+	client := newTestClient(mockProxy)
+	defer client.Close()
 
 	// test success
 	mockProxy.EXPECT().GetDdChannel(mock.Anything, mock.Anything).Return(&milvuspb.StringResponse{Status: merr.Success()}, nil)
-	_, err = client.GetDdChannel(ctx, &internalpb.GetDdChannelRequest{})
+	_, err := client.GetDdChannel(ctx, &internalpb.GetDdChannelRequest{})
 	assert.Nil(t, err)
 
 	// test return error code
@@ -438,20 +369,12 @@ func Test_ImportV2(t *testing.T) {
 	paramtable.Init()
 	ctx := context.Background()
 
-	client, err := NewClient(ctx, "test", 1)
-	assert.NoError(t, err)
+	mockProxy := mocks.NewMockProxyClient(t)
+	client := newTestClient(mockProxy)
 	defer client.Close()
 
-	mockProxy := mocks.NewMockProxyClient(t)
-	mockGrpcClient := mocks.NewMockGrpcClient[proxypb.ProxyClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, f func(proxypb.ProxyClient) (interface{}, error)) (interface{}, error) {
-		return f(mockProxy)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
 	mockProxy.EXPECT().ImportV2(mock.Anything, mock.Anything).Return(&internalpb.ImportResponse{Status: merr.Success()}, nil)
-	_, err = client.ImportV2(ctx, &internalpb.ImportRequest{})
+	_, err := client.ImportV2(ctx, &internalpb.ImportRequest{})
 	assert.Nil(t, err)
 
 	mockProxy.EXPECT().GetImportProgress(mock.Anything, mock.Anything).Return(&internalpb.GetImportProgressResponse{Status: merr.Success()}, nil)
@@ -467,22 +390,13 @@ func Test_InvalidateShardLeaderCache(t *testing.T) {
 	paramtable.Init()
 
 	ctx := context.Background()
-	client, err := NewClient(ctx, "test", 1)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
-	defer client.Close()
-
 	mockProxy := mocks.NewMockProxyClient(t)
-	mockGrpcClient := mocks.NewMockGrpcClient[proxypb.ProxyClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, f func(proxypb.ProxyClient) (interface{}, error)) (interface{}, error) {
-		return f(mockProxy)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
+	client := newTestClient(mockProxy)
+	defer client.Close()
 
 	// test success
 	mockProxy.EXPECT().InvalidateShardLeaderCache(mock.Anything, mock.Anything).Return(merr.Success(), nil)
-	_, err = client.InvalidateShardLeaderCache(ctx, &proxypb.InvalidateShardLeaderCacheRequest{})
+	_, err := client.InvalidateShardLeaderCache(ctx, &proxypb.InvalidateShardLeaderCacheRequest{})
 	assert.Nil(t, err)
 
 	// test return error code
@@ -504,19 +418,24 @@ func Test_GetSegmentsInfo(t *testing.T) {
 	paramtable.Init()
 	ctx := context.Background()
 
-	client, err := NewClient(ctx, "test", 1)
-	assert.NoError(t, err)
+	mockProxy := mocks.NewMockProxyClient(t)
+	client := newTestClient(mockProxy)
 	defer client.Close()
 
-	mockProxy := mocks.NewMockProxyClient(t)
-	mockGrpcClient := mocks.NewMockGrpcClient[proxypb.ProxyClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, f func(proxypb.ProxyClient) (interface{}, error)) (interface{}, error) {
-		return f(mockProxy)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
 	mockProxy.EXPECT().GetSegmentsInfo(mock.Anything, mock.Anything).Return(&internalpb.GetSegmentsInfoResponse{Status: merr.Success()}, nil)
-	_, err = client.GetSegmentsInfo(ctx, &internalpb.GetSegmentsInfoRequest{})
+	_, err := client.GetSegmentsInfo(ctx, &internalpb.GetSegmentsInfoRequest{})
+	assert.Nil(t, err)
+}
+
+func Test_GetQuotaMetrics(t *testing.T) {
+	paramtable.Init()
+	ctx := context.Background()
+
+	mockProxy := mocks.NewMockProxyClient(t)
+	client := newTestClient(mockProxy)
+	defer client.Close()
+
+	mockProxy.EXPECT().GetQuotaMetrics(mock.Anything, mock.Anything).Return(&internalpb.GetQuotaMetricsResponse{Status: merr.Success()}, nil)
+	_, err := client.GetQuotaMetrics(ctx, &internalpb.GetQuotaMetricsRequest{})
 	assert.Nil(t, err)
 }

@@ -18,7 +18,8 @@ package grpcproxyclient
 
 import (
 	"context"
-	"fmt"
+	"sync"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
@@ -26,98 +27,111 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
-	"github.com/milvus-io/milvus/internal/distributed/utils"
 	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/internal/util/grpcclient"
+	kvfactory "github.com/milvus-io/milvus/internal/util/dependency/kv"
+	"github.com/milvus-io/milvus/internal/util/grpcutil"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/contextutil"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/discoverer"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/lazygrpc"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/resolver"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/proxypb"
 	"github.com/milvus-io/milvus/pkg/v2/util/commonpbutil"
-	"github.com/milvus-io/milvus/pkg/v2/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
 var Params *paramtable.ComponentParam = paramtable.Get()
 
+var (
+	sharedOnce    sync.Once
+	sharedService lazygrpc.Service[proxypb.ProxyClient]
+	sharedRB      resolver.Builder
+)
+
+func getSharedService() lazygrpc.Service[proxypb.ProxyClient] {
+	sharedOnce.Do(func() {
+		etcdCli, _ := kvfactory.GetEtcdAndPath()
+		role := sessionutil.GetSessionPrefixByRole(typeutil.ProxyRole)
+		sharedRB = resolver.NewSessionBuilder(
+			etcdCli,
+			discoverer.OptSDPrefix(role),
+			discoverer.OptSDVersionRange(">=2.6.0-dev"),
+		)
+		cfg := &Params.ProxyGrpcClientCfg
+		dialTimeout := cfg.DialTimeout.GetAsDuration(time.Millisecond)
+		dialOptions := grpcutil.GetDialOptions(cfg, "milvus.proto.proxy.Proxy", sharedRB, nil, nil)
+		conn := lazygrpc.NewConn(func(ctx context.Context) (*grpc.ClientConn, error) {
+			ctx, cancel := context.WithTimeout(ctx, dialTimeout)
+			defer cancel()
+			return grpc.DialContext(
+				ctx,
+				resolver.SessionResolverScheme+":///"+typeutil.ProxyRole,
+				dialOptions...,
+			)
+		})
+		sharedService = lazygrpc.WithServiceCreator(conn, proxypb.NewProxyClient)
+	})
+	return sharedService
+}
+
 // Client is the grpc client for Proxy
 type Client struct {
-	grpcClient grpcclient.GrpcClient[proxypb.ProxyClient]
-	addr       string
+	service lazygrpc.Service[proxypb.ProxyClient]
+	nodeID  int64
 }
 
 // NewClient creates a new client instance
 func NewClient(ctx context.Context, addr string, nodeID int64) (types.ProxyClient, error) {
-	if addr == "" {
-		return nil, errors.New("address is empty")
-	}
-	sess := sessionutil.NewSession(context.Background())
-	if sess == nil {
-		err := errors.New("new session error, maybe can not connect to etcd")
-		log.Ctx(ctx).Debug("Proxy client new session failed", zap.Error(err))
+	svc := getSharedService()
+	if svc == nil {
+		err := errors.New("failed to initialize shared proxy grpc connection")
+		log.Ctx(ctx).Error("failed to get shared proxy grpc service", zap.Error(err))
 		return nil, err
 	}
-	config := &Params.ProxyGrpcClientCfg
-	client := &Client{
-		addr:       addr,
-		grpcClient: grpcclient.NewClientBase[proxypb.ProxyClient](config, "milvus.proto.proxy.Proxy"),
-	}
-	// node shall specify node id
-	client.grpcClient.SetRole(fmt.Sprintf("%s-%d", typeutil.ProxyRole, nodeID))
-	client.grpcClient.SetGetAddrFunc(client.getAddr)
-	client.grpcClient.SetNewGrpcClientFunc(client.newGrpcClient)
-	client.grpcClient.SetNodeID(nodeID)
-	client.grpcClient.SetSession(sess)
-	if Params.InternalTLSCfg.InternalTLSEnabled.GetAsBool() {
-		client.grpcClient.EnableEncryption()
-		cp, err := utils.CreateCertPoolforClient(Params.InternalTLSCfg.InternalTLSCaPemPath.GetValue(), "Proxy")
-		if err != nil {
-			log.Ctx(ctx).Error("Failed to create cert pool for Proxy client")
-			return nil, err
-		}
-		client.grpcClient.SetInternalTLSCertPool(cp)
-		client.grpcClient.SetInternalTLSServerName(Params.InternalTLSCfg.InternalTLSSNI.GetValue())
-	}
-	return client, nil
+	return &Client{
+		service: svc,
+		nodeID:  nodeID,
+	}, nil
 }
 
-func (c *Client) newGrpcClient(cc *grpc.ClientConn) proxypb.ProxyClient {
-	return proxypb.NewProxyClient(cc)
-}
-
-func (c *Client) getAddr() (string, error) {
-	return c.addr, nil
-}
-
-// Close stops the client, closes the connection
+// Close stops the client. The shared connection is managed at package level.
 func (c *Client) Close() error {
-	return c.grpcClient.Close()
+	return nil
 }
 
-func wrapGrpcCall[T any](ctx context.Context, c *Client, call func(proxyClient proxypb.ProxyClient) (*T, error)) (*T, error) {
-	ret, err := c.grpcClient.ReCall(ctx, func(client proxypb.ProxyClient) (any, error) {
-		if !funcutil.CheckCtxValid(ctx) {
-			return nil, ctx.Err()
-		}
-		return call(client)
-	})
-	if err != nil || ret == nil {
-		return nil, err
+// CloseSharedConnection closes the shared gRPC connection. Call during process shutdown.
+func CloseSharedConnection() {
+	if sharedRB != nil {
+		sharedRB.Close()
 	}
-	return ret.(*T), err
+	if sharedService != nil {
+		sharedService.Close()
+	}
+}
+
+func callService[T any](ctx context.Context, c *Client, fn func(ctx context.Context, client proxypb.ProxyClient) (T, error)) (T, error) {
+	client, err := c.service.GetService(ctx)
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	ctx = contextutil.WithPickServerID(ctx, c.nodeID)
+	return fn(ctx, client)
 }
 
 // GetComponentStates get the component state.
 func (c *Client) GetComponentStates(ctx context.Context, req *milvuspb.GetComponentStatesRequest, opts ...grpc.CallOption) (*milvuspb.ComponentStates, error) {
-	return wrapGrpcCall(ctx, c, func(client proxypb.ProxyClient) (*milvuspb.ComponentStates, error) {
+	return callService(ctx, c, func(ctx context.Context, client proxypb.ProxyClient) (*milvuspb.ComponentStates, error) {
 		return client.GetComponentStates(ctx, &milvuspb.GetComponentStatesRequest{})
 	})
 }
 
 // GetStatisticsChannel return the statistics channel in string
 func (c *Client) GetStatisticsChannel(ctx context.Context, req *internalpb.GetStatisticsChannelRequest, opts ...grpc.CallOption) (*milvuspb.StringResponse, error) {
-	return wrapGrpcCall(ctx, c, func(client proxypb.ProxyClient) (*milvuspb.StringResponse, error) {
+	return callService(ctx, c, func(ctx context.Context, client proxypb.ProxyClient) (*milvuspb.StringResponse, error) {
 		return client.GetStatisticsChannel(ctx, &internalpb.GetStatisticsChannelRequest{})
 	})
 }
@@ -127,9 +141,9 @@ func (c *Client) InvalidateCollectionMetaCache(ctx context.Context, req *proxypb
 	req = typeutil.Clone(req)
 	commonpbutil.UpdateMsgBase(
 		req.GetBase(),
-		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.grpcClient.GetNodeID())),
+		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.nodeID)),
 	)
-	return wrapGrpcCall(ctx, c, func(client proxypb.ProxyClient) (*commonpb.Status, error) {
+	return callService(ctx, c, func(ctx context.Context, client proxypb.ProxyClient) (*commonpb.Status, error) {
 		return client.InvalidateCollectionMetaCache(ctx, req)
 	})
 }
@@ -138,9 +152,9 @@ func (c *Client) InvalidateCredentialCache(ctx context.Context, req *proxypb.Inv
 	req = typeutil.Clone(req)
 	commonpbutil.UpdateMsgBase(
 		req.GetBase(),
-		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.grpcClient.GetNodeID())),
+		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.nodeID)),
 	)
-	return wrapGrpcCall(ctx, c, func(client proxypb.ProxyClient) (*commonpb.Status, error) {
+	return callService(ctx, c, func(ctx context.Context, client proxypb.ProxyClient) (*commonpb.Status, error) {
 		return client.InvalidateCredentialCache(ctx, req)
 	})
 }
@@ -149,9 +163,9 @@ func (c *Client) UpdateCredentialCache(ctx context.Context, req *proxypb.UpdateC
 	req = typeutil.Clone(req)
 	commonpbutil.UpdateMsgBase(
 		req.GetBase(),
-		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.grpcClient.GetNodeID())),
+		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.nodeID)),
 	)
-	return wrapGrpcCall(ctx, c, func(client proxypb.ProxyClient) (*commonpb.Status, error) {
+	return callService(ctx, c, func(ctx context.Context, client proxypb.ProxyClient) (*commonpb.Status, error) {
 		return client.UpdateCredentialCache(ctx, req)
 	})
 }
@@ -160,9 +174,9 @@ func (c *Client) RefreshPolicyInfoCache(ctx context.Context, req *proxypb.Refres
 	req = typeutil.Clone(req)
 	commonpbutil.UpdateMsgBase(
 		req.GetBase(),
-		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.grpcClient.GetNodeID())),
+		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.nodeID)),
 	)
-	return wrapGrpcCall(ctx, c, func(client proxypb.ProxyClient) (*commonpb.Status, error) {
+	return callService(ctx, c, func(ctx context.Context, client proxypb.ProxyClient) (*commonpb.Status, error) {
 		return client.RefreshPolicyInfoCache(ctx, req)
 	})
 }
@@ -173,9 +187,9 @@ func (c *Client) GetProxyMetrics(ctx context.Context, req *milvuspb.GetMetricsRe
 	req = typeutil.Clone(req)
 	commonpbutil.UpdateMsgBase(
 		req.GetBase(),
-		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.grpcClient.GetNodeID())),
+		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.nodeID)),
 	)
-	return wrapGrpcCall(ctx, c, func(client proxypb.ProxyClient) (*milvuspb.GetMetricsResponse, error) {
+	return callService(ctx, c, func(ctx context.Context, client proxypb.ProxyClient) (*milvuspb.GetMetricsResponse, error) {
 		return client.GetProxyMetrics(ctx, req)
 	})
 }
@@ -185,9 +199,9 @@ func (c *Client) SetRates(ctx context.Context, req *proxypb.SetRatesRequest, opt
 	req = typeutil.Clone(req)
 	commonpbutil.UpdateMsgBase(
 		req.GetBase(),
-		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.grpcClient.GetNodeID())),
+		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.nodeID)),
 	)
-	return wrapGrpcCall(ctx, c, func(client proxypb.ProxyClient) (*commonpb.Status, error) {
+	return callService(ctx, c, func(ctx context.Context, client proxypb.ProxyClient) (*commonpb.Status, error) {
 		return client.SetRates(ctx, req)
 	})
 }
@@ -196,51 +210,51 @@ func (c *Client) ListClientInfos(ctx context.Context, req *proxypb.ListClientInf
 	req = typeutil.Clone(req)
 	commonpbutil.UpdateMsgBase(
 		req.GetBase(),
-		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.grpcClient.GetNodeID())),
+		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.nodeID)),
 	)
-	return wrapGrpcCall(ctx, c, func(client proxypb.ProxyClient) (*proxypb.ListClientInfosResponse, error) {
+	return callService(ctx, c, func(ctx context.Context, client proxypb.ProxyClient) (*proxypb.ListClientInfosResponse, error) {
 		return client.ListClientInfos(ctx, req)
 	})
 }
 
 func (c *Client) GetDdChannel(ctx context.Context, req *internalpb.GetDdChannelRequest, opts ...grpc.CallOption) (*milvuspb.StringResponse, error) {
-	return wrapGrpcCall(ctx, c, func(client proxypb.ProxyClient) (*milvuspb.StringResponse, error) {
+	return callService(ctx, c, func(ctx context.Context, client proxypb.ProxyClient) (*milvuspb.StringResponse, error) {
 		return client.GetDdChannel(ctx, req)
 	})
 }
 
 func (c *Client) ImportV2(ctx context.Context, req *internalpb.ImportRequest, opts ...grpc.CallOption) (*internalpb.ImportResponse, error) {
-	return wrapGrpcCall(ctx, c, func(client proxypb.ProxyClient) (*internalpb.ImportResponse, error) {
+	return callService(ctx, c, func(ctx context.Context, client proxypb.ProxyClient) (*internalpb.ImportResponse, error) {
 		return client.ImportV2(ctx, req)
 	})
 }
 
 func (c *Client) GetImportProgress(ctx context.Context, req *internalpb.GetImportProgressRequest, opts ...grpc.CallOption) (*internalpb.GetImportProgressResponse, error) {
-	return wrapGrpcCall(ctx, c, func(client proxypb.ProxyClient) (*internalpb.GetImportProgressResponse, error) {
+	return callService(ctx, c, func(ctx context.Context, client proxypb.ProxyClient) (*internalpb.GetImportProgressResponse, error) {
 		return client.GetImportProgress(ctx, req)
 	})
 }
 
 func (c *Client) ListImports(ctx context.Context, req *internalpb.ListImportsRequest, opts ...grpc.CallOption) (*internalpb.ListImportsResponse, error) {
-	return wrapGrpcCall(ctx, c, func(client proxypb.ProxyClient) (*internalpb.ListImportsResponse, error) {
+	return callService(ctx, c, func(ctx context.Context, client proxypb.ProxyClient) (*internalpb.ListImportsResponse, error) {
 		return client.ListImports(ctx, req)
 	})
 }
 
 func (c *Client) InvalidateShardLeaderCache(ctx context.Context, req *proxypb.InvalidateShardLeaderCacheRequest, opts ...grpc.CallOption) (*commonpb.Status, error) {
-	return wrapGrpcCall(ctx, c, func(client proxypb.ProxyClient) (*commonpb.Status, error) {
+	return callService(ctx, c, func(ctx context.Context, client proxypb.ProxyClient) (*commonpb.Status, error) {
 		return client.InvalidateShardLeaderCache(ctx, req)
 	})
 }
 
 func (c *Client) GetSegmentsInfo(ctx context.Context, req *internalpb.GetSegmentsInfoRequest, opts ...grpc.CallOption) (*internalpb.GetSegmentsInfoResponse, error) {
-	return wrapGrpcCall(ctx, c, func(client proxypb.ProxyClient) (*internalpb.GetSegmentsInfoResponse, error) {
+	return callService(ctx, c, func(ctx context.Context, client proxypb.ProxyClient) (*internalpb.GetSegmentsInfoResponse, error) {
 		return client.GetSegmentsInfo(ctx, req)
 	})
 }
 
 func (c *Client) GetQuotaMetrics(ctx context.Context, req *internalpb.GetQuotaMetricsRequest, opts ...grpc.CallOption) (*internalpb.GetQuotaMetricsResponse, error) {
-	return wrapGrpcCall(ctx, c, func(client proxypb.ProxyClient) (*internalpb.GetQuotaMetricsResponse, error) {
+	return callService(ctx, c, func(ctx context.Context, client proxypb.ProxyClient) (*internalpb.GetQuotaMetricsResponse, error) {
 		return client.GetQuotaMetrics(ctx, req)
 	})
 }
