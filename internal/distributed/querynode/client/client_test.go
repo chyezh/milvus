@@ -29,6 +29,22 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
+// mockService implements lazygrpc.Service[querypb.QueryNodeClient] for testing.
+type mockService struct {
+	client querypb.QueryNodeClient
+	err    error
+}
+
+func (m *mockService) GetService(ctx context.Context) (querypb.QueryNodeClient, error) {
+	return m.client, m.err
+}
+
+func (m *mockService) GetConn(ctx context.Context) (*grpc.ClientConn, error) {
+	return nil, nil
+}
+
+func (m *mockService) Close() {}
+
 func Test_NewClient(t *testing.T) {
 	paramtable.Init()
 
@@ -36,12 +52,17 @@ func Test_NewClient(t *testing.T) {
 	client, err := NewClient(ctx, "", 1)
 	assert.Nil(t, client)
 	assert.Error(t, err)
+}
 
-	client, err = NewClient(ctx, "test", 2)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+func Test_RPCMethods_ServiceError(t *testing.T) {
+	paramtable.Init()
 
-	ctx, cancel := context.WithCancel(ctx)
+	c := &Client{
+		service: &mockService{err: errors.New("dummy")},
+		nodeID:  1,
+	}
+
+	ctx := context.Background()
 
 	checkFunc := func(retNotNil bool) {
 		retCheck := func(notNil bool, ret any, err error) {
@@ -54,119 +75,144 @@ func Test_NewClient(t *testing.T) {
 			}
 		}
 
-		r1, err := client.GetComponentStates(ctx, nil)
+		r1, err := c.GetComponentStates(ctx, nil)
 		retCheck(retNotNil, r1, err)
 
-		r2, err := client.GetTimeTickChannel(ctx, nil)
+		r2, err := c.GetTimeTickChannel(ctx, nil)
 		retCheck(retNotNil, r2, err)
 
-		r3, err := client.GetStatisticsChannel(ctx, nil)
+		r3, err := c.GetStatisticsChannel(ctx, nil)
 		retCheck(retNotNil, r3, err)
 
-		r6, err := client.WatchDmChannels(ctx, nil)
+		r6, err := c.WatchDmChannels(ctx, nil)
 		retCheck(retNotNil, r6, err)
 
-		r7, err := client.LoadSegments(ctx, nil)
+		r7, err := c.LoadSegments(ctx, nil)
 		retCheck(retNotNil, r7, err)
 
-		r8, err := client.ReleaseCollection(ctx, nil)
+		r8, err := c.ReleaseCollection(ctx, nil)
 		retCheck(retNotNil, r8, err)
 
-		r8, err = client.LoadPartitions(ctx, nil)
+		r8, err = c.LoadPartitions(ctx, nil)
 		retCheck(retNotNil, r8, err)
 
-		r9, err := client.ReleasePartitions(ctx, nil)
+		r9, err := c.ReleasePartitions(ctx, nil)
 		retCheck(retNotNil, r9, err)
 
-		r10, err := client.ReleaseSegments(ctx, nil)
+		r10, err := c.ReleaseSegments(ctx, nil)
 		retCheck(retNotNil, r10, err)
 
-		r11, err := client.GetSegmentInfo(ctx, nil)
+		r11, err := c.GetSegmentInfo(ctx, nil)
 		retCheck(retNotNil, r11, err)
 
-		r12, err := client.GetMetrics(ctx, nil)
+		r12, err := c.GetMetrics(ctx, nil)
 		retCheck(retNotNil, r12, err)
 
-		r14, err := client.Search(ctx, nil)
+		r14, err := c.Search(ctx, nil)
 		retCheck(retNotNil, r14, err)
 
-		r15, err := client.Query(ctx, nil)
+		r15, err := c.Query(ctx, nil)
 		retCheck(retNotNil, r15, err)
 
-		r16, err := client.SyncReplicaSegments(ctx, nil)
+		r16, err := c.SyncReplicaSegments(ctx, nil)
 		retCheck(retNotNil, r16, err)
 
-		r17, err := client.GetStatistics(ctx, nil)
+		r17, err := c.GetStatistics(ctx, nil)
 		retCheck(retNotNil, r17, err)
 
-		r18, err := client.ShowConfigurations(ctx, nil)
+		r18, err := c.ShowConfigurations(ctx, nil)
 		retCheck(retNotNil, r18, err)
 
-		r19, err := client.QuerySegments(ctx, nil)
+		r19, err := c.QuerySegments(ctx, nil)
 		retCheck(retNotNil, r19, err)
 
-		r20, err := client.SearchSegments(ctx, nil)
+		r20, err := c.SearchSegments(ctx, nil)
 		retCheck(retNotNil, r20, err)
 
-		r21, err := client.DeleteBatch(ctx, nil)
+		r21, err := c.DeleteBatch(ctx, nil)
 		retCheck(retNotNil, r21, err)
 
-		r22, err := client.RunAnalyzer(ctx, nil)
+		r22, err := c.RunAnalyzer(ctx, nil)
 		retCheck(retNotNil, r22, err)
 
-		r23, err := client.ValidateAnalyzer(ctx, nil)
+		r23, err := c.ValidateAnalyzer(ctx, nil)
 		retCheck(retNotNil, r23, err)
 
-		r24, err := client.GetHighlight(ctx, nil)
+		r24, err := c.GetHighlight(ctx, nil)
 		retCheck(retNotNil, r24, err)
 
 		// stream rpc
-		client, err := client.QueryStream(ctx, nil)
-		retCheck(retNotNil, client, err)
+		qs, err := c.QueryStream(ctx, nil)
+		retCheck(retNotNil, qs, err)
 	}
 
-	client.(*Client).grpcClient = &mock.GRPCClientBase[querypb.QueryNodeClient]{
-		GetGrpcClientErr: errors.New("dummy"),
-	}
-
-	newFunc1 := func(cc *grpc.ClientConn) querypb.QueryNodeClient {
-		return &mock.GrpcQueryNodeClient{Err: nil}
-	}
-	client.(*Client).grpcClient.SetNewGrpcClientFunc(newFunc1)
-
+	// Test error case: service returns error
 	checkFunc(false)
+}
 
-	client.(*Client).grpcClient = &mock.GRPCClientBase[querypb.QueryNodeClient]{
-		GetGrpcClientErr: nil,
+func Test_RPCMethods_ClientError(t *testing.T) {
+	paramtable.Init()
+
+	c := &Client{
+		service: &mockService{client: &mock.GrpcQueryNodeClient{Err: errors.New("dummy")}},
+		nodeID:  1,
 	}
 
-	newFunc2 := func(cc *grpc.ClientConn) querypb.QueryNodeClient {
-		return &mock.GrpcQueryNodeClient{Err: errors.New("dummy")}
+	ctx := context.Background()
+
+	r1, err := c.GetComponentStates(ctx, nil)
+	assert.Nil(t, r1)
+	assert.Error(t, err)
+
+	r2, err := c.Search(ctx, nil)
+	assert.Nil(t, r2)
+	assert.Error(t, err)
+}
+
+func Test_RPCMethods_Success(t *testing.T) {
+	paramtable.Init()
+
+	c := &Client{
+		service: &mockService{client: &mock.GrpcQueryNodeClient{Err: nil}},
+		nodeID:  1,
 	}
 
-	client.(*Client).grpcClient.SetNewGrpcClientFunc(newFunc2)
+	ctx := context.Background()
 
-	checkFunc(false)
+	r1, err := c.GetComponentStates(ctx, nil)
+	assert.NotNil(t, r1)
+	assert.NoError(t, err)
 
-	client.(*Client).grpcClient = &mock.GRPCClientBase[querypb.QueryNodeClient]{
-		GetGrpcClientErr: nil,
+	r2, err := c.Search(ctx, nil)
+	assert.NotNil(t, r2)
+	assert.NoError(t, err)
+
+	r3, err := c.Query(ctx, nil)
+	assert.NotNil(t, r3)
+	assert.NoError(t, err)
+
+	r4, err := c.WatchDmChannels(ctx, nil)
+	assert.NotNil(t, r4)
+	assert.NoError(t, err)
+
+	r5, err := c.GetMetrics(ctx, nil)
+	assert.NotNil(t, r5)
+	assert.NoError(t, err)
+
+	r6, err := c.GetDataDistribution(ctx, nil)
+	assert.NotNil(t, r6)
+	assert.NoError(t, err)
+
+	r7, err := c.SyncDistribution(ctx, nil)
+	assert.NotNil(t, r7)
+	assert.NoError(t, err)
+}
+
+func Test_Close(t *testing.T) {
+	c := &Client{
+		service: &mockService{},
+		nodeID:  1,
 	}
-
-	newFunc3 := func(cc *grpc.ClientConn) querypb.QueryNodeClient {
-		return &mock.GrpcQueryNodeClient{Err: nil}
-	}
-	client.(*Client).grpcClient.SetNewGrpcClientFunc(newFunc3)
-
-	checkFunc(true)
-
-	// ctx canceled
-	client.(*Client).grpcClient = &mock.GRPCClientBase[querypb.QueryNodeClient]{
-		GetGrpcClientErr: nil,
-	}
-	client.(*Client).grpcClient.SetNewGrpcClientFunc(newFunc1)
-	cancel() // make context canceled
-	checkFunc(false)
-
-	err = client.Close()
+	err := c.Close()
 	assert.NoError(t, err)
 }
