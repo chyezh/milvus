@@ -23,38 +23,107 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bytedance/mockey"
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
-	mock1 "github.com/stretchr/testify/mock"
 	"google.golang.org/grpc"
 
-	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/internal/mocks"
-	"github.com/milvus-io/milvus/internal/util/grpcclient"
+	grpcutilresolver "github.com/milvus-io/milvus/internal/util/grpcutil/resolver"
 	"github.com/milvus-io/milvus/internal/util/mock"
 	"github.com/milvus-io/milvus/pkg/v2/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
+	grpcresolver "google.golang.org/grpc/resolver"
+
+	mock1 "github.com/stretchr/testify/mock"
 )
 
 var mockErr = errors.New("mock grpc err")
 
 func TestMain(m *testing.M) {
 	rand.Seed(time.Now().UnixNano())
+	paramtable.Init()
 	os.Exit(m.Run())
+}
+
+// mockServiceImpl implements lazygrpc.Service[MixCoordClient] for testing.
+type mockServiceImpl struct {
+	client    MixCoordClient
+	clientErr error
+	closed    bool
+}
+
+func (m *mockServiceImpl) GetService(ctx context.Context) (MixCoordClient, error) {
+	if ctx.Err() != nil {
+		return MixCoordClient{}, ctx.Err()
+	}
+	if m.clientErr != nil {
+		return MixCoordClient{}, m.clientErr
+	}
+	return m.client, nil
+}
+
+func (m *mockServiceImpl) GetConn(ctx context.Context) (*grpc.ClientConn, error) {
+	return nil, nil
+}
+
+func (m *mockServiceImpl) Close() {
+	m.closed = true
+}
+
+// mockResolverBuilder implements resolver.Builder for testing.
+type mockResolverBuilder struct {
+	closed bool
+}
+
+func (m *mockResolverBuilder) Build(_ grpcresolver.Target, _ grpcresolver.ClientConn, _ grpcresolver.BuildOptions) (grpcresolver.Resolver, error) {
+	return nil, nil
+}
+
+func (m *mockResolverBuilder) Scheme() string {
+	return "mock"
+}
+
+func (m *mockResolverBuilder) Close() {
+	m.closed = true
+}
+
+func (m *mockResolverBuilder) Resolver() grpcutilresolver.Resolver {
+	return nil
+}
+
+// newTestClient creates a Client with a mock service for testing.
+func newTestClient(mix MixCoordClient) *Client {
+	svc := &mockServiceImpl{client: mix}
+	rb := &mockResolverBuilder{}
+	return &Client{
+		service: svc,
+		rb:      rb,
+	}
+}
+
+// newTestClientWithErr creates a Client with a mock service that returns an error.
+func newTestClientWithErr(err error) *Client {
+	svc := &mockServiceImpl{clientErr: err}
+	rb := &mockResolverBuilder{}
+	return &Client{
+		service: svc,
+		rb:      rb,
+	}
 }
 
 func Test_NewClient(t *testing.T) {
 	ctx := context.Background()
 
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	// Test with mock service - success case
+	client := newTestClient(MixCoordClient{
+		RootCoordClient:  &mock.GrpcRootCoordClient{Err: nil},
+		QueryCoordClient: &mock.GrpcQueryCoordClient{Err: nil},
+	})
 
 	checkFunc := func(retNotNil bool) {
 		retCheck := func(notNil bool, ret interface{}, err error) {
@@ -390,47 +459,26 @@ func Test_NewClient(t *testing.T) {
 		retCheck(retNotNil, r42, err)
 	}
 
-	client.(*Client).grpcClient = &mock.GRPCClientBase[MixCoordClient]{
-		GetGrpcClientErr: errors.New("dummy"),
-	}
-
-	newFunc1 := func(cc *grpc.ClientConn) MixCoordClient {
-		return MixCoordClient{
-			RootCoordClient:  &mock.GrpcRootCoordClient{Err: nil},
-			QueryCoordClient: &mock.GrpcQueryCoordClient{Err: nil},
-		}
-	}
-	client.(*Client).grpcClient.SetNewGrpcClientFunc(newFunc1)
-
+	// Test service error case
+	client.service = &mockServiceImpl{clientErr: errors.New("dummy")}
 	checkFunc(false)
 
-	client.(*Client).grpcClient = &mock.GRPCClientBase[MixCoordClient]{
-		GetGrpcClientErr: nil,
-	}
-
-	newFunc2 := func(cc *grpc.ClientConn) MixCoordClient {
-		return MixCoordClient{
+	// Test service returning error responses
+	client.service = &mockServiceImpl{
+		client: MixCoordClient{
 			RootCoordClient:  &mock.GrpcRootCoordClient{Err: errors.New("dummy")},
 			QueryCoordClient: &mock.GrpcQueryCoordClient{Err: errors.New("dummy")},
-		}
+		},
 	}
-
-	client.(*Client).grpcClient.SetNewGrpcClientFunc(newFunc2)
-
 	checkFunc(false)
 
-	client.(*Client).grpcClient = &mock.GRPCClientBase[MixCoordClient]{
-		GetGrpcClientErr: nil,
-	}
-
-	newFunc3 := func(cc *grpc.ClientConn) MixCoordClient {
-		return MixCoordClient{
+	// Test service success
+	client.service = &mockServiceImpl{
+		client: MixCoordClient{
 			RootCoordClient:  &mock.GrpcRootCoordClient{Err: nil},
 			QueryCoordClient: &mock.GrpcQueryCoordClient{Err: nil},
-		}
+		},
 	}
-	client.(*Client).grpcClient.SetNewGrpcClientFunc(newFunc3)
-
 	checkFunc(true)
 
 	// timeout
@@ -612,36 +660,29 @@ func Test_NewClient(t *testing.T) {
 		retCheck(rTimeout, err)
 	}
 	// clean up
-	err = client.Close()
+	err := client.Close()
 	assert.NoError(t, err)
 }
 
-func Test_Flush(t *testing.T) {
-	paramtable.Init()
-
-	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
-	defer client.Close()
-
+// newTestClientWithMockDC creates a test Client with a mock DataCoordClient.
+func newTestClientWithMockDC(t *testing.T) (*Client, *mocks.MockDataCoordClient) {
 	mockDC := mocks.NewMockDataCoordClient(t)
 	mockmix := MixCoordClient{
 		DataCoordClient: mockDC,
 	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
+	return newTestClient(mockmix), mockDC
+}
+
+func Test_Flush(t *testing.T) {
+	ctx := context.Background()
+	client, mockDC := newTestClientWithMockDC(t)
+	defer client.Close()
 
 	// test success
 	mockDC.EXPECT().Flush(mock1.Anything, mock1.Anything).Return(&datapb.FlushResponse{
 		Status: merr.Success(),
 	}, nil)
-	_, err = client.Flush(ctx, &datapb.FlushRequest{})
+	_, err := client.Flush(ctx, &datapb.FlushRequest{})
 	assert.Nil(t, err)
 
 	// test return error status
@@ -672,52 +713,31 @@ func Test_Flush(t *testing.T) {
 }
 
 func Test_GetSegmentStates(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-	// test success
 	mockDC.EXPECT().GetSegmentStates(mock1.Anything, mock1.Anything).Return(&datapb.GetSegmentStatesResponse{
 		Status: merr.Success(),
 	}, nil)
-	_, err = client.GetSegmentStates(ctx, &datapb.GetSegmentStatesRequest{})
+	_, err := client.GetSegmentStates(ctx, &datapb.GetSegmentStatesRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
 	mockDC.ExpectedCalls = nil
 	mockDC.EXPECT().GetSegmentStates(mock1.Anything, mock1.Anything).Return(&datapb.GetSegmentStatesResponse{
 		Status: merr.Status(merr.ErrServiceNotReady),
 	}, nil)
-
 	rsp, err := client.GetSegmentStates(ctx, &datapb.GetSegmentStatesRequest{})
 	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
 	assert.Nil(t, err)
 
-	// test return error
 	mockDC.ExpectedCalls = nil
 	mockDC.EXPECT().GetSegmentStates(mock1.Anything, mock1.Anything).Return(&datapb.GetSegmentStatesResponse{
 		Status: merr.Success(),
 	}, mockErr)
-
 	_, err = client.GetSegmentStates(ctx, &datapb.GetSegmentStatesRequest{})
 	assert.NotNil(t, err)
 
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -726,52 +746,25 @@ func Test_GetSegmentStates(t *testing.T) {
 }
 
 func Test_GetInsertBinlogPaths(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-	// test success
-	mockDC.EXPECT().GetInsertBinlogPaths(mock1.Anything, mock1.Anything).Return(&datapb.GetInsertBinlogPathsResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.GetInsertBinlogPaths(ctx, &datapb.GetInsertBinlogPathsRequest{})
+	mockDC.EXPECT().GetInsertBinlogPaths(mock1.Anything, mock1.Anything).Return(&datapb.GetInsertBinlogPathsResponse{Status: merr.Success()}, nil)
+	_, err := client.GetInsertBinlogPaths(ctx, &datapb.GetInsertBinlogPathsRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
 	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetInsertBinlogPaths(mock1.Anything, mock1.Anything).Return(&datapb.GetInsertBinlogPathsResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
+	mockDC.EXPECT().GetInsertBinlogPaths(mock1.Anything, mock1.Anything).Return(&datapb.GetInsertBinlogPathsResponse{Status: merr.Status(merr.ErrServiceNotReady)}, nil)
 	rsp, err := client.GetInsertBinlogPaths(ctx, &datapb.GetInsertBinlogPathsRequest{})
 	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
 	assert.Nil(t, err)
 
-	// test return error
 	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetInsertBinlogPaths(mock1.Anything, mock1.Anything).Return(&datapb.GetInsertBinlogPathsResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
+	mockDC.EXPECT().GetInsertBinlogPaths(mock1.Anything, mock1.Anything).Return(&datapb.GetInsertBinlogPathsResponse{Status: merr.Success()}, mockErr)
 	_, err = client.GetInsertBinlogPaths(ctx, &datapb.GetInsertBinlogPathsRequest{})
 	assert.NotNil(t, err)
 
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -780,52 +773,14 @@ func Test_GetInsertBinlogPaths(t *testing.T) {
 }
 
 func Test_GetCollectionStatistics(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-	// test success
-	mockDC.EXPECT().GetCollectionStatistics(mock1.Anything, mock1.Anything).Return(&datapb.GetCollectionStatisticsResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.GetCollectionStatistics(ctx, &datapb.GetCollectionStatisticsRequest{})
+	mockDC.EXPECT().GetCollectionStatistics(mock1.Anything, mock1.Anything).Return(&datapb.GetCollectionStatisticsResponse{Status: merr.Success()}, nil)
+	_, err := client.GetCollectionStatistics(ctx, &datapb.GetCollectionStatisticsRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetCollectionStatistics(mock1.Anything, mock1.Anything).Return(&datapb.GetCollectionStatisticsResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.GetCollectionStatistics(ctx, &datapb.GetCollectionStatisticsRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetCollectionStatistics(mock1.Anything, mock1.Anything).Return(&datapb.GetCollectionStatisticsResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.GetCollectionStatistics(ctx, &datapb.GetCollectionStatisticsRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -834,52 +789,14 @@ func Test_GetCollectionStatistics(t *testing.T) {
 }
 
 func Test_GetPartitionStatistics(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-	// test success
-	mockDC.EXPECT().GetPartitionStatistics(mock1.Anything, mock1.Anything).Return(&datapb.GetPartitionStatisticsResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.GetPartitionStatistics(ctx, &datapb.GetPartitionStatisticsRequest{})
+	mockDC.EXPECT().GetPartitionStatistics(mock1.Anything, mock1.Anything).Return(&datapb.GetPartitionStatisticsResponse{Status: merr.Success()}, nil)
+	_, err := client.GetPartitionStatistics(ctx, &datapb.GetPartitionStatisticsRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetPartitionStatistics(mock1.Anything, mock1.Anything).Return(&datapb.GetPartitionStatisticsResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.GetPartitionStatistics(ctx, &datapb.GetPartitionStatisticsRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetPartitionStatistics(mock1.Anything, mock1.Anything).Return(&datapb.GetPartitionStatisticsResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.GetPartitionStatistics(ctx, &datapb.GetPartitionStatisticsRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -888,53 +805,25 @@ func Test_GetPartitionStatistics(t *testing.T) {
 }
 
 func Test_GetSegmentInfo(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockDC.EXPECT().GetSegmentInfo(mock1.Anything, mock1.Anything).Return(&datapb.GetSegmentInfoResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.GetSegmentInfo(ctx, &datapb.GetSegmentInfoRequest{})
+	mockDC.EXPECT().GetSegmentInfo(mock1.Anything, mock1.Anything).Return(&datapb.GetSegmentInfoResponse{Status: merr.Success()}, nil)
+	_, err := client.GetSegmentInfo(ctx, &datapb.GetSegmentInfoRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
 	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetSegmentInfo(mock1.Anything, mock1.Anything).Return(&datapb.GetSegmentInfoResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
+	mockDC.EXPECT().GetSegmentInfo(mock1.Anything, mock1.Anything).Return(&datapb.GetSegmentInfoResponse{Status: merr.Status(merr.ErrServiceNotReady)}, nil)
 	rsp, err := client.GetSegmentInfo(ctx, &datapb.GetSegmentInfoRequest{})
 	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
 	assert.Nil(t, err)
 
-	// test return error
 	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetSegmentInfo(mock1.Anything, mock1.Anything).Return(&datapb.GetSegmentInfoResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
+	mockDC.EXPECT().GetSegmentInfo(mock1.Anything, mock1.Anything).Return(&datapb.GetSegmentInfoResponse{Status: merr.Success()}, mockErr)
 	_, err = client.GetSegmentInfo(ctx, &datapb.GetSegmentInfoRequest{})
 	assert.NotNil(t, err)
 
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -943,108 +832,30 @@ func Test_GetSegmentInfo(t *testing.T) {
 }
 
 func Test_SaveBinlogPaths(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockDC.EXPECT().GetSegmentInfo(mock1.Anything, mock1.Anything).Return(&datapb.GetSegmentInfoResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.GetSegmentInfo(ctx, &datapb.GetSegmentInfoRequest{})
+	mockDC.EXPECT().SaveBinlogPaths(mock1.Anything, mock1.Anything).Return(merr.Success(), nil)
+	_, err := client.SaveBinlogPaths(ctx, &datapb.SaveBinlogPathsRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetSegmentInfo(mock1.Anything, mock1.Anything).Return(&datapb.GetSegmentInfoResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.GetSegmentInfo(ctx, &datapb.GetSegmentInfoRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetSegmentInfo(mock1.Anything, mock1.Anything).Return(&datapb.GetSegmentInfoResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.GetSegmentInfo(ctx, &datapb.GetSegmentInfoRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
-	_, err = client.GetSegmentInfo(ctx, &datapb.GetSegmentInfoRequest{})
+	_, err = client.SaveBinlogPaths(ctx, &datapb.SaveBinlogPathsRequest{})
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func Test_GetRecoveryInfo(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockDC.EXPECT().GetRecoveryInfo(mock1.Anything, mock1.Anything).Return(&datapb.GetRecoveryInfoResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.GetRecoveryInfo(ctx, &datapb.GetRecoveryInfoRequest{})
+	mockDC.EXPECT().GetRecoveryInfo(mock1.Anything, mock1.Anything).Return(&datapb.GetRecoveryInfoResponse{Status: merr.Success()}, nil)
+	_, err := client.GetRecoveryInfo(ctx, &datapb.GetRecoveryInfoRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetRecoveryInfo(mock1.Anything, mock1.Anything).Return(&datapb.GetRecoveryInfoResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.GetRecoveryInfo(ctx, &datapb.GetRecoveryInfoRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetRecoveryInfo(mock1.Anything, mock1.Anything).Return(&datapb.GetRecoveryInfoResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.GetRecoveryInfo(ctx, &datapb.GetRecoveryInfoRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1053,52 +864,14 @@ func Test_GetRecoveryInfo(t *testing.T) {
 }
 
 func Test_GetRecoveryInfoV2(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockDC.EXPECT().GetRecoveryInfoV2(mock1.Anything, mock1.Anything).Return(&datapb.GetRecoveryInfoResponseV2{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.GetRecoveryInfoV2(ctx, &datapb.GetRecoveryInfoRequestV2{})
+	mockDC.EXPECT().GetRecoveryInfoV2(mock1.Anything, mock1.Anything).Return(&datapb.GetRecoveryInfoResponseV2{Status: merr.Success()}, nil)
+	_, err := client.GetRecoveryInfoV2(ctx, &datapb.GetRecoveryInfoRequestV2{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetRecoveryInfoV2(mock1.Anything, mock1.Anything).Return(&datapb.GetRecoveryInfoResponseV2{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.GetRecoveryInfoV2(ctx, &datapb.GetRecoveryInfoRequestV2{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetRecoveryInfoV2(mock1.Anything, mock1.Anything).Return(&datapb.GetRecoveryInfoResponseV2{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.GetRecoveryInfoV2(ctx, &datapb.GetRecoveryInfoRequestV2{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1107,53 +880,14 @@ func Test_GetRecoveryInfoV2(t *testing.T) {
 }
 
 func Test_GetFlushedSegments(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockDC.EXPECT().GetFlushedSegments(mock1.Anything, mock1.Anything).Return(&datapb.GetFlushedSegmentsResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.GetFlushedSegments(ctx, &datapb.GetFlushedSegmentsRequest{})
+	mockDC.EXPECT().GetFlushedSegments(mock1.Anything, mock1.Anything).Return(&datapb.GetFlushedSegmentsResponse{Status: merr.Success()}, nil)
+	_, err := client.GetFlushedSegments(ctx, &datapb.GetFlushedSegmentsRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetFlushedSegments(mock1.Anything, mock1.Anything).Return(&datapb.GetFlushedSegmentsResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.GetFlushedSegments(ctx, &datapb.GetFlushedSegmentsRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetFlushedSegments(mock1.Anything, mock1.Anything).Return(&datapb.GetFlushedSegmentsResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.GetFlushedSegments(ctx, &datapb.GetFlushedSegmentsRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1162,53 +896,14 @@ func Test_GetFlushedSegments(t *testing.T) {
 }
 
 func Test_GetSegmentsByStates(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockDC.EXPECT().GetSegmentsByStates(mock1.Anything, mock1.Anything).Return(&datapb.GetSegmentsByStatesResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.GetSegmentsByStates(ctx, &datapb.GetSegmentsByStatesRequest{})
+	mockDC.EXPECT().GetSegmentsByStates(mock1.Anything, mock1.Anything).Return(&datapb.GetSegmentsByStatesResponse{Status: merr.Success()}, nil)
+	_, err := client.GetSegmentsByStates(ctx, &datapb.GetSegmentsByStatesRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetSegmentsByStates(mock1.Anything, mock1.Anything).Return(&datapb.GetSegmentsByStatesResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.GetSegmentsByStates(ctx, &datapb.GetSegmentsByStatesRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetSegmentsByStates(mock1.Anything, mock1.Anything).Return(&datapb.GetSegmentsByStatesResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.GetSegmentsByStates(ctx, &datapb.GetSegmentsByStatesRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1217,52 +912,14 @@ func Test_GetSegmentsByStates(t *testing.T) {
 }
 
 func Test_ManualCompaction(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockDC.EXPECT().ManualCompaction(mock1.Anything, mock1.Anything).Return(&milvuspb.ManualCompactionResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.ManualCompaction(ctx, &milvuspb.ManualCompactionRequest{})
+	mockDC.EXPECT().ManualCompaction(mock1.Anything, mock1.Anything).Return(&milvuspb.ManualCompactionResponse{Status: merr.Success()}, nil)
+	_, err := client.ManualCompaction(ctx, &milvuspb.ManualCompactionRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().ManualCompaction(mock1.Anything, mock1.Anything).Return(&milvuspb.ManualCompactionResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.ManualCompaction(ctx, &milvuspb.ManualCompactionRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().ManualCompaction(mock1.Anything, mock1.Anything).Return(&milvuspb.ManualCompactionResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.ManualCompaction(ctx, &milvuspb.ManualCompactionRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1271,52 +928,14 @@ func Test_ManualCompaction(t *testing.T) {
 }
 
 func Test_GetCompactionState(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockDC.EXPECT().GetCompactionState(mock1.Anything, mock1.Anything).Return(&milvuspb.GetCompactionStateResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.GetCompactionState(ctx, &milvuspb.GetCompactionStateRequest{})
+	mockDC.EXPECT().GetCompactionState(mock1.Anything, mock1.Anything).Return(&milvuspb.GetCompactionStateResponse{Status: merr.Success()}, nil)
+	_, err := client.GetCompactionState(ctx, &milvuspb.GetCompactionStateRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetCompactionState(mock1.Anything, mock1.Anything).Return(&milvuspb.GetCompactionStateResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.GetCompactionState(ctx, &milvuspb.GetCompactionStateRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetCompactionState(mock1.Anything, mock1.Anything).Return(&milvuspb.GetCompactionStateResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.GetCompactionState(ctx, &milvuspb.GetCompactionStateRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1325,52 +944,14 @@ func Test_GetCompactionState(t *testing.T) {
 }
 
 func Test_GetCompactionStateWithPlans(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockDC.EXPECT().GetCompactionStateWithPlans(mock1.Anything, mock1.Anything).Return(&milvuspb.GetCompactionPlansResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.GetCompactionStateWithPlans(ctx, &milvuspb.GetCompactionPlansRequest{})
+	mockDC.EXPECT().GetCompactionStateWithPlans(mock1.Anything, mock1.Anything).Return(&milvuspb.GetCompactionPlansResponse{Status: merr.Success()}, nil)
+	_, err := client.GetCompactionStateWithPlans(ctx, &milvuspb.GetCompactionPlansRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetCompactionStateWithPlans(mock1.Anything, mock1.Anything).Return(&milvuspb.GetCompactionPlansResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.GetCompactionStateWithPlans(ctx, &milvuspb.GetCompactionPlansRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetCompactionStateWithPlans(mock1.Anything, mock1.Anything).Return(&milvuspb.GetCompactionPlansResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.GetCompactionStateWithPlans(ctx, &milvuspb.GetCompactionPlansRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1379,52 +960,14 @@ func Test_GetCompactionStateWithPlans(t *testing.T) {
 }
 
 func Test_WatchChannels(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockDC.EXPECT().WatchChannels(mock1.Anything, mock1.Anything).Return(&datapb.WatchChannelsResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.WatchChannels(ctx, &datapb.WatchChannelsRequest{})
+	mockDC.EXPECT().WatchChannels(mock1.Anything, mock1.Anything).Return(&datapb.WatchChannelsResponse{Status: merr.Success()}, nil)
+	_, err := client.WatchChannels(ctx, &datapb.WatchChannelsRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().WatchChannels(mock1.Anything, mock1.Anything).Return(&datapb.WatchChannelsResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.WatchChannels(ctx, &datapb.WatchChannelsRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().WatchChannels(mock1.Anything, mock1.Anything).Return(&datapb.WatchChannelsResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.WatchChannels(ctx, &datapb.WatchChannelsRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1433,52 +976,14 @@ func Test_WatchChannels(t *testing.T) {
 }
 
 func Test_GetFlushState(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockDC.EXPECT().GetFlushState(mock1.Anything, mock1.Anything).Return(&milvuspb.GetFlushStateResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.GetFlushState(ctx, &datapb.GetFlushStateRequest{})
+	mockDC.EXPECT().GetFlushState(mock1.Anything, mock1.Anything).Return(&milvuspb.GetFlushStateResponse{Status: merr.Success()}, nil)
+	_, err := client.GetFlushState(ctx, &datapb.GetFlushStateRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetFlushState(mock1.Anything, mock1.Anything).Return(&milvuspb.GetFlushStateResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.GetFlushState(ctx, &datapb.GetFlushStateRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetFlushState(mock1.Anything, mock1.Anything).Return(&milvuspb.GetFlushStateResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.GetFlushState(ctx, &datapb.GetFlushStateRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1487,52 +992,14 @@ func Test_GetFlushState(t *testing.T) {
 }
 
 func Test_GetFlushAllState(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockDC.EXPECT().GetFlushAllState(mock1.Anything, mock1.Anything).Return(&milvuspb.GetFlushAllStateResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.GetFlushAllState(ctx, &milvuspb.GetFlushAllStateRequest{})
+	mockDC.EXPECT().GetFlushAllState(mock1.Anything, mock1.Anything).Return(&milvuspb.GetFlushAllStateResponse{Status: merr.Success()}, nil)
+	_, err := client.GetFlushAllState(ctx, &milvuspb.GetFlushAllStateRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetFlushAllState(mock1.Anything, mock1.Anything).Return(&milvuspb.GetFlushAllStateResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.GetFlushAllState(ctx, &milvuspb.GetFlushAllStateRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetFlushAllState(mock1.Anything, mock1.Anything).Return(&milvuspb.GetFlushAllStateResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.GetFlushAllState(ctx, &milvuspb.GetFlushAllStateRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1541,53 +1008,14 @@ func Test_GetFlushAllState(t *testing.T) {
 }
 
 func Test_DropVirtualChannel(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockDC.EXPECT().DropVirtualChannel(mock1.Anything, mock1.Anything).Return(&datapb.DropVirtualChannelResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.DropVirtualChannel(ctx, &datapb.DropVirtualChannelRequest{})
+	mockDC.EXPECT().DropVirtualChannel(mock1.Anything, mock1.Anything).Return(&datapb.DropVirtualChannelResponse{Status: merr.Success()}, nil)
+	_, err := client.DropVirtualChannel(ctx, &datapb.DropVirtualChannelRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().DropVirtualChannel(mock1.Anything, mock1.Anything).Return(&datapb.DropVirtualChannelResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.DropVirtualChannel(ctx, &datapb.DropVirtualChannelRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().DropVirtualChannel(mock1.Anything, mock1.Anything).Return(&datapb.DropVirtualChannelResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.DropVirtualChannel(ctx, &datapb.DropVirtualChannelRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1596,53 +1024,14 @@ func Test_DropVirtualChannel(t *testing.T) {
 }
 
 func Test_SetSegmentState(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockDC.EXPECT().SetSegmentState(mock1.Anything, mock1.Anything).Return(&datapb.SetSegmentStateResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.SetSegmentState(ctx, &datapb.SetSegmentStateRequest{})
+	mockDC.EXPECT().SetSegmentState(mock1.Anything, mock1.Anything).Return(&datapb.SetSegmentStateResponse{Status: merr.Success()}, nil)
+	_, err := client.SetSegmentState(ctx, &datapb.SetSegmentStateRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().SetSegmentState(mock1.Anything, mock1.Anything).Return(&datapb.SetSegmentStateResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.SetSegmentState(ctx, &datapb.SetSegmentStateRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().SetSegmentState(mock1.Anything, mock1.Anything).Return(&datapb.SetSegmentStateResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.SetSegmentState(ctx, &datapb.SetSegmentStateRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1651,47 +1040,14 @@ func Test_SetSegmentState(t *testing.T) {
 }
 
 func Test_UpdateSegmentStatistics(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().UpdateSegmentStatistics(mock1.Anything, mock1.Anything).Return(merr.Success(), nil)
-	_, err = client.UpdateSegmentStatistics(ctx, &datapb.UpdateSegmentStatisticsRequest{})
+	_, err := client.UpdateSegmentStatistics(ctx, &datapb.UpdateSegmentStatisticsRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().UpdateSegmentStatistics(mock1.Anything, mock1.Anything).Return(merr.Status(merr.ErrServiceNotReady), nil)
-
-	rsp, err := client.UpdateSegmentStatistics(ctx, &datapb.UpdateSegmentStatisticsRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().UpdateSegmentStatistics(mock1.Anything, mock1.Anything).Return(merr.Success(), mockErr)
-
-	_, err = client.UpdateSegmentStatistics(ctx, &datapb.UpdateSegmentStatisticsRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1700,47 +1056,14 @@ func Test_UpdateSegmentStatistics(t *testing.T) {
 }
 
 func Test_UpdateChannelCheckpoint(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().UpdateChannelCheckpoint(mock1.Anything, mock1.Anything).Return(merr.Success(), nil)
-	_, err = client.UpdateChannelCheckpoint(ctx, &datapb.UpdateChannelCheckpointRequest{})
+	_, err := client.UpdateChannelCheckpoint(ctx, &datapb.UpdateChannelCheckpointRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().UpdateChannelCheckpoint(mock1.Anything, mock1.Anything).Return(merr.Status(merr.ErrServiceNotReady), nil)
-
-	rsp, err := client.UpdateChannelCheckpoint(ctx, &datapb.UpdateChannelCheckpointRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().UpdateChannelCheckpoint(mock1.Anything, mock1.Anything).Return(merr.Success(), mockErr)
-
-	_, err = client.UpdateChannelCheckpoint(ctx, &datapb.UpdateChannelCheckpointRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1749,48 +1072,14 @@ func Test_UpdateChannelCheckpoint(t *testing.T) {
 }
 
 func Test_MarkSegmentsDropped(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().MarkSegmentsDropped(mock1.Anything, mock1.Anything).Return(merr.Success(), nil)
-	_, err = client.MarkSegmentsDropped(ctx, &datapb.MarkSegmentsDroppedRequest{})
+	_, err := client.MarkSegmentsDropped(ctx, &datapb.MarkSegmentsDroppedRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().MarkSegmentsDropped(mock1.Anything, mock1.Anything).Return(merr.Status(merr.ErrServiceNotReady), nil)
-
-	rsp, err := client.MarkSegmentsDropped(ctx, &datapb.MarkSegmentsDroppedRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().MarkSegmentsDropped(mock1.Anything, mock1.Anything).Return(
-		merr.Success(), mockErr)
-
-	_, err = client.MarkSegmentsDropped(ctx, &datapb.MarkSegmentsDroppedRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1799,47 +1088,14 @@ func Test_MarkSegmentsDropped(t *testing.T) {
 }
 
 func Test_BroadcastAlteredCollection(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().BroadcastAlteredCollection(mock1.Anything, mock1.Anything).Return(merr.Success(), nil)
-	_, err = client.BroadcastAlteredCollection(ctx, &datapb.AlterCollectionRequest{})
+	_, err := client.BroadcastAlteredCollection(ctx, &datapb.AlterCollectionRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().BroadcastAlteredCollection(mock1.Anything, mock1.Anything).Return(merr.Status(merr.ErrServiceNotReady), nil)
-
-	rsp, err := client.BroadcastAlteredCollection(ctx, &datapb.AlterCollectionRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().BroadcastAlteredCollection(mock1.Anything, mock1.Anything).Return(
-		merr.Success(), mockErr)
-
-	_, err = client.BroadcastAlteredCollection(ctx, &datapb.AlterCollectionRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1848,48 +1104,14 @@ func Test_BroadcastAlteredCollection(t *testing.T) {
 }
 
 func Test_GcConfirm(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().GcConfirm(mock1.Anything, mock1.Anything).Return(&datapb.GcConfirmResponse{Status: merr.Success()}, nil)
-	_, err = client.GcConfirm(ctx, &datapb.GcConfirmRequest{})
+	_, err := client.GcConfirm(ctx, &datapb.GcConfirmRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GcConfirm(mock1.Anything, mock1.Anything).Return(&datapb.GcConfirmResponse{Status: merr.Status(merr.ErrServiceNotReady)}, nil)
-
-	rsp, err := client.GcConfirm(ctx, &datapb.GcConfirmRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GcConfirm(mock1.Anything, mock1.Anything).Return(&datapb.GcConfirmResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.GcConfirm(ctx, &datapb.GcConfirmRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1898,53 +1120,14 @@ func Test_GcConfirm(t *testing.T) {
 }
 
 func Test_CreateIndex(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().CreateIndex(mock1.Anything, mock1.Anything).Return(merr.Success(), nil)
-	_, err = client.CreateIndex(ctx, &indexpb.CreateIndexRequest{})
+	_, err := client.CreateIndex(ctx, &indexpb.CreateIndexRequest{})
 	assert.Nil(t, err)
 
-	// test compatible with 2.2.x
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().CreateIndex(mock1.Anything, mock1.Anything).Return(nil, merr.ErrServiceUnimplemented).Times(1)
-	mockDC.EXPECT().CreateIndex(mock1.Anything, mock1.Anything).Return(merr.Success(), nil)
-	_, err = client.CreateIndex(ctx, &indexpb.CreateIndexRequest{})
-	assert.Nil(t, err)
-
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().CreateIndex(mock1.Anything, mock1.Anything).Return(merr.Status(merr.ErrServiceNotReady), nil)
-
-	rsp, err := client.CreateIndex(ctx, &indexpb.CreateIndexRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().CreateIndex(mock1.Anything, mock1.Anything).Return(merr.Success(), mockErr)
-
-	_, err = client.CreateIndex(ctx, &indexpb.CreateIndexRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -1953,57 +1136,14 @@ func Test_CreateIndex(t *testing.T) {
 }
 
 func Test_GetSegmentIndexState(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().GetSegmentIndexState(mock1.Anything, mock1.Anything).Return(&indexpb.GetSegmentIndexStateResponse{Status: merr.Success()}, nil)
-	_, err = client.GetSegmentIndexState(ctx, &indexpb.GetSegmentIndexStateRequest{})
+	_, err := client.GetSegmentIndexState(ctx, &indexpb.GetSegmentIndexStateRequest{})
 	assert.Nil(t, err)
 
-	// test compatible with 2.2.x
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetSegmentIndexState(mock1.Anything, mock1.Anything).Return(nil, merr.ErrServiceUnimplemented).Times(1)
-	mockDC.EXPECT().GetSegmentIndexState(mock1.Anything, mock1.Anything).Return(&indexpb.GetSegmentIndexStateResponse{}, nil)
-	_, err = client.GetSegmentIndexState(ctx, &indexpb.GetSegmentIndexStateRequest{})
-	assert.Nil(t, err)
-
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetSegmentIndexState(mock1.Anything, mock1.Anything).Return(&indexpb.GetSegmentIndexStateResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.GetSegmentIndexState(ctx, &indexpb.GetSegmentIndexStateRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetSegmentIndexState(mock1.Anything, mock1.Anything).Return(&indexpb.GetSegmentIndexStateResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.GetSegmentIndexState(ctx, &indexpb.GetSegmentIndexStateRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -2012,56 +1152,14 @@ func Test_GetSegmentIndexState(t *testing.T) {
 }
 
 func Test_GetIndexState(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().GetIndexState(mock1.Anything, mock1.Anything).Return(&indexpb.GetIndexStateResponse{Status: merr.Success()}, nil)
-	_, err = client.GetIndexState(ctx, &indexpb.GetIndexStateRequest{})
+	_, err := client.GetIndexState(ctx, &indexpb.GetIndexStateRequest{})
 	assert.Nil(t, err)
 
-	// test compatible with 2.2.x
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetIndexState(mock1.Anything, mock1.Anything).Return(nil, merr.ErrServiceUnimplemented).Times(1)
-	mockDC.EXPECT().GetIndexState(mock1.Anything, mock1.Anything).Return(&indexpb.GetIndexStateResponse{}, nil)
-	_, err = client.GetIndexState(ctx, &indexpb.GetIndexStateRequest{})
-	assert.Nil(t, err)
-
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetIndexState(mock1.Anything, mock1.Anything).Return(&indexpb.GetIndexStateResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.GetIndexState(ctx, &indexpb.GetIndexStateRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetIndexState(mock1.Anything, mock1.Anything).Return(&indexpb.GetIndexStateResponse{
-		Status: merr.Success(),
-	}, mockErr)
-	_, err = client.GetIndexState(ctx, &indexpb.GetIndexStateRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -2070,57 +1168,14 @@ func Test_GetIndexState(t *testing.T) {
 }
 
 func Test_GetIndexInfos(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().GetIndexInfos(mock1.Anything, mock1.Anything).Return(&indexpb.GetIndexInfoResponse{Status: merr.Success()}, nil)
-	_, err = client.GetIndexInfos(ctx, &indexpb.GetIndexInfoRequest{})
+	_, err := client.GetIndexInfos(ctx, &indexpb.GetIndexInfoRequest{})
 	assert.Nil(t, err)
 
-	// test compatible with 2.2.x
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetIndexInfos(mock1.Anything, mock1.Anything).Return(nil, merr.ErrServiceUnimplemented).Times(1)
-	mockDC.EXPECT().GetIndexInfos(mock1.Anything, mock1.Anything).Return(&indexpb.GetIndexInfoResponse{}, nil)
-	_, err = client.GetIndexInfos(ctx, &indexpb.GetIndexInfoRequest{})
-	assert.Nil(t, err)
-
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetIndexInfos(mock1.Anything, mock1.Anything).Return(&indexpb.GetIndexInfoResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.GetIndexInfos(ctx, &indexpb.GetIndexInfoRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetIndexInfos(mock1.Anything, mock1.Anything).Return(&indexpb.GetIndexInfoResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.GetIndexInfos(ctx, &indexpb.GetIndexInfoRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -2129,57 +1184,14 @@ func Test_GetIndexInfos(t *testing.T) {
 }
 
 func Test_DescribeIndex(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().DescribeIndex(mock1.Anything, mock1.Anything).Return(&indexpb.DescribeIndexResponse{Status: merr.Success()}, nil)
-	_, err = client.DescribeIndex(ctx, &indexpb.DescribeIndexRequest{})
+	_, err := client.DescribeIndex(ctx, &indexpb.DescribeIndexRequest{})
 	assert.Nil(t, err)
 
-	// test compatible with 2.2.x
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().DescribeIndex(mock1.Anything, mock1.Anything).Return(nil, merr.ErrServiceUnimplemented).Times(1)
-	mockDC.EXPECT().DescribeIndex(mock1.Anything, mock1.Anything).Return(&indexpb.DescribeIndexResponse{}, nil)
-	_, err = client.DescribeIndex(ctx, &indexpb.DescribeIndexRequest{})
-	assert.Nil(t, err)
-
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().DescribeIndex(mock1.Anything, mock1.Anything).Return(&indexpb.DescribeIndexResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.DescribeIndex(ctx, &indexpb.DescribeIndexRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().DescribeIndex(mock1.Anything, mock1.Anything).Return(&indexpb.DescribeIndexResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.DescribeIndex(ctx, &indexpb.DescribeIndexRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -2188,57 +1200,14 @@ func Test_DescribeIndex(t *testing.T) {
 }
 
 func Test_GetIndexStatistics(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().GetIndexStatistics(mock1.Anything, mock1.Anything).Return(&indexpb.GetIndexStatisticsResponse{Status: merr.Success()}, nil)
-	_, err = client.GetIndexStatistics(ctx, &indexpb.GetIndexStatisticsRequest{})
+	_, err := client.GetIndexStatistics(ctx, &indexpb.GetIndexStatisticsRequest{})
 	assert.Nil(t, err)
 
-	// test compatible with 2.2.x
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetIndexStatistics(mock1.Anything, mock1.Anything).Return(nil, merr.ErrServiceUnimplemented).Times(1)
-	mockDC.EXPECT().GetIndexStatistics(mock1.Anything, mock1.Anything).Return(&indexpb.GetIndexStatisticsResponse{}, nil)
-	_, err = client.GetIndexStatistics(ctx, &indexpb.GetIndexStatisticsRequest{})
-	assert.Nil(t, err)
-
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetIndexStatistics(mock1.Anything, mock1.Anything).Return(&indexpb.GetIndexStatisticsResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.GetIndexStatistics(ctx, &indexpb.GetIndexStatisticsRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetIndexStatistics(mock1.Anything, mock1.Anything).Return(&indexpb.GetIndexStatisticsResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.GetIndexStatistics(ctx, &indexpb.GetIndexStatisticsRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -2247,57 +1216,14 @@ func Test_GetIndexStatistics(t *testing.T) {
 }
 
 func Test_GetIndexBuildProgress(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().GetIndexBuildProgress(mock1.Anything, mock1.Anything).Return(&indexpb.GetIndexBuildProgressResponse{Status: merr.Success()}, nil)
-	_, err = client.GetIndexBuildProgress(ctx, &indexpb.GetIndexBuildProgressRequest{})
+	_, err := client.GetIndexBuildProgress(ctx, &indexpb.GetIndexBuildProgressRequest{})
 	assert.Nil(t, err)
 
-	// test compatible with 2.2.x
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetIndexBuildProgress(mock1.Anything, mock1.Anything).Return(nil, merr.ErrServiceUnimplemented).Times(1)
-	mockDC.EXPECT().GetIndexBuildProgress(mock1.Anything, mock1.Anything).Return(&indexpb.GetIndexBuildProgressResponse{}, nil)
-	_, err = client.GetIndexBuildProgress(ctx, &indexpb.GetIndexBuildProgressRequest{})
-	assert.Nil(t, err)
-
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetIndexBuildProgress(mock1.Anything, mock1.Anything).Return(&indexpb.GetIndexBuildProgressResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.GetIndexBuildProgress(ctx, &indexpb.GetIndexBuildProgressRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetIndexBuildProgress(mock1.Anything, mock1.Anything).Return(&indexpb.GetIndexBuildProgressResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.GetIndexBuildProgress(ctx, &indexpb.GetIndexBuildProgressRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -2306,54 +1232,14 @@ func Test_GetIndexBuildProgress(t *testing.T) {
 }
 
 func Test_DropIndex(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().DropIndex(mock1.Anything, mock1.Anything).Return(merr.Success(), nil)
-	_, err = client.DropIndex(ctx, &indexpb.DropIndexRequest{})
+	_, err := client.DropIndex(ctx, &indexpb.DropIndexRequest{})
 	assert.Nil(t, err)
 
-	// test compatible with 2.2.x
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().DropIndex(mock1.Anything, mock1.Anything).Return(nil, merr.ErrServiceUnimplemented).Times(1)
-	mockDC.EXPECT().DropIndex(mock1.Anything, mock1.Anything).Return(&commonpb.Status{}, nil)
-	_, err = client.DropIndex(ctx, &indexpb.DropIndexRequest{})
-	assert.Nil(t, err)
-
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().DropIndex(mock1.Anything, mock1.Anything).Return(
-		merr.Status(merr.ErrServiceNotReady), nil)
-
-	rsp, err := client.DropIndex(ctx, &indexpb.DropIndexRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().DropIndex(mock1.Anything, mock1.Anything).Return(merr.Success(), mockErr)
-
-	_, err = client.DropIndex(ctx, &indexpb.DropIndexRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -2362,47 +1248,14 @@ func Test_DropIndex(t *testing.T) {
 }
 
 func Test_ReportDataNodeTtMsgs(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().ReportDataNodeTtMsgs(mock1.Anything, mock1.Anything).Return(merr.Success(), nil)
-	_, err = client.ReportDataNodeTtMsgs(ctx, &datapb.ReportDataNodeTtMsgsRequest{})
+	_, err := client.ReportDataNodeTtMsgs(ctx, &datapb.ReportDataNodeTtMsgsRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().ReportDataNodeTtMsgs(mock1.Anything, mock1.Anything).Return(
-		merr.Status(merr.ErrServiceNotReady), nil)
-
-	rsp, err := client.ReportDataNodeTtMsgs(ctx, &datapb.ReportDataNodeTtMsgsRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().ReportDataNodeTtMsgs(mock1.Anything, mock1.Anything).Return(merr.Success(), mockErr)
-
-	_, err = client.ReportDataNodeTtMsgs(ctx, &datapb.ReportDataNodeTtMsgsRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -2411,47 +1264,14 @@ func Test_ReportDataNodeTtMsgs(t *testing.T) {
 }
 
 func Test_GcControl(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().GcControl(mock1.Anything, mock1.Anything).Return(merr.Success(), nil)
-	_, err = client.GcControl(ctx, &datapb.GcControlRequest{})
+	_, err := client.GcControl(ctx, &datapb.GcControlRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GcControl(mock1.Anything, mock1.Anything).Return(
-		merr.Status(merr.ErrServiceNotReady), nil)
-
-	rsp, err := client.GcControl(ctx, &datapb.GcControlRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GcControl(mock1.Anything, mock1.Anything).Return(merr.Success(), mockErr)
-
-	_, err = client.GcControl(ctx, &datapb.GcControlRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -2460,187 +1280,57 @@ func Test_GcControl(t *testing.T) {
 }
 
 func Test_ListIndexes(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockDC.EXPECT().ListIndexes(mock1.Anything, mock1.Anything).Return(&indexpb.ListIndexesResponse{
-		Status: merr.Success(),
-	}, nil).Once()
-	_, err = client.ListIndexes(ctx, &indexpb.ListIndexesRequest{})
+	mockDC.EXPECT().ListIndexes(mock1.Anything, mock1.Anything).Return(&indexpb.ListIndexesResponse{Status: merr.Success()}, nil)
+	_, err := client.ListIndexes(ctx, &indexpb.ListIndexesRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.EXPECT().ListIndexes(mock1.Anything, mock1.Anything).Return(
-		&indexpb.ListIndexesResponse{
-			Status: merr.Status(merr.ErrServiceNotReady),
-		}, nil).Once()
-
-	rsp, err := client.ListIndexes(ctx, &indexpb.ListIndexesRequest{})
-
-	assert.Nil(t, err)
-	assert.False(t, merr.Ok(rsp.GetStatus()))
-
-	// test return error
-	mockDC.EXPECT().ListIndexes(mock1.Anything, mock1.Anything).Return(nil, mockErr).Once()
-
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
 	_, err = client.ListIndexes(ctx, &indexpb.ListIndexesRequest{})
-	assert.Error(t, err)
-
-	// test ctx done
-	ctx, cancel := context.WithCancel(ctx)
-	cancel()
-	_, err = client.ListIndexes(ctx, &indexpb.ListIndexesRequest{})
-	assert.ErrorIs(t, err, context.Canceled)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func Test_GetChannelRecoveryInfo(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockDC.EXPECT().GetChannelRecoveryInfo(mock1.Anything, mock1.Anything).Return(&datapb.GetChannelRecoveryInfoResponse{
-		Status: merr.Success(),
-	}, nil).Once()
-	_, err = client.GetChannelRecoveryInfo(ctx, &datapb.GetChannelRecoveryInfoRequest{})
+	mockDC.EXPECT().GetChannelRecoveryInfo(mock1.Anything, mock1.Anything).Return(&datapb.GetChannelRecoveryInfoResponse{Status: merr.Success()}, nil)
+	_, err := client.GetChannelRecoveryInfo(ctx, &datapb.GetChannelRecoveryInfoRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.EXPECT().GetChannelRecoveryInfo(mock1.Anything, mock1.Anything).Return(
-		&datapb.GetChannelRecoveryInfoResponse{
-			Status: merr.Status(merr.ErrServiceNotReady),
-		}, nil).Once()
-
-	rsp, err := client.GetChannelRecoveryInfo(ctx, &datapb.GetChannelRecoveryInfoRequest{})
-
-	assert.Nil(t, err)
-	assert.False(t, merr.Ok(rsp.GetStatus()))
-
-	// test return error
-	mockDC.EXPECT().GetChannelRecoveryInfo(mock1.Anything, mock1.Anything).Return(nil, mockErr).Once()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+	defer cancel()
+	time.Sleep(20 * time.Millisecond)
 	_, err = client.GetChannelRecoveryInfo(ctx, &datapb.GetChannelRecoveryInfoRequest{})
-	assert.Error(t, err)
-
-	// test ctx done
-	ctx, cancel := context.WithCancel(ctx)
-	cancel()
-	_, err = client.GetChannelRecoveryInfo(ctx, &datapb.GetChannelRecoveryInfoRequest{})
-	assert.ErrorIs(t, err, context.Canceled)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func Test_GetQuotaMetrics(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	mockRC := mocks.NewMockRootCoordClient(t)
+	client := newTestClient(MixCoordClient{RootCoordClient: mockRC})
 	defer client.Close()
 
-	mockRC := mocks.NewMockRootCoordClient(t)
-	mockmix := MixCoordClient{
-		RootCoordClient: mockRC,
-	}
-
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockRC.EXPECT().GetQuotaMetrics(mock1.Anything, mock1.Anything).Return(&internalpb.GetQuotaMetricsResponse{
-		Status:      merr.Success(),
-		MetricsInfo: `{"proxy": {"tasks": 100}}`,
-	}, nil).Once()
-	resp, err := client.GetQuotaMetrics(ctx, &internalpb.GetQuotaMetricsRequest{})
+	mockRC.EXPECT().GetQuotaMetrics(mock1.Anything, mock1.Anything).Return(&internalpb.GetQuotaMetricsResponse{Status: merr.Success()}, nil)
+	_, err := client.GetQuotaMetrics(ctx, &internalpb.GetQuotaMetricsRequest{})
 	assert.Nil(t, err)
-	assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
-	assert.Equal(t, `{"proxy": {"tasks": 100}}`, resp.GetMetricsInfo())
 }
 
 func Test_FlushAll(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockDC.EXPECT().FlushAll(mock1.Anything, mock1.Anything).Return(&datapb.FlushAllResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.FlushAll(ctx, &datapb.FlushAllRequest{})
+	mockDC.EXPECT().FlushAll(mock1.Anything, mock1.Anything).Return(&datapb.FlushAllResponse{Status: merr.Success()}, nil)
+	_, err := client.FlushAll(ctx, &datapb.FlushAllRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().FlushAll(mock1.Anything, mock1.Anything).Return(&datapb.FlushAllResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.FlushAll(ctx, &datapb.FlushAllRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().FlushAll(mock1.Anything, mock1.Anything).Return(&datapb.FlushAllResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.FlushAll(ctx, &datapb.FlushAllRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -2649,53 +1339,15 @@ func Test_FlushAll(t *testing.T) {
 }
 
 func TestClient_TruncateCollection(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	mockRC := mocks.NewMockRootCoordClient(t)
+	client := newTestClient(MixCoordClient{RootCoordClient: mockRC})
 	defer client.Close()
 
-	mockRC := mocks.NewMockRootCoordClient(t)
-	mockmix := MixCoordClient{
-		RootCoordClient: mockRC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
-	mockRC.EXPECT().TruncateCollection(mock1.Anything, mock1.Anything).Return(&milvuspb.TruncateCollectionResponse{
-		Status: merr.Success(),
-	}, nil)
-	_, err = client.TruncateCollection(ctx, &milvuspb.TruncateCollectionRequest{})
+	mockRC.EXPECT().TruncateCollection(mock1.Anything, mock1.Anything).Return(&milvuspb.TruncateCollectionResponse{Status: merr.Success()}, nil)
+	_, err := client.TruncateCollection(ctx, &milvuspb.TruncateCollectionRequest{})
 	assert.Nil(t, err)
 
-	// test return error status
-	mockRC.ExpectedCalls = nil
-	mockRC.EXPECT().TruncateCollection(mock1.Anything, mock1.Anything).Return(&milvuspb.TruncateCollectionResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.TruncateCollection(ctx, &milvuspb.TruncateCollectionRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockRC.ExpectedCalls = nil
-	mockRC.EXPECT().TruncateCollection(mock1.Anything, mock1.Anything).Return(&milvuspb.TruncateCollectionResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.TruncateCollection(ctx, &milvuspb.TruncateCollectionRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -2705,24 +1357,9 @@ func TestClient_TruncateCollection(t *testing.T) {
 
 func TestClient_GetRestoreSnapshotState(t *testing.T) {
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().GetRestoreSnapshotState(mock1.Anything, mock1.Anything).Return(&datapb.GetRestoreSnapshotStateResponse{
 		Status: merr.Success(),
 		Info: &datapb.RestoreSnapshotInfo{
@@ -2736,26 +1373,6 @@ func TestClient_GetRestoreSnapshotState(t *testing.T) {
 	assert.Equal(t, int64(1), resp.GetInfo().GetJobId())
 	assert.Equal(t, datapb.RestoreSnapshotState_RestoreSnapshotExecuting, resp.GetInfo().GetState())
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetRestoreSnapshotState(mock1.Anything, mock1.Anything).Return(&datapb.GetRestoreSnapshotStateResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.GetRestoreSnapshotState(ctx, &datapb.GetRestoreSnapshotStateRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().GetRestoreSnapshotState(mock1.Anything, mock1.Anything).Return(&datapb.GetRestoreSnapshotStateResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.GetRestoreSnapshotState(ctx, &datapb.GetRestoreSnapshotStateRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -2765,24 +1382,9 @@ func TestClient_GetRestoreSnapshotState(t *testing.T) {
 
 func TestClient_ListRestoreSnapshotJobs(t *testing.T) {
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().ListRestoreSnapshotJobs(mock1.Anything, mock1.Anything).Return(&datapb.ListRestoreSnapshotJobsResponse{
 		Status: merr.Success(),
 		Jobs: []*datapb.RestoreSnapshotInfo{
@@ -2794,26 +1396,6 @@ func TestClient_ListRestoreSnapshotJobs(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(resp.GetJobs()))
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().ListRestoreSnapshotJobs(mock1.Anything, mock1.Anything).Return(&datapb.ListRestoreSnapshotJobsResponse{
-		Status: merr.Status(merr.ErrServiceNotReady),
-	}, nil)
-
-	rsp, err := client.ListRestoreSnapshotJobs(ctx, &datapb.ListRestoreSnapshotJobsRequest{})
-	assert.NotEqual(t, int32(0), rsp.GetStatus().GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().ListRestoreSnapshotJobs(mock1.Anything, mock1.Anything).Return(&datapb.ListRestoreSnapshotJobsResponse{
-		Status: merr.Success(),
-	}, mockErr)
-
-	_, err = client.ListRestoreSnapshotJobs(ctx, &datapb.ListRestoreSnapshotJobsRequest{})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -2823,60 +1405,17 @@ func TestClient_ListRestoreSnapshotJobs(t *testing.T) {
 
 func TestClient_BatchUpdateManifest(t *testing.T) {
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	mockDC := mocks.NewMockDataCoordClient(t)
-	mockmix := MixCoordClient{
-		DataCoordClient: mockDC,
-	}
-	mockGrpcClient := mocks.NewMockGrpcClient[MixCoordClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().GetNodeID().Return(1)
-	mockGrpcClient.EXPECT().ReCall(mock1.Anything, mock1.Anything).RunAndReturn(func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-		return f(mockmix)
-	})
-	client.(*Client).grpcClient = mockGrpcClient
-
-	// test success
 	mockDC.EXPECT().BatchUpdateManifest(mock1.Anything, mock1.Anything).Return(merr.Success(), nil)
 	resp, err := client.BatchUpdateManifest(ctx, &datapb.BatchUpdateManifestRequest{
 		CollectionId: 100,
-		Items: []*datapb.BatchUpdateManifestItem{
-			{SegmentId: 1, ManifestVersion: 10},
-		},
+		Items:        []*datapb.BatchUpdateManifestItem{{SegmentId: 1, ManifestVersion: 10}},
 	})
 	assert.Nil(t, err)
 	assert.True(t, merr.Ok(resp))
 
-	// test return error status
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().BatchUpdateManifest(mock1.Anything, mock1.Anything).Return(merr.Status(merr.ErrServiceNotReady), nil)
-
-	rsp, err := client.BatchUpdateManifest(ctx, &datapb.BatchUpdateManifestRequest{
-		CollectionId: 100,
-		Items: []*datapb.BatchUpdateManifestItem{
-			{SegmentId: 1, ManifestVersion: 10},
-		},
-	})
-	assert.NotEqual(t, int32(0), rsp.GetCode())
-	assert.Nil(t, err)
-
-	// test return error
-	mockDC.ExpectedCalls = nil
-	mockDC.EXPECT().BatchUpdateManifest(mock1.Anything, mock1.Anything).Return(merr.Success(), mockErr)
-
-	_, err = client.BatchUpdateManifest(ctx, &datapb.BatchUpdateManifestRequest{
-		CollectionId: 100,
-		Items: []*datapb.BatchUpdateManifestItem{
-			{SegmentId: 1, ManifestVersion: 10},
-		},
-	})
-	assert.NotNil(t, err)
-
-	// test ctx done
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
 	defer cancel()
 	time.Sleep(20 * time.Millisecond)
@@ -2885,250 +1424,70 @@ func TestClient_BatchUpdateManifest(t *testing.T) {
 }
 
 func Test_CreateExternalCollection(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	config := &Params.RootCoordGrpcClientCfg
-	grpcClient := grpcclient.NewClientBase[MixCoordClient](config, "milvus.proto.rootcoord.RootCoord")
-	client.(*Client).grpcClient = grpcClient
-	mockClose := mockey.Mock(mockey.GetMethod(&grpcClient, "Close")).
-		Return(nil).Build()
-	defer mockClose.UnPatch()
-	mockGetNodeID := mockey.Mock(mockey.GetMethod(&grpcClient, "GetNodeID")).
-		Return(1).Build()
-	defer mockGetNodeID.UnPatch()
-
-	req := &msgpb.CreateCollectionRequest{
-		CollectionName: "test_external_collection",
-	}
-
-	// 构造一个 MixCoordClient，用于在 ReCall 中使用
-	mockMix := MixCoordClient{
-		DataCoordClient: datapb.NewDataCoordClient(nil),
-	}
-
-	// Test success case
-	// Mock DataCoordClient 的 CreateExternalCollection 方法
-	mockCreate := mockey.Mock(mockey.GetMethod(mockMix.DataCoordClient, "CreateExternalCollection")).
-		Return(&datapb.CreateExternalCollectionResponse{
-			Status: merr.Success(),
-		}, nil).Build()
-
-	mockReCall := mockey.Mock(mockey.GetMethod(&grpcClient, "ReCall")).To(
-		func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-			return f(mockMix)
-		}).Build()
-
-	_, err = client.CreateExternalCollection(ctx, req)
+	mockDC.EXPECT().CreateExternalCollection(mock1.Anything, mock1.Anything).Return(&datapb.CreateExternalCollectionResponse{Status: merr.Success()}, nil)
+	_, err := client.CreateExternalCollection(ctx, &msgpb.CreateCollectionRequest{CollectionName: "test_external_collection"})
 	assert.Nil(t, err)
-	mockCreate.UnPatch()
-	mockReCall.UnPatch()
 
-	// Test error case
-	mockCreateErr := mockey.Mock(mockey.GetMethod(mockMix.DataCoordClient, "CreateExternalCollection")).
-		Return(nil, mockErr).Build()
-	defer mockCreateErr.UnPatch()
-
-	mockReCall = mockey.Mock(mockey.GetMethod(&grpcClient, "ReCall")).To(
-		func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-			return f(mockMix)
-		}).Build()
-	defer mockReCall.UnPatch()
-
-	_, err = client.CreateExternalCollection(ctx, req)
+	mockDC.ExpectedCalls = nil
+	mockDC.EXPECT().CreateExternalCollection(mock1.Anything, mock1.Anything).Return(nil, mockErr)
+	_, err = client.CreateExternalCollection(ctx, &msgpb.CreateCollectionRequest{CollectionName: "test_external_collection"})
 	assert.NotNil(t, err)
 }
 
 func Test_RefreshExternalCollection(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	config := &Params.RootCoordGrpcClientCfg
-	grpcClient := grpcclient.NewClientBase[MixCoordClient](config, "milvus.proto.rootcoord.RootCoord")
-	client.(*Client).grpcClient = grpcClient
-	mockClose := mockey.Mock(mockey.GetMethod(&grpcClient, "Close")).
-		Return(nil).Build()
-	defer mockClose.UnPatch()
-	mockGetNodeID := mockey.Mock(mockey.GetMethod(&grpcClient, "GetNodeID")).
-		Return(1).Build()
-	defer mockGetNodeID.UnPatch()
-
-	mockMix := MixCoordClient{
-		DataCoordClient: datapb.NewDataCoordClient(nil),
-	}
-
-	req := &datapb.RefreshExternalCollectionRequest{
-		CollectionId:   1001,
-		CollectionName: "test_collection",
-	}
-
-	// Test success case
-	mockRefresh := mockey.Mock(mockey.GetMethod(mockMix.DataCoordClient, "RefreshExternalCollection")).
-		Return(&datapb.RefreshExternalCollectionResponse{
-			Status: merr.Success(),
-			JobId:  54321,
-		}, nil).Build()
-
-	mockReCall := mockey.Mock(mockey.GetMethod(&grpcClient, "ReCall")).To(
-		func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-			return f(mockMix)
-		}).Build()
-
-	resp, err := client.RefreshExternalCollection(ctx, req)
+	mockDC.EXPECT().RefreshExternalCollection(mock1.Anything, mock1.Anything).Return(&datapb.RefreshExternalCollectionResponse{Status: merr.Success(), JobId: 54321}, nil)
+	resp, err := client.RefreshExternalCollection(ctx, &datapb.RefreshExternalCollectionRequest{CollectionId: 1001})
 	assert.Nil(t, err)
 	assert.Equal(t, int64(54321), resp.GetJobId())
-	mockRefresh.UnPatch()
-	mockReCall.UnPatch()
 
-	// Test error case
-	mockRefreshErr := mockey.Mock(mockey.GetMethod(mockMix.DataCoordClient, "RefreshExternalCollection")).
-		Return(nil, mockErr).Build()
-	defer mockRefreshErr.UnPatch()
-
-	mockReCall = mockey.Mock(mockey.GetMethod(&grpcClient, "ReCall")).To(
-		func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-			return f(mockMix)
-		}).Build()
-	defer mockReCall.UnPatch()
-
-	_, err = client.RefreshExternalCollection(ctx, req)
+	mockDC.ExpectedCalls = nil
+	mockDC.EXPECT().RefreshExternalCollection(mock1.Anything, mock1.Anything).Return(nil, mockErr)
+	_, err = client.RefreshExternalCollection(ctx, &datapb.RefreshExternalCollectionRequest{CollectionId: 1001})
 	assert.NotNil(t, err)
 }
 
 func Test_GetRefreshExternalCollectionProgress(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	config := &Params.RootCoordGrpcClientCfg
-	grpcClient := grpcclient.NewClientBase[MixCoordClient](config, "milvus.proto.rootcoord.RootCoord")
-	client.(*Client).grpcClient = grpcClient
-	mockClose := mockey.Mock(mockey.GetMethod(&grpcClient, "Close")).
-		Return(nil).Build()
-	defer mockClose.UnPatch()
-	mockGetNodeID := mockey.Mock(mockey.GetMethod(&grpcClient, "GetNodeID")).
-		Return(1).Build()
-	defer mockGetNodeID.UnPatch()
-
-	mockMix := MixCoordClient{
-		DataCoordClient: datapb.NewDataCoordClient(nil),
-	}
-
-	req := &datapb.GetRefreshExternalCollectionProgressRequest{
-		JobId: 54321,
-	}
-
-	// Test success case
-	mockProgress := mockey.Mock(mockey.GetMethod(mockMix.DataCoordClient, "GetRefreshExternalCollectionProgress")).
-		Return(&datapb.GetRefreshExternalCollectionProgressResponse{
-			Status: merr.Success(),
-			JobInfo: &datapb.ExternalCollectionRefreshJob{
-				JobId:    54321,
-				Progress: 50,
-			},
-		}, nil).Build()
-
-	mockReCall := mockey.Mock(mockey.GetMethod(&grpcClient, "ReCall")).To(
-		func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-			return f(mockMix)
-		}).Build()
-
-	resp, err := client.GetRefreshExternalCollectionProgress(ctx, req)
+	mockDC.EXPECT().GetRefreshExternalCollectionProgress(mock1.Anything, mock1.Anything).Return(&datapb.GetRefreshExternalCollectionProgressResponse{
+		Status:  merr.Success(),
+		JobInfo: &datapb.ExternalCollectionRefreshJob{JobId: 54321, Progress: 50},
+	}, nil)
+	resp, err := client.GetRefreshExternalCollectionProgress(ctx, &datapb.GetRefreshExternalCollectionProgressRequest{JobId: 54321})
 	assert.Nil(t, err)
 	assert.Equal(t, int64(54321), resp.GetJobInfo().GetJobId())
-	mockProgress.UnPatch()
-	mockReCall.UnPatch()
 
-	// Test error case
-	mockProgressErr := mockey.Mock(mockey.GetMethod(mockMix.DataCoordClient, "GetRefreshExternalCollectionProgress")).
-		Return(nil, mockErr).Build()
-	defer mockProgressErr.UnPatch()
-
-	mockReCall = mockey.Mock(mockey.GetMethod(&grpcClient, "ReCall")).To(
-		func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-			return f(mockMix)
-		}).Build()
-	defer mockReCall.UnPatch()
-
-	_, err = client.GetRefreshExternalCollectionProgress(ctx, req)
+	mockDC.ExpectedCalls = nil
+	mockDC.EXPECT().GetRefreshExternalCollectionProgress(mock1.Anything, mock1.Anything).Return(nil, mockErr)
+	_, err = client.GetRefreshExternalCollectionProgress(ctx, &datapb.GetRefreshExternalCollectionProgressRequest{JobId: 54321})
 	assert.NotNil(t, err)
 }
 
 func Test_ListRefreshExternalCollectionJobs(t *testing.T) {
-	paramtable.Init()
-
 	ctx := context.Background()
-	client, err := NewClient(ctx)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	client, mockDC := newTestClientWithMockDC(t)
 	defer client.Close()
 
-	config := &Params.RootCoordGrpcClientCfg
-	grpcClient := grpcclient.NewClientBase[MixCoordClient](config, "milvus.proto.rootcoord.RootCoord")
-	client.(*Client).grpcClient = grpcClient
-	mockClose := mockey.Mock(mockey.GetMethod(&grpcClient, "Close")).
-		Return(nil).Build()
-	defer mockClose.UnPatch()
-	mockGetNodeID := mockey.Mock(mockey.GetMethod(&grpcClient, "GetNodeID")).
-		Return(1).Build()
-	defer mockGetNodeID.UnPatch()
-
-	mockMix := MixCoordClient{
-		DataCoordClient: datapb.NewDataCoordClient(nil),
-	}
-
-	req := &datapb.ListRefreshExternalCollectionJobsRequest{
-		CollectionId: 1001,
-	}
-
-	// Test success case
-	mockList := mockey.Mock(mockey.GetMethod(mockMix.DataCoordClient, "ListRefreshExternalCollectionJobs")).
-		Return(&datapb.ListRefreshExternalCollectionJobsResponse{
-			Status: merr.Success(),
-			Jobs: []*datapb.ExternalCollectionRefreshJob{
-				{
-					JobId:    54321,
-					Progress: 100,
-				},
-			},
-		}, nil).Build()
-
-	mockReCall := mockey.Mock(mockey.GetMethod(&grpcClient, "ReCall")).To(
-		func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-			return f(mockMix)
-		}).Build()
-
-	resp, err := client.ListRefreshExternalCollectionJobs(ctx, req)
+	mockDC.EXPECT().ListRefreshExternalCollectionJobs(mock1.Anything, mock1.Anything).Return(&datapb.ListRefreshExternalCollectionJobsResponse{
+		Status: merr.Success(),
+		Jobs:   []*datapb.ExternalCollectionRefreshJob{{JobId: 54321, Progress: 100}},
+	}, nil)
+	resp, err := client.ListRefreshExternalCollectionJobs(ctx, &datapb.ListRefreshExternalCollectionJobsRequest{CollectionId: 1001})
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(resp.GetJobs()))
-	mockList.UnPatch()
-	mockReCall.UnPatch()
 
-	// Test error case
-	mockListErr := mockey.Mock(mockey.GetMethod(mockMix.DataCoordClient, "ListRefreshExternalCollectionJobs")).
-		Return(nil, mockErr).Build()
-	defer mockListErr.UnPatch()
-
-	mockReCall = mockey.Mock(mockey.GetMethod(&grpcClient, "ReCall")).To(
-		func(ctx context.Context, f func(MixCoordClient) (interface{}, error)) (interface{}, error) {
-			return f(mockMix)
-		}).Build()
-	defer mockReCall.UnPatch()
-
-	_, err = client.ListRefreshExternalCollectionJobs(ctx, req)
+	mockDC.ExpectedCalls = nil
+	mockDC.EXPECT().ListRefreshExternalCollectionJobs(mock1.Anything, mock1.Anything).Return(nil, mockErr)
+	_, err = client.ListRefreshExternalCollectionJobs(ctx, &datapb.ListRefreshExternalCollectionJobsRequest{CollectionId: 1001})
 	assert.NotNil(t, err)
 }

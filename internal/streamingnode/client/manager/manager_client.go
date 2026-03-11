@@ -5,11 +5,9 @@ import (
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
-	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 
-	"github.com/milvus-io/milvus/internal/json"
-	"github.com/milvus-io/milvus/internal/util/grpcutil/balancer/picker"
+	"github.com/milvus-io/milvus/internal/util/grpcutil"
 	"github.com/milvus-io/milvus/internal/util/grpcutil/discoverer"
 	"github.com/milvus-io/milvus/internal/util/grpcutil/lazygrpc"
 	"github.com/milvus-io/milvus/internal/util/grpcutil/resolver"
@@ -17,8 +15,6 @@ import (
 	streamingserviceinterceptor "github.com/milvus-io/milvus/internal/util/streamingutil/service/interceptor"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
-	"github.com/milvus-io/milvus/pkg/v2/tracer"
-	"github.com/milvus-io/milvus/pkg/v2/util/interceptor"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
@@ -75,48 +71,15 @@ func NewManagerClient(etcdCli *clientv3.Client) ManagerClient {
 // getDialOptions returns grpc dial options.
 func getDialOptions(rb resolver.Builder) []grpc.DialOption {
 	cfg := &paramtable.Get().StreamingNodeGrpcClientCfg
-	tlsCfg := &paramtable.Get().InternalTLSCfg
-	retryPolicy := cfg.GetDefaultRetryPolicy()
-	retryPolicy["retryableStatusCodes"] = []string{"UNAVAILABLE"}
-	defaultServiceConfig := map[string]interface{}{
-		"loadBalancingConfig": []map[string]interface{}{
-			{picker.ServerIDPickerBalancerName: map[string]interface{}{}},
-		},
-		"methodConfig": []map[string]interface{}{
-			{
-				"name": []map[string]string{
-					{"service": "milvus.proto.streaming.StreamingNodeManagerService"},
-				},
-				"waitForReady": true,
-				"retryPolicy":  retryPolicy,
-			},
-		},
-	}
-	defaultServiceConfigJSON, err := json.Marshal(defaultServiceConfig)
-	if err != nil {
-		panic(err)
-	}
-	creds, err := tlsCfg.GetClientCreds(context.Background())
-	if err != nil {
-		panic(err)
-	}
-	dialOptions := cfg.GetDialOptionsFromConfig()
-	dialOptions = append(dialOptions,
-		grpc.WithBlock(),
-		grpc.WithResolvers(rb),
-		grpc.WithTransportCredentials(creds),
-		grpc.WithChainUnaryInterceptor(
-			otelgrpc.UnaryClientInterceptor(tracer.GetInterceptorOpts()...),
-			interceptor.ClusterInjectionUnaryClientInterceptor(),
+	return grpcutil.GetDialOptions(
+		cfg,
+		"milvus.proto.streaming.StreamingNodeManagerService",
+		rb,
+		[]grpc.UnaryClientInterceptor{
 			streamingserviceinterceptor.NewStreamingServiceUnaryClientInterceptor(),
-		),
-		grpc.WithChainStreamInterceptor(
-			otelgrpc.StreamClientInterceptor(tracer.GetInterceptorOpts()...),
-			interceptor.ClusterInjectionStreamClientInterceptor(),
+		},
+		[]grpc.StreamClientInterceptor{
 			streamingserviceinterceptor.NewStreamingServiceStreamClientInterceptor(),
-		),
-		grpc.WithReturnConnectionError(),
-		grpc.WithDefaultServiceConfig(string(defaultServiceConfigJSON)),
+		},
 	)
-	return dialOptions
 }
