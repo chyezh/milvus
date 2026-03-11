@@ -9,9 +9,9 @@ import (
 	"github.com/stretchr/testify/mock"
 	"google.golang.org/grpc/resolver"
 
-	"github.com/milvus-io/milvus/internal/mocks/util/streamingutil/service/mock_resolver"
-	"github.com/milvus-io/milvus/internal/util/streamingutil/service/attributes"
-	"github.com/milvus-io/milvus/internal/util/streamingutil/service/discoverer"
+	"github.com/milvus-io/milvus/internal/mocks/util/grpcutil/mock_resolver"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/attributes"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/discoverer"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )

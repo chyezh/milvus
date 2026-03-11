@@ -10,7 +10,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
 	"github.com/milvus-io/milvus/internal/mocks/util/streamingutil/service/mock_lazygrpc"
-	"github.com/milvus-io/milvus/internal/util/streamingutil/service/lazygrpc"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/lazygrpc"
 	"github.com/milvus-io/milvus/pkg/v2/mocks/proto/mock_streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"

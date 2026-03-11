@@ -8,39 +8,28 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc/resolver"
 
-	"github.com/milvus-io/milvus/internal/util/streamingutil/service/discoverer"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/discoverer"
 	"github.com/milvus-io/milvus/pkg/v2/log"
-	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
 const (
 	// targets: milvus-session:///streamingcoord.
 	SessionResolverScheme = "milvus-session"
-	// targets: channel-assignment://external-grpc-client
-	ChannelAssignmentResolverScheme = "channel-assignment"
 )
 
 var idAllocator = typeutil.NewIDAllocator()
-
-// NewChannelAssignmentBuilder creates a new resolver builder.
-func NewChannelAssignmentBuilder(w types.AssignmentDiscoverWatcher) Builder {
-	b := newBuilder(ChannelAssignmentResolverScheme,
-		discoverer.NewChannelAssignmentDiscoverer(w),
-		log.With(log.FieldComponent("grpc-resolver"), zap.String("scheme", ChannelAssignmentResolverScheme)))
-	return b
-}
 
 // NewSessionBuilder creates a new resolver builder.
 // Multiple sessions are allowed, use the role as prefix.
 func NewSessionBuilder(c *clientv3.Client, sessionDiscovererOptions ...discoverer.SessionDiscovererOption) Builder {
 	sd := discoverer.NewSessionDiscoverer(c, sessionDiscovererOptions...)
-	b := newBuilder(SessionResolverScheme, sd, sd.Logger().With(log.FieldComponent("grpc-resolver"), zap.String("scheme", SessionResolverScheme)))
+	b := NewBuilder(SessionResolverScheme, sd, sd.Logger().With(log.FieldComponent("grpc-resolver"), zap.String("scheme", SessionResolverScheme)))
 	return b
 }
 
-// newBuilder creates a new resolver builder.
-func newBuilder(scheme string, d discoverer.Discoverer, logger *log.MLogger) Builder {
+// NewBuilder creates a new resolver builder.
+func NewBuilder(scheme string, d discoverer.Discoverer, logger *log.MLogger) Builder {
 	resolver := newResolverWithDiscoverer(d, 1*time.Second, logger) // configurable.
 	b := &builderImpl{
 		lifetime: typeutil.NewLifetime(),

@@ -9,8 +9,8 @@ import (
 	"google.golang.org/grpc/resolver"
 
 	"github.com/milvus-io/milvus/internal/mocks/google.golang.org/grpc/mock_resolver"
-	"github.com/milvus-io/milvus/internal/mocks/util/streamingutil/service/mock_discoverer"
-	"github.com/milvus-io/milvus/internal/util/streamingutil/service/discoverer"
+	"github.com/milvus-io/milvus/internal/mocks/util/grpcutil/mock_discoverer"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/discoverer"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 
@@ -30,7 +30,7 @@ func TestNewBuilder(t *testing.T) {
 		}
 	})
 
-	b := newBuilder("test", d, log.With())
+	b := NewBuilder("test", d, log.With())
 	r := b.Resolver()
 	assert.NotNil(t, r)
 	assert.Equal(t, "test", b.Scheme())

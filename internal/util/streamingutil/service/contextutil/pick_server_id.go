@@ -2,32 +2,18 @@ package contextutil
 
 import (
 	"context"
-)
 
-type (
-	pickResultKeyType int
+	grpccontextutil "github.com/milvus-io/milvus/internal/util/grpcutil/contextutil"
 )
-
-var pickResultServerIDKey pickResultKeyType = 0
 
 // WithPickServerID returns a new context with the pick result.
+// Delegates to grpcutil/contextutil.
 func WithPickServerID(ctx context.Context, serverID int64) context.Context {
-	return context.WithValue(ctx, pickResultServerIDKey, &serverIDPickResult{
-		serverID: serverID,
-	})
+	return grpccontextutil.WithPickServerID(ctx, serverID)
 }
 
 // GetPickServerID must get the pick result from context.
-// panic otherwise.
+// Delegates to grpcutil/contextutil.
 func GetPickServerID(ctx context.Context) (int64, bool) {
-	pr := ctx.Value(pickResultServerIDKey)
-	if pr == nil {
-		return -1, false
-	}
-	return pr.(*serverIDPickResult).serverID, true
-}
-
-// serverIDPickResult is used to store the result of picker.
-type serverIDPickResult struct {
-	serverID int64
+	return grpccontextutil.GetPickServerID(ctx)
 }

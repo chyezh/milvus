@@ -8,7 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 
-	"github.com/milvus-io/milvus/internal/util/streamingutil/service/attributes"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/attributes"
+	grpcdiscoverer "github.com/milvus-io/milvus/internal/util/grpcutil/discoverer"
 	"github.com/milvus-io/milvus/pkg/v2/mocks/streaming/util/mock_types"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
@@ -79,9 +80,9 @@ func TestChannelAssignmentDiscoverer(t *testing.T) {
 	idx := 0
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	err := d.Discover(ctx, func(state VersionedState) error {
+	err := d.Discover(ctx, func(state grpcdiscoverer.VersionedState) error {
 		assert.True(t, expected[idx].Version.EQ(state.Version))
-		assignment := state.ChannelAssignmentInfo()
+		assignment := ChannelAssignmentInfo(state)
 		assert.Equal(t, expected[idx].Assignments, assignment)
 		if idx < len(expected)-1 {
 			ch <- expected[idx+1]

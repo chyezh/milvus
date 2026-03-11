@@ -6,7 +6,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"google.golang.org/grpc/resolver"
 
-	"github.com/milvus-io/milvus/internal/util/streamingutil/service/discoverer"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/discoverer"
 )
 
 type VersionedState = discoverer.VersionedState

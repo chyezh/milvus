@@ -6,8 +6,8 @@ import (
 	"google.golang.org/grpc/balancer"
 	"google.golang.org/grpc/balancer/base"
 
-	"github.com/milvus-io/milvus/internal/util/streamingutil/service/attributes"
-	bbalancer "github.com/milvus-io/milvus/internal/util/streamingutil/service/balancer"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/attributes"
+	bbalancer "github.com/milvus-io/milvus/internal/util/grpcutil/balancer"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 )
 

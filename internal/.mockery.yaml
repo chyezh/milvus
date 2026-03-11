@@ -97,14 +97,13 @@ packages:
   github.com/milvus-io/milvus/internal/storage:
     interfaces:
       ChunkManager:
-  github.com/milvus-io/milvus/internal/util/streamingutil/service/discoverer:
+  github.com/milvus-io/milvus/internal/util/grpcutil/discoverer:
     interfaces:
       Discoverer:
-      AssignmentDiscoverWatcher:
-  github.com/milvus-io/milvus/internal/util/streamingutil/service/lazygrpc:
+  github.com/milvus-io/milvus/internal/util/grpcutil/lazygrpc:
     interfaces:
       Service:
-  github.com/milvus-io/milvus/internal/util/streamingutil/service/resolver:
+  github.com/milvus-io/milvus/internal/util/grpcutil/resolver:
     interfaces:
       Resolver:
       Builder:

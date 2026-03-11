@@ -3,8 +3,8 @@ package client
 import (
 	"github.com/milvus-io/milvus/internal/streamingcoord/client/assignment"
 	"github.com/milvus-io/milvus/internal/streamingcoord/client/broadcast"
-	"github.com/milvus-io/milvus/internal/util/streamingutil/service/lazygrpc"
-	"github.com/milvus-io/milvus/internal/util/streamingutil/service/resolver"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/lazygrpc"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/resolver"
 )
 
 // clientImpl is the implementation of Client.

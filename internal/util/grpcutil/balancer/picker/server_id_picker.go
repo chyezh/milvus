@@ -11,7 +11,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/contextutil"
 	"github.com/milvus-io/milvus/pkg/v2/util/interceptor"
 )
 

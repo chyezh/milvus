@@ -13,10 +13,11 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/consumer"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/producer"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
-	"github.com/milvus-io/milvus/internal/util/streamingutil/service/balancer/picker"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/balancer/picker"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/lazygrpc"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/resolver"
+	streamingservice "github.com/milvus-io/milvus/internal/util/streamingutil/service"
 	streamingserviceinterceptor "github.com/milvus-io/milvus/internal/util/streamingutil/service/interceptor"
-	"github.com/milvus-io/milvus/internal/util/streamingutil/service/lazygrpc"
-	"github.com/milvus-io/milvus/internal/util/streamingutil/service/resolver"
 	"github.com/milvus-io/milvus/pkg/v2/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/options"
@@ -101,7 +102,7 @@ type HandlerClient interface {
 
 // NewHandlerClient creates a new handler client.
 func NewHandlerClient(w types.AssignmentDiscoverWatcher) HandlerClient {
-	rb := resolver.NewChannelAssignmentBuilder(w)
+	rb := streamingservice.NewChannelAssignmentBuilder(w)
 	dialTimeout := paramtable.Get().StreamingNodeGrpcClientCfg.DialTimeout.GetAsDuration(time.Millisecond)
 	dialOptions := getDialOptions(rb)
 	conn := lazygrpc.NewConn(func(ctx context.Context) (*grpc.ClientConn, error) {
@@ -109,7 +110,7 @@ func NewHandlerClient(w types.AssignmentDiscoverWatcher) HandlerClient {
 		defer cancel()
 		return grpc.DialContext(
 			ctx,
-			resolver.ChannelAssignmentResolverScheme+":///"+typeutil.StreamingNodeRole,
+			streamingservice.ChannelAssignmentResolverScheme+":///"+typeutil.StreamingNodeRole,
 			dialOptions..., // TODO: we should use dynamic service config in future by add it to resolver.
 		)
 	})

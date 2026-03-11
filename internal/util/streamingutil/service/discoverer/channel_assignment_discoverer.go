@@ -6,14 +6,15 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc/resolver"
 
-	"github.com/milvus-io/milvus/internal/util/streamingutil/service/attributes"
+	"github.com/milvus-io/milvus/internal/util/grpcutil/attributes"
+	grpcdiscoverer "github.com/milvus-io/milvus/internal/util/grpcutil/discoverer"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v2/util/typeutil"
 )
 
 // NewChannelAssignmentDiscoverer returns a new Discoverer for the channel assignment registration.
-func NewChannelAssignmentDiscoverer(logCoordManager types.AssignmentDiscoverWatcher) Discoverer {
+func NewChannelAssignmentDiscoverer(logCoordManager types.AssignmentDiscoverWatcher) grpcdiscoverer.Discoverer {
 	return &channelAssignmentDiscoverer{
 		assignmentWatcher: logCoordManager,
 		lastDiscovery:     nil,
@@ -27,15 +28,15 @@ type channelAssignmentDiscoverer struct {
 }
 
 // NewVersionedState returns a lowest versioned state.
-func (d *channelAssignmentDiscoverer) NewVersionedState() VersionedState {
-	return VersionedState{
+func (d *channelAssignmentDiscoverer) NewVersionedState() grpcdiscoverer.VersionedState {
+	return grpcdiscoverer.VersionedState{
 		Version: typeutil.VersionInt64Pair{Global: -1, Local: -1},
 		State:   resolver.State{},
 	}
 }
 
 // channelAssignmentDiscoverer implements the resolver.Discoverer interface.
-func (d *channelAssignmentDiscoverer) Discover(ctx context.Context, cb func(VersionedState) error) error {
+func (d *channelAssignmentDiscoverer) Discover(ctx context.Context, cb func(grpcdiscoverer.VersionedState) error) error {
 	if d.lastDiscovery != nil {
 		// Always send the current state first if there's.
 		// Outside logic may lost the last state before retry Discover function.
@@ -51,7 +52,7 @@ func (d *channelAssignmentDiscoverer) Discover(ctx context.Context, cb func(Vers
 
 // parseState parses the addresses from the discovery response.
 // Always perform a copy here.
-func (d *channelAssignmentDiscoverer) parseState() VersionedState {
+func (d *channelAssignmentDiscoverer) parseState() grpcdiscoverer.VersionedState {
 	addrs := make([]resolver.Address, 0, len(d.lastDiscovery.Assignments))
 	for _, assignment := range d.lastDiscovery.Assignments {
 		assignment := assignment
@@ -64,14 +65,14 @@ func (d *channelAssignmentDiscoverer) parseState() VersionedState {
 		})
 	}
 	// TODO: service config should be sent by resolver in future to achieve dynamic configuration for grpc.
-	return VersionedState{
+	return grpcdiscoverer.VersionedState{
 		Version: d.lastDiscovery.Version,
 		State:   resolver.State{Addresses: addrs},
 	}
 }
 
 // ChannelAssignmentInfo returns the channel assignment info from the resolver state.
-func (s *VersionedState) ChannelAssignmentInfo() map[int64]types.StreamingNodeAssignment {
+func ChannelAssignmentInfo(s grpcdiscoverer.VersionedState) map[int64]types.StreamingNodeAssignment {
 	assignments := make(map[int64]types.StreamingNodeAssignment)
 	for _, v := range s.State.Addresses {
 		assignment := attributes.GetChannelAssignmentInfoFromAttributes(v.BalancerAttributes)
