@@ -33,16 +33,55 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
 )
 
+// mockServiceImpl implements lazygrpc.Service[DataNodeClient] for testing.
+type mockServiceImpl struct {
+	client    DataNodeClient
+	clientErr error
+	closed    bool
+}
+
+func (m *mockServiceImpl) GetService(ctx context.Context) (DataNodeClient, error) {
+	if ctx.Err() != nil {
+		return DataNodeClient{}, ctx.Err()
+	}
+	if m.clientErr != nil {
+		return DataNodeClient{}, m.clientErr
+	}
+	return m.client, nil
+}
+
+func (m *mockServiceImpl) GetConn(ctx context.Context) (*grpc.ClientConn, error) {
+	return nil, nil
+}
+
+func (m *mockServiceImpl) Close() {
+	m.closed = true
+}
+
+// newTestClient creates a Client with a mock service for testing.
+func newTestClient(dnClient DataNodeClient, serverID int64) *Client {
+	svc := &mockServiceImpl{client: dnClient}
+	return &Client{
+		service:  svc,
+		serverID: serverID,
+	}
+}
+
+// newTestClientWithErr creates a Client with a mock service that returns an error.
+func newTestClientWithErr(err error, serverID int64) *Client {
+	svc := &mockServiceImpl{clientErr: err}
+	return &Client{
+		service:  svc,
+		serverID: serverID,
+	}
+}
+
 func Test_NewClient(t *testing.T) {
 	paramtable.Init()
 	ctx := context.Background()
-	client, err := NewClient(ctx, "", 1, false)
-	assert.Nil(t, client)
-	assert.Error(t, err)
 
-	client, err = NewClient(ctx, "test", 2, false)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+	// Test with error case - service returns error
+	client := newTestClientWithErr(errors.New("dummy"), 1)
 
 	checkFunc := func(retNotNil bool) {
 		retCheck := func(notNil bool, ret interface{}, err error) {
@@ -101,59 +140,31 @@ func Test_NewClient(t *testing.T) {
 		retCheck(retNotNil, r17, err)
 	}
 
-	client.(*Client).grpcClient = &mock2.GRPCClientBase[DataNodeClient]{
-		GetGrpcClientErr: errors.New("dummy"),
-	}
+	checkFunc(false)
 
-	newFunc1 := func(cc *grpc.ClientConn) DataNodeClient {
-		return DataNodeClient{
-			DataNodeClient:  &mock2.GrpcDataNodeClient{Err: nil},
-			IndexNodeClient: &mock2.GrpcDataNodeClient{Err: nil},
-		}
-	}
-	client.(*Client).grpcClient.SetNewGrpcClientFunc(newFunc1)
+	// Test with error responses from underlying client
+	client = newTestClient(DataNodeClient{
+		DataNodeClient:  &mock2.GrpcDataNodeClient{Err: errors.New("dummy")},
+		IndexNodeClient: &mock2.GrpcDataNodeClient{Err: errors.New("dummy")},
+	}, 2)
 
 	checkFunc(false)
 
-	client.(*Client).grpcClient = &mock2.GRPCClientBase[DataNodeClient]{
-		GetGrpcClientErr: nil,
-	}
-
-	newFunc2 := func(cc *grpc.ClientConn) DataNodeClient {
-		return DataNodeClient{
-			DataNodeClient:  &mock2.GrpcDataNodeClient{Err: errors.New("dummy")},
-			IndexNodeClient: &mock2.GrpcDataNodeClient{Err: errors.New("dummy")},
-		}
-	}
-
-	client.(*Client).grpcClient.SetNewGrpcClientFunc(newFunc2)
-
-	checkFunc(false)
-
-	client.(*Client).grpcClient = &mock2.GRPCClientBase[DataNodeClient]{
-		GetGrpcClientErr: nil,
-	}
-
-	newFunc3 := func(cc *grpc.ClientConn) DataNodeClient {
-		return DataNodeClient{
-			DataNodeClient:  &mock2.GrpcDataNodeClient{Err: nil},
-			IndexNodeClient: &mock2.GrpcDataNodeClient{Err: nil},
-		}
-	}
-	client.(*Client).grpcClient.SetNewGrpcClientFunc(newFunc3)
+	// Test with successful responses
+	client = newTestClient(DataNodeClient{
+		DataNodeClient:  &mock2.GrpcDataNodeClient{Err: nil},
+		IndexNodeClient: &mock2.GrpcDataNodeClient{Err: nil},
+	}, 2)
 
 	checkFunc(true)
 
-	err = client.Close()
+	err := client.Close()
 	assert.NoError(t, err)
 }
 
 func TestIndexClient(t *testing.T) {
 	paramtable.Init()
 	ctx := context.Background()
-	client, err := NewClient(ctx, "localhost:1234", 1, false)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
 
 	mockIN := mocks.NewMockDataNodeClient(t)
 	mockDN := mocks.NewMockDataNodeClient(t)
@@ -162,13 +173,7 @@ func TestIndexClient(t *testing.T) {
 		IndexNodeClient: mockIN,
 	}
 
-	mockGrpcClient := mocks.NewMockGrpcClient[DataNodeClient](t)
-	mockGrpcClient.EXPECT().Close().Return(nil)
-	mockGrpcClient.EXPECT().ReCall(mock.Anything, mock.Anything).
-		RunAndReturn(func(ctx context.Context, f func(nodeClient DataNodeClient) (interface{}, error)) (interface{}, error) {
-			return f(mockNode)
-		})
-	client.(*Client).grpcClient = mockGrpcClient
+	client := newTestClient(mockNode, 1)
 
 	t.Run("GetComponentStates", func(t *testing.T) {
 		mockDN.EXPECT().GetComponentStates(mock.Anything, mock.Anything).Return(nil, nil)
@@ -284,6 +289,6 @@ func TestIndexClient(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	err = client.Close()
+	err := client.Close()
 	assert.NoError(t, err)
 }
