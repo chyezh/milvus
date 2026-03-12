@@ -342,6 +342,29 @@ def process_rg(
     logger.info("Phase transfer_segments complete for RG '%s'.", rg_name)
 
 
+def cleanup_dirty_rgs(client: MilvusClient, rg_names: list):
+    """Set dirty RGs to (0,0) to release nodes, then drop them."""
+    for rg_name in rg_names:
+        drg = dirty_rg_name(rg_name)
+        rgs = utility.list_resource_groups(using=client._using)
+        if drg not in rgs:
+            logger.info("Dirty RG '%s' does not exist, skipping.", drg)
+            continue
+
+        # Set requests/limits to 0 so nodes flow out
+        logger.info("Setting dirty RG '%s' to requests=0, limits=0...", drg)
+        update_rg_config(client, drg, req=0, lim=0)
+
+        # Wait for nodes to leave
+        logger.info("Waiting for dirty RG '%s' to become empty...", drg)
+        wait_for_rg_node_count(client, drg, 0, timeout=300)
+
+        # Drop the empty RG
+        logger.info("Dropping dirty RG '%s'...", drg)
+        utility.drop_resource_group(drg, using=client._using)
+        logger.info("Dirty RG '%s' dropped.", drg)
+
+
 def rolling_replace(
     milvus_host: str,
     milvus_port: int,
@@ -352,10 +375,12 @@ def rolling_replace(
     node_timeout: int,
     dry_run: bool = False,
     transfer_only: bool = False,
+    token: str = None,
+    cleanup_dirty: bool = False,
 ):
     """Execute rolling replacement of QueryNodes."""
     uri = f"http://{milvus_host}:{milvus_port}"
-    client = MilvusClient(uri=uri)
+    client = MilvusClient(uri=uri, token=token) if token else MilvusClient(uri=uri)
     ops = MilvusOpsClient(ops_host, ops_port)
 
     # Collect initial state
@@ -403,6 +428,14 @@ def rolling_replace(
                 "Specify --rg explicitly."
             )
         logger.info("Auto-discovered RGs: %s", rg_names)
+
+    if cleanup_dirty:
+        logger.info("=" * 60)
+        logger.info("Cleaning up dirty resource groups")
+        logger.info("=" * 60)
+        cleanup_dirty_rgs(client, rg_names)
+        logger.info("Cleanup complete.")
+        return
 
     if transfer_only:
         # --transfer-only: read old nodes from dirty RGs (already in place)
@@ -582,6 +615,11 @@ def main():
         help="Timeout in seconds waiting for node transfers (default: 300)",
     )
     parser.add_argument(
+        "--token",
+        default=None,
+        help="Milvus authentication token (e.g. 'user:password' or API key)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Only show what would be done, don't execute",
@@ -591,6 +629,12 @@ def main():
         action="store_true",
         help="Skip drain_old and fill_new phases, only run transfer_segments. "
         "Use when retrying after a failure where nodes are already in place.",
+    )
+    parser.add_argument(
+        "--cleanup-dirty",
+        action="store_true",
+        help="Clean up dirty RGs: set requests/limits to 0 (releasing nodes) "
+        "and drop them. Use after rolling replacement is complete.",
     )
     parser.add_argument(
         "--log-dir",
@@ -611,6 +655,8 @@ def main():
         node_timeout=args.node_timeout,
         dry_run=args.dry_run,
         transfer_only=args.transfer_only,
+        token=args.token,
+        cleanup_dirty=args.cleanup_dirty,
     )
 
 
