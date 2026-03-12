@@ -672,8 +672,8 @@ def main():
     parser.add_argument(
         "--transfer-timeout",
         type=int,
-        default=600,
-        help="Timeout in seconds for segment transfer per node (default: 600)",
+        default=3600,
+        help="Timeout in seconds for segment transfer per node (default: 3600)",
     )
     parser.add_argument(
         "--node-timeout",
