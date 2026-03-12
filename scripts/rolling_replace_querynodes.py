@@ -22,8 +22,7 @@ Workflow:
 During step 2, the replica being processed is unavailable.
 The other replica remains fully functional to serve queries.
 
-Checkpoint/resume: state is saved to a JSON file after each key step.
-If the script is interrupted, re-run with the same arguments to resume.
+Retry: use --transfer-only to skip drain_old/fill_new and only retry segment transfers.
 
 End state:
 - __recycle_resource_group: empty
@@ -32,7 +31,6 @@ End state:
 """
 
 import argparse
-import json
 import logging
 import os
 import sys
@@ -79,105 +77,6 @@ def setup_logging(log_dir: str = "logs"):
 
     logger.info("Log file: %s", os.path.abspath(log_file))
     return log_file
-
-
-# ---------------------------------------------------------------------------
-# Checkpoint
-# ---------------------------------------------------------------------------
-
-
-class Checkpoint:
-    """Persist progress to a JSON file for resume after interruption.
-
-    State schema:
-    {
-        "rg_names": ["rg1", "rg2"],
-        "rg_old_nodes": {"rg1": [1,2,3], "rg2": [4,5,6]},
-        "completed_rgs": ["rg1"],
-        "current_rg": "rg2",
-        "current_phase": "drain_old" | "fill_new" | "transfer_segments" | null,
-        "transferred_old_nodes": [4, 5]   # old nodes whose segments are already cleared
-    }
-    """
-
-    def __init__(self, path: str):
-        self.path = path
-        self.state: dict = {}
-
-    def load(self) -> bool:
-        """Load checkpoint. Returns True if a valid checkpoint was loaded."""
-        if not os.path.exists(self.path):
-            return False
-        with open(self.path, "r") as f:
-            self.state = json.load(f)
-        logger.info("Loaded checkpoint from %s: %s", self.path, self.state)
-        return True
-
-    def save(self):
-        """Persist current state to disk."""
-        tmp = self.path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(self.state, f, indent=2)
-        os.replace(tmp, self.path)
-        logger.debug("Checkpoint saved: %s", self.state)
-
-    def init(self, rg_names: list, rg_old_nodes: dict):
-        """Initialize checkpoint for a fresh run."""
-        self.state = {
-            "rg_names": rg_names,
-            "rg_old_nodes": {k: sorted(v) for k, v in rg_old_nodes.items()},
-            "completed_rgs": [],
-            "current_rg": None,
-            "current_phase": None,
-            "transferred_old_nodes": [],
-        }
-        self.save()
-
-    @property
-    def completed_rgs(self) -> list:
-        return self.state.get("completed_rgs", [])
-
-    @property
-    def current_rg(self) -> str | None:
-        return self.state.get("current_rg")
-
-    @property
-    def current_phase(self) -> str | None:
-        return self.state.get("current_phase")
-
-    @property
-    def transferred_old_nodes(self) -> list:
-        return self.state.get("transferred_old_nodes", [])
-
-    @property
-    def rg_old_nodes(self) -> dict:
-        return self.state.get("rg_old_nodes", {})
-
-    def begin_rg(self, rg_name: str):
-        self.state["current_rg"] = rg_name
-        self.state["current_phase"] = "drain_old"
-        self.state["transferred_old_nodes"] = []
-        self.save()
-
-    def phase_done(self, phase: str, next_phase: str | None):
-        self.state["current_phase"] = next_phase
-        self.save()
-
-    def mark_node_transferred(self, node_id: int):
-        self.state["transferred_old_nodes"].append(node_id)
-        self.save()
-
-    def complete_rg(self, rg_name: str):
-        self.state["completed_rgs"].append(rg_name)
-        self.state["current_rg"] = None
-        self.state["current_phase"] = None
-        self.state["transferred_old_nodes"] = []
-        self.save()
-
-    def remove(self):
-        if os.path.exists(self.path):
-            os.remove(self.path)
-            logger.info("Checkpoint file removed: %s", self.path)
 
 
 # ---------------------------------------------------------------------------
@@ -345,17 +244,16 @@ def process_rg(
     ops: MilvusOpsClient,
     rg_name: str,
     old_nodes: set,
-    ckpt: Checkpoint,
     transfer_timeout: int,
     node_timeout: int,
+    transfer_only: bool = False,
 ):
     """Process a single RG: drain old nodes → fill new nodes → transfer segments."""
     n = len(old_nodes)
     drg = dirty_rg_name(rg_name)
-    phase = ckpt.current_phase
 
     # --- Phase: drain_old ---
-    if phase == "drain_old":
+    if not transfer_only:
         logger.info("Phase drain_old: moving old nodes from '%s' to '%s'", rg_name, drg)
 
         # Create dirty RG with 0,0 first (no node demand yet)
@@ -395,11 +293,9 @@ def process_rg(
                 f"Expected: {sorted(old_nodes)}, Got: {sorted(dirty_nodes)}"
             )
         logger.info("Phase drain_old complete. dirty nodes: %s", sorted(dirty_nodes))
-        ckpt.phase_done("drain_old", "fill_new")
-        phase = "fill_new"
 
     # --- Phase: fill_new ---
-    if phase == "fill_new":
+    if not transfer_only:
         logger.info(
             "Phase fill_new: pulling new nodes from '%s' to '%s'", RECYCLE_RG, rg_name
         )
@@ -416,41 +312,34 @@ def process_rg(
                 f"RG '{rg_name}' contains old nodes after fill: {sorted(overlap)}"
             )
         logger.info("Phase fill_new complete. new nodes: %s", sorted(new_nodes))
-        ckpt.phase_done("fill_new", "transfer_segments")
-        phase = "transfer_segments"
 
     # --- Phase: transfer_segments ---
-    if phase == "transfer_segments":
-        already_done = set(ckpt.transferred_old_nodes)
-        dirty_nodes = get_rg_node_ids(client, drg)
-        new_nodes = get_rg_node_ids(client, rg_name)
-        new_node_list = sorted(new_nodes)
+    dirty_nodes = get_rg_node_ids(client, drg)
+    new_nodes = get_rg_node_ids(client, rg_name)
+    new_node_list = sorted(new_nodes)
 
-        remaining = sorted(dirty_nodes - already_done)
+    logger.info(
+        "Phase transfer_segments: %d old nodes to drain, targets: %s",
+        len(dirty_nodes),
+        new_node_list,
+    )
+
+    for i, old_node_id in enumerate(sorted(dirty_nodes)):
+        target_node_id = new_node_list[i % len(new_node_list)]
         logger.info(
-            "Phase transfer_segments: %d remaining (of %d total), targets: %s",
-            len(remaining),
+            "Transferring segments from node %d to node %d (%d/%d)...",
+            old_node_id,
+            target_node_id,
+            i + 1,
             len(dirty_nodes),
-            new_node_list,
         )
+        ops.transfer_segment(old_node_id, target_node_id, copy_mode=False)
 
-        for i, old_node_id in enumerate(remaining):
-            target_node_id = new_node_list[i % len(new_node_list)]
-            logger.info(
-                "Transferring segments from node %d to node %d (%d/%d)...",
-                old_node_id,
-                target_node_id,
-                i + 1,
-                len(remaining),
-            )
-            ops.transfer_segment(old_node_id, target_node_id, copy_mode=False)
+        logger.info("Waiting for node %d to have no segments...", old_node_id)
+        wait_for_node_segments_empty(ops, old_node_id, timeout=transfer_timeout)
+        logger.info("Node %d segments cleared.", old_node_id)
 
-            logger.info("Waiting for node %d to have no segments...", old_node_id)
-            wait_for_node_segments_empty(ops, old_node_id, timeout=transfer_timeout)
-            logger.info("Node %d segments cleared.", old_node_id)
-            ckpt.mark_node_transferred(old_node_id)
-
-        logger.info("Phase transfer_segments complete for RG '%s'.", rg_name)
+    logger.info("Phase transfer_segments complete for RG '%s'.", rg_name)
 
 
 def rolling_replace(
@@ -461,16 +350,13 @@ def rolling_replace(
     rg_names: list,
     transfer_timeout: int,
     node_timeout: int,
-    checkpoint_file: str,
     dry_run: bool = False,
+    transfer_only: bool = False,
 ):
     """Execute rolling replacement of QueryNodes."""
     uri = f"http://{milvus_host}:{milvus_port}"
     client = MilvusClient(uri=uri)
     ops = MilvusOpsClient(ops_host, ops_port)
-
-    ckpt = Checkpoint(checkpoint_file)
-    resumed = ckpt.load()
 
     # Collect initial state
     logger.info("=" * 60)
@@ -518,12 +404,38 @@ def rolling_replace(
             )
         logger.info("Auto-discovered RGs: %s", rg_names)
 
-    if resumed:
-        # Use old_nodes from checkpoint (original snapshot before any changes)
-        rg_old_nodes = {k: set(v) for k, v in ckpt.rg_old_nodes.items()}
-        logger.info(
-            "Resuming from checkpoint. Original old nodes: %s", ckpt.rg_old_nodes
-        )
+    if transfer_only:
+        # --transfer-only: read old nodes from dirty RGs (already in place)
+        rg_old_nodes = {}
+        for rg_name in rg_names:
+            drg = dirty_rg_name(rg_name)
+            dirty_nodes = get_rg_node_ids(client, drg)
+            if not dirty_nodes:
+                raise RuntimeError(
+                    f"--transfer-only: dirty RG '{drg}' has no nodes. "
+                    "drain_old may not have completed for this RG."
+                )
+            rg_old_nodes[rg_name] = dirty_nodes
+            logger.info(
+                "RG '%s' old nodes in dirty RG '%s' (%d): %s",
+                rg_name,
+                drg,
+                len(dirty_nodes),
+                sorted(dirty_nodes),
+            )
+            # Verify the target RG has new nodes
+            new_nodes = get_rg_node_ids(client, rg_name)
+            if not new_nodes:
+                raise RuntimeError(
+                    f"--transfer-only: RG '{rg_name}' has no new nodes. "
+                    "fill_new may not have completed for this RG."
+                )
+            logger.info(
+                "RG '%s' new nodes (%d): %s",
+                rg_name,
+                len(new_nodes),
+                sorted(new_nodes),
+            )
     else:
         # Fresh run: identify old nodes per RG
         rg_old_nodes = {}
@@ -547,8 +459,6 @@ def rolling_replace(
                 f"Not enough new nodes in '{RECYCLE_RG}': "
                 f"have {len(recycle_nodes)}, need {total_needed}"
             )
-
-        ckpt.init(rg_names, rg_old_nodes)
 
     if dry_run:
         logger.info("[DRY RUN] Would process the following:")
@@ -574,10 +484,6 @@ def rolling_replace(
     try:
         # Step 2: Process each RG (one replica at a time)
         for rg_idx, rg_name in enumerate(rg_names):
-            if rg_name in ckpt.completed_rgs:
-                logger.info("Skipping RG '%s' (already completed)", rg_name)
-                continue
-
             old_nodes = rg_old_nodes[rg_name]
             logger.info("=" * 60)
             logger.info(
@@ -589,21 +495,16 @@ def rolling_replace(
             )
             logger.info("=" * 60)
 
-            # Set starting phase for new or resumed RG
-            if ckpt.current_rg != rg_name:
-                ckpt.begin_rg(rg_name)
-
             process_rg(
                 client,
                 ops,
                 rg_name,
                 old_nodes,
-                ckpt,
                 transfer_timeout=transfer_timeout,
                 node_timeout=node_timeout,
+                transfer_only=transfer_only,
             )
 
-            ckpt.complete_rg(rg_name)
             logger.info("RG '%s' replacement complete.", rg_name)
 
     except Exception:
@@ -611,7 +512,7 @@ def rolling_replace(
         logger.info(
             "Balance is still SUSPENDED. Manual intervention needed. "
             "Run: POST /management/querycoord/balance/resume to restore. "
-            "Re-run this script with the same arguments to resume from checkpoint."
+            "Re-run with --transfer-only to retry segment transfers."
         )
         raise
 
@@ -632,7 +533,6 @@ def rolling_replace(
         rg_info = utility.describe_resource_group(rg, using=client._using)
         logger.info("  %s: available=%d", rg, rg_info.num_available_node)
 
-    ckpt.remove()
     logger.info("Rolling replacement completed successfully!")
 
 
@@ -682,14 +582,15 @@ def main():
         help="Timeout in seconds waiting for node transfers (default: 300)",
     )
     parser.add_argument(
-        "--checkpoint-file",
-        default="rolling_replace_checkpoint.json",
-        help="Checkpoint file for resume (default: rolling_replace_checkpoint.json)",
-    )
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Only show what would be done, don't execute",
+    )
+    parser.add_argument(
+        "--transfer-only",
+        action="store_true",
+        help="Skip drain_old and fill_new phases, only run transfer_segments. "
+        "Use when retrying after a failure where nodes are already in place.",
     )
     parser.add_argument(
         "--log-dir",
@@ -708,8 +609,8 @@ def main():
         rg_names=args.rg,
         transfer_timeout=args.transfer_timeout,
         node_timeout=args.node_timeout,
-        checkpoint_file=args.checkpoint_file,
         dry_run=args.dry_run,
+        transfer_only=args.transfer_only,
     )
 
 
