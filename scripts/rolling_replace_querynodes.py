@@ -4,27 +4,35 @@ Rolling replacement of QueryNodes across resource groups.
 
 Prerequisites:
 - 2 replicas, each using a separate RG (e.g., rg1, rg2), each with N QueryNodes.
-- Equal number of new QNs already added to __default_resource_group (2*N total).
+- Equal number of new QNs already in __recycle_resource_group (2*N total).
 
 Workflow:
 1. Suspend QueryCoord balance.
-2. For each RG, one-by-one:
-   a. transfer_node: move 1 node from RG to __recycle_resource_group.
-   b. Detect which node was moved out (diff node sets before/after).
-   c. Suspend the moved node to prevent new segment loading.
-   d. Wait until QueryCoord auto-fills the RG from __default_resource_group.
-   e. Detect which new node joined the RG.
-   f. Transfer all segments from moved node to the specific new node.
-   g. Wait until moved node has no segments.
+2. For each RG (one replica at a time):
+   a. Create __dirty_query_node_{rg_name} with requests=N, limits=N.
+   b. Set RG requests=0, limits=0 to make all old nodes redundant.
+   c. Coordinator auto-moves old nodes from RG to dirty (redundant → missing).
+   d. Wait until RG has 0 nodes and dirty has N nodes.
+   e. Set RG requests=N, limits=N to pull new nodes from recycle.
+   f. Wait until RG has N available nodes (filled from recycle).
+   g. For each old node in dirty, transfer_segment to a new node in RG.
+   h. Wait until all old nodes have no segments.
 3. Resume QueryCoord balance.
 
+During step 2, the replica being processed is unavailable.
+The other replica remains fully functional to serve queries.
+
+Checkpoint/resume: state is saved to a JSON file after each key step.
+If the script is interrupted, re-run with the same arguments to resume.
+
 End state:
-- __default_resource_group: empty
-- __recycle_resource_group: all old QNs (no segments)
-- Each RG: N new QNs with all segments
+- __recycle_resource_group: empty
+- __dirty_query_node_{rg_name}: all old QNs (no segments)
+- Each RG: N new QNs with all segments loaded
 """
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -33,8 +41,17 @@ from datetime import datetime
 
 import requests
 from pymilvus import MilvusClient, utility
+from pymilvus.client.types import ResourceGroupConfig
 
 logger = logging.getLogger("rolling_replace")
+
+RECYCLE_RG = "__recycle_resource_group"
+RG_PREFIX = "rg_for_replica_"
+
+
+def dirty_rg_name(rg_name: str) -> str:
+    """Generate dirty resource group name for a given RG."""
+    return f"__dirty_query_node_{rg_name}"
 
 
 def setup_logging(log_dir: str = "logs"):
@@ -48,12 +65,10 @@ def setup_logging(log_dir: str = "logs"):
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
 
-    # File handler
     file_handler = logging.FileHandler(log_file, encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(formatter)
@@ -66,8 +81,108 @@ def setup_logging(log_dir: str = "logs"):
     return log_file
 
 
-DEFAULT_RG = "__default_resource_group"
-RECYCLE_RG = "__recycle_resource_group"
+# ---------------------------------------------------------------------------
+# Checkpoint
+# ---------------------------------------------------------------------------
+
+
+class Checkpoint:
+    """Persist progress to a JSON file for resume after interruption.
+
+    State schema:
+    {
+        "rg_names": ["rg1", "rg2"],
+        "rg_old_nodes": {"rg1": [1,2,3], "rg2": [4,5,6]},
+        "completed_rgs": ["rg1"],
+        "current_rg": "rg2",
+        "current_phase": "drain_old" | "fill_new" | "transfer_segments" | null,
+        "transferred_old_nodes": [4, 5]   # old nodes whose segments are already cleared
+    }
+    """
+
+    def __init__(self, path: str):
+        self.path = path
+        self.state: dict = {}
+
+    def load(self) -> bool:
+        """Load checkpoint. Returns True if a valid checkpoint was loaded."""
+        if not os.path.exists(self.path):
+            return False
+        with open(self.path, "r") as f:
+            self.state = json.load(f)
+        logger.info("Loaded checkpoint from %s: %s", self.path, self.state)
+        return True
+
+    def save(self):
+        """Persist current state to disk."""
+        tmp = self.path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(self.state, f, indent=2)
+        os.replace(tmp, self.path)
+        logger.debug("Checkpoint saved: %s", self.state)
+
+    def init(self, rg_names: list, rg_old_nodes: dict):
+        """Initialize checkpoint for a fresh run."""
+        self.state = {
+            "rg_names": rg_names,
+            "rg_old_nodes": {k: sorted(v) for k, v in rg_old_nodes.items()},
+            "completed_rgs": [],
+            "current_rg": None,
+            "current_phase": None,
+            "transferred_old_nodes": [],
+        }
+        self.save()
+
+    @property
+    def completed_rgs(self) -> list:
+        return self.state.get("completed_rgs", [])
+
+    @property
+    def current_rg(self) -> str | None:
+        return self.state.get("current_rg")
+
+    @property
+    def current_phase(self) -> str | None:
+        return self.state.get("current_phase")
+
+    @property
+    def transferred_old_nodes(self) -> list:
+        return self.state.get("transferred_old_nodes", [])
+
+    @property
+    def rg_old_nodes(self) -> dict:
+        return self.state.get("rg_old_nodes", {})
+
+    def begin_rg(self, rg_name: str):
+        self.state["current_rg"] = rg_name
+        self.state["current_phase"] = "drain_old"
+        self.state["transferred_old_nodes"] = []
+        self.save()
+
+    def phase_done(self, phase: str, next_phase: str | None):
+        self.state["current_phase"] = next_phase
+        self.save()
+
+    def mark_node_transferred(self, node_id: int):
+        self.state["transferred_old_nodes"].append(node_id)
+        self.save()
+
+    def complete_rg(self, rg_name: str):
+        self.state["completed_rgs"].append(rg_name)
+        self.state["current_rg"] = None
+        self.state["current_phase"] = None
+        self.state["transferred_old_nodes"] = []
+        self.save()
+
+    def remove(self):
+        if os.path.exists(self.path):
+            os.remove(self.path)
+            logger.info("Checkpoint file removed: %s", self.path)
+
+
+# ---------------------------------------------------------------------------
+# Milvus ops client
+# ---------------------------------------------------------------------------
 
 
 class MilvusOpsClient:
@@ -80,13 +195,11 @@ class MilvusOpsClient:
         url = f"{self.base_url}{path}"
         resp = requests.post(url, data=data, timeout=30)
         resp.raise_for_status()
-        return resp.json()
-
-    def _get(self, path: str, params: dict = None) -> dict:
-        url = f"{self.base_url}{path}"
-        resp = requests.get(url, params=params, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+        result = resp.json()
+        # Validate response status if present
+        if isinstance(result, dict) and result.get("status", "ok") == "error":
+            raise RuntimeError(f"API error on {path}: {result}")
+        return result
 
     def suspend_balance(self):
         logger.info("Suspending QueryCoord balance...")
@@ -109,11 +222,10 @@ class MilvusOpsClient:
         return result.get("nodeInfos", [])
 
     def get_node_distribution(self, node_id: int) -> dict:
-        result = self._post(
+        return self._post(
             "/management/querycoord/distribution/get",
             data={"node_id": str(node_id)},
         )
-        return result
 
     def transfer_segment(
         self, source_node_id: int, target_node_id: int, copy_mode: bool = False
@@ -124,7 +236,6 @@ class MilvusOpsClient:
             data={
                 "source_node_id": str(source_node_id),
                 "target_node_id": str(target_node_id),
-                # omit segment_id => TransferAll=true
                 "copy_mode": str(copy_mode).lower(),
             },
         )
@@ -136,23 +247,24 @@ class MilvusOpsClient:
         )
         return result
 
-    def suspend_node(self, node_id: int):
-        """Suspend a query node (prevents new segment/channel loading)."""
-        result = self._post(
-            "/management/querycoord/node/suspend",
-            data={"node_id": str(node_id)},
-        )
-        logger.info("Suspend node %d result: %s", node_id, result)
-        return result
 
-    def resume_node(self, node_id: int):
-        """Resume a suspended query node."""
-        result = self._post(
-            "/management/querycoord/node/resume",
-            data={"node_id": str(node_id)},
-        )
-        logger.info("Resume node %d result: %s", node_id, result)
-        return result
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def get_rg_node_ids(client: MilvusClient, rg_name: str) -> set:
+    """Get the set of node IDs currently in a resource group."""
+    rg_info = utility.describe_resource_group(rg_name, using=client._using)
+    if hasattr(rg_info, "nodes") and rg_info.nodes:
+        return {node.node_id for node in rg_info.nodes}
+    return set()
+
+
+def get_rg_available_count(client: MilvusClient, rg_name: str) -> int:
+    """Get the number of available nodes in a resource group."""
+    rg_info = utility.describe_resource_group(rg_name, using=client._using)
+    return rg_info.num_available_node
 
 
 def wait_for_rg_node_count(
@@ -162,22 +274,21 @@ def wait_for_rg_node_count(
     timeout: int = 300,
     interval: int = 5,
 ):
-    """Wait until resource group has exactly expected_count available nodes."""
+    """Wait until resource group has expected available node count."""
     deadline = time.time() + timeout
     while time.time() < deadline:
-        rg_info = utility.describe_resource_group(rg_name, using=client._using)
-        available = rg_info.num_available_node
+        available = get_rg_available_count(client, rg_name)
         logger.info(
             "RG '%s': available_nodes=%d, expected=%d",
             rg_name,
             available,
             expected_count,
         )
-        if available >= expected_count:
+        if available == expected_count:
             return
         time.sleep(interval)
     raise TimeoutError(
-        f"Timed out waiting for RG '{rg_name}' to have {expected_count} nodes"
+        f"Timed out waiting for RG '{rg_name}' to have {expected_count} available nodes"
     )
 
 
@@ -199,40 +310,147 @@ def wait_for_node_segments_empty(
     raise TimeoutError(f"Timed out waiting for node {node_id} to have no segments")
 
 
-def get_rg_node_ids(client: MilvusClient, rg_name: str) -> set:
-    """Get the set of node IDs currently in a resource group."""
-    rg_info = utility.describe_resource_group(rg_name, using=client._using)
-    if hasattr(rg_info, "nodes") and rg_info.nodes:
-        return set(rg_info.nodes.keys())
-    raise RuntimeError(
-        f"Cannot get node IDs from RG info for '{rg_name}'. "
-        f"Check pymilvus version supports describe_resource_group().nodes"
-    )
-
-
-def setup_recycle_rg(client: MilvusClient):
-    """Create or update __recycle_resource_group with requests=0, limits=100000."""
-    from pymilvus import utility as util
-    from pymilvus.client.types import ResourceGroupConfig
-
-    rgs = util.list_resource_groups(using=client._using)
+def ensure_rg_exists(client: MilvusClient, rg_name: str, req: int, lim: int):
+    """Create or update a resource group with given requests/limits."""
     config = ResourceGroupConfig(
-        requests={"node_num": 0},
-        limits={"node_num": 100000},
+        requests={"node_num": req},
+        limits={"node_num": lim},
     )
-    if RECYCLE_RG in rgs:
-        logger.info("Updating existing %s", RECYCLE_RG)
-        util.update_resource_groups(
-            {RECYCLE_RG: config},
-            using=client._using,
-        )
+    rgs = utility.list_resource_groups(using=client._using)
+    if rg_name in rgs:
+        logger.info("Updating RG '%s': requests=%d, limits=%d", rg_name, req, lim)
+        utility.update_resource_groups({rg_name: config}, using=client._using)
     else:
-        logger.info("Creating %s", RECYCLE_RG)
-        util.create_resource_group(
-            RECYCLE_RG,
-            config=config,
+        logger.info("Creating RG '%s': requests=%d, limits=%d", rg_name, req, lim)
+        utility.create_resource_group(rg_name, config=config, using=client._using)
+
+
+def update_rg_config(client: MilvusClient, rg_name: str, req: int, lim: int):
+    """Update resource group requests and limits."""
+    config = ResourceGroupConfig(
+        requests={"node_num": req},
+        limits={"node_num": lim},
+    )
+    logger.info("Updating RG '%s': requests=%d, limits=%d", rg_name, req, lim)
+    utility.update_resource_groups({rg_name: config}, using=client._using)
+
+
+# ---------------------------------------------------------------------------
+# Core logic
+# ---------------------------------------------------------------------------
+
+
+def process_rg(
+    client: MilvusClient,
+    ops: MilvusOpsClient,
+    rg_name: str,
+    old_nodes: set,
+    ckpt: Checkpoint,
+    transfer_timeout: int,
+    node_timeout: int,
+):
+    """Process a single RG: drain old nodes → fill new nodes → transfer segments."""
+    n = len(old_nodes)
+    drg = dirty_rg_name(rg_name)
+    phase = ckpt.current_phase
+
+    # --- Phase: drain_old ---
+    if phase == "drain_old":
+        logger.info("Phase drain_old: moving old nodes from '%s' to '%s'", rg_name, drg)
+
+        # Create dirty RG with 0,0 first (no node demand yet)
+        ensure_rg_exists(client, drg, req=0, lim=0)
+
+        # Atomically update both: rg → release nodes, dirty → accept nodes
+        dirty_config = ResourceGroupConfig(
+            requests={"node_num": n},
+            limits={"node_num": n},
+        )
+        rg_config = ResourceGroupConfig(
+            requests={"node_num": 0},
+            limits={"node_num": 0},
+        )
+        logger.info(
+            "Atomically updating '%s' (requests=0, limits=0) "
+            "and '%s' (requests=%d, limits=%d)...",
+            rg_name,
+            drg,
+            n,
+            n,
+        )
+        utility.update_resource_groups(
+            {rg_name: rg_config, drg: dirty_config},
             using=client._using,
         )
+
+        logger.info("Waiting for RG '%s' to drain (0 nodes)...", rg_name)
+        wait_for_rg_node_count(client, rg_name, 0, timeout=node_timeout)
+        logger.info("Waiting for dirty RG '%s' to fill (%d nodes)...", drg, n)
+        wait_for_rg_node_count(client, drg, n, timeout=node_timeout)
+
+        dirty_nodes = get_rg_node_ids(client, drg)
+        if dirty_nodes != old_nodes:
+            raise RuntimeError(
+                f"Dirty RG '{drg}' has unexpected nodes. "
+                f"Expected: {sorted(old_nodes)}, Got: {sorted(dirty_nodes)}"
+            )
+        logger.info("Phase drain_old complete. dirty nodes: %s", sorted(dirty_nodes))
+        ckpt.phase_done("drain_old", "fill_new")
+        phase = "fill_new"
+
+    # --- Phase: fill_new ---
+    if phase == "fill_new":
+        logger.info(
+            "Phase fill_new: pulling new nodes from '%s' to '%s'", RECYCLE_RG, rg_name
+        )
+
+        update_rg_config(client, rg_name, req=n, lim=n)
+
+        logger.info("Waiting for RG '%s' to fill with %d new nodes...", rg_name, n)
+        wait_for_rg_node_count(client, rg_name, n, timeout=node_timeout)
+
+        new_nodes = get_rg_node_ids(client, rg_name)
+        overlap = new_nodes & old_nodes
+        if overlap:
+            raise RuntimeError(
+                f"RG '{rg_name}' contains old nodes after fill: {sorted(overlap)}"
+            )
+        logger.info("Phase fill_new complete. new nodes: %s", sorted(new_nodes))
+        ckpt.phase_done("fill_new", "transfer_segments")
+        phase = "transfer_segments"
+
+    # --- Phase: transfer_segments ---
+    if phase == "transfer_segments":
+        already_done = set(ckpt.transferred_old_nodes)
+        dirty_nodes = get_rg_node_ids(client, drg)
+        new_nodes = get_rg_node_ids(client, rg_name)
+        new_node_list = sorted(new_nodes)
+
+        remaining = sorted(dirty_nodes - already_done)
+        logger.info(
+            "Phase transfer_segments: %d remaining (of %d total), targets: %s",
+            len(remaining),
+            len(dirty_nodes),
+            new_node_list,
+        )
+
+        for i, old_node_id in enumerate(remaining):
+            target_node_id = new_node_list[i % len(new_node_list)]
+            logger.info(
+                "Transferring segments from node %d to node %d (%d/%d)...",
+                old_node_id,
+                target_node_id,
+                i + 1,
+                len(remaining),
+            )
+            ops.transfer_segment(old_node_id, target_node_id, copy_mode=False)
+
+            logger.info("Waiting for node %d to have no segments...", old_node_id)
+            wait_for_node_segments_empty(ops, old_node_id, timeout=transfer_timeout)
+            logger.info("Node %d segments cleared.", old_node_id)
+            ckpt.mark_node_transferred(old_node_id)
+
+        logger.info("Phase transfer_segments complete for RG '%s'.", rg_name)
 
 
 def rolling_replace(
@@ -240,22 +458,18 @@ def rolling_replace(
     milvus_port: int,
     ops_port: int,
     rg_names: list,
-    nodes_per_rg: int,
     transfer_timeout: int,
     node_timeout: int,
+    checkpoint_file: str,
     dry_run: bool = False,
 ):
     """Execute rolling replacement of QueryNodes."""
-    # Connect to Milvus
     uri = f"http://{milvus_host}:{milvus_port}"
     client = MilvusClient(uri=uri)
     ops = MilvusOpsClient(milvus_host, ops_port)
 
-    # Step 0: Setup recycle RG
-    logger.info("=" * 60)
-    logger.info("Step 0: Setup recycle resource group")
-    logger.info("=" * 60)
-    setup_recycle_rg(client)
+    ckpt = Checkpoint(checkpoint_file)
+    resumed = ckpt.load()
 
     # Collect initial state
     logger.info("=" * 60)
@@ -270,22 +484,58 @@ def rolling_replace(
     all_nodes = ops.list_query_nodes()
     logger.info("All query nodes: %s", all_nodes)
 
-    # Identify old nodes per RG by listing current nodes via ops list and
-    # cross-referencing with RG membership.
-    # We rely on describe_resource_group to get node info.
-    rg_old_nodes = {}
-    for rg_name in rg_names:
-        node_ids = get_rg_node_ids(client, rg_name)
-        rg_old_nodes[rg_name] = node_ids
-        logger.info("RG '%s' old nodes (%d): %s", rg_name, len(node_ids), node_ids)
+    # Auto-discover RGs if not specified
+    if not rg_names:
+        rg_names = sorted(rg for rg in all_rgs if rg.startswith(RG_PREFIX))
+        if not rg_names:
+            raise RuntimeError(
+                f"No resource groups matching '{RG_PREFIX}*' found. "
+                "Specify --rg explicitly."
+            )
+        logger.info("Auto-discovered RGs: %s", rg_names)
+
+    if resumed:
+        # Use old_nodes from checkpoint (original snapshot before any changes)
+        rg_old_nodes = {k: set(v) for k, v in ckpt.rg_old_nodes.items()}
+        logger.info(
+            "Resuming from checkpoint. Original old nodes: %s", ckpt.rg_old_nodes
+        )
+    else:
+        # Fresh run: identify old nodes per RG
+        rg_old_nodes = {}
+        for rg_name in rg_names:
+            node_ids = get_rg_node_ids(client, rg_name)
+            if not node_ids:
+                raise RuntimeError(f"RG '{rg_name}' has no nodes")
+            rg_old_nodes[rg_name] = node_ids
+            logger.info("RG '%s' old nodes (%d): %s", rg_name, len(node_ids), node_ids)
+
+        # Verify recycle RG has enough new nodes
+        recycle_nodes = get_rg_node_ids(client, RECYCLE_RG)
+        total_needed = sum(len(nodes) for nodes in rg_old_nodes.values())
+        logger.info(
+            "Recycle RG has %d nodes, need %d for replacement",
+            len(recycle_nodes),
+            total_needed,
+        )
+        if len(recycle_nodes) < total_needed:
+            raise RuntimeError(
+                f"Not enough new nodes in '{RECYCLE_RG}': "
+                f"have {len(recycle_nodes)}, need {total_needed}"
+            )
+
+        ckpt.init(rg_names, rg_old_nodes)
 
     if dry_run:
         logger.info("[DRY RUN] Would process the following:")
         for rg_name, nodes in rg_old_nodes.items():
-            logger.info("  RG '%s': replace %d nodes %s", rg_name, len(nodes), nodes)
+            logger.info(
+                "  RG '%s': replace %d nodes %s", rg_name, len(nodes), sorted(nodes)
+            )
+            logger.info("    dirty RG: '%s'", dirty_rg_name(rg_name))
         return
 
-    # Step 1: Suspend balance
+    # Step 1: Suspend balance (idempotent — safe to call if already suspended)
     logger.info("=" * 60)
     logger.info("Step 1: Suspend QueryCoord balance")
     logger.info("=" * 60)
@@ -298,8 +548,12 @@ def rolling_replace(
         )
 
     try:
-        # Step 2-3: Process each RG
+        # Step 2: Process each RG (one replica at a time)
         for rg_idx, rg_name in enumerate(rg_names):
+            if rg_name in ckpt.completed_rgs:
+                logger.info("Skipping RG '%s' (already completed)", rg_name)
+                continue
+
             old_nodes = rg_old_nodes[rg_name]
             logger.info("=" * 60)
             logger.info(
@@ -311,96 +565,35 @@ def rolling_replace(
             )
             logger.info("=" * 60)
 
-            for node_idx in range(len(old_nodes)):
-                logger.info("-" * 40)
-                logger.info(
-                    "Replacing node (%d/%d) in RG '%s'",
-                    node_idx + 1,
-                    len(old_nodes),
-                    rg_name,
-                )
-                logger.info("-" * 40)
+            # Set starting phase for new or resumed RG
+            if ckpt.current_rg != rg_name:
+                ckpt.begin_rg(rg_name)
 
-                # Step 2a: Record current nodes, then transfer one out
-                nodes_before = get_rg_node_ids(client, rg_name)
-                logger.info("RG '%s' nodes before transfer: %s", rg_name, nodes_before)
+            process_rg(
+                client,
+                ops,
+                rg_name,
+                old_nodes,
+                ckpt,
+                transfer_timeout=transfer_timeout,
+                node_timeout=node_timeout,
+            )
 
-                logger.info(
-                    "Transferring 1 node from '%s' to '%s'...",
-                    rg_name,
-                    RECYCLE_RG,
-                )
-                utility.transfer_node(
-                    rg_name,
-                    RECYCLE_RG,
-                    1,
-                    using=client._using,
-                )
-
-                # Step 2b: Detect which node was moved out
-                nodes_after_transfer = get_rg_node_ids(client, rg_name)
-                moved_nodes = nodes_before - nodes_after_transfer
-                if len(moved_nodes) != 1:
-                    raise RuntimeError(
-                        f"Expected 1 node moved out, got {len(moved_nodes)}: {moved_nodes}. "
-                        f"Before: {nodes_before}, After: {nodes_after_transfer}"
-                    )
-                moved_node_id = moved_nodes.pop()
-                logger.info("Node %d was moved to '%s'", moved_node_id, RECYCLE_RG)
-
-                # Step 2c: Suspend the moved node to prevent new segment loading
-                logger.info("Suspending node %d...", moved_node_id)
-                ops.suspend_node(moved_node_id)
-
-                # Step 2d: Wait for coord to assign a new QN from default RG
-                logger.info(
-                    "Waiting for RG '%s' to have %d available nodes...",
-                    rg_name,
-                    nodes_per_rg,
-                )
-                wait_for_rg_node_count(
-                    client, rg_name, nodes_per_rg, timeout=node_timeout
-                )
-
-                # Step 2e: Detect which new node joined
-                nodes_after_fill = get_rg_node_ids(client, rg_name)
-                new_nodes = nodes_after_fill - nodes_after_transfer
-                if len(new_nodes) != 1:
-                    raise RuntimeError(
-                        f"Expected 1 new node joined, got {len(new_nodes)}: {new_nodes}. "
-                        f"After transfer: {nodes_after_transfer}, After fill: {nodes_after_fill}"
-                    )
-                new_node_id = new_nodes.pop()
-                logger.info(
-                    "New node %d joined RG '%s' from default RG", new_node_id, rg_name
-                )
-
-                # Step 3a: Transfer all segments from moved node to the new node
-                logger.info(
-                    "Transferring all segments from node %d to node %d...",
-                    moved_node_id,
-                    new_node_id,
-                )
-                ops.transfer_segment(moved_node_id, new_node_id, copy_mode=False)
-
-                # Step 3b: Wait for moved node to have no segments
-                logger.info("Waiting for node %d to have no segments...", moved_node_id)
-                wait_for_node_segments_empty(
-                    ops, moved_node_id, timeout=transfer_timeout
-                )
-                logger.info("Node %d segments cleared.", moved_node_id)
+            ckpt.complete_rg(rg_name)
+            logger.info("RG '%s' replacement complete.", rg_name)
 
     except Exception:
         logger.exception("Error during rolling replacement!")
         logger.info(
             "Balance is still SUSPENDED. Manual intervention needed. "
-            "Run: POST /management/querycoord/balance/resume to restore."
+            "Run: POST /management/querycoord/balance/resume to restore. "
+            "Re-run this script with the same arguments to resume from checkpoint."
         )
         raise
 
-    # Step 4: Resume balance (only on success)
+    # Step 3: Resume balance (only on success)
     logger.info("=" * 60)
-    logger.info("Step 4: Resume QueryCoord balance")
+    logger.info("Step 3: Resume QueryCoord balance")
     logger.info("=" * 60)
     ops.resume_balance()
     status = ops.get_balance_status()
@@ -415,6 +608,7 @@ def rolling_replace(
         rg_info = utility.describe_resource_group(rg, using=client._using)
         logger.info("  %s: available=%d", rg, rg_info.num_available_node)
 
+    ckpt.remove()
     logger.info("Rolling replacement completed successfully!")
 
 
@@ -442,14 +636,9 @@ def main():
     parser.add_argument(
         "--rg",
         nargs="+",
-        required=True,
-        help="Resource group names to process (e.g., rg1 rg2)",
-    )
-    parser.add_argument(
-        "--nodes-per-rg",
-        type=int,
-        required=True,
-        help="Expected number of nodes per RG",
+        default=None,
+        help="Resource group names to process. If not specified, auto-discovers "
+        "RGs matching '%s*' prefix" % RG_PREFIX,
     )
     parser.add_argument(
         "--transfer-timeout",
@@ -461,7 +650,12 @@ def main():
         "--node-timeout",
         type=int,
         default=300,
-        help="Timeout in seconds waiting for new node to join RG (default: 300)",
+        help="Timeout in seconds waiting for node transfers (default: 300)",
+    )
+    parser.add_argument(
+        "--checkpoint-file",
+        default="rolling_replace_checkpoint.json",
+        help="Checkpoint file for resume (default: rolling_replace_checkpoint.json)",
     )
     parser.add_argument(
         "--dry-run",
@@ -482,9 +676,9 @@ def main():
         milvus_port=args.port,
         ops_port=args.ops_port,
         rg_names=args.rg,
-        nodes_per_rg=args.nodes_per_rg,
         transfer_timeout=args.transfer_timeout,
         node_timeout=args.node_timeout,
+        checkpoint_file=args.checkpoint_file,
         dry_run=args.dry_run,
     )
 
