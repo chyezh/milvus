@@ -8,12 +8,14 @@ Prerequisites:
 
 Workflow:
 1. Suspend QueryCoord balance.
-2. For each RG, one-by-one for each old QN:
-   a. transfer_node: move old QN from its RG to __recycle_resource_group.
-      QueryCoord auto-fills the RG slot from __default_resource_group.
-   b. Wait until the RG has the expected node count (new QN joined).
-   c. Transfer all segments+channels from old QN to other nodes in the RG.
-   d. Wait until old QN has no segments/channels.
+2. For each RG, one-by-one:
+   a. transfer_node: move 1 node from RG to __recycle_resource_group.
+   b. Detect which node was moved out (diff node sets before/after).
+   c. Suspend the moved node to prevent new segment loading.
+   d. Wait until QueryCoord auto-fills the RG from __default_resource_group.
+   e. Detect which new node joined the RG.
+   f. Transfer all segments from moved node to the specific new node.
+   g. Wait until moved node has no segments.
 3. Resume QueryCoord balance.
 
 End state:
@@ -113,32 +115,25 @@ class MilvusOpsClient:
         )
         return result
 
-    def transfer_segment(self, source_node_id: int, copy_mode: bool = False):
-        """Transfer all segments from source_node to other nodes in the same RG."""
+    def transfer_segment(
+        self, source_node_id: int, target_node_id: int, copy_mode: bool = False
+    ):
+        """Transfer all segments from source_node to target_node."""
         result = self._post(
             "/management/querycoord/transfer/segment",
             data={
                 "source_node_id": str(source_node_id),
-                # omit target_node_id => ToAllNodes=true
+                "target_node_id": str(target_node_id),
                 # omit segment_id => TransferAll=true
                 "copy_mode": str(copy_mode).lower(),
             },
         )
-        logger.info("Transfer segment from node %d result: %s", source_node_id, result)
-        return result
-
-    def transfer_channel(self, source_node_id: int, copy_mode: bool = False):
-        """Transfer all channels from source_node to other nodes in the same RG."""
-        result = self._post(
-            "/management/querycoord/transfer/channel",
-            data={
-                "source_node_id": str(source_node_id),
-                # omit target_node_id => ToAllNodes=true
-                # omit channel_name => TransferAll=true
-                "copy_mode": str(copy_mode).lower(),
-            },
+        logger.info(
+            "Transfer segment from node %d to node %d result: %s",
+            source_node_id,
+            target_node_id,
+            result,
         )
-        logger.info("Transfer channel from node %d result: %s", source_node_id, result)
         return result
 
     def suspend_node(self, node_id: int):
@@ -186,28 +181,33 @@ def wait_for_rg_node_count(
     )
 
 
-def wait_for_node_empty(
+def wait_for_node_segments_empty(
     ops: MilvusOpsClient,
     node_id: int,
     timeout: int = 600,
     interval: int = 5,
 ):
-    """Wait until a query node has no segments and no channels."""
+    """Wait until a query node has no segments."""
     deadline = time.time() + timeout
     while time.time() < deadline:
         dist = ops.get_node_distribution(node_id)
         segments = dist.get("sealed_segmentIDs", [])
-        channels = dist.get("channel_names", [])
-        logger.info(
-            "Node %d: segments=%d, channels=%d",
-            node_id,
-            len(segments),
-            len(channels),
-        )
-        if len(segments) == 0 and len(channels) == 0:
+        logger.info("Node %d: segments=%d", node_id, len(segments))
+        if len(segments) == 0:
             return
         time.sleep(interval)
-    raise TimeoutError(f"Timed out waiting for node {node_id} to become empty")
+    raise TimeoutError(f"Timed out waiting for node {node_id} to have no segments")
+
+
+def get_rg_node_ids(client: MilvusClient, rg_name: str) -> set:
+    """Get the set of node IDs currently in a resource group."""
+    rg_info = utility.describe_resource_group(rg_name, using=client._using)
+    if hasattr(rg_info, "nodes") and rg_info.nodes:
+        return set(rg_info.nodes.keys())
+    raise RuntimeError(
+        f"Cannot get node IDs from RG info for '{rg_name}'. "
+        f"Check pymilvus version supports describe_resource_group().nodes"
+    )
 
 
 def setup_recycle_rg(client: MilvusClient):
@@ -275,18 +275,9 @@ def rolling_replace(
     # We rely on describe_resource_group to get node info.
     rg_old_nodes = {}
     for rg_name in rg_names:
-        rg_info = utility.describe_resource_group(rg_name, using=client._using)
-        logger.info("RG '%s' info: %s", rg_name, rg_info)
-        # Extract node IDs - nodes is a dict {node_id: num_segments} in pymilvus
-        if hasattr(rg_info, "nodes") and rg_info.nodes:
-            node_ids = list(rg_info.nodes.keys())
-        else:
-            raise RuntimeError(
-                f"Cannot get node IDs from RG info for '{rg_name}'. "
-                f"Check pymilvus version supports describe_resource_group().nodes"
-            )
+        node_ids = get_rg_node_ids(client, rg_name)
         rg_old_nodes[rg_name] = node_ids
-        logger.info("RG '%s' old nodes: %s", rg_name, node_ids)
+        logger.info("RG '%s' old nodes (%d): %s", rg_name, len(node_ids), node_ids)
 
     if dry_run:
         logger.info("[DRY RUN] Would process the following:")
@@ -320,25 +311,22 @@ def rolling_replace(
             )
             logger.info("=" * 60)
 
-            for node_idx, old_node_id in enumerate(old_nodes):
+            for node_idx in range(len(old_nodes)):
                 logger.info("-" * 40)
                 logger.info(
-                    "Replacing node %d (%d/%d) in RG '%s'",
-                    old_node_id,
+                    "Replacing node (%d/%d) in RG '%s'",
                     node_idx + 1,
                     len(old_nodes),
                     rg_name,
                 )
                 logger.info("-" * 40)
 
-                # Step 2a: Suspend the old node first to prevent new loads
-                logger.info("Suspending node %d...", old_node_id)
-                ops.suspend_node(old_node_id)
+                # Step 2a: Record current nodes, then transfer one out
+                nodes_before = get_rg_node_ids(client, rg_name)
+                logger.info("RG '%s' nodes before transfer: %s", rg_name, nodes_before)
 
-                # Step 2b: Transfer node from RG to recycle RG
                 logger.info(
-                    "Transferring node %d from '%s' to '%s'...",
-                    old_node_id,
+                    "Transferring 1 node from '%s' to '%s'...",
                     rg_name,
                     RECYCLE_RG,
                 )
@@ -349,9 +337,22 @@ def rolling_replace(
                     using=client._using,
                 )
 
-                # Step 2c: Wait for coord to assign a new QN from default RG.
-                # After transfer, the RG lost 1 node. Coord auto-fills from
-                # default_rg because the RG config requests=N pulls from default.
+                # Step 2b: Detect which node was moved out
+                nodes_after_transfer = get_rg_node_ids(client, rg_name)
+                moved_nodes = nodes_before - nodes_after_transfer
+                if len(moved_nodes) != 1:
+                    raise RuntimeError(
+                        f"Expected 1 node moved out, got {len(moved_nodes)}: {moved_nodes}. "
+                        f"Before: {nodes_before}, After: {nodes_after_transfer}"
+                    )
+                moved_node_id = moved_nodes.pop()
+                logger.info("Node %d was moved to '%s'", moved_node_id, RECYCLE_RG)
+
+                # Step 2c: Suspend the moved node to prevent new segment loading
+                logger.info("Suspending node %d...", moved_node_id)
+                ops.suspend_node(moved_node_id)
+
+                # Step 2d: Wait for coord to assign a new QN from default RG
                 logger.info(
                     "Waiting for RG '%s' to have %d available nodes...",
                     rg_name,
@@ -361,18 +362,33 @@ def rolling_replace(
                     client, rg_name, nodes_per_rg, timeout=node_timeout
                 )
 
-                # Step 3a: Transfer all segments from old node to other nodes
-                logger.info("Transferring all segments from node %d...", old_node_id)
-                ops.transfer_segment(old_node_id, copy_mode=False)
+                # Step 2e: Detect which new node joined
+                nodes_after_fill = get_rg_node_ids(client, rg_name)
+                new_nodes = nodes_after_fill - nodes_after_transfer
+                if len(new_nodes) != 1:
+                    raise RuntimeError(
+                        f"Expected 1 new node joined, got {len(new_nodes)}: {new_nodes}. "
+                        f"After transfer: {nodes_after_transfer}, After fill: {nodes_after_fill}"
+                    )
+                new_node_id = new_nodes.pop()
+                logger.info(
+                    "New node %d joined RG '%s' from default RG", new_node_id, rg_name
+                )
 
-                # Step 3b: Transfer all channels from old node
-                logger.info("Transferring all channels from node %d...", old_node_id)
-                ops.transfer_channel(old_node_id, copy_mode=False)
+                # Step 3a: Transfer all segments from moved node to the new node
+                logger.info(
+                    "Transferring all segments from node %d to node %d...",
+                    moved_node_id,
+                    new_node_id,
+                )
+                ops.transfer_segment(moved_node_id, new_node_id, copy_mode=False)
 
-                # Step 3c: Wait for old node to be empty
-                logger.info("Waiting for node %d to become empty...", old_node_id)
-                wait_for_node_empty(ops, old_node_id, timeout=transfer_timeout)
-                logger.info("Node %d is now empty.", old_node_id)
+                # Step 3b: Wait for moved node to have no segments
+                logger.info("Waiting for node %d to have no segments...", moved_node_id)
+                wait_for_node_segments_empty(
+                    ops, moved_node_id, timeout=transfer_timeout
+                )
+                logger.info("Node %d segments cleared.", moved_node_id)
 
     except Exception:
         logger.exception("Error during rolling replacement!")
