@@ -484,6 +484,29 @@ def rolling_replace(
     all_nodes = ops.list_query_nodes()
     logger.info("All query nodes: %s", all_nodes)
 
+    # Show segment distribution per node
+    logger.info("-" * 40)
+    logger.info("Segment Distribution")
+    logger.info("-" * 40)
+    for node_info in all_nodes:
+        node_id = node_info.get("ID", node_info.get("id"))
+        if node_id is None:
+            continue
+        try:
+            dist = ops.get_node_distribution(node_id)
+            channels = dist.get("channel_names") or []
+            segments = dist.get("sealed_segmentIDs") or []
+            logger.info(
+                "  Node %d: sealed_segments=%d %s, channels=%d %s",
+                node_id,
+                len(segments),
+                segments,
+                len(channels),
+                channels,
+            )
+        except Exception as e:
+            logger.warning("  Node %d: failed to get distribution: %s", node_id, e)
+
     # Auto-discover RGs if not specified
     if not rg_names:
         rg_names = sorted(rg for rg in all_rgs if rg.startswith(RG_PREFIX))
