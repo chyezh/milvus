@@ -456,6 +456,7 @@ def process_rg(
 def rolling_replace(
     milvus_host: str,
     milvus_port: int,
+    ops_host: str,
     ops_port: int,
     rg_names: list,
     transfer_timeout: int,
@@ -466,7 +467,7 @@ def rolling_replace(
     """Execute rolling replacement of QueryNodes."""
     uri = f"http://{milvus_host}:{milvus_port}"
     client = MilvusClient(uri=uri)
-    ops = MilvusOpsClient(milvus_host, ops_port)
+    ops = MilvusOpsClient(ops_host, ops_port)
 
     ckpt = Checkpoint(checkpoint_file)
     resumed = ckpt.load()
@@ -651,6 +652,11 @@ def main():
         help="Milvus proxy gRPC port (default: 19530)",
     )
     parser.add_argument(
+        "--ops-host",
+        default=None,
+        help="Milvus management/ops HTTP host (default: same as --host)",
+    )
+    parser.add_argument(
         "--ops-port",
         type=int,
         default=9091,
@@ -697,6 +703,7 @@ def main():
     rolling_replace(
         milvus_host=args.host,
         milvus_port=args.port,
+        ops_host=args.ops_host or args.host,
         ops_port=args.ops_port,
         rg_names=args.rg,
         transfer_timeout=args.transfer_timeout,
