@@ -25,7 +25,9 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
+	mock1 "github.com/stretchr/testify/mock"
 	"google.golang.org/grpc"
+	grpcresolver "google.golang.org/grpc/resolver"
 
 	"github.com/milvus-io/milvus-proto/go-api/v2/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v2/msgpb"
@@ -37,9 +39,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/util/merr"
 	"github.com/milvus-io/milvus/pkg/v2/util/paramtable"
-	grpcresolver "google.golang.org/grpc/resolver"
-
-	mock1 "github.com/stretchr/testify/mock"
 )
 
 var mockErr = errors.New("mock grpc err")

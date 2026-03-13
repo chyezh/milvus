@@ -902,9 +902,6 @@ grpc:
     initialBackoff: 0.2
     maxBackoff: 10
     backoffMultiplier: 2
-    minResetInterval: 1000
-    maxCancelError: 32
-    minSessionCheckInterval: 200
 
 # Configure external tls.
 tls:
