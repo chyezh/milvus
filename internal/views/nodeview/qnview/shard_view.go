@@ -11,9 +11,10 @@ import (
 // qnShardView manages all query view state machines for a single shard on a QueryNode.
 // All public methods are concurrent-safe via the internal mutex.
 type qnShardView struct {
-	mu     sync.Mutex
-	views  map[qviews.QueryViewVersion]*qnViewEntry
-	segMgr SegmentManager
+	mu      sync.Mutex
+	views   map[qviews.QueryViewVersion]*qnViewEntry
+	segMgr  SegmentManager
+	onEmpty func() // called (under mu) when the last view entry is removed
 }
 
 // qnViewEntry pairs an ApplyView (carrying the OnReport callback) with its state machine.
@@ -159,5 +160,8 @@ func (s *qnShardView) consumeReportAndCleanup(key qviews.QueryViewKey, entry *qn
 	}
 	if entry.sm.State() == qviews.QueryViewStateDropped {
 		delete(s.views, key.QueryViewVersion)
+		if len(s.views) == 0 && s.onEmpty != nil {
+			s.onEmpty()
+		}
 	}
 }

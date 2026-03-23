@@ -49,8 +49,10 @@ type ReleaseSegments struct {
 // stall without ever producing a response to the Coordinator.
 //
 //   - Acquire: for every Acquire call, the implementation MUST eventually
-//     invoke exactly one of OnReady (at least once) or OnUnrecoverable.
-//     Failure to do so leaves the view stuck in Preparing with no report.
+//     invoke at least one of OnReady or OnUnrecoverable. OnReady may be
+//     called multiple times for incremental progress; OnUnrecoverable is
+//     called at most once to signal a terminal failure.
+//     Failure to invoke any callback leaves the view stuck in Preparing.
 //
 //   - Release: for every Release call, the implementation MUST eventually
 //     invoke OnDropped exactly once.

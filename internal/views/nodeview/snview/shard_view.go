@@ -20,6 +20,7 @@ type snShardView struct {
 	views   map[qviews.QueryViewVersion]*snViewEntry
 	catalog StreamingNodeCatalog
 	resMgr  StreamingNodeResourceManager
+	onEmpty func() // called (under mu) when the last view entry is removed
 }
 
 // snViewEntry pairs an ApplyView (carrying the OnReport callback) with its state machine.
@@ -39,7 +40,16 @@ func recoverSnShardView(
 ) *snShardView {
 	entries := make(map[qviews.QueryViewVersion]*snViewEntry, len(views))
 	for version, sm := range views {
-		entries[version] = &snViewEntry{sm: sm}
+		// Populate ApplyView.View from SM's meta+snView so that
+		// consumeAndRelease can safely call entry.View.QueryViewKey().
+		view := qviews.NewQueryViewAtWorkNodeFromProto(&viewpb.QueryViewOfShard{
+			Meta:          sm.Meta(),
+			StreamingNode: sm.SNView(),
+		})
+		entries[version] = &snViewEntry{
+			ApplyView: handler.ApplyView{View: view},
+			sm:        sm,
+		}
 	}
 	s := &snShardView{
 		views:   entries,
@@ -197,7 +207,7 @@ func (s *snShardView) notifyDropped(version qviews.QueryViewVersion) {
 	}
 
 	entry.sm.OnDropped()
-	s.consumeReportAndCleanup(version, entry)
+	s.consumeReportPersistAndCleanup(version, entry)
 }
 
 // consumeReportPersistAndCleanup drains pending persist, report, and release,
@@ -209,19 +219,19 @@ func (s *snShardView) consumeReportPersistAndCleanup(version qviews.QueryViewVer
 	s.consumeAndPersist(entry)
 	s.consumeReport(entry)
 	s.consumeAndRelease(version, entry)
-	if entry.sm.State() == qviews.QueryViewStateDropped {
-		delete(s.views, version)
-	}
+	s.cleanupIfDropped(version, entry)
 }
 
-// consumeReportAndCleanup drains pending report, invokes callback,
-// and removes the entry if it has reached Dropped state.
-// Used by notifyDropped where persist/release are not expected.
+// cleanupIfDropped removes the entry if it has reached Dropped state,
+// and fires the onEmpty callback if the shard has no more entries.
 // Caller must hold s.mu.
-func (s *snShardView) consumeReportAndCleanup(version qviews.QueryViewVersion, entry *snViewEntry) {
-	s.consumeReport(entry)
-	if entry.sm.State() == qviews.QueryViewStateDropped {
-		delete(s.views, version)
+func (s *snShardView) cleanupIfDropped(version qviews.QueryViewVersion, entry *snViewEntry) {
+	if entry.sm.State() != qviews.QueryViewStateDropped {
+		return
+	}
+	delete(s.views, version)
+	if len(s.views) == 0 && s.onEmpty != nil {
+		s.onEmpty()
 	}
 }
 

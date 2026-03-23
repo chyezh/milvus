@@ -97,6 +97,7 @@ func RecoverSNQueryViewHandler(
 	// Create shard views and start recovery via ResourceManager.
 	for shardID, sr := range grouped {
 		shard := recoverSnShardView(shardID, sr.views, catalog, resMgr)
+		shard.onEmpty = h.makeOnEmpty(shardID)
 		h.shards[shardID] = shard
 	}
 
@@ -130,8 +131,17 @@ func (h *SNQueryViewHandler) getOrCreateShard(shardID qviews.ShardID) *snShardVi
 			views:   make(map[qviews.QueryViewVersion]*snViewEntry),
 			catalog: h.catalog,
 			resMgr:  h.resMgr,
+			onEmpty: h.makeOnEmpty(shardID),
 		}
 		h.shards[shardID] = shard
 	}
 	return shard
+}
+
+func (h *SNQueryViewHandler) makeOnEmpty(shardID qviews.ShardID) func() {
+	return func() {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		delete(h.shards, shardID)
+	}
 }

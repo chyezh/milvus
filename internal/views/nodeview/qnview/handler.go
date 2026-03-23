@@ -90,6 +90,11 @@ func (h *QNQueryViewHandler) getOrCreateShard(shardID qviews.ShardID) *qnShardVi
 		shard = &qnShardView{
 			views:  make(map[qviews.QueryViewVersion]*qnViewEntry),
 			segMgr: h.segMgr,
+			onEmpty: func() {
+				h.mu.Lock()
+				defer h.mu.Unlock()
+				delete(h.shards, shardID)
+			},
 		}
 		h.shards[shardID] = shard
 	}
