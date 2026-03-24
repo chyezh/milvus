@@ -19,8 +19,8 @@ import (
 //
 // State flow:
 //
-//	Normal:  Preparing → Ready → Dropped
-//	Error:   Preparing → Unrecoverable → Dropped
+//	Normal:  Preparing → Ready → Dropping → Dropped
+//	Error:   Preparing → Unrecoverable → Dropping → Dropped
 //
 // The Preparing → Ready transition is automatic: when OnSegmentsReady reports
 // all segments across all partitions as ready, the SM transitions to Ready.
@@ -40,7 +40,8 @@ type QNQueryViewStateMachine struct {
 	totalSegments int
 	readyCount    int
 
-	pendingReport *viewpb.QueryViewOfShard
+	pendingReport  *viewpb.QueryViewOfShard
+	pendingRelease bool
 }
 
 // NewQNQueryViewStateMachine creates a state machine when the QN receives
@@ -152,6 +153,25 @@ func (sm *QNQueryViewStateMachine) ConsumeReport() *viewpb.QueryViewOfShard {
 	return v
 }
 
+// ConsumeRelease returns true if the SM has a pending Release operation
+// (i.e., entered Dropping state) and clears the flag.
+func (sm *QNQueryViewStateMachine) ConsumeRelease() bool {
+	v := sm.pendingRelease
+	sm.pendingRelease = false
+	return v
+}
+
+// OnDropped is called by the SegmentManager Release callback when segment
+// release completes. Transitions Dropping → Dropped.
+// Only valid in Dropping state; ignored in other states.
+func (sm *QNQueryViewStateMachine) OnDropped() {
+	if sm.state != qviews.QueryViewStateDropping {
+		return
+	}
+	sm.state = qviews.QueryViewStateDropped
+	sm.pendingReport = sm.buildReport()
+}
+
 // --- Coord push handlers ---
 
 func (sm *QNQueryViewStateMachine) handleCoordPreparing() {
@@ -165,11 +185,21 @@ func (sm *QNQueryViewStateMachine) handleCoordPreparing() {
 }
 
 func (sm *QNQueryViewStateMachine) handleCoordDropped() {
-	if sm.state != qviews.QueryViewStateDropped {
-		sm.state = qviews.QueryViewStateDropped
+	switch sm.state {
+	case qviews.QueryViewStateDropping:
+		// Already releasing segments, wait for OnDropped callback.
+		return
+	case qviews.QueryViewStateDropped:
+		// Terminal state: re-report for Coord fast-forward.
+		sm.pendingReport = sm.buildReport()
+		return
+	default:
+		// Transition to Dropping: signal that Release should be called.
+		// Clear any stale pending report (e.g., from prior OnSegmentsReady).
+		sm.state = qviews.QueryViewStateDropping
+		sm.pendingReport = nil
+		sm.pendingRelease = true
 	}
-	// Always re-report Dropped (handles both transition and re-push in terminal state).
-	sm.pendingReport = sm.buildReport()
 }
 
 // --- Helpers ---
