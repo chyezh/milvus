@@ -911,6 +911,29 @@ func TestDown_SNNotDownYet_RePushDown(t *testing.T) {
 	assertPendingSyncState(t, sm, qviews.QueryViewStateDown)
 }
 
+// TestDown_SNDropped_FastForwardToDropping: SN reports Dropped in Down
+// (e.g., Coord crash recovery regressed from Dropping to Down) → skip to Dropping.
+func TestDown_SNDropped_FastForwardToDropping(t *testing.T) {
+	view := buildTestView(1)
+	sm := NewCoordQueryViewStateMachine(view)
+	drainPending(sm)
+
+	// Advance to Down
+	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
+	drainPending(sm)
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
+	drainPending(sm)
+	sm.EnterDown()
+	drainPending(sm)
+
+	// SN reports Dropped → same as Down, advance to Dropping
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateDropped))
+	assert.Equal(t, qviews.QueryViewStateDropping, sm.State())
+	assertNoPendingPersist(t, sm)
+	assertPendingSyncState(t, sm, qviews.QueryViewStateDropped)
+}
+
 // TestDropping_NodeNotDropped_RePushDropped: node reports non-Dropped in
 // Dropping → re-push Dropped.
 func TestDropping_NodeNotDropped_RePushDropped(t *testing.T) {
@@ -1200,7 +1223,7 @@ func TestPreparing_QNReportsBeforeSN(t *testing.T) {
 
 // TestDown_UnrecoverableFromSN_NotHandled: Down handler only checks SN Down,
 // so SN Unrecoverable triggers re-push Down (not Unrecoverable transition).
-func TestDown_UnrecoverableFromSN_NotHandled(t *testing.T) {
+func TestDown_UnrecoverableFromSN(t *testing.T) {
 	view := buildTestView(1)
 	sm := NewCoordQueryViewStateMachine(view)
 	drainPending(sm)
@@ -1214,11 +1237,32 @@ func TestDown_UnrecoverableFromSN_NotHandled(t *testing.T) {
 	sm.EnterDown()
 	drainPending(sm)
 
-	// SN Unrecoverable → not Down → re-push Down
+	// SN Unrecoverable → Unrecoverable (persist, wait for Manager).
 	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUnrecoverable))
-	assert.Equal(t, qviews.QueryViewStateDown, sm.State())
-	assertNoPendingPersist(t, sm)
-	assertPendingSyncState(t, sm, qviews.QueryViewStateDown)
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
+	assertPendingPersistState(t, sm, qviews.QueryViewStateUnrecoverable)
+	assertNoPendingSync(t, sm)
+}
+
+func TestDown_UnrecoverableFromQN(t *testing.T) {
+	view := buildTestView(1)
+	sm := NewCoordQueryViewStateMachine(view)
+	drainPending(sm)
+
+	// Advance to Down
+	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateReady))
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateReady))
+	drainPending(sm)
+	sm.OnNodeStateReported(snReport(view, qviews.QueryViewStateUp))
+	drainPending(sm)
+	sm.EnterDown()
+	drainPending(sm)
+
+	// QN Unrecoverable → Unrecoverable (persist, wait for Manager).
+	sm.OnNodeStateReported(qnReport(view, 1, qviews.QueryViewStateUnrecoverable))
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
+	assertPendingPersistState(t, sm, qviews.QueryViewStateUnrecoverable)
+	assertNoPendingSync(t, sm)
 }
 
 // TestDropping_PartialDropped_StaysDropping: verifies incremental Dropped

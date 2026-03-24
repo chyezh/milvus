@@ -24,7 +24,4 @@ type QueryViewHandler interface {
 	// State updates (both immediate and asynchronous) are reported
 	// exclusively through the OnReport callback in each ApplyView.
 	ApplyViews(views []ApplyView)
-
-	// Close releases resources held by the handler.
-	Close()
 }
