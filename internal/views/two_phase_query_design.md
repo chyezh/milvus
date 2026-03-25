@@ -32,9 +32,11 @@ Client → Proxy → StreamingNode: Phase 1 (get query plan)
 Two new gRPC services are introduced, both on the **data plane**, separate from the
 existing `ViewSyncService` (control plane, Coord→Node):
 
-- **QueryPlanService** (Phase 1): Only implemented by StreamingNode. Generates a
-  shard-level query plan containing a consistent snapshot reference (view version,
-  MVCC timestamp, work node list) and runs global optimizers.
+- **QueryPlanService** (Phase 1): Only implemented by StreamingNode. Provides two RPCs:
+  - `GetQueryPlan`: Generates a shard-level query plan (view version, MVCC timestamp,
+    work node list) and runs global optimizers.
+  - `GetMVCCTimestamp`: Lightweight RPC returning only the MVCC timestamp from the
+    primary replica's WAL. Used for cross-replica strong consistency (see Section 2.5).
 
 - **ViewQueryService** (Phase 2): Implemented by both StreamingNode and QueryNode.
   Provides Search, Query, and Requery operations. Each node determines which segments
@@ -50,6 +52,8 @@ following the same pattern as `StreamingCode` / `StreamingError`. Key error code
 - **VIEW_INVALIDATED**: View version is no longer valid (Down/Dropped) → retry from Phase 1.
 - **VIEW_NOT_FOUND**: View version not found on this node → retry from Phase 1.
 - **ON_SHUTDOWN**: Node is shutting down → retry from Phase 1 (SN may have moved).
+- **NOT_PRIMARY**: Node is not the primary replica for this shard → Proxy refreshes
+  primary mapping and retries (see Section 2.5).
 
 ### 2.3 Plan Reuse
 
@@ -67,6 +71,68 @@ Phase 2b: Requery(version=V, PKs) → output fields for final PKs only
 
 This reduces bandwidth by deferring output field retrieval until after reduce.
 If the view is invalidated between 2a and 2b, the client retries from Phase 1.
+
+### 2.4 HybridSearch
+
+HybridSearch (advanced search with multiple sub-searches) is handled at the Proxy
+level. Proxy splits the HybridSearch into M individual sub-searches, each executed
+as a full Phase 1 + Phase 2 flow against all work nodes. After all sub-search results
+are collected and reduced per-shard, Proxy performs the hybrid reranking (RRF, weighted,
+etc.) across the M sub-search results.
+
+For a shard with N work nodes and M sub-searches, Proxy issues N×M Phase 2 requests
+in parallel. This increases RPC fan-out compared to the current Delegator-internal
+approach, but eliminates the Delegator single-point bottleneck. The reranking itself
+is lightweight (CPU/memory only) and Proxy scales horizontally.
+
+### 2.5 Multi-Replica Query Flow
+
+**PChannel replication model:** A pchannel can have multiple replicas across SNs.
+One SN is the primary for a pchannel (owns WAL, supports read-write); other SNs
+are secondary (subscribe to WAL, read-only). A replica's shard assigned to an SN
+inherits the SN's primary/secondary status for the corresponding pchannel.
+
+**MVCC and consistency levels:**
+- **Strong consistency**: MVCC timestamp must come from the primary SN (latest WAL
+  write position). Only the primary SN can guarantee the most up-to-date read point.
+- **Other consistency levels** (Bounded, Session, Eventual): MVCC can come from any
+  replica's SN. Secondary SNs use their WAL subscription position.
+
+**MVCC is pchannel-granularity.** Multiple vchannels sharing the same pchannel share
+the same WAL, so `GetMVCCTimestamp` returns the pchannel-level WAL write position.
+The request carries vchannel; the client automatically maps vchannel→pchannel for
+routing, and the SN derives pchannel from vchannel internally.
+
+**The `GetQueryPlan` request supports two mutually exclusive MVCC modes** (via oneof):
+- `consistency_level`: SN generates MVCC from WAL. For Strong consistency on a
+  non-primary SN, returns `NOT_PRIMARY` error.
+- `mvcc_timestamp`: Proxy provides a pre-obtained MVCC timestamp. SN uses it
+  directly, skipping WAL lookup.
+
+**Proxy decision flow per shard:**
+
+```
+Proxy selects target replica (load balancing):
+  if non-strong consistency:
+    → target SN: GetQueryPlan(consistency_level=Bounded/Eventual) → plan → Phase 2
+  if strong consistency AND target is primary:
+    → primary SN: GetQueryPlan(consistency_level=Strong) → plan → Phase 2
+  if strong consistency AND target is NOT primary:
+    → primary SN: GetMVCCTimestamp() → ts
+    → target SN: GetQueryPlan(mvcc_timestamp=ts) → plan → Phase 2
+```
+
+**Error handling for stale primary mapping:**
+Proxy's knowledge of which replica is primary may be stale (e.g., after SN failover).
+When a non-primary SN receives a Strong consistency request, it returns
+`VIEW_CODE_NOT_PRIMARY`. Proxy then refreshes the primary mapping from
+StreamingCoord/WAL binding and retries.
+
+**Secondary SN lag during cross-replica execution:**
+When Proxy forwards an MVCC timestamp to a secondary replica, the secondary SN may
+not have caught up to that timestamp yet. This is handled gracefully: the SN returns
+the query plan normally, and during Phase 2 execution, each node's SearchScheduler
+waits for MVCC confirmation before executing queries against each segment.
 
 ## 3. Optimizer Framework
 
@@ -110,10 +176,14 @@ Future Proxy integration will use this client as a backend.
 
 All dependencies are injected as interfaces:
 
-- **QueryPlanServiceResolver**: Resolves vchannel → QueryPlanServiceClient via WAL binding
-  to find the owning StreamingNode.
-- **ViewQueryServiceResolver**: Resolves a work node → ViewQueryServiceClient.
-- **ShardResolver**: Resolves collection → list of ShardIDs.
+- **QueryPlanClient**: Phase 1 operations (GetQueryPlan, GetMVCCTimestamp). Takes ShardID
+  as routing key. Implementation by StreamingNode HandlerClient (see Section 5.4).
+- **ViewQueryServiceClient**: Phase 2 operations (SearchOnView, QueryOnView, RequeryOnView).
+  Takes WorkNode as routing key. Dispatches to SN or QN sub-client based on node type
+  (see Section 5.4).
+- **ShardResolver**: Resolves collection → per-vchannel replica info (all replicas +
+  primary replica identification). Backed by the channel assignment service discovery
+  (see Section 5.5).
 
 ### 4.3 Streaming Reducer
 
@@ -155,26 +225,32 @@ Search(req):
 
 ## 5. Node-Side Implementation
 
-### 5.1 StreamingNode
+### 5.1 StreamingNode — Server Side
 
-Implements both QueryPlanService and ViewQueryService.
+Implements both QueryPlanService and ViewQueryService gRPC servers.
 
-**Phase 1 (GetQueryPlan):**
+**Phase 1 — GetQueryPlan:**
 1. Find the latest Up-state query view for the requested shard.
 2. Generate MVCC timestamp based on consistency level (from WAL).
+   - If `consistency_level=Strong` and this SN is not primary → return `NOT_PRIMARY`.
+   - If `mvcc_timestamp` provided → use directly, skip WAL lookup.
 3. Run Global Optimizers on the request.
 4. Build work node list from the query view (SN itself + all QNs).
 5. Return query plan with optimized request.
 
-**Phase 2 (Search/Query/Requery):**
+**Phase 1 — GetMVCCTimestamp:**
+1. Verify this SN is the primary replica (owns WAL) → otherwise return `NOT_PRIMARY`.
+2. Return the latest WAL write position as MVCC timestamp.
+
+**Phase 2 — Search/Query/Requery:**
 1. Validate view version exists and is Up/UpRecovering.
 2. Delegate to **SearchScheduler** for execution (see Section 5.3).
 
-### 5.2 QueryNode
+### 5.2 QueryNode — Server Side
 
-Implements ViewQueryService only.
+Implements ViewQueryService gRPC server only.
 
-**Phase 2 (Search/Query/Requery):**
+**Phase 2 — Search/Query/Requery:**
 1. Validate view version exists and is Ready.
 2. Delegate to **SearchScheduler** for execution (see Section 5.3).
 
@@ -193,13 +269,72 @@ per-node **SearchScheduler**. The scheduler is responsible for:
    complete, maintaining only top-k entries to bound memory usage.
 5. Returns the final reduced result for this node.
 
+### 5.4 Client-Side Implementation
+
+The client-side interfaces (`QueryPlanClient`, `ViewQueryServiceClient`) are
+implemented by extending existing infrastructure:
+
+**QueryPlanClient** — implemented by extending `HandlerClient`
+(`internal/streamingnode/client/handler/`):
+- Reuses the existing channel assignment resolver and gRPC connection infrastructure.
+- **Multi-SN routing**: With pchannel replication, a pchannel maps to multiple SNs
+  (primary + secondaries). The ShardID (replica_id, vchannel) is used as routing key:
+  the client resolves vchannel→pchannel, then uses shard assignment data to identify
+  which SN holds the target replica, routing to that specific SN.
+- `GetQueryPlan`: routes to the replica's SN via the connection pool.
+- `GetMVCCTimestamp`: routes to the primary SN (identified via `channel_is_primary`).
+- Error conversion (gRPC status → ViewError) handled internally via interceptor.
+
+**ViewQueryServiceClient** — composite client dispatching by WorkNode type:
+
+```
+ViewQueryServiceClient
+  ├── HandlerClient (SN part) → for StreamingWorkNode
+  └── QNClient (QN part)      → for QueryWorkNode
+```
+
+- **SN part**: Extends `HandlerClient` with SearchOnView/QueryOnView/RequeryOnView
+  methods. Reuses the same SN connection pool and routing infrastructure.
+- **QN part**: Independent implementation managing QN connections. References the
+  existing querynodev2 cluster worker connection management pattern.
+- **Dispatch**: The top-level `ViewQueryServiceClient` switches on `WorkNode` type
+  and delegates to the appropriate sub-client.
+
+### 5.5 Shard Discovery via Channel Assignment
+
+ShardResolver is backed by the existing channel assignment service discovery
+(`streaming.proto`), extended to publish per-SN shard and primary information
+alongside pchannel→SN binding.
+
+**Data flow:** Coord publishes shard assignments as part of channel assignment
+full updates. `StreamingNodeAssignment` is extended with two new fields:
+
+- `shard_assignment`: A `ShardAssignmentInfo` carrying the loaded shards
+  (collection_id, shard_index, replica_id) on this node.
+- `secondary_channels`: Secondary (read-only) pchannel replicas on this SN.
+  Primary pchannels remain in the existing `channels` field, preserving backward
+  compatibility. Old clients ignore the new field.
+
+The client-side watcher maintains a local cache, so shard resolution is a pure
+local lookup with zero network overhead on the query path.
+
+**Primary replica derivation:** The existing `channels` field contains primary
+pchannels (WAL owner, read-write); the new `secondary_channels` field contains
+secondary pchannels (WAL subscriber, read-only). A replica's shard inherits the
+primary/secondary status of its pchannel on the same SN. The client identifies
+the primary replica for each vchannel: the replica whose shard is on the SN where
+the corresponding pchannel appears in `channels` (not `secondary_channels`).
+
+All proto definitions are in `streaming.proto` under `ShardAssignmentInfo`
+and `ShardAssignmentEntry`.
+
 ## 6. Package Layout
 
 ```
 internal/views/
 ├── queryclient/
-│   ├── client.go              # ViewQueryClient implementation
-│   ├── resolver.go            # Dependency interfaces
+│   ├── client.go              # ViewQueryClient (top-level orchestrator)
+│   ├── resolver.go            # Dependency interfaces (QueryPlanClient, ViewQueryServiceClient, ShardResolver)
 │   ├── reducer.go             # Streaming reducers
 │   └── retry.go               # Shard-level retry logic
 ├── optimizer/
@@ -211,4 +346,7 @@ internal/views/
 ├── coordview/                 # (existing) Coord-side view management
 ├── nodeview/                  # (existing) Node-side view management
 └── qviews/                    # (existing) Shared types
+
+internal/streamingnode/client/handler/
+└── handler_client.go          # (existing) Extended with QueryPlanClient + SN ViewQueryService
 ```

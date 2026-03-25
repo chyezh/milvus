@@ -252,6 +252,7 @@ enum ViewCode {
     VIEW_CODE_VIEW_INVALIDATED = 1;  // View version is no longer valid (Down/Dropped).
     VIEW_CODE_VIEW_NOT_FOUND   = 2;  // View version not found on this node.
     VIEW_CODE_ON_SHUTDOWN      = 3;  // Node is shutting down.
+    VIEW_CODE_NOT_PRIMARY      = 4;  // Node is not the primary replica for this shard (strong consistency requires primary).
     VIEW_CODE_UNKNOWN          = 999;
 }
 
@@ -298,14 +299,29 @@ message QueryPlanWorkNode {
 // Only implemented by StreamingNode.
 // Proxy calls this to obtain a consistent snapshot reference (view version, MVCC timestamp,
 // work node list) and to run global optimizers (BM25 IDF, search param tuning).
+// Also provides a lightweight GetMVCCTimestamp RPC for cross-replica strong consistency,
+// where Proxy obtains MVCC from the primary replica and forwards it to another replica.
 service QueryPlanService {
     rpc GetQueryPlan(GetQueryPlanRequest) returns (GetQueryPlanResponse) {}
+    // GetMVCCTimestamp returns only the MVCC timestamp from the primary replica's WAL.
+    // Lightweight alternative to GetQueryPlan for cross-replica strong consistency:
+    // Proxy gets MVCC from primary, then calls GetQueryPlan on the target replica with the pre-obtained timestamp.
+    // Returns VIEW_CODE_NOT_PRIMARY if the node is not the primary replica.
+    rpc GetMVCCTimestamp(GetMVCCTimestampRequest) returns (GetMVCCTimestampResponse) {}
 }
 
 message GetQueryPlanRequest {
     int64 collection_id = 1;
     ShardID shard_id = 2;
-    common.ConsistencyLevel consistency_level = 3;
+    // Mutually exclusive MVCC source:
+    // - consistency_level: SN generates MVCC from WAL based on consistency level.
+    //   For Strong consistency, returns VIEW_CODE_NOT_PRIMARY if not the primary replica.
+    // - mvcc_timestamp: Proxy provides a pre-obtained MVCC timestamp (e.g., from primary replica
+    //   via GetMVCCTimestamp). SN uses it directly, skipping WAL lookup.
+    oneof mvcc {
+        common.ConsistencyLevel consistency_level = 3;
+        uint64 mvcc_timestamp = 7;
+    }
     repeated int64 partition_ids = 4;
     // Original request for global optimization (BM25 IDF, search param tuning, etc.).
     // Global optimizers may modify serialized_expr_plan and placeholder_group within.
@@ -314,6 +330,14 @@ message GetQueryPlanRequest {
         internal.SearchRequest legacy_search_request = 5;
         internal.RetrieveRequest legacy_retrieve_request = 6;
     }
+}
+
+message GetMVCCTimestampRequest {
+    string vchannel = 1;
+}
+
+message GetMVCCTimestampResponse {
+    uint64 mvcc_timestamp = 1;
 }
 
 message GetQueryPlanResponse {
