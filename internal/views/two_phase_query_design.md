@@ -72,18 +72,25 @@ Phase 2b: Requery(version=V, PKs) → output fields for final PKs only
 This reduces bandwidth by deferring output field retrieval until after reduce.
 If the view is invalidated between 2a and 2b, the client retries from Phase 1.
 
-### 2.4 HybridSearch
+### 2.4 Search and Query Model
 
-HybridSearch (advanced search with multiple sub-searches) is handled at the Proxy
-level. Proxy splits the HybridSearch into M individual sub-searches, each executed
-as a full Phase 1 + Phase 2 flow against all work nodes. After all sub-search results
-are collected and reduced per-shard, Proxy performs the hybrid reranking (RRF, weighted,
-etc.) across the M sub-search results.
+Search and Query are separate operations due to fundamentally different result
+models (SearchResults uses serialized blob with scores/ranking; RetrieveResults
+uses structured FieldData rows).
 
-For a shard with N work nodes and M sub-searches, Proxy issues N×M Phase 2 requests
-in parallel. This increases RPC fan-out compared to the current Delegator-internal
-approach, but eliminates the Delegator single-point bottleneck. The reranking itself
-is lightweight (CPU/memory only) and Proxy scales horizontally.
+**Search** supports one or more sub-searches with optional reranking:
+
+| Scenario | Sub-searches | Reranker |
+|---|---|---|
+| Single Search | 1 | none |
+| HybridSearch | M | RRF/Weighted/Model/... |
+
+**Query** is always a single expression-based retrieve, no reranking.
+
+**Phase 1** is called once per shard, shared by all sub-searches within a Search
+request. For HybridSearch, Phase 2 sends the full request (with `is_advanced=true`
+and all sub-searches) as one RPC per work node — the node's SearchScheduler
+handles internal parallelism.
 
 ### 2.5 Multi-Replica Query Flow
 
@@ -166,13 +173,57 @@ Initially a placeholder interface.
 An independent internal query client in `internal/views/queryclient/`, decoupled from Proxy.
 Future Proxy integration will use this client as a backend.
 
-### 4.1 Layers
+### 4.1 Interface
 
-- **ViewQueryClient**: Top-level interface exposing `Search` and `Query`. Resolves
-  collection → shards, orchestrates Phase 1 + Phase 2 across all shards, and performs
-  streaming reduce.
+`ViewQueryClient` exposes `Search` and `Query` as separate entry points:
 
-### 4.2 Dependencies
+- **Search**: Handles single search and HybridSearch (multiple sub-searches with
+  optional reranker). Each sub-search is an `internalpb.SearchRequest`.
+- **Query**: Handles single expression-based retrieve. One `internalpb.RetrieveRequest`.
+
+### 4.2 Execution Stages and Field Fetch Planning
+
+Query execution has five stages. Stages 3–5 are optional depending on the
+query type and field requirements:
+
+```
+Plan → Search → [RerankQuery] → [Rerank] → [Requery]
+```
+
+| Stage | Name | Description |
+|---|---|---|
+| 1 | **Plan** | Shard resolution + GetQueryPlan (Phase 1) + FieldFetchPlan generation |
+| 2 | **Search** | Dispatch to work nodes + streaming reduce (Phase 2) |
+| 3 | **RerankQuery** | Fetch reranker-required fields via RequeryOnView (optional) |
+| 4 | **Rerank** | Cross-sub-search reranking (optional, HybridSearch only) |
+| 5 | **Requery** | Fetch remaining output fields via RequeryOnView (optional) |
+
+The reranker's required fields and the user's output fields are both known at
+request time. A **FieldFetchPlanner** (injected at construction) decides which
+fields to fetch at each stage:
+
+- **SearchFields**: Returned from work nodes alongside PKs + scores during Search.
+  Avoids requery but increases per-node response size.
+- **RerankQueryFields**: Fetched via RequeryOnView during RerankQuery, on the full
+  candidate set. Only needed if the reranker requires fields not in SearchFields.
+- **RequeryFields**: Fetched via RequeryOnView during Requery, on the final top-k
+  only. For output fields not yet available.
+
+The three sets are disjoint; their union equals `rerank_fields ∪ output_fields`.
+
+Available strategies:
+
+| Strategy | Search carries | RerankQuery | Requery | Best for |
+|---|---|---|---|---|
+| All-in-Search | all fields | none | none | small fields, few work nodes |
+| Defer-all | PKs + scores | all fields | none | high reduce ratio |
+| Split | rerank fields | none | output fields | small rerank fields, large output |
+| Defer-split | PKs + scores | rerank fields | output fields | large candidate set, large fields |
+
+The planner can be a static configuration or driven by a `CostEstimator` that
+evaluates field sizes, candidate counts, and network topology.
+
+### 4.3 Dependencies
 
 All dependencies are injected as interfaces:
 
@@ -185,7 +236,7 @@ All dependencies are injected as interfaces:
   primary replica identification). Backed by the channel assignment service discovery
   (see Section 5.5).
 
-### 4.3 Streaming Reducer
+### 4.4 Streaming Reducer
 
 A **shard-aware streaming reducer** that processes results incrementally as they arrive
 from work nodes. Key properties:
@@ -201,21 +252,48 @@ from work nodes. Key properties:
 
 Both `SearchResultReducer` and `RetrieveResultReducer` follow this pattern.
 
-### 4.4 Execution Flow
+### 4.5 Execution Flow
 
 ```
 Search(req):
+  [Plan]
   1. Resolve collection → shards
-  2. For all shards concurrently: Phase 1 (get query plan from SN)
-  3. Create streaming reducer
-  4. For all work nodes across all plans concurrently: Phase 2 (execute)
-     → Each result feeds into reducer.Add(shardID, result)
-     → On VIEW_INVALIDATED: reducer.ResetShard, retry that shard from Phase 1
-  5. reducer.Finish() → final result
-  6. Optional requery: reuse same plans for output field retrieval
+  2. if len(SubSearches) > 1: reranker.Builder.Build(req) → Reranker
+  3. FieldFetchPlanner.Plan(reranker.RequiredFields(), outputFields) → FieldFetchPlan
+  4. For all shards concurrently: GetQueryPlan (once per shard)
+  [Search]
+  5. For all work nodes concurrently: SearchOnView (with SearchFields)
+     → Each result feeds into reducer
+     → On VIEW_INVALIDATED: reducer.ResetShard, retry from Plan
+  6. reducer.Finish() → per-sub-search results
+  [RerankQuery] (optional)
+  7. if RerankQueryFields non-empty:
+       RequeryOnView(candidate PKs, RerankQueryFields) using same plans
+  [Rerank] (optional)
+  8. if Reranker present:
+       Reranker.Rerank(per-sub-search results) → final top-k
+  [Requery] (optional)
+  9. if RequeryFields non-empty:
+       RequeryOnView(final top-k PKs, RequeryFields) using same plans
+  10. Return final SearchResult
+
+Query(req):
+  [Plan]
+  1. Resolve collection → shards
+  2. FieldFetchPlanner.Plan() → FieldFetchPlan
+  3. For all shards concurrently: GetQueryPlan (once per shard)
+  [Search]
+  4. For all work nodes concurrently: QueryOnView (with SearchFields)
+     → Each result feeds into reducer
+     → On VIEW_INVALIDATED: reducer.ResetShard, retry from Plan
+  5. reducer.Finish() → reduced result
+  [Requery] (optional)
+  6. if RequeryFields non-empty:
+       RequeryOnView(PKs, RequeryFields) using same plans
+  7. Return final QueryResult
 ```
 
-### 4.5 Retry Strategy
+### 4.6 Retry Strategy
 
 - **Scope**: Per-shard. Only the failed shard retries from Phase 1; other shards'
   results are preserved.
@@ -333,10 +411,11 @@ and `ShardAssignmentEntry`.
 ```
 internal/views/
 ├── queryclient/
-│   ├── client.go              # ViewQueryClient (top-level orchestrator)
-│   ├── resolver.go            # Dependency interfaces (QueryPlanClient, ViewQueryServiceClient, ShardResolver)
-│   ├── reducer.go             # Streaming reducers
-│   └── retry.go               # Shard-level retry logic
+│   ├── client.go              # ViewQueryClient interface, ExecuteRequest, SubRequest
+│   ├── resolver.go            # QueryPlanClient, ViewQueryServiceClient, ShardResolver
+│   ├── planner.go             # FieldFetchPlanner, FieldFetchPlan, CostEstimator
+│   └── reducer/
+│       └── reducer.go         # SearchResultReducer, RetrieveResultReducer
 ├── optimizer/
 │   ├── global.go              # GlobalOptimizer interface + no-op placeholder
 │   └── local.go               # LocalOptimizer interface + no-op placeholder
