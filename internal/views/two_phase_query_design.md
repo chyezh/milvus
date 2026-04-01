@@ -82,8 +82,14 @@ uses structured FieldData rows).
 
 | Scenario | Sub-searches | Reranker |
 |---|---|---|
-| Single Search | 1 | none |
+| Single Search (no rerank) | 1 | none |
+| Single Search (with rerank) | 1 | Decay/Model/... |
 | HybridSearch | M | RRF/Weighted/Model/... |
+
+Reranking applies to both single search (e.g., decay function, model-based reranking
+on a single vector search result) and HybridSearch (e.g., RRF/weighted merging across
+multiple sub-searches). The reranker is constructed internally by the reranker.Builder
+based on the request's FunctionScore or RankParams configuration.
 
 **Query** is always a single expression-based retrieve, no reranking.
 
@@ -102,8 +108,12 @@ inherits the SN's primary/secondary status for the corresponding pchannel.
 **MVCC and consistency levels:**
 - **Strong consistency**: MVCC timestamp must come from the primary SN (latest WAL
   write position). Only the primary SN can guarantee the most up-to-date read point.
-- **Other consistency levels** (Bounded, Session, Eventual): MVCC can come from any
-  replica's SN. Secondary SNs use their WAL subscription position.
+  Uses `consistency_level` mode in GetQueryPlanRequest.
+- **Session consistency**: Proxy maintains a per-session last write timestamp. This
+  timestamp is passed via `mvcc_timestamp` mode in GetQueryPlanRequest, so the SN
+  uses it directly without WAL lookup. Can target any replica.
+- **Bounded / Eventual**: MVCC can come from any replica's SN. Secondary SNs use
+  their WAL subscription position. Uses `consistency_level` mode.
 
 **MVCC is pchannel-granularity.** Multiple vchannels sharing the same pchannel share
 the same WAL, so `GetMVCCTimestamp` returns the pchannel-level WAL write position.
@@ -183,33 +193,35 @@ Future Proxy integration will use this client as a backend.
 
 ### 4.2 Execution Stages and Field Fetch Planning
 
-Query execution has five stages. Stages 3–5 are optional depending on the
-query type and field requirements:
+Query execution has six stages. Stages 3–6 are optional depending on the
+query type, reranking, and rendering requirements:
 
 ```
-Plan → Search → [RerankQuery] → [Rerank] → [Requery]
+Plan → Search → [RerankQuery] → [Rerank] → [Requery] → Render
 ```
 
 | Stage | Name | Description |
 |---|---|---|
-| 1 | **Plan** | Shard resolution + GetQueryPlan (Phase 1) + FieldFetchPlan generation |
+| 1 | **Plan** | Shard resolution + Reranker/Renderer construction + FieldFetchPlan generation + GetQueryPlan (Phase 1) |
 | 2 | **Search** | Dispatch to work nodes + streaming reduce (Phase 2) |
 | 3 | **RerankQuery** | Fetch reranker-required fields via RequeryOnView (optional) |
-| 4 | **Rerank** | Cross-sub-search reranking (optional, HybridSearch only) |
-| 5 | **Requery** | Fetch remaining output fields via RequeryOnView (optional) |
+| 4 | **Rerank** | Cross-sub-search reranking (optional) |
+| 5 | **Requery** | Fetch remaining output/render fields via RequeryOnView (optional) |
+| 6 | **Render** | Result post-processing (always runs; noop for plain queries, text highlighting for BM25, etc.) |
 
-The reranker's required fields and the user's output fields are both known at
-request time. A **FieldFetchPlanner** (injected at construction) decides which
-fields to fetch at each stage:
+The reranker's required fields, renderer's required fields, and the user's output
+fields are all known at request time. A **FieldFetchPlanner** (injected at
+construction) decides which fields to fetch at each stage:
 
 - **SearchFields**: Returned from work nodes alongside PKs + scores during Search.
   Avoids requery but increases per-node response size.
 - **RerankQueryFields**: Fetched via RequeryOnView during RerankQuery, on the full
   candidate set. Only needed if the reranker requires fields not in SearchFields.
 - **RequeryFields**: Fetched via RequeryOnView during Requery, on the final top-k
-  only. For output fields not yet available.
+  only. For output and render fields not yet available.
 
-The three sets are disjoint; their union equals `rerank_fields ∪ output_fields`.
+The three sets are disjoint; their union equals
+`rerank_fields ∪ output_fields ∪ render_fields`.
 
 Available strategies:
 
@@ -217,8 +229,8 @@ Available strategies:
 |---|---|---|---|---|
 | All-in-Search | all fields | none | none | small fields, few work nodes |
 | Defer-all | PKs + scores | all fields | none | high reduce ratio |
-| Split | rerank fields | none | output fields | small rerank fields, large output |
-| Defer-split | PKs + scores | rerank fields | output fields | large candidate set, large fields |
+| Split | rerank fields | none | output + render fields | small rerank fields, large output |
+| Defer-split | PKs + scores | rerank fields | output + render fields | large candidate set, large fields |
 
 The planner can be a static configuration or driven by a `CostEstimator` that
 evaluates field sizes, candidate counts, and network topology.
@@ -251,6 +263,8 @@ from work nodes. Key properties:
   nodes contribute results. `Finish` performs a final cross-shard top-k merge.
 
 Both `SearchResultReducer` and `RetrieveResultReducer` follow this pattern.
+Multiple reducer implementations handle different semantics (standard top-k,
+GroupBy per-group top-k, etc.).
 
 ### 4.5 Execution Flow
 
@@ -258,13 +272,15 @@ Both `SearchResultReducer` and `RetrieveResultReducer` follow this pattern.
 Search(req):
   [Plan]
   1. Resolve collection → shards
-  2. if len(SubSearches) > 1: reranker.Builder.Build(req) → Reranker
-  3. FieldFetchPlanner.Plan(reranker.RequiredFields(), outputFields) → FieldFetchPlan
-  4. For all shards concurrently: GetQueryPlan (once per shard)
-  [Search]
-  5. For all work nodes concurrently: SearchOnView (with SearchFields)
-     → Each result feeds into reducer
-     → On VIEW_INVALIDATED: reducer.ResetShard, retry from Plan
+  2. reranker.Builder.Build(req) → Reranker (may be nil)
+  3. Renderer.Build(req) → Renderer
+  4. FieldFetchPlanner.Plan(reranker.RequiredFields(), renderer.RequiredFields(), outputFields) → FieldFetchPlan
+  [Search] (per-shard pipelining: each shard starts Phase 2 as soon as its Phase 1 completes)
+  5. For each shard concurrently:
+       a. GetQueryPlan (Phase 1, once per shard)
+       b. For all work nodes in plan concurrently: SearchOnView (with SearchFields)
+          → Each result feeds into reducer
+          → On VIEW_INVALIDATED: reducer.ResetShard, retry from step 5a for this shard
   6. reducer.Finish() → per-sub-search results
   [RerankQuery] (optional)
   7. if RerankQueryFields non-empty:
@@ -275,22 +291,28 @@ Search(req):
   [Requery] (optional)
   9. if RequeryFields non-empty:
        RequeryOnView(final top-k PKs, RequeryFields) using same plans
-  10. Return final SearchResult
+  [Render]
+  10. Renderer.Render(results) → post-processed results
+  11. Return final SearchResult
 
 Query(req):
   [Plan]
   1. Resolve collection → shards
-  2. FieldFetchPlanner.Plan() → FieldFetchPlan
-  3. For all shards concurrently: GetQueryPlan (once per shard)
-  [Search]
-  4. For all work nodes concurrently: QueryOnView (with SearchFields)
-     → Each result feeds into reducer
-     → On VIEW_INVALIDATED: reducer.ResetShard, retry from Plan
+  2. Renderer.Build(req) → Renderer
+  3. FieldFetchPlanner.Plan(renderer.RequiredFields(), outputFields) → FieldFetchPlan
+  [Search] (per-shard pipelining)
+  4. For each shard concurrently:
+       a. GetQueryPlan (Phase 1, once per shard)
+       b. For all work nodes in plan concurrently: QueryOnView (with SearchFields)
+          → Each result feeds into reducer
+          → On VIEW_INVALIDATED: reducer.ResetShard, retry from step 4a for this shard
   5. reducer.Finish() → reduced result
   [Requery] (optional)
   6. if RequeryFields non-empty:
        RequeryOnView(PKs, RequeryFields) using same plans
-  7. Return final QueryResult
+  [Render]
+  7. Renderer.Render(results) → post-processed results
+  8. Return final QueryResult
 ```
 
 ### 4.6 Retry Strategy
@@ -314,6 +336,8 @@ Implements both QueryPlanService and ViewQueryService gRPC servers.
    - If `mvcc_timestamp` provided → use directly, skip WAL lookup.
 3. Run Global Optimizers on the request.
 4. Build work node list from the query view (SN itself + all QNs).
+   If partition_ids are specified, prune work nodes that have no segments
+   for the requested partitions to reduce Phase 2 fan-out.
 5. Return query plan with optimized request.
 
 **Phase 1 — GetMVCCTimestamp:**
@@ -360,7 +384,7 @@ implemented by extending existing infrastructure:
   the client resolves vchannel→pchannel, then uses shard assignment data to identify
   which SN holds the target replica, routing to that specific SN.
 - `GetQueryPlan`: routes to the replica's SN via the connection pool.
-- `GetMVCCTimestamp`: routes to the primary SN (identified via `channel_is_primary`).
+- `GetMVCCTimestamp`: routes to the primary SN (identified via `channels` vs `secondary_channels`).
 - Error conversion (gRPC status → ViewError) handled internally via interceptor.
 
 **ViewQueryServiceClient** — composite client dispatching by WorkNode type:
@@ -411,11 +435,15 @@ and `ShardAssignmentEntry`.
 ```
 internal/views/
 ├── queryclient/
-│   ├── client.go              # ViewQueryClient interface, ExecuteRequest, SubRequest
+│   ├── client.go              # ViewQueryClient interface, SearchRequest, QueryRequest
 │   ├── resolver.go            # QueryPlanClient, ViewQueryServiceClient, ShardResolver
 │   ├── planner.go             # FieldFetchPlanner, FieldFetchPlan, CostEstimator
-│   └── reducer/
-│       └── reducer.go         # SearchResultReducer, RetrieveResultReducer
+│   ├── reducer/
+│   │   └── reducer.go         # SearchResultReducer, RetrieveResultReducer
+│   ├── reranker/
+│   │   └── reranker.go        # Reranker interface, Builder interface
+│   └── renderer/
+│       └── renderer.go        # Renderer interface, Builder interface, noop renderer
 ├── optimizer/
 │   ├── global.go              # GlobalOptimizer interface + no-op placeholder
 │   └── local.go               # LocalOptimizer interface + no-op placeholder

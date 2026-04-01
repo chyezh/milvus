@@ -9,9 +9,13 @@ import (
 // SearchResultReducer incrementally reduces search results as they arrive from work nodes.
 // Thread-safe: Add may be called concurrently from multiple goroutines.
 //
-// Internally maintains a per-shard sub-reducer with eager top-k reduce.
+// Internally maintains a per-shard sub-reducer with eager reduce.
 // ResetShard discards a single shard's accumulated results in O(1),
 // enabling shard-level retry without losing other shards' data.
+//
+// Multiple implementations handle different semantics:
+// - Standard top-k reduce (sorted by score)
+// - GroupBy per-group top-k reduce (grouped by field value)
 type SearchResultReducer interface {
 	// Add feeds a single work node's search result into the reducer.
 	Add(shardID qviews.ShardID, result *viewpb.SearchOnViewResponse) error

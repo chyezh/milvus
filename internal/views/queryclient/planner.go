@@ -4,22 +4,23 @@ import "context"
 
 // Query execution stages:
 //
-//   Plan → Search → [RerankQuery] → [Rerank] → [Requery]
+//   Plan → Search → [RerankQuery] → [Rerank] → [Requery] → Render
 //
-// - Plan:        Shard resolution + GetQueryPlan (Phase 1) + FieldFetchPlan generation.
+// - Plan:        Shard resolution + Reranker/Renderer construction + FieldFetchPlan generation + GetQueryPlan (Phase 1).
 // - Search:      Dispatch to work nodes + streaming reduce (Phase 2).
 // - RerankQuery: Fetch reranker-required fields via RequeryOnView (optional).
-// - Rerank:      Cross-sub-search reranking (optional, HybridSearch only).
-// - Requery:     Fetch remaining output fields via RequeryOnView (optional).
+// - Rerank:      Cross-sub-search reranking (optional).
+// - Requery:     Fetch remaining output/render fields via RequeryOnView (optional).
+// - Render:      Result post-processing — noop for plain queries, text highlighting for BM25, etc. (always runs).
 //
 // Fields can be fetched at three stages:
 // - SearchFields:      returned from work nodes alongside PKs + scores during Search.
 // - RerankQueryFields: fetched via RequeryOnView during RerankQuery (for reranker use).
-// - RequeryFields:     fetched via RequeryOnView during Requery (for final output).
+// - RequeryFields:     fetched via RequeryOnView during Requery (for output + render use).
 
 // FieldFetchPlanner decides which fields to fetch at each execution stage.
-// The planner examines reranker requirements, user-requested output fields,
-// and query characteristics to produce an optimal field fetch plan.
+// The planner examines reranker requirements, renderer requirements, user-requested
+// output fields, and query characteristics to produce an optimal field fetch plan.
 //
 // Implementations range from static strategies (always defer, always inline)
 // to cost-based planners that evaluate field sizes and candidate counts.
@@ -31,6 +32,8 @@ type FieldFetchPlanner interface {
 type FieldFetchPlanParams struct {
 	// Fields required by the reranker (from Reranker.RequiredFields()).
 	RerankFields []string
+	// Fields required by the renderer (from Renderer.RequiredFields()).
+	RenderFields []string
 	// Fields requested by the user as output.
 	OutputFields []string
 	// Number of sub-searches in the request.
@@ -42,7 +45,8 @@ type FieldFetchPlanParams struct {
 }
 
 // FieldFetchPlan tells the executor what fields to fetch at each stage.
-// The three field sets are disjoint; their union equals rerankFields ∪ outputFields.
+// The three field sets are disjoint; their union equals
+// rerankFields ∪ outputFields ∪ renderFields.
 type FieldFetchPlan struct {
 	// SearchFields are returned from work nodes alongside PKs + scores
 	// during the Search stage. Avoids requery but increases per-node response size.
@@ -54,8 +58,8 @@ type FieldFetchPlan struct {
 	RerankQueryFields []string
 
 	// RequeryFields are fetched via RequeryOnView during the Requery stage,
-	// on the final top-k only. For output fields not yet available from
-	// SearchFields or RerankQueryFields.
+	// on the final top-k only. For output and render fields not yet available
+	// from SearchFields or RerankQueryFields.
 	RequeryFields []string
 }
 
@@ -66,8 +70,8 @@ type CostEstimator interface {
 }
 
 // NewDefaultFieldFetchPlanner returns a planner that carries rerank fields
-// during Search and defers remaining output fields to Requery.
-// When no reranker is present, all output fields are carried during Search.
+// during Search and defers remaining output/render fields to Requery.
+// When no reranker is present, all output/render fields are carried during Search.
 func NewDefaultFieldFetchPlanner() FieldFetchPlanner {
 	return &defaultFieldFetchPlanner{}
 }
@@ -75,10 +79,23 @@ func NewDefaultFieldFetchPlanner() FieldFetchPlanner {
 type defaultFieldFetchPlanner struct{}
 
 func (p *defaultFieldFetchPlanner) Plan(_ context.Context, params *FieldFetchPlanParams) (*FieldFetchPlan, error) {
+	// Collect all needed fields, deduplicated.
+	allNeeded := make(map[string]struct{})
+	for _, f := range params.OutputFields {
+		allNeeded[f] = struct{}{}
+	}
+	for _, f := range params.RenderFields {
+		allNeeded[f] = struct{}{}
+	}
+
 	if len(params.RerankFields) == 0 {
-		// No reranker: carry all output fields during Search.
+		// No reranker: carry all needed fields during Search.
+		fields := make([]string, 0, len(allNeeded))
+		for f := range allNeeded {
+			fields = append(fields, f)
+		}
 		return &FieldFetchPlan{
-			SearchFields: params.OutputFields,
+			SearchFields: fields,
 		}, nil
 	}
 
@@ -89,7 +106,7 @@ func (p *defaultFieldFetchPlanner) Plan(_ context.Context, params *FieldFetchPla
 	}
 
 	var requeryFields []string
-	for _, f := range params.OutputFields {
+	for f := range allNeeded {
 		if _, ok := rerankSet[f]; !ok {
 			requeryFields = append(requeryFields, f)
 		}
