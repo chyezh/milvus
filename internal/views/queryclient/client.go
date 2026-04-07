@@ -3,6 +3,9 @@ package queryclient
 import (
 	"context"
 
+	"github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v2/schemapb"
+	"github.com/milvus-io/milvus/internal/views/queryclient/reranker"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 )
 
@@ -28,8 +31,27 @@ type ViewQueryClient interface {
 // SearchRequest wraps an internal search request with orchestration metadata.
 // For HybridSearch, Req.IsAdvanced=true and Req.SubReqs contains the sub-searches.
 // For single search, Req.IsAdvanced=false.
+//
+// Metadata fields (OutputFieldNames, RankParams, FunctionScore, OrderByFields)
+// are populated by the Proxy from the API-level request and collection schema.
 type SearchRequest struct {
 	Req *internalpb.SearchRequest
+
+	// OutputFieldNames are the user-requested output field names,
+	// resolved from Req.OutputFieldsId by the Proxy using the collection schema.
+	OutputFieldNames []string
+
+	// RankParams from HybridSearch API (legacy rank params).
+	// Used by the reranker builder to construct the appropriate reranker.
+	RankParams []*commonpb.KeyValuePair
+
+	// FunctionScore from the search request schema.
+	// Used for score-function-based reranking.
+	FunctionScore *schemapb.FunctionScore
+
+	// OrderByFields parsed from the search request.
+	// When non-empty, results are sorted by these fields instead of by score.
+	OrderByFields []reranker.OrderByField
 }
 
 // SearchResult contains the final search result after reduce and optional reranking.
@@ -40,6 +62,10 @@ type SearchResult struct {
 // QueryRequest wraps an internal retrieve request with orchestration metadata.
 type QueryRequest struct {
 	Req *internalpb.RetrieveRequest
+
+	// OutputFieldNames are the user-requested output field names,
+	// resolved from Req.OutputFieldsId by the Proxy using the collection schema.
+	OutputFieldNames []string
 }
 
 // QueryResult contains the final retrieve result after reduce.
