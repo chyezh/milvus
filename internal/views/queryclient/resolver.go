@@ -40,9 +40,13 @@ type ShardReplicas struct {
 	ShardIDs       []qviews.ShardID // All replicas including primary.
 }
 
-// ShardResolver resolves the shard replicas of a collection.
-// Returns per-vchannel replica information for Proxy to perform replica selection
-// and primary/secondary routing.
+// ShardResolver resolves shard topology for a collection.
 type ShardResolver interface {
-	ResolveShards(ctx context.Context, collectionID int64) ([]ShardReplicas, error)
+	// ResolveVChannels returns all vchannels of a collection.
+	// Used by the collection-level client to determine the shard fanout.
+	ResolveVChannels(ctx context.Context, collectionID int64) ([]string, error)
+
+	// ResolveShard returns the replicas of a single shard identified by vchannel.
+	// Used by the shard-level client for replica selection and consistency routing.
+	ResolveShard(ctx context.Context, collectionID int64, vchannel string) (*ShardReplicas, error)
 }

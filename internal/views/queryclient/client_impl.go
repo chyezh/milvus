@@ -3,12 +3,12 @@ package queryclient
 import (
 	"context"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/milvus-io/milvus/internal/views/queryclient/reducer"
 	"github.com/milvus-io/milvus/internal/views/queryclient/renderer"
 	"github.com/milvus-io/milvus/internal/views/queryclient/reranker"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
-	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"golang.org/x/sync/errgroup"
 )
 
 const defaultMaxRetries = 3
@@ -101,14 +101,14 @@ func (c *viewQueryClientImpl) Search(ctx context.Context, req *SearchRequest) (*
 		RenderFields:   rnd.RequiredFields(),
 		OutputFields:   req.OutputFieldNames,
 		NumSubSearches: len(req.Req.SubReqs),
-		TopK:           int64(req.Req.Topk),
+		TopK:           req.Req.Topk,
 	})
 	if err != nil {
 		return nil, err
 	}
 
 	// Resolve collection → vchannels.
-	vchannels, err := c.resolveVChannels(ctx, req.Req.CollectionID)
+	vchannels, err := c.shardResolver.ResolveVChannels(ctx, req.Req.CollectionID)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +187,7 @@ func (c *viewQueryClientImpl) Query(ctx context.Context, req *QueryRequest) (*Qu
 	}
 
 	// Resolve collection → vchannels.
-	vchannels, err := c.resolveVChannels(ctx, req.Req.CollectionID)
+	vchannels, err := c.shardResolver.ResolveVChannels(ctx, req.Req.CollectionID)
 	if err != nil {
 		return nil, err
 	}
@@ -286,20 +286,4 @@ func (c *viewQueryClientImpl) queryAllShards(
 		return nil, err
 	}
 	return shardPlans, nil
-}
-
-// resolveVChannels resolves the vchannels for a collection.
-func (c *viewQueryClientImpl) resolveVChannels(ctx context.Context, collectionID int64) ([]string, error) {
-	allShards, err := c.shardResolver.ResolveShards(ctx, collectionID)
-	if err != nil {
-		return nil, err
-	}
-	if len(allShards) == 0 {
-		return nil, merr.WrapErrServiceInternal("no shards resolved for collection")
-	}
-	vchannels := make([]string, len(allShards))
-	for i := range allShards {
-		vchannels[i] = allShards[i].VChannel
-	}
-	return vchannels, nil
 }

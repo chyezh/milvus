@@ -3,14 +3,14 @@ package queryclient
 import (
 	"context"
 
+	"golang.org/x/sync/errgroup"
+
 	commonpb "github.com/milvus-io/milvus-proto/go-api/v2/commonpb"
 	"github.com/milvus-io/milvus/internal/views/queryclient/reducer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/viewerror"
 	"github.com/milvus-io/milvus/pkg/v2/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v2/proto/viewpb"
-	"github.com/milvus-io/milvus/pkg/v2/util/merr"
-	"golang.org/x/sync/errgroup"
 )
 
 // shardViewQueryClient executes two-phase queries at the shard granularity.
@@ -68,28 +68,23 @@ func (s *shardViewQueryClient) Search(ctx context.Context, req *ShardSearchReque
 		buildPlanReq: func(targetShardID qviews.ShardID) *viewpb.GetQueryPlanRequest {
 			return &viewpb.GetQueryPlanRequest{
 				CollectionId: req.Req.CollectionID,
-				ShardId:      shardIDIntoProto(targetShardID),
+				ShardId:      targetShardID.IntoProto(),
 				PartitionIds: req.Req.PartitionIDs,
 				Request: &viewpb.GetQueryPlanRequest_LegacySearchRequest{
 					LegacySearchRequest: req.Req,
 				},
 			}
 		},
-		dispatch: func(ctx context.Context, plan *viewpb.QueryPlan, shardID qviews.ShardID, workNodes []qviews.WorkNode) error {
-			searchReq := plan.GetLegacySearchRequest()
-			searchReq.MvccTimestamp = plan.MvccTimestamp
-			return s.dispatchToWorkNodes(ctx, shardID, plan.Version, workNodes,
-				func(ctx context.Context, node qviews.WorkNode, protoShardID *viewpb.ShardID, version *viewpb.QueryViewVersion) error {
-					resp, err := s.queryServiceClient.SearchOnView(ctx, node, &viewpb.SearchOnViewRequest{
-						LegacyReq: searchReq,
-						ShardId:   protoShardID,
-						Version:   version,
-					})
-					if err != nil {
-						return err
-					}
-					return req.Reducer.Add(shardID, resp)
-				})
+		dispatchNode: func(ctx context.Context, node qviews.WorkNode, plan *viewpb.QueryPlan, shardID qviews.ShardID) error {
+			resp, err := s.queryServiceClient.SearchOnView(ctx, node, &viewpb.SearchOnViewRequest{
+				LegacyReq: plan.GetLegacySearchRequest(),
+				ShardId:   shardID.IntoProto(),
+				Version:   plan.Version,
+			})
+			if err != nil {
+				return err
+			}
+			return req.Reducer.Add(shardID, resp)
 		},
 		resetShard: req.Reducer.ResetShard,
 	})
@@ -105,28 +100,23 @@ func (s *shardViewQueryClient) Query(ctx context.Context, req *ShardQueryRequest
 		buildPlanReq: func(targetShardID qviews.ShardID) *viewpb.GetQueryPlanRequest {
 			return &viewpb.GetQueryPlanRequest{
 				CollectionId: req.Req.CollectionID,
-				ShardId:      shardIDIntoProto(targetShardID),
+				ShardId:      targetShardID.IntoProto(),
 				PartitionIds: req.Req.PartitionIDs,
 				Request: &viewpb.GetQueryPlanRequest_LegacyRetrieveRequest{
 					LegacyRetrieveRequest: req.Req,
 				},
 			}
 		},
-		dispatch: func(ctx context.Context, plan *viewpb.QueryPlan, shardID qviews.ShardID, workNodes []qviews.WorkNode) error {
-			retrieveReq := plan.GetLegacyRetrieveRequest()
-			retrieveReq.MvccTimestamp = plan.MvccTimestamp
-			return s.dispatchToWorkNodes(ctx, shardID, plan.Version, workNodes,
-				func(ctx context.Context, node qviews.WorkNode, protoShardID *viewpb.ShardID, version *viewpb.QueryViewVersion) error {
-					resp, err := s.queryServiceClient.QueryOnView(ctx, node, &viewpb.QueryOnViewRequest{
-						LegacyReq: retrieveReq,
-						ShardId:   protoShardID,
-						Version:   version,
-					})
-					if err != nil {
-						return err
-					}
-					return req.Reducer.Add(shardID, resp)
-				})
+		dispatchNode: func(ctx context.Context, node qviews.WorkNode, plan *viewpb.QueryPlan, shardID qviews.ShardID) error {
+			resp, err := s.queryServiceClient.QueryOnView(ctx, node, &viewpb.QueryOnViewRequest{
+				LegacyReq: plan.GetLegacyRetrieveRequest(),
+				ShardId:   shardID.IntoProto(),
+				Version:   plan.Version,
+			})
+			if err != nil {
+				return err
+			}
+			return req.Reducer.Add(shardID, resp)
 		},
 		resetShard: req.Reducer.ResetShard,
 	})
@@ -143,10 +133,9 @@ type shardExecParams struct {
 	guaranteeTs      uint64
 	// buildPlanReq creates the GetQueryPlanRequest for a target shard.
 	buildPlanReq func(targetShardID qviews.ShardID) *viewpb.GetQueryPlanRequest
-	// dispatch executes Phase 2 against the plan's work nodes.
-	// It should extract the optimized request from the plan, fan out to work nodes,
-	// and feed results into the appropriate reducer.
-	dispatch func(ctx context.Context, plan *viewpb.QueryPlan, shardID qviews.ShardID, workNodes []qviews.WorkNode) error
+	// dispatchNode executes a Phase 2 RPC on a single work node.
+	// Called concurrently for each work node in the plan.
+	dispatchNode func(ctx context.Context, node qviews.WorkNode, plan *viewpb.QueryPlan, shardID qviews.ShardID) error
 	// resetShard resets the reducer state for the given shard on retry.
 	resetShard func(shardID qviews.ShardID)
 }
@@ -165,7 +154,7 @@ func (s *shardViewQueryClient) executeShard(
 	for attempt := 0; attempt < s.maxRetries; attempt++ {
 		// Resolve shard replicas (every attempt, including first).
 		// ShardResolver uses a local cache, so this is a zero-overhead lookup.
-		shardReplicas, err := s.resolveShardReplicas(ctx, collectionID, vchannel)
+		shardReplicas, err := s.shardResolver.ResolveShard(ctx, collectionID, vchannel)
 		if err != nil {
 			return nil, err
 		}
@@ -191,11 +180,19 @@ func (s *shardViewQueryClient) executeShard(
 			return nil, err
 		}
 
-		shardID := shardIDFromProto(plan.ShardId)
+		shardID := qviews.FromProtoShardID(plan.ShardId)
 		workNodes := workNodesFromPlan(plan)
 
-		// Phase 2: Dispatch to all work nodes.
-		err = params.dispatch(ctx, plan, shardID, workNodes)
+		// Phase 2: Fan out to all work nodes concurrently.
+		// Set MVCC timestamp into the plan's request before dispatch.
+		// Both SearchRequest and RetrieveRequest have MvccTimestamp field.
+		if sr := plan.GetLegacySearchRequest(); sr != nil {
+			sr.MvccTimestamp = plan.MvccTimestamp
+		}
+		if rr := plan.GetLegacyRetrieveRequest(); rr != nil {
+			rr.MvccTimestamp = plan.MvccTimestamp
+		}
+		err = s.fanOutToWorkNodes(ctx, workNodes, plan, shardID, params.dispatchNode)
 		if pickResult.Done != nil {
 			pickResult.Done(ReplicaDoneInfo{Err: err})
 		}
@@ -235,8 +232,6 @@ func (s *shardViewQueryClient) executeGetQueryPlan(
 	switch consistencyLevel {
 	case commonpb.ConsistencyLevel_Strong:
 		if targetShardID != shardReplicas.PrimaryShardID {
-			// Cross-replica strong consistency: get MVCC from primary SN,
-			// then issue GetQueryPlan on the target with the obtained timestamp.
 			mvccResp, err := s.queryPlanClient.GetMVCCTimestamp(ctx, shardReplicas.PrimaryShardID,
 				&viewpb.GetMVCCTimestampRequest{
 					Vchannel: targetShardID.VChannel,
@@ -248,19 +243,15 @@ func (s *shardViewQueryClient) executeGetQueryPlan(
 				MvccTimestamp: mvccResp.MvccTimestamp,
 			}
 		} else {
-			// Target is primary: SN generates MVCC from its own WAL.
 			planReq.Mvcc = &viewpb.GetQueryPlanRequest_ConsistencyLevel{
 				ConsistencyLevel: commonpb.ConsistencyLevel_Strong,
 			}
 		}
 	case commonpb.ConsistencyLevel_Session:
-		// Session: use the Proxy-provided session timestamp directly.
-		// SN uses it directly, skipping WAL lookup. Can target any replica.
 		planReq.Mvcc = &viewpb.GetQueryPlanRequest_MvccTimestamp{
 			MvccTimestamp: guaranteeTs,
 		}
 	default:
-		// Bounded / Eventually: SN generates MVCC from its own WAL position.
 		planReq.Mvcc = &viewpb.GetQueryPlanRequest_ConsistencyLevel{
 			ConsistencyLevel: consistencyLevel,
 		}
@@ -273,52 +264,25 @@ func (s *shardViewQueryClient) executeGetQueryPlan(
 	return resp.Plan, nil
 }
 
-// ============================================================================
-// Fan-out helpers
-// ============================================================================
-
-// workNodeCall is a function that executes a single Phase 2 RPC on one work node.
-type workNodeCall func(ctx context.Context, node qviews.WorkNode, shardID *viewpb.ShardID, version *viewpb.QueryViewVersion) error
-
-// dispatchToWorkNodes fans out a Phase 2 call to all work nodes concurrently.
-func (s *shardViewQueryClient) dispatchToWorkNodes(
+// fanOutToWorkNodes dispatches Phase 2 to all work nodes concurrently.
+// Uses errgroup.WithContext for fast-fail: if any node fails, gCtx is canceled
+// and in-flight RPCs on other nodes are aborted. The caller (executeShard) then
+// retries the entire shard.
+func (s *shardViewQueryClient) fanOutToWorkNodes(
 	ctx context.Context,
-	shardID qviews.ShardID,
-	version *viewpb.QueryViewVersion,
 	workNodes []qviews.WorkNode,
-	call workNodeCall,
+	plan *viewpb.QueryPlan,
+	shardID qviews.ShardID,
+	dispatchNode func(ctx context.Context, node qviews.WorkNode, plan *viewpb.QueryPlan, shardID qviews.ShardID) error,
 ) error {
-	protoShardID := shardIDIntoProto(shardID)
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, node := range workNodes {
 		node := node
 		g.Go(func() error {
-			return call(gCtx, node, protoShardID, version)
+			return dispatchNode(gCtx, node, plan, shardID)
 		})
 	}
 	return g.Wait()
-}
-
-// ============================================================================
-// Utility functions
-// ============================================================================
-
-// resolveShardReplicas resolves shard replicas for a specific vchannel.
-func (s *shardViewQueryClient) resolveShardReplicas(
-	ctx context.Context,
-	collectionID int64,
-	vchannel string,
-) (*ShardReplicas, error) {
-	allShards, err := s.shardResolver.ResolveShards(ctx, collectionID)
-	if err != nil {
-		return nil, err
-	}
-	for i := range allShards {
-		if allShards[i].VChannel == vchannel {
-			return &allShards[i], nil
-		}
-	}
-	return nil, merr.WrapErrServiceInternal("shard not found: " + vchannel)
 }
 
 // workNodesFromPlan converts proto QueryPlanWorkNode list to domain WorkNode types.
@@ -333,20 +297,4 @@ func workNodesFromPlan(plan *viewpb.QueryPlan) []qviews.WorkNode {
 		}
 	}
 	return nodes
-}
-
-// shardIDFromProto converts a proto ShardID to a domain ShardID.
-func shardIDFromProto(pb *viewpb.ShardID) qviews.ShardID {
-	return qviews.ShardID{
-		ReplicaID: pb.ReplicaId,
-		VChannel:  pb.Vchannel,
-	}
-}
-
-// shardIDIntoProto converts a domain ShardID to a proto ShardID.
-func shardIDIntoProto(id qviews.ShardID) *viewpb.ShardID {
-	return &viewpb.ShardID{
-		ReplicaId: id.ReplicaID,
-		Vchannel:  id.VChannel,
-	}
 }
