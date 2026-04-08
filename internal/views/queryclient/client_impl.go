@@ -70,6 +70,12 @@ func NewViewQueryClient(
 func (c *viewQueryClientImpl) Search(ctx context.Context, req *SearchRequest) (*SearchResult, error) {
 	// === Stage: Plan ===
 
+	// Resolve vchannels first — cheapest operation, fast-fails on invalid collection.
+	vchannels, err := c.shardResolver.ResolveVChannels(ctx, req.Req.CollectionID)
+	if err != nil {
+		return nil, err
+	}
+
 	// Build reranker (nil if no reranking needed).
 	rnk, err := c.rerankerBuilder.Build(ctx, &reranker.BuildRequest{
 		CollectionID:   req.Req.CollectionID,
@@ -107,13 +113,7 @@ func (c *viewQueryClientImpl) Search(ctx context.Context, req *SearchRequest) (*
 		return nil, err
 	}
 
-	// Resolve collection → vchannels.
-	vchannels, err := c.shardResolver.ResolveVChannels(ctx, req.Req.CollectionID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create per-request reducer.
+	// Create per-request reducer just before search.
 	searchReducer, err := c.searchReducerBuilder.Build(req.Req)
 	if err != nil {
 		return nil, err
@@ -169,6 +169,12 @@ func (c *viewQueryClientImpl) Search(ctx context.Context, req *SearchRequest) (*
 func (c *viewQueryClientImpl) Query(ctx context.Context, req *QueryRequest) (*QueryResult, error) {
 	// === Stage: Plan ===
 
+	// Resolve vchannels first — cheapest operation, fast-fails on invalid collection.
+	vchannels, err := c.shardResolver.ResolveVChannels(ctx, req.Req.CollectionID)
+	if err != nil {
+		return nil, err
+	}
+
 	// Build renderer (no reranker for Query).
 	rnd, err := c.rendererBuilder.Build(ctx, &renderer.BuildRequest{
 		CollectionID: req.Req.CollectionID,
@@ -186,13 +192,7 @@ func (c *viewQueryClientImpl) Query(ctx context.Context, req *QueryRequest) (*Qu
 		return nil, err
 	}
 
-	// Resolve collection → vchannels.
-	vchannels, err := c.shardResolver.ResolveVChannels(ctx, req.Req.CollectionID)
-	if err != nil {
-		return nil, err
-	}
-
-	// Create per-request reducer.
+	// Create per-request reducer just before search.
 	retrieveReducer, err := c.retrieveReducerBuilder.Build(req.Req)
 	if err != nil {
 		return nil, err

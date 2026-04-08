@@ -134,7 +134,8 @@ type shardExecParams struct {
 	// buildPlanReq creates the GetQueryPlanRequest for a target shard.
 	buildPlanReq func(targetShardID qviews.ShardID) *viewpb.GetQueryPlanRequest
 	// dispatchNode executes a Phase 2 RPC on a single work node.
-	// Called concurrently for each work node in the plan.
+	// Called concurrently for each work node in the plan, with per-node retry
+	// for non-ViewError transient failures.
 	dispatchNode func(ctx context.Context, node qviews.WorkNode, plan *viewpb.QueryPlan, shardID qviews.ShardID) error
 	// resetShard resets the reducer state for the given shard on retry.
 	resetShard func(shardID qviews.ShardID)
@@ -143,6 +144,9 @@ type shardExecParams struct {
 // executeShard runs Phase 1 + Phase 2 for a single shard with retry.
 // Replica resolution is performed at the beginning of each attempt (including the first),
 // so stale primary mappings are automatically refreshed on retry.
+//
+// Shard-level retry handles ViewErrors (view invalidated, not found, etc.).
+// Per-node retry within fanOutToWorkNodes handles transient non-view errors.
 func (s *shardViewQueryClient) executeShard(
 	ctx context.Context,
 	collectionID int64,
@@ -152,6 +156,10 @@ func (s *shardViewQueryClient) executeShard(
 	var lastErr error
 
 	for attempt := 0; attempt < s.maxRetries; attempt++ {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		// Resolve shard replicas (every attempt, including first).
 		// ShardResolver uses a local cache, so this is a zero-overhead lookup.
 		shardReplicas, err := s.shardResolver.ResolveShard(ctx, collectionID, vchannel)
@@ -168,7 +176,7 @@ func (s *shardViewQueryClient) executeShard(
 
 		// Phase 1: GetQueryPlan with consistency routing.
 		planReq := params.buildPlanReq(targetShardID)
-		plan, err := s.executeGetQueryPlan(ctx, params.consistencyLevel, params.guaranteeTs, targetShardID, shardReplicas, planReq)
+		plan, err := s.executeGetQueryPlan(ctx, targetShardID, shardReplicas, planReq, params)
 		if err != nil {
 			if pickResult.Done != nil {
 				pickResult.Done(ReplicaDoneInfo{Err: err})
@@ -223,13 +231,12 @@ func (s *shardViewQueryClient) executeShard(
 //   - Bounded/Eventually: GetQueryPlan(consistency_level=...) — SN generates MVCC from WAL
 func (s *shardViewQueryClient) executeGetQueryPlan(
 	ctx context.Context,
-	consistencyLevel commonpb.ConsistencyLevel,
-	guaranteeTs uint64,
 	targetShardID qviews.ShardID,
 	shardReplicas *ShardReplicas,
 	planReq *viewpb.GetQueryPlanRequest,
+	params *shardExecParams,
 ) (*viewpb.QueryPlan, error) {
-	switch consistencyLevel {
+	switch params.consistencyLevel {
 	case commonpb.ConsistencyLevel_Strong:
 		if targetShardID != shardReplicas.PrimaryShardID {
 			mvccResp, err := s.queryPlanClient.GetMVCCTimestamp(ctx, shardReplicas.PrimaryShardID,
@@ -249,11 +256,11 @@ func (s *shardViewQueryClient) executeGetQueryPlan(
 		}
 	case commonpb.ConsistencyLevel_Session:
 		planReq.Mvcc = &viewpb.GetQueryPlanRequest_MvccTimestamp{
-			MvccTimestamp: guaranteeTs,
+			MvccTimestamp: params.guaranteeTs,
 		}
 	default:
 		planReq.Mvcc = &viewpb.GetQueryPlanRequest_ConsistencyLevel{
-			ConsistencyLevel: consistencyLevel,
+			ConsistencyLevel: params.consistencyLevel,
 		}
 	}
 
@@ -268,6 +275,9 @@ func (s *shardViewQueryClient) executeGetQueryPlan(
 // Uses errgroup.WithContext for fast-fail: if any node fails, gCtx is canceled
 // and in-flight RPCs on other nodes are aborted. The caller (executeShard) then
 // retries the entire shard.
+//
+// Per-node transient retry (network timeout, etc.) is handled by the
+// ViewQueryServiceClient implementation, not here.
 func (s *shardViewQueryClient) fanOutToWorkNodes(
 	ctx context.Context,
 	workNodes []qviews.WorkNode,
