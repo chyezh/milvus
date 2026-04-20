@@ -34,12 +34,12 @@ message DataViewOfCollection {
 message DataViewOfShard {
     string vchannel = 1;
     repeated DataViewOfPartition partitions = 2;
-    // Shard delete-retention frontier, preserved on the wire for the
-    // QueryView consumer (QueryViewAtCoordBuilder). The DataCoord does not
-    // advance it yet: publishing a safe, monotonic Transform frontier is
-    // deferred until StreamingNode provides the shard-level Growing-Segment
-    // Flush barrier. Consumers must treat 0 as "not published".
-    uint64 transform_start_after_timetick = 3;
+    // W: WAL-certified lower bound for data not yet published into this view.
+    // Advanced atomically with final L1 Flush publication, never by checkpoint reports.
+    uint64 growing_transform_start_after_timetick = 3;
+    // A: minimum cursor of the exact Segment bases selected by this view.
+    // Recomputed for every membership/base change, including Flush. Empty shards use W.
+    uint64 compacted_transform_start_after_timetick = 4;
 }
 
 message DataViewOfPartition {
@@ -51,6 +51,9 @@ message DataViewOfPartition {
     // partition, Segment ID, and this version alone.
     repeated int64 segment_ids = 2 [packed = true];
     repeated int64 segment_manifest_versions = 3 [packed = true];
+    // Parallel to segment_ids; tied to the selected Segment data revision.
+    // Zero means legacy/unknown coverage, never a safe replay timestamp.
+    repeated uint64 segment_transform_start_after_timeticks = 4 [packed = true];
 }
 
 // QueryViewState represents the distributed lifecycle of a QueryView.
@@ -83,7 +86,7 @@ message QueryViewMeta {
     QueryViewState state = 5;
     uint64 load_info_version = 6;
     uint64 transform_start_after_timetick = 7;
-    int32 schema_version = 8; // Exact logical schema required by this view.
+    int32 schema_version = 8; // Required logical collection schema revision.
 }
 
 // QueryViewOfStreamingNode is the StreamingNode-local part of a QueryView.
@@ -109,6 +112,8 @@ message QueryViewOfPartition {
     int64 partition_id = 1;
     repeated int64 segment_ids = 2;
     repeated int64 ready_segment_ids = 3;
+    // Minimum physical base version required before this view reports Ready.
+    // Parallel to segment_ids; zero preserves legacy metadata resolution.
     repeated int64 segment_manifest_versions = 5 [packed = true];
 }
 
@@ -210,6 +215,8 @@ message QueryPlanMVCC {
     uint64 read_proof_timetick = 4;
 }
 
+// QuerySchemaBinding prevents Phase 2 and requery from changing the schema,
+// MVCC or adding field accesses beyond those checked against WAL schema history.
 message QuerySchemaBinding {
     int32 schema_version = 1;
     uint64 growing_timetick = 2;
@@ -296,6 +303,13 @@ message QueryPlan {
     QueryPayloadReuse reused_payloads = 7;
 }
 
+message QueryPayloadReuse {
+    bool placeholder_group = 1;
+    bool serialized_expr_plan = 2;
+    // Positional, parallel to SearchRequest.sub_reqs.
+    repeated QueryPayloadReuse sub_requests = 3;
+}
+
 //
 // ======================== View Query Service (Phase 2) ========================
 //
@@ -308,9 +322,6 @@ service ViewQueryService {
     rpc SearchOnView(SearchOnViewRequest) returns (SearchOnViewResponse) {}
     // QueryOnView executes a query (retrieve by expression) on segments belonging to the given view version.
     rpc QueryOnView(QueryOnViewRequest) returns (QueryOnViewResponse) {}
-    // RequeryOnView fetches output fields for a set of PKs after Proxy-side reduce.
-    // Uses the same view version as the preceding search/query to ensure consistency.
-    rpc RequeryOnView(RequeryOnViewRequest) returns (RequeryOnViewResponse) {}
 }
 
 message SearchOnViewRequest {
@@ -337,24 +348,4 @@ message QueryOnViewRequest {
 message QueryOnViewResponse {
     // TODO: replace with native view result types once legacy internal protos are removed.
     internal.RetrieveResults legacy_results = 1;
-}
-
-message RequeryOnViewRequest {
-    // TODO: replace with native view request types once legacy internal protos are removed.
-    internal.RetrieveRequest legacy_req = 1;
-    ShardID shard_id = 2;
-    QueryViewVersion version = 3;
-    QueryPlanMVCC mvcc = 4;
-}
-
-message RequeryOnViewResponse {
-    // TODO: replace with native view result types once legacy internal protos are removed.
-    internal.RetrieveResults legacy_results = 1;
-}
-
-message QueryPayloadReuse {
-    bool placeholder_group = 1;
-    bool serialized_expr_plan = 2;
-    // Positional, parallel to SearchRequest.sub_reqs.
-    repeated QueryPayloadReuse sub_requests = 3;
 }
