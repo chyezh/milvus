@@ -1094,6 +1094,73 @@ func TestShouldUpdateCurrentTarget_NoReadyDelegators(t *testing.T) {
 	assert.False(t, result, "Expected false when NO ready delegators exist")
 }
 
+func TestUpdateNextTargetBlocksWhenOldNextDelegatorCannotReconcile(t *testing.T) {
+	paramtable.Init()
+	ctx := context.Background()
+	collectionID := int64(1000)
+	channelName := "channel-1"
+	currentVersion := int64(100)
+	oldNextVersion := int64(200)
+	segmentID := int64(10)
+
+	nodeMgr := session.NewNodeManager()
+	nodeMgr.Add(session.NewNodeInfo(session.ImmutableNodeInfo{NodeID: 1}))
+
+	targetMgr := meta.NewMockTargetManager(t)
+	distMgr := meta.NewDistributionManager(nodeMgr)
+	broker := meta.NewMockBroker(t)
+	cluster := session.NewMockCluster(t)
+
+	replica := meta.NewReplica(&querypb.Replica{
+		ID:            1,
+		CollectionID:  collectionID,
+		ResourceGroup: meta.DefaultResourceGroupName,
+		Nodes:         []int64{1},
+	})
+	mockCatalog := mocks.NewQueryCoordCatalog(t)
+	mockCatalog.EXPECT().SaveReplica(mock.Anything, mock.Anything).Return(nil).Maybe()
+	replicaMgr := meta.NewReplicaManager(nil, mockCatalog)
+	assert.NoError(t, replicaMgr.Put(ctx, replica))
+
+	metaInstance := &meta.Meta{
+		CollectionManager: meta.NewCollectionManager(nil),
+		ReplicaManager:    replicaMgr,
+	}
+	observer := NewTargetObserver(metaInstance, targetMgr, distMgr, broker, cluster, nodeMgr)
+
+	targetMgr.EXPECT().GetCollectionTargetVersion(mock.Anything, collectionID, meta.NextTarget).Return(oldNextVersion).Once()
+	targetMgr.EXPECT().IsCurrentTargetExist(mock.Anything, collectionID, int64(-1)).Return(true).Once()
+	targetMgr.EXPECT().GetCollectionTargetVersion(mock.Anything, collectionID, meta.CurrentTarget).Return(currentVersion).Once()
+	targetMgr.EXPECT().GetSealedSegmentsByChannel(mock.Anything, collectionID, channelName, meta.CurrentTarget).Return(map[int64]*datapb.SegmentInfo{
+		segmentID: {
+			ID:            segmentID,
+			CollectionID:  collectionID,
+			InsertChannel: channelName,
+		},
+	}).Once()
+
+	distMgr.ChannelDistManager.Update(1, &meta.DmChannel{
+		VchannelInfo: &datapb.VchannelInfo{
+			CollectionID: collectionID,
+			ChannelName:  channelName,
+		},
+		Node: 1,
+		View: &meta.LeaderView{
+			ID:            1,
+			CollectionID:  collectionID,
+			Channel:       channelName,
+			TargetVersion: oldNextVersion,
+			Segments:      map[int64]*querypb.SegmentDist{},
+			Status:        &querypb.LeaderViewStatus{Serviceable: true},
+		},
+	})
+
+	err := observer.updateNextTarget(ctx, collectionID)
+	assert.Error(t, err)
+	targetMgr.AssertNotCalled(t, "UpdateCollectionNextTarget", mock.Anything, collectionID)
+	cluster.AssertNotCalled(t, "SyncDistribution", mock.Anything, mock.Anything, mock.Anything)
+}
+
 // TestUpdateAllReplicasCheckpointMetric tests the all-replicas checkpoint metric behavior
 func TestUpdateAllReplicasCheckpointMetric(t *testing.T) {
 	paramtable.Init()

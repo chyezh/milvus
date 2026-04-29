@@ -1246,11 +1246,31 @@ func (suite *SegmentCheckerTestSuite) TestFilterOutSegmentInUse() {
 	result = checker.filterOutSegmentInUse(ctx, replica, testSegments, ch2DelegatorList)
 	suite.Len(result, 0, "Should release all segments when any delegator hasn't updated")
 
-	// Test case 6: Partition is nil - should release all segments (no partition info)
+	// Test case 6: Leader view with a future target version still references the segment.
+	// Release must not wait on leader-view cleanup; otherwise SegmentChecker and LeaderChecker
+	// can deadlock because LeaderChecker removes leader routes only after the segment leaves dist.
+	leaderView6 := utils.CreateTestLeaderView(nodeID1, collectionID, channel,
+		map[int64]int64{segmentID3: nodeID1}, map[int64]*meta.Segment{})
+	leaderView6.TargetVersion = currentTargetVersion + 1
+	checker.dist.ChannelDistManager.Update(nodeID1, &meta.DmChannel{
+		VchannelInfo: &datapb.VchannelInfo{
+			CollectionID: collectionID,
+			ChannelName:  channel,
+		},
+		Node: nodeID1,
+		View: leaderView6,
+	})
+
+	ch2DelegatorList = getCh2DelegatorList()
+	result = checker.filterOutSegmentInUse(ctx, replica, []*meta.Segment{segments[2]}, ch2DelegatorList)
+	suite.Len(result, 1, "Future-version leader view reference must not block segment release")
+
+	// Test case 7: Partition is nil - should release the segment because no partition-scoped
+	// readable version protection can be applied.
 	checker.meta.RemovePartition(ctx, partitionID)
 	ch2DelegatorList = getCh2DelegatorList()
 	result = checker.filterOutSegmentInUse(ctx, replica, []*meta.Segment{segments[0]}, ch2DelegatorList)
-	suite.Len(result, 0, "Should release all segments when partition is nil")
+	suite.Len(result, 1, "Segment should be released when partition is nil and no delegator references it")
 }
 
 func (suite *SegmentCheckerTestSuite) TestReopenOnStaleDataVersion() {
