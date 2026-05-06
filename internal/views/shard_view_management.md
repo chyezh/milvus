@@ -1,7 +1,7 @@
 # Shard View Manager Design
 
 > This document describes the design of `ShardViewManager`, which manages multiple QueryViews for a single shard (vchannel) within a single replica on the Coord side.
-> Reference: [Distributed Query View Design](distributed_query_view_design.md), [QueryView State Machine](query_view_state_machine.md), [view.proto](../../pkg/proto/view.proto), [ReliableSyncer](../views/coordview/syncer/reliable_syncer.go), [CoordQueryViewStateMachine](../views/coordview/state_machine.go)
+> Reference: [Distributed Query View Design](distributed_query_view_design.md), [QueryView State Machine](query_view_state_machine.md), [view.proto](../../pkg/proto/view.proto), [ReliableSyncer](../views/coord/coordview/syncer/reliable_syncer.go), [CoordQueryViewStateMachine](../views/coord/coordview/state_machine.go)
 
 ## 1. Overview
 
@@ -49,7 +49,7 @@ ETCD persistence layer. Implemented in `internal/metastore/kv/queryview/kv_catal
 
 ### 2.2 ReliableSyncer (existing)
 
-Reliable delivery of QueryView syncs from Coord to work nodes. Defined in `internal/views/coordview/syncer/reliable_syncer.go`.
+Reliable delivery of QueryView syncs from Coord to work nodes. Defined in `internal/views/coord/coordview/syncer/reliable_syncer.go`.
 
 Key properties used by ShardViewManager:
 
@@ -61,7 +61,7 @@ Key properties used by ShardViewManager:
 
 ### 2.3 CoordQueryViewStateMachine (existing)
 
-Per-view state machine. Defined in `internal/views/coordview/state_machine.go`. Key interface used:
+Per-view state machine. Defined in `internal/views/coord/coordview/state_machine.go`. Key interface used:
 - `OnNodeStateReported(report)` — process a node response
 - `ConsumePersist() / ConsumeSync()` — consume pending I/O signals
 - `EnterDown()` — transition Up → Down
@@ -177,7 +177,7 @@ All access serialized via `m.mu`. Callbacks from ReliableSyncer's recv goroutine
 ## 7. Package Location
 
 ```
-internal/views/coordview/
+internal/views/coord/coordview/
     syncer/reliable_syncer.go   // ReliableSyncer interface (existing)
     state_machine.go            // CoordQueryViewStateMachine (existing)
     shard_view_manager.go       // ShardViewManager implementation

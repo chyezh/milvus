@@ -8,7 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/metastore/kv/queryview"
-	"github.com/milvus-io/milvus/internal/views/coordview/syncer"
+	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v2/log"
 	"github.com/milvus-io/milvus/pkg/v2/proto/viewpb"
@@ -32,6 +32,7 @@ type ShardViewManager struct {
 	shardID qviews.ShardID
 	catalog queryview.QueryViewCatalog
 	syncer  syncer.ReliableSyncer
+	observe func(qviews.ShardID, *ShardStats)
 
 	// All active views keyed by version for O(1) lookup.
 	views map[qviews.QueryViewVersion]*CoordQueryViewStateMachine
@@ -102,9 +103,119 @@ func NewShardViewManager(
 	return m
 }
 
-// ShardID returns the shard identifier (ReplicaID + VChannel).
-func (m *ShardViewManager) ShardID() qviews.ShardID {
-	return m.shardID
+func (m *ShardViewManager) SetStatsObserver(observer func(qviews.ShardID, *ShardStats)) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.observe = observer
+}
+
+// Stats returns an atomic snapshot of this shard's current placement state.
+//
+// The returned snapshot includes placements from the Up view, any in-flight
+// Preparing/Ready view, and Unrecoverable views that still need to be accounted
+// as live placement until cleanup reaches Dropping.
+//
+// The returned maps/slices are freshly allocated; callers may retain and
+// inspect them without holding the manager's lock.
+func (m *ShardViewManager) Stats() *ShardStats {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.statsLocked()
+}
+
+func (m *ShardViewManager) statsLocked() *ShardStats {
+	stats := &ShardStats{
+		Segments: make(map[int64]*SegmentStats),
+	}
+
+	for _, sm := range m.views {
+		baseState, ok := segmentStateFromViewState(sm.State())
+		if !ok {
+			continue
+		}
+
+		version := sm.Version()
+		switch sm.State() {
+		case qviews.QueryViewStateUp:
+			if stats.UpVersion == nil || version.GT(*stats.UpVersion) {
+				stats.UpVersion = &version
+				stats.UpSettings = sm.View().GetMeta().GetSettings()
+			}
+		case qviews.QueryViewStatePreparing, qviews.QueryViewStateReady:
+			if stats.PreparingVersion == nil || version.GT(*stats.PreparingVersion) {
+				stats.PreparingVersion = &version
+			}
+		}
+
+		fillSegments(stats.Segments, sm.View().GetQueryNode(), baseState, sm.QNReadySegments())
+	}
+
+	return stats
+}
+
+func segmentStateFromViewState(state qviews.QueryViewState) (SegmentState, bool) {
+	switch state {
+	case qviews.QueryViewStatePreparing:
+		return SegmentStatePreparing, true
+	case qviews.QueryViewStateReady:
+		return SegmentStatePreparing, true
+	case qviews.QueryViewStateDown:
+		return SegmentStateReady, true
+	case qviews.QueryViewStateUp:
+		return SegmentStateUp, true
+	case qviews.QueryViewStateUnrecoverable:
+		return SegmentStateUnrecoverable, true
+	default:
+		return 0, false
+	}
+}
+
+// fillSegments merges placements from one view's QueryNode list into the
+// segmentID-keyed map. When multiple views mention the same segment on the
+// same node, the most reusable state wins: Up > Ready > Preparing >
+// Unrecoverable.
+func fillSegments(segments map[int64]*SegmentStats, queryNodes []*viewpb.QueryViewOfQueryNode, baseState SegmentState, readySegments map[int64][]int64) {
+	for _, qn := range queryNodes {
+		nodeID := qn.GetNodeId()
+		readySet := segmentSet(readySegments[nodeID])
+		for _, p := range qn.GetPartitions() {
+			partID := p.GetPartitionId()
+			for _, segID := range p.GetSegmentIds() {
+				state := baseState
+				if state != SegmentStateUp && readySet[segID] {
+					state = SegmentStateReady
+				}
+				segment := segments[segID]
+				if segment == nil {
+					segment = &SegmentStats{
+						SegmentID:   segID,
+						PartitionID: partID,
+						Nodes:       make(map[int64]SegmentState),
+					}
+					segments[segID] = segment
+				}
+				mergeSegmentState(segment, nodeID, state)
+			}
+		}
+	}
+}
+
+func mergeSegmentState(segment *SegmentStats, nodeID int64, state SegmentState) {
+	current, ok := segment.Nodes[nodeID]
+	if !ok || state > current {
+		segment.Nodes[nodeID] = state
+	}
+}
+
+func segmentSet(segments []int64) map[int64]bool {
+	if len(segments) == 0 {
+		return nil
+	}
+	out := make(map[int64]bool, len(segments))
+	for _, segment := range segments {
+		out[segment] = true
+	}
+	return out
 }
 
 // AddPreparing adds a new view in Preparing state from a builder.
@@ -154,6 +265,7 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 
 	// Flush all accumulated I/O.
 	m.flush()
+	m.publishStatsLocked()
 	return nil
 }
 
@@ -184,6 +296,7 @@ func (m *ShardViewManager) RequestRelease(ctx context.Context) error {
 	m.advanceUnrecoverableToDropping()
 
 	m.flush()
+	m.publishStatsLocked()
 	return nil
 }
 
@@ -347,6 +460,7 @@ func (m *ShardViewManager) makeOnSyncResponse(version qviews.QueryViewVersion) f
 		sm.OnNodeStateReported(resp)
 		m.processStateMachine(sm)
 		m.flush()
+		m.publishStatsLocked()
 
 		// If the view was removed during processing, stop tracking.
 		_, exists := m.views[version]
@@ -369,6 +483,13 @@ func (m *ShardViewManager) makeOnNodeLost(version qviews.QueryViewVersion) func(
 		sm.EnterUnrecoverable()
 		m.processStateMachine(sm)
 		m.flush()
+		m.publishStatsLocked()
+	}
+}
+
+func (m *ShardViewManager) publishStatsLocked() {
+	if m.observe != nil {
+		m.observe(m.shardID, m.statsLocked())
 	}
 }
 

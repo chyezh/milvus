@@ -3,8 +3,8 @@ package qnview
 import (
 	"sync"
 
-	"github.com/milvus-io/milvus/internal/views/nodeview/handler"
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v2/proto/viewpb"
 )
 

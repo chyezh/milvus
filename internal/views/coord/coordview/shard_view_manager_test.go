@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/milvus-io/milvus/internal/views/coordview/syncer"
+	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v2/proto/viewpb"
 )
@@ -23,6 +23,7 @@ type mockCatalog struct {
 	mu        sync.Mutex
 	saved     []*viewpb.QueryViewOfShard   // accumulated across all calls
 	saveCalls [][]*viewpb.QueryViewOfShard // per-call batches
+	listed    []*viewpb.QueryViewOfShard   // returned by ListQueryViews
 }
 
 func newMockCatalog() *mockCatalog {
@@ -30,7 +31,13 @@ func newMockCatalog() *mockCatalog {
 }
 
 func (c *mockCatalog) ListQueryViews(ctx context.Context) ([]*viewpb.QueryViewOfShard, error) {
-	return nil, nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]*viewpb.QueryViewOfShard, len(c.listed))
+	for i, v := range c.listed {
+		out[i] = proto.Clone(v).(*viewpb.QueryViewOfShard)
+	}
+	return out, nil
 }
 
 func (c *mockCatalog) SaveQueryViews(ctx context.Context, views []*viewpb.QueryViewOfShard) error {
@@ -198,7 +205,7 @@ func newTestManager(catalog *mockCatalog, s *mockSyncer, recovered ...*viewpb.Qu
 }
 
 // simulateNodeResponse simulates a node responding by finding and invoking the OnSyncResponse callback.
-func simulateNodeResponse(t *testing.T, s *mockSyncer, node qviews.WorkNode, version qviews.QueryViewVersion, state qviews.QueryViewState) bool {
+func simulateNodeResponse(t *testing.T, s *mockSyncer, node qviews.WorkNode, version qviews.QueryViewVersion, state qviews.QueryViewState, readySegs ...int64) bool {
 	t.Helper()
 	cb := s.findOnSyncResponse(node, version)
 	require.NotNil(t, cb, "no OnSyncResponse found for node=%v version=%v", node, version)
@@ -216,7 +223,12 @@ func simulateNodeResponse(t *testing.T, s *mockSyncer, node qviews.WorkNode, ver
 	case qviews.StreamingNode:
 		resp = qviews.NewQueryViewAtStreamingNode(meta, &viewpb.QueryViewOfStreamingNode{})
 	case qviews.QueryNode:
-		resp = qviews.NewQueryViewAtQueryNode(meta, &viewpb.QueryViewOfQueryNode{NodeId: n.ID})
+		resp = qviews.NewQueryViewAtQueryNode(meta, &viewpb.QueryViewOfQueryNode{
+			NodeId: n.ID,
+			Partitions: []*viewpb.QueryViewOfPartition{
+				{PartitionId: 10, ReadySegmentIds: readySegs},
+			},
+		})
 	}
 	return cb(resp)
 }

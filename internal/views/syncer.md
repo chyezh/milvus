@@ -1,7 +1,7 @@
 # Syncer Design
 
 > A reliable message delivery layer over unreliable gRPC bidirectional streams.
-> Package: [`coordview/syncer/`](coordview/syncer/), Proto: [view.proto](../../pkg/proto/view.proto)
+> Package: [`coord/coordview/syncer/`](coord/coordview/syncer/), Proto: [view.proto](../../pkg/proto/view.proto)
 
 ## 1. Architecture
 
@@ -40,7 +40,7 @@
 
 ## 2. Interfaces
 
-Defined in [`coordview/syncer/reliable_syncer.go`](coordview/syncer/reliable_syncer.go).
+Defined in [`coord/coordview/syncer/reliable_syncer.go`](coord/coordview/syncer/reliable_syncer.go).
 
 ### SyncView
 
@@ -281,7 +281,7 @@ pendingSyncQueryViews
 ## 8. File Organization
 
 ```
-internal/views/coordview/
+internal/views/coord/coordview/
 ├── syncer/
 │   ├── reliable_syncer.go          # ReliableSyncer interface, SyncView, SyncGroup, ViewSyncClient
 │   ├── syncer_impl.go              # reliableSyncer implementation + node watcher

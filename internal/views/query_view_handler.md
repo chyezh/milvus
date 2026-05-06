@@ -1,7 +1,7 @@
 # QueryViewHandler Design
 
 > Work-node side components that receive Coord-pushed query views and report state changes back.
-> Counterpart to the Coord-side [Syncer](coordview/syncer/syncer.md).
+> Counterpart to the Coord-side [Syncer](syncer.md).
 
 ## 1. Architecture
 
@@ -169,6 +169,6 @@ Violating any contract leaves the corresponding view stuck (Preparing/UpRecoveri
 
 | Package | Contents |
 |---|---|
-| `nodeview/handler` | `ApplyView`, `QueryViewHandler` interface, `ViewSyncServer`, `pendingReports` |
-| `nodeview/qnview` | `QNQueryViewHandler`, `QNQueryViewStateMachine`, `SegmentManager` interface |
-| `nodeview/snview` | `SNQueryViewHandler`, `SNQueryViewStateMachine`, `StreamingNodeResourceManager` interface, `StreamingNodeCatalog` interface |
+| `worknode/handler` | `ApplyView`, `QueryViewHandler` interface, `ViewSyncServer`, `pendingReports` |
+| `worknode/qnview` | `QNQueryViewHandler`, `QNQueryViewStateMachine`, `SegmentManager` interface |
+| `worknode/snview` | `SNQueryViewHandler`, `SNQueryViewStateMachine`, `StreamingNodeResourceManager` interface, `StreamingNodeCatalog` interface |
