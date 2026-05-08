@@ -5,14 +5,18 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/ratelimit"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls"
+	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 )
 
 type WALCheckpoint = utility.WALCheckpoint
+type Checkpoint = utility.Checkpoint
 
 const RecoveryMagicStreamingInitialized = utility.RecoveryMagicStreamingInitialized
 
@@ -45,6 +49,14 @@ type BuildRecoveryStreamParam struct {
 // RecoveryMetrics is the metrics of the recovery info.
 type RecoveryMetrics struct {
 	RecoveryTimeTick uint64
+}
+
+// ScannerTaskParam is the parameter for starting the recovery storage WAL scanner.
+type ScannerTaskParam struct {
+	WAL               *syncutil.Future[wal.WAL]
+	RecoverySnapshot  *RecoverySnapshot
+	ScannerRateLimit  *ratelimit.AdaptiveRateLimitController
+	StartingRateLimit *ratelimit.AdaptiveRateLimitController
 }
 
 // RecoveryStreamBuilder is an interface that is used to build a recovery stream from the WAL.
@@ -87,6 +99,9 @@ type RecoveryStorage interface {
 	// Metrics gets the metrics of the recovery storage.
 	Metrics() RecoveryMetrics
 
+	// StartScannerTask starts the background scanner that tails WAL messages into recovery storage.
+	StartScannerTask(param ScannerTaskParam)
+
 	// TODO: should be removed in future,
 	// GetSchema gets last schema of the collection which timetick is less than the given timetick.
 	GetSchema(ctx context.Context, vchannel string, timetick uint64) (*schemapb.CollectionSchema, error)
@@ -94,12 +109,8 @@ type RecoveryStorage interface {
 	// ObserveMessage observes the message from the WAL.
 	ObserveMessage(ctx context.Context, msg message.ImmutableMessage) error
 
-	// UpdateFlusherCheckpoint updates the checkpoint of flusher.
-	// TODO: should be removed in future, after merge the flusher logic into recovery storage.
-	UpdateFlusherCheckpoint(vchannel string, checkpoint *WALCheckpoint)
-
-	// GetFlusherCheckpointByTimeTick returns the minimum flush checkpoint among all vchannels based on time tick.
-	GetFlusherCheckpointByTimeTick(ctx context.Context) *WALCheckpoint
+	// GetDataCheckpoint returns the current gsegment-gated data checkpoint.
+	GetDataCheckpoint(ctx context.Context) *WALCheckpoint
 
 	// Close closes the recovery storage.
 	Close()

@@ -21,10 +21,8 @@ func newTestRecoveryStorage(t *testing.T) *recoveryStorageImpl {
 	paramtable.Init()
 	resource.InitForTest(t)
 	rs := newRecoveryStorage(types.PChannelInfo{Name: "test_channel"}, &WALCheckpoint{
-		MessageID: rmq.NewRmqID(0),
-		TimeTick:  0,
+		MetaCheckpoint: &Checkpoint{MessageID: rmq.NewRmqID(0), TimeTick: 0},
 	})
-	rs.segments = make(map[int64]*segmentRecoveryInfo)
 	rs.vchannels = make(map[string]*vchannelRecoveryInfo)
 	return rs
 }
@@ -62,21 +60,26 @@ func addDroppedVChannel(rs *recoveryStorageImpl, vchannel string, collectionID i
 
 // addGrowingSegment adds a growing segment to the recovery storage.
 func addGrowingSegment(rs *recoveryStorageImpl, segmentID, collectionID, partitionID int64, vchannel string) {
-	rs.segments[segmentID] = &segmentRecoveryInfo{
-		meta: &streamingpb.SegmentAssignmentMeta{
-			CollectionId:   collectionID,
-			PartitionId:    partitionID,
-			SegmentId:      segmentID,
-			Vchannel:       vchannel,
-			State:          streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING,
-			StorageVersion: 1,
-			Stat: &streamingpb.SegmentAssignmentStat{
-				MaxBinarySize:         1024,
-				CreateSegmentTimeTick: 10,
-			},
+	rs.segmentManager.CreateL1Segment(&streamingpb.SegmentAssignmentMeta{
+		CollectionId:   collectionID,
+		PartitionId:    partitionID,
+		SegmentId:      segmentID,
+		Vchannel:       vchannel,
+		State:          streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING,
+		StorageVersion: 1,
+		Stat: &streamingpb.SegmentAssignmentStat{
+			MaxBinarySize:         1024,
+			CreateSegmentTimeTick: 10,
 		},
-		dirty: true,
+	}, nil)
+}
+
+func segmentState(rs *recoveryStorageImpl, segmentID int64) streamingpb.SegmentAssignmentState {
+	snapshot := rs.segmentManager.GetSnapshots()[segmentID]
+	if snapshot == nil {
+		return streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_UNKNOWN
 	}
+	return snapshot.GetState()
 }
 
 // buildDropCollectionMsg builds a DropCollection immutable message.
@@ -114,11 +117,11 @@ func TestHandleDropCollection_VChannelAlreadyDropped_FlushesOrphanedSegments(t *
 	rs.handleDropCollection(dropMsg)
 
 	// Verify: orphaned segments for collection 100 are flushed.
-	assert.False(t, rs.segments[1001].IsGrowing(), "segment 1001 should be flushed")
-	assert.False(t, rs.segments[1002].IsGrowing(), "segment 1002 should be flushed")
+	assert.NotEqual(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING, segmentState(rs, 1001), "segment 1001 should be flushed")
+	assert.NotEqual(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING, segmentState(rs, 1002), "segment 1002 should be flushed")
 
 	// Verify: segment from different collection is still growing.
-	assert.True(t, rs.segments[2001].IsGrowing(), "segment 2001 should still be growing")
+	assert.Equal(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING, segmentState(rs, 2001), "segment 2001 should still be growing")
 }
 
 func TestHandleDropCollection_VChannelNotFound_FlushesOrphanedSegments(t *testing.T) {
@@ -132,7 +135,7 @@ func TestHandleDropCollection_VChannelNotFound_FlushesOrphanedSegments(t *testin
 	rs.handleDropCollection(dropMsg)
 
 	// Segment should be flushed even though vchannel doesn't exist.
-	assert.False(t, rs.segments[1001].IsGrowing(), "segment 1001 should be flushed")
+	assert.NotEqual(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING, segmentState(rs, 1001), "segment 1001 should be flushed")
 }
 
 func TestHandleDropCollection_NormalCase_StillWorks(t *testing.T) {
@@ -149,7 +152,7 @@ func TestHandleDropCollection_NormalCase_StillWorks(t *testing.T) {
 	assert.Equal(t, streamingpb.VChannelState_VCHANNEL_STATE_DROPPED, rs.vchannels["v1"].meta.State)
 
 	// Segment should be flushed.
-	assert.False(t, rs.segments[1001].IsGrowing(), "segment 1001 should be flushed")
+	assert.NotEqual(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING, segmentState(rs, 1001), "segment 1001 should be flushed")
 }
 
 func TestGetSnapshot_FiltersOrphanedSegments(t *testing.T) {
@@ -228,7 +231,7 @@ func TestHandleCreateSegment_SkipsForDroppedVChannel(t *testing.T) {
 	rs.handleCreateSegment(message.MustAsImmutableCreateSegmentMessageV2(createMsg))
 
 	// Segment should NOT have been created.
-	assert.Empty(t, rs.segments, "no segment should be created for a dropped vchannel")
+	assert.Empty(t, rs.segmentManager.GetSnapshots(), "no segment should be created for a dropped vchannel")
 }
 
 func TestHandleCreateSegment_SkipsForNonExistentVChannel(t *testing.T) {
@@ -253,7 +256,7 @@ func TestHandleCreateSegment_SkipsForNonExistentVChannel(t *testing.T) {
 	rs.handleCreateSegment(message.MustAsImmutableCreateSegmentMessageV2(createMsg))
 
 	// Segment should NOT have been created.
-	assert.Empty(t, rs.segments, "no segment should be created for a non-existent vchannel")
+	assert.Empty(t, rs.segmentManager.GetSnapshots(), "no segment should be created for a non-existent vchannel")
 }
 
 func TestHandleCreateSegment_NormalCase_StillWorks(t *testing.T) {
@@ -280,9 +283,10 @@ func TestHandleCreateSegment_NormalCase_StillWorks(t *testing.T) {
 	rs.handleCreateSegment(message.MustAsImmutableCreateSegmentMessageV2(createMsg))
 
 	// Segment should be created normally.
-	assert.Len(t, rs.segments, 1)
-	assert.Contains(t, rs.segments, int64(1001))
-	assert.True(t, rs.segments[1001].IsGrowing())
+	snapshots := rs.segmentManager.GetSnapshots()
+	assert.Len(t, snapshots, 1)
+	assert.Contains(t, snapshots, int64(1001))
+	assert.Equal(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING, snapshots[1001].GetState())
 }
 
 func TestFullReplayScenario_DroppedCollectionReplay(t *testing.T) {
@@ -328,7 +332,7 @@ func TestFullReplayScenario_DroppedCollectionReplay(t *testing.T) {
 
 	// After drop: vchannel is DROPPED, segment is FLUSHED.
 	assert.Equal(t, streamingpb.VChannelState_VCHANNEL_STATE_DROPPED, rs.vchannels["v1"].meta.State)
-	assert.False(t, rs.segments[1001].IsGrowing())
+	assert.NotEqual(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING, segmentState(rs, 1001))
 
 	// Snapshot should be empty (no active vchannels, no growing segments).
 	snapshot := rs.getSnapshot()
@@ -353,8 +357,8 @@ func TestFullReplayScenario_PartialEtcdPersist(t *testing.T) {
 	rs.handleDropCollection(dropMsg)
 
 	// All segments should be flushed.
-	assert.False(t, rs.segments[1001].IsGrowing())
-	assert.False(t, rs.segments[1002].IsGrowing())
+	assert.NotEqual(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING, segmentState(rs, 1001))
+	assert.NotEqual(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING, segmentState(rs, 1002))
 
 	// Snapshot should be clean.
 	snapshot := rs.getSnapshot()

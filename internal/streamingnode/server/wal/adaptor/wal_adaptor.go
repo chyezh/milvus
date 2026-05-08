@@ -10,12 +10,12 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/milvus-io/milvus/internal/streamingnode/server/flusher/flusherimpl"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/adaptor/rate"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/recovery"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v3/log"
@@ -66,7 +66,7 @@ func adaptImplsToRWWAL(
 	roWAL *roWALAdaptorImpl,
 	builders []interceptors.InterceptorBuilder,
 	interceptorParam *interceptors.InterceptorBuildParam,
-	flusher *flusherimpl.WALFlusherImpl,
+	recoveryStorage recovery.RecoveryStorage,
 ) *walAdaptorImpl {
 	if roWAL.Channel().AccessMode != types.AccessModeRW {
 		panic("wal should be read-write")
@@ -79,7 +79,7 @@ func adaptImplsToRWWAL(
 		appendExecutionPool:    conc.NewPool[struct{}](0),
 		param:                  interceptorParam,
 		interceptorBuildResult: buildInterceptor(builders, interceptorParam),
-		flusher:                flusher,
+		recoveryStorage:        recoveryStorage,
 		writeMetrics:           metricsutil.NewWriteMetrics(roWAL.Channel(), roWAL.WALName()),
 		isFenced:               atomic.NewBool(false),
 		appendRateCounter:      utility.NewAverageRateCounter(10 * time.Second), // 10 second sliding window
@@ -99,7 +99,7 @@ type walAdaptorImpl struct {
 	appendExecutionPool    *conc.Pool[struct{}]
 	param                  *interceptors.InterceptorBuildParam
 	interceptorBuildResult interceptorBuildResult
-	flusher                *flusherimpl.WALFlusherImpl
+	recoveryStorage        recovery.RecoveryStorage
 	writeMetrics           *metricsutil.WriteMetrics
 	isFenced               *atomic.Bool
 	appendRateCounter      *utility.AverageRateCounter // tracks append rate (bytes/sec)
@@ -108,11 +108,14 @@ type walAdaptorImpl struct {
 // Metrics returns the metrics of the wal.
 func (w *walAdaptorImpl) Metrics() types.WALMetrics {
 	currentMVCC := w.param.MVCCManager.GetMVCCOfVChannel(w.Channel().Name)
-	recoveryMetrics := w.flusher.Metrics()
+	var recoveryTimeTick uint64
+	if w.recoveryStorage != nil {
+		recoveryTimeTick = w.recoveryStorage.Metrics().RecoveryTimeTick
+	}
 	return types.RWWALMetrics{
 		ChannelInfo:      w.Channel(),
 		MVCCTimeTick:     currentMVCC.Timetick,
-		RecoveryTimeTick: recoveryMetrics.RecoveryTimeTick,
+		RecoveryTimeTick: recoveryTimeTick,
 	}
 }
 
@@ -319,11 +322,9 @@ func (w *walAdaptorImpl) Close() {
 	w.forceCancelAfterGracefulTimeout()
 	w.lifetime.Wait()
 
-	// close the flusher.
-	w.Logger().Info("wal begin to close flusher...")
-	if w.flusher != nil {
-		// only in test, the flusher is nil.
-		w.flusher.Close()
+	w.Logger().Info("wal begin to close recovery storage...")
+	if w.recoveryStorage != nil {
+		w.recoveryStorage.Close()
 	}
 
 	w.Logger().Info("wal begin to close scanners...")

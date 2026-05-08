@@ -17,8 +17,8 @@ type OpenerBuilder interface {
 
 // OpenOption is the option for allocating wal instance.
 type OpenOption struct {
-	Channel        types.PChannelInfo
-	DisableFlusher bool // disable flusher for test, only use in test.
+	Channel                       types.PChannelInfo
+	DisableRecoveryStorageScanner bool // disable recovery storage wal scanner for test, only use in test.
 }
 
 // Opener is the interface for build wal instance.

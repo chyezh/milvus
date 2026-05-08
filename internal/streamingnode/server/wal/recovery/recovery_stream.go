@@ -20,19 +20,19 @@ func (r *recoveryStorageImpl) recoverFromStream(
 	lastTimeTickMessage message.ImmutableMessage,
 ) (snapshot *RecoverySnapshot, err error) {
 	r.metrics.ObserveStateChange(recoveryStorageStateStreamRecovering)
-	r.metrics.ObServePersistedMetrics(r.checkpoint.TimeTick)
+	r.metrics.ObServePersistedMetrics(r.checkpoint.MetaCheckpoint.TimeTick)
 	r.SetLogger(resource.Resource().Logger().With(
 		log.FieldComponent(componentRecoveryStorage),
 		zap.String("channel", recoveryStreamBuilder.Channel().String()),
-		zap.String("startMessageID", r.checkpoint.MessageID.String()),
-		zap.Uint64("fromTimeTick", r.checkpoint.TimeTick),
+		zap.String("startMessageID", r.checkpoint.MetaCheckpoint.MessageID.String()),
+		zap.Uint64("fromTimeTick", r.checkpoint.MetaCheckpoint.TimeTick),
 		zap.Uint64("toTimeTick", lastTimeTickMessage.TimeTick()),
 		zap.String("state", recoveryStorageStateStreamRecovering),
 	))
 
 	r.Logger().Info("recover from wal stream...")
 	rs := recoveryStreamBuilder.Build(BuildRecoveryStreamParam{
-		StartCheckpoint: r.checkpoint.MessageID,
+		StartCheckpoint: r.checkpoint.MetaCheckpoint.MessageID,
 		EndTimeTick:     lastTimeTickMessage.TimeTick(),
 	})
 	defer func() {
@@ -64,8 +64,8 @@ L:
 		zap.String("channel", recoveryStreamBuilder.Channel().String()),
 		zap.Int("vchannels", len(snapshot.VChannels)),
 		zap.Int("segments", len(snapshot.SegmentAssignments)),
-		zap.String("checkpoint", snapshot.Checkpoint.MessageID.String()),
-		zap.Uint64("checkpointTimeTick", snapshot.Checkpoint.TimeTick),
+		zap.String("checkpoint", snapshot.Checkpoint.MetaCheckpoint.MessageID.String()),
+		zap.Uint64("checkpointTimeTick", snapshot.Checkpoint.MetaCheckpoint.TimeTick),
 	}
 	if snapshot.AlterWALInfo != nil {
 		logFields = append(logFields,
@@ -81,7 +81,6 @@ L:
 // Use this function to get the snapshot after recovery is finished,
 // and use the snapshot to recover all write ahead components.
 func (r *recoveryStorageImpl) getSnapshot() *RecoverySnapshot {
-	segments := make(map[int64]*streamingpb.SegmentAssignmentMeta, len(r.segments))
 	vchannels := make(map[string]*streamingpb.VChannelMeta, len(r.vchannels))
 	// Collect active vchannels and build a set of active partition IDs (globally unique).
 	activePartitions := make(map[int64]struct{})
@@ -93,32 +92,33 @@ func (r *recoveryStorageImpl) getSnapshot() *RecoverySnapshot {
 			}
 		}
 	}
-	for segmentID, segment := range r.segments {
-		if !segment.IsGrowing() {
+	segments := make(map[int64]*streamingpb.SegmentAssignmentMeta)
+	for segmentID, segment := range r.segmentManager.GetSnapshots() {
+		if segment.GetState() != streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING {
 			continue
 		}
 		// Defensive filtering: skip GROWING segments whose parent vchannel does not exist
 		// or is not active, or whose partition has been dropped. This can happen due to
 		// non-atomic etcd persistence or Kafka offset compaction replaying CreateSegment
 		// for dropped collections/partitions.
-		if _, ok := vchannels[segment.meta.Vchannel]; !ok {
+		if _, ok := vchannels[segment.GetVchannel()]; !ok {
 			r.Logger().Warn("getSnapshot: skipping orphaned growing segment with non-active vchannel",
 				zap.Int64("segmentID", segmentID),
-				zap.String("vchannel", segment.meta.Vchannel),
-				zap.Int64("collectionID", segment.meta.CollectionId),
+				zap.String("vchannel", segment.GetVchannel()),
+				zap.Int64("collectionID", segment.GetCollectionId()),
 			)
 			continue
 		}
-		if _, ok := activePartitions[segment.meta.PartitionId]; !ok {
+		if _, ok := activePartitions[segment.GetPartitionId()]; !ok {
 			r.Logger().Warn("getSnapshot: skipping orphaned growing segment with dropped partition",
 				zap.Int64("segmentID", segmentID),
-				zap.String("vchannel", segment.meta.Vchannel),
-				zap.Int64("collectionID", segment.meta.CollectionId),
-				zap.Int64("partitionID", segment.meta.PartitionId),
+				zap.String("vchannel", segment.GetVchannel()),
+				zap.Int64("collectionID", segment.GetCollectionId()),
+				zap.Int64("partitionID", segment.GetPartitionId()),
 			)
 			continue
 		}
-		segments[segmentID] = proto.Clone(segment.meta).(*streamingpb.SegmentAssignmentMeta)
+		segments[segmentID] = segment
 	}
 	snapshot := &RecoverySnapshot{
 		VChannels:          vchannels,

@@ -82,7 +82,7 @@ func RecoverShardManager(param *ShardManagerRecoverParam) ShardManager {
 				partitionID,
 				segmentManagers,
 				param.TxnManager,
-				param.InitialRecoverSnapshot.Checkpoint.TimeTick, // use the checkpoint time tick to fence directly.
+				param.InitialRecoverSnapshot.Checkpoint.MetaCheckpoint.TimeTick, // use the checkpoint time tick to fence directly.
 				metrics,
 			)
 			segmentTotal += len(segmentManagers)

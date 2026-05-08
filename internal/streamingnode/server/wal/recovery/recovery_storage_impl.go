@@ -2,17 +2,21 @@ package recovery
 
 import (
 	"context"
+	"sort"
 	"sync"
+	"time"
 
 	"github.com/cockroachdb/errors"
-	"github.com/samber/lo"
+	"github.com/prometheus/client_golang/prometheus"
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/gsegment"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
@@ -43,6 +47,7 @@ func RecoverRecoveryStorage(
 		rs.Logger().Warn("recovery storage failed", zap.Error(err))
 		return nil, nil, err
 	}
+
 	// recover the state from wal and start the background task to persist the state.
 	snapshot, err := rs.recoverFromStream(ctx, recoveryStreamBuilder, lastTimeTickMessage)
 	if err != nil {
@@ -70,11 +75,16 @@ func newRecoveryStorage(channel types.PChannelInfo, cp *utility.WALCheckpoint) *
 		mu:                     sync.Mutex{},
 		currentClusterID:       paramtable.Get().CommonCfg.ClusterPrefix.GetValue(),
 		channel:                channel,
-		checkpoint:             cp,
+		checkpoint:             cloneWALCheckpoint(cp),
+		observedCheckpoint:     cloneWALCheckpoint(cp),
 		dirtyCounter:           0,
 		persistNotifier:        make(chan struct{}, 1),
 		gracefulClosed:         false,
 		metrics:                newRecoveryStorageMetrics(channel),
+		segmentManager: gsegment.NewSegmentManager(
+			resource.Resource().ChunkManager(),
+			gsegment.WithContextIDAllocator(context.Background(), resource.Resource().IDAllocator()),
+		),
 	}
 }
 
@@ -87,21 +97,28 @@ type recoveryStorageImpl struct {
 	mu                     sync.Mutex
 	currentClusterID       string
 	channel                types.PChannelInfo
-	segments               map[int64]*segmentRecoveryInfo
 	vchannels              map[string]*vchannelRecoveryInfo
 	checkpoint             *WALCheckpoint
+	observedCheckpoint     *WALCheckpoint
+	checkpointHistory      []*WALCheckpoint
 	dirtyCounter           int // records the message count since last persist snapshot.
 	// used to trigger the recovery persist operation.
 	persistNotifier        chan struct{}
 	gracefulClosed         bool
 	truncator              walimpls.WALImpls
 	metrics                *recoveryMetrics
+	scannerTaskNotifier    *syncutil.AsyncTaskNotifier[struct{}]
+	scannerTaskMetrics     *scannerTaskMetrics
+	lastDispatchTimeTick   uint64
+	emptyTimeTickCounter   prometheus.Counter
 	pendingPersistSnapshot *RecoverySnapshot
 	// used to mark switch MQ msg found
 	alterWALInfo *AlterWALInfo
 	// pendingSalvageCheckpoint holds the salvage checkpoint captured during force promote.
 	// Set under r.mu; consumed and persisted by the background task to avoid holding the lock.
 	pendingSalvageCheckpoint *utility.ReplicateCheckpoint
+	// segment manager for L0/L1 segment buffering and persistence
+	segmentManager *gsegment.SegmentManager
 }
 
 // Metrics gets the metrics of the wal.
@@ -110,24 +127,8 @@ func (r *recoveryStorageImpl) Metrics() RecoveryMetrics {
 	defer r.mu.Unlock()
 
 	return RecoveryMetrics{
-		RecoveryTimeTick: r.checkpoint.TimeTick,
+		RecoveryTimeTick: r.checkpoint.MetaCheckpoint.TimeTick,
 	}
-}
-
-// UpdateFlusherCheckpoint updates the checkpoint of flusher.
-// TODO: should be removed in future, after merge the flusher logic into recovery storage.
-func (r *recoveryStorageImpl) UpdateFlusherCheckpoint(vchannel string, checkpoint *WALCheckpoint) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if vchannelInfo, ok := r.vchannels[vchannel]; ok {
-		if err := vchannelInfo.UpdateFlushCheckpoint(checkpoint); err != nil {
-			r.Logger().Warn("failed to update flush checkpoint", zap.Error(err))
-			return
-		}
-		r.Logger().Info("update flush checkpoint", zap.String("vchannel", vchannel), zap.String("messageID", checkpoint.MessageID.String()), zap.Uint64("timeTick", checkpoint.TimeTick))
-		return
-	}
-	r.Logger().Warn("vchannel not found", zap.String("vchannel", vchannel))
 }
 
 // GetSchema gets the schema of the collection at the given timetick.
@@ -166,9 +167,11 @@ func (r *recoveryStorageImpl) ObserveMessage(ctx context.Context, msg message.Im
 
 // Close closes the recovery storage and wait the background task stop.
 func (r *recoveryStorageImpl) Close() {
+	r.closeScannerTask()
 	r.backgroundTaskNotifier.Cancel()
 	r.backgroundTaskNotifier.BlockUntilFinish()
 	r.metrics.Close()
+	r.segmentManager.Close()
 }
 
 // notifyPersist notifies a persist operation.
@@ -184,20 +187,21 @@ func (r *recoveryStorageImpl) notifyPersist() {
 func (r *recoveryStorageImpl) consumeDirtySnapshot() *RecoverySnapshot {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.dirtyCounter == 0 && r.pendingSalvageCheckpoint == nil {
+
+	r.advanceDataCheckpointIfSyncedLocked()
+
+	managerSnapshots := r.segmentManager.GetDirtySnapshots()
+	hasManagerSnapshots := len(managerSnapshots) > 0
+
+	if r.dirtyCounter == 0 && r.pendingSalvageCheckpoint == nil && !hasManagerSnapshots {
 		return nil
 	}
 
 	segments := make(map[int64]*streamingpb.SegmentAssignmentMeta)
 	vchannels := make(map[string]*streamingpb.VChannelMeta)
-	for _, segment := range r.segments {
-		dirtySnapshot, shouldBeRemoved := segment.ConsumeDirtyAndGetSnapshot()
-		if shouldBeRemoved {
-			delete(r.segments, segment.meta.SegmentId)
-		}
-		if dirtySnapshot != nil {
-			segments[segment.meta.SegmentId] = dirtySnapshot
-		}
+
+	for segmentID, snapshot := range managerSnapshots {
+		segments[segmentID] = snapshot
 	}
 	for _, vchannel := range r.vchannels {
 		dirtySnapshot, shouldBeRemoved := vchannel.ConsumeDirtyAndGetSnapshot()
@@ -214,21 +218,24 @@ func (r *recoveryStorageImpl) consumeDirtySnapshot() *RecoverySnapshot {
 	r.pendingSalvageCheckpoint = nil
 	// clear the dirty counter.
 	r.dirtyCounter = 0
+	snapshotCheckpoint := r.observedCheckpoint.Clone()
+	snapshotCheckpoint.DataCheckpoint = r.checkpoint.DataCheckpoint.Clone()
+	r.checkpoint = snapshotCheckpoint.Clone()
 	return &RecoverySnapshot{
 		VChannels:          vchannels,
 		SegmentAssignments: segments,
-		Checkpoint:         r.checkpoint.Clone(),
+		Checkpoint:         snapshotCheckpoint,
 		SalvageCheckpoint:  salvageCP,
 	}
 }
 
 // observeMessage observes a message and update the recovery storage.
 func (r *recoveryStorageImpl) observeMessage(msg message.ImmutableMessage) {
-	if msg.TimeTick() <= r.checkpoint.TimeTick {
+	if msg.TimeTick() <= r.checkpoint.MetaCheckpoint.TimeTick {
 		if r.Logger().Level().Enabled(zap.DebugLevel) {
 			r.Logger().Debug("skip the message before the checkpoint",
 				log.FieldMessage(msg),
-				zap.Uint64("checkpoint", r.checkpoint.TimeTick),
+				zap.Uint64("checkpoint", r.checkpoint.MetaCheckpoint.TimeTick),
 				zap.Uint64("incoming", msg.TimeTick()),
 			)
 		}
@@ -237,7 +244,11 @@ func (r *recoveryStorageImpl) observeMessage(msg message.ImmutableMessage) {
 	r.handleMessage(msg)
 
 	r.updateCheckpoint(msg)
-	r.metrics.ObServeInMemMetrics(r.checkpoint.TimeTick)
+	r.segmentManager.SealStaleChunks(
+		msg.TimeTick(),
+		paramtable.Get().DataNodeCfg.SyncPeriod.GetAsDuration(time.Second),
+	)
+	r.metrics.ObServeInMemMetrics(r.observedCheckpoint.MetaCheckpoint.TimeTick)
 
 	if !msg.IsPersisted() {
 		// only trigger persist when the message is persisted.
@@ -249,8 +260,83 @@ func (r *recoveryStorageImpl) observeMessage(msg message.ImmutableMessage) {
 	}
 }
 
+func (r *recoveryStorageImpl) advanceDataCheckpointIfSyncedLocked() {
+	if r.observedCheckpoint == nil {
+		r.observedCheckpoint = cloneWALCheckpoint(r.checkpoint)
+	}
+	r.advanceDataCheckpointToLocked(r.segmentManager.SyncSafeTimeTick(r.observedCheckpoint.MetaCheckpoint.TimeTick))
+}
+
+// advanceCheckpointIfSyncedLocked is kept for tests that exercise checkpoint
+// mutation directly. Production persistence advances the meta checkpoint in
+// consumeDirtySnapshot and advances the data checkpoint through gsegment.
+func (r *recoveryStorageImpl) advanceCheckpointIfSyncedLocked() {
+	r.advanceDataCheckpointIfSyncedLocked()
+	if r.observedCheckpoint == nil {
+		return
+	}
+	dataCheckpoint := r.checkpoint.DataCheckpoint.Clone()
+	r.checkpoint = r.observedCheckpoint.Clone()
+	r.checkpoint.DataCheckpoint = dataCheckpoint
+}
+
+func (r *recoveryStorageImpl) advanceDataCheckpointToLocked(safeTimeTick uint64) {
+	var candidate *WALCheckpoint
+	prune := 0
+	for idx, checkpoint := range r.checkpointHistory {
+		if checkpoint.MetaCheckpoint.TimeTick > safeTimeTick {
+			break
+		}
+		candidate = checkpoint
+		prune = idx + 1
+	}
+	if candidate == nil || !dataCheckpointAhead(candidate, r.checkpoint.DataCheckpoint) {
+		return
+	}
+	r.checkpoint.DataCheckpoint = &utility.Checkpoint{
+		MessageID: candidate.MetaCheckpoint.MessageID,
+		TimeTick:  candidate.MetaCheckpoint.TimeTick,
+	}
+	if prune > 0 {
+		r.checkpointHistory = append([]*WALCheckpoint(nil), r.checkpointHistory[prune:]...)
+	}
+}
+
+func dataCheckpointAhead(candidate *WALCheckpoint, current *utility.Checkpoint) bool {
+	if candidate == nil || current == nil {
+		return candidate != nil && current == nil
+	}
+	if candidate.MetaCheckpoint.TimeTick != current.TimeTick {
+		return candidate.MetaCheckpoint.TimeTick > current.TimeTick
+	}
+	if candidate.MetaCheckpoint.MessageID == nil || current.MessageID == nil {
+		return candidate.MetaCheckpoint.MessageID != current.MessageID
+	}
+	return !candidate.MetaCheckpoint.MessageID.LT(current.MessageID)
+}
+
+func cloneWALCheckpoint(checkpoint *WALCheckpoint) *WALCheckpoint {
+	if checkpoint == nil {
+		return nil
+	}
+	return checkpoint.Clone()
+}
+
+func (r *recoveryStorageImpl) appendObservedCheckpointLocked() {
+	if r.observedCheckpoint == nil {
+		return
+	}
+	r.checkpointHistory = append(r.checkpointHistory, r.observedCheckpoint.Clone())
+}
+
 // updateCheckpoint updates the checkpoint of the recovery storage.
 func (r *recoveryStorageImpl) updateCheckpoint(msg message.ImmutableMessage) {
+	if r.observedCheckpoint == nil {
+		r.observedCheckpoint = cloneWALCheckpoint(r.checkpoint)
+	}
+	if r.observedCheckpoint.MetaCheckpoint == nil {
+		r.observedCheckpoint.MetaCheckpoint = &utility.Checkpoint{}
+	}
 	if msg.MessageType() == message.MessageTypeAlterReplicateConfig {
 		cfg := message.MustAsImmutableAlterReplicateConfigMessageV2(msg)
 		header := cfg.Header()
@@ -261,22 +347,22 @@ func (r *recoveryStorageImpl) updateCheckpoint(msg message.ImmutableMessage) {
 			r.Logger().Info("AlterReplicateConfig message has ignore flag set, skipping checkpoint update",
 				zap.Bool("forcePromote", header.ForcePromote))
 		} else {
-			r.checkpoint.ReplicateConfig = header.ReplicateConfiguration
+			r.observedCheckpoint.ReplicateConfig = header.ReplicateConfiguration
 			clusterRole := replicateutil.MustNewConfigHelper(r.currentClusterID, header.ReplicateConfiguration).GetCurrentCluster()
 			switch clusterRole.Role() {
 			case replicateutil.RolePrimary:
-				if header.GetForcePromote() && r.checkpoint.ReplicateCheckpoint != nil {
+				if header.GetForcePromote() && r.observedCheckpoint.ReplicateCheckpoint != nil {
 					// Store for background task to persist; never call etcd while holding r.mu.
-					r.pendingSalvageCheckpoint = r.checkpoint.ReplicateCheckpoint
+					r.pendingSalvageCheckpoint = r.observedCheckpoint.ReplicateCheckpoint
 					r.notifyPersist()
 				}
-				r.checkpoint.ReplicateCheckpoint = nil
+				r.observedCheckpoint.ReplicateCheckpoint = nil
 			case replicateutil.RoleSecondary:
 				// Update the replicate checkpoint if the cluster role is secondary.
 				sourceClusterID := clusterRole.SourceCluster().GetClusterId()
 				sourcePChannel := clusterRole.MustGetSourceChannel(r.channel.Name)
-				if r.checkpoint.ReplicateCheckpoint == nil || r.checkpoint.ReplicateCheckpoint.ClusterID != sourceClusterID {
-					r.checkpoint.ReplicateCheckpoint = &utility.ReplicateCheckpoint{
+				if r.observedCheckpoint.ReplicateCheckpoint == nil || r.observedCheckpoint.ReplicateCheckpoint.ClusterID != sourceClusterID {
+					r.observedCheckpoint.ReplicateCheckpoint = &utility.ReplicateCheckpoint{
 						ClusterID: sourceClusterID,
 						PChannel:  sourcePChannel,
 						MessageID: nil,
@@ -286,10 +372,10 @@ func (r *recoveryStorageImpl) updateCheckpoint(msg message.ImmutableMessage) {
 			}
 		}
 	}
-	r.checkpoint.MessageID = msg.LastConfirmedMessageID()
-	r.checkpoint.TimeTick = msg.TimeTick()
-	if r.alterWALInfo != nil && r.alterWALInfo.FoundAlterWALMsg && (r.checkpoint.AlterWalState == nil || r.checkpoint.AlterWalState.Stage == streamingpb.AlterWALStage_NONE) {
-		r.checkpoint.AlterWalState = &streamingpb.AlterWALState{
+	r.observedCheckpoint.MetaCheckpoint.MessageID = msg.LastConfirmedMessageID()
+	r.observedCheckpoint.MetaCheckpoint.TimeTick = msg.TimeTick()
+	if r.alterWALInfo != nil && r.alterWALInfo.FoundAlterWALMsg && (r.observedCheckpoint.AlterWalState == nil || r.observedCheckpoint.AlterWalState.Stage == streamingpb.AlterWALStage_NONE) {
+		r.observedCheckpoint.AlterWalState = &streamingpb.AlterWALState{
 			TargetWalName: r.alterWALInfo.TargetWALName,
 			TimeTick:      r.alterWALInfo.AlterWALTs,
 			Configs:       r.alterWALInfo.AlterWALConfig,
@@ -300,21 +386,25 @@ func (r *recoveryStorageImpl) updateCheckpoint(msg message.ImmutableMessage) {
 	// update the replicate checkpoint.
 	replicateHeader := msg.ReplicateHeader()
 	if replicateHeader == nil {
+		r.appendObservedCheckpointLocked()
 		return
 	}
-	if r.checkpoint.ReplicateCheckpoint == nil {
+	if r.observedCheckpoint.ReplicateCheckpoint == nil {
 		r.detectInconsistency(msg, "replicate checkpoint is nil when incoming replicate message")
+		r.appendObservedCheckpointLocked()
 		return
 	}
-	if replicateHeader.ClusterID != r.checkpoint.ReplicateCheckpoint.ClusterID {
+	if replicateHeader.ClusterID != r.observedCheckpoint.ReplicateCheckpoint.ClusterID {
 		r.detectInconsistency(msg,
 			"replicate header cluster id mismatch",
-			zap.String("expected", r.checkpoint.ReplicateCheckpoint.ClusterID),
+			zap.String("expected", r.observedCheckpoint.ReplicateCheckpoint.ClusterID),
 			zap.String("actual", replicateHeader.ClusterID))
+		r.appendObservedCheckpointLocked()
 		return
 	}
-	r.checkpoint.ReplicateCheckpoint.MessageID = replicateHeader.LastConfirmedMessageID
-	r.checkpoint.ReplicateCheckpoint.TimeTick = replicateHeader.TimeTick
+	r.observedCheckpoint.ReplicateCheckpoint.MessageID = replicateHeader.LastConfirmedMessageID
+	r.observedCheckpoint.ReplicateCheckpoint.TimeTick = replicateHeader.TimeTick
+	r.appendObservedCheckpointLocked()
 }
 
 // The incoming message id is always sorted with timetick.
@@ -389,19 +479,9 @@ func (r *recoveryStorageImpl) handleMessage(msg message.ImmutableMessage) {
 func (r *recoveryStorageImpl) handleAlterWAL(msg message.ImmutableAlterWALMessageV2) {
 	header := msg.Header()
 
-	segmentIDs := make([]int64, 0)
-	rows := make([]uint64, 0)
-	binarySize := make([]uint64, 0)
-
 	// Flush all growing segments before WAL switch
-	for segmentID, segment := range r.segments {
-		if segment.IsGrowing() {
-			segment.ObserveFlush(msg.TimeTick())
-			segmentIDs = append(segmentIDs, segmentID)
-			rows = append(rows, segment.Rows())
-			binarySize = append(binarySize, segment.BinarySize())
-		}
-	}
+	flushed := r.segmentManager.FlushAllSegments(msg.TimeTick())
+	segmentIDs, rows, binarySize := segmentSnapshotLogFields(flushed)
 
 	if len(segmentIDs) > 0 {
 		r.Logger().Info("flush all growing segments for WAL switch",
@@ -427,17 +507,16 @@ func (r *recoveryStorageImpl) handleAlterWAL(msg message.ImmutableAlterWALMessag
 
 // handleInsert handles the insert message.
 func (r *recoveryStorageImpl) handleInsert(msg message.ImmutableInsertMessageV1) {
-	for _, partition := range msg.Header().GetPartitions() {
-		if segment, ok := r.segments[partition.SegmentAssignment.SegmentId]; ok && segment.IsGrowing() {
-			segment.ObserveInsert(msg.TimeTick(), partition)
-		} else {
-			r.detectInconsistency(msg, "segment not found")
-		}
-	}
+	r.segmentManager.ObserveInsert(msg)
 }
 
 // handleDelete handles the delete message.
 func (r *recoveryStorageImpl) handleDelete(msg message.ImmutableDeleteMessageV1) {
+	var schema *schemapb.CollectionSchema
+	if vchannelInfo, ok := r.vchannels[msg.VChannel()]; ok {
+		_, schema = vchannelInfo.GetSchema(msg.TimeTick())
+	}
+	r.segmentManager.ObserveDelete(msg, schema)
 }
 
 // handleCreateSegment handles the create segment message.
@@ -453,17 +532,36 @@ func (r *recoveryStorageImpl) handleCreateSegment(msg message.ImmutableCreateSeg
 		)
 		return
 	}
-	segment := newSegmentRecoveryInfoFromCreateSegmentMessage(msg)
-	r.segments[segment.meta.SegmentId] = segment
+	segmentMeta := NewSegmentAssignmentMetaFromCreateSegmentMessage(msg)
+
+	if segmentMeta.GetStat().GetLevel() == datapb.SegmentLevel_L0 {
+		segmentMeta.PersistedStorage = &streamingpb.SegmentAssignmentMeta_L0{
+			L0: &streamingpb.L0SegmentPersistedStorage{},
+		}
+		r.segmentManager.CreateL0Segment(segmentMeta)
+	} else {
+		segmentMeta.PersistedStorage = &streamingpb.SegmentAssignmentMeta_L1{
+			L1: &streamingpb.L1SegmentPersistedStorage{},
+		}
+
+		var schema *schemapb.CollectionSchema
+		if vchannelInfo, ok := r.vchannels[msg.VChannel()]; ok {
+			_, schema = vchannelInfo.GetSchema(msg.TimeTick())
+		}
+		r.segmentManager.CreateL1Segment(segmentMeta, schema)
+	}
+
 	r.Logger().Info("create segment", log.FieldMessage(msg))
 }
 
 // handleFlush handles the flush message.
 func (r *recoveryStorageImpl) handleFlush(msg message.ImmutableFlushMessageV2) {
 	header := msg.Header()
-	if segment, ok := r.segments[header.SegmentId]; ok {
-		segment.ObserveFlush(msg.TimeTick())
-		r.Logger().Info("flush segment", log.FieldMessage(msg), zap.Uint64("rows", segment.Rows()), zap.Uint64("binarySize", segment.BinarySize()))
+	if snapshot, ok := r.segmentManager.FlushSegment(header.SegmentId, msg.TimeTick()); ok {
+		r.Logger().Info("flush segment",
+			log.FieldMessage(msg),
+			zap.Uint64("rows", snapshot.GetStat().GetModifiedRows()),
+			zap.Uint64("binarySize", snapshot.GetStat().GetModifiedBinarySize()))
 	}
 }
 
@@ -478,33 +576,57 @@ func (r *recoveryStorageImpl) handleManualFlush(msg message.ImmutableManualFlush
 
 // handleFlushAll handles the flush all message.
 func (r *recoveryStorageImpl) handleFlushAll(msg message.ImmutableFlushAllMessageV2) {
-	segments := lo.MapValues(r.segments, func(segment *segmentRecoveryInfo, _ int64) struct{} {
-		return struct{}{}
-	})
-	r.flushSegments(msg, segments)
+	r.logFlushedSegments(msg, r.segmentManager.FlushAllSegments(msg.TimeTick()))
 }
 
 // flushSegments flushes the segments in the recovery storage.
 func (r *recoveryStorageImpl) flushSegments(msg message.ImmutableMessage, sealSegmentIDs map[int64]struct{}) {
-	segmentIDs := make([]int64, 0)
-	rows := make([]uint64, 0)
-	binarySize := make([]uint64, 0)
-	for segmentID := range sealSegmentIDs {
-		if segment, ok := r.segments[segmentID]; ok {
-			segment.ObserveFlush(msg.TimeTick())
-			segmentIDs = append(segmentIDs, segment.meta.SegmentId)
-			rows = append(rows, segment.Rows())
-			binarySize = append(binarySize, segment.BinarySize())
-		}
+	flushed := r.segmentManager.FlushSegments(sealSegmentIDs, msg.TimeTick())
+	if len(flushed) != len(sealSegmentIDs) {
+		r.detectInconsistency(msg, "flush segments not exist",
+			zap.Int64s("wanted", segmentIDsFromSet(sealSegmentIDs)),
+			zap.Int64s("actually", segmentIDsFromSnapshots(flushed)))
 	}
-	if len(segmentIDs) != len(sealSegmentIDs) {
-		r.detectInconsistency(msg, "flush segments not exist", zap.Int64s("wanted", lo.Keys(sealSegmentIDs)), zap.Int64s("actually", segmentIDs))
-	}
+	r.logFlushedSegments(msg, flushed)
+}
+
+func (r *recoveryStorageImpl) logFlushedSegments(msg message.ImmutableMessage, snapshots map[int64]*streamingpb.SegmentAssignmentMeta) {
+	segmentIDs, rows, binarySize := segmentSnapshotLogFields(snapshots)
 	r.Logger().Info("flush segments of collection by flush", log.FieldMessage(msg),
 		zap.Uint64s("rows", rows),
 		zap.Uint64s("binarySize", binarySize),
 		zap.Int("flushedSegmentCount", len(segmentIDs)),
 	)
+}
+
+func segmentSnapshotLogFields(snapshots map[int64]*streamingpb.SegmentAssignmentMeta) ([]int64, []uint64, []uint64) {
+	segmentIDs := segmentIDsFromSnapshots(snapshots)
+	rows := make([]uint64, 0, len(segmentIDs))
+	binarySize := make([]uint64, 0, len(segmentIDs))
+	for _, segmentID := range segmentIDs {
+		stat := snapshots[segmentID].GetStat()
+		rows = append(rows, stat.GetModifiedRows())
+		binarySize = append(binarySize, stat.GetModifiedBinarySize())
+	}
+	return segmentIDs, rows, binarySize
+}
+
+func segmentIDsFromSnapshots(snapshots map[int64]*streamingpb.SegmentAssignmentMeta) []int64 {
+	segmentIDs := make([]int64, 0, len(snapshots))
+	for segmentID := range snapshots {
+		segmentIDs = append(segmentIDs, segmentID)
+	}
+	sort.Slice(segmentIDs, func(i, j int) bool { return segmentIDs[i] < segmentIDs[j] })
+	return segmentIDs
+}
+
+func segmentIDsFromSet(segmentIDs map[int64]struct{}) []int64 {
+	ids := make([]int64, 0, len(segmentIDs))
+	for segmentID := range segmentIDs {
+		ids = append(ids, segmentID)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }
 
 // handleCreateCollection handles the create collection message.
@@ -530,15 +652,8 @@ func (r *recoveryStorageImpl) handleDropCollection(msg message.ImmutableDropColl
 
 // flushAllSegmentOfCollection flushes all segments of the collection.
 func (r *recoveryStorageImpl) flushAllSegmentOfCollection(msg message.ImmutableMessage, collectionID int64) {
-	segmentIDs := make([]int64, 0)
-	rows := make([]uint64, 0)
-	for _, segment := range r.segments {
-		if segment.meta.CollectionId == collectionID {
-			segment.ObserveFlush(msg.TimeTick())
-			segmentIDs = append(segmentIDs, segment.meta.SegmentId)
-			rows = append(rows, segment.Rows())
-		}
-	}
+	flushed := r.segmentManager.FlushSegmentsByCollection(collectionID, msg.TimeTick())
+	segmentIDs, rows, _ := segmentSnapshotLogFields(flushed)
 	r.Logger().Info("flush all segments of collection", log.FieldMessage(msg), zap.Int64s("segmentIDs", segmentIDs), zap.Uint64s("rows", rows))
 }
 
@@ -564,15 +679,8 @@ func (r *recoveryStorageImpl) handleDropPartition(msg message.ImmutableDropParti
 
 // flushAllSegmentOfPartition flushes all segments of the partition.
 func (r *recoveryStorageImpl) flushAllSegmentOfPartition(msg message.ImmutableMessage, partitionID int64) {
-	segmentIDs := make([]int64, 0)
-	rows := make([]uint64, 0)
-	for _, segment := range r.segments {
-		if segment.meta.PartitionId == partitionID {
-			segment.ObserveFlush(msg.TimeTick())
-			segmentIDs = append(segmentIDs, segment.meta.SegmentId)
-			rows = append(rows, segment.Rows())
-		}
-	}
+	flushed := r.segmentManager.FlushSegmentsByPartition(partitionID, msg.TimeTick())
+	segmentIDs, rows, _ := segmentSnapshotLogFields(flushed)
 	r.Logger().Info("flush all segments of partition", log.FieldMessage(msg), zap.Int64s("segmentIDs", segmentIDs), zap.Uint64s("rows", rows))
 }
 
@@ -639,45 +747,17 @@ func (r *recoveryStorageImpl) detectInconsistency(msg message.ImmutableMessage, 
 	r.metrics.ObserveInconsitentEvent()
 }
 
-// GetFlusherCheckpointByTimeTick returns the minimum flush checkpoint among all vchannels based on time tick.
-// This method is used to determine the earliest checkpoint that can be safely flushed.
-func (r *recoveryStorageImpl) GetFlusherCheckpointByTimeTick(ctx context.Context) *WALCheckpoint {
+// GetDataCheckpoint returns the current gsegment-gated data checkpoint.
+func (r *recoveryStorageImpl) GetDataCheckpoint(ctx context.Context) *WALCheckpoint {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if len(r.vchannels) == 0 {
-		r.Logger().Info("get flush checkpoint fast return pChan cp, due to no vChan", zap.String("pChannel", r.channel.String()))
-		return r.checkpoint
+	r.advanceDataCheckpointIfSyncedLocked()
+	if r.checkpoint == nil || r.checkpoint.DataCheckpoint == nil {
+		return nil
 	}
-
-	var minimumCheckpoint *WALCheckpoint
-	for _, vchannel := range r.vchannels {
-		if vchannel.GetFlushCheckpoint() == nil {
-			// If any flush checkpoint is not set, not ready.
-			return nil
-		}
-		if minimumCheckpoint == nil || vchannel.GetFlushCheckpoint().TimeTick < minimumCheckpoint.TimeTick {
-			minimumCheckpoint = vchannel.GetFlushCheckpoint()
-		}
-	}
-	return minimumCheckpoint
-}
-
-// getFlusherCheckpoint returns flusher checkpoint concurrent-safe
-// NOTE: shall not be called with r.mu.Lock()!
-func (r *recoveryStorageImpl) getFlusherCheckpoint() *WALCheckpoint {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	var minimumCheckpoint *WALCheckpoint
-	for _, vchannel := range r.vchannels {
-		if vchannel.GetFlushCheckpoint() == nil {
-			// If any flush checkpoint is not set, not ready.
-			return nil
-		}
-		if minimumCheckpoint == nil || vchannel.GetFlushCheckpoint().MessageID.LTE(minimumCheckpoint.MessageID) {
-			minimumCheckpoint = vchannel.GetFlushCheckpoint()
-		}
-	}
-	return minimumCheckpoint
+	checkpoint := r.checkpoint.Clone()
+	checkpoint.MetaCheckpoint.MessageID = r.checkpoint.DataCheckpoint.MessageID
+	checkpoint.MetaCheckpoint.TimeTick = r.checkpoint.DataCheckpoint.TimeTick
+	return checkpoint
 }

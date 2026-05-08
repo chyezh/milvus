@@ -35,7 +35,7 @@ func TestWALRateLimitComponent(t *testing.T) {
 	defer component.Close()
 
 	assert.NotNil(t, component.RecoveryStorage)
-	assert.NotNil(t, component.FlusherRecovering)
+	assert.NotNil(t, component.RecoveryStorageScannerStarting)
 	assert.NotNil(t, component.NodeMemory)
 	assert.NotNil(t, component.AppendRate)
 

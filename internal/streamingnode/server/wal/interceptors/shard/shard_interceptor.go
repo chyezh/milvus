@@ -172,6 +172,9 @@ func (impl *shardInterceptor) handleInsertMessage(ctx context.Context, msg messa
 		return nil, errors.Wrap(err, "CheckIfCollectionSchemaVersionMatch")
 	}
 	for _, partition := range header.GetPartitions() {
+		if partition.PartitionId == 0 {
+			return nil, status.NewUnrecoverableError("partition id should not be 0, maybe milvus is on-upgrading")
+		}
 		if partition.BinarySize == 0 {
 			// binary size should be set at proxy with estimate, but we don't implement it right now.
 			// use payload size instead.

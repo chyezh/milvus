@@ -17,13 +17,18 @@ func TestUpdateCheckpoint(t *testing.T) {
 		channel:          types.PChannelInfo{Name: "test1-rootcoord-dml_0"},
 		checkpoint:       &WALCheckpoint{},
 		metrics:          newRecoveryStorageMetrics(types.PChannelInfo{Name: "test1-rootcoord-dml_0"}),
+		segmentManager:   newTestSegmentManager(t),
+	}
+	updateAndAdvance := func(msg message.ImmutableMessage) {
+		rs.updateCheckpoint(msg)
+		rs.advanceCheckpointIfSyncedLocked()
 	}
 
-	rs.updateCheckpoint(newAlterReplicateConfigMessage("test1", []string{"test2"}, 1, walimplstest.NewTestMessageID(1)))
+	updateAndAdvance(newAlterReplicateConfigMessage("test1", []string{"test2"}, 1, walimplstest.NewTestMessageID(1)))
 	assert.Nil(t, rs.checkpoint.ReplicateCheckpoint)
-	assert.Equal(t, rs.checkpoint.MessageID, walimplstest.NewTestMessageID(1))
-	assert.Equal(t, rs.checkpoint.TimeTick, uint64(1))
-	rs.updateCheckpoint(newAlterReplicateConfigMessage("test2", []string{"test1"}, 1, walimplstest.NewTestMessageID(1)))
+	assert.Equal(t, rs.checkpoint.MetaCheckpoint.MessageID, walimplstest.NewTestMessageID(1))
+	assert.Equal(t, rs.checkpoint.MetaCheckpoint.TimeTick, uint64(1))
+	updateAndAdvance(newAlterReplicateConfigMessage("test2", []string{"test1"}, 1, walimplstest.NewTestMessageID(1)))
 	assert.NotNil(t, rs.checkpoint.ReplicateCheckpoint)
 	assert.Equal(t, rs.checkpoint.ReplicateCheckpoint.ClusterID, "test2")
 	assert.Equal(t, rs.checkpoint.ReplicateCheckpoint.PChannel, "test2-rootcoord-dml_0")
@@ -42,17 +47,17 @@ func TestUpdateCheckpoint(t *testing.T) {
 	immutableReplicateMsg := replicateMsg.WithTimeTick(4).
 		WithLastConfirmed(walimplstest.NewTestMessageID(11)).
 		IntoImmutableMessage(walimplstest.NewTestMessageID(22))
-	rs.updateCheckpoint(immutableReplicateMsg)
+	updateAndAdvance(immutableReplicateMsg)
 
 	// update with wrong clusterID.
-	rs.updateCheckpoint(immutableReplicateMsg)
+	updateAndAdvance(immutableReplicateMsg)
 	assert.NotNil(t, rs.checkpoint.ReplicateCheckpoint)
 	assert.Equal(t, rs.checkpoint.ReplicateCheckpoint.ClusterID, "test2")
 	assert.Equal(t, rs.checkpoint.ReplicateCheckpoint.PChannel, "test2-rootcoord-dml_0")
 	assert.Nil(t, rs.checkpoint.ReplicateCheckpoint.MessageID)
 	assert.Zero(t, rs.checkpoint.ReplicateCheckpoint.TimeTick)
 
-	rs.updateCheckpoint(newAlterReplicateConfigMessage("test3", []string{"test2", "test1"}, 1, walimplstest.NewTestMessageID(1)))
+	updateAndAdvance(newAlterReplicateConfigMessage("test3", []string{"test2", "test1"}, 5, walimplstest.NewTestMessageID(12)))
 	assert.NotNil(t, rs.checkpoint.ReplicateCheckpoint)
 	assert.Equal(t, rs.checkpoint.ReplicateCheckpoint.ClusterID, "test3")
 	assert.Equal(t, rs.checkpoint.ReplicateCheckpoint.PChannel, "test3-rootcoord-dml_0")
@@ -60,18 +65,21 @@ func TestUpdateCheckpoint(t *testing.T) {
 	assert.Zero(t, rs.checkpoint.ReplicateCheckpoint.TimeTick)
 
 	// update with right clusterID.
-	rs.updateCheckpoint(immutableReplicateMsg)
+	rightClusterMsg := replicateMsg.WithTimeTick(6).
+		WithLastConfirmed(walimplstest.NewTestMessageID(13)).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(24))
+	updateAndAdvance(rightClusterMsg)
 	assert.NotNil(t, rs.checkpoint.ReplicateCheckpoint)
-	assert.Equal(t, rs.checkpoint.MessageID, walimplstest.NewTestMessageID(11))
-	assert.Equal(t, rs.checkpoint.TimeTick, uint64(4))
+	assert.Equal(t, rs.checkpoint.MetaCheckpoint.MessageID, walimplstest.NewTestMessageID(13))
+	assert.Equal(t, rs.checkpoint.MetaCheckpoint.TimeTick, uint64(6))
 	assert.Equal(t, rs.checkpoint.ReplicateCheckpoint.ClusterID, "test3")
 	assert.Equal(t, rs.checkpoint.ReplicateCheckpoint.PChannel, "test3-rootcoord-dml_0")
 	assert.True(t, rs.checkpoint.ReplicateCheckpoint.MessageID.EQ(walimplstest.NewTestMessageID(10)))
 	assert.Equal(t, rs.checkpoint.ReplicateCheckpoint.TimeTick, uint64(3))
 
-	rs.updateCheckpoint(newAlterReplicateConfigMessage("test1", []string{"test2"}, 1, walimplstest.NewTestMessageID(1)))
+	updateAndAdvance(newAlterReplicateConfigMessage("test1", []string{"test2"}, 7, walimplstest.NewTestMessageID(14)))
 	assert.Nil(t, rs.checkpoint.ReplicateCheckpoint)
-	rs.updateCheckpoint(immutableReplicateMsg)
+	updateAndAdvance(rightClusterMsg)
 }
 
 // newAlterReplicateConfigMessage creates a new alter replicate config message.

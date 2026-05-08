@@ -112,7 +112,7 @@ func TestShardManager(t *testing.T) {
 				},
 			},
 			Checkpoint: &recovery.WALCheckpoint{
-				TimeTick: 300,
+				MetaCheckpoint: &recovery.Checkpoint{TimeTick: 300},
 			},
 		},
 		TxnManager: &mockedTxnManager{},
@@ -316,7 +316,7 @@ func TestShardManagerSchemaVersionCheck(t *testing.T) {
 		InitialRecoverSnapshot: &recovery.RecoverySnapshot{
 			VChannels:          map[string]*streamingpb.VChannelMeta{},
 			SegmentAssignments: map[int64]*streamingpb.SegmentAssignmentMeta{},
-			Checkpoint:         &recovery.WALCheckpoint{TimeTick: 100},
+			Checkpoint:         &recovery.WALCheckpoint{MetaCheckpoint: &recovery.Checkpoint{TimeTick: 100}},
 		},
 		TxnManager: &mockedTxnManager{},
 	}).(*shardManagerImpl)
@@ -556,7 +556,7 @@ func newShardManagerWithGrowingSegment(t *testing.T, collID, partID, segID int64
 					},
 				},
 			},
-			Checkpoint: &recovery.WALCheckpoint{TimeTick: 100},
+			Checkpoint: &recovery.WALCheckpoint{MetaCheckpoint: &recovery.Checkpoint{TimeTick: 100}},
 		},
 		TxnManager: &mockedTxnManager{},
 	}).(*shardManagerImpl)

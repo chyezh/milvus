@@ -3,15 +3,12 @@ package recovery
 import (
 	"math"
 
-	"github.com/cockroachdb/errors"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
-	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
-	"github.com/milvus-io/milvus/pkg/v3/util/tsoutil"
 )
 
 // newVChannelRecoveryInfoFromCreateCollectionMessage creates a new vchannel recovery info from a create collection message.
@@ -60,9 +57,8 @@ func newVChannelRecoveryInfoFromCreateCollectionMessage(msg message.ImmutableCre
 
 // vchannelRecoveryInfo is the recovery info for a vchannel.
 type vchannelRecoveryInfo struct {
-	meta              *streamingpb.VChannelMeta
-	flusherCheckpoint *WALCheckpoint // update from the flusher.
-	dirty             bool           // whether the vchannel recovery info is dirty.
+	meta  *streamingpb.VChannelMeta
+	dirty bool // whether the vchannel recovery info is dirty.
 }
 
 // IsActive returns true if the vchannel is active.
@@ -80,12 +76,6 @@ func (info *vchannelRecoveryInfo) IsPartitionActive(partitionId int64) bool {
 	return false
 }
 
-// GetFlushCheckpoint returns the flush checkpoint of the vchannel recovery info.
-// return nil if the flush checkpoint is not set.
-func (info *vchannelRecoveryInfo) GetFlushCheckpoint() *WALCheckpoint {
-	return info.flusherCheckpoint
-}
-
 // GetSchema returns the schema of the vchannel at the given timetick.
 // return nil if the schema is not found.
 func (info *vchannelRecoveryInfo) GetSchema(timetick uint64) (int, *schemapb.CollectionSchema) {
@@ -101,29 +91,6 @@ func (info *vchannelRecoveryInfo) GetSchema(timetick uint64) (int, *schemapb.Col
 		}
 	}
 	return -1, nil
-}
-
-// UpdateFlushCheckpoint updates the flush checkpoint of the vchannel recovery info.
-func (info *vchannelRecoveryInfo) UpdateFlushCheckpoint(checkpoint *WALCheckpoint) error {
-	// Because current L0 may be consuming the data before the flush checkpoint,
-	// so we introduce a tolerance duration to delay the drop operation of the schema that is not used anymore.
-	tolerance := paramtable.Get().StreamingCfg.WALRecoverySchemaExpirationTolerance.GetAsDurationByParse()
-	if info.flusherCheckpoint == nil || info.flusherCheckpoint.MessageID.LTE(checkpoint.MessageID) {
-		info.flusherCheckpoint = checkpoint
-		timetick := tsoutil.AddPhysicalDurationOnTs(info.flusherCheckpoint.TimeTick, -tolerance)
-		idx, _ := info.GetSchema(timetick)
-		for i := 0; i < idx; i++ {
-			// drop the schema that is not used anymore.
-			// the future GetSchema operation will use the timetick greater than the flusher checkpoint.
-			// Those schema is too old, and will not be used anymore, can be dropped.
-			if info.meta.CollectionInfo.Schemas[i].State == streamingpb.VChannelSchemaState_VCHANNEL_SCHEMA_STATE_NORMAL {
-				info.meta.CollectionInfo.Schemas[i].State = streamingpb.VChannelSchemaState_VCHANNEL_SCHEMA_STATE_DROPPED
-				info.dirty = true
-			}
-		}
-		return nil
-	}
-	return errors.Errorf("update illegal checkpoint of flusher, current: %s, target: %s", info.flusherCheckpoint.MessageID.String(), checkpoint.MessageID.String())
 }
 
 // ObserveSchemaChange is called when a schema change message is observed.

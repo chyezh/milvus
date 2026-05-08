@@ -12,12 +12,14 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/mocks"
 	"github.com/milvus-io/milvus/internal/mocks/mock_metastore"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	internaltypes "github.com/milvus-io/milvus/internal/types"
+	mqserver "github.com/milvus-io/milvus/pkg/v3/mq/mqimpl/rocksmq/server"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/etcdpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/rootcoordpb"
@@ -51,16 +53,20 @@ func TestInitRecoveryInfoFromMeta(t *testing.T) {
 
 	lastConfirmed := message.CreateTestTimeTickSyncMessage(t, 1, 1, rmq.NewRmqID(1))
 	rs := newRecoveryStorage(channel, utility.NewWALCheckpointFromProto(&streamingpb.WALCheckpoint{
-		MessageId:     rmq.NewRmqID(1).IntoProto(),
-		TimeTick:      1,
+		MetaMessageId: rmq.NewRmqID(1).IntoProto(),
+		MetaTimeTick:  1,
 		RecoveryMagic: utility.RecoveryMagicStreamingInitialized,
+		DataCheckpoint: &streamingpb.WALDataCheckpoint{
+			MessageId: rmq.NewRmqID(1).IntoProto(),
+			TimeTick:  1,
+		},
 	}))
 
 	err := rs.recoverRecoveryInfoFromMeta(context.Background(), channel, lastConfirmed.IntoImmutableMessage(rmq.NewRmqID(1)))
 	assert.NoError(t, err)
 	assert.NotNil(t, rs.checkpoint)
 	assert.Equal(t, utility.RecoveryMagicStreamingInitialized, rs.checkpoint.Magic)
-	assert.True(t, rs.checkpoint.MessageID.EQ(rmq.NewRmqID(1)))
+	assert.True(t, rs.checkpoint.MetaCheckpoint.MessageID.EQ(rmq.NewRmqID(1)))
 }
 
 func TestInitRecoveryInfoFromCoord(t *testing.T) {
@@ -127,6 +133,25 @@ func TestInitRecoveryInfoFromCoord(t *testing.T) {
 			Status: merr.Success(),
 		}, nil
 	})
+	c.EXPECT().GetChannelRecoveryInfo(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, req *datapb.GetChannelRecoveryInfoRequest, opts ...grpc.CallOption) (*datapb.GetChannelRecoveryInfoResponse, error) {
+		timetickByChannel := map[string]uint64{
+			"v1": 10,
+			"v2": 20,
+		}
+		timetick, ok := timetickByChannel[req.GetVchannel()]
+		assert.True(t, ok)
+		return &datapb.GetChannelRecoveryInfoResponse{
+			Status: merr.Success(),
+			Info: &datapb.VchannelInfo{
+				SeekPosition: &msgpb.MsgPosition{
+					ChannelName: req.GetVchannel(),
+					MsgID:       mqserver.SerializeRmqID(int64(timetick)),
+					Timestamp:   timetick,
+					WALName:     commonpb.WALName_RocksMQ,
+				},
+			},
+		}, nil
+	})
 	fc.Set(c)
 
 	resource.InitForTest(t, resource.OptStreamingNodeCatalog(snCatalog), resource.OptMixCoordClient(fc))
@@ -137,6 +162,9 @@ func TestInitRecoveryInfoFromCoord(t *testing.T) {
 	err := rs.recoverRecoveryInfoFromMeta(context.Background(), channel, lastConfirmed.IntoImmutableMessage(rmq.NewRmqID(1)))
 	assert.NoError(t, err)
 	assert.NotNil(t, rs.checkpoint)
+	assert.NotNil(t, rs.checkpoint.DataCheckpoint)
+	assert.True(t, rs.checkpoint.DataCheckpoint.MessageID.EQ(rmq.NewRmqID(10)))
+	assert.Equal(t, uint64(10), rs.checkpoint.DataCheckpoint.TimeTick)
 	assert.Len(t, rs.vchannels, 2)
 	assert.Len(t, initialedVChannels, 2)
 }

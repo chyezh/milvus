@@ -7,6 +7,7 @@
 #   cmake-build-debug/
 #   proxy/cmake-build-debug/
 #   a/b/c/cmake-build-debug/
+cmake_build
 **/cmake-build-debug/*
 **/cmake-build-debug-coverage/*
 **/cmake-build-release/*
@@ -19,6 +20,7 @@ CMakeUserPresets.json
 .cache
 coverage_report/
 
+internal/core/output
 internal/core/output/*
 internal/core/build/*
 **/.idea/*

@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/mocks"
 	"github.com/milvus-io/milvus/internal/mocks/mock_metastore"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
@@ -38,9 +39,13 @@ func TestRecoveryStorage(t *testing.T) {
 	vchannelMetas := make(map[string]*streamingpb.VChannelMeta)
 	segmentMetas := make(map[int64]*streamingpb.SegmentAssignmentMeta)
 	cp := &streamingpb.WALCheckpoint{
-		MessageId:     rmq.NewRmqID(1).IntoProto(),
-		TimeTick:      1,
+		MetaMessageId: rmq.NewRmqID(1).IntoProto(),
+		MetaTimeTick:  1,
 		RecoveryMagic: 0,
+		DataCheckpoint: &streamingpb.WALDataCheckpoint{
+			MessageId: rmq.NewRmqID(1).IntoProto(),
+			TimeTick:  1,
+		},
 	}
 
 	snCatalog := mock_metastore.NewMockStreamingNodeCataLog(t)
@@ -92,6 +97,7 @@ func TestRecoveryStorage(t *testing.T) {
 	mixCoord.EXPECT().DropVirtualChannel(mock.Anything, mock.Anything).Return(&datapb.DropVirtualChannelResponse{
 		Status: merr.Success(),
 	}, nil)
+	mixCoord.EXPECT().SaveBinlogPaths(mock.Anything, mock.Anything).Return(merr.Success(), nil).Maybe()
 	f := syncutil.NewFuture[internaltypes.MixCoordClient]()
 	f.Set(mixCoord)
 
@@ -147,8 +153,8 @@ func TestRecoveryStorage(t *testing.T) {
 				partitionNum += len(v.meta.CollectionInfo.Partitions)
 			}
 		}
-		for _, v := range rs.segments {
-			if v.meta.State != streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED {
+		for _, v := range rs.segmentManager.GetSnapshots() {
+			if v.GetState() != streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED {
 				segmentNum += 1
 			}
 		}
@@ -608,7 +614,9 @@ func (b *streamBuilder) createSchemaChange() message.ImmutableMessage {
 				CollectionId:      collectionID,
 				FlushedSegmentIds: segmentIDs,
 			}).
-			WithBody(&message.SchemaChangeMessageBody{}).
+			WithBody(&message.SchemaChangeMessageBody{
+				Schema: &schemapb.CollectionSchema{},
+			}).
 			MustBuildMutable().
 			WithTimeTick(b.timetick).
 			WithLastConfirmed(rmq.NewRmqID(b.lastConfirmedMessageID)).

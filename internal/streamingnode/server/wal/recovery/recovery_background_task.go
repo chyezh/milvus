@@ -27,7 +27,9 @@ func (rs *recoveryStorageImpl) isDirty() bool {
 
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	return rs.dirtyCounter > 0 || rs.pendingSalvageCheckpoint != nil
+	return rs.dirtyCounter > 0 ||
+		rs.pendingSalvageCheckpoint != nil ||
+		rs.segmentManager.HasDirtySnapshot()
 }
 
 // TODO: !!! all recovery persist operation should be a compare-and-swap operation to
@@ -64,6 +66,9 @@ func (rs *recoveryStorageImpl) persistDritySnapshotWhenClosing() error {
 	ctx, cancel := context.WithTimeout(context.Background(), rs.cfg.gracefulTimeout)
 	defer cancel()
 
+	if err := rs.segmentManager.Drain(ctx); err != nil {
+		return err
+	}
 	for rs.isDirty() {
 		if err := rs.persistDirtySnapshot(ctx, zap.InfoLevel); err != nil {
 			return err
@@ -86,8 +91,8 @@ func (rs *recoveryStorageImpl) persistDirtySnapshot(ctx context.Context, lvl zap
 	snapshot := rs.pendingPersistSnapshot
 	rs.metrics.ObserveIsOnPersisting(true)
 	logger := rs.Logger().With(
-		zap.String("checkpoint", snapshot.Checkpoint.MessageID.String()),
-		zap.Uint64("checkpointTimeTick", snapshot.Checkpoint.TimeTick),
+		zap.String("checkpoint", snapshot.Checkpoint.MetaCheckpoint.MessageID.String()),
+		zap.Uint64("checkpointTimeTick", snapshot.Checkpoint.MetaCheckpoint.TimeTick),
 		zap.Int("vchannelCount", len(snapshot.VChannels)),
 		zap.Int("segmentCount", len(snapshot.SegmentAssignments)),
 	)
@@ -133,6 +138,10 @@ func (rs *recoveryStorageImpl) persistDirtySnapshot(ctx context.Context, lvl zap
 		return err
 	}
 
+	if err := rs.notifyDataCoordSaveBinlogPaths(ctx, snapshot); err != nil {
+		return err
+	}
+
 	// Salvage checkpoint must be persisted before the consume checkpoint to guarantee ordering:
 	// if the node crashes between these two writes, the next snapshot retry will re-persist both.
 	if snapshot.SalvageCheckpoint != nil {
@@ -152,21 +161,21 @@ func (rs *recoveryStorageImpl) persistDirtySnapshot(ctx context.Context, lvl zap
 	}
 
 	// sample the checkpoint for truncator to make wal truncation.
-	rs.metrics.ObServePersistedMetrics(snapshot.Checkpoint.TimeTick)
+	rs.metrics.ObServePersistedMetrics(snapshot.Checkpoint.MetaCheckpoint.TimeTick)
 	rs.simpleTruncateCheckpoint(ctx, snapshot.Checkpoint)
 	return
 }
 
 func (rs *recoveryStorageImpl) simpleTruncateCheckpoint(ctx context.Context, checkpoint *WALCheckpoint) {
-	flusherCP := rs.getFlusherCheckpoint()
-	if flusherCP == nil {
+	dataCP := checkpoint.DataCheckpoint
+	if dataCP == nil || rs.truncator == nil {
 		return
 	}
 	// use the smaller one to truncate the wal.
-	if flusherCP.MessageID.LTE(checkpoint.MessageID) {
-		_ = rs.truncator.Truncate(ctx, flusherCP.MessageID)
+	if dataCP.MessageID.LTE(checkpoint.MetaCheckpoint.MessageID) {
+		_ = rs.truncator.Truncate(ctx, dataCP.MessageID)
 	} else {
-		_ = rs.truncator.Truncate(ctx, checkpoint.MessageID)
+		_ = rs.truncator.Truncate(ctx, checkpoint.MetaCheckpoint.MessageID)
 	}
 }
 

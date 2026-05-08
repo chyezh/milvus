@@ -36,7 +36,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexcgopb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
-	"github.com/milvus-io/milvus/pkg/v3/util/metautil"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/retry"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
@@ -189,77 +188,30 @@ func (bw *BulkPackWriterV2) writeInserts(ctx context.Context, pack *SyncPack) (m
 	return logs, manifestPath, nil
 }
 
-func (bw *BulkPackWriterV2) writeInsertsIntoStorage(_ context.Context,
+func (bw *BulkPackWriterV2) writeInsertsIntoStorage(ctx context.Context,
 	pluginContextPtr *indexcgopb.StoragePluginContext,
 	pack *SyncPack,
 	rec storage.Record,
 	tsFrom typeutil.Timestamp,
 	tsTo typeutil.Timestamp,
 ) (map[int64]*datapb.FieldBinlog, string, error) {
-	logs := make(map[int64]*datapb.FieldBinlog)
-	columnGroups := bw.columnGroups
-	bucketName := bw.getBucketName()
-
-	var err error
-	doWrite := func(w storage.RecordWriter) error {
-		if err = w.Write(rec); err != nil {
-			if closeErr := w.Close(); closeErr != nil {
-				log.Error("failed to close writer after write failed", zap.Error(closeErr))
-			}
-			return err
-		}
-		// close first the get stats & output
-		return w.Close()
-	}
-
-	var manifestPath string
-	getFieldNullCounts := func(columnGroup storagecommon.ColumnGroup) map[int64]int64 {
-		result := make(map[int64]int64, len(columnGroup.Fields))
-		for _, fieldID := range columnGroup.Fields {
-			if col := rec.Column(fieldID); col != nil {
-				result[fieldID] = int64(col.NullN())
-			}
-		}
-		return result
-	}
-
-	paths := make([]string, 0)
-	for _, columnGroup := range columnGroups {
-		id, err := bw.allocator.AllocOne()
-		if err != nil {
-			return nil, "", err
-		}
-		path := metautil.BuildInsertLogPath(bw.getRootPath(), pack.collectionID, pack.partitionID, pack.segmentID, columnGroup.GroupID, id)
-		paths = append(paths, path)
-	}
-	w, err := storage.NewPackedRecordWriter(bucketName, paths, bw.schema, bw.bufferSize, bw.multiPartUploadSize, columnGroups, bw.storageConfig, pluginContextPtr)
-	if err != nil {
-		return nil, "", err
-	}
-	if err = doWrite(w); err != nil {
-		return nil, "", err
-	}
-	// workaround to store row num
-	for _, columnGroup := range columnGroups {
-		columnGroupID := columnGroup.GroupID
-		logs[columnGroupID] = &datapb.FieldBinlog{
-			FieldID:     columnGroupID,
-			ChildFields: columnGroup.Fields,
-			Binlogs: []*datapb.Binlog{
-				{
-					LogSize:         int64(w.GetColumnGroupWrittenCompressed(columnGroup.GroupID)),
-					MemorySize:      int64(w.GetColumnGroupWrittenUncompressed(columnGroup.GroupID)),
-					LogPath:         w.GetWrittenPaths(columnGroupID),
-					EntriesNum:      w.GetWrittenRowNum(),
-					TimestampFrom:   tsFrom,
-					TimestampTo:     tsTo,
-					FieldNullCounts: getFieldNullCounts(columnGroup),
-				},
-			},
-		}
-	}
-
-	return logs, manifestPath, nil
+	return WritePackedInsert(ctx, PackedInsertWriteInput{
+		CollectionID:        pack.collectionID,
+		PartitionID:         pack.partitionID,
+		SegmentID:           pack.segmentID,
+		Schema:              bw.schema,
+		Record:              rec,
+		TsFrom:              tsFrom,
+		TsTo:                tsTo,
+		RootPath:            bw.getRootPath(),
+		BucketName:          bw.getBucketName(),
+		ColumnGroups:        bw.columnGroups,
+		BufferSize:          bw.bufferSize,
+		MultiPartUploadSize: bw.multiPartUploadSize,
+		StorageConfig:       bw.storageConfig,
+		PluginContext:       pluginContextPtr,
+		Allocator:           bw.allocator,
+	})
 }
 
 func (bw *BulkPackWriterV2) serializeBinlog(_ context.Context, pack *SyncPack) (storage.Record, error) {

@@ -31,6 +31,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
@@ -2233,6 +2234,15 @@ func GetDenseVectorFieldSchemas(schema *schemapb.CollectionSchema) []*schemapb.F
 		}
 	}
 	return ret
+}
+
+// MustGetPrimaryFieldSchema get primary field schema from collection schema, if not found, panic.
+func MustGetPrimaryFieldSchema(schema *schemapb.CollectionSchema) *schemapb.FieldSchema {
+	if field, err := GetPrimaryFieldSchema(schema); err == nil {
+		return field
+	}
+	schemaJSON, _ := protojson.Marshal(schema)
+	panic(fmt.Sprintf("primary field is not found in schema: %s", string(schemaJSON)))
 }
 
 // GetPrimaryFieldSchema get primary field schema from collection schema

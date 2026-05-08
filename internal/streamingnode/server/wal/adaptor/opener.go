@@ -9,7 +9,6 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/flusher/flusherimpl"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
@@ -141,11 +140,11 @@ func (o *openerAdaptorImpl) determineWALName(ctx context.Context, opt *wal.OpenO
 		checkpoint := utility.NewWALCheckpointFromProto(cpProto)
 		log.Ctx(ctx).Info("get checkpoint from catalog",
 			zap.String("channel", opt.Channel.Name),
-			zap.Stringer("checkpoint", checkpoint.MessageID),
-			zap.Uint64("checkpointTimeTick", checkpoint.TimeTick),
-			zap.Stringer("currentWAL", checkpoint.MessageID.WALName()),
+			zap.Stringer("checkpoint", checkpoint.MetaCheckpoint.MessageID),
+			zap.Uint64("checkpointTimeTick", checkpoint.MetaCheckpoint.TimeTick),
+			zap.Stringer("currentWAL", checkpoint.MetaCheckpoint.MessageID.WALName()),
 			zap.Any("AlterWalState", checkpoint.AlterWalState))
-		walName = checkpoint.MessageID.WALName()
+		walName = checkpoint.MetaCheckpoint.MessageID.WALName()
 	}
 
 	if walName == message.WALNameUnknown {
@@ -246,18 +245,15 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 		return nil, err
 	}
 
-	// start the flusher to flush and generate recovery info.
-	var flusher *flusherimpl.WALFlusherImpl
-	if !opt.DisableFlusher {
-		flusher = flusherimpl.RecoverWALFlusher(&flusherimpl.RecoverWALFlusherParam{
-			WAL:                param.WAL,
-			RecoveryStorage:    rs,
-			ChannelInfo:        l.Channel(),
-			RecoverySnapshot:   snapshot,
-			RateLimitComponent: roWAL.WALRateLimitComponent,
+	if !opt.DisableRecoveryStorageScanner {
+		rs.StartScannerTask(recovery.ScannerTaskParam{
+			WAL:               param.WAL,
+			RecoverySnapshot:  snapshot,
+			ScannerRateLimit:  roWAL.RecoveryStorage,
+			StartingRateLimit: roWAL.RecoveryStorageScannerStarting,
 		})
 	}
-	wal := adaptImplsToRWWAL(roWAL, o.interceptorBuilders, param, flusher)
+	wal := adaptImplsToRWWAL(roWAL, o.interceptorBuilders, param, rs)
 	o.walInstances.Insert(id, wal)
 	return wal, nil
 }
@@ -287,8 +283,8 @@ func (o *openerAdaptorImpl) handleAlterWAL(ctx context.Context, l walimpls.WALIm
 		zap.String("channel", opt.Channel.String()),
 		zap.Bool("foundAlterWAL", snapshot.AlterWALInfo.FoundAlterWALMsg),
 		zap.Stringer("targetWAL", snapshot.AlterWALInfo.TargetWALName),
-		zap.String("checkpointMessageID", snapshot.Checkpoint.MessageID.String()),
-		zap.Uint64("checkpointTimeTick", snapshot.Checkpoint.TimeTick),
+		zap.String("checkpointMessageID", snapshot.Checkpoint.MetaCheckpoint.MessageID.String()),
+		zap.Uint64("checkpointTimeTick", snapshot.Checkpoint.MetaCheckpoint.TimeTick),
 		zap.Any("alterWALConfig", snapshot.AlterWALInfo.AlterWALConfig))
 
 	if snapshot.Checkpoint.AlterWalState != nil && snapshot.Checkpoint.AlterWalState.Stage == streamingpb.AlterWALStage_FLUSHING {
@@ -312,16 +308,12 @@ func (o *openerAdaptorImpl) handleAlterWAL(ctx context.Context, l walimpls.WALIm
 func (o *openerAdaptorImpl) handleAlterWALFlushingStage(ctx context.Context, opt *wal.OpenOption, roWAL *roWALAdaptorImpl,
 	param *interceptors.InterceptorBuildParam, rs recovery.RecoveryStorage, snapshot *recovery.RecoverySnapshot,
 ) error {
-	// Start flusher to flush all growing segments
-	var flusher *flusherimpl.WALFlusherImpl
-	if !opt.DisableFlusher {
+	if !opt.DisableRecoveryStorageScanner {
 		f := syncutil.NewFuture[wal.WAL]()
 		f.Set(roWAL)
 		roWAL.ForceRecovery(true)
-		flusher = flusherimpl.RecoverWALFlusher(&flusherimpl.RecoverWALFlusherParam{
+		rs.StartScannerTask(recovery.ScannerTaskParam{
 			WAL:              f,
-			RecoveryStorage:  rs,
-			ChannelInfo:      roWAL.Channel(),
 			RecoverySnapshot: snapshot,
 		})
 	}
@@ -338,28 +330,28 @@ func (o *openerAdaptorImpl) handleAlterWALFlushingStage(ctx context.Context, opt
 
 	const defaultWALSwitchFlushTimeout = 1 * time.Minute
 
-	// Periodically check flush progress until target time tick is reached
-	var flusherCP *utility.WALCheckpoint
-	for flusherCP == nil || flusherCP.TimeTick < targetTimeTick {
+	// Periodically check data checkpoint progress until target time tick is reached.
+	var dataCheckpoint *utility.WALCheckpoint
+	for dataCheckpoint == nil || dataCheckpoint.MetaCheckpoint.TimeTick < targetTimeTick {
 		select {
 		case <-ticker.C:
-			flusherCP = rs.GetFlusherCheckpointByTimeTick(ctx)
-			if flusherCP == nil {
-				log.Ctx(ctx).Info("waiting for flusher checkpoint initialization")
+			dataCheckpoint = rs.GetDataCheckpoint(ctx)
+			if dataCheckpoint == nil {
+				log.Ctx(ctx).Info("waiting for data checkpoint initialization")
 				continue
 			}
-			if flusherCP.TimeTick >= targetTimeTick {
+			if dataCheckpoint.MetaCheckpoint.TimeTick >= targetTimeTick {
 				log.Ctx(ctx).Info("flush completed, ready for WAL switch",
 					zap.String("channel", opt.Channel.Name),
-					zap.Uint64("flusherCheckpointTS", flusherCP.TimeTick),
+					zap.Uint64("dataCheckpointTS", dataCheckpoint.MetaCheckpoint.TimeTick),
 					zap.Uint64("targetTimeTick", targetTimeTick),
 					zap.Stringer("targetWAL", targetWALName))
 				break
 			}
-			remaining := targetTimeTick - flusherCP.TimeTick
+			remaining := targetTimeTick - dataCheckpoint.MetaCheckpoint.TimeTick
 			log.Ctx(ctx).Info("flush in progress",
 				zap.String("channel", opt.Channel.Name),
-				zap.Uint64("currentTS", flusherCP.TimeTick),
+				zap.Uint64("currentTS", dataCheckpoint.MetaCheckpoint.TimeTick),
 				zap.Uint64("targetTS", targetTimeTick),
 				zap.Uint64("remainingTS", remaining))
 		case <-time.After(defaultWALSwitchFlushTimeout):
@@ -378,9 +370,6 @@ func (o *openerAdaptorImpl) handleAlterWALFlushingStage(ctx context.Context, opt
 	// Close recovery storage and related resources to persist final state
 	log.Ctx(ctx).Info("closing recovery storage to persist WAL switch snapshot")
 	rs.Close()
-	if flusher != nil {
-		flusher.Close()
-	}
 	param.Clear()
 	roWAL.Close()
 
@@ -397,8 +386,8 @@ func (o *openerAdaptorImpl) handleAlterWALFlushingStage(ctx context.Context, opt
 
 	log.Ctx(ctx).Info("checkpoint stage updated to ADVANCE_CHECKPOINT",
 		zap.String("channel", opt.Channel.Name),
-		zap.String("checkpoint", snapshot.Checkpoint.MessageID.String()),
-		zap.Uint64("checkpointTS", snapshot.Checkpoint.TimeTick))
+		zap.String("checkpoint", snapshot.Checkpoint.MetaCheckpoint.MessageID.String()),
+		zap.Uint64("checkpointTS", snapshot.Checkpoint.MetaCheckpoint.TimeTick))
 	return nil
 }
 
@@ -411,7 +400,7 @@ func (o *openerAdaptorImpl) handleAlterWALAdvanceCheckpointsStage(ctx context.Co
 	}
 
 	// Build new WAL initial position
-	newWALInitialTimeTick := snapshot.Checkpoint.TimeTick
+	newWALInitialTimeTick := snapshot.Checkpoint.MetaCheckpoint.TimeTick
 	newWALInitialMsgID, newWALName := msgadaptor.MustGetEarliestMessageIDFromMQType(snapshot.Checkpoint.AlterWalState.TargetWalName)
 
 	if len(vchannels) > 0 {
@@ -478,9 +467,13 @@ func (o *openerAdaptorImpl) handleAlterWALAdvanceCheckpointsStage(ctx context.Co
 	// Update pchannel checkpoint: reset alterWALState and set position to new WAL initial position
 	finalCheckpoint := snapshot.Checkpoint.Clone()
 	finalCheckpoint.AlterWalState = nil
-	finalCheckpoint.MessageID = msgadaptor.MustGetMessageIDFromMQWrapperID(newWALInitialMsgID)
+	finalCheckpoint.MetaCheckpoint.MessageID = msgadaptor.MustGetMessageIDFromMQWrapperID(newWALInitialMsgID)
 	if finalCheckpoint.ReplicateCheckpoint != nil {
-		finalCheckpoint.ReplicateCheckpoint.MessageID = finalCheckpoint.MessageID
+		finalCheckpoint.ReplicateCheckpoint.MessageID = finalCheckpoint.MetaCheckpoint.MessageID
+	}
+	if finalCheckpoint.DataCheckpoint != nil {
+		finalCheckpoint.DataCheckpoint.MessageID = finalCheckpoint.MetaCheckpoint.MessageID
+		finalCheckpoint.DataCheckpoint.TimeTick = finalCheckpoint.MetaCheckpoint.TimeTick
 	}
 
 	// Persist final checkpoint to catalog
@@ -492,13 +485,13 @@ func (o *openerAdaptorImpl) handleAlterWALAdvanceCheckpointsStage(ctx context.Co
 	}
 
 	// Register default WAL name for delegator to track seek position changes
-	message.RegisterDefaultWALName(finalCheckpoint.MessageID.WALName())
+	message.RegisterDefaultWALName(finalCheckpoint.MetaCheckpoint.MessageID.WALName())
 
 	log.Ctx(ctx).Info("pchannel checkpoint updated to new WAL initial position",
 		zap.String("channel", opt.Channel.Name),
-		zap.String("newCheckpoint", finalCheckpoint.MessageID.String()),
-		zap.String("newWAL", finalCheckpoint.MessageID.WALName().String()),
-		zap.Uint64("newCheckpointTS", finalCheckpoint.TimeTick))
+		zap.String("newCheckpoint", finalCheckpoint.MetaCheckpoint.MessageID.String()),
+		zap.String("newWAL", finalCheckpoint.MetaCheckpoint.MessageID.WALName().String()),
+		zap.Uint64("newCheckpointTS", finalCheckpoint.MetaCheckpoint.TimeTick))
 
 	return nil
 }

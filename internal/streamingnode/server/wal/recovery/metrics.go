@@ -11,6 +11,14 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/tsoutil"
 )
 
+const (
+	scannerTaskStateRecovering scannerTaskState = "in_recovery"
+	scannerTaskStateWorking    scannerTaskState = "working"
+	scannerTaskStateClosing    scannerTaskState = "closing"
+)
+
+type scannerTaskState = string
+
 func newRecoveryStorageMetrics(channelInfo types.PChannelInfo) *recoveryMetrics {
 	constLabels := prometheus.Labels{
 		metrics.NodeIDLabelName:         paramtable.GetStringNodeID(),
@@ -27,6 +35,24 @@ func newRecoveryStorageMetrics(channelInfo types.PChannelInfo) *recoveryMetrics 
 	}
 }
 
+func newScannerTaskMetrics(channelInfo types.PChannelInfo) *scannerTaskMetrics {
+	constLabels := prometheus.Labels{
+		metrics.NodeIDLabelName:         paramtable.GetStringNodeID(),
+		metrics.WALChannelLabelName:     channelInfo.Name,
+		metrics.WALChannelTermLabelName: strconv.FormatInt(channelInfo.Term, 10),
+	}
+	m := &scannerTaskMetrics{
+		constLabels: constLabels,
+		// Keep existing Prometheus metric names for compatibility; this task used to be
+		// implemented by the WAL flusher.
+		info:     metrics.WALFlusherInfo.MustCurryWith(constLabels),
+		timetick: metrics.WALFlusherTimeTick.With(constLabels),
+		state:    scannerTaskStateRecovering,
+	}
+	m.info.WithLabelValues(scannerTaskStateRecovering).Set(1)
+	return m
+}
+
 type recoveryMetrics struct {
 	constLabels            prometheus.Labels
 	info                   *prometheus.GaugeVec
@@ -34,6 +60,13 @@ type recoveryMetrics struct {
 	isOnPersisting         prometheus.Gauge
 	inMemTimeTick          prometheus.Gauge
 	persistedTimeTick      prometheus.Gauge
+}
+
+type scannerTaskMetrics struct {
+	constLabels prometheus.Labels
+	info        *prometheus.GaugeVec
+	timetick    prometheus.Gauge
+	state       scannerTaskState
 }
 
 // ObserveStateChange sets the state of the recovery storage metrics.
@@ -60,6 +93,21 @@ func (m *recoveryMetrics) ObserveIsOnPersisting(onPersisting bool) {
 	} else {
 		m.isOnPersisting.Set(0)
 	}
+}
+
+func (m *scannerTaskMetrics) IntoState(state scannerTaskState) {
+	metrics.WALFlusherInfo.DeletePartialMatch(m.constLabels)
+	m.state = state
+	m.info.WithLabelValues(m.state).Set(1)
+}
+
+func (m *scannerTaskMetrics) ObserveMetrics(tickTime uint64) {
+	m.timetick.Set(tsoutil.PhysicalTimeSeconds(tickTime))
+}
+
+func (m *scannerTaskMetrics) Close() {
+	metrics.WALFlusherInfo.DeletePartialMatch(m.constLabels)
+	metrics.WALFlusherTimeTick.DeletePartialMatch(m.constLabels)
 }
 
 func (m *recoveryMetrics) Close() {

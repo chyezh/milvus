@@ -6,8 +6,6 @@ package resource
 import (
 	"testing"
 
-	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
-	"github.com/milvus-io/milvus/internal/flushcommon/writebuffer"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/stats"
 	tinspector "github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick/inspector"
 	"github.com/milvus-io/milvus/internal/types"
@@ -23,10 +21,6 @@ func InitForTest(t *testing.T, opts ...optResourceInit) {
 	}
 	for _, opt := range opts {
 		opt(r)
-	}
-	if r.chunkManager != nil {
-		r.syncMgr = syncmgr.NewSyncManager(r.chunkManager)
-		r.wbMgr = writebuffer.NewManager(r.syncMgr)
 	}
 	if r.mixCoordClient != nil {
 		r.timestampAllocator = idalloc.NewTSOAllocator(r.mixCoordClient)

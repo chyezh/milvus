@@ -27,8 +27,7 @@ func TestNonReplicateManager(t *testing.T) {
 		CurrentClusterID: "test1",
 		InitialRecoverSnapshot: &recovery.RecoverySnapshot{
 			Checkpoint: &utility.WALCheckpoint{
-				MessageID:           walimplstest.NewTestMessageID(1),
-				TimeTick:            1,
+				MetaCheckpoint:      &utility.Checkpoint{MessageID: walimplstest.NewTestMessageID(1), TimeTick: 1},
 				ReplicateCheckpoint: nil,
 				ReplicateConfig:     nil,
 			},
@@ -51,8 +50,7 @@ func TestPrimaryReplicateManager(t *testing.T) {
 		CurrentClusterID: "test1",
 		InitialRecoverSnapshot: &recovery.RecoverySnapshot{
 			Checkpoint: &utility.WALCheckpoint{
-				MessageID:           walimplstest.NewTestMessageID(1),
-				TimeTick:            1,
+				MetaCheckpoint:      &utility.Checkpoint{MessageID: walimplstest.NewTestMessageID(1), TimeTick: 1},
 				ReplicateCheckpoint: nil,
 				ReplicateConfig:     newReplicateConfiguration("test1", "test2"),
 			},
@@ -75,8 +73,7 @@ func TestSecondaryReplicateManager(t *testing.T) {
 		CurrentClusterID: "test1",
 		InitialRecoverSnapshot: &recovery.RecoverySnapshot{
 			Checkpoint: &utility.WALCheckpoint{
-				MessageID: walimplstest.NewTestMessageID(1),
-				TimeTick:  1,
+				MetaCheckpoint: &utility.Checkpoint{MessageID: walimplstest.NewTestMessageID(1), TimeTick: 1},
 				ReplicateCheckpoint: &utility.ReplicateCheckpoint{
 					ClusterID: "test2",
 					PChannel:  "test2-rootcoord-dml_0",
@@ -104,8 +101,7 @@ func TestSalvageCheckpointCaptureOnForcePromote(t *testing.T) {
 		CurrentClusterID: "test1",
 		InitialRecoverSnapshot: &recovery.RecoverySnapshot{
 			Checkpoint: &utility.WALCheckpoint{
-				MessageID: walimplstest.NewTestMessageID(1),
-				TimeTick:  1,
+				MetaCheckpoint: &utility.Checkpoint{MessageID: walimplstest.NewTestMessageID(1), TimeTick: 1},
 				ReplicateCheckpoint: &utility.ReplicateCheckpoint{
 					ClusterID: "test2",
 					PChannel:  "test2-rootcoord-dml_0",
@@ -145,8 +141,7 @@ func TestSalvageCheckpointNotCapturedOnNormalPromote(t *testing.T) {
 		CurrentClusterID: "test1",
 		InitialRecoverSnapshot: &recovery.RecoverySnapshot{
 			Checkpoint: &utility.WALCheckpoint{
-				MessageID: walimplstest.NewTestMessageID(1),
-				TimeTick:  1,
+				MetaCheckpoint: &utility.Checkpoint{MessageID: walimplstest.NewTestMessageID(1), TimeTick: 1},
 				ReplicateCheckpoint: &utility.ReplicateCheckpoint{
 					ClusterID: "test2",
 					PChannel:  "test2-rootcoord-dml_0",
@@ -177,8 +172,7 @@ func TestSalvageCheckpointNotCapturedWhenAlreadyPrimary(t *testing.T) {
 		CurrentClusterID: "test1",
 		InitialRecoverSnapshot: &recovery.RecoverySnapshot{
 			Checkpoint: &utility.WALCheckpoint{
-				MessageID:           walimplstest.NewTestMessageID(1),
-				TimeTick:            1,
+				MetaCheckpoint:      &utility.Checkpoint{MessageID: walimplstest.NewTestMessageID(1), TimeTick: 1},
 				ReplicateCheckpoint: nil,
 				ReplicateConfig:     newReplicateConfiguration("test1", "test2"),
 			},
@@ -208,8 +202,7 @@ func TestSalvageCheckpointLoadedFromEtcd(t *testing.T) {
 		CurrentClusterID: "test1",
 		InitialRecoverSnapshot: &recovery.RecoverySnapshot{
 			Checkpoint: &utility.WALCheckpoint{
-				MessageID:       walimplstest.NewTestMessageID(1),
-				TimeTick:        1,
+				MetaCheckpoint:  &utility.Checkpoint{MessageID: walimplstest.NewTestMessageID(1), TimeTick: 1},
 				ReplicateConfig: newReplicateConfiguration("test1", "test2"),
 			},
 		},
@@ -241,8 +234,7 @@ func TestSalvageCheckpointMultipleForcePromotes(t *testing.T) {
 		CurrentClusterID: "test1",
 		InitialRecoverSnapshot: &recovery.RecoverySnapshot{
 			Checkpoint: &utility.WALCheckpoint{
-				MessageID: walimplstest.NewTestMessageID(1),
-				TimeTick:  1,
+				MetaCheckpoint: &utility.Checkpoint{MessageID: walimplstest.NewTestMessageID(1), TimeTick: 1},
 				ReplicateCheckpoint: &utility.ReplicateCheckpoint{
 					ClusterID: "cluster-a",
 					PChannel:  "cluster-a-rootcoord-dml_0",
@@ -307,8 +299,7 @@ func TestSecondaryReplicateManagerWithTxn(t *testing.T) {
 		CurrentClusterID: "test1",
 		InitialRecoverSnapshot: &recovery.RecoverySnapshot{
 			Checkpoint: &utility.WALCheckpoint{
-				MessageID: walimplstest.NewTestMessageID(1),
-				TimeTick:  1,
+				MetaCheckpoint: &utility.Checkpoint{MessageID: walimplstest.NewTestMessageID(1), TimeTick: 1},
 				ReplicateCheckpoint: &utility.ReplicateCheckpoint{
 					ClusterID: "test2",
 					PChannel:  "test2-rootcoord-dml_0",

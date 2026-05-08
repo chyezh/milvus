@@ -37,8 +37,7 @@ func TestUpdateCheckpointForcePromote(t *testing.T) {
 			currentClusterID: "test1",
 			channel:          types.PChannelInfo{Name: "test1-rootcoord-dml_0"},
 			checkpoint: &WALCheckpoint{
-				MessageID: walimplstest.NewTestMessageID(1),
-				TimeTick:  1,
+				MetaCheckpoint: &Checkpoint{MessageID: walimplstest.NewTestMessageID(1), TimeTick: 1},
 				ReplicateCheckpoint: &utility.ReplicateCheckpoint{
 					ClusterID: "test2",
 					PChannel:  "test2-rootcoord-dml_0",
@@ -46,16 +45,21 @@ func TestUpdateCheckpointForcePromote(t *testing.T) {
 					TimeTick:  500,
 				},
 			},
-			metrics: newRecoveryStorageMetrics(types.PChannelInfo{Name: "test1-rootcoord-dml_0"}),
+			metrics:        newRecoveryStorageMetrics(types.PChannelInfo{Name: "test1-rootcoord-dml_0"}),
+			segmentManager: newTestSegmentManager(t),
+		}
+		updateAndAdvance := func(msg message.ImmutableMessage) {
+			rs.updateCheckpoint(msg)
+			rs.advanceCheckpointIfSyncedLocked()
 		}
 
 		// Start as secondary of test2
-		rs.updateCheckpoint(newAlterReplicateConfigMessage("test2", []string{"test1"}, 2, walimplstest.NewTestMessageID(2)))
+		updateAndAdvance(newAlterReplicateConfigMessage("test2", []string{"test1"}, 2, walimplstest.NewTestMessageID(2)))
 		assert.NotNil(t, rs.checkpoint.ReplicateCheckpoint)
 		assert.Nil(t, rs.pendingSalvageCheckpoint)
 
 		// Force promote to primary — should capture the salvage checkpoint
-		rs.updateCheckpoint(newAlterReplicateConfigMessageWithForcePromote("test1", []string{"test2"}, 3, walimplstest.NewTestMessageID(3)))
+		updateAndAdvance(newAlterReplicateConfigMessageWithForcePromote("test1", []string{"test2"}, 3, walimplstest.NewTestMessageID(3)))
 		assert.Nil(t, rs.checkpoint.ReplicateCheckpoint)
 		assert.NotNil(t, rs.pendingSalvageCheckpoint)
 		assert.Equal(t, "test2", rs.pendingSalvageCheckpoint.ClusterID)
@@ -66,8 +70,7 @@ func TestUpdateCheckpointForcePromote(t *testing.T) {
 			currentClusterID: "test1",
 			channel:          types.PChannelInfo{Name: "test1-rootcoord-dml_0"},
 			checkpoint: &WALCheckpoint{
-				MessageID: walimplstest.NewTestMessageID(1),
-				TimeTick:  1,
+				MetaCheckpoint: &Checkpoint{MessageID: walimplstest.NewTestMessageID(1), TimeTick: 1},
 				ReplicateCheckpoint: &utility.ReplicateCheckpoint{
 					ClusterID: "test2",
 					PChannel:  "test2-rootcoord-dml_0",
@@ -75,12 +78,17 @@ func TestUpdateCheckpointForcePromote(t *testing.T) {
 					TimeTick:  500,
 				},
 			},
-			metrics: newRecoveryStorageMetrics(types.PChannelInfo{Name: "test1-rootcoord-dml_0"}),
+			metrics:        newRecoveryStorageMetrics(types.PChannelInfo{Name: "test1-rootcoord-dml_0"}),
+			segmentManager: newTestSegmentManager(t),
+		}
+		updateAndAdvance := func(msg message.ImmutableMessage) {
+			rs.updateCheckpoint(msg)
+			rs.advanceCheckpointIfSyncedLocked()
 		}
 
-		rs.updateCheckpoint(newAlterReplicateConfigMessage("test2", []string{"test1"}, 2, walimplstest.NewTestMessageID(2)))
+		updateAndAdvance(newAlterReplicateConfigMessage("test2", []string{"test1"}, 2, walimplstest.NewTestMessageID(2)))
 		// Normal promote (no ForcePromote flag)
-		rs.updateCheckpoint(newAlterReplicateConfigMessage("test1", []string{"test2"}, 3, walimplstest.NewTestMessageID(3)))
+		updateAndAdvance(newAlterReplicateConfigMessage("test1", []string{"test2"}, 3, walimplstest.NewTestMessageID(3)))
 		assert.Nil(t, rs.checkpoint.ReplicateCheckpoint)
 		assert.Nil(t, rs.pendingSalvageCheckpoint)
 	})
@@ -91,14 +99,15 @@ func TestUpdateCheckpointForcePromote(t *testing.T) {
 			currentClusterID: "test1",
 			channel:          types.PChannelInfo{Name: "test1-rootcoord-dml_0"},
 			checkpoint: &WALCheckpoint{
-				MessageID:           walimplstest.NewTestMessageID(1),
-				TimeTick:            1,
+				MetaCheckpoint:      &Checkpoint{MessageID: walimplstest.NewTestMessageID(1), TimeTick: 1},
 				ReplicateCheckpoint: nil,
 			},
-			metrics: newRecoveryStorageMetrics(types.PChannelInfo{Name: "test1-rootcoord-dml_0"}),
+			metrics:        newRecoveryStorageMetrics(types.PChannelInfo{Name: "test1-rootcoord-dml_0"}),
+			segmentManager: newTestSegmentManager(t),
 		}
 
 		rs.updateCheckpoint(newAlterReplicateConfigMessageWithForcePromote("test1", []string{"test2"}, 2, walimplstest.NewTestMessageID(2)))
+		rs.advanceCheckpointIfSyncedLocked()
 		assert.Nil(t, rs.checkpoint.ReplicateCheckpoint)
 		assert.Nil(t, rs.pendingSalvageCheckpoint)
 	})
@@ -115,14 +124,13 @@ func TestConsumeDirtySnapshotWithSalvageCheckpoint(t *testing.T) {
 			currentClusterID: "test1",
 			channel:          types.PChannelInfo{Name: "test1-rootcoord-dml_0"},
 			checkpoint: &WALCheckpoint{
-				MessageID: walimplstest.NewTestMessageID(10),
-				TimeTick:  10,
+				MetaCheckpoint: &Checkpoint{MessageID: walimplstest.NewTestMessageID(10), TimeTick: 10},
 			},
-			segments:                 map[int64]*segmentRecoveryInfo{},
 			vchannels:                map[string]*vchannelRecoveryInfo{},
 			pendingSalvageCheckpoint: cp,
 			dirtyCounter:             0,
 			metrics:                  newRecoveryStorageMetrics(types.PChannelInfo{Name: "test1-rootcoord-dml_0"}),
+			segmentManager:           newTestSegmentManager(t),
 		}
 
 		// consumeDirtySnapshot should pick up the pending salvage checkpoint even when dirtyCounter==0
@@ -143,14 +151,13 @@ func TestConsumeDirtySnapshotWithSalvageCheckpoint(t *testing.T) {
 			currentClusterID: "test1",
 			channel:          types.PChannelInfo{Name: "test1-rootcoord-dml_0"},
 			checkpoint: &WALCheckpoint{
-				MessageID: walimplstest.NewTestMessageID(10),
-				TimeTick:  10,
+				MetaCheckpoint: &Checkpoint{MessageID: walimplstest.NewTestMessageID(10), TimeTick: 10},
 			},
-			segments:                 map[int64]*segmentRecoveryInfo{},
 			vchannels:                map[string]*vchannelRecoveryInfo{},
 			pendingSalvageCheckpoint: nil,
 			dirtyCounter:             3,
 			metrics:                  newRecoveryStorageMetrics(types.PChannelInfo{Name: "test1-rootcoord-dml_0"}),
+			segmentManager:           newTestSegmentManager(t),
 		}
 
 		snapshot := rs.consumeDirtySnapshot()
@@ -169,14 +176,13 @@ func TestConsumeDirtySnapshotWithSalvageCheckpoint(t *testing.T) {
 			currentClusterID: "test1",
 			channel:          types.PChannelInfo{Name: "test1-rootcoord-dml_0"},
 			checkpoint: &WALCheckpoint{
-				MessageID: walimplstest.NewTestMessageID(10),
-				TimeTick:  10,
+				MetaCheckpoint: &Checkpoint{MessageID: walimplstest.NewTestMessageID(10), TimeTick: 10},
 			},
-			segments:                 map[int64]*segmentRecoveryInfo{},
 			vchannels:                map[string]*vchannelRecoveryInfo{},
 			pendingSalvageCheckpoint: cp,
 			dirtyCounter:             5,
 			metrics:                  newRecoveryStorageMetrics(types.PChannelInfo{Name: "test1-rootcoord-dml_0"}),
+			segmentManager:           newTestSegmentManager(t),
 		}
 
 		snapshot := rs.consumeDirtySnapshot()
@@ -197,12 +203,12 @@ func TestIsDirtyWithSalvageCheckpoint(t *testing.T) {
 	rs := &recoveryStorageImpl{
 		currentClusterID:         "test1",
 		channel:                  types.PChannelInfo{Name: "test-pchannel"},
-		checkpoint:               &WALCheckpoint{MessageID: walimplstest.NewTestMessageID(10), TimeTick: 10},
-		segments:                 map[int64]*segmentRecoveryInfo{},
+		checkpoint:               &WALCheckpoint{MetaCheckpoint: &Checkpoint{MessageID: walimplstest.NewTestMessageID(10), TimeTick: 10}},
 		vchannels:                map[string]*vchannelRecoveryInfo{},
 		pendingSalvageCheckpoint: cp,
 		dirtyCounter:             0,
 		metrics:                  newRecoveryStorageMetrics(types.PChannelInfo{Name: "test-pchannel"}),
+		segmentManager:           newTestSegmentManager(t),
 	}
 	assert.True(t, rs.isDirty())
 
@@ -228,13 +234,12 @@ func TestPersistDirtySnapshotWithSalvageCheckpoint(t *testing.T) {
 		cfg:     newConfig(),
 		channel: types.PChannelInfo{Name: "test-pchannel"},
 		checkpoint: &WALCheckpoint{
-			MessageID: walimplstest.NewTestMessageID(10),
-			TimeTick:  10,
+			MetaCheckpoint: &Checkpoint{MessageID: walimplstest.NewTestMessageID(10), TimeTick: 10},
 		},
-		segments:                 map[int64]*segmentRecoveryInfo{},
 		vchannels:                map[string]*vchannelRecoveryInfo{},
 		pendingSalvageCheckpoint: cp,
 		metrics:                  newRecoveryStorageMetrics(types.PChannelInfo{Name: "test-pchannel"}),
+		segmentManager:           newTestSegmentManager(t),
 	}
 
 	err := rs.persistDirtySnapshot(context.Background(), zap.InfoLevel)

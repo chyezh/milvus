@@ -31,7 +31,7 @@ func buildInterceptorParams(ctx context.Context, underlyingWALImpls walimpls.WAL
 		// For protecting the `LastConfirmedMessageID` promise,
 		// we use the checkpoint (checkpoint is always see the committed message) to promise we can see the uncommitted message
 		// when using the FirstTimeTickMessage as the poisition to read.
-		lastConfirmedMessageID = cp.MessageID
+		lastConfirmedMessageID = cp.MetaCheckpoint.MessageID
 	}
 	msg, err := sendFirstTimeTick(ctx, underlyingWALImpls, lastConfirmedMessageID)
 	if err != nil {

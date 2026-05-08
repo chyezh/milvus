@@ -145,19 +145,19 @@ func (f *testOneWALFramework) Run() {
 			Term: int64(f.term),
 		}
 		rwWAL, err := f.opener.Open(ctx, &wal.OpenOption{
-			Channel:        pChannel,
-			DisableFlusher: true,
+			Channel:                       pChannel,
+			DisableRecoveryStorageScanner: true,
 		})
 		require.NoError(f.t, err)
 		require.NotNil(f.t, rwWAL)
 		require.Equal(f.t, pChannel.Name, rwWAL.Channel().Name)
-		// TODO: add test here after remove the flusher component.
+		// TODO: add test here after recovery storage scanner coverage is improved.
 		// metrics := rwWAL.Metrics()
 
 		pChannel.AccessMode = types.AccessModeRO
 		roWAL, err := f.opener.Open(ctx, &wal.OpenOption{
-			Channel:        pChannel,
-			DisableFlusher: true,
+			Channel:                       pChannel,
+			DisableRecoveryStorageScanner: true,
 		})
 		require.NoError(f.t, err)
 		metrics := roWAL.Metrics()

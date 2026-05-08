@@ -5,8 +5,6 @@ import (
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 
-	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
-	"github.com/milvus-io/milvus/internal/flushcommon/writebuffer"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/stats"
@@ -73,24 +71,17 @@ func Init(opts ...optResourceInit) {
 	newR.logger = log.With(log.FieldModule(typeutil.StreamingNodeRole))
 	newR.segmentStatsManager = stats.NewStatsManager()
 	newR.timeTickInspector = tinspector.NewTimeTickSyncInspector()
-	newR.syncMgr = syncmgr.NewSyncManager(newR.chunkManager)
-	newR.wbMgr = writebuffer.NewManager(newR.syncMgr)
-	newR.wbMgr.Start()
 	assertNotNil(newR.ChunkManager())
 	assertNotNil(newR.TSOAllocator())
 	assertNotNil(newR.MixCoordClient())
 	assertNotNil(newR.StreamingNodeCatalog())
 	assertNotNil(newR.SegmentStatsManager())
 	assertNotNil(newR.TimeTickInspector())
-	assertNotNil(newR.SyncManager())
-	assertNotNil(newR.WriteBufferManager())
 	r = newR
 }
 
 // Release releases the singleton of resources.
 func Release() {
-	r.wbMgr.Stop()
-	r.syncMgr.Close()
 }
 
 // Resource access the underlying singleton of resources.
@@ -111,10 +102,6 @@ type resourceImpl struct {
 	segmentStatsManager  *stats.StatsManager
 	timeTickInspector    tinspector.TimeTickSyncInspector
 	vchannelTempStorage  *vchantempstore.VChannelTempStorage
-
-	// TODO: Global flusher components, should be removed afteer flushering in wal refactoring.
-	syncMgr syncmgr.SyncManager
-	wbMgr   writebuffer.BufferManager
 }
 
 // TSOAllocator returns the timestamp allocator to allocate timestamp.
@@ -135,16 +122,6 @@ func (r *resourceImpl) ETCD() *clientv3.Client {
 // ChunkManager returns the chunk manager.
 func (r *resourceImpl) ChunkManager() storage.ChunkManager {
 	return r.chunkManager
-}
-
-// SyncManager returns the sync manager.
-func (r *resourceImpl) SyncManager() syncmgr.SyncManager {
-	return r.syncMgr
-}
-
-// WriteBufferManager returns the write buffer manager.
-func (r *resourceImpl) WriteBufferManager() writebuffer.BufferManager {
-	return r.wbMgr
 }
 
 // RootCoordClient returns the root coordinator client.

@@ -37,49 +37,46 @@ func TestFlushAllOnControlChannel(t *testing.T) {
 	pchannel := "test_channel"
 	controlChannel := funcutil.GetControlChannel(pchannel)
 
-	newGrowingSegment := func(segmentID, collectionID, partitionID int64, vchannel string) *segmentRecoveryInfo {
-		return &segmentRecoveryInfo{
-			meta: &streamingpb.SegmentAssignmentMeta{
-				SegmentId:          segmentID,
-				CollectionId:       collectionID,
-				PartitionId:        partitionID,
-				Vchannel:           vchannel,
-				State:              streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING,
-				CheckpointTimeTick: 1,
-				Stat: &streamingpb.SegmentAssignmentStat{
-					MaxRows:      1000,
-					ModifiedRows: 10,
-				},
+	newGrowingSegment := func(segmentID, collectionID, partitionID int64, vchannel string) *streamingpb.SegmentAssignmentMeta {
+		return &streamingpb.SegmentAssignmentMeta{
+			SegmentId:          segmentID,
+			CollectionId:       collectionID,
+			PartitionId:        partitionID,
+			Vchannel:           vchannel,
+			State:              streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING,
+			CheckpointTimeTick: 1,
+			Stat: &streamingpb.SegmentAssignmentStat{
+				MaxRows:      1000,
+				ModifiedRows: 10,
 			},
-			dirty: false,
 		}
 	}
 
 	newTestRS := func() *recoveryStorageImpl {
-		return &recoveryStorageImpl{
+		rs := &recoveryStorageImpl{
 			cfg:              newConfig(),
 			currentClusterID: "test1",
 			channel:          types.PChannelInfo{Name: pchannel},
 			checkpoint: &WALCheckpoint{
-				MessageID: rmq.NewRmqID(1),
-				TimeTick:  1,
+				MetaCheckpoint: &Checkpoint{MessageID: rmq.NewRmqID(1), TimeTick: 1},
 			},
-			segments: map[int64]*segmentRecoveryInfo{
-				100: newGrowingSegment(100, 1, 1, pchannel+"_v0"),
-				200: newGrowingSegment(200, 2, 2, pchannel+"_v1"),
-			},
-			vchannels: make(map[string]*vchannelRecoveryInfo),
-			metrics:   newRecoveryStorageMetrics(types.PChannelInfo{Name: pchannel}),
+			vchannels:      make(map[string]*vchannelRecoveryInfo),
+			metrics:        newRecoveryStorageMetrics(types.PChannelInfo{Name: pchannel}),
+			segmentManager: newTestSegmentManager(t),
 		}
+		rs.segmentManager.RecoverFromSnapshot(map[int64]*streamingpb.SegmentAssignmentMeta{
+			100: newGrowingSegment(100, 1, 1, pchannel+"_v0"),
+			200: newGrowingSegment(200, 2, 2, pchannel+"_v1"),
+		})
+		return rs
 	}
 
 	t.Run("FlushAllOnControlChannel", func(t *testing.T) {
 		rs := newTestRS()
 
 		// Verify segments are initially GROWING
-		for _, seg := range rs.segments {
-			assert.True(t, seg.IsGrowing())
-			assert.False(t, seg.dirty)
+		for _, seg := range rs.segmentManager.GetSnapshots() {
+			assert.Equal(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING, seg.GetState())
 		}
 
 		// Create FlushAll message on control channel via broadcast split
@@ -88,15 +85,15 @@ func TestFlushAllOnControlChannel(t *testing.T) {
 		rs.observeMessage(flushAllMsg)
 
 		// All segments should be FLUSHED
-		for segID, seg := range rs.segments {
-			assert.Equal(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED, seg.meta.State,
+		for segID, seg := range rs.segmentManager.GetSnapshots() {
+			assert.Equal(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED, seg.GetState(),
 				"segment %d should be flushed", segID)
-			assert.True(t, seg.dirty, "segment %d should be dirty after flush", segID)
 		}
 
-		// Checkpoint should be updated
-		assert.Equal(t, uint64(10), rs.checkpoint.TimeTick)
-		assert.True(t, rs.checkpoint.MessageID.EQ(rmq.NewRmqID(5)))
+		// Observed checkpoint should be updated; persisted checkpoint is gated
+		// until dirty snapshot consumption.
+		assert.Equal(t, uint64(10), rs.observedCheckpoint.MetaCheckpoint.TimeTick)
+		assert.True(t, rs.observedCheckpoint.MetaCheckpoint.MessageID.EQ(rmq.NewRmqID(5)))
 	})
 
 	t.Run("FlushAllOnRegularChannel", func(t *testing.T) {
@@ -115,14 +112,12 @@ func TestFlushAllOnControlChannel(t *testing.T) {
 		rs.observeMessage(flushAllMsg)
 
 		// All segments should be FLUSHED
-		for segID, seg := range rs.segments {
-			assert.Equal(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED, seg.meta.State,
+		for segID, seg := range rs.segmentManager.GetSnapshots() {
+			assert.Equal(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED, seg.GetState(),
 				"segment %d should be flushed", segID)
-			assert.True(t, seg.dirty, "segment %d should be dirty after flush", segID)
 		}
 
-		// Checkpoint should be updated
-		assert.Equal(t, uint64(10), rs.checkpoint.TimeTick)
+		assert.Equal(t, uint64(10), rs.observedCheckpoint.MetaCheckpoint.TimeTick)
 	})
 
 	t.Run("FlushAllIdempotent", func(t *testing.T) {
@@ -133,8 +128,8 @@ func TestFlushAllOnControlChannel(t *testing.T) {
 
 		rs.observeMessage(flushAllMsg1)
 
-		for _, seg := range rs.segments {
-			assert.Equal(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED, seg.meta.State)
+		for _, seg := range rs.segmentManager.GetSnapshots() {
+			assert.Equal(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED, seg.GetState())
 		}
 
 		// Second FlushAll with higher timetick - should be idempotent
@@ -143,12 +138,11 @@ func TestFlushAllOnControlChannel(t *testing.T) {
 		rs.observeMessage(flushAllMsg2)
 
 		// Segments should remain FLUSHED
-		for segID, seg := range rs.segments {
-			assert.Equal(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED, seg.meta.State,
+		for segID, seg := range rs.segmentManager.GetSnapshots() {
+			assert.Equal(t, streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED, seg.GetState(),
 				"segment %d should still be flushed", segID)
 		}
 
-		// Checkpoint should advance
-		assert.Equal(t, uint64(20), rs.checkpoint.TimeTick)
+		assert.Equal(t, uint64(20), rs.observedCheckpoint.MetaCheckpoint.TimeTick)
 	})
 }

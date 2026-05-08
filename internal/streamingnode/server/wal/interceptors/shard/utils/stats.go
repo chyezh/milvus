@@ -8,6 +8,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/tsoutil"
 )
 
 // PartitionUniqueKey is the unique key of a partition.
@@ -76,7 +77,7 @@ func NewSegmentStatFromProto(statProto *streamingpb.SegmentAssignmentStat) *Segm
 		MaxBinarySize:    statProto.MaxBinarySize,
 		CreateTime:       time.Unix(statProto.CreateTimestamp, 0),
 		BinLogCounter:    statProto.BinlogCounter,
-		LastModifiedTime: time.Unix(statProto.LastModifiedTimestamp, 0),
+		LastModifiedTime: tsoutil.PhysicalTime(statProto.GetEndTimeTick()),
 		Level:            lv,
 	}
 }

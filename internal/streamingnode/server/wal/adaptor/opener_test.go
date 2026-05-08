@@ -39,7 +39,7 @@ func TestOpenerAdaptorFailure(t *testing.T) {
 
 	catalog := mock_metastore.NewMockStreamingNodeCataLog(t)
 	catalog.EXPECT().GetConsumeCheckpoint(mock.Anything, mock.Anything).Return(
-		&streamingpb.WALCheckpoint{MessageId: &commonpb.MessageID{
+		&streamingpb.WALCheckpoint{MetaMessageId: &commonpb.MessageID{
 			Id:      "0",
 			WALName: commonpb.WALName_Test,
 		}}, nil)

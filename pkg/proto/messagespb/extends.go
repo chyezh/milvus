@@ -14,27 +14,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package flusherimpl
+package messagespb
 
-import (
-	"sync"
-
-	"github.com/milvus-io/milvus/pkg/v3/util/conc"
-)
-
-var (
-	execPool         *conc.Pool[any]
-	execPoolInitOnce sync.Once
-)
-
-func initExecPool() {
-	execPool = conc.NewPool[any](
-		128,
-		conc.WithPreAlloc(true),
-	)
+func (h *InsertMessageHeader) TotolRows() uint64 {
+	rows := uint64(0)
+	for _, p := range h.Partitions {
+		rows += p.Rows
+	}
+	return rows
 }
 
-func GetExecPool() *conc.Pool[any] {
-	execPoolInitOnce.Do(initExecPool)
-	return execPool
+func (h *DeleteMessageHeader) TotolRows() uint64 {
+	return h.Rows
 }

@@ -11,7 +11,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/rmq"
-	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
 func TestNewVChannelRecoveryInfoFromVChannelMeta(t *testing.T) {
@@ -34,9 +33,6 @@ func TestNewVChannelRecoveryInfoFromVChannelMeta(t *testing.T) {
 }
 
 func TestNewVChannelRecoveryInfoFromCreateCollectionMessage(t *testing.T) {
-	paramtable.Init()
-	paramtable.Get().StreamingCfg.WALRecoverySchemaExpirationTolerance.SwapTempValue("0")
-
 	schema1 := &schemapb.CollectionSchema{
 		Name: "test-collection-1",
 	}
@@ -217,40 +213,6 @@ func TestNewVChannelRecoveryInfoFromCreateCollectionMessage(t *testing.T) {
 	assert.False(t, shouldBeRemoved)
 	assert.False(t, info.dirty)
 	assert.Len(t, snapshot.CollectionInfo.Schemas, 2)
-
-	// UpdateFlushCheckpoint
-	info.UpdateFlushCheckpoint(&WALCheckpoint{
-		MessageID: msgID5,
-		TimeTick:  ts - 1,
-	})
-	assert.Equal(t, ts-1, info.flusherCheckpoint.TimeTick)
-	assert.False(t, info.dirty)
-
-	// schema change will be dropped by the flusher checkpoint.
-	info.UpdateFlushCheckpoint(&WALCheckpoint{
-		MessageID: msgID5,
-		TimeTick:  ts + 1,
-	})
-	assert.Equal(t, ts+1, info.flusherCheckpoint.TimeTick)
-	assert.True(t, info.dirty)
-	idx, schema2Saved = info.GetSchema(ts - 1)
-	assert.Equal(t, 0, idx)
-	assert.Equal(t, streamingpb.VChannelSchemaState_VCHANNEL_SCHEMA_STATE_DROPPED, info.meta.CollectionInfo.Schemas[idx].State)
-	assert.Equal(t, schema1.Name, schema2Saved.Name)
-	idx, schema2Saved = info.GetSchema(ts)
-	assert.Equal(t, 1, idx)
-	assert.Equal(t, streamingpb.VChannelSchemaState_VCHANNEL_SCHEMA_STATE_NORMAL, info.meta.CollectionInfo.Schemas[idx].State)
-	assert.Equal(t, schema2.Name, schema2Saved.Name)
-
-	snapshot, shouldBeRemoved = info.ConsumeDirtyAndGetSnapshot()
-	assert.NotNil(t, snapshot)
-	assert.False(t, shouldBeRemoved)
-	assert.False(t, info.dirty)
-	assert.Len(t, info.meta.CollectionInfo.Schemas, 1)
-	assert.True(t, proto.Equal(schema2, info.meta.CollectionInfo.Schemas[0].Schema))
-	assert.Len(t, snapshot.CollectionInfo.Schemas, 2)
-	assert.Equal(t, streamingpb.VChannelSchemaState_VCHANNEL_SCHEMA_STATE_DROPPED, snapshot.CollectionInfo.Schemas[0].State)
-	assert.Equal(t, streamingpb.VChannelSchemaState_VCHANNEL_SCHEMA_STATE_NORMAL, snapshot.CollectionInfo.Schemas[1].State)
 
 	// DropCollection
 	msg2 := message.NewDropCollectionMessageBuilderV1().
