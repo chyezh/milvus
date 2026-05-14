@@ -353,14 +353,14 @@ var (
 var registerDNOnce sync.Once
 
 // RegisterDataNode registers DataNode metrics
-func RegisterDataNode(registry *prometheus.Registry) {
+func RegisterDataNode(registry prometheus.Registerer) {
 	registerDNOnce.Do(func() {
 		registerDataNodeOnce(registry)
 	})
 }
 
 // registerDataNodeOnce registers DataNode metrics
-func registerDataNodeOnce(registry *prometheus.Registry) {
+func registerDataNodeOnce(registry prometheus.Registerer) {
 	registry.MustRegister(DataNodeNumFlowGraphs)
 	// input related
 	registry.MustRegister(DataNodeConsumeMsgRowsCount)

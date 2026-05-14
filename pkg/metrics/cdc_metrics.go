@@ -117,7 +117,7 @@ var CDCStreamRPCReconnectTimes = prometheus.NewCounterVec(
 	},
 )
 
-func RegisterCDC(registry *prometheus.Registry) {
+func RegisterCDC(registry prometheus.Registerer) {
 	registry.MustRegister(CDCReplicatedMessagesTotal)
 	registry.MustRegister(CDCReplicatedBytesTotal)
 	registry.MustRegister(CDCReplicateEndToEndLatency)

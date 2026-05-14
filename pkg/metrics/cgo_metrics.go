@@ -76,7 +76,7 @@ var (
 )
 
 // RegisterCGOMetrics registers the cgo metrics.
-func RegisterCGOMetrics(registry *prometheus.Registry) {
+func RegisterCGOMetrics(registry prometheus.Registerer) {
 	once.Do(func() {
 		registry.MustRegister(ActiveFutureTotal)
 		registry.MustRegister(RunningCgoCallTotal)

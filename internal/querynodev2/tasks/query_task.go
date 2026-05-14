@@ -81,7 +81,6 @@ func (t *QueryTask) PreExecute() error {
 		nodeID,
 		queryLabel,
 		t.collection.GetDBName(),
-		t.collection.GetResourceGroup(), // TODO: resource group and db name may be removed at runtime.
 		// should be refactor into metricsutil.observer in the future.
 	).Observe(inQueueDurationMS)
 

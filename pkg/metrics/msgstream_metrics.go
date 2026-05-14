@@ -59,7 +59,7 @@ var (
 )
 
 // RegisterMsgStreamMetrics registers msg stream metrics
-func RegisterMsgStreamMetrics(registry *prometheus.Registry) {
+func RegisterMsgStreamMetrics(registry prometheus.Registerer) {
 	registry.MustRegister(NumConsumers)
 	registry.MustRegister(MsgStreamRequestLatency)
 	registry.MustRegister(MsgStreamOpCounter)

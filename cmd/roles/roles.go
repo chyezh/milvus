@@ -68,10 +68,6 @@ var Registry *internalmetrics.MilvusRegistry
 
 func init() {
 	Registry = internalmetrics.NewMilvusRegistry()
-	metrics.Register(Registry.GoRegistry)
-	metrics.RegisterMetaMetrics(Registry.GoRegistry)
-	metrics.RegisterMsgStreamMetrics(Registry.GoRegistry)
-	metrics.RegisterStorageMetrics(Registry.GoRegistry)
 }
 
 // stopRocksmqIfUsed closes the RocksMQ if it is used.
@@ -109,7 +105,7 @@ func cleanLocalDir(path string) {
 func runComponent[T component](ctx context.Context,
 	localMsg bool,
 	creator func(context.Context, dependency.Factory) (T, error),
-	metricRegister func(*prometheus.Registry),
+	metricRegister func(prometheus.Registerer),
 ) *conc.Future[component] {
 	sign := make(chan struct{})
 	future := conc.Go(func() (component, error) {
@@ -126,7 +122,7 @@ func runComponent[T component](ctx context.Context,
 				return nil, errors.Wrap(err, "prepare component failed")
 			}
 			healthz.Register(role)
-			metricRegister(Registry.GoRegistry)
+			metricRegister(Registry.Registerer())
 			return role, nil
 		}
 
@@ -318,6 +314,16 @@ func (mr *MilvusRoles) setupLogger() {
 	}))
 }
 
+func registerMilvusMetrics(r *internalmetrics.MilvusRegistry) {
+	r.InitResourceGroupRegisterer(paramtable.GetRole())
+	r.RegisterBaseCollectors()
+	registerer := r.Registerer()
+	metrics.Register(registerer)
+	metrics.RegisterMetaMetrics(registerer)
+	metrics.RegisterMsgStreamMetrics(registerer)
+	metrics.RegisterStorageMetrics(registerer)
+}
+
 // Register serves prometheus http service
 func setupPrometheusHTTPServer(r *internalmetrics.MilvusRegistry) {
 	log.Info("setupPrometheusHTTPServer")
@@ -453,6 +459,8 @@ func (mr *MilvusRoles) Run() {
 	expr.Register("param", paramtable.Get())
 	mr.setupLogger()
 	defer log.Cleanup()
+
+	registerMilvusMetrics(Registry)
 
 	http.ServeHTTP()
 	setupPrometheusHTTPServer(Registry)

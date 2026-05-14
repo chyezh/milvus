@@ -19,24 +19,22 @@
 package metrics
 
 import (
+	"sync"
+
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	pkgmetrics "github.com/milvus-io/milvus/pkg/v3/metrics"
-	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
 func NewMilvusRegistry() *MilvusRegistry {
 	r := &MilvusRegistry{
-		GoRegistry: prometheus.NewRegistry(),
-		CRegistry:  NewCRegistry(),
+		GoRegistry:   prometheus.NewRegistry(),
+		CRegistry:    NewCRegistry(),
+		goRegisterer: nil,
 	}
-
-	r.GoRegistry.MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
-	r.GoRegistry.MustRegister(prometheus.NewGoCollector())
-
+	r.goRegisterer = r.GoRegistry
 	return r
 }
 
@@ -44,6 +42,40 @@ func NewMilvusRegistry() *MilvusRegistry {
 type MilvusRegistry struct {
 	GoRegistry *prometheus.Registry
 	CRegistry  *CRegistry
+
+	goRegisterer          prometheus.Registerer
+	registerBaseCollector sync.Once
+}
+
+func (r *MilvusRegistry) InitResourceGroupRegisterer(role string) {
+	if r.GoRegistry == nil {
+		r.goRegisterer = nil
+		return
+	}
+
+	resourceGroup := sessionutil.GetResourceGroupNameFromEnv(role)
+	if resourceGroup == "" {
+		r.goRegisterer = r.GoRegistry
+		return
+	}
+	r.goRegisterer = prometheus.WrapRegistererWith(
+		prometheus.Labels{pkgmetrics.ResourceGroupLabelName: resourceGroup},
+		r.GoRegistry,
+	)
+}
+
+func (r *MilvusRegistry) Registerer() prometheus.Registerer {
+	if r.goRegisterer == nil {
+		return r.GoRegistry
+	}
+	return r.goRegisterer
+}
+
+func (r *MilvusRegistry) RegisterBaseCollectors() {
+	r.registerBaseCollector.Do(func() {
+		r.Registerer().MustRegister(prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
+		r.Registerer().MustRegister(prometheus.NewGoCollector())
+	})
 }
 
 // Gather implements Gatherer.
@@ -55,58 +87,13 @@ func (r *MilvusRegistry) Gather() ([]*dto.MetricFamily, error) {
 	if err != nil {
 		return nil, err
 	}
-	resourceGroup := resourceGroupLabelValue()
 	if r.CRegistry == nil {
-		return injectResourceGroupLabel(resGo, resourceGroup), nil
+		return resGo, nil
 	}
 	resC, err := r.CRegistry.Gather()
 	if err != nil {
 		// if gather c metrics fail, ignore the error and return go metrics
-		return injectResourceGroupLabel(resGo, resourceGroup), nil
+		return resGo, nil
 	}
-	return injectResourceGroupLabel(append(resGo, resC...), resourceGroup), nil
-}
-
-func resourceGroupLabelValue() string {
-	return sessionutil.GetResourceGroupNameFromEnv(paramtable.GetRole())
-}
-
-func injectResourceGroupLabel(metricFamilies []*dto.MetricFamily, resourceGroup string) []*dto.MetricFamily {
-	if resourceGroup == "" {
-		return metricFamilies
-	}
-
-	for i, mf := range metricFamilies {
-		if mf == nil {
-			continue
-		}
-
-		var cloned *dto.MetricFamily
-		for j, metric := range mf.GetMetric() {
-			if metric == nil || hasResourceGroupLabel(metric) {
-				continue
-			}
-			if cloned == nil {
-				cloned = proto.Clone(mf).(*dto.MetricFamily)
-			}
-			cloned.Metric[j].Label = append(cloned.Metric[j].Label, &dto.LabelPair{
-				Name:  proto.String(pkgmetrics.ResourceGroupLabelName),
-				Value: proto.String(resourceGroup),
-			})
-		}
-
-		if cloned != nil {
-			metricFamilies[i] = cloned
-		}
-	}
-	return metricFamilies
-}
-
-func hasResourceGroupLabel(metric *dto.Metric) bool {
-	for _, label := range metric.GetLabel() {
-		if label.GetName() == pkgmetrics.ResourceGroupLabelName {
-			return true
-		}
-	}
-	return false
+	return append(resGo, resC...), nil
 }

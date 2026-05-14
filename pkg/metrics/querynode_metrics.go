@@ -200,7 +200,6 @@ var (
 			nodeIDLabelName,
 			queryTypeLabelName,
 			databaseLabelName,
-			ResourceGroupLabelName,
 		})
 
 	QueryNodeSQPerUserLatencyInQueue = prometheus.NewHistogramVec(
@@ -640,7 +639,6 @@ var (
 		}, []string{
 			nodeIDLabelName,
 			databaseLabelName,
-			ResourceGroupLabelName,
 			queryTypeLabelName,
 		},
 	)
@@ -655,7 +653,6 @@ var (
 		}, []string{
 			nodeIDLabelName,
 			databaseLabelName,
-			ResourceGroupLabelName,
 			queryTypeLabelName,
 		},
 	)
@@ -684,7 +681,6 @@ var (
 		}, []string{
 			nodeIDLabelName,
 			databaseLabelName,
-			ResourceGroupLabelName,
 			queryTypeLabelName,
 		})
 
@@ -698,7 +694,6 @@ var (
 		}, []string{
 			nodeIDLabelName,
 			databaseLabelName,
-			ResourceGroupLabelName,
 			queryTypeLabelName,
 		})
 
@@ -725,7 +720,6 @@ var (
 		}, []string{
 			nodeIDLabelName,
 			databaseLabelName,
-			ResourceGroupLabelName,
 		})
 
 	// QueryNodeDiskCacheLoadBytes records the number of bytes loaded from disk cache.
@@ -738,11 +732,10 @@ var (
 		}, []string{
 			nodeIDLabelName,
 			databaseLabelName,
-			ResourceGroupLabelName,
 		})
 
 	// QueryNodeDiskCacheLoadDuration records the total time cost of loading segments from disk cache.
-	// With db and resource group labels.
+	// With db labels.
 	QueryNodeDiskCacheLoadDuration = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: milvusNamespace,
@@ -752,7 +745,6 @@ var (
 		}, []string{
 			nodeIDLabelName,
 			databaseLabelName,
-			ResourceGroupLabelName,
 		})
 
 	// QueryNodeDiskCacheLoadGlobalDuration records the global time cost of loading segments from disk cache.
@@ -777,7 +769,6 @@ var (
 		}, []string{
 			nodeIDLabelName,
 			databaseLabelName,
-			ResourceGroupLabelName,
 		})
 
 	// QueryNodeDiskCacheEvictBytes records the number of bytes evicted from disk cache.
@@ -790,7 +781,6 @@ var (
 		}, []string{
 			nodeIDLabelName,
 			databaseLabelName,
-			ResourceGroupLabelName,
 		})
 
 	// QueryNodeDiskCacheEvictDuration records the total time cost of evicting segments from disk cache.
@@ -803,7 +793,6 @@ var (
 		}, []string{
 			nodeIDLabelName,
 			databaseLabelName,
-			ResourceGroupLabelName,
 		})
 
 	// QueryNodeDiskCacheEvictGlobalDuration records the global time cost of evicting segments from disk cache.
@@ -932,7 +921,7 @@ var (
 )
 
 // RegisterQueryNode registers QueryNode metrics
-func RegisterQueryNode(registry *prometheus.Registry) {
+func RegisterQueryNode(registry prometheus.Registerer) {
 	registry.MustRegister(QueryNodeNumCollections)
 	registry.MustRegister(QueryNodeNumPartitions)
 	registry.MustRegister(QueryNodeNumSegments)

@@ -483,7 +483,7 @@ var (
 )
 
 // RegisterProxy registers Proxy metrics
-func RegisterProxy(registry *prometheus.Registry) {
+func RegisterProxy(registry prometheus.Registerer) {
 	registry.MustRegister(ProxyReceivedNQ)
 	registry.MustRegister(ProxySearchVectors)
 	registry.MustRegister(ProxyInsertVectors)

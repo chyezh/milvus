@@ -94,7 +94,7 @@ var (
 )
 
 // RegisterLoggingMetrics registers logging metrics
-func RegisterLoggingMetrics(registry *prometheus.Registry) {
+func RegisterLoggingMetrics(registry prometheus.Registerer) {
 	LoggingMetricsRegisterOnce.Do(func() {
 		registry.MustRegister(LoggingPendingWriteTotal)
 		registry.MustRegister(LoggingTruncatedWriteTotal)

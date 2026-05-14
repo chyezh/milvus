@@ -151,7 +151,7 @@ var (
 			Subsystem: typeutil.QueryCoordRole,
 			Name:      "resource_group_info",
 			Help:      "all resource group detail info in query coord",
-		}, []string{ResourceGroupLabelName, NodeIDLabelName})
+		}, []string{NodeIDLabelName})
 
 	QueryCoordResourceGroupReplicaTotal = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -159,7 +159,7 @@ var (
 			Subsystem: typeutil.QueryCoordRole,
 			Name:      "resource_group_replica_total",
 			Help:      "total replica number of resource group",
-		}, []string{ResourceGroupLabelName})
+		}, []string{})
 
 	QueryCoordReplicaRONodeTotal = prometheus.NewGauge(
 		prometheus.GaugeOpts{
@@ -179,7 +179,7 @@ var (
 )
 
 // RegisterQueryCoord registers QueryCoord metrics
-func RegisterQueryCoord(registry *prometheus.Registry) {
+func RegisterQueryCoord(registry prometheus.Registerer) {
 	registry.MustRegister(QueryCoordNumCollections)
 	registry.MustRegister(QueryCoordNumPartitions)
 	registry.MustRegister(QueryCoordLoadCount)

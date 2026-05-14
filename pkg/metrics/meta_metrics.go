@@ -58,7 +58,7 @@ var (
 )
 
 // RegisterMetaMetrics registers meta metrics
-func RegisterMetaMetrics(registry *prometheus.Registry) {
+func RegisterMetaMetrics(registry prometheus.Registerer) {
 	registry.MustRegister(MetaKvSize)
 	registry.MustRegister(MetaRequestLatency)
 	registry.MustRegister(MetaOpCounter)

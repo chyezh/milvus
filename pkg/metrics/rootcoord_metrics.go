@@ -249,7 +249,7 @@ var (
 )
 
 // RegisterRootCoord registers RootCoord metrics
-func RegisterMixCoord(registry *prometheus.Registry) {
+func RegisterMixCoord(registry prometheus.Registerer) {
 	registry.Register(RootCoordProxyCounter)
 
 	// for time tick

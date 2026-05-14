@@ -580,7 +580,7 @@ var (
 )
 
 // RegisterStreamingServiceClient registers streaming service client metrics
-func RegisterStreamingServiceClient(registry *prometheus.Registry) {
+func RegisterStreamingServiceClient(registry prometheus.Registerer) {
 	StreamingServiceClientRegisterOnce.Do(func() {
 		registry.MustRegister(StreamingServiceClientResumingProducerTotal)
 		registry.MustRegister(StreamingServiceClientProducerTotal)
@@ -597,7 +597,7 @@ func RegisterStreamingServiceClient(registry *prometheus.Registry) {
 }
 
 // registerStreamingCoord registers streaming coord metrics
-func registerStreamingCoord(registry *prometheus.Registry) {
+func registerStreamingCoord(registry prometheus.Registerer) {
 	registry.MustRegister(StreamingCoordPChannelInfo)
 	registry.MustRegister(StreamingCoordVChannelTotal)
 	registry.MustRegister(StreamingCoordAssignmentVersion)
@@ -610,7 +610,7 @@ func registerStreamingCoord(registry *prometheus.Registry) {
 }
 
 // RegisterStreamingNode registers streaming node metrics
-func RegisterStreamingNode(registry *prometheus.Registry) {
+func RegisterStreamingNode(registry prometheus.Registerer) {
 	registry.MustRegister(StreamingNodeProducerTotal)
 	registry.MustRegister(StreamingNodeProduceInflightTotal)
 	registry.MustRegister(StreamingNodeConsumerTotal)
@@ -626,7 +626,7 @@ func RegisterStreamingNode(registry *prometheus.Registry) {
 }
 
 // registerWAL registers wal metrics
-func registerWAL(registry *prometheus.Registry) {
+func registerWAL(registry prometheus.Registerer) {
 	registry.MustRegister(WALInfo)
 	registry.MustRegister(WALLastAllocatedTimeTick)
 	registry.MustRegister(WALAllocateTimeTickTotal)

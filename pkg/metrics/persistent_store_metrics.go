@@ -140,7 +140,7 @@ var (
 )
 
 // RegisterStorageMetrics registers storage metrics
-func RegisterStorageMetrics(registry *prometheus.Registry) {
+func RegisterStorageMetrics(registry prometheus.Registerer) {
 	registry.MustRegister(PersistentDataKvSize)
 	registry.MustRegister(PersistentDataRequestLatency)
 	registry.MustRegister(PersistentDataOpCounter)

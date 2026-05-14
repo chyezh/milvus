@@ -26,7 +26,6 @@ import (
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 
 	pkgmetrics "github.com/milvus-io/milvus/pkg/v3/metrics"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
@@ -56,7 +55,7 @@ func TestMilvusRegistryGather_NilCRegistry(t *testing.T) {
 	assert.Greater(t, len(res), 0)
 }
 
-func TestMilvusRegistryGather_InjectsResourceGroupLabel(t *testing.T) {
+func TestMilvusRegistryRegisterer_InjectsResourceGroupConstLabel(t *testing.T) {
 	t.Setenv("MILVUS_SERVER_LABEL_RESOURCE_GROUP", "rg-default")
 	t.Setenv("MILVUS_SERVER_LABEL_QN_RESOURCE_GROUP", "rg-querynode")
 	paramtable.SetRole(typeutil.QueryNodeRole)
@@ -64,32 +63,23 @@ func TestMilvusRegistryGather_InjectsResourceGroupLabel(t *testing.T) {
 		paramtable.SetRole("")
 	})
 
-	reg := prometheus.NewRegistry()
+	r := NewMilvusRegistry()
+	r.CRegistry = nil
+	r.InitResourceGroupRegisterer(paramtable.GetRole())
+
 	plainGauge := prometheus.NewGauge(prometheus.GaugeOpts{
-		Name: "milvus_registry_test_plain_metric",
+		Name: "milvus_registry_test_const_label_metric",
 		Help: "plain metric",
 	})
-	existingRGGauge := prometheus.NewGaugeVec(prometheus.GaugeOpts{
-		Name: "milvus_registry_test_existing_rg_metric",
-		Help: "metric with semantic rg label",
-	}, []string{pkgmetrics.ResourceGroupLabelName})
 	plainGauge.Set(1)
-	existingRGGauge.WithLabelValues("semantic-rg").Set(2)
-	reg.MustRegister(plainGauge, existingRGGauge)
-
-	r := &MilvusRegistry{
-		GoRegistry: reg,
-		CRegistry:  nil,
-	}
+	r.Registerer().MustRegister(plainGauge)
 	res, err := r.Gather()
 	require.NoError(t, err)
 
-	assertMetricHasResourceGroupLabel(t, res, "milvus_registry_test_plain_metric", "rg-querynode")
-	assertMetricHasResourceGroupLabel(t, res, "milvus_registry_test_existing_rg_metric", "semantic-rg")
-	assertMetricResourceGroupLabelCount(t, res, "milvus_registry_test_existing_rg_metric", 1)
+	assertMetricHasResourceGroupLabel(t, res, "milvus_registry_test_const_label_metric", "rg-querynode")
 }
 
-func TestMilvusRegistryGather_LeavesMetricsUnchangedWithoutResourceGroup(t *testing.T) {
+func TestMilvusRegistryRegisterer_UsesRawRegistryWithoutResourceGroup(t *testing.T) {
 	unsetEnv(t, "MILVUS_SERVER_LABEL_RESOURCE_GROUP")
 	unsetEnv(t, "MILVUS_SERVER_LABEL_QN_RESOURCE_GROUP")
 	paramtable.SetRole(typeutil.QueryNodeRole)
@@ -97,59 +87,66 @@ func TestMilvusRegistryGather_LeavesMetricsUnchangedWithoutResourceGroup(t *test
 		paramtable.SetRole("")
 	})
 
-	reg := prometheus.NewRegistry()
+	r := NewMilvusRegistry()
+	r.CRegistry = nil
+	r.InitResourceGroupRegisterer(paramtable.GetRole())
+
 	gauge := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "milvus_registry_test_no_resource_group_metric",
 		Help: "plain metric",
 	})
 	gauge.Set(1)
-	reg.MustRegister(gauge)
-
-	r := &MilvusRegistry{
-		GoRegistry: reg,
-		CRegistry:  nil,
-	}
+	r.Registerer().MustRegister(gauge)
 	res, err := r.Gather()
 	require.NoError(t, err)
 
 	assertMetricResourceGroupLabelCount(t, res, "milvus_registry_test_no_resource_group_metric", 0)
 }
 
-func TestInjectResourceGroupLabel_AddsLabelToMetricFamilies(t *testing.T) {
-	metricType := dto.MetricType_GAUGE
-	metricWithoutRG := &dto.MetricFamily{
-		Name: proto.String("c_metric_without_rg"),
-		Help: proto.String("c metric without rg"),
-		Type: &metricType,
-		Metric: []*dto.Metric{
-			{
-				Gauge: &dto.Gauge{Value: proto.Float64(1)},
-			},
-		},
-	}
-	metricFamilies := []*dto.MetricFamily{
-		metricWithoutRG,
-		{
-			Name: proto.String("c_metric_with_rg"),
-			Help: proto.String("c metric with rg"),
-			Type: &metricType,
-			Metric: []*dto.Metric{
-				{
-					Label: []*dto.LabelPair{
-						{Name: proto.String(pkgmetrics.ResourceGroupLabelName), Value: proto.String("semantic-rg")},
-					},
-					Gauge: &dto.Gauge{Value: proto.Float64(2)},
-				},
-			},
-		},
-	}
+func TestMilvusRegistryGather_DoesNotInjectResourceGroupLabel(t *testing.T) {
+	t.Setenv("MILVUS_SERVER_LABEL_RESOURCE_GROUP", "rg-default")
+	paramtable.SetRole(typeutil.QueryNodeRole)
+	t.Cleanup(func() {
+		paramtable.SetRole("")
+	})
 
-	res := injectResourceGroupLabel(metricFamilies, "rg-process")
+	r := NewMilvusRegistry()
+	r.CRegistry = nil
+	gauge := prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "milvus_registry_test_raw_metric",
+		Help: "plain metric",
+	})
+	gauge.Set(1)
+	r.GoRegistry.MustRegister(gauge)
 
-	assertMetricHasResourceGroupLabel(t, res, "c_metric_without_rg", "rg-process")
-	assertMetricHasResourceGroupLabel(t, res, "c_metric_with_rg", "semantic-rg")
-	assertMetricResourceGroupLabelCount(t, res, "c_metric_with_rg", 1)
-	assertMetricResourceGroupLabelCount(t, []*dto.MetricFamily{metricWithoutRG}, "c_metric_without_rg", 0)
+	res, err := r.Gather()
+	require.NoError(t, err)
+
+	assertMetricResourceGroupLabelCount(t, res, "milvus_registry_test_raw_metric", 0)
+}
+
+func TestMilvusRegistryRegisterBaseCollectors_UsesResourceGroupRegisterer(t *testing.T) {
+	t.Setenv("MILVUS_SERVER_LABEL_RESOURCE_GROUP", "rg-default")
+	paramtable.SetRole(typeutil.ProxyRole)
+	t.Cleanup(func() {
+		paramtable.SetRole("")
+	})
+
+	r := NewMilvusRegistry()
+	r.CRegistry = nil
+	r.InitResourceGroupRegisterer(paramtable.GetRole())
+	r.RegisterBaseCollectors()
+
+	res, err := r.Gather()
+	require.NoError(t, err)
+
+	for _, mf := range res {
+		if mf.GetName() == "go_goroutines" {
+			assertMetricHasResourceGroupLabel(t, res, "go_goroutines", "rg-default")
+			return
+		}
+	}
+	t.Fatal("go_goroutines metric not found")
 }
 
 func assertMetricHasResourceGroupLabel(t *testing.T, metricFamilies []*dto.MetricFamily, metricName string, expected string) {

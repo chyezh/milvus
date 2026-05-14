@@ -107,7 +107,6 @@ func (t *SearchTask) PreExecute() error {
 		nodeID,
 		metrics.SearchLabel,
 		t.collection.GetDBName(),
-		t.collection.GetResourceGroup(),
 		// TODO: resource group and db name may be removed at runtime,
 		// should be refactor into metricsutil.observer in the future.
 	).Observe(inQueueDurationMS)
