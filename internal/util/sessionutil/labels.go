@@ -63,6 +63,10 @@ func NewServerLabel(role string, label string) string {
 	return SupportedLabelPrefix + strings.ToUpper(role) + "_" + strings.ToUpper(label)
 }
 
+func GetResourceGroupNameFromEnv(role string) string {
+	return getServerLabelsFromEnv(role)[LabelResourceGroup]
+}
+
 func getServerLabelsFromEnv(role string) map[string]string {
 	labelsSpecifiedByRole := make(map[string]string)
 	labels := make(map[string]string)

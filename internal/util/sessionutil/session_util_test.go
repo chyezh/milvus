@@ -955,3 +955,11 @@ func TestGetResourceGroupName(t *testing.T) {
 		assert.Equal(t, "my_rg", s.GetResourceGroupName())
 	})
 }
+
+func TestGetResourceGroupNameFromEnv(t *testing.T) {
+	t.Setenv(NewServerLabel("", LabelResourceGroup), "rg-default")
+	t.Setenv(NewServerLabel(typeutil.QueryNodeRole, LabelResourceGroup), "rg-querynode")
+
+	assert.Equal(t, "rg-querynode", GetResourceGroupNameFromEnv(typeutil.QueryNodeRole))
+	assert.Equal(t, "rg-default", GetResourceGroupNameFromEnv(typeutil.DataNodeRole))
+}
