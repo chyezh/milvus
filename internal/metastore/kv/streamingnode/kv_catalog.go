@@ -314,6 +314,50 @@ func (c *catalog) DropSegmentAssignments(ctx context.Context, pChannelName strin
 	})
 }
 
+// ListSegmentDataVersionSummaries lists the segment data version summaries of the pchannel.
+func (c *catalog) ListSegmentDataVersionSummaries(ctx context.Context, pChannelName string) (map[string]*streamingpb.SegmentDataVersionSummary, error) {
+	prefix := buildSegmentDataVersionSummaryPrefix(pChannelName)
+	keys, values, err := c.metaKV.LoadWithPrefix(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+
+	summaries := make(map[string]*streamingpb.SegmentDataVersionSummary, len(values))
+	for idx, value := range values {
+		vchannel := strings.TrimPrefix(keys[idx], prefix)
+		if vchannel == "" || strings.Contains(vchannel, "/") {
+			return nil, errors.Errorf("mismatched segment data version summary recovery meta, key %s", keys[idx])
+		}
+		summary := &streamingpb.SegmentDataVersionSummary{}
+		if err = proto.Unmarshal([]byte(value), summary); err != nil {
+			return nil, errors.Wrapf(err, "unmarshal pchannel %s failed", keys[idx])
+		}
+		summaries[vchannel] = summary
+	}
+	return summaries, nil
+}
+
+// SaveSegmentDataVersionSummaries saves segment data version summaries to meta storage.
+func (c *catalog) SaveSegmentDataVersionSummaries(ctx context.Context, pChannelName string, summaries map[string]*streamingpb.SegmentDataVersionSummary) error {
+	kvs := make(map[string]string, len(summaries))
+	for vchannel, summary := range summaries {
+		key := buildSegmentDataVersionSummaryKey(pChannelName, vchannel)
+		data, err := proto.Marshal(summary)
+		if err != nil {
+			return errors.Wrapf(err, "marshal segment data version summary for vchannel %s at pchannel %s failed", vchannel, pChannelName)
+		}
+		kvs[key] = string(data)
+	}
+
+	maxTxnNum := paramtable.Get().MetaStoreCfg.MaxEtcdTxnNum.GetAsInt()
+	if len(kvs) > 0 {
+		return etcd.SaveByBatchWithLimit(kvs, maxTxnNum, func(partialKvs map[string]string) error {
+			return c.metaKV.MultiSave(ctx, partialKvs)
+		})
+	}
+	return nil
+}
+
 // GetConsumeCheckpoint gets the consuming checkpoint of the wal.
 func (c *catalog) GetConsumeCheckpoint(ctx context.Context, pchannelName string) (*streamingpb.WALCheckpoint, error) {
 	key := buildConsumeCheckpointKey(pchannelName)
@@ -387,6 +431,11 @@ func buildSegmentAssignmentPrefix(pChannelName string) string {
 	return buildWALPrefix(pChannelName) + DirectorySegmentAssign + "/"
 }
 
+// buildSegmentDataVersionSummaryPrefix returns the prefix for all segment data version summaries under a pchannel.
+func buildSegmentDataVersionSummaryPrefix(pChannelName string) string {
+	return buildWALPrefix(pChannelName) + DirectorySegmentDataVersionSummary + "/"
+}
+
 // buildTransformLogPrefix returns the prefix for transform log metadata under a pchannel.
 func buildTransformLogPrefix(pChannelName string) string {
 	return buildWALPrefix(pChannelName) + DirectoryTransformLog + "/"
@@ -407,6 +456,11 @@ func buildVChannelSchemaKey(pChannelName string, vchannelName string, version ui
 // buildSegmentAssignmentKey returns the key for a specific segment assignment.
 func buildSegmentAssignmentKey(pChannelName string, segmentID int64) string {
 	return buildSegmentAssignmentPrefix(pChannelName) + strconv.FormatInt(segmentID, 10)
+}
+
+// buildSegmentDataVersionSummaryKey returns the key for a specific vchannel segment data version summary.
+func buildSegmentDataVersionSummaryKey(pChannelName string, vchannelName string) string {
+	return buildSegmentDataVersionSummaryPrefix(pChannelName) + vchannelName
 }
 
 // buildTransformLogKey returns the key for a specific transform log's metadata.

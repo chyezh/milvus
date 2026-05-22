@@ -14,6 +14,7 @@ type ReadOption struct {
 	Name               string
 	VChannel           string
 	StartAfterTimeTick uint64
+	EndTimeTick        uint64
 }
 
 type Scanner interface {

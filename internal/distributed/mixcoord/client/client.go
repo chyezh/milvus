@@ -1737,6 +1737,17 @@ func (c *Client) GetShardLeaders(ctx context.Context, req *querypb.GetShardLeade
 	})
 }
 
+func (c *Client) GetStreamingNodeQueryViewResources(ctx context.Context, req *querypb.GetStreamingNodeQueryViewResourcesRequest, opts ...grpc.CallOption) (*querypb.GetStreamingNodeQueryViewResourcesResponse, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.grpcClient.GetNodeID())),
+	)
+	return wrapGrpcCall(ctx, c, func(client MixCoordClient) (*querypb.GetStreamingNodeQueryViewResourcesResponse, error) {
+		return client.GetStreamingNodeQueryViewResources(ctx, req)
+	})
+}
+
 func (c *Client) CreateResourceGroup(ctx context.Context, req *milvuspb.CreateResourceGroupRequest, opts ...grpc.CallOption) (*commonpb.Status, error) {
 	req = typeutil.Clone(req)
 	commonpbutil.UpdateMsgBase(

@@ -17,6 +17,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/txn"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/recovery"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/util"
 	"github.com/milvus-io/milvus/pkg/v3/log"
@@ -132,6 +133,10 @@ func (o *openerAdaptorImpl) Open(ctx context.Context, opt *wal.OpenOption) (wal.
 	return wal, nil
 }
 
+func loadConfigListenerForRecovery() walview.LoadConfigListener {
+	return resource.Resource().ViewResourceRegistry()
+}
+
 // determineWALName determines which walName to use for the given channel.
 func (o *openerAdaptorImpl) determineWALName(ctx context.Context, opt *wal.OpenOption) (message.WALName, error) {
 	walName := message.WALNameUnknown
@@ -206,7 +211,13 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 		roWAL.Close()
 		return nil, errors.Wrap(err, "when building interceptor params")
 	}
-	rs, snapshot, err := recovery.RecoverRecoveryStorage(ctx, newRecoveryStreamBuilder(roWAL), cp, param.LastTimeTickMessage)
+	rs, snapshot, err := recovery.RecoverRecoveryStorage(
+		ctx,
+		newRecoveryStreamBuilder(roWAL),
+		cp,
+		param.LastTimeTickMessage,
+		recovery.WithLoadConfigListener(loadConfigListenerForRecovery()),
+	)
 	if err != nil {
 		param.Clear()
 		roWAL.Close()

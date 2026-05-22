@@ -830,6 +830,12 @@ func (s *Server) GetShardLeaders(ctx context.Context, req *querypb.GetShardLeade
 	}, nil
 }
 
+func (s *Server) GetStreamingNodeQueryViewResources(ctx context.Context, req *querypb.GetStreamingNodeQueryViewResourcesRequest) (*querypb.GetStreamingNodeQueryViewResourcesResponse, error) {
+	return &querypb.GetStreamingNodeQueryViewResourcesResponse{
+		Status: merr.Status(merr.WrapErrServiceUnimplemented(errors.New("GetStreamingNodeQueryViewResources is not implemented"))),
+	}, nil
+}
+
 func (s *Server) CheckHealth(ctx context.Context, req *milvuspb.CheckHealthRequest) (*milvuspb.CheckHealthResponse, error) {
 	if err := merr.CheckHealthy(s.State()); err != nil {
 		return &milvuspb.CheckHealthResponse{Status: merr.Status(err), IsHealthy: false, Reasons: []string{err.Error()}}, nil

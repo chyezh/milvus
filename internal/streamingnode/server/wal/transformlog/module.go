@@ -169,6 +169,14 @@ func (m *Module) Read(ctx context.Context, opt transformlogapi.ReadOption) trans
 	return log.log.Read(ctx, opt)
 }
 
+func (m *Module) LatestTransformTimeTick(vchannel string) uint64 {
+	log := m.getLog(vchannel)
+	if log == nil {
+		return 0
+	}
+	return log.log.LatestTimeTick()
+}
+
 func (m *Module) DataFrontier(scope moduleapi.Scope) walcheckpoint.Barrier {
 	owners := make([]transformLogFrontierOwner, 0)
 	switch scope.Type {

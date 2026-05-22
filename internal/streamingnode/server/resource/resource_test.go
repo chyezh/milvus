@@ -30,13 +30,16 @@ func TestInit(t *testing.T) {
 		OptETCD(&clientv3.Client{}),
 		OptMixCoordClient(syncutil.NewFuture[types.MixCoordClient]()),
 		OptStreamingNodeCatalog(mock_metastore.NewMockStreamingNodeCataLog(t)),
+		OptStreamingNodeQueryViewCatalog(noopStreamingNodeQueryViewCatalog{}),
 	)
 	assert.NotNil(t, Resource().TSOAllocator())
 	assert.NotNil(t, Resource().ETCD())
 	assert.NotNil(t, Resource().MixCoordClient())
+	assert.NotNil(t, Resource().ViewResourceRegistry())
 	Release()
 }
 
 func TestInitForTest(t *testing.T) {
 	InitForTest(t)
+	assert.NotNil(t, Resource().ViewResourceRegistry())
 }

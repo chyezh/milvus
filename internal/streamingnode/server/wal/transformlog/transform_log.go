@@ -21,6 +21,7 @@ type TransformLog interface {
 
 	Recover(context.Context, *streamingpb.VChannelTransformLogMeta) (RecoverResult, error)
 	SnapshotMeta() *streamingpb.VChannelTransformLogMeta
+	LatestTimeTick() uint64
 	DataCheckpointTimeTick() uint64
 	DataBarrierTimeTick() uint64
 	MaterializedTimeTick() uint64
@@ -234,7 +235,7 @@ func (t *transformLog) Read(ctx context.Context, opt transformlogapi.ReadOption)
 		return transformlogapi.NewErrorScanner(opt.Name, errors.Wrap(transformlogapi.ErrStartPointTruncated, "start point is truncated"))
 	}
 	chunks := snapshotChunks(t.retainedChunks)
-	scanner := newScanner(opt.Name, opt.StartAfterTimeTick, liveAfterTimeTick(opt.StartAfterTimeTick, chunks))
+	scanner := newScanner(opt.Name, opt.StartAfterTimeTick, opt.EndTimeTick, liveAfterTimeTick(opt.StartAfterTimeTick, chunks))
 	t.registerScanner(scanner)
 	t.mu.Unlock()
 	go scanner.send(ctx, t, chunks)
@@ -299,6 +300,12 @@ func (t *transformLog) SnapshotMeta() *streamingpb.VChannelTransformLogMeta {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return cloneMeta(t.meta)
+}
+
+func (t *transformLog) LatestTimeTick() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return max(t.meta.GetCheckpointTimeTick(), t.buffer.DataTimeTick())
 }
 
 func (t *transformLog) DataCheckpointTimeTick() uint64 {

@@ -375,6 +375,12 @@ type StreamingNodeCataLog interface {
 	// DropSegmentAssignments drops retained segment assignment recovery meta for the wal.
 	DropSegmentAssignments(ctx context.Context, pChannelName string, segmentIDs []int64) error
 
+	// ListSegmentDataVersionSummaries lists segment data version summaries for the wal.
+	ListSegmentDataVersionSummaries(ctx context.Context, pChannelName string) (map[string]*streamingpb.SegmentDataVersionSummary, error)
+
+	// SaveSegmentDataVersionSummaries saves segment data version summaries for the wal.
+	SaveSegmentDataVersionSummaries(ctx context.Context, pChannelName string, summaries map[string]*streamingpb.SegmentDataVersionSummary) error
+
 	// GetConsumeCheckpoint gets the consuming checkpoint of the wal.
 	// Return nil, nil if the checkpoint is not exist.
 	GetConsumeCheckpoint(ctx context.Context, pChannelName string) (*streamingpb.WALCheckpoint, error)

@@ -128,6 +128,7 @@ func (h *SNQueryViewHandler) getOrCreateShard(shardID qviews.ShardID) *snShardVi
 	shard, ok := h.shards[shardID]
 	if !ok {
 		shard = &snShardView{
+			shardID: shardID,
 			views:   make(map[qviews.QueryViewVersion]*snViewEntry),
 			catalog: h.catalog,
 			resMgr:  h.resMgr,

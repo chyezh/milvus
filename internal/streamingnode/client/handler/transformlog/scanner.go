@@ -110,6 +110,7 @@ func (s *Stream) Subscribe(ctx context.Context, opt transformlogapi.ReadOption) 
 				SubscriptionId:     sub.subscriptionID,
 				Vchannel:           opt.VChannel,
 				StartAfterTimeTick: opt.StartAfterTimeTick,
+				EndTimeTick:        opt.EndTimeTick,
 			},
 		},
 	}); err != nil {

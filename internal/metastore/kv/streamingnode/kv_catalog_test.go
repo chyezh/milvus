@@ -17,6 +17,7 @@ import (
 	"github.com/milvus-io/milvus/internal/kv/mocks"
 	kvfactory "github.com/milvus-io/milvus/internal/util/dependency/kv"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
@@ -116,6 +117,34 @@ func TestCatalogTransformLogMeta(t *testing.T) {
 	kv.EXPECT().MultiRemove(mock.Anything, []string{buildTransformLogKey("p1", "v1")}).
 		Return(nil)
 	require.NoError(t, catalog.DropTransformLogMeta(ctx, "p1", []string{"v1"}))
+}
+
+func TestCatalogSegmentDataVersionSummary(t *testing.T) {
+	kv := mocks.NewMetaKv(t)
+	summary := &streamingpb.SegmentDataVersionSummary{
+		DataVersion: &viewpb.DataVersion{StreamingVersion: 10, CompactVersion: 2},
+	}
+	value, err := proto.Marshal(summary)
+	require.NoError(t, err)
+
+	kv.EXPECT().LoadWithPrefix(mock.Anything, buildSegmentDataVersionSummaryPrefix("p1")).
+		Return([]string{buildSegmentDataVersionSummaryKey("p1", "v1")}, []string{string(value)}, nil)
+	catalog := NewCataLog(kv)
+	ctx := context.Background()
+	summaries, err := catalog.ListSegmentDataVersionSummaries(ctx, "p1")
+	require.NoError(t, err)
+	require.Len(t, summaries, 1)
+	assert.True(t, proto.Equal(summary, summaries["v1"]))
+
+	kv.EXPECT().MultiSave(mock.Anything, mock.MatchedBy(func(kvs map[string]string) bool {
+		saved, ok := kvs[buildSegmentDataVersionSummaryKey("p1", "v1")]
+		if !ok {
+			return false
+		}
+		loaded := &streamingpb.SegmentDataVersionSummary{}
+		return proto.Unmarshal([]byte(saved), loaded) == nil && proto.Equal(summary, loaded)
+	})).Return(nil)
+	require.NoError(t, catalog.SaveSegmentDataVersionSummaries(ctx, "p1", map[string]*streamingpb.SegmentDataVersionSummary{"v1": summary}))
 }
 
 func TestCatalogListSegmentAssignmentRejectsMismatchedOwner(t *testing.T) {

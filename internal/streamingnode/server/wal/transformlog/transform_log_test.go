@@ -77,6 +77,47 @@ func TestReadBuffersLiveEntriesUntilCaughtUp(t *testing.T) {
 	assert.Equal(t, uint64(21), liveEvent.Entry.GetTimeTick())
 }
 
+func TestReadStopsAtEndTimeTick(t *testing.T) {
+	transformLog := New(Config{VChannel: "v1"}).(*transformLog)
+	transformLog.retainedChunks = []*streamingpb.TransformLogChunk{
+		{ChunkId: 0, Entries: []*streamingpb.TransformLogEntry{
+			testTransformLogEntry(10),
+			testTransformLogEntry(20),
+			testTransformLogEntry(30),
+		}},
+	}
+
+	scanner := transformLog.Read(context.Background(), transformlogapi.ReadOption{
+		Name:               "test-scanner",
+		VChannel:           "v1",
+		StartAfterTimeTick: 1,
+		EndTimeTick:        20,
+	})
+	defer scanner.Close()
+
+	first := <-scanner.Chan()
+	require.NotNil(t, first.Entry)
+	assert.Equal(t, uint64(10), first.Entry.GetTimeTick())
+	second := <-scanner.Chan()
+	require.NotNil(t, second.Entry)
+	assert.Equal(t, uint64(20), second.Entry.GetTimeTick())
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-scanner.Done():
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	select {
+	case event := <-scanner.Chan():
+		t.Fatalf("unexpected event after end timetick: %+v", event)
+	default:
+	}
+	assert.NoError(t, scanner.Error())
+}
+
 func TestSnapshotChunksCopiesSliceOnly(t *testing.T) {
 	first := &streamingpb.TransformLogChunk{ChunkId: 1}
 	second := &streamingpb.TransformLogChunk{ChunkId: 2}

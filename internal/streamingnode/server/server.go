@@ -9,12 +9,16 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/registry"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/service"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/snview"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/walmanager"
 	"github.com/milvus-io/milvus/internal/util/fileresource"
 	"github.com/milvus-io/milvus/internal/util/initcore"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
+	worknodehandler "github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v3/log"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	_ "github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/kafka"
 	_ "github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/pulsar"
 	_ "github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/rmq"
@@ -89,4 +93,12 @@ func (s *Server) initService() {
 func (s *Server) registerGRPCService(grpcServer *grpc.Server) {
 	streamingpb.RegisterStreamingNodeHandlerServiceServer(grpcServer, s.handlerService)
 	streamingpb.RegisterStreamingNodeManagerServiceServer(grpcServer, s.managerService)
+	catalog := resource.Resource().StreamingNodeQueryViewCatalog()
+	persistedViews, err := catalog.ListQueryViews(context.Background())
+	if err != nil {
+		panic(fmt.Sprintf("recover streaming node query view handler failed, %+v", err))
+	}
+	resMgr := viewresource.NewManager(resource.Resource().ViewResourceRegistry())
+	snHandler := snview.RecoverSNQueryViewHandler(catalog, resMgr, persistedViews)
+	viewpb.RegisterViewSyncServiceServer(grpcServer, worknodehandler.NewViewSyncServer(snHandler))
 }

@@ -127,6 +127,7 @@ func (s *SubscribeServer) createSubscription(req *streamingpb.CreateTransformSub
 		Name:               req.GetVchannel(),
 		VChannel:           req.GetVchannel(),
 		StartAfterTimeTick: req.GetStartAfterTimeTick(),
+		EndTimeTick:        req.GetEndTimeTick(),
 	})
 	if err := scanner.Error(); err != nil {
 		return s.sendSubscriptionError(req.GetSubscriptionId(), req.GetVchannel(), err)
@@ -147,6 +148,7 @@ func (s *SubscribeServer) createSubscription(req *streamingpb.CreateTransformSub
 				SubscriptionId:     req.GetSubscriptionId(),
 				Vchannel:           req.GetVchannel(),
 				StartAfterTimeTick: req.GetStartAfterTimeTick(),
+				EndTimeTick:        req.GetEndTimeTick(),
 			},
 		},
 	}); err != nil {

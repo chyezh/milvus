@@ -36,6 +36,10 @@ func NewErrorScanner(name string, err error) Scanner {
 	return errorScanner{name: name, done: done, err: err}
 }
 
+func NewEmptyScanner(name string) Scanner {
+	return NewErrorScanner(name, nil)
+}
+
 func (s errorScanner) Name() string {
 	return s.name
 }

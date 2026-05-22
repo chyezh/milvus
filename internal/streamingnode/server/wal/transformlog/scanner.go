@@ -13,6 +13,7 @@ import (
 type scanner struct {
 	name       string
 	startAfter uint64
+	end        uint64
 	liveAfter  uint64
 	ch         chan transformlogapi.Event
 	done       chan struct{}
@@ -25,10 +26,11 @@ type scanner struct {
 	pending    []transformlogapi.Event
 }
 
-func newScanner(name string, startAfter uint64, liveAfter uint64) *scanner {
+func newScanner(name string, startAfter uint64, end uint64, liveAfter uint64) *scanner {
 	return &scanner{
 		name:       name,
 		startAfter: startAfter,
+		end:        end,
 		liveAfter:  liveAfter,
 		ch:         make(chan transformlogapi.Event, 16),
 		done:       make(chan struct{}),
@@ -70,6 +72,9 @@ func (s *scanner) send(ctx context.Context, transformLog *transformLog, chunks [
 			if entry.GetTimeTick() <= s.startAfter {
 				continue
 			}
+			if s.exceedsEnd(entry.GetTimeTick()) {
+				return
+			}
 			if !s.sendEvent(ctx, transformlogapi.Event{Entry: proto.Clone(entry).(*streamingpb.TransformLogEntry)}) {
 				return
 			}
@@ -79,6 +84,9 @@ func (s *scanner) send(ctx context.Context, transformLog *transformLog, chunks [
 		return
 	}
 	if !s.drainPending(ctx) {
+		return
+	}
+	if s.end > 0 {
 		return
 	}
 	select {
@@ -104,6 +112,9 @@ func (s *scanner) publishEntry(entry *streamingpb.TransformLogEntry) {
 	if entry.GetTimeTick() <= s.liveAfter {
 		return
 	}
+	if s.exceedsEnd(entry.GetTimeTick()) {
+		return
+	}
 	event := transformlogapi.Event{Entry: proto.Clone(entry).(*streamingpb.TransformLogEntry)}
 	s.liveMu.Lock()
 	defer s.liveMu.Unlock()
@@ -112,6 +123,10 @@ func (s *scanner) publishEntry(entry *streamingpb.TransformLogEntry) {
 		return
 	}
 	_ = s.sendEvent(context.Background(), event)
+}
+
+func (s *scanner) exceedsEnd(timeTick uint64) bool {
+	return s.end > 0 && timeTick > s.end
 }
 
 func (s *scanner) drainPending(ctx context.Context) bool {

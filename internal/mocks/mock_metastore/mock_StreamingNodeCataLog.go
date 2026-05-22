@@ -345,6 +345,65 @@ func (_c *MockStreamingNodeCataLog_ListSegmentAssignment_Call) RunAndReturn(run 
 	return _c
 }
 
+// ListSegmentDataVersionSummaries provides a mock function with given fields: ctx, pChannelName
+func (_m *MockStreamingNodeCataLog) ListSegmentDataVersionSummaries(ctx context.Context, pChannelName string) (map[string]*streamingpb.SegmentDataVersionSummary, error) {
+	ret := _m.Called(ctx, pChannelName)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListSegmentDataVersionSummaries")
+	}
+
+	var r0 map[string]*streamingpb.SegmentDataVersionSummary
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string) (map[string]*streamingpb.SegmentDataVersionSummary, error)); ok {
+		return rf(ctx, pChannelName)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string) map[string]*streamingpb.SegmentDataVersionSummary); ok {
+		r0 = rf(ctx, pChannelName)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(map[string]*streamingpb.SegmentDataVersionSummary)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = rf(ctx, pChannelName)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MockStreamingNodeCataLog_ListSegmentDataVersionSummaries_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListSegmentDataVersionSummaries'
+type MockStreamingNodeCataLog_ListSegmentDataVersionSummaries_Call struct {
+	*mock.Call
+}
+
+// ListSegmentDataVersionSummaries is a helper method to define mock.On call
+//   - ctx context.Context
+//   - pChannelName string
+func (_e *MockStreamingNodeCataLog_Expecter) ListSegmentDataVersionSummaries(ctx interface{}, pChannelName interface{}) *MockStreamingNodeCataLog_ListSegmentDataVersionSummaries_Call {
+	return &MockStreamingNodeCataLog_ListSegmentDataVersionSummaries_Call{Call: _e.mock.On("ListSegmentDataVersionSummaries", ctx, pChannelName)}
+}
+
+func (_c *MockStreamingNodeCataLog_ListSegmentDataVersionSummaries_Call) Run(run func(ctx context.Context, pChannelName string)) *MockStreamingNodeCataLog_ListSegmentDataVersionSummaries_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string))
+	})
+	return _c
+}
+
+func (_c *MockStreamingNodeCataLog_ListSegmentDataVersionSummaries_Call) Return(_a0 map[string]*streamingpb.SegmentDataVersionSummary, _a1 error) *MockStreamingNodeCataLog_ListSegmentDataVersionSummaries_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MockStreamingNodeCataLog_ListSegmentDataVersionSummaries_Call) RunAndReturn(run func(context.Context, string) (map[string]*streamingpb.SegmentDataVersionSummary, error)) *MockStreamingNodeCataLog_ListSegmentDataVersionSummaries_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // ListVChannel provides a mock function with given fields: ctx, pchannelName
 func (_m *MockStreamingNodeCataLog) ListVChannel(ctx context.Context, pchannelName string) ([]*streamingpb.VChannelMeta, error) {
 	ret := _m.Called(ctx, pchannelName)
@@ -603,6 +662,54 @@ func (_c *MockStreamingNodeCataLog_SaveSegmentAssignments_Call) Return(_a0 error
 }
 
 func (_c *MockStreamingNodeCataLog_SaveSegmentAssignments_Call) RunAndReturn(run func(context.Context, string, map[int64]*streamingpb.SegmentAssignmentMeta) error) *MockStreamingNodeCataLog_SaveSegmentAssignments_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// SaveSegmentDataVersionSummaries provides a mock function with given fields: ctx, pChannelName, summaries
+func (_m *MockStreamingNodeCataLog) SaveSegmentDataVersionSummaries(ctx context.Context, pChannelName string, summaries map[string]*streamingpb.SegmentDataVersionSummary) error {
+	ret := _m.Called(ctx, pChannelName, summaries)
+
+	if len(ret) == 0 {
+		panic("no return value specified for SaveSegmentDataVersionSummaries")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, string, map[string]*streamingpb.SegmentDataVersionSummary) error); ok {
+		r0 = rf(ctx, pChannelName, summaries)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MockStreamingNodeCataLog_SaveSegmentDataVersionSummaries_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'SaveSegmentDataVersionSummaries'
+type MockStreamingNodeCataLog_SaveSegmentDataVersionSummaries_Call struct {
+	*mock.Call
+}
+
+// SaveSegmentDataVersionSummaries is a helper method to define mock.On call
+//   - ctx context.Context
+//   - pChannelName string
+//   - summaries map[string]*streamingpb.SegmentDataVersionSummary
+func (_e *MockStreamingNodeCataLog_Expecter) SaveSegmentDataVersionSummaries(ctx interface{}, pChannelName interface{}, summaries interface{}) *MockStreamingNodeCataLog_SaveSegmentDataVersionSummaries_Call {
+	return &MockStreamingNodeCataLog_SaveSegmentDataVersionSummaries_Call{Call: _e.mock.On("SaveSegmentDataVersionSummaries", ctx, pChannelName, summaries)}
+}
+
+func (_c *MockStreamingNodeCataLog_SaveSegmentDataVersionSummaries_Call) Run(run func(ctx context.Context, pChannelName string, summaries map[string]*streamingpb.SegmentDataVersionSummary)) *MockStreamingNodeCataLog_SaveSegmentDataVersionSummaries_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string), args[2].(map[string]*streamingpb.SegmentDataVersionSummary))
+	})
+	return _c
+}
+
+func (_c *MockStreamingNodeCataLog_SaveSegmentDataVersionSummaries_Call) Return(_a0 error) *MockStreamingNodeCataLog_SaveSegmentDataVersionSummaries_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockStreamingNodeCataLog_SaveSegmentDataVersionSummaries_Call) RunAndReturn(run func(context.Context, string, map[string]*streamingpb.SegmentDataVersionSummary) error) *MockStreamingNodeCataLog_SaveSegmentDataVersionSummaries_Call {
 	_c.Call.Return(run)
 	return _c
 }

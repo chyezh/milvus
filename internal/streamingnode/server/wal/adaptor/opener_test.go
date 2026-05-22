@@ -13,6 +13,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus/internal/mocks/mock_metastore"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
@@ -96,6 +97,13 @@ func TestDetermineLastConfirmedMessageID(t *testing.T) {
 	}, 4)
 	lastConfirmedMessageID = determineLastConfirmedMessageID(rmq.NewRmqID(5), txnBuffer)
 	assert.Equal(t, rmq.NewRmqID(1), lastConfirmedMessageID)
+}
+
+func TestLoadConfigListenerForRecoveryUsesResourceRegistry(t *testing.T) {
+	registry := viewresource.NewRegistry(nil, nil)
+	resource.InitForTest(t, resource.OptViewResourceRegistry(registry))
+
+	require.Same(t, registry, loadConfigListenerForRecovery())
 }
 
 func TestHandleAlterWALFlushingStageWaitsRecoveryDataCheckpoint(t *testing.T) {

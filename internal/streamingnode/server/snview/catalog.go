@@ -1,10 +1,17 @@
 package snview
 
-import "github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+import (
+	"context"
+
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+)
 
 // StreamingNodeCatalog defines the persistence interface for SN query views,
 // implemented by the streaming node's catalog layer.
 type StreamingNodeCatalog interface {
+	// ListQueryViews loads persisted Up query views for local crash recovery.
+	ListQueryViews(ctx context.Context) ([]*viewpb.QueryViewOfShard, error)
+
 	// SaveQueryView persists or deletes a query view based on its state.
 	// The persistence key is derived internally from view.Meta.
 	//

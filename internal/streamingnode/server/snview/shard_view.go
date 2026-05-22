@@ -16,11 +16,16 @@ import (
 // contracts require that all callbacks are asynchronous, so this does not
 // cause deadlocks.
 type snShardView struct {
-	mu      sync.Mutex
-	views   map[qviews.QueryViewVersion]*snViewEntry
-	catalog StreamingNodeCatalog
-	resMgr  StreamingNodeResourceManager
-	onEmpty func() // called (under mu) when the last view entry is removed
+	mu              sync.Mutex
+	shardID         qviews.ShardID
+	collectionID    int64
+	hasCollectionID bool
+	lastMinVersion  qviews.DataVersion
+	hasLastMin      bool
+	views           map[qviews.QueryViewVersion]*snViewEntry
+	catalog         StreamingNodeCatalog
+	resMgr          StreamingNodeResourceManager
+	onEmpty         func() // called (under mu) when the last view entry is removed
 }
 
 // snViewEntry pairs an ApplyView (carrying the OnReport callback) with its state machine.
@@ -52,9 +57,14 @@ func recoverSnShardView(
 		}
 	}
 	s := &snShardView{
+		shardID: shardID,
 		views:   entries,
 		catalog: catalog,
 		resMgr:  resMgr,
+	}
+	for _, sm := range views {
+		s.setCollectionIDLocked(sm.Meta().GetCollectionId())
+		break
 	}
 
 	// Start recovery for each view via ResourceManager under shard lock.
@@ -64,7 +74,8 @@ func recoverSnShardView(
 		key := qviews.QueryViewKey{ShardID: shardID, QueryViewVersion: version}
 		v := version // capture loop variable
 		resMgr.Recover(RecoverResource{
-			Key: key,
+			Key:  key,
+			Meta: views[version].Meta(),
 			OnRecoveringDone: func() {
 				s.notifyRecoveringDone(v)
 			},
@@ -73,6 +84,7 @@ func recoverSnShardView(
 			},
 		})
 	}
+	s.updateMinDataVersionLocked()
 
 	return s
 }
@@ -85,11 +97,13 @@ func (s *snShardView) ApplyViews(views []handler.ApplyView) {
 	for i := range views {
 		s.applyOneLocked(&views[i])
 	}
+	s.updateMinDataVersionLocked()
 }
 
 // applyOneLocked applies a single view. Caller must hold s.mu.
 func (s *snShardView) applyOneLocked(av *handler.ApplyView) {
 	key := av.View.QueryViewKey()
+	s.setCollectionIDLocked(av.View.IntoProto().GetMeta().GetCollectionId())
 	entry, exists := s.views[key.QueryViewVersion]
 	pushedState := av.View.State()
 
@@ -110,7 +124,8 @@ func (s *snShardView) applyOneLocked(av *handler.ApplyView) {
 			// Tell ResourceManager to prepare resources. Callbacks will drive SM progress.
 			version := key.QueryViewVersion
 			s.resMgr.Acquire(AcquireResource{
-				Key: key,
+				Key:  key,
+				Meta: sm.Meta(),
 				OnReady: func() {
 					s.notifyReady(version)
 				},
@@ -142,6 +157,17 @@ func (s *snShardView) applyOneLocked(av *handler.ApplyView) {
 	s.consumeReportPersistAndCleanup(key.QueryViewVersion, entry)
 }
 
+func (s *snShardView) setCollectionIDLocked(collectionID int64) {
+	if collectionID == 0 {
+		return
+	}
+	if s.hasCollectionID {
+		return
+	}
+	s.collectionID = collectionID
+	s.hasCollectionID = true
+}
+
 // notifyReady is called by ResourceManager callback when resource preparation
 // completes. Drives the SM from Preparing → Ready.
 func (s *snShardView) notifyReady(version qviews.QueryViewVersion) {
@@ -155,6 +181,7 @@ func (s *snShardView) notifyReady(version qviews.QueryViewVersion) {
 
 	entry.sm.OnReady()
 	s.consumeReportPersistAndCleanup(version, entry)
+	s.updateMinDataVersionLocked()
 }
 
 // notifyRecoveringDone is called by ResourceManager callback when WAL catch-up
@@ -170,6 +197,7 @@ func (s *snShardView) notifyRecoveringDone(version qviews.QueryViewVersion) {
 
 	entry.sm.OnRecoveringDone()
 	s.consumeReportPersistAndCleanup(version, entry)
+	s.updateMinDataVersionLocked()
 }
 
 // notifyUnrecoverable is called by ResourceManager callback when a fatal error occurs.
@@ -184,6 +212,7 @@ func (s *snShardView) notifyUnrecoverable(version qviews.QueryViewVersion) {
 
 	entry.sm.OnUnrecoverable()
 	s.consumeReportPersistAndCleanup(version, entry)
+	s.updateMinDataVersionLocked()
 }
 
 // consumeReport drains pending report and invokes callback.
@@ -208,6 +237,7 @@ func (s *snShardView) notifyDropped(version qviews.QueryViewVersion) {
 
 	entry.sm.OnDropped()
 	s.consumeReportPersistAndCleanup(version, entry)
+	s.updateMinDataVersionLocked()
 }
 
 // consumeReportPersistAndCleanup drains pending persist, report, and release,
@@ -233,6 +263,52 @@ func (s *snShardView) cleanupIfDropped(version qviews.QueryViewVersion, entry *s
 	if len(s.views) == 0 && s.onEmpty != nil {
 		s.onEmpty()
 	}
+}
+
+func (s *snShardView) updateMinDataVersionLocked() {
+	if !s.hasCollectionID {
+		return
+	}
+	min, ok := s.minRetainedDataVersionLocked()
+	if !ok {
+		if s.hasLastMin {
+			s.hasLastMin = false
+			s.resMgr.ReleaseLoad(ReleaseLoadResource{
+				CollectionID: s.collectionID,
+				VChannel:     s.shardID.VChannel,
+			})
+		}
+		return
+	}
+	if s.hasLastMin && s.lastMinVersion.EQ(min) {
+		return
+	}
+	s.lastMinVersion = min
+	s.hasLastMin = true
+	s.resMgr.UpdateMinDataVersion(UpdateMinDataVersionResource{
+		CollectionID:   s.collectionID,
+		VChannel:       s.shardID.VChannel,
+		MinDataVersion: min,
+	})
+}
+
+func (s *snShardView) minRetainedDataVersionLocked() (qviews.DataVersion, bool) {
+	var min qviews.DataVersion
+	ok := false
+	for version, entry := range s.views {
+		if !retainsDataVersion(entry.sm.State()) {
+			continue
+		}
+		if !ok || min.GT(version.DataVersion) {
+			min = version.DataVersion
+			ok = true
+		}
+	}
+	return min, ok
+}
+
+func retainsDataVersion(state qviews.QueryViewState) bool {
+	return state == qviews.QueryViewStateUp || state == qviews.QueryViewStateUpRecovering
 }
 
 // consumeAndPersist drains pending persist and writes to catalog.

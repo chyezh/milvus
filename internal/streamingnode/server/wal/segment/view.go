@@ -11,6 +11,8 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -218,36 +220,31 @@ func (s *segmentView) ObserveTxnMessage(_ context.Context, msg message.Immutable
 	metaTimeTick := s.meta.CheckpointTimeTick
 	pendingDataTimeTick := s.pending.DataTimeTick()
 	appliedMeta := false
-	msg.RangeOver(func(im message.ImmutableMessage) error {
-		if im.MessageType() != message.MessageTypeInsert {
-			return nil
+	var rows uint64
+	var binarySize uint64
+	err := forEachSegmentInsertMessage(msg, s.meta.GetSegmentId(), func(insert segmentInsertMessage) error {
+		matched = true
+		if timetick > metaTimeTick {
+			s.observeInsertMetaLocked(timetick, insert.Assignment)
+			appliedMeta = true
 		}
-		insert := message.MustAsImmutableInsertMessageV1(im)
-		for _, assignment := range insert.Header().GetPartitions() {
-			if assignment.GetSegmentAssignment().GetSegmentId() != s.meta.GetSegmentId() {
-				continue
-			}
-			matched = true
-			if timetick > metaTimeTick {
-				s.observeInsertMetaLocked(timetick, assignment)
-				appliedMeta = true
-			}
-			if s.metaAndData &&
-				timetick > s.meta.GetDataCheckpointTimeTick() &&
-				timetick > pendingDataTimeTick {
-				s.pending.appendWithTimeTick(insert, assignment, timetick)
-				appliedData = true
-			}
+		if s.metaAndData &&
+			timetick > s.meta.GetDataCheckpointTimeTick() &&
+			timetick > pendingDataTimeTick {
+			rows += insert.Assignment.GetRows()
+			binarySize += insert.Assignment.GetBinarySize()
+			appliedData = true
 		}
 		return nil
 	})
-	if !matched {
+	if err != nil || !matched {
 		return result
 	}
 	if appliedMeta {
 		result.Meta = s.metaBarrier()
 	}
 	if appliedData {
+		s.pending.appendMessage(msg, rows, binarySize)
 		result.Data = s.dataBarrier()
 		if s.flushPolicy != nil && s.flushPolicy.ShouldFlush(s.pending, timetick) {
 			task = s.newFlushL1BufferTaskLocked()
@@ -319,6 +316,59 @@ func (info *segmentView) AssignmentMeta() *streamingpb.SegmentAssignmentMeta {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	return proto.Clone(info.meta).(*streamingpb.SegmentAssignmentMeta)
+}
+
+func (info *segmentView) VisibleSnapshot(vchannel string, dataVersion qviews.DataVersion) (walview.VisibleSegment, bool) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	if info.meta.GetVchannel() != vchannel || !info.visibleAtDataVersionLocked(dataVersion) {
+		return walview.VisibleSegment{}, false
+	}
+	meta := proto.Clone(info.meta).(*streamingpb.SegmentAssignmentMeta)
+	insertMessages := info.pending.Messages()
+	for _, chunk := range info.pendingFlushChunks {
+		insertMessages = append(insertMessages, chunk.Messages()...)
+	}
+	visible := walview.VisibleSegment{
+		SegmentID:           meta.GetSegmentId(),
+		PartitionID:         meta.GetPartitionId(),
+		Schema:              cloneSchema(info.schema),
+		Assignment:          meta,
+		SealedAtDataVersion: meta.GetSealedAtDataVersion(),
+		Data: walview.SegmentSnapshotData{
+			PersistedStorage: clonePersistedStorage(meta.GetPersistedStorage()),
+			InsertMessages:   insertMessages,
+		},
+	}
+	return visible, true
+}
+
+func (info *segmentView) visibleAtDataVersionLocked(dataVersion qviews.DataVersion) bool {
+	switch info.meta.GetState() {
+	case streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING:
+		return true
+	case streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED:
+		if info.meta.GetSealedAtDataVersion() == nil {
+			return true
+		}
+		return qviews.FromProtoDataVersion(info.meta.GetSealedAtDataVersion()).GT(dataVersion)
+	default:
+		return false
+	}
+}
+
+func cloneSchema(schema *schemapb.CollectionSchema) *schemapb.CollectionSchema {
+	if schema == nil {
+		return nil
+	}
+	return proto.Clone(schema).(*schemapb.CollectionSchema)
+}
+
+func clonePersistedStorage(storage *streamingpb.L1SegmentPersistedStorage) *streamingpb.L1SegmentPersistedStorage {
+	if storage == nil {
+		return nil
+	}
+	return proto.Clone(storage).(*streamingpb.L1SegmentPersistedStorage)
 }
 
 func (info *segmentView) metaTimeTick() uint64 {

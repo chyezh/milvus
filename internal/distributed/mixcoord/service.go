@@ -651,6 +651,10 @@ func (s *Server) GetShardLeaders(ctx context.Context, req *querypb.GetShardLeade
 	return s.mixCoord.GetShardLeaders(ctx, req)
 }
 
+func (s *Server) GetStreamingNodeQueryViewResources(ctx context.Context, req *querypb.GetStreamingNodeQueryViewResourcesRequest) (*querypb.GetStreamingNodeQueryViewResourcesResponse, error) {
+	return s.mixCoord.GetStreamingNodeQueryViewResources(ctx, req)
+}
+
 func (s *Server) CreateResourceGroup(ctx context.Context, req *milvuspb.CreateResourceGroupRequest) (*commonpb.Status, error) {
 	return s.mixCoord.CreateResourceGroup(ctx, req)
 }
