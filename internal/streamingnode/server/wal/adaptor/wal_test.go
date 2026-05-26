@@ -30,12 +30,14 @@ import (
 	"github.com/milvus-io/milvus/internal/util/idalloc"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/rootcoordpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/options"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 )
@@ -80,6 +82,10 @@ func initResourceForTest(t *testing.T) {
 
 	rc := idalloc.NewMockRootCoordClient(t)
 	rc.EXPECT().GetPChannelInfo(mock.Anything, mock.Anything).Return(&rootcoordpb.GetPChannelInfoResponse{}, nil)
+	rc.EXPECT().AllocSegment(mock.Anything, mock.Anything).Return(&datapb.AllocSegmentResponse{
+		Status: merr.Success(),
+	}, nil).Maybe()
+	rc.EXPECT().SaveBinlogPaths(mock.Anything, mock.Anything).Return(merr.Success(), nil).Maybe()
 
 	catalog := mock_metastore.NewMockStreamingNodeCataLog(t)
 	catalog.EXPECT().GetConsumeCheckpoint(mock.Anything, mock.Anything).Return(nil, nil)
@@ -146,8 +152,7 @@ func (f *testOneWALFramework) Run() {
 			Term: int64(f.term),
 		}
 		rwWAL, err := f.opener.Open(ctx, &wal.OpenOption{
-			Channel:        pChannel,
-			DisableFlusher: true,
+			Channel: pChannel,
 		})
 		require.NoError(f.t, err)
 		require.NotNil(f.t, rwWAL)
@@ -157,8 +162,7 @@ func (f *testOneWALFramework) Run() {
 
 		pChannel.AccessMode = types.AccessModeRO
 		roWAL, err := f.opener.Open(ctx, &wal.OpenOption{
-			Channel:        pChannel,
-			DisableFlusher: true,
+			Channel: pChannel,
 		})
 		require.NoError(f.t, err)
 		metrics := roWAL.Metrics()

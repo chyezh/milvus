@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bytedance/mockey"
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -14,7 +13,6 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus/internal/mocks/mock_metastore"
 	"github.com/milvus-io/milvus/internal/mocks/streamingnode/server/wal/mock_recovery"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/flusher/flusherimpl"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
@@ -100,7 +98,7 @@ func TestDetermineLastConfirmedMessageID(t *testing.T) {
 	assert.Equal(t, rmq.NewRmqID(1), lastConfirmedMessageID)
 }
 
-func TestHandleAlterWALFlushingStagePassesRateLimitComponent(t *testing.T) {
+func TestHandleAlterWALFlushingStageWaitsRecoveryDataCheckpoint(t *testing.T) {
 	channel := types.PChannelInfo{
 		Name:       "alter-wal-flushing-test",
 		Term:       1,
@@ -120,11 +118,9 @@ func TestHandleAlterWALFlushingStagePassesRateLimitComponent(t *testing.T) {
 			return rmq.NewRmqID(1), nil
 		},
 	}, func() {})
-	rateLimitComponent := roWAL.WALRateLimitComponent
-
 	rs := mock_recovery.NewMockRecoveryStorage(t)
 	rs.EXPECT().
-		GetFlusherCheckpointByTimeTick(mock.Anything).
+		GetDataCheckpoint(mock.Anything).
 		Return(&recovery.WALCheckpoint{
 			MessageID: rmq.NewRmqID(2),
 			TimeTick:  100,
@@ -148,19 +144,6 @@ func TestHandleAlterWALFlushingStagePassesRateLimitComponent(t *testing.T) {
 		},
 	}
 
-	var capturedParam *flusherimpl.RecoverWALFlusherParam
-	mockRecoverFlusher := mockey.Mock(flusherimpl.RecoverWALFlusher).
-		To(func(param *flusherimpl.RecoverWALFlusherParam) *flusherimpl.WALFlusherImpl {
-			captured := *param
-			capturedParam = &captured
-			return &flusherimpl.WALFlusherImpl{}
-		}).
-		Build()
-	defer mockRecoverFlusher.UnPatch()
-
-	mockFlusherClose := mockey.Mock((*flusherimpl.WALFlusherImpl).Close).Return().Build()
-	defer mockFlusherClose.UnPatch()
-
 	err := (&openerAdaptorImpl{}).handleAlterWALFlushingStage(
 		context.Background(),
 		&wal.OpenOption{Channel: channel},
@@ -171,13 +154,5 @@ func TestHandleAlterWALFlushingStagePassesRateLimitComponent(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	require.NotNil(t, capturedParam)
-	require.NotNil(t, capturedParam.RateLimitComponent)
-	require.NotNil(t, capturedParam.WAL)
-	assert.Same(t, rateLimitComponent, capturedParam.RateLimitComponent)
-	assert.Same(t, roWAL, capturedParam.WAL.Get())
-	assert.Same(t, rs, capturedParam.RecoveryStorage)
-	assert.Equal(t, channel, capturedParam.ChannelInfo)
-	assert.Same(t, snapshot, capturedParam.RecoverySnapshot)
 	assert.Equal(t, streamingpb.AlterWALStage_ADVANCE_CHECKPOINT, snapshot.Checkpoint.AlterWalState.Stage)
 }

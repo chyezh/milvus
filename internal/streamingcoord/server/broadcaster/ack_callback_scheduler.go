@@ -233,12 +233,13 @@ func (s *ackCallbackScheduler) fixIncompleteBroadcastsForForcePromote(ctx contex
 		for i, msg := range pending.pendingMessages {
 			pending.pendingMessages[i] = message.ClearReplicateHeader(msg)
 		}
+		broadcastID := task.Header().BroadcastID
 		s.Logger().Info("Delegating incomplete task to broadcastScheduler",
-			zap.Uint64("broadcastID", task.Header().BroadcastID),
+			zap.Uint64("broadcastID", broadcastID),
 			zap.String("messageType", task.msg.MessageType().String()),
 			zap.Int("pendingVChannels", len(pending.pendingMessages)))
 		if _, err := s.bm.broadcastScheduler.AddTask(ctx, pending); err != nil {
-			return errors.Wrapf(err, "failed to supplement task %d via broadcastScheduler", task.Header().BroadcastID)
+			return errors.Wrapf(err, "failed to supplement task %d via broadcastScheduler", broadcastID)
 		}
 	}
 	s.Logger().Info("All incomplete broadcasts fixed and tombstoned")

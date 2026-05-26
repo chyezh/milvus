@@ -2,108 +2,36 @@ package recovery
 
 import (
 	"context"
-	"fmt"
-	"math/rand"
+	"sync/atomic"
 	"testing"
 
-	"github.com/cockroachdb/errors"
-	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
-	"github.com/milvus-io/milvus/internal/mocks"
 	"github.com/milvus-io/milvus/internal/mocks/mock_metastore"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
+	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
-	internaltypes "github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
+	mock_walimpls "github.com/milvus-io/milvus/pkg/v3/mocks/streaming/mock_walimpls"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/rmq"
-	"github.com/milvus-io/milvus/pkg/v3/util/merr"
-	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
-	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 )
 
-func TestRecoveryStorage(t *testing.T) {
-	paramtable.Get().Save(paramtable.Get().StreamingCfg.WALRecoveryPersistInterval.Key, "1ms")
-	paramtable.Get().Save(paramtable.Get().StreamingCfg.WALRecoveryGracefulCloseTimeout.Key, "10ms")
-
-	vchannelMetas := make(map[string]*streamingpb.VChannelMeta)
-	segmentMetas := make(map[int64]*streamingpb.SegmentAssignmentMeta)
-	cp := &streamingpb.WALCheckpoint{
-		MessageId:     rmq.NewRmqID(1).IntoProto(),
-		TimeTick:      1,
-		RecoveryMagic: 0,
-	}
-
-	snCatalog := mock_metastore.NewMockStreamingNodeCataLog(t)
-	snCatalog.EXPECT().ListSegmentAssignment(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, channel string) ([]*streamingpb.SegmentAssignmentMeta, error) {
-		return lo.MapToSlice(segmentMetas, func(_ int64, v *streamingpb.SegmentAssignmentMeta) *streamingpb.SegmentAssignmentMeta {
-			return proto.Clone(v).(*streamingpb.SegmentAssignmentMeta)
-		}), nil
+func TestRecoveryStorageCheckpointManagerDirtySnapshot(t *testing.T) {
+	rs := newRecoveryStorage(types.PChannelInfo{Name: "test_channel"}, &WALCheckpoint{
+		MessageID: rmq.NewRmqID(1),
+		TimeTick:  1,
 	})
-	snCatalog.EXPECT().ListVChannel(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, channel string) ([]*streamingpb.VChannelMeta, error) {
-		return lo.MapToSlice(vchannelMetas, func(_ string, v *streamingpb.VChannelMeta) *streamingpb.VChannelMeta {
-			return proto.Clone(v).(*streamingpb.VChannelMeta)
-		}), nil
-	})
-	snCatalog.EXPECT().SaveSegmentAssignments(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, s string, m map[int64]*streamingpb.SegmentAssignmentMeta) error {
-		if rand.Int31n(3) == 0 {
-			return errors.New("save failed")
-		}
-		for _, v := range m {
-			if v.State != streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED {
-				segmentMetas[v.SegmentId] = v
-			} else {
-				delete(segmentMetas, v.SegmentId)
-			}
-		}
-		return nil
-	})
-	snCatalog.EXPECT().SaveVChannels(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, s string, m map[string]*streamingpb.VChannelMeta) error {
-		if rand.Int31n(3) == 0 {
-			return errors.New("save failed")
-		}
-		for _, v := range m {
-			if v.State != streamingpb.VChannelState_VCHANNEL_STATE_DROPPED {
-				vchannelMetas[v.Vchannel] = v
-			} else {
-				delete(vchannelMetas, v.Vchannel)
-			}
-		}
-		return nil
-	})
-	snCatalog.EXPECT().GetConsumeCheckpoint(mock.Anything, mock.Anything).Return(cp, nil)
-	snCatalog.EXPECT().SaveConsumeCheckpoint(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, pchannelName string, checkpoint *streamingpb.WALCheckpoint) error {
-		if rand.Int31n(3) == 0 {
-			return errors.New("save failed")
-		}
-		cp = checkpoint
-		return nil
-	})
-	mixCoord := mocks.NewMockMixCoordClient(t)
-	mixCoord.EXPECT().DropVirtualChannel(mock.Anything, mock.Anything).Return(&datapb.DropVirtualChannelResponse{
-		Status: merr.Success(),
-	}, nil)
-	f := syncutil.NewFuture[internaltypes.MixCoordClient]()
-	f.Set(mixCoord)
-
-	resource.InitForTest(t, resource.OptStreamingNodeCatalog(snCatalog), resource.OptMixCoordClient(f))
-	b := &streamBuilder{
-		channel:                types.PChannelInfo{Name: "test_channel"},
-		lastConfirmedMessageID: 1,
-		messageID:              1,
-		timetick:               1,
-		collectionIDs:          make(map[int64]map[int64]map[int64]struct{}),
-		vchannels:              make(map[int64]string),
-		idAlloc:                1,
+	rs.modules = []moduleapi.Module{
+		&recordingModule{result: moduleapi.ObserveResult{
+			Meta: walcheckpoint.BarrierFunc(func() uint64 { return 2 }),
+		}},
 	}
 
 	msg := message.NewTimeTickMessageBuilderV1().
@@ -111,590 +39,517 @@ func TestRecoveryStorage(t *testing.T) {
 		WithHeader(&message.TimeTickMessageHeader{}).
 		WithBody(&msgpb.TimeTickMsg{}).
 		MustBuildMutable().
-		WithTimeTick(1).
-		WithLastConfirmed(rmq.NewRmqID(1)).
-		IntoImmutableMessage(rmq.NewRmqID(1))
-	b.generateStreamMessage()
+		WithTimeTick(2).
+		WithLastConfirmed(rmq.NewRmqID(2)).
+		IntoImmutableMessage(rmq.NewRmqID(2))
 
-	for i := 0; i < 3; i++ {
-		if i == 2 {
-			// make sure the checkpoint is saved.
-			paramtable.Get().Save(paramtable.Get().StreamingCfg.WALRecoveryGracefulCloseTimeout.Key, "1000s")
-		}
-		cpProto, err := resource.Resource().StreamingNodeCatalog().GetConsumeCheckpoint(context.Background(), b.Channel().Name)
-		if err != nil {
-			require.NoError(t, err)
-		}
-		cp := utility.NewWALCheckpointFromProto(cpProto)
-		rsInterface, snapshot, err := RecoverRecoveryStorage(context.Background(), b, cp, msg)
-		rs := rsInterface.(*recoveryStorageImpl)
-		assert.NoError(t, err)
-		assert.NotNil(t, rs)
-		assert.NotNil(t, snapshot)
+	rs.observeMessage(context.Background(), msg)
 
-		msgs := b.generateStreamMessage()
-		for _, msg := range msgs {
-			rs.ObserveMessage(context.Background(), msg)
-			assert.NotNil(t, rs.Metrics())
-		}
-		rs.Close()
-		var partitionNum int
-		var collectionNum int
-		var segmentNum int
-		for _, v := range rs.vchannels {
-			if v.meta.State != streamingpb.VChannelState_VCHANNEL_STATE_DROPPED {
-				collectionNum += 1
-				partitionNum += len(v.meta.CollectionInfo.Partitions)
-			}
-		}
-		for _, v := range rs.segments {
-			if v.meta.State != streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED {
-				segmentNum += 1
-			}
-		}
-		assert.Equal(t, partitionNum, b.partitionNum())
-		assert.Equal(t, collectionNum, b.collectionNum())
-		assert.Equal(t, segmentNum, b.segmentNum())
-		if b.segmentNum() != segmentNum {
-			t.Logf("segmentNum: %d, b.segmentNum: %d", segmentNum, b.segmentNum())
-		}
+	assert.True(t, rs.checkpointManager.HasDirty())
+	snapshot := rs.consumeDirtySnapshot()
+	require.NotNil(t, snapshot)
+	assert.True(t, snapshot.CheckpointDirty)
+	assert.True(t, rmq.NewRmqID(2).EQ(snapshot.Checkpoint.MessageID))
+	assert.Equal(t, uint64(2), snapshot.Checkpoint.TimeTick)
+	assert.False(t, rs.checkpointManager.HasDirty())
+}
 
-		if rs.gracefulClosed {
-			// only available when graceful closing
-			assert.Equal(t, b.collectionNum(), len(vchannelMetas))
-			if b.collectionNum() != len(vchannelMetas) {
-				for _, v := range vchannelMetas {
-					t.Logf("vchannel: %s, state: %s", v.Vchannel, v.State)
-				}
-				for id := range b.collectionIDs {
-					t.Logf("collectionID: %d, %s", id, b.vchannels[id])
-				}
-			}
-			partitionNum := 0
-			for _, v := range vchannelMetas {
-				partitionNum += len(v.CollectionInfo.Partitions)
-			}
-			assert.Equal(t, b.partitionNum(), partitionNum)
-			assert.Equal(t, b.segmentNum(), len(segmentMetas))
-		}
+func TestRecoveryStorageCheckpointPersistDoesNotUseBusinessScheduler(t *testing.T) {
+	snCatalog := mock_metastore.NewMockStreamingNodeCataLog(t)
+	snCatalog.EXPECT().SaveConsumeCheckpoint(mock.Anything, "test_channel", mock.MatchedBy(func(checkpoint *streamingpb.WALCheckpoint) bool {
+		return rmq.NewRmqID(10).EQ(message.MustUnmarshalMessageID(checkpoint.GetMessageId())) &&
+			checkpoint.GetTimeTick() == 10 &&
+			checkpoint.GetDataCheckpoint() != nil &&
+			rmq.NewRmqID(5).EQ(message.MustUnmarshalMessageID(checkpoint.GetDataCheckpoint().GetMessageId())) &&
+			checkpoint.GetDataCheckpoint().GetTimeTick() == 5
+	})).Return(nil).Once()
+	resource.InitForTest(t, resource.OptStreamingNodeCatalog(snCatalog))
+
+	truncator := mock_walimpls.NewMockWALImpls(t)
+	truncator.EXPECT().Truncate(mock.Anything, mock.MatchedBy(func(id message.MessageID) bool {
+		return rmq.NewRmqID(5).EQ(id)
+	})).Return(nil).Once()
+
+	rs := newRecoveryStorage(types.PChannelInfo{Name: "test_channel"}, &WALCheckpoint{
+		MessageID: rmq.NewRmqID(1),
+		TimeTick:  1,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: rmq.NewRmqID(1),
+			TimeTick:  1,
+		},
+	})
+	rs.truncator = truncator
+	rs.taskScheduler.Close()
+
+	snapshot := &RecoverySnapshot{
+		Checkpoint: &WALCheckpoint{
+			MessageID: rmq.NewRmqID(10),
+			TimeTick:  10,
+			DataCheckpoint: &utility.WALConsumeCheckpoint{
+				MessageID: rmq.NewRmqID(5),
+				TimeTick:  5,
+			},
+		},
+		CheckpointDirty: true,
 	}
+
+	require.NoError(t, rs.persistCheckpointSnapshot(context.Background(), snapshot, false))
 }
 
-type streamBuilder struct {
-	channel                types.PChannelInfo
-	lastConfirmedMessageID int64
-	messageID              int64
-	timetick               uint64
-	collectionIDs          map[int64]map[int64]map[int64]struct{}
-	vchannels              map[int64]string
-	idAlloc                int64
-	histories              []message.ImmutableMessage
-}
+func TestRecoveryStorageCheckpointPersistNotifiesModules(t *testing.T) {
+	snCatalog := mock_metastore.NewMockStreamingNodeCataLog(t)
+	snCatalog.EXPECT().SaveConsumeCheckpoint(mock.Anything, "test_channel", mock.Anything).Return(nil).Once()
+	resource.InitForTest(t, resource.OptStreamingNodeCatalog(snCatalog))
 
-func (b *streamBuilder) collectionNum() int {
-	return len(b.collectionIDs)
-}
-
-func (b *streamBuilder) partitionNum() int {
-	partitionNum := 0
-	for _, partitions := range b.collectionIDs {
-		partitionNum += len(partitions)
+	rs := newRecoveryStorage(types.PChannelInfo{Name: "test_channel"}, &WALCheckpoint{
+		MessageID: rmq.NewRmqID(1),
+		TimeTick:  1,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: rmq.NewRmqID(1),
+			TimeTick:  1,
+		},
+	})
+	module := &recordingModule{}
+	rs.modules = []moduleapi.Module{module}
+	snapshot := &RecoverySnapshot{
+		Checkpoint: &WALCheckpoint{
+			MessageID: rmq.NewRmqID(10),
+			TimeTick:  10,
+			DataCheckpoint: &utility.WALConsumeCheckpoint{
+				MessageID: rmq.NewRmqID(5),
+				TimeTick:  5,
+			},
+		},
+		CheckpointDirty: true,
 	}
-	return partitionNum
+
+	require.NoError(t, rs.persistCheckpointSnapshot(context.Background(), snapshot, false))
+
+	require.Equal(t, [][2]uint64{{10, 5}}, module.persistedCheckpoints)
 }
 
-func (b *streamBuilder) segmentNum() int {
-	segmentNum := 0
-	for _, partitions := range b.collectionIDs {
-		for _, segments := range partitions {
-			segmentNum += len(segments)
-		}
+func TestRecoveryStorageObservesNonPersistedTimeTick(t *testing.T) {
+	rs := newRecoveryStorage(types.PChannelInfo{Name: "test_channel"}, &WALCheckpoint{
+		MessageID: rmq.NewRmqID(1),
+		TimeTick:  1,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: rmq.NewRmqID(1),
+			TimeTick:  1,
+		},
+	})
+	rs.modules = []moduleapi.Module{
+		&recordingModule{result: moduleapi.ObserveResult{
+			Meta: walcheckpoint.BarrierFunc(func() uint64 { return 5 }),
+			Data: walcheckpoint.BarrierFunc(func() uint64 { return 5 }),
+		}},
 	}
-	return segmentNum
+
+	msg := message.NewTimeTickMessageBuilderV1().
+		WithAllVChannel().
+		WithNotPersisted().
+		WithHeader(&message.TimeTickMessageHeader{}).
+		WithBody(&msgpb.TimeTickMsg{}).
+		MustBuildMutable().
+		WithTimeTick(5).
+		WithLastConfirmed(rmq.NewRmqID(5)).
+		IntoImmutableMessage(rmq.NewRmqID(5))
+	require.False(t, msg.IsPersisted())
+
+	rs.observeMessage(context.Background(), msg)
+	rs.checkpointManager.TryAdvanceMetaCheckpoint()
+	rs.checkpointManager.TryAdvanceDataCheckpoint()
+
+	assert.True(t, rmq.NewRmqID(5).EQ(rs.checkpoint.MessageID))
+	assert.Equal(t, uint64(5), rs.checkpoint.TimeTick)
+	require.NotNil(t, rs.checkpoint.DataCheckpoint)
+	assert.True(t, rmq.NewRmqID(5).EQ(rs.checkpoint.DataCheckpoint.MessageID))
+	assert.Equal(t, uint64(5), rs.checkpoint.DataCheckpoint.TimeTick)
 }
 
-func (b *streamBuilder) RWWALImpls() walimpls.WALImpls {
+func TestRecoveryStorageMetaCheckpointWaitsForPersistedMetaBarrier(t *testing.T) {
+	rs := newRecoveryStorage(types.PChannelInfo{Name: "test_channel"}, &WALCheckpoint{
+		MessageID: rmq.NewRmqID(1),
+		TimeTick:  1,
+	})
+	metaFrontier := newTestAtomicUint64(1)
+	module := &recordingModule{
+		result: moduleapi.ObserveResult{
+			Meta: walcheckpoint.BarrierFunc(func() uint64 { return metaFrontier.Load() }),
+		},
+	}
+	rs.modules = []moduleapi.Module{module}
+
+	msg := message.NewTimeTickMessageBuilderV1().
+		WithAllVChannel().
+		WithHeader(&message.TimeTickMessageHeader{}).
+		WithBody(&msgpb.TimeTickMsg{}).
+		MustBuildMutable().
+		WithTimeTick(5).
+		WithLastConfirmed(rmq.NewRmqID(5)).
+		IntoImmutableMessage(rmq.NewRmqID(5))
+
+	rs.observeMessage(context.Background(), msg)
+	assert.True(t, rmq.NewRmqID(1).EQ(rs.checkpoint.MessageID))
+	assert.Equal(t, uint64(1), rs.checkpoint.TimeTick)
+
+	snapshot := rs.consumeDirtySnapshot()
+	assert.Nil(t, snapshot)
+	assert.Equal(t, 1, module.persistRequests)
+
+	metaFrontier.Store(5)
+	rs.NotifyBarrierUpdated()
+
+	assert.True(t, rmq.NewRmqID(5).EQ(rs.checkpoint.MessageID))
+	assert.Equal(t, uint64(5), rs.checkpoint.TimeTick)
+}
+
+func updateCheckpointWithImmediateMetaBarrier(rs *recoveryStorageImpl, msg message.ImmutableMessage) {
+	timetick := msg.TimeTick()
+	rs.updateCheckpoint(msg, walcheckpoint.BarrierFunc(func() uint64 { return timetick }))
+}
+
+type recordingModule struct {
+	observed             []uint64
+	persistRequests      int
+	persistedCheckpoints [][2]uint64
+	result               moduleapi.ObserveResult
+}
+
+func newTestAtomicUint64(value uint64) *atomic.Uint64 {
+	frontier := &atomic.Uint64{}
+	frontier.Store(value)
+	return frontier
+}
+
+func (m *recordingModule) Name() string {
+	return "recording"
+}
+
+func (m *recordingModule) ObserveMessage(_ context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
+	m.observed = append(m.observed, msg.TimeTick())
+	return m.result
+}
+
+func (m *recordingModule) SwitchIntoMetaAndData() moduleapi.Snapshot {
 	return nil
 }
 
-type testRecoveryStream struct {
-	ch chan message.ImmutableMessage
+func (m *recordingModule) RequirePersist() {
+	m.persistRequests++
 }
 
-func (ts *testRecoveryStream) Chan() <-chan message.ImmutableMessage {
-	return ts.ch
+func (m *recordingModule) NotifyCheckpointPersisted(metaTimeTick uint64, dataTimeTick uint64) {
+	m.persistedCheckpoints = append(m.persistedCheckpoints, [2]uint64{metaTimeTick, dataTimeTick})
 }
 
-func (ts *testRecoveryStream) Error() error {
-	return nil
+func TestRecoveryStorageCheckpointDirtyTriggersModulePersist(t *testing.T) {
+	rs := newRecoveryStorage(types.PChannelInfo{Name: "test_channel"}, &WALCheckpoint{
+		MessageID: rmq.NewRmqID(1),
+		TimeTick:  1,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: rmq.NewRmqID(1),
+			TimeTick:  1,
+		},
+	})
+	module := &recordingModule{}
+	rs.modules = []moduleapi.Module{module}
+
+	msg := message.NewTimeTickMessageBuilderV1().
+		WithAllVChannel().
+		WithHeader(&message.TimeTickMessageHeader{}).
+		WithBody(&msgpb.TimeTickMsg{}).
+		MustBuildMutable().
+		WithTimeTick(5).
+		WithLastConfirmed(rmq.NewRmqID(5)).
+		IntoImmutableMessage(rmq.NewRmqID(5))
+	rs.updateCheckpoint(msg, walcheckpoint.BarrierFunc(func() uint64 { return 5 }))
+
+	require.True(t, rs.checkpointManager.HasDirty())
+	require.Equal(t, 0, rs.dirtyCounter)
+
+	snapshot := rs.consumeDirtySnapshot()
+	require.NotNil(t, snapshot)
+	assert.Equal(t, 1, module.persistRequests)
 }
 
-func (ts *testRecoveryStream) TxnBuffer() *utility.TxnBuffer {
-	return nil
+func TestRecoveryStorageDataCheckpointDirtyTriggersDataPersist(t *testing.T) {
+	rs := newRecoveryStorage(types.PChannelInfo{Name: "test_channel"}, &WALCheckpoint{
+		MessageID: rmq.NewRmqID(5),
+		TimeTick:  5,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: rmq.NewRmqID(1),
+			TimeTick:  1,
+		},
+	})
+	module := &recordingModule{}
+	rs.modules = []moduleapi.Module{module}
+
+	msg := message.NewTimeTickMessageBuilderV1().
+		WithAllVChannel().
+		WithHeader(&message.TimeTickMessageHeader{}).
+		WithBody(&msgpb.TimeTickMsg{}).
+		MustBuildMutable().
+		WithTimeTick(5).
+		WithLastConfirmed(rmq.NewRmqID(5)).
+		IntoImmutableMessage(rmq.NewRmqID(5))
+	rs.updateDataCheckpoint(msg, walcheckpoint.BarrierFunc(func() uint64 { return 5 }))
+
+	require.True(t, rs.checkpointManager.HasDirty())
+	require.Equal(t, 0, rs.dirtyCounter)
+
+	snapshot := rs.consumeDirtySnapshot()
+	require.NotNil(t, snapshot)
+	assert.Equal(t, 1, module.persistRequests)
 }
 
-func (ts *testRecoveryStream) Close() error {
-	return nil
+func TestRecoveryStorageDoesNotFilterPersistedMessageByTimeTick(t *testing.T) {
+	rs := newRecoveryStorage(types.PChannelInfo{Name: "test_channel"}, &WALCheckpoint{
+		MessageID: rmq.NewRmqID(10),
+		TimeTick:  10,
+	})
+	module := &recordingModule{}
+	rs.modules = []moduleapi.Module{module}
+
+	msg := message.NewTimeTickMessageBuilderV1().
+		WithAllVChannel().
+		WithHeader(&message.TimeTickMessageHeader{}).
+		WithBody(&msgpb.TimeTickMsg{}).
+		MustBuildMutable().
+		WithTimeTick(5).
+		WithLastConfirmed(rmq.NewRmqID(5)).
+		IntoImmutableMessage(rmq.NewRmqID(5))
+
+	rs.observeMessage(context.Background(), msg)
+
+	assert.Equal(t, []uint64{5}, module.observed)
+	assert.True(t, rmq.NewRmqID(10).EQ(rs.checkpoint.MessageID))
+	assert.Equal(t, uint64(10), rs.checkpoint.TimeTick)
 }
 
-func (b *streamBuilder) WALName() message.WALName {
+func TestRecoveryStorageRegistersReturnedDataBarrierWithoutModeCheck(t *testing.T) {
+	rs := newRecoveryStorage(types.PChannelInfo{Name: "test_channel"}, &WALCheckpoint{
+		MessageID: rmq.NewRmqID(1),
+		TimeTick:  1,
+	})
+	module := &recordingModule{
+		result: moduleapi.ObserveResult{
+			Meta: walcheckpoint.BarrierFunc(func() uint64 { return 5 }),
+			Data: walcheckpoint.BarrierFunc(func() uint64 { return 5 }),
+		},
+	}
+	rs.modules = []moduleapi.Module{module}
+
+	msg := message.NewTimeTickMessageBuilderV1().
+		WithAllVChannel().
+		WithHeader(&message.TimeTickMessageHeader{}).
+		WithBody(&msgpb.TimeTickMsg{}).
+		MustBuildMutable().
+		WithTimeTick(5).
+		WithLastConfirmed(rmq.NewRmqID(5)).
+		IntoImmutableMessage(rmq.NewRmqID(5))
+
+	rs.observeMessage(context.Background(), msg)
+
+	require.NotNil(t, rs.checkpoint.DataCheckpoint)
+	assert.True(t, rmq.NewRmqID(5).EQ(rs.checkpoint.DataCheckpoint.MessageID))
+	assert.Equal(t, uint64(5), rs.checkpoint.DataCheckpoint.TimeTick)
+}
+
+func TestRecoveryStorageStartsDataScannerFromDataCheckpoint(t *testing.T) {
+	channel := types.PChannelInfo{Name: "test_channel"}
+	rs := newRecoveryStorage(channel, &WALCheckpoint{
+		MessageID: rmq.NewRmqID(10),
+		TimeTick:  10,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: rmq.NewRmqID(3),
+			TimeTick:  3,
+		},
+	})
+	builder := &recordingRecoveryStreamBuilder{
+		channel: channel,
+		stream:  newBlockingRecoveryStream(),
+	}
+
+	rs.startDataLiveScanner(builder)
+	defer rs.backgroundTaskNotifier.Cancel()
+	defer builder.stream.Close()
+	defer rs.taskScheduler.Close()
+
+	require.Len(t, builder.builds, 1)
+	assert.True(t, rmq.NewRmqID(3).EQ(builder.builds[0].StartCheckpoint))
+	assert.Equal(t, uint64(0), builder.builds[0].EndTimeTick)
+}
+
+func TestRecoveryStorageMetaAndDataObserveRegistersDataBarrier(t *testing.T) {
+	rs := newRecoveryStorage(types.PChannelInfo{Name: "test_channel"}, &WALCheckpoint{
+		MessageID: rmq.NewRmqID(1),
+		TimeTick:  1,
+	})
+	dataFrontier := newTestAtomicUint64(1)
+	module := &recordingModule{
+		result: moduleapi.ObserveResult{
+			Meta: walcheckpoint.BarrierFunc(func() uint64 { return 5 }),
+			Data: walcheckpoint.BarrierFunc(func() uint64 { return dataFrontier.Load() }),
+		},
+	}
+	rs.modules = []moduleapi.Module{module}
+
+	msg := message.NewTimeTickMessageBuilderV1().
+		WithAllVChannel().
+		WithHeader(&message.TimeTickMessageHeader{}).
+		WithBody(&msgpb.TimeTickMsg{}).
+		MustBuildMutable().
+		WithTimeTick(5).
+		WithLastConfirmed(rmq.NewRmqID(5)).
+		IntoImmutableMessage(rmq.NewRmqID(5))
+
+	rs.observeMessage(context.Background(), msg)
+	assert.Nil(t, rs.checkpoint.DataCheckpoint)
+
+	dataFrontier.Store(5)
+	rs.checkpointManager.TryAdvanceMetaCheckpoint()
+	rs.checkpointManager.TryAdvanceDataCheckpoint()
+	require.NotNil(t, rs.checkpoint.DataCheckpoint)
+	assert.True(t, rmq.NewRmqID(5).EQ(rs.checkpoint.DataCheckpoint.MessageID))
+	assert.Equal(t, uint64(5), rs.checkpoint.DataCheckpoint.TimeTick)
+}
+
+func TestRecoveryStorageDataScannerObserveIgnoresMetaCheckpoint(t *testing.T) {
+	rs := newRecoveryStorage(types.PChannelInfo{Name: "test_channel"}, &WALCheckpoint{
+		MessageID: rmq.NewRmqID(100),
+		TimeTick:  100,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: rmq.NewRmqID(1),
+			TimeTick:  1,
+		},
+	})
+	dataFrontier := newTestAtomicUint64(1)
+	module := &recordingModule{
+		result: moduleapi.ObserveResult{
+			Meta: walcheckpoint.BarrierFunc(func() uint64 { return 5 }),
+			Data: walcheckpoint.BarrierFunc(func() uint64 { return dataFrontier.Load() }),
+		},
+	}
+	rs.modules = []moduleapi.Module{module}
+	msg := message.NewTimeTickMessageBuilderV1().
+		WithAllVChannel().
+		WithHeader(&message.TimeTickMessageHeader{}).
+		WithBody(&msgpb.TimeTickMsg{}).
+		MustBuildMutable().
+		WithTimeTick(5).
+		WithLastConfirmed(rmq.NewRmqID(5)).
+		IntoImmutableMessage(rmq.NewRmqID(5))
+
+	rs.observeDataScannerMessage(context.Background(), msg)
+	assert.True(t, rmq.NewRmqID(1).EQ(rs.checkpoint.DataCheckpoint.MessageID))
+	assert.Equal(t, uint64(1), rs.checkpoint.DataCheckpoint.TimeTick)
+
+	dataFrontier.Store(5)
+	rs.checkpointManager.TryAdvanceDataCheckpoint()
+
+	require.NotNil(t, rs.checkpoint.DataCheckpoint)
+	assert.True(t, rmq.NewRmqID(5).EQ(rs.checkpoint.DataCheckpoint.MessageID))
+	assert.Equal(t, uint64(5), rs.checkpoint.DataCheckpoint.TimeTick)
+}
+
+func TestRecoveryStorageDataScannerObservesMetaAfterMetaCheckpoint(t *testing.T) {
+	rs := newRecoveryStorage(types.PChannelInfo{Name: "test_channel"}, &WALCheckpoint{
+		MessageID: rmq.NewRmqID(1),
+		TimeTick:  1,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: rmq.NewRmqID(1),
+			TimeTick:  1,
+		},
+	})
+	metaFrontier := newTestAtomicUint64(1)
+	dataFrontier := newTestAtomicUint64(1)
+	module := &recordingModule{
+		result: moduleapi.ObserveResult{
+			Meta: walcheckpoint.BarrierFunc(func() uint64 { return metaFrontier.Load() }),
+			Data: walcheckpoint.BarrierFunc(func() uint64 { return dataFrontier.Load() }),
+		},
+	}
+	rs.modules = []moduleapi.Module{module}
+
+	msg := message.NewTimeTickMessageBuilderV1().
+		WithAllVChannel().
+		WithHeader(&message.TimeTickMessageHeader{}).
+		WithBody(&msgpb.TimeTickMsg{}).
+		MustBuildMutable().
+		WithTimeTick(5).
+		WithLastConfirmed(rmq.NewRmqID(5)).
+		IntoImmutableMessage(rmq.NewRmqID(5))
+
+	rs.observeDataScannerMessage(context.Background(), msg)
+	assert.Equal(t, []uint64{5}, module.observed)
+	assert.True(t, rmq.NewRmqID(1).EQ(rs.checkpoint.MessageID))
+	assert.Equal(t, uint64(1), rs.checkpoint.TimeTick)
+	require.NotNil(t, rs.checkpoint.DataCheckpoint)
+	assert.True(t, rmq.NewRmqID(1).EQ(rs.checkpoint.DataCheckpoint.MessageID))
+	assert.Equal(t, uint64(1), rs.checkpoint.DataCheckpoint.TimeTick)
+	assert.Equal(t, 1, rs.dirtyCounter)
+
+	snapshot := rs.consumeDirtySnapshot()
+	assert.Nil(t, snapshot)
+	assert.Equal(t, 1, module.persistRequests)
+	metaFrontier.Store(5)
+	dataFrontier.Store(5)
+	rs.NotifyBarrierUpdated()
+
+	assert.True(t, rmq.NewRmqID(5).EQ(rs.checkpoint.MessageID))
+	assert.Equal(t, uint64(5), rs.checkpoint.TimeTick)
+	require.NotNil(t, rs.checkpoint.DataCheckpoint)
+	assert.True(t, rmq.NewRmqID(5).EQ(rs.checkpoint.DataCheckpoint.MessageID))
+	assert.Equal(t, uint64(5), rs.checkpoint.DataCheckpoint.TimeTick)
+}
+
+type recordingRecoveryStreamBuilder struct {
+	channel types.PChannelInfo
+	stream  RecoveryStream
+	builds  []BuildRecoveryStreamParam
+}
+
+func (b *recordingRecoveryStreamBuilder) WALName() message.WALName {
 	return message.WALNameRocksmq
 }
 
-func (b *streamBuilder) Channel() types.PChannelInfo {
+func (b *recordingRecoveryStreamBuilder) Channel() types.PChannelInfo {
 	return b.channel
 }
 
-func (b *streamBuilder) Build(param BuildRecoveryStreamParam) RecoveryStream {
-	rs := &testRecoveryStream{
-		ch: make(chan message.ImmutableMessage, len(b.histories)),
-	}
-	cp := param.StartCheckpoint
-	for _, msg := range b.histories {
-		if cp.LTE(msg.MessageID()) {
-			rs.ch <- msg
-		}
-	}
-	close(rs.ch)
-	return rs
+func (b *recordingRecoveryStreamBuilder) Build(param BuildRecoveryStreamParam) RecoveryStream {
+	b.builds = append(b.builds, param)
+	return b.stream
 }
 
-func (b *streamBuilder) generateStreamMessage() []message.ImmutableMessage {
-	type opRate struct {
-		op   func() message.ImmutableMessage
-		rate int
-	}
-	opRates := []opRate{
-		{op: b.createCollection, rate: 1},
-		{op: b.createPartition, rate: 1},
-		{op: b.dropCollection, rate: 1},
-		{op: b.dropPartition, rate: 1},
-		{op: b.createSegment, rate: 2},
-		{op: b.flushSegment, rate: 2},
-		{op: b.createInsert, rate: 5},
-		{op: b.createDelete, rate: 5},
-		{op: b.createTxn, rate: 5},
-		{op: b.createManualFlush, rate: 2},
-		{op: b.createFlushAll, rate: 2},
-		{op: b.createSchemaChange, rate: 1},
-		{op: b.createTruncateCollection, rate: 1},
-	}
-	ops := make([]func() message.ImmutableMessage, 0)
-	for _, opRate := range opRates {
-		for i := 0; i < opRate.rate; i++ {
-			ops = append(ops, opRate.op)
-		}
-	}
-	msgs := make([]message.ImmutableMessage, 0)
-	for i := 0; i < int(rand.Int63n(1000)+1000); i++ {
-		op := rand.Int31n(int32(len(ops)))
-		if msg := ops[op](); msg != nil {
-			msgs = append(msgs, msg)
-		}
-	}
-	b.histories = append(b.histories, msgs...)
-	return msgs
-}
-
-// createCollection creates a collection message with the given vchannel.
-func (b *streamBuilder) createCollection() message.ImmutableMessage {
-	vchannel := fmt.Sprintf("vchannel_%d", b.allocID())
-	collectionID := b.allocID()
-	partitions := rand.Int31n(1023) + 1
-	partitionIDs := make(map[int64]map[int64]struct{}, partitions)
-	for i := int32(0); i < partitions; i++ {
-		partitionIDs[b.allocID()] = make(map[int64]struct{})
-	}
-	b.nextMessage()
-	b.collectionIDs[collectionID] = partitionIDs
-	b.vchannels[collectionID] = vchannel
-	return message.NewCreateCollectionMessageBuilderV1().
-		WithVChannel(vchannel).
-		WithHeader(&message.CreateCollectionMessageHeader{
-			CollectionId: collectionID,
-			PartitionIds: lo.Keys(partitionIDs),
-		}).
-		WithBody(&msgpb.CreateCollectionRequest{}).
-		MustBuildMutable().
-		WithTimeTick(b.timetick).
-		WithLastConfirmed(rmq.NewRmqID(b.lastConfirmedMessageID)).
-		IntoImmutableMessage(rmq.NewRmqID(b.messageID))
-}
-
-func (b *streamBuilder) createPartition() message.ImmutableMessage {
-	for collectionID, collection := range b.collectionIDs {
-		if rand.Int31n(3) < 1 {
-			continue
-		}
-		partitionID := b.allocID()
-		collection[partitionID] = make(map[int64]struct{})
-		b.nextMessage()
-		return message.NewCreatePartitionMessageBuilderV1().
-			WithVChannel(b.vchannels[collectionID]).
-			WithHeader(&message.CreatePartitionMessageHeader{
-				CollectionId: collectionID,
-				PartitionId:  partitionID,
-			}).
-			WithBody(&msgpb.CreatePartitionRequest{}).
-			MustBuildMutable().
-			WithTimeTick(b.timetick).
-			WithLastConfirmed(rmq.NewRmqID(b.lastConfirmedMessageID)).
-			IntoImmutableMessage(rmq.NewRmqID(b.messageID))
-	}
+func (b *recordingRecoveryStreamBuilder) RWWALImpls() walimpls.WALImpls {
 	return nil
 }
 
-func (b *streamBuilder) createSegment() message.ImmutableMessage {
-	for collectionID, collection := range b.collectionIDs {
-		if rand.Int31n(3) < 1 {
-			continue
-		}
-		for partitionID, partition := range collection {
-			if rand.Int31n(3) < 1 {
-				continue
-			}
-			segmentID := b.allocID()
-			partition[segmentID] = struct{}{}
-			b.nextMessage()
-			return message.NewCreateSegmentMessageBuilderV2().
-				WithVChannel(b.vchannels[collectionID]).
-				WithHeader(&message.CreateSegmentMessageHeader{
-					CollectionId:   collectionID,
-					SegmentId:      segmentID,
-					PartitionId:    partitionID,
-					StorageVersion: 1,
-					MaxSegmentSize: 1024,
-				}).
-				WithBody(&message.CreateSegmentMessageBody{}).
-				MustBuildMutable().
-				WithTimeTick(b.timetick).
-				WithLastConfirmed(rmq.NewRmqID(b.lastConfirmedMessageID)).
-				IntoImmutableMessage(rmq.NewRmqID(b.messageID))
-		}
-	}
+type blockingRecoveryStream struct {
+	ch     chan message.ImmutableMessage
+	closed atomic.Bool
+}
+
+func newBlockingRecoveryStream() *blockingRecoveryStream {
+	return &blockingRecoveryStream{ch: make(chan message.ImmutableMessage)}
+}
+
+func (s *blockingRecoveryStream) Chan() <-chan message.ImmutableMessage {
+	return s.ch
+}
+
+func (s *blockingRecoveryStream) Error() error {
 	return nil
 }
 
-func (b *streamBuilder) dropCollection() message.ImmutableMessage {
-	for collectionID := range b.collectionIDs {
-		if rand.Int31n(3) < 1 {
-			continue
-		}
-		b.nextMessage()
-		delete(b.collectionIDs, collectionID)
-		return message.NewDropCollectionMessageBuilderV1().
-			WithVChannel(b.vchannels[collectionID]).
-			WithHeader(&message.DropCollectionMessageHeader{
-				CollectionId: collectionID,
-			}).
-			WithBody(&msgpb.DropCollectionRequest{}).
-			MustBuildMutable().
-			WithTimeTick(b.timetick).
-			WithLastConfirmed(rmq.NewRmqID(b.lastConfirmedMessageID)).
-			IntoImmutableMessage(rmq.NewRmqID(b.messageID))
-	}
+func (s *blockingRecoveryStream) TxnBuffer() *utility.TxnBuffer {
 	return nil
 }
 
-func (b *streamBuilder) dropPartition() message.ImmutableMessage {
-	for collectionID, collection := range b.collectionIDs {
-		if rand.Int31n(3) < 1 {
-			continue
-		}
-		for partitionID := range collection {
-			if rand.Int31n(3) < 1 {
-				continue
-			}
-			b.nextMessage()
-			delete(collection, partitionID)
-			return message.NewDropPartitionMessageBuilderV1().
-				WithVChannel(b.vchannels[collectionID]).
-				WithHeader(&message.DropPartitionMessageHeader{
-					CollectionId: collectionID,
-					PartitionId:  partitionID,
-				}).
-				WithBody(&msgpb.DropPartitionRequest{}).
-				MustBuildMutable().
-				WithTimeTick(b.timetick).
-				WithLastConfirmed(rmq.NewRmqID(b.lastConfirmedMessageID)).
-				IntoImmutableMessage(rmq.NewRmqID(b.messageID))
-		}
+func (s *blockingRecoveryStream) Close() error {
+	if s.closed.CompareAndSwap(false, true) {
+		close(s.ch)
 	}
 	return nil
-}
-
-func (b *streamBuilder) flushSegment() message.ImmutableMessage {
-	for collectionID, collection := range b.collectionIDs {
-		if rand.Int31n(3) < 1 {
-			continue
-		}
-		for partitionID := range collection {
-			if rand.Int31n(3) < 1 {
-				continue
-			}
-			for segmentID := range collection[partitionID] {
-				if rand.Int31n(4) < 1 {
-					continue
-				}
-				delete(collection[partitionID], segmentID)
-				b.nextMessage()
-				return message.NewFlushMessageBuilderV2().
-					WithVChannel(b.vchannels[collectionID]).
-					WithHeader(&message.FlushMessageHeader{
-						CollectionId: collectionID,
-						SegmentId:    segmentID,
-					}).
-					WithBody(&message.FlushMessageBody{}).
-					MustBuildMutable().
-					WithTimeTick(b.timetick).
-					WithLastConfirmed(rmq.NewRmqID(b.lastConfirmedMessageID)).
-					IntoImmutableMessage(rmq.NewRmqID(b.messageID))
-			}
-		}
-	}
-	return nil
-}
-
-func (b *streamBuilder) createTxn() message.ImmutableMessage {
-	for collectionID, collection := range b.collectionIDs {
-		if rand.Int31n(3) < 1 {
-			continue
-		}
-		b.nextMessage()
-		txnSession := &message.TxnContext{
-			TxnID: message.TxnID(b.allocID()),
-		}
-		begin := message.NewBeginTxnMessageBuilderV2().
-			WithVChannel(b.vchannels[collectionID]).
-			WithHeader(&message.BeginTxnMessageHeader{}).
-			WithBody(&message.BeginTxnMessageBody{}).
-			MustBuildMutable().
-			WithTimeTick(b.timetick).
-			WithTxnContext(*txnSession).
-			WithLastConfirmed(rmq.NewRmqID(b.lastConfirmedMessageID)).
-			IntoImmutableMessage(rmq.NewRmqID(b.messageID))
-
-		builder := message.NewImmutableTxnMessageBuilder(message.MustAsImmutableBeginTxnMessageV2(begin))
-		for partitionID := range collection {
-			for segmentID := range collection[partitionID] {
-				b.nextMessage()
-				builder.Add(message.NewInsertMessageBuilderV1().
-					WithVChannel(b.vchannels[collectionID]).
-					WithHeader(&message.InsertMessageHeader{
-						CollectionId: collectionID,
-						Partitions: []*messagespb.PartitionSegmentAssignment{
-							{
-								PartitionId:       partitionID,
-								Rows:              uint64(rand.Int31n(100)),
-								BinarySize:        uint64(rand.Int31n(100)),
-								SegmentAssignment: &messagespb.SegmentAssignment{SegmentId: segmentID},
-							},
-						},
-					}).
-					WithBody(&msgpb.InsertRequest{}).
-					MustBuildMutable().
-					WithTimeTick(b.timetick).
-					WithTxnContext(*txnSession).
-					WithLastConfirmed(rmq.NewRmqID(b.lastConfirmedMessageID)).
-					IntoImmutableMessage(rmq.NewRmqID(b.messageID)))
-			}
-		}
-
-		b.nextMessage()
-		commit := message.NewCommitTxnMessageBuilderV2().
-			WithVChannel(b.vchannels[collectionID]).
-			WithHeader(&message.CommitTxnMessageHeader{}).
-			WithBody(&message.CommitTxnMessageBody{}).
-			MustBuildMutable().
-			WithTimeTick(b.timetick).
-			WithTxnContext(*txnSession).
-			WithLastConfirmed(rmq.NewRmqID(b.lastConfirmedMessageID)).
-			IntoImmutableMessage(rmq.NewRmqID(b.messageID))
-		txnMsg, _ := builder.Build(message.MustAsImmutableCommitTxnMessageV2(commit))
-		return txnMsg
-	}
-	return nil
-}
-
-func (b *streamBuilder) createDelete() message.ImmutableMessage {
-	for collectionID := range b.collectionIDs {
-		if rand.Int31n(3) < 1 {
-			continue
-		}
-		b.nextMessage()
-		return message.NewDeleteMessageBuilderV1().
-			WithVChannel(b.vchannels[collectionID]).
-			WithHeader(&message.DeleteMessageHeader{
-				CollectionId: collectionID,
-			}).
-			WithBody(&msgpb.DeleteRequest{}).
-			MustBuildMutable().
-			WithTimeTick(b.timetick).
-			WithLastConfirmed(rmq.NewRmqID(b.lastConfirmedMessageID)).
-			IntoImmutableMessage(rmq.NewRmqID(b.messageID))
-	}
-	return nil
-}
-
-func (b *streamBuilder) createManualFlush() message.ImmutableMessage {
-	for collectionID, collection := range b.collectionIDs {
-		if rand.Int31n(3) < 1 {
-			continue
-		}
-		segmentIDs := make([]int64, 0)
-		for partitionID := range collection {
-			for segmentID := range collection[partitionID] {
-				segmentIDs = append(segmentIDs, segmentID)
-				delete(collection[partitionID], segmentID)
-			}
-		}
-		if len(segmentIDs) == 0 {
-			continue
-		}
-		b.nextMessage()
-		return message.NewManualFlushMessageBuilderV2().
-			WithVChannel(b.vchannels[collectionID]).
-			WithHeader(&message.ManualFlushMessageHeader{
-				CollectionId: collectionID,
-				SegmentIds:   segmentIDs,
-			}).
-			WithBody(&message.ManualFlushMessageBody{}).
-			MustBuildMutable().
-			WithTimeTick(b.timetick).
-			WithLastConfirmed(rmq.NewRmqID(b.lastConfirmedMessageID)).
-			IntoImmutableMessage(rmq.NewRmqID(b.messageID))
-	}
-	return nil
-}
-
-func (b *streamBuilder) createFlushAll() message.ImmutableMessage {
-	if rand.Int31n(3) < 1 {
-		return nil
-	}
-	for _, collection := range b.collectionIDs {
-		for partitionID := range collection {
-			for segmentID := range collection[partitionID] {
-				delete(collection[partitionID], segmentID)
-			}
-		}
-	}
-	b.nextMessage()
-	return message.NewFlushAllMessageBuilderV2().
-		WithVChannel(b.channel.Name).
-		WithHeader(&message.FlushAllMessageHeader{}).
-		WithBody(&message.FlushAllMessageBody{}).
-		MustBuildMutable().
-		WithTimeTick(b.timetick).
-		WithLastConfirmed(rmq.NewRmqID(b.lastConfirmedMessageID)).
-		IntoImmutableMessage(rmq.NewRmqID(b.messageID))
-}
-
-func (b *streamBuilder) createSchemaChange() message.ImmutableMessage {
-	for collectionID, collection := range b.collectionIDs {
-		if rand.Int31n(3) < 1 {
-			continue
-		}
-		segmentIDs := make([]int64, 0)
-		for partitionID := range collection {
-			for segmentID := range collection[partitionID] {
-				segmentIDs = append(segmentIDs, segmentID)
-				delete(collection[partitionID], segmentID)
-			}
-		}
-		b.nextMessage()
-		return message.NewSchemaChangeMessageBuilderV2().
-			WithVChannel(b.vchannels[collectionID]).
-			WithHeader(&message.SchemaChangeMessageHeader{
-				CollectionId:      collectionID,
-				FlushedSegmentIds: segmentIDs,
-			}).
-			WithBody(&message.SchemaChangeMessageBody{}).
-			MustBuildMutable().
-			WithTimeTick(b.timetick).
-			WithLastConfirmed(rmq.NewRmqID(b.lastConfirmedMessageID)).
-			IntoImmutableMessage(rmq.NewRmqID(b.messageID))
-	}
-	return nil
-}
-
-func (b *streamBuilder) createInsert() message.ImmutableMessage {
-	for collectionID, collection := range b.collectionIDs {
-		if rand.Int31n(3) < 1 {
-			continue
-		}
-		for partitionID := range collection {
-			if rand.Int31n(3) < 1 {
-				continue
-			}
-			for segmentID := range collection[partitionID] {
-				if rand.Int31n(4) < 2 {
-					continue
-				}
-				b.nextMessage()
-				return message.NewInsertMessageBuilderV1().
-					WithVChannel(b.vchannels[collectionID]).
-					WithHeader(&message.InsertMessageHeader{
-						CollectionId: collectionID,
-						Partitions: []*messagespb.PartitionSegmentAssignment{
-							{
-								PartitionId:       partitionID,
-								Rows:              uint64(rand.Int31n(100)),
-								BinarySize:        uint64(rand.Int31n(100)),
-								SegmentAssignment: &messagespb.SegmentAssignment{SegmentId: segmentID},
-							},
-						},
-					}).
-					WithBody(&msgpb.InsertRequest{}).
-					MustBuildMutable().
-					WithTimeTick(b.timetick).
-					WithLastConfirmed(rmq.NewRmqID(b.lastConfirmedMessageID)).
-					IntoImmutableMessage(rmq.NewRmqID(b.messageID))
-			}
-		}
-	}
-	return nil
-}
-
-func (b *streamBuilder) createTruncateCollection() message.ImmutableMessage {
-	for collectionID, collection := range b.collectionIDs {
-		if rand.Int31n(3) < 1 {
-			continue
-		}
-		segmentIDs := make([]int64, 0)
-		for partitionID := range collection {
-			for segmentID := range collection[partitionID] {
-				segmentIDs = append(segmentIDs, segmentID)
-				delete(collection[partitionID], segmentID)
-			}
-		}
-		if len(segmentIDs) == 0 {
-			continue
-		}
-		b.nextMessage()
-		return message.NewTruncateCollectionMessageBuilderV2().
-			WithVChannel(b.vchannels[collectionID]).
-			WithHeader(&messagespb.TruncateCollectionMessageHeader{
-				CollectionId: collectionID,
-				SegmentIds:   segmentIDs,
-			}).
-			WithBody(&messagespb.TruncateCollectionMessageBody{}).
-			MustBuildMutable().
-			WithTimeTick(b.timetick).
-			WithLastConfirmed(rmq.NewRmqID(b.lastConfirmedMessageID)).
-			IntoImmutableMessage(rmq.NewRmqID(b.messageID))
-	}
-	return nil
-}
-
-func (b *streamBuilder) nextMessage() {
-	b.messageID++
-	if rand.Int31n(3) < 2 {
-		b.lastConfirmedMessageID = b.messageID + 1
-	}
-	b.timetick++
-}
-
-func (b *streamBuilder) allocID() int64 {
-	b.idAlloc++
-	return b.idAlloc
 }

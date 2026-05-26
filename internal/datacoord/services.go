@@ -2839,10 +2839,8 @@ func (s *Server) ListRefreshExternalCollectionJobs(ctx context.Context, req *dat
 }
 
 // broadcastCommitImportMessage broadcasts a CommitImport WAL message for the given import job.
-// The message is broadcast to the job's data vchannels so each vchannel's WAL flusher
-// can observe the commit fence, flush pending DML, and call HandleCommitVchannel.
-// (Control-channel-only broadcast is dropped by the flusher's IsControlChannel guard
-// before reaching the CommitImport case, so it cannot drive per-vchannel commits.)
+// The message is broadcast to the job's data vchannels so each vchannel's recovery data path
+// can observe the commit fence, flush pending DML, and ack after the local durable state advances.
 func (s *Server) broadcastCommitImportMessage(ctx context.Context, job ImportJob) error {
 	broadcaster, err := s.startBroadcastWithCollectionID(ctx, job.GetCollectionID())
 	if err != nil {
@@ -2856,7 +2854,7 @@ func (s *Server) broadcastCommitImportMessage(ctx context.Context, job ImportJob
 			JobId:        job.GetJobID(),
 		}).
 		WithBody(&messagespb.CommitImportMessageBody{}).
-		WithBroadcast(job.GetVchannels()).
+		WithBroadcast(job.GetVchannels(), message.OptBuildBroadcastAckSyncUp()).
 		MustBuildBroadcast()
 
 	_, err = broadcaster.Broadcast(ctx, msg)
@@ -2978,15 +2976,19 @@ func (s *Server) HandleCommitVchannel(ctx context.Context, req *datapb.HandleCom
 	if err := merr.CheckHealthy(s.GetStateCode()); err != nil {
 		return merr.Status(err), nil
 	}
-	jobID := req.GetJobId()
-	vchannel := req.GetVchannel()
+	if err := s.handleCommitImportVChannel(ctx, req.GetJobId(), req.GetVchannel()); err != nil {
+		return merr.Status(err), nil
+	}
+	return merr.Success(), nil
+}
 
+func (s *Server) handleCommitImportVChannel(ctx context.Context, jobID int64, vchannel string) error {
 	// Pre-fetch segment IDs for this job+vchannel BEFORE calling HandleCommitVchannel.
 	// The callback must not access importMeta because HandleCommitVchannel holds m.mu (write lock);
 	// calling GetTaskBy inside the callback would attempt to re-acquire m.mu (read lock) → deadlock.
 	segIDs := s.getImportSegmentIDsByVchannel(ctx, jobID, vchannel)
 
-	err := s.importMeta.HandleCommitVchannel(ctx, jobID, vchannel, func() error {
+	return s.importMeta.HandleCommitVchannel(ctx, jobID, vchannel, func() error {
 		// Only access s.meta (segment meta) here, NOT s.importMeta.
 		// Batch all segment updates into a single UpdateSegmentsInfo call (one etcd write).
 		ops := make([]UpdateOperator, 0, len(segIDs))
@@ -2998,10 +3000,6 @@ func (s *Server) HandleCommitVchannel(ctx context.Context, req *datapb.HandleCom
 		}
 		return s.meta.UpdateSegmentsInfo(ctx, ops...)
 	})
-	if err != nil {
-		return merr.Status(err), nil
-	}
-	return merr.Success(), nil
 }
 
 // getImportSegmentIDsByVchannel returns all segment IDs (including sorted segments) belonging to
