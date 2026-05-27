@@ -20,7 +20,6 @@ import (
 	"context"
 	"io"
 	"os"
-	"sync"
 	"testing"
 	"time"
 
@@ -51,7 +50,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/metric"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
-	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
@@ -2282,9 +2280,9 @@ func TestDelegatorCatchingUpStreamingData(t *testing.T) {
 			vchannelName:               "test-channel",
 			latestTsafe:                atomic.NewUint64(0),
 			catchingUpStreamingData:    atomic.NewBool(true),
-			tsCond:                     syncutil.NewContextCond(&sync.Mutex{}),
 			latestRequiredMVCCTimeTick: atomic.NewUint64(0),
 		}
+		sd.tsafeWaiters = newTSafeWaiterManager(sd.latestTsafe)
 
 		// Initially catching up
 		assert.True(t, sd.CatchingUpStreamingData())
@@ -2306,9 +2304,9 @@ func TestDelegatorCatchingUpStreamingData(t *testing.T) {
 			vchannelName:               "test-channel",
 			latestTsafe:                atomic.NewUint64(0),
 			catchingUpStreamingData:    atomic.NewBool(true),
-			tsCond:                     syncutil.NewContextCond(&sync.Mutex{}),
 			latestRequiredMVCCTimeTick: atomic.NewUint64(0),
 		}
+		sd.tsafeWaiters = newTSafeWaiterManager(sd.latestTsafe)
 
 		// Initially catching up
 		assert.True(t, sd.CatchingUpStreamingData())
@@ -2330,9 +2328,9 @@ func TestDelegatorCatchingUpStreamingData(t *testing.T) {
 			vchannelName:               "test-channel",
 			latestTsafe:                atomic.NewUint64(0),
 			catchingUpStreamingData:    atomic.NewBool(true),
-			tsCond:                     syncutil.NewContextCond(&sync.Mutex{}),
 			latestRequiredMVCCTimeTick: atomic.NewUint64(0),
 		}
+		sd.tsafeWaiters = newTSafeWaiterManager(sd.latestTsafe)
 
 		// Initially catching up
 		assert.True(t, sd.CatchingUpStreamingData())

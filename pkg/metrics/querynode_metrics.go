@@ -189,6 +189,37 @@ var (
 			queryTypeLabelName,
 		})
 
+	QueryNodeWaitTSafeWaiterCount = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: milvusNamespace,
+			Subsystem: typeutil.QueryNodeRole,
+			Name:      "wait_tsafe_waiter_count",
+			Help:      "number of active waitTSafe waiters",
+		}, []string{
+			nodeIDLabelName,
+		})
+
+	QueryNodeWaitTSafeWakeupCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: milvusNamespace,
+			Subsystem: typeutil.QueryNodeRole,
+			Name:      "wait_tsafe_wakeup_count",
+			Help:      "count of waitTSafe waiters finished by status",
+		}, []string{
+			nodeIDLabelName,
+			statusLabelName,
+		})
+
+	QueryNodeWaitTSafeAvoidedWakeupCount = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: milvusNamespace,
+			Subsystem: typeutil.QueryNodeRole,
+			Name:      "wait_tsafe_avoided_wakeup_count",
+			Help:      "count of unsatisfied waitTSafe waiters not woken by targeted tSafe notification",
+		}, []string{
+			nodeIDLabelName,
+		})
+
 	QueryNodeSQLatencyInQueue = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: milvusNamespace,
@@ -965,6 +996,9 @@ func RegisterQueryNode(registry *prometheus.Registry) {
 	registry.MustRegister(QueryNodeSQCount)
 	registry.MustRegister(QueryNodeSQReqLatency)
 	registry.MustRegister(QueryNodeSQLatencyWaitTSafe)
+	registry.MustRegister(QueryNodeWaitTSafeWaiterCount)
+	registry.MustRegister(QueryNodeWaitTSafeWakeupCount)
+	registry.MustRegister(QueryNodeWaitTSafeAvoidedWakeupCount)
 	registry.MustRegister(QueryNodeSQLatencyInQueue)
 	registry.MustRegister(QueryNodeSQPerUserLatencyInQueue)
 	registry.MustRegister(QueryNodeSQSegmentLatency)

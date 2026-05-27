@@ -141,10 +141,10 @@ type shardDelegator struct {
 	deleteMut    sync.RWMutex
 	deleteBuffer deletebuffer.DeleteBuffer[*deletebuffer.Item]
 
-	sf          conc.Singleflight[struct{}]
-	loader      segments.Loader
-	tsCond      *syncutil.ContextCond
-	latestTsafe *atomic.Uint64
+	sf           conc.Singleflight[struct{}]
+	loader       segments.Loader
+	tsafeWaiters *tsafeWaiterManager
+	latestTsafe  *atomic.Uint64
 	// queryHook
 	queryHook      optimizers.QueryHook
 	partitionStats map[UniqueID]*storage.PartitionStatsSnapshot
@@ -1082,35 +1082,67 @@ func (sd *shardDelegator) waitTSafe(ctx context.Context, ts uint64) (uint64, err
 	// (e.g. forward delete retrying against a dead QueryNode).
 	stallTimeout := paramtable.Get().QueryNodeCfg.WaitTsafeStallTimeout.GetAsDurationByParse()
 
-	// Standard condition variable pattern: Lock → for !condition { Wait } → Unlock
-	sd.tsCond.L.Lock()
-	for sd.latestTsafe.Load() < ts && sd.Serviceable() {
-		stallCtx, stallCancel := context.WithTimeout(ctx, stallTimeout)
-		err := sd.tsCond.Wait(stallCtx)
-		stallCancel()
-		if err != nil {
-			// Wait returned without holding the lock.
-			if ctx.Err() != nil {
-				return 0, ctx.Err()
+	observedTSafe := latestTSafe
+	nodeID := paramtable.GetStringNodeID()
+	for {
+		current, waiter, closed := sd.tsafeWaiters.addWaiter(ts)
+		if current >= ts {
+			return current, nil
+		}
+		if closed || !sd.Serviceable() {
+			return 0, merr.WrapErrChannelNotAvailable(sd.vchannelName, "delegator closed during wait tsafe")
+		}
+		if current > observedTSafe {
+			observedTSafe = current
+		}
+		metrics.QueryNodeWaitTSafeWaiterCount.WithLabelValues(nodeID).Inc()
+
+		timer := time.NewTimer(stallTimeout)
+		select {
+		case <-waiter.done:
+			stopTSafeWaitTimer(timer)
+			metrics.QueryNodeWaitTSafeWaiterCount.WithLabelValues(nodeID).Dec()
+			current = sd.latestTsafe.Load()
+			if current >= ts {
+				metrics.QueryNodeWaitTSafeWakeupCount.WithLabelValues(nodeID, metrics.SuccessLabel).Inc()
+				return current, nil
 			}
-			// No broadcast within stallTimeout — tSafe is stalled.
+			if !sd.Serviceable() {
+				metrics.QueryNodeWaitTSafeWakeupCount.WithLabelValues(nodeID, waitTSafeClosedLabel).Inc()
+				return 0, merr.WrapErrChannelNotAvailable(sd.vchannelName, "delegator closed during wait tsafe")
+			}
+			if current > observedTSafe {
+				observedTSafe = current
+			}
+		case <-ctx.Done():
+			stopTSafeWaitTimer(timer)
+			sd.tsafeWaiters.cancel(waiter)
+			metrics.QueryNodeWaitTSafeWaiterCount.WithLabelValues(nodeID).Dec()
+			metrics.QueryNodeWaitTSafeWakeupCount.WithLabelValues(nodeID, metrics.CancelLabel).Inc()
+			return 0, ctx.Err()
+		case <-timer.C:
+			sd.tsafeWaiters.cancel(waiter)
+			metrics.QueryNodeWaitTSafeWaiterCount.WithLabelValues(nodeID).Dec()
+			current = sd.latestTsafe.Load()
+			if current >= ts {
+				metrics.QueryNodeWaitTSafeWakeupCount.WithLabelValues(nodeID, metrics.SuccessLabel).Inc()
+				return current, nil
+			}
+			if current > observedTSafe {
+				observedTSafe = current
+				continue
+			}
+
+			observedTime := tsoutil.PhysicalTime(observedTSafe)
 			log.Warn("tsafe stall detected, fast-fail to allow proxy failover",
-				zap.Uint64("currentTsafe", sd.latestTsafe.Load()),
+				zap.Uint64("currentTsafe", current),
 				zap.Uint64("targetTs", ts),
 				zap.Duration("stallTimeout", stallTimeout),
 			)
-			return 0, WrapErrTsLagTooLarge(sd.vchannelName, gt.Sub(st), stallTimeout)
+			metrics.QueryNodeWaitTSafeWakeupCount.WithLabelValues(nodeID, metrics.FailLabel).Inc()
+			return 0, WrapErrTsLagTooLarge(sd.vchannelName, gt.Sub(observedTime), stallTimeout)
 		}
-		// Woken by broadcast with lock re-acquired, loop back to re-check condition.
 	}
-	current := sd.latestTsafe.Load()
-	serviceable := sd.Serviceable()
-	sd.tsCond.L.Unlock()
-
-	if !serviceable {
-		return 0, merr.WrapErrChannelNotAvailable(sd.vchannelName, "delegator closed during wait tsafe")
-	}
-	return current, nil
 }
 
 // GetLatestRequiredMVCCTimeTick returns the latest required mvcc timestamp for the delegator.
@@ -1150,12 +1182,10 @@ func (sd *shardDelegator) UpdateTSafe(tsafe uint64) {
 		return
 	}
 
-	// Store and broadcast under lock to prevent lost wakeups:
-	// without the lock, a waiter could observe the old tSafe, then enter
-	// Wait() after the broadcast has already fired, missing the notification.
-	sd.tsCond.LockAndBroadcast()
-	sd.latestTsafe.Store(tsafe)
-	sd.tsCond.L.Unlock()
+	_, avoidedWakeup := sd.tsafeWaiters.update(tsafe)
+	if avoidedWakeup > 0 {
+		metrics.QueryNodeWaitTSafeAvoidedWakeupCount.WithLabelValues(paramtable.GetStringNodeID()).Add(float64(avoidedWakeup))
+	}
 
 	// Check if caught up with streaming data (all fields are atomic, no lock needed)
 	if sd.catchingUpStreamingData.Load() {
@@ -1250,8 +1280,7 @@ func (sd *shardDelegator) Close() {
 	sd.lifetime.SetState(lifetime.Stopped)
 	sd.lifetime.Close()
 	// broadcast to all waitTsafe to quit
-	sd.tsCond.LockAndBroadcast()
-	sd.tsCond.L.Unlock()
+	sd.tsafeWaiters.closeAll()
 	sd.lifetime.Wait()
 
 	// Stop background snapshot loop before refunding candidates
@@ -1459,7 +1488,7 @@ func NewShardDelegator(ctx context.Context, collectionID UniqueID, replicaID Uni
 		}
 	}
 
-	sd.tsCond = syncutil.NewContextCond(&sync.Mutex{})
+	sd.tsafeWaiters = newTSafeWaiterManager(sd.latestTsafe)
 	paramtable.Get().Watch(paramtable.Get().QueryNodeCfg.DelegatorPostLoadConcurrencyFactor.Key, postLoadConfigHandler)
 	log.Info("finish build new shardDelegator")
 	return sd, nil
