@@ -84,7 +84,10 @@ func TestQueryViewAtCoordBuilder(t *testing.T) {
 		Meta:      result.Meta,
 		QueryNode: []*viewpb.QueryViewOfQueryNode{node1001},
 	})
-	assert.ElementsMatch(t, []int64{100, 101, 201}, qv1001.(*QueryViewAtQueryNode).SegmentIDs())
+	assert.Equal(t, map[int64][]int64{
+		1: {100, 101},
+		2: {201},
+	}, qv1001.(*QueryViewAtQueryNode).SegmentIDs())
 }
 
 func TestQueryViewAtCoordBuilder_Empty(t *testing.T) {

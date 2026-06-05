@@ -10,8 +10,12 @@ type AcquireSegments struct {
 	// Key identifies the query view that holds the segment references.
 	Key qviews.QueryViewKey
 
-	// SegmentIDs lists all segments this view requires.
-	SegmentIDs []int64
+	// CollectionID identifies the collection these segments belong to.
+	CollectionID int64
+
+	// SegmentIDs maps partitionID to segment IDs assigned to this view.
+	// Grouped by partition to preserve association for progress reporting.
+	SegmentIDs map[int64][]int64
 
 	// Settings contains the load configuration (fields, partitions, etc.).
 	Settings *viewpb.QueryViewSettings
@@ -31,6 +35,10 @@ type AcquireSegments struct {
 type ReleaseSegments struct {
 	// Key identifies the query view whose segment references are being released.
 	Key qviews.QueryViewKey
+
+	// SegmentIDs maps partitionID to segment IDs to release.
+	// Must match the partition→segment mapping used during Acquire.
+	SegmentIDs map[int64][]int64
 
 	// OnDropped is called when the release operation completes (segments actually
 	// unloaded or ref counts decremented).
