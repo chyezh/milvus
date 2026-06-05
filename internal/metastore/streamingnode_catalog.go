@@ -18,11 +18,17 @@ type StreamingNodeCataLog interface {
 	// SaveVChannels save vchannel on current pchannel.
 	SaveVChannels(ctx context.Context, pchannelName string, vchannels map[string]*streamingpb.VChannelMeta) error
 
+	// DropVChannels drops retained vchannel recovery meta on current pchannel.
+	DropVChannels(ctx context.Context, pchannelName string, vchannels map[string]*streamingpb.VChannelMeta) error
+
 	// ListSegmentAssignment list all segment assignments for the wal.
 	ListSegmentAssignment(ctx context.Context, pChannelName string) ([]*streamingpb.SegmentAssignmentMeta, error)
 
 	// SaveSegmentAssignments save the segment assignments for the wal.
 	SaveSegmentAssignments(ctx context.Context, pChannelName string, infos map[int64]*streamingpb.SegmentAssignmentMeta) error
+
+	// DropSegmentAssignments drops retained segment assignment recovery meta for the wal.
+	DropSegmentAssignments(ctx context.Context, pChannelName string, segmentIDs []int64) error
 
 	// GetConsumeCheckpoint gets the consuming checkpoint of the wal.
 	// Return nil, nil if the checkpoint is not exist.
