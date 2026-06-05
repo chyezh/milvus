@@ -169,6 +169,32 @@ func (m *Manager) DataCheckpointTimeTick() uint64 {
 	return dataTimeTick
 }
 
+func (m *Manager) ChannelDataCheckpointTimeTicks() map[string]uint64 {
+	checkpoints := make(map[string]uint64, len(m.vchannelViews))
+	for vchannelName, vchannel := range m.vchannelViews {
+		if vchannel == nil {
+			continue
+		}
+		if timetick := vchannel.DataCheckpointTimeTick(); timetick > 0 {
+			checkpoints[vchannelName] = timetick
+		}
+	}
+	for _, segment := range m.segmentViews {
+		if segment == nil {
+			continue
+		}
+		meta := segment.AssignmentMeta()
+		if meta == nil || meta.GetVchannel() == "" {
+			continue
+		}
+		current, ok := checkpoints[meta.GetVchannel()]
+		if timetick := segment.DataCheckpointTimeTick(); timetick > 0 && (!ok || timetick < current) {
+			checkpoints[meta.GetVchannel()] = timetick
+		}
+	}
+	return checkpoints
+}
+
 func frontierBefore(timetick uint64) uint64 {
 	if timetick == 0 {
 		return 0

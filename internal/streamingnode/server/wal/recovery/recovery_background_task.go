@@ -6,12 +6,15 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/pkg/v3/log"
+	msgadaptor "github.com/milvus-io/milvus/pkg/v3/streaming/util/message/adaptor"
 )
 
 // isDirty checks if the recovery storage mem state is not consistent with the persisted recovery storage.
@@ -173,24 +176,27 @@ func (rs *recoveryStorageImpl) notifyCheckpointPersisted(checkpoint *WALCheckpoi
 
 func (rs *recoveryStorageImpl) refreshSnapshotCheckpoint(snapshot *RecoverySnapshot) {
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
 
 	if rs.checkpointManager == nil {
+		rs.mu.Unlock()
 		return
 	}
 	rs.checkpointManager.TryAdvanceMetaCheckpoint()
 	rs.checkpointManager.TryAdvanceDataCheckpoint()
-	rs.updateDataCheckpointFromViewsLocked()
+	channelCheckpoints := rs.updateDataCheckpointFromViewsLocked()
 	if checkpointDirty := rs.checkpointManager.ConsumeDirty(); checkpointDirty {
 		snapshot.Checkpoint = rs.checkpointManager.Snapshot()
 		snapshot.CheckpointDirty = true
 	}
+	rs.mu.Unlock()
+	rs.updateChannelCheckpoints(channelCheckpoints)
 }
 
-func (rs *recoveryStorageImpl) updateDataCheckpointFromViewsLocked() {
+func (rs *recoveryStorageImpl) updateDataCheckpointFromViewsLocked() []*msgpb.MsgPosition {
 	if dataTimeTick := rs.dataCheckpointTimeTickLocked(); dataTimeTick != math.MaxUint64 {
 		rs.checkpointManager.UpdateDataCheckpointFromPhysicalCheckpoint(dataTimeTick)
 	}
+	return rs.channelDataCheckpointPositionsLocked()
 }
 
 func (rs *recoveryStorageImpl) dataCheckpointTimeTickLocked() uint64 {
@@ -205,6 +211,52 @@ func (rs *recoveryStorageImpl) dataCheckpointTimeTickLocked() uint64 {
 		}
 	}
 	return dataTimeTick
+}
+
+func (rs *recoveryStorageImpl) channelDataCheckpointPositionsLocked() []*msgpb.MsgPosition {
+	if rs.checkpointManager == nil || rs.checkpointManager.Checkpoint().MessageID == nil {
+		return nil
+	}
+	channelTimeTicks := make(map[string]uint64)
+	for _, module := range rs.modules {
+		view, ok := module.(moduleapi.ChannelDataCheckpointView)
+		if !ok {
+			continue
+		}
+		for vchannel, timetick := range view.ChannelDataCheckpointTimeTicks() {
+			if vchannel == "" || timetick == 0 || timetick == math.MaxUint64 {
+				continue
+			}
+			current, ok := channelTimeTicks[vchannel]
+			if !ok || timetick < current {
+				channelTimeTicks[vchannel] = timetick
+			}
+		}
+	}
+	if len(channelTimeTicks) == 0 {
+		return nil
+	}
+	msgID, walName := msgadaptor.MustGetMQWrapperIDAndWALNameFromMessage(rs.checkpointManager.Checkpoint().MessageID)
+	msgIDBytes := msgID.Serialize()
+	positions := make([]*msgpb.MsgPosition, 0, len(channelTimeTicks))
+	for vchannel, timetick := range channelTimeTicks {
+		positions = append(positions, &msgpb.MsgPosition{
+			ChannelName: vchannel,
+			MsgID:       msgIDBytes,
+			Timestamp:   timetick,
+			WALName:     commonpb.WALName(walName),
+		})
+	}
+	return positions
+}
+
+func (rs *recoveryStorageImpl) updateChannelCheckpoints(positions []*msgpb.MsgPosition) {
+	if rs.channelCheckpointUpdater == nil {
+		return
+	}
+	for _, pos := range positions {
+		rs.channelCheckpointUpdater.AddTask(pos, true, func() {})
+	}
 }
 
 func (rs *recoveryStorageImpl) simpleTruncateCheckpoint(ctx context.Context, checkpoint *WALCheckpoint) {

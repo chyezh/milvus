@@ -36,6 +36,10 @@ type DataCheckpointView interface {
 	DataCheckpointTimeTick() uint64
 }
 
+type ChannelDataCheckpointView interface {
+	ChannelDataCheckpointTimeTicks() map[string]uint64
+}
+
 type Runtime struct {
 	Scheduler AsyncTaskScheduler
 	Notifier  BarrierUpdatedNotifier
