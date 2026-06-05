@@ -246,6 +246,42 @@ func TestVChannelViewObserveCreatePartitionUsesMetaWatermark(t *testing.T) {
 	assert.False(t, hasPartitionMeta(vchannel.AssignmentMeta(), 20))
 }
 
+func TestGrowingManagerDataCheckpointTimeTickUsesMinimumViewDataCheckpoint(t *testing.T) {
+	manager := NewManager(map[string]*streamingpb.VChannelMeta{
+		"v1": {
+			Vchannel:               "v1",
+			State:                  streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
+			CheckpointTimeTick:     100,
+			DataCheckpointTimeTick: 80,
+			CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
+				CollectionId: 1,
+				Partitions: []*streamingpb.PartitionInfoOfVChannel{
+					{PartitionId: 10, State: streamingpb.PartitionState_PARTITION_STATE_NORMAL},
+				},
+				Schemas: []*streamingpb.CollectionSchemaOfVChannel{
+					{Schema: &schemapb.CollectionSchema{}, CheckpointTimeTick: 1},
+				},
+			},
+			LatestDataVersion:  &viewpb.DataVersion{},
+			GrowingSegmentMode: streamingpb.GrowingSegmentMode_GROWING_SEGMENT_MODE_WRITE_ONLY,
+		},
+	}, map[int64]*streamingpb.SegmentAssignmentMeta{
+		100: {
+			CollectionId:           1,
+			PartitionId:            10,
+			SegmentId:              100,
+			Vchannel:               "v1",
+			State:                  streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING,
+			CheckpointTimeTick:     100,
+			DataCheckpointTimeTick: 60,
+			Stat:                   &streamingpb.SegmentAssignmentStat{CreateSegmentTimeTick: 1},
+			PersistedStorage:       &streamingpb.L1SegmentPersistedStorage{},
+		},
+	}, nil)
+
+	assert.Equal(t, uint64(60), manager.DataCheckpointTimeTick())
+}
+
 type neverFlushPolicy struct{}
 
 func (neverFlushPolicy) ShouldFlush(writeOnlyInsertBuffer, uint64) bool {

@@ -155,6 +155,12 @@ func (info *vChannelView) TimeTick() uint64 {
 	return info.persistedDataTimeTick
 }
 
+func (info *vChannelView) DataCheckpointTimeTick() uint64 {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	return info.meta.GetDataCheckpointTimeTick()
+}
+
 func (info *vChannelView) hasPendingDataWorkLocked() bool {
 	if info.meta.GetDataCheckpointTimeTick() > info.persistedDataTimeTick {
 		return true

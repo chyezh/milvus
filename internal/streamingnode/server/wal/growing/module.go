@@ -148,6 +148,27 @@ func (owners durableFrontierOwners) TimeTick() uint64 {
 	return frontier
 }
 
+func (m *Manager) DataCheckpointTimeTick() uint64 {
+	dataTimeTick := uint64(math.MaxUint64)
+	for _, vchannel := range m.vchannelViews {
+		if vchannel == nil {
+			continue
+		}
+		if timetick := vchannel.DataCheckpointTimeTick(); timetick < dataTimeTick {
+			dataTimeTick = timetick
+		}
+	}
+	for _, segment := range m.segmentViews {
+		if segment == nil {
+			continue
+		}
+		if timetick := segment.DataCheckpointTimeTick(); timetick < dataTimeTick {
+			dataTimeTick = timetick
+		}
+	}
+	return dataTimeTick
+}
+
 func frontierBefore(timetick uint64) uint64 {
 	if timetick == 0 {
 		return 0
@@ -242,3 +263,4 @@ func (m *Manager) NotifyCheckpointPersisted(metaTimeTick uint64, dataTimeTick ui
 
 var _ moduleapi.Module = (*Manager)(nil)
 var _ moduleapi.DurableFrontierView = (*Manager)(nil)
+var _ moduleapi.DataCheckpointView = (*Manager)(nil)

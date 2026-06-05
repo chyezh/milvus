@@ -2,6 +2,7 @@ package recovery
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -179,10 +180,31 @@ func (rs *recoveryStorageImpl) refreshSnapshotCheckpoint(snapshot *RecoverySnaps
 	}
 	rs.checkpointManager.TryAdvanceMetaCheckpoint()
 	rs.checkpointManager.TryAdvanceDataCheckpoint()
-	if rs.checkpointManager.ConsumeDirty() {
+	rs.updateDataCheckpointFromViewsLocked()
+	if checkpointDirty := rs.checkpointManager.ConsumeDirty(); checkpointDirty {
 		snapshot.Checkpoint = rs.checkpointManager.Snapshot()
 		snapshot.CheckpointDirty = true
 	}
+}
+
+func (rs *recoveryStorageImpl) updateDataCheckpointFromViewsLocked() {
+	if dataTimeTick := rs.dataCheckpointTimeTickLocked(); dataTimeTick != math.MaxUint64 {
+		rs.checkpointManager.UpdateDataCheckpointFromPhysicalCheckpoint(dataTimeTick)
+	}
+}
+
+func (rs *recoveryStorageImpl) dataCheckpointTimeTickLocked() uint64 {
+	dataTimeTick := uint64(math.MaxUint64)
+	for _, module := range rs.modules {
+		view, ok := module.(moduleapi.DataCheckpointView)
+		if !ok {
+			continue
+		}
+		if timetick := view.DataCheckpointTimeTick(); timetick < dataTimeTick {
+			dataTimeTick = timetick
+		}
+	}
+	return dataTimeTick
 }
 
 func (rs *recoveryStorageImpl) simpleTruncateCheckpoint(ctx context.Context, checkpoint *WALCheckpoint) {

@@ -177,6 +177,7 @@ func (r *recoveryStorageImpl) NotifyBarrierUpdated() {
 	}
 	r.checkpointManager.TryAdvanceMetaCheckpoint()
 	r.checkpointManager.TryAdvanceDataCheckpoint()
+	r.updateDataCheckpointFromViewsLocked()
 	r.notifyPersist()
 	if r.taskScheduler != nil {
 		r.taskScheduler.Notify()
