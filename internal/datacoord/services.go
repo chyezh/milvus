@@ -1470,6 +1470,9 @@ func (s *Server) GetFlushState(ctx context.Context, req *datapb.GetFlushStateReq
 
 			return resp, nil
 		}
+		resp.Flushed = true
+		log.Info("GetFlushState all segment flushed")
+		return resp, nil
 	}
 
 	channels, err := s.getChannelsByCollectionID(ctx, req.GetCollectionID())

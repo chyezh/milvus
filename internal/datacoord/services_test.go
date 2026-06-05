@@ -78,7 +78,7 @@ func (s *ServerSuite) SetupSuite() {
 		<-ctx.Done()
 		return ctx.Err()
 	})
-	b.EXPECT().GetLatestWALLocated(mock.Anything, mock.Anything).Return(0, true)
+	b.EXPECT().GetLatestWALLocated(mock.Anything, mock.Anything).Return(0, true).Maybe()
 	balance.Register(b)
 }
 
@@ -149,23 +149,19 @@ func (s *ServerSuite) TestGetFlushState_ByFlushTs() {
 }
 
 func (s *ServerSuite) TestGetFlushState_BySegment() {
-	s.mockMixCoord.EXPECT().DescribeCollectionInternal(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, req *milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error) {
-		return &milvuspb.DescribeCollectionResponse{
-			Status:              merr.Success(),
-			VirtualChannelNames: []string{"ch1"},
-		}, nil
-	})
 	tests := []struct {
 		description string
 		segID       int64
 		state       commonpb.SegmentState
+		flushTs     uint64
 
 		expected bool
 	}{
-		{"flushed seg1", 1, commonpb.SegmentState_Flushed, true},
-		{"flushed seg2", 2, commonpb.SegmentState_Flushed, true},
-		{"sealed seg3", 3, commonpb.SegmentState_Sealed, false},
-		{"compacted/dropped seg4", 4, commonpb.SegmentState_Dropped, true},
+		{"flushed seg1", 1, commonpb.SegmentState_Flushed, 0, true},
+		{"flushed seg2", 2, commonpb.SegmentState_Flushed, 0, true},
+		{"flushed segment ignores stale channel checkpoint", 5, commonpb.SegmentState_Flushed, 13, true},
+		{"sealed seg3", 3, commonpb.SegmentState_Sealed, 0, false},
+		{"compacted/dropped seg4", 4, commonpb.SegmentState_Dropped, 0, true},
 	}
 
 	for _, test := range tests {
@@ -184,7 +180,10 @@ func (s *ServerSuite) TestGetFlushState_BySegment() {
 			})
 			s.Require().NoError(err)
 
-			resp, err := s.testServer.GetFlushState(context.TODO(), &datapb.GetFlushStateRequest{SegmentIDs: []int64{test.segID}})
+			resp, err := s.testServer.GetFlushState(context.TODO(), &datapb.GetFlushStateRequest{
+				SegmentIDs: []int64{test.segID},
+				FlushTs:    test.flushTs,
+			})
 			s.NoError(err)
 			s.EqualValues(&milvuspb.GetFlushStateResponse{
 				Status:  merr.Success(),
