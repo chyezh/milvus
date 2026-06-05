@@ -209,19 +209,16 @@ func (s *Server) broadcastImport(ctx context.Context,
 
 func (c *DDLCallbacks) registerImportCallbacks() {
 	registry.RegisterImportV1AckCallback(c.importV1AckCallback)
-	registry.RegisterCommitImportV2AckCallback(c.commitImportV2AckCallback)
+	registry.RegisterCommitImportV2AckOnceCallback(c.commitImportV2AckOnceCallback)
 	registry.RegisterRollbackImportV2AckCallback(c.rollbackImportV2AckCallback)
 }
 
-// commitImportV2AckCallback handles the ack callback for CommitImport WAL message.
-// It transitions the import job from Uncommitted → Committing state.
-// Concurrency safety is guaranteed by the broadcaster framework's resource key lock
-// (exclusive collection-level lock), so no CAS is needed here.
-func (c *DDLCallbacks) commitImportV2AckCallback(ctx context.Context, result message.BroadcastResultCommitImportMessageV2) error {
-	header := result.Message.Header()
-	jobID := header.GetJobId()
-	mlog.Info(ctx, "CommitImport broadcast ack received", mlog.FieldJobID(jobID))
-
+func (c *DDLCallbacks) commitImportV2AckOnceCallback(ctx context.Context, result message.AckResultCommitImportMessageV2) error {
+	msg := result.Message
+	if funcutil.IsControlChannel(msg.VChannel()) {
+		return nil
+	}
+	jobID := msg.Header().GetJobId()
 	job := c.importMeta.GetJob(ctx, jobID)
 	if job == nil {
 		mlog.Warn(ctx, "CommitImport: job not found, skipping", mlog.FieldJobID(jobID))
@@ -229,14 +226,17 @@ func (c *DDLCallbacks) commitImportV2AckCallback(ctx context.Context, result mes
 	}
 	switch job.GetState() {
 	case internalpb.ImportJobState_Uncommitted:
-		// proceed
-	case internalpb.ImportJobState_Committing, internalpb.ImportJobState_Completed:
-		mlog.Info(ctx, "CommitImport: job already committing or completed, no-op",
+		if err := c.importMeta.UpdateJob(ctx, jobID, UpdateJobState(internalpb.ImportJobState_Importing)); err != nil {
+			return err
+		}
+		uncommittedDuration := job.GetTR().RecordSpan()
+		mlog.Info(ctx, "import job uncommitted stage done",
+			mlog.FieldJobID(jobID),
+			mlog.Duration("jobTimeCost/uncommitted", uncommittedDuration))
+	case internalpb.ImportJobState_Importing, internalpb.ImportJobState_Committing:
+	case internalpb.ImportJobState_Completed, internalpb.ImportJobState_Failed:
+		mlog.Info(ctx, "CommitImport: job already terminal, no-op",
 			mlog.FieldJobID(jobID), mlog.String("state", job.GetState().String()))
-		return nil
-	case internalpb.ImportJobState_Failed:
-		mlog.Info(ctx, "CommitImport: job already failed, no-op",
-			mlog.FieldJobID(jobID))
 		return nil
 	default:
 		// CommitImport may be replicated before the local import task reaches
@@ -246,18 +246,7 @@ func (c *DDLCallbacks) commitImportV2AckCallback(ctx context.Context, result mes
 			mlog.FieldJobID(jobID), mlog.String("state", job.GetState().String()))
 		return merr.WrapErrImportSysFailedMsg("job %d is in state %s, waiting for Uncommitted", jobID, job.GetState())
 	}
-
-	if err := c.importMeta.UpdateJob(ctx, jobID,
-		UpdateJobState(internalpb.ImportJobState_Committing),
-	); err != nil {
-		return err
-	}
-
-	uncommittedDuration := job.GetTR().RecordSpan()
-	mlog.Info(ctx, "import job uncommitted stage done",
-		mlog.FieldJobID(jobID),
-		mlog.Duration("jobTimeCost/uncommitted", uncommittedDuration))
-	return nil
+	return c.handleCommitImportVChannel(ctx, jobID, msg.VChannel(), msg.TimeTick())
 }
 
 // rollbackImportV2AckCallback handles the ack callback for RollbackImport WAL message.

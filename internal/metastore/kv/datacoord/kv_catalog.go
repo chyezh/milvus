@@ -1312,19 +1312,19 @@ func (kc *Catalog) ListDataViews(ctx context.Context) (map[int64][]*viewpb.DataV
 	applyFn := func(key []byte, value []byte) error {
 		parts := strings.Split(string(key), "/")
 		if len(parts) < 3 {
-			log.Ctx(ctx).Warn("invalid data view key format", zap.String("key", string(key)))
+			mlog.Warn(ctx, "invalid data view key format", mlog.String("key", string(key)))
 			return fmt.Errorf("invalid data view key format: %s", string(key))
 		}
 		collectionID, err := strconv.ParseInt(parts[len(parts)-3], 10, 64)
 		if err != nil {
-			log.Ctx(ctx).Warn("failed to parse collectionID from data view key",
-				zap.String("key", string(key)), zap.Error(err))
+			mlog.Warn(ctx, "failed to parse collectionID from data view key",
+				mlog.String("key", string(key)), mlog.Err(err))
 			return err
 		}
 		view := &viewpb.DataViewOfCollection{}
 		if err := proto.Unmarshal(value, view); err != nil {
-			log.Ctx(ctx).Warn("failed to unmarshal DataViewOfCollection",
-				zap.String("key", string(key)), zap.Error(err))
+			mlog.Warn(ctx, "failed to unmarshal DataViewOfCollection",
+				mlog.String("key", string(key)), mlog.Err(err))
 			return err
 		}
 		views[collectionID] = append(views[collectionID], view)
