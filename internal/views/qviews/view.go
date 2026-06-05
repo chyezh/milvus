@@ -129,11 +129,11 @@ func (qv *QueryViewAtQueryNode) ViewOfQueryNode() *viewpb.QueryViewOfQueryNode {
 	return qv.inner.QueryNode[0]
 }
 
-// SegmentIDs returns all segment IDs assigned to this query node across all partitions.
-func (qv *QueryViewAtQueryNode) SegmentIDs() []int64 {
-	var ids []int64
+// SegmentIDs returns segment IDs grouped by partition.
+func (qv *QueryViewAtQueryNode) SegmentIDs() map[int64][]int64 {
+	result := make(map[int64][]int64, len(qv.ViewOfQueryNode().Partitions))
 	for _, p := range qv.ViewOfQueryNode().Partitions {
-		ids = append(ids, p.SegmentIds...)
+		result[p.PartitionId] = p.SegmentIds
 	}
-	return ids
+	return result
 }

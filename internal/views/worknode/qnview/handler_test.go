@@ -166,7 +166,11 @@ func TestQNHandler_ApplyViews_NewPreparing(t *testing.T) {
 	key := view.QueryViewKey()
 	req, ok := mgr.getAcquired(key)
 	require.True(t, ok)
-	assert.ElementsMatch(t, []int64{1000, 1001, 2000}, req.SegmentIDs)
+	assert.Equal(t, int64(testCollectionID), req.CollectionID)
+	assert.Equal(t, map[int64][]int64{
+		10: {1000, 1001},
+		20: {2000},
+	}, req.SegmentIDs)
 	assert.NotNil(t, req.OnReady)
 	assert.NotNil(t, req.OnUnrecoverable)
 }

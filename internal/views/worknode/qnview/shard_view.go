@@ -54,18 +54,17 @@ func (s *qnShardView) applyOneLocked(av *handler.ApplyView) {
 		case qviews.QueryViewStatePreparing:
 			// New Preparing view: create SM and acquire segments.
 			qnView := av.View.(*qviews.QueryViewAtQueryNode)
-			sm := NewQNQueryViewStateMachine(
-				qnView.IntoProto().Meta,
-				qnView.ViewOfQueryNode(),
-			)
+			pb := qnView.IntoProto()
+			sm := NewQNQueryViewStateMachine(pb.Meta, qnView.ViewOfQueryNode())
 			entry = &qnViewEntry{ApplyView: *av, sm: sm}
 			s.views[key.QueryViewVersion] = entry
 
 			// Tell SegmentManager to load segments. Callbacks will drive SM progress.
 			s.segMgr.Acquire(AcquireSegments{
-				Key:        key,
-				SegmentIDs: qnView.SegmentIDs(),
-				Settings:   qnView.IntoProto().Meta.Settings,
+				Key:          key,
+				CollectionID: pb.Meta.CollectionId,
+				SegmentIDs:   qnView.SegmentIDs(),
+				Settings:     pb.Meta.Settings,
 				OnReady: func(readySegments map[int64][]int64) {
 					s.notifySegmentsReady(key.QueryViewVersion, readySegments)
 				},
@@ -151,8 +150,10 @@ func (s *qnShardView) consumeReportAndCleanup(key qviews.QueryViewKey, entry *qn
 		entry.OnReport(qviews.NewQueryViewAtWorkNodeFromProto(report))
 	}
 	if entry.sm.ConsumeRelease() {
+		qnView := entry.View.(*qviews.QueryViewAtQueryNode)
 		s.segMgr.Release(ReleaseSegments{
-			Key: key,
+			Key:        key,
+			SegmentIDs: qnView.SegmentIDs(),
 			OnDropped: func() {
 				s.notifyDropped(key.QueryViewVersion)
 			},
