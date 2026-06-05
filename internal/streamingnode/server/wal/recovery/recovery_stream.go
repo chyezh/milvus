@@ -5,16 +5,16 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/growing"
 	"github.com/milvus-io/milvus/pkg/v3/log"
-	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 )
 
-// recoverFromStream recovers the recovery storage from the recovery stream.
-func (r *recoveryStorageImpl) recoverFromStream(
+// runBoundedMetaScannerAndSwitchModules recovers fast module metadata from a bounded WAL scan,
+// then switches modules into MetaAndData mode and returns their open snapshot.
+func (r *recoveryStorageImpl) runBoundedMetaScannerAndSwitchModules(
 	ctx context.Context,
 	recoveryStreamBuilder RecoveryStreamBuilder,
 	lastTimeTickMessage message.ImmutableMessage,
@@ -58,7 +58,7 @@ L:
 	if rs.Error() != nil {
 		return nil, errors.Wrap(rs.Error(), "failed to read the recovery info from wal")
 	}
-	snapshot = r.getSnapshot()
+	snapshot = r.switchModulesIntoMetaAndData()
 	snapshot.TxnBuffer = rs.TxnBuffer()
 	logFields := []zap.Field{
 		zap.String("channel", recoveryStreamBuilder.Channel().String()),
@@ -77,55 +77,17 @@ L:
 	return snapshot, nil
 }
 
-// getSnapshot returns the snapshot of the recovery storage.
-// Use this function to get the snapshot after recovery is finished,
-// and use the snapshot to recover all write ahead components.
-func (r *recoveryStorageImpl) getSnapshot() *RecoverySnapshot {
-	segments := make(map[int64]*streamingpb.SegmentAssignmentMeta, len(r.segments))
-	vchannels := make(map[string]*streamingpb.VChannelMeta, len(r.vchannels))
-	// Collect active vchannels and build a set of active partition IDs (globally unique).
-	activePartitions := make(map[int64]struct{})
-	for channelName, vchannel := range r.vchannels {
-		if vchannel.IsActive() {
-			vchannels[channelName] = proto.Clone(vchannel.meta).(*streamingpb.VChannelMeta)
-			for _, p := range vchannel.meta.CollectionInfo.Partitions {
-				activePartitions[p.PartitionId] = struct{}{}
-			}
-		}
-	}
-	for segmentID, segment := range r.segments {
-		if !segment.IsGrowing() {
-			continue
-		}
-		// Defensive filtering: skip recoverable segment assignments whose parent vchannel
-		// does not exist or is not active, or whose partition has been dropped. This can happen due to
-		// non-atomic etcd persistence or Kafka offset compaction replaying CreateSegment
-		// for dropped collections/partitions.
-		if _, ok := vchannels[segment.meta.Vchannel]; !ok {
-			r.Logger().Warn("getSnapshot: skipping orphaned segment assignment with non-active vchannel",
-				zap.Int64("segmentID", segmentID),
-				zap.String("vchannel", segment.meta.Vchannel),
-				zap.Int64("collectionID", segment.meta.CollectionId),
-				zap.String("state", segment.meta.State.String()),
-			)
-			continue
-		}
-		if _, ok := activePartitions[segment.meta.PartitionId]; !ok {
-			r.Logger().Warn("getSnapshot: skipping orphaned segment assignment with dropped partition",
-				zap.Int64("segmentID", segmentID),
-				zap.String("vchannel", segment.meta.Vchannel),
-				zap.Int64("collectionID", segment.meta.CollectionId),
-				zap.Int64("partitionID", segment.meta.PartitionId),
-				zap.String("state", segment.meta.State.String()),
-			)
-			continue
-		}
-		segments[segmentID] = proto.Clone(segment.meta).(*streamingpb.SegmentAssignmentMeta)
-	}
+func (r *recoveryStorageImpl) switchModulesIntoMetaAndData() *RecoverySnapshot {
 	snapshot := &RecoverySnapshot{
-		VChannels:          vchannels,
-		SegmentAssignments: segments,
-		Checkpoint:         r.checkpoint.Clone(),
+		Checkpoint: r.checkpointManager.Snapshot(),
+	}
+	for _, module := range r.modules {
+		moduleSnapshot := module.SwitchIntoMetaAndData()
+		switch s := moduleSnapshot.(type) {
+		case *growing.Snapshot:
+			snapshot.VChannels = s.VChannels
+			snapshot.SegmentAssignments = s.SegmentAssignments
+		}
 	}
 	if r.alterWALInfo != nil {
 		alterWALInfoCopy := *r.alterWALInfo
