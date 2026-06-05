@@ -17,7 +17,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
-	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/rmq"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
 )
 
@@ -64,35 +63,6 @@ type testDataCheckpointModule struct {
 
 func (m *testDataCheckpointModule) DataCheckpointTimeTick() uint64 {
 	return m.timetick
-}
-
-type testChannelDataCheckpointModule struct {
-	testRecoveryModule
-	timetick         uint64
-	channelTimeTicks map[string]uint64
-}
-
-func (m *testChannelDataCheckpointModule) DataCheckpointTimeTick() uint64 {
-	return m.timetick
-}
-
-func (m *testChannelDataCheckpointModule) ChannelDataCheckpointTimeTicks() map[string]uint64 {
-	return m.channelTimeTicks
-}
-
-type testChannelCheckpointUpdater struct {
-	positions []*msgpb.MsgPosition
-	flushes   []bool
-	closed    bool
-}
-
-func (u *testChannelCheckpointUpdater) AddTask(channelPos *msgpb.MsgPosition, flush bool, callback func()) {
-	u.positions = append(u.positions, channelPos)
-	u.flushes = append(u.flushes, flush)
-}
-
-func (u *testChannelCheckpointUpdater) Close() {
-	u.closed = true
 }
 
 func TestRecoveryStorageRegistersImmediateCheckpointForBarrierlessMessage(t *testing.T) {
@@ -151,51 +121,6 @@ func TestRecoveryStorageNotifyBarrierUpdatedUsesViewDataCheckpoint(t *testing.T)
 	assert.True(t, walimplstest.NewTestMessageID(10).EQ(snapshot.DataCheckpoint.MessageID))
 	assert.Equal(t, uint64(80), snapshot.DataCheckpoint.TimeTick)
 	assert.True(t, storage.checkpointManager.HasDirty())
-}
-
-func TestRecoveryStorageNotifyBarrierUpdatedUpdatesChannelCheckpointsFromViews(t *testing.T) {
-	checkpoint := &utility.WALCheckpoint{
-		MessageID: rmq.NewRmqID(10),
-		TimeTick:  100,
-		DataCheckpoint: &utility.WALConsumeCheckpoint{
-			MessageID: rmq.NewRmqID(5),
-			TimeTick:  50,
-		},
-	}
-	storage := newRecoveryStorage(types.PChannelInfo{Name: "test-pchannel"}, checkpoint)
-	defer storage.metrics.Close()
-	defer storage.taskScheduler.Close()
-	updater := &testChannelCheckpointUpdater{}
-	storage.channelCheckpointUpdater = updater
-	storage.modules = []moduleapi.Module{&testChannelDataCheckpointModule{
-		timetick: 60,
-		channelTimeTicks: map[string]uint64{
-			"v1": 60,
-			"v2": 80,
-		},
-	}}
-
-	storage.NotifyBarrierUpdated()
-
-	require.Len(t, updater.positions, 2)
-	assert.ElementsMatch(t, []string{"v1", "v2"}, []string{
-		updater.positions[0].GetChannelName(),
-		updater.positions[1].GetChannelName(),
-	})
-	byChannel := map[string]*msgpb.MsgPosition{}
-	for _, pos := range updater.positions {
-		byChannel[pos.GetChannelName()] = pos
-	}
-	assert.Equal(t, uint64(60), byChannel["v1"].GetTimestamp())
-	assert.Equal(t, uint64(80), byChannel["v2"].GetTimestamp())
-	assert.Equal(t, commonpb.WALName_RocksMQ, byChannel["v1"].GetWALName())
-	assert.Equal(t, []byte{10, 0, 0, 0, 0, 0, 0, 0}, byChannel["v1"].GetMsgID())
-	assert.Equal(t, []bool{true, true}, updater.flushes)
-
-	snapshot := storage.checkpointManager.Snapshot()
-	require.NotNil(t, snapshot.DataCheckpoint)
-	assert.True(t, rmq.NewRmqID(10).EQ(snapshot.DataCheckpoint.MessageID))
-	assert.Equal(t, uint64(60), snapshot.DataCheckpoint.TimeTick)
 }
 
 func TestValidateRecoveredGrowingMetaNormalizesBackwardCompatibleDefaults(t *testing.T) {

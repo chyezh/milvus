@@ -4,17 +4,13 @@ import (
 	"context"
 	"sync"
 
-	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"go.uber.org/zap"
 
-	flushbroker "github.com/milvus-io/milvus/internal/flushcommon/broker"
-	flushutil "github.com/milvus-io/milvus/internal/flushcommon/util"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/growing"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
-	internaltypes "github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/idalloc"
 	"github.com/milvus-io/milvus/pkg/v3/log"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -34,17 +30,6 @@ const (
 	recoveryStorageStateStreamRecovering  = "stream-recovering"
 	recoveryStorageStateWorking           = "working"
 )
-
-type channelCheckpointUpdater interface {
-	AddTask(channelPos *msgpb.MsgPosition, flush bool, callback func())
-	Close()
-}
-
-func newChannelCheckpointUpdater(coord internaltypes.MixCoordClient, serverID int64) channelCheckpointUpdater {
-	updater := flushutil.NewChannelCheckpointUpdater(flushbroker.NewCoordBroker(coord, serverID))
-	go updater.Start()
-	return updater
-}
 
 // RecoverRecoveryStorage creates a new recovery storage.
 func RecoverRecoveryStorage(
@@ -129,12 +114,11 @@ type recoveryStorageImpl struct {
 	taskScheduler          *scheduler.Scheduler
 	dirtyCounter           int // records the message count since last persist snapshot.
 	// used to trigger the recovery persist operation.
-	persistNotifier          chan struct{}
-	gracefulClosed           bool
-	truncator                walimpls.WALImpls
-	metrics                  *recoveryMetrics
-	pendingPersistSnapshot   *RecoverySnapshot
-	channelCheckpointUpdater channelCheckpointUpdater
+	persistNotifier        chan struct{}
+	gracefulClosed         bool
+	truncator              walimpls.WALImpls
+	metrics                *recoveryMetrics
+	pendingPersistSnapshot *RecoverySnapshot
 	// used to mark switch MQ msg found
 	alterWALInfo *AlterWALInfo
 	// pendingSalvageCheckpoint holds the salvage checkpoint captured during force promote.
@@ -160,7 +144,6 @@ func (r *recoveryStorageImpl) initGrowingManager(
 	if err != nil {
 		return err
 	}
-	r.channelCheckpointUpdater = newChannelCheckpointUpdater(coord, paramtable.GetNodeID())
 	catalog := resource.Resource().StreamingNodeCatalog()
 	moduleRuntime := moduleapi.Runtime{
 		Scheduler: r.taskScheduler,
@@ -188,19 +171,17 @@ func (r *recoveryStorageImpl) initGrowingManager(
 
 func (r *recoveryStorageImpl) NotifyBarrierUpdated() {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.checkpointManager == nil {
-		r.mu.Unlock()
 		return
 	}
 	r.checkpointManager.TryAdvanceMetaCheckpoint()
 	r.checkpointManager.TryAdvanceDataCheckpoint()
-	channelCheckpoints := r.updateDataCheckpointFromViewsLocked()
+	r.updateDataCheckpointFromViewsLocked()
 	r.notifyPersist()
 	if r.taskScheduler != nil {
 		r.taskScheduler.Notify()
 	}
-	r.mu.Unlock()
-	r.updateChannelCheckpoints(channelCheckpoints)
 }
 
 // Metrics gets the metrics of the wal.
@@ -222,9 +203,6 @@ func (r *recoveryStorageImpl) ObserveMessage(ctx context.Context, msg message.Im
 
 // Close closes the recovery storage and wait the background task stop.
 func (r *recoveryStorageImpl) Close() {
-	if r.channelCheckpointUpdater != nil {
-		r.channelCheckpointUpdater.Close()
-	}
 	r.backgroundTaskNotifier.Cancel()
 	r.backgroundTaskNotifier.BlockUntilFinish()
 	if r.taskScheduler != nil {

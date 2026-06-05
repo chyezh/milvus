@@ -282,52 +282,6 @@ func TestGrowingManagerDataCheckpointTimeTickUsesMinimumViewDataCheckpoint(t *te
 	assert.Equal(t, uint64(60), manager.DataCheckpointTimeTick())
 }
 
-func TestGrowingManagerChannelDataCheckpointTimeTicksUsesMinimumPerVChannel(t *testing.T) {
-	manager := NewManager(map[string]*streamingpb.VChannelMeta{
-		"v1": {
-			Vchannel:               "v1",
-			State:                  streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
-			DataCheckpointTimeTick: 0,
-			LatestDataVersion:      &viewpb.DataVersion{},
-			GrowingSegmentMode:     streamingpb.GrowingSegmentMode_GROWING_SEGMENT_MODE_WRITE_ONLY,
-		},
-		"v2": {
-			Vchannel:               "v2",
-			State:                  streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
-			DataCheckpointTimeTick: 70,
-			LatestDataVersion:      &viewpb.DataVersion{},
-			GrowingSegmentMode:     streamingpb.GrowingSegmentMode_GROWING_SEGMENT_MODE_WRITE_ONLY,
-		},
-	}, map[int64]*streamingpb.SegmentAssignmentMeta{
-		101: {
-			SegmentId:              101,
-			Vchannel:               "v1",
-			State:                  streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING,
-			DataCheckpointTimeTick: 60,
-			PersistedStorage:       &streamingpb.L1SegmentPersistedStorage{},
-		},
-		102: {
-			SegmentId:              102,
-			Vchannel:               "v1",
-			State:                  streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING,
-			DataCheckpointTimeTick: 90,
-			PersistedStorage:       &streamingpb.L1SegmentPersistedStorage{},
-		},
-		201: {
-			SegmentId:              201,
-			Vchannel:               "v2",
-			State:                  streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING,
-			DataCheckpointTimeTick: 75,
-			PersistedStorage:       &streamingpb.L1SegmentPersistedStorage{},
-		},
-	}, nil)
-
-	assert.Equal(t, map[string]uint64{
-		"v1": 60,
-		"v2": 70,
-	}, manager.ChannelDataCheckpointTimeTicks())
-}
-
 type neverFlushPolicy struct{}
 
 func (neverFlushPolicy) ShouldFlush(writeOnlyInsertBuffer, uint64) bool {
