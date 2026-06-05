@@ -10,7 +10,7 @@ import (
 )
 
 type writeOnlyInsertBuffer struct {
-	entries      []InsertEntry
+	entries      []insertEntry
 	fromTimeTick uint64
 	toTimeTick   uint64
 	rows         uint64
@@ -28,7 +28,7 @@ func (b *writeOnlyInsertBuffer) appendWithTimeTick(msg message.ImmutableInsertMe
 	b.toTimeTick = timetick
 	b.rows += assignment.GetRows()
 	b.binarySize += assignment.GetBinarySize()
-	b.entries = append(b.entries, InsertEntry{
+	b.entries = append(b.entries, insertEntry{
 		timeTick:   timetick,
 		assignment: clonePartitionSegmentAssignment(assignment),
 		request:    cloneInsertRequest(msg.MustBody()),
@@ -39,8 +39,8 @@ func (b writeOnlyInsertBuffer) DataTimeTick() uint64 {
 	return b.toTimeTick
 }
 
-func (b *writeOnlyInsertBuffer) flushPack(meta *streamingpb.SegmentAssignmentMeta, schema *schemapb.CollectionSchema) *FlushPack {
-	return &FlushPack{
+func (b *writeOnlyInsertBuffer) flushPack(meta *streamingpb.SegmentAssignmentMeta, schema *schemapb.CollectionSchema) *flushPack {
+	return &flushPack{
 		Meta:         proto.Clone(meta).(*streamingpb.SegmentAssignmentMeta),
 		CollectionID: meta.GetCollectionId(),
 		PartitionID:  meta.GetPartitionId(),
@@ -65,13 +65,13 @@ func (b *writeOnlyInsertBuffer) takeAll() writeOnlyInsertBuffer {
 	return chunk
 }
 
-func cloneGrowingSegmentInsertEntries(entries []InsertEntry) []InsertEntry {
+func cloneGrowingSegmentInsertEntries(entries []insertEntry) []insertEntry {
 	if len(entries) == 0 {
 		return nil
 	}
-	cloned := make([]InsertEntry, 0, len(entries))
+	cloned := make([]insertEntry, 0, len(entries))
 	for _, entry := range entries {
-		cloned = append(cloned, InsertEntry{
+		cloned = append(cloned, insertEntry{
 			timeTick:   entry.timeTick,
 			assignment: clonePartitionSegmentAssignment(entry.assignment),
 			request:    cloneInsertRequest(entry.request),

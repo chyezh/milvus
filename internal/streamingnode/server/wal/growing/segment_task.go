@@ -9,7 +9,7 @@ import (
 )
 
 type segmentTaskBase struct {
-	segment      *SegmentView
+	segment      *segmentView
 	name         string
 	precondition scheduler.Precondition
 	done         atomic.Bool
@@ -43,15 +43,15 @@ type ensureGrowingSegmentTask struct {
 func (t *ensureGrowingSegmentTask) Run(ctx context.Context) error {
 	return t.run(ctx, func(ctx context.Context) error {
 		segment := t.segment
-		meta := segment.Meta()
+		meta := segment.AssignmentMeta()
 		if err := segment.lifecycle.EnsureGrowingSegment(ctx, meta); err != nil {
 			return err
 		}
 
 		segment.mu.Lock()
-		segment.markPendingDataDurable(t.timetick)
+		segment.MarkPendingDataDurable(t.timetick)
 		segment.mu.Unlock()
-		segment.notifyDataUpdated()
+		segment.NotifyDataUpdated()
 		return nil
 	})
 }
@@ -63,7 +63,7 @@ type flushL1BufferTask struct {
 
 func (t *flushL1BufferTask) Run(ctx context.Context) error {
 	return t.run(ctx, func(ctx context.Context) error {
-		return t.segment.flushInsertChunk(ctx, t.timetick)
+		return t.segment.FlushInsertChunk(ctx, t.timetick)
 	})
 }
 
@@ -76,23 +76,23 @@ type commitL1SegmentTask struct {
 func (t *commitL1SegmentTask) Run(ctx context.Context) error {
 	return t.run(ctx, func(ctx context.Context) error {
 		segment := t.segment
-		if err := segment.flushInsertChunk(ctx, t.flushTimeTick); err != nil {
+		if err := segment.FlushInsertChunk(ctx, t.flushTimeTick); err != nil {
 			return err
 		}
-		meta := segment.Meta()
+		meta := segment.AssignmentMeta()
 		if err := segment.lifecycle.CommitL1Segment(ctx, meta); err != nil {
 			return err
 		}
 
 		segment.mu.Lock()
-		segment.markPendingDataDurable(t.timetick)
+		segment.MarkPendingDataDurable(t.timetick)
 		segment.mu.Unlock()
-		segment.notifyDataUpdated()
+		segment.NotifyDataUpdated()
 		return nil
 	})
 }
 
-func (s *SegmentView) newEnsureGrowingSegmentTaskLocked(timetick uint64) scheduler.Task {
+func (s *segmentView) newEnsureGrowingSegmentTaskLocked(timetick uint64) scheduler.Task {
 	task := &ensureGrowingSegmentTask{
 		segmentTaskBase: s.newSegmentTaskBaseLocked("ensure-growing-segment"),
 		timetick:        timetick,
@@ -101,7 +101,7 @@ func (s *SegmentView) newEnsureGrowingSegmentTaskLocked(timetick uint64) schedul
 	return task
 }
 
-func (s *SegmentView) newFlushL1BufferTaskLocked() scheduler.Task {
+func (s *segmentView) newFlushL1BufferTaskLocked() scheduler.Task {
 	task := &flushL1BufferTask{
 		segmentTaskBase: s.newSegmentTaskBaseLocked("flush-l1-buffer"),
 		timetick:        s.enqueuePendingFlushChunkLocked(),
@@ -110,7 +110,7 @@ func (s *SegmentView) newFlushL1BufferTaskLocked() scheduler.Task {
 	return task
 }
 
-func (s *SegmentView) newCommitL1SegmentTaskLocked(timetick uint64) scheduler.Task {
+func (s *segmentView) newCommitL1SegmentTaskLocked(timetick uint64) scheduler.Task {
 	task := &commitL1SegmentTask{
 		segmentTaskBase: s.newSegmentTaskBaseLocked("commit-l1-segment"),
 		timetick:        timetick,
@@ -120,7 +120,7 @@ func (s *SegmentView) newCommitL1SegmentTaskLocked(timetick uint64) scheduler.Ta
 	return task
 }
 
-func (s *SegmentView) newSegmentTaskBaseLocked(name string) segmentTaskBase {
+func (s *segmentView) newSegmentTaskBaseLocked(name string) segmentTaskBase {
 	return segmentTaskBase{
 		segment:      s,
 		name:         name,
@@ -128,7 +128,7 @@ func (s *SegmentView) newSegmentTaskBaseLocked(name string) segmentTaskBase {
 	}
 }
 
-func (s *SegmentView) segmentTaskPreconditionLocked() scheduler.Precondition {
+func (s *segmentView) segmentTaskPreconditionLocked() scheduler.Precondition {
 	pending := s.pendingTasks[:0]
 	preconditions := make([]scheduler.Precondition, 0, len(s.pendingTasks))
 	for _, task := range s.pendingTasks {

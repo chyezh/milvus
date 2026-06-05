@@ -14,10 +14,10 @@ import (
 
 type cleanupSnapshot struct {
 	vchannelsToDrop    map[string]*streamingpb.VChannelMeta
-	vchannelOwners     map[string]*VChannelView
+	vchannelOwners     map[string]*vChannelView
 	vchannelPartitions map[string]map[int64]uint64
 	segmentIDsToDrop   []int64
-	segmentOwners      map[int64]*SegmentView
+	segmentOwners      map[int64]*segmentView
 }
 
 func (s *cleanupSnapshot) empty() bool {
@@ -29,7 +29,7 @@ func (s *cleanupSnapshot) empty() bool {
 		len(s.segmentIDsToDrop) == 0
 }
 
-func (m *Manager) NewCleanupTask(
+func (m *Manager) newCleanupTask(
 	metaPhysicalTimeTick uint64,
 	dataPhysicalTimeTick uint64,
 	precondition preconditioned.Precondition,
@@ -51,9 +51,9 @@ func (m *Manager) NewCleanupTask(
 func (m *Manager) collectCleanupSnapshot(metaPhysicalTimeTick uint64, dataPhysicalTimeTick uint64) *cleanupSnapshot {
 	snapshot := &cleanupSnapshot{
 		vchannelsToDrop:    make(map[string]*streamingpb.VChannelMeta),
-		vchannelOwners:     make(map[string]*VChannelView),
+		vchannelOwners:     make(map[string]*vChannelView),
 		vchannelPartitions: make(map[string]map[int64]uint64),
-		segmentOwners:      make(map[int64]*SegmentView),
+		segmentOwners:      make(map[int64]*segmentView),
 	}
 	for segmentID, segment := range m.segmentViews {
 		if !segment.TombstonedCleanupReady(metaPhysicalTimeTick, dataPhysicalTimeTick) {
@@ -82,7 +82,7 @@ func (m *Manager) collectCleanupSnapshot(metaPhysicalTimeTick uint64, dataPhysic
 
 type cleanupTask struct {
 	channelName  string
-	catalog      RecoveryCatalog
+	catalog      recoveryCatalog
 	logger       *log.MLogger
 	manager      *Manager
 	snapshot     *cleanupSnapshot
@@ -156,7 +156,7 @@ func (t *cleanupTask) filterPartitionCleanupPlan() {
 		if owner == nil || owner != t.manager.retainedVChannel(vchannel) {
 			continue
 		}
-		cleanupPartitions := owner.partitionCleanupPlan(partitions)
+		cleanupPartitions := owner.PartitionCleanupPlan(partitions)
 		if len(cleanupPartitions) == 0 {
 			continue
 		}
@@ -175,7 +175,7 @@ func (t *cleanupTask) apply() bool {
 	for _, segmentID := range t.snapshot.segmentIDsToDrop {
 		segment := t.snapshot.segmentOwners[segmentID]
 		if vchannel := t.manager.retainedVChannel(segment.AssignmentMeta().GetVchannel()); vchannel != nil {
-			vchannel.removeSegment(segmentID)
+			vchannel.RemoveSegment(segmentID)
 		}
 		delete(t.manager.segmentViews, segmentID)
 	}

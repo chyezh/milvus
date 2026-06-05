@@ -16,7 +16,7 @@ type segmentLifecycleWriter struct {
 	serverID int64
 }
 
-func NewSegmentLifecycleWriter(coord types.MixCoordClient, serverID int64) SegmentLifecycle {
+func NewSegmentLifecycleWriter(coord types.MixCoordClient, serverID int64) segmentLifecycle {
 	return &segmentLifecycleWriter{
 		coord:    coord,
 		serverID: serverID,
@@ -39,7 +39,7 @@ func (w *segmentLifecycleWriter) CommitL1Segment(ctx context.Context, meta *stre
 	}, retry.AttemptAlways())
 }
 
-func (w *segmentLifecycleWriter) CommitL0Segment(ctx context.Context, batch *L0DeleteBatch) error {
+func (w *segmentLifecycleWriter) CommitL0Segment(ctx context.Context, batch *l0DeleteBatch) error {
 	req := buildCommitL0SegmentRequest(w.serverID, batch)
 	return retry.Do(ctx, func() error {
 		resp, err := w.coord.SaveBinlogPaths(ctx, req)
@@ -99,7 +99,7 @@ func buildCommitL1SegmentRequest(serverID int64, meta *streamingpb.SegmentAssign
 	}
 }
 
-func buildCommitL0SegmentRequest(serverID int64, batch *L0DeleteBatch) *datapb.SaveBinlogPathsRequest {
+func buildCommitL0SegmentRequest(serverID int64, batch *l0DeleteBatch) *datapb.SaveBinlogPathsRequest {
 	req := &datapb.SaveBinlogPathsRequest{
 		Base: commonpbutil.NewMsgBase(
 			commonpbutil.WithMsgType(0),
@@ -138,4 +138,4 @@ func buildCommitL0SegmentRequest(serverID int64, batch *L0DeleteBatch) *datapb.S
 	return req
 }
 
-var _ SegmentLifecycle = (*segmentLifecycleWriter)(nil)
+var _ segmentLifecycle = (*segmentLifecycleWriter)(nil)

@@ -13,7 +13,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/syncutil/preconditioned"
 )
 
-type RecoveryCatalog interface {
+type recoveryCatalog interface {
 	SaveVChannels(ctx context.Context, pchannel string, vchannels map[string]*streamingpb.VChannelMeta) error
 	DropVChannels(ctx context.Context, pchannel string, vchannels map[string]*streamingpb.VChannelMeta) error
 	SaveSegmentAssignments(ctx context.Context, pchannel string, segments map[int64]*streamingpb.SegmentAssignmentMeta) error
@@ -23,13 +23,13 @@ type RecoveryCatalog interface {
 type dirtySnapshot struct {
 	VChannels          map[string]*streamingpb.VChannelMeta
 	SegmentAssignments map[int64]*streamingpb.SegmentAssignmentMeta
-	vchannelOwners     map[string]*VChannelView
-	segmentOwners      map[int64]*SegmentView
+	vchannelOwners     map[string]*vChannelView
+	segmentOwners      map[int64]*segmentView
 }
 
 type dirtyOwners struct {
-	vchannelOwners map[string]*VChannelView
-	segmentOwners  map[int64]*SegmentView
+	vchannelOwners map[string]*vChannelView
+	segmentOwners  map[int64]*segmentView
 }
 
 func (s *dirtySnapshot) empty() bool {
@@ -40,9 +40,9 @@ func (s *dirtyOwners) empty() bool {
 	return s == nil || (len(s.vchannelOwners) == 0 && len(s.segmentOwners) == 0)
 }
 
-func (m *Manager) NewPersistTask(
+func (m *Manager) newPersistTask(
 	channelName string,
-	catalog RecoveryCatalog,
+	catalog recoveryCatalog,
 	logger *log.MLogger,
 	precondition preconditioned.Precondition,
 	onPersisted func(),
@@ -65,12 +65,12 @@ func (m *Manager) hasPendingPersistWork() bool {
 		return true
 	}
 	for _, segment := range m.segmentViews {
-		if segment.hasReadyTombstoneFinalize() {
+		if segment.HasReadyTombstoneFinalize() {
 			return true
 		}
 	}
 	for _, vchannel := range m.vchannelViews {
-		if vchannel.hasReadyTombstoneFinalize() {
+		if vchannel.HasReadyTombstoneFinalize() {
 			return true
 		}
 	}
@@ -78,8 +78,8 @@ func (m *Manager) hasPendingPersistWork() bool {
 }
 
 func (m *Manager) collectDirtyOwners() *dirtyOwners {
-	segmentOwners := make(map[int64]*SegmentView)
-	vchannelOwners := make(map[string]*VChannelView)
+	segmentOwners := make(map[int64]*segmentView)
+	vchannelOwners := make(map[string]*vChannelView)
 	for _, segment := range m.segmentViews {
 		if segment.HasDirty() {
 			segmentOwners[segment.ID()] = segment
@@ -102,8 +102,8 @@ func (s *dirtyOwners) consumeSnapshot() *dirtySnapshot {
 	}
 	segments := make(map[int64]*streamingpb.SegmentAssignmentMeta)
 	vchannels := make(map[string]*streamingpb.VChannelMeta)
-	segmentOwners := make(map[int64]*SegmentView)
-	vchannelOwners := make(map[string]*VChannelView)
+	segmentOwners := make(map[int64]*segmentView)
+	vchannelOwners := make(map[string]*vChannelView)
 	for segmentID, segment := range s.segmentOwners {
 		dirtySnapshot := segment.ConsumeDirtyAndGetSnapshot()
 		if dirtySnapshot != nil {
@@ -148,7 +148,7 @@ func (m *Manager) markSnapshotPersisted(snapshot *dirtySnapshot) {
 
 type persistTask struct {
 	channelName  string
-	catalog      RecoveryCatalog
+	catalog      recoveryCatalog
 	logger       *log.MLogger
 	manager      *Manager
 	precondition preconditioned.Precondition

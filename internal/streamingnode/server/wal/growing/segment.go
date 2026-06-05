@@ -8,13 +8,13 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 )
 
-type SegmentLifecycle interface {
+type segmentLifecycle interface {
 	EnsureGrowingSegment(ctx context.Context, meta *streamingpb.SegmentAssignmentMeta) error
 	CommitL1Segment(ctx context.Context, meta *streamingpb.SegmentAssignmentMeta) error
-	CommitL0Segment(ctx context.Context, batch *L0DeleteBatch) error
+	CommitL0Segment(ctx context.Context, batch *l0DeleteBatch) error
 }
 
-type L0DeleteBatch struct {
+type l0DeleteBatch struct {
 	VChannel      string
 	CollectionID  int64
 	PartitionID   int64

@@ -45,7 +45,7 @@ func (m *Manager) SwitchIntoMetaAndData() moduleapi.Snapshot {
 }
 
 func (m *Manager) RequirePersist() {
-	task := m.NewPersistTask(
+	task := m.newPersistTask(
 		m.channelName,
 		m.catalog,
 		m.logger,
@@ -75,11 +75,11 @@ func (m *Manager) finalizeTombstones() bool {
 
 func (m *Manager) PartitionDurableFrontier(collectionID int64, partitionID int64) walcheckpoint.Barrier {
 	return m.durableFrontier(
-		func(vchannel *VChannelView) bool {
+		func(vchannel *vChannelView) bool {
 			return vchannelCollectionID(vchannel) == collectionID
 		},
-		func(segment *SegmentView) bool {
-			meta := segment.Meta()
+		func(segment *segmentView) bool {
+			meta := segment.AssignmentMeta()
 			return meta.GetCollectionId() == collectionID && meta.GetPartitionId() == partitionID
 		},
 	)
@@ -87,25 +87,25 @@ func (m *Manager) PartitionDurableFrontier(collectionID int64, partitionID int64
 
 func (m *Manager) VChannelDurableFrontier(vchannel string) walcheckpoint.Barrier {
 	return m.durableFrontier(
-		func(info *VChannelView) bool {
+		func(info *vChannelView) bool {
 			return info.AssignmentMeta().GetVchannel() == vchannel
 		},
-		func(segment *SegmentView) bool {
-			return segment.Meta().GetVchannel() == vchannel
+		func(segment *segmentView) bool {
+			return segment.AssignmentMeta().GetVchannel() == vchannel
 		},
 	)
 }
 
 func (m *Manager) AllDurableFrontier() walcheckpoint.Barrier {
 	return m.durableFrontier(
-		func(*VChannelView) bool { return true },
-		func(*SegmentView) bool { return true },
+		func(*vChannelView) bool { return true },
+		func(*segmentView) bool { return true },
 	)
 }
 
 func (m *Manager) durableFrontier(
-	matchVChannel func(*VChannelView) bool,
-	matchSegment func(*SegmentView) bool,
+	matchVChannel func(*vChannelView) bool,
+	matchSegment func(*segmentView) bool,
 ) walcheckpoint.Barrier {
 	owners := make(durableFrontierOwners, 0)
 	for _, vchannel := range m.vchannelViews {
@@ -121,7 +121,7 @@ func (m *Manager) durableFrontier(
 	return owners
 }
 
-func vchannelCollectionID(vchannel *VChannelView) int64 {
+func vchannelCollectionID(vchannel *vChannelView) int64 {
 	if vchannel == nil || vchannel.AssignmentMeta() == nil || vchannel.AssignmentMeta().GetCollectionInfo() == nil {
 		return 0
 	}
@@ -229,7 +229,7 @@ func (m *Manager) Snapshot() *Snapshot {
 }
 
 func (m *Manager) NotifyCheckpointPersisted(metaTimeTick uint64, dataTimeTick uint64) {
-	task := m.NewCleanupTask(
+	task := m.newCleanupTask(
 		metaTimeTick,
 		dataTimeTick,
 		scheduler.All(scheduler.After(m.lastPersistTask), scheduler.After(m.lastCleanupTask)),

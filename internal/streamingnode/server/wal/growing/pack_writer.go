@@ -66,7 +66,7 @@ func NewBulkPackWriter(
 	allocator allocator.Interface,
 	storageConfig *indexpb.StorageConfig,
 	writeRetryOpts ...retry.Option,
-) PackWriter {
+) packWriter {
 	return &growingBulkPackWriter{
 		chunkManager:   chunkManager,
 		allocator:      allocator,
@@ -76,7 +76,7 @@ func NewBulkPackWriter(
 	}
 }
 
-func (w *growingBulkPackWriter) FlushInsertBuffer(ctx context.Context, pack *FlushPack) (*FlushResult, error) {
+func (w *growingBulkPackWriter) FlushInsertBuffer(ctx context.Context, pack *flushPack) (*flushResult, error) {
 	writeFn := w.writeFn
 	if writeFn == nil {
 		writeFn = writeGrowingBulkPack
@@ -119,7 +119,7 @@ func (w *growingBulkPackWriter) FlushInsertBuffer(ctx context.Context, pack *Flu
 		return nil, err
 	}
 
-	return &FlushResult{
+	return &flushResult{
 		PersistedStorage: &streamingpb.L1SegmentPersistedStorage{
 			ManifestPath: writeResult.manifestPath,
 			Binlogs: []*streamingpb.L1SegmentBinLogs{
@@ -135,7 +135,7 @@ func (w *growingBulkPackWriter) FlushInsertBuffer(ctx context.Context, pack *Flu
 	}, nil
 }
 
-func (w *growingBulkPackWriter) FlushDeleteBuffer(ctx context.Context, pack *DeleteFlushPack) (*DeleteFlushResult, error) {
+func (w *growingBulkPackWriter) FlushDeleteBuffer(ctx context.Context, pack *deleteFlushPack) (*deleteFlushResult, error) {
 	if w.allocator == nil {
 		return nil, errors.New("growing bulk pack writer allocator is nil")
 	}
@@ -170,8 +170,8 @@ func (w *growingBulkPackWriter) FlushDeleteBuffer(ctx context.Context, pack *Del
 	if err != nil {
 		return nil, err
 	}
-	return &DeleteFlushResult{
-		Batch: &L0DeleteBatch{
+	return &deleteFlushResult{
+		Batch: &l0DeleteBatch{
 			VChannel:      pack.VChannel,
 			CollectionID:  pack.CollectionID,
 			PartitionID:   pack.PartitionID,
@@ -185,7 +185,7 @@ func (w *growingBulkPackWriter) FlushDeleteBuffer(ctx context.Context, pack *Del
 	}, nil
 }
 
-func buildGrowingDeleteData(pack *DeleteFlushPack) (*storage.DeleteData, error) {
+func buildGrowingDeleteData(pack *deleteFlushPack) (*storage.DeleteData, error) {
 	deleteData := &storage.DeleteData{}
 	for _, entry := range pack.Deletes {
 		request := cloneDeleteRequest(entry.request)
@@ -204,7 +204,7 @@ func buildGrowingDeleteData(pack *DeleteFlushPack) (*storage.DeleteData, error) 
 	return deleteData, nil
 }
 
-func buildGrowingInsertData(schema *schemapb.CollectionSchema, pack *FlushPack) ([]*storage.InsertData, error) {
+func buildGrowingInsertData(schema *schemapb.CollectionSchema, pack *flushPack) ([]*storage.InsertData, error) {
 	pkField, err := typeutil.GetPrimaryFieldSchema(schema)
 	if err != nil {
 		return nil, err

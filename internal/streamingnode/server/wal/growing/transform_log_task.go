@@ -9,7 +9,7 @@ import (
 )
 
 type flushTransformLogBufferTask struct {
-	vchannel     *VChannelView
+	vchannel     *vChannelView
 	precondition scheduler.Precondition
 	done         atomic.Bool
 }
@@ -40,12 +40,12 @@ func (t *flushTransformLogBufferTask) run(ctx context.Context) error {
 	runtime := vchannel.runtime
 	for {
 		var targetTimeTick uint64
-		var pack *DeleteFlushPack
+		var pack *deleteFlushPack
 		var nextTargetTimeTick uint64
 		vchannel.mu.Lock()
 		targetTimeTick = vchannel.transformLogBuffer.FlushTargetTimeTick()
 		if targetTimeTick > vchannel.meta.GetDataCheckpointTimeTick() {
-			_, schema := vchannel.getSchemaLocked(targetTimeTick)
+			_, schema := vchannel.GetSchemaLocked(targetTimeTick)
 			pack = vchannel.transformLogBuffer.FlushPack(vchannel.meta, schema, targetTimeTick)
 		}
 		vchannel.mu.Unlock()
@@ -67,9 +67,9 @@ func (t *flushTransformLogBufferTask) run(ctx context.Context) error {
 			if !vchannel.transformLogBuffer.HasFlushWorkThrough(targetTimeTick) {
 				durableTimeTick = targetTimeTick
 			}
-			vchannel.markDeleteDataDurable(durableTimeTick)
+			vchannel.MarkDeleteDataDurable(durableTimeTick)
 		} else if targetTimeTick > vchannel.meta.GetDataCheckpointTimeTick() {
-			vchannel.markDeleteDataDurable(targetTimeTick)
+			vchannel.MarkDeleteDataDurable(targetTimeTick)
 		}
 		currentFlushTarget := vchannel.transformLogBuffer.FlushTargetTimeTick()
 		vchannel.transformLogBuffer.FinishFlush()
@@ -82,10 +82,10 @@ func (t *flushTransformLogBufferTask) run(ctx context.Context) error {
 			nextTargetTimeTick = vchannel.transformLogBuffer.DataTimeTick()
 		}
 		if nextTargetTimeTick > 0 {
-			nextTask = vchannel.startFlushTransformLogBufferTaskLocked(nextTargetTimeTick)
+			nextTask = vchannel.StartFlushTransformLogBufferTaskLocked(nextTargetTimeTick)
 		}
 		vchannel.mu.Unlock()
-		vchannel.notifyDataUpdated()
+		vchannel.NotifyDataUpdated()
 		break
 	}
 	if nextTask != nil {

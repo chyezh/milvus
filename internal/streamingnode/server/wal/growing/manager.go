@@ -9,13 +9,13 @@ import (
 )
 
 type Manager struct {
-	vchannelViews map[string]*VChannelView
-	segmentViews  map[int64]*SegmentView
-	lifecycle     SegmentLifecycle
-	packWriter    PackWriter
+	vchannelViews map[string]*vChannelView
+	segmentViews  map[int64]*segmentView
+	lifecycle     segmentLifecycle
+	packWriter    packWriter
 	onDataUpdated func()
 	channelName   string
-	catalog       RecoveryCatalog
+	catalog       recoveryCatalog
 	logger        *log.MLogger
 	runtime       moduleapi.Runtime
 	metaAndData   bool
@@ -25,11 +25,11 @@ type Manager struct {
 	lastCleanupTask scheduler.TaskHandle
 }
 
-type ManagerOption func(*Manager)
+type managerOption func(*Manager)
 
 type runtimeConfig struct {
-	lifecycle     SegmentLifecycle
-	packWriter    PackWriter
+	lifecycle     segmentLifecycle
+	packWriter    packWriter
 	runtime       moduleapi.Runtime
 	onDataUpdated func()
 	flushPolicy   flushPolicy
@@ -44,33 +44,33 @@ func firstRuntimeConfig(configs []runtimeConfig) runtimeConfig {
 	return configs[0]
 }
 
-func WithPackWriter(writer PackWriter) ManagerOption {
+func WithPackWriter(writer packWriter) managerOption {
 	return func(manager *Manager) {
 		manager.packWriter = writer
 	}
 }
 
-func WithDataBarrierUpdatedCallback(callback func()) ManagerOption {
+func WithDataBarrierUpdatedCallback(callback func()) managerOption {
 	return func(manager *Manager) {
 		manager.onDataUpdated = callback
 	}
 }
 
-func WithRecoveryCatalog(channelName string, catalog RecoveryCatalog) ManagerOption {
+func WithRecoveryCatalog(channelName string, catalog recoveryCatalog) managerOption {
 	return func(manager *Manager) {
 		manager.channelName = channelName
 		manager.catalog = catalog
 	}
 }
 
-func WithModuleRuntime(logger *log.MLogger, runtime moduleapi.Runtime) ManagerOption {
+func WithModuleRuntime(logger *log.MLogger, runtime moduleapi.Runtime) managerOption {
 	return func(manager *Manager) {
 		manager.logger = logger
 		manager.runtime = runtime
 	}
 }
 
-func WithTransformLogBufferMaxRows(maxRows uint64) ManagerOption {
+func WithTransformLogBufferMaxRows(maxRows uint64) managerOption {
 	return func(manager *Manager) {
 		manager.transformRows = maxRows
 	}
@@ -79,8 +79,8 @@ func WithTransformLogBufferMaxRows(maxRows uint64) ManagerOption {
 func NewManager(
 	vchannels map[string]*streamingpb.VChannelMeta,
 	segments map[int64]*streamingpb.SegmentAssignmentMeta,
-	lifecycle SegmentLifecycle,
-	opts ...ManagerOption,
+	lifecycle segmentLifecycle,
+	opts ...managerOption,
 ) *Manager {
 	if vchannels == nil {
 		vchannels = make(map[string]*streamingpb.VChannelMeta)
@@ -89,8 +89,8 @@ func NewManager(
 		segments = make(map[int64]*streamingpb.SegmentAssignmentMeta)
 	}
 	manager := &Manager{
-		vchannelViews: make(map[string]*VChannelView, len(vchannels)),
-		segmentViews:  make(map[int64]*SegmentView, len(segments)),
+		vchannelViews: make(map[string]*vChannelView, len(vchannels)),
+		segmentViews:  make(map[int64]*segmentView, len(segments)),
 		lifecycle:     lifecycle,
 	}
 	for _, opt := range opts {
@@ -116,16 +116,16 @@ func (m *Manager) initializeRuntimeInfos(
 	segments map[int64]*streamingpb.SegmentAssignmentMeta,
 ) {
 	for vchannel, meta := range vchannels {
-		m.vchannelViews[vchannel] = NewVChannelView(meta, m.runtimeConfig())
+		m.vchannelViews[vchannel] = newVChannelViewFromMeta(meta, m.runtimeConfig())
 	}
 	for _, meta := range segments {
 		vchannelManager := m.vchannelViews[meta.GetVchannel()]
-		segment := NewSegmentViewFromMeta(meta, segmentSchema(vchannelManager, meta), m.runtimeConfig())
+		segment := newSegmentViewFromMeta(meta, segmentSchema(vchannelManager, meta), m.runtimeConfig())
 		m.addSegmentView(segment)
 	}
 }
 
-func segmentSchema(vchannel *VChannelView, meta *streamingpb.SegmentAssignmentMeta) *schemapb.CollectionSchema {
+func segmentSchema(vchannel *vChannelView, meta *streamingpb.SegmentAssignmentMeta) *schemapb.CollectionSchema {
 	if vchannel == nil {
 		return nil
 	}
@@ -137,7 +137,7 @@ func segmentSchema(vchannel *VChannelView, meta *streamingpb.SegmentAssignmentMe
 	return schema
 }
 
-func (m *Manager) VChannel(vchannel string) *VChannelView {
+func (m *Manager) vChannel(vchannel string) *vChannelView {
 	info := m.vchannelViews[vchannel]
 	if info == nil || !info.IsActive() {
 		return nil
@@ -145,26 +145,22 @@ func (m *Manager) VChannel(vchannel string) *VChannelView {
 	return info
 }
 
-func (m *Manager) retainedVChannel(vchannel string) *VChannelView {
+func (m *Manager) retainedVChannel(vchannel string) *vChannelView {
 	return m.vchannelViews[vchannel]
 }
 
-func (m *Manager) VChannels() map[string]*VChannelView {
+func (m *Manager) vChannels() map[string]*vChannelView {
 	return m.vchannelViews
 }
 
-func (m *Manager) Segments() map[int64]*SegmentView {
-	return m.segmentViews
-}
-
-func (m *Manager) AddVChannel(meta *streamingpb.VChannelMeta) *VChannelView {
+func (m *Manager) addVChannel(meta *streamingpb.VChannelMeta) *vChannelView {
 	info := newVChannelView(meta, 0, 0, true, m.runtimeConfig())
 	m.vchannelViews[info.AssignmentMeta().GetVchannel()] = info
 	m.attachRetainedSegments(info)
 	return info
 }
 
-func (m *Manager) addSegmentView(segment *SegmentView) *SegmentView {
+func (m *Manager) addSegmentView(segment *segmentView) *segmentView {
 	segmentMeta := segment.AssignmentMeta()
 	m.segmentViews[segmentMeta.GetSegmentId()] = segment
 	vchannelManager := m.retainedVChannel(segmentMeta.GetVchannel())
@@ -175,11 +171,11 @@ func (m *Manager) addSegmentView(segment *SegmentView) *SegmentView {
 	if segmentMeta.GetCollectionId() != vchannelMeta.GetCollectionInfo().GetCollectionId() {
 		return segment
 	}
-	vchannelManager.addSegment(segment)
+	vchannelManager.AddSegment(segment)
 	return segment
 }
 
-func (m *Manager) attachRetainedSegments(vchannelManager *VChannelView) {
+func (m *Manager) attachRetainedSegments(vchannelManager *vChannelView) {
 	vchannelMeta := vchannelManager.AssignmentMeta()
 	for _, segment := range m.segmentViews {
 		segmentMeta := segment.AssignmentMeta()
@@ -188,11 +184,11 @@ func (m *Manager) attachRetainedSegments(vchannelManager *VChannelView) {
 			continue
 		}
 		segment.SetSchema(segmentSchema(vchannelManager, segmentMeta))
-		vchannelManager.addSegment(segment)
+		vchannelManager.AddSegment(segment)
 	}
 }
 
-func (m *Manager) refreshRetainedSegmentSchemas(vchannelManager *VChannelView) {
+func (m *Manager) refreshRetainedSegmentSchemas(vchannelManager *vChannelView) {
 	vchannelMeta := vchannelManager.AssignmentMeta()
 	for _, segment := range m.segmentViews {
 		segmentMeta := segment.AssignmentMeta()

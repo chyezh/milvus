@@ -69,7 +69,7 @@ func TestGrowingManagerTruncateCollectionAdvancesVChannelMeta(t *testing.T) {
 	result := manager.ObserveMessage(context.Background(), msg)
 
 	require.NotNil(t, result.Meta)
-	vchannel := manager.VChannels()["v1"].AssignmentMeta()
+	vchannel := manager.vChannels()["v1"].AssignmentMeta()
 	assert.Equal(t, streamingpb.VChannelState_VCHANNEL_STATE_NORMAL, vchannel.GetState())
 	assert.Equal(t, uint64(10), vchannel.GetCheckpointTimeTick())
 }

@@ -12,8 +12,8 @@ import (
 
 const defaultTransformLogBufferMaxRows = 1024
 
-type TransformLogBuffer struct {
-	entries             []DeleteEntry
+type transformLogBuffer struct {
+	entries             []deleteEntry
 	fromTimeTick        uint64
 	toTimeTick          uint64
 	rows                uint64
@@ -22,14 +22,14 @@ type TransformLogBuffer struct {
 	flushTargetTimeTick uint64
 }
 
-func newTransformLogBuffer(maxRows uint64) TransformLogBuffer {
+func newTransformLogBuffer(maxRows uint64) transformLogBuffer {
 	if maxRows == 0 {
 		maxRows = defaultTransformLogBufferMaxRows
 	}
-	return TransformLogBuffer{maxRows: maxRows}
+	return transformLogBuffer{maxRows: maxRows}
 }
 
-func (b *TransformLogBuffer) AppendDelete(msg message.ImmutableDeleteMessageV1) {
+func (b *transformLogBuffer) AppendDelete(msg message.ImmutableDeleteMessageV1) {
 	timetick := msg.TimeTick()
 	if len(b.entries) == 0 {
 		b.fromTimeTick = timetick
@@ -38,18 +38,18 @@ func (b *TransformLogBuffer) AppendDelete(msg message.ImmutableDeleteMessageV1) 
 	rows := deleteEntryRows(body)
 	b.toTimeTick = timetick
 	b.rows += rows
-	b.entries = append(b.entries, DeleteEntry{
+	b.entries = append(b.entries, deleteEntry{
 		timeTick: timetick,
 		rows:     rows,
 		request:  cloneDeleteRequest(body),
 	})
 }
 
-func (b *TransformLogBuffer) ShouldFlush() bool {
+func (b *transformLogBuffer) ShouldFlush() bool {
 	return len(b.entries) > 0 && b.rows >= b.maxRows
 }
 
-func (b *TransformLogBuffer) StartFlush(timetick uint64) bool {
+func (b *transformLogBuffer) StartFlush(timetick uint64) bool {
 	if timetick == 0 {
 		timetick = b.toTimeTick
 	}
@@ -66,33 +66,33 @@ func (b *TransformLogBuffer) StartFlush(timetick uint64) bool {
 	return true
 }
 
-func (b *TransformLogBuffer) FinishFlush() {
+func (b *transformLogBuffer) FinishFlush() {
 	b.flushing = false
 	b.flushTargetTimeTick = 0
 }
 
-func (b *TransformLogBuffer) IsFlushing() bool {
+func (b *transformLogBuffer) IsFlushing() bool {
 	return b.flushing
 }
 
-func (b *TransformLogBuffer) DataTimeTick() uint64 {
+func (b *transformLogBuffer) DataTimeTick() uint64 {
 	return b.toTimeTick
 }
 
-func (b *TransformLogBuffer) FlushTargetTimeTick() uint64 {
+func (b *transformLogBuffer) FlushTargetTimeTick() uint64 {
 	return b.flushTargetTimeTick
 }
 
-func (b *TransformLogBuffer) IsEmpty() bool {
+func (b *transformLogBuffer) IsEmpty() bool {
 	return len(b.entries) == 0
 }
 
-func (b *TransformLogBuffer) FlushPack(meta *streamingpb.VChannelMeta, schema *schemapb.CollectionSchema, timetick uint64) *DeleteFlushPack {
+func (b *transformLogBuffer) FlushPack(meta *streamingpb.VChannelMeta, schema *schemapb.CollectionSchema, timetick uint64) *deleteFlushPack {
 	entries := b.flushEntriesThrough(timetick)
 	if len(entries) == 0 {
 		return nil
 	}
-	return &DeleteFlushPack{
+	return &deleteFlushPack{
 		VChannel:     meta.GetVchannel(),
 		CollectionID: meta.GetCollectionInfo().GetCollectionId(),
 		PartitionID:  common.AllPartitionsID,
@@ -111,11 +111,11 @@ func (b *TransformLogBuffer) FlushPack(meta *streamingpb.VChannelMeta, schema *s
 	}
 }
 
-func (b *TransformLogBuffer) HasFlushWorkThrough(timetick uint64) bool {
+func (b *transformLogBuffer) HasFlushWorkThrough(timetick uint64) bool {
 	return len(b.entriesThrough(timetick)) > 0
 }
 
-func (b *TransformLogBuffer) flushEntriesThrough(timetick uint64) []DeleteEntry {
+func (b *transformLogBuffer) flushEntriesThrough(timetick uint64) []deleteEntry {
 	entries := b.entriesThrough(timetick)
 	if len(entries) == 0 {
 		return nil
@@ -133,7 +133,7 @@ func (b *TransformLogBuffer) flushEntriesThrough(timetick uint64) []DeleteEntry 
 	return entries
 }
 
-func (b *TransformLogBuffer) entriesThrough(timetick uint64) []DeleteEntry {
+func (b *transformLogBuffer) entriesThrough(timetick uint64) []deleteEntry {
 	for idx, entry := range b.entries {
 		if entry.timeTick > timetick {
 			return b.entries[:idx]
@@ -142,7 +142,7 @@ func (b *TransformLogBuffer) entriesThrough(timetick uint64) []DeleteEntry {
 	return b.entries
 }
 
-func (b *TransformLogBuffer) DiscardThrough(timetick uint64) {
+func (b *transformLogBuffer) DiscardThrough(timetick uint64) {
 	kept := b.entries[:0]
 	for _, entry := range b.entries {
 		if entry.timeTick <= timetick {
@@ -154,7 +154,7 @@ func (b *TransformLogBuffer) DiscardThrough(timetick uint64) {
 	b.rebuildStats()
 }
 
-func (b *TransformLogBuffer) rebuildStats() {
+func (b *transformLogBuffer) rebuildStats() {
 	b.fromTimeTick = 0
 	b.toTimeTick = 0
 	b.rows = 0
@@ -175,13 +175,13 @@ func deleteEntryRows(request *msgpb.DeleteRequest) uint64 {
 	return 1
 }
 
-func cloneDeleteEntries(entries []DeleteEntry) []DeleteEntry {
+func cloneDeleteEntries(entries []deleteEntry) []deleteEntry {
 	if len(entries) == 0 {
 		return nil
 	}
-	cloned := make([]DeleteEntry, 0, len(entries))
+	cloned := make([]deleteEntry, 0, len(entries))
 	for _, entry := range entries {
-		cloned = append(cloned, DeleteEntry{
+		cloned = append(cloned, deleteEntry{
 			timeTick: entry.timeTick,
 			rows:     entry.rows,
 			request:  proto.Clone(entry.request).(*msgpb.DeleteRequest),

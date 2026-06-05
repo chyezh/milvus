@@ -12,12 +12,12 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 )
 
-type PackWriter interface {
-	FlushInsertBuffer(ctx context.Context, pack *FlushPack) (*FlushResult, error)
-	FlushDeleteBuffer(ctx context.Context, pack *DeleteFlushPack) (*DeleteFlushResult, error)
+type packWriter interface {
+	FlushInsertBuffer(ctx context.Context, pack *flushPack) (*flushResult, error)
+	FlushDeleteBuffer(ctx context.Context, pack *deleteFlushPack) (*deleteFlushResult, error)
 }
 
-type FlushPack struct {
+type flushPack struct {
 	Meta         *streamingpb.SegmentAssignmentMeta
 	CollectionID int64
 	PartitionID  int64
@@ -28,39 +28,39 @@ type FlushPack struct {
 	Schema       *schemapb.CollectionSchema
 	Rows         uint64
 	BinarySize   uint64
-	Inserts      []InsertEntry
+	Inserts      []insertEntry
 }
 
-type InsertEntry struct {
+type insertEntry struct {
 	timeTick   uint64
 	assignment *messagespb.PartitionSegmentAssignment
 	request    *msgpb.InsertRequest
 }
 
-type FlushResult struct {
+type flushResult struct {
 	PersistedStorage *streamingpb.L1SegmentPersistedStorage
 }
 
-type DeleteFlushPack struct {
+type deleteFlushPack struct {
 	VChannel      string
 	CollectionID  int64
 	PartitionID   int64
 	FromTimeTick  uint64
 	ToTimeTick    uint64
 	Schema        *schemapb.CollectionSchema
-	Deletes       []DeleteEntry
+	Deletes       []deleteEntry
 	StartPosition *msgpb.MsgPosition
 	Checkpoint    *msgpb.MsgPosition
 }
 
-type DeleteEntry struct {
+type deleteEntry struct {
 	timeTick uint64
 	rows     uint64
 	request  *msgpb.DeleteRequest
 }
 
-type DeleteFlushResult struct {
-	Batch *L0DeleteBatch
+type deleteFlushResult struct {
+	Batch *l0DeleteBatch
 }
 
 func cloneL1SegmentBinLogs(binlogs []*streamingpb.L1SegmentBinLogs) []*streamingpb.L1SegmentBinLogs {
