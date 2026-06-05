@@ -146,12 +146,15 @@ func (s *segmentView) ObserveCreateSegmentMessageV2(_ context.Context, msg messa
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	result := moduleapi.ObserveResult{Meta: s.metaBarrier()}
+	result := moduleapi.ObserveResult{}
+	if s.shouldSkipReplayLocked(msg.TimeTick()) {
+		return result
+	}
 	if !s.metaAndData {
 		return result
 	}
 	timetick := msg.TimeTick()
-	if timetick <= s.persistedDataTimeTick {
+	if timetick <= s.meta.GetDataCheckpointTimeTick() {
 		return result
 	}
 	task := s.newEnsureGrowingSegmentTaskLocked(timetick)
@@ -168,9 +171,13 @@ func (s *segmentView) ObserveInsertMessageV1(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	result := moduleapi.ObserveResult{Meta: s.metaBarrier()}
+	result := moduleapi.ObserveResult{}
+	if !s.canReplayInsertLocked(msg.TimeTick()) {
+		return result
+	}
 	if msg.TimeTick() > s.meta.CheckpointTimeTick {
 		s.observeInsertMetaLocked(msg.TimeTick(), assignment)
+		result.Meta = s.metaBarrier()
 	}
 	if !s.metaAndData {
 		return result
@@ -197,10 +204,17 @@ func (s *segmentView) ObserveTxnMessage(_ context.Context, msg message.Immutable
 	timetick := msg.TimeTick()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	result := moduleapi.ObserveResult{}
+	if s.shouldSkipReplayLocked(timetick) {
+		return result
+	}
+	if !s.canReplayInsertLocked(timetick) {
+		return result
+	}
+
 	metaTimeTick := s.meta.CheckpointTimeTick
 	pendingDataTimeTick := s.pending.DataTimeTick()
+	appliedMeta := false
 	msg.RangeOver(func(im message.ImmutableMessage) error {
 		if im.MessageType() != message.MessageTypeInsert {
 			return nil
@@ -213,6 +227,7 @@ func (s *segmentView) ObserveTxnMessage(_ context.Context, msg message.Immutable
 			matched = true
 			if timetick > metaTimeTick {
 				s.observeInsertMetaLocked(timetick, assignment)
+				appliedMeta = true
 			}
 			if s.metaAndData &&
 				timetick > s.meta.GetDataCheckpointTimeTick() &&
@@ -226,7 +241,9 @@ func (s *segmentView) ObserveTxnMessage(_ context.Context, msg message.Immutable
 	if !matched {
 		return result
 	}
-	result.Meta = s.metaBarrier()
+	if appliedMeta {
+		result.Meta = s.metaBarrier()
+	}
 	if appliedData {
 		result.Data = s.dataBarrier()
 		if s.flushPolicy != nil && s.flushPolicy.ShouldFlush(s.pending, timetick) {
@@ -254,13 +271,13 @@ func (s *segmentView) Flush(_ context.Context, timetick uint64) moduleapi.Observ
 
 	closed, flushTimeTick, metaChanged := s.observeFlushMeta(timetick)
 	result := moduleapi.ObserveResult{}
-	if metaChanged || closed {
+	if metaChanged {
 		result.Meta = s.metaBarrier()
 	}
 	if !s.metaAndData {
 		return result
 	}
-	if !closed || flushTimeTick <= s.persistedDataTimeTick {
+	if !closed || flushTimeTick <= s.meta.GetDataCheckpointTimeTick() {
 		return result
 	}
 	task := s.newCommitL1SegmentTaskLocked(flushTimeTick)
@@ -429,9 +446,7 @@ func (info *segmentView) IsGrowing() bool {
 	return info.meta.State == streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING
 }
 
-func (info *segmentView) CanReplayInsert(timetick uint64) bool {
-	info.mu.Lock()
-	defer info.mu.Unlock()
+func (info *segmentView) canReplayInsertLocked(timetick uint64) bool {
 	switch info.meta.GetState() {
 	case streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING:
 		return true
@@ -440,6 +455,10 @@ func (info *segmentView) CanReplayInsert(timetick uint64) bool {
 	default:
 		return false
 	}
+}
+
+func (info *segmentView) shouldSkipReplayLocked(timetick uint64) bool {
+	return shouldSkipTombstonedSegmentMeta(info.meta, timetick)
 }
 
 func (info *segmentView) TombstonePersisted() bool {

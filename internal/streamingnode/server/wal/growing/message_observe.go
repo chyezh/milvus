@@ -7,6 +7,7 @@ import (
 
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/log"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
@@ -53,21 +54,15 @@ func (m *Manager) observeMessage(ctx context.Context, msg message.ImmutableMessa
 
 func (m *Manager) observeCreateCollectionMessage(msg message.ImmutableCreateCollectionMessageV1) moduleapi.ObserveResult {
 	if vchannel := m.vchannelViews[msg.VChannel()]; vchannel != nil {
-		if vchannel.ShouldSkipReplay(msg.TimeTick()) {
-			return emptyObserveResult()
-		}
-		if vchannel.CanStartNewCollectionAt(msg.TimeTick()) {
+		decision, result := vchannel.ObserveExistingCreateCollectionMessageV1(msg)
+		switch decision {
+		case existingCreateCollectionStartNew:
 			vchannel := m.addVChannel(newVChannelMetaFromCreateCollectionMessage(msg))
 			return moduleapi.ObserveResult{Meta: vchannel.MetaBarrier()}
+		case existingCreateCollectionInconsistent:
+			m.logInconsistency(msg, "create collection vchannel already exists", zap.String("vchannel", msg.VChannel()))
 		}
-		if !vchannelMatchesCollection(vchannel, msg.Header().GetCollectionId()) {
-			return emptyObserveResult()
-		}
-		if !vchannel.CanReplayAt(msg.TimeTick()) {
-			return emptyObserveResult()
-		}
-		m.logInconsistency(msg, "create collection vchannel already exists", zap.String("vchannel", msg.VChannel()))
-		return moduleapi.ObserveResult{Meta: vchannel.MetaBarrier()}
+		return result
 	}
 	vchannel := m.addVChannel(newVChannelMetaFromCreateCollectionMessage(msg))
 	return moduleapi.ObserveResult{Meta: vchannel.MetaBarrier()}
@@ -78,21 +73,11 @@ func (m *Manager) observeCreatePartitionMessage(msg message.ImmutableCreateParti
 	if vchannel == nil {
 		return emptyObserveResult()
 	}
-	if !vchannelMatchesCollection(vchannel, msg.Header().GetCollectionId()) {
-		return emptyObserveResult()
-	}
-	if vchannel.ShouldSkipReplay(msg.TimeTick()) ||
-		vchannel.ShouldSkipPartitionReplay(msg.Header().GetPartitionId(), msg.TimeTick()) {
-		return emptyObserveResult()
-	}
-	if !vchannel.CanReplayAt(msg.TimeTick()) {
-		return emptyObserveResult()
-	}
 	return vchannel.ObserveCreatePartitionMessageV1(msg)
 }
 
 func (m *Manager) observeSchemaChangeMessage(ctx context.Context, msg message.ImmutableSchemaChangeMessageV2) moduleapi.ObserveResult {
-	vchannel, result, canMutate := m.prepareActiveVChannelObserve(ctx, msg.TimeTick(), msg.VChannel(), msg.Header().GetCollectionId(), true)
+	vchannel, result, canMutate := m.prepareActiveVChannelObserve(ctx, msg.TimeTick(), msg.VChannel(), true)
 	if !canMutate {
 		return result
 	}
@@ -104,7 +89,7 @@ func (m *Manager) observeSchemaChangeMessage(ctx context.Context, msg message.Im
 
 func (m *Manager) observeAlterCollectionMessage(ctx context.Context, msg message.ImmutableAlterCollectionMessageV2) moduleapi.ObserveResult {
 	schemaChange := messageutil.IsSchemaChange(msg.Header())
-	vchannel, result, canMutate := m.prepareActiveVChannelObserve(ctx, msg.TimeTick(), msg.VChannel(), msg.Header().GetCollectionId(), schemaChange)
+	vchannel, result, canMutate := m.prepareActiveVChannelObserve(ctx, msg.TimeTick(), msg.VChannel(), schemaChange)
 	if !canMutate {
 		return result
 	}
@@ -120,7 +105,6 @@ func (m *Manager) prepareActiveVChannelObserve(
 	ctx context.Context,
 	timetick uint64,
 	vchannelName string,
-	collectionID int64,
 	flushSegments bool,
 ) (*vChannelView, moduleapi.ObserveResult, bool) {
 	vchannel := m.retainedVChannel(vchannelName)
@@ -129,15 +113,10 @@ func (m *Manager) prepareActiveVChannelObserve(
 	}
 	result := emptyObserveResult()
 	if flushSegments {
-		result = m.flushRetainedVChannelSegmentsCreatedBefore(ctx, timetick, vchannelName, collectionID)
+		result = m.flushRetainedVChannelSegmentsCreatedBefore(ctx, timetick, vchannelName)
 	}
-	if !vchannelMatchesCollection(vchannel, collectionID) ||
-		vchannel.ShouldSkipReplay(timetick) ||
-		!vchannel.CanReplayAt(timetick) {
+	if !vchannel.CanObserveActiveAt(timetick) {
 		return vchannel, result, false
-	}
-	if !vchannel.IsActive() {
-		return vchannel, composeObserveResults(result, moduleapi.ObserveResult{Meta: vchannel.MetaBarrier()}), false
 	}
 	return vchannel, result, true
 }
@@ -148,31 +127,19 @@ func (m *Manager) observeCreateSegmentMessage(ctx context.Context, msg message.I
 		m.logInconsistency(msg, "create segment vchannel not found", zap.String("vchannel", msg.VChannel()), zap.Int64("segmentID", msg.Header().GetSegmentId()))
 		return emptyObserveResult()
 	}
-	if !vchannelMatchesCollection(vchannel, msg.Header().GetCollectionId()) {
-		return emptyObserveResult()
-	}
-	if !vchannel.CanReplayAt(msg.TimeTick()) ||
-		!vchannel.CanReplayPartitionAt(msg.Header().GetPartitionId(), msg.TimeTick()) {
-		return emptyObserveResult()
-	}
 	segment := m.segmentViews[msg.Header().GetSegmentId()]
-	if segment != nil && shouldSkipTombstonedSegmentMeta(segment.AssignmentMeta(), msg.TimeTick()) {
-		return emptyObserveResult()
-	}
+	result := emptyObserveResult()
 	if segment == nil {
-		if !vchannel.HasPartitionMeta(msg.Header().GetPartitionId()) {
-			m.logInconsistency(msg, "create segment partition not found", zap.String("vchannel", msg.VChannel()), zap.Int64("partitionID", msg.Header().GetPartitionId()), zap.Int64("segmentID", msg.Header().GetSegmentId()))
-			return emptyObserveResult()
-		}
-		_, schema := vchannel.GetSchema(msg.TimeTick())
+		schema := vchannel.CreateSegmentSchema(msg.Header().GetPartitionId(), msg.TimeTick())
 		if schema == nil {
-			m.logInconsistency(msg, "create segment schema not found", zap.String("vchannel", msg.VChannel()), zap.Int64("segmentID", msg.Header().GetSegmentId()), zap.Uint64("timeTick", msg.TimeTick()))
+			m.logInconsistency(msg, "create segment partition not found", zap.String("vchannel", msg.VChannel()), zap.Int64("partitionID", msg.Header().GetPartitionId()), zap.Int64("segmentID", msg.Header().GetSegmentId()))
 			return emptyObserveResult()
 		}
 		segment = newSegmentViewFromCreateSegmentMessage(msg, schema, m.runtimeConfig())
 		m.addSegmentView(segment)
+		result.Meta = segment.metaBarrier()
 	}
-	return segment.ObserveCreateSegmentMessageV2(ctx, msg)
+	return composeObserveResults(result, segment.ObserveCreateSegmentMessageV2(ctx, msg))
 }
 
 func (m *Manager) observeFlushMessage(ctx context.Context, msg message.ImmutableFlushMessageV2) moduleapi.ObserveResult {
@@ -181,21 +148,15 @@ func (m *Manager) observeFlushMessage(ctx context.Context, msg message.Immutable
 		m.logInconsistency(msg, "flush segment not found", zap.Int64("segmentID", msg.Header().GetSegmentId()))
 		return emptyObserveResult()
 	}
-	if shouldSkipTombstonedSegmentMeta(segment.AssignmentMeta(), msg.TimeTick()) {
-		return emptyObserveResult()
-	}
-	if !m.segmentOwnerCanReplayAt(segment, msg.TimeTick()) {
-		return emptyObserveResult()
-	}
 	return segment.Flush(ctx, msg.TimeTick())
 }
 
 func (m *Manager) observeManualFlushMessage(ctx context.Context, msg message.ImmutableManualFlushMessageV2) moduleapi.ObserveResult {
-	return m.flushVChannelSegmentsCreatedBefore(ctx, msg.TimeTick(), msg.VChannel(), msg.Header().GetCollectionId())
+	return m.flushVChannelSegmentsCreatedBefore(ctx, msg.TimeTick(), msg.VChannel())
 }
 
 func (m *Manager) observeFlushAllMessage(ctx context.Context, msg message.ImmutableFlushAllMessageV2) moduleapi.ObserveResult {
-	result := m.observeSegments(ctx, msg.TimeTick(), func(segment *segmentView) bool {
+	result := m.observeSegments(func(segment *segmentView) bool {
 		return segment.CreateTimeTick() < msg.TimeTick()
 	}, func(segment *segmentView) moduleapi.ObserveResult {
 		return segment.Flush(ctx, msg.TimeTick())
@@ -208,16 +169,7 @@ func (m *Manager) observeDropCollectionMessage(ctx context.Context, msg message.
 	if vchannel == nil {
 		return emptyObserveResult()
 	}
-	result := m.flushVChannelSegmentsCreatedBefore(ctx, msg.TimeTick(), msg.VChannel(), msg.Header().GetCollectionId())
-	if !vchannelMatchesCollection(vchannel, msg.Header().GetCollectionId()) {
-		return result
-	}
-	if vchannel.ShouldSkipReplay(msg.TimeTick()) {
-		return result
-	}
-	if !vchannel.CanReplayAt(msg.TimeTick()) {
-		return result
-	}
+	result := m.flushVChannelSegmentsCreatedBefore(ctx, msg.TimeTick(), msg.VChannel())
 	return composeObserveResults(result, vchannel.ObserveDropCollectionMessageV1(msg))
 }
 
@@ -226,19 +178,7 @@ func (m *Manager) observeDropPartitionMessage(ctx context.Context, msg message.I
 	if vchannel == nil {
 		return emptyObserveResult()
 	}
-	result := m.flushPartitionSegmentsCreatedBefore(ctx, msg.TimeTick(), msg.VChannel(), msg.Header().GetCollectionId(), msg.Header().GetPartitionId())
-	if !vchannelMatchesCollection(vchannel, msg.Header().GetCollectionId()) {
-		return result
-	}
-	if vchannel.ShouldSkipReplay(msg.TimeTick()) ||
-		!vchannel.CanReplayAt(msg.TimeTick()) ||
-		!vchannel.CanReplayPartitionAt(msg.Header().GetPartitionId(), msg.TimeTick()) {
-		return result
-	}
-	if !vchannel.HasPartitionMeta(msg.Header().GetPartitionId()) {
-		m.logInconsistency(msg, "drop partition partition not found", zap.String("vchannel", msg.VChannel()), zap.Int64("partitionID", msg.Header().GetPartitionId()))
-		return result
-	}
+	result := m.flushPartitionSegmentsCreatedBefore(ctx, msg.TimeTick(), msg.VChannel(), msg.Header().GetPartitionId())
 	return composeObserveResults(result, vchannel.ObserveDropPartitionMessageV1(msg))
 }
 
@@ -247,18 +187,12 @@ func (m *Manager) observeTruncateCollectionMessage(ctx context.Context, msg mess
 	if vchannel == nil {
 		return emptyObserveResult()
 	}
-	result := m.flushVChannelSegmentsCreatedBefore(ctx, msg.TimeTick(), msg.VChannel(), msg.Header().GetCollectionId())
-	if !vchannelMatchesCollection(vchannel, msg.Header().GetCollectionId()) {
-		return result
-	}
-	if vchannel.ShouldSkipReplay(msg.TimeTick()) || !vchannel.CanReplayAt(msg.TimeTick()) {
-		return result
-	}
+	result := m.flushVChannelSegmentsCreatedBefore(ctx, msg.TimeTick(), msg.VChannel())
 	return composeObserveResults(result, vchannel.ObserveTruncateCollectionMessageV2(msg))
 }
 
 func (m *Manager) observeAlterWALMessage(ctx context.Context, msg message.ImmutableAlterWALMessageV2) moduleapi.ObserveResult {
-	result := m.observeSegments(ctx, msg.TimeTick(), func(segment *segmentView) bool {
+	result := m.observeSegments(func(segment *segmentView) bool {
 		return segment.CreateTimeTick() < msg.TimeTick()
 	}, func(segment *segmentView) moduleapi.ObserveResult {
 		return segment.Flush(ctx, msg.TimeTick())
@@ -270,19 +204,12 @@ func (m *Manager) flushVChannelSegmentsCreatedBefore(
 	ctx context.Context,
 	timetick uint64,
 	vchannel string,
-	collectionID int64,
 ) moduleapi.ObserveResult {
 	info := m.retainedVChannel(vchannel)
 	if info == nil {
 		return emptyObserveResult()
 	}
-	result := m.flushRetainedVChannelSegmentsCreatedBefore(ctx, timetick, vchannel, collectionID)
-	if !vchannelMatchesCollection(info, collectionID) {
-		return result
-	}
-	if info.ShouldSkipReplay(timetick) || !info.CanReplayAt(timetick) {
-		return result
-	}
+	result := m.flushRetainedVChannelSegmentsCreatedBefore(ctx, timetick, vchannel)
 	return composeObserveResults(result, m.flushVChannelTransformLogBuffer(timetick, vchannel))
 }
 
@@ -290,14 +217,12 @@ func (m *Manager) flushRetainedVChannelSegmentsCreatedBefore(
 	ctx context.Context,
 	timetick uint64,
 	vchannel string,
-	collectionID int64,
 ) moduleapi.ObserveResult {
-	return m.observeSegments(ctx, timetick, func(segment *segmentView) bool {
-		meta := segment.AssignmentMeta()
-		return meta.GetVchannel() == vchannel &&
-			meta.GetCollectionId() == collectionID &&
-			segment.CreateTimeTick() < timetick
-	}, func(segment *segmentView) moduleapi.ObserveResult {
+	info := m.retainedVChannel(vchannel)
+	if info == nil {
+		return emptyObserveResult()
+	}
+	return m.observeSegmentViews(info.SegmentsForFlush(common.AllPartitionsID, timetick), func(segment *segmentView) moduleapi.ObserveResult {
 		return segment.Flush(ctx, timetick)
 	})
 }
@@ -306,23 +231,13 @@ func (m *Manager) flushPartitionSegmentsCreatedBefore(
 	ctx context.Context,
 	timetick uint64,
 	vchannel string,
-	collectionID int64,
 	partitionID int64,
 ) moduleapi.ObserveResult {
 	info := m.retainedVChannel(vchannel)
 	if info == nil {
 		return emptyObserveResult()
 	}
-	result := m.flushRetainedPartitionSegmentsCreatedBefore(ctx, timetick, vchannel, collectionID, partitionID)
-	if !vchannelMatchesCollection(info, collectionID) {
-		return result
-	}
-	if info.ShouldSkipReplay(timetick) ||
-		!info.CanReplayAt(timetick) ||
-		!info.CanReplayPartitionAt(partitionID, timetick) ||
-		!info.HasPartitionMeta(partitionID) {
-		return result
-	}
+	result := m.flushRetainedPartitionSegmentsCreatedBefore(ctx, timetick, vchannel, partitionID)
 	return composeObserveResults(result, m.flushVChannelTransformLogBuffer(timetick, vchannel))
 }
 
@@ -330,23 +245,20 @@ func (m *Manager) flushRetainedPartitionSegmentsCreatedBefore(
 	ctx context.Context,
 	timetick uint64,
 	vchannel string,
-	collectionID int64,
 	partitionID int64,
 ) moduleapi.ObserveResult {
-	return m.observeSegments(ctx, timetick, func(segment *segmentView) bool {
-		meta := segment.AssignmentMeta()
-		return meta.GetVchannel() == vchannel &&
-			meta.GetCollectionId() == collectionID &&
-			meta.GetPartitionId() == partitionID &&
-			segment.CreateTimeTick() < timetick
-	}, func(segment *segmentView) moduleapi.ObserveResult {
+	info := m.retainedVChannel(vchannel)
+	if info == nil {
+		return emptyObserveResult()
+	}
+	return m.observeSegmentViews(info.SegmentsForFlush(partitionID, timetick), func(segment *segmentView) moduleapi.ObserveResult {
 		return segment.Flush(ctx, timetick)
 	})
 }
 
 func (m *Manager) flushVChannelTransformLogBuffer(timetick uint64, vchannel string) moduleapi.ObserveResult {
 	info := m.retainedVChannel(vchannel)
-	if info == nil || info.ShouldSkipReplay(timetick) {
+	if info == nil {
 		return emptyObserveResult()
 	}
 	return info.FlushTransformLogBuffer(timetick)
@@ -355,44 +267,28 @@ func (m *Manager) flushVChannelTransformLogBuffer(timetick uint64, vchannel stri
 func (m *Manager) flushAllTransformLogBuffers(timetick uint64) moduleapi.ObserveResult {
 	result := emptyObserveResult()
 	for _, info := range m.vchannelViews {
-		if !info.CanReplayAt(timetick) {
-			continue
-		}
 		result = composeObserveResults(result, info.FlushTransformLogBuffer(timetick))
 	}
 	return result
 }
 
-func (m *Manager) observeSegments(
-	_ context.Context,
-	timetick uint64,
-	matches func(*segmentView) bool,
-	observe func(*segmentView) moduleapi.ObserveResult,
-) moduleapi.ObserveResult {
-	result := emptyObserveResult()
+func (m *Manager) observeSegments(matches func(*segmentView) bool, observe func(*segmentView) moduleapi.ObserveResult) moduleapi.ObserveResult {
+	segments := make([]*segmentView, 0, len(m.segmentViews))
 	for _, segment := range m.segmentViews {
-		if !matches(segment) {
-			continue
+		if matches(segment) {
+			segments = append(segments, segment)
 		}
-		if shouldSkipTombstonedSegmentMeta(segment.AssignmentMeta(), timetick) {
-			continue
-		}
-		if !m.segmentOwnerCanReplayAt(segment, timetick) {
-			continue
-		}
+	}
+	return m.observeSegmentViews(segments, observe)
+}
+
+func (m *Manager) observeSegmentViews(segments []*segmentView, observe func(*segmentView) moduleapi.ObserveResult) moduleapi.ObserveResult {
+	result := emptyObserveResult()
+	for _, segment := range segments {
 		segmentResult := observe(segment)
 		result = composeObserveResults(result, segmentResult)
 	}
 	return result
-}
-
-func (m *Manager) segmentOwnerCanReplayAt(segment *segmentView, timetick uint64) bool {
-	segmentMeta := segment.AssignmentMeta()
-	vchannel := m.retainedVChannel(segmentMeta.GetVchannel())
-	if vchannel == nil || segmentMeta.GetCollectionId() != vchannelCollectionID(vchannel) {
-		return true
-	}
-	return vchannel.CanReplayAt(timetick) && vchannel.CanReplayPartitionAt(segmentMeta.GetPartitionId(), timetick)
 }
 
 func (m *Manager) observeInsertMessage(ctx context.Context, msg message.ImmutableInsertMessageV1) moduleapi.ObserveResult {
@@ -401,25 +297,11 @@ func (m *Manager) observeInsertMessage(ctx context.Context, msg message.Immutabl
 		m.logInconsistency(msg, "insert vchannel not found", zap.String("vchannel", msg.VChannel()))
 		return emptyObserveResult()
 	}
-	if !vchannelMatchesCollection(vchannelManager, msg.Header().GetCollectionId()) {
-		return emptyObserveResult()
-	}
-	if !vchannelManager.CanReplayAt(msg.TimeTick()) {
-		return emptyObserveResult()
-	}
 	result := emptyObserveResult()
 	for _, partition := range msg.Header().GetPartitions() {
-		if !vchannelManager.CanReplayExistingPartitionAt(partition.GetPartitionId(), msg.TimeTick()) {
-			continue
-		}
 		segmentID := partition.GetSegmentAssignment().GetSegmentId()
-		segment := vchannelManager.Segment(segmentID)
+		segment := vchannelManager.SegmentForInsert(partition.GetPartitionId(), segmentID, msg.TimeTick())
 		if segment == nil {
-			m.logInconsistency(msg, "insert segment not found", zap.String("vchannel", msg.VChannel()), zap.Int64("segmentID", segmentID))
-			continue
-		}
-		if !segment.CanReplayInsert(msg.TimeTick()) {
-			m.logInconsistency(msg, "insert segment cannot replay insert", zap.String("vchannel", msg.VChannel()), zap.Int64("segmentID", segmentID))
 			continue
 		}
 		segmentResult := segment.ObserveInsertMessageV1(ctx, msg, partition)
@@ -435,14 +317,6 @@ func (m *Manager) observeDeleteMessage(ctx context.Context, msg message.Immutabl
 	vchannelManager := m.retainedVChannel(msg.VChannel())
 	if vchannelManager == nil {
 		m.logInconsistency(msg, "delete vchannel not found", zap.String("vchannel", msg.VChannel()))
-		return emptyObserveResult()
-	}
-	if !vchannelMatchesCollection(vchannelManager, msg.Header().GetCollectionId()) {
-		return emptyObserveResult()
-	}
-	partitionID := msg.MustBody().GetPartitionID()
-	if !vchannelManager.CanReplayAt(msg.TimeTick()) ||
-		!vchannelManager.CanReplayExistingPartitionAt(partitionID, msg.TimeTick()) {
 		return emptyObserveResult()
 	}
 	return vchannelManager.ObserveDeleteMessageV1(ctx, msg)
@@ -463,27 +337,13 @@ func (m *Manager) observeTxnMessage(ctx context.Context, msg message.ImmutableTx
 				m.logInconsistency(insert, "txn insert vchannel not found", zap.String("vchannel", insert.VChannel()))
 				return nil
 			}
-			if !vchannelMatchesCollection(vchannelView, insert.Header().GetCollectionId()) {
-				return nil
-			}
-			if !vchannelView.CanReplayAt(timetick) {
-				return nil
-			}
 			for _, partition := range insert.Header().GetPartitions() {
-				if !vchannelView.CanReplayExistingPartitionAt(partition.GetPartitionId(), timetick) {
-					continue
-				}
 				segmentID := partition.GetSegmentAssignment().GetSegmentId()
 				if _, observed := observedSegments[segmentID]; observed {
 					continue
 				}
-				segment := vchannelView.Segment(segmentID)
+				segment := vchannelView.SegmentForInsert(partition.GetPartitionId(), segmentID, timetick)
 				if segment == nil {
-					m.logInconsistency(insert, "txn insert segment not found", zap.String("vchannel", insert.VChannel()), zap.Int64("segmentID", segmentID))
-					continue
-				}
-				if !segment.CanReplayInsert(timetick) {
-					m.logInconsistency(insert, "txn insert segment cannot replay insert", zap.String("vchannel", insert.VChannel()), zap.Int64("segmentID", segmentID))
 					continue
 				}
 				observedSegments[segmentID] = struct{}{}
@@ -515,18 +375,8 @@ func (m *Manager) observeTxnDeleteMessages(deletes []message.ImmutableDeleteMess
 		m.logInconsistency(deletes[0], "txn delete vchannel not found", zap.String("vchannel", vchannelName))
 		return emptyObserveResult()
 	}
-	if !vchannelMatchesCollection(vchannelManager, deletes[0].Header().GetCollectionId()) {
-		return emptyObserveResult()
-	}
-	if !vchannelManager.CanReplayAt(timetick) {
-		return emptyObserveResult()
-	}
-	filteredDeletes := deletes[:0]
+	filteredDeletes := make([]message.ImmutableDeleteMessageV1, 0, len(deletes))
 	for _, deleted := range deletes {
-		partitionID := deleted.MustBody().GetPartitionID()
-		if !vchannelManager.CanReplayExistingPartitionAt(partitionID, timetick) {
-			continue
-		}
 		filteredDeletes = append(filteredDeletes, deleteMessageWithTimeTick(deleted, timetick))
 	}
 	if len(filteredDeletes) == 0 {
@@ -552,10 +402,6 @@ func deleteMessageWithTimeTick(deleted message.ImmutableDeleteMessageV1, timetic
 
 func emptyObserveResult() moduleapi.ObserveResult {
 	return moduleapi.ObserveResult{}
-}
-
-func vchannelMatchesCollection(vchannel *vChannelView, collectionID int64) bool {
-	return vchannelCollectionID(vchannel) == collectionID
 }
 
 func dataBarrierResult(barrier walcheckpoint.Barrier) moduleapi.ObserveResult {

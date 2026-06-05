@@ -238,12 +238,6 @@ func (info *vChannelView) HasReadyTombstoneFinalize() bool {
 	return false
 }
 
-func (info *vChannelView) Segment(segmentID int64) *segmentView {
-	info.mu.Lock()
-	defer info.mu.Unlock()
-	return info.segments[segmentID]
-}
-
 func (info *vChannelView) AddSegment(segment *segmentView) {
 	info.mu.Lock()
 	defer info.mu.Unlock()
@@ -276,7 +270,11 @@ func (info *vChannelView) ObserveDeleteMessagesV1(messages []message.ImmutableDe
 	pendingDataTimeTick := info.transformLogBuffer.DataTimeTick()
 	appended := false
 	for _, msg := range messages {
-		if msg.TimeTick() <= info.meta.GetDataCheckpointTimeTick() || msg.TimeTick() <= pendingDataTimeTick {
+		partitionID := msg.MustBody().GetPartitionID()
+		if !info.canReplayAtLocked(msg.TimeTick()) ||
+			!info.canReplayExistingPartitionAtLocked(partitionID, msg.TimeTick()) ||
+			msg.TimeTick() <= info.meta.GetDataCheckpointTimeTick() ||
+			msg.TimeTick() <= pendingDataTimeTick {
 			continue
 		}
 		info.transformLogBuffer.AppendDelete(msg)
@@ -300,7 +298,8 @@ func (info *vChannelView) ObserveDeleteMessagesV1(messages []message.ImmutableDe
 func (info *vChannelView) FlushTransformLogBuffer(timetick uint64) moduleapi.ObserveResult {
 	var task scheduler.Task
 	info.mu.Lock()
-	if !info.metaAndData ||
+	if !info.canReplayAtLocked(timetick) ||
+		!info.metaAndData ||
 		info.meta.GetState() == streamingpb.VChannelState_VCHANNEL_STATE_TOMBSTONED ||
 		(info.transformLogBuffer.IsEmpty() && timetick <= info.meta.GetDataCheckpointTimeTick()) {
 		info.mu.Unlock()
@@ -359,23 +358,37 @@ func (info *vChannelView) IsActive() bool {
 	return info.meta.GetState() == streamingpb.VChannelState_VCHANNEL_STATE_NORMAL
 }
 
-func (info *vChannelView) ShouldSkipReplay(timetick uint64) bool {
+type existingCreateCollectionDecision int
+
+const (
+	existingCreateCollectionIgnored existingCreateCollectionDecision = iota
+	existingCreateCollectionStartNew
+	existingCreateCollectionInconsistent
+)
+
+func (info *vChannelView) ObserveExistingCreateCollectionMessageV1(msg message.ImmutableCreateCollectionMessageV1) (existingCreateCollectionDecision, moduleapi.ObserveResult) {
 	info.mu.Lock()
 	defer info.mu.Unlock()
-	return shouldSkipTombstonedVChannelMeta(info.meta, timetick)
+	timetick := msg.TimeTick()
+	if shouldSkipTombstonedVChannelMeta(info.meta, timetick) {
+		return existingCreateCollectionIgnored, emptyObserveResult()
+	}
+	if info.canStartNewCollectionAtLocked(timetick) {
+		return existingCreateCollectionStartNew, emptyObserveResult()
+	}
+	if !info.canReplayAtLocked(timetick) {
+		return existingCreateCollectionIgnored, emptyObserveResult()
+	}
+	return existingCreateCollectionInconsistent, moduleapi.ObserveResult{Meta: walcheckpoint.BarrierFunc(info.metaTimeTick)}
 }
 
-func (info *vChannelView) CanStartNewCollectionAt(timetick uint64) bool {
-	info.mu.Lock()
-	defer info.mu.Unlock()
+func (info *vChannelView) canStartNewCollectionAtLocked(timetick uint64) bool {
 	return info.meta.GetState() == streamingpb.VChannelState_VCHANNEL_STATE_TOMBSTONED &&
 		info.meta.GetTombstoneTimeTick() > 0 &&
 		timetick > info.meta.GetTombstoneTimeTick()
 }
 
-func (info *vChannelView) CanReplayAt(timetick uint64) bool {
-	info.mu.Lock()
-	defer info.mu.Unlock()
+func (info *vChannelView) canReplayAtLocked(timetick uint64) bool {
 	if shouldSkipTombstonedVChannelMeta(info.meta, timetick) {
 		return false
 	}
@@ -385,30 +398,17 @@ func (info *vChannelView) CanReplayAt(timetick uint64) bool {
 	return timetick <= info.meta.GetCheckpointTimeTick()
 }
 
-func (info *vChannelView) ShouldSkipPartitionReplay(partitionID int64, timetick uint64) bool {
+func (info *vChannelView) CanObserveActiveAt(timetick uint64) bool {
 	info.mu.Lock()
 	defer info.mu.Unlock()
-	for _, partition := range info.meta.GetCollectionInfo().GetPartitions() {
-		if partition.GetPartitionId() != partitionID {
-			continue
-		}
-		return shouldSkipTombstonedPartitionMeta(partition, timetick)
-	}
-	return false
+	return info.canReplayAtLocked(timetick) &&
+		info.meta.GetState() == streamingpb.VChannelState_VCHANNEL_STATE_NORMAL
 }
 
-func (info *vChannelView) CanReplayPartitionAt(partitionID int64, timetick uint64) bool {
-	info.mu.Lock()
-	defer info.mu.Unlock()
-	return info.canReplayPartitionAtLocked(partitionID, timetick)
-}
-
-func (info *vChannelView) CanReplayExistingPartitionAt(partitionID int64, timetick uint64) bool {
+func (info *vChannelView) canReplayExistingPartitionAtLocked(partitionID int64, timetick uint64) bool {
 	if partitionID == common.AllPartitionsID {
 		return true
 	}
-	info.mu.Lock()
-	defer info.mu.Unlock()
 	return info.canReplayPartitionAtLocked(partitionID, timetick) && info.hasPartitionMetaLocked(partitionID)
 }
 
@@ -429,12 +429,6 @@ func (info *vChannelView) canReplayPartitionAtLocked(partitionID int64, timetick
 	return true
 }
 
-func (info *vChannelView) HasPartitionMeta(partitionID int64) bool {
-	info.mu.Lock()
-	defer info.mu.Unlock()
-	return info.hasPartitionMetaLocked(partitionID)
-}
-
 func (info *vChannelView) hasPartitionMetaLocked(partitionID int64) bool {
 	for _, partition := range info.meta.GetCollectionInfo().GetPartitions() {
 		if partition.GetPartitionId() == partitionID {
@@ -442,6 +436,54 @@ func (info *vChannelView) hasPartitionMetaLocked(partitionID int64) bool {
 		}
 	}
 	return false
+}
+
+func (info *vChannelView) CreateSegmentSchema(partitionID int64, timetick uint64) *schemapb.CollectionSchema {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	if !info.canReplayAtLocked(timetick) || !info.canReplayPartitionAtLocked(partitionID, timetick) {
+		return nil
+	}
+	if !info.hasPartitionMetaLocked(partitionID) {
+		return nil
+	}
+	_, schema := info.GetSchemaLocked(timetick)
+	return schema
+}
+
+func (info *vChannelView) SegmentForInsert(partitionID int64, segmentID int64, timetick uint64) *segmentView {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	if !info.canReplayAtLocked(timetick) || !info.canReplayExistingPartitionAtLocked(partitionID, timetick) {
+		return nil
+	}
+	return info.segments[segmentID]
+}
+
+func (info *vChannelView) SegmentsForFlush(partitionID int64, timetick uint64) []*segmentView {
+	info.mu.Lock()
+	if !info.canReplayAtLocked(timetick) || !info.canReplayExistingPartitionAtLocked(partitionID, timetick) {
+		info.mu.Unlock()
+		return nil
+	}
+	candidates := make([]*segmentView, 0, len(info.segments))
+	for _, segment := range info.segments {
+		candidates = append(candidates, segment)
+	}
+	info.mu.Unlock()
+
+	segments := candidates[:0]
+	for _, segment := range candidates {
+		meta := segment.AssignmentMeta()
+		if partitionID != common.AllPartitionsID && meta.GetPartitionId() != partitionID {
+			continue
+		}
+		if segment.CreateTimeTick() >= timetick {
+			continue
+		}
+		segments = append(segments, segment)
+	}
+	return segments
 }
 
 func (info *vChannelView) TombstonedCleanupPlan(metaPhysicalTimeTick uint64, dataPhysicalTimeTick uint64) (dropSnapshot *streamingpb.VChannelMeta, cleanupPartitions map[int64]uint64) {
@@ -564,18 +606,14 @@ func (info *vChannelView) GetSchemaLocked(timetick uint64) (int, *schemapb.Colle
 func (info *vChannelView) ObserveSchemaChangeMessageV2(msg message.ImmutableSchemaChangeMessageV2) moduleapi.ObserveResult {
 	info.mu.Lock()
 	defer info.mu.Unlock()
-	if msg.TimeTick() < info.meta.CheckpointTimeTick {
-		// the txn message will share the same time tick.
-		// (although the flush operation is not a txn message)
-		// so we only filter the time tick is less than the checkpoint time tick.
-		// Consistent state is guaranteed by the recovery storage's mutex.
-		return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+	if msg.TimeTick() <= info.meta.CheckpointTimeTick {
+		return emptyObserveResult()
 	}
 	if info.meta.GetState() != streamingpb.VChannelState_VCHANNEL_STATE_NORMAL {
-		return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+		return emptyObserveResult()
 	}
 	if info.hasSchemaVersionLocked(msg.TimeTick(), msg.MustBody().Schema) {
-		return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+		return emptyObserveResult()
 	}
 
 	info.meta.CollectionInfo.Schemas = append(info.meta.CollectionInfo.Schemas, &streamingpb.CollectionSchemaOfVChannel{
@@ -591,30 +629,23 @@ func (info *vChannelView) ObserveSchemaChangeMessageV2(msg message.ImmutableSche
 func (info *vChannelView) ObserveAlterCollectionMessageV2(msg message.ImmutableAlterCollectionMessageV2) moduleapi.ObserveResult {
 	info.mu.Lock()
 	defer info.mu.Unlock()
-	if msg.TimeTick() < info.meta.CheckpointTimeTick {
-		// the txn message will share the same time tick.
-		// (although the flush operation is not a txn message)
-		// so we only filter the time tick is less than the checkpoint time tick.
-		// Consistent state is guaranteed by the recovery storage's mutex.
-		return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+	if msg.TimeTick() <= info.meta.CheckpointTimeTick {
+		return emptyObserveResult()
 	}
 	if info.meta.GetState() != streamingpb.VChannelState_VCHANNEL_STATE_NORMAL {
-		return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+		return emptyObserveResult()
 	}
 	schemaChange := messageutil.IsSchemaChange(msg.Header())
 	if schemaChange {
 		schema := msg.MustBody().Updates.Schema
 		if info.hasSchemaVersionLocked(msg.TimeTick(), schema) {
-			return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+			return emptyObserveResult()
 		}
 		info.meta.CollectionInfo.Schemas = append(info.meta.CollectionInfo.Schemas, &streamingpb.CollectionSchemaOfVChannel{
 			Schema:             schema,
 			State:              streamingpb.VChannelSchemaState_VCHANNEL_SCHEMA_STATE_NORMAL,
 			CheckpointTimeTick: msg.TimeTick(),
 		})
-	}
-	if !schemaChange && msg.TimeTick() == info.meta.GetCheckpointTimeTick() {
-		return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
 	}
 	info.meta.CheckpointTimeTick = msg.TimeTick()
 	info.dirty = true
@@ -633,16 +664,12 @@ func (info *vChannelView) hasSchemaVersionLocked(timetick uint64, schema *schema
 func (info *vChannelView) ObserveDropCollectionMessageV1(msg message.ImmutableDropCollectionMessageV1) moduleapi.ObserveResult {
 	info.mu.Lock()
 	defer info.mu.Unlock()
-	if msg.TimeTick() < info.meta.CheckpointTimeTick {
-		// the txn message will share the same time tick.
-		// (although the flush operation is not a txn message)
-		// so we only filter the time tick is less than the checkpoint time tick.
-		// Consistent state is guaranteed by the recovery storage's mutex.
-		return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+	if msg.TimeTick() <= info.meta.CheckpointTimeTick {
+		return emptyObserveResult()
 	}
 	if isVChannelClosed(info.meta.GetState()) {
 		// make it idempotent, only the first drop collection message can be observed.
-		return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+		return emptyObserveResult()
 	}
 	info.meta.State = streamingpb.VChannelState_VCHANNEL_STATE_DROPPED
 	info.meta.CheckpointTimeTick = msg.TimeTick()
@@ -654,10 +681,10 @@ func (info *vChannelView) ObserveTruncateCollectionMessageV2(msg message.Immutab
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	if msg.TimeTick() <= info.meta.CheckpointTimeTick {
-		return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+		return emptyObserveResult()
 	}
 	if info.meta.GetState() != streamingpb.VChannelState_VCHANNEL_STATE_NORMAL {
-		return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+		return emptyObserveResult()
 	}
 	info.meta.CheckpointTimeTick = msg.TimeTick()
 	info.dirty = true
@@ -667,18 +694,14 @@ func (info *vChannelView) ObserveTruncateCollectionMessageV2(msg message.Immutab
 func (info *vChannelView) ObserveDropPartitionMessageV1(msg message.ImmutableDropPartitionMessageV1) moduleapi.ObserveResult {
 	info.mu.Lock()
 	defer info.mu.Unlock()
-	if msg.TimeTick() < info.meta.CheckpointTimeTick {
-		// the txn message will share the same time tick.
-		// (although the flush operation is not a txn message)
-		// so we only filter the time tick is less than the checkpoint time tick.
-		// Consistent state is guaranteed by the recovery storage's mutex.
-		return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+	if msg.TimeTick() <= info.meta.CheckpointTimeTick {
+		return emptyObserveResult()
 	}
 	for _, partition := range info.meta.CollectionInfo.Partitions {
 		if partition.PartitionId == msg.Header().PartitionId {
 			// make it idempotent, only the first drop partition message can be observed.
 			if !isPartitionNormal(partition.GetState()) {
-				return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+				return emptyObserveResult()
 			}
 			partition.State = streamingpb.PartitionState_PARTITION_STATE_DROPPED
 			partition.TombstoneTimeTick = msg.TimeTick()
@@ -687,21 +710,17 @@ func (info *vChannelView) ObserveDropPartitionMessageV1(msg message.ImmutableDro
 			return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
 		}
 	}
-	return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+	return emptyObserveResult()
 }
 
 func (info *vChannelView) ObserveCreatePartitionMessageV1(msg message.ImmutableCreatePartitionMessageV1) moduleapi.ObserveResult {
 	info.mu.Lock()
 	defer info.mu.Unlock()
-	if msg.TimeTick() < info.meta.CheckpointTimeTick {
-		// the txn message will share the same time tick.
-		// (although the flush operation is not a txn message)
-		// so we only filter the time tick is less than the checkpoint time tick.
-		// Consistent state is guaranteed by the recovery storage.
-		return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+	if msg.TimeTick() <= info.meta.CheckpointTimeTick {
+		return emptyObserveResult()
 	}
 	if info.meta.GetState() != streamingpb.VChannelState_VCHANNEL_STATE_NORMAL {
-		return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+		return emptyObserveResult()
 	}
 	for _, partition := range info.meta.CollectionInfo.Partitions {
 		if partition.PartitionId == msg.Header().PartitionId {
@@ -710,8 +729,9 @@ func (info *vChannelView) ObserveCreatePartitionMessageV1(msg message.ImmutableC
 				partition.TombstoneTimeTick = 0
 				info.meta.CheckpointTimeTick = msg.TimeTick()
 				info.dirty = true
+				return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
 			}
-			return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+			return emptyObserveResult()
 		}
 	}
 	info.meta.CollectionInfo.Partitions = append(info.meta.CollectionInfo.Partitions, &streamingpb.PartitionInfoOfVChannel{
@@ -813,12 +833,6 @@ func isPartitionNormal(state streamingpb.PartitionState) bool {
 
 func shouldSkipTombstonedVChannelMeta(meta *streamingpb.VChannelMeta, timetick uint64) bool {
 	return meta.GetState() == streamingpb.VChannelState_VCHANNEL_STATE_TOMBSTONED &&
-		meta.GetTombstoneTimeTick() > 0 &&
-		timetick <= meta.GetTombstoneTimeTick()
-}
-
-func shouldSkipTombstonedPartitionMeta(meta *streamingpb.PartitionInfoOfVChannel, timetick uint64) bool {
-	return meta.GetState() == streamingpb.PartitionState_PARTITION_STATE_TOMBSTONED &&
 		meta.GetTombstoneTimeTick() > 0 &&
 		timetick <= meta.GetTombstoneTimeTick()
 }
