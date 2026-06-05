@@ -38,6 +38,9 @@ func RecoverRecoveryStorage(
 	cp *utility.WALCheckpoint,
 	lastTimeTickMessage message.ImmutableMessage,
 ) (RecoveryStorage, *RecoverySnapshot, error) {
+	if cp == nil {
+		cp = initialCheckpointFromLastTimeTickMessage(lastTimeTickMessage)
+	}
 	rs := newRecoveryStorage(recoveryStreamBuilder.Channel(), cp)
 	if err := rs.recoverRecoveryInfoFromMeta(ctx, recoveryStreamBuilder.Channel()); err != nil {
 		rs.Logger().Warn("recovery storage failed", zap.Error(err))
@@ -59,6 +62,18 @@ func RecoverRecoveryStorage(
 	go rs.backgroundTask()
 	rs.startDataLiveScanner(recoveryStreamBuilder)
 	return rs, snapshot, nil
+}
+
+func initialCheckpointFromLastTimeTickMessage(lastTimeTickMessage message.ImmutableMessage) *utility.WALCheckpoint {
+	point := utility.WALConsumeCheckpoint{
+		MessageID: lastTimeTickMessage.LastConfirmedMessageID(),
+		TimeTick:  lastTimeTickMessage.TimeTick(),
+	}
+	return &utility.WALCheckpoint{
+		MessageID:      point.MessageID,
+		TimeTick:       point.TimeTick,
+		DataCheckpoint: point.Clone(),
+	}
 }
 
 // newRecoveryStorage creates a new recovery storage.
@@ -270,9 +285,6 @@ func (r *recoveryStorageImpl) observeModulesMessage(ctx context.Context, msg mes
 }
 
 func (r *recoveryStorageImpl) updateDataCheckpoint(msg message.ImmutableMessage, barrier walcheckpoint.Barrier) {
-	if barrier == nil {
-		return
-	}
 	point := utility.WALConsumeCheckpoint{
 		MessageID: msg.LastConfirmedMessageID(),
 		TimeTick:  msg.TimeTick(),
@@ -364,9 +376,7 @@ func (r *recoveryStorageImpl) updateCheckpoint(msg message.ImmutableMessage, met
 		TimeTick:  msg.TimeTick(),
 	}
 	r.advanceMetaObservedCheckpoint(point)
-	if metaBarrier != nil {
-		r.checkpointManager.AddMetaBarrier(point, metaBarrier)
-	}
+	r.checkpointManager.AddMetaBarrier(point, metaBarrier)
 	if r.alterWALInfo != nil && r.alterWALInfo.FoundAlterWALMsg && (r.checkpoint.AlterWalState == nil || r.checkpoint.AlterWalState.Stage == streamingpb.AlterWALStage_NONE) {
 		r.checkpoint.AlterWalState = &streamingpb.AlterWALState{
 			TargetWalName: r.alterWALInfo.TargetWALName,

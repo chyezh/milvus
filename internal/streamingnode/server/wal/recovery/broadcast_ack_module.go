@@ -9,6 +9,7 @@ import (
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
 	scheduler "github.com/milvus-io/milvus/pkg/v3/syncutil/preconditioned"
 )
 
@@ -48,7 +49,7 @@ func (m *broadcastAckModule) Name() string {
 
 func (m *broadcastAckModule) ObserveMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
 	header := msg.BroadcastHeader()
-	if header == nil || !header.AckSyncUp || m.mode != moduleModeMetaAndData {
+	if header == nil || m.mode != moduleModeMetaAndData {
 		return moduleapi.ObserveResult{}
 	}
 
@@ -78,29 +79,27 @@ func (m *broadcastAckModule) RequirePersist() {
 func (m *broadcastAckModule) buildPrecondition(msg message.ImmutableMessage) scheduler.Precondition {
 	switch msg.MessageType() {
 	case message.MessageTypeDropCollection:
-		drop := message.MustAsImmutableDropCollectionMessageV1(msg)
-		return m.collectionDurablePrecondition(drop.TimeTick(), drop.Header().GetCollectionId())
+		return m.vchannelDurablePrecondition(msg.TimeTick(), msg.VChannel())
 	case message.MessageTypeTruncateCollection:
-		truncate := message.MustAsImmutableTruncateCollectionMessageV2(msg)
-		return m.collectionDurablePrecondition(truncate.TimeTick(), truncate.Header().GetCollectionId())
+		return m.vchannelDurablePrecondition(msg.TimeTick(), msg.VChannel())
 	case message.MessageTypeDropPartition:
 		drop := message.MustAsImmutableDropPartitionMessageV1(msg)
 		header := drop.Header()
 		return m.partitionDurablePrecondition(drop.TimeTick(), header.GetCollectionId(), header.GetPartitionId())
+	case message.MessageTypeManualFlush:
+		return m.vchannelDurablePrecondition(msg.TimeTick(), msg.VChannel())
 	case message.MessageTypeFlushAll:
 		return m.allDurablePrecondition(msg.TimeTick())
-	case message.MessageTypeCommitImport:
-		commit := message.MustAsImmutableCommitImportMessageV2(msg)
-		return m.vchannelDurablePrecondition(commit.TimeTick(), commit.VChannel())
+	case message.MessageTypeAlterCollection:
+		alter := message.MustAsImmutableAlterCollectionMessageV2(msg)
+		if messageutil.IsSchemaChange(alter.Header()) {
+			return m.vchannelDurablePrecondition(alter.TimeTick(), alter.VChannel())
+		}
+	case message.MessageTypeAlterWAL:
+		return m.allDurablePrecondition(msg.TimeTick())
 	default:
-		return scheduler.AlwaysReady{}
 	}
-}
-
-func (m *broadcastAckModule) collectionDurablePrecondition(timetick uint64, collectionID int64) scheduler.Precondition {
-	return m.frontierPrecondition(timetick, func(view moduleapi.DurableFrontierView) walcheckpoint.Barrier {
-		return view.CollectionDurableFrontier(collectionID)
-	})
+	return scheduler.AlwaysReady{}
 }
 
 func (m *broadcastAckModule) partitionDurablePrecondition(timetick uint64, collectionID int64, partitionID int64) scheduler.Precondition {

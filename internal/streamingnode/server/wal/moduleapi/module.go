@@ -27,7 +27,6 @@ type CheckpointPersistedObserver interface {
 }
 
 type DurableFrontierView interface {
-	CollectionDurableFrontier(collectionID int64) walcheckpoint.Barrier
 	PartitionDurableFrontier(collectionID int64, partitionID int64) walcheckpoint.Barrier
 	VChannelDurableFrontier(vchannel string) walcheckpoint.Barrier
 	AllDurableFrontier() walcheckpoint.Barrier

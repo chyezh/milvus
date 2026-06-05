@@ -81,7 +81,7 @@ func initResourceForTest(t *testing.T) {
 	params.Save(params.StreamingCfg.WALWriteAheadBufferCapacity.Key, "10k")
 
 	rc := idalloc.NewMockRootCoordClient(t)
-	rc.EXPECT().GetPChannelInfo(mock.Anything, mock.Anything).Return(&rootcoordpb.GetPChannelInfoResponse{}, nil)
+	rc.EXPECT().GetPChannelInfo(mock.Anything, mock.Anything).Return(&rootcoordpb.GetPChannelInfoResponse{}, nil).Maybe()
 	rc.EXPECT().AllocSegment(mock.Anything, mock.Anything).Return(&datapb.AllocSegmentResponse{
 		Status: merr.Success(),
 	}, nil).Maybe()

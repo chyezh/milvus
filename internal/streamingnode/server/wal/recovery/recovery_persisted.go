@@ -7,8 +7,10 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v3/log"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/util/conc"
 )
@@ -103,7 +105,13 @@ func (r *recoveryStorageImpl) ensureDataCheckpoint() error {
 		return nil
 	}
 	if r.checkpoint.DataCheckpoint == nil || r.checkpoint.DataCheckpoint.MessageID == nil {
-		return errors.New("missing data checkpoint in recovery checkpoint")
+		r.checkpoint.DataCheckpoint = &utility.WALConsumeCheckpoint{
+			MessageID: r.checkpoint.MessageID,
+			TimeTick:  r.checkpoint.TimeTick,
+		}
+		if r.checkpointManager != nil {
+			r.checkpointManager.MarkDirty()
+		}
 	}
 	return nil
 }
@@ -112,6 +120,7 @@ func validateRecoveredGrowingMeta(
 	vchannels map[string]*streamingpb.VChannelMeta,
 	segments map[int64]*streamingpb.SegmentAssignmentMeta,
 ) error {
+	normalizeRecoveredGrowingMeta(vchannels, segments)
 	for vchannelName, vchannel := range vchannels {
 		if vchannel.GetVchannel() == "" {
 			return errors.New("vchannel missing vchannel owner in recovery meta")
@@ -236,28 +245,26 @@ func validateRecoveredGrowingMeta(
 	if err := validateTombstonedOwnerCoveredSegments(vchannels, segments); err != nil {
 		return err
 	}
-	if err := validateSegmentPersistedStorage(segments); err != nil {
-		return err
-	}
-	return validateVChannelLatestDataVersion(vchannels)
-}
-
-func validateSegmentPersistedStorage(segments map[int64]*streamingpb.SegmentAssignmentMeta) error {
-	for segmentID, segment := range segments {
-		if segment.GetPersistedStorage() == nil {
-			return errors.Errorf("segment missing persisted storage in recovery meta: %d", segmentID)
-		}
-	}
 	return nil
 }
 
-func validateVChannelLatestDataVersion(vchannels map[string]*streamingpb.VChannelMeta) error {
-	for vchannelName, vchannel := range vchannels {
+func normalizeRecoveredGrowingMeta(
+	vchannels map[string]*streamingpb.VChannelMeta,
+	segments map[int64]*streamingpb.SegmentAssignmentMeta,
+) {
+	for _, vchannel := range vchannels {
 		if vchannel.GetLatestDataVersion() == nil {
-			return errors.Errorf("vchannel missing latest data version in recovery meta: %s", vchannelName)
+			vchannel.LatestDataVersion = &viewpb.DataVersion{}
+		}
+		if vchannel.GetGrowingSegmentMode() == streamingpb.GrowingSegmentMode_GROWING_SEGMENT_MODE_UNKNOWN {
+			vchannel.GrowingSegmentMode = streamingpb.GrowingSegmentMode_GROWING_SEGMENT_MODE_WRITE_ONLY
 		}
 	}
-	return nil
+	for _, segment := range segments {
+		if segment.GetPersistedStorage() == nil {
+			segment.PersistedStorage = &streamingpb.L1SegmentPersistedStorage{}
+		}
+	}
 }
 
 func validateTombstonedOwnerCoveredSegments(

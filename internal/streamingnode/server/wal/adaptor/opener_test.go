@@ -12,7 +12,6 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus/internal/mocks/mock_metastore"
-	"github.com/milvus-io/milvus/internal/mocks/streamingnode/server/wal/mock_recovery"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
@@ -107,7 +106,9 @@ func TestHandleAlterWALFlushingStageWaitsRecoveryDataCheckpoint(t *testing.T) {
 	catalog := mock_metastore.NewMockStreamingNodeCataLog(t)
 	catalog.EXPECT().
 		SaveConsumeCheckpoint(mock.Anything, channel.Name, mock.MatchedBy(func(checkpoint *streamingpb.WALCheckpoint) bool {
-			return checkpoint.GetAlterWalState().GetStage() == streamingpb.AlterWALStage_ADVANCE_CHECKPOINT
+			return checkpoint.GetAlterWalState().GetStage() == streamingpb.AlterWALStage_ADVANCE_CHECKPOINT &&
+				checkpoint.GetDataCheckpoint().GetTimeTick() == 100 &&
+				rmq.NewRmqID(2).EQ(message.MustUnmarshalMessageID(checkpoint.GetDataCheckpoint().GetMessageId()))
 		})).
 		Return(nil)
 	resource.InitForTest(t, resource.OptStreamingNodeCatalog(catalog))
@@ -118,19 +119,17 @@ func TestHandleAlterWALFlushingStageWaitsRecoveryDataCheckpoint(t *testing.T) {
 			return rmq.NewRmqID(1), nil
 		},
 	}, func() {})
-	rs := mock_recovery.NewMockRecoveryStorage(t)
-	rs.EXPECT().
-		GetDataCheckpoint(mock.Anything).
-		Return(&recovery.WALCheckpoint{
+	rs := &stalledRecoveryStorage{
+		checkpoint: &recovery.WALCheckpoint{
 			MessageID: rmq.NewRmqID(2),
 			TimeTick:  100,
-		})
-	rs.EXPECT().Close().Return()
+		},
+	}
 
 	snapshot := &recovery.RecoverySnapshot{
 		Checkpoint: &recovery.WALCheckpoint{
 			MessageID: rmq.NewRmqID(1),
-			TimeTick:  10,
+			TimeTick:  100,
 			AlterWalState: &streamingpb.AlterWALState{
 				TargetWalName: commonpb.WALName_Test,
 				TimeTick:      100,
@@ -155,4 +154,129 @@ func TestHandleAlterWALFlushingStageWaitsRecoveryDataCheckpoint(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, streamingpb.AlterWALStage_ADVANCE_CHECKPOINT, snapshot.Checkpoint.AlterWalState.Stage)
+	require.NotNil(t, snapshot.Checkpoint.DataCheckpoint)
+	assert.Equal(t, uint64(100), snapshot.Checkpoint.DataCheckpoint.TimeTick)
+	assert.True(t, rmq.NewRmqID(2).EQ(snapshot.Checkpoint.DataCheckpoint.MessageID))
+}
+
+func TestHandleAlterWALAdvanceCheckpointsStageMovesDataCheckpointToNewWAL(t *testing.T) {
+	channel := types.PChannelInfo{
+		Name:       "alter-wal-advance-test",
+		Term:       1,
+		AccessMode: types.AccessModeRW,
+	}
+	catalog := mock_metastore.NewMockStreamingNodeCataLog(t)
+	catalog.EXPECT().
+		ListVChannel(mock.Anything, channel.Name).
+		Return(nil, nil)
+	catalog.EXPECT().
+		SaveConsumeCheckpoint(mock.Anything, channel.Name, mock.MatchedBy(func(checkpoint *streamingpb.WALCheckpoint) bool {
+			dataCP := checkpoint.GetDataCheckpoint()
+			msgID := checkpoint.GetMessageId()
+			dataMessageID := dataCP.GetMessageId()
+			return checkpoint.GetAlterWalState() == nil &&
+				checkpoint.GetTimeTick() == 100 &&
+				dataCP.GetTimeTick() == 100 &&
+				msgID.GetId() == dataMessageID.GetId() &&
+				msgID.GetWALName() == dataMessageID.GetWALName() &&
+				msgID.GetWALName() == commonpb.WALName_RocksMQ
+		})).
+		Return(nil)
+	resource.InitForTest(t, resource.OptStreamingNodeCatalog(catalog))
+
+	snapshot := &recovery.RecoverySnapshot{
+		Checkpoint: &recovery.WALCheckpoint{
+			MessageID: rmq.NewRmqID(1),
+			TimeTick:  100,
+			DataCheckpoint: &utility.WALConsumeCheckpoint{
+				MessageID: rmq.NewRmqID(2),
+				TimeTick:  100,
+			},
+			AlterWalState: &streamingpb.AlterWALState{
+				TargetWalName: commonpb.WALName_RocksMQ,
+				TimeTick:      100,
+				Stage:         streamingpb.AlterWALStage_ADVANCE_CHECKPOINT,
+			},
+		},
+	}
+
+	err := (&openerAdaptorImpl{}).handleAlterWALAdvanceCheckpointsStage(
+		context.Background(),
+		&wal.OpenOption{Channel: channel},
+		snapshot,
+	)
+
+	require.NoError(t, err)
+}
+
+func TestHandleAlterWALFlushingStageTimesOutWhenDataCheckpointStalls(t *testing.T) {
+	oldCheckInterval := walSwitchFlushCheckInterval
+	oldTimeout := walSwitchFlushTimeout
+	walSwitchFlushCheckInterval = 10 * time.Millisecond
+	walSwitchFlushTimeout = 30 * time.Millisecond
+	defer func() {
+		walSwitchFlushCheckInterval = oldCheckInterval
+		walSwitchFlushTimeout = oldTimeout
+	}()
+
+	channel := types.PChannelInfo{
+		Name:       "alter-wal-flushing-timeout-test",
+		Term:       1,
+		AccessMode: types.AccessModeRW,
+	}
+	rs := &stalledRecoveryStorage{
+		checkpoint: &recovery.WALCheckpoint{
+			MessageID: rmq.NewRmqID(2),
+			TimeTick:  10,
+		},
+	}
+	snapshot := &recovery.RecoverySnapshot{
+		Checkpoint: &recovery.WALCheckpoint{
+			MessageID: rmq.NewRmqID(1),
+			TimeTick:  10,
+			AlterWalState: &streamingpb.AlterWALState{
+				TargetWalName: commonpb.WALName_Test,
+				TimeTick:      100,
+				Stage:         streamingpb.AlterWALStage_FLUSHING,
+			},
+		},
+		AlterWALInfo: &recovery.AlterWALInfo{
+			FoundAlterWALMsg: true,
+			TargetWALName:    commonpb.WALName_Test,
+			AlterWALTs:       100,
+		},
+	}
+
+	start := time.Now()
+	err := (&openerAdaptorImpl{}).handleAlterWALFlushingStage(
+		context.Background(),
+		&wal.OpenOption{Channel: channel},
+		nil,
+		&interceptors.InterceptorBuildParam{},
+		rs,
+		snapshot,
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timeout waiting for flush completion")
+	assert.Less(t, time.Since(start), 500*time.Millisecond)
+	assert.Equal(t, streamingpb.AlterWALStage_FLUSHING, snapshot.Checkpoint.AlterWalState.Stage)
+}
+
+type stalledRecoveryStorage struct {
+	checkpoint *recovery.WALCheckpoint
+}
+
+func (s *stalledRecoveryStorage) Metrics() recovery.RecoveryMetrics {
+	return recovery.RecoveryMetrics{}
+}
+
+func (s *stalledRecoveryStorage) ObserveMessage(ctx context.Context, msg message.ImmutableMessage) {
+}
+
+func (s *stalledRecoveryStorage) GetDataCheckpoint(ctx context.Context) *recovery.WALCheckpoint {
+	return s.checkpoint
+}
+
+func (s *stalledRecoveryStorage) Close() {
 }

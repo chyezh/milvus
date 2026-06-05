@@ -676,6 +676,20 @@ func (info *VChannelView) ObserveDropCollectionMessageV1(msg message.ImmutableDr
 	return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
 }
 
+func (info *VChannelView) ObserveTruncateCollectionMessageV2(msg message.ImmutableTruncateCollectionMessageV2) moduleapi.ObserveResult {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	if msg.TimeTick() <= info.meta.CheckpointTimeTick {
+		return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+	}
+	if info.meta.GetState() != streamingpb.VChannelState_VCHANNEL_STATE_NORMAL {
+		return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+	}
+	info.meta.CheckpointTimeTick = msg.TimeTick()
+	info.dirty = true
+	return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
+}
+
 func (info *VChannelView) ObserveDropPartitionMessageV1(msg message.ImmutableDropPartitionMessageV1) moduleapi.ObserveResult {
 	info.mu.Lock()
 	defer info.mu.Unlock()

@@ -79,6 +79,11 @@ type openerAdaptorImpl struct {
 	interceptorBuilders []interceptors.InterceptorBuilder
 }
 
+var (
+	walSwitchFlushCheckInterval = time.Second
+	walSwitchFlushTimeout       = time.Minute
+)
+
 // Open opens a wal instance for the channel.
 func (o *openerAdaptorImpl) Open(ctx context.Context, opt *wal.OpenOption) (wal.WAL, error) {
 	if !o.lifetime.Add(typeutil.LifetimeStateWorking) {
@@ -307,10 +312,10 @@ func (o *openerAdaptorImpl) handleAlterWALFlushingStage(ctx context.Context, opt
 		zap.String("channel", opt.Channel.Name),
 		zap.Uint64("targetTimeTick", targetTimeTick))
 
-	ticker := time.NewTicker(1 * time.Second)
+	ticker := time.NewTicker(walSwitchFlushCheckInterval)
 	defer ticker.Stop()
-
-	const defaultWALSwitchFlushTimeout = 1 * time.Minute
+	timeout := time.NewTimer(walSwitchFlushTimeout)
+	defer timeout.Stop()
 
 	// Periodically check recovery-owned data progress until target time tick is reached.
 	var dataCP *utility.WALCheckpoint
@@ -336,10 +341,10 @@ func (o *openerAdaptorImpl) handleAlterWALFlushingStage(ctx context.Context, opt
 				zap.Uint64("currentTS", dataCP.TimeTick),
 				zap.Uint64("targetTS", targetTimeTick),
 				zap.Uint64("remainingTS", remaining))
-		case <-time.After(defaultWALSwitchFlushTimeout):
+		case <-timeout.C:
 			log.Ctx(ctx).Warn("timeout waiting for flush completion",
 				zap.String("channel", opt.Channel.Name),
-				zap.Duration("timeout", defaultWALSwitchFlushTimeout))
+				zap.Duration("timeout", walSwitchFlushTimeout))
 			return errors.Newf("timeout waiting for flush completion during WAL switch")
 		case <-ctx.Done():
 			log.Ctx(ctx).Warn("context canceled while waiting for flush completion",
@@ -358,6 +363,10 @@ func (o *openerAdaptorImpl) handleAlterWALFlushingStage(ctx context.Context, opt
 	roWAL.Close()
 
 	// Update checkpoint stage to ADVANCE_CHECKPOINT and persist to catalog
+	snapshot.Checkpoint.DataCheckpoint = &utility.WALConsumeCheckpoint{
+		MessageID: dataCP.MessageID,
+		TimeTick:  dataCP.TimeTick,
+	}
 	snapshot.Checkpoint.AlterWalState.Stage = streamingpb.AlterWALStage_ADVANCE_CHECKPOINT
 
 	catalog := resource.Resource().StreamingNodeCatalog()
@@ -452,6 +461,10 @@ func (o *openerAdaptorImpl) handleAlterWALAdvanceCheckpointsStage(ctx context.Co
 	finalCheckpoint := snapshot.Checkpoint.Clone()
 	finalCheckpoint.AlterWalState = nil
 	finalCheckpoint.MessageID = msgadaptor.MustGetMessageIDFromMQWrapperID(newWALInitialMsgID)
+	finalCheckpoint.DataCheckpoint = &utility.WALConsumeCheckpoint{
+		MessageID: finalCheckpoint.MessageID,
+		TimeTick:  finalCheckpoint.TimeTick,
+	}
 	if finalCheckpoint.ReplicateCheckpoint != nil {
 		finalCheckpoint.ReplicateCheckpoint.MessageID = finalCheckpoint.MessageID
 	}

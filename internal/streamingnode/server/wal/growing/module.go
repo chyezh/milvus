@@ -28,20 +28,9 @@ func (m *Manager) ObserveMessage(ctx context.Context, msg message.ImmutableMessa
 	if funcutil.IsControlChannel(msg.VChannel()) && !msg.IsPChannelLevel() {
 		// CChannel messages only provide global ordering here. They should not mutate
 		// vchannel/segment state, but checkpoints can still advance over them.
-		return m.completeObserveResult(msg, moduleapi.ObserveResult{})
+		return moduleapi.ObserveResult{}
 	}
-	return m.completeObserveResult(msg, m.observeMessage(ctx, msg))
-}
-
-func (m *Manager) completeObserveResult(msg message.ImmutableMessage, result moduleapi.ObserveResult) moduleapi.ObserveResult {
-	timetick := msg.TimeTick()
-	if result.Meta == nil {
-		result.Meta = walcheckpoint.BarrierFunc(func() uint64 { return timetick })
-	}
-	if m.metaAndData && result.Data == nil {
-		result.Data = walcheckpoint.BarrierFunc(func() uint64 { return timetick })
-	}
-	return result
+	return m.observeMessage(ctx, msg)
 }
 
 func (m *Manager) SwitchIntoMetaAndData() moduleapi.Snapshot {
@@ -82,17 +71,6 @@ func (m *Manager) finalizeTombstones() bool {
 		finalized = vchannel.TryFinalizeTombstone() || finalized
 	}
 	return finalized
-}
-
-func (m *Manager) CollectionDurableFrontier(collectionID int64) walcheckpoint.Barrier {
-	return m.durableFrontier(
-		func(vchannel *VChannelView) bool {
-			return vchannelCollectionID(vchannel) == collectionID
-		},
-		func(segment *SegmentView) bool {
-			return segment.Meta().GetCollectionId() == collectionID
-		},
-	)
 }
 
 func (m *Manager) PartitionDurableFrontier(collectionID int64, partitionID int64) walcheckpoint.Barrier {

@@ -243,7 +243,18 @@ func (m *Manager) observeDropPartitionMessage(ctx context.Context, msg message.I
 }
 
 func (m *Manager) observeTruncateCollectionMessage(ctx context.Context, msg message.ImmutableTruncateCollectionMessageV2) moduleapi.ObserveResult {
-	return m.flushVChannelSegmentsCreatedBefore(ctx, msg.TimeTick(), msg.VChannel(), msg.Header().GetCollectionId())
+	vchannel := m.retainedVChannel(msg.VChannel())
+	if vchannel == nil {
+		return emptyObserveResult()
+	}
+	result := m.flushVChannelSegmentsCreatedBefore(ctx, msg.TimeTick(), msg.VChannel(), msg.Header().GetCollectionId())
+	if !vchannelMatchesCollection(vchannel, msg.Header().GetCollectionId()) {
+		return result
+	}
+	if vchannel.ShouldSkipReplay(msg.TimeTick()) || !vchannel.CanReplayAt(msg.TimeTick()) {
+		return result
+	}
+	return composeObserveResults(result, vchannel.ObserveTruncateCollectionMessageV2(msg))
 }
 
 func (m *Manager) observeAlterWALMessage(ctx context.Context, msg message.ImmutableAlterWALMessageV2) moduleapi.ObserveResult {
