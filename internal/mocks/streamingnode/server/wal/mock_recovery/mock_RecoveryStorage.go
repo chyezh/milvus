@@ -58,12 +58,12 @@ func (_c *MockRecoveryStorage_Close_Call) RunAndReturn(run func()) *MockRecovery
 	return _c
 }
 
-// GetFlusherCheckpointByTimeTick provides a mock function with given fields: ctx
-func (_m *MockRecoveryStorage) GetFlusherCheckpointByTimeTick(ctx context.Context) *recovery.WALCheckpoint {
+// GetDataCheckpoint provides a mock function with given fields: ctx
+func (_m *MockRecoveryStorage) GetDataCheckpoint(ctx context.Context) *recovery.WALCheckpoint {
 	ret := _m.Called(ctx)
 
 	if len(ret) == 0 {
-		panic("no return value specified for GetFlusherCheckpointByTimeTick")
+		panic("no return value specified for GetDataCheckpoint")
 	}
 
 	var r0 *recovery.WALCheckpoint
@@ -78,30 +78,30 @@ func (_m *MockRecoveryStorage) GetFlusherCheckpointByTimeTick(ctx context.Contex
 	return r0
 }
 
-// MockRecoveryStorage_GetFlusherCheckpointByTimeTick_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetFlusherCheckpointByTimeTick'
-type MockRecoveryStorage_GetFlusherCheckpointByTimeTick_Call struct {
+// MockRecoveryStorage_GetDataCheckpoint_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetDataCheckpoint'
+type MockRecoveryStorage_GetDataCheckpoint_Call struct {
 	*mock.Call
 }
 
-// GetFlusherCheckpointByTimeTick is a helper method to define mock.On call
+// GetDataCheckpoint is a helper method to define mock.On call
 //   - ctx context.Context
-func (_e *MockRecoveryStorage_Expecter) GetFlusherCheckpointByTimeTick(ctx interface{}) *MockRecoveryStorage_GetFlusherCheckpointByTimeTick_Call {
-	return &MockRecoveryStorage_GetFlusherCheckpointByTimeTick_Call{Call: _e.mock.On("GetFlusherCheckpointByTimeTick", ctx)}
+func (_e *MockRecoveryStorage_Expecter) GetDataCheckpoint(ctx interface{}) *MockRecoveryStorage_GetDataCheckpoint_Call {
+	return &MockRecoveryStorage_GetDataCheckpoint_Call{Call: _e.mock.On("GetDataCheckpoint", ctx)}
 }
 
-func (_c *MockRecoveryStorage_GetFlusherCheckpointByTimeTick_Call) Run(run func(ctx context.Context)) *MockRecoveryStorage_GetFlusherCheckpointByTimeTick_Call {
+func (_c *MockRecoveryStorage_GetDataCheckpoint_Call) Run(run func(ctx context.Context)) *MockRecoveryStorage_GetDataCheckpoint_Call {
 	_c.Call.Run(func(args mock.Arguments) {
 		run(args[0].(context.Context))
 	})
 	return _c
 }
 
-func (_c *MockRecoveryStorage_GetFlusherCheckpointByTimeTick_Call) Return(_a0 *recovery.WALCheckpoint) *MockRecoveryStorage_GetFlusherCheckpointByTimeTick_Call {
+func (_c *MockRecoveryStorage_GetDataCheckpoint_Call) Return(_a0 *recovery.WALCheckpoint) *MockRecoveryStorage_GetDataCheckpoint_Call {
 	_c.Call.Return(_a0)
 	return _c
 }
 
-func (_c *MockRecoveryStorage_GetFlusherCheckpointByTimeTick_Call) RunAndReturn(run func(context.Context) *recovery.WALCheckpoint) *MockRecoveryStorage_GetFlusherCheckpointByTimeTick_Call {
+func (_c *MockRecoveryStorage_GetDataCheckpoint_Call) RunAndReturn(run func(context.Context) *recovery.WALCheckpoint) *MockRecoveryStorage_GetDataCheckpoint_Call {
 	_c.Call.Return(run)
 	return _c
 }
@@ -255,40 +255,6 @@ func (_c *MockRecoveryStorage_ObserveMessage_Call) Return(_a0 error) *MockRecove
 
 func (_c *MockRecoveryStorage_ObserveMessage_Call) RunAndReturn(run func(context.Context, message.ImmutableMessage) error) *MockRecoveryStorage_ObserveMessage_Call {
 	_c.Call.Return(run)
-	return _c
-}
-
-// UpdateFlusherCheckpoint provides a mock function with given fields: vchannel, checkpoint
-func (_m *MockRecoveryStorage) UpdateFlusherCheckpoint(vchannel string, checkpoint *recovery.WALCheckpoint) {
-	_m.Called(vchannel, checkpoint)
-}
-
-// MockRecoveryStorage_UpdateFlusherCheckpoint_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateFlusherCheckpoint'
-type MockRecoveryStorage_UpdateFlusherCheckpoint_Call struct {
-	*mock.Call
-}
-
-// UpdateFlusherCheckpoint is a helper method to define mock.On call
-//   - vchannel string
-//   - checkpoint *recovery.WALCheckpoint
-func (_e *MockRecoveryStorage_Expecter) UpdateFlusherCheckpoint(vchannel interface{}, checkpoint interface{}) *MockRecoveryStorage_UpdateFlusherCheckpoint_Call {
-	return &MockRecoveryStorage_UpdateFlusherCheckpoint_Call{Call: _e.mock.On("UpdateFlusherCheckpoint", vchannel, checkpoint)}
-}
-
-func (_c *MockRecoveryStorage_UpdateFlusherCheckpoint_Call) Run(run func(vchannel string, checkpoint *recovery.WALCheckpoint)) *MockRecoveryStorage_UpdateFlusherCheckpoint_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(string), args[1].(*recovery.WALCheckpoint))
-	})
-	return _c
-}
-
-func (_c *MockRecoveryStorage_UpdateFlusherCheckpoint_Call) Return() *MockRecoveryStorage_UpdateFlusherCheckpoint_Call {
-	_c.Call.Return()
-	return _c
-}
-
-func (_c *MockRecoveryStorage_UpdateFlusherCheckpoint_Call) RunAndReturn(run func(string, *recovery.WALCheckpoint)) *MockRecoveryStorage_UpdateFlusherCheckpoint_Call {
-	_c.Run(run)
 	return _c
 }
 
