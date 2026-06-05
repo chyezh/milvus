@@ -168,10 +168,10 @@ func TestRecoveryStorageNotifyBarrierUpdatedUpdatesChannelCheckpointsFromViews(t
 	updater := &testChannelCheckpointUpdater{}
 	storage.channelCheckpointUpdater = updater
 	storage.modules = []moduleapi.Module{&testChannelDataCheckpointModule{
-		timetick: 110,
+		timetick: 60,
 		channelTimeTicks: map[string]uint64{
-			"v1": 110,
-			"v2": 120,
+			"v1": 60,
+			"v2": 80,
 		},
 	}}
 
@@ -186,8 +186,8 @@ func TestRecoveryStorageNotifyBarrierUpdatedUpdatesChannelCheckpointsFromViews(t
 	for _, pos := range updater.positions {
 		byChannel[pos.GetChannelName()] = pos
 	}
-	assert.Equal(t, uint64(110), byChannel["v1"].GetTimestamp())
-	assert.Equal(t, uint64(120), byChannel["v2"].GetTimestamp())
+	assert.Equal(t, uint64(60), byChannel["v1"].GetTimestamp())
+	assert.Equal(t, uint64(80), byChannel["v2"].GetTimestamp())
 	assert.Equal(t, commonpb.WALName_RocksMQ, byChannel["v1"].GetWALName())
 	assert.Equal(t, []byte{10, 0, 0, 0, 0, 0, 0, 0}, byChannel["v1"].GetMsgID())
 	assert.Equal(t, []bool{true, true}, updater.flushes)
@@ -195,37 +195,7 @@ func TestRecoveryStorageNotifyBarrierUpdatedUpdatesChannelCheckpointsFromViews(t
 	snapshot := storage.checkpointManager.Snapshot()
 	require.NotNil(t, snapshot.DataCheckpoint)
 	assert.True(t, rmq.NewRmqID(10).EQ(snapshot.DataCheckpoint.MessageID))
-	assert.Equal(t, uint64(110), snapshot.DataCheckpoint.TimeTick)
-}
-
-func TestRecoveryStorageSkipsChannelCheckpointNotAheadOfPhysicalCheckpoint(t *testing.T) {
-	checkpoint := &utility.WALCheckpoint{
-		MessageID: rmq.NewRmqID(10),
-		TimeTick:  100,
-		DataCheckpoint: &utility.WALConsumeCheckpoint{
-			MessageID: rmq.NewRmqID(5),
-			TimeTick:  50,
-		},
-	}
-	storage := newRecoveryStorage(types.PChannelInfo{Name: "test-pchannel"}, checkpoint)
-	defer storage.metrics.Close()
-	defer storage.taskScheduler.Close()
-	updater := &testChannelCheckpointUpdater{}
-	storage.channelCheckpointUpdater = updater
-	storage.modules = []moduleapi.Module{&testChannelDataCheckpointModule{
-		timetick: 90,
-		channelTimeTicks: map[string]uint64{
-			"v1": 90,
-			"v2": 100,
-			"v3": 101,
-		},
-	}}
-
-	storage.NotifyBarrierUpdated()
-
-	require.Len(t, updater.positions, 1)
-	assert.Equal(t, "v3", updater.positions[0].GetChannelName())
-	assert.Equal(t, uint64(101), updater.positions[0].GetTimestamp())
+	assert.Equal(t, uint64(60), snapshot.DataCheckpoint.TimeTick)
 }
 
 func TestValidateRecoveredGrowingMetaNormalizesBackwardCompatibleDefaults(t *testing.T) {

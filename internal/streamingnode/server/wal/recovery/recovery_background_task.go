@@ -217,7 +217,6 @@ func (rs *recoveryStorageImpl) channelDataCheckpointPositionsLocked() []*msgpb.M
 	if rs.checkpointManager == nil || rs.checkpointManager.Checkpoint().MessageID == nil {
 		return nil
 	}
-	physicalTimeTick := rs.checkpointManager.Checkpoint().TimeTick
 	channelTimeTicks := make(map[string]uint64)
 	for _, module := range rs.modules {
 		view, ok := module.(moduleapi.ChannelDataCheckpointView)
@@ -225,7 +224,7 @@ func (rs *recoveryStorageImpl) channelDataCheckpointPositionsLocked() []*msgpb.M
 			continue
 		}
 		for vchannel, timetick := range view.ChannelDataCheckpointTimeTicks() {
-			if vchannel == "" || timetick == 0 || timetick == math.MaxUint64 || timetick <= physicalTimeTick {
+			if vchannel == "" || timetick == 0 || timetick == math.MaxUint64 {
 				continue
 			}
 			current, ok := channelTimeTicks[vchannel]
