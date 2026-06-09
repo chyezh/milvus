@@ -223,11 +223,11 @@ Example: If view A is unreasonable and causes OOM on a node, it is marked as Unr
 | Coord | Sealed Segment Balancer | Gathering information from all Managers, generating and distributing QueryViews |
 | Coord | QueryView Manager | View state machine transitions, syncing view information to all Nodes |
 | Streaming Node | QueryView Manager | Listening for view state machine changes, applying to Growing Segments and BM25, etc. |
-| Streaming Node | Pure Delete Stream Manager | Acting as subscription server, publishing Delete data to QueryNodes |
+| Streaming Node | Pure Delete Stream Manager | Acting as subscription server, publishing Delete data to QueryNodes. See [Pure Transform Subscription](pure_transform_subscription.md). |
 | Streaming Node | Growing Segment Manager | Incremental data management, maintaining Growing Segment lifecycle |
 | Query Node | QueryView Manager | Listening for view state machine changes, applying to Sealed Segments |
 | Query Node | Sealed Segment Manager | Historical data management, maintaining Sealed Segment lifecycle |
-| Query Node | Pure Delete Stream Manager | Acting as subscription client, applying Delete data to each Segment |
+| Query Node | Pure Delete Stream Manager | Acting as subscription client, applying Delete data to each Segment. See [Pure Transform Subscription](pure_transform_subscription.md). |
 
 ### 11.3 SyncQueryView RPC
 

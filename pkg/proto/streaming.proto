@@ -5,6 +5,7 @@ package milvus.proto.streaming;
 option go_package = "github.com/milvus-io/milvus/pkg/v3/proto/streamingpb";
 
 import "data_coord.proto";
+import "msg.proto";
 import "messages.proto";
 import "common.proto";
 import "milvus.proto";
@@ -384,6 +385,11 @@ service StreamingNodeHandlerService {
     // log node, the RPC will return error CHANNEL_NOT_EXIST. If channel is
     // moving away to other log node, the RPC will return error CHANNEL_FENCED.
     rpc Consume(stream ConsumeRequest) returns (stream ConsumeResponse) {};
+
+    // SubscribeTransform is a bi-directional streaming RPC to subscribe
+    // vchannel-level transform effects. Multiple vchannel subscriptions can be
+    // multiplexed on one stream by subscription_id.
+    rpc SubscribeTransform(stream TransformRequest) returns (stream TransformResponse) {};
 }
 
 // GetReplicateCheckpointRequest is the request of GetReplicateCheckpoint service.
@@ -572,6 +578,175 @@ message ConsumeMessageReponse {
 
 message CloseConsumerResponse {}
 
+// TransformRequest is the request of the SubscribeTransform RPC.
+message TransformRequest {
+    oneof request {
+        CreateTransformSubscriptionRequest create = 1;
+        CloseTransformSubscriptionRequest close_subscription = 2;
+        CloseTransformStreamRequest close_stream = 3;
+        RefreshTransformSubscriptionRequest refresh = 4;
+    }
+}
+
+// CreateTransformSubscriptionRequest creates a vchannel-level transform
+// subscription on a SubscribeTransform stream.
+message CreateTransformSubscriptionRequest {
+    int64 subscription_id = 1;
+    string vchannel = 2;
+
+    // Exclusive. Server sends transform effects with timetick >
+    // start_after_time_tick.
+    uint64 start_after_time_tick = 3;
+}
+
+// CloseTransformSubscriptionRequest closes one vchannel subscription on a
+// SubscribeTransform stream.
+message CloseTransformSubscriptionRequest {
+    int64 subscription_id = 1;
+}
+
+// CloseTransformStreamRequest gracefully closes the SubscribeTransform stream.
+message CloseTransformStreamRequest {}
+
+// RefreshTransformSubscriptionRequest requests a fresh replay barrier for an
+// existing vchannel subscription on a SubscribeTransform stream.
+message RefreshTransformSubscriptionRequest {
+    int64 subscription_id = 1;
+    string vchannel = 2;
+
+    // Exclusive. Server sends retained transform effects with timetick >
+    // start_after_time_tick, then sends a caught_up barrier.
+    uint64 start_after_time_tick = 3;
+}
+
+// TransformResponse is the response of the SubscribeTransform RPC.
+message TransformResponse {
+    oneof response {
+        CreateTransformSubscriptionResponse create = 1;
+        TransformMessageBatch message_batch = 2;
+        TransformSubscriptionCaughtUp caught_up = 3;
+        TransformSubscriptionError subscription_error = 4;
+        CloseTransformStreamResponse close_stream = 5;
+    }
+}
+
+// CreateTransformSubscriptionResponse acknowledges creation of one vchannel
+// transform subscription.
+message CreateTransformSubscriptionResponse {
+    int64 subscription_id = 1;
+    string vchannel = 2;
+    uint64 start_after_time_tick = 3;
+
+    // Deprecated. Pure transform subscription does not expose a latest
+    // transform-log timetick to QN. This field is kept for wire compatibility and
+    // must be left as zero.
+    uint64 catch_up_target_time_tick = 4 [deprecated = true];
+
+    // Deprecated. L0 is an asynchronous materialized output and is not the
+    // subscription replay source. This field is kept for wire compatibility and
+    // must be left as zero.
+    uint64 l0_durable_time_tick = 5 [deprecated = true];
+
+    // Oldest exclusive start point currently replayable by SN.
+    uint64 retention_start_after_time_tick = 6;
+}
+
+// TransformSubscriptionCaughtUp is a one-time barrier for a subscription's
+// initial replay range. It is not idle timetick synchronization.
+message TransformSubscriptionCaughtUp {
+    int64 subscription_id = 1;
+    string vchannel = 2;
+
+    // Deprecated. Caught-up is a request-level barrier, not a TimeTick
+    // watermark. This field is kept for wire compatibility and must be left as
+    // zero.
+    uint64 caught_up_to_time_tick = 3 [deprecated = true];
+}
+
+// TransformSubscriptionError carries a StreamingError for one subscription on a
+// multiplexed SubscribeTransform stream.
+message TransformSubscriptionError {
+    int64 subscription_id = 1;
+    string vchannel = 2;
+    StreamingError error = 3;
+}
+
+// CloseTransformStreamResponse acknowledges graceful stream close.
+message CloseTransformStreamResponse {}
+
+// TransformMessageBatch is an at-least-once delivery unit for transform
+// effects.
+message TransformMessageBatch {
+    int64 subscription_id = 1;
+    string vchannel = 2;
+
+    oneof payload {
+        TransformDeleteBatch delete = 10;
+    }
+}
+
+message TransformDeleteBatch {
+    // Blocks are ordered by time_tick in non-decreasing order. Blocks with the
+    // same time_tick keep the stable order produced by the StreamingNode
+    // transform log reader.
+    repeated TransformDeleteBlock blocks = 1;
+}
+
+message TransformDeleteBlock {
+    int64 partition_id = 1;
+    schema.IDs primary_keys = 2;
+
+    // Delete event timetick shared by all primary keys in this block.
+    uint64 time_tick = 3;
+}
+
+message TransformLogEntry {
+    string vchannel = 1;
+    uint64 from_time_tick = 2;
+    uint64 to_time_tick = 3;
+    repeated TransformDeleteBlock blocks = 4;
+    // Internal WAL data checkpoint position covered by this durable transform
+    // entry. Subscription replay still uses TransformDeleteBlock.time_tick.
+    uint64 data_time_tick = 5;
+}
+
+message TransformLogChunk {
+    repeated TransformLogEntry entries = 1;
+}
+
+message TransformLogChunkMeta {
+    string path = 1;
+    uint64 from_time_tick = 2;
+    uint64 to_time_tick = 3;
+    uint64 entry_count = 4;
+    int64 size_bytes = 5;
+}
+
+message TransformLogMaterializationRecord {
+    string vchannel = 1;
+    uint64 from_time_tick = 2;
+    uint64 to_time_tick = 3;
+    int64 collection_id = 4;
+    int64 partition_id = 5;
+    int64 segment_id = 6;
+    repeated TransformDeleteBlock transform_blocks = 7;
+    repeated data.FieldBinlog deltalogs = 8;
+    msg.MsgPosition start_position = 9;
+    msg.MsgPosition checkpoint = 10;
+    uint64 data_from_time_tick = 11;
+    uint64 data_to_time_tick = 12;
+}
+
+message VChannelTransformLogMeta {
+    uint64 retention_start_after_time_tick = 1;
+    uint64 materialized_time_tick = 2;
+
+    // Deprecated. Use chunks instead.
+    repeated TransformLogEntry entries = 3 [deprecated = true];
+    repeated TransformLogChunkMeta chunks = 4;
+    uint64 materialized_data_time_tick = 5;
+}
+
 //
 // StreamingNodeManagerService
 //
@@ -659,6 +834,11 @@ message VChannelMeta {
     GrowingSegmentMode growing_segment_mode = 6; // runtime mode of growing segments under this vchannel.
     uint64 data_checkpoint_time_tick = 7; // The timetick of data checkpoint, the data already durable at this timetick.
     uint64 tombstone_time_tick = 8; // The timetick this retained vchannel meta starts filtering replay.
+    // Deprecated. Use transform_log_meta instead.
+    repeated TransformLogEntry transform_log_entries = 9 [deprecated = true];
+    // Deprecated. Use transform_log_meta.retention_start_after_time_tick instead.
+    uint64 transform_log_retention_start_after_time_tick = 10 [deprecated = true];
+    VChannelTransformLogMeta transform_log_meta = 11;
 }
 
 enum GrowingSegmentMode {
