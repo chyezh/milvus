@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"math"
 	"path"
+	"sort"
 	"strconv"
 	"time"
 
@@ -93,10 +94,12 @@ type meta struct {
 	ctx     context.Context
 	catalog metastore.DataCoordCatalog
 
-	collections *typeutil.ConcurrentMap[UniqueID, *collectionInfo] // collection id to collection info
+	collections            *typeutil.ConcurrentMap[UniqueID, *collectionInfo] // collection id to collection info
+	recoveredCollectionIDs []int64
 
-	segMu    lock.RWMutex
-	segments *SegmentsInfo // segment id to segment info
+	segMu           lock.RWMutex
+	segments        *SegmentsInfo // segment id to segment info
+	dataViewManager DataViewManager
 
 	channelCPs   *channelCPs // vChannel -> channel checkpoint/see position
 	chunkManager storage.ChunkManager
@@ -232,15 +235,16 @@ func newMeta(ctx context.Context, catalog metastore.DataCoordCatalog, chunkManag
 	// Construct meta struct first so reloadFromKV can run in parallel with sub-meta loading.
 	// reloadFromKV uses m.catalog/m.segments/m.channelCPs which are independent of sub-metas.
 	mt := &meta{
-		ctx:             ctx,
-		catalog:         catalog,
-		collections:     typeutil.NewConcurrentMap[UniqueID, *collectionInfo](),
-		segments:        NewSegmentsInfo(),
-		channelCPs:      newChannelCps(),
-		chunkManager:    chunkManager,
-		resourceIDMap:   make(map[int64]*internalpb.FileResourceInfo),
-		resourceVersion: 0,
-		resourceLock:    lock.RWMutex{},
+		ctx:                    ctx,
+		catalog:                catalog,
+		collections:            typeutil.NewConcurrentMap[UniqueID, *collectionInfo](),
+		recoveredCollectionIDs: append([]int64(nil), collectionIDs...),
+		segments:               NewSegmentsInfo(),
+		channelCPs:             newChannelCps(),
+		chunkManager:           chunkManager,
+		resourceIDMap:          make(map[int64]*internalpb.FileResourceInfo),
+		resourceVersion:        0,
+		resourceLock:           lock.RWMutex{},
 	}
 
 	g, _ := errgroup.WithContext(ctx)
@@ -2033,6 +2037,31 @@ func (m *meta) SelectSegments(ctx context.Context, filters ...SegmentFilter) []*
 	return m.segments.GetSegmentsBySelector(filters...)
 }
 
+func (m *meta) GetCollectionIDsByPartition(ctx context.Context, partitionIDs []int64) []int64 {
+	partitions := make(map[int64]struct{}, len(partitionIDs))
+	for _, partitionID := range partitionIDs {
+		partitions[partitionID] = struct{}{}
+	}
+	collections := make(map[int64]struct{})
+	for _, collection := range m.GetCollections() {
+		for _, partitionID := range collection.Partitions {
+			if _, ok := partitions[partitionID]; ok {
+				collections[collection.ID] = struct{}{}
+				break
+			}
+		}
+	}
+	for _, segment := range m.SelectSegments(ctx, SegmentFilterFunc(func(segment *SegmentInfo) bool {
+		_, ok := partitions[segment.GetPartitionID()]
+		return ok && segment.GetCollectionID() != 0
+	})) {
+		collections[segment.GetCollectionID()] = struct{}{}
+	}
+	collectionIDs := lo.Keys(collections)
+	sort.Slice(collectionIDs, func(i, j int) bool { return collectionIDs[i] < collectionIDs[j] })
+	return collectionIDs
+}
+
 func (m *meta) GetRealSegmentsForChannel(channel string) []*SegmentInfo {
 	m.segMu.RLock()
 	defer m.segMu.RUnlock()
@@ -2570,19 +2599,52 @@ func (m *meta) ValidateSegmentStateBeforeCompleteCompactionMutation(t *datapb.Co
 }
 
 func (m *meta) CompleteCompactionMutation(ctx context.Context, t *datapb.CompactionTask, result *datapb.CompactionPlanResult) ([]*SegmentInfo, *segMetricMutation, error) {
-	m.segMu.Lock()
-	defer m.segMu.Unlock()
-	switch t.GetType() {
-	case datapb.CompactionType_MixCompaction:
-		return m.completeMixCompactionMutation(t, result)
-	case datapb.CompactionType_ClusteringCompaction:
-		return m.completeClusterCompactionMutation(t, result)
-	case datapb.CompactionType_SortCompaction:
-		return m.completeSortCompactionMutation(t, result)
-	case datapb.CompactionType_BumpSchemaVersionCompaction:
-		return m.completeBumpSchemaVersionCompactionMutation(t, result)
+	var (
+		newSegments    []*SegmentInfo
+		metricMutation *segMetricMutation
+		err            error
+	)
+	func() {
+		m.segMu.Lock()
+		defer m.segMu.Unlock()
+		switch t.GetType() {
+		case datapb.CompactionType_MixCompaction:
+			newSegments, metricMutation, err = m.completeMixCompactionMutation(t, result)
+		case datapb.CompactionType_ClusteringCompaction:
+			newSegments, metricMutation, err = m.completeClusterCompactionMutation(t, result)
+		case datapb.CompactionType_SortCompaction:
+			newSegments, metricMutation, err = m.completeSortCompactionMutation(t, result)
+		case datapb.CompactionType_BumpSchemaVersionCompaction:
+			newSegments, metricMutation, err = m.completeBumpSchemaVersionCompactionMutation(t, result)
+		default:
+			err = merr.WrapErrIllegalCompactionPlan("illegal compaction type")
+		}
+	}()
+	if err != nil {
+		return nil, nil, err
 	}
-	return nil, nil, merr.WrapErrIllegalCompactionPlan("illegal compaction type")
+	m.publishDataViewAfterCompaction(ctx, t, lo.Map(newSegments, func(segment *SegmentInfo, _ int) int64 {
+		return segment.GetID()
+	}))
+	return newSegments, metricMutation, nil
+}
+
+func (m *meta) publishDataViewAfterCompaction(ctx context.Context, t *datapb.CompactionTask, compactTo []int64) {
+	if m.dataViewManager == nil {
+		return
+	}
+	if err := m.dataViewManager.OnCompact(ctx, CompactDataViewEvent{
+		CollectionID: t.GetCollectionID(),
+		CompactFrom:  t.GetInputSegments(),
+		CompactTo:    compactTo,
+	}); err != nil {
+		log.Ctx(ctx).Warn("failed to publish DataView after compaction",
+			zap.Int64("planID", t.GetPlanID()),
+			zap.Int64("collectionID", t.GetCollectionID()),
+			zap.Int64s("compactFrom", t.GetInputSegments()),
+			zap.Int64s("compactTo", compactTo),
+			zap.Error(err))
+	}
 }
 
 // buildSegment utility function for compose datapb.SegmentInfo struct with provided info

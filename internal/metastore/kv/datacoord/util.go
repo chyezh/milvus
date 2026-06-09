@@ -381,3 +381,11 @@ func buildExternalCollectionRefreshTaskKey(taskID int64) string {
 func buildSnapshotKey(collectionID int64, snapshotID int64) string {
 	return fmt.Sprintf("%s/%d/%d", SnapshotPrefix, collectionID, snapshotID)
 }
+
+func buildDataViewVersionPrefix(collectionID int64) string {
+	return fmt.Sprintf("%s/%d/versions/", DataViewPrefix, collectionID)
+}
+
+func buildDataViewVersionKey(collectionID, streamingVersion, compactVersion int64) string {
+	return fmt.Sprintf("%s/%d/versions/%d/%d", DataViewPrefix, collectionID, streamingVersion, compactVersion)
+}

@@ -44,6 +44,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/etcd"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
@@ -2195,4 +2196,45 @@ func TestCatalog_ExternalCollectionRefreshAndFileResource(t *testing.T) {
 		assert.NotEmpty(t, key)
 		assert.Contains(t, key, "12345")
 	})
+}
+
+func TestDataViewCatalog(t *testing.T) {
+	ctx := context.Background()
+	txn := mocks.NewMetaKv(t)
+	catalog := NewCatalog(txn, rootPath, "")
+	dataView := &viewpb.DataViewOfCollection{
+		CollectionId: 100,
+		DataVersion: &viewpb.DataVersion{
+			StreamingVersion: 2,
+			CompactVersion:   1,
+		},
+		Shards: []*viewpb.DataViewOfShard{
+			{
+				Vchannel: "ch-1",
+				Partitions: []*viewpb.DataViewOfPartition{
+					{PartitionId: 10, SegmentIds: []int64{101, 102}},
+				},
+			},
+		},
+	}
+	value, err := proto.Marshal(dataView)
+	assert.NoError(t, err)
+
+	txn.EXPECT().Save(ctx, buildDataViewVersionKey(100, 2, 1), string(value)).Return(nil).Once()
+	assert.NoError(t, catalog.SaveDataView(ctx, dataView))
+
+	txn.EXPECT().WalkWithPrefix(ctx, buildDataViewVersionPrefix(100), mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _ string, _ int, f func([]byte, []byte) error) error {
+			return f([]byte(buildDataViewVersionKey(100, 2, 1)), value)
+		}).Once()
+	views, err := catalog.ListDataViews(ctx, 100)
+	assert.NoError(t, err)
+	assert.Len(t, views, 1)
+	assert.True(t, proto.Equal(dataView, views[0]))
+
+	txn.EXPECT().Remove(ctx, buildDataViewVersionKey(100, 2, 1)).Return(nil).Once()
+	assert.NoError(t, catalog.DropDataView(ctx, 100, dataView.GetDataVersion()))
+
+	txn.EXPECT().RemoveWithPrefix(ctx, buildDataViewVersionPrefix(100)).Return(nil).Once()
+	assert.NoError(t, catalog.DropDataViews(ctx, 100))
 }
