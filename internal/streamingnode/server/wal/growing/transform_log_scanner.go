@@ -14,14 +14,14 @@ import (
 
 func (m *Manager) Read(ctx context.Context, opt transformlog.ReadOption) transformlog.Scanner {
 	if opt.VChannel == "" {
-		return newTransformLogErrorScanner(opt.Name, errors.New("transform log read requires vchannel"))
+		return newTransformLogErrorScanner(opt.Name, errors.Wrap(transformlog.ErrInvalidReadOption, "vchannel is required"))
 	}
 	if funcutil.ToPhysicalChannel(opt.VChannel) != m.channelName && m.channelName != "" {
-		return newTransformLogErrorScanner(opt.Name, errors.New("transform log vchannel does not belong to manager pchannel"))
+		return newTransformLogErrorScanner(opt.Name, errors.Wrap(transformlog.ErrInvalidReadOption, "vchannel does not belong to manager pchannel"))
 	}
 	vchannel := m.vChannel(opt.VChannel)
 	if vchannel == nil {
-		return newTransformLogErrorScanner(opt.Name, errors.New("transform log vchannel is not available"))
+		return newTransformLogErrorScanner(opt.Name, errors.Wrap(transformlog.ErrVChannelUnavailable, "vchannel is not available"))
 	}
 	return vchannel.ReadTransformLog(ctx, opt)
 }
@@ -34,7 +34,7 @@ func (info *vChannelView) ReadTransformLog(ctx context.Context, opt transformlog
 
 	transformMeta := meta.GetTransformLogMeta()
 	if transformMeta != nil && opt.StartAfterTimeTick < transformMeta.GetTruncateTimeTick() {
-		return newTransformLogErrorScanner(opt.Name, errors.New("transform log start point is truncated"))
+		return newTransformLogErrorScanner(opt.Name, errors.Wrap(transformlog.ErrStartPointTruncated, "start point is truncated"))
 	}
 	scanner := newTransformLogScanner(opt.Name, opt.StartAfterTimeTick)
 	go scanner.send(ctx, info, chunks)

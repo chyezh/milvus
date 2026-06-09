@@ -1,6 +1,16 @@
 package transformlog
 
-import "context"
+import (
+	"context"
+
+	"github.com/cockroachdb/errors"
+)
+
+var (
+	ErrInvalidReadOption   = errors.New("invalid transform log read option")
+	ErrStartPointTruncated = errors.New("transform log start point is truncated")
+	ErrVChannelUnavailable = errors.New("transform log vchannel is unavailable")
+)
 
 type errorAccesser struct {
 	err error

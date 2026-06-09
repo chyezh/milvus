@@ -3,6 +3,7 @@ package streaming
 import (
 	"context"
 
+	resumabletransformlog "github.com/milvus-io/milvus/internal/distributed/streaming/internal/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
@@ -21,5 +22,8 @@ func (a transformLogAccesser) Read(ctx context.Context, opts transformlog.ReadOp
 	}
 	defer a.w.lifetime.Done()
 
-	return a.w.handlerClient.ReadTransformLog(ctx, opts)
+	if opts.VChannel == "" {
+		return transformlog.NewErrorScanner(opts.Name, transformlog.ErrInvalidReadOption)
+	}
+	return resumabletransformlog.NewResumableScanner(ctx, a.w.handlerClient.ReadTransformLog, opts)
 }
