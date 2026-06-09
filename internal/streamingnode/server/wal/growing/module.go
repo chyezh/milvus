@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 
+	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
@@ -247,6 +248,66 @@ func (m *Manager) Snapshot() *Snapshot {
 		VChannels:          vchannels,
 		SegmentAssignments: segments,
 	}
+}
+
+func (m *Manager) RecoverTransformLogs(ctx context.Context) error {
+	for _, vchannel := range m.vchannelViews {
+		if err := vchannel.RecoverTransformLog(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (info *vChannelView) RecoverTransformLog(ctx context.Context) error {
+	info.mu.Lock()
+	store := info.transformLogChunkStore
+	meta := proto.Clone(info.meta).(*streamingpb.VChannelMeta)
+	info.mu.Unlock()
+	if store == nil {
+		return nil
+	}
+	transformMeta := meta.GetTransformLogMeta()
+	if transformMeta == nil || transformMeta.GetFirstChunkId() == transformMeta.GetNextChunkId() {
+		return nil
+	}
+	chunks := make([]*streamingpb.TransformLogChunk, 0, transformMeta.GetNextChunkId()-transformMeta.GetFirstChunkId())
+	var lastTimeTick uint64
+	for chunkID := transformMeta.GetFirstChunkId(); chunkID < transformMeta.GetNextChunkId(); chunkID++ {
+		chunk, err := store.ReadTransformLogChunk(ctx, meta.GetVchannel(), chunkID)
+		if err != nil {
+			return err
+		}
+		if err := validateTransformLogChunk(chunk, chunkID, lastTimeTick); err != nil {
+			return err
+		}
+		lastTimeTick = chunk.GetEntries()[len(chunk.GetEntries())-1].GetTimeTick()
+		chunks = append(chunks, chunk)
+	}
+	info.mu.Lock()
+	info.retainedTransformLogChunks = chunks
+	info.persistedDataTimeTick = transformMeta.GetCheckpointTimeTick()
+	info.mu.Unlock()
+	return nil
+}
+
+func validateTransformLogChunk(chunk *streamingpb.TransformLogChunk, expectedChunkID uint64, previousTimeTick uint64) error {
+	if chunk == nil {
+		return errors.Errorf("transform log chunk %d is nil", expectedChunkID)
+	}
+	if chunk.GetChunkId() != expectedChunkID {
+		return errors.Errorf("transform log chunk id mismatch, expected %d, got %d", expectedChunkID, chunk.GetChunkId())
+	}
+	if len(chunk.GetEntries()) == 0 {
+		return errors.Errorf("transform log chunk %d is empty", expectedChunkID)
+	}
+	for _, entry := range chunk.GetEntries() {
+		if entry.GetTimeTick() <= previousTimeTick {
+			return errors.Errorf("transform log chunk %d entries are not ordered", expectedChunkID)
+		}
+		previousTimeTick = entry.GetTimeTick()
+	}
+	return nil
 }
 
 func (m *Manager) NotifyCheckpointPersisted(metaTimeTick uint64, dataTimeTick uint64) {

@@ -111,6 +111,21 @@ func (b *transformLogBuffer) FlushPack(meta *streamingpb.VChannelMeta, schema *s
 	}
 }
 
+func (b *transformLogBuffer) FlushChunk(chunkID uint64, timetick uint64) *streamingpb.TransformLogChunk {
+	entries := b.flushEntriesThrough(timetick)
+	if len(entries) == 0 {
+		return nil
+	}
+	chunkEntries := make([]*streamingpb.TransformLogEntry, 0, len(entries))
+	for _, entry := range entries {
+		chunkEntries = append(chunkEntries, transformLogEntryFromDeleteEntry(entry))
+	}
+	return &streamingpb.TransformLogChunk{
+		ChunkId: chunkID,
+		Entries: chunkEntries,
+	}
+}
+
 func (b *transformLogBuffer) HasFlushWorkThrough(timetick uint64) bool {
 	return len(b.entriesThrough(timetick)) > 0
 }
@@ -188,4 +203,21 @@ func cloneDeleteEntries(entries []deleteEntry) []deleteEntry {
 		})
 	}
 	return cloned
+}
+
+func transformLogEntryFromDeleteEntry(entry deleteEntry) *streamingpb.TransformLogEntry {
+	request := cloneDeleteRequest(entry.request)
+	return &streamingpb.TransformLogEntry{
+		TimeTick: entry.timeTick,
+		Entry: &streamingpb.TransformLogEntry_Delete{
+			Delete: &streamingpb.TransformDeleteEntry{
+				Blocks: []*streamingpb.TransformDeleteBlock{
+					{
+						PartitionId: request.GetPartitionID(),
+						PrimaryKeys: request.GetPrimaryKeys(),
+					},
+				},
+			},
+		},
+	}
 }

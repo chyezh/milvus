@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -90,6 +91,9 @@ type RecoveryStorage interface {
 
 	// GetDataCheckpoint returns the recovery-owned data checkpoint.
 	GetDataCheckpoint(ctx context.Context) *WALCheckpoint
+
+	// TransformLog returns the TransformLog accesser owned by RecoveryStorage.
+	TransformLog() transformlog.Accesser
 
 	// Close closes the recovery storage.
 	Close()

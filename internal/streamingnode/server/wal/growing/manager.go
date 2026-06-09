@@ -9,17 +9,19 @@ import (
 )
 
 type Manager struct {
-	vchannelViews map[string]*vChannelView
-	segmentViews  map[int64]*segmentView
-	lifecycle     segmentLifecycle
-	packWriter    packWriter
-	onDataUpdated func()
-	channelName   string
-	catalog       recoveryCatalog
-	logger        *log.MLogger
-	runtime       moduleapi.Runtime
-	metaAndData   bool
-	transformRows uint64
+	vchannelViews           map[string]*vChannelView
+	segmentViews            map[int64]*segmentView
+	lifecycle               segmentLifecycle
+	packWriter              packWriter
+	onDataUpdated           func()
+	channelName             string
+	catalog                 recoveryCatalog
+	logger                  *log.MLogger
+	runtime                 moduleapi.Runtime
+	metaAndData             bool
+	transformRows           uint64
+	transformLogChunkWriter transformLogChunkWriter
+	transformLogChunkStore  transformLogChunkStore
 
 	lastPersistTask scheduler.TaskHandle
 	lastCleanupTask scheduler.TaskHandle
@@ -28,13 +30,15 @@ type Manager struct {
 type managerOption func(*Manager)
 
 type runtimeConfig struct {
-	lifecycle     segmentLifecycle
-	packWriter    packWriter
-	runtime       moduleapi.Runtime
-	onDataUpdated func()
-	flushPolicy   flushPolicy
-	metaAndData   bool
-	transformRows uint64
+	lifecycle               segmentLifecycle
+	packWriter              packWriter
+	runtime                 moduleapi.Runtime
+	onDataUpdated           func()
+	flushPolicy             flushPolicy
+	metaAndData             bool
+	transformRows           uint64
+	transformLogChunkWriter transformLogChunkWriter
+	transformLogChunkStore  transformLogChunkStore
 }
 
 func firstRuntimeConfig(configs []runtimeConfig) runtimeConfig {
@@ -76,6 +80,19 @@ func WithTransformLogBufferMaxRows(maxRows uint64) managerOption {
 	}
 }
 
+func WithTransformLogChunkWriter(writer transformLogChunkWriter) managerOption {
+	return func(manager *Manager) {
+		manager.transformLogChunkWriter = writer
+	}
+}
+
+func WithTransformLogChunkStore(store transformLogChunkStore) managerOption {
+	return func(manager *Manager) {
+		manager.transformLogChunkStore = store
+		manager.transformLogChunkWriter = store
+	}
+}
+
 func NewManager(
 	vchannels map[string]*streamingpb.VChannelMeta,
 	segments map[int64]*streamingpb.SegmentAssignmentMeta,
@@ -102,12 +119,14 @@ func NewManager(
 
 func (m *Manager) runtimeConfig() runtimeConfig {
 	return runtimeConfig{
-		lifecycle:     m.lifecycle,
-		packWriter:    m.packWriter,
-		runtime:       m.runtime,
-		onDataUpdated: m.onDataUpdated,
-		metaAndData:   m.metaAndData,
-		transformRows: m.transformRows,
+		lifecycle:               m.lifecycle,
+		packWriter:              m.packWriter,
+		runtime:                 m.runtime,
+		onDataUpdated:           m.onDataUpdated,
+		metaAndData:             m.metaAndData,
+		transformRows:           m.transformRows,
+		transformLogChunkWriter: m.transformLogChunkWriter,
+		transformLogChunkStore:  m.transformLogChunkStore,
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
+	"github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/adaptor/rate"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
@@ -127,6 +128,13 @@ func (w *walAdaptorImpl) GetLatestMVCCTimestamp(ctx context.Context, vchannel st
 		resource.Resource().TimeTickInspector().TriggerSync(w.rwWALImpls.Channel(), false)
 	}
 	return currentMVCC.Timetick, nil
+}
+
+func (w *walAdaptorImpl) TransformLog() transformlog.Accesser {
+	if w.param == nil || w.param.RecoveryStorage == nil {
+		return transformlog.NewErrorAccesser(status.NewOnShutdownError("recovery storage is unavailable"))
+	}
+	return w.param.RecoveryStorage.TransformLog()
 }
 
 // GetReplicateCheckpoint returns the replicate checkpoint of the wal.

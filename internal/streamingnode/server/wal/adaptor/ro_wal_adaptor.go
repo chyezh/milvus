@@ -7,6 +7,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/adaptor/rate"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
@@ -55,6 +56,10 @@ func (w *roWALAdaptorImpl) Metrics() types.WALMetrics {
 
 func (w *roWALAdaptorImpl) GetLatestMVCCTimestamp(ctx context.Context, vchannel string) (uint64, error) {
 	panic("we cannot acquire lastest mvcc timestamp from a read only wal")
+}
+
+func (w *roWALAdaptorImpl) TransformLog() transformlog.Accesser {
+	return transformlog.NewErrorAccesser(status.NewOnShutdownError("read only wal does not serve transform log"))
 }
 
 func (w *roWALAdaptorImpl) GetReplicateCheckpoint() (*wal.ReplicateCheckpoint, error) {

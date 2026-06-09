@@ -7,6 +7,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
+	"github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/growing"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
@@ -158,10 +159,17 @@ func (r *recoveryStorageImpl) initGrowingManager(
 			idalloc.NewMAllocator(resource.Resource().IDAllocator()),
 			nil,
 		)),
+		growing.WithTransformLogChunkStore(growing.NewObjectTransformLogChunkStore(
+			resource.Resource().ChunkManager(),
+			r.channel.Name,
+		)),
 		growing.WithRecoveryCatalog(r.channel.Name, catalog),
 		growing.WithDataBarrierUpdatedCallback(r.NotifyBarrierUpdated),
 		growing.WithModuleRuntime(r.Logger(), moduleRuntime),
 	)
+	if err := r.growingManager.RecoverTransformLogs(ctx); err != nil {
+		return err
+	}
 	r.modules = []moduleapi.Module{
 		r.growingManager,
 		newBroadcastAckModule(r.channel.Name, r.growingManager, moduleRuntime),
@@ -192,6 +200,10 @@ func (r *recoveryStorageImpl) Metrics() RecoveryMetrics {
 	return RecoveryMetrics{
 		RecoveryTimeTick: r.checkpoint.TimeTick,
 	}
+}
+
+func (r *recoveryStorageImpl) TransformLog() transformlog.Accesser {
+	return r.growingManager
 }
 
 // ObserveMessage is called when a new message is observed.

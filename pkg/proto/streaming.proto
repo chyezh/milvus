@@ -577,6 +577,11 @@ message ConsumeMessageReponse {
 
 message CloseConsumerResponse {}
 
+// CreateTransformStreamRequest is passed in SubscribeTransform stream metadata.
+message CreateTransformStreamRequest {
+    PChannelInfo pchannel = 1;
+}
+
 // TransformRequest is the request of the SubscribeTransform RPC.
 message TransformRequest {
     oneof request {

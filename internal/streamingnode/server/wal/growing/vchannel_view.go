@@ -37,17 +37,20 @@ func newVChannelView(
 	config runtimeConfig,
 ) *vChannelView {
 	return &vChannelView{
-		meta:                  meta,
-		persistedMetaTimeTick: persistedMetaTimeTick,
-		persistedDataTimeTick: persistedDataTimeTick,
-		dirty:                 dirty,
-		segments:              make(map[int64]*segmentView),
-		lifecycle:             config.lifecycle,
-		packWriter:            config.packWriter,
-		runtime:               config.runtime,
-		onDataUpdated:         config.onDataUpdated,
-		metaAndData:           config.metaAndData,
-		transformLogBuffer:    newTransformLogBuffer(config.transformRows),
+		meta:                    meta,
+		persistedMetaTimeTick:   persistedMetaTimeTick,
+		persistedDataTimeTick:   persistedDataTimeTick,
+		dirty:                   dirty,
+		segments:                make(map[int64]*segmentView),
+		lifecycle:               config.lifecycle,
+		packWriter:              config.packWriter,
+		transformLogChunkWriter: config.transformLogChunkWriter,
+		transformLogChunkStore:  config.transformLogChunkStore,
+		runtime:                 config.runtime,
+		onDataUpdated:           config.onDataUpdated,
+		metaAndData:             config.metaAndData,
+		transformLogBuffer:      newTransformLogBuffer(config.transformRows),
+		transformLogSubscribers: make(map[*transformLogScanner]struct{}),
 	}
 }
 
@@ -92,15 +95,19 @@ type vChannelView struct {
 	persistedDataTimeTick uint64
 	dirty                 bool // whether the vchannel recovery info is dirty.
 
-	segments      map[int64]*segmentView
-	lifecycle     segmentLifecycle
-	packWriter    packWriter
-	runtime       moduleapi.Runtime
-	onDataUpdated func()
-	metaAndData   bool
+	segments                map[int64]*segmentView
+	lifecycle               segmentLifecycle
+	packWriter              packWriter
+	transformLogChunkWriter transformLogChunkWriter
+	transformLogChunkStore  transformLogChunkStore
+	runtime                 moduleapi.Runtime
+	onDataUpdated           func()
+	metaAndData             bool
 
-	transformLogBuffer transformLogBuffer
-	transformLogTasks  []scheduler.TaskHandle
+	transformLogBuffer         transformLogBuffer
+	retainedTransformLogChunks []*streamingpb.TransformLogChunk
+	transformLogSubscribers    map[*transformLogScanner]struct{}
+	transformLogTasks          []scheduler.TaskHandle
 }
 
 func (info *vChannelView) AssignmentMeta() *streamingpb.VChannelMeta {

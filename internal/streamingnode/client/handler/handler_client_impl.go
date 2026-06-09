@@ -12,8 +12,10 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/consumer"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/producer"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/registry"
+	transformlogclient "github.com/milvus-io/milvus/internal/streamingnode/client/handler/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
+	"github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/balancer/picker"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/lazygrpc"
@@ -41,6 +43,7 @@ type handlerClientImpl struct {
 	rebalanceTrigger types.AssignmentRebalanceTrigger
 	newProducer      func(ctx context.Context, opts *producer.ProducerOptions, handler streamingpb.StreamingNodeHandlerServiceClient) (Producer, error)
 	newConsumer      func(ctx context.Context, opts *consumer.ConsumerOptions, handlerClient streamingpb.StreamingNodeHandlerServiceClient) (Consumer, error)
+	newTransformLog  func(ctx context.Context, opts *transformlogclient.ScannerOptions, handlerClient streamingpb.StreamingNodeHandlerServiceClient) (transformlog.Scanner, error)
 }
 
 // GetLatestMVCCTimestampIfLocal gets the latest mvcc timestamp of the vchannel.
@@ -267,6 +270,42 @@ func (hc *handlerClientImpl) CreateConsumer(ctx context.Context, opts *ConsumerO
 		return nil, err
 	}
 	return c.(Consumer), nil
+}
+
+// ReadTransformLog creates a local or remote transform log scanner.
+func (hc *handlerClientImpl) ReadTransformLog(ctx context.Context, opts transformlog.ReadOption) transformlog.Scanner {
+	if !hc.lifetime.Add(typeutil.LifetimeStateWorking) {
+		return transformlog.NewErrorScanner(opts.Name, ErrClientClosed)
+	}
+	defer hc.lifetime.Done()
+
+	if opts.VChannel == "" {
+		return transformlog.NewErrorScanner(opts.Name, errors.New("vchannel is required"))
+	}
+	pchannel := funcutil.ToPhysicalChannel(opts.VChannel)
+	logger := log.With(zap.String("pchannel", pchannel), zap.String("vchannel", opts.VChannel), zap.String("handler", "transformlog"))
+	s, err := hc.createHandlerAfterStreamingNodeReady(ctx, logger, pchannel, func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
+		localWAL, err := registry.GetLocalAvailableWAL(assign.Channel)
+		if err == nil {
+			return localWAL.TransformLog().Read(ctx, opts), nil
+		}
+		if !shouldUseRemoteWAL(err) {
+			return nil, err
+		}
+
+		handlerService, err := hc.service.GetService(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return hc.newTransformLog(ctx, &transformlogclient.ScannerOptions{
+			Assignment: assign,
+			ReadOption: opts,
+		}, handlerService)
+	})
+	if err != nil {
+		return transformlog.NewErrorScanner(opts.Name, err)
+	}
+	return s.(transformlog.Scanner)
 }
 
 type handlerCreateFunc func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error)

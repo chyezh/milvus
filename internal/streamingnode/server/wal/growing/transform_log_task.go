@@ -3,10 +3,16 @@ package growing
 import (
 	"context"
 
+	"github.com/cockroachdb/errors"
 	"go.uber.org/atomic"
 
+	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	scheduler "github.com/milvus-io/milvus/pkg/v3/syncutil/preconditioned"
 )
+
+type transformLogChunkWriter interface {
+	WriteTransformLogChunk(ctx context.Context, vchannel string, chunk *streamingpb.TransformLogChunk) error
+}
 
 type flushTransformLogBufferTask struct {
 	vchannel     *vChannelView
@@ -40,30 +46,40 @@ func (t *flushTransformLogBufferTask) run(ctx context.Context) error {
 	runtime := vchannel.runtime
 	for {
 		var targetTimeTick uint64
-		var pack *deleteFlushPack
+		var chunk *streamingpb.TransformLogChunk
 		var nextTargetTimeTick uint64
+		var liveEntries []*streamingpb.TransformLogEntry
 		vchannel.mu.Lock()
 		targetTimeTick = vchannel.transformLogBuffer.FlushTargetTimeTick()
 		if targetTimeTick > vchannel.meta.GetDataCheckpointTimeTick() {
-			_, schema := vchannel.GetSchemaLocked(targetTimeTick)
-			pack = vchannel.transformLogBuffer.FlushPack(vchannel.meta, schema, targetTimeTick)
+			transformMeta := ensureTransformLogMeta(vchannel.meta)
+			chunk = vchannel.transformLogBuffer.FlushChunk(transformMeta.GetNextChunkId(), targetTimeTick)
 		}
 		vchannel.mu.Unlock()
 
-		if pack != nil {
-			result, err := vchannel.packWriter.FlushDeleteBuffer(ctx, pack)
-			if err != nil {
-				return err
+		if chunk != nil {
+			if vchannel.transformLogChunkWriter == nil {
+				return errors.New("transform log chunk writer is nil")
 			}
-			if err := vchannel.lifecycle.CommitL0Segment(ctx, result.Batch); err != nil {
+			if err := vchannel.transformLogChunkWriter.WriteTransformLogChunk(ctx, vchannel.Name(), chunk); err != nil {
 				return err
 			}
 		}
 
 		vchannel.mu.Lock()
-		if pack != nil {
-			vchannel.transformLogBuffer.DiscardThrough(pack.ToTimeTick)
-			durableTimeTick := pack.ToTimeTick
+		if chunk != nil {
+			toTimeTick := chunk.GetEntries()[len(chunk.GetEntries())-1].GetTimeTick()
+			vchannel.transformLogBuffer.DiscardThrough(toTimeTick)
+			vchannel.retainedTransformLogChunks = append(vchannel.retainedTransformLogChunks, chunk)
+			liveEntries = chunk.GetEntries()
+			transformMeta := ensureTransformLogMeta(vchannel.meta)
+			if toTimeTick > transformMeta.GetCheckpointTimeTick() {
+				transformMeta.CheckpointTimeTick = toTimeTick
+			}
+			if chunk.GetChunkId() >= transformMeta.GetNextChunkId() {
+				transformMeta.NextChunkId = chunk.GetChunkId() + 1
+			}
+			durableTimeTick := toTimeTick
 			if !vchannel.transformLogBuffer.HasFlushWorkThrough(targetTimeTick) {
 				durableTimeTick = targetTimeTick
 			}
@@ -85,6 +101,9 @@ func (t *flushTransformLogBufferTask) run(ctx context.Context) error {
 			nextTask = vchannel.StartFlushTransformLogBufferTaskLocked(nextTargetTimeTick)
 		}
 		vchannel.mu.Unlock()
+		if len(liveEntries) > 0 {
+			vchannel.publishTransformLogEntries(liveEntries)
+		}
 		vchannel.NotifyDataUpdated()
 		break
 	}
@@ -92,4 +111,11 @@ func (t *flushTransformLogBufferTask) run(ctx context.Context) error {
 		runtime.Scheduler.Submit(nextTask)
 	}
 	return nil
+}
+
+func ensureTransformLogMeta(meta *streamingpb.VChannelMeta) *streamingpb.VChannelTransformLogMeta {
+	if meta.TransformLogMeta == nil {
+		meta.TransformLogMeta = &streamingpb.VChannelTransformLogMeta{}
+	}
+	return meta.TransformLogMeta
 }
