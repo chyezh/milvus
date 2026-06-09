@@ -863,11 +863,8 @@ func (m *meta) UpdateSegment(segmentID int64, operators ...SegmentOperator) erro
 }
 
 type updateSegmentPack struct {
-	meta *meta
-	svm  *segmentViewMeta // alternative segment backend (used by segmentViewMeta methods)
-
-	collectionID int64 // optional: if set, cross-check segment ownership in Get()
-	segments     map[int64]*SegmentInfo
+	meta     *meta
+	segments map[int64]*SegmentInfo
 	// for update etcd binlog paths
 	increments map[int64]metastore.BinlogsIncrement
 	// for update segment metric after alter segments
@@ -893,12 +890,7 @@ func (p *updateSegmentPack) Validate() error {
 		if segment.Level == datapb.SegmentLevel_L0 {
 			return nil
 		}
-		var segmentInMeta *SegmentInfo
-		if p.svm != nil {
-			segmentInMeta = p.svm.GetSegment(segment.ID)
-		} else {
-			segmentInMeta = p.meta.segments.GetSegment(segment.ID)
-		}
+		segmentInMeta := p.meta.segments.GetSegment(segment.ID)
 		if segmentInMeta.State == commonpb.SegmentState_Flushed && segment.State != commonpb.SegmentState_Dropped {
 			// if the segment is flushed, we should not update the segment meta, ignore the operation directly.
 			return errors.Wrapf(ErrIgnoredSegmentMetaOperation,
@@ -921,25 +913,12 @@ func (p *updateSegmentPack) Get(segmentID int64) *SegmentInfo {
 		return segment
 	}
 
-	var segment *SegmentInfo
-	if p.svm != nil {
-		segment = p.svm.GetSegment(segmentID)
-	} else {
-		segment = p.meta.segments.GetSegment(segmentID)
-	}
+	segment := p.meta.segments.GetSegment(segmentID)
 	if segment == nil {
 		log.Ctx(context.TODO()).Warn("meta update: get segment failed - segment not found",
 			zap.Int64("segmentID", segmentID),
 			zap.Bool("segment nil", segment == nil),
 			zap.Bool("segment unhealthy", !isSegmentHealthy(segment)))
-		return nil
-	}
-
-	if p.collectionID != 0 && segment.GetCollectionID() != p.collectionID {
-		log.Ctx(context.TODO()).Warn("meta update: segment belongs to different collection",
-			zap.Int64("expectedCollectionID", p.collectionID),
-			zap.Int64("actualCollectionID", segment.GetCollectionID()),
-			zap.Int64("segmentID", segmentID))
 		return nil
 	}
 
