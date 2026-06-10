@@ -64,7 +64,63 @@ RecoveryStorage framework.
 This keeps ack logic as transport-level acknowledgement while leaving business
 decisions inside VChannelModule, SegmentModule, and TransformLogModule.
 
-## 5. Invariants
+## 5. ModuleAPI Implementation
+
+`AckModule` implements the core `Module` API. It depends on a composed
+`DataFrontierProvider` built by RecoveryStorage.
+
+```go
+type AckModule struct {
+    frontierProvider moduleapi.DataFrontierProvider
+}
+
+var _ moduleapi.Module = (*AckModule)(nil)
+```
+
+### Module.Name
+
+Returns `ModuleNameAck`.
+
+### Module.ObserveMessage
+
+If the message has no `BroadcastHeader`, AckModule returns an empty
+`ObserveResult`.
+
+If the message has a `BroadcastHeader`, AckModule creates an ack task and
+returns a Data barrier. The task precondition combines:
+
+- previous ack task completion;
+- the composed Data frontier for the message scope when required by message
+  semantics.
+
+AckModule does not return Meta barriers.
+
+### Module.SwitchIntoMetaAndData
+
+Switches ack processing into MetaAndData mode and returns an empty
+`ModuleSnapshot`. AckModule does not contribute WAL open data snapshots.
+
+### Module.ConsumeDirtySnapshots
+
+Returns nil. Ack state is represented by in-memory Data barriers and replayable
+coordinator Ack RPCs, not by catalog snapshots.
+
+### DataFrontierProvider Dependency
+
+AckModule asks the provider for scope barriers:
+
+```go
+frontierProvider.DataFrontier(scope)
+```
+
+The provider composes all modules implementing `DataFrontierView`, such as
+SegmentModule and TransformLogModule. AckModule does not depend on those
+modules directly.
+
+AckModule does not implement `DataCheckpointView`, `DataFrontierView`, or
+`CheckpointPersistedObserver`.
+
+## 6. Invariants
 
 1. AckModule returns Data barriers, not Meta barriers.
 2. Ack tasks are ordered by WAL ack order.

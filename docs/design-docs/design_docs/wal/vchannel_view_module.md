@@ -104,14 +104,110 @@ tombstone ordering.
 
 On WAL open, RecoveryStorage loads VChannel snapshots from catalog and
 constructs `VChannelModule` in MetaOnly mode. Historical WAL replay uses the
-same `ObserveMessage` implementation. Dirty snapshots are persisted by
-VChannelModule-owned persist tasks.
+same `ObserveMessage` implementation. Dirty snapshots are consumed and
+persisted by RecoveryStorage.
 
 Schema history is VChannel child state. VChannel names are not reusable, so a
 final VChannel cleanup removes the VChannel owner key and schema keys under the
 same VChannel prefix.
 
-## 6. Invariants
+## 6. ModuleAPI Implementation
+
+`VChannelModule` implements the core `Module` API and the schema provider
+interface:
+
+```go
+type VChannelModule struct {
+    views map[string]*VChannelView
+}
+
+var _ moduleapi.Module = (*VChannelModule)(nil)
+var _ SchemaProvider = (*VChannelModule)(nil)
+var _ moduleapi.CheckpointPersistedObserver = (*VChannelModule)(nil)
+```
+
+### Module.Name
+
+Returns `ModuleNameVChannel`.
+
+### Module.ObserveMessage
+
+`ObserveMessage` handles only VChannel-owned metadata messages:
+
+- `CreateCollection`
+- `CreatePartition`
+- `DropPartition`
+- `DropCollection`
+- `TruncateCollection`
+- schema-changing and metadata-changing `AlterCollection`
+
+It updates VChannel-owned Meta state synchronously and returns a Meta barrier
+when the changed VChannel snapshot must be persisted. It does not return Data
+barriers because VChannelModule does not own Data-side durable work.
+
+Messages for Insert, Delete, Txn(Delete), segment flush, TransformLog
+truncation, import lifecycle, and broadcast ack are ignored by this module.
+
+### Module.SwitchIntoMetaAndData
+
+Switches all retained VChannel views from MetaOnly to MetaAndData mode and
+returns:
+
+```go
+type VChannelModuleSnapshot struct {
+    VChannels map[string]*streamingpb.VChannelMeta
+}
+```
+
+This snapshot is used by RecoveryStorage to build the WAL open
+`RecoverySnapshot`.
+
+### Module.ConsumeDirtySnapshots
+
+Returns one dirty snapshot per VChannel key:
+
+```text
+ModuleName = vchannel
+Key        = {PChannel, VChannel}
+Op         = Upsert or Delete
+Payload    = *streamingpb.VChannelMeta for Upsert
+```
+
+For partition cleanup, the payload is the owning VChannel meta with the
+partition removed. For final VChannel cleanup, the operation is Delete.
+
+### DirtySnapshot.MarkPersisted
+
+The VChannel dirty snapshot calls back into its owning view:
+
+```go
+func (s *vchannelDirtySnapshot) MarkPersisted() {
+    s.owner.markSnapshotPersisted(s)
+}
+```
+
+The owner validates the snapshot generation, records the persisted
+`MetaTimeTick`, clears dirty/pending state for that generation, and advances the
+Meta barrier. Delete snapshots remove the retained VChannel view after catalog
+drop succeeds.
+
+### CheckpointPersistedObserver
+
+`NotifyCheckpointPersisted(metaTimeTick, dataTimeTick)` is used only to detect
+cleanup opportunities for VChannel and partition tombstones. If cleanup is
+possible, VChannelModule marks a new dirty snapshot and notifies
+RecoveryStorage. The actual catalog update still flows through
+`ConsumeDirtySnapshots` and `DirtySnapshot.MarkPersisted`.
+
+### SchemaProvider
+
+`SchemaAt(vchannel, partitionID, timetick)` reads only VChannel-owned schema
+and partition history. It is the only supported cross-module read from
+VChannelModule.
+
+`VChannelModule` does not implement `DataCheckpointView` or `DataFrontierView`.
+
+## 7. Invariants
 
 1. VChannel metadata is the source for collection, partition, and schema state.
 2. Schema history is owned by VChannelModule.

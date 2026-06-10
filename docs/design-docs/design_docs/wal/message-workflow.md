@@ -11,7 +11,8 @@ Common rules:
 - Each data module updates its own View.Meta synchronously in `ObserveMessage`.
 - Each data module updates its own View.Data asynchronously through Scheduler
   tasks.
-- Dirty Views are persisted by module-owned persist tasks.
+- Dirty snapshots are consumed and persisted by RecoveryStorage. After
+  persistence succeeds, RecoveryStorage calls `DirtySnapshot.MarkPersisted()`.
 - CheckpointManager advances physical checkpoints only after returned barriers disappear.
 - AckModule submits an ack task and returns a DataBarrier for every persisted message with a `BroadcastHeader`.
 - AckModule's DataBarrier disappears only after the coordinator broadcast Ack API succeeds.

@@ -117,7 +117,101 @@ MetaAndData mode.
 Repeated `CreateSegment`, `Insert`, and `Flush` messages must be idempotent
 against persisted Segment state and Data checkpoints.
 
-## 6. Invariants
+## 6. ModuleAPI Implementation
+
+`SegmentModule` implements the core `Module` API plus data checkpoint/frontier
+views:
+
+```go
+type SegmentModule struct {
+    segments       map[int64]*SegmentView
+    schemaProvider SchemaProvider
+}
+
+var _ moduleapi.Module = (*SegmentModule)(nil)
+var _ moduleapi.DataCheckpointView = (*SegmentModule)(nil)
+var _ moduleapi.DataFrontierView = (*SegmentModule)(nil)
+var _ moduleapi.CheckpointPersistedObserver = (*SegmentModule)(nil)
+```
+
+### Module.Name
+
+Returns `ModuleNameSegment`.
+
+### Module.ObserveMessage
+
+`ObserveMessage` handles Segment-owned messages:
+
+- `CreateSegment`
+- `Insert`
+- `Flush`
+- Insert bodies inside committed `Txn`
+- flush-style barriers from `ManualFlush`, `FlushAll`, `DropPartition`,
+  `DropCollection`, `TruncateCollection`, schema-changing `AlterCollection`,
+  and `AlterWAL`
+
+It reads `SchemaAt` from VChannelModule only while creating a new Segment View.
+It returns Meta barriers for Segment metadata changes and Data barriers for
+pending L1 output or lifecycle side effects.
+
+Delete and Txn(Delete) bodies are ignored by SegmentModule.
+
+### Module.SwitchIntoMetaAndData
+
+Switches retained Segment views into MetaAndData mode and returns:
+
+```go
+type SegmentModuleSnapshot struct {
+    Segments map[int64]*streamingpb.SegmentAssignmentMeta
+}
+```
+
+### Module.ConsumeDirtySnapshots
+
+Returns one dirty snapshot per Segment key:
+
+```text
+ModuleName = segment
+Key        = {PChannel, SegmentID}
+Op         = Upsert or Delete
+Payload    = *streamingpb.SegmentAssignmentMeta for Upsert
+```
+
+Upsert snapshots publish Segment Meta and Data progress. Delete snapshots drop
+retained tombstoned Segment metadata after cleanup is safe.
+
+### DirtySnapshot.MarkPersisted
+
+The Segment dirty snapshot calls back into its owning Segment View. The owner
+validates the snapshot generation, records persisted Meta/Data timeticks,
+clears pending dirty state for that generation, and advances corresponding
+Meta/Data barriers. Delete snapshots remove the retained Segment View after the
+catalog drop succeeds.
+
+### DataCheckpointView
+
+`DataCheckpointTimeTick()` returns the minimum persisted Data checkpoint across
+retained Segment views that still own Data work. Idle or fully cleaned segment
+state must not pin the global data checkpoint.
+
+### DataFrontierView
+
+`DataFrontier(scope)` returns a barrier for Segment Data progress in the given
+scope:
+
+- `ScopeAll`: all retained local segments;
+- `ScopeVChannel`: segments in the target vchannel;
+- `ScopePartition`: segments in the target vchannel/partition.
+
+AckModule uses this through RecoveryStorage's composed `DataFrontierProvider`.
+
+### CheckpointPersistedObserver
+
+`NotifyCheckpointPersisted(metaTimeTick, dataTimeTick)` lets SegmentModule
+detect segment tombstone cleanup opportunities. Cleanup produces Segment Delete
+dirty snapshots and still uses RecoveryStorage-owned catalog persistence.
+
+## 7. Invariants
 
 1. SegmentModule owns Insert/L1 state and segment assignment metadata.
 2. SegmentModule does not own VChannel lifecycle or Delete data.
