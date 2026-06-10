@@ -489,7 +489,8 @@ type TransformLogModuleSnapshot struct {
 
 ### Module.ConsumeDirtySnapshots
 
-Returns one dirty snapshot per vchannel TransformLog key:
+Returns one dirty snapshot per vchannel TransformLog key. The operation only
+snapshots module-local memory and does not return an error:
 
 ```text
 ModuleName = transformlog
@@ -512,9 +513,9 @@ func (s *transformLogDirtySnapshot) MarkPersisted() {
 }
 ```
 
-The owner validates the snapshot generation, records persisted
-`checkpoint_time_tick` and truncate metadata, clears dirty/pending state for
-that generation, and advances the TransformLog Data barrier. Delete snapshots
+The owner records persisted `checkpoint_time_tick`, clears the matching
+in-flight dirty snapshot, recomputes dirty state against the current
+TransformLog view, and advances the TransformLog Data barrier. Delete snapshots
 remove retained TransformLog state after catalog drop succeeds.
 
 ### DataCheckpointView

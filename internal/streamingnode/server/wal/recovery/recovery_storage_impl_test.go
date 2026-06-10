@@ -3,6 +3,7 @@ package recovery
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
@@ -24,19 +25,21 @@ type testRecoveryModule struct {
 	result moduleapi.ObserveResult
 }
 
-func (m *testRecoveryModule) Name() string {
-	return "test"
+func (m *testRecoveryModule) Name() moduleapi.ModuleName {
+	return moduleapi.ModuleName("test")
 }
 
 func (m *testRecoveryModule) ObserveMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
 	return m.result
 }
 
-func (m *testRecoveryModule) SwitchIntoMetaAndData() moduleapi.Snapshot {
+func (m *testRecoveryModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
 	return nil
 }
 
-func (m *testRecoveryModule) RequirePersist() {}
+func (m *testRecoveryModule) ConsumeDirtySnapshots() []moduleapi.DirtySnapshot {
+	return nil
+}
 
 type testDurableFrontierView struct {
 	partition walcheckpoint.Barrier
@@ -44,16 +47,17 @@ type testDurableFrontierView struct {
 	all       walcheckpoint.Barrier
 }
 
-func (v testDurableFrontierView) PartitionDurableFrontier(collectionID int64, partitionID int64) walcheckpoint.Barrier {
-	return v.partition
-}
-
-func (v testDurableFrontierView) VChannelDurableFrontier(vchannel string) walcheckpoint.Barrier {
-	return v.vchannel
-}
-
-func (v testDurableFrontierView) AllDurableFrontier() walcheckpoint.Barrier {
-	return v.all
+func (v testDurableFrontierView) DataFrontier(scope moduleapi.Scope) walcheckpoint.Barrier {
+	switch scope.Type {
+	case moduleapi.ScopeAll:
+		return v.all
+	case moduleapi.ScopeVChannel:
+		return v.vchannel
+	case moduleapi.ScopePartition:
+		return v.partition
+	default:
+		return nil
+	}
 }
 
 type testDataCheckpointModule struct {
@@ -63,6 +67,18 @@ type testDataCheckpointModule struct {
 
 func (m *testDataCheckpointModule) DataCheckpointTimeTick() uint64 {
 	return m.timetick
+}
+
+type notifyingDirtyModule struct {
+	testRecoveryModule
+	notify func()
+}
+
+func (m *notifyingDirtyModule) ConsumeDirtySnapshots() []moduleapi.DirtySnapshot {
+	if m.notify != nil {
+		m.notify()
+	}
+	return nil
 }
 
 func TestRecoveryStorageRegistersImmediateCheckpointForBarrierlessMessage(t *testing.T) {
@@ -123,7 +139,41 @@ func TestRecoveryStorageNotifyBarrierUpdatedUsesViewDataCheckpoint(t *testing.T)
 	assert.True(t, storage.checkpointManager.HasDirty())
 }
 
-func TestValidateRecoveredGrowingMetaNormalizesBackwardCompatibleDefaults(t *testing.T) {
+func TestRecoveryStorageConsumeDirtySnapshotDoesNotHoldLockWhileCollectingModules(t *testing.T) {
+	checkpoint := &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(10),
+		TimeTick:  100,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: walimplstest.NewTestMessageID(10),
+			TimeTick:  100,
+		},
+	}
+	storage := newRecoveryStorage(types.PChannelInfo{Name: "test-pchannel"}, checkpoint)
+	defer storage.metrics.Close()
+	defer storage.taskScheduler.Close()
+	storage.modules = []moduleapi.Module{&notifyingDirtyModule{
+		notify: func() {
+			storage.NotifyModuleUpdated(moduleapi.ModuleName("test"))
+		},
+	}}
+
+	done := make(chan struct{})
+	go func() {
+		_ = storage.consumeDirtySnapshot()
+		close(done)
+	}()
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-done:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestValidateRecoveredViewMetaNormalizesBackwardCompatibleDefaults(t *testing.T) {
 	vchannel := &streamingpb.VChannelMeta{
 		Vchannel: "v1",
 		State:    streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
@@ -154,7 +204,7 @@ func TestValidateRecoveredGrowingMetaNormalizesBackwardCompatibleDefaults(t *tes
 		},
 	}
 
-	err := validateRecoveredGrowingMeta(
+	err := validateRecoveredViewMeta(
 		map[string]*streamingpb.VChannelMeta{"v1": vchannel},
 		map[int64]*streamingpb.SegmentAssignmentMeta{100: segment},
 	)

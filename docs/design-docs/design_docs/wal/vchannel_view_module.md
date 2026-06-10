@@ -164,7 +164,8 @@ This snapshot is used by RecoveryStorage to build the WAL open
 
 ### Module.ConsumeDirtySnapshots
 
-Returns one dirty snapshot per VChannel key:
+Returns one dirty snapshot per VChannel key. The operation only snapshots
+module-local memory and does not return an error:
 
 ```text
 ModuleName = vchannel
@@ -186,10 +187,10 @@ func (s *vchannelDirtySnapshot) MarkPersisted() {
 }
 ```
 
-The owner validates the snapshot generation, records the persisted
-`MetaTimeTick`, clears dirty/pending state for that generation, and advances the
-Meta barrier. Delete snapshots remove the retained VChannel view after catalog
-drop succeeds.
+The owner records the persisted `MetaTimeTick`, clears the matching in-flight
+dirty snapshot, recomputes dirty state against the current VChannel view, and
+advances the Meta barrier. Delete snapshots remove the retained VChannel view
+after catalog drop succeeds.
 
 ### CheckpointPersistedObserver
 

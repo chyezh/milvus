@@ -168,7 +168,8 @@ type SegmentModuleSnapshot struct {
 
 ### Module.ConsumeDirtySnapshots
 
-Returns one dirty snapshot per Segment key:
+Returns one dirty snapshot per Segment key. The operation only snapshots
+module-local memory and does not return an error:
 
 ```text
 ModuleName = segment
@@ -183,10 +184,10 @@ retained tombstoned Segment metadata after cleanup is safe.
 ### DirtySnapshot.MarkPersisted
 
 The Segment dirty snapshot calls back into its owning Segment View. The owner
-validates the snapshot generation, records persisted Meta/Data timeticks,
-clears pending dirty state for that generation, and advances corresponding
-Meta/Data barriers. Delete snapshots remove the retained Segment View after the
-catalog drop succeeds.
+records persisted Meta/Data timeticks, clears the matching in-flight dirty
+snapshot, recomputes dirty state against the current Segment view, and advances
+corresponding Meta/Data barriers. Delete snapshots remove the retained Segment
+View after the catalog drop succeeds.
 
 ### DataCheckpointView
 

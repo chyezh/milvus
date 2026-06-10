@@ -238,7 +238,8 @@ type Module interface {
     SwitchIntoMetaAndData() ModuleSnapshot
 
     // Capture dirty views as stable snapshots for RecoveryStorage-owned
-    // catalog persistence.
+    // catalog persistence. This is a local memory snapshot operation and
+    // therefore does not return an error.
     ConsumeDirtySnapshots() []DirtySnapshot
 }
 ```
@@ -334,8 +335,8 @@ const (
 ```
 
 `MarkPersisted` belongs to the dirty snapshot because the snapshot can carry
-the owning module pointer and generation information needed to update persisted
-frontiers safely:
+the owning module pointer and the exact in-flight view needed to update
+persisted frontiers safely:
 
 ```go
 type transformLogDirtySnapshot struct {
@@ -343,7 +344,6 @@ type transformLogDirtySnapshot struct {
     key   SnapshotKey
     meta  *streamingpb.VChannelTransformLogMeta
     op    SnapshotOp
-    gen   uint64
 }
 
 func (s *transformLogDirtySnapshot) MarkPersisted() {
@@ -354,16 +354,18 @@ func (s *transformLogDirtySnapshot) MarkPersisted() {
 RecoveryStorage does not know how a module advances its internal barriers. It
 only persists the snapshot and calls `MarkPersisted` after success.
 
-`ConsumeDirtySnapshots` is not a dirty queue pop. It captures the current dirty
-view as a stable in-flight snapshot. RecoveryStorage owns that in-flight
-snapshot until it is persisted successfully. If persistence fails,
-RecoveryStorage retries the same snapshot and does not call `MarkPersisted`.
+`ConsumeDirtySnapshots` is not a dirty queue pop and does not perform catalog or
+object-storage I/O. It captures the current dirty view as a stable in-flight
+snapshot. RecoveryStorage owns that in-flight snapshot until it is persisted
+successfully. If persistence fails, RecoveryStorage retries the same snapshot
+and does not call `MarkPersisted`.
 
-While an in-flight snapshot exists for an owner, that owner does not need to
-produce another snapshot for the same dirty generation. If the underlying view
-becomes dirty again while the in-flight snapshot is being persisted, the module
-records the newer dirty state and exposes the next stable snapshot only after
-the current snapshot has been marked persisted.
+While an in-flight snapshot exists for an owner, repeated consume calls return
+that same stable view. If the underlying view becomes dirty again while the
+in-flight snapshot is being persisted, the module records the newer dirty state
+in memory. After `MarkPersisted` clears the in-flight snapshot, the next
+`ConsumeDirtySnapshots` call captures the newer dirty view as the next stable
+snapshot.
 
 ### 8.4 Snapshot Persistence
 

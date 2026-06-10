@@ -8,10 +8,11 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/growing"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/segment"
 	waltransformlog "github.com/milvus-io/milvus/internal/streamingnode/server/wal/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
 	"github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 	"github.com/milvus-io/milvus/internal/util/idalloc"
 	"github.com/milvus-io/milvus/pkg/v3/log"
@@ -111,16 +112,19 @@ type recoveryStorageImpl struct {
 	checkpoint             *WALCheckpoint
 	checkpointManager      *walcheckpoint.Manager
 	metaObservedCheckpoint utility.WALConsumeCheckpoint
-	growingManager         *growing.Manager
+	vchannelModule         *vchannel.Module
+	segmentModule          *segment.Module
+	transformLogModule     *waltransformlog.Module
 	modules                []moduleapi.Module
 	taskScheduler          *scheduler.Scheduler
 	dirtyCounter           int // records the message count since last persist snapshot.
+	moduleDirty            bool
 	// used to trigger the recovery persist operation.
 	persistNotifier        chan struct{}
 	gracefulClosed         bool
 	truncator              walimpls.WALImpls
 	metrics                *recoveryMetrics
-	pendingPersistSnapshot *RecoverySnapshot
+	pendingPersistSnapshot *dirtyPersistSnapshot
 	// used to mark switch MQ msg found
 	alterWALInfo *AlterWALInfo
 	// pendingSalvageCheckpoint holds the salvage checkpoint captured during force promote.
@@ -137,7 +141,7 @@ func (r *recoveryStorageImpl) installCheckpointManager(checkpoint *WALCheckpoint
 	}
 }
 
-func (r *recoveryStorageImpl) initGrowingManager(
+func (r *recoveryStorageImpl) initRecoveryModules(
 	ctx context.Context,
 	vchannels map[string]*streamingpb.VChannelMeta,
 	segments map[int64]*streamingpb.SegmentAssignmentMeta,
@@ -147,35 +151,46 @@ func (r *recoveryStorageImpl) initGrowingManager(
 	if err != nil {
 		return err
 	}
-	catalog := resource.Resource().StreamingNodeCatalog()
 	moduleRuntime := moduleapi.Runtime{
 		Scheduler: r.taskScheduler,
 		Notifier:  r,
 	}
-	r.growingManager = growing.NewManager(
+	r.vchannelModule = vchannel.NewModule(
+		r.channel.Name,
 		vchannels,
+		vchannel.WithModuleRuntime(r.Logger(), moduleRuntime),
+	)
+	r.segmentModule = segment.NewModule(
+		r.channel.Name,
 		segments,
-		growing.NewSegmentLifecycleWriter(coord, paramtable.GetNodeID()),
-		growing.WithPackWriter(growing.NewBulkPackWriter(
+		r.vchannelModule,
+		segment.NewSegmentLifecycleWriter(coord, paramtable.GetNodeID()),
+		segment.WithPackWriter(segment.NewBulkPackWriter(
 			resource.Resource().ChunkManager(),
 			idalloc.NewMAllocator(resource.Resource().IDAllocator()),
 			nil,
 		)),
-		growing.WithTransformLogStore(waltransformlog.NewObjectChunkStore(
-			resource.Resource().ChunkManager(),
-			r.channel.Name,
-		)),
-		growing.WithTransformLogMetas(transformLogMetas),
-		growing.WithRecoveryCatalog(r.channel.Name, catalog),
-		growing.WithDataBarrierUpdatedCallback(r.NotifyBarrierUpdated),
-		growing.WithModuleRuntime(r.Logger(), moduleRuntime),
+		segment.WithModuleRuntime(r.Logger(), moduleRuntime),
 	)
-	if err := r.growingManager.RecoverTransformLogs(ctx); err != nil {
+	transformLogStore := waltransformlog.NewObjectChunkStore(
+		resource.Resource().ChunkManager(),
+		r.channel.Name,
+	)
+	r.transformLogModule = waltransformlog.NewModule(
+		r.channel.Name,
+		transformLogMetas,
+		transformLogStore,
+		waltransformlog.WithModuleRuntime(moduleRuntime),
+	)
+	if err := r.transformLogModule.Recover(ctx); err != nil {
 		return err
 	}
+	frontierProvider := newDataFrontierProvider(r.segmentModule, r.transformLogModule)
 	r.modules = []moduleapi.Module{
-		r.growingManager,
-		newBroadcastAckModule(r.channel.Name, r.growingManager, moduleRuntime),
+		r.vchannelModule,
+		r.segmentModule,
+		r.transformLogModule,
+		newBroadcastAckModule(r.channel.Name, frontierProvider, moduleRuntime),
 	}
 	return nil
 }
@@ -183,12 +198,23 @@ func (r *recoveryStorageImpl) initGrowingManager(
 func (r *recoveryStorageImpl) NotifyBarrierUpdated() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.moduleDirty = true
 	if r.checkpointManager == nil {
 		return
 	}
 	r.checkpointManager.TryAdvanceMetaCheckpoint()
 	r.checkpointManager.TryAdvanceDataCheckpoint()
 	r.updateDataCheckpointFromViewsLocked()
+	r.notifyPersist()
+	if r.taskScheduler != nil {
+		r.taskScheduler.Notify()
+	}
+}
+
+func (r *recoveryStorageImpl) NotifyModuleUpdated(moduleapi.ModuleName) {
+	r.mu.Lock()
+	r.moduleDirty = true
+	r.mu.Unlock()
 	r.notifyPersist()
 	if r.taskScheduler != nil {
 		r.taskScheduler.Notify()
@@ -206,7 +232,10 @@ func (r *recoveryStorageImpl) Metrics() RecoveryMetrics {
 }
 
 func (r *recoveryStorageImpl) TransformLog() transformlog.Accesser {
-	return r.growingManager
+	if r.transformLogModule != nil {
+		return r.transformLogModule
+	}
+	return transformlog.NewErrorAccesser(transformlog.ErrVChannelUnavailable)
 }
 
 // ObserveMessage is called when a new message is observed.
@@ -236,21 +265,23 @@ func (r *recoveryStorageImpl) notifyPersist() {
 
 // consumeDirtySnapshot consumes the dirty state and returns a snapshot to persist.
 // A snapshot is always a consistent state (fully consume a message or a txn message) of the recovery storage.
-func (r *recoveryStorageImpl) consumeDirtySnapshot() *RecoverySnapshot {
+func (r *recoveryStorageImpl) consumeDirtySnapshot() *dirtyPersistSnapshot {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.checkpointManager == nil {
 		r.installCheckpointManager(r.checkpoint)
 	}
-	checkpointDirty := r.checkpointManager != nil && r.checkpointManager.HasDirty()
-	if r.dirtyCounter == 0 && r.pendingSalvageCheckpoint == nil && !checkpointDirty {
-		return nil
+	r.mu.Unlock()
+
+	moduleSnapshots := make([]moduleapi.DirtySnapshot, 0)
+	for _, module := range r.modules {
+		moduleSnapshots = append(moduleSnapshots, module.ConsumeDirtySnapshots()...)
 	}
 
-	if r.dirtyCounter > 0 || checkpointDirty {
-		for _, module := range r.modules {
-			module.RequirePersist()
-		}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	checkpointDirty := r.checkpointManager != nil && r.checkpointManager.HasDirty()
+	if r.dirtyCounter == 0 && !r.moduleDirty && r.pendingSalvageCheckpoint == nil && !checkpointDirty && len(moduleSnapshots) == 0 {
+		return nil
 	}
 	// Atomically capture the salvage checkpoint alongside other dirty state.
 	// Clearing it here (under r.mu) ensures it is only consumed once.
@@ -258,14 +289,17 @@ func (r *recoveryStorageImpl) consumeDirtySnapshot() *RecoverySnapshot {
 	r.pendingSalvageCheckpoint = nil
 	// clear the dirty counter.
 	r.dirtyCounter = 0
+	r.moduleDirty = false
 	checkpointDirty = r.checkpointManager.ConsumeDirty() || salvageCP != nil
-	if !checkpointDirty && salvageCP == nil {
+	if !checkpointDirty && salvageCP == nil && len(moduleSnapshots) == 0 {
 		return nil
 	}
-	return &RecoverySnapshot{
-		Checkpoint:        r.checkpointManager.Snapshot(),
-		CheckpointDirty:   checkpointDirty,
-		SalvageCheckpoint: salvageCP,
+	return &dirtyPersistSnapshot{
+		Checkpoint:         r.checkpointManager.Snapshot(),
+		CheckpointDirty:    checkpointDirty,
+		SalvageCheckpoint:  salvageCP,
+		ModuleDirtySnaps:   moduleSnapshots,
+		ModuleSnapshotsAck: false,
 	}
 }
 
