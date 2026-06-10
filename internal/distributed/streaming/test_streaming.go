@@ -27,6 +27,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 	kvfactory "github.com/milvus-io/milvus/internal/util/dependency/kv"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -212,6 +213,10 @@ func (n *noopWALAccesser) Broadcast() Broadcast {
 
 func (n *noopWALAccesser) Read(ctx context.Context, opts ReadOption) Scanner {
 	return &noopScanner{}
+}
+
+func (n *noopWALAccesser) TransformLog() transformlog.Accesser {
+	return transformlog.NewErrorAccesser(nil)
 }
 
 func (n *noopWALAccesser) AppendMessages(ctx context.Context, msgs ...message.MutableMessage) AppendResponses {
