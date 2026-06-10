@@ -237,7 +237,8 @@ type Module interface {
     // module snapshot needed by WAL open.
     SwitchIntoMetaAndData() ModuleSnapshot
 
-    // Return dirty snapshots for RecoveryStorage-owned catalog persistence.
+    // Capture dirty views as stable snapshots for RecoveryStorage-owned
+    // catalog persistence.
     ConsumeDirtySnapshots() []DirtySnapshot
 }
 ```
@@ -292,7 +293,8 @@ type TransformLogModuleSnapshot struct {
 ```
 
 RecoveryStorage assembles these module snapshots into the WAL open
-`RecoverySnapshot`.
+`RecoverySnapshot`. Modules that do not contribute WAL open data, such as
+`AckModule`, return nil.
 
 ### 8.3 DirtySnapshot
 
@@ -350,9 +352,18 @@ func (s *transformLogDirtySnapshot) MarkPersisted() {
 ```
 
 RecoveryStorage does not know how a module advances its internal barriers. It
-only persists the snapshot and calls `MarkPersisted` after success. If
-persistence fails, `MarkPersisted` is not called and the corresponding barrier
-continues to block.
+only persists the snapshot and calls `MarkPersisted` after success.
+
+`ConsumeDirtySnapshots` is not a dirty queue pop. It captures the current dirty
+view as a stable in-flight snapshot. RecoveryStorage owns that in-flight
+snapshot until it is persisted successfully. If persistence fails,
+RecoveryStorage retries the same snapshot and does not call `MarkPersisted`.
+
+While an in-flight snapshot exists for an owner, that owner does not need to
+produce another snapshot for the same dirty generation. If the underlying view
+becomes dirty again while the in-flight snapshot is being persisted, the module
+records the newer dirty state and exposes the next stable snapshot only after
+the current snapshot has been marked persisted.
 
 ### 8.4 Snapshot Persistence
 
@@ -382,10 +393,11 @@ The persistence loop is:
 for module in modules:
     snapshots := module.ConsumeDirtySnapshots()
     for snapshot in snapshots:
-        persist snapshot by ModuleName + Op + Key
-        if success:
-            snapshot.MarkPersisted()
-            NotifyBarrierUpdated()
+        keep snapshot as in-flight
+        retry persist snapshot by ModuleName + Op + Key until success
+        snapshot.MarkPersisted()
+        clear in-flight snapshot
+        NotifyBarrierUpdated()
 ```
 
 ### 8.5 Optional Module Views

@@ -162,7 +162,8 @@ module-local idempotent consumption based on TransformLog meta.
 When the TransformLog buffer reaches policy thresholds or a later flush-style
 message requires it, TransformLogModule submits a TransformLog task. Task
 completion writes chunk data, updates TransformLog meta and `DataTimeTick`,
-marks the TransformLog dirty, and later TransformLog meta persistence advances
+marks a TransformLog DirtySnapshot, and notifies RecoveryStorage. RecoveryStorage
+persists the snapshot and calls `DirtySnapshot.MarkPersisted()`, which advances
 the Data barrier.
 
 This message is not a broadcast message, so AckModule does not call the coordinator Ack API.

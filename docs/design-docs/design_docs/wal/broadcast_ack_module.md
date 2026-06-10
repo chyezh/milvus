@@ -97,8 +97,8 @@ AckModule does not return Meta barriers.
 
 ### Module.SwitchIntoMetaAndData
 
-Switches ack processing into MetaAndData mode and returns an empty
-`ModuleSnapshot`. AckModule does not contribute WAL open data snapshots.
+Switches ack processing into MetaAndData mode and returns nil. AckModule does
+not contribute WAL open data snapshots.
 
 ### Module.ConsumeDirtySnapshots
 
