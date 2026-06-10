@@ -128,14 +128,15 @@ func NewHandlerClient(w types.AssignmentDiscoverWatcher) HandlerClient {
 	})
 	watcher := assignment.NewWatcher(rb.Resolver())
 	return &handlerClientImpl{
-		lifetime:         typeutil.NewLifetime(),
-		service:          lazygrpc.WithServiceCreator(conn, streamingpb.NewStreamingNodeHandlerServiceClient),
-		rb:               rb,
-		watcher:          watcher,
-		rebalanceTrigger: w,
-		newProducer:      producer.CreateProducer,
-		newConsumer:      consumer.CreateConsumer,
-		newTransformLog:  transformlogclient.CreateScanner,
+		lifetime:              typeutil.NewLifetime(),
+		service:               lazygrpc.WithServiceCreator(conn, streamingpb.NewStreamingNodeHandlerServiceClient),
+		rb:                    rb,
+		watcher:               watcher,
+		rebalanceTrigger:      w,
+		newProducer:           producer.CreateProducer,
+		newConsumer:           consumer.CreateConsumer,
+		newTransformLogStream: transformlogclient.CreateStream,
+		transformStreams:      make(map[transformlogclient.StreamKey]*transformlogclient.Stream),
 	}
 }
 

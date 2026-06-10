@@ -6,8 +6,8 @@ import (
 
 	"github.com/cockroachdb/errors"
 
-	transformlogapi "github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/walmanager"
+	transformlogapi "github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -20,7 +20,13 @@ type SubscribeServer struct {
 	stream     streamingpb.StreamingNodeHandlerService_SubscribeTransformServer
 	sendMu     sync.Mutex
 	scannersMu sync.Mutex
-	scanners   map[int64]transformlogapi.Scanner
+	scanners   map[int64]*subscription
+}
+
+type subscription struct {
+	id       int64
+	vchannel string
+	scanner  transformlogapi.Scanner
 }
 
 func CreateSubscribeServer(
@@ -39,7 +45,7 @@ func CreateSubscribeServer(
 		walManager: walManager,
 		accesser:   w.TransformLog(),
 		stream:     stream,
-		scanners:   make(map[int64]transformlogapi.Scanner),
+		scanners:   make(map[int64]*subscription),
 	}, nil
 }
 
@@ -60,7 +66,18 @@ func (s *SubscribeServer) Execute() error {
 				return err
 			}
 		case *streamingpb.TransformRequest_CloseSubscription:
-			s.closeSubscription(req.CloseSubscription.GetSubscriptionId())
+			subscriptionID := req.CloseSubscription.GetSubscriptionId()
+			vchannel := s.closeSubscription(subscriptionID)
+			if err := s.send(&streamingpb.TransformResponse{
+				Response: &streamingpb.TransformResponse_CloseSubscription{
+					CloseSubscription: &streamingpb.CloseTransformSubscriptionResponse{
+						SubscriptionId: subscriptionID,
+						Vchannel:       vchannel,
+					},
+				},
+			}); err != nil {
+				return err
+			}
 		case *streamingpb.TransformRequest_CloseStream:
 			s.closeAll()
 			return s.send(&streamingpb.TransformResponse{
@@ -83,21 +100,23 @@ func (s *SubscribeServer) send(resp *streamingpb.TransformResponse) error {
 func (s *SubscribeServer) closeAll() {
 	s.scannersMu.Lock()
 	scanners := s.scanners
-	s.scanners = make(map[int64]transformlogapi.Scanner)
+	s.scanners = make(map[int64]*subscription)
 	s.scannersMu.Unlock()
-	for _, scanner := range scanners {
-		_ = scanner.Close()
+	for _, subscription := range scanners {
+		_ = subscription.scanner.Close()
 	}
 }
 
-func (s *SubscribeServer) closeSubscription(subscriptionID int64) {
+func (s *SubscribeServer) closeSubscription(subscriptionID int64) string {
 	s.scannersMu.Lock()
-	scanner := s.scanners[subscriptionID]
+	subscription := s.scanners[subscriptionID]
 	delete(s.scanners, subscriptionID)
 	s.scannersMu.Unlock()
-	if scanner != nil {
-		_ = scanner.Close()
+	if subscription != nil {
+		_ = subscription.scanner.Close()
+		return subscription.vchannel
 	}
+	return ""
 }
 
 func (s *SubscribeServer) createSubscription(req *streamingpb.CreateTransformSubscriptionRequest) error {
@@ -114,9 +133,13 @@ func (s *SubscribeServer) createSubscription(req *streamingpb.CreateTransformSub
 	}
 	s.scannersMu.Lock()
 	if old := s.scanners[req.GetSubscriptionId()]; old != nil {
-		_ = old.Close()
+		_ = old.scanner.Close()
 	}
-	s.scanners[req.GetSubscriptionId()] = scanner
+	s.scanners[req.GetSubscriptionId()] = &subscription{
+		id:       req.GetSubscriptionId(),
+		vchannel: req.GetVchannel(),
+		scanner:  scanner,
+	}
 	s.scannersMu.Unlock()
 	if err := s.send(&streamingpb.TransformResponse{
 		Response: &streamingpb.TransformResponse_Create{

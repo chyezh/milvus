@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -36,14 +37,16 @@ var (
 )
 
 type handlerClientImpl struct {
-	lifetime         *typeutil.Lifetime
-	service          lazygrpc.Service[streamingpb.StreamingNodeHandlerServiceClient]
-	rb               resolver.Builder
-	watcher          assignment.Watcher
-	rebalanceTrigger types.AssignmentRebalanceTrigger
-	newProducer      func(ctx context.Context, opts *producer.ProducerOptions, handler streamingpb.StreamingNodeHandlerServiceClient) (Producer, error)
-	newConsumer      func(ctx context.Context, opts *consumer.ConsumerOptions, handlerClient streamingpb.StreamingNodeHandlerServiceClient) (Consumer, error)
-	newTransformLog  func(ctx context.Context, opts *transformlogclient.ScannerOptions, handlerClient streamingpb.StreamingNodeHandlerServiceClient) (transformlog.Scanner, error)
+	lifetime              *typeutil.Lifetime
+	service               lazygrpc.Service[streamingpb.StreamingNodeHandlerServiceClient]
+	rb                    resolver.Builder
+	watcher               assignment.Watcher
+	rebalanceTrigger      types.AssignmentRebalanceTrigger
+	newProducer           func(ctx context.Context, opts *producer.ProducerOptions, handler streamingpb.StreamingNodeHandlerServiceClient) (Producer, error)
+	newConsumer           func(ctx context.Context, opts *consumer.ConsumerOptions, handlerClient streamingpb.StreamingNodeHandlerServiceClient) (Consumer, error)
+	newTransformLogStream func(ctx context.Context, opts *transformlogclient.StreamOptions, handlerClient streamingpb.StreamingNodeHandlerServiceClient) (*transformlogclient.Stream, error)
+	transformStreamMu     sync.Mutex
+	transformStreams      map[transformlogclient.StreamKey]*transformlogclient.Stream
 }
 
 // GetLatestMVCCTimestampIfLocal gets the latest mvcc timestamp of the vchannel.
@@ -297,15 +300,43 @@ func (hc *handlerClientImpl) ReadTransformLog(ctx context.Context, opts transfor
 		if err != nil {
 			return nil, err
 		}
-		return hc.newTransformLog(ctx, &transformlogclient.ScannerOptions{
-			Assignment: assign,
-			ReadOption: opts,
-		}, handlerService)
+		stream, err := hc.getOrCreateTransformLogStream(ctx, assign, handlerService)
+		if err != nil {
+			return nil, err
+		}
+		return stream.Subscribe(ctx, opts)
 	})
 	if err != nil {
 		return transformlog.NewErrorScanner(opts.Name, err)
 	}
 	return s.(transformlog.Scanner)
+}
+
+func (hc *handlerClientImpl) getOrCreateTransformLogStream(
+	ctx context.Context,
+	assign *types.PChannelInfoAssigned,
+	handlerService streamingpb.StreamingNodeHandlerServiceClient,
+) (*transformlogclient.Stream, error) {
+	key := transformlogclient.NewStreamKey(assign)
+	hc.transformStreamMu.Lock()
+	defer hc.transformStreamMu.Unlock()
+	if hc.transformStreams == nil {
+		hc.transformStreams = make(map[transformlogclient.StreamKey]*transformlogclient.Stream)
+	}
+	if stream := hc.transformStreams[key]; stream != nil {
+		select {
+		case <-stream.Done():
+			delete(hc.transformStreams, key)
+		default:
+			return stream, nil
+		}
+	}
+	stream, err := hc.newTransformLogStream(ctx, &transformlogclient.StreamOptions{Assignment: assign}, handlerService)
+	if err != nil {
+		return nil, err
+	}
+	hc.transformStreams[key] = stream
+	return stream, nil
 }
 
 type handlerCreateFunc func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error)
@@ -371,6 +402,14 @@ func (hc *handlerClientImpl) waitForNextBackoff(ctx context.Context, pchannel st
 func (hc *handlerClientImpl) Close() {
 	hc.lifetime.SetState(typeutil.LifetimeStateStopped)
 	hc.lifetime.Wait()
+
+	hc.transformStreamMu.Lock()
+	transformStreams := hc.transformStreams
+	hc.transformStreams = nil
+	hc.transformStreamMu.Unlock()
+	for _, stream := range transformStreams {
+		_ = stream.Close()
+	}
 
 	hc.watcher.Close()
 	hc.service.Close()

@@ -618,7 +618,8 @@ message TransformResponse {
         TransformMessageBatch message_batch = 2;
         TransformSubscriptionCaughtUp caught_up = 3;
         TransformSubscriptionError subscription_error = 4;
-        CloseTransformStreamResponse close_stream = 5;
+        CloseTransformSubscriptionResponse close_subscription = 5;
+        CloseTransformStreamResponse close_stream = 6;
     }
 }
 
@@ -631,6 +632,13 @@ message CreateTransformSubscriptionResponse {
 
     // Current SN TransformLog truncation cursor.
     uint64 truncate_time_tick = 4;
+}
+
+// CloseTransformSubscriptionResponse acknowledges closing one vchannel
+// subscription on a SubscribeTransform stream.
+message CloseTransformSubscriptionResponse {
+    int64 subscription_id = 1;
+    string vchannel = 2;
 }
 
 // TransformSubscriptionCaughtUp is a one-time barrier for a subscription's

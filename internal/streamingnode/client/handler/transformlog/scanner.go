@@ -14,97 +14,179 @@ import (
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
-	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 )
 
-type ScannerOptions struct {
-	Assignment *types.PChannelInfoAssigned
-	ReadOption transformlogapi.ReadOption
+type StreamKey struct {
+	PChannel string
+	Term     int64
+	ServerID int64
 }
 
-func CreateScanner(
+func NewStreamKey(assignment *types.PChannelInfoAssigned) StreamKey {
+	return StreamKey{
+		PChannel: assignment.Channel.Name,
+		Term:     assignment.Channel.Term,
+		ServerID: assignment.Node.ServerID,
+	}
+}
+
+type StreamOptions struct {
+	Assignment *types.PChannelInfoAssigned
+}
+
+func CreateStream(
 	ctx context.Context,
-	opts *ScannerOptions,
+	opts *StreamOptions,
 	handlerClient streamingpb.StreamingNodeHandlerServiceClient,
-) (transformlogapi.Scanner, error) {
-	ctx = contextutil.WithCreateTransformStream(ctx, &streamingpb.CreateTransformStreamRequest{
+) (*Stream, error) {
+	ctx = contextutil.WithCreateTransformStream(context.WithoutCancel(ctx), &streamingpb.CreateTransformStreamRequest{
 		Pchannel: types.NewProtoFromPChannelInfo(opts.Assignment.Channel),
 	})
 	streamClient, err := handlerClient.SubscribeTransform(ctx, grpc.MaxCallRecvMsgSize(math.MaxInt32))
 	if err != nil {
 		return nil, err
 	}
-	scanner := &remoteScanner{
-		name: opts.ReadOption.Name,
-		subscriptionID: 1,
-		vchannel: opts.ReadOption.VChannel,
-		stream: streamClient,
-		ch: make(chan transformlogapi.Event, 16),
-		finishErr: syncutil.NewFuture[error](),
-		closeOnce: sync.Once{},
+	stream := &Stream{
+		key:           NewStreamKey(opts.Assignment),
+		stream:        streamClient,
+		subscriptions: make(map[int64]*remoteSubscription),
+		done:          make(chan struct{}),
 	}
-	if err := streamClient.Send(&streamingpb.TransformRequest{
+	go stream.recvLoop()
+	return stream, nil
+}
+
+type Stream struct {
+	key    StreamKey
+	stream streamingpb.StreamingNodeHandlerService_SubscribeTransformClient
+
+	sendMu     sync.Mutex
+	mu         sync.Mutex
+	nextID     int64
+	err        error
+	done       chan struct{}
+	closeOnce  sync.Once
+	finishOnce sync.Once
+
+	subscriptions map[int64]*remoteSubscription
+}
+
+func (s *Stream) Key() StreamKey {
+	return s.key
+}
+
+func (s *Stream) Done() <-chan struct{} {
+	return s.done
+}
+
+func (s *Stream) Error() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
+
+func (s *Stream) Subscribe(ctx context.Context, opt transformlogapi.ReadOption) (transformlogapi.Scanner, error) {
+	sub := s.newSubscription(opt)
+	if sub == nil {
+		return nil, s.Error()
+	}
+	if err := s.send(&streamingpb.TransformRequest{
 		Request: &streamingpb.TransformRequest_Create{
 			Create: &streamingpb.CreateTransformSubscriptionRequest{
-				SubscriptionId: scanner.subscriptionID,
-				Vchannel: scanner.vchannel,
-				StartAfterTimeTick: opts.ReadOption.StartAfterTimeTick,
+				SubscriptionId:     sub.subscriptionID,
+				Vchannel:           opt.VChannel,
+				StartAfterTimeTick: opt.StartAfterTimeTick,
 			},
 		},
 	}); err != nil {
-		_ = streamClient.CloseSend()
+		s.removeSubscription(sub.subscriptionID)
+		sub.finish(err)
 		return nil, err
 	}
-	go scanner.recvLoop()
-	return scanner, nil
+	select {
+	case <-sub.created:
+		if err := sub.Error(); err != nil {
+			return nil, err
+		}
+		return sub, nil
+	case <-sub.Done():
+		return nil, sub.Error()
+	case <-ctx.Done():
+		s.removeSubscription(sub.subscriptionID)
+		sub.finish(ctx.Err())
+		_ = s.sendCloseSubscription(sub.subscriptionID)
+		return nil, ctx.Err()
+	}
 }
 
-type remoteScanner struct {
-	name string
-	subscriptionID int64
-	vchannel string
-	stream streamingpb.StreamingNodeHandlerService_SubscribeTransformClient
-	ch chan transformlogapi.Event
-	finishErr *syncutil.Future[error]
-	closeOnce sync.Once
-}
-
-func (s *remoteScanner) Name() string {
-	return s.name
-}
-
-func (s *remoteScanner) Chan() <-chan transformlogapi.Event {
-	return s.ch
-}
-
-func (s *remoteScanner) Error() error {
-	return s.finishErr.Get()
-}
-
-func (s *remoteScanner) Done() <-chan struct{} {
-	return s.finishErr.Done()
-}
-
-func (s *remoteScanner) Close() error {
+func (s *Stream) Close() error {
 	s.closeOnce.Do(func() {
-		_ = s.stream.Send(&streamingpb.TransformRequest{
-			Request: &streamingpb.TransformRequest_CloseSubscription{
-				CloseSubscription: &streamingpb.CloseTransformSubscriptionRequest{SubscriptionId: s.subscriptionID},
+		_ = s.send(&streamingpb.TransformRequest{
+			Request: &streamingpb.TransformRequest_CloseStream{
+				CloseStream: &streamingpb.CloseTransformStreamRequest{},
 			},
 		})
 		_ = s.stream.CloseSend()
 	})
-	return s.finishErr.Get()
+	<-s.done
+	return s.Error()
 }
 
-func (s *remoteScanner) recvLoop() {
+func (s *Stream) newSubscription(opt transformlogapi.ReadOption) *remoteSubscription {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	select {
+	case <-s.done:
+		return nil
+	default:
+	}
+	s.nextID++
+	sub := newRemoteSubscription(s, s.nextID, opt)
+	s.subscriptions[sub.subscriptionID] = sub
+	return sub
+}
+
+func (s *Stream) getSubscription(subscriptionID int64) *remoteSubscription {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.subscriptions[subscriptionID]
+}
+
+func (s *Stream) removeSubscription(subscriptionID int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.subscriptions, subscriptionID)
+}
+
+func (s *Stream) sendCloseSubscription(subscriptionID int64) error {
+	return s.send(&streamingpb.TransformRequest{
+		Request: &streamingpb.TransformRequest_CloseSubscription{
+			CloseSubscription: &streamingpb.CloseTransformSubscriptionRequest{SubscriptionId: subscriptionID},
+		},
+	})
+}
+
+func (s *Stream) send(req *streamingpb.TransformRequest) error {
+	select {
+	case <-s.done:
+		if err := s.Error(); err != nil {
+			return err
+		}
+		return io.EOF
+	default:
+	}
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
+	return s.stream.Send(req)
+}
+
+func (s *Stream) recvLoop() {
 	var err error
 	defer func() {
-		close(s.ch)
 		if errors.Is(err, io.EOF) {
 			err = nil
 		}
-		s.finishErr.Set(err)
+		s.finish(err)
 	}()
 	for {
 		resp, recvErr := s.stream.Recv()
@@ -114,31 +196,205 @@ func (s *remoteScanner) recvLoop() {
 		}
 		switch resp := resp.GetResponse().(type) {
 		case *streamingpb.TransformResponse_Create:
-			continue
+			s.handleCreate(resp.Create)
 		case *streamingpb.TransformResponse_MessageBatch:
-			if resp.MessageBatch.GetSubscriptionId() != s.subscriptionID {
-				continue
-			}
-			for _, entry := range resp.MessageBatch.GetEntries() {
-				s.ch <- transformlogapi.Event{Entry: entry}
-			}
+			s.handleMessageBatch(resp.MessageBatch)
 		case *streamingpb.TransformResponse_CaughtUp:
-			if resp.CaughtUp.GetSubscriptionId() != s.subscriptionID {
-				continue
-			}
-			s.ch <- transformlogapi.Event{
-				CaughtUp: &transformlogapi.CaughtUp{
-					StartAfterTimeTick: resp.CaughtUp.GetStartAfterTimeTick(),
-				},
-			}
+			s.handleCaughtUp(resp.CaughtUp)
 		case *streamingpb.TransformResponse_SubscriptionError:
-			if resp.SubscriptionError.GetSubscriptionId() == s.subscriptionID {
-				err = status.AsStreamingError((*status.StreamingError)(resp.SubscriptionError.GetError()))
-				return
-			}
+			s.handleSubscriptionError(resp.SubscriptionError)
+		case *streamingpb.TransformResponse_CloseSubscription:
+			s.handleCloseSubscription(resp.CloseSubscription)
 		case *streamingpb.TransformResponse_CloseStream:
 			err = nil
 			return
 		}
+	}
+}
+
+func (s *Stream) handleCreate(resp *streamingpb.CreateTransformSubscriptionResponse) {
+	if resp == nil {
+		return
+	}
+	if sub := s.getSubscription(resp.GetSubscriptionId()); sub != nil {
+		sub.markCreated(nil)
+	}
+}
+
+func (s *Stream) handleMessageBatch(resp *streamingpb.TransformMessageBatch) {
+	if resp == nil {
+		return
+	}
+	sub := s.getSubscription(resp.GetSubscriptionId())
+	if sub == nil {
+		return
+	}
+	for _, entry := range resp.GetEntries() {
+		sub.sendEvent(transformlogapi.Event{Entry: entry})
+	}
+}
+
+func (s *Stream) handleCaughtUp(resp *streamingpb.TransformSubscriptionCaughtUp) {
+	if resp == nil {
+		return
+	}
+	if sub := s.getSubscription(resp.GetSubscriptionId()); sub != nil {
+		sub.sendEvent(transformlogapi.Event{
+			CaughtUp: &transformlogapi.CaughtUp{StartAfterTimeTick: resp.GetStartAfterTimeTick()},
+		})
+	}
+}
+
+func (s *Stream) handleSubscriptionError(resp *streamingpb.TransformSubscriptionError) {
+	if resp == nil {
+		return
+	}
+	sub := s.getSubscription(resp.GetSubscriptionId())
+	if sub == nil {
+		return
+	}
+	err := status.NewUnknownError("transform subscription error")
+	if resp.GetError() != nil {
+		err = status.AsStreamingError((*status.StreamingError)(resp.GetError()))
+	}
+	s.removeSubscription(resp.GetSubscriptionId())
+	sub.finish(err)
+}
+
+func (s *Stream) handleCloseSubscription(resp *streamingpb.CloseTransformSubscriptionResponse) {
+	if resp == nil {
+		return
+	}
+	sub := s.getSubscription(resp.GetSubscriptionId())
+	if sub == nil {
+		return
+	}
+	s.removeSubscription(resp.GetSubscriptionId())
+	sub.markCloseAck(nil)
+	sub.finish(nil)
+}
+
+func (s *Stream) finish(err error) {
+	s.finishOnce.Do(func() {
+		s.mu.Lock()
+		s.err = err
+		subscriptions := s.subscriptions
+		s.subscriptions = make(map[int64]*remoteSubscription)
+		close(s.done)
+		s.mu.Unlock()
+		for _, sub := range subscriptions {
+			sub.finish(err)
+		}
+		_ = s.stream.CloseSend()
+	})
+}
+
+type remoteSubscription struct {
+	stream         *Stream
+	name           string
+	subscriptionID int64
+	vchannel       string
+	ch             chan transformlogapi.Event
+	done           chan struct{}
+	created        chan struct{}
+	closeAck       chan struct{}
+
+	errMu        sync.Mutex
+	err          error
+	createdOnce  sync.Once
+	closeAckOnce sync.Once
+	closeOnce    sync.Once
+	finishOnce   sync.Once
+}
+
+func newRemoteSubscription(stream *Stream, subscriptionID int64, opt transformlogapi.ReadOption) *remoteSubscription {
+	return &remoteSubscription{
+		stream:         stream,
+		name:           opt.Name,
+		subscriptionID: subscriptionID,
+		vchannel:       opt.VChannel,
+		ch:             make(chan transformlogapi.Event, 16),
+		done:           make(chan struct{}),
+		created:        make(chan struct{}),
+		closeAck:       make(chan struct{}),
+	}
+}
+
+func (s *remoteSubscription) Name() string {
+	return s.name
+}
+
+func (s *remoteSubscription) Chan() <-chan transformlogapi.Event {
+	return s.ch
+}
+
+func (s *remoteSubscription) Error() error {
+	s.errMu.Lock()
+	defer s.errMu.Unlock()
+	return s.err
+}
+
+func (s *remoteSubscription) Done() <-chan struct{} {
+	return s.done
+}
+
+func (s *remoteSubscription) Close() error {
+	s.closeOnce.Do(func() {
+		select {
+		case <-s.done:
+			return
+		default:
+		}
+		if err := s.stream.sendCloseSubscription(s.subscriptionID); err != nil {
+			s.stream.removeSubscription(s.subscriptionID)
+			s.finish(err)
+		}
+	})
+	<-s.done
+	return s.Error()
+}
+
+func (s *remoteSubscription) sendEvent(event transformlogapi.Event) {
+	select {
+	case s.ch <- event:
+	case <-s.done:
+	}
+}
+
+func (s *remoteSubscription) markCreated(err error) {
+	if err != nil {
+		s.setError(err)
+	}
+	s.createdOnce.Do(func() {
+		close(s.created)
+	})
+}
+
+func (s *remoteSubscription) markCloseAck(err error) {
+	if err != nil {
+		s.setError(err)
+	}
+	s.closeAckOnce.Do(func() {
+		close(s.closeAck)
+	})
+}
+
+func (s *remoteSubscription) finish(err error) {
+	s.finishOnce.Do(func() {
+		if err != nil {
+			s.setError(err)
+		}
+		s.markCreated(err)
+		s.markCloseAck(err)
+		close(s.done)
+		close(s.ch)
+	})
+}
+
+func (s *remoteSubscription) setError(err error) {
+	s.errMu.Lock()
+	defer s.errMu.Unlock()
+	if s.err == nil {
+		s.err = err
 	}
 }
