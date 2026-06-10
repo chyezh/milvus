@@ -74,9 +74,12 @@ type DataCoordCatalog interface {
 	AddSegment(ctx context.Context, segment *datapb.SegmentInfo) error
 	// TODO Remove this later, we should update flush segments info for each segment separately, so far we still need transaction
 	AlterSegments(ctx context.Context, newSegments []*datapb.SegmentInfo, binlogs ...BinlogsIncrement) error
-	AlterSegmentsAndSaveDataView(ctx context.Context, newSegments []*datapb.SegmentInfo, collectionID int64, view *viewpb.DataViewOfCollection, binlogs ...BinlogsIncrement) error
 	SaveDroppedSegmentsInBatch(ctx context.Context, segments []*datapb.SegmentInfo) error
 	DropSegment(ctx context.Context, segment *datapb.SegmentInfo) error
+	SaveDataView(ctx context.Context, dataView *viewpb.DataViewOfCollection) error
+	ListDataViews(ctx context.Context, collectionID int64) ([]*viewpb.DataViewOfCollection, error)
+	DropDataView(ctx context.Context, collectionID int64, dataVersion *viewpb.DataVersion) error
+	DropDataViews(ctx context.Context, collectionID int64) error
 
 	// TODO: From MarkChannelAdded to DropChannel, it's totally a redundant design by now, remove it in future.
 	MarkChannelAdded(ctx context.Context, channel string) error
@@ -157,10 +160,4 @@ type DataCoordCatalog interface {
 	SaveSnapshot(ctx context.Context, snapshot *datapb.SnapshotInfo) error
 	DropSnapshot(ctx context.Context, collectionID int64, snapshotID int64) error
 	ListSnapshots(ctx context.Context) ([]*datapb.SnapshotInfo, error)
-
-	// DataView
-	SaveDataView(ctx context.Context, collectionID int64, view *viewpb.DataViewOfCollection) error
-	ListDataViews(ctx context.Context) (map[int64][]*viewpb.DataViewOfCollection, error)
-	DropDataView(ctx context.Context, collectionID int64, version *viewpb.DataVersion) error
-	DropDataViewsByCollection(ctx context.Context, collectionID int64) error
 }
