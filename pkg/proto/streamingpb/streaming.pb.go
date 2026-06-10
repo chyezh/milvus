@@ -6007,7 +6007,6 @@ type VChannelMeta struct {
 	GrowingSegmentMode     GrowingSegmentMode        `protobuf:"varint,6,opt,name=growing_segment_mode,json=growingSegmentMode,proto3,enum=milvus.proto.streaming.GrowingSegmentMode" json:"growing_segment_mode,omitempty"` // runtime mode of growing segments under this vchannel.
 	DataCheckpointTimeTick uint64                    `protobuf:"varint,7,opt,name=data_checkpoint_time_tick,json=dataCheckpointTimeTick,proto3" json:"data_checkpoint_time_tick,omitempty"`                                  // The timetick of data checkpoint, the data already durable at this timetick.
 	TombstoneTimeTick      uint64                    `protobuf:"varint,8,opt,name=tombstone_time_tick,json=tombstoneTimeTick,proto3" json:"tombstone_time_tick,omitempty"`                                                   // The timetick this retained vchannel meta starts filtering replay.
-	TransformLogMeta       *VChannelTransformLogMeta `protobuf:"bytes,9,opt,name=transform_log_meta,json=transformLogMeta,proto3" json:"transform_log_meta,omitempty"`
 }
 
 func (x *VChannelMeta) Reset() {
@@ -6096,13 +6095,6 @@ func (x *VChannelMeta) GetTombstoneTimeTick() uint64 {
 		return x.TombstoneTimeTick
 	}
 	return 0
-}
-
-func (x *VChannelMeta) GetTransformLogMeta() *VChannelTransformLogMeta {
-	if x != nil {
-		return x.TransformLogMeta
-	}
-	return nil
 }
 
 // CollectionInfoOfVChannel is the collection info in vchannel.
@@ -7888,7 +7880,7 @@ var file_streaming_proto_rawDesc = []byte{
 	0x6d, 0x69, 0x6c, 0x76, 0x75, 0x73, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2e, 0x73, 0x74, 0x72,
 	0x65, 0x61, 0x6d, 0x69, 0x6e, 0x67, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x69, 0x6e, 0x67,
 	0x4e, 0x6f, 0x64, 0x65, 0x4d, 0x65, 0x74, 0x72, 0x69, 0x63, 0x73, 0x52, 0x07, 0x6d, 0x65, 0x74,
-	0x72, 0x69, 0x63, 0x73, 0x22, 0xed, 0x04, 0x0a, 0x0c, 0x56, 0x43, 0x68, 0x61, 0x6e, 0x6e, 0x65,
+	0x72, 0x69, 0x63, 0x73, 0x22, 0x8d, 0x04, 0x0a, 0x0c, 0x56, 0x43, 0x68, 0x61, 0x6e, 0x6e, 0x65,
 	0x6c, 0x4d, 0x65, 0x74, 0x61, 0x12, 0x1a, 0x0a, 0x08, 0x76, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65,
 	0x6c, 0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x08, 0x76, 0x63, 0x68, 0x61, 0x6e, 0x6e, 0x65,
 	0x6c, 0x12, 0x3b, 0x0a, 0x05, 0x73, 0x74, 0x61, 0x74, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0e,
@@ -7921,13 +7913,7 @@ var file_streaming_proto_rawDesc = []byte{
 	0x54, 0x69, 0x63, 0x6b, 0x12, 0x2e, 0x0a, 0x13, 0x74, 0x6f, 0x6d, 0x62, 0x73, 0x74, 0x6f, 0x6e,
 	0x65, 0x5f, 0x74, 0x69, 0x6d, 0x65, 0x5f, 0x74, 0x69, 0x63, 0x6b, 0x18, 0x08, 0x20, 0x01, 0x28,
 	0x04, 0x52, 0x11, 0x74, 0x6f, 0x6d, 0x62, 0x73, 0x74, 0x6f, 0x6e, 0x65, 0x54, 0x69, 0x6d, 0x65,
-	0x54, 0x69, 0x63, 0x6b, 0x12, 0x5e, 0x0a, 0x12, 0x74, 0x72, 0x61, 0x6e, 0x73, 0x66, 0x6f, 0x72,
-	0x6d, 0x5f, 0x6c, 0x6f, 0x67, 0x5f, 0x6d, 0x65, 0x74, 0x61, 0x18, 0x09, 0x20, 0x01, 0x28, 0x0b,
-	0x32, 0x30, 0x2e, 0x6d, 0x69, 0x6c, 0x76, 0x75, 0x73, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2e,
-	0x73, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x69, 0x6e, 0x67, 0x2e, 0x56, 0x43, 0x68, 0x61, 0x6e, 0x6e,
-	0x65, 0x6c, 0x54, 0x72, 0x61, 0x6e, 0x73, 0x66, 0x6f, 0x72, 0x6d, 0x4c, 0x6f, 0x67, 0x4d, 0x65,
-	0x74, 0x61, 0x52, 0x10, 0x74, 0x72, 0x61, 0x6e, 0x73, 0x66, 0x6f, 0x72, 0x6d, 0x4c, 0x6f, 0x67,
-	0x4d, 0x65, 0x74, 0x61, 0x22, 0xde, 0x01, 0x0a, 0x18, 0x43, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74,
+	0x54, 0x69, 0x63, 0x6b, 0x22, 0xde, 0x01, 0x0a, 0x18, 0x43, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74,
 	0x69, 0x6f, 0x6e, 0x49, 0x6e, 0x66, 0x6f, 0x4f, 0x66, 0x56, 0x43, 0x68, 0x61, 0x6e, 0x6e, 0x65,
 	0x6c, 0x12, 0x23, 0x0a, 0x0d, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x5f,
 	0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x03, 0x52, 0x0c, 0x63, 0x6f, 0x6c, 0x6c, 0x65, 0x63,
@@ -8678,69 +8664,68 @@ var file_streaming_proto_depIdxs = []int32{
 	100, // 105: milvus.proto.streaming.VChannelMeta.collection_info:type_name -> milvus.proto.streaming.CollectionInfoOfVChannel
 	125, // 106: milvus.proto.streaming.VChannelMeta.latest_data_version:type_name -> milvus.proto.view.DataVersion
 	5,   // 107: milvus.proto.streaming.VChannelMeta.growing_segment_mode:type_name -> milvus.proto.streaming.GrowingSegmentMode
-	88,  // 108: milvus.proto.streaming.VChannelMeta.transform_log_meta:type_name -> milvus.proto.streaming.VChannelTransformLogMeta
-	102, // 109: milvus.proto.streaming.CollectionInfoOfVChannel.partitions:type_name -> milvus.proto.streaming.PartitionInfoOfVChannel
-	101, // 110: milvus.proto.streaming.CollectionInfoOfVChannel.schemas:type_name -> milvus.proto.streaming.CollectionSchemaOfVChannel
-	126, // 111: milvus.proto.streaming.CollectionSchemaOfVChannel.schema:type_name -> milvus.proto.schema.CollectionSchema
-	8,   // 112: milvus.proto.streaming.CollectionSchemaOfVChannel.state:type_name -> milvus.proto.streaming.VChannelSchemaState
-	7,   // 113: milvus.proto.streaming.PartitionInfoOfVChannel.state:type_name -> milvus.proto.streaming.PartitionState
-	9,   // 114: milvus.proto.streaming.SegmentAssignmentMeta.state:type_name -> milvus.proto.streaming.SegmentAssignmentState
-	106, // 115: milvus.proto.streaming.SegmentAssignmentMeta.stat:type_name -> milvus.proto.streaming.SegmentAssignmentStat
-	104, // 116: milvus.proto.streaming.SegmentAssignmentMeta.persisted_storage:type_name -> milvus.proto.streaming.L1SegmentPersistedStorage
-	125, // 117: milvus.proto.streaming.SegmentAssignmentMeta.sealed_at_data_version:type_name -> milvus.proto.view.DataVersion
-	105, // 118: milvus.proto.streaming.L1SegmentPersistedStorage.binlogs:type_name -> milvus.proto.streaming.L1SegmentBinLogs
-	127, // 119: milvus.proto.streaming.L1SegmentPersistedStorage.merged_stats_binlog:type_name -> milvus.proto.data.FieldBinlog
-	127, // 120: milvus.proto.streaming.L1SegmentBinLogs.field_binlog:type_name -> milvus.proto.data.FieldBinlog
-	127, // 121: milvus.proto.streaming.L1SegmentBinLogs.stats_binlog:type_name -> milvus.proto.data.FieldBinlog
-	127, // 122: milvus.proto.streaming.L1SegmentBinLogs.bm25_binlog:type_name -> milvus.proto.data.FieldBinlog
-	128, // 123: milvus.proto.streaming.SegmentAssignmentStat.level:type_name -> milvus.proto.data.SegmentLevel
-	115, // 124: milvus.proto.streaming.WALCheckpoint.message_id:type_name -> milvus.proto.common.MessageID
-	117, // 125: milvus.proto.streaming.WALCheckpoint.replicate_config:type_name -> milvus.proto.common.ReplicateConfiguration
-	121, // 126: milvus.proto.streaming.WALCheckpoint.replicate_checkpoint:type_name -> milvus.proto.common.ReplicateCheckpoint
-	109, // 127: milvus.proto.streaming.WALCheckpoint.alter_wal_state:type_name -> milvus.proto.streaming.AlterWALState
-	108, // 128: milvus.proto.streaming.WALCheckpoint.data_checkpoint:type_name -> milvus.proto.streaming.WALConsumeCheckpoint
-	115, // 129: milvus.proto.streaming.WALConsumeCheckpoint.message_id:type_name -> milvus.proto.common.MessageID
-	129, // 130: milvus.proto.streaming.AlterWALState.target_wal_name:type_name -> milvus.proto.common.WALName
-	113, // 131: milvus.proto.streaming.AlterWALState.configs:type_name -> milvus.proto.streaming.AlterWALState.ConfigsEntry
-	10,  // 132: milvus.proto.streaming.AlterWALState.stage:type_name -> milvus.proto.streaming.AlterWALStage
-	117, // 133: milvus.proto.streaming.ReplicateConfigurationMeta.replicate_configuration:type_name -> milvus.proto.common.ReplicateConfiguration
-	18,  // 134: milvus.proto.streaming.ReplicateConfigurationMeta.acked_result:type_name -> milvus.proto.streaming.AckedResult
-	130, // 135: milvus.proto.streaming.ReplicatePChannelMeta.target_cluster:type_name -> milvus.proto.common.MilvusCluster
-	121, // 136: milvus.proto.streaming.ReplicatePChannelMeta.initialized_checkpoint:type_name -> milvus.proto.common.ReplicateCheckpoint
-	57,  // 137: milvus.proto.streaming.BroadcastResponse.ResultsEntry.value:type_name -> milvus.proto.streaming.ProduceMessageResponseResult
-	131, // 138: milvus.proto.streaming.StreamingNodeStateService.GetComponentStates:input_type -> milvus.proto.milvus.GetComponentStatesRequest
-	20,  // 139: milvus.proto.streaming.StreamingCoordBroadcastService.Broadcast:input_type -> milvus.proto.streaming.BroadcastRequest
-	22,  // 140: milvus.proto.streaming.StreamingCoordBroadcastService.Ack:input_type -> milvus.proto.streaming.BroadcastAckRequest
-	24,  // 141: milvus.proto.streaming.StreamingCoordAssignmentService.UpdateReplicateConfiguration:input_type -> milvus.proto.streaming.UpdateReplicateConfigurationRequest
-	26,  // 142: milvus.proto.streaming.StreamingCoordAssignmentService.UpdateWALBalancePolicy:input_type -> milvus.proto.streaming.UpdateWALBalancePolicyRequest
-	30,  // 143: milvus.proto.streaming.StreamingCoordAssignmentService.AssignmentDiscover:input_type -> milvus.proto.streaming.AssignmentDiscoverRequest
-	45,  // 144: milvus.proto.streaming.StreamingNodeHandlerService.GetReplicateCheckpoint:input_type -> milvus.proto.streaming.GetReplicateCheckpointRequest
-	47,  // 145: milvus.proto.streaming.StreamingNodeHandlerService.GetSalvageCheckpoint:input_type -> milvus.proto.streaming.GetSalvageCheckpointRequest
-	49,  // 146: milvus.proto.streaming.StreamingNodeHandlerService.Produce:input_type -> milvus.proto.streaming.ProduceRequest
-	59,  // 147: milvus.proto.streaming.StreamingNodeHandlerService.Consume:input_type -> milvus.proto.streaming.ConsumeRequest
-	73,  // 148: milvus.proto.streaming.StreamingNodeHandlerService.SubscribeTransform:input_type -> milvus.proto.streaming.TransformRequest
-	89,  // 149: milvus.proto.streaming.StreamingNodeManagerService.Assign:input_type -> milvus.proto.streaming.StreamingNodeManagerAssignRequest
-	91,  // 150: milvus.proto.streaming.StreamingNodeManagerService.Remove:input_type -> milvus.proto.streaming.StreamingNodeManagerRemoveRequest
-	93,  // 151: milvus.proto.streaming.StreamingNodeManagerService.CollectStatus:input_type -> milvus.proto.streaming.StreamingNodeManagerCollectStatusRequest
-	132, // 152: milvus.proto.streaming.StreamingNodeStateService.GetComponentStates:output_type -> milvus.proto.milvus.ComponentStates
-	21,  // 153: milvus.proto.streaming.StreamingCoordBroadcastService.Broadcast:output_type -> milvus.proto.streaming.BroadcastResponse
-	23,  // 154: milvus.proto.streaming.StreamingCoordBroadcastService.Ack:output_type -> milvus.proto.streaming.BroadcastAckResponse
-	25,  // 155: milvus.proto.streaming.StreamingCoordAssignmentService.UpdateReplicateConfiguration:output_type -> milvus.proto.streaming.UpdateReplicateConfigurationResponse
-	29,  // 156: milvus.proto.streaming.StreamingCoordAssignmentService.UpdateWALBalancePolicy:output_type -> milvus.proto.streaming.UpdateWALBalancePolicyResponse
-	33,  // 157: milvus.proto.streaming.StreamingCoordAssignmentService.AssignmentDiscover:output_type -> milvus.proto.streaming.AssignmentDiscoverResponse
-	46,  // 158: milvus.proto.streaming.StreamingNodeHandlerService.GetReplicateCheckpoint:output_type -> milvus.proto.streaming.GetReplicateCheckpointResponse
-	48,  // 159: milvus.proto.streaming.StreamingNodeHandlerService.GetSalvageCheckpoint:output_type -> milvus.proto.streaming.GetSalvageCheckpointResponse
-	53,  // 160: milvus.proto.streaming.StreamingNodeHandlerService.Produce:output_type -> milvus.proto.streaming.ProduceResponse
-	68,  // 161: milvus.proto.streaming.StreamingNodeHandlerService.Consume:output_type -> milvus.proto.streaming.ConsumeResponse
-	77,  // 162: milvus.proto.streaming.StreamingNodeHandlerService.SubscribeTransform:output_type -> milvus.proto.streaming.TransformResponse
-	90,  // 163: milvus.proto.streaming.StreamingNodeManagerService.Assign:output_type -> milvus.proto.streaming.StreamingNodeManagerAssignResponse
-	92,  // 164: milvus.proto.streaming.StreamingNodeManagerService.Remove:output_type -> milvus.proto.streaming.StreamingNodeManagerRemoveResponse
-	98,  // 165: milvus.proto.streaming.StreamingNodeManagerService.CollectStatus:output_type -> milvus.proto.streaming.StreamingNodeManagerCollectStatusResponse
-	152, // [152:166] is the sub-list for method output_type
-	138, // [138:152] is the sub-list for method input_type
-	138, // [138:138] is the sub-list for extension type_name
-	138, // [138:138] is the sub-list for extension extendee
-	0,   // [0:138] is the sub-list for field type_name
+	102, // 108: milvus.proto.streaming.CollectionInfoOfVChannel.partitions:type_name -> milvus.proto.streaming.PartitionInfoOfVChannel
+	101, // 109: milvus.proto.streaming.CollectionInfoOfVChannel.schemas:type_name -> milvus.proto.streaming.CollectionSchemaOfVChannel
+	126, // 110: milvus.proto.streaming.CollectionSchemaOfVChannel.schema:type_name -> milvus.proto.schema.CollectionSchema
+	8,   // 111: milvus.proto.streaming.CollectionSchemaOfVChannel.state:type_name -> milvus.proto.streaming.VChannelSchemaState
+	7,   // 112: milvus.proto.streaming.PartitionInfoOfVChannel.state:type_name -> milvus.proto.streaming.PartitionState
+	9,   // 113: milvus.proto.streaming.SegmentAssignmentMeta.state:type_name -> milvus.proto.streaming.SegmentAssignmentState
+	106, // 114: milvus.proto.streaming.SegmentAssignmentMeta.stat:type_name -> milvus.proto.streaming.SegmentAssignmentStat
+	104, // 115: milvus.proto.streaming.SegmentAssignmentMeta.persisted_storage:type_name -> milvus.proto.streaming.L1SegmentPersistedStorage
+	125, // 116: milvus.proto.streaming.SegmentAssignmentMeta.sealed_at_data_version:type_name -> milvus.proto.view.DataVersion
+	105, // 117: milvus.proto.streaming.L1SegmentPersistedStorage.binlogs:type_name -> milvus.proto.streaming.L1SegmentBinLogs
+	127, // 118: milvus.proto.streaming.L1SegmentPersistedStorage.merged_stats_binlog:type_name -> milvus.proto.data.FieldBinlog
+	127, // 119: milvus.proto.streaming.L1SegmentBinLogs.field_binlog:type_name -> milvus.proto.data.FieldBinlog
+	127, // 120: milvus.proto.streaming.L1SegmentBinLogs.stats_binlog:type_name -> milvus.proto.data.FieldBinlog
+	127, // 121: milvus.proto.streaming.L1SegmentBinLogs.bm25_binlog:type_name -> milvus.proto.data.FieldBinlog
+	128, // 122: milvus.proto.streaming.SegmentAssignmentStat.level:type_name -> milvus.proto.data.SegmentLevel
+	115, // 123: milvus.proto.streaming.WALCheckpoint.message_id:type_name -> milvus.proto.common.MessageID
+	117, // 124: milvus.proto.streaming.WALCheckpoint.replicate_config:type_name -> milvus.proto.common.ReplicateConfiguration
+	121, // 125: milvus.proto.streaming.WALCheckpoint.replicate_checkpoint:type_name -> milvus.proto.common.ReplicateCheckpoint
+	109, // 126: milvus.proto.streaming.WALCheckpoint.alter_wal_state:type_name -> milvus.proto.streaming.AlterWALState
+	108, // 127: milvus.proto.streaming.WALCheckpoint.data_checkpoint:type_name -> milvus.proto.streaming.WALConsumeCheckpoint
+	115, // 128: milvus.proto.streaming.WALConsumeCheckpoint.message_id:type_name -> milvus.proto.common.MessageID
+	129, // 129: milvus.proto.streaming.AlterWALState.target_wal_name:type_name -> milvus.proto.common.WALName
+	113, // 130: milvus.proto.streaming.AlterWALState.configs:type_name -> milvus.proto.streaming.AlterWALState.ConfigsEntry
+	10,  // 131: milvus.proto.streaming.AlterWALState.stage:type_name -> milvus.proto.streaming.AlterWALStage
+	117, // 132: milvus.proto.streaming.ReplicateConfigurationMeta.replicate_configuration:type_name -> milvus.proto.common.ReplicateConfiguration
+	18,  // 133: milvus.proto.streaming.ReplicateConfigurationMeta.acked_result:type_name -> milvus.proto.streaming.AckedResult
+	130, // 134: milvus.proto.streaming.ReplicatePChannelMeta.target_cluster:type_name -> milvus.proto.common.MilvusCluster
+	121, // 135: milvus.proto.streaming.ReplicatePChannelMeta.initialized_checkpoint:type_name -> milvus.proto.common.ReplicateCheckpoint
+	57,  // 136: milvus.proto.streaming.BroadcastResponse.ResultsEntry.value:type_name -> milvus.proto.streaming.ProduceMessageResponseResult
+	131, // 137: milvus.proto.streaming.StreamingNodeStateService.GetComponentStates:input_type -> milvus.proto.milvus.GetComponentStatesRequest
+	20,  // 138: milvus.proto.streaming.StreamingCoordBroadcastService.Broadcast:input_type -> milvus.proto.streaming.BroadcastRequest
+	22,  // 139: milvus.proto.streaming.StreamingCoordBroadcastService.Ack:input_type -> milvus.proto.streaming.BroadcastAckRequest
+	24,  // 140: milvus.proto.streaming.StreamingCoordAssignmentService.UpdateReplicateConfiguration:input_type -> milvus.proto.streaming.UpdateReplicateConfigurationRequest
+	26,  // 141: milvus.proto.streaming.StreamingCoordAssignmentService.UpdateWALBalancePolicy:input_type -> milvus.proto.streaming.UpdateWALBalancePolicyRequest
+	30,  // 142: milvus.proto.streaming.StreamingCoordAssignmentService.AssignmentDiscover:input_type -> milvus.proto.streaming.AssignmentDiscoverRequest
+	45,  // 143: milvus.proto.streaming.StreamingNodeHandlerService.GetReplicateCheckpoint:input_type -> milvus.proto.streaming.GetReplicateCheckpointRequest
+	47,  // 144: milvus.proto.streaming.StreamingNodeHandlerService.GetSalvageCheckpoint:input_type -> milvus.proto.streaming.GetSalvageCheckpointRequest
+	49,  // 145: milvus.proto.streaming.StreamingNodeHandlerService.Produce:input_type -> milvus.proto.streaming.ProduceRequest
+	59,  // 146: milvus.proto.streaming.StreamingNodeHandlerService.Consume:input_type -> milvus.proto.streaming.ConsumeRequest
+	73,  // 147: milvus.proto.streaming.StreamingNodeHandlerService.SubscribeTransform:input_type -> milvus.proto.streaming.TransformRequest
+	89,  // 148: milvus.proto.streaming.StreamingNodeManagerService.Assign:input_type -> milvus.proto.streaming.StreamingNodeManagerAssignRequest
+	91,  // 149: milvus.proto.streaming.StreamingNodeManagerService.Remove:input_type -> milvus.proto.streaming.StreamingNodeManagerRemoveRequest
+	93,  // 150: milvus.proto.streaming.StreamingNodeManagerService.CollectStatus:input_type -> milvus.proto.streaming.StreamingNodeManagerCollectStatusRequest
+	132, // 151: milvus.proto.streaming.StreamingNodeStateService.GetComponentStates:output_type -> milvus.proto.milvus.ComponentStates
+	21,  // 152: milvus.proto.streaming.StreamingCoordBroadcastService.Broadcast:output_type -> milvus.proto.streaming.BroadcastResponse
+	23,  // 153: milvus.proto.streaming.StreamingCoordBroadcastService.Ack:output_type -> milvus.proto.streaming.BroadcastAckResponse
+	25,  // 154: milvus.proto.streaming.StreamingCoordAssignmentService.UpdateReplicateConfiguration:output_type -> milvus.proto.streaming.UpdateReplicateConfigurationResponse
+	29,  // 155: milvus.proto.streaming.StreamingCoordAssignmentService.UpdateWALBalancePolicy:output_type -> milvus.proto.streaming.UpdateWALBalancePolicyResponse
+	33,  // 156: milvus.proto.streaming.StreamingCoordAssignmentService.AssignmentDiscover:output_type -> milvus.proto.streaming.AssignmentDiscoverResponse
+	46,  // 157: milvus.proto.streaming.StreamingNodeHandlerService.GetReplicateCheckpoint:output_type -> milvus.proto.streaming.GetReplicateCheckpointResponse
+	48,  // 158: milvus.proto.streaming.StreamingNodeHandlerService.GetSalvageCheckpoint:output_type -> milvus.proto.streaming.GetSalvageCheckpointResponse
+	53,  // 159: milvus.proto.streaming.StreamingNodeHandlerService.Produce:output_type -> milvus.proto.streaming.ProduceResponse
+	68,  // 160: milvus.proto.streaming.StreamingNodeHandlerService.Consume:output_type -> milvus.proto.streaming.ConsumeResponse
+	77,  // 161: milvus.proto.streaming.StreamingNodeHandlerService.SubscribeTransform:output_type -> milvus.proto.streaming.TransformResponse
+	90,  // 162: milvus.proto.streaming.StreamingNodeManagerService.Assign:output_type -> milvus.proto.streaming.StreamingNodeManagerAssignResponse
+	92,  // 163: milvus.proto.streaming.StreamingNodeManagerService.Remove:output_type -> milvus.proto.streaming.StreamingNodeManagerRemoveResponse
+	98,  // 164: milvus.proto.streaming.StreamingNodeManagerService.CollectStatus:output_type -> milvus.proto.streaming.StreamingNodeManagerCollectStatusResponse
+	151, // [151:165] is the sub-list for method output_type
+	137, // [137:151] is the sub-list for method input_type
+	137, // [137:137] is the sub-list for extension type_name
+	137, // [137:137] is the sub-list for extension extendee
+	0,   // [0:137] is the sub-list for field type_name
 }
 
 func init() { file_streaming_proto_init() }

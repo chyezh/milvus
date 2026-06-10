@@ -201,10 +201,10 @@ are derived from `entries[0].time_tick` and
 
 ### 5.5 Transform Log Meta
 
-`VChannelTransformLogMeta` is stored under `VChannelMeta.TransformLogMeta` and
-is persisted through the RecoveryStorage recovery catalog path. It stores one
-small durable entry point for the vchannel TransformLog; it does not store
-per-chunk paths or per-chunk time ranges.
+`VChannelTransformLogMeta` is stored as an independent RecoveryStorage catalog
+record under the pchannel transform-log namespace. It stores one small durable
+entry point for the vchannel TransformLog; it does not store per-chunk paths or
+per-chunk time ranges and is not embedded in `VChannelMeta`.
 
 ```proto
 message VChannelTransformLogMeta {
@@ -253,25 +253,19 @@ advances only after the corresponding recovery catalog meta has been persisted.
 
 ### 6.1 Ownership
 
-Each vchannel has one TransformLog state object owned by `VChannelView` inside
-the growing module. This object is part of the vchannel recovery state: it is
-created from `VChannelMeta.TransformLogMeta`, recovered together with the
-vchannel view, and published through the same RecoveryStorage catalog
-persistence path.
+The growing module owns three independent runtime views and coordinates them:
 
-`VChannelView` is responsible for the RecoveryStorage-facing lifecycle only:
+- `VChannelView` owns vchannel metadata only: collection, partition, schema,
+  lifecycle state, meta checkpoint, and data checkpoint.
+- `SegmentView` owns Insert persistence state.
+- `TransformLog` owns Delete persistence state, transform-log chunks, retained
+  chunk replay, scanner fanout, and transform-log meta.
 
-- observing WAL Delete messages and appending TransformLog entries;
-- buffering and flushing TransformLog chunks;
-- updating `VChannelMeta.TransformLogMeta`;
-- participating in `SwitchIntoMetaAndData` and `MarkSnapshotPersisted`;
-- exposing the TransformLog DataBarrier used by RecoveryStorage checkpoint
-  advancement;
-- reconstructing TransformLog state during recovery.
-
-`VChannelView` is not the subscription service and is not the public truncation
-API. Subscription and truncation logic access the state through independent
-interfaces exposed by the growing module.
+`VChannelView` is not the Delete buffer owner, subscription service, or public
+truncation API. The growing module validates vchannel replay semantics with
+`VChannelView`, appends valid Delete messages to `TransformLog`, and advances
+the vchannel data checkpoint only after `TransformLog.Flush` publishes durable
+Delete progress.
 
 ### 6.2 Runtime State
 
@@ -324,9 +318,10 @@ The publication order is a hard invariant:
 1. pending entries become a TransformLogChunk object.
 2. chunk object write succeeds.
 3. in-memory TransformLogMeta publishes next_chunk_id and checkpoint_time_tick.
-4. RecoveryStorage persists VChannelMeta.TransformLogMeta.
-5. MarkSnapshotPersisted advances persistedCheckpointTimeTick.
-6. TransformLog DataBarrier advances.
+4. RecoveryStorage persists TransformLogMeta under the independent transform-log key.
+5. RecoveryStorage persists the VChannelMeta data checkpoint.
+6. MarkSnapshotPersisted advances persisted checkpoints.
+7. TransformLog/VChannel DataBarrier advances.
 ```
 
 Therefore:
@@ -357,20 +352,23 @@ different Delete content, it is a recovery consistency error.
 
 On StreamingNode recovery:
 
-1. RecoveryStorage loads `VChannelMeta`, including `TransformLogMeta`.
-2. TransformLog reads all deterministic chunk files in
+1. RecoveryStorage loads `VChannelMeta`, `SegmentAssignmentMeta`, and
+   independent `VChannelTransformLogMeta` records.
+2. The growing module creates one TransformLog per recovered vchannel and
+   injects the matching transform-log meta by vchannel key.
+3. TransformLog reads all deterministic chunk files in
    `[first_chunk_id, next_chunk_id)`.
-3. TransformLog validates each chunk:
+4. TransformLog validates each chunk:
    - `chunk.chunk_id` matches the expected id;
    - chunk is non-empty;
    - entries are ordered by `time_tick`;
    - concatenated chunks are ordered by `time_tick`.
-4. TransformLog reconstructs its in-memory retained entries and local chunk
+5. TransformLog reconstructs its in-memory retained entries and local chunk
    state.
-5. `persistedCheckpointTimeTick` is initialized from
+6. `persistedCheckpointTimeTick` is initialized from
    `meta.checkpoint_time_tick`.
-6. RecoveryStorage resumes WAL consumption after its recovered checkpoint.
-7. Replayed Delete messages are appended idempotently.
+7. RecoveryStorage resumes WAL consumption after its recovered checkpoint.
+8. Replayed Delete messages are appended idempotently.
 
 If a chunk inside `[first_chunk_id, next_chunk_id)` is missing or corrupt, the
 retained TransformLog is incomplete and the vchannel cannot serve safely. Chunks
@@ -406,7 +404,7 @@ Truncation publish order:
 
 ```text
 1. Advance in-memory truncate_time_tick and first_chunk_id.
-2. Persist VChannelMeta.TransformLogMeta.
+2. Persist independent TransformLogMeta.
 3. After meta publish succeeds, asynchronously delete old chunk objects.
 ```
 
@@ -585,8 +583,9 @@ WAL Delete@T
   -> TransformLog appends entry@T to pending buffer
   -> pending entries are flushed as dense chunk files
   -> TransformLogMeta publishes checkpoint_time_tick
-  -> recovery catalog persists VChannelMeta.TransformLogMeta
-  -> TransformLog DataBarrier advances to persisted checkpoint
+  -> recovery catalog persists independent TransformLogMeta
+  -> recovery catalog persists VChannelMeta data checkpoint
+  -> TransformLog/VChannel DataBarrier advances to persisted checkpoint
   -> RecoveryStorage data checkpoint may pass T
 ```
 
@@ -697,7 +696,7 @@ progress.
 3. Write the L0 deltalog object.
 4. Commit the L0 segment to DataCoord.
 5. Advance `TransformLogMeta.materialized_time_tick`.
-6. Persist `VChannelMeta.TransformLogMeta`.
+6. Persist independent TransformLogMeta.
 
 `materialized_time_tick` is on the same TransformLog timeline as
 `entry.time_tick`. No separate materialized data/effect cursor exists.
@@ -839,9 +838,10 @@ It does not expose a latest TimeTick. It is not an idle progress message.
 
 ### Stage 1: TransformLog Storage
 
-- Add `VChannelMeta.TransformLogMeta` with checkpoint, truncate, dense chunk
-  id range, and materialized cursor.
-- Store TransformLog state under `VChannelView` in the growing module.
+- Add independent TransformLogMeta catalog records with checkpoint, truncate,
+  dense chunk id range, and materialized cursor.
+- Store TransformLog state as a growing-module peer of `VChannelView` and
+  `SegmentView`.
 - Add object-storage chunk files with deterministic dense chunk paths.
 - Implement pending buffer, pending flush chunks, and chunk flush tasks.
 - Wire TransformLog DataBarrier through catalog-persisted

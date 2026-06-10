@@ -120,6 +120,11 @@ func (t *cleanupTask) Run(ctx context.Context) error {
 		}
 	}
 	if len(vchannelsToDrop) > 0 {
+		if err := retryOperationWithBackoff(ctx, logger.With(zap.String("op", "dropTransformLogs")), func(ctx context.Context) error {
+			return t.catalog.DropTransformLogMeta(ctx, t.channelName, lo.Keys(vchannelsToDrop))
+		}); err != nil {
+			return err
+		}
 		if err := retryOperationWithBackoff(ctx, logger.With(zap.String("op", "dropVChannels")), func(ctx context.Context) error {
 			return t.catalog.DropVChannels(ctx, t.channelName, vchannelsToDrop)
 		}); err != nil {
@@ -181,6 +186,7 @@ func (t *cleanupTask) apply() bool {
 	}
 	for vchannel := range t.snapshot.vchannelsToDrop {
 		delete(t.manager.vchannelViews, vchannel)
+		delete(t.manager.transformLogs, vchannel)
 	}
 	return partitionMetaChanged
 }

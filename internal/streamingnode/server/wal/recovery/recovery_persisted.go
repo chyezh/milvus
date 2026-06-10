@@ -65,7 +65,18 @@ func (r *recoveryStorageImpl) recoverRecoveryInfoFromMeta(ctx context.Context, c
 		return struct{}{}, nil
 	})
 
-	if err := conc.BlockOnAll(fVChannel, fSegment); err != nil {
+	var transformLogMetas map[string]*streamingpb.VChannelTransformLogMeta
+	fTransformLog := conc.Go(func() (struct{}, error) {
+		metas, err := catalog.ListTransformLogMeta(ctx, channelInfo.Name)
+		if err != nil {
+			return struct{}{}, errors.Wrap(err, "failed to get transform log meta from catalog")
+		}
+		transformLogMetas = metas
+		r.Logger().Info("recover transform log meta done", zap.Int("transformLogs", len(transformLogMetas)))
+		return struct{}{}, nil
+	})
+
+	if err := conc.BlockOnAll(fVChannel, fSegment, fTransformLog); err != nil {
 		return err
 	}
 	if err := r.ensureDataCheckpoint(); err != nil {
@@ -75,7 +86,7 @@ func (r *recoveryStorageImpl) recoverRecoveryInfoFromMeta(ctx context.Context, c
 		return err
 	}
 	r.Logger().Info("recover segment info done", zap.Int("segments", len(segmentMetas)))
-	return r.initGrowingManager(ctx, vchannelMetas, segmentMetas)
+	return r.initGrowingManager(ctx, vchannelMetas, segmentMetas, transformLogMetas)
 }
 
 func vchannelMetaMap(vchannels []*streamingpb.VChannelMeta) (map[string]*streamingpb.VChannelMeta, error) {

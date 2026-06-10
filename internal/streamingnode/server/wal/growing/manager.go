@@ -3,25 +3,27 @@ package growing
 import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	waltransformlog "github.com/milvus-io/milvus/internal/streamingnode/server/wal/transformlog"
 	"github.com/milvus-io/milvus/pkg/v3/log"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	scheduler "github.com/milvus-io/milvus/pkg/v3/syncutil/preconditioned"
 )
 
 type Manager struct {
-	vchannelViews           map[string]*vChannelView
-	segmentViews            map[int64]*segmentView
-	lifecycle               segmentLifecycle
-	packWriter              packWriter
-	onDataUpdated           func()
-	channelName             string
-	catalog                 recoveryCatalog
-	logger                  *log.MLogger
-	runtime                 moduleapi.Runtime
-	metaAndData             bool
-	transformRows           uint64
-	transformLogChunkWriter transformLogChunkWriter
-	transformLogChunkStore  transformLogChunkStore
+	vchannelViews     map[string]*vChannelView
+	segmentViews      map[int64]*segmentView
+	transformLogs     map[string]*transformLogView
+	lifecycle         segmentLifecycle
+	packWriter        packWriter
+	onDataUpdated     func()
+	channelName       string
+	catalog           recoveryCatalog
+	logger            *log.MLogger
+	runtime           moduleapi.Runtime
+	metaAndData       bool
+	transformRows     uint64
+	transformLogStore waltransformlog.Store
+	transformLogMetas map[string]*streamingpb.VChannelTransformLogMeta
 
 	lastPersistTask scheduler.TaskHandle
 	lastCleanupTask scheduler.TaskHandle
@@ -30,15 +32,15 @@ type Manager struct {
 type managerOption func(*Manager)
 
 type runtimeConfig struct {
-	lifecycle               segmentLifecycle
-	packWriter              packWriter
-	runtime                 moduleapi.Runtime
-	onDataUpdated           func()
-	flushPolicy             flushPolicy
-	metaAndData             bool
-	transformRows           uint64
-	transformLogChunkWriter transformLogChunkWriter
-	transformLogChunkStore  transformLogChunkStore
+	lifecycle         segmentLifecycle
+	packWriter        packWriter
+	runtime           moduleapi.Runtime
+	onDataUpdated     func()
+	flushPolicy       flushPolicy
+	metaAndData       bool
+	transformRows     uint64
+	transformLogStore waltransformlog.Store
+	transformLogMetas map[string]*streamingpb.VChannelTransformLogMeta
 }
 
 func firstRuntimeConfig(configs []runtimeConfig) runtimeConfig {
@@ -80,16 +82,15 @@ func WithTransformLogBufferMaxRows(maxRows uint64) managerOption {
 	}
 }
 
-func WithTransformLogChunkWriter(writer transformLogChunkWriter) managerOption {
+func WithTransformLogStore(store waltransformlog.Store) managerOption {
 	return func(manager *Manager) {
-		manager.transformLogChunkWriter = writer
+		manager.transformLogStore = store
 	}
 }
 
-func WithTransformLogChunkStore(store transformLogChunkStore) managerOption {
+func WithTransformLogMetas(metas map[string]*streamingpb.VChannelTransformLogMeta) managerOption {
 	return func(manager *Manager) {
-		manager.transformLogChunkStore = store
-		manager.transformLogChunkWriter = store
+		manager.transformLogMetas = metas
 	}
 }
 
@@ -108,6 +109,7 @@ func NewManager(
 	manager := &Manager{
 		vchannelViews: make(map[string]*vChannelView, len(vchannels)),
 		segmentViews:  make(map[int64]*segmentView, len(segments)),
+		transformLogs: make(map[string]*transformLogView, len(vchannels)),
 		lifecycle:     lifecycle,
 	}
 	for _, opt := range opts {
@@ -119,14 +121,14 @@ func NewManager(
 
 func (m *Manager) runtimeConfig() runtimeConfig {
 	return runtimeConfig{
-		lifecycle:               m.lifecycle,
-		packWriter:              m.packWriter,
-		runtime:                 m.runtime,
-		onDataUpdated:           m.onDataUpdated,
-		metaAndData:             m.metaAndData,
-		transformRows:           m.transformRows,
-		transformLogChunkWriter: m.transformLogChunkWriter,
-		transformLogChunkStore:  m.transformLogChunkStore,
+		lifecycle:         m.lifecycle,
+		packWriter:        m.packWriter,
+		runtime:           m.runtime,
+		onDataUpdated:     m.onDataUpdated,
+		metaAndData:       m.metaAndData,
+		transformRows:     m.transformRows,
+		transformLogStore: m.transformLogStore,
+		transformLogMetas: m.transformLogMetas,
 	}
 }
 
@@ -136,6 +138,7 @@ func (m *Manager) initializeRuntimeInfos(
 ) {
 	for vchannel, meta := range vchannels {
 		m.vchannelViews[vchannel] = newVChannelViewFromMeta(meta, m.runtimeConfig())
+		m.addTransformLog(vchannel, m.transformLogMetas[vchannel])
 	}
 	for _, meta := range segments {
 		vchannelManager := m.vchannelViews[meta.GetVchannel()]
@@ -175,8 +178,27 @@ func (m *Manager) vChannels() map[string]*vChannelView {
 func (m *Manager) addVChannel(meta *streamingpb.VChannelMeta) *vChannelView {
 	info := newVChannelView(meta, 0, 0, true, m.runtimeConfig())
 	m.vchannelViews[info.AssignmentMeta().GetVchannel()] = info
+	m.addTransformLog(info.Name(), nil)
 	m.attachRetainedSegments(info)
 	return info
+}
+
+func (m *Manager) transformLog(vchannel string) *transformLogView {
+	return m.transformLogs[vchannel]
+}
+
+func (m *Manager) addTransformLog(vchannel string, meta *streamingpb.VChannelTransformLogMeta) *transformLogView {
+	if existing := m.transformLogs[vchannel]; existing != nil {
+		return existing
+	}
+	transformLog := newTransformLogView(waltransformlog.New(waltransformlog.Config{
+		VChannel: vchannel,
+		MaxRows:  m.transformRows,
+		Meta:     meta,
+		Store:    m.transformLogStore,
+	}))
+	m.transformLogs[vchannel] = transformLog
+	return transformLog
 }
 
 func (m *Manager) addSegmentView(segment *segmentView) *segmentView {

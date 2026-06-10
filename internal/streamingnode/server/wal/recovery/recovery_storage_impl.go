@@ -10,6 +10,7 @@ import (
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/growing"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	waltransformlog "github.com/milvus-io/milvus/internal/streamingnode/server/wal/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 	"github.com/milvus-io/milvus/internal/util/idalloc"
@@ -140,6 +141,7 @@ func (r *recoveryStorageImpl) initGrowingManager(
 	ctx context.Context,
 	vchannels map[string]*streamingpb.VChannelMeta,
 	segments map[int64]*streamingpb.SegmentAssignmentMeta,
+	transformLogMetas map[string]*streamingpb.VChannelTransformLogMeta,
 ) error {
 	coord, err := resource.Resource().MixCoordClient().GetWithContext(ctx)
 	if err != nil {
@@ -159,10 +161,11 @@ func (r *recoveryStorageImpl) initGrowingManager(
 			idalloc.NewMAllocator(resource.Resource().IDAllocator()),
 			nil,
 		)),
-		growing.WithTransformLogChunkStore(growing.NewObjectTransformLogChunkStore(
+		growing.WithTransformLogStore(waltransformlog.NewObjectChunkStore(
 			resource.Resource().ChunkManager(),
 			r.channel.Name,
 		)),
+		growing.WithTransformLogMetas(transformLogMetas),
 		growing.WithRecoveryCatalog(r.channel.Name, catalog),
 		growing.WithDataBarrierUpdatedCallback(r.NotifyBarrierUpdated),
 		growing.WithModuleRuntime(r.Logger(), moduleRuntime),

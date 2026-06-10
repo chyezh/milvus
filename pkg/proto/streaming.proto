@@ -799,7 +799,6 @@ message VChannelMeta {
     GrowingSegmentMode growing_segment_mode = 6; // runtime mode of growing segments under this vchannel.
     uint64 data_checkpoint_time_tick = 7; // The timetick of data checkpoint, the data already durable at this timetick.
     uint64 tombstone_time_tick = 8; // The timetick this retained vchannel meta starts filtering replay.
-    VChannelTransformLogMeta transform_log_meta = 9;
 }
 
 enum GrowingSegmentMode {

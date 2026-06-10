@@ -84,6 +84,40 @@ func TestCatalogSegmentAssignments(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestCatalogTransformLogMeta(t *testing.T) {
+	kv := mocks.NewMetaKv(t)
+	meta := &streamingpb.VChannelTransformLogMeta{
+		CheckpointTimeTick: 50,
+		FirstChunkId:       3,
+		NextChunkId:        4,
+	}
+	value, err := proto.Marshal(meta)
+	require.NoError(t, err)
+
+	kv.EXPECT().LoadWithPrefix(mock.Anything, buildTransformLogPrefix("p1")).
+		Return([]string{buildTransformLogKey("p1", "v1")}, []string{string(value)}, nil)
+	catalog := NewCataLog(kv)
+	ctx := context.Background()
+	metas, err := catalog.ListTransformLogMeta(ctx, "p1")
+	require.NoError(t, err)
+	require.Len(t, metas, 1)
+	assert.True(t, proto.Equal(meta, metas["v1"]))
+
+	kv.EXPECT().MultiSave(mock.Anything, mock.MatchedBy(func(kvs map[string]string) bool {
+		saved, ok := kvs[buildTransformLogKey("p1", "v1")]
+		if !ok {
+			return false
+		}
+		loaded := &streamingpb.VChannelTransformLogMeta{}
+		return proto.Unmarshal([]byte(saved), loaded) == nil && proto.Equal(meta, loaded)
+	})).Return(nil)
+	require.NoError(t, catalog.SaveTransformLogMeta(ctx, "p1", map[string]*streamingpb.VChannelTransformLogMeta{"v1": meta}))
+
+	kv.EXPECT().MultiRemove(mock.Anything, []string{buildTransformLogKey("p1", "v1")}).
+		Return(nil)
+	require.NoError(t, catalog.DropTransformLogMeta(ctx, "p1", []string{"v1"}))
+}
+
 func TestCatalogListSegmentAssignmentRejectsMismatchedOwner(t *testing.T) {
 	kv := mocks.NewMetaKv(t)
 	segment := &streamingpb.SegmentAssignmentMeta{

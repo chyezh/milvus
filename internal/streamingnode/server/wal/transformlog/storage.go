@@ -1,4 +1,4 @@
-package growing
+package transformlog
 
 import (
 	"context"
@@ -11,24 +11,24 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 )
 
-type transformLogChunkStore interface {
-	transformLogChunkWriter
+type Store interface {
+	WriteTransformLogChunk(ctx context.Context, vchannel string, chunk *streamingpb.TransformLogChunk) error
 	ReadTransformLogChunk(ctx context.Context, vchannel string, chunkID uint64) (*streamingpb.TransformLogChunk, error)
 }
 
-type objectTransformLogChunkStore struct {
+type objectChunkStore struct {
 	chunkManager storage.ChunkManager
 	pchannel     string
 }
 
-func NewObjectTransformLogChunkStore(chunkManager storage.ChunkManager, pchannel string) transformLogChunkStore {
-	return &objectTransformLogChunkStore{
+func NewObjectChunkStore(chunkManager storage.ChunkManager, pchannel string) Store {
+	return &objectChunkStore{
 		chunkManager: chunkManager,
 		pchannel:     pchannel,
 	}
 }
 
-func (s *objectTransformLogChunkStore) WriteTransformLogChunk(ctx context.Context, vchannel string, chunk *streamingpb.TransformLogChunk) error {
+func (s *objectChunkStore) WriteTransformLogChunk(ctx context.Context, vchannel string, chunk *streamingpb.TransformLogChunk) error {
 	bytes, err := proto.Marshal(chunk)
 	if err != nil {
 		return err
@@ -36,7 +36,7 @@ func (s *objectTransformLogChunkStore) WriteTransformLogChunk(ctx context.Contex
 	return s.chunkManager.Write(ctx, s.chunkPath(vchannel, chunk.GetChunkId()), bytes)
 }
 
-func (s *objectTransformLogChunkStore) ReadTransformLogChunk(ctx context.Context, vchannel string, chunkID uint64) (*streamingpb.TransformLogChunk, error) {
+func (s *objectChunkStore) ReadTransformLogChunk(ctx context.Context, vchannel string, chunkID uint64) (*streamingpb.TransformLogChunk, error) {
 	bytes, err := s.chunkManager.Read(ctx, s.chunkPath(vchannel, chunkID))
 	if err != nil {
 		return nil, err
@@ -48,7 +48,7 @@ func (s *objectTransformLogChunkStore) ReadTransformLogChunk(ctx context.Context
 	return chunk, nil
 }
 
-func (s *objectTransformLogChunkStore) chunkPath(vchannel string, chunkID uint64) string {
+func (s *objectChunkStore) chunkPath(vchannel string, chunkID uint64) string {
 	return path.Join(
 		s.chunkManager.RootPath(),
 		"transform-log",

@@ -1,7 +1,6 @@
 package growing
 
 import (
-	"context"
 	"math"
 	"sync"
 
@@ -15,7 +14,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
-	scheduler "github.com/milvus-io/milvus/pkg/v3/syncutil/preconditioned"
 )
 
 // newVChannelViewFromMeta creates a vChannelView from persisted vchannel meta.
@@ -36,21 +34,18 @@ func newVChannelView(
 	dirty bool,
 	config runtimeConfig,
 ) *vChannelView {
+	meta = proto.Clone(meta).(*streamingpb.VChannelMeta)
 	return &vChannelView{
-		meta:                    meta,
-		persistedMetaTimeTick:   persistedMetaTimeTick,
-		persistedDataTimeTick:   persistedDataTimeTick,
-		dirty:                   dirty,
-		segments:                make(map[int64]*segmentView),
-		lifecycle:               config.lifecycle,
-		packWriter:              config.packWriter,
-		transformLogChunkWriter: config.transformLogChunkWriter,
-		transformLogChunkStore:  config.transformLogChunkStore,
-		runtime:                 config.runtime,
-		onDataUpdated:           config.onDataUpdated,
-		metaAndData:             config.metaAndData,
-		transformLogBuffer:      newTransformLogBuffer(config.transformRows),
-		transformLogSubscribers: make(map[*transformLogScanner]struct{}),
+		meta:                  meta,
+		persistedMetaTimeTick: persistedMetaTimeTick,
+		persistedDataTimeTick: persistedDataTimeTick,
+		dirty:                 dirty,
+		segments:              make(map[int64]*segmentView),
+		lifecycle:             config.lifecycle,
+		packWriter:            config.packWriter,
+		runtime:               config.runtime,
+		onDataUpdated:         config.onDataUpdated,
+		metaAndData:           config.metaAndData,
 	}
 }
 
@@ -95,19 +90,12 @@ type vChannelView struct {
 	persistedDataTimeTick uint64
 	dirty                 bool // whether the vchannel recovery info is dirty.
 
-	segments                map[int64]*segmentView
-	lifecycle               segmentLifecycle
-	packWriter              packWriter
-	transformLogChunkWriter transformLogChunkWriter
-	transformLogChunkStore  transformLogChunkStore
-	runtime                 moduleapi.Runtime
-	onDataUpdated           func()
-	metaAndData             bool
-
-	transformLogBuffer         transformLogBuffer
-	retainedTransformLogChunks []*streamingpb.TransformLogChunk
-	transformLogSubscribers    map[*transformLogScanner]struct{}
-	transformLogTasks          []scheduler.TaskHandle
+	segments      map[int64]*segmentView
+	lifecycle     segmentLifecycle
+	packWriter    packWriter
+	runtime       moduleapi.Runtime
+	onDataUpdated func()
+	metaAndData   bool
 }
 
 func (info *vChannelView) AssignmentMeta() *streamingpb.VChannelMeta {
@@ -184,16 +172,6 @@ func (info *vChannelView) hasPendingDataWorkLocked() bool {
 			}
 		}
 	}
-	if !info.transformLogBuffer.IsEmpty() ||
-		info.transformLogBuffer.IsFlushing() ||
-		info.transformLogBuffer.FlushTargetTimeTick() > info.persistedDataTimeTick {
-		return true
-	}
-	for _, task := range info.transformLogTasks {
-		if task != nil && !task.Done() {
-			return true
-		}
-	}
 	return false
 }
 
@@ -267,94 +245,6 @@ func (info *vChannelView) SwitchIntoMetaAndData() {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	info.metaAndData = true
-}
-
-func (info *vChannelView) ObserveDeleteMessageV1(_ context.Context, msg message.ImmutableDeleteMessageV1) moduleapi.ObserveResult {
-	return info.ObserveDeleteMessagesV1([]message.ImmutableDeleteMessageV1{msg})
-}
-
-func (info *vChannelView) ObserveDeleteMessagesV1(messages []message.ImmutableDeleteMessageV1) moduleapi.ObserveResult {
-	var task scheduler.Task
-	info.mu.Lock()
-	if !info.metaAndData {
-		info.mu.Unlock()
-		return emptyObserveResult()
-	}
-	pendingDataTimeTick := info.transformLogBuffer.DataTimeTick()
-	appended := false
-	for _, msg := range messages {
-		partitionID := msg.MustBody().GetPartitionID()
-		if !info.canReplayAtLocked(msg.TimeTick()) ||
-			!info.canReplayExistingPartitionAtLocked(partitionID, msg.TimeTick()) ||
-			msg.TimeTick() <= info.meta.GetDataCheckpointTimeTick() ||
-			msg.TimeTick() <= pendingDataTimeTick {
-			continue
-		}
-		info.transformLogBuffer.AppendDelete(msg)
-		appended = true
-	}
-	if !appended {
-		info.mu.Unlock()
-		return emptyObserveResult()
-	}
-	if info.transformLogBuffer.ShouldFlush() {
-		task = info.StartFlushTransformLogBufferTaskLocked(info.transformLogBuffer.DataTimeTick())
-	}
-	runtime := info.runtime
-	info.mu.Unlock()
-	if task != nil {
-		runtime.Scheduler.Submit(task)
-	}
-	return dataBarrierResult(info)
-}
-
-func (info *vChannelView) FlushTransformLogBuffer(timetick uint64) moduleapi.ObserveResult {
-	var task scheduler.Task
-	info.mu.Lock()
-	if !info.canReplayAtLocked(timetick) ||
-		!info.metaAndData ||
-		info.meta.GetState() == streamingpb.VChannelState_VCHANNEL_STATE_TOMBSTONED ||
-		(info.transformLogBuffer.IsEmpty() && timetick <= info.meta.GetDataCheckpointTimeTick()) {
-		info.mu.Unlock()
-		return emptyObserveResult()
-	}
-	task = info.StartFlushTransformLogBufferTaskLocked(timetick)
-	runtime := info.runtime
-	info.mu.Unlock()
-	if task != nil {
-		runtime.Scheduler.Submit(task)
-	}
-	return dataBarrierResult(info)
-}
-
-func (info *vChannelView) StartFlushTransformLogBufferTaskLocked(timetick uint64) scheduler.Task {
-	if !info.transformLogBuffer.StartFlush(timetick) {
-		return nil
-	}
-	return info.newFlushTransformLogBufferTask()
-}
-
-func (info *vChannelView) newFlushTransformLogBufferTask() scheduler.Task {
-	task := &flushTransformLogBufferTask{
-		vchannel:     info,
-		precondition: info.transformLogTaskPreconditionLocked(),
-	}
-	info.transformLogTasks = append(info.transformLogTasks, task)
-	return task
-}
-
-func (info *vChannelView) transformLogTaskPreconditionLocked() scheduler.Precondition {
-	pending := info.transformLogTasks[:0]
-	preconditions := make([]scheduler.Precondition, 0, len(info.transformLogTasks))
-	for _, task := range info.transformLogTasks {
-		if task == nil || task.Done() {
-			continue
-		}
-		pending = append(pending, task)
-		preconditions = append(preconditions, scheduler.After(task))
-	}
-	info.transformLogTasks = pending
-	return scheduler.All(preconditions...)
 }
 
 func (info *vChannelView) MarkDeleteDataDurable(timetick uint64) {

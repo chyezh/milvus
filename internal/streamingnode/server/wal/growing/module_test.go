@@ -5,14 +5,16 @@ import (
 	"path"
 	"testing"
 
-	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
-	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
-	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
+	waltransformlog "github.com/milvus-io/milvus/internal/streamingnode/server/wal/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 	"github.com/milvus-io/milvus/pkg/v3/objectstorage"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
@@ -167,9 +169,9 @@ func TestSegmentViewObserveInsertUsesMetaAndDataWatermarksSeparately(t *testing.
 	assert.Len(t, segment.pending.entries, 1)
 }
 
-func TestVChannelViewObserveDeleteUsesDataWatermarkAndBufferTail(t *testing.T) {
-	vchannel := newVChannelView(
-		&streamingpb.VChannelMeta{
+func TestGrowingManagerObserveDeleteUsesDataWatermarkAndBufferTail(t *testing.T) {
+	manager := NewManager(map[string]*streamingpb.VChannelMeta{
+		"v1": {
 			Vchannel:               "v1",
 			State:                  streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
 			CheckpointTimeTick:     100,
@@ -184,38 +186,30 @@ func TestVChannelViewObserveDeleteUsesDataWatermarkAndBufferTail(t *testing.T) {
 				},
 			},
 		},
-		0,
-		0,
-		false,
-		runtimeConfig{
-			metaAndData:   true,
-			transformRows: 100,
-		},
-	)
+	}, nil, nil, WithTransformLogBufferMaxRows(100))
+	manager.metaAndData = true
+	vchannel := manager.vChannels()["v1"]
+	vchannel.metaAndData = true
 	msg := newTestDeleteMessage(t, 50)
 
-	result := vchannel.ObserveDeleteMessageV1(context.Background(), msg)
+	result := manager.observeDeleteMessages(vchannel, []message.ImmutableDeleteMessageV1{msg})
 
 	require.NotNil(t, result.Data)
-	assert.Len(t, vchannel.transformLogBuffer.entries, 1)
-	assert.Equal(t, uint64(50), vchannel.transformLogBuffer.DataTimeTick())
 
-	duplicate := vchannel.ObserveDeleteMessageV1(context.Background(), msg)
+	duplicate := manager.observeDeleteMessages(vchannel, []message.ImmutableDeleteMessageV1{msg})
 	assert.Nil(t, duplicate.Meta)
 	assert.Nil(t, duplicate.Data)
-	assert.Len(t, vchannel.transformLogBuffer.entries, 1)
 
 	persisted := newTestDeleteMessage(t, 8)
-	persistedResult := vchannel.ObserveDeleteMessageV1(context.Background(), persisted)
+	persistedResult := manager.observeDeleteMessages(vchannel, []message.ImmutableDeleteMessageV1{persisted})
 	assert.Nil(t, persistedResult.Meta)
 	assert.Nil(t, persistedResult.Data)
-	assert.Len(t, vchannel.transformLogBuffer.entries, 1)
 }
 
-func TestVChannelViewFlushTransformLogWritesChunkAndMeta(t *testing.T) {
-	writer := &recordingTransformLogChunkWriter{}
-	vchannel := newVChannelView(
-		&streamingpb.VChannelMeta{
+func TestGrowingManagerFlushTransformLogWritesChunkAndMeta(t *testing.T) {
+	store := &recordingTransformLogStore{}
+	manager := NewManager(map[string]*streamingpb.VChannelMeta{
+		"v1": {
 			Vchannel:               "v1",
 			State:                  streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
 			CheckpointTimeTick:     100,
@@ -229,33 +223,28 @@ func TestVChannelViewFlushTransformLogWritesChunkAndMeta(t *testing.T) {
 					{Schema: &schemapb.CollectionSchema{}, CheckpointTimeTick: 1},
 				},
 			},
-			TransformLogMeta: &streamingpb.VChannelTransformLogMeta{},
 		},
-		0,
-		0,
-		false,
-		runtimeConfig{
-			metaAndData:             true,
-			transformRows:           100,
-			transformLogChunkWriter: writer,
-		},
+	}, nil, nil,
+		WithTransformLogStore(store),
+		WithTransformLogBufferMaxRows(100),
 	)
+	manager.metaAndData = true
+	vchannel := manager.vChannels()["v1"]
+	vchannel.metaAndData = true
 	msg := newTestDeleteMessage(t, 50)
 
-	result := vchannel.ObserveDeleteMessageV1(context.Background(), msg)
+	result := manager.observeDeleteMessages(vchannel, []message.ImmutableDeleteMessageV1{msg})
 	require.NotNil(t, result.Data)
 
-	vchannel.mu.Lock()
-	task := vchannel.StartFlushTransformLogBufferTaskLocked(50)
-	vchannel.mu.Unlock()
+	task := manager.startFlushTransformLogBufferTask("v1", 50)
 	require.NotNil(t, task)
 	require.NoError(t, task.Run(context.Background()))
 
-	require.Len(t, writer.chunks, 1)
-	assert.Equal(t, "v1", writer.vchannels[0])
-	assert.Equal(t, uint64(0), writer.chunks[0].GetChunkId())
-	require.Len(t, writer.chunks[0].GetEntries(), 1)
-	entry := writer.chunks[0].GetEntries()[0]
+	require.Len(t, store.chunks, 1)
+	assert.Equal(t, "v1", store.vchannels[0])
+	assert.Equal(t, uint64(0), store.chunks[0].GetChunkId())
+	require.Len(t, store.chunks[0].GetEntries(), 1)
+	entry := store.chunks[0].GetEntries()[0]
 	assert.Equal(t, uint64(50), entry.GetTimeTick())
 	require.NotNil(t, entry.GetDelete())
 	require.Len(t, entry.GetDelete().GetBlocks(), 1)
@@ -265,17 +254,17 @@ func TestVChannelViewFlushTransformLogWritesChunkAndMeta(t *testing.T) {
 	))
 
 	meta := vchannel.AssignmentMeta()
-	require.NotNil(t, meta.GetTransformLogMeta())
-	assert.Equal(t, uint64(50), meta.GetTransformLogMeta().GetCheckpointTimeTick())
-	assert.Equal(t, uint64(0), meta.GetTransformLogMeta().GetFirstChunkId())
-	assert.Equal(t, uint64(1), meta.GetTransformLogMeta().GetNextChunkId())
 	assert.Equal(t, uint64(50), meta.GetDataCheckpointTimeTick())
+	transformMeta := manager.transformLog("v1").log.SnapshotMeta()
+	assert.Equal(t, uint64(50), transformMeta.GetCheckpointTimeTick())
+	assert.Equal(t, uint64(0), transformMeta.GetFirstChunkId())
+	assert.Equal(t, uint64(1), transformMeta.GetNextChunkId())
 }
 
 func TestObjectTransformLogChunkStoreRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	chunkManager := storage.NewLocalChunkManager(objectstorage.RootPath(root))
-	store := NewObjectTransformLogChunkStore(chunkManager, "p1")
+	store := waltransformlog.NewObjectChunkStore(chunkManager, "p1")
 	chunk := &streamingpb.TransformLogChunk{
 		ChunkId: 3,
 		Entries: []*streamingpb.TransformLogEntry{
@@ -306,7 +295,7 @@ func TestObjectTransformLogChunkStoreRoundTrip(t *testing.T) {
 
 func TestGrowingManagerRecoverTransformLogReadsRetainedChunks(t *testing.T) {
 	root := t.TempDir()
-	store := NewObjectTransformLogChunkStore(storage.NewLocalChunkManager(objectstorage.RootPath(root)), "p1")
+	store := waltransformlog.NewObjectChunkStore(storage.NewLocalChunkManager(objectstorage.RootPath(root)), "p1")
 	chunk := &streamingpb.TransformLogChunk{
 		ChunkId: 3,
 		Entries: []*streamingpb.TransformLogEntry{
@@ -341,44 +330,34 @@ func TestGrowingManagerRecoverTransformLogReadsRetainedChunks(t *testing.T) {
 					{Schema: &schemapb.CollectionSchema{}, CheckpointTimeTick: 1},
 				},
 			},
-			TransformLogMeta: &streamingpb.VChannelTransformLogMeta{
+		},
+	}, nil, nil,
+		WithTransformLogStore(store),
+		WithTransformLogMetas(map[string]*streamingpb.VChannelTransformLogMeta{
+			"v1": {
 				CheckpointTimeTick: 50,
 				FirstChunkId:       3,
 				NextChunkId:        4,
 			},
-		},
-	}, nil, nil, WithTransformLogChunkStore(store))
+		}),
+	)
 
 	require.NoError(t, manager.RecoverTransformLogs(context.Background()))
 
-	vchannel := manager.vChannels()["v1"]
-	require.Len(t, vchannel.retainedTransformLogChunks, 1)
-	assert.True(t, proto.Equal(chunk, vchannel.retainedTransformLogChunks[0]))
+	scanner := manager.Read(context.Background(), transformlog.ReadOption{
+		Name:               "test-scanner",
+		VChannel:           "v1",
+		StartAfterTimeTick: 10,
+	})
+	defer scanner.Close()
+	entryEvent := <-scanner.Chan()
+	require.NotNil(t, entryEvent.Entry)
+	assert.True(t, proto.Equal(chunk.GetEntries()[0], entryEvent.Entry))
 }
 
 func TestGrowingManagerReadTransformLogReplaysRetainedEntriesAndCaughtUp(t *testing.T) {
-	manager := NewManager(map[string]*streamingpb.VChannelMeta{
-		"v1": {
-			Vchannel:               "v1",
-			State:                  streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
-			CheckpointTimeTick:     100,
-			DataCheckpointTimeTick: 50,
-			CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
-				CollectionId: 1,
-				Partitions: []*streamingpb.PartitionInfoOfVChannel{
-					{PartitionId: 10, State: streamingpb.PartitionState_PARTITION_STATE_NORMAL},
-				},
-				Schemas: []*streamingpb.CollectionSchemaOfVChannel{
-					{Schema: &schemapb.CollectionSchema{}, CheckpointTimeTick: 1},
-				},
-			},
-			TransformLogMeta: &streamingpb.VChannelTransformLogMeta{
-				CheckpointTimeTick: 50,
-				FirstChunkId:       3,
-				NextChunkId:        4,
-			},
-		},
-	}, nil, nil)
+	root := t.TempDir()
+	store := waltransformlog.NewObjectChunkStore(storage.NewLocalChunkManager(objectstorage.RootPath(root)), "p1")
 	chunk := &streamingpb.TransformLogChunk{
 		ChunkId: 3,
 		Entries: []*streamingpb.TransformLogEntry{
@@ -397,7 +376,34 @@ func TestGrowingManagerReadTransformLogReplaysRetainedEntriesAndCaughtUp(t *test
 			},
 		},
 	}
-	manager.vChannels()["v1"].retainedTransformLogChunks = []*streamingpb.TransformLogChunk{chunk}
+	require.NoError(t, store.WriteTransformLogChunk(context.Background(), "v1", chunk))
+	manager := NewManager(map[string]*streamingpb.VChannelMeta{
+		"v1": {
+			Vchannel:               "v1",
+			State:                  streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
+			CheckpointTimeTick:     100,
+			DataCheckpointTimeTick: 50,
+			CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
+				CollectionId: 1,
+				Partitions: []*streamingpb.PartitionInfoOfVChannel{
+					{PartitionId: 10, State: streamingpb.PartitionState_PARTITION_STATE_NORMAL},
+				},
+				Schemas: []*streamingpb.CollectionSchemaOfVChannel{
+					{Schema: &schemapb.CollectionSchema{}, CheckpointTimeTick: 1},
+				},
+			},
+		},
+	}, nil, nil,
+		WithTransformLogStore(store),
+		WithTransformLogMetas(map[string]*streamingpb.VChannelTransformLogMeta{
+			"v1": {
+				CheckpointTimeTick: 50,
+				FirstChunkId:       3,
+				NextChunkId:        4,
+			},
+		}),
+	)
+	require.NoError(t, manager.RecoverTransformLogs(context.Background()))
 
 	scanner := manager.Read(context.Background(), transformlog.ReadOption{
 		Name:               "test-scanner",
@@ -417,7 +423,7 @@ func TestGrowingManagerReadTransformLogReplaysRetainedEntriesAndCaughtUp(t *test
 }
 
 func TestGrowingManagerReadTransformLogForwardsLiveEntriesAfterCaughtUp(t *testing.T) {
-	writer := &recordingTransformLogChunkWriter{}
+	store := &recordingTransformLogStore{}
 	manager := NewManager(map[string]*streamingpb.VChannelMeta{
 		"v1": {
 			Vchannel:               "v1",
@@ -433,10 +439,9 @@ func TestGrowingManagerReadTransformLogForwardsLiveEntriesAfterCaughtUp(t *testi
 					{Schema: &schemapb.CollectionSchema{}, CheckpointTimeTick: 1},
 				},
 			},
-			TransformLogMeta: &streamingpb.VChannelTransformLogMeta{},
 		},
 	}, nil, nil,
-		WithTransformLogChunkWriter(writer),
+		WithTransformLogStore(store),
 		WithTransformLogBufferMaxRows(100),
 	)
 	manager.metaAndData = true
@@ -454,11 +459,9 @@ func TestGrowingManagerReadTransformLogForwardsLiveEntriesAfterCaughtUp(t *testi
 	require.NotNil(t, caughtUpEvent.CaughtUp)
 
 	msg := newTestDeleteMessage(t, 50)
-	result := vchannel.ObserveDeleteMessageV1(context.Background(), msg)
+	result := manager.observeDeleteMessages(vchannel, []message.ImmutableDeleteMessageV1{msg})
 	require.NotNil(t, result.Data)
-	vchannel.mu.Lock()
-	task := vchannel.StartFlushTransformLogBufferTaskLocked(50)
-	vchannel.mu.Unlock()
+	task := manager.startFlushTransformLogBufferTask("v1", 50)
 	require.NotNil(t, task)
 	require.NoError(t, task.Run(context.Background()))
 
@@ -507,15 +510,24 @@ func TestVChannelViewObserveCreatePartitionUsesMetaWatermark(t *testing.T) {
 	assert.False(t, hasPartitionMeta(vchannel.AssignmentMeta(), 20))
 }
 
-type recordingTransformLogChunkWriter struct {
+type recordingTransformLogStore struct {
 	vchannels []string
 	chunks    []*streamingpb.TransformLogChunk
 }
 
-func (w *recordingTransformLogChunkWriter) WriteTransformLogChunk(_ context.Context, vchannel string, chunk *streamingpb.TransformLogChunk) error {
+func (w *recordingTransformLogStore) WriteTransformLogChunk(_ context.Context, vchannel string, chunk *streamingpb.TransformLogChunk) error {
 	w.vchannels = append(w.vchannels, vchannel)
 	w.chunks = append(w.chunks, proto.Clone(chunk).(*streamingpb.TransformLogChunk))
 	return nil
+}
+
+func (w *recordingTransformLogStore) ReadTransformLogChunk(_ context.Context, vchannel string, chunkID uint64) (*streamingpb.TransformLogChunk, error) {
+	for idx, candidate := range w.chunks {
+		if w.vchannels[idx] == vchannel && candidate.GetChunkId() == chunkID {
+			return proto.Clone(candidate).(*streamingpb.TransformLogChunk), nil
+		}
+	}
+	return nil, errors.Errorf("chunk %s/%d not found", vchannel, chunkID)
 }
 
 func TestGrowingManagerDataCheckpointTimeTickUsesMinimumViewDataCheckpoint(t *testing.T) {
