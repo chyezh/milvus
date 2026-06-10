@@ -695,19 +695,13 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 		}
 		log.Info("save binlog and checkpoints failed with ignorable error", zap.Error(err))
 	}
-	if s.dataViewManager != nil {
-		if req.GetSegLevel() == datapb.SegmentLevel_L0 {
-			if _, err := s.dataViewManager.OnL0Compact(ctx, L0CompactDataViewEvent{CollectionID: req.GetCollectionID()}); err != nil {
-				log.Warn("failed to refresh DataView delete timetick after L0 update", zap.Error(err))
-			}
-		} else if req.GetFlushed() {
-			if _, err := s.dataViewManager.OnFlush(ctx, FlushDataViewEvent{
-				CollectionID:         req.GetCollectionID(),
-				SegmentIDs:           []int64{req.GetSegmentID()},
-				TemporaryUnavailable: enableSortCompaction(),
-			}); err != nil {
-				log.Warn("failed to publish DataView after flush", zap.Error(err))
-			}
+	if s.dataViewManager != nil && req.GetFlushed() && req.GetSegLevel() != datapb.SegmentLevel_L0 {
+		if _, err := s.dataViewManager.OnFlush(ctx, FlushDataViewEvent{
+			CollectionID:         req.GetCollectionID(),
+			SegmentIDs:           []int64{req.GetSegmentID()},
+			TemporaryUnavailable: enableSortCompaction(),
+		}); err != nil {
+			log.Warn("failed to publish DataView after flush", zap.Error(err))
 		}
 	}
 

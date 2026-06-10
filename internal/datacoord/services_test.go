@@ -329,6 +329,8 @@ func (s *ServerSuite) TestSaveBinlogPath_SaveDroppedSegment() {
 
 func (s *ServerSuite) TestSaveBinlogPath_L0Segment() {
 	s.testServer.meta.AddCollection(&collectionInfo{ID: 0})
+	manager := &fakeGCDataViewManager{}
+	s.testServer.dataViewManager = manager
 
 	segment := s.testServer.meta.GetHealthySegment(context.TODO(), 1)
 	s.Require().Nil(segment)
@@ -377,6 +379,8 @@ func (s *ServerSuite) TestSaveBinlogPath_L0Segment() {
 	segment = s.testServer.meta.GetHealthySegment(context.TODO(), 1)
 	s.NotNil(segment)
 	s.EqualValues(datapb.SegmentLevel_L0, segment.GetLevel())
+	s.Empty(manager.l0CompactEvents)
+	s.Empty(manager.flushEvents)
 }
 
 func (s *ServerSuite) TestSaveBinlogPath_NormalCase() {
