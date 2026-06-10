@@ -280,5 +280,7 @@ func (f *fakeSubscribeTransformClient) RecvMsg(m interface{}) error {
 	return nil
 }
 
-var _ streamingpb.StreamingNodeHandlerService_SubscribeTransformClient = (*fakeSubscribeTransformClient)(nil)
-var _ grpc.ClientStream = (*fakeSubscribeTransformClient)(nil)
+var (
+	_ streamingpb.StreamingNodeHandlerService_SubscribeTransformClient = (*fakeSubscribeTransformClient)(nil)
+	_ grpc.ClientStream                                                = (*fakeSubscribeTransformClient)(nil)
+)

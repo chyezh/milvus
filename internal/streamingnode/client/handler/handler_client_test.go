@@ -306,5 +306,7 @@ func (f *handlerFakeSubscribeTransformClient) RecvMsg(m interface{}) error {
 	return nil
 }
 
-var _ streamingpb.StreamingNodeHandlerService_SubscribeTransformClient = (*handlerFakeSubscribeTransformClient)(nil)
-var _ grpc.ClientStream = (*handlerFakeSubscribeTransformClient)(nil)
+var (
+	_ streamingpb.StreamingNodeHandlerService_SubscribeTransformClient = (*handlerFakeSubscribeTransformClient)(nil)
+	_ grpc.ClientStream                                                = (*handlerFakeSubscribeTransformClient)(nil)
+)
