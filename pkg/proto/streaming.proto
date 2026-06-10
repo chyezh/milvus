@@ -797,7 +797,6 @@ message VChannelMeta {
     uint64 checkpoint_time_tick = 4; // The timetick of checkpoint, the meta already see the message at this timetick.
     view.DataVersion latest_data_version = 5; // latest data version of this vchannel.
     GrowingSegmentMode growing_segment_mode = 6; // runtime mode of growing segments under this vchannel.
-    uint64 data_checkpoint_time_tick = 7; // The timetick of data checkpoint, the data already durable at this timetick.
     uint64 tombstone_time_tick = 8; // The timetick this retained vchannel meta starts filtering replay.
 }
 

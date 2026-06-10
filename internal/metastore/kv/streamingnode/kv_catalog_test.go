@@ -161,8 +161,7 @@ func TestCatalogRetainsClosedRecoveryMeta(t *testing.T) {
 					},
 				},
 			},
-			CheckpointTimeTick:     100,
-			DataCheckpointTimeTick: 50,
+			CheckpointTimeTick: 100,
 		},
 	}
 	require.NoError(t, catalog.SaveVChannels(ctx, "p1", vchannels))
@@ -172,7 +171,6 @@ func TestCatalogRetainsClosedRecoveryMeta(t *testing.T) {
 	require.Len(t, loadedVChannels, 1)
 	assert.Equal(t, streamingpb.VChannelState_VCHANNEL_STATE_DROPPED, loadedVChannels[0].GetState())
 	assert.Equal(t, uint64(100), loadedVChannels[0].GetCheckpointTimeTick())
-	assert.Equal(t, uint64(50), loadedVChannels[0].GetDataCheckpointTimeTick())
 
 	segments := map[int64]*streamingpb.SegmentAssignmentMeta{
 		300: {
@@ -276,9 +274,8 @@ func TestCatalogRetainsTombstonedRecoveryMeta(t *testing.T) {
 					},
 				},
 			},
-			CheckpointTimeTick:     100,
-			DataCheckpointTimeTick: 100,
-			TombstoneTimeTick:      100,
+			CheckpointTimeTick: 100,
+			TombstoneTimeTick:  100,
 		},
 	}
 	require.NoError(t, catalog.SaveVChannels(ctx, "p1", vchannels))
@@ -339,9 +336,8 @@ func TestCatalogDropsTombstonedRecoveryMeta(t *testing.T) {
 					},
 				},
 			},
-			CheckpointTimeTick:     100,
-			DataCheckpointTimeTick: 100,
-			TombstoneTimeTick:      100,
+			CheckpointTimeTick: 100,
+			TombstoneTimeTick:  100,
 		},
 		"vchannel-2": {
 			Vchannel: "vchannel-2",

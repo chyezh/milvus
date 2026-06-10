@@ -21,7 +21,6 @@ func newVChannelViewFromMeta(meta *streamingpb.VChannelMeta, configs ...runtimeC
 	return newVChannelView(
 		meta,
 		meta.GetCheckpointTimeTick(),
-		meta.GetDataCheckpointTimeTick(),
 		false,
 		firstRuntimeConfig(configs),
 	)
@@ -30,7 +29,6 @@ func newVChannelViewFromMeta(meta *streamingpb.VChannelMeta, configs ...runtimeC
 func newVChannelView(
 	meta *streamingpb.VChannelMeta,
 	persistedMetaTimeTick uint64,
-	persistedDataTimeTick uint64,
 	dirty bool,
 	config runtimeConfig,
 ) *vChannelView {
@@ -38,7 +36,6 @@ func newVChannelView(
 	return &vChannelView{
 		meta:                  meta,
 		persistedMetaTimeTick: persistedMetaTimeTick,
-		persistedDataTimeTick: persistedDataTimeTick,
 		dirty:                 dirty,
 		segments:              make(map[int64]*segmentView),
 		lifecycle:             config.lifecycle,
@@ -74,10 +71,9 @@ func newVChannelMetaFromCreateCollectionMessage(msg message.ImmutableCreateColle
 				},
 			},
 		},
-		CheckpointTimeTick:     msg.TimeTick(),
-		LatestDataVersion:      &viewpb.DataVersion{},
-		GrowingSegmentMode:     streamingpb.GrowingSegmentMode_GROWING_SEGMENT_MODE_WRITE_ONLY,
-		DataCheckpointTimeTick: 0,
+		CheckpointTimeTick: msg.TimeTick(),
+		LatestDataVersion:  &viewpb.DataVersion{},
+		GrowingSegmentMode: streamingpb.GrowingSegmentMode_GROWING_SEGMENT_MODE_WRITE_ONLY,
 	}
 }
 
@@ -87,7 +83,6 @@ type vChannelView struct {
 
 	meta                  *streamingpb.VChannelMeta
 	persistedMetaTimeTick uint64
-	persistedDataTimeTick uint64
 	dirty                 bool // whether the vchannel recovery info is dirty.
 
 	segments      map[int64]*segmentView
@@ -126,64 +121,9 @@ func (info *vChannelView) MetaBarrier() walcheckpoint.Barrier {
 	return walcheckpoint.BarrierFunc(info.metaTimeTick)
 }
 
-func (info *vChannelView) DurableFrontierTimeTick() uint64 {
-	info.mu.Lock()
-	defer info.mu.Unlock()
-	if info.meta.GetState() == streamingpb.VChannelState_VCHANNEL_STATE_TOMBSTONED {
-		if info.dirty {
-			return frontierBefore(info.meta.GetTombstoneTimeTick())
-		}
-		return math.MaxUint64
-	}
-	if tombstoneTimeTick := info.dirtyPartitionTombstoneFrontierLocked(); tombstoneTimeTick > 0 {
-		return frontierBefore(tombstoneTimeTick)
-	}
-	if !info.hasPendingDataWorkLocked() {
-		return math.MaxUint64
-	}
-	return info.persistedDataTimeTick
-}
-
-func (info *vChannelView) TimeTick() uint64 {
-	info.mu.Lock()
-	defer info.mu.Unlock()
-	return info.persistedDataTimeTick
-}
-
-func (info *vChannelView) DataCheckpointTimeTick() uint64 {
-	info.mu.Lock()
-	defer info.mu.Unlock()
-	return info.meta.GetDataCheckpointTimeTick()
-}
-
-func (info *vChannelView) hasPendingDataWorkLocked() bool {
-	if info.meta.GetDataCheckpointTimeTick() > info.persistedDataTimeTick {
-		return true
-	}
-	if info.meta.GetState() == streamingpb.VChannelState_VCHANNEL_STATE_DROPPED &&
-		info.meta.GetDataCheckpointTimeTick() < info.meta.GetCheckpointTimeTick() {
-		return true
-	}
-	if collectionInfo := info.meta.GetCollectionInfo(); collectionInfo != nil {
-		for _, partition := range collectionInfo.GetPartitions() {
-			if partition.GetState() == streamingpb.PartitionState_PARTITION_STATE_DROPPED &&
-				info.meta.GetDataCheckpointTimeTick() < partition.GetTombstoneTimeTick() {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func (info *vChannelView) markMetaPersistedLocked(timetick uint64) {
 	if timetick > info.persistedMetaTimeTick {
 		info.persistedMetaTimeTick = timetick
-	}
-}
-
-func (info *vChannelView) markDataPersistedLocked(timetick uint64) {
-	if timetick > info.persistedDataTimeTick {
-		info.persistedDataTimeTick = timetick
 	}
 }
 
@@ -191,7 +131,6 @@ func (info *vChannelView) MarkSnapshotPersisted(snapshot *streamingpb.VChannelMe
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	info.markMetaPersistedLocked(snapshot.GetCheckpointTimeTick())
-	info.markDataPersistedLocked(snapshot.GetDataCheckpointTimeTick())
 	info.dirty = !proto.Equal(info.meta, snapshot)
 }
 
@@ -201,28 +140,20 @@ func (info *vChannelView) NotifyDataUpdated() {
 	}
 }
 
-func (info *vChannelView) markDataCheckpointLocked(timetick uint64) {
-	if timetick <= info.meta.GetDataCheckpointTimeTick() {
-		return
-	}
-	info.meta.DataCheckpointTimeTick = timetick
-	info.dirty = true
-}
-
-func (info *vChannelView) TryFinalizeTombstone() bool {
+func (info *vChannelView) TryFinalizeTombstone(dataCheckpointTimeTick uint64) bool {
 	info.mu.Lock()
 	defer info.mu.Unlock()
-	return info.maybeMarkTombstonedLocked()
+	return info.maybeMarkTombstonedLocked(dataCheckpointTimeTick)
 }
 
-func (info *vChannelView) HasReadyTombstoneFinalize() bool {
+func (info *vChannelView) HasReadyTombstoneFinalize(dataCheckpointTimeTick uint64) bool {
 	info.mu.Lock()
 	defer info.mu.Unlock()
-	if info.vchannelTombstoneFinalizeReadyLocked() {
+	if info.vchannelTombstoneFinalizeReadyLocked(dataCheckpointTimeTick) {
 		return true
 	}
 	for _, partition := range info.meta.GetCollectionInfo().GetPartitions() {
-		if info.partitionTombstoneFinalizeReadyLocked(partition) {
+		if info.partitionTombstoneFinalizeReadyLocked(partition, dataCheckpointTimeTick) {
 			return true
 		}
 	}
@@ -245,13 +176,6 @@ func (info *vChannelView) SwitchIntoMetaAndData() {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	info.metaAndData = true
-}
-
-func (info *vChannelView) MarkDeleteDataDurable(timetick uint64) {
-	if timetick <= info.meta.GetDataCheckpointTimeTick() {
-		return
-	}
-	info.markDataCheckpointLocked(timetick)
 }
 
 // IsActive returns true if the vchannel is active.
@@ -389,11 +313,15 @@ func (info *vChannelView) SegmentsForFlush(partitionID int64, timetick uint64) [
 	return segments
 }
 
-func (info *vChannelView) TombstonedCleanupPlan(metaPhysicalTimeTick uint64, dataPhysicalTimeTick uint64) (dropSnapshot *streamingpb.VChannelMeta, cleanupPartitions map[int64]uint64) {
+func (info *vChannelView) TombstonedCleanupPlan(
+	metaPhysicalTimeTick uint64,
+	dataPhysicalTimeTick uint64,
+	persistedDataTimeTick uint64,
+) (dropSnapshot *streamingpb.VChannelMeta, cleanupPartitions map[int64]uint64) {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 
-	if info.vchannelTombstonedCleanupReadyLocked(metaPhysicalTimeTick, dataPhysicalTimeTick) {
+	if info.vchannelTombstonedCleanupReadyLocked(metaPhysicalTimeTick, dataPhysicalTimeTick, persistedDataTimeTick) {
 		return proto.Clone(info.meta).(*streamingpb.VChannelMeta), nil
 	}
 	if info.dirty {
@@ -402,7 +330,7 @@ func (info *vChannelView) TombstonedCleanupPlan(metaPhysicalTimeTick uint64, dat
 	for _, partition := range info.meta.GetCollectionInfo().GetPartitions() {
 		if partitionTombstonedCleanupReady(partition, metaPhysicalTimeTick, dataPhysicalTimeTick) &&
 			info.persistedMetaTimeTick >= partition.GetTombstoneTimeTick() &&
-			info.persistedDataTimeTick >= partition.GetTombstoneTimeTick() {
+			persistedDataTimeTick >= partition.GetTombstoneTimeTick() {
 			if cleanupPartitions == nil {
 				cleanupPartitions = make(map[int64]uint64)
 			}
@@ -415,18 +343,22 @@ func (info *vChannelView) TombstonedCleanupPlan(metaPhysicalTimeTick uint64, dat
 	return nil, cleanupPartitions
 }
 
-func (info *vChannelView) vchannelTombstonedCleanupReadyLocked(metaPhysicalTimeTick uint64, dataPhysicalTimeTick uint64) bool {
+func (info *vChannelView) vchannelTombstonedCleanupReadyLocked(
+	metaPhysicalTimeTick uint64,
+	dataPhysicalTimeTick uint64,
+	persistedDataTimeTick uint64,
+) bool {
 	tombstoneTimeTick := info.meta.GetTombstoneTimeTick()
 	return info.meta.GetState() == streamingpb.VChannelState_VCHANNEL_STATE_TOMBSTONED &&
 		tombstoneTimeTick > 0 &&
 		!info.dirty &&
 		info.persistedMetaTimeTick >= tombstoneTimeTick &&
-		info.persistedDataTimeTick >= tombstoneTimeTick &&
+		persistedDataTimeTick >= tombstoneTimeTick &&
 		metaPhysicalTimeTick > tombstoneTimeTick &&
 		dataPhysicalTimeTick > tombstoneTimeTick
 }
 
-func (info *vChannelView) VChannelDropCleanupSnapshot(tombstoneTimeTick uint64) *streamingpb.VChannelMeta {
+func (info *vChannelView) VChannelDropCleanupSnapshot(tombstoneTimeTick uint64, persistedDataTimeTick uint64) *streamingpb.VChannelMeta {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 
@@ -435,7 +367,7 @@ func (info *vChannelView) VChannelDropCleanupSnapshot(tombstoneTimeTick uint64) 
 		info.meta.GetTombstoneTimeTick() != tombstoneTimeTick ||
 		info.dirty ||
 		info.persistedMetaTimeTick < tombstoneTimeTick ||
-		info.persistedDataTimeTick < tombstoneTimeTick {
+		persistedDataTimeTick < tombstoneTimeTick {
 		return nil
 	}
 	return proto.Clone(info.meta).(*streamingpb.VChannelMeta)
@@ -657,9 +589,9 @@ func (info *vChannelView) ConsumeDirtyAndGetSnapshot() *streamingpb.VChannelMeta
 	return proto.Clone(info.meta).(*streamingpb.VChannelMeta)
 }
 
-func (info *vChannelView) maybeMarkTombstonedLocked() bool {
+func (info *vChannelView) maybeMarkTombstonedLocked(dataCheckpointTimeTick uint64) bool {
 	changed := false
-	if info.vchannelTombstoneFinalizeReadyLocked() {
+	if info.vchannelTombstoneFinalizeReadyLocked(dataCheckpointTimeTick) {
 		tombstoneTimeTick := info.meta.GetCheckpointTimeTick()
 		info.meta.State = streamingpb.VChannelState_VCHANNEL_STATE_TOMBSTONED
 		info.meta.TombstoneTimeTick = tombstoneTimeTick
@@ -667,7 +599,7 @@ func (info *vChannelView) maybeMarkTombstonedLocked() bool {
 		changed = true
 	}
 	for _, partition := range info.meta.GetCollectionInfo().GetPartitions() {
-		if !info.partitionTombstoneFinalizeReadyLocked(partition) {
+		if !info.partitionTombstoneFinalizeReadyLocked(partition, dataCheckpointTimeTick) {
 			continue
 		}
 		partition.State = streamingpb.PartitionState_PARTITION_STATE_TOMBSTONED
@@ -677,40 +609,20 @@ func (info *vChannelView) maybeMarkTombstonedLocked() bool {
 	return changed
 }
 
-func (info *vChannelView) vchannelTombstoneFinalizeReadyLocked() bool {
+func (info *vChannelView) vchannelTombstoneFinalizeReadyLocked(dataCheckpointTimeTick uint64) bool {
 	tombstoneTimeTick := info.meta.GetCheckpointTimeTick()
 	return info.meta.GetState() == streamingpb.VChannelState_VCHANNEL_STATE_DROPPED &&
 		tombstoneTimeTick > 0 &&
-		info.meta.GetDataCheckpointTimeTick() >= tombstoneTimeTick &&
+		dataCheckpointTimeTick >= tombstoneTimeTick &&
 		info.coveredSegmentsTombstonedLocked(common.AllPartitionsID, tombstoneTimeTick)
 }
 
-func (info *vChannelView) partitionTombstoneFinalizeReadyLocked(partition *streamingpb.PartitionInfoOfVChannel) bool {
+func (info *vChannelView) partitionTombstoneFinalizeReadyLocked(partition *streamingpb.PartitionInfoOfVChannel, dataCheckpointTimeTick uint64) bool {
 	tombstoneTimeTick := partition.GetTombstoneTimeTick()
 	return partition.GetState() == streamingpb.PartitionState_PARTITION_STATE_DROPPED &&
 		tombstoneTimeTick > 0 &&
-		info.meta.GetDataCheckpointTimeTick() >= tombstoneTimeTick &&
+		dataCheckpointTimeTick >= tombstoneTimeTick &&
 		info.coveredSegmentsTombstonedLocked(partition.GetPartitionId(), tombstoneTimeTick)
-}
-
-func (info *vChannelView) dirtyPartitionTombstoneFrontierLocked() uint64 {
-	if !info.dirty {
-		return 0
-	}
-	frontier := uint64(math.MaxUint64)
-	for _, partition := range info.meta.GetCollectionInfo().GetPartitions() {
-		if partition.GetState() != streamingpb.PartitionState_PARTITION_STATE_TOMBSTONED {
-			continue
-		}
-		tombstoneTimeTick := partition.GetTombstoneTimeTick()
-		if tombstoneTimeTick < frontier {
-			frontier = tombstoneTimeTick
-		}
-	}
-	if frontier == uint64(math.MaxUint64) {
-		return 0
-	}
-	return frontier
 }
 
 func (info *vChannelView) coveredSegmentsTombstonedLocked(partitionID int64, timetick uint64) bool {

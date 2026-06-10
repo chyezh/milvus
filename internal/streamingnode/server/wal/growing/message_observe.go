@@ -269,7 +269,7 @@ func (m *Manager) flushVChannelTransformLogBuffer(timetick uint64, vchannel stri
 	if !info.canReplayAtLocked(timetick) ||
 		!info.metaAndData ||
 		info.meta.GetState() == streamingpb.VChannelState_VCHANNEL_STATE_TOMBSTONED ||
-		(!transformLog.log.HasPendingWork(info.persistedDataTimeTick) && timetick <= info.meta.GetDataCheckpointTimeTick()) {
+		(!transformLog.log.HasPendingWork() && timetick <= transformLog.log.DataCheckpointTimeTick()) {
 		info.mu.Unlock()
 		return emptyObserveResult()
 	}
@@ -278,7 +278,7 @@ func (m *Manager) flushVChannelTransformLogBuffer(timetick uint64, vchannel stri
 	if task := m.startFlushTransformLogBufferTask(vchannel, timetick); task != nil {
 		runtime.Scheduler.Submit(task)
 	}
-	return dataBarrierResult(info)
+	return dataBarrierResult(transformLog.dataBarrier())
 }
 
 func (m *Manager) flushAllTransformLogBuffers(timetick uint64) moduleapi.ObserveResult {
@@ -427,12 +427,10 @@ func (m *Manager) observeDeleteMessages(vchannel *vChannelView, messages []messa
 		partitionID := msg.MustBody().GetPartitionID()
 		if !vchannel.canReplayAtLocked(msg.TimeTick()) ||
 			!vchannel.canReplayExistingPartitionAtLocked(partitionID, msg.TimeTick()) ||
-			msg.TimeTick() <= vchannel.meta.GetDataCheckpointTimeTick() {
+			msg.TimeTick() <= transformLog.log.DataCheckpointTimeTick() {
 			continue
 		}
-		appendResult = transformLog.log.Append(msg, waltransformlog.AppendOption{
-			CurrentDurableTimeTick: vchannel.meta.GetDataCheckpointTimeTick(),
-		})
+		appendResult = transformLog.log.Append(msg)
 		appended = appendResult.Appended || appended
 	}
 	runtime := vchannel.runtime
@@ -447,7 +445,7 @@ func (m *Manager) observeDeleteMessages(vchannel *vChannelView, messages []messa
 	if task != nil {
 		runtime.Scheduler.Submit(task)
 	}
-	return dataBarrierResult(vchannel)
+	return dataBarrierResult(transformLog.dataBarrier())
 }
 
 func deleteMessageWithTimeTick(deleted message.ImmutableDeleteMessageV1, timetick uint64) message.ImmutableDeleteMessageV1 {

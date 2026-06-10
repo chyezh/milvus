@@ -2,10 +2,12 @@ package growing
 
 import (
 	"context"
+	"math"
 	"sync"
 
 	"go.uber.org/atomic"
 
+	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
 	waltransformlog "github.com/milvus-io/milvus/internal/streamingnode/server/wal/transformlog"
 	scheduler "github.com/milvus-io/milvus/pkg/v3/syncutil/preconditioned"
 )
@@ -29,6 +31,25 @@ func (v *transformLogView) hasPendingTask() bool {
 		}
 	}
 	return false
+}
+
+func (v *transformLogView) DataCheckpointTimeTick() uint64 {
+	return v.log.DataCheckpointTimeTick()
+}
+
+func (v *transformLogView) HasDataCheckpoint() bool {
+	return v.log.DataCheckpointTimeTick() > 0 || v.log.HasPendingWork() || v.hasPendingTask()
+}
+
+func (v *transformLogView) DurableFrontierTimeTick() uint64 {
+	if v.log.HasDirty() || v.log.HasPendingWork() || v.hasPendingTask() {
+		return v.log.DataBarrierTimeTick()
+	}
+	return math.MaxUint64
+}
+
+func (v *transformLogView) dataBarrier() walcheckpoint.Barrier {
+	return walcheckpoint.BarrierFunc(v.log.DataBarrierTimeTick)
 }
 
 func (v *transformLogView) startFlushTask(manager *Manager, vchannel string, timetick uint64) scheduler.Task {
@@ -92,10 +113,8 @@ func (t *flushTransformLogBufferTask) run(ctx context.Context) error {
 	if vchannel == nil || transformLog == nil {
 		return nil
 	}
-	currentDurableTimeTick := vchannel.DataCheckpointTimeTick()
 	result, err := transformLog.log.Flush(ctx, waltransformlog.FlushOption{
-		TargetTimeTick:         t.timetick,
-		CurrentDurableTimeTick: currentDurableTimeTick,
+		TargetTimeTick: t.timetick,
 	})
 	if err != nil {
 		return err
@@ -106,9 +125,6 @@ func (t *flushTransformLogBufferTask) run(ctx context.Context) error {
 
 	var nextTask scheduler.Task
 	vchannel.mu.Lock()
-	if result.DurableTimeTick > 0 {
-		vchannel.MarkDeleteDataDurable(result.DurableTimeTick)
-	}
 	if result.NextTargetTimeTick > 0 {
 		nextTask = t.manager.startFlushTransformLogBufferTask(t.vchannelName, result.NextTargetTimeTick)
 	}

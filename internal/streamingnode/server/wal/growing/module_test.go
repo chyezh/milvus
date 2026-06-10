@@ -172,10 +172,9 @@ func TestSegmentViewObserveInsertUsesMetaAndDataWatermarksSeparately(t *testing.
 func TestGrowingManagerObserveDeleteUsesDataWatermarkAndBufferTail(t *testing.T) {
 	manager := NewManager(map[string]*streamingpb.VChannelMeta{
 		"v1": {
-			Vchannel:               "v1",
-			State:                  streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
-			CheckpointTimeTick:     100,
-			DataCheckpointTimeTick: 10,
+			Vchannel:           "v1",
+			State:              streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
+			CheckpointTimeTick: 100,
 			CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
 				CollectionId: 1,
 				Partitions: []*streamingpb.PartitionInfoOfVChannel{
@@ -186,7 +185,12 @@ func TestGrowingManagerObserveDeleteUsesDataWatermarkAndBufferTail(t *testing.T)
 				},
 			},
 		},
-	}, nil, nil, WithTransformLogBufferMaxRows(100))
+	}, nil, nil,
+		WithTransformLogBufferMaxRows(100),
+		WithTransformLogMetas(map[string]*streamingpb.VChannelTransformLogMeta{
+			"v1": {CheckpointTimeTick: 10},
+		}),
+	)
 	manager.metaAndData = true
 	vchannel := manager.vChannels()["v1"]
 	vchannel.metaAndData = true
@@ -210,10 +214,9 @@ func TestGrowingManagerFlushTransformLogWritesChunkAndMeta(t *testing.T) {
 	store := &recordingTransformLogStore{}
 	manager := NewManager(map[string]*streamingpb.VChannelMeta{
 		"v1": {
-			Vchannel:               "v1",
-			State:                  streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
-			CheckpointTimeTick:     100,
-			DataCheckpointTimeTick: 10,
+			Vchannel:           "v1",
+			State:              streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
+			CheckpointTimeTick: 100,
 			CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
 				CollectionId: 1,
 				Partitions: []*streamingpb.PartitionInfoOfVChannel{
@@ -227,6 +230,9 @@ func TestGrowingManagerFlushTransformLogWritesChunkAndMeta(t *testing.T) {
 	}, nil, nil,
 		WithTransformLogStore(store),
 		WithTransformLogBufferMaxRows(100),
+		WithTransformLogMetas(map[string]*streamingpb.VChannelTransformLogMeta{
+			"v1": {CheckpointTimeTick: 10},
+		}),
 	)
 	manager.metaAndData = true
 	vchannel := manager.vChannels()["v1"]
@@ -253,8 +259,6 @@ func TestGrowingManagerFlushTransformLogWritesChunkAndMeta(t *testing.T) {
 		entry.GetDelete().GetBlocks()[0].GetPrimaryKeys(),
 	))
 
-	meta := vchannel.AssignmentMeta()
-	assert.Equal(t, uint64(50), meta.GetDataCheckpointTimeTick())
 	transformMeta := manager.transformLog("v1").log.SnapshotMeta()
 	assert.Equal(t, uint64(50), transformMeta.GetCheckpointTimeTick())
 	assert.Equal(t, uint64(0), transformMeta.GetFirstChunkId())
@@ -317,10 +321,9 @@ func TestGrowingManagerRecoverTransformLogReadsRetainedChunks(t *testing.T) {
 	require.NoError(t, store.WriteTransformLogChunk(context.Background(), "v1", chunk))
 	manager := NewManager(map[string]*streamingpb.VChannelMeta{
 		"v1": {
-			Vchannel:               "v1",
-			State:                  streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
-			CheckpointTimeTick:     100,
-			DataCheckpointTimeTick: 50,
+			Vchannel:           "v1",
+			State:              streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
+			CheckpointTimeTick: 100,
 			CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
 				CollectionId: 1,
 				Partitions: []*streamingpb.PartitionInfoOfVChannel{
@@ -379,10 +382,9 @@ func TestGrowingManagerReadTransformLogReplaysRetainedEntriesAndCaughtUp(t *test
 	require.NoError(t, store.WriteTransformLogChunk(context.Background(), "v1", chunk))
 	manager := NewManager(map[string]*streamingpb.VChannelMeta{
 		"v1": {
-			Vchannel:               "v1",
-			State:                  streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
-			CheckpointTimeTick:     100,
-			DataCheckpointTimeTick: 50,
+			Vchannel:           "v1",
+			State:              streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
+			CheckpointTimeTick: 100,
 			CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
 				CollectionId: 1,
 				Partitions: []*streamingpb.PartitionInfoOfVChannel{
@@ -426,10 +428,9 @@ func TestGrowingManagerReadTransformLogForwardsLiveEntriesAfterCaughtUp(t *testi
 	store := &recordingTransformLogStore{}
 	manager := NewManager(map[string]*streamingpb.VChannelMeta{
 		"v1": {
-			Vchannel:               "v1",
-			State:                  streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
-			CheckpointTimeTick:     100,
-			DataCheckpointTimeTick: 10,
+			Vchannel:           "v1",
+			State:              streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
+			CheckpointTimeTick: 100,
 			CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
 				CollectionId: 1,
 				Partitions: []*streamingpb.PartitionInfoOfVChannel{
@@ -443,6 +444,9 @@ func TestGrowingManagerReadTransformLogForwardsLiveEntriesAfterCaughtUp(t *testi
 	}, nil, nil,
 		WithTransformLogStore(store),
 		WithTransformLogBufferMaxRows(100),
+		WithTransformLogMetas(map[string]*streamingpb.VChannelTransformLogMeta{
+			"v1": {CheckpointTimeTick: 10},
+		}),
 	)
 	manager.metaAndData = true
 	vchannel := manager.vChannels()["v1"]
@@ -488,7 +492,6 @@ func TestVChannelViewObserveCreatePartitionUsesMetaWatermark(t *testing.T) {
 			},
 		},
 		0,
-		0,
 		false,
 		runtimeConfig{},
 	)
@@ -530,13 +533,51 @@ func (w *recordingTransformLogStore) ReadTransformLogChunk(_ context.Context, vc
 	return nil, errors.Errorf("chunk %s/%d not found", vchannel, chunkID)
 }
 
-func TestGrowingManagerDataCheckpointTimeTickUsesMinimumViewDataCheckpoint(t *testing.T) {
+func TestGrowingManagerDataCheckpointTimeTickUsesMinimumTransformLogAndSegmentCheckpoint(t *testing.T) {
 	manager := NewManager(map[string]*streamingpb.VChannelMeta{
 		"v1": {
+			Vchannel:           "v1",
+			State:              streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
+			CheckpointTimeTick: 100,
+			CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
+				CollectionId: 1,
+				Partitions: []*streamingpb.PartitionInfoOfVChannel{
+					{PartitionId: 10, State: streamingpb.PartitionState_PARTITION_STATE_NORMAL},
+				},
+				Schemas: []*streamingpb.CollectionSchemaOfVChannel{
+					{Schema: &schemapb.CollectionSchema{}, CheckpointTimeTick: 1},
+				},
+			},
+			LatestDataVersion:  &viewpb.DataVersion{},
+			GrowingSegmentMode: streamingpb.GrowingSegmentMode_GROWING_SEGMENT_MODE_WRITE_ONLY,
+		},
+	}, map[int64]*streamingpb.SegmentAssignmentMeta{
+		100: {
+			CollectionId:           1,
+			PartitionId:            10,
+			SegmentId:              100,
 			Vchannel:               "v1",
-			State:                  streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
+			State:                  streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING,
 			CheckpointTimeTick:     100,
-			DataCheckpointTimeTick: 80,
+			DataCheckpointTimeTick: 60,
+			Stat:                   &streamingpb.SegmentAssignmentStat{CreateSegmentTimeTick: 1},
+			PersistedStorage:       &streamingpb.L1SegmentPersistedStorage{},
+		},
+	}, nil,
+		WithTransformLogMetas(map[string]*streamingpb.VChannelTransformLogMeta{
+			"v1": {CheckpointTimeTick: 40},
+		}),
+	)
+
+	assert.Equal(t, uint64(40), manager.DataCheckpointTimeTick())
+}
+
+func TestGrowingManagerDataCheckpointTimeTickIgnoresIdleTransformLog(t *testing.T) {
+	manager := NewManager(map[string]*streamingpb.VChannelMeta{
+		"v1": {
+			Vchannel:           "v1",
+			State:              streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
+			CheckpointTimeTick: 100,
 			CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
 				CollectionId: 1,
 				Partitions: []*streamingpb.PartitionInfoOfVChannel{

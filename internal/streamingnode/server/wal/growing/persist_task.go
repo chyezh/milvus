@@ -74,8 +74,12 @@ func (m *Manager) hasPendingPersistWork() bool {
 			return true
 		}
 	}
-	for _, vchannel := range m.vchannelViews {
-		if vchannel.HasReadyTombstoneFinalize() {
+	for vchannelName, vchannel := range m.vchannelViews {
+		transformLog := m.transformLog(vchannelName)
+		if transformLog == nil {
+			continue
+		}
+		if vchannel.HasReadyTombstoneFinalize(transformLog.DataCheckpointTimeTick()) {
 			return true
 		}
 	}

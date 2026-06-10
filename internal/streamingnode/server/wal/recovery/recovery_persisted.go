@@ -156,9 +156,6 @@ func validateRecoveredGrowingMeta(
 			if vchannel.GetCheckpointTimeTick() < vchannel.GetTombstoneTimeTick() {
 				return errors.Errorf("tombstoned vchannel checkpoint before tombstone timetick in recovery meta: %s", vchannelName)
 			}
-			if vchannel.GetDataCheckpointTimeTick() < vchannel.GetTombstoneTimeTick() {
-				return errors.Errorf("tombstoned vchannel data checkpoint before tombstone timetick in recovery meta: %s", vchannelName)
-			}
 		}
 		for _, partition := range vchannel.GetCollectionInfo().GetPartitions() {
 			if partition.GetPartitionId() == 0 {
@@ -179,9 +176,6 @@ func validateRecoveredGrowingMeta(
 				}
 				if vchannel.GetCheckpointTimeTick() < partition.GetTombstoneTimeTick() {
 					return errors.Errorf("tombstoned partition checkpoint before tombstone timetick in recovery meta: partition %d of vchannel %s", partition.GetPartitionId(), vchannelName)
-				}
-				if vchannel.GetDataCheckpointTimeTick() < partition.GetTombstoneTimeTick() {
-					return errors.Errorf("tombstoned partition data checkpoint before tombstone timetick in recovery meta: partition %d of vchannel %s", partition.GetPartitionId(), vchannelName)
 				}
 			default:
 				return errors.Errorf("unknown partition state in recovery meta: partition %d of vchannel %s", partition.GetPartitionId(), vchannelName)

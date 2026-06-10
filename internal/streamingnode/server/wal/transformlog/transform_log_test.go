@@ -75,6 +75,19 @@ func TestReadBuffersLiveEntriesUntilCaughtUp(t *testing.T) {
 	assert.Equal(t, uint64(21), liveEvent.Entry.GetTimeTick())
 }
 
+func TestSnapshotChunksCopiesSliceOnly(t *testing.T) {
+	first := &streamingpb.TransformLogChunk{ChunkId: 1}
+	second := &streamingpb.TransformLogChunk{ChunkId: 2}
+	chunks := []*streamingpb.TransformLogChunk{first}
+
+	snapshot := snapshotChunks(chunks)
+	require.Len(t, snapshot, 1)
+	assert.Same(t, first, snapshot[0])
+
+	chunks[0] = second
+	assert.Same(t, first, snapshot[0])
+}
+
 func testTransformLogEntry(timeTick uint64) *streamingpb.TransformLogEntry {
 	return &streamingpb.TransformLogEntry{TimeTick: timeTick}
 }

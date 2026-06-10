@@ -176,7 +176,7 @@ func (m *Manager) vChannels() map[string]*vChannelView {
 }
 
 func (m *Manager) addVChannel(meta *streamingpb.VChannelMeta) *vChannelView {
-	info := newVChannelView(meta, 0, 0, true, m.runtimeConfig())
+	info := newVChannelView(meta, 0, true, m.runtimeConfig())
 	m.vchannelViews[info.AssignmentMeta().GetVchannel()] = info
 	m.addTransformLog(info.Name(), nil)
 	m.attachRetainedSegments(info)

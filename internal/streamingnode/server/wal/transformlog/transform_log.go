@@ -13,17 +13,19 @@ import (
 )
 
 type TransformLog interface {
-	Append(message.ImmutableDeleteMessageV1, AppendOption) AppendResult
+	Append(message.ImmutableDeleteMessageV1) AppendResult
 	Flush(context.Context, FlushOption) (FlushResult, error)
 	Read(context.Context, transformlogapi.ReadOption) transformlogapi.Scanner
 	Truncate(TruncateOption) TruncateResult
 
 	Recover(context.Context, *streamingpb.VChannelTransformLogMeta) (RecoverResult, error)
 	SnapshotMeta() *streamingpb.VChannelTransformLogMeta
+	DataCheckpointTimeTick() uint64
+	DataBarrierTimeTick() uint64
 	HasDirty() bool
 	ConsumeDirtyAndGetSnapshot() *streamingpb.VChannelTransformLogMeta
 	MarkSnapshotPersisted(*streamingpb.VChannelTransformLogMeta)
-	HasPendingWork(persistedDataTimeTick uint64) bool
+	HasPendingWork() bool
 }
 
 type Config struct {
@@ -33,10 +35,6 @@ type Config struct {
 	Store    Store
 }
 
-type AppendOption struct {
-	CurrentDurableTimeTick uint64
-}
-
 type AppendResult struct {
 	Appended     bool
 	ShouldFlush  bool
@@ -44,8 +42,7 @@ type AppendResult struct {
 }
 
 type FlushOption struct {
-	TargetTimeTick         uint64
-	CurrentDurableTimeTick uint64
+	TargetTimeTick uint64
 }
 
 type FlushResult struct {
@@ -68,13 +65,14 @@ type RecoverResult struct {
 }
 
 type transformLog struct {
-	flushMu  sync.Mutex
-	mu       sync.Mutex
-	vchannel string
-	meta     *streamingpb.VChannelTransformLogMeta
-	dirty    bool
-	buffer   buffer
-	store    Store
+	flushMu               sync.Mutex
+	mu                    sync.Mutex
+	vchannel              string
+	meta                  *streamingpb.VChannelTransformLogMeta
+	persistedDataTimeTick uint64
+	dirty                 bool
+	buffer                buffer
+	store                 Store
 
 	retainedChunks []*streamingpb.TransformLogChunk
 
@@ -83,20 +81,21 @@ type transformLog struct {
 }
 
 func New(config Config) TransformLog {
+	meta := cloneMetaOrNew(config.Meta)
 	return &transformLog{
-		vchannel:    config.VChannel,
-		meta:        cloneMetaOrNew(config.Meta),
-		buffer:      newBuffer(config.MaxRows),
-		store:       config.Store,
-		subscribers: make(map[*scanner]struct{}),
+		vchannel:              config.VChannel,
+		meta:                  meta,
+		persistedDataTimeTick: meta.GetCheckpointTimeTick(),
+		buffer:                newBuffer(config.MaxRows),
+		store:                 config.Store,
+		subscribers:           make(map[*scanner]struct{}),
 	}
 }
 
-func (t *transformLog) Append(msg message.ImmutableDeleteMessageV1, opt AppendOption) AppendResult {
+func (t *transformLog) Append(msg message.ImmutableDeleteMessageV1) AppendResult {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	currentDurableTimeTick := maxTimeTick(opt.CurrentDurableTimeTick, t.meta.GetCheckpointTimeTick())
-	if msg.TimeTick() <= currentDurableTimeTick || msg.TimeTick() <= t.buffer.DataTimeTick() {
+	if msg.TimeTick() <= t.meta.GetCheckpointTimeTick() || msg.TimeTick() <= t.buffer.DataTimeTick() {
 		return AppendResult{DataTimeTick: t.buffer.DataTimeTick()}
 	}
 	t.buffer.AppendDelete(msg)
@@ -112,13 +111,12 @@ func (t *transformLog) Flush(ctx context.Context, opt FlushOption) (FlushResult,
 	defer t.flushMu.Unlock()
 	var work flushWork
 	t.mu.Lock()
-	currentDurableTimeTick := maxTimeTick(opt.CurrentDurableTimeTick, t.meta.GetCheckpointTimeTick())
 	if !t.buffer.StartFlush(opt.TargetTimeTick) && (!t.buffer.IsFlushing() || t.buffer.FlushTargetTimeTick() == 0) {
 		t.mu.Unlock()
 		return FlushResult{}, nil
 	}
 	targetTimeTick := t.buffer.FlushTargetTimeTick()
-	if targetTimeTick > currentDurableTimeTick {
+	if targetTimeTick > t.meta.GetCheckpointTimeTick() {
 		work = t.prepareFlushLocked(targetTimeTick)
 	} else {
 		work = flushWork{TargetTimeTick: targetTimeTick}
@@ -135,7 +133,7 @@ func (t *transformLog) Flush(ctx context.Context, opt FlushOption) (FlushResult,
 	}
 
 	t.mu.Lock()
-	result, publishedEntries := t.commitFlushLocked(work, currentDurableTimeTick)
+	result, publishedEntries := t.commitFlushLocked(work)
 	result.Started = true
 	t.mu.Unlock()
 	if len(publishedEntries) > 0 {
@@ -150,7 +148,7 @@ func (t *transformLog) Read(ctx context.Context, opt transformlogapi.ReadOption)
 		t.mu.Unlock()
 		return transformlogapi.NewErrorScanner(opt.Name, errors.Wrap(transformlogapi.ErrStartPointTruncated, "start point is truncated"))
 	}
-	chunks := cloneChunks(t.retainedChunks)
+	chunks := snapshotChunks(t.retainedChunks)
 	scanner := newScanner(opt.Name, opt.StartAfterTimeTick, liveAfterTimeTick(opt.StartAfterTimeTick, chunks))
 	t.registerScanner(scanner)
 	t.mu.Unlock()
@@ -184,6 +182,7 @@ func (t *transformLog) Recover(ctx context.Context, meta *streamingpb.VChannelTr
 	t.mu.Lock()
 	if meta != nil {
 		t.meta = cloneMetaOrNew(meta)
+		t.persistedDataTimeTick = t.meta.GetCheckpointTimeTick()
 	}
 	recoverMeta := cloneMeta(t.meta)
 	t.retainedChunks = nil
@@ -216,6 +215,18 @@ func (t *transformLog) SnapshotMeta() *streamingpb.VChannelTransformLogMeta {
 	return cloneMeta(t.meta)
 }
 
+func (t *transformLog) DataCheckpointTimeTick() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.meta.GetCheckpointTimeTick()
+}
+
+func (t *transformLog) DataBarrierTimeTick() uint64 {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.persistedDataTimeTick
+}
+
 func (t *transformLog) HasDirty() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -234,15 +245,18 @@ func (t *transformLog) ConsumeDirtyAndGetSnapshot() *streamingpb.VChannelTransfo
 func (t *transformLog) MarkSnapshotPersisted(snapshot *streamingpb.VChannelTransformLogMeta) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if snapshot.GetCheckpointTimeTick() > t.persistedDataTimeTick {
+		t.persistedDataTimeTick = snapshot.GetCheckpointTimeTick()
+	}
 	t.dirty = !proto.Equal(t.meta, snapshot)
 }
 
-func (t *transformLog) HasPendingWork(persistedDataTimeTick uint64) bool {
+func (t *transformLog) HasPendingWork() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return !t.buffer.IsEmpty() ||
 		t.buffer.IsFlushing() ||
-		t.buffer.FlushTargetTimeTick() > persistedDataTimeTick
+		t.buffer.FlushTargetTimeTick() > t.persistedDataTimeTick
 }
 
 type flushWork struct {
@@ -257,7 +271,7 @@ func (t *transformLog) prepareFlushLocked(targetTimeTick uint64) flushWork {
 	}
 }
 
-func (t *transformLog) commitFlushLocked(work flushWork, currentDurableTimeTick uint64) (FlushResult, []*streamingpb.TransformLogEntry) {
+func (t *transformLog) commitFlushLocked(work flushWork) (FlushResult, []*streamingpb.TransformLogEntry) {
 	var result FlushResult
 	var publishedEntries []*streamingpb.TransformLogEntry
 	if work.Chunk != nil {
@@ -276,14 +290,13 @@ func (t *transformLog) commitFlushLocked(work flushWork, currentDurableTimeTick 
 		if !t.buffer.HasFlushWorkThrough(work.TargetTimeTick) {
 			result.DurableTimeTick = work.TargetTimeTick
 		}
-	} else if work.TargetTimeTick > currentDurableTimeTick {
+	} else if work.TargetTimeTick > t.meta.GetCheckpointTimeTick() {
+		t.meta.CheckpointTimeTick = work.TargetTimeTick
+		t.dirty = true
 		result.DurableTimeTick = work.TargetTimeTick
 	}
 
-	nextDurableTimeTick := currentDurableTimeTick
-	if result.DurableTimeTick > nextDurableTimeTick {
-		nextDurableTimeTick = result.DurableTimeTick
-	}
+	nextDurableTimeTick := maxTimeTick(t.meta.GetCheckpointTimeTick(), result.DurableTimeTick)
 	currentFlushTarget := t.buffer.FlushTargetTimeTick()
 	t.buffer.FinishFlush()
 	switch {
@@ -356,15 +369,15 @@ func cloneMeta(meta *streamingpb.VChannelTransformLogMeta) *streamingpb.VChannel
 	return proto.Clone(meta).(*streamingpb.VChannelTransformLogMeta)
 }
 
-func cloneChunks(chunks []*streamingpb.TransformLogChunk) []*streamingpb.TransformLogChunk {
+func snapshotChunks(chunks []*streamingpb.TransformLogChunk) []*streamingpb.TransformLogChunk {
 	if len(chunks) == 0 {
 		return nil
 	}
-	cloned := make([]*streamingpb.TransformLogChunk, 0, len(chunks))
-	for _, chunk := range chunks {
-		cloned = append(cloned, proto.Clone(chunk).(*streamingpb.TransformLogChunk))
-	}
-	return cloned
+	// Retained chunks are immutable after they are appended or recovered. A shallow
+	// slice snapshot is enough to isolate readers from truncate moving retainedChunks.
+	snapshot := make([]*streamingpb.TransformLogChunk, len(chunks))
+	copy(snapshot, chunks)
+	return snapshot
 }
 
 func liveAfterTimeTick(startAfter uint64, chunks []*streamingpb.TransformLogChunk) uint64 {

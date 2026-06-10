@@ -66,7 +66,12 @@ func (m *Manager) collectCleanupSnapshot(metaPhysicalTimeTick uint64, dataPhysic
 		return snapshot.segmentIDsToDrop[i] < snapshot.segmentIDsToDrop[j]
 	})
 	for vchannelName, vchannel := range m.vchannelViews {
-		dropSnapshot, cleanupPartitions := vchannel.TombstonedCleanupPlan(metaPhysicalTimeTick, dataPhysicalTimeTick)
+		transformLog := m.transformLog(vchannelName)
+		if transformLog == nil {
+			continue
+		}
+		persistedDataTimeTick := transformLog.log.DataBarrierTimeTick()
+		dropSnapshot, cleanupPartitions := vchannel.TombstonedCleanupPlan(metaPhysicalTimeTick, dataPhysicalTimeTick, persistedDataTimeTick)
 		if dropSnapshot != nil {
 			snapshot.vchannelsToDrop[vchannelName] = dropSnapshot
 			snapshot.vchannelOwners[vchannelName] = vchannel
@@ -144,7 +149,11 @@ func (t *cleanupTask) vchannelDropSnapshots() map[string]*streamingpb.VChannelMe
 		if owner == nil || owner != t.snapshot.vchannelOwners[vchannel] {
 			continue
 		}
-		dropSnapshot := owner.VChannelDropCleanupSnapshot(snapshot.GetTombstoneTimeTick())
+		transformLog := t.manager.transformLog(vchannel)
+		if transformLog == nil {
+			continue
+		}
+		dropSnapshot := owner.VChannelDropCleanupSnapshot(snapshot.GetTombstoneTimeTick(), transformLog.log.DataBarrierTimeTick())
 		if dropSnapshot == nil {
 			continue
 		}
