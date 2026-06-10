@@ -13,7 +13,7 @@ import (
 )
 
 type TransformLog interface {
-	Append(message.ImmutableDeleteMessageV1) AppendResult
+	Append(message.ImmutableMessage, AppendOption) AppendResult
 	Flush(context.Context, FlushOption) (FlushResult, error)
 	Read(context.Context, transformlogapi.ReadOption) transformlogapi.Scanner
 	Truncate(TruncateOption) TruncateResult
@@ -39,6 +39,17 @@ type AppendResult struct {
 	Appended     bool
 	ShouldFlush  bool
 	DataTimeTick uint64
+}
+
+type AppendOption struct {
+	DeleteFilter func(partitionID int64, timeTick uint64) bool
+}
+
+func (o AppendOption) acceptDelete(partitionID int64, timeTick uint64) bool {
+	if o.DeleteFilter == nil {
+		return true
+	}
+	return o.DeleteFilter(partitionID, timeTick)
 }
 
 type FlushOption struct {
@@ -92,13 +103,15 @@ func New(config Config) TransformLog {
 	}
 }
 
-func (t *transformLog) Append(msg message.ImmutableDeleteMessageV1) AppendResult {
+func (t *transformLog) Append(msg message.ImmutableMessage, opt AppendOption) AppendResult {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if msg.TimeTick() <= t.meta.GetCheckpointTimeTick() || msg.TimeTick() <= t.buffer.DataTimeTick() {
 		return AppendResult{DataTimeTick: t.buffer.DataTimeTick()}
 	}
-	t.buffer.AppendDelete(msg)
+	if !t.buffer.Append(msg, opt) {
+		return AppendResult{DataTimeTick: t.buffer.DataTimeTick()}
+	}
 	return AppendResult{
 		Appended:     true,
 		ShouldFlush:  t.buffer.ShouldFlush(),

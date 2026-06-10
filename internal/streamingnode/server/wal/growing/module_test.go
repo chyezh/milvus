@@ -4,6 +4,7 @@ import (
 	"context"
 	"path"
 	"testing"
+	"time"
 
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
@@ -196,16 +197,16 @@ func TestGrowingManagerObserveDeleteUsesDataWatermarkAndBufferTail(t *testing.T)
 	vchannel.metaAndData = true
 	msg := newTestDeleteMessage(t, 50)
 
-	result := manager.observeDeleteMessages(vchannel, []message.ImmutableDeleteMessageV1{msg})
+	result := manager.observeTransformLogMessage(vchannel, msg)
 
 	require.NotNil(t, result.Data)
 
-	duplicate := manager.observeDeleteMessages(vchannel, []message.ImmutableDeleteMessageV1{msg})
+	duplicate := manager.observeTransformLogMessage(vchannel, msg)
 	assert.Nil(t, duplicate.Meta)
 	assert.Nil(t, duplicate.Data)
 
 	persisted := newTestDeleteMessage(t, 8)
-	persistedResult := manager.observeDeleteMessages(vchannel, []message.ImmutableDeleteMessageV1{persisted})
+	persistedResult := manager.observeTransformLogMessage(vchannel, persisted)
 	assert.Nil(t, persistedResult.Meta)
 	assert.Nil(t, persistedResult.Data)
 }
@@ -239,7 +240,7 @@ func TestGrowingManagerFlushTransformLogWritesChunkAndMeta(t *testing.T) {
 	vchannel.metaAndData = true
 	msg := newTestDeleteMessage(t, 50)
 
-	result := manager.observeDeleteMessages(vchannel, []message.ImmutableDeleteMessageV1{msg})
+	result := manager.observeTransformLogMessage(vchannel, msg)
 	require.NotNil(t, result.Data)
 
 	task := manager.startFlushTransformLogBufferTask("v1", 50)
@@ -263,6 +264,52 @@ func TestGrowingManagerFlushTransformLogWritesChunkAndMeta(t *testing.T) {
 	assert.Equal(t, uint64(50), transformMeta.GetCheckpointTimeTick())
 	assert.Equal(t, uint64(0), transformMeta.GetFirstChunkId())
 	assert.Equal(t, uint64(1), transformMeta.GetNextChunkId())
+}
+
+func TestGrowingManagerTxnDeleteStoredAsSingleTransformLogEntry(t *testing.T) {
+	store := &recordingTransformLogStore{}
+	manager := NewManager(map[string]*streamingpb.VChannelMeta{
+		"v1": {
+			Vchannel:           "v1",
+			State:              streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
+			CheckpointTimeTick: 100,
+			CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
+				CollectionId: 1,
+				Partitions: []*streamingpb.PartitionInfoOfVChannel{
+					{PartitionId: 10, State: streamingpb.PartitionState_PARTITION_STATE_NORMAL},
+				},
+				Schemas: []*streamingpb.CollectionSchemaOfVChannel{
+					{Schema: &schemapb.CollectionSchema{}, CheckpointTimeTick: 1},
+				},
+			},
+		},
+	}, nil, nil,
+		WithTransformLogStore(store),
+		WithTransformLogBufferMaxRows(100),
+		WithTransformLogMetas(map[string]*streamingpb.VChannelTransformLogMeta{
+			"v1": {CheckpointTimeTick: 10},
+		}),
+	)
+	manager.metaAndData = true
+	vchannel := manager.vChannels()["v1"]
+	vchannel.metaAndData = true
+	txn := newTestTxnDeleteMessage(t, 50, []int64{1, 2})
+
+	result := manager.observeTxnMessage(context.Background(), txn)
+	require.NotNil(t, result.Data)
+
+	task := manager.startFlushTransformLogBufferTask("v1", 50)
+	require.NotNil(t, task)
+	require.NoError(t, task.Run(context.Background()))
+
+	require.Len(t, store.chunks, 1)
+	require.Len(t, store.chunks[0].GetEntries(), 1)
+	entry := store.chunks[0].GetEntries()[0]
+	assert.Equal(t, uint64(50), entry.GetTimeTick())
+	require.NotNil(t, entry.GetDelete())
+	require.Len(t, entry.GetDelete().GetBlocks(), 2)
+	assert.Equal(t, []int64{1}, entry.GetDelete().GetBlocks()[0].GetPrimaryKeys().GetIntId().GetData())
+	assert.Equal(t, []int64{2}, entry.GetDelete().GetBlocks()[1].GetPrimaryKeys().GetIntId().GetData())
 }
 
 func TestObjectTransformLogChunkStoreRoundTrip(t *testing.T) {
@@ -463,7 +510,7 @@ func TestGrowingManagerReadTransformLogForwardsLiveEntriesAfterCaughtUp(t *testi
 	require.NotNil(t, caughtUpEvent.CaughtUp)
 
 	msg := newTestDeleteMessage(t, 50)
-	result := manager.observeDeleteMessages(vchannel, []message.ImmutableDeleteMessageV1{msg})
+	result := manager.observeTransformLogMessage(vchannel, msg)
 	require.NotNil(t, result.Data)
 	task := manager.startFlushTransformLogBufferTask("v1", 50)
 	require.NotNil(t, task)
@@ -633,7 +680,16 @@ func newTestInsertMessage(t *testing.T, timetick uint64, assignment *messagespb.
 
 func newTestDeleteMessage(t *testing.T, timetick uint64) message.ImmutableDeleteMessageV1 {
 	t.Helper()
-	mutableMsg := message.NewDeleteMessageBuilderV1().
+	mutableMsg := newTestDeleteMutableMessage(t, 1, timetick)
+	msg := mutableMsg.WithTimeTick(timetick).
+		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
+	return message.MustAsImmutableDeleteMessageV1(msg)
+}
+
+func newTestDeleteMutableMessage(t *testing.T, pk int64, timetick uint64) message.MutableMessage {
+	t.Helper()
+	return message.NewDeleteMessageBuilderV1().
 		WithVChannel("v1").
 		WithHeader(&message.DeleteMessageHeader{
 			CollectionId: 1,
@@ -643,14 +699,51 @@ func newTestDeleteMessage(t *testing.T, timetick uint64) message.ImmutableDelete
 			Base:         &commonpb.MsgBase{MsgType: commonpb.MsgType_Delete},
 			CollectionID: 1,
 			PartitionID:  10,
-			PrimaryKeys:  &schemapb.IDs{IdField: &schemapb.IDs_IntId{IntId: &schemapb.LongArray{Data: []int64{1}}}},
+			PrimaryKeys:  &schemapb.IDs{IdField: &schemapb.IDs_IntId{IntId: &schemapb.LongArray{Data: []int64{pk}}}},
 			Timestamps:   []uint64{timetick},
 		}).
 		MustBuildMutable()
-	msg := mutableMsg.WithTimeTick(timetick).
+}
+
+func newTestTxnDeleteMessage(t *testing.T, timetick uint64, pks []int64) message.ImmutableTxnMessage {
+	t.Helper()
+	txnCtx := message.TxnContext{TxnID: 1, Keepalive: time.Second}
+	beginMutable := message.NewBeginTxnMessageBuilderV2().
+		WithVChannel("v1").
+		WithHeader(&message.BeginTxnMessageHeader{}).
+		WithBody(&message.BeginTxnMessageBody{}).
+		MustBuildMutable()
+	begin := beginMutable.WithTxnContext(txnCtx).
+		WithTimeTick(timetick - 2).
+		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick - 2))).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick - 2)))
+	beginMsg := message.MustAsImmutableBeginTxnMessageV2(begin)
+
+	builder := message.NewImmutableTxnMessageBuilder(beginMsg)
+	for idx, pk := range pks {
+		bodyTimeTick := timetick - 1
+		immutableDelete := newTestDeleteMutableMessage(t, pk, bodyTimeTick).
+			WithTxnContext(txnCtx).
+			WithTimeTick(bodyTimeTick).
+			WithLastConfirmed(walimplstest.NewTestMessageID(int64(bodyTimeTick))).
+			IntoImmutableMessage(walimplstest.NewTestMessageID(int64(bodyTimeTick) + int64(idx) + 1))
+		builder.Add(immutableDelete)
+	}
+
+	commitMutable := message.NewCommitTxnMessageBuilderV2().
+		WithVChannel("v1").
+		WithHeader(&message.CommitTxnMessageHeader{}).
+		WithBody(&message.CommitTxnMessageBody{}).
+		MustBuildMutable()
+	commit := commitMutable.WithTxnContext(txnCtx).
+		WithTimeTick(timetick).
 		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
 		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
-	return message.MustAsImmutableDeleteMessageV1(msg)
+	commitMsg := message.MustAsImmutableCommitTxnMessageV2(commit)
+
+	txn, err := builder.Build(commitMsg)
+	require.NoError(t, err)
+	return txn
 }
 
 func hasPartitionMeta(meta *streamingpb.VChannelMeta, partitionID int64) bool {

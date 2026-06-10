@@ -11,7 +11,7 @@ import (
 const defaultBufferMaxRows = 1024
 
 type buffer struct {
-	entries             []deleteEntry
+	entries             []transformEntry
 	fromTimeTick        uint64
 	toTimeTick          uint64
 	rows                uint64
@@ -27,20 +27,19 @@ func newBuffer(maxRows uint64) buffer {
 	return buffer{maxRows: maxRows}
 }
 
-func (b *buffer) AppendDelete(msg message.ImmutableDeleteMessageV1) {
-	timetick := msg.TimeTick()
+func (b *buffer) Append(msg message.ImmutableMessage, opt AppendOption) bool {
+	entry := transformEntryFromMessage(msg, opt)
+	if entry == nil {
+		return false
+	}
+	timetick := entry.timeTick
 	if len(b.entries) == 0 {
 		b.fromTimeTick = timetick
 	}
-	body := msg.MustBody()
-	rows := deleteEntryRows(body)
 	b.toTimeTick = timetick
-	b.rows += rows
-	b.entries = append(b.entries, deleteEntry{
-		timeTick: timetick,
-		rows:     rows,
-		request:  cloneDeleteRequest(body),
-	})
+	b.rows += entry.rows
+	b.entries = append(b.entries, *entry)
+	return true
 }
 
 func (b *buffer) ShouldFlush() bool {
@@ -92,7 +91,7 @@ func (b *buffer) FlushChunk(chunkID uint64, timetick uint64) *streamingpb.Transf
 	}
 	chunkEntries := make([]*streamingpb.TransformLogEntry, 0, len(entries))
 	for _, entry := range entries {
-		chunkEntries = append(chunkEntries, transformLogEntryFromDeleteEntry(entry))
+		chunkEntries = append(chunkEntries, cloneTransformLogEntry(entry.entry))
 	}
 	return &streamingpb.TransformLogChunk{
 		ChunkId: chunkID,
@@ -104,7 +103,7 @@ func (b *buffer) HasFlushWorkThrough(timetick uint64) bool {
 	return len(b.entriesThrough(timetick)) > 0
 }
 
-func (b *buffer) flushEntriesThrough(timetick uint64) []deleteEntry {
+func (b *buffer) flushEntriesThrough(timetick uint64) []transformEntry {
 	entries := b.entriesThrough(timetick)
 	if len(entries) == 0 {
 		return nil
@@ -122,7 +121,7 @@ func (b *buffer) flushEntriesThrough(timetick uint64) []deleteEntry {
 	return entries
 }
 
-func (b *buffer) entriesThrough(timetick uint64) []deleteEntry {
+func (b *buffer) entriesThrough(timetick uint64) []transformEntry {
 	for idx, entry := range b.entries {
 		if entry.timeTick > timetick {
 			return b.entries[:idx]
@@ -157,10 +156,10 @@ func (b *buffer) rebuildStats() {
 	}
 }
 
-type deleteEntry struct {
+type transformEntry struct {
 	timeTick uint64
 	rows     uint64
-	request  *msgpb.DeleteRequest
+	entry    *streamingpb.TransformLogEntry
 }
 
 func deleteEntryRows(request *msgpb.DeleteRequest) uint64 {
@@ -170,21 +169,65 @@ func deleteEntryRows(request *msgpb.DeleteRequest) uint64 {
 	return 1
 }
 
-func transformLogEntryFromDeleteEntry(entry deleteEntry) *streamingpb.TransformLogEntry {
-	request := cloneDeleteRequest(entry.request)
-	return &streamingpb.TransformLogEntry{
-		TimeTick: entry.timeTick,
-		Entry: &streamingpb.TransformLogEntry_Delete{
-			Delete: &streamingpb.TransformDeleteEntry{
-				Blocks: []*streamingpb.TransformDeleteBlock{
-					{
-						PartitionId: request.GetPartitionID(),
-						PrimaryKeys: request.GetPrimaryKeys(),
-					},
+func transformEntryFromMessage(msg message.ImmutableMessage, opt AppendOption) *transformEntry {
+	switch msg.MessageType() {
+	case message.MessageTypeDelete:
+		deleted := message.MustAsImmutableDeleteMessageV1(msg)
+		return transformEntryFromDeletes(msg.TimeTick(), []message.ImmutableDeleteMessageV1{deleted}, opt)
+	case message.MessageTypeTxn:
+		txn := message.AsImmutableTxnMessage(msg)
+		deletes := make([]message.ImmutableDeleteMessageV1, 0)
+		_ = txn.RangeOver(func(im message.ImmutableMessage) error {
+			if im.MessageType() == message.MessageTypeDelete {
+				deletes = append(deletes, message.MustAsImmutableDeleteMessageV1(im))
+			}
+			return nil
+		})
+		return transformEntryFromDeletes(msg.TimeTick(), deletes, opt)
+	default:
+		return nil
+	}
+}
+
+func transformEntryFromDeletes(timeTick uint64, deletes []message.ImmutableDeleteMessageV1, opt AppendOption) *transformEntry {
+	blocks := make([]*streamingpb.TransformDeleteBlock, 0, len(deletes))
+	var rows uint64
+	for _, deleted := range deletes {
+		request := cloneDeleteRequest(deleted.MustBody())
+		if request == nil {
+			continue
+		}
+		if !opt.acceptDelete(request.GetPartitionID(), timeTick) {
+			continue
+		}
+		rows += deleteEntryRows(request)
+		blocks = append(blocks, &streamingpb.TransformDeleteBlock{
+			PartitionId: request.GetPartitionID(),
+			PrimaryKeys: request.GetPrimaryKeys(),
+		})
+	}
+	if len(blocks) == 0 {
+		return nil
+	}
+	return &transformEntry{
+		timeTick: timeTick,
+		rows:     rows,
+		entry: &streamingpb.TransformLogEntry{
+			TimeTick: timeTick,
+			Entry: &streamingpb.TransformLogEntry_Delete{
+				Delete: &streamingpb.TransformDeleteEntry{
+					Blocks: blocks,
 				},
 			},
 		},
 	}
+}
+
+func cloneTransformLogEntry(entry *streamingpb.TransformLogEntry) *streamingpb.TransformLogEntry {
+	if entry == nil {
+		return nil
+	}
+	return proto.Clone(entry).(*streamingpb.TransformLogEntry)
 }
 
 func cloneDeleteRequest(value *msgpb.DeleteRequest) *msgpb.DeleteRequest {

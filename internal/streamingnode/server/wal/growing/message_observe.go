@@ -344,13 +344,13 @@ func (m *Manager) observeDeleteMessage(ctx context.Context, msg message.Immutabl
 		m.logInconsistency(msg, "delete vchannel not found", zap.String("vchannel", msg.VChannel()))
 		return emptyObserveResult()
 	}
-	return m.observeDeleteMessages(vchannelManager, []message.ImmutableDeleteMessageV1{msg})
+	return m.observeTransformLogMessage(vchannelManager, msg)
 }
 
 func (m *Manager) observeTxnMessage(ctx context.Context, msg message.ImmutableTxnMessage) moduleapi.ObserveResult {
 	result := emptyObserveResult()
 	observedSegments := make(map[int64]struct{})
-	deletes := make(map[string][]message.ImmutableDeleteMessageV1)
+	hasDelete := false
 	timetick := msg.TimeTick()
 	msg.RangeOver(func(im message.ImmutableMessage) error {
 		var subResult moduleapi.ObserveResult
@@ -375,8 +375,7 @@ func (m *Manager) observeTxnMessage(ctx context.Context, msg message.ImmutableTx
 				subResult = composeObserveResults(subResult, segment.ObserveTxnMessage(ctx, msg))
 			}
 		case message.MessageTypeDelete:
-			deleted := message.MustAsImmutableDeleteMessageV1(im)
-			deletes[deleted.VChannel()] = append(deletes[deleted.VChannel()], deleted)
+			hasDelete = true
 		default:
 			m.logInconsistency(im, "unexpected message type in txn message", zap.String("messageType", im.MessageType().String()))
 			return nil
@@ -384,33 +383,18 @@ func (m *Manager) observeTxnMessage(ctx context.Context, msg message.ImmutableTx
 		result = composeObserveResults(result, subResult)
 		return nil
 	})
-	for _, vchannelDeletes := range deletes {
-		result = composeObserveResults(result, m.observeTxnDeleteMessages(vchannelDeletes, timetick))
+	if hasDelete {
+		vchannelManager := m.retainedVChannel(msg.VChannel())
+		if vchannelManager == nil {
+			m.logInconsistency(msg, "txn delete vchannel not found", zap.String("vchannel", msg.VChannel()))
+			return result
+		}
+		result = composeObserveResults(result, m.observeTransformLogMessage(vchannelManager, msg))
 	}
 	return result
 }
 
-func (m *Manager) observeTxnDeleteMessages(deletes []message.ImmutableDeleteMessageV1, timetick uint64) moduleapi.ObserveResult {
-	if !m.metaAndData || len(deletes) == 0 {
-		return emptyObserveResult()
-	}
-	vchannelName := deletes[0].VChannel()
-	vchannelManager := m.retainedVChannel(vchannelName)
-	if vchannelManager == nil {
-		m.logInconsistency(deletes[0], "txn delete vchannel not found", zap.String("vchannel", vchannelName))
-		return emptyObserveResult()
-	}
-	filteredDeletes := make([]message.ImmutableDeleteMessageV1, 0, len(deletes))
-	for _, deleted := range deletes {
-		filteredDeletes = append(filteredDeletes, deleteMessageWithTimeTick(deleted, timetick))
-	}
-	if len(filteredDeletes) == 0 {
-		return emptyObserveResult()
-	}
-	return m.observeDeleteMessages(vchannelManager, filteredDeletes)
-}
-
-func (m *Manager) observeDeleteMessages(vchannel *vChannelView, messages []message.ImmutableDeleteMessageV1) moduleapi.ObserveResult {
+func (m *Manager) observeTransformLogMessage(vchannel *vChannelView, msg message.ImmutableMessage) moduleapi.ObserveResult {
 	transformLog := m.transformLog(vchannel.Name())
 	if transformLog == nil {
 		return emptyObserveResult()
@@ -421,22 +405,21 @@ func (m *Manager) observeDeleteMessages(vchannel *vChannelView, messages []messa
 		vchannel.mu.Unlock()
 		return emptyObserveResult()
 	}
-	appended := false
-	var appendResult waltransformlog.AppendResult
-	for _, msg := range messages {
-		partitionID := msg.MustBody().GetPartitionID()
-		if !vchannel.canReplayAtLocked(msg.TimeTick()) ||
-			!vchannel.canReplayExistingPartitionAtLocked(partitionID, msg.TimeTick()) ||
-			msg.TimeTick() <= transformLog.log.DataCheckpointTimeTick() {
-			continue
-		}
-		appendResult = transformLog.log.Append(msg)
-		appended = appendResult.Appended || appended
+	if !vchannel.canReplayAtLocked(msg.TimeTick()) ||
+		msg.TimeTick() <= transformLog.log.DataCheckpointTimeTick() {
+		vchannel.mu.Unlock()
+		return emptyObserveResult()
 	}
+	appendOpt := waltransformlog.AppendOption{
+		DeleteFilter: func(partitionID int64, timetick uint64) bool {
+			return vchannel.canReplayExistingPartitionAtLocked(partitionID, timetick)
+		},
+	}
+	appendResult := transformLog.log.Append(msg, appendOpt)
 	runtime := vchannel.runtime
 	vchannelName := vchannel.meta.GetVchannel()
 	vchannel.mu.Unlock()
-	if !appended {
+	if !appendResult.Appended {
 		return emptyObserveResult()
 	}
 	if appendResult.ShouldFlush {
@@ -446,21 +429,6 @@ func (m *Manager) observeDeleteMessages(vchannel *vChannelView, messages []messa
 		runtime.Scheduler.Submit(task)
 	}
 	return dataBarrierResult(transformLog.dataBarrier())
-}
-
-func deleteMessageWithTimeTick(deleted message.ImmutableDeleteMessageV1, timetick uint64) message.ImmutableDeleteMessageV1 {
-	if deleted.TimeTick() == timetick {
-		return deleted
-	}
-	msg := message.NewDeleteMessageBuilderV1().
-		WithVChannel(deleted.VChannel()).
-		WithHeader(deleted.Header()).
-		WithBody(deleted.MustBody()).
-		MustBuildMutable().
-		WithTimeTick(timetick).
-		WithLastConfirmed(deleted.LastConfirmedMessageID()).
-		IntoImmutableMessage(deleted.MessageID())
-	return message.MustAsImmutableDeleteMessageV1(msg)
 }
 
 func emptyObserveResult() moduleapi.ObserveResult {
