@@ -84,6 +84,40 @@ func TestCatalogSegmentAssignments(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestCatalogTransformLogMeta(t *testing.T) {
+	kv := mocks.NewMetaKv(t)
+	meta := &streamingpb.VChannelTransformLogMeta{
+		CheckpointTimeTick: 50,
+		FirstChunkId:       3,
+		NextChunkId:        4,
+	}
+	value, err := proto.Marshal(meta)
+	require.NoError(t, err)
+
+	kv.EXPECT().LoadWithPrefix(mock.Anything, buildTransformLogPrefix("p1")).
+		Return([]string{buildTransformLogKey("p1", "v1")}, []string{string(value)}, nil)
+	catalog := NewCataLog(kv)
+	ctx := context.Background()
+	metas, err := catalog.ListTransformLogMeta(ctx, "p1")
+	require.NoError(t, err)
+	require.Len(t, metas, 1)
+	assert.True(t, proto.Equal(meta, metas["v1"]))
+
+	kv.EXPECT().MultiSave(mock.Anything, mock.MatchedBy(func(kvs map[string]string) bool {
+		saved, ok := kvs[buildTransformLogKey("p1", "v1")]
+		if !ok {
+			return false
+		}
+		loaded := &streamingpb.VChannelTransformLogMeta{}
+		return proto.Unmarshal([]byte(saved), loaded) == nil && proto.Equal(meta, loaded)
+	})).Return(nil)
+	require.NoError(t, catalog.SaveTransformLogMeta(ctx, "p1", map[string]*streamingpb.VChannelTransformLogMeta{"v1": meta}))
+
+	kv.EXPECT().MultiRemove(mock.Anything, []string{buildTransformLogKey("p1", "v1")}).
+		Return(nil)
+	require.NoError(t, catalog.DropTransformLogMeta(ctx, "p1", []string{"v1"}))
+}
+
 func TestCatalogListSegmentAssignmentRejectsMismatchedOwner(t *testing.T) {
 	kv := mocks.NewMetaKv(t)
 	segment := &streamingpb.SegmentAssignmentMeta{
@@ -127,8 +161,7 @@ func TestCatalogRetainsClosedRecoveryMeta(t *testing.T) {
 					},
 				},
 			},
-			CheckpointTimeTick:     100,
-			DataCheckpointTimeTick: 50,
+			CheckpointTimeTick: 100,
 		},
 	}
 	require.NoError(t, catalog.SaveVChannels(ctx, "p1", vchannels))
@@ -138,7 +171,6 @@ func TestCatalogRetainsClosedRecoveryMeta(t *testing.T) {
 	require.Len(t, loadedVChannels, 1)
 	assert.Equal(t, streamingpb.VChannelState_VCHANNEL_STATE_DROPPED, loadedVChannels[0].GetState())
 	assert.Equal(t, uint64(100), loadedVChannels[0].GetCheckpointTimeTick())
-	assert.Equal(t, uint64(50), loadedVChannels[0].GetDataCheckpointTimeTick())
 
 	segments := map[int64]*streamingpb.SegmentAssignmentMeta{
 		300: {
@@ -242,9 +274,8 @@ func TestCatalogRetainsTombstonedRecoveryMeta(t *testing.T) {
 					},
 				},
 			},
-			CheckpointTimeTick:     100,
-			DataCheckpointTimeTick: 100,
-			TombstoneTimeTick:      100,
+			CheckpointTimeTick: 100,
+			TombstoneTimeTick:  100,
 		},
 	}
 	require.NoError(t, catalog.SaveVChannels(ctx, "p1", vchannels))
@@ -305,9 +336,8 @@ func TestCatalogDropsTombstonedRecoveryMeta(t *testing.T) {
 					},
 				},
 			},
-			CheckpointTimeTick:     100,
-			DataCheckpointTimeTick: 100,
-			TombstoneTimeTick:      100,
+			CheckpointTimeTick: 100,
+			TombstoneTimeTick:  100,
 		},
 		"vchannel-2": {
 			Vchannel: "vchannel-2",
