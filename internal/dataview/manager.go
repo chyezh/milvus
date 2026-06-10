@@ -27,16 +27,10 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
+	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
-
-type Catalog interface {
-	SaveDataView(ctx context.Context, dataView *viewpb.DataViewOfCollection) error
-	ListDataViews(ctx context.Context, collectionID int64) ([]*viewpb.DataViewOfCollection, error)
-	DropDataView(ctx context.Context, collectionID int64, dataVersion *viewpb.DataVersion) error
-	DropDataViews(ctx context.Context, collectionID int64) error
-}
 
 type SegmentStore interface {
 	GetSegment(ctx context.Context, segID int64) *Segment
@@ -117,7 +111,7 @@ type collectionDataViewState struct {
 
 type dataViewManager struct {
 	mu       sync.RWMutex
-	catalog  Catalog
+	catalog  metastore.DataCoordCatalog
 	segments SegmentStore
 	states   map[int64]*collectionDataViewState
 }
@@ -230,7 +224,7 @@ type dataViewMembershipMutation struct {
 	classifyAdvance func(removed bool, added bool) dataViewAdvance
 }
 
-func NewManager(catalog Catalog, segments SegmentStore) Manager {
+func NewManager(catalog metastore.DataCoordCatalog, segments SegmentStore) Manager {
 	return &dataViewManager{
 		catalog:  catalog,
 		segments: segments,

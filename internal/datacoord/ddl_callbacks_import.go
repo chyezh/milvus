@@ -210,7 +210,7 @@ func (s *Server) broadcastImport(ctx context.Context,
 
 func (c *DDLCallbacks) registerImportCallbacks() {
 	registry.RegisterImportV1AckCallback(c.importV1AckCallback)
-	registry.RegisterCommitImportV2AckCallback(c.commitImportV2AckCallback)
+	registry.RegisterCommitImportV2AckOnceCallback(c.commitImportV2AckOnceCallback)
 	registry.RegisterRollbackImportV2AckCallback(c.rollbackImportV2AckCallback)
 }
 
@@ -220,7 +220,15 @@ func (c *DDLCallbacks) registerImportCallbacks() {
 // (exclusive collection-level lock), so no CAS is needed here.
 func (c *DDLCallbacks) commitImportV2AckCallback(ctx context.Context, result message.BroadcastResultCommitImportMessageV2) error {
 	header := result.Message.Header()
-	jobID := header.GetJobId()
+	return c.handleCommitImportV2Ack(ctx, header.GetJobId())
+}
+
+func (c *DDLCallbacks) commitImportV2AckOnceCallback(ctx context.Context, result message.AckResultCommitImportMessageV2) error {
+	header := result.Message.Header()
+	return c.handleCommitImportV2Ack(ctx, header.GetJobId())
+}
+
+func (c *DDLCallbacks) handleCommitImportV2Ack(ctx context.Context, jobID int64) error {
 	log.Ctx(ctx).Info("CommitImport broadcast ack received", zap.Int64("jobID", jobID))
 
 	job := c.importMeta.GetJob(ctx, jobID)

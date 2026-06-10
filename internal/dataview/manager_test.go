@@ -28,11 +28,14 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
+	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
 type fakeDataViewCatalog struct {
+	metastore.DataCoordCatalog
+
 	mu                  sync.Mutex
 	views               []*viewpb.DataViewOfCollection
 	saveErrOnce         error

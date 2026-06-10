@@ -20,6 +20,7 @@ import (
 	"context"
 
 	"github.com/milvus-io/milvus/internal/dataview"
+	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
@@ -39,7 +40,7 @@ type dataViewSegmentStore struct {
 	meta *meta
 }
 
-func newDataViewManager(catalog dataview.Catalog, meta *meta) DataViewManager {
+func newDataViewManager(catalog metastore.DataCoordCatalog, meta *meta) DataViewManager {
 	return dataview.NewManager(catalog, &dataViewSegmentStore{meta: meta})
 }
 
