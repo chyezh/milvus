@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/samber/lo"
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 
@@ -467,6 +468,21 @@ func applyExternalCollectionSegmentUpdate(
 	}
 	if patchErr != nil {
 		return patchErr
+	}
+	if mt.dataViewManager != nil {
+		addSegmentIDs := lo.Map(normalizedUpdatedSegments, func(segment *datapb.SegmentInfo, _ int) int64 {
+			return segment.GetID()
+		})
+		if _, err := mt.dataViewManager.OnExternalRefresh(ctx, ExternalRefreshDataViewEvent{
+			CollectionID: collectionID,
+			AddSegments:  addSegmentIDs,
+			DropSegments: segmentsToDrop,
+		}); err != nil {
+			log.Warn("failed to publish DataView after external collection refresh",
+				zap.Int64s("addSegments", addSegmentIDs),
+				zap.Int64s("dropSegments", segmentsToDrop),
+				zap.Error(err))
+		}
 	}
 
 	log.Info("external collection segments updated successfully",

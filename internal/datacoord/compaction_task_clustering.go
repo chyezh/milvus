@@ -603,6 +603,10 @@ func (t *clusteringCompactionTask) completeTask() error {
 	// now, the segment view only includes the result segments.
 	if err = t.markInputSegmentsDropped(); err != nil {
 		log.Warn("mark input segments as Dropped failed, skip it and wait retry")
+		return nil
+	}
+	if meta, ok := t.meta.(*meta); ok {
+		meta.publishDataViewAfterCompaction(context.TODO(), t.GetTaskProto(), t.GetTaskProto().GetResultSegments())
 	}
 
 	return nil
