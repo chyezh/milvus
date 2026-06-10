@@ -182,6 +182,11 @@ func TestHandlerClientGetOrCreateTransformLogStreamReusesAssignmentStream(t *tes
 	require.Same(t, stream1, stream2)
 	require.Equal(t, 1, createCount)
 	_ = stream1.Close()
+	require.Eventually(t, func() bool {
+		handler.transformStreamMu.Lock()
+		defer handler.transformStreamMu.Unlock()
+		return len(handler.transformStreams) == 0
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestHandlerClient_GetSalvageCheckpoint(t *testing.T) {

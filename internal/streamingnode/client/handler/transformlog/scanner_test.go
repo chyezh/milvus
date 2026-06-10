@@ -79,6 +79,49 @@ func TestStreamMultiplexesSubscriptionsAndCloseAck(t *testing.T) {
 		},
 	})
 	require.Equal(t, uint64(20), recvEvent(t, sub2.Chan()).CaughtUp.StartAfterTimeTick)
+
+	closeDone = make(chan error, 1)
+	go func() {
+		closeDone <- sub2.Close()
+	}()
+	closeReq = fakeStream.sent(t)
+	require.Equal(t, int64(2), closeReq.GetCloseSubscription().GetSubscriptionId())
+	fakeStream.recv(&streamingpb.TransformResponse{
+		Response: &streamingpb.TransformResponse_CloseSubscription{
+			CloseSubscription: &streamingpb.CloseTransformSubscriptionResponse{
+				SubscriptionId: 2,
+				Vchannel:       "v2",
+			},
+		},
+	})
+	require.NoError(t, <-closeDone)
+	closeStreamReq := fakeStream.sent(t)
+	require.NotNil(t, closeStreamReq.GetCloseStream())
+	require.Eventually(t, func() bool {
+		select {
+		case <-stream.Done():
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestStreamRejectsSubscribeAfterClosing(t *testing.T) {
+	ctx := context.Background()
+	fakeStream := newFakeSubscribeTransformClient(ctx)
+	handlerClient := mock_streamingpb.NewMockStreamingNodeHandlerServiceClient(t)
+	handlerClient.EXPECT().SubscribeTransform(mock.Anything, mock.Anything).Return(fakeStream, nil).Once()
+
+	stream, err := CreateStream(ctx, &StreamOptions{Assignment: testAssignment()}, handlerClient)
+	require.NoError(t, err)
+	defer stream.Close()
+
+	stream.markClosing()
+	scanner, err := stream.Subscribe(ctx, transformReadOption("v1", 10))
+	require.ErrorIs(t, err, io.EOF)
+	require.Nil(t, scanner)
+	requireNoSentRequest(t, fakeStream)
 }
 
 func subscribeForTest(
@@ -141,6 +184,15 @@ func recvEvent[T any](t *testing.T, ch <-chan T) T {
 		t.Fatal("timeout waiting event")
 		var zero T
 		return zero
+	}
+}
+
+func requireNoSentRequest(t *testing.T, f *fakeSubscribeTransformClient) {
+	t.Helper()
+	select {
+	case req := <-f.sendCh:
+		t.Fatalf("unexpected sent request: %v", req)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

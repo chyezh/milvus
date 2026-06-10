@@ -32,6 +32,7 @@ func NewStreamKey(assignment *types.PChannelInfoAssigned) StreamKey {
 
 type StreamOptions struct {
 	Assignment *types.PChannelInfoAssigned
+	OnClose    func(StreamKey, *Stream)
 }
 
 func CreateStream(
@@ -49,6 +50,7 @@ func CreateStream(
 	stream := &Stream{
 		key:           NewStreamKey(opts.Assignment),
 		stream:        streamClient,
+		onClose:       opts.OnClose,
 		subscriptions: make(map[int64]*remoteSubscription),
 		done:          make(chan struct{}),
 	}
@@ -63,10 +65,13 @@ type Stream struct {
 	sendMu     sync.Mutex
 	mu         sync.Mutex
 	nextID     int64
+	active     int
+	closing    bool
 	err        error
 	done       chan struct{}
 	closeOnce  sync.Once
 	finishOnce sync.Once
+	onClose    func(StreamKey, *Stream)
 
 	subscriptions map[int64]*remoteSubscription
 }
@@ -85,10 +90,19 @@ func (s *Stream) Error() error {
 	return s.err
 }
 
+func (s *Stream) IsClosing() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closing
+}
+
 func (s *Stream) Subscribe(ctx context.Context, opt transformlogapi.ReadOption) (transformlogapi.Scanner, error) {
 	sub := s.newSubscription(opt)
 	if sub == nil {
-		return nil, s.Error()
+		if err := s.Error(); err != nil {
+			return nil, err
+		}
+		return nil, io.EOF
 	}
 	if err := s.send(&streamingpb.TransformRequest{
 		Request: &streamingpb.TransformRequest_Create{
@@ -112,14 +126,15 @@ func (s *Stream) Subscribe(ctx context.Context, opt transformlogapi.ReadOption) 
 	case <-sub.Done():
 		return nil, sub.Error()
 	case <-ctx.Done():
+		_ = s.sendCloseSubscription(sub.subscriptionID)
 		s.removeSubscription(sub.subscriptionID)
 		sub.finish(ctx.Err())
-		_ = s.sendCloseSubscription(sub.subscriptionID)
 		return nil, ctx.Err()
 	}
 }
 
 func (s *Stream) Close() error {
+	s.markClosing()
 	s.closeOnce.Do(func() {
 		_ = s.send(&streamingpb.TransformRequest{
 			Request: &streamingpb.TransformRequest_CloseStream{
@@ -140,10 +155,20 @@ func (s *Stream) newSubscription(opt transformlogapi.ReadOption) *remoteSubscrip
 		return nil
 	default:
 	}
+	if s.closing {
+		return nil
+	}
 	s.nextID++
 	sub := newRemoteSubscription(s, s.nextID, opt)
 	s.subscriptions[sub.subscriptionID] = sub
+	s.active++
 	return sub
+}
+
+func (s *Stream) markClosing() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closing = true
 }
 
 func (s *Stream) getSubscription(subscriptionID int64) *remoteSubscription {
@@ -156,6 +181,29 @@ func (s *Stream) removeSubscription(subscriptionID int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.subscriptions, subscriptionID)
+}
+
+func (s *Stream) onSubscriptionFinished(subscriptionID int64) {
+	shouldClose := false
+	s.mu.Lock()
+	delete(s.subscriptions, subscriptionID)
+	if s.active > 0 {
+		s.active--
+	}
+	if s.active == 0 {
+		select {
+		case <-s.done:
+		default:
+			s.closing = true
+			shouldClose = true
+		}
+	}
+	s.mu.Unlock()
+	if shouldClose {
+		go func() {
+			_ = s.Close()
+		}()
+	}
 }
 
 func (s *Stream) sendCloseSubscription(subscriptionID int64) error {
@@ -278,6 +326,8 @@ func (s *Stream) finish(err error) {
 	s.finishOnce.Do(func() {
 		s.mu.Lock()
 		s.err = err
+		s.closing = true
+		s.active = 0
 		subscriptions := s.subscriptions
 		s.subscriptions = make(map[int64]*remoteSubscription)
 		close(s.done)
@@ -286,6 +336,9 @@ func (s *Stream) finish(err error) {
 			sub.finish(err)
 		}
 		_ = s.stream.CloseSend()
+		if s.onClose != nil {
+			s.onClose(s.key, s)
+		}
 	})
 }
 
@@ -388,6 +441,7 @@ func (s *remoteSubscription) finish(err error) {
 		s.markCloseAck(err)
 		close(s.done)
 		close(s.ch)
+		s.stream.onSubscriptionFinished(s.subscriptionID)
 	})
 }
 

@@ -328,15 +328,30 @@ func (hc *handlerClientImpl) getOrCreateTransformLogStream(
 		case <-stream.Done():
 			delete(hc.transformStreams, key)
 		default:
+			if stream.IsClosing() {
+				delete(hc.transformStreams, key)
+				break
+			}
 			return stream, nil
 		}
 	}
-	stream, err := hc.newTransformLogStream(ctx, &transformlogclient.StreamOptions{Assignment: assign}, handlerService)
+	stream, err := hc.newTransformLogStream(ctx, &transformlogclient.StreamOptions{
+		Assignment: assign,
+		OnClose:    hc.removeTransformLogStream,
+	}, handlerService)
 	if err != nil {
 		return nil, err
 	}
 	hc.transformStreams[key] = stream
 	return stream, nil
+}
+
+func (hc *handlerClientImpl) removeTransformLogStream(key transformlogclient.StreamKey, stream *transformlogclient.Stream) {
+	hc.transformStreamMu.Lock()
+	defer hc.transformStreamMu.Unlock()
+	if hc.transformStreams != nil && hc.transformStreams[key] == stream {
+		delete(hc.transformStreams, key)
+	}
 }
 
 type handlerCreateFunc func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error)
