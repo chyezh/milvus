@@ -697,11 +697,11 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 	}
 	if s.dataViewManager != nil {
 		if req.GetSegLevel() == datapb.SegmentLevel_L0 {
-			if err := s.dataViewManager.OnL0Compact(ctx, L0CompactDataViewEvent{CollectionID: req.GetCollectionID()}); err != nil {
+			if _, err := s.dataViewManager.OnL0Compact(ctx, L0CompactDataViewEvent{CollectionID: req.GetCollectionID()}); err != nil {
 				log.Warn("failed to refresh DataView delete timetick after L0 update", zap.Error(err))
 			}
 		} else if req.GetFlushed() {
-			if err := s.dataViewManager.OnFlush(ctx, FlushDataViewEvent{
+			if _, err := s.dataViewManager.OnFlush(ctx, FlushDataViewEvent{
 				CollectionID:         req.GetCollectionID(),
 				SegmentIDs:           []int64{req.GetSegmentID()},
 				TemporaryUnavailable: enableSortCompaction(),
@@ -2127,7 +2127,7 @@ func (s *Server) NotifyDropPartition(ctx context.Context, channel string, partit
 		zap.Any("partitionID", partitionIDs))
 	if s.dataViewManager != nil {
 		for _, collectionID := range s.meta.GetCollectionIDsByPartition(ctx, partitionIDs) {
-			if err := s.dataViewManager.OnDropPartition(ctx, DropPartitionDataViewEvent{
+			if _, err := s.dataViewManager.OnDropPartition(ctx, DropPartitionDataViewEvent{
 				CollectionID: collectionID,
 				PartitionIDs: partitionIDs,
 			}); err != nil {
@@ -2157,7 +2157,7 @@ func (s *Server) DropSegmentsByTime(ctx context.Context, collectionID int64, flu
 			return err
 		}
 		if s.dataViewManager != nil {
-			err = s.dataViewManager.OnTruncate(ctx, TruncateDataViewEvent{
+			_, err = s.dataViewManager.OnTruncate(ctx, TruncateDataViewEvent{
 				CollectionID: collectionID,
 				VChannel:     channelName,
 				FlushTs:      flushTs,
@@ -3066,7 +3066,7 @@ func (s *Server) HandleCommitVchannel(ctx context.Context, req *datapb.HandleCom
 			return err
 		}
 		if s.dataViewManager != nil && collectionID != 0 {
-			if err := s.dataViewManager.OnImport(ctx, ImportDataViewEvent{
+			if _, err := s.dataViewManager.OnImport(ctx, ImportDataViewEvent{
 				CollectionID: collectionID,
 				SegmentIDs:   segIDs,
 			}); err != nil {

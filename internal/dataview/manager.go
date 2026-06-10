@@ -44,15 +44,15 @@ type SegmentStore interface {
 }
 
 type Manager interface {
-	OnFlush(ctx context.Context, event FlushDataViewEvent) error
-	OnImport(ctx context.Context, event ImportDataViewEvent) error
-	OnCopySegmentComplete(ctx context.Context, event CopySegmentCompleteDataViewEvent) error
-	OnCompact(ctx context.Context, event CompactDataViewEvent) error
-	OnL0Compact(ctx context.Context, event L0CompactDataViewEvent) error
-	OnExternalRefresh(ctx context.Context, event ExternalRefreshDataViewEvent) error
-	OnDropPartition(ctx context.Context, event DropPartitionDataViewEvent) error
-	OnTruncate(ctx context.Context, event TruncateDataViewEvent) error
-	OnDropCollection(ctx context.Context, collectionID int64) error
+	OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error)
+	OnImport(ctx context.Context, event ImportDataViewEvent) (*viewpb.DataVersion, error)
+	OnCopySegmentComplete(ctx context.Context, event CopySegmentCompleteDataViewEvent) (*viewpb.DataVersion, error)
+	OnCompact(ctx context.Context, event CompactDataViewEvent) (*viewpb.DataVersion, error)
+	OnL0Compact(ctx context.Context, event L0CompactDataViewEvent) (*viewpb.DataVersion, error)
+	OnExternalRefresh(ctx context.Context, event ExternalRefreshDataViewEvent) (*viewpb.DataVersion, error)
+	OnDropPartition(ctx context.Context, event DropPartitionDataViewEvent) (*viewpb.DataVersion, error)
+	OnTruncate(ctx context.Context, event TruncateDataViewEvent) (*viewpb.DataVersion, error)
+	OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error)
 
 	RecoverCollection(ctx context.Context, collectionID int64) error
 	LatestVisibleDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error)
@@ -238,7 +238,7 @@ func NewManager(catalog Catalog, segments SegmentStore) Manager {
 	}
 }
 
-func (m *dataViewManager) OnFlush(ctx context.Context, event FlushDataViewEvent) error {
+func (m *dataViewManager) OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error) {
 	return m.applyMembershipMutation(ctx, dataViewMembershipMutation{
 		collectionID:   event.CollectionID,
 		addSegmentIDs:  event.SegmentIDs,
@@ -247,7 +247,7 @@ func (m *dataViewManager) OnFlush(ctx context.Context, event FlushDataViewEvent)
 	})
 }
 
-func (m *dataViewManager) OnImport(ctx context.Context, event ImportDataViewEvent) error {
+func (m *dataViewManager) OnImport(ctx context.Context, event ImportDataViewEvent) (*viewpb.DataVersion, error) {
 	return m.applyMembershipMutation(ctx, dataViewMembershipMutation{
 		collectionID:  event.CollectionID,
 		addSegmentIDs: event.SegmentIDs,
@@ -255,7 +255,7 @@ func (m *dataViewManager) OnImport(ctx context.Context, event ImportDataViewEven
 	})
 }
 
-func (m *dataViewManager) OnCopySegmentComplete(ctx context.Context, event CopySegmentCompleteDataViewEvent) error {
+func (m *dataViewManager) OnCopySegmentComplete(ctx context.Context, event CopySegmentCompleteDataViewEvent) (*viewpb.DataVersion, error) {
 	return m.applyMembershipMutation(ctx, dataViewMembershipMutation{
 		collectionID:  event.CollectionID,
 		addSegmentIDs: event.SegmentIDs,
@@ -263,9 +263,9 @@ func (m *dataViewManager) OnCopySegmentComplete(ctx context.Context, event CopyS
 	})
 }
 
-func (m *dataViewManager) OnCompact(ctx context.Context, event CompactDataViewEvent) error {
+func (m *dataViewManager) OnCompact(ctx context.Context, event CompactDataViewEvent) (*viewpb.DataVersion, error) {
 	if m.hasPendingCompactOutput(ctx, event.CompactTo, event.AllowInvisibleTo) {
-		return nil
+		return nil, nil
 	}
 	return m.applyMembershipMutation(ctx, dataViewMembershipMutation{
 		collectionID:   event.CollectionID,
@@ -276,15 +276,15 @@ func (m *dataViewManager) OnCompact(ctx context.Context, event CompactDataViewEv
 	})
 }
 
-func (m *dataViewManager) OnL0Compact(ctx context.Context, event L0CompactDataViewEvent) error {
+func (m *dataViewManager) OnL0Compact(ctx context.Context, event L0CompactDataViewEvent) (*viewpb.DataVersion, error) {
 	state := m.getState(event.CollectionID)
 	if state == nil {
-		return nil
+		return nil, nil
 	}
 	state.mu.Lock()
 	if state.dropped {
 		state.mu.Unlock()
-		return nil
+		return nil, nil
 	}
 
 	if state.latestResident != nil {
@@ -293,11 +293,12 @@ func (m *dataViewManager) OnL0Compact(ctx context.Context, event L0CompactDataVi
 	if state.latestVisible != nil {
 		state.latestVisible = m.withDeleteTimetick(ctx, state.latestVisible)
 	}
+	version := dataVersionFromView(state.latestResident)
 	state.mu.Unlock()
-	return nil
+	return version, nil
 }
 
-func (m *dataViewManager) OnExternalRefresh(ctx context.Context, event ExternalRefreshDataViewEvent) error {
+func (m *dataViewManager) OnExternalRefresh(ctx context.Context, event ExternalRefreshDataViewEvent) (*viewpb.DataVersion, error) {
 	return m.applyMembershipMutation(ctx, dataViewMembershipMutation{
 		collectionID:   event.CollectionID,
 		addSegmentIDs:  event.AddSegments,
@@ -314,7 +315,7 @@ func (m *dataViewManager) OnExternalRefresh(ctx context.Context, event ExternalR
 	})
 }
 
-func (m *dataViewManager) OnDropPartition(ctx context.Context, event DropPartitionDataViewEvent) error {
+func (m *dataViewManager) OnDropPartition(ctx context.Context, event DropPartitionDataViewEvent) (*viewpb.DataVersion, error) {
 	partitions := make(map[int64]struct{}, len(event.PartitionIDs))
 	for _, partitionID := range event.PartitionIDs {
 		partitions[partitionID] = struct{}{}
@@ -329,7 +330,7 @@ func (m *dataViewManager) OnDropPartition(ctx context.Context, event DropPartiti
 	})
 }
 
-func (m *dataViewManager) OnTruncate(ctx context.Context, event TruncateDataViewEvent) error {
+func (m *dataViewManager) OnTruncate(ctx context.Context, event TruncateDataViewEvent) (*viewpb.DataVersion, error) {
 	return m.applyMembershipMutation(ctx, dataViewMembershipMutation{
 		collectionID: event.CollectionID,
 		advance:      dataViewAdvanceCompact,
@@ -343,13 +344,13 @@ func (m *dataViewManager) OnTruncate(ctx context.Context, event TruncateDataView
 	})
 }
 
-func (m *dataViewManager) OnDropCollection(ctx context.Context, collectionID int64) error {
+func (m *dataViewManager) OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error) {
 	state := m.getOrCreateState(collectionID)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
 	if err := m.catalog.DropDataViews(ctx, collectionID); err != nil {
-		return err
+		return nil, err
 	}
 	state.latestResident = nil
 	state.latestVisible = nil
@@ -359,7 +360,7 @@ func (m *dataViewManager) OnDropCollection(ctx context.Context, collectionID int
 	if m.states[collectionID] == state {
 		delete(m.states, collectionID)
 	}
-	return nil
+	return nil, nil
 }
 
 func (m *dataViewManager) RecoverCollection(ctx context.Context, collectionID int64) error {
@@ -517,12 +518,12 @@ func (m *dataViewManager) GarbageCollect(ctx context.Context, collectionID int64
 	return nil
 }
 
-func (m *dataViewManager) applyMembershipMutation(ctx context.Context, mutation dataViewMembershipMutation) error {
+func (m *dataViewManager) applyMembershipMutation(ctx context.Context, mutation dataViewMembershipMutation) (*viewpb.DataVersion, error) {
 	state := m.getOrCreateState(mutation.collectionID)
 	state.mu.Lock()
 	if state.dropped {
 		state.mu.Unlock()
-		return nil
+		return nil, nil
 	}
 
 	previousResident := canonicalDataViewClone(state.latestResident)
@@ -557,8 +558,9 @@ func (m *dataViewManager) applyMembershipMutation(ctx context.Context, mutation 
 		if state.latestVisible != nil {
 			state.latestVisible = m.withDeleteTimetick(ctx, state.latestVisible)
 		}
+		version := dataVersionFromView(state.latestResident)
 		state.mu.Unlock()
-		return nil
+		return version, nil
 	}
 
 	advance := mutation.advance
@@ -569,15 +571,16 @@ func (m *dataViewManager) applyMembershipMutation(ctx context.Context, mutation 
 	toPersist := cloneDataViewWithoutDeleteTimetick(next)
 	if err := m.catalog.SaveDataView(ctx, toPersist); err != nil {
 		state.mu.Unlock()
-		return err
+		return nil, err
 	}
 
 	state.latestResident = canonicalDataViewClone(toPersist)
 	if m.isDataViewVisibleFromBase(ctx, previousResident, state.latestResident, nil) {
 		state.latestVisible = m.withDeleteTimetick(ctx, state.latestResident)
 	}
+	version := dataVersionFromView(state.latestResident)
 	state.mu.Unlock()
-	return nil
+	return version, nil
 }
 
 func (m *dataViewManager) getState(collectionID int64) *collectionDataViewState {
@@ -945,6 +948,13 @@ func cloneDataVersion(version *viewpb.DataVersion) *viewpb.DataVersion {
 		return nil
 	}
 	return proto.Clone(version).(*viewpb.DataVersion)
+}
+
+func dataVersionFromView(view *viewpb.DataViewOfCollection) *viewpb.DataVersion {
+	if view == nil {
+		return nil
+	}
+	return cloneDataVersion(view.GetDataVersion())
 }
 
 func cloneDataViewWithoutDeleteTimetick(view *viewpb.DataViewOfCollection) *viewpb.DataViewOfCollection {

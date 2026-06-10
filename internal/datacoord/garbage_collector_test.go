@@ -87,40 +87,40 @@ type fakeGCDataViewCall struct {
 	retainLatest int
 }
 
-func (m *fakeGCDataViewManager) OnFlush(ctx context.Context, event FlushDataViewEvent) error {
-	return nil
+func (m *fakeGCDataViewManager) OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error) {
+	return nil, nil
 }
 
-func (m *fakeGCDataViewManager) OnImport(ctx context.Context, event ImportDataViewEvent) error {
-	return nil
+func (m *fakeGCDataViewManager) OnImport(ctx context.Context, event ImportDataViewEvent) (*viewpb.DataVersion, error) {
+	return nil, nil
 }
 
-func (m *fakeGCDataViewManager) OnCopySegmentComplete(ctx context.Context, event CopySegmentCompleteDataViewEvent) error {
-	return nil
+func (m *fakeGCDataViewManager) OnCopySegmentComplete(ctx context.Context, event CopySegmentCompleteDataViewEvent) (*viewpb.DataVersion, error) {
+	return nil, nil
 }
 
-func (m *fakeGCDataViewManager) OnCompact(ctx context.Context, event CompactDataViewEvent) error {
-	return nil
+func (m *fakeGCDataViewManager) OnCompact(ctx context.Context, event CompactDataViewEvent) (*viewpb.DataVersion, error) {
+	return nil, nil
 }
 
-func (m *fakeGCDataViewManager) OnL0Compact(ctx context.Context, event L0CompactDataViewEvent) error {
-	return nil
+func (m *fakeGCDataViewManager) OnL0Compact(ctx context.Context, event L0CompactDataViewEvent) (*viewpb.DataVersion, error) {
+	return nil, nil
 }
 
-func (m *fakeGCDataViewManager) OnExternalRefresh(ctx context.Context, event ExternalRefreshDataViewEvent) error {
-	return nil
+func (m *fakeGCDataViewManager) OnExternalRefresh(ctx context.Context, event ExternalRefreshDataViewEvent) (*viewpb.DataVersion, error) {
+	return nil, nil
 }
 
-func (m *fakeGCDataViewManager) OnDropPartition(ctx context.Context, event DropPartitionDataViewEvent) error {
-	return nil
+func (m *fakeGCDataViewManager) OnDropPartition(ctx context.Context, event DropPartitionDataViewEvent) (*viewpb.DataVersion, error) {
+	return nil, nil
 }
 
-func (m *fakeGCDataViewManager) OnTruncate(ctx context.Context, event TruncateDataViewEvent) error {
-	return nil
+func (m *fakeGCDataViewManager) OnTruncate(ctx context.Context, event TruncateDataViewEvent) (*viewpb.DataVersion, error) {
+	return nil, nil
 }
 
-func (m *fakeGCDataViewManager) OnDropCollection(ctx context.Context, collectionID int64) error {
-	return nil
+func (m *fakeGCDataViewManager) OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error) {
+	return nil, nil
 }
 
 func (m *fakeGCDataViewManager) RecoverCollection(ctx context.Context, collectionID int64) error {

@@ -471,7 +471,7 @@ func applyExternalCollectionSegmentUpdate(
 		addSegmentIDs := lo.Map(normalizedUpdatedSegments, func(segment *datapb.SegmentInfo, _ int) int64 {
 			return segment.GetID()
 		})
-		if err := mt.dataViewManager.OnExternalRefresh(ctx, ExternalRefreshDataViewEvent{
+		if _, err := mt.dataViewManager.OnExternalRefresh(ctx, ExternalRefreshDataViewEvent{
 			CollectionID: collectionID,
 			AddSegments:  addSegmentIDs,
 			DropSegments: segmentsToDrop,

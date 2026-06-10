@@ -733,7 +733,7 @@ func SyncCopySegmentTask(task CopySegmentTask, resp *datapb.QueryCopySegmentResp
 				return err
 			}
 			if meta.dataViewManager != nil {
-				if err := meta.dataViewManager.OnCopySegmentComplete(ctx, CopySegmentCompleteDataViewEvent{
+				if _, err := meta.dataViewManager.OnCopySegmentComplete(ctx, CopySegmentCompleteDataViewEvent{
 					CollectionID: task.GetCollectionId(),
 					SegmentIDs:   []int64{result.GetSegmentId()},
 				}); err != nil {

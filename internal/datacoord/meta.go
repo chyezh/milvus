@@ -2633,7 +2633,7 @@ func (m *meta) publishDataViewAfterCompaction(ctx context.Context, t *datapb.Com
 	if m.dataViewManager == nil {
 		return
 	}
-	if err := m.dataViewManager.OnCompact(ctx, CompactDataViewEvent{
+	if _, err := m.dataViewManager.OnCompact(ctx, CompactDataViewEvent{
 		CollectionID: t.GetCollectionID(),
 		CompactFrom:  t.GetInputSegments(),
 		CompactTo:    compactTo,
