@@ -271,9 +271,6 @@ func (s *stalledRecoveryStorage) Metrics() recovery.RecoveryMetrics {
 	return recovery.RecoveryMetrics{}
 }
 
-func (s *stalledRecoveryStorage) ObserveMessage(ctx context.Context, msg message.ImmutableMessage) {
-}
-
 func (s *stalledRecoveryStorage) GetDataCheckpoint(ctx context.Context) *recovery.WALCheckpoint {
 	return s.checkpoint
 }
