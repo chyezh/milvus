@@ -113,8 +113,16 @@ const (
 	ScopePartition
 )
 
+type DataProgressKind int
+
+const (
+	DataProgressDurable DataProgressKind = iota
+	DataProgressMaterialized
+)
+
 type Scope struct {
 	Type ScopeType
+	Kind DataProgressKind
 
 	VChannel     string
 	CollectionID int64
