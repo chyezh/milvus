@@ -5,10 +5,9 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/errors"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
-	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 )
 
 var (
@@ -100,8 +99,8 @@ func (s *reliableSyncer) getOrCreateSyncer(ctx context.Context, nodeKey qviews.W
 		return nil, false
 	}
 
-	log.Info("ReliableSyncer: node discovered on demand, creating ResumableSyncer",
-		zap.String("node", nodeKey))
+	mlog.Info(ctx, "ReliableSyncer: node discovered on demand, creating ResumableSyncer",
+		mlog.String("node", nodeKey))
 	rs = newResumableSyncer(s.ctx, node, s.client)
 	s.resumableSyncers[nodeKey] = rs
 	return rs, false
@@ -141,7 +140,7 @@ func (s *reliableSyncer) watchNodes() {
 			if s.ctx.Err() != nil {
 				return
 			}
-			log.Warn("ReliableSyncer: WatchNodeChanged failed, retrying", zap.Error(err))
+			mlog.Warn(s.ctx, "ReliableSyncer: WatchNodeChanged failed, retrying", mlog.Err(err))
 			continue
 		}
 
@@ -174,7 +173,7 @@ func (s *reliableSyncer) drainRemovedNodes() {
 		if s.ctx.Err() != nil {
 			return
 		}
-		log.Warn("ReliableSyncer: GetAllNodes failed", zap.Error(err))
+		mlog.Warn(s.ctx, "ReliableSyncer: GetAllNodes failed", mlog.Err(err))
 		return
 	}
 
@@ -196,8 +195,8 @@ func (s *reliableSyncer) drainRemovedNodes() {
 
 	// Close removed ResumableSyncers and drain pending views (node lost).
 	for _, r := range removed {
-		log.Info("ReliableSyncer: node removed, closing ResumableSyncer",
-			zap.String("node", r.key))
+		mlog.Info(s.ctx, "ReliableSyncer: node removed, closing ResumableSyncer",
+			mlog.String("node", r.key))
 		r.syncer.Close()
 		r.syncer.DrainPendingIfNodeLost()
 	}

@@ -6,10 +6,9 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"go.uber.org/zap"
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
-	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
@@ -90,8 +89,8 @@ func (rs *resumableSyncer) loop() {
 			if rs.ctx.Err() != nil {
 				return
 			}
-			log.Warn("ResumableSyncer: failed to open stream",
-				zap.String("node", rs.node.String()), zap.Error(err))
+			mlog.Warn(rs.ctx, "ResumableSyncer: failed to open stream",
+				mlog.String("node", rs.node.String()), mlog.Err(err))
 
 			nextBackoff := bo.NextBackOff()
 			select {
@@ -149,8 +148,8 @@ func (rs *resumableSyncer) recvLoop(stream viewpb.ViewSyncService_SyncQueryViewC
 	for {
 		resp, err := stream.Recv()
 		if err != nil {
-			log.Warn("ResumableSyncer: stream recv failed",
-				zap.String("node", rs.node.String()), zap.Error(err))
+			mlog.Warn(rs.ctx, "ResumableSyncer: stream recv failed",
+				mlog.String("node", rs.node.String()), mlog.Err(err))
 			return
 		}
 
@@ -191,8 +190,8 @@ func (rs *resumableSyncer) sendBatched(stream viewpb.ViewSyncService_SyncQueryVi
 			},
 		}
 		if err := stream.Send(req); err != nil {
-			log.Warn("ResumableSyncer: stream send failed",
-				zap.String("node", rs.node.String()), zap.Error(err))
+			mlog.Warn(rs.ctx, "ResumableSyncer: stream send failed",
+				mlog.String("node", rs.node.String()), mlog.Err(err))
 			return err
 		}
 	}
