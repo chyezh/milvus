@@ -373,7 +373,7 @@ TransformLog materialized_time_tick -> L0 Segment output committed to DataCoord
 - `FlushTo(T)` makes TransformLog entries up to `T` durable in TransformLog
   chunks and advances `checkpoint_time_tick` after catalog persistence.
 - `MaterializeTo(T)` reads retained entries in
-  `(materialized_time_tick, T]`, writes L0 deltalogs, commits L0 segments to
+  `(materialized_time_tick, T]`, writes L0 deltalog files, commits L0 segments to
   DataCoord, and advances `materialized_time_tick` after catalog persistence.
 
 Materialization requires TransformLog chunk durability first. A materialization
@@ -381,9 +381,11 @@ task for target `T` has a precondition that the same vchannel's durable
 frontier has reached `T`.
 
 The materializer groups Delete blocks by `(vchannel, partitionID)` and writes
-one or more L0 segments per group. The collection id is a vchannel-level
-property and is obtained from the owning TransformLog, not from every Delete
-block.
+one or more L0 segments per group. Each L0 Segment owns exactly one deltalog
+file. If a selected range must be split by row or size limit, the materializer
+creates multiple L0 segments instead of attaching multiple deltalogs to one L0
+Segment. The collection id is a vchannel-level property and is obtained from
+the owning TransformLog, not from every Delete block.
 
 ```text
 retained TransformLog entries
@@ -391,7 +393,7 @@ retained TransformLog entries
   -> group Delete blocks by partitionID
   -> build storage.DeleteData with primary keys and entry.time_tick
   -> allocate L0 segment ids
-  -> write deltalog through the existing syncmgr / pack-writer path
+  -> write one deltalog per L0 segment through the existing syncmgr / pack-writer path
   -> SaveBinlogPaths(SegLevel_L0, Flushed=true)
   -> update meta.materialized_time_tick = T
   -> mark TransformLog DirtySnapshot
@@ -900,7 +902,13 @@ flush/drop messages can wait for it through the materialized frontier.
 ### 12.1 Materialization Policy
 
 The materializer accumulates TransformLog entries and triggers when enough data
-has been collected. The primary trigger is size, such as row count or bytes.
+has been collected. The primary trigger is accumulated unmaterialized Delete
+data size:
+
+- if accumulated rows after `materialized_time_tick` reach or exceed
+  `l0.maxRowNum`;
+- or if accumulated bytes after `materialized_time_tick` reach or exceed
+  `l0.maxSize`.
 
 Small ranges should stay in TransformLog until the threshold is met. L0
 materialization is not triggered by QueryNode subscription ack or local buffer
@@ -919,14 +927,16 @@ TransformLog chunks are durable.
 3. Group Delete blocks by `(vchannel, partitionID)`.
 4. Build `storage.DeleteData` from primary keys and the enclosing entry
    timetick.
-5. Allocate L0 segment ids and write deltalog objects through the existing
-   syncmgr / pack-writer path.
-6. Commit the L0 segments to DataCoord with
+5. Split the selected data into one or more L0 segments. Each L0 segment
+   contains exactly one deltalog file.
+6. Allocate L0 segment ids and write one deltalog per L0 segment through the
+   existing syncmgr / pack-writer path.
+7. Commit the L0 segments to DataCoord with
    `SaveBinlogPaths(SegLevel_L0, Flushed=true)`.
-7. Advance `TransformLogMeta.materialized_time_tick` to `target_timetick`.
-8. Mark a TransformLog DirtySnapshot.
-9. RecoveryStorage persists independent TransformLogMeta.
-10. DirtySnapshot.MarkPersisted publishes the materialized cursor.
+8. Advance `TransformLogMeta.materialized_time_tick` to `target_timetick`.
+9. Mark a TransformLog DirtySnapshot.
+10. RecoveryStorage persists independent TransformLogMeta.
+11. DirtySnapshot.MarkPersisted publishes the materialized cursor.
 
 `materialized_time_tick` is on the same TransformLog timeline as
 `entry.time_tick`. No separate materialized data/effect cursor exists.
