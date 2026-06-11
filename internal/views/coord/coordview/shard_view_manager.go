@@ -5,12 +5,10 @@ import (
 	"sort"
 	"sync"
 
-	"go.uber.org/zap"
-
 	"github.com/milvus-io/milvus/internal/metastore/kv/queryview"
 	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
-	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
@@ -405,10 +403,10 @@ func (m *ShardViewManager) flush() {
 			// SaveQueryViews only fails when the Coordinator is shutting down
 			// (ctx canceled). On next startup a full recovery from ETCD will
 			// reconstruct all state machines, so this is safe to log-and-skip.
-			log.Ctx(m.ctx).Warn("failed to persist query views",
-				zap.String("shardID", m.shardID.String()),
-				zap.Int("count", len(m.pendingPersists)),
-				zap.Error(err),
+			mlog.Warn(m.ctx, "failed to persist query views",
+				mlog.String("shardID", m.shardID.String()),
+				mlog.Int("count", len(m.pendingPersists)),
+				mlog.Err(err),
 			)
 		}
 		m.pendingPersists = m.pendingPersists[:0]
@@ -438,9 +436,9 @@ func (m *ShardViewManager) flush() {
 				// SyncViews only fails when the Coordinator is shutting down
 				// (ctx canceled or syncer closed). On next startup a full
 				// recovery will re-push all outstanding syncs.
-				log.Ctx(m.ctx).Warn("failed to sync views to nodes",
-					zap.String("shardID", m.shardID.String()),
-					zap.Error(err),
+				mlog.Warn(m.ctx, "failed to sync views to nodes",
+					mlog.String("shardID", m.shardID.String()),
+					mlog.Err(err),
 				)
 			}
 		}
