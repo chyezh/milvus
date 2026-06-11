@@ -90,13 +90,10 @@ type RecoveryStream interface {
 	Close() error
 }
 
-// RecoveryStorage is an interface that is used to observe the messages from the WAL.
+// RecoveryStorage owns WAL recovery state for one pchannel.
 type RecoveryStorage interface {
 	// Metrics gets the metrics of the recovery storage.
 	Metrics() RecoveryMetrics
-
-	// ObserveMessage observes the message from the WAL.
-	ObserveMessage(ctx context.Context, msg message.ImmutableMessage)
 
 	// GetDataCheckpoint returns the recovery-owned data checkpoint.
 	GetDataCheckpoint(ctx context.Context) *WALCheckpoint

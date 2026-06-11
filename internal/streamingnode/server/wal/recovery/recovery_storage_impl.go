@@ -204,7 +204,6 @@ func (r *recoveryStorageImpl) NotifyBarrierUpdated() {
 	}
 	r.checkpointManager.TryAdvanceMetaCheckpoint()
 	r.checkpointManager.TryAdvanceDataCheckpoint()
-	r.updateDataCheckpointFromViewsLocked()
 	r.notifyPersist()
 	if r.taskScheduler != nil {
 		r.taskScheduler.Notify()
@@ -236,13 +235,6 @@ func (r *recoveryStorageImpl) TransformLog() transformlog.Accesser {
 		return r.transformLogModule
 	}
 	return transformlog.NewErrorAccesser(transformlog.ErrVChannelUnavailable)
-}
-
-// ObserveMessage is called when a new message is observed.
-func (r *recoveryStorageImpl) ObserveMessage(ctx context.Context, msg message.ImmutableMessage) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.observeMessage(ctx, msg)
 }
 
 // Close closes the recovery storage and wait the background task stop.
@@ -314,6 +306,23 @@ func (r *recoveryStorageImpl) observeMessage(ctx context.Context, msg message.Im
 	if r.dirtyCounter > r.cfg.maxDirtyMessages {
 		r.notifyPersist()
 	}
+}
+
+func (r *recoveryStorageImpl) observeMetaOnlyMessage(ctx context.Context, msg message.ImmutableMessage) {
+	result := r.observeModulesMessage(ctx, msg)
+	r.updateCheckpoint(msg, result.Meta)
+	r.metrics.ObServeInMemMetrics(r.checkpoint.TimeTick)
+
+	r.dirtyCounter++
+	if r.dirtyCounter > r.cfg.maxDirtyMessages {
+		r.notifyPersist()
+	}
+}
+
+func (r *recoveryStorageImpl) observeMetaScannerMessage(ctx context.Context, msg message.ImmutableMessage) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.observeMetaOnlyMessage(ctx, msg)
 }
 
 func (r *recoveryStorageImpl) observeDataScannerMessage(ctx context.Context, msg message.ImmutableMessage) {

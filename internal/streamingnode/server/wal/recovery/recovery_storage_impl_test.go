@@ -60,15 +60,6 @@ func (v testDurableFrontierView) DataFrontier(scope moduleapi.Scope) walcheckpoi
 	}
 }
 
-type testDataCheckpointModule struct {
-	testRecoveryModule
-	timetick uint64
-}
-
-func (m *testDataCheckpointModule) DataCheckpointTimeTick() uint64 {
-	return m.timetick
-}
-
 type notifyingDirtyModule struct {
 	testRecoveryModule
 	notify func()
@@ -105,7 +96,7 @@ func TestRecoveryStorageRegistersImmediateCheckpointForBarrierlessMessage(t *tes
 	msg := mutableMsg.WithTimeTick(2).WithLastConfirmed(lastConfirmed).
 		IntoImmutableMessage(walimplstest.NewTestMessageID(3))
 
-	storage.ObserveMessage(context.Background(), msg)
+	storage.observeDataScannerMessage(context.Background(), msg)
 
 	snapshot := storage.checkpointManager.Snapshot()
 	assert.True(t, lastConfirmed.EQ(snapshot.MessageID))
@@ -116,7 +107,42 @@ func TestRecoveryStorageRegistersImmediateCheckpointForBarrierlessMessage(t *tes
 	assert.True(t, storage.checkpointManager.HasDirty())
 }
 
-func TestRecoveryStorageNotifyBarrierUpdatedUsesViewDataCheckpoint(t *testing.T) {
+func TestRecoveryStorageMetaOnlyObserveDoesNotAdvanceDataCheckpoint(t *testing.T) {
+	checkpoint := &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(1),
+		TimeTick:  1,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: walimplstest.NewTestMessageID(1),
+			TimeTick:  1,
+		},
+	}
+	storage := newRecoveryStorage(types.PChannelInfo{Name: "test-pchannel"}, checkpoint)
+	defer storage.metrics.Close()
+	defer storage.taskScheduler.Close()
+	storage.modules = []moduleapi.Module{&testRecoveryModule{}}
+
+	lastConfirmed := walimplstest.NewTestMessageID(2)
+	mutableMsg, err := message.NewTimeTickMessageBuilderV1().
+		WithHeader(&message.TimeTickMessageHeader{}).
+		WithVChannel("test-vchannel").
+		WithBody(&msgpb.TimeTickMsg{}).
+		BuildMutable()
+	require.NoError(t, err)
+	msg := mutableMsg.WithTimeTick(2).WithLastConfirmed(lastConfirmed).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(3))
+
+	storage.observeMetaScannerMessage(context.Background(), msg)
+
+	snapshot := storage.checkpointManager.Snapshot()
+	assert.True(t, lastConfirmed.EQ(snapshot.MessageID))
+	assert.Equal(t, uint64(2), snapshot.TimeTick)
+	require.NotNil(t, snapshot.DataCheckpoint)
+	assert.True(t, walimplstest.NewTestMessageID(1).EQ(snapshot.DataCheckpoint.MessageID))
+	assert.Equal(t, uint64(1), snapshot.DataCheckpoint.TimeTick)
+	assert.True(t, storage.checkpointManager.HasDirty())
+}
+
+func TestRecoveryStorageNotifyBarrierUpdatedDoesNotAdvanceDataCheckpointWithoutDataBarrier(t *testing.T) {
 	checkpoint := &utility.WALCheckpoint{
 		MessageID: walimplstest.NewTestMessageID(10),
 		TimeTick:  100,
@@ -128,15 +154,15 @@ func TestRecoveryStorageNotifyBarrierUpdatedUsesViewDataCheckpoint(t *testing.T)
 	storage := newRecoveryStorage(types.PChannelInfo{Name: "test-pchannel"}, checkpoint)
 	defer storage.metrics.Close()
 	defer storage.taskScheduler.Close()
-	storage.modules = []moduleapi.Module{&testDataCheckpointModule{timetick: 80}}
+	storage.modules = []moduleapi.Module{&testRecoveryModule{}}
 
 	storage.NotifyBarrierUpdated()
 
 	snapshot := storage.checkpointManager.Snapshot()
 	require.NotNil(t, snapshot.DataCheckpoint)
-	assert.True(t, walimplstest.NewTestMessageID(10).EQ(snapshot.DataCheckpoint.MessageID))
-	assert.Equal(t, uint64(80), snapshot.DataCheckpoint.TimeTick)
-	assert.True(t, storage.checkpointManager.HasDirty())
+	assert.True(t, walimplstest.NewTestMessageID(5).EQ(snapshot.DataCheckpoint.MessageID))
+	assert.Equal(t, uint64(50), snapshot.DataCheckpoint.TimeTick)
+	assert.False(t, storage.checkpointManager.HasDirty())
 }
 
 func TestRecoveryStorageConsumeDirtySnapshotDoesNotHoldLockWhileCollectingModules(t *testing.T) {

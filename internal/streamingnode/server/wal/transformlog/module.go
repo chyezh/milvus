@@ -147,19 +147,6 @@ func (m *Module) Read(ctx context.Context, opt transformlogapi.ReadOption) trans
 	return log.log.Read(ctx, opt)
 }
 
-func (m *Module) DataCheckpointTimeTick() uint64 {
-	dataTimeTick := uint64(math.MaxUint64)
-	for _, log := range m.snapshotLogs() {
-		if !log.hasDataCheckpoint() {
-			continue
-		}
-		if timetick := log.log.DataBarrierTimeTick(); timetick < dataTimeTick {
-			dataTimeTick = timetick
-		}
-	}
-	return dataTimeTick
-}
-
 func (m *Module) DataFrontier(scope moduleapi.Scope) walcheckpoint.Barrier {
 	logs := make(transformLogFrontierOwners, 0)
 	switch scope.Type {
@@ -175,9 +162,6 @@ func (m *Module) DataFrontier(scope moduleapi.Scope) walcheckpoint.Barrier {
 		return nil
 	}
 	return logs
-}
-
-func (m *Module) NotifyCheckpointPersisted(uint64, uint64) {
 }
 
 func (m *Module) observeTransformLogMessage(msg message.ImmutableMessage) moduleapi.ObserveResult {
@@ -406,10 +390,8 @@ func composeBarrier(left walcheckpoint.Barrier, right walcheckpoint.Barrier) wal
 }
 
 var (
-	_ moduleapi.Module                      = (*Module)(nil)
-	_ moduleapi.DataCheckpointView          = (*Module)(nil)
-	_ moduleapi.DataFrontierView            = (*Module)(nil)
-	_ moduleapi.CheckpointPersistedObserver = (*Module)(nil)
-	_ transformlogapi.Accesser              = (*Module)(nil)
-	_ walcheckpoint.Barrier                 = (transformLogFrontierOwners)(nil)
+	_ moduleapi.Module           = (*Module)(nil)
+	_ moduleapi.DataFrontierView = (*Module)(nil)
+	_ transformlogapi.Accesser   = (*Module)(nil)
+	_ walcheckpoint.Barrier      = (transformLogFrontierOwners)(nil)
 )

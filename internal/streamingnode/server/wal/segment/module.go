@@ -179,16 +179,6 @@ func (m *Module) ConsumeDirtySnapshots() []moduleapi.DirtySnapshot {
 	return snapshots
 }
 
-func (m *Module) DataCheckpointTimeTick() uint64 {
-	dataTimeTick := uint64(math.MaxUint64)
-	for _, segment := range m.snapshotSegments() {
-		if timetick := segment.dataTimeTick(); timetick < dataTimeTick {
-			dataTimeTick = timetick
-		}
-	}
-	return dataTimeTick
-}
-
 func (m *Module) DataFrontier(scope moduleapi.Scope) walcheckpoint.Barrier {
 	owners := make(frontierOwners, 0)
 	for _, segment := range m.snapshotSegments() {
@@ -463,7 +453,6 @@ func frontierBefore(timetick uint64) uint64 {
 
 var (
 	_ moduleapi.Module                      = (*Module)(nil)
-	_ moduleapi.DataCheckpointView          = (*Module)(nil)
 	_ moduleapi.DataFrontierView            = (*Module)(nil)
 	_ moduleapi.CheckpointPersistedObserver = (*Module)(nil)
 	_ walcheckpoint.Barrier                 = (frontierOwners)(nil)

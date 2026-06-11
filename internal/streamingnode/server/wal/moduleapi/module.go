@@ -105,10 +105,6 @@ type CheckpointPersistedObserver interface {
 	NotifyCheckpointPersisted(metaTimeTick uint64, dataTimeTick uint64)
 }
 
-type DataCheckpointView interface {
-	DataCheckpointTimeTick() uint64
-}
-
 type ScopeType int
 
 const (

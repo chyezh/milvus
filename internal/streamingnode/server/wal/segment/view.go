@@ -337,12 +337,6 @@ func (info *segmentView) dataTimeTick() uint64 {
 	return info.persistedDataTimeTick
 }
 
-func (info *segmentView) DataCheckpointTimeTick() uint64 {
-	info.mu.Lock()
-	defer info.mu.Unlock()
-	return info.meta.GetDataCheckpointTimeTick()
-}
-
 func (info *segmentView) dataBarrier() walcheckpoint.Barrier {
 	return walcheckpoint.BarrierFunc(info.dataTimeTick)
 }
