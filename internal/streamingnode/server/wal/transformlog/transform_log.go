@@ -402,9 +402,6 @@ func (t *transformLog) commitFlushLocked(work flushWork) (FlushResult, []*stream
 		t.buffer.DiscardThrough(toTimeTick)
 		t.retainedChunks = append(t.retainedChunks, work.Chunk)
 		publishedEntries = work.Chunk.GetEntries()
-		if toTimeTick > t.meta.GetCheckpointTimeTick() {
-			t.meta.CheckpointTimeTick = toTimeTick
-		}
 		if work.Chunk.GetChunkId() >= t.meta.GetNextChunkId() {
 			t.meta.NextChunkId = work.Chunk.GetChunkId() + 1
 		}
@@ -412,6 +409,9 @@ func (t *transformLog) commitFlushLocked(work flushWork) (FlushResult, []*stream
 		result.DurableTimeTick = toTimeTick
 		if !t.buffer.HasFlushWorkThrough(work.TargetTimeTick) {
 			result.DurableTimeTick = work.TargetTimeTick
+		}
+		if result.DurableTimeTick > t.meta.GetCheckpointTimeTick() {
+			t.meta.CheckpointTimeTick = result.DurableTimeTick
 		}
 	} else if work.TargetTimeTick > t.meta.GetCheckpointTimeTick() {
 		t.meta.CheckpointTimeTick = work.TargetTimeTick

@@ -177,6 +177,45 @@ func TestMaterializeWithoutEntriesOnlyAdvancesCursor(t *testing.T) {
 	assert.Equal(t, uint64(20), snapshot.GetMaterializedTimeTick())
 }
 
+func TestFlushAdvancesCheckpointToFenceTimeTick(t *testing.T) {
+	transformLog := New(Config{
+		VChannel: "v1",
+		Store:    newMemoryStore(),
+	}).(*transformLog)
+
+	appendResult := transformLog.Append(newModuleTestDeleteMessage(t, 10), AppendOption{})
+	require.True(t, appendResult.Appended)
+
+	result, err := transformLog.Flush(context.Background(), FlushOption{TargetTimeTick: 20})
+	require.NoError(t, err)
+	assert.True(t, result.Started)
+	assert.Equal(t, uint64(20), result.DurableTimeTick)
+
+	snapshot := transformLog.SnapshotMeta()
+	assert.Equal(t, uint64(20), snapshot.GetCheckpointTimeTick())
+	require.Len(t, transformLog.retainedChunks, 1)
+	require.Len(t, transformLog.retainedChunks[0].GetEntries(), 1)
+	assert.Equal(t, uint64(10), transformLog.retainedChunks[0].GetEntries()[0].GetTimeTick())
+}
+
+func TestFlushKeepsCheckpointAtLastDurableEntryWhenTargetStillHasPendingEntries(t *testing.T) {
+	transformLog := New(Config{
+		VChannel: "v1",
+		Store:    newMemoryStore(),
+		MaxRows:  1,
+	}).(*transformLog)
+
+	require.True(t, transformLog.Append(newModuleTestDeleteMessage(t, 10), AppendOption{}).Appended)
+	require.True(t, transformLog.Append(newModuleTestDeleteMessage(t, 11), AppendOption{}).Appended)
+
+	result, err := transformLog.Flush(context.Background(), FlushOption{TargetTimeTick: 20})
+	require.NoError(t, err)
+	assert.True(t, result.Started)
+	assert.Equal(t, uint64(10), result.DurableTimeTick)
+	assert.Equal(t, uint64(20), result.NextTargetTimeTick)
+	assert.Equal(t, uint64(10), transformLog.SnapshotMeta().GetCheckpointTimeTick())
+}
+
 func TestShouldMaterializeUsesUnmaterializedRowsAndBytes(t *testing.T) {
 	transformLog := New(Config{
 		VChannel:            "by-dev-rootcoord-dml_1v0",
