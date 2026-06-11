@@ -4,10 +4,8 @@ import (
 	"context"
 	"io"
 
-	"go.uber.org/zap"
-
 	"github.com/milvus-io/milvus/internal/views/qviews"
-	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
@@ -84,7 +82,7 @@ func (s *ViewSyncServer) sendPendingReports(
 				},
 			},
 		}); err != nil {
-			log.Warn("ViewSyncServer: failed to send reports", zap.Error(err))
+			mlog.Warn(stream.Context(), "ViewSyncServer: failed to send reports", mlog.Err(err))
 			return false, err
 		}
 	}
@@ -94,7 +92,7 @@ func (s *ViewSyncServer) sendPendingReports(
 				Close: &viewpb.SyncCloseResponse{},
 			},
 		}); err != nil {
-			log.Warn("ViewSyncServer: failed to send close response", zap.Error(err))
+			mlog.Warn(stream.Context(), "ViewSyncServer: failed to send close response", mlog.Err(err))
 			return false, err
 		}
 	}
@@ -112,7 +110,7 @@ func (s *ViewSyncServer) recvLoop(
 			if err == io.EOF {
 				return nil
 			}
-			log.Warn("ViewSyncServer: stream recv failed", zap.Error(err))
+			mlog.Warn(stream.Context(), "ViewSyncServer: stream recv failed", mlog.Err(err))
 			return err
 		}
 
