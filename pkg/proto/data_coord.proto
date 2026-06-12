@@ -464,6 +464,12 @@ message SegmentInfo {
   // timestamps to commit_timestamp, then clears this field back to 0. L0 delete
   // compaction is excluded because it only compacts delete logs.
   uint64 commit_timestamp = 36;
+
+  // delete_apply_start_after_timetick is the exclusive lower bound for delete
+  // data that must be retained/applied when this segment is loaded.
+  // DataView derives shard-level delete_apply_start_after_timetick from this
+  // persisted segment metadata field.
+  uint64 delete_apply_start_after_timetick = 37;
 }
 
 message SegmentStartPosition {
@@ -490,6 +496,7 @@ message SaveBinlogPathsRequest {
   repeated FieldBinlog field2Bm25logPaths = 16;
   bool with_full_binlogs = 17; // report with full data for verification.
   string manifest_path = 18; //
+  uint64 delete_apply_start_after_timetick = 19;
 }
 
 message CheckPoint {
@@ -1597,6 +1604,8 @@ message SegmentDescription {
   // Must be preserved across snapshot/restore so temporal protections
   // (GC, TTL, MVCC) are not lost on the restored segments.
   uint64 commit_timestamp = 18;
+  // Mirrors SegmentInfo.delete_apply_start_after_timetick.
+  uint64 delete_apply_start_after_timetick = 19;
 }
 
 message CollectionDescription {

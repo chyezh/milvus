@@ -786,6 +786,115 @@ func TestSnapshotManifest_CommitTimestampRoundtripV3(t *testing.T) {
 	assert.Equal(t, wantCommitTs, segments[0].GetCommitTimestamp())
 }
 
+func TestSnapshotManifest_DeleteApplyStartAfterTimetickRoundtripV5(t *testing.T) {
+	tempDir := t.TempDir()
+	cm := storage.NewLocalChunkManager(objectstorage.RootPath(tempDir))
+	reader := NewSnapshotReader(cm)
+
+	const wantCommitTs = uint64(1234567890)
+	const wantDeleteApplyStartAfterTimetick = uint64(1234567000)
+	segment := &datapb.SegmentDescription{
+		SegmentId:                     1001,
+		PartitionId:                   2001,
+		ChannelName:                   "ch-0",
+		CommitTimestamp:               wantCommitTs,
+		DeleteApplyStartAfterTimetick: wantDeleteApplyStartAfterTimetick,
+	}
+	entry := snapshotio.SegmentToManifestEntry(segment)
+	require.Equal(t, int64(wantCommitTs), entry.CommitTimestamp)
+	require.Equal(t, int64(wantDeleteApplyStartAfterTimetick), entry.DeleteApplyStartAfterTimetick)
+
+	assert.Contains(t, snapshotio.AvroSchemaV5(), "delete_apply_start_after_timetick")
+	schema, err := snapshotio.ManifestSchemaByVersion(5)
+	require.NoError(t, err)
+	binaryData, err := avro.Marshal(schema, entry)
+	require.NoError(t, err)
+
+	manifestPath := path.Join(tempDir, "v5_manifest.avro")
+	require.NoError(t, cm.Write(context.Background(), manifestPath, binaryData))
+
+	segments, err := reader.readManifestFile(context.Background(), manifestPath, 5)
+	require.NoError(t, err)
+	require.Len(t, segments, 1)
+	assert.Equal(t, wantCommitTs, segments[0].GetCommitTimestamp())
+	assert.Equal(t, wantDeleteApplyStartAfterTimetick, segments[0].GetDeleteApplyStartAfterTimetick())
+}
+
+func TestSnapshotManifest_LegacyV3NoDeleteApplyStartAfterTimetick(t *testing.T) {
+	tempDir := t.TempDir()
+	cm := storage.NewLocalChunkManager(objectstorage.RootPath(tempDir))
+	reader := NewSnapshotReader(cm)
+
+	segment := &datapb.SegmentDescription{
+		SegmentId:                     1001,
+		PartitionId:                   2001,
+		ChannelName:                   "ch-0",
+		CommitTimestamp:               999,
+		DeleteApplyStartAfterTimetick: 888,
+	}
+	entry := snapshotio.SegmentToManifestEntry(segment)
+
+	assert.NotContains(t, snapshotio.AvroSchemaV3(), "delete_apply_start_after_timetick")
+	v3Schema, err := snapshotio.ManifestSchemaByVersion(3)
+	require.NoError(t, err)
+	binaryData, err := avro.Marshal(v3Schema, entry)
+	require.NoError(t, err)
+
+	manifestPath := path.Join(tempDir, "v3_manifest.avro")
+	require.NoError(t, cm.Write(context.Background(), manifestPath, binaryData))
+
+	segments, err := reader.readManifestFile(context.Background(), manifestPath, 3)
+	require.NoError(t, err)
+	require.Len(t, segments, 1)
+	assert.Equal(t, uint64(999), segments[0].GetCommitTimestamp())
+	assert.Equal(t, uint64(0), segments[0].GetDeleteApplyStartAfterTimetick(),
+		"V3 manifest must decode with DeleteApplyStartAfterTimetick=0 (field absent in schema)")
+}
+
+func TestSnapshotManifest_LegacyV4NoDeleteApplyStartAfterTimetick(t *testing.T) {
+	tempDir := t.TempDir()
+	cm := storage.NewLocalChunkManager(objectstorage.RootPath(tempDir))
+	reader := NewSnapshotReader(cm)
+
+	segment := &datapb.SegmentDescription{
+		SegmentId:                     1001,
+		PartitionId:                   2001,
+		ChannelName:                   "ch-0",
+		CommitTimestamp:               999,
+		DeleteApplyStartAfterTimetick: 888,
+		Binlogs: []*datapb.FieldBinlog{{
+			FieldID:     900,
+			ChildFields: []int64{100, 101},
+			Format:      "parquet",
+			Binlogs: []*datapb.Binlog{{
+				EntriesNum: 10,
+				LogPath:    "files/insert_log/1/2/3/900/1",
+			}},
+		}},
+	}
+	entry := snapshotio.SegmentToManifestEntry(segment)
+
+	assert.NotContains(t, snapshotio.AvroSchemaV4(), "delete_apply_start_after_timetick")
+	assert.Contains(t, snapshotio.AvroSchemaV4(), "child_fields")
+	v4Schema, err := snapshotio.ManifestSchemaByVersion(4)
+	require.NoError(t, err)
+	binaryData, err := avro.Marshal(v4Schema, entry)
+	require.NoError(t, err)
+
+	manifestPath := path.Join(tempDir, "v4_manifest.avro")
+	require.NoError(t, cm.Write(context.Background(), manifestPath, binaryData))
+
+	segments, err := reader.readManifestFile(context.Background(), manifestPath, 4)
+	require.NoError(t, err)
+	require.Len(t, segments, 1)
+	assert.Equal(t, uint64(999), segments[0].GetCommitTimestamp())
+	assert.Equal(t, uint64(0), segments[0].GetDeleteApplyStartAfterTimetick(),
+		"V4 manifest must decode with DeleteApplyStartAfterTimetick=0 (field absent in schema)")
+	require.Len(t, segments[0].GetBinlogs(), 1)
+	assert.Equal(t, []int64{100, 101}, segments[0].GetBinlogs()[0].GetChildFields())
+	assert.Equal(t, "parquet", segments[0].GetBinlogs()[0].GetFormat())
+}
+
 // TestSnapshotManifest_LegacyV2NoCommitTimestamp verifies that a manifest
 // written with the V2 schema (no commit_timestamp field) still decodes cleanly
 // under the V2 reader and surfaces CommitTimestamp=0. This guarantees that
@@ -1390,6 +1499,11 @@ func TestValidateFormatVersion(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "version_5_current",
+			version: 5,
+			wantErr: false,
+		},
+		{
 			name:        "version_100_future",
 			version:     100,
 			wantErr:     true,
@@ -1440,6 +1554,11 @@ func TestGetManifestSchemaByVersion(t *testing.T) {
 		{
 			name:    "version_4_current",
 			version: 4,
+			wantErr: false,
+		},
+		{
+			name:    "version_5_current",
+			version: 5,
 			wantErr: false,
 		},
 		{
