@@ -65,6 +65,7 @@ func TestUpdateCommitTimestamp_SetsField(t *testing.T) {
 	err = meta.UpdateSegmentsInfo(context.Background(), UpdateCommitTimestamp(1, 9999))
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(9999), meta.GetSegment(context.Background(), 1).GetCommitTimestamp())
+	assert.Equal(t, uint64(9999), meta.GetSegment(context.Background(), 1).GetDeleteApplyStartAfterTimetick())
 }
 
 func TestUpdateCommitTimestamp_SegmentNotFound(t *testing.T) {
@@ -100,6 +101,7 @@ func TestUpdateCommitTimestamp_AcceptAboveMaxTimestampTo(t *testing.T) {
 	err = meta.UpdateSegmentsInfo(context.Background(), UpdateCommitTimestamp(1, 9999))
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(9999), meta.GetSegment(context.Background(), 1).GetCommitTimestamp())
+	assert.Equal(t, uint64(9999), meta.GetSegment(context.Background(), 1).GetDeleteApplyStartAfterTimetick())
 }
 
 func TestUpdateCommitTimestamp_AcceptEqualToMaxTimestampTo(t *testing.T) {
