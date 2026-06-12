@@ -841,12 +841,12 @@ func (suite *MetaBasicSuite) TestCompleteCompactionMutation() {
 		latestSegments.SetSegment(1, &SegmentInfo{SegmentInfo: &datapb.SegmentInfo{
 			ID: 1, CollectionID: 100, PartitionID: 10,
 			State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1,
-			NumOfRows: 2, CommitTimestamp: 5000,
+			NumOfRows: 2, CommitTimestamp: 5000, DeleteApplyStartAfterTimetick: 4500,
 		}})
 		latestSegments.SetSegment(2, &SegmentInfo{SegmentInfo: &datapb.SegmentInfo{
 			ID: 2, CollectionID: 100, PartitionID: 10,
 			State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1,
-			NumOfRows: 3, CommitTimestamp: 8000,
+			NumOfRows: 3, CommitTimestamp: 8000, DeleteApplyStartAfterTimetick: 7000,
 		}})
 
 		result := &datapb.CompactionPlanResult{
@@ -866,6 +866,7 @@ func (suite *MetaBasicSuite) TestCompleteCompactionMutation() {
 		suite.NoError(err)
 		suite.Require().Equal(1, len(infos))
 		suite.EqualValues(0, infos[0].GetCommitTimestamp(), "compaction normalizes commit_timestamp: row timestamps already rewritten")
+		suite.EqualValues(4500, infos[0].GetDeleteApplyStartAfterTimetick())
 	})
 
 	suite.Run("sort compaction normalizes commit_timestamp to zero", func() {
@@ -873,7 +874,7 @@ func (suite *MetaBasicSuite) TestCompleteCompactionMutation() {
 		latestSegments.SetSegment(1, &SegmentInfo{SegmentInfo: &datapb.SegmentInfo{
 			ID: 1, CollectionID: 100, PartitionID: 10,
 			State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L2,
-			NumOfRows: 2, CommitTimestamp: 7777,
+			NumOfRows: 2, CommitTimestamp: 7777, DeleteApplyStartAfterTimetick: 6666,
 		}})
 
 		result := &datapb.CompactionPlanResult{
@@ -893,6 +894,7 @@ func (suite *MetaBasicSuite) TestCompleteCompactionMutation() {
 		suite.NoError(err)
 		suite.Require().Equal(1, len(infos))
 		suite.EqualValues(0, infos[0].GetCommitTimestamp(), "sort compaction normalizes commit_timestamp: row timestamps already rewritten")
+		suite.EqualValues(6666, infos[0].GetDeleteApplyStartAfterTimetick())
 	})
 
 	suite.Run("clustering compaction normalizes commit_timestamp to zero", func() {
@@ -900,12 +902,12 @@ func (suite *MetaBasicSuite) TestCompleteCompactionMutation() {
 		latestSegments.SetSegment(1, &SegmentInfo{SegmentInfo: &datapb.SegmentInfo{
 			ID: 1, CollectionID: 100, PartitionID: 10,
 			State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1,
-			NumOfRows: 2, CommitTimestamp: 6000,
+			NumOfRows: 2, CommitTimestamp: 6000, DeleteApplyStartAfterTimetick: 5500,
 		}})
 		latestSegments.SetSegment(2, &SegmentInfo{SegmentInfo: &datapb.SegmentInfo{
 			ID: 2, CollectionID: 100, PartitionID: 10,
 			State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1,
-			NumOfRows: 3, CommitTimestamp: 4000,
+			NumOfRows: 3, CommitTimestamp: 4000, DeleteApplyStartAfterTimetick: 3500,
 		}})
 
 		result := &datapb.CompactionPlanResult{
@@ -924,6 +926,7 @@ func (suite *MetaBasicSuite) TestCompleteCompactionMutation() {
 		suite.NoError(err)
 		suite.Require().Equal(1, len(infos))
 		suite.EqualValues(0, infos[0].GetCommitTimestamp(), "clustering compaction normalizes commit_timestamp: row timestamps already rewritten")
+		suite.EqualValues(3500, infos[0].GetDeleteApplyStartAfterTimetick())
 	})
 
 	suite.Run("mix compaction with mixed import and normal segments normalizes to zero", func() {
@@ -939,6 +942,7 @@ func (suite *MetaBasicSuite) TestCompleteCompactionMutation() {
 			ID: 2, CollectionID: 100, PartitionID: 10,
 			State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1,
 			NumOfRows: 3, CommitTimestamp: 0,
+			StartPosition: &msgpb.MsgPosition{ChannelName: "ch-1", Timestamp: 6000},
 		}})
 
 		result := &datapb.CompactionPlanResult{
@@ -958,6 +962,7 @@ func (suite *MetaBasicSuite) TestCompleteCompactionMutation() {
 		suite.NoError(err)
 		suite.Require().Equal(1, len(infos))
 		suite.EqualValues(0, infos[0].GetCommitTimestamp(), "compaction normalizes commit_timestamp: row timestamps already rewritten")
+		suite.EqualValues(5000, infos[0].GetDeleteApplyStartAfterTimetick(), "legacy import input falls back to commit_timestamp when new field is absent")
 	})
 
 	suite.Run("mix compaction with no import segments sets commit_timestamp to 0", func() {
@@ -966,11 +971,13 @@ func (suite *MetaBasicSuite) TestCompleteCompactionMutation() {
 			ID: 1, CollectionID: 100, PartitionID: 10,
 			State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1,
 			NumOfRows: 2, CommitTimestamp: 0,
+			StartPosition: &msgpb.MsgPosition{ChannelName: "ch-1", Timestamp: 2000},
 		}})
 		latestSegments.SetSegment(2, &SegmentInfo{SegmentInfo: &datapb.SegmentInfo{
 			ID: 2, CollectionID: 100, PartitionID: 10,
 			State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1,
 			NumOfRows: 3, CommitTimestamp: 0,
+			StartPosition: &msgpb.MsgPosition{ChannelName: "ch-1", Timestamp: 3000},
 		}})
 
 		result := &datapb.CompactionPlanResult{
@@ -990,6 +997,7 @@ func (suite *MetaBasicSuite) TestCompleteCompactionMutation() {
 		suite.NoError(err)
 		suite.Require().Equal(1, len(infos))
 		suite.EqualValues(0, infos[0].GetCommitTimestamp(), "normal segment compaction must not set commit_timestamp")
+		suite.EqualValues(2000, infos[0].GetDeleteApplyStartAfterTimetick(), "legacy normal input falls back to start_position when new field is absent")
 	})
 
 	suite.Run("sort compaction normalizes stale import fallback start position", func() {
@@ -1903,6 +1911,7 @@ func (suite *MetaBasicSuite) TestCompleteBumpSchemaVersionCompactionMutation() {
 		oldBefore.InsertChannel = "test-channel"
 		oldBefore.StartPosition = &msgpb.MsgPosition{ChannelName: "test-channel", Timestamp: 10}
 		oldBefore.DmlPosition = &msgpb.MsgPosition{ChannelName: "test-channel", Timestamp: 20}
+		oldBefore.DeleteApplyStartAfterTimetick = 15
 		result := &datapb.CompactionPlanResult{
 			Segments: []*datapb.CompactionSegment{
 				{
@@ -1949,6 +1958,7 @@ func (suite *MetaBasicSuite) TestCompleteBumpSchemaVersionCompactionMutation() {
 		suite.EqualValues(80, created.GetStartPosition().GetTimestamp())
 		suite.Equal("test-channel", created.GetDmlPosition().GetChannelName())
 		suite.EqualValues(300, created.GetDmlPosition().GetTimestamp())
+		suite.EqualValues(15, created.GetDeleteApplyStartAfterTimetick())
 	})
 
 	suite.Run("zero-row replacement drops old segment and creates dropped new segment without manifest", func() {
@@ -3781,6 +3791,62 @@ func TestUpdateSegmentsInfo(t *testing.T) {
 		assert.NoError(t, err)
 		seg = meta.GetSegment(context.TODO(), 1)
 		assert.Equal(t, uint64(0), seg.GetCommitTimestamp())
+	})
+}
+
+func TestUpdateDeleteApplyStartAfterTimetick(t *testing.T) {
+	t.Run("explicit value", func(t *testing.T) {
+		meta, err := newMemoryMeta(t)
+		require.NoError(t, err)
+		require.NoError(t, meta.AddSegment(context.Background(), &SegmentInfo{
+			SegmentInfo: &datapb.SegmentInfo{ID: 1, State: commonpb.SegmentState_Flushed},
+		}))
+
+		err = meta.UpdateSegmentsInfo(context.Background(), UpdateDeleteApplyStartAfterTimetick(1, 9000))
+		require.NoError(t, err)
+		assert.Equal(t, uint64(9000), meta.GetSegment(context.Background(), 1).GetDeleteApplyStartAfterTimetick())
+	})
+
+	t.Run("fallback uses commit timestamp before start position", func(t *testing.T) {
+		meta, err := newMemoryMeta(t)
+		require.NoError(t, err)
+		require.NoError(t, meta.AddSegment(context.Background(), &SegmentInfo{
+			SegmentInfo: &datapb.SegmentInfo{
+				ID:              1,
+				State:           commonpb.SegmentState_Flushed,
+				CommitTimestamp: 7000,
+			},
+		}))
+
+		err = meta.UpdateSegmentsInfo(context.Background(),
+			UpdateStartPosition([]*datapb.SegmentStartPosition{{
+				SegmentID:     1,
+				StartPosition: &msgpb.MsgPosition{MsgID: []byte{1}, Timestamp: 5000},
+			}}),
+			UpdateDeleteApplyStartAfterTimetick(1, 0),
+		)
+		require.NoError(t, err)
+		segment := meta.GetSegment(context.Background(), 1)
+		assert.Equal(t, uint64(5000), segment.GetStartPosition().GetTimestamp())
+		assert.Equal(t, uint64(7000), segment.GetDeleteApplyStartAfterTimetick())
+	})
+
+	t.Run("fallback uses start position for normal legacy segment", func(t *testing.T) {
+		meta, err := newMemoryMeta(t)
+		require.NoError(t, err)
+		require.NoError(t, meta.AddSegment(context.Background(), &SegmentInfo{
+			SegmentInfo: &datapb.SegmentInfo{ID: 1, State: commonpb.SegmentState_Flushed},
+		}))
+
+		err = meta.UpdateSegmentsInfo(context.Background(),
+			UpdateStartPosition([]*datapb.SegmentStartPosition{{
+				SegmentID:     1,
+				StartPosition: &msgpb.MsgPosition{MsgID: []byte{1}, Timestamp: 5000},
+			}}),
+			UpdateDeleteApplyStartAfterTimetick(1, 0),
+		)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(5000), meta.GetSegment(context.Background(), 1).GetDeleteApplyStartAfterTimetick())
 	})
 }
 

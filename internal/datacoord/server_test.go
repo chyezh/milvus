@@ -1157,7 +1157,7 @@ func TestDropVirtualChannel(t *testing.T) {
 					ChannelName: "ch1",
 					MsgID:       []byte{1, 2, 3},
 					MsgGroup:    "",
-					Timestamp:   0,
+					Timestamp:   uint64(1000 + segment.id),
 				},
 				NumOfRows: 10,
 			}
@@ -1167,6 +1167,9 @@ func TestDropVirtualChannel(t *testing.T) {
 		resp, err := svr.DropVirtualChannel(ctx, req)
 		assert.NoError(t, err)
 		assert.Equal(t, commonpb.ErrorCode_Success, resp.GetStatus().GetErrorCode())
+		droppedSegment := svr.meta.GetSegment(ctx, segments[0].id)
+		require.NotNil(t, droppedSegment)
+		assert.Equal(t, uint64(1000+segments[0].id), droppedSegment.GetDeleteApplyStartAfterTimetick())
 
 		// resend
 		resp, err = svr.DropVirtualChannel(ctx, req)
