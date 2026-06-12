@@ -65,7 +65,8 @@ const (
 	// Version 2: Adds index_store_path_version to vector/scalar index files
 	// Version 3: Adds commit_timestamp to ManifestEntry (import/CDC segments)
 	// Version 4: Adds child_fields and format to AvroFieldBinlog
-	SnapshotFormatVersion = 4
+	// Version 5: Adds delete_apply_start_after_timetick to ManifestEntry
+	SnapshotFormatVersion = 5
 )
 
 var (
@@ -84,12 +85,16 @@ var (
 	manifestSchemaV4Once sync.Once
 	manifestSchemaV4     avro.Schema
 	manifestSchemaV4Err  error
+
+	manifestSchemaV5Once sync.Once
+	manifestSchemaV5     avro.Schema
+	manifestSchemaV5Err  error
 )
 
 // getManifestSchema returns the cached Avro schema for writing new manifest files.
-// New writes always use the current schema version (V4).
+// New writes always use the current schema version (V5).
 func getManifestSchema() (avro.Schema, error) {
-	return getManifestSchemaV4()
+	return getManifestSchemaV5()
 }
 
 func getManifestSchemaV1() (avro.Schema, error) {
@@ -120,6 +125,13 @@ func getManifestSchemaV4() (avro.Schema, error) {
 	return manifestSchemaV4, manifestSchemaV4Err
 }
 
+func getManifestSchemaV5() (avro.Schema, error) {
+	manifestSchemaV5Once.Do(func() {
+		manifestSchemaV5, manifestSchemaV5Err = avro.Parse(getAvroSchemaV5())
+	})
+	return manifestSchemaV5, manifestSchemaV5Err
+}
+
 // getManifestSchemaByVersion returns the Avro schema for the specified format
 // version. Avro binary is positional, so each on-disk version must be decoded
 // with the exact schema it was written with — a single "current" schema with
@@ -130,7 +142,8 @@ func getManifestSchemaV4() (avro.Schema, error) {
 //   - Version 2: Adds index_store_path_version
 //   - Version 3: Adds commit_timestamp (import/CDC segments)
 //   - Version 4: Adds child_fields and format to AvroFieldBinlog
-//   - Version 5+: Future schemas (to be added when needed)
+//   - Version 5: Adds delete_apply_start_after_timetick
+//   - Version 6+: Future schemas (to be added when needed)
 //
 // When adding a new schema version:
 //  1. Create a new schema function (e.g., getAvroSchemaV4) that derives from
@@ -151,6 +164,8 @@ func getManifestSchemaByVersion(version int) (avro.Schema, error) {
 		return getManifestSchemaV3()
 	case 4:
 		return getManifestSchemaV4()
+	case 5:
+		return getManifestSchemaV5()
 	default:
 		return nil, merr.WrapErrServiceInternalMsg("unsupported manifest schema version: %d", version)
 	}
@@ -247,6 +262,8 @@ type ManifestEntry struct {
 	// Stored as int64 because Avro `long` is signed and hamba/avro/v2 rejects
 	// uint64 — the proto-side uint64 is converted at the boundary.
 	CommitTimestamp int64 `avro:"commit_timestamp"`
+	// DeleteApplyStartAfterTimetick mirrors SegmentInfo.delete_apply_start_after_timetick.
+	DeleteApplyStartAfterTimetick int64 `avro:"delete_apply_start_after_timetick"`
 }
 
 // AvroFieldBinlog represents datapb.FieldBinlog in Avro-compatible format.
@@ -926,16 +943,17 @@ func (r *SnapshotReader) readManifestFile(ctx context.Context, filePath string, 
 
 	// Convert ManifestEntry record to protobuf SegmentDescription
 	segment := &datapb.SegmentDescription{
-		SegmentId:       record.SegmentID,
-		PartitionId:     record.PartitionID,
-		SegmentLevel:    datapb.SegmentLevel(record.SegmentLevel),
-		ChannelName:     record.ChannelName,
-		NumOfRows:       record.NumOfRows,
-		StartPosition:   convertAvroToMsgPosition(record.StartPosition),
-		DmlPosition:     convertAvroToMsgPosition(record.DmlPosition),
-		StorageVersion:  record.StorageVersion,
-		IsSorted:        record.IsSorted,
-		CommitTimestamp: uint64(record.CommitTimestamp), // int64 -> uint64
+		SegmentId:                     record.SegmentID,
+		PartitionId:                   record.PartitionID,
+		SegmentLevel:                  datapb.SegmentLevel(record.SegmentLevel),
+		ChannelName:                   record.ChannelName,
+		NumOfRows:                     record.NumOfRows,
+		StartPosition:                 convertAvroToMsgPosition(record.StartPosition),
+		DmlPosition:                   convertAvroToMsgPosition(record.DmlPosition),
+		StorageVersion:                record.StorageVersion,
+		IsSorted:                      record.IsSorted,
+		CommitTimestamp:               uint64(record.CommitTimestamp),               // int64 -> uint64
+		DeleteApplyStartAfterTimetick: uint64(record.DeleteApplyStartAfterTimetick), // int64 -> uint64
 	}
 
 	// Convert binlog files (insert data)
@@ -1089,23 +1107,24 @@ func convertSegmentToManifestEntry(segment *datapb.SegmentDescription) ManifestE
 
 	// Assemble the ManifestEntry with all converted fields
 	return ManifestEntry{
-		SegmentID:         segment.GetSegmentId(),
-		PartitionID:       segment.GetPartitionId(),
-		SegmentLevel:      int64(segment.GetSegmentLevel()),
-		BinlogFiles:       avroBinlogFiles,
-		DeltalogFiles:     avroDeltalogFiles,
-		IndexFiles:        avroIndexFiles,
-		ChannelName:       segment.GetChannelName(),
-		NumOfRows:         segment.GetNumOfRows(),
-		StatslogFiles:     avroStatslogFiles,
-		Bm25StatslogFiles: avroBm25StatslogFiles,
-		TextIndexFiles:    avroTextIndexFiles,
-		JSONKeyIndexFiles: avroJSONKeyIndexFiles,
-		StartPosition:     convertMsgPositionToAvro(segment.GetStartPosition()),
-		DmlPosition:       convertMsgPositionToAvro(segment.GetDmlPosition()),
-		StorageVersion:    segment.GetStorageVersion(),
-		IsSorted:          segment.GetIsSorted(),
-		CommitTimestamp:   int64(segment.GetCommitTimestamp()), // uint64 -> int64
+		SegmentID:                     segment.GetSegmentId(),
+		PartitionID:                   segment.GetPartitionId(),
+		SegmentLevel:                  int64(segment.GetSegmentLevel()),
+		BinlogFiles:                   avroBinlogFiles,
+		DeltalogFiles:                 avroDeltalogFiles,
+		IndexFiles:                    avroIndexFiles,
+		ChannelName:                   segment.GetChannelName(),
+		NumOfRows:                     segment.GetNumOfRows(),
+		StatslogFiles:                 avroStatslogFiles,
+		Bm25StatslogFiles:             avroBm25StatslogFiles,
+		TextIndexFiles:                avroTextIndexFiles,
+		JSONKeyIndexFiles:             avroJSONKeyIndexFiles,
+		StartPosition:                 convertMsgPositionToAvro(segment.GetStartPosition()),
+		DmlPosition:                   convertMsgPositionToAvro(segment.GetDmlPosition()),
+		StorageVersion:                segment.GetStorageVersion(),
+		IsSorted:                      segment.GetIsSorted(),
+		CommitTimestamp:               int64(segment.GetCommitTimestamp()),               // uint64 -> int64
+		DeleteApplyStartAfterTimetick: int64(segment.GetDeleteApplyStartAfterTimetick()), // uint64 -> int64
 	}
 }
 
@@ -1595,8 +1614,8 @@ func getAvroSchemaV3() string {
 }
 
 // getAvroSchemaV4 returns the V4 schema, derived from V3 by extending
-// AvroFieldBinlog with child_fields and format. New writes use V4; legacy V1/V2/V3
-// manifests are decoded with their exact historical schemas.
+// AvroFieldBinlog with child_fields and format. Legacy V1/V2/V3 manifests are
+// decoded with their exact historical schemas.
 func getAvroSchemaV4() string {
 	return strings.Replace(getAvroSchemaV3(),
 		`"name": "AvroFieldBinlog",
@@ -1611,5 +1630,15 @@ func getAvroSchemaV4() string {
 								{"name": "format", "type": "string", "default": ""},
 								{
 									"name": "binlogs",`,
+		1)
+}
+
+// getAvroSchemaV5 returns the V5 schema, derived from V4 by inserting
+// delete_apply_start_after_timetick after commit_timestamp.
+func getAvroSchemaV5() string {
+	return strings.Replace(getAvroSchemaV4(),
+		`{"name": "commit_timestamp", "type": "long", "default": 0},`,
+		`{"name": "commit_timestamp", "type": "long", "default": 0},
+				{"name": "delete_apply_start_after_timetick", "type": "long", "default": 0},`,
 		1)
 }
