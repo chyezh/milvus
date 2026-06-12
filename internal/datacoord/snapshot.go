@@ -61,6 +61,7 @@ const (
 	// Version 2: Adds index_store_path_version to vector/scalar index files
 	// Version 3: Adds commit_timestamp to ManifestEntry (import/CDC segments)
 	// Version 4: Adds child_fields and format to AvroFieldBinlog
+	// Version 5: Adds delete_apply_start_after_timetick to ManifestEntry
 	SnapshotFormatVersion = snapshotio.SnapshotFormatVersion
 )
 
