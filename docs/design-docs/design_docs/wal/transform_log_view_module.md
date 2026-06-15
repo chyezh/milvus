@@ -723,6 +723,34 @@ wait-for-ready, server-id picking, gRPC dialing, interceptors, and rebalance
 error reporting remain in the existing StreamingNode `handlerClient`
 infrastructure.
 
+The resume boundary is the last TransformLog entry delivered to the QueryNode
+local buffer, not the last `CaughtUp` event. The initial underlying scanner is
+created from the caller's `StartAfterTimeTick`. After an entry with TimeTick
+`T` is forwarded, the resumable scanner records `next_start_after = T`. If the
+underlying scanner then closes or returns a retryable transport error, the next
+attempt recreates the scanner with `StartAfterTimeTick = next_start_after`.
+This makes resume exclusive and avoids replaying entries that were already
+accepted by the local buffer.
+
+`handlerClient.ReadTransformLog` is the raw scanner factory used by this
+wrapper. It chooses a local in-process scanner or a remote `SubscribeTransform`
+scanner for one attempt, but it does not own resume state. Code that needs the
+QueryNode subscription semantics must use `WALAccesser.TransformLog().Read`,
+which installs the resumable scanner around that factory.
+
+Retry continues until the caller's context is canceled or the underlying
+scanner reports a non-retryable semantic error, such as an invalid read option,
+an unavailable vchannel, or a start point older than the TransformLog truncation
+cursor. In the truncation case, the local buffer can no longer repair the
+required suffix and the affected QueryViews become Unrecoverable.
+
+Each recreated underlying scanner may emit its own `CaughtUp` event after its
+retained suffix is drained. `CaughtUp` is therefore a barrier for one underlying
+subscription attempt, not a monotonic progress value. The QueryNode local buffer
+must treat repeated `CaughtUp` events as idempotent: once it has marked the
+vchannel stream caught up, later reconnect barriers must not regress segment
+registrations, while live entries after the barrier continue to be delivered.
+
 `handlerClient.ReadTransformLog` uses the same pattern as `CreateConsumer`:
 
 ```text
@@ -861,9 +889,16 @@ local buffer.
 ### 11.4 Reconnect
 
 If the upstream subscription stream breaks, QueryNode reconnects and recreates
-the vchannel subscription from the oldest local point it must still cover. If
-StreamingNode can still serve entries after that point, the local buffer is repaired
-and live consumption continues.
+the vchannel subscription. The local buffer keeps entries it has already
+accepted, so the distributed resumable scanner normally asks the next
+underlying subscription to start after the last delivered TransformLog entry.
+If no entry has been delivered yet, it retries from the original QueryView
+start point. This is equivalent to preserving the oldest local point the buffer
+must cover while avoiding duplicate delivery for the already-buffered prefix.
+
+If StreamingNode can still serve entries after the resume point, the local
+buffer receives the missing suffix, observes a new attempt-level `CaughtUp`
+barrier, and live consumption continues.
 
 If StreamingNode TransformLog storage can no longer cover the required point,
 affected QueryViews become Unrecoverable. The first implementation does not

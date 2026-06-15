@@ -10,11 +10,12 @@ type AcquireSegments struct {
 	// Key identifies the query view that holds the segment references.
 	Key qviews.QueryViewKey
 
-	// SegmentIDs lists all segments this view requires.
-	SegmentIDs []int64
+	// Meta carries collection, replica, vchannel, settings, and transform start
+	// point for this query view.
+	Meta *viewpb.QueryViewMeta
 
-	// Settings contains the load configuration (fields, partitions, etc.).
-	Settings *viewpb.QueryViewSettings
+	// View carries this QueryNode's partition-to-segment assignment.
+	View *viewpb.QueryViewOfQueryNode
 
 	// OnReady is called when segments become available.
 	// readySegments maps partitionID → newly loaded segment IDs.

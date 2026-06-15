@@ -187,6 +187,24 @@ func TestNormalFlow_AllSegmentsAtOnce(t *testing.T) {
 	assertNoReport(t, sm)
 }
 
+func TestNormalFlow_OptionalPartitionsDoNotBlockReady(t *testing.T) {
+	meta := buildTestMeta()
+	meta.Settings = &viewpb.QueryViewSettings{
+		RequiredPartitions: []int64{10},
+		OptionalPartitions: []int64{20},
+	}
+	sm := NewQNQueryViewStateMachine(meta, buildTestQNView())
+
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000, 1001, 1002}})
+
+	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	report := sm.ConsumeReport()
+	require.NotNil(t, report)
+	assert.Equal(t, viewpb.QueryViewState_QueryViewStateReady, report.GetMeta().GetState())
+	assert.ElementsMatch(t, []int64{1000, 1001, 1002}, getReadySegments(report, 10))
+	assert.Empty(t, getReadySegments(report, 20))
+}
+
 func TestNormalFlow_ReadyToDropping(t *testing.T) {
 	sm := newReadySM()
 
@@ -348,6 +366,27 @@ func TestSegments_IgnoredInReady(t *testing.T) {
 	sm.OnSegmentsReady(map[int64][]int64{10: {1000}})
 	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
 	assertNoReport(t, sm)
+}
+
+func TestSegments_OptionalReadyAfterReadyReportsProgress(t *testing.T) {
+	meta := buildTestMeta()
+	meta.Settings = &viewpb.QueryViewSettings{
+		RequiredPartitions: []int64{10},
+		OptionalPartitions: []int64{20},
+	}
+	sm := NewQNQueryViewStateMachine(meta, buildTestQNView())
+	sm.OnSegmentsReady(map[int64][]int64{10: {1000, 1001, 1002}})
+	require.Equal(t, qviews.QueryViewStateReady, sm.State())
+	sm.ConsumeReport()
+
+	sm.OnSegmentsReady(map[int64][]int64{20: {2000}})
+
+	assert.Equal(t, qviews.QueryViewStateReady, sm.State())
+	report := sm.ConsumeReport()
+	require.NotNil(t, report)
+	assert.Equal(t, viewpb.QueryViewState_QueryViewStateReady, report.GetMeta().GetState())
+	assert.ElementsMatch(t, []int64{1000, 1001, 1002}, getReadySegments(report, 10))
+	assert.ElementsMatch(t, []int64{2000}, getReadySegments(report, 20))
 }
 
 func TestSegments_IgnoredInUnrecoverable(t *testing.T) {

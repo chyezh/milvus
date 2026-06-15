@@ -274,6 +274,175 @@ func (_c *MockLoader_LoadDeltaLogs_Call) RunAndReturn(run func(context.Context, 
 	return _c
 }
 
+// LoadDeltaLogsWithoutResource provides a mock function with given fields: ctx, segment, loadInfo
+func (_m *MockLoader) LoadDeltaLogsWithoutResource(ctx context.Context, segment Segment, loadInfo *querypb.SegmentLoadInfo) error {
+	ret := _m.Called(ctx, segment, loadInfo)
+
+	if len(ret) == 0 {
+		panic("no return value specified for LoadDeltaLogsWithoutResource")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, Segment, *querypb.SegmentLoadInfo) error); ok {
+		r0 = rf(ctx, segment, loadInfo)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MockLoader_LoadDeltaLogsWithoutResource_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'LoadDeltaLogsWithoutResource'
+type MockLoader_LoadDeltaLogsWithoutResource_Call struct {
+	*mock.Call
+}
+
+// LoadDeltaLogsWithoutResource is a helper method to define mock.On call
+//   - ctx context.Context
+//   - segment Segment
+//   - loadInfo *querypb.SegmentLoadInfo
+func (_e *MockLoader_Expecter) LoadDeltaLogsWithoutResource(ctx interface{}, segment interface{}, loadInfo interface{}) *MockLoader_LoadDeltaLogsWithoutResource_Call {
+	return &MockLoader_LoadDeltaLogsWithoutResource_Call{Call: _e.mock.On("LoadDeltaLogsWithoutResource", ctx, segment, loadInfo)}
+}
+
+func (_c *MockLoader_LoadDeltaLogsWithoutResource_Call) Run(run func(ctx context.Context, segment Segment, loadInfo *querypb.SegmentLoadInfo)) *MockLoader_LoadDeltaLogsWithoutResource_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(Segment), args[2].(*querypb.SegmentLoadInfo))
+	})
+	return _c
+}
+
+func (_c *MockLoader_LoadDeltaLogsWithoutResource_Call) Return(_a0 error) *MockLoader_LoadDeltaLogsWithoutResource_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockLoader_LoadDeltaLogsWithoutResource_Call) RunAndReturn(run func(context.Context, Segment, *querypb.SegmentLoadInfo) error) *MockLoader_LoadDeltaLogsWithoutResource_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// LoadSegment provides a mock function with given fields: ctx, segment, loadInfo
+func (_m *MockLoader) LoadSegment(ctx context.Context, segment Segment, loadInfo *querypb.SegmentLoadInfo) error {
+	ret := _m.Called(ctx, segment, loadInfo)
+
+	if len(ret) == 0 {
+		panic("no return value specified for LoadSegment")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, Segment, *querypb.SegmentLoadInfo) error); ok {
+		r0 = rf(ctx, segment, loadInfo)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MockLoader_LoadSegment_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'LoadSegment'
+type MockLoader_LoadSegment_Call struct {
+	*mock.Call
+}
+
+// LoadSegment is a helper method to define mock.On call
+//   - ctx context.Context
+//   - segment Segment
+//   - loadInfo *querypb.SegmentLoadInfo
+func (_e *MockLoader_Expecter) LoadSegment(ctx interface{}, segment interface{}, loadInfo interface{}) *MockLoader_LoadSegment_Call {
+	return &MockLoader_LoadSegment_Call{Call: _e.mock.On("LoadSegment", ctx, segment, loadInfo)}
+}
+
+func (_c *MockLoader_LoadSegment_Call) Run(run func(ctx context.Context, segment Segment, loadInfo *querypb.SegmentLoadInfo)) *MockLoader_LoadSegment_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(Segment), args[2].(*querypb.SegmentLoadInfo))
+	})
+	return _c
+}
+
+func (_c *MockLoader_LoadSegment_Call) Return(_a0 error) *MockLoader_LoadSegment_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockLoader_LoadSegment_Call) RunAndReturn(run func(context.Context, Segment, *querypb.SegmentLoadInfo) error) *MockLoader_LoadSegment_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ReserveLoadResource provides a mock function with given fields: ctx, infos
+func (_m *MockLoader) ReserveLoadResource(ctx context.Context, infos ...*querypb.SegmentLoadInfo) (LoadResourceReservation, error) {
+	_va := make([]interface{}, len(infos))
+	for _i := range infos {
+		_va[_i] = infos[_i]
+	}
+	var _ca []interface{}
+	_ca = append(_ca, ctx)
+	_ca = append(_ca, _va...)
+	ret := _m.Called(_ca...)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ReserveLoadResource")
+	}
+
+	var r0 LoadResourceReservation
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, ...*querypb.SegmentLoadInfo) (LoadResourceReservation, error)); ok {
+		return rf(ctx, infos...)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, ...*querypb.SegmentLoadInfo) LoadResourceReservation); ok {
+		r0 = rf(ctx, infos...)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(LoadResourceReservation)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, ...*querypb.SegmentLoadInfo) error); ok {
+		r1 = rf(ctx, infos...)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MockLoader_ReserveLoadResource_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ReserveLoadResource'
+type MockLoader_ReserveLoadResource_Call struct {
+	*mock.Call
+}
+
+// ReserveLoadResource is a helper method to define mock.On call
+//   - ctx context.Context
+//   - infos ...*querypb.SegmentLoadInfo
+func (_e *MockLoader_Expecter) ReserveLoadResource(ctx interface{}, infos ...interface{}) *MockLoader_ReserveLoadResource_Call {
+	return &MockLoader_ReserveLoadResource_Call{Call: _e.mock.On("ReserveLoadResource",
+		append([]interface{}{ctx}, infos...)...)}
+}
+
+func (_c *MockLoader_ReserveLoadResource_Call) Run(run func(ctx context.Context, infos ...*querypb.SegmentLoadInfo)) *MockLoader_ReserveLoadResource_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		variadicArgs := make([]*querypb.SegmentLoadInfo, len(args)-1)
+		for i, a := range args[1:] {
+			if a != nil {
+				variadicArgs[i] = a.(*querypb.SegmentLoadInfo)
+			}
+		}
+		run(args[0].(context.Context), variadicArgs...)
+	})
+	return _c
+}
+
+func (_c *MockLoader_ReserveLoadResource_Call) Return(_a0 LoadResourceReservation, _a1 error) *MockLoader_ReserveLoadResource_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MockLoader_ReserveLoadResource_Call) RunAndReturn(run func(context.Context, ...*querypb.SegmentLoadInfo) (LoadResourceReservation, error)) *MockLoader_ReserveLoadResource_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // LoadIndex provides a mock function with given fields: ctx, segment, info, version
 func (_m *MockLoader) LoadIndex(ctx context.Context, segment Segment, info *querypb.SegmentLoadInfo, version int64) error {
 	ret := _m.Called(ctx, segment, info, version)

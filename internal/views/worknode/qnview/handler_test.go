@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/worknode/handler"
@@ -166,7 +167,8 @@ func TestQNHandler_ApplyViews_NewPreparing(t *testing.T) {
 	key := view.QueryViewKey()
 	req, ok := mgr.getAcquired(key)
 	require.True(t, ok)
-	assert.ElementsMatch(t, []int64{1000, 1001, 2000}, req.SegmentIDs)
+	assert.True(t, proto.Equal(buildHandlerTestMeta(1), req.Meta))
+	assert.True(t, proto.Equal(buildHandlerTestQNView(1), req.View))
 	assert.NotNil(t, req.OnReady)
 	assert.NotNil(t, req.OnUnrecoverable)
 }
