@@ -38,6 +38,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/lock"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
@@ -438,7 +439,7 @@ func (ob *TargetObserver) updateNextTarget(ctx context.Context, collectionID int
 	oldNextVersion := ob.targetMgr.GetCollectionTargetVersion(ctx, collectionID, meta.NextTarget)
 	if oldNextVersion > 0 {
 		if !ob.reconcileDelegatorsBeforeNextTargetUpdate(ctx, collectionID, oldNextVersion) {
-			return fmt.Errorf("failed to reconcile old next target delegators before updating next target")
+			return merr.WrapErrServiceInternal("failed to reconcile old next target delegators before updating next target")
 		}
 	}
 	err := ob.targetMgr.UpdateCollectionNextTarget(ctx, collectionID)
@@ -696,7 +697,7 @@ func (ob *TargetObserver) checkDelegatorSegmentDataReadyForTarget(ctx context.Co
 	for segmentID, targetSegment := range targetSegments {
 		segmentDist, ok := delegator.View.Segments[segmentID]
 		if !ok {
-			return fmt.Errorf("delegator lacks segment %d", segmentID)
+			return merr.WrapErrServiceInternalMsg("delegator lacks segment %d", segmentID)
 		}
 		segments := ob.distMgr.SegmentDistManager.GetByFilter(
 			meta.WithCollectionID(delegator.CollectionID),
@@ -704,7 +705,7 @@ func (ob *TargetObserver) checkDelegatorSegmentDataReadyForTarget(ctx context.Co
 			meta.WithNodeID(segmentDist.GetNodeID()),
 		)
 		if len(segments) == 0 {
-			return fmt.Errorf("segment %d not found in distribution on node %d", segmentID, segmentDist.GetNodeID())
+			return merr.WrapErrServiceInternalMsg("segment %d not found in distribution on node %d", segmentID, segmentDist.GetNodeID())
 		}
 		segment := segments[0]
 		cmp, err := packed.CompareManifestPath(segment.ManifestPath, targetSegment.GetManifestPath())
@@ -712,10 +713,10 @@ func (ob *TargetObserver) checkDelegatorSegmentDataReadyForTarget(ctx context.Co
 			return err
 		}
 		if cmp < 0 {
-			return fmt.Errorf("segment %d manifest is outdated, dist=%s target=%s", segmentID, segment.ManifestPath, targetSegment.GetManifestPath())
+			return merr.WrapErrServiceInternalMsg("segment %d manifest is outdated, dist=%s target=%s", segmentID, segment.ManifestPath, targetSegment.GetManifestPath())
 		}
 		if segment.DataVersion != nil && *segment.DataVersion < targetSegment.GetDataVersion() {
-			return fmt.Errorf("segment %d data version is outdated, dist=%d target=%d", segmentID, *segment.DataVersion, targetSegment.GetDataVersion())
+			return merr.WrapErrServiceInternalMsg("segment %d data version is outdated, dist=%d target=%d", segmentID, *segment.DataVersion, targetSegment.GetDataVersion())
 		}
 	}
 	return nil
