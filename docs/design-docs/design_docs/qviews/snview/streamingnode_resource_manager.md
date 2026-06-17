@@ -172,7 +172,7 @@ type LoadConfigListener interface {
 
 `OnAlterLoadConfig` receives a complete WAL input view and starts asynchronous
 resource preparation. It returns the live observer that `RecoveryStorage` uses
-to deliver later WAL messages.
+to deliver later resource events.
 
 `OnDropLoadConfig` removes the initialization reference for the vchannel. It is
 not a QueryView cleanup command.

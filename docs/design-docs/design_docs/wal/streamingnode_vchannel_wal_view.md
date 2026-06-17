@@ -1,29 +1,39 @@
 # StreamingNode VChannel WAL View Design
 
-> VChannel-level WAL input view used by `viewresource` to prepare StreamingNode
-> query resources after `AlterLoadConfig`.
+> VChannel-level WAL input view used by `StreamingNodeResourceManager` to
+> prepare StreamingNode query resources after `AlterLoadConfig`.
 > References: [WAL Recovery Architecture](wal-recovery-architecture.md),
 > [Segment View Module](segment_view_module.md),
 > [TransformLog View Module](transform_log_view_module.md), and
-> [StreamingNode View Resource Design](../qviews/streamingnode_resource_manager.md).
+> [StreamingNode Query Resource Manager Design](../qviews/snview/streamingnode_resource_manager.md).
 
 ## 1. Goal
 
 `AlterLoadConfig` is the WAL event that starts StreamingNode-side resource
-preparation for a loaded vchannel. At that WAL observe point, `viewresource`
-needs one consistent input package:
+preparation for a loaded vchannel. At that WAL observe point,
+`StreamingNodeResourceManager` needs one consistent input package:
 
 ```text
 latest schema and load_config from VChannelModule
 historical Insert state from SegmentModule
 historical Delete replay from TransformLogModule
-live Insert/Delete/Flush messages after capture from RecoveryStorage
+live WAL/resource events after capture from RecoveryStorage
 two TimeTick watermarks for growing and transform MVCC
 ```
 
 This input package is `VChannelWALView`. RecoveryStorage creates it at a serialized
 WAL observe point and passes it to a load-config listener implemented by
-`viewresource`.
+`StreamingNodeResourceManager`.
+
+The core guarantee of `VChannelWALView` is no-gap WAL input handoff:
+
+```text
+data visible at the capture point
+  -> VChannelWALView historical inputs
+
+WAL/resource events after the capture point
+  -> VChannelLiveObserver
+```
 
 Non-goals:
 
@@ -40,15 +50,42 @@ AlterLoadConfig is observed by RecoveryStorage
   -> RecoveryStorage captures current module views
   -> RecoveryStorage creates VChannelWALView
   -> RecoveryStorage calls LoadConfigListener.OnAlterLoadConfig(view)
-  -> viewresource returns a VChannelLiveObserver to RecoveryStorage
-  -> viewresource asynchronously loads historical Insert and Delete
-  -> RecoveryStorage synchronously pushes later live ImmutableMessages to the observer
-  -> query runtime advances source-specific applied TimeTicks
+  -> StreamingNodeResourceManager returns a VChannelLiveObserver to RecoveryStorage
+  -> StreamingNodeResourceManager asynchronously loads historical Insert and Delete
+  -> RecoveryStorage synchronously pushes later live resource events to the observer
+  -> resource runtime advances source-specific applied TimeTicks
 ```
 
 The capture is serialized with WAL observe. Modules do not need a
 `SnapshotAt(TimeTick)` API. They expose their current state while RecoveryStorage is
 at the capture point; RecoveryStorage owns later live message dispatch.
+
+### 2.1 No-Gap Input Contract
+
+For one vchannel and one resource base DataVersion, `VChannelWALView` guarantees
+that StreamingNode resource preparation receives a continuous WAL input stream:
+
+1. Historical Insert state before the capture point is represented by
+   `SegmentSnapshot`.
+2. Historical Delete/Transform state before the capture point is represented by
+   `DeleteReplay`, bounded by `BaseTransformTimeTick`.
+3. WAL/resource events after the capture point are delivered through the
+   `VChannelLiveObserver` returned by `LoadConfigListener.OnAlterLoadConfig`.
+4. RecoveryStorage registers the returned observer before it dispatches any
+   later event for the vchannel to registered live observers.
+5. After registration, RecoveryStorage offers later WAL message events to the
+   observer in WAL observe order, after normal module observation and
+   checkpoint/barrier updates.
+6. Segment resource metadata events derived from module side effects, such as
+   `SegmentSealedEvent`, are delivered through the same observer after the
+   owning module records the state change.
+7. The observer path is lossless while it is registered: a full observer buffer
+   must apply backpressure instead of silently dropping messages.
+
+Returning a nil observer means the listener declines this WALView and no no-gap
+resource handoff is established for that callback. A registered observer that
+later returns false is unregistered; after that point the listener has
+explicitly abandoned this live handoff.
 
 ## 3. TimeTick Watermarks
 
@@ -92,8 +129,8 @@ historical Delete replay.
 ```text
 RecoveryStorage
   owns the serialized capture point, creates VChannelWALView, computes the two
-  base TimeTick watermarks, and synchronously dispatches later live
-  ImmutableMessages to observers returned by the listener.
+  base TimeTick watermarks, and synchronously dispatches later live resource
+  events to observers returned by the listener.
 
 VChannelModule
   owns schema, partition, collection metadata, and persisted load_config.
@@ -105,7 +142,7 @@ SegmentModule
 TransformLogModule
   owns durable Delete history and provides historical Delete replay descriptors.
 
-viewresource registry
+StreamingNodeResourceManager
   implements LoadConfigListener, consumes VChannelWALView, starts an asynchronous
   WALView load task, returns a live observer, and tracks runtime apply frontier.
 ```
@@ -126,7 +163,7 @@ RecoveryStorage, TransformLog, SegmentModule, or VChannelModule implementations.
 ## 5. Listener
 
 The listener interface should live on the WAL side to avoid importing
-`viewresource` from RecoveryStorage.
+StreamingNode resource-management packages from RecoveryStorage.
 
 ```go
 type LoadConfigListener interface {
@@ -141,15 +178,15 @@ type DropLoadConfigEvent struct {
 }
 ```
 
-The concrete view resource registry implements this listener interface. Callback
-contract:
+The concrete `StreamingNodeResourceManager` implements this listener interface.
+Callback contract:
 
 - `OnAlterLoadConfig` and `OnDropLoadConfig` only hand off intent and handles; they
   must return quickly.
 - callbacks must not build csegments, perform BM25 RPC, or replay TransformLog.
 - `OnAlterLoadConfig` creates a short-lived WALView load task, starts asynchronous
   resource preparation, and returns the observer that RecoveryStorage will use for
-  later WAL messages. Returning nil means the listener declines live observation.
+  later resource events. Returning nil means the listener declines live observation.
 - missed in-memory callbacks are recovered by RecoveryStorage scanning persisted
   `VChannelMeta.load_config` after WAL open and re-emitting `OnAlterLoadConfig`.
 
@@ -182,7 +219,7 @@ type VChannelWALView struct {
 `message.ImmutableMessage` and is released by Go GC when no runtime references it.
 The live observer is not part of the view; it is returned by
 `LoadConfigListener.OnAlterLoadConfig` so the listener can decide how to buffer or
-apply live WAL messages.
+apply live resource events.
 
 ## 7. Segment Snapshot
 
@@ -239,36 +276,53 @@ every segment.
 
 The live observer is vchannel-level, not segment-level, because Delete is scoped to
 the vchannel/partition and must stay ordered with Insert. RecoveryStorage owns this
-observer registration and dispatches immutable messages after normal module observation.
-SegmentModule and TransformLogModule do not register query observers or publish
-query live messages directly.
+observer registration and dispatches resource events after normal module observation
+or module-owned side-effect completion. SegmentModule and TransformLogModule do not
+register query observers or publish query live events directly.
 
 ```go
 type VChannelLiveObserver interface {
-    ObserveMessage(ctx context.Context, msg message.ImmutableMessage) bool
+    ObserveEvent(ctx context.Context, event VChannelResourceEvent) bool
     Close()
+}
+
+type VChannelResourceEvent struct {
+    Message       message.ImmutableMessage
+    SegmentSealed *SegmentSealedEvent
+}
+
+type SegmentSealedEvent struct {
+    SegmentID           int64
+    VChannel            string
+    SealedAtDataVersion qviews.DataVersion
 }
 ```
 
 Observer contract:
 
-- messages are emitted in WAL observe order;
-- messages are emitted only for WAL messages observed after this view is captured;
-- RecoveryStorage calls `ObserveMessage` after modules observe the same WAL message
-  and after RecoveryStorage updates its in-memory checkpoint/barrier state;
-- dispatch uses the original `message.ImmutableMessage`, not a custom wrapper
-  or decoded data copy;
-- the observer must not silently drop messages;
-- `ObserveMessage` returns false when the observer is closed or should be
+- WAL message events are emitted in WAL observe order;
+- WAL message events are emitted only for WAL messages observed after this view
+  is captured;
+- RecoveryStorage calls `ObserveEvent` for WAL message events after modules
+  observe the same WAL message and after RecoveryStorage updates its in-memory
+  checkpoint/barrier state;
+- dispatch uses the original `message.ImmutableMessage` inside the resource
+  event, not decoded data copy;
+- resource metadata events such as `SegmentSealedEvent` are emitted after the
+  owning module records the state change;
+- the observer must not silently drop events;
+- `ObserveEvent` returns false when the observer is closed or should be
   unregistered;
-- csegment Insert/Delete and BM25 updates are applied asynchronously by the query
-  runtime, not by RecoveryStorage or SegmentModule.
+- once `ObserveEvent` returns false, RecoveryStorage unregisters the observer
+  and the no-gap handoff for that listener is ended;
+- csegment Insert/Delete and BM25 updates are applied asynchronously by the
+  resource runtime, not by RecoveryStorage or SegmentModule.
 
 Backpressure:
 
 - the returned observer owns a bounded live-message buffer;
-- observer `ObserveMessage` appends the immutable message to that buffer;
-- when the buffer is full, `ObserveMessage` blocks instead of dropping messages;
+- observer `ObserveEvent` appends the resource event to that buffer;
+- when the buffer is full, `ObserveEvent` blocks instead of dropping events;
 - blocking live observer delivery slows RecoveryStorage WAL consumption;
 - this is the intended backpressure path and propagates through normal WAL
   checkpoint/ack behavior to the write side;
@@ -276,9 +330,9 @@ Backpressure:
   wait for query resource readiness.
 
 This design does not require RecoveryStorage to create a goroutine per observer.
-If viewresource wants asynchronous application, the returned observer owns that
-buffering policy internally; RecoveryStorage still performs one synchronous call
-per later WAL message.
+If `StreamingNodeResourceManager` wants asynchronous application, the returned
+observer owns that buffering policy internally; RecoveryStorage still performs
+one synchronous call per later event.
 
 ## 9. Historical Delete Replay
 
@@ -300,13 +354,14 @@ bounded by VChannelWALView.BaseTransformTimeTick.
 The end bound is:
   VChannelWALView.BaseTransformTimeTick
 
-The first implementation may choose the start bound internally as:
+The start bound is chosen internally by RecoveryStorage. A valid conservative
+choice is:
   min visible segment create timetick - 1
 ```
 
-Later implementations can use a tighter delete start point if SegmentModule or
+RecoveryStorage may use a tighter delete start point when SegmentModule or
 DataView exposes one. The start and end bounds are implementation details of
-scanner construction; viewresource must not depend on them.
+scanner construction; `StreamingNodeResourceManager` must not depend on them.
 
 The end bound is expressed through `transformlog.ReadOption.EndTimeTick`.
 RecoveryStorage creates the scanner directly instead of exposing a TransformLog
@@ -325,7 +380,8 @@ When RecoveryStorage observes `AlterLoadConfig`:
 3. RecoveryStorage computes BaseGrowingTimeTick from SegmentModule and TransformLogModule summaries.
 4. RecoveryStorage computes BaseTransformTimeTick from TransformLogModule summary.
 5. RecoveryStorage captures schema/load_config from VChannelModule.
-6. RecoveryStorage asks SegmentModule for the current visible segment snapshot.
+6. RecoveryStorage asks SegmentModule for the visible segment snapshot selected
+   by the resource recovery base DataVersion.
 7. RecoveryStorage asks TransformLogModule for a Delete replay scanner bounded
    by BaseTransformTimeTick.
 8. RecoveryStorage calls listener.OnAlterLoadConfig(view).
@@ -333,19 +389,22 @@ When RecoveryStorage observes `AlterLoadConfig`:
 10. RecoveryStorage continues WAL consumption without waiting for query resources.
 ```
 
-For later WAL messages:
+For later resource events:
 
 ```text
-1. RecoveryStorage observes the message through VChannelModule, SegmentModule,
-   TransformLogModule, and AckModule.
+1. For WAL messages, RecoveryStorage observes the message through VChannelModule,
+   SegmentModule, TransformLogModule, and AckModule.
 2. RecoveryStorage updates its in-memory checkpoint/barrier state.
-3. RecoveryStorage calls matching vchannel observers with the immutable message itself.
+3. RecoveryStorage calls matching vchannel observers with a resource event that
+   wraps the original immutable message.
+4. For module side-effect events such as SegmentSealedEvent, RecoveryStorage
+   calls matching vchannel observers after the owning module records the event.
 ```
 
 ## 11. Runtime Build Flow
 
-`viewresource` consumes the view asynchronously through the registry's WALView load
-task:
+`StreamingNodeResourceManager` consumes the view asynchronously through its
+WALView load task:
 
 ```text
 1. Create a WALView load task and its live message buffer.
@@ -354,28 +413,34 @@ task:
 4. Read DeleteReplay to completion and apply every returned Delete entry.
 5. Set growing runtime applied TimeTick to BaseGrowingTimeTick.
 6. Expose BaseTransformTimeTick to the resource layer as the transform read bound.
-7. Advance applied TimeTicks after each message is applied to csegment, growing BM25,
-   or transform buffers.
-8. Query waits until each source reaches its own read bound.
+7. Advance applied TimeTicks after each WAL message event is applied to csegment,
+   growing BM25, or transform buffers.
+8. Publish resource readiness only after the historical inputs are attached and
+   the live observer is owned by the runtime.
 ```
 
 This preserves MVCC without making `RecoveryStorage.ObserveMessage` or
 `SegmentModule.ObserveMessage` synchronously call csegment `Insert` or `Delete`.
-The WALView load task is volatile. It is not a retention anchor and does not participate
-in DataVersion GC; QueryView Up/recovery versions drive long-term retention.
+The WALView load task is volatile. It is not a retention anchor and does not
+participate in DataVersion GC. Long-term retention is driven by the
+`StreamingNodeResourceManager` reference model defined in
+[StreamingNode Query Resource Manager Design](../qviews/snview/streamingnode_resource_manager.md).
 Repeated `AlterLoadConfig` callbacks for a vchannel that already has an in-flight
-WALView load task are ignored by the registry and return no observer. They do not
-cancel or replace the existing task.
+WALView load task are ignored by the resource manager and return no observer.
+They do not cancel or replace the existing task.
 
 ## 12. Recovery
 
 The listener callback itself is volatile. On StreamingNode restart:
 
 ```text
-RecoveryStorage restores VChannelMeta.load_config, SegmentModule, and TransformLogModule.
-After bounded replay and module switch, RecoveryStorage scans recovered
-VChannelMeta.load_config entries and re-emits OnAlterLoadConfig callbacks.
+RecoveryStorage restores VChannelMeta.load_config, SegmentModule, TransformLogModule,
+and persisted QueryView meta needed by resource recovery. After bounded replay and
+module switch, RecoveryStorage builds VChannelWALView using the resource recovery
+base DataVersion and re-emits OnAlterLoadConfig callbacks.
 ```
 
 The fresh view computes new base TimeTick watermarks from recovered module state.
-Crash recovery does not depend on any pre-crash observer or query runtime state.
+Crash recovery does not depend on any pre-crash observer or resource runtime state.
+The recovery base DataVersion selection is defined by
+[StreamingNode Query Resource Manager Design](../qviews/snview/streamingnode_resource_manager.md).
