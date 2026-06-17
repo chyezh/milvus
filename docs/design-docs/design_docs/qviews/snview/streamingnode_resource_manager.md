@@ -118,17 +118,23 @@ vchannelResourceState
   initRef bool
   queryViewRefs map[QueryViewVersion]QueryViewMeta
   runtimes map[DataVersion]runtimeState
+  idfOracleRuntime IDFOracleRuntime
   loading currentLoadTask
 ```
 
-`runtimeState` contains StreamingNode-side query resources:
+`runtimeState` contains StreamingNode-side query resources retained for a
+specific resource DataVersion:
 
 - csegment-backed growing data;
 - retained flushed-as-growing data required by older QueryViews;
 - historical delete replay result;
 - live WAL observer and apply frontier;
-- BM25 / IDF resources;
 - other query resources tied to the same DataVersion model.
+
+`idfOracleRuntime` is a vchannel-level singleton resource. It is initialized by
+the same `OnAlterLoadConfig` / recovery build flow, but it is not retained as a
+`DataVersion -> oracle` map. Its lifecycle and asynchronous advancement are
+defined in [StreamingNode IDF Oracle Runtime Design](idf_oracle_runtime.md).
 
 ### 3.4 Invariants
 
@@ -259,10 +265,22 @@ For the first QueryView reference on a vchannel, `Acquire` also removes the
 initialization reference created by `OnAlterLoadConfig`. This is the ownership
 transfer from load-config initialization to QueryView lifecycle management.
 
+After the QueryView reference is registered and the initial resource is ready,
+`Acquire` may notify the vchannel-level IDF oracle runtime of the QueryView
+DataVersion through `MaybeAdvance`. This is an asynchronous IDF maintenance
+signal and does not make QueryView readiness wait for IDF advancement. The IDF
+runtime remains protected by the QueryView reference after the initialization
+reference is removed.
+
 ### 5.3 QueryView Up Flow
 
 When a QueryView becomes `Up`, the state machine persists the QueryView meta for
 StreamingNode crash recovery. The resource manager is not notified.
+
+The first QueryView `Up` report for a vchannel must wait for the IDF oracle
+initial catchup described in
+[StreamingNode IDF Oracle Runtime Design](idf_oracle_runtime.md). Later
+QueryViews do not wait for asynchronous IDF advancement before reporting `Up`.
 
 This keeps responsibilities separate:
 
@@ -283,7 +301,8 @@ QueryView references remain, all resources owned by that vchannel can be
 released.
 
 Resource release may close live observers, cancel in-flight preparation, release
-csegments, and release BM25 cache leases owned by the resource manager.
+csegments, and close the vchannel-level IDF oracle runtime. IDF sealed BM25
+cache leases are released by `IDFOracleRuntime` during its own close path.
 
 Segment metadata GC remains owned by `SegmentModule`. The resource manager can
 release its query resources, but it does not delete SegmentModule metadata
