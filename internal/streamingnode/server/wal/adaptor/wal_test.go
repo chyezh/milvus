@@ -14,9 +14,11 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/mocks"
 	"github.com/milvus-io/milvus/internal/mocks/mock_metastore"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
@@ -43,6 +45,14 @@ import (
 )
 
 const testVChannel = "v1"
+
+type adaptorTestMixCoordClient struct {
+	*mocks.MockMixCoordClient
+}
+
+func (c adaptorTestMixCoordClient) GetDataView(context.Context, *datapb.GetDataViewRequest, ...grpc.CallOption) (*datapb.GetDataViewResponse, error) {
+	return nil, errors.New("unexpected GetDataView call")
+}
 
 type walTestFramework struct {
 	b            wal.OpenerBuilder
@@ -97,7 +107,7 @@ func initResourceForTest(t *testing.T) {
 	catalog.EXPECT().GetSalvageCheckpoint(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	catalog.EXPECT().SaveSalvageCheckpoint(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	fMixCoordClient := syncutil.NewFuture[internaltypes.MixCoordClient]()
-	fMixCoordClient.Set(rc)
+	fMixCoordClient.Set(adaptorTestMixCoordClient{MockMixCoordClient: rc})
 	resource.InitForTest(
 		t,
 		resource.OptMixCoordClient(fMixCoordClient),

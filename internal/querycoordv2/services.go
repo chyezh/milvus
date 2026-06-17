@@ -38,6 +38,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/metrics"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
@@ -831,9 +832,111 @@ func (s *Server) GetShardLeaders(ctx context.Context, req *querypb.GetShardLeade
 }
 
 func (s *Server) GetStreamingNodeQueryViewResources(ctx context.Context, req *querypb.GetStreamingNodeQueryViewResourcesRequest) (*querypb.GetStreamingNodeQueryViewResourcesResponse, error) {
-	return &querypb.GetStreamingNodeQueryViewResourcesResponse{
-		Status: merr.Status(merr.WrapErrServiceUnimplemented(errors.New("GetStreamingNodeQueryViewResources is not implemented"))),
-	}, nil
+	resp := &querypb.GetStreamingNodeQueryViewResourcesResponse{
+		Status:       merr.Success(),
+		CollectionId: req.GetCollectionId(),
+		Vchannel:     req.GetVchannel(),
+		DataVersion:  req.GetDataVersion(),
+	}
+	if err := merr.CheckHealthy(s.State()); err != nil {
+		resp.Status = merr.Status(err)
+		return resp, nil
+	}
+	if req.GetCollectionId() == 0 {
+		resp.Status = merr.Status(merr.WrapErrParameterInvalidMsg("collection id is zero"))
+		return resp, nil
+	}
+	if req.GetVchannel() == "" {
+		resp.Status = merr.Status(merr.WrapErrParameterInvalidMsg("vchannel is empty"))
+		return resp, nil
+	}
+	if req.GetDataVersion() == nil {
+		resp.Status = merr.Status(merr.WrapErrParameterInvalidMsg("data version is nil"))
+		return resp, nil
+	}
+
+	dataView, err := s.broker.GetDataView(ctx, req.GetCollectionId(), req.GetDataVersion())
+	if err != nil {
+		resp.Status = merr.Status(err)
+		return resp, nil
+	}
+	shard := dataViewShard(dataView, req.GetVchannel())
+	if shard == nil {
+		resp.Status = merr.Status(merr.WrapErrServiceInternalMsg(
+			"data view shard not found, collectionID=%d, vchannel=%s, dataVersion=(%d,%d)",
+			req.GetCollectionId(),
+			req.GetVchannel(),
+			req.GetDataVersion().GetStreamingVersion(),
+			req.GetDataVersion().GetCompactVersion(),
+		))
+		return resp, nil
+	}
+
+	segmentIDs := dataViewShardSegmentIDs(shard, req.GetSettings())
+	if len(segmentIDs) == 0 {
+		return resp, nil
+	}
+	segments, err := s.broker.GetSegmentInfo(ctx, segmentIDs...)
+	if err != nil {
+		resp.Status = merr.Status(err)
+		return resp, nil
+	}
+	byID := make(map[int64]*querypb.StreamingNodeBM25Resource, len(segments))
+	for _, segment := range segments {
+		if segment.GetInsertChannel() != "" && segment.GetInsertChannel() != req.GetVchannel() {
+			resp.Status = merr.Status(merr.WrapErrServiceInternalMsg(
+				"segment channel mismatch, segmentID=%d, expected=%s, actual=%s",
+				segment.GetID(),
+				req.GetVchannel(),
+				segment.GetInsertChannel(),
+			))
+			return resp, nil
+		}
+		byID[segment.GetID()] = &querypb.StreamingNodeBM25Resource{
+			SegmentId:      segment.GetID(),
+			PartitionId:    segment.GetPartitionID(),
+			Bm25Binlogs:    segment.GetBm25Statslogs(),
+			StorageVersion: segment.GetStorageVersion(),
+			ManifestPath:   segment.GetManifestPath(),
+		}
+	}
+	for _, segmentID := range segmentIDs {
+		resource, ok := byID[segmentID]
+		if !ok {
+			resp.Status = merr.Status(merr.WrapErrSegmentNotFound(segmentID, "missing segment info for data view"))
+			return resp, nil
+		}
+		resp.Bm25Resources = append(resp.Bm25Resources, resource)
+	}
+	return resp, nil
+}
+
+func dataViewShard(dataView *viewpb.DataViewOfCollection, vchannel string) *viewpb.DataViewOfShard {
+	if dataView == nil {
+		return nil
+	}
+	for _, shard := range dataView.GetShards() {
+		if shard.GetVchannel() == vchannel {
+			return shard
+		}
+	}
+	return nil
+}
+
+func dataViewShardSegmentIDs(shard *viewpb.DataViewOfShard, settings *viewpb.QueryViewSettings) []int64 {
+	if shard == nil {
+		return nil
+	}
+	requiredPartitions := typeutil.NewSet(settings.GetRequiredPartitions()...)
+	loadsAllPartitions := len(requiredPartitions) == 0
+	segmentIDs := make([]int64, 0)
+	for _, partition := range shard.GetPartitions() {
+		if !loadsAllPartitions && !requiredPartitions.Contain(partition.GetPartitionId()) {
+			continue
+		}
+		segmentIDs = append(segmentIDs, partition.GetSegmentIds()...)
+	}
+	return segmentIDs
 }
 
 func (s *Server) CheckHealth(ctx context.Context, req *milvuspb.CheckHealthRequest) (*milvuspb.CheckHealthResponse, error) {

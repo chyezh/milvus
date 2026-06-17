@@ -1099,6 +1099,10 @@ func (s *mixCoordImpl) GetRecoveryInfoV2(ctx context.Context, req *datapb.GetRec
 	return s.datacoordServer.GetRecoveryInfoV2(ctx, req)
 }
 
+func (s *mixCoordImpl) GetDataView(ctx context.Context, req *datapb.GetDataViewRequest) (*datapb.GetDataViewResponse, error) {
+	return s.datacoordServer.GetDataView(ctx, req)
+}
+
 func (s *mixCoordImpl) GetChannelRecoveryInfo(ctx context.Context, req *datapb.GetChannelRecoveryInfoRequest) (*datapb.GetChannelRecoveryInfoResponse, error) {
 	return s.datacoordServer.GetChannelRecoveryInfo(ctx, req)
 }

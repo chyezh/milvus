@@ -36,6 +36,7 @@ const (
 	DataCoord_SaveBinlogPaths_FullMethodName                      = "/milvus.proto.data.DataCoord/SaveBinlogPaths"
 	DataCoord_GetRecoveryInfo_FullMethodName                      = "/milvus.proto.data.DataCoord/GetRecoveryInfo"
 	DataCoord_GetRecoveryInfoV2_FullMethodName                    = "/milvus.proto.data.DataCoord/GetRecoveryInfoV2"
+	DataCoord_GetDataView_FullMethodName                          = "/milvus.proto.data.DataCoord/GetDataView"
 	DataCoord_GetChannelRecoveryInfo_FullMethodName               = "/milvus.proto.data.DataCoord/GetChannelRecoveryInfo"
 	DataCoord_GetFlushedSegments_FullMethodName                   = "/milvus.proto.data.DataCoord/GetFlushedSegments"
 	DataCoord_GetSegmentsByStates_FullMethodName                  = "/milvus.proto.data.DataCoord/GetSegmentsByStates"
@@ -109,6 +110,7 @@ type DataCoordClient interface {
 	SaveBinlogPaths(ctx context.Context, in *SaveBinlogPathsRequest, opts ...grpc.CallOption) (*commonpb.Status, error)
 	GetRecoveryInfo(ctx context.Context, in *GetRecoveryInfoRequest, opts ...grpc.CallOption) (*GetRecoveryInfoResponse, error)
 	GetRecoveryInfoV2(ctx context.Context, in *GetRecoveryInfoRequestV2, opts ...grpc.CallOption) (*GetRecoveryInfoResponseV2, error)
+	GetDataView(ctx context.Context, in *GetDataViewRequest, opts ...grpc.CallOption) (*GetDataViewResponse, error)
 	GetChannelRecoveryInfo(ctx context.Context, in *GetChannelRecoveryInfoRequest, opts ...grpc.CallOption) (*GetChannelRecoveryInfoResponse, error)
 	GetFlushedSegments(ctx context.Context, in *GetFlushedSegmentsRequest, opts ...grpc.CallOption) (*GetFlushedSegmentsResponse, error)
 	GetSegmentsByStates(ctx context.Context, in *GetSegmentsByStatesRequest, opts ...grpc.CallOption) (*GetSegmentsByStatesResponse, error)
@@ -294,6 +296,15 @@ func (c *dataCoordClient) GetRecoveryInfo(ctx context.Context, in *GetRecoveryIn
 func (c *dataCoordClient) GetRecoveryInfoV2(ctx context.Context, in *GetRecoveryInfoRequestV2, opts ...grpc.CallOption) (*GetRecoveryInfoResponseV2, error) {
 	out := new(GetRecoveryInfoResponseV2)
 	err := c.cc.Invoke(ctx, DataCoord_GetRecoveryInfoV2_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *dataCoordClient) GetDataView(ctx context.Context, in *GetDataViewRequest, opts ...grpc.CallOption) (*GetDataViewResponse, error) {
+	out := new(GetDataViewResponse)
+	err := c.cc.Invoke(ctx, DataCoord_GetDataView_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -780,6 +791,7 @@ type DataCoordServer interface {
 	SaveBinlogPaths(context.Context, *SaveBinlogPathsRequest) (*commonpb.Status, error)
 	GetRecoveryInfo(context.Context, *GetRecoveryInfoRequest) (*GetRecoveryInfoResponse, error)
 	GetRecoveryInfoV2(context.Context, *GetRecoveryInfoRequestV2) (*GetRecoveryInfoResponseV2, error)
+	GetDataView(context.Context, *GetDataViewRequest) (*GetDataViewResponse, error)
 	GetChannelRecoveryInfo(context.Context, *GetChannelRecoveryInfoRequest) (*GetChannelRecoveryInfoResponse, error)
 	GetFlushedSegments(context.Context, *GetFlushedSegmentsRequest) (*GetFlushedSegmentsResponse, error)
 	GetSegmentsByStates(context.Context, *GetSegmentsByStatesRequest) (*GetSegmentsByStatesResponse, error)
@@ -887,6 +899,9 @@ func (UnimplementedDataCoordServer) GetRecoveryInfo(context.Context, *GetRecover
 }
 func (UnimplementedDataCoordServer) GetRecoveryInfoV2(context.Context, *GetRecoveryInfoRequestV2) (*GetRecoveryInfoResponseV2, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetRecoveryInfoV2 not implemented")
+}
+func (UnimplementedDataCoordServer) GetDataView(context.Context, *GetDataViewRequest) (*GetDataViewResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetDataView not implemented")
 }
 func (UnimplementedDataCoordServer) GetChannelRecoveryInfo(context.Context, *GetChannelRecoveryInfoRequest) (*GetChannelRecoveryInfoResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetChannelRecoveryInfo not implemented")
@@ -1283,6 +1298,24 @@ func _DataCoord_GetRecoveryInfoV2_Handler(srv interface{}, ctx context.Context, 
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(DataCoordServer).GetRecoveryInfoV2(ctx, req.(*GetRecoveryInfoRequestV2))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DataCoord_GetDataView_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetDataViewRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DataCoordServer).GetDataView(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DataCoord_GetDataView_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DataCoordServer).GetDataView(ctx, req.(*GetDataViewRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2263,6 +2296,10 @@ var DataCoord_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetRecoveryInfoV2",
 			Handler:    _DataCoord_GetRecoveryInfoV2_Handler,
+		},
+		{
+			MethodName: "GetDataView",
+			Handler:    _DataCoord_GetDataView_Handler,
 		},
 		{
 			MethodName: "GetChannelRecoveryInfo",

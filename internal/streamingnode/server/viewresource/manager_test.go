@@ -2,35 +2,52 @@ package viewresource
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/snview"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
-func TestManagerAcquireWaitsForPreparedRuntime(t *testing.T) {
-	registry := NewRegistry(NoopGrowingSegmentPreparer{}, NoopBM25Provider{})
-	manager := NewManager(registry)
+type blockedCatchupBM25Builder struct {
+	runtime *BM25Runtime
+}
 
-	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
-	meta := &viewpb.QueryViewMeta{
-		CollectionId: 1,
-		ReplicaId:    2,
-		Vchannel:     "ch",
-		Version: &viewpb.QueryViewVersion{
-			DataVersion:  version.IntoProto(),
-			QueryVersion: 3,
-		},
-		Settings: &viewpb.QueryViewSettings{RequiredFields: []int64{100}},
+func (b *blockedCatchupBM25Builder) BuildInitial(context.Context, LoadResourceDescriptor) (*BM25Runtime, error) {
+	if b.runtime == nil {
+		b.runtime = &BM25Runtime{}
 	}
-	key := qviews.QueryViewKey{
-		ShardID:          qviews.ShardID{ReplicaID: 2, VChannel: "ch"},
-		QueryViewVersion: qviews.QueryViewVersion{DataVersion: version, QueryVersion: 3},
+	return b.runtime, nil
+}
+
+func TestBM25RuntimeCatchupError(t *testing.T) {
+	runtime := &BM25Runtime{}
+	err := errors.New("catchup failed")
+	runtime.MarkCatchupFailed(err)
+	<-runtime.CatchupDone()
+	require.ErrorIs(t, runtime.CatchupError(), err)
+
+	runtime.MarkCatchupDone()
+	require.ErrorIs(t, runtime.CatchupError(), err)
+}
+
+func TestManagerAcquireWaitsForWALTriggeredRuntime(t *testing.T) {
+	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, NoopIDFOracleRuntimeBuilder{})
+	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
+	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
+
+	observer := manager.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", version, meta.GetSettings()))
+	require.NotNil(t, observer)
+	t.Cleanup(observer.Close)
+
+	select {
+	case <-manager.NotifyReady():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager readiness")
 	}
 
 	ready := make(chan struct{})
@@ -45,18 +62,99 @@ func TestManagerAcquireWaitsForPreparedRuntime(t *testing.T) {
 
 	select {
 	case <-ready:
-		t.Fatal("manager reported ready before registry prepared the runtime")
-	case <-time.After(50 * time.Millisecond):
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager ready callback")
 	}
+}
 
-	observer := registry.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", version, meta.GetSettings()))
+func TestManagerDuplicateAlterAfterAcquireDoesNotRestoreInitRef(t *testing.T) {
+	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, NoopIDFOracleRuntimeBuilder{})
+	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
+	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
+	view := testAlterLoadConfigView(1, "ch", version, meta.GetSettings())
+
+	observer := manager.OnAlterLoadConfig(view)
 	require.NotNil(t, observer)
 	t.Cleanup(observer.Close)
+	select {
+	case <-manager.NotifyReady():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager readiness")
+	}
 
+	ready := make(chan struct{})
+	manager.Acquire(snview.AcquireResource{
+		Key:     key,
+		Meta:    meta,
+		OnReady: func() { close(ready) },
+		OnUnrecoverable: func() {
+			t.Error("unexpected unrecoverable callback")
+		},
+	})
 	select {
 	case <-ready:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for manager ready callback")
+	}
+
+	require.Nil(t, manager.OnAlterLoadConfig(view))
+
+	dropped := make(chan struct{})
+	manager.Release(snview.ReleaseResource{
+		Key:       key,
+		OnDropped: func() { close(dropped) },
+	})
+	select {
+	case <-dropped:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager dropped callback")
+	}
+
+	runtime, runtimeReady, err := manager.GetViewRuntime(ViewResourceDescriptor{
+		CollectionID: 1,
+		VChannel:     "ch",
+		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 3},
+	})
+	require.NoError(t, err)
+	require.False(t, runtimeReady)
+	require.Nil(t, runtime)
+}
+
+func TestManagerNewAlterAfterAcquireDoesNotRestoreInitRef(t *testing.T) {
+	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, NoopIDFOracleRuntimeBuilder{})
+	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
+	nextVersion := qviews.DataVersion{StreamingVersion: 11, CompactVersion: 1}
+	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
+
+	observer := manager.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", version, meta.GetSettings()))
+	require.NotNil(t, observer)
+	t.Cleanup(observer.Close)
+	select {
+	case <-manager.NotifyReady():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager readiness")
+	}
+
+	ready := make(chan struct{})
+	manager.Acquire(snview.AcquireResource{
+		Key:             key,
+		Meta:            meta,
+		OnReady:         func() { close(ready) },
+		OnUnrecoverable: func() { t.Error("unexpected unrecoverable callback") },
+	})
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager ready callback")
+	}
+
+	nextObserver := manager.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", nextVersion, meta.GetSettings()))
+	require.NotNil(t, nextObserver)
+	t.Cleanup(nextObserver.Close)
+	select {
+	case <-manager.NotifyReady():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager readiness")
 	}
 
 	dropped := make(chan struct{})
@@ -64,98 +162,60 @@ func TestManagerAcquireWaitsForPreparedRuntime(t *testing.T) {
 		Key:       key,
 		OnDropped: func() { close(dropped) },
 	})
-
 	select {
 	case <-dropped:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for manager dropped callback")
 	}
 
-	manager.UpdateMinDataVersion(snview.UpdateMinDataVersionResource{
-		CollectionID:   1,
-		VChannel:       "ch",
-		MinDataVersion: qviews.DataVersion{StreamingVersion: 11},
-	})
-	runtime, runtimeReady, err := registry.GetViewRuntime(ViewResourceDescriptor{
+	runtime, runtimeReady, err := manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "ch",
-		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 3},
+		Version:      qviews.QueryViewVersion{DataVersion: nextVersion, QueryVersion: 4},
 	})
-	require.Error(t, err)
+	require.NoError(t, err)
 	require.False(t, runtimeReady)
 	require.Nil(t, runtime)
 }
 
-func TestManagerAcquireWaitsForDeleteApplyFrontier(t *testing.T) {
-	registry := NewRegistry(nil, NoopBM25Provider{})
-	manager := NewManager(registry)
-
+func TestManagerAcquireWithoutWALTriggeredRuntimeIsUnrecoverable(t *testing.T) {
+	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, NoopIDFOracleRuntimeBuilder{})
 	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
-	meta := &viewpb.QueryViewMeta{
-		CollectionId: 1,
-		ReplicaId:    2,
-		Vchannel:     "ch",
-		Version: &viewpb.QueryViewVersion{
-			DataVersion:  version.IntoProto(),
-			QueryVersion: 3,
-		},
-		DeleteApplyStartAfterTimetick: 30,
-	}
-	key := qviews.QueryViewKey{
-		ShardID:          qviews.ShardID{ReplicaID: 2, VChannel: "ch"},
-		QueryViewVersion: qviews.QueryViewVersion{DataVersion: version, QueryVersion: 3},
-	}
+	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
 
-	ready := make(chan struct{})
+	unrecoverable := make(chan struct{})
 	manager.Acquire(snview.AcquireResource{
-		Key:     key,
-		Meta:    meta,
-		OnReady: func() { close(ready) },
-		OnUnrecoverable: func() {
-			t.Error("unexpected unrecoverable callback")
+		Key:  key,
+		Meta: meta,
+		OnReady: func() {
+			t.Error("unexpected ready callback")
 		},
+		OnUnrecoverable: func() { close(unrecoverable) },
 	})
 
-	observer := registry.OnAlterLoadConfig(walview.VChannelWALView{
-		CollectionID:          1,
-		VChannel:              "ch",
-		BaseGrowingTimeTick:   20,
-		BaseTransformTimeTick: 10,
-		SegmentSnapshot: walview.VisibleSegmentSnapshot{
-			DataVersion: version,
-		},
-	})
 	select {
-	case <-ready:
-		t.Fatal("manager reported ready before delete apply frontier caught up")
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	require.True(t, observer.ObserveMessage(context.Background(), newTestDeleteMessage(t, "ch", 30)))
-	select {
-	case <-ready:
+	case <-unrecoverable:
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for manager ready callback")
+		t.Fatal("timed out waiting for manager unrecoverable callback")
 	}
 }
 
 func TestManagerReleaseBeforeReadyCompletesAcquireAsUnrecoverable(t *testing.T) {
-	registry := NewRegistry(NoopGrowingSegmentPreparer{}, NoopBM25Provider{})
-	manager := NewManager(registry)
-
-	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
-	meta := &viewpb.QueryViewMeta{
-		CollectionId: 1,
-		ReplicaId:    2,
-		Vchannel:     "ch",
-		Version: &viewpb.QueryViewVersion{
-			DataVersion:  version.IntoProto(),
-			QueryVersion: 3,
-		},
+	blocking := &cancelAwareGrowingSegmentRuntimeBuilder{
+		started:  make(chan struct{}),
+		canceled: make(chan struct{}),
 	}
-	key := qviews.QueryViewKey{
-		ShardID:          qviews.ShardID{ReplicaID: 2, VChannel: "ch"},
-		QueryViewVersion: qviews.QueryViewVersion{DataVersion: version, QueryVersion: 3},
+	manager := NewManager(blocking, NoopIDFOracleRuntimeBuilder{})
+	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
+	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
+
+	observer := manager.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", version, meta.GetSettings()))
+	require.NotNil(t, observer)
+	t.Cleanup(observer.Close)
+	select {
+	case <-blocking.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for in-flight load")
 	}
 
 	ready := make(chan struct{})
@@ -182,46 +242,135 @@ func TestManagerReleaseBeforeReadyCompletesAcquireAsUnrecoverable(t *testing.T) 
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for manager unrecoverable callback")
 	}
-
-	observer := registry.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", version, meta.GetSettings()))
-	require.NotNil(t, observer)
-	t.Cleanup(observer.Close)
-
 	select {
 	case <-ready:
 		t.Fatal("manager reported ready after release")
-	case <-time.After(100 * time.Millisecond):
+	default:
+	}
+}
+
+func TestManagerReleaseAndReacquireSameKeyDoesNotCompleteStaleAcquireAsReady(t *testing.T) {
+	bm25 := &blockedCatchupBM25Builder{}
+	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, bm25)
+	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
+	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
+	holdMeta, holdKey := testQueryViewMetaAndKey(1, 2, "ch", version, 4)
+
+	observer := manager.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", version, meta.GetSettings()))
+	require.NotNil(t, observer)
+	t.Cleanup(observer.Close)
+	select {
+	case <-manager.NotifyReady():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager readiness")
 	}
 
-	registry.ReleaseLoad(1, "ch")
-	runtime, runtimeReady, err := registry.GetViewRuntime(ViewResourceDescriptor{
+	holdReady := make(chan struct{})
+	manager.Acquire(snview.AcquireResource{
+		Key:             holdKey,
+		Meta:            holdMeta,
+		OnReady:         func() { close(holdReady) },
+		OnUnrecoverable: func() { t.Error("unexpected hold unrecoverable callback") },
+	})
+
+	staleReady := make(chan struct{}, 1)
+	staleUnrecoverable := make(chan struct{}, 1)
+	manager.Acquire(snview.AcquireResource{
+		Key:  key,
+		Meta: meta,
+		OnReady: func() {
+			staleReady <- struct{}{}
+		},
+		OnUnrecoverable: func() {
+			staleUnrecoverable <- struct{}{}
+		},
+	})
+
+	dropped := make(chan struct{})
+	manager.Release(snview.ReleaseResource{
+		Key:       key,
+		OnDropped: func() { close(dropped) },
+	})
+	select {
+	case <-dropped:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager dropped callback")
+	}
+
+	newReady := make(chan struct{})
+	manager.Acquire(snview.AcquireResource{
+		Key:             key,
+		Meta:            meta,
+		OnReady:         func() { close(newReady) },
+		OnUnrecoverable: func() { t.Error("unexpected reacquire unrecoverable callback") },
+	})
+
+	bm25.runtime.MarkCatchupDone()
+
+	select {
+	case <-newReady:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for reacquire ready callback")
+	}
+	select {
+	case <-holdReady:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for hold ready callback")
+	}
+	select {
+	case <-staleReady:
+		t.Fatal("stale acquire reported ready after same key was reacquired")
+	default:
+	}
+	select {
+	case <-staleUnrecoverable:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for stale acquire unrecoverable callback")
+	}
+}
+
+func TestManagerUnknownReleaseDoesNotDropInitRefResources(t *testing.T) {
+	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, NoopIDFOracleRuntimeBuilder{})
+	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
+	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
+
+	observer := manager.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", version, meta.GetSettings()))
+	require.NotNil(t, observer)
+	t.Cleanup(observer.Close)
+	select {
+	case <-manager.NotifyReady():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager readiness")
+	}
+
+	dropped := make(chan struct{})
+	manager.Release(snview.ReleaseResource{
+		Key:       key,
+		OnDropped: func() { close(dropped) },
+	})
+	select {
+	case <-dropped:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager dropped callback")
+	}
+
+	runtime, runtimeReady, err := manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "ch",
 		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 3},
 	})
 	require.NoError(t, err)
-	require.False(t, runtimeReady)
-	require.Nil(t, runtime)
+	require.True(t, runtimeReady)
+	require.NotNil(t, runtime)
 }
 
-func TestManagerEvictWakesWaitingOldViewAsUnrecoverable(t *testing.T) {
-	registry := NewRegistry(NoopGrowingSegmentPreparer{}, NoopBM25Provider{})
-	manager := NewManager(registry)
-
+func TestManagerCloseRejectsNewLoadAndAcquire(t *testing.T) {
+	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, NoopIDFOracleRuntimeBuilder{})
 	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
-	meta := &viewpb.QueryViewMeta{
-		CollectionId: 1,
-		ReplicaId:    2,
-		Vchannel:     "ch",
-		Version: &viewpb.QueryViewVersion{
-			DataVersion:  version.IntoProto(),
-			QueryVersion: 3,
-		},
-	}
-	key := qviews.QueryViewKey{
-		ShardID:          qviews.ShardID{ReplicaID: 2, VChannel: "ch"},
-		QueryViewVersion: qviews.QueryViewVersion{DataVersion: version, QueryVersion: 3},
-	}
+	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
+
+	manager.Close()
+	require.Nil(t, manager.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", version, meta.GetSettings())))
 
 	unrecoverable := make(chan struct{})
 	manager.Acquire(snview.AcquireResource{
@@ -232,16 +381,64 @@ func TestManagerEvictWakesWaitingOldViewAsUnrecoverable(t *testing.T) {
 		},
 		OnUnrecoverable: func() { close(unrecoverable) },
 	})
-
-	manager.UpdateMinDataVersion(snview.UpdateMinDataVersionResource{
-		CollectionID:   1,
-		VChannel:       "ch",
-		MinDataVersion: qviews.DataVersion{StreamingVersion: 11},
-	})
-
 	select {
 	case <-unrecoverable:
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for unrecoverable callback")
+		t.Fatal("timed out waiting for manager unrecoverable callback")
 	}
+}
+
+func TestManagerClosePanicsWithQueryViewRefs(t *testing.T) {
+	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, NoopIDFOracleRuntimeBuilder{})
+	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
+	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
+
+	observer := manager.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", version, meta.GetSettings()))
+	require.NotNil(t, observer)
+	t.Cleanup(observer.Close)
+	select {
+	case <-manager.NotifyReady():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager readiness")
+	}
+
+	ready := make(chan struct{})
+	manager.Acquire(snview.AcquireResource{
+		Key:     key,
+		Meta:    meta,
+		OnReady: func() { close(ready) },
+		OnUnrecoverable: func() {
+			t.Error("unexpected unrecoverable callback")
+		},
+	})
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager ready callback")
+	}
+
+	require.PanicsWithError(t, "query resource manager closed with 1 query view references", manager.Close)
+}
+
+func testQueryViewMetaAndKey(
+	collectionID int64,
+	replicaID int64,
+	vchannel string,
+	dataVersion qviews.DataVersion,
+	queryVersion int64,
+) (*viewpb.QueryViewMeta, qviews.QueryViewKey) {
+	meta := &viewpb.QueryViewMeta{
+		CollectionId: collectionID,
+		ReplicaId:    replicaID,
+		Vchannel:     vchannel,
+		Version: &viewpb.QueryViewVersion{
+			DataVersion:  dataVersion.IntoProto(),
+			QueryVersion: queryVersion,
+		},
+	}
+	key := qviews.QueryViewKey{
+		ShardID:          qviews.ShardID{ReplicaID: replicaID, VChannel: vchannel},
+		QueryViewVersion: qviews.QueryViewVersion{DataVersion: dataVersion, QueryVersion: queryVersion},
+	}
+	return meta, key
 }

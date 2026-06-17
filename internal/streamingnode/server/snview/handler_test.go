@@ -81,17 +81,14 @@ func (c *mockCatalog) savedCount() int {
 type mockResourceManager struct {
 	mu              sync.Mutex
 	acquired        map[qviews.QueryViewKey]AcquireResource
-	recovered       map[qviews.QueryViewKey]RecoverResource
+	acquiredOrder   []qviews.QueryViewKey
 	released        []qviews.QueryViewKey
 	releaseCallback map[qviews.QueryViewKey]func() // captured OnDropped callbacks
-	minVersions     []UpdateMinDataVersionResource
-	releaseLoads    []ReleaseLoadResource
 }
 
 func newMockResourceManager() *mockResourceManager {
 	return &mockResourceManager{
 		acquired:        make(map[qviews.QueryViewKey]AcquireResource),
-		recovered:       make(map[qviews.QueryViewKey]RecoverResource),
 		releaseCallback: make(map[qviews.QueryViewKey]func()),
 	}
 }
@@ -100,12 +97,7 @@ func (m *mockResourceManager) Acquire(req AcquireResource) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.acquired[req.Key] = req
-}
-
-func (m *mockResourceManager) Recover(req RecoverResource) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.recovered[req.Key] = req
+	m.acquiredOrder = append(m.acquiredOrder, req.Key)
 }
 
 func (m *mockResourceManager) Release(req ReleaseResource) {
@@ -113,18 +105,6 @@ func (m *mockResourceManager) Release(req ReleaseResource) {
 	defer m.mu.Unlock()
 	m.released = append(m.released, req.Key)
 	m.releaseCallback[req.Key] = req.OnDropped
-}
-
-func (m *mockResourceManager) UpdateMinDataVersion(req UpdateMinDataVersionResource) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.minVersions = append(m.minVersions, req)
-}
-
-func (m *mockResourceManager) ReleaseLoad(req ReleaseLoadResource) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.releaseLoads = append(m.releaseLoads, req)
 }
 
 func (m *mockResourceManager) invokeReleaseCallback(key qviews.QueryViewKey) {
@@ -144,41 +124,22 @@ func (m *mockResourceManager) getAcquired(key qviews.QueryViewKey) (AcquireResou
 	return req, ok
 }
 
-func (m *mockResourceManager) getRecovered(key qviews.QueryViewKey) (RecoverResource, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	req, ok := m.recovered[key]
-	return req, ok
-}
-
 func (m *mockResourceManager) acquiredCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.acquired)
 }
 
-func (m *mockResourceManager) recoveredCount() int {
+func (m *mockResourceManager) acquiredKeys() []qviews.QueryViewKey {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return len(m.recovered)
+	return append([]qviews.QueryViewKey{}, m.acquiredOrder...)
 }
 
 func (m *mockResourceManager) releasedCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.released)
-}
-
-func (m *mockResourceManager) minVersionUpdates() []UpdateMinDataVersionResource {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return append([]UpdateMinDataVersionResource{}, m.minVersions...)
-}
-
-func (m *mockResourceManager) releaseLoadUpdates() []ReleaseLoadResource {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return append([]ReleaseLoadResource{}, m.releaseLoads...)
 }
 
 // ---------------------------------------------------------------------------
@@ -355,47 +316,6 @@ func TestSNHandler_CoordUp_PersistsRecoveryInfo(t *testing.T) {
 	assert.Equal(t, 1, cat.savedCount())
 }
 
-func TestSNHandler_OnlyUpViewsAdvanceEvictWatermark(t *testing.T) {
-	cat := newMockCatalog()
-	mgr := newMockResourceManager()
-	h := RecoverSNQueryViewHandler(cat, mgr, nil)
-
-	rc1 := &reportCollector{}
-	rc2 := &reportCollector{}
-	view1 := newPreparingSNView(1)
-	view2 := newPreparingSNView(2)
-	h.ApplyViews([]handler.ApplyView{
-		{View: view1, OnReport: rc1.onReport},
-		{View: view2, OnReport: rc2.onReport},
-	})
-	require.Empty(t, mgr.minVersionUpdates())
-
-	req1, _ := mgr.getAcquired(view1.QueryViewKey())
-	req1.OnReady()
-	require.Empty(t, mgr.minVersionUpdates())
-
-	h.ApplyViews([]handler.ApplyView{
-		{View: newSNViewWithState(1, viewpb.QueryViewState_QueryViewStateUp), OnReport: rc1.onReport},
-	})
-	require.Len(t, mgr.minVersionUpdates(), 1)
-	assert.Equal(t, qviews.DataVersion{StreamingVersion: 1, CompactVersion: 1}, mgr.minVersionUpdates()[0].MinDataVersion)
-
-	req2, _ := mgr.getAcquired(view2.QueryViewKey())
-	req2.OnReady()
-	require.Len(t, mgr.minVersionUpdates(), 1)
-
-	h.ApplyViews([]handler.ApplyView{
-		{View: newSNViewWithState(2, viewpb.QueryViewState_QueryViewStateUp), OnReport: rc2.onReport},
-	})
-	require.Len(t, mgr.minVersionUpdates(), 1)
-
-	h.ApplyViews([]handler.ApplyView{
-		{View: newSNViewWithState(1, viewpb.QueryViewState_QueryViewStateDown), OnReport: rc1.onReport},
-	})
-	require.Len(t, mgr.minVersionUpdates(), 2)
-	assert.Equal(t, qviews.DataVersion{StreamingVersion: 2, CompactVersion: 1}, mgr.minVersionUpdates()[1].MinDataVersion)
-}
-
 // ---------------------------------------------------------------------------
 // 4. Coord Down — Up → Down (deletes recovery info)
 // ---------------------------------------------------------------------------
@@ -427,37 +347,6 @@ func TestSNHandler_CoordDown_DeletesRecoveryInfo(t *testing.T) {
 	})
 	assert.Equal(t, qviews.QueryViewStateDown, rc.last().State())
 	assert.Equal(t, 0, cat.savedCount()) // deleted
-}
-
-func TestSNHandler_CoordDownFromLastUpReleasesVChannelLoad(t *testing.T) {
-	cat := newMockCatalog()
-	mgr := newMockResourceManager()
-	h := RecoverSNQueryViewHandler(cat, mgr, nil)
-
-	rc := &reportCollector{}
-	view := newPreparingSNView(1)
-	h.ApplyViews([]handler.ApplyView{
-		{View: view, OnReport: rc.onReport},
-	})
-
-	key := view.QueryViewKey()
-	req, ok := mgr.getAcquired(key)
-	require.True(t, ok)
-	req.OnReady()
-
-	h.ApplyViews([]handler.ApplyView{
-		{View: newSNViewWithState(1, viewpb.QueryViewState_QueryViewStateUp), OnReport: rc.onReport},
-	})
-	require.Empty(t, mgr.releaseLoadUpdates())
-
-	h.ApplyViews([]handler.ApplyView{
-		{View: newSNViewWithState(1, viewpb.QueryViewState_QueryViewStateDown), OnReport: rc.onReport},
-	})
-
-	releases := mgr.releaseLoadUpdates()
-	require.Len(t, releases, 1)
-	assert.Equal(t, testCollectionID, releases[0].CollectionID)
-	assert.Equal(t, testVChannel, releases[0].VChannel)
 }
 
 // ---------------------------------------------------------------------------
@@ -565,7 +454,7 @@ func TestSNHandler_ResourceManagerCallback_UnrecoverableFromUpRecovering(t *test
 	cat.SaveQueryView(persistedView)
 	assert.Equal(t, 1, cat.savedCount())
 
-	// Recover.
+	// Recover persisted Up view state.
 	h := RecoverSNQueryViewHandler(cat, mgr, []*viewpb.QueryViewOfShard{persistedView})
 
 	// Set up report callback via ApplyViews re-push.
@@ -576,11 +465,11 @@ func TestSNHandler_ResourceManagerCallback_UnrecoverableFromUpRecovering(t *test
 	})
 	// UpRecovering SM reports nothing for Preparing re-push (waits for WAL).
 
-	// ResourceManager calls OnUnrecoverable via Recover callback.
+	// ResourceManager calls OnUnrecoverable via recovered Acquire callback.
 	key := preparingView.QueryViewKey()
-	recoverReq, ok := mgr.getRecovered(key)
+	acquireReq, ok := mgr.getAcquired(key)
 	require.True(t, ok)
-	recoverReq.OnUnrecoverable()
+	acquireReq.OnUnrecoverable()
 
 	// No report: UpRecovering→Unrecoverable is not reported to Coord.
 	// The query path will detect the unavailable view.
@@ -606,9 +495,9 @@ func TestSNHandler_Recover_CreatesUpRecoveringViews(t *testing.T) {
 
 	h := RecoverSNQueryViewHandler(cat, mgr, []*viewpb.QueryViewOfShard{persistedView})
 
-	// ResourceManager should have Recover called.
+	// ResourceManager should have Acquire called for recovered Up views.
 	key := newPreparingSNView(1).QueryViewKey()
-	recoverReq, ok := mgr.getRecovered(key)
+	acquireReq, ok := mgr.getAcquired(key)
 	require.True(t, ok)
 
 	// Register callback via ApplyViews (simulating Coord re-push).
@@ -621,32 +510,30 @@ func TestSNHandler_Recover_CreatesUpRecoveringViews(t *testing.T) {
 	assert.Equal(t, 0, rc.count())
 
 	// WAL catches up via ResourceManager callback.
-	recoverReq.OnRecoveringDone()
+	acquireReq.OnReady()
 
 	require.Equal(t, 1, rc.count())
 	assert.Equal(t, qviews.QueryViewStateUp, rc.last().State())
 	// Already persisted as Up — no new save (catalog save count unchanged).
 }
 
-func TestSNHandler_RecoveredUpViewsAdvanceEvictWatermark(t *testing.T) {
+func TestSNHandler_Recover_AcquiresUpViewsInVersionOrder(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
 
-	meta1 := buildHandlerTestMeta(1)
-	meta1.State = viewpb.QueryViewState_QueryViewStateUp
 	meta2 := buildHandlerTestMeta(2)
 	meta2.State = viewpb.QueryViewState_QueryViewStateUp
+	meta1 := buildHandlerTestMeta(1)
+	meta1.State = viewpb.QueryViewState_QueryViewStateUp
 
 	RecoverSNQueryViewHandler(cat, mgr, []*viewpb.QueryViewOfShard{
-		{Meta: meta1, StreamingNode: &viewpb.QueryViewOfStreamingNode{}},
 		{Meta: meta2, StreamingNode: &viewpb.QueryViewOfStreamingNode{}},
+		{Meta: meta1, StreamingNode: &viewpb.QueryViewOfStreamingNode{}},
 	})
 
-	updates := mgr.minVersionUpdates()
-	require.Len(t, updates, 1)
-	assert.Equal(t, testCollectionID, updates[0].CollectionID)
-	assert.Equal(t, testVChannel, updates[0].VChannel)
-	assert.Equal(t, qviews.DataVersion{StreamingVersion: 1, CompactVersion: 1}, updates[0].MinDataVersion)
+	keys := mgr.acquiredKeys()
+	require.Len(t, keys, 2)
+	assert.True(t, keys[1].QueryViewVersion.GT(keys[0].QueryViewVersion))
 }
 
 // ---------------------------------------------------------------------------
@@ -866,7 +753,7 @@ func TestSNHandler_RecoverCallback_AfterDropped_Ignored(t *testing.T) {
 	h := RecoverSNQueryViewHandler(cat, mgr, []*viewpb.QueryViewOfShard{persistedView})
 
 	key := newPreparingSNView(1).QueryViewKey()
-	recoverReq, ok := mgr.getRecovered(key)
+	acquireReq, ok := mgr.getAcquired(key)
 	require.True(t, ok)
 
 	// Drop the view via Coord push.
@@ -878,8 +765,8 @@ func TestSNHandler_RecoverCallback_AfterDropped_Ignored(t *testing.T) {
 	require.Equal(t, 1, rc.count())
 	assert.Equal(t, qviews.QueryViewStateDropped, rc.last().State())
 
-	// Stale Recover callback after entry removed — should be no-op, no panic.
-	recoverReq.OnRecoveringDone()
+	// Stale recovered Acquire callback after entry removed should be no-op.
+	acquireReq.OnReady()
 	assert.Equal(t, 1, rc.count())
 }
 
@@ -924,7 +811,7 @@ func TestSNHandler_DroppedFromUp_DeletesRecoveryInfo(t *testing.T) {
 // 16. Recover async callback flow
 // ---------------------------------------------------------------------------
 
-func TestSNHandler_Recover_AsyncCallbackFlow(t *testing.T) {
+func TestSNHandler_Recover_AcquireCallbackFlow(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
 
@@ -937,15 +824,14 @@ func TestSNHandler_Recover_AsyncCallbackFlow(t *testing.T) {
 
 	h := RecoverSNQueryViewHandler(cat, mgr, []*viewpb.QueryViewOfShard{persistedView})
 
-	// Verify Recover was called (not Acquire).
-	assert.Equal(t, 0, mgr.acquiredCount())
-	assert.Equal(t, 1, mgr.recoveredCount())
+	// Recovered views acquire resources through the same ordered Acquire path.
+	assert.Equal(t, 1, mgr.acquiredCount())
 
 	key := newPreparingSNView(1).QueryViewKey()
-	recoverReq, ok := mgr.getRecovered(key)
+	acquireReq, ok := mgr.getAcquired(key)
 	require.True(t, ok)
-	assert.NotNil(t, recoverReq.OnRecoveringDone)
-	assert.NotNil(t, recoverReq.OnUnrecoverable)
+	assert.NotNil(t, acquireReq.OnReady)
+	assert.NotNil(t, acquireReq.OnUnrecoverable)
 
 	// Register callback via ApplyViews.
 	rc := &reportCollector{}
@@ -955,7 +841,7 @@ func TestSNHandler_Recover_AsyncCallbackFlow(t *testing.T) {
 	assert.Equal(t, 0, rc.count()) // UpRecovering suppresses
 
 	// WAL catch-up completes.
-	recoverReq.OnRecoveringDone()
+	acquireReq.OnReady()
 
 	require.Equal(t, 1, rc.count())
 	assert.Equal(t, qviews.QueryViewStateUp, rc.last().State())

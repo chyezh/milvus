@@ -1,10 +1,15 @@
 package snview
 
 import (
+	"slices"
 	"sync"
+
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/worknode/handler"
+	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
@@ -104,6 +109,88 @@ func RecoverSNQueryViewHandler(
 	return h
 }
 
+func RecoverPChannelSNQueryViewHandler(
+	pchannel string,
+	catalog StreamingNodeCatalog,
+	resMgr StreamingNodeResourceManager,
+	views []*viewpb.QueryViewOfShard,
+) *SNQueryViewHandler {
+	return RecoverSNQueryViewHandler(catalog, resMgr, FilterQueryViewsByPChannel(pchannel, views))
+}
+
+func FilterQueryViewsByPChannel(pchannel string, views []*viewpb.QueryViewOfShard) []*viewpb.QueryViewOfShard {
+	filtered := make([]*viewpb.QueryViewOfShard, 0, len(views))
+	for _, view := range views {
+		if funcutil.ToPhysicalChannel(view.GetMeta().GetVchannel()) == pchannel {
+			filtered = append(filtered, view)
+		}
+	}
+	return filtered
+}
+
+func OldestUpDataVersions(views []*viewpb.QueryViewOfShard) map[string]qviews.DataVersion {
+	result := make(map[string]qviews.DataVersion)
+	for _, view := range views {
+		meta := view.GetMeta()
+		if qviews.QueryViewState(meta.GetState()) != qviews.QueryViewStateUp || meta.GetVersion() == nil {
+			continue
+		}
+		version := qviews.FromProtoQueryViewVersion(meta.GetVersion())
+		current, ok := result[meta.GetVchannel()]
+		if !ok || current.GT(version.DataVersion) {
+			result[meta.GetVchannel()] = version.DataVersion
+		}
+	}
+	return result
+}
+
+func RecoveredLoadConfigs(views []*viewpb.QueryViewOfShard) map[string]*streamingpb.VChannelLoadConfig {
+	selected := make(map[string]*viewpb.QueryViewMeta)
+	selectedVersion := make(map[string]qviews.QueryViewVersion)
+	for _, view := range views {
+		meta := view.GetMeta()
+		if qviews.QueryViewState(meta.GetState()) != qviews.QueryViewStateUp || meta.GetVersion() == nil {
+			continue
+		}
+		version := qviews.FromProtoQueryViewVersion(meta.GetVersion())
+		current, ok := selectedVersion[meta.GetVchannel()]
+		if !ok || current.GT(version) {
+			selected[meta.GetVchannel()] = meta
+			selectedVersion[meta.GetVchannel()] = version
+		}
+	}
+	result := make(map[string]*streamingpb.VChannelLoadConfig, len(selected))
+	for vchannel, meta := range selected {
+		settings := meta.GetSettings()
+		fields := make([]*messagespb.LoadFieldConfig, 0, len(settings.GetRequiredFields()))
+		for _, fieldID := range settings.GetRequiredFields() {
+			fields = append(fields, &messagespb.LoadFieldConfig{FieldId: fieldID})
+		}
+		result[vchannel] = &streamingpb.VChannelLoadConfig{
+			Header: &messagespb.AlterLoadConfigMessageHeader{
+				CollectionId: meta.GetCollectionId(),
+				PartitionIds: append([]int64{}, settings.GetRequiredPartitions()...),
+				LoadFields:   fields,
+			},
+		}
+	}
+	return result
+}
+
+func SortQueryViewsByVersion(views []*viewpb.QueryViewOfShard) {
+	slices.SortFunc(views, func(left, right *viewpb.QueryViewOfShard) int {
+		lv := qviews.FromProtoQueryViewVersion(left.GetMeta().GetVersion())
+		rv := qviews.FromProtoQueryViewVersion(right.GetMeta().GetVersion())
+		if lv.EQ(rv) {
+			return 0
+		}
+		if rv.GT(lv) {
+			return -1
+		}
+		return 1
+	})
+}
+
 // ApplyViews applies a batch of coord-pushed views.
 // Views are grouped by ShardID and applied atomically per shard.
 // All state reports are delivered through the OnReport callback.
@@ -119,6 +206,20 @@ func (h *SNQueryViewHandler) ApplyViews(views []handler.ApplyView) {
 	for shardID, shardViews := range grouped {
 		shard := h.getOrCreateShard(shardID)
 		shard.ApplyViews(shardViews)
+	}
+}
+
+func (h *SNQueryViewHandler) CloseForHandoff() {
+	h.mu.Lock()
+	shards := make([]*snShardView, 0, len(h.shards))
+	for _, shard := range h.shards {
+		shards = append(shards, shard)
+	}
+	h.shards = make(map[qviews.ShardID]*snShardView)
+	h.mu.Unlock()
+
+	for _, shard := range shards {
+		shard.CloseForHandoff()
 	}
 }
 

@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/milvus-io/milvus/internal/mocks/mock_metastore"
 	"github.com/milvus-io/milvus/internal/mocks/mock_storage"
 	"github.com/milvus-io/milvus/internal/types"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 )
@@ -17,6 +19,16 @@ import (
 func TestMain(m *testing.M) {
 	paramtable.Init()
 	os.Exit(m.Run())
+}
+
+type testStreamingNodeQueryViewCatalog struct{}
+
+func (testStreamingNodeQueryViewCatalog) ListQueryViews(context.Context) ([]*viewpb.QueryViewOfShard, error) {
+	return nil, nil
+}
+
+func (testStreamingNodeQueryViewCatalog) SaveQueryView(*viewpb.QueryViewOfShard) error {
+	return nil
 }
 
 func TestInit(t *testing.T) {
@@ -30,16 +42,11 @@ func TestInit(t *testing.T) {
 		OptETCD(&clientv3.Client{}),
 		OptMixCoordClient(syncutil.NewFuture[types.MixCoordClient]()),
 		OptStreamingNodeCatalog(mock_metastore.NewMockStreamingNodeCataLog(t)),
-		OptStreamingNodeQueryViewCatalog(noopStreamingNodeQueryViewCatalog{}),
+		OptStreamingNodeQueryViewCatalog(testStreamingNodeQueryViewCatalog{}),
 	)
 	assert.NotNil(t, Resource().TSOAllocator())
 	assert.NotNil(t, Resource().ETCD())
 	assert.NotNil(t, Resource().MixCoordClient())
-	assert.NotNil(t, Resource().ViewResourceRegistry())
+	assert.NotNil(t, Resource().QueryViewRouter())
 	Release()
-}
-
-func TestInitForTest(t *testing.T) {
-	InitForTest(t)
-	assert.NotNil(t, Resource().ViewResourceRegistry())
 }

@@ -108,14 +108,16 @@ func (l *recordingLoadConfigListener) OnDropLoadConfig(event walview.DropLoadCon
 
 type recordingLiveObserver struct {
 	messages []message.ImmutableMessage
+	events   []walview.VChannelResourceEvent
 	closed   bool
 }
 
-func (o *recordingLiveObserver) ObserveMessage(_ context.Context, msg message.ImmutableMessage) bool {
+func (o *recordingLiveObserver) ObserveEvent(_ context.Context, event walview.VChannelResourceEvent) bool {
 	if o.closed {
 		return false
 	}
-	o.messages = append(o.messages, msg)
+	o.events = append(o.events, event)
+	o.messages = append(o.messages, event.Message)
 	return true
 }
 
@@ -192,6 +194,50 @@ func TestRecoveryStorageDispatchesLiveObserverAfterDataObserve(t *testing.T) {
 	assert.True(t, lastConfirmed.EQ(snapshot.MessageID))
 	require.Len(t, observer.messages, 1)
 	assert.Same(t, msg, observer.messages[0])
+}
+
+func TestRecoveryStorageSerializesSegmentSealedEventWithObserverRegistration(t *testing.T) {
+	checkpoint := &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(1),
+		TimeTick:  1,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: walimplstest.NewTestMessageID(1),
+			TimeTick:  1,
+		},
+	}
+	storage := newRecoveryStorage(types.PChannelInfo{Name: "test-pchannel"}, checkpoint)
+	defer storage.metrics.Close()
+	defer storage.taskScheduler.Close()
+	storage.liveObservers = newLiveObserverRegistry()
+
+	event := walview.SegmentSealedEvent{
+		SegmentID: 10,
+		VChannel:  "test-vchannel",
+	}
+	done := make(chan struct{})
+	storage.mu.Lock()
+	go func() {
+		storage.observeSegmentSealedEvent(event)
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("segment sealed event dispatched before recovery storage registration point was released")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	observer := &recordingLiveObserver{}
+	storage.liveObservers.Register("test-vchannel", observer)
+	storage.mu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for segment sealed event dispatch")
+	}
+	require.Len(t, observer.events, 1)
+	require.NotNil(t, observer.events[0].SegmentSealed)
+	require.Equal(t, int64(10), observer.events[0].SegmentSealed.SegmentID)
 }
 
 func TestRecoveryStorageCreatesWALViewAfterAlterLoadConfig(t *testing.T) {
@@ -279,6 +325,60 @@ func TestRecoveryStorageCreatesWALViewAfterAlterLoadConfig(t *testing.T) {
 	storage.observeDataScannerMessage(context.Background(), liveMsg)
 	require.Len(t, listener.observer.messages, 1)
 	assert.Same(t, liveMsg, listener.observer.messages[0])
+}
+
+func TestRecoveryStorageDetachLoadConfigListenerStopsLoadCallbacks(t *testing.T) {
+	checkpoint := &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(1),
+		TimeTick:  1,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: walimplstest.NewTestMessageID(1),
+			TimeTick:  1,
+		},
+	}
+	storage := newRecoveryStorage(types.PChannelInfo{Name: "test-pchannel"}, checkpoint)
+	defer storage.metrics.Close()
+	defer storage.taskScheduler.Close()
+
+	storage.vchannelModule = vchannel.NewModule("test-pchannel", map[string]*streamingpb.VChannelMeta{
+		"test-vchannel": {
+			Vchannel:           "test-vchannel",
+			State:              streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
+			CheckpointTimeTick: 1,
+			CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
+				CollectionId: 100,
+				Schemas: []*streamingpb.CollectionSchemaOfVChannel{
+					{
+						Schema:             &schemapb.CollectionSchema{Name: "c100"},
+						State:              streamingpb.VChannelSchemaState_VCHANNEL_SCHEMA_STATE_NORMAL,
+						CheckpointTimeTick: 1,
+					},
+				},
+			},
+		},
+	})
+	storage.segmentModule = segment.NewModule("test-pchannel", nil, storage.vchannelModule, nil)
+	storage.transformLogModule = waltransformlog.NewModule("test-pchannel", nil, nil)
+	storage.transformLogModule.SwitchIntoMetaAndData()
+	storage.modules = []moduleapi.Module{storage.vchannelModule, storage.segmentModule, storage.transformLogModule}
+	listener := &recordingLoadConfigListener{}
+	storage.loadConfigListener = listener
+	storage.DetachLoadConfigListener()
+
+	mutableMsg, err := message.NewAlterLoadConfigMessageBuilderV2().
+		WithHeader(&message.AlterLoadConfigMessageHeader{CollectionId: 100}).
+		WithVChannel("test-vchannel").
+		WithBody(&message.AlterLoadConfigMessageBody{}).
+		BuildMutable()
+	require.NoError(t, err)
+	msg := mutableMsg.WithTimeTick(2).WithLastConfirmed(walimplstest.NewTestMessageID(2)).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(3))
+
+	storage.observeDataScannerMessage(context.Background(), msg)
+
+	require.Empty(t, listener.views)
+	require.Nil(t, listener.observer)
+	require.NotNil(t, storage.vchannelModule.VChannelMeta("test-vchannel").GetLoadConfig())
 }
 
 func TestRecoveryStorageEmitsDropForRecoveredVChannelWithoutLoadConfig(t *testing.T) {

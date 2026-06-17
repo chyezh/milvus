@@ -10,6 +10,9 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/snview"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource/idf"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/replicate/replicates"
@@ -17,9 +20,9 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/txn"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/recovery"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/util"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/log"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -133,10 +136,6 @@ func (o *openerAdaptorImpl) Open(ctx context.Context, opt *wal.OpenOption) (wal.
 	return wal, nil
 }
 
-func loadConfigListenerForRecovery() walview.LoadConfigListener {
-	return resource.Resource().ViewResourceRegistry()
-}
-
 // determineWALName determines which walName to use for the given channel.
 func (o *openerAdaptorImpl) determineWALName(ctx context.Context, opt *wal.OpenOption) (message.WALName, error) {
 	walName := message.WALNameUnknown
@@ -211,23 +210,51 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 		roWAL.Close()
 		return nil, errors.Wrap(err, "when building interceptor params")
 	}
+	queryViewCatalog := resource.Resource().StreamingNodeQueryViewCatalog()
+	persistedViews, err := queryViewCatalog.ListQueryViews(ctx)
+	if err != nil {
+		param.Clear()
+		roWAL.Close()
+		return nil, errors.Wrap(err, "when loading streaming node query view meta")
+	}
+	pchannelViews := snview.FilterQueryViewsByPChannel(opt.Channel.Name, persistedViews)
+	resourceBaseByVChannel := snview.OldestUpDataVersions(pchannelViews)
+	recoveredLoadConfigs := snview.RecoveredLoadConfigs(pchannelViews)
+	resMgr := viewresource.NewManager(nil, idf.NewFutureProvider(
+		resource.Resource().MixCoordClient(),
+		idf.WithChunkManager(resource.Resource().ChunkManager()),
+	))
 	rs, snapshot, err := recovery.RecoverRecoveryStorage(
 		ctx,
 		newRecoveryStreamBuilder(roWAL),
 		cp,
 		param.LastTimeTickMessage,
-		recovery.WithLoadConfigListener(loadConfigListenerForRecovery()),
+		recovery.WithLoadConfigListener(resMgr),
+		recovery.WithResourceRecoveryBaseSelector(func(vchannel string) (qviews.DataVersion, bool) {
+			version, ok := resourceBaseByVChannel[vchannel]
+			return version, ok
+		}),
+		recovery.WithRecoveredLoadConfigProvider(func(vchannel string) *streamingpb.VChannelLoadConfig {
+			return recoveredLoadConfigs[vchannel]
+		}),
 	)
 	if err != nil {
+		resMgr.Close()
 		param.Clear()
 		roWAL.Close()
 		return nil, errors.Wrap(err, "when recovering recovery storage")
 	}
 	param.RecoveryStorage = rs
+	snHandler := snview.RecoverPChannelSNQueryViewHandler(opt.Channel.Name, queryViewCatalog, resMgr, pchannelViews)
+	unregisterQueryViewHandler := resource.Resource().QueryViewRouter().Register(opt.Channel.Name, snHandler)
 
 	// Handle alter WAL if found in snapshot
 	// This flushes all remaining data and triggers WAL switch to the target implementation
 	if snapshot.AlterWALInfo != nil && snapshot.AlterWALInfo.FoundAlterWALMsg {
+		unregisterQueryViewHandler()
+		rs.DetachLoadConfigListener()
+		snHandler.CloseForHandoff()
+		resMgr.Close()
 		return o.handleAlterWAL(ctx, l, opt, roWAL, param, rs, snapshot)
 	}
 
@@ -258,10 +285,17 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 			SalvageCheckpoints:     salvageCheckpoints,
 		},
 	); err != nil {
+		unregisterQueryViewHandler()
+		rs.DetachLoadConfigListener()
+		snHandler.CloseForHandoff()
+		resMgr.Close()
 		return nil, err
 	}
 
 	wal := adaptImplsToRWWAL(roWAL, o.interceptorBuilders, param)
+	wal.queryViewHandler = snHandler
+	wal.viewResourceManager = resMgr
+	wal.unregisterQueryViewHandler = unregisterQueryViewHandler
 	o.walInstances.Insert(id, wal)
 	return wal, nil
 }

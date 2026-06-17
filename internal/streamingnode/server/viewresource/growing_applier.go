@@ -21,10 +21,11 @@ import (
 )
 
 type segcoreGrowingRuntimeApplier struct {
-	mu         sync.Mutex
-	closeOnce  sync.Once
-	collection *segcore.CCollection
-	segments   map[int64]segcore.CSegment
+	mu              sync.Mutex
+	closeOnce       sync.Once
+	collection      *segcore.CCollection
+	segments        map[int64]segcore.CSegment
+	flushedSegments map[int64]struct{}
 }
 
 func newSegcoreGrowingRuntimeApplier(ctx context.Context, desc LoadResourceDescriptor) (GrowingRuntimeApplier, error) {
@@ -40,8 +41,9 @@ func newSegcoreGrowingRuntimeApplier(ctx context.Context, desc LoadResourceDescr
 		return nil, err
 	}
 	applier := &segcoreGrowingRuntimeApplier{
-		collection: collection,
-		segments:   make(map[int64]segcore.CSegment),
+		collection:      collection,
+		segments:        make(map[int64]segcore.CSegment),
+		flushedSegments: make(map[int64]struct{}),
 	}
 	for _, segment := range desc.WALView.SegmentSnapshot.Segments {
 		if segment.Data.PersistedStorage == nil {
@@ -87,6 +89,10 @@ func (a *segcoreGrowingRuntimeApplier) ApplyLiveMessage(ctx context.Context, msg
 		return nil
 	}
 	switch msg.MessageType() {
+	case message.MessageTypeCreateSegment:
+		created := message.MustAsImmutableCreateSegmentMessageV2(msg)
+		_, err := a.getOrCreateSegment(created.Header().GetSegmentId())
+		return err
 	case message.MessageTypeInsert:
 		return a.applyInsertMessage(ctx, 0, msg)
 	case message.MessageTypeTxn:
@@ -96,6 +102,9 @@ func (a *segcoreGrowingRuntimeApplier) ApplyLiveMessage(ctx context.Context, msg
 		return a.applyLiveDeleteMessage(ctx, msg)
 	case message.MessageTypeDelete:
 		return a.applyLiveDeleteMessage(ctx, msg)
+	case message.MessageTypeFlush:
+		a.markSegmentFlushed(message.MustAsImmutableFlushMessageV2(msg).Header().GetSegmentId())
+		return nil
 	default:
 		return nil
 	}
@@ -109,6 +118,7 @@ func (a *segcoreGrowingRuntimeApplier) Close() {
 			segment.Release()
 		}
 		a.segments = nil
+		a.flushedSegments = nil
 		if a.collection != nil {
 			a.collection.Release()
 			a.collection = nil
@@ -139,6 +149,12 @@ func (a *segcoreGrowingRuntimeApplier) insert(ctx context.Context, insert walvie
 	segmentID := insert.Assignment.GetSegmentAssignment().GetSegmentId()
 	request.PartitionID = insert.Assignment.GetPartitionId()
 	request.SegmentID = segmentID
+	a.mu.Lock()
+	flushed := a.segmentFlushedLocked(segmentID)
+	a.mu.Unlock()
+	if flushed {
+		return errors.Errorf("growing segment %d already flushed", segmentID)
+	}
 	insertMsg := &msgstream.InsertMsg{
 		BaseMsg: msgstream.BaseMsg{
 			BeginTimestamp: insert.TimeTick,
@@ -245,6 +261,23 @@ func (a *segcoreGrowingRuntimeApplier) getOrCreateSegment(segmentID int64) (segc
 	return segment, nil
 }
 
+func (a *segcoreGrowingRuntimeApplier) markSegmentFlushed(segmentID int64) {
+	if segmentID == 0 {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.flushedSegments == nil {
+		a.flushedSegments = make(map[int64]struct{})
+	}
+	a.flushedSegments[segmentID] = struct{}{}
+}
+
+func (a *segcoreGrowingRuntimeApplier) segmentFlushedLocked(segmentID int64) bool {
+	_, ok := a.flushedSegments[segmentID]
+	return ok
+}
+
 func (a *segcoreGrowingRuntimeApplier) segmentIDs() []int64 {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -260,6 +293,19 @@ func (a *segcoreGrowingRuntimeApplier) segment(segmentID int64) (segcore.CSegmen
 	defer a.mu.Unlock()
 	segment, ok := a.segments[segmentID]
 	return segment, ok
+}
+
+func (a *segcoreGrowingRuntimeApplier) releaseSegment(segmentID int64) {
+	a.mu.Lock()
+	segment, ok := a.segments[segmentID]
+	if ok {
+		delete(a.segments, segmentID)
+	}
+	delete(a.flushedSegments, segmentID)
+	a.mu.Unlock()
+	if ok {
+		segment.Release()
+	}
 }
 
 func (a *segcoreGrowingRuntimeApplier) snapshotSegments() map[int64]segcore.CSegment {

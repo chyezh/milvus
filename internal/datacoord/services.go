@@ -47,6 +47,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -55,6 +56,11 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/timerecord"
 	"github.com/milvus-io/milvus/pkg/v3/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
+)
+
+const (
+	statusExtraInfoDataViewStreamingVersion = "data_view_streaming_version"
+	statusExtraInfoDataViewCompactVersion   = "data_view_compact_version"
 )
 
 // GetTimeTickChannel legacy API, returns time tick channel name
@@ -699,13 +705,17 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 		log.Error("save binlog and checkpoints failed", zap.Error(err))
 		return merr.Status(err), nil
 	}
+	var flushedDataVersion *viewpb.DataVersion
 	if s.dataViewManager != nil && req.GetFlushed() && req.GetSegLevel() != datapb.SegmentLevel_L0 {
-		if _, err := s.dataViewManager.OnFlush(ctx, FlushDataViewEvent{
+		version, err := s.dataViewManager.OnFlush(ctx, FlushDataViewEvent{
 			CollectionID:         req.GetCollectionID(),
 			SegmentIDs:           []int64{req.GetSegmentID()},
 			TemporaryUnavailable: enableSortCompaction(),
-		}); err != nil {
+		})
+		if err != nil {
 			log.Warn("failed to publish DataView after flush", zap.Error(err))
+		} else {
+			flushedDataVersion = version
 		}
 	}
 
@@ -729,7 +739,7 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 		metrics.DataCoordSizeStoredL0Segment.WithLabelValues(fmt.Sprint(req.GetCollectionID())).Observe(calculateL0SegmentSize(req.GetField2StatslogPaths()))
 
 		s.compactionTriggerManager.OnCollectionUpdate(req.GetCollectionID())
-		return merr.Success(), nil
+		return successWithFlushedDataVersion(flushedDataVersion), nil
 	}
 
 	// notify building index and compaction for "flushing/flushed" level one segment
@@ -749,7 +759,19 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 		}
 	}
 
-	return merr.Success(), nil
+	return successWithFlushedDataVersion(flushedDataVersion), nil
+}
+
+func successWithFlushedDataVersion(version *viewpb.DataVersion) *commonpb.Status {
+	status := merr.Success()
+	if version == nil {
+		return status
+	}
+	status.ExtraInfo = map[string]string{
+		statusExtraInfoDataViewStreamingVersion: strconv.FormatInt(version.GetStreamingVersion(), 10),
+		statusExtraInfoDataViewCompactVersion:   strconv.FormatInt(version.GetCompactVersion(), 10),
+	}
+	return status
 }
 
 func (s *Server) validateTextSegmentStorage(req *datapb.SaveBinlogPathsRequest) error {
@@ -1119,6 +1141,40 @@ func (s *Server) GetRecoveryInfoV2(ctx context.Context, req *datapb.GetRecoveryI
 
 	resp.Channels = channelInfos
 	resp.Segments = segmentInfos
+	return resp, nil
+}
+
+func (s *Server) GetDataView(ctx context.Context, req *datapb.GetDataViewRequest) (*datapb.GetDataViewResponse, error) {
+	resp := &datapb.GetDataViewResponse{
+		Status: merr.Success(),
+	}
+	if err := merr.CheckHealthy(s.GetStateCode()); err != nil {
+		resp.Status = merr.Status(err)
+		return resp, nil
+	}
+	if req.GetDataVersion() == nil {
+		resp.Status = merr.Status(merr.WrapErrParameterInvalidMsg("data version is nil"))
+		return resp, nil
+	}
+	if s.dataViewManager == nil {
+		resp.Status = merr.Status(merr.WrapErrServiceInternalMsg("data view manager is nil"))
+		return resp, nil
+	}
+	view, err := s.dataViewManager.DataView(ctx, req.GetCollectionID(), req.GetDataVersion())
+	if err != nil {
+		resp.Status = merr.Status(err)
+		return resp, nil
+	}
+	if view == nil {
+		resp.Status = merr.Status(merr.WrapErrServiceInternalMsg(
+			"data view not found, collectionID=%d, dataVersion=(%d,%d)",
+			req.GetCollectionID(),
+			req.GetDataVersion().GetStreamingVersion(),
+			req.GetDataVersion().GetCompactVersion(),
+		))
+		return resp, nil
+	}
+	resp.DataView = view
 	return resp, nil
 }
 

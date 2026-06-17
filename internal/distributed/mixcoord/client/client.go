@@ -1172,6 +1172,17 @@ func (c *Client) GetRecoveryInfoV2(ctx context.Context, req *datapb.GetRecoveryI
 	})
 }
 
+func (c *Client) GetDataView(ctx context.Context, req *datapb.GetDataViewRequest, opts ...grpc.CallOption) (*datapb.GetDataViewResponse, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.sess.ServerID)),
+	)
+	return wrapGrpcCall(ctx, c, func(client MixCoordClient) (*datapb.GetDataViewResponse, error) {
+		return client.GetDataView(ctx, req)
+	})
+}
+
 // GetChannelRecoveryInfo returns the corresponding vchannel info.
 func (c *Client) GetChannelRecoveryInfo(ctx context.Context, req *datapb.GetChannelRecoveryInfoRequest, opts ...grpc.CallOption) (*datapb.GetChannelRecoveryInfoResponse, error) {
 	req = typeutil.Clone(req)

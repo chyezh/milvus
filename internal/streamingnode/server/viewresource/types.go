@@ -18,10 +18,11 @@ import (
 // LoadResourceDescriptor describes the latest vchannel runtime that must be
 // prepared after WAL observes AlterLoadConfig.
 type LoadResourceDescriptor struct {
-	WALView      walview.VChannelWALView
-	LiveMessages <-chan message.ImmutableMessage
-	LiveDone     <-chan struct{}
-	OnApplied    func()
+	WALView    walview.VChannelWALView
+	LiveEvents <-chan walview.VChannelResourceEvent
+	LiveDone   <-chan struct{}
+	OnApplied  func()
+	BM25       *BM25Runtime
 }
 
 func (d LoadResourceDescriptor) CollectionID() int64 {
@@ -77,12 +78,17 @@ type GrowingRuntime struct {
 	SegmentIDs          []int64
 	Segments            map[int64]segcore.CSegment
 	DeleteReplayEntries []*streamingpb.TransformLogEntry
-	LiveMessages        <-chan message.ImmutableMessage
+	LiveEvents          <-chan walview.VChannelResourceEvent
 
 	applier                  GrowingRuntimeApplier
 	mu                       sync.RWMutex
 	flushedSegments          map[int64]struct{}
+	sealedAtDataVersions     map[int64]qviews.DataVersion
+	truncateDataVersion      qviews.DataVersion
+	hasTruncateDataVersion   bool
 	closeOnce                sync.Once
+	liveStopCh               chan struct{}
+	liveDoneCh               chan struct{}
 	appliedGrowingTimeTick   atomic.Uint64
 	appliedTransformTimeTick atomic.Uint64
 	bm25                     atomic.Pointer[BM25Runtime]
@@ -123,6 +129,20 @@ func (r *GrowingRuntime) SegmentFlushed(segmentID int64) bool {
 	return ok
 }
 
+func (r *GrowingRuntime) registerSegment(segmentID int64) {
+	if r == nil || segmentID == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, existing := range r.SegmentIDs {
+		if existing == segmentID {
+			return
+		}
+	}
+	r.SegmentIDs = append(r.SegmentIDs, segmentID)
+}
+
 func (r *GrowingRuntime) markSegmentFlushed(segmentID int64) {
 	if r == nil || segmentID == 0 {
 		return
@@ -135,11 +155,87 @@ func (r *GrowingRuntime) markSegmentFlushed(segmentID int64) {
 	r.flushedSegments[segmentID] = struct{}{}
 }
 
+func (r *GrowingRuntime) markSegmentSealed(segmentID int64, sealedAt qviews.DataVersion) {
+	if r == nil || segmentID == 0 {
+		return
+	}
+	release := false
+	r.mu.Lock()
+	if r.sealedAtDataVersions == nil {
+		r.sealedAtDataVersions = make(map[int64]qviews.DataVersion)
+	}
+	if existing, ok := r.sealedAtDataVersions[segmentID]; ok && !existing.EQ(sealedAt) {
+		r.mu.Unlock()
+		panic("conflicting sealed data version for growing segment")
+	}
+	r.sealedAtDataVersions[segmentID] = sealedAt
+	if r.hasTruncateDataVersion && r.truncateDataVersion.GTE(sealedAt) {
+		r.removeSegmentMetadataLocked(segmentID)
+		release = true
+	}
+	r.mu.Unlock()
+	if release {
+		r.releaseSegment(segmentID)
+	}
+}
+
+func (r *GrowingRuntime) Truncate(minDataVersion qviews.DataVersion) {
+	if r == nil || r.applier == nil {
+		return
+	}
+	r.mu.Lock()
+	if !r.hasTruncateDataVersion || minDataVersion.GT(r.truncateDataVersion) {
+		r.truncateDataVersion = minDataVersion
+		r.hasTruncateDataVersion = true
+	}
+	segmentsToRelease := make([]int64, 0)
+	for segmentID, sealedAt := range r.sealedAtDataVersions {
+		if r.truncateDataVersion.GTE(sealedAt) {
+			segmentsToRelease = append(segmentsToRelease, segmentID)
+			r.removeSegmentMetadataLocked(segmentID)
+		}
+	}
+	r.mu.Unlock()
+	for _, segmentID := range segmentsToRelease {
+		r.releaseSegment(segmentID)
+	}
+}
+
+func (r *GrowingRuntime) removeSegmentMetadataLocked(segmentID int64) {
+	delete(r.sealedAtDataVersions, segmentID)
+	delete(r.flushedSegments, segmentID)
+	delete(r.Segments, segmentID)
+	for i, id := range r.SegmentIDs {
+		if id == segmentID {
+			r.SegmentIDs = append(r.SegmentIDs[:i], r.SegmentIDs[i+1:]...)
+			return
+		}
+	}
+}
+
+func (r *GrowingRuntime) releaseSegment(segmentID int64) {
+	if releaser, ok := r.applier.(growingSegmentReleaser); ok {
+		releaser.releaseSegment(segmentID)
+	}
+}
+
 func (r *GrowingRuntime) Close() {
 	if r == nil {
 		return
 	}
 	r.closeOnce.Do(func() {
+		r.mu.Lock()
+		liveStopCh := r.liveStopCh
+		liveDoneCh := r.liveDoneCh
+		r.liveStopCh = nil
+		r.liveDoneCh = nil
+		r.mu.Unlock()
+		if liveStopCh != nil {
+			close(liveStopCh)
+		}
+		if liveDoneCh != nil {
+			<-liveDoneCh
+		}
 		if r.applier != nil {
 			r.applier.Close()
 		}
@@ -159,9 +255,15 @@ type BM25Runtime struct {
 	GrowingSegmentIDs []int64
 	Oracle            BM25Oracle
 	LiveUpdater       BM25LiveUpdater
+	Advancer          BM25Advancer
+	DataVersion       qviews.DataVersion
 
-	closeOnce sync.Once
-	OnClose   func()
+	closeOnce   sync.Once
+	catchupMu   sync.Mutex
+	catchupOnce sync.Once
+	catchupDone chan struct{}
+	catchupErr  error
+	OnClose     func()
 }
 
 type BM25Oracle interface {
@@ -172,6 +274,14 @@ type BM25LiveUpdater interface {
 	ApplyLiveMessage(context.Context, message.ImmutableMessage) error
 }
 
+type BM25SegmentSealedUpdater interface {
+	ApplySegmentSealed(segmentID int64, sealedAt qviews.DataVersion)
+}
+
+type BM25Advancer interface {
+	MaybeAdvance(qviews.DataVersion)
+}
+
 func (r *BM25Runtime) ApplyLiveMessage(ctx context.Context, msg message.ImmutableMessage) error {
 	if r == nil || r.LiveUpdater == nil {
 		return nil
@@ -179,11 +289,74 @@ func (r *BM25Runtime) ApplyLiveMessage(ctx context.Context, msg message.Immutabl
 	return r.LiveUpdater.ApplyLiveMessage(ctx, msg)
 }
 
+func (r *BM25Runtime) ApplySegmentSealed(segmentID int64, sealedAt qviews.DataVersion) {
+	if r == nil || r.LiveUpdater == nil {
+		return
+	}
+	if updater, ok := r.LiveUpdater.(BM25SegmentSealedUpdater); ok {
+		updater.ApplySegmentSealed(segmentID, sealedAt)
+	}
+}
+
+func (r *BM25Runtime) CatchupDone() <-chan struct{} {
+	if r == nil {
+		return closedChannel()
+	}
+	r.catchupMu.Lock()
+	defer r.catchupMu.Unlock()
+	r.ensureCatchupDoneLocked()
+	return r.catchupDone
+}
+
+func (r *BM25Runtime) CatchupError() error {
+	if r == nil {
+		return nil
+	}
+	r.catchupMu.Lock()
+	defer r.catchupMu.Unlock()
+	return r.catchupErr
+}
+
+func (r *BM25Runtime) MaybeAdvance(target qviews.DataVersion) {
+	if r == nil || r.Advancer == nil || !target.GT(r.DataVersion) {
+		return
+	}
+	r.Advancer.MaybeAdvance(target)
+}
+
+func (r *BM25Runtime) MarkCatchupDone() {
+	r.markCatchupDone(nil)
+}
+
+func (r *BM25Runtime) MarkCatchupFailed(err error) {
+	r.markCatchupDone(err)
+}
+
+func (r *BM25Runtime) markCatchupDone(err error) {
+	if r == nil {
+		return
+	}
+	r.catchupMu.Lock()
+	defer r.catchupMu.Unlock()
+	r.ensureCatchupDoneLocked()
+	r.catchupOnce.Do(func() {
+		r.catchupErr = err
+		close(r.catchupDone)
+	})
+}
+
+func (r *BM25Runtime) ensureCatchupDoneLocked() {
+	if r.catchupDone == nil {
+		r.catchupDone = make(chan struct{})
+	}
+}
+
 func (r *BM25Runtime) Close() {
 	if r == nil {
 		return
 	}
 	r.closeOnce.Do(func() {
+		r.MarkCatchupDone()
 		if r.OnClose != nil {
 			r.OnClose()
 		}
@@ -197,4 +370,10 @@ type BM25SegmentResource struct {
 	BM25Binlogs    []*datapb.FieldBinlog
 	StorageVersion int64
 	ManifestPath   string
+}
+
+func closedChannel() <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
 }

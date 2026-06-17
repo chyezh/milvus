@@ -10,6 +10,7 @@ import "milvus.proto";
 import "schema.proto";
 import "msg.proto";
 import "index_coord.proto";
+import "view.proto";
 
 // TODO: import google/protobuf/empty.proto
 message Empty {}
@@ -52,6 +53,7 @@ service DataCoord {
   rpc SaveBinlogPaths(SaveBinlogPathsRequest) returns (common.Status){}
   rpc GetRecoveryInfo(GetRecoveryInfoRequest) returns (GetRecoveryInfoResponse){}
   rpc GetRecoveryInfoV2(GetRecoveryInfoRequestV2) returns (GetRecoveryInfoResponseV2){}
+  rpc GetDataView(GetDataViewRequest) returns (GetDataViewResponse){}
   rpc GetChannelRecoveryInfo(GetChannelRecoveryInfoRequest) returns (GetChannelRecoveryInfoResponse){}
   rpc GetFlushedSegments(GetFlushedSegmentsRequest) returns(GetFlushedSegmentsResponse){}
   rpc GetSegmentsByStates(GetSegmentsByStatesRequest) returns(GetSegmentsByStatesResponse){}
@@ -610,6 +612,17 @@ message GetRecoveryInfoRequestV2 {
   common.MsgBase base = 1;
   int64 collectionID = 2;
   repeated int64 partitionIDs = 3;
+}
+
+message GetDataViewRequest {
+  common.MsgBase base = 1;
+  int64 collectionID = 2;
+  view.DataVersion data_version = 3;
+}
+
+message GetDataViewResponse {
+  common.Status status = 1;
+  view.DataViewOfCollection data_view = 2;
 }
 
 message GetChannelRecoveryInfoRequest {

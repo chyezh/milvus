@@ -30,10 +30,10 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
-var _ walview.LoadConfigListener = (*DefaultRegistry)(nil)
+var _ walview.LoadConfigListener = (*DefaultManager)(nil)
 
-func TestRegistryInterfaceUsesWALViewBoundary(t *testing.T) {
-	_, ok := reflect.TypeOf((*Registry)(nil)).Elem().MethodByName("PrepareLatestFromAlterLoadConfig")
+func TestManagerInterfaceUsesWALViewBoundary(t *testing.T) {
+	_, ok := reflect.TypeOf((*Manager)(nil)).Elem().MethodByName("BuildInitial")
 	require.False(t, ok)
 }
 
@@ -67,49 +67,51 @@ func testAlterLoadConfigView(collectionID int64, vchannel string, version qviews
 	}
 }
 
-type fakeGrowingPreparer struct {
+type fakeGrowingSegmentRuntimeBuilder struct {
 	mu    sync.Mutex
 	calls []LoadResourceDescriptor
 	block chan struct{}
 	seen  chan struct{}
 }
 
-func (p *fakeGrowingPreparer) PrepareLatest(_ context.Context, desc LoadResourceDescriptor) (*GrowingRuntime, error) {
+func (p *fakeGrowingSegmentRuntimeBuilder) Build(_ context.Context, desc LoadResourceDescriptor) (*GrowingRuntime, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls = append(p.calls, desc)
 	return &GrowingRuntime{SegmentIDs: []int64{10, 11}}, nil
 }
 
-type cancelAwareGrowingPreparer struct {
+type cancelAwareGrowingSegmentRuntimeBuilder struct {
 	started  chan struct{}
 	canceled chan struct{}
 }
 
-func (p *cancelAwareGrowingPreparer) PrepareLatest(ctx context.Context, desc LoadResourceDescriptor) (*GrowingRuntime, error) {
+func (p *cancelAwareGrowingSegmentRuntimeBuilder) Build(ctx context.Context, desc LoadResourceDescriptor) (*GrowingRuntime, error) {
 	close(p.started)
 	<-ctx.Done()
 	close(p.canceled)
 	return nil, ctx.Err()
 }
 
-type fakeBM25Provider struct {
+type fakeIDFOracleRuntimeBuilder struct {
 	mu    sync.Mutex
 	calls []LoadResourceDescriptor
 }
 
-func (p *fakeBM25Provider) PrepareLatestFromAlterLoadConfig(_ context.Context, desc LoadResourceDescriptor) (*BM25Runtime, error) {
+func (p *fakeIDFOracleRuntimeBuilder) BuildInitial(_ context.Context, desc LoadResourceDescriptor) (*BM25Runtime, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls = append(p.calls, desc)
-	return &BM25Runtime{Resources: []*BM25SegmentResource{{SegmentID: 20}}}, nil
+	runtime := &BM25Runtime{Resources: []*BM25SegmentResource{{SegmentID: 20}}}
+	runtime.MarkCatchupDone()
+	return runtime, nil
 }
 
-type errorBM25Provider struct {
+type errorIDFOracleRuntimeBuilder struct {
 	err error
 }
 
-func (p errorBM25Provider) PrepareLatestFromAlterLoadConfig(context.Context, LoadResourceDescriptor) (*BM25Runtime, error) {
+func (p errorIDFOracleRuntimeBuilder) BuildInitial(context.Context, LoadResourceDescriptor) (*BM25Runtime, error) {
 	return nil, p.err
 }
 
@@ -118,6 +120,54 @@ type recordingGrowingApplier struct {
 	events  []string
 	closed  bool
 	closeCh chan struct{}
+}
+
+type errorLiveApplier struct {
+	noopGrowingRuntimeApplier
+	err error
+}
+
+func (a errorLiveApplier) ApplyLiveMessage(context.Context, message.ImmutableMessage) error {
+	return a.err
+}
+
+type errorBM25LiveUpdater struct {
+	err error
+}
+
+func (u errorBM25LiveUpdater) ApplyLiveMessage(context.Context, message.ImmutableMessage) error {
+	return u.err
+}
+
+type releaseRecordingApplier struct {
+	noopGrowingRuntimeApplier
+	mu       sync.Mutex
+	segments map[int64]struct{}
+	released []int64
+}
+
+func newReleaseRecordingApplier(segmentIDs ...int64) *releaseRecordingApplier {
+	segments := make(map[int64]struct{}, len(segmentIDs))
+	for _, segmentID := range segmentIDs {
+		segments[segmentID] = struct{}{}
+	}
+	return &releaseRecordingApplier{segments: segments}
+}
+
+func (a *releaseRecordingApplier) releaseSegment(segmentID int64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if _, ok := a.segments[segmentID]; !ok {
+		return
+	}
+	delete(a.segments, segmentID)
+	a.released = append(a.released, segmentID)
+}
+
+func (a *releaseRecordingApplier) releasedSegments() []int64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]int64(nil), a.released...)
 }
 
 func newRecordingGrowingApplier() *recordingGrowingApplier {
@@ -267,6 +317,95 @@ func newTestFlushMessage(t *testing.T, vchannel string, segmentID int64, timetic
 		IntoImmutableMessage(rmq.NewRmqID(int64(timetick + 1)))
 }
 
+func newTestCreateSegmentMessage(t *testing.T, vchannel string, segmentID int64, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	mutable, err := message.NewCreateSegmentMessageBuilderV2().
+		WithVChannel(vchannel).
+		WithHeader(&message.CreateSegmentMessageHeader{
+			CollectionId: 1,
+			PartitionId:  10,
+			SegmentId:    segmentID,
+		}).
+		WithBody(&message.CreateSegmentMessageBody{}).
+		BuildMutable()
+	require.NoError(t, err)
+	return mutable.WithTimeTick(timetick).
+		WithLastConfirmed(rmq.NewRmqID(int64(timetick))).
+		IntoImmutableMessage(rmq.NewRmqID(int64(timetick + 1)))
+}
+
+func newTestInsertTxnMessage(t *testing.T, vchannel string, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	insert := message.NewInsertMessageBuilderV1().
+		WithVChannel(vchannel).
+		WithHeader(&message.InsertMessageHeader{}).
+		WithBody(&msgpb.InsertRequest{}).
+		MustBuildMutable()
+	return newTestTxnMessage(t, vchannel, timetick, insert.
+		WithTimeTick(timetick-1).
+		WithLastConfirmed(rmq.NewRmqID(int64(timetick-1))))
+}
+
+func newTestDeleteTxnMessage(t *testing.T, vchannel string, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	deleted := message.NewDeleteMessageBuilderV1().
+		WithVChannel(vchannel).
+		WithHeader(&message.DeleteMessageHeader{
+			CollectionId: 1,
+			Rows:         1,
+		}).
+		WithBody(&msgpb.DeleteRequest{
+			Base:         &commonpb.MsgBase{MsgType: commonpb.MsgType_Delete},
+			CollectionID: 1,
+			PartitionID:  10,
+			PrimaryKeys:  &schemapb.IDs{IdField: &schemapb.IDs_IntId{IntId: &schemapb.LongArray{Data: []int64{1}}}},
+			Timestamps:   []uint64{timetick},
+		}).
+		MustBuildMutable()
+	return newTestTxnMessage(t, vchannel, timetick, deleted.
+		WithTimeTick(timetick-1).
+		WithLastConfirmed(rmq.NewRmqID(int64(timetick-1))))
+}
+
+func newTestTxnMessage(t *testing.T, vchannel string, timetick uint64, innerMessages ...message.MutableMessage) message.ImmutableMessage {
+	t.Helper()
+	txnCtx := message.TxnContext{
+		TxnID:     message.TxnID(timetick),
+		Keepalive: time.Second,
+	}
+	begin := message.NewBeginTxnMessageBuilderV2().
+		WithVChannel(vchannel).
+		WithHeader(&message.BeginTxnMessageHeader{}).
+		WithBody(&message.BeginTxnMessageBody{}).
+		MustBuildMutable()
+	beginMsg := message.MustAsImmutableBeginTxnMessageV2(begin.
+		WithTxnContext(txnCtx).
+		WithTimeTick(timetick - 2).
+		WithLastConfirmed(rmq.NewRmqID(int64(timetick - 2))).
+		IntoImmutableMessage(rmq.NewRmqID(int64(timetick - 2))))
+
+	builder := message.NewImmutableTxnMessageBuilder(beginMsg)
+	for i, inner := range innerMessages {
+		builder.Add(inner.
+			WithTxnContext(txnCtx).
+			IntoImmutableMessage(rmq.NewRmqID(int64(timetick - 1 + uint64(i)))))
+	}
+	commit := message.NewCommitTxnMessageBuilderV2().
+		WithVChannel(vchannel).
+		WithHeader(&message.CommitTxnMessageHeader{}).
+		WithBody(&message.CommitTxnMessageBody{}).
+		MustBuildMutable()
+	commitMsg := message.MustAsImmutableCommitTxnMessageV2(commit.
+		WithTxnContext(txnCtx).
+		WithTimeTick(timetick).
+		WithLastConfirmed(rmq.NewRmqID(int64(timetick))).
+		IntoImmutableMessage(rmq.NewRmqID(int64(timetick + 1))))
+
+	txn, err := builder.Build(commitMsg)
+	require.NoError(t, err)
+	return txn
+}
+
 type fakeTransformLogScanner struct {
 	ch     chan transformlogapi.Event
 	done   chan struct{}
@@ -307,13 +446,13 @@ func (s *fakeTransformLogScanner) Close() error {
 	return s.err
 }
 
-func TestRegistryOnAlterLoadConfigPreparesWALViewDataVersion(t *testing.T) {
-	growing := &fakeGrowingPreparer{}
-	bm25 := &fakeBM25Provider{}
-	registry := NewRegistry(growing, bm25)
+func TestManagerOnAlterLoadConfigBuildsWALViewDataVersion(t *testing.T) {
+	growing := &fakeGrowingSegmentRuntimeBuilder{}
+	bm25 := &fakeIDFOracleRuntimeBuilder{}
+	manager := NewManager(growing, bm25)
 
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
-	observer := registry.OnAlterLoadConfig(walview.VChannelWALView{
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
 		VChannel:     "by-dev-rootcoord-dml_0_1v0",
 		LoadConfig: &streamingpb.VChannelLoadConfig{
@@ -331,12 +470,12 @@ func TestRegistryOnAlterLoadConfigPreparesWALViewDataVersion(t *testing.T) {
 	require.NotNil(t, observer)
 
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
 
-	runtime, ready, err := registry.GetViewRuntime(ViewResourceDescriptor{
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "by-dev-rootcoord-dml_0_1v0",
 		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
@@ -358,10 +497,10 @@ func TestRegistryOnAlterLoadConfigPreparesWALViewDataVersion(t *testing.T) {
 	bm25.mu.Unlock()
 }
 
-func TestRegistryDefaultGrowingPreparerUsesWALViewSegmentSnapshot(t *testing.T) {
-	registry := NewRegistry(nil, nil)
+func TestManagerDefaultGrowingRuntimeBuilderUsesWALViewSegmentSnapshot(t *testing.T) {
+	manager := NewManager(nil, nil)
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
-	registry.OnAlterLoadConfig(walview.VChannelWALView{
+	manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
 		VChannel:     "ch",
 		SegmentSnapshot: walview.VisibleSegmentSnapshot{
@@ -373,12 +512,12 @@ func TestRegistryDefaultGrowingPreparerUsesWALViewSegmentSnapshot(t *testing.T) 
 		},
 	})
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
 
-	runtime, ready, err := registry.GetViewRuntime(ViewResourceDescriptor{
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "ch",
 		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
@@ -388,16 +527,16 @@ func TestRegistryDefaultGrowingPreparerUsesWALViewSegmentSnapshot(t *testing.T) 
 	require.Equal(t, []int64{10, 11}, runtime.Growing.SegmentIDs)
 }
 
-func TestRegistryDefaultGrowingPreparerAppliesSnapshotDeleteAndLiveInOrder(t *testing.T) {
+func TestManagerDefaultGrowingRuntimeBuilderAppliesSnapshotDeleteAndLiveInOrder(t *testing.T) {
 	applier := newRecordingGrowingApplier()
-	registry := NewRegistry(SnapshotGrowingSegmentPreparer{
+	manager := NewManager(SnapshotGrowingSegmentRuntimeBuilder{
 		NewApplier: func(context.Context, LoadResourceDescriptor) (GrowingRuntimeApplier, error) {
 			return applier, nil
 		},
 	}, nil)
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
 	scanner := newFakeTransformLogScanner()
-	observer := registry.OnAlterLoadConfig(walview.VChannelWALView{
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID:          1,
 		VChannel:              "ch",
 		BaseGrowingTimeTick:   40,
@@ -424,12 +563,12 @@ func TestRegistryDefaultGrowingPreparerAppliesSnapshotDeleteAndLiveInOrder(t *te
 	scanner.ch <- transformlogapi.Event{CaughtUp: &transformlogapi.CaughtUp{StartAfterTimeTick: 1}}
 
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
 
-	require.True(t, observer.ObserveMessage(context.Background(), newTestDeleteMessage(t, "ch", 45)))
+	require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newTestDeleteMessage(t, "ch", 45)}))
 	require.Eventuallyf(t, func() bool {
 		return len(applier.snapshot()) == 4
 	}, time.Second, 10*time.Millisecond, "events: %v", applier.snapshot())
@@ -441,14 +580,14 @@ func TestRegistryDefaultGrowingPreparerAppliesSnapshotDeleteAndLiveInOrder(t *te
 	}, applier.snapshot())
 }
 
-func TestRegistryDefaultGrowingPreparerBuildsSegcoreGrowingSegmentFromSnapshotInsert(t *testing.T) {
+func TestManagerDefaultGrowingRuntimeBuilderBuildsSegcoreGrowingSegmentFromSnapshotInsert(t *testing.T) {
 	initSegcoreForViewResourceTest(t)
 
-	registry := NewRegistry(nil, nil)
+	manager := NewManager(nil, nil)
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
 	schema := mock_segcore.GenTestCollectionSchema("snview-resource", schemapb.DataType_Int64, false)
 	segmentID := int64(10)
-	observer := registry.OnAlterLoadConfig(walview.VChannelWALView{
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID:        1,
 		VChannel:            "ch",
 		BaseGrowingTimeTick: 30,
@@ -474,12 +613,12 @@ func TestRegistryDefaultGrowingPreparerBuildsSegcoreGrowingSegmentFromSnapshotIn
 	require.NotNil(t, observer)
 
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
 
-	runtime, ready, err := registry.GetViewRuntime(ViewResourceDescriptor{
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "ch",
 		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
@@ -489,16 +628,16 @@ func TestRegistryDefaultGrowingPreparerBuildsSegcoreGrowingSegmentFromSnapshotIn
 	require.Contains(t, runtime.Growing.Segments, segmentID)
 	require.Equal(t, int64(3), runtime.Growing.Segments[segmentID].RowNum())
 
-	registry.ReleaseLoad(1, "ch")
+	manager.OnDropLoadConfig(walview.DropLoadConfigEvent{CollectionID: 1, VChannel: "ch"})
 }
 
-func TestRegistryDefaultGrowingPreparerAppliesLiveInsertToNewSegcoreSegment(t *testing.T) {
+func TestManagerDefaultGrowingRuntimeBuilderAppliesLiveInsertToNewSegcoreSegment(t *testing.T) {
 	initSegcoreForViewResourceTest(t)
 
-	registry := NewRegistry(nil, nil)
+	manager := NewManager(nil, nil)
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
 	schema := mock_segcore.GenTestCollectionSchema("snview-resource-live", schemapb.DataType_Int64, false)
-	observer := registry.OnAlterLoadConfig(walview.VChannelWALView{
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID:        1,
 		VChannel:            "ch",
 		BaseGrowingTimeTick: 30,
@@ -511,11 +650,11 @@ func TestRegistryDefaultGrowingPreparerAppliesLiveInsertToNewSegcoreSegment(t *t
 	})
 	require.NotNil(t, observer)
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
-	runtime, ready, err := registry.GetViewRuntime(ViewResourceDescriptor{
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "ch",
 		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
@@ -524,19 +663,104 @@ func TestRegistryDefaultGrowingPreparerAppliesLiveInsertToNewSegcoreSegment(t *t
 	require.True(t, ready)
 
 	segmentID := int64(20)
-	require.True(t, observer.ObserveMessage(context.Background(), newTestSegmentInsertMessage(t, "ch", segmentID, 2, 40, schema)))
+	require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newTestSegmentInsertMessage(t, "ch", segmentID, 2, 40, schema)}))
 	require.Eventually(t, func() bool {
 		segment, ok := runtime.Growing.Segment(segmentID)
 		return ok && segment.RowNum() == 2
 	}, time.Second, 10*time.Millisecond)
 
-	registry.ReleaseLoad(1, "ch")
+	manager.OnDropLoadConfig(walview.DropLoadConfigEvent{CollectionID: 1, VChannel: "ch"})
 }
 
-func TestRegistryGrowingRuntimeRecordsLiveFlush(t *testing.T) {
-	registry := NewRegistry(nil, nil)
+func TestManagerDefaultGrowingRuntimeRejectsLiveInsertAfterFlush(t *testing.T) {
+	initSegcoreForViewResourceTest(t)
+
+	manager := NewManager(nil, nil)
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
-	observer := registry.OnAlterLoadConfig(walview.VChannelWALView{
+	schema := mock_segcore.GenTestCollectionSchema("snview-resource-flush", schemapb.DataType_Int64, false)
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
+		CollectionID:        1,
+		VChannel:            "ch",
+		BaseGrowingTimeTick: 30,
+		Schema:              schema,
+		SegmentSnapshot: walview.VisibleSegmentSnapshot{
+			CollectionID: 1,
+			VChannel:     "ch",
+			DataVersion:  version,
+		},
+	})
+	require.NotNil(t, observer)
+	select {
+	case <-manager.NotifyReady():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager readiness")
+	}
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
+		CollectionID: 1,
+		VChannel:     "ch",
+		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
+	})
+	require.NoError(t, err)
+	require.True(t, ready)
+
+	segmentID := int64(21)
+	require.True(t, runtime.Growing.applyLiveMessage(context.Background(), newTestFlushMessage(t, "ch", segmentID, 40)))
+	require.True(t, runtime.Growing.SegmentFlushed(segmentID))
+	require.Panics(t, func() {
+		runtime.Growing.applyLiveMessage(context.Background(), newTestSegmentInsertMessage(t, "ch", segmentID, 2, 41, schema))
+	})
+	_, ok := runtime.Growing.Segment(segmentID)
+	require.False(t, ok)
+
+	manager.OnDropLoadConfig(walview.DropLoadConfigEvent{CollectionID: 1, VChannel: "ch"})
+}
+
+func TestManagerDefaultGrowingRuntimeBuilderAppliesLiveCreateSegment(t *testing.T) {
+	initSegcoreForViewResourceTest(t)
+
+	manager := NewManager(nil, nil)
+	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
+	schema := mock_segcore.GenTestCollectionSchema("snview-resource-create", schemapb.DataType_Int64, false)
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
+		CollectionID:        1,
+		VChannel:            "ch",
+		BaseGrowingTimeTick: 30,
+		Schema:              schema,
+		SegmentSnapshot: walview.VisibleSegmentSnapshot{
+			CollectionID: 1,
+			VChannel:     "ch",
+			DataVersion:  version,
+		},
+	})
+	require.NotNil(t, observer)
+	select {
+	case <-manager.NotifyReady():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager readiness")
+	}
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
+		CollectionID: 1,
+		VChannel:     "ch",
+		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
+	})
+	require.NoError(t, err)
+	require.True(t, ready)
+
+	segmentID := int64(30)
+	require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newTestCreateSegmentMessage(t, "ch", segmentID, 40)}))
+	require.Eventually(t, func() bool {
+		_, ok := runtime.Growing.Segment(segmentID)
+		return ok
+	}, time.Second, 10*time.Millisecond)
+	require.Contains(t, runtime.Growing.SegmentIDs, segmentID)
+
+	manager.OnDropLoadConfig(walview.DropLoadConfigEvent{CollectionID: 1, VChannel: "ch"})
+}
+
+func TestManagerGrowingRuntimeRecordsLiveFlush(t *testing.T) {
+	manager := NewManager(nil, nil)
+	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
 		VChannel:     "ch",
 		SegmentSnapshot: walview.VisibleSegmentSnapshot{
@@ -545,11 +769,11 @@ func TestRegistryGrowingRuntimeRecordsLiveFlush(t *testing.T) {
 	})
 	require.NotNil(t, observer)
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
-	runtime, ready, err := registry.GetViewRuntime(ViewResourceDescriptor{
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "ch",
 		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
@@ -557,10 +781,33 @@ func TestRegistryGrowingRuntimeRecordsLiveFlush(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ready)
 
-	require.True(t, observer.ObserveMessage(context.Background(), newTestFlushMessage(t, "ch", 10, 40)))
+	require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newTestFlushMessage(t, "ch", 10, 40)}))
 	require.Eventually(t, func() bool {
 		return runtime.Growing.SegmentFlushed(10)
 	}, time.Second, 10*time.Millisecond)
+}
+
+func TestGrowingRuntimeTruncateWatermarkAppliesToLateSegmentSealed(t *testing.T) {
+	applier := newReleaseRecordingApplier(10)
+	runtime := &GrowingRuntime{
+		SegmentIDs:      []int64{10},
+		applier:         applier,
+		flushedSegments: map[int64]struct{}{10: {}},
+	}
+
+	runtime.Truncate(qviews.DataVersion{StreamingVersion: 20, CompactVersion: 1})
+	require.Empty(t, applier.releasedSegments())
+
+	applied := runtime.applyLiveEvent(context.Background(), walview.VChannelResourceEvent{
+		SegmentSealed: &walview.SegmentSealedEvent{
+			SegmentID:           10,
+			SealedAtDataVersion: qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1},
+		},
+	})
+	require.True(t, applied)
+	require.Equal(t, []int64{10}, applier.releasedSegments())
+	require.False(t, runtime.SegmentFlushed(10))
+	require.Empty(t, runtime.SegmentIDs)
 }
 
 func TestDeleteTimestampsFromRequestUsesPerRowTimestamps(t *testing.T) {
@@ -600,11 +847,11 @@ func TestDeleteTimestampsFromTransformLogBlockUsesEntryTimeTick(t *testing.T) {
 	require.Equal(t, []uint64{200, 200, 200}, deleteTimestampsFromTransformLogBlock(200, block))
 }
 
-func TestRegistryDefaultGrowingPreparerDrainsDeleteReplayBeforeReady(t *testing.T) {
-	registry := NewRegistry(nil, nil)
+func TestManagerDefaultGrowingRuntimeBuilderDrainsDeleteReplayBeforeReady(t *testing.T) {
+	manager := NewManager(nil, nil)
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
 	scanner := newFakeTransformLogScanner()
-	registry.OnAlterLoadConfig(walview.VChannelWALView{
+	manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
 		VChannel:     "ch",
 		SegmentSnapshot: walview.VisibleSegmentSnapshot{
@@ -614,8 +861,8 @@ func TestRegistryDefaultGrowingPreparerDrainsDeleteReplayBeforeReady(t *testing.
 	})
 
 	select {
-	case <-registry.NotifyReady():
-		t.Fatal("registry reported ready before delete replay caught up")
+	case <-manager.NotifyReady():
+		t.Fatal("manager reported ready before delete replay caught up")
 	case <-time.After(50 * time.Millisecond):
 	}
 
@@ -625,12 +872,12 @@ func TestRegistryDefaultGrowingPreparerDrainsDeleteReplayBeforeReady(t *testing.
 	close(scanner.done)
 
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
 
-	runtime, ready, err := registry.GetViewRuntime(ViewResourceDescriptor{
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "ch",
 		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
@@ -642,10 +889,10 @@ func TestRegistryDefaultGrowingPreparerDrainsDeleteReplayBeforeReady(t *testing.
 	require.True(t, scanner.closed)
 }
 
-func TestRegistryDefaultGrowingPreparerInitializesAppliedFrontiers(t *testing.T) {
-	registry := NewRegistry(nil, nil)
+func TestManagerDefaultGrowingRuntimeBuilderInitializesAppliedFrontiers(t *testing.T) {
+	manager := NewManager(nil, nil)
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
-	registry.OnAlterLoadConfig(walview.VChannelWALView{
+	manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID:          1,
 		VChannel:              "ch",
 		BaseGrowingTimeTick:   20,
@@ -656,12 +903,12 @@ func TestRegistryDefaultGrowingPreparerInitializesAppliedFrontiers(t *testing.T)
 	})
 
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
 
-	runtime, ready, err := registry.GetViewRuntime(ViewResourceDescriptor{
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "ch",
 		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
@@ -672,10 +919,10 @@ func TestRegistryDefaultGrowingPreparerInitializesAppliedFrontiers(t *testing.T)
 	require.Equal(t, uint64(10), runtime.Growing.AppliedTransformTimeTick())
 }
 
-func TestRegistryGrowingRuntimeAdvancesLiveAppliedFrontier(t *testing.T) {
-	registry := NewRegistry(nil, nil)
+func TestManagerGrowingRuntimeAdvancesLiveAppliedFrontier(t *testing.T) {
+	manager := NewManager(nil, nil)
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
-	observer := registry.OnAlterLoadConfig(walview.VChannelWALView{
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID:          1,
 		VChannel:              "ch",
 		BaseGrowingTimeTick:   20,
@@ -686,11 +933,11 @@ func TestRegistryGrowingRuntimeAdvancesLiveAppliedFrontier(t *testing.T) {
 	})
 
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
-	runtime, ready, err := registry.GetViewRuntime(ViewResourceDescriptor{
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "ch",
 		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
@@ -698,17 +945,17 @@ func TestRegistryGrowingRuntimeAdvancesLiveAppliedFrontier(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ready)
 
-	require.True(t, observer.ObserveMessage(context.Background(), newTestInsertMessage(t, "ch", 30)))
+	require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newTestInsertMessage(t, "ch", 30)}))
 	require.Eventually(t, func() bool {
 		return runtime.Growing.AppliedGrowingTimeTick() == 30
 	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, uint64(10), runtime.Growing.AppliedTransformTimeTick())
 }
 
-func TestRegistryGetViewRuntimeWaitsForDeleteApplyFrontier(t *testing.T) {
-	registry := NewRegistry(nil, nil)
+func TestManagerGrowingRuntimeDoesNotAdvanceTransformFrontierForInsertOnlyTxn(t *testing.T) {
+	manager := NewManager(nil, nil)
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
-	observer := registry.OnAlterLoadConfig(walview.VChannelWALView{
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID:          1,
 		VChannel:              "ch",
 		BaseGrowingTimeTick:   20,
@@ -719,9 +966,93 @@ func TestRegistryGetViewRuntimeWaitsForDeleteApplyFrontier(t *testing.T) {
 	})
 
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
+	}
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
+		CollectionID: 1,
+		VChannel:     "ch",
+		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
+	})
+	require.NoError(t, err)
+	require.True(t, ready)
+
+	require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newTestInsertTxnMessage(t, "ch", 30)}))
+	require.Eventually(t, func() bool {
+		return runtime.Growing.AppliedGrowingTimeTick() == 30
+	}, time.Second, 10*time.Millisecond)
+	require.Equal(t, uint64(10), runtime.Growing.AppliedTransformTimeTick())
+}
+
+func TestManagerGrowingRuntimeAdvancesTransformFrontierForDeleteTxn(t *testing.T) {
+	manager := NewManager(nil, nil)
+	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
+		CollectionID:          1,
+		VChannel:              "ch",
+		BaseGrowingTimeTick:   20,
+		BaseTransformTimeTick: 10,
+		SegmentSnapshot: walview.VisibleSegmentSnapshot{
+			DataVersion: version,
+		},
+	})
+
+	select {
+	case <-manager.NotifyReady():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager readiness")
+	}
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
+		CollectionID: 1,
+		VChannel:     "ch",
+		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
+	})
+	require.NoError(t, err)
+	require.True(t, ready)
+
+	require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newTestDeleteTxnMessage(t, "ch", 30)}))
+	require.Eventually(t, func() bool {
+		return runtime.Growing.AppliedGrowingTimeTick() == 30 && runtime.Growing.AppliedTransformTimeTick() == 30
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestManagerGrowingRuntimePanicsOnLiveApplyFailure(t *testing.T) {
+	runtime := &GrowingRuntime{
+		applier: errorLiveApplier{err: errors.New("apply failed")},
+	}
+	require.Panics(t, func() {
+		runtime.applyLiveMessage(context.Background(), newTestInsertMessage(t, "ch", 30))
+	})
+}
+
+func TestManagerGrowingRuntimePanicsOnBM25LiveApplyFailure(t *testing.T) {
+	runtime := &GrowingRuntime{
+		applier: noopGrowingRuntimeApplier{},
+	}
+	runtime.setBM25Runtime(&BM25Runtime{LiveUpdater: errorBM25LiveUpdater{err: errors.New("bm25 failed")}})
+	require.Panics(t, func() {
+		runtime.applyLiveMessage(context.Background(), newTestInsertMessage(t, "ch", 30))
+	})
+}
+
+func TestManagerGetViewRuntimeWaitsForDeleteApplyFrontier(t *testing.T) {
+	manager := NewManager(nil, nil)
+	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
+		CollectionID:          1,
+		VChannel:              "ch",
+		BaseGrowingTimeTick:   20,
+		BaseTransformTimeTick: 10,
+		SegmentSnapshot: walview.VisibleSegmentSnapshot{
+			DataVersion: version,
+		},
+	})
+
+	select {
+	case <-manager.NotifyReady():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager readiness")
 	}
 
 	desc := ViewResourceDescriptor{
@@ -730,23 +1061,23 @@ func TestRegistryGetViewRuntimeWaitsForDeleteApplyFrontier(t *testing.T) {
 		Version:                       qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
 		DeleteApplyStartAfterTimeTick: 20,
 	}
-	runtime, ready, err := registry.GetViewRuntime(desc)
+	runtime, ready, err := manager.GetViewRuntime(desc)
 	require.NoError(t, err)
 	require.False(t, ready)
 	require.Nil(t, runtime)
 
-	require.True(t, observer.ObserveMessage(context.Background(), newTestDeleteMessage(t, "ch", 20)))
+	require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newTestDeleteMessage(t, "ch", 20)}))
 	require.Eventually(t, func() bool {
-		runtime, ready, err = registry.GetViewRuntime(desc)
+		runtime, ready, err = manager.GetViewRuntime(desc)
 		return err == nil && ready && runtime != nil && runtime.Growing.AppliedTransformTimeTick() == 20
 	}, time.Second, 10*time.Millisecond)
 }
 
-func TestRegistryGetViewRuntimeErrorsWhenRequestedVersionIsBehindForwardLoad(t *testing.T) {
-	registry := NewRegistry(nil, nil)
+func TestManagerGetViewRuntimeErrorsWhenRequestedVersionIsBehindForwardLoad(t *testing.T) {
+	manager := NewManager(nil, nil)
 	loadedVersion := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
 	oldVersion := qviews.DataVersion{StreamingVersion: 99, CompactVersion: 2}
-	registry.OnAlterLoadConfig(walview.VChannelWALView{
+	manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
 		VChannel:     "ch",
 		SegmentSnapshot: walview.VisibleSegmentSnapshot{
@@ -755,12 +1086,12 @@ func TestRegistryGetViewRuntimeErrorsWhenRequestedVersionIsBehindForwardLoad(t *
 	})
 
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
 
-	runtime, ready, err := registry.GetViewRuntime(ViewResourceDescriptor{
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "ch",
 		Version:      qviews.QueryViewVersion{DataVersion: oldVersion, QueryVersion: 1},
@@ -770,10 +1101,10 @@ func TestRegistryGetViewRuntimeErrorsWhenRequestedVersionIsBehindForwardLoad(t *
 	require.Nil(t, runtime)
 }
 
-func TestRegistryDefaultGrowingPreparerRejectsMismatchedWALViewSnapshot(t *testing.T) {
-	registry := NewRegistry(nil, nil)
+func TestManagerDefaultGrowingRuntimeBuilderRejectsMismatchedWALViewSnapshot(t *testing.T) {
+	manager := NewManager(nil, nil)
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
-	registry.OnAlterLoadConfig(walview.VChannelWALView{
+	manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
 		VChannel:     "ch",
 		SegmentSnapshot: walview.VisibleSegmentSnapshot{
@@ -784,12 +1115,12 @@ func TestRegistryDefaultGrowingPreparerRejectsMismatchedWALViewSnapshot(t *testi
 	})
 
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
 
-	runtime, ready, err := registry.GetViewRuntime(ViewResourceDescriptor{
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "ch",
 		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
@@ -799,14 +1130,14 @@ func TestRegistryDefaultGrowingPreparerRejectsMismatchedWALViewSnapshot(t *testi
 	require.Nil(t, runtime)
 }
 
-func TestRegistryDefaultGrowingPreparerFailsOnDeleteReplayError(t *testing.T) {
-	registry := NewRegistry(nil, nil)
+func TestManagerDefaultGrowingRuntimeBuilderFailsOnDeleteReplayError(t *testing.T) {
+	manager := NewManager(nil, nil)
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
 	scanner := newFakeTransformLogScanner()
 	scanner.err = errors.New("delete replay failed")
 	close(scanner.done)
 
-	registry.OnAlterLoadConfig(walview.VChannelWALView{
+	manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
 		VChannel:     "ch",
 		SegmentSnapshot: walview.VisibleSegmentSnapshot{
@@ -816,12 +1147,12 @@ func TestRegistryDefaultGrowingPreparerFailsOnDeleteReplayError(t *testing.T) {
 	})
 
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
 
-	runtime, ready, err := registry.GetViewRuntime(ViewResourceDescriptor{
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "ch",
 		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
@@ -831,16 +1162,17 @@ func TestRegistryDefaultGrowingPreparerFailsOnDeleteReplayError(t *testing.T) {
 	require.Nil(t, runtime)
 }
 
-func TestRegistryClosesPreparedGrowingRuntimeWhenBM25PreparationFails(t *testing.T) {
-	applier := newRecordingGrowingApplier()
-	registry := NewRegistry(SnapshotGrowingSegmentPreparer{
+func TestManagerDoesNotBuildGrowingRuntimeWhenBM25PreparationFails(t *testing.T) {
+	growingCalled := false
+	manager := NewManager(SnapshotGrowingSegmentRuntimeBuilder{
 		NewApplier: func(context.Context, LoadResourceDescriptor) (GrowingRuntimeApplier, error) {
-			return applier, nil
+			growingCalled = true
+			return newRecordingGrowingApplier(), nil
 		},
-	}, errorBM25Provider{err: errors.New("bm25 failed")})
+	}, errorIDFOracleRuntimeBuilder{err: errors.New("bm25 failed")})
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
 
-	registry.OnAlterLoadConfig(walview.VChannelWALView{
+	manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
 		VChannel:     "ch",
 		SegmentSnapshot: walview.VisibleSegmentSnapshot{
@@ -849,12 +1181,12 @@ func TestRegistryClosesPreparedGrowingRuntimeWhenBM25PreparationFails(t *testing
 	})
 
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
 
-	runtime, ready, err := registry.GetViewRuntime(ViewResourceDescriptor{
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "ch",
 		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
@@ -862,53 +1194,86 @@ func TestRegistryClosesPreparedGrowingRuntimeWhenBM25PreparationFails(t *testing
 	require.ErrorContains(t, err, "bm25 failed")
 	require.False(t, ready)
 	require.Nil(t, runtime)
+	require.False(t, growingCalled)
+}
+
+func TestManagerFinishBuildClosesRuntimeReturnedWithError(t *testing.T) {
+	manager := NewManager(nil, nil)
+	applier := newRecordingGrowingApplier()
+	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
+	key := runtimeKey{vchannel: "ch", version: version}
+	task := newResourceBuildTask(context.Background(), BuildKey{
+		CollectionID: 1,
+		VChannel:     "ch",
+		DataVersion:  version,
+	}, func(context.Context) (*ViewRuntime, error) {
+		return nil, nil
+	})
+	manager.runtimes[key] = &runtimeState{
+		collectionID: 1,
+		loading:      true,
+		task:         task,
+	}
+
+	task.finish(&ViewRuntime{
+		CollectionID: 1,
+		VChannel:     "ch",
+		DataVersion:  version,
+		Growing:      &GrowingRuntime{applier: applier},
+	}, errors.New("build canceled"))
+	manager.finishBuild(key, task)
+
 	select {
 	case <-applier.closeCh:
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for growing runtime close")
+		t.Fatal("timed out waiting for errored runtime close")
 	}
 }
 
-func TestRegistryLiveObserverFeedsPreparedGrowingRuntime(t *testing.T) {
-	registry := NewRegistry(nil, nil)
+func TestManagerLiveObserverFeedsPreparedGrowingRuntime(t *testing.T) {
+	manager := NewManager(nil, nil)
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
-	observer := registry.OnAlterLoadConfig(walview.VChannelWALView{
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
 		VChannel:     "ch",
 		SegmentSnapshot: walview.VisibleSegmentSnapshot{
 			DataVersion: version,
 		},
 	})
-	require.True(t, observer.ObserveMessage(context.Background(), newTestInsertMessage(t, "ch", 30)))
-	require.True(t, observer.ObserveMessage(context.Background(), newTestInsertMessage(t, "ch", 31)))
+	require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newTestInsertMessage(t, "ch", 30)}))
+	require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newTestInsertMessage(t, "ch", 31)}))
 
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
 
-	runtime, ready, err := registry.GetViewRuntime(ViewResourceDescriptor{
-		CollectionID: 1,
-		VChannel:     "ch",
-		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
-	})
-	require.NoError(t, err)
-	require.True(t, ready)
+	var runtime *ViewRuntime
+	require.Eventually(t, func() bool {
+		var ready bool
+		var err error
+		runtime, ready, err = manager.GetViewRuntime(ViewResourceDescriptor{
+			CollectionID: 1,
+			VChannel:     "ch",
+			Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
+		})
+		return err == nil && ready && runtime != nil
+	}, time.Second, 10*time.Millisecond)
 	require.Eventually(t, func() bool {
 		return runtime.Growing.AppliedGrowingTimeTick() == 31
 	}, time.Second, 10*time.Millisecond)
 
 	observer.Close()
-	require.False(t, observer.ObserveMessage(context.Background(), nil))
+	require.False(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: nil}))
 }
 
-func TestRegistryOnAlterLoadConfigReturnsNilObserverForDuplicateVersion(t *testing.T) {
-	blocking := &cancelAwareGrowingPreparer{
+func TestManagerOnAlterLoadConfigReturnsNilObserverForDuplicateVersion(t *testing.T) {
+	blocking := &cancelAwareGrowingSegmentRuntimeBuilder{
 		started:  make(chan struct{}),
 		canceled: make(chan struct{}),
 	}
-	registry := NewRegistry(blocking, NoopBM25Provider{})
+	manager := NewManager(blocking, NoopIDFOracleRuntimeBuilder{})
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
 	view := walview.VChannelWALView{
 		CollectionID: 1,
@@ -918,16 +1283,19 @@ func TestRegistryOnAlterLoadConfigReturnsNilObserverForDuplicateVersion(t *testi
 		},
 	}
 
-	observer := registry.OnAlterLoadConfig(view)
+	observer := manager.OnAlterLoadConfig(view)
 	require.NotNil(t, observer)
 	select {
 	case <-blocking.started:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for in-flight load")
 	}
-	require.Nil(t, registry.OnAlterLoadConfig(view))
+	require.Nil(t, manager.OnAlterLoadConfig(view))
+	newerView := view
+	newerView.SegmentSnapshot.DataVersion = qviews.DataVersion{StreamingVersion: 101, CompactVersion: 2}
+	require.Nil(t, manager.OnAlterLoadConfig(newerView))
 
-	registry.OnDropLoadConfig(walview.DropLoadConfigEvent{
+	manager.OnDropLoadConfig(walview.DropLoadConfigEvent{
 		CollectionID: 1,
 		VChannel:     "ch",
 	})
@@ -937,22 +1305,22 @@ func TestRegistryOnAlterLoadConfigReturnsNilObserverForDuplicateVersion(t *testi
 		t.Fatal("timed out waiting for in-flight load cancellation")
 	}
 
-	readyRegistry := NewRegistry(nil, nil)
-	observer = readyRegistry.OnAlterLoadConfig(view)
+	readyManager := NewManager(nil, nil)
+	observer = readyManager.OnAlterLoadConfig(view)
 	require.NotNil(t, observer)
 	select {
-	case <-readyRegistry.NotifyReady():
+	case <-readyManager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
-	require.Nil(t, readyRegistry.OnAlterLoadConfig(view))
+	require.Nil(t, readyManager.OnAlterLoadConfig(view))
 	observer.Close()
 }
 
-func TestRegistryEvictBeforeClosesPreparedLiveObserver(t *testing.T) {
-	registry := NewRegistry(nil, nil)
+func TestManagerDropLoadConfigClosesPreparedLiveObserver(t *testing.T) {
+	manager := NewManager(nil, nil)
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
-	observer := registry.OnAlterLoadConfig(walview.VChannelWALView{
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
 		VChannel:     "ch",
 		SegmentSnapshot: walview.VisibleSegmentSnapshot{
@@ -961,76 +1329,32 @@ func TestRegistryEvictBeforeClosesPreparedLiveObserver(t *testing.T) {
 	})
 	require.NotNil(t, observer)
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
 
-	registry.EvictBefore(1, "ch", qviews.DataVersion{StreamingVersion: 101})
-
-	require.False(t, observer.ObserveMessage(context.Background(), newTestInsertMessage(t, "ch", 30)))
-}
-
-func TestRegistryReleaseLoadClosesPreparedLiveObserver(t *testing.T) {
-	registry := NewRegistry(nil, nil)
-	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
-	observer := registry.OnAlterLoadConfig(walview.VChannelWALView{
-		CollectionID: 1,
-		VChannel:     "ch",
-		SegmentSnapshot: walview.VisibleSegmentSnapshot{
-			DataVersion: version,
-		},
-	})
-	require.NotNil(t, observer)
-	select {
-	case <-registry.NotifyReady():
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
-	}
-
-	registry.ReleaseLoad(1, "ch")
-
-	require.False(t, observer.ObserveMessage(context.Background(), newTestInsertMessage(t, "ch", 30)))
-}
-
-func TestRegistryDropLoadConfigClosesPreparedLiveObserver(t *testing.T) {
-	registry := NewRegistry(nil, nil)
-	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
-	observer := registry.OnAlterLoadConfig(walview.VChannelWALView{
-		CollectionID: 1,
-		VChannel:     "ch",
-		SegmentSnapshot: walview.VisibleSegmentSnapshot{
-			DataVersion: version,
-		},
-	})
-	require.NotNil(t, observer)
-	select {
-	case <-registry.NotifyReady():
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
-	}
-
-	registry.OnDropLoadConfig(walview.DropLoadConfigEvent{
+	manager.OnDropLoadConfig(walview.DropLoadConfigEvent{
 		CollectionID: 1,
 		VChannel:     "ch",
 	})
 
-	require.False(t, observer.ObserveMessage(context.Background(), newTestInsertMessage(t, "ch", 30)))
+	require.False(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newTestInsertMessage(t, "ch", 30)}))
 }
 
 func TestLiveObserverCloseUnblocksFullBuffer(t *testing.T) {
 	observer := newLiveObserver()
 	for i := 0; i < defaultLiveObserverBufferSize; i++ {
-		require.True(t, observer.ObserveMessage(context.Background(), nil))
+		require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: nil}))
 	}
 
 	done := make(chan bool, 1)
 	go func() {
-		done <- observer.ObserveMessage(context.Background(), nil)
+		done <- observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: nil})
 	}()
 	select {
 	case result := <-done:
-		t.Fatalf("ObserveMessage returned before close: %v", result)
+		t.Fatalf("ObserveEvent returned before close: %v", result)
 	case <-time.After(50 * time.Millisecond):
 	}
 
@@ -1039,29 +1363,29 @@ func TestLiveObserverCloseUnblocksFullBuffer(t *testing.T) {
 	case result := <-done:
 		require.False(t, result)
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for ObserveMessage to unblock")
+		t.Fatal("timed out waiting for ObserveEvent to unblock")
 	}
 }
 
-func TestRegistryDropLoadConfigCancelsInFlightAndMakesPreparedRuntimeUnavailable(t *testing.T) {
-	registry := NewRegistry(NoopGrowingSegmentPreparer{}, NoopBM25Provider{})
+func TestManagerDropLoadConfigCancelsInFlightAndMakesPreparedRuntimeUnavailable(t *testing.T) {
+	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, NoopIDFOracleRuntimeBuilder{})
 	readyVersion := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
-	registry.OnAlterLoadConfig(walview.VChannelWALView{
+	manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
 		VChannel:     "ch",
 		SegmentSnapshot: walview.VisibleSegmentSnapshot{
 			DataVersion: readyVersion,
 		},
 	})
-	<-registry.NotifyReady()
+	<-manager.NotifyReady()
 
-	blocking := &cancelAwareGrowingPreparer{
+	blocking := &cancelAwareGrowingSegmentRuntimeBuilder{
 		started:  make(chan struct{}),
 		canceled: make(chan struct{}),
 	}
-	registry.growing = blocking
+	manager.growing = blocking
 	loadingVersion := qviews.DataVersion{StreamingVersion: 11, CompactVersion: 0}
-	registry.OnAlterLoadConfig(walview.VChannelWALView{
+	manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
 		VChannel:     "ch",
 		SegmentSnapshot: walview.VisibleSegmentSnapshot{
@@ -1074,7 +1398,7 @@ func TestRegistryDropLoadConfigCancelsInFlightAndMakesPreparedRuntimeUnavailable
 		t.Fatal("timed out waiting for in-flight load")
 	}
 
-	registry.OnDropLoadConfig(walview.DropLoadConfigEvent{
+	manager.OnDropLoadConfig(walview.DropLoadConfigEvent{
 		CollectionID: 1,
 		VChannel:     "ch",
 	})
@@ -1084,32 +1408,32 @@ func TestRegistryDropLoadConfigCancelsInFlightAndMakesPreparedRuntimeUnavailable
 		t.Fatal("timed out waiting for in-flight load cancellation")
 	}
 
-	runtime, ready, err := registry.GetViewRuntime(ViewResourceDescriptor{
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "ch",
 		Version:      qviews.QueryViewVersion{DataVersion: readyVersion, QueryVersion: 1},
 	})
-	require.ErrorContains(t, err, "load config was dropped")
+	require.NoError(t, err)
 	require.False(t, ready)
 	require.Nil(t, runtime)
 
-	runtime, ready, err = registry.GetViewRuntime(ViewResourceDescriptor{
+	runtime, ready, err = manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "ch",
 		Version:      qviews.QueryViewVersion{DataVersion: loadingVersion, QueryVersion: 1},
 	})
-	require.Error(t, err)
+	require.NoError(t, err)
 	require.False(t, ready)
 	require.Nil(t, runtime)
 }
 
-func TestRegistryOnAlterLoadConfigUsesWALViewBoundary(t *testing.T) {
-	growing := &fakeGrowingPreparer{}
-	bm25 := &fakeBM25Provider{}
-	registry := NewRegistry(growing, bm25)
+func TestManagerOnAlterLoadConfigUsesWALViewBoundary(t *testing.T) {
+	growing := &fakeGrowingSegmentRuntimeBuilder{}
+	bm25 := &fakeIDFOracleRuntimeBuilder{}
+	manager := NewManager(growing, bm25)
 
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
-	observer := registry.OnAlterLoadConfig(testAlterLoadConfigView(
+	observer := manager.OnAlterLoadConfig(testAlterLoadConfigView(
 		1,
 		"by-dev-rootcoord-dml_0_1v0",
 		version,
@@ -1122,12 +1446,12 @@ func TestRegistryOnAlterLoadConfigUsesWALViewBoundary(t *testing.T) {
 	t.Cleanup(observer.Close)
 
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
 
-	runtime, ready, err := registry.GetViewRuntime(ViewResourceDescriptor{
+	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "by-dev-rootcoord-dml_0_1v0",
 		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
@@ -1145,49 +1469,4 @@ func TestRegistryOnAlterLoadConfigUsesWALViewBoundary(t *testing.T) {
 	bm25.mu.Lock()
 	require.Len(t, bm25.calls, 1)
 	bm25.mu.Unlock()
-
-	registry.EvictBefore(1, "by-dev-rootcoord-dml_0_1v0", qviews.DataVersion{StreamingVersion: 101, CompactVersion: 0})
-	runtime, ready, err = registry.GetViewRuntime(ViewResourceDescriptor{
-		CollectionID: 1,
-		VChannel:     "by-dev-rootcoord-dml_0_1v0",
-		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
-	})
-	require.Error(t, err)
-	require.False(t, ready)
-	require.Nil(t, runtime)
-}
-
-func TestRegistryEvictBeforeKeepsMinAndNewer(t *testing.T) {
-	registry := NewRegistry(NoopGrowingSegmentPreparer{}, NoopBM25Provider{})
-	v1 := qviews.DataVersion{StreamingVersion: 1, CompactVersion: 0}
-	v2 := qviews.DataVersion{StreamingVersion: 2, CompactVersion: 0}
-
-	observer := registry.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", v1, nil))
-	require.NotNil(t, observer)
-	t.Cleanup(observer.Close)
-	<-registry.NotifyReady()
-	observer = registry.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", v2, nil))
-	require.NotNil(t, observer)
-	t.Cleanup(observer.Close)
-	<-registry.NotifyReady()
-
-	registry.EvictBefore(1, "ch", v2)
-
-	runtime, ready, err := registry.GetViewRuntime(ViewResourceDescriptor{
-		CollectionID: 1,
-		VChannel:     "ch",
-		Version:      qviews.QueryViewVersion{DataVersion: v1, QueryVersion: 1},
-	})
-	require.Error(t, err)
-	require.False(t, ready)
-	require.Nil(t, runtime)
-
-	runtime, ready, err = registry.GetViewRuntime(ViewResourceDescriptor{
-		CollectionID: 1,
-		VChannel:     "ch",
-		Version:      qviews.QueryViewVersion{DataVersion: v2, QueryVersion: 1},
-	})
-	require.NoError(t, err)
-	require.True(t, ready)
-	require.NotNil(t, runtime)
 }

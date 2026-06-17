@@ -32,11 +32,15 @@ func (r *liveObserverRegistry) Register(vchannel string, observer walview.VChann
 }
 
 func (r *liveObserverRegistry) Dispatch(ctx context.Context, msg message.ImmutableMessage) {
-	for _, observer := range r.snapshot(msg.VChannel()) {
-		if observer.ObserveMessage(ctx, msg) {
+	r.DispatchEvent(ctx, msg.VChannel(), walview.VChannelResourceEvent{Message: msg})
+}
+
+func (r *liveObserverRegistry) DispatchEvent(ctx context.Context, vchannel string, event walview.VChannelResourceEvent) {
+	for _, observer := range r.snapshot(vchannel) {
+		if observer.ObserveEvent(ctx, event) {
 			continue
 		}
-		r.unregister(msg.VChannel(), observer)
+		r.unregister(vchannel, observer)
 	}
 }
 

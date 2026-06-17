@@ -68,8 +68,23 @@ type SegmentSnapshotData struct {
 	InsertMessages   []message.ImmutableMessage
 }
 
-// VChannelLiveObserver observes raw WAL messages after a VChannelWALView capture.
+// VChannelResourceEvent is the ordered live input delivered after a
+// VChannelWALView capture.
+type VChannelResourceEvent struct {
+	Message       message.ImmutableMessage
+	SegmentSealed *SegmentSealedEvent
+}
+
+// SegmentSealedEvent reports the DataVersion assigned when a flushed growing
+// segment becomes sealed.
+type SegmentSealedEvent struct {
+	SegmentID           int64
+	VChannel            string
+	SealedAtDataVersion qviews.DataVersion
+}
+
+// VChannelLiveObserver observes live resource events after a VChannelWALView capture.
 type VChannelLiveObserver interface {
-	ObserveMessage(ctx context.Context, msg message.ImmutableMessage) bool
+	ObserveEvent(ctx context.Context, event VChannelResourceEvent) bool
 	Close()
 }

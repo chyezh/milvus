@@ -57,6 +57,27 @@ func (c *segmentCache) loadSealedStats(
 	return aggregate, lease, nil
 }
 
+func (c *segmentCache) acquire(
+	ctx context.Context,
+	chunkManager storage.ChunkManager,
+	resource *querypb.StreamingNodeBM25Resource,
+) (bm25Stats, *segmentCacheLease, error) {
+	aggregate := make(bm25Stats)
+	if chunkManager == nil || resource == nil {
+		return aggregate, nil, nil
+	}
+	key, err := buildSealedCacheKey(resource)
+	if err != nil {
+		return nil, nil, err
+	}
+	stats, err := c.retain(ctx, chunkManager, key, resource)
+	if err != nil {
+		return nil, nil, err
+	}
+	mergeBM25Stats(aggregate, stats)
+	return aggregate, &segmentCacheLease{cache: c, keys: []sealedCacheKey{key}}, nil
+}
+
 func (c *segmentCache) retain(
 	ctx context.Context,
 	chunkManager storage.ChunkManager,

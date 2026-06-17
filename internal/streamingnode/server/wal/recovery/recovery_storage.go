@@ -102,6 +102,10 @@ type RecoveryStorage interface {
 	// TransformLog returns the TransformLog accesser owned by RecoveryStorage.
 	TransformLog() transformlog.Accesser
 
+	// DetachLoadConfigListener stops WAL load-config callbacks to the
+	// StreamingNode query resource manager during pchannel handoff.
+	DetachLoadConfigListener()
+
 	// Close closes the recovery storage.
 	Close()
 }

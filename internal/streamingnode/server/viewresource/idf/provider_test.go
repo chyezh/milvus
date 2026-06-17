@@ -32,7 +32,7 @@ import (
 func TestProviderSkipsWhenLoadedFieldsDoNotNeedBM25(t *testing.T) {
 	provider := NewProvider(nil)
 
-	runtime, err := provider.PrepareLatestFromAlterLoadConfig(context.Background(), newLoadResourceDescriptor(
+	runtime, err := provider.BuildInitial(context.Background(), newLoadResourceDescriptor(
 		0,
 		"",
 		qviews.DataVersion{},
@@ -73,7 +73,7 @@ func TestProviderLoadsBM25Resources(t *testing.T) {
 		},
 	})
 
-	runtime, err := provider.PrepareLatestFromAlterLoadConfig(context.Background(), newLoadResourceDescriptor(
+	runtime, err := provider.BuildInitial(context.Background(), newLoadResourceDescriptor(
 		1,
 		"ch",
 		version,
@@ -133,7 +133,7 @@ func TestProviderBuildsBM25OracleFromSealedAndGrowingStats(t *testing.T) {
 	}, WithChunkManager(cm))
 	schema := bm25TestSchema()
 	growingRow := typeutil.CreateAndSortSparseFloatRow(map[uint32]float32{7: 1})
-	runtime, err := provider.PrepareLatestFromAlterLoadConfig(context.Background(), viewresource.LoadResourceDescriptor{
+	runtime, err := provider.BuildInitial(context.Background(), viewresource.LoadResourceDescriptor{
 		WALView: walview.VChannelWALView{
 			CollectionID: 1,
 			VChannel:     "ch",
@@ -214,18 +214,18 @@ func TestProviderReusesSealedBM25StatsWhileRuntimeRetained(t *testing.T) {
 		&viewpb.QueryViewSettings{RequiredFields: []int64{100}},
 	)
 
-	runtimeA, err := provider.PrepareLatestFromAlterLoadConfig(context.Background(), desc)
+	runtimeA, err := provider.BuildInitial(context.Background(), desc)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), countingCM.readCount.Load())
 
-	runtimeB, err := provider.PrepareLatestFromAlterLoadConfig(context.Background(), desc)
+	runtimeB, err := provider.BuildInitial(context.Background(), desc)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), countingCM.readCount.Load())
 
 	runtimeA.Close()
 	runtimeB.Close()
 
-	_, err = provider.PrepareLatestFromAlterLoadConfig(context.Background(), desc)
+	_, err = provider.BuildInitial(context.Background(), desc)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), countingCM.readCount.Load())
 }
@@ -239,13 +239,13 @@ func TestProviderRuntimeAppliesLiveGrowingBM25Stats(t *testing.T) {
 			DataVersion:  version.IntoProto(),
 		},
 	})
-	registry := viewresource.NewRegistry(viewresource.SnapshotGrowingSegmentPreparer{
+	manager := viewresource.NewManager(viewresource.SnapshotGrowingSegmentRuntimeBuilder{
 		NewApplier: func(context.Context, viewresource.LoadResourceDescriptor) (viewresource.GrowingRuntimeApplier, error) {
 			return noopGrowingApplier{}, nil
 		},
 	}, provider)
 	schema := bm25TestSchema()
-	observer := registry.OnAlterLoadConfig(walview.VChannelWALView{
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
 		VChannel:     "ch",
 		Schema:       schema,
@@ -269,12 +269,13 @@ func TestProviderRuntimeAppliesLiveGrowingBM25Stats(t *testing.T) {
 		},
 	})
 	require.NotNil(t, observer)
+	defer manager.Close()
 	select {
-	case <-registry.NotifyReady():
+	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for registry readiness")
+		t.Fatal("timed out waiting for manager readiness")
 	}
-	runtime, ready, err := registry.GetViewRuntime(viewresource.ViewResourceDescriptor{
+	runtime, ready, err := manager.GetViewRuntime(viewresource.ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "ch",
 		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
@@ -285,7 +286,7 @@ func TestProviderRuntimeAppliesLiveGrowingBM25Stats(t *testing.T) {
 	tf := typeutil.CreateAndSortSparseFloatRow(map[uint32]float32{8: 1})
 	before, _, err := runtime.BM25.Oracle.BuildIDF(100, &schemapb.SparseFloatArray{Contents: [][]byte{tf}, Dim: 9})
 	require.NoError(t, err)
-	require.True(t, observer.ObserveMessage(context.Background(), newBM25InsertMessage(t, "ch", 99, 39, tf)))
+	require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newBM25InsertMessage(t, "ch", 99, 39, tf)}))
 	require.Eventually(t, func() bool {
 		return runtime.Growing.AppliedGrowingTimeTick() == 39
 	}, time.Second, 10*time.Millisecond)
@@ -293,10 +294,178 @@ func TestProviderRuntimeAppliesLiveGrowingBM25Stats(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, before, afterInactiveSegment)
 
-	require.True(t, observer.ObserveMessage(context.Background(), newBM25InsertMessage(t, "ch", 10, 40, tf)))
+	require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newCreateSegmentMessage(t, "ch", 99, 40)}))
+	require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newBM25InsertMessage(t, "ch", 99, 41, tf)}))
 	require.Eventually(t, func() bool {
 		after, _, err := runtime.BM25.Oracle.BuildIDF(100, &schemapb.SparseFloatArray{Contents: [][]byte{tf}, Dim: 9})
 		return err == nil && string(after[0]) != string(before[0])
+	}, time.Second, 10*time.Millisecond)
+}
+
+func TestProviderRuntimeRejectsLiveGrowingInsertAfterFlush(t *testing.T) {
+	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
+	provider := NewProvider(&bm25QueryCoordClient{
+		resp: &querypb.GetStreamingNodeQueryViewResourcesResponse{
+			CollectionId: 1,
+			Vchannel:     "ch",
+			DataVersion:  version.IntoProto(),
+		},
+	})
+	schema := bm25TestSchema()
+	runtime, err := provider.BuildInitial(context.Background(), viewresource.LoadResourceDescriptor{
+		WALView: walview.VChannelWALView{
+			CollectionID: 1,
+			VChannel:     "ch",
+			Schema:       schema,
+			LoadConfig: &streamingpb.VChannelLoadConfig{
+				Header: &messagespb.AlterLoadConfigMessageHeader{
+					LoadFields: []*messagespb.LoadFieldConfig{{FieldId: 100}},
+				},
+			},
+			SegmentSnapshot: walview.VisibleSegmentSnapshot{
+				DataVersion: version,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	segmentID := int64(99)
+	require.NoError(t, runtime.ApplyLiveMessage(context.Background(), newCreateSegmentMessage(t, "ch", segmentID, 40)))
+	require.NoError(t, runtime.ApplyLiveMessage(context.Background(), newBM25FlushMessage(t, "ch", segmentID, 41)))
+	err = runtime.ApplyLiveMessage(context.Background(), newBM25InsertMessage(
+		t,
+		"ch",
+		segmentID,
+		42,
+		typeutil.CreateAndSortSparseFloatRow(map[uint32]float32{8: 1}),
+	))
+	require.ErrorContains(t, err, "already flushed")
+}
+
+func TestProviderRuntimeCatchupWaitsForManagerHandoff(t *testing.T) {
+	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
+	provider := NewProvider(&bm25QueryCoordClient{
+		resp: &querypb.GetStreamingNodeQueryViewResourcesResponse{
+			CollectionId: 1,
+			Vchannel:     "ch",
+			DataVersion:  version.IntoProto(),
+		},
+	})
+	schema := bm25TestSchema()
+	runtime, err := provider.BuildInitial(context.Background(), viewresource.LoadResourceDescriptor{
+		WALView: walview.VChannelWALView{
+			CollectionID: 1,
+			VChannel:     "ch",
+			Schema:       schema,
+			LoadConfig: &streamingpb.VChannelLoadConfig{
+				Header: &messagespb.AlterLoadConfigMessageHeader{
+					LoadFields: []*messagespb.LoadFieldConfig{{FieldId: 100}},
+				},
+			},
+			SegmentSnapshot: walview.VisibleSegmentSnapshot{
+				DataVersion: version,
+			},
+		},
+	})
+	require.NoError(t, err)
+	defer runtime.Close()
+	select {
+	case <-runtime.CatchupDone():
+		t.Fatal("provider closed catchup before resource manager live handoff")
+	default:
+	}
+
+	manager := viewresource.NewManager(viewresource.SnapshotGrowingSegmentRuntimeBuilder{
+		NewApplier: func(context.Context, viewresource.LoadResourceDescriptor) (viewresource.GrowingRuntimeApplier, error) {
+			return noopGrowingApplier{}, nil
+		},
+	}, provider)
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
+		CollectionID: 1,
+		VChannel:     "ch",
+		Schema:       schema,
+		LoadConfig: &streamingpb.VChannelLoadConfig{
+			Header: &messagespb.AlterLoadConfigMessageHeader{
+				LoadFields: []*messagespb.LoadFieldConfig{{FieldId: 100}},
+			},
+		},
+		SegmentSnapshot: walview.VisibleSegmentSnapshot{
+			DataVersion: version,
+		},
+	})
+	require.NotNil(t, observer)
+	select {
+	case <-manager.NotifyReady():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager readiness")
+	}
+	viewRuntime, ready, err := manager.GetViewRuntime(viewresource.ViewResourceDescriptor{
+		CollectionID: 1,
+		VChannel:     "ch",
+		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
+	})
+	require.NoError(t, err)
+	require.True(t, ready)
+	select {
+	case <-viewRuntime.BM25.CatchupDone():
+	default:
+		t.Fatal("resource manager did not close catchup after live handoff")
+	}
+}
+
+func TestProviderRuntimeAdvancementRemovesLiveGrowingStats(t *testing.T) {
+	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
+	provider := NewProvider(&versionedBM25QueryCoordClient{})
+	manager := viewresource.NewManager(viewresource.SnapshotGrowingSegmentRuntimeBuilder{
+		NewApplier: func(context.Context, viewresource.LoadResourceDescriptor) (viewresource.GrowingRuntimeApplier, error) {
+			return noopGrowingApplier{}, nil
+		},
+	}, provider)
+	schema := bm25TestSchema()
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
+		CollectionID: 1,
+		VChannel:     "ch",
+		Schema:       schema,
+		LoadConfig: &streamingpb.VChannelLoadConfig{
+			Header: &messagespb.AlterLoadConfigMessageHeader{
+				LoadFields: []*messagespb.LoadFieldConfig{{FieldId: 100}},
+			},
+		},
+		SegmentSnapshot: walview.VisibleSegmentSnapshot{
+			DataVersion: version,
+		},
+	})
+	require.NotNil(t, observer)
+	select {
+	case <-manager.NotifyReady():
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for manager readiness")
+	}
+	runtime, ready, err := manager.GetViewRuntime(viewresource.ViewResourceDescriptor{
+		CollectionID: 1,
+		VChannel:     "ch",
+		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
+	})
+	require.NoError(t, err)
+	require.True(t, ready)
+
+	tf := typeutil.CreateAndSortSparseFloatRow(map[uint32]float32{8: 1})
+	before, _, err := runtime.BM25.Oracle.BuildIDF(100, &schemapb.SparseFloatArray{Contents: [][]byte{tf}, Dim: 9})
+	require.NoError(t, err)
+
+	require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newCreateSegmentMessage(t, "ch", 20, 40)}))
+	require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newBM25InsertMessage(t, "ch", 20, 41, tf)}))
+	require.Eventually(t, func() bool {
+		after, _, err := runtime.BM25.Oracle.BuildIDF(100, &schemapb.SparseFloatArray{Contents: [][]byte{tf}, Dim: 9})
+		return err == nil && string(after[0]) != string(before[0])
+	}, time.Second, 10*time.Millisecond)
+
+	target := qviews.DataVersion{StreamingVersion: 11, CompactVersion: 1}
+	runtime.BM25.ApplySegmentSealed(20, target)
+	runtime.BM25.MaybeAdvance(target)
+	require.Eventually(t, func() bool {
+		after, _, err := runtime.BM25.Oracle.BuildIDF(100, &schemapb.SparseFloatArray{Contents: [][]byte{tf}, Dim: 9})
+		return err == nil && string(after[0]) == string(before[0])
 	}, time.Second, 10*time.Millisecond)
 }
 
@@ -310,7 +479,7 @@ func TestProviderRejectsMismatchedBM25ResourceResponse(t *testing.T) {
 		},
 	})
 
-	runtime, err := provider.PrepareLatestFromAlterLoadConfig(context.Background(), newLoadResourceDescriptor(
+	runtime, err := provider.BuildInitial(context.Background(), newLoadResourceDescriptor(
 		1,
 		"ch",
 		version,
@@ -434,6 +603,39 @@ func newBM25InsertMessage(t *testing.T, vchannel string, segmentID int64, timeti
 		IntoImmutableMessage(rmq.NewRmqID(int64(timetick)))
 }
 
+func newCreateSegmentMessage(t *testing.T, vchannel string, segmentID int64, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	mutable, err := message.NewCreateSegmentMessageBuilderV2().
+		WithVChannel(vchannel).
+		WithHeader(&message.CreateSegmentMessageHeader{
+			CollectionId: 1,
+			PartitionId:  10,
+			SegmentId:    segmentID,
+		}).
+		WithBody(&message.CreateSegmentMessageBody{}).
+		BuildMutable()
+	require.NoError(t, err)
+	return mutable.WithTimeTick(timetick).
+		WithLastConfirmedUseMessageID().
+		IntoImmutableMessage(rmq.NewRmqID(int64(timetick)))
+}
+
+func newBM25FlushMessage(t *testing.T, vchannel string, segmentID int64, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	mutable := message.NewFlushMessageBuilderV2().
+		WithVChannel(vchannel).
+		WithHeader(&message.FlushMessageHeader{
+			CollectionId: 1,
+			PartitionId:  10,
+			SegmentId:    segmentID,
+		}).
+		WithBody(&message.FlushMessageBody{}).
+		MustBuildMutable()
+	return mutable.WithTimeTick(timetick).
+		WithLastConfirmedUseMessageID().
+		IntoImmutableMessage(rmq.NewRmqID(int64(timetick)))
+}
+
 type noopGrowingApplier struct{}
 
 func (noopGrowingApplier) LoadPersistedSegment(context.Context, walview.VisibleSegment) error {
@@ -475,4 +677,20 @@ func (c *bm25QueryCoordClient) GetStreamingNodeQueryViewResources(
 	...grpc.CallOption,
 ) (*querypb.GetStreamingNodeQueryViewResourcesResponse, error) {
 	return c.resp, nil
+}
+
+type versionedBM25QueryCoordClient struct {
+	utilmock.GrpcQueryCoordClient
+}
+
+func (versionedBM25QueryCoordClient) GetStreamingNodeQueryViewResources(
+	_ context.Context,
+	req *querypb.GetStreamingNodeQueryViewResourcesRequest,
+	_ ...grpc.CallOption,
+) (*querypb.GetStreamingNodeQueryViewResourcesResponse, error) {
+	return &querypb.GetStreamingNodeQueryViewResourcesResponse{
+		CollectionId: req.GetCollectionId(),
+		Vchannel:     req.GetVchannel(),
+		DataVersion:  req.GetDataVersion(),
+	}, nil
 }

@@ -11,6 +11,8 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/snview"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/adaptor/rate"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
@@ -93,13 +95,16 @@ func adaptImplsToRWWAL(
 type walAdaptorImpl struct {
 	*roWALAdaptorImpl
 
-	rwWALImpls             walimpls.WALImpls
-	appendExecutionPool    *conc.Pool[struct{}]
-	param                  *interceptors.InterceptorBuildParam
-	interceptorBuildResult interceptorBuildResult
-	writeMetrics           *metricsutil.WriteMetrics
-	isFenced               *atomic.Bool
-	appendRateCounter      *utility.AverageRateCounter // tracks append rate (bytes/sec)
+	rwWALImpls                 walimpls.WALImpls
+	appendExecutionPool        *conc.Pool[struct{}]
+	param                      *interceptors.InterceptorBuildParam
+	interceptorBuildResult     interceptorBuildResult
+	writeMetrics               *metricsutil.WriteMetrics
+	isFenced                   *atomic.Bool
+	appendRateCounter          *utility.AverageRateCounter // tracks append rate (bytes/sec)
+	queryViewHandler           *snview.SNQueryViewHandler
+	viewResourceManager        viewresource.Manager
+	unregisterQueryViewHandler func()
 }
 
 // Metrics returns the metrics of the wal.
@@ -325,6 +330,22 @@ func (w *walAdaptorImpl) Close() {
 	w.lifetime.SetState(typeutil.LifetimeStateStopped)
 	w.forceCancelAfterGracefulTimeout()
 	w.lifetime.Wait()
+
+	if w.unregisterQueryViewHandler != nil {
+		w.unregisterQueryViewHandler()
+	}
+	if w.param.RecoveryStorage != nil {
+		w.Logger().Info("wal begin to detach query resource load config listener...")
+		w.param.RecoveryStorage.DetachLoadConfigListener()
+	}
+	if w.queryViewHandler != nil {
+		w.Logger().Info("wal begin to close query view state machine...")
+		w.queryViewHandler.CloseForHandoff()
+	}
+	if w.viewResourceManager != nil {
+		w.Logger().Info("wal begin to close query view resources...")
+		w.viewResourceManager.Close()
+	}
 
 	// close the recovery-owned data path.
 	w.Logger().Info("wal begin to close recovery data path...")

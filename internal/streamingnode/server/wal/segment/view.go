@@ -16,6 +16,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	scheduler "github.com/milvus-io/milvus/pkg/v3/syncutil/preconditioned"
 	"github.com/milvus-io/milvus/pkg/v3/util/tsoutil"
@@ -57,6 +58,7 @@ func newSegmentView(
 		pending:               pending,
 		flushPolicy:           flushPolicy,
 		onDataUpdated:         config.onDataUpdated,
+		onSegmentSealed:       config.onSegmentSealed,
 		schema:                schema,
 		metaAndData:           config.metaAndData,
 	}
@@ -129,8 +131,9 @@ type segmentView struct {
 	// pendingFlushChunks keeps chunks already handed to pending/running flush tasks.
 	// Chunks stay here until segment data checkpoint advances over them.
 	pendingFlushChunks []writeOnlyInsertBuffer
-	flushPolicy        flushPolicy                // decides when pending insert data should be flushed.
-	onDataUpdated      func()                     // notifies checkpoint manager when data barrier may advance.
+	flushPolicy        flushPolicy // decides when pending insert data should be flushed.
+	onDataUpdated      func()      // notifies checkpoint manager when data barrier may advance.
+	onSegmentSealed    func(walview.SegmentSealedEvent)
 	schema             *schemapb.CollectionSchema // schema used to encode pending insert data.
 	metaAndData        bool                       // false during meta-only replay; true when data tasks may run.
 }
@@ -460,6 +463,12 @@ func (info *segmentView) NotifyDataUpdated() {
 	}
 }
 
+func (info *segmentView) NotifySegmentSealed(event walview.SegmentSealedEvent) {
+	if info.onSegmentSealed != nil {
+		info.onSegmentSealed(event)
+	}
+}
+
 func (info *segmentView) markDataCheckpointLocked(timetick uint64) {
 	if timetick <= info.meta.GetDataCheckpointTimeTick() {
 		return
@@ -586,6 +595,26 @@ func (s *segmentView) MarkPendingDataDurable(timetick uint64) {
 		return
 	}
 	s.markDataCheckpointLocked(timetick)
+}
+
+func (s *segmentView) markSealedAtDataVersionLocked(version *viewpb.DataVersion) (walview.SegmentSealedEvent, bool) {
+	if version == nil {
+		return walview.SegmentSealedEvent{}, false
+	}
+	current := s.meta.GetSealedAtDataVersion()
+	if current != nil {
+		if proto.Equal(current, version) {
+			return walview.SegmentSealedEvent{}, false
+		}
+		panic("conflicting sealed data version for segment assignment")
+	}
+	s.meta.SealedAtDataVersion = proto.Clone(version).(*viewpb.DataVersion)
+	s.dirty = true
+	return walview.SegmentSealedEvent{
+		SegmentID:           s.meta.GetSegmentId(),
+		VChannel:            s.meta.GetVchannel(),
+		SealedAtDataVersion: qviews.FromProtoDataVersion(version),
+	}, true
 }
 
 func (s *segmentView) maybeMarkTombstonedLocked() bool {

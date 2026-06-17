@@ -40,15 +40,17 @@ type Module struct {
 	latestInsertTimeTicks   map[string]uint64
 	persistedMetaPhysicalTT uint64
 	persistedDataPhysicalTT uint64
+	onSegmentSealed         func(walview.SegmentSealedEvent)
 }
 
 type runtimeConfig struct {
-	lifecycle     segmentLifecycle
-	packWriter    packWriter
-	runtime       moduleapi.Runtime
-	onDataUpdated func()
-	flushPolicy   flushPolicy
-	metaAndData   bool
+	lifecycle       segmentLifecycle
+	packWriter      packWriter
+	runtime         moduleapi.Runtime
+	onDataUpdated   func()
+	onSegmentSealed func(walview.SegmentSealedEvent)
+	flushPolicy     flushPolicy
+	metaAndData     bool
 }
 
 func firstRuntimeConfig(configs []runtimeConfig) runtimeConfig {
@@ -76,6 +78,12 @@ func WithModuleRuntime(logger *log.MLogger, runtime moduleapi.Runtime) ModuleOpt
 	return func(module *Module) {
 		module.logger = logger
 		module.runtime = runtime
+	}
+}
+
+func WithSegmentSealedNotifier(notifier func(walview.SegmentSealedEvent)) ModuleOption {
+	return func(module *Module) {
+		module.onSegmentSealed = notifier
 	}
 }
 
@@ -114,11 +122,12 @@ func NewModule(
 
 func (m *Module) runtimeConfig() runtimeConfig {
 	return runtimeConfig{
-		lifecycle:     m.lifecycle,
-		packWriter:    m.packWriter,
-		runtime:       m.runtime,
-		onDataUpdated: m.notifyModuleUpdated,
-		metaAndData:   m.metaAndData,
+		lifecycle:       m.lifecycle,
+		packWriter:      m.packWriter,
+		runtime:         m.runtime,
+		onDataUpdated:   m.notifyModuleUpdated,
+		onSegmentSealed: m.onSegmentSealed,
+		metaAndData:     m.metaAndData,
 	}
 }
 
@@ -473,6 +482,14 @@ func (m *Module) LatestInsertTimeTick(vchannel string) uint64 {
 func (m *Module) VisibleSnapshot(vchannel string, baseGrowingTimeTick uint64) walview.VisibleSegmentSnapshot {
 	segments := m.snapshotSegments()
 	dataVersion := m.segmentSnapshotDataVersion(vchannel, segments)
+	return m.visibleSnapshotAtDataVersion(vchannel, baseGrowingTimeTick, dataVersion, segments)
+}
+
+func (m *Module) VisibleSnapshotAtDataVersion(vchannel string, baseGrowingTimeTick uint64, dataVersion qviews.DataVersion) walview.VisibleSegmentSnapshot {
+	return m.visibleSnapshotAtDataVersion(vchannel, baseGrowingTimeTick, dataVersion, m.snapshotSegments())
+}
+
+func (m *Module) visibleSnapshotAtDataVersion(vchannel string, baseGrowingTimeTick uint64, dataVersion qviews.DataVersion, segments map[int64]*segmentView) walview.VisibleSegmentSnapshot {
 	snapshot := walview.VisibleSegmentSnapshot{
 		VChannel:            vchannel,
 		DataVersion:         dataVersion,

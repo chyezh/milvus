@@ -10,8 +10,6 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/snview"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource/idf"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/stats"
 	tinspector "github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick/inspector"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchantempstore"
@@ -64,12 +62,6 @@ func OptStreamingNodeQueryViewCatalog(catalog snview.StreamingNodeCatalog) optRe
 	}
 }
 
-func OptViewResourceRegistry(registry viewresource.Registry) optResourceInit {
-	return func(r *resourceImpl) {
-		r.viewResourceRegistry = registry
-	}
-}
-
 // Apply initializes the singleton of resources.
 // Should be call when streaming node startup.
 func Apply(opts ...optResourceInit) {
@@ -88,11 +80,9 @@ func Init(opts ...optResourceInit) {
 	newR.logger = log.With(log.FieldModule(typeutil.StreamingNodeRole))
 	newR.segmentStatsManager = stats.NewStatsManager()
 	newR.timeTickInspector = tinspector.NewTimeTickSyncInspector()
+	newR.queryViewRouter = snview.NewPChannelQueryViewRouter()
 	newR.syncMgr = syncmgr.NewSyncManager(newR.chunkManager)
 	newR.wbMgr = writebuffer.NewManager(newR.syncMgr)
-	if newR.viewResourceRegistry == nil {
-		newR.viewResourceRegistry = viewresource.NewRegistry(nil, idf.NewFutureProvider(newR.mixCoordClient, idf.WithChunkManager(newR.chunkManager)))
-	}
 	newR.wbMgr.Start()
 	assertNotNil(newR.ChunkManager())
 	assertNotNil(newR.TSOAllocator())
@@ -102,8 +92,8 @@ func Init(opts ...optResourceInit) {
 	assertNotNil(newR.TimeTickInspector())
 	assertNotNil(newR.SyncManager())
 	assertNotNil(newR.WriteBufferManager())
-	assertNotNil(newR.ViewResourceRegistry())
 	assertNotNil(newR.StreamingNodeQueryViewCatalog())
+	assertNotNil(newR.QueryViewRouter())
 	r = newR
 }
 
@@ -132,7 +122,7 @@ type resourceImpl struct {
 	segmentStatsManager           *stats.StatsManager
 	timeTickInspector             tinspector.TimeTickSyncInspector
 	vchannelTempStorage           *vchantempstore.VChannelTempStorage
-	viewResourceRegistry          viewresource.Registry
+	queryViewRouter               *snview.PChannelQueryViewRouter
 
 	// TODO: Global flusher components, should be removed afteer flushering in wal refactoring.
 	syncMgr syncmgr.SyncManager
@@ -196,8 +186,8 @@ func (r *resourceImpl) VChannelTempStorage() *vchantempstore.VChannelTempStorage
 	return r.vchannelTempStorage
 }
 
-func (r *resourceImpl) ViewResourceRegistry() viewresource.Registry {
-	return r.viewResourceRegistry
+func (r *resourceImpl) QueryViewRouter() *snview.PChannelQueryViewRouter {
+	return r.queryViewRouter
 }
 
 func (r *resourceImpl) Logger() *log.MLogger {

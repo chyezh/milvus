@@ -819,6 +819,10 @@ func (s *Server) GetRecoveryInfoV2(ctx context.Context, req *datapb.GetRecoveryI
 	return s.mixCoord.GetRecoveryInfoV2(ctx, req)
 }
 
+func (s *Server) GetDataView(ctx context.Context, req *datapb.GetDataViewRequest) (*datapb.GetDataViewResponse, error) {
+	return s.mixCoord.GetDataView(ctx, req)
+}
+
 // GetChannelRecoveryInfo gets the corresponding vchannel info.
 func (s *Server) GetChannelRecoveryInfo(ctx context.Context, req *datapb.GetChannelRecoveryInfoRequest) (*datapb.GetChannelRecoveryInfoResponse, error) {
 	return s.mixCoord.GetChannelRecoveryInfo(ctx, req)
