@@ -33,14 +33,15 @@ background IDF advancement.
 
 Although the runtime is a vchannel-level singleton, its lifetime is protected by
 the same resource reference model as growing segment resources. The
-`StreamingNodeResourceManager` keeps the runtime alive while either the
-load-config initialization reference or any QueryView reference exists.
+PChannel-local `StreamingNodeResourceManager` keeps the runtime alive while
+either the load-config initialization reference or any QueryView reference
+exists.
 
 ## 2. Components And Business Boundaries
 
 | Component | Role | Boundary |
 |---|---|---|
-| `StreamingNodeResourceManager` | Creates the vchannel resource build task from `OnAlterLoadConfig` or recovery. Owns QueryView/init references and closes the whole IDF runtime when the vchannel resource is released. | It does not compute BM25 stats diffs and does not evict IDF internal segment stats. |
+| `StreamingNodeResourceManager` | PChannel-local component that creates the vchannel resource build task from `OnAlterLoadConfig` or recovery. Owns QueryView/init references and closes the whole IDF runtime when the vchannel resource is released or when the PChannel runtime finalizes after QueryView handoff. | It does not compute BM25 stats diffs and does not evict IDF internal segment stats. |
 | `VChannelWALView` | Provides the initial schema, settings, segment snapshot, historical insert input, and no-gap live resource event stream. | Its capture and no-gap contract are defined in [StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md). |
 | `IDFOracleRuntimeBuilder` | Builds the initial vchannel-level `IDFOracleRuntime` from one `VChannelWALView`. | It does not submit build tasks, manage QueryView references, or advance the oracle for later QueryViews. |
 | `IDFOracleRuntime` | Owns the vchannel singleton oracle, growing BM25 stats store, sealed contribution leases, current DataVersion, initial catchup state, and advance worker. | It does not expose external truncation; current-oracle cleanup is internal. |
@@ -54,6 +55,10 @@ load-config initialization reference or any QueryView reference exists.
 ### 3.1 Relationship Model
 
 ```text
+PChannelRuntime
+        |
+        | Owns
+        v
 StreamingNodeResourceManager
         |
         | BuildTask created by OnAlterLoadConfig / recovery
@@ -141,10 +146,11 @@ BM25 stats can be removed.
 11. The current oracle is changed only by one atomic diff commit.
 12. The runtime owns cleanup of obsolete growing stats, sealed leases, and
     abandoned advance-task resources.
-13. `StreamingNodeResourceManager` protects the whole runtime with the same
-    `initRef + queryViewRefs` reference model used for other vchannel resources.
-14. `StreamingNodeResourceManager` only closes the whole runtime; it does not
-    call a truncate or eviction method on IDF internals.
+13. The PChannel-local `StreamingNodeResourceManager` protects the whole runtime
+    with the same `initRef + queryViewRefs` reference model used for other
+    vchannel resources.
+14. The PChannel-local `StreamingNodeResourceManager` only closes the whole
+    runtime; it does not call a truncate or eviction method on IDF internals.
 15. A valid live event that cannot be applied is a critical StreamingNode
     corruption, not a recoverable QueryView resource condition.
 
@@ -540,16 +546,17 @@ closes the whole runtime when the vchannel resource has no remaining references.
 Recovery uses the same path as normal initialization:
 
 ```text
-RecoveryStorage restores load intent and QueryView meta
-  -> selects recovery base DataVersion
+PChannelRuntime restores WAL state and QueryView meta
+  -> QueryViewStateMachine provides the oldest recovered Up QueryView DataVersion
+  -> RecoveryStorage selects recovery base DataVersion
   -> builds VChannelWALView(recoveryBaseDataVersion)
   -> StreamingNodeResourceManager.OnAlterLoadConfig(view)
   -> IDFOracleRuntimeBuilder.BuildInitial(view)
 ```
 
 If persisted Up QueryViews exist, the recovery base DataVersion is the oldest Up
-QueryView DataVersion selected by the resource-manager recovery rule. Otherwise
-it is the base DataVersion provided by WALView construction.
+QueryView DataVersion selected by the PChannel recovery rule. Otherwise it is
+the base DataVersion provided by WALView construction.
 
 After recovery initializes the singleton oracle, recovered QueryViews are
 acquired in QueryViewVersion order. Later QueryView preparation notifications may

@@ -10,11 +10,12 @@
 `GrowingSegmentRuntime` is the vchannel-level resource that owns the growing-side
 data prepared from `VChannelWALView`.
 
-It is created by `StreamingNodeResourceManager` when WAL load intent or
-StreamingNode crash recovery requires local query resources:
+It is created by the PChannel-local `StreamingNodeResourceManager` when WAL load
+intent or StreamingNode crash recovery requires local query resources:
 
 ```text
-RecoveryStorage
+PChannelRuntime
+  -> RecoveryStorage
   -> VChannelWALView
   -> StreamingNodeResourceManager
   -> Scheduler
@@ -40,7 +41,7 @@ release. Those responsibilities belong to `RecoveryStorage`,
 
 | Component | Role | Boundary |
 |---|---|---|
-| `StreamingNodeResourceManager` | Owns QueryView/init references and build state. Submits runtime build jobs and releases completed runtimes. | It does not build individual growing segments directly. |
+| `StreamingNodeResourceManager` | PChannel-local owner of QueryView/init references and build state. Submits runtime build jobs and releases completed runtimes for its PChannel. | It does not build individual growing segments directly and does not serve resources across PChannels. |
 | `Scheduler` | Runs runtime build jobs with bounded concurrency. | It does not know QueryView references, priority, or resource lifecycle. |
 | `GrowingSegmentRuntimeBuilder` | Builds one `GrowingSegmentRuntime` from one `VChannelWALView` and the corresponding live stream. | It does not submit jobs, manage references, or choose DataVersion. |
 | `GrowingSegmentRuntime` | Owns the vchannel-level segment map, live apply loop, applied frontiers, truncation watermark, and close path. | It does not access `SegmentModule` or `TransformLogModule`. |
@@ -54,6 +55,10 @@ release. Those responsibilities belong to `RecoveryStorage`,
 ### 3.1 Relationship Model
 
 ```text
+PChannelRuntime
+        |
+        | Owns
+        v
 StreamingNodeResourceManager
         |
         | Submit build job
@@ -251,8 +256,9 @@ RecoveryStorage observes AlterLoadConfig
 Crash recovery:
 
 ```text
-RecoveryStorage restores load intent and persisted QueryView meta
-  -> selects recovery base DataVersion
+PChannelRuntime restores load intent and persisted QueryView meta
+  -> QueryViewStateMachine provides the oldest recovered Up QueryView DataVersion
+  -> RecoveryStorage selects recovery base DataVersion
   -> builds VChannelWALView(recoveryBaseDataVersion)
   -> StreamingNodeResourceManager.OnAlterLoadConfig(view)
   -> create BuildTask

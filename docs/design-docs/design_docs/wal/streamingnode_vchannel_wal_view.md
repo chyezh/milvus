@@ -1,7 +1,8 @@
 # StreamingNode VChannel WAL View Design
 
-> VChannel-level WAL input view used by `StreamingNodeResourceManager` to
-> prepare StreamingNode query resources after `AlterLoadConfig`.
+> VChannel-level WAL input view used by the PChannel-local
+> `StreamingNodeResourceManager` to prepare StreamingNode query resources after
+> `AlterLoadConfig`.
 > References: [WAL Recovery Architecture](wal-recovery-architecture.md),
 > [Segment View Module](segment_view_module.md),
 > [TransformLog View Module](transform_log_view_module.md), and
@@ -11,7 +12,8 @@
 
 `AlterLoadConfig` is the WAL event that starts StreamingNode-side resource
 preparation for a loaded vchannel. At that WAL observe point,
-`StreamingNodeResourceManager` needs one consistent input package:
+the PChannel-local `StreamingNodeResourceManager` needs one consistent input
+package:
 
 ```text
 latest schema and load_config from VChannelModule
@@ -22,8 +24,8 @@ two TimeTick watermarks for growing and transform MVCC
 ```
 
 This input package is `VChannelWALView`. RecoveryStorage creates it at a serialized
-WAL observe point and passes it to a load-config listener implemented by
-`StreamingNodeResourceManager`.
+WAL observe point and passes it to a load-config listener implemented by the
+same PChannelRuntime's `StreamingNodeResourceManager`.
 
 The core guarantee of `VChannelWALView` is no-gap WAL input handoff:
 
@@ -50,8 +52,10 @@ AlterLoadConfig is observed by RecoveryStorage
   -> RecoveryStorage captures current module views
   -> RecoveryStorage creates VChannelWALView
   -> RecoveryStorage calls LoadConfigListener.OnAlterLoadConfig(view)
-  -> StreamingNodeResourceManager returns a VChannelLiveObserver to RecoveryStorage
-  -> StreamingNodeResourceManager asynchronously loads historical Insert and Delete
+  -> PChannel-local StreamingNodeResourceManager returns a VChannelLiveObserver
+     to RecoveryStorage
+  -> PChannel-local StreamingNodeResourceManager asynchronously loads historical
+     Insert and Delete
   -> RecoveryStorage synchronously pushes later live resource events to the observer
   -> resource runtime advances source-specific applied TimeTicks
 ```
@@ -145,6 +149,7 @@ TransformLogModule
 StreamingNodeResourceManager
   implements LoadConfigListener, consumes VChannelWALView, starts an asynchronous
   WALView load task, returns a live observer, and tracks runtime apply frontier.
+  It is scoped to the same PChannelRuntime as RecoveryStorage.
 ```
 
 The dependency direction is one-way:
@@ -178,7 +183,8 @@ type DropLoadConfigEvent struct {
 }
 ```
 
-The concrete `StreamingNodeResourceManager` implements this listener interface.
+The PChannel-local concrete `StreamingNodeResourceManager` implements this
+listener interface.
 Callback contract:
 
 - `OnAlterLoadConfig` and `OnDropLoadConfig` only hand off intent and handles; they
@@ -434,10 +440,11 @@ They do not cancel or replace the existing task.
 The listener callback itself is volatile. On StreamingNode restart:
 
 ```text
-RecoveryStorage restores VChannelMeta.load_config, SegmentModule, TransformLogModule,
-and persisted QueryView meta needed by resource recovery. After bounded replay and
-module switch, RecoveryStorage builds VChannelWALView using the resource recovery
-base DataVersion and re-emits OnAlterLoadConfig callbacks.
+PChannelRuntime restores VChannelMeta.load_config, SegmentModule, TransformLogModule,
+and persisted QueryView meta. QueryViewStateMachine provides the oldest recovered
+Up QueryView DataVersion when resource recovery needs it. After bounded replay
+and module switch, RecoveryStorage builds VChannelWALView using the selected
+resource recovery base DataVersion and re-emits OnAlterLoadConfig callbacks.
 ```
 
 The fresh view computes new base TimeTick watermarks from recovered module state.

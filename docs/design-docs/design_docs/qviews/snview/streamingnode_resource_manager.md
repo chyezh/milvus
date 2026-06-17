@@ -10,14 +10,19 @@
 `StreamingNodeResourceManager` prepares query resources from WAL state and keeps
 them alive while QueryViews reference them.
 
-It has two upstream callers:
+The manager is scoped to one `PChannelRuntime`. A StreamingNode may run many
+PChannel runtimes, and each runtime owns its own resource manager instance. A
+StreamingNode-level registry may create or find these managers, but it does not
+own vchannel resource lifecycle.
+
+Inside one `PChannelRuntime`, it has two upstream callers:
 
 ```text
 RecoveryStorage -> StreamingNodeResourceManager
 QueryViewStateMachine -> StreamingNodeResourceManager
 ```
 
-The same concrete component implements both WAL-side and QueryView-side
+The same PChannel-local component implements both WAL-side and QueryView-side
 interfaces:
 
 - `walview.LoadConfigListener`
@@ -29,23 +34,28 @@ The purpose of this component is to:
 2. prepare local StreamingNode query resources from `VChannelWALView`;
 3. track initialization and QueryView references;
 4. report resource readiness to QueryView state machines;
-5. release resources only after all references are gone.
+5. release resources after all references are gone;
+6. close remaining PChannel-local resources when the `PChannelRuntime` closes.
 
 `Up` is not a resource-manager event. An `Up` QueryView is persisted only as
 WAL-bound QueryView meta for StreamingNode crash recovery. Resource lifetime is
 driven by `OnAlterLoadConfig`, `OnDropLoadConfig`, `Acquire`, and `Release`.
+WAL ownership handoff first closes the PChannel-local QueryView state machine,
+which releases QueryView references, and only then finalizes the resource
+manager.
 
 ## 2. Dependency Components And Business Boundaries
 
 | Component | Role | Boundary |
 |---|---|---|
-| `RecoveryStorage` | Observes `AlterLoadConfig` / `DropLoadConfig`, restores WAL metadata on startup, builds valid `VChannelWALView`, and calls `StreamingNodeResourceManager` through `LoadConfigListener`. | It does not build csegments, fetch BM25 resources, or wait for query resources to become ready. WALView capture details are defined in [StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md). |
+| `PChannelRuntime` | Owns one PChannel WAL instance and the PChannel-local WAL submodules, including `RecoveryStorage`, `QueryViewStateMachine`, and `StreamingNodeResourceManager`. | It coordinates WAL open, recovery, handoff close, and module close order. It does not build vchannel query resources directly. |
+| `RecoveryStorage` | Observes `AlterLoadConfig` / `DropLoadConfig`, restores WAL metadata on startup, builds valid `VChannelWALView`, and calls the PChannel-local `StreamingNodeResourceManager` through `LoadConfigListener`. | It does not build csegments, fetch BM25 resources, wait for query resources to become ready, or manage QueryView lifecycle. WALView capture details are defined in [StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md). |
 | `VChannelModule` | Persists `VChannelMeta.load_config`. | It is an input provider for `RecoveryStorage`, not a direct dependency of `StreamingNodeResourceManager`. |
 | `SegmentModule` | Provides the visible segment snapshot for a requested base `DataVersion`. | It owns segment metadata and segment GC. The resource manager does not query or mutate it directly. |
 | `TransformLogModule` | Provides historical transform replay and transform frontier for the WAL view. | It owns TransformLog storage. The resource manager consumes only the scanner/frontier already packaged in `VChannelWALView`. |
-| `StreamingNodeResourceManager` | Owns StreamingNode query resources, resource references, readiness checks, and resource release. | It implements both `LoadConfigListener` and `QueryViewResourceManager`. |
-| `QueryViewStateMachine` | Owns QueryView state transitions and calls `Acquire` when a QueryView starts using resources, and `Release` when a QueryView is dropped. | It does not manage csegments, BM25 resources, live observers, or resource GC directly. |
-| `QueryView Meta` | WAL-bound metadata persisted for crash recovery. | It is used directly by recovery and `Acquire`; no extra resource-layer abstraction is required. |
+| `StreamingNodeResourceManager` | Owns query resources, resource references, readiness checks, and resource release for one PChannel. | It implements both `LoadConfigListener` and `QueryViewResourceManager` for the same `PChannelRuntime`. |
+| `QueryViewStateMachine` | PChannel-local WAL submodule that owns local QueryView state transitions, calls `Acquire` when a QueryView starts using resources, calls `Release` when a QueryView leaves this PChannel runtime, and drains local QueryViews before WAL handoff close. | It does not manage csegments, BM25 resources, live observers, or resource GC directly. WAL handoff unmounts local QueryViews but must not delete persisted QueryView meta that another node needs to recover. |
+| `QueryView Meta` | WAL-bound metadata persisted for crash recovery and owned by the PChannel-local QueryView state machine. | It is used directly by QueryView recovery and `Acquire`; no extra resource-layer abstraction is required. |
 | `QueryCoord` | Generates QueryViews and may provide sealed BM25 resources through RPC. | This document treats it only as an external dependency. |
 
 The key dependency boundary is:
@@ -53,6 +63,9 @@ The key dependency boundary is:
 ```text
 VChannelModule / SegmentModule / TransformLogModule
         -> RecoveryStorage builds VChannelWALView
+        -> StreamingNodeResourceManager
+
+QueryViewStateMachine
         -> StreamingNodeResourceManager
 ```
 
@@ -65,6 +78,27 @@ delete replay contract are defined by
 ## 3. Component Relationships And Invariants
 
 ### 3.1 Relationship Model
+
+```text
+PChannelRuntime
+  +-- RecoveryStorage
+  |     -> StreamingNodeResourceManager
+  +-- QueryViewStateMachine
+  |     -> StreamingNodeResourceManager
+  +-- StreamingNodeResourceManager
+```
+
+The shorter dependency graph is:
+
+```text
+RecoveryStorage -> StreamingNodeResourceManager
+QueryViewStateMachine -> StreamingNodeResourceManager
+```
+
+Both dependencies are PChannel-local. The resource manager does not serve
+resources across PChannels.
+
+Normal WAL messages still enter through `RecoveryStorage`:
 
 ```text
 AlterLoadConfig / DropLoadConfig WAL message
@@ -83,7 +117,7 @@ QueryViewStateMachine
 
 `RecoveryStorage` creates or removes initialization intent. The QueryView state
 machine creates or removes QueryView references. The resource manager is the
-only component that owns the resulting resources.
+only component that owns the resulting resources for this PChannel.
 
 ### 3.2 Reference Model
 
@@ -107,6 +141,9 @@ Reference rules:
 6. `OnDropLoadConfig` removes only `initRef`.
 7. Resources can be released only when both `initRef` and all
    `queryViewRefs` are absent.
+8. WAL handoff close drains `queryViewRefs` through
+   `QueryViewStateMachine.CloseForHandoff` before the resource manager is
+   finalized.
 
 ### 3.3 Resource State
 
@@ -155,6 +192,8 @@ defined in [StreamingNode IDF Oracle Runtime Design](idf_oracle_runtime.md).
    signal.
 9. Recovery acquires QueryViews in QueryViewVersion order.
 10. Resources are released only after all resource-manager references are gone.
+11. PChannel handoff close must first unmount local QueryViews through
+    `QueryViewStateMachine`, then close the resource manager.
 
 ## 4. Interface Description
 
@@ -164,8 +203,13 @@ defined in [StreamingNode IDF Oracle Runtime Design](idf_oracle_runtime.md).
 type StreamingNodeResourceManager interface {
     walview.LoadConfigListener
     snview.QueryViewResourceManager
+    Close()
 }
 ```
+
+There is one `StreamingNodeResourceManager` instance per `PChannelRuntime`.
+`Close` is a PChannel lifecycle finalizer called by `PChannelRuntime` after the
+PChannel-local QueryView state machine has drained local QueryViews.
 
 ### 4.2 WAL-Side Interface
 
@@ -202,7 +246,30 @@ Persisted QueryViews are WAL-bound meta. Recovery uses the same ordered
 `Acquire` operation as the normal flow and does not introduce a separate
 resource path.
 
-### 4.4 Readiness Contract
+### 4.4 QueryView State Machine Lifecycle
+
+`QueryViewStateMachine` is a PChannel-local WAL submodule:
+
+```go
+type QueryViewStateMachine interface {
+    Recover(upViews []QueryViewMeta)
+    CloseForHandoff()
+    Close()
+}
+```
+
+`Recover` restores persisted QueryView meta and calls `Acquire` in
+QueryViewVersion order for this PChannel. It also exposes the oldest recovered
+Up QueryView DataVersion to the PChannel recovery flow so `RecoveryStorage` can
+build the correct `VChannelWALView` base.
+
+`CloseForHandoff` is used when WAL ownership is moving away from the current
+node. It stops new local QueryView transitions, releases every local QueryView
+reference through `QueryViewResourceManager.Release`, and clears only local
+state. It must not delete persisted QueryView meta; the target node needs that
+meta to recover or receive the QueryViews.
+
+### 4.5 Readiness Contract
 
 `Acquire` must eventually invoke exactly one terminal callback:
 
@@ -290,15 +357,17 @@ This keeps responsibilities separate:
 
 ### 5.4 QueryView Release Flow
 
-When the QueryView state machine drops a view, it calls:
+When the QueryView state machine removes a QueryView from this PChannel runtime,
+it calls:
 
 ```text
 StreamingNodeResourceManager.Release(QueryViewMeta)
 ```
 
-`Release` removes the QueryView reference. If no initialization reference and no
-QueryView references remain, all resources owned by that vchannel can be
-released.
+`Release` removes the QueryView reference. This path is used both for logical
+QueryView removal and for local unmount during WAL handoff. If no initialization
+reference and no QueryView references remain, all resources owned by that
+vchannel can be released.
 
 Resource release may close live observers, cancel in-flight preparation, release
 csegments, and close the vchannel-level IDF oracle runtime. IDF sealed BM25
@@ -328,21 +397,22 @@ resources unreferenced and therefore releasable.
 
 ### 5.6 Recovery Flow
 
-StreamingNode recovery restores both WAL-owned load intent and persisted
-QueryView meta.
+PChannel runtime recovery restores both WAL-owned load intent and persisted
+QueryView meta for the PChannel.
 
 For each vchannel:
 
 ```text
-1. RecoveryStorage reads VChannelMeta and persisted QueryView meta.
-2. If persisted Up QueryViews exist:
+1. RecoveryStorage restores VChannelMeta and WAL module state.
+2. QueryViewStateMachine restores persisted QueryView meta.
+3. If persisted Up QueryViews exist:
      sort them by QueryViewVersion ascending
      recoveryBaseDataVersion = first QueryView.DataVersion
    Else:
      recoveryBaseDataVersion = SegmentModule.MaxDataVersion(vchannel)
-3. RecoveryStorage builds a valid VChannelWALView(recoveryBaseDataVersion).
-4. RecoveryStorage calls StreamingNodeResourceManager.OnAlterLoadConfig(view).
-5. QueryViewStateMachine recovers persisted Up QueryViews and calls Acquire
+4. RecoveryStorage builds a valid VChannelWALView(recoveryBaseDataVersion).
+5. RecoveryStorage calls StreamingNodeResourceManager.OnAlterLoadConfig(view).
+6. QueryViewStateMachine calls Acquire for recovered Up QueryViews
    sequentially in QueryViewVersion order.
 ```
 
@@ -357,7 +427,38 @@ This guarantees that the oldest recovered Up QueryView establishes the minimum
 resource boundary first. Higher-version QueryViews only add references on top of
 the already recovered resource base.
 
-### 5.7 Unrecoverable Conditions
+### 5.7 PChannel Handoff Close Flow
+
+When PChannel WAL ownership moves away from the current StreamingNode, local
+query resources must be released before the WAL instance finishes closing.
+
+The close order is owned by `PChannelRuntime`:
+
+```text
+PChannelRuntime.CloseForHandoff
+  -> stop new QueryView transitions and new resource prepares
+  -> QueryViewStateMachine.CloseForHandoff()
+       -> Release every local QueryView reference
+       -> keep persisted QueryView meta intact
+  -> StreamingNodeResourceManager.Close()
+       -> close initRef-only resources
+       -> cancel leftover build tasks
+       -> assert no QueryView references remain
+  -> RecoveryStorage.Close()
+  -> WAL implementation close
+```
+
+`CloseForHandoff` is different from logical QueryView drop. It only unmounts
+local QueryView state from the current node so the QueryViews can be prepared or
+recovered on another node.
+
+`StreamingNodeResourceManager.Close` is not a replacement for
+`QueryViewResourceManager.Release`. It is a PChannel lifecycle finalizer called
+after the QueryView state machine has drained local references. If QueryView
+references still remain, that indicates a close-order violation; the current
+node must still stop serving local resources during WAL handoff.
+
+### 5.8 Unrecoverable Conditions
 
 A QueryView is unrecoverable when:
 
@@ -365,9 +466,10 @@ A QueryView is unrecoverable when:
   view;
 - the requested DataVersion is older than the retained resource boundary;
 - the requested resources failed to prepare;
-- the QueryView is acquired out of version order during recovery.
+- the QueryView is acquired out of version order during recovery;
+- the PChannel runtime is closing for handoff.
 
-### 5.8 Cleanup Rule
+### 5.9 Cleanup Rule
 
 The resource manager releases a vchannel's resources only when:
 

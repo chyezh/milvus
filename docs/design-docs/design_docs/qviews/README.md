@@ -226,10 +226,10 @@ clears that state and cancels any in-flight load-initialization task. These load
 messages are broadcast to all vchannels of the collection, so each SN consumer mutates
 the local `VChannelMeta` for `msg.VChannel()`. `AlterLoadConfig` is a load intent, not
 a DataVersion recovery contract. RecoveryStorage captures a `VChannelWALView` from
-retained SegmentModule and TransformLog state, and the view resource registry starts an
-asynchronous initialization task before any QueryView exists. Long-term resource
-retention is driven by the minimum DataVersion required by local Up views and temporary
-recovery anchors, not by the initialization task.
+retained SegmentModule and TransformLog state, and the PChannel-local
+StreamingNode resource manager starts an asynchronous initialization task before
+any QueryView exists. Long-term resource retention is driven by local QueryView
+references and temporary recovery anchors, not by the initialization task.
 QueryNode sealed segment resources continue to follow QueryNode's segment/view resource
 lifecycle.
 
@@ -237,11 +237,12 @@ Example: If view A is unreasonable and causes OOM on a node, it is marked as Unr
 
 For StreamingNode-side resource preparation boundaries, including `AlterLoadConfig`
 initialization, `DropLoadConfig` cleanup, and recovery from `VChannelMeta.load_config`
-before QueryView sync, see [StreamingNode View Resource Design](streamingnode_resource_manager.md).
-For SegmentModule-side query-visible segment preparation and retention, see
-[StreamingNode Growing Segment Resource Design](streamingnode_growing_segment.md).
-For BM25 sealed resource discovery and DataVersion-level IDF aggregation on
-StreamingNode, see [StreamingNode BM25 and IDFOracle Design](streamingnode_bm25_idf_oracle.md).
+before QueryView sync, see
+[StreamingNode Query Resource Manager Design](snview/streamingnode_resource_manager.md).
+For StreamingNode growing-side runtime preparation and retention, see
+[StreamingNode Growing Segment Runtime Design](snview/growing_segment_runtime.md).
+For BM25 sealed resource discovery and vchannel-level IDF oracle maintenance on
+StreamingNode, see [StreamingNode IDF Oracle Runtime Design](snview/idf_oracle_runtime.md).
 
 ## 11. Coord and Node Interactions
 
@@ -260,7 +261,7 @@ StreamingNode, see [StreamingNode BM25 and IDFOracle Design](streamingnode_bm25_
 | Coord | DataView Manager | Maintaining the storage view list |
 | Coord | Sealed Segment Balancer | Gathering information from all Managers, generating and distributing QueryViews |
 | Coord | QueryView Manager | View state machine transitions, syncing view information to all Nodes |
-| Streaming Node | View Resource Registry | Preparing vchannel resources from `VChannelMeta.load_config`, latest schema, SegmentModule views, TransformLog, and BM25 resource RPC |
+| Streaming Node | PChannel Query Resource Manager | Preparing vchannel resources from `VChannelMeta.load_config`, latest schema, SegmentModule views, TransformLog, and BM25 resource RPC |
 | Streaming Node | QueryView Manager | Listening for view state machine changes, checking prepared view resources, and publishing the required DataVersion watermark for SN-only eviction |
 | Streaming Node | Pure Delete Stream Manager | Acting as subscription server, publishing Delete data to QueryNodes. See [TransformLog View Module](../wal/transform_log_view_module.md). |
 | Streaming Node | Growing Segment Manager | Incremental data management, maintaining Growing Segment lifecycle |
