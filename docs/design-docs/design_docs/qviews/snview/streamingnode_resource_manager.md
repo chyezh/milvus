@@ -39,7 +39,7 @@ driven by `OnAlterLoadConfig`, `OnDropLoadConfig`, `Acquire`, and `Release`.
 
 | Component | Role | Boundary |
 |---|---|---|
-| `RecoveryStorage` | Observes `AlterLoadConfig` / `DropLoadConfig`, restores WAL metadata on startup, builds valid `VChannelWALView`, and calls `StreamingNodeResourceManager` through `LoadConfigListener`. | It does not build csegments, fetch BM25 resources, or wait for query resources to become ready. |
+| `RecoveryStorage` | Observes `AlterLoadConfig` / `DropLoadConfig`, restores WAL metadata on startup, builds valid `VChannelWALView`, and calls `StreamingNodeResourceManager` through `LoadConfigListener`. | It does not build csegments, fetch BM25 resources, or wait for query resources to become ready. WALView capture details are defined in [StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md). |
 | `VChannelModule` | Persists `VChannelMeta.load_config`. | It is an input provider for `RecoveryStorage`, not a direct dependency of `StreamingNodeResourceManager`. |
 | `SegmentModule` | Provides the visible segment snapshot for a requested base `DataVersion`. | It owns segment metadata and segment GC. The resource manager does not query or mutate it directly. |
 | `TransformLogModule` | Provides historical transform replay and transform frontier for the WAL view. | It owns TransformLog storage. The resource manager consumes only the scanner/frontier already packaged in `VChannelWALView`. |
@@ -58,6 +58,9 @@ VChannelModule / SegmentModule / TransformLogModule
 
 `StreamingNodeResourceManager` consumes `VChannelWALView` as the complete WAL
 input package. It must not call back into WAL modules to rebuild a snapshot.
+The WALView structure, capture order, live observer contract, and historical
+delete replay contract are defined by
+[StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md).
 
 ## 3. Component Relationships And Invariants
 
@@ -231,14 +234,11 @@ The normal preparation base is:
 normalBaseDataVersion = SegmentModule.MaxDataVersion(vchannel)
 ```
 
-`VChannelWALView` carries a segment snapshot built for that base DataVersion:
-
-```text
-visibleGrowing(D) =
-  current GROWING segments
-  union retained FLUSHED segments whose sealed_at_data_version is unknown
-  union retained FLUSHED segments whose sealed_at_data_version > D
-```
+`RecoveryStorage` builds `VChannelWALView` for this base DataVersion. The
+WALView capture rules, segment snapshot contents, live observer, and delete
+replay are defined in
+[StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md).
+The segment visibility rule is owned by [Segment View Module](../../wal/segment_view_module.md).
 
 The resource manager prepares resources from the WAL view only. It must not call
 back into `SegmentModule` or `TransformLogModule` to rebuild inputs.
