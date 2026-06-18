@@ -20,21 +20,8 @@ import (
 	"github.com/milvus-io/milvus/internal/util/idalloc"
 	"github.com/milvus-io/milvus/pkg/v3/log"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 )
-
-type noopStreamingNodeQueryViewCatalog struct{}
-
-var _ snview.StreamingNodeCatalog = noopStreamingNodeQueryViewCatalog{}
-
-func (noopStreamingNodeQueryViewCatalog) ListQueryViews(context.Context) ([]*viewpb.QueryViewOfShard, error) {
-	return nil, nil
-}
-
-func (noopStreamingNodeQueryViewCatalog) SaveQueryView(*viewpb.QueryViewOfShard) error {
-	return nil
-}
 
 type testMixCoordClient struct {
 	*mocks.MockMixCoordClient
@@ -75,9 +62,6 @@ func InitForTest(t *testing.T, opts ...optResourceInit) {
 	}
 	r.segmentStatsManager = stats.NewStatsManager()
 	r.timeTickInspector = tinspector.NewTimeTickSyncInspector()
-	if r.streamingNodeQueryViewCatalog == nil {
-		r.streamingNodeQueryViewCatalog = noopStreamingNodeQueryViewCatalog{}
-	}
 	if r.queryViewRouter == nil {
 		r.queryViewRouter = snview.NewPChannelQueryViewRouter()
 	}

@@ -56,12 +56,6 @@ func OptStreamingNodeCatalog(catalog metastore.StreamingNodeCataLog) optResource
 	}
 }
 
-func OptStreamingNodeQueryViewCatalog(catalog snview.StreamingNodeCatalog) optResourceInit {
-	return func(r *resourceImpl) {
-		r.streamingNodeQueryViewCatalog = catalog
-	}
-}
-
 // Apply initializes the singleton of resources.
 // Should be call when streaming node startup.
 func Apply(opts ...optResourceInit) {
@@ -92,7 +86,6 @@ func Init(opts ...optResourceInit) {
 	assertNotNil(newR.TimeTickInspector())
 	assertNotNil(newR.SyncManager())
 	assertNotNil(newR.WriteBufferManager())
-	assertNotNil(newR.StreamingNodeQueryViewCatalog())
 	assertNotNil(newR.QueryViewRouter())
 	r = newR
 }
@@ -111,18 +104,17 @@ func Resource() *resourceImpl {
 // resourceImpl is a basic resource dependency for streamingnode server.
 // All utility on it is concurrent-safe and singleton.
 type resourceImpl struct {
-	logger                        *log.MLogger
-	timestampAllocator            idalloc.Allocator
-	idAllocator                   idalloc.Allocator
-	etcdClient                    *clientv3.Client
-	chunkManager                  storage.ChunkManager
-	mixCoordClient                *syncutil.Future[types.MixCoordClient]
-	streamingNodeCatalog          metastore.StreamingNodeCataLog
-	streamingNodeQueryViewCatalog snview.StreamingNodeCatalog
-	segmentStatsManager           *stats.StatsManager
-	timeTickInspector             tinspector.TimeTickSyncInspector
-	vchannelTempStorage           *vchantempstore.VChannelTempStorage
-	queryViewRouter               *snview.PChannelQueryViewRouter
+	logger               *log.MLogger
+	timestampAllocator   idalloc.Allocator
+	idAllocator          idalloc.Allocator
+	etcdClient           *clientv3.Client
+	chunkManager         storage.ChunkManager
+	mixCoordClient       *syncutil.Future[types.MixCoordClient]
+	streamingNodeCatalog metastore.StreamingNodeCataLog
+	segmentStatsManager  *stats.StatsManager
+	timeTickInspector    tinspector.TimeTickSyncInspector
+	vchannelTempStorage  *vchantempstore.VChannelTempStorage
+	queryViewRouter      *snview.PChannelQueryViewRouter
 
 	// TODO: Global flusher components, should be removed afteer flushering in wal refactoring.
 	syncMgr syncmgr.SyncManager
@@ -167,10 +159,6 @@ func (r *resourceImpl) MixCoordClient() *syncutil.Future[types.MixCoordClient] {
 // StreamingNodeCataLog returns the streaming node catalog.
 func (r *resourceImpl) StreamingNodeCatalog() metastore.StreamingNodeCataLog {
 	return r.streamingNodeCatalog
-}
-
-func (r *resourceImpl) StreamingNodeQueryViewCatalog() snview.StreamingNodeCatalog {
-	return r.streamingNodeQueryViewCatalog
 }
 
 func (r *resourceImpl) SegmentStatsManager() *stats.StatsManager {

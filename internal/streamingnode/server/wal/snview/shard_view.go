@@ -1,9 +1,12 @@
 package snview
 
 import (
+	"context"
+	"fmt"
 	"sort"
 	"sync"
 
+	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
@@ -18,11 +21,12 @@ import (
 // cause deadlocks.
 type snShardView struct {
 	mu              sync.Mutex
+	pchannel        string
 	shardID         qviews.ShardID
 	collectionID    int64
 	hasCollectionID bool
 	views           map[qviews.QueryViewVersion]*snViewEntry
-	catalog         StreamingNodeCatalog
+	catalog         metastore.StreamingNodeCataLog
 	resMgr          StreamingNodeResourceManager
 	onEmpty         func() // called (under mu) when the last view entry is removed
 }
@@ -37,9 +41,10 @@ type snViewEntry struct {
 // and starts recovery for each view via ResourceManager (under shard lock).
 // Called during handler construction.
 func recoverSnShardView(
+	pchannel string,
 	shardID qviews.ShardID,
 	views map[qviews.QueryViewVersion]*SNQueryViewStateMachine,
-	catalog StreamingNodeCatalog,
+	catalog metastore.StreamingNodeCataLog,
 	resMgr StreamingNodeResourceManager,
 ) *snShardView {
 	entries := make(map[qviews.QueryViewVersion]*snViewEntry, len(views))
@@ -56,10 +61,11 @@ func recoverSnShardView(
 		}
 	}
 	s := &snShardView{
-		shardID: shardID,
-		views:   entries,
-		catalog: catalog,
-		resMgr:  resMgr,
+		pchannel: pchannel,
+		shardID:  shardID,
+		views:    entries,
+		catalog:  catalog,
+		resMgr:   resMgr,
 	}
 	for _, sm := range views {
 		s.setCollectionIDLocked(sm.Meta().GetCollectionId())
@@ -303,7 +309,12 @@ func (s *snShardView) consumeAndPersist(entry *snViewEntry) {
 	if persist == nil {
 		return
 	}
-	s.catalog.SaveQueryView(persist)
+	assertQueryViewBelongsToPChannel(s.pchannel, persist)
+	if err := s.catalog.SaveQueryViews(context.Background(), s.pchannel, []*viewpb.QueryViewOfShard{
+		normalizePersistedSNQueryView(persist),
+	}); err != nil {
+		panic(fmt.Sprintf("persist query view %s failed: %v", persist.GetMeta().GetVchannel(), err))
+	}
 }
 
 // consumeAndRelease drains pending release and calls ResourceManager.Release.

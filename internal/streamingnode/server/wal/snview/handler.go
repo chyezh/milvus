@@ -4,8 +4,7 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
-
+	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
@@ -59,23 +58,27 @@ var _ handler.QueryViewHandler = (*SNQueryViewHandler)(nil)
 //     (In practice unreachable — entry is deleted upon reaching Dropped.)
 //   - Other states: SM handles coord push and responds accordingly.
 type SNQueryViewHandler struct {
-	mu      sync.Mutex
-	shards  map[qviews.ShardID]*snShardView
-	catalog StreamingNodeCatalog
-	resMgr  StreamingNodeResourceManager
+	mu       sync.Mutex
+	pchannel string
+	shards   map[qviews.ShardID]*snShardView
+	catalog  metastore.StreamingNodeCataLog
+	resMgr   StreamingNodeResourceManager
 }
 
 // RecoverSNQueryViewHandler reconstructs the handler from persisted views
 // during SN startup. Pass nil or empty views for a fresh handler.
 func RecoverSNQueryViewHandler(
-	catalog StreamingNodeCatalog,
+	pchannel string,
+	catalog metastore.StreamingNodeCataLog,
 	resMgr StreamingNodeResourceManager,
 	views []*viewpb.QueryViewOfShard,
 ) *SNQueryViewHandler {
+	assertQueryViewsBelongToPChannel(pchannel, views)
 	h := &SNQueryViewHandler{
-		shards:  make(map[qviews.ShardID]*snShardView),
-		catalog: catalog,
-		resMgr:  resMgr,
+		pchannel: pchannel,
+		shards:   make(map[qviews.ShardID]*snShardView),
+		catalog:  catalog,
+		resMgr:   resMgr,
 	}
 
 	// Build SMs grouped by shard.
@@ -101,7 +104,7 @@ func RecoverSNQueryViewHandler(
 
 	// Create shard views and start recovery via ResourceManager.
 	for shardID, sr := range grouped {
-		shard := recoverSnShardView(shardID, sr.views, catalog, resMgr)
+		shard := recoverSnShardView(pchannel, shardID, sr.views, catalog, resMgr)
 		shard.onEmpty = h.makeOnEmpty(shardID)
 		h.shards[shardID] = shard
 	}
@@ -111,21 +114,11 @@ func RecoverSNQueryViewHandler(
 
 func RecoverPChannelSNQueryViewHandler(
 	pchannel string,
-	catalog StreamingNodeCatalog,
+	catalog metastore.StreamingNodeCataLog,
 	resMgr StreamingNodeResourceManager,
 	views []*viewpb.QueryViewOfShard,
 ) *SNQueryViewHandler {
-	return RecoverSNQueryViewHandler(catalog, resMgr, FilterQueryViewsByPChannel(pchannel, views))
-}
-
-func FilterQueryViewsByPChannel(pchannel string, views []*viewpb.QueryViewOfShard) []*viewpb.QueryViewOfShard {
-	filtered := make([]*viewpb.QueryViewOfShard, 0, len(views))
-	for _, view := range views {
-		if funcutil.ToPhysicalChannel(view.GetMeta().GetVchannel()) == pchannel {
-			filtered = append(filtered, view)
-		}
-	}
-	return filtered
+	return RecoverSNQueryViewHandler(pchannel, catalog, resMgr, views)
 }
 
 func OldestUpDataVersions(views []*viewpb.QueryViewOfShard) map[string]qviews.DataVersion {
@@ -229,11 +222,12 @@ func (h *SNQueryViewHandler) getOrCreateShard(shardID qviews.ShardID) *snShardVi
 	shard, ok := h.shards[shardID]
 	if !ok {
 		shard = &snShardView{
-			shardID: shardID,
-			views:   make(map[qviews.QueryViewVersion]*snViewEntry),
-			catalog: h.catalog,
-			resMgr:  h.resMgr,
-			onEmpty: h.makeOnEmpty(shardID),
+			pchannel: h.pchannel,
+			shardID:  shardID,
+			views:    make(map[qviews.QueryViewVersion]*snViewEntry),
+			catalog:  h.catalog,
+			resMgr:   h.resMgr,
+			onEmpty:  h.makeOnEmpty(shardID),
 		}
 		h.shards[shardID] = shard
 	}

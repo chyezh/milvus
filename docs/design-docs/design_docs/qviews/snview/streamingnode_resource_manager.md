@@ -55,7 +55,7 @@ manager.
 | `TransformLogModule` | Provides historical transform replay and transform frontier for the WAL view. | It owns TransformLog storage. The resource manager consumes only the scanner/frontier already packaged in `VChannelWALView`. |
 | `StreamingNodeResourceManager` | Owns query resources, resource references, readiness checks, and resource release for one PChannel. | It implements both `LoadConfigListener` and `QueryViewResourceManager` for the same `PChannelRuntime`. |
 | `QueryViewStateMachine` | PChannel-local WAL submodule that owns local QueryView state transitions, calls `Acquire` when a QueryView starts using resources, calls `Release` when a QueryView leaves this PChannel runtime, and drains local QueryViews before WAL handoff close. | It does not manage csegments, BM25 resources, live observers, or resource GC directly. WAL handoff unmounts local QueryViews but must not delete persisted QueryView meta that another node needs to recover. |
-| `QueryView Meta` | WAL-bound metadata persisted for crash recovery and owned by the PChannel-local QueryView state machine. | It is used directly by QueryView recovery and `Acquire`; no extra resource-layer abstraction is required. |
+| `QueryView Meta` | WAL-bound metadata persisted for crash recovery and owned by the PChannel-local QueryView state machine. | It is stored under `streamingnode-meta/wal/<pchannel>/query-view/...`, used directly by QueryView recovery and `Acquire`, and must not be scoped by StreamingNode node ID. |
 | `QueryCoord` | Generates QueryViews and may provide sealed BM25 resources through RPC. | This document treats it only as an external dependency. |
 
 The key dependency boundary is:

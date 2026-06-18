@@ -18,6 +18,7 @@ const (
 	testCollectionID int64 = 100
 	testReplicaID    int64 = 1
 	testVChannel           = "v0_c0"
+	testPChannel           = testVChannel
 )
 
 func buildTestMeta() *viewpb.QueryViewMeta {

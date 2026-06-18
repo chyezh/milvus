@@ -1,21 +1,33 @@
 package snview
 
 import (
-	"context"
+	"fmt"
 
+	"google.golang.org/protobuf/proto"
+
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 )
 
-// StreamingNodeCatalog defines the persistence interface for SN query views,
-// implemented by the streaming node's catalog layer.
-type StreamingNodeCatalog interface {
-	// ListQueryViews loads persisted Up query views for local crash recovery.
-	ListQueryViews(ctx context.Context) ([]*viewpb.QueryViewOfShard, error)
+func normalizePersistedSNQueryView(view *viewpb.QueryViewOfShard) *viewpb.QueryViewOfShard {
+	if qviews.QueryViewState(view.GetMeta().GetState()) == qviews.QueryViewStateUp {
+		return view
+	}
+	dropped := proto.Clone(view).(*viewpb.QueryViewOfShard)
+	dropped.Meta.State = viewpb.QueryViewState_QueryViewStateDropped
+	return dropped
+}
 
-	// SaveQueryView persists or deletes a query view based on its state.
-	// The persistence key is derived internally from view.Meta.
-	//
-	//   - Meta.State == Up → save/overwrite recovery info.
-	//   - Meta.State == Down, Unrecoverable, or Dropped → delete recovery info.
-	SaveQueryView(view *viewpb.QueryViewOfShard) error
+func assertQueryViewBelongsToPChannel(pchannel string, view *viewpb.QueryViewOfShard) {
+	vchannel := view.GetMeta().GetVchannel()
+	if funcutil.ToPhysicalChannel(vchannel) != pchannel {
+		panic(fmt.Sprintf("query view vchannel %s does not belong to pchannel %s", vchannel, pchannel))
+	}
+}
+
+func assertQueryViewsBelongToPChannel(pchannel string, views []*viewpb.QueryViewOfShard) {
+	for _, view := range views {
+		assertQueryViewBelongsToPChannel(pchannel, view)
+	}
 }

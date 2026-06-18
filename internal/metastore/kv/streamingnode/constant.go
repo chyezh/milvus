@@ -7,6 +7,7 @@ const (
 	DirectorySegmentAssign             = "segment-assign"
 	DirectorySegmentDataVersionSummary = "segment-data-version-summary"
 	DirectoryTransformLog              = "transform-log"
+	DirectoryQueryView                 = "query-view"
 	DirectoryVChannel                  = "vchannel"
 	DirectorySchema                    = "schema"
 

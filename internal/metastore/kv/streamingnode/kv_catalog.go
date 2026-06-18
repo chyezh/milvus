@@ -2,6 +2,7 @@ package streamingnode
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,7 +14,9 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/pkg/v3/kv"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/etcd"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
@@ -358,6 +361,55 @@ func (c *catalog) SaveSegmentDataVersionSummaries(ctx context.Context, pChannelN
 	return nil
 }
 
+// ListQueryViews lists the StreamingNode query view recovery meta of the pchannel.
+func (c *catalog) ListQueryViews(ctx context.Context, pChannelName string) ([]*viewpb.QueryViewOfShard, error) {
+	prefix := buildQueryViewPrefix(pChannelName)
+	keys, values, err := c.metaKV.LoadWithPrefix(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+
+	views := make([]*viewpb.QueryViewOfShard, 0, len(values))
+	for idx, value := range values {
+		view := &viewpb.QueryViewOfShard{}
+		if err = proto.Unmarshal([]byte(value), view); err != nil {
+			return nil, errors.Wrapf(err, "unmarshal query view %s failed", keys[idx])
+		}
+		assertQueryViewBelongsToPChannel(pChannelName, view.GetMeta())
+		if keys[idx] != buildQueryViewKey(pChannelName, view.GetMeta()) {
+			panic(fmt.Sprintf("mismatched query view recovery meta, key %s, meta %s", keys[idx], view.GetMeta().GetVchannel()))
+		}
+		views = append(views, view)
+	}
+	return views, nil
+}
+
+// SaveQueryViews saves the StreamingNode query view recovery meta of the pchannel.
+func (c *catalog) SaveQueryViews(ctx context.Context, pChannelName string, views []*viewpb.QueryViewOfShard) error {
+	if len(views) == 0 {
+		return nil
+	}
+
+	kvs := make(map[string]string, len(views))
+	removes := make([]string, 0)
+	for _, view := range views {
+		meta := view.GetMeta()
+		assertQueryViewBelongsToPChannel(pChannelName, meta)
+		key := buildQueryViewKey(pChannelName, meta)
+		if meta.GetState() == viewpb.QueryViewState_QueryViewStateDropped {
+			removes = append(removes, key)
+			continue
+		}
+		data, err := marshalQueryViewForPersistence(view)
+		if err != nil {
+			return errors.Wrapf(err, "marshal query view %s at pchannel %s failed", meta.GetVchannel(), pChannelName)
+		}
+		kvs[key] = string(data)
+	}
+
+	return c.metaKV.MultiSaveAndRemove(ctx, kvs, removes)
+}
+
 // GetConsumeCheckpoint gets the consuming checkpoint of the wal.
 func (c *catalog) GetConsumeCheckpoint(ctx context.Context, pchannelName string) (*streamingpb.WALCheckpoint, error) {
 	key := buildConsumeCheckpointKey(pchannelName)
@@ -441,6 +493,11 @@ func buildTransformLogPrefix(pChannelName string) string {
 	return buildWALPrefix(pChannelName) + DirectoryTransformLog + "/"
 }
 
+// buildQueryViewPrefix returns the prefix for StreamingNode query view recovery meta under a pchannel.
+func buildQueryViewPrefix(pChannelName string) string {
+	return buildWALPrefix(pChannelName) + DirectoryQueryView + "/"
+}
+
 // Key functions: return exact keys for individual records.
 
 // buildVChannelKey returns the key for a specific vchannel's metadata.
@@ -468,9 +525,47 @@ func buildTransformLogKey(pChannelName string, vchannelName string) string {
 	return buildTransformLogPrefix(pChannelName) + vchannelName
 }
 
+// buildQueryViewKey returns the key for a specific StreamingNode query view recovery meta.
+func buildQueryViewKey(pChannelName string, meta *viewpb.QueryViewMeta) string {
+	assertQueryViewBelongsToPChannel(pChannelName, meta)
+	version := meta.GetVersion()
+	dataVersion := version.GetDataVersion()
+	if version == nil || dataVersion == nil {
+		panic(fmt.Sprintf("query view %s has nil version", meta.GetVchannel()))
+	}
+	return fmt.Sprintf("%s%d/%d/%s/%d/%d/%d",
+		buildQueryViewPrefix(pChannelName),
+		meta.GetCollectionId(),
+		meta.GetReplicaId(),
+		meta.GetVchannel(),
+		dataVersion.GetStreamingVersion(),
+		dataVersion.GetCompactVersion(),
+		version.GetQueryVersion(),
+	)
+}
+
 // buildConsumeCheckpointKey returns the key for the consume checkpoint of a pchannel.
 func buildConsumeCheckpointKey(pchannelName string) string {
 	return buildWALPrefix(pchannelName) + KeyConsumeCheckpoint
+}
+
+func assertQueryViewBelongsToPChannel(pChannelName string, meta *viewpb.QueryViewMeta) {
+	if meta == nil {
+		panic("query view meta is nil")
+	}
+	if funcutil.ToPhysicalChannel(meta.GetVchannel()) != pChannelName {
+		panic(fmt.Sprintf("query view vchannel %s does not belong to pchannel %s", meta.GetVchannel(), pChannelName))
+	}
+}
+
+func marshalQueryViewForPersistence(view *viewpb.QueryViewOfShard) ([]byte, error) {
+	clone := proto.Clone(view).(*viewpb.QueryViewOfShard)
+	for _, qn := range clone.GetQueryNode() {
+		for _, partition := range qn.GetPartitions() {
+			partition.ReadySegmentIds = nil
+		}
+	}
+	return proto.Marshal(clone)
 }
 
 // removePrefix removes the prefix from the keys.

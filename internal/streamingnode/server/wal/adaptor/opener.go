@@ -210,16 +210,15 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 		roWAL.Close()
 		return nil, errors.Wrap(err, "when building interceptor params")
 	}
-	queryViewCatalog := resource.Resource().StreamingNodeQueryViewCatalog()
-	persistedViews, err := queryViewCatalog.ListQueryViews(ctx)
+	queryViewCatalog := resource.Resource().StreamingNodeCatalog()
+	persistedViews, err := queryViewCatalog.ListQueryViews(ctx, opt.Channel.Name)
 	if err != nil {
 		param.Clear()
 		roWAL.Close()
 		return nil, errors.Wrap(err, "when loading streaming node query view meta")
 	}
-	pchannelViews := snview.FilterQueryViewsByPChannel(opt.Channel.Name, persistedViews)
-	resourceBaseByVChannel := snview.OldestUpDataVersions(pchannelViews)
-	recoveredLoadConfigs := snview.RecoveredLoadConfigs(pchannelViews)
+	resourceBaseByVChannel := snview.OldestUpDataVersions(persistedViews)
+	recoveredLoadConfigs := snview.RecoveredLoadConfigs(persistedViews)
 	resMgr := viewresource.NewManager(nil, idf.NewFutureProvider(
 		resource.Resource().MixCoordClient(),
 		idf.WithChunkManager(resource.Resource().ChunkManager()),
@@ -245,7 +244,7 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 		return nil, errors.Wrap(err, "when recovering recovery storage")
 	}
 	param.RecoveryStorage = rs
-	snHandler := snview.RecoverPChannelSNQueryViewHandler(opt.Channel.Name, queryViewCatalog, resMgr, pchannelViews)
+	snHandler := snview.RecoverPChannelSNQueryViewHandler(opt.Channel.Name, queryViewCatalog, resMgr, persistedViews)
 	unregisterQueryViewHandler := resource.Resource().QueryViewRouter().Register(opt.Channel.Name, snHandler)
 
 	// Handle alter WAL if found in snapshot
