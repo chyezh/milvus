@@ -16,6 +16,7 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
+	"github.com/milvus-io/milvus/internal/util/initcore"
 	utilmock "github.com/milvus-io/milvus/internal/util/mock"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/objectstorage"
@@ -26,8 +27,19 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/rmq"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
+
+func initSegcoreForIDFProviderTest(t *testing.T) {
+	t.Helper()
+	paramtable.Init()
+	initcore.InitExecExpressionFunctionFactory()
+	localDataRootPath := filepath.Join(paramtable.Get().LocalStorageCfg.Path.GetValue(), typeutil.QueryNodeRole)
+	initcore.InitLocalChunkManager(localDataRootPath)
+	require.NoError(t, initcore.InitMmapManager(paramtable.Get(), 1))
+	require.NoError(t, initcore.InitTieredStorage(paramtable.Get()))
+}
 
 func TestProviderSkipsWhenLoadedFieldsDoNotNeedBM25(t *testing.T) {
 	provider := NewProvider(nil)
@@ -231,6 +243,8 @@ func TestProviderReusesSealedBM25StatsWhileRuntimeRetained(t *testing.T) {
 }
 
 func TestProviderRuntimeAppliesLiveGrowingBM25Stats(t *testing.T) {
+	initSegcoreForIDFProviderTest(t)
+
 	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
 	provider := NewProvider(&bm25QueryCoordClient{
 		resp: &querypb.GetStreamingNodeQueryViewResourcesResponse{
@@ -239,11 +253,7 @@ func TestProviderRuntimeAppliesLiveGrowingBM25Stats(t *testing.T) {
 			DataVersion:  version.IntoProto(),
 		},
 	})
-	manager := viewresource.NewManager(viewresource.SnapshotGrowingSegmentRuntimeBuilder{
-		NewApplier: func(context.Context, viewresource.LoadResourceDescriptor) (viewresource.GrowingRuntimeApplier, error) {
-			return noopGrowingApplier{}, nil
-		},
-	}, provider)
+	manager := viewresource.NewManager(nil, provider)
 	schema := bm25TestSchema()
 	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
@@ -343,6 +353,8 @@ func TestProviderRuntimeRejectsLiveGrowingInsertAfterFlush(t *testing.T) {
 }
 
 func TestProviderRuntimeCatchupWaitsForManagerHandoff(t *testing.T) {
+	initSegcoreForIDFProviderTest(t)
+
 	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
 	provider := NewProvider(&bm25QueryCoordClient{
 		resp: &querypb.GetStreamingNodeQueryViewResourcesResponse{
@@ -375,11 +387,7 @@ func TestProviderRuntimeCatchupWaitsForManagerHandoff(t *testing.T) {
 	default:
 	}
 
-	manager := viewresource.NewManager(viewresource.SnapshotGrowingSegmentRuntimeBuilder{
-		NewApplier: func(context.Context, viewresource.LoadResourceDescriptor) (viewresource.GrowingRuntimeApplier, error) {
-			return noopGrowingApplier{}, nil
-		},
-	}, provider)
+	manager := viewresource.NewManager(nil, provider)
 	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
 		VChannel:     "ch",
@@ -414,13 +422,11 @@ func TestProviderRuntimeCatchupWaitsForManagerHandoff(t *testing.T) {
 }
 
 func TestProviderRuntimeAdvancementRemovesLiveGrowingStats(t *testing.T) {
+	initSegcoreForIDFProviderTest(t)
+
 	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
 	provider := NewProvider(&versionedBM25QueryCoordClient{})
-	manager := viewresource.NewManager(viewresource.SnapshotGrowingSegmentRuntimeBuilder{
-		NewApplier: func(context.Context, viewresource.LoadResourceDescriptor) (viewresource.GrowingRuntimeApplier, error) {
-			return noopGrowingApplier{}, nil
-		},
-	}, provider)
+	manager := viewresource.NewManager(nil, provider)
 	schema := bm25TestSchema()
 	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
@@ -530,15 +536,22 @@ func bm25TestSchema() *schemapb.CollectionSchema {
 	return &schemapb.CollectionSchema{
 		Name: "bm25_schema",
 		Fields: []*schemapb.FieldSchema{
-			{FieldID: 1, Name: "pk", DataType: schemapb.DataType_Int64, IsPrimaryKey: true},
-			{FieldID: 2, Name: "text", DataType: schemapb.DataType_VarChar},
+			{FieldID: 101, Name: "pk", DataType: schemapb.DataType_Int64, IsPrimaryKey: true},
+			{
+				FieldID:  102,
+				Name:     "text",
+				DataType: schemapb.DataType_VarChar,
+				TypeParams: []*commonpb.KeyValuePair{
+					{Key: "max_length", Value: "1024"},
+				},
+			},
 			{FieldID: 100, Name: "sparse", DataType: schemapb.DataType_SparseFloatVector, IsFunctionOutput: true},
 		},
 		Functions: []*schemapb.FunctionSchema{
 			{
 				Name:           "bm25",
 				Type:           schemapb.FunctionType_BM25,
-				InputFieldIds:  []int64{2},
+				InputFieldIds:  []int64{102},
 				OutputFieldIds: []int64{100},
 			},
 		},
@@ -573,14 +586,14 @@ func newBM25InsertMessage(t *testing.T, vchannel string, segmentID int64, timeti
 			FieldsData: []*schemapb.FieldData{
 				{
 					Type:    schemapb.DataType_Int64,
-					FieldId: 1,
+					FieldId: 101,
 					Field: &schemapb.FieldData_Scalars{Scalars: &schemapb.ScalarField{
 						Data: &schemapb.ScalarField_LongData{LongData: &schemapb.LongArray{Data: []int64{1}}},
 					}},
 				},
 				{
 					Type:    schemapb.DataType_VarChar,
-					FieldId: 2,
+					FieldId: 102,
 					Field: &schemapb.FieldData_Scalars{Scalars: &schemapb.ScalarField{
 						Data: &schemapb.ScalarField_StringData{StringData: &schemapb.StringArray{Data: []string{"text"}}},
 					}},
@@ -635,26 +648,6 @@ func newBM25FlushMessage(t *testing.T, vchannel string, segmentID int64, timetic
 		WithLastConfirmedUseMessageID().
 		IntoImmutableMessage(rmq.NewRmqID(int64(timetick)))
 }
-
-type noopGrowingApplier struct{}
-
-func (noopGrowingApplier) LoadPersistedSegment(context.Context, walview.VisibleSegment) error {
-	return nil
-}
-
-func (noopGrowingApplier) ApplySnapshotInsert(context.Context, walview.VisibleSegment, message.ImmutableMessage) error {
-	return nil
-}
-
-func (noopGrowingApplier) ApplyDeleteReplay(context.Context, *streamingpb.TransformLogEntry) error {
-	return nil
-}
-
-func (noopGrowingApplier) ApplyLiveMessage(context.Context, message.ImmutableMessage) error {
-	return nil
-}
-
-func (noopGrowingApplier) Close() {}
 
 type countingChunkManager struct {
 	storage.ChunkManager

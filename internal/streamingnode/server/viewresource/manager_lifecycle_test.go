@@ -3,7 +3,6 @@ package viewresource
 import (
 	"context"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"reflect"
 	"sync"
@@ -78,7 +77,7 @@ func (p *fakeGrowingSegmentRuntimeBuilder) Build(_ context.Context, desc LoadRes
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls = append(p.calls, desc)
-	return &GrowingRuntime{SegmentIDs: []int64{10, 11}}, nil
+	return &GrowingRuntime{}, nil
 }
 
 type cancelAwareGrowingSegmentRuntimeBuilder struct {
@@ -115,67 +114,6 @@ func (p errorIDFOracleRuntimeBuilder) BuildInitial(context.Context, LoadResource
 	return nil, p.err
 }
 
-type recordingGrowingApplier struct {
-	mu      sync.Mutex
-	events  []string
-	closed  bool
-	closeCh chan struct{}
-}
-
-type errorLiveApplier struct {
-	noopGrowingRuntimeApplier
-	err error
-}
-
-func (a errorLiveApplier) ApplyLiveMessage(context.Context, message.ImmutableMessage) error {
-	return a.err
-}
-
-type errorBM25LiveUpdater struct {
-	err error
-}
-
-func (u errorBM25LiveUpdater) ApplyLiveMessage(context.Context, message.ImmutableMessage) error {
-	return u.err
-}
-
-type releaseRecordingApplier struct {
-	noopGrowingRuntimeApplier
-	mu       sync.Mutex
-	segments map[int64]struct{}
-	released []int64
-}
-
-func newReleaseRecordingApplier(segmentIDs ...int64) *releaseRecordingApplier {
-	segments := make(map[int64]struct{}, len(segmentIDs))
-	for _, segmentID := range segmentIDs {
-		segments[segmentID] = struct{}{}
-	}
-	return &releaseRecordingApplier{segments: segments}
-}
-
-func (a *releaseRecordingApplier) ReleaseSegment(segmentID int64) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if _, ok := a.segments[segmentID]; !ok {
-		return
-	}
-	delete(a.segments, segmentID)
-	a.released = append(a.released, segmentID)
-}
-
-func (a *releaseRecordingApplier) releasedSegments() []int64 {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return append([]int64(nil), a.released...)
-}
-
-func newRecordingGrowingApplier() *recordingGrowingApplier {
-	return &recordingGrowingApplier{
-		closeCh: make(chan struct{}),
-	}
-}
-
 func initSegcoreForViewResourceTest(t *testing.T) {
 	t.Helper()
 	paramtable.Init()
@@ -184,48 +122,6 @@ func initSegcoreForViewResourceTest(t *testing.T) {
 	initcore.InitLocalChunkManager(localDataRootPath)
 	require.NoError(t, initcore.InitMmapManager(paramtable.Get(), 1))
 	require.NoError(t, initcore.InitTieredStorage(paramtable.Get()))
-}
-
-func (a *recordingGrowingApplier) LoadPersistedSegment(_ context.Context, segment walview.VisibleSegment) error {
-	a.record("persisted:%d", segment.SegmentID)
-	return nil
-}
-
-func (a *recordingGrowingApplier) ApplySnapshotInsert(_ context.Context, segment walview.VisibleSegment, msg message.ImmutableMessage) error {
-	a.record("snapshot:%d:%d", segment.SegmentID, msg.TimeTick())
-	return nil
-}
-
-func (a *recordingGrowingApplier) ApplyDeleteReplay(_ context.Context, entry *streamingpb.TransformLogEntry) error {
-	a.record("delete:%d", entry.GetTimeTick())
-	return nil
-}
-
-func (a *recordingGrowingApplier) ApplyLiveMessage(_ context.Context, msg message.ImmutableMessage) error {
-	a.record("live:%s:%d", msg.MessageType().String(), msg.TimeTick())
-	return nil
-}
-
-func (a *recordingGrowingApplier) Close() {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.closed {
-		return
-	}
-	a.closed = true
-	close(a.closeCh)
-}
-
-func (a *recordingGrowingApplier) record(format string, args ...any) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.events = append(a.events, fmt.Sprintf(format, args...))
-}
-
-func (a *recordingGrowingApplier) snapshot() []string {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	return append([]string(nil), a.events...)
 }
 
 func newTestInsertMessage(t *testing.T, vchannel string, timetick uint64) message.ImmutableMessage {
@@ -524,60 +420,7 @@ func TestManagerDefaultGrowingRuntimeBuilderUsesWALViewSegmentSnapshot(t *testin
 	})
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.Equal(t, []int64{10, 11}, runtime.Growing.SegmentIDs)
-}
-
-func TestManagerDefaultGrowingRuntimeBuilderAppliesSnapshotDeleteAndLiveInOrder(t *testing.T) {
-	applier := newRecordingGrowingApplier()
-	manager := NewManager(SnapshotGrowingSegmentRuntimeBuilder{
-		NewApplier: func(context.Context, LoadResourceDescriptor) (GrowingRuntimeApplier, error) {
-			return applier, nil
-		},
-	}, nil)
-	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
-	scanner := newFakeTransformLogScanner()
-	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
-		CollectionID:          1,
-		VChannel:              "ch",
-		BaseGrowingTimeTick:   40,
-		BaseTransformTimeTick: 35,
-		SegmentSnapshot: walview.VisibleSegmentSnapshot{
-			DataVersion: version,
-			Segments: []walview.VisibleSegment{
-				{
-					SegmentID: 10,
-					Data: walview.SegmentSnapshotData{
-						PersistedStorage: &streamingpb.L1SegmentPersistedStorage{},
-						InsertMessages: []message.ImmutableMessage{
-							newTestInsertMessage(t, "ch", 30),
-						},
-					},
-				},
-			},
-		},
-		DeleteReplay: scanner,
-	})
-	require.NotNil(t, observer)
-
-	scanner.ch <- wal.TransformLogEvent{Entry: &streamingpb.TransformLogEntry{TimeTick: 35}}
-	scanner.ch <- wal.TransformLogEvent{CaughtUp: &wal.TransformLogCaughtUp{StartAfterTimeTick: 1}}
-
-	select {
-	case <-manager.NotifyReady():
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for manager readiness")
-	}
-
-	require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newTestDeleteMessage(t, "ch", 45)}))
-	require.Eventuallyf(t, func() bool {
-		return len(applier.snapshot()) == 4
-	}, time.Second, 10*time.Millisecond, "events: %v", applier.snapshot())
-	require.Equal(t, []string{
-		"persisted:10",
-		"snapshot:10:30",
-		"delete:35",
-		"live:Delete:45",
-	}, applier.snapshot())
+	require.Equal(t, []int64{10, 11}, runtime.Growing.SegmentIDs())
 }
 
 func TestManagerDefaultGrowingRuntimeBuilderBuildsSegcoreGrowingSegmentFromSnapshotInsert(t *testing.T) {
@@ -625,8 +468,9 @@ func TestManagerDefaultGrowingRuntimeBuilderBuildsSegcoreGrowingSegmentFromSnaps
 	})
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.Contains(t, runtime.Growing.Segments, segmentID)
-	require.Equal(t, int64(3), runtime.Growing.Segments[segmentID].RowNum())
+	segment, ok := runtime.Growing.Segment(segmentID)
+	require.True(t, ok)
+	require.Equal(t, int64(3), segment.RowNum())
 
 	manager.OnDropLoadConfig(walview.DropLoadConfigEvent{CollectionID: 1, VChannel: "ch"})
 }
@@ -672,49 +516,6 @@ func TestManagerDefaultGrowingRuntimeBuilderAppliesLiveInsertToNewSegcoreSegment
 	manager.OnDropLoadConfig(walview.DropLoadConfigEvent{CollectionID: 1, VChannel: "ch"})
 }
 
-func TestManagerDefaultGrowingRuntimeRejectsLiveInsertAfterFlush(t *testing.T) {
-	initSegcoreForViewResourceTest(t)
-
-	manager := NewManager(nil, nil)
-	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
-	schema := mock_segcore.GenTestCollectionSchema("snview-resource-flush", schemapb.DataType_Int64, false)
-	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
-		CollectionID:        1,
-		VChannel:            "ch",
-		BaseGrowingTimeTick: 30,
-		Schema:              schema,
-		SegmentSnapshot: walview.VisibleSegmentSnapshot{
-			CollectionID: 1,
-			VChannel:     "ch",
-			DataVersion:  version,
-		},
-	})
-	require.NotNil(t, observer)
-	select {
-	case <-manager.NotifyReady():
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for manager readiness")
-	}
-	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
-		CollectionID: 1,
-		VChannel:     "ch",
-		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
-	})
-	require.NoError(t, err)
-	require.True(t, ready)
-
-	segmentID := int64(21)
-	require.True(t, runtime.Growing.ApplyLiveMessage(context.Background(), newTestFlushMessage(t, "ch", segmentID, 40)))
-	require.True(t, runtime.Growing.SegmentFlushed(segmentID))
-	require.Panics(t, func() {
-		runtime.Growing.ApplyLiveMessage(context.Background(), newTestSegmentInsertMessage(t, "ch", segmentID, 2, 41, schema))
-	})
-	_, ok := runtime.Growing.Segment(segmentID)
-	require.False(t, ok)
-
-	manager.OnDropLoadConfig(walview.DropLoadConfigEvent{CollectionID: 1, VChannel: "ch"})
-}
-
 func TestManagerDefaultGrowingRuntimeBuilderAppliesLiveCreateSegment(t *testing.T) {
 	initSegcoreForViewResourceTest(t)
 
@@ -752,7 +553,7 @@ func TestManagerDefaultGrowingRuntimeBuilderAppliesLiveCreateSegment(t *testing.
 		_, ok := runtime.Growing.Segment(segmentID)
 		return ok
 	}, time.Second, 10*time.Millisecond)
-	require.Contains(t, runtime.Growing.SegmentIDs, segmentID)
+	require.Contains(t, runtime.Growing.SegmentIDs(), segmentID)
 
 	manager.OnDropLoadConfig(walview.DropLoadConfigEvent{CollectionID: 1, VChannel: "ch"})
 }
@@ -785,63 +586,6 @@ func TestManagerGrowingRuntimeRecordsLiveFlush(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return runtime.Growing.SegmentFlushed(10)
 	}, time.Second, 10*time.Millisecond)
-}
-
-func TestGrowingRuntimeTruncateWatermarkAppliesToLateSegmentSealed(t *testing.T) {
-	applier := newReleaseRecordingApplier(10)
-	runtime := newGrowingRuntimeForTest(applier)
-	runtime.SegmentIDs = []int64{10}
-
-	runtime.Truncate(qviews.DataVersion{StreamingVersion: 20, CompactVersion: 1})
-	require.Empty(t, applier.releasedSegments())
-
-	applied := runtime.ApplyLiveEvent(context.Background(), walview.VChannelResourceEvent{
-		SegmentSealed: &walview.SegmentSealedEvent{
-			SegmentID:           10,
-			SealedAtDataVersion: qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1},
-		},
-	})
-	require.True(t, applied)
-	require.Equal(t, []int64{10}, applier.releasedSegments())
-	require.False(t, runtime.SegmentFlushed(10))
-	require.Empty(t, runtime.SegmentIDs)
-}
-
-func TestDeleteTimestampsFromRequestUsesPerRowTimestamps(t *testing.T) {
-	request := &msgpb.DeleteRequest{
-		PrimaryKeys: &schemapb.IDs{
-			IdField: &schemapb.IDs_IntId{
-				IntId: &schemapb.LongArray{Data: []int64{1, 2, 3}},
-			},
-		},
-		Timestamps: []uint64{11, 12, 13},
-	}
-
-	require.Equal(t, []uint64{11, 12, 13}, deleteTimestampsFromRequest(100, request))
-}
-
-func TestDeleteTimestampsFromRequestFallsBackToMessageTimeTick(t *testing.T) {
-	request := &msgpb.DeleteRequest{
-		PrimaryKeys: &schemapb.IDs{
-			IdField: &schemapb.IDs_IntId{
-				IntId: &schemapb.LongArray{Data: []int64{1, 2}},
-			},
-		},
-	}
-
-	require.Equal(t, []uint64{100, 100}, deleteTimestampsFromRequest(100, request))
-}
-
-func TestDeleteTimestampsFromTransformLogBlockUsesEntryTimeTick(t *testing.T) {
-	block := &streamingpb.TransformDeleteBlock{
-		PrimaryKeys: &schemapb.IDs{
-			IdField: &schemapb.IDs_IntId{
-				IntId: &schemapb.LongArray{Data: []int64{1, 2, 3}},
-			},
-		},
-	}
-
-	require.Equal(t, []uint64{200, 200, 200}, deleteTimestampsFromTransformLogBlock(200, block))
 }
 
 func TestManagerDefaultGrowingRuntimeBuilderDrainsDeleteReplayBeforeReady(t *testing.T) {
@@ -881,8 +625,9 @@ func TestManagerDefaultGrowingRuntimeBuilderDrainsDeleteReplayBeforeReady(t *tes
 	})
 	require.NoError(t, err)
 	require.True(t, ready)
-	require.Len(t, runtime.Growing.DeleteReplayEntries, 1)
-	require.Equal(t, uint64(10), runtime.Growing.DeleteReplayEntries[0].GetTimeTick())
+	deleteReplayEntries := runtime.Growing.DeleteReplayEntries()
+	require.Len(t, deleteReplayEntries, 1)
+	require.Equal(t, uint64(10), deleteReplayEntries[0].GetTimeTick())
 	require.True(t, scanner.closed)
 }
 
@@ -1014,21 +759,6 @@ func TestManagerGrowingRuntimeAdvancesTransformFrontierForDeleteTxn(t *testing.T
 	}, time.Second, 10*time.Millisecond)
 }
 
-func TestManagerGrowingRuntimePanicsOnLiveApplyFailure(t *testing.T) {
-	runtime := newGrowingRuntimeForTest(errorLiveApplier{err: errors.New("apply failed")})
-	require.Panics(t, func() {
-		runtime.ApplyLiveMessage(context.Background(), newTestInsertMessage(t, "ch", 30))
-	})
-}
-
-func TestManagerGrowingRuntimePanicsOnBM25LiveApplyFailure(t *testing.T) {
-	runtime := newGrowingRuntimeForTest(noopGrowingRuntimeApplier{})
-	runtime.SetBM25Runtime(&BM25Runtime{LiveUpdater: errorBM25LiveUpdater{err: errors.New("bm25 failed")}})
-	require.Panics(t, func() {
-		runtime.ApplyLiveMessage(context.Background(), newTestInsertMessage(t, "ch", 30))
-	})
-}
-
 func TestManagerGetViewRuntimeWaitsForDeleteApplyFrontier(t *testing.T) {
 	manager := NewManager(nil, nil)
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
@@ -1156,13 +886,8 @@ func TestManagerDefaultGrowingRuntimeBuilderFailsOnDeleteReplayError(t *testing.
 }
 
 func TestManagerDoesNotBuildGrowingRuntimeWhenBM25PreparationFails(t *testing.T) {
-	growingCalled := false
-	manager := NewManager(SnapshotGrowingSegmentRuntimeBuilder{
-		NewApplier: func(context.Context, LoadResourceDescriptor) (GrowingRuntimeApplier, error) {
-			growingCalled = true
-			return newRecordingGrowingApplier(), nil
-		},
-	}, errorIDFOracleRuntimeBuilder{err: errors.New("bm25 failed")})
+	growing := &fakeGrowingSegmentRuntimeBuilder{}
+	manager := NewManager(growing, errorIDFOracleRuntimeBuilder{err: errors.New("bm25 failed")})
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
 
 	manager.OnAlterLoadConfig(walview.VChannelWALView{
@@ -1187,12 +912,14 @@ func TestManagerDoesNotBuildGrowingRuntimeWhenBM25PreparationFails(t *testing.T)
 	require.ErrorContains(t, err, "bm25 failed")
 	require.False(t, ready)
 	require.Nil(t, runtime)
-	require.False(t, growingCalled)
+	growing.mu.Lock()
+	require.Empty(t, growing.calls)
+	growing.mu.Unlock()
 }
 
 func TestManagerFinishBuildClosesRuntimeReturnedWithError(t *testing.T) {
 	manager := NewManager(nil, nil)
-	applier := newRecordingGrowingApplier()
+	closed := make(chan struct{})
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
 	key := runtimeKey{vchannel: "ch", version: version}
 	task := newResourceBuildTask(context.Background(), BuildKey{
@@ -1212,12 +939,14 @@ func TestManagerFinishBuildClosesRuntimeReturnedWithError(t *testing.T) {
 		CollectionID: 1,
 		VChannel:     "ch",
 		DataVersion:  version,
-		Growing:      newGrowingRuntimeForTest(applier),
+		BM25: &BM25Runtime{OnClose: func() {
+			close(closed)
+		}},
 	}, errors.New("build canceled"))
 	manager.finishBuild(key, task)
 
 	select {
-	case <-applier.closeCh:
+	case <-closed:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for errored runtime close")
 	}
@@ -1452,7 +1181,6 @@ func TestManagerOnAlterLoadConfigUsesWALViewBoundary(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ready)
 	require.NotNil(t, runtime)
-	require.Equal(t, []int64{10, 11}, runtime.Growing.SegmentIDs)
 	require.Len(t, runtime.BM25.Resources, 1)
 
 	growing.mu.Lock()

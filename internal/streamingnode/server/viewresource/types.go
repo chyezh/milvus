@@ -15,8 +15,6 @@ import (
 type LoadResourceDescriptor = growingruntime.Descriptor
 type GrowingRuntime = growingruntime.Runtime
 type GrowingSegmentRuntimeBuilder = growingruntime.Builder
-type GrowingRuntimeApplier = growingruntime.Applier
-type GrowingRuntimeApplierFactory = growingruntime.ApplierFactory
 type NoopGrowingSegmentRuntimeBuilder = growingruntime.NoopBuilder
 type SnapshotGrowingSegmentRuntimeBuilder = growingruntime.SnapshotBuilder
 

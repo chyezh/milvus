@@ -212,7 +212,7 @@ func (c *reportCollector) count() int {
 func TestSNHandler_ApplyViews_NewPreparing(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
 
 	rc := &reportCollector{}
 	view := newPreparingSNView(1)
@@ -234,7 +234,7 @@ func TestSNHandler_ApplyViews_NewPreparing(t *testing.T) {
 func TestSNHandler_ApplyViews_UnknownViewReportsUnrecoverable(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
 
 	// Non-Preparing, non-Dropped state for unknown view → Unrecoverable.
 	rc := &reportCollector{}
@@ -250,7 +250,7 @@ func TestSNHandler_ApplyViews_UnknownViewReportsUnrecoverable(t *testing.T) {
 func TestSNHandler_ApplyViews_DroppedOnUnknownViewReportsBack(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
 
 	// Coord pushes Dropped for a view SN doesn't know (e.g., after restart).
 	// SN must report Dropped back so Coord can finish cleanup.
@@ -271,7 +271,7 @@ func TestSNHandler_ApplyViews_DroppedOnUnknownViewReportsBack(t *testing.T) {
 func TestSNHandler_ResourceManagerCallback_TransitionToReady(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
 
 	rc := &reportCollector{}
 	view := newPreparingSNView(1)
@@ -298,7 +298,7 @@ func TestSNHandler_ResourceManagerCallback_TransitionToReady(t *testing.T) {
 func TestSNHandler_CoordUp_PersistsRecoveryInfo(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
 
 	rc := &reportCollector{}
 	view := newPreparingSNView(1)
@@ -327,7 +327,7 @@ func TestSNHandler_CoordUp_PersistsRecoveryInfo(t *testing.T) {
 func TestSNHandler_CoordDown_DeletesRecoveryInfo(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
 
 	rc := &reportCollector{}
 	view := newPreparingSNView(1)
@@ -360,7 +360,7 @@ func TestSNHandler_CoordDown_DeletesRecoveryInfo(t *testing.T) {
 func TestSNHandler_CoordDropped_DroppingThenDropped(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
 
 	rc := &reportCollector{}
 	view := newPreparingSNView(1)
@@ -394,7 +394,7 @@ func TestSNHandler_CoordDropped_DroppingThenDropped(t *testing.T) {
 func TestSNHandler_CoordDropped_WhileDropping_Ignored(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
 
 	rc := &reportCollector{}
 	view := newPreparingSNView(1)
@@ -427,7 +427,7 @@ func TestSNHandler_CoordDropped_WhileDropping_Ignored(t *testing.T) {
 func TestSNHandler_ResourceManagerCallback_Unrecoverable(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
 
 	rc := &reportCollector{}
 	view := newPreparingSNView(1)
@@ -459,7 +459,7 @@ func TestSNHandler_ResourceManagerCallback_UnrecoverableFromUpRecovering(t *test
 	assert.Equal(t, 1, cat.savedCount())
 
 	// Recover persisted Up view state.
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, []*viewpb.QueryViewOfShard{persistedView})
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, []*viewpb.QueryViewOfShard{persistedView})
 
 	// Set up report callback via ApplyViews re-push.
 	rc := &reportCollector{}
@@ -497,7 +497,7 @@ func TestSNHandler_Recover_CreatesUpRecoveringViews(t *testing.T) {
 		StreamingNode: &viewpb.QueryViewOfStreamingNode{},
 	}
 
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, []*viewpb.QueryViewOfShard{persistedView})
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, []*viewpb.QueryViewOfShard{persistedView})
 
 	// ResourceManager should have Acquire called for recovered Up views.
 	key := newPreparingSNView(1).QueryViewKey()
@@ -530,7 +530,7 @@ func TestSNHandler_Recover_AcquiresUpViewsInVersionOrder(t *testing.T) {
 	meta1 := buildHandlerTestMeta(1)
 	meta1.State = viewpb.QueryViewState_QueryViewStateUp
 
-	RecoverSNQueryViewHandler(testPChannel, cat, mgr, []*viewpb.QueryViewOfShard{
+	recoverSNQueryViewHandler(testPChannel, cat, mgr, []*viewpb.QueryViewOfShard{
 		{Meta: meta2, StreamingNode: &viewpb.QueryViewOfStreamingNode{}},
 		{Meta: meta1, StreamingNode: &viewpb.QueryViewOfStreamingNode{}},
 	})
@@ -547,7 +547,7 @@ func TestSNHandler_Recover_AcquiresUpViewsInVersionOrder(t *testing.T) {
 func TestSNHandler_CallbackReplacement(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
 
 	rc1 := &reportCollector{}
 	view := newPreparingSNView(1)
@@ -581,7 +581,7 @@ func TestSNHandler_CallbackReplacement(t *testing.T) {
 func TestSNHandler_FullLifecycle(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
 
 	rc := &reportCollector{}
 	view := newPreparingSNView(1)
@@ -640,7 +640,7 @@ func TestSNHandler_FullLifecycle(t *testing.T) {
 func TestSNHandler_MultipleVersions(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
 
 	rc1 := &reportCollector{}
 	rc2 := &reportCollector{}
@@ -673,7 +673,7 @@ func TestSNHandler_MultipleVersions(t *testing.T) {
 func TestSNHandler_ConcurrentApplyAndCallback(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
 
 	const numViews = 20
 	var wg sync.WaitGroup
@@ -724,7 +724,7 @@ func TestSNHandler_Recover_ThenCoordDown(t *testing.T) {
 	}
 	cat.SaveQueryViews(context.Background(), testPChannel, []*viewpb.QueryViewOfShard{persistedView})
 
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, []*viewpb.QueryViewOfShard{persistedView})
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, []*viewpb.QueryViewOfShard{persistedView})
 
 	// Coord pushes Down to recovered view.
 	rc := &reportCollector{}
@@ -754,7 +754,7 @@ func TestSNHandler_RecoverCallback_AfterDropped_Ignored(t *testing.T) {
 		StreamingNode: &viewpb.QueryViewOfStreamingNode{},
 	}
 
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, []*viewpb.QueryViewOfShard{persistedView})
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, []*viewpb.QueryViewOfShard{persistedView})
 
 	key := newPreparingSNView(1).QueryViewKey()
 	acquireReq, ok := mgr.getAcquired(key)
@@ -781,7 +781,7 @@ func TestSNHandler_RecoverCallback_AfterDropped_Ignored(t *testing.T) {
 func TestSNHandler_DroppedFromUp_DeletesRecoveryInfo(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
 
 	rc := &reportCollector{}
 	view := newPreparingSNView(1)
@@ -826,7 +826,7 @@ func TestSNHandler_Recover_AcquireCallbackFlow(t *testing.T) {
 		StreamingNode: &viewpb.QueryViewOfStreamingNode{},
 	}
 
-	h := RecoverSNQueryViewHandler(testPChannel, cat, mgr, []*viewpb.QueryViewOfShard{persistedView})
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, []*viewpb.QueryViewOfShard{persistedView})
 
 	// Recovered views acquire resources through the same ordered Acquire path.
 	assert.Equal(t, 1, mgr.acquiredCount())

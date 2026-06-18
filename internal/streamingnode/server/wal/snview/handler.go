@@ -1,7 +1,6 @@
 package snview
 
 import (
-	"slices"
 	"sync"
 
 	"github.com/milvus-io/milvus/internal/metastore"
@@ -65,9 +64,9 @@ type SNQueryViewHandler struct {
 	resMgr   StreamingNodeResourceManager
 }
 
-// RecoverSNQueryViewHandler reconstructs the handler from persisted views
+// recoverSNQueryViewHandler reconstructs the handler from persisted views
 // during SN startup. Pass nil or empty views for a fresh handler.
-func RecoverSNQueryViewHandler(
+func recoverSNQueryViewHandler(
 	pchannel string,
 	catalog metastore.StreamingNodeCataLog,
 	resMgr StreamingNodeResourceManager,
@@ -83,7 +82,7 @@ func RecoverSNQueryViewHandler(
 	// Build SMs grouped by shard.
 	type shardRecovery struct {
 		shardID qviews.ShardID
-		views   map[qviews.QueryViewVersion]*SNQueryViewStateMachine
+		views   map[qviews.QueryViewVersion]*snQueryViewStateMachine
 	}
 	grouped := make(map[qviews.ShardID]*shardRecovery)
 
@@ -95,10 +94,10 @@ func RecoverSNQueryViewHandler(
 
 		sr, ok := grouped[shardID]
 		if !ok {
-			sr = &shardRecovery{shardID: shardID, views: make(map[qviews.QueryViewVersion]*SNQueryViewStateMachine)}
+			sr = &shardRecovery{shardID: shardID, views: make(map[qviews.QueryViewVersion]*snQueryViewStateMachine)}
 			grouped[shardID] = sr
 		}
-		sr.views[version] = RecoverSNQueryViewStateMachine(meta, snView)
+		sr.views[version] = recoverSNQueryViewStateMachine(meta, snView)
 	}
 
 	// Create shard views and start recovery via ResourceManager.
@@ -117,7 +116,7 @@ func RecoverPChannelSNQueryViewHandler(
 	resMgr StreamingNodeResourceManager,
 	views []*viewpb.QueryViewOfShard,
 ) *SNQueryViewHandler {
-	return RecoverSNQueryViewHandler(pchannel, catalog, resMgr, views)
+	return recoverSNQueryViewHandler(pchannel, catalog, resMgr, views)
 }
 
 func OldestUpDataVersions(views []*viewpb.QueryViewOfShard) map[string]qviews.DataVersion {
@@ -167,20 +166,6 @@ func RecoveredLoadConfigs(views []*viewpb.QueryViewOfShard) map[string]*streamin
 		}
 	}
 	return result
-}
-
-func SortQueryViewsByVersion(views []*viewpb.QueryViewOfShard) {
-	slices.SortFunc(views, func(left, right *viewpb.QueryViewOfShard) int {
-		lv := qviews.FromProtoQueryViewVersion(left.GetMeta().GetVersion())
-		rv := qviews.FromProtoQueryViewVersion(right.GetMeta().GetVersion())
-		if lv.EQ(rv) {
-			return 0
-		}
-		if rv.GT(lv) {
-			return -1
-		}
-		return 1
-	})
 }
 
 // ApplyViews applies a batch of coord-pushed views.

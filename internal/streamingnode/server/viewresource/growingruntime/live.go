@@ -46,9 +46,9 @@ func (r *Runtime) startLiveApply(ctx context.Context, done <-chan struct{}, onAp
 	}()
 }
 
-func (r *Runtime) ApplyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent) bool {
+func (r *Runtime) applyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent) bool {
 	if event.Message != nil {
-		return r.ApplyLiveMessage(ctx, event.Message)
+		return r.applyLiveMessage(ctx, event.Message)
 	}
 	if event.SegmentSealed != nil {
 		r.markSegmentSealed(event.SegmentSealed.SegmentID, event.SegmentSealed.SealedAtDataVersion)
@@ -60,14 +60,12 @@ func (r *Runtime) ApplyLiveEvent(ctx context.Context, event walview.VChannelReso
 	return false
 }
 
-func (r *Runtime) ApplyLiveMessage(ctx context.Context, msg message.ImmutableMessage) bool {
+func (r *Runtime) applyLiveMessage(ctx context.Context, msg message.ImmutableMessage) bool {
 	if r == nil || msg == nil {
 		return false
 	}
-	if r.applier != nil {
-		if err := r.applier.ApplyLiveMessage(ctx, msg); err != nil {
-			panic(errors.Wrap(err, "failed to apply live message to growing runtime"))
-		}
+	if err := r.dispatchMessage(ctx, msg); err != nil {
+		panic(errors.Wrap(err, "failed to apply live message to growing runtime"))
 	}
 	if bm25 := r.bm25Runtime(); bm25 != nil {
 		if err := bm25.ApplyLiveMessage(ctx, msg); err != nil {
@@ -79,21 +77,7 @@ func (r *Runtime) ApplyLiveMessage(ctx context.Context, msg message.ImmutableMes
 	if messageAdvancesTransformFrontier(msg) {
 		advanced = advanceTimeTick(&r.appliedTransformTimeTick, timeTick) || advanced
 	}
-	switch msg.MessageType() {
-	case message.MessageTypeCreateSegment:
-		r.registerSegment(message.MustAsImmutableCreateSegmentMessageV2(msg).Header().GetSegmentId())
-	case message.MessageTypeFlush:
-		r.markSegmentFlushed(message.MustAsImmutableFlushMessageV2(msg).Header().GetSegmentId())
-	}
 	return advanced
-}
-
-func (r *Runtime) applyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent) bool {
-	return r.ApplyLiveEvent(ctx, event)
-}
-
-func (r *Runtime) applyLiveMessage(ctx context.Context, msg message.ImmutableMessage) bool {
-	return r.ApplyLiveMessage(ctx, msg)
 }
 
 func messageAdvancesTransformFrontier(msg message.ImmutableMessage) bool {

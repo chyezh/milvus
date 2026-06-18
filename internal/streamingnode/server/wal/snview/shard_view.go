@@ -34,7 +34,7 @@ type snShardView struct {
 // snViewEntry pairs an ApplyView (carrying the OnReport callback) with its state machine.
 type snViewEntry struct {
 	handler.ApplyView
-	sm *SNQueryViewStateMachine
+	sm *snQueryViewStateMachine
 }
 
 // recoverSnShardView constructs an snShardView from pre-built recovered state machines
@@ -43,7 +43,7 @@ type snViewEntry struct {
 func recoverSnShardView(
 	pchannel string,
 	shardID qviews.ShardID,
-	views map[qviews.QueryViewVersion]*SNQueryViewStateMachine,
+	views map[qviews.QueryViewVersion]*snQueryViewStateMachine,
 	catalog metastore.StreamingNodeCataLog,
 	resMgr StreamingNodeResourceManager,
 ) *snShardView {
@@ -152,7 +152,7 @@ func (s *snShardView) applyOneLocked(av *handler.ApplyView) {
 		case qviews.QueryViewStatePreparing:
 			// New Preparing view: create SM and acquire resources.
 			snView := av.View.(*qviews.QueryViewAtStreamingNode)
-			sm := NewSNQueryViewStateMachine(
+			sm := newSNQueryViewStateMachine(
 				snView.IntoProto().Meta,
 				snView.ViewOfStreamingNode(),
 			)
