@@ -42,6 +42,9 @@ func (r *Runtime) markReady() {
 		return
 	}
 	r.state = stateReady
+	if len(r.pendingEvents) == 0 {
+		r.closePendingDrainedLocked()
+	}
 	r.startDrainLocked()
 }
 
@@ -67,6 +70,7 @@ func (r *Runtime) drainPending() {
 		}
 		if len(r.pendingEvents) == 0 {
 			r.drainRunning = false
+			r.closePendingDrainedLocked()
 			r.mu.Unlock()
 			return
 		}
@@ -84,12 +88,20 @@ func (r *Runtime) drainPending() {
 
 func (r *Runtime) applyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent) bool {
 	if event.Message != nil {
-		return r.applyLiveMessage(ctx, event.Message)
+		advanced := r.applyLiveMessage(ctx, event.Message)
+		if bm25 := r.bm25Runtime(); bm25 != nil {
+			if err := bm25.ApplyLiveEvent(ctx, event); err != nil {
+				panic(errors.Wrap(err, "failed to apply live event to BM25 runtime"))
+			}
+		}
+		return advanced
 	}
 	if event.SegmentSealed != nil {
 		r.markSegmentSealed(event.SegmentSealed.SegmentID, event.SegmentSealed.SealedAtDataVersion)
 		if bm25 := r.bm25Runtime(); bm25 != nil {
-			bm25.ApplySegmentSealed(event.SegmentSealed.SegmentID, event.SegmentSealed.SealedAtDataVersion)
+			if err := bm25.ApplyLiveEvent(ctx, event); err != nil {
+				panic(errors.Wrap(err, "failed to apply live event to BM25 runtime"))
+			}
 		}
 		return true
 	}
@@ -102,11 +114,6 @@ func (r *Runtime) applyLiveMessage(ctx context.Context, msg message.ImmutableMes
 	}
 	if err := r.dispatchMessage(ctx, msg); err != nil {
 		panic(errors.Wrap(err, "failed to apply live message to growing runtime"))
-	}
-	if bm25 := r.bm25Runtime(); bm25 != nil {
-		if err := bm25.ApplyLiveMessage(ctx, msg); err != nil {
-			panic(errors.Wrap(err, "failed to apply live message to BM25 runtime"))
-		}
 	}
 	timeTick := msg.TimeTick()
 	advanced := advanceTimeTick(&r.appliedGrowingTimeTick, timeTick)

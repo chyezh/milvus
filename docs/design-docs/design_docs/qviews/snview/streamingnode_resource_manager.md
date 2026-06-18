@@ -26,7 +26,7 @@ The same PChannel-local component implements both WAL-side and QueryView-side
 interfaces:
 
 - `walview.LoadConfigListener`
-- `snview.QueryViewResourceManager`
+- `snview.StreamingNodeResourceManager`
 
 The purpose of this component is to:
 
@@ -165,7 +165,8 @@ specific resource DataVersion:
 - csegment-backed growing data;
 - retained flushed-as-growing data required by older QueryViews;
 - historical delete replay result;
-- live WAL observer and apply frontier;
+- `GrowingSegmentRuntime` as the live WAL observer;
+- pending live-event buffer and apply frontiers;
 - other query resources tied to the same DataVersion model.
 
 `idfOracleRuntime` is a vchannel-level singleton resource. It is initialized by
@@ -202,7 +203,7 @@ defined in [StreamingNode IDF Oracle Runtime Design](idf_oracle_runtime.md).
 ```go
 type StreamingNodeResourceManager interface {
     walview.LoadConfigListener
-    snview.QueryViewResourceManager
+    snview.StreamingNodeResourceManager
     Close()
 }
 ```
@@ -221,8 +222,9 @@ type LoadConfigListener interface {
 ```
 
 `OnAlterLoadConfig` receives a complete WAL input view and starts asynchronous
-resource preparation. It returns the live observer that `RecoveryStorage` uses
-to deliver later resource events.
+resource preparation. It creates a `GrowingSegmentRuntime` in `Preparing` state
+and returns that runtime as the live observer that `RecoveryStorage` uses to
+deliver later resource events.
 
 `OnDropLoadConfig` removes the initialization reference for the vchannel. It is
 not a QueryView cleanup command.
@@ -369,9 +371,9 @@ QueryView removal and for local unmount during WAL handoff. If no initialization
 reference and no QueryView references remain, all resources owned by that
 vchannel can be released.
 
-Resource release may close live observers, cancel in-flight preparation, release
-csegments, and close the vchannel-level IDF oracle runtime. IDF sealed BM25
-cache leases are released by `IDFOracleRuntime` during its own close path.
+Resource release may close the observer runtime, cancel in-flight preparation,
+release csegments, and close the vchannel-level IDF oracle runtime. IDF sealed
+BM25 cache leases are released by `IDFOracleRuntime` during its own close path.
 
 Segment metadata GC remains owned by `SegmentModule`. The resource manager can
 release its query resources, but it does not delete SegmentModule metadata

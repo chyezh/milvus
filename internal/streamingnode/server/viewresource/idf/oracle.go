@@ -379,7 +379,17 @@ func (r *oracleRuntime) BuildIDF(fieldID int64, tfs *schemapb.SparseFloatArray) 
 	return idfs, stats.GetAvgdl(), nil
 }
 
-func (r *oracleRuntime) ApplyLiveMessage(_ context.Context, msg message.ImmutableMessage) error {
+func (r *oracleRuntime) ApplyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent) error {
+	if event.Message != nil {
+		return r.applyLiveMessage(ctx, event.Message)
+	}
+	if event.SegmentSealed != nil {
+		r.applySegmentSealed(event.SegmentSealed.SegmentID, event.SegmentSealed.SealedAtDataVersion)
+	}
+	return nil
+}
+
+func (r *oracleRuntime) applyLiveMessage(_ context.Context, msg message.ImmutableMessage) error {
 	if msg == nil {
 		return nil
 	}
@@ -430,7 +440,7 @@ func (r *oracleRuntime) ApplyLiveMessage(_ context.Context, msg message.Immutabl
 	return nil
 }
 
-func (r *oracleRuntime) ApplySegmentSealed(segmentID int64, sealedAt qviews.DataVersion) {
+func (r *oracleRuntime) applySegmentSealed(segmentID int64, sealedAt qviews.DataVersion) {
 	r.mu.Lock()
 	r.growingStore.markSealed(segmentID, sealedAt)
 	currentVersion := r.currentVersion

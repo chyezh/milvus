@@ -6,10 +6,10 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource/growingruntime"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
-	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 )
 
 type LoadResourceDescriptor = growingruntime.Descriptor
@@ -68,31 +68,18 @@ type BM25Oracle interface {
 }
 
 type BM25LiveUpdater interface {
-	ApplyLiveMessage(context.Context, message.ImmutableMessage) error
-}
-
-type BM25SegmentSealedUpdater interface {
-	ApplySegmentSealed(segmentID int64, sealedAt qviews.DataVersion)
+	ApplyLiveEvent(context.Context, walview.VChannelResourceEvent) error
 }
 
 type BM25Advancer interface {
 	MaybeAdvance(qviews.DataVersion)
 }
 
-func (r *BM25Runtime) ApplyLiveMessage(ctx context.Context, msg message.ImmutableMessage) error {
+func (r *BM25Runtime) ApplyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent) error {
 	if r == nil || r.LiveUpdater == nil {
 		return nil
 	}
-	return r.LiveUpdater.ApplyLiveMessage(ctx, msg)
-}
-
-func (r *BM25Runtime) ApplySegmentSealed(segmentID int64, sealedAt qviews.DataVersion) {
-	if r == nil || r.LiveUpdater == nil {
-		return
-	}
-	if updater, ok := r.LiveUpdater.(BM25SegmentSealedUpdater); ok {
-		updater.ApplySegmentSealed(segmentID, sealedAt)
-	}
+	return r.LiveUpdater.ApplyLiveEvent(ctx, event)
 }
 
 func (r *BM25Runtime) CatchupDone() <-chan struct{} {

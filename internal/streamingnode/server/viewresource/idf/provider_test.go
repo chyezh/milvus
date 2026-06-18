@@ -340,15 +340,17 @@ func TestProviderRuntimeRejectsLiveGrowingInsertAfterFlush(t *testing.T) {
 	require.NoError(t, err)
 
 	segmentID := int64(99)
-	require.NoError(t, runtime.ApplyLiveMessage(context.Background(), newCreateSegmentMessage(t, "ch", segmentID, 40)))
-	require.NoError(t, runtime.ApplyLiveMessage(context.Background(), newBM25FlushMessage(t, "ch", segmentID, 41)))
-	err = runtime.ApplyLiveMessage(context.Background(), newBM25InsertMessage(
-		t,
-		"ch",
-		segmentID,
-		42,
-		typeutil.CreateAndSortSparseFloatRow(map[uint32]float32{8: 1}),
-	))
+	require.NoError(t, runtime.ApplyLiveEvent(context.Background(), walview.VChannelResourceEvent{Message: newCreateSegmentMessage(t, "ch", segmentID, 40)}))
+	require.NoError(t, runtime.ApplyLiveEvent(context.Background(), walview.VChannelResourceEvent{Message: newBM25FlushMessage(t, "ch", segmentID, 41)}))
+	err = runtime.ApplyLiveEvent(context.Background(), walview.VChannelResourceEvent{
+		Message: newBM25InsertMessage(
+			t,
+			"ch",
+			segmentID,
+			42,
+			typeutil.CreateAndSortSparseFloatRow(map[uint32]float32{8: 1}),
+		),
+	})
 	require.ErrorContains(t, err, "already flushed")
 }
 
@@ -414,11 +416,14 @@ func TestProviderRuntimeCatchupWaitsForManagerHandoff(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, ready)
-	select {
-	case <-viewRuntime.BM25.CatchupDone():
-	default:
-		t.Fatal("resource manager did not close catchup after live handoff")
-	}
+	require.Eventually(t, func() bool {
+		select {
+		case <-viewRuntime.BM25.CatchupDone():
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
 }
 
 func TestProviderRuntimeAdvancementRemovesLiveGrowingStats(t *testing.T) {
@@ -467,7 +472,12 @@ func TestProviderRuntimeAdvancementRemovesLiveGrowingStats(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 
 	target := qviews.DataVersion{StreamingVersion: 11, CompactVersion: 1}
-	runtime.BM25.ApplySegmentSealed(20, target)
+	require.NoError(t, runtime.BM25.ApplyLiveEvent(context.Background(), walview.VChannelResourceEvent{
+		SegmentSealed: &walview.SegmentSealedEvent{
+			SegmentID:           20,
+			SealedAtDataVersion: target,
+		},
+	}))
 	runtime.BM25.MaybeAdvance(target)
 	require.Eventually(t, func() bool {
 		after, _, err := runtime.BM25.Oracle.BuildIDF(100, &schemapb.SparseFloatArray{Contents: [][]byte{tf}, Dim: 9})

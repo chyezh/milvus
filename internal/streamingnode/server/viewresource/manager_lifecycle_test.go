@@ -629,6 +629,59 @@ func TestManagerDefaultGrowingRuntimeBuilderDrainsDeleteReplayBeforeReady(t *tes
 	require.True(t, scanner.closed)
 }
 
+func TestManagerBM25CatchupWaitsForRuntimePendingDrain(t *testing.T) {
+	bm25 := &blockedCatchupBM25Builder{}
+	manager := NewManager(nil, bm25)
+	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
+	scanner := newFakeTransformLogScanner()
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
+		CollectionID: 1,
+		VChannel:     "ch",
+		SegmentSnapshot: walview.VisibleSegmentSnapshot{
+			DataVersion: version,
+		},
+		DeleteReplay: scanner,
+	})
+	require.NotNil(t, observer)
+	require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{
+		Message: newTestInsertMessage(t, "ch", 30),
+	}))
+	require.Eventually(t, func() bool {
+		return bm25.runtime != nil
+	}, time.Second, 10*time.Millisecond)
+	select {
+	case <-bm25.runtime.CatchupDone():
+		t.Fatal("BM25 catchup closed before runtime pending events were drained")
+	default:
+	}
+
+	scanner.ch <- wal.TransformLogEvent{CaughtUp: &wal.TransformLogCaughtUp{StartAfterTimeTick: 1}}
+	close(scanner.done)
+
+	var runtime *ViewRuntime
+	require.Eventually(t, func() bool {
+		var ready bool
+		var err error
+		runtime, ready, err = manager.GetViewRuntime(ViewResourceDescriptor{
+			CollectionID: 1,
+			VChannel:     "ch",
+			Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
+		})
+		return err == nil && ready && runtime != nil
+	}, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return runtime.Growing.AppliedGrowingTimeTick() == 30
+	}, time.Second, 10*time.Millisecond)
+	require.Eventually(t, func() bool {
+		select {
+		case <-bm25.runtime.CatchupDone():
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+}
+
 func TestManagerDefaultGrowingRuntimeBuilderInitializesAppliedFrontiers(t *testing.T) {
 	manager := NewManager(nil, nil)
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}

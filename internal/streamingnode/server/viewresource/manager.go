@@ -188,7 +188,11 @@ func (r *DefaultManager) prepareRuntime(ctx context.Context, desc LoadResourceDe
 	}
 	if bm25 != nil {
 		bm25.DataVersion = desc.DataVersion()
-		bm25.MarkCatchupDone()
+		go func() {
+			<-runtime.Growing.PendingDrained()
+			bm25.MarkCatchupDone()
+			r.notifyReady()
+		}()
 	}
 	return runtime, nil
 }

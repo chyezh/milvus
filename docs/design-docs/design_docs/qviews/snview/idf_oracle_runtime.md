@@ -43,7 +43,7 @@ exists.
 |---|---|---|
 | `StreamingNodeResourceManager` | PChannel-local component that creates the vchannel resource build task from `OnAlterLoadConfig` or recovery. Owns QueryView/init references and closes the whole IDF runtime when the vchannel resource is released or when the PChannel runtime finalizes after QueryView handoff. | It does not compute BM25 stats diffs and does not evict IDF internal segment stats. |
 | `VChannelWALView` | Provides the initial schema, settings, segment snapshot, historical insert input, and no-gap live resource event stream. | Its capture and no-gap contract are defined in [StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md). |
-| `IDFOracleRuntimeBuilder` | Builds the initial vchannel-level `IDFOracleRuntime` from one `VChannelWALView`. | It does not submit build tasks, manage QueryView references, or advance the oracle for later QueryViews. |
+| `IDFOracleRuntimeBuilder` | Builds the initial BM25 runtime from one `LoadResourceDescriptor` that wraps `VChannelWALView`. | It does not submit build tasks, manage QueryView references, or advance the oracle for later QueryViews. |
 | `IDFOracleRuntime` | Owns the vchannel singleton oracle, growing BM25 stats store, sealed contribution leases, current DataVersion, initial catchup state, and advance worker. | It does not expose external truncation; current-oracle cleanup is internal. |
 | `SealedBM25ResourceProvider` | Calls QueryCoord to fetch the complete sealed BM25 resource set for a target DataVersion. | It does not cache local files or merge oracle stats. |
 | `SealedBM25SegmentCache` | Downloads, parses, reuses, and leases sealed BM25 stats. | It does not decide DataVersion advancement or contribution membership. |
@@ -65,7 +65,7 @@ StreamingNodeResourceManager
         v
 IDFOracleRuntimeBuilder
         |
-        | BuildInitial(VChannelWALView)
+        | BuildInitial(LoadResourceDescriptor)
         v
 IDFOracleRuntime
         |                         |
@@ -162,15 +162,16 @@ BM25 stats can be removed.
 type IDFOracleRuntimeBuilder interface {
     BuildInitial(
         ctx context.Context,
-        view walview.VChannelWALView,
-    ) (IDFOracleRuntime, error)
+        desc viewresource.LoadResourceDescriptor,
+    ) (*viewresource.BM25Runtime, error)
 }
 ```
 
-`BuildInitial` creates the vchannel singleton runtime for the WALView base
-DataVersion. It fetches the initial sealed resources, initializes the growing
-stats store from the WALView segment snapshot, and starts the ordered live event
-apply path.
+`BuildInitial` creates the initial BM25 runtime for the WALView base
+DataVersion. It fetches the initial sealed resources and initializes the growing
+stats store from the WALView segment snapshot. Ordered live event application is
+driven by `GrowingSegmentRuntime`, which forwards each drained
+`VChannelResourceEvent` into the BM25 runtime.
 
 The builder is not a scheduler. Runtime build concurrency is still controlled by
 the resource build scheduler described in
@@ -188,7 +189,7 @@ type IDFOracleRuntime interface {
     CatchupDone() <-chan struct{}
     CatchupError() error
 
-    ApplyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent)
+    ApplyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent) error
 
     MaybeAdvance(target qviews.DataVersion)
 
@@ -197,8 +198,9 @@ type IDFOracleRuntime interface {
 ```
 
 `CatchupDone` is the gate for the first QueryView `Up` report. It closes only
-after the initial oracle has consumed the WALView historical inputs and caught up
-to the initial live-resource handoff point.
+after the initial oracle has consumed the WALView historical inputs and the
+`GrowingSegmentRuntime` pending buffer captured around the initial live-resource
+handoff has been drained.
 
 `MaybeAdvance` is called during later QueryView preparation. If `target` is not
 newer than `CurrentDataVersion`, it is ignored. Otherwise it enqueues an
@@ -337,7 +339,7 @@ RecoveryStorage observes AlterLoadConfig / restores load intent
   -> builds VChannelWALView(baseDataVersion)
   -> StreamingNodeResourceManager.OnAlterLoadConfig(view)
   -> resource BuildTask starts
-  -> IDFOracleRuntimeBuilder.BuildInitial(view)
+  -> IDFOracleRuntimeBuilder.BuildInitial(desc)
 ```
 
 `BuildInitial` performs:
@@ -353,8 +355,8 @@ RecoveryStorage observes AlterLoadConfig / restores load intent
 6. generate BM25 stats from each snapshot segment's persisted BM25 binlogs and
    snapshot insert messages;
 7. merge sealed and growing stats into the initial current oracle;
-8. attach ordered live event application;
-9. close `CatchupDone` after the initial no-gap live handoff is caught up.
+8. expose ordered live event application through `ApplyLiveEvent`;
+9. close `CatchupDone` after `GrowingSegmentRuntime.PendingDrained()` closes.
 
 Snapshot insert messages may be Insert or Txn(Insert) messages. Consumers must
 use the shared WALView insert parser and select only rows assigned to the target
@@ -551,7 +553,7 @@ PChannelRuntime restores WAL state and QueryView meta
   -> RecoveryStorage selects recovery base DataVersion
   -> builds VChannelWALView(recoveryBaseDataVersion)
   -> StreamingNodeResourceManager.OnAlterLoadConfig(view)
-  -> IDFOracleRuntimeBuilder.BuildInitial(view)
+  -> IDFOracleRuntimeBuilder.BuildInitial(desc)
 ```
 
 If persisted Up QueryViews exist, the recovery base DataVersion is the oldest Up

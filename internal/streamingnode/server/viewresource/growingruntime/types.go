@@ -12,7 +12,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
-	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 )
 
 // Descriptor describes the latest vchannel runtime that must be prepared after
@@ -63,8 +62,7 @@ type Builder interface {
 }
 
 type BM25Runtime interface {
-	ApplyLiveMessage(context.Context, message.ImmutableMessage) error
-	ApplySegmentSealed(segmentID int64, sealedAt qviews.DataVersion)
+	ApplyLiveEvent(context.Context, walview.VChannelResourceEvent) error
 }
 
 type state int
@@ -88,6 +86,8 @@ type Runtime struct {
 	pendingEvents            []walview.VChannelResourceEvent
 	drainRunning             bool
 	drainWG                  sync.WaitGroup
+	pendingDrained           chan struct{}
+	pendingDrainedOnce       sync.Once
 	truncateDataVersion      qviews.DataVersion
 	hasTruncateDataVersion   bool
 	closeOnce                sync.Once
@@ -98,9 +98,10 @@ type Runtime struct {
 
 func newRuntime(desc Descriptor) *Runtime {
 	return &Runtime{
-		state:    statePreparing,
-		desc:     desc,
-		segments: make(map[int64]*growingSegment),
+		state:          statePreparing,
+		desc:           desc,
+		segments:       make(map[int64]*growingSegment),
+		pendingDrained: make(chan struct{}),
 	}
 }
 
@@ -199,6 +200,7 @@ func (r *Runtime) Close() {
 		r.mu.Lock()
 		r.state = stateClosed
 		r.pendingEvents = nil
+		r.closePendingDrainedLocked()
 		r.mu.Unlock()
 
 		r.drainWG.Wait()
@@ -219,6 +221,24 @@ func (r *Runtime) Close() {
 		if collection != nil {
 			collection.Release()
 		}
+	})
+}
+
+func (r *Runtime) PendingDrained() <-chan struct{} {
+	if r == nil || r.pendingDrained == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	return r.pendingDrained
+}
+
+func (r *Runtime) closePendingDrainedLocked() {
+	if r.pendingDrained == nil {
+		return
+	}
+	r.pendingDrainedOnce.Do(func() {
+		close(r.pendingDrained)
 	})
 }
 

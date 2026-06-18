@@ -18,9 +18,11 @@ PChannelRuntime
   -> RecoveryStorage
   -> VChannelWALView
   -> StreamingNodeResourceManager
+  -> GrowingSegmentRuntimeBuilder.NewRuntime
+  -> GrowingSegmentRuntime(Preparing, VChannelLiveObserver)
   -> Scheduler
-  -> GrowingSegmentRuntimeBuilder
-  -> GrowingSegmentRuntime
+  -> GrowingSegmentRuntime.Prepare
+  -> GrowingSegmentRuntime(Ready)
 ```
 
 The purpose of `GrowingSegmentRuntime` is to:
@@ -29,7 +31,7 @@ The purpose of `GrowingSegmentRuntime` is to:
    `DataVersion`;
 2. load historical visible segment data from `VChannelWALView.SegmentSnapshot`;
 3. apply historical deletes from `VChannelWALView.DeleteReplay`;
-4. attach the no-gap live WAL input provided by `VChannelLiveObserver`;
+4. implement `VChannelLiveObserver` and buffer live events while preparing;
 5. track runtime health and close all segment resources when released.
 
 The runtime does not select DataVersion, compute visible segment membership, read
@@ -42,9 +44,9 @@ release. Those responsibilities belong to `RecoveryStorage`,
 | Component | Role | Boundary |
 |---|---|---|
 | `StreamingNodeResourceManager` | PChannel-local owner of QueryView/init references and build state. Submits runtime build jobs and releases completed runtimes for its PChannel. | It does not build individual growing segments directly and does not serve resources across PChannels. |
-| `Scheduler` | Runs runtime build jobs with bounded concurrency. | It does not know QueryView references, priority, or resource lifecycle. |
-| `GrowingSegmentRuntimeBuilder` | Builds one `GrowingSegmentRuntime` from one `VChannelWALView` and the corresponding live stream. | It does not submit jobs, manage references, or choose DataVersion. |
-| `GrowingSegmentRuntime` | Owns the vchannel-level segment map, live apply loop, applied frontiers, truncation watermark, and close path. | It does not access `SegmentModule` or `TransformLogModule`. |
+| `Scheduler` | Runs runtime prepare jobs with bounded concurrency. | It does not know QueryView references, priority, or resource lifecycle. |
+| `GrowingSegmentRuntimeBuilder` | Creates one `GrowingSegmentRuntime` in `Preparing` state from one `VChannelWALView`. | It does not submit jobs, run historical loading, manage references, or choose DataVersion. |
+| `GrowingSegmentRuntime` | Owns the vchannel-level segment map, live observer state, pending event buffer, live drain task, applied frontiers, truncation watermark, and close path. | It does not access `SegmentModule` or `TransformLogModule`. |
 | `GrowingSegment` | Owns one segment's local resource handle and applies segment-scoped persisted data, inserts, and deletes. | It does not own vchannel-level message dispatch or live observer registration. |
 | `VChannelWALView` | Provides no-gap WAL input for the selected resource base DataVersion. | Its contract is defined in [StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md). |
 | `SegmentModule` | Owns segment metadata, visible snapshot construction, and segment metadata GC. | It is only consumed through `VChannelWALView`; runtime components do not call it directly. |
@@ -61,15 +63,15 @@ PChannelRuntime
         v
 StreamingNodeResourceManager
         |
-        | Submit build job
+        | Create Preparing runtime and submit prepare job
         v
 Scheduler
         |
         | Run with concurrency limit
         v
-GrowingSegmentRuntimeBuilder
+GrowingSegmentRuntime.Prepare
         |
-        | Build from VChannelWALView
+        | Load historical WALView inputs and mark Ready
         v
 GrowingSegmentRuntime
         |
@@ -78,8 +80,8 @@ GrowingSegmentRuntime
 GrowingSegment
 ```
 
-The scheduler controls how many build jobs run concurrently. The builder
-executes one job. The runtime owns the resulting resources.
+The scheduler controls how many prepare jobs run concurrently. The builder
+creates the runtime before scheduling. The runtime owns the resulting resources.
 
 ### 3.2 Runtime State
 
@@ -89,9 +91,11 @@ GrowingSegmentRuntime
   vchannel
   baseDataVersion
   schema
+  state Preparing | Ready | Closed
   segments map[segmentID]GrowingSegment
-  liveStream
-  liveApplyTask
+  pendingEvents []VChannelResourceEvent
+  liveDrainTask
+  pendingDrained
   appliedGrowingTimeTick
   appliedTransformTimeTick
   truncateDataVersion
@@ -118,8 +122,8 @@ storage or segcore implementation from the runtime builder.
 
 ### 3.4 Invariants
 
-1. `GrowingSegmentRuntimeBuilder` only consumes `VChannelWALView` and the live
-   stream created from the returned `VChannelLiveObserver`.
+1. `GrowingSegmentRuntimeBuilder` only consumes `VChannelWALView` and creates a
+   `GrowingSegmentRuntime` that implements `VChannelLiveObserver`.
 2. Runtime preparation never reads `SegmentModule` or `TransformLogModule`
    directly.
 3. `VChannelWALView` owns the no-gap input guarantee.
@@ -131,7 +135,8 @@ storage or segcore implementation from the runtime builder.
 7. Persisted segment data is loaded before snapshot insert messages are replayed
    for the same segment.
 8. `DeleteReplay` is drained and applied before the runtime is reported ready.
-9. The live stream is attached before the runtime is reported ready.
+9. The runtime is returned as the live observer before the prepare task runs.
+   Events observed in `Preparing` are stored in the runtime pending buffer.
 10. `SealedAtDataVersion` updates after the WALView capture point are delivered
     by resource events from RecoveryStorage, not by direct SegmentModule reads.
 11. Runtime live apply is not a recoverable resource-level error path. If a
@@ -162,7 +167,7 @@ type BuildTask interface {
     Run()
 
     Done() <-chan struct{}
-    Result() (*GrowingSegmentRuntime, error)
+    Result() (*ViewRuntime, error)
     Cancel()
 }
 ```
@@ -172,23 +177,20 @@ priority, QueryView reference tracking, result storage, cancellation policy, or
 DataVersion selection.
 
 `BuildTask` is both the scheduled unit and the build handle. It owns the
-cancellable build context, executes `GrowingSegmentRuntimeBuilder.Build`, records
-the terminal result, closes `Done`, and exposes `Cancel` to the resource manager.
+cancellable build context, executes the runtime prepare function, records the
+terminal result, closes `Done`, and exposes `Cancel` to the resource manager.
 
 ### 4.2 GrowingSegmentRuntimeBuilder
 
 ```go
 type GrowingSegmentRuntimeBuilder interface {
-    Build(
-        ctx context.Context,
-        view walview.VChannelWALView,
-        live LiveStream,
-    ) (*GrowingSegmentRuntime, error)
+    NewRuntime(desc LoadResourceDescriptor) (*GrowingSegmentRuntime, error)
 }
 ```
 
-The builder constructs one runtime from one WALView. It is not a scheduler and
-does not own global concurrency policy.
+The builder constructs one `Preparing` runtime from one WALView. It is not a
+scheduler, does not execute historical loading, and does not own global
+concurrency policy.
 
 ### 4.3 GrowingSegmentRuntime
 
@@ -198,7 +200,9 @@ type GrowingSegmentRuntime struct {
 }
 
 func (r *GrowingSegmentRuntime) DataVersion() qviews.DataVersion
-func (r *GrowingSegmentRuntime) ApplyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent)
+func (r *GrowingSegmentRuntime) ObserveEvent(ctx context.Context, event walview.VChannelResourceEvent) bool
+func (r *GrowingSegmentRuntime) Prepare(ctx context.Context) error
+func (r *GrowingSegmentRuntime) PendingDrained() <-chan struct{}
 func (r *GrowingSegmentRuntime) Truncate(minDataVersion qviews.DataVersion)
 func (r *GrowingSegmentRuntime) Close()
 ```
@@ -206,7 +210,14 @@ func (r *GrowingSegmentRuntime) Close()
 The runtime exposes resource lifecycle and truncation operations. Query-facing
 APIs are intentionally out of scope for this document.
 
-`ApplyLiveEvent` does not return a recoverable error. Failure to apply a valid
+`ObserveEvent` is the WAL live observer entrypoint. In `Preparing`, it buffers
+events. In `Ready`, it appends events and starts asynchronous drain when needed.
+
+`Prepare` performs historical loading and changes the runtime to `Ready`.
+`PendingDrained` closes after the runtime has entered `Ready` and the pending
+buffer captured around the initial WALView handoff has been drained.
+
+Runtime live apply does not return a recoverable error. Failure to apply a valid
 live event means the write path, WALView input, or runtime state is corrupted.
 That is a critical StreamingNode failure, not a resource-manager condition that
 can be repaired locally.
@@ -249,6 +260,8 @@ RecoveryStorage observes AlterLoadConfig
   -> builds VChannelWALView
   -> StreamingNodeResourceManager.OnAlterLoadConfig(view)
   -> create initRef
+  -> create GrowingSegmentRuntime in Preparing state
+  -> return GrowingSegmentRuntime as VChannelLiveObserver
   -> create BuildTask
   -> scheduler.Submit(task)
 ```
@@ -261,6 +274,8 @@ PChannelRuntime restores load intent and persisted QueryView meta
   -> RecoveryStorage selects recovery base DataVersion
   -> builds VChannelWALView(recoveryBaseDataVersion)
   -> StreamingNodeResourceManager.OnAlterLoadConfig(view)
+  -> create GrowingSegmentRuntime in Preparing state
+  -> return GrowingSegmentRuntime as VChannelLiveObserver
   -> create BuildTask
   -> scheduler.Submit(task)
 ```
@@ -286,20 +301,20 @@ When all references for an in-flight job are removed, `StreamingNodeResourceMana
 may call `BuildTask.Cancel()`. When all references for a completed runtime are
 removed, `StreamingNodeResourceManager` closes the runtime.
 
-### 5.3 Runtime Build Flow
+### 5.3 Runtime Prepare Flow
 
-`GrowingSegmentRuntimeBuilder.Build` executes the resource preparation flow:
+`GrowingSegmentRuntime.Prepare` executes the resource preparation flow:
 
 ```text
-1. Create an empty GrowingSegmentRuntime.
+1. Create the underlying collection resource.
 2. Load every segment from view.SegmentSnapshot.Segments.
 3. Drain and apply view.DeleteReplay.
 4. Initialize applied frontiers from the WALView base watermarks.
-5. Attach the live stream and start the runtime live apply task.
-6. Return ready runtime.
+5. Mark the runtime Ready.
+6. If the pending buffer is non-empty, start asynchronous drain.
 ```
 
-The builder trusts the no-gap WAL input contract of `VChannelWALView`. It does
+The runtime trusts the no-gap WAL input contract of `VChannelWALView`. It does
 not re-check or reconstruct the WALView's snapshot boundaries.
 
 ### 5.4 Snapshot Segment Loading
@@ -319,7 +334,7 @@ segment. A WAL message must not be blindly loaded into every segment.
 
 ### 5.5 Historical Delete Replay
 
-After snapshot segment loading completes, the builder drains
+After snapshot segment loading completes, `Prepare` drains
 `view.DeleteReplay` to completion.
 
 Each returned transform entry is applied through `GrowingSegmentRuntime`, which
@@ -331,8 +346,8 @@ DeleteReplay entry
   -> matching GrowingSegment.ApplyDelete
 ```
 
-If the scanner returns an error, build fails. A failed build closes the scanner,
-the live stream, and every partially built segment resource.
+If the scanner returns an error, prepare fails. A failed prepare closes the
+scanner and every partially built segment resource.
 
 ### 5.6 Frontier Initialization
 
@@ -347,21 +362,28 @@ appliedTransformTimeTick = view.BaseTransformTimeTick
 These frontiers describe resource preparation progress. Query behavior is out of
 scope.
 
-### 5.7 Live Stream Attachment
+### 5.7 Live Observer And Pending Drain
 
-The live stream is attached before the runtime is reported ready.
+The runtime itself is returned as the live observer before the prepare task runs.
 
 ```text
-live stream
-  -> GrowingSegmentRuntime live apply task
-  -> GrowingSegmentRuntime.ApplyLiveEvent
+RecoveryStorage live resource event
+  -> GrowingSegmentRuntime.ObserveEvent
+     -> if Preparing: append to pending buffer
+     -> if Ready: append to pending buffer and start drain if needed
+  -> GrowingSegmentRuntime drain task
   -> GrowingSegment methods as needed
 ```
 
-The live apply task consumes later resource events in the order delivered by
+When `Prepare` marks the runtime `Ready`, it starts an asynchronous drain if
+there are buffered events. `PendingDrained` closes after the runtime is ready and
+the pending buffer has reached empty at least once. The IDF oracle initial
+`CatchupDone` waits for this signal.
+
+The drain task consumes resource events in the order delivered by
 `VChannelLiveObserver`. Runtime live apply has no recoverable error path. If a
-ready runtime cannot apply valid live input, the StreamingNode must treat it as a
-critical corruption.
+ready runtime cannot apply valid live input, the StreamingNode must treat it as
+a critical corruption.
 
 ### 5.8 Live Resource Event Dispatch
 
@@ -423,14 +445,14 @@ segment-resource trimming operation.
 
 ### 5.11 Ready Condition
 
-`GrowingSegmentRuntimeBuilder` returns ready only after:
+`GrowingSegmentRuntime.Prepare` marks the runtime ready only after:
 
 1. all snapshot visible segments are created;
 2. all persisted segment storage is loaded;
 3. all snapshot insert messages are replayed;
 4. `DeleteReplay` is drained and applied;
 5. base frontiers are initialized;
-6. the live stream is attached to the runtime.
+6. the runtime is marked `Ready`.
 
 Ready means resource preparation completed for the WALView handoff. It does not
 describe query execution behavior.
@@ -440,7 +462,6 @@ describe query execution behavior.
 Build failure closes all owned resources:
 
 - `DeleteReplay` scanner;
-- live stream / observer handle;
 - partially created `GrowingSegment` resources;
 - the partially created `GrowingSegmentRuntime`.
 
@@ -455,14 +476,15 @@ error.
 
 1. `GrowingSegmentRuntime` is the only vchannel-level growing segment collection.
 2. There is no separate `GrowingSegmentSet`.
-3. `GrowingSegmentRuntimeBuilder` builds one runtime from one `VChannelWALView`.
+3. `GrowingSegmentRuntimeBuilder` creates one Preparing runtime from one
+   `VChannelWALView`.
 4. `Scheduler` limits build concurrency only.
 5. `Acquire` never schedules runtime builds.
 6. `VChannelWALView` provides no-gap WAL input.
-7. The builder must attach and apply the WALView input without breaking the
+7. The runtime must buffer and apply WALView live input without breaking the
    no-gap handoff.
-8. Ready is published only after historical inputs are applied and the live
-   stream is attached.
+8. Ready is published only after historical inputs are applied and the runtime
+   state changes to `Ready`.
 9. `Truncate` releases only segments whose sealed DataVersion is known and not
    newer than the truncation watermark.
 10. Runtime live apply has no recoverable error path.

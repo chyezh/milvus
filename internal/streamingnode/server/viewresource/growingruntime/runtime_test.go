@@ -27,11 +27,9 @@ type errorBM25LiveUpdater struct {
 	err error
 }
 
-func (u errorBM25LiveUpdater) ApplyLiveMessage(context.Context, message.ImmutableMessage) error {
+func (u errorBM25LiveUpdater) ApplyLiveEvent(context.Context, walview.VChannelResourceEvent) error {
 	return u.err
 }
-
-func (u errorBM25LiveUpdater) ApplySegmentSealed(int64, qviews.DataVersion) {}
 
 func newTestInsertMessage(t *testing.T, vchannel string, timetick uint64) message.ImmutableMessage {
 	t.Helper()
@@ -196,6 +194,6 @@ func TestRuntimePanicsOnBM25LiveApplyFailure(t *testing.T) {
 	runtime := newRuntime(Descriptor{})
 	runtime.SetBM25Runtime(errorBM25LiveUpdater{err: errors.New("bm25 failed")})
 	require.Panics(t, func() {
-		runtime.applyLiveMessage(context.Background(), newTestInsertMessage(t, "ch", 30))
+		runtime.applyLiveEvent(context.Background(), walview.VChannelResourceEvent{Message: newTestInsertMessage(t, "ch", 30)})
 	})
 }
