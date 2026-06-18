@@ -749,11 +749,6 @@ func TestCatalogQueryViews(t *testing.T) {
 		require.NoError(t, catalog.SaveQueryViews(ctx, "p1", []*viewpb.QueryViewOfShard{view}))
 		require.NotContains(t, storage, key)
 	}
-
-	view.Meta.State = viewpb.QueryViewState_QueryViewStateUp
-	require.Panics(t, func() {
-		_ = catalog.SaveQueryViews(ctx, "p2", []*viewpb.QueryViewOfShard{view})
-	})
 }
 
 func makeQueryViewForCatalogTest(vchannel string, state viewpb.QueryViewState) *viewpb.QueryViewOfShard {

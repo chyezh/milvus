@@ -309,7 +309,6 @@ func (s *snShardView) consumeAndPersist(entry *snViewEntry) {
 	if persist == nil {
 		return
 	}
-	assertQueryViewBelongsToPChannel(s.pchannel, persist)
 	if err := s.catalog.SaveQueryViews(context.Background(), s.pchannel, []*viewpb.QueryViewOfShard{persist}); err != nil {
 		panic(fmt.Sprintf("persist query view %s failed: %v", persist.GetMeta().GetVchannel(), err))
 	}

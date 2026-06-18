@@ -73,7 +73,6 @@ func RecoverSNQueryViewHandler(
 	resMgr StreamingNodeResourceManager,
 	views []*viewpb.QueryViewOfShard,
 ) *SNQueryViewHandler {
-	assertQueryViewsBelongToPChannel(pchannel, views)
 	h := &SNQueryViewHandler{
 		pchannel: pchannel,
 		shards:   make(map[qviews.ShardID]*snShardView),

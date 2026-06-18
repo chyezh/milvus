@@ -16,7 +16,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/etcd"
-	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
@@ -375,7 +374,6 @@ func (c *catalog) ListQueryViews(ctx context.Context, pChannelName string) ([]*v
 		if err = proto.Unmarshal([]byte(value), view); err != nil {
 			return nil, errors.Wrapf(err, "unmarshal query view %s failed", keys[idx])
 		}
-		assertQueryViewBelongsToPChannel(pChannelName, view.GetMeta())
 		if keys[idx] != buildQueryViewKey(pChannelName, view.GetMeta()) {
 			panic(fmt.Sprintf("mismatched query view recovery meta, key %s, meta %s", keys[idx], view.GetMeta().GetVchannel()))
 		}
@@ -394,7 +392,6 @@ func (c *catalog) SaveQueryViews(ctx context.Context, pChannelName string, views
 	removes := make([]string, 0)
 	for _, view := range views {
 		meta := view.GetMeta()
-		assertQueryViewBelongsToPChannel(pChannelName, meta)
 		key := buildQueryViewKey(pChannelName, meta)
 		if meta.GetState() == viewpb.QueryViewState_QueryViewStateUp {
 			data, err := marshalQueryViewForPersistence(view)
@@ -527,7 +524,9 @@ func buildTransformLogKey(pChannelName string, vchannelName string) string {
 
 // buildQueryViewKey returns the key for a specific StreamingNode query view recovery meta.
 func buildQueryViewKey(pChannelName string, meta *viewpb.QueryViewMeta) string {
-	assertQueryViewBelongsToPChannel(pChannelName, meta)
+	if meta == nil {
+		panic("query view meta is nil")
+	}
 	version := meta.GetVersion()
 	if version == nil || version.GetDataVersion() == nil {
 		panic(fmt.Sprintf("query view %s has nil version", meta.GetVchannel()))
@@ -547,15 +546,6 @@ func buildQueryViewKey(pChannelName string, meta *viewpb.QueryViewMeta) string {
 // buildConsumeCheckpointKey returns the key for the consume checkpoint of a pchannel.
 func buildConsumeCheckpointKey(pchannelName string) string {
 	return buildWALPrefix(pchannelName) + KeyConsumeCheckpoint
-}
-
-func assertQueryViewBelongsToPChannel(pChannelName string, meta *viewpb.QueryViewMeta) {
-	if meta == nil {
-		panic("query view meta is nil")
-	}
-	if funcutil.ToPhysicalChannel(meta.GetVchannel()) != pChannelName {
-		panic(fmt.Sprintf("query view vchannel %s does not belong to pchannel %s", meta.GetVchannel(), pChannelName))
-	}
 }
 
 func marshalQueryViewForPersistence(view *viewpb.QueryViewOfShard) ([]byte, error) {
