@@ -6,9 +6,9 @@ import (
 
 	"github.com/cockroachdb/errors"
 
-	"github.com/milvus-io/milvus/internal/streamingnode/server/snview"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
-	transformlogapi "github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -726,7 +726,7 @@ func validateWALViewSnapshot(desc LoadResourceDescriptor) error {
 	return nil
 }
 
-func drainDeleteReplay(ctx context.Context, scanner transformlogapi.Scanner) ([]*streamingpb.TransformLogEntry, error) {
+func drainDeleteReplay(ctx context.Context, scanner wal.TransformLogScanner) ([]*streamingpb.TransformLogEntry, error) {
 	if scanner == nil {
 		return nil, nil
 	}

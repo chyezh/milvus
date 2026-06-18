@@ -18,7 +18,6 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/recovery"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
-	"github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 	"github.com/milvus-io/milvus/pkg/v3/log"
 	"github.com/milvus-io/milvus/pkg/v3/mocks/streaming/mock_walimpls"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -276,8 +275,8 @@ func (s *stalledRecoveryStorage) GetDataCheckpoint(ctx context.Context) *recover
 	return s.checkpoint
 }
 
-func (s *stalledRecoveryStorage) TransformLog() transformlog.Accesser {
-	return transformlog.NewErrorAccesser(errors.New("transform log unavailable"))
+func (s *stalledRecoveryStorage) TransformLog() wal.TransformLogAccesser {
+	return wal.NewTransformLogErrorAccesser(errors.New("transform log unavailable"))
 }
 
 func (s *stalledRecoveryStorage) DetachLoadConfigListener() {

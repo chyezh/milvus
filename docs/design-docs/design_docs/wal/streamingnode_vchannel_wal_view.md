@@ -217,7 +217,7 @@ type VChannelWALView struct {
     Schema     *schemapb.CollectionSchema
 
     SegmentSnapshot VisibleSegmentSnapshot
-    DeleteReplay     transformlog.Scanner
+    DeleteReplay     wal.TransformLogScanner
 }
 ```
 
@@ -342,13 +342,13 @@ one synchronous call per later event.
 
 ## 9. Historical Delete Replay
 
-Historical Delete is supplied through a bounded `transformlog.Scanner` and bounded
+Historical Delete is supplied through a bounded `wal.TransformLogScanner` and bounded
 by `BaseTransformTimeTick`. The scanner is already bound to the required historical
 range when RecoveryStorage creates the `VChannelWALView`; consumers only need to
 read it to completion and apply every returned Delete entry.
 
 ```go
-DeleteReplay transformlog.Scanner
+DeleteReplay wal.TransformLogScanner
 ```
 
 Contract:
@@ -369,7 +369,7 @@ RecoveryStorage may use a tighter delete start point when SegmentModule or
 DataView exposes one. The start and end bounds are implementation details of
 scanner construction; `StreamingNodeResourceManager` must not depend on them.
 
-The end bound is expressed through `transformlog.ReadOption.EndTimeTick`.
+The end bound is expressed through `wal.TransformLogReadOption.EndTimeTick`.
 RecoveryStorage creates the scanner directly instead of exposing a TransformLog
 accesser or replay factory through `VChannelWALView`.
 When `BaseTransformTimeTick` is zero, RecoveryStorage returns an already-complete

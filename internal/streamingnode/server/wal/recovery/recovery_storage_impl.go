@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus/internal/flushcommon/broker"
 	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/segment"
@@ -17,7 +18,6 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
-	"github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 	"github.com/milvus-io/milvus/internal/util/idalloc"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/log"
@@ -283,11 +283,11 @@ func (r *recoveryStorageImpl) Metrics() RecoveryMetrics {
 	}
 }
 
-func (r *recoveryStorageImpl) TransformLog() transformlog.Accesser {
+func (r *recoveryStorageImpl) TransformLog() wal.TransformLogAccesser {
 	if r.transformLogModule != nil {
 		return r.transformLogModule
 	}
-	return transformlog.NewErrorAccesser(transformlog.ErrVChannelUnavailable)
+	return wal.NewTransformLogErrorAccesser(wal.ErrTransformLogVChannelUnavailable)
 }
 
 func (r *recoveryStorageImpl) DetachLoadConfigListener() {
@@ -475,19 +475,19 @@ func (r *recoveryStorageImpl) recoveredLoadConfig(vchannel string) *streamingpb.
 
 func newDeleteReplayScanner(
 	ctx context.Context,
-	accesser transformlog.Accesser,
+	accesser wal.TransformLogAccesser,
 	vchannel string,
 	startAfterTimeTick uint64,
 	endTimeTick uint64,
-) transformlog.Scanner {
+) wal.TransformLogScanner {
 	const name = "vchannel-wal-view-delete-replay"
 	if accesser == nil {
-		return transformlog.NewErrorScanner(name, transformlog.ErrVChannelUnavailable)
+		return wal.NewTransformLogErrorScanner(name, wal.ErrTransformLogVChannelUnavailable)
 	}
 	if endTimeTick == 0 {
-		return transformlog.NewEmptyScanner(name)
+		return wal.NewEmptyTransformLogScanner(name)
 	}
-	return accesser.Read(ctx, transformlog.ReadOption{
+	return accesser.Read(ctx, wal.TransformLogReadOption{
 		Name:               name,
 		VChannel:           vchannel,
 		StartAfterTimeTick: startAfterTimeTick,

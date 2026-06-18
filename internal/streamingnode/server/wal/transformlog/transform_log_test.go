@@ -10,7 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
-	transformlogapi "github.com/milvus-io/milvus/internal/streamingnode/transformlog"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 )
 
@@ -21,7 +21,7 @@ func TestReadIgnoresDelayedPublishForRetainedEntries(t *testing.T) {
 		{ChunkId: 0, Entries: []*streamingpb.TransformLogEntry{entry}},
 	}
 
-	scanner := transformLog.Read(context.Background(), transformlogapi.ReadOption{
+	scanner := transformLog.Read(context.Background(), wal.TransformLogReadOption{
 		Name:               "test-scanner",
 		VChannel:           "v1",
 		StartAfterTimeTick: 10,
@@ -53,7 +53,7 @@ func TestReadBuffersLiveEntriesUntilCaughtUp(t *testing.T) {
 		{ChunkId: 0, Entries: entries},
 	}
 
-	scanner := transformLog.Read(context.Background(), transformlogapi.ReadOption{
+	scanner := transformLog.Read(context.Background(), wal.TransformLogReadOption{
 		Name:               "test-scanner",
 		VChannel:           "v1",
 		StartAfterTimeTick: 0,
@@ -87,7 +87,7 @@ func TestReadStopsAtEndTimeTick(t *testing.T) {
 		}},
 	}
 
-	scanner := transformLog.Read(context.Background(), transformlogapi.ReadOption{
+	scanner := transformLog.Read(context.Background(), wal.TransformLogReadOption{
 		Name:               "test-scanner",
 		VChannel:           "v1",
 		StartAfterTimeTick: 1,

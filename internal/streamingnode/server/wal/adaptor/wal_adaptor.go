@@ -11,14 +11,13 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/adaptor/rate"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
-	"github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v3/log"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -135,9 +134,9 @@ func (w *walAdaptorImpl) GetLatestMVCCTimestamp(ctx context.Context, vchannel st
 	return currentMVCC.Timetick, nil
 }
 
-func (w *walAdaptorImpl) TransformLog() transformlog.Accesser {
+func (w *walAdaptorImpl) TransformLog() wal.TransformLogAccesser {
 	if w.param == nil || w.param.RecoveryStorage == nil {
-		return transformlog.NewErrorAccesser(status.NewOnShutdownError("recovery storage is unavailable"))
+		return wal.NewTransformLogErrorAccesser(status.NewOnShutdownError("recovery storage is unavailable"))
 	}
 	return w.param.RecoveryStorage.TransformLog()
 }

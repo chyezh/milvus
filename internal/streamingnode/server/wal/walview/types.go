@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
-	"github.com/milvus-io/milvus/internal/streamingnode/transformlog"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
@@ -37,7 +37,7 @@ type VChannelWALView struct {
 	Schema     *schemapb.CollectionSchema
 
 	SegmentSnapshot VisibleSegmentSnapshot
-	DeleteReplay    transformlog.Scanner
+	DeleteReplay    wal.TransformLogScanner
 }
 
 // VisibleSegmentSnapshot is the historical growing-side insert state captured at a WAL observe point.

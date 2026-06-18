@@ -7,7 +7,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"google.golang.org/protobuf/proto"
 
-	transformlogapi "github.com/milvus-io/milvus/internal/streamingnode/transformlog"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 )
@@ -16,7 +16,7 @@ type TransformLog interface {
 	Append(message.ImmutableMessage, AppendOption) AppendResult
 	Flush(context.Context, FlushOption) (FlushResult, error)
 	Materialize(context.Context, MaterializeOption) (MaterializeResult, error)
-	Read(context.Context, transformlogapi.ReadOption) transformlogapi.Scanner
+	Read(context.Context, wal.TransformLogReadOption) wal.TransformLogScanner
 	Truncate(TruncateOption) TruncateResult
 
 	Recover(context.Context, *streamingpb.VChannelTransformLogMeta) (RecoverResult, error)
@@ -228,11 +228,11 @@ func (t *transformLog) Materialize(ctx context.Context, opt MaterializeOption) (
 	return t.commitMaterializeLocked(work), nil
 }
 
-func (t *transformLog) Read(ctx context.Context, opt transformlogapi.ReadOption) transformlogapi.Scanner {
+func (t *transformLog) Read(ctx context.Context, opt wal.TransformLogReadOption) wal.TransformLogScanner {
 	t.mu.Lock()
 	if opt.StartAfterTimeTick < t.meta.GetTruncateTimeTick() {
 		t.mu.Unlock()
-		return transformlogapi.NewErrorScanner(opt.Name, errors.Wrap(transformlogapi.ErrStartPointTruncated, "start point is truncated"))
+		return wal.NewTransformLogErrorScanner(opt.Name, errors.Wrap(wal.ErrTransformLogStartPointTruncated, "start point is truncated"))
 	}
 	chunks := snapshotChunks(t.retainedChunks)
 	scanner := newScanner(opt.Name, opt.StartAfterTimeTick, opt.EndTimeTick, liveAfterTimeTick(opt.StartAfterTimeTick, chunks))

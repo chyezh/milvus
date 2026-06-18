@@ -171,4 +171,4 @@ Violating any contract leaves the corresponding view stuck (Preparing/UpRecoveri
 |---|---|
 | `worknode/handler` | `ApplyView`, `QueryViewHandler` interface, `ViewSyncServer`, `pendingReports` |
 | `worknode/qnview` | `QNQueryViewHandler`, `QNQueryViewStateMachine`, `SegmentManager` interface |
-| `streamingnode/server/snview` | `SNQueryViewHandler`, `SNQueryViewStateMachine`, `StreamingNodeResourceManager` interface, `StreamingNodeCatalog` interface |
+| `streamingnode/server/wal/snview` | `SNQueryViewHandler`, `SNQueryViewStateMachine`, `StreamingNodeResourceManager` interface, `StreamingNodeCatalog` interface |

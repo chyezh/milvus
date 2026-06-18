@@ -16,8 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus/internal/mocks/util/mock_segcore"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
-	transformlogapi "github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 	"github.com/milvus-io/milvus/internal/util/initcore"
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/internal/views/qviews"
@@ -407,7 +407,7 @@ func newTestTxnMessage(t *testing.T, vchannel string, timetick uint64, innerMess
 }
 
 type fakeTransformLogScanner struct {
-	ch     chan transformlogapi.Event
+	ch     chan wal.TransformLogEvent
 	done   chan struct{}
 	err    error
 	closed bool
@@ -415,7 +415,7 @@ type fakeTransformLogScanner struct {
 
 func newFakeTransformLogScanner() *fakeTransformLogScanner {
 	return &fakeTransformLogScanner{
-		ch:   make(chan transformlogapi.Event, 16),
+		ch:   make(chan wal.TransformLogEvent, 16),
 		done: make(chan struct{}),
 	}
 }
@@ -424,7 +424,7 @@ func (s *fakeTransformLogScanner) Name() string {
 	return "fake"
 }
 
-func (s *fakeTransformLogScanner) Chan() <-chan transformlogapi.Event {
+func (s *fakeTransformLogScanner) Chan() <-chan wal.TransformLogEvent {
 	return s.ch
 }
 
@@ -559,8 +559,8 @@ func TestManagerDefaultGrowingRuntimeBuilderAppliesSnapshotDeleteAndLiveInOrder(
 	})
 	require.NotNil(t, observer)
 
-	scanner.ch <- transformlogapi.Event{Entry: &streamingpb.TransformLogEntry{TimeTick: 35}}
-	scanner.ch <- transformlogapi.Event{CaughtUp: &transformlogapi.CaughtUp{StartAfterTimeTick: 1}}
+	scanner.ch <- wal.TransformLogEvent{Entry: &streamingpb.TransformLogEntry{TimeTick: 35}}
+	scanner.ch <- wal.TransformLogEvent{CaughtUp: &wal.TransformLogCaughtUp{StartAfterTimeTick: 1}}
 
 	select {
 	case <-manager.NotifyReady():
@@ -867,8 +867,8 @@ func TestManagerDefaultGrowingRuntimeBuilderDrainsDeleteReplayBeforeReady(t *tes
 	}
 
 	entry := &streamingpb.TransformLogEntry{TimeTick: 10}
-	scanner.ch <- transformlogapi.Event{Entry: entry}
-	scanner.ch <- transformlogapi.Event{CaughtUp: &transformlogapi.CaughtUp{StartAfterTimeTick: 1}}
+	scanner.ch <- wal.TransformLogEvent{Entry: entry}
+	scanner.ch <- wal.TransformLogEvent{CaughtUp: &wal.TransformLogCaughtUp{StartAfterTimeTick: 1}}
 	close(scanner.done)
 
 	select {
