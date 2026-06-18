@@ -123,7 +123,8 @@ func TestRuntimeRejectsLiveInsertAfterFlush(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	runtime := newRuntime(collection)
+	runtime := newRuntime(Descriptor{})
+	runtime.collection = collection
 	defer runtime.Close()
 
 	segmentID := int64(21)
@@ -137,7 +138,7 @@ func TestRuntimeRejectsLiveInsertAfterFlush(t *testing.T) {
 }
 
 func TestRuntimeTruncateWatermarkAppliesToLateSegmentSealed(t *testing.T) {
-	runtime := newRuntime(nil)
+	runtime := newRuntime(Descriptor{})
 	runtime.addSegment(newGrowingSegment(nil, 10, 0))
 
 	runtime.Truncate(qviews.DataVersion{StreamingVersion: 20, CompactVersion: 1})
@@ -192,7 +193,7 @@ func TestDeleteTimestampsFromTransformLogBlockUsesEntryTimeTick(t *testing.T) {
 }
 
 func TestRuntimePanicsOnBM25LiveApplyFailure(t *testing.T) {
-	runtime := newRuntime(nil)
+	runtime := newRuntime(Descriptor{})
 	runtime.SetBM25Runtime(errorBM25LiveUpdater{err: errors.New("bm25 failed")})
 	require.Panics(t, func() {
 		runtime.applyLiveMessage(context.Background(), newTestInsertMessage(t, "ch", 30))

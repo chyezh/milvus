@@ -42,7 +42,6 @@ type runtimeState struct {
 	err          error
 	cancel       context.CancelFunc
 	task         BuildTask
-	observer     *liveObserver
 }
 
 type referenceState struct {
@@ -85,18 +84,26 @@ func NewManager(growing GrowingSegmentRuntimeBuilder, bm25 IDFOracleRuntimeBuild
 }
 
 func (r *DefaultManager) OnAlterLoadConfig(view walview.VChannelWALView) walview.VChannelLiveObserver {
-	observer := newLiveObserver()
 	desc := LoadResourceDescriptor{
-		WALView:    view,
-		LiveEvents: observer.Events(),
-		LiveDone:   observer.Done(),
-		OnApplied:  r.notifyReady,
+		WALView:   view,
+		OnApplied: r.notifyReady,
 	}
-	if !r.prepareLatestFromAlterLoadConfig(context.Background(), desc, observer) {
-		observer.Close()
+	growing, err := r.growing.NewRuntime(desc)
+	if err != nil {
 		return nil
 	}
-	return observer
+	runtime := &ViewRuntime{
+		CollectionID: desc.CollectionID(),
+		VChannel:     desc.VChannel(),
+		DataVersion:  desc.DataVersion(),
+		Schema:       desc.Schema(),
+		Growing:      growing,
+	}
+	if !r.prepareLatestFromAlterLoadConfig(context.Background(), desc, runtime) {
+		runtime.Close()
+		return nil
+	}
+	return growing
 }
 
 func (r *DefaultManager) OnDropLoadConfig(event walview.DropLoadConfigEvent) {
@@ -105,12 +112,9 @@ func (r *DefaultManager) OnDropLoadConfig(event walview.DropLoadConfigEvent) {
 	if refs := r.refs[lk]; refs != nil {
 		refs.initRef = false
 	}
-	cancels, observers, runtimes := r.cleanupIfUnreferencedLocked(lk)
+	cancels, runtimes := r.cleanupIfUnreferencedLocked(lk)
 	r.mu.Unlock()
 
-	for _, observer := range observers {
-		observer.Close()
-	}
 	for _, runtime := range runtimes {
 		runtime.Close()
 	}
@@ -120,7 +124,7 @@ func (r *DefaultManager) OnDropLoadConfig(event walview.DropLoadConfigEvent) {
 	r.notifyReady()
 }
 
-func (r *DefaultManager) prepareLatestFromAlterLoadConfig(ctx context.Context, desc LoadResourceDescriptor, observer *liveObserver) bool {
+func (r *DefaultManager) prepareLatestFromAlterLoadConfig(ctx context.Context, desc LoadResourceDescriptor, runtime *ViewRuntime) bool {
 	key := runtimeKey{vchannel: desc.VChannel(), version: desc.DataVersion()}
 	lk := loadKey{collectionID: desc.CollectionID(), vchannel: desc.VChannel()}
 
@@ -155,14 +159,14 @@ func (r *DefaultManager) prepareLatestFromAlterLoadConfig(ctx context.Context, d
 		VChannel:     desc.VChannel(),
 		DataVersion:  desc.DataVersion(),
 	}, func(ctx context.Context) (*ViewRuntime, error) {
-		return r.buildRuntime(ctx, desc)
+		return r.prepareRuntime(ctx, desc, runtime)
 	})
 	state.collectionID = desc.CollectionID()
+	state.runtime = runtime
 	state.loading = true
 	state.err = nil
 	state.cancel = task.Cancel
 	state.task = task
-	state.observer = observer
 	r.mu.Unlock()
 
 	r.scheduler.Submit(task)
@@ -170,30 +174,23 @@ func (r *DefaultManager) prepareLatestFromAlterLoadConfig(ctx context.Context, d
 	return true
 }
 
-func (r *DefaultManager) buildRuntime(ctx context.Context, desc LoadResourceDescriptor) (*ViewRuntime, error) {
+func (r *DefaultManager) prepareRuntime(ctx context.Context, desc LoadResourceDescriptor, runtime *ViewRuntime) (*ViewRuntime, error) {
 	bm25, err := r.bm25.BuildInitial(ctx, desc)
 	if err != nil {
-		return nil, err
+		return runtime, err
 	}
-	desc.BM25 = bm25
-	growing, err := r.growing.Build(ctx, desc)
-	if err != nil {
+	runtime.BM25 = bm25
+	runtime.Growing.SetBM25Runtime(bm25)
+	if err := runtime.Growing.Prepare(ctx); err != nil {
 		bm25.Close()
-		return nil, err
+		runtime.BM25 = nil
+		return runtime, err
 	}
-	growing.SetBM25Runtime(bm25)
 	if bm25 != nil {
 		bm25.DataVersion = desc.DataVersion()
 		bm25.MarkCatchupDone()
 	}
-	return &ViewRuntime{
-		CollectionID: desc.CollectionID(),
-		VChannel:     desc.VChannel(),
-		DataVersion:  desc.DataVersion(),
-		Schema:       desc.Schema(),
-		Growing:      growing,
-		BM25:         bm25,
-	}, nil
+	return runtime, nil
 }
 
 func (r *DefaultManager) finishBuild(key runtimeKey, task BuildTask) {
@@ -220,14 +217,14 @@ func (r *DefaultManager) finishBuild(key runtimeKey, task BuildTask) {
 	state.cancel = nil
 	state.task = nil
 	if err != nil {
+		if runtime == nil {
+			runtime = state.runtime
+		}
 		if runtime != nil {
 			runtime.Close()
 		}
+		state.runtime = nil
 		state.err = err
-		if state.observer != nil {
-			state.observer.Close()
-			state.observer = nil
-		}
 	} else {
 		state.runtime = runtime
 	}
@@ -318,7 +315,6 @@ func (r *DefaultManager) Release(req snview.ReleaseResource) {
 	var truncateTo qviews.DataVersion
 	var hasTruncate bool
 	var cancels []context.CancelFunc
-	var observers []*liveObserver
 	var runtimes []*ViewRuntime
 
 	r.mu.Lock()
@@ -340,14 +336,11 @@ func (r *DefaultManager) Release(req snview.ReleaseResource) {
 	if hasTruncate {
 		truncates = r.growingRuntimesLocked(lk)
 	}
-	cancels, observers, runtimes = r.cleanupIfUnreferencedLocked(lk)
+	cancels, runtimes = r.cleanupIfUnreferencedLocked(lk)
 	r.mu.Unlock()
 
 	for _, runtime := range truncates {
 		runtime.Truncate(truncateTo)
-	}
-	for _, observer := range observers {
-		observer.Close()
 	}
 	for _, runtime := range runtimes {
 		runtime.Close()
@@ -365,7 +358,6 @@ func (r *DefaultManager) Release(req snview.ReleaseResource) {
 
 func (r *DefaultManager) Close() {
 	var cancels []context.CancelFunc
-	var observers []*liveObserver
 	var runtimes []*ViewRuntime
 
 	r.mu.Lock()
@@ -374,9 +366,6 @@ func (r *DefaultManager) Close() {
 	for key, state := range r.runtimes {
 		if state.cancel != nil {
 			cancels = append(cancels, state.cancel)
-		}
-		if state.observer != nil {
-			observers = append(observers, state.observer)
 		}
 		if state.runtime != nil {
 			runtimes = append(runtimes, state.runtime)
@@ -388,9 +377,6 @@ func (r *DefaultManager) Close() {
 	r.refEpoch = make(map[qviews.QueryViewKey]uint64)
 	r.mu.Unlock()
 
-	for _, observer := range observers {
-		observer.Close()
-	}
 	for _, runtime := range runtimes {
 		runtime.Close()
 	}
@@ -552,18 +538,17 @@ func (r *DefaultManager) growingRuntimesLocked(lk loadKey) []*GrowingRuntime {
 	return runtimes
 }
 
-func (r *DefaultManager) cleanupIfUnreferencedLocked(lk loadKey) ([]context.CancelFunc, []*liveObserver, []*ViewRuntime) {
+func (r *DefaultManager) cleanupIfUnreferencedLocked(lk loadKey) ([]context.CancelFunc, []*ViewRuntime) {
 	refs := r.refs[lk]
 	if refs != nil && (refs.initRef || len(refs.queryViewRefs) > 0) {
-		return nil, nil, nil
+		return nil, nil
 	}
 	if refs == nil && lk.collectionID != 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
 	delete(r.refs, lk)
 
 	var cancels []context.CancelFunc
-	var observers []*liveObserver
 	var runtimes []*ViewRuntime
 	for key, state := range r.runtimes {
 		if key.vchannel != lk.vchannel || (lk.collectionID != 0 && state.collectionID != lk.collectionID) {
@@ -572,15 +557,12 @@ func (r *DefaultManager) cleanupIfUnreferencedLocked(lk loadKey) ([]context.Canc
 		if state.cancel != nil {
 			cancels = append(cancels, state.cancel)
 		}
-		if state.observer != nil {
-			observers = append(observers, state.observer)
-		}
 		if state.runtime != nil {
 			runtimes = append(runtimes, state.runtime)
 		}
 		delete(r.runtimes, key)
 	}
-	return cancels, observers, runtimes
+	return cancels, runtimes
 }
 
 func (r *DefaultManager) NotifyReady() <-chan struct{} {
@@ -600,49 +582,4 @@ func (NoopIDFOracleRuntimeBuilder) BuildInitial(context.Context, LoadResourceDes
 	runtime := &BM25Runtime{}
 	runtime.MarkCatchupDone()
 	return runtime, nil
-}
-
-const defaultLiveObserverBufferSize = 1024
-
-type liveObserver struct {
-	closeOnce sync.Once
-	ch        chan walview.VChannelResourceEvent
-	closed    chan struct{}
-}
-
-func newLiveObserver() *liveObserver {
-	return &liveObserver{
-		ch:     make(chan walview.VChannelResourceEvent, defaultLiveObserverBufferSize),
-		closed: make(chan struct{}),
-	}
-}
-
-func (o *liveObserver) ObserveEvent(ctx context.Context, event walview.VChannelResourceEvent) bool {
-	select {
-	case <-o.closed:
-		return false
-	default:
-	}
-	select {
-	case o.ch <- event:
-		return true
-	case <-o.closed:
-		return false
-	case <-ctx.Done():
-		return false
-	}
-}
-
-func (o *liveObserver) Close() {
-	o.closeOnce.Do(func() {
-		close(o.closed)
-	})
-}
-
-func (o *liveObserver) Events() <-chan walview.VChannelResourceEvent {
-	return o.ch
-}
-
-func (o *liveObserver) Done() <-chan struct{} {
-	return o.closed
 }

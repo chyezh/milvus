@@ -69,23 +69,21 @@ func testAlterLoadConfigView(collectionID int64, vchannel string, version qviews
 type fakeGrowingSegmentRuntimeBuilder struct {
 	mu    sync.Mutex
 	calls []LoadResourceDescriptor
-	block chan struct{}
-	seen  chan struct{}
 }
 
-func (p *fakeGrowingSegmentRuntimeBuilder) Build(_ context.Context, desc LoadResourceDescriptor) (*GrowingRuntime, error) {
+func (p *fakeGrowingSegmentRuntimeBuilder) NewRuntime(desc LoadResourceDescriptor) (*GrowingRuntime, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls = append(p.calls, desc)
-	return &GrowingRuntime{}, nil
+	return NoopGrowingSegmentRuntimeBuilder{}.NewRuntime(desc)
 }
 
-type cancelAwareGrowingSegmentRuntimeBuilder struct {
+type cancelAwareIDFOracleRuntimeBuilder struct {
 	started  chan struct{}
 	canceled chan struct{}
 }
 
-func (p *cancelAwareGrowingSegmentRuntimeBuilder) Build(ctx context.Context, desc LoadResourceDescriptor) (*GrowingRuntime, error) {
+func (p *cancelAwareIDFOracleRuntimeBuilder) BuildInitial(ctx context.Context, _ LoadResourceDescriptor) (*BM25Runtime, error) {
 	close(p.started)
 	<-ctx.Done()
 	close(p.canceled)
@@ -827,7 +825,7 @@ func TestManagerGetViewRuntimeErrorsWhenRequestedVersionIsBehindForwardLoad(t *t
 func TestManagerDefaultGrowingRuntimeBuilderRejectsMismatchedWALViewSnapshot(t *testing.T) {
 	manager := NewManager(nil, nil)
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
-	manager.OnAlterLoadConfig(walview.VChannelWALView{
+	observer := manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
 		VChannel:     "ch",
 		SegmentSnapshot: walview.VisibleSegmentSnapshot{
@@ -836,19 +834,14 @@ func TestManagerDefaultGrowingRuntimeBuilderRejectsMismatchedWALViewSnapshot(t *
 			DataVersion:  version,
 		},
 	})
-
-	select {
-	case <-manager.NotifyReady():
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for manager readiness")
-	}
+	require.Nil(t, observer)
 
 	runtime, ready, err := manager.GetViewRuntime(ViewResourceDescriptor{
 		CollectionID: 1,
 		VChannel:     "ch",
 		Version:      qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
 	})
-	require.ErrorContains(t, err, "wal view snapshot mismatch")
+	require.NoError(t, err)
 	require.False(t, ready)
 	require.Nil(t, runtime)
 }
@@ -885,7 +878,7 @@ func TestManagerDefaultGrowingRuntimeBuilderFailsOnDeleteReplayError(t *testing.
 	require.Nil(t, runtime)
 }
 
-func TestManagerDoesNotBuildGrowingRuntimeWhenBM25PreparationFails(t *testing.T) {
+func TestManagerDoesNotPrepareGrowingRuntimeWhenBM25PreparationFails(t *testing.T) {
 	growing := &fakeGrowingSegmentRuntimeBuilder{}
 	manager := NewManager(growing, errorIDFOracleRuntimeBuilder{err: errors.New("bm25 failed")})
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
@@ -913,7 +906,7 @@ func TestManagerDoesNotBuildGrowingRuntimeWhenBM25PreparationFails(t *testing.T)
 	require.False(t, ready)
 	require.Nil(t, runtime)
 	growing.mu.Lock()
-	require.Empty(t, growing.calls)
+	require.Len(t, growing.calls, 1)
 	growing.mu.Unlock()
 }
 
@@ -986,16 +979,19 @@ func TestManagerLiveObserverFeedsPreparedGrowingRuntime(t *testing.T) {
 		return runtime.Growing.AppliedGrowingTimeTick() == 31
 	}, time.Second, 10*time.Millisecond)
 
-	observer.Close()
+	manager.OnDropLoadConfig(walview.DropLoadConfigEvent{
+		CollectionID: 1,
+		VChannel:     "ch",
+	})
 	require.False(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: nil}))
 }
 
 func TestManagerOnAlterLoadConfigReturnsNilObserverForDuplicateVersion(t *testing.T) {
-	blocking := &cancelAwareGrowingSegmentRuntimeBuilder{
+	blocking := &cancelAwareIDFOracleRuntimeBuilder{
 		started:  make(chan struct{}),
 		canceled: make(chan struct{}),
 	}
-	manager := NewManager(blocking, NoopIDFOracleRuntimeBuilder{})
+	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, blocking)
 	version := qviews.DataVersion{StreamingVersion: 100, CompactVersion: 2}
 	view := walview.VChannelWALView{
 		CollectionID: 1,
@@ -1036,7 +1032,6 @@ func TestManagerOnAlterLoadConfigReturnsNilObserverForDuplicateVersion(t *testin
 		t.Fatal("timed out waiting for manager readiness")
 	}
 	require.Nil(t, readyManager.OnAlterLoadConfig(view))
-	observer.Close()
 }
 
 func TestManagerDropLoadConfigClosesPreparedLiveObserver(t *testing.T) {
@@ -1064,31 +1059,6 @@ func TestManagerDropLoadConfigClosesPreparedLiveObserver(t *testing.T) {
 	require.False(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: newTestInsertMessage(t, "ch", 30)}))
 }
 
-func TestLiveObserverCloseUnblocksFullBuffer(t *testing.T) {
-	observer := newLiveObserver()
-	for i := 0; i < defaultLiveObserverBufferSize; i++ {
-		require.True(t, observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: nil}))
-	}
-
-	done := make(chan bool, 1)
-	go func() {
-		done <- observer.ObserveEvent(context.Background(), walview.VChannelResourceEvent{Message: nil})
-	}()
-	select {
-	case result := <-done:
-		t.Fatalf("ObserveEvent returned before close: %v", result)
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	observer.Close()
-	select {
-	case result := <-done:
-		require.False(t, result)
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for ObserveEvent to unblock")
-	}
-}
-
 func TestManagerDropLoadConfigCancelsInFlightAndMakesPreparedRuntimeUnavailable(t *testing.T) {
 	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, NoopIDFOracleRuntimeBuilder{})
 	readyVersion := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
@@ -1101,11 +1071,11 @@ func TestManagerDropLoadConfigCancelsInFlightAndMakesPreparedRuntimeUnavailable(
 	})
 	<-manager.NotifyReady()
 
-	blocking := &cancelAwareGrowingSegmentRuntimeBuilder{
+	blocking := &cancelAwareIDFOracleRuntimeBuilder{
 		started:  make(chan struct{}),
 		canceled: make(chan struct{}),
 	}
-	manager.growing = blocking
+	manager.bm25 = blocking
 	loadingVersion := qviews.DataVersion{StreamingVersion: 11, CompactVersion: 0}
 	manager.OnAlterLoadConfig(walview.VChannelWALView{
 		CollectionID: 1,
@@ -1165,7 +1135,6 @@ func TestManagerOnAlterLoadConfigUsesWALViewBoundary(t *testing.T) {
 		},
 	))
 	require.NotNil(t, observer)
-	t.Cleanup(observer.Close)
 
 	select {
 	case <-manager.NotifyReady():

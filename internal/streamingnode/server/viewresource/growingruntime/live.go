@@ -9,41 +9,77 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 )
 
-func (r *Runtime) startLiveApply(ctx context.Context, done <-chan struct{}, onApplied func()) {
-	if r == nil || r.LiveEvents == nil {
-		return
-	}
-	if done == nil {
-		done = neverDone()
+var _ walview.VChannelLiveObserver = (*Runtime)(nil)
+
+func (r *Runtime) ObserveEvent(ctx context.Context, event walview.VChannelResourceEvent) bool {
+	if r == nil {
+		return false
 	}
 	r.mu.Lock()
-	if r.liveStopCh == nil {
-		r.liveStopCh = make(chan struct{})
+	defer r.mu.Unlock()
+	if r.state == stateClosed {
+		return false
 	}
-	if r.liveDoneCh == nil {
-		r.liveDoneCh = make(chan struct{})
+	select {
+	case <-ctx.Done():
+		return false
+	default:
 	}
-	stopCh := r.liveStopCh
-	doneCh := r.liveDoneCh
-	r.mu.Unlock()
+	r.pendingEvents = append(r.pendingEvents, event)
+	if r.state == stateReady {
+		r.startDrainLocked()
+	}
+	return true
+}
+
+func (r *Runtime) markReady() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state == stateClosed {
+		return
+	}
+	r.state = stateReady
+	r.startDrainLocked()
+}
+
+func (r *Runtime) startDrainLocked() {
+	if r.drainRunning || len(r.pendingEvents) == 0 {
+		return
+	}
+	r.drainRunning = true
+	r.drainWG.Add(1)
 	go func() {
-		defer close(doneCh)
-		for {
-			select {
-			case event, ok := <-r.LiveEvents:
-				if !ok {
-					return
-				}
-				if r.applyLiveEvent(ctx, event) && onApplied != nil {
-					onApplied()
-				}
-			case <-done:
-				return
-			case <-stopCh:
-				return
-			}
-		}
+		defer r.drainWG.Done()
+		r.drainPending()
 	}()
+}
+
+func (r *Runtime) drainPending() {
+	for {
+		r.mu.Lock()
+		if r.state == stateClosed {
+			r.drainRunning = false
+			r.mu.Unlock()
+			return
+		}
+		if len(r.pendingEvents) == 0 {
+			r.drainRunning = false
+			r.mu.Unlock()
+			return
+		}
+		event := r.pendingEvents[0]
+		copy(r.pendingEvents, r.pendingEvents[1:])
+		r.pendingEvents[len(r.pendingEvents)-1] = walview.VChannelResourceEvent{}
+		r.pendingEvents = r.pendingEvents[:len(r.pendingEvents)-1]
+		r.mu.Unlock()
+
+		if r.applyLiveEvent(context.Background(), event) && r.desc.OnApplied != nil {
+			r.desc.OnApplied()
+		}
+	}
 }
 
 func (r *Runtime) applyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent) bool {
@@ -118,8 +154,4 @@ func advanceTimeTick(value interface {
 			return true
 		}
 	}
-}
-
-func neverDone() <-chan struct{} {
-	return make(chan struct{})
 }

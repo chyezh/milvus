@@ -14,17 +14,21 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
-func (r *Runtime) addSegment(segment *growingSegment) {
+func (r *Runtime) addSegment(segment *growingSegment) bool {
 	if r == nil || segment == nil || segment.id() == 0 {
-		return
+		return false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.state == stateClosed {
+		return false
+	}
 	if _, ok := r.segments[segment.id()]; ok {
 		panic("duplicated growing segment")
 	}
 	r.segments[segment.id()] = segment
 	r.segmentIDs = append(r.segmentIDs, segment.id())
+	return true
 }
 
 func (r *Runtime) setDeleteReplayEntries(entries []*streamingpb.TransformLogEntry) {
@@ -42,6 +46,9 @@ func (r *Runtime) getOrCreateSegment(segmentID int64, partitionID int64) *growin
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.state == stateClosed {
+		return nil
+	}
 	if segment := r.segments[segmentID]; segment != nil {
 		return segment
 	}
@@ -72,6 +79,9 @@ func (r *Runtime) dispatchMessage(ctx context.Context, msg message.ImmutableMess
 	case message.MessageTypeCreateSegment:
 		created := message.MustAsImmutableCreateSegmentMessageV2(msg)
 		segment := r.getOrCreateSegment(created.Header().GetSegmentId(), created.Header().GetPartitionId())
+		if segment == nil {
+			return nil
+		}
 		return segment.ensureCSegment()
 	case message.MessageTypeInsert:
 		return r.applyInsertMessage(ctx, msg)
@@ -85,6 +95,9 @@ func (r *Runtime) dispatchMessage(ctx context.Context, msg message.ImmutableMess
 	case message.MessageTypeFlush:
 		flushed := message.MustAsImmutableFlushMessageV2(msg)
 		segment := r.getOrCreateSegment(flushed.Header().GetSegmentId(), flushed.Header().GetPartitionId())
+		if segment == nil {
+			return nil
+		}
 		segment.markFlushed()
 		return nil
 	default:
@@ -100,6 +113,9 @@ func (r *Runtime) applyInsertMessage(ctx context.Context, raw message.ImmutableM
 		}
 		segmentID := assignment.GetSegmentAssignment().GetSegmentId()
 		segment := r.getOrCreateSegment(segmentID, assignment.GetPartitionId())
+		if segment == nil {
+			return nil
+		}
 		return segment.applyInsert(ctx, insert)
 	})
 }

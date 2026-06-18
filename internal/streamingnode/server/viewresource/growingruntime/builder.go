@@ -12,56 +12,83 @@ import (
 
 type NoopBuilder struct{}
 
-func (NoopBuilder) Build(context.Context, Descriptor) (*Runtime, error) {
-	return newRuntime(nil), nil
+func (NoopBuilder) NewRuntime(desc Descriptor) (*Runtime, error) {
+	runtime := newRuntime(desc)
+	runtime.prepareFunc = func(context.Context) error {
+		runtime.markReady()
+		return nil
+	}
+	return runtime, nil
 }
 
 type SnapshotBuilder struct{}
 
-func (p SnapshotBuilder) Build(ctx context.Context, desc Descriptor) (*Runtime, error) {
+func (p SnapshotBuilder) NewRuntime(desc Descriptor) (*Runtime, error) {
 	if err := validateWALViewSnapshot(desc); err != nil {
 		return nil, err
 	}
+	return newRuntime(desc), nil
+}
+
+func (r *Runtime) Prepare(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	if r.prepareFunc != nil {
+		return r.prepareFunc(ctx)
+	}
+	desc := r.desc
 	collection, err := newCollection(desc)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	runtime := newRuntime(collection)
-	runtime.LiveEvents = desc.LiveEvents
+	r.mu.Lock()
+	if r.state == stateClosed {
+		r.mu.Unlock()
+		if collection != nil {
+			collection.Release()
+		}
+		return context.Canceled
+	}
+	r.collection = collection
+	r.mu.Unlock()
+
+	prepared := false
 	defer func() {
-		if runtime != nil {
-			runtime.Close()
+		if !prepared {
+			r.Close()
 		}
 	}()
 	for _, visible := range desc.WALView.SegmentSnapshot.Segments {
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return ctx.Err()
 		default:
 		}
 		segment, err := newGrowingSegmentFromVisible(ctx, collection, visible)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		runtime.addSegment(segment)
+		if !r.addSegment(segment) {
+			segment.release()
+			return context.Canceled
+		}
 	}
 	deleteEntries, err := drainDeleteReplay(ctx, desc.WALView.DeleteReplay)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	runtime.setDeleteReplayEntries(deleteEntries)
+	r.setDeleteReplayEntries(deleteEntries)
 	for _, entry := range deleteEntries {
-		if err := runtime.applyTransformLogEntry(ctx, entry); err != nil {
-			return nil, err
+		if err := r.applyTransformLogEntry(ctx, entry); err != nil {
+			return err
 		}
 	}
-	runtime.SetBM25Runtime(desc.BM25)
-	runtime.appliedGrowingTimeTick.Store(desc.WALView.BaseGrowingTimeTick)
-	runtime.appliedTransformTimeTick.Store(desc.WALView.BaseTransformTimeTick)
-	runtime.startLiveApply(ctx, desc.LiveDone, desc.OnApplied)
-	readyRuntime := runtime
-	runtime = nil
-	return readyRuntime, nil
+	r.appliedGrowingTimeTick.Store(desc.WALView.BaseGrowingTimeTick)
+	r.appliedTransformTimeTick.Store(desc.WALView.BaseTransformTimeTick)
+	r.markReady()
+	prepared = true
+	return nil
 }
 
 func newCollection(desc Descriptor) (*segcore.CCollection, error) {

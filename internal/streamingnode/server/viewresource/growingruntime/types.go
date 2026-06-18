@@ -18,11 +18,8 @@ import (
 // Descriptor describes the latest vchannel runtime that must be prepared after
 // WAL observes AlterLoadConfig.
 type Descriptor struct {
-	WALView    walview.VChannelWALView
-	LiveEvents <-chan walview.VChannelResourceEvent
-	LiveDone   <-chan struct{}
-	OnApplied  func()
-	BM25       BM25Runtime
+	WALView   walview.VChannelWALView
+	OnApplied func()
 }
 
 func (d Descriptor) CollectionID() int64 {
@@ -62,7 +59,7 @@ func settingsFromAlterLoadConfig(header *messagespb.AlterLoadConfigMessageHeader
 // Builder converts WAL-side growing state into queryable csegment-backed
 // resources for the requested latest DataVersion.
 type Builder interface {
-	Build(ctx context.Context, desc Descriptor) (*Runtime, error)
+	NewRuntime(desc Descriptor) (*Runtime, error)
 }
 
 type BM25Runtime interface {
@@ -70,29 +67,40 @@ type BM25Runtime interface {
 	ApplySegmentSealed(segmentID int64, sealedAt qviews.DataVersion)
 }
 
+type state int
+
+const (
+	statePreparing state = iota
+	stateReady
+	stateClosed
+)
+
 // Runtime is the csegment-backed growing side prepared for one DataVersion.
 type Runtime struct {
-	LiveEvents <-chan walview.VChannelResourceEvent
-
 	mu                       sync.RWMutex
+	state                    state
+	desc                     Descriptor
 	collection               *segcore.CCollection
 	segments                 map[int64]*growingSegment
 	segmentIDs               []int64
 	deleteReplayEntries      []*streamingpb.TransformLogEntry
+	prepareFunc              func(context.Context) error
+	pendingEvents            []walview.VChannelResourceEvent
+	drainRunning             bool
+	drainWG                  sync.WaitGroup
 	truncateDataVersion      qviews.DataVersion
 	hasTruncateDataVersion   bool
 	closeOnce                sync.Once
-	liveStopCh               chan struct{}
-	liveDoneCh               chan struct{}
 	appliedGrowingTimeTick   atomic.Uint64
 	appliedTransformTimeTick atomic.Uint64
 	bm25                     atomic.Value
 }
 
-func newRuntime(collection *segcore.CCollection) *Runtime {
+func newRuntime(desc Descriptor) *Runtime {
 	return &Runtime{
-		collection: collection,
-		segments:   make(map[int64]*growingSegment),
+		state:    statePreparing,
+		desc:     desc,
+		segments: make(map[int64]*growingSegment),
 	}
 }
 
@@ -189,17 +197,12 @@ func (r *Runtime) Close() {
 	}
 	r.closeOnce.Do(func() {
 		r.mu.Lock()
-		liveStopCh := r.liveStopCh
-		liveDoneCh := r.liveDoneCh
-		r.liveStopCh = nil
-		r.liveDoneCh = nil
+		r.state = stateClosed
+		r.pendingEvents = nil
 		r.mu.Unlock()
-		if liveStopCh != nil {
-			close(liveStopCh)
-		}
-		if liveDoneCh != nil {
-			<-liveDoneCh
-		}
+
+		r.drainWG.Wait()
+
 		r.mu.Lock()
 		segments := make([]*growingSegment, 0, len(r.segments))
 		for _, segment := range r.segments {

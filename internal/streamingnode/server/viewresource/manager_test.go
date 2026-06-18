@@ -42,7 +42,6 @@ func TestManagerAcquireWaitsForWALTriggeredRuntime(t *testing.T) {
 
 	observer := manager.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", version, meta.GetSettings()))
 	require.NotNil(t, observer)
-	t.Cleanup(observer.Close)
 
 	select {
 	case <-manager.NotifyReady():
@@ -75,7 +74,6 @@ func TestManagerDuplicateAlterAfterAcquireDoesNotRestoreInitRef(t *testing.T) {
 
 	observer := manager.OnAlterLoadConfig(view)
 	require.NotNil(t, observer)
-	t.Cleanup(observer.Close)
 	select {
 	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
@@ -128,7 +126,6 @@ func TestManagerNewAlterAfterAcquireDoesNotRestoreInitRef(t *testing.T) {
 
 	observer := manager.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", version, meta.GetSettings()))
 	require.NotNil(t, observer)
-	t.Cleanup(observer.Close)
 	select {
 	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
@@ -201,17 +198,16 @@ func TestManagerAcquireWithoutWALTriggeredRuntimeIsUnrecoverable(t *testing.T) {
 }
 
 func TestManagerReleaseBeforeReadyCompletesAcquireAsUnrecoverable(t *testing.T) {
-	blocking := &cancelAwareGrowingSegmentRuntimeBuilder{
+	blocking := &cancelAwareIDFOracleRuntimeBuilder{
 		started:  make(chan struct{}),
 		canceled: make(chan struct{}),
 	}
-	manager := NewManager(blocking, NoopIDFOracleRuntimeBuilder{})
+	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, blocking)
 	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
 	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
 
 	observer := manager.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", version, meta.GetSettings()))
 	require.NotNil(t, observer)
-	t.Cleanup(observer.Close)
 	select {
 	case <-blocking.started:
 	case <-time.After(time.Second):
@@ -258,7 +254,6 @@ func TestManagerReleaseAndReacquireSameKeyDoesNotCompleteStaleAcquireAsReady(t *
 
 	observer := manager.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", version, meta.GetSettings()))
 	require.NotNil(t, observer)
-	t.Cleanup(observer.Close)
 	select {
 	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
@@ -336,7 +331,6 @@ func TestManagerUnknownReleaseDoesNotDropInitRefResources(t *testing.T) {
 
 	observer := manager.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", version, meta.GetSettings()))
 	require.NotNil(t, observer)
-	t.Cleanup(observer.Close)
 	select {
 	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
@@ -395,7 +389,6 @@ func TestManagerClosePanicsWithQueryViewRefs(t *testing.T) {
 
 	observer := manager.OnAlterLoadConfig(testAlterLoadConfigView(1, "ch", version, meta.GetSettings()))
 	require.NotNil(t, observer)
-	t.Cleanup(observer.Close)
 	select {
 	case <-manager.NotifyReady():
 	case <-time.After(time.Second):
