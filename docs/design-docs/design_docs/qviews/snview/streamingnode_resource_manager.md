@@ -1,19 +1,19 @@
 # StreamingNode Query Resource Manager Design
 
 > StreamingNode-side query resource ownership for QueryView.
-> This document defines the `StreamingNodeResourceManager` boundary used by WAL
-> recovery and the StreamingNode QueryView state machine. Query execution,
-> QueryCoord placement, and QueryNode sealed segment lifecycle are out of scope.
+> This document defines the PChannel-local resource manager, the vchannel-level
+> `QueryRuntime`, and the reference model used by WAL recovery and the
+> StreamingNode QueryView state machine. Query execution, QueryCoord placement,
+> and QueryNode sealed segment lifecycle are out of scope.
 
 ## 1. Purpose
 
-`StreamingNodeResourceManager` prepares query resources from WAL state and keeps
-them alive while QueryViews reference them.
+`StreamingNodeResourceManager` prepares and owns StreamingNode-local query
+resources for QueryView.
 
 The manager is scoped to one `PChannelRuntime`. A StreamingNode may run many
-PChannel runtimes, and each runtime owns its own resource manager instance. A
-StreamingNode-level registry may create or find these managers, but it does not
-own vchannel resource lifecycle.
+PChannel runtimes, and each PChannel runtime owns one resource manager instance.
+The manager does not serve resources across PChannels.
 
 Inside one `PChannelRuntime`, it has two upstream callers:
 
@@ -28,35 +28,39 @@ interfaces:
 - `walview.LoadConfigListener`
 - `snview.StreamingNodeResourceManager`
 
-The purpose of this component is to:
+The manager owns resource lifetime. The actual vchannel resources are held by a
+single `QueryRuntime` per loaded vchannel:
 
-1. receive WAL-captured load intent from `RecoveryStorage`;
-2. prepare local StreamingNode query resources from `VChannelWALView`;
-3. track initialization and QueryView references;
-4. report resource readiness to QueryView state machines;
-5. release resources after all references are gone;
-6. close remaining PChannel-local resources when the `PChannelRuntime` closes.
+```text
+StreamingNodeResourceManager
+  -> QueryRuntime
+       -> GrowingRuntime
+       -> IDFOracleRuntime
+```
+
+`QueryRuntime` is the only `walview.VChannelLiveObserver` for the vchannel. It
+buffers live resource events while preparing, initializes all query resource
+modules, drains the pending buffer into every module, and reports catchup only
+after the whole vchannel resource is ready.
 
 `Up` is not a resource-manager event. An `Up` QueryView is persisted only as
 WAL-bound QueryView meta for StreamingNode crash recovery. Resource lifetime is
 driven by `OnAlterLoadConfig`, `OnDropLoadConfig`, `Acquire`, and `Release`.
-WAL ownership handoff first closes the PChannel-local QueryView state machine,
-which releases QueryView references, and only then finalizes the resource
-manager.
 
 ## 2. Dependency Components And Business Boundaries
 
 | Component | Role | Boundary |
 |---|---|---|
-| `PChannelRuntime` | Owns one PChannel WAL instance and the PChannel-local WAL submodules, including `RecoveryStorage`, `QueryViewStateMachine`, and `StreamingNodeResourceManager`. | It coordinates WAL open, recovery, handoff close, and module close order. It does not build vchannel query resources directly. |
-| `RecoveryStorage` | Observes `AlterLoadConfig` / `DropLoadConfig`, restores WAL metadata on startup, builds valid `VChannelWALView`, and calls the PChannel-local `StreamingNodeResourceManager` through `LoadConfigListener`. | It does not build csegments, fetch BM25 resources, wait for query resources to become ready, or manage QueryView lifecycle. WALView capture details are defined in [StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md). |
-| `VChannelModule` | Persists `VChannelMeta.load_config`. | It is an input provider for `RecoveryStorage`, not a direct dependency of `StreamingNodeResourceManager`. |
-| `SegmentModule` | Provides the visible segment snapshot for a requested base `DataVersion`. | It owns segment metadata and segment GC. The resource manager does not query or mutate it directly. |
-| `TransformLogModule` | Provides historical transform replay and transform frontier for the WAL view. | It owns TransformLog storage. The resource manager consumes only the scanner/frontier already packaged in `VChannelWALView`. |
-| `StreamingNodeResourceManager` | Owns query resources, resource references, readiness checks, and resource release for one PChannel. | It implements both `LoadConfigListener` and `QueryViewResourceManager` for the same `PChannelRuntime`. |
-| `QueryViewStateMachine` | PChannel-local WAL submodule that owns local QueryView state transitions, calls `Acquire` when a QueryView starts using resources, calls `Release` when a QueryView leaves this PChannel runtime, and drains local QueryViews before WAL handoff close. | It does not manage csegments, BM25 resources, live observers, or resource GC directly. WAL handoff unmounts local QueryViews but must not delete persisted QueryView meta that another node needs to recover. |
-| `QueryView Meta` | WAL-bound metadata persisted for crash recovery and owned by the PChannel-local QueryView state machine. | It is stored under `streamingnode-meta/wal/<pchannel>/query-view/...`, used directly by QueryView recovery and `Acquire`, and must not be scoped by StreamingNode node ID. |
-| `QueryCoord` | Generates QueryViews and may provide sealed BM25 resources through RPC. | This document treats it only as an external dependency. |
+| `PChannelRuntime` | Owns one PChannel WAL instance and PChannel-local WAL submodules, including `RecoveryStorage`, `QueryViewStateMachine`, and `StreamingNodeResourceManager`. | It coordinates WAL open, recovery, handoff close, and module close order. It does not build vchannel query resources directly. |
+| `RecoveryStorage` | Observes `AlterLoadConfig` / `DropLoadConfig`, restores WAL metadata on startup, builds valid `VChannelWALView`, and calls the resource manager through `LoadConfigListener`. | It does not build csegments, fetch BM25 resources, wait for query resources to become ready, or manage QueryView lifecycle. WALView capture details are defined in [StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md). |
+| `StreamingNodeResourceManager` | Owns PChannel-local resource references, creates vchannel `QueryRuntime` instances, submits initialization tasks, waits for resource catchup on `Acquire`, advances DataVersion watermarks, and releases resources. | It does not apply WAL events to concrete resources directly. It does not own QueryView state transitions. |
+| `QueryRuntime` | VChannel-level singleton resource runtime. Implements `VChannelLiveObserver`, owns pending live-event buffering, initializes resource modules, drains pending events into modules, exposes whole-resource catchup, and broadcasts DataVersion advancement. | It does not own QueryView references, `load_config` meta, or WAL module snapshots. |
+| `QueryRuntimeModule` | Common lifecycle interface implemented by resource modules. | It does not manage references or live observer registration. |
+| `GrowingRuntime` | QueryRuntime module that owns growing segment resources for the vchannel. | It does not implement `VChannelLiveObserver`, maintain pending buffers, or decide QueryView lifecycle. Details are defined in [StreamingNode Growing Segment Runtime Design](growing_segment_runtime.md). |
+| `IDFOracleRuntime` | QueryRuntime module that owns the vchannel singleton BM25 / IDF oracle. | It does not implement `VChannelLiveObserver`, expose external truncation, or own QueryView references. Details are defined in [StreamingNode IDF Oracle Runtime Design](idf_oracle_runtime.md). |
+| `Scheduler` | Runs `QueryRuntime` initialization tasks with bounded concurrency. | It does not know QueryView references, resource lifetime, or DataVersion watermarks. |
+| `QueryViewStateMachine` | PChannel-local WAL submodule that owns QueryView transitions, calls `Acquire` when a QueryView starts using local resources, calls `Release` when a QueryView leaves this PChannel runtime, and drains local QueryViews before WAL handoff close. | It does not manage csegments, BM25 resources, live observers, or resource GC directly. |
+| `QueryView Meta` | WAL-bound metadata persisted for crash recovery and owned by the PChannel-local QueryView state machine. | It is stored under the PChannel WAL identity, used by QueryView recovery and `Acquire`, and must not be scoped by StreamingNode node ID. |
 
 The key dependency boundary is:
 
@@ -64,6 +68,8 @@ The key dependency boundary is:
 VChannelModule / SegmentModule / TransformLogModule
         -> RecoveryStorage builds VChannelWALView
         -> StreamingNodeResourceManager
+        -> QueryRuntime
+        -> QueryRuntimeModule
 
 QueryViewStateMachine
         -> StreamingNodeResourceManager
@@ -79,45 +85,58 @@ delete replay contract are defined by
 
 ### 3.1 Relationship Model
 
-```text
-PChannelRuntime
-  +-- RecoveryStorage
-  |     -> StreamingNodeResourceManager
-  +-- QueryViewStateMachine
-  |     -> StreamingNodeResourceManager
-  +-- StreamingNodeResourceManager
-```
-
-The shorter dependency graph is:
+Normal load:
 
 ```text
-RecoveryStorage -> StreamingNodeResourceManager
-QueryViewStateMachine -> StreamingNodeResourceManager
-```
-
-Both dependencies are PChannel-local. The resource manager does not serve
-resources across PChannels.
-
-Normal WAL messages still enter through `RecoveryStorage`:
-
-```text
-AlterLoadConfig / DropLoadConfig WAL message
+AlterLoadConfig WAL message
         |
         v
 RecoveryStorage
         |
-        | LoadConfigListener
+        | OnAlterLoadConfig(VChannelWALView)
         v
 StreamingNodeResourceManager
-        ^
-        | QueryViewResourceManager
         |
-QueryViewStateMachine
+        | create vchannel singleton
+        v
+QueryRuntime(Preparing, VChannelLiveObserver)
+        |
+        | submit initialization
+        v
+Scheduler
 ```
 
-`RecoveryStorage` creates or removes initialization intent. The QueryView state
-machine creates or removes QueryView references. The resource manager is the
-only component that owns the resulting resources for this PChannel.
+Live resource events:
+
+```text
+RecoveryStorage
+        |
+        | ObserveEvent
+        v
+QueryRuntime
+        |
+        | ordered ApplyLiveEvent
+        v
+QueryRuntimeModule
+```
+
+QueryView references:
+
+```text
+QueryViewStateMachine
+        |
+        | Acquire / Release
+        v
+StreamingNodeResourceManager
+        |
+        | Advance(oldestDataVersion)
+        v
+QueryRuntime
+        |
+        | module.Advance(oldestDataVersion)
+        v
+GrowingRuntime / IDFOracleRuntime
+```
 
 ### 3.2 Reference Model
 
@@ -131,11 +150,10 @@ resource refs =
 
 Reference rules:
 
-1. `OnAlterLoadConfig` creates an initialization reference, `initRef`.
+1. `OnAlterLoadConfig` creates `initRef`.
 2. `Acquire(QueryView)` creates a `queryViewRef`.
-3. The first successful `Acquire` atomically transfers ownership from
-   `initRef` to the QueryView lifecycle by registering the QueryView reference
-   and removing `initRef` in the same state update.
+3. The first successful `Acquire` atomically registers the QueryView reference
+   and removes `initRef`.
 4. Later `Acquire` calls only add QueryView references.
 5. `Release(QueryView)` removes the corresponding QueryView reference.
 6. `OnDropLoadConfig` removes only `initRef`.
@@ -145,60 +163,97 @@ Reference rules:
    `QueryViewStateMachine.CloseForHandoff` before the resource manager is
    finalized.
 
-### 3.3 Resource State
+### 3.3 VChannel Resource State
 
-The component maintains vchannel-local state:
+The manager maintains one resource state per loaded vchannel:
 
 ```text
+resources map[vchannel]vchannelResourceState
+
 vchannelResourceState
-  loadConfigPresent bool
   initRef bool
   queryViewRefs map[QueryViewVersion]QueryViewMeta
-  runtimes map[DataVersion]runtimeState
-  idfOracleRuntime IDFOracleRuntime
-  loading currentLoadTask
+  runtime QueryRuntime
+  buildTask QueryRuntimeBuildTask
 ```
 
-`runtimeState` contains StreamingNode-side query resources retained for a
-specific resource DataVersion:
+There is no `DataVersion -> runtime` map. A loaded vchannel owns exactly one
+`QueryRuntime`.
 
-- csegment-backed growing data;
-- retained flushed-as-growing data required by older QueryViews;
-- historical delete replay result;
-- `GrowingSegmentRuntime` as the live WAL observer;
-- pending live-event buffer and apply frontiers;
-- other query resources tied to the same DataVersion model.
+The resource key is only `vchannel`. `collectionID` is a consistency property
+inside `VChannelWALView`, `QueryRuntime`, and resource modules. It is not part
+of the manager's resource identity. If a repeated load for the same vchannel
+contains a different collection ID, it is a critical WAL/resource consistency
+bug and must fail by assertion.
 
-`idfOracleRuntime` is a vchannel-level singleton resource. It is initialized by
-the same `OnAlterLoadConfig` / recovery build flow, but it is not retained as a
-`DataVersion -> oracle` map. Its lifecycle and asynchronous advancement are
-defined in [StreamingNode IDF Oracle Runtime Design](idf_oracle_runtime.md).
+The runtime owns all module state:
 
-### 3.4 Invariants
+```text
+QueryRuntime
+  collectionID
+  vchannel
+  baseDataVersion
+  state Preparing | Ready | Closed
+  pendingEvents []VChannelResourceEvent
+  modules []QueryRuntimeModule
+  growingRuntime GrowingRuntime
+  idfOracleRuntime IDFOracleRuntime
+  catchupDone
+  catchupErr
+```
+
+### 3.4 DataVersion Advancement
+
+The resource manager computes one watermark from active QueryView references:
+
+```text
+oldestDataVersion = min(queryViewRefs.DataVersion)
+```
+
+It calls `QueryRuntime.Advance(oldestDataVersion)` only when at least one
+QueryView reference exists.
+
+`QueryRuntime.Advance` broadcasts the same watermark to every module:
+
+```text
+GrowingRuntime.Advance(oldestDataVersion)
+IDFOracleRuntime.Advance(oldestDataVersion)
+```
+
+Module-specific meaning:
+
+- `GrowingRuntime` uses the watermark to release growing segment state no longer
+  needed by any active QueryView.
+- `IDFOracleRuntime` uses the watermark to asynchronously advance BM25 / IDF
+  oracle state. The oracle must not advance beyond the oldest active QueryView.
+
+### 3.5 Invariants
 
 1. `RecoveryStorage` depends on `StreamingNodeResourceManager` only through
    `LoadConfigListener`.
 2. `QueryViewStateMachine` depends on `StreamingNodeResourceManager` only
    through `QueryViewResourceManager`.
 3. `StreamingNodeResourceManager` is the only owner of StreamingNode query
-   resource lifetime.
-4. `VChannelModule`, `SegmentModule`, and `TransformLogModule` are WALView input
-   providers through `RecoveryStorage`; the resource manager does not query them
-   directly.
-5. `AlterLoadConfig` creates `initRef` and starts resource preparation.
-6. `DropLoadConfig` removes only `initRef`.
-7. QueryView `Acquire` creates QueryView references; QueryView `Release`
-   removes them.
-8. `Up` persistence is recovery metadata only and is not a resource-manager
-   signal.
-9. Recovery acquires QueryViews in QueryViewVersion order.
-10. Resources are released only after all resource-manager references are gone.
-11. PChannel handoff close must first unmount local QueryViews through
+   resource lifetime for its PChannel.
+4. A loaded vchannel has at most one `QueryRuntime`.
+5. `QueryRuntime` is the only live observer returned to `RecoveryStorage`.
+6. Resource modules do not implement `VChannelLiveObserver`.
+7. `QueryRuntime.CatchupDone` represents whole-resource catchup, not a single
+   module's catchup.
+8. `AlterLoadConfig` creates `initRef` and starts `QueryRuntime`
+   initialization.
+9. `DropLoadConfig` removes only `initRef`.
+10. QueryView `Acquire` creates QueryView references; QueryView `Release`
+    removes them.
+11. QueryView `Acquire` does not create or schedule a new runtime.
+12. Recovery acquires QueryViews in QueryViewVersion order.
+13. Resources are released only after all resource-manager references are gone.
+14. PChannel handoff close must first unmount local QueryViews through
     `QueryViewStateMachine`, then close the resource manager.
 
 ## 4. Interface Description
 
-### 4.1 Component Interface
+### 4.1 PChannel Resource Manager
 
 ```go
 type StreamingNodeResourceManager interface {
@@ -209,8 +264,8 @@ type StreamingNodeResourceManager interface {
 ```
 
 There is one `StreamingNodeResourceManager` instance per `PChannelRuntime`.
-`Close` is a PChannel lifecycle finalizer called by `PChannelRuntime` after the
-PChannel-local QueryView state machine has drained local QueryViews.
+`Close` is called by `PChannelRuntime` after the PChannel-local QueryView state
+machine has drained local QueryViews.
 
 ### 4.2 WAL-Side Interface
 
@@ -221,10 +276,9 @@ type LoadConfigListener interface {
 }
 ```
 
-`OnAlterLoadConfig` receives a complete WAL input view and starts asynchronous
-resource preparation. It creates a `GrowingSegmentRuntime` in `Preparing` state
-and returns that runtime as the live observer that `RecoveryStorage` uses to
-deliver later resource events.
+`OnAlterLoadConfig` receives a complete WAL input view, creates the vchannel
+singleton `QueryRuntime` in `Preparing` state, submits its initialization task,
+and returns the runtime as the live observer.
 
 `OnDropLoadConfig` removes the initialization reference for the vchannel. It is
 not a QueryView cleanup command.
@@ -233,252 +287,202 @@ not a QueryView cleanup command.
 
 ```go
 type QueryViewResourceManager interface {
-    Acquire(req AcquireResource)
-    Release(req ReleaseResource)
+    Acquire(ctx context.Context, req AcquireResource) error
+    Release(ctx context.Context, req ReleaseResource)
 }
 ```
 
-`Acquire` registers a QueryView reference and eventually reports either ready or
-unrecoverable.
+`Acquire` waits for `QueryRuntime.CatchupDone` before QueryView can report `Up`.
+After reference registration, it advances the runtime with the oldest active
+QueryView DataVersion.
 
-`Release` removes a QueryView reference and releases resources if no references
-remain.
+`Release` removes the QueryView reference. If QueryView references remain, it
+advances the runtime with the new oldest active QueryView DataVersion. If no
+reference remains and `initRef` is absent, it closes the runtime.
 
-Persisted QueryViews are WAL-bound meta. Recovery uses the same ordered
-`Acquire` operation as the normal flow and does not introduce a separate
-resource path.
-
-### 4.4 QueryView State Machine Lifecycle
-
-`QueryViewStateMachine` is a PChannel-local WAL submodule:
+### 4.4 QueryRuntime
 
 ```go
-type QueryViewStateMachine interface {
-    Recover(upViews []QueryViewMeta)
-    CloseForHandoff()
+type QueryRuntime interface {
+    walview.VChannelLiveObserver
+
+    Initialize(ctx context.Context) error
+
+    CatchupDone() <-chan struct{}
+    CatchupError() error
+
+    Advance(oldestDataVersion qviews.DataVersion)
+
     Close()
 }
 ```
 
-`Recover` restores persisted QueryView meta and calls `Acquire` in
-QueryViewVersion order for this PChannel. It also exposes the oldest recovered
-Up QueryView DataVersion to the PChannel recovery flow so `RecoveryStorage` can
-build the correct `VChannelWALView` base.
+`Initialize` prepares all modules and drains the pending live-event buffer.
 
-`CloseForHandoff` is used when WAL ownership is moving away from the current
-node. It stops new local QueryView transitions, releases every local QueryView
-reference through `QueryViewResourceManager.Release`, and clears only local
-state. It must not delete persisted QueryView meta; the target node needs that
-meta to recover or receive the QueryViews.
+`CatchupDone` closes only after:
 
-### 4.5 Readiness Contract
+1. every module has finished `Prepare`;
+2. the runtime has entered `Ready`;
+3. all pending events captured during `Preparing` have been applied to every
+   module in WAL order.
 
-`Acquire` must eventually invoke exactly one terminal callback:
+`Advance` is called only when at least one QueryView reference exists.
 
-- ready, when all resources required by the QueryView are available;
-- unrecoverable, when the requested version cannot be served.
+### 4.5 QueryRuntimeModule
 
-Readiness checks are read-only with respect to WAL modules. They can wait for an
-existing WAL-triggered preparation task, but they must not pull a new historical
-snapshot from `SegmentModule` or `TransformLogModule`.
+```go
+type QueryRuntimeModule interface {
+    Prepare(ctx context.Context) error
+    ApplyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent)
+    Advance(oldestDataVersion qviews.DataVersion)
+    Close()
+}
+```
 
-Repeated `Acquire` for the same QueryView version is idempotent and returns the
-same logical readiness result.
+`GrowingRuntime` and `IDFOracleRuntime` both implement this interface. Concrete
+query-facing accessors are exposed by their own module-specific interfaces, not
+by `QueryRuntimeModule`.
+
+`ApplyLiveEvent` has no recoverable error return. Failure to apply valid live
+input means the WALView input or local runtime state is corrupted and the
+StreamingNode must fail critically.
+
+### 4.6 Scheduler
+
+```go
+type Scheduler interface {
+    Submit(task QueryRuntimeBuildTask)
+    Close()
+}
+
+type QueryRuntimeBuildTask interface {
+    Key() string // vchannel
+
+    Run()
+    Done() <-chan struct{}
+    Result() (QueryRuntime, error)
+
+    Cancel()
+}
+```
+
+The scheduler guarantees bounded initialization concurrency. It does not manage
+references, create tasks from QueryView `Acquire`, choose DataVersions, or apply
+resource events.
 
 ## 5. Actual Behavior
 
-### 5.1 Normal AlterLoadConfig Flow
-
-`AlterLoadConfig` is the only WAL trigger that starts StreamingNode-side query
-resource preparation.
+### 5.1 Normal Load
 
 ```text
 RecoveryStorage observes AlterLoadConfig
-  -> VChannelModule persists VChannelMeta.load_config
-  -> SegmentModule provides a visible segment snapshot
-  -> TransformLogModule provides delete replay and transform frontier
-  -> RecoveryStorage builds VChannelWALView
+  -> builds VChannelWALView
   -> StreamingNodeResourceManager.OnAlterLoadConfig(view)
-  -> StreamingNodeResourceManager creates initRef
-  -> StreamingNodeResourceManager starts asynchronous resource preparation
+  -> manager creates initRef
+  -> manager creates QueryRuntime(Preparing)
+  -> manager submits QueryRuntimeBuildTask
+  -> manager returns QueryRuntime as VChannelLiveObserver
 ```
 
-The normal preparation base is:
+The returned observer receives live resource events immediately. Events observed
+before runtime readiness are stored in `QueryRuntime.pendingEvents`.
+
+### 5.2 QueryRuntime Initialization
 
 ```text
-normalBaseDataVersion = SegmentModule.MaxDataVersion(vchannel)
+Scheduler runs QueryRuntimeBuildTask
+  -> QueryRuntime.Initialize
+  -> GrowingRuntime.Prepare
+  -> IDFOracleRuntime.Prepare
+  -> QueryRuntime enters Ready
+  -> QueryRuntime drains pendingEvents in WAL order
+  -> each event is applied to every QueryRuntimeModule
+  -> QueryRuntime closes CatchupDone
 ```
 
-`RecoveryStorage` builds `VChannelWALView` for this base DataVersion. The
-WALView capture rules, segment snapshot contents, live observer, and delete
-replay are defined in
-[StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md).
-The segment visibility rule is owned by [Segment View Module](../../wal/segment_view_module.md).
+After `Ready`, new live events are still serialized by `QueryRuntime` and
+applied to modules in the same module order.
 
-The resource manager prepares resources from the WAL view only. It must not call
-back into `SegmentModule` or `TransformLogModule` to rebuild inputs.
-
-### 5.2 QueryView Acquire Flow
-
-When the StreamingNode QueryView state machine receives or recovers a QueryView
-that needs local resources, it calls:
+### 5.3 First QueryView Acquire
 
 ```text
-StreamingNodeResourceManager.Acquire(QueryViewMeta)
+QueryViewStateMachine.Acquire(qv)
+  -> manager registers queryViewRef
+  -> manager removes initRef in the same state update
+  -> manager waits for QueryRuntime.CatchupDone
+  -> manager calls QueryRuntime.Advance(qv.DataVersion)
+  -> QueryView may report Up
 ```
 
-`Acquire` registers a QueryView reference and waits until the resource runtime
-needed by the QueryView is ready.
+The first QueryView transfers ownership from the load-config initialization
+reference to QueryView references.
 
-For the first QueryView reference on a vchannel, `Acquire` also removes the
-initialization reference created by `OnAlterLoadConfig`. This is the ownership
-transfer from load-config initialization to QueryView lifecycle management.
-
-After the QueryView reference is registered and the initial resource is ready,
-`Acquire` may notify the vchannel-level IDF oracle runtime of the QueryView
-DataVersion through `MaybeAdvance`. This is an asynchronous IDF maintenance
-signal and does not make QueryView readiness wait for IDF advancement. The IDF
-runtime remains protected by the QueryView reference after the initialization
-reference is removed.
-
-### 5.3 QueryView Up Flow
-
-When a QueryView becomes `Up`, the state machine persists the QueryView meta for
-StreamingNode crash recovery. The resource manager is not notified.
-
-The first QueryView `Up` report for a vchannel must wait for the IDF oracle
-initial catchup described in
-[StreamingNode IDF Oracle Runtime Design](idf_oracle_runtime.md). Later
-QueryViews do not wait for asynchronous IDF advancement before reporting `Up`.
-
-This keeps responsibilities separate:
-
-- the state machine persists recovery state;
-- the resource manager manages resources through references;
-- `Up` itself does not change resource lifetime.
-
-### 5.4 QueryView Release Flow
-
-When the QueryView state machine removes a QueryView from this PChannel runtime,
-it calls:
+### 5.4 Later QueryView Acquire
 
 ```text
-StreamingNodeResourceManager.Release(QueryViewMeta)
+QueryViewStateMachine.Acquire(qv)
+  -> manager registers queryViewRef
+  -> manager waits for QueryRuntime.CatchupDone
+  -> manager computes oldestDataVersion from all queryViewRefs
+  -> manager calls QueryRuntime.Advance(oldestDataVersion)
 ```
 
-`Release` removes the QueryView reference. This path is used both for logical
-QueryView removal and for local unmount during WAL handoff. If no initialization
-reference and no QueryView references remain, all resources owned by that
-vchannel can be released.
+`Acquire` never schedules another runtime. A vchannel already has a singleton
+runtime.
 
-Resource release may close the observer runtime, cancel in-flight preparation,
-release csegments, and close the vchannel-level IDF oracle runtime. IDF sealed
-BM25 cache leases are released by `IDFOracleRuntime` during its own close path.
+### 5.5 QueryView Release
 
-Segment metadata GC remains owned by `SegmentModule`. The resource manager can
-release its query resources, but it does not delete SegmentModule metadata
-directly.
+```text
+QueryViewStateMachine.Release(qv)
+  -> manager removes queryViewRef
+  -> if queryViewRefs is non-empty:
+         manager calls QueryRuntime.Advance(oldestDataVersion)
+     else if initRef is absent:
+         manager closes QueryRuntime
+```
 
-### 5.5 DropLoadConfig Flow
-
-`DropLoadConfig` removes only the load intent:
+### 5.6 Drop Load Config
 
 ```text
 RecoveryStorage observes DropLoadConfig
-  -> VChannelModule persists VChannelMeta.load_config = nil
-  -> StreamingNodeResourceManager.OnDropLoadConfig(...)
-  -> StreamingNodeResourceManager removes initRef
+  -> removes VChannelMeta.load_config
+  -> StreamingNodeResourceManager.OnDropLoadConfig(event)
+  -> manager removes initRef
+  -> if queryViewRefs is empty:
+         manager closes QueryRuntime
 ```
 
-`DropLoadConfig` must not remove QueryView references. If resources have already
-been acquired by QueryViews, they remain alive until the QueryView state machine
-calls `Release`.
+`DropLoadConfig` does not directly clean QueryView references and does not
+delete QueryView meta.
 
-If no QueryView has acquired the resources, removing `initRef` makes the
-resources unreferenced and therefore releasable.
+### 5.7 Crash Recovery
 
-### 5.6 Recovery Flow
+Recovery rebuilds state from WAL metadata:
 
-PChannel runtime recovery restores both WAL-owned load intent and persisted
-QueryView meta for the PChannel.
+1. `RecoveryStorage` reads load config and QueryView metadata.
+2. For each loaded vchannel, it chooses the recovery base DataVersion:
+   - if persisted `Up` QueryViews exist, use the oldest `Up` QueryView
+     DataVersion;
+   - otherwise use the SegmentModule-provided maximum DataVersion.
+3. `RecoveryStorage` builds a valid `VChannelWALView` for the chosen base.
+4. `RecoveryStorage` calls `OnAlterLoadConfig(view)`.
+5. `QueryViewStateMachine` replays QueryView metadata and calls `Acquire` in
+   QueryViewVersion order.
 
-For each vchannel:
+### 5.8 WAL Handoff Close
 
-```text
-1. RecoveryStorage restores VChannelMeta and WAL module state.
-2. QueryViewStateMachine restores persisted QueryView meta.
-3. If persisted Up QueryViews exist:
-     sort them by QueryViewVersion ascending
-     recoveryBaseDataVersion = first QueryView.DataVersion
-   Else:
-     recoveryBaseDataVersion = SegmentModule.MaxDataVersion(vchannel)
-4. RecoveryStorage builds a valid VChannelWALView(recoveryBaseDataVersion).
-5. RecoveryStorage calls StreamingNodeResourceManager.OnAlterLoadConfig(view).
-6. QueryViewStateMachine calls Acquire for recovered Up QueryViews
-   sequentially in QueryViewVersion order.
-```
+WAL handoff means this node should release local resources because QueryViews
+will be transferred to another node.
 
-The ordered `Acquire` requirement is part of the contract:
-
-```text
-Acquire order per vchannel:
-  DataVersion ascending, then QueryVersion ascending
-```
-
-This guarantees that the oldest recovered Up QueryView establishes the minimum
-resource boundary first. Higher-version QueryViews only add references on top of
-the already recovered resource base.
-
-### 5.7 PChannel Handoff Close Flow
-
-When PChannel WAL ownership moves away from the current StreamingNode, local
-query resources must be released before the WAL instance finishes closing.
-
-The close order is owned by `PChannelRuntime`:
+The close order is:
 
 ```text
 PChannelRuntime.CloseForHandoff
-  -> stop new QueryView transitions and new resource prepares
-  -> QueryViewStateMachine.CloseForHandoff()
-       -> Release every local QueryView reference
-       -> keep persisted QueryView meta intact
-  -> StreamingNodeResourceManager.Close()
-       -> close initRef-only resources
-       -> cancel leftover build tasks
-       -> assert no QueryView references remain
-  -> RecoveryStorage.Close()
-  -> WAL implementation close
+  -> QueryViewStateMachine.CloseForHandoff
+       -> Release all local QueryView refs
+  -> StreamingNodeResourceManager.Close
+       -> close remaining initRef-only runtimes
 ```
 
-`CloseForHandoff` is different from logical QueryView drop. It only unmounts
-local QueryView state from the current node so the QueryViews can be prepared or
-recovered on another node.
-
-`StreamingNodeResourceManager.Close` is not a replacement for
-`QueryViewResourceManager.Release`. It is a PChannel lifecycle finalizer called
-after the QueryView state machine has drained local references. If QueryView
-references still remain, that indicates a close-order violation; the current
-node must still stop serving local resources during WAL handoff.
-
-### 5.8 Unrecoverable Conditions
-
-A QueryView is unrecoverable when:
-
-- load intent is absent and no recovered QueryView path created a valid WAL
-  view;
-- the requested DataVersion is older than the retained resource boundary;
-- the requested resources failed to prepare;
-- the QueryView is acquired out of version order during recovery;
-- the PChannel runtime is closing for handoff.
-
-### 5.9 Cleanup Rule
-
-The resource manager releases a vchannel's resources only when:
-
-```text
-initRef == false
-and len(queryViewRefs) == 0
-```
-
-`DropLoadConfig` alone is not a cleanup command. It only removes `initRef`; the
-normal reference rule then decides whether resources are releasable.
+Persisted QueryView meta is not deleted by this resource close path. It remains
+WAL-bound metadata for the next owner to recover.
