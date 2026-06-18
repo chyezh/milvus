@@ -154,7 +154,7 @@ func newReleaseRecordingApplier(segmentIDs ...int64) *releaseRecordingApplier {
 	return &releaseRecordingApplier{segments: segments}
 }
 
-func (a *releaseRecordingApplier) releaseSegment(segmentID int64) {
+func (a *releaseRecordingApplier) ReleaseSegment(segmentID int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if _, ok := a.segments[segmentID]; !ok {
@@ -704,10 +704,10 @@ func TestManagerDefaultGrowingRuntimeRejectsLiveInsertAfterFlush(t *testing.T) {
 	require.True(t, ready)
 
 	segmentID := int64(21)
-	require.True(t, runtime.Growing.applyLiveMessage(context.Background(), newTestFlushMessage(t, "ch", segmentID, 40)))
+	require.True(t, runtime.Growing.ApplyLiveMessage(context.Background(), newTestFlushMessage(t, "ch", segmentID, 40)))
 	require.True(t, runtime.Growing.SegmentFlushed(segmentID))
 	require.Panics(t, func() {
-		runtime.Growing.applyLiveMessage(context.Background(), newTestSegmentInsertMessage(t, "ch", segmentID, 2, 41, schema))
+		runtime.Growing.ApplyLiveMessage(context.Background(), newTestSegmentInsertMessage(t, "ch", segmentID, 2, 41, schema))
 	})
 	_, ok := runtime.Growing.Segment(segmentID)
 	require.False(t, ok)
@@ -789,16 +789,13 @@ func TestManagerGrowingRuntimeRecordsLiveFlush(t *testing.T) {
 
 func TestGrowingRuntimeTruncateWatermarkAppliesToLateSegmentSealed(t *testing.T) {
 	applier := newReleaseRecordingApplier(10)
-	runtime := &GrowingRuntime{
-		SegmentIDs:      []int64{10},
-		applier:         applier,
-		flushedSegments: map[int64]struct{}{10: {}},
-	}
+	runtime := newGrowingRuntimeForTest(applier)
+	runtime.SegmentIDs = []int64{10}
 
 	runtime.Truncate(qviews.DataVersion{StreamingVersion: 20, CompactVersion: 1})
 	require.Empty(t, applier.releasedSegments())
 
-	applied := runtime.applyLiveEvent(context.Background(), walview.VChannelResourceEvent{
+	applied := runtime.ApplyLiveEvent(context.Background(), walview.VChannelResourceEvent{
 		SegmentSealed: &walview.SegmentSealedEvent{
 			SegmentID:           10,
 			SealedAtDataVersion: qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1},
@@ -1018,21 +1015,17 @@ func TestManagerGrowingRuntimeAdvancesTransformFrontierForDeleteTxn(t *testing.T
 }
 
 func TestManagerGrowingRuntimePanicsOnLiveApplyFailure(t *testing.T) {
-	runtime := &GrowingRuntime{
-		applier: errorLiveApplier{err: errors.New("apply failed")},
-	}
+	runtime := newGrowingRuntimeForTest(errorLiveApplier{err: errors.New("apply failed")})
 	require.Panics(t, func() {
-		runtime.applyLiveMessage(context.Background(), newTestInsertMessage(t, "ch", 30))
+		runtime.ApplyLiveMessage(context.Background(), newTestInsertMessage(t, "ch", 30))
 	})
 }
 
 func TestManagerGrowingRuntimePanicsOnBM25LiveApplyFailure(t *testing.T) {
-	runtime := &GrowingRuntime{
-		applier: noopGrowingRuntimeApplier{},
-	}
-	runtime.setBM25Runtime(&BM25Runtime{LiveUpdater: errorBM25LiveUpdater{err: errors.New("bm25 failed")}})
+	runtime := newGrowingRuntimeForTest(noopGrowingRuntimeApplier{})
+	runtime.SetBM25Runtime(&BM25Runtime{LiveUpdater: errorBM25LiveUpdater{err: errors.New("bm25 failed")}})
 	require.Panics(t, func() {
-		runtime.applyLiveMessage(context.Background(), newTestInsertMessage(t, "ch", 30))
+		runtime.ApplyLiveMessage(context.Background(), newTestInsertMessage(t, "ch", 30))
 	})
 }
 
@@ -1219,7 +1212,7 @@ func TestManagerFinishBuildClosesRuntimeReturnedWithError(t *testing.T) {
 		CollectionID: 1,
 		VChannel:     "ch",
 		DataVersion:  version,
-		Growing:      &GrowingRuntime{applier: applier},
+		Growing:      newGrowingRuntimeForTest(applier),
 	}, errors.New("build canceled"))
 	manager.finishBuild(key, task)
 

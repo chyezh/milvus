@@ -3,47 +3,22 @@ package viewresource
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
-	"github.com/milvus-io/milvus/internal/util/segcore"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource/growingruntime"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 )
 
-// LoadResourceDescriptor describes the latest vchannel runtime that must be
-// prepared after WAL observes AlterLoadConfig.
-type LoadResourceDescriptor struct {
-	WALView    walview.VChannelWALView
-	LiveEvents <-chan walview.VChannelResourceEvent
-	LiveDone   <-chan struct{}
-	OnApplied  func()
-	BM25       *BM25Runtime
-}
-
-func (d LoadResourceDescriptor) CollectionID() int64 {
-	return d.WALView.CollectionID
-}
-
-func (d LoadResourceDescriptor) VChannel() string {
-	return d.WALView.VChannel
-}
-
-func (d LoadResourceDescriptor) DataVersion() qviews.DataVersion {
-	return d.WALView.SegmentSnapshot.DataVersion
-}
-
-func (d LoadResourceDescriptor) Settings() *viewpb.QueryViewSettings {
-	return SettingsFromAlterLoadConfig(d.WALView.LoadConfig.GetHeader())
-}
-
-func (d LoadResourceDescriptor) Schema() *schemapb.CollectionSchema {
-	return d.WALView.Schema
-}
+type LoadResourceDescriptor = growingruntime.Descriptor
+type GrowingRuntime = growingruntime.Runtime
+type GrowingSegmentRuntimeBuilder = growingruntime.Builder
+type GrowingRuntimeApplier = growingruntime.Applier
+type GrowingRuntimeApplierFactory = growingruntime.ApplierFactory
+type NoopGrowingSegmentRuntimeBuilder = growingruntime.NoopBuilder
+type SnapshotGrowingSegmentRuntimeBuilder = growingruntime.SnapshotBuilder
 
 // ViewResourceDescriptor describes a QueryView runtime readiness request.
 type ViewResourceDescriptor struct {
@@ -61,7 +36,7 @@ type ViewRuntime struct {
 	VChannel     string
 	DataVersion  qviews.DataVersion
 	Schema       *schemapb.CollectionSchema
-	Growing      *GrowingRuntime
+	Growing      *growingruntime.Runtime
 	BM25         *BM25Runtime
 }
 
@@ -71,182 +46,6 @@ func (r *ViewRuntime) Close() {
 	}
 	r.Growing.Close()
 	r.BM25.Close()
-}
-
-// GrowingRuntime is the csegment-backed growing side prepared for one DataVersion.
-type GrowingRuntime struct {
-	SegmentIDs          []int64
-	Segments            map[int64]segcore.CSegment
-	DeleteReplayEntries []*streamingpb.TransformLogEntry
-	LiveEvents          <-chan walview.VChannelResourceEvent
-
-	applier                  GrowingRuntimeApplier
-	mu                       sync.RWMutex
-	flushedSegments          map[int64]struct{}
-	sealedAtDataVersions     map[int64]qviews.DataVersion
-	truncateDataVersion      qviews.DataVersion
-	hasTruncateDataVersion   bool
-	closeOnce                sync.Once
-	liveStopCh               chan struct{}
-	liveDoneCh               chan struct{}
-	appliedGrowingTimeTick   atomic.Uint64
-	appliedTransformTimeTick atomic.Uint64
-	bm25                     atomic.Pointer[BM25Runtime]
-}
-
-func (r *GrowingRuntime) AppliedGrowingTimeTick() uint64 {
-	if r == nil {
-		return 0
-	}
-	return r.appliedGrowingTimeTick.Load()
-}
-
-func (r *GrowingRuntime) AppliedTransformTimeTick() uint64 {
-	if r == nil {
-		return 0
-	}
-	return r.appliedTransformTimeTick.Load()
-}
-
-func (r *GrowingRuntime) Segment(segmentID int64) (segcore.CSegment, bool) {
-	if r == nil {
-		return nil, false
-	}
-	if concrete, ok := r.applier.(*segcoreGrowingRuntimeApplier); ok {
-		return concrete.segment(segmentID)
-	}
-	segment, ok := r.Segments[segmentID]
-	return segment, ok
-}
-
-func (r *GrowingRuntime) SegmentFlushed(segmentID int64) bool {
-	if r == nil {
-		return false
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	_, ok := r.flushedSegments[segmentID]
-	return ok
-}
-
-func (r *GrowingRuntime) registerSegment(segmentID int64) {
-	if r == nil || segmentID == 0 {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	for _, existing := range r.SegmentIDs {
-		if existing == segmentID {
-			return
-		}
-	}
-	r.SegmentIDs = append(r.SegmentIDs, segmentID)
-}
-
-func (r *GrowingRuntime) markSegmentFlushed(segmentID int64) {
-	if r == nil || segmentID == 0 {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.flushedSegments == nil {
-		r.flushedSegments = make(map[int64]struct{})
-	}
-	r.flushedSegments[segmentID] = struct{}{}
-}
-
-func (r *GrowingRuntime) markSegmentSealed(segmentID int64, sealedAt qviews.DataVersion) {
-	if r == nil || segmentID == 0 {
-		return
-	}
-	release := false
-	r.mu.Lock()
-	if r.sealedAtDataVersions == nil {
-		r.sealedAtDataVersions = make(map[int64]qviews.DataVersion)
-	}
-	if existing, ok := r.sealedAtDataVersions[segmentID]; ok && !existing.EQ(sealedAt) {
-		r.mu.Unlock()
-		panic("conflicting sealed data version for growing segment")
-	}
-	r.sealedAtDataVersions[segmentID] = sealedAt
-	if r.hasTruncateDataVersion && r.truncateDataVersion.GTE(sealedAt) {
-		r.removeSegmentMetadataLocked(segmentID)
-		release = true
-	}
-	r.mu.Unlock()
-	if release {
-		r.releaseSegment(segmentID)
-	}
-}
-
-func (r *GrowingRuntime) Truncate(minDataVersion qviews.DataVersion) {
-	if r == nil || r.applier == nil {
-		return
-	}
-	r.mu.Lock()
-	if !r.hasTruncateDataVersion || minDataVersion.GT(r.truncateDataVersion) {
-		r.truncateDataVersion = minDataVersion
-		r.hasTruncateDataVersion = true
-	}
-	segmentsToRelease := make([]int64, 0)
-	for segmentID, sealedAt := range r.sealedAtDataVersions {
-		if r.truncateDataVersion.GTE(sealedAt) {
-			segmentsToRelease = append(segmentsToRelease, segmentID)
-			r.removeSegmentMetadataLocked(segmentID)
-		}
-	}
-	r.mu.Unlock()
-	for _, segmentID := range segmentsToRelease {
-		r.releaseSegment(segmentID)
-	}
-}
-
-func (r *GrowingRuntime) removeSegmentMetadataLocked(segmentID int64) {
-	delete(r.sealedAtDataVersions, segmentID)
-	delete(r.flushedSegments, segmentID)
-	delete(r.Segments, segmentID)
-	for i, id := range r.SegmentIDs {
-		if id == segmentID {
-			r.SegmentIDs = append(r.SegmentIDs[:i], r.SegmentIDs[i+1:]...)
-			return
-		}
-	}
-}
-
-func (r *GrowingRuntime) releaseSegment(segmentID int64) {
-	if releaser, ok := r.applier.(growingSegmentReleaser); ok {
-		releaser.releaseSegment(segmentID)
-	}
-}
-
-func (r *GrowingRuntime) Close() {
-	if r == nil {
-		return
-	}
-	r.closeOnce.Do(func() {
-		r.mu.Lock()
-		liveStopCh := r.liveStopCh
-		liveDoneCh := r.liveDoneCh
-		r.liveStopCh = nil
-		r.liveDoneCh = nil
-		r.mu.Unlock()
-		if liveStopCh != nil {
-			close(liveStopCh)
-		}
-		if liveDoneCh != nil {
-			<-liveDoneCh
-		}
-		if r.applier != nil {
-			r.applier.Close()
-		}
-	})
-}
-
-func (r *GrowingRuntime) setBM25Runtime(bm25 *BM25Runtime) {
-	if r == nil {
-		return
-	}
-	r.bm25.Store(bm25)
 }
 
 // BM25Runtime records the BM25 resources loaded for one DataVersion.

@@ -1,4 +1,4 @@
-package viewresource
+package growingruntime
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
-type segcoreGrowingRuntimeApplier struct {
+type segcoreApplier struct {
 	mu              sync.Mutex
 	closeOnce       sync.Once
 	collection      *segcore.CCollection
@@ -28,9 +28,9 @@ type segcoreGrowingRuntimeApplier struct {
 	flushedSegments map[int64]struct{}
 }
 
-func newSegcoreGrowingRuntimeApplier(ctx context.Context, desc LoadResourceDescriptor) (GrowingRuntimeApplier, error) {
+func newSegcoreApplier(ctx context.Context, desc Descriptor) (Applier, error) {
 	if desc.Schema() == nil {
-		return noopGrowingRuntimeApplier{}, nil
+		return NoopApplier{}, nil
 	}
 	collection, err := segcore.CreateCCollection(&segcore.CreateCCollectionRequest{
 		CollectionID:  desc.CollectionID(),
@@ -40,7 +40,7 @@ func newSegcoreGrowingRuntimeApplier(ctx context.Context, desc LoadResourceDescr
 	if err != nil {
 		return nil, err
 	}
-	applier := &segcoreGrowingRuntimeApplier{
+	applier := &segcoreApplier{
 		collection:      collection,
 		segments:        make(map[int64]segcore.CSegment),
 		flushedSegments: make(map[int64]struct{}),
@@ -57,7 +57,7 @@ func newSegcoreGrowingRuntimeApplier(ctx context.Context, desc LoadResourceDescr
 	return applier, nil
 }
 
-func (a *segcoreGrowingRuntimeApplier) LoadPersistedSegment(ctx context.Context, segment walview.VisibleSegment) error {
+func (a *segcoreApplier) LoadPersistedSegment(ctx context.Context, segment walview.VisibleSegment) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if _, ok := a.segments[segment.SegmentID]; ok {
@@ -76,15 +76,15 @@ func (a *segcoreGrowingRuntimeApplier) LoadPersistedSegment(ctx context.Context,
 	return csegment.Load(ctx)
 }
 
-func (a *segcoreGrowingRuntimeApplier) ApplySnapshotInsert(ctx context.Context, segment walview.VisibleSegment, msg message.ImmutableMessage) error {
+func (a *segcoreApplier) ApplySnapshotInsert(ctx context.Context, segment walview.VisibleSegment, msg message.ImmutableMessage) error {
 	return a.applyInsertMessage(ctx, segment.SegmentID, msg)
 }
 
-func (a *segcoreGrowingRuntimeApplier) ApplyDeleteReplay(ctx context.Context, entry *streamingpb.TransformLogEntry) error {
+func (a *segcoreApplier) ApplyDeleteReplay(ctx context.Context, entry *streamingpb.TransformLogEntry) error {
 	return a.applyTransformLogEntry(ctx, entry)
 }
 
-func (a *segcoreGrowingRuntimeApplier) ApplyLiveMessage(ctx context.Context, msg message.ImmutableMessage) error {
+func (a *segcoreApplier) ApplyLiveMessage(ctx context.Context, msg message.ImmutableMessage) error {
 	if msg == nil {
 		return nil
 	}
@@ -110,7 +110,7 @@ func (a *segcoreGrowingRuntimeApplier) ApplyLiveMessage(ctx context.Context, msg
 	}
 }
 
-func (a *segcoreGrowingRuntimeApplier) Close() {
+func (a *segcoreApplier) Close() {
 	a.closeOnce.Do(func() {
 		a.mu.Lock()
 		defer a.mu.Unlock()
@@ -126,7 +126,7 @@ func (a *segcoreGrowingRuntimeApplier) Close() {
 	})
 }
 
-func (a *segcoreGrowingRuntimeApplier) applyInsertMessage(ctx context.Context, segmentID int64, raw message.ImmutableMessage) error {
+func (a *segcoreApplier) applyInsertMessage(ctx context.Context, segmentID int64, raw message.ImmutableMessage) error {
 	if raw == nil {
 		return nil
 	}
@@ -140,7 +140,7 @@ func (a *segcoreGrowingRuntimeApplier) applyInsertMessage(ctx context.Context, s
 	})
 }
 
-func (a *segcoreGrowingRuntimeApplier) insert(ctx context.Context, insert walview.SegmentInsertMessage) error {
+func (a *segcoreApplier) insert(ctx context.Context, insert walview.SegmentInsertMessage) error {
 	body := insert.Message.MustBody()
 	if body == nil {
 		return errors.New("growing insert message has nil request")
@@ -178,7 +178,7 @@ func (a *segcoreGrowingRuntimeApplier) insert(ctx context.Context, insert walvie
 	return err
 }
 
-func (a *segcoreGrowingRuntimeApplier) applyLiveDeleteMessage(ctx context.Context, msg message.ImmutableMessage) error {
+func (a *segcoreApplier) applyLiveDeleteMessage(ctx context.Context, msg message.ImmutableMessage) error {
 	switch msg.MessageType() {
 	case message.MessageTypeDelete:
 		deleted := message.MustAsImmutableDeleteMessageV1(msg)
@@ -200,26 +200,26 @@ func (a *segcoreGrowingRuntimeApplier) applyLiveDeleteMessage(ctx context.Contex
 	}
 }
 
-func (a *segcoreGrowingRuntimeApplier) applyDeleteRequest(ctx context.Context, timeTick uint64, request *msgpb.DeleteRequest) error {
+func (a *segcoreApplier) applyDeleteRequest(ctx context.Context, timeTick uint64, request *msgpb.DeleteRequest) error {
 	if request == nil {
 		return nil
 	}
-	return a.deleteFromAllSegments(ctx, storage.ParseIDs2PrimaryKeysBatch(request.GetPrimaryKeys()), deleteTimestampsFromRequest(timeTick, request))
+	return a.deleteFromAllSegments(ctx, storage.ParseIDs2PrimaryKeysBatch(request.GetPrimaryKeys()), DeleteTimestampsFromRequest(timeTick, request))
 }
 
-func (a *segcoreGrowingRuntimeApplier) applyTransformLogEntry(ctx context.Context, entry *streamingpb.TransformLogEntry) error {
+func (a *segcoreApplier) applyTransformLogEntry(ctx context.Context, entry *streamingpb.TransformLogEntry) error {
 	if entry == nil || entry.GetDelete() == nil {
 		return nil
 	}
 	for _, block := range entry.GetDelete().GetBlocks() {
-		if err := a.deleteFromAllSegments(ctx, storage.ParseIDs2PrimaryKeysBatch(block.GetPrimaryKeys()), deleteTimestampsFromTransformLogBlock(entry.GetTimeTick(), block)); err != nil {
+		if err := a.deleteFromAllSegments(ctx, storage.ParseIDs2PrimaryKeysBatch(block.GetPrimaryKeys()), DeleteTimestampsFromTransformLogBlock(entry.GetTimeTick(), block)); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (a *segcoreGrowingRuntimeApplier) deleteFromAllSegments(ctx context.Context, primaryKeys storage.PrimaryKeys, timestamps []typeutil.Timestamp) error {
+func (a *segcoreApplier) deleteFromAllSegments(ctx context.Context, primaryKeys storage.PrimaryKeys, timestamps []typeutil.Timestamp) error {
 	if primaryKeys.Len() == 0 {
 		return nil
 	}
@@ -243,7 +243,7 @@ func (a *segcoreGrowingRuntimeApplier) deleteFromAllSegments(ctx context.Context
 	return nil
 }
 
-func (a *segcoreGrowingRuntimeApplier) getOrCreateSegment(segmentID int64) (segcore.CSegment, error) {
+func (a *segcoreApplier) getOrCreateSegment(segmentID int64) (segcore.CSegment, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if segment, ok := a.segments[segmentID]; ok {
@@ -261,7 +261,7 @@ func (a *segcoreGrowingRuntimeApplier) getOrCreateSegment(segmentID int64) (segc
 	return segment, nil
 }
 
-func (a *segcoreGrowingRuntimeApplier) markSegmentFlushed(segmentID int64) {
+func (a *segcoreApplier) markSegmentFlushed(segmentID int64) {
 	if segmentID == 0 {
 		return
 	}
@@ -273,12 +273,12 @@ func (a *segcoreGrowingRuntimeApplier) markSegmentFlushed(segmentID int64) {
 	a.flushedSegments[segmentID] = struct{}{}
 }
 
-func (a *segcoreGrowingRuntimeApplier) segmentFlushedLocked(segmentID int64) bool {
+func (a *segcoreApplier) segmentFlushedLocked(segmentID int64) bool {
 	_, ok := a.flushedSegments[segmentID]
 	return ok
 }
 
-func (a *segcoreGrowingRuntimeApplier) segmentIDs() []int64 {
+func (a *segcoreApplier) segmentIDs() []int64 {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	ids := make([]int64, 0, len(a.segments))
@@ -288,14 +288,14 @@ func (a *segcoreGrowingRuntimeApplier) segmentIDs() []int64 {
 	return ids
 }
 
-func (a *segcoreGrowingRuntimeApplier) segment(segmentID int64) (segcore.CSegment, bool) {
+func (a *segcoreApplier) segment(segmentID int64) (segcore.CSegment, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	segment, ok := a.segments[segmentID]
 	return segment, ok
 }
 
-func (a *segcoreGrowingRuntimeApplier) releaseSegment(segmentID int64) {
+func (a *segcoreApplier) ReleaseSegment(segmentID int64) {
 	a.mu.Lock()
 	segment, ok := a.segments[segmentID]
 	if ok {
@@ -308,7 +308,7 @@ func (a *segcoreGrowingRuntimeApplier) releaseSegment(segmentID int64) {
 	}
 }
 
-func (a *segcoreGrowingRuntimeApplier) snapshotSegments() map[int64]segcore.CSegment {
+func (a *segcoreApplier) snapshotSegments() map[int64]segcore.CSegment {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	segments := make(map[int64]segcore.CSegment, len(a.segments))
@@ -362,7 +362,7 @@ func repeatedTimeTicks(timeTick uint64, n int) []typeutil.Timestamp {
 	return timestamps
 }
 
-func deleteTimestampsFromRequest(timeTick uint64, request *msgpb.DeleteRequest) []typeutil.Timestamp {
+func DeleteTimestampsFromRequest(timeTick uint64, request *msgpb.DeleteRequest) []typeutil.Timestamp {
 	if request == nil {
 		return nil
 	}
@@ -375,7 +375,7 @@ func deleteTimestampsFromRequest(timeTick uint64, request *msgpb.DeleteRequest) 
 	return result
 }
 
-func deleteTimestampsFromTransformLogBlock(timeTick uint64, block *streamingpb.TransformDeleteBlock) []typeutil.Timestamp {
+func DeleteTimestampsFromTransformLogBlock(timeTick uint64, block *streamingpb.TransformDeleteBlock) []typeutil.Timestamp {
 	if block == nil {
 		return nil
 	}
