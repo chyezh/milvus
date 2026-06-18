@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/errors"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
@@ -12,12 +13,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
-// IDFOracleRuntimeBuilder prepares DataVersion-level BM25 IDF resources.
-type IDFOracleRuntimeBuilder interface {
-	BuildInitial(ctx context.Context, desc LoadResourceDescriptor) (*BM25Runtime, error)
-}
-
-// Manager prepares and owns StreamingNode query resources for one PChannel runtime.
+// Manager prepares and owns StreamingNode query runtimes for one PChannel runtime.
 type Manager interface {
 	walview.LoadConfigListener
 	snview.SNQueryRuntimeManager
@@ -25,501 +21,345 @@ type Manager interface {
 	Close()
 }
 
-type runtimeKey struct {
-	vchannel string
-	version  qviews.DataVersion
-}
-
-type loadKey struct {
-	collectionID int64
-	vchannel     string
-}
-
-type runtimeState struct {
-	collectionID int64
-	runtime      *ViewRuntime
-	loading      bool
-	err          error
-	cancel       context.CancelFunc
-	task         BuildTask
-}
-
-type referenceState struct {
+type resourceState struct {
 	initRef       bool
 	queryViewRefs map[qviews.QueryViewKey]*viewpb.QueryViewMeta
+
+	runtime *QueryRuntime
+	task    BuildTask
+	err     error
 }
 
-// DefaultManager is the concrete PChannel-local query resource manager.
+// DefaultManager is the concrete PChannel-local query runtime manager.
 type DefaultManager struct {
 	mu        sync.Mutex
 	growing   GrowingSegmentRuntimeBuilder
-	bm25      IDFOracleRuntimeBuilder
+	idf       IDFOracleRuntimeBuilder
 	scheduler Scheduler
 
-	runtimes map[runtimeKey]*runtimeState
-	refs     map[loadKey]*referenceState
-	refIndex map[qviews.QueryViewKey]loadKey
-	refEpoch map[qviews.QueryViewKey]uint64
-	notify   chan struct{}
-	closed   bool
+	resources map[string]*resourceState
+	refIndex  map[qviews.QueryViewKey]string
+	refEpoch  map[qviews.QueryViewKey]uint64
+	closed    bool
 }
 
-func NewManager(growing GrowingSegmentRuntimeBuilder, bm25 IDFOracleRuntimeBuilder) *DefaultManager {
+func NewManager(growing GrowingSegmentRuntimeBuilder, idf IDFOracleRuntimeBuilder) *DefaultManager {
 	if growing == nil {
 		growing = SnapshotGrowingSegmentRuntimeBuilder{}
 	}
-	if bm25 == nil {
-		bm25 = NoopIDFOracleRuntimeBuilder{}
+	if idf == nil {
+		idf = NoopIDFOracleRuntimeBuilder{}
 	}
 	return &DefaultManager{
 		growing:   growing,
-		bm25:      bm25,
+		idf:       idf,
 		scheduler: NewScheduler(4),
-		runtimes:  make(map[runtimeKey]*runtimeState),
-		refs:      make(map[loadKey]*referenceState),
-		refIndex:  make(map[qviews.QueryViewKey]loadKey),
+		resources: make(map[string]*resourceState),
+		refIndex:  make(map[qviews.QueryViewKey]string),
 		refEpoch:  make(map[qviews.QueryViewKey]uint64),
-		notify:    make(chan struct{}, 1),
 	}
 }
 
-func (r *DefaultManager) OnAlterLoadConfig(view walview.VChannelWALView) walview.VChannelLiveObserver {
-	desc := LoadResourceDescriptor{
-		WALView:   view,
-		OnApplied: r.notifyReady,
-	}
-	growing, err := r.growing.NewRuntime(desc)
+func (m *DefaultManager) OnAlterLoadConfig(view walview.VChannelWALView) walview.VChannelLiveObserver {
+	desc := LoadResourceDescriptor{WALView: view}
+	growing, err := m.growing.NewRuntime(desc)
 	if err != nil {
-		return nil
+		panic(errors.Wrap(err, "create growing runtime"))
 	}
-	runtime := &ViewRuntime{
-		CollectionID: desc.CollectionID(),
-		VChannel:     desc.VChannel(),
-		DataVersion:  desc.DataVersion(),
-		Schema:       desc.Schema(),
-		Growing:      growing,
+	idf, err := m.idf.NewRuntime(desc)
+	if err != nil {
+		panic(errors.Wrap(err, "create IDF oracle runtime"))
 	}
-	if !r.prepareLatestFromAlterLoadConfig(context.Background(), desc, runtime) {
-		runtime.Close()
-		return nil
-	}
-	return growing
-}
-
-func (r *DefaultManager) OnDropLoadConfig(event walview.DropLoadConfigEvent) {
-	lk := loadKey{collectionID: event.CollectionID, vchannel: event.VChannel}
-	r.mu.Lock()
-	if refs := r.refs[lk]; refs != nil {
-		refs.initRef = false
-	}
-	cancels, runtimes := r.cleanupIfUnreferencedLocked(lk)
-	r.mu.Unlock()
-
-	for _, runtime := range runtimes {
-		runtime.Close()
-	}
-	for _, cancel := range cancels {
-		cancel()
-	}
-	r.notifyReady()
-}
-
-func (r *DefaultManager) prepareLatestFromAlterLoadConfig(ctx context.Context, desc LoadResourceDescriptor, runtime *ViewRuntime) bool {
-	key := runtimeKey{vchannel: desc.VChannel(), version: desc.DataVersion()}
-	lk := loadKey{collectionID: desc.CollectionID(), vchannel: desc.VChannel()}
-
-	r.mu.Lock()
-	if r.closed {
-		r.mu.Unlock()
-		return false
-	}
-	for existingKey, existingState := range r.runtimes {
-		if existingKey.vchannel == key.vchannel && existingState.collectionID == desc.CollectionID() && existingState.loading {
-			r.mu.Unlock()
-			return false
+	runtime := NewQueryRuntime(desc, growing, idf)
+	task := newResourceBuildTask(context.Background(), desc.VChannel(), func(ctx context.Context) (*QueryRuntime, error) {
+		if err := runtime.Initialize(ctx); err != nil {
+			return runtime, err
 		}
-	}
-	state, ok := r.runtimes[key]
-	if ok && (state.loading || state.runtime != nil) {
-		r.mu.Unlock()
-		return false
-	}
-	if !ok {
-		state = &runtimeState{}
-		r.runtimes[key] = state
-	}
-	refs := r.refs[lk]
-	if refs == nil {
-		refs = &referenceState{queryViewRefs: make(map[qviews.QueryViewKey]*viewpb.QueryViewMeta)}
-		r.refs[lk] = refs
-	}
-	refs.initRef = len(refs.queryViewRefs) == 0
-	task := newResourceBuildTask(ctx, BuildKey{
-		CollectionID: desc.CollectionID(),
-		VChannel:     desc.VChannel(),
-		DataVersion:  desc.DataVersion(),
-	}, func(ctx context.Context) (*ViewRuntime, error) {
-		return r.prepareRuntime(ctx, desc, runtime)
+		return runtime, nil
 	})
-	state.collectionID = desc.CollectionID()
-	state.runtime = runtime
-	state.loading = true
-	state.err = nil
-	state.cancel = task.Cancel
-	state.task = task
-	r.mu.Unlock()
 
-	r.scheduler.Submit(task)
-	go r.finishBuild(key, task)
-	return true
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		task.Cancel()
+		runtime.Close()
+		return nil
+	}
+	if _, ok := m.resources[desc.VChannel()]; ok {
+		m.mu.Unlock()
+		runtime.Close()
+		return nil
+	}
+	m.resources[desc.VChannel()] = &resourceState{
+		initRef:       true,
+		queryViewRefs: make(map[qviews.QueryViewKey]*viewpb.QueryViewMeta),
+		runtime:       runtime,
+		task:          task,
+	}
+	m.mu.Unlock()
+
+	m.scheduler.Submit(task)
+	go m.finishBuild(desc.VChannel(), task)
+	return runtime
 }
 
-func (r *DefaultManager) prepareRuntime(ctx context.Context, desc LoadResourceDescriptor, runtime *ViewRuntime) (*ViewRuntime, error) {
-	bm25, err := r.bm25.BuildInitial(ctx, desc)
-	if err != nil {
-		return runtime, err
+func (m *DefaultManager) OnDropLoadConfig(event walview.DropLoadConfigEvent) {
+	m.mu.Lock()
+	state := m.resources[event.VChannel]
+	if state != nil {
+		state.initRef = false
 	}
-	runtime.BM25 = bm25
-	runtime.Growing.SetBM25Runtime(bm25)
-	if err := runtime.Growing.Prepare(ctx); err != nil {
-		bm25.Close()
-		runtime.BM25 = nil
-		return runtime, err
-	}
-	if bm25 != nil {
-		bm25.DataVersion = desc.DataVersion()
-		go func() {
-			<-runtime.Growing.PendingDrained()
-			bm25.MarkCatchupDone()
-			r.notifyReady()
-		}()
-	}
-	return runtime, nil
+	runtime, task := m.cleanupIfUnreferencedLocked(event.VChannel)
+	m.mu.Unlock()
+
+	cancelTask(task)
+	closeRuntime(runtime)
 }
 
-func (r *DefaultManager) finishBuild(key runtimeKey, task BuildTask) {
+func (m *DefaultManager) finishBuild(vchannel string, task BuildTask) {
 	runtime, err := task.Result()
-	r.mu.Lock()
-	state, ok := r.runtimes[key]
-	if !ok {
-		r.mu.Unlock()
-		if runtime != nil {
-			runtime.Close()
-		}
-		r.notifyReady()
+	m.mu.Lock()
+	state := m.resources[vchannel]
+	if state == nil || state.task != task {
+		m.mu.Unlock()
+		closeRuntime(runtime)
 		return
 	}
-	if state.task != task {
-		r.mu.Unlock()
-		if runtime != nil {
-			runtime.Close()
-		}
-		r.notifyReady()
-		return
-	}
-	state.loading = false
-	state.cancel = nil
 	state.task = nil
 	if err != nil {
-		if runtime == nil {
-			runtime = state.runtime
+		if errors.Is(err, context.Canceled) {
+			state.err = err
+		} else {
+			m.mu.Unlock()
+			panic(errors.Wrap(err, "initialize query runtime"))
 		}
-		if runtime != nil {
-			runtime.Close()
-		}
-		state.runtime = nil
-		state.err = err
 	} else {
 		state.runtime = runtime
+		state.err = nil
 	}
-	r.mu.Unlock()
-	r.notifyReady()
+	runtime, cleanupTask := m.cleanupIfUnreferencedLocked(vchannel)
+	m.mu.Unlock()
+
+	cancelTask(cleanupTask)
+	closeRuntime(runtime)
 }
 
-func (r *DefaultManager) GetViewRuntime(desc ViewResourceDescriptor) (*ViewRuntime, bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	key, state, ok := r.findRuntimeForRequestLocked(desc.CollectionID, desc.VChannel, desc.Version.DataVersion)
-	_ = key
-	if !ok {
-		return nil, false, nil
-	}
-	if key.version.GT(desc.Version.DataVersion) {
-		return nil, false, errors.Errorf(
-			"view runtime data version %s is behind loaded data version %s",
-			desc.Version.DataVersion.String(),
-			key.version.String(),
-		)
-	}
-	if state.loading {
-		return nil, false, nil
-	}
-	if state.err != nil {
-		return nil, false, state.err
-	}
-	if state.runtime == nil {
-		return nil, false, nil
-	}
-	if desc.DeleteApplyStartAfterTimeTick > state.runtime.Growing.AppliedTransformTimeTick() {
-		return nil, false, nil
-	}
-	if state.runtime.CollectionID != desc.CollectionID {
-		return nil, false, errors.Errorf(
-			"view runtime collection mismatch: runtime collection %d, requested collection %d",
-			state.runtime.CollectionID,
-			desc.CollectionID,
-		)
-	}
-	return state.runtime, true, nil
+func (m *DefaultManager) Acquire(req snview.AcquireResource) {
+	epoch := m.registerQueryViewRef(req)
+	go m.waitRuntimeReady(req.Key, epoch, req.OnReady)
 }
 
-func (r *DefaultManager) findRuntimeForRequestLocked(collectionID int64, vchannel string, requested qviews.DataVersion) (runtimeKey, *runtimeState, bool) {
-	var selectedKey runtimeKey
-	var selected *runtimeState
-	ok := false
-	hasServing := false
-	for key, state := range r.runtimes {
-		if key.vchannel != vchannel || state.collectionID != collectionID {
-			continue
+func (m *DefaultManager) Release(req snview.ReleaseResource) {
+	var runtime *QueryRuntime
+	var task BuildTask
+	var advanceRuntime *QueryRuntime
+	var advance qviews.DataVersion
+	var hasAdvance bool
+
+	m.mu.Lock()
+	vchannel, ok := m.refIndex[req.Key]
+	if ok {
+		delete(m.refIndex, req.Key)
+		if state := m.resources[vchannel]; state != nil {
+			delete(state.queryViewRefs, req.Key)
+			advance, hasAdvance = minQueryViewDataVersion(state.queryViewRefs)
+			advanceRuntime = state.runtime
 		}
-		if !key.version.GT(requested) {
-			if !hasServing || key.version.GT(selectedKey.version) {
-				selectedKey = key
-				selected = state
-				hasServing = true
-				ok = true
-			}
-			continue
-		}
-		if !hasServing && (!ok || selectedKey.version.GT(key.version)) {
-			selectedKey = key
-			selected = state
-			ok = true
-		}
+		runtime, task = m.cleanupIfUnreferencedLocked(vchannel)
 	}
-	return selectedKey, selected, ok
-}
+	m.mu.Unlock()
 
-func (r *DefaultManager) Acquire(req snview.AcquireResource) {
-	epoch, err := r.registerQueryViewRef(req)
-	if err != nil {
-		go func() {
-			if req.OnUnrecoverable != nil {
-				req.OnUnrecoverable()
-			}
-		}()
-		return
+	if ok && hasAdvance && advanceRuntime != nil {
+		advanceRuntime.Advance(advance)
 	}
-	go r.waitRuntimeLoop(req.Key, epoch, req.Meta, req.OnReady, req.OnUnrecoverable)
-}
-
-func (r *DefaultManager) Release(req snview.ReleaseResource) {
-	var truncates []*GrowingRuntime
-	var truncateTo qviews.DataVersion
-	var hasTruncate bool
-	var cancels []context.CancelFunc
-	var runtimes []*ViewRuntime
-
-	r.mu.Lock()
-	lk, ok := r.refIndex[req.Key]
-	if !ok {
-		r.mu.Unlock()
-		go func() {
-			if req.OnDropped != nil {
-				req.OnDropped()
-			}
-		}()
-		return
-	}
-	delete(r.refIndex, req.Key)
-	if refs := r.refs[lk]; refs != nil {
-		delete(refs.queryViewRefs, req.Key)
-		truncateTo, hasTruncate = refs.minQueryViewDataVersion()
-	}
-	if hasTruncate {
-		truncates = r.growingRuntimesLocked(lk)
-	}
-	cancels, runtimes = r.cleanupIfUnreferencedLocked(lk)
-	r.mu.Unlock()
-
-	for _, runtime := range truncates {
-		runtime.Truncate(truncateTo)
-	}
-	for _, runtime := range runtimes {
-		runtime.Close()
-	}
-	for _, cancel := range cancels {
-		cancel()
-	}
-	r.notifyReady()
 	go func() {
 		if req.OnDropped != nil {
 			req.OnDropped()
 		}
 	}()
+	cancelTask(task)
+	closeRuntime(runtime)
 }
 
-func (r *DefaultManager) Close() {
-	var cancels []context.CancelFunc
-	var runtimes []*ViewRuntime
-
-	r.mu.Lock()
-	remainingQueryViewRefs := r.queryViewRefCountLocked()
-	r.closed = true
-	for key, state := range r.runtimes {
-		if state.cancel != nil {
-			cancels = append(cancels, state.cancel)
+func (m *DefaultManager) Close() {
+	m.mu.Lock()
+	remainingQueryViewRefs := m.queryViewRefCountLocked()
+	m.closed = true
+	runtimes := make([]*QueryRuntime, 0, len(m.resources))
+	tasks := make([]BuildTask, 0, len(m.resources))
+	for vchannel, state := range m.resources {
+		if state.task != nil {
+			tasks = append(tasks, state.task)
 		}
 		if state.runtime != nil {
 			runtimes = append(runtimes, state.runtime)
 		}
-		delete(r.runtimes, key)
+		delete(m.resources, vchannel)
 	}
-	r.refs = make(map[loadKey]*referenceState)
-	r.refIndex = make(map[qviews.QueryViewKey]loadKey)
-	r.refEpoch = make(map[qviews.QueryViewKey]uint64)
-	r.mu.Unlock()
+	m.refIndex = make(map[qviews.QueryViewKey]string)
+	m.refEpoch = make(map[qviews.QueryViewKey]uint64)
+	m.mu.Unlock()
 
+	for _, task := range tasks {
+		cancelTask(task)
+	}
 	for _, runtime := range runtimes {
-		runtime.Close()
+		closeRuntime(runtime)
 	}
-	for _, cancel := range cancels {
-		cancel()
+	if m.scheduler != nil {
+		m.scheduler.Close()
 	}
-	if r.scheduler != nil {
-		r.scheduler.Close()
-	}
-	r.notifyReady()
 	if remainingQueryViewRefs > 0 {
-		panic(errors.Errorf("query resource manager closed with %d query view references", remainingQueryViewRefs))
+		panic(errors.Errorf("query runtime manager closed with %d query view references", remainingQueryViewRefs))
 	}
 }
 
-func (r *DefaultManager) registerQueryViewRef(req snview.AcquireResource) (uint64, error) {
+func (m *DefaultManager) registerQueryViewRef(req snview.AcquireResource) uint64 {
 	if req.Meta == nil || req.Meta.GetVersion() == nil || req.Meta.GetVersion().GetDataVersion() == nil {
-		return 0, errors.New("query view meta version is nil")
+		panic("query view meta version is nil")
 	}
-	lk := loadKey{collectionID: req.Meta.GetCollectionId(), vchannel: req.Meta.GetVchannel()}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.closed {
-		return 0, errors.New("query resource manager is closed")
+	vchannel := req.Meta.GetVchannel()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		panic("query runtime manager is closed")
 	}
-	refs := r.refs[lk]
-	if refs == nil {
-		return 0, errors.Errorf("query resource for vchannel %s is not initialized", req.Meta.GetVchannel())
+	state := m.resources[vchannel]
+	if state == nil {
+		panic("query runtime is not initialized")
 	}
-	if refs.queryViewRefs == nil {
-		refs.queryViewRefs = make(map[qviews.QueryViewKey]*viewpb.QueryViewMeta)
+	if existing, ok := m.refIndex[req.Key]; ok && existing != vchannel {
+		panic("query view already references a different runtime")
 	}
-	if existingLK, ok := r.refIndex[req.Key]; ok {
-		if existingLK != lk {
-			return 0, errors.Errorf("query view %s already references a different resource", req.Key.String())
-		}
-		if _, ok := refs.queryViewRefs[req.Key]; ok {
-			return r.refEpoch[req.Key], nil
-		}
+	if state.queryViewRefs == nil {
+		state.queryViewRefs = make(map[qviews.QueryViewKey]*viewpb.QueryViewMeta)
 	}
-	refs.queryViewRefs[req.Key] = req.Meta
-	r.refIndex[req.Key] = lk
-	r.refEpoch[req.Key]++
-	epoch := r.refEpoch[req.Key]
-	refs.initRef = false
-	return epoch, nil
+	if _, ok := state.queryViewRefs[req.Key]; !ok {
+		m.assertMonotonicAcquireLocked(state, req.Key.QueryViewVersion.DataVersion)
+		state.queryViewRefs[req.Key] = req.Meta
+		m.refIndex[req.Key] = vchannel
+		m.refEpoch[req.Key]++
+		state.initRef = false
+	}
+	return m.refEpoch[req.Key]
 }
 
-func (r *DefaultManager) waitRuntimeLoop(
-	key qviews.QueryViewKey,
-	epoch uint64,
-	meta *viewpb.QueryViewMeta,
-	onReady func(),
-	onUnrecoverable func(),
-) {
-	desc := ViewResourceDescriptor{
-		CollectionID:                  meta.GetCollectionId(),
-		ReplicaID:                     meta.GetReplicaId(),
-		VChannel:                      meta.GetVchannel(),
-		Version:                       qviews.FromProtoQueryViewVersion(meta.GetVersion()),
-		Settings:                      meta.GetSettings(),
-		DeleteApplyStartAfterTimeTick: meta.GetDeleteApplyStartAfterTimetick(),
+func (m *DefaultManager) assertMonotonicAcquireLocked(state *resourceState, version qviews.DataVersion) {
+	for key := range state.queryViewRefs {
+		if key.QueryViewVersion.DataVersion.GT(version) {
+			panic("non-monotonic query view acquire")
+		}
 	}
+}
+
+func (m *DefaultManager) waitRuntimeReady(key qviews.QueryViewKey, epoch uint64, onReady func()) {
 	for {
-		if !r.hasQueryViewRef(key, epoch) {
-			if onUnrecoverable != nil {
-				onUnrecoverable()
-			}
+		runtime, task, ok := m.runtimeForRef(key, epoch)
+		if !ok {
 			return
 		}
-		runtime, ready, err := r.GetViewRuntime(desc)
-		if err != nil {
-			if onUnrecoverable != nil {
-				onUnrecoverable()
+		if task != nil {
+			<-task.Done()
+			_, err := task.Result()
+			if err != nil {
+				if errors.Is(err, context.Canceled) {
+					return
+				}
+				panic(errors.Wrap(err, "wait query runtime initialization"))
 			}
+			continue
+		}
+		advance, ok := m.oldestDataVersionForRef(key, epoch)
+		if !ok {
 			return
 		}
-		if ready {
-			if !r.hasQueryViewRef(key, epoch) {
-				if onUnrecoverable != nil {
-					onUnrecoverable()
-				}
-				return
-			}
-			if runtime != nil && runtime.BM25 != nil {
-				select {
-				case <-runtime.BM25.CatchupDone():
-				case <-r.NotifyReady():
-					continue
-				}
-				runtime.BM25.MaybeAdvance(desc.Version.DataVersion)
-			}
-			if !r.hasQueryViewRef(key, epoch) {
-				if onUnrecoverable != nil {
-					onUnrecoverable()
-				}
-				return
-			}
-			if onReady != nil {
-				onReady()
-			}
-			return
+		runtime.Advance(advance)
+		if onReady != nil && m.hasQueryViewRef(key, epoch) {
+			onReady()
 		}
-		select {
-		case <-r.NotifyReady():
-		}
+		return
 	}
 }
 
-func (r *DefaultManager) hasQueryViewRef(key qviews.QueryViewKey, epoch uint64) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.refEpoch[key] != epoch {
+func (m *DefaultManager) runtimeForRef(key qviews.QueryViewKey, epoch uint64) (*QueryRuntime, BuildTask, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.refEpoch[key] != epoch {
+		return nil, nil, false
+	}
+	vchannel, ok := m.refIndex[key]
+	if !ok {
+		return nil, nil, false
+	}
+	state := m.resources[vchannel]
+	if state == nil {
+		return nil, nil, false
+	}
+	if state.err != nil && !errors.Is(state.err, context.Canceled) {
+		panic(errors.Wrap(state.err, "query runtime initialization failed"))
+	}
+	return state.runtime, state.task, true
+}
+
+func (m *DefaultManager) oldestDataVersionForRef(key qviews.QueryViewKey, epoch uint64) (qviews.DataVersion, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.refEpoch[key] != epoch {
+		return qviews.DataVersion{}, false
+	}
+	vchannel, ok := m.refIndex[key]
+	if !ok {
+		return qviews.DataVersion{}, false
+	}
+	state := m.resources[vchannel]
+	if state == nil {
+		return qviews.DataVersion{}, false
+	}
+	return minQueryViewDataVersion(state.queryViewRefs)
+}
+
+func (m *DefaultManager) hasQueryViewRef(key qviews.QueryViewKey, epoch uint64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.refEpoch[key] != epoch {
 		return false
 	}
-	lk, ok := r.refIndex[key]
+	vchannel, ok := m.refIndex[key]
 	if !ok {
 		return false
 	}
-	refs := r.refs[lk]
-	if refs == nil {
+	state := m.resources[vchannel]
+	if state == nil {
 		return false
 	}
-	_, ok = refs.queryViewRefs[key]
+	_, ok = state.queryViewRefs[key]
 	return ok
 }
 
-func (r *DefaultManager) queryViewRefCountLocked() int {
+func (m *DefaultManager) cleanupIfUnreferencedLocked(vchannel string) (*QueryRuntime, BuildTask) {
+	state := m.resources[vchannel]
+	if state == nil {
+		return nil, nil
+	}
+	if state.initRef || len(state.queryViewRefs) > 0 {
+		return nil, nil
+	}
+	delete(m.resources, vchannel)
+	return state.runtime, state.task
+}
+
+func (m *DefaultManager) queryViewRefCountLocked() int {
 	count := 0
-	for _, refs := range r.refs {
-		count += len(refs.queryViewRefs)
+	for _, state := range m.resources {
+		count += len(state.queryViewRefs)
 	}
 	return count
 }
 
-func (s *referenceState) minQueryViewDataVersion() (qviews.DataVersion, bool) {
+func minQueryViewDataVersion(refs map[qviews.QueryViewKey]*viewpb.QueryViewMeta) (qviews.DataVersion, bool) {
 	var min qviews.DataVersion
 	ok := false
-	for key := range s.queryViewRefs {
+	for key := range refs {
 		version := key.QueryViewVersion.DataVersion
 		if !ok || min.GT(version) {
 			min = version
@@ -529,61 +369,31 @@ func (s *referenceState) minQueryViewDataVersion() (qviews.DataVersion, bool) {
 	return min, ok
 }
 
-func (r *DefaultManager) growingRuntimesLocked(lk loadKey) []*GrowingRuntime {
-	runtimes := make([]*GrowingRuntime, 0)
-	for key, state := range r.runtimes {
-		if key.vchannel != lk.vchannel || (lk.collectionID != 0 && state.collectionID != lk.collectionID) {
-			continue
-		}
-		if state.runtime != nil && state.runtime.Growing != nil {
-			runtimes = append(runtimes, state.runtime.Growing)
-		}
+func cancelTask(task BuildTask) {
+	if task != nil {
+		task.Cancel()
 	}
-	return runtimes
 }
 
-func (r *DefaultManager) cleanupIfUnreferencedLocked(lk loadKey) ([]context.CancelFunc, []*ViewRuntime) {
-	refs := r.refs[lk]
-	if refs != nil && (refs.initRef || len(refs.queryViewRefs) > 0) {
-		return nil, nil
-	}
-	if refs == nil && lk.collectionID != 0 {
-		return nil, nil
-	}
-	delete(r.refs, lk)
-
-	var cancels []context.CancelFunc
-	var runtimes []*ViewRuntime
-	for key, state := range r.runtimes {
-		if key.vchannel != lk.vchannel || (lk.collectionID != 0 && state.collectionID != lk.collectionID) {
-			continue
-		}
-		if state.cancel != nil {
-			cancels = append(cancels, state.cancel)
-		}
-		if state.runtime != nil {
-			runtimes = append(runtimes, state.runtime)
-		}
-		delete(r.runtimes, key)
-	}
-	return cancels, runtimes
-}
-
-func (r *DefaultManager) NotifyReady() <-chan struct{} {
-	return r.notify
-}
-
-func (r *DefaultManager) notifyReady() {
-	select {
-	case r.notify <- struct{}{}:
-	default:
+func closeRuntime(runtime *QueryRuntime) {
+	if runtime != nil {
+		runtime.Close()
 	}
 }
 
 type NoopIDFOracleRuntimeBuilder struct{}
 
-func (NoopIDFOracleRuntimeBuilder) BuildInitial(context.Context, LoadResourceDescriptor) (*BM25Runtime, error) {
-	runtime := &BM25Runtime{}
-	runtime.MarkCatchupDone()
-	return runtime, nil
+func (NoopIDFOracleRuntimeBuilder) NewRuntime(LoadResourceDescriptor) (IDFOracleRuntime, error) {
+	return noopIDFOracleRuntime{}, nil
+}
+
+type noopIDFOracleRuntime struct{}
+
+func (noopIDFOracleRuntime) Prepare(context.Context) error { return nil }
+func (noopIDFOracleRuntime) ApplyLiveEvent(context.Context, walview.VChannelResourceEvent) {
+}
+func (noopIDFOracleRuntime) Advance(qviews.DataVersion) {}
+func (noopIDFOracleRuntime) Close()                     {}
+func (noopIDFOracleRuntime) BuildIDF(int64, *schemapb.SparseFloatArray) ([][]byte, float64, error) {
+	return nil, 0, errors.New("IDF oracle is not initialized")
 }

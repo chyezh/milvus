@@ -2,6 +2,7 @@ package idf
 
 import (
 	"context"
+	"sync"
 
 	"github.com/cockroachdb/errors"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
@@ -63,31 +64,87 @@ func NewFutureProvider(client *syncutil.Future[types.MixCoordClient], opts ...Pr
 	}
 }
 
-func (p *FutureProvider) BuildInitial(ctx context.Context, desc viewresource.LoadResourceDescriptor) (*viewresource.BM25Runtime, error) {
-	schema := desc.Schema()
-	settings := desc.Settings()
-	if !hasLoadedBM25Function(schema, settings.GetRequiredFields()) {
-		return newReadyBM25Runtime(), nil
+func (p *FutureProvider) NewRuntime(desc viewresource.LoadResourceDescriptor) (viewresource.IDFOracleRuntime, error) {
+	return &Runtime{future: p, desc: desc}, nil
+}
+
+func (p *Provider) NewRuntime(desc viewresource.LoadResourceDescriptor) (viewresource.IDFOracleRuntime, error) {
+	return &Runtime{provider: p, desc: desc}, nil
+}
+
+type Runtime struct {
+	mu       sync.RWMutex
+	provider *Provider
+	future   *FutureProvider
+	desc     viewresource.LoadResourceDescriptor
+	oracle   *oracleRuntime
+	closed   bool
+}
+
+func (r *Runtime) Prepare(ctx context.Context) error {
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return context.Canceled
 	}
-	if p.client == nil {
+	if r.oracle != nil {
+		r.mu.Unlock()
+		return nil
+	}
+	r.mu.Unlock()
+
+	provider, err := r.resolveProvider(ctx)
+	if err != nil {
+		return err
+	}
+	oracle, err := provider.buildOracle(ctx, r.desc)
+	if err != nil {
+		return err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed {
+		if oracle != nil {
+			oracle.Close()
+		}
+		return context.Canceled
+	}
+	r.oracle = oracle
+	return nil
+}
+
+func (r *Runtime) resolveProvider(ctx context.Context) (*Provider, error) {
+	if r.provider != nil {
+		return r.provider, nil
+	}
+	if r.future == nil {
+		return nil, errors.New("IDF oracle provider is nil")
+	}
+	schema := r.desc.Schema()
+	settings := r.desc.Settings()
+	if !hasLoadedBM25Function(schema, settings.GetRequiredFields()) {
+		return &Provider{}, nil
+	}
+	if r.future.client == nil {
 		return nil, errors.New("mixcoord client future is nil")
 	}
-	client, err := p.client.GetWithContext(ctx)
+	client, err := r.future.client.GetWithContext(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return (&Provider{
+	return &Provider{
 		client:       client,
-		chunkManager: p.chunkManager,
-		sealedCache:  p.sealedCache,
-	}).BuildInitial(ctx, desc)
+		chunkManager: r.future.chunkManager,
+		sealedCache:  r.future.sealedCache,
+	}, nil
 }
 
-func (p *Provider) BuildInitial(ctx context.Context, desc viewresource.LoadResourceDescriptor) (*viewresource.BM25Runtime, error) {
+func (p *Provider) buildOracle(ctx context.Context, desc viewresource.LoadResourceDescriptor) (*oracleRuntime, error) {
 	schema := desc.Schema()
 	settings := desc.Settings()
 	if !hasLoadedBM25Function(schema, settings.GetRequiredFields()) {
-		return newReadyBM25Runtime(), nil
+		return nil, nil
 	}
 	if p.client == nil {
 		return nil, errors.New("querycoord client is nil")
@@ -97,39 +154,48 @@ func (p *Provider) BuildInitial(ctx context.Context, desc viewresource.LoadResou
 	if err != nil {
 		return nil, err
 	}
-	bm25Resources := make([]*viewresource.BM25SegmentResource, 0, len(resources))
-	for _, resource := range resources {
-		bm25Resources = append(bm25Resources, &viewresource.BM25SegmentResource{
-			SegmentID:      resource.GetSegmentId(),
-			PartitionID:    resource.GetPartitionId(),
-			BM25Binlogs:    resource.GetBm25Binlogs(),
-			StorageVersion: resource.GetStorageVersion(),
-			ManifestPath:   resource.GetManifestPath(),
-		})
-	}
-	growingSegmentIDs := make([]int64, 0, len(desc.WALView.SegmentSnapshot.Segments))
-	for _, segment := range desc.WALView.SegmentSnapshot.Segments {
-		growingSegmentIDs = append(growingSegmentIDs, segment.SegmentID)
-	}
-	runtime, err := newOracleRuntime(ctx, p, desc, resources)
-	if err != nil {
-		return nil, err
-	}
-	bm25 := &viewresource.BM25Runtime{
-		Resources:         bm25Resources,
-		GrowingSegmentIDs: growingSegmentIDs,
-		Oracle:            runtime,
-		LiveUpdater:       runtime,
-		Advancer:          runtime,
-		OnClose:           runtime.Close,
-	}
-	return bm25, nil
+	return newOracleRuntime(ctx, p, desc, resources)
 }
 
-func newReadyBM25Runtime() *viewresource.BM25Runtime {
-	runtime := &viewresource.BM25Runtime{}
-	runtime.MarkCatchupDone()
-	return runtime
+func (r *Runtime) BuildIDF(fieldID int64, tfs *schemapb.SparseFloatArray) ([][]byte, float64, error) {
+	oracle := r.currentOracle()
+	if oracle == nil {
+		return nil, 0, errors.New("IDF oracle is not initialized")
+	}
+	return oracle.BuildIDF(fieldID, tfs)
+}
+
+func (r *Runtime) ApplyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent) {
+	if oracle := r.currentOracle(); oracle != nil {
+		oracle.ApplyLiveEvent(ctx, event)
+	}
+}
+
+func (r *Runtime) Advance(oldestDataVersion qviews.DataVersion) {
+	if oracle := r.currentOracle(); oracle != nil {
+		oracle.Advance(oldestDataVersion)
+	}
+}
+
+func (r *Runtime) Close() {
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		return
+	}
+	r.closed = true
+	oracle := r.oracle
+	r.oracle = nil
+	r.mu.Unlock()
+	if oracle != nil {
+		oracle.Close()
+	}
+}
+
+func (r *Runtime) currentOracle() *oracleRuntime {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.oracle
 }
 
 func collectGrowingInsertStats(stats bm25Stats, schema *schemapb.CollectionSchema, insert walview.SegmentInsertMessage) error {

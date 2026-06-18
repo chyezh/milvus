@@ -379,14 +379,20 @@ func (r *oracleRuntime) BuildIDF(fieldID int64, tfs *schemapb.SparseFloatArray) 
 	return idfs, stats.GetAvgdl(), nil
 }
 
-func (r *oracleRuntime) ApplyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent) error {
+func (r *oracleRuntime) Prepare(context.Context) error {
+	return nil
+}
+
+func (r *oracleRuntime) ApplyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent) {
 	if event.Message != nil {
-		return r.applyLiveMessage(ctx, event.Message)
+		if err := r.applyLiveMessage(ctx, event.Message); err != nil {
+			panic(errors.Wrap(err, "failed to apply live event to IDF oracle runtime"))
+		}
+		return
 	}
 	if event.SegmentSealed != nil {
 		r.applySegmentSealed(event.SegmentSealed.SegmentID, event.SegmentSealed.SealedAtDataVersion)
 	}
-	return nil
 }
 
 func (r *oracleRuntime) applyLiveMessage(_ context.Context, msg message.ImmutableMessage) error {
@@ -465,6 +471,10 @@ func (r *oracleRuntime) MaybeAdvance(target qviews.DataVersion) {
 	case r.notify <- struct{}{}:
 	default:
 	}
+}
+
+func (r *oracleRuntime) Advance(target qviews.DataVersion) {
+	r.MaybeAdvance(target)
 }
 
 func (r *oracleRuntime) Close() {

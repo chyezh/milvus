@@ -421,68 +421,6 @@ func TestSNHandler_CoordDropped_WhileDropping_Ignored(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 6. ResourceManager callback → Unrecoverable
-// ---------------------------------------------------------------------------
-
-func TestSNHandler_ResourceManagerCallback_Unrecoverable(t *testing.T) {
-	cat := newMockCatalog()
-	mgr := newMockResourceManager()
-	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
-
-	rc := &reportCollector{}
-	view := newPreparingSNView(1)
-	h.ApplyViews([]handler.ApplyView{
-		{View: view, OnReport: rc.onReport},
-	})
-
-	key := view.QueryViewKey()
-	req, _ := mgr.getAcquired(key)
-	req.OnUnrecoverable()
-
-	assert.Equal(t, qviews.QueryViewStateUnrecoverable, rc.last().State())
-	// No persist needed from Preparing → Unrecoverable.
-	assert.Equal(t, 0, cat.savedCount())
-}
-
-func TestSNHandler_ResourceManagerCallback_UnrecoverableFromUpRecovering(t *testing.T) {
-	cat := newMockCatalog()
-	mgr := newMockResourceManager()
-
-	// Simulate persisted Up view.
-	meta := buildHandlerTestMeta(1)
-	meta.State = viewpb.QueryViewState_QueryViewStateUp
-	persistedView := &viewpb.QueryViewOfShard{
-		Meta:          meta,
-		StreamingNode: &viewpb.QueryViewOfStreamingNode{},
-	}
-	cat.SaveQueryViews(context.Background(), testPChannel, []*viewpb.QueryViewOfShard{persistedView})
-	assert.Equal(t, 1, cat.savedCount())
-
-	// Recover persisted Up view state.
-	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, []*viewpb.QueryViewOfShard{persistedView})
-
-	// Set up report callback via ApplyViews re-push.
-	rc := &reportCollector{}
-	preparingView := newPreparingSNView(1)
-	h.ApplyViews([]handler.ApplyView{
-		{View: preparingView, OnReport: rc.onReport},
-	})
-	// UpRecovering SM reports nothing for Preparing re-push (waits for WAL).
-
-	// ResourceManager calls OnUnrecoverable via recovered Acquire callback.
-	key := preparingView.QueryViewKey()
-	acquireReq, ok := mgr.getAcquired(key)
-	require.True(t, ok)
-	acquireReq.OnUnrecoverable()
-
-	// No report: UpRecovering→Unrecoverable is not reported to Coord.
-	// The query path will detect the unavailable view.
-	assert.Equal(t, 0, rc.count())
-	// Recovery info retained — not deleted.
-	assert.Equal(t, 1, cat.savedCount())
-}
-
-// ---------------------------------------------------------------------------
 // 7. Recover — crash recovery
 // ---------------------------------------------------------------------------
 
@@ -835,7 +773,6 @@ func TestSNHandler_Recover_AcquireCallbackFlow(t *testing.T) {
 	acquireReq, ok := mgr.getAcquired(key)
 	require.True(t, ok)
 	assert.NotNil(t, acquireReq.OnReady)
-	assert.NotNil(t, acquireReq.OnUnrecoverable)
 
 	// Register callback via ApplyViews.
 	rc := &reportCollector{}

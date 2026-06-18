@@ -26,7 +26,7 @@ var _ handler.QueryViewHandler = (*SNQueryViewHandler)(nil)
 // Resource management is delegated to the SNQueryRuntimeManager.
 // When a new Preparing view arrives, the handler acquires resources via
 // ResourceManager. The ResourceManager drives SM progress by invoking
-// OnReady/OnUnrecoverable callbacks asynchronously.
+// OnReady callbacks asynchronously.
 //
 // # Response Guarantee
 //
@@ -38,14 +38,14 @@ var _ handler.QueryViewHandler = (*SNQueryViewHandler)(nil)
 // View does not exist in handler:
 //
 //   - Preparing: creates SM + calls Acquire. No immediate response.
-//     Response depends on ResourceManager calling OnReady or OnUnrecoverable.
+//     Response depends on ResourceManager calling OnReady.
 //   - Dropped: responds immediately with the Dropped view (SN restart case).
 //   - Other states: responds immediately with Unrecoverable (state lost after restart).
 //
 // View already exists in handler:
 //
 //   - Preparing, SM in Preparing/UpRecovering/Dropping: no immediate response.
-//     Response depends on ResourceManager callbacks.
+//     Response depends on ResourceManager callbacks when a resource operation is pending.
 //   - Preparing, SM past Preparing/UpRecovering/Dropping: responds immediately with
 //     current state (Ready/Up/Down/Unrecoverable/Dropped) for Coord fast-forward.
 //   - Dropped, SM in Preparing/Ready/Up/Down/Unrecoverable: transitions to Dropping,

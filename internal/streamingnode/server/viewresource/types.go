@@ -5,11 +5,10 @@ import (
 	"sync"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+
 	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource/growingruntime"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
-	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
 type LoadResourceDescriptor = growingruntime.Descriptor
@@ -18,146 +17,232 @@ type GrowingSegmentRuntimeBuilder = growingruntime.Builder
 type NoopGrowingSegmentRuntimeBuilder = growingruntime.NoopBuilder
 type SnapshotGrowingSegmentRuntimeBuilder = growingruntime.SnapshotBuilder
 
-// ViewResourceDescriptor describes a QueryView runtime readiness request.
-type ViewResourceDescriptor struct {
-	CollectionID                  int64
-	ReplicaID                     int64
-	VChannel                      string
-	Version                       qviews.QueryViewVersion
-	Settings                      *viewpb.QueryViewSettings
-	DeleteApplyStartAfterTimeTick uint64
+// QueryRuntimeModule is a concrete vchannel resource module managed by
+// QueryRuntime. Modules do not observe WAL directly.
+type QueryRuntimeModule interface {
+	Prepare(context.Context) error
+	ApplyLiveEvent(context.Context, walview.VChannelResourceEvent)
+	Advance(qviews.DataVersion)
+	Close()
 }
 
-// ViewRuntime is the SN-side prepared runtime for one DataVersion.
-type ViewRuntime struct {
-	CollectionID int64
-	VChannel     string
-	DataVersion  qviews.DataVersion
-	Schema       *schemapb.CollectionSchema
-	Growing      *growingruntime.Runtime
-	BM25         *BM25Runtime
+// IDFOracleRuntime is the vchannel BM25 / IDF module.
+type IDFOracleRuntime interface {
+	QueryRuntimeModule
+	BM25Oracle
 }
 
-func (r *ViewRuntime) Close() {
-	if r == nil {
-		return
-	}
-	r.Growing.Close()
-	r.BM25.Close()
+// IDFOracleRuntimeBuilder creates an unprepared IDF oracle module.
+type IDFOracleRuntimeBuilder interface {
+	NewRuntime(desc LoadResourceDescriptor) (IDFOracleRuntime, error)
 }
 
-// BM25Runtime records the BM25 resources loaded for one DataVersion.
-type BM25Runtime struct {
-	Resources         []*BM25SegmentResource
-	GrowingSegmentIDs []int64
-	Oracle            BM25Oracle
-	LiveUpdater       BM25LiveUpdater
-	Advancer          BM25Advancer
-	DataVersion       qviews.DataVersion
-
-	closeOnce   sync.Once
-	catchupMu   sync.Mutex
-	catchupOnce sync.Once
-	catchupDone chan struct{}
-	catchupErr  error
-	OnClose     func()
-}
-
+// BM25Oracle is the query-facing IDF oracle surface.
 type BM25Oracle interface {
 	BuildIDF(fieldID int64, tfs *schemapb.SparseFloatArray) ([][]byte, float64, error)
 }
 
-type BM25LiveUpdater interface {
-	ApplyLiveEvent(context.Context, walview.VChannelResourceEvent) error
+const defaultLiveEventBufferSize = 1024
+
+// QueryRuntime is the vchannel singleton owned by SNQueryRuntimeManager.
+type QueryRuntime struct {
+	mu      sync.Mutex
+	cond    *sync.Cond
+	state   queryRuntimeState
+	desc    LoadResourceDescriptor
+	modules []QueryRuntimeModule
+
+	pending      []walview.VChannelResourceEvent
+	pendingLimit int
+
+	drainWG sync.WaitGroup
+	applyMu sync.Mutex
+
+	latestAdvance qviews.DataVersion
+	hasAdvance    bool
 }
 
-type BM25Advancer interface {
-	MaybeAdvance(qviews.DataVersion)
+type queryRuntimeState int
+
+const (
+	queryRuntimePreparing queryRuntimeState = iota
+	queryRuntimeReady
+	queryRuntimeClosed
+)
+
+func NewQueryRuntime(desc LoadResourceDescriptor, growing *growingruntime.Runtime, idf IDFOracleRuntime) *QueryRuntime {
+	runtime := &QueryRuntime{
+		state:        queryRuntimePreparing,
+		desc:         desc,
+		pendingLimit: defaultLiveEventBufferSize,
+		modules: []QueryRuntimeModule{
+			growing,
+			idf,
+		},
+	}
+	runtime.cond = sync.NewCond(&runtime.mu)
+	return runtime
 }
 
-func (r *BM25Runtime) ApplyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent) error {
-	if r == nil || r.LiveUpdater == nil {
+func (r *QueryRuntime) Initialize(ctx context.Context) error {
+	if r == nil {
 		return nil
 	}
-	return r.LiveUpdater.ApplyLiveEvent(ctx, event)
-}
-
-func (r *BM25Runtime) CatchupDone() <-chan struct{} {
-	if r == nil {
-		return closedChannel()
-	}
-	r.catchupMu.Lock()
-	defer r.catchupMu.Unlock()
-	r.ensureCatchupDoneLocked()
-	return r.catchupDone
-}
-
-func (r *BM25Runtime) CatchupError() error {
-	if r == nil {
-		return nil
-	}
-	r.catchupMu.Lock()
-	defer r.catchupMu.Unlock()
-	return r.catchupErr
-}
-
-func (r *BM25Runtime) MaybeAdvance(target qviews.DataVersion) {
-	if r == nil || r.Advancer == nil || !target.GT(r.DataVersion) {
-		return
-	}
-	r.Advancer.MaybeAdvance(target)
-}
-
-func (r *BM25Runtime) MarkCatchupDone() {
-	r.markCatchupDone(nil)
-}
-
-func (r *BM25Runtime) MarkCatchupFailed(err error) {
-	r.markCatchupDone(err)
-}
-
-func (r *BM25Runtime) markCatchupDone(err error) {
-	if r == nil {
-		return
-	}
-	r.catchupMu.Lock()
-	defer r.catchupMu.Unlock()
-	r.ensureCatchupDoneLocked()
-	r.catchupOnce.Do(func() {
-		r.catchupErr = err
-		close(r.catchupDone)
-	})
-}
-
-func (r *BM25Runtime) ensureCatchupDoneLocked() {
-	if r.catchupDone == nil {
-		r.catchupDone = make(chan struct{})
-	}
-}
-
-func (r *BM25Runtime) Close() {
-	if r == nil {
-		return
-	}
-	r.closeOnce.Do(func() {
-		r.MarkCatchupDone()
-		if r.OnClose != nil {
-			r.OnClose()
+	for _, module := range r.modules {
+		if module == nil {
+			continue
 		}
-	})
+		if err := module.Prepare(ctx); err != nil {
+			return err
+		}
+	}
+	initial := r.takeInitialBatch()
+	r.applyBatch(ctx, initial)
+	advance, hasAdvance := r.recordedAdvance()
+	r.mu.Lock()
+	if r.state == queryRuntimeClosed {
+		r.mu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return context.Canceled
+	}
+	r.state = queryRuntimeReady
+	r.drainWG.Add(1)
+	go func() {
+		defer r.drainWG.Done()
+		r.drainLoop()
+	}()
+	r.cond.Broadcast()
+	r.mu.Unlock()
+	if hasAdvance {
+		r.advanceModules(advance)
+	}
+	return nil
 }
 
-// BM25SegmentResource is the SN-side shape of QueryCoord's BM25 resource proto.
-type BM25SegmentResource struct {
-	SegmentID      int64
-	PartitionID    int64
-	BM25Binlogs    []*datapb.FieldBinlog
-	StorageVersion int64
-	ManifestPath   string
+func (r *QueryRuntime) ObserveEvent(ctx context.Context, event walview.VChannelResourceEvent) bool {
+	if r == nil {
+		return false
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	default:
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state == queryRuntimeClosed {
+		return false
+	}
+	for r.pendingLimit > 0 && len(r.pending) >= r.pendingLimit && r.state != queryRuntimeClosed {
+		r.cond.Wait()
+	}
+	if r.state == queryRuntimeClosed {
+		return false
+	}
+	r.pending = append(r.pending, event)
+	r.cond.Signal()
+	return true
 }
 
-func closedChannel() <-chan struct{} {
-	ch := make(chan struct{})
-	close(ch)
-	return ch
+func (r *QueryRuntime) Advance(oldestDataVersion qviews.DataVersion) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	if r.hasAdvance && r.latestAdvance.GT(oldestDataVersion) {
+		r.mu.Unlock()
+		panic("non-monotonic query runtime advance")
+	}
+	r.latestAdvance = oldestDataVersion
+	r.hasAdvance = true
+	ready := r.state == queryRuntimeReady
+	r.mu.Unlock()
+	if ready {
+		r.advanceModules(oldestDataVersion)
+	}
+}
+
+func (r *QueryRuntime) recordedAdvance() (qviews.DataVersion, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.latestAdvance, r.hasAdvance
+}
+
+func (r *QueryRuntime) advanceModules(oldestDataVersion qviews.DataVersion) {
+	r.mu.Lock()
+	modules := append([]QueryRuntimeModule(nil), r.modules...)
+	r.mu.Unlock()
+	for _, module := range modules {
+		if module != nil {
+			module.Advance(oldestDataVersion)
+		}
+	}
+}
+
+func (r *QueryRuntime) Close() {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	if r.state == queryRuntimeClosed {
+		r.mu.Unlock()
+		return
+	}
+	r.state = queryRuntimeClosed
+	r.pending = nil
+	r.cond.Broadcast()
+	modules := append([]QueryRuntimeModule(nil), r.modules...)
+	r.mu.Unlock()
+	r.drainWG.Wait()
+	r.applyMu.Lock()
+	defer r.applyMu.Unlock()
+	for i := len(modules) - 1; i >= 0; i-- {
+		if modules[i] != nil {
+			modules[i].Close()
+		}
+	}
+}
+
+func (r *QueryRuntime) takeInitialBatch() []walview.VChannelResourceEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	batch := r.pending
+	r.pending = nil
+	r.cond.Broadcast()
+	return batch
+}
+
+func (r *QueryRuntime) drainLoop() {
+	for {
+		r.mu.Lock()
+		for len(r.pending) == 0 && r.state != queryRuntimeClosed {
+			r.cond.Wait()
+		}
+		if r.state == queryRuntimeClosed {
+			r.mu.Unlock()
+			return
+		}
+		batch := r.pending
+		r.pending = nil
+		r.cond.Broadcast()
+		r.mu.Unlock()
+		r.applyBatch(context.Background(), batch)
+	}
+}
+
+func (r *QueryRuntime) applyBatch(ctx context.Context, batch []walview.VChannelResourceEvent) {
+	r.applyMu.Lock()
+	defer r.applyMu.Unlock()
+	r.mu.Lock()
+	modules := append([]QueryRuntimeModule(nil), r.modules...)
+	r.mu.Unlock()
+	for _, event := range batch {
+		for _, module := range modules {
+			if module != nil {
+				module.ApplyLiveEvent(ctx, event)
+			}
+		}
+	}
 }

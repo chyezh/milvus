@@ -9,27 +9,17 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 )
 
-var _ walview.VChannelLiveObserver = (*Runtime)(nil)
-
-func (r *Runtime) ObserveEvent(ctx context.Context, event walview.VChannelResourceEvent) bool {
+func (r *Runtime) ApplyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent) {
 	if r == nil {
-		return false
+		return
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.state == stateClosed {
-		return false
+	if event.Message != nil {
+		r.applyLiveMessage(ctx, event.Message)
+		return
 	}
-	select {
-	case <-ctx.Done():
-		return false
-	default:
+	if event.SegmentSealed != nil {
+		r.markSegmentSealed(event.SegmentSealed.SegmentID, event.SegmentSealed.SealedAtDataVersion)
 	}
-	r.pendingEvents = append(r.pendingEvents, event)
-	if r.state == stateReady {
-		r.startDrainLocked()
-	}
-	return true
 }
 
 func (r *Runtime) markReady() {
@@ -42,70 +32,6 @@ func (r *Runtime) markReady() {
 		return
 	}
 	r.state = stateReady
-	if len(r.pendingEvents) == 0 {
-		r.closePendingDrainedLocked()
-	}
-	r.startDrainLocked()
-}
-
-func (r *Runtime) startDrainLocked() {
-	if r.drainRunning || len(r.pendingEvents) == 0 {
-		return
-	}
-	r.drainRunning = true
-	r.drainWG.Add(1)
-	go func() {
-		defer r.drainWG.Done()
-		r.drainPending()
-	}()
-}
-
-func (r *Runtime) drainPending() {
-	for {
-		r.mu.Lock()
-		if r.state == stateClosed {
-			r.drainRunning = false
-			r.mu.Unlock()
-			return
-		}
-		if len(r.pendingEvents) == 0 {
-			r.drainRunning = false
-			r.closePendingDrainedLocked()
-			r.mu.Unlock()
-			return
-		}
-		event := r.pendingEvents[0]
-		copy(r.pendingEvents, r.pendingEvents[1:])
-		r.pendingEvents[len(r.pendingEvents)-1] = walview.VChannelResourceEvent{}
-		r.pendingEvents = r.pendingEvents[:len(r.pendingEvents)-1]
-		r.mu.Unlock()
-
-		if r.applyLiveEvent(context.Background(), event) && r.desc.OnApplied != nil {
-			r.desc.OnApplied()
-		}
-	}
-}
-
-func (r *Runtime) applyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent) bool {
-	if event.Message != nil {
-		advanced := r.applyLiveMessage(ctx, event.Message)
-		if bm25 := r.bm25Runtime(); bm25 != nil {
-			if err := bm25.ApplyLiveEvent(ctx, event); err != nil {
-				panic(errors.Wrap(err, "failed to apply live event to BM25 runtime"))
-			}
-		}
-		return advanced
-	}
-	if event.SegmentSealed != nil {
-		r.markSegmentSealed(event.SegmentSealed.SegmentID, event.SegmentSealed.SealedAtDataVersion)
-		if bm25 := r.bm25Runtime(); bm25 != nil {
-			if err := bm25.ApplyLiveEvent(ctx, event); err != nil {
-				panic(errors.Wrap(err, "failed to apply live event to BM25 runtime"))
-			}
-		}
-		return true
-	}
-	return false
 }
 
 func (r *Runtime) applyLiveMessage(ctx context.Context, msg message.ImmutableMessage) bool {

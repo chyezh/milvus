@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"sync"
-
-	"github.com/milvus-io/milvus/internal/views/qviews"
 )
 
 type Scheduler interface {
@@ -13,17 +11,11 @@ type Scheduler interface {
 	Close()
 }
 
-type BuildKey struct {
-	CollectionID int64
-	VChannel     string
-	DataVersion  qviews.DataVersion
-}
-
 type BuildTask interface {
-	Key() BuildKey
+	Key() string
 	Run()
 	Done() <-chan struct{}
-	Result() (*ViewRuntime, error)
+	Result() (*QueryRuntime, error)
 	Cancel()
 }
 
@@ -76,21 +68,21 @@ func (s *defaultScheduler) Close() {
 }
 
 type resourceBuildTask struct {
-	key    BuildKey
+	key    string
 	ctx    context.Context
 	cancel context.CancelFunc
-	build  func(context.Context) (*ViewRuntime, error)
+	build  func(context.Context) (*QueryRuntime, error)
 
 	done chan struct{}
 
 	mu       sync.Mutex
 	started  bool
 	finished bool
-	runtime  *ViewRuntime
+	runtime  *QueryRuntime
 	err      error
 }
 
-func newResourceBuildTask(parent context.Context, key BuildKey, build func(context.Context) (*ViewRuntime, error)) *resourceBuildTask {
+func newResourceBuildTask(parent context.Context, key string, build func(context.Context) (*QueryRuntime, error)) *resourceBuildTask {
 	ctx, cancel := context.WithCancel(parent)
 	return &resourceBuildTask{
 		key:    key,
@@ -101,7 +93,7 @@ func newResourceBuildTask(parent context.Context, key BuildKey, build func(conte
 	}
 }
 
-func (t *resourceBuildTask) Key() BuildKey {
+func (t *resourceBuildTask) Key() string {
 	return t.key
 }
 
@@ -122,7 +114,7 @@ func (t *resourceBuildTask) Done() <-chan struct{} {
 	return t.done
 }
 
-func (t *resourceBuildTask) Result() (*ViewRuntime, error) {
+func (t *resourceBuildTask) Result() (*QueryRuntime, error) {
 	<-t.done
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -143,7 +135,7 @@ func (t *resourceBuildTask) Cancel() {
 	t.mu.Unlock()
 }
 
-func (t *resourceBuildTask) finish(runtime *ViewRuntime, err error) {
+func (t *resourceBuildTask) finish(runtime *QueryRuntime, err error) {
 	t.mu.Lock()
 	if t.finished {
 		t.mu.Unlock()

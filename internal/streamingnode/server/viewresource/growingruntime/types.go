@@ -61,10 +61,6 @@ type Builder interface {
 	NewRuntime(desc Descriptor) (*Runtime, error)
 }
 
-type BM25Runtime interface {
-	ApplyLiveEvent(context.Context, walview.VChannelResourceEvent) error
-}
-
 type state int
 
 const (
@@ -83,25 +79,18 @@ type Runtime struct {
 	segmentIDs               []int64
 	deleteReplayEntries      []*streamingpb.TransformLogEntry
 	prepareFunc              func(context.Context) error
-	pendingEvents            []walview.VChannelResourceEvent
-	drainRunning             bool
-	drainWG                  sync.WaitGroup
-	pendingDrained           chan struct{}
-	pendingDrainedOnce       sync.Once
 	truncateDataVersion      qviews.DataVersion
 	hasTruncateDataVersion   bool
 	closeOnce                sync.Once
 	appliedGrowingTimeTick   atomic.Uint64
 	appliedTransformTimeTick atomic.Uint64
-	bm25                     atomic.Value
 }
 
 func newRuntime(desc Descriptor) *Runtime {
 	return &Runtime{
-		state:          statePreparing,
-		desc:           desc,
-		segments:       make(map[int64]*growingSegment),
-		pendingDrained: make(chan struct{}),
+		state:    statePreparing,
+		desc:     desc,
+		segments: make(map[int64]*growingSegment),
 	}
 }
 
@@ -182,6 +171,10 @@ func (r *Runtime) Truncate(minDataVersion qviews.DataVersion) {
 	}
 }
 
+func (r *Runtime) Advance(minDataVersion qviews.DataVersion) {
+	r.Truncate(minDataVersion)
+}
+
 func (r *Runtime) removeSegmentMetadataLocked(segmentID int64) {
 	delete(r.segments, segmentID)
 	for i, id := range r.segmentIDs {
@@ -199,11 +192,7 @@ func (r *Runtime) Close() {
 	r.closeOnce.Do(func() {
 		r.mu.Lock()
 		r.state = stateClosed
-		r.pendingEvents = nil
-		r.closePendingDrainedLocked()
 		r.mu.Unlock()
-
-		r.drainWG.Wait()
 
 		r.mu.Lock()
 		segments := make([]*growingSegment, 0, len(r.segments))
@@ -222,40 +211,4 @@ func (r *Runtime) Close() {
 			collection.Release()
 		}
 	})
-}
-
-func (r *Runtime) PendingDrained() <-chan struct{} {
-	if r == nil || r.pendingDrained == nil {
-		ch := make(chan struct{})
-		close(ch)
-		return ch
-	}
-	return r.pendingDrained
-}
-
-func (r *Runtime) closePendingDrainedLocked() {
-	if r.pendingDrained == nil {
-		return
-	}
-	r.pendingDrainedOnce.Do(func() {
-		close(r.pendingDrained)
-	})
-}
-
-func (r *Runtime) SetBM25Runtime(bm25 BM25Runtime) {
-	if r == nil || bm25 == nil {
-		return
-	}
-	r.bm25.Store(bm25)
-}
-
-func (r *Runtime) bm25Runtime() BM25Runtime {
-	if r == nil {
-		return nil
-	}
-	bm25 := r.bm25.Load()
-	if bm25 == nil {
-		return nil
-	}
-	return bm25.(BM25Runtime)
 }

@@ -2,7 +2,6 @@ package growingruntime
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"testing"
 
@@ -22,14 +21,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
-
-type errorBM25LiveUpdater struct {
-	err error
-}
-
-func (u errorBM25LiveUpdater) ApplyLiveEvent(context.Context, walview.VChannelResourceEvent) error {
-	return u.err
-}
 
 func newTestInsertMessage(t *testing.T, vchannel string, timetick uint64) message.ImmutableMessage {
 	t.Helper()
@@ -142,13 +133,12 @@ func TestRuntimeTruncateWatermarkAppliesToLateSegmentSealed(t *testing.T) {
 	runtime.Truncate(qviews.DataVersion{StreamingVersion: 20, CompactVersion: 1})
 	require.Equal(t, []int64{10}, runtime.SegmentIDs())
 
-	applied := runtime.applyLiveEvent(context.Background(), walview.VChannelResourceEvent{
+	runtime.ApplyLiveEvent(context.Background(), walview.VChannelResourceEvent{
 		SegmentSealed: &walview.SegmentSealedEvent{
 			SegmentID:           10,
 			SealedAtDataVersion: qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1},
 		},
 	})
-	require.True(t, applied)
 	require.False(t, runtime.SegmentFlushed(10))
 	require.Empty(t, runtime.SegmentIDs())
 }
@@ -188,12 +178,4 @@ func TestDeleteTimestampsFromTransformLogBlockUsesEntryTimeTick(t *testing.T) {
 	}
 
 	require.Equal(t, []uint64{200, 200, 200}, deleteTimestampsFromTransformLogBlock(200, block))
-}
-
-func TestRuntimePanicsOnBM25LiveApplyFailure(t *testing.T) {
-	runtime := newRuntime(Descriptor{})
-	runtime.SetBM25Runtime(errorBM25LiveUpdater{err: errors.New("bm25 failed")})
-	require.Panics(t, func() {
-		runtime.applyLiveEvent(context.Background(), walview.VChannelResourceEvent{Message: newTestInsertMessage(t, "ch", 30)})
-	})
 }
