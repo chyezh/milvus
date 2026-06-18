@@ -13,10 +13,10 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
-// Manager prepares and owns StreamingNode query runtimes for one PChannel runtime.
-type Manager interface {
+// SNQueryRuntimeManager prepares and owns StreamingNode query runtimes for one PChannel runtime.
+type SNQueryRuntimeManager interface {
 	walview.LoadConfigListener
-	snview.SNQueryRuntimeManager
+	snview.StreamingNodeResourceManager
 
 	Close()
 }
@@ -30,8 +30,8 @@ type resourceState struct {
 	err     error
 }
 
-// DefaultManager is the concrete PChannel-local query runtime manager.
-type DefaultManager struct {
+// queryRuntimeManager is the concrete PChannel-local query runtime manager.
+type queryRuntimeManager struct {
 	mu        sync.Mutex
 	growing   GrowingSegmentRuntimeBuilder
 	idf       IDFOracleRuntimeBuilder
@@ -43,14 +43,14 @@ type DefaultManager struct {
 	closed    bool
 }
 
-func NewManager(growing GrowingSegmentRuntimeBuilder, idf IDFOracleRuntimeBuilder) *DefaultManager {
+func NewManager(growing GrowingSegmentRuntimeBuilder, idf IDFOracleRuntimeBuilder) SNQueryRuntimeManager {
 	if growing == nil {
 		growing = SnapshotGrowingSegmentRuntimeBuilder{}
 	}
 	if idf == nil {
 		idf = NoopIDFOracleRuntimeBuilder{}
 	}
-	return &DefaultManager{
+	return &queryRuntimeManager{
 		growing:   growing,
 		idf:       idf,
 		scheduler: NewScheduler(4),
@@ -60,7 +60,7 @@ func NewManager(growing GrowingSegmentRuntimeBuilder, idf IDFOracleRuntimeBuilde
 	}
 }
 
-func (m *DefaultManager) OnAlterLoadConfig(view walview.VChannelWALView) walview.VChannelLiveObserver {
+func (m *queryRuntimeManager) OnAlterLoadConfig(view walview.VChannelWALView) walview.VChannelLiveObserver {
 	desc := LoadResourceDescriptor{WALView: view}
 	growing, err := m.growing.NewRuntime(desc)
 	if err != nil {
@@ -103,7 +103,7 @@ func (m *DefaultManager) OnAlterLoadConfig(view walview.VChannelWALView) walview
 	return runtime
 }
 
-func (m *DefaultManager) OnDropLoadConfig(event walview.DropLoadConfigEvent) {
+func (m *queryRuntimeManager) OnDropLoadConfig(event walview.DropLoadConfigEvent) {
 	m.mu.Lock()
 	state := m.resources[event.VChannel]
 	if state != nil {
@@ -116,7 +116,7 @@ func (m *DefaultManager) OnDropLoadConfig(event walview.DropLoadConfigEvent) {
 	closeRuntime(runtime)
 }
 
-func (m *DefaultManager) finishBuild(vchannel string, task BuildTask) {
+func (m *queryRuntimeManager) finishBuild(vchannel string, task BuildTask) {
 	runtime, err := task.Result()
 	m.mu.Lock()
 	state := m.resources[vchannel]
@@ -144,12 +144,12 @@ func (m *DefaultManager) finishBuild(vchannel string, task BuildTask) {
 	closeRuntime(runtime)
 }
 
-func (m *DefaultManager) Acquire(req snview.AcquireResource) {
+func (m *queryRuntimeManager) Acquire(req snview.AcquireResource) {
 	epoch := m.registerQueryViewRef(req)
 	go m.waitRuntimeReady(req.Key, epoch, req.OnReady)
 }
 
-func (m *DefaultManager) Release(req snview.ReleaseResource) {
+func (m *queryRuntimeManager) Release(req snview.ReleaseResource) {
 	var runtime *QueryRuntime
 	var task BuildTask
 	var advanceRuntime *QueryRuntime
@@ -181,7 +181,7 @@ func (m *DefaultManager) Release(req snview.ReleaseResource) {
 	closeRuntime(runtime)
 }
 
-func (m *DefaultManager) Close() {
+func (m *queryRuntimeManager) Close() {
 	m.mu.Lock()
 	remainingQueryViewRefs := m.queryViewRefCountLocked()
 	m.closed = true
@@ -214,7 +214,7 @@ func (m *DefaultManager) Close() {
 	}
 }
 
-func (m *DefaultManager) registerQueryViewRef(req snview.AcquireResource) uint64 {
+func (m *queryRuntimeManager) registerQueryViewRef(req snview.AcquireResource) uint64 {
 	if req.Meta == nil || req.Meta.GetVersion() == nil || req.Meta.GetVersion().GetDataVersion() == nil {
 		panic("query view meta version is nil")
 	}
@@ -244,7 +244,7 @@ func (m *DefaultManager) registerQueryViewRef(req snview.AcquireResource) uint64
 	return m.refEpoch[req.Key]
 }
 
-func (m *DefaultManager) assertMonotonicAcquireLocked(state *resourceState, version qviews.DataVersion) {
+func (m *queryRuntimeManager) assertMonotonicAcquireLocked(state *resourceState, version qviews.DataVersion) {
 	for key := range state.queryViewRefs {
 		if key.QueryViewVersion.DataVersion.GT(version) {
 			panic("non-monotonic query view acquire")
@@ -252,7 +252,7 @@ func (m *DefaultManager) assertMonotonicAcquireLocked(state *resourceState, vers
 	}
 }
 
-func (m *DefaultManager) waitRuntimeReady(key qviews.QueryViewKey, epoch uint64, onReady func()) {
+func (m *queryRuntimeManager) waitRuntimeReady(key qviews.QueryViewKey, epoch uint64, onReady func()) {
 	for {
 		runtime, task, ok := m.runtimeForRef(key, epoch)
 		if !ok {
@@ -281,7 +281,7 @@ func (m *DefaultManager) waitRuntimeReady(key qviews.QueryViewKey, epoch uint64,
 	}
 }
 
-func (m *DefaultManager) runtimeForRef(key qviews.QueryViewKey, epoch uint64) (*QueryRuntime, BuildTask, bool) {
+func (m *queryRuntimeManager) runtimeForRef(key qviews.QueryViewKey, epoch uint64) (*QueryRuntime, BuildTask, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.refEpoch[key] != epoch {
@@ -301,7 +301,7 @@ func (m *DefaultManager) runtimeForRef(key qviews.QueryViewKey, epoch uint64) (*
 	return state.runtime, state.task, true
 }
 
-func (m *DefaultManager) oldestDataVersionForRef(key qviews.QueryViewKey, epoch uint64) (qviews.DataVersion, bool) {
+func (m *queryRuntimeManager) oldestDataVersionForRef(key qviews.QueryViewKey, epoch uint64) (qviews.DataVersion, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.refEpoch[key] != epoch {
@@ -318,7 +318,7 @@ func (m *DefaultManager) oldestDataVersionForRef(key qviews.QueryViewKey, epoch 
 	return minQueryViewDataVersion(state.queryViewRefs)
 }
 
-func (m *DefaultManager) hasQueryViewRef(key qviews.QueryViewKey, epoch uint64) bool {
+func (m *queryRuntimeManager) hasQueryViewRef(key qviews.QueryViewKey, epoch uint64) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.refEpoch[key] != epoch {
@@ -336,7 +336,7 @@ func (m *DefaultManager) hasQueryViewRef(key qviews.QueryViewKey, epoch uint64) 
 	return ok
 }
 
-func (m *DefaultManager) cleanupIfUnreferencedLocked(vchannel string) (*QueryRuntime, BuildTask) {
+func (m *queryRuntimeManager) cleanupIfUnreferencedLocked(vchannel string) (*QueryRuntime, BuildTask) {
 	state := m.resources[vchannel]
 	if state == nil {
 		return nil, nil
@@ -348,7 +348,7 @@ func (m *DefaultManager) cleanupIfUnreferencedLocked(vchannel string) (*QueryRun
 	return state.runtime, state.task
 }
 
-func (m *DefaultManager) queryViewRefCountLocked() int {
+func (m *queryRuntimeManager) queryViewRefCountLocked() int {
 	count := 0
 	for _, state := range m.resources {
 		count += len(state.queryViewRefs)

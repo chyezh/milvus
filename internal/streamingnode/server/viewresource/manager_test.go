@@ -16,7 +16,7 @@ import (
 )
 
 func TestManagerAcquireWaitsForQueryRuntimeInitialization(t *testing.T) {
-	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, NoopIDFOracleRuntimeBuilder{})
+	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, NoopIDFOracleRuntimeBuilder{}).(*queryRuntimeManager)
 	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
 	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
 
@@ -46,7 +46,7 @@ func TestManagerAcquireWaitsForQueryRuntimeInitialization(t *testing.T) {
 }
 
 func TestManagerReleaseClosesUnreferencedRuntime(t *testing.T) {
-	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, NoopIDFOracleRuntimeBuilder{})
+	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, NoopIDFOracleRuntimeBuilder{}).(*queryRuntimeManager)
 	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
 	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
 
@@ -162,7 +162,7 @@ func TestQueryRuntimeInitialBatchAndReadyEventsUseSameConsumer(t *testing.T) {
 	runtime.Close()
 }
 
-func waitReady(t *testing.T, manager *DefaultManager, key qviews.QueryViewKey, meta *viewpb.QueryViewMeta) {
+func waitReady(t *testing.T, manager *queryRuntimeManager, key qviews.QueryViewKey, meta *viewpb.QueryViewMeta) {
 	t.Helper()
 	ready := make(chan struct{})
 	manager.Acquire(snview.AcquireResource{
@@ -177,7 +177,7 @@ func waitReady(t *testing.T, manager *DefaultManager, key qviews.QueryViewKey, m
 	}
 }
 
-func (m *DefaultManager) resourceState(vchannel string) *resourceState {
+func (m *queryRuntimeManager) resourceState(vchannel string) *resourceState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.resources[vchannel]

@@ -102,7 +102,7 @@ type walAdaptorImpl struct {
 	isFenced                   *atomic.Bool
 	appendRateCounter          *utility.AverageRateCounter // tracks append rate (bytes/sec)
 	queryViewHandler           *snview.SNQueryViewHandler
-	viewResourceManager        viewresource.Manager
+	viewResourceManager        viewresource.SNQueryRuntimeManager
 	unregisterQueryViewHandler func()
 }
 

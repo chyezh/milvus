@@ -31,7 +31,7 @@ type ReleaseResource struct {
 	OnDropped func()
 }
 
-// SNQueryRuntimeManager manages streaming resources on a StreamingNode.
+// StreamingNodeResourceManager manages streaming resources on a StreamingNode.
 // Resources include growing segments, BM25 IDF statistics, and other
 // shard-level query state required to serve a query view.
 //
@@ -57,7 +57,7 @@ type ReleaseResource struct {
 //
 // All callbacks MUST be invoked asynchronously (not during the Acquire /
 // Release call itself) to avoid deadlocking the caller's mutex.
-type SNQueryRuntimeManager interface {
+type StreamingNodeResourceManager interface {
 	// Acquire registers a QueryView reference and waits for existing
 	// WAL-triggered resource preparation.
 	Acquire(req AcquireResource)

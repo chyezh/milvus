@@ -19,14 +19,14 @@ Inside one `PChannelRuntime`, it has two upstream callers:
 
 ```text
 RecoveryStorage -> SNQueryRuntimeManager
-QueryViewStateMachine -> SNQueryRuntimeManager
+QueryViewStateMachine -> snview.StreamingNodeResourceManager
 ```
 
 The same PChannel-local component implements both WAL-side and QueryView-side
 interfaces:
 
 - `walview.LoadConfigListener`
-- `snview.SNQueryRuntimeManager`
+- `snview.StreamingNodeResourceManager`
 
 The manager owns resource lifetime. The actual vchannel resources are held by a
 single `QueryRuntime` per loaded vchannel:
@@ -72,7 +72,8 @@ VChannelModule / SegmentModule / TransformLogModule
         -> QueryRuntimeModule
 
 QueryViewStateMachine
-        -> SNQueryRuntimeManager
+        -> snview.StreamingNodeResourceManager
+        -> SNQueryRuntimeManager implementation
 ```
 
 `SNQueryRuntimeManager` consumes `VChannelWALView` as the complete WAL
@@ -228,8 +229,8 @@ Module-specific meaning:
 
 1. `RecoveryStorage` depends on `SNQueryRuntimeManager` only through
    `LoadConfigListener`.
-2. `QueryViewStateMachine` depends on `SNQueryRuntimeManager` only
-   through `QueryViewResourceManager`.
+2. `QueryViewStateMachine` depends on the resource layer only through
+   `snview.StreamingNodeResourceManager`.
 3. `SNQueryRuntimeManager` is the only owner of StreamingNode query
    resource lifetime for its PChannel.
 4. A loaded vchannel has at most one `QueryRuntime`.
@@ -258,7 +259,7 @@ Module-specific meaning:
 ```go
 type SNQueryRuntimeManager interface {
     walview.LoadConfigListener
-    snview.SNQueryRuntimeManager
+    snview.StreamingNodeResourceManager
     Close()
 }
 ```
@@ -286,7 +287,7 @@ not a QueryView cleanup command.
 ### 4.3 QueryView-Side Interface
 
 ```go
-type QueryViewResourceManager interface {
+type StreamingNodeResourceManager interface {
     Acquire(req AcquireResource)
     Release(req ReleaseResource)
 }
