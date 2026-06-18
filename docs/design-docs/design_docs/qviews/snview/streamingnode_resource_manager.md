@@ -1,6 +1,6 @@
-# StreamingNode Query Resource Manager Design
+# StreamingNode Query Runtime Manager Design
 
-> StreamingNode-side query resource ownership for QueryView.
+> StreamingNode-side query runtime ownership for QueryView.
 > This document defines the PChannel-local resource manager, the vchannel-level
 > `QueryRuntime`, and the reference model used by WAL recovery and the
 > StreamingNode QueryView state machine. Query execution, QueryCoord placement,
@@ -8,8 +8,8 @@
 
 ## 1. Purpose
 
-`StreamingNodeResourceManager` prepares and owns StreamingNode-local query
-resources for QueryView.
+`SNQueryRuntimeManager` prepares and owns StreamingNode-local query runtimes for
+QueryView.
 
 The manager is scoped to one `PChannelRuntime`. A StreamingNode may run many
 PChannel runtimes, and each PChannel runtime owns one resource manager instance.
@@ -18,21 +18,21 @@ The manager does not serve resources across PChannels.
 Inside one `PChannelRuntime`, it has two upstream callers:
 
 ```text
-RecoveryStorage -> StreamingNodeResourceManager
-QueryViewStateMachine -> StreamingNodeResourceManager
+RecoveryStorage -> SNQueryRuntimeManager
+QueryViewStateMachine -> SNQueryRuntimeManager
 ```
 
 The same PChannel-local component implements both WAL-side and QueryView-side
 interfaces:
 
 - `walview.LoadConfigListener`
-- `snview.StreamingNodeResourceManager`
+- `snview.SNQueryRuntimeManager`
 
 The manager owns resource lifetime. The actual vchannel resources are held by a
 single `QueryRuntime` per loaded vchannel:
 
 ```text
-StreamingNodeResourceManager
+SNQueryRuntimeManager
   -> QueryRuntime
        -> GrowingRuntime
        -> IDFOracleRuntime
@@ -51,9 +51,9 @@ driven by `OnAlterLoadConfig`, `OnDropLoadConfig`, `Acquire`, and `Release`.
 
 | Component | Role | Boundary |
 |---|---|---|
-| `PChannelRuntime` | Owns one PChannel WAL instance and PChannel-local WAL submodules, including `RecoveryStorage`, `QueryViewStateMachine`, and `StreamingNodeResourceManager`. | It coordinates WAL open, recovery, handoff close, and module close order. It does not build vchannel query resources directly. |
+| `PChannelRuntime` | Owns one PChannel WAL instance and PChannel-local WAL submodules, including `RecoveryStorage`, `QueryViewStateMachine`, and `SNQueryRuntimeManager`. | It coordinates WAL open, recovery, handoff close, and module close order. It does not build vchannel query resources directly. |
 | `RecoveryStorage` | Observes `AlterLoadConfig` / `DropLoadConfig`, restores WAL metadata on startup, builds valid `VChannelWALView`, and calls the resource manager through `LoadConfigListener`. | It does not build csegments, fetch BM25 resources, wait for query resources to become ready, or manage QueryView lifecycle. WALView capture details are defined in [StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md). |
-| `StreamingNodeResourceManager` | Owns PChannel-local resource references, creates vchannel `QueryRuntime` instances, submits initialization tasks, waits for resource catchup on `Acquire`, advances DataVersion watermarks, and releases resources. | It does not apply WAL events to concrete resources directly. It does not own QueryView state transitions. |
+| `SNQueryRuntimeManager` | Owns PChannel-local resource references, creates vchannel `QueryRuntime` instances, submits initialization tasks, waits for resource catchup on `Acquire`, advances DataVersion watermarks, and releases resources. | It does not apply WAL events to concrete resources directly. It does not own QueryView state transitions. |
 | `QueryRuntime` | VChannel-level singleton resource runtime. Implements `VChannelLiveObserver`, owns pending live-event buffering, initializes resource modules, drains pending events into modules, exposes whole-resource catchup, and broadcasts DataVersion advancement. | It does not own QueryView references, `load_config` meta, or WAL module snapshots. |
 | `QueryRuntimeModule` | Common lifecycle interface implemented by resource modules. | It does not manage references or live observer registration. |
 | `GrowingRuntime` | QueryRuntime module that owns growing segment resources for the vchannel. | It does not implement `VChannelLiveObserver`, maintain pending buffers, or decide QueryView lifecycle. Details are defined in [StreamingNode Growing Segment Runtime Design](growing_segment_runtime.md). |
@@ -67,15 +67,15 @@ The key dependency boundary is:
 ```text
 VChannelModule / SegmentModule / TransformLogModule
         -> RecoveryStorage builds VChannelWALView
-        -> StreamingNodeResourceManager
+        -> SNQueryRuntimeManager
         -> QueryRuntime
         -> QueryRuntimeModule
 
 QueryViewStateMachine
-        -> StreamingNodeResourceManager
+        -> SNQueryRuntimeManager
 ```
 
-`StreamingNodeResourceManager` consumes `VChannelWALView` as the complete WAL
+`SNQueryRuntimeManager` consumes `VChannelWALView` as the complete WAL
 input package. It must not call back into WAL modules to rebuild a snapshot.
 The WALView structure, capture order, live observer contract, and historical
 delete replay contract are defined by
@@ -95,7 +95,7 @@ RecoveryStorage
         |
         | OnAlterLoadConfig(VChannelWALView)
         v
-StreamingNodeResourceManager
+SNQueryRuntimeManager
         |
         | create vchannel singleton
         v
@@ -127,7 +127,7 @@ QueryViewStateMachine
         |
         | Acquire / Release
         v
-StreamingNodeResourceManager
+SNQueryRuntimeManager
         |
         | Advance(oldestDataVersion)
         v
@@ -229,11 +229,11 @@ Module-specific meaning:
 
 ### 3.5 Invariants
 
-1. `RecoveryStorage` depends on `StreamingNodeResourceManager` only through
+1. `RecoveryStorage` depends on `SNQueryRuntimeManager` only through
    `LoadConfigListener`.
-2. `QueryViewStateMachine` depends on `StreamingNodeResourceManager` only
+2. `QueryViewStateMachine` depends on `SNQueryRuntimeManager` only
    through `QueryViewResourceManager`.
-3. `StreamingNodeResourceManager` is the only owner of StreamingNode query
+3. `SNQueryRuntimeManager` is the only owner of StreamingNode query
    resource lifetime for its PChannel.
 4. A loaded vchannel has at most one `QueryRuntime`.
 5. `QueryRuntime` is the only live observer returned to `RecoveryStorage`.
@@ -256,14 +256,14 @@ Module-specific meaning:
 ### 4.1 PChannel Resource Manager
 
 ```go
-type StreamingNodeResourceManager interface {
+type SNQueryRuntimeManager interface {
     walview.LoadConfigListener
-    snview.StreamingNodeResourceManager
+    snview.SNQueryRuntimeManager
     Close()
 }
 ```
 
-There is one `StreamingNodeResourceManager` instance per `PChannelRuntime`.
+There is one `SNQueryRuntimeManager` instance per `PChannelRuntime`.
 `Close` is called by `PChannelRuntime` after the PChannel-local QueryView state
 machine has drained local QueryViews.
 
@@ -377,7 +377,7 @@ resource events.
 ```text
 RecoveryStorage observes AlterLoadConfig
   -> builds VChannelWALView
-  -> StreamingNodeResourceManager.OnAlterLoadConfig(view)
+  -> SNQueryRuntimeManager.OnAlterLoadConfig(view)
   -> manager creates initRef
   -> manager creates QueryRuntime(Preparing)
   -> manager submits QueryRuntimeBuildTask
@@ -446,7 +446,7 @@ QueryViewStateMachine.Release(qv)
 ```text
 RecoveryStorage observes DropLoadConfig
   -> removes VChannelMeta.load_config
-  -> StreamingNodeResourceManager.OnDropLoadConfig(event)
+  -> SNQueryRuntimeManager.OnDropLoadConfig(event)
   -> manager removes initRef
   -> if queryViewRefs is empty:
          manager closes QueryRuntime
@@ -480,7 +480,7 @@ The close order is:
 PChannelRuntime.CloseForHandoff
   -> QueryViewStateMachine.CloseForHandoff
        -> Release all local QueryView refs
-  -> StreamingNodeResourceManager.Close
+  -> SNQueryRuntimeManager.Close
        -> close remaining initRef-only runtimes
 ```
 

@@ -23,7 +23,7 @@ var _ handler.QueryViewHandler = (*SNQueryViewHandler)(nil)
 // SN supports crash recovery via persistence. Recovered views start in
 // UpRecovering state and transition to Up once WAL catch-up completes.
 //
-// Resource management is delegated to the StreamingNodeResourceManager.
+// Resource management is delegated to the SNQueryRuntimeManager.
 // When a new Preparing view arrives, the handler acquires resources via
 // ResourceManager. The ResourceManager drives SM progress by invoking
 // OnReady/OnUnrecoverable callbacks asynchronously.
@@ -31,8 +31,8 @@ var _ handler.QueryViewHandler = (*SNQueryViewHandler)(nil)
 // # Response Guarantee
 //
 // Every view pushed via ApplyViews is guaranteed to eventually produce a
-// response (via OnReport callback), provided the StreamingNodeResourceManager
-// fulfills its liveness contracts (see StreamingNodeResourceManager doc).
+// response (via OnReport callback), provided the SNQueryRuntimeManager
+// fulfills its liveness contracts (see SNQueryRuntimeManager doc).
 // The response paths are:
 //
 // View does not exist in handler:
@@ -61,7 +61,7 @@ type SNQueryViewHandler struct {
 	pchannel string
 	shards   map[qviews.ShardID]*snShardView
 	catalog  metastore.StreamingNodeCataLog
-	resMgr   StreamingNodeResourceManager
+	resMgr   SNQueryRuntimeManager
 }
 
 // recoverSNQueryViewHandler reconstructs the handler from persisted views
@@ -69,7 +69,7 @@ type SNQueryViewHandler struct {
 func recoverSNQueryViewHandler(
 	pchannel string,
 	catalog metastore.StreamingNodeCataLog,
-	resMgr StreamingNodeResourceManager,
+	resMgr SNQueryRuntimeManager,
 	views []*viewpb.QueryViewOfShard,
 ) *SNQueryViewHandler {
 	h := &SNQueryViewHandler{
@@ -113,7 +113,7 @@ func recoverSNQueryViewHandler(
 func RecoverPChannelSNQueryViewHandler(
 	pchannel string,
 	catalog metastore.StreamingNodeCataLog,
-	resMgr StreamingNodeResourceManager,
+	resMgr SNQueryRuntimeManager,
 	views []*viewpb.QueryViewOfShard,
 ) *SNQueryViewHandler {
 	return recoverSNQueryViewHandler(pchannel, catalog, resMgr, views)

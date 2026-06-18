@@ -12,7 +12,7 @@ growing-side segment resources prepared from `VChannelWALView`.
 It is created as part of a vchannel `QueryRuntime`:
 
 ```text
-StreamingNodeResourceManager
+SNQueryRuntimeManager
   -> QueryRuntime(Preparing)
        -> GrowingRuntime
        -> IDFOracleRuntime
@@ -34,7 +34,7 @@ and does not expose catchup state. Those responsibilities belong to
 
 | Component | Role | Boundary |
 |---|---|---|
-| `StreamingNodeResourceManager` | PChannel-local owner of QueryView/init references. Creates the vchannel `QueryRuntime` and submits its initialization task. | It does not build individual growing segments or apply WAL events directly. |
+| `SNQueryRuntimeManager` | PChannel-local owner of QueryView/init references. Creates the vchannel `QueryRuntime` and submits its initialization task. | It does not build individual growing segments or apply WAL events directly. |
 | `QueryRuntime` | VChannel-level singleton runtime. Implements `VChannelLiveObserver`, owns pending event buffering, calls `GrowingRuntime.Prepare`, forwards live events, and calls `GrowingRuntime.Advance`. | It does not own single-segment resource handles directly. |
 | `GrowingRuntime` | QueryRuntime module that owns the vchannel segment map and segment-level dispatch. | It does not implement `VChannelLiveObserver`, decide resource references, or call WAL modules directly. |
 | `GrowingSegment` | Owns one segment's local resource handle and applies segment-scoped persisted data, inserts, deletes, and sealed metadata. | It does not own vchannel-level message dispatch or DataVersion watermarks. |
@@ -79,7 +79,7 @@ GrowingSegment
 DataVersion advancement:
 
 ```text
-StreamingNodeResourceManager
+SNQueryRuntimeManager
         |
         | QueryRuntime.Advance(oldestDataVersion)
         v
@@ -250,7 +250,7 @@ resource events captured by `RecoveryStorage` and forwarded by `QueryRuntime`.
 ### 5.4 Truncation
 
 ```text
-StreamingNodeResourceManager computes oldest active QueryView DataVersion
+SNQueryRuntimeManager computes oldest active QueryView DataVersion
   -> QueryRuntime.Advance(oldestDataVersion)
   -> GrowingRuntime.Advance(oldestDataVersion)
   -> GrowingRuntime.Truncate(oldestDataVersion)

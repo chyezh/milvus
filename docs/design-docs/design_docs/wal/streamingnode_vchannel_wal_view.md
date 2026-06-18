@@ -1,18 +1,18 @@
 # StreamingNode VChannel WAL View Design
 
 > VChannel-level WAL input view used by the PChannel-local
-> `StreamingNodeResourceManager` to prepare StreamingNode query resources after
+> `SNQueryRuntimeManager` to prepare StreamingNode query resources after
 > `AlterLoadConfig`.
 > References: [WAL Recovery Architecture](wal-recovery-architecture.md),
 > [Segment View Module](segment_view_module.md),
 > [TransformLog View Module](transform_log_view_module.md), and
-> [StreamingNode Query Resource Manager Design](../qviews/snview/streamingnode_resource_manager.md).
+> [StreamingNode Query Runtime Manager Design](../qviews/snview/streamingnode_resource_manager.md).
 
 ## 1. Goal
 
 `AlterLoadConfig` is the WAL event that starts StreamingNode-side resource
 preparation for a loaded vchannel. At that WAL observe point,
-the PChannel-local `StreamingNodeResourceManager` needs one consistent input
+the PChannel-local `SNQueryRuntimeManager` needs one consistent input
 package:
 
 ```text
@@ -25,7 +25,7 @@ two TimeTick watermarks for growing and transform MVCC
 
 This input package is `VChannelWALView`. RecoveryStorage creates it at a serialized
 WAL observe point and passes it to a load-config listener implemented by the
-same PChannelRuntime's `StreamingNodeResourceManager`.
+same PChannelRuntime's `SNQueryRuntimeManager`.
 
 The core guarantee of `VChannelWALView` is no-gap WAL input handoff:
 
@@ -52,9 +52,9 @@ AlterLoadConfig is observed by RecoveryStorage
   -> RecoveryStorage captures current module views
   -> RecoveryStorage creates VChannelWALView
   -> RecoveryStorage calls LoadConfigListener.OnAlterLoadConfig(view)
-  -> PChannel-local StreamingNodeResourceManager returns a VChannelLiveObserver
+  -> PChannel-local SNQueryRuntimeManager returns a VChannelLiveObserver
      to RecoveryStorage
-  -> PChannel-local StreamingNodeResourceManager asynchronously loads historical
+  -> PChannel-local SNQueryRuntimeManager asynchronously loads historical
      Insert and Delete
   -> RecoveryStorage synchronously pushes later live resource events to the observer
   -> resource runtime advances source-specific applied TimeTicks
@@ -146,7 +146,7 @@ SegmentModule
 TransformLogModule
   owns durable Delete history and provides historical Delete replay descriptors.
 
-StreamingNodeResourceManager
+SNQueryRuntimeManager
   implements LoadConfigListener, consumes VChannelWALView, starts an asynchronous
   WALView load task, returns a live observer, and tracks runtime apply frontier.
   It is scoped to the same PChannelRuntime as RecoveryStorage.
@@ -183,7 +183,7 @@ type DropLoadConfigEvent struct {
 }
 ```
 
-The PChannel-local concrete `StreamingNodeResourceManager` implements this
+The PChannel-local concrete `SNQueryRuntimeManager` implements this
 listener interface.
 Callback contract:
 
@@ -336,7 +336,7 @@ Backpressure:
   wait for query resource readiness.
 
 This design does not require RecoveryStorage to create a goroutine per observer.
-If `StreamingNodeResourceManager` wants asynchronous application, the returned
+If `SNQueryRuntimeManager` wants asynchronous application, the returned
 observer owns that buffering policy internally; RecoveryStorage still performs
 one synchronous call per later event.
 
@@ -367,7 +367,7 @@ choice is:
 
 RecoveryStorage may use a tighter delete start point when SegmentModule or
 DataView exposes one. The start and end bounds are implementation details of
-scanner construction; `StreamingNodeResourceManager` must not depend on them.
+scanner construction; `SNQueryRuntimeManager` must not depend on them.
 
 The end bound is expressed through `wal.TransformLogReadOption.EndTimeTick`.
 RecoveryStorage creates the scanner directly instead of exposing a TransformLog
@@ -409,7 +409,7 @@ For later resource events:
 
 ## 11. Runtime Build Flow
 
-`StreamingNodeResourceManager` consumes the view asynchronously through its
+`SNQueryRuntimeManager` consumes the view asynchronously through its
 WALView load task:
 
 ```text
@@ -429,8 +429,8 @@ This preserves MVCC without making `RecoveryStorage.ObserveMessage` or
 `SegmentModule.ObserveMessage` synchronously call csegment `Insert` or `Delete`.
 The WALView load task is volatile. It is not a retention anchor and does not
 participate in DataVersion GC. Long-term retention is driven by the
-`StreamingNodeResourceManager` reference model defined in
-[StreamingNode Query Resource Manager Design](../qviews/snview/streamingnode_resource_manager.md).
+`SNQueryRuntimeManager` reference model defined in
+[StreamingNode Query Runtime Manager Design](../qviews/snview/streamingnode_resource_manager.md).
 Repeated `AlterLoadConfig` callbacks for a vchannel that already has an in-flight
 WALView load task are ignored by the resource manager and return no observer.
 They do not cancel or replace the existing task.
@@ -450,4 +450,4 @@ resource recovery base DataVersion and re-emits OnAlterLoadConfig callbacks.
 The fresh view computes new base TimeTick watermarks from recovered module state.
 Crash recovery does not depend on any pre-crash observer or resource runtime state.
 The recovery base DataVersion selection is defined by
-[StreamingNode Query Resource Manager Design](../qviews/snview/streamingnode_resource_manager.md).
+[StreamingNode Query Runtime Manager Design](../qviews/snview/streamingnode_resource_manager.md).

@@ -20,7 +20,7 @@ type IDFOracleRuntimeBuilder interface {
 // Manager prepares and owns StreamingNode query resources for one PChannel runtime.
 type Manager interface {
 	walview.LoadConfigListener
-	snview.StreamingNodeResourceManager
+	snview.SNQueryRuntimeManager
 
 	Close()
 }

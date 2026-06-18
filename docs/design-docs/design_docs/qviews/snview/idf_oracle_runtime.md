@@ -35,7 +35,7 @@ and does not expose catchup state. Whole-vchannel catchup belongs to
 
 | Component | Role | Boundary |
 |---|---|---|
-| `StreamingNodeResourceManager` | PChannel-local owner of QueryView/init references. It creates the vchannel `QueryRuntime`, waits for whole-resource catchup on `Acquire`, and advances the runtime by oldest active QueryView DataVersion. | It does not compute BM25 stats diffs and does not evict IDF internal segment stats. |
+| `SNQueryRuntimeManager` | PChannel-local owner of QueryView/init references. It creates the vchannel `QueryRuntime`, waits for whole-resource catchup on `Acquire`, and advances the runtime by oldest active QueryView DataVersion. | It does not compute BM25 stats diffs and does not evict IDF internal segment stats. |
 | `QueryRuntime` | VChannel-level singleton runtime. Implements `VChannelLiveObserver`, owns pending event buffering, calls `IDFOracleRuntime.Prepare`, forwards live events, and calls `IDFOracleRuntime.Advance`. | It does not compute BM25 stats or fetch sealed resources directly. |
 | `IDFOracleRuntime` | QueryRuntime module that owns the vchannel singleton oracle, growing BM25 stats store, sealed contribution leases, current DataVersion, and advance worker. | It does not implement `VChannelLiveObserver`, expose external truncation, or own QueryView references. |
 | `VChannelWALView` | Provides the initial schema, settings, segment snapshot, historical insert input, and no-gap live resource event stream. | Its capture and no-gap contract are defined in [StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md). |
@@ -86,7 +86,7 @@ GrowingBM25StatsStore
 DataVersion advancement:
 
 ```text
-StreamingNodeResourceManager
+SNQueryRuntimeManager
         |
         | QueryRuntime.Advance(oldestDataVersion)
         v
@@ -322,7 +322,7 @@ IDF-specific catchup handle.
 
 ```text
 QueryView references move forward
-  -> StreamingNodeResourceManager computes oldestDataVersion
+  -> SNQueryRuntimeManager computes oldestDataVersion
   -> QueryRuntime.Advance(oldestDataVersion)
   -> IDFOracleRuntime.Advance(oldestDataVersion)
   -> IDFAdvanceWorker.Request(oldestDataVersion)

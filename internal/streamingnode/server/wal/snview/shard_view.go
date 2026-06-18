@@ -15,7 +15,7 @@ import (
 // snShardView manages all query view state machines for a single shard on a StreamingNode.
 // All public methods are concurrent-safe via the internal mutex.
 //
-// All StreamingNodeResourceManager operations (Acquire, Release) are
+// All SNQueryRuntimeManager operations (Acquire, Release) are
 // invoked while holding the shard mutex. The ResourceManager's liveness
 // contracts require that all callbacks are asynchronous, so this does not
 // cause deadlocks.
@@ -27,7 +27,7 @@ type snShardView struct {
 	hasCollectionID bool
 	views           map[qviews.QueryViewVersion]*snViewEntry
 	catalog         metastore.StreamingNodeCataLog
-	resMgr          StreamingNodeResourceManager
+	resMgr          SNQueryRuntimeManager
 	onEmpty         func() // called (under mu) when the last view entry is removed
 }
 
@@ -45,7 +45,7 @@ func recoverSnShardView(
 	shardID qviews.ShardID,
 	views map[qviews.QueryViewVersion]*snQueryViewStateMachine,
 	catalog metastore.StreamingNodeCataLog,
-	resMgr StreamingNodeResourceManager,
+	resMgr SNQueryRuntimeManager,
 ) *snShardView {
 	entries := make(map[qviews.QueryViewVersion]*snViewEntry, len(views))
 	for version, sm := range views {

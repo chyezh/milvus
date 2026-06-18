@@ -238,7 +238,7 @@ Example: If view A is unreasonable and causes OOM on a node, it is marked as Unr
 For StreamingNode-side resource preparation boundaries, including `AlterLoadConfig`
 initialization, `DropLoadConfig` cleanup, and recovery from `VChannelMeta.load_config`
 before QueryView sync, see
-[StreamingNode Query Resource Manager Design](snview/streamingnode_resource_manager.md).
+[StreamingNode Query Runtime Manager Design](snview/streamingnode_resource_manager.md).
 For StreamingNode growing-side runtime preparation and retention, see
 [StreamingNode Growing Segment Runtime Design](snview/growing_segment_runtime.md).
 For BM25 sealed resource discovery and vchannel-level IDF oracle maintenance on
