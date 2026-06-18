@@ -28,15 +28,15 @@ The purpose of `IDFOracleRuntime` is to:
 7. clean obsolete internal BM25 statistics and sealed cache leases by itself.
 
 `IDFOracleRuntime` is not a live observer. It does not maintain pending buffers
-and does not expose catchup state. Whole-vchannel catchup belongs to
-`QueryRuntime`.
+and does not expose catchup state. `QueryRuntime.Initialize` owns buffering,
+catchup, and the transition to `Ready`.
 
 ## 2. Components And Business Boundaries
 
 | Component | Role | Boundary |
 |---|---|---|
-| `SNQueryRuntimeManager` | PChannel-local owner of QueryView/init references. It creates the vchannel `QueryRuntime`, waits for whole-resource catchup on `Acquire`, and advances the runtime by oldest active QueryView DataVersion. | It does not compute BM25 stats diffs and does not evict IDF internal segment stats. |
-| `QueryRuntime` | VChannel-level singleton runtime. Implements `VChannelLiveObserver`, owns pending event buffering, calls `IDFOracleRuntime.Prepare`, forwards live events, and calls `IDFOracleRuntime.Advance`. | It does not compute BM25 stats or fetch sealed resources directly. |
+| `SNQueryRuntimeManager` | PChannel-local owner of QueryView/init references. It creates the vchannel `QueryRuntime`, waits for runtime initialization on `Acquire`, and advances the runtime by oldest active QueryView DataVersion. | It does not compute BM25 stats diffs and does not evict IDF internal segment stats. |
+| `QueryRuntime` | VChannel-level singleton runtime. Implements `VChannelLiveObserver`, owns one live-event buffer and one consumer, calls `IDFOracleRuntime.Prepare`, forwards live events, and calls `IDFOracleRuntime.Advance`. | It does not compute BM25 stats or fetch sealed resources directly. |
 | `IDFOracleRuntime` | QueryRuntime module that owns the vchannel singleton oracle, growing BM25 stats store, sealed contribution leases, current DataVersion, and advance worker. | It does not implement `VChannelLiveObserver`, expose external truncation, or own QueryView references. |
 | `VChannelWALView` | Provides the initial schema, settings, segment snapshot, historical insert input, and no-gap live resource event stream. | Its capture and no-gap contract are defined in [StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md). |
 | `SealedBM25ResourceProvider` | Calls QueryCoord to fetch the complete sealed BM25 resource set for a target DataVersion. | It does not cache local files or merge oracle stats. |
@@ -146,7 +146,7 @@ BM25 stats can be removed.
 2. There is only one `IDFOracleRuntime` per loaded vchannel.
 3. There is no `DataVersion -> IDFOracle` map.
 4. `IDFOracleRuntime` does not implement `VChannelLiveObserver`.
-5. `IDFOracleRuntime` does not expose module-level `CatchupDone`.
+5. `IDFOracleRuntime` does not expose a module-level catchup handle.
 6. Initial construction is triggered by `QueryRuntime.Initialize`, not by
    QueryView `Acquire`.
 7. The initialized oracle DataVersion is the `VChannelWALView` base
@@ -155,7 +155,8 @@ BM25 stats can be removed.
 9. Initial growing BM25 stats are generated from the WALView segment snapshot.
 10. Live growing BM25 stats are generated from events forwarded by
     `QueryRuntime` in WAL order.
-11. The first QueryView `Up` report waits for `QueryRuntime.CatchupDone`.
+11. The first QueryView `Up` report waits for `QueryRuntime.Initialize` to
+    complete successfully.
 12. `Advance(oldestDataVersion)` may enqueue asynchronous IDF advancement, but
     QueryView activation does not wait for the advancement to finish.
 13. IDF advancement is vchannel-local, serial, asynchronous, and monotonic.
@@ -308,15 +309,16 @@ sequence is also applied to the other resource modules.
 
 ### 5.3 First QueryView Up
 
-The first QueryView `Up` report waits for `QueryRuntime.CatchupDone`, not for an
-IDF-specific catchup handle.
+The first QueryView `Up` report waits for `QueryRuntime.Initialize` to complete
+successfully, not for an IDF-specific catchup handle.
 
-`QueryRuntime.CatchupDone` closes after:
+`QueryRuntime.Initialize` returns successfully after:
 
 1. `GrowingRuntime.Prepare` returns;
 2. `IDFOracleRuntime.Prepare` returns;
-3. all pending live events observed during preparation have been applied to both
-   modules.
+3. `QueryRuntime` starts its singleton consumer;
+4. `QueryRuntime` atomically takes the current live-event buffer batch;
+5. every event in the initial batch has been applied to both modules.
 
 ### 5.4 Oracle Advancement
 

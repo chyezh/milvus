@@ -27,15 +27,15 @@ The purpose of `GrowingRuntime` is to:
 5. release growing segment state no longer needed by active QueryViews.
 
 `GrowingRuntime` is not a live observer. It does not maintain pending buffers
-and does not expose catchup state. Those responsibilities belong to
-`QueryRuntime`.
+and does not expose catchup state. `QueryRuntime.Initialize` owns buffering,
+catchup, and the transition to `Ready`.
 
 ## 2. Components And Business Boundaries
 
 | Component | Role | Boundary |
 |---|---|---|
 | `SNQueryRuntimeManager` | PChannel-local owner of QueryView/init references. Creates the vchannel `QueryRuntime` and submits its initialization task. | It does not build individual growing segments or apply WAL events directly. |
-| `QueryRuntime` | VChannel-level singleton runtime. Implements `VChannelLiveObserver`, owns pending event buffering, calls `GrowingRuntime.Prepare`, forwards live events, and calls `GrowingRuntime.Advance`. | It does not own single-segment resource handles directly. |
+| `QueryRuntime` | VChannel-level singleton runtime. Implements `VChannelLiveObserver`, owns one live-event buffer and one consumer, calls `GrowingRuntime.Prepare`, forwards live events, and calls `GrowingRuntime.Advance`. | It does not own single-segment resource handles directly. |
 | `GrowingRuntime` | QueryRuntime module that owns the vchannel segment map and segment-level dispatch. | It does not implement `VChannelLiveObserver`, decide resource references, or call WAL modules directly. |
 | `GrowingSegment` | Owns one segment's local resource handle and applies segment-scoped persisted data, inserts, deletes, and sealed metadata. | It does not own vchannel-level message dispatch or DataVersion watermarks. |
 | `VChannelWALView` | Provides no-gap WAL input for the selected base DataVersion. | Its contract is defined in [StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md). |
@@ -129,7 +129,7 @@ storage or segcore implementation from the runtime.
 1. `GrowingRuntime` implements `QueryRuntimeModule`.
 2. `GrowingRuntime` does not implement `VChannelLiveObserver`.
 3. `GrowingRuntime` does not own pending live-event buffering.
-4. `GrowingRuntime` does not expose `CatchupDone`.
+4. `GrowingRuntime` does not expose a catchup handle.
 5. Runtime preparation never reads `SegmentModule` or `TransformLogModule`
    directly.
 6. `VChannelWALView` owns the no-gap input guarantee.
@@ -233,8 +233,8 @@ QueryRuntime.applyLiveEvent(event)
   -> GrowingSegment.ApplyInsert / ApplyDelete / MarkSealed / Close
 ```
 
-`QueryRuntime` owns event ordering. `GrowingRuntime` assumes calls are already
-serialized in WAL order.
+`QueryRuntime` owns event ordering. `GrowingRuntime` assumes calls come from the
+single `QueryRuntime` consumer and are already serialized in WAL order.
 
 ### 5.3 Segment Seal DataVersion
 

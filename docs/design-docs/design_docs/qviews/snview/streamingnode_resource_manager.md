@@ -39,9 +39,9 @@ SNQueryRuntimeManager
 ```
 
 `QueryRuntime` is the only `walview.VChannelLiveObserver` for the vchannel. It
-buffers live resource events while preparing, initializes all query resource
-modules, drains the pending buffer into every module, and reports catchup only
-after the whole vchannel resource is ready.
+pushes live resource events into one internal buffer, initializes all query
+resource modules, drains the buffer into every module through one consumer, and
+enters `Ready` only after the whole vchannel resource is caught up.
 
 `Up` is not a resource-manager event. An `Up` QueryView is persisted only as
 WAL-bound QueryView meta for StreamingNode crash recovery. Resource lifetime is
@@ -53,8 +53,8 @@ driven by `OnAlterLoadConfig`, `OnDropLoadConfig`, `Acquire`, and `Release`.
 |---|---|---|
 | `PChannelRuntime` | Owns one PChannel WAL instance and PChannel-local WAL submodules, including `RecoveryStorage`, `QueryViewStateMachine`, and `SNQueryRuntimeManager`. | It coordinates WAL open, recovery, handoff close, and module close order. It does not build vchannel query resources directly. |
 | `RecoveryStorage` | Observes `AlterLoadConfig` / `DropLoadConfig`, restores WAL metadata on startup, builds valid `VChannelWALView`, and calls the resource manager through `LoadConfigListener`. | It does not build csegments, fetch BM25 resources, wait for query resources to become ready, or manage QueryView lifecycle. WALView capture details are defined in [StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md). |
-| `SNQueryRuntimeManager` | Owns PChannel-local resource references, creates vchannel `QueryRuntime` instances, submits initialization tasks, waits for resource catchup on `Acquire`, advances DataVersion watermarks, and releases resources. | It does not apply WAL events to concrete resources directly. It does not own QueryView state transitions. |
-| `QueryRuntime` | VChannel-level singleton resource runtime. Implements `VChannelLiveObserver`, owns pending live-event buffering, initializes resource modules, drains pending events into modules, exposes whole-resource catchup, and broadcasts DataVersion advancement. | It does not own QueryView references, `load_config` meta, or WAL module snapshots. |
+| `SNQueryRuntimeManager` | Owns PChannel-local resource references, creates vchannel `QueryRuntime` instances, submits initialization tasks, waits for runtime initialization on `Acquire`, advances DataVersion watermarks, and releases resources. | It does not apply WAL events to concrete resources directly. It does not own QueryView state transitions. |
+| `QueryRuntime` | VChannel-level singleton resource runtime. Implements `VChannelLiveObserver`, owns one live-event buffer and one consumer, initializes resource modules, drains buffered events into modules, and broadcasts DataVersion advancement. | It does not own QueryView references, `load_config` meta, or WAL module snapshots. |
 | `QueryRuntimeModule` | Common lifecycle interface implemented by resource modules. | It does not manage references or live observer registration. |
 | `GrowingRuntime` | QueryRuntime module that owns growing segment resources for the vchannel. | It does not implement `VChannelLiveObserver`, maintain pending buffers, or decide QueryView lifecycle. Details are defined in [StreamingNode Growing Segment Runtime Design](growing_segment_runtime.md). |
 | `IDFOracleRuntime` | QueryRuntime module that owns the vchannel singleton BM25 / IDF oracle. | It does not implement `VChannelLiveObserver`, expose external truncation, or own QueryView references. Details are defined in [StreamingNode IDF Oracle Runtime Design](idf_oracle_runtime.md). |
@@ -182,9 +182,7 @@ There is no `DataVersion -> runtime` map. A loaded vchannel owns exactly one
 
 The resource key is only `vchannel`. `collectionID` is a consistency property
 inside `VChannelWALView`, `QueryRuntime`, and resource modules. It is not part
-of the manager's resource identity. If a repeated load for the same vchannel
-contains a different collection ID, it is a critical WAL/resource consistency
-bug and must fail by assertion.
+of the manager's resource identity.
 
 The runtime owns all module state:
 
@@ -195,11 +193,10 @@ QueryRuntime
   baseDataVersion
   state Preparing | Ready | Closed
   pendingEvents []VChannelResourceEvent
+  drainWorker
   modules []QueryRuntimeModule
   growingRuntime GrowingRuntime
   idfOracleRuntime IDFOracleRuntime
-  catchupDone
-  catchupErr
 ```
 
 ### 3.4 DataVersion Advancement
@@ -238,7 +235,7 @@ Module-specific meaning:
 4. A loaded vchannel has at most one `QueryRuntime`.
 5. `QueryRuntime` is the only live observer returned to `RecoveryStorage`.
 6. Resource modules do not implement `VChannelLiveObserver`.
-7. `QueryRuntime.CatchupDone` represents whole-resource catchup, not a single
+7. `QueryRuntime.Initialize` represents whole-resource catchup, not a single
    module's catchup.
 8. `AlterLoadConfig` creates `initRef` and starts `QueryRuntime`
    initialization.
@@ -246,9 +243,12 @@ Module-specific meaning:
 10. QueryView `Acquire` creates QueryView references; QueryView `Release`
     removes them.
 11. QueryView `Acquire` does not create or schedule a new runtime.
-12. Recovery acquires QueryViews in QueryViewVersion order.
-13. Resources are released only after all resource-manager references are gone.
-14. PChannel handoff close must first unmount local QueryViews through
+12. QueryView `Acquire` is monotonic for one vchannel.
+13. `QueryRuntime.Advance(oldestDataVersion)` is monotonic. A non-monotonic
+    advance is a critical resource-manager bug and must fail by assertion.
+14. Recovery acquires QueryViews in QueryViewVersion order.
+15. Resources are released only after all resource-manager references are gone.
+16. PChannel handoff close must first unmount local QueryViews through
     `QueryViewStateMachine`, then close the resource manager.
 
 ## 4. Interface Description
@@ -287,18 +287,37 @@ not a QueryView cleanup command.
 
 ```go
 type QueryViewResourceManager interface {
-    Acquire(ctx context.Context, req AcquireResource) error
-    Release(ctx context.Context, req ReleaseResource)
+    Acquire(req AcquireResource)
+    Release(req ReleaseResource)
+}
+
+type AcquireResource struct {
+    Key qviews.QueryViewKey
+    Meta *viewpb.QueryViewMeta
+
+    OnReady func()
+}
+
+type ReleaseResource struct {
+    Key qviews.QueryViewKey
+
+    OnDropped func()
 }
 ```
 
-`Acquire` waits for `QueryRuntime.CatchupDone` before QueryView can report `Up`.
-After reference registration, it advances the runtime with the oldest active
-QueryView DataVersion.
+`Acquire` is asynchronous. It registers the QueryView reference and returns
+without calling callbacks inline. When the vchannel `QueryRuntime`
+initialization task has completed successfully, the manager advances the runtime
+with the oldest active QueryView DataVersion and invokes `OnReady`.
 
-`Release` removes the QueryView reference. If QueryView references remain, it
-advances the runtime with the new oldest active QueryView DataVersion. If no
-reference remains and `initRef` is absent, it closes the runtime.
+The current design does not model recoverable or unrecoverable resource errors.
+`QueryRuntime.Initialize` is not expected to fail for valid WAL input. A
+non-cancellation failure means critical local corruption and must fail fast.
+
+`Release` is asynchronous. It removes the QueryView reference, advances the
+runtime if QueryView references remain, and invokes `OnDropped` after the
+release transition is recorded. Runtime close is a resource-manager cleanup
+operation and is not part of the QueryView state-machine report path.
 
 ### 4.4 QueryRuntime
 
@@ -308,25 +327,46 @@ type QueryRuntime interface {
 
     Initialize(ctx context.Context) error
 
-    CatchupDone() <-chan struct{}
-    CatchupError() error
-
     Advance(oldestDataVersion qviews.DataVersion)
 
     Close()
 }
 ```
 
-`Initialize` prepares all modules and drains the pending live-event buffer.
+`Initialize` prepares all modules, catches up historical inputs, drains the
+pending live-event buffer, and moves the runtime to `Ready`.
 
-`CatchupDone` closes only after:
+`Initialize` returns successfully only after:
 
 1. every module has finished `Prepare`;
-2. the runtime has entered `Ready`;
-3. all pending events captured during `Preparing` have been applied to every
-   module in WAL order.
+2. the runtime atomically takes the current live-event buffer batch and clears
+   the shared buffer;
+3. the singleton consumer has applied that initial batch to every module in WAL
+   order;
+4. the runtime has entered `Ready`.
+
+Events appended while the initial batch is being drained stay in the shared
+buffer. They are handled by the same singleton consumer after the runtime enters
+`Ready`, but they do not block the `Ready` transition.
+
+`Initialize` has no recoverable data failure path for valid WAL input. If it
+observes invalid data or a module cannot apply valid input, the StreamingNode
+must fail critically. Returning an error is reserved for lifecycle cancellation,
+normally `ctx.Done` during WAL close or manager close.
 
 `Advance` is called only when at least one QueryView reference exists.
+`oldestDataVersion` passed to `Advance` must be monotonic non-decreasing for one
+vchannel. The runtime records the latest advanced `oldestDataVersion`; a later
+call with an older value is a critical bug and must fail by assertion.
+
+`Close` is a fast resource cancellation path. It stops accepting new live
+events, cancels `Initialize` if it is still running, stops the singleton
+consumer, closes modules, and releases buffered events. It does not invoke
+QueryView callbacks or report QueryView states.
+
+After `Close` starts, `ObserveEvent` must not append new events to the runtime
+buffer. It returns `false` if the WAL observer contract requires an acceptance
+result.
 
 ### 4.5 QueryRuntimeModule
 
@@ -346,6 +386,9 @@ by `QueryRuntimeModule`.
 `ApplyLiveEvent` has no recoverable error return. Failure to apply valid live
 input means the WALView input or local runtime state is corrupted and the
 StreamingNode must fail critically.
+
+`QueryRuntime` is responsible for serializing calls to `ApplyLiveEvent`. Modules
+must not start their own live-event consumers.
 
 ### 4.6 Scheduler
 
@@ -385,7 +428,7 @@ RecoveryStorage observes AlterLoadConfig
 ```
 
 The returned observer receives live resource events immediately. Events observed
-before runtime readiness are stored in `QueryRuntime.pendingEvents`.
+before runtime readiness are pushed into the `QueryRuntime` live-event buffer.
 
 ### 5.2 QueryRuntime Initialization
 
@@ -394,14 +437,28 @@ Scheduler runs QueryRuntimeBuildTask
   -> QueryRuntime.Initialize
   -> GrowingRuntime.Prepare
   -> IDFOracleRuntime.Prepare
-  -> QueryRuntime enters Ready
-  -> QueryRuntime drains pendingEvents in WAL order
+  -> QueryRuntime starts the singleton consumer
+  -> QueryRuntime atomically takes the current buffer batch
+  -> QueryRuntime drains the initial batch in WAL order
   -> each event is applied to every QueryRuntimeModule
-  -> QueryRuntime closes CatchupDone
+  -> QueryRuntime enters Ready
 ```
 
-After `Ready`, new live events are still serialized by `QueryRuntime` and
-applied to modules in the same module order.
+`QueryRuntime` owns one live-event buffer and one consumer. `ObserveEvent`
+always appends to the same buffer, both while `Initialize` is running and after
+the runtime is `Ready`. The singleton consumer drains the buffer in WAL order
+and applies each event to every module before moving to the next event.
+
+The consumer starts only after all modules finish `Prepare`. During
+`Initialize`, catchup is complete when the consumer drains the initial batch and
+the runtime enters `Ready`. Events appended while the initial batch is draining
+remain in the shared buffer. After `Ready`, the same consumer keeps draining
+future events through the same serialized path.
+
+If the initialization context is canceled, the runtime is being closed. The
+manager cancels the build task, closes the runtime, and releases owned resources.
+This close path is only a resource cleanup path and does not trigger QueryView
+state-machine reports.
 
 ### 5.3 First QueryView Acquire
 
@@ -409,8 +466,9 @@ applied to modules in the same module order.
 QueryViewStateMachine.Acquire(qv)
   -> manager registers queryViewRef
   -> manager removes initRef in the same state update
-  -> manager waits for QueryRuntime.CatchupDone
+  -> manager waits for QueryRuntimeBuildTask.Done
   -> manager calls QueryRuntime.Advance(qv.DataVersion)
+  -> manager invokes OnReady asynchronously
   -> QueryView may report Up
 ```
 
@@ -422,9 +480,10 @@ reference to QueryView references.
 ```text
 QueryViewStateMachine.Acquire(qv)
   -> manager registers queryViewRef
-  -> manager waits for QueryRuntime.CatchupDone
+  -> manager waits for QueryRuntimeBuildTask.Done
   -> manager computes oldestDataVersion from all queryViewRefs
   -> manager calls QueryRuntime.Advance(oldestDataVersion)
+  -> manager invokes OnReady asynchronously
 ```
 
 `Acquire` never schedules another runtime. A vchannel already has a singleton
@@ -439,6 +498,7 @@ QueryViewStateMachine.Release(qv)
          manager calls QueryRuntime.Advance(oldestDataVersion)
      else if initRef is absent:
          manager closes QueryRuntime
+  -> manager invokes OnDropped asynchronously
 ```
 
 ### 5.6 Drop Load Config
@@ -481,8 +541,13 @@ PChannelRuntime.CloseForHandoff
   -> QueryViewStateMachine.CloseForHandoff
        -> Release all local QueryView refs
   -> SNQueryRuntimeManager.Close
-       -> close remaining initRef-only runtimes
+       -> fast-cancel remaining runtimes and release resources
 ```
 
 Persisted QueryView meta is not deleted by this resource close path. It remains
 WAL-bound metadata for the next owner to recover.
+
+`SNQueryRuntimeManager.Close` is not part of the QueryView state machine. It
+does not call QueryView callbacks and does not report QueryView states. It stops
+accepting new live events, cancels in-flight initialization, stops runtime
+consumers, closes modules, and releases buffered events.
