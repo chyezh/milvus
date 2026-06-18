@@ -396,15 +396,15 @@ func (c *catalog) SaveQueryViews(ctx context.Context, pChannelName string, views
 		meta := view.GetMeta()
 		assertQueryViewBelongsToPChannel(pChannelName, meta)
 		key := buildQueryViewKey(pChannelName, meta)
-		if meta.GetState() == viewpb.QueryViewState_QueryViewStateDropped {
-			removes = append(removes, key)
+		if meta.GetState() == viewpb.QueryViewState_QueryViewStateUp {
+			data, err := marshalQueryViewForPersistence(view)
+			if err != nil {
+				return errors.Wrapf(err, "marshal query view %s at pchannel %s failed", meta.GetVchannel(), pChannelName)
+			}
+			kvs[key] = string(data)
 			continue
 		}
-		data, err := marshalQueryViewForPersistence(view)
-		if err != nil {
-			return errors.Wrapf(err, "marshal query view %s at pchannel %s failed", meta.GetVchannel(), pChannelName)
-		}
-		kvs[key] = string(data)
+		removes = append(removes, key)
 	}
 
 	return c.metaKV.MultiSaveAndRemove(ctx, kvs, removes)
@@ -529,10 +529,10 @@ func buildTransformLogKey(pChannelName string, vchannelName string) string {
 func buildQueryViewKey(pChannelName string, meta *viewpb.QueryViewMeta) string {
 	assertQueryViewBelongsToPChannel(pChannelName, meta)
 	version := meta.GetVersion()
-	dataVersion := version.GetDataVersion()
-	if version == nil || dataVersion == nil {
+	if version == nil || version.GetDataVersion() == nil {
 		panic(fmt.Sprintf("query view %s has nil version", meta.GetVchannel()))
 	}
+	dataVersion := version.GetDataVersion()
 	return fmt.Sprintf("%s%d/%d/%s/%d/%d/%d",
 		buildQueryViewPrefix(pChannelName),
 		meta.GetCollectionId(),

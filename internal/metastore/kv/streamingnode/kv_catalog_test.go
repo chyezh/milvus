@@ -722,9 +722,10 @@ func TestCatalogQueryViews(t *testing.T) {
 	catalog := NewCataLog(kv)
 	ctx := context.Background()
 	view := makeQueryViewForCatalogTest("p1_100v0", viewpb.QueryViewState_QueryViewStateUp)
+	key := "streamingnode-meta/wal/p1/query-view/1/10/p1_100v0/20/0/30"
 
 	require.NoError(t, catalog.SaveQueryViews(ctx, "p1", []*viewpb.QueryViewOfShard{view}))
-	require.Contains(t, storage, "streamingnode-meta/wal/p1/query-view/1/10/p1_100v0/20/0/30")
+	require.Contains(t, storage, key)
 
 	views, err := catalog.ListQueryViews(ctx, "p1")
 	require.NoError(t, err)
@@ -735,9 +736,19 @@ func TestCatalogQueryViews(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, views)
 
-	view.Meta.State = viewpb.QueryViewState_QueryViewStateDropped
-	require.NoError(t, catalog.SaveQueryViews(ctx, "p1", []*viewpb.QueryViewOfShard{view}))
-	require.Empty(t, storage)
+	for _, state := range []viewpb.QueryViewState{
+		viewpb.QueryViewState_QueryViewStateDown,
+		viewpb.QueryViewState_QueryViewStateUnrecoverable,
+		viewpb.QueryViewState_QueryViewStateDropped,
+	} {
+		view.Meta.State = viewpb.QueryViewState_QueryViewStateUp
+		require.NoError(t, catalog.SaveQueryViews(ctx, "p1", []*viewpb.QueryViewOfShard{view}))
+		require.Contains(t, storage, key)
+
+		view.Meta.State = state
+		require.NoError(t, catalog.SaveQueryViews(ctx, "p1", []*viewpb.QueryViewOfShard{view}))
+		require.NotContains(t, storage, key)
+	}
 
 	view.Meta.State = viewpb.QueryViewState_QueryViewStateUp
 	require.Panics(t, func() {
