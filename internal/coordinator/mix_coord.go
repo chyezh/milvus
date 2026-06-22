@@ -978,10 +978,6 @@ func (s *mixCoordImpl) GetShardLeaders(ctx context.Context, req *querypb.GetShar
 	return s.queryCoordServer.GetShardLeaders(ctx, req)
 }
 
-func (s *mixCoordImpl) GetStreamingNodeQueryViewResources(ctx context.Context, req *querypb.GetStreamingNodeQueryViewResourcesRequest) (*querypb.GetStreamingNodeQueryViewResourcesResponse, error) {
-	return s.queryCoordServer.GetStreamingNodeQueryViewResources(ctx, req)
-}
-
 func (s *mixCoordImpl) CreateResourceGroup(ctx context.Context, req *milvuspb.CreateResourceGroupRequest) (*commonpb.Status, error) {
 	return s.queryCoordServer.CreateResourceGroup(ctx, req)
 }
@@ -1099,8 +1095,8 @@ func (s *mixCoordImpl) GetRecoveryInfoV2(ctx context.Context, req *datapb.GetRec
 	return s.datacoordServer.GetRecoveryInfoV2(ctx, req)
 }
 
-func (s *mixCoordImpl) GetDataView(ctx context.Context, req *datapb.GetDataViewRequest) (*datapb.GetDataViewResponse, error) {
-	return s.datacoordServer.GetDataView(ctx, req)
+func (s *mixCoordImpl) GetStreamingNodeQueryViewResources(ctx context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
+	return s.datacoordServer.GetStreamingNodeQueryViewResources(ctx, req)
 }
 
 func (s *mixCoordImpl) GetChannelRecoveryInfo(ctx context.Context, req *datapb.GetChannelRecoveryInfoRequest) (*datapb.GetChannelRecoveryInfoResponse, error) {

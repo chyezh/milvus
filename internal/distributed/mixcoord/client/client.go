@@ -1172,14 +1172,14 @@ func (c *Client) GetRecoveryInfoV2(ctx context.Context, req *datapb.GetRecoveryI
 	})
 }
 
-func (c *Client) GetDataView(ctx context.Context, req *datapb.GetDataViewRequest, opts ...grpc.CallOption) (*datapb.GetDataViewResponse, error) {
+func (c *Client) GetStreamingNodeQueryViewResources(ctx context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest, opts ...grpc.CallOption) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
 	req = typeutil.Clone(req)
 	commonpbutil.UpdateMsgBase(
 		req.GetBase(),
 		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.sess.ServerID)),
 	)
-	return wrapGrpcCall(ctx, c, func(client MixCoordClient) (*datapb.GetDataViewResponse, error) {
-		return client.GetDataView(ctx, req)
+	return wrapGrpcCall(ctx, c, func(client MixCoordClient) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
+		return client.GetStreamingNodeQueryViewResources(ctx, req)
 	})
 }
 
@@ -1745,17 +1745,6 @@ func (c *Client) GetShardLeaders(ctx context.Context, req *querypb.GetShardLeade
 	)
 	return wrapGrpcCall(ctx, c, func(client MixCoordClient) (*querypb.GetShardLeadersResponse, error) {
 		return client.GetShardLeaders(ctx, req)
-	})
-}
-
-func (c *Client) GetStreamingNodeQueryViewResources(ctx context.Context, req *querypb.GetStreamingNodeQueryViewResourcesRequest, opts ...grpc.CallOption) (*querypb.GetStreamingNodeQueryViewResourcesResponse, error) {
-	req = typeutil.Clone(req)
-	commonpbutil.UpdateMsgBase(
-		req.GetBase(),
-		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.grpcClient.GetNodeID())),
-	)
-	return wrapGrpcCall(ctx, c, func(client MixCoordClient) (*querypb.GetStreamingNodeQueryViewResourcesResponse, error) {
-		return client.GetStreamingNodeQueryViewResources(ctx, req)
 	})
 }
 

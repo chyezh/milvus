@@ -4,11 +4,7 @@
 package resource
 
 import (
-	"context"
-	"errors"
 	"testing"
-
-	"google.golang.org/grpc"
 
 	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
 	"github.com/milvus-io/milvus/internal/flushcommon/writebuffer"
@@ -19,16 +15,11 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/util/idalloc"
 	"github.com/milvus-io/milvus/pkg/v3/log"
-	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 )
 
 type testMixCoordClient struct {
 	*mocks.MockMixCoordClient
-}
-
-func (c testMixCoordClient) GetDataView(context.Context, *datapb.GetDataViewRequest, ...grpc.CallOption) (*datapb.GetDataViewResponse, error) {
-	return nil, errors.New("unexpected GetDataView call")
 }
 
 // OptWriteBufferManager provides a write buffer manager to the resource (test only).

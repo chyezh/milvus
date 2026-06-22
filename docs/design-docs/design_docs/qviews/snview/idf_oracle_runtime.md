@@ -39,7 +39,7 @@ catchup, and the transition to `Ready`.
 | `QueryRuntime` | VChannel-level singleton runtime. Implements `VChannelLiveObserver`, owns one live-event buffer and one consumer, calls `IDFOracleRuntime.Prepare`, forwards live events, and calls `IDFOracleRuntime.Advance`. | It does not compute BM25 stats or fetch sealed resources directly. |
 | `IDFOracleRuntime` | QueryRuntime module that owns the vchannel singleton oracle, growing BM25 stats store, sealed contribution leases, current DataVersion, and advance worker. | It does not implement `VChannelLiveObserver`, expose external truncation, or own QueryView references. |
 | `VChannelWALView` | Provides the initial schema, settings, segment snapshot, historical insert input, and no-gap live resource event stream. | Its capture and no-gap contract are defined in [StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md). |
-| `SealedBM25ResourceProvider` | Calls QueryCoord to fetch the complete sealed BM25 resource set for a target DataVersion. | It does not cache local files or merge oracle stats. |
+| `SealedBM25ResourceProvider` | Calls DataCoord to fetch the complete sealed BM25 resource set for a target DataVersion. | It does not cache local files or merge oracle stats. |
 | `SealedBM25SegmentCache` | Downloads, parses, reuses, and leases sealed BM25 stats. | It does not decide DataVersion advancement or contribution membership. |
 | `GrowingBM25StatsStore` | Maintains local BM25 stats for growing segments generated from snapshot and live WAL events, plus flushed/sealed metadata. | It does not fetch sealed resources from QueryCoord. |
 | `IDFAdvanceWorker` | Serializes asynchronous oracle advancement requests and coalesces them to the newest allowed requested DataVersion. | It is internal to `IDFOracleRuntime` and is not the resource build scheduler. |
@@ -223,7 +223,7 @@ type SealedBM25ResourceProvider interface {
         vchannel string,
         dataVersion qviews.DataVersion,
         settings *viewpb.QueryViewSettings,
-    ) ([]*querypb.StreamingNodeBM25Resource, error)
+    ) ([]*datapb.StreamingNodeBM25Resource, error)
 }
 ```
 
@@ -236,7 +236,7 @@ DataVersion. They are not a diff from StreamingNode's current local cache.
 type SealedBM25SegmentCache interface {
     Acquire(
         ctx context.Context,
-        resource *querypb.StreamingNodeBM25Resource,
+        resource *datapb.StreamingNodeBM25Resource,
     ) (SealedBM25Lease, error)
 }
 

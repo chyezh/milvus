@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
-	"google.golang.org/grpc"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
@@ -48,10 +47,6 @@ const testVChannel = "v1"
 
 type adaptorTestMixCoordClient struct {
 	*mocks.MockMixCoordClient
-}
-
-func (c adaptorTestMixCoordClient) GetDataView(context.Context, *datapb.GetDataViewRequest, ...grpc.CallOption) (*datapb.GetDataViewResponse, error) {
-	return nil, errors.New("unexpected GetDataView call")
 }
 
 type walTestFramework struct {

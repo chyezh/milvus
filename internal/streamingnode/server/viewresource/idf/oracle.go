@@ -10,7 +10,7 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
-	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -275,7 +275,7 @@ func newOracleRuntime(
 	provider *Provider,
 	walView walview.VChannelWALView,
 	settings *viewpb.QueryViewSettings,
-	initialResources []*querypb.StreamingNodeBM25Resource,
+	initialResources []*datapb.StreamingNodeBM25Resource,
 ) (*oracleRuntime, error) {
 	runtimeCtx, cancel := context.WithCancel(context.Background())
 	r := &oracleRuntime{
@@ -631,8 +631,8 @@ func (p *Provider) getSealedBM25Resources(
 	vchannel string,
 	dataVersion qviews.DataVersion,
 	settings *viewpb.QueryViewSettings,
-) ([]*querypb.StreamingNodeBM25Resource, error) {
-	resp, err := p.client.GetStreamingNodeQueryViewResources(ctx, &querypb.GetStreamingNodeQueryViewResourcesRequest{
+) ([]*datapb.StreamingNodeBM25Resource, error) {
+	resp, err := p.client.GetStreamingNodeQueryViewResources(ctx, &datapb.GetStreamingNodeQueryViewResourcesRequest{
 		CollectionId: collectionID,
 		Vchannel:     vchannel,
 		DataVersion:  dataVersion.IntoProto(),
@@ -649,7 +649,7 @@ func (p *Provider) getSealedBM25Resources(
 
 func (p *Provider) acquireSealedContributions(
 	ctx context.Context,
-	resources []*querypb.StreamingNodeBM25Resource,
+	resources []*datapb.StreamingNodeBM25Resource,
 ) (map[int64]sealedContribution, error) {
 	contributions := make(map[int64]sealedContribution, len(resources))
 	for _, resource := range resources {

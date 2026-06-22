@@ -651,10 +651,6 @@ func (s *Server) GetShardLeaders(ctx context.Context, req *querypb.GetShardLeade
 	return s.mixCoord.GetShardLeaders(ctx, req)
 }
 
-func (s *Server) GetStreamingNodeQueryViewResources(ctx context.Context, req *querypb.GetStreamingNodeQueryViewResourcesRequest) (*querypb.GetStreamingNodeQueryViewResourcesResponse, error) {
-	return s.mixCoord.GetStreamingNodeQueryViewResources(ctx, req)
-}
-
 func (s *Server) CreateResourceGroup(ctx context.Context, req *milvuspb.CreateResourceGroupRequest) (*commonpb.Status, error) {
 	return s.mixCoord.CreateResourceGroup(ctx, req)
 }
@@ -819,8 +815,8 @@ func (s *Server) GetRecoveryInfoV2(ctx context.Context, req *datapb.GetRecoveryI
 	return s.mixCoord.GetRecoveryInfoV2(ctx, req)
 }
 
-func (s *Server) GetDataView(ctx context.Context, req *datapb.GetDataViewRequest) (*datapb.GetDataViewResponse, error) {
-	return s.mixCoord.GetDataView(ctx, req)
+func (s *Server) GetStreamingNodeQueryViewResources(ctx context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
+	return s.mixCoord.GetStreamingNodeQueryViewResources(ctx, req)
 }
 
 // GetChannelRecoveryInfo gets the corresponding vchannel info.

@@ -1144,12 +1144,23 @@ func (s *Server) GetRecoveryInfoV2(ctx context.Context, req *datapb.GetRecoveryI
 	return resp, nil
 }
 
-func (s *Server) GetDataView(ctx context.Context, req *datapb.GetDataViewRequest) (*datapb.GetDataViewResponse, error) {
-	resp := &datapb.GetDataViewResponse{
-		Status: merr.Success(),
+func (s *Server) GetStreamingNodeQueryViewResources(ctx context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
+	resp := &datapb.GetStreamingNodeQueryViewResourcesResponse{
+		Status:       merr.Success(),
+		CollectionId: req.GetCollectionId(),
+		Vchannel:     req.GetVchannel(),
+		DataVersion:  req.GetDataVersion(),
 	}
 	if err := merr.CheckHealthy(s.GetStateCode()); err != nil {
 		resp.Status = merr.Status(err)
+		return resp, nil
+	}
+	if req.GetCollectionId() == 0 {
+		resp.Status = merr.Status(merr.WrapErrParameterInvalidMsg("collection id is zero"))
+		return resp, nil
+	}
+	if req.GetVchannel() == "" {
+		resp.Status = merr.Status(merr.WrapErrParameterInvalidMsg("vchannel is empty"))
 		return resp, nil
 	}
 	if req.GetDataVersion() == nil {
@@ -1160,22 +1171,88 @@ func (s *Server) GetDataView(ctx context.Context, req *datapb.GetDataViewRequest
 		resp.Status = merr.Status(merr.WrapErrServiceInternalMsg("data view manager is nil"))
 		return resp, nil
 	}
-	view, err := s.dataViewManager.DataView(ctx, req.GetCollectionID(), req.GetDataVersion())
+	dataView, err := s.dataViewManager.DataView(ctx, req.GetCollectionId(), req.GetDataVersion())
 	if err != nil {
 		resp.Status = merr.Status(err)
 		return resp, nil
 	}
-	if view == nil {
+	shard := dataViewShard(dataView, req.GetVchannel())
+	if shard == nil {
 		resp.Status = merr.Status(merr.WrapErrServiceInternalMsg(
-			"data view not found, collectionID=%d, dataVersion=(%d,%d)",
-			req.GetCollectionID(),
+			"data view shard not found, collectionID=%d, vchannel=%s, dataVersion=(%d,%d)",
+			req.GetCollectionId(),
+			req.GetVchannel(),
 			req.GetDataVersion().GetStreamingVersion(),
 			req.GetDataVersion().GetCompactVersion(),
 		))
 		return resp, nil
 	}
-	resp.DataView = view
+
+	segmentIDs := dataViewShardSegmentIDs(shard, req.GetSettings())
+	if len(segmentIDs) == 0 {
+		return resp, nil
+	}
+	byID := make(map[int64]*datapb.StreamingNodeBM25Resource, len(segmentIDs))
+	for _, segmentID := range segmentIDs {
+		segment := s.meta.GetSegment(ctx, segmentID)
+		if segment == nil {
+			resp.Status = merr.Status(merr.WrapErrSegmentNotFound(segmentID, "missing segment info for data view"))
+			return resp, nil
+		}
+		if segment.GetInsertChannel() != "" && segment.GetInsertChannel() != req.GetVchannel() {
+			resp.Status = merr.Status(merr.WrapErrServiceInternalMsg(
+				"segment channel mismatch, segmentID=%d, expected=%s, actual=%s",
+				segment.GetID(),
+				req.GetVchannel(),
+				segment.GetInsertChannel(),
+			))
+			return resp, nil
+		}
+		byID[segment.GetID()] = &datapb.StreamingNodeBM25Resource{
+			SegmentId:      segment.GetID(),
+			PartitionId:    segment.GetPartitionID(),
+			Bm25Binlogs:    segment.GetBm25Statslogs(),
+			StorageVersion: segment.GetStorageVersion(),
+			ManifestPath:   segment.GetManifestPath(),
+		}
+	}
+	for _, segmentID := range segmentIDs {
+		resource, ok := byID[segmentID]
+		if !ok {
+			resp.Status = merr.Status(merr.WrapErrSegmentNotFound(segmentID, "missing segment info for data view"))
+			return resp, nil
+		}
+		resp.Bm25Resources = append(resp.Bm25Resources, resource)
+	}
 	return resp, nil
+}
+
+func dataViewShard(dataView *viewpb.DataViewOfCollection, vchannel string) *viewpb.DataViewOfShard {
+	if dataView == nil {
+		return nil
+	}
+	for _, shard := range dataView.GetShards() {
+		if shard.GetVchannel() == vchannel {
+			return shard
+		}
+	}
+	return nil
+}
+
+func dataViewShardSegmentIDs(shard *viewpb.DataViewOfShard, settings *viewpb.QueryViewSettings) []int64 {
+	if shard == nil {
+		return nil
+	}
+	requiredPartitions := typeutil.NewSet(settings.GetRequiredPartitions()...)
+	loadsAllPartitions := len(requiredPartitions) == 0
+	segmentIDs := make([]int64, 0)
+	for _, partition := range shard.GetPartitions() {
+		if !loadsAllPartitions && !requiredPartitions.Contain(partition.GetPartitionId()) {
+			continue
+		}
+		segmentIDs = append(segmentIDs, partition.GetSegmentIds()...)
+	}
+	return segmentIDs
 }
 
 // GetChannelRecoveryInfo get recovery channel info.

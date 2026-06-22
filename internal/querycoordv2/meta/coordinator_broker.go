@@ -34,7 +34,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/rootcoordpb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
@@ -50,7 +49,6 @@ type Broker interface {
 	GetSegmentInfo(ctx context.Context, segmentID ...UniqueID) ([]*datapb.SegmentInfo, error)
 	GetIndexInfo(ctx context.Context, collectionID UniqueID, segmentIDs ...UniqueID) (map[int64][]*querypb.FieldIndexInfo, error)
 	GetRecoveryInfoV2(ctx context.Context, collectionID UniqueID, partitionIDs ...UniqueID) ([]*datapb.VchannelInfo, []*datapb.SegmentInfo, error)
-	GetDataView(ctx context.Context, collectionID UniqueID, dataVersion *viewpb.DataVersion) (*viewpb.DataViewOfCollection, error)
 	DescribeDatabase(ctx context.Context, dbName string) (*rootcoordpb.DescribeDatabaseResponse, error)
 	GetCollectionLoadInfo(ctx context.Context, collectionID UniqueID) ([]string, int64, error)
 }
@@ -253,29 +251,6 @@ func (broker *CoordinatorBroker) GetRecoveryInfoV2(ctx context.Context, collecti
 	}
 
 	return recoveryInfo.Channels, recoveryInfo.Segments, nil
-}
-
-func (broker *CoordinatorBroker) GetDataView(ctx context.Context, collectionID UniqueID, dataVersion *viewpb.DataVersion) (*viewpb.DataViewOfCollection, error) {
-	ctx, cancel := context.WithTimeout(ctx, paramtable.Get().QueryCoordCfg.BrokerTimeout.GetAsDuration(time.Millisecond))
-	defer cancel()
-	log := log.Ctx(ctx).With(
-		zap.Int64("collectionID", collectionID),
-		zap.Int64("streamingVersion", dataVersion.GetStreamingVersion()),
-		zap.Int64("compactVersion", dataVersion.GetCompactVersion()),
-	)
-
-	resp, err := broker.mixCoord.GetDataView(ctx, &datapb.GetDataViewRequest{
-		Base: commonpbutil.NewMsgBase(
-			commonpbutil.WithMsgType(commonpb.MsgType_GetRecoveryInfo),
-		),
-		CollectionID: collectionID,
-		DataVersion:  dataVersion,
-	})
-	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Warn("get data view failed", zap.Error(err))
-		return nil, err
-	}
-	return resp.GetDataView(), nil
 }
 
 func (broker *CoordinatorBroker) GetSegmentInfo(ctx context.Context, ids ...UniqueID) ([]*datapb.SegmentInfo, error) {

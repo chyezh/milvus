@@ -6231,27 +6231,27 @@ func (_c *MixCoord_GetShardLeaders_Call) RunAndReturn(run func(context.Context, 
 }
 
 // GetStreamingNodeQueryViewResources provides a mock function with given fields: _a0, _a1
-func (_m *MixCoord) GetStreamingNodeQueryViewResources(_a0 context.Context, _a1 *querypb.GetStreamingNodeQueryViewResourcesRequest) (*querypb.GetStreamingNodeQueryViewResourcesResponse, error) {
+func (_m *MixCoord) GetStreamingNodeQueryViewResources(_a0 context.Context, _a1 *datapb.GetStreamingNodeQueryViewResourcesRequest) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
 	ret := _m.Called(_a0, _a1)
 
 	if len(ret) == 0 {
 		panic("no return value specified for GetStreamingNodeQueryViewResources")
 	}
 
-	var r0 *querypb.GetStreamingNodeQueryViewResourcesResponse
+	var r0 *datapb.GetStreamingNodeQueryViewResourcesResponse
 	var r1 error
-	if rf, ok := ret.Get(0).(func(context.Context, *querypb.GetStreamingNodeQueryViewResourcesRequest) (*querypb.GetStreamingNodeQueryViewResourcesResponse, error)); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, *datapb.GetStreamingNodeQueryViewResourcesRequest) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error)); ok {
 		return rf(_a0, _a1)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, *querypb.GetStreamingNodeQueryViewResourcesRequest) *querypb.GetStreamingNodeQueryViewResourcesResponse); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, *datapb.GetStreamingNodeQueryViewResourcesRequest) *datapb.GetStreamingNodeQueryViewResourcesResponse); ok {
 		r0 = rf(_a0, _a1)
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*querypb.GetStreamingNodeQueryViewResourcesResponse)
+			r0 = ret.Get(0).(*datapb.GetStreamingNodeQueryViewResourcesResponse)
 		}
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, *querypb.GetStreamingNodeQueryViewResourcesRequest) error); ok {
+	if rf, ok := ret.Get(1).(func(context.Context, *datapb.GetStreamingNodeQueryViewResourcesRequest) error); ok {
 		r1 = rf(_a0, _a1)
 	} else {
 		r1 = ret.Error(1)
@@ -6267,24 +6267,24 @@ type MixCoord_GetStreamingNodeQueryViewResources_Call struct {
 
 // GetStreamingNodeQueryViewResources is a helper method to define mock.On call
 //   - _a0 context.Context
-//   - _a1 *querypb.GetStreamingNodeQueryViewResourcesRequest
+//   - _a1 *datapb.GetStreamingNodeQueryViewResourcesRequest
 func (_e *MixCoord_Expecter) GetStreamingNodeQueryViewResources(_a0 interface{}, _a1 interface{}) *MixCoord_GetStreamingNodeQueryViewResources_Call {
 	return &MixCoord_GetStreamingNodeQueryViewResources_Call{Call: _e.mock.On("GetStreamingNodeQueryViewResources", _a0, _a1)}
 }
 
-func (_c *MixCoord_GetStreamingNodeQueryViewResources_Call) Run(run func(_a0 context.Context, _a1 *querypb.GetStreamingNodeQueryViewResourcesRequest)) *MixCoord_GetStreamingNodeQueryViewResources_Call {
+func (_c *MixCoord_GetStreamingNodeQueryViewResources_Call) Run(run func(_a0 context.Context, _a1 *datapb.GetStreamingNodeQueryViewResourcesRequest)) *MixCoord_GetStreamingNodeQueryViewResources_Call {
 	_c.Call.Run(func(args mock.Arguments) {
-		run(args[0].(context.Context), args[1].(*querypb.GetStreamingNodeQueryViewResourcesRequest))
+		run(args[0].(context.Context), args[1].(*datapb.GetStreamingNodeQueryViewResourcesRequest))
 	})
 	return _c
 }
 
-func (_c *MixCoord_GetStreamingNodeQueryViewResources_Call) Return(_a0 *querypb.GetStreamingNodeQueryViewResourcesResponse, _a1 error) *MixCoord_GetStreamingNodeQueryViewResources_Call {
+func (_c *MixCoord_GetStreamingNodeQueryViewResources_Call) Return(_a0 *datapb.GetStreamingNodeQueryViewResourcesResponse, _a1 error) *MixCoord_GetStreamingNodeQueryViewResources_Call {
 	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *MixCoord_GetStreamingNodeQueryViewResources_Call) RunAndReturn(run func(context.Context, *querypb.GetStreamingNodeQueryViewResourcesRequest) (*querypb.GetStreamingNodeQueryViewResourcesResponse, error)) *MixCoord_GetStreamingNodeQueryViewResources_Call {
+func (_c *MixCoord_GetStreamingNodeQueryViewResources_Call) RunAndReturn(run func(context.Context, *datapb.GetStreamingNodeQueryViewResourcesRequest) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error)) *MixCoord_GetStreamingNodeQueryViewResources_Call {
 	_c.Call.Return(run)
 	return _c
 }

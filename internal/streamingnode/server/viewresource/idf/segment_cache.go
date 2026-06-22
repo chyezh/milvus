@@ -8,7 +8,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 )
 
 type sealedCacheKey string
@@ -32,7 +32,7 @@ func newSegmentCache() *segmentCache {
 func (c *segmentCache) acquire(
 	ctx context.Context,
 	chunkManager storage.ChunkManager,
-	resource *querypb.StreamingNodeBM25Resource,
+	resource *datapb.StreamingNodeBM25Resource,
 ) (bm25Stats, *segmentCacheLease, error) {
 	aggregate := make(bm25Stats)
 	if chunkManager == nil || resource == nil {
@@ -54,7 +54,7 @@ func (c *segmentCache) retain(
 	ctx context.Context,
 	chunkManager storage.ChunkManager,
 	key sealedCacheKey,
-	resource *querypb.StreamingNodeBM25Resource,
+	resource *datapb.StreamingNodeBM25Resource,
 ) (bm25Stats, error) {
 	c.mu.Lock()
 	if entry, ok := c.entries[key]; ok {
@@ -116,7 +116,7 @@ func (l *segmentCacheLease) Close() {
 	})
 }
 
-func buildSealedCacheKey(resource *querypb.StreamingNodeBM25Resource) (sealedCacheKey, error) {
+func buildSealedCacheKey(resource *datapb.StreamingNodeBM25Resource) (sealedCacheKey, error) {
 	bytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(resource)
 	if err != nil {
 		return "", errors.Wrap(err, "marshal bm25 sealed cache key")
@@ -127,7 +127,7 @@ func buildSealedCacheKey(resource *querypb.StreamingNodeBM25Resource) (sealedCac
 func loadSealedSegmentStats(
 	ctx context.Context,
 	chunkManager storage.ChunkManager,
-	resource *querypb.StreamingNodeBM25Resource,
+	resource *datapb.StreamingNodeBM25Resource,
 ) (bm25Stats, error) {
 	stats := make(bm25Stats)
 	for _, fieldBinlog := range resource.GetBm25Binlogs() {

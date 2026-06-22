@@ -15,7 +15,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/mq/msgstream"
-	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 )
@@ -28,7 +28,7 @@ var (
 // Provider loads sealed BM25 resources for a DataVersion and aggregates the
 // WALView growing BM25 stats into a runtime oracle.
 type Provider struct {
-	client       querypb.QueryCoordClient
+	client       datapb.DataCoordClient
 	chunkManager storage.ChunkManager
 	sealedCache  *segmentCache
 }
@@ -41,7 +41,7 @@ func WithChunkManager(chunkManager storage.ChunkManager) ProviderOption {
 	}
 }
 
-func NewProvider(client querypb.QueryCoordClient, opts ...ProviderOption) *Provider {
+func NewProvider(client datapb.DataCoordClient, opts ...ProviderOption) *Provider {
 	provider := &Provider{client: client, sealedCache: newSegmentCache()}
 	for _, opt := range opts {
 		opt(provider)
@@ -237,7 +237,7 @@ func collectGrowingInsertStats(stats bm25Stats, schema *schemapb.CollectionSchem
 	return nil
 }
 
-func validateResourceResponseFor(collectionID int64, vchannel string, dataVersion qviews.DataVersion, resp *querypb.GetStreamingNodeQueryViewResourcesResponse) error {
+func validateResourceResponseFor(collectionID int64, vchannel string, dataVersion qviews.DataVersion, resp *datapb.GetStreamingNodeQueryViewResourcesResponse) error {
 	if resp.GetCollectionId() != collectionID {
 		return errors.Errorf(
 			"bm25 resource response mismatch: request collection %d, response collection %d",

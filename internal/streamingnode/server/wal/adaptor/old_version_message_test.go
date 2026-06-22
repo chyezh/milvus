@@ -2,12 +2,10 @@ package adaptor
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
@@ -16,7 +14,6 @@ import (
 	"github.com/milvus-io/milvus/internal/mocks"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/types"
-	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -25,10 +22,6 @@ import (
 
 type oldVersionMixCoordClient struct {
 	*mocks.MockMixCoordClient
-}
-
-func (c oldVersionMixCoordClient) GetDataView(context.Context, *datapb.GetDataViewRequest, ...grpc.CallOption) (*datapb.GetDataViewResponse, error) {
-	return nil, errors.New("unexpected GetDataView call")
 }
 
 func TestNewOldVersionImmutableMessage(t *testing.T) {
