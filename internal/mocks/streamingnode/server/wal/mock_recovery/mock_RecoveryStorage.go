@@ -8,8 +8,8 @@ import (
 	message "github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	mock "github.com/stretchr/testify/mock"
 
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	recovery "github.com/milvus-io/milvus/internal/streamingnode/server/wal/recovery"
-	transformlog "github.com/milvus-io/milvus/internal/streamingnode/transformlog"
 
 	schemapb "github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 )
@@ -60,19 +60,19 @@ func (_c *MockRecoveryStorage_Close_Call) RunAndReturn(run func()) *MockRecovery
 }
 
 // TransformLog provides a mock function with no fields
-func (_m *MockRecoveryStorage) TransformLog() transformlog.Accesser {
+func (_m *MockRecoveryStorage) TransformLog() wal.TransformLogAccesser {
 	ret := _m.Called()
 
 	if len(ret) == 0 {
 		panic("no return value specified for TransformLog")
 	}
 
-	var r0 transformlog.Accesser
-	if rf, ok := ret.Get(0).(func() transformlog.Accesser); ok {
+	var r0 wal.TransformLogAccesser
+	if rf, ok := ret.Get(0).(func() wal.TransformLogAccesser); ok {
 		r0 = rf()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(transformlog.Accesser)
+			r0 = ret.Get(0).(wal.TransformLogAccesser)
 		}
 	}
 
@@ -96,12 +96,12 @@ func (_c *MockRecoveryStorage_TransformLog_Call) Run(run func()) *MockRecoverySt
 	return _c
 }
 
-func (_c *MockRecoveryStorage_TransformLog_Call) Return(_a0 transformlog.Accesser) *MockRecoveryStorage_TransformLog_Call {
+func (_c *MockRecoveryStorage_TransformLog_Call) Return(_a0 wal.TransformLogAccesser) *MockRecoveryStorage_TransformLog_Call {
 	_c.Call.Return(_a0)
 	return _c
 }
 
-func (_c *MockRecoveryStorage_TransformLog_Call) RunAndReturn(run func() transformlog.Accesser) *MockRecoveryStorage_TransformLog_Call {
+func (_c *MockRecoveryStorage_TransformLog_Call) RunAndReturn(run func() wal.TransformLogAccesser) *MockRecoveryStorage_TransformLog_Call {
 	_c.Call.Return(run)
 	return _c
 }

@@ -2,6 +2,7 @@ package streamingnode
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/pkg/v3/kv"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/etcd"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
@@ -314,6 +316,97 @@ func (c *catalog) DropSegmentAssignments(ctx context.Context, pChannelName strin
 	})
 }
 
+// ListSegmentDataVersionSummaries lists the segment data version summaries of the pchannel.
+func (c *catalog) ListSegmentDataVersionSummaries(ctx context.Context, pChannelName string) (map[string]*streamingpb.SegmentDataVersionSummary, error) {
+	prefix := buildSegmentDataVersionSummaryPrefix(pChannelName)
+	keys, values, err := c.metaKV.LoadWithPrefix(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+
+	summaries := make(map[string]*streamingpb.SegmentDataVersionSummary, len(values))
+	for idx, value := range values {
+		vchannel := strings.TrimPrefix(keys[idx], prefix)
+		if vchannel == "" || strings.Contains(vchannel, "/") {
+			return nil, errors.Errorf("mismatched segment data version summary recovery meta, key %s", keys[idx])
+		}
+		summary := &streamingpb.SegmentDataVersionSummary{}
+		if err = proto.Unmarshal([]byte(value), summary); err != nil {
+			return nil, errors.Wrapf(err, "unmarshal pchannel %s failed", keys[idx])
+		}
+		summaries[vchannel] = summary
+	}
+	return summaries, nil
+}
+
+// SaveSegmentDataVersionSummaries saves segment data version summaries to meta storage.
+func (c *catalog) SaveSegmentDataVersionSummaries(ctx context.Context, pChannelName string, summaries map[string]*streamingpb.SegmentDataVersionSummary) error {
+	kvs := make(map[string]string, len(summaries))
+	for vchannel, summary := range summaries {
+		key := buildSegmentDataVersionSummaryKey(pChannelName, vchannel)
+		data, err := proto.Marshal(summary)
+		if err != nil {
+			return errors.Wrapf(err, "marshal segment data version summary for vchannel %s at pchannel %s failed", vchannel, pChannelName)
+		}
+		kvs[key] = string(data)
+	}
+
+	maxTxnNum := paramtable.Get().MetaStoreCfg.MaxEtcdTxnNum.GetAsInt()
+	if len(kvs) > 0 {
+		return etcd.SaveByBatchWithLimit(kvs, maxTxnNum, func(partialKvs map[string]string) error {
+			return c.metaKV.MultiSave(ctx, partialKvs)
+		})
+	}
+	return nil
+}
+
+// ListQueryViews lists the StreamingNode query view recovery meta of the pchannel.
+func (c *catalog) ListQueryViews(ctx context.Context, pChannelName string) ([]*viewpb.QueryViewOfShard, error) {
+	prefix := buildQueryViewPrefix(pChannelName)
+	keys, values, err := c.metaKV.LoadWithPrefix(ctx, prefix)
+	if err != nil {
+		return nil, err
+	}
+
+	views := make([]*viewpb.QueryViewOfShard, 0, len(values))
+	for idx, value := range values {
+		view := &viewpb.QueryViewOfShard{}
+		if err = proto.Unmarshal([]byte(value), view); err != nil {
+			return nil, errors.Wrapf(err, "unmarshal query view %s failed", keys[idx])
+		}
+		if keys[idx] != buildQueryViewKey(pChannelName, view.GetMeta()) {
+			panic(fmt.Sprintf("mismatched query view recovery meta, key %s, meta %s", keys[idx], view.GetMeta().GetVchannel()))
+		}
+		views = append(views, view)
+	}
+	return views, nil
+}
+
+// SaveQueryViews saves the StreamingNode query view recovery meta of the pchannel.
+func (c *catalog) SaveQueryViews(ctx context.Context, pChannelName string, views []*viewpb.QueryViewOfShard) error {
+	if len(views) == 0 {
+		return nil
+	}
+
+	kvs := make(map[string]string, len(views))
+	removes := make([]string, 0)
+	for _, view := range views {
+		meta := view.GetMeta()
+		key := buildQueryViewKey(pChannelName, meta)
+		if meta.GetState() == viewpb.QueryViewState_QueryViewStateUp {
+			data, err := marshalQueryViewForPersistence(view)
+			if err != nil {
+				return errors.Wrapf(err, "marshal query view %s at pchannel %s failed", meta.GetVchannel(), pChannelName)
+			}
+			kvs[key] = string(data)
+			continue
+		}
+		removes = append(removes, key)
+	}
+
+	return c.metaKV.MultiSaveAndRemove(ctx, kvs, removes)
+}
+
 // GetConsumeCheckpoint gets the consuming checkpoint of the wal.
 func (c *catalog) GetConsumeCheckpoint(ctx context.Context, pchannelName string) (*streamingpb.WALCheckpoint, error) {
 	key := buildConsumeCheckpointKey(pchannelName)
@@ -387,9 +480,19 @@ func buildSegmentAssignmentPrefix(pChannelName string) string {
 	return buildWALPrefix(pChannelName) + DirectorySegmentAssign + "/"
 }
 
+// buildSegmentDataVersionSummaryPrefix returns the prefix for all segment data version summaries under a pchannel.
+func buildSegmentDataVersionSummaryPrefix(pChannelName string) string {
+	return buildWALPrefix(pChannelName) + DirectorySegmentDataVersionSummary + "/"
+}
+
 // buildTransformLogPrefix returns the prefix for transform log metadata under a pchannel.
 func buildTransformLogPrefix(pChannelName string) string {
 	return buildWALPrefix(pChannelName) + DirectoryTransformLog + "/"
+}
+
+// buildQueryViewPrefix returns the prefix for StreamingNode query view recovery meta under a pchannel.
+func buildQueryViewPrefix(pChannelName string) string {
+	return buildWALPrefix(pChannelName) + DirectoryQueryView + "/"
 }
 
 // Key functions: return exact keys for individual records.
@@ -409,14 +512,50 @@ func buildSegmentAssignmentKey(pChannelName string, segmentID int64) string {
 	return buildSegmentAssignmentPrefix(pChannelName) + strconv.FormatInt(segmentID, 10)
 }
 
+// buildSegmentDataVersionSummaryKey returns the key for a specific vchannel segment data version summary.
+func buildSegmentDataVersionSummaryKey(pChannelName string, vchannelName string) string {
+	return buildSegmentDataVersionSummaryPrefix(pChannelName) + vchannelName
+}
+
 // buildTransformLogKey returns the key for a specific transform log's metadata.
 func buildTransformLogKey(pChannelName string, vchannelName string) string {
 	return buildTransformLogPrefix(pChannelName) + vchannelName
 }
 
+// buildQueryViewKey returns the key for a specific StreamingNode query view recovery meta.
+func buildQueryViewKey(pChannelName string, meta *viewpb.QueryViewMeta) string {
+	if meta == nil {
+		panic("query view meta is nil")
+	}
+	version := meta.GetVersion()
+	if version == nil || version.GetDataVersion() == nil {
+		panic(fmt.Sprintf("query view %s has nil version", meta.GetVchannel()))
+	}
+	dataVersion := version.GetDataVersion()
+	return fmt.Sprintf("%s%d/%d/%s/%d/%d/%d",
+		buildQueryViewPrefix(pChannelName),
+		meta.GetCollectionId(),
+		meta.GetReplicaId(),
+		meta.GetVchannel(),
+		dataVersion.GetStreamingVersion(),
+		dataVersion.GetCompactVersion(),
+		version.GetQueryVersion(),
+	)
+}
+
 // buildConsumeCheckpointKey returns the key for the consume checkpoint of a pchannel.
 func buildConsumeCheckpointKey(pchannelName string) string {
 	return buildWALPrefix(pchannelName) + KeyConsumeCheckpoint
+}
+
+func marshalQueryViewForPersistence(view *viewpb.QueryViewOfShard) ([]byte, error) {
+	clone := proto.Clone(view).(*viewpb.QueryViewOfShard)
+	for _, qn := range clone.GetQueryNode() {
+		for _, partition := range qn.GetPartitions() {
+			partition.ReadySegmentIds = nil
+		}
+	}
+	return proto.Marshal(clone)
 }
 
 // removePrefix removes the prefix from the keys.

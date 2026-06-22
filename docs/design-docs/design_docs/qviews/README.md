@@ -192,7 +192,13 @@ Growing → Sealed [DataVersion D1] → Release
 |---|---|---|---|
 | **Growing** | Discovered from WAL | Segment is in Growing state; Coord has not yet managed it | Always queried |
 | **Sealed [D1]** | Consumed Flush event from WAL | Segment becomes Sealed at version D1 (meaning Coord has seen this Segment in views ≥ D1) | View Version < (D1,0): Always queried; View Version ≥ (D1,0): Not queried (data is already on QN) |
-| **Release** | Minimum view version on current SN ≥ (D1,0) and no view contains this Segment | Segment does not participate in any queries | Noop |
+| **Release** | SN required DataVersion watermark ≥ D1 and no retained view needs this Segment | Segment does not participate in any queries | Noop |
+
+The Sealed state is retained on StreamingNode until the local required DataVersion
+watermark reaches D1. This delayed GC is required for crash recovery when
+a persisted Up view is older than the latest local SegmentModule state: the old Up
+view still needs flushed-at-D1 segments as growing-side resources if its DataVersion is
+lower than D1.
 
 ## 9. Historical Query Segment Lifecycle
 
@@ -214,7 +220,29 @@ Loaded → Release
 - Resources are released when their associated query views are released.
 - Multi-version view support enables atomic updates on nodes to ensure resource liveness, reducing the frequency of resource operations.
 
+StreamingNode is the exception for load-intent vchannel resources prepared from WAL.
+`AlterLoadConfig` is persisted as vchannel load state in `VChannelMeta`; `DropLoadConfig`
+clears that state and cancels any in-flight load-initialization task. These load config
+messages are broadcast to all vchannels of the collection, so each SN consumer mutates
+the local `VChannelMeta` for `msg.VChannel()`. `AlterLoadConfig` is a load intent, not
+a DataVersion recovery contract. RecoveryStorage captures a `VChannelWALView` from
+retained SegmentModule and TransformLog state, and the PChannel-local
+StreamingNode resource manager starts an asynchronous initialization task before
+any QueryView exists. Long-term resource retention is driven by local QueryView
+references and temporary recovery anchors, not by the initialization task.
+QueryNode sealed segment resources continue to follow QueryNode's segment/view resource
+lifecycle.
+
 Example: If view A is unreasonable and causes OOM on a node, it is marked as Unrecoverable, but view A still exists on the node and already-loaded resources are not rolled back. After Coord detects this, the Balancer generates a new view B and pushes both views for atomic modification (A Dropped, B Preparing). Resources in (A diff B) are released, resources in (B diff A) are loaded, and resources in A∩B are retained.
+
+For StreamingNode-side resource preparation boundaries, including `AlterLoadConfig`
+initialization, `DropLoadConfig` cleanup, and recovery from `VChannelMeta.load_config`
+before QueryView sync, see
+[StreamingNode Query Runtime Manager Design](snview/streamingnode_resource_manager.md).
+For StreamingNode growing-side runtime preparation and retention, see
+[StreamingNode Growing Segment Runtime Design](snview/growing_segment_runtime.md).
+For BM25 sealed resource discovery and vchannel-level IDF oracle maintenance on
+StreamingNode, see [StreamingNode IDF Oracle Runtime Design](snview/idf_oracle_runtime.md).
 
 ## 11. Coord and Node Interactions
 
@@ -233,7 +261,8 @@ Example: If view A is unreasonable and causes OOM on a node, it is marked as Unr
 | Coord | DataView Manager | Maintaining the storage view list |
 | Coord | Sealed Segment Balancer | Gathering information from all Managers, generating and distributing QueryViews |
 | Coord | QueryView Manager | View state machine transitions, syncing view information to all Nodes |
-| Streaming Node | QueryView Manager | Listening for view state machine changes, applying to Growing Segments and BM25, etc. |
+| Streaming Node | PChannel Query Resource Manager | Preparing vchannel resources from `VChannelMeta.load_config`, latest schema, SegmentModule views, TransformLog, and BM25 resource RPC |
+| Streaming Node | QueryView Manager | Listening for view state machine changes, checking prepared view resources, and publishing the required DataVersion watermark for SN-only eviction |
 | Streaming Node | Pure Delete Stream Manager | Acting as subscription server, publishing Delete data to QueryNodes. See [TransformLog View Module](../wal/transform_log_view_module.md). |
 | Streaming Node | Growing Segment Manager | Incremental data management, maintaining Growing Segment lifecycle |
 | Query Node | QueryView Manager | Listening for view state machine changes, applying to Sealed Segments |

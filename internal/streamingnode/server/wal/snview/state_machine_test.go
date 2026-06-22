@@ -18,6 +18,7 @@ const (
 	testCollectionID int64 = 100
 	testReplicaID    int64 = 1
 	testVChannel           = "v0_c0"
+	testPChannel           = testVChannel
 )
 
 func buildTestMeta() *viewpb.QueryViewMeta {
@@ -37,12 +38,12 @@ func buildTestSNView() *viewpb.QueryViewOfStreamingNode {
 	return &viewpb.QueryViewOfStreamingNode{}
 }
 
-func newTestSM() *SNQueryViewStateMachine {
-	return NewSNQueryViewStateMachine(buildTestMeta(), buildTestSNView())
+func newTestSM() *snQueryViewStateMachine {
+	return newSNQueryViewStateMachine(buildTestMeta(), buildTestSNView())
 }
 
 // newReadySM returns a SM in Ready state with all pending drained.
-func newReadySM() *SNQueryViewStateMachine {
+func newReadySM() *snQueryViewStateMachine {
 	sm := newTestSM()
 	sm.ConsumeReport() // drain Preparing report
 	sm.OnReady()
@@ -51,7 +52,7 @@ func newReadySM() *SNQueryViewStateMachine {
 }
 
 // newUpSM returns a SM in Up state with all pending drained.
-func newUpSM() *SNQueryViewStateMachine {
+func newUpSM() *snQueryViewStateMachine {
 	sm := newReadySM()
 	sm.OnCoordStateDelivered(qviews.QueryViewStateUp)
 	sm.ConsumeReport()
@@ -60,7 +61,7 @@ func newUpSM() *SNQueryViewStateMachine {
 }
 
 // newDownSM returns a SM in Down state with all pending drained.
-func newDownSM() *SNQueryViewStateMachine {
+func newDownSM() *snQueryViewStateMachine {
 	sm := newUpSM()
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDown)
 	sm.ConsumeReport()
@@ -69,7 +70,7 @@ func newDownSM() *SNQueryViewStateMachine {
 }
 
 // newUnrecoverableSM returns a SM in Unrecoverable state (from Preparing) with all pending drained.
-func newUnrecoverableSM() *SNQueryViewStateMachine {
+func newUnrecoverableSM() *snQueryViewStateMachine {
 	sm := newTestSM()
 	sm.ConsumeReport()
 	sm.OnUnrecoverable()
@@ -78,7 +79,7 @@ func newUnrecoverableSM() *SNQueryViewStateMachine {
 }
 
 // newDroppingFromPreparingSM returns a SM in Dropping state (from Preparing) with all pending drained.
-func newDroppingFromPreparingSM() *SNQueryViewStateMachine {
+func newDroppingFromPreparingSM() *snQueryViewStateMachine {
 	sm := newTestSM()
 	sm.ConsumeReport()
 	sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
@@ -87,7 +88,7 @@ func newDroppingFromPreparingSM() *SNQueryViewStateMachine {
 }
 
 // newDroppedSM returns a SM in Dropped state with all pending drained.
-func newDroppedSM() *SNQueryViewStateMachine {
+func newDroppedSM() *snQueryViewStateMachine {
 	sm := newDroppingFromPreparingSM()
 	sm.OnDropped()
 	sm.ConsumeReport()
@@ -95,11 +96,11 @@ func newDroppedSM() *SNQueryViewStateMachine {
 }
 
 // newRecoveringSM returns a SM in UpRecovering state with all pending drained.
-func newRecoveringSM() *SNQueryViewStateMachine {
-	return RecoverSNQueryViewStateMachine(buildTestMeta(), buildTestSNView())
+func newRecoveringSM() *snQueryViewStateMachine {
+	return recoverSNQueryViewStateMachine(buildTestMeta(), buildTestSNView())
 }
 
-func assertReportState(t *testing.T, sm *SNQueryViewStateMachine, expected qviews.QueryViewState) {
+func assertReportState(t *testing.T, sm *snQueryViewStateMachine, expected qviews.QueryViewState) {
 	t.Helper()
 	v := sm.ConsumeReport()
 	require.NotNil(t, v, "expected pending report with state %s", expected)
@@ -124,12 +125,12 @@ func assertReportState(t *testing.T, sm *SNQueryViewStateMachine, expected qview
 	assert.NotEqual(t, int64(-1), sm.Meta().CollectionId)
 }
 
-func assertNoReport(t *testing.T, sm *SNQueryViewStateMachine) {
+func assertNoReport(t *testing.T, sm *snQueryViewStateMachine) {
 	t.Helper()
 	assert.Nil(t, sm.ConsumeReport(), "expected no pending report")
 }
 
-func assertPersistState(t *testing.T, sm *SNQueryViewStateMachine, expected qviews.QueryViewState) {
+func assertPersistState(t *testing.T, sm *snQueryViewStateMachine, expected qviews.QueryViewState) {
 	t.Helper()
 	v := sm.ConsumePersist()
 	require.NotNil(t, v, "expected pending persist with state %s", expected)
@@ -154,23 +155,23 @@ func assertPersistState(t *testing.T, sm *SNQueryViewStateMachine, expected qvie
 	assert.NotEqual(t, int64(-1), sm.Meta().CollectionId)
 }
 
-func assertNoPersist(t *testing.T, sm *SNQueryViewStateMachine) {
+func assertNoPersist(t *testing.T, sm *snQueryViewStateMachine) {
 	t.Helper()
 	assert.Nil(t, sm.ConsumePersist(), "expected no pending persist")
 }
 
-func assertRelease(t *testing.T, sm *SNQueryViewStateMachine) {
+func assertRelease(t *testing.T, sm *snQueryViewStateMachine) {
 	t.Helper()
 	assert.True(t, sm.ConsumeRelease(), "expected pending release")
 }
 
-func assertNoRelease(t *testing.T, sm *SNQueryViewStateMachine) {
+func assertNoRelease(t *testing.T, sm *snQueryViewStateMachine) {
 	t.Helper()
 	assert.False(t, sm.ConsumeRelease(), "expected no pending release")
 }
 
 // ---------------------------------------------------------------------------
-// 1. Construction — NewSNQueryViewStateMachine
+// 1. Construction — newSNQueryViewStateMachine
 // ---------------------------------------------------------------------------
 
 func TestNew_InitialState(t *testing.T) {
@@ -199,7 +200,7 @@ func TestNew_NoPendingRelease(t *testing.T) {
 func TestNew_MetaAndViewPreserved(t *testing.T) {
 	meta := buildTestMeta()
 	snView := buildTestSNView()
-	sm := NewSNQueryViewStateMachine(meta, snView)
+	sm := newSNQueryViewStateMachine(meta, snView)
 	assert.Equal(t, meta, sm.Meta())
 	assert.Equal(t, snView, sm.SNView())
 }
@@ -222,7 +223,7 @@ func TestNew_ReportStructure(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Construction — RecoverSNQueryViewStateMachine
+// 2. Construction — recoverSNQueryViewStateMachine
 // ---------------------------------------------------------------------------
 
 func TestRecover_InitialState(t *testing.T) {
@@ -1237,7 +1238,7 @@ func TestRecoverability_UpRecoveringThenCoordCrash(t *testing.T) {
 }
 
 func TestRecoverability_SNCrashRecovery_FullFlow(t *testing.T) {
-	sm := RecoverSNQueryViewStateMachine(buildTestMeta(), buildTestSNView())
+	sm := recoverSNQueryViewStateMachine(buildTestMeta(), buildTestSNView())
 	assert.Equal(t, qviews.QueryViewStateUpRecovering, sm.State())
 	assertNoReport(t, sm)
 	assertNoPersist(t, sm)

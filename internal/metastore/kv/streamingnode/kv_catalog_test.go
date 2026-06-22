@@ -2,6 +2,7 @@ package streamingnode
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/cockroachdb/errors"
@@ -16,7 +17,9 @@ import (
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
 	"github.com/milvus-io/milvus/internal/kv/mocks"
 	kvfactory "github.com/milvus-io/milvus/internal/util/dependency/kv"
+	"github.com/milvus-io/milvus/pkg/v3/kv/predicates"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
@@ -116,6 +119,34 @@ func TestCatalogTransformLogMeta(t *testing.T) {
 	kv.EXPECT().MultiRemove(mock.Anything, []string{buildTransformLogKey("p1", "v1")}).
 		Return(nil)
 	require.NoError(t, catalog.DropTransformLogMeta(ctx, "p1", []string{"v1"}))
+}
+
+func TestCatalogSegmentDataVersionSummary(t *testing.T) {
+	kv := mocks.NewMetaKv(t)
+	summary := &streamingpb.SegmentDataVersionSummary{
+		DataVersion: &viewpb.DataVersion{StreamingVersion: 10, CompactVersion: 2},
+	}
+	value, err := proto.Marshal(summary)
+	require.NoError(t, err)
+
+	kv.EXPECT().LoadWithPrefix(mock.Anything, buildSegmentDataVersionSummaryPrefix("p1")).
+		Return([]string{buildSegmentDataVersionSummaryKey("p1", "v1")}, []string{string(value)}, nil)
+	catalog := NewCataLog(kv)
+	ctx := context.Background()
+	summaries, err := catalog.ListSegmentDataVersionSummaries(ctx, "p1")
+	require.NoError(t, err)
+	require.Len(t, summaries, 1)
+	assert.True(t, proto.Equal(summary, summaries["v1"]))
+
+	kv.EXPECT().MultiSave(mock.Anything, mock.MatchedBy(func(kvs map[string]string) bool {
+		saved, ok := kvs[buildSegmentDataVersionSummaryKey("p1", "v1")]
+		if !ok {
+			return false
+		}
+		loaded := &streamingpb.SegmentDataVersionSummary{}
+		return proto.Unmarshal([]byte(saved), loaded) == nil && proto.Equal(summary, loaded)
+	})).Return(nil)
+	require.NoError(t, catalog.SaveSegmentDataVersionSummaries(ctx, "p1", map[string]*streamingpb.SegmentDataVersionSummary{"v1": summary}))
 }
 
 func TestCatalogListSegmentAssignmentRejectsMismatchedOwner(t *testing.T) {
@@ -658,4 +689,83 @@ func TestBuildPrefixAndKey(t *testing.T) {
 
 	assert.Equal(t, "streamingnode-meta/wal/p1/salvage-checkpoint/cluster-a", buildSalvageCheckpointPath("p1", "cluster-a"))
 	assert.Equal(t, "streamingnode-meta/wal/p2/salvage-checkpoint/cluster-b", buildSalvageCheckpointPath("p2", "cluster-b"))
+
+	assert.Equal(t, "streamingnode-meta/wal/p1/query-view/", buildQueryViewPrefix("p1"))
+}
+
+func TestCatalogQueryViews(t *testing.T) {
+	kv := mocks.NewMetaKv(t)
+	storage := make(map[string]string)
+	kv.EXPECT().LoadWithPrefix(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, prefix string) ([]string, []string, error) {
+			keys := make([]string, 0)
+			values := make([]string, 0)
+			for key, value := range storage {
+				if strings.HasPrefix(key, prefix) {
+					keys = append(keys, key)
+					values = append(values, value)
+				}
+			}
+			return keys, values, nil
+		}).Maybe()
+	kv.EXPECT().MultiSaveAndRemove(mock.Anything, mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, saves map[string]string, removals []string, _ ...predicates.Predicate) error {
+			for key, value := range saves {
+				storage[key] = value
+			}
+			for _, key := range removals {
+				delete(storage, key)
+			}
+			return nil
+		}).Maybe()
+
+	catalog := NewCataLog(kv)
+	ctx := context.Background()
+	view := makeQueryViewForCatalogTest("p1_100v0", viewpb.QueryViewState_QueryViewStateUp)
+	key := "streamingnode-meta/wal/p1/query-view/1/10/p1_100v0/20/0/30"
+
+	require.NoError(t, catalog.SaveQueryViews(ctx, "p1", []*viewpb.QueryViewOfShard{view}))
+	require.Contains(t, storage, key)
+
+	views, err := catalog.ListQueryViews(ctx, "p1")
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	require.Equal(t, "p1_100v0", views[0].GetMeta().GetVchannel())
+
+	views, err = catalog.ListQueryViews(ctx, "p2")
+	require.NoError(t, err)
+	require.Empty(t, views)
+
+	for _, state := range []viewpb.QueryViewState{
+		viewpb.QueryViewState_QueryViewStateDown,
+		viewpb.QueryViewState_QueryViewStateUnrecoverable,
+		viewpb.QueryViewState_QueryViewStateDropped,
+	} {
+		view.Meta.State = viewpb.QueryViewState_QueryViewStateUp
+		require.NoError(t, catalog.SaveQueryViews(ctx, "p1", []*viewpb.QueryViewOfShard{view}))
+		require.Contains(t, storage, key)
+
+		view.Meta.State = state
+		require.NoError(t, catalog.SaveQueryViews(ctx, "p1", []*viewpb.QueryViewOfShard{view}))
+		require.NotContains(t, storage, key)
+	}
+}
+
+func makeQueryViewForCatalogTest(vchannel string, state viewpb.QueryViewState) *viewpb.QueryViewOfShard {
+	return &viewpb.QueryViewOfShard{
+		Meta: &viewpb.QueryViewMeta{
+			CollectionId: 1,
+			ReplicaId:    10,
+			Vchannel:     vchannel,
+			Version: &viewpb.QueryViewVersion{
+				DataVersion: &viewpb.DataVersion{
+					StreamingVersion: 20,
+					CompactVersion:   0,
+				},
+				QueryVersion: 30,
+			},
+			State: state,
+		},
+		StreamingNode: &viewpb.QueryViewOfStreamingNode{},
+	}
 }
