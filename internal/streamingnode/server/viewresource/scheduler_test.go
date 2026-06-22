@@ -13,7 +13,7 @@ func TestSchedulerSubmitAfterCloseCompletesTask(t *testing.T) {
 	scheduler := NewScheduler(1)
 	scheduler.Close()
 
-	task := newResourceBuildTask(context.Background(), "ch", func(context.Context) (*QueryRuntime, error) {
+	task := newResourceBuildTask(context.Background(), func(context.Context) (*QueryRuntime, error) {
 		return nil, errors.New("unexpected build")
 	})
 

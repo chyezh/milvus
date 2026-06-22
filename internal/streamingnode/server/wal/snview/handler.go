@@ -79,12 +79,7 @@ func recoverSNQueryViewHandler(
 		resMgr:   resMgr,
 	}
 
-	// Build SMs grouped by shard.
-	type shardRecovery struct {
-		shardID qviews.ShardID
-		views   map[qviews.QueryViewVersion]*snQueryViewStateMachine
-	}
-	grouped := make(map[qviews.ShardID]*shardRecovery)
+	grouped := make(map[qviews.ShardID]map[qviews.QueryViewVersion]*snQueryViewStateMachine)
 
 	for _, view := range views {
 		meta := view.Meta
@@ -92,17 +87,16 @@ func recoverSNQueryViewHandler(
 		shardID := qviews.NewShardIDFromQVMeta(meta)
 		version := qviews.FromProtoQueryViewVersion(meta.Version)
 
-		sr, ok := grouped[shardID]
+		shardViews, ok := grouped[shardID]
 		if !ok {
-			sr = &shardRecovery{shardID: shardID, views: make(map[qviews.QueryViewVersion]*snQueryViewStateMachine)}
-			grouped[shardID] = sr
+			shardViews = make(map[qviews.QueryViewVersion]*snQueryViewStateMachine)
+			grouped[shardID] = shardViews
 		}
-		sr.views[version] = recoverSNQueryViewStateMachine(meta, snView)
+		shardViews[version] = recoverSNQueryViewStateMachine(meta, snView)
 	}
 
-	// Create shard views and start recovery via ResourceManager.
-	for shardID, sr := range grouped {
-		shard := recoverSnShardView(pchannel, shardID, sr.views, catalog, resMgr)
+	for shardID, shardViews := range grouped {
+		shard := recoverSnShardView(pchannel, shardID, shardViews, catalog, resMgr)
 		shard.onEmpty = h.makeOnEmpty(shardID)
 		h.shards[shardID] = shard
 	}

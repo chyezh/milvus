@@ -20,7 +20,7 @@ func (r *Runtime) addSegment(segment *growingSegment) bool {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.state == stateClosed {
+	if r.closed {
 		return false
 	}
 	if _, ok := r.segments[segment.id()]; ok {
@@ -31,22 +31,13 @@ func (r *Runtime) addSegment(segment *growingSegment) bool {
 	return true
 }
 
-func (r *Runtime) setDeleteReplayEntries(entries []*streamingpb.TransformLogEntry) {
-	if r == nil {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.deleteReplayEntries = append([]*streamingpb.TransformLogEntry(nil), entries...)
-}
-
 func (r *Runtime) getOrCreateSegment(segmentID int64, partitionID int64) *growingSegment {
 	if r == nil || segmentID == 0 {
 		return nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.state == stateClosed {
+	if r.closed {
 		return nil
 	}
 	if segment := r.segments[segmentID]; segment != nil {

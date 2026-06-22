@@ -98,7 +98,7 @@ GrowingRuntime
   vchannel
   baseDataVersion
   schema
-  state Preparing | Ready | Closed
+  closed
   segments map[segmentID]GrowingSegment
   appliedGrowingTimeTick
   appliedTransformTimeTick

@@ -29,34 +29,6 @@ func newSegmentCache() *segmentCache {
 	}
 }
 
-func (c *segmentCache) loadSealedStats(
-	ctx context.Context,
-	chunkManager storage.ChunkManager,
-	resources []*querypb.StreamingNodeBM25Resource,
-) (bm25Stats, *segmentCacheLease, error) {
-	aggregate := make(bm25Stats)
-	if chunkManager == nil || len(resources) == 0 {
-		return aggregate, nil, nil
-	}
-
-	lease := &segmentCacheLease{cache: c}
-	for _, resource := range resources {
-		key, err := buildSealedCacheKey(resource)
-		if err != nil {
-			lease.Close()
-			return nil, nil, err
-		}
-		stats, err := c.retain(ctx, chunkManager, key, resource)
-		if err != nil {
-			lease.Close()
-			return nil, nil, err
-		}
-		lease.keys = append(lease.keys, key)
-		mergeBM25Stats(aggregate, stats)
-	}
-	return aggregate, lease, nil
-}
-
 func (c *segmentCache) acquire(
 	ctx context.Context,
 	chunkManager storage.ChunkManager,
@@ -74,7 +46,7 @@ func (c *segmentCache) acquire(
 	if err != nil {
 		return nil, nil, err
 	}
-	mergeBM25Stats(aggregate, stats)
+	aggregate.merge(stats)
 	return aggregate, &segmentCacheLease{cache: c, keys: []sealedCacheKey{key}}, nil
 }
 
@@ -174,10 +146,4 @@ func loadSealedSegmentStats(
 		}
 	}
 	return stats, nil
-}
-
-func mergeBM25Stats(dst bm25Stats, src bm25Stats) {
-	for fieldID, srcStats := range src {
-		dst.getOrCreate(fieldID).Merge(srcStats)
-	}
 }

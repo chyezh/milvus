@@ -400,8 +400,6 @@ type Scheduler interface {
 }
 
 type QueryRuntimeBuildTask interface {
-    Key() string // vchannel
-
     Run()
     Done() <-chan struct{}
     Result() (QueryRuntime, error)

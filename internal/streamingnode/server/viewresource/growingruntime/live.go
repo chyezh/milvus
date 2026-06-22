@@ -22,31 +22,18 @@ func (r *Runtime) ApplyLiveEvent(ctx context.Context, event walview.VChannelReso
 	}
 }
 
-func (r *Runtime) markReady() {
-	if r == nil {
-		return
-	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.state == stateClosed {
-		return
-	}
-	r.state = stateReady
-}
-
-func (r *Runtime) applyLiveMessage(ctx context.Context, msg message.ImmutableMessage) bool {
+func (r *Runtime) applyLiveMessage(ctx context.Context, msg message.ImmutableMessage) {
 	if r == nil || msg == nil {
-		return false
+		return
 	}
 	if err := r.dispatchMessage(ctx, msg); err != nil {
 		panic(errors.Wrap(err, "failed to apply live message to growing runtime"))
 	}
 	timeTick := msg.TimeTick()
-	advanced := advanceTimeTick(&r.appliedGrowingTimeTick, timeTick)
+	advanceTimeTick(&r.appliedGrowingTimeTick, timeTick)
 	if messageAdvancesTransformFrontier(msg) {
-		advanced = advanceTimeTick(&r.appliedTransformTimeTick, timeTick) || advanced
+		advanceTimeTick(&r.appliedTransformTimeTick, timeTick)
 	}
-	return advanced
 }
 
 func messageAdvancesTransformFrontier(msg message.ImmutableMessage) bool {
@@ -77,14 +64,14 @@ func messageAdvancesTransformFrontier(msg message.ImmutableMessage) bool {
 func advanceTimeTick(value interface {
 	Load() uint64
 	CompareAndSwap(old uint64, new uint64) bool
-}, next uint64) bool {
+}, next uint64) {
 	for {
 		current := value.Load()
 		if next <= current {
-			return false
+			return
 		}
 		if value.CompareAndSwap(current, next) {
-			return true
+			return
 		}
 	}
 }

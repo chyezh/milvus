@@ -10,7 +10,6 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
-	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
 // SNQueryRuntimeManager prepares and owns StreamingNode query runtimes for one PChannel runtime.
@@ -23,7 +22,7 @@ type SNQueryRuntimeManager interface {
 
 type resourceState struct {
 	initRef       bool
-	queryViewRefs map[qviews.QueryViewKey]*viewpb.QueryViewMeta
+	queryViewRefs map[qviews.QueryViewKey]struct{}
 
 	runtime *QueryRuntime
 	task    BuildTask
@@ -71,7 +70,7 @@ func (m *queryRuntimeManager) OnAlterLoadConfig(view walview.VChannelWALView) wa
 		panic(errors.Wrap(err, "create IDF oracle runtime"))
 	}
 	runtime := NewQueryRuntime(desc, growing, idf)
-	task := newResourceBuildTask(context.Background(), desc.VChannel(), func(ctx context.Context) (*QueryRuntime, error) {
+	task := newResourceBuildTask(context.Background(), func(ctx context.Context) (*QueryRuntime, error) {
 		if err := runtime.Initialize(ctx); err != nil {
 			return runtime, err
 		}
@@ -92,7 +91,7 @@ func (m *queryRuntimeManager) OnAlterLoadConfig(view walview.VChannelWALView) wa
 	}
 	m.resources[desc.VChannel()] = &resourceState{
 		initRef:       true,
-		queryViewRefs: make(map[qviews.QueryViewKey]*viewpb.QueryViewMeta),
+		queryViewRefs: make(map[qviews.QueryViewKey]struct{}),
 		runtime:       runtime,
 		task:          task,
 	}
@@ -232,11 +231,11 @@ func (m *queryRuntimeManager) registerQueryViewRef(req snview.AcquireResource) u
 		panic("query view already references a different runtime")
 	}
 	if state.queryViewRefs == nil {
-		state.queryViewRefs = make(map[qviews.QueryViewKey]*viewpb.QueryViewMeta)
+		state.queryViewRefs = make(map[qviews.QueryViewKey]struct{})
 	}
 	if _, ok := state.queryViewRefs[req.Key]; !ok {
 		m.assertMonotonicAcquireLocked(state, req.Key.QueryViewVersion.DataVersion)
-		state.queryViewRefs[req.Key] = req.Meta
+		state.queryViewRefs[req.Key] = struct{}{}
 		m.refIndex[req.Key] = vchannel
 		m.refEpoch[req.Key]++
 		state.initRef = false
@@ -356,7 +355,7 @@ func (m *queryRuntimeManager) queryViewRefCountLocked() int {
 	return count
 }
 
-func minQueryViewDataVersion(refs map[qviews.QueryViewKey]*viewpb.QueryViewMeta) (qviews.DataVersion, bool) {
+func minQueryViewDataVersion(refs map[qviews.QueryViewKey]struct{}) (qviews.DataVersion, bool) {
 	var min qviews.DataVersion
 	ok := false
 	for key := range refs {

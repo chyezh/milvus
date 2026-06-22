@@ -15,7 +15,6 @@ type NoopBuilder struct{}
 func (NoopBuilder) NewRuntime(desc Descriptor) (*Runtime, error) {
 	runtime := newRuntime(desc)
 	runtime.prepareFunc = func(context.Context) error {
-		runtime.markReady()
 		return nil
 	}
 	return runtime, nil
@@ -43,7 +42,7 @@ func (r *Runtime) Prepare(ctx context.Context) error {
 		return err
 	}
 	r.mu.Lock()
-	if r.state == stateClosed {
+	if r.closed {
 		r.mu.Unlock()
 		if collection != nil {
 			collection.Release()
@@ -78,7 +77,6 @@ func (r *Runtime) Prepare(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	r.setDeleteReplayEntries(deleteEntries)
 	for _, entry := range deleteEntries {
 		if err := r.applyTransformLogEntry(ctx, entry); err != nil {
 			return err
@@ -86,7 +84,6 @@ func (r *Runtime) Prepare(ctx context.Context) error {
 	}
 	r.appliedGrowingTimeTick.Store(desc.WALView.BaseGrowingTimeTick)
 	r.appliedTransformTimeTick.Store(desc.WALView.BaseTransformTimeTick)
-	r.markReady()
 	prepared = true
 	return nil
 }

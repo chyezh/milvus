@@ -12,7 +12,6 @@ type Scheduler interface {
 }
 
 type BuildTask interface {
-	Key() string
 	Run()
 	Done() <-chan struct{}
 	Result() (*QueryRuntime, error)
@@ -21,7 +20,6 @@ type BuildTask interface {
 
 type defaultScheduler struct {
 	sem    chan struct{}
-	done   chan struct{}
 	closed chan struct{}
 	once   sync.Once
 	wg     sync.WaitGroup
@@ -33,7 +31,6 @@ func NewScheduler(concurrency int) Scheduler {
 	}
 	return &defaultScheduler{
 		sem:    make(chan struct{}, concurrency),
-		done:   make(chan struct{}),
 		closed: make(chan struct{}),
 	}
 }
@@ -63,12 +60,10 @@ func (s *defaultScheduler) Close() {
 	s.once.Do(func() {
 		close(s.closed)
 		s.wg.Wait()
-		close(s.done)
 	})
 }
 
 type resourceBuildTask struct {
-	key    string
 	ctx    context.Context
 	cancel context.CancelFunc
 	build  func(context.Context) (*QueryRuntime, error)
@@ -82,19 +77,14 @@ type resourceBuildTask struct {
 	err      error
 }
 
-func newResourceBuildTask(parent context.Context, key string, build func(context.Context) (*QueryRuntime, error)) *resourceBuildTask {
+func newResourceBuildTask(parent context.Context, build func(context.Context) (*QueryRuntime, error)) *resourceBuildTask {
 	ctx, cancel := context.WithCancel(parent)
 	return &resourceBuildTask{
-		key:    key,
 		ctx:    ctx,
 		cancel: cancel,
 		build:  build,
 		done:   make(chan struct{}),
 	}
-}
-
-func (t *resourceBuildTask) Key() string {
-	return t.key
 }
 
 func (t *resourceBuildTask) Run() {

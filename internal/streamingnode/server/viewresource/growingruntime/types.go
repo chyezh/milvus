@@ -10,15 +10,13 @@ import (
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
 // Descriptor describes the latest vchannel runtime that must be prepared after
 // WAL observes AlterLoadConfig.
 type Descriptor struct {
-	WALView   walview.VChannelWALView
-	OnApplied func()
+	WALView walview.VChannelWALView
 }
 
 func (d Descriptor) CollectionID() int64 {
@@ -61,23 +59,14 @@ type Builder interface {
 	NewRuntime(desc Descriptor) (*Runtime, error)
 }
 
-type state int
-
-const (
-	statePreparing state = iota
-	stateReady
-	stateClosed
-)
-
 // Runtime is the csegment-backed growing side prepared for one DataVersion.
 type Runtime struct {
 	mu                       sync.RWMutex
-	state                    state
+	closed                   bool
 	desc                     Descriptor
 	collection               *segcore.CCollection
 	segments                 map[int64]*growingSegment
 	segmentIDs               []int64
-	deleteReplayEntries      []*streamingpb.TransformLogEntry
 	prepareFunc              func(context.Context) error
 	truncateDataVersion      qviews.DataVersion
 	hasTruncateDataVersion   bool
@@ -88,7 +77,6 @@ type Runtime struct {
 
 func newRuntime(desc Descriptor) *Runtime {
 	return &Runtime{
-		state:    statePreparing,
 		desc:     desc,
 		segments: make(map[int64]*growingSegment),
 	}
@@ -140,15 +128,6 @@ func (r *Runtime) SegmentIDs() []int64 {
 	return append([]int64(nil), r.segmentIDs...)
 }
 
-func (r *Runtime) DeleteReplayEntries() []*streamingpb.TransformLogEntry {
-	if r == nil {
-		return nil
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return append([]*streamingpb.TransformLogEntry(nil), r.deleteReplayEntries...)
-}
-
 func (r *Runtime) Truncate(minDataVersion qviews.DataVersion) {
 	if r == nil {
 		return
@@ -191,7 +170,7 @@ func (r *Runtime) Close() {
 	}
 	r.closeOnce.Do(func() {
 		r.mu.Lock()
-		r.state = stateClosed
+		r.closed = true
 		r.mu.Unlock()
 
 		r.mu.Lock()

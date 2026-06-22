@@ -117,7 +117,7 @@ func TestRuntimeRejectsLiveInsertAfterFlush(t *testing.T) {
 	defer runtime.Close()
 
 	segmentID := int64(21)
-	require.True(t, runtime.applyLiveMessage(context.Background(), newTestFlushMessage(t, "ch", segmentID, 40)))
+	runtime.applyLiveMessage(context.Background(), newTestFlushMessage(t, "ch", segmentID, 40))
 	require.True(t, runtime.SegmentFlushed(segmentID))
 	require.Panics(t, func() {
 		runtime.applyLiveMessage(context.Background(), newTestSegmentInsertMessage(t, "ch", segmentID, 2, 41, schema))

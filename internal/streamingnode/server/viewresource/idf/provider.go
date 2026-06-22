@@ -7,7 +7,6 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
-	"github.com/samber/lo"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/storage"
@@ -93,6 +92,15 @@ func (r *Runtime) Prepare(ctx context.Context) error {
 	}
 	r.mu.Unlock()
 
+	if !hasLoadedBM25Function(r.desc.Schema(), r.desc.Settings().GetRequiredFields()) {
+		r.mu.RLock()
+		closed := r.closed
+		r.mu.RUnlock()
+		if closed {
+			return context.Canceled
+		}
+		return nil
+	}
 	provider, err := r.resolveProvider(ctx)
 	if err != nil {
 		return err
@@ -121,11 +129,6 @@ func (r *Runtime) resolveProvider(ctx context.Context) (*Provider, error) {
 	if r.future == nil {
 		return nil, errors.New("IDF oracle provider is nil")
 	}
-	schema := r.desc.Schema()
-	settings := r.desc.Settings()
-	if !hasLoadedBM25Function(schema, settings.GetRequiredFields()) {
-		return &Provider{}, nil
-	}
 	if r.future.client == nil {
 		return nil, errors.New("mixcoord client future is nil")
 	}
@@ -141,11 +144,7 @@ func (r *Runtime) resolveProvider(ctx context.Context) (*Provider, error) {
 }
 
 func (p *Provider) buildOracle(ctx context.Context, desc viewresource.LoadResourceDescriptor) (*oracleRuntime, error) {
-	schema := desc.Schema()
 	settings := desc.Settings()
-	if !hasLoadedBM25Function(schema, settings.GetRequiredFields()) {
-		return nil, nil
-	}
 	if p.client == nil {
 		return nil, errors.New("querycoord client is nil")
 	}
@@ -253,10 +252,11 @@ func hasLoadedBM25Function(schema *schemapb.CollectionSchema, loadedFields []int
 	if schema == nil {
 		return false
 	}
-	loaded := lo.SliceToMap(loadedFields, func(fieldID int64) (int64, struct{}) {
-		return fieldID, struct{}{}
-	})
 	loadsAllFields := len(loadedFields) == 0
+	loaded := make(map[int64]struct{}, len(loadedFields))
+	for _, fieldID := range loadedFields {
+		loaded[fieldID] = struct{}{}
+	}
 	for _, function := range schema.GetFunctions() {
 		if function.GetType() != schemapb.FunctionType_BM25 || len(function.GetOutputFieldIds()) == 0 {
 			continue
