@@ -8,7 +8,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource/growingruntime"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
@@ -17,10 +16,7 @@ import (
 )
 
 func TestManagerAcquireWaitsForQueryRuntimeInitialization(t *testing.T) {
-	manager := NewManager(
-		NewGrowingRuntimeModuleBuilder(growingruntime.NoopBuilder{}),
-		NoopQueryRuntimeModuleBuilder{},
-	).(*queryRuntimeManager)
+	manager := NewManager(testModuleBuilder{}).(*queryRuntimeManager)
 	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
 	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
 
@@ -50,10 +46,7 @@ func TestManagerAcquireWaitsForQueryRuntimeInitialization(t *testing.T) {
 }
 
 func TestManagerReleaseClosesUnreferencedRuntime(t *testing.T) {
-	manager := NewManager(
-		NewGrowingRuntimeModuleBuilder(growingruntime.NoopBuilder{}),
-		NoopQueryRuntimeModuleBuilder{},
-	).(*queryRuntimeManager)
+	manager := NewManager(testModuleBuilder{}).(*queryRuntimeManager)
 	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
 	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
 
@@ -75,7 +68,7 @@ func TestManagerReleaseClosesUnreferencedRuntime(t *testing.T) {
 }
 
 func TestQueryRuntimeAdvanceRejectsNonMonotonicWatermark(t *testing.T) {
-	runtime := NewQueryRuntime(noopQueryRuntimeModule{})
+	runtime := NewQueryRuntime(&recordingModule{})
 	runtime.Advance(qviews.DataVersion{StreamingVersion: 10})
 	require.Panics(t, func() {
 		runtime.Advance(qviews.DataVersion{StreamingVersion: 9})
@@ -83,7 +76,7 @@ func TestQueryRuntimeAdvanceRejectsNonMonotonicWatermark(t *testing.T) {
 }
 
 func TestQueryRuntimeCloseRejectsLiveEvents(t *testing.T) {
-	runtime := NewQueryRuntime(noopQueryRuntimeModule{})
+	runtime := NewQueryRuntime(&recordingModule{})
 	runtime.Close()
 	require.False(t, runtime.ObserveEvent(context.Background(), walview.VChannelResourceEvent{}))
 }
@@ -100,7 +93,7 @@ func TestQueryRuntimeAdvanceBeforeReadyBroadcastsAfterInitialize(t *testing.T) {
 }
 
 func TestQueryRuntimeCloseUnblocksFullLiveEventBuffer(t *testing.T) {
-	runtime := NewQueryRuntime(noopQueryRuntimeModule{})
+	runtime := NewQueryRuntime(&recordingModule{})
 	runtime.pendingLimit = 1
 	require.True(t, runtime.ObserveEvent(context.Background(), walview.VChannelResourceEvent{
 		SegmentSealed: &walview.SegmentSealedEvent{SegmentID: 1},
@@ -206,6 +199,12 @@ type recordingModule struct {
 	mu       sync.Mutex
 	segments []int64
 	advances []qviews.DataVersion
+}
+
+type testModuleBuilder struct{}
+
+func (testModuleBuilder) NewRuntime() (QueryRuntimeModule, error) {
+	return &recordingModule{}, nil
 }
 
 func (m *recordingModule) Prepare(context.Context, walview.VChannelWALView) error { return nil }

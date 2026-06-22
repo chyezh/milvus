@@ -397,17 +397,3 @@ func NewGrowingRuntimeModuleBuilder(builder growingruntime.Builder) QueryRuntime
 func (b growingRuntimeModuleBuilder) NewRuntime() (QueryRuntimeModule, error) {
 	return b.builder.NewRuntime()
 }
-
-type NoopQueryRuntimeModuleBuilder struct{}
-
-func (NoopQueryRuntimeModuleBuilder) NewRuntime() (QueryRuntimeModule, error) {
-	return noopQueryRuntimeModule{}, nil
-}
-
-type noopQueryRuntimeModule struct{}
-
-func (noopQueryRuntimeModule) Prepare(context.Context, walview.VChannelWALView) error { return nil }
-func (noopQueryRuntimeModule) ApplyLiveEvent(context.Context, walview.VChannelResourceEvent) {
-}
-func (noopQueryRuntimeModule) Advance(qviews.DataVersion) {}
-func (noopQueryRuntimeModule) Close()                     {}

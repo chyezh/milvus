@@ -11,16 +11,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 )
 
-type NoopBuilder struct{}
-
-func (NoopBuilder) NewRuntime() (*Runtime, error) {
-	runtime := newRuntime()
-	runtime.prepareFunc = func(context.Context) error {
-		return nil
-	}
-	return runtime, nil
-}
-
 type SnapshotBuilder struct{}
 
 func (p SnapshotBuilder) NewRuntime() (*Runtime, error) {
@@ -30,9 +20,6 @@ func (p SnapshotBuilder) NewRuntime() (*Runtime, error) {
 func (r *Runtime) Prepare(ctx context.Context, view walview.VChannelWALView) error {
 	if r == nil {
 		return nil
-	}
-	if r.prepareFunc != nil {
-		return r.prepareFunc(ctx)
 	}
 	if err := validateWALViewSnapshot(view); err != nil {
 		return err

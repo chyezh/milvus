@@ -1,7 +1,6 @@
 package growingruntime
 
 import (
-	"context"
 	"sync"
 	"sync/atomic"
 
@@ -43,7 +42,6 @@ type Runtime struct {
 	collection               *segcore.CCollection
 	segments                 map[int64]*growingSegment
 	segmentIDs               []int64
-	prepareFunc              func(context.Context) error
 	truncateDataVersion      qviews.DataVersion
 	hasTruncateDataVersion   bool
 	closeOnce                sync.Once
