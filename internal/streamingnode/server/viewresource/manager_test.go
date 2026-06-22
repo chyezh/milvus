@@ -16,7 +16,10 @@ import (
 )
 
 func TestManagerAcquireWaitsForQueryRuntimeInitialization(t *testing.T) {
-	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, NoopIDFOracleRuntimeBuilder{}).(*queryRuntimeManager)
+	manager := NewManager(
+		NewGrowingRuntimeModuleBuilder(NoopGrowingSegmentRuntimeBuilder{}),
+		NoopQueryRuntimeModuleBuilder{},
+	).(*queryRuntimeManager)
 	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
 	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
 
@@ -46,7 +49,10 @@ func TestManagerAcquireWaitsForQueryRuntimeInitialization(t *testing.T) {
 }
 
 func TestManagerReleaseClosesUnreferencedRuntime(t *testing.T) {
-	manager := NewManager(NoopGrowingSegmentRuntimeBuilder{}, NoopIDFOracleRuntimeBuilder{}).(*queryRuntimeManager)
+	manager := NewManager(
+		NewGrowingRuntimeModuleBuilder(NoopGrowingSegmentRuntimeBuilder{}),
+		NoopQueryRuntimeModuleBuilder{},
+	).(*queryRuntimeManager)
 	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
 	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
 
@@ -68,10 +74,7 @@ func TestManagerReleaseClosesUnreferencedRuntime(t *testing.T) {
 }
 
 func TestQueryRuntimeAdvanceRejectsNonMonotonicWatermark(t *testing.T) {
-	runtime := NewQueryRuntime(
-		nil,
-		noopIDFOracleRuntime{},
-	)
+	runtime := NewQueryRuntime(noopQueryRuntimeModule{})
 	runtime.Advance(qviews.DataVersion{StreamingVersion: 10})
 	require.Panics(t, func() {
 		runtime.Advance(qviews.DataVersion{StreamingVersion: 9})
@@ -79,21 +82,14 @@ func TestQueryRuntimeAdvanceRejectsNonMonotonicWatermark(t *testing.T) {
 }
 
 func TestQueryRuntimeCloseRejectsLiveEvents(t *testing.T) {
-	runtime := NewQueryRuntime(
-		nil,
-		noopIDFOracleRuntime{},
-	)
+	runtime := NewQueryRuntime(noopQueryRuntimeModule{})
 	runtime.Close()
 	require.False(t, runtime.ObserveEvent(context.Background(), walview.VChannelResourceEvent{}))
 }
 
 func TestQueryRuntimeAdvanceBeforeReadyBroadcastsAfterInitialize(t *testing.T) {
 	module := &recordingModule{}
-	runtime := NewQueryRuntime(
-		nil,
-		noopIDFOracleRuntime{},
-	)
-	runtime.modules = []QueryRuntimeModule{module}
+	runtime := NewQueryRuntime(module)
 
 	advance := qviews.DataVersion{StreamingVersion: 12}
 	runtime.Advance(advance)
@@ -103,10 +99,7 @@ func TestQueryRuntimeAdvanceBeforeReadyBroadcastsAfterInitialize(t *testing.T) {
 }
 
 func TestQueryRuntimeCloseUnblocksFullLiveEventBuffer(t *testing.T) {
-	runtime := NewQueryRuntime(
-		nil,
-		noopIDFOracleRuntime{},
-	)
+	runtime := NewQueryRuntime(noopQueryRuntimeModule{})
 	runtime.pendingLimit = 1
 	require.True(t, runtime.ObserveEvent(context.Background(), walview.VChannelResourceEvent{
 		SegmentSealed: &walview.SegmentSealedEvent{SegmentID: 1},
@@ -135,11 +128,7 @@ func TestQueryRuntimeCloseUnblocksFullLiveEventBuffer(t *testing.T) {
 
 func TestQueryRuntimeInitialBatchAndReadyEventsUseSameConsumer(t *testing.T) {
 	module := &recordingModule{}
-	runtime := NewQueryRuntime(
-		nil,
-		noopIDFOracleRuntime{},
-	)
-	runtime.modules = []QueryRuntimeModule{module}
+	runtime := NewQueryRuntime(module)
 
 	require.True(t, runtime.ObserveEvent(context.Background(), walview.VChannelResourceEvent{
 		SegmentSealed: &walview.SegmentSealedEvent{SegmentID: 1},

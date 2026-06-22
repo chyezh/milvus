@@ -193,6 +193,10 @@ type IDFOracleRuntime interface {
 }
 ```
 
+This is an IDF-module concept. The shared `viewresource` package depends only
+on `QueryRuntimeModule` and `QueryRuntimeModuleBuilder`; it does not define or
+reference `IDFOracleRuntime`.
+
 `Prepare` builds the initial oracle for the provided WALView base DataVersion.
 It fetches sealed resources and initializes growing BM25 stats from the WALView
 segment snapshot. `IDFOracleRuntime` keeps the derived oracle state, not the

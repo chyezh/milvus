@@ -34,8 +34,7 @@ single `QueryRuntime` per loaded vchannel:
 ```text
 SNQueryRuntimeManager
   -> QueryRuntime
-       -> GrowingRuntime
-       -> IDFOracleRuntime
+       -> QueryRuntimeModule*
 ```
 
 `QueryRuntime` is the only `walview.VChannelLiveObserver` for the vchannel. It
@@ -56,8 +55,8 @@ driven by `OnAlterLoadConfig`, `OnDropLoadConfig`, `Acquire`, and `Release`.
 | `SNQueryRuntimeManager` | Owns PChannel-local resource references, creates vchannel `QueryRuntime` instances, submits initialization tasks, waits for runtime initialization on `Acquire`, advances DataVersion watermarks, and releases resources. | It does not apply WAL events to concrete resources directly. It does not own QueryView state transitions. |
 | `QueryRuntime` | VChannel-level singleton resource runtime. Implements `VChannelLiveObserver`, owns one live-event buffer and one consumer, initializes resource modules, drains buffered events into modules, and broadcasts DataVersion advancement. | It does not own QueryView references, `load_config` meta, or WAL module snapshots. |
 | `QueryRuntimeModule` | Common lifecycle interface implemented by resource modules. | It does not manage references or live observer registration. |
+| `QueryRuntimeModuleBuilder` | Creates unprepared `QueryRuntimeModule` instances when `AlterLoadConfig` creates a new runtime. | It does not receive QueryView references or own module initialization; `VChannelWALView` is passed later to `QueryRuntime.Initialize`. |
 | `GrowingRuntime` | QueryRuntime module that owns growing segment resources for the vchannel. | It does not implement `VChannelLiveObserver`, maintain pending buffers, or decide QueryView lifecycle. Details are defined in [StreamingNode Growing Segment Runtime Design](growing_segment_runtime.md). |
-| `IDFOracleRuntime` | QueryRuntime module that owns the vchannel singleton BM25 / IDF oracle. | It does not implement `VChannelLiveObserver`, expose external truncation, or own QueryView references. Details are defined in [StreamingNode IDF Oracle Runtime Design](idf_oracle_runtime.md). |
 | `Scheduler` | Runs `QueryRuntime` initialization tasks with bounded concurrency. | It does not know QueryView references, resource lifetime, or DataVersion watermarks. |
 | `QueryViewStateMachine` | PChannel-local WAL submodule that owns QueryView transitions, calls `Acquire` when a QueryView starts using local resources, calls `Release` when a QueryView leaves this PChannel runtime, and drains local QueryViews before WAL handoff close. | It does not manage csegments, BM25 resources, live observers, or resource GC directly. |
 | `QueryView Meta` | WAL-bound metadata persisted for crash recovery and owned by the PChannel-local QueryView state machine. | It is stored under the PChannel WAL identity, used by QueryView recovery and `Acquire`, and must not be scoped by StreamingNode node ID. |
@@ -136,7 +135,7 @@ QueryRuntime
         |
         | module.Advance(oldestDataVersion)
         v
-GrowingRuntime / IDFOracleRuntime
+QueryRuntimeModule*
 ```
 
 ### 3.2 Reference Model
@@ -189,15 +188,10 @@ The runtime owns all module state:
 
 ```text
 QueryRuntime
-  collectionID
-  vchannel
-  baseDataVersion
   state Preparing | Ready | Closed
   pendingEvents []VChannelResourceEvent
   drainWorker
   modules []QueryRuntimeModule
-  growingRuntime GrowingRuntime
-  idfOracleRuntime IDFOracleRuntime
 ```
 
 ### 3.4 DataVersion Advancement
@@ -214,16 +208,15 @@ QueryView reference exists.
 `QueryRuntime.Advance` broadcasts the same watermark to every module:
 
 ```text
-GrowingRuntime.Advance(oldestDataVersion)
-IDFOracleRuntime.Advance(oldestDataVersion)
+each QueryRuntimeModule.Advance(oldestDataVersion)
 ```
 
 Module-specific meaning:
 
 - `GrowingRuntime` uses the watermark to release growing segment state no longer
   needed by any active QueryView.
-- `IDFOracleRuntime` uses the watermark to asynchronously advance BM25 / IDF
-  oracle state. The oracle must not advance beyond the oldest active QueryView.
+- BM25 / IDF modules may use the watermark to asynchronously advance oracle
+  state. A module must not advance beyond the oldest active QueryView.
 
 ### 3.5 Invariants
 
@@ -385,9 +378,20 @@ type QueryRuntimeModule interface {
 }
 ```
 
-`GrowingRuntime` and `IDFOracleRuntime` both implement this interface. Concrete
-query-facing accessors are exposed by their own module-specific interfaces, not
-by `QueryRuntimeModule`.
+Concrete resource implementations such as growing segment runtime and BM25 / IDF
+runtime implement this interface. Query-facing accessors are exposed by their
+own module-specific interfaces, not by `QueryRuntimeModule`.
+
+```go
+type QueryRuntimeModuleBuilder interface {
+    NewRuntime() (QueryRuntimeModule, error)
+}
+```
+
+`SNQueryRuntimeManager` receives module builders when it is constructed and uses
+them to create one fresh module set for every loaded vchannel. The manager does
+not know module-specific concepts such as BM25, IDF, or query-facing oracle
+APIs.
 
 `ApplyLiveEvent` has no recoverable error return. Failure to apply valid live
 input means the WALView input or local runtime state is corrupted and the
@@ -439,8 +443,7 @@ before runtime readiness are pushed into the `QueryRuntime` live-event buffer.
 ```text
 Scheduler runs QueryRuntimeBuildTask
   -> QueryRuntime.Initialize(VChannelWALView)
-  -> GrowingRuntime.Prepare
-  -> IDFOracleRuntime.Prepare
+  -> each QueryRuntimeModule.Prepare
   -> QueryRuntime starts the singleton consumer
   -> QueryRuntime atomically takes the current buffer batch
   -> QueryRuntime drains the initial batch in WAL order

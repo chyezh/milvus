@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 
-	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource/growingruntime"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 )
@@ -36,14 +35,11 @@ const (
 	queryRuntimeClosed
 )
 
-func NewQueryRuntime(growing *growingruntime.Runtime, idf IDFOracleRuntime) *QueryRuntime {
+func NewQueryRuntime(modules ...QueryRuntimeModule) *QueryRuntime {
 	runtime := &QueryRuntime{
 		state:        queryRuntimePreparing,
 		pendingLimit: defaultLiveEventBufferSize,
-		modules: []QueryRuntimeModule{
-			growing,
-			idf,
-		},
+		modules:      append([]QueryRuntimeModule(nil), modules...),
 	}
 	runtime.cond = sync.NewCond(&runtime.mu)
 	return runtime

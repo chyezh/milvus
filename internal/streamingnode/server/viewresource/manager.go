@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/errors"
-	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
@@ -31,10 +30,9 @@ type resourceState struct {
 
 // queryRuntimeManager is the concrete PChannel-local query runtime manager.
 type queryRuntimeManager struct {
-	mu        sync.Mutex
-	growing   GrowingSegmentRuntimeBuilder
-	idf       IDFOracleRuntimeBuilder
-	scheduler Scheduler
+	mu             sync.Mutex
+	moduleBuilders []QueryRuntimeModuleBuilder
+	scheduler      Scheduler
 
 	resources map[string]*resourceState
 	refIndex  map[qviews.QueryViewKey]string
@@ -42,33 +40,21 @@ type queryRuntimeManager struct {
 	closed    bool
 }
 
-func NewManager(growing GrowingSegmentRuntimeBuilder, idf IDFOracleRuntimeBuilder) SNQueryRuntimeManager {
-	if growing == nil {
-		growing = SnapshotGrowingSegmentRuntimeBuilder{}
-	}
-	if idf == nil {
-		idf = NoopIDFOracleRuntimeBuilder{}
+func NewManager(moduleBuilders ...QueryRuntimeModuleBuilder) SNQueryRuntimeManager {
+	if len(moduleBuilders) == 0 {
+		moduleBuilders = []QueryRuntimeModuleBuilder{NewGrowingRuntimeModuleBuilder(nil)}
 	}
 	return &queryRuntimeManager{
-		growing:   growing,
-		idf:       idf,
-		scheduler: NewScheduler(4),
-		resources: make(map[string]*resourceState),
-		refIndex:  make(map[qviews.QueryViewKey]string),
-		refEpoch:  make(map[qviews.QueryViewKey]uint64),
+		moduleBuilders: append([]QueryRuntimeModuleBuilder(nil), moduleBuilders...),
+		scheduler:      NewScheduler(4),
+		resources:      make(map[string]*resourceState),
+		refIndex:       make(map[qviews.QueryViewKey]string),
+		refEpoch:       make(map[qviews.QueryViewKey]uint64),
 	}
 }
 
 func (m *queryRuntimeManager) OnAlterLoadConfig(view walview.VChannelWALView) walview.VChannelLiveObserver {
-	growing, err := m.growing.NewRuntime()
-	if err != nil {
-		panic(errors.Wrap(err, "create growing runtime"))
-	}
-	idf, err := m.idf.NewRuntime()
-	if err != nil {
-		panic(errors.Wrap(err, "create IDF oracle runtime"))
-	}
-	runtime := NewQueryRuntime(growing, idf)
+	runtime := NewQueryRuntime(m.newModules()...)
 	task := newResourceBuildTask(context.Background(), func(ctx context.Context) (*QueryRuntime, error) {
 		if err := runtime.Initialize(ctx, view); err != nil {
 			return runtime, err
@@ -99,6 +85,23 @@ func (m *queryRuntimeManager) OnAlterLoadConfig(view walview.VChannelWALView) wa
 	m.scheduler.Submit(task)
 	go m.finishBuild(view.VChannel, task)
 	return runtime
+}
+
+func (m *queryRuntimeManager) newModules() []QueryRuntimeModule {
+	modules := make([]QueryRuntimeModule, 0, len(m.moduleBuilders))
+	for _, builder := range m.moduleBuilders {
+		if builder == nil {
+			continue
+		}
+		module, err := builder.NewRuntime()
+		if err != nil {
+			panic(errors.Wrap(err, "create query runtime module"))
+		}
+		if module != nil {
+			modules = append(modules, module)
+		}
+	}
+	return modules
 }
 
 func (m *queryRuntimeManager) OnDropLoadConfig(event walview.DropLoadConfigEvent) {
@@ -379,19 +382,31 @@ func closeRuntime(runtime *QueryRuntime) {
 	}
 }
 
-type NoopIDFOracleRuntimeBuilder struct{}
-
-func (NoopIDFOracleRuntimeBuilder) NewRuntime() (IDFOracleRuntime, error) {
-	return noopIDFOracleRuntime{}, nil
+type growingRuntimeModuleBuilder struct {
+	builder GrowingSegmentRuntimeBuilder
 }
 
-type noopIDFOracleRuntime struct{}
+func NewGrowingRuntimeModuleBuilder(builder GrowingSegmentRuntimeBuilder) QueryRuntimeModuleBuilder {
+	if builder == nil {
+		builder = SnapshotGrowingSegmentRuntimeBuilder{}
+	}
+	return growingRuntimeModuleBuilder{builder: builder}
+}
 
-func (noopIDFOracleRuntime) Prepare(context.Context, walview.VChannelWALView) error { return nil }
-func (noopIDFOracleRuntime) ApplyLiveEvent(context.Context, walview.VChannelResourceEvent) {
+func (b growingRuntimeModuleBuilder) NewRuntime() (QueryRuntimeModule, error) {
+	return b.builder.NewRuntime()
 }
-func (noopIDFOracleRuntime) Advance(qviews.DataVersion) {}
-func (noopIDFOracleRuntime) Close()                     {}
-func (noopIDFOracleRuntime) BuildIDF(int64, *schemapb.SparseFloatArray) ([][]byte, float64, error) {
-	return nil, 0, errors.New("IDF oracle is not initialized")
+
+type NoopQueryRuntimeModuleBuilder struct{}
+
+func (NoopQueryRuntimeModuleBuilder) NewRuntime() (QueryRuntimeModule, error) {
+	return noopQueryRuntimeModule{}, nil
 }
+
+type noopQueryRuntimeModule struct{}
+
+func (noopQueryRuntimeModule) Prepare(context.Context, walview.VChannelWALView) error { return nil }
+func (noopQueryRuntimeModule) ApplyLiveEvent(context.Context, walview.VChannelResourceEvent) {
+}
+func (noopQueryRuntimeModule) Advance(qviews.DataVersion) {}
+func (noopQueryRuntimeModule) Close()                     {}

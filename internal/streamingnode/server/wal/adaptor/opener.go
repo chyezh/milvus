@@ -219,10 +219,13 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 	}
 	resourceBaseByVChannel := snview.OldestUpDataVersions(persistedViews)
 	recoveredLoadConfigs := snview.RecoveredLoadConfigs(persistedViews)
-	resMgr := viewresource.NewManager(nil, idf.NewFutureProvider(
-		resource.Resource().MixCoordClient(),
-		idf.WithChunkManager(resource.Resource().ChunkManager()),
-	))
+	resMgr := viewresource.NewManager(
+		viewresource.NewGrowingRuntimeModuleBuilder(nil),
+		idf.NewFutureProvider(
+			resource.Resource().MixCoordClient(),
+			idf.WithChunkManager(resource.Resource().ChunkManager()),
+		),
+	)
 	rs, snapshot, err := recovery.RecoverRecoveryStorage(
 		ctx,
 		newRecoveryStreamBuilder(roWAL),

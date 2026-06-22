@@ -20,7 +20,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 )
 
-var _ viewresource.IDFOracleRuntimeBuilder = (*Provider)(nil)
+var _ viewresource.QueryRuntimeModuleBuilder = (*Provider)(nil)
+var _ viewresource.QueryRuntimeModuleBuilder = (*FutureProvider)(nil)
 
 // Provider loads sealed BM25 resources for a DataVersion and aggregates the
 // WALView growing BM25 stats into a runtime oracle.
@@ -64,11 +65,11 @@ func NewFutureProvider(client *syncutil.Future[types.MixCoordClient], opts ...Pr
 	}
 }
 
-func (p *FutureProvider) NewRuntime() (viewresource.IDFOracleRuntime, error) {
+func (p *FutureProvider) NewRuntime() (viewresource.QueryRuntimeModule, error) {
 	return &Runtime{future: p}, nil
 }
 
-func (p *Provider) NewRuntime() (viewresource.IDFOracleRuntime, error) {
+func (p *Provider) NewRuntime() (viewresource.QueryRuntimeModule, error) {
 	return &Runtime{provider: p}, nil
 }
 
@@ -92,7 +93,7 @@ func (r *Runtime) Prepare(ctx context.Context, walView walview.VChannelWALView) 
 	}
 	r.mu.Unlock()
 
-	settings := viewresource.QueryViewSettingsFromWALView(walView)
+	settings := queryViewSettingsFromWALView(walView)
 	if !hasLoadedBM25Function(walView.Schema, settings.GetRequiredFields()) {
 		r.mu.RLock()
 		closed := r.closed
@@ -154,6 +155,21 @@ func (p *Provider) buildOracle(ctx context.Context, walView walview.VChannelWALV
 		return nil, err
 	}
 	return newOracleRuntime(ctx, p, walView, settings, resources)
+}
+
+func queryViewSettingsFromWALView(view walview.VChannelWALView) *viewpb.QueryViewSettings {
+	header := view.LoadConfig.GetHeader()
+	if header == nil {
+		return &viewpb.QueryViewSettings{}
+	}
+	fields := make([]int64, 0, len(header.GetLoadFields()))
+	for _, field := range header.GetLoadFields() {
+		fields = append(fields, field.GetFieldId())
+	}
+	return &viewpb.QueryViewSettings{
+		RequiredPartitions: append([]int64{}, header.GetPartitionIds()...),
+		RequiredFields:     fields,
+	}
 }
 
 func (r *Runtime) BuildIDF(fieldID int64, tfs *schemapb.SparseFloatArray) ([][]byte, float64, error) {

@@ -15,7 +15,7 @@ It is created as part of a vchannel `QueryRuntime`:
 SNQueryRuntimeManager
   -> QueryRuntime(Preparing)
        -> GrowingRuntime
-       -> IDFOracleRuntime
+       -> other QueryRuntimeModule implementations
 ```
 
 The purpose of `GrowingRuntime` is to:
