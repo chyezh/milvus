@@ -64,7 +64,8 @@ func messageAdvancesTransformFrontier(msg message.ImmutableMessage) bool {
 func advanceTimeTick(value interface {
 	Load() uint64
 	CompareAndSwap(old uint64, new uint64) bool
-}, next uint64) {
+}, next uint64,
+) {
 	for {
 		current := value.Load()
 		if next <= current {

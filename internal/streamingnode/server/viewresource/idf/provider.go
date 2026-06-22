@@ -20,8 +20,10 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 )
 
-var _ viewresource.QueryRuntimeModuleBuilder = (*Provider)(nil)
-var _ viewresource.QueryRuntimeModuleBuilder = (*FutureProvider)(nil)
+var (
+	_ viewresource.QueryRuntimeModuleBuilder = (*Provider)(nil)
+	_ viewresource.QueryRuntimeModuleBuilder = (*FutureProvider)(nil)
+)
 
 // Provider loads sealed BM25 resources for a DataVersion and aggregates the
 // WALView growing BM25 stats into a runtime oracle.
