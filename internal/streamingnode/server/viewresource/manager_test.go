@@ -69,7 +69,6 @@ func TestManagerReleaseClosesUnreferencedRuntime(t *testing.T) {
 
 func TestQueryRuntimeAdvanceRejectsNonMonotonicWatermark(t *testing.T) {
 	runtime := NewQueryRuntime(
-		LoadResourceDescriptor{WALView: testWALView(1, "ch", qviews.DataVersion{StreamingVersion: 10})},
 		nil,
 		noopIDFOracleRuntime{},
 	)
@@ -81,7 +80,6 @@ func TestQueryRuntimeAdvanceRejectsNonMonotonicWatermark(t *testing.T) {
 
 func TestQueryRuntimeCloseRejectsLiveEvents(t *testing.T) {
 	runtime := NewQueryRuntime(
-		LoadResourceDescriptor{WALView: testWALView(1, "ch", qviews.DataVersion{StreamingVersion: 10})},
 		nil,
 		noopIDFOracleRuntime{},
 	)
@@ -92,7 +90,6 @@ func TestQueryRuntimeCloseRejectsLiveEvents(t *testing.T) {
 func TestQueryRuntimeAdvanceBeforeReadyBroadcastsAfterInitialize(t *testing.T) {
 	module := &recordingModule{}
 	runtime := NewQueryRuntime(
-		LoadResourceDescriptor{WALView: testWALView(1, "ch", qviews.DataVersion{StreamingVersion: 10})},
 		nil,
 		noopIDFOracleRuntime{},
 	)
@@ -100,14 +97,13 @@ func TestQueryRuntimeAdvanceBeforeReadyBroadcastsAfterInitialize(t *testing.T) {
 
 	advance := qviews.DataVersion{StreamingVersion: 12}
 	runtime.Advance(advance)
-	require.NoError(t, runtime.Initialize(context.Background()))
+	require.NoError(t, runtime.Initialize(context.Background(), testWALView(1, "ch", qviews.DataVersion{StreamingVersion: 10})))
 	require.Equal(t, []qviews.DataVersion{advance}, module.advancedVersions())
 	runtime.Close()
 }
 
 func TestQueryRuntimeCloseUnblocksFullLiveEventBuffer(t *testing.T) {
 	runtime := NewQueryRuntime(
-		LoadResourceDescriptor{WALView: testWALView(1, "ch", qviews.DataVersion{StreamingVersion: 10})},
 		nil,
 		noopIDFOracleRuntime{},
 	)
@@ -140,7 +136,6 @@ func TestQueryRuntimeCloseUnblocksFullLiveEventBuffer(t *testing.T) {
 func TestQueryRuntimeInitialBatchAndReadyEventsUseSameConsumer(t *testing.T) {
 	module := &recordingModule{}
 	runtime := NewQueryRuntime(
-		LoadResourceDescriptor{WALView: testWALView(1, "ch", qviews.DataVersion{StreamingVersion: 10})},
 		nil,
 		noopIDFOracleRuntime{},
 	)
@@ -149,7 +144,7 @@ func TestQueryRuntimeInitialBatchAndReadyEventsUseSameConsumer(t *testing.T) {
 	require.True(t, runtime.ObserveEvent(context.Background(), walview.VChannelResourceEvent{
 		SegmentSealed: &walview.SegmentSealedEvent{SegmentID: 1},
 	}))
-	require.NoError(t, runtime.Initialize(context.Background()))
+	require.NoError(t, runtime.Initialize(context.Background(), testWALView(1, "ch", qviews.DataVersion{StreamingVersion: 10})))
 	require.Equal(t, []int64{1}, module.segmentIDs())
 
 	require.True(t, runtime.ObserveEvent(context.Background(), walview.VChannelResourceEvent{
@@ -223,7 +218,7 @@ type recordingModule struct {
 	advances []qviews.DataVersion
 }
 
-func (m *recordingModule) Prepare(context.Context) error { return nil }
+func (m *recordingModule) Prepare(context.Context, walview.VChannelWALView) error { return nil }
 func (m *recordingModule) ApplyLiveEvent(_ context.Context, event walview.VChannelResourceEvent) {
 	if event.SegmentSealed == nil {
 		return

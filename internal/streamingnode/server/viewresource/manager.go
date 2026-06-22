@@ -60,18 +60,17 @@ func NewManager(growing GrowingSegmentRuntimeBuilder, idf IDFOracleRuntimeBuilde
 }
 
 func (m *queryRuntimeManager) OnAlterLoadConfig(view walview.VChannelWALView) walview.VChannelLiveObserver {
-	desc := LoadResourceDescriptor{WALView: view}
-	growing, err := m.growing.NewRuntime(desc)
+	growing, err := m.growing.NewRuntime()
 	if err != nil {
 		panic(errors.Wrap(err, "create growing runtime"))
 	}
-	idf, err := m.idf.NewRuntime(desc)
+	idf, err := m.idf.NewRuntime()
 	if err != nil {
 		panic(errors.Wrap(err, "create IDF oracle runtime"))
 	}
-	runtime := NewQueryRuntime(desc, growing, idf)
+	runtime := NewQueryRuntime(growing, idf)
 	task := newResourceBuildTask(context.Background(), func(ctx context.Context) (*QueryRuntime, error) {
-		if err := runtime.Initialize(ctx); err != nil {
+		if err := runtime.Initialize(ctx, view); err != nil {
 			return runtime, err
 		}
 		return runtime, nil
@@ -84,12 +83,12 @@ func (m *queryRuntimeManager) OnAlterLoadConfig(view walview.VChannelWALView) wa
 		runtime.Close()
 		return nil
 	}
-	if _, ok := m.resources[desc.VChannel()]; ok {
+	if _, ok := m.resources[view.VChannel]; ok {
 		m.mu.Unlock()
 		runtime.Close()
 		return nil
 	}
-	m.resources[desc.VChannel()] = &resourceState{
+	m.resources[view.VChannel] = &resourceState{
 		initRef:       true,
 		queryViewRefs: make(map[qviews.QueryViewKey]struct{}),
 		runtime:       runtime,
@@ -98,7 +97,7 @@ func (m *queryRuntimeManager) OnAlterLoadConfig(view walview.VChannelWALView) wa
 	m.mu.Unlock()
 
 	m.scheduler.Submit(task)
-	go m.finishBuild(desc.VChannel(), task)
+	go m.finishBuild(view.VChannel, task)
 	return runtime
 }
 
@@ -382,13 +381,13 @@ func closeRuntime(runtime *QueryRuntime) {
 
 type NoopIDFOracleRuntimeBuilder struct{}
 
-func (NoopIDFOracleRuntimeBuilder) NewRuntime(LoadResourceDescriptor) (IDFOracleRuntime, error) {
+func (NoopIDFOracleRuntimeBuilder) NewRuntime() (IDFOracleRuntime, error) {
 	return noopIDFOracleRuntime{}, nil
 }
 
 type noopIDFOracleRuntime struct{}
 
-func (noopIDFOracleRuntime) Prepare(context.Context) error { return nil }
+func (noopIDFOracleRuntime) Prepare(context.Context, walview.VChannelWALView) error { return nil }
 func (noopIDFOracleRuntime) ApplyLiveEvent(context.Context, walview.VChannelResourceEvent) {
 }
 func (noopIDFOracleRuntime) Advance(qviews.DataVersion) {}

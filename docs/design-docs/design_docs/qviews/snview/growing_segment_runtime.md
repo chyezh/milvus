@@ -152,7 +152,7 @@ storage or segcore implementation from the runtime.
 
 ```go
 type QueryRuntimeModule interface {
-    Prepare(ctx context.Context) error
+    Prepare(ctx context.Context, view walview.VChannelWALView) error
     ApplyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent)
     Advance(oldestDataVersion qviews.DataVersion)
     Close()
@@ -172,7 +172,8 @@ type GrowingRuntime interface {
 }
 ```
 
-`Prepare` loads the historical resources from the captured `VChannelWALView`.
+`Prepare` loads the historical resources from the provided `VChannelWALView`.
+`GrowingRuntime` does not retain the WALView after preparation.
 
 `ApplyLiveEvent` is called only by `QueryRuntime`, in WAL order. It dispatches
 vchannel events to the affected `GrowingSegment` instances.

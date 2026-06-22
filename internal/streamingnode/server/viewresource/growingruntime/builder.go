@@ -6,14 +6,15 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 )
 
 type NoopBuilder struct{}
 
-func (NoopBuilder) NewRuntime(desc Descriptor) (*Runtime, error) {
-	runtime := newRuntime(desc)
+func (NoopBuilder) NewRuntime() (*Runtime, error) {
+	runtime := newRuntime()
 	runtime.prepareFunc = func(context.Context) error {
 		return nil
 	}
@@ -22,22 +23,21 @@ func (NoopBuilder) NewRuntime(desc Descriptor) (*Runtime, error) {
 
 type SnapshotBuilder struct{}
 
-func (p SnapshotBuilder) NewRuntime(desc Descriptor) (*Runtime, error) {
-	if err := validateWALViewSnapshot(desc); err != nil {
-		return nil, err
-	}
-	return newRuntime(desc), nil
+func (p SnapshotBuilder) NewRuntime() (*Runtime, error) {
+	return newRuntime(), nil
 }
 
-func (r *Runtime) Prepare(ctx context.Context) error {
+func (r *Runtime) Prepare(ctx context.Context, view walview.VChannelWALView) error {
 	if r == nil {
 		return nil
 	}
 	if r.prepareFunc != nil {
 		return r.prepareFunc(ctx)
 	}
-	desc := r.desc
-	collection, err := newCollection(desc)
+	if err := validateWALViewSnapshot(view); err != nil {
+		return err
+	}
+	collection, err := newCollection(view)
 	if err != nil {
 		return err
 	}
@@ -58,7 +58,7 @@ func (r *Runtime) Prepare(ctx context.Context) error {
 			r.Close()
 		}
 	}()
-	for _, visible := range desc.WALView.SegmentSnapshot.Segments {
+	for _, visible := range view.SegmentSnapshot.Segments {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -73,7 +73,7 @@ func (r *Runtime) Prepare(ctx context.Context) error {
 			return context.Canceled
 		}
 	}
-	deleteEntries, err := drainDeleteReplay(ctx, desc.WALView.DeleteReplay)
+	deleteEntries, err := drainDeleteReplay(ctx, view.DeleteReplay)
 	if err != nil {
 		return err
 	}
@@ -82,36 +82,36 @@ func (r *Runtime) Prepare(ctx context.Context) error {
 			return err
 		}
 	}
-	r.appliedGrowingTimeTick.Store(desc.WALView.BaseGrowingTimeTick)
-	r.appliedTransformTimeTick.Store(desc.WALView.BaseTransformTimeTick)
+	r.appliedGrowingTimeTick.Store(view.BaseGrowingTimeTick)
+	r.appliedTransformTimeTick.Store(view.BaseTransformTimeTick)
 	prepared = true
 	return nil
 }
 
-func newCollection(desc Descriptor) (*segcore.CCollection, error) {
-	if desc.Schema() == nil {
+func newCollection(view walview.VChannelWALView) (*segcore.CCollection, error) {
+	if view.Schema == nil {
 		return nil, nil
 	}
 	return segcore.CreateCCollection(&segcore.CreateCCollectionRequest{
-		CollectionID:  desc.CollectionID(),
-		Schema:        desc.Schema(),
-		LoadFieldList: desc.Settings().GetRequiredFields(),
+		CollectionID:  view.CollectionID,
+		Schema:        view.Schema,
+		LoadFieldList: settingsFromWALView(view).GetRequiredFields(),
 	})
 }
 
-func validateWALViewSnapshot(desc Descriptor) error {
-	snapshot := desc.WALView.SegmentSnapshot
-	if snapshot.CollectionID != 0 && snapshot.CollectionID != desc.CollectionID() {
+func validateWALViewSnapshot(view walview.VChannelWALView) error {
+	snapshot := view.SegmentSnapshot
+	if snapshot.CollectionID != 0 && snapshot.CollectionID != view.CollectionID {
 		return errors.Errorf(
 			"wal view snapshot mismatch: view collection %d, snapshot collection %d",
-			desc.CollectionID(),
+			view.CollectionID,
 			snapshot.CollectionID,
 		)
 	}
-	if snapshot.VChannel != "" && snapshot.VChannel != desc.VChannel() {
+	if snapshot.VChannel != "" && snapshot.VChannel != view.VChannel {
 		return errors.Errorf(
 			"wal view snapshot mismatch: view vchannel %s, snapshot vchannel %s",
-			desc.VChannel(),
+			view.VChannel,
 			snapshot.VChannel,
 		)
 	}

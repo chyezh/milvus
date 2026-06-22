@@ -5,7 +5,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/internal/views/qviews"
@@ -13,30 +12,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
-// Descriptor describes the latest vchannel runtime that must be prepared after
-// WAL observes AlterLoadConfig.
-type Descriptor struct {
-	WALView walview.VChannelWALView
-}
-
-func (d Descriptor) CollectionID() int64 {
-	return d.WALView.CollectionID
-}
-
-func (d Descriptor) VChannel() string {
-	return d.WALView.VChannel
-}
-
-func (d Descriptor) DataVersion() qviews.DataVersion {
-	return d.WALView.SegmentSnapshot.DataVersion
-}
-
-func (d Descriptor) Settings() *viewpb.QueryViewSettings {
-	return settingsFromAlterLoadConfig(d.WALView.LoadConfig.GetHeader())
-}
-
-func (d Descriptor) Schema() *schemapb.CollectionSchema {
-	return d.WALView.Schema
+func settingsFromWALView(view walview.VChannelWALView) *viewpb.QueryViewSettings {
+	return settingsFromAlterLoadConfig(view.LoadConfig.GetHeader())
 }
 
 func settingsFromAlterLoadConfig(header *messagespb.AlterLoadConfigMessageHeader) *viewpb.QueryViewSettings {
@@ -56,14 +33,13 @@ func settingsFromAlterLoadConfig(header *messagespb.AlterLoadConfigMessageHeader
 // Builder converts WAL-side growing state into queryable csegment-backed
 // resources for the requested latest DataVersion.
 type Builder interface {
-	NewRuntime(desc Descriptor) (*Runtime, error)
+	NewRuntime() (*Runtime, error)
 }
 
 // Runtime is the csegment-backed growing side prepared for one DataVersion.
 type Runtime struct {
 	mu                       sync.RWMutex
 	closed                   bool
-	desc                     Descriptor
 	collection               *segcore.CCollection
 	segments                 map[int64]*growingSegment
 	segmentIDs               []int64
@@ -75,9 +51,8 @@ type Runtime struct {
 	appliedTransformTimeTick atomic.Uint64
 }
 
-func newRuntime(desc Descriptor) *Runtime {
+func newRuntime() *Runtime {
 	return &Runtime{
-		desc:     desc,
 		segments: make(map[int64]*growingSegment),
 	}
 }

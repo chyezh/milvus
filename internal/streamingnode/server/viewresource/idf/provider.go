@@ -16,6 +16,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 )
 
@@ -63,24 +64,23 @@ func NewFutureProvider(client *syncutil.Future[types.MixCoordClient], opts ...Pr
 	}
 }
 
-func (p *FutureProvider) NewRuntime(desc viewresource.LoadResourceDescriptor) (viewresource.IDFOracleRuntime, error) {
-	return &Runtime{future: p, desc: desc}, nil
+func (p *FutureProvider) NewRuntime() (viewresource.IDFOracleRuntime, error) {
+	return &Runtime{future: p}, nil
 }
 
-func (p *Provider) NewRuntime(desc viewresource.LoadResourceDescriptor) (viewresource.IDFOracleRuntime, error) {
-	return &Runtime{provider: p, desc: desc}, nil
+func (p *Provider) NewRuntime() (viewresource.IDFOracleRuntime, error) {
+	return &Runtime{provider: p}, nil
 }
 
 type Runtime struct {
 	mu       sync.RWMutex
 	provider *Provider
 	future   *FutureProvider
-	desc     viewresource.LoadResourceDescriptor
 	oracle   *oracleRuntime
 	closed   bool
 }
 
-func (r *Runtime) Prepare(ctx context.Context) error {
+func (r *Runtime) Prepare(ctx context.Context, walView walview.VChannelWALView) error {
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
@@ -92,7 +92,8 @@ func (r *Runtime) Prepare(ctx context.Context) error {
 	}
 	r.mu.Unlock()
 
-	if !hasLoadedBM25Function(r.desc.Schema(), r.desc.Settings().GetRequiredFields()) {
+	settings := viewresource.QueryViewSettingsFromWALView(walView)
+	if !hasLoadedBM25Function(walView.Schema, settings.GetRequiredFields()) {
 		r.mu.RLock()
 		closed := r.closed
 		r.mu.RUnlock()
@@ -105,7 +106,7 @@ func (r *Runtime) Prepare(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	oracle, err := provider.buildOracle(ctx, r.desc)
+	oracle, err := provider.buildOracle(ctx, walView, settings)
 	if err != nil {
 		return err
 	}
@@ -143,17 +144,16 @@ func (r *Runtime) resolveProvider(ctx context.Context) (*Provider, error) {
 	}, nil
 }
 
-func (p *Provider) buildOracle(ctx context.Context, desc viewresource.LoadResourceDescriptor) (*oracleRuntime, error) {
-	settings := desc.Settings()
+func (p *Provider) buildOracle(ctx context.Context, walView walview.VChannelWALView, settings *viewpb.QueryViewSettings) (*oracleRuntime, error) {
 	if p.client == nil {
 		return nil, errors.New("querycoord client is nil")
 	}
 
-	resources, err := p.getSealedBM25Resources(ctx, desc.CollectionID(), desc.VChannel(), desc.DataVersion(), settings)
+	resources, err := p.getSealedBM25Resources(ctx, walView.CollectionID, walView.VChannel, walView.SegmentSnapshot.DataVersion, settings)
 	if err != nil {
 		return nil, err
 	}
-	return newOracleRuntime(ctx, p, desc, resources)
+	return newOracleRuntime(ctx, p, walView, settings, resources)
 }
 
 func (r *Runtime) BuildIDF(fieldID int64, tfs *schemapb.SparseFloatArray) ([][]byte, float64, error) {

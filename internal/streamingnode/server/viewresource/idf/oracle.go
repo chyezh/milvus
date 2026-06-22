@@ -8,7 +8,6 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
@@ -274,25 +273,26 @@ type oracleRuntime struct {
 func newOracleRuntime(
 	ctx context.Context,
 	provider *Provider,
-	desc viewresource.LoadResourceDescriptor,
+	walView walview.VChannelWALView,
+	settings *viewpb.QueryViewSettings,
 	initialResources []*querypb.StreamingNodeBM25Resource,
 ) (*oracleRuntime, error) {
 	runtimeCtx, cancel := context.WithCancel(context.Background())
 	r := &oracleRuntime{
 		provider:       provider,
-		collectionID:   desc.CollectionID(),
-		vchannel:       desc.VChannel(),
-		settings:       desc.Settings(),
-		schema:         desc.Schema(),
+		collectionID:   walView.CollectionID,
+		vchannel:       walView.VChannel,
+		settings:       settings,
+		schema:         walView.Schema,
 		ctx:            runtimeCtx,
 		cancel:         cancel,
 		notify:         make(chan struct{}, 1),
 		closeCh:        make(chan struct{}),
-		currentVersion: desc.DataVersion(),
-		currentStats:   newBM25StatsFromSchema(desc.Schema()),
+		currentVersion: walView.SegmentSnapshot.DataVersion,
+		currentStats:   newBM25StatsFromSchema(walView.Schema),
 		currentSealed:  make(map[int64]sealedContribution),
 		currentGrowing: make(map[int64]growingContribution),
-		growingStore:   newGrowingStatsStore(desc.Schema()),
+		growingStore:   newGrowingStatsStore(walView.Schema),
 	}
 	sealed, err := provider.acquireSealedContributions(ctx, initialResources)
 	if err != nil {
@@ -303,13 +303,13 @@ func newOracleRuntime(
 		r.currentSealed[contribution.segmentID] = contribution
 		r.currentStats.merge(contribution.stats)
 	}
-	if err := r.loadInitialGrowing(ctx, desc); err != nil {
+	if err := r.loadInitialGrowing(ctx, walView); err != nil {
 		r.releaseSealed(sealed)
 		cancel()
 		return nil, err
 	}
 	targetSealed := segmentSetFromSealed(r.currentSealed)
-	r.currentGrowing = r.growingStore.snapshotForDataVersion(desc.DataVersion(), targetSealed)
+	r.currentGrowing = r.growingStore.snapshotForDataVersion(walView.SegmentSnapshot.DataVersion, targetSealed)
 	for _, contribution := range r.currentGrowing {
 		r.currentStats.merge(contribution.stats)
 	}
@@ -318,8 +318,8 @@ func newOracleRuntime(
 	return r, nil
 }
 
-func (r *oracleRuntime) loadInitialGrowing(ctx context.Context, desc viewresource.LoadResourceDescriptor) error {
-	for _, segment := range desc.WALView.SegmentSnapshot.Segments {
+func (r *oracleRuntime) loadInitialGrowing(ctx context.Context, walView walview.VChannelWALView) error {
+	for _, segment := range walView.SegmentSnapshot.Segments {
 		r.growingStore.registerSegment(segment.SegmentID, segment.PartitionID)
 		if err := r.collectPersistedGrowingStats(ctx, segment); err != nil {
 			return err
@@ -377,10 +377,6 @@ func (r *oracleRuntime) BuildIDF(fieldID int64, tfs *schemapb.SparseFloatArray) 
 		idfs = append(idfs, stats.BuildIDF(tf))
 	}
 	return idfs, stats.GetAvgdl(), nil
-}
-
-func (r *oracleRuntime) Prepare(context.Context) error {
-	return nil
 }
 
 func (r *oracleRuntime) ApplyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent) {

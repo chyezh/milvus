@@ -104,15 +104,13 @@ func TestRuntimeRejectsLiveInsertAfterFlush(t *testing.T) {
 	initSegcoreForRuntimeTest(t)
 
 	schema := mock_segcore.GenTestCollectionSchema("snview-resource-flush", schemapb.DataType_Int64, false)
-	collection, err := newCollection(Descriptor{
-		WALView: walview.VChannelWALView{
-			CollectionID: 1,
-			VChannel:     "ch",
-			Schema:       schema,
-		},
+	collection, err := newCollection(walview.VChannelWALView{
+		CollectionID: 1,
+		VChannel:     "ch",
+		Schema:       schema,
 	})
 	require.NoError(t, err)
-	runtime := newRuntime(Descriptor{})
+	runtime := newRuntime()
 	runtime.collection = collection
 	defer runtime.Close()
 
@@ -127,7 +125,7 @@ func TestRuntimeRejectsLiveInsertAfterFlush(t *testing.T) {
 }
 
 func TestRuntimeTruncateWatermarkAppliesToLateSegmentSealed(t *testing.T) {
-	runtime := newRuntime(Descriptor{})
+	runtime := newRuntime()
 	runtime.addSegment(newGrowingSegment(nil, 10, 0))
 
 	runtime.Truncate(qviews.DataVersion{StreamingVersion: 20, CompactVersion: 1})

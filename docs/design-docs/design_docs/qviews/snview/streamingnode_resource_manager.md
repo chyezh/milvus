@@ -182,8 +182,8 @@ There is no `DataVersion -> runtime` map. A loaded vchannel owns exactly one
 `QueryRuntime`.
 
 The resource key is only `vchannel`. `collectionID` is a consistency property
-inside `VChannelWALView`, `QueryRuntime`, and resource modules. It is not part
-of the manager's resource identity.
+inside `VChannelWALView` and resource modules. It is not part of the manager's
+resource identity.
 
 The runtime owns all module state:
 
@@ -326,7 +326,7 @@ operation and is not part of the QueryView state-machine report path.
 type QueryRuntime interface {
     walview.VChannelLiveObserver
 
-    Initialize(ctx context.Context) error
+    Initialize(ctx context.Context, view walview.VChannelWALView) error
 
     Advance(oldestDataVersion qviews.DataVersion)
 
@@ -334,12 +334,13 @@ type QueryRuntime interface {
 }
 ```
 
-`Initialize` prepares all modules, catches up historical inputs, drains the
-pending live-event buffer, and moves the runtime to `Ready`.
+`Initialize` prepares all modules from the provided `VChannelWALView`, catches
+up historical inputs, drains the pending live-event buffer, and moves the
+runtime to `Ready`.
 
 `Initialize` returns successfully only after:
 
-1. every module has finished `Prepare`;
+1. every module has finished `Prepare(ctx, view)`;
 2. the runtime atomically takes the current live-event buffer batch and clears
    the shared buffer;
 3. the singleton consumer has applied that initial batch to every module in WAL
@@ -354,6 +355,10 @@ buffer. They are handled by the same singleton consumer after the runtime enters
 observes invalid data or a module cannot apply valid input, the StreamingNode
 must fail critically. Returning an error is reserved for lifecycle cancellation,
 normally `ctx.Done` during WAL close or manager close.
+
+`QueryRuntime` does not retain the `VChannelWALView` after `Initialize`
+returns. The WALView is a preparation input package, not a runtime resource
+handle.
 
 `Advance` is called only when at least one QueryView reference exists.
 `oldestDataVersion` passed to `Advance` must be monotonic non-decreasing for one
@@ -373,7 +378,7 @@ result.
 
 ```go
 type QueryRuntimeModule interface {
-    Prepare(ctx context.Context) error
+    Prepare(ctx context.Context, view walview.VChannelWALView) error
     ApplyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent)
     Advance(oldestDataVersion qviews.DataVersion)
     Close()
@@ -433,7 +438,7 @@ before runtime readiness are pushed into the `QueryRuntime` live-event buffer.
 
 ```text
 Scheduler runs QueryRuntimeBuildTask
-  -> QueryRuntime.Initialize
+  -> QueryRuntime.Initialize(VChannelWALView)
   -> GrowingRuntime.Prepare
   -> IDFOracleRuntime.Prepare
   -> QueryRuntime starts the singleton consumer

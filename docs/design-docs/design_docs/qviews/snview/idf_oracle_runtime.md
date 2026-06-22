@@ -173,7 +173,7 @@ BM25 stats can be removed.
 
 ```go
 type QueryRuntimeModule interface {
-    Prepare(ctx context.Context) error
+    Prepare(ctx context.Context, view walview.VChannelWALView) error
     ApplyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent)
     Advance(oldestDataVersion qviews.DataVersion)
     Close()
@@ -193,9 +193,10 @@ type IDFOracleRuntime interface {
 }
 ```
 
-`Prepare` builds the initial oracle for the WALView base DataVersion. It fetches
-sealed resources and initializes growing BM25 stats from the WALView segment
-snapshot.
+`Prepare` builds the initial oracle for the provided WALView base DataVersion.
+It fetches sealed resources and initializes growing BM25 stats from the WALView
+segment snapshot. `IDFOracleRuntime` keeps the derived oracle state, not the
+WALView object passed into `Prepare`.
 
 `ApplyLiveEvent` updates growing BM25 stats and sealed-at metadata from live
 events forwarded by `QueryRuntime`.
