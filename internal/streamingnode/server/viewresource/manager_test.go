@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource/growingruntime"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
@@ -17,7 +18,7 @@ import (
 
 func TestManagerAcquireWaitsForQueryRuntimeInitialization(t *testing.T) {
 	manager := NewManager(
-		NewGrowingRuntimeModuleBuilder(NoopGrowingSegmentRuntimeBuilder{}),
+		NewGrowingRuntimeModuleBuilder(growingruntime.NoopBuilder{}),
 		NoopQueryRuntimeModuleBuilder{},
 	).(*queryRuntimeManager)
 	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
@@ -50,7 +51,7 @@ func TestManagerAcquireWaitsForQueryRuntimeInitialization(t *testing.T) {
 
 func TestManagerReleaseClosesUnreferencedRuntime(t *testing.T) {
 	manager := NewManager(
-		NewGrowingRuntimeModuleBuilder(NoopGrowingSegmentRuntimeBuilder{}),
+		NewGrowingRuntimeModuleBuilder(growingruntime.NoopBuilder{}),
 		NoopQueryRuntimeModuleBuilder{},
 	).(*queryRuntimeManager)
 	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}

@@ -3,15 +3,9 @@ package viewresource
 import (
 	"context"
 
-	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource/growingruntime"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 )
-
-type GrowingRuntime = growingruntime.Runtime
-type GrowingSegmentRuntimeBuilder = growingruntime.Builder
-type NoopGrowingSegmentRuntimeBuilder = growingruntime.NoopBuilder
-type SnapshotGrowingSegmentRuntimeBuilder = growingruntime.SnapshotBuilder
 
 // QueryRuntimeModule is a concrete vchannel resource module managed by
 // QueryRuntime. Modules do not observe WAL directly.

@@ -6,6 +6,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 
+	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource/growingruntime"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
@@ -383,12 +384,12 @@ func closeRuntime(runtime *QueryRuntime) {
 }
 
 type growingRuntimeModuleBuilder struct {
-	builder GrowingSegmentRuntimeBuilder
+	builder growingruntime.Builder
 }
 
-func NewGrowingRuntimeModuleBuilder(builder GrowingSegmentRuntimeBuilder) QueryRuntimeModuleBuilder {
+func NewGrowingRuntimeModuleBuilder(builder growingruntime.Builder) QueryRuntimeModuleBuilder {
 	if builder == nil {
-		builder = SnapshotGrowingSegmentRuntimeBuilder{}
+		builder = growingruntime.SnapshotBuilder{}
 	}
 	return growingRuntimeModuleBuilder{builder: builder}
 }
