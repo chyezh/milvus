@@ -1,34 +1,21 @@
 package snview
 
-import "github.com/milvus-io/milvus/internal/views/qviews"
+import (
+	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+)
 
 // AcquireResource describes a resource acquisition request for a new Preparing view.
 type AcquireResource struct {
 	// Key identifies the query view.
 	Key qviews.QueryViewKey
 
+	// Meta carries the complete view metadata required by resource preparation.
+	Meta *viewpb.QueryViewMeta
+
 	// OnReady is called when resource preparation completes successfully.
 	// Must NOT be called synchronously during Acquire.
 	OnReady func()
-
-	// OnUnrecoverable is called when a fatal error prevents resource setup.
-	// Must NOT be called synchronously during Acquire.
-	OnUnrecoverable func()
-}
-
-// RecoverResource describes a resource recovery request for a persisted view
-// after SN crash recovery.
-type RecoverResource struct {
-	// Key identifies the query view.
-	Key qviews.QueryViewKey
-
-	// OnRecoveringDone is called when WAL catch-up completes successfully.
-	// Must NOT be called synchronously during Recover.
-	OnRecoveringDone func()
-
-	// OnUnrecoverable is called when a fatal error prevents recovery.
-	// Must NOT be called synchronously during Recover.
-	OnUnrecoverable func()
 }
 
 // ReleaseResource describes a resource release request when a query view
@@ -37,8 +24,9 @@ type ReleaseResource struct {
 	// Key identifies the query view whose resources are being released.
 	Key qviews.QueryViewKey
 
-	// OnDropped is called when the release operation completes (growing segments
-	// unsubscribed, BM25 IDF stats released, etc.).
+	// OnDropped is called when the view-level release operation completes.
+	// Physical SN resources are reclaimed by DataVersion watermark updates,
+	// not by per-view reference counting.
 	// Must NOT be called synchronously during Release.
 	OnDropped func()
 }
@@ -47,33 +35,33 @@ type ReleaseResource struct {
 // Resources include growing segments, BM25 IDF statistics, and other
 // shard-level query state required to serve a query view.
 //
+// The resource lifecycle is reference based. AlterLoadConfig creates an
+// initialization reference. Acquire registers a QueryView reference and the
+// first successful QueryView reference removes the initialization reference.
+// Release removes the QueryView reference. Physical resources are closed only
+// after both the initialization reference and all QueryView references are gone.
+//
 // # Liveness Contracts
 //
 // Implementations MUST guarantee the following callback obligations.
 // Violating these contracts causes the corresponding query views to
 // stall without ever producing a response to the Coordinator.
 //
-//   - Acquire: for every Acquire call, the implementation MUST eventually
-//     invoke exactly one of OnReady or OnUnrecoverable.
+//   - Acquire: for every Acquire call in normal running mode, the implementation
+//     MUST eventually invoke OnReady.
 //     Failure to do so leaves the view stuck in Preparing with no report.
-//
-//   - Recover: for every Recover call, the implementation MUST eventually
-//     invoke exactly one of OnRecoveringDone or OnUnrecoverable.
-//     Failure to do so leaves the view stuck in UpRecovering with no report.
 //
 //   - Release: for every Release call, the implementation MUST eventually
 //     invoke OnDropped exactly once.
 //     Failure to do so leaves the view stuck in Dropping with no report.
 //
 // All callbacks MUST be invoked asynchronously (not during the Acquire /
-// Recover / Release call itself) to avoid deadlocking the caller's mutex.
+// Release call itself) to avoid deadlocking the caller's mutex.
 type StreamingNodeResourceManager interface {
-	// Acquire starts resource preparation for a new query view.
+	// Acquire registers a QueryView reference and waits for existing
+	// WAL-triggered resource preparation.
 	Acquire(req AcquireResource)
 
-	// Recover starts WAL catch-up for a recovered query view.
-	Recover(req RecoverResource)
-
-	// Release releases resources held by a query view being dropped.
+	// Release removes the QueryView reference held by a local state machine.
 	Release(req ReleaseResource)
 }

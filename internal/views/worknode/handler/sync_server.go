@@ -13,6 +13,7 @@ import (
 // bidirectional streaming RPC. It receives query views from the coordinator,
 // delegates them to a QueryViewHandler, and sends back sync reports.
 type ViewSyncServer struct {
+	viewpb.UnimplementedViewSyncServiceServer
 	handler QueryViewHandler
 }
 
