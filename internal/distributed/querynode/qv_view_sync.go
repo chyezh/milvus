@@ -5,28 +5,24 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
-	"github.com/milvus-io/milvus/internal/metastore/kv/binlog"
 	qn "github.com/milvus-io/milvus/internal/querynodev2"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/internal/views/worknode/qnview"
 	"github.com/milvus-io/milvus/pkg/v3/log"
-	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
-	"github.com/milvus-io/milvus/pkg/v3/util/retry"
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 )
 
@@ -139,113 +135,6 @@ func (p *lazyQueryViewMetadataProvider) DescribeCollection(ctx context.Context, 
 		return nil, err
 	}
 	return resp, nil
-}
-
-func (p *lazyQueryViewMetadataProvider) GetSegmentInfo(ctx context.Context, segmentIDs ...int64) ([]*datapb.SegmentInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, paramtable.Get().QueryCoordCfg.BrokerTimeout.GetAsDuration(time.Millisecond))
-	defer cancel()
-
-	client, err := p.client(ctx)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := client.GetSegmentInfo(ctx, &datapb.GetSegmentInfoRequest{
-		SegmentIDs:       segmentIDs,
-		IncludeUnHealthy: true,
-	})
-	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Ctx(ctx).Warn("failed to get segment info for query view", zap.Int64s("segmentIDs", segmentIDs), zap.Error(err))
-		return nil, err
-	}
-	if len(resp.GetInfos()) == 0 && len(segmentIDs) > 0 {
-		return nil, merr.WrapErrSegmentNotFound(segmentIDs[0], "no such segment in DataCoord")
-	}
-	if len(segmentIDs) > 0 {
-		returned := make(map[int64]struct{}, len(resp.GetInfos()))
-		for _, info := range resp.GetInfos() {
-			returned[info.GetID()] = struct{}{}
-		}
-		for _, segmentID := range segmentIDs {
-			if _, ok := returned[segmentID]; !ok {
-				return nil, merr.WrapErrSegmentNotFound(segmentID, "no such segment in DataCoord")
-			}
-		}
-	}
-	if err := binlog.DecompressMultiBinLogs(resp.GetInfos()); err != nil {
-		return nil, err
-	}
-	return resp.GetInfos(), nil
-}
-
-func (p *lazyQueryViewMetadataProvider) ListIndexes(ctx context.Context, collectionID int64) ([]*indexpb.IndexInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, paramtable.Get().QueryCoordCfg.BrokerTimeout.GetAsDuration(time.Millisecond))
-	defer cancel()
-
-	client, err := p.client(ctx)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := client.ListIndexes(ctx, &indexpb.ListIndexesRequest{CollectionID: collectionID})
-	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Ctx(ctx).Warn("failed to list indexes for query view", zap.Int64("collectionID", collectionID), zap.Error(err))
-		return nil, err
-	}
-	return resp.GetIndexInfos(), nil
-}
-
-func (p *lazyQueryViewMetadataProvider) GetIndexInfo(ctx context.Context, collectionID int64, segmentIDs ...int64) (map[int64][]*querypb.FieldIndexInfo, error) {
-	ctx, cancel := context.WithTimeout(ctx, paramtable.Get().QueryCoordCfg.BrokerTimeout.GetAsDuration(time.Millisecond))
-	defer cancel()
-
-	client, err := p.client(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var resp *indexpb.GetIndexInfoResponse
-	retry.Do(ctx, func() error {
-		resp, err = client.GetIndexInfos(ctx, &indexpb.GetIndexInfoRequest{
-			CollectionID: collectionID,
-			SegmentIDs:   segmentIDs,
-		})
-		if errors.Is(err, merr.ErrServiceUnimplemented) {
-			return err
-		}
-		return nil
-	})
-	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Ctx(ctx).Warn("failed to get index info for query view", zap.Int64("collectionID", collectionID), zap.Int64s("segmentIDs", segmentIDs), zap.Error(err))
-		return nil, err
-	}
-	if len(resp.GetSegmentInfo()) == 0 {
-		return nil, merr.WrapErrIndexNotFoundForSegments(segmentIDs)
-	}
-	indexes := make(map[int64][]*querypb.FieldIndexInfo, len(resp.GetSegmentInfo()))
-	for _, segmentID := range segmentIDs {
-		segmentInfo, ok := resp.GetSegmentInfo()[segmentID]
-		if !ok || len(segmentInfo.GetIndexInfos()) == 0 {
-			return nil, merr.WrapErrIndexNotFoundForSegments(segmentIDs)
-		}
-	}
-	for segmentID, segmentInfo := range resp.GetSegmentInfo() {
-		for _, info := range segmentInfo.GetIndexInfos() {
-			indexes[segmentID] = append(indexes[segmentID], &querypb.FieldIndexInfo{
-				FieldID:                   info.GetFieldID(),
-				EnableIndex:               true,
-				IndexName:                 info.GetIndexName(),
-				IndexID:                   info.GetIndexID(),
-				BuildID:                   info.GetBuildID(),
-				IndexParams:               info.GetIndexParams(),
-				IndexFilePaths:            info.GetIndexFilePaths(),
-				IndexSize:                 int64(info.GetMemSize()),
-				IndexVersion:              info.GetIndexVersion(),
-				NumRows:                   info.GetNumRows(),
-				CurrentIndexVersion:       info.GetCurrentIndexVersion(),
-				CurrentScalarIndexVersion: info.GetCurrentScalarIndexVersion(),
-				IndexStorePathVersion:     info.GetIndexStorePathVersion(),
-			})
-		}
-	}
-	return indexes, nil
 }
 
 func (p *lazyQueryViewMetadataProvider) GetQueryViewSegmentLoadInfo(ctx context.Context, collectionID int64, segmentIDs ...int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error) {

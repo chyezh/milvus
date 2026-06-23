@@ -34,7 +34,6 @@ import (
 	"github.com/milvus-io/milvus/internal/mocks"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/views/worknode/qnview"
-	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
@@ -345,23 +344,9 @@ func TestQueryViewTransformLogAccesserNilWhenWALNotReady(t *testing.T) {
 type fakeQueryViewMetadataMixCoordClient struct {
 	types.MixCoordClient
 
-	getSegmentInfoReq  *datapb.GetSegmentInfoRequest
-	getSegmentInfoResp *datapb.GetSegmentInfoResponse
-	getSegmentInfoErr  error
-	getIndexInfoResp   *indexpb.GetIndexInfoResponse
-	getIndexInfoErr    error
-	getQVLoadInfoReq   *querypb.GetQueryViewSegmentLoadInfoRequest
-	getQVLoadInfoResp  *querypb.GetQueryViewSegmentLoadInfoResponse
-	getQVLoadInfoErr   error
-}
-
-func (c *fakeQueryViewMetadataMixCoordClient) GetSegmentInfo(_ context.Context, req *datapb.GetSegmentInfoRequest, _ ...grpc.CallOption) (*datapb.GetSegmentInfoResponse, error) {
-	c.getSegmentInfoReq = req
-	return c.getSegmentInfoResp, c.getSegmentInfoErr
-}
-
-func (c *fakeQueryViewMetadataMixCoordClient) GetIndexInfos(context.Context, *indexpb.GetIndexInfoRequest, ...grpc.CallOption) (*indexpb.GetIndexInfoResponse, error) {
-	return c.getIndexInfoResp, c.getIndexInfoErr
+	getQVLoadInfoReq  *querypb.GetQueryViewSegmentLoadInfoRequest
+	getQVLoadInfoResp *querypb.GetQueryViewSegmentLoadInfoResponse
+	getQVLoadInfoErr  error
 }
 
 func (c *fakeQueryViewMetadataMixCoordClient) GetQueryViewSegmentLoadInfo(_ context.Context, req *querypb.GetQueryViewSegmentLoadInfoRequest, _ ...grpc.CallOption) (*querypb.GetQueryViewSegmentLoadInfoResponse, error) {
@@ -373,123 +358,6 @@ func newTestQueryViewMetadataProvider(client types.MixCoordClient) *lazyQueryVie
 	future := syncutil.NewFuture[types.MixCoordClient]()
 	future.Set(client)
 	return &lazyQueryViewMetadataProvider{mixCoord: future}
-}
-
-func TestLazyQueryViewMetadataProvider_GetSegmentInfoReturnsNotFoundOnPartialResult(t *testing.T) {
-	client := &fakeQueryViewMetadataMixCoordClient{
-		getSegmentInfoResp: &datapb.GetSegmentInfoResponse{
-			Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
-			Infos: []*datapb.SegmentInfo{
-				{ID: 1000, CollectionID: 100, PartitionID: 10},
-			},
-		},
-	}
-	provider := newTestQueryViewMetadataProvider(client)
-
-	segments, err := provider.GetSegmentInfo(context.Background(), 1000, 1001)
-
-	assert.Nil(t, segments)
-	assert.ErrorIs(t, err, merr.ErrSegmentNotFound)
-	require.NotNil(t, client.getSegmentInfoReq)
-	assert.True(t, client.getSegmentInfoReq.GetIncludeUnHealthy())
-}
-
-func TestLazyQueryViewMetadataProvider_GetIndexInfoReturnsNotFoundOnEmptySegments(t *testing.T) {
-	provider := newTestQueryViewMetadataProvider(&fakeQueryViewMetadataMixCoordClient{
-		getIndexInfoResp: &indexpb.GetIndexInfoResponse{
-			Status:      &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
-			SegmentInfo: map[int64]*indexpb.SegmentInfo{},
-		},
-	})
-
-	indexes, err := provider.GetIndexInfo(context.Background(), 100, 1000)
-
-	assert.Nil(t, indexes)
-	assert.ErrorIs(t, err, merr.ErrIndexNotFound)
-}
-
-func TestLazyQueryViewMetadataProvider_GetIndexInfoReturnsNotFoundWhenSegmentMissing(t *testing.T) {
-	provider := newTestQueryViewMetadataProvider(&fakeQueryViewMetadataMixCoordClient{
-		getIndexInfoResp: &indexpb.GetIndexInfoResponse{
-			Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
-			SegmentInfo: map[int64]*indexpb.SegmentInfo{
-				1001: {CollectionID: 100, SegmentID: 1001},
-			},
-		},
-	})
-
-	indexes, err := provider.GetIndexInfo(context.Background(), 100, 1000)
-
-	assert.Nil(t, indexes)
-	assert.ErrorIs(t, err, merr.ErrIndexNotFound)
-}
-
-func TestLazyQueryViewMetadataProvider_GetIndexInfoReturnsNotFoundWhenIndexListEmpty(t *testing.T) {
-	provider := newTestQueryViewMetadataProvider(&fakeQueryViewMetadataMixCoordClient{
-		getIndexInfoResp: &indexpb.GetIndexInfoResponse{
-			Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
-			SegmentInfo: map[int64]*indexpb.SegmentInfo{
-				1000: {CollectionID: 100, SegmentID: 1000},
-			},
-		},
-	})
-
-	indexes, err := provider.GetIndexInfo(context.Background(), 100, 1000)
-
-	assert.Nil(t, indexes)
-	assert.ErrorIs(t, err, merr.ErrIndexNotFound)
-}
-
-func TestLazyQueryViewMetadataProvider_GetIndexInfoConvertsSegmentIndexes(t *testing.T) {
-	params := []*commonpb.KeyValuePair{{Key: "metric_type", Value: "L2"}}
-	provider := newTestQueryViewMetadataProvider(&fakeQueryViewMetadataMixCoordClient{
-		getIndexInfoResp: &indexpb.GetIndexInfoResponse{
-			Status: &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
-			SegmentInfo: map[int64]*indexpb.SegmentInfo{
-				1000: {
-					CollectionID: 100,
-					SegmentID:    1000,
-					IndexInfos: []*indexpb.IndexFilePathInfo{
-						{
-							SegmentID:                 1000,
-							FieldID:                   101,
-							IndexID:                   200,
-							BuildID:                   300,
-							IndexName:                 "vec_idx",
-							IndexParams:               params,
-							IndexFilePaths:            []string{"idx/1", "idx/2"},
-							IndexVersion:              4,
-							NumRows:                   5,
-							CurrentIndexVersion:       6,
-							MemSize:                   7,
-							CurrentScalarIndexVersion: 8,
-							IndexStorePathVersion:     indexpb.IndexStorePathVersion_INDEX_STORE_PATH_VERSION_COLLECTION_ROOTED,
-						},
-					},
-				},
-			},
-		},
-	})
-
-	indexes, err := provider.GetIndexInfo(context.Background(), 100, 1000)
-
-	require.NoError(t, err)
-	require.Len(t, indexes, 1)
-	require.Len(t, indexes[1000], 1)
-	got := indexes[1000][0]
-	assert.Equal(t, int64(101), got.GetFieldID())
-	assert.True(t, got.GetEnableIndex())
-	assert.Equal(t, "vec_idx", got.GetIndexName())
-	assert.Equal(t, int64(200), got.GetIndexID())
-	assert.Equal(t, int64(300), got.GetBuildID())
-	assert.Equal(t, params, got.GetIndexParams())
-	assert.Equal(t, []string{"idx/1", "idx/2"}, got.GetIndexFilePaths())
-	assert.Equal(t, int64(7), got.GetIndexSize())
-	assert.Equal(t, int64(4), got.GetIndexVersion())
-	assert.Equal(t, int64(5), got.GetNumRows())
-	assert.Equal(t, int32(6), got.GetCurrentIndexVersion())
-	assert.Equal(t, int32(8), got.GetCurrentScalarIndexVersion())
-	assert.Equal(t, indexpb.IndexStorePathVersion_INDEX_STORE_PATH_VERSION_COLLECTION_ROOTED, got.GetIndexStorePathVersion())
 }
 
 func TestLazyQueryViewMetadataProvider_GetQueryViewSegmentLoadInfo(t *testing.T) {

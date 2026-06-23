@@ -11,9 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
-	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 )
@@ -22,21 +19,15 @@ func TestDefaultSegmentLoadScheduler_ReservesAndReleasesResourceAroundLoad(t *te
 	meta := buildHandlerTestMeta(1)
 	runtime := &fakeCollectionRuntimeGuard{collectionID: testCollectionID}
 	provider := &fakeMetadataProvider{
-		collection: &milvuspb.DescribeCollectionResponse{Schema: &schemapb.CollectionSchema{Name: "test"}},
-		segments:   []*datapb.SegmentInfo{{ID: 1000, PartitionID: 10, InsertChannel: testVChannel}},
+		loadInfos: []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
 	}
-	planner := &fakeLoadPlanner{plan: &LoadPlan{
-		CollectionID:     testCollectionID,
-		Segments:         []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
-		ReadyByPartition: map[int64][]int64{10: {1000}},
-	}}
 	loader := &fakePhysicalLoader{
 		loadFn: func(info *querypb.SegmentLoadInfo, collection CollectionRuntime) (TransformSegment, error) {
 			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID()}, nil
 		},
 	}
 	estimator := &fakeSegmentResourceEstimator{}
-	scheduler := NewDefaultSegmentLoadScheduler(provider, planner, loader, estimator)
+	scheduler := NewDefaultSegmentLoadScheduler(provider, loader, estimator)
 
 	loadedCh := make(chan TransformSegment, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -74,13 +65,12 @@ func TestDefaultSegmentLoadScheduler_UsesPackedSegmentLoadInfoFromMetadataProvid
 		loadInfos:      []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10, CollectionID: testCollectionID}},
 		loadIndexInfos: indexes,
 	}
-	planner := &fakeLoadPlanner{err: errors.New("planner should not be called")}
 	loader := &fakePhysicalLoader{
 		loadFn: func(info *querypb.SegmentLoadInfo, collection CollectionRuntime) (TransformSegment, error) {
 			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID()}, nil
 		},
 	}
-	scheduler := NewDefaultSegmentLoadScheduler(provider, planner, loader)
+	scheduler := NewDefaultSegmentLoadScheduler(provider, loader)
 
 	loadedCh := make(chan TransformSegment, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -104,9 +94,6 @@ func TestDefaultSegmentLoadScheduler_UsesPackedSegmentLoadInfoFromMetadataProvid
 	}
 	assert.Equal(t, []int64{1000}, provider.loadInfoCalled)
 	assert.False(t, provider.describeCalled)
-	assert.Empty(t, provider.segmentsCalled)
-	assert.False(t, provider.indexesCalled)
-	assert.Empty(t, provider.indexInfoCalled)
 	assert.ElementsMatch(t, indexes, runtime.updatedIndexes)
 	require.Len(t, loader.loadInfos, 1)
 	assert.Equal(t, int64(1000), loader.loadInfos[0].GetSegmentID())
@@ -115,20 +102,14 @@ func TestDefaultSegmentLoadScheduler_UsesPackedSegmentLoadInfoFromMetadataProvid
 func TestDefaultSegmentLoadScheduler_UsesTaskTransformStartTick(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
 	provider := &fakeMetadataProvider{
-		collection: &milvuspb.DescribeCollectionResponse{Schema: &schemapb.CollectionSchema{Name: "test"}},
-		segments:   []*datapb.SegmentInfo{{ID: 1000, PartitionID: 10, InsertChannel: testVChannel}},
+		loadInfos: []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
 	}
-	planner := &fakeLoadPlanner{plan: &LoadPlan{
-		CollectionID:     testCollectionID,
-		Segments:         []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
-		ReadyByPartition: map[int64][]int64{10: {1000}},
-	}}
 	loader := &fakePhysicalLoader{
 		loadFn: func(info *querypb.SegmentLoadInfo, collection CollectionRuntime) (TransformSegment, error) {
 			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID(), startAfter: 10}, nil
 		},
 	}
-	scheduler := NewDefaultSegmentLoadScheduler(provider, planner, loader)
+	scheduler := NewDefaultSegmentLoadScheduler(provider, loader)
 
 	loadedCh := make(chan TransformSegment, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -158,23 +139,16 @@ func TestDefaultSegmentLoadScheduler_UpdatesCollectionIndexMetaBeforeLoad(t *tes
 	runtime := &fakeCollectionRuntimeGuard{collectionID: testCollectionID}
 	indexes := []*indexpb.IndexInfo{{CollectionID: testCollectionID, FieldID: 101, IndexName: "vec_idx"}}
 	provider := &fakeMetadataProvider{
-		collection: &milvuspb.DescribeCollectionResponse{Schema: &schemapb.CollectionSchema{Name: "test"}},
-		segments:   []*datapb.SegmentInfo{{ID: 1000, PartitionID: 10, InsertChannel: testVChannel}},
-		indexes:    indexes,
+		loadInfos:      []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
+		loadIndexInfos: indexes,
 	}
-	planner := &fakeLoadPlanner{plan: &LoadPlan{
-		CollectionID:     testCollectionID,
-		IndexInfos:       indexes,
-		Segments:         []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
-		ReadyByPartition: map[int64][]int64{10: {1000}},
-	}}
 	loader := &fakePhysicalLoader{
 		loadFn: func(info *querypb.SegmentLoadInfo, collection CollectionRuntime) (TransformSegment, error) {
 			assert.ElementsMatch(t, indexes, runtime.updatedIndexes)
 			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID()}, nil
 		},
 	}
-	scheduler := NewDefaultSegmentLoadScheduler(provider, planner, loader)
+	scheduler := NewDefaultSegmentLoadScheduler(provider, loader)
 
 	loadedCh := make(chan TransformSegment, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -203,19 +177,12 @@ func TestDefaultSegmentLoadScheduler_IndexMetaUpdateFailureSkipsReserveAndLoad(t
 	runtime := &fakeCollectionRuntimeGuard{collectionID: testCollectionID, updateErr: errors.New("index meta update failed")}
 	indexes := []*indexpb.IndexInfo{{CollectionID: testCollectionID, FieldID: 101, IndexName: "vec_idx"}}
 	provider := &fakeMetadataProvider{
-		collection: &milvuspb.DescribeCollectionResponse{Schema: &schemapb.CollectionSchema{Name: "test"}},
-		segments:   []*datapb.SegmentInfo{{ID: 1000, PartitionID: 10, InsertChannel: testVChannel}},
-		indexes:    indexes,
+		loadInfos:      []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
+		loadIndexInfos: indexes,
 	}
-	planner := &fakeLoadPlanner{plan: &LoadPlan{
-		CollectionID:     testCollectionID,
-		IndexInfos:       indexes,
-		Segments:         []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
-		ReadyByPartition: map[int64][]int64{10: {1000}},
-	}}
 	loader := &fakePhysicalLoader{}
 	estimator := &fakeSegmentResourceEstimator{}
-	scheduler := NewDefaultSegmentLoadScheduler(provider, planner, loader, estimator)
+	scheduler := NewDefaultSegmentLoadScheduler(provider, loader, estimator)
 
 	unrecoverableCh := make(chan error, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -245,17 +212,11 @@ func TestDefaultSegmentLoadScheduler_ReservationFailureSkipsPhysicalLoad(t *test
 	meta := buildHandlerTestMeta(1)
 	runtime := &fakeCollectionRuntimeGuard{collectionID: testCollectionID}
 	provider := &fakeMetadataProvider{
-		collection: &milvuspb.DescribeCollectionResponse{Schema: &schemapb.CollectionSchema{Name: "test"}},
-		segments:   []*datapb.SegmentInfo{{ID: 1000, PartitionID: 10, InsertChannel: testVChannel}},
+		loadInfos: []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
 	}
-	planner := &fakeLoadPlanner{plan: &LoadPlan{
-		CollectionID:     testCollectionID,
-		Segments:         []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
-		ReadyByPartition: map[int64][]int64{10: {1000}},
-	}}
 	loader := &fakePhysicalLoader{}
 	estimator := &fakeSegmentResourceEstimator{err: errors.New("resource rejected")}
-	scheduler := NewDefaultSegmentLoadScheduler(provider, planner, loader, estimator)
+	scheduler := NewDefaultSegmentLoadScheduler(provider, loader, estimator)
 
 	unrecoverableCh := make(chan error, 1)
 	scheduler.Submit(SegmentLoadTask{

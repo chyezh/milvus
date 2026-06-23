@@ -13,7 +13,6 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/internal/views/worknode/qnview"
-	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/segcorepb"
@@ -108,18 +107,6 @@ type fakeQVMetadataProvider struct {
 
 func (p *fakeQVMetadataProvider) DescribeCollection(context.Context, int64) (*milvuspb.DescribeCollectionResponse, error) {
 	return p.collection, p.err
-}
-
-func (p *fakeQVMetadataProvider) GetSegmentInfo(context.Context, ...int64) ([]*datapb.SegmentInfo, error) {
-	return nil, nil
-}
-
-func (p *fakeQVMetadataProvider) ListIndexes(context.Context, int64) ([]*indexpb.IndexInfo, error) {
-	return nil, nil
-}
-
-func (p *fakeQVMetadataProvider) GetIndexInfo(context.Context, int64, ...int64) (map[int64][]*querypb.FieldIndexInfo, error) {
-	return nil, nil
 }
 
 func (p *fakeQVMetadataProvider) GetQueryViewSegmentLoadInfo(context.Context, int64, ...int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error) {

@@ -14,7 +14,7 @@ type DefaultSegmentLoadScheduler struct {
 	estimator SegmentResourceEstimator
 }
 
-func NewDefaultSegmentLoadScheduler(meta MetadataProvider, _ LoadPlanner, loader PhysicalSegmentLoader, estimators ...SegmentResourceEstimator) *DefaultSegmentLoadScheduler {
+func NewDefaultSegmentLoadScheduler(meta MetadataProvider, loader PhysicalSegmentLoader, estimators ...SegmentResourceEstimator) *DefaultSegmentLoadScheduler {
 	var estimator SegmentResourceEstimator
 	if len(estimators) > 0 {
 		estimator = estimators[0]

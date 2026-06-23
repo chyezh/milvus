@@ -7,7 +7,6 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/internal/views/qviews"
-	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -103,37 +102,7 @@ type LoadedSegments struct {
 
 type MetadataProvider interface {
 	DescribeCollection(ctx context.Context, collectionID int64) (*milvuspb.DescribeCollectionResponse, error)
-	GetSegmentInfo(ctx context.Context, segmentIDs ...int64) ([]*datapb.SegmentInfo, error)
-	ListIndexes(ctx context.Context, collectionID int64) ([]*indexpb.IndexInfo, error)
-	GetIndexInfo(ctx context.Context, collectionID int64, segmentIDs ...int64) (map[int64][]*querypb.FieldIndexInfo, error)
 	GetQueryViewSegmentLoadInfo(ctx context.Context, collectionID int64, segmentIDs ...int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error)
-}
-
-// LoadPlanner converts QueryView assignment and metadata into a local blocking
-// load plan.
-type LoadPlanner interface {
-	Build(ctx context.Context, req BuildLoadPlanRequest) (*LoadPlan, error)
-}
-
-type BuildLoadPlanRequest struct {
-	Meta           *viewpb.QueryViewMeta
-	View           *viewpb.QueryViewOfQueryNode
-	Collection     *milvuspb.DescribeCollectionResponse
-	Segments       []*datapb.SegmentInfo
-	Indexes        []*indexpb.IndexInfo
-	SegmentIndexes map[int64][]*querypb.FieldIndexInfo
-}
-
-type LoadPlan struct {
-	CollectionID int64
-	ReplicaID    int64
-	VChannel     string
-	Schema       *schemapb.CollectionSchema
-	LoadMeta     *querypb.LoadMetaInfo
-	IndexInfos   []*indexpb.IndexInfo
-	Segments     []*querypb.SegmentLoadInfo
-
-	ReadyByPartition map[int64][]int64
 }
 
 type PhysicalSegmentLoader interface {

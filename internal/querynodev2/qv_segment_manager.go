@@ -26,7 +26,7 @@ func (node *QueryNode) NewQueryViewSegmentManager(meta qnview.MetadataProvider, 
 		return nil
 	}
 	physicalLoader := NewQueryViewPhysicalSegmentLoader(node.manager, node.loader)
-	physicalManager := qnview.NewViewAwareSealedSegmentManager(meta, qnview.NewDefaultLoadPlanner(), physicalLoader, newQueryViewSegmentResourceEstimator(node.loader))
+	physicalManager := qnview.NewViewAwareSealedSegmentManager(meta, physicalLoader, newQueryViewSegmentResourceEstimator(node.loader))
 	collectionRuntime := newQueryViewCollectionRuntimeManager(meta, node.manager.Collection)
 	return qnview.NewTransformAwareSegmentManager(physicalManager, qvtransformlogbuffer.New(accesser), collectionRuntime)
 }

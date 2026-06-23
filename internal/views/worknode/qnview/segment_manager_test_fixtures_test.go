@@ -11,7 +11,6 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/internal/views/qviews"
-	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -185,7 +184,7 @@ func (g *fakeCollectionRuntimeGuard) CCollection() *segcore.CCollection {
 }
 
 func (g *fakeCollectionRuntimeGuard) UpdateIndexMeta(_ context.Context, indexes []*indexpb.IndexInfo) error {
-	g.updatedIndexes = cloneIndexInfos(indexes)
+	g.updatedIndexes = append([]*indexpb.IndexInfo(nil), indexes...)
 	return g.updateErr
 }
 
@@ -254,20 +253,13 @@ type instantTransformGuard struct{}
 func (instantTransformGuard) Release() {}
 
 type fakeMetadataProvider struct {
-	mu              sync.Mutex
-	describeCalled  bool
-	segmentsCalled  []int64
-	indexesCalled   bool
-	indexInfoCalled []int64
-	loadInfoCalled  []int64
-	collection      *milvuspb.DescribeCollectionResponse
-	segments        []*datapb.SegmentInfo
-	indexes         []*indexpb.IndexInfo
-	segmentIndexes  map[int64][]*querypb.FieldIndexInfo
-	loadInfos       []*querypb.SegmentLoadInfo
-	loadIndexInfos  []*indexpb.IndexInfo
-	err             error
-	indexErr        error
+	mu             sync.Mutex
+	describeCalled bool
+	loadInfoCalled []int64
+	collection     *milvuspb.DescribeCollectionResponse
+	loadInfos      []*querypb.SegmentLoadInfo
+	loadIndexInfos []*indexpb.IndexInfo
+	err            error
 }
 
 func (p *fakeMetadataProvider) DescribeCollection(context.Context, int64) (*milvuspb.DescribeCollectionResponse, error) {
@@ -275,102 +267,24 @@ func (p *fakeMetadataProvider) DescribeCollection(context.Context, int64) (*milv
 	return p.collection, p.err
 }
 
-func (p *fakeMetadataProvider) GetSegmentInfo(_ context.Context, segmentIDs ...int64) ([]*datapb.SegmentInfo, error) {
-	p.segmentsCalled = append([]int64(nil), segmentIDs...)
-	if len(segmentIDs) > 0 {
-		keep := make(map[int64]struct{}, len(segmentIDs))
-		for _, segmentID := range segmentIDs {
-			keep[segmentID] = struct{}{}
-		}
-		out := make([]*datapb.SegmentInfo, 0, len(segmentIDs))
-		for _, segment := range p.segments {
-			if _, ok := keep[segment.GetID()]; ok {
-				out = append(out, segment)
-			}
-		}
-		return out, p.err
-	}
-	return p.segments, p.err
-}
-
-func (p *fakeMetadataProvider) ListIndexes(context.Context, int64) ([]*indexpb.IndexInfo, error) {
-	p.indexesCalled = true
-	return p.indexes, p.err
-}
-
-func (p *fakeMetadataProvider) GetIndexInfo(_ context.Context, _ int64, segmentIDs ...int64) (map[int64][]*querypb.FieldIndexInfo, error) {
-	p.indexInfoCalled = append([]int64(nil), segmentIDs...)
-	if p.indexErr != nil {
-		return nil, p.indexErr
-	}
-	return p.segmentIndexes, p.err
-}
-
 func (p *fakeMetadataProvider) GetQueryViewSegmentLoadInfo(_ context.Context, _ int64, segmentIDs ...int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error) {
 	p.mu.Lock()
 	p.loadInfoCalled = append(p.loadInfoCalled, segmentIDs...)
 	p.mu.Unlock()
-	if p.err != nil {
-		return nil, nil, p.err
-	}
-	indexes := p.loadIndexInfos
-	if indexes == nil {
-		indexes = p.indexes
-	}
-	if p.loadInfos != nil {
-		return p.loadInfos, indexes, nil
+	if p.err != nil || len(segmentIDs) == 0 {
+		return p.loadInfos, p.loadIndexInfos, p.err
 	}
 	keep := make(map[int64]struct{}, len(segmentIDs))
 	for _, segmentID := range segmentIDs {
 		keep[segmentID] = struct{}{}
 	}
 	loadInfos := make([]*querypb.SegmentLoadInfo, 0, len(segmentIDs))
-	for _, segment := range p.segments {
-		if _, ok := keep[segment.GetID()]; !ok {
-			continue
+	for _, info := range p.loadInfos {
+		if _, ok := keep[info.GetSegmentID()]; ok {
+			loadInfos = append(loadInfos, info)
 		}
-		loadInfos = append(loadInfos, &querypb.SegmentLoadInfo{
-			SegmentID:     segment.GetID(),
-			PartitionID:   segment.GetPartitionID(),
-			CollectionID:  segment.GetCollectionID(),
-			InsertChannel: segment.GetInsertChannel(),
-			IndexInfos:    p.segmentIndexes[segment.GetID()],
-		})
 	}
-	return loadInfos, indexes, nil
-}
-
-type fakeLoadPlanner struct {
-	req   BuildLoadPlanRequest
-	reqs  []BuildLoadPlanRequest
-	plan  *LoadPlan
-	plans []*LoadPlan
-	err   error
-}
-
-func (p *fakeLoadPlanner) Build(_ context.Context, req BuildLoadPlanRequest) (*LoadPlan, error) {
-	p.req = req
-	p.reqs = append(p.reqs, req)
-	if len(p.plans) > 0 {
-		plan := p.plans[0]
-		p.plans = p.plans[1:]
-		return fillFakePlanSegments(plan, req), p.err
-	}
-	return fillFakePlanSegments(p.plan, req), p.err
-}
-
-func fillFakePlanSegments(plan *LoadPlan, req BuildLoadPlanRequest) *LoadPlan {
-	if plan == nil || len(plan.Segments) > 0 {
-		return plan
-	}
-	out := *plan
-	for _, segment := range req.Segments {
-		out.Segments = append(out.Segments, &querypb.SegmentLoadInfo{
-			SegmentID:   segment.GetID(),
-			PartitionID: segment.GetPartitionID(),
-		})
-	}
-	return &out
+	return loadInfos, p.loadIndexInfos, nil
 }
 
 type fakePhysicalLoader struct {

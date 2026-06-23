@@ -42,8 +42,8 @@ type segmentLoadSubmission struct {
 	ctx       context.Context
 }
 
-func NewViewAwareSealedSegmentManager(meta MetadataProvider, planner LoadPlanner, loader PhysicalSegmentLoader, estimators ...SegmentResourceEstimator) *ViewAwareSealedSegmentManager {
-	return NewViewAwareSealedSegmentManagerWithScheduler(NewDefaultSegmentLoadScheduler(meta, planner, loader, estimators...))
+func NewViewAwareSealedSegmentManager(meta MetadataProvider, loader PhysicalSegmentLoader, estimators ...SegmentResourceEstimator) *ViewAwareSealedSegmentManager {
+	return NewViewAwareSealedSegmentManagerWithScheduler(NewDefaultSegmentLoadScheduler(meta, loader, estimators...))
 }
 
 func NewViewAwareSealedSegmentManagerWithScheduler(scheduler SegmentLoadScheduler) *ViewAwareSealedSegmentManager {

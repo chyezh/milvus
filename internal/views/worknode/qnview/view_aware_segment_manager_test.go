@@ -10,13 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
-	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/views/qviews"
-	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
-	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 func TestViewAwareSealedSegmentManager_SubmitsSegmentLoadTasks(t *testing.T) {
@@ -264,20 +260,11 @@ func TestViewAwareSealedSegmentManager_AcquireFetchesMetadataLoadsAndReports(t *
 	meta := buildHandlerTestMeta(1)
 	view := buildHandlerTestQNView(1)
 	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
-	collection := &milvuspb.DescribeCollectionResponse{
-		Schema: &schemapb.CollectionSchema{Name: "test"},
-	}
-	segmentInfos := []*datapb.SegmentInfo{
-		{ID: 1000, PartitionID: 10, InsertChannel: testVChannel},
-		{ID: 1001, PartitionID: 10, InsertChannel: testVChannel},
-		{ID: 2000, PartitionID: 20, InsertChannel: testVChannel},
-	}
-	provider := &fakeMetadataProvider{collection: collection, segments: segmentInfos}
-	planner := &fakeLoadPlanner{
-		plans: []*LoadPlan{
-			{CollectionID: testCollectionID, Segments: []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}}, ReadyByPartition: map[int64][]int64{10: {1000}}},
-			{CollectionID: testCollectionID, Segments: []*querypb.SegmentLoadInfo{{SegmentID: 1001, PartitionID: 10}}, ReadyByPartition: map[int64][]int64{10: {1001}}},
-			{CollectionID: testCollectionID, Segments: []*querypb.SegmentLoadInfo{{SegmentID: 2000, PartitionID: 20}}, ReadyByPartition: map[int64][]int64{20: {2000}}},
+	provider := &fakeMetadataProvider{
+		loadInfos: []*querypb.SegmentLoadInfo{
+			{SegmentID: 1000, PartitionID: 10},
+			{SegmentID: 1001, PartitionID: 10},
+			{SegmentID: 2000, PartitionID: 20},
 		},
 	}
 	loader := &fakePhysicalLoader{
@@ -285,7 +272,7 @@ func TestViewAwareSealedSegmentManager_AcquireFetchesMetadataLoadsAndReports(t *
 			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID()}, nil
 		},
 	}
-	mgr := NewViewAwareSealedSegmentManager(provider, planner, loader)
+	mgr := NewViewAwareSealedSegmentManager(provider, loader)
 
 	loadedCh := make(chan *LoadedSegments, 3)
 	mgr.Acquire(AcquirePhysicalSegments{
@@ -298,8 +285,6 @@ func TestViewAwareSealedSegmentManager_AcquireFetchesMetadataLoadsAndReports(t *
 		return len(loadedCh) == 3
 	}, time.Second, 10*time.Millisecond)
 	assert.False(t, provider.describeCalled)
-	assert.False(t, provider.indexesCalled)
-	assert.Empty(t, planner.reqs)
 	require.Len(t, loader.loadInfos, 3)
 	assert.ElementsMatch(t, []int64{1000, 1001, 2000}, provider.loadInfoCalled)
 }
@@ -312,24 +297,9 @@ func TestViewAwareSealedSegmentManager_LoadsMissingSegmentsIndependently(t *test
 	}
 	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
 	provider := &fakeMetadataProvider{
-		collection: &milvuspb.DescribeCollectionResponse{Schema: &schemapb.CollectionSchema{Name: "test"}},
-		segments: []*datapb.SegmentInfo{
-			{ID: 1000, PartitionID: 10, InsertChannel: testVChannel},
-			{ID: 1001, PartitionID: 10, InsertChannel: testVChannel},
-		},
-	}
-	planner := &fakeLoadPlanner{
-		plans: []*LoadPlan{
-			{
-				CollectionID:     testCollectionID,
-				Segments:         []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
-				ReadyByPartition: map[int64][]int64{10: {1000}},
-			},
-			{
-				CollectionID:     testCollectionID,
-				Segments:         []*querypb.SegmentLoadInfo{{SegmentID: 1001, PartitionID: 10}},
-				ReadyByPartition: map[int64][]int64{10: {1001}},
-			},
+		loadInfos: []*querypb.SegmentLoadInfo{
+			{SegmentID: 1000, PartitionID: 10},
+			{SegmentID: 1001, PartitionID: 10},
 		},
 	}
 	loader := &fakePhysicalLoader{
@@ -337,7 +307,7 @@ func TestViewAwareSealedSegmentManager_LoadsMissingSegmentsIndependently(t *test
 			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID()}, nil
 		},
 	}
-	mgr := NewViewAwareSealedSegmentManager(provider, planner, loader)
+	mgr := NewViewAwareSealedSegmentManager(provider, loader)
 
 	loadedCh := make(chan *LoadedSegments, 2)
 	mgr.Acquire(AcquirePhysicalSegments{
@@ -349,7 +319,6 @@ func TestViewAwareSealedSegmentManager_LoadsMissingSegmentsIndependently(t *test
 	require.Eventually(t, func() bool {
 		return len(loadedCh) == 2
 	}, time.Second, 10*time.Millisecond)
-	assert.Empty(t, planner.reqs)
 	require.Len(t, loader.loadInfos, 2)
 	loadedSegments := []int64{loader.loadInfos[0].GetSegmentID(), loader.loadInfos[1].GetSegmentID()}
 	assert.ElementsMatch(t, []int64{1000, 1001}, loadedSegments)
@@ -363,22 +332,19 @@ func TestViewAwareSealedSegmentManager_ReleaseAfterLastView(t *testing.T) {
 	meta2 := buildHandlerTestMeta(2)
 	view2 := buildHandlerTestQNView(1)
 	key2 := qviews.NewQueryViewAtQueryNode(meta2, view2).QueryViewKey()
-	readyByPartition := map[int64][]int64{10: {1000, 1001}, 20: {2000}}
 	provider := &fakeMetadataProvider{
-		collection: &milvuspb.DescribeCollectionResponse{Schema: &schemapb.CollectionSchema{Name: "test"}},
-		segments: []*datapb.SegmentInfo{
-			{ID: 1000, PartitionID: 10, InsertChannel: testVChannel},
-			{ID: 1001, PartitionID: 10, InsertChannel: testVChannel},
-			{ID: 2000, PartitionID: 20, InsertChannel: testVChannel},
+		loadInfos: []*querypb.SegmentLoadInfo{
+			{SegmentID: 1000, PartitionID: 10},
+			{SegmentID: 1001, PartitionID: 10},
+			{SegmentID: 2000, PartitionID: 20},
 		},
 	}
-	planner := &fakeLoadPlanner{plan: &LoadPlan{CollectionID: testCollectionID, ReadyByPartition: readyByPartition}}
 	loader := &fakePhysicalLoader{
 		loadFn: func(info *querypb.SegmentLoadInfo, collection CollectionRuntime) (TransformSegment, error) {
 			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID()}, nil
 		},
 	}
-	mgr := NewViewAwareSealedSegmentManager(provider, planner, loader)
+	mgr := NewViewAwareSealedSegmentManager(provider, loader)
 
 	ready1 := make(chan *LoadedSegments, 3)
 	ready2 := make(chan *LoadedSegments, 1)
@@ -408,15 +374,11 @@ func TestViewAwareSealedSegmentManager_MissingIndexDoesNotBlockAcquire(t *testin
 		Partitions: []*viewpb.QueryViewOfPartition{{PartitionId: 10, SegmentIds: []int64{1000}}},
 	}
 	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
-	readyByPartition := map[int64][]int64{10: {1000}}
 	provider := &fakeMetadataProvider{
-		collection: &milvuspb.DescribeCollectionResponse{Schema: &schemapb.CollectionSchema{Name: "test"}},
-		segments:   []*datapb.SegmentInfo{{ID: 1000, PartitionID: 10, InsertChannel: testVChannel}},
-		indexErr:   merr.ErrIndexNotFound,
+		loadInfos: []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
 	}
-	planner := &fakeLoadPlanner{plan: &LoadPlan{CollectionID: testCollectionID, ReadyByPartition: readyByPartition}}
 	loader := &fakePhysicalLoader{loaded: &fakeTransformSegment{id: 1000, partitionID: 10}}
-	mgr := NewViewAwareSealedSegmentManager(provider, planner, loader)
+	mgr := NewViewAwareSealedSegmentManager(provider, loader)
 
 	loadedCh := make(chan *LoadedSegments, 1)
 	unrecoverableCh := make(chan struct{}, 1)
@@ -436,6 +398,4 @@ func TestViewAwareSealedSegmentManager_MissingIndexDoesNotBlockAcquire(t *testin
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for load callback")
 	}
-	assert.Empty(t, planner.reqs)
-	assert.Empty(t, provider.indexInfoCalled)
 }
