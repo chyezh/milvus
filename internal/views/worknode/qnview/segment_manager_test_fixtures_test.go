@@ -254,14 +254,18 @@ type instantTransformGuard struct{}
 func (instantTransformGuard) Release() {}
 
 type fakeMetadataProvider struct {
+	mu              sync.Mutex
 	describeCalled  bool
 	segmentsCalled  []int64
 	indexesCalled   bool
 	indexInfoCalled []int64
+	loadInfoCalled  []int64
 	collection      *milvuspb.DescribeCollectionResponse
 	segments        []*datapb.SegmentInfo
 	indexes         []*indexpb.IndexInfo
 	segmentIndexes  map[int64][]*querypb.FieldIndexInfo
+	loadInfos       []*querypb.SegmentLoadInfo
+	loadIndexInfos  []*indexpb.IndexInfo
 	err             error
 	indexErr        error
 }
@@ -300,6 +304,40 @@ func (p *fakeMetadataProvider) GetIndexInfo(_ context.Context, _ int64, segmentI
 		return nil, p.indexErr
 	}
 	return p.segmentIndexes, p.err
+}
+
+func (p *fakeMetadataProvider) GetQueryViewSegmentLoadInfo(_ context.Context, _ int64, segmentIDs ...int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error) {
+	p.mu.Lock()
+	p.loadInfoCalled = append(p.loadInfoCalled, segmentIDs...)
+	p.mu.Unlock()
+	if p.err != nil {
+		return nil, nil, p.err
+	}
+	indexes := p.loadIndexInfos
+	if indexes == nil {
+		indexes = p.indexes
+	}
+	if p.loadInfos != nil {
+		return p.loadInfos, indexes, nil
+	}
+	keep := make(map[int64]struct{}, len(segmentIDs))
+	for _, segmentID := range segmentIDs {
+		keep[segmentID] = struct{}{}
+	}
+	loadInfos := make([]*querypb.SegmentLoadInfo, 0, len(segmentIDs))
+	for _, segment := range p.segments {
+		if _, ok := keep[segment.GetID()]; !ok {
+			continue
+		}
+		loadInfos = append(loadInfos, &querypb.SegmentLoadInfo{
+			SegmentID:     segment.GetID(),
+			PartitionID:   segment.GetPartitionID(),
+			CollectionID:  segment.GetCollectionID(),
+			InsertChannel: segment.GetInsertChannel(),
+			IndexInfos:    p.segmentIndexes[segment.GetID()],
+		})
+	}
+	return loadInfos, indexes, nil
 }
 
 type fakeLoadPlanner struct {

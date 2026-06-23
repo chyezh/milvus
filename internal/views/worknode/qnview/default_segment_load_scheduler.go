@@ -4,29 +4,23 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/cockroachdb/errors"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
-	"github.com/milvus-io/milvus/pkg/v3/util/merr"
-	"google.golang.org/protobuf/proto"
 )
 
 type DefaultSegmentLoadScheduler struct {
 	meta      MetadataProvider
-	planner   LoadPlanner
 	loader    PhysicalSegmentLoader
 	estimator SegmentResourceEstimator
 }
 
-func NewDefaultSegmentLoadScheduler(meta MetadataProvider, planner LoadPlanner, loader PhysicalSegmentLoader, estimators ...SegmentResourceEstimator) *DefaultSegmentLoadScheduler {
+func NewDefaultSegmentLoadScheduler(meta MetadataProvider, _ LoadPlanner, loader PhysicalSegmentLoader, estimators ...SegmentResourceEstimator) *DefaultSegmentLoadScheduler {
 	var estimator SegmentResourceEstimator
 	if len(estimators) > 0 {
 		estimator = estimators[0]
 	}
 	return &DefaultSegmentLoadScheduler{
 		meta:      meta,
-		planner:   planner,
 		loader:    loader,
 		estimator: estimator,
 	}
@@ -58,55 +52,24 @@ func (s *DefaultSegmentLoadScheduler) load(task SegmentLoadTask) {
 }
 
 func (s *DefaultSegmentLoadScheduler) loadMissing(ctx context.Context, task SegmentLoadTask) (*LoadedSegments, error) {
-	collection, err := s.meta.DescribeCollection(ctx, task.Meta.GetCollectionId())
+	loadInfos, indexes, err := s.meta.GetQueryViewSegmentLoadInfo(ctx, task.Meta.GetCollectionId(), task.SegmentID)
 	if err != nil {
 		return nil, err
 	}
-	segments, err := s.meta.GetSegmentInfo(ctx, task.SegmentID)
-	if err != nil {
+	if len(loadInfos) != 1 {
+		return nil, fmt.Errorf("segment load info should contain exactly one segment, got %d", len(loadInfos))
+	}
+	if err := updateCollectionIndexMeta(ctx, task.Collection, indexes); err != nil {
 		return nil, err
 	}
-	if len(segments) != 1 {
-		return nil, fmt.Errorf("missing segment metadata: expected 1, got %d", len(segments))
-	}
-	indexes, err := s.meta.ListIndexes(ctx, task.Meta.GetCollectionId())
-	if err != nil {
-		return nil, err
-	}
-	segmentIndexes, err := s.meta.GetIndexInfo(ctx, task.Meta.GetCollectionId(), task.SegmentID)
-	if err != nil {
-		if !errors.Is(err, merr.ErrIndexNotFound) {
-			return nil, err
-		}
-		segmentIndexes = nil
-	}
-	plan, err := s.planner.Build(ctx, BuildLoadPlanRequest{
-		Meta: proto.Clone(task.Meta).(*viewpb.QueryViewMeta),
-		View: &viewpb.QueryViewOfQueryNode{
-			Partitions: []*viewpb.QueryViewOfPartition{{PartitionId: task.PartitionID, SegmentIds: []int64{task.SegmentID}}},
-		},
-		Collection:     collection,
-		Segments:       segments,
-		Indexes:        indexes,
-		SegmentIndexes: segmentIndexes,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if len(plan.Segments) != 1 {
-		return nil, fmt.Errorf("segment load plan should contain exactly one segment, got %d", len(plan.Segments))
-	}
-	if err := updateCollectionIndexMeta(ctx, task.Collection, plan.IndexInfos); err != nil {
-		return nil, err
-	}
-	reservation, err := s.reserve(ctx, plan.Segments[0], task.Collection)
+	reservation, err := s.reserve(ctx, loadInfos[0], task.Collection)
 	if err != nil {
 		return nil, err
 	}
 	if reservation != nil {
 		defer reservation.Release()
 	}
-	segment, err := s.loader.Load(ctx, plan.Segments[0], task.Collection)
+	segment, err := s.loader.Load(ctx, loadInfos[0], task.Collection)
 	if err != nil {
 		return nil, err
 	}

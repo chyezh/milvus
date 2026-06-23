@@ -247,3 +247,25 @@ func (p *lazyQueryViewMetadataProvider) GetIndexInfo(ctx context.Context, collec
 	}
 	return indexes, nil
 }
+
+func (p *lazyQueryViewMetadataProvider) GetQueryViewSegmentLoadInfo(ctx context.Context, collectionID int64, segmentIDs ...int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, paramtable.Get().QueryCoordCfg.BrokerTimeout.GetAsDuration(time.Millisecond))
+	defer cancel()
+
+	client, err := p.client(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	resp, err := client.GetQueryViewSegmentLoadInfo(ctx, &querypb.GetQueryViewSegmentLoadInfoRequest{
+		CollectionID: collectionID,
+		SegmentIDs:   segmentIDs,
+	})
+	if err := merr.CheckRPCCall(resp, err); err != nil {
+		log.Ctx(ctx).Warn("failed to get query view segment load info", zap.Int64("collectionID", collectionID), zap.Int64s("segmentIDs", segmentIDs), zap.Error(err))
+		return nil, nil, err
+	}
+	if len(resp.GetInfos()) == 0 && len(segmentIDs) > 0 {
+		return nil, nil, merr.WrapErrSegmentNotFound(segmentIDs[0], "no such segment load info in DataCoord")
+	}
+	return resp.GetInfos(), resp.GetIndexInfoList(), nil
+}

@@ -122,6 +122,10 @@ func (p *fakeQVMetadataProvider) GetIndexInfo(context.Context, int64, ...int64) 
 	return nil, nil
 }
 
+func (p *fakeQVMetadataProvider) GetQueryViewSegmentLoadInfo(context.Context, int64, ...int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error) {
+	return nil, nil, p.err
+}
+
 func (l *fakeQVLoader) NewSegment(_ context.Context, _ qnview.CollectionRuntime, info *querypb.SegmentLoadInfo) (qvLoadedSegment, error) {
 	l.newCalled = true
 	l.collectionID = info.GetCollectionID()

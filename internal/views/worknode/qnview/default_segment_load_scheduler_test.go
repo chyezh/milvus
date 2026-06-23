@@ -66,6 +66,52 @@ func TestDefaultSegmentLoadScheduler_ReservesAndReleasesResourceAroundLoad(t *te
 	assert.Same(t, runtime, loader.collections[0])
 }
 
+func TestDefaultSegmentLoadScheduler_UsesPackedSegmentLoadInfoFromMetadataProvider(t *testing.T) {
+	meta := buildHandlerTestMeta(1)
+	runtime := &fakeCollectionRuntimeGuard{collectionID: testCollectionID}
+	indexes := []*indexpb.IndexInfo{{CollectionID: testCollectionID, FieldID: 101, IndexName: "vec_idx"}}
+	provider := &fakeMetadataProvider{
+		loadInfos:      []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10, CollectionID: testCollectionID}},
+		loadIndexInfos: indexes,
+	}
+	planner := &fakeLoadPlanner{err: errors.New("planner should not be called")}
+	loader := &fakePhysicalLoader{
+		loadFn: func(info *querypb.SegmentLoadInfo, collection CollectionRuntime) (TransformSegment, error) {
+			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID()}, nil
+		},
+	}
+	scheduler := NewDefaultSegmentLoadScheduler(provider, planner, loader)
+
+	loadedCh := make(chan TransformSegment, 1)
+	scheduler.Submit(SegmentLoadTask{
+		Context:     context.Background(),
+		Meta:        meta,
+		SegmentID:   1000,
+		PartitionID: 10,
+		VChannel:    testVChannel,
+		Collection:  runtime,
+		OnLoaded:    func(segment TransformSegment) { loadedCh <- segment },
+		OnUnrecoverable: func(err error) {
+			t.Fatalf("unexpected unrecoverable: %v", err)
+		},
+	})
+
+	select {
+	case loaded := <-loadedCh:
+		assert.Equal(t, int64(1000), loaded.ID())
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for loaded segment")
+	}
+	assert.Equal(t, []int64{1000}, provider.loadInfoCalled)
+	assert.False(t, provider.describeCalled)
+	assert.Empty(t, provider.segmentsCalled)
+	assert.False(t, provider.indexesCalled)
+	assert.Empty(t, provider.indexInfoCalled)
+	assert.ElementsMatch(t, indexes, runtime.updatedIndexes)
+	require.Len(t, loader.loadInfos, 1)
+	assert.Equal(t, int64(1000), loader.loadInfos[0].GetSegmentID())
+}
+
 func TestDefaultSegmentLoadScheduler_UsesTaskTransformStartTick(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
 	provider := &fakeMetadataProvider{

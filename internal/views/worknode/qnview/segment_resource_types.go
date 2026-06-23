@@ -106,6 +106,7 @@ type MetadataProvider interface {
 	GetSegmentInfo(ctx context.Context, segmentIDs ...int64) ([]*datapb.SegmentInfo, error)
 	ListIndexes(ctx context.Context, collectionID int64) ([]*indexpb.IndexInfo, error)
 	GetIndexInfo(ctx context.Context, collectionID int64, segmentIDs ...int64) (map[int64][]*querypb.FieldIndexInfo, error)
+	GetQueryViewSegmentLoadInfo(ctx context.Context, collectionID int64, segmentIDs ...int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error)
 }
 
 // LoadPlanner converts QueryView assignment and metadata into a local blocking

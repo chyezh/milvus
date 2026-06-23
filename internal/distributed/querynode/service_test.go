@@ -350,6 +350,9 @@ type fakeQueryViewMetadataMixCoordClient struct {
 	getSegmentInfoErr  error
 	getIndexInfoResp   *indexpb.GetIndexInfoResponse
 	getIndexInfoErr    error
+	getQVLoadInfoReq   *querypb.GetQueryViewSegmentLoadInfoRequest
+	getQVLoadInfoResp  *querypb.GetQueryViewSegmentLoadInfoResponse
+	getQVLoadInfoErr   error
 }
 
 func (c *fakeQueryViewMetadataMixCoordClient) GetSegmentInfo(_ context.Context, req *datapb.GetSegmentInfoRequest, _ ...grpc.CallOption) (*datapb.GetSegmentInfoResponse, error) {
@@ -359,6 +362,11 @@ func (c *fakeQueryViewMetadataMixCoordClient) GetSegmentInfo(_ context.Context, 
 
 func (c *fakeQueryViewMetadataMixCoordClient) GetIndexInfos(context.Context, *indexpb.GetIndexInfoRequest, ...grpc.CallOption) (*indexpb.GetIndexInfoResponse, error) {
 	return c.getIndexInfoResp, c.getIndexInfoErr
+}
+
+func (c *fakeQueryViewMetadataMixCoordClient) GetQueryViewSegmentLoadInfo(_ context.Context, req *querypb.GetQueryViewSegmentLoadInfoRequest, _ ...grpc.CallOption) (*querypb.GetQueryViewSegmentLoadInfoResponse, error) {
+	c.getQVLoadInfoReq = req
+	return c.getQVLoadInfoResp, c.getQVLoadInfoErr
 }
 
 func newTestQueryViewMetadataProvider(client types.MixCoordClient) *lazyQueryViewMetadataProvider {
@@ -482,6 +490,27 @@ func TestLazyQueryViewMetadataProvider_GetIndexInfoConvertsSegmentIndexes(t *tes
 	assert.Equal(t, int32(6), got.GetCurrentIndexVersion())
 	assert.Equal(t, int32(8), got.GetCurrentScalarIndexVersion())
 	assert.Equal(t, indexpb.IndexStorePathVersion_INDEX_STORE_PATH_VERSION_COLLECTION_ROOTED, got.GetIndexStorePathVersion())
+}
+
+func TestLazyQueryViewMetadataProvider_GetQueryViewSegmentLoadInfo(t *testing.T) {
+	indexes := []*indexpb.IndexInfo{{CollectionID: 100, FieldID: 101, IndexName: "vec_idx"}}
+	client := &fakeQueryViewMetadataMixCoordClient{
+		getQVLoadInfoResp: &querypb.GetQueryViewSegmentLoadInfoResponse{
+			Status:        &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
+			Infos:         []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
+			IndexInfoList: indexes,
+		},
+	}
+	provider := newTestQueryViewMetadataProvider(client)
+
+	infos, indexInfos, err := provider.GetQueryViewSegmentLoadInfo(context.Background(), 100, 1000)
+
+	require.NoError(t, err)
+	assert.Equal(t, []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}}, infos)
+	assert.Equal(t, indexes, indexInfos)
+	require.NotNil(t, client.getQVLoadInfoReq)
+	assert.Equal(t, int64(100), client.getQVLoadInfoReq.GetCollectionID())
+	assert.Equal(t, []int64{1000}, client.getQVLoadInfoReq.GetSegmentIDs())
 }
 
 func Test_Run(t *testing.T) {

@@ -297,14 +297,11 @@ func TestViewAwareSealedSegmentManager_AcquireFetchesMetadataLoadsAndReports(t *
 	require.Eventually(t, func() bool {
 		return len(loadedCh) == 3
 	}, time.Second, 10*time.Millisecond)
-	assert.True(t, provider.describeCalled)
-	assert.True(t, provider.indexesCalled)
-	require.Len(t, planner.reqs, 3)
+	assert.False(t, provider.describeCalled)
+	assert.False(t, provider.indexesCalled)
+	assert.Empty(t, planner.reqs)
 	require.Len(t, loader.loadInfos, 3)
-	for _, req := range planner.reqs {
-		assert.Equal(t, collection, req.Collection)
-		require.Len(t, req.Segments, 1)
-	}
+	assert.ElementsMatch(t, []int64{1000, 1001, 2000}, provider.loadInfoCalled)
 }
 
 func TestViewAwareSealedSegmentManager_LoadsMissingSegmentsIndependently(t *testing.T) {
@@ -352,13 +349,11 @@ func TestViewAwareSealedSegmentManager_LoadsMissingSegmentsIndependently(t *test
 	require.Eventually(t, func() bool {
 		return len(loadedCh) == 2
 	}, time.Second, 10*time.Millisecond)
-	require.Len(t, planner.reqs, 2)
+	assert.Empty(t, planner.reqs)
 	require.Len(t, loader.loadInfos, 2)
-	plannedSegments := []int64{
-		planner.reqs[0].View.GetPartitions()[0].GetSegmentIds()[0],
-		planner.reqs[1].View.GetPartitions()[0].GetSegmentIds()[0],
-	}
-	assert.ElementsMatch(t, []int64{1000, 1001}, plannedSegments)
+	loadedSegments := []int64{loader.loadInfos[0].GetSegmentID(), loader.loadInfos[1].GetSegmentID()}
+	assert.ElementsMatch(t, []int64{1000, 1001}, loadedSegments)
+	assert.ElementsMatch(t, []int64{1000, 1001}, provider.loadInfoCalled)
 }
 
 func TestViewAwareSealedSegmentManager_ReleaseAfterLastView(t *testing.T) {
@@ -441,5 +436,6 @@ func TestViewAwareSealedSegmentManager_MissingIndexDoesNotBlockAcquire(t *testin
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for load callback")
 	}
-	assert.Nil(t, planner.req.SegmentIndexes)
+	assert.Empty(t, planner.reqs)
+	assert.Empty(t, provider.indexInfoCalled)
 }
