@@ -56,7 +56,7 @@ func TestQueryViewCollectionRuntimeManager_AcquireRefsCollectionAndReleaseUnrefs
 	assert.Equal(t, querypb.LoadType_LoadCollection, collection.putLoadMeta.GetLoadType())
 	assert.Equal(t, int64(1), collection.putLoadMeta.GetCollectionID())
 	assert.Equal(t, "db", collection.putLoadMeta.GetDbName())
-	assert.Equal(t, uint64(9), collection.putLoadMeta.GetSchemaVersion())
+	assert.Equal(t, uint64(9), collection.putLoadMeta.GetSchemaBarrierTs())
 	assert.Equal(t, []int64{10, 20}, collection.putLoadMeta.GetPartitionIDs())
 	assert.Equal(t, []int64{100, 101}, collection.putLoadMeta.GetLoadFields())
 
@@ -89,7 +89,7 @@ func TestQueryViewCollectionRuntimeGuard_UpdateIndexMetaRefsAndUnrefsCollection(
 	assert.Equal(t, querypb.LoadType_LoadCollection, collection.putLoadMeta.GetLoadType())
 	assert.Equal(t, int64(1), collection.putLoadMeta.GetCollectionID())
 	assert.Equal(t, "db", collection.putLoadMeta.GetDbName())
-	assert.Equal(t, uint64(9), collection.putLoadMeta.GetSchemaVersion())
+	assert.Equal(t, uint64(9), collection.putLoadMeta.GetSchemaBarrierTs())
 	assert.Equal(t, int64(1), collection.unrefCollection)
 	assert.Equal(t, uint32(1), collection.unrefCount)
 }

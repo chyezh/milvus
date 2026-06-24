@@ -1,7 +1,7 @@
 # QueryNode Sealed Segment Async Alignment Design
 
 > Future QueryNode-side resource alignment after Stage 1 sealed segment load.
-> References: [QueryNode Sealed Segment Load Design](sealed_segment_load.md), [Distributed Query View Design](README.md), [DataView Design](data_view.md), [view.proto](../../../../pkg/proto/view.proto).
+> References: [QueryNode QueryView Resource Preparation Design](qnview/querynode_queryview_resource_preparation.md), [Distributed Query View Design](README.md), [DataView Design](data_view.md), [view.proto](../../../../pkg/proto/view.proto).
 
 ## 1. Goal
 

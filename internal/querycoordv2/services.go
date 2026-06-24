@@ -439,13 +439,10 @@ func (s *Server) GetLoadSegmentInfo(ctx context.Context, req *querypb.GetSegment
 }
 
 func (s *Server) GetQueryViewSegmentLoadInfo(ctx context.Context, req *querypb.GetQueryViewSegmentLoadInfoRequest) (*querypb.GetQueryViewSegmentLoadInfoResponse, error) {
-	log := log.Ctx(ctx).With(
-		zap.Int64("collectionID", req.GetCollectionID()),
-		zap.Int64s("segments", req.GetSegmentIDs()),
-	)
+	ctx = mlog.WithFields(ctx, mlog.Int64("collectionID", req.GetCollectionID()), mlog.Int64s("segments", req.GetSegmentIDs()))
 	if err := merr.CheckHealthy(s.State()); err != nil {
 		msg := "failed to get query view segment load info"
-		log.Warn(msg, zap.Error(err))
+		mlog.Warn(ctx, msg, mlog.Err(err))
 		return &querypb.GetQueryViewSegmentLoadInfoResponse{
 			Status: merr.Status(merr.Wrapf(err, "%s", msg)),
 		}, nil

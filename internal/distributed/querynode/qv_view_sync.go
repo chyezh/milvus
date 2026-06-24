@@ -5,7 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"go.uber.org/zap"
 	"google.golang.org/grpc"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
@@ -16,7 +15,7 @@ import (
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/internal/views/worknode/qnview"
-	"github.com/milvus-io/milvus/pkg/v3/log"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
@@ -131,7 +130,7 @@ func (p *lazyQueryViewMetadataProvider) DescribeCollection(ctx context.Context, 
 		CollectionID: collectionID,
 	})
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Ctx(ctx).Warn("failed to describe collection for query view", zap.Int64("collectionID", collectionID), zap.Error(err))
+		mlog.Warn(ctx, "failed to describe collection for query view", mlog.Int64("collectionID", collectionID), mlog.Err(err))
 		return nil, err
 	}
 	return resp, nil
@@ -150,7 +149,7 @@ func (p *lazyQueryViewMetadataProvider) GetQueryViewSegmentLoadInfo(ctx context.
 		SegmentIDs:   segmentIDs,
 	})
 	if err := merr.CheckRPCCall(resp, err); err != nil {
-		log.Ctx(ctx).Warn("failed to get query view segment load info", zap.Int64("collectionID", collectionID), zap.Int64s("segmentIDs", segmentIDs), zap.Error(err))
+		mlog.Warn(ctx, "failed to get query view segment load info", mlog.Int64("collectionID", collectionID), mlog.Int64s("segmentIDs", segmentIDs), mlog.Err(err))
 		return nil, nil, err
 	}
 	if len(resp.GetInfos()) == 0 && len(segmentIDs) > 0 {

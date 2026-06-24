@@ -44,12 +44,12 @@ func (m *queryViewCollectionRuntimeManager) Acquire(ctx context.Context, view *q
 		collection.GetSchema(),
 		nil,
 		&querypb.LoadMetaInfo{
-			LoadType:      querypb.LoadType_LoadCollection,
-			CollectionID:  meta.GetCollectionId(),
-			PartitionIDs:  qvViewPartitionIDs(view.ViewOfQueryNode()),
-			DbName:        collection.GetDbName(),
-			LoadFields:    append([]int64(nil), meta.GetSettings().GetRequiredFields()...),
-			SchemaVersion: collection.GetUpdateTimestamp(),
+			LoadType:        querypb.LoadType_LoadCollection,
+			CollectionID:    meta.GetCollectionId(),
+			PartitionIDs:    qvViewPartitionIDs(view.ViewOfQueryNode()),
+			DbName:          collection.GetDbName(),
+			LoadFields:      append([]int64(nil), meta.GetSettings().GetRequiredFields()...),
+			SchemaBarrierTs: collection.GetUpdateTimestamp(),
 		},
 	); err != nil {
 		return nil, err
@@ -103,10 +103,10 @@ func (g *queryViewCollectionRuntimeGuard) UpdateIndexMeta(ctx context.Context, i
 		g.schema,
 		segments.ComposeIndexMeta(ctx, indexes, g.schema),
 		&querypb.LoadMetaInfo{
-			LoadType:      querypb.LoadType_LoadCollection,
-			CollectionID:  g.collectionID,
-			DbName:        g.databaseName,
-			SchemaVersion: uint64(g.schemaVersion),
+			LoadType:        querypb.LoadType_LoadCollection,
+			CollectionID:    g.collectionID,
+			DbName:          g.databaseName,
+			SchemaBarrierTs: uint64(g.schemaVersion),
 		},
 	); err != nil {
 		return err
