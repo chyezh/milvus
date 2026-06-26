@@ -35,6 +35,8 @@ type QNQueryViewStateMachine struct {
 
 	// Per-partition ready segment set, updated incrementally by OnSegmentsReady.
 	readySegments map[int64]map[int64]struct{}
+	// Per-partition assigned segment set used for Ready transition counting.
+	assignedSegments map[int64]map[int64]struct{}
 
 	// Counters for O(1) completion check.
 	totalSegments int
@@ -51,18 +53,18 @@ type QNQueryViewStateMachine struct {
 //   - State is Preparing. No pendingReport (subsequent OnSegmentsReady /
 //     OnUnrecoverable will drive progress and generate reports).
 func NewQNQueryViewStateMachine(meta *viewpb.QueryViewMeta, qnView *viewpb.QueryViewOfQueryNode) *QNQueryViewStateMachine {
-	total := 0
 	readySegments := make(map[int64]map[int64]struct{}, len(qnView.Partitions))
 	for _, p := range qnView.Partitions {
-		total += len(p.SegmentIds)
 		readySegments[p.PartitionId] = make(map[int64]struct{})
 	}
+	assignedSegments, total := buildAssignedSegmentSet(qnView)
 	return &QNQueryViewStateMachine{
-		state:         qviews.QueryViewStatePreparing,
-		meta:          meta,
-		qnView:        qnView,
-		readySegments: readySegments,
-		totalSegments: total,
+		state:            qviews.QueryViewStatePreparing,
+		meta:             meta,
+		qnView:           qnView,
+		readySegments:    readySegments,
+		assignedSegments: assignedSegments,
+		totalSegments:    total,
 	}
 }
 
@@ -100,38 +102,63 @@ func (sm *QNQueryViewStateMachine) OnCoordStateDelivered(pushedState qviews.Quer
 	}
 }
 
-// OnSegmentsReady reports incremental segment loading progress during Preparing.
+// OnSegmentsReady reports incremental segment loading progress.
 // readySegmentIDs maps partition ID to the newly loaded segment IDs (delta).
 // Duplicate segment IDs are deduplicated internally.
 //
-// When all segments across all partitions are ready, the SM automatically
+// When all assigned segments across all partitions are ready, the SM automatically
 // transitions to Ready state.
 //
-// Only valid in Preparing state; ignored in other states.
+// Valid in Preparing and Ready state; ignored in other states.
 func (sm *QNQueryViewStateMachine) OnSegmentsReady(readySegmentIDs map[int64][]int64) {
-	if sm.state != qviews.QueryViewStatePreparing {
+	if sm.state != qviews.QueryViewStatePreparing && sm.state != qviews.QueryViewStateReady {
 		return
 	}
 
+	changed := false
 	for partitionID, segIDs := range readySegmentIDs {
 		pSet := sm.readySegments[partitionID]
 		if pSet == nil {
 			continue
 		}
+		assignedSet := sm.assignedSegments[partitionID]
 		for _, segID := range segIDs {
 			if _, exists := pSet[segID]; !exists {
 				pSet[segID] = struct{}{}
-				sm.readyCount++
+				changed = true
+				if _, assigned := assignedSet[segID]; assigned {
+					sm.readyCount++
+				}
 			}
 		}
 	}
 
+	if sm.state == qviews.QueryViewStateReady {
+		if changed {
+			sm.pendingReport = sm.buildReport()
+		}
+		return
+	}
 	if sm.readyCount >= sm.totalSegments {
 		sm.state = qviews.QueryViewStateReady
 		sm.pendingReport = sm.buildReport()
 	} else {
 		sm.pendingReport = sm.buildReport()
 	}
+}
+
+func buildAssignedSegmentSet(qnView *viewpb.QueryViewOfQueryNode) (map[int64]map[int64]struct{}, int) {
+	assignedSegments := make(map[int64]map[int64]struct{}, len(qnView.GetPartitions()))
+	total := 0
+	for _, partition := range qnView.GetPartitions() {
+		segments := make(map[int64]struct{}, len(partition.GetSegmentIds()))
+		for _, segmentID := range partition.GetSegmentIds() {
+			segments[segmentID] = struct{}{}
+		}
+		assignedSegments[partition.GetPartitionId()] = segments
+		total += len(segments)
+	}
+	return assignedSegments, total
 }
 
 // OnUnrecoverable reports a fatal error (e.g., OOM during segment loading).

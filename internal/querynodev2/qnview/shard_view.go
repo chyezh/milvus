@@ -3,6 +3,8 @@ package qnview
 import (
 	"sync"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
@@ -62,10 +64,11 @@ func (s *qnShardView) applyOneLocked(av *handler.ApplyView) {
 			s.views[key.QueryViewVersion] = entry
 
 			// Tell SegmentManager to load segments. Callbacks will drive SM progress.
+			meta := qnView.IntoProto().Meta
 			s.segMgr.Acquire(AcquireSegments{
-				Key:        key,
-				SegmentIDs: qnView.SegmentIDs(),
-				Settings:   qnView.IntoProto().Meta.Settings,
+				Key:  key,
+				Meta: proto.Clone(meta).(*viewpb.QueryViewMeta),
+				View: proto.Clone(qnView.ViewOfQueryNode()).(*viewpb.QueryViewOfQueryNode),
 				OnReady: func(readySegments map[int64][]int64) {
 					s.notifySegmentsReady(key.QueryViewVersion, readySegments)
 				},

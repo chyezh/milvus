@@ -68,6 +68,10 @@ Each `ApplyView` carries a coord-pushed `View` and an `OnReport` callback. All s
 - **Auto-create**: Unknown QueryViewKey + Preparing state → new SM + resource acquisition.
 - **Auto-destroy**: SM reaches Dropped → entry removed from shard map → `onEmpty` callback removes shard if empty.
 - **Callback replacement**: Re-apply of same QueryViewKey replaces `OnReport`. Old callback is never invoked after replacement.
+- **Operation idempotency**: Duplicate Coord pushes for the same QueryViewKey
+  reuse the existing handler entry and replace its callback. The SM consumes
+  the pushed state and external dependencies are invoked only when the SM
+  produces a new resource operation.
 
 ### Unknown View Handling
 
@@ -96,11 +100,13 @@ When a Coord push arrives for a view not in the handler (e.g., node restarted):
 1. Coord pushes Preparing → handler creates SM → calls `segMgr.Acquire(OnReady, OnUnrecoverable)`.
 2. SegmentManager loads segments asynchronously.
    - **Success**: calls `OnReady(readySegments)` (may be called multiple times for incremental progress) → SM advances Preparing → Ready → report Ready to Coord.
-   - **Fatal error**: calls `OnUnrecoverable` (at most once) → SM advances Preparing → Unrecoverable → report Unrecoverable to Coord.
+   - **Fatal error**: calls `OnUnrecoverable` for the acquire invocation → SM advances Preparing → Unrecoverable → report Unrecoverable to Coord.
 3. Coord pushes Dropped → SM enters Dropping → calls `segMgr.Release(OnDropped)`.
 4. SegmentManager releases segments asynchronously → calls `OnDropped` → SM advances Dropping → Dropped → report Dropped to Coord → entry cleaned up.
 
 All callbacks must be asynchronous (not during Acquire/Release) to avoid deadlocking the shard mutex.
+Duplicate QueryViewKey handling is owned by the handler/SM pair, not by
+`SegmentManager`.
 
 ### 4.2 SN: ResourceManager + Catalog Interaction
 
@@ -150,8 +156,8 @@ The handler's response guarantee depends on external dependencies fulfilling cal
 
 | Operation | Obligation |
 |---|---|
-| `Acquire` | Must eventually invoke at least one of `OnReady` or `OnUnrecoverable` |
-| `Release` | Must eventually invoke `OnDropped` exactly once |
+| `Acquire` | For each invocation issued by the SM, must eventually invoke at least one of that invocation's `OnReady` or `OnUnrecoverable` callbacks |
+| `Release` | For each invocation issued by the SM, must eventually invoke that invocation's `OnDropped` callback exactly once |
 
 ### ResourceManager (SN)
 
