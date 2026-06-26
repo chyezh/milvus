@@ -68,9 +68,10 @@ Each `ApplyView` carries a coord-pushed `View` and an `OnReport` callback. All s
 - **Auto-create**: Unknown QueryViewKey + Preparing state → new SM + resource acquisition.
 - **Auto-destroy**: SM reaches Dropped → entry removed from shard map → `onEmpty` callback removes shard if empty.
 - **Callback replacement**: Re-apply of same QueryViewKey replaces `OnReport`. Old callback is never invoked after replacement.
-- **Operation idempotency**: Duplicate Coord pushes for the same QueryViewKey are
-  resolved by the SM. External dependencies are invoked only when the SM makes
-  a real state transition that requires a resource operation.
+- **Operation idempotency**: Duplicate Coord pushes for the same QueryViewKey
+  reuse the existing handler entry and replace its callback. The SM consumes
+  the pushed state and external dependencies are invoked only when the SM
+  produces a new resource operation.
 
 ### Unknown View Handling
 
@@ -104,7 +105,8 @@ When a Coord push arrives for a view not in the handler (e.g., node restarted):
 4. SegmentManager releases segments asynchronously → calls `OnDropped` → SM advances Dropping → Dropped → report Dropped to Coord → entry cleaned up.
 
 All callbacks must be asynchronous (not during Acquire/Release) to avoid deadlocking the shard mutex.
-Duplicate QueryViewKey handling is owned by the SM, not by `SegmentManager`.
+Duplicate QueryViewKey handling is owned by the handler/SM pair, not by
+`SegmentManager`.
 
 ### 4.2 SN: ResourceManager + Catalog Interaction
 
