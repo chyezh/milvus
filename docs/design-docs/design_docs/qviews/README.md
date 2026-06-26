@@ -233,6 +233,11 @@ references and temporary recovery anchors, not by the initialization task.
 QueryNode sealed segment resources continue to follow QueryNode's segment/view resource
 lifecycle.
 
+For QueryNode-side sealed segment resource preparation, including collection
+runtime pinning, DataCoord-packed segment load info, physical sealed segment
+load, TransformLog registration/catch-up, and release semantics, see
+[QueryNode QueryView Resource Preparation Design](qnview/querynode_queryview_resource_preparation.md).
+
 Example: If view A is unreasonable and causes OOM on a node, it is marked as Unrecoverable, but view A still exists on the node and already-loaded resources are not rolled back. After Coord detects this, the Balancer generates a new view B and pushes both views for atomic modification (A Dropped, B Preparing). Resources in (A diff B) are released, resources in (B diff A) are loaded, and resources in A∩B are retained.
 
 For StreamingNode-side resource preparation boundaries, including `AlterLoadConfig`

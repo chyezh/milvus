@@ -117,10 +117,8 @@ message QueryViewMeta {
 message QueryViewSettings {
     // Partitions that must be loaded for the view to be available.
     repeated int64 required_partitions = 1;
-    // Partitions that should be loaded but do not affect view availability.
-    repeated int64 optional_partitions = 2;
     // Fields that must be loaded for the view to be available.
-    repeated int64 required_fields = 3;
+    repeated int64 required_fields = 2;
 }
 
 // QueryViewOfStreamingNode represents the streaming node's portion of a query view.
