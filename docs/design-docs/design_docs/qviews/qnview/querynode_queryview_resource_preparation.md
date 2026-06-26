@@ -3,7 +3,6 @@
 > References: [Distributed Query View Design](../README.md),
 > [QueryView State Machine Per-Node Analysis](../query_view_state_machine.md),
 > [QueryView Handler Design](../query_view_handler.md),
-> [QueryNode Sealed Segment Async Alignment Design](../sealed_segment_async_alignment.md),
 > [view.proto](../../../../../pkg/proto/view.proto), and
 > [query_coord.proto](../../../../../pkg/proto/query_coord.proto).
 
@@ -28,8 +27,8 @@ This document does not cover:
 3. post-Ready asynchronous index/stats alignment;
 4. query execution or result reduction.
 
-Post-Ready index/stats resource alignment is intentionally separated into
-[QueryNode Sealed Segment Async Alignment Design](../sealed_segment_async_alignment.md).
+Post-Ready index/stats resource alignment is intentionally outside this
+resource-preparation design.
 
 ## 2. Design Principles
 
@@ -327,8 +326,5 @@ decides the next view.
    describes per-node state transitions and report behavior.
 3. [QueryView Handler Design](../query_view_handler.md) describes handler-level
    application of coord-pushed views.
-4. [QueryNode Sealed Segment Async Alignment Design](../sealed_segment_async_alignment.md)
-   describes future nonblocking index/stats alignment after the Stage 1
-   resource-preparation flow in this document.
-5. StreamingNode resource preparation is covered by the `snview` documents and
+4. StreamingNode resource preparation is covered by the `snview` documents and
    is intentionally independent from the QueryNode sealed segment flow.
