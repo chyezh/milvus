@@ -15,26 +15,6 @@ func segmentPartitionMap(view *viewpb.QueryViewOfQueryNode) map[int64]int64 {
 	return segments
 }
 
-func readyByPartition(view *viewpb.QueryViewOfQueryNode) map[int64][]int64 {
-	ready := make(map[int64][]int64, len(view.GetPartitions()))
-	for _, partition := range view.GetPartitions() {
-		if len(partition.GetSegmentIds()) == 0 {
-			continue
-		}
-		ready[partition.GetPartitionId()] = append([]int64(nil), partition.GetSegmentIds()...)
-	}
-	return ready
-}
-
-func hasAssignedSegments(view *viewpb.QueryViewOfQueryNode) bool {
-	for _, partition := range view.GetPartitions() {
-		if len(partition.GetSegmentIds()) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
 func filterViewSegments(view *viewpb.QueryViewOfQueryNode, segmentIDs []int64) *viewpb.QueryViewOfQueryNode {
 	if len(segmentIDs) == len(segmentPartitionMap(view)) {
 		return proto.Clone(view).(*viewpb.QueryViewOfQueryNode)

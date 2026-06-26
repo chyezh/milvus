@@ -37,21 +37,19 @@ func (s *QueryViewSegmentLoadScheduler) load(task SegmentLoadTask) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	loaded, err := s.loadMissing(ctx, task)
+	segment, err := s.loadMissing(ctx, task)
 	if err != nil {
 		if task.OnUnrecoverable != nil {
 			task.OnUnrecoverable(err)
 		}
 		return
 	}
-	for _, segment := range loaded.Segments {
-		if task.OnLoaded != nil {
-			task.OnLoaded(segment)
-		}
+	if task.OnLoaded != nil {
+		task.OnLoaded(segment)
 	}
 }
 
-func (s *QueryViewSegmentLoadScheduler) loadMissing(ctx context.Context, task SegmentLoadTask) (*LoadedSegments, error) {
+func (s *QueryViewSegmentLoadScheduler) loadMissing(ctx context.Context, task SegmentLoadTask) (TransformSegment, error) {
 	loadInfos, indexes, err := s.meta.GetQueryViewSegmentLoadInfo(ctx, task.Meta.GetCollectionId(), task.SegmentID)
 	if err != nil {
 		return nil, err
@@ -79,10 +77,7 @@ func (s *QueryViewSegmentLoadScheduler) loadMissing(ctx context.Context, task Se
 			startAfter:       task.TransformStartAfterTimeTick,
 		}
 	}
-	return &LoadedSegments{
-		Segments:         []TransformSegment{segment},
-		ReadyByPartition: map[int64][]int64{segment.PartitionID(): {segment.ID()}},
-	}, nil
+	return segment, nil
 }
 
 func (s *QueryViewSegmentLoadScheduler) reserve(ctx context.Context, info *querypb.SegmentLoadInfo, collection CollectionRuntime) (ResourceReservation, error) {

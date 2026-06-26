@@ -20,12 +20,9 @@ func TestQueryViewSegmentReadinessManager_WaitsForCatchupBeforeReady(t *testing.
 	view := buildHandlerTestQNView(1)
 	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
 
-	loaded := &LoadedSegments{
-		Segments: []TransformSegment{
-			&fakeTransformSegment{id: 1000, partitionID: 10},
-			&fakeTransformSegment{id: 1001, partitionID: 10},
-		},
-		ReadyByPartition: map[int64][]int64{10: {1000, 1001}},
+	loaded := []TransformSegment{
+		&fakeTransformSegment{id: 1000, partitionID: 10},
+		&fakeTransformSegment{id: 1001, partitionID: 10},
 	}
 
 	var physicalReq AcquirePhysicalSegments
@@ -199,10 +196,7 @@ func TestQueryViewSegmentReadinessManager_ReleasesLoadedSegmentAfterLastView(t *
 
 	physical := fakePhysicalSegmentManager{
 		acquire: func(req AcquirePhysicalSegments) {
-			req.OnLoaded(&LoadedSegments{
-				Segments:         []TransformSegment{segment},
-				ReadyByPartition: map[int64][]int64{10: {1000}},
-			})
+			req.OnLoaded([]TransformSegment{segment})
 		},
 		release: func(req ReleaseSegments) { req.OnDropped() },
 	}
@@ -266,9 +260,7 @@ func TestQueryViewSegmentReadinessManager_ReleasesLateLoadedSegmentAfterViewRele
 	<-dropped
 
 	lateSegment := &fakeTransformSegment{id: 1000, partitionID: 10}
-	physicalReq.OnLoaded(&LoadedSegments{
-		Segments: []TransformSegment{lateSegment},
-	})
+	physicalReq.OnLoaded([]TransformSegment{lateSegment})
 
 	assert.True(t, lateSegment.released)
 	select {
@@ -283,12 +275,9 @@ func TestQueryViewSegmentReadinessManager_ReportsReadyIncrementallyPerSegment(t 
 	view := buildHandlerTestQNView(1)
 	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
 
-	loaded := &LoadedSegments{
-		Segments: []TransformSegment{
-			&fakeTransformSegment{id: 1000, partitionID: 10},
-			&fakeTransformSegment{id: 1001, partitionID: 10},
-		},
-		ReadyByPartition: map[int64][]int64{10: {1000, 1001}},
+	loaded := []TransformSegment{
+		&fakeTransformSegment{id: 1000, partitionID: 10},
+		&fakeTransformSegment{id: 1001, partitionID: 10},
 	}
 	physical := fakePhysicalSegmentManager{
 		acquire: func(req AcquirePhysicalSegments) {
@@ -356,10 +345,7 @@ func TestQueryViewSegmentReadinessManager_LoadedSegmentAcquireDoesNotReleaseShar
 	physical := fakePhysicalSegmentManager{
 		acquire: func(req AcquirePhysicalSegments) {
 			acquireCalls <- req
-			req.OnLoaded(&LoadedSegments{
-				Segments:         []TransformSegment{segment},
-				ReadyByPartition: map[int64][]int64{10: {1000}},
-			})
+			req.OnLoaded([]TransformSegment{segment})
 		},
 		release: func(req ReleaseSegments) { req.OnDropped() },
 	}
@@ -598,15 +584,9 @@ func TestQueryViewSegmentReadinessManager_KeepsEnsureRegisterVChannelTogether(t 
 		acquire: func(req AcquirePhysicalSegments) {
 			switch req.Meta.GetVchannel() {
 			case "vchannel-1":
-				req.OnLoaded(&LoadedSegments{
-					Segments:         []TransformSegment{&fakeTransformSegment{id: 1000, vchannel: "vchannel-1", partitionID: 10}},
-					ReadyByPartition: map[int64][]int64{10: {1000}},
-				})
+				req.OnLoaded([]TransformSegment{&fakeTransformSegment{id: 1000, vchannel: "vchannel-1", partitionID: 10}})
 			case "vchannel-2":
-				req.OnLoaded(&LoadedSegments{
-					Segments:         []TransformSegment{&fakeTransformSegment{id: 2000, vchannel: "vchannel-2", partitionID: 20}},
-					ReadyByPartition: map[int64][]int64{20: {2000}},
-				})
+				req.OnLoaded([]TransformSegment{&fakeTransformSegment{id: 2000, vchannel: "vchannel-2", partitionID: 20}})
 			}
 		},
 		release: func(req ReleaseSegments) { req.OnDropped() },
@@ -635,10 +615,7 @@ func TestQueryViewSegmentReadinessManager_FailureReportsUnrecoverable(t *testing
 	physical := fakePhysicalSegmentManager{
 		acquire: func(req AcquirePhysicalSegments) {
 			physicalCalled <- struct{}{}
-			req.OnLoaded(&LoadedSegments{
-				Segments:         []TransformSegment{&fakeTransformSegment{id: 1000, partitionID: 10}},
-				ReadyByPartition: map[int64][]int64{10: {1000}},
-			})
+			req.OnLoaded([]TransformSegment{&fakeTransformSegment{id: 1000, partitionID: 10}})
 		},
 		release: func(req ReleaseSegments) { req.OnDropped() },
 	}

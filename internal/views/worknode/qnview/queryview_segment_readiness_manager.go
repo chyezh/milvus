@@ -48,8 +48,7 @@ func (m *QueryViewSegmentReadinessManager) Release(req ReleaseSegments) {
 type transformSegmentLoadState int
 
 const (
-	transformSegmentNotLoad transformSegmentLoadState = iota
-	transformSegmentLoading
+	transformSegmentLoading transformSegmentLoadState = iota
 	transformSegmentCatchingUp
 	transformSegmentLoaded
 )
@@ -64,7 +63,6 @@ type transformViewRef struct {
 }
 
 type transformSegmentState struct {
-	partitionID   int64
 	state         transformSegmentLoadState
 	segment       TransformSegment
 	reg           TransformRegistration
@@ -98,17 +96,14 @@ func (m *QueryViewSegmentReadinessManager) acquire(req AcquireSegments) {
 		return
 	}
 
-	readyNow, segmentsToLoad, empty, noAssignedSegments := m.recordAcquire(req, cancel, guard, collectionGuard)
+	readyNow, segmentsToLoad, noAssignedSegments := m.recordAcquire(req, cancel, guard, collectionGuard)
 	for _, waiter := range readyNow {
 		waiter.reportReady()
 	}
 	if noAssignedSegments && req.OnReady != nil {
 		req.OnReady(map[int64][]int64{})
 	}
-	if empty {
-		return
-	}
-	if len(segmentsToLoad) == 0 {
+	if noAssignedSegments || len(segmentsToLoad) == 0 {
 		return
 	}
 	viewToLoad := filterViewSegments(req.View, segmentsToLoad)
@@ -118,7 +113,7 @@ func (m *QueryViewSegmentReadinessManager) acquire(req AcquireSegments) {
 		Meta:       proto.Clone(req.Meta).(*viewpb.QueryViewMeta),
 		View:       viewToLoad,
 		Collection: collectionGuard,
-		OnLoaded: func(loaded *LoadedSegments) {
+		OnLoaded: func(loaded []TransformSegment) {
 			m.onPhysicalLoaded(loaded)
 		},
 		OnSegmentUnrecoverable: func(segmentID int64, err error) {
@@ -137,7 +132,7 @@ func (m *QueryViewSegmentReadinessManager) acquireCollectionRuntime(ctx context.
 	return m.collections.Acquire(ctx, view)
 }
 
-func (m *QueryViewSegmentReadinessManager) recordAcquire(req AcquireSegments, cancel context.CancelFunc, guard TransformLogGuard, collectionGuard CollectionRuntimeGuard) ([]transformSegmentWaiter, []int64, bool, bool) {
+func (m *QueryViewSegmentReadinessManager) recordAcquire(req AcquireSegments, cancel context.CancelFunc, guard TransformLogGuard, collectionGuard CollectionRuntimeGuard) ([]transformSegmentWaiter, []int64, bool) {
 	segmentPartitions := segmentPartitionMap(req.View)
 	readyNow := make([]transformSegmentWaiter, 0)
 	segmentsToLoad := make([]int64, 0)
@@ -158,15 +153,11 @@ func (m *QueryViewSegmentReadinessManager) recordAcquire(req AcquireSegments, ca
 		state := m.segments[segmentID]
 		if state == nil {
 			state = &transformSegmentState{
-				partitionID: partitionID,
-				state:       transformSegmentLoading,
-				refs:        make(map[qviews.QueryViewKey]struct{}),
-				waiters:     make(map[qviews.QueryViewKey]transformSegmentWaiter),
+				state:   transformSegmentLoading,
+				refs:    make(map[qviews.QueryViewKey]struct{}),
+				waiters: make(map[qviews.QueryViewKey]transformSegmentWaiter),
 			}
 			m.segments[segmentID] = state
-			segmentsToLoad = append(segmentsToLoad, segmentID)
-		} else if state.state == transformSegmentNotLoad {
-			state.state = transformSegmentLoading
 			segmentsToLoad = append(segmentsToLoad, segmentID)
 		}
 		state.refs[req.Key] = struct{}{}
@@ -189,7 +180,7 @@ func (m *QueryViewSegmentReadinessManager) recordAcquire(req AcquireSegments, ca
 		_ = segment.Release(context.Background())
 	}
 	oldDetach.guards.release()
-	return readyNow, segmentsToLoad, len(segmentPartitions) == 0, !hasAssignedSegments(req.View)
+	return readyNow, segmentsToLoad, len(segmentPartitions) == 0
 }
 
 func invokeUnrecoverable(cb func()) {
@@ -198,11 +189,8 @@ func invokeUnrecoverable(cb func()) {
 	}
 }
 
-func (m *QueryViewSegmentReadinessManager) onPhysicalLoaded(loaded *LoadedSegments) {
-	if loaded == nil {
-		return
-	}
-	for _, segment := range loaded.Segments {
+func (m *QueryViewSegmentReadinessManager) onPhysicalLoaded(segments []TransformSegment) {
+	for _, segment := range segments {
 		if segment == nil {
 			continue
 		}
@@ -226,7 +214,6 @@ func (m *QueryViewSegmentReadinessManager) markPhysicalLoaded(segment TransformS
 		return false
 	}
 	state.segment = segment
-	state.partitionID = segment.PartitionID()
 	state.state = transformSegmentCatchingUp
 	return true
 }

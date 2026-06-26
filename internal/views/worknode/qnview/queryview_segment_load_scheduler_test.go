@@ -31,13 +31,11 @@ func TestQueryViewSegmentLoadScheduler_ReservesAndReleasesResourceAroundLoad(t *
 
 	loadedCh := make(chan TransformSegment, 1)
 	scheduler.Submit(SegmentLoadTask{
-		Context:     context.Background(),
-		Meta:        meta,
-		SegmentID:   1000,
-		PartitionID: 10,
-		VChannel:    testVChannel,
-		Collection:  runtime,
-		OnLoaded:    func(segment TransformSegment) { loadedCh <- segment },
+		Context:    context.Background(),
+		Meta:       meta,
+		SegmentID:  1000,
+		Collection: runtime,
+		OnLoaded:   func(segment TransformSegment) { loadedCh <- segment },
 		OnUnrecoverable: func(error) {
 			t.Fatal("unexpected unrecoverable")
 		},
@@ -74,13 +72,11 @@ func TestQueryViewSegmentLoadScheduler_UsesPackedSegmentLoadInfoFromQueryViewLoa
 
 	loadedCh := make(chan TransformSegment, 1)
 	scheduler.Submit(SegmentLoadTask{
-		Context:     context.Background(),
-		Meta:        meta,
-		SegmentID:   1000,
-		PartitionID: 10,
-		VChannel:    testVChannel,
-		Collection:  runtime,
-		OnLoaded:    func(segment TransformSegment) { loadedCh <- segment },
+		Context:    context.Background(),
+		Meta:       meta,
+		SegmentID:  1000,
+		Collection: runtime,
+		OnLoaded:   func(segment TransformSegment) { loadedCh <- segment },
 		OnUnrecoverable: func(err error) {
 			t.Fatalf("unexpected unrecoverable: %v", err)
 		},
@@ -116,8 +112,6 @@ func TestQueryViewSegmentLoadScheduler_UsesTaskTransformStartTick(t *testing.T) 
 		Context:                     context.Background(),
 		Meta:                        meta,
 		SegmentID:                   1000,
-		PartitionID:                 10,
-		VChannel:                    testVChannel,
 		TransformStartAfterTimeTick: 99,
 		OnLoaded:                    func(segment TransformSegment) { loadedCh <- segment },
 		OnUnrecoverable: func(error) {
@@ -152,13 +146,11 @@ func TestQueryViewSegmentLoadScheduler_UpdatesCollectionIndexMetaBeforeLoad(t *t
 
 	loadedCh := make(chan TransformSegment, 1)
 	scheduler.Submit(SegmentLoadTask{
-		Context:     context.Background(),
-		Meta:        meta,
-		SegmentID:   1000,
-		PartitionID: 10,
-		VChannel:    testVChannel,
-		Collection:  runtime,
-		OnLoaded:    func(segment TransformSegment) { loadedCh <- segment },
+		Context:    context.Background(),
+		Meta:       meta,
+		SegmentID:  1000,
+		Collection: runtime,
+		OnLoaded:   func(segment TransformSegment) { loadedCh <- segment },
 		OnUnrecoverable: func(error) {
 			t.Fatal("unexpected unrecoverable")
 		},
@@ -189,8 +181,6 @@ func TestQueryViewSegmentLoadScheduler_IndexMetaUpdateFailureSkipsReserveAndLoad
 		Context:         context.Background(),
 		Meta:            meta,
 		SegmentID:       1000,
-		PartitionID:     10,
-		VChannel:        testVChannel,
 		Collection:      runtime,
 		OnLoaded:        func(TransformSegment) { t.Fatal("unexpected loaded") },
 		OnUnrecoverable: func(err error) { unrecoverableCh <- err },
@@ -223,8 +213,6 @@ func TestQueryViewSegmentLoadScheduler_ReservationFailureSkipsPhysicalLoad(t *te
 		Context:         context.Background(),
 		Meta:            meta,
 		SegmentID:       1000,
-		PartitionID:     10,
-		VChannel:        testVChannel,
 		Collection:      runtime,
 		OnLoaded:        func(TransformSegment) { t.Fatal("unexpected loaded") },
 		OnUnrecoverable: func(err error) { unrecoverableCh <- err },

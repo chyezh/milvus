@@ -148,14 +148,3 @@ func newPrimaryKeysLike(pks storage.PrimaryKeys) (storage.PrimaryKeys, bool) {
 		return nil, false
 	}
 }
-
-func cloneReadyByPartition(in map[int64][]int64) map[int64][]int64 {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[int64][]int64, len(in))
-	for partitionID, segmentIDs := range in {
-		out[partitionID] = append([]int64(nil), segmentIDs...)
-	}
-	return out
-}

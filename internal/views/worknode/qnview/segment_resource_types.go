@@ -88,16 +88,9 @@ type AcquirePhysicalSegments struct {
 	View       *viewpb.QueryViewOfQueryNode
 	Collection CollectionRuntime
 
-	OnLoaded               func(loaded *LoadedSegments)
+	OnLoaded               func(loaded []TransformSegment)
 	OnSegmentUnrecoverable func(segmentID int64, err error)
 	OnUnrecoverable        func()
-}
-
-// LoadedSegments contains loaded segment consumers plus the corresponding
-// readiness report shape.
-type LoadedSegments struct {
-	Segments         []TransformSegment
-	ReadyByPartition map[int64][]int64
 }
 
 type QueryViewLoadMetadataProvider interface {
@@ -126,8 +119,6 @@ type SegmentLoadTask struct {
 	Context                     context.Context
 	Meta                        *viewpb.QueryViewMeta
 	SegmentID                   int64
-	PartitionID                 int64
-	VChannel                    string
 	Collection                  CollectionRuntime
 	TransformStartAfterTimeTick uint64
 

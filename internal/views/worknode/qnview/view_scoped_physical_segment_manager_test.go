@@ -27,10 +27,10 @@ func TestViewScopedPhysicalSegmentManager_SubmitsSegmentLoadTasks(t *testing.T) 
 	scheduler := &fakeSegmentLoadScheduler{}
 	mgr := NewViewScopedPhysicalSegmentManagerWithScheduler(scheduler)
 
-	loadedCh := make(chan *LoadedSegments, 2)
+	loadedCh := make(chan []TransformSegment, 2)
 	mgr.Acquire(AcquirePhysicalSegments{
 		Key: key, Meta: meta, View: view, Collection: runtime,
-		OnLoaded:        func(loaded *LoadedSegments) { loadedCh <- loaded },
+		OnLoaded:        func(loaded []TransformSegment) { loadedCh <- loaded },
 		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable") },
 	})
 
@@ -43,8 +43,6 @@ func TestViewScopedPhysicalSegmentManager_SubmitsSegmentLoadTasks(t *testing.T) 
 	}
 	for _, segmentID := range []int64{1000, 1001} {
 		task := taskBySegment[segmentID]
-		assert.Equal(t, int64(10), task.PartitionID)
-		assert.Equal(t, testVChannel, task.VChannel)
 		assert.Same(t, runtime, task.Collection)
 		assert.Equal(t, uint64(99), task.TransformStartAfterTimeTick)
 	}
@@ -69,7 +67,7 @@ func TestViewScopedPhysicalSegmentManager_CancelsLoadingSegmentAfterLastViewRele
 
 	mgr.Acquire(AcquirePhysicalSegments{
 		Key: key, Meta: meta, View: view,
-		OnLoaded:        func(*LoadedSegments) { t.Fatal("unexpected loaded") },
+		OnLoaded:        func([]TransformSegment) { t.Fatal("unexpected loaded") },
 		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable") },
 	})
 	require.Eventually(t, func() bool {
@@ -107,7 +105,7 @@ func TestViewScopedPhysicalSegmentManager_ReleaseWaitsForInFlightLoadCallback(t 
 
 	mgr.Acquire(AcquirePhysicalSegments{
 		Key: key, Meta: meta, View: view,
-		OnLoaded:        func(*LoadedSegments) { t.Fatal("unexpected loaded after release") },
+		OnLoaded:        func([]TransformSegment) { t.Fatal("unexpected loaded after release") },
 		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable") },
 	})
 	require.Eventually(t, func() bool {
@@ -145,11 +143,11 @@ func TestViewScopedPhysicalSegmentManager_SharedInFlightLoadSurvivesSubmitterRel
 	scheduler := &fakeSegmentLoadScheduler{}
 	mgr := NewViewScopedPhysicalSegmentManagerWithScheduler(scheduler)
 
-	loaded1 := make(chan *LoadedSegments, 1)
-	loaded2 := make(chan *LoadedSegments, 1)
+	loaded1 := make(chan []TransformSegment, 1)
+	loaded2 := make(chan []TransformSegment, 1)
 	mgr.Acquire(AcquirePhysicalSegments{
 		Key: key1, Meta: meta1, View: view,
-		OnLoaded:        func(loaded *LoadedSegments) { loaded1 <- loaded },
+		OnLoaded:        func(loaded []TransformSegment) { loaded1 <- loaded },
 		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable for first view") },
 	})
 	require.Eventually(t, func() bool {
@@ -157,7 +155,7 @@ func TestViewScopedPhysicalSegmentManager_SharedInFlightLoadSurvivesSubmitterRel
 	}, time.Second, 10*time.Millisecond)
 	mgr.Acquire(AcquirePhysicalSegments{
 		Key: key2, Meta: meta2, View: view,
-		OnLoaded:        func(loaded *LoadedSegments) { loaded2 <- loaded },
+		OnLoaded:        func(loaded []TransformSegment) { loaded2 <- loaded },
 		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable for second view") },
 	})
 	time.Sleep(20 * time.Millisecond)
@@ -186,8 +184,8 @@ func TestViewScopedPhysicalSegmentManager_SharedInFlightLoadSurvivesSubmitterRel
 	}
 	select {
 	case got := <-loaded2:
-		require.Len(t, got.Segments, 1)
-		assert.Equal(t, int64(1000), got.Segments[0].ID())
+		require.Len(t, got, 1)
+		assert.Equal(t, int64(1000), got[0].ID())
 	case <-time.After(time.Second):
 		t.Fatal("shared live view did not receive loaded callback")
 	}
@@ -213,7 +211,7 @@ func TestViewScopedPhysicalSegmentManager_CancelsOnlyLastRefTasksOnMixedRelease(
 
 	mgr.Acquire(AcquirePhysicalSegments{
 		Key: key1, Meta: meta1, View: view1,
-		OnLoaded:        func(*LoadedSegments) { t.Fatal("unexpected loaded for first view") },
+		OnLoaded:        func([]TransformSegment) { t.Fatal("unexpected loaded for first view") },
 		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable for first view") },
 	})
 	require.Eventually(t, func() bool {
@@ -225,7 +223,7 @@ func TestViewScopedPhysicalSegmentManager_CancelsOnlyLastRefTasksOnMixedRelease(
 	}
 	mgr.Acquire(AcquirePhysicalSegments{
 		Key: key2, Meta: meta2, View: view2,
-		OnLoaded:        func(*LoadedSegments) {},
+		OnLoaded:        func([]TransformSegment) {},
 		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable for second view") },
 	})
 	time.Sleep(20 * time.Millisecond)
@@ -248,13 +246,6 @@ func TestViewScopedPhysicalSegmentManager_CancelsOnlyLastRefTasksOnMixedRelease(
 		t.Fatal("timed out waiting for first view release")
 	}
 }
-func cloneReadyByPartitionForTest(in map[int64][]int64) map[int64][]int64 {
-	out := make(map[int64][]int64, len(in))
-	for partitionID, segmentIDs := range in {
-		out[partitionID] = append([]int64(nil), segmentIDs...)
-	}
-	return out
-}
 
 func TestViewScopedPhysicalSegmentManager_AcquireFetchesMetadataLoadsAndReports(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
@@ -274,10 +265,10 @@ func TestViewScopedPhysicalSegmentManager_AcquireFetchesMetadataLoadsAndReports(
 	}
 	mgr := NewViewScopedPhysicalSegmentManager(provider, loader)
 
-	loadedCh := make(chan *LoadedSegments, 3)
+	loadedCh := make(chan []TransformSegment, 3)
 	mgr.Acquire(AcquirePhysicalSegments{
 		Key: key, Meta: meta, View: view,
-		OnLoaded:        func(loaded *LoadedSegments) { loadedCh <- loaded },
+		OnLoaded:        func(loaded []TransformSegment) { loadedCh <- loaded },
 		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable") },
 	})
 
@@ -309,10 +300,10 @@ func TestViewScopedPhysicalSegmentManager_LoadsMissingSegmentsIndependently(t *t
 	}
 	mgr := NewViewScopedPhysicalSegmentManager(provider, loader)
 
-	loadedCh := make(chan *LoadedSegments, 2)
+	loadedCh := make(chan []TransformSegment, 2)
 	mgr.Acquire(AcquirePhysicalSegments{
 		Key: key, Meta: meta, View: view,
-		OnLoaded:        func(loaded *LoadedSegments) { loadedCh <- loaded },
+		OnLoaded:        func(loaded []TransformSegment) { loadedCh <- loaded },
 		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable") },
 	})
 
@@ -346,13 +337,13 @@ func TestViewScopedPhysicalSegmentManager_ReleaseAfterLastView(t *testing.T) {
 	}
 	mgr := NewViewScopedPhysicalSegmentManager(provider, loader)
 
-	ready1 := make(chan *LoadedSegments, 3)
-	ready2 := make(chan *LoadedSegments, 1)
-	mgr.Acquire(AcquirePhysicalSegments{Key: key1, Meta: meta1, View: view1, OnLoaded: func(loaded *LoadedSegments) { ready1 <- loaded }, OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable") }})
+	ready1 := make(chan []TransformSegment, 3)
+	ready2 := make(chan []TransformSegment, 1)
+	mgr.Acquire(AcquirePhysicalSegments{Key: key1, Meta: meta1, View: view1, OnLoaded: func(loaded []TransformSegment) { ready1 <- loaded }, OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable") }})
 	require.Eventually(t, func() bool {
 		return len(ready1) == 3
 	}, time.Second, 10*time.Millisecond)
-	mgr.Acquire(AcquirePhysicalSegments{Key: key2, Meta: meta2, View: view2, OnLoaded: func(loaded *LoadedSegments) { ready2 <- loaded }, OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable") }})
+	mgr.Acquire(AcquirePhysicalSegments{Key: key2, Meta: meta2, View: view2, OnLoaded: func(loaded []TransformSegment) { ready2 <- loaded }, OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable") }})
 	<-ready2
 
 	dropped1 := make(chan struct{}, 1)
@@ -380,19 +371,18 @@ func TestViewScopedPhysicalSegmentManager_MissingIndexDoesNotBlockAcquire(t *tes
 	loader := &fakePhysicalLoader{loaded: &fakeTransformSegment{id: 1000, partitionID: 10}}
 	mgr := NewViewScopedPhysicalSegmentManager(provider, loader)
 
-	loadedCh := make(chan *LoadedSegments, 1)
+	loadedCh := make(chan []TransformSegment, 1)
 	unrecoverableCh := make(chan struct{}, 1)
 	mgr.Acquire(AcquirePhysicalSegments{
 		Key: key, Meta: meta, View: view,
-		OnLoaded:        func(loaded *LoadedSegments) { loadedCh <- loaded },
+		OnLoaded:        func(loaded []TransformSegment) { loadedCh <- loaded },
 		OnUnrecoverable: func() { unrecoverableCh <- struct{}{} },
 	})
 
 	select {
 	case got := <-loadedCh:
-		require.Equal(t, map[int64][]int64{10: {1000}}, got.ReadyByPartition)
-		require.Len(t, got.Segments, 1)
-		assert.Equal(t, int64(1000), got.Segments[0].ID())
+		require.Len(t, got, 1)
+		assert.Equal(t, int64(1000), got[0].ID())
 	case <-unrecoverableCh:
 		t.Fatal("missing index should not make query view unrecoverable")
 	case <-time.After(time.Second):

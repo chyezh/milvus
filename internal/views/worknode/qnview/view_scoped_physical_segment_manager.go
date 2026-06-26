@@ -19,22 +19,18 @@ type ViewScopedPhysicalSegmentManager struct {
 }
 
 type viewRef struct {
-	key             qviews.QueryViewKey
-	meta            *viewpb.QueryViewMeta
-	view            *viewpb.QueryViewOfQueryNode
 	segments        map[int64]int64
 	loadWG          *sync.WaitGroup
-	onLoaded        func(*LoadedSegments)
+	onLoaded        func([]TransformSegment)
 	onSegmentFailed func(segmentID int64, err error)
 	onUnrecoverable func()
 }
 
 type physicalSegmentState struct {
-	segment     TransformSegment
-	partitionID int64
-	loading     bool
-	loadCancel  context.CancelFunc
-	refs        map[qviews.QueryViewKey]struct{}
+	segment    TransformSegment
+	loading    bool
+	loadCancel context.CancelFunc
+	refs       map[qviews.QueryViewKey]struct{}
 }
 
 type segmentLoadSubmission struct {
@@ -87,24 +83,20 @@ func (m *ViewScopedPhysicalSegmentManager) recordView(req AcquirePhysicalSegment
 	}
 	m.cancels[req.Key] = cancel
 	m.views[req.Key] = &viewRef{
-		key:             req.Key,
-		meta:            proto.Clone(req.Meta).(*viewpb.QueryViewMeta),
-		view:            proto.Clone(req.View).(*viewpb.QueryViewOfQueryNode),
 		segments:        segmentPartitions,
 		loadWG:          loadWG,
 		onLoaded:        req.OnLoaded,
 		onSegmentFailed: req.OnSegmentUnrecoverable,
 		onUnrecoverable: req.OnUnrecoverable,
 	}
-	for segmentID, partitionID := range segmentPartitions {
+	for segmentID := range segmentPartitions {
 		state, ok := m.segments[segmentID]
 		if !ok {
 			loadCtx, loadCancel := context.WithCancel(context.Background())
 			state = &physicalSegmentState{
-				partitionID: partitionID,
-				loading:     true,
-				loadCancel:  loadCancel,
-				refs:        make(map[qviews.QueryViewKey]struct{}),
+				loading:    true,
+				loadCancel: loadCancel,
+				refs:       make(map[qviews.QueryViewKey]struct{}),
 			}
 			m.segments[segmentID] = state
 			toLoad = append(toLoad, segmentLoadSubmission{segmentID: segmentID, ctx: loadCtx})
@@ -148,8 +140,6 @@ func (m *ViewScopedPhysicalSegmentManager) submitSegmentLoad(ctx context.Context
 		Context:                     ctx,
 		Meta:                        proto.Clone(req.Meta).(*viewpb.QueryViewMeta),
 		SegmentID:                   segmentID,
-		PartitionID:                 segmentPartitionMap(req.View)[segmentID],
-		VChannel:                    req.Meta.GetVchannel(),
 		Collection:                  req.Collection,
 		TransformStartAfterTimeTick: req.Meta.GetDeleteApplyStartAfterTimetick(),
 		OnLoaded: func(segment TransformSegment) {
@@ -187,7 +177,6 @@ func (m *ViewScopedPhysicalSegmentManager) completePhysicalSegmentLoad(segment T
 		return nil, false
 	}
 	state.segment = segment
-	state.partitionID = segment.PartitionID()
 	state.loading = false
 	state.loadCancel = nil
 	if len(state.refs) == 0 {
@@ -201,10 +190,7 @@ func (m *ViewScopedPhysicalSegmentManager) completePhysicalSegmentLoad(segment T
 		if ref == nil || ref.onLoaded == nil {
 			continue
 		}
-		loaded := &LoadedSegments{
-			Segments:         []TransformSegment{segment},
-			ReadyByPartition: map[int64][]int64{segment.PartitionID(): {segment.ID()}},
-		}
+		loaded := []TransformSegment{segment}
 		cb := ref.onLoaded
 		notifications = append(notifications, func() {
 			cb(loaded)
@@ -271,8 +257,7 @@ func (m *ViewScopedPhysicalSegmentManager) ResetSegment(segmentID int64) {
 	}
 }
 
-func (m *ViewScopedPhysicalSegmentManager) collectLoaded(view *viewpb.QueryViewOfQueryNode) (*LoadedSegments, bool) {
-	ready := readyByPartition(view)
+func (m *ViewScopedPhysicalSegmentManager) collectLoaded(view *viewpb.QueryViewOfQueryNode) ([]TransformSegment, bool) {
 	segments := make([]TransformSegment, 0, len(segmentPartitionMap(view)))
 
 	m.mu.Lock()
@@ -286,7 +271,7 @@ func (m *ViewScopedPhysicalSegmentManager) collectLoaded(view *viewpb.QueryViewO
 			segments = append(segments, state.segment)
 		}
 	}
-	return &LoadedSegments{Segments: segments, ReadyByPartition: ready}, true
+	return segments, true
 }
 
 func (m *ViewScopedPhysicalSegmentManager) removeView(key qviews.QueryViewKey) ([]int64, *sync.WaitGroup) {
