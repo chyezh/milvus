@@ -100,16 +100,16 @@ func (r *fakeQVResourceReservation) Release() {
 	r.released = true
 }
 
-type fakeQVMetadataProvider struct {
+type fakeQVLoadMetadataProvider struct {
 	collection *milvuspb.DescribeCollectionResponse
 	err        error
 }
 
-func (p *fakeQVMetadataProvider) DescribeCollection(context.Context, int64) (*milvuspb.DescribeCollectionResponse, error) {
+func (p *fakeQVLoadMetadataProvider) DescribeCollection(context.Context, int64) (*milvuspb.DescribeCollectionResponse, error) {
 	return p.collection, p.err
 }
 
-func (p *fakeQVMetadataProvider) GetQueryViewSegmentLoadInfo(context.Context, int64, ...int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error) {
+func (p *fakeQVLoadMetadataProvider) GetQueryViewSegmentLoadInfo(context.Context, int64, ...int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error) {
 	return nil, nil, p.err
 }
 

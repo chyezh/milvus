@@ -32,9 +32,9 @@ type TransformRegistration interface {
 	Unregister()
 }
 
-// CollectionRuntimeManager pins QueryView-scoped collection runtime before any
+// QueryViewCollectionRuntimeManager pins QueryView-scoped collection runtime before any
 // physical segment load is submitted.
-type CollectionRuntimeManager interface {
+type QueryViewCollectionRuntimeManager interface {
 	Acquire(ctx context.Context, view *qviews.QueryViewAtQueryNode) (CollectionRuntimeGuard, error)
 }
 
@@ -81,7 +81,7 @@ type PhysicalSegmentResetter interface {
 }
 
 // AcquirePhysicalSegments is the physical manager request wrapped by
-// TransformAwareSegmentManager.
+// QueryViewSegmentReadinessManager.
 type AcquirePhysicalSegments struct {
 	Key        qviews.QueryViewKey
 	Meta       *viewpb.QueryViewMeta
@@ -100,7 +100,7 @@ type LoadedSegments struct {
 	ReadyByPartition map[int64][]int64
 }
 
-type MetadataProvider interface {
+type QueryViewLoadMetadataProvider interface {
 	DescribeCollection(ctx context.Context, collectionID int64) (*milvuspb.DescribeCollectionResponse, error)
 	GetQueryViewSegmentLoadInfo(ctx context.Context, collectionID int64, segmentIDs ...int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error)
 }

@@ -126,14 +126,14 @@ func (g *fakeTransformLogGuard) Release() {
 	g.released = true
 }
 
-type fakeCollectionRuntimeManager struct {
+type fakeQueryViewCollectionRuntimeManager struct {
 	mu          sync.Mutex
 	acquireView *qviews.QueryViewAtQueryNode
 	acquireErr  error
 	guard       *fakeCollectionRuntimeGuard
 }
 
-func (m *fakeCollectionRuntimeManager) Acquire(_ context.Context, view *qviews.QueryViewAtQueryNode) (CollectionRuntimeGuard, error) {
+func (m *fakeQueryViewCollectionRuntimeManager) Acquire(_ context.Context, view *qviews.QueryViewAtQueryNode) (CollectionRuntimeGuard, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.acquireView = view
@@ -252,7 +252,7 @@ type instantTransformGuard struct{}
 
 func (instantTransformGuard) Release() {}
 
-type fakeMetadataProvider struct {
+type fakeQueryViewLoadMetadataProvider struct {
 	mu             sync.Mutex
 	describeCalled bool
 	loadInfoCalled []int64
@@ -262,12 +262,12 @@ type fakeMetadataProvider struct {
 	err            error
 }
 
-func (p *fakeMetadataProvider) DescribeCollection(context.Context, int64) (*milvuspb.DescribeCollectionResponse, error) {
+func (p *fakeQueryViewLoadMetadataProvider) DescribeCollection(context.Context, int64) (*milvuspb.DescribeCollectionResponse, error) {
 	p.describeCalled = true
 	return p.collection, p.err
 }
 
-func (p *fakeMetadataProvider) GetQueryViewSegmentLoadInfo(_ context.Context, _ int64, segmentIDs ...int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error) {
+func (p *fakeQueryViewLoadMetadataProvider) GetQueryViewSegmentLoadInfo(_ context.Context, _ int64, segmentIDs ...int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error) {
 	p.mu.Lock()
 	p.loadInfoCalled = append(p.loadInfoCalled, segmentIDs...)
 	p.mu.Unlock()

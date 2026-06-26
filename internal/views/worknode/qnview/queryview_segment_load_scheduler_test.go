@@ -15,10 +15,10 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 )
 
-func TestDefaultSegmentLoadScheduler_ReservesAndReleasesResourceAroundLoad(t *testing.T) {
+func TestQueryViewSegmentLoadScheduler_ReservesAndReleasesResourceAroundLoad(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
 	runtime := &fakeCollectionRuntimeGuard{collectionID: testCollectionID}
-	provider := &fakeMetadataProvider{
+	provider := &fakeQueryViewLoadMetadataProvider{
 		loadInfos: []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
 	}
 	loader := &fakePhysicalLoader{
@@ -27,7 +27,7 @@ func TestDefaultSegmentLoadScheduler_ReservesAndReleasesResourceAroundLoad(t *te
 		},
 	}
 	estimator := &fakeSegmentResourceEstimator{}
-	scheduler := NewDefaultSegmentLoadScheduler(provider, loader, estimator)
+	scheduler := NewQueryViewSegmentLoadScheduler(provider, loader, estimator)
 
 	loadedCh := make(chan TransformSegment, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -57,11 +57,11 @@ func TestDefaultSegmentLoadScheduler_ReservesAndReleasesResourceAroundLoad(t *te
 	assert.Same(t, runtime, loader.collections[0])
 }
 
-func TestDefaultSegmentLoadScheduler_UsesPackedSegmentLoadInfoFromMetadataProvider(t *testing.T) {
+func TestQueryViewSegmentLoadScheduler_UsesPackedSegmentLoadInfoFromQueryViewLoadMetadataProvider(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
 	runtime := &fakeCollectionRuntimeGuard{collectionID: testCollectionID}
 	indexes := []*indexpb.IndexInfo{{CollectionID: testCollectionID, FieldID: 101, IndexName: "vec_idx"}}
-	provider := &fakeMetadataProvider{
+	provider := &fakeQueryViewLoadMetadataProvider{
 		loadInfos:      []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10, CollectionID: testCollectionID}},
 		loadIndexInfos: indexes,
 	}
@@ -70,7 +70,7 @@ func TestDefaultSegmentLoadScheduler_UsesPackedSegmentLoadInfoFromMetadataProvid
 			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID()}, nil
 		},
 	}
-	scheduler := NewDefaultSegmentLoadScheduler(provider, loader)
+	scheduler := NewQueryViewSegmentLoadScheduler(provider, loader)
 
 	loadedCh := make(chan TransformSegment, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -99,9 +99,9 @@ func TestDefaultSegmentLoadScheduler_UsesPackedSegmentLoadInfoFromMetadataProvid
 	assert.Equal(t, int64(1000), loader.loadInfos[0].GetSegmentID())
 }
 
-func TestDefaultSegmentLoadScheduler_UsesTaskTransformStartTick(t *testing.T) {
+func TestQueryViewSegmentLoadScheduler_UsesTaskTransformStartTick(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
-	provider := &fakeMetadataProvider{
+	provider := &fakeQueryViewLoadMetadataProvider{
 		loadInfos: []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
 	}
 	loader := &fakePhysicalLoader{
@@ -109,7 +109,7 @@ func TestDefaultSegmentLoadScheduler_UsesTaskTransformStartTick(t *testing.T) {
 			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID(), startAfter: 10}, nil
 		},
 	}
-	scheduler := NewDefaultSegmentLoadScheduler(provider, loader)
+	scheduler := NewQueryViewSegmentLoadScheduler(provider, loader)
 
 	loadedCh := make(chan TransformSegment, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -134,11 +134,11 @@ func TestDefaultSegmentLoadScheduler_UsesTaskTransformStartTick(t *testing.T) {
 	assert.Equal(t, uint64(99), loaded.TransformStartAfterTimeTick())
 }
 
-func TestDefaultSegmentLoadScheduler_UpdatesCollectionIndexMetaBeforeLoad(t *testing.T) {
+func TestQueryViewSegmentLoadScheduler_UpdatesCollectionIndexMetaBeforeLoad(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
 	runtime := &fakeCollectionRuntimeGuard{collectionID: testCollectionID}
 	indexes := []*indexpb.IndexInfo{{CollectionID: testCollectionID, FieldID: 101, IndexName: "vec_idx"}}
-	provider := &fakeMetadataProvider{
+	provider := &fakeQueryViewLoadMetadataProvider{
 		loadInfos:      []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
 		loadIndexInfos: indexes,
 	}
@@ -148,7 +148,7 @@ func TestDefaultSegmentLoadScheduler_UpdatesCollectionIndexMetaBeforeLoad(t *tes
 			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID()}, nil
 		},
 	}
-	scheduler := NewDefaultSegmentLoadScheduler(provider, loader)
+	scheduler := NewQueryViewSegmentLoadScheduler(provider, loader)
 
 	loadedCh := make(chan TransformSegment, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -172,17 +172,17 @@ func TestDefaultSegmentLoadScheduler_UpdatesCollectionIndexMetaBeforeLoad(t *tes
 	assert.ElementsMatch(t, indexes, runtime.updatedIndexes)
 }
 
-func TestDefaultSegmentLoadScheduler_IndexMetaUpdateFailureSkipsReserveAndLoad(t *testing.T) {
+func TestQueryViewSegmentLoadScheduler_IndexMetaUpdateFailureSkipsReserveAndLoad(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
 	runtime := &fakeCollectionRuntimeGuard{collectionID: testCollectionID, updateErr: errors.New("index meta update failed")}
 	indexes := []*indexpb.IndexInfo{{CollectionID: testCollectionID, FieldID: 101, IndexName: "vec_idx"}}
-	provider := &fakeMetadataProvider{
+	provider := &fakeQueryViewLoadMetadataProvider{
 		loadInfos:      []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
 		loadIndexInfos: indexes,
 	}
 	loader := &fakePhysicalLoader{}
 	estimator := &fakeSegmentResourceEstimator{}
-	scheduler := NewDefaultSegmentLoadScheduler(provider, loader, estimator)
+	scheduler := NewQueryViewSegmentLoadScheduler(provider, loader, estimator)
 
 	unrecoverableCh := make(chan error, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -208,15 +208,15 @@ func TestDefaultSegmentLoadScheduler_IndexMetaUpdateFailureSkipsReserveAndLoad(t
 	assert.Empty(t, loader.loadInfos)
 }
 
-func TestDefaultSegmentLoadScheduler_ReservationFailureSkipsPhysicalLoad(t *testing.T) {
+func TestQueryViewSegmentLoadScheduler_ReservationFailureSkipsPhysicalLoad(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
 	runtime := &fakeCollectionRuntimeGuard{collectionID: testCollectionID}
-	provider := &fakeMetadataProvider{
+	provider := &fakeQueryViewLoadMetadataProvider{
 		loadInfos: []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
 	}
 	loader := &fakePhysicalLoader{}
 	estimator := &fakeSegmentResourceEstimator{err: errors.New("resource rejected")}
-	scheduler := NewDefaultSegmentLoadScheduler(provider, loader, estimator)
+	scheduler := NewQueryViewSegmentLoadScheduler(provider, loader, estimator)
 
 	unrecoverableCh := make(chan error, 1)
 	scheduler.Submit(SegmentLoadTask{

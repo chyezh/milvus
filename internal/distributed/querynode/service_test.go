@@ -354,13 +354,13 @@ func (c *fakeQueryViewMetadataMixCoordClient) GetQueryViewSegmentLoadInfo(_ cont
 	return c.getQVLoadInfoResp, c.getQVLoadInfoErr
 }
 
-func newTestQueryViewMetadataProvider(client types.MixCoordClient) *lazyQueryViewMetadataProvider {
+func newTestQueryViewLoadMetadataProvider(client types.MixCoordClient) *lazyQueryViewLoadMetadataProvider {
 	future := syncutil.NewFuture[types.MixCoordClient]()
 	future.Set(client)
-	return &lazyQueryViewMetadataProvider{mixCoord: future}
+	return &lazyQueryViewLoadMetadataProvider{mixCoord: future}
 }
 
-func TestLazyQueryViewMetadataProvider_GetQueryViewSegmentLoadInfo(t *testing.T) {
+func TestLazyQueryViewLoadMetadataProvider_GetQueryViewSegmentLoadInfo(t *testing.T) {
 	indexes := []*indexpb.IndexInfo{{CollectionID: 100, FieldID: 101, IndexName: "vec_idx"}}
 	client := &fakeQueryViewMetadataMixCoordClient{
 		getQVLoadInfoResp: &querypb.GetQueryViewSegmentLoadInfoResponse{
@@ -369,7 +369,7 @@ func TestLazyQueryViewMetadataProvider_GetQueryViewSegmentLoadInfo(t *testing.T)
 			IndexInfoList: indexes,
 		},
 	}
-	provider := newTestQueryViewMetadataProvider(client)
+	provider := newTestQueryViewLoadMetadataProvider(client)
 
 	infos, indexInfos, err := provider.GetQueryViewSegmentLoadInfo(context.Background(), 100, 1000)
 

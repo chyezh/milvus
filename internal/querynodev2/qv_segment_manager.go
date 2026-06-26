@@ -21,14 +21,14 @@ func NewQueryViewPhysicalSegmentLoader(manager *segments.Manager, loader segment
 	})
 }
 
-func (node *QueryNode) NewQueryViewSegmentManager(meta qnview.MetadataProvider, accesser wal.TransformLogAccesser) qnview.SegmentManager {
+func (node *QueryNode) NewQueryViewSegmentManager(meta qnview.QueryViewLoadMetadataProvider, accesser wal.TransformLogAccesser) qnview.SegmentManager {
 	if node.manager == nil || node.loader == nil || meta == nil || accesser == nil {
 		return nil
 	}
 	physicalLoader := NewQueryViewPhysicalSegmentLoader(node.manager, node.loader)
-	physicalManager := qnview.NewViewAwareSealedSegmentManager(meta, physicalLoader, newQueryViewSegmentResourceEstimator(node.loader))
+	physicalManager := qnview.NewViewScopedPhysicalSegmentManager(meta, physicalLoader, newQueryViewSegmentResourceEstimator(node.loader))
 	collectionRuntime := newQueryViewCollectionRuntimeManager(meta, node.manager.Collection)
-	return qnview.NewTransformAwareSegmentManager(physicalManager, qvtransformlogbuffer.New(accesser), collectionRuntime)
+	return qnview.NewQueryViewSegmentReadinessManager(physicalManager, qvtransformlogbuffer.New(accesser), collectionRuntime)
 }
 
 func newQueryViewPhysicalSegmentLoader(collections qvCollectionManager, segments qvSegmentManager, loader qvSegmentLoader) *queryViewPhysicalSegmentLoader {

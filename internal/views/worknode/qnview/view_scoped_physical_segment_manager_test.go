@@ -15,7 +15,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
-func TestViewAwareSealedSegmentManager_SubmitsSegmentLoadTasks(t *testing.T) {
+func TestViewScopedPhysicalSegmentManager_SubmitsSegmentLoadTasks(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
 	meta.DeleteApplyStartAfterTimetick = 99
 	view := &viewpb.QueryViewOfQueryNode{
@@ -25,7 +25,7 @@ func TestViewAwareSealedSegmentManager_SubmitsSegmentLoadTasks(t *testing.T) {
 	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
 	runtime := &fakeCollectionRuntimeGuard{collectionID: testCollectionID}
 	scheduler := &fakeSegmentLoadScheduler{}
-	mgr := NewViewAwareSealedSegmentManagerWithScheduler(scheduler)
+	mgr := NewViewScopedPhysicalSegmentManagerWithScheduler(scheduler)
 
 	loadedCh := make(chan *LoadedSegments, 2)
 	mgr.Acquire(AcquirePhysicalSegments{
@@ -57,7 +57,7 @@ func TestViewAwareSealedSegmentManager_SubmitsSegmentLoadTasks(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
-func TestViewAwareSealedSegmentManager_CancelsLoadingSegmentAfterLastViewRelease(t *testing.T) {
+func TestViewScopedPhysicalSegmentManager_CancelsLoadingSegmentAfterLastViewRelease(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
 	view := &viewpb.QueryViewOfQueryNode{
 		NodeId:     1,
@@ -65,7 +65,7 @@ func TestViewAwareSealedSegmentManager_CancelsLoadingSegmentAfterLastViewRelease
 	}
 	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
 	scheduler := &fakeSegmentLoadScheduler{}
-	mgr := NewViewAwareSealedSegmentManagerWithScheduler(scheduler)
+	mgr := NewViewScopedPhysicalSegmentManagerWithScheduler(scheduler)
 
 	mgr.Acquire(AcquirePhysicalSegments{
 		Key: key, Meta: meta, View: view,
@@ -95,7 +95,7 @@ func TestViewAwareSealedSegmentManager_CancelsLoadingSegmentAfterLastViewRelease
 	}
 }
 
-func TestViewAwareSealedSegmentManager_ReleaseWaitsForInFlightLoadCallback(t *testing.T) {
+func TestViewScopedPhysicalSegmentManager_ReleaseWaitsForInFlightLoadCallback(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
 	view := &viewpb.QueryViewOfQueryNode{
 		NodeId:     1,
@@ -103,7 +103,7 @@ func TestViewAwareSealedSegmentManager_ReleaseWaitsForInFlightLoadCallback(t *te
 	}
 	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
 	scheduler := &fakeSegmentLoadScheduler{}
-	mgr := NewViewAwareSealedSegmentManagerWithScheduler(scheduler)
+	mgr := NewViewScopedPhysicalSegmentManagerWithScheduler(scheduler)
 
 	mgr.Acquire(AcquirePhysicalSegments{
 		Key: key, Meta: meta, View: view,
@@ -132,7 +132,7 @@ func TestViewAwareSealedSegmentManager_ReleaseWaitsForInFlightLoadCallback(t *te
 	assert.True(t, segment.released)
 }
 
-func TestViewAwareSealedSegmentManager_SharedInFlightLoadSurvivesSubmitterRelease(t *testing.T) {
+func TestViewScopedPhysicalSegmentManager_SharedInFlightLoadSurvivesSubmitterRelease(t *testing.T) {
 	meta1 := buildHandlerTestMeta(1)
 	view := &viewpb.QueryViewOfQueryNode{
 		NodeId:     1,
@@ -143,7 +143,7 @@ func TestViewAwareSealedSegmentManager_SharedInFlightLoadSurvivesSubmitterReleas
 	key2 := qviews.NewQueryViewAtQueryNode(meta2, view).QueryViewKey()
 
 	scheduler := &fakeSegmentLoadScheduler{}
-	mgr := NewViewAwareSealedSegmentManagerWithScheduler(scheduler)
+	mgr := NewViewScopedPhysicalSegmentManagerWithScheduler(scheduler)
 
 	loaded1 := make(chan *LoadedSegments, 1)
 	loaded2 := make(chan *LoadedSegments, 1)
@@ -194,7 +194,7 @@ func TestViewAwareSealedSegmentManager_SharedInFlightLoadSurvivesSubmitterReleas
 	assert.False(t, segment.released)
 }
 
-func TestViewAwareSealedSegmentManager_CancelsOnlyLastRefTasksOnMixedRelease(t *testing.T) {
+func TestViewScopedPhysicalSegmentManager_CancelsOnlyLastRefTasksOnMixedRelease(t *testing.T) {
 	meta1 := buildHandlerTestMeta(1)
 	view1 := &viewpb.QueryViewOfQueryNode{
 		NodeId:     1,
@@ -209,7 +209,7 @@ func TestViewAwareSealedSegmentManager_CancelsOnlyLastRefTasksOnMixedRelease(t *
 	key2 := qviews.NewQueryViewAtQueryNode(meta2, view2).QueryViewKey()
 
 	scheduler := &fakeSegmentLoadScheduler{}
-	mgr := NewViewAwareSealedSegmentManagerWithScheduler(scheduler)
+	mgr := NewViewScopedPhysicalSegmentManagerWithScheduler(scheduler)
 
 	mgr.Acquire(AcquirePhysicalSegments{
 		Key: key1, Meta: meta1, View: view1,
@@ -256,11 +256,11 @@ func cloneReadyByPartitionForTest(in map[int64][]int64) map[int64][]int64 {
 	return out
 }
 
-func TestViewAwareSealedSegmentManager_AcquireFetchesMetadataLoadsAndReports(t *testing.T) {
+func TestViewScopedPhysicalSegmentManager_AcquireFetchesMetadataLoadsAndReports(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
 	view := buildHandlerTestQNView(1)
 	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
-	provider := &fakeMetadataProvider{
+	provider := &fakeQueryViewLoadMetadataProvider{
 		loadInfos: []*querypb.SegmentLoadInfo{
 			{SegmentID: 1000, PartitionID: 10},
 			{SegmentID: 1001, PartitionID: 10},
@@ -272,7 +272,7 @@ func TestViewAwareSealedSegmentManager_AcquireFetchesMetadataLoadsAndReports(t *
 			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID()}, nil
 		},
 	}
-	mgr := NewViewAwareSealedSegmentManager(provider, loader)
+	mgr := NewViewScopedPhysicalSegmentManager(provider, loader)
 
 	loadedCh := make(chan *LoadedSegments, 3)
 	mgr.Acquire(AcquirePhysicalSegments{
@@ -289,14 +289,14 @@ func TestViewAwareSealedSegmentManager_AcquireFetchesMetadataLoadsAndReports(t *
 	assert.ElementsMatch(t, []int64{1000, 1001, 2000}, provider.loadInfoCalled)
 }
 
-func TestViewAwareSealedSegmentManager_LoadsMissingSegmentsIndependently(t *testing.T) {
+func TestViewScopedPhysicalSegmentManager_LoadsMissingSegmentsIndependently(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
 	view := &viewpb.QueryViewOfQueryNode{
 		NodeId:     1,
 		Partitions: []*viewpb.QueryViewOfPartition{{PartitionId: 10, SegmentIds: []int64{1000, 1001}}},
 	}
 	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
-	provider := &fakeMetadataProvider{
+	provider := &fakeQueryViewLoadMetadataProvider{
 		loadInfos: []*querypb.SegmentLoadInfo{
 			{SegmentID: 1000, PartitionID: 10},
 			{SegmentID: 1001, PartitionID: 10},
@@ -307,7 +307,7 @@ func TestViewAwareSealedSegmentManager_LoadsMissingSegmentsIndependently(t *test
 			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID()}, nil
 		},
 	}
-	mgr := NewViewAwareSealedSegmentManager(provider, loader)
+	mgr := NewViewScopedPhysicalSegmentManager(provider, loader)
 
 	loadedCh := make(chan *LoadedSegments, 2)
 	mgr.Acquire(AcquirePhysicalSegments{
@@ -325,14 +325,14 @@ func TestViewAwareSealedSegmentManager_LoadsMissingSegmentsIndependently(t *test
 	assert.ElementsMatch(t, []int64{1000, 1001}, provider.loadInfoCalled)
 }
 
-func TestViewAwareSealedSegmentManager_ReleaseAfterLastView(t *testing.T) {
+func TestViewScopedPhysicalSegmentManager_ReleaseAfterLastView(t *testing.T) {
 	meta1 := buildHandlerTestMeta(1)
 	view1 := buildHandlerTestQNView(1)
 	key1 := qviews.NewQueryViewAtQueryNode(meta1, view1).QueryViewKey()
 	meta2 := buildHandlerTestMeta(2)
 	view2 := buildHandlerTestQNView(1)
 	key2 := qviews.NewQueryViewAtQueryNode(meta2, view2).QueryViewKey()
-	provider := &fakeMetadataProvider{
+	provider := &fakeQueryViewLoadMetadataProvider{
 		loadInfos: []*querypb.SegmentLoadInfo{
 			{SegmentID: 1000, PartitionID: 10},
 			{SegmentID: 1001, PartitionID: 10},
@@ -344,7 +344,7 @@ func TestViewAwareSealedSegmentManager_ReleaseAfterLastView(t *testing.T) {
 			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID()}, nil
 		},
 	}
-	mgr := NewViewAwareSealedSegmentManager(provider, loader)
+	mgr := NewViewScopedPhysicalSegmentManager(provider, loader)
 
 	ready1 := make(chan *LoadedSegments, 3)
 	ready2 := make(chan *LoadedSegments, 1)
@@ -367,18 +367,18 @@ func TestViewAwareSealedSegmentManager_ReleaseAfterLastView(t *testing.T) {
 	assert.Len(t, loader.loadInfos, 3)
 }
 
-func TestViewAwareSealedSegmentManager_MissingIndexDoesNotBlockAcquire(t *testing.T) {
+func TestViewScopedPhysicalSegmentManager_MissingIndexDoesNotBlockAcquire(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
 	view := &viewpb.QueryViewOfQueryNode{
 		NodeId:     1,
 		Partitions: []*viewpb.QueryViewOfPartition{{PartitionId: 10, SegmentIds: []int64{1000}}},
 	}
 	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
-	provider := &fakeMetadataProvider{
+	provider := &fakeQueryViewLoadMetadataProvider{
 		loadInfos: []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
 	}
 	loader := &fakePhysicalLoader{loaded: &fakeTransformSegment{id: 1000, partitionID: 10}}
-	mgr := NewViewAwareSealedSegmentManager(provider, loader)
+	mgr := NewViewScopedPhysicalSegmentManager(provider, loader)
 
 	loadedCh := make(chan *LoadedSegments, 1)
 	unrecoverableCh := make(chan struct{}, 1)

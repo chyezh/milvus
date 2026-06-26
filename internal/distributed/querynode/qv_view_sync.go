@@ -48,7 +48,7 @@ func (s *Server) registerQueryViewSyncServer() {
 				return nil
 			}
 			return qnImpl.NewQueryViewSegmentManager(
-				&lazyQueryViewMetadataProvider{mixCoord: s.mixCoord},
+				&lazyQueryViewLoadMetadataProvider{mixCoord: s.mixCoord},
 				queryViewTransformLogAccesser(),
 			)
 		},
@@ -105,18 +105,18 @@ func queryViewTransformLogAccesser() wal.TransformLogAccesser {
 	return wal.TransformLog()
 }
 
-type lazyQueryViewMetadataProvider struct {
+type lazyQueryViewLoadMetadataProvider struct {
 	mixCoord *syncutil.Future[types.MixCoordClient]
 }
 
-func (p *lazyQueryViewMetadataProvider) client(ctx context.Context) (types.MixCoordClient, error) {
+func (p *lazyQueryViewLoadMetadataProvider) client(ctx context.Context) (types.MixCoordClient, error) {
 	if p.mixCoord == nil {
 		return nil, merr.WrapErrServiceUnavailable("mixcoord client is not initialized")
 	}
 	return p.mixCoord.GetWithContext(ctx)
 }
 
-func (p *lazyQueryViewMetadataProvider) DescribeCollection(ctx context.Context, collectionID int64) (*milvuspb.DescribeCollectionResponse, error) {
+func (p *lazyQueryViewLoadMetadataProvider) DescribeCollection(ctx context.Context, collectionID int64) (*milvuspb.DescribeCollectionResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, paramtable.Get().QueryCoordCfg.BrokerTimeout.GetAsDuration(time.Millisecond))
 	defer cancel()
 
@@ -136,7 +136,7 @@ func (p *lazyQueryViewMetadataProvider) DescribeCollection(ctx context.Context, 
 	return resp, nil
 }
 
-func (p *lazyQueryViewMetadataProvider) GetQueryViewSegmentLoadInfo(ctx context.Context, collectionID int64, segmentIDs ...int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error) {
+func (p *lazyQueryViewLoadMetadataProvider) GetQueryViewSegmentLoadInfo(ctx context.Context, collectionID int64, segmentIDs ...int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error) {
 	ctx, cancel := context.WithTimeout(ctx, paramtable.Get().QueryCoordCfg.BrokerTimeout.GetAsDuration(time.Millisecond))
 	defer cancel()
 

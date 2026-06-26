@@ -20,7 +20,7 @@ import (
 
 func TestQueryViewCollectionRuntimeManager_AcquireRefsCollectionAndReleaseUnrefs(t *testing.T) {
 	collection := &fakeQVCollectionManager{}
-	provider := &fakeQVMetadataProvider{
+	provider := &fakeQVLoadMetadataProvider{
 		collection: &milvuspb.DescribeCollectionResponse{
 			CollectionID:    1,
 			DbName:          "db",

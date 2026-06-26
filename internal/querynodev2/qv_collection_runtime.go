@@ -15,11 +15,11 @@ import (
 )
 
 type queryViewCollectionRuntimeManager struct {
-	meta        qnview.MetadataProvider
+	meta        qnview.QueryViewLoadMetadataProvider
 	collections qvCollectionManager
 }
 
-func newQueryViewCollectionRuntimeManager(meta qnview.MetadataProvider, collections qvCollectionManager) *queryViewCollectionRuntimeManager {
+func newQueryViewCollectionRuntimeManager(meta qnview.QueryViewLoadMetadataProvider, collections qvCollectionManager) *queryViewCollectionRuntimeManager {
 	return &queryViewCollectionRuntimeManager{
 		meta:        meta,
 		collections: collections,

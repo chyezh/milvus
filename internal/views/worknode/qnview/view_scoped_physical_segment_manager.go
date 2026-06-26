@@ -9,7 +9,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type ViewAwareSealedSegmentManager struct {
+type ViewScopedPhysicalSegmentManager struct {
 	scheduler SegmentLoadScheduler
 
 	mu       sync.Mutex
@@ -42,12 +42,12 @@ type segmentLoadSubmission struct {
 	ctx       context.Context
 }
 
-func NewViewAwareSealedSegmentManager(meta MetadataProvider, loader PhysicalSegmentLoader, estimators ...SegmentResourceEstimator) *ViewAwareSealedSegmentManager {
-	return NewViewAwareSealedSegmentManagerWithScheduler(NewDefaultSegmentLoadScheduler(meta, loader, estimators...))
+func NewViewScopedPhysicalSegmentManager(meta QueryViewLoadMetadataProvider, loader PhysicalSegmentLoader, estimators ...SegmentResourceEstimator) *ViewScopedPhysicalSegmentManager {
+	return NewViewScopedPhysicalSegmentManagerWithScheduler(NewQueryViewSegmentLoadScheduler(meta, loader, estimators...))
 }
 
-func NewViewAwareSealedSegmentManagerWithScheduler(scheduler SegmentLoadScheduler) *ViewAwareSealedSegmentManager {
-	return &ViewAwareSealedSegmentManager{
+func NewViewScopedPhysicalSegmentManagerWithScheduler(scheduler SegmentLoadScheduler) *ViewScopedPhysicalSegmentManager {
+	return &ViewScopedPhysicalSegmentManager{
 		scheduler: scheduler,
 		views:     make(map[qviews.QueryViewKey]*viewRef),
 		segments:  make(map[int64]*physicalSegmentState),
@@ -55,13 +55,13 @@ func NewViewAwareSealedSegmentManagerWithScheduler(scheduler SegmentLoadSchedule
 	}
 }
 
-func (m *ViewAwareSealedSegmentManager) Acquire(req AcquirePhysicalSegments) {
+func (m *ViewScopedPhysicalSegmentManager) Acquire(req AcquirePhysicalSegments) {
 	ctx, cancel := context.WithCancel(context.Background())
 	toLoad, loadWG := m.recordView(req, cancel)
 	go m.load(ctx, req, toLoad, loadWG)
 }
 
-func (m *ViewAwareSealedSegmentManager) Release(req ReleaseSegments) {
+func (m *ViewScopedPhysicalSegmentManager) Release(req ReleaseSegments) {
 	go func() {
 		toCancel, loadWG := m.removeView(req.Key)
 		for _, segmentID := range toCancel {
@@ -76,7 +76,7 @@ func (m *ViewAwareSealedSegmentManager) Release(req ReleaseSegments) {
 	}()
 }
 
-func (m *ViewAwareSealedSegmentManager) recordView(req AcquirePhysicalSegments, cancel context.CancelFunc) ([]segmentLoadSubmission, *sync.WaitGroup) {
+func (m *ViewScopedPhysicalSegmentManager) recordView(req AcquirePhysicalSegments, cancel context.CancelFunc) ([]segmentLoadSubmission, *sync.WaitGroup) {
 	segmentPartitions := segmentPartitionMap(req.View)
 	toLoad := make([]segmentLoadSubmission, 0, len(segmentPartitions))
 	loadWG := &sync.WaitGroup{}
@@ -122,7 +122,7 @@ func (m *ViewAwareSealedSegmentManager) recordView(req AcquirePhysicalSegments, 
 	return toLoad, loadWG
 }
 
-func (m *ViewAwareSealedSegmentManager) load(ctx context.Context, req AcquirePhysicalSegments, toLoad []segmentLoadSubmission, loadWG *sync.WaitGroup) {
+func (m *ViewScopedPhysicalSegmentManager) load(ctx context.Context, req AcquirePhysicalSegments, toLoad []segmentLoadSubmission, loadWG *sync.WaitGroup) {
 	if len(toLoad) > 0 {
 		for _, submission := range toLoad {
 			if ctx.Err() != nil {
@@ -143,7 +143,7 @@ func (m *ViewAwareSealedSegmentManager) load(ctx context.Context, req AcquirePhy
 	}
 }
 
-func (m *ViewAwareSealedSegmentManager) submitSegmentLoad(ctx context.Context, req AcquirePhysicalSegments, segmentID int64, loadWG *sync.WaitGroup) {
+func (m *ViewScopedPhysicalSegmentManager) submitSegmentLoad(ctx context.Context, req AcquirePhysicalSegments, segmentID int64, loadWG *sync.WaitGroup) {
 	task := SegmentLoadTask{
 		Context:                     ctx,
 		Meta:                        proto.Clone(req.Meta).(*viewpb.QueryViewMeta),
@@ -179,7 +179,7 @@ func (m *ViewAwareSealedSegmentManager) submitSegmentLoad(ctx context.Context, r
 	m.scheduler.Submit(task)
 }
 
-func (m *ViewAwareSealedSegmentManager) completePhysicalSegmentLoad(segment TransformSegment) ([]func(), bool) {
+func (m *ViewScopedPhysicalSegmentManager) completePhysicalSegmentLoad(segment TransformSegment) ([]func(), bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	state := m.segments[segment.ID()]
@@ -213,7 +213,7 @@ func (m *ViewAwareSealedSegmentManager) completePhysicalSegmentLoad(segment Tran
 	return notifications, true
 }
 
-func (m *ViewAwareSealedSegmentManager) failPhysicalSegmentLoad(segmentID int64, err error) []func() {
+func (m *ViewScopedPhysicalSegmentManager) failPhysicalSegmentLoad(segmentID int64, err error) []func() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -257,7 +257,7 @@ func (m *ViewAwareSealedSegmentManager) failPhysicalSegmentLoad(segmentID int64,
 	return notifications
 }
 
-func (m *ViewAwareSealedSegmentManager) ResetSegment(segmentID int64) {
+func (m *ViewScopedPhysicalSegmentManager) ResetSegment(segmentID int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if state := m.segments[segmentID]; state != nil {
@@ -271,7 +271,7 @@ func (m *ViewAwareSealedSegmentManager) ResetSegment(segmentID int64) {
 	}
 }
 
-func (m *ViewAwareSealedSegmentManager) collectLoaded(view *viewpb.QueryViewOfQueryNode) (*LoadedSegments, bool) {
+func (m *ViewScopedPhysicalSegmentManager) collectLoaded(view *viewpb.QueryViewOfQueryNode) (*LoadedSegments, bool) {
 	ready := readyByPartition(view)
 	segments := make([]TransformSegment, 0, len(segmentPartitionMap(view)))
 
@@ -289,7 +289,7 @@ func (m *ViewAwareSealedSegmentManager) collectLoaded(view *viewpb.QueryViewOfQu
 	return &LoadedSegments{Segments: segments, ReadyByPartition: ready}, true
 }
 
-func (m *ViewAwareSealedSegmentManager) removeView(key qviews.QueryViewKey) ([]int64, *sync.WaitGroup) {
+func (m *ViewScopedPhysicalSegmentManager) removeView(key qviews.QueryViewKey) ([]int64, *sync.WaitGroup) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

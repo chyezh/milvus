@@ -26,22 +26,9 @@ func readyByPartition(view *viewpb.QueryViewOfQueryNode) map[int64][]int64 {
 	return ready
 }
 
-func hasRequiredAssignedSegments(meta *viewpb.QueryViewMeta, view *viewpb.QueryViewOfQueryNode) bool {
-	requiredPartitions := make(map[int64]struct{})
-	optionalPartitions := make(map[int64]struct{})
-	if meta != nil && meta.GetSettings() != nil {
-		for _, partitionID := range meta.GetSettings().GetRequiredPartitions() {
-			requiredPartitions[partitionID] = struct{}{}
-		}
-		for _, partitionID := range meta.GetSettings().GetOptionalPartitions() {
-			optionalPartitions[partitionID] = struct{}{}
-		}
-	}
+func hasAssignedSegments(view *viewpb.QueryViewOfQueryNode) bool {
 	for _, partition := range view.GetPartitions() {
-		if len(partition.GetSegmentIds()) == 0 {
-			continue
-		}
-		if isRequiredPartition(partition.GetPartitionId(), requiredPartitions, optionalPartitions) {
+		if len(partition.GetSegmentIds()) > 0 {
 			return true
 		}
 	}

@@ -10,7 +10,7 @@ type AcquireSegments struct {
 	// Key identifies the query view that holds the segment references.
 	Key qviews.QueryViewKey
 
-	// Meta carries collection, replica, vchannel, settings, and transform start
+	// Meta carries collection, replica, vchannel, version, and transform start
 	// point for this query view.
 	Meta *viewpb.QueryViewMeta
 
@@ -62,9 +62,8 @@ type ReleaseSegments struct {
 // All callbacks MUST be invoked asynchronously (not during the Acquire /
 // Release call itself) to avoid deadlocking the caller's mutex.
 type SegmentManager interface {
-	// Acquire creates or updates a segment reference.
-	// First call for a key: increments ref counts, starts loading with given settings.
-	// Subsequent calls with same key: diffs settings and reconfigures if changed.
+	// Acquire creates a view-scoped segment reference, starts missing segment
+	// loads, and reports readiness for all assigned segments.
 	Acquire(req AcquireSegments)
 
 	// Release decrements reference counts for all segments held by this view.

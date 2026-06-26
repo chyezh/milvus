@@ -8,31 +8,31 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 )
 
-type DefaultSegmentLoadScheduler struct {
-	meta      MetadataProvider
+type QueryViewSegmentLoadScheduler struct {
+	meta      QueryViewLoadMetadataProvider
 	loader    PhysicalSegmentLoader
 	estimator SegmentResourceEstimator
 }
 
-func NewDefaultSegmentLoadScheduler(meta MetadataProvider, loader PhysicalSegmentLoader, estimators ...SegmentResourceEstimator) *DefaultSegmentLoadScheduler {
+func NewQueryViewSegmentLoadScheduler(meta QueryViewLoadMetadataProvider, loader PhysicalSegmentLoader, estimators ...SegmentResourceEstimator) *QueryViewSegmentLoadScheduler {
 	var estimator SegmentResourceEstimator
 	if len(estimators) > 0 {
 		estimator = estimators[0]
 	}
-	return &DefaultSegmentLoadScheduler{
+	return &QueryViewSegmentLoadScheduler{
 		meta:      meta,
 		loader:    loader,
 		estimator: estimator,
 	}
 }
 
-func (s *DefaultSegmentLoadScheduler) Submit(task SegmentLoadTask) {
+func (s *QueryViewSegmentLoadScheduler) Submit(task SegmentLoadTask) {
 	go s.load(task)
 }
 
-func (s *DefaultSegmentLoadScheduler) Cancel(int64) {}
+func (s *QueryViewSegmentLoadScheduler) Cancel(int64) {}
 
-func (s *DefaultSegmentLoadScheduler) load(task SegmentLoadTask) {
+func (s *QueryViewSegmentLoadScheduler) load(task SegmentLoadTask) {
 	ctx := task.Context
 	if ctx == nil {
 		ctx = context.Background()
@@ -51,7 +51,7 @@ func (s *DefaultSegmentLoadScheduler) load(task SegmentLoadTask) {
 	}
 }
 
-func (s *DefaultSegmentLoadScheduler) loadMissing(ctx context.Context, task SegmentLoadTask) (*LoadedSegments, error) {
+func (s *QueryViewSegmentLoadScheduler) loadMissing(ctx context.Context, task SegmentLoadTask) (*LoadedSegments, error) {
 	loadInfos, indexes, err := s.meta.GetQueryViewSegmentLoadInfo(ctx, task.Meta.GetCollectionId(), task.SegmentID)
 	if err != nil {
 		return nil, err
@@ -85,7 +85,7 @@ func (s *DefaultSegmentLoadScheduler) loadMissing(ctx context.Context, task Segm
 	}, nil
 }
 
-func (s *DefaultSegmentLoadScheduler) reserve(ctx context.Context, info *querypb.SegmentLoadInfo, collection CollectionRuntime) (ResourceReservation, error) {
+func (s *QueryViewSegmentLoadScheduler) reserve(ctx context.Context, info *querypb.SegmentLoadInfo, collection CollectionRuntime) (ResourceReservation, error) {
 	if s.estimator == nil {
 		return nil, nil
 	}
