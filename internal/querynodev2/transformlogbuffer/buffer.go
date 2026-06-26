@@ -6,9 +6,9 @@ import (
 	"io"
 	"sync"
 
+	"github.com/milvus-io/milvus/internal/querynodev2/qnview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/views/qviews"
-	"github.com/milvus-io/milvus/internal/views/worknode/qnview"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 )
 

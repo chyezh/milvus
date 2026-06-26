@@ -1,6 +1,6 @@
 //go:build test && dynamic
 
-package querynodev2
+package qvresource
 
 import (
 	"context"

@@ -1,10 +1,10 @@
-package querynodev2
+package qvresource
 
 import (
 	"context"
 
+	"github.com/milvus-io/milvus/internal/querynodev2/qnview"
 	"github.com/milvus-io/milvus/internal/querynodev2/segments"
-	"github.com/milvus-io/milvus/internal/views/worknode/qnview"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 )
 

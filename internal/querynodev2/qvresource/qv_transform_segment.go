@@ -1,4 +1,4 @@
-package querynodev2
+package qvresource
 
 import (
 	"context"
