@@ -42,8 +42,10 @@ type ManagerClient interface {
 
 // NodeInfo is the basic QueryNode identity discovered from session service discovery.
 type NodeInfo struct {
-	ServerID int64
-	Address  string
+	ServerID     int64
+	Address      string
+	Stopping     bool
+	ServerLabels map[string]string
 }
 
 // NewManagerClient creates a new QueryNode manager client using etcd session discovery.

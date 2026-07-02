@@ -30,7 +30,7 @@ func TestHardConstraints_MemCapacityExceededRejected(t *testing.T) {
 }
 
 func TestHardConstraints_ZeroCapacityTreatedAsUnlimited(t *testing.T) {
-	node := &BalanceNode{NodeID: 1, Alive: true, MemoryCapacity: 0, UpMemLoad: 1 << 40}
+	node := &BalanceNode{NodeID: 1, Alive: true, UpMemLoad: 1 << 40}
 	seg := &SegmentInfo{MemSize: 1 << 40}
 	assert.True(t, passHardConstraints(node, seg))
 }

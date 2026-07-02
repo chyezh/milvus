@@ -147,8 +147,8 @@ func TestSnapshotBuilder_NodeInfosCopied(t *testing.T) {
 	reg := emptyRegistry(t)
 
 	nodes := map[int64]*NodeInfo{
-		1: {NodeID: 1, Alive: true, ResourceGroup: "default", MemoryCapacity: 1000},
-		2: {NodeID: 2, Alive: false, Stopping: true, MemoryCapacity: 2000, MemoryUsage: 500},
+		1: {NodeID: 1, Alive: true, ResourceGroup: "default"},
+		2: {NodeID: 2, Alive: false, Stopping: true},
 	}
 
 	builder := NewSnapshotBuilder(
@@ -165,13 +165,11 @@ func TestSnapshotBuilder_NodeInfosCopied(t *testing.T) {
 	require.NotNil(t, n1)
 	assert.True(t, n1.Alive)
 	assert.Equal(t, "default", n1.ResourceGroup)
-	assert.Equal(t, int64(1000), n1.MemoryCapacity)
 	assert.Equal(t, int64(0), n1.UpMemLoad, "no shards → zero aggregate")
 
 	n2 := snap.Nodes[2]
 	require.NotNil(t, n2)
 	assert.True(t, n2.Stopping)
-	assert.Equal(t, int64(500), n2.MemoryUsage)
 }
 
 func TestSnapshotBuilder_AggregatePerNodeLoad(t *testing.T) {
@@ -198,8 +196,8 @@ func TestSnapshotBuilder_AggregatePerNodeLoad(t *testing.T) {
 	}
 
 	nodes := map[int64]*NodeInfo{
-		1: {NodeID: 1, Alive: true, MemoryCapacity: 10000},
-		2: {NodeID: 2, Alive: true, MemoryCapacity: 10000},
+		1: {NodeID: 1, Alive: true},
+		2: {NodeID: 2, Alive: true},
 	}
 
 	builder := NewSnapshotBuilder(

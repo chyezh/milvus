@@ -79,12 +79,10 @@ func buildBalanceNodes(snapshot *NodeSnapshot) map[int64]*BalanceNode {
 	out := make(map[int64]*BalanceNode)
 	snapshot.Range(func(id int64, info *NodeInfo) bool {
 		out[id] = &BalanceNode{
-			NodeID:         info.NodeID,
-			Alive:          info.Alive,
-			Stopping:       info.Stopping,
-			ResourceGroup:  info.ResourceGroup,
-			MemoryCapacity: info.MemoryCapacity,
-			MemoryUsage:    info.MemoryUsage,
+			NodeID:        info.NodeID,
+			Alive:         info.Alive,
+			Stopping:      info.Stopping,
+			ResourceGroup: info.ResourceGroup,
 		}
 		return true
 	})

@@ -19,7 +19,10 @@ import (
 )
 
 func TestGetAllQueryNodesReturnsSessionNodeInfo(t *testing.T) {
-	r := &fakeResolver{state: newQueryNodeVersionedState(1, []int64{10, 20})}
+	r := &fakeResolver{state: newQueryNodeVersionedState(1, map[int64]queryNodeSessionInfo{
+		10: {},
+		20: {stopping: true, labels: map[string]string{sessionutil.LabelResourceGroup: "rg-from-session"}},
+	})}
 	m := &managerClientImpl{
 		lifetime: typeutil.NewLifetime(),
 		stopped:  make(chan struct{}),
@@ -32,7 +35,7 @@ func TestGetAllQueryNodesReturnsSessionNodeInfo(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, map[int64]*NodeInfo{
 		10: {ServerID: 10, Address: "localhost:10"},
-		20: {ServerID: 20, Address: "localhost:20"},
+		20: {ServerID: 20, Address: "localhost:20", Stopping: true, ServerLabels: map[string]string{sessionutil.LabelResourceGroup: "rg-from-session"}},
 	}, nodes)
 }
 
@@ -64,17 +67,24 @@ func TestCreateViewSyncClientRoutesByQueryNodeID(t *testing.T) {
 	assert.Equal(t, queryNodeID, picked)
 }
 
-func newQueryNodeVersionedState(version int64, serverIDs []int64) discoverer.VersionedState {
+type queryNodeSessionInfo struct {
+	stopping bool
+	labels   map[string]string
+}
+
+func newQueryNodeVersionedState(version int64, sessions map[int64]queryNodeSessionInfo) discoverer.VersionedState {
 	state := discoverer.VersionedState{
 		Version: typeutil.VersionInt64(version),
 		State: grpcresolver.State{
-			Addresses: make([]grpcresolver.Address, 0, len(serverIDs)),
+			Addresses: make([]grpcresolver.Address, 0, len(sessions)),
 		},
 	}
-	for _, serverID := range serverIDs {
+	for serverID, info := range sessions {
 		session := &sessionutil.SessionRaw{
-			ServerID: serverID,
-			Address:  fmt.Sprintf("localhost:%d", serverID),
+			ServerID:     serverID,
+			Address:      fmt.Sprintf("localhost:%d", serverID),
+			Stopping:     info.stopping,
+			ServerLabels: info.labels,
 		}
 		state.State.Addresses = append(state.State.Addresses, grpcresolver.Address{
 			Addr:               session.Address,

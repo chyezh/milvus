@@ -16,16 +16,13 @@ type NodeProvider interface {
 	Snapshot() *NodeSnapshot
 }
 
-// NodeInfo carries the static portion of a QueryNode's state — identity,
-// health, and capacity. Dynamic per-shard load is computed by the builder.
+// NodeInfo carries the QueryNode state provided by the coordinator-facing
+// node view. Dynamic per-shard load is computed by the builder.
 type NodeInfo struct {
-	NodeID         int64
-	Alive          bool
-	Stopping       bool
-	ResourceGroup  string
-	MemoryCapacity int64
-	// MemoryUsage is the last value reported by the node over SyncResponse.
-	MemoryUsage int64
+	NodeID        int64
+	Alive         bool
+	Stopping      bool
+	ResourceGroup string
 }
 
 // NodeSnapshot is a provider-owned immutable node view.

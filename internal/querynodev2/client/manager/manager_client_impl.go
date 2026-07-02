@@ -61,11 +61,24 @@ func (c *managerClientImpl) GetAllQueryNodes(ctx context.Context) (map[int64]*No
 	result := make(map[int64]*NodeInfo, len(state.State.Addresses))
 	for serverID, session := range state.Sessions() {
 		result[serverID] = &NodeInfo{
-			ServerID: serverID,
-			Address:  session.Address,
+			ServerID:     serverID,
+			Address:      session.Address,
+			Stopping:     session.Stopping,
+			ServerLabels: copyServerLabels(session.ServerLabels),
 		}
 	}
 	return result, nil
+}
+
+func copyServerLabels(labels map[string]string) map[string]string {
+	if labels == nil {
+		return nil
+	}
+	cp := make(map[string]string, len(labels))
+	for k, v := range labels {
+		cp[k] = v
+	}
+	return cp
 }
 
 func (c *managerClientImpl) CreateViewSyncClient(ctx context.Context, queryNodeID int64) (viewpb.ViewSyncServiceClient, error) {

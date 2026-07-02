@@ -24,8 +24,8 @@ func TestBalancer_ReconcileDirtyShardAppliesPrepare(t *testing.T) {
 		store,
 		reg,
 		&fakeNodeProvider{infos: map[int64]*NodeInfo{
-			1: {NodeID: 1, Alive: true, MemoryCapacity: 1000},
-			2: {NodeID: 2, Alive: true, MemoryCapacity: 1000},
+			1: {NodeID: 1, Alive: true},
+			2: {NodeID: 2, Alive: true},
 		}},
 		&fakeDataViewProvider{
 			collections: []*viewpb.DataViewOfCollection{{
@@ -64,7 +64,7 @@ func TestBalancer_ReconcileDirtyCollectionExpandsTrackedShards(t *testing.T) {
 		store,
 		reg,
 		&fakeNodeProvider{infos: map[int64]*NodeInfo{
-			1: {NodeID: 1, Alive: true, MemoryCapacity: 1000},
+			1: {NodeID: 1, Alive: true},
 		}},
 		&fakeDataViewProvider{
 			collections: []*viewpb.DataViewOfCollection{{
@@ -98,7 +98,7 @@ func TestBalancer_ReconcileFullScanDoesNotRestackPreparing(t *testing.T) {
 		store,
 		reg,
 		&fakeNodeProvider{infos: map[int64]*NodeInfo{
-			1: {NodeID: 1, Alive: true, MemoryCapacity: 1000},
+			1: {NodeID: 1, Alive: true},
 		}},
 		&fakeDataViewProvider{
 			collections: []*viewpb.DataViewOfCollection{{
