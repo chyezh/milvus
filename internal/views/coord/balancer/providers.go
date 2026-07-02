@@ -5,9 +5,9 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
-// NodeProvider supplies the identity / health / capacity of every QueryNode
-// visible to this Coord. Backed by Node Manager + Replica Manager at the
-// facade layer.
+// NodeProvider supplies the identity / health / capacity / resource group of
+// every QueryNode visible to this Coord. Backed by Node Manager and resource
+// group metadata at the facade layer.
 //
 // The SnapshotBuilder combines these infos with cross-shard-aggregated load
 // (from ShardViewRegistry) to produce the final *BalanceNode in the snapshot.
