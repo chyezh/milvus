@@ -83,6 +83,8 @@ func buildBalanceNodes(snapshot *NodeSnapshot) map[int64]*BalanceNode {
 			Alive:         info.Alive,
 			Stopping:      info.Stopping,
 			ResourceGroup: info.ResourceGroup,
+			// TODO: populate MemoryCapacity / MemoryUsage from node view once
+			// QueryNode reports the capacity signal into the coordinator path.
 		}
 		return true
 	})
