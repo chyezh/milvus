@@ -32,7 +32,7 @@ type fakeDataViewProvider struct {
 	segments    map[int64]*SegmentInfo
 }
 
-func (f *fakeDataViewProvider) Snapshot() *DataViewSnapshot {
+func (f *fakeDataViewProvider) DataViewSnapshot(context.Context) *DataViewSnapshot {
 	return NewDataViewSnapshot(1, f.collections, newMapSegmentSnapshot(f.segments))
 }
 
@@ -132,7 +132,7 @@ func TestSnapshotBuilder_EmptyInputs(t *testing.T) {
 		&BalanceConfig{},
 	)
 
-	snap := builder.Build()
+	snap := builder.Build(context.Background())
 	require.NotNil(t, snap)
 	assert.Empty(t, snap.ConfigsMap())
 	assert.Empty(t, snap.ShardStatsMap())
@@ -158,7 +158,7 @@ func TestSnapshotBuilder_NodeInfosCopied(t *testing.T) {
 		&BalanceConfig{},
 	)
 
-	snap := builder.Build()
+	snap := builder.Build(context.Background())
 	require.Len(t, snap.Nodes, 2)
 
 	n1 := snap.Nodes[1]
@@ -207,7 +207,7 @@ func TestSnapshotBuilder_AggregatePerNodeLoad(t *testing.T) {
 		&BalanceConfig{},
 	)
 
-	snap := builder.Build()
+	snap := builder.Build(context.Background())
 	require.Len(t, snap.Nodes, 2)
 
 	n1 := snap.Nodes[1]
@@ -259,7 +259,7 @@ func TestSnapshotBuilder_CollectsSegmentsFromDataViewsAndPlacements(t *testing.T
 		&BalanceConfig{},
 	)
 
-	snap := builder.Build()
+	snap := builder.Build(context.Background())
 
 	// Segment metadata stays behind the DataView snapshot lookup; Build no
 	// longer materializes a segment map.
@@ -295,7 +295,7 @@ func TestSnapshotBuilder_UnknownNodeInPlacementIsSkipped(t *testing.T) {
 		&BalanceConfig{},
 	)
 
-	snap := builder.Build()
+	snap := builder.Build(context.Background())
 	// Node 99 does not appear in snap.Nodes; Balancer's Phase 1 will flag
 	// current view as referencing an unavailable node.
 	_, ok := snap.Nodes[99]
@@ -319,7 +319,7 @@ func TestSnapshotBuilder_MissingSegmentInfoContributesZero(t *testing.T) {
 		&BalanceConfig{},
 	)
 
-	snap := builder.Build()
+	snap := builder.Build(context.Background())
 	n1 := snap.Nodes[1]
 	// Only segment 101 contributes its MemSize; segment 102 contributes 0.
 	assert.Equal(t, int64(100), n1.PendingMemLoad)

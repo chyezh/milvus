@@ -21,6 +21,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/internal/metastore"
+	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
@@ -91,6 +92,8 @@ func newDataViewSegment(segment *SegmentInfo) *dataview.Segment {
 		CollectionID:                  segment.GetCollectionID(),
 		PartitionID:                   segment.GetPartitionID(),
 		InsertChannel:                 segment.GetInsertChannel(),
+		NumOfRows:                     segment.GetNumOfRows(),
+		MemSize:                       dataViewSegmentMemSize(segment),
 		State:                         segment.GetState(),
 		Level:                         segment.GetLevel(),
 		IsImporting:                   segment.GetIsImporting(),
@@ -102,4 +105,33 @@ func newDataViewSegment(segment *SegmentInfo) *dataview.Segment {
 		CreatedByCompaction:           segment.GetCreatedByCompaction(),
 		CompactionFrom:                append([]int64(nil), segment.GetCompactionFrom()...),
 	}
+}
+
+func dataViewSegmentMemSize(segment *SegmentInfo) int64 {
+	if segment == nil {
+		return 0
+	}
+	var total int64
+	for _, fieldBinlog := range segment.GetBinlogs() {
+		total += fieldBinlogMemSize(fieldBinlog)
+	}
+	for _, fieldBinlog := range segment.GetStatslogs() {
+		total += fieldBinlogMemSize(fieldBinlog)
+	}
+	for _, fieldBinlog := range segment.GetBm25Statslogs() {
+		total += fieldBinlogMemSize(fieldBinlog)
+	}
+	return total
+}
+
+func fieldBinlogMemSize(fieldBinlog *datapb.FieldBinlog) int64 {
+	var total int64
+	for _, binlog := range fieldBinlog.GetBinlogs() {
+		memorySize := binlog.GetMemorySize()
+		if memorySize == 0 {
+			memorySize = binlog.GetLogSize()
+		}
+		total += memorySize
+	}
+	return total
 }

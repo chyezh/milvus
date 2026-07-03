@@ -21,7 +21,7 @@ type Balancer interface {
 }
 
 type snapshotSource interface {
-	Build() *BalancerSnapshot
+	Build(ctx context.Context) *BalancerSnapshot
 }
 
 // DefaultBalancer owns the trigger queue and reconcile loop. Business
@@ -124,7 +124,7 @@ func (b *DefaultBalancer) Reconcile(ctx context.Context) error {
 	if b.snapshotBuilder == nil || b.viewRegistry == nil || b.policy == nil {
 		return nil
 	}
-	snap := b.snapshotBuilder.Build()
+	snap := b.snapshotBuilder.Build(ctx)
 	dirty := b.queue.drain(snap)
 	if len(dirty) == 0 {
 		return nil
