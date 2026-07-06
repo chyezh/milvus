@@ -237,6 +237,9 @@ QueryRuntime.applyLiveEvent(event)
 `QueryRuntime` owns event ordering. `GrowingRuntime` assumes calls come from the
 single `QueryRuntime` consumer and are already serialized in WAL order.
 
+Recovery baseline events are defined by
+[RecoveryBarrier](../../../../agent_guides/streaming-system/message/message-semantic-recovery-barrier.md).
+
 ### 5.3 Segment Seal DataVersion
 
 Segment sealing has two relevant moments:

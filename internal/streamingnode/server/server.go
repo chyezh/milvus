@@ -7,13 +7,16 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/registry"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/queryplan"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/service"
+	snviewquery "github.com/milvus-io/milvus/internal/streamingnode/server/viewquery"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/walmanager"
 	"github.com/milvus-io/milvus/internal/util/analyzer"
 	"github.com/milvus-io/milvus/internal/util/fileresource"
 	"github.com/milvus-io/milvus/internal/util/initcore"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
+	sharedviewquery "github.com/milvus-io/milvus/internal/views/viewquery"
 	worknodehandler "github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -97,4 +100,9 @@ func (s *Server) registerGRPCService(grpcServer *grpc.Server) {
 	streamingpb.RegisterStreamingNodeHandlerServiceServer(grpcServer, s.handlerService)
 	streamingpb.RegisterStreamingNodeManagerServiceServer(grpcServer, s.managerService)
 	viewpb.RegisterViewSyncServiceServer(grpcServer, worknodehandler.NewViewSyncServer(resource.Resource().QueryViewRouter()))
+	viewpb.RegisterViewQueryServiceServer(grpcServer, sharedviewquery.NewServer(
+		resource.Resource().QueryViewRouter(),
+		snviewquery.NewScheduler(snviewquery.NewDirectSegmentTaskExecutor(paramtable.GetNodeID())),
+	))
+	viewpb.RegisterQueryPlanServiceServer(grpcServer, queryplan.NewServer(s.walManager))
 }

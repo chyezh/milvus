@@ -3,6 +3,7 @@
 package qnview
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -25,6 +26,16 @@ type mockSegmentManager struct {
 	acquired        map[qviews.QueryViewKey]AcquireSegments
 	released        []qviews.QueryViewKey
 	releaseCallback map[qviews.QueryViewKey]func() // captured onDropped callbacks
+	queryHandles    []SealedSegmentHandle
+	queryErr        error
+	queryKey        qviews.QueryViewKey
+	queryView       *viewpb.QueryViewOfQueryNode
+	beforeQuery     func()
+	waitKey         qviews.QueryViewKey
+	waitView        *viewpb.QueryViewOfQueryNode
+	waitTimetick    uint64
+	waitErr         error
+	waitCalled      bool
 }
 
 func newMockSegmentManager() *mockSegmentManager {
@@ -46,6 +57,30 @@ func (m *mockSegmentManager) Release(req ReleaseSegments) {
 	delete(m.acquired, req.Key)
 	m.released = append(m.released, req.Key)
 	m.releaseCallback[req.Key] = req.OnDropped
+}
+
+func (m *mockSegmentManager) AcquireSealedSegmentHandles(_ context.Context, key qviews.QueryViewKey, view *viewpb.QueryViewOfQueryNode) ([]SealedSegmentHandle, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.beforeQuery != nil {
+		m.beforeQuery()
+	}
+	m.queryKey = key
+	m.queryView = proto.Clone(view).(*viewpb.QueryViewOfQueryNode)
+	if m.queryErr != nil {
+		return nil, m.queryErr
+	}
+	return append([]SealedSegmentHandle(nil), m.queryHandles...), nil
+}
+
+func (m *mockSegmentManager) WaitTransformVisible(_ context.Context, key qviews.QueryViewKey, view *viewpb.QueryViewOfQueryNode, timetick uint64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.waitCalled = true
+	m.waitKey = key
+	m.waitView = proto.Clone(view).(*viewpb.QueryViewOfQueryNode)
+	m.waitTimetick = timetick
+	return m.waitErr
 }
 
 func (m *mockSegmentManager) invokeReleaseCallback(key qviews.QueryViewKey) {

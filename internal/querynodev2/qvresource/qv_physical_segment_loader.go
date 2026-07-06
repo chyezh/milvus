@@ -149,6 +149,14 @@ func (s *qvLocalSegment) Partition() int64 {
 	return s.segment.Partition()
 }
 
+func (s *qvLocalSegment) QuerySegment() segments.Segment {
+	return s.segment
+}
+
+func (s *qvLocalSegment) Collection() *segments.Collection {
+	return s.collection
+}
+
 func (s *qvLocalSegment) Delete(ctx context.Context, primaryKeys storage.PrimaryKeys, timestamps []typeutil.Timestamp) error {
 	return s.segment.Delete(ctx, primaryKeys, timestamps)
 }

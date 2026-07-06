@@ -17,12 +17,15 @@ import (
 )
 
 type fakeTransformSegment struct {
-	id          int64
-	vchannel    string
-	partitionID int64
-	startAfter  uint64
-	applied     uint64
-	released    bool
+	id           int64
+	vchannel     string
+	partitionID  int64
+	startAfter   uint64
+	applied      uint64
+	released     bool
+	waitErr      error
+	waitTimetick uint64
+	waitCalled   bool
 }
 
 func (s *fakeTransformSegment) ID() int64 {
@@ -50,6 +53,12 @@ func (s *fakeTransformSegment) ApplyTransform(context.Context, *streamingpb.Tran
 
 func (s *fakeTransformSegment) AppliedTransformTimeTick() uint64 {
 	return s.applied
+}
+
+func (s *fakeTransformSegment) WaitTransformApplied(_ context.Context, timetick uint64) error {
+	s.waitCalled = true
+	s.waitTimetick = timetick
+	return s.waitErr
 }
 
 func (s *fakeTransformSegment) Release(context.Context) error {
@@ -288,6 +297,7 @@ func (p *fakeQueryViewLoadMetadataProvider) GetQueryViewSegmentLoadInfo(_ contex
 }
 
 type fakePhysicalLoader struct {
+	mu          sync.Mutex
 	loadInfos   []*querypb.SegmentLoadInfo
 	collections []CollectionRuntime
 	released    []int64
@@ -298,8 +308,10 @@ type fakePhysicalLoader struct {
 }
 
 func (l *fakePhysicalLoader) Load(_ context.Context, info *querypb.SegmentLoadInfo, collection CollectionRuntime) (TransformSegment, error) {
+	l.mu.Lock()
 	l.loadInfos = append(l.loadInfos, info)
 	l.collections = append(l.collections, collection)
+	l.mu.Unlock()
 	if l.loadFn != nil {
 		return l.loadFn(info, collection)
 	}
@@ -307,6 +319,8 @@ func (l *fakePhysicalLoader) Load(_ context.Context, info *querypb.SegmentLoadIn
 }
 
 func (l *fakePhysicalLoader) Release(_ context.Context, segmentIDs []int64) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.released = append(l.released, segmentIDs...)
 	return l.releaseErr
 }

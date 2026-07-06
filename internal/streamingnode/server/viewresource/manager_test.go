@@ -83,6 +83,32 @@ func TestManagerAcquireBeforeLoadConfigWaitsForQueryRuntime(t *testing.T) {
 	require.Len(t, state.queryViewRefs, 1)
 }
 
+func TestManagerGetQueryRuntimeReturnsReadyRuntimeForQueryViewRef(t *testing.T) {
+	manager := NewManager(testModuleBuilder{}).(*queryRuntimeManager)
+	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
+	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
+
+	require.NotNil(t, manager.OnAlterLoadConfig(testWALView(1, "ch", version)))
+	waitReady(t, manager, key, meta)
+
+	runtime, ok := manager.GetQueryRuntime(key)
+	require.True(t, ok)
+	require.NotNil(t, runtime)
+}
+
+func TestManagerQueryRuntimeReturnsSNRuntimeInterface(t *testing.T) {
+	manager := NewManager(testModuleBuilder{}).(*queryRuntimeManager)
+	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
+	meta, key := testQueryViewMetaAndKey(1, 2, "ch", version, 3)
+
+	require.NotNil(t, manager.OnAlterLoadConfig(testWALView(1, "ch", version)))
+	waitReady(t, manager, key, meta)
+
+	runtime, ok := manager.QueryRuntime(key)
+	require.True(t, ok)
+	require.NotNil(t, runtime)
+}
+
 func TestManagerReleaseClosesUnreferencedRuntime(t *testing.T) {
 	manager := NewManager(testModuleBuilder{}).(*queryRuntimeManager)
 	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}

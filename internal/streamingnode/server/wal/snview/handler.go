@@ -1,10 +1,13 @@
 package snview
 
 import (
+	"context"
 	"sync"
 
 	"github.com/milvus-io/milvus/internal/metastore"
+	"github.com/milvus-io/milvus/internal/views/optimizer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/internal/views/viewerror"
 	"github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -57,11 +60,19 @@ var _ handler.QueryViewHandler = (*SNQueryViewHandler)(nil)
 //     (In practice unreachable — entry is deleted upon reaching Dropped.)
 //   - Other states: SM handles coord push and responds accordingly.
 type SNQueryViewHandler struct {
-	mu       sync.Mutex
-	pchannel string
-	shards   map[qviews.ShardID]*snShardView
-	catalog  metastore.StreamingNodeCataLog
-	resMgr   StreamingNodeResourceManager
+	mu             sync.Mutex
+	pchannel       string
+	shards         map[qviews.ShardID]*snShardView
+	catalog        metastore.StreamingNodeCataLog
+	resMgr         StreamingNodeResourceManager
+	localOptimizer optimizer.LocalOptimizer
+}
+
+type QueryViewLease struct {
+	Version qviews.QueryViewVersion
+	Meta    *viewpb.QueryViewMeta
+	View    *viewpb.QueryViewOfShard
+	Release func()
 }
 
 // recoverSNQueryViewHandler reconstructs the handler from persisted views
@@ -73,10 +84,11 @@ func recoverSNQueryViewHandler(
 	views []*viewpb.QueryViewOfShard,
 ) *SNQueryViewHandler {
 	h := &SNQueryViewHandler{
-		pchannel: pchannel,
-		shards:   make(map[qviews.ShardID]*snShardView),
-		catalog:  catalog,
-		resMgr:   resMgr,
+		pchannel:       pchannel,
+		shards:         make(map[qviews.ShardID]*snShardView),
+		catalog:        catalog,
+		resMgr:         resMgr,
+		localOptimizer: optimizer.NewNoopLocalOptimizer(),
 	}
 
 	grouped := make(map[qviews.ShardID]map[qviews.QueryViewVersion]*snQueryViewStateMachine)
@@ -192,6 +204,21 @@ func (h *SNQueryViewHandler) CloseForHandoff() {
 	for _, shard := range shards {
 		shard.CloseForHandoff()
 	}
+}
+
+func (h *SNQueryViewHandler) AcquireLatestUpView(ctx context.Context, shardID qviews.ShardID) (*QueryViewLease, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	h.mu.Lock()
+	shard := h.shards[shardID]
+	h.mu.Unlock()
+	if shard == nil {
+		return nil, viewerror.NewViewNotFound("query view %s is not found", shardID.String())
+	}
+	return shard.acquireLatestUpView(ctx)
 }
 
 func (h *SNQueryViewHandler) getOrCreateShard(shardID qviews.ShardID) *snShardView {

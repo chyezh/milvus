@@ -1,6 +1,9 @@
 package snview
 
 import (
+	"context"
+
+	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
@@ -64,4 +67,21 @@ type StreamingNodeResourceManager interface {
 
 	// Release removes the QueryView reference held by a local state machine.
 	Release(req ReleaseResource)
+}
+
+type QueryRuntimeProvider interface {
+	QueryRuntime(key qviews.QueryViewKey) (QueryRuntime, bool)
+}
+
+type QueryRuntime interface {
+	WaitMVCCVisible(ctx context.Context, growingTimetick uint64, transformingTimetick uint64) error
+	AcquireGrowingSegmentHandles(ctx context.Context, partitionIDs []int64) ([]GrowingSegmentHandle, error)
+}
+
+type GrowingSegmentHandle interface {
+	ID() int64
+	PartitionID() int64
+	Collection() *segcore.CCollection
+	Segment() segcore.CSegment
+	Release()
 }

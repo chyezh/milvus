@@ -10,10 +10,10 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
-	qn "github.com/milvus-io/milvus/internal/querynodev2"
 	"github.com/milvus-io/milvus/internal/querynodev2/qnview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/types"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
@@ -26,8 +26,12 @@ import (
 )
 
 func registerQueryViewSyncServer(grpcServer *grpc.Server, segMgr qnview.SegmentManager) {
+	registerQueryViewSyncHandler(grpcServer, qnview.NewQNQueryViewHandler(segMgr))
+}
+
+func registerQueryViewSyncHandler(grpcServer *grpc.Server, queryViewHandler *qnview.QNQueryViewHandler) {
 	viewpb.RegisterViewSyncServiceServer(grpcServer, &queryNodeViewSyncServer{
-		ViewSyncServer: handler.NewViewSyncServer(qnview.NewQNQueryViewHandler(segMgr)),
+		ViewSyncServer: handler.NewViewSyncServer(queryViewHandler),
 	})
 }
 
@@ -38,21 +42,6 @@ type queryNodeViewSyncServer struct {
 
 func (s *queryNodeViewSyncServer) SyncQueryView(stream viewpb.ViewSyncService_SyncQueryViewServer) error {
 	return s.ViewSyncServer.SyncQueryView(stream)
-}
-
-func (s *Server) registerQueryViewSyncServer() {
-	registerQueryViewSyncServer(s.grpcServer, &lazyQNSegmentManager{
-		build: func() qnview.SegmentManager {
-			qnImpl, ok := s.querynode.(*qn.QueryNode)
-			if !ok {
-				return nil
-			}
-			return qnImpl.NewQueryViewSegmentManager(
-				&lazyQueryViewLoadMetadataProvider{mixCoord: s.mixCoord},
-				queryViewTransformLogAccesser(),
-			)
-		},
-	})
 }
 
 type lazyQNSegmentManager struct {
@@ -86,6 +75,22 @@ func (m *lazyQNSegmentManager) Release(req qnview.ReleaseSegments) {
 		return
 	}
 	manager.Release(req)
+}
+
+func (m *lazyQNSegmentManager) AcquireSealedSegmentHandles(ctx context.Context, key qviews.QueryViewKey, view *viewpb.QueryViewOfQueryNode) ([]qnview.SealedSegmentHandle, error) {
+	manager := m.get()
+	if manager == nil {
+		return nil, merr.WrapErrServiceUnavailable("query view segment manager is not initialized")
+	}
+	return manager.AcquireSealedSegmentHandles(ctx, key, view)
+}
+
+func (m *lazyQNSegmentManager) WaitTransformVisible(ctx context.Context, key qviews.QueryViewKey, view *viewpb.QueryViewOfQueryNode, timetick uint64) error {
+	manager := m.get()
+	if manager == nil {
+		return merr.WrapErrServiceUnavailable("query view segment manager is not initialized")
+	}
+	return manager.WaitTransformVisible(ctx, key, view, timetick)
 }
 
 func (m *lazyQNSegmentManager) get() qnview.SegmentManager {

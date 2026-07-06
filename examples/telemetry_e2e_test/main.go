@@ -426,8 +426,8 @@ func pushTestCommands(ctx context.Context, conn *grpc.ClientConn) error {
 	// Command 2: collection_metrics (persistent)
 	fmt.Println("\n  📤 Pushing 'collection_metrics' command...")
 	collMetricsPayload, _ := json.Marshal(map[string]interface{}{
-		"collections": []string{collectionName},
-		"enabled":     true,
+		"collections":   []string{collectionName},
+		"enabled":       true,
 		"metrics_types": []string{"latency", "qps"},
 	})
 

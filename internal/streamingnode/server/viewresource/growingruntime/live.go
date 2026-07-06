@@ -30,9 +30,9 @@ func (r *Runtime) applyLiveMessage(ctx context.Context, msg message.ImmutableMes
 		panic(errors.Wrap(err, "failed to apply live message to growing runtime"))
 	}
 	timeTick := msg.TimeTick()
-	advanceTimeTick(&r.appliedGrowingTimeTick, timeTick)
+	r.markGrowingTimeTick(timeTick)
 	if messageAdvancesTransformFrontier(msg) {
-		advanceTimeTick(&r.appliedTransformTimeTick, timeTick)
+		r.markTransformTimeTick(timeTick)
 	}
 }
 
@@ -65,14 +65,14 @@ func advanceTimeTick(value interface {
 	Load() uint64
 	CompareAndSwap(old uint64, new uint64) bool
 }, next uint64,
-) {
+) bool {
 	for {
 		current := value.Load()
 		if next <= current {
-			return
+			return false
 		}
 		if value.CompareAndSwap(current, next) {
-			return
+			return true
 		}
 	}
 }

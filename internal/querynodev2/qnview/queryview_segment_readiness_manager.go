@@ -70,6 +70,7 @@ type transformSegmentState struct {
 	segment       TransformSegment
 	reg           TransformRegistration
 	catchupCancel context.CancelFunc
+	queryRefs     int
 	refs          map[qviews.QueryViewKey]struct{}
 	waiters       map[qviews.QueryViewKey]transformSegmentWaiter
 }
@@ -360,7 +361,7 @@ func (m *QueryViewSegmentReadinessManager) notifyUnrecoverable(key qviews.QueryV
 func (m *QueryViewSegmentReadinessManager) release(req ReleaseSegments) {
 	detached := m.detachView(req.Key)
 	for _, segment := range detached.segments {
-		_ = segment.Release(context.Background())
+		m.releaseDetachedSegment(segment)
 	}
 	m.physical.Release(ReleaseSegments{
 		Key: req.Key,
@@ -426,12 +427,23 @@ func (m *QueryViewSegmentReadinessManager) detachViewLocked(key qviews.QueryView
 				state.reg.Unregister()
 			}
 			if state.segment != nil {
+				if state.queryRefs > 0 {
+					continue
+				}
 				detached.segments = append(detached.segments, state.segment)
+				delete(m.segments, segmentID)
+				continue
 			}
 			delete(m.segments, segmentID)
 		}
 	}
 	return detached
+}
+
+func (m *QueryViewSegmentReadinessManager) releaseDetachedSegment(segment TransformSegment) {
+	if segment != nil {
+		_ = segment.Release(context.Background())
+	}
 }
 
 func (w transformSegmentWaiter) reportReady() {

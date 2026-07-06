@@ -21,7 +21,8 @@ type WAL interface {
 
 	ROWAL
 
-	// GetLatestMVCCTimestamp get the latest mvcc timestamp of the wal at vchannel.
+	// GetLatestMVCCTimestamp returns the growing MVCC frontier of the vchannel.
+	// TODO: remove it after legacy consumers switch to QueryPlanMVCC.
 	GetLatestMVCCTimestamp(ctx context.Context, vchannel string) (uint64, error)
 
 	// TransformLog returns the RecoveryStorage-owned TransformLog accesser.

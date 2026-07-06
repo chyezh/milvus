@@ -81,19 +81,19 @@ func TestNewQueryViewAtWorkNodeFromProto_InvalidInputPanics(t *testing.T) {
 		State: viewpb.QueryViewState_QueryViewStatePreparing,
 	}
 
-	require.Panics(t, func() {
-		NewQueryViewAtWorkNodeFromProto(&viewpb.QueryViewOfShard{
-			Meta:          meta,
-			StreamingNode: &viewpb.QueryViewOfStreamingNode{},
-			QueryNode:     []*viewpb.QueryViewOfQueryNode{{NodeId: 1}},
-		})
+	qv := NewQueryViewAtWorkNodeFromProto(&viewpb.QueryViewOfShard{
+		Meta:          meta,
+		StreamingNode: &viewpb.QueryViewOfStreamingNode{},
+		QueryNode:     []*viewpb.QueryViewOfQueryNode{{NodeId: 1}},
 	})
+	assert.Equal(t, NewStreamingNodeFromVChannel("v1"), qv.WorkNode())
+	assert.Len(t, qv.IntoProto().GetQueryNode(), 1)
 
 	require.Panics(t, func() {
 		NewQueryViewAtWorkNodeFromProto(&viewpb.QueryViewOfShard{Meta: meta})
 	})
 
-	qv := &QueryViewAtQueryNode{
+	qnView := &QueryViewAtQueryNode{
 		queryViewAtWorkNodeBase: queryViewAtWorkNodeBase{
 			inner: &viewpb.QueryViewOfShard{
 				Meta: meta,
@@ -105,6 +105,6 @@ func TestNewQueryViewAtWorkNodeFromProto_InvalidInputPanics(t *testing.T) {
 		},
 	}
 	require.Panics(t, func() {
-		qv.ViewOfQueryNode()
+		qnView.ViewOfQueryNode()
 	})
 }

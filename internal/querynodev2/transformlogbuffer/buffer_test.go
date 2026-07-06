@@ -128,6 +128,10 @@ func (s *fakeSegment) AppliedTransformTimeTick() uint64 {
 	return s.applied[len(s.applied)-1]
 }
 
+func (s *fakeSegment) WaitTransformApplied(context.Context, uint64) error {
+	return nil
+}
+
 func (s *fakeSegment) Release(context.Context) error {
 	return nil
 }

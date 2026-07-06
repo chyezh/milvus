@@ -43,6 +43,7 @@ type (
 		CChannelAssignment     *streamingpb.CChannelAssignment
 		PChannelView           *PChannelView
 		Relations              []types.PChannelInfoAssigned
+		ShardAssignments       map[int64]types.ShardAssignmentInfo
 		ReplicateConfiguration *commonpb.ReplicateConfiguration
 	}
 	WatchChannelAssignmentsCallback func(param WatchChannelAssignmentsCallbackParam) error

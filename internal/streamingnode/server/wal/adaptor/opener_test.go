@@ -113,7 +113,7 @@ func TestHandleAlterWALFlushingStageWaitsRecoveryDataCheckpoint(t *testing.T) {
 		Return(nil)
 	resource.InitForTest(t, resource.OptStreamingNodeCatalog(catalog))
 
-	roWAL := adaptImplsToROWAL(&firstTimeTickWALImpls{
+	roWAL := adaptImplsToROWAL(&recoveryBarrierWALImpls{
 		channel: channel,
 		appendFunc: func(context.Context, message.MutableMessage) (message.MessageID, error) {
 			return rmq.NewRmqID(1), nil

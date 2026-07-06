@@ -55,9 +55,6 @@ func (qv *queryViewAtWorkNodeBase) IntoProto() *viewpb.QueryViewOfShard {
 
 // NewQueryViewAtWorkNodeFromProto creates a new query view at work node from proto.
 func NewQueryViewAtWorkNodeFromProto(pb *viewpb.QueryViewOfShard) QueryViewAtWorkNode {
-	if pb.StreamingNode != nil && pb.QueryNode != nil {
-		panic("invalid node view proto, should be streaming or query")
-	}
 	if pb.StreamingNode != nil {
 		return &QueryViewAtStreamingNode{
 			queryViewAtWorkNodeBase: queryViewAtWorkNodeBase{inner: pb},
@@ -68,6 +65,24 @@ func NewQueryViewAtWorkNodeFromProto(pb *viewpb.QueryViewOfShard) QueryViewAtWor
 		}
 	}
 	panic("invalid node view proto")
+}
+
+// NewFullQueryViewAtStreamingNode creates a streaming-node view that also keeps
+// the complete shard topology for query planning.
+func NewFullQueryViewAtStreamingNode(meta *viewpb.QueryViewMeta, view *viewpb.QueryViewOfStreamingNode, qns []*viewpb.QueryViewOfQueryNode) QueryViewAtWorkNode {
+	queryNodes := make([]*viewpb.QueryViewOfQueryNode, 0, len(qns))
+	for _, qn := range qns {
+		queryNodes = append(queryNodes, proto.Clone(qn).(*viewpb.QueryViewOfQueryNode))
+	}
+	return &QueryViewAtStreamingNode{
+		queryViewAtWorkNodeBase: queryViewAtWorkNodeBase{
+			inner: &viewpb.QueryViewOfShard{
+				Meta:          proto.Clone(meta).(*viewpb.QueryViewMeta),
+				StreamingNode: proto.Clone(view).(*viewpb.QueryViewOfStreamingNode),
+				QueryNode:     queryNodes,
+			},
+		},
+	}
 }
 
 // NewQueryViewAtStreamingNode creates a new query view at streaming node.

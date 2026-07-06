@@ -17,6 +17,7 @@ type SNQueryRuntimeManager interface {
 	walview.LoadConfigListener
 	snview.StreamingNodeResourceManager
 
+	GetQueryRuntime(key qviews.QueryViewKey) (*QueryRuntime, bool)
 	Close()
 }
 
@@ -195,6 +196,23 @@ func (m *queryRuntimeManager) Release(req snview.ReleaseResource) {
 	}()
 	cancelTask(task)
 	closeRuntime(runtime)
+}
+
+func (m *queryRuntimeManager) GetQueryRuntime(key qviews.QueryViewKey) (*QueryRuntime, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	vchannel, ok := m.refIndex[key]
+	if !ok {
+		return nil, false
+	}
+	state := m.resources[vchannel]
+	if state == nil || state.task != nil || state.runtime == nil {
+		return nil, false
+	}
+	if state.err != nil {
+		return nil, false
+	}
+	return state.runtime, true
 }
 
 func (m *queryRuntimeManager) Close() {
