@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"sync"
 
 	"google.golang.org/grpc"
 
@@ -22,29 +23,63 @@ type managerClientImpl struct {
 
 	rb      resolver.Builder
 	service lazygrpc.Service[viewpb.ViewSyncServiceClient]
+
+	mu                   sync.RWMutex
+	nodeChangedNotifiers []func()
+	watchStarted         bool
+	watchCancel          context.CancelFunc
+	watchWG              sync.WaitGroup
 }
 
-func (c *managerClientImpl) WatchNodeChanged(ctx context.Context) (<-chan struct{}, error) {
+func (c *managerClientImpl) RegisterNodeChangedNotifier(notifier func()) {
+	if notifier == nil {
+		return
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.nodeChangedNotifiers = append(c.nodeChangedNotifiers, notifier)
+	if c.watchStarted {
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c.watchStarted = true
+	c.watchCancel = cancel
+	c.watchWG.Add(1)
+	go c.watchNodeChanged(ctx)
+}
+
+func (c *managerClientImpl) watchNodeChanged(ctx context.Context) {
+	defer c.watchWG.Done()
+
 	if !c.lifetime.Add(typeutil.LifetimeStateWorking) {
-		return nil, status.NewOnShutdownError("querynode manager client is closing")
+		return
 	}
 	defer c.lifetime.Done()
 
-	resultCh := make(chan struct{}, 1)
-	go func() {
-		defer close(resultCh)
-		c.rb.Resolver().Watch(ctx, func(state resolver.VersionedState) error {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-c.stopped:
-				return status.NewOnShutdownError("querynode manager client is closing")
-			case resultCh <- struct{}{}:
-			}
-			return nil
-		})
-	}()
-	return resultCh, nil
+	_ = c.rb.Resolver().Watch(ctx, func(state resolver.VersionedState) error {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.stopped:
+			return status.NewOnShutdownError("querynode manager client is closing")
+		default:
+		}
+		c.notifyNodeChanged()
+		return nil
+	})
+}
+
+func (c *managerClientImpl) notifyNodeChanged() {
+	c.mu.RLock()
+	notifiers := append([]func(){}, c.nodeChangedNotifiers...)
+	c.mu.RUnlock()
+
+	for _, notifier := range notifiers {
+		notifier()
+	}
 }
 
 func (c *managerClientImpl) GetAllQueryNodes(ctx context.Context) (map[int64]*NodeInfo, error) {
@@ -99,8 +134,15 @@ func (c *managerClientImpl) CreateViewSyncClient(ctx context.Context, queryNodeI
 
 func (c *managerClientImpl) Close() {
 	c.lifetime.SetState(typeutil.LifetimeStateStopped)
+	c.mu.RLock()
+	cancel := c.watchCancel
+	c.mu.RUnlock()
+	if cancel != nil {
+		cancel()
+	}
 	close(c.stopped)
 	c.lifetime.Wait()
+	c.watchWG.Wait()
 
 	c.service.Close()
 	c.rb.Close()

@@ -26,8 +26,9 @@ import (
 // It wraps etcd session service discovery, following the same pattern as
 // StreamingNode's ManagerClient.
 type ManagerClient interface {
-	// WatchNodeChanged returns a channel that signals QueryNode membership changes.
-	WatchNodeChanged(ctx context.Context) (<-chan struct{}, error)
+	// RegisterNodeChangedNotifier registers a callback for QueryNode membership changes.
+	// The notifier must be non-blocking.
+	RegisterNodeChangedNotifier(notifier func())
 
 	// GetAllQueryNodes fetches all discovered QueryNode info.
 	// The result is fetched from service discovery, so there's no RPC call.

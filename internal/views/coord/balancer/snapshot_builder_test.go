@@ -20,11 +20,24 @@ import (
 // --- fake providers used throughout the tests ---
 
 type fakeNodeProvider struct {
-	infos map[int64]*NodeInfo
+	infos     map[int64]*NodeInfo
+	notifiers []func()
 }
 
 func (f *fakeNodeProvider) Snapshot() *NodeSnapshot {
 	return NewNodeSnapshot(1, f.infos)
+}
+
+func (f *fakeNodeProvider) RegisterNodeChangedNotifier(notifier func()) {
+	if notifier != nil {
+		f.notifiers = append(f.notifiers, notifier)
+	}
+}
+
+func (f *fakeNodeProvider) notifyNodeChanged() {
+	for _, notifier := range f.notifiers {
+		notifier()
+	}
 }
 
 type fakeDataViewProvider struct {

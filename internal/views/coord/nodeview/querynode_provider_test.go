@@ -95,8 +95,15 @@ func TestQueryNodeProviderSnapshotKeepsLastSnapshotOnDependencyError(t *testing.
 }
 
 type fakeQueryNodeClient struct {
-	nodes map[int64]*qnmanager.NodeInfo
-	err   error
+	nodes     map[int64]*qnmanager.NodeInfo
+	err       error
+	notifiers []func()
+}
+
+func (c *fakeQueryNodeClient) RegisterNodeChangedNotifier(notifier func()) {
+	if notifier != nil {
+		c.notifiers = append(c.notifiers, notifier)
+	}
 }
 
 func (c *fakeQueryNodeClient) GetAllQueryNodes(ctx context.Context) (map[int64]*qnmanager.NodeInfo, error) {

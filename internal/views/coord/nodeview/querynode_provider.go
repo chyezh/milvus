@@ -15,6 +15,7 @@ var _ balancer.NodeProvider = (*QueryNodeProvider)(nil)
 
 // QueryNodeClient supplies QueryNode facts discovered by the manager client.
 type QueryNodeClient interface {
+	RegisterNodeChangedNotifier(notifier func())
 	GetAllQueryNodes(ctx context.Context) (map[int64]*qnmanager.NodeInfo, error)
 }
 
@@ -90,6 +91,10 @@ func (p *QueryNodeProvider) Snapshot() *balancer.NodeSnapshot {
 	p.version++
 	p.snapshot = balancer.NewNodeSnapshot(p.version, infos)
 	return p.snapshot
+}
+
+func (p *QueryNodeProvider) RegisterNodeChangedNotifier(notifier func()) {
+	p.nodes.RegisterNodeChangedNotifier(notifier)
 }
 
 func (p *QueryNodeProvider) resourceGroupByNode() (map[int64]string, error) {

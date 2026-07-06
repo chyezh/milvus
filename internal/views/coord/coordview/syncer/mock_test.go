@@ -116,8 +116,7 @@ func (s *mockStream) injectResponse(views ...*viewpb.QueryViewOfShard) {
 
 type mockViewSyncClient struct {
 	mu           sync.Mutex
-	watchCh      chan struct{}
-	nodes        map[qviews.WorkNodeKey]qviews.WorkNode
+	notifiers    []func()
 	aliveNodes   map[qviews.WorkNodeKey]bool
 	openStreamFn func(ctx context.Context, node qviews.WorkNode) (viewpb.ViewSyncService_SyncQueryViewClient, error)
 	closed       bool
@@ -125,26 +124,17 @@ type mockViewSyncClient struct {
 
 func newMockViewSyncClient() *mockViewSyncClient {
 	return &mockViewSyncClient{
-		watchCh:    make(chan struct{}, 10),
-		nodes:      make(map[qviews.WorkNodeKey]qviews.WorkNode),
 		aliveNodes: make(map[qviews.WorkNodeKey]bool),
 	}
 }
 
-func (c *mockViewSyncClient) WatchNodeChanged(ctx context.Context) (<-chan struct{}, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.watchCh, nil
-}
-
-func (c *mockViewSyncClient) GetAllNodes(ctx context.Context) (map[qviews.WorkNodeKey]qviews.WorkNode, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	result := make(map[qviews.WorkNodeKey]qviews.WorkNode, len(c.nodes))
-	for k, v := range c.nodes {
-		result[k] = v
+func (c *mockViewSyncClient) RegisterNodeChangedNotifier(notifier func()) {
+	if notifier == nil {
+		return
 	}
-	return result, nil
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.notifiers = append(c.notifiers, notifier)
 }
 
 func (c *mockViewSyncClient) IsNodeAlive(_ context.Context, node qviews.WorkNode) bool {
@@ -169,25 +159,29 @@ func (c *mockViewSyncClient) Close() {
 	c.mu.Unlock()
 }
 
-// addNode adds a node to both the node map and alive set.
+// addNode marks a node as alive.
 func (c *mockViewSyncClient) addNode(node qviews.WorkNode) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.nodes[node.Key()] = node
 	c.aliveNodes[node.Key()] = true
 }
 
-// removeNode removes a node from both maps.
+// removeNode marks a node as not alive.
 func (c *mockViewSyncClient) removeNode(node qviews.WorkNode) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.nodes, node.Key())
 	delete(c.aliveNodes, node.Key())
 }
 
-// notifyNodeChanged sends a signal to the watch channel.
+// notifyNodeChanged invokes registered node-change notifiers.
 func (c *mockViewSyncClient) notifyNodeChanged() {
-	c.watchCh <- struct{}{}
+	c.mu.Lock()
+	notifiers := append([]func(){}, c.notifiers...)
+	c.mu.Unlock()
+
+	for _, notifier := range notifiers {
+		notifier()
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -3,7 +3,9 @@ package manager
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc"
@@ -65,6 +67,26 @@ func TestCreateViewSyncClientRoutesByQueryNodeID(t *testing.T) {
 	picked, ok = contextutil.GetPickServerID(baseClient.dataCtx)
 	assert.True(t, ok)
 	assert.Equal(t, queryNodeID, picked)
+}
+
+func TestRegisterNodeChangedNotifier(t *testing.T) {
+	r := &fakeResolver{state: newQueryNodeVersionedState(1, map[int64]queryNodeSessionInfo{
+		10: {},
+	})}
+	m := &managerClientImpl{
+		lifetime: typeutil.NewLifetime(),
+		stopped:  make(chan struct{}),
+		rb:       &fakeResolverBuilder{resolver: r},
+		service:  &fakeViewSyncService{},
+	}
+	defer m.Close()
+
+	var called atomic.Bool
+	m.RegisterNodeChangedNotifier(func() {
+		called.Store(true)
+	})
+
+	assert.Eventually(t, called.Load, time.Second, 10*time.Millisecond)
 }
 
 type queryNodeSessionInfo struct {

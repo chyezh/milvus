@@ -18,6 +18,12 @@ type NodeProvider interface {
 	Snapshot() *NodeSnapshot
 }
 
+// NodeChangedNotifier lets Balancer subscribe to node membership changes from
+// its NodeProvider. The notifier must be non-blocking.
+type NodeChangedNotifier interface {
+	RegisterNodeChangedNotifier(notifier func())
+}
+
 // NodeInfo carries the QueryNode state provided by the coordinator-facing
 // node view. Dynamic per-shard load is computed by the builder.
 type NodeInfo struct {

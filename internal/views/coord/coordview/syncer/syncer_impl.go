@@ -26,7 +26,6 @@ type reliableSyncer struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
-	wg     sync.WaitGroup
 }
 
 // NewReliableSyncer creates a new ReliableSyncer.
@@ -38,8 +37,7 @@ func NewReliableSyncer(client ViewSyncClient) ReliableSyncer {
 		ctx:              ctx,
 		cancel:           cancel,
 	}
-	s.wg.Add(1)
-	go s.watchNodes()
+	client.RegisterNodeChangedNotifier(s.drainRemovedNodes)
 	return s
 }
 
@@ -81,24 +79,33 @@ func notifyQueryNodeLost(sv SyncView) {
 // Returns (nil, true) if the syncer is closed.
 func (s *reliableSyncer) getOrCreateSyncer(ctx context.Context, nodeKey qviews.WorkNodeKey, views []SyncView) (rs *resumableSyncer, closed bool) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, true
+	}
+	if rs, ok := s.resumableSyncers[nodeKey]; ok {
+		s.mu.Unlock()
+		return rs, false
+	}
+	if len(views) == 0 {
+		s.mu.Unlock()
+		return nil, false
+	}
+	node := views[0].View.WorkNode()
+	s.mu.Unlock()
 
+	if !s.client.IsNodeAlive(ctx, node) {
+		return nil, false
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.closed {
 		return nil, true
 	}
 	if rs, ok := s.resumableSyncers[nodeKey]; ok {
 		return rs, false
 	}
-	if len(views) == 0 {
-		return nil, false
-	}
-
-	// IsNodeAlive is a local cache lookup, safe to call under lock.
-	node := views[0].View.WorkNode()
-	if !s.client.IsNodeAlive(ctx, node) {
-		return nil, false
-	}
-
 	mlog.Info(ctx, "ReliableSyncer: node discovered on demand, creating ResumableSyncer",
 		mlog.String("node", nodeKey))
 	rs = newResumableSyncer(s.ctx, node, s.client)
@@ -116,7 +123,6 @@ func (s *reliableSyncer) Close() error {
 	s.mu.Unlock()
 
 	s.cancel()
-	s.wg.Wait()
 
 	// Close all remaining ResumableSyncers (graceful shutdown, no drain).
 	s.mu.Lock()
@@ -130,50 +136,28 @@ func (s *reliableSyncer) Close() error {
 	return nil
 }
 
-// watchNodes watches node membership changes and drains ResumableSyncers for removed nodes.
-func (s *reliableSyncer) watchNodes() {
-	defer s.wg.Done()
-
-	for s.ctx.Err() == nil {
-		ch, err := s.client.WatchNodeChanged(s.ctx)
-		if err != nil {
-			if s.ctx.Err() != nil {
-				return
-			}
-			mlog.Warn(s.ctx, "ReliableSyncer: WatchNodeChanged failed, retrying", mlog.Err(err))
-			continue
-		}
-
-		// Initial sync.
-		s.drainRemovedNodes()
-
-		// Watch for changes.
-		for {
-			select {
-			case <-s.ctx.Done():
-				return
-			case _, ok := <-ch:
-				if !ok {
-					// Channel closed, re-watch.
-					break
-				}
-				s.drainRemovedNodes()
-				continue
-			}
-			break
-		}
-	}
-}
-
-// drainRemovedNodes fetches the current node set and drains ResumableSyncers for removed nodes.
+// drainRemovedNodes drains ResumableSyncers whose target nodes are no longer alive.
 // It does NOT create ResumableSyncers for new nodes — that is done lazily by tryCreateSyncer.
 func (s *reliableSyncer) drainRemovedNodes() {
-	nodes, err := s.client.GetAllNodes(s.ctx)
-	if err != nil {
-		if s.ctx.Err() != nil {
-			return
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	syncers := make(map[qviews.WorkNodeKey]*resumableSyncer, len(s.resumableSyncers))
+	for nodeKey, rs := range s.resumableSyncers {
+		syncers[nodeKey] = rs
+	}
+	s.mu.Unlock()
+
+	// Find removed nodes — collect ResumableSyncers to close.
+	var removed []removedNode
+	for nodeKey, rs := range syncers {
+		if !s.client.IsNodeAlive(s.ctx, rs.node) {
+			removed = append(removed, removedNode{key: nodeKey, syncer: rs})
 		}
-		mlog.Warn(s.ctx, "ReliableSyncer: GetAllNodes failed", mlog.Err(err))
+	}
+	if len(removed) == 0 {
 		return
 	}
 
@@ -182,15 +166,14 @@ func (s *reliableSyncer) drainRemovedNodes() {
 		s.mu.Unlock()
 		return
 	}
-
-	// Find removed nodes — collect ResumableSyncers to close.
-	var removed []removedNode
-	for nodeKey, rs := range s.resumableSyncers {
-		if _, exists := nodes[nodeKey]; !exists {
-			removed = append(removed, removedNode{key: nodeKey, syncer: rs})
-			delete(s.resumableSyncers, nodeKey)
+	kept := removed[:0]
+	for _, r := range removed {
+		if s.resumableSyncers[r.key] == r.syncer {
+			delete(s.resumableSyncers, r.key)
+			kept = append(kept, r)
 		}
 	}
+	removed = kept
 	s.mu.Unlock()
 
 	// Close removed ResumableSyncers and drain pending views (node lost).

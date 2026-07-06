@@ -56,13 +56,27 @@ func NewDefaultBalancer(
 	if builder != nil {
 		source = builder
 	}
-	return &DefaultBalancer{
+	balancer := &DefaultBalancer{
 		snapshotBuilder: source,
 		viewRegistry:    registry,
 		policy:          policy,
 		queue:           newTriggerQueue(),
 		tickerInterval:  interval,
 	}
+	if builder != nil {
+		balancer.registerNodeChangedNotifier(builder.nodeProvider)
+	}
+	return balancer
+}
+
+func (b *DefaultBalancer) registerNodeChangedNotifier(provider NodeProvider) {
+	notifier, ok := provider.(NodeChangedNotifier)
+	if !ok {
+		return
+	}
+	notifier.RegisterNodeChangedNotifier(func() {
+		b.Trigger(TriggerScope{NodeChanged: true})
+	})
 }
 
 // Start launches the reconcile loop and enqueues an initial full scan.
