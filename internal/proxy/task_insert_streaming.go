@@ -5,8 +5,10 @@ import (
 	"fmt"
 
 	"go.opentelemetry.io/otel"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/util/hookutil"
@@ -200,35 +202,131 @@ func repackInsertDataWithPartitionKeyForStreamingService(
 			partition2RowOffsets[partitionName] = append(partition2RowOffsets[partitionName], idx)
 		}
 
-		for partitionName, rowOffsets := range partition2RowOffsets {
-			msgs, err := genInsertMsgsByPartition(ctx, 0, partitionIDs[partitionName], partitionName, rowOffsets, channel, insertMsg)
+		batchBuilder := newPartitionKeyInsertBatchBuilder(channel, insertMsg.CollectionID, schemaVersion, ez)
+		for _, partitionName := range partitionNames {
+			partitionRowOffsets := partition2RowOffsets[partitionName]
+			if len(partitionRowOffsets) == 0 {
+				continue
+			}
+			msgs, err := genInsertMsgsByPartition(ctx, 0, partitionIDs[partitionName], partitionName, partitionRowOffsets, channel, insertMsg)
 			if err != nil {
 				return nil, err
 			}
 			for _, msg := range msgs {
 				insertRequest := msg.(*msgstream.InsertMsg).InsertRequest
-				newMsg, err := message.NewInsertMessageBuilderV1().
-					WithVChannel(channel).
-					WithHeader(&message.InsertMessageHeader{
-						CollectionId: insertMsg.CollectionID,
-						Partitions: []*message.PartitionSegmentAssignment{
-							{
-								PartitionId: partitionIDs[partitionName],
-								Rows:        insertRequest.GetNumRows(),
-								BinarySize:  0, // TODO: current not used, message estimate size is used.
-							},
-						},
-						SchemaVersion: &schemaVersion,
-					}).
-					WithBody(insertRequest).
-					WithCipher(ez).
-					BuildMutable()
+				mutableMsg, err := batchBuilder.append(&message.PartitionSegmentAssignment{
+					PartitionId: partitionIDs[partitionName],
+					Rows:        insertRequest.GetNumRows(),
+					BinarySize:  uint64(proto.Size(insertRequest)),
+				}, insertRequest)
 				if err != nil {
 					return nil, err
 				}
-				messages = append(messages, newMsg)
+				if mutableMsg != nil {
+					messages = append(messages, mutableMsg)
+				}
 			}
+		}
+		mutableMsg, err := batchBuilder.flush()
+		if err != nil {
+			return nil, err
+		}
+		if mutableMsg != nil {
+			messages = append(messages, mutableMsg)
 		}
 	}
 	return messages, nil
+}
+
+type partitionKeyInsertBatchBuilder struct {
+	channel        string
+	collectionID   int64
+	schemaVersion  int32
+	ez             *message.CipherConfig
+	maxMessageSize int
+	header         *message.InsertMessageHeader
+	body           *msgpb.InsertRequest
+	currentSize    int
+}
+
+func newPartitionKeyInsertBatchBuilder(channel string, collectionID int64, schemaVersion int32, ez *message.CipherConfig) *partitionKeyInsertBatchBuilder {
+	builder := &partitionKeyInsertBatchBuilder{
+		channel:        channel,
+		collectionID:   collectionID,
+		schemaVersion:  schemaVersion,
+		ez:             ez,
+		maxMessageSize: Params.PulsarCfg.MaxMessageSize.GetAsInt(),
+	}
+	builder.reset()
+	return builder
+}
+
+func (b *partitionKeyInsertBatchBuilder) reset() {
+	b.header = &message.InsertMessageHeader{
+		CollectionId:  b.collectionID,
+		Partitions:    make([]*message.PartitionSegmentAssignment, 0),
+		SchemaVersion: &b.schemaVersion,
+	}
+	b.body = nil
+	b.currentSize = 0
+}
+
+func (b *partitionKeyInsertBatchBuilder) append(assignment *message.PartitionSegmentAssignment, insertRequest *msgpb.InsertRequest) (message.MutableMessage, error) {
+	requestSize := proto.Size(insertRequest)
+	if b.body != nil && b.currentSize+requestSize >= b.maxMessageSize {
+		msg, err := b.flush()
+		if err != nil {
+			return nil, err
+		}
+		b.appendToCurrent(assignment, insertRequest)
+		b.currentSize = requestSize
+		return msg, nil
+	}
+	b.appendToCurrent(assignment, insertRequest)
+	b.currentSize += requestSize
+	return nil, nil
+}
+
+func (b *partitionKeyInsertBatchBuilder) appendToCurrent(assignment *message.PartitionSegmentAssignment, insertRequest *msgpb.InsertRequest) {
+	b.header.Partitions = append(b.header.Partitions, proto.Clone(assignment).(*message.PartitionSegmentAssignment))
+	if b.body == nil {
+		b.body = proto.Clone(insertRequest).(*msgpb.InsertRequest)
+		return
+	}
+	appendInsertRequestRows(b.body, insertRequest)
+}
+
+func appendInsertRequestRows(dst *msgpb.InsertRequest, src *msgpb.InsertRequest) {
+	dst.RowIDs = append(dst.RowIDs, src.GetRowIDs()...)
+	dst.Timestamps = append(dst.Timestamps, src.GetTimestamps()...)
+	dst.NumRows += src.GetNumRows()
+
+	dataIndices := make([]int64, 0, src.GetNumRows())
+	for i := uint64(0); i < src.GetNumRows(); i++ {
+		dataIndices = append(dataIndices, int64(i))
+	}
+	for i, srcField := range src.GetFieldsData() {
+		if i >= len(dst.FieldsData) {
+			dst.FieldsData = append(dst.FieldsData, proto.Clone(srcField).(*schemapb.FieldData))
+			continue
+		}
+		typeutil.AppendFieldDataByColumn(dst.FieldsData[i], srcField, dataIndices)
+	}
+}
+
+func (b *partitionKeyInsertBatchBuilder) flush() (message.MutableMessage, error) {
+	if b.body == nil {
+		return nil, nil
+	}
+	msg, err := message.NewInsertMessageBuilderV1().
+		WithVChannel(b.channel).
+		WithHeader(b.header).
+		WithBody(b.body).
+		WithCipher(b.ez).
+		BuildMutable()
+	if err != nil {
+		return nil, err
+	}
+	b.reset()
+	return msg, nil
 }

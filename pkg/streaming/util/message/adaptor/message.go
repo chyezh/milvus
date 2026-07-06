@@ -2,11 +2,14 @@ package adaptor
 
 import (
 	"github.com/cockroachdb/errors"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/pkg/v3/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 var UnmashalerDispatcher = (&msgstream.ProtoUDFactory{}).NewUnmarshalDispatcher()
@@ -34,12 +37,12 @@ func NewMsgPackFromMessage(msgs ...message.ImmutableMessage) (*msgstream.MsgPack
 			continue
 		}
 
-		tsMsg, err := parseSingleMsg(msg)
+		tsMsgs, err := parseSingleMsg(msg)
 		if err != nil {
 			finalErr = errors.CombineErrors(finalErr, errors.Wrapf(err, "Failed to convert message to msgpack, %v", msg.MessageID()))
 			continue
 		}
-		allTsMsgs = append(allTsMsgs, tsMsg)
+		allTsMsgs = append(allTsMsgs, tsMsgs...)
 	}
 	if len(allTsMsgs) == 0 {
 		return nil, finalErr
@@ -80,12 +83,11 @@ func parseTxnMsg(msg message.ImmutableMessage) ([]msgstream.TsMsg, error) {
 
 	tsMsgs := make([]msgstream.TsMsg, 0, txnMsg.Size())
 	err := txnMsg.RangeOver(func(im message.ImmutableMessage) error {
-		var tsMsg msgstream.TsMsg
-		tsMsg, err := parseSingleMsg(im)
+		parsedMsgs, err := parseSingleMsg(im)
 		if err != nil {
 			return err
 		}
-		tsMsgs = append(tsMsgs, tsMsg)
+		tsMsgs = append(tsMsgs, parsedMsgs...)
 		return nil
 	})
 	if err != nil {
@@ -95,7 +97,7 @@ func parseTxnMsg(msg message.ImmutableMessage) ([]msgstream.TsMsg, error) {
 }
 
 // parseSingleMsg converts message to ts message.
-func parseSingleMsg(msg message.ImmutableMessage) (msgstream.TsMsg, error) {
+func parseSingleMsg(msg message.ImmutableMessage) ([]msgstream.TsMsg, error) {
 	switch msg.Version() {
 	case message.VersionV1, message.VersionOld:
 		return fromMessageToTsMsgV1(msg)
@@ -107,124 +109,172 @@ func parseSingleMsg(msg message.ImmutableMessage) (msgstream.TsMsg, error) {
 }
 
 // fromMessageToTsMsgV1 converts message to ts message.
-func fromMessageToTsMsgV1(msg message.ImmutableMessage) (msgstream.TsMsg, error) {
+func fromMessageToTsMsgV1(msg message.ImmutableMessage) ([]msgstream.TsMsg, error) {
 	tsMsg, err := UnmashalerDispatcher.Unmarshal(msg.Payload(), MustGetCommonpbMsgTypeFromMessageType(msg.MessageType()))
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to unmarshal message")
 	}
-	tsMsg.SetTs(msg.TimeTick())
-	tsMsg.SetPosition(&msgpb.MsgPosition{
-		ChannelName: msg.VChannel(),
-		// from the last confirmed message id, you can read all messages which timetick is greater or equal than current message id.
-		MsgID:     MustGetMQWrapperIDFromMessage(msg.LastConfirmedMessageID()).Serialize(),
-		MsgGroup:  "", // Not important any more.
-		Timestamp: msg.TimeTick(),
-		WALName:   commonpb.WALName(msg.WALName()),
-	})
 
-	return recoverMessageFromHeader(tsMsg, msg)
+	tsMsgs, err := recoverMessageFromHeader(tsMsg, msg)
+	if err != nil {
+		return nil, err
+	}
+	setTsAndPosition(tsMsgs, msg)
+	return tsMsgs, nil
 }
 
 // fromMessageToTsMsgV2 converts message to ts message.
-func fromMessageToTsMsgV2(msg message.ImmutableMessage) (msgstream.TsMsg, error) {
-	var tsMsg msgstream.TsMsg
+func fromMessageToTsMsgV2(msg message.ImmutableMessage) ([]msgstream.TsMsg, error) {
+	var tsMsgs []msgstream.TsMsg
 	var err error
 	switch msg.MessageType() {
 	case message.MessageTypeFlush:
-		tsMsg, err = NewFlushMessageBody(msg)
+		tsMsgs, err = oneTsMsg(NewFlushMessageBody(msg))
 	case message.MessageTypeManualFlush:
-		tsMsg, err = NewManualFlushMessageBody(msg)
+		tsMsgs, err = oneTsMsg(NewManualFlushMessageBody(msg))
 	case message.MessageTypeFlushAll:
-		tsMsg, err = NewFlushAllMessageBody(msg)
+		tsMsgs, err = oneTsMsg(NewFlushAllMessageBody(msg))
 	case message.MessageTypeCreateSegment:
-		tsMsg, err = NewCreateSegmentMessageBody(msg)
+		tsMsgs, err = oneTsMsg(NewCreateSegmentMessageBody(msg))
 	case message.MessageTypeSchemaChange:
-		tsMsg, err = NewSchemaChangeMessageBody(msg)
+		tsMsgs, err = oneTsMsg(NewSchemaChangeMessageBody(msg))
 	case message.MessageTypeAlterCollection:
-		tsMsg, err = NewAlterCollectionMessageBody(msg)
+		tsMsgs, err = oneTsMsg(NewAlterCollectionMessageBody(msg))
 	case message.MessageTypeTruncateCollection:
-		tsMsg, err = NewTruncateCollectionMessageBody(msg)
+		tsMsgs, err = oneTsMsg(NewTruncateCollectionMessageBody(msg))
 	case message.MessageTypeAlterWAL:
-		tsMsg, err = NewAlterWALMessageBody(msg)
+		tsMsgs, err = oneTsMsg(NewAlterWALMessageBody(msg))
 	case message.MessageTypeCreateIndex:
-		tsMsg, err = NewCreateIndexMessageBody(msg)
+		tsMsgs, err = oneTsMsg(NewCreateIndexMessageBody(msg))
 	default:
 		panic("unsupported message type")
 	}
 	if err != nil {
 		return nil, err
 	}
-	tsMsg.SetTs(msg.TimeTick())
-	tsMsg.SetPosition(&msgpb.MsgPosition{
+	setTsAndPosition(tsMsgs, msg)
+	return tsMsgs, nil
+}
+
+func oneTsMsg(tsMsg msgstream.TsMsg, err error) ([]msgstream.TsMsg, error) {
+	if err != nil {
+		return nil, err
+	}
+	return []msgstream.TsMsg{tsMsg}, nil
+}
+
+func setTsAndPosition(tsMsgs []msgstream.TsMsg, msg message.ImmutableMessage) {
+	position := &msgpb.MsgPosition{
 		ChannelName: msg.VChannel(),
 		// from the last confirmed message id, you can read all messages which timetick is greater or equal than current message id.
 		MsgID:     MustGetMQWrapperIDFromMessage(msg.LastConfirmedMessageID()).Serialize(),
 		MsgGroup:  "", // Not important any more.
 		Timestamp: msg.TimeTick(),
 		WALName:   commonpb.WALName(msg.WALName()),
-	})
-	return tsMsg, nil
+	}
+	for _, tsMsg := range tsMsgs {
+		tsMsg.SetTs(msg.TimeTick())
+		tsMsg.SetPosition(position)
+	}
 }
 
 // recoverMessageFromHeader recovers message from header.
-func recoverMessageFromHeader(tsMsg msgstream.TsMsg, msg message.ImmutableMessage) (msgstream.TsMsg, error) {
+func recoverMessageFromHeader(tsMsg msgstream.TsMsg, msg message.ImmutableMessage) ([]msgstream.TsMsg, error) {
 	switch msg.MessageType() {
 	case message.MessageTypeInsert:
 		insertMessage, err := message.AsImmutableInsertMessageV1(msg)
 		if err != nil {
 			return nil, errors.Wrap(err, "Failed to convert message to insert message")
 		}
-		// insertMsg has multiple partition and segment assignment is done by insert message header.
-		// so recover insert message from header before send it.
-		return recoverInsertMsgFromHeader(tsMsg.(*msgstream.InsertMsg), insertMessage)
+		return recoverInsertMsgsFromHeader(tsMsg.(*msgstream.InsertMsg), insertMessage)
 	case message.MessageTypeDelete:
 		deleteMessage, err := message.AsImmutableDeleteMessageV1(msg)
 		if err != nil {
 			return nil, errors.Wrap(err, "Failed to convert message to delete message")
 		}
-		return recoverDeleteMsgFromHeader(tsMsg.(*msgstream.DeleteMsg), deleteMessage)
+		return oneTsMsg(recoverDeleteMsgFromHeader(tsMsg.(*msgstream.DeleteMsg), deleteMessage))
 	case message.MessageTypeImport:
 		importMessage, err := message.AsImmutableImportMessageV1(msg)
 		if err != nil {
 			return nil, errors.Wrap(err, "Failed to convert message to import message")
 		}
-		return recoverImportMsgFromHeader(tsMsg.(*msgstream.ImportMsg), importMessage.Header(), msg.TimeTick())
+		return oneTsMsg(recoverImportMsgFromHeader(tsMsg.(*msgstream.ImportMsg), importMessage.Header(), msg.TimeTick()))
 	default:
-		return tsMsg, nil
+		return []msgstream.TsMsg{tsMsg}, nil
 	}
 }
 
 // recoverInsertMsgFromHeader recovers insert message from header.
-func recoverInsertMsgFromHeader(insertMsg *msgstream.InsertMsg, msg message.ImmutableInsertMessageV1) (msgstream.TsMsg, error) {
+func recoverInsertMsgsFromHeader(insertMsg *msgstream.InsertMsg, msg message.ImmutableInsertMessageV1) ([]msgstream.TsMsg, error) {
 	header := msg.Header()
 	timetick := msg.TimeTick()
 
 	if insertMsg.GetCollectionID() != header.GetCollectionId() {
 		panic("unreachable code, collection id is not equal")
 	}
-	// header promise a batch insert on vchannel in future, so header has multiple partition.
-	var assignment *message.PartitionSegmentAssignment
-	for _, p := range header.Partitions {
-		if p.GetPartitionId() == insertMsg.GetPartitionID() {
-			assignment = p
-			break
+
+	tsMsgs := make([]msgstream.TsMsg, 0, len(header.GetPartitions()))
+	rowOffset := uint64(0)
+	for _, assignment := range header.GetPartitions() {
+		if assignment.GetSegmentAssignment().GetSegmentId() == 0 {
+			panic("unreachable code, partition id is not exist")
 		}
+		recovered, err := recoverInsertRequestFromPartitionAssignment(insertMsg.InsertRequest, assignment, rowOffset, timetick, msg.VChannel())
+		if err != nil {
+			return nil, err
+		}
+		tsMsgs = append(tsMsgs, recovered)
+		rowOffset += assignment.GetRows()
 	}
-	if assignment.GetSegmentAssignment().GetSegmentId() == 0 {
-		panic("unreachable code, partition id is not exist")
+	if rowOffset != insertMsg.GetNumRows() {
+		return nil, errors.Errorf("insert header rows %d does not match body rows %d", rowOffset, insertMsg.GetNumRows())
+	}
+	return tsMsgs, nil
+}
+
+func recoverInsertRequestFromPartitionAssignment(insertRequest *msgpb.InsertRequest, assignment *message.PartitionSegmentAssignment, rowOffset uint64, timetick uint64, vchannel string) (msgstream.TsMsg, error) {
+	rows := assignment.GetRows()
+	if rowOffset+rows > insertRequest.GetNumRows() {
+		return nil, errors.Errorf("insert header rows exceed body rows, offset %d rows %d body rows %d",
+			rowOffset, rows, insertRequest.GetNumRows())
 	}
 
-	insertMsg.SegmentID = assignment.GetSegmentAssignment().GetSegmentId()
-	// timetick should has been assign at streaming node.
-	// so overwrite the timetick on insertRequest.
-	timestamps := make([]uint64, insertMsg.GetNumRows())
+	recovered := proto.Clone(insertRequest).(*msgpb.InsertRequest)
+	recovered.PartitionID = assignment.GetPartitionId()
+	if recovered.GetPartitionID() != insertRequest.GetPartitionID() {
+		recovered.PartitionName = ""
+	}
+	recovered.SegmentID = assignment.GetSegmentAssignment().GetSegmentId()
+	recovered.NumRows = rows
+	recovered.RowIDs = sliceInt64(insertRequest.GetRowIDs(), rowOffset, rows)
+	recovered.FieldsData = make([]*schemapb.FieldData, len(insertRequest.GetFieldsData()))
+
+	idxComputer := typeutil.NewFieldDataIdxComputer(insertRequest.GetFieldsData())
+	for rowIdx := rowOffset; rowIdx < rowOffset+rows; rowIdx++ {
+		fieldIdxs := idxComputer.Compute(int64(rowIdx))
+		typeutil.AppendFieldData(recovered.FieldsData, insertRequest.GetFieldsData(), int64(rowIdx), fieldIdxs...)
+	}
+
+	timestamps := make([]uint64, rows)
 	for i := 0; i < len(timestamps); i++ {
 		timestamps[i] = timetick
 	}
-	insertMsg.Timestamps = timestamps
-	insertMsg.Base.Timestamp = timetick
-	insertMsg.ShardName = msg.VChannel()
-	return insertMsg, nil
+	recovered.Timestamps = timestamps
+	if recovered.Base == nil {
+		recovered.Base = &commonpb.MsgBase{MsgType: commonpb.MsgType_Insert}
+	}
+	recovered.Base.Timestamp = timetick
+	recovered.ShardName = vchannel
+	return &msgstream.InsertMsg{InsertRequest: recovered}, nil
+}
+
+func sliceInt64(values []int64, offset uint64, rows uint64) []int64 {
+	if len(values) == 0 {
+		return nil
+	}
+	start := int(offset)
+	end := int(offset + rows)
+	return append([]int64(nil), values[start:end]...)
 }
 
 func recoverDeleteMsgFromHeader(deleteMsg *msgstream.DeleteMsg, msg message.ImmutableDeleteMessageV1) (msgstream.TsMsg, error) {

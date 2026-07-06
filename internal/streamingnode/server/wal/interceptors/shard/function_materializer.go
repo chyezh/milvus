@@ -5,6 +5,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard/shards"
 	"github.com/milvus-io/milvus/internal/util/function"
@@ -58,34 +59,7 @@ type collectionSchemaGetter interface {
 
 func (impl *shardInterceptor) materializeFunctionFields(ctx context.Context, insertMsg message.MutableInsertMessageV1, collectionID int64, schemaVersion int32) error {
 	body := insertMsg.MustBody()
-	changed, ok, err := function.TryMaterialize(collectionID, schemaVersion, body)
-	if err != nil {
-		return err
-	}
-	if ok {
-		if changed {
-			insertMsg.OverwriteBody(body)
-		}
-		return nil
-	}
-
-	schemaGetter, ok := impl.shardManager.(collectionSchemaGetter)
-	if !ok {
-		return nil
-	}
-
-	schema, err := schemaGetter.GetCollectionSchema(collectionID, schemaVersion)
-	if err != nil {
-		if errors.Is(err, shards.ErrCollectionSchemaNotFound) {
-			return nil
-		}
-		return err
-	}
-	if !function.HasEmbeddingFunctions(schema) {
-		return nil
-	}
-
-	changed, err = function.FillFunctionData(ctx, collectionID, schema, body)
+	changed, err := impl.materializeInsertRequestFunctionFields(ctx, body, collectionID, schemaVersion)
 	if err != nil {
 		return err
 	}
@@ -93,4 +67,36 @@ func (impl *shardInterceptor) materializeFunctionFields(ctx context.Context, ins
 		insertMsg.OverwriteBody(body)
 	}
 	return nil
+}
+
+func (impl *shardInterceptor) materializeInsertRequestFunctionFields(ctx context.Context, body *msgpb.InsertRequest, collectionID int64, schemaVersion int32) (bool, error) {
+	changed, ok, err := function.TryMaterialize(collectionID, schemaVersion, body)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		return changed, nil
+	}
+
+	schemaGetter, ok := impl.shardManager.(collectionSchemaGetter)
+	if !ok {
+		return false, nil
+	}
+
+	schema, err := schemaGetter.GetCollectionSchema(collectionID, schemaVersion)
+	if err != nil {
+		if errors.Is(err, shards.ErrCollectionSchemaNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !function.HasEmbeddingFunctions(schema) {
+		return false, nil
+	}
+
+	changed, err = function.FillFunctionData(ctx, collectionID, schema, body)
+	if err != nil {
+		return false, err
+	}
+	return changed, nil
 }

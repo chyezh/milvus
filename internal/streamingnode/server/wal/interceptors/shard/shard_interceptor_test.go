@@ -220,6 +220,67 @@ func TestShardInterceptorPassesExplicitNonZeroSchemaVersion(t *testing.T) {
 	assert.NotNil(t, msgID)
 }
 
+func TestShardInterceptorAssignsSegmentsForMultiPartitionInsertMessage(t *testing.T) {
+	b := NewInterceptorBuilder()
+	shardManager := mock_shards.NewMockShardManager(t)
+	shardManager.EXPECT().Logger().Return(mlog.With()).Maybe()
+	i := b.Build(&interceptors.InterceptorBuildParam{
+		ShardManager: shardManager,
+	})
+	defer i.Close()
+
+	msg := message.NewInsertMessageBuilderV1().
+		WithVChannel("v1").
+		WithHeader(&messagespb.InsertMessageHeader{
+			CollectionId: 1,
+			Partitions: []*messagespb.PartitionSegmentAssignment{
+				{
+					PartitionId: 10,
+					Rows:        2,
+					BinarySize:  100,
+				},
+				{
+					PartitionId: 20,
+					Rows:        3,
+					BinarySize:  200,
+				},
+			},
+			SchemaVersion: proto.Int32(3),
+		}).
+		WithBody(&msgpb.InsertRequest{
+			CollectionID: 1,
+			NumRows:      5,
+		}).
+		MustBuildMutable().
+		WithTimeTick(1)
+
+	shardManager.EXPECT().CheckIfCollectionSchemaVersionMatch(mock.MatchedBy(func(h *message.InsertMessageHeader) bool {
+		return h != nil && h.GetCollectionId() == int64(1) && h.GetSchemaVersion() == 3
+	})).Return(int32(3), nil)
+	assigned := map[int64]uint64{}
+	shardManager.EXPECT().AssignSegment(mock.Anything).RunAndReturn(func(req *shards.AssignSegmentRequest) (*shards.AssignSegmentResult, error) {
+		assigned[req.PartitionID] = req.ModifiedMetrics.Rows
+		return &shards.AssignSegmentResult{SegmentID: req.PartitionID + 1000, Acknowledge: atomic.NewInt32(1)}, nil
+	}).Twice()
+
+	appendCalled := false
+	msgID, err := i.DoAppend(context.Background(), msg, func(ctx context.Context, msg message.MutableMessage) (message.MessageID, error) {
+		appendCalled = true
+		insertMsg := message.MustAsMutableInsertMessageV1(msg)
+		header := insertMsg.Header()
+		assert.Equal(t, int64(1010), header.GetPartitions()[0].GetSegmentAssignment().GetSegmentId())
+		assert.Equal(t, int64(1020), header.GetPartitions()[1].GetSegmentAssignment().GetSegmentId())
+		return rmq.NewRmqID(1), nil
+	})
+	assert.NoError(t, err)
+	assert.NotNil(t, msgID)
+	assert.True(t, appendCalled)
+	assert.Equal(t, map[int64]uint64{
+		10: 2,
+		20: 3,
+	}, assigned)
+}
+
 func TestShardInterceptorPassesExplicitZeroSchemaVersion(t *testing.T) {
 	b := NewInterceptorBuilder()
 	shardManager := mock_shards.NewMockShardManager(t)

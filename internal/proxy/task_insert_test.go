@@ -6,6 +6,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
@@ -21,6 +22,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/testutils"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 func TestRepackInsertDataForStreamingServicePreservesExplicitZeroSchemaVersion(t *testing.T) {
@@ -75,6 +77,158 @@ func TestRepackInsertDataForStreamingServicePreservesExplicitZeroSchemaVersion(t
 	header := msg.Header()
 	assert.NotNil(t, header.SchemaVersion)
 	assert.Equal(t, int32(0), header.GetSchemaVersion())
+}
+
+func TestRepackInsertDataWithPartitionKeyForStreamingServiceMergesPartitions(t *testing.T) {
+	paramtable.Init()
+
+	oldCache := globalMetaCache
+	cache := NewMockCache(t)
+	cache.EXPECT().GetPartitions(mock.Anything, "db", "coll").Return(map[string]int64{
+		"part_0": 100,
+		"part_1": 101,
+	}, nil)
+	cache.EXPECT().GetPartitionID(mock.Anything, "db", "coll", "part_0").Return(int64(100), nil)
+	cache.EXPECT().GetPartitionID(mock.Anything, "db", "coll", "part_1").Return(int64(101), nil)
+	globalMetaCache = cache
+	defer func() { globalMetaCache = oldCache }()
+
+	insertMsg := &msgstream.InsertMsg{
+		InsertRequest: &msgpb.InsertRequest{
+			Base: &commonpb.MsgBase{
+				MsgType:  commonpb.MsgType_Insert,
+				SourceID: 1,
+			},
+			CollectionID:   10,
+			DbName:         "db",
+			CollectionName: "coll",
+			NumRows:        6,
+			FieldsData: []*schemapb.FieldData{
+				{
+					FieldName: "pk",
+					FieldId:   1,
+					Type:      schemapb.DataType_Int64,
+					Field: &schemapb.FieldData_Scalars{
+						Scalars: &schemapb.ScalarField{
+							Data: &schemapb.ScalarField_LongData{
+								LongData: &schemapb.LongArray{Data: []int64{1, 2, 3, 4, 5, 6}},
+							},
+						},
+					},
+				},
+			},
+			RowIDs:     []int64{1, 2, 3, 4, 5, 6},
+			Timestamps: []uint64{11, 12, 13, 14, 15, 16},
+		},
+	}
+	partitionKeys := &schemapb.FieldData{
+		Field: &schemapb.FieldData_Scalars{
+			Scalars: &schemapb.ScalarField{
+				Data: &schemapb.ScalarField_LongData{
+					LongData: &schemapb.LongArray{Data: []int64{1, 2, 3, 4, 5, 6}},
+				},
+			},
+		},
+	}
+	result := &milvuspb.MutationResult{
+		IDs: &schemapb.IDs{
+			IdField: &schemapb.IDs_IntId{IntId: &schemapb.LongArray{Data: []int64{1, 2, 3, 4, 5, 6}}},
+		},
+	}
+
+	msgs, err := repackInsertDataWithPartitionKeyForStreamingService(
+		context.Background(),
+		[]string{"ch"},
+		insertMsg,
+		result,
+		partitionKeys,
+		nil,
+		&schemapb.CollectionSchema{},
+		7,
+	)
+	assert.NoError(t, err)
+	assert.Len(t, msgs, 1)
+	assert.Equal(t, message.VersionV1, msgs[0].Version())
+
+	msg := message.MustAsMutableInsertMessageV1(msgs[0])
+	header := msg.Header()
+	body := msg.MustBody()
+	assert.NotNil(t, header.SchemaVersion)
+	assert.Equal(t, int32(7), header.GetSchemaVersion())
+	assert.Greater(t, len(header.GetPartitions()), 1)
+	assert.Equal(t, uint64(6), body.GetNumRows())
+
+	expectedPartitions, err := typeutil.HashKey2Partitions(partitionKeys, []string{"part_0", "part_1"})
+	assert.NoError(t, err)
+	expectedRows := map[int64]uint64{}
+	expectedBodyRows := make([]int64, 0, 6)
+	for partitionIdx := uint32(0); partitionIdx < 2; partitionIdx++ {
+		for rowIdx, actualPartitionIdx := range expectedPartitions {
+			if actualPartitionIdx == partitionIdx {
+				expectedBodyRows = append(expectedBodyRows, int64(rowIdx+1))
+			}
+		}
+	}
+	for _, partitionIdx := range expectedPartitions {
+		expectedRows[int64(100+partitionIdx)]++
+	}
+	assert.Len(t, expectedRows, 2)
+	assert.Equal(t, expectedBodyRows, body.GetRowIDs())
+	assert.Equal(t, expectedBodyRows, body.GetFieldsData()[0].GetScalars().GetLongData().GetData())
+
+	totalRows := uint64(0)
+	actualRows := map[int64]uint64{}
+	for _, partition := range header.GetPartitions() {
+		assert.Greater(t, partition.GetBinarySize(), uint64(0))
+		actualRows[partition.GetPartitionId()] += partition.GetRows()
+		totalRows += partition.GetRows()
+	}
+	assert.Equal(t, uint64(6), totalRows)
+	assert.Equal(t, expectedRows, actualRows)
+}
+
+func TestPartitionKeyInsertBatchBuilderFlushesBeforeMaxMessageSize(t *testing.T) {
+	builder := newPartitionKeyInsertBatchBuilder("ch", 10, 7, nil)
+	firstReq := &msgpb.InsertRequest{
+		CollectionID: 10,
+		PartitionID:  100,
+		NumRows:      2,
+		RowIDs:       []int64{1, 2},
+	}
+	secondReq := &msgpb.InsertRequest{
+		CollectionID: 10,
+		PartitionID:  101,
+		NumRows:      2,
+		RowIDs:       []int64{3, 4},
+	}
+	builder.maxMessageSize = proto.Size(firstReq) + proto.Size(secondReq) - 1
+
+	msg, err := builder.append(&message.PartitionSegmentAssignment{
+		PartitionId: 100,
+		Rows:        firstReq.GetNumRows(),
+	}, firstReq)
+	assert.NoError(t, err)
+	assert.Nil(t, msg)
+
+	msg, err = builder.append(&message.PartitionSegmentAssignment{
+		PartitionId: 101,
+		Rows:        secondReq.GetNumRows(),
+	}, secondReq)
+	assert.NoError(t, err)
+	assert.NotNil(t, msg)
+	assert.Equal(t, message.VersionV1, msg.Version())
+	firstBatch := message.MustAsMutableInsertMessageV1(msg)
+	assert.Equal(t, uint64(2), firstBatch.MustBody().GetNumRows())
+	assert.Equal(t, []int64{1, 2}, firstBatch.MustBody().GetRowIDs())
+	assert.Equal(t, int64(100), firstBatch.Header().GetPartitions()[0].GetPartitionId())
+
+	msg, err = builder.flush()
+	assert.NoError(t, err)
+	assert.NotNil(t, msg)
+	secondBatch := message.MustAsMutableInsertMessageV1(msg)
+	assert.Equal(t, uint64(2), secondBatch.MustBody().GetNumRows())
+	assert.Equal(t, []int64{3, 4}, secondBatch.MustBody().GetRowIDs())
+	assert.Equal(t, int64(101), secondBatch.Header().GetPartitions()[0].GetPartitionId())
 }
 
 func TestInsertTaskPreExecuteTextRequiresStorageV3(t *testing.T) {

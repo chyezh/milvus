@@ -147,7 +147,6 @@ func (impl *shardInterceptor) handleDropPartition(ctx context.Context, msg messa
 func (impl *shardInterceptor) handleInsertMessage(ctx context.Context, msg message.MutableMessage, appendOp interceptors.Append) (message.MessageID, error) {
 	insertMsg := message.MustAsMutableInsertMessageV1(msg)
 	// Assign segment for insert message.
-	// !!! Current implementation a insert message only has one parition, but we need to merge the message for partition-key in future.
 	header := insertMsg.Header()
 	collectionID := header.GetCollectionId()
 	schemaVersion := header.GetSchemaVersion()

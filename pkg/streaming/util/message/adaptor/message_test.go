@@ -4,6 +4,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/milvus-io/milvus/pkg/v3/mq/msgstream"
@@ -53,6 +56,86 @@ func TestNewMsgPackFromInsertMessage(t *testing.T) {
 
 		for _, ts := range insertMsg.Timestamps {
 			assert.Equal(t, ts, tt)
+		}
+	}
+}
+
+func TestNewMsgPackFromInsertMessageSplitsPartitionsByHeaderRows(t *testing.T) {
+	id := rmq.NewRmqID(1)
+	tt := uint64(time.Now().UnixNano())
+
+	mutableMsg := message.NewInsertMessageBuilderV1().
+		WithVChannel("v1").
+		WithHeader(&message.InsertMessageHeader{
+			CollectionId: 100,
+			Partitions: []*message.PartitionSegmentAssignment{
+				{
+					PartitionId: 10,
+					Rows:        2,
+					SegmentAssignment: &message.SegmentAssignment{
+						SegmentId: 1000,
+					},
+				},
+				{
+					PartitionId: 20,
+					Rows:        3,
+					SegmentAssignment: &message.SegmentAssignment{
+						SegmentId: 2000,
+					},
+				},
+			},
+		}).
+		WithBody(&msgpb.InsertRequest{
+			Base: &commonpb.MsgBase{
+				MsgType: commonpb.MsgType_Insert,
+			},
+			CollectionID: 100,
+			NumRows:      5,
+			RowIDs:       []int64{1, 2, 3, 4, 5},
+			FieldsData: []*schemapb.FieldData{
+				{
+					Type:      schemapb.DataType_Int64,
+					FieldName: "pk",
+					FieldId:   1,
+					Field: &schemapb.FieldData_Scalars{
+						Scalars: &schemapb.ScalarField{
+							Data: &schemapb.ScalarField_LongData{
+								LongData: &schemapb.LongArray{Data: []int64{1, 2, 3, 4, 5}},
+							},
+						},
+					},
+				},
+			},
+		}).
+		MustBuildMutable().
+		WithTimeTick(tt).
+		WithLastConfirmedUseMessageID()
+
+	pack, err := NewMsgPackFromMessage(mutableMsg.IntoImmutableMessage(id))
+	assert.NoError(t, err)
+	assert.NotNil(t, pack)
+	assert.Len(t, pack.Msgs, 2)
+
+	first := pack.Msgs[0].(*msgstream.InsertMsg)
+	assert.Equal(t, int64(10), first.GetPartitionID())
+	assert.Equal(t, int64(1000), first.GetSegmentID())
+	assert.Equal(t, uint64(2), first.GetNumRows())
+	assert.Equal(t, []int64{1, 2}, first.GetRowIDs())
+	assert.Equal(t, []int64{1, 2}, first.GetFieldsData()[0].GetScalars().GetLongData().GetData())
+
+	second := pack.Msgs[1].(*msgstream.InsertMsg)
+	assert.Equal(t, int64(20), second.GetPartitionID())
+	assert.Equal(t, int64(2000), second.GetSegmentID())
+	assert.Equal(t, uint64(3), second.GetNumRows())
+	assert.Equal(t, []int64{3, 4, 5}, second.GetRowIDs())
+	assert.Equal(t, []int64{3, 4, 5}, second.GetFieldsData()[0].GetScalars().GetLongData().GetData())
+
+	for _, insertMsg := range []*msgstream.InsertMsg{first, second} {
+		assert.Equal(t, "v1", insertMsg.ShardName)
+		assert.Equal(t, tt, insertMsg.Base.Timestamp)
+		assert.Len(t, insertMsg.Timestamps, int(insertMsg.GetNumRows()))
+		for _, ts := range insertMsg.Timestamps {
+			assert.Equal(t, tt, ts)
 		}
 	}
 }
