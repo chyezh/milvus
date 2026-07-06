@@ -21,7 +21,6 @@ import (
 
 	"github.com/cockroachdb/errors"
 
-	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -43,7 +42,7 @@ func (s *Server) broadcastDropLoadConfigCollectionV2ForReleaseCollection(ctx con
 		return err
 	}
 
-	if !s.meta.Exist(ctx, req.GetCollectionID()) {
+	if s.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[req.GetCollectionID()] == nil {
 		return errReleaseCollectionNotLoaded
 	}
 	msg := message.NewDropLoadConfigMessageBuilderV2().
@@ -52,7 +51,7 @@ func (s *Server) broadcastDropLoadConfigCollectionV2ForReleaseCollection(ctx con
 			CollectionId: coll.GetCollectionID(),
 		}).
 		WithBody(&message.DropLoadConfigMessageBody{}).
-		WithBroadcast([]string{streaming.WAL().ControlChannel()}). // TODO: after we support query view in 3.0, we should broadcast the drop load config message to all vchannels.
+		WithBroadcast(collectionLoadConfigBroadcastChannels(coll), message.OptBuildBroadcastAckSyncUp()).
 		MustBuildBroadcast()
 
 	_, err = broadcaster.Broadcast(ctx, msg)
