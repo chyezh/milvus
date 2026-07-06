@@ -9,6 +9,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/pkg/v3/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
@@ -227,7 +228,7 @@ func recoverInsertMsgsFromHeader(insertMsg *msgstream.InsertMsg, msg message.Imm
 		rowOffset += assignment.GetRows()
 	}
 	if rowOffset != insertMsg.GetNumRows() {
-		return nil, errors.Errorf("insert header rows %d does not match body rows %d", rowOffset, insertMsg.GetNumRows())
+		return nil, merr.WrapErrServiceInternalMsg("insert header rows %d does not match body rows %d", rowOffset, insertMsg.GetNumRows())
 	}
 	return tsMsgs, nil
 }
@@ -235,7 +236,7 @@ func recoverInsertMsgsFromHeader(insertMsg *msgstream.InsertMsg, msg message.Imm
 func recoverInsertRequestFromPartitionAssignment(insertRequest *msgpb.InsertRequest, assignment *message.PartitionSegmentAssignment, rowOffset uint64, timetick uint64, vchannel string) (msgstream.TsMsg, error) {
 	rows := assignment.GetRows()
 	if rowOffset+rows > insertRequest.GetNumRows() {
-		return nil, errors.Errorf("insert header rows exceed body rows, offset %d rows %d body rows %d",
+		return nil, merr.WrapErrServiceInternalMsg("insert header rows exceed body rows, offset %d rows %d body rows %d",
 			rowOffset, rows, insertRequest.GetNumRows())
 	}
 
