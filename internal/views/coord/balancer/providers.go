@@ -68,9 +68,11 @@ type DataViewProvider interface {
 	DataViewSnapshot(ctx context.Context) *DataViewSnapshot
 }
 
-type DataViewSnapshot = balancerapi.DataViewSnapshot
-type SegmentInfo = balancerapi.SegmentInfo
-type SegmentSnapshot = balancerapi.SegmentSnapshot
+type (
+	DataViewSnapshot = balancerapi.DataViewSnapshot
+	SegmentInfo      = balancerapi.SegmentInfo
+	SegmentSnapshot  = balancerapi.SegmentSnapshot
+)
 
 func NewDataViewSnapshot(
 	version uint64,

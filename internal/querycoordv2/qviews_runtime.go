@@ -19,7 +19,6 @@ package querycoordv2
 import (
 	"context"
 
-	"github.com/cockroachdb/errors"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
@@ -35,6 +34,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/coord/nodeview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/kv"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 type qviewsBalancer interface {
@@ -72,13 +72,13 @@ type qviewsRuntimeDependencies struct {
 
 func newQViewsRuntime(ctx context.Context, deps qviewsRuntimeDependencies) (*qviewsRuntime, error) {
 	if deps.queryCoordCatalog == nil {
-		return nil, errors.New("querycoord catalog is nil")
+		return nil, merr.WrapErrServiceInternalMsg("querycoord catalog is nil")
 	}
 	if deps.queryViewCatalog == nil {
-		return nil, errors.New("query view catalog is nil")
+		return nil, merr.WrapErrServiceInternalMsg("query view catalog is nil")
 	}
 	if deps.resourceGroupManager == nil {
-		return nil, errors.New("resource group manager is nil")
+		return nil, merr.WrapErrServiceInternalMsg("resource group manager is nil")
 	}
 	if deps.dataViewProvider == nil {
 		deps.dataViewProvider = emptyDataViewProvider{}
@@ -88,18 +88,18 @@ func newQViewsRuntime(ctx context.Context, deps qviewsRuntimeDependencies) (*qvi
 		deps.queryNodeClient = deps.queryNodeManager
 	}
 	if deps.queryNodeClient == nil {
-		return nil, errors.New("querynode client is nil")
+		return nil, merr.WrapErrServiceInternalMsg("querynode client is nil")
 	}
 
 	if deps.viewSyncClient == nil {
 		if deps.queryNodeManager == nil {
-			return nil, errors.New("querynode manager client is nil")
+			return nil, merr.WrapErrServiceInternalMsg("querynode manager client is nil")
 		}
 		if deps.streamingNodeManager == nil {
-			return nil, errors.New("streamingnode manager client is nil")
+			return nil, merr.WrapErrServiceInternalMsg("streamingnode manager client is nil")
 		}
 		if deps.walLocatedProvider == nil {
-			return nil, errors.New("wal located provider is nil")
+			return nil, merr.WrapErrServiceInternalMsg("wal located provider is nil")
 		}
 		deps.viewSyncClient = syncer.NewDefaultViewSyncClient(
 			deps.queryNodeManager,

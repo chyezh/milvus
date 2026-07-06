@@ -163,6 +163,7 @@ func (c *fakeRuntimeViewSyncClient) RegisterNodeChangedNotifier(func()) {}
 func (c *fakeRuntimeViewSyncClient) IsNodeAlive(context.Context, qviews.WorkNode) bool {
 	return true
 }
+
 func (c *fakeRuntimeViewSyncClient) OpenSyncStream(context.Context, qviews.WorkNode) (viewpb.ViewSyncService_SyncQueryViewClient, error) {
 	return nil, nil
 }
@@ -180,6 +181,7 @@ type fakeRuntimeResourceGroupManager struct{}
 func (m *fakeRuntimeResourceGroupManager) ListResourceGroups(context.Context) []string {
 	return nil
 }
+
 func (m *fakeRuntimeResourceGroupManager) GetNodes(context.Context, string) ([]int64, error) {
 	return nil, nil
 }
@@ -208,6 +210,8 @@ func (b *fakeRuntimeBalancer) Trigger(scopes ...balancer.TriggerScope) {
 	b.triggers = append(b.triggers, scopes...)
 }
 
-var _ syncer.ViewSyncClient = (*fakeRuntimeViewSyncClient)(nil)
-var _ balancer.DataViewProvider = (*fakeRuntimeDataViewProvider)(nil)
-var _ loadmgr.DirtyCollectionNotifier = func(int64) {}
+var (
+	_ syncer.ViewSyncClient           = (*fakeRuntimeViewSyncClient)(nil)
+	_ balancer.DataViewProvider       = (*fakeRuntimeDataViewProvider)(nil)
+	_ loadmgr.DirtyCollectionNotifier = func(int64) {}
+)

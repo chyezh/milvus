@@ -3,12 +3,11 @@ package syncer
 import (
 	"context"
 
-	"github.com/cockroachdb/errors"
-
 	qnmanager "github.com/milvus-io/milvus/internal/querynodev2/client/manager"
 	snmanager "github.com/milvus-io/milvus/internal/streamingnode/client/manager"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 var _ ViewSyncClient = (*DefaultViewSyncClient)(nil)
@@ -68,7 +67,7 @@ func (c *DefaultViewSyncClient) OpenSyncStream(ctx context.Context, node qviews.
 	switch n := node.(type) {
 	case qviews.QueryNode:
 		if c.queryNodes == nil {
-			return nil, errors.New("querynode manager client is nil")
+			return nil, merr.WrapErrServiceInternalMsg("querynode manager client is nil")
 		}
 		client, err := c.queryNodes.CreateViewSyncClient(ctx, n.ID)
 		if err != nil {
@@ -77,14 +76,14 @@ func (c *DefaultViewSyncClient) OpenSyncStream(ctx context.Context, node qviews.
 		return client.SyncQueryView(ctx)
 	case qviews.StreamingNode:
 		if c.streamingNodes == nil {
-			return nil, errors.New("streamingnode manager client is nil")
+			return nil, merr.WrapErrServiceInternalMsg("streamingnode manager client is nil")
 		}
 		if c.channels == nil {
-			return nil, errors.New("channel manager is nil")
+			return nil, merr.WrapErrServiceInternalMsg("channel manager is nil")
 		}
 		streamingNodeID, ok := c.channels.GetLatestWALLocated(ctx, n.PChannel)
 		if !ok {
-			return nil, errors.Newf("streamingnode assignment not found for pchannel %s", n.PChannel)
+			return nil, merr.WrapErrServiceInternalMsg("streamingnode assignment not found for pchannel %s", n.PChannel)
 		}
 		client, err := c.streamingNodes.CreateViewSyncClient(ctx, streamingNodeID)
 		if err != nil {
@@ -92,7 +91,7 @@ func (c *DefaultViewSyncClient) OpenSyncStream(ctx context.Context, node qviews.
 		}
 		return client.SyncQueryView(ctx)
 	default:
-		return nil, errors.Newf("unknown work node type %T", node)
+		return nil, merr.WrapErrServiceInternalMsg("unknown work node type %T", node)
 	}
 }
 
