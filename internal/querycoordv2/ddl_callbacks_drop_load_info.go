@@ -22,7 +22,6 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
-	"github.com/milvus-io/milvus/internal/querycoordv2/job"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -61,17 +60,7 @@ func (s *Server) broadcastDropLoadConfigCollectionV2ForReleaseCollection(ctx con
 }
 
 func (s *Server) dropLoadConfigV2AckCallback(ctx context.Context, result message.BroadcastResultDropLoadConfigMessageV2) error {
-	releaseJob := job.NewReleaseCollectionJob(ctx,
-		result,
-		s.dist,
-		s.meta,
-		s.broker,
-		s.targetMgr,
-		s.targetObserver,
-		s.checkerController,
-		s.proxyClientManager,
-	)
-	if err := releaseJob.Execute(); err != nil {
+	if err := s.qviewsRuntime.loadManager.ReleaseCollection(ctx, result.Message.Header()); err != nil {
 		return err
 	}
 	meta.GlobalFailedLoadCache.Remove(result.Message.Header().GetCollectionId())

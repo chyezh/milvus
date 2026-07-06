@@ -21,6 +21,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/internal/metastore"
+	"github.com/milvus-io/milvus/internal/views/coord/balancer"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
@@ -50,6 +51,10 @@ func (s *Server) Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb
 		return nil, nil
 	}
 	return s.dataViewManager.Snapshot(ctx, collectionIDs)
+}
+
+func (s *Server) DataViewProvider() balancer.DataViewProvider {
+	return s.dataViewManager
 }
 
 func (s *dataViewSegmentStore) GetSegment(ctx context.Context, segmentID int64) *dataview.Segment {

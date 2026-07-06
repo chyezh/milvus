@@ -27,38 +27,12 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore/mocks"
 	"github.com/milvus-io/milvus/internal/querycoordv2/meta"
 	"github.com/milvus-io/milvus/internal/views/coord/balancer"
-	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 )
 
-func buildAlterLoadConfigBroadcastResult(collectionID int64, vchannels ...string) message.BroadcastResultAlterLoadConfigMessageV2 {
-	if len(vchannels) == 0 {
-		vchannels = []string{"v0", "v1"}
-	}
-	broadcastMsg := message.NewAlterLoadConfigMessageBuilderV2().
-		WithHeader(&messagespb.AlterLoadConfigMessageHeader{
-			CollectionId: collectionID,
-			Replicas: []*messagespb.LoadReplicaConfig{
-				{ReplicaId: 1000, ResourceGroupName: "__default_resource_group"},
-			},
-		}).
-		WithBody(&messagespb.AlterLoadConfigMessageBody{}).
-		WithBroadcast(vchannels).
-		MustBuildBroadcast()
-
-	results := make(map[string]*message.AppendResult, len(vchannels))
-	for _, vchannel := range vchannels {
-		results[vchannel] = &message.AppendResult{}
-	}
-	return message.BroadcastResultAlterLoadConfigMessageV2{
-		Message: message.MustAsBroadcastAlterLoadConfigMessageV2(broadcastMsg),
-		Results: results,
-	}
-}
-
-func TestAlterLoadConfigV2AckCallbackUpdatesQViewsRuntime(t *testing.T) {
+func TestDropLoadConfigV2AckCallbackUpdatesQViewsRuntime(t *testing.T) {
 	ctx := context.Background()
 	catalog := mocks.NewQueryCoordCatalog(t)
 	catalog.EXPECT().GetCollections(mock.Anything).Return(nil, nil).Once()
@@ -80,15 +54,36 @@ func TestAlterLoadConfigV2AckCallbackUpdatesQViewsRuntime(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	meta.GlobalFailedLoadCache = meta.NewFailedLoadCache()
-	s := &Server{qviewsRuntime: runtime}
 	catalog.EXPECT().SaveCollection(mock.Anything, mock.Anything).Return(nil).Once()
 	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything).Return(nil).Once()
+	require.NoError(t, runtime.loadManager.UpdateLoadConfig(ctx, buildAlterLoadConfigBroadcastResult(100)))
+	require.Contains(t, runtime.loadConfigStore.Snapshot().ConfigsMap(), int64(100))
+	fakeBalancer.triggers = nil
 
-	require.NoError(t, s.alterLoadConfigV2AckCallback(ctx, buildAlterLoadConfigBroadcastResult(100)))
+	meta.GlobalFailedLoadCache = meta.NewFailedLoadCache()
+	s := &Server{qviewsRuntime: runtime}
+	catalog.EXPECT().ReleaseReplicas(mock.Anything, int64(100)).Return(nil).Once()
+	catalog.EXPECT().ReleaseCollection(mock.Anything, int64(100)).Return(nil).Once()
 
-	assert.Contains(t, runtime.loadConfigStore.Snapshot().ConfigsMap(), int64(100))
-	assert.NotNil(t, runtime.shardViewRegistry.Get(qviews.ShardID{ReplicaID: 1000, VChannel: "v0"}))
-	assert.NotNil(t, runtime.shardViewRegistry.Get(qviews.ShardID{ReplicaID: 1000, VChannel: "v1"}))
+	require.NoError(t, s.dropLoadConfigV2AckCallback(ctx, buildDropLoadConfigBroadcastResult(100)))
+
+	assert.NotContains(t, runtime.loadConfigStore.Snapshot().ConfigsMap(), int64(100))
 	assert.Equal(t, []balancer.TriggerScope{{DirtyCollections: []int64{100}}}, fakeBalancer.triggers)
+}
+
+func buildDropLoadConfigBroadcastResult(collectionID int64) message.BroadcastResultDropLoadConfigMessageV2 {
+	broadcastMsg := message.NewDropLoadConfigMessageBuilderV2().
+		WithHeader(&messagespb.DropLoadConfigMessageHeader{
+			CollectionId: collectionID,
+		}).
+		WithBody(&messagespb.DropLoadConfigMessageBody{}).
+		WithBroadcast([]string{"v0", "v1"}).
+		MustBuildBroadcast()
+	return message.BroadcastResultDropLoadConfigMessageV2{
+		Message: message.MustAsBroadcastDropLoadConfigMessageV2(broadcastMsg),
+		Results: map[string]*message.AppendResult{
+			"v0": {},
+			"v1": {},
+		},
+	}
 }
