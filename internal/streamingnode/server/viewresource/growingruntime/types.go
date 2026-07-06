@@ -38,6 +38,7 @@ type Builder interface {
 // Runtime is the csegment-backed growing side prepared for one DataVersion.
 type Runtime struct {
 	mu                       sync.RWMutex
+	mvccCond                 *sync.Cond
 	closed                   bool
 	collection               *segcore.CCollection
 	segments                 map[int64]*growingSegment
@@ -45,14 +46,17 @@ type Runtime struct {
 	truncateDataVersion      qviews.DataVersion
 	hasTruncateDataVersion   bool
 	closeOnce                sync.Once
+	queryRefs                int
 	appliedGrowingTimeTick   atomic.Uint64
 	appliedTransformTimeTick atomic.Uint64
 }
 
 func newRuntime() *Runtime {
-	return &Runtime{
+	runtime := &Runtime{
 		segments: make(map[int64]*growingSegment),
 	}
+	runtime.mvccCond = sync.NewCond(&runtime.mu)
+	return runtime
 }
 
 func (r *Runtime) AppliedGrowingTimeTick() uint64 {
@@ -144,17 +148,14 @@ func (r *Runtime) Close() {
 	r.closeOnce.Do(func() {
 		r.mu.Lock()
 		r.closed = true
-		r.mu.Unlock()
-
-		r.mu.Lock()
+		r.mvccCond.Broadcast()
 		segments := make([]*growingSegment, 0, len(r.segments))
 		for _, segment := range r.segments {
 			segments = append(segments, segment)
 		}
 		r.segments = nil
 		r.segmentIDs = nil
-		collection := r.collection
-		r.collection = nil
+		collection := r.releaseCollectionIfIdleLocked()
 		r.mu.Unlock()
 		for _, segment := range segments {
 			segment.release()
@@ -163,4 +164,31 @@ func (r *Runtime) Close() {
 			collection.Release()
 		}
 	})
+}
+
+func (r *Runtime) pinQueryLocked() bool {
+	if r.closed {
+		return false
+	}
+	r.queryRefs++
+	return true
+}
+
+func (r *Runtime) unpinQuery() {
+	r.mu.Lock()
+	r.queryRefs--
+	collection := r.releaseCollectionIfIdleLocked()
+	r.mu.Unlock()
+	if collection != nil {
+		collection.Release()
+	}
+}
+
+func (r *Runtime) releaseCollectionIfIdleLocked() *segcore.CCollection {
+	if !r.closed || r.queryRefs > 0 || r.collection == nil {
+		return nil
+	}
+	collection := r.collection
+	r.collection = nil
+	return collection
 }

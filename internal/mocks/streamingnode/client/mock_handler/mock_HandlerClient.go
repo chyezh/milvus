@@ -522,6 +522,53 @@ func (_c *MockHandlerClient_PrepareReleaseManualFlush_Call) RunAndReturn(run fun
 	return _c
 }
 
+// QueryViewClient provides a mock function with no fields
+func (_m *MockHandlerClient) QueryViewClient() handler.QueryViewClient {
+	ret := _m.Called()
+
+	if len(ret) == 0 {
+		panic("no return value specified for QueryViewClient")
+	}
+
+	var r0 handler.QueryViewClient
+	if rf, ok := ret.Get(0).(func() handler.QueryViewClient); ok {
+		r0 = rf()
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(handler.QueryViewClient)
+		}
+	}
+
+	return r0
+}
+
+// MockHandlerClient_QueryViewClient_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'QueryViewClient'
+type MockHandlerClient_QueryViewClient_Call struct {
+	*mock.Call
+}
+
+// QueryViewClient is a helper method to define mock.On call
+func (_e *MockHandlerClient_Expecter) QueryViewClient() *MockHandlerClient_QueryViewClient_Call {
+	return &MockHandlerClient_QueryViewClient_Call{Call: _e.mock.On("QueryViewClient")}
+}
+
+func (_c *MockHandlerClient_QueryViewClient_Call) Run(run func()) *MockHandlerClient_QueryViewClient_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run()
+	})
+	return _c
+}
+
+func (_c *MockHandlerClient_QueryViewClient_Call) Return(_a0 handler.QueryViewClient) *MockHandlerClient_QueryViewClient_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockHandlerClient_QueryViewClient_Call) RunAndReturn(run func() handler.QueryViewClient) *MockHandlerClient_QueryViewClient_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // NewMockHandlerClient creates a new instance of MockHandlerClient. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewMockHandlerClient(t interface {

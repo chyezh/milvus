@@ -34,9 +34,11 @@ import (
 	"github.com/milvus-io/milvus/internal/mocks"
 	"github.com/milvus-io/milvus/internal/querynodev2/qnview"
 	"github.com/milvus-io/milvus/internal/types"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
@@ -328,11 +330,30 @@ func TestRegisterQueryViewSyncServer(t *testing.T) {
 	assert.True(t, ok)
 }
 
+func TestRegisterQueryViewServers(t *testing.T) {
+	server := grpc.NewServer()
+	registerQueryViewServers(server, noopQNSegmentManager{}, 100)
+
+	services := server.GetServiceInfo()
+	_, ok := services["milvus.proto.view.ViewSyncService"]
+	assert.True(t, ok)
+	_, ok = services["milvus.proto.view.ViewQueryService"]
+	assert.True(t, ok)
+}
+
 type noopQNSegmentManager struct{}
 
 func (noopQNSegmentManager) Acquire(qnview.AcquireSegments) {}
 
 func (noopQNSegmentManager) Release(qnview.ReleaseSegments) {}
+
+func (noopQNSegmentManager) AcquireSealedSegmentHandles(context.Context, qviews.QueryViewKey, *viewpb.QueryViewOfQueryNode) ([]qnview.SealedSegmentHandle, error) {
+	return nil, nil
+}
+
+func (noopQNSegmentManager) WaitTransformVisible(context.Context, qviews.QueryViewKey, *viewpb.QueryViewOfQueryNode, uint64) error {
+	return nil
+}
 
 func TestQueryViewTransformLogAccesserNilWhenWALNotReady(t *testing.T) {
 	streaming.SetWALForTest(nil)

@@ -111,6 +111,9 @@ type HandlerClient interface {
 	// ReadTransformLog creates a local or remote transform log scanner.
 	ReadTransformLog(ctx context.Context, opts wal.TransformLogReadOption) wal.TransformLogScanner
 
+	// QueryViewClient returns the QueryView domain client.
+	QueryViewClient() QueryViewClient
+
 	// Close closes the handler client.
 	// It will only stop the underlying service discovery, but don't stop the producer and consumer created by it.
 	// So please close Producer and Consumer created by it before close the handler client.
@@ -132,7 +135,7 @@ func NewHandlerClient(w types.AssignmentDiscoverWatcher) HandlerClient {
 		)
 	})
 	watcher := assignment.NewWatcher(rb.Resolver())
-	return &handlerClientImpl{
+	hc := &handlerClientImpl{
 		lifetime:              typeutil.NewLifetime(),
 		service:               lazygrpc.WithServiceCreator(conn, streamingpb.NewStreamingNodeHandlerServiceClient),
 		rb:                    rb,
@@ -143,6 +146,8 @@ func NewHandlerClient(w types.AssignmentDiscoverWatcher) HandlerClient {
 		newTransformLogStream: transformlogclient.CreateStream,
 		transformStreams:      make(map[transformlogclient.StreamKey]*transformlogclient.Stream),
 	}
+	hc.queryViewClient = newQueryViewClient(hc, conn)
+	return hc
 }
 
 // getDialOptions returns grpc dial options.

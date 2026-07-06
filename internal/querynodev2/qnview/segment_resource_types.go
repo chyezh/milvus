@@ -66,6 +66,7 @@ type TransformSegment interface {
 	TransformStartAfterTimeTick() uint64
 	ApplyTransform(ctx context.Context, entry *streamingpb.TransformLogEntry) error
 	AppliedTransformTimeTick() uint64
+	WaitTransformApplied(ctx context.Context, timetick uint64) error
 	Release(ctx context.Context) error
 }
 

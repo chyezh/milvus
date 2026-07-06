@@ -33,6 +33,7 @@ type growingSegment struct {
 	sealedAtDataVersion    qviews.DataVersion
 	hasSealedAtDataVersion bool
 	released               bool
+	refs                   int
 }
 
 func newGrowingSegment(collection *segcore.CCollection, segmentID int64, partitionID int64) *growingSegment {
@@ -78,6 +79,32 @@ func (s *growingSegment) csegment() (segcore.CSegment, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.segment, s.segment != nil
+}
+
+func (s *growingSegment) pinIfNotReleased() (segcore.CSegment, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.released || s.segment == nil {
+		return nil, false
+	}
+	s.refs++
+	return s.segment, true
+}
+
+func (s *growingSegment) unpin() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.refs--
+	segment := s.releaseIfIdleLocked()
+	s.mu.Unlock()
+	if segment != nil {
+		segment.Release()
+	}
 }
 
 func (s *growingSegment) isFlushed() bool {
@@ -263,12 +290,20 @@ func (s *growingSegment) release() {
 		return
 	}
 	s.released = true
-	segment := s.segment
-	s.segment = nil
+	segment := s.releaseIfIdleLocked()
 	s.mu.Unlock()
 	if segment != nil {
 		segment.Release()
 	}
+}
+
+func (s *growingSegment) releaseIfIdleLocked() segcore.CSegment {
+	if !s.released || s.refs > 0 || s.segment == nil {
+		return nil
+	}
+	segment := s.segment
+	s.segment = nil
+	return segment
 }
 
 func loadInfoFromVisibleSegment(segment walview.VisibleSegment) *querypb.SegmentLoadInfo {

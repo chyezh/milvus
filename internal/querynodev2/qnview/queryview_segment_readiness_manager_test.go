@@ -3,6 +3,7 @@
 package qnview
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -225,6 +226,55 @@ func TestQueryViewSegmentReadinessManager_ReleasesLoadedSegmentAfterLastView(t *
 	<-dropped
 
 	assert.True(t, reg.unregistered)
+	assert.True(t, segment.released)
+}
+
+func TestQueryViewSegmentReadinessManager_QueryHandleDefersSegmentRelease(t *testing.T) {
+	meta := buildHandlerTestMeta(1)
+	view := &viewpb.QueryViewOfQueryNode{
+		NodeId:     1,
+		Partitions: []*viewpb.QueryViewOfPartition{{PartitionId: 10, SegmentIds: []int64{1000}}},
+	}
+	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
+	segment := &fakeTransformSegment{id: 1000, partitionID: 10}
+
+	physical := fakePhysicalSegmentManager{
+		acquire: func(req AcquirePhysicalSegments) {
+			req.OnLoaded([]TransformSegment{segment})
+		},
+		release: func(req ReleaseSegments) { req.OnDropped() },
+	}
+	buffer := &fakeTransformLogBuffer{}
+	mgr := NewQueryViewSegmentReadinessManager(physical, buffer)
+
+	readyCh := make(chan map[int64][]int64, 1)
+	mgr.Acquire(AcquireSegments{
+		Key: key, Meta: meta, View: view,
+		OnReady:         func(ready map[int64][]int64) { readyCh <- ready },
+		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable") },
+	})
+	require.Eventually(t, func() bool {
+		buffer.mu.Lock()
+		defer buffer.mu.Unlock()
+		return len(buffer.regs) == 1
+	}, time.Second, 10*time.Millisecond)
+	buffer.mu.Lock()
+	reg := buffer.regs[0]
+	buffer.mu.Unlock()
+	close(reg.waitCh)
+	require.Equal(t, map[int64][]int64{10: {1000}}, <-readyCh)
+
+	handles, err := mgr.AcquireSealedSegmentHandles(context.Background(), key, view)
+	require.NoError(t, err)
+	require.Len(t, handles, 1)
+	assert.Equal(t, int64(1000), handles[0].ID())
+
+	dropped := make(chan struct{}, 1)
+	mgr.Release(ReleaseSegments{Key: key, OnDropped: func() { dropped <- struct{}{} }})
+	<-dropped
+	assert.False(t, segment.released)
+
+	handles[0].Release()
 	assert.True(t, segment.released)
 }
 

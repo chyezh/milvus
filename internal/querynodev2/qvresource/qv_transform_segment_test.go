@@ -5,6 +5,7 @@ package qvresource
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -82,6 +83,36 @@ func TestQueryViewTransformSegment_FiltersDeleteByPKCandidate(t *testing.T) {
 	assert.Equal(t, storage.NewInt64PrimaryKey(2), segment.deletedPKs.Get(0))
 	assert.Equal(t, []uint64{99}, segment.deletedTS)
 	assert.Equal(t, uint64(99), wrapped.AppliedTransformTimeTick())
+}
+
+func TestQueryViewTransformSegment_WaitTransformAppliedReturnsAfterApply(t *testing.T) {
+	segment := &fakeQVSegment{id: 10, partitionID: 100}
+	wrapped := newQueryViewTransformSegment(segment, nil, "v1", 50)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- wrapped.WaitTransformApplied(context.Background(), 99)
+	}()
+
+	select {
+	case err := <-done:
+		t.Fatalf("wait returned before transform was applied: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	err := wrapped.ApplyTransform(context.Background(), &streamingpb.TransformLogEntry{TimeTick: 99})
+	require.NoError(t, err)
+	require.NoError(t, <-done)
+}
+
+func TestQueryViewTransformSegment_WaitTransformAppliedReturnsContextError(t *testing.T) {
+	segment := &fakeQVSegment{id: 10, partitionID: 100}
+	wrapped := newQueryViewTransformSegment(segment, nil, "v1", 50)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := wrapped.WaitTransformApplied(ctx, 99)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestQueryViewTransformSegment_ReturnsErrorForMalformedDeletePrimaryKeys(t *testing.T) {

@@ -6,9 +6,12 @@ import (
 	"sort"
 	"sync"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	qvobserve "github.com/milvus-io/milvus/internal/views/qviews/observe"
+	"github.com/milvus-io/milvus/internal/views/viewerror"
 	"github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
@@ -35,7 +38,9 @@ type snShardView struct {
 // snViewEntry pairs an ApplyView (carrying the OnReport callback) with its state machine.
 type snViewEntry struct {
 	handler.ApplyView
-	sm *snQueryViewStateMachine
+	sm             *snQueryViewStateMachine
+	queryRefs      int
+	releasePending bool
 }
 
 // recoverSnShardView constructs an snShardView from pre-built recovered state machines
@@ -150,6 +155,54 @@ func (s *snShardView) CloseForHandoff() {
 		})
 	}
 	wg.Wait()
+}
+
+func (s *snShardView) acquireLatestUpView(ctx context.Context) (*QueryViewLease, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var selected *snViewEntry
+	var selectedVersion qviews.QueryViewVersion
+	for version, entry := range s.views {
+		if entry.sm.State() != qviews.QueryViewStateUp {
+			continue
+		}
+		if selected == nil || version.GT(selectedVersion) {
+			selected = entry
+			selectedVersion = version
+		}
+	}
+	if selected == nil {
+		return nil, viewerror.NewViewNotFound("latest up query view %s is not found", s.shardID.String())
+	}
+	selected.queryRefs++
+	view := proto.Clone(selected.View.IntoProto()).(*viewpb.QueryViewOfShard)
+	var once sync.Once
+	return &QueryViewLease{
+		Version: selectedVersion,
+		Meta:    proto.Clone(view.GetMeta()).(*viewpb.QueryViewMeta),
+		View:    view,
+		Release: func() { once.Do(func() { s.releaseQueryViewLease(selectedVersion) }) },
+	}, nil
+}
+
+func (s *snShardView) releaseQueryViewLease(version qviews.QueryViewVersion) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, exists := s.views[version]
+	if !exists || entry.queryRefs == 0 {
+		return
+	}
+	entry.queryRefs--
+	if entry.queryRefs == 0 && entry.releasePending {
+		s.releaseQueryResourceLocked(version, entry)
+	}
 }
 
 // applyOneLocked applies a single view. Caller must hold s.mu.
@@ -361,6 +414,15 @@ func (s *snShardView) consumeAndRelease(version qviews.QueryViewVersion, entry *
 	if !entry.sm.ConsumeRelease() {
 		return
 	}
+	if entry.queryRefs > 0 {
+		entry.releasePending = true
+		return
+	}
+	s.releaseQueryResourceLocked(version, entry)
+}
+
+func (s *snShardView) releaseQueryResourceLocked(version qviews.QueryViewVersion, entry *snViewEntry) {
+	entry.releasePending = false
 	key := entry.View.QueryViewKey()
 	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeReleaseResourceEvent{
 		View: key,

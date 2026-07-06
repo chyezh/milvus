@@ -20,6 +20,12 @@ StreamingNode would become a compute-intensive and IO-intensive global bottlenec
 
 ## 3. Two-Phase Query Process
 
+For the detailed query-path flow, service boundary, client orchestration, and
+shard discovery design, see [Query Client Design](query/query_client.md).
+For node-side Phase 1 planning and Phase 2 execution, see
+[Query Plan Node-Side Design](query/query_plan.md) and
+[Query Execution Node-Side Design](query/query_execution.md).
+
 1. **Phase One**: Proxy generates a Shard-level query plan from StreamingNode using the highest version QueryView:
    - Includes MVCC
    - Query optimization (BM25, Segment filtering, etc.)

@@ -34,6 +34,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/adaptor"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/options"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/ratelimit"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
@@ -349,9 +350,9 @@ func (s *scannerAdaptorImpl) handleUpstream(msg message.ImmutableMessage) {
 	var isTailing bool
 	msg, isTailing = isTailingScanImmutableMessage(msg)
 	s.metrics.ObserveMessage(isTailing, msg.MessageType(), msg.EstimateSize())
-	if msg.MessageType() == message.MessageTypeTimeTick {
-		// If the time tick message incoming,
-		// the reorder buffer can be consumed until latest confirmed timetick.
+	if messageutil.IsTimeTickConfirmBarrier(msg.MessageType()) {
+		// If a timetick confirm barrier arrives, the reorder buffer can be
+		// consumed until the latest confirmed timetick.
 		messages := s.reorderBuffer.PopUtilTimeTick(msg.TimeTick())
 		s.metrics.UpdateTimeTickBufSize(s.reorderBuffer.Bytes())
 

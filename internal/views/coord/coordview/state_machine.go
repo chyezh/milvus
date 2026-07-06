@@ -332,7 +332,7 @@ func (sm *CoordQueryViewStateMachine) syncViewsForState(state qviews.QueryViewSt
 		cap += len(sm.view.QueryNode)
 	}
 	views := make([]qviews.QueryViewAtWorkNode, 0, cap)
-	views = append(views, qviews.NewQueryViewAtStreamingNode(meta, sm.view.StreamingNode))
+	views = append(views, qviews.NewFullQueryViewAtStreamingNode(meta, sm.view.StreamingNode, sm.view.QueryNode))
 	if includeQN {
 		for _, qn := range sm.view.QueryNode {
 			views = append(views, qviews.NewQueryViewAtQueryNode(meta, qn))

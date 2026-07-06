@@ -69,8 +69,8 @@ func (r *Runtime) Prepare(ctx context.Context, view walview.VChannelWALView) err
 			return err
 		}
 	}
-	r.appliedGrowingTimeTick.Store(view.BaseGrowingTimeTick)
-	r.appliedTransformTimeTick.Store(view.BaseTransformTimeTick)
+	r.markGrowingTimeTick(view.BaseGrowingTimeTick)
+	r.markTransformTimeTick(view.BaseTransformTimeTick)
 	prepared = true
 	return nil
 }

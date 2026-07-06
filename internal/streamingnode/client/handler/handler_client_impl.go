@@ -37,6 +37,7 @@ var (
 type handlerClientImpl struct {
 	lifetime              *typeutil.Lifetime
 	service               lazygrpc.Service[streamingpb.StreamingNodeHandlerServiceClient]
+	queryViewClient       QueryViewClient
 	rb                    resolver.Builder
 	watcher               assignment.Watcher
 	rebalanceTrigger      types.AssignmentRebalanceTrigger
