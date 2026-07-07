@@ -5,6 +5,56 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 )
 
+const (
+	fieldType                 = "type"
+	fieldSID                  = "sid"
+	fieldQV                   = "qv"
+	fieldDV                   = "dv"
+	fieldState                = "state"
+	fieldPreemptingDV         = "preemptingDv"
+	fieldNewUpSID             = "newUpSid"
+	fieldNewUpQV              = "newUpQv"
+	fieldNewUpDV              = "newUpDv"
+	fieldWN                   = "wn"
+	fieldReportedState        = "reportedState"
+	fieldResourceReadyPercent = "resourceReadyPercent"
+	fieldError                = "error"
+	fieldSegmentID            = "segmentID"
+	fieldSegmentCount         = "segmentCount"
+	fieldReadySegmentCount    = "readySegmentCount"
+)
+
+const (
+	eventCoordQNLostDetected                = "CoordQNLostDetected"
+	eventCoordViewCreated                   = "CoordViewCreated"
+	eventCoordViewPreempted                 = "CoordViewPreempted"
+	eventCoordViewAdvancedFromUnrecoverable = "CoordViewAdvancedFromUnrecoverable"
+	eventCoordViewReleaseRequested          = "CoordViewReleaseRequested"
+	eventCoordViewHandoffToNewUp            = "CoordViewHandoffToNewUp"
+	eventCoordViewReportApplied             = "CoordViewReportApplied"
+	eventCoordViewQNLostApplied             = "CoordViewQNLostApplied"
+	eventQNApplyCoordView                   = "QNApplyCoordView"
+	eventQNSegmentUnrecoverable             = "QNSegmentUnrecoverable"
+	eventQNReportView                       = "QNReportView"
+	eventQNReleaseDone                      = "QNReleaseDone"
+	eventSNApplyCoordView                   = "SNApplyCoordView"
+	eventSNRecoveringDone                   = "SNRecoveringDone"
+	eventSNReportView                       = "SNReportView"
+	eventSNReleaseDone                      = "SNReleaseDone"
+	eventQNSegmentFailure                   = "QNSegmentFailure"
+	eventQNAcquireSegments                  = "QNAcquireSegments"
+	eventQNSegmentsReady                    = "QNSegmentsReady"
+	eventQNReleaseSegments                  = "QNReleaseSegments"
+	eventSNAcquireResource                  = "SNAcquireResource"
+	eventSNRecoverAcquireResource           = "SNRecoverAcquireResource"
+	eventSNResourceReady                    = "SNResourceReady"
+	eventSNReleaseResource                  = "SNReleaseResource"
+	eventCoordPersistView                   = "CoordPersistView"
+	eventSNPersistView                      = "SNPersistView"
+	eventCoordSyncViewBatch                 = "CoordSyncViewBatch"
+	eventCoordSyncViewBatchFailed           = "CoordSyncViewBatchFailed"
+)
+
 // Event is the sealed interface implemented by all QueryView observability events.
 type Event interface {
 	mlog.ObjectMarshaler
@@ -41,8 +91,8 @@ func (e CoordQueryNodeLostDetectedEvent) LogLevel() mlog.Level {
 }
 
 func (e CoordQueryNodeLostDetectedEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "CoordQueryNodeLostDetectedEvent")
-	addQueryNode(enc, e.Node)
+	enc.AddString(fieldType, eventCoordQNLostDetected)
+	enc.AddString(fieldWN, e.Node.String())
 	return nil
 }
 
@@ -58,9 +108,11 @@ func (e CoordViewCreatedEvent) LogLevel() mlog.Level {
 }
 
 func (e CoordViewCreatedEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "CoordViewCreatedEvent")
-	addQueryViewKey(enc, e.View)
-	addState(enc, "state", e.State)
+	enc.AddString(fieldType, eventCoordViewCreated)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.State.String())
 	return nil
 }
 
@@ -77,9 +129,12 @@ func (e CoordViewPreemptedEvent) LogLevel() mlog.Level {
 }
 
 func (e CoordViewPreemptedEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "CoordViewPreemptedEvent")
-	addViewStateTransition(enc, e.ViewStateTransition)
-	addDataVersion(enc, "preempting_", e.PreemptingDataVersion)
+	enc.AddString(fieldType, eventCoordViewPreempted)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.From.String()+"->"+e.To.String())
+	enc.AddString(fieldPreemptingDV, e.PreemptingDataVersion.String())
 	return nil
 }
 
@@ -95,8 +150,11 @@ func (e CoordViewAdvancedFromUnrecoverableEvent) LogLevel() mlog.Level {
 }
 
 func (e CoordViewAdvancedFromUnrecoverableEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "CoordViewAdvancedFromUnrecoverableEvent")
-	addViewStateTransition(enc, e.ViewStateTransition)
+	enc.AddString(fieldType, eventCoordViewAdvancedFromUnrecoverable)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.From.String()+"->"+e.To.String())
 	return nil
 }
 
@@ -112,8 +170,11 @@ func (e CoordViewReleaseRequestedEvent) LogLevel() mlog.Level {
 }
 
 func (e CoordViewReleaseRequestedEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "CoordViewReleaseRequestedEvent")
-	addViewStateTransition(enc, e.ViewStateTransition)
+	enc.AddString(fieldType, eventCoordViewReleaseRequested)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.From.String()+"->"+e.To.String())
 	return nil
 }
 
@@ -130,9 +191,14 @@ func (e CoordViewHandoffToNewUpEvent) LogLevel() mlog.Level {
 }
 
 func (e CoordViewHandoffToNewUpEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "CoordViewHandoffToNewUpEvent")
-	addViewStateTransition(enc, e.ViewStateTransition)
-	addQueryViewKeyWithPrefix(enc, "new_up_", e.NewUpView)
+	enc.AddString(fieldType, eventCoordViewHandoffToNewUp)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.From.String()+"->"+e.To.String())
+	enc.AddString(fieldNewUpSID, e.NewUpView.ShardID.String())
+	enc.AddString(fieldNewUpQV, e.NewUpView.QueryViewVersion.String())
+	enc.AddString(fieldNewUpDV, e.NewUpView.QueryViewVersion.DataVersion.String())
 	return nil
 }
 
@@ -153,11 +219,16 @@ func (e CoordViewReportAppliedEvent) LogLevel() mlog.Level {
 }
 
 func (e CoordViewReportAppliedEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "CoordViewReportAppliedEvent")
-	addViewStateTransition(enc, e.ViewStateTransition)
-	addWorkNode(enc, e.Node)
-	addState(enc, "reported_state", e.ReportedState)
-	enc.AddInt64("resource_ready_percent", e.ResourceReadyPercent)
+	enc.AddString(fieldType, eventCoordViewReportApplied)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.From.String()+"->"+e.To.String())
+	if e.Node != nil {
+		enc.AddString(fieldWN, e.Node.String())
+	}
+	enc.AddString(fieldReportedState, e.ReportedState.String())
+	enc.AddInt64(fieldResourceReadyPercent, e.ResourceReadyPercent)
 	return nil
 }
 
@@ -174,9 +245,12 @@ func (e CoordViewQueryNodeLostAppliedEvent) LogLevel() mlog.Level {
 }
 
 func (e CoordViewQueryNodeLostAppliedEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "CoordViewQueryNodeLostAppliedEvent")
-	addViewStateTransition(enc, e.ViewStateTransition)
-	addQueryNode(enc, e.Node)
+	enc.AddString(fieldType, eventCoordViewQNLostApplied)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.From.String()+"->"+e.To.String())
+	enc.AddString(fieldWN, e.Node.String())
 	return nil
 }
 
@@ -192,8 +266,11 @@ func (e QueryNodeApplyCoordViewEvent) LogLevel() mlog.Level {
 }
 
 func (e QueryNodeApplyCoordViewEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "QueryNodeApplyCoordViewEvent")
-	addViewStateTransition(enc, e.ViewStateTransition)
+	enc.AddString(fieldType, eventQNApplyCoordView)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.From.String()+"->"+e.To.String())
 	return nil
 }
 
@@ -210,9 +287,14 @@ func (e QueryNodeSegmentUnrecoverableEvent) LogLevel() mlog.Level {
 }
 
 func (e QueryNodeSegmentUnrecoverableEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "QueryNodeSegmentUnrecoverableEvent")
-	addViewStateTransition(enc, e.ViewStateTransition)
-	addError(enc, e.Err)
+	enc.AddString(fieldType, eventQNSegmentUnrecoverable)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.From.String()+"->"+e.To.String())
+	if e.Err != nil {
+		enc.AddString(fieldError, e.Err.Error())
+	}
 	return nil
 }
 
@@ -228,9 +310,11 @@ func (e QueryNodeReportViewEvent) LogLevel() mlog.Level {
 }
 
 func (e QueryNodeReportViewEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "QueryNodeReportViewEvent")
-	addQueryViewKey(enc, e.View)
-	addState(enc, "state", e.State)
+	enc.AddString(fieldType, eventQNReportView)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.State.String())
 	return nil
 }
 
@@ -246,8 +330,11 @@ func (e QueryNodeReleaseDoneEvent) LogLevel() mlog.Level {
 }
 
 func (e QueryNodeReleaseDoneEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "QueryNodeReleaseDoneEvent")
-	addViewStateTransition(enc, e.ViewStateTransition)
+	enc.AddString(fieldType, eventQNReleaseDone)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.From.String()+"->"+e.To.String())
 	return nil
 }
 
@@ -263,8 +350,11 @@ func (e StreamingNodeApplyCoordViewEvent) LogLevel() mlog.Level {
 }
 
 func (e StreamingNodeApplyCoordViewEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "StreamingNodeApplyCoordViewEvent")
-	addViewStateTransition(enc, e.ViewStateTransition)
+	enc.AddString(fieldType, eventSNApplyCoordView)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.From.String()+"->"+e.To.String())
 	return nil
 }
 
@@ -280,8 +370,11 @@ func (e StreamingNodeRecoveringDoneEvent) LogLevel() mlog.Level {
 }
 
 func (e StreamingNodeRecoveringDoneEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "StreamingNodeRecoveringDoneEvent")
-	addViewStateTransition(enc, e.ViewStateTransition)
+	enc.AddString(fieldType, eventSNRecoveringDone)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.From.String()+"->"+e.To.String())
 	return nil
 }
 
@@ -298,9 +391,11 @@ func (e StreamingNodeReportViewEvent) LogLevel() mlog.Level {
 }
 
 func (e StreamingNodeReportViewEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "StreamingNodeReportViewEvent")
-	addQueryViewKey(enc, e.View)
-	addState(enc, "state", e.State)
+	enc.AddString(fieldType, eventSNReportView)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.State.String())
 	return nil
 }
 
@@ -316,8 +411,11 @@ func (e StreamingNodeReleaseDoneEvent) LogLevel() mlog.Level {
 }
 
 func (e StreamingNodeReleaseDoneEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "StreamingNodeReleaseDoneEvent")
-	addViewStateTransition(enc, e.ViewStateTransition)
+	enc.AddString(fieldType, eventSNReleaseDone)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.From.String()+"->"+e.To.String())
 	return nil
 }
 
@@ -335,10 +433,14 @@ func (e QueryNodeSegmentFailureEvent) LogLevel() mlog.Level {
 }
 
 func (e QueryNodeSegmentFailureEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "QueryNodeSegmentFailureEvent")
-	addQueryViewKey(enc, e.View)
-	enc.AddInt64("segment_id", e.SegmentID)
-	addError(enc, e.Err)
+	enc.AddString(fieldType, eventQNSegmentFailure)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddInt64(fieldSegmentID, e.SegmentID)
+	if e.Err != nil {
+		enc.AddString(fieldError, e.Err.Error())
+	}
 	return nil
 }
 
@@ -355,9 +457,11 @@ func (e QueryNodeAcquireSegmentsEvent) LogLevel() mlog.Level {
 }
 
 func (e QueryNodeAcquireSegmentsEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "QueryNodeAcquireSegmentsEvent")
-	addQueryViewKey(enc, e.View)
-	enc.AddInt("segment_count", e.SegmentCount)
+	enc.AddString(fieldType, eventQNAcquireSegments)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddInt(fieldSegmentCount, e.SegmentCount)
 	return nil
 }
 
@@ -374,9 +478,12 @@ func (e QueryNodeSegmentsReadyEvent) LogLevel() mlog.Level {
 }
 
 func (e QueryNodeSegmentsReadyEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "QueryNodeSegmentsReadyEvent")
-	addViewStateTransition(enc, e.ViewStateTransition)
-	enc.AddInt("ready_segment_count", e.ReadySegmentCount)
+	enc.AddString(fieldType, eventQNSegmentsReady)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.From.String()+"->"+e.To.String())
+	enc.AddInt(fieldReadySegmentCount, e.ReadySegmentCount)
 	return nil
 }
 
@@ -392,8 +499,10 @@ func (e QueryNodeReleaseSegmentsEvent) LogLevel() mlog.Level {
 }
 
 func (e QueryNodeReleaseSegmentsEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "QueryNodeReleaseSegmentsEvent")
-	addQueryViewKey(enc, e.View)
+	enc.AddString(fieldType, eventQNReleaseSegments)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
 	return nil
 }
 
@@ -409,8 +518,10 @@ func (e StreamingNodeAcquireResourceEvent) LogLevel() mlog.Level {
 }
 
 func (e StreamingNodeAcquireResourceEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "StreamingNodeAcquireResourceEvent")
-	addQueryViewKey(enc, e.View)
+	enc.AddString(fieldType, eventSNAcquireResource)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
 	return nil
 }
 
@@ -426,8 +537,10 @@ func (e StreamingNodeRecoverAcquireResourceEvent) LogLevel() mlog.Level {
 }
 
 func (e StreamingNodeRecoverAcquireResourceEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "StreamingNodeRecoverAcquireResourceEvent")
-	addQueryViewKey(enc, e.View)
+	enc.AddString(fieldType, eventSNRecoverAcquireResource)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
 	return nil
 }
 
@@ -443,8 +556,11 @@ func (e StreamingNodeResourceReadyEvent) LogLevel() mlog.Level {
 }
 
 func (e StreamingNodeResourceReadyEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "StreamingNodeResourceReadyEvent")
-	addViewStateTransition(enc, e.ViewStateTransition)
+	enc.AddString(fieldType, eventSNResourceReady)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.From.String()+"->"+e.To.String())
 	return nil
 }
 
@@ -460,8 +576,10 @@ func (e StreamingNodeReleaseResourceEvent) LogLevel() mlog.Level {
 }
 
 func (e StreamingNodeReleaseResourceEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "StreamingNodeReleaseResourceEvent")
-	addQueryViewKey(enc, e.View)
+	enc.AddString(fieldType, eventSNReleaseResource)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
 	return nil
 }
 
@@ -478,9 +596,11 @@ func (e CoordPersistViewEvent) LogLevel() mlog.Level {
 }
 
 func (e CoordPersistViewEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "CoordPersistViewEvent")
-	addQueryViewKey(enc, e.View)
-	addState(enc, "state", e.State)
+	enc.AddString(fieldType, eventCoordPersistView)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.State.String())
 	return nil
 }
 
@@ -497,9 +617,11 @@ func (e StreamingNodePersistViewEvent) LogLevel() mlog.Level {
 }
 
 func (e StreamingNodePersistViewEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "StreamingNodePersistViewEvent")
-	addQueryViewKey(enc, e.View)
-	addState(enc, "state", e.State)
+	enc.AddString(fieldType, eventSNPersistView)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.State.String())
 	return nil
 }
 
@@ -516,9 +638,11 @@ func (e CoordSyncViewBatchEvent) LogLevel() mlog.Level {
 }
 
 func (e CoordSyncViewBatchEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "CoordSyncViewBatchEvent")
-	addQueryViewKey(enc, e.View)
-	addState(enc, "state", e.State)
+	enc.AddString(fieldType, eventCoordSyncViewBatch)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.State.String())
 	return nil
 }
 
@@ -536,52 +660,13 @@ func (e CoordSyncViewBatchFailedEvent) LogLevel() mlog.Level {
 }
 
 func (e CoordSyncViewBatchFailedEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
-	addEventType(enc, "CoordSyncViewBatchFailedEvent")
-	addQueryViewKey(enc, e.View)
-	addState(enc, "state", e.State)
-	addError(enc, e.Err)
+	enc.AddString(fieldType, eventCoordSyncViewBatchFailed)
+	enc.AddString(fieldSID, e.View.ShardID.String())
+	enc.AddString(fieldQV, e.View.QueryViewVersion.String())
+	enc.AddString(fieldDV, e.View.QueryViewVersion.DataVersion.String())
+	enc.AddString(fieldState, e.State.String())
+	if e.Err != nil {
+		enc.AddString(fieldError, e.Err.Error())
+	}
 	return nil
-}
-
-func addEventType(enc mlog.ObjectEncoder, eventType string) {
-	enc.AddString("type", eventType)
-}
-
-func addViewStateTransition(enc mlog.ObjectEncoder, transition ViewStateTransition) {
-	addQueryViewKey(enc, transition.View)
-	enc.AddString("state", transition.From.String()+"->"+transition.To.String())
-}
-
-func addQueryViewKey(enc mlog.ObjectEncoder, key qviews.QueryViewKey) {
-	addQueryViewKeyWithPrefix(enc, "", key)
-}
-
-func addQueryViewKeyWithPrefix(enc mlog.ObjectEncoder, prefix string, key qviews.QueryViewKey) {
-	enc.AddString(prefix+"sid", key.ShardID.String())
-	enc.AddString(prefix+"qv", key.QueryViewVersion.String())
-	addDataVersion(enc, prefix, key.QueryViewVersion.DataVersion)
-}
-
-func addDataVersion(enc mlog.ObjectEncoder, prefix string, version qviews.DataVersion) {
-	enc.AddString(prefix+"dv", version.String())
-}
-
-func addWorkNode(enc mlog.ObjectEncoder, node qviews.WorkNode) {
-	if node != nil {
-		enc.AddString("wn", node.String())
-	}
-}
-
-func addQueryNode(enc mlog.ObjectEncoder, node qviews.QueryNode) {
-	addWorkNode(enc, node)
-}
-
-func addState(enc mlog.ObjectEncoder, key string, state qviews.QueryViewState) {
-	enc.AddString(key, state.String())
-}
-
-func addError(enc mlog.ObjectEncoder, err error) {
-	if err != nil {
-		enc.AddString("error", err.Error())
-	}
 }

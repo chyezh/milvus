@@ -112,14 +112,14 @@ func TestEventMarshalLogObjectSplitsQueryViewKeyAndUsesStringers(t *testing.T) {
 		t.Fatalf("marshal event: %v", err)
 	}
 
-	assertField(t, enc, "type", "CoordViewReportAppliedEvent")
+	assertField(t, enc, "type", "CoordViewReportApplied")
 	assertField(t, enc, "sid", view.ShardID.String())
 	assertField(t, enc, "qv", view.QueryViewVersion.String())
 	assertField(t, enc, "dv", view.QueryViewVersion.DataVersion.String())
 	assertField(t, enc, "state", qviews.QueryViewStatePreparing.String()+"->"+qviews.QueryViewStateReady.String())
 	assertField(t, enc, "wn", qviews.NewQueryNode(10).String())
-	assertField(t, enc, "reported_state", qviews.QueryViewStateReady.String())
-	assertField(t, enc, "resource_ready_percent", int64(80))
+	assertField(t, enc, "reportedState", qviews.QueryViewStateReady.String())
+	assertField(t, enc, "resourceReadyPercent", int64(80))
 }
 
 func TestEventMarshalLogObjectSplitsAdditionalQueryViewKey(t *testing.T) {
@@ -154,9 +154,9 @@ func TestEventMarshalLogObjectSplitsAdditionalQueryViewKey(t *testing.T) {
 	assertField(t, enc, "sid", view.ShardID.String())
 	assertField(t, enc, "qv", view.QueryViewVersion.String())
 	assertField(t, enc, "dv", view.QueryViewVersion.DataVersion.String())
-	assertField(t, enc, "new_up_sid", newUpView.ShardID.String())
-	assertField(t, enc, "new_up_qv", newUpView.QueryViewVersion.String())
-	assertField(t, enc, "new_up_dv", newUpView.QueryViewVersion.DataVersion.String())
+	assertField(t, enc, "newUpSid", newUpView.ShardID.String())
+	assertField(t, enc, "newUpQv", newUpView.QueryViewVersion.String())
+	assertField(t, enc, "newUpDv", newUpView.QueryViewVersion.DataVersion.String())
 }
 
 func TestFieldEventWrapsEventAsMlogObject(t *testing.T) {
@@ -174,8 +174,56 @@ func TestFieldEventWrapsEventAsMlogObject(t *testing.T) {
 	if field.Type != zapcore.InlineMarshalerType {
 		t.Fatalf("unexpected field type: %v", field.Type)
 	}
-	assertField(t, enc, "type", "CoordViewCreatedEvent")
+	assertField(t, enc, "type", "CoordViewCreated")
 	assertField(t, enc, "state", qviews.QueryViewStatePreparing.String())
+}
+
+func TestEventTypeShortensNodeNamesAndDropsEventSuffix(t *testing.T) {
+	tests := []struct {
+		name     string
+		event    Event
+		expected string
+	}{
+		{
+			name: "query node",
+			event: QueryNodeReportViewEvent{
+				View:  testQueryViewKey(),
+				State: qviews.QueryViewStateReady,
+			},
+			expected: "QNReportView",
+		},
+		{
+			name: "streaming node",
+			event: StreamingNodeReportViewEvent{
+				View:  testQueryViewKey(),
+				State: qviews.QueryViewStateUp,
+			},
+			expected: "SNReportView",
+		},
+		{
+			name: "query node in coord event",
+			event: CoordViewQueryNodeLostAppliedEvent{
+				ViewStateTransition: ViewStateTransition{
+					View: testQueryViewKey(),
+					From: qviews.QueryViewStateUp,
+					To:   qviews.QueryViewStateUnrecoverable,
+				},
+				Node: qviews.NewQueryNode(10),
+			},
+			expected: "CoordViewQNLostApplied",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			enc := zapcore.NewMapObjectEncoder()
+
+			if err := test.event.MarshalLogObject(enc); err != nil {
+				t.Fatalf("marshal event: %v", err)
+			}
+
+			assertField(t, enc, "type", test.expected)
+		})
+	}
 }
 
 func TestEventLogLevel(t *testing.T) {
@@ -231,7 +279,7 @@ func TestCoordSyncViewBatchEventMarshalLogObject(t *testing.T) {
 		t.Fatalf("marshal event: %v", err)
 	}
 
-	assertField(t, enc, "type", "CoordSyncViewBatchEvent")
+	assertField(t, enc, "type", "CoordSyncViewBatch")
 	assertField(t, enc, "sid", view.ShardID.String())
 	assertField(t, enc, "qv", view.QueryViewVersion.String())
 	assertField(t, enc, "dv", view.QueryViewVersion.DataVersion.String())
