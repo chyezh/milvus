@@ -2,13 +2,14 @@ package qnview
 
 import (
 	"context"
-	"errors"
 	"sync"
+
+	"github.com/cockroachdb/errors"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	qvobserve "github.com/milvus-io/milvus/internal/views/qviews/observe"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
-	"google.golang.org/protobuf/proto"
 )
 
 // QueryViewSegmentReadinessManager turns physically loaded segments into

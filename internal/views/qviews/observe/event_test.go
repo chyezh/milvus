@@ -4,9 +4,10 @@ import (
 	"context"
 	"testing"
 
+	"go.uber.org/zap/zapcore"
+
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
-	"go.uber.org/zap/zapcore"
 )
 
 func TestConcreteEventsImplementEvent(t *testing.T) {

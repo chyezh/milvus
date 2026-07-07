@@ -7,6 +7,8 @@ import (
 	"context"
 	"testing"
 
+	"google.golang.org/grpc"
+
 	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
 	"github.com/milvus-io/milvus/internal/flushcommon/writebuffer"
 	"github.com/milvus-io/milvus/internal/mocks"
@@ -18,7 +20,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
-	"google.golang.org/grpc"
 )
 
 type testMixCoordClient struct {
