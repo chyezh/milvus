@@ -8,6 +8,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore/kv/queryview"
 	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	qvobserve "github.com/milvus-io/milvus/internal/views/qviews/observe"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
@@ -239,7 +240,17 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 
 	// Preempt existing Preparing/Ready view.
 	if m.preparingView != nil {
+		key := m.keyForStateMachine(m.preparingView)
+		before := m.preparingView.State()
 		m.preparingView.EnterUnrecoverable()
+		qvobserve.Observe(ctx, qvobserve.CoordViewPreemptedEvent{
+			ViewStateTransition: qvobserve.ViewStateTransition{
+				View: key,
+				From: before,
+				To:   m.preparingView.State(),
+			},
+			PreemptingDataVersion: newDV,
+		})
 		m.processStateMachine(m.preparingView)
 		// preparingView is cleared by processStateMachine (Unrecoverable case).
 	}
@@ -257,6 +268,10 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 	sm := NewCoordQueryViewStateMachine(view)
 	m.views[sm.Version()] = sm
 	m.preparingView = sm
+	qvobserve.Observe(ctx, qvobserve.CoordViewCreatedEvent{
+		View:  m.keyForStateMachine(sm),
+		State: sm.State(),
+	})
 
 	// Process: persist write-ahead + collect sync.
 	m.processStateMachine(sm)
@@ -279,13 +294,31 @@ func (m *ShardViewManager) RequestRelease(ctx context.Context) error {
 	defer m.mu.Unlock()
 
 	if m.preparingView != nil {
+		key := m.keyForStateMachine(m.preparingView)
+		before := m.preparingView.State()
 		m.preparingView.EnterUnrecoverable()
+		qvobserve.Observe(ctx, qvobserve.CoordViewReleaseRequestedEvent{
+			ViewStateTransition: qvobserve.ViewStateTransition{
+				View: key,
+				From: before,
+				To:   m.preparingView.State(),
+			},
+		})
 		m.processStateMachine(m.preparingView)
 		// preparingView is cleared by processStateMachine (Unrecoverable case).
 	}
 
 	if m.upView != nil {
+		key := m.keyForStateMachine(m.upView)
+		before := m.upView.State()
 		m.upView.EnterDown()
+		qvobserve.Observe(ctx, qvobserve.CoordViewReleaseRequestedEvent{
+			ViewStateTransition: qvobserve.ViewStateTransition{
+				View: key,
+				From: before,
+				To:   m.upView.State(),
+			},
+		})
 		m.processStateMachine(m.upView)
 		// processStateMachine's Down case clears m.upView.
 	}
@@ -309,11 +342,19 @@ func (m *ShardViewManager) processStateMachine(sm *CoordQueryViewStateMachine) {
 	for {
 		// 1. ConsumePersist → collect into pending batch.
 		if persist := sm.ConsumePersist(); persist != nil {
+			qvobserve.Observe(m.ctx, qvobserve.CoordPersistViewEvent{
+				View:  m.keyForStateMachine(sm),
+				State: qviews.QueryViewState(persist.GetMeta().GetState()),
+			})
 			m.pendingPersists = append(m.pendingPersists, persist)
 		}
 
 		// 2. ConsumeSync → collect into pending batch.
 		if views := sm.ConsumeSync(); len(views) > 0 {
+			qvobserve.Observe(m.ctx, qvobserve.CoordSyncViewBatchEvent{
+				View:  m.keyForStateMachine(sm),
+				State: views[0].State(),
+			})
 			m.pendingSyncs = append(m.pendingSyncs, syncEntry{sm: sm, views: views})
 		}
 
@@ -370,7 +411,16 @@ func (m *ShardViewManager) processStateMachine(sm *CoordQueryViewStateMachine) {
 func (m *ShardViewManager) advanceUnrecoverableToDropping() {
 	for _, sm := range m.views {
 		if sm.State() == qviews.QueryViewStateUnrecoverable {
+			key := m.keyForStateMachine(sm)
+			before := sm.State()
 			sm.EnterDropping()
+			qvobserve.Observe(m.ctx, qvobserve.CoordViewAdvancedFromUnrecoverableEvent{
+				ViewStateTransition: qvobserve.ViewStateTransition{
+					View: key,
+					From: before,
+					To:   sm.State(),
+				},
+			})
 			m.processStateMachine(sm)
 		}
 	}
@@ -381,7 +431,17 @@ func (m *ShardViewManager) advanceUnrecoverableToDropping() {
 // Must be called under m.mu.
 func (m *ShardViewManager) downOlderUpView(newUp *CoordQueryViewStateMachine) {
 	if m.upView != nil && m.upView != newUp {
+		key := m.keyForStateMachine(m.upView)
+		before := m.upView.State()
 		m.upView.EnterDown()
+		qvobserve.Observe(m.ctx, qvobserve.CoordViewHandoffToNewUpEvent{
+			ViewStateTransition: qvobserve.ViewStateTransition{
+				View: key,
+				From: before,
+				To:   m.upView.State(),
+			},
+			NewUpView: m.keyForStateMachine(newUp),
+		})
 		m.processStateMachine(m.upView)
 		// processStateMachine's Down case clears m.upView.
 	}
@@ -433,6 +493,16 @@ func (m *ShardViewManager) flush() {
 		}
 		if len(viewsByNode) > 0 {
 			if err := m.syncer.SyncViews(m.ctx, syncer.SyncGroup{ViewsByNode: viewsByNode}); err != nil {
+				for _, entry := range m.pendingSyncs {
+					if len(entry.views) == 0 {
+						continue
+					}
+					qvobserve.Observe(m.ctx, qvobserve.CoordSyncViewBatchFailedEvent{
+						View:  m.keyForStateMachine(entry.sm),
+						State: entry.views[0].State(),
+						Err:   err,
+					})
+				}
 				// SyncViews only fails when the Coordinator is shutting down
 				// (ctx canceled or syncer closed). On next startup a full
 				// recovery will re-push all outstanding syncs.
@@ -460,7 +530,18 @@ func (m *ShardViewManager) makeOnSyncResponse(version qviews.QueryViewVersion, t
 			return true // view already removed, stop tracking
 		}
 
+		before := sm.State()
 		sm.OnNodeStateReported(resp)
+		qvobserve.Observe(m.ctx, qvobserve.CoordViewReportAppliedEvent{
+			ViewStateTransition: qvobserve.ViewStateTransition{
+				View: m.keyForStateMachine(sm),
+				From: before,
+				To:   sm.State(),
+			},
+			Node:                 target.WorkNode(),
+			ReportedState:        resp.State(),
+			ResourceReadyPercent: resourceReadyPercent(resp),
+		})
 		m.processStateMachine(sm)
 		m.flush()
 		m.publishStatsLocked()
@@ -499,10 +580,42 @@ func (m *ShardViewManager) makeOnQueryNodeLost(version qviews.QueryViewVersion) 
 			return // view already removed
 		}
 
+		key := m.keyForStateMachine(sm)
+		before := sm.State()
+		qvobserve.Observe(m.ctx, qvobserve.CoordQueryNodeLostDetectedEvent{
+			Node: node,
+		})
 		sm.OnQueryNodeLost(node)
+		qvobserve.Observe(m.ctx, qvobserve.CoordViewQueryNodeLostAppliedEvent{
+			ViewStateTransition: qvobserve.ViewStateTransition{
+				View: key,
+				From: before,
+				To:   sm.State(),
+			},
+			Node: node,
+		})
 		m.processStateMachine(sm)
 		m.flush()
 		m.publishStatsLocked()
+	}
+}
+
+func (m *ShardViewManager) keyForStateMachine(sm *CoordQueryViewStateMachine) qviews.QueryViewKey {
+	return qviews.QueryViewKey{
+		ShardID:          m.shardID,
+		QueryViewVersion: sm.Version(),
+	}
+}
+
+func resourceReadyPercent(report qviews.QueryViewAtWorkNode) int64 {
+	if _, ok := report.WorkNode().(qviews.StreamingNode); !ok {
+		return 0
+	}
+	switch report.State() {
+	case qviews.QueryViewStateReady, qviews.QueryViewStateUp, qviews.QueryViewStateDown, qviews.QueryViewStateDropped:
+		return 100
+	default:
+		return 0
 	}
 }
 

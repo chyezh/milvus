@@ -2,6 +2,7 @@ package qviews
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
@@ -26,7 +27,7 @@ type QueryViewState viewpb.QueryViewState
 
 // String returns the string representation of the query view state.
 func (s QueryViewState) String() string {
-	return viewpb.QueryViewState(s).String()
+	return strings.TrimPrefix(viewpb.QueryViewState(s).String(), "QueryViewState")
 }
 
 // ShardID is the unique identifier of a shard (replica + vchannel).
@@ -84,7 +85,7 @@ type DataVersion struct {
 
 // String returns the string representation of the data version.
 func (dv DataVersion) String() string {
-	return fmt.Sprintf("(%d,%d)", dv.StreamingVersion, dv.CompactVersion)
+	return fmt.Sprintf("%d/%d", dv.StreamingVersion, dv.CompactVersion)
 }
 
 // EQ returns true if dv is equal to other.
