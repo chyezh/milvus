@@ -141,11 +141,7 @@ func (s *Server) generateQViewsReplicaConfigs(
 			redundantReplicas = append(redundantReplicas, replica.ReplicaID)
 			continue
 		}
-		replicaConfigs = append(replicaConfigs, &messagespb.LoadReplicaConfig{
-			ReplicaId:         replica.ReplicaID,
-			ResourceGroupName: rgName,
-			Priority:          replica.Priority,
-		})
+		replicaConfigs = append(replicaConfigs, newLoadReplicaConfig(replica.ReplicaID, rgName, replica.Priority))
 		existingReplicaNum[rgName]++
 	}
 
@@ -156,28 +152,28 @@ func (s *Server) generateQViewsReplicaConfigs(
 			if len(redundantReplicas) > 0 {
 				replicaID := redundantReplicas[0]
 				redundantReplicas = redundantReplicas[1:]
-				replicaConfigs = append(replicaConfigs, &messagespb.LoadReplicaConfig{
-					ReplicaId:         replicaID,
-					ResourceGroupName: rgName,
-					Priority:          expected.Priority,
-				})
+				replicaConfigs = append(replicaConfigs, newLoadReplicaConfig(replicaID, rgName, expected.Priority))
 				continue
 			}
 			replicaID, err := s.meta.AllocateReplicaID(ctx)
 			if err != nil {
 				return nil, err
 			}
-			replicaConfigs = append(replicaConfigs, &messagespb.LoadReplicaConfig{
-				ReplicaId:         replicaID,
-				ResourceGroupName: rgName,
-				Priority:          expected.Priority,
-			})
+			replicaConfigs = append(replicaConfigs, newLoadReplicaConfig(replicaID, rgName, expected.Priority))
 		}
 	}
 	sort.Slice(replicaConfigs, func(i, j int) bool {
 		return replicaConfigs[i].GetReplicaId() < replicaConfigs[j].GetReplicaId()
 	})
 	return replicaConfigs, nil
+}
+
+func newLoadReplicaConfig(replicaID int64, rgName string, priority commonpb.LoadPriority) *messagespb.LoadReplicaConfig {
+	return &messagespb.LoadReplicaConfig{
+		ReplicaId:         replicaID,
+		ResourceGroupName: rgName,
+		Priority:          priority,
+	}
 }
 
 func loadConfigIntoAlterLoadConfigHeader(cfg *loadmgr.LoadConfig) *messagespb.AlterLoadConfigMessageHeader {

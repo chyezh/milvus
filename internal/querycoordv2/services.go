@@ -68,9 +68,10 @@ func (s *Server) ShowLoadCollections(ctx context.Context, req *querypb.ShowColle
 	defer meta.GlobalFailedLoadCache.TryExpire()
 
 	isGetAll := false
+	configs := s.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()
 	collectionSet := typeutil.NewUniqueSet(req.GetCollectionIDs()...)
 	if len(req.GetCollectionIDs()) == 0 {
-		for collectionID := range s.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap() {
+		for collectionID := range configs {
 			collectionSet.Insert(collectionID)
 		}
 		isGetAll = true
@@ -84,7 +85,7 @@ func (s *Server) ShowLoadCollections(ctx context.Context, req *querypb.ShowColle
 		QueryServiceAvailable: make([]bool, 0, len(collectionSet)),
 	}
 	for _, collectionID := range collections {
-		cfg := s.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[collectionID]
+		cfg := configs[collectionID]
 		if cfg == nil {
 			if isGetAll {
 				// The collection is released during this,

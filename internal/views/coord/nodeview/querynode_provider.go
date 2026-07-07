@@ -69,11 +69,7 @@ func (p *QueryNodeProvider) Snapshot() *balancer.NodeSnapshot {
 		}
 		rg := node.ServerLabels[sessionutil.LabelResourceGroup]
 		if rg == "" {
-			var ok bool
-			rg, ok = rgByNode[nodeID]
-			if !ok {
-				continue
-			}
+			rg = rgByNode[nodeID]
 		}
 		if rg == "" {
 			continue
