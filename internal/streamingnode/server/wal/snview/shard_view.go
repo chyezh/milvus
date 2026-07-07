@@ -8,8 +8,8 @@ import (
 
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	qvobserve "github.com/milvus-io/milvus/internal/views/qviews/observe"
 	"github.com/milvus-io/milvus/internal/views/worknode/handler"
-	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
@@ -86,9 +86,9 @@ func recoverSnShardView(
 	for _, version := range versions {
 		key := qviews.QueryViewKey{ShardID: shardID, QueryViewVersion: version}
 		v := version // capture loop variable
-		logSNQueryViewEvent("recover_acquire_resource", key,
-			mlog.FieldCollectionID(views[version].Meta().GetCollectionId()),
-			mlog.FieldPChannel(pchannel))
+		qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeRecoverAcquireResourceEvent{
+			View: key,
+		})
 		resMgr.Acquire(AcquireResource{
 			Key:  key,
 			Meta: views[version].Meta(),
@@ -159,9 +159,9 @@ func (s *snShardView) applyOneLocked(av *handler.ApplyView) {
 			)
 			entry = &snViewEntry{ApplyView: *av, sm: sm}
 			s.views[key.QueryViewVersion] = entry
-			logSNQueryViewEvent("acquire_resource", key,
-				mlog.FieldCollectionID(snView.IntoProto().GetMeta().GetCollectionId()),
-				mlog.FieldPChannel(s.pchannel))
+			qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeAcquireResourceEvent{
+				View: key,
+			})
 			// SN SM constructor generates a Preparing report.
 			s.consumeReport(entry)
 
@@ -196,9 +196,13 @@ func (s *snShardView) applyOneLocked(av *handler.ApplyView) {
 	entry.ApplyView = *av
 	before := entry.sm.State()
 	entry.sm.OnCoordStateDelivered(pushedState)
-	logSNQueryViewStateChange("coord_push", key, before, entry.sm.State(),
-		mlog.String("pushedState", pushedState.String()),
-		mlog.FieldPChannel(s.pchannel))
+	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeApplyCoordViewEvent{
+		ViewStateTransition: qvobserve.ViewStateTransition{
+			View: key,
+			From: before,
+			To:   entry.sm.State(),
+		},
+	})
 	s.consumeReportPersistAndCleanup(key.QueryViewVersion, entry)
 }
 
@@ -227,8 +231,13 @@ func (s *snShardView) notifyReady(version qviews.QueryViewVersion) {
 	key := entry.View.QueryViewKey()
 	before := entry.sm.State()
 	entry.sm.OnReady()
-	logSNQueryViewStateChange("resource_ready", key, before, entry.sm.State(),
-		mlog.FieldPChannel(s.pchannel))
+	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeResourceReadyEvent{
+		ViewStateTransition: qvobserve.ViewStateTransition{
+			View: key,
+			From: before,
+			To:   entry.sm.State(),
+		},
+	})
 	s.consumeReportPersistAndCleanup(version, entry)
 }
 
@@ -246,8 +255,13 @@ func (s *snShardView) notifyRecoveringDone(version qviews.QueryViewVersion) {
 	key := entry.View.QueryViewKey()
 	before := entry.sm.State()
 	entry.sm.OnRecoveringDone()
-	logSNQueryViewStateChange("recovering_done", key, before, entry.sm.State(),
-		mlog.FieldPChannel(s.pchannel))
+	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeRecoveringDoneEvent{
+		ViewStateTransition: qvobserve.ViewStateTransition{
+			View: key,
+			From: before,
+			To:   entry.sm.State(),
+		},
+	})
 	s.consumeReportPersistAndCleanup(version, entry)
 }
 
@@ -256,8 +270,10 @@ func (s *snShardView) notifyRecoveringDone(version qviews.QueryViewVersion) {
 func (s *snShardView) consumeReport(entry *snViewEntry) {
 	report := entry.sm.ConsumeReport()
 	if report != nil && entry.OnReport != nil {
-		logSNQueryViewReport("report_state", entry.View.QueryViewKey(), qviews.QueryViewState(report.GetMeta().GetState()),
-			mlog.FieldPChannel(s.pchannel))
+		qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeReportViewEvent{
+			View:  entry.View.QueryViewKey(),
+			State: qviews.QueryViewState(report.GetMeta().GetState()),
+		})
 		entry.OnReport(qviews.NewQueryViewAtWorkNodeFromProto(report))
 	}
 }
@@ -276,8 +292,13 @@ func (s *snShardView) notifyDropped(version qviews.QueryViewVersion) {
 	key := entry.View.QueryViewKey()
 	before := entry.sm.State()
 	entry.sm.OnDropped()
-	logSNQueryViewStateChange("release_done", key, before, entry.sm.State(),
-		mlog.FieldPChannel(s.pchannel))
+	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeReleaseDoneEvent{
+		ViewStateTransition: qvobserve.ViewStateTransition{
+			View: key,
+			From: before,
+			To:   entry.sm.State(),
+		},
+	})
 	s.consumeReportPersistAndCleanup(version, entry)
 }
 
@@ -314,10 +335,10 @@ func (s *snShardView) consumeAndPersist(entry *snViewEntry) {
 	if persist == nil {
 		return
 	}
-	logSNQueryViewEvent("persist_state", entry.View.QueryViewKey(),
-		mlog.FieldCollectionID(persist.GetMeta().GetCollectionId()),
-		mlog.FieldPChannel(s.pchannel),
-		mlog.String("state", qviews.QueryViewState(persist.GetMeta().GetState()).String()))
+	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodePersistViewEvent{
+		View:  entry.View.QueryViewKey(),
+		State: qviews.QueryViewState(persist.GetMeta().GetState()),
+	})
 	if err := s.catalog.SaveQueryViews(context.Background(), s.pchannel, []*viewpb.QueryViewOfShard{persist}); err != nil {
 		panic(fmt.Sprintf("persist query view %s failed: %v", persist.GetMeta().GetVchannel(), err))
 	}
@@ -330,9 +351,9 @@ func (s *snShardView) consumeAndRelease(version qviews.QueryViewVersion, entry *
 		return
 	}
 	key := entry.View.QueryViewKey()
-	logSNQueryViewEvent("release_resource", key,
-		mlog.FieldPChannel(s.pchannel),
-		mlog.String("state", entry.sm.State().String()))
+	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeReleaseResourceEvent{
+		View: key,
+	})
 	s.resMgr.Release(ReleaseResource{
 		Key: key,
 		OnDropped: func() {

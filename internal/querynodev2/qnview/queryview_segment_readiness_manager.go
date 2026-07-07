@@ -6,7 +6,7 @@ import (
 	"sync"
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
-	"github.com/milvus-io/milvus/pkg/v3/mlog"
+	qvobserve "github.com/milvus-io/milvus/internal/views/qviews/observe"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"google.golang.org/protobuf/proto"
 )
@@ -309,8 +309,11 @@ func (m *QueryViewSegmentReadinessManager) failSegment(segmentID int64, err erro
 		err = errors.New("segment became unrecoverable")
 	}
 	for _, waiter := range waiters {
-		logQNQueryViewSegmentFailure("segment_failed", waiter.key, segmentID, err,
-			mlog.Int("loadState", int(state.state)))
+		qvobserve.Observe(context.TODO(), qvobserve.QueryNodeSegmentFailureEvent{
+			View:      waiter.key,
+			SegmentID: segmentID,
+			Err:       err,
+		})
 		m.notifyUnrecoverable(waiter.key, waiter.onUnrecoverable)
 	}
 }

@@ -16,7 +16,7 @@ internal/views/qviews/observe
     observer.go
 ```
 
-`observe` depends on `internal/views/qviews` and the standard library. Coord,
+`observe` depends on `internal/views/qviews`, `pkg/v3/mlog`, and the standard library. Coord,
 QueryNode, and StreamingNode owner packages depend on `observe`.
 
 ## Observer
@@ -25,22 +25,59 @@ QueryNode, and StreamingNode owner packages depend on `observe`.
 type Observer interface {
     Observe(context.Context, Event)
 }
+
+type Registry struct {
+    mu        sync.RWMutex
+    observers []Observer
+}
+
+func NewRegistry(observers ...Observer) *Registry
+func (r *Registry) Register(observer Observer)
+func (r *Registry) Observe(ctx context.Context, event Event)
+
+func Register(observer Observer)
+func Observe(ctx context.Context, event Event)
+
+type LogObserver struct{}
+
+func (LogObserver) Observe(ctx context.Context, event Event) {
+    level := event.LogLevel()
+    if !mlog.LevelEnabled(level) {
+        return
+    }
+    mlog.Log(ctx, level, "query view event", FieldEvent(event))
+}
 ```
+
+The package owns a global default registry initialized with `LogObserver`.
+Component code emits events through `observe.Observe(ctx, event)`. Additional
+observers, such as metrics observers, register through `observe.Register`.
+The registry snapshots its observer list before fanout so observer execution
+does not hold the registry lock.
 
 ## Event Interface
 
 ```go
 type Event interface {
+    mlog.ObjectMarshaler
+    LogLevel() mlog.Level
     isQueryViewEvent()
 }
 
-type BaseEvent struct{}
+type baseEvent struct{}
 
-func (BaseEvent) isQueryViewEvent() {}
+func (baseEvent) isQueryViewEvent() {}
+
+func FieldEvent(event Event) mlog.Field {
+    return mlog.Inline(event)
+}
 ```
 
 Every observable event is represented by one concrete Go type and embeds
-`BaseEvent`. Consumers inspect events with type assertions or type switches.
+`baseEvent`. Consumers log events with `FieldEvent`, which returns an inline
+mlog field, and inspect events with type assertions or type switches. `LogLevel`
+is part of the event contract so log observers can check whether the target
+level is enabled before constructing the inline event field.
 
 ```go
 var _ Event = CoordViewQueryNodeLostAppliedEvent{}
@@ -60,7 +97,7 @@ func Observe(ctx context.Context, event Event) {
 
 Event type is split by cardinality. Each event payload carries the identity of
 the observed object. The supported cardinalities are `node`, `view`,
-`segment`, `view-segments`, `resource`, `persist`, and `sync`.
+`segment`, `view-segments`, `resource`, `persist`, and `sync-batch`.
 
 ## Shared Types
 
@@ -87,7 +124,7 @@ Node events observe one worker node.
 // CoordQueryNodeLostDetectedEvent is emitted when Coord sync code observes
 // QueryNode loss.
 type CoordQueryNodeLostDetectedEvent struct {
-    BaseEvent
+    baseEvent
     Node qviews.QueryNode
 }
 ```
@@ -101,7 +138,7 @@ View events observe one QueryView.
 ```go
 // CoordViewCreatedEvent is emitted after Coord creates a new Preparing view.
 type CoordViewCreatedEvent struct {
-    BaseEvent
+    baseEvent
     View  qviews.QueryViewKey
     State qviews.QueryViewState
 }
@@ -109,7 +146,7 @@ type CoordViewCreatedEvent struct {
 // CoordViewPreemptedEvent is emitted after Coord preempts a Preparing or Ready
 // view while adding a new Preparing view.
 type CoordViewPreemptedEvent struct {
-    BaseEvent
+    baseEvent
     ViewStateTransition
     PreemptingDataVersion qviews.DataVersion
 }
@@ -117,30 +154,31 @@ type CoordViewPreemptedEvent struct {
 // CoordViewAdvancedFromUnrecoverableEvent is emitted after Coord advances an
 // Unrecoverable view to Dropping.
 type CoordViewAdvancedFromUnrecoverableEvent struct {
-    BaseEvent
+    baseEvent
     ViewStateTransition
 }
 
 // CoordViewReleaseRequestedEvent is emitted after ShardViewManager applies
 // RequestRelease to a view.
 type CoordViewReleaseRequestedEvent struct {
-    BaseEvent
+    baseEvent
     ViewStateTransition
 }
 
 // CoordViewHandoffToNewUpEvent is emitted after ShardViewManager transitions
 // the previous Up view to Down because another view became Up.
 type CoordViewHandoffToNewUpEvent struct {
-    BaseEvent
+    baseEvent
     ViewStateTransition
     NewUpView qviews.QueryViewKey
 }
 
 // CoordViewReportAppliedEvent is emitted after ShardViewManager applies a
 // work-node report to a view. ResourceReadyPercent is the report-side resource
-// preparation progress in [0, 100].
+// preparation progress in [0, 100]. StreamingNode reports derive this value
+// from view state: resource-ready states report 100, other states report 0.
 type CoordViewReportAppliedEvent struct {
-    BaseEvent
+    baseEvent
     ViewStateTransition
     Node                 qviews.WorkNode
     ReportedState        qviews.QueryViewState
@@ -150,7 +188,7 @@ type CoordViewReportAppliedEvent struct {
 // CoordViewQueryNodeLostAppliedEvent is emitted after ShardViewManager applies
 // QueryNode loss to a view.
 type CoordViewQueryNodeLostAppliedEvent struct {
-    BaseEvent
+    baseEvent
     ViewStateTransition
     Node qviews.QueryNode
 }
@@ -162,21 +200,21 @@ type CoordViewQueryNodeLostAppliedEvent struct {
 // QueryNodeApplyCoordViewEvent is emitted after QueryNode applies a Coord view
 // state.
 type QueryNodeApplyCoordViewEvent struct {
-    BaseEvent
+    baseEvent
     ViewStateTransition
 }
 
 // QueryNodeSegmentUnrecoverableEvent is emitted after the segment
 // unrecoverable callback moves a view to Unrecoverable.
 type QueryNodeSegmentUnrecoverableEvent struct {
-    BaseEvent
+    baseEvent
     ViewStateTransition
     Err error
 }
 
 // QueryNodeReportViewEvent is emitted when QueryNode reports local view state.
 type QueryNodeReportViewEvent struct {
-    BaseEvent
+    baseEvent
     View  qviews.QueryViewKey
     State qviews.QueryViewState
 }
@@ -184,7 +222,7 @@ type QueryNodeReportViewEvent struct {
 // QueryNodeReleaseDoneEvent is emitted after QueryNode observes release
 // completion for a view.
 type QueryNodeReleaseDoneEvent struct {
-    BaseEvent
+    baseEvent
     ViewStateTransition
 }
 ```
@@ -195,21 +233,21 @@ type QueryNodeReleaseDoneEvent struct {
 // StreamingNodeApplyCoordViewEvent is emitted after StreamingNode applies a
 // Coord view state.
 type StreamingNodeApplyCoordViewEvent struct {
-    BaseEvent
+    baseEvent
     ViewStateTransition
 }
 
 // StreamingNodeRecoveringDoneEvent is emitted after StreamingNode observes
 // recovery completion for a view.
 type StreamingNodeRecoveringDoneEvent struct {
-    BaseEvent
+    baseEvent
     ViewStateTransition
 }
 
 // StreamingNodeReportViewEvent is emitted when StreamingNode reports local view
 // state.
 type StreamingNodeReportViewEvent struct {
-    BaseEvent
+    baseEvent
     View  qviews.QueryViewKey
     State qviews.QueryViewState
 }
@@ -217,7 +255,7 @@ type StreamingNodeReportViewEvent struct {
 // StreamingNodeReleaseDoneEvent is emitted after StreamingNode observes release
 // completion for a view.
 type StreamingNodeReleaseDoneEvent struct {
-    BaseEvent
+    baseEvent
     ViewStateTransition
 }
 ```
@@ -232,7 +270,7 @@ Segment events observe one segment inside one QueryView.
 // QueryNodeSegmentFailureEvent is emitted when physical segment load or
 // transform-log catch-up fails.
 type QueryNodeSegmentFailureEvent struct {
-    BaseEvent
+    baseEvent
     View      qviews.QueryViewKey
     SegmentID int64
     Err       error
@@ -249,7 +287,7 @@ View-segments events observe one segment batch inside one QueryView.
 // QueryNodeAcquireSegmentsEvent is emitted when QueryNode starts acquiring
 // segments for a new Preparing view.
 type QueryNodeAcquireSegmentsEvent struct {
-    BaseEvent
+    baseEvent
     View         qviews.QueryViewKey
     SegmentCount int
 }
@@ -257,7 +295,7 @@ type QueryNodeAcquireSegmentsEvent struct {
 // QueryNodeSegmentsReadyEvent is emitted after the segment readiness callback
 // moves a view forward.
 type QueryNodeSegmentsReadyEvent struct {
-    BaseEvent
+    baseEvent
     ViewStateTransition
     ReadySegmentCount int
 }
@@ -265,7 +303,7 @@ type QueryNodeSegmentsReadyEvent struct {
 // QueryNodeReleaseSegmentsEvent is emitted when QueryNode starts releasing
 // segments for a view.
 type QueryNodeReleaseSegmentsEvent struct {
-    BaseEvent
+    baseEvent
     View qviews.QueryViewKey
 }
 ```
@@ -280,28 +318,28 @@ Resource events observe one StreamingNode resource for one QueryView.
 // StreamingNodeAcquireResourceEvent is emitted when StreamingNode starts
 // acquiring resources for a new Preparing view.
 type StreamingNodeAcquireResourceEvent struct {
-    BaseEvent
+    baseEvent
     View qviews.QueryViewKey
 }
 
 // StreamingNodeRecoverAcquireResourceEvent is emitted when StreamingNode starts
 // acquiring resources for a recovered Up view.
 type StreamingNodeRecoverAcquireResourceEvent struct {
-    BaseEvent
+    baseEvent
     View qviews.QueryViewKey
 }
 
 // StreamingNodeResourceReadyEvent is emitted after the resource ready callback
 // moves a view forward.
 type StreamingNodeResourceReadyEvent struct {
-    BaseEvent
+    baseEvent
     ViewStateTransition
 }
 
 // StreamingNodeReleaseResourceEvent is emitted when StreamingNode starts
 // releasing resources for a view.
 type StreamingNodeReleaseResourceEvent struct {
-    BaseEvent
+    baseEvent
     View qviews.QueryViewKey
 }
 ```
@@ -316,7 +354,7 @@ Persist events observe one persisted QueryView state write.
 // CoordPersistViewEvent is emitted when ShardViewManager.flush persists a view
 // state.
 type CoordPersistViewEvent struct {
-    BaseEvent
+    baseEvent
     View  qviews.QueryViewKey
     State qviews.QueryViewState
 }
@@ -328,34 +366,32 @@ type CoordPersistViewEvent struct {
 // StreamingNodePersistViewEvent is emitted when StreamingNode persists local
 // view state.
 type StreamingNodePersistViewEvent struct {
-    BaseEvent
+    baseEvent
     View  qviews.QueryViewKey
     State qviews.QueryViewState
 }
 ```
 
-### Sync
+### Sync-Batch
 
-Sync events observe one QueryView sync to one worker node.
+Sync-batch events observe one QueryView sync to one worker-node batch.
 
 #### Coord
 
 ```go
-// CoordSyncViewEvent is emitted when ShardViewManager.flush syncs a view state
-// to a worker node.
-type CoordSyncViewEvent struct {
-    BaseEvent
+// CoordSyncViewBatchEvent is emitted when ShardViewManager.flush syncs a view
+// state to one worker-node batch.
+type CoordSyncViewBatchEvent struct {
+    baseEvent
     View  qviews.QueryViewKey
-    Node  qviews.WorkNode
     State qviews.QueryViewState
 }
 
-// CoordSyncViewFailedEvent is emitted when ShardViewManager.flush fails to sync
-// a view state to a worker node.
-type CoordSyncViewFailedEvent struct {
-    BaseEvent
+// CoordSyncViewBatchFailedEvent is emitted when ShardViewManager.flush fails to
+// sync a view state to one worker-node batch.
+type CoordSyncViewBatchFailedEvent struct {
+    baseEvent
     View  qviews.QueryViewKey
-    Node  qviews.WorkNode
     State qviews.QueryViewState
     Err   error
 }
