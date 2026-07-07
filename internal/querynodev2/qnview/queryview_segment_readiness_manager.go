@@ -2,9 +2,11 @@ package qnview
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"google.golang.org/protobuf/proto"
 )
@@ -117,7 +119,7 @@ func (m *QueryViewSegmentReadinessManager) acquire(req AcquireSegments) {
 			m.onPhysicalLoaded(loaded)
 		},
 		OnSegmentUnrecoverable: func(segmentID int64, err error) {
-			m.failSegment(segmentID)
+			m.failSegment(segmentID, err)
 		},
 		OnUnrecoverable: func() {
 			m.failView(req.Key)
@@ -221,7 +223,7 @@ func (m *QueryViewSegmentReadinessManager) markPhysicalLoaded(segment TransformS
 func (m *QueryViewSegmentReadinessManager) registerAndCatchup(segment TransformSegment) {
 	reg, err := m.buffer.RegisterSegment(context.Background(), segment)
 	if err != nil {
-		m.failSegment(segment.ID())
+		m.failSegment(segment.ID(), err)
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -233,7 +235,7 @@ func (m *QueryViewSegmentReadinessManager) registerAndCatchup(segment TransformS
 	if err := reg.WaitCatchup(ctx); err != nil {
 		cancel()
 		reg.Unregister()
-		m.failSegment(segment.ID())
+		m.failSegment(segment.ID(), err)
 		return
 	}
 	cancel()
@@ -274,7 +276,7 @@ func (m *QueryViewSegmentReadinessManager) markSegmentReady(segmentID int64) []t
 	return waiters
 }
 
-func (m *QueryViewSegmentReadinessManager) failSegment(segmentID int64) {
+func (m *QueryViewSegmentReadinessManager) failSegment(segmentID int64, err error) {
 	m.mu.Lock()
 	state := m.segments[segmentID]
 	if state == nil {
@@ -303,7 +305,12 @@ func (m *QueryViewSegmentReadinessManager) failSegment(segmentID int64) {
 	if resetter, ok := m.physical.(PhysicalSegmentResetter); ok {
 		resetter.ResetSegment(segmentID)
 	}
+	if err == nil {
+		err = errors.New("segment became unrecoverable")
+	}
 	for _, waiter := range waiters {
+		logQNQueryViewSegmentFailure("segment_failed", waiter.key, segmentID, err,
+			mlog.Int("loadState", int(state.state)))
 		m.notifyUnrecoverable(waiter.key, waiter.onUnrecoverable)
 	}
 }

@@ -239,7 +239,10 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 
 	// Preempt existing Preparing/Ready view.
 	if m.preparingView != nil {
+		key := m.keyForStateMachine(m.preparingView)
+		before := m.preparingView.State()
 		m.preparingView.EnterUnrecoverable()
+		logCoordQueryViewStateChange(ctx, "preempt_preparing_view", key, before, m.preparingView.State())
 		m.processStateMachine(m.preparingView)
 		// preparingView is cleared by processStateMachine (Unrecoverable case).
 	}
@@ -257,6 +260,8 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 	sm := NewCoordQueryViewStateMachine(view)
 	m.views[sm.Version()] = sm
 	m.preparingView = sm
+	logCoordQueryViewEvent(ctx, "add_preparing_view", m.keyForStateMachine(sm),
+		mlog.FieldCollectionID(view.GetMeta().GetCollectionId()))
 
 	// Process: persist write-ahead + collect sync.
 	m.processStateMachine(sm)
@@ -279,13 +284,19 @@ func (m *ShardViewManager) RequestRelease(ctx context.Context) error {
 	defer m.mu.Unlock()
 
 	if m.preparingView != nil {
+		key := m.keyForStateMachine(m.preparingView)
+		before := m.preparingView.State()
 		m.preparingView.EnterUnrecoverable()
+		logCoordQueryViewStateChange(ctx, "release_preparing_view", key, before, m.preparingView.State())
 		m.processStateMachine(m.preparingView)
 		// preparingView is cleared by processStateMachine (Unrecoverable case).
 	}
 
 	if m.upView != nil {
+		key := m.keyForStateMachine(m.upView)
+		before := m.upView.State()
 		m.upView.EnterDown()
+		logCoordQueryViewStateChange(ctx, "release_up_view", key, before, m.upView.State())
 		m.processStateMachine(m.upView)
 		// processStateMachine's Down case clears m.upView.
 	}
@@ -309,11 +320,17 @@ func (m *ShardViewManager) processStateMachine(sm *CoordQueryViewStateMachine) {
 	for {
 		// 1. ConsumePersist → collect into pending batch.
 		if persist := sm.ConsumePersist(); persist != nil {
+			logCoordQueryViewEvent(m.ctx, "persist_state", m.keyForStateMachine(sm),
+				mlog.FieldCollectionID(persist.GetMeta().GetCollectionId()),
+				mlog.String("state", qviews.QueryViewState(persist.GetMeta().GetState()).String()))
 			m.pendingPersists = append(m.pendingPersists, persist)
 		}
 
 		// 2. ConsumeSync → collect into pending batch.
 		if views := sm.ConsumeSync(); len(views) > 0 {
+			logCoordQueryViewEvent(m.ctx, "sync_state", m.keyForStateMachine(sm),
+				mlog.Int("viewCount", len(views)),
+				mlog.String("state", sm.State().String()))
 			m.pendingSyncs = append(m.pendingSyncs, syncEntry{sm: sm, views: views})
 		}
 
@@ -370,7 +387,10 @@ func (m *ShardViewManager) processStateMachine(sm *CoordQueryViewStateMachine) {
 func (m *ShardViewManager) advanceUnrecoverableToDropping() {
 	for _, sm := range m.views {
 		if sm.State() == qviews.QueryViewStateUnrecoverable {
+			key := m.keyForStateMachine(sm)
+			before := sm.State()
 			sm.EnterDropping()
+			logCoordQueryViewStateChange(m.ctx, "advance_unrecoverable_view", key, before, sm.State())
 			m.processStateMachine(sm)
 		}
 	}
@@ -381,7 +401,10 @@ func (m *ShardViewManager) advanceUnrecoverableToDropping() {
 // Must be called under m.mu.
 func (m *ShardViewManager) downOlderUpView(newUp *CoordQueryViewStateMachine) {
 	if m.upView != nil && m.upView != newUp {
+		key := m.keyForStateMachine(m.upView)
+		before := m.upView.State()
 		m.upView.EnterDown()
+		logCoordQueryViewStateChange(m.ctx, "down_older_up_view", key, before, m.upView.State())
 		m.processStateMachine(m.upView)
 		// processStateMachine's Down case clears m.upView.
 	}
@@ -460,7 +483,12 @@ func (m *ShardViewManager) makeOnSyncResponse(version qviews.QueryViewVersion, t
 			return true // view already removed, stop tracking
 		}
 
+		before := sm.State()
 		sm.OnNodeStateReported(resp)
+		logCoordQueryViewReport(m.ctx, "node_report", m.keyForStateMachine(sm), before, sm.State(),
+			mlog.String("workNode", target.WorkNode().String()),
+			mlog.String("targetState", target.State().String()),
+			mlog.String("reportedState", resp.State().String()))
 		m.processStateMachine(sm)
 		m.flush()
 		m.publishStatsLocked()
@@ -499,10 +527,21 @@ func (m *ShardViewManager) makeOnQueryNodeLost(version qviews.QueryViewVersion) 
 			return // view already removed
 		}
 
+		key := m.keyForStateMachine(sm)
+		before := sm.State()
 		sm.OnQueryNodeLost(node)
+		logCoordQueryViewStateChange(m.ctx, "querynode_lost", key, before, sm.State(),
+			mlog.FieldNodeID(node.ID))
 		m.processStateMachine(sm)
 		m.flush()
 		m.publishStatsLocked()
+	}
+}
+
+func (m *ShardViewManager) keyForStateMachine(sm *CoordQueryViewStateMachine) qviews.QueryViewKey {
+	return qviews.QueryViewKey{
+		ShardID:          m.shardID,
+		QueryViewVersion: sm.Version(),
 	}
 }
 
