@@ -102,12 +102,23 @@ func recoverSnShardView(
 }
 
 // ApplyViews applies a batch of coord-pushed views atomically.
+// Preparing and Up views are processed first so new serving candidates are
+// installed before old views are released.
 func (s *snShardView) ApplyViews(views []handler.ApplyView) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for i := range views {
-		s.applyOneLocked(&views[i])
+		state := views[i].View.State()
+		if state == qviews.QueryViewStatePreparing || state == qviews.QueryViewStateUp {
+			s.applyOneLocked(&views[i])
+		}
+	}
+	for i := range views {
+		state := views[i].View.State()
+		if state != qviews.QueryViewStatePreparing && state != qviews.QueryViewStateUp {
+			s.applyOneLocked(&views[i])
+		}
 	}
 }
 

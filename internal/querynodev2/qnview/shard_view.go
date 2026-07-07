@@ -28,20 +28,21 @@ type qnViewEntry struct {
 }
 
 // ApplyViews applies a batch of coord-pushed views atomically.
-// Preparing views are processed first to ensure segment ref counts are
-// incremented before any Dropped views decrement them, preventing
-// unnecessary unload-then-reload of shared segments.
+// Preparing and Up views are processed first so new serving candidates are
+// installed before old views are released.
 func (s *qnShardView) ApplyViews(views []handler.ApplyView) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for i := range views {
-		if views[i].View.State() == qviews.QueryViewStatePreparing {
+		state := views[i].View.State()
+		if state == qviews.QueryViewStatePreparing || state == qviews.QueryViewStateUp {
 			s.applyOneLocked(&views[i])
 		}
 	}
 	for i := range views {
-		if views[i].View.State() != qviews.QueryViewStatePreparing {
+		state := views[i].View.State()
+		if state != qviews.QueryViewStatePreparing && state != qviews.QueryViewStateUp {
 			s.applyOneLocked(&views[i])
 		}
 	}
