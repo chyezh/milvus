@@ -88,6 +88,7 @@ type mockResourceManager struct {
 	acquiredOrder   []qviews.QueryViewKey
 	released        []qviews.QueryViewKey
 	releaseCallback map[qviews.QueryViewKey]func() // captured OnDropped callbacks
+	ops             *[]string
 }
 
 func newMockResourceManager() *mockResourceManager {
@@ -107,6 +108,9 @@ func (m *mockResourceManager) Acquire(req AcquireResource) {
 func (m *mockResourceManager) Release(req ReleaseResource) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.ops != nil {
+		*m.ops = append(*m.ops, fmt.Sprintf("release:%s", req.Key.QueryViewVersion))
+	}
 	m.released = append(m.released, req.Key)
 	m.releaseCallback[req.Key] = req.OnDropped
 }
@@ -318,6 +322,57 @@ func TestSNHandler_CoordUp_PersistsRecoveryInfo(t *testing.T) {
 	require.Equal(t, 3, rc.count()) // Preparing + Ready + Up
 	assert.Equal(t, qviews.QueryViewStateUp, rc.last().State())
 	assert.Equal(t, 1, cat.savedCount())
+}
+
+func TestSNHandler_ApplyViews_PrioritizesPreparingAndUpInBatch(t *testing.T) {
+	cat := newMockCatalog()
+	mgr := newMockResourceManager()
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+
+	oldView := newPreparingSNView(1)
+	oldKey := oldView.QueryViewKey()
+	oldRC := &reportCollector{}
+	h.ApplyViews([]handler.ApplyView{{View: oldView, OnReport: oldRC.onReport}})
+	oldReq, ok := mgr.getAcquired(oldKey)
+	require.True(t, ok)
+	oldReq.OnReady()
+	h.ApplyViews([]handler.ApplyView{{
+		View:     newSNViewWithState(1, viewpb.QueryViewState_QueryViewStateUp),
+		OnReport: oldRC.onReport,
+	}})
+	require.Equal(t, qviews.QueryViewStateUp, oldRC.last().State())
+
+	newView := newPreparingSNView(2)
+	newKey := newView.QueryViewKey()
+	newRC := &reportCollector{}
+	h.ApplyViews([]handler.ApplyView{{View: newView, OnReport: newRC.onReport}})
+	newReq, ok := mgr.getAcquired(newKey)
+	require.True(t, ok)
+	newReq.OnReady()
+	require.Equal(t, qviews.QueryViewStateReady, newRC.last().State())
+
+	var ops []string
+	mgr.ops = &ops
+	h.ApplyViews([]handler.ApplyView{
+		{
+			View:     newSNViewWithState(1, viewpb.QueryViewState_QueryViewStateDropped),
+			OnReport: oldRC.onReport,
+		},
+		{
+			View: newSNViewWithState(2, viewpb.QueryViewState_QueryViewStateUp),
+			OnReport: func(report qviews.QueryViewAtWorkNode) {
+				if report.State() == qviews.QueryViewStateUp {
+					ops = append(ops, fmt.Sprintf("report:%s", report.QueryViewKey().QueryViewVersion))
+				}
+				newRC.onReport(report)
+			},
+		},
+	})
+
+	require.Equal(t, []string{
+		fmt.Sprintf("report:%s", newKey.QueryViewVersion),
+		fmt.Sprintf("release:%s", oldKey.QueryViewVersion),
+	}, ops)
 }
 
 // ---------------------------------------------------------------------------

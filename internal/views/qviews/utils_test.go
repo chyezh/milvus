@@ -103,18 +103,24 @@ func TestStateTransition(t *testing.T) {
 
 func TestQueryViewIdentifiersString(t *testing.T) {
 	state := QueryViewStatePreparing
-	assert.Equal(t, viewpb.QueryViewState_QueryViewStatePreparing.String(), state.String())
+	assert.Equal(t, "Preparing", state.String())
 	assert.Equal(t, "unknown", NodeType(0).String())
+
+	dv := DataVersion{StreamingVersion: 2, CompactVersion: 3}
+	assert.Equal(t, "2/3", dv.String())
+
+	qv := QueryViewVersion{
+		DataVersion:  dv,
+		QueryVersion: 4,
+	}
+	assert.Equal(t, "2/3/4", qv.String())
 
 	key := QueryViewKey{
 		ShardID: ShardID{
 			ReplicaID: 10,
 			VChannel:  "by-dev-rootcoord-dml_0_1v0",
 		},
-		QueryViewVersion: QueryViewVersion{
-			DataVersion:  DataVersion{StreamingVersion: 2, CompactVersion: 3},
-			QueryVersion: 4,
-		},
+		QueryViewVersion: qv,
 	}
-	assert.Equal(t, "10-by-dev-rootcoord-dml_0_1v0-(2,3)/4", key.String())
+	assert.Equal(t, "10-by-dev-rootcoord-dml_0_1v0-2/3/4", key.String())
 }

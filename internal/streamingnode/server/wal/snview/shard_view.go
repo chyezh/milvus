@@ -8,6 +8,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	qvobserve "github.com/milvus-io/milvus/internal/views/qviews/observe"
 	"github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
@@ -85,6 +86,9 @@ func recoverSnShardView(
 	for _, version := range versions {
 		key := qviews.QueryViewKey{ShardID: shardID, QueryViewVersion: version}
 		v := version // capture loop variable
+		qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeRecoverAcquireResourceEvent{
+			View: key,
+		})
 		resMgr.Acquire(AcquireResource{
 			Key:  key,
 			Meta: views[version].Meta(),
@@ -98,12 +102,23 @@ func recoverSnShardView(
 }
 
 // ApplyViews applies a batch of coord-pushed views atomically.
+// Preparing and Up views are processed first so new serving candidates are
+// installed before old views are released.
 func (s *snShardView) ApplyViews(views []handler.ApplyView) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for i := range views {
-		s.applyOneLocked(&views[i])
+		state := views[i].View.State()
+		if state == qviews.QueryViewStatePreparing || state == qviews.QueryViewStateUp {
+			s.applyOneLocked(&views[i])
+		}
+	}
+	for i := range views {
+		state := views[i].View.State()
+		if state != qviews.QueryViewStatePreparing && state != qviews.QueryViewStateUp {
+			s.applyOneLocked(&views[i])
+		}
 	}
 }
 
@@ -155,6 +170,9 @@ func (s *snShardView) applyOneLocked(av *handler.ApplyView) {
 			)
 			entry = &snViewEntry{ApplyView: *av, sm: sm}
 			s.views[key.QueryViewVersion] = entry
+			qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeAcquireResourceEvent{
+				View: key,
+			})
 			// SN SM constructor generates a Preparing report.
 			s.consumeReport(entry)
 
@@ -187,7 +205,15 @@ func (s *snShardView) applyOneLocked(av *handler.ApplyView) {
 
 	// Existing view: replace callback and deliver coord push.
 	entry.ApplyView = *av
+	before := entry.sm.State()
 	entry.sm.OnCoordStateDelivered(pushedState)
+	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeApplyCoordViewEvent{
+		ViewStateTransition: qvobserve.ViewStateTransition{
+			View: key,
+			From: before,
+			To:   entry.sm.State(),
+		},
+	})
 	s.consumeReportPersistAndCleanup(key.QueryViewVersion, entry)
 }
 
@@ -213,7 +239,16 @@ func (s *snShardView) notifyReady(version qviews.QueryViewVersion) {
 		return
 	}
 
+	key := entry.View.QueryViewKey()
+	before := entry.sm.State()
 	entry.sm.OnReady()
+	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeResourceReadyEvent{
+		ViewStateTransition: qvobserve.ViewStateTransition{
+			View: key,
+			From: before,
+			To:   entry.sm.State(),
+		},
+	})
 	s.consumeReportPersistAndCleanup(version, entry)
 }
 
@@ -228,7 +263,16 @@ func (s *snShardView) notifyRecoveringDone(version qviews.QueryViewVersion) {
 		return
 	}
 
+	key := entry.View.QueryViewKey()
+	before := entry.sm.State()
 	entry.sm.OnRecoveringDone()
+	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeRecoveringDoneEvent{
+		ViewStateTransition: qvobserve.ViewStateTransition{
+			View: key,
+			From: before,
+			To:   entry.sm.State(),
+		},
+	})
 	s.consumeReportPersistAndCleanup(version, entry)
 }
 
@@ -237,6 +281,10 @@ func (s *snShardView) notifyRecoveringDone(version qviews.QueryViewVersion) {
 func (s *snShardView) consumeReport(entry *snViewEntry) {
 	report := entry.sm.ConsumeReport()
 	if report != nil && entry.OnReport != nil {
+		qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeReportViewEvent{
+			View:  entry.View.QueryViewKey(),
+			State: qviews.QueryViewState(report.GetMeta().GetState()),
+		})
 		entry.OnReport(qviews.NewQueryViewAtWorkNodeFromProto(report))
 	}
 }
@@ -252,7 +300,16 @@ func (s *snShardView) notifyDropped(version qviews.QueryViewVersion) {
 		return
 	}
 
+	key := entry.View.QueryViewKey()
+	before := entry.sm.State()
 	entry.sm.OnDropped()
+	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeReleaseDoneEvent{
+		ViewStateTransition: qvobserve.ViewStateTransition{
+			View: key,
+			From: before,
+			To:   entry.sm.State(),
+		},
+	})
 	s.consumeReportPersistAndCleanup(version, entry)
 }
 
@@ -289,6 +346,10 @@ func (s *snShardView) consumeAndPersist(entry *snViewEntry) {
 	if persist == nil {
 		return
 	}
+	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodePersistViewEvent{
+		View:  entry.View.QueryViewKey(),
+		State: qviews.QueryViewState(persist.GetMeta().GetState()),
+	})
 	if err := s.catalog.SaveQueryViews(context.Background(), s.pchannel, []*viewpb.QueryViewOfShard{persist}); err != nil {
 		panic(fmt.Sprintf("persist query view %s failed: %v", persist.GetMeta().GetVchannel(), err))
 	}
@@ -301,6 +362,9 @@ func (s *snShardView) consumeAndRelease(version qviews.QueryViewVersion, entry *
 		return
 	}
 	key := entry.View.QueryViewKey()
+	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeReleaseResourceEvent{
+		View: key,
+	})
 	s.resMgr.Release(ReleaseResource{
 		Key: key,
 		OnDropped: func() {

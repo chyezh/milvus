@@ -1,11 +1,13 @@
 package qnview
 
 import (
+	"context"
 	"sync"
 
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	qvobserve "github.com/milvus-io/milvus/internal/views/qviews/observe"
 	"github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
@@ -26,20 +28,21 @@ type qnViewEntry struct {
 }
 
 // ApplyViews applies a batch of coord-pushed views atomically.
-// Preparing views are processed first to ensure segment ref counts are
-// incremented before any Dropped views decrement them, preventing
-// unnecessary unload-then-reload of shared segments.
+// Preparing and Up views are processed first so new serving candidates are
+// installed before old views are released.
 func (s *qnShardView) ApplyViews(views []handler.ApplyView) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for i := range views {
-		if views[i].View.State() == qviews.QueryViewStatePreparing {
+		state := views[i].View.State()
+		if state == qviews.QueryViewStatePreparing || state == qviews.QueryViewStateUp {
 			s.applyOneLocked(&views[i])
 		}
 	}
 	for i := range views {
-		if views[i].View.State() != qviews.QueryViewStatePreparing {
+		state := views[i].View.State()
+		if state != qviews.QueryViewStatePreparing && state != qviews.QueryViewStateUp {
 			s.applyOneLocked(&views[i])
 		}
 	}
@@ -56,15 +59,19 @@ func (s *qnShardView) applyOneLocked(av *handler.ApplyView) {
 		case qviews.QueryViewStatePreparing:
 			// New Preparing view: create SM and acquire segments.
 			qnView := av.View.(*qviews.QueryViewAtQueryNode)
+			meta := qnView.IntoProto().Meta
 			sm := NewQNQueryViewStateMachine(
-				qnView.IntoProto().Meta,
+				meta,
 				qnView.ViewOfQueryNode(),
 			)
 			entry = &qnViewEntry{ApplyView: *av, sm: sm}
 			s.views[key.QueryViewVersion] = entry
+			qvobserve.Observe(context.TODO(), qvobserve.QueryNodeAcquireSegmentsEvent{
+				View:         key,
+				SegmentCount: countViewSegments(qnView.ViewOfQueryNode()),
+			})
 
 			// Tell SegmentManager to load segments. Callbacks will drive SM progress.
-			meta := qnView.IntoProto().Meta
 			s.segMgr.Acquire(AcquireSegments{
 				Key:  key,
 				Meta: proto.Clone(meta).(*viewpb.QueryViewMeta),
@@ -96,7 +103,15 @@ func (s *qnShardView) applyOneLocked(av *handler.ApplyView) {
 
 	// Existing view: replace callback and deliver coord push.
 	entry.ApplyView = *av
+	before := entry.sm.State()
 	entry.sm.OnCoordStateDelivered(pushedState)
+	qvobserve.Observe(context.TODO(), qvobserve.QueryNodeApplyCoordViewEvent{
+		ViewStateTransition: qvobserve.ViewStateTransition{
+			View: key,
+			From: before,
+			To:   entry.sm.State(),
+		},
+	})
 	s.consumeReportAndCleanup(key, entry)
 }
 
@@ -111,8 +126,18 @@ func (s *qnShardView) notifySegmentsReady(version qviews.QueryViewVersion, ready
 		return
 	}
 
+	key := entry.View.QueryViewKey()
+	before := entry.sm.State()
 	entry.sm.OnSegmentsReady(readySegments)
-	s.consumeReportAndCleanup(entry.View.QueryViewKey(), entry)
+	qvobserve.Observe(context.TODO(), qvobserve.QueryNodeSegmentsReadyEvent{
+		ViewStateTransition: qvobserve.ViewStateTransition{
+			View: key,
+			From: before,
+			To:   entry.sm.State(),
+		},
+		ReadySegmentCount: countReadySegments(readySegments),
+	})
+	s.consumeReportAndCleanup(key, entry)
 }
 
 // notifyUnrecoverable is called by SegmentManager callback when a fatal error
@@ -126,8 +151,17 @@ func (s *qnShardView) notifyUnrecoverable(version qviews.QueryViewVersion) {
 		return
 	}
 
+	key := entry.View.QueryViewKey()
+	before := entry.sm.State()
 	entry.sm.OnUnrecoverable()
-	s.consumeReportAndCleanup(entry.View.QueryViewKey(), entry)
+	qvobserve.Observe(context.TODO(), qvobserve.QueryNodeSegmentUnrecoverableEvent{
+		ViewStateTransition: qvobserve.ViewStateTransition{
+			View: key,
+			From: before,
+			To:   entry.sm.State(),
+		},
+	})
+	s.consumeReportAndCleanup(key, entry)
 }
 
 // notifyDropped is called by the SegmentManager Release callback when segment
@@ -141,8 +175,17 @@ func (s *qnShardView) notifyDropped(version qviews.QueryViewVersion) {
 		return
 	}
 
+	key := entry.View.QueryViewKey()
+	before := entry.sm.State()
 	entry.sm.OnDropped()
-	s.consumeReportAndCleanup(entry.View.QueryViewKey(), entry)
+	qvobserve.Observe(context.TODO(), qvobserve.QueryNodeReleaseDoneEvent{
+		ViewStateTransition: qvobserve.ViewStateTransition{
+			View: key,
+			From: before,
+			To:   entry.sm.State(),
+		},
+	})
+	s.consumeReportAndCleanup(key, entry)
 }
 
 // consumeReportAndCleanup drains pending report and release, invokes callbacks,
@@ -151,9 +194,16 @@ func (s *qnShardView) notifyDropped(version qviews.QueryViewVersion) {
 func (s *qnShardView) consumeReportAndCleanup(key qviews.QueryViewKey, entry *qnViewEntry) {
 	report := entry.sm.ConsumeReport()
 	if report != nil && entry.OnReport != nil {
+		qvobserve.Observe(context.TODO(), qvobserve.QueryNodeReportViewEvent{
+			View:  key,
+			State: qviews.QueryViewState(report.GetMeta().GetState()),
+		})
 		entry.OnReport(qviews.NewQueryViewAtWorkNodeFromProto(report))
 	}
 	if entry.sm.ConsumeRelease() {
+		qvobserve.Observe(context.TODO(), qvobserve.QueryNodeReleaseSegmentsEvent{
+			View: key,
+		})
 		s.segMgr.Release(ReleaseSegments{
 			Key: key,
 			OnDropped: func() {
@@ -167,4 +217,20 @@ func (s *qnShardView) consumeReportAndCleanup(key qviews.QueryViewKey, entry *qn
 			s.onEmpty()
 		}
 	}
+}
+
+func countReadySegments(readySegments map[int64][]int64) int {
+	total := 0
+	for _, segmentIDs := range readySegments {
+		total += len(segmentIDs)
+	}
+	return total
+}
+
+func countViewSegments(view *viewpb.QueryViewOfQueryNode) int {
+	total := 0
+	for _, partition := range view.GetPartitions() {
+		total += len(partition.GetSegmentIds())
+	}
+	return total
 }
