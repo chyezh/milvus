@@ -26,8 +26,28 @@ func NewViewSyncServer(handler QueryViewHandler) *ViewSyncServer {
 // It runs a recv loop in the current goroutine and a send loop in a background goroutine.
 // All stream.Send calls are serialized through the send loop to ensure thread safety.
 func (s *ViewSyncServer) SyncQueryView(stream viewpb.ViewSyncService_SyncQueryViewServer) error {
+	return s.SyncQueryViewUntil(stream, nil)
+}
+
+// SyncQueryViewUntil runs SyncQueryView and sends a close response when closeSignal
+// is closed. The client is expected to close its send side after receiving the
+// close response so the server recv loop can exit.
+func (s *ViewSyncServer) SyncQueryViewUntil(stream viewpb.ViewSyncService_SyncQueryViewServer, closeSignal <-chan struct{}) error {
 	ctx := stream.Context()
 	pending := newPendingReports()
+
+	closeWatcherDone := make(chan struct{})
+	if closeSignal != nil {
+		go func() {
+			select {
+			case <-closeSignal:
+				pending.SetCloseResponse()
+			case <-closeWatcherDone:
+			case <-ctx.Done():
+			}
+		}()
+	}
+	defer close(closeWatcherDone)
 
 	// Start send loop goroutine — the only goroutine that calls stream.Send.
 	sendDone := make(chan struct{})

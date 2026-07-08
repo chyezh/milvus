@@ -46,6 +46,19 @@ type WAL interface {
 	AppendAsync(ctx context.Context, msg message.MutableMessage, cb func(*AppendResult, error))
 }
 
+type WALUnwrapper interface {
+	UnwrapWAL() WAL
+}
+
+func Unwrap(l WAL) WAL {
+	if unwrapper, ok := l.(WALUnwrapper); ok {
+		if raw := unwrapper.UnwrapWAL(); raw != nil {
+			return raw
+		}
+	}
+	return l
+}
+
 // ROWAL is the read-only WAL interface.
 // ROWAL only supports reading records from the wal but not writing.
 // !!! Don't implement it directly, implement walimpls.WAL instead.

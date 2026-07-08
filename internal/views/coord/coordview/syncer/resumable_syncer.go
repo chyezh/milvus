@@ -120,6 +120,7 @@ func (rs *resumableSyncer) loop() {
 
 		// Recv blocks until stream breaks.
 		rs.recvLoop(stream)
+		_ = stream.CloseSend()
 
 		// Stream broke — cancel send loop and wait.
 		streamCancel()
@@ -155,6 +156,9 @@ func (rs *resumableSyncer) recvLoop(stream viewpb.ViewSyncService_SyncQueryViewC
 
 		viewsResp := resp.GetViews()
 		if viewsResp == nil {
+			if resp.GetClose() != nil {
+				return
+			}
 			continue
 		}
 

@@ -8,12 +8,14 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/queryplan/provider"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/views/viewerror"
+	worknodehandler "github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 )
 
 type walManager interface {
-	GetAvailableRawWALByPChannel(pchannel string) (wal.WAL, error)
+	GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error)
 }
 
 type Server struct {
@@ -26,7 +28,7 @@ func NewServer(walManager walManager) *Server {
 }
 
 func (s *Server) GetQueryPlan(ctx context.Context, req *viewpb.GetQueryPlanRequest) (*viewpb.GetQueryPlanResponse, error) {
-	p, err := s.providerForVChannel(req.GetShardId().GetVchannel())
+	p, err := s.providerForVChannel(ctx, req.GetShardId().GetVchannel())
 	if err != nil {
 		return nil, toRPCError(err)
 	}
@@ -38,7 +40,7 @@ func (s *Server) GetQueryPlan(ctx context.Context, req *viewpb.GetQueryPlanReque
 }
 
 func (s *Server) GetMVCCTimestamp(ctx context.Context, req *viewpb.GetMVCCTimestampRequest) (*viewpb.GetMVCCTimestampResponse, error) {
-	p, err := s.providerForVChannel(req.GetVchannel())
+	p, err := s.providerForVChannel(ctx, req.GetVchannel())
 	if err != nil {
 		return nil, toRPCError(err)
 	}
@@ -49,18 +51,26 @@ func (s *Server) GetMVCCTimestamp(ctx context.Context, req *viewpb.GetMVCCTimest
 	return resp, nil
 }
 
-func (s *Server) providerForVChannel(vchannel string) (provider.QueryPlanProvider, error) {
+func (s *Server) providerForVChannel(ctx context.Context, vchannel string) (provider.QueryPlanProvider, error) {
 	if s == nil || s.walManager == nil {
 		return nil, viewerror.NewOnShutdownError("query plan service is unavailable")
 	}
 	if vchannel == "" {
 		return nil, viewerror.NewUnknownError("empty vchannel")
 	}
-	rawWAL, err := s.walManager.GetAvailableRawWALByPChannel(funcutil.ToPhysicalChannel(vchannel))
+	pchannel, err := worknodehandler.DecodeQueryViewPChannelFromIncomingContext(ctx)
+	if err != nil {
+		return nil, viewerror.NewUnknownError("%s", err.Error())
+	}
+	expectedPChannel := funcutil.ToPhysicalChannel(vchannel)
+	if pchannel.Name != expectedPChannel {
+		return nil, viewerror.NewUnknownError("query view pchannel metadata mismatch, expected %s, got %s", expectedPChannel, pchannel.Name)
+	}
+	rawWAL, err := s.walManager.GetAvailableWAL(pchannel)
 	if err != nil {
 		return nil, viewerror.NewOnShutdownError("local WAL for vchannel %s is unavailable: %s", vchannel, err.Error())
 	}
-	p, ok := rawWAL.(provider.QueryPlanProvider)
+	p, ok := wal.Unwrap(rawWAL).(provider.QueryPlanProvider)
 	if !ok {
 		return nil, viewerror.NewUnknownError("local WAL for vchannel %s does not implement query plan provider", vchannel)
 	}

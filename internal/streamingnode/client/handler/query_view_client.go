@@ -6,6 +6,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/lazygrpc"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/viewerror"
+	worknodehandler "github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
@@ -133,7 +134,8 @@ func executeViewRPC[T any](
 	call func(context.Context, *types.PChannelInfoAssigned) (viewRPCResult[T], error),
 ) (T, error) {
 	result, err := qvc.owner.createHandlerAfterStreamingNodeReady(ctx, logger, pchannel, func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
-		rpcResult, err := call(ctx, assign)
+		rpcCtx := worknodehandler.EncodeQueryViewPChannelToOutgoingContext(ctx, assign.Channel)
+		rpcResult, err := call(rpcCtx, assign)
 		if err != nil {
 			return nil, err
 		}

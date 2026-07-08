@@ -103,8 +103,7 @@ type ReliableSyncer interface {
 
 // ViewSyncClient provides service discovery and gRPC stream creation for all work node types.
 // Internally routes QueryNodes through the QueryNode manager client and
-// StreamingNodes through channel WAL-location lookup plus the StreamingNode
-// manager client.
+// StreamingNodes through the pchannel-level StreamingNode handler client.
 type ViewSyncClient interface {
 	// RegisterNodeChangedNotifier registers a callback that is invoked whenever
 	// node changes may require draining removed QueryNode syncers. The notifier
