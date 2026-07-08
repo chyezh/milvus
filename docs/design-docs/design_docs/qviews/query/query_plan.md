@@ -92,8 +92,8 @@ while plan generation is using it.
 ## 5. MVCC Semantics
 
 For the primary path, `walAdaptorImpl` obtains `QueryPlanMVCC` from its local
-WAL/MVCC state. A QueryView shard's WAL stream is split into two logical
-frontiers:
+WAL/MVCC state. `QueryPlanMVCC` carries executor-local wait positions, not raw
+message category frontiers:
 
 ```proto
 message QueryPlanMVCC {
@@ -106,12 +106,11 @@ The frontiers mean:
 
 | Field | Meaning | Phase 2 consumer |
 |---|---|---|
-| `growing_timetick` | Latest timetick of the growing stream, currently Insert-like messages. | StreamingNode waits for growing runtime visibility. |
-| `transforming_timetick` | Latest timetick of the transforming stream, currently Delete-like messages; future Update and DeleteByExpr belong here. | StreamingNode and QueryNode wait for transform visibility. |
+| `growing_timetick` | WAL TimeTick position that the corresponding StreamingNode shard's growing runtime must consume before serving growing queries. | StreamingNode only. |
+| `transforming_timetick` | WAL TimeTick position that the corresponding QueryNode shard's TransformBuffer must consume before serving sealed queries. | QueryNode only. |
 
-The derived user-facing read point for growing data is
-`max(growing_timetick, transforming_timetick)`, but `QueryPlan` carries the two
-raw frontiers so each executor waits on the correct local resource.
+Both values must come from persisted WAL message TimeTicks. There is no
+system-clock, local-wall-clock, or synthetic non-WAL MVCC source.
 
 `GetQueryPlan` supports two protocol modes:
 
@@ -139,14 +138,24 @@ waiting until local execution resources are readable at the requested
 First-version generation rule:
 
 ```text
-growing_timetick      = latest timetick of messages that mutate SN growing data
-transforming_timetick = latest timetick of messages that must be consumed by
-                       every work node in the current view
+growing_timetick      = latest WAL TimeTick that must be visible in the
+                       StreamingNode growing runtime before SN-side query
+                       execution
+transforming_timetick = latest WAL TimeTick that must be visible in the
+                       QueryNode TransformBuffer before QN-side query
+                       execution
 ```
 
-Currently, Insert-like messages advance the growing frontier, while Delete-like
-messages advance the transforming frontier. Future Update and DeleteByExpr
-messages should advance the transforming frontier.
+Currently, Insert advances the StreamingNode growing wait position. Delete
+advances both the StreamingNode growing wait position and the QueryNode
+transforming wait position because both node types must observe the delete before
+serving a query at or after that TimeTick.
+
+TransformLog is the QueryNode-side projection of all WAL messages that advance
+`transforming_timetick`. The source message categories and entry kinds are
+defined by [TransformLog View Module](../../wal/transform_log_view_module.md).
+Future Update and DeleteByExpr messages should advance the transforming wait
+position through TransformLog payload entries.
 
 ## 6. Work Node Construction
 

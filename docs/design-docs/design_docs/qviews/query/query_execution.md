@@ -161,17 +161,21 @@ message QueryPlanMVCC {
 }
 ```
 
-Phase 1 chooses these read frontiers. Phase 2 task providers wait until local
-resources can serve them, then attach the same MVCC to every returned segment
-task as the read boundary.
+Phase 1 chooses these executor-local wait positions. Phase 2 task providers wait
+until local node resources can serve them, then attach the same MVCC to every
+returned segment task as the read boundary.
 
 First-version wait rules are view/runtime-level, not segment-level:
 
 | Node | Wait rule |
 |---|---|
 | StreamingNode | wait growing runtime visibility >= `mvcc.growing_timetick` |
-| StreamingNode | wait transform visibility >= `mvcc.transforming_timetick` |
-| QueryNode | wait QueryView-level transform visibility >= `mvcc.transforming_timetick` |
+| QueryNode | wait TransformBuffer visibility >= `mvcc.transforming_timetick` |
+
+StreamingNode consumes only `growing_timetick`. QueryNode consumes only
+`transforming_timetick`. If a WAL message must affect both nodes before a query
+can execute, Phase 1 advances both executor-local positions from that WAL
+message TimeTick.
 
 After tasks are returned:
 
@@ -191,7 +195,7 @@ WAL state:
 SNQueryViewHandler
   -> selected Up QueryView ref
   -> SNQueryRuntimeManager / QueryRuntime
-  -> growing runtime and transform visibility
+  -> growing runtime visibility
   -> concrete SN segment tasks
 ```
 
@@ -201,12 +205,16 @@ First-version `Acquire*SegmentTasks` behavior:
 2. Reject any state except `Up`.
 3. Acquire the QueryView/runtime ref.
 4. Wait growing visibility to `mvcc.growing_timetick`.
-5. Wait transform visibility to `mvcc.transforming_timetick`.
-6. Collect local growing segment candidates from the runtime and view version.
-7. Run the operation-specific LocalOptimizer.
-8. Acquire growing segment handles for selected candidates.
-9. Release the QueryView/runtime ref.
-10. Return concrete SN Search/Query segment tasks.
+5. Collect local growing segment candidates from the runtime and view version.
+6. Run the operation-specific LocalOptimizer.
+7. Acquire growing segment handles for selected candidates.
+8. Release the QueryView/runtime ref.
+9. Return concrete SN Search/Query segment tasks.
+
+The growing runtime may internally apply TransformLog-equivalent effects such as
+Delete before advancing its applied growing visibility. That is an internal
+runtime contract; the task provider does not pass or wait on
+`mvcc.transforming_timetick` for StreamingNode execution.
 
 Segments that have already been handed off to QueryNode are excluded according to
 the QueryView version and the growing runtime's DataVersion rules.
@@ -221,7 +229,7 @@ QueryView:
 ```text
 QNQueryViewHandler
   -> selected Ready QueryView ref
-  -> QueryView-level transform visibility
+  -> TransformBuffer visibility
   -> QueryNode segment/resource managers
   -> concrete QN segment tasks
 ```
@@ -231,16 +239,19 @@ First-version `Acquire*SegmentTasks` behavior:
 1. Match request `shard_id` and `version`.
 2. Reject any state except `Ready`.
 3. Acquire the QueryView ref.
-4. Wait QueryView-level transform visibility to `mvcc.transforming_timetick`.
+4. Wait node-local TransformBuffer visibility to `mvcc.transforming_timetick`.
 5. Collect local sealed segment candidates from the view.
 6. Run the operation-specific LocalOptimizer.
 7. Acquire sealed segment handles for selected candidates.
 8. Release the QueryView ref.
 9. Return concrete QN Search/Query segment tasks.
 
-The first implementation waits at QueryView-level transform visibility. It does
-not wait per selected segment. A later segment-level wait optimization must keep
-the same task provider contract.
+The first implementation waits at node-local TransformBuffer visibility. It does
+not wait per selected segment. Segment catch-up is part of resource preparation;
+after catch-up, live TransformLog application is a vchannel/resource-level
+broadcast. A later segment-level internal optimization must keep the same task
+provider contract and must only expose a single TransformBuffer visibility
+frontier to the query path.
 
 ## 8. Local Optimizer
 
