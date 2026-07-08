@@ -136,9 +136,13 @@ routing, and the SN derives pchannel from vchannel internally.
 `QueryPlanMVCC` has two frontiers:
 
 ```text
-growing_timetick      = latest timetick for Insert-like growing data
-transforming_timetick = latest timetick for Delete/Update-like transform data
+growing_timetick      = StreamingNode growing-runtime wait position
+transforming_timetick = QueryNode TransformBuffer wait position
 ```
+
+Both positions are WAL message TimeTicks. The query client treats them as opaque
+executor-local MVCC values: StreamingNode targets consume `growing_timetick`, and
+QueryNode targets consume `transforming_timetick`.
 
 **Proxy decision flow per shard:**
 

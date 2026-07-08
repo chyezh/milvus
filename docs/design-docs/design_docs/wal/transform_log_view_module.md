@@ -15,20 +15,23 @@
 QueryViews move sealed-segment transform application from StreamingNode to
 QueryNode.
 
-StreamingNode consumes WAL Delete messages and stores them in a vchannel-level
-TransformLog owned by an independent RecoveryStorage module. QueryNode
-subscribes once per vchannel when it first loads a QueryView for that vchannel,
-buffers TransformLog entries locally, and applies them to local sealed segments.
+StreamingNode consumes WAL messages that advance QueryNode transform visibility
+and stores their projection in a vchannel-level TransformLog owned by an
+independent RecoveryStorage module. QueryNode subscribes once per vchannel when
+it first loads a QueryView for that vchannel, buffers TransformLog entries
+locally, and applies them to local sealed segments.
 
-The first transform type is Delete. The design keeps the protocol extensible,
-but this document only defines Delete behavior.
+The first payload transform type is Delete. TransformLog also carries empty
+barrier entries for WAL messages that do not contain transform payload but still
+advance the QueryNode transforming MVCC position.
 
 ## 2. Core Constraints
 
 1. **TransformLog is the source for QueryNode subscription**. QueryNode
    subscribes to TransformLog entries, not WAL records and not L0 segments.
-2. **One TimeTick semantic**. `TransformLogEntry.time_tick` is the WAL Delete
-   TimeTick and the MVCC TimeTick. There is no separate data/effect timetick.
+2. **One TimeTick semantic**. `TransformLogEntry.time_tick` is the source WAL
+   message TimeTick and the MVCC TimeTick. There is no separate data/effect
+   timetick.
 3. **Transform protocol emits transform entries**. SubscribeTransform does not
    expose WAL message id, last-confirmed id, transaction context, WAL
    properties, or WAL scanner internals.
@@ -56,7 +59,7 @@ but this document only defines Delete behavior.
    tombstones, dirty snapshots, and persistence tasks.
 10. **TransformLog is part of RecoveryStorage data persistence**. It
     contributes a DataBarrier so the RecoveryStorage data checkpoint cannot pass
-    a Delete whose TransformLog entry is not durably published.
+    a WAL message whose TransformLog entry is not durably published.
 11. **L0 segments are independent output**. L0 materialization is how
     TransformLog interacts with DataCoord/Coordinator, but it is not the
     QueryNode subscription replay source. `DropCollection`, `ManualFlush`, and
@@ -158,9 +161,9 @@ QN applies entries with entry.time_tick > S
 ```
 
 The field is inherited from DataView into QueryView when the view is generated.
-For the current Delete-only implementation, it means all Delete entries with
-`time_tick > transform_start_after_timetick` must be applied to sealed segments
-covered by the view.
+For the first implementation, it means all Delete entries and transform barrier
+entries with `time_tick > transform_start_after_timetick` must be consumed
+before the QueryNode can expose transform visibility past that point.
 
 ### 5.2 Transform Delete Block
 
@@ -176,22 +179,40 @@ message TransformDeleteBlock {
 
 ### 5.3 Transform Log Entry
 
-One TransformLog entry corresponds to one WAL Delete message. Transactions are
-handled as one atomic WAL message and therefore one TransformLog entry.
+One TransformLog entry corresponds to one source WAL message that advances the
+QueryNode transforming MVCC position. Transactions are handled as one atomic WAL
+message and therefore one TransformLog entry.
 
 ```proto
 message TransformDeleteEntry {
     repeated TransformDeleteBlock blocks = 1;
 }
 
+message TransformBarrierEntry {}
+
 message TransformLogEntry {
     uint64 time_tick = 1;
 
     oneof entry {
         TransformDeleteEntry delete = 2;
+        TransformBarrierEntry barrier = 3;
     }
 }
 ```
+
+`delete` entries carry transform payload. `barrier` entries carry no payload and
+only advance TransformLog / TransformBuffer visibility to `time_tick`.
+
+The first-version TransformLog entry sources are grouped by why they advance the
+QueryNode transforming MVCC position:
+
+| Source category | Source WAL messages | TransformLog entry | Meaning |
+|---|---|---|---|
+| Payload transform | Delete / Txn(Delete) | `delete` | Apply delete payload and advance transforming MVCC. |
+| Transform baseline barrier | CreateCollection, RecoveryBarrier | `barrier` | Establish or advance a per-vchannel TransformBuffer baseline even when no payload transform exists yet. |
+| Transform progress barrier | Flush, ManualFlush, FlushAll, DropPartition, DropCollection, TruncateCollection, schema-changing AlterCollection, AlterWAL | `barrier` | Synchronize QueryNode transform visibility with WAL messages whose completion or ordering depends on transform progress. |
+
+Insert does not produce a TransformLog entry.
 
 ### 5.4 Transform Log Chunk
 
@@ -270,14 +291,15 @@ aggregation. Runtime ownership is split into three independent modules:
   lifecycle state, vchannel tombstones, dirty snapshots, and meta checkpoint.
 - `SegmentModule` owns Insert persistence state, segment assignment metadata,
   segment tombstones, L1 output, and segment data checkpoint.
-- `TransformLogModule` owns Delete persistence state, transform-log chunks,
-  retained chunk replay, scanner fanout, transform-log meta, transform-log
-  tombstones, and delete data checkpoint.
+- `TransformLogModule` owns Delete payload entries, transform barrier entries,
+  transform-log chunks, retained chunk replay, scanner fanout, transform-log
+  meta, transform-log tombstones, and transform data checkpoint.
 
-`VChannelModule` is not the Delete buffer owner, subscription service, or
-public truncation API. `TransformLogModule` consumes Delete and Txn(Delete)
-messages directly from RecoveryStorage, handles each Txn as one atomic WAL
-message, and lets TransformLog meta persistence advance the delete DataBarrier.
+`VChannelModule` is not the transform buffer owner, subscription service, or
+public truncation API. `TransformLogModule` consumes Delete, Txn(Delete), and
+transform barrier source messages directly from RecoveryStorage, handles each
+Txn as one atomic WAL message, and lets TransformLog meta persistence advance
+the transform DataBarrier.
 
 `SegmentModule` has the only required cross-module read: when observing
 `CreateSegment`, it obtains the historical schema through
@@ -1009,7 +1031,7 @@ scanner from the oldest local point QueryNode still needs to cover.
 | Response | Meaning |
 | --- | --- |
 | `create` | Acknowledge scanner creation and report `truncate_time_tick`. |
-| `message_batch` | Carry ordered `TransformLogEntry` values, currently Delete entries. |
+| `message_batch` | Carry ordered `TransformLogEntry` values, including Delete payload entries and transform barrier entries. |
 | `caught_up` | Barrier for the create/reconnect subscription request. |
 | `subscription_error` | Error scoped to one subscription on a multiplexed stream. |
 | `close_stream` | Acknowledge graceful stream close. |
@@ -1032,14 +1054,14 @@ It does not expose a latest TimeTick. It is not an idle progress message.
 | `RecoveryStorage` | Owns WAL data consumption, module dispatch, checkpoint advancement, recovery catalog persistence, and barrier composition. |
 | `VChannelModule` | Owns vchannel metadata, schema, partition lifecycle, vchannel tombstones, dirty snapshots, and exposes only narrow read-only schema lookup to `SegmentModule`. |
 | `SegmentModule` | Owns Insert data, segment assignment metadata, segment tombstones, L1 output, and segment data checkpoint. It may read `SchemaAt` from `VChannelModule` when creating segment state. |
-| `TransformLogModule` | Owns Delete and Txn(Delete) data, transform-log chunks, retained chunk replay, scanner fanout, transform-log meta, transform-log tombstones, truncation, L0 materialization, and delete data checkpoint. |
+| `TransformLogModule` | Owns Delete and Txn(Delete) data, transform barrier entries, transform-log chunks, retained chunk replay, scanner fanout, transform-log meta, transform-log tombstones, truncation, L0 materialization, and transform data checkpoint. |
 | `internal/streamingnode/server/wal` | Defines the root WAL contracts, including `TransformLogAccesser`, `TransformLogReadOption`, `TransformLogScanner`, events, and errors. |
 | `WALAccesser.TransformLog()` | Provides the public WAL-Read-style TransformLog access entry. It creates a resumable scanner and reuses the existing WAL `handlerClient`. |
 | `handlerClient.ReadTransformLog` | Reuses WAL assignment discovery, local registry, wait-for-ready, server-id picker, gRPC service client, and rebalance error reporting to choose local or remote scanner creation. |
 | `SubscribeTransform` server | Remote transport adapter: resolves the assigned WAL from stream metadata, opens a TransformLog scanner, sends retained entries, emits caught-up, then forwards live entries. |
 | `QN TransformClient` | Owns TransformLog scanners and one local transform buffer per vchannel. |
-| `QN vchannel transform buffer` | Stores received TransformLog entries for local QueryView consumption and truncates old entries as local views advance. |
-| `QN SegmentManager/DeleteApplier` | Loads sealed segments, consumes the local vchannel transform buffer, applies Delete entries, and reports Ready or Unrecoverable. |
+| `QN vchannel transform buffer` | Stores received TransformLog entries, applies live entries as a vchannel/resource-level broadcast after segment catch-up, exposes TransformBuffer visibility, and truncates old entries as local views advance. |
+| `QN SegmentManager/TransformApplier` | Loads sealed segments, performs segment catch-up from the local vchannel transform buffer, applies Delete payload entries, consumes barrier entries, and reports Ready or Unrecoverable. |
 | `L0 materializer` | Converts accumulated TransformLog entries into DataCoord-managed L0 delete segments when thresholds or force barriers are met. |
 
 ## 15. Errors
@@ -1050,54 +1072,58 @@ It does not expose a latest TimeTick. It is not an idle progress message.
 | Requested start is older than `truncate_time_tick` | Replay unavailable; affected QueryView becomes Unrecoverable. |
 | Stream breaks | QueryNode reconnects and recreates the vchannel subscription from the oldest required local point. |
 | Reconnect cannot cover required local point | Affected QueryViews become Unrecoverable. |
-| TransformLog chunk write fails | DataBarrier does not advance; RecoveryStorage checkpoint cannot pass the Delete. |
+| TransformLog chunk write fails | DataBarrier does not advance; RecoveryStorage checkpoint cannot pass the source WAL message. |
 | TransformLog meta persist fails | DataBarrier does not advance; WAL replay will rebuild unpublished entries after recovery. |
 | Retained chunk is missing during recovery | Vchannel TransformLog recovery fails; subscriptions cannot be served safely. |
 
 ## 16. Invariants
 
-1. `TransformLogEntry.time_tick` is the WAL Delete TimeTick and MVCC TimeTick.
+1. `TransformLogEntry.time_tick` is the source WAL message TimeTick and MVCC
+   TimeTick.
 2. There is no separate data timetick or effect timetick in TransformLog.
 3. `transform_start_after_timetick` is exclusive.
 4. `TransformDeleteBlock` does not carry a TimeTick; it uses the enclosing
    entry's TimeTick.
-5. Each `TransformLogChunk` is non-empty.
-6. Chunk ids are dense and vchannel-local.
-7. Retained chunk files are exactly `[first_chunk_id, next_chunk_id)`.
-8. Chunk paths are deterministic from `(pchannel, vchannel, chunk_id)`.
-9. Entries are ordered by `time_tick` inside each chunk.
-10. Retained chunks ordered by chunk id form a complete ordered TransformLog.
-11. TransformLog DataBarrier is backed by catalog-persisted
+5. `TransformBarrierEntry` is empty and only advances TransformBuffer
+   visibility.
+6. Each `TransformLogChunk` is non-empty.
+7. Chunk ids are dense and vchannel-local.
+8. Retained chunk files are exactly `[first_chunk_id, next_chunk_id)`.
+9. Chunk paths are deterministic from `(pchannel, vchannel, chunk_id)`.
+10. Entries are ordered by `time_tick` inside each chunk.
+11. Retained chunks ordered by chunk id form a complete ordered TransformLog.
+12. TransformLog DataBarrier is backed by catalog-persisted
     `checkpoint_time_tick`, not by pending buffer or object write alone.
-12. RecoveryStorage data checkpoint cannot pass a Delete before TransformLog
-    meta that covers the Delete has been persisted.
-13. Truncate meta is published before old chunk objects are deleted.
-14. TransformLog is owned by an independent RecoveryStorage module, not by
+13. RecoveryStorage data checkpoint cannot pass a transforming source message
+    before TransformLog meta that covers the message has been persisted.
+14. Truncate meta is published before old chunk objects are deleted.
+15. TransformLog is owned by an independent RecoveryStorage module, not by
     VChannelModule or SegmentModule.
-15. SubscribeTransform sends TransformLog entries, not WAL records.
-16. QueryNode subscribes at vchannel granularity.
-17. Local and remote TransformLog subscriptions are flattened behind the same
+16. SubscribeTransform sends TransformLog entries, not WAL records.
+17. QueryNode subscribes at vchannel granularity.
+18. Local and remote TransformLog subscriptions are flattened behind the same
     WAL-Read-style scanner interface.
-18. TransformLog exposes its read contract through the root `wal` package and
+19. TransformLog exposes its read contract through the root `wal` package and
     reuses the existing WAL accesser and StreamingNode handler client
     infrastructure for assignment, local/remote selection, retry, and gRPC.
-19. `SubscribeTransform` carries pchannel assignment in stream metadata, while
+20. `SubscribeTransform` carries pchannel assignment in stream metadata, while
     per-subscription requests carry only vchannel and start TimeTick.
-20. A QueryNode keeps one local transform buffer per vchannel.
-21. Later QueryViews on the same QueryNode/vchannel consume from the local
+21. A QueryNode keeps one local transform buffer per vchannel.
+22. Later QueryViews on the same QueryNode/vchannel consume from the local
     buffer and do not create a new upstream subscription.
-22. QueryView start points on the same QueryNode/vchannel are monotonic.
-23. L0 materialization is independent output to DataCoord/Coordinator.
-24. L0 is not the normal QueryNode subscription replay source.
-25. `DropCollection`, `ManualFlush`, and `FlushAll` wait for the
+23. QueryView start points on the same QueryNode/vchannel are monotonic.
+24. L0 materialization is independent output to DataCoord/Coordinator.
+25. L0 is not the normal QueryNode subscription replay source.
+26. `DropCollection`, `ManualFlush`, and `FlushAll` wait for the
     TransformLog materialized frontier before acking.
-26. The materialized frontier is backed by catalog-persisted
+27. The materialized frontier is backed by catalog-persisted
     `materialized_time_tick`, not by DataCoord RPC success alone.
-27. Caught-up is a subscription barrier, not a TimeTick watermark.
-28. Delete delivery may be at least once; Delete apply must be idempotent.
-29. TransformLogModule does not read VChannel or Segment state for Delete
+28. Caught-up is a subscription barrier, not a TimeTick watermark.
+29. TransformLog delivery may be at least once; transform apply must be
+    idempotent.
+30. TransformLogModule does not read VChannel or Segment state for Delete
     replay, tombstone finalize, or cleanup.
-30. The only required cross-module read is `SegmentModule -> VChannelModule`
+31. The only required cross-module read is `SegmentModule -> VChannelModule`
     `SchemaAt(vchannel, partitionID, timetick)` for segment creation.
 
 ## 17. Implementation Stages
@@ -1110,6 +1136,8 @@ It does not expose a latest TimeTick. It is not an idle progress message.
   directly with RecoveryStorage.
 - Add object-storage chunk files with deterministic dense chunk paths.
 - Implement pending buffer, pending flush chunks, and chunk flush tasks.
+- Generate Delete payload entries and empty barrier entries for WAL messages
+  that advance QueryNode transforming MVCC.
 - Wire TransformLog DataBarrier through catalog-persisted
   `checkpoint_time_tick`.
 - Implement recovery by reading retained chunks in `[first_chunk_id,
@@ -1135,13 +1163,17 @@ It does not expose a latest TimeTick. It is not an idle progress message.
 - Send retained entries after `start_after_time_tick`, then caught-up, then
   live entries.
 - Store received entries in a local vchannel buffer.
-- Make QueryView segment readiness consume from the local buffer.
+- Make QueryView segment readiness consume catch-up entries from the local
+  buffer.
+- After segment catch-up, apply live TransformLog entries through a
+  vchannel/resource-level broadcast and expose one TransformBuffer visibility
+  frontier to the query path.
 - Truncate the local buffer as active QueryViews advance.
 
 ### Stage 3: L0 Materialization
 
-- Materialize TransformLog entries into L0 delete segments when thresholds are
-  met.
+- Materialize Delete payload entries into L0 delete segments when thresholds are
+  met; barrier entries only advance transform/materialization frontiers.
 - Force materialization for `DropCollection`, `ManualFlush`, and `FlushAll`.
 - Commit L0 segments to DataCoord.
 - Advance `materialized_time_tick` independently from QueryNode subscription
