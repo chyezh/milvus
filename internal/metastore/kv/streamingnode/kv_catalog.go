@@ -271,8 +271,8 @@ func (c *catalog) ListSegmentAssignment(ctx context.Context, pChannelName string
 		if err = proto.Unmarshal([]byte(value), info); err != nil {
 			return nil, errors.Wrapf(err, "unmarshal pchannel %s failed", keys[k])
 		}
-		expectedKey := buildSegmentAssignmentKey(pChannelName, info.GetSegmentId())
-		if keys[k] != expectedKey {
+		segmentID, err := strconv.ParseInt(typeutil.After(keys[k], prefix), 10, 64)
+		if err != nil || segmentID != info.GetSegmentId() {
 			return nil, errors.Errorf("mismatched segment assignment recovery meta, key %s, meta %d", keys[k], info.GetSegmentId())
 		}
 		infos = append(infos, info)
@@ -326,7 +326,7 @@ func (c *catalog) ListSegmentDataVersionSummaries(ctx context.Context, pChannelN
 
 	summaries := make(map[string]*streamingpb.SegmentDataVersionSummary, len(values))
 	for idx, value := range values {
-		vchannel := strings.TrimPrefix(keys[idx], prefix)
+		vchannel := typeutil.After(keys[idx], prefix)
 		if vchannel == "" || strings.Contains(vchannel, "/") {
 			return nil, errors.Errorf("mismatched segment data version summary recovery meta, key %s", keys[idx])
 		}
@@ -374,7 +374,9 @@ func (c *catalog) ListQueryViews(ctx context.Context, pChannelName string) ([]*v
 		if err = proto.Unmarshal([]byte(value), view); err != nil {
 			return nil, errors.Wrapf(err, "unmarshal query view %s failed", keys[idx])
 		}
-		if keys[idx] != buildQueryViewKey(pChannelName, view.GetMeta()) {
+		key := typeutil.After(keys[idx], prefix)
+		expectedKey := typeutil.After(buildQueryViewKey(pChannelName, view.GetMeta()), prefix)
+		if key != expectedKey {
 			panic(fmt.Sprintf("mismatched query view recovery meta, key %s, meta %s", keys[idx], view.GetMeta().GetVchannel()))
 		}
 		views = append(views, view)

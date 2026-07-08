@@ -56,11 +56,16 @@ func (s *reliableSyncer) SyncViews(ctx context.Context, group SyncGroup) error {
 			continue
 		}
 		// Node not found — notify views immediately.
-		for _, sv := range views {
-			notifyQueryNodeLost(sv)
-		}
+		lostViews := append([]SyncView(nil), views...)
+		go notifyQueryNodeLostViews(lostViews)
 	}
 	return nil
+}
+
+func notifyQueryNodeLostViews(views []SyncView) {
+	for _, sv := range views {
+		notifyQueryNodeLost(sv)
+	}
 }
 
 func notifyQueryNodeLost(sv SyncView) {
