@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -293,6 +294,19 @@ func TestSplitMaterializeGroupsSplitsSingleBlockByRowLimit(t *testing.T) {
 		assert.Equal(t, schemapb.DataType_Int64, group.pkType)
 		assert.Len(t, group.pks, len(group.timestamps))
 	}
+}
+
+func TestTransformLogDeleteRowsUsesPrimaryKeyCount(t *testing.T) {
+	request := &msgpb.DeleteRequest{
+		PrimaryKeys: &schemapb.IDs{
+			IdField: &schemapb.IDs_IntId{
+				IntId: &schemapb.LongArray{Data: []int64{1, 2, 3}},
+			},
+		},
+		Timestamps: []uint64{10},
+	}
+
+	assert.Equal(t, uint64(3), deleteEntryRows(request))
 }
 
 func testTransformLogEntry(timeTick uint64) *streamingpb.TransformLogEntry {

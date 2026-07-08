@@ -141,7 +141,16 @@ func TestRuntimeTruncateWatermarkAppliesToLateSegmentSealed(t *testing.T) {
 	require.Empty(t, runtime.SegmentIDs())
 }
 
-func TestDeleteTimestampsFromRequestUsesPerRowTimestamps(t *testing.T) {
+func TestInsertTimestampsFromRequestUsesMessageTimeTick(t *testing.T) {
+	request := &msgpb.InsertRequest{
+		Timestamps: []uint64{11, 12, 13},
+		NumRows:    3,
+	}
+
+	require.Equal(t, []uint64{100, 100, 100}, insertTimestampsFromRequest(100, request))
+}
+
+func TestDeleteTimestampsFromRequestUsesMessageTimeTick(t *testing.T) {
 	request := &msgpb.DeleteRequest{
 		PrimaryKeys: &schemapb.IDs{
 			IdField: &schemapb.IDs_IntId{
@@ -151,7 +160,7 @@ func TestDeleteTimestampsFromRequestUsesPerRowTimestamps(t *testing.T) {
 		Timestamps: []uint64{11, 12, 13},
 	}
 
-	require.Equal(t, []uint64{11, 12, 13}, deleteTimestampsFromRequest(100, request))
+	require.Equal(t, []uint64{100, 100, 100}, deleteTimestampsFromRequest(100, request))
 }
 
 func TestDeleteTimestampsFromRequestFallsBackToMessageTimeTick(t *testing.T) {

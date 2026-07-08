@@ -2,6 +2,7 @@ package growingruntime
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/cockroachdb/errors"
@@ -13,6 +14,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/mq/msgstream"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
@@ -185,6 +187,7 @@ func (s *growingSegment) applyInsert(ctx context.Context, insert walview.Segment
 	request := proto.Clone(body).(*msgpb.InsertRequest)
 	request.PartitionID = insert.Assignment.GetPartitionId()
 	request.SegmentID = s.segmentID
+	request.Timestamps = insertTimestampsFromRequest(insert.TimeTick, request)
 	insertMsg := &msgstream.InsertMsg{
 		BaseMsg: msgstream.BaseMsg{
 			BeginTimestamp: insert.TimeTick,
@@ -214,6 +217,19 @@ func (s *growingSegment) applyInsert(ctx context.Context, insert walview.Segment
 		Timestamps: request.GetTimestamps(),
 		Record:     record,
 	})
+	if err == nil {
+		minTS, maxTS := timestampBounds(request.GetTimestamps())
+		mlog.Debug(ctx, "applied insert to growing segment",
+			mlog.FieldCollectionID(request.GetCollectionID()),
+			mlog.FieldPartitionID(request.GetPartitionID()),
+			mlog.FieldSegmentID(s.segmentID),
+			mlog.Uint64("timeTick", insert.TimeTick),
+			mlog.Int("rowIDCount", len(request.GetRowIDs())),
+			mlog.Int("timestampCount", len(request.GetTimestamps())),
+			mlog.Uint64("timestampMin", minTS),
+			mlog.Uint64("timestampMax", maxTS),
+		)
+	}
 	return err
 }
 
@@ -246,6 +262,17 @@ func (s *growingSegment) applyDelete(ctx context.Context, primaryKeys storage.Pr
 		PrimaryKeys: primaryKeys,
 		Timestamps:  timestamps,
 	})
+	if err == nil {
+		minTS, maxTS := timestampBounds(timestamps)
+		mlog.Debug(ctx, "applied delete to growing segment",
+			mlog.FieldSegmentID(s.segmentID),
+			mlog.Int("primaryKeyCount", primaryKeys.Len()),
+			mlog.Strings("primaryKeySamples", primaryKeySamples(primaryKeys, 8)),
+			mlog.Int("timestampCount", len(timestamps)),
+			mlog.Uint64("timestampMin", minTS),
+			mlog.Uint64("timestampMax", maxTS),
+		)
+	}
 	return err
 }
 
@@ -354,13 +381,7 @@ func deleteTimestampsFromRequest(timeTick uint64, request *msgpb.DeleteRequest) 
 	if request == nil {
 		return nil
 	}
-	timestamps := request.GetTimestamps()
-	if len(timestamps) == 0 {
-		return repeatedTimeTicks(timeTick, primaryKeyCount(request.GetPrimaryKeys()))
-	}
-	result := make([]typeutil.Timestamp, len(timestamps))
-	copy(result, timestamps)
-	return result
+	return repeatedTimeTicks(timeTick, primaryKeyCount(request.GetPrimaryKeys()))
 }
 
 func deleteTimestampsFromTransformLogBlock(timeTick uint64, block *streamingpb.TransformDeleteBlock) []typeutil.Timestamp {
@@ -368,6 +389,20 @@ func deleteTimestampsFromTransformLogBlock(timeTick uint64, block *streamingpb.T
 		return nil
 	}
 	return repeatedTimeTicks(timeTick, primaryKeyCount(block.GetPrimaryKeys()))
+}
+
+func insertTimestampsFromRequest(timeTick uint64, request *msgpb.InsertRequest) []typeutil.Timestamp {
+	if request == nil {
+		return nil
+	}
+	rowCount := int(request.GetNumRows())
+	if rowCount == 0 {
+		rowCount = len(request.GetRowIDs())
+	}
+	if rowCount == 0 {
+		rowCount = len(request.GetTimestamps())
+	}
+	return repeatedTimeTicks(timeTick, rowCount)
 }
 
 func primaryKeyCount(ids *schemapb.IDs) int {
@@ -382,4 +417,36 @@ func primaryKeyCount(ids *schemapb.IDs) int {
 	default:
 		return 0
 	}
+}
+
+func timestampBounds(timestamps []typeutil.Timestamp) (typeutil.Timestamp, typeutil.Timestamp) {
+	if len(timestamps) == 0 {
+		return 0, 0
+	}
+	minTS := timestamps[0]
+	maxTS := timestamps[0]
+	for _, ts := range timestamps[1:] {
+		if ts < minTS {
+			minTS = ts
+		}
+		if ts > maxTS {
+			maxTS = ts
+		}
+	}
+	return minTS, maxTS
+}
+
+func primaryKeySamples(primaryKeys storage.PrimaryKeys, limit int) []string {
+	if primaryKeys == nil || limit <= 0 {
+		return nil
+	}
+	n := primaryKeys.Len()
+	if n > limit {
+		n = limit
+	}
+	samples := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		samples = append(samples, fmt.Sprint(primaryKeys.Get(i).GetValue()))
+	}
+	return samples
 }
