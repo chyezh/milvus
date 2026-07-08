@@ -13,6 +13,29 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
+func TestServerCreateCollectionDataViewDelegatesToDataViewManager(t *testing.T) {
+	manager := &fakeGCDataViewManager{}
+	server := &Server{dataViewManager: manager}
+
+	version, err := server.CreateCollectionDataView(context.Background(), 10, []string{"ch-0", "ch-1"})
+
+	require.NoError(t, err)
+	require.Nil(t, version)
+	require.Equal(t, []CreateCollectionDataViewEvent{{
+		CollectionID: 10,
+		VChannels:    []string{"ch-0", "ch-1"},
+	}}, manager.createEvents)
+}
+
+func TestServerCreateCollectionDataViewReturnsEmptyWithoutDataViewManager(t *testing.T) {
+	server := &Server{}
+
+	version, err := server.CreateCollectionDataView(context.Background(), 10, []string{"ch-0"})
+
+	require.NoError(t, err)
+	require.Nil(t, version)
+}
+
 func TestServerSnapshotDelegatesToDataViewManager(t *testing.T) {
 	manager := &fakeGCDataViewManager{
 		snapshotViews: []*viewpb.DataViewOfCollection{

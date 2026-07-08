@@ -181,6 +181,84 @@ func findDataViewShard(view *viewpb.DataViewOfCollection, vchannel string) (*vie
 	return nil, false
 }
 
+func TestDataViewManagerOnCreateCollectionCreatesEmptyVisibleView(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, _ := newTestDataViewManager()
+
+	version, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+		CollectionID: 1,
+		VChannels:    []string{"ch-1", "ch-0"},
+	})
+	require.NoError(t, err)
+	requireDataVersion(t, version, 1, 0)
+
+	require.Len(t, catalog.views, 1)
+	persisted := catalog.views[0]
+	require.Equal(t, int64(1), persisted.GetCollectionId())
+	requireDataVersion(t, persisted.GetDataVersion(), 1, 0)
+	require.Len(t, persisted.GetShards(), 2)
+	require.Equal(t, "ch-0", persisted.GetShards()[0].GetVchannel())
+	require.Equal(t, "ch-1", persisted.GetShards()[1].GetVchannel())
+	require.Empty(t, persisted.GetShards()[0].GetPartitions())
+	require.Empty(t, persisted.GetShards()[1].GetPartitions())
+
+	visible, err := manager.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, visible)
+	requireDataVersion(t, visible.GetDataVersion(), 1, 0)
+	require.Len(t, visible.GetShards(), 2)
+	require.Zero(t, visible.GetShards()[0].GetDeleteApplyStartAfterTimetick())
+
+	snapshot := manager.DataViewSnapshot(ctx)
+	_, ok := snapshot.ShardView(1, "ch-0")
+	require.True(t, ok)
+	_, ok = snapshot.ShardView(1, "ch-1")
+	require.True(t, ok)
+}
+
+func TestDataViewManagerOnCreateCollectionIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, _ := newTestDataViewManager()
+	event := CreateCollectionDataViewEvent{
+		CollectionID: 1,
+		VChannels:    []string{"ch-0"},
+	}
+
+	first, err := manager.OnCreateCollection(ctx, event)
+	require.NoError(t, err)
+	second, err := manager.OnCreateCollection(ctx, event)
+	require.NoError(t, err)
+
+	requireDataVersion(t, first, 1, 0)
+	requireDataVersion(t, second, 1, 0)
+	require.Len(t, catalog.views, 1)
+}
+
+func TestDataViewManagerOnCreateCollectionReusesPersistedView(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, _ := newTestDataViewManager()
+	catalog.views = append(catalog.views, &viewpb.DataViewOfCollection{
+		CollectionId: 1,
+		DataVersion:  &viewpb.DataVersion{StreamingVersion: 1},
+		Shards:       []*viewpb.DataViewOfShard{{Vchannel: "ch-0"}},
+	})
+
+	version, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+		CollectionID: 1,
+		VChannels:    []string{"ch-0"},
+	})
+
+	require.NoError(t, err)
+	requireDataVersion(t, version, 1, 0)
+	require.Len(t, catalog.views, 1)
+
+	visible, err := manager.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, visible)
+	require.Len(t, visible.GetShards(), 1)
+	require.Equal(t, "ch-0", visible.GetShards()[0].GetVchannel())
+}
+
 func TestDataViewManagerOnFlushCreatesVisibleView(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, store := newTestDataViewManager()
