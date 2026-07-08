@@ -250,12 +250,10 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 	}
 	param.RecoveryStorage = rs
 	snHandler := snview.RecoverPChannelSNQueryViewHandler(opt.Channel.Name, queryViewCatalog, resMgr, persistedViews)
-	unregisterQueryViewHandler := resource.Resource().QueryViewRouter().Register(opt.Channel.Name, snHandler)
 
 	// Handle alter WAL if found in snapshot
 	// This flushes all remaining data and triggers WAL switch to the target implementation
 	if snapshot.AlterWALInfo != nil && snapshot.AlterWALInfo.FoundAlterWALMsg {
-		unregisterQueryViewHandler()
 		rs.DetachLoadConfigListener()
 		snHandler.CloseForHandoff()
 		resMgr.Close()
@@ -289,7 +287,6 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 			SalvageCheckpoints:     salvageCheckpoints,
 		},
 	); err != nil {
-		unregisterQueryViewHandler()
 		rs.DetachLoadConfigListener()
 		snHandler.CloseForHandoff()
 		resMgr.Close()
@@ -299,7 +296,6 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 	wal := adaptImplsToRWWAL(roWAL, o.interceptorBuilders, param)
 	wal.queryViewHandler = snHandler
 	wal.viewResourceManager = resMgr
-	wal.unregisterQueryViewHandler = unregisterQueryViewHandler
 	o.walInstances.Insert(id, wal)
 	return wal, nil
 }

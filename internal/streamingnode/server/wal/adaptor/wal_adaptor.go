@@ -100,16 +100,15 @@ func adaptImplsToRWWAL(
 type walAdaptorImpl struct {
 	*roWALAdaptorImpl
 
-	rwWALImpls                 walimpls.WALImpls
-	appendExecutionPool        *conc.Pool[struct{}]
-	param                      *interceptors.InterceptorBuildParam
-	interceptorBuildResult     interceptorBuildResult
-	writeMetrics               *metricsutil.WriteMetrics
-	isFenced                   *atomic.Bool
-	appendRateCounter          *utility.AverageRateCounter // tracks append rate (bytes/sec)
-	queryViewHandler           *snview.SNQueryViewHandler
-	viewResourceManager        viewresource.SNQueryRuntimeManager
-	unregisterQueryViewHandler func()
+	rwWALImpls             walimpls.WALImpls
+	appendExecutionPool    *conc.Pool[struct{}]
+	param                  *interceptors.InterceptorBuildParam
+	interceptorBuildResult interceptorBuildResult
+	writeMetrics           *metricsutil.WriteMetrics
+	isFenced               *atomic.Bool
+	appendRateCounter      *utility.AverageRateCounter // tracks append rate (bytes/sec)
+	queryViewHandler       *snview.SNQueryViewHandler
+	viewResourceManager    viewresource.SNQueryRuntimeManager
 }
 
 // Metrics returns the metrics of the wal.
@@ -515,9 +514,6 @@ func (w *walAdaptorImpl) Close() {
 	w.forceCancelAfterGracefulTimeout()
 	w.lifetime.Wait()
 
-	if w.unregisterQueryViewHandler != nil {
-		w.unregisterQueryViewHandler()
-	}
 	if w.param.RecoveryStorage != nil {
 		w.Logger().Info(context.TODO(), "wal begin to detach query resource load config listener...")
 		w.param.RecoveryStorage.DetachLoadConfigListener()
