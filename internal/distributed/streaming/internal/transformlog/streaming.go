@@ -10,6 +10,7 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 )
 
 type StreamFactory = func(ctx context.Context, pchannel string) (wal.TransformLogStream, error)
@@ -136,15 +137,26 @@ func (s *resumableStream) resumeLoop() {
 		underlying, err := s.factory(s.ctx, s.pchannel)
 		if err != nil {
 			if !isRetryable(err) {
+				mlog.Debug(s.ctx, "resumable transform log stream create failed with non-retryable error",
+					mlog.FieldPChannel(s.pchannel),
+					mlog.Err(err),
+				)
 				finalErr = err
 				return
 			}
+			mlog.Debug(s.ctx, "resumable transform log stream create failed, retrying",
+				mlog.FieldPChannel(s.pchannel),
+				mlog.Err(err),
+			)
 			if waitErr := s.waitNextRetry(retryBackoff.NextBackOff()); waitErr != nil {
 				finalErr = waitErr
 				return
 			}
 			continue
 		}
+		mlog.Debug(s.ctx, "resumable transform log stream acquired underlying stream",
+			mlog.FieldPChannel(s.pchannel),
+		)
 		s.setUnderlying(underlying)
 		err = s.subscribePending(underlying)
 		if err == nil {
@@ -153,9 +165,17 @@ func (s *resumableStream) resumeLoop() {
 		_ = underlying.Close()
 		s.clearUnderlying(underlying)
 		if err != nil && !isRetryable(err) {
+			mlog.Debug(s.ctx, "resumable transform log stream stopped by non-retryable error",
+				mlog.FieldPChannel(s.pchannel),
+				mlog.Err(err),
+			)
 			finalErr = err
 			return
 		}
+		mlog.Debug(s.ctx, "resumable transform log stream underlying stream unavailable, retrying",
+			mlog.FieldPChannel(s.pchannel),
+			mlog.Err(err),
+		)
 		if waitErr := s.waitNextRetry(retryBackoff.NextBackOff()); waitErr != nil {
 			finalErr = waitErr
 			return
@@ -213,6 +233,13 @@ func (s *resumableStream) subscriptionSnapshot() []*resumableSubscription {
 func (s *resumableStream) subscribeRemote(underlying wal.TransformLogStream, sub *resumableSubscription) error {
 	opt := sub.option()
 	opt.Handler = nopCloseHandler{TransformLogEventHandler: sub.handler}
+	mlog.Debug(s.ctx, "resumable transform log stream subscribing vchannel",
+		mlog.FieldPChannel(s.pchannel),
+		mlog.FieldVChannel(opt.VChannel),
+		mlog.Uint64("startAfterTimeTick", opt.StartAfterTimeTick),
+		mlog.Uint64("endTimeTick", opt.EndTimeTick),
+		mlog.Int64("subscriptionID", sub.ID()),
+	)
 	remote, err := underlying.Subscribe(s.ctx, opt)
 	if err != nil {
 		return err
@@ -225,6 +252,13 @@ func (s *resumableStream) subscribeRemote(underlying wal.TransformLogStream, sub
 	sub.remote = remote
 	s.mu.Unlock()
 	sub.markReady(nil)
+	mlog.Debug(s.ctx, "resumable transform log stream subscribed vchannel",
+		mlog.FieldPChannel(s.pchannel),
+		mlog.FieldVChannel(opt.VChannel),
+		mlog.Uint64("startAfterTimeTick", opt.StartAfterTimeTick),
+		mlog.Int64("subscriptionID", sub.ID()),
+		mlog.Int64("remoteSubscriptionID", remote.ID()),
+	)
 	return nil
 }
 

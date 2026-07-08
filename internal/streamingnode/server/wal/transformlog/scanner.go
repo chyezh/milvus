@@ -4,37 +4,34 @@ import (
 	"context"
 	"sync"
 
-	"google.golang.org/protobuf/proto"
-
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
-	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 )
 
 type scanner struct {
-	name       string
-	startAfter uint64
-	end        uint64
-	liveAfter  uint64
-	ch         chan wal.TransformLogEvent
-	done       chan struct{}
-	close      chan struct{}
-	errMu      sync.Mutex
-	err        error
-	closed     sync.Once
-	liveMu     sync.Mutex
-	caughtUp   bool
-	pending    []wal.TransformLogEvent
+	log             *transformLog
+	name            string
+	startAfter      uint64
+	end             uint64
+	caughtUpTarget  uint64
+	ch              chan wal.TransformLogEvent
+	done            chan struct{}
+	close           chan struct{}
+	errMu           sync.Mutex
+	err             error
+	closed          sync.Once
+	caughtUpEmitted bool
 }
 
-func newScanner(name string, startAfter uint64, end uint64, liveAfter uint64) *scanner {
+func newScanner(log *transformLog, name string, startAfter uint64, end uint64, caughtUpTarget uint64) *scanner {
 	return &scanner{
-		name:       name,
-		startAfter: startAfter,
-		end:        end,
-		liveAfter:  liveAfter,
-		ch:         make(chan wal.TransformLogEvent, 16),
-		done:       make(chan struct{}),
-		close:      make(chan struct{}),
+		log:            log,
+		name:           name,
+		startAfter:     startAfter,
+		end:            end,
+		caughtUpTarget: caughtUpTarget,
+		ch:             make(chan wal.TransformLogEvent, 16),
+		done:           make(chan struct{}),
+		close:          make(chan struct{}),
 	}
 }
 
@@ -64,36 +61,53 @@ func (s *scanner) Close() error {
 	return s.Error()
 }
 
-func (s *scanner) send(ctx context.Context, transformLog *transformLog, chunks []*streamingpb.TransformLogChunk) {
+func (s *scanner) run(ctx context.Context) {
 	defer close(s.done)
-	defer transformLog.unregisterScanner(s)
-	for _, chunk := range chunks {
-		for _, entry := range chunk.GetEntries() {
-			if entry.GetTimeTick() <= s.startAfter {
-				continue
-			}
-			if s.exceedsEnd(entry.GetTimeTick()) {
+	cursor := s.startAfter
+	for {
+		entry, ok, err := s.log.nextEntryAfter(ctx, cursor)
+		if err != nil {
+			s.setError(err)
+			return
+		}
+		if ok {
+			timeTick := entry.GetTimeTick()
+			if s.exceedsEnd(timeTick) {
 				return
 			}
-			if !s.sendEvent(ctx, wal.TransformLogEvent{Entry: proto.Clone(entry).(*streamingpb.TransformLogEntry)}) {
+			if !s.sendEvent(ctx, wal.TransformLogEvent{Entry: entry}) {
+				return
+			}
+			cursor = timeTick
+			if !s.caughtUpEmitted && cursor >= s.caughtUpTarget {
+				if !s.emitCaughtUp(ctx) {
+					return
+				}
+				if s.end > 0 {
+					return
+				}
+			}
+			continue
+		}
+		if !s.caughtUpEmitted {
+			if !s.emitCaughtUp(ctx) {
+				return
+			}
+			if s.end > 0 {
 				return
 			}
 		}
+		if !s.waitAppend(ctx) {
+			return
+		}
 	}
-	if !s.sendEvent(ctx, wal.TransformLogEvent{CaughtUp: &wal.TransformLogCaughtUp{StartAfterTimeTick: s.startAfter}}) {
-		return
-	}
-	if !s.drainPending(ctx) {
-		return
-	}
-	if s.end > 0 {
-		return
-	}
-	select {
-	case <-s.close:
-	case <-ctx.Done():
-		s.setError(ctx.Err())
-	}
+}
+
+func (s *scanner) emitCaughtUp(ctx context.Context) bool {
+	s.caughtUpEmitted = true
+	return s.sendEvent(ctx, wal.TransformLogEvent{
+		CaughtUp: &wal.TransformLogCaughtUp{StartAfterTimeTick: s.startAfter},
+	})
 }
 
 func (s *scanner) sendEvent(ctx context.Context, event wal.TransformLogEvent) bool {
@@ -108,38 +122,21 @@ func (s *scanner) sendEvent(ctx context.Context, event wal.TransformLogEvent) bo
 	}
 }
 
-func (s *scanner) publishEntry(entry *streamingpb.TransformLogEntry) {
-	if entry.GetTimeTick() <= s.liveAfter {
-		return
+func (s *scanner) waitAppend(ctx context.Context) bool {
+	notifyCh := s.log.notifyChannel()
+	select {
+	case <-notifyCh:
+		return true
+	case <-s.close:
+		return false
+	case <-ctx.Done():
+		s.setError(ctx.Err())
+		return false
 	}
-	if s.exceedsEnd(entry.GetTimeTick()) {
-		return
-	}
-	event := wal.TransformLogEvent{Entry: proto.Clone(entry).(*streamingpb.TransformLogEntry)}
-	s.liveMu.Lock()
-	defer s.liveMu.Unlock()
-	if !s.caughtUp {
-		s.pending = append(s.pending, event)
-		return
-	}
-	_ = s.sendEvent(context.Background(), event)
 }
 
 func (s *scanner) exceedsEnd(timeTick uint64) bool {
 	return s.end > 0 && timeTick > s.end
-}
-
-func (s *scanner) drainPending(ctx context.Context) bool {
-	s.liveMu.Lock()
-	defer s.liveMu.Unlock()
-	s.caughtUp = true
-	for _, event := range s.pending {
-		if !s.sendEvent(ctx, event) {
-			return false
-		}
-	}
-	s.pending = nil
-	return true
 }
 
 func (s *scanner) setError(err error) {

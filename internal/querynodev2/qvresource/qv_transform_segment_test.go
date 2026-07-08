@@ -12,6 +12,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/storage"
+	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 )
 
@@ -58,6 +59,29 @@ func TestQueryViewTransformSegment_AppliesDeleteForMatchingPartition(t *testing.
 	assert.Equal(t, []uint64{99, 99}, segment.deletedTS)
 	assert.Equal(t, "v1", wrapped.VChannel())
 	assert.Equal(t, uint64(50), wrapped.TransformStartAfterTimeTick())
+	assert.Equal(t, uint64(99), wrapped.AppliedTransformTimeTick())
+}
+
+func TestQueryViewTransformSegment_AppliesAllPartitionsDelete(t *testing.T) {
+	segment := &fakeQVSegment{id: 10, partitionID: 100}
+	wrapped := newQueryViewTransformSegment(segment, nil, "v1", 50)
+
+	err := wrapped.ApplyTransform(context.Background(), &streamingpb.TransformLogEntry{
+		TimeTick: 99,
+		Entry: &streamingpb.TransformLogEntry_Delete{Delete: &streamingpb.TransformDeleteEntry{
+			Blocks: []*streamingpb.TransformDeleteBlock{
+				{
+					PartitionId: common.AllPartitionsID,
+					PrimaryKeys: &schemapb.IDs{IdField: &schemapb.IDs_IntId{IntId: &schemapb.LongArray{Data: []int64{2, 3}}}},
+				},
+			},
+		}},
+	})
+	require.NoError(t, err)
+
+	require.NotNil(t, segment.deletedPKs)
+	assert.Equal(t, 2, segment.deletedPKs.Len())
+	assert.Equal(t, []uint64{99, 99}, segment.deletedTS)
 	assert.Equal(t, uint64(99), wrapped.AppliedTransformTimeTick())
 }
 

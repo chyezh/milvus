@@ -100,6 +100,7 @@ type transformLog struct {
 	flushMu               sync.Mutex
 	materializeMu         sync.Mutex
 	mu                    sync.Mutex
+	notifyCh              chan struct{}
 	vchannel              string
 	meta                  *streamingpb.VChannelTransformLogMeta
 	persistedDataTimeTick uint64
@@ -112,10 +113,7 @@ type transformLog struct {
 	materializeMaxRows    uint64
 	materializeMaxBytes   uint64
 
-	retainedChunks []*streamingpb.TransformLogChunk
-
-	subscriberMu sync.Mutex
-	subscribers  map[*scanner]struct{}
+	chunks []*chunkDescriptor
 }
 
 func New(config Config) TransformLog {
@@ -125,12 +123,12 @@ func New(config Config) TransformLog {
 		meta:                  meta,
 		persistedDataTimeTick: meta.GetCheckpointTimeTick(),
 		persistedMaterialized: meta.GetMaterializedTimeTick(),
+		notifyCh:              make(chan struct{}),
 		buffer:                newBuffer(config.MaxRows),
 		store:                 config.Store,
 		materializer:          config.Materializer,
 		materializeMaxRows:    config.MaterializeMaxRows,
 		materializeMaxBytes:   config.MaterializeMaxBytes,
-		subscribers:           make(map[*scanner]struct{}),
 	}
 }
 
@@ -143,6 +141,7 @@ func (t *transformLog) Append(msg message.ImmutableMessage, opt AppendOption) Ap
 	if !t.buffer.Append(msg, opt) {
 		return AppendResult{DataTimeTick: t.buffer.DataTimeTick()}
 	}
+	t.notifyScannersLocked()
 	return AppendResult{
 		Appended:     true,
 		ShouldFlush:  t.buffer.ShouldFlush(),
@@ -157,6 +156,7 @@ func (t *transformLog) AppendBarrier(timeTick uint64) AppendResult {
 		return AppendResult{DataTimeTick: t.buffer.DataTimeTick()}
 	}
 	t.buffer.AppendEntry(transformBarrierEntry(timeTick))
+	t.notifyScannersLocked()
 	return AppendResult{
 		Appended:     true,
 		ShouldFlush:  t.buffer.ShouldFlush(),
@@ -191,19 +191,15 @@ func (t *transformLog) Flush(ctx context.Context, opt FlushOption) (FlushResult,
 	}
 
 	t.mu.Lock()
-	result, publishedEntries := t.commitFlushLocked(work)
+	result := t.commitFlushLocked(work)
 	result.Started = true
 	t.mu.Unlock()
-	if len(publishedEntries) > 0 {
-		t.publish(publishedEntries)
-	}
 	return result, nil
 }
 
 func (t *transformLog) Materialize(ctx context.Context, opt MaterializeOption) (MaterializeResult, error) {
 	t.materializeMu.Lock()
 	defer t.materializeMu.Unlock()
-	var work materializeWork
 	t.mu.Lock()
 	targetTimeTick := opt.TargetTimeTick
 	if targetTimeTick == 0 {
@@ -220,8 +216,12 @@ func (t *transformLog) Materialize(ctx context.Context, opt MaterializeOption) (
 		t.mu.Unlock()
 		return MaterializeResult{}, nil
 	}
-	work = t.prepareMaterializeLocked(targetTimeTick)
 	t.mu.Unlock()
+
+	work, err := t.prepareMaterialize(ctx, targetTimeTick)
+	if err != nil {
+		return MaterializeResult{}, err
+	}
 
 	if len(work.Entries) > 0 {
 		if t.materializer == nil {
@@ -249,37 +249,46 @@ func (t *transformLog) Read(ctx context.Context, opt wal.TransformLogReadOption)
 		t.mu.Unlock()
 		return wal.NewTransformLogErrorScanner(opt.Name, errors.Wrap(wal.ErrTransformLogStartPointTruncated, "start point is truncated"))
 	}
-	chunks := snapshotChunks(t.retainedChunks)
-	scanner := newScanner(opt.Name, opt.StartAfterTimeTick, opt.EndTimeTick, liveAfterTimeTick(opt.StartAfterTimeTick, chunks))
-	t.registerScanner(scanner)
+	scanner := newScanner(t, opt.Name, opt.StartAfterTimeTick, opt.EndTimeTick, t.latestTimeTickLocked())
 	t.mu.Unlock()
-	go scanner.send(ctx, t, chunks)
+	go scanner.run(ctx)
 	return scanner
 }
 
 func (t *transformLog) Truncate(opt TruncateOption) TruncateResult {
+	var changed bool
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	if opt.TimeTick <= t.meta.GetTruncateTimeTick() {
+		t.mu.Unlock()
 		return TruncateResult{}
 	}
 	t.meta.TruncateTimeTick = opt.TimeTick
 	t.dirty = true
-	for len(t.retainedChunks) > 0 {
-		chunk := t.retainedChunks[0]
-		entries := chunk.GetEntries()
-		if len(entries) == 0 || entries[len(entries)-1].GetTimeTick() > opt.TimeTick {
+	changed = true
+	for len(t.chunks) > 0 {
+		chunk := t.chunks[0]
+		if chunk.toTimeTick == 0 {
+			t.mu.Unlock()
+			if err := t.loadChunk(context.TODO(), chunk); err != nil {
+				return TruncateResult{Changed: changed}
+			}
+			t.mu.Lock()
+			continue
+		}
+		if chunk.toTimeTick > opt.TimeTick {
 			break
 		}
-		t.retainedChunks = t.retainedChunks[1:]
-		if chunk.GetChunkId() >= t.meta.GetFirstChunkId() {
-			t.meta.FirstChunkId = chunk.GetChunkId() + 1
+		t.chunks = t.chunks[1:]
+		if chunk.id >= t.meta.GetFirstChunkId() {
+			t.meta.FirstChunkId = chunk.id + 1
 		}
 	}
-	return TruncateResult{Changed: true}
+	t.mu.Unlock()
+	return TruncateResult{Changed: changed}
 }
 
 func (t *transformLog) Recover(ctx context.Context, meta *streamingpb.VChannelTransformLogMeta) (RecoverResult, error) {
+	_ = ctx
 	t.mu.Lock()
 	if meta != nil {
 		t.meta = cloneMetaOrNew(meta)
@@ -287,26 +296,18 @@ func (t *transformLog) Recover(ctx context.Context, meta *streamingpb.VChannelTr
 		t.persistedMaterialized = t.meta.GetMaterializedTimeTick()
 	}
 	recoverMeta := cloneMeta(t.meta)
-	t.retainedChunks = nil
+	t.chunks = nil
+	t.buffer = newBuffer(t.buffer.maxRows)
 	t.mu.Unlock()
-	if t.store == nil || recoverMeta == nil || recoverMeta.GetFirstChunkId() == recoverMeta.GetNextChunkId() {
+	if recoverMeta == nil || recoverMeta.GetFirstChunkId() == recoverMeta.GetNextChunkId() {
 		return RecoverResult{}, nil
 	}
-	chunks := make([]*streamingpb.TransformLogChunk, 0, recoverMeta.GetNextChunkId()-recoverMeta.GetFirstChunkId())
-	var lastTimeTick uint64
+	chunks := make([]*chunkDescriptor, 0, recoverMeta.GetNextChunkId()-recoverMeta.GetFirstChunkId())
 	for chunkID := recoverMeta.GetFirstChunkId(); chunkID < recoverMeta.GetNextChunkId(); chunkID++ {
-		chunk, err := t.store.ReadTransformLogChunk(ctx, t.vchannel, chunkID)
-		if err != nil {
-			return RecoverResult{}, err
-		}
-		if err := validateChunk(chunk, chunkID, lastTimeTick); err != nil {
-			return RecoverResult{}, err
-		}
-		lastTimeTick = chunk.GetEntries()[len(chunk.GetEntries())-1].GetTimeTick()
-		chunks = append(chunks, chunk)
+		chunks = append(chunks, newColdChunkDescriptor(chunkID))
 	}
 	t.mu.Lock()
-	t.retainedChunks = chunks
+	t.chunks = chunks
 	t.mu.Unlock()
 	return RecoverResult{Recovered: true, CheckpointTimeTick: recoverMeta.GetCheckpointTimeTick()}, nil
 }
@@ -391,8 +392,12 @@ func (t *transformLog) HasPendingWork() bool {
 
 func (t *transformLog) ShouldMaterialize() bool {
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	rows, bytes := t.pendingMaterializeStatsLocked(t.meta.GetCheckpointTimeTick())
+	targetTimeTick := t.meta.GetCheckpointTimeTick()
+	t.mu.Unlock()
+	rows, bytes, err := t.pendingMaterializeStats(context.TODO(), targetTimeTick)
+	if err != nil {
+		return false
+	}
 	maxRows := t.materializeMaxRows
 	if maxRows == 0 {
 		maxRows = defaultMaterializeMaxRows
@@ -416,14 +421,12 @@ func (t *transformLog) prepareFlushLocked(targetTimeTick uint64) flushWork {
 	}
 }
 
-func (t *transformLog) commitFlushLocked(work flushWork) (FlushResult, []*streamingpb.TransformLogEntry) {
+func (t *transformLog) commitFlushLocked(work flushWork) FlushResult {
 	var result FlushResult
-	var publishedEntries []*streamingpb.TransformLogEntry
 	if work.Chunk != nil {
 		toTimeTick := work.Chunk.GetEntries()[len(work.Chunk.GetEntries())-1].GetTimeTick()
 		t.buffer.DiscardThrough(toTimeTick)
-		t.retainedChunks = append(t.retainedChunks, work.Chunk)
-		publishedEntries = work.Chunk.GetEntries()
+		t.chunks = append(t.chunks, newLoadedChunkDescriptor(work.Chunk))
 		if work.Chunk.GetChunkId() >= t.meta.GetNextChunkId() {
 			t.meta.NextChunkId = work.Chunk.GetChunkId() + 1
 		}
@@ -452,7 +455,7 @@ func (t *transformLog) commitFlushLocked(work flushWork) (FlushResult, []*stream
 	case t.buffer.ShouldFlush():
 		result.NextTargetTimeTick = t.buffer.DataTimeTick()
 	}
-	return result, publishedEntries
+	return result
 }
 
 type materializeWork struct {
@@ -462,48 +465,50 @@ type materializeWork struct {
 	Bytes          uint64
 }
 
-func (t *transformLog) prepareMaterializeLocked(targetTimeTick uint64) materializeWork {
+func (t *transformLog) prepareMaterialize(ctx context.Context, targetTimeTick uint64) (materializeWork, error) {
 	work := materializeWork{TargetTimeTick: targetTimeTick}
-	startAfter := t.meta.GetMaterializedTimeTick()
-	for _, chunk := range t.retainedChunks {
-		for _, entry := range chunk.GetEntries() {
-			if entry.GetTimeTick() <= startAfter {
-				continue
-			}
-			if entry.GetTimeTick() > targetTimeTick {
-				return work
-			}
-			if !isTransformDeleteEntry(entry) {
-				continue
-			}
-			work.Entries = append(work.Entries, cloneTransformLogEntry(entry))
-			work.Rows += transformLogEntryRows(entry)
-			work.Bytes += uint64(proto.Size(entry))
+	t.mu.Lock()
+	cursor := t.meta.GetMaterializedTimeTick()
+	t.mu.Unlock()
+	for {
+		entry, ok, err := t.nextEntryAfter(ctx, cursor)
+		if err != nil {
+			return materializeWork{}, err
 		}
+		if !ok || entry.GetTimeTick() > targetTimeTick {
+			return work, nil
+		}
+		cursor = entry.GetTimeTick()
+		if !isTransformDeleteEntry(entry) {
+			continue
+		}
+		work.Entries = append(work.Entries, entry)
+		work.Rows += transformLogEntryRows(entry)
+		work.Bytes += uint64(proto.Size(entry))
 	}
-	return work
 }
 
-func (t *transformLog) pendingMaterializeStatsLocked(targetTimeTick uint64) (uint64, uint64) {
-	startAfter := t.meta.GetMaterializedTimeTick()
+func (t *transformLog) pendingMaterializeStats(ctx context.Context, targetTimeTick uint64) (uint64, uint64, error) {
+	t.mu.Lock()
+	cursor := t.meta.GetMaterializedTimeTick()
+	t.mu.Unlock()
 	var rows uint64
 	var bytes uint64
-	for _, chunk := range t.retainedChunks {
-		for _, entry := range chunk.GetEntries() {
-			if entry.GetTimeTick() <= startAfter {
-				continue
-			}
-			if entry.GetTimeTick() > targetTimeTick {
-				return rows, bytes
-			}
-			if !isTransformDeleteEntry(entry) {
-				continue
-			}
-			rows += transformLogEntryRows(entry)
-			bytes += uint64(proto.Size(entry))
+	for {
+		entry, ok, err := t.nextEntryAfter(ctx, cursor)
+		if err != nil {
+			return 0, 0, err
 		}
+		if !ok || entry.GetTimeTick() > targetTimeTick {
+			return rows, bytes, nil
+		}
+		cursor = entry.GetTimeTick()
+		if !isTransformDeleteEntry(entry) {
+			continue
+		}
+		rows += transformLogEntryRows(entry)
+		bytes += uint64(proto.Size(entry))
 	}
-	return rows, bytes
 }
 
 func (t *transformLog) commitMaterializeLocked(work materializeWork) MaterializeResult {
@@ -521,30 +526,141 @@ func (t *transformLog) commitMaterializeLocked(work materializeWork) Materialize
 	}
 }
 
-func (t *transformLog) publish(entries []*streamingpb.TransformLogEntry) {
-	t.subscriberMu.Lock()
-	subscribers := make([]*scanner, 0, len(t.subscribers))
-	for subscriber := range t.subscribers {
-		subscribers = append(subscribers, subscriber)
-	}
-	t.subscriberMu.Unlock()
-	for _, entry := range entries {
-		for _, subscriber := range subscribers {
-			subscriber.publishEntry(entry)
+func (t *transformLog) nextEntryAfter(ctx context.Context, after uint64) (*streamingpb.TransformLogEntry, bool, error) {
+	for {
+		t.mu.Lock()
+		entry, chunkToLoad, err := t.nextEntryAfterLocked(after)
+		t.mu.Unlock()
+		if err != nil {
+			return nil, false, err
+		}
+		if entry != nil {
+			return entry, true, nil
+		}
+		if chunkToLoad == nil {
+			return nil, false, nil
+		}
+		if err := t.loadChunk(ctx, chunkToLoad); err != nil {
+			return nil, false, err
 		}
 	}
 }
 
-func (t *transformLog) registerScanner(scanner *scanner) {
-	t.subscriberMu.Lock()
-	defer t.subscriberMu.Unlock()
-	t.subscribers[scanner] = struct{}{}
+func (t *transformLog) nextEntryAfterLocked(after uint64) (*streamingpb.TransformLogEntry, *chunkDescriptor, error) {
+	if after < t.meta.GetTruncateTimeTick() {
+		return nil, nil, errors.Wrap(wal.ErrTransformLogStartPointTruncated, "start point is truncated")
+	}
+	for _, chunk := range t.chunks {
+		if chunk.toTimeTick > 0 && chunk.toTimeTick <= after {
+			continue
+		}
+		if !chunk.loaded() {
+			return nil, chunk, nil
+		}
+		for _, entry := range chunk.entries {
+			if entry.GetTimeTick() > after {
+				return cloneTransformLogEntry(entry), nil, nil
+			}
+		}
+	}
+	for _, entry := range t.buffer.entries {
+		if entry.timeTick > after {
+			return cloneTransformLogEntry(entry.entry), nil, nil
+		}
+	}
+	return nil, nil, nil
 }
 
-func (t *transformLog) unregisterScanner(scanner *scanner) {
-	t.subscriberMu.Lock()
-	defer t.subscriberMu.Unlock()
-	delete(t.subscribers, scanner)
+func (t *transformLog) loadChunk(ctx context.Context, chunk *chunkDescriptor) error {
+	for {
+		t.mu.Lock()
+		switch chunk.state {
+		case chunkStateLoaded:
+			t.mu.Unlock()
+			return nil
+		case chunkStateLoading:
+			done := chunk.loadDone
+			t.mu.Unlock()
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		case chunkStateCold:
+			if t.store == nil {
+				t.mu.Unlock()
+				return errors.New("transform log store is nil")
+			}
+			done := make(chan struct{})
+			chunk.state = chunkStateLoading
+			chunk.loadDone = done
+			t.mu.Unlock()
+
+			loaded, err := t.store.ReadTransformLogChunk(ctx, t.vchannel, chunk.id)
+			var entries []*streamingpb.TransformLogEntry
+			if err == nil {
+				err = validateChunk(loaded, chunk.id, 0)
+			}
+			if err == nil {
+				entries = cloneTransformLogEntries(loaded.GetEntries())
+			}
+
+			t.mu.Lock()
+			if err == nil {
+				chunk.setEntries(entries)
+				err = t.validateLoadedChunkOrderLocked(chunk)
+			}
+			if err != nil {
+				chunk.clearEntries()
+				chunk.state = chunkStateCold
+			}
+			close(done)
+			chunk.loadDone = nil
+			t.mu.Unlock()
+			return err
+		}
+	}
+}
+
+func (t *transformLog) validateLoadedChunkOrderLocked(chunk *chunkDescriptor) error {
+	if !chunk.loaded() {
+		return nil
+	}
+	for idx, candidate := range t.chunks {
+		if candidate != chunk {
+			continue
+		}
+		if idx > 0 {
+			previous := t.chunks[idx-1]
+			if previous.toTimeTick > 0 && chunk.fromTimeTick <= previous.toTimeTick {
+				return errors.Errorf("transform log chunk %d entries are not ordered", chunk.id)
+			}
+		}
+		if idx+1 < len(t.chunks) {
+			next := t.chunks[idx+1]
+			if next.fromTimeTick > 0 && chunk.toTimeTick >= next.fromTimeTick {
+				return errors.Errorf("transform log chunk %d entries are not ordered", chunk.id)
+			}
+		}
+		return nil
+	}
+	return nil
+}
+
+func (t *transformLog) notifyChannel() <-chan struct{} {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.notifyCh
+}
+
+func (t *transformLog) notifyScannersLocked() {
+	close(t.notifyCh)
+	t.notifyCh = make(chan struct{})
+}
+
+func (t *transformLog) latestTimeTickLocked() uint64 {
+	return maxTimeTick(t.meta.GetCheckpointTimeTick(), t.buffer.DataTimeTick())
 }
 
 func validateChunk(chunk *streamingpb.TransformLogChunk, expectedChunkID uint64, previousTimeTick uint64) error {
@@ -566,6 +682,61 @@ func validateChunk(chunk *streamingpb.TransformLogChunk, expectedChunkID uint64,
 	return nil
 }
 
+type chunkState int
+
+const (
+	chunkStateCold chunkState = iota
+	chunkStateLoading
+	chunkStateLoaded
+)
+
+type chunkDescriptor struct {
+	id           uint64
+	state        chunkState
+	loadDone     chan struct{}
+	fromTimeTick uint64
+	toTimeTick   uint64
+	entries      []*streamingpb.TransformLogEntry
+}
+
+func newColdChunkDescriptor(chunkID uint64) *chunkDescriptor {
+	return &chunkDescriptor{
+		id:    chunkID,
+		state: chunkStateCold,
+	}
+}
+
+func newLoadedChunkDescriptor(chunk *streamingpb.TransformLogChunk) *chunkDescriptor {
+	descriptor := &chunkDescriptor{
+		id:    chunk.GetChunkId(),
+		state: chunkStateLoaded,
+	}
+	descriptor.setEntries(cloneTransformLogEntries(chunk.GetEntries()))
+	return descriptor
+}
+
+func (c *chunkDescriptor) loaded() bool {
+	return c.state == chunkStateLoaded
+}
+
+func (c *chunkDescriptor) setEntries(entries []*streamingpb.TransformLogEntry) {
+	c.entries = entries
+	if len(entries) == 0 {
+		c.fromTimeTick = 0
+		c.toTimeTick = 0
+		return
+	}
+	c.fromTimeTick = entries[0].GetTimeTick()
+	c.toTimeTick = entries[len(entries)-1].GetTimeTick()
+	c.state = chunkStateLoaded
+}
+
+func (c *chunkDescriptor) clearEntries() {
+	c.entries = nil
+	c.fromTimeTick = 0
+	c.toTimeTick = 0
+}
+
 func cloneMetaOrNew(meta *streamingpb.VChannelTransformLogMeta) *streamingpb.VChannelTransformLogMeta {
 	if meta == nil {
 		return &streamingpb.VChannelTransformLogMeta{}
@@ -580,29 +751,12 @@ func cloneMeta(meta *streamingpb.VChannelTransformLogMeta) *streamingpb.VChannel
 	return proto.Clone(meta).(*streamingpb.VChannelTransformLogMeta)
 }
 
-func snapshotChunks(chunks []*streamingpb.TransformLogChunk) []*streamingpb.TransformLogChunk {
-	if len(chunks) == 0 {
-		return nil
+func cloneTransformLogEntries(entries []*streamingpb.TransformLogEntry) []*streamingpb.TransformLogEntry {
+	cloned := make([]*streamingpb.TransformLogEntry, 0, len(entries))
+	for _, entry := range entries {
+		cloned = append(cloned, cloneTransformLogEntry(entry))
 	}
-	// Retained chunks are immutable after they are appended or recovered. A shallow
-	// slice snapshot is enough to isolate readers from truncate moving retainedChunks.
-	snapshot := make([]*streamingpb.TransformLogChunk, len(chunks))
-	copy(snapshot, chunks)
-	return snapshot
-}
-
-func liveAfterTimeTick(startAfter uint64, chunks []*streamingpb.TransformLogChunk) uint64 {
-	liveAfter := startAfter
-	for _, chunk := range chunks {
-		entries := chunk.GetEntries()
-		if len(entries) == 0 {
-			continue
-		}
-		if timeTick := entries[len(entries)-1].GetTimeTick(); timeTick > liveAfter {
-			liveAfter = timeTick
-		}
-	}
-	return liveAfter
+	return cloned
 }
 
 func maxTimeTick(left uint64, right uint64) uint64 {

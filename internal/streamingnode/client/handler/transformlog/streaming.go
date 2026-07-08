@@ -12,6 +12,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
@@ -25,6 +26,7 @@ func CreateEventStream(
 	opts *EventStreamOptions,
 	handlerClient streamingpb.StreamingNodeHandlerServiceClient,
 ) (*EventStream, error) {
+	pchannel := opts.Assignment.Channel.Name
 	ctx = contextutil.WithCreateTransformStream(ctx, &streamingpb.CreateTransformStreamRequest{
 		Pchannel: types.NewProtoFromPChannelInfo(opts.Assignment.Channel),
 	})
@@ -32,7 +34,14 @@ func CreateEventStream(
 	if err != nil {
 		return nil, err
 	}
+	mlog.Debug(ctx, "handler transform log event stream created",
+		mlog.FieldPChannel(pchannel),
+		mlog.Int64("serverID", opts.Assignment.Node.ServerID),
+		mlog.Int64("term", opts.Assignment.Channel.Term),
+	)
 	stream := &EventStream{
+		ctx:           ctx,
+		pchannel:      pchannel,
 		stream:        streamClient,
 		subscriptions: make(map[int64]*eventSubscription),
 		done:          make(chan struct{}),
@@ -42,7 +51,9 @@ func CreateEventStream(
 }
 
 type EventStream struct {
-	stream streamingpb.StreamingNodeHandlerService_SubscribeTransformClient
+	ctx      context.Context
+	pchannel string
+	stream   streamingpb.StreamingNodeHandlerService_SubscribeTransformClient
 
 	sendMu     sync.Mutex
 	mu         sync.Mutex
@@ -88,6 +99,13 @@ func (s *EventStream) Subscribe(ctx context.Context, opt wal.TransformLogSubscri
 		sub.finish(err)
 		return nil, err
 	}
+	mlog.Debug(ctx, "handler transform log event stream sent subscription request",
+		mlog.FieldPChannel(s.pchannel),
+		mlog.FieldVChannel(opt.VChannel),
+		mlog.Uint64("startAfterTimeTick", opt.StartAfterTimeTick),
+		mlog.Uint64("endTimeTick", opt.EndTimeTick),
+		mlog.Int64("subscriptionID", sub.subscriptionID),
+	)
 	select {
 	case <-sub.ready:
 		if err := sub.Error(); err != nil {
@@ -236,6 +254,12 @@ func (s *EventStream) handleCreate(resp *streamingpb.CreateTransformSubscription
 	}
 	if sub := s.getSubscription(resp.GetSubscriptionId()); sub != nil {
 		sub.markReady(nil)
+		mlog.Debug(s.ctx, "handler transform log event stream subscription created",
+			mlog.FieldPChannel(s.pchannel),
+			mlog.FieldVChannel(resp.GetVchannel()),
+			mlog.Uint64("startAfterTimeTick", resp.GetStartAfterTimeTick()),
+			mlog.Int64("subscriptionID", resp.GetSubscriptionId()),
+		)
 	}
 }
 
@@ -248,6 +272,12 @@ func (s *EventStream) handleMessageBatch(resp *streamingpb.TransformMessageBatch
 		return
 	}
 	for _, entry := range resp.GetEntries() {
+		mlog.Debug(s.ctx, "handler transform log event stream received entry",
+			mlog.FieldPChannel(s.pchannel),
+			mlog.FieldVChannel(resp.GetVchannel()),
+			mlog.Int64("subscriptionID", resp.GetSubscriptionId()),
+			mlog.Uint64("timeTick", entry.GetTimeTick()),
+		)
 		if err := sub.handle(wal.TransformLogStreamEvent{
 			SubscriptionID: resp.GetSubscriptionId(),
 			VChannel:       resp.GetVchannel(),
@@ -276,6 +306,12 @@ func (s *EventStream) handleCaughtUp(resp *streamingpb.TransformSubscriptionCaug
 		s.removeSubscription(resp.GetSubscriptionId())
 		sub.finish(err)
 	}
+	mlog.Debug(s.ctx, "handler transform log event stream received caught-up",
+		mlog.FieldPChannel(s.pchannel),
+		mlog.FieldVChannel(resp.GetVchannel()),
+		mlog.Int64("subscriptionID", resp.GetSubscriptionId()),
+		mlog.Uint64("startAfterTimeTick", resp.GetStartAfterTimeTick()),
+	)
 }
 
 func (s *EventStream) handleSubscriptionError(resp *streamingpb.TransformSubscriptionError) {
@@ -297,6 +333,12 @@ func (s *EventStream) handleSubscriptionError(resp *streamingpb.TransformSubscri
 		Err:            err,
 	})
 	sub.finish(err)
+	mlog.Debug(s.ctx, "handler transform log event stream received subscription error",
+		mlog.FieldPChannel(s.pchannel),
+		mlog.FieldVChannel(resp.GetVchannel()),
+		mlog.Int64("subscriptionID", resp.GetSubscriptionId()),
+		mlog.Err(err),
+	)
 }
 
 func (s *EventStream) handleCloseSubscription(resp *streamingpb.CloseTransformSubscriptionResponse) {
@@ -309,6 +351,11 @@ func (s *EventStream) handleCloseSubscription(resp *streamingpb.CloseTransformSu
 	}
 	s.removeSubscription(resp.GetSubscriptionId())
 	sub.finish(nil)
+	mlog.Debug(s.ctx, "handler transform log event stream subscription closed",
+		mlog.FieldPChannel(s.pchannel),
+		mlog.FieldVChannel(resp.GetVchannel()),
+		mlog.Int64("subscriptionID", resp.GetSubscriptionId()),
+	)
 }
 
 func (s *EventStream) finish(err error) {
@@ -320,6 +367,10 @@ func (s *EventStream) finish(err error) {
 		s.subscriptions = make(map[int64]*eventSubscription)
 		close(s.done)
 		s.mu.Unlock()
+		mlog.Debug(s.ctx, "handler transform log event stream finished",
+			mlog.FieldPChannel(s.pchannel),
+			mlog.Err(err),
+		)
 		for _, sub := range subscriptions {
 			if err != nil {
 				_ = sub.handle(wal.TransformLogStreamEvent{

@@ -8,6 +8,7 @@ import (
 	"github.com/milvus-io/milvus/internal/querynodev2/qnview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 )
@@ -67,6 +68,12 @@ func (b *Buffer) Acquire(ctx context.Context, view *qviews.QueryViewAtQueryNode)
 		buf.sub = sub
 		b.channels[vchannel] = buf
 		stream.refs[vchannel] = buf
+		mlog.Debug(ctx, "querynode transform log buffer subscribed vchannel",
+			mlog.FieldPChannel(pchannel),
+			mlog.FieldVChannel(vchannel),
+			mlog.Uint64("startAfterTimeTick", startFrom),
+			mlog.Int64("subscriptionID", sub.ID()),
+		)
 	}
 	if err := buf.acquire(ctx, startFrom); err != nil {
 		return nil, err
@@ -118,6 +125,9 @@ func (b *Buffer) getOrCreateStreamLocked(ctx context.Context, pchannel string) (
 	if err != nil {
 		return nil, err
 	}
+	mlog.Debug(ctx, "querynode transform log buffer acquired pchannel stream",
+		mlog.FieldPChannel(pchannel),
+	)
 	state = &streamState{
 		pchannel: pchannel,
 		stream:   stream,
@@ -157,13 +167,31 @@ type bufEventHandler struct {
 
 func (h bufEventHandler) Handle(event wal.TransformLogStreamEvent) error {
 	if event.Err != nil {
+		mlog.Debug(context.TODO(), "querynode transform log buffer received subscription error",
+			mlog.FieldPChannel(h.buffer.pchannel),
+			mlog.FieldVChannel(h.buffer.vchannel),
+			mlog.Int64("subscriptionID", event.SubscriptionID),
+			mlog.Err(event.Err),
+		)
 		h.buffer.fail(event.Err)
 		return nil
 	}
 	if event.Entry != nil {
+		mlog.Debug(context.TODO(), "querynode transform log buffer received entry",
+			mlog.FieldPChannel(h.buffer.pchannel),
+			mlog.FieldVChannel(h.buffer.vchannel),
+			mlog.Int64("subscriptionID", event.SubscriptionID),
+			mlog.Uint64("timeTick", event.Entry.GetTimeTick()),
+		)
 		h.buffer.onEntry(event.Entry)
 	}
 	if event.CaughtUp != nil {
+		mlog.Debug(context.TODO(), "querynode transform log buffer received caught-up",
+			mlog.FieldPChannel(h.buffer.pchannel),
+			mlog.FieldVChannel(h.buffer.vchannel),
+			mlog.Int64("subscriptionID", event.SubscriptionID),
+			mlog.Uint64("startAfterTimeTick", event.CaughtUp.StartAfterTimeTick),
+		)
 		h.buffer.onCaughtUp()
 	}
 	return nil
@@ -246,6 +274,14 @@ func (b *vchannelBuffer) registerSegment(ctx context.Context, segment qnview.Tra
 	}
 	reg := newRegistration(b, segment)
 	b.pending[segment.ID()] = reg
+	mlog.Debug(ctx, "querynode transform log buffer registered segment",
+		mlog.FieldPChannel(b.pchannel),
+		mlog.FieldVChannel(b.vchannel),
+		mlog.FieldSegmentID(segment.ID()),
+		mlog.Uint64("startAfterTimeTick", startFrom),
+		mlog.Int("pendingSegments", len(b.pending)),
+		mlog.Int("liveSegments", len(b.live)),
+	)
 	b.mu.Unlock()
 
 	if err := b.owner.scheduleDrain(ctx, reg); err != nil {
@@ -268,6 +304,12 @@ func (b *vchannelBuffer) drainRegistration(ctx context.Context, reg *registratio
 				return ctx.Err()
 			default:
 			}
+			mlog.Debug(ctx, "querynode transform log buffer drains entry to segment",
+				mlog.FieldPChannel(b.pchannel),
+				mlog.FieldVChannel(b.vchannel),
+				mlog.FieldSegmentID(reg.segment.ID()),
+				mlog.Uint64("timeTick", entry.GetTimeTick()),
+			)
 			if err := reg.segment.ApplyTransform(ctx, entry); err != nil {
 				return err
 			}
@@ -307,12 +349,33 @@ func (b *vchannelBuffer) waitTransformVisible(ctx context.Context, timetick uint
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	waitLogged := false
 	for {
 		if timetick <= b.retentionStart || b.visibleTimeTick >= timetick {
+			if waitLogged {
+				mlog.Debug(ctx, "querynode transform log buffer wait visible done",
+					mlog.FieldPChannel(b.pchannel),
+					mlog.FieldVChannel(b.vchannel),
+					mlog.Uint64("targetTimeTick", timetick),
+					mlog.Uint64("visibleTimeTick", b.visibleTimeTick),
+					mlog.Uint64("retentionStart", b.retentionStart),
+				)
+			}
 			return nil
 		}
 		if b.err != nil {
 			return b.err
+		}
+		if !waitLogged {
+			waitLogged = true
+			mlog.Debug(ctx, "querynode transform log buffer wait visible",
+				mlog.FieldPChannel(b.pchannel),
+				mlog.FieldVChannel(b.vchannel),
+				mlog.Uint64("targetTimeTick", timetick),
+				mlog.Uint64("visibleTimeTick", b.visibleTimeTick),
+				mlog.Uint64("retentionStart", b.retentionStart),
+				mlog.Bool("caughtUp", b.caughtUp),
+			)
 		}
 		notify := b.visibilityNotify
 		b.mu.Unlock()
@@ -320,6 +383,15 @@ func (b *vchannelBuffer) waitTransformVisible(ctx context.Context, timetick uint
 		case <-notify:
 		case <-ctx.Done():
 			b.mu.Lock()
+			mlog.Debug(ctx, "querynode transform log buffer wait visible canceled",
+				mlog.FieldPChannel(b.pchannel),
+				mlog.FieldVChannel(b.vchannel),
+				mlog.Uint64("targetTimeTick", timetick),
+				mlog.Uint64("visibleTimeTick", b.visibleTimeTick),
+				mlog.Uint64("retentionStart", b.retentionStart),
+				mlog.Bool("caughtUp", b.caughtUp),
+				mlog.Err(ctx.Err()),
+			)
 			return ctx.Err()
 		}
 		b.mu.Lock()
@@ -400,6 +472,12 @@ func (b *vchannelBuffer) onEntry(entry *streamingpb.TransformLogEntry) {
 	b.mu.Unlock()
 
 	for _, reg := range applies {
+		mlog.Debug(context.TODO(), "querynode transform log buffer applies entry to live segment",
+			mlog.FieldPChannel(b.pchannel),
+			mlog.FieldVChannel(b.vchannel),
+			mlog.FieldSegmentID(reg.segment.ID()),
+			mlog.Uint64("timeTick", entry.GetTimeTick()),
+		)
 		if err := reg.segment.ApplyTransform(context.Background(), entry); err != nil {
 			b.fail(err)
 			return
@@ -409,6 +487,11 @@ func (b *vchannelBuffer) onEntry(entry *streamingpb.TransformLogEntry) {
 	b.mu.Lock()
 	if entry.GetTimeTick() > b.visibleTimeTick {
 		b.visibleTimeTick = entry.GetTimeTick()
+		mlog.Debug(context.TODO(), "querynode transform log buffer advanced visible timetick",
+			mlog.FieldPChannel(b.pchannel),
+			mlog.FieldVChannel(b.vchannel),
+			mlog.Uint64("visibleTimeTick", b.visibleTimeTick),
+		)
 		b.notifyVisibilityLocked()
 	}
 	b.mu.Unlock()
@@ -421,6 +504,11 @@ func (b *vchannelBuffer) onCaughtUp() {
 		return
 	}
 	b.caughtUp = true
+	mlog.Debug(context.TODO(), "querynode transform log buffer marked caught-up",
+		mlog.FieldPChannel(b.pchannel),
+		mlog.FieldVChannel(b.vchannel),
+		mlog.Uint64("visibleTimeTick", b.visibleTimeTick),
+	)
 	b.notifyVisibilityLocked()
 	b.mu.Unlock()
 }
@@ -484,8 +572,26 @@ func (r *registration) WaitCatchup(ctx context.Context) error {
 	case <-r.done:
 		r.errMu.Lock()
 		defer r.errMu.Unlock()
+		if r.err != nil {
+			mlog.Debug(ctx, "querynode transform log buffer segment catchup failed",
+				mlog.FieldPChannel(r.buffer.pchannel),
+				mlog.FieldVChannel(r.buffer.vchannel),
+				mlog.FieldSegmentID(r.segment.ID()),
+				mlog.Uint64("startAfterTimeTick", r.startFrom),
+				mlog.Uint64("drainedTo", r.drainedTo),
+				mlog.Err(r.err),
+			)
+		}
 		return r.err
 	case <-ctx.Done():
+		mlog.Debug(ctx, "querynode transform log buffer segment catchup canceled",
+			mlog.FieldPChannel(r.buffer.pchannel),
+			mlog.FieldVChannel(r.buffer.vchannel),
+			mlog.FieldSegmentID(r.segment.ID()),
+			mlog.Uint64("startAfterTimeTick", r.startFrom),
+			mlog.Uint64("drainedTo", r.drainedTo),
+			mlog.Err(ctx.Err()),
+		)
 		return ctx.Err()
 	}
 }

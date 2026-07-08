@@ -15,43 +15,10 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 )
 
-func TestReadIgnoresDelayedPublishForRetainedEntries(t *testing.T) {
+func TestReadDrainsCreationTailBeforeFutureAppends(t *testing.T) {
 	transformLog := New(Config{VChannel: "v1"}).(*transformLog)
-	entry := testTransformLogEntry(50)
-	transformLog.retainedChunks = []*streamingpb.TransformLogChunk{
-		{ChunkId: 0, Entries: []*streamingpb.TransformLogEntry{entry}},
-	}
-
-	scanner := transformLog.Read(context.Background(), wal.TransformLogReadOption{
-		Name:               "test-scanner",
-		VChannel:           "v1",
-		StartAfterTimeTick: 10,
-	})
-	defer scanner.Close()
-
-	transformLog.publish([]*streamingpb.TransformLogEntry{entry})
-
-	entryEvent := <-scanner.Chan()
-	require.NotNil(t, entryEvent.Entry)
-	assert.Equal(t, uint64(50), entryEvent.Entry.GetTimeTick())
-	caughtUpEvent := <-scanner.Chan()
-	require.NotNil(t, caughtUpEvent.CaughtUp)
-
-	select {
-	case event := <-scanner.Chan():
-		t.Fatalf("unexpected duplicate event: %+v", event)
-	case <-time.After(50 * time.Millisecond):
-	}
-}
-
-func TestReadBuffersLiveEntriesUntilCaughtUp(t *testing.T) {
-	transformLog := New(Config{VChannel: "v1"}).(*transformLog)
-	entries := make([]*streamingpb.TransformLogEntry, 0, 20)
 	for timeTick := uint64(1); timeTick <= 20; timeTick++ {
-		entries = append(entries, testTransformLogEntry(timeTick))
-	}
-	transformLog.retainedChunks = []*streamingpb.TransformLogChunk{
-		{ChunkId: 0, Entries: entries},
+		require.True(t, transformLog.AppendBarrier(timeTick).Appended)
 	}
 
 	scanner := transformLog.Read(context.Background(), wal.TransformLogReadOption{
@@ -64,7 +31,7 @@ func TestReadBuffersLiveEntriesUntilCaughtUp(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return len(scanner.Chan()) == 16
 	}, time.Second, 10*time.Millisecond)
-	transformLog.publish([]*streamingpb.TransformLogEntry{testTransformLogEntry(21)})
+	require.True(t, transformLog.AppendBarrier(21).Appended)
 
 	for expected := uint64(1); expected <= 20; expected++ {
 		event := <-scanner.Chan()
@@ -80,13 +47,9 @@ func TestReadBuffersLiveEntriesUntilCaughtUp(t *testing.T) {
 
 func TestReadStopsAtEndTimeTick(t *testing.T) {
 	transformLog := New(Config{VChannel: "v1"}).(*transformLog)
-	transformLog.retainedChunks = []*streamingpb.TransformLogChunk{
-		{ChunkId: 0, Entries: []*streamingpb.TransformLogEntry{
-			testTransformLogEntry(10),
-			testTransformLogEntry(20),
-			testTransformLogEntry(30),
-		}},
-	}
+	require.True(t, transformLog.AppendBarrier(10).Appended)
+	require.True(t, transformLog.AppendBarrier(20).Appended)
+	require.True(t, transformLog.AppendBarrier(30).Appended)
 
 	scanner := transformLog.Read(context.Background(), wal.TransformLogReadOption{
 		Name:               "test-scanner",
@@ -119,17 +82,128 @@ func TestReadStopsAtEndTimeTick(t *testing.T) {
 	assert.NoError(t, scanner.Error())
 }
 
-func TestSnapshotChunksCopiesSliceOnly(t *testing.T) {
-	first := &streamingpb.TransformLogChunk{ChunkId: 1}
-	second := &streamingpb.TransformLogChunk{ChunkId: 2}
-	chunks := []*streamingpb.TransformLogChunk{first}
+func TestRecoverKeepsChunksColdUntilRead(t *testing.T) {
+	store := newMemoryStore()
+	require.NoError(t, store.WriteTransformLogChunk(context.Background(), "v1", &streamingpb.TransformLogChunk{
+		ChunkId: 0,
+		Entries: []*streamingpb.TransformLogEntry{
+			testTransformLogDeleteEntry(10, 1),
+		},
+	}))
+	store.resetReadCount()
+	transformLog := New(Config{
+		VChannel: "v1",
+		Store:    store,
+		Meta: &streamingpb.VChannelTransformLogMeta{
+			CheckpointTimeTick: 10,
+			NextChunkId:        1,
+		},
+	}).(*transformLog)
 
-	snapshot := snapshotChunks(chunks)
-	require.Len(t, snapshot, 1)
-	assert.Same(t, first, snapshot[0])
+	result, err := transformLog.Recover(context.Background(), nil)
+	require.NoError(t, err)
+	assert.True(t, result.Recovered)
+	assert.Equal(t, 0, store.readCount("v1", 0))
 
-	chunks[0] = second
-	assert.Same(t, first, snapshot[0])
+	scanner := transformLog.Read(context.Background(), wal.TransformLogReadOption{
+		Name:               "test-scanner",
+		VChannel:           "v1",
+		StartAfterTimeTick: 0,
+	})
+	defer scanner.Close()
+
+	event := <-scanner.Chan()
+	require.NotNil(t, event.Entry)
+	assert.Equal(t, uint64(10), event.Entry.GetTimeTick())
+	assert.Equal(t, 1, store.readCount("v1", 0))
+}
+
+func TestMaterializeLoadsRecoveredColdChunk(t *testing.T) {
+	store := newMemoryStore()
+	require.NoError(t, store.WriteTransformLogChunk(context.Background(), "v1", &streamingpb.TransformLogChunk{
+		ChunkId: 0,
+		Entries: []*streamingpb.TransformLogEntry{
+			testTransformLogDeleteEntry(10, 1, 2),
+		},
+	}))
+	store.resetReadCount()
+	materializer := &recordingMaterializer{}
+	transformLog := New(Config{
+		VChannel:     "v1",
+		Store:        store,
+		Materializer: materializer,
+		Meta: &streamingpb.VChannelTransformLogMeta{
+			CheckpointTimeTick: 10,
+			NextChunkId:        1,
+		},
+	}).(*transformLog)
+	_, err := transformLog.Recover(context.Background(), nil)
+	require.NoError(t, err)
+
+	result, err := transformLog.Materialize(context.Background(), MaterializeOption{TargetTimeTick: 10})
+	require.NoError(t, err)
+	assert.True(t, result.HasMaterializedSegments)
+	assert.Equal(t, uint64(2), result.MaterializedRows)
+	assert.Equal(t, 1, store.readCount("v1", 0))
+	require.Len(t, materializer.requests, 1)
+	require.Len(t, materializer.requests[0].Entries, 1)
+}
+
+func TestTruncateLoadsRecoveredColdChunkToAdvanceFirstChunk(t *testing.T) {
+	store := newMemoryStore()
+	require.NoError(t, store.WriteTransformLogChunk(context.Background(), "v1", &streamingpb.TransformLogChunk{
+		ChunkId: 0,
+		Entries: []*streamingpb.TransformLogEntry{
+			testTransformLogDeleteEntry(10, 1),
+		},
+	}))
+	store.resetReadCount()
+	transformLog := New(Config{
+		VChannel: "v1",
+		Store:    store,
+		Meta: &streamingpb.VChannelTransformLogMeta{
+			CheckpointTimeTick: 10,
+			NextChunkId:        1,
+		},
+	}).(*transformLog)
+	_, err := transformLog.Recover(context.Background(), nil)
+	require.NoError(t, err)
+
+	result := transformLog.Truncate(TruncateOption{TimeTick: 10})
+	assert.True(t, result.Changed)
+	assert.Equal(t, uint64(1), transformLog.SnapshotMeta().GetFirstChunkId())
+	assert.Equal(t, 1, store.readCount("v1", 0))
+}
+
+func TestFlushWhileScannerDrainsDoesNotDuplicateEntries(t *testing.T) {
+	transformLog := New(Config{
+		VChannel: "v1",
+		Store:    newMemoryStore(),
+	}).(*transformLog)
+	for timeTick := uint64(1); timeTick <= 20; timeTick++ {
+		require.True(t, transformLog.AppendBarrier(timeTick).Appended)
+	}
+
+	scanner := transformLog.Read(context.Background(), wal.TransformLogReadOption{
+		Name:               "test-scanner",
+		VChannel:           "v1",
+		StartAfterTimeTick: 0,
+	})
+	defer scanner.Close()
+	require.Eventually(t, func() bool {
+		return len(scanner.Chan()) == 16
+	}, time.Second, 10*time.Millisecond)
+
+	_, err := transformLog.Flush(context.Background(), FlushOption{TargetTimeTick: 20})
+	require.NoError(t, err)
+
+	for expected := uint64(1); expected <= 20; expected++ {
+		event := <-scanner.Chan()
+		require.NotNil(t, event.Entry)
+		assert.Equal(t, expected, event.Entry.GetTimeTick())
+	}
+	caughtUp := <-scanner.Chan()
+	require.NotNil(t, caughtUp.CaughtUp)
 }
 
 func TestConsumeDirtySnapshotKeepsStableInFlightView(t *testing.T) {
@@ -172,14 +246,12 @@ func TestMaterializeAdvancesMaterializedBarrierAfterSnapshotPersisted(t *testing
 	materializer := &recordingMaterializer{}
 	transformLog := New(Config{
 		VChannel:     "by-dev-rootcoord-dml_1v0",
+		Store:        newMemoryStore(),
 		Materializer: materializer,
-		Meta: &streamingpb.VChannelTransformLogMeta{
-			CheckpointTimeTick: 20,
-		},
 	}).(*transformLog)
-	transformLog.retainedChunks = []*streamingpb.TransformLogChunk{
-		{ChunkId: 1, Entries: []*streamingpb.TransformLogEntry{testTransformLogDeleteEntry(10, 1, 2)}},
-	}
+	require.True(t, transformLog.Append(newModuleTestDeleteMessage(t, 10), AppendOption{}).Appended)
+	_, err := transformLog.Flush(context.Background(), FlushOption{TargetTimeTick: 20})
+	require.NoError(t, err)
 
 	result, err := transformLog.Materialize(context.Background(), MaterializeOption{TargetTimeTick: 20})
 	require.NoError(t, err)
@@ -223,25 +295,21 @@ func TestMaterializeSkipsBarrierEntries(t *testing.T) {
 	materializer := &recordingMaterializer{}
 	transformLog := New(Config{
 		VChannel:     "by-dev-rootcoord-dml_1v0",
+		Store:        newMemoryStore(),
 		Materializer: materializer,
-		Meta: &streamingpb.VChannelTransformLogMeta{
-			CheckpointTimeTick: 30,
-		},
 	}).(*transformLog)
-	transformLog.retainedChunks = []*streamingpb.TransformLogChunk{
-		{ChunkId: 1, Entries: []*streamingpb.TransformLogEntry{
-			testTransformLogBarrierEntry(5),
-			testTransformLogDeleteEntry(10, 1, 2),
-			testTransformLogBarrierEntry(20),
-		}},
-	}
+	require.True(t, transformLog.AppendBarrier(5).Appended)
+	require.True(t, transformLog.Append(newModuleTestDeleteMessage(t, 10), AppendOption{}).Appended)
+	require.True(t, transformLog.AppendBarrier(20).Appended)
+	_, err := transformLog.Flush(context.Background(), FlushOption{TargetTimeTick: 30})
+	require.NoError(t, err)
 
 	result, err := transformLog.Materialize(context.Background(), MaterializeOption{TargetTimeTick: 30})
 	require.NoError(t, err)
 	assert.True(t, result.Started)
 	assert.True(t, result.HasMaterializedSegments)
 	assert.Equal(t, uint64(30), result.MaterializedTimeTick)
-	assert.Equal(t, uint64(2), result.MaterializedRows)
+	assert.Equal(t, uint64(1), result.MaterializedRows)
 	require.Len(t, materializer.requests, 1)
 	require.Len(t, materializer.requests[0].Entries, 1)
 	assert.Equal(t, uint64(10), materializer.requests[0].Entries[0].GetTimeTick())
@@ -264,9 +332,9 @@ func TestFlushAdvancesCheckpointToFenceTimeTick(t *testing.T) {
 
 	snapshot := transformLog.SnapshotMeta()
 	assert.Equal(t, uint64(20), snapshot.GetCheckpointTimeTick())
-	require.Len(t, transformLog.retainedChunks, 1)
-	require.Len(t, transformLog.retainedChunks[0].GetEntries(), 1)
-	assert.Equal(t, uint64(10), transformLog.retainedChunks[0].GetEntries()[0].GetTimeTick())
+	require.Len(t, transformLog.chunks, 1)
+	require.Len(t, transformLog.chunks[0].entries, 1)
+	assert.Equal(t, uint64(10), transformLog.chunks[0].entries[0].GetTimeTick())
 }
 
 func TestFlushKeepsCheckpointAtLastDurableEntryWhenTargetStillHasPendingEntries(t *testing.T) {
@@ -296,9 +364,10 @@ func TestShouldMaterializeUsesUnmaterializedRowsAndBytes(t *testing.T) {
 			CheckpointTimeTick: 20,
 		},
 	}).(*transformLog)
-	transformLog.retainedChunks = []*streamingpb.TransformLogChunk{
-		{ChunkId: 1, Entries: []*streamingpb.TransformLogEntry{testTransformLogDeleteEntry(10, 1, 2)}},
-	}
+	transformLog.chunks = []*chunkDescriptor{newLoadedChunkDescriptor(&streamingpb.TransformLogChunk{
+		ChunkId: 1,
+		Entries: []*streamingpb.TransformLogEntry{testTransformLogDeleteEntry(10, 1, 2)},
+	})}
 
 	assert.True(t, transformLog.ShouldMaterialize())
 	transformLog.meta.MaterializedTimeTick = 10

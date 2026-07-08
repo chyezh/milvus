@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/walmanager"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
@@ -21,6 +22,7 @@ type SubscribeServer struct {
 	sendMu     sync.Mutex
 	scannersMu sync.Mutex
 	scanners   map[int64]*subscription
+	pchannel   string
 }
 
 type subscription struct {
@@ -46,6 +48,7 @@ func CreateSubscribeServer(
 		accesser:   w.TransformLog(),
 		stream:     stream,
 		scanners:   make(map[int64]*subscription),
+		pchannel:   createReq.GetPchannel().GetName(),
 	}, nil
 }
 
@@ -130,6 +133,13 @@ func (s *SubscribeServer) createSubscription(req *streamingpb.CreateTransformSub
 		EndTimeTick:        req.GetEndTimeTick(),
 	})
 	if err := scanner.Error(); err != nil {
+		mlog.Debug(s.stream.Context(), "streamingnode transform log subscription create failed",
+			mlog.FieldPChannel(s.pchannel),
+			mlog.FieldVChannel(req.GetVchannel()),
+			mlog.Int64("subscriptionID", req.GetSubscriptionId()),
+			mlog.Uint64("startAfterTimeTick", req.GetStartAfterTimeTick()),
+			mlog.Err(err),
+		)
 		return s.sendSubscriptionError(req.GetSubscriptionId(), req.GetVchannel(), err)
 	}
 	s.scannersMu.Lock()
@@ -142,6 +152,13 @@ func (s *SubscribeServer) createSubscription(req *streamingpb.CreateTransformSub
 		scanner:  scanner,
 	}
 	s.scannersMu.Unlock()
+	mlog.Debug(s.stream.Context(), "streamingnode transform log subscription created",
+		mlog.FieldPChannel(s.pchannel),
+		mlog.FieldVChannel(req.GetVchannel()),
+		mlog.Int64("subscriptionID", req.GetSubscriptionId()),
+		mlog.Uint64("startAfterTimeTick", req.GetStartAfterTimeTick()),
+		mlog.Uint64("endTimeTick", req.GetEndTimeTick()),
+	)
 	if err := s.send(&streamingpb.TransformResponse{
 		Response: &streamingpb.TransformResponse_Create{
 			Create: &streamingpb.CreateTransformSubscriptionResponse{
@@ -168,6 +185,12 @@ func (s *SubscribeServer) forwardSubscription(subscriptionID int64, vchannel str
 				return
 			}
 			if event.Entry != nil {
+				mlog.Debug(s.stream.Context(), "streamingnode transform log forward entry",
+					mlog.FieldPChannel(s.pchannel),
+					mlog.FieldVChannel(vchannel),
+					mlog.Int64("subscriptionID", subscriptionID),
+					mlog.Uint64("timeTick", event.Entry.GetTimeTick()),
+				)
 				if err := s.send(&streamingpb.TransformResponse{
 					Response: &streamingpb.TransformResponse_MessageBatch{
 						MessageBatch: &streamingpb.TransformMessageBatch{
@@ -182,6 +205,12 @@ func (s *SubscribeServer) forwardSubscription(subscriptionID int64, vchannel str
 				}
 			}
 			if event.CaughtUp != nil {
+				mlog.Debug(s.stream.Context(), "streamingnode transform log forward caught-up",
+					mlog.FieldPChannel(s.pchannel),
+					mlog.FieldVChannel(vchannel),
+					mlog.Int64("subscriptionID", subscriptionID),
+					mlog.Uint64("startAfterTimeTick", event.CaughtUp.StartAfterTimeTick),
+				)
 				if err := s.send(&streamingpb.TransformResponse{
 					Response: &streamingpb.TransformResponse_CaughtUp{
 						CaughtUp: &streamingpb.TransformSubscriptionCaughtUp{
@@ -197,6 +226,12 @@ func (s *SubscribeServer) forwardSubscription(subscriptionID int64, vchannel str
 			}
 		case <-scanner.Done():
 			if err := scanner.Error(); err != nil {
+				mlog.Debug(s.stream.Context(), "streamingnode transform log scanner failed",
+					mlog.FieldPChannel(s.pchannel),
+					mlog.FieldVChannel(vchannel),
+					mlog.Int64("subscriptionID", subscriptionID),
+					mlog.Err(err),
+				)
 				_ = s.sendSubscriptionError(subscriptionID, vchannel, err)
 			}
 			s.closeSubscription(subscriptionID)

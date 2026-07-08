@@ -59,6 +59,62 @@ func TestLatestTransformTimeTickIncludesUnflushedBuffer(t *testing.T) {
 	assert.Equal(t, uint64(10), module.LatestTransformTimeTick("v1"))
 }
 
+func TestDeletePublishesToLiveSubscriberBeforeFlush(t *testing.T) {
+	ctx := context.Background()
+	module := NewModule("p1", map[string]*streamingpb.VChannelTransformLogMeta{
+		"v1": {},
+	}, newMemoryStore())
+	module.SwitchIntoMetaAndData()
+
+	scanner := module.Read(ctx, wal.TransformLogReadOption{
+		Name:               "test-scanner",
+		VChannel:           "v1",
+		StartAfterTimeTick: 0,
+	})
+	defer scanner.Close()
+
+	caughtUp := <-scanner.Chan()
+	require.NotNil(t, caughtUp.CaughtUp)
+
+	module.ObserveMessage(ctx, newModuleTestDeleteMessage(t, 10))
+
+	select {
+	case event := <-scanner.Chan():
+		require.NotNil(t, event.Entry)
+		assert.Equal(t, uint64(10), event.Entry.GetTimeTick())
+		require.IsType(t, &streamingpb.TransformLogEntry_Delete{}, event.Entry.GetEntry())
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for live transform log delete entry")
+	}
+}
+
+func TestReadReplaysUnflushedBuffer(t *testing.T) {
+	ctx := context.Background()
+	module := NewModule("p1", map[string]*streamingpb.VChannelTransformLogMeta{
+		"v1": {},
+	}, newMemoryStore())
+	module.SwitchIntoMetaAndData()
+	module.ObserveMessage(ctx, newModuleTestDeleteMessage(t, 10))
+
+	scanner := module.Read(ctx, wal.TransformLogReadOption{
+		Name:               "test-scanner",
+		VChannel:           "v1",
+		StartAfterTimeTick: 0,
+	})
+	defer scanner.Close()
+
+	select {
+	case event := <-scanner.Chan():
+		require.NotNil(t, event.Entry)
+		assert.Equal(t, uint64(10), event.Entry.GetTimeTick())
+		require.IsType(t, &streamingpb.TransformLogEntry_Delete{}, event.Entry.GetEntry())
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for unflushed transform log delete entry")
+	}
+	caughtUp := <-scanner.Chan()
+	require.NotNil(t, caughtUp.CaughtUp)
+}
+
 func TestCreateCollectionCreatesTransformLogForVChannelWithoutDeleteHistory(t *testing.T) {
 	ctx := context.Background()
 	module := NewModule("p1", nil, newMemoryStore())
@@ -80,15 +136,6 @@ func TestCreateCollectionCreatesTransformLogForVChannelWithoutDeleteHistory(t *t
 	})
 	defer scanner.Close()
 
-	caughtUp := <-scanner.Chan()
-	require.NotNil(t, caughtUp.CaughtUp)
-
-	module.ObserveMessage(ctx, newModuleTestDeleteMessage(t, 10))
-	log := module.getLog("v1")
-	require.NotNil(t, log)
-	_, err := log.log.Flush(ctx, FlushOption{TargetTimeTick: 10})
-	require.NoError(t, err)
-
 	select {
 	case event := <-scanner.Chan():
 		require.NotNil(t, event.Entry)
@@ -97,6 +144,11 @@ func TestCreateCollectionCreatesTransformLogForVChannelWithoutDeleteHistory(t *t
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for live transform log barrier entry")
 	}
+	caughtUp := <-scanner.Chan()
+	require.NotNil(t, caughtUp.CaughtUp)
+
+	module.ObserveMessage(ctx, newModuleTestDeleteMessage(t, 10))
+
 	select {
 	case event := <-scanner.Chan():
 		require.NotNil(t, event.Entry)
@@ -123,9 +175,9 @@ func TestCreateCollectionProducesTransformBarrierEntry(t *testing.T) {
 	assert.Equal(t, uint64(5), flushResult.DurableTimeTick)
 
 	transformLog := log.log.(*transformLog)
-	require.Len(t, transformLog.retainedChunks, 1)
-	require.Len(t, transformLog.retainedChunks[0].GetEntries(), 1)
-	entry := transformLog.retainedChunks[0].GetEntries()[0]
+	require.Len(t, transformLog.chunks, 1)
+	require.Len(t, transformLog.chunks[0].entries, 1)
+	entry := transformLog.chunks[0].entries[0]
 	assert.Equal(t, uint64(5), entry.GetTimeTick())
 	require.IsType(t, &streamingpb.TransformLogEntry_Barrier{}, entry.GetEntry())
 }
@@ -147,8 +199,8 @@ func TestFlushStyleMessageProducesTransformBarrierEntry(t *testing.T) {
 	assert.Equal(t, uint64(20), flushResult.DurableTimeTick)
 
 	transformLog := log.log.(*transformLog)
-	require.Len(t, transformLog.retainedChunks, 1)
-	entries := transformLog.retainedChunks[0].GetEntries()
+	require.Len(t, transformLog.chunks, 1)
+	entries := transformLog.chunks[0].entries
 	require.Len(t, entries, 2)
 	assert.Equal(t, uint64(5), entries[0].GetTimeTick())
 	require.IsType(t, &streamingpb.TransformLogEntry_Barrier{}, entries[0].GetEntry())
@@ -158,10 +210,14 @@ func TestFlushStyleMessageProducesTransformBarrierEntry(t *testing.T) {
 
 type memoryStore struct {
 	chunks map[string]map[uint64]*streamingpb.TransformLogChunk
+	reads  map[string]map[uint64]int
 }
 
 func newMemoryStore() *memoryStore {
-	return &memoryStore{chunks: make(map[string]map[uint64]*streamingpb.TransformLogChunk)}
+	return &memoryStore{
+		chunks: make(map[string]map[uint64]*streamingpb.TransformLogChunk),
+		reads:  make(map[string]map[uint64]int),
+	}
 }
 
 func (s *memoryStore) WriteTransformLogChunk(_ context.Context, vchannel string, chunk *streamingpb.TransformLogChunk) error {
@@ -173,7 +229,19 @@ func (s *memoryStore) WriteTransformLogChunk(_ context.Context, vchannel string,
 }
 
 func (s *memoryStore) ReadTransformLogChunk(_ context.Context, vchannel string, chunkID uint64) (*streamingpb.TransformLogChunk, error) {
+	if s.reads[vchannel] == nil {
+		s.reads[vchannel] = make(map[uint64]int)
+	}
+	s.reads[vchannel][chunkID]++
 	return proto.Clone(s.chunks[vchannel][chunkID]).(*streamingpb.TransformLogChunk), nil
+}
+
+func (s *memoryStore) resetReadCount() {
+	s.reads = make(map[string]map[uint64]int)
+}
+
+func (s *memoryStore) readCount(vchannel string, chunkID uint64) int {
+	return s.reads[vchannel][chunkID]
 }
 
 func newModuleTestCreateCollectionMessage(t *testing.T, timetick uint64) message.ImmutableCreateCollectionMessageV1 {

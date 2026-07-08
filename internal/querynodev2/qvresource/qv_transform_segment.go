@@ -8,6 +8,8 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/querynodev2/segments"
 	"github.com/milvus-io/milvus/internal/storage"
+	"github.com/milvus-io/milvus/pkg/v3/common"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
@@ -76,22 +78,47 @@ func (s *queryViewTransformSegment) ApplyTransform(ctx context.Context, entry *s
 		s.markTransformApplied(entry.GetTimeTick())
 		return nil
 	}
+	if ctx == nil {
+		ctx = context.TODO()
+	}
 	for _, block := range deleteEntry.GetBlocks() {
-		if block.GetPartitionId() != s.PartitionID() {
+		blockPartitionID := block.GetPartitionId()
+		if blockPartitionID != common.AllPartitionsID && blockPartitionID != s.PartitionID() {
+			mlog.Debug(ctx, "querynode transform segment skipped delete block by partition",
+				mlog.FieldSegmentID(s.ID()),
+				mlog.FieldPartitionID(s.PartitionID()),
+				mlog.Int64("blockPartitionID", blockPartitionID),
+				mlog.Uint64("timeTick", entry.GetTimeTick()),
+			)
 			continue
 		}
 		pks, err := parseTransformDeletePrimaryKeys(block.GetPrimaryKeys())
 		if err != nil {
 			return err
 		}
+		originalPKCount := pks.Len()
 		timestamps := make([]typeutil.Timestamp, pks.Len())
 		for i := range timestamps {
 			timestamps[i] = entry.GetTimeTick()
 		}
 		pks, timestamps = filterMaybeHitPrimaryKeys(s.segment, pks, timestamps)
 		if pks == nil || pks.Len() == 0 {
+			mlog.Debug(ctx, "querynode transform segment delete block filtered out",
+				mlog.FieldSegmentID(s.ID()),
+				mlog.FieldPartitionID(s.PartitionID()),
+				mlog.Uint64("timeTick", entry.GetTimeTick()),
+				mlog.Int("originalPKCount", originalPKCount),
+				mlog.Int("filteredPKCount", 0),
+			)
 			continue
 		}
+		mlog.Debug(ctx, "querynode transform segment applies delete block",
+			mlog.FieldSegmentID(s.ID()),
+			mlog.FieldPartitionID(s.PartitionID()),
+			mlog.Uint64("timeTick", entry.GetTimeTick()),
+			mlog.Int("originalPKCount", originalPKCount),
+			mlog.Int("filteredPKCount", pks.Len()),
+		)
 		if err := s.segment.Delete(ctx, pks, timestamps); err != nil {
 			return err
 		}
