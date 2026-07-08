@@ -108,8 +108,8 @@ type HandlerClient interface {
 	// A consumer will not share stream connection with other consumers.
 	CreateConsumer(ctx context.Context, opts *ConsumerOptions) (Consumer, error)
 
-	// ReadTransformLog creates a local or remote transform log scanner.
-	ReadTransformLog(ctx context.Context, opts wal.TransformLogReadOption) wal.TransformLogScanner
+	// AcquireTransformLogStream creates a pchannel-level transform log event stream.
+	AcquireTransformLogStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error)
 
 	// QueryViewClient returns the QueryView domain client.
 	QueryViewClient() QueryViewClient
@@ -136,15 +136,14 @@ func NewHandlerClient(w types.AssignmentDiscoverWatcher) HandlerClient {
 	})
 	watcher := assignment.NewWatcher(rb.Resolver())
 	hc := &handlerClientImpl{
-		lifetime:              typeutil.NewLifetime(),
-		service:               lazygrpc.WithServiceCreator(conn, streamingpb.NewStreamingNodeHandlerServiceClient),
-		rb:                    rb,
-		watcher:               watcher,
-		rebalanceTrigger:      w,
-		newProducer:           producer.CreateProducer,
-		newConsumer:           consumer.CreateConsumer,
-		newTransformLogStream: transformlogclient.CreateStream,
-		transformStreams:      make(map[transformlogclient.StreamKey]*transformlogclient.Stream),
+		lifetime:                   typeutil.NewLifetime(),
+		service:                    lazygrpc.WithServiceCreator(conn, streamingpb.NewStreamingNodeHandlerServiceClient),
+		rb:                         rb,
+		watcher:                    watcher,
+		rebalanceTrigger:           w,
+		newProducer:                producer.CreateProducer,
+		newConsumer:                consumer.CreateConsumer,
+		newTransformLogEventStream: transformlogclient.CreateEventStream,
 	}
 	hc.queryViewClient = newQueryViewClient(hc, conn)
 	return hc

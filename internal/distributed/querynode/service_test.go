@@ -351,15 +351,15 @@ func (noopQNSegmentManager) AcquireSealedSegmentHandles(context.Context, qviews.
 	return nil, nil
 }
 
-func (noopQNSegmentManager) WaitTransformVisible(context.Context, qviews.QueryViewKey, *viewpb.QueryViewOfQueryNode, uint64) error {
+func (noopQNSegmentManager) WaitTransformVisible(context.Context, qviews.QueryViewKey, uint64) error {
 	return nil
 }
 
-func TestQueryViewTransformLogAccesserNilWhenWALNotReady(t *testing.T) {
+func TestQueryViewTransformLogStreamManagerNilWhenWALNotReady(t *testing.T) {
 	streaming.SetWALForTest(nil)
 	defer streaming.SetupNoopWALForTest()
 
-	assert.Nil(t, queryViewTransformLogAccesser())
+	assert.Nil(t, queryViewTransformLogStreamManager())
 }
 
 type fakeQueryViewMetadataMixCoordClient struct {

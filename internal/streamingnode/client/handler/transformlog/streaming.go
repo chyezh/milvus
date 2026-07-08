@@ -16,87 +16,57 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
 
-type StreamKey struct {
-	PChannel string
-	Term     int64
-	ServerID int64
-}
-
-func NewStreamKey(assignment *types.PChannelInfoAssigned) StreamKey {
-	return StreamKey{
-		PChannel: assignment.Channel.Name,
-		Term:     assignment.Channel.Term,
-		ServerID: assignment.Node.ServerID,
-	}
-}
-
-type StreamOptions struct {
+type EventStreamOptions struct {
 	Assignment *types.PChannelInfoAssigned
-	OnClose    func(StreamKey, *Stream)
 }
 
-func CreateStream(
+func CreateEventStream(
 	ctx context.Context,
-	opts *StreamOptions,
+	opts *EventStreamOptions,
 	handlerClient streamingpb.StreamingNodeHandlerServiceClient,
-) (*Stream, error) {
-	ctx = contextutil.WithCreateTransformStream(context.WithoutCancel(ctx), &streamingpb.CreateTransformStreamRequest{
+) (*EventStream, error) {
+	ctx = contextutil.WithCreateTransformStream(ctx, &streamingpb.CreateTransformStreamRequest{
 		Pchannel: types.NewProtoFromPChannelInfo(opts.Assignment.Channel),
 	})
 	streamClient, err := handlerClient.SubscribeTransform(ctx, grpc.MaxCallRecvMsgSize(math.MaxInt32))
 	if err != nil {
 		return nil, err
 	}
-	stream := &Stream{
-		key:           NewStreamKey(opts.Assignment),
+	stream := &EventStream{
 		stream:        streamClient,
-		onClose:       opts.OnClose,
-		subscriptions: make(map[int64]*remoteSubscription),
+		subscriptions: make(map[int64]*eventSubscription),
 		done:          make(chan struct{}),
 	}
 	go stream.recvLoop()
 	return stream, nil
 }
 
-type Stream struct {
-	key    StreamKey
+type EventStream struct {
 	stream streamingpb.StreamingNodeHandlerService_SubscribeTransformClient
 
 	sendMu     sync.Mutex
 	mu         sync.Mutex
 	nextID     int64
-	active     int
 	closing    bool
 	err        error
 	done       chan struct{}
 	closeOnce  sync.Once
 	finishOnce sync.Once
-	onClose    func(StreamKey, *Stream)
 
-	subscriptions map[int64]*remoteSubscription
+	subscriptions map[int64]*eventSubscription
 }
 
-func (s *Stream) Key() StreamKey {
-	return s.key
-}
-
-func (s *Stream) Done() <-chan struct{} {
+func (s *EventStream) Done() <-chan struct{} {
 	return s.done
 }
 
-func (s *Stream) Error() error {
+func (s *EventStream) Error() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.err
 }
 
-func (s *Stream) IsClosing() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.closing
-}
-
-func (s *Stream) Subscribe(ctx context.Context, opt wal.TransformLogReadOption) (wal.TransformLogScanner, error) {
+func (s *EventStream) Subscribe(ctx context.Context, opt wal.TransformLogSubscriptionOption) (wal.TransformLogSubscription, error) {
 	sub := s.newSubscription(opt)
 	if sub == nil {
 		if err := s.Error(); err != nil {
@@ -119,12 +89,12 @@ func (s *Stream) Subscribe(ctx context.Context, opt wal.TransformLogReadOption) 
 		return nil, err
 	}
 	select {
-	case <-sub.created:
+	case <-sub.ready:
 		if err := sub.Error(); err != nil {
 			return nil, err
 		}
 		return sub, nil
-	case <-sub.Done():
+	case <-sub.done:
 		return nil, sub.Error()
 	case <-ctx.Done():
 		_ = s.sendCloseSubscription(sub.subscriptionID)
@@ -134,7 +104,7 @@ func (s *Stream) Subscribe(ctx context.Context, opt wal.TransformLogReadOption) 
 	}
 }
 
-func (s *Stream) Close() error {
+func (s *EventStream) Close() error {
 	s.markClosing()
 	s.closeOnce.Do(func() {
 		_ = s.send(&streamingpb.TransformRequest{
@@ -148,7 +118,7 @@ func (s *Stream) Close() error {
 	return s.Error()
 }
 
-func (s *Stream) newSubscription(opt wal.TransformLogReadOption) *remoteSubscription {
+func (s *EventStream) newSubscription(opt wal.TransformLogSubscriptionOption) *eventSubscription {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	select {
@@ -159,39 +129,38 @@ func (s *Stream) newSubscription(opt wal.TransformLogReadOption) *remoteSubscrip
 	if s.closing {
 		return nil
 	}
+	if opt.Handler == nil {
+		return nil
+	}
 	s.nextID++
-	sub := newRemoteSubscription(s, s.nextID, opt)
+	sub := newEventSubscription(s, s.nextID, opt)
 	s.subscriptions[sub.subscriptionID] = sub
-	s.active++
 	return sub
 }
 
-func (s *Stream) markClosing() {
+func (s *EventStream) markClosing() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closing = true
 }
 
-func (s *Stream) getSubscription(subscriptionID int64) *remoteSubscription {
+func (s *EventStream) getSubscription(subscriptionID int64) *eventSubscription {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.subscriptions[subscriptionID]
 }
 
-func (s *Stream) removeSubscription(subscriptionID int64) {
+func (s *EventStream) removeSubscription(subscriptionID int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.subscriptions, subscriptionID)
 }
 
-func (s *Stream) onSubscriptionFinished(subscriptionID int64) {
+func (s *EventStream) onSubscriptionFinished(subscriptionID int64) {
 	shouldClose := false
 	s.mu.Lock()
 	delete(s.subscriptions, subscriptionID)
-	if s.active > 0 {
-		s.active--
-	}
-	if s.active == 0 {
+	if len(s.subscriptions) == 0 {
 		select {
 		case <-s.done:
 		default:
@@ -207,7 +176,7 @@ func (s *Stream) onSubscriptionFinished(subscriptionID int64) {
 	}
 }
 
-func (s *Stream) sendCloseSubscription(subscriptionID int64) error {
+func (s *EventStream) sendCloseSubscription(subscriptionID int64) error {
 	return s.send(&streamingpb.TransformRequest{
 		Request: &streamingpb.TransformRequest_CloseSubscription{
 			CloseSubscription: &streamingpb.CloseTransformSubscriptionRequest{SubscriptionId: subscriptionID},
@@ -215,7 +184,7 @@ func (s *Stream) sendCloseSubscription(subscriptionID int64) error {
 	})
 }
 
-func (s *Stream) send(req *streamingpb.TransformRequest) error {
+func (s *EventStream) send(req *streamingpb.TransformRequest) error {
 	select {
 	case <-s.done:
 		if err := s.Error(); err != nil {
@@ -229,7 +198,7 @@ func (s *Stream) send(req *streamingpb.TransformRequest) error {
 	return s.stream.Send(req)
 }
 
-func (s *Stream) recvLoop() {
+func (s *EventStream) recvLoop() {
 	var err error
 	defer func() {
 		if errors.Is(err, io.EOF) {
@@ -261,16 +230,16 @@ func (s *Stream) recvLoop() {
 	}
 }
 
-func (s *Stream) handleCreate(resp *streamingpb.CreateTransformSubscriptionResponse) {
+func (s *EventStream) handleCreate(resp *streamingpb.CreateTransformSubscriptionResponse) {
 	if resp == nil {
 		return
 	}
 	if sub := s.getSubscription(resp.GetSubscriptionId()); sub != nil {
-		sub.markCreated(nil)
+		sub.markReady(nil)
 	}
 }
 
-func (s *Stream) handleMessageBatch(resp *streamingpb.TransformMessageBatch) {
+func (s *EventStream) handleMessageBatch(resp *streamingpb.TransformMessageBatch) {
 	if resp == nil {
 		return
 	}
@@ -279,22 +248,37 @@ func (s *Stream) handleMessageBatch(resp *streamingpb.TransformMessageBatch) {
 		return
 	}
 	for _, entry := range resp.GetEntries() {
-		sub.sendEvent(wal.TransformLogEvent{Entry: entry})
+		if err := sub.handle(wal.TransformLogStreamEvent{
+			SubscriptionID: resp.GetSubscriptionId(),
+			VChannel:       resp.GetVchannel(),
+			Entry:          entry,
+		}); err != nil {
+			s.removeSubscription(resp.GetSubscriptionId())
+			sub.finish(err)
+			return
+		}
 	}
 }
 
-func (s *Stream) handleCaughtUp(resp *streamingpb.TransformSubscriptionCaughtUp) {
+func (s *EventStream) handleCaughtUp(resp *streamingpb.TransformSubscriptionCaughtUp) {
 	if resp == nil {
 		return
 	}
-	if sub := s.getSubscription(resp.GetSubscriptionId()); sub != nil {
-		sub.sendEvent(wal.TransformLogEvent{
-			CaughtUp: &wal.TransformLogCaughtUp{StartAfterTimeTick: resp.GetStartAfterTimeTick()},
-		})
+	sub := s.getSubscription(resp.GetSubscriptionId())
+	if sub == nil {
+		return
+	}
+	if err := sub.handle(wal.TransformLogStreamEvent{
+		SubscriptionID: resp.GetSubscriptionId(),
+		VChannel:       resp.GetVchannel(),
+		CaughtUp:       &wal.TransformLogCaughtUp{StartAfterTimeTick: resp.GetStartAfterTimeTick()},
+	}); err != nil {
+		s.removeSubscription(resp.GetSubscriptionId())
+		sub.finish(err)
 	}
 }
 
-func (s *Stream) handleSubscriptionError(resp *streamingpb.TransformSubscriptionError) {
+func (s *EventStream) handleSubscriptionError(resp *streamingpb.TransformSubscriptionError) {
 	if resp == nil {
 		return
 	}
@@ -307,10 +291,15 @@ func (s *Stream) handleSubscriptionError(resp *streamingpb.TransformSubscription
 		err = status.AsStreamingError((*status.StreamingError)(resp.GetError()))
 	}
 	s.removeSubscription(resp.GetSubscriptionId())
+	_ = sub.handle(wal.TransformLogStreamEvent{
+		SubscriptionID: resp.GetSubscriptionId(),
+		VChannel:       resp.GetVchannel(),
+		Err:            err,
+	})
 	sub.finish(err)
 }
 
-func (s *Stream) handleCloseSubscription(resp *streamingpb.CloseTransformSubscriptionResponse) {
+func (s *EventStream) handleCloseSubscription(resp *streamingpb.CloseTransformSubscriptionResponse) {
 	if resp == nil {
 		return
 	}
@@ -319,137 +308,28 @@ func (s *Stream) handleCloseSubscription(resp *streamingpb.CloseTransformSubscri
 		return
 	}
 	s.removeSubscription(resp.GetSubscriptionId())
-	sub.markCloseAck(nil)
 	sub.finish(nil)
 }
 
-func (s *Stream) finish(err error) {
+func (s *EventStream) finish(err error) {
 	s.finishOnce.Do(func() {
 		s.mu.Lock()
 		s.err = err
 		s.closing = true
-		s.active = 0
 		subscriptions := s.subscriptions
-		s.subscriptions = make(map[int64]*remoteSubscription)
+		s.subscriptions = make(map[int64]*eventSubscription)
 		close(s.done)
 		s.mu.Unlock()
 		for _, sub := range subscriptions {
+			if err != nil {
+				_ = sub.handle(wal.TransformLogStreamEvent{
+					SubscriptionID: sub.ID(),
+					VChannel:       sub.VChannel(),
+					Err:            err,
+				})
+			}
 			sub.finish(err)
 		}
 		_ = s.stream.CloseSend()
-		if s.onClose != nil {
-			s.onClose(s.key, s)
-		}
 	})
-}
-
-type remoteSubscription struct {
-	stream         *Stream
-	name           string
-	subscriptionID int64
-	vchannel       string
-	ch             chan wal.TransformLogEvent
-	done           chan struct{}
-	created        chan struct{}
-	closeAck       chan struct{}
-
-	errMu        sync.Mutex
-	err          error
-	createdOnce  sync.Once
-	closeAckOnce sync.Once
-	closeOnce    sync.Once
-	finishOnce   sync.Once
-}
-
-func newRemoteSubscription(stream *Stream, subscriptionID int64, opt wal.TransformLogReadOption) *remoteSubscription {
-	return &remoteSubscription{
-		stream:         stream,
-		name:           opt.Name,
-		subscriptionID: subscriptionID,
-		vchannel:       opt.VChannel,
-		ch:             make(chan wal.TransformLogEvent, 16),
-		done:           make(chan struct{}),
-		created:        make(chan struct{}),
-		closeAck:       make(chan struct{}),
-	}
-}
-
-func (s *remoteSubscription) Name() string {
-	return s.name
-}
-
-func (s *remoteSubscription) Chan() <-chan wal.TransformLogEvent {
-	return s.ch
-}
-
-func (s *remoteSubscription) Error() error {
-	s.errMu.Lock()
-	defer s.errMu.Unlock()
-	return s.err
-}
-
-func (s *remoteSubscription) Done() <-chan struct{} {
-	return s.done
-}
-
-func (s *remoteSubscription) Close() error {
-	s.closeOnce.Do(func() {
-		select {
-		case <-s.done:
-			return
-		default:
-		}
-		if err := s.stream.sendCloseSubscription(s.subscriptionID); err != nil {
-			s.stream.removeSubscription(s.subscriptionID)
-			s.finish(err)
-		}
-	})
-	<-s.done
-	return s.Error()
-}
-
-func (s *remoteSubscription) sendEvent(event wal.TransformLogEvent) {
-	select {
-	case s.ch <- event:
-	case <-s.done:
-	}
-}
-
-func (s *remoteSubscription) markCreated(err error) {
-	if err != nil {
-		s.setError(err)
-	}
-	s.createdOnce.Do(func() {
-		close(s.created)
-	})
-}
-
-func (s *remoteSubscription) markCloseAck(err error) {
-	if err != nil {
-		s.setError(err)
-	}
-	s.closeAckOnce.Do(func() {
-		close(s.closeAck)
-	})
-}
-
-func (s *remoteSubscription) finish(err error) {
-	s.finishOnce.Do(func() {
-		if err != nil {
-			s.setError(err)
-		}
-		s.markCreated(err)
-		s.markCloseAck(err)
-		close(s.done)
-		close(s.ch)
-		s.stream.onSubscriptionFinished(s.subscriptionID)
-	})
-}
-
-func (s *remoteSubscription) setError(err error) {
-	s.errMu.Lock()
-	defer s.errMu.Unlock()
-	if s.err == nil {
-		s.err = err
-	}
 }

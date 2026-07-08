@@ -10,7 +10,6 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
@@ -22,7 +21,6 @@ import (
 	"github.com/milvus-io/milvus/internal/mocks/util/streamingutil/service/mock_resolver"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/consumer"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/producer"
-	transformlogclient "github.com/milvus-io/milvus/internal/streamingnode/client/handler/transformlog"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v3/mocks/proto/mock_streamingpb"
@@ -157,36 +155,6 @@ func TestHandlerClient(t *testing.T) {
 	assert.Nil(t, consumer)
 
 	handler.GetLatestMVCCTimestampIfLocal(ctx, "pchannel")
-}
-
-func TestHandlerClientGetOrCreateTransformLogStreamReusesAssignmentStream(t *testing.T) {
-	assignment := &types.PChannelInfoAssigned{
-		Channel: types.PChannelInfo{Name: "pchannel", Term: 1},
-		Node:    types.StreamingNodeInfo{ServerID: 1, Address: "localhost"},
-	}
-	handlerServiceClient := mock_streamingpb.NewMockStreamingNodeHandlerServiceClient(t)
-	fakeStream := newHandlerFakeSubscribeTransformClient(context.Background())
-	handlerServiceClient.EXPECT().SubscribeTransform(mock.Anything, mock.Anything).Return(fakeStream, nil).Once()
-
-	createCount := 0
-	handler := &handlerClientImpl{
-		newTransformLogStream: func(ctx context.Context, opts *transformlogclient.StreamOptions, handlerClient streamingpb.StreamingNodeHandlerServiceClient) (*transformlogclient.Stream, error) {
-			createCount++
-			return transformlogclient.CreateStream(ctx, opts, handlerClient)
-		},
-	}
-	stream1, err := handler.getOrCreateTransformLogStream(context.Background(), assignment, handlerServiceClient)
-	require.NoError(t, err)
-	stream2, err := handler.getOrCreateTransformLogStream(context.Background(), assignment, handlerServiceClient)
-	require.NoError(t, err)
-	require.Same(t, stream1, stream2)
-	require.Equal(t, 1, createCount)
-	_ = stream1.Close()
-	require.Eventually(t, func() bool {
-		handler.transformStreamMu.Lock()
-		defer handler.transformStreamMu.Unlock()
-		return len(handler.transformStreams) == 0
-	}, time.Second, 10*time.Millisecond)
 }
 
 func TestHandlerClient_GetSalvageCheckpoint(t *testing.T) {

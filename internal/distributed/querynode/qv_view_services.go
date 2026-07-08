@@ -23,7 +23,7 @@ func (s *Server) registerQueryViewServers() {
 			}
 			return qnImpl.NewQueryViewSegmentManager(
 				&lazyQueryViewLoadMetadataProvider{mixCoord: s.mixCoord},
-				queryViewTransformLogAccesser(),
+				queryViewTransformLogStreamManager(),
 			)
 		},
 	}, paramtable.GetNodeID())

@@ -16,27 +16,35 @@ import (
 // QueryView-ready segments by registering them with the TransformLogBuffer and
 // waiting for catch-up.
 type QueryViewSegmentReadinessManager struct {
-	physical    PhysicalSegmentManager
-	buffer      TransformLogBuffer
-	collections QueryViewCollectionRuntimeManager
+	physical     PhysicalSegmentManager
+	buffer       TransformLogBuffer
+	collections  QueryViewCollectionRuntimeManager
+	catchupTasks chan TransformSegment
 
 	mu       sync.Mutex
 	views    map[qviews.QueryViewKey]*transformViewRef
 	segments map[int64]*transformSegmentState
 }
 
+const transformCatchupWorkerCount = 4
+
 func NewQueryViewSegmentReadinessManager(physical PhysicalSegmentManager, buffer TransformLogBuffer, collections ...QueryViewCollectionRuntimeManager) *QueryViewSegmentReadinessManager {
 	var collectionManager QueryViewCollectionRuntimeManager
 	if len(collections) > 0 {
 		collectionManager = collections[0]
 	}
-	return &QueryViewSegmentReadinessManager{
-		physical:    physical,
-		buffer:      buffer,
-		collections: collectionManager,
-		views:       make(map[qviews.QueryViewKey]*transformViewRef),
-		segments:    make(map[int64]*transformSegmentState),
+	m := &QueryViewSegmentReadinessManager{
+		physical:     physical,
+		buffer:       buffer,
+		collections:  collectionManager,
+		catchupTasks: make(chan TransformSegment, 1024),
+		views:        make(map[qviews.QueryViewKey]*transformViewRef),
+		segments:     make(map[int64]*transformSegmentState),
 	}
+	for i := 0; i < transformCatchupWorkerCount; i++ {
+		go m.catchupWorker()
+	}
+	return m
 }
 
 func (m *QueryViewSegmentReadinessManager) Acquire(req AcquireSegments) {
@@ -199,10 +207,20 @@ func (m *QueryViewSegmentReadinessManager) onPhysicalLoaded(segments []Transform
 			continue
 		}
 		if m.markPhysicalLoaded(segment) {
-			go m.registerAndCatchup(segment)
+			m.scheduleCatchup(segment)
 		} else {
 			_ = segment.Release(context.Background())
 		}
+	}
+}
+
+func (m *QueryViewSegmentReadinessManager) scheduleCatchup(segment TransformSegment) {
+	m.catchupTasks <- segment
+}
+
+func (m *QueryViewSegmentReadinessManager) catchupWorker() {
+	for segment := range m.catchupTasks {
+		m.registerAndCatchup(segment)
 	}
 }
 

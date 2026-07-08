@@ -43,6 +43,43 @@ type TransformLogCaughtUp struct {
 	StartAfterTimeTick uint64
 }
 
+type TransformLogStreamManager interface {
+	AcquireStream(ctx context.Context, pchannel string) (TransformLogStream, error)
+}
+
+type TransformLogStream interface {
+	Subscribe(ctx context.Context, opt TransformLogSubscriptionOption) (TransformLogSubscription, error)
+	Done() <-chan struct{}
+	Error() error
+	Close() error
+}
+
+type TransformLogSubscriptionOption struct {
+	VChannel           string
+	StartAfterTimeTick uint64
+	EndTimeTick        uint64
+	Handler            TransformLogEventHandler
+}
+
+type TransformLogEventHandler interface {
+	Handle(event TransformLogStreamEvent) error
+	Close()
+}
+
+type TransformLogSubscription interface {
+	ID() int64
+	VChannel() string
+	Close() error
+}
+
+type TransformLogStreamEvent struct {
+	SubscriptionID int64
+	VChannel       string
+	Entry          *streamingpb.TransformLogEntry
+	CaughtUp       *TransformLogCaughtUp
+	Err            error
+}
+
 type transformLogErrorAccesser struct {
 	err error
 }

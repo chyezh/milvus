@@ -85,12 +85,12 @@ func (m *lazyQNSegmentManager) AcquireSealedSegmentHandles(ctx context.Context, 
 	return manager.AcquireSealedSegmentHandles(ctx, key, view)
 }
 
-func (m *lazyQNSegmentManager) WaitTransformVisible(ctx context.Context, key qviews.QueryViewKey, view *viewpb.QueryViewOfQueryNode, timetick uint64) error {
+func (m *lazyQNSegmentManager) WaitTransformVisible(ctx context.Context, key qviews.QueryViewKey, timetick uint64) error {
 	manager := m.get()
 	if manager == nil {
 		return merr.WrapErrServiceUnavailable("query view segment manager is not initialized")
 	}
-	return manager.WaitTransformVisible(ctx, key, view, timetick)
+	return manager.WaitTransformVisible(ctx, key, timetick)
 }
 
 func (m *lazyQNSegmentManager) get() qnview.SegmentManager {
@@ -102,12 +102,12 @@ func (m *lazyQNSegmentManager) get() qnview.SegmentManager {
 	return m.manager
 }
 
-func queryViewTransformLogAccesser() wal.TransformLogAccesser {
-	wal := streaming.WAL()
-	if wal == nil {
+func queryViewTransformLogStreamManager() wal.TransformLogStreamManager {
+	walAccesser := streaming.WAL()
+	if walAccesser == nil {
 		return nil
 	}
-	return wal.TransformLog()
+	return walAccesser.TransformLogStreamManager()
 }
 
 type lazyQueryViewLoadMetadataProvider struct {
