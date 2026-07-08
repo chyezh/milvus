@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus/internal/metastore"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick/mvcc"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
@@ -82,6 +83,8 @@ func newQueryPlanTestView(state viewpb.QueryViewState) qviews.QueryViewAtWorkNod
 
 func newQueryPlanTestWALAdaptor(t *testing.T) *walAdaptorImpl {
 	t.Helper()
+
+	resource.InitForTest(t)
 
 	resMgr := &queryPlanTestResourceManager{}
 	queryViewHandler := snview.RecoverPChannelSNQueryViewHandler(
