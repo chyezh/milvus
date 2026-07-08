@@ -14,6 +14,7 @@ import (
 
 type TransformLog interface {
 	Append(message.ImmutableMessage, AppendOption) AppendResult
+	AppendBarrier(uint64) AppendResult
 	Flush(context.Context, FlushOption) (FlushResult, error)
 	Materialize(context.Context, MaterializeOption) (MaterializeResult, error)
 	Read(context.Context, wal.TransformLogReadOption) wal.TransformLogScanner
@@ -142,6 +143,20 @@ func (t *transformLog) Append(msg message.ImmutableMessage, opt AppendOption) Ap
 	if !t.buffer.Append(msg, opt) {
 		return AppendResult{DataTimeTick: t.buffer.DataTimeTick()}
 	}
+	return AppendResult{
+		Appended:     true,
+		ShouldFlush:  t.buffer.ShouldFlush(),
+		DataTimeTick: t.buffer.DataTimeTick(),
+	}
+}
+
+func (t *transformLog) AppendBarrier(timeTick uint64) AppendResult {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if timeTick <= t.meta.GetCheckpointTimeTick() || timeTick <= t.buffer.DataTimeTick() {
+		return AppendResult{DataTimeTick: t.buffer.DataTimeTick()}
+	}
+	t.buffer.AppendEntry(transformBarrierEntry(timeTick))
 	return AppendResult{
 		Appended:     true,
 		ShouldFlush:  t.buffer.ShouldFlush(),
@@ -458,6 +473,9 @@ func (t *transformLog) prepareMaterializeLocked(targetTimeTick uint64) materiali
 			if entry.GetTimeTick() > targetTimeTick {
 				return work
 			}
+			if !isTransformDeleteEntry(entry) {
+				continue
+			}
 			work.Entries = append(work.Entries, cloneTransformLogEntry(entry))
 			work.Rows += transformLogEntryRows(entry)
 			work.Bytes += uint64(proto.Size(entry))
@@ -477,6 +495,9 @@ func (t *transformLog) pendingMaterializeStatsLocked(targetTimeTick uint64) (uin
 			}
 			if entry.GetTimeTick() > targetTimeTick {
 				return rows, bytes
+			}
+			if !isTransformDeleteEntry(entry) {
+				continue
 			}
 			rows += transformLogEntryRows(entry)
 			bytes += uint64(proto.Size(entry))
@@ -589,4 +610,11 @@ func maxTimeTick(left uint64, right uint64) uint64 {
 		return left
 	}
 	return right
+}
+
+func isTransformDeleteEntry(entry *streamingpb.TransformLogEntry) bool {
+	if entry == nil {
+		return false
+	}
+	return entry.GetDelete() != nil
 }

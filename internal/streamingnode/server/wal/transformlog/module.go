@@ -92,11 +92,13 @@ func (m *Module) Name() moduleapi.ModuleName {
 func (m *Module) ObserveMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
 	switch msg.MessageType() {
 	case message.MessageTypeCreateCollection:
-		m.observeCreateCollectionMessage(msg)
+		return m.observeCreateCollectionMessage(msg)
 	case message.MessageTypeDelete:
 		return m.observeTransformLogMessage(msg)
 	case message.MessageTypeTxn:
 		return m.observeTransformLogMessage(msg)
+	case message.MessageTypeRecoveryBarrier:
+		return m.flushAllByMessageTimeTick(msg.TimeTick(), msg.MessageType())
 	case message.MessageTypeDropCollection,
 		message.MessageTypeFlushAll:
 		return m.materializeByMessageTimeTick(msg.TimeTick(), msg.VChannel(), msg.MessageType())
@@ -199,11 +201,23 @@ func (m *Module) DataFrontier(scope moduleapi.Scope) walcheckpoint.Barrier {
 	}
 }
 
-func (m *Module) observeCreateCollectionMessage(msg message.ImmutableMessage) {
+func (m *Module) observeCreateCollectionMessage(msg message.ImmutableMessage) moduleapi.ObserveResult {
 	if msg.VChannel() == "" {
-		return
+		return moduleapi.ObserveResult{}
 	}
-	m.getOrCreateLog(msg.VChannel())
+	log := m.getOrCreateLog(msg.VChannel())
+	if m.currentMode() != moduleModeMetaAndData {
+		return moduleapi.ObserveResult{}
+	}
+	if msg.TimeTick() <= log.log.DataCheckpointTimeTick() {
+		return moduleapi.ObserveResult{}
+	}
+	appendResult := log.log.Append(msg, AppendOption{})
+	if !appendResult.Appended {
+		return moduleapi.ObserveResult{}
+	}
+	m.submitFlushTask(log, msg.VChannel(), appendResult.DataTimeTick)
+	return moduleapi.ObserveResult{Data: log.dataBarrier()}
 }
 
 func (m *Module) observeTransformLogMessage(msg message.ImmutableMessage) moduleapi.ObserveResult {
@@ -218,7 +232,7 @@ func (m *Module) observeTransformLogMessage(msg message.ImmutableMessage) module
 	if !appendResult.Appended {
 		return moduleapi.ObserveResult{}
 	}
-	if appendResult.ShouldFlush {
+	if appendResult.ShouldFlush || isTransformBarrierMessage(msg) {
 		m.submitFlushTask(log, msg.VChannel(), appendResult.DataTimeTick)
 	}
 	return moduleapi.ObserveResult{Data: log.dataBarrier()}
@@ -229,16 +243,14 @@ func (m *Module) materializeByMessageTimeTick(timetick uint64, vchannel string, 
 		return moduleapi.ObserveResult{}
 	}
 	if msgType == message.MessageTypeFlushAll {
-		result := moduleapi.ObserveResult{}
-		for name, log := range m.snapshotLogs() {
-			result.Data = composeBarrier(result.Data, m.materializeLog(name, log, timetick))
-		}
-		return result
+		return m.materializeAllByMessageTimeTick(timetick, msgType)
 	}
 	if vchannel == "" {
 		return moduleapi.ObserveResult{}
 	}
-	return moduleapi.ObserveResult{Data: m.materializeLog(vchannel, m.getLog(vchannel), timetick)}
+	log := m.getOrCreateLog(vchannel)
+	dataBarrier := m.appendBarrierToLog(log, timetick)
+	return moduleapi.ObserveResult{Data: composeBarrier(dataBarrier, m.materializeLog(vchannel, log, timetick))}
 }
 
 func (m *Module) flushByMessageTimeTick(timetick uint64, vchannel string, msgType message.MessageType) moduleapi.ObserveResult {
@@ -246,16 +258,65 @@ func (m *Module) flushByMessageTimeTick(timetick uint64, vchannel string, msgTyp
 		return moduleapi.ObserveResult{}
 	}
 	if msgType == message.MessageTypeFlushAll || msgType == message.MessageTypeAlterWAL {
-		result := moduleapi.ObserveResult{}
-		for name, log := range m.snapshotLogs() {
-			result.Data = composeBarrier(result.Data, m.flushLog(name, log, timetick))
-		}
-		return result
+		return m.flushAllByMessageTimeTick(timetick, msgType)
 	}
 	if vchannel == "" {
 		return moduleapi.ObserveResult{}
 	}
-	return moduleapi.ObserveResult{Data: m.flushLog(vchannel, m.getLog(vchannel), timetick)}
+	log := m.getOrCreateLog(vchannel)
+	dataBarrier := m.appendBarrierToLog(log, timetick)
+	return moduleapi.ObserveResult{Data: composeBarrier(dataBarrier, m.flushLog(vchannel, log, timetick))}
+}
+
+func (m *Module) flushAllByMessageTimeTick(timetick uint64, msgType message.MessageType) moduleapi.ObserveResult {
+	result := moduleapi.ObserveResult{}
+	for name, log := range m.snapshotLogs() {
+		result.Data = composeBarrier(result.Data, m.appendBarrierToLog(log, timetick))
+		result.Data = composeBarrier(result.Data, m.flushLog(name, log, timetick))
+	}
+	return result
+}
+
+func (m *Module) materializeAllByMessageTimeTick(timetick uint64, msgType message.MessageType) moduleapi.ObserveResult {
+	result := moduleapi.ObserveResult{}
+	for name, log := range m.snapshotLogs() {
+		result.Data = composeBarrier(result.Data, m.appendBarrierToLog(log, timetick))
+		result.Data = composeBarrier(result.Data, m.materializeLog(name, log, timetick))
+	}
+	return result
+}
+
+func (m *Module) appendBarrierToLog(log *moduleLog, timetick uint64) walcheckpoint.Barrier {
+	if log == nil {
+		return nil
+	}
+	if timetick <= log.log.DataCheckpointTimeTick() {
+		return nil
+	}
+	if !log.log.AppendBarrier(timetick).Appended {
+		return nil
+	}
+	return log.dataBarrier()
+}
+
+func isTransformBarrierMessage(msg message.ImmutableMessage) bool {
+	switch msg.MessageType() {
+	case message.MessageTypeCreateCollection,
+		message.MessageTypeRecoveryBarrier,
+		message.MessageTypeFlush,
+		message.MessageTypeManualFlush,
+		message.MessageTypeFlushAll,
+		message.MessageTypeDropPartition,
+		message.MessageTypeDropCollection,
+		message.MessageTypeTruncateCollection,
+		message.MessageTypeAlterWAL:
+		return true
+	case message.MessageTypeAlterCollection:
+		alter := message.MustAsImmutableAlterCollectionMessageV2(msg)
+		return messageutil.IsSchemaChange(alter.Header())
+	default:
+		return false
+	}
 }
 
 func (m *Module) flushLog(vchannel string, log *moduleLog, timetick uint64) walcheckpoint.Barrier {

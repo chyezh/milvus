@@ -141,7 +141,7 @@ func (m *ViewScopedPhysicalSegmentManager) submitSegmentLoad(ctx context.Context
 		Meta:                        proto.Clone(req.Meta).(*viewpb.QueryViewMeta),
 		SegmentID:                   segmentID,
 		Collection:                  req.Collection,
-		TransformStartAfterTimeTick: req.Meta.GetDeleteApplyStartAfterTimetick(),
+		TransformStartAfterTimeTick: req.Meta.GetTransformStartAfterTimetick(),
 		OnLoaded: func(segment TransformSegment) {
 			defer loadWG.Done()
 			if segment == nil {

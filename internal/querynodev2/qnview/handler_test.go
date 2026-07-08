@@ -32,7 +32,6 @@ type mockSegmentManager struct {
 	queryView       *viewpb.QueryViewOfQueryNode
 	beforeQuery     func()
 	waitKey         qviews.QueryViewKey
-	waitView        *viewpb.QueryViewOfQueryNode
 	waitTimetick    uint64
 	waitErr         error
 	waitCalled      bool
@@ -73,12 +72,11 @@ func (m *mockSegmentManager) AcquireSealedSegmentHandles(_ context.Context, key 
 	return append([]SealedSegmentHandle(nil), m.queryHandles...), nil
 }
 
-func (m *mockSegmentManager) WaitTransformVisible(_ context.Context, key qviews.QueryViewKey, view *viewpb.QueryViewOfQueryNode, timetick uint64) error {
+func (m *mockSegmentManager) WaitTransformVisible(_ context.Context, key qviews.QueryViewKey, timetick uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.waitCalled = true
 	m.waitKey = key
-	m.waitView = proto.Clone(view).(*viewpb.QueryViewOfQueryNode)
 	m.waitTimetick = timetick
 	return m.waitErr
 }

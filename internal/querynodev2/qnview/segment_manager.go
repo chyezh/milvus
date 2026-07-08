@@ -76,7 +76,7 @@ type SegmentManager interface {
 	// sealed segments that already reached QueryView transform readiness.
 	AcquireSealedSegmentHandles(ctx context.Context, key qviews.QueryViewKey, view *viewpb.QueryViewOfQueryNode) ([]SealedSegmentHandle, error)
 
-	// WaitTransformVisible waits until all selected sealed segments can serve
-	// the QueryPlan transforming timetick boundary.
-	WaitTransformVisible(ctx context.Context, key qviews.QueryViewKey, view *viewpb.QueryViewOfQueryNode, timetick uint64) error
+	// WaitTransformVisible waits until the view-scoped TransformLogBuffer can
+	// serve the QueryPlan transforming timetick boundary.
+	WaitTransformVisible(ctx context.Context, key qviews.QueryViewKey, timetick uint64) error
 }

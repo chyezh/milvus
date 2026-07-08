@@ -43,9 +43,9 @@ message DataViewOfCollection {
 message DataViewOfShard {
     string vchannel = 1;
     repeated DataViewOfPartition partitions = 2;
-    // Delete data with timetick > this value needs to be applied to segments in this shard.
-    // Used by streaming nodes to determine when older delete data can be safely evicted.
-    uint64 delete_apply_start_after_timetick = 3;
+    // TransformLog entries with timetick > this value need to be consumed for this shard.
+    // Used by streaming nodes to determine when older transform data can be safely evicted.
+    uint64 transform_start_after_timetick = 3;
 }
 
 // DataViewOfPartition represents the storage view of a single partition within a shard.
@@ -112,8 +112,8 @@ message QueryViewMeta {
     QueryViewState state = 5;
     QueryViewSettings settings = 6;
     // Inherited from DataViewOfShard at the time this query view was created.
-    // Delete data with timetick > this value needs to be applied to segments in this shard.
-    uint64 delete_apply_start_after_timetick = 7;
+    // TransformLog entries with timetick > this value need to be consumed for this shard.
+    uint64 transform_start_after_timetick = 7;
 }
 
 // QueryViewSettings contains the load configuration for a query view.
@@ -215,8 +215,8 @@ message SyncDataViewRequest {
 // for delete data eviction, avoiding the overhead of full DataViewOfShard.
 message DataViewShardTimeTick {
     string vchannel = 1;
-    // Delete data with timetick > this value needs to be applied to segments in this shard.
-    uint64 delete_apply_start_after_timetick = 2;
+    // TransformLog entries with timetick > this value need to be consumed for this shard.
+    uint64 transform_start_after_timetick = 2;
 }
 
 // SyncDataViewResponse is the acknowledgement of the data view sync.

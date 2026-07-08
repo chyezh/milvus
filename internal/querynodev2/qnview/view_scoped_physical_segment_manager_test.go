@@ -17,7 +17,7 @@ import (
 
 func TestViewScopedPhysicalSegmentManager_SubmitsSegmentLoadTasks(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
-	meta.DeleteApplyStartAfterTimetick = 99
+	meta.TransformStartAfterTimetick = 99
 	view := &viewpb.QueryViewOfQueryNode{
 		NodeId:     1,
 		Partitions: []*viewpb.QueryViewOfPartition{{PartitionId: 10, SegmentIds: []int64{1000, 1001}}},

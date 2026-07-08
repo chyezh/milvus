@@ -88,9 +88,11 @@ type fakeSegment struct {
 	partitionID int64
 	startAfter  uint64
 
-	mu      sync.Mutex
-	applied []uint64
-	err     error
+	mu           sync.Mutex
+	applied      []uint64
+	err          error
+	applyStarted chan struct{}
+	applyBlock   chan struct{}
 }
 
 func (s *fakeSegment) ID() int64 {
@@ -112,6 +114,15 @@ func (s *fakeSegment) TransformStartAfterTimeTick() uint64 {
 func (s *fakeSegment) ApplyTransform(_ context.Context, entry *streamingpb.TransformLogEntry) error {
 	if s.err != nil {
 		return s.err
+	}
+	if s.applyStarted != nil {
+		select {
+		case s.applyStarted <- struct{}{}:
+		default:
+		}
+	}
+	if s.applyBlock != nil {
+		<-s.applyBlock
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -202,6 +213,104 @@ func TestBufferRegistrationKeepsApplyingLiveEntriesAfterCaughtUp(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+func TestGuardWaitTransformVisibleUsesVChannelFrontier(t *testing.T) {
+	accesser := &fakeAccesser{}
+	buffer := New(accesser)
+	guard, err := buffer.Acquire(context.Background(), newTestQueryView("v1", 50))
+	require.NoError(t, err)
+	defer guard.Release()
+
+	require.NoError(t, guard.WaitTransformVisible(context.Background(), 50))
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- guard.WaitTransformVisible(context.Background(), 70)
+	}()
+
+	select {
+	case err := <-waitDone:
+		t.Fatalf("wait finished before target frontier: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	scanner := accesser.firstScanner()
+	scanner.ch <- wal.TransformLogEvent{Entry: &streamingpb.TransformLogEntry{TimeTick: 60}}
+	select {
+	case err := <-waitDone:
+		t.Fatalf("wait finished at lower frontier: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	scanner.ch <- wal.TransformLogEvent{Entry: &streamingpb.TransformLogEntry{TimeTick: 70}}
+	require.NoError(t, <-waitDone)
+}
+
+func TestGuardWaitTransformVisibleWaitsForLiveApply(t *testing.T) {
+	accesser := &fakeAccesser{}
+	buffer := New(accesser)
+	guard, err := buffer.Acquire(context.Background(), newTestQueryView("v1", 50))
+	require.NoError(t, err)
+	defer guard.Release()
+
+	segment := &fakeSegment{
+		id:           10,
+		vchannel:     "v1",
+		startAfter:   50,
+		applyStarted: make(chan struct{}, 1),
+		applyBlock:   make(chan struct{}),
+	}
+	reg, err := buffer.RegisterSegment(context.Background(), segment)
+	require.NoError(t, err)
+	defer reg.Unregister()
+
+	scanner := accesser.firstScanner()
+	scanner.ch <- wal.TransformLogEvent{CaughtUp: &wal.TransformLogCaughtUp{StartAfterTimeTick: 50}}
+	require.NoError(t, reg.WaitCatchup(context.Background()))
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- guard.WaitTransformVisible(context.Background(), 60)
+	}()
+
+	scanner.ch <- wal.TransformLogEvent{Entry: &streamingpb.TransformLogEntry{TimeTick: 60}}
+	require.Eventually(t, func() bool {
+		select {
+		case <-segment.applyStarted:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	select {
+	case err := <-waitDone:
+		t.Fatalf("wait finished before live apply completed: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(segment.applyBlock)
+	require.NoError(t, <-waitDone)
+	assert.Equal(t, []uint64{60}, segment.appliedTicks())
+}
+
+func TestGuardWaitTransformVisibleReturnsScannerError(t *testing.T) {
+	accesser := &fakeAccesser{}
+	buffer := New(accesser)
+	guard, err := buffer.Acquire(context.Background(), newTestQueryView("v1", 50))
+	require.NoError(t, err)
+	defer guard.Release()
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- guard.WaitTransformVisible(context.Background(), 70)
+	}()
+
+	scanner := accesser.firstScanner()
+	scanner.err = errors.New("transform log truncated")
+	_ = scanner.Close()
+
+	require.ErrorContains(t, <-waitDone, "transform log truncated")
+}
+
 func TestBufferRegisterSegmentFailsWhenScannerFailsBeforeCaughtUp(t *testing.T) {
 	accesser := &fakeAccesser{}
 	buffer := New(accesser)
@@ -219,8 +328,8 @@ func TestBufferRegisterSegmentFailsWhenScannerFailsBeforeCaughtUp(t *testing.T) 
 func newTestQueryView(vchannel string, startAfter uint64) *qviews.QueryViewAtQueryNode {
 	return qviews.NewQueryViewAtQueryNode(
 		&viewpb.QueryViewMeta{
-			Vchannel:                      vchannel,
-			DeleteApplyStartAfterTimetick: startAfter,
+			Vchannel:                    vchannel,
+			TransformStartAfterTimetick: startAfter,
 		},
 		&viewpb.QueryViewOfQueryNode{NodeId: 1},
 	).(*qviews.QueryViewAtQueryNode)

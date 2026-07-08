@@ -32,7 +32,7 @@ func (b *Buffer) Acquire(ctx context.Context, view *qviews.QueryViewAtQueryNode)
 	}
 	meta := view.IntoProto().GetMeta()
 	vchannel := meta.GetVchannel()
-	startFrom := meta.GetDeleteApplyStartAfterTimetick()
+	startFrom := meta.GetTransformStartAfterTimetick()
 	if vchannel == "" {
 		return nil, wal.ErrTransformLogInvalidReadOption
 	}
@@ -85,29 +85,37 @@ func (g *guard) Release() {
 	})
 }
 
+func (g *guard) WaitTransformVisible(ctx context.Context, timetick uint64) error {
+	return g.buffer.waitTransformVisible(ctx, timetick)
+}
+
 type vchannelBuffer struct {
 	owner    *Buffer
 	vchannel string
 	cancel   context.CancelFunc
 
-	mu             sync.Mutex
-	scanner        wal.TransformLogScanner
-	retentionStart uint64
-	guards         map[uint64]int
-	entries        []*streamingpb.TransformLogEntry
-	regs           map[*registration]struct{}
-	caughtUp       bool
-	err            error
+	mu               sync.Mutex
+	scanner          wal.TransformLogScanner
+	retentionStart   uint64
+	visibleTimeTick  uint64
+	visibilityNotify chan struct{}
+	guards           map[uint64]int
+	entries          []*streamingpb.TransformLogEntry
+	regs             map[*registration]struct{}
+	caughtUp         bool
+	err              error
 }
 
 func newVChannelBuffer(owner *Buffer, vchannel string, startFrom uint64, cancel context.CancelFunc) *vchannelBuffer {
 	return &vchannelBuffer{
-		owner:          owner,
-		vchannel:       vchannel,
-		cancel:         cancel,
-		retentionStart: startFrom,
-		guards:         make(map[uint64]int),
-		regs:           make(map[*registration]struct{}),
+		owner:            owner,
+		vchannel:         vchannel,
+		cancel:           cancel,
+		retentionStart:   startFrom,
+		visibleTimeTick:  startFrom,
+		visibilityNotify: make(chan struct{}),
+		guards:           make(map[uint64]int),
+		regs:             make(map[*registration]struct{}),
 	}
 }
 
@@ -159,6 +167,32 @@ func (b *vchannelBuffer) registerSegment(ctx context.Context, segment qnview.Tra
 	}
 	b.regs[reg] = struct{}{}
 	return reg, nil
+}
+
+func (b *vchannelBuffer) waitTransformVisible(ctx context.Context, timetick uint64) error {
+	if timetick == 0 {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for {
+		b.refreshScannerDoneLocked()
+		if timetick <= b.retentionStart || b.visibleTimeTick >= timetick {
+			return nil
+		}
+		if b.err != nil {
+			return b.err
+		}
+		notify := b.visibilityNotify
+		b.mu.Unlock()
+		select {
+		case <-notify:
+		case <-ctx.Done():
+			b.mu.Lock()
+			return ctx.Err()
+		}
+		b.mu.Lock()
+	}
 }
 
 func (b *vchannelBuffer) unregister(reg *registration) {
@@ -241,17 +275,39 @@ func (b *vchannelBuffer) onEntry(entry *streamingpb.TransformLogEntry) {
 	if entry.GetTimeTick() > b.retentionStart {
 		b.entries = append(b.entries, entry)
 	}
-	regs := make([]*registration, 0, len(b.regs))
+	applies := make([]liveApply, 0, len(b.regs))
 	for reg := range b.regs {
 		if entry.GetTimeTick() > reg.startFrom {
-			regs = append(regs, reg)
+			applies = append(applies, liveApply{
+				reg: reg,
+				ack: make(chan error, 1),
+			})
 		}
 	}
 	b.mu.Unlock()
 
-	for _, reg := range regs {
-		reg.enqueue(regEvent{entry: entry})
+	for _, apply := range applies {
+		if !apply.reg.enqueue(regEvent{entry: entry, ack: apply.ack}) {
+			close(apply.ack)
+		}
 	}
+	for _, apply := range applies {
+		select {
+		case err, ok := <-apply.ack:
+			if ok && err != nil {
+				b.fail(err)
+				return
+			}
+		case <-apply.reg.stop:
+		}
+	}
+
+	b.mu.Lock()
+	if entry.GetTimeTick() > b.visibleTimeTick {
+		b.visibleTimeTick = entry.GetTimeTick()
+		b.notifyVisibilityLocked()
+	}
+	b.mu.Unlock()
 }
 
 func (b *vchannelBuffer) onCaughtUp() {
@@ -261,6 +317,7 @@ func (b *vchannelBuffer) onCaughtUp() {
 		return
 	}
 	b.caughtUp = true
+	b.notifyVisibilityLocked()
 	regs := make([]*registration, 0, len(b.regs))
 	for reg := range b.regs {
 		regs = append(regs, reg)
@@ -279,6 +336,7 @@ func (b *vchannelBuffer) fail(err error) {
 		return
 	}
 	b.err = err
+	b.notifyVisibilityLocked()
 	regs := make([]*registration, 0, len(b.regs))
 	for reg := range b.regs {
 		regs = append(regs, reg)
@@ -288,6 +346,11 @@ func (b *vchannelBuffer) fail(err error) {
 	for _, reg := range regs {
 		reg.enqueue(regEvent{err: err})
 	}
+}
+
+func (b *vchannelBuffer) notifyVisibilityLocked() {
+	close(b.visibilityNotify)
+	b.visibilityNotify = make(chan struct{})
 }
 
 func (b *vchannelBuffer) refreshScannerDoneLocked() {
@@ -305,6 +368,12 @@ type regEvent struct {
 	entry    *streamingpb.TransformLogEntry
 	caughtUp bool
 	err      error
+	ack      chan error
+}
+
+type liveApply struct {
+	reg *registration
+	ack chan error
 }
 
 type registration struct {
@@ -347,10 +416,12 @@ func (r *registration) Unregister() {
 	})
 }
 
-func (r *registration) enqueue(event regEvent) {
+func (r *registration) enqueue(event regEvent) bool {
 	select {
 	case r.events <- event:
+		return true
 	case <-r.stop:
+		return false
 	}
 }
 
@@ -363,7 +434,11 @@ func (r *registration) consume(ctx context.Context) {
 				return
 			}
 			if event.entry != nil {
-				if err := r.segment.ApplyTransform(ctx, event.entry); err != nil {
+				err := r.segment.ApplyTransform(ctx, event.entry)
+				if event.ack != nil {
+					event.ack <- err
+				}
+				if err != nil {
 					r.finish(err)
 					return
 				}

@@ -23,6 +23,7 @@ type TransformLogBuffer interface {
 // TransformLogGuard pins a local TransformLog buffer range for one QueryView
 // lifetime.
 type TransformLogGuard interface {
+	WaitTransformVisible(ctx context.Context, timetick uint64) error
 	Release()
 }
 

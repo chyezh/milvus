@@ -219,6 +219,35 @@ func TestMaterializeWithoutEntriesOnlyAdvancesCursor(t *testing.T) {
 	assert.Equal(t, uint64(20), snapshot.GetMaterializedTimeTick())
 }
 
+func TestMaterializeSkipsBarrierEntries(t *testing.T) {
+	materializer := &recordingMaterializer{}
+	transformLog := New(Config{
+		VChannel:     "by-dev-rootcoord-dml_1v0",
+		Materializer: materializer,
+		Meta: &streamingpb.VChannelTransformLogMeta{
+			CheckpointTimeTick: 30,
+		},
+	}).(*transformLog)
+	transformLog.retainedChunks = []*streamingpb.TransformLogChunk{
+		{ChunkId: 1, Entries: []*streamingpb.TransformLogEntry{
+			testTransformLogBarrierEntry(5),
+			testTransformLogDeleteEntry(10, 1, 2),
+			testTransformLogBarrierEntry(20),
+		}},
+	}
+
+	result, err := transformLog.Materialize(context.Background(), MaterializeOption{TargetTimeTick: 30})
+	require.NoError(t, err)
+	assert.True(t, result.Started)
+	assert.True(t, result.HasMaterializedSegments)
+	assert.Equal(t, uint64(30), result.MaterializedTimeTick)
+	assert.Equal(t, uint64(2), result.MaterializedRows)
+	require.Len(t, materializer.requests, 1)
+	require.Len(t, materializer.requests[0].Entries, 1)
+	assert.Equal(t, uint64(10), materializer.requests[0].Entries[0].GetTimeTick())
+	require.NotNil(t, materializer.requests[0].Entries[0].GetDelete())
+}
+
 func TestFlushAdvancesCheckpointToFenceTimeTick(t *testing.T) {
 	transformLog := New(Config{
 		VChannel: "v1",
@@ -327,6 +356,15 @@ func testTransformLogDeleteEntry(timeTick uint64, pks ...int64) *streamingpb.Tra
 					},
 				},
 			},
+		},
+	}
+}
+
+func testTransformLogBarrierEntry(timeTick uint64) *streamingpb.TransformLogEntry {
+	return &streamingpb.TransformLogEntry{
+		TimeTick: timeTick,
+		Entry: &streamingpb.TransformLogEntry_Barrier{
+			Barrier: &streamingpb.TransformBarrierEntry{},
 		},
 	}
 }

@@ -716,13 +716,16 @@ message TransformDeleteEntry {
     repeated TransformDeleteBlock blocks = 1;
 }
 
+message TransformBarrierEntry {}
+
 // TransformLogEntry is the durable and subscription replay unit.
 message TransformLogEntry {
-    // WAL Delete TimeTick, also the MVCC TimeTick.
+    // Source WAL message TimeTick, also the MVCC TimeTick.
     uint64 time_tick = 1;
 
     oneof entry {
         TransformDeleteEntry delete = 2;
+        TransformBarrierEntry barrier = 3;
     }
 }
 

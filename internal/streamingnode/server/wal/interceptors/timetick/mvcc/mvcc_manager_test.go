@@ -113,6 +113,19 @@ func TestRecoveryBarrierConfirmsQueryPlanMVCC(t *testing.T) {
 	assert.Equal(t, VChannelMVCC{GrowingTimetick: 130, TransformingTimetick: 120, Confirmed: true}, mvcc)
 }
 
+func TestTransformBarrierMessagesAdvanceTransformingMVCC(t *testing.T) {
+	cm := NewMVCCManager(100)
+	cm.ApplyRecoveryBarrier("vc1", 120)
+
+	cm.UpdateMVCC(createTestMessage(t, 130, "vc1", message.MessageTypeManualFlush, false, true))
+	mvcc := cm.GetMVCCOfVChannel("vc1")
+	assert.Equal(t, VChannelMVCC{GrowingTimetick: 120, TransformingTimetick: 130, Confirmed: false}, mvcc)
+
+	cm.UpdateMVCC(createTestMessage(t, 130, "", message.MessageTypeTimeTick, false, true))
+	mvcc = cm.GetMVCCOfVChannel("vc1")
+	assert.Equal(t, VChannelMVCC{GrowingTimetick: 120, TransformingTimetick: 130, Confirmed: true}, mvcc)
+}
+
 func createTestMessage(
 	t *testing.T,
 	tt uint64,

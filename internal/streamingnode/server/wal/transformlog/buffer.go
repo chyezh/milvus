@@ -7,6 +7,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
 )
 
 const defaultBufferMaxRows = 1024
@@ -33,6 +34,14 @@ func (b *buffer) Append(msg message.ImmutableMessage, opt AppendOption) bool {
 	if entry == nil {
 		return false
 	}
+	b.AppendEntry(entry)
+	return true
+}
+
+func (b *buffer) AppendEntry(entry *transformEntry) {
+	if entry == nil {
+		return
+	}
 	timetick := entry.timeTick
 	if len(b.entries) == 0 {
 		b.fromTimeTick = timetick
@@ -40,7 +49,6 @@ func (b *buffer) Append(msg message.ImmutableMessage, opt AppendOption) bool {
 	b.toTimeTick = timetick
 	b.rows += entry.rows
 	b.entries = append(b.entries, *entry)
-	return true
 }
 
 func (b *buffer) ShouldFlush() bool {
@@ -182,6 +190,22 @@ func transformEntryFromMessage(msg message.ImmutableMessage, opt AppendOption) *
 			return nil
 		})
 		return transformEntryFromDeletes(msg.TimeTick(), deletes, opt)
+	case message.MessageTypeCreateCollection,
+		message.MessageTypeRecoveryBarrier,
+		message.MessageTypeFlush,
+		message.MessageTypeManualFlush,
+		message.MessageTypeFlushAll,
+		message.MessageTypeDropPartition,
+		message.MessageTypeDropCollection,
+		message.MessageTypeTruncateCollection,
+		message.MessageTypeAlterWAL:
+		return transformBarrierEntry(msg.TimeTick())
+	case message.MessageTypeAlterCollection:
+		alter := message.MustAsImmutableAlterCollectionMessageV2(msg)
+		if messageutil.IsSchemaChange(alter.Header()) {
+			return transformBarrierEntry(msg.TimeTick())
+		}
+		return nil
 	default:
 		return nil
 	}
@@ -216,6 +240,18 @@ func transformEntryFromDeletes(timeTick uint64, deletes []message.ImmutableDelet
 				Delete: &streamingpb.TransformDeleteEntry{
 					Blocks: blocks,
 				},
+			},
+		},
+	}
+}
+
+func transformBarrierEntry(timeTick uint64) *transformEntry {
+	return &transformEntry{
+		timeTick: timeTick,
+		entry: &streamingpb.TransformLogEntry{
+			TimeTick: timeTick,
+			Entry: &streamingpb.TransformLogEntry_Barrier{
+				Barrier: &streamingpb.TransformBarrierEntry{},
 			},
 		},
 	}

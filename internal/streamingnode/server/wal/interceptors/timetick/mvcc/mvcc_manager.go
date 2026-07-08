@@ -73,6 +73,9 @@ func (cm *MVCCManager) UpdateMVCC(msg message.MutableMessage) {
 		return
 	}
 	if vchannel == "" {
+		if isPChannelTransformBarrier(msgType) {
+			cm.advanceTransformingAllLocked(tt)
+		}
 		return
 	}
 	mvcc := cm.vchannelMVCCs[vchannel]
@@ -100,6 +103,23 @@ func (cm *MVCCManager) UpdateMVCC(msg message.MutableMessage) {
 		}
 		mvcc.TransformingTimetick = tt
 		mvcc.GrowingTimetick = max(mvcc.GrowingTimetick, mvcc.TransformingTimetick)
+	case message.MessageTypeFlush,
+		message.MessageTypeManualFlush,
+		message.MessageTypeDropPartition,
+		message.MessageTypeDropCollection,
+		message.MessageTypeTruncateCollection,
+		message.MessageTypeFlushAll,
+		message.MessageTypeAlterWAL:
+		if tt <= mvcc.TransformingTimetick {
+			return
+		}
+		mvcc.TransformingTimetick = tt
+	case message.MessageTypeAlterCollection:
+		alter := message.MustAsMutableAlterCollectionMessageV2(msg)
+		if !messageutil.IsSchemaChange(alter.Header()) || tt <= mvcc.TransformingTimetick {
+			return
+		}
+		mvcc.TransformingTimetick = tt
 	default:
 		return
 	}
@@ -116,6 +136,22 @@ func (cm *MVCCManager) sync(tt uint64) {
 			cm.vchannelMVCCs[vchannel] = mvcc
 		}
 	}
+}
+
+func (cm *MVCCManager) advanceTransformingAllLocked(tt uint64) {
+	for vchannel, mvcc := range cm.vchannelMVCCs {
+		if tt <= mvcc.TransformingTimetick {
+			continue
+		}
+		mvcc.TransformingTimetick = tt
+		mvcc.Confirmed = false
+		cm.vchannelMVCCs[vchannel] = mvcc
+	}
+}
+
+func isPChannelTransformBarrier(msgType message.MessageType) bool {
+	return msgType == message.MessageTypeFlushAll ||
+		msgType == message.MessageTypeAlterWAL
 }
 
 // VChannelMVCC is a mvcc of one vchannel

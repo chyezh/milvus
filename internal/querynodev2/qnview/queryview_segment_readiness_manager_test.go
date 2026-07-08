@@ -17,7 +17,7 @@ import (
 
 func TestQueryViewSegmentReadinessManager_WaitsForCatchupBeforeReady(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
-	meta.DeleteApplyStartAfterTimetick = 100
+	meta.TransformStartAfterTimetick = 100
 	view := buildHandlerTestQNView(1)
 	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
 
@@ -75,7 +75,7 @@ func TestQueryViewSegmentReadinessManager_WaitsForCatchupBeforeReady(t *testing.
 	mergeReadyByPartition(ready, <-readyCh)
 	require.ElementsMatch(t, []int64{1000, 1001}, ready[10])
 	assert.Equal(t, testVChannel, buffer.acquireView.IntoProto().GetMeta().GetVchannel())
-	assert.Equal(t, uint64(100), buffer.acquireView.IntoProto().GetMeta().GetDeleteApplyStartAfterTimetick())
+	assert.Equal(t, uint64(100), buffer.acquireView.IntoProto().GetMeta().GetTransformStartAfterTimetick())
 	assert.ElementsMatch(t, []int64{1000, 1001}, buffer.registerSegments)
 }
 
@@ -115,6 +115,54 @@ func TestQueryViewSegmentReadinessManager_AcquiresTransformGuardBeforePhysicalAc
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for physical acquire")
 	}
+}
+
+func TestQueryViewSegmentReadinessManager_WaitTransformVisibleUsesTransformGuard(t *testing.T) {
+	meta := buildHandlerTestMeta(1)
+	meta.TransformStartAfterTimetick = 100
+	view := buildHandlerTestQNView(1)
+	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
+
+	segment := &fakeTransformSegment{id: 1000, partitionID: 10}
+	physical := fakePhysicalSegmentManager{
+		acquire: func(req AcquirePhysicalSegments) {
+			req.OnLoaded([]TransformSegment{segment})
+		},
+		release: func(req ReleaseSegments) {
+			req.OnDropped()
+		},
+	}
+	buffer := &fakeTransformLogBuffer{}
+	mgr := NewQueryViewSegmentReadinessManager(physical, buffer)
+
+	readyCh := make(chan map[int64][]int64, 1)
+	mgr.Acquire(AcquireSegments{
+		Key: key, Meta: meta, View: view,
+		OnReady:         func(ready map[int64][]int64) { readyCh <- ready },
+		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable") },
+	})
+
+	require.Eventually(t, func() bool {
+		buffer.mu.Lock()
+		defer buffer.mu.Unlock()
+		return len(buffer.regs) == 1
+	}, time.Second, 10*time.Millisecond)
+	buffer.mu.Lock()
+	close(buffer.regs[0].waitCh)
+	buffer.mu.Unlock()
+	require.Eventually(t, func() bool {
+		select {
+		case <-readyCh:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	require.NoError(t, mgr.WaitTransformVisible(context.Background(), key, 120))
+	assert.False(t, segment.waitCalled)
+	assert.True(t, buffer.guard.waitCalled)
+	assert.Equal(t, uint64(120), buffer.guard.waitTimetick)
 }
 
 func TestQueryViewSegmentReadinessManager_AcquiresCollectionGuardBeforePhysicalAcquire(t *testing.T) {

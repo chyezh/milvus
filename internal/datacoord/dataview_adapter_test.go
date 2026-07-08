@@ -101,7 +101,7 @@ func TestDataViewSegmentStoreSelectSegmentsSkipsDroppedPartition(t *testing.T) {
 	require.Equal(t, int64(11), segments[0].GetNumOfRows())
 	require.Equal(t, int64(1408), segments[0].GetMemSize())
 	require.Equal(t, uint64(500), segments[0].GetStartPosition().GetTimestamp())
-	require.Equal(t, uint64(500), segments[0].GetDeleteApplyStartAfterTimetick())
+	require.Equal(t, uint64(500), segments[0].GetTransformStartAfterTimetick())
 }
 
 func TestDataViewRecoveryUsesCollectionPartitions(t *testing.T) {

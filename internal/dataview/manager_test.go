@@ -168,7 +168,7 @@ func newDataViewTestSegment(collectionID, partitionID, segmentID int64, channel 
 			ChannelName: channel,
 			Timestamp:   dmlTs,
 		},
-		DeleteApplyStartAfterTimetick: dmlTs,
+		TransformStartAfterTimetick: dmlTs,
 	}
 }
 
@@ -207,7 +207,7 @@ func TestDataViewManagerOnCreateCollectionCreatesEmptyVisibleView(t *testing.T) 
 	require.NotNil(t, visible)
 	requireDataVersion(t, visible.GetDataVersion(), 1, 0)
 	require.Len(t, visible.GetShards(), 2)
-	require.Zero(t, visible.GetShards()[0].GetDeleteApplyStartAfterTimetick())
+	require.Zero(t, visible.GetShards()[0].GetTransformStartAfterTimetick())
 
 	snapshot := manager.DataViewSnapshot(ctx)
 	_, ok := snapshot.ShardView(1, "ch-0")
@@ -271,12 +271,12 @@ func TestDataViewManagerOnFlushCreatesVisibleView(t *testing.T) {
 	require.Len(t, catalog.views, 1)
 	require.Equal(t, int64(1), catalog.views[0].GetDataVersion().GetStreamingVersion())
 	require.Equal(t, int64(0), catalog.views[0].GetDataVersion().GetCompactVersion())
-	require.Zero(t, catalog.views[0].GetShards()[0].GetDeleteApplyStartAfterTimetick())
+	require.Zero(t, catalog.views[0].GetShards()[0].GetTransformStartAfterTimetick())
 
 	view, err := manager.LatestVisibleDataView(ctx, 1)
 	require.NoError(t, err)
 	require.NotNil(t, view)
-	require.Equal(t, uint64(1000), view.GetShards()[0].GetDeleteApplyStartAfterTimetick())
+	require.Equal(t, uint64(1000), view.GetShards()[0].GetTransformStartAfterTimetick())
 	require.Equal(t, []int64{100}, view.GetShards()[0].GetPartitions()[0].GetSegmentIds())
 }
 
@@ -316,7 +316,7 @@ func TestDataViewManagerOnFlushExposesVisibleTimeTick(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, timeticks, 1)
 	require.Equal(t, "ch-1", timeticks[0].GetVchannel())
-	require.Equal(t, uint64(1000), timeticks[0].GetDeleteApplyStartAfterTimetick())
+	require.Equal(t, uint64(1000), timeticks[0].GetTransformStartAfterTimetick())
 }
 
 func TestDataViewManagerFlushTemporaryThenSortHandoff(t *testing.T) {
@@ -360,7 +360,7 @@ func TestDataViewManagerFlushTemporaryThenSortHandoff(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, visible)
 	require.Equal(t, []int64{101}, visible.GetShards()[0].GetPartitions()[0].GetSegmentIds())
-	require.Equal(t, uint64(1100), visible.GetShards()[0].GetDeleteApplyStartAfterTimetick())
+	require.Equal(t, uint64(1100), visible.GetShards()[0].GetTransformStartAfterTimetick())
 }
 
 func TestDataViewManagerImportAndCopySegmentCompleteAdvanceStreamingVersion(t *testing.T) {
@@ -432,7 +432,7 @@ func TestDataViewManagerShardTimeTicksUseLatestVisibleView(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, timeticks, 1)
 	require.Equal(t, "ch-1", timeticks[0].GetVchannel())
-	require.Equal(t, uint64(1000), timeticks[0].GetDeleteApplyStartAfterTimetick())
+	require.Equal(t, uint64(1000), timeticks[0].GetTransformStartAfterTimetick())
 }
 
 func TestDataViewManagerSnapshotReturnsLatestVisibleClone(t *testing.T) {
@@ -455,7 +455,7 @@ func TestDataViewManagerSnapshotReturnsLatestVisibleClone(t *testing.T) {
 	require.Len(t, views, 1)
 	require.Equal(t, int64(1), views[0].GetDataVersion().GetStreamingVersion())
 	require.Equal(t, []int64{100}, views[0].GetShards()[0].GetPartitions()[0].GetSegmentIds())
-	require.Equal(t, uint64(1000), views[0].GetShards()[0].GetDeleteApplyStartAfterTimetick())
+	require.Equal(t, uint64(1000), views[0].GetShards()[0].GetTransformStartAfterTimetick())
 
 	views[0].Shards[0].Partitions[0].SegmentIds[0] = 999
 	views, err = manager.Snapshot(ctx, []int64{1})
@@ -536,7 +536,7 @@ func TestDataViewManagerL0CompactRefreshesDeleteTimetickWithoutVersionBump(t *te
 	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-1", 900)
 	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100, 101}})))
 
-	store.segments[101].DeleteApplyStartAfterTimetick = 800
+	store.segments[101].TransformStartAfterTimetick = 800
 	version, err := manager.OnL0Compact(ctx, L0CompactDataViewEvent{CollectionID: 1})
 	require.NoError(t, err)
 	requireDataVersion(t, version, 1, 0)
@@ -545,7 +545,7 @@ func TestDataViewManagerL0CompactRefreshesDeleteTimetickWithoutVersionBump(t *te
 	view, err := manager.LatestVisibleDataView(ctx, 1)
 	require.NoError(t, err)
 	require.NotNil(t, view)
-	require.Equal(t, uint64(800), view.GetShards()[0].GetDeleteApplyStartAfterTimetick())
+	require.Equal(t, uint64(800), view.GetShards()[0].GetTransformStartAfterTimetick())
 	require.Equal(t, int64(1), view.GetDataVersion().GetStreamingVersion())
 	require.Equal(t, int64(0), view.GetDataVersion().GetCompactVersion())
 }
@@ -555,23 +555,23 @@ func TestDataViewManagerDeleteTimetickUsesSegmentFieldBeforeDmlPosition(t *testi
 	manager, _, store := newTestDataViewManager()
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
 	store.segments[100].DmlPosition.Timestamp = 5000
-	store.segments[100].DeleteApplyStartAfterTimetick = 900
+	store.segments[100].TransformStartAfterTimetick = 900
 
 	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})))
 
 	view, err := manager.LatestVisibleDataView(ctx, 1)
 	require.NoError(t, err)
-	require.Equal(t, uint64(900), view.GetShards()[0].GetDeleteApplyStartAfterTimetick())
+	require.Equal(t, uint64(900), view.GetShards()[0].GetTransformStartAfterTimetick())
 }
 
 func TestDataViewManagerDeleteTimetickFallbackForLegacySegments(t *testing.T) {
 	ctx := context.Background()
 	manager, _, store := newTestDataViewManager()
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
-	store.segments[100].DeleteApplyStartAfterTimetick = 0
+	store.segments[100].TransformStartAfterTimetick = 0
 	store.segments[100].CommitTimestamp = 900
 	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
-	store.segments[101].DeleteApplyStartAfterTimetick = 0
+	store.segments[101].TransformStartAfterTimetick = 0
 	store.segments[101].StartPosition.Timestamp = 800
 	store.segments[101].DmlPosition.Timestamp = 7000
 
@@ -579,7 +579,7 @@ func TestDataViewManagerDeleteTimetickFallbackForLegacySegments(t *testing.T) {
 
 	view, err := manager.LatestVisibleDataView(ctx, 1)
 	require.NoError(t, err)
-	require.Equal(t, uint64(800), view.GetShards()[0].GetDeleteApplyStartAfterTimetick())
+	require.Equal(t, uint64(800), view.GetShards()[0].GetTransformStartAfterTimetick())
 }
 
 func TestDataViewManagerDropPartitionAdvancesCompactVersion(t *testing.T) {
@@ -865,14 +865,14 @@ func TestDataViewManagerRecoverRefreshesDeleteTimetickWithoutVersionBump(t *test
 	require.NoError(t, err)
 	require.Len(t, timeticks, 1)
 	require.Equal(t, "ch-1", timeticks[0].GetVchannel())
-	require.Equal(t, uint64(500), timeticks[0].GetDeleteApplyStartAfterTimetick())
+	require.Equal(t, uint64(500), timeticks[0].GetTransformStartAfterTimetick())
 
 	visible, err := manager.LatestVisibleDataView(ctx, 1)
 	require.NoError(t, err)
 	require.NotNil(t, visible)
 	require.Equal(t, int64(1), visible.GetDataVersion().GetStreamingVersion())
 	require.Equal(t, int64(0), visible.GetDataVersion().GetCompactVersion())
-	require.Equal(t, uint64(500), visible.GetShards()[0].GetDeleteApplyStartAfterTimetick())
+	require.Equal(t, uint64(500), visible.GetShards()[0].GetTransformStartAfterTimetick())
 }
 
 func TestDataViewManagerRecoverAddsNeverPublishedStreamingSegment(t *testing.T) {

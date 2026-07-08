@@ -140,8 +140,19 @@ func (b *fakeTransformLogBuffer) RegisterSegment(_ context.Context, segment Tran
 }
 
 type fakeTransformLogGuard struct {
-	mu       sync.Mutex
-	released bool
+	mu           sync.Mutex
+	released     bool
+	waitCalled   bool
+	waitTimetick uint64
+	waitErr      error
+}
+
+func (g *fakeTransformLogGuard) WaitTransformVisible(_ context.Context, timetick uint64) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.waitCalled = true
+	g.waitTimetick = timetick
+	return g.waitErr
 }
 
 func (g *fakeTransformLogGuard) Release() {
@@ -273,6 +284,10 @@ func (b *interleavingTransformLogBuffer) RegisterSegment(_ context.Context, segm
 }
 
 type instantTransformGuard struct{}
+
+func (instantTransformGuard) WaitTransformVisible(context.Context, uint64) error {
+	return nil
+}
 
 func (instantTransformGuard) Release() {}
 
