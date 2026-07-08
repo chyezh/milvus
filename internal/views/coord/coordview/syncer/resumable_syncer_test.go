@@ -215,6 +215,34 @@ func TestResumable_RePushClearsUnsent(t *testing.T) {
 	assert.Len(t, req.GetViews().QueryViews, 1, "rePush should send exactly the current entries")
 }
 
+func TestResumable_ResponseCallbackCanEnqueueFollowUpForSameView(t *testing.T) {
+	rs, streamReady, cancel := newResumableTestSetup(t)
+	defer cancel()
+	defer rs.Close()
+
+	stream := waitStream(t, streamReady)
+
+	followUp := newTestSyncViewWithState(1, 1, qviews.QueryViewStateDropped, nil, nil)
+	first := newTestSyncViewWithState(1, 1, qviews.QueryViewStateDown, func(qviews.QueryViewAtWorkNode) bool {
+		rs.Sync([]SyncView{followUp})
+		return true
+	}, nil)
+
+	rs.Sync([]SyncView{first})
+
+	req, ok := stream.waitSend(time.Second)
+	require.True(t, ok)
+	require.Len(t, req.GetViews().QueryViews, 1)
+	assert.Equal(t, viewpb.QueryViewState(qviews.QueryViewStateDown), req.GetViews().QueryViews[0].GetMeta().GetState())
+
+	stream.injectResponse(req.GetViews().QueryViews[0])
+
+	req, ok = stream.waitSend(time.Second)
+	require.True(t, ok, "follow-up sync enqueued from callback should be sent")
+	require.Len(t, req.GetViews().QueryViews, 1)
+	assert.Equal(t, viewpb.QueryViewState(qviews.QueryViewStateDropped), req.GetViews().QueryViews[0].GetMeta().GetState())
+}
+
 // TestResumable_OpenStreamError verifies the syncer retries with backoff on stream open failure.
 func TestResumable_OpenStreamError(t *testing.T) {
 	node := qviews.NewQueryNode(1)
@@ -324,4 +352,21 @@ func TestResumable_SendLoopReturnsWhenContextDone(t *testing.T) {
 
 	rs.sendLoop(ctx, stream)
 	assert.Empty(t, stream.collectSent())
+}
+
+func newTestSyncViewWithState(
+	nodeID int64,
+	version int64,
+	state qviews.QueryViewState,
+	onResp func(qviews.QueryViewAtWorkNode) bool,
+	onQueryNodeLost func(qviews.QueryNode),
+) SyncView {
+	view := newTestQNView(nodeID, version)
+	pb := view.IntoProto()
+	pb.Meta.State = viewpb.QueryViewState(state)
+	return SyncView{
+		View:            qviews.NewQueryViewAtWorkNodeFromProto(pb),
+		OnSyncResponse:  onResp,
+		OnQueryNodeLost: onQueryNodeLost,
+	}
 }
