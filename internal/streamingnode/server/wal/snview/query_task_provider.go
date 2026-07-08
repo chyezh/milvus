@@ -5,6 +5,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/viewquery"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
@@ -31,6 +32,13 @@ func (h *SNQueryViewHandler) AcquireSearchSegmentTasks(
 	if err != nil {
 		return nil, err
 	}
+	mlog.Debug(ctx, "acquire streamingnode search segment tasks wait mvcc",
+		mlog.FieldCollectionID(req.GetCollectionID()),
+		mlog.FieldVChannel(shardID.VChannel),
+		mlog.Int64("replicaID", shardID.ReplicaID),
+		mlog.Uint64("growingTimeTick", mvcc.GetGrowingTimetick()),
+		mlog.Uint64("transformingTimeTick", mvcc.GetTransformingTimetick()),
+	)
 	if err := runtime.WaitMVCCVisible(ctx, mvcc.GetGrowingTimetick(), mvcc.GetTransformingTimetick()); err != nil {
 		return nil, err
 	}
@@ -38,6 +46,11 @@ func (h *SNQueryViewHandler) AcquireSearchSegmentTasks(
 	if err != nil {
 		return nil, err
 	}
+	mlog.Debug(ctx, "acquired streamingnode search segment tasks",
+		mlog.FieldCollectionID(req.GetCollectionID()),
+		mlog.FieldVChannel(shardID.VChannel),
+		mlog.Int("segmentCount", len(handles)),
+	)
 	tasks := make([]SNSearchSegmentTask, 0, len(handles))
 	for _, handle := range handles {
 		tasks = append(tasks, SNSearchSegmentTask{
@@ -70,6 +83,13 @@ func (h *SNQueryViewHandler) AcquireQuerySegmentTasks(
 	if err != nil {
 		return nil, err
 	}
+	mlog.Debug(ctx, "acquire streamingnode query segment tasks wait mvcc",
+		mlog.FieldCollectionID(req.GetCollectionID()),
+		mlog.FieldVChannel(shardID.VChannel),
+		mlog.Int64("replicaID", shardID.ReplicaID),
+		mlog.Uint64("growingTimeTick", mvcc.GetGrowingTimetick()),
+		mlog.Uint64("transformingTimeTick", mvcc.GetTransformingTimetick()),
+	)
 	if err := runtime.WaitMVCCVisible(ctx, mvcc.GetGrowingTimetick(), mvcc.GetTransformingTimetick()); err != nil {
 		return nil, err
 	}
@@ -77,6 +97,11 @@ func (h *SNQueryViewHandler) AcquireQuerySegmentTasks(
 	if err != nil {
 		return nil, err
 	}
+	mlog.Debug(ctx, "acquired streamingnode query segment tasks",
+		mlog.FieldCollectionID(req.GetCollectionID()),
+		mlog.FieldVChannel(shardID.VChannel),
+		mlog.Int("segmentCount", len(handles)),
+	)
 	tasks := make([]SNQuerySegmentTask, 0, len(handles))
 	for _, handle := range handles {
 		tasks = append(tasks, SNQuerySegmentTask{

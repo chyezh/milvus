@@ -69,6 +69,83 @@ func TestShardSearchReturnsQueryPlanMVCCForRequery(t *testing.T) {
 	require.Equal(t, mvcc.GetTransformingTimetick(), queryService.searchReq.GetLegacyReq().GetMvccTimestamp())
 }
 
+func TestSessionSearchOnPrimaryLetsSNGenerateQueryPlanMVCC(t *testing.T) {
+	shardID := qviews.ShardID{ReplicaID: 1, VChannel: "by-dev-rootcoord-dml_0_100v0"}
+	planClient := &fakeQueryPlanClient{
+		plan: newTestSearchQueryPlan(shardID, &viewpb.QueryPlanMVCC{
+			GrowingTimetick:      100,
+			TransformingTimetick: 90,
+		}),
+	}
+	queryService := &fakeViewQueryServiceClient{}
+	client := newShardViewQueryClient(
+		1,
+		planClient,
+		queryService,
+		&fakeShardResolver{replicas: &resolver.ShardReplicas{
+			VChannel:       shardID.VChannel,
+			PrimaryShardID: shardID,
+			ShardIDs:       []qviews.ShardID{shardID},
+		}},
+		fixedReplicaPicker{shardID: shardID},
+	)
+
+	_, err := client.Search(context.Background(), &ShardSearchRequest{
+		VChannel: shardID.VChannel,
+		Req: &internalpb.SearchRequest{
+			CollectionID:       100,
+			ConsistencyLevel:   commonpb.ConsistencyLevel_Session,
+			GuaranteeTimestamp: 999,
+		},
+		Reducer: fakeSearchResultReducer{},
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, commonpb.ConsistencyLevel_Strong, planClient.planReq.GetConsistencyLevel())
+	require.Nil(t, planClient.planReq.GetQueryPlanMvcc())
+	require.Equal(t, 0, planClient.mvccReqCount)
+}
+
+func TestSessionSearchOnSecondaryUsesPrimaryWALMVCC(t *testing.T) {
+	vchannel := "by-dev-rootcoord-dml_0_100v0"
+	primaryShardID := qviews.ShardID{ReplicaID: 1, VChannel: vchannel}
+	secondaryShardID := qviews.ShardID{ReplicaID: 2, VChannel: vchannel}
+	mvcc := &viewpb.QueryPlanMVCC{
+		GrowingTimetick:      100,
+		TransformingTimetick: 90,
+	}
+	planClient := &fakeQueryPlanClient{plan: newTestSearchQueryPlan(secondaryShardID, mvcc)}
+	queryService := &fakeViewQueryServiceClient{}
+	client := newShardViewQueryClient(
+		1,
+		planClient,
+		queryService,
+		&fakeShardResolver{replicas: &resolver.ShardReplicas{
+			VChannel:       vchannel,
+			PrimaryShardID: primaryShardID,
+			ShardIDs:       []qviews.ShardID{primaryShardID, secondaryShardID},
+		}},
+		fixedReplicaPicker{shardID: secondaryShardID},
+	)
+
+	_, err := client.Search(context.Background(), &ShardSearchRequest{
+		VChannel: vchannel,
+		Req: &internalpb.SearchRequest{
+			CollectionID:       100,
+			ConsistencyLevel:   commonpb.ConsistencyLevel_Session,
+			GuaranteeTimestamp: 999,
+		},
+		Reducer: fakeSearchResultReducer{},
+	})
+	require.NoError(t, err)
+
+	require.Equal(t, 1, planClient.mvccReqCount)
+	require.Equal(t, primaryShardID, planClient.mvccShardID)
+	require.Equal(t, vchannel, planClient.mvccReq.GetVchannel())
+	require.True(t, proto.Equal(mvcc, planClient.planReq.GetQueryPlanMvcc()))
+	require.Equal(t, commonpb.ConsistencyLevel(0), planClient.planReq.GetConsistencyLevel())
+}
+
 type fakeShardResolver struct {
 	replicas *resolver.ShardReplicas
 }
@@ -90,14 +167,22 @@ func (p fixedReplicaPicker) Pick(context.Context, ReplicaPickInfo) (ReplicaPickR
 }
 
 type fakeQueryPlanClient struct {
-	plan *viewpb.QueryPlan
+	plan         *viewpb.QueryPlan
+	planReq      *viewpb.GetQueryPlanRequest
+	mvccReq      *viewpb.GetMVCCTimestampRequest
+	mvccShardID  qviews.ShardID
+	mvccReqCount int
 }
 
-func (f *fakeQueryPlanClient) GetQueryPlan(context.Context, qviews.ShardID, *viewpb.GetQueryPlanRequest) (*viewpb.GetQueryPlanResponse, error) {
+func (f *fakeQueryPlanClient) GetQueryPlan(_ context.Context, _ qviews.ShardID, req *viewpb.GetQueryPlanRequest) (*viewpb.GetQueryPlanResponse, error) {
+	f.planReq = proto.Clone(req).(*viewpb.GetQueryPlanRequest)
 	return &viewpb.GetQueryPlanResponse{Plan: f.plan}, nil
 }
 
-func (f *fakeQueryPlanClient) GetMVCCTimestamp(context.Context, qviews.ShardID, *viewpb.GetMVCCTimestampRequest) (*viewpb.GetMVCCTimestampResponse, error) {
+func (f *fakeQueryPlanClient) GetMVCCTimestamp(_ context.Context, shardID qviews.ShardID, req *viewpb.GetMVCCTimestampRequest) (*viewpb.GetMVCCTimestampResponse, error) {
+	f.mvccReq = proto.Clone(req).(*viewpb.GetMVCCTimestampRequest)
+	f.mvccShardID = shardID
+	f.mvccReqCount++
 	return &viewpb.GetMVCCTimestampResponse{Mvcc: f.plan.GetMvcc()}, nil
 }
 
@@ -128,4 +213,23 @@ func (fakeSearchResultReducer) ResetShard(qviews.ShardID) {}
 
 func (fakeSearchResultReducer) Finish() (*internalpb.SearchResults, error) {
 	return &internalpb.SearchResults{}, nil
+}
+
+func newTestSearchQueryPlan(shardID qviews.ShardID, mvcc *viewpb.QueryPlanMVCC) *viewpb.QueryPlan {
+	queryNode := qviews.NewQueryNode(11)
+	return &viewpb.QueryPlan{
+		ShardId: shardID.IntoProto(),
+		Version: &viewpb.QueryViewVersion{QueryVersion: 10},
+		Mvcc:    mvcc,
+		Request: &viewpb.QueryPlan_LegacySearchRequest{
+			LegacySearchRequest: &internalpb.SearchRequest{},
+		},
+		WorkNodes: []*viewpb.QueryPlanWorkNode{
+			{
+				Node: &viewpb.QueryPlanWorkNode_QueryNode{
+					QueryNode: &viewpb.QueryWorkNode{NodeId: queryNode.ID},
+				},
+			},
+		},
+	}
 }

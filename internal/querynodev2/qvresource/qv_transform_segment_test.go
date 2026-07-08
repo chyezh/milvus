@@ -105,6 +105,18 @@ func TestQueryViewTransformSegment_WaitTransformAppliedReturnsAfterApply(t *test
 	require.NoError(t, <-done)
 }
 
+func TestQueryViewTransformSegment_StartsAppliedAtTransformStart(t *testing.T) {
+	segment := &fakeQVSegment{id: 10, partitionID: 100}
+	wrapped := newQueryViewTransformSegment(segment, nil, "v1", 50)
+
+	require.Equal(t, uint64(50), wrapped.AppliedTransformTimeTick())
+	require.NoError(t, wrapped.WaitTransformApplied(context.Background(), 50))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, wrapped.WaitTransformApplied(ctx, 51), context.Canceled)
+}
+
 func TestQueryViewTransformSegment_WaitTransformAppliedReturnsContextError(t *testing.T) {
 	segment := &fakeQVSegment{id: 10, partitionID: 100}
 	wrapped := newQueryViewTransformSegment(segment, nil, "v1", 50)
@@ -135,5 +147,5 @@ func TestQueryViewTransformSegment_ReturnsErrorForMalformedDeletePrimaryKeys(t *
 	})
 	require.Error(t, err)
 	assert.Nil(t, segment.deletedPKs)
-	assert.Zero(t, wrapped.AppliedTransformTimeTick())
+	assert.Equal(t, uint64(50), wrapped.AppliedTransformTimeTick())
 }

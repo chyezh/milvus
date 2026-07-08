@@ -30,6 +30,7 @@ func newQueryViewTransformSegment(segment qvLoadedSegment, releaser qvSegmentMan
 		releaser:   releaser,
 		vchannel:   vchannel,
 		startAfter: startAfter,
+		applied:    startAfter,
 		waiters:    make(map[uint64][]chan struct{}),
 	}
 }
