@@ -4,6 +4,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 )
@@ -163,10 +164,7 @@ type transformEntry struct {
 }
 
 func deleteEntryRows(request *msgpb.DeleteRequest) uint64 {
-	if rows := len(request.GetTimestamps()); rows > 0 {
-		return uint64(rows)
-	}
-	return 1
+	return uint64(primaryKeyCount(request.GetPrimaryKeys()))
 }
 
 func transformEntryFromMessage(msg message.ImmutableMessage, opt AppendOption) *transformEntry {
@@ -235,4 +233,18 @@ func cloneDeleteRequest(value *msgpb.DeleteRequest) *msgpb.DeleteRequest {
 		return nil
 	}
 	return proto.Clone(value).(*msgpb.DeleteRequest)
+}
+
+func primaryKeyCount(ids *schemapb.IDs) int {
+	if ids == nil {
+		return 0
+	}
+	switch ids.IdField.(type) {
+	case *schemapb.IDs_IntId:
+		return len(ids.GetIntId().GetData())
+	case *schemapb.IDs_StrId:
+		return len(ids.GetStrId().GetData())
+	default:
+		return 0
+	}
 }
