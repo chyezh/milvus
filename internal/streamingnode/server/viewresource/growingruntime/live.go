@@ -6,6 +6,7 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 )
 
@@ -30,10 +31,19 @@ func (r *Runtime) applyLiveMessage(ctx context.Context, msg message.ImmutableMes
 		panic(errors.Wrap(err, "failed to apply live message to growing runtime"))
 	}
 	timeTick := msg.TimeTick()
+	advancesTransform := messageAdvancesTransformFrontier(msg)
 	r.markGrowingTimeTick(timeTick)
-	if messageAdvancesTransformFrontier(msg) {
+	if advancesTransform {
 		r.markTransformTimeTick(timeTick)
 	}
+	mlog.Debug(ctx, "applied live message to growing runtime",
+		mlog.FieldVChannel(msg.VChannel()),
+		mlog.String("messageType", msg.MessageType().String()),
+		mlog.Uint64("timeTick", timeTick),
+		mlog.Bool("advancesTransform", advancesTransform),
+		mlog.Uint64("appliedGrowingTimeTick", r.appliedGrowingTimeTick.Load()),
+		mlog.Uint64("appliedTransformTimeTick", r.appliedTransformTimeTick.Load()),
+	)
 }
 
 func messageAdvancesTransformFrontier(msg message.ImmutableMessage) bool {

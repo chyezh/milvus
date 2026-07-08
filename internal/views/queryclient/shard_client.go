@@ -66,7 +66,6 @@ type ShardQueryRequest struct {
 func (s *shardViewQueryClient) Search(ctx context.Context, req *ShardSearchRequest) (*ShardPlan, error) {
 	return s.executeShard(ctx, req.Req.CollectionID, req.VChannel, &shardExecParams{
 		consistencyLevel: req.Req.ConsistencyLevel,
-		guaranteeTs:      req.Req.GuaranteeTimestamp,
 		buildPlanReq: func(targetShardID qviews.ShardID) *viewpb.GetQueryPlanRequest {
 			return &viewpb.GetQueryPlanRequest{
 				CollectionId: req.Req.CollectionID,
@@ -99,7 +98,6 @@ func (s *shardViewQueryClient) Search(ctx context.Context, req *ShardSearchReque
 func (s *shardViewQueryClient) Query(ctx context.Context, req *ShardQueryRequest) (*ShardPlan, error) {
 	return s.executeShard(ctx, req.Req.CollectionID, req.VChannel, &shardExecParams{
 		consistencyLevel: req.Req.ConsistencyLevel,
-		guaranteeTs:      req.Req.GuaranteeTimestamp,
 		buildPlanReq: func(targetShardID qviews.ShardID) *viewpb.GetQueryPlanRequest {
 			return &viewpb.GetQueryPlanRequest{
 				CollectionId: req.Req.CollectionID,
@@ -134,7 +132,6 @@ func (s *shardViewQueryClient) Query(ctx context.Context, req *ShardQueryRequest
 // Both Search and Query use the same executeShard loop, differing only in these callbacks.
 type shardExecParams struct {
 	consistencyLevel commonpb.ConsistencyLevel
-	guaranteeTs      uint64
 	// buildPlanReq creates the GetQueryPlanRequest for a target shard.
 	buildPlanReq func(targetShardID qviews.ShardID) *viewpb.GetQueryPlanRequest
 	// dispatchNode executes a Phase 2 RPC on a single work node.
@@ -224,7 +221,7 @@ func (s *shardViewQueryClient) executeShard(
 // Routing logic per consistency level:
 //   - Strong on primary: GetQueryPlan(consistency_level=Strong)
 //   - Strong cross-replica: GetMVCCTimestamp from primary → GetQueryPlan(query_plan_mvcc=mvcc)
-//   - Session: GetQueryPlan(query_plan_mvcc={guaranteeTs, guaranteeTs}) — Proxy provides session timestamp
+//   - Session: same routing as Strong; SN sees consistency_level=Strong for primary planning
 //   - Bounded/Eventually: GetQueryPlan(consistency_level=...) — SN generates MVCC from WAL
 func (s *shardViewQueryClient) executeGetQueryPlan(
 	ctx context.Context,
@@ -234,7 +231,7 @@ func (s *shardViewQueryClient) executeGetQueryPlan(
 	params *shardExecParams,
 ) (*viewpb.QueryPlan, error) {
 	switch params.consistencyLevel {
-	case commonpb.ConsistencyLevel_Strong:
+	case commonpb.ConsistencyLevel_Strong, commonpb.ConsistencyLevel_Session:
 		if targetShardID != shardReplicas.PrimaryShardID {
 			mvccResp, err := s.queryPlanClient.GetMVCCTimestamp(ctx, shardReplicas.PrimaryShardID,
 				&viewpb.GetMVCCTimestampRequest{
@@ -250,13 +247,6 @@ func (s *shardViewQueryClient) executeGetQueryPlan(
 			planReq.Mvcc = &viewpb.GetQueryPlanRequest_ConsistencyLevel{
 				ConsistencyLevel: commonpb.ConsistencyLevel_Strong,
 			}
-		}
-	case commonpb.ConsistencyLevel_Session:
-		planReq.Mvcc = &viewpb.GetQueryPlanRequest_QueryPlanMvcc{
-			QueryPlanMvcc: &viewpb.QueryPlanMVCC{
-				GrowingTimetick:      params.guaranteeTs,
-				TransformingTimetick: params.guaranteeTs,
-			},
 		}
 	default:
 		planReq.Mvcc = &viewpb.GetQueryPlanRequest_ConsistencyLevel{

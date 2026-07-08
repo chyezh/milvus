@@ -114,10 +114,11 @@ inherits the SN's primary/secondary status for the corresponding pchannel.
 - **Strong consistency**: MVCC frontiers must come from the primary SN (latest WAL
   positions). Only the primary SN can guarantee the most up-to-date read point.
   Uses `consistency_level` mode in GetQueryPlanRequest.
-- **Session consistency**: Proxy maintains a per-session last write timestamp. This
-  timestamp is converted into a `QueryPlanMVCC` and passed via `query_plan_mvcc`
-  mode in GetQueryPlanRequest, so the SN uses it directly without WAL lookup. Can
-  target any replica.
+- **Session consistency**: Same MVCC routing as Strong consistency. MVCC frontiers
+  must come from the primary SN; when the selected target is not primary, Proxy
+  first obtains `QueryPlanMVCC` from primary and forwards it to the target. SN
+  does not distinguish Session from Strong; primary planning is sent as
+  `consistency_level=Strong`.
 - **Bounded / Eventual**: MVCC can come from any replica's SN. Secondary SNs use
   their WAL subscription position. Uses `consistency_level` mode.
 
@@ -150,6 +151,8 @@ Proxy selects target replica (load balancing):
   if strong consistency AND target is NOT primary:
     → primary SN: GetMVCCTimestamp() → mvcc
     → target SN: GetQueryPlan(query_plan_mvcc=mvcc) → plan → Phase 2
+  if session consistency:
+    → same routing as strong; primary planning uses consistency_level=Strong
 ```
 
 **Error handling for stale primary mapping:**

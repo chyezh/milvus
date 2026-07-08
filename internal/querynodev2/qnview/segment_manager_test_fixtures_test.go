@@ -9,6 +9,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/querynodev2/segments"
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
@@ -64,6 +65,20 @@ func (s *fakeTransformSegment) WaitTransformApplied(_ context.Context, timetick 
 func (s *fakeTransformSegment) Release(context.Context) error {
 	s.released = true
 	return nil
+}
+
+type fakeReadableTransformSegment struct {
+	fakeTransformSegment
+	querySegment segments.Segment
+	collection   *segments.Collection
+}
+
+func (s *fakeReadableTransformSegment) QuerySegment() segments.Segment {
+	return s.querySegment
+}
+
+func (s *fakeReadableTransformSegment) Collection() *segments.Collection {
+	return s.collection
 }
 
 type fakeTransformRegistration struct {

@@ -149,6 +149,12 @@ func (w *walAdaptorImpl) GetLatestQueryPlanMVCC(ctx context.Context, vchannel st
 		// if the mvcc is not confirmed, trigger a sync operation to make it confirmed as soon as possible.
 		resource.Resource().TimeTickInspector().TriggerSync(w.rwWALImpls.Channel(), false)
 	}
+	mlog.Debug(ctx, "query view latest mvcc resolved",
+		mlog.FieldVChannel(vchannel),
+		mlog.Uint64("growingTimeTick", currentMVCC.GrowingTimetick),
+		mlog.Uint64("transformingTimeTick", currentMVCC.TransformingTimetick),
+		mlog.Bool("confirmed", currentMVCC.Confirmed),
+	)
 	return &viewpb.QueryPlanMVCC{
 		GrowingTimetick:      currentMVCC.GrowingTimetick,
 		TransformingTimetick: currentMVCC.TransformingTimetick,
@@ -189,6 +195,14 @@ func (w *walAdaptorImpl) GetQueryPlan(ctx context.Context, req *viewpb.GetQueryP
 		Mvcc:      mvcc,
 		WorkNodes: buildQueryPlanWorkNodes(lease.View, req),
 	}
+	mlog.Debug(ctx, "query view plan created",
+		mlog.FieldCollectionID(lease.Meta.GetCollectionId()),
+		mlog.FieldVChannel(shardID.VChannel),
+		mlog.Int64("replicaID", shardID.ReplicaID),
+		mlog.Uint64("growingTimeTick", mvcc.GetGrowingTimetick()),
+		mlog.Uint64("transformingTimeTick", mvcc.GetTransformingTimetick()),
+		mlog.Int("workNodeCount", len(plan.WorkNodes)),
+	)
 	var runtime *viewresource.QueryRuntime
 	if w.viewResourceManager != nil {
 		runtime, _ = w.viewResourceManager.GetQueryRuntime(qviews.QueryViewKey{
