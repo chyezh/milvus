@@ -85,6 +85,20 @@ func TestQueryPlanMVCCTracksGrowingAndTransformingSeparately(t *testing.T) {
 	assert.Equal(t, VChannelMVCC{}, missing)
 }
 
+func TestCreateCollectionInitializesQueryPlanMVCC(t *testing.T) {
+	cm := NewMVCCManager(100)
+
+	cm.UpdateMVCC(createTestMessage(t, 120, "vc1", message.MessageTypeCreateCollection, false, true))
+
+	mvcc := cm.GetMVCCOfVChannel("vc1")
+	assert.Equal(t, VChannelMVCC{GrowingTimetick: 120, TransformingTimetick: 120, Confirmed: false}, mvcc)
+
+	cm.UpdateMVCC(createTestMessage(t, 120, "", message.MessageTypeTimeTick, false, true))
+
+	mvcc = cm.GetMVCCOfVChannel("vc1")
+	assert.Equal(t, VChannelMVCC{GrowingTimetick: 120, TransformingTimetick: 120, Confirmed: true}, mvcc)
+}
+
 func TestRecoveryBarrierConfirmsQueryPlanMVCC(t *testing.T) {
 	cm := NewMVCCManager(100)
 	cm.ApplyRecoveryBarrier("vc1", 120)

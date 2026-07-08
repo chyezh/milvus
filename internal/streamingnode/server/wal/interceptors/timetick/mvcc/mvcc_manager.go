@@ -77,6 +77,12 @@ func (cm *MVCCManager) UpdateMVCC(msg message.MutableMessage) {
 	}
 	mvcc := cm.vchannelMVCCs[vchannel]
 	switch msgType {
+	case message.MessageTypeCreateCollection:
+		if tt <= max(mvcc.GrowingTimetick, mvcc.TransformingTimetick) {
+			return
+		}
+		mvcc.GrowingTimetick = tt
+		mvcc.TransformingTimetick = tt
 	case message.MessageTypeInsert:
 		if tt <= mvcc.GrowingTimetick {
 			return
