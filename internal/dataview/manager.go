@@ -39,6 +39,7 @@ type SegmentStore interface {
 }
 
 type Manager interface {
+	OnCreateCollection(ctx context.Context, event CreateCollectionDataViewEvent) (*viewpb.DataVersion, error)
 	OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error)
 	OnImport(ctx context.Context, event ImportDataViewEvent) (*viewpb.DataVersion, error)
 	OnCopySegmentComplete(ctx context.Context, event CopySegmentCompleteDataViewEvent) (*viewpb.DataVersion, error)
@@ -57,6 +58,11 @@ type Manager interface {
 	ShardTimeTicks(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewShardTimeTick, error)
 	IsSegmentReferenced(ctx context.Context, collectionID int64, segmentID int64) (bool, error)
 	GarbageCollect(ctx context.Context, collectionID int64, protected []*viewpb.DataVersion, retainLatest int) error
+}
+
+type CreateCollectionDataViewEvent struct {
+	CollectionID int64
+	VChannels    []string
 }
 
 type FlushDataViewEvent struct {
@@ -265,6 +271,41 @@ func NewManager(catalog metastore.DataCoordCatalog, segments SegmentStore) Manag
 		segments: segments,
 		states:   make(map[int64]*collectionDataViewState),
 	}
+}
+
+func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCollectionDataViewEvent) (*viewpb.DataVersion, error) {
+	state := m.getOrCreateState(event.CollectionID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.dropped = false
+
+	if state.latestResident != nil {
+		if state.latestVisible == nil {
+			state.latestVisible = m.withDeleteTimetick(ctx, state.latestResident)
+		}
+		return dataVersionFromView(state.latestResident), nil
+	}
+
+	persistedViews, err := m.catalog.ListDataViews(ctx, event.CollectionID)
+	if err != nil {
+		return nil, err
+	}
+	latestPersisted := latestDataView(persistedViews)
+	if latestPersisted != nil {
+		state.latestResident = canonicalDataViewClone(latestPersisted)
+		state.latestVisible = m.latestVisiblePersistedView(ctx, persistedViews)
+		return dataVersionFromView(state.latestResident), nil
+	}
+
+	view := buildEmptyDataView(event.CollectionID, event.VChannels)
+	view.DataVersion = nextDataVersion(nil, dataViewAdvanceStreaming)
+	toPersist := cloneDataViewWithoutDeleteTimetick(view)
+	if err := m.catalog.SaveDataView(ctx, toPersist); err != nil {
+		return nil, err
+	}
+	state.latestResident = canonicalDataViewClone(toPersist)
+	state.latestVisible = m.withDeleteTimetick(ctx, state.latestResident)
+	return dataVersionFromView(state.latestResident), nil
 }
 
 func (m *dataViewManager) OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error) {
@@ -1095,6 +1136,26 @@ func canonicalizeDataView(view *viewpb.DataViewOfCollection) {
 			partition.SegmentIds = dedupSortedInt64s(partition.SegmentIds)
 		}
 	}
+}
+
+func buildEmptyDataView(collectionID int64, vchannels []string) *viewpb.DataViewOfCollection {
+	view := &viewpb.DataViewOfCollection{
+		CollectionId: collectionID,
+		DataVersion:  &viewpb.DataVersion{},
+	}
+	if len(vchannels) == 0 {
+		return view
+	}
+	seen := make(map[string]struct{}, len(vchannels))
+	for _, vchannel := range vchannels {
+		if _, ok := seen[vchannel]; ok {
+			continue
+		}
+		seen[vchannel] = struct{}{}
+		view.Shards = append(view.Shards, &viewpb.DataViewOfShard{Vchannel: vchannel})
+	}
+	canonicalizeDataView(view)
+	return view
 }
 
 func dedupSortedInt64s(values []int64) []int64 {

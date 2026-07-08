@@ -28,6 +28,8 @@ type ShardViewRegistry struct {
 	shards   map[qviews.ShardID]*ShardViewManager
 	stats    map[qviews.ShardID]*ShardStats
 	snapshot *ShardViewSnapshot
+
+	statsObservers []func(qviews.ShardID, *ShardStats)
 }
 
 // RecoverShardViewRegistry constructs a ShardViewRegistry and rebuilds every
@@ -129,6 +131,18 @@ func (r *ShardViewRegistry) Snapshot() *ShardViewSnapshot {
 	return r.snapshot
 }
 
+// RegisterStatsObserver registers an observer for future per-shard stats
+// updates. The current snapshot is not replayed; callers that need recovery
+// state should read Snapshot explicitly.
+func (r *ShardViewRegistry) RegisterStatsObserver(observer func(qviews.ShardID, *ShardStats)) {
+	if observer == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.statsObservers = append(r.statsObservers, observer)
+}
+
 type ShardViewSnapshot struct {
 	version uint64
 	stats   map[qviews.ShardID]*ShardStats
@@ -161,12 +175,18 @@ func (s *ShardViewSnapshot) StatsMap() map[qviews.ShardID]*ShardStats {
 
 func (r *ShardViewRegistry) onShardStatsChanged(shardID qviews.ShardID, stats *ShardStats) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if _, ok := r.shards[shardID]; !ok {
+		r.mu.Unlock()
 		return
 	}
 	r.stats[shardID] = stats
 	r.version++
+	observers := append([]func(qviews.ShardID, *ShardStats){}, r.statsObservers...)
+	r.mu.Unlock()
+
+	for _, observer := range observers {
+		observer(shardID, stats)
+	}
 }
 
 func (r *ShardViewRegistry) publishSnapshotLocked() {

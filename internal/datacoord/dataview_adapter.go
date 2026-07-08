@@ -28,6 +28,7 @@ import (
 
 type (
 	DataViewManager                  = dataview.Manager
+	CreateCollectionDataViewEvent    = dataview.CreateCollectionDataViewEvent
 	FlushDataViewEvent               = dataview.FlushDataViewEvent
 	ImportDataViewEvent              = dataview.ImportDataViewEvent
 	CopySegmentCompleteDataViewEvent = dataview.CopySegmentCompleteDataViewEvent
@@ -44,6 +45,16 @@ type dataViewSegmentStore struct {
 
 func newDataViewManager(catalog metastore.DataCoordCatalog, meta *meta) DataViewManager {
 	return dataview.NewManager(catalog, &dataViewSegmentStore{meta: meta})
+}
+
+func (s *Server) CreateCollectionDataView(ctx context.Context, collectionID int64, vchannels []string) (*viewpb.DataVersion, error) {
+	if s.dataViewManager == nil {
+		return nil, nil
+	}
+	return s.dataViewManager.OnCreateCollection(ctx, dataview.CreateCollectionDataViewEvent{
+		CollectionID: collectionID,
+		VChannels:    vchannels,
+	})
 }
 
 func (s *Server) Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewOfCollection, error) {
