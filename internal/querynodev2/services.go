@@ -44,6 +44,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/analyzer"
 	"github.com/milvus-io/milvus/internal/util/fileresource"
 	"github.com/milvus-io/milvus/internal/util/searchutil/scheduler"
+	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	streamingstatus "github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/internal/util/streamrpc"
 	"github.com/milvus-io/milvus/internal/util/textmatch"
@@ -1322,6 +1323,10 @@ func (node *QueryNode) GetDataDistribution(ctx context.Context, req *querypb.Get
 
 	channelVersionInfos := make([]*querypb.ChannelVersionInfo, 0)
 	leaderViews := make([]*querypb.LeaderView, 0)
+	var labels map[string]string
+	if node.session != nil {
+		labels = node.session.ServerLabels
+	}
 
 	node.delegators.Range(func(key string, delegator delegator.ShardDelegator) bool {
 		if !delegator.Serviceable() {
@@ -1368,7 +1373,7 @@ func (node *QueryNode) GetDataDistribution(ctx context.Context, req *querypb.Get
 			TargetVersion:          queryView.GetVersion(),
 			Status: &querypb.LeaderViewStatus{
 				Serviceable:             queryView.Serviceable(),
-				CatchingUpStreamingData: delegator.CatchingUpStreamingData(),
+				CatchingUpStreamingData: leaderViewCatchingUpStreamingData(labels, delegator.CatchingUpStreamingData()),
 			},
 		})
 		return true
@@ -1384,6 +1389,14 @@ func (node *QueryNode) GetDataDistribution(ctx context.Context, req *querypb.Get
 		MemCapacityInMB: float64(hardware.GetMemoryCount() / 1024 / 1024),
 		CpuNum:          int64(hardware.GetCPUNum()),
 	}, nil
+}
+
+func leaderViewCatchingUpStreamingData(labels map[string]string, catchingUp bool) bool {
+	if labels[sessionutil.LabelStreamingNodeEmbeddedQueryNode] == "1" ||
+		labels[sessionutil.LegacyLabelStreamingNodeEmbeddedQueryNode] == "1" {
+		return false
+	}
+	return catchingUp
 }
 
 func (node *QueryNode) SyncDistribution(ctx context.Context, req *querypb.SyncDistributionRequest) (*commonpb.Status, error) {

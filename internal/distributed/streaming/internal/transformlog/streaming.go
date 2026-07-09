@@ -136,14 +136,6 @@ func (s *resumableStream) resumeLoop() {
 		}
 		underlying, err := s.factory(s.ctx, s.pchannel)
 		if err != nil {
-			if !isRetryable(err) {
-				mlog.Debug(s.ctx, "resumable transform log stream create failed with non-retryable error",
-					mlog.FieldPChannel(s.pchannel),
-					mlog.Err(err),
-				)
-				finalErr = err
-				return
-			}
 			mlog.Debug(s.ctx, "resumable transform log stream create failed, retrying",
 				mlog.FieldPChannel(s.pchannel),
 				mlog.Err(err),
@@ -164,14 +156,6 @@ func (s *resumableStream) resumeLoop() {
 		}
 		_ = underlying.Close()
 		s.clearUnderlying(underlying)
-		if err != nil && !isRetryable(err) {
-			mlog.Debug(s.ctx, "resumable transform log stream stopped by non-retryable error",
-				mlog.FieldPChannel(s.pchannel),
-				mlog.Err(err),
-			)
-			finalErr = err
-			return
-		}
 		mlog.Debug(s.ctx, "resumable transform log stream underlying stream unavailable, retrying",
 			mlog.FieldPChannel(s.pchannel),
 			mlog.Err(err),
@@ -206,7 +190,7 @@ func (s *resumableStream) subscribePending(underlying wal.TransformLogStream) er
 			continue
 		}
 		if err := s.subscribeRemote(underlying, sub); err != nil {
-			if isRetryable(err) {
+			if underlying.Error() != nil {
 				return err
 			}
 			_ = sub.handle(wal.TransformLogStreamEvent{
@@ -214,7 +198,7 @@ func (s *resumableStream) subscribePending(underlying wal.TransformLogStream) er
 				VChannel:       sub.VChannel(),
 				Err:            err,
 			})
-			s.removeSubscription(sub, err)
+			sub.markReady(nil)
 		}
 	}
 	return nil
@@ -278,22 +262,12 @@ func (s *resumableStream) waitUntilUnavailable(underlying wal.TransformLogStream
 }
 
 func (s *resumableStream) removeSubscription(sub *resumableSubscription, err error) {
-	s.removeSubscriptionWithRemoteClose(sub, err, true)
-}
-
-func (s *resumableStream) removeSubscriptionFromHandler(sub *resumableSubscription, err error) {
-	s.removeSubscriptionWithRemoteClose(sub, err, false)
-}
-
-func (s *resumableStream) removeSubscriptionWithRemoteClose(sub *resumableSubscription, err error, closeRemote bool) {
 	var remote wal.TransformLogSubscription
 	shouldClose := false
 	s.mu.Lock()
 	if s.subscriptions[sub.id] == sub {
 		delete(s.subscriptions, sub.id)
-		if closeRemote {
-			remote = sub.remote
-		}
+		remote = sub.remote
 		sub.remote = nil
 		shouldClose = len(s.subscriptions) == 0 && !s.closing
 	}

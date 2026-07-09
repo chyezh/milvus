@@ -15,8 +15,9 @@ import (
 // I/O (reporting to Coord, persistence, resource release) is signaled through
 // pending protos consumed via ConsumeReport / ConsumePersist / ConsumeRelease.
 //
-// The SN only stores its own portion of the view: QueryViewMeta + QueryViewOfStreamingNode.
-// It does not have access to the full QueryViewOfShard.
+// The SN stores the complete shard view it receives from Coord. Its local
+// resources are described by QueryViewOfStreamingNode, while QueryNode topology
+// must be retained for query planning after SN crash recovery.
 //
 // State flow:
 //
@@ -31,9 +32,10 @@ import (
 //
 // Thread-safety: NOT thread-safe. The caller must serialize access.
 type snQueryViewStateMachine struct {
-	state  qviews.QueryViewState
-	meta   *viewpb.QueryViewMeta
-	snView *viewpb.QueryViewOfStreamingNode
+	state      qviews.QueryViewState
+	meta       *viewpb.QueryViewMeta
+	snView     *viewpb.QueryViewOfStreamingNode
+	queryNodes []*viewpb.QueryViewOfQueryNode
 
 	pendingReport  *viewpb.QueryViewOfShard
 	pendingPersist *viewpb.QueryViewOfShard
@@ -45,11 +47,12 @@ type snQueryViewStateMachine struct {
 //
 // After construction:
 //   - ConsumeReport returns Preparing (acknowledge receipt to Coord).
-func newSNQueryViewStateMachine(meta *viewpb.QueryViewMeta, snView *viewpb.QueryViewOfStreamingNode) *snQueryViewStateMachine {
+func newSNQueryViewStateMachine(meta *viewpb.QueryViewMeta, snView *viewpb.QueryViewOfStreamingNode, queryNodes []*viewpb.QueryViewOfQueryNode) *snQueryViewStateMachine {
 	sm := &snQueryViewStateMachine{
-		state:  qviews.QueryViewStatePreparing,
-		meta:   meta,
-		snView: snView,
+		state:      qviews.QueryViewStatePreparing,
+		meta:       proto.Clone(meta).(*viewpb.QueryViewMeta),
+		snView:     cloneStreamingNodeView(snView),
+		queryNodes: cloneQueryNodeViews(queryNodes),
 	}
 	sm.pendingReport = sm.buildReport()
 	return sm
@@ -62,11 +65,12 @@ func newSNQueryViewStateMachine(meta *viewpb.QueryViewMeta, snView *viewpb.Query
 //   - State is UpRecovering (WAL must catch up before serving).
 //   - No pendingReport (don't report until WAL catches up).
 //   - No pendingPersist (already persisted as Up).
-func recoverSNQueryViewStateMachine(meta *viewpb.QueryViewMeta, snView *viewpb.QueryViewOfStreamingNode) *snQueryViewStateMachine {
+func recoverSNQueryViewStateMachine(meta *viewpb.QueryViewMeta, snView *viewpb.QueryViewOfStreamingNode, queryNodes []*viewpb.QueryViewOfQueryNode) *snQueryViewStateMachine {
 	return &snQueryViewStateMachine{
-		state:  qviews.QueryViewStateUpRecovering,
-		meta:   meta,
-		snView: snView,
+		state:      qviews.QueryViewStateUpRecovering,
+		meta:       proto.Clone(meta).(*viewpb.QueryViewMeta),
+		snView:     cloneStreamingNodeView(snView),
+		queryNodes: cloneQueryNodeViews(queryNodes),
 	}
 }
 
@@ -82,12 +86,33 @@ func (sm *snQueryViewStateMachine) IsRecovering() bool {
 
 // Meta returns the query view meta.
 func (sm *snQueryViewStateMachine) Meta() *viewpb.QueryViewMeta {
-	return sm.meta
+	return proto.Clone(sm.meta).(*viewpb.QueryViewMeta)
 }
 
-// SNView returns the original QueryViewOfStreamingNode.
+// SNView returns the StreamingNode-local portion of the retained shard view.
 func (sm *snQueryViewStateMachine) SNView() *viewpb.QueryViewOfStreamingNode {
-	return sm.snView
+	return cloneStreamingNodeView(sm.snView)
+}
+
+// QueryNodes returns the query-node topology retained for query planning.
+func (sm *snQueryViewStateMachine) QueryNodes() []*viewpb.QueryViewOfQueryNode {
+	return cloneQueryNodeViews(sm.queryNodes)
+}
+
+// UpdateView records the latest complete shard topology pushed by Coord. State
+// transitions still use the state machine's current state; incoming Meta.State
+// is only a command input and is overwritten by buildReport/buildDroppedPersist.
+func (sm *snQueryViewStateMachine) UpdateView(view *viewpb.QueryViewOfShard) {
+	if view == nil {
+		return
+	}
+	if view.GetMeta() != nil {
+		sm.meta = proto.Clone(view.GetMeta()).(*viewpb.QueryViewMeta)
+	}
+	if view.GetStreamingNode() != nil {
+		sm.snView = cloneStreamingNodeView(view.GetStreamingNode())
+	}
+	sm.queryNodes = cloneQueryNodeViews(view.GetQueryNode())
 }
 
 // OnCoordStateDelivered handles a state push from the Coordinator.
@@ -295,7 +320,8 @@ func (sm *snQueryViewStateMachine) buildReport() *viewpb.QueryViewOfShard {
 
 	return &viewpb.QueryViewOfShard{
 		Meta:          meta,
-		StreamingNode: proto.Clone(sm.snView).(*viewpb.QueryViewOfStreamingNode),
+		QueryNode:     cloneQueryNodeViews(sm.queryNodes),
+		StreamingNode: cloneStreamingNodeView(sm.snView),
 	}
 }
 
@@ -307,6 +333,28 @@ func (sm *snQueryViewStateMachine) buildDroppedPersist() *viewpb.QueryViewOfShar
 
 	return &viewpb.QueryViewOfShard{
 		Meta:          meta,
-		StreamingNode: proto.Clone(sm.snView).(*viewpb.QueryViewOfStreamingNode),
+		QueryNode:     cloneQueryNodeViews(sm.queryNodes),
+		StreamingNode: cloneStreamingNodeView(sm.snView),
 	}
+}
+
+func cloneStreamingNodeView(view *viewpb.QueryViewOfStreamingNode) *viewpb.QueryViewOfStreamingNode {
+	if view == nil {
+		return nil
+	}
+	return proto.Clone(view).(*viewpb.QueryViewOfStreamingNode)
+}
+
+func cloneQueryNodeViews(views []*viewpb.QueryViewOfQueryNode) []*viewpb.QueryViewOfQueryNode {
+	if len(views) == 0 {
+		return nil
+	}
+	out := make([]*viewpb.QueryViewOfQueryNode, 0, len(views))
+	for _, view := range views {
+		if view == nil {
+			continue
+		}
+		out = append(out, proto.Clone(view).(*viewpb.QueryViewOfQueryNode))
+	}
+	return out
 }

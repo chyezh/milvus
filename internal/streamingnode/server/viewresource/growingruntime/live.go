@@ -51,7 +51,7 @@ func messageAdvancesTransformFrontier(msg message.ImmutableMessage) bool {
 		return false
 	}
 	switch msg.MessageType() {
-	case message.MessageTypeDelete:
+	case message.MessageTypeDelete, message.MessageTypeRecoveryBarrier:
 		return true
 	case message.MessageTypeTxn:
 		txn := message.AsImmutableTxnMessage(msg)

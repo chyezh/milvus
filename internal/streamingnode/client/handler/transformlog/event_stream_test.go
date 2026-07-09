@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	streamingstatus "github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v3/mocks/proto/mock_streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
@@ -63,7 +64,7 @@ func TestEventStreamPublishesSubscriptionEventsOnSharedOutput(t *testing.T) {
 	require.Equal(t, uint64(10), event.CaughtUp.StartAfterTimeTick)
 }
 
-func TestEventStreamPublishesStreamErrorToSubscriptions(t *testing.T) {
+func TestEventStreamReportsStreamErrorOnStreamOnly(t *testing.T) {
 	ctx := context.Background()
 	fakeStream := newFakeSubscribeTransformClient(ctx)
 	handlerClient := mock_streamingpb.NewMockStreamingNodeHandlerServiceClient(t)
@@ -78,10 +79,46 @@ func TestEventStreamPublishesStreamErrorToSubscriptions(t *testing.T) {
 	streamErr := errors.New("stream broken")
 	fakeStream.fail(streamErr)
 
+	requireNoEvent(t, handler.events)
+	require.Eventually(t, func() bool {
+		select {
+		case <-stream.Done():
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+	require.ErrorIs(t, stream.Error(), streamErr)
+	require.ErrorIs(t, sub.Close(), streamErr)
+}
+
+func TestEventStreamPublishesSubscriptionError(t *testing.T) {
+	ctx := context.Background()
+	fakeStream := newFakeSubscribeTransformClient(ctx)
+	handlerClient := mock_streamingpb.NewMockStreamingNodeHandlerServiceClient(t)
+	handlerClient.EXPECT().SubscribeTransform(mock.Anything, mock.Anything).Return(fakeStream, nil).Once()
+
+	stream, err := CreateEventStream(ctx, &EventStreamOptions{Assignment: testAssignment()}, handlerClient)
+	require.NoError(t, err)
+	defer stream.Close()
+
+	handler := newRecordingHandler()
+	sub := subscribeEventForTest(t, ctx, stream, "v1", 10, handler, fakeStream)
+	subErr := streamingstatus.NewIgnoreOperation("subscription failed")
+	fakeStream.recv(&streamingpb.TransformResponse{
+		Response: &streamingpb.TransformResponse_SubscriptionError{
+			SubscriptionError: &streamingpb.TransformSubscriptionError{
+				SubscriptionId: sub.ID(),
+				Vchannel:       "v1",
+				Error:          subErr.AsPBError(),
+			},
+		},
+	})
+
 	event := recvEvent(t, handler.events)
 	require.Equal(t, sub.ID(), event.SubscriptionID)
 	require.Equal(t, "v1", event.VChannel)
-	require.ErrorIs(t, event.Err, streamErr)
+	require.True(t, streamingstatus.AsStreamingError(event.Err).IsIgnoredOperation())
 }
 
 func subscribeEventForTest(
@@ -152,6 +189,15 @@ func recvEvent[T any](t *testing.T, ch <-chan T) T {
 		t.Fatal("timeout waiting event")
 		var zero T
 		return zero
+	}
+}
+
+func requireNoEvent[T any](t *testing.T, ch <-chan T) {
+	t.Helper()
+	select {
+	case event := <-ch:
+		t.Fatalf("unexpected event: %+v", event)
+	case <-time.After(20 * time.Millisecond):
 	}
 }
 

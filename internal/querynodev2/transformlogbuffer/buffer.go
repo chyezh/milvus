@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/cockroachdb/errors"
+
 	"github.com/milvus-io/milvus/internal/querynodev2/qnview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/views/qviews"
@@ -56,27 +58,16 @@ func (b *Buffer) Acquire(ctx context.Context, view *qviews.QueryViewAtQueryNode)
 		if err != nil {
 			return nil, err
 		}
-		buf = newVChannelBuffer(b, pchannel, vchannel, startFrom, nil)
-		sub, err := stream.stream.Subscribe(ctx, wal.TransformLogSubscriptionOption{
-			VChannel:           vchannel,
-			StartAfterTimeTick: startFrom,
-			Handler:            bufEventHandler{buffer: buf},
-		})
-		if err != nil {
-			return nil, err
-		}
-		buf.sub = sub
+		buf = newVChannelBuffer(b, pchannel, vchannel, startFrom)
 		b.channels[vchannel] = buf
 		stream.refs[vchannel] = buf
-		mlog.Debug(ctx, "querynode transform log buffer subscribed vchannel",
-			mlog.FieldPChannel(pchannel),
-			mlog.FieldVChannel(vchannel),
-			mlog.Uint64("startAfterTimeTick", startFrom),
-			mlog.Int64("subscriptionID", sub.ID()),
-		)
 	}
-	if err := buf.acquire(ctx, startFrom); err != nil {
+	if err := buf.acquireLocked(startFrom); err != nil {
 		return nil, err
+	}
+	stream := b.streamsByPChannel[pchannel]
+	if stream != nil {
+		buf.ensureSubscribed(stream.stream)
 	}
 	return &guard{buffer: buf, startFrom: startFrom}, nil
 }
@@ -114,9 +105,18 @@ func (b *Buffer) drainWorker() {
 }
 
 func (b *Buffer) getOrCreateStreamLocked(ctx context.Context, pchannel string) (*streamState, error) {
-	state := b.streamsByPChannel[pchannel]
-	if state != nil {
-		return state, nil
+	if state := b.streamsByPChannel[pchannel]; state != nil {
+		select {
+		case <-state.stream.Done():
+			if len(state.refs) == 0 {
+				delete(b.streamsByPChannel, pchannel)
+				_ = state.stream.Close()
+			} else {
+				return state, nil
+			}
+		default:
+			return state, nil
+		}
 	}
 	if b.streams == nil {
 		return nil, wal.ErrTransformLogInvalidReadOption
@@ -128,7 +128,7 @@ func (b *Buffer) getOrCreateStreamLocked(ctx context.Context, pchannel string) (
 	mlog.Debug(ctx, "querynode transform log buffer acquired pchannel stream",
 		mlog.FieldPChannel(pchannel),
 	)
-	state = &streamState{
+	state := &streamState{
 		pchannel: pchannel,
 		stream:   stream,
 		refs:     make(map[string]*vchannelBuffer),
@@ -137,8 +137,7 @@ func (b *Buffer) getOrCreateStreamLocked(ctx context.Context, pchannel string) (
 	return state, nil
 }
 
-func (b *Buffer) remove(vchannel string, buf *vchannelBuffer) {
-	b.mu.Lock()
+func (b *Buffer) removeLocked(vchannel string, buf *vchannelBuffer) wal.TransformLogStream {
 	if b.channels[vchannel] == buf {
 		delete(b.channels, vchannel)
 	}
@@ -146,13 +145,10 @@ func (b *Buffer) remove(vchannel string, buf *vchannelBuffer) {
 		delete(state.refs, vchannel)
 		if len(state.refs) == 0 {
 			delete(b.streamsByPChannel, buf.pchannel)
-			stream := state.stream
-			b.mu.Unlock()
-			_ = stream.Close()
-			return
+			return state.stream
 		}
 	}
-	b.mu.Unlock()
+	return nil
 }
 
 type streamState struct {
@@ -221,6 +217,11 @@ type vchannelBuffer struct {
 	vchannel string
 	sub      wal.TransformLogSubscription
 
+	initCtx    context.Context
+	initCancel context.CancelFunc
+	initOnce   sync.Once
+	closing    bool
+
 	mu               sync.Mutex
 	retentionStart   uint64
 	visibleTimeTick  uint64
@@ -233,12 +234,14 @@ type vchannelBuffer struct {
 	err              error
 }
 
-func newVChannelBuffer(owner *Buffer, pchannel string, vchannel string, startFrom uint64, sub wal.TransformLogSubscription) *vchannelBuffer {
+func newVChannelBuffer(owner *Buffer, pchannel string, vchannel string, startFrom uint64) *vchannelBuffer {
+	initCtx, initCancel := context.WithCancel(context.Background())
 	return &vchannelBuffer{
 		owner:            owner,
 		pchannel:         pchannel,
 		vchannel:         vchannel,
-		sub:              sub,
+		initCtx:          initCtx,
+		initCancel:       initCancel,
 		retentionStart:   startFrom,
 		visibleTimeTick:  startFrom,
 		visibilityNotify: make(chan struct{}),
@@ -248,9 +251,53 @@ func newVChannelBuffer(owner *Buffer, pchannel string, vchannel string, startFro
 	}
 }
 
-func (b *vchannelBuffer) acquire(_ context.Context, startFrom uint64) error {
+func (b *vchannelBuffer) ensureSubscribed(stream wal.TransformLogStream) {
+	b.initOnce.Do(func() {
+		go b.subscribe(stream)
+	})
+}
+
+func (b *vchannelBuffer) subscribe(stream wal.TransformLogStream) {
+	sub, err := stream.Subscribe(b.initCtx, wal.TransformLogSubscriptionOption{
+		VChannel:           b.vchannel,
+		StartAfterTimeTick: b.retentionStart,
+		Handler:            bufEventHandler{buffer: b},
+	})
+	if err != nil {
+		if b.isClosing() && errors.Is(err, context.Canceled) {
+			return
+		}
+		b.fail(err)
+		return
+	}
+	b.mu.Lock()
+	if b.closing {
+		b.mu.Unlock()
+		_ = sub.Close()
+		return
+	}
+	b.sub = sub
+	b.mu.Unlock()
+	mlog.Debug(context.TODO(), "querynode transform log buffer subscribed vchannel",
+		mlog.FieldPChannel(b.pchannel),
+		mlog.FieldVChannel(b.vchannel),
+		mlog.Uint64("startAfterTimeTick", b.retentionStart),
+		mlog.Int64("subscriptionID", sub.ID()),
+	)
+}
+
+func (b *vchannelBuffer) isClosing() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.closing
+}
+
+func (b *vchannelBuffer) acquireLocked(startFrom uint64) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closing {
+		return context.Canceled
+	}
 	if b.err != nil {
 		return b.err
 	}
@@ -294,9 +341,17 @@ func (b *vchannelBuffer) registerSegment(ctx context.Context, segment qnview.Tra
 
 func (b *vchannelBuffer) drainRegistration(ctx context.Context, reg *registration) error {
 	for {
-		batch, err := b.nextCatchupBatch(reg)
-		if err != nil || len(batch) == 0 {
+		batch, done, notify, err := b.nextCatchupBatch(reg)
+		if err != nil || done {
 			return err
+		}
+		if len(batch) == 0 {
+			select {
+			case <-notify:
+				continue
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 		for _, entry := range batch {
 			select {
@@ -320,14 +375,14 @@ func (b *vchannelBuffer) drainRegistration(ctx context.Context, reg *registratio
 	}
 }
 
-func (b *vchannelBuffer) nextCatchupBatch(reg *registration) ([]*streamingpb.TransformLogEntry, error) {
+func (b *vchannelBuffer) nextCatchupBatch(reg *registration) ([]*streamingpb.TransformLogEntry, bool, <-chan struct{}, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.err != nil {
-		return nil, b.err
+		return nil, false, nil, b.err
 	}
 	if b.pending[reg.segment.ID()] != reg {
-		return nil, nil
+		return nil, true, nil, nil
 	}
 	batch := make([]*streamingpb.TransformLogEntry, 0)
 	for _, entry := range b.entries {
@@ -336,11 +391,14 @@ func (b *vchannelBuffer) nextCatchupBatch(reg *registration) ([]*streamingpb.Tra
 		}
 	}
 	if len(batch) == 0 {
+		if !b.caughtUp {
+			return nil, false, b.visibilityNotify, nil
+		}
 		delete(b.pending, reg.segment.ID())
 		b.live[reg.segment.ID()] = reg
-		return nil, nil
+		return nil, true, nil, nil
 	}
-	return batch, nil
+	return batch, false, nil, nil
 }
 
 func (b *vchannelBuffer) waitTransformVisible(ctx context.Context, timetick uint64) error {
@@ -412,24 +470,36 @@ func (b *vchannelBuffer) removeRegistration(reg *registration) {
 }
 
 func (b *vchannelBuffer) releaseGuard(startFrom uint64) {
+	b.owner.mu.Lock()
 	b.mu.Lock()
 	if count := b.guards[startFrom]; count > 1 {
 		b.guards[startFrom] = count - 1
 		b.trimLocked()
 		b.mu.Unlock()
+		b.owner.mu.Unlock()
 		return
 	}
 	delete(b.guards, startFrom)
 	if len(b.guards) == 0 {
-		b.mu.Unlock()
-		if b.sub != nil {
-			_ = b.sub.Close()
+		b.closing = true
+		if b.initCancel != nil {
+			b.initCancel()
 		}
-		b.owner.remove(b.vchannel, b)
+		sub := b.sub
+		stream := b.owner.removeLocked(b.vchannel, b)
+		b.mu.Unlock()
+		b.owner.mu.Unlock()
+		if sub != nil {
+			_ = sub.Close()
+		}
+		if stream != nil {
+			_ = stream.Close()
+		}
 		return
 	}
 	b.trimLocked()
 	b.mu.Unlock()
+	b.owner.mu.Unlock()
 }
 
 func (b *vchannelBuffer) trimLocked() {

@@ -104,7 +104,7 @@ func recoverSNQueryViewHandler(
 			shardViews = make(map[qviews.QueryViewVersion]*snQueryViewStateMachine)
 			grouped[shardID] = shardViews
 		}
-		shardViews[version] = recoverSNQueryViewStateMachine(meta, snView)
+		shardViews[version] = recoverSNQueryViewStateMachine(meta, snView, view.GetQueryNode())
 	}
 
 	for shardID, shardViews := range grouped {

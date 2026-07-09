@@ -208,6 +208,35 @@ func TestFlushStyleMessageProducesTransformBarrierEntry(t *testing.T) {
 	require.IsType(t, &streamingpb.TransformLogEntry_Barrier{}, entries[1].GetEntry())
 }
 
+func TestRecoveryBarrierInMetaOnlyModeDoesNotHideRecoveredDelete(t *testing.T) {
+	ctx := context.Background()
+	module := NewModule("p1", map[string]*streamingpb.VChannelTransformLogMeta{
+		"v1": {},
+	}, newMemoryStore())
+
+	module.ObserveMessage(ctx, newModuleTestRecoveryBarrierMessage(t, 30))
+	module.SwitchIntoMetaAndData()
+	module.ObserveMessage(ctx, newModuleTestDeleteMessage(t, 20))
+	module.ObserveMessage(ctx, newModuleTestRecoveryBarrierMessage(t, 30))
+
+	scanner := module.Read(ctx, wal.TransformLogReadOption{
+		Name:               "test-scanner",
+		VChannel:           "v1",
+		StartAfterTimeTick: 0,
+	})
+	defer scanner.Close()
+
+	deleteEvent := <-scanner.Chan()
+	require.NotNil(t, deleteEvent.Entry)
+	assert.Equal(t, uint64(20), deleteEvent.Entry.GetTimeTick())
+	require.IsType(t, &streamingpb.TransformLogEntry_Delete{}, deleteEvent.Entry.GetEntry())
+
+	barrierEvent := <-scanner.Chan()
+	require.NotNil(t, barrierEvent.Entry)
+	assert.Equal(t, uint64(30), barrierEvent.Entry.GetTimeTick())
+	require.IsType(t, &streamingpb.TransformLogEntry_Barrier{}, barrierEvent.Entry.GetEntry())
+}
+
 type memoryStore struct {
 	chunks map[string]map[uint64]*streamingpb.TransformLogChunk
 	reads  map[string]map[uint64]int
@@ -298,4 +327,17 @@ func newModuleTestManualFlushMessage(t *testing.T, timetick uint64) message.Immu
 		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
 		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
 	return message.MustAsImmutableManualFlushMessageV2(msg)
+}
+
+func newModuleTestRecoveryBarrierMessage(t *testing.T, timetick uint64) message.ImmutableRecoveryBarrierMessageV2 {
+	t.Helper()
+	mutableMsg := message.NewRecoveryBarrierMessageBuilderV2().
+		WithHeader(&message.RecoveryBarrierMessageHeader{}).
+		WithBody(&message.RecoveryBarrierMessageBody{}).
+		WithAllVChannel().
+		MustBuildMutable()
+	msg := mutableMsg.WithTimeTick(timetick).
+		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
+	return message.MustAsImmutableRecoveryBarrierMessageV2(msg)
 }

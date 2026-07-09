@@ -100,6 +100,27 @@ func newTestFlushMessage(t *testing.T, vchannel string, segmentID int64, timetic
 		IntoImmutableMessage(rmq.NewRmqID(int64(timetick + 1)))
 }
 
+func newTestRecoveryBarrierMessage(t *testing.T, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	mutable := message.NewRecoveryBarrierMessageBuilderV2().
+		WithHeader(&message.RecoveryBarrierMessageHeader{}).
+		WithBody(&message.RecoveryBarrierMessageBody{}).
+		WithAllVChannel().
+		MustBuildMutable()
+	return mutable.WithTimeTick(timetick).
+		WithLastConfirmed(rmq.NewRmqID(int64(timetick))).
+		IntoImmutableMessage(rmq.NewRmqID(int64(timetick + 1)))
+}
+
+func TestRecoveryBarrierAdvancesBothRuntimeFrontiers(t *testing.T) {
+	runtime := newRuntime()
+
+	runtime.applyLiveMessage(context.Background(), newTestRecoveryBarrierMessage(t, 30))
+
+	require.Equal(t, uint64(30), runtime.AppliedGrowingTimeTick())
+	require.Equal(t, uint64(30), runtime.AppliedTransformTimeTick())
+}
+
 func TestRuntimeRejectsLiveInsertAfterFlush(t *testing.T) {
 	initSegcoreForRuntimeTest(t)
 

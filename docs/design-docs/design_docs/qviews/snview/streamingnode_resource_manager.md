@@ -59,7 +59,7 @@ driven by `OnAlterLoadConfig`, `OnDropLoadConfig`, `Acquire`, and `Release`.
 | `GrowingRuntime` | QueryRuntime module that owns growing segment resources for the vchannel. | It does not implement `VChannelLiveObserver`, maintain pending buffers, or decide QueryView lifecycle. Details are defined in [StreamingNode Growing Segment Runtime Design](growing_segment_runtime.md). |
 | `Scheduler` | Runs `QueryRuntime` initialization tasks with bounded concurrency. | It does not know QueryView references, resource lifetime, or DataVersion watermarks. |
 | `QueryViewStateMachine` | PChannel-local WAL submodule that owns QueryView transitions, calls `Acquire` when a QueryView starts using local resources, calls `Release` when a QueryView leaves this PChannel runtime, and drains local QueryViews before WAL handoff close. | It does not manage csegments, BM25 resources, live observers, or resource GC directly. |
-| `QueryView Meta` | WAL-bound metadata persisted for crash recovery and owned by the PChannel-local QueryView state machine. | It is stored under the PChannel WAL identity, used by QueryView recovery and `Acquire`, and must not be scoped by StreamingNode node ID. |
+| `QueryView Meta` | WAL-bound full `QueryViewOfShard` persisted for crash recovery and owned by the PChannel-local QueryView state machine. | It is stored under the PChannel WAL identity, used by QueryView recovery and `Acquire`, and must not be scoped by StreamingNode node ID. The resource manager consumes only the StreamingNode-local portion, but the persisted value must retain QueryNode topology for Phase 1 query planning after restart. |
 
 The key dependency boundary is:
 

@@ -55,10 +55,11 @@ func recoverSnShardView(
 ) *snShardView {
 	entries := make(map[qviews.QueryViewVersion]*snViewEntry, len(views))
 	for version, sm := range views {
-		// Populate ApplyView.View from SM's meta+snView so that
-		// consumeAndRelease can safely call entry.View.QueryViewKey().
+		// Populate ApplyView.View from SM's full shard view so query planning
+		// after recovery still sees QueryNode topology.
 		view := qviews.NewQueryViewAtWorkNodeFromProto(&viewpb.QueryViewOfShard{
 			Meta:          sm.Meta(),
+			QueryNode:     sm.QueryNodes(),
 			StreamingNode: sm.SNView(),
 		})
 		entries[version] = &snViewEntry{
@@ -217,9 +218,11 @@ func (s *snShardView) applyOneLocked(av *handler.ApplyView) {
 		case qviews.QueryViewStatePreparing:
 			// New Preparing view: create SM and acquire resources.
 			snView := av.View.(*qviews.QueryViewAtStreamingNode)
+			pb := snView.IntoProto()
 			sm := newSNQueryViewStateMachine(
-				snView.IntoProto().Meta,
-				snView.ViewOfStreamingNode(),
+				pb.Meta,
+				pb.StreamingNode,
+				pb.QueryNode,
 			)
 			entry = &snViewEntry{ApplyView: *av, sm: sm}
 			s.views[key.QueryViewVersion] = entry
@@ -258,6 +261,7 @@ func (s *snShardView) applyOneLocked(av *handler.ApplyView) {
 
 	// Existing view: replace callback and deliver coord push.
 	entry.ApplyView = *av
+	entry.sm.UpdateView(av.View.IntoProto())
 	before := entry.sm.State()
 	entry.sm.OnCoordStateDelivered(pushedState)
 	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeApplyCoordViewEvent{

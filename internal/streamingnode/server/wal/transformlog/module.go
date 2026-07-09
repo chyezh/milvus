@@ -98,6 +98,9 @@ func (m *Module) ObserveMessage(ctx context.Context, msg message.ImmutableMessag
 	case message.MessageTypeTxn:
 		return m.observeTransformLogMessage(msg)
 	case message.MessageTypeRecoveryBarrier:
+		if m.currentMode() != moduleModeMetaAndData {
+			return moduleapi.ObserveResult{}
+		}
 		return m.flushAllByMessageTimeTick(msg.TimeTick(), msg.MessageType())
 	case message.MessageTypeDropCollection,
 		message.MessageTypeFlushAll:

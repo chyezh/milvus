@@ -61,13 +61,6 @@ func TestResumableStreamResubscribesFromLastDeliveredTimeTick(t *testing.T) {
 	require.Equal(t, sub2.ID(), event.SubscriptionID)
 	require.Equal(t, uint64(21), event.Entry.GetTimeTick())
 
-	first.emit(wal.TransformLogStreamEvent{
-		SubscriptionID: first.subscriptionID("pchannel_100v0"),
-		VChannel:       "pchannel_100v0",
-		Err:            grpcstatus.Error(codes.Unavailable, "stream broken"),
-	})
-	requireNoStreamEvent(t, handler1.events)
-
 	first.finish(grpcstatus.Error(codes.Unavailable, "stream broken"))
 
 	require.Eventually(t, func() bool {
@@ -91,16 +84,33 @@ func TestResumableStreamResubscribesFromLastDeliveredTimeTick(t *testing.T) {
 	require.Equal(t, uint64(12), event.Entry.GetTimeTick())
 }
 
-func subscribeStreamForTest(
-	t *testing.T,
-	ctx context.Context,
-	stream wal.TransformLogStream,
-	opt wal.TransformLogSubscriptionOption,
-) wal.TransformLogSubscription {
+func TestResumableStreamKeepsSubscriptionOnSubscribeError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	underlying := newFakeTransformLogStream()
+	underlying.subscribeErrByVChan["pchannel_100v0"] = wal.ErrTransformLogStartPointTruncated
+	stream := NewResumableStream(ctx, "pchannel", func(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
+		return underlying, nil
+	})
+	defer stream.Close()
+
+	handler := newRecordingHandler()
+	sub := subscribeStreamForTest(t, ctx, stream, wal.TransformLogSubscriptionOption{
+		VChannel:           "pchannel_100v0",
+		StartAfterTimeTick: 10,
+		Handler:            handler,
+	})
+	event := recvStreamEvent(t, handler.events)
+	require.Equal(t, sub.ID(), event.SubscriptionID)
+	require.Equal(t, "pchannel_100v0", event.VChannel)
+	require.ErrorIs(t, event.Err, wal.ErrTransformLogStartPointTruncated)
+}
+
+func subscribeStreamForTest(t *testing.T, ctx context.Context, stream wal.TransformLogStream, opt wal.TransformLogSubscriptionOption) wal.TransformLogSubscription {
 	t.Helper()
 	sub, err := stream.Subscribe(ctx, opt)
 	require.NoError(t, err)
-	require.NotNil(t, sub)
 	return sub
 }
 
@@ -115,37 +125,32 @@ func recvStreamEvent(t *testing.T, ch <-chan wal.TransformLogStreamEvent) wal.Tr
 	}
 }
 
-func requireNoStreamEvent(t *testing.T, ch <-chan wal.TransformLogStreamEvent) {
-	t.Helper()
-	select {
-	case event := <-ch:
-		t.Fatalf("unexpected transform log stream event: %+v", event)
-	case <-time.After(20 * time.Millisecond):
-	}
-}
-
 type fakeTransformLogStream struct {
-	mu          sync.Mutex
-	nextID      int64
-	optsByID    map[int64]wal.TransformLogSubscriptionOption
-	idsByVChan  map[string]int64
-	done        chan struct{}
-	err         error
-	finishOnce  sync.Once
-	closeCalled bool
+	mu                  sync.Mutex
+	nextID              int64
+	optsByID            map[int64]wal.TransformLogSubscriptionOption
+	idsByVChan          map[string]int64
+	subscribeErrByVChan map[string]error
+	done                chan struct{}
+	err                 error
+	finishOnce          sync.Once
 }
 
 func newFakeTransformLogStream() *fakeTransformLogStream {
 	return &fakeTransformLogStream{
-		optsByID:   make(map[int64]wal.TransformLogSubscriptionOption),
-		idsByVChan: make(map[string]int64),
-		done:       make(chan struct{}),
+		optsByID:            make(map[int64]wal.TransformLogSubscriptionOption),
+		idsByVChan:          make(map[string]int64),
+		subscribeErrByVChan: make(map[string]error),
+		done:                make(chan struct{}),
 	}
 }
 
-func (s *fakeTransformLogStream) Subscribe(ctx context.Context, opt wal.TransformLogSubscriptionOption) (wal.TransformLogSubscription, error) {
+func (s *fakeTransformLogStream) Subscribe(_ context.Context, opt wal.TransformLogSubscriptionOption) (wal.TransformLogSubscription, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.subscribeErrByVChan[opt.VChannel]; err != nil {
+		return nil, err
+	}
 	s.nextID++
 	id := s.nextID
 	s.optsByID[id] = opt
@@ -164,9 +169,6 @@ func (s *fakeTransformLogStream) Error() error {
 }
 
 func (s *fakeTransformLogStream) Close() error {
-	s.mu.Lock()
-	s.closeCalled = true
-	s.mu.Unlock()
 	s.finish(nil)
 	return nil
 }

@@ -49,24 +49,24 @@ func NewQueryViewSegmentReadinessManager(physical PhysicalSegmentManager, buffer
 
 func (m *QueryViewSegmentReadinessManager) Acquire(req AcquireSegments) {
 	req = cloneAcquireSegments(req)
-	go m.acquire(req)
+	m.acquire(req)
 }
 
 func (m *QueryViewSegmentReadinessManager) Release(req ReleaseSegments) {
-	go m.release(req)
+	m.release(req)
 }
 
 type transformSegmentLoadState int
 
 const (
-	transformSegmentLoading transformSegmentLoadState = iota
+	transformSegmentWaiting transformSegmentLoadState = iota
+	transformSegmentLoading
 	transformSegmentCatchingUp
 	transformSegmentLoaded
 )
 
 type transformViewRef struct {
 	cancel          context.CancelFunc
-	acquireToken    *struct{}
 	transformGuard  TransformLogGuard
 	collectionGuard CollectionRuntimeGuard
 	segments        map[int64]int64
@@ -94,39 +94,37 @@ type transformSegmentWaiter struct {
 
 func (m *QueryViewSegmentReadinessManager) acquire(req AcquireSegments) {
 	ctx, cancel := context.WithCancel(context.Background())
-	token := &struct{}{}
 	view := qviews.NewQueryViewAtQueryNode(req.Meta, req.View).(*qviews.QueryViewAtQueryNode)
-	oldDetach := m.recordPendingAcquire(req, cancel, token)
-	for _, segment := range oldDetach.segments {
-		_ = segment.Release(context.Background())
-	}
-	oldDetach.guards.release()
-
 	guard, err := m.buffer.Acquire(ctx, view)
 	if err != nil {
 		cancel()
-		if detached, current := m.detachViewIfTokenMatches(req.Key, token); current {
-			detached.guards.release()
-			invokeUnrecoverable(req.OnUnrecoverable)
-		}
+		invokeUnrecoverable(req.OnUnrecoverable)
 		return
 	}
-	if !m.attachTransformGuard(req.Key, token, guard) {
+
+	ref, ok := m.recordPendingAcquire(req, cancel, guard)
+	if !ok {
 		cancel()
 		guard.Release()
 		return
 	}
+	go m.continueAcquire(req, ref, view, ctx, cancel)
+}
+
+func (m *QueryViewSegmentReadinessManager) continueAcquire(req AcquireSegments, ref *transformViewRef, view *qviews.QueryViewAtQueryNode, ctx context.Context, cancel context.CancelFunc) {
 	collectionGuard, err := m.acquireCollectionRuntime(ctx, view)
 	if err != nil {
 		cancel()
-		if detached, current := m.detachViewIfTokenMatches(req.Key, token); current {
-			detached.guards.release()
+		if detached, current := m.detachViewIfCurrent(req.Key, ref); current {
+			detached.releaseTransform()
+			detached.unregister()
+			detached.releaseSegments()
 			invokeUnrecoverable(req.OnUnrecoverable)
 		}
 		return
 	}
 
-	readyNow, segmentsToLoad, noAssignedSegments, current := m.finishAcquire(req, token, collectionGuard)
+	readyNow, physicalRefSegments, noAssignedSegments, current := m.activateAcquire(req, ref, collectionGuard)
 	if !current {
 		cancel()
 		collectionGuard.Release()
@@ -139,10 +137,13 @@ func (m *QueryViewSegmentReadinessManager) acquire(req AcquireSegments) {
 	if noAssignedSegments && req.OnReady != nil {
 		req.OnReady(map[int64][]int64{})
 	}
-	if noAssignedSegments || len(segmentsToLoad) == 0 {
+	if noAssignedSegments {
 		return
 	}
-	viewToLoad := filterViewSegments(req.View, segmentsToLoad)
+	if len(physicalRefSegments) == 0 {
+		return
+	}
+	viewToLoad := filterViewSegments(req.View, physicalRefSegments)
 
 	m.physical.Acquire(AcquirePhysicalSegments{
 		Key:        req.Key,
@@ -168,87 +169,98 @@ func (m *QueryViewSegmentReadinessManager) acquireCollectionRuntime(ctx context.
 	return m.collections.Acquire(ctx, view)
 }
 
-func (m *QueryViewSegmentReadinessManager) recordPendingAcquire(req AcquireSegments, cancel context.CancelFunc, token *struct{}) transformViewDetach {
+func (m *QueryViewSegmentReadinessManager) recordPendingAcquire(req AcquireSegments, cancel context.CancelFunc, guard TransformLogGuard) (*transformViewRef, bool) {
 	segmentPartitions := segmentPartitionMap(req.View)
 
 	m.mu.Lock()
-	oldDetach := m.detachViewLocked(req.Key)
-	m.views[req.Key] = &transformViewRef{
+	defer m.mu.Unlock()
+	if m.views[req.Key] != nil {
+		return nil, false
+	}
+	ref := &transformViewRef{
 		cancel:          cancel,
-		acquireToken:    token,
+		transformGuard:  guard,
 		segments:        segmentPartitions,
 		onUnrecoverable: req.OnUnrecoverable,
 	}
-	m.mu.Unlock()
-
-	return oldDetach
-}
-
-func (m *QueryViewSegmentReadinessManager) attachTransformGuard(key qviews.QueryViewKey, token *struct{}, guard TransformLogGuard) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	ref := m.views[key]
-	if ref == nil || ref.acquireToken != token {
-		return false
-	}
-	ref.transformGuard = guard
-	return true
-}
-
-func (m *QueryViewSegmentReadinessManager) detachViewIfTokenMatches(key qviews.QueryViewKey, token *struct{}) (transformViewDetach, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	ref := m.views[key]
-	if ref == nil || ref.acquireToken != token {
-		return transformViewDetach{}, false
-	}
-	return m.detachViewLocked(key), true
-}
-
-func (m *QueryViewSegmentReadinessManager) finishAcquire(req AcquireSegments, token *struct{}, collectionGuard CollectionRuntimeGuard) ([]transformSegmentWaiter, []int64, bool, bool) {
-	segmentPartitions := segmentPartitionMap(req.View)
-	readyNow := make([]transformSegmentWaiter, 0)
-	segmentsToLoad := make([]int64, 0)
-
-	m.mu.Lock()
-	ref := m.views[req.Key]
-	if ref == nil || ref.acquireToken != token {
-		m.mu.Unlock()
-		return nil, nil, false, false
-	}
-	ref.collectionGuard = collectionGuard
-	ref.segments = segmentPartitions
-	ref.onUnrecoverable = req.OnUnrecoverable
+	m.views[req.Key] = ref
 	for segmentID, partitionID := range segmentPartitions {
 		state := m.segments[segmentID]
 		if state == nil {
 			state = &transformSegmentState{
-				state:   transformSegmentLoading,
+				state:   transformSegmentWaiting,
 				refs:    make(map[qviews.QueryViewKey]struct{}),
 				waiters: make(map[qviews.QueryViewKey]transformSegmentWaiter),
 			}
 			m.segments[segmentID] = state
-			segmentsToLoad = append(segmentsToLoad, segmentID)
 		}
 		state.refs[req.Key] = struct{}{}
-		waiter := transformSegmentWaiter{
+		state.waiters[req.Key] = transformSegmentWaiter{
 			key:             req.Key,
 			partitionID:     partitionID,
 			segmentID:       segmentID,
 			onReady:         req.OnReady,
 			onUnrecoverable: req.OnUnrecoverable,
 		}
+	}
+	return ref, true
+}
+
+func (m *QueryViewSegmentReadinessManager) detachViewIfCurrent(key qviews.QueryViewKey, ref *transformViewRef) (transformViewDetach, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.views[key] != ref {
+		return transformViewDetach{}, false
+	}
+	return m.detachViewLocked(key), true
+}
+
+func (m *QueryViewSegmentReadinessManager) activateAcquire(req AcquireSegments, ref *transformViewRef, collectionGuard CollectionRuntimeGuard) ([]transformSegmentWaiter, []int64, bool, bool) {
+	readyNow := make([]transformSegmentWaiter, 0)
+	physicalRefSegments := make([]int64, 0)
+
+	m.mu.Lock()
+	if m.views[req.Key] != ref {
+		m.mu.Unlock()
+		return nil, nil, false, false
+	}
+	ref.collectionGuard = collectionGuard
+	ref.onUnrecoverable = req.OnUnrecoverable
+	for segmentID := range ref.segments {
+		state := m.segments[segmentID]
+		if state == nil {
+			state = &transformSegmentState{
+				state:   transformSegmentWaiting,
+				refs:    make(map[qviews.QueryViewKey]struct{}),
+				waiters: make(map[qviews.QueryViewKey]transformSegmentWaiter),
+			}
+			m.segments[segmentID] = state
+			state.refs[req.Key] = struct{}{}
+		}
+		waiter := transformSegmentWaiter{
+			key:             req.Key,
+			partitionID:     ref.segments[segmentID],
+			segmentID:       segmentID,
+			onReady:         req.OnReady,
+			onUnrecoverable: req.OnUnrecoverable,
+		}
 		if state.state == transformSegmentLoaded {
 			readyNow = append(readyNow, waiter)
+			delete(state.waiters, req.Key)
 			continue
+		}
+		if state.state == transformSegmentWaiting {
+			state.state = transformSegmentLoading
+		}
+		if state.state == transformSegmentLoading {
+			physicalRefSegments = append(physicalRefSegments, segmentID)
 		}
 		state.waiters[req.Key] = waiter
 	}
 	m.mu.Unlock()
 
-	return readyNow, segmentsToLoad, len(segmentPartitions) == 0, true
+	return readyNow, physicalRefSegments, len(ref.segments) == 0, true
 }
 
 func invokeUnrecoverable(cb func()) {
@@ -262,9 +274,9 @@ func (m *QueryViewSegmentReadinessManager) onPhysicalLoaded(segments []Transform
 		if segment == nil {
 			continue
 		}
-		if m.markPhysicalLoaded(segment) {
+		if kept, schedule := m.markPhysicalLoaded(segment); schedule {
 			m.scheduleCatchup(segment)
-		} else {
+		} else if !kept {
 			_ = segment.Release(context.Background())
 		}
 	}
@@ -280,20 +292,20 @@ func (m *QueryViewSegmentReadinessManager) catchupWorker() {
 	}
 }
 
-func (m *QueryViewSegmentReadinessManager) markPhysicalLoaded(segment TransformSegment) bool {
+func (m *QueryViewSegmentReadinessManager) markPhysicalLoaded(segment TransformSegment) (bool, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	state := m.segments[segment.ID()]
 	if state == nil || len(state.refs) == 0 {
-		return false
+		return false, false
 	}
 	if state.state == transformSegmentLoaded || state.state == transformSegmentCatchingUp {
-		return false
+		return true, false
 	}
 	state.segment = segment
 	state.state = transformSegmentCatchingUp
-	return true
+	return true, true
 }
 
 func (m *QueryViewSegmentReadinessManager) registerAndCatchup(segment TransformSegment) {
@@ -434,13 +446,13 @@ func (m *QueryViewSegmentReadinessManager) notifyUnrecoverable(key qviews.QueryV
 
 func (m *QueryViewSegmentReadinessManager) release(req ReleaseSegments) {
 	detached := m.detachView(req.Key)
-	for _, segment := range detached.segments {
-		m.releaseDetachedSegment(segment)
-	}
+	detached.releaseTransform()
+	detached.unregister()
+	detached.releaseSegments()
 	m.physical.Release(ReleaseSegments{
 		Key: req.Key,
 		OnDropped: func() {
-			detached.guards.release()
+			detached.releaseCollection()
 			if req.OnDropped != nil {
 				req.OnDropped()
 			}
@@ -455,15 +467,41 @@ type transformViewGuards struct {
 
 type transformViewDetach struct {
 	guards   transformViewGuards
+	cancels  []context.CancelFunc
+	regs     []TransformRegistration
 	segments []TransformSegment
 }
 
-func (g transformViewGuards) release() {
-	if g.transform != nil {
-		g.transform.Release()
+func (d transformViewDetach) releaseTransform() {
+	if d.guards.transform != nil {
+		d.guards.transform.Release()
 	}
-	if g.collection != nil {
-		g.collection.Release()
+}
+
+func (d transformViewDetach) releaseCollection() {
+	if d.guards.collection != nil {
+		d.guards.collection.Release()
+	}
+}
+
+func (d transformViewDetach) unregister() {
+	for _, cancel := range d.cancels {
+		if cancel != nil {
+			cancel()
+		}
+	}
+	for _, reg := range d.regs {
+		if reg != nil {
+			reg.Unregister()
+		}
+	}
+}
+
+func (d transformViewDetach) releaseSegments() {
+	for _, segment := range d.segments {
+		if segment != nil {
+			_ = segment.Release(context.Background())
+		}
 	}
 }
 
@@ -495,10 +533,12 @@ func (m *QueryViewSegmentReadinessManager) detachViewLocked(key qviews.QueryView
 		delete(state.waiters, key)
 		if len(state.refs) == 0 {
 			if state.catchupCancel != nil {
-				state.catchupCancel()
+				detached.cancels = append(detached.cancels, state.catchupCancel)
+				state.catchupCancel = nil
 			}
 			if state.reg != nil {
-				state.reg.Unregister()
+				detached.regs = append(detached.regs, state.reg)
+				state.reg = nil
 			}
 			if state.segment != nil {
 				if state.queryRefs > 0 {

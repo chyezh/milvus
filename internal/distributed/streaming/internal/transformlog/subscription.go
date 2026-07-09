@@ -124,17 +124,9 @@ type checkpointEventHandler struct {
 func (h *checkpointEventHandler) Handle(event wal.TransformLogStreamEvent) error {
 	event.SubscriptionID = h.sub.ID()
 	event.VChannel = h.sub.VChannel()
-	if event.Err != nil && isRetryable(event.Err) {
-		return nil
-	}
 	err := h.inner.Handle(event)
 	if err != nil {
-		h.sub.stream.removeSubscriptionFromHandler(h.sub, err)
 		return err
-	}
-	if event.Err != nil {
-		h.sub.stream.removeSubscriptionFromHandler(h.sub, event.Err)
-		return nil
 	}
 	if event.Entry != nil {
 		h.sub.advance(event.Entry.GetTimeTick())

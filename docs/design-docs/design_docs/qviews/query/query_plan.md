@@ -63,12 +63,21 @@ The lease has three important properties:
 1. It is acquired atomically from the PChannel QueryView state boundary.
 2. It represents one Up QueryView version.
 3. It keeps the selected QueryView stable until `Release` is called.
+4. `View` is the complete shard view, including `QueryNode` sealed-segment
+   topology and `StreamingNode` growing assignment.
 
 Only the QueryView lease needs an explicit reference count. The optimizer does
 not need a separate lifetime handle: `walAdaptorImpl.GetQueryPlan` creates the
 optimizer from `viewresource` while holding the selected QueryView lease, uses it
 inside the same call, and then calls `Release` after the plan is built, even if
 optimizer execution fails.
+
+Although `SNQueryViewHandler` prepares only StreamingNode-local resources, it
+must retain and persist the full `QueryViewOfShard` received from Coord. After a
+StreamingNode restart, Phase 1 planning is recovered from the SN-local
+WAL-bound QueryView meta; if the persisted view only contains
+`QueryViewOfStreamingNode`, `build work_nodes from lease.View` can only produce
+the StreamingNode work node and sealed QueryNode results are omitted.
 
 ## 4. View Selection
 

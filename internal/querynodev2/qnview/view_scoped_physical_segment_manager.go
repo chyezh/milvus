@@ -53,13 +53,17 @@ func NewViewScopedPhysicalSegmentManagerWithScheduler(scheduler SegmentLoadSched
 
 func (m *ViewScopedPhysicalSegmentManager) Acquire(req AcquirePhysicalSegments) {
 	ctx, cancel := context.WithCancel(context.Background())
-	toLoad, loadWG := m.recordView(req, cancel)
+	toLoad, loadWG, ok := m.recordView(req, cancel)
+	if !ok {
+		cancel()
+		return
+	}
 	go m.load(ctx, req, toLoad, loadWG)
 }
 
 func (m *ViewScopedPhysicalSegmentManager) Release(req ReleaseSegments) {
+	toCancel, loadWG := m.removeView(req.Key)
 	go func() {
-		toCancel, loadWG := m.removeView(req.Key)
 		for _, segmentID := range toCancel {
 			m.scheduler.Cancel(segmentID)
 		}
@@ -72,14 +76,15 @@ func (m *ViewScopedPhysicalSegmentManager) Release(req ReleaseSegments) {
 	}()
 }
 
-func (m *ViewScopedPhysicalSegmentManager) recordView(req AcquirePhysicalSegments, cancel context.CancelFunc) ([]segmentLoadSubmission, *sync.WaitGroup) {
+func (m *ViewScopedPhysicalSegmentManager) recordView(req AcquirePhysicalSegments, cancel context.CancelFunc) ([]segmentLoadSubmission, *sync.WaitGroup, bool) {
 	segmentPartitions := segmentPartitionMap(req.View)
 	toLoad := make([]segmentLoadSubmission, 0, len(segmentPartitions))
 	loadWG := &sync.WaitGroup{}
 
 	m.mu.Lock()
-	if oldCancel, ok := m.cancels[req.Key]; ok {
-		oldCancel()
+	if m.views[req.Key] != nil {
+		m.mu.Unlock()
+		return nil, nil, false
 	}
 	m.cancels[req.Key] = cancel
 	m.views[req.Key] = &viewRef{
@@ -111,7 +116,7 @@ func (m *ViewScopedPhysicalSegmentManager) recordView(req AcquirePhysicalSegment
 	loadWG.Add(len(toLoad))
 	m.mu.Unlock()
 
-	return toLoad, loadWG
+	return toLoad, loadWG, true
 }
 
 func (m *ViewScopedPhysicalSegmentManager) load(ctx context.Context, req AcquirePhysicalSegments, toLoad []segmentLoadSubmission, loadWG *sync.WaitGroup) {
@@ -307,9 +312,7 @@ func (m *ViewScopedPhysicalSegmentManager) removeView(key qviews.QueryViewKey) (
 		}
 	}
 	if cancel, ok := m.cancels[key]; ok {
-		if len(toCancel) == len(ref.segments) {
-			cancel()
-		}
+		cancel()
 		delete(m.cancels, key)
 	}
 	return toCancel, ref.loadWG

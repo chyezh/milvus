@@ -5,6 +5,8 @@ package transformlogbuffer
 import (
 	"context"
 	"errors"
+	"slices"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -95,15 +97,13 @@ func (s *fakeStream) Close() error {
 	return s.err
 }
 
-func (s *fakeStream) fail(err error) {
+func (s *fakeStream) failSubscription(err error) {
 	s.mu.Lock()
 	subscriptions := append([]wal.TransformLogSubscriptionOption(nil), s.subscriptions...)
 	s.mu.Unlock()
 	for _, sub := range subscriptions {
 		_ = sub.Handler.Handle(wal.TransformLogStreamEvent{VChannel: sub.VChannel, Err: err})
 	}
-	s.err = err
-	s.Close()
 }
 
 func (s *fakeStream) emit(event wal.TransformLogStreamEvent) {
@@ -126,6 +126,21 @@ func (s *fakeStream) subscriptionVChannels() []string {
 		vchannels = append(vchannels, sub.VChannel)
 	}
 	return vchannels
+}
+
+func requireSubscriptionVChannels(t *testing.T, stream *fakeStream, expected []string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		return stringSetEqual(stream.subscriptionVChannels(), expected)
+	}, time.Second, 10*time.Millisecond)
+}
+
+func stringSetEqual(left []string, right []string) bool {
+	left = append([]string(nil), left...)
+	right = append([]string(nil), right...)
+	sort.Strings(left)
+	sort.Strings(right)
+	return slices.Equal(left, right)
 }
 
 type fakeSubscription struct {
@@ -230,7 +245,7 @@ func TestBufferAcquireMultiplexesVChannelsOnOnePChannelStream(t *testing.T) {
 	require.Equal(t, 1, streams.callCount("p"))
 	stream := streams.stream("p")
 	require.NotNil(t, stream)
-	assert.ElementsMatch(t, []string{"p_1v0", "p_2v0"}, stream.subscriptionVChannels())
+	requireSubscriptionVChannels(t, stream, []string{"p_1v0", "p_2v0"})
 
 	waitDone := make(chan error, 1)
 	go func() {
@@ -256,7 +271,7 @@ func TestBufferAcquireReusesVChannelSubscriptionAndRegistersFromLocalBuffer(t *t
 	require.Equal(t, 1, streams.callCount("v1"))
 	stream := streams.stream("v1")
 	require.NotNil(t, stream)
-	require.Equal(t, []string{"v1"}, stream.subscriptionVChannels())
+	requireSubscriptionVChannels(t, stream, []string{"v1"})
 
 	stream.emit(wal.TransformLogStreamEvent{VChannel: "v1", Entry: &streamingpb.TransformLogEntry{TimeTick: 60}})
 	stream.emit(wal.TransformLogStreamEvent{VChannel: "v1", Entry: &streamingpb.TransformLogEntry{TimeTick: 90}})
@@ -268,7 +283,7 @@ func TestBufferAcquireReusesVChannelSubscriptionAndRegistersFromLocalBuffer(t *t
 	require.NoError(t, err)
 	require.NoError(t, reg.WaitCatchup(context.Background()))
 	assert.Equal(t, []uint64{90}, segment.appliedTicks())
-	assert.Equal(t, []string{"v1"}, stream.subscriptionVChannels())
+	requireSubscriptionVChannels(t, stream, []string{"v1"})
 
 	guard1.Release()
 	oldSegment := &fakeSegment{id: 11, vchannel: "v1", startAfter: 60}
@@ -298,6 +313,7 @@ func TestBufferRegistrationKeepsApplyingLiveEntriesAfterCaughtUp(t *testing.T) {
 
 	stream := streams.stream("v1")
 	require.NotNil(t, stream)
+	requireSubscriptionVChannels(t, stream, []string{"v1"})
 	stream.emit(wal.TransformLogStreamEvent{VChannel: "v1", CaughtUp: &wal.TransformLogCaughtUp{StartAfterTimeTick: 50}})
 	require.NoError(t, reg.WaitCatchup(context.Background()))
 
@@ -316,6 +332,7 @@ func TestBufferRegisterSegmentReturnsBeforeCatchupDrainCompletes(t *testing.T) {
 
 	stream := streams.stream("p")
 	require.NotNil(t, stream)
+	requireSubscriptionVChannels(t, stream, []string{"p_1v0"})
 	stream.emit(wal.TransformLogStreamEvent{
 		VChannel: "p_1v0",
 		Entry:    &streamingpb.TransformLogEntry{TimeTick: 60},
@@ -364,6 +381,7 @@ func TestBufferRegisterSegmentDrainsEntriesArrivingDuringCatchupBeforeLiveAttach
 
 	stream := streams.stream("p")
 	require.NotNil(t, stream)
+	requireSubscriptionVChannels(t, stream, []string{"p_1v0"})
 	stream.emit(wal.TransformLogStreamEvent{
 		VChannel: "p_1v0",
 		Entry:    &streamingpb.TransformLogEntry{TimeTick: 60},
@@ -388,10 +406,14 @@ func TestBufferRegisterSegmentDrainsEntriesArrivingDuringCatchupBeforeLiveAttach
 		VChannel: "p_1v0",
 		Entry:    &streamingpb.TransformLogEntry{TimeTick: 70},
 	})
-	require.NoError(t, guard.WaitTransformVisible(context.Background(), 70))
+	stream.emit(wal.TransformLogStreamEvent{
+		VChannel: "p_1v0",
+		CaughtUp: &wal.TransformLogCaughtUp{StartAfterTimeTick: 50},
+	})
 
 	close(applyBlock)
 	require.NoError(t, reg.WaitCatchup(context.Background()))
+	require.NoError(t, guard.WaitTransformVisible(context.Background(), 70))
 	assert.Equal(t, []uint64{60, 70}, segment.appliedTicks())
 
 	stream.emit(wal.TransformLogStreamEvent{
@@ -425,6 +447,7 @@ func TestGuardWaitTransformVisibleUsesVChannelFrontier(t *testing.T) {
 
 	stream := streams.stream("v1")
 	require.NotNil(t, stream)
+	requireSubscriptionVChannels(t, stream, []string{"v1"})
 	stream.emit(wal.TransformLogStreamEvent{VChannel: "v1", Entry: &streamingpb.TransformLogEntry{TimeTick: 60}})
 	select {
 	case err := <-waitDone:
@@ -456,6 +479,7 @@ func TestGuardWaitTransformVisibleWaitsForLiveApply(t *testing.T) {
 
 	stream := streams.stream("v1")
 	require.NotNil(t, stream)
+	requireSubscriptionVChannels(t, stream, []string{"v1"})
 	stream.emit(wal.TransformLogStreamEvent{VChannel: "v1", CaughtUp: &wal.TransformLogCaughtUp{StartAfterTimeTick: 50}})
 	require.NoError(t, reg.WaitCatchup(context.Background()))
 
@@ -498,7 +522,8 @@ func TestGuardWaitTransformVisibleReturnsScannerError(t *testing.T) {
 
 	stream := streams.stream("v1")
 	require.NotNil(t, stream)
-	stream.fail(errors.New("transform log truncated"))
+	requireSubscriptionVChannels(t, stream, []string{"v1"})
+	stream.failSubscription(errors.New("transform log truncated"))
 
 	require.ErrorContains(t, <-waitDone, "transform log truncated")
 }
@@ -511,7 +536,8 @@ func TestBufferRegisterSegmentFailsWhenScannerFailsBeforeCaughtUp(t *testing.T) 
 
 	stream := streams.stream("v1")
 	require.NotNil(t, stream)
-	stream.fail(errors.New("truncated"))
+	requireSubscriptionVChannels(t, stream, []string{"v1"})
+	stream.failSubscription(errors.New("truncated"))
 
 	require.Eventually(t, func() bool {
 		_, err = buffer.RegisterSegment(context.Background(), &fakeSegment{id: 10, vchannel: "v1", startAfter: 50})

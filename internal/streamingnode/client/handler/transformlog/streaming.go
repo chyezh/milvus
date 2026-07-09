@@ -95,8 +95,7 @@ func (s *EventStream) Subscribe(ctx context.Context, opt wal.TransformLogSubscri
 			},
 		},
 	}); err != nil {
-		s.removeSubscription(sub.subscriptionID)
-		sub.finish(err)
+		s.finish(err)
 		return nil, err
 	}
 	mlog.Debug(ctx, "handler transform log event stream sent subscription request",
@@ -372,13 +371,6 @@ func (s *EventStream) finish(err error) {
 			mlog.Err(err),
 		)
 		for _, sub := range subscriptions {
-			if err != nil {
-				_ = sub.handle(wal.TransformLogStreamEvent{
-					SubscriptionID: sub.ID(),
-					VChannel:       sub.VChannel(),
-					Err:            err,
-				})
-			}
 			sub.finish(err)
 		}
 		_ = s.stream.CloseSend()

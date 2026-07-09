@@ -13,6 +13,11 @@ type liveObserverRegistry struct {
 	observers map[string]map[walview.VChannelLiveObserver]struct{}
 }
 
+type liveObserverRef struct {
+	vchannel string
+	observer walview.VChannelLiveObserver
+}
+
 func newLiveObserverRegistry() *liveObserverRegistry {
 	return &liveObserverRegistry{
 		observers: make(map[string]map[walview.VChannelLiveObserver]struct{}),
@@ -32,7 +37,20 @@ func (r *liveObserverRegistry) Register(vchannel string, observer walview.VChann
 }
 
 func (r *liveObserverRegistry) Dispatch(ctx context.Context, msg message.ImmutableMessage) {
+	if msg.VChannel() == "" {
+		r.DispatchAll(ctx, walview.VChannelResourceEvent{Message: msg})
+		return
+	}
 	r.DispatchEvent(ctx, msg.VChannel(), walview.VChannelResourceEvent{Message: msg})
+}
+
+func (r *liveObserverRegistry) DispatchAll(ctx context.Context, event walview.VChannelResourceEvent) {
+	for _, ref := range r.snapshotAll() {
+		if ref.observer.ObserveEvent(ctx, event) {
+			continue
+		}
+		r.unregister(ref.vchannel, ref.observer)
+	}
 }
 
 func (r *liveObserverRegistry) DispatchEvent(ctx context.Context, vchannel string, event walview.VChannelResourceEvent) {
@@ -63,6 +81,21 @@ func (r *liveObserverRegistry) snapshot(vchannel string) []walview.VChannelLiveO
 		observers = append(observers, observer)
 	}
 	return observers
+}
+
+func (r *liveObserverRegistry) snapshotAll() []liveObserverRef {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	refs := make([]liveObserverRef, 0)
+	for vchannel, registered := range r.observers {
+		for observer := range registered {
+			refs = append(refs, liveObserverRef{
+				vchannel: vchannel,
+				observer: observer,
+			})
+		}
+	}
+	return refs
 }
 
 func (r *liveObserverRegistry) take(vchannel string) []walview.VChannelLiveObserver {
