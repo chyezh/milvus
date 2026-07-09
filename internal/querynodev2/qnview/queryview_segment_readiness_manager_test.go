@@ -234,6 +234,79 @@ func TestQueryViewSegmentReadinessManager_CollectionGuardFailureStopsPhysicalAcq
 	buffer.guard.mu.Unlock()
 }
 
+type blockingQueryViewCollectionRuntimeManager struct {
+	entered chan struct{}
+	done    chan struct{}
+}
+
+func (m *blockingQueryViewCollectionRuntimeManager) Acquire(ctx context.Context, _ *qviews.QueryViewAtQueryNode) (CollectionRuntimeGuard, error) {
+	close(m.entered)
+	<-ctx.Done()
+	close(m.done)
+	return nil, ctx.Err()
+}
+
+func TestQueryViewSegmentReadinessManager_ReleaseCancelsPendingCollectionAcquire(t *testing.T) {
+	meta := buildHandlerTestMeta(1)
+	view := buildHandlerTestQNView(1)
+	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
+
+	buffer := &fakeTransformLogBuffer{}
+	collections := &blockingQueryViewCollectionRuntimeManager{
+		entered: make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+	physicalCalled := make(chan struct{}, 1)
+	physical := fakePhysicalSegmentManager{
+		acquire: func(req AcquirePhysicalSegments) {
+			physicalCalled <- struct{}{}
+		},
+		release: func(req ReleaseSegments) { req.OnDropped() },
+	}
+	mgr := NewQueryViewSegmentReadinessManager(physical, buffer, collections)
+
+	unrecoverable := make(chan struct{}, 1)
+	mgr.Acquire(AcquireSegments{
+		Key: key, Meta: meta, View: view,
+		OnReady:         func(map[int64][]int64) { t.Fatal("unexpected ready") },
+		OnUnrecoverable: func() { unrecoverable <- struct{}{} },
+	})
+
+	select {
+	case <-collections.entered:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for collection acquire")
+	}
+
+	dropped := make(chan struct{}, 1)
+	mgr.Release(ReleaseSegments{Key: key, OnDropped: func() { dropped <- struct{}{} }})
+
+	select {
+	case <-dropped:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for drop")
+	}
+	select {
+	case <-collections.done:
+	case <-time.After(time.Second):
+		t.Fatal("release should cancel pending collection acquire")
+	}
+	select {
+	case <-physicalCalled:
+		t.Fatal("physical acquire should not run after release cancels pending acquire")
+	case <-time.After(20 * time.Millisecond):
+	}
+	select {
+	case <-unrecoverable:
+		t.Fatal("release cancellation should not report unrecoverable")
+	default:
+	}
+	require.NotNil(t, buffer.guard)
+	buffer.guard.mu.Lock()
+	assert.True(t, buffer.guard.released)
+	buffer.guard.mu.Unlock()
+}
+
 func TestQueryViewSegmentReadinessManager_ReleasesLoadedSegmentAfterLastView(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
 	view := &viewpb.QueryViewOfQueryNode{
