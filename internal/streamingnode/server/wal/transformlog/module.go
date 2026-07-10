@@ -3,6 +3,7 @@ package transformlog
 import (
 	"context"
 	"math"
+	"sort"
 	"sync"
 
 	"go.uber.org/atomic"
@@ -39,6 +40,7 @@ type Module struct {
 	streamMu     sync.Mutex
 	streamNotify chan struct{}
 	streamSeq    uint64
+	streamSeqByV map[string]uint64
 }
 
 type ModuleOption func(*Module)
@@ -79,6 +81,7 @@ func NewModule(
 		logs:         make(map[string]*moduleLog, len(metas)),
 		store:        store,
 		streamNotify: make(chan struct{}),
+		streamSeqByV: make(map[string]uint64),
 	}
 	for _, opt := range opts {
 		opt(module)
@@ -212,7 +215,7 @@ func (m *Module) observeCreateCollectionMessage(msg message.ImmutableMessage) mo
 	if !appendResult.Appended {
 		return moduleapi.ObserveResult{}
 	}
-	m.notifyStream()
+	m.notifyStream(msg.VChannel())
 	m.submitFlushTask(log, msg.VChannel(), appendResult.DataTimeTick)
 	return moduleapi.ObserveResult{Data: log.dataBarrier()}
 }
@@ -229,7 +232,7 @@ func (m *Module) observeTransformLogMessage(msg message.ImmutableMessage) module
 	if !appendResult.Appended {
 		return moduleapi.ObserveResult{}
 	}
-	m.notifyStream()
+	m.notifyStream(msg.VChannel())
 	if appendResult.ShouldFlush || isTransformBarrierMessage(msg) {
 		m.submitFlushTask(log, msg.VChannel(), appendResult.DataTimeTick)
 	}
@@ -247,7 +250,7 @@ func (m *Module) materializeByMessageTimeTick(timetick uint64, vchannel string, 
 		return moduleapi.ObserveResult{}
 	}
 	log := m.getOrCreateLog(vchannel)
-	dataBarrier := m.appendBarrierToLog(log, timetick)
+	dataBarrier := m.appendBarrierToLog(vchannel, log, timetick)
 	return moduleapi.ObserveResult{Data: composeBarrier(dataBarrier, m.materializeLog(vchannel, log, timetick))}
 }
 
@@ -262,14 +265,14 @@ func (m *Module) flushByMessageTimeTick(timetick uint64, vchannel string, msgTyp
 		return moduleapi.ObserveResult{}
 	}
 	log := m.getOrCreateLog(vchannel)
-	dataBarrier := m.appendBarrierToLog(log, timetick)
+	dataBarrier := m.appendBarrierToLog(vchannel, log, timetick)
 	return moduleapi.ObserveResult{Data: composeBarrier(dataBarrier, m.flushLog(vchannel, log, timetick))}
 }
 
 func (m *Module) flushAllByMessageTimeTick(timetick uint64, msgType message.MessageType) moduleapi.ObserveResult {
 	result := moduleapi.ObserveResult{}
 	for name, log := range m.snapshotLogs() {
-		result.Data = composeBarrier(result.Data, m.appendBarrierToLog(log, timetick))
+		result.Data = composeBarrier(result.Data, m.appendBarrierToLog(name, log, timetick))
 		result.Data = composeBarrier(result.Data, m.flushLog(name, log, timetick))
 	}
 	return result
@@ -278,13 +281,13 @@ func (m *Module) flushAllByMessageTimeTick(timetick uint64, msgType message.Mess
 func (m *Module) materializeAllByMessageTimeTick(timetick uint64, msgType message.MessageType) moduleapi.ObserveResult {
 	result := moduleapi.ObserveResult{}
 	for name, log := range m.snapshotLogs() {
-		result.Data = composeBarrier(result.Data, m.appendBarrierToLog(log, timetick))
+		result.Data = composeBarrier(result.Data, m.appendBarrierToLog(name, log, timetick))
 		result.Data = composeBarrier(result.Data, m.materializeLog(name, log, timetick))
 	}
 	return result
 }
 
-func (m *Module) appendBarrierToLog(log *moduleLog, timetick uint64) walcheckpoint.Barrier {
+func (m *Module) appendBarrierToLog(vchannel string, log *moduleLog, timetick uint64) walcheckpoint.Barrier {
 	if log == nil {
 		return nil
 	}
@@ -294,7 +297,7 @@ func (m *Module) appendBarrierToLog(log *moduleLog, timetick uint64) walcheckpoi
 	if !log.log.AppendBarrier(timetick).Appended {
 		return nil
 	}
-	m.notifyStream()
+	m.notifyStream(vchannel)
 	return log.dataBarrier()
 }
 
@@ -390,18 +393,26 @@ func (m *Module) snapshotLogs() map[string]*moduleLog {
 	return logs
 }
 
-func (m *Module) notifyStream() {
+func (m *Module) notifyStream(vchannel string) {
 	m.streamMu.Lock()
 	defer m.streamMu.Unlock()
 	m.streamSeq++
+	m.streamSeqByV[vchannel] = m.streamSeq
 	close(m.streamNotify)
 	m.streamNotify = make(chan struct{})
 }
 
-func (m *Module) streamNotifyState() (<-chan struct{}, uint64) {
+func (m *Module) streamNotifyStateSince(seq uint64) (<-chan struct{}, uint64, []string) {
 	m.streamMu.Lock()
 	defer m.streamMu.Unlock()
-	return m.streamNotify, m.streamSeq
+	changed := make([]string, 0)
+	for vchannel, vchannelSeq := range m.streamSeqByV {
+		if vchannelSeq > seq {
+			changed = append(changed, vchannel)
+		}
+	}
+	sort.Strings(changed)
+	return m.streamNotify, m.streamSeq, changed
 }
 
 func (m *Module) newTransformLog(vchannel string, meta *streamingpb.VChannelTransformLogMeta) TransformLog {

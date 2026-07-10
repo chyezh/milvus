@@ -59,6 +59,28 @@ func TestLatestTransformTimeTickIncludesUnflushedBuffer(t *testing.T) {
 	assert.Equal(t, uint64(10), module.LatestTransformTimeTick("v1"))
 }
 
+func TestStreamNotifyStateTracksChangedVChannel(t *testing.T) {
+	ctx := context.Background()
+	module := NewModule("p1", nil, newMemoryStore())
+	module.SwitchIntoMetaAndData()
+
+	_, seq, changed := module.streamNotifyStateSince(0)
+	require.Zero(t, seq)
+	require.Empty(t, changed)
+
+	result := module.ObserveMessage(ctx, newModuleTestDeleteMessageWithVChannel(t, 10, "v1"))
+	require.NotNil(t, result.Data)
+	_, seq, changed = module.streamNotifyStateSince(seq)
+	require.NotZero(t, seq)
+	require.Equal(t, []string{"v1"}, changed)
+
+	result = module.ObserveMessage(ctx, newModuleTestDeleteMessageWithVChannel(t, 20, "v2"))
+	require.NotNil(t, result.Data)
+	_, seq, changed = module.streamNotifyStateSince(seq)
+	require.NotZero(t, seq)
+	require.Equal(t, []string{"v2"}, changed)
+}
+
 func TestDeletePublishesToLiveSubscriberBeforeFlush(t *testing.T) {
 	ctx := context.Background()
 	module := NewModule("p1", map[string]*streamingpb.VChannelTransformLogMeta{
@@ -309,9 +331,13 @@ func newModuleTestCreateCollectionMessage(t *testing.T, timetick uint64) message
 }
 
 func newModuleTestDeleteMessage(t *testing.T, timetick uint64) message.ImmutableDeleteMessageV1 {
+	return newModuleTestDeleteMessageWithVChannel(t, timetick, "v1")
+}
+
+func newModuleTestDeleteMessageWithVChannel(t *testing.T, timetick uint64, vchannel string) message.ImmutableDeleteMessageV1 {
 	t.Helper()
 	mutableMsg := message.NewDeleteMessageBuilderV1().
-		WithVChannel("v1").
+		WithVChannel(vchannel).
 		WithHeader(&message.DeleteMessageHeader{
 			CollectionId: 1,
 			Rows:         1,

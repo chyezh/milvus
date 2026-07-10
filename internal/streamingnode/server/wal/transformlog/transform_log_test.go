@@ -38,7 +38,7 @@ func TestReadDrainsCreationTailBeforeFutureAppends(t *testing.T) {
 		return len(handler.events) == 16
 	}, time.Second, 10*time.Millisecond)
 	require.True(t, transformLog.AppendBarrier(21).Appended)
-	module.notifyStream()
+	module.notifyStream("v1")
 
 	for expected := uint64(1); expected <= 20; expected++ {
 		event := <-handler.events

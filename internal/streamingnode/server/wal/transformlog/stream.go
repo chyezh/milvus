@@ -82,7 +82,7 @@ func (m *Module) AcquireStream(ctx context.Context, pchannel string) (wal.Transf
 		subs:         make(map[int64]*streamSubscription),
 		byVChannel:   make(map[string]map[int64]*streamSubscription),
 	}
-	_, stream.seenNotifySeq = m.streamNotifyState()
+	_, stream.seenNotifySeq, _ = m.streamNotifyStateSince(0)
 	for i := 0; i < defaultStreamCatchupWorkers; i++ {
 		go stream.catchupWorker()
 	}
@@ -170,10 +170,10 @@ func (s *transformLogStream) run() {
 	defer close(s.done)
 	defer close(s.catchupTasks)
 	for {
-		notifyCh, notifySeq := s.module.streamNotifyState()
+		notifyCh, notifySeq, changedVChannels := s.module.streamNotifyStateSince(s.seenNotifySeq)
 		if notifySeq != s.seenNotifySeq {
 			s.seenNotifySeq = notifySeq
-			s.dispatchAllLive()
+			s.dispatchChangedLive(changedVChannels)
 			continue
 		}
 		select {
@@ -356,6 +356,16 @@ func (s *transformLogStream) sendEvent(ctx context.Context, event streamEvent) b
 
 func (s *transformLogStream) dispatchAllLive() {
 	for vchannel := range s.byVChannel {
+		s.dispatchVChannel(vchannel)
+	}
+}
+
+func (s *transformLogStream) dispatchChangedLive(vchannels []string) {
+	for _, vchannel := range vchannels {
+		if vchannel == "" {
+			s.dispatchAllLive()
+			continue
+		}
 		s.dispatchVChannel(vchannel)
 	}
 }
