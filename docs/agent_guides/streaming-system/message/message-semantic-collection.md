@@ -24,8 +24,8 @@ All broadcast messages implicitly carry **SharedCluster** via the Broadcaster.
 | CreateSegment *(SelfControlled)* | Single VChannel | No | — |
 | Flush *(SelfControlled)* | Single VChannel | No | — |
 | ManualFlush | Single VChannel | Yes (VChannel) | — |
-| AlterLoadConfig | Broadcast: CChannel | No | SharedDBName + ExclusiveCollectionName |
-| DropLoadConfig | Broadcast: CChannel | No | SharedDBName + ExclusiveCollectionName (or ExclusiveCluster) |
+| AlterLoadConfig | Broadcast: VChannels + CChannel (AckSyncUp) | No | SharedDBName + ExclusiveCollectionName |
+| DropLoadConfig | Broadcast: VChannels + CChannel (AckSyncUp) | No | SharedDBName + ExclusiveCollectionName (or ExclusiveCluster) |
 | BatchUpdateManifest | Broadcast: CChannel | No | SharedDBName + SharedCollectionName |
 
 ## Message Descriptions
@@ -41,8 +41,8 @@ All broadcast messages implicitly carry **SharedCluster** via the Broadcaster.
 - **Insert** / **Delete**: DML on a single VChannel. CipherEnabled.
 - **CreateSegment** / **Flush**: WAL-generated (SelfControlled). Allocates or seals a growing segment.
 - **ManualFlush**: Seals all growing segments for a collection on a VChannel.
-- **AlterLoadConfig**: Modifies load configuration — partition set, replica count, load fields, etc. CChannel-only, consumed by QueryCoord.
-- **DropLoadConfig**: Removes load configuration, unloading/releasing from query nodes. Uses ExclusiveCluster when part of DropCollection flow.
+- **AlterLoadConfig**: Modifies load configuration — partition set, replica count, load fields, etc. Broadcasts to all collection VChannels plus the CChannel with AckSyncUp. StreamingNode consumes the VChannel copies to publish WAL views, and QueryCoord consumes the CChannel callback to drive load.
+- **DropLoadConfig**: Removes load configuration, unloading/releasing from query nodes. Broadcasts to all collection VChannels plus the CChannel with AckSyncUp. Uses ExclusiveCluster when part of DropCollection flow.
 - **BatchUpdateManifest**: Updates segment manifest versions in batch. Used after compaction or index building. CChannel-only.
 
 ## Data Lifecycle Ordering Invariants
