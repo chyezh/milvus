@@ -7,7 +7,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus/internal/mocks/streamingnode/server/wal/interceptors/timetick/mock_inspector"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/timetick/inspector"
@@ -44,26 +43,4 @@ func TestInsepctor(t *testing.T) {
 		i.MustGetOperator(pchannel)
 	})
 	i.Close()
-}
-
-func TestInspectorDoesNotSyncOnBackgroundTicker(t *testing.T) {
-	paramtable.Init()
-	require.NoError(t, paramtable.Get().Save(paramtable.Get().ProxyCfg.TimeTickInterval.Key, "10"))
-	t.Cleanup(func() {
-		require.NoError(t, paramtable.Get().Reset(paramtable.Get().ProxyCfg.TimeTickInterval.Key))
-	})
-
-	i := inspector.NewTimeTickSyncInspector()
-	defer i.Close()
-
-	operator := mock_inspector.NewMockTimeTickSyncOperator(t)
-	pchannel := types.PChannelInfo{
-		Name: "test-no-background-sync",
-		Term: 1,
-	}
-	operator.EXPECT().Channel().Return(pchannel)
-	i.RegisterSyncOperator(operator)
-
-	time.Sleep(50 * time.Millisecond)
-	i.UnregisterSyncOperator(operator)
 }

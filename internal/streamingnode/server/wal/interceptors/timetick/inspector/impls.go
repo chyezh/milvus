@@ -12,8 +12,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
-var enableBackgroundTimeTickSync = false
-
 // NewTimeTickSyncInspector creates a new time tick sync inspector.
 func NewTimeTickSyncInspector() TimeTickSyncInspector {
 	inspector := &timeTickSyncInspectorImpl{
@@ -72,18 +70,14 @@ func (s *timeTickSyncInspectorImpl) UnregisterSyncOperator(operator TimeTickSync
 func (s *timeTickSyncInspectorImpl) background() {
 	defer s.taskNotifier.Finish(struct{}{})
 
-	var tickerC <-chan time.Time
-	if enableBackgroundTimeTickSync {
-		interval := paramtable.Get().ProxyCfg.TimeTickInterval.GetAsDuration(time.Millisecond)
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		tickerC = ticker.C
-	}
+	interval := paramtable.Get().ProxyCfg.TimeTickInterval.GetAsDuration(time.Millisecond)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-s.taskNotifier.Context().Done():
 			return
-		case <-tickerC:
+		case <-ticker.C:
 			s.operators.Range(func(name string, _ TimeTickSyncOperator) bool {
 				s.asyncSync(name, false)
 				return true
