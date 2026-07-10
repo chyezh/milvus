@@ -36,6 +36,7 @@ type queryRuntimeManager struct {
 	mu             sync.Mutex
 	moduleBuilders []QueryRuntimeModuleBuilder
 	scheduler      Scheduler
+	dispatcher     *queryRuntimeDispatcher
 
 	resources map[string]*resourceState
 	refIndex  map[qviews.QueryViewKey]string
@@ -50,6 +51,7 @@ func NewManager(moduleBuilders ...QueryRuntimeModuleBuilder) SNQueryRuntimeManag
 	return &queryRuntimeManager{
 		moduleBuilders: append([]QueryRuntimeModuleBuilder(nil), moduleBuilders...),
 		scheduler:      NewScheduler(4),
+		dispatcher:     newQueryRuntimeDispatcher(defaultLiveEventDispatchConcurrency),
 		resources:      make(map[string]*resourceState),
 		refIndex:       make(map[qviews.QueryViewKey]string),
 		refEpoch:       make(map[qviews.QueryViewKey]uint64),
@@ -64,7 +66,7 @@ func newResourceState() *resourceState {
 }
 
 func (m *queryRuntimeManager) OnAlterLoadConfig(view walview.VChannelWALView) walview.VChannelLiveObserver {
-	runtime := NewQueryRuntime(m.newModules()...)
+	runtime := newQueryRuntime(m.dispatcher, m.newModules()...)
 	task := newResourceBuildTask(context.Background(), func(ctx context.Context) (*QueryRuntime, error) {
 		if err := runtime.Initialize(ctx, view); err != nil {
 			return runtime, err
@@ -243,6 +245,9 @@ func (m *queryRuntimeManager) Close() {
 	}
 	if m.scheduler != nil {
 		m.scheduler.Close()
+	}
+	if m.dispatcher != nil {
+		m.dispatcher.Close()
 	}
 	if remainingQueryViewRefs > 0 {
 		panic(errors.Errorf("query runtime manager closed with %d query view references", remainingQueryViewRefs))

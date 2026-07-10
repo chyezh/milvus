@@ -39,7 +39,8 @@ SNQueryRuntimeManager
 
 `QueryRuntime` is the only `walview.VChannelLiveObserver` for the vchannel. It
 pushes live resource events into one internal buffer, initializes all query
-resource modules, drains the buffer into every module through one consumer, and
+resource modules, drains the initial buffer before becoming ready, and then
+submits later buffered events to the manager-level live-event dispatcher. It
 enters `Ready` only after the whole vchannel resource is caught up.
 
 `Up` is not a resource-manager event. An `Up` QueryView is persisted only as
@@ -52,8 +53,8 @@ driven by `OnAlterLoadConfig`, `OnDropLoadConfig`, `Acquire`, and `Release`.
 |---|---|---|
 | `PChannelRuntime` | Owns one PChannel WAL instance and PChannel-local WAL submodules, including `RecoveryStorage`, `QueryViewStateMachine`, and `SNQueryRuntimeManager`. | It coordinates WAL open, recovery, handoff close, and module close order. It does not build vchannel query resources directly. |
 | `RecoveryStorage` | Observes `AlterLoadConfig` / `DropLoadConfig`, restores WAL metadata on startup, builds valid `VChannelWALView`, and calls the resource manager through `LoadConfigListener`. | It does not build csegments, fetch BM25 resources, wait for query resources to become ready, or manage QueryView lifecycle. WALView capture details are defined in [StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md). |
-| `SNQueryRuntimeManager` | Owns PChannel-local resource references, creates vchannel `QueryRuntime` instances, submits initialization tasks, waits for runtime initialization on `Acquire`, advances DataVersion watermarks, and releases resources. | It does not apply WAL events to concrete resources directly. It does not own QueryView state transitions. |
-| `QueryRuntime` | VChannel-level singleton resource runtime. Implements `VChannelLiveObserver`, owns one live-event buffer and one consumer, initializes resource modules, drains buffered events into modules, and broadcasts DataVersion advancement. | It does not own QueryView references, `load_config` meta, or WAL module snapshots. |
+| `SNQueryRuntimeManager` | Owns PChannel-local resource references, creates vchannel `QueryRuntime` instances, owns the fixed live-event dispatcher, submits initialization tasks, waits for runtime initialization on `Acquire`, advances DataVersion watermarks, and releases resources. | It does not apply WAL events to concrete resources directly. It does not own QueryView state transitions. |
+| `QueryRuntime` | VChannel-level singleton resource runtime. Implements `VChannelLiveObserver`, owns one live-event buffer, initializes resource modules, drains buffered events into modules when scheduled by the manager-level dispatcher, and broadcasts DataVersion advancement. | It does not own QueryView references, `load_config` meta, WAL module snapshots, or dedicated goroutines. |
 | `QueryRuntimeModule` | Common lifecycle interface implemented by resource modules. | It does not manage references or live observer registration. |
 | `QueryRuntimeModuleBuilder` | Creates unprepared `QueryRuntimeModule` instances when `AlterLoadConfig` creates a new runtime. | It does not receive QueryView references or own module initialization; `VChannelWALView` is passed later to `QueryRuntime.Initialize`. |
 | `GrowingRuntime` | QueryRuntime module that owns growing segment resources for the vchannel. | It does not implement `VChannelLiveObserver`, maintain pending buffers, or decide QueryView lifecycle. Details are defined in [StreamingNode Growing Segment Runtime Design](growing_segment_runtime.md). |
@@ -190,7 +191,7 @@ The runtime owns all module state:
 QueryRuntime
   state Preparing | Ready | Closed
   pendingEvents []VChannelResourceEvent
-  drainWorker
+  drainScheduled bool
   modules []QueryRuntimeModule
 ```
 
@@ -340,9 +341,11 @@ runtime to `Ready`.
    order;
 4. the runtime has entered `Ready`.
 
-Events appended while the initial batch is being drained stay in the shared
-buffer. They are handled by the same singleton consumer after the runtime enters
-`Ready`, but they do not block the `Ready` transition.
+Events appended while the initial batch is being drained stay in the same
+runtime buffer. After the runtime enters `Ready`, it schedules itself on the
+manager-level dispatcher. The dispatcher drains the runtime in batches, keeps
+one active drain per runtime, and allows different runtimes to be drained by
+different workers concurrently.
 
 `Initialize` has no recoverable data failure path for valid WAL input. If it
 observes invalid data or a module cannot apply valid input, the StreamingNode
@@ -359,9 +362,9 @@ vchannel. The runtime records the latest advanced `oldestDataVersion`; a later
 call with an older value is a critical bug and must fail by assertion.
 
 `Close` is a fast resource cancellation path. It stops accepting new live
-events, cancels `Initialize` if it is still running, stops the singleton
-consumer, closes modules, and releases buffered events. It does not invoke
-QueryView callbacks or report QueryView states.
+events, cancels `Initialize` if it is still running, waits for any in-flight
+apply to leave the runtime, closes modules, and releases buffered events. It
+does not invoke QueryView callbacks or report QueryView states.
 
 After `Close` starts, `ObserveEvent` must not append new events to the runtime
 buffer. It returns `false` if the WAL observer contract requires an acceptance
@@ -397,7 +400,9 @@ APIs.
 input means the WALView input or local runtime state is corrupted and the
 StreamingNode must fail critically.
 
-`QueryRuntime` is responsible for serializing calls to `ApplyLiveEvent`. Modules
+`QueryRuntime` is responsible for serializing calls to `ApplyLiveEvent` for one
+vchannel. The manager-level dispatcher may run different runtimes concurrently,
+but a single runtime must not apply two live-event batches concurrently. Modules
 must not start their own live-event consumers.
 
 ### 4.6 Scheduler
@@ -444,23 +449,25 @@ before runtime readiness are pushed into the `QueryRuntime` live-event buffer.
 Scheduler runs QueryRuntimeBuildTask
   -> QueryRuntime.Initialize(VChannelWALView)
   -> each QueryRuntimeModule.Prepare
-  -> QueryRuntime starts the singleton consumer
   -> QueryRuntime atomically takes the current buffer batch
   -> QueryRuntime drains the initial batch in WAL order
   -> each event is applied to every QueryRuntimeModule
   -> QueryRuntime enters Ready
+  -> QueryRuntime schedules itself on the manager dispatcher if more live events are buffered
 ```
 
-`QueryRuntime` owns one live-event buffer and one consumer. `ObserveEvent`
-always appends to the same buffer, both while `Initialize` is running and after
-the runtime is `Ready`. The singleton consumer drains the buffer in WAL order
-and applies each event to every module before moving to the next event.
+`QueryRuntime` owns one live-event buffer. `ObserveEvent` always appends to the
+same buffer, both while `Initialize` is running and after the runtime is
+`Ready`. After `Ready`, `ObserveEvent` schedules the runtime on the fixed
+manager dispatcher when it transitions from idle to pending. The dispatcher
+drains the buffer in WAL order and applies each event to every module before
+moving to the next event.
 
-The consumer starts only after all modules finish `Prepare`. During
-`Initialize`, catchup is complete when the consumer drains the initial batch and
-the runtime enters `Ready`. Events appended while the initial batch is draining
-remain in the shared buffer. After `Ready`, the same consumer keeps draining
-future events through the same serialized path.
+Live dispatch starts only after all modules finish `Prepare`. During
+`Initialize`, catchup is complete when the runtime drains the initial batch and
+enters `Ready`. Events appended while the initial batch is draining remain in
+the same buffer. After `Ready`, the shared dispatcher keeps draining future
+events through the same per-runtime serialized path.
 
 If the initialization context is canceled, the runtime is being closed. The
 manager cancels the build task, closes the runtime, and releases owned resources.

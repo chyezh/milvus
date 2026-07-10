@@ -20,8 +20,9 @@ type QueryRuntime struct {
 	pending      []walview.VChannelResourceEvent
 	pendingLimit int
 
-	drainWG sync.WaitGroup
-	applyMu sync.Mutex
+	dispatcher     *queryRuntimeDispatcher
+	drainScheduled bool
+	applyMu        sync.Mutex
 
 	latestAdvance qviews.DataVersion
 	hasAdvance    bool
@@ -36,7 +37,12 @@ const (
 )
 
 func NewQueryRuntime(modules ...QueryRuntimeModule) *QueryRuntime {
+	return newQueryRuntime(nil, modules...)
+}
+
+func newQueryRuntime(dispatcher *queryRuntimeDispatcher, modules ...QueryRuntimeModule) *QueryRuntime {
 	runtime := &QueryRuntime{
+		dispatcher:   dispatcher,
 		state:        queryRuntimePreparing,
 		pendingLimit: defaultLiveEventBufferSize,
 		modules:      append([]QueryRuntimeModule(nil), modules...),
@@ -69,15 +75,14 @@ func (r *QueryRuntime) Initialize(ctx context.Context, view walview.VChannelWALV
 		return context.Canceled
 	}
 	r.state = queryRuntimeReady
-	r.drainWG.Add(1)
-	go func() {
-		defer r.drainWG.Done()
-		r.drainLoop()
-	}()
+	drain := r.markDrainScheduledLocked()
 	r.cond.Broadcast()
 	r.mu.Unlock()
 	if hasAdvance {
 		r.advanceModules(advance)
+	}
+	if drain {
+		r.submitDrain()
 	}
 	return nil
 }
@@ -92,18 +97,24 @@ func (r *QueryRuntime) ObserveEvent(ctx context.Context, event walview.VChannelR
 	default:
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	if r.state == queryRuntimeClosed {
+		r.mu.Unlock()
 		return false
 	}
 	for r.pendingLimit > 0 && len(r.pending) >= r.pendingLimit && r.state != queryRuntimeClosed {
 		r.cond.Wait()
 	}
 	if r.state == queryRuntimeClosed {
+		r.mu.Unlock()
 		return false
 	}
 	r.pending = append(r.pending, event)
+	drain := r.markDrainScheduledLocked()
 	r.cond.Signal()
+	r.mu.Unlock()
+	if drain {
+		r.submitDrain()
+	}
 	return true
 }
 
@@ -153,10 +164,10 @@ func (r *QueryRuntime) Close() {
 	}
 	r.state = queryRuntimeClosed
 	r.pending = nil
+	r.drainScheduled = false
 	r.cond.Broadcast()
 	modules := append([]QueryRuntimeModule(nil), r.modules...)
 	r.mu.Unlock()
-	r.drainWG.Wait()
 	r.applyMu.Lock()
 	defer r.applyMu.Unlock()
 	for i := len(modules) - 1; i >= 0; i-- {
@@ -175,22 +186,48 @@ func (r *QueryRuntime) takeInitialBatch() []walview.VChannelResourceEvent {
 	return batch
 }
 
-func (r *QueryRuntime) drainLoop() {
+func (r *QueryRuntime) markDrainScheduledLocked() bool {
+	if r.state != queryRuntimeReady || len(r.pending) == 0 || r.drainScheduled {
+		return false
+	}
+	r.drainScheduled = true
+	return true
+}
+
+func (r *QueryRuntime) submitDrain() {
+	if r.dispatcher != nil && r.dispatcher.Submit(r) {
+		return
+	}
+	r.drainReady()
+}
+
+func (r *QueryRuntime) drainReady() {
 	for {
-		r.mu.Lock()
-		for len(r.pending) == 0 && r.state != queryRuntimeClosed {
-			r.cond.Wait()
-		}
-		if r.state == queryRuntimeClosed {
-			r.mu.Unlock()
+		batch, ok := r.takeDrainBatch()
+		if !ok {
 			return
 		}
-		batch := r.pending
-		r.pending = nil
-		r.cond.Broadcast()
-		r.mu.Unlock()
 		r.applyBatch(context.Background(), batch)
 	}
+}
+
+func (r *QueryRuntime) takeDrainBatch() ([]walview.VChannelResourceEvent, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.state == queryRuntimeClosed {
+		r.drainScheduled = false
+		r.cond.Broadcast()
+		return nil, false
+	}
+	if len(r.pending) == 0 {
+		r.drainScheduled = false
+		r.cond.Broadcast()
+		return nil, false
+	}
+	batch := r.pending
+	r.pending = nil
+	r.cond.Broadcast()
+	return batch, true
 }
 
 func (r *QueryRuntime) applyBatch(ctx context.Context, batch []walview.VChannelResourceEvent) {

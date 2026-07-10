@@ -1,7 +1,9 @@
 package viewresource
 
 import (
+	"bytes"
 	"context"
+	"runtime/pprof"
 	"sync"
 	"testing"
 	"time"
@@ -204,6 +206,37 @@ func TestQueryRuntimeInitialBatchAndReadyEventsUseSameConsumer(t *testing.T) {
 	runtime.Close()
 }
 
+func TestQueryRuntimeDoesNotStartPerRuntimeDrainLoop(t *testing.T) {
+	manager := NewManager(testModuleBuilder{}).(*queryRuntimeManager)
+	defer manager.Close()
+
+	keys := make([]qviews.QueryViewKey, 0, 8)
+	for i := 0; i < 8; i++ {
+		vchannel := "ch-" + string(rune('a'+i))
+		version := qviews.DataVersion{StreamingVersion: int64(10 + i), CompactVersion: 1}
+		meta, key := testQueryViewMetaAndKey(1, 2, vchannel, version, 3)
+
+		require.NotNil(t, manager.OnAlterLoadConfig(testWALView(1, vchannel, version)))
+		waitReady(t, manager, key, meta)
+		keys = append(keys, key)
+	}
+
+	count := countGoroutineStack("github.com/milvus-io/milvus/internal/streamingnode/server/viewresource.(*QueryRuntime).drainLoop")
+	for _, key := range keys {
+		dropped := make(chan struct{})
+		manager.Release(snview.ReleaseResource{
+			Key:       key,
+			OnDropped: func() { close(dropped) },
+		})
+		select {
+		case <-dropped:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for dropped callback")
+		}
+	}
+	require.Zero(t, count)
+}
+
 func waitReady(t *testing.T, manager *queryRuntimeManager, key qviews.QueryViewKey, meta *viewpb.QueryViewMeta) {
 	t.Helper()
 	ready := make(chan struct{})
@@ -295,4 +328,10 @@ func (m *recordingModule) advancedVersions() []qviews.DataVersion {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]qviews.DataVersion(nil), m.advances...)
+}
+
+func countGoroutineStack(pattern string) int {
+	var buf bytes.Buffer
+	_ = pprof.Lookup("goroutine").WriteTo(&buf, 1)
+	return bytes.Count(buf.Bytes(), []byte(pattern))
 }
