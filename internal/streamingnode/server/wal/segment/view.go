@@ -61,6 +61,7 @@ func newSegmentView(
 		onSegmentSealed:       config.onSegmentSealed,
 		schema:                schema,
 		metaAndData:           config.metaAndData,
+		commitL1Limiter:       config.commitL1Limiter,
 	}
 }
 
@@ -136,6 +137,7 @@ type segmentView struct {
 	onSegmentSealed    func(walview.SegmentSealedEvent)
 	schema             *schemapb.CollectionSchema // schema used to encode pending insert data.
 	metaAndData        bool                       // false during meta-only replay; true when data tasks may run.
+	commitL1Limiter    *commitL1Limiter
 }
 
 func (s *segmentView) ID() int64 {

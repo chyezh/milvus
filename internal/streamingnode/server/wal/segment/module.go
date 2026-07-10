@@ -17,6 +17,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
 type SchemaProvider interface {
@@ -40,6 +41,7 @@ type Module struct {
 	persistedMetaPhysicalTT uint64
 	persistedDataPhysicalTT uint64
 	onSegmentSealed         func(walview.SegmentSealedEvent)
+	commitL1Limiter         *commitL1Limiter
 }
 
 type runtimeConfig struct {
@@ -50,6 +52,7 @@ type runtimeConfig struct {
 	onSegmentSealed func(walview.SegmentSealedEvent)
 	flushPolicy     flushPolicy
 	metaAndData     bool
+	commitL1Limiter *commitL1Limiter
 }
 
 func firstRuntimeConfig(configs []runtimeConfig) runtimeConfig {
@@ -83,6 +86,18 @@ func WithModuleRuntime(logger *mlog.Logger, runtime moduleapi.Runtime) ModuleOpt
 func WithSegmentSealedNotifier(notifier func(walview.SegmentSealedEvent)) ModuleOption {
 	return func(module *Module) {
 		module.onSegmentSealed = notifier
+	}
+}
+
+func WithCommitL1Concurrency(concurrency int) ModuleOption {
+	return func(module *Module) {
+		module.commitL1Limiter = newCommitL1Limiter(concurrency)
+	}
+}
+
+func WithDynamicCommitL1Concurrency(param *paramtable.ParamItem) ModuleOption {
+	return func(module *Module) {
+		module.commitL1Limiter = getDynamicCommitL1Limiter(param)
 	}
 }
 
@@ -127,6 +142,7 @@ func (m *Module) runtimeConfig() runtimeConfig {
 		onDataUpdated:   m.notifyModuleUpdated,
 		onSegmentSealed: m.onSegmentSealed,
 		metaAndData:     m.metaAndData,
+		commitL1Limiter: m.commitL1Limiter,
 	}
 }
 

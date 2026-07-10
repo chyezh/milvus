@@ -2,6 +2,7 @@ package segment
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
+	scheduler "github.com/milvus-io/milvus/pkg/v3/syncutil/preconditioned"
 )
 
 func TestCleanupDeleteSnapshotKeepsStableInFlightView(t *testing.T) {
@@ -106,6 +108,79 @@ func TestBuildCommitL1SegmentRequestUsesCreateSegmentTimetickForDeleteApply(t *t
 	assert.Equal(t, int64(10), req.GetCheckPoints()[0].GetNumOfRows())
 }
 
+func TestCommitL1SegmentConcurrencyLimit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	taskScheduler := scheduler.New(ctx, scheduler.WithRetryInterval(10*time.Millisecond))
+	defer taskScheduler.Close()
+	lifecycle := newBlockingCommitLifecycle()
+	limiter := newCommitL1Limiter(1)
+	module1 := NewModule("p1", map[int64]*streamingpb.SegmentAssignmentMeta{
+		1: newTestGrowingSegmentMeta(1, "v1"),
+	}, nil, lifecycle,
+		WithModuleRuntime(nil, moduleapi.Runtime{Scheduler: taskScheduler}),
+		withCommitL1LimiterForTest(limiter),
+	)
+	module2 := NewModule("p2", map[int64]*streamingpb.SegmentAssignmentMeta{
+		2: newTestGrowingSegmentMeta(2, "v2"),
+	}, nil, lifecycle,
+		WithModuleRuntime(nil, moduleapi.Runtime{Scheduler: taskScheduler}),
+		withCommitL1LimiterForTest(limiter),
+	)
+	module1.SwitchIntoMetaAndData()
+	module2.SwitchIntoMetaAndData()
+
+	module1.segments[1].Flush(ctx, 10)
+	module2.segments[2].Flush(ctx, 10)
+
+	first := lifecycle.waitEntered(t)
+	select {
+	case second := <-lifecycle.entered:
+		t.Fatalf("second commit entered before releasing first, first=%d second=%d", first, second)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	lifecycle.releaseOne()
+	second := lifecycle.waitEntered(t)
+	assert.NotEqual(t, first, second)
+	lifecycle.releaseOne()
+	require.NoError(t, taskScheduler.WaitIdle(ctx))
+}
+
+func TestCommitL1SegmentConcurrencyCanBeResized(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	taskScheduler := scheduler.New(ctx, scheduler.WithRetryInterval(10*time.Millisecond))
+	defer taskScheduler.Close()
+	lifecycle := newBlockingCommitLifecycle()
+	limiter := newCommitL1Limiter(1)
+	module := NewModule("p1", map[int64]*streamingpb.SegmentAssignmentMeta{
+		1: newTestGrowingSegmentMeta(1, "v1"),
+		2: newTestGrowingSegmentMeta(2, "v1"),
+	}, nil, lifecycle,
+		WithModuleRuntime(nil, moduleapi.Runtime{Scheduler: taskScheduler}),
+		withCommitL1LimiterForTest(limiter),
+	)
+	module.SwitchIntoMetaAndData()
+
+	module.segments[1].Flush(ctx, 10)
+	module.segments[2].Flush(ctx, 10)
+
+	first := lifecycle.waitEntered(t)
+	select {
+	case second := <-lifecycle.entered:
+		t.Fatalf("second commit entered before resizing limiter, first=%d second=%d", first, second)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	limiter.UpdateConcurrency(2)
+	second := lifecycle.waitEntered(t)
+	assert.NotEqual(t, first, second)
+	lifecycle.releaseOne()
+	lifecycle.releaseOne()
+	require.NoError(t, taskScheduler.WaitIdle(ctx))
+}
+
 func TestNewGrowingSegmentInfoUsesCreateSegmentTimetickForDeleteApply(t *testing.T) {
 	meta := &streamingpb.SegmentAssignmentMeta{
 		CollectionId:           1,
@@ -126,6 +201,81 @@ func TestNewGrowingSegmentInfoUsesCreateSegmentTimetickForDeleteApply(t *testing
 	assert.Equal(t, uint64(1000), segmentInfo.GetDeleteApplyStartAfterTimetick())
 	assert.Equal(t, uint64(1000), segmentInfo.GetStartPosition().GetTimestamp())
 	assert.Equal(t, uint64(3000), segmentInfo.GetDmlPosition().GetTimestamp())
+}
+
+type blockingCommitLifecycle struct {
+	entered chan int64
+	release chan struct{}
+
+	mu      sync.Mutex
+	version int64
+}
+
+func newBlockingCommitLifecycle() *blockingCommitLifecycle {
+	return &blockingCommitLifecycle{
+		entered: make(chan int64, 2),
+		release: make(chan struct{}, 2),
+	}
+}
+
+func (l *blockingCommitLifecycle) EnsureGrowingSegment(context.Context, *streamingpb.SegmentAssignmentMeta) error {
+	return nil
+}
+
+func (l *blockingCommitLifecycle) CommitL1Segment(ctx context.Context, meta *streamingpb.SegmentAssignmentMeta) (*viewpb.DataVersion, error) {
+	select {
+	case l.entered <- meta.GetSegmentId():
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	select {
+	case <-l.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	l.mu.Lock()
+	l.version++
+	version := l.version
+	l.mu.Unlock()
+	return &viewpb.DataVersion{StreamingVersion: version}, nil
+}
+
+func (l *blockingCommitLifecycle) waitEntered(t *testing.T) int64 {
+	t.Helper()
+	select {
+	case segmentID := <-l.entered:
+		return segmentID
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for commit")
+		return 0
+	}
+}
+
+func (l *blockingCommitLifecycle) releaseOne() {
+	l.release <- struct{}{}
+}
+
+func withCommitL1LimiterForTest(limiter *commitL1Limiter) ModuleOption {
+	return func(module *Module) {
+		module.commitL1Limiter = limiter
+	}
+}
+
+func newTestGrowingSegmentMeta(segmentID int64, vchannel string) *streamingpb.SegmentAssignmentMeta {
+	return &streamingpb.SegmentAssignmentMeta{
+		CollectionId:           1,
+		PartitionId:            10,
+		SegmentId:              segmentID,
+		Vchannel:               vchannel,
+		State:                  streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING,
+		CheckpointTimeTick:     1,
+		DataCheckpointTimeTick: 1,
+		PersistedStorage:       &streamingpb.L1SegmentPersistedStorage{},
+		Stat: &streamingpb.SegmentAssignmentStat{
+			CreateSegmentTimeTick: 1,
+			Level:                 datapb.SegmentLevel_L1,
+		},
+	}
 }
 
 func TestVisibleSnapshotIncludesPendingInsertMessages(t *testing.T) {

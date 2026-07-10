@@ -212,6 +212,7 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		segment.WithSegmentSealedNotifier(func(event walview.SegmentSealedEvent) {
 			r.observeSegmentSealedEvent(event)
 		}),
+		segment.WithDynamicCommitL1Concurrency(&paramtable.Get().StreamingCfg.FlushL1CommitConcurrency),
 	)
 	transformLogStore := waltransformlog.NewObjectChunkStore(
 		resource.Resource().ChunkManager(),
@@ -573,8 +574,9 @@ func (r *recoveryStorageImpl) startDataLiveScanner(recoveryStreamBuilder Recover
 		return
 	}
 	rs := recoveryStreamBuilder.Build(BuildRecoveryStreamParam{
-		StartCheckpoint: checkpoint.MessageID,
-		EndTimeTick:     0,
+		StartCheckpoint:     checkpoint.MessageID,
+		EndTimeTick:         0,
+		UseWriteAheadBuffer: true,
 	})
 	go r.runDataLiveScanner(rs)
 }

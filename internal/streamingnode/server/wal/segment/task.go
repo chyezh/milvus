@@ -76,6 +76,13 @@ type commitL1SegmentTask struct {
 func (t *commitL1SegmentTask) Run(ctx context.Context) error {
 	return t.run(ctx, func(ctx context.Context) error {
 		segment := t.segment
+		if limiter := segment.commitL1Limiter; limiter != nil {
+			release, err := limiter.Acquire(ctx)
+			if err != nil {
+				return err
+			}
+			defer release()
+		}
 		if err := segment.FlushInsertChunk(ctx, t.flushTimeTick); err != nil {
 			return err
 		}

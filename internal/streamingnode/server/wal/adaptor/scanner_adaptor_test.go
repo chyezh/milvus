@@ -14,6 +14,7 @@ import (
 	"github.com/milvus-io/milvus/internal/mocks/streamingnode/server/wal/interceptors/timetick/mock_inspector"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/wab"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v3/config"
@@ -63,7 +64,7 @@ func TestScannerAdaptorReadError(t *testing.T) {
 			MessageFilter: nil,
 		},
 		metricsutil.NewScanMetrics(types.PChannelInfo{}).NewScannerMetrics(),
-		func() {}, false)
+		func() {})
 	// wait for timetick inspector first round
 	<-sig1.CloseCh()
 	// wait for scanner backoff 2 rounds
@@ -72,6 +73,47 @@ func TestScannerAdaptorReadError(t *testing.T) {
 	<-s.Chan()
 	<-s.Done()
 	assert.NoError(t, s.Error())
+}
+
+func TestScannerAdaptorWaitsForTimeTickOperator(t *testing.T) {
+	resource.InitForTest(t)
+
+	pchannel := types.PChannelInfo{Name: "test-pchannel", AccessMode: types.AccessModeRW}
+	l := mock_walimpls.NewMockWALImpls(t)
+	l.EXPECT().Channel().Return(pchannel)
+	scanner := &scannerAdaptorImpl{
+		logger:        mlog.With(),
+		innerWAL:      l,
+		ScannerHelper: helper.NewScannerHelper("test"),
+	}
+
+	done := make(chan wab.ROWriteAheadBuffer, 1)
+	go func() {
+		wb, err := scanner.waitWriteAheadBuffer()
+		assert.NoError(t, err)
+		done <- wb
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("write ahead buffer should wait until timetick operator is registered")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	wb := mock_wab.NewMockROWriteAheadBuffer(t)
+	operator := mock_inspector.NewMockTimeTickSyncOperator(t)
+	operator.EXPECT().Channel().Return(pchannel)
+	operator.EXPECT().WriteAheadBuffer().Return(wb)
+	operator.EXPECT().Sync(mock.Anything, mock.Anything).Maybe()
+	resource.Resource().TimeTickInspector().RegisterSyncOperator(operator)
+	defer resource.Resource().TimeTickInspector().UnregisterSyncOperator(operator)
+
+	select {
+	case got := <-done:
+		assert.Equal(t, wb, got)
+	case <-time.After(time.Second):
+		t.Fatal("wait write ahead buffer timeout")
+	}
 }
 
 func TestPauseConsumption(t *testing.T) {

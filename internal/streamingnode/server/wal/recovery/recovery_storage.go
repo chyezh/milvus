@@ -49,6 +49,9 @@ type AlterWALInfo struct {
 type BuildRecoveryStreamParam struct {
 	StartCheckpoint message.MessageID
 	EndTimeTick     uint64
+	// UseWriteAheadBuffer lets unbounded live scanners switch to WAB tailing after
+	// catching up durable WAL. Bounded startup recovery keeps this disabled.
+	UseWriteAheadBuffer bool
 }
 
 // RecoveryMetrics is the metrics of the recovery info.

@@ -24,6 +24,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
 )
 
@@ -123,6 +124,69 @@ func (o *recordingLiveObserver) ObserveEvent(_ context.Context, event walview.VC
 
 func (o *recordingLiveObserver) Close() {
 	o.closed = true
+}
+
+type recordingRecoveryStreamBuilder struct {
+	param BuildRecoveryStreamParam
+}
+
+func (b *recordingRecoveryStreamBuilder) WALName() message.WALName {
+	return message.WALNameTest
+}
+
+func (b *recordingRecoveryStreamBuilder) Channel() types.PChannelInfo {
+	return types.PChannelInfo{Name: "test-pchannel"}
+}
+
+func (b *recordingRecoveryStreamBuilder) Build(param BuildRecoveryStreamParam) RecoveryStream {
+	b.param = param
+	return &closedRecoveryStream{ch: make(chan message.ImmutableMessage)}
+}
+
+func (b *recordingRecoveryStreamBuilder) RWWALImpls() walimpls.WALImpls {
+	return nil
+}
+
+type closedRecoveryStream struct {
+	ch chan message.ImmutableMessage
+}
+
+func (s *closedRecoveryStream) Chan() <-chan message.ImmutableMessage {
+	close(s.ch)
+	return s.ch
+}
+
+func (s *closedRecoveryStream) Error() error {
+	return nil
+}
+
+func (s *closedRecoveryStream) TxnBuffer() *utility.TxnBuffer {
+	return nil
+}
+
+func (s *closedRecoveryStream) Close() error {
+	return nil
+}
+
+func TestRecoveryStorageDataLiveScannerUsesWriteAheadBuffer(t *testing.T) {
+	checkpoint := &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(1),
+		TimeTick:  1,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: walimplstest.NewTestMessageID(2),
+			TimeTick:  2,
+		},
+	}
+	storage := newRecoveryStorage(types.PChannelInfo{Name: "test-pchannel"}, checkpoint)
+	defer storage.metrics.Close()
+	defer storage.taskScheduler.Close()
+
+	builder := &recordingRecoveryStreamBuilder{}
+	storage.startDataLiveScanner(builder)
+
+	assert.True(t, builder.param.UseWriteAheadBuffer)
+	assert.True(t, checkpoint.DataCheckpoint.MessageID.EQ(builder.param.StartCheckpoint))
+	assert.Equal(t, uint64(0), builder.param.EndTimeTick)
 }
 
 func TestRecoveryStorageRegistersImmediateCheckpointForBarrierlessMessage(t *testing.T) {
