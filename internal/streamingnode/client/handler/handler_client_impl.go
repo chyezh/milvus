@@ -331,6 +331,13 @@ func (hc *handlerClientImpl) AcquireTransformLogStream(ctx context.Context, pcha
 	}
 	logger := mlog.With(mlog.String("pchannel", pchannel), mlog.String("handler", "transformlog-event-stream"))
 	s, err := hc.createHandlerAfterStreamingNodeReady(ctx, logger, pchannel, func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
+		localWAL, err := registry.GetLocalAvailableWAL(assign.Channel)
+		if err == nil {
+			return localWAL.TransformLog().AcquireStream(ctx, pchannel)
+		}
+		if !shouldUseRemoteWAL(err) {
+			return nil, err
+		}
 		handlerService, err := hc.service.GetService(ctx)
 		if err != nil {
 			return nil, err

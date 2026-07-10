@@ -66,20 +66,24 @@ func TestDeletePublishesToLiveSubscriberBeforeFlush(t *testing.T) {
 	}, newMemoryStore())
 	module.SwitchIntoMetaAndData()
 
-	scanner := module.Read(ctx, wal.TransformLogReadOption{
-		Name:               "test-scanner",
+	stream, err := module.AcquireStream(ctx, "p1")
+	require.NoError(t, err)
+	defer stream.Close()
+	handler := newRecordingStreamHandler()
+	_, err = stream.Subscribe(ctx, wal.TransformLogSubscriptionOption{
 		VChannel:           "v1",
 		StartAfterTimeTick: 0,
+		Handler:            handler,
 	})
-	defer scanner.Close()
+	require.NoError(t, err)
 
-	caughtUp := <-scanner.Chan()
+	caughtUp := recvStreamEvent(t, handler.events)
 	require.NotNil(t, caughtUp.CaughtUp)
 
 	module.ObserveMessage(ctx, newModuleTestDeleteMessage(t, 10))
 
 	select {
-	case event := <-scanner.Chan():
+	case event := <-handler.events:
 		require.NotNil(t, event.Entry)
 		assert.Equal(t, uint64(10), event.Entry.GetTimeTick())
 		require.IsType(t, &streamingpb.TransformLogEntry_Delete{}, event.Entry.GetEntry())
@@ -96,22 +100,26 @@ func TestReadReplaysUnflushedBuffer(t *testing.T) {
 	module.SwitchIntoMetaAndData()
 	module.ObserveMessage(ctx, newModuleTestDeleteMessage(t, 10))
 
-	scanner := module.Read(ctx, wal.TransformLogReadOption{
-		Name:               "test-scanner",
+	stream, err := module.AcquireStream(ctx, "p1")
+	require.NoError(t, err)
+	defer stream.Close()
+	handler := newRecordingStreamHandler()
+	_, err = stream.Subscribe(ctx, wal.TransformLogSubscriptionOption{
 		VChannel:           "v1",
 		StartAfterTimeTick: 0,
+		Handler:            handler,
 	})
-	defer scanner.Close()
+	require.NoError(t, err)
 
 	select {
-	case event := <-scanner.Chan():
+	case event := <-handler.events:
 		require.NotNil(t, event.Entry)
 		assert.Equal(t, uint64(10), event.Entry.GetTimeTick())
 		require.IsType(t, &streamingpb.TransformLogEntry_Delete{}, event.Entry.GetEntry())
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for unflushed transform log delete entry")
 	}
-	caughtUp := <-scanner.Chan()
+	caughtUp := recvStreamEvent(t, handler.events)
 	require.NotNil(t, caughtUp.CaughtUp)
 }
 
@@ -120,37 +128,41 @@ func TestCreateCollectionCreatesTransformLogForVChannelWithoutDeleteHistory(t *t
 	module := NewModule("p1", nil, newMemoryStore())
 	module.SwitchIntoMetaAndData()
 
-	beforeCreate := module.Read(ctx, wal.TransformLogReadOption{
-		Name:               "test-scanner-before-create",
+	stream, err := module.AcquireStream(ctx, "p1")
+	require.NoError(t, err)
+	defer stream.Close()
+	_, err = stream.Subscribe(ctx, wal.TransformLogSubscriptionOption{
 		VChannel:           "v1",
 		StartAfterTimeTick: 0,
+		Handler:            newRecordingStreamHandler(),
 	})
-	assert.True(t, errors.Is(beforeCreate.Error(), wal.ErrTransformLogVChannelUnavailable))
+	assert.True(t, errors.Is(err, wal.ErrTransformLogVChannelUnavailable))
 
 	module.ObserveMessage(ctx, newModuleTestCreateCollectionMessage(t, 5))
 
-	scanner := module.Read(ctx, wal.TransformLogReadOption{
-		Name:               "test-scanner",
+	handler := newRecordingStreamHandler()
+	_, err = stream.Subscribe(ctx, wal.TransformLogSubscriptionOption{
 		VChannel:           "v1",
 		StartAfterTimeTick: 0,
+		Handler:            handler,
 	})
-	defer scanner.Close()
+	require.NoError(t, err)
 
 	select {
-	case event := <-scanner.Chan():
+	case event := <-handler.events:
 		require.NotNil(t, event.Entry)
 		assert.Equal(t, uint64(5), event.Entry.GetTimeTick())
 		require.IsType(t, &streamingpb.TransformLogEntry_Barrier{}, event.Entry.GetEntry())
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for live transform log barrier entry")
 	}
-	caughtUp := <-scanner.Chan()
+	caughtUp := recvStreamEvent(t, handler.events)
 	require.NotNil(t, caughtUp.CaughtUp)
 
 	module.ObserveMessage(ctx, newModuleTestDeleteMessage(t, 10))
 
 	select {
-	case event := <-scanner.Chan():
+	case event := <-handler.events:
 		require.NotNil(t, event.Entry)
 		assert.Equal(t, uint64(10), event.Entry.GetTimeTick())
 		require.IsType(t, &streamingpb.TransformLogEntry_Delete{}, event.Entry.GetEntry())
@@ -219,19 +231,23 @@ func TestRecoveryBarrierInMetaOnlyModeDoesNotHideRecoveredDelete(t *testing.T) {
 	module.ObserveMessage(ctx, newModuleTestDeleteMessage(t, 20))
 	module.ObserveMessage(ctx, newModuleTestRecoveryBarrierMessage(t, 30))
 
-	scanner := module.Read(ctx, wal.TransformLogReadOption{
-		Name:               "test-scanner",
+	stream, err := module.AcquireStream(ctx, "p1")
+	require.NoError(t, err)
+	defer stream.Close()
+	handler := newRecordingStreamHandler()
+	_, err = stream.Subscribe(ctx, wal.TransformLogSubscriptionOption{
 		VChannel:           "v1",
 		StartAfterTimeTick: 0,
+		Handler:            handler,
 	})
-	defer scanner.Close()
+	require.NoError(t, err)
 
-	deleteEvent := <-scanner.Chan()
+	deleteEvent := recvStreamEvent(t, handler.events)
 	require.NotNil(t, deleteEvent.Entry)
 	assert.Equal(t, uint64(20), deleteEvent.Entry.GetTimeTick())
 	require.IsType(t, &streamingpb.TransformLogEntry_Delete{}, deleteEvent.Entry.GetEntry())
 
-	barrierEvent := <-scanner.Chan()
+	barrierEvent := recvStreamEvent(t, handler.events)
 	require.NotNil(t, barrierEvent.Entry)
 	assert.Equal(t, uint64(30), barrierEvent.Entry.GetTimeTick())
 	require.IsType(t, &streamingpb.TransformLogEntry_Barrier{}, barrierEvent.Entry.GetEntry())

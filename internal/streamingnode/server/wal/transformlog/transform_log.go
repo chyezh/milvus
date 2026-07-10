@@ -17,7 +17,6 @@ type TransformLog interface {
 	AppendBarrier(uint64) AppendResult
 	Flush(context.Context, FlushOption) (FlushResult, error)
 	Materialize(context.Context, MaterializeOption) (MaterializeResult, error)
-	Read(context.Context, wal.TransformLogReadOption) wal.TransformLogScanner
 	Truncate(TruncateOption) TruncateResult
 
 	Recover(context.Context, *streamingpb.VChannelTransformLogMeta) (RecoverResult, error)
@@ -241,18 +240,6 @@ func (t *transformLog) Materialize(ctx context.Context, opt MaterializeOption) (
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.commitMaterializeLocked(work), nil
-}
-
-func (t *transformLog) Read(ctx context.Context, opt wal.TransformLogReadOption) wal.TransformLogScanner {
-	t.mu.Lock()
-	if opt.StartAfterTimeTick < t.meta.GetTruncateTimeTick() {
-		t.mu.Unlock()
-		return wal.NewTransformLogErrorScanner(opt.Name, errors.Wrap(wal.ErrTransformLogStartPointTruncated, "start point is truncated"))
-	}
-	scanner := newScanner(t, opt.Name, opt.StartAfterTimeTick, opt.EndTimeTick, t.latestTimeTickLocked())
-	t.mu.Unlock()
-	go scanner.run(ctx)
-	return scanner
 }
 
 func (t *transformLog) Truncate(opt TruncateOption) TruncateResult {

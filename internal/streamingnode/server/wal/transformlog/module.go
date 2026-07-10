@@ -5,7 +5,6 @@ import (
 	"math"
 	"sync"
 
-	"github.com/cockroachdb/errors"
 	"go.uber.org/atomic"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
@@ -36,6 +35,10 @@ type Module struct {
 	runtime             moduleapi.Runtime
 	mode                moduleMode
 	initialized         bool
+
+	streamMu     sync.Mutex
+	streamNotify chan struct{}
+	streamSeq    uint64
 }
 
 type ModuleOption func(*Module)
@@ -72,9 +75,10 @@ func NewModule(
 	opts ...ModuleOption,
 ) *Module {
 	module := &Module{
-		pchannel: pchannel,
-		logs:     make(map[string]*moduleLog, len(metas)),
-		store:    store,
+		pchannel:     pchannel,
+		logs:         make(map[string]*moduleLog, len(metas)),
+		store:        store,
+		streamNotify: make(chan struct{}),
 	}
 	for _, opt := range opts {
 		opt(module)
@@ -165,17 +169,6 @@ func (m *Module) Recover(ctx context.Context) error {
 	return nil
 }
 
-func (m *Module) Read(ctx context.Context, opt wal.TransformLogReadOption) wal.TransformLogScanner {
-	if opt.VChannel == "" {
-		return wal.NewTransformLogErrorScanner(opt.Name, errors.Wrap(wal.ErrTransformLogInvalidReadOption, "vchannel is empty"))
-	}
-	log := m.getLog(opt.VChannel)
-	if log == nil {
-		return wal.NewTransformLogErrorScanner(opt.Name, errors.Wrap(wal.ErrTransformLogVChannelUnavailable, "transform log is not found"))
-	}
-	return log.log.Read(ctx, opt)
-}
-
 func (m *Module) LatestTransformTimeTick(vchannel string) uint64 {
 	log := m.getLog(vchannel)
 	if log == nil {
@@ -219,6 +212,7 @@ func (m *Module) observeCreateCollectionMessage(msg message.ImmutableMessage) mo
 	if !appendResult.Appended {
 		return moduleapi.ObserveResult{}
 	}
+	m.notifyStream()
 	m.submitFlushTask(log, msg.VChannel(), appendResult.DataTimeTick)
 	return moduleapi.ObserveResult{Data: log.dataBarrier()}
 }
@@ -235,6 +229,7 @@ func (m *Module) observeTransformLogMessage(msg message.ImmutableMessage) module
 	if !appendResult.Appended {
 		return moduleapi.ObserveResult{}
 	}
+	m.notifyStream()
 	if appendResult.ShouldFlush || isTransformBarrierMessage(msg) {
 		m.submitFlushTask(log, msg.VChannel(), appendResult.DataTimeTick)
 	}
@@ -299,6 +294,7 @@ func (m *Module) appendBarrierToLog(log *moduleLog, timetick uint64) walcheckpoi
 	if !log.log.AppendBarrier(timetick).Appended {
 		return nil
 	}
+	m.notifyStream()
 	return log.dataBarrier()
 }
 
@@ -392,6 +388,20 @@ func (m *Module) snapshotLogs() map[string]*moduleLog {
 		logs[vchannel] = log
 	}
 	return logs
+}
+
+func (m *Module) notifyStream() {
+	m.streamMu.Lock()
+	defer m.streamMu.Unlock()
+	m.streamSeq++
+	close(m.streamNotify)
+	m.streamNotify = make(chan struct{})
+}
+
+func (m *Module) streamNotifyState() (<-chan struct{}, uint64) {
+	m.streamMu.Lock()
+	defer m.streamMu.Unlock()
+	return m.streamNotify, m.streamSeq
 }
 
 func (m *Module) newTransformLog(vchannel string, meta *streamingpb.VChannelTransformLogMeta) TransformLog {
@@ -629,8 +639,8 @@ func composeBarrier(left walcheckpoint.Barrier, right walcheckpoint.Barrier) wal
 }
 
 var (
-	_ moduleapi.Module           = (*Module)(nil)
-	_ moduleapi.DataFrontierView = (*Module)(nil)
-	_ wal.TransformLogAccesser   = (*Module)(nil)
-	_ walcheckpoint.Barrier      = transformLogFrontierOwners{}
+	_ moduleapi.Module              = (*Module)(nil)
+	_ moduleapi.DataFrontierView    = (*Module)(nil)
+	_ wal.TransformLogStreamManager = (*Module)(nil)
+	_ walcheckpoint.Barrier         = transformLogFrontierOwners{}
 )

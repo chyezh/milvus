@@ -16,70 +16,80 @@ import (
 )
 
 func TestReadDrainsCreationTailBeforeFutureAppends(t *testing.T) {
-	transformLog := New(Config{VChannel: "v1"}).(*transformLog)
+	module := NewModule("p1", map[string]*streamingpb.VChannelTransformLogMeta{"v1": {}}, nil)
+	module.SwitchIntoMetaAndData()
+	transformLog := module.getLog("v1").log.(*transformLog)
 	for timeTick := uint64(1); timeTick <= 20; timeTick++ {
 		require.True(t, transformLog.AppendBarrier(timeTick).Appended)
 	}
 
-	scanner := transformLog.Read(context.Background(), wal.TransformLogReadOption{
-		Name:               "test-scanner",
+	stream, err := module.AcquireStream(context.Background(), "p1")
+	require.NoError(t, err)
+	defer stream.Close()
+	handler := newRecordingStreamHandler()
+	_, err = stream.Subscribe(context.Background(), wal.TransformLogSubscriptionOption{
 		VChannel:           "v1",
 		StartAfterTimeTick: 0,
+		Handler:            handler,
 	})
-	defer scanner.Close()
+	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
-		return len(scanner.Chan()) == 16
+		return len(handler.events) == 16
 	}, time.Second, 10*time.Millisecond)
 	require.True(t, transformLog.AppendBarrier(21).Appended)
+	module.notifyStream()
 
 	for expected := uint64(1); expected <= 20; expected++ {
-		event := <-scanner.Chan()
+		event := <-handler.events
 		require.NotNil(t, event.Entry)
 		assert.Equal(t, expected, event.Entry.GetTimeTick())
 	}
-	caughtUpEvent := <-scanner.Chan()
+	caughtUpEvent := <-handler.events
 	require.NotNil(t, caughtUpEvent.CaughtUp)
-	liveEvent := <-scanner.Chan()
+	liveEvent := <-handler.events
 	require.NotNil(t, liveEvent.Entry)
 	assert.Equal(t, uint64(21), liveEvent.Entry.GetTimeTick())
 }
 
 func TestReadStopsAtEndTimeTick(t *testing.T) {
-	transformLog := New(Config{VChannel: "v1"}).(*transformLog)
+	module := NewModule("p1", map[string]*streamingpb.VChannelTransformLogMeta{"v1": {}}, nil)
+	module.SwitchIntoMetaAndData()
+	transformLog := module.getLog("v1").log.(*transformLog)
 	require.True(t, transformLog.AppendBarrier(10).Appended)
 	require.True(t, transformLog.AppendBarrier(20).Appended)
 	require.True(t, transformLog.AppendBarrier(30).Appended)
 
-	scanner := transformLog.Read(context.Background(), wal.TransformLogReadOption{
-		Name:               "test-scanner",
+	stream, err := module.AcquireStream(context.Background(), "p1")
+	require.NoError(t, err)
+	defer stream.Close()
+	handler := newRecordingStreamHandler()
+	_, err = stream.Subscribe(context.Background(), wal.TransformLogSubscriptionOption{
 		VChannel:           "v1",
 		StartAfterTimeTick: 1,
 		EndTimeTick:        20,
+		Handler:            handler,
 	})
-	defer scanner.Close()
+	require.NoError(t, err)
 
-	first := <-scanner.Chan()
+	first := recvStreamEvent(t, handler.events)
 	require.NotNil(t, first.Entry)
 	assert.Equal(t, uint64(10), first.Entry.GetTimeTick())
-	second := <-scanner.Chan()
+	second := recvStreamEvent(t, handler.events)
 	require.NotNil(t, second.Entry)
 	assert.Equal(t, uint64(20), second.Entry.GetTimeTick())
+	caughtUp := recvStreamEvent(t, handler.events)
+	require.NotNil(t, caughtUp.CaughtUp)
 
 	require.Eventually(t, func() bool {
 		select {
-		case <-scanner.Done():
+		case <-handler.closed:
 			return true
 		default:
 			return false
 		}
 	}, time.Second, 10*time.Millisecond)
-	select {
-	case event := <-scanner.Chan():
-		t.Fatalf("unexpected event after end timetick: %+v", event)
-	default:
-	}
-	assert.NoError(t, scanner.Error())
+	requireNoStreamEvent(t, handler.events)
 }
 
 func TestRecoverKeepsChunksColdUntilRead(t *testing.T) {
@@ -91,28 +101,31 @@ func TestRecoverKeepsChunksColdUntilRead(t *testing.T) {
 		},
 	}))
 	store.resetReadCount()
-	transformLog := New(Config{
-		VChannel: "v1",
-		Store:    store,
-		Meta: &streamingpb.VChannelTransformLogMeta{
+	module := NewModule("p1", map[string]*streamingpb.VChannelTransformLogMeta{
+		"v1": {
 			CheckpointTimeTick: 10,
 			NextChunkId:        1,
 		},
-	}).(*transformLog)
+	}, store)
+	transformLog := module.getLog("v1").log.(*transformLog)
 
 	result, err := transformLog.Recover(context.Background(), nil)
 	require.NoError(t, err)
 	assert.True(t, result.Recovered)
 	assert.Equal(t, 0, store.readCount("v1", 0))
 
-	scanner := transformLog.Read(context.Background(), wal.TransformLogReadOption{
-		Name:               "test-scanner",
+	stream, err := module.AcquireStream(context.Background(), "p1")
+	require.NoError(t, err)
+	defer stream.Close()
+	handler := newRecordingStreamHandler()
+	_, err = stream.Subscribe(context.Background(), wal.TransformLogSubscriptionOption{
 		VChannel:           "v1",
 		StartAfterTimeTick: 0,
+		Handler:            handler,
 	})
-	defer scanner.Close()
+	require.NoError(t, err)
 
-	event := <-scanner.Chan()
+	event := recvStreamEvent(t, handler.events)
 	require.NotNil(t, event.Entry)
 	assert.Equal(t, uint64(10), event.Entry.GetTimeTick())
 	assert.Equal(t, 1, store.readCount("v1", 0))
@@ -176,33 +189,35 @@ func TestTruncateLoadsRecoveredColdChunkToAdvanceFirstChunk(t *testing.T) {
 }
 
 func TestFlushWhileScannerDrainsDoesNotDuplicateEntries(t *testing.T) {
-	transformLog := New(Config{
-		VChannel: "v1",
-		Store:    newMemoryStore(),
-	}).(*transformLog)
+	module := NewModule("p1", map[string]*streamingpb.VChannelTransformLogMeta{"v1": {}}, newMemoryStore())
+	transformLog := module.getLog("v1").log.(*transformLog)
 	for timeTick := uint64(1); timeTick <= 20; timeTick++ {
 		require.True(t, transformLog.AppendBarrier(timeTick).Appended)
 	}
 
-	scanner := transformLog.Read(context.Background(), wal.TransformLogReadOption{
-		Name:               "test-scanner",
+	stream, err := module.AcquireStream(context.Background(), "p1")
+	require.NoError(t, err)
+	defer stream.Close()
+	handler := newRecordingStreamHandler()
+	_, err = stream.Subscribe(context.Background(), wal.TransformLogSubscriptionOption{
 		VChannel:           "v1",
 		StartAfterTimeTick: 0,
+		Handler:            handler,
 	})
-	defer scanner.Close()
+	require.NoError(t, err)
 	require.Eventually(t, func() bool {
-		return len(scanner.Chan()) == 16
+		return len(handler.events) == 16
 	}, time.Second, 10*time.Millisecond)
 
-	_, err := transformLog.Flush(context.Background(), FlushOption{TargetTimeTick: 20})
+	_, err = transformLog.Flush(context.Background(), FlushOption{TargetTimeTick: 20})
 	require.NoError(t, err)
 
 	for expected := uint64(1); expected <= 20; expected++ {
-		event := <-scanner.Chan()
+		event := <-handler.events
 		require.NotNil(t, event.Entry)
 		assert.Equal(t, expected, event.Entry.GetTimeTick())
 	}
-	caughtUp := <-scanner.Chan()
+	caughtUp := <-handler.events
 	require.NotNil(t, caughtUp.CaughtUp)
 }
 

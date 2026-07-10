@@ -448,6 +448,7 @@ func (r *recoveryStorageImpl) newVChannelWALView(vchannel string) (walview.VChan
 	deleteReplay := newDeleteReplayScanner(
 		r.backgroundTaskNotifier.Context(),
 		r.transformLogModule,
+		r.channel.Name,
 		vchannel,
 		deleteReplayStartAfter(segmentSnapshot),
 		baseTransformTimeTick,
@@ -470,28 +471,6 @@ func (r *recoveryStorageImpl) recoveredLoadConfig(vchannel string) *streamingpb.
 		return nil
 	}
 	return r.recoveredLoadConfigProvider(vchannel)
-}
-
-func newDeleteReplayScanner(
-	ctx context.Context,
-	accesser wal.TransformLogAccesser,
-	vchannel string,
-	startAfterTimeTick uint64,
-	endTimeTick uint64,
-) wal.TransformLogScanner {
-	const name = "vchannel-wal-view-delete-replay"
-	if accesser == nil {
-		return wal.NewTransformLogErrorScanner(name, wal.ErrTransformLogVChannelUnavailable)
-	}
-	if endTimeTick == 0 {
-		return wal.NewEmptyTransformLogScanner(name)
-	}
-	return accesser.Read(ctx, wal.TransformLogReadOption{
-		Name:               name,
-		VChannel:           vchannel,
-		StartAfterTimeTick: startAfterTimeTick,
-		EndTimeTick:        endTimeTick,
-	})
 }
 
 func deleteReplayStartAfter(snapshot walview.VisibleSegmentSnapshot) uint64 {

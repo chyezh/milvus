@@ -17,18 +17,12 @@ import (
 
 type SubscribeServer struct {
 	walManager walmanager.Manager
-	accesser   wal.TransformLogAccesser
+	logStream  wal.TransformLogStream
 	stream     streamingpb.StreamingNodeHandlerService_SubscribeTransformServer
 	sendMu     sync.Mutex
-	scannersMu sync.Mutex
-	scanners   map[int64]*subscription
+	subsMu     sync.Mutex
+	subs       map[int64]wal.TransformLogSubscription
 	pchannel   string
-}
-
-type subscription struct {
-	id       int64
-	vchannel string
-	scanner  wal.TransformLogScanner
 }
 
 func CreateSubscribeServer(
@@ -43,11 +37,19 @@ func CreateSubscribeServer(
 	if err != nil {
 		return nil, err
 	}
+	streamManager, ok := w.TransformLog().(wal.TransformLogStreamManager)
+	if !ok {
+		return nil, status.NewInner("transform log stream manager is not available")
+	}
+	logStream, err := streamManager.AcquireStream(stream.Context(), createReq.GetPchannel().GetName())
+	if err != nil {
+		return nil, err
+	}
 	return &SubscribeServer{
 		walManager: walManager,
-		accesser:   w.TransformLog(),
+		logStream:  logStream,
 		stream:     stream,
-		scanners:   make(map[int64]*subscription),
+		subs:       make(map[int64]wal.TransformLogSubscription),
 		pchannel:   createReq.GetPchannel().GetName(),
 	}, nil
 }
@@ -101,23 +103,24 @@ func (s *SubscribeServer) send(resp *streamingpb.TransformResponse) error {
 }
 
 func (s *SubscribeServer) closeAll() {
-	s.scannersMu.Lock()
-	scanners := s.scanners
-	s.scanners = make(map[int64]*subscription)
-	s.scannersMu.Unlock()
-	for _, subscription := range scanners {
-		_ = subscription.scanner.Close()
+	s.subsMu.Lock()
+	subs := s.subs
+	s.subs = make(map[int64]wal.TransformLogSubscription)
+	s.subsMu.Unlock()
+	for _, sub := range subs {
+		_ = sub.Close()
 	}
+	_ = s.logStream.Close()
 }
 
 func (s *SubscribeServer) closeSubscription(subscriptionID int64) string {
-	s.scannersMu.Lock()
-	subscription := s.scanners[subscriptionID]
-	delete(s.scanners, subscriptionID)
-	s.scannersMu.Unlock()
-	if subscription != nil {
-		_ = subscription.scanner.Close()
-		return subscription.vchannel
+	s.subsMu.Lock()
+	sub := s.subs[subscriptionID]
+	delete(s.subs, subscriptionID)
+	s.subsMu.Unlock()
+	if sub != nil {
+		_ = sub.Close()
+		return sub.VChannel()
 	}
 	return ""
 }
@@ -126,13 +129,19 @@ func (s *SubscribeServer) createSubscription(req *streamingpb.CreateTransformSub
 	if req == nil {
 		return status.NewInvalidArgument("create transform subscription request is nil")
 	}
-	scanner := s.accesser.Read(s.stream.Context(), wal.TransformLogReadOption{
-		Name:               req.GetVchannel(),
+	handler := newServerEventHandler(
+		req.GetSubscriptionId(),
+		req.GetVchannel(),
+		s.sendSubscriptionEvent,
+	)
+	sub, err := s.logStream.Subscribe(s.stream.Context(), wal.TransformLogSubscriptionOption{
+		SubscriptionID:     req.GetSubscriptionId(),
 		VChannel:           req.GetVchannel(),
 		StartAfterTimeTick: req.GetStartAfterTimeTick(),
 		EndTimeTick:        req.GetEndTimeTick(),
+		Handler:            handler,
 	})
-	if err := scanner.Error(); err != nil {
+	if err != nil {
 		mlog.Debug(s.stream.Context(), "streamingnode transform log subscription create failed",
 			mlog.FieldPChannel(s.pchannel),
 			mlog.FieldVChannel(req.GetVchannel()),
@@ -142,16 +151,12 @@ func (s *SubscribeServer) createSubscription(req *streamingpb.CreateTransformSub
 		)
 		return s.sendSubscriptionError(req.GetSubscriptionId(), req.GetVchannel(), err)
 	}
-	s.scannersMu.Lock()
-	if old := s.scanners[req.GetSubscriptionId()]; old != nil {
-		_ = old.scanner.Close()
+	s.subsMu.Lock()
+	if old := s.subs[req.GetSubscriptionId()]; old != nil {
+		_ = old.Close()
 	}
-	s.scanners[req.GetSubscriptionId()] = &subscription{
-		id:       req.GetSubscriptionId(),
-		vchannel: req.GetVchannel(),
-		scanner:  scanner,
-	}
-	s.scannersMu.Unlock()
+	s.subs[req.GetSubscriptionId()] = sub
+	s.subsMu.Unlock()
 	mlog.Debug(s.stream.Context(), "streamingnode transform log subscription created",
 		mlog.FieldPChannel(s.pchannel),
 		mlog.FieldVChannel(req.GetVchannel()),
@@ -169,78 +174,11 @@ func (s *SubscribeServer) createSubscription(req *streamingpb.CreateTransformSub
 			},
 		},
 	}); err != nil {
-		_ = scanner.Close()
+		_ = sub.Close()
 		return err
 	}
-	go s.forwardSubscription(req.GetSubscriptionId(), req.GetVchannel(), scanner)
+	handler.markReady()
 	return nil
-}
-
-func (s *SubscribeServer) forwardSubscription(subscriptionID int64, vchannel string, scanner wal.TransformLogScanner) {
-	for {
-		select {
-		case event, ok := <-scanner.Chan():
-			if !ok {
-				s.closeSubscription(subscriptionID)
-				return
-			}
-			if event.Entry != nil {
-				mlog.Debug(s.stream.Context(), "streamingnode transform log forward entry",
-					mlog.FieldPChannel(s.pchannel),
-					mlog.FieldVChannel(vchannel),
-					mlog.Int64("subscriptionID", subscriptionID),
-					mlog.Uint64("timeTick", event.Entry.GetTimeTick()),
-				)
-				if err := s.send(&streamingpb.TransformResponse{
-					Response: &streamingpb.TransformResponse_MessageBatch{
-						MessageBatch: &streamingpb.TransformMessageBatch{
-							SubscriptionId: subscriptionID,
-							Vchannel:       vchannel,
-							Entries:        []*streamingpb.TransformLogEntry{event.Entry},
-						},
-					},
-				}); err != nil {
-					s.closeSubscription(subscriptionID)
-					return
-				}
-			}
-			if event.CaughtUp != nil {
-				mlog.Debug(s.stream.Context(), "streamingnode transform log forward caught-up",
-					mlog.FieldPChannel(s.pchannel),
-					mlog.FieldVChannel(vchannel),
-					mlog.Int64("subscriptionID", subscriptionID),
-					mlog.Uint64("startAfterTimeTick", event.CaughtUp.StartAfterTimeTick),
-				)
-				if err := s.send(&streamingpb.TransformResponse{
-					Response: &streamingpb.TransformResponse_CaughtUp{
-						CaughtUp: &streamingpb.TransformSubscriptionCaughtUp{
-							SubscriptionId:     subscriptionID,
-							Vchannel:           vchannel,
-							StartAfterTimeTick: event.CaughtUp.StartAfterTimeTick,
-						},
-					},
-				}); err != nil {
-					s.closeSubscription(subscriptionID)
-					return
-				}
-			}
-		case <-scanner.Done():
-			if err := scanner.Error(); err != nil {
-				mlog.Debug(s.stream.Context(), "streamingnode transform log scanner failed",
-					mlog.FieldPChannel(s.pchannel),
-					mlog.FieldVChannel(vchannel),
-					mlog.Int64("subscriptionID", subscriptionID),
-					mlog.Err(err),
-				)
-				_ = s.sendSubscriptionError(subscriptionID, vchannel, err)
-			}
-			s.closeSubscription(subscriptionID)
-			return
-		case <-s.stream.Context().Done():
-			s.closeSubscription(subscriptionID)
-			return
-		}
-	}
 }
 
 func (s *SubscribeServer) sendSubscriptionError(subscriptionID int64, vchannel string, err error) error {
@@ -252,5 +190,93 @@ func (s *SubscribeServer) sendSubscriptionError(subscriptionID int64, vchannel s
 				Error:          status.AsStreamingError(err).AsPBError(),
 			},
 		},
+	})
+}
+
+func (s *SubscribeServer) sendSubscriptionEvent(event wal.TransformLogStreamEvent) error {
+	if event.Err != nil {
+		mlog.Debug(s.stream.Context(), "streamingnode transform log subscription failed",
+			mlog.FieldPChannel(s.pchannel),
+			mlog.FieldVChannel(event.VChannel),
+			mlog.Int64("subscriptionID", event.SubscriptionID),
+			mlog.Err(event.Err),
+		)
+		return s.sendSubscriptionError(event.SubscriptionID, event.VChannel, event.Err)
+	}
+	if event.Entry != nil {
+		mlog.Debug(s.stream.Context(), "streamingnode transform log forward entry",
+			mlog.FieldPChannel(s.pchannel),
+			mlog.FieldVChannel(event.VChannel),
+			mlog.Int64("subscriptionID", event.SubscriptionID),
+			mlog.Uint64("timeTick", event.Entry.GetTimeTick()),
+		)
+		return s.send(&streamingpb.TransformResponse{
+			Response: &streamingpb.TransformResponse_MessageBatch{
+				MessageBatch: &streamingpb.TransformMessageBatch{
+					SubscriptionId: event.SubscriptionID,
+					Vchannel:       event.VChannel,
+					Entries:        []*streamingpb.TransformLogEntry{event.Entry},
+				},
+			},
+		})
+	}
+	if event.CaughtUp != nil {
+		mlog.Debug(s.stream.Context(), "streamingnode transform log forward caught-up",
+			mlog.FieldPChannel(s.pchannel),
+			mlog.FieldVChannel(event.VChannel),
+			mlog.Int64("subscriptionID", event.SubscriptionID),
+			mlog.Uint64("startAfterTimeTick", event.CaughtUp.StartAfterTimeTick),
+		)
+		return s.send(&streamingpb.TransformResponse{
+			Response: &streamingpb.TransformResponse_CaughtUp{
+				CaughtUp: &streamingpb.TransformSubscriptionCaughtUp{
+					SubscriptionId:     event.SubscriptionID,
+					Vchannel:           event.VChannel,
+					StartAfterTimeTick: event.CaughtUp.StartAfterTimeTick,
+				},
+			},
+		})
+	}
+	return nil
+}
+
+type serverEventHandler struct {
+	subscriptionID int64
+	vchannel       string
+	ready          chan struct{}
+	closed         chan struct{}
+	send           func(wal.TransformLogStreamEvent) error
+	readyOnce      sync.Once
+	closeOnce      sync.Once
+}
+
+func newServerEventHandler(subscriptionID int64, vchannel string, send func(wal.TransformLogStreamEvent) error) *serverEventHandler {
+	return &serverEventHandler{
+		subscriptionID: subscriptionID,
+		vchannel:       vchannel,
+		ready:          make(chan struct{}),
+		closed:         make(chan struct{}),
+		send:           send,
+	}
+}
+
+func (h *serverEventHandler) Handle(event wal.TransformLogStreamEvent) error {
+	select {
+	case <-h.ready:
+	case <-h.closed:
+		return nil
+	}
+	return h.send(event)
+}
+
+func (h *serverEventHandler) Close() {
+	h.closeOnce.Do(func() {
+		close(h.closed)
+	})
+}
+
+func (h *serverEventHandler) markReady() {
+	h.readyOnce.Do(func() {
+		close(h.ready)
 	})
 }
