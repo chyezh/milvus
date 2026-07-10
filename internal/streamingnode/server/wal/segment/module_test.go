@@ -51,6 +51,7 @@ func TestCleanupDeleteSnapshotKeepsStableInFlightView(t *testing.T) {
 	first[0].MarkPersisted()
 	assert.Empty(t, module.ConsumeDirtySnapshots())
 	assert.Empty(t, module.snapshotSegments())
+	assert.Empty(t, module.snapshotSegmentsByVChannel("v1"))
 }
 
 func TestCleanupEmitsDataVersionSummaryBeforeDeletingSegment(t *testing.T) {
@@ -374,6 +375,48 @@ func TestVisibleSnapshotSelectsDataVersionFromSegmentModuleState(t *testing.T) {
 	assert.Equal(t, int64(1), snapshot.DataVersion.CompactVersion)
 	require.Len(t, snapshot.Segments, 1)
 	assert.Equal(t, int64(1), snapshot.Segments[0].SegmentID)
+}
+
+func TestVisibleSnapshotOnlyScansTargetVChannelSegments(t *testing.T) {
+	module := NewModule("p1", map[int64]*streamingpb.SegmentAssignmentMeta{
+		1: {
+			CollectionId:       100,
+			PartitionId:        200,
+			SegmentId:          1,
+			Vchannel:           "v1",
+			State:              streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING,
+			CheckpointTimeTick: 1,
+			PersistedStorage:   &streamingpb.L1SegmentPersistedStorage{},
+			Stat: &streamingpb.SegmentAssignmentStat{
+				CreateSegmentTimeTick: 1,
+			},
+		},
+		2: {
+			CollectionId:           100,
+			PartitionId:            300,
+			SegmentId:              2,
+			Vchannel:               "v2",
+			State:                  streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED,
+			CheckpointTimeTick:     20,
+			DataCheckpointTimeTick: 20,
+			PersistedStorage:       &streamingpb.L1SegmentPersistedStorage{},
+			SealedAtDataVersion:    &viewpb.DataVersion{StreamingVersion: 99, CompactVersion: 1},
+			Stat: &streamingpb.SegmentAssignmentStat{
+				CreateSegmentTimeTick: 1,
+			},
+		},
+	}, nil, nil, WithDataVersionSummaries(map[string]*streamingpb.SegmentDataVersionSummary{
+		"v1": {DataVersion: &viewpb.DataVersion{StreamingVersion: 3, CompactVersion: 1}},
+	}))
+
+	snapshot := module.VisibleSnapshot("v1", 100)
+
+	assert.Equal(t, int64(3), snapshot.DataVersion.StreamingVersion)
+	assert.Equal(t, int64(1), snapshot.DataVersion.CompactVersion)
+	require.Len(t, snapshot.Segments, 1)
+	assert.Equal(t, int64(1), snapshot.Segments[0].SegmentID)
+	assert.Len(t, module.snapshotSegmentsByVChannel("v1"), 1)
+	assert.Len(t, module.snapshotSegmentsByVChannel("v2"), 1)
 }
 
 func TestVisibleSnapshotUsesSummaryWhenNoFlushedSegmentRemains(t *testing.T) {

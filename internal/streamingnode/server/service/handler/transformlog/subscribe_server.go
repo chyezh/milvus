@@ -52,14 +52,13 @@ func CreateSubscribeServer(
 }
 
 func (s *SubscribeServer) Execute() error {
+	defer s.closeAll()
 	for {
 		req, err := s.stream.Recv()
 		if errors.Is(err, io.EOF) {
-			s.closeAll()
 			return nil
 		}
 		if err != nil {
-			s.closeAll()
 			return err
 		}
 		switch req := req.GetRequest().(type) {
@@ -81,7 +80,6 @@ func (s *SubscribeServer) Execute() error {
 				return err
 			}
 		case *streamingpb.TransformRequest_CloseStream:
-			s.closeAll()
 			return s.send(&streamingpb.TransformResponse{
 				Response: &streamingpb.TransformResponse_CloseStream{
 					CloseStream: &streamingpb.CloseTransformStreamResponse{},

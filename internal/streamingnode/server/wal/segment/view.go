@@ -323,6 +323,42 @@ func (info *segmentView) AssignmentMeta() *streamingpb.SegmentAssignmentMeta {
 	return proto.Clone(info.meta).(*streamingpb.SegmentAssignmentMeta)
 }
 
+func (info *segmentView) IDAndVChannel() (int64, string) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	return info.meta.GetSegmentId(), info.meta.GetVchannel()
+}
+
+func (info *segmentView) VChannel() string {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	return info.meta.GetVchannel()
+}
+
+func (info *segmentView) PartitionID() int64 {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	return info.meta.GetPartitionId()
+}
+
+func (info *segmentView) MatchesScope(scope moduleapi.Scope) bool {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	switch scope.Type {
+	case moduleapi.ScopeAll:
+		return true
+	case moduleapi.ScopeVChannel:
+		return info.meta.GetVchannel() == scope.VChannel
+	case moduleapi.ScopePartition:
+		if scope.VChannel != "" && info.meta.GetVchannel() != scope.VChannel {
+			return false
+		}
+		return info.meta.GetCollectionId() == scope.CollectionID && info.meta.GetPartitionId() == scope.PartitionID
+	default:
+		return false
+	}
+}
+
 func (info *segmentView) VisibleSnapshot(vchannel string, dataVersion qviews.DataVersion) (walview.VisibleSegment, bool) {
 	info.mu.Lock()
 	defer info.mu.Unlock()
@@ -360,6 +396,17 @@ func (info *segmentView) visibleAtDataVersionLocked(dataVersion qviews.DataVersi
 	default:
 		return false
 	}
+}
+
+func (info *segmentView) SealedDataVersion(vchannel string) (qviews.DataVersion, bool) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	if info.meta.GetVchannel() != vchannel ||
+		info.meta.GetState() != streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED ||
+		info.meta.GetSealedAtDataVersion() == nil {
+		return qviews.DataVersion{}, false
+	}
+	return qviews.FromProtoDataVersion(info.meta.GetSealedAtDataVersion()), true
 }
 
 func cloneSchema(schema *schemapb.CollectionSchema) *schemapb.CollectionSchema {

@@ -28,6 +28,7 @@ type Module struct {
 	mu                      sync.Mutex
 	pchannel                string
 	segments                map[int64]*segmentView
+	segmentsByVChannel      map[string]map[int64]*segmentView
 	dataVersionSummaries    map[string]*streamingpb.SegmentDataVersionSummary
 	lifecycle               segmentLifecycle
 	packWriter              packWriter
@@ -114,6 +115,7 @@ func NewModule(
 	module := &Module{
 		pchannel:                pchannel,
 		segments:                make(map[int64]*segmentView, len(segments)),
+		segmentsByVChannel:      make(map[string]map[int64]*segmentView),
 		dataVersionSummaries:    make(map[string]*streamingpb.SegmentDataVersionSummary),
 		schemaProvider:          schemaProvider,
 		lifecycle:               lifecycle,
@@ -129,7 +131,9 @@ func NewModule(
 		if module.schemaProvider != nil {
 			schema, _ = module.schemaProvider.SchemaAt(meta.GetVchannel(), meta.GetPartitionId(), meta.GetStat().GetCreateSegmentTimeTick())
 		}
-		module.segments[meta.GetSegmentId()] = newSegmentViewFromMeta(meta, schema, module.runtimeConfig())
+		segment := newSegmentViewFromMeta(meta, schema, module.runtimeConfig())
+		module.segments[meta.GetSegmentId()] = segment
+		module.addSegmentToVChannelIndexLocked(meta.GetVchannel(), meta.GetSegmentId(), segment)
 	}
 	return module
 }
@@ -227,22 +231,8 @@ func (m *Module) ConsumeDirtySnapshots() []moduleapi.DirtySnapshot {
 
 func (m *Module) DataFrontier(scope moduleapi.Scope) walcheckpoint.Barrier {
 	owners := make(frontierOwners, 0)
-	for _, segment := range m.snapshotSegments() {
-		meta := segment.AssignmentMeta()
-		switch scope.Type {
-		case moduleapi.ScopeAll:
-		case moduleapi.ScopeVChannel:
-			if meta.GetVchannel() != scope.VChannel {
-				continue
-			}
-		case moduleapi.ScopePartition:
-			if scope.VChannel != "" && meta.GetVchannel() != scope.VChannel {
-				continue
-			}
-			if meta.GetCollectionId() != scope.CollectionID || meta.GetPartitionId() != scope.PartitionID {
-				continue
-			}
-		default:
+	for _, segment := range m.snapshotSegmentsForScope(scope) {
+		if !segment.MatchesScope(scope) {
 			continue
 		}
 		owners = append(owners, segment)
@@ -328,21 +318,24 @@ func (m *Module) observeFlushMessage(ctx context.Context, msg message.ImmutableF
 }
 
 func (m *Module) flushVChannelSegmentsCreatedBefore(ctx context.Context, timetick uint64, vchannel string) moduleapi.ObserveResult {
-	return m.flushSegmentsCreatedBefore(ctx, timetick, func(segment *segmentView) bool {
-		return segment.AssignmentMeta().GetVchannel() == vchannel
+	return m.flushSegmentSetCreatedBefore(ctx, timetick, m.snapshotSegmentsByVChannel(vchannel), func(*segmentView) bool {
+		return true
 	})
 }
 
 func (m *Module) flushPartitionSegmentsCreatedBefore(ctx context.Context, timetick uint64, vchannel string, partitionID int64) moduleapi.ObserveResult {
-	return m.flushSegmentsCreatedBefore(ctx, timetick, func(segment *segmentView) bool {
-		meta := segment.AssignmentMeta()
-		return meta.GetVchannel() == vchannel && meta.GetPartitionId() == partitionID
+	return m.flushSegmentSetCreatedBefore(ctx, timetick, m.snapshotSegmentsByVChannel(vchannel), func(segment *segmentView) bool {
+		return segment.PartitionID() == partitionID
 	})
 }
 
 func (m *Module) flushSegmentsCreatedBefore(ctx context.Context, timetick uint64, match func(*segmentView) bool) moduleapi.ObserveResult {
+	return m.flushSegmentSetCreatedBefore(ctx, timetick, m.snapshotSegments(), match)
+}
+
+func (m *Module) flushSegmentSetCreatedBefore(ctx context.Context, timetick uint64, segments map[int64]*segmentView, match func(*segmentView) bool) moduleapi.ObserveResult {
 	result := moduleapi.ObserveResult{}
-	for _, segment := range m.snapshotSegments() {
+	for _, segment := range segments {
 		if !match(segment) || segment.CreateTimeTick() >= timetick {
 			continue
 		}
@@ -359,9 +352,10 @@ func (m *Module) schemaAt(vchannel string, partitionID int64, timetick uint64) (
 }
 
 func (m *Module) addSegment(segment *segmentView) {
-	meta := segment.AssignmentMeta()
+	segmentID, vchannel := segment.IDAndVChannel()
 	m.mu.Lock()
-	m.segments[meta.GetSegmentId()] = segment
+	m.segments[segmentID] = segment
+	m.addSegmentToVChannelIndexLocked(vchannel, segmentID, segment)
 	m.mu.Unlock()
 }
 
@@ -372,10 +366,12 @@ func (m *Module) getSegment(segmentID int64) *segmentView {
 }
 
 func (m *Module) removeSegmentIfOwner(segmentID int64, owner *segmentView) {
+	vchannel := owner.VChannel()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.segments[segmentID] == owner {
 		delete(m.segments, segmentID)
+		m.removeSegmentFromVChannelIndexLocked(vchannel, segmentID, owner)
 	}
 }
 
@@ -447,11 +443,13 @@ func (m *Module) markDataVersionSummaryPersisted(vchannel string, summary *strea
 }
 
 func (m *Module) markCleanupPersisted(segmentID int64, owner *segmentView) {
+	vchannel := owner.VChannel()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.pendingCleanupSnapshots, segmentID)
 	if m.segments[segmentID] == owner {
 		delete(m.segments, segmentID)
+		m.removeSegmentFromVChannelIndexLocked(vchannel, segmentID, owner)
 	}
 }
 
@@ -469,6 +467,47 @@ func (m *Module) snapshotSegments() map[int64]*segmentView {
 		segments[segmentID] = segment
 	}
 	return segments
+}
+
+func (m *Module) snapshotSegmentsByVChannel(vchannel string) map[int64]*segmentView {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	index := m.segmentsByVChannel[vchannel]
+	segments := make(map[int64]*segmentView, len(index))
+	for segmentID, segment := range index {
+		segments[segmentID] = segment
+	}
+	return segments
+}
+
+func (m *Module) snapshotSegmentsForScope(scope moduleapi.Scope) map[int64]*segmentView {
+	switch scope.Type {
+	case moduleapi.ScopeVChannel, moduleapi.ScopePartition:
+		if scope.VChannel != "" {
+			return m.snapshotSegmentsByVChannel(scope.VChannel)
+		}
+	}
+	return m.snapshotSegments()
+}
+
+func (m *Module) addSegmentToVChannelIndexLocked(vchannel string, segmentID int64, segment *segmentView) {
+	if m.segmentsByVChannel[vchannel] == nil {
+		m.segmentsByVChannel[vchannel] = make(map[int64]*segmentView)
+	}
+	m.segmentsByVChannel[vchannel][segmentID] = segment
+}
+
+func (m *Module) removeSegmentFromVChannelIndexLocked(vchannel string, segmentID int64, owner *segmentView) {
+	segments := m.segmentsByVChannel[vchannel]
+	if segments == nil {
+		return
+	}
+	if segments[segmentID] == owner {
+		delete(segments, segmentID)
+	}
+	if len(segments) == 0 {
+		delete(m.segmentsByVChannel, vchannel)
+	}
 }
 
 func (m *Module) snapshotGrowingSegments() map[int64]*streamingpb.SegmentAssignmentMeta {
@@ -495,13 +534,13 @@ func (m *Module) LatestInsertTimeTick(vchannel string) uint64 {
 }
 
 func (m *Module) VisibleSnapshot(vchannel string, baseGrowingTimeTick uint64) walview.VisibleSegmentSnapshot {
-	segments := m.snapshotSegments()
+	segments := m.snapshotSegmentsByVChannel(vchannel)
 	dataVersion := m.segmentSnapshotDataVersion(vchannel, segments)
 	return m.visibleSnapshotAtDataVersion(vchannel, baseGrowingTimeTick, dataVersion, segments)
 }
 
 func (m *Module) VisibleSnapshotAtDataVersion(vchannel string, baseGrowingTimeTick uint64, dataVersion qviews.DataVersion) walview.VisibleSegmentSnapshot {
-	return m.visibleSnapshotAtDataVersion(vchannel, baseGrowingTimeTick, dataVersion, m.snapshotSegments())
+	return m.visibleSnapshotAtDataVersion(vchannel, baseGrowingTimeTick, dataVersion, m.snapshotSegmentsByVChannel(vchannel))
 }
 
 func (m *Module) visibleSnapshotAtDataVersion(vchannel string, baseGrowingTimeTick uint64, dataVersion qviews.DataVersion, segments map[int64]*segmentView) walview.VisibleSegmentSnapshot {
@@ -528,13 +567,10 @@ func (m *Module) segmentSnapshotDataVersion(vchannel string, segments map[int64]
 	dataVersion := segmentDataVersionSummary(m.dataVersionSummaries[vchannel])
 	m.mu.Unlock()
 	for _, segment := range segments {
-		meta := segment.AssignmentMeta()
-		if meta.GetVchannel() != vchannel ||
-			meta.GetState() != streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED ||
-			meta.GetSealedAtDataVersion() == nil {
+		sealedVersion, ok := segment.SealedDataVersion(vchannel)
+		if !ok {
 			continue
 		}
-		sealedVersion := qviews.FromProtoDataVersion(meta.GetSealedAtDataVersion())
 		if sealedVersion.GT(dataVersion) {
 			dataVersion = sealedVersion
 		}

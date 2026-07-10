@@ -60,10 +60,41 @@ func TestSubscribeServerCloseSubscriptionAck(t *testing.T) {
 	require.NoError(t, <-errCh)
 }
 
+func TestSubscribeServerClosesLogStreamOnCreateSendError(t *testing.T) {
+	stream := newFakeSubscribeTransformServer(context.Background())
+	stream.sendErr = io.ErrClosedPipe
+	logStream := newFakeTransformLogStream()
+	server := &SubscribeServer{
+		logStream: logStream,
+		stream:    stream,
+		subs:      make(map[int64]wal.TransformLogSubscription),
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- server.Execute()
+	}()
+
+	stream.recv(&streamingpb.TransformRequest{
+		Request: &streamingpb.TransformRequest_Create{
+			Create: &streamingpb.CreateTransformSubscriptionRequest{
+				SubscriptionId:     10,
+				Vchannel:           "v1",
+				StartAfterTimeTick: 100,
+			},
+		},
+	})
+
+	require.ErrorIs(t, <-errCh, io.ErrClosedPipe)
+	require.True(t, logStream.closed)
+	require.True(t, logStream.subscription(10).closed)
+}
+
 type fakeTransformLogStream struct {
-	mu   sync.Mutex
-	subs map[int64]*fakeTransformLogSubscription
-	done chan struct{}
+	mu     sync.Mutex
+	subs   map[int64]*fakeTransformLogSubscription
+	done   chan struct{}
+	closed bool
 }
 
 func newFakeTransformLogStream() *fakeTransformLogStream {
@@ -93,6 +124,9 @@ func (s *fakeTransformLogStream) Error() error {
 }
 
 func (s *fakeTransformLogStream) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
 	return nil
 }
 
@@ -122,9 +156,10 @@ func (s *fakeTransformLogSubscription) Close() error {
 }
 
 type fakeSubscribeTransformServer struct {
-	ctx    context.Context
-	recvCh chan *streamingpb.TransformRequest
-	sendCh chan *streamingpb.TransformResponse
+	ctx     context.Context
+	recvCh  chan *streamingpb.TransformRequest
+	sendCh  chan *streamingpb.TransformResponse
+	sendErr error
 }
 
 func newFakeSubscribeTransformServer(ctx context.Context) *fakeSubscribeTransformServer {
@@ -151,6 +186,9 @@ func (s *fakeSubscribeTransformServer) sent(t *testing.T) *streamingpb.Transform
 }
 
 func (s *fakeSubscribeTransformServer) Send(resp *streamingpb.TransformResponse) error {
+	if s.sendErr != nil {
+		return s.sendErr
+	}
 	s.sendCh <- resp
 	return nil
 }
