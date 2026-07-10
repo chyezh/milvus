@@ -37,10 +37,7 @@ func CreateSubscribeServer(
 	if err != nil {
 		return nil, err
 	}
-	streamManager, ok := w.TransformLog().(wal.TransformLogStreamManager)
-	if !ok {
-		return nil, status.NewInner("transform log stream manager is not available")
-	}
+	streamManager := w.TransformLog()
 	logStream, err := streamManager.AcquireStream(stream.Context(), createReq.GetPchannel().GetName())
 	if err != nil {
 		return nil, err

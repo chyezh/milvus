@@ -5,10 +5,11 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/errors"
+	"google.golang.org/protobuf/proto"
+
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
-	"google.golang.org/protobuf/proto"
 )
 
 type ViewScopedPhysicalSegmentManager struct {
@@ -117,12 +118,12 @@ func (m *ViewScopedPhysicalSegmentManager) recordView(req AcquirePhysicalSegment
 				requests:   make(map[qviews.QueryViewKey]segmentLoadRequest),
 			}
 			m.segments[segmentID] = state
-			toLoad = append(toLoad, segmentLoadSubmission{segmentID: segmentID, ctx: loadCtx, request: newSegmentLoadRequest(req)})
+			toLoad = append(toLoad, segmentLoadSubmission{segmentID: segmentID, ctx: loadCtx, request: newSegmentLoadRequest(req), done: loadCancel})
 		} else if state.segment == nil && !state.loading && !state.pending {
 			loadCtx, loadCancel := context.WithCancel(context.Background())
 			state.loading = true
 			state.loadCancel = loadCancel
-			toLoad = append(toLoad, segmentLoadSubmission{segmentID: segmentID, ctx: loadCtx, request: newSegmentLoadRequest(req)})
+			toLoad = append(toLoad, segmentLoadSubmission{segmentID: segmentID, ctx: loadCtx, request: newSegmentLoadRequest(req), done: loadCancel})
 		}
 		state.refs[req.Key] = struct{}{}
 		state.requests[req.Key] = newSegmentLoadRequest(req)
@@ -388,7 +389,7 @@ func (m *ViewScopedPhysicalSegmentManager) collectPendingLoadSubmissionsLocked()
 			segmentID: segmentID,
 			ctx:       loadCtx,
 			request:   request,
-			done:      m.trackPendingLoadAttemptLocked(state),
+			done:      chainLoadDone(loadCancel, m.trackPendingLoadAttemptLocked(state)),
 		})
 	}
 	return submissions

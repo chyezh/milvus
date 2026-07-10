@@ -9,6 +9,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 const defaultStreamCatchupWorkers = 4
@@ -69,7 +70,7 @@ func (m *Module) AcquireStream(ctx context.Context, pchannel string) (wal.Transf
 	if m.pchannel != "" && m.pchannel != pchannel {
 		return nil, errors.Wrapf(wal.ErrTransformLogInvalidReadOption, "pchannel mismatch, expected %s, got %s", m.pchannel, pchannel)
 	}
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(ctx) // #nosec G118 -- cancel is owned by transformLogStream.Close/finish.
 	stream := &transformLogStream{
 		ctx:          ctx,
 		cancel:       cancel,
@@ -220,7 +221,7 @@ func (s *transformLogStream) createSubscription(opt wal.TransformLogSubscription
 	}
 	transformLog, ok := log.log.(*transformLog)
 	if !ok {
-		return nil, errors.New("transform log implementation does not support streaming")
+		return nil, merr.WrapErrServiceInternalMsg("transform log implementation does not support streaming")
 	}
 	transformLog.mu.Lock()
 	if opt.StartAfterTimeTick < transformLog.meta.GetTruncateTimeTick() {
@@ -241,7 +242,7 @@ func (s *transformLogStream) createSubscription(opt wal.TransformLogSubscription
 	if old := s.subs[subscriptionID]; old != nil {
 		s.finishSubscription(old, nil, false)
 	}
-	ctx, cancel := context.WithCancel(s.ctx)
+	ctx, cancel := context.WithCancel(s.ctx) // #nosec G118 -- cancel is owned by streamSubscription.Close/finishSubscription.
 	sub := &streamSubscription{
 		stream:         s,
 		id:             subscriptionID,
