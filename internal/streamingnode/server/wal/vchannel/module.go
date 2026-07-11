@@ -189,6 +189,14 @@ func (m *Module) VChannelMeta(vchannel string) *streamingpb.VChannelMeta {
 	return view.AssignmentMeta()
 }
 
+func (m *Module) WALViewSnapshot(vchannel string) (WALViewSnapshot, bool) {
+	view := m.retainedVChannel(vchannel)
+	if view == nil {
+		return WALViewSnapshot{}, false
+	}
+	return view.WALViewSnapshot()
+}
+
 func (m *Module) observeCreateCollectionMessage(msg message.ImmutableCreateCollectionMessageV1) moduleapi.ObserveResult {
 	if vchannel := m.retainedVChannel(msg.VChannel()); vchannel != nil {
 		decision, result := vchannel.ObserveExistingCreateCollectionMessageV1(msg)

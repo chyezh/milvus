@@ -397,13 +397,10 @@ func (m *Module) cleanupSnapshot(segmentID int64, owner *segmentView) moduleapi.
 }
 
 func (m *Module) dataVersionSummarySnapshotBeforeCleanup(owner *segmentView) moduleapi.DirtySnapshot {
-	meta := owner.AssignmentMeta()
-	if meta.GetState() != streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_TOMBSTONED ||
-		meta.GetSealedAtDataVersion() == nil {
+	vchannel, sealedVersion, ok := owner.TombstonedSealedDataVersion()
+	if !ok {
 		return nil
 	}
-	vchannel := meta.GetVchannel()
-	sealedVersion := qviews.FromProtoDataVersion(meta.GetSealedAtDataVersion())
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 
-	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/flushcommon/broker"
 	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
@@ -426,11 +425,11 @@ func (r *recoveryStorageImpl) newVChannelWALView(vchannel string) (walview.VChan
 	if r.vchannelModule == nil || r.segmentModule == nil || r.transformLogModule == nil || r.liveObservers == nil {
 		return walview.VChannelWALView{}, false
 	}
-	meta := r.vchannelModule.VChannelMeta(vchannel)
-	if meta == nil {
+	vchannelSnapshot, ok := r.vchannelModule.WALViewSnapshot(vchannel)
+	if !ok {
 		return walview.VChannelWALView{}, false
 	}
-	loadConfig := meta.GetLoadConfig()
+	loadConfig := vchannelSnapshot.LoadConfig
 	if loadConfig == nil {
 		loadConfig = r.recoveredLoadConfig(vchannel)
 	}
@@ -456,11 +455,11 @@ func (r *recoveryStorageImpl) newVChannelWALView(vchannel string) (walview.VChan
 	return walview.VChannelWALView{
 		PChannel:              r.channel.Name,
 		VChannel:              vchannel,
-		CollectionID:          meta.GetCollectionInfo().GetCollectionId(),
+		CollectionID:          vchannelSnapshot.CollectionID,
 		BaseGrowingTimeTick:   baseGrowingTimeTick,
 		BaseTransformTimeTick: baseTransformTimeTick,
 		LoadConfig:            loadConfig,
-		Schema:                latestSchema(meta),
+		Schema:                vchannelSnapshot.Schema,
 		SegmentSnapshot:       segmentSnapshot,
 		DeleteReplay:          deleteReplay,
 	}, true
@@ -491,14 +490,6 @@ func deleteReplayStartAfter(snapshot walview.VisibleSegmentSnapshot) uint64 {
 		return 0
 	}
 	return minCreateTimeTick - 1
-}
-
-func latestSchema(meta *streamingpb.VChannelMeta) *schemapb.CollectionSchema {
-	schemas := meta.GetCollectionInfo().GetSchemas()
-	if len(schemas) == 0 {
-		return nil
-	}
-	return schemas[len(schemas)-1].GetSchema()
 }
 
 func (r *recoveryStorageImpl) observeMetaScannerMessage(ctx context.Context, msg message.ImmutableMessage) {

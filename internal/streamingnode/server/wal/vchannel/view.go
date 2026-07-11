@@ -77,8 +77,15 @@ type vChannelView struct {
 	persistedMetaTimeTick uint64
 	dirty                 bool // whether the current vchannel recovery info still needs catalog persistence.
 	pendingDirtySnapshot  *streamingpb.VChannelMeta
+	walViewSnapshot       *WALViewSnapshot
 
 	metaAndData bool
+}
+
+type WALViewSnapshot struct {
+	CollectionID int64
+	LoadConfig   *streamingpb.VChannelLoadConfig
+	Schema       *schemapb.CollectionSchema
 }
 
 func (info *vChannelView) AssignmentMeta() *streamingpb.VChannelMeta {
@@ -97,6 +104,35 @@ func (info *vChannelView) HasDirty() bool {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	return info.dirty
+}
+
+func (info *vChannelView) WALViewSnapshot() (WALViewSnapshot, bool) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	if info.meta.GetState() != streamingpb.VChannelState_VCHANNEL_STATE_NORMAL {
+		return WALViewSnapshot{}, false
+	}
+	if info.walViewSnapshot == nil {
+		info.walViewSnapshot = info.buildWALViewSnapshotLocked()
+	}
+	return *info.walViewSnapshot, true
+}
+
+func (info *vChannelView) buildWALViewSnapshotLocked() *WALViewSnapshot {
+	snapshot := &WALViewSnapshot{
+		CollectionID: info.meta.GetCollectionInfo().GetCollectionId(),
+	}
+	if loadConfig := info.meta.GetLoadConfig(); loadConfig != nil {
+		snapshot.LoadConfig = proto.Clone(loadConfig).(*streamingpb.VChannelLoadConfig)
+	}
+	if _, schema := info.GetSchemaLocked(0); schema != nil {
+		snapshot.Schema = proto.Clone(schema).(*schemapb.CollectionSchema)
+	}
+	return snapshot
+}
+
+func (info *vChannelView) invalidateWALViewSnapshotLocked() {
+	info.walViewSnapshot = nil
 }
 
 func (info *vChannelView) metaTimeTick() uint64 {
@@ -329,6 +365,7 @@ func (info *vChannelView) ApplyPartitionCleanup(partitionIDs map[int64]uint64) b
 	}
 	info.meta.CollectionInfo.Partitions = remaining
 	info.dirty = true
+	info.invalidateWALViewSnapshotLocked()
 	return true
 }
 
@@ -396,6 +433,7 @@ func (info *vChannelView) ObserveSchemaChangeMessageV2(msg message.ImmutableSche
 	})
 	info.meta.CheckpointTimeTick = msg.TimeTick()
 	info.dirty = true
+	info.invalidateWALViewSnapshotLocked()
 	return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
 }
 
@@ -422,6 +460,7 @@ func (info *vChannelView) ObserveAlterCollectionMessageV2(msg message.ImmutableA
 	}
 	info.meta.CheckpointTimeTick = msg.TimeTick()
 	info.dirty = true
+	info.invalidateWALViewSnapshotLocked()
 	return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
 }
 
@@ -447,6 +486,7 @@ func (info *vChannelView) ObserveDropCollectionMessageV1(msg message.ImmutableDr
 	info.meta.State = streamingpb.VChannelState_VCHANNEL_STATE_DROPPED
 	info.meta.CheckpointTimeTick = msg.TimeTick()
 	info.dirty = true
+	info.invalidateWALViewSnapshotLocked()
 	return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
 }
 
@@ -461,6 +501,7 @@ func (info *vChannelView) ObserveTruncateCollectionMessageV2(msg message.Immutab
 	}
 	info.meta.CheckpointTimeTick = msg.TimeTick()
 	info.dirty = true
+	info.invalidateWALViewSnapshotLocked()
 	return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
 }
 
@@ -481,6 +522,7 @@ func (info *vChannelView) ObserveAlterLoadConfigMessageV2(msg message.ImmutableA
 	}
 	info.meta.CheckpointTimeTick = msg.TimeTick()
 	info.dirty = true
+	info.invalidateWALViewSnapshotLocked()
 	return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
 }
 
@@ -499,6 +541,7 @@ func (info *vChannelView) ObserveDropLoadConfigMessageV2(msg message.ImmutableDr
 	info.meta.LoadConfig = nil
 	info.meta.CheckpointTimeTick = msg.TimeTick()
 	info.dirty = true
+	info.invalidateWALViewSnapshotLocked()
 	return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
 }
 
@@ -518,6 +561,7 @@ func (info *vChannelView) ObserveDropPartitionMessageV1(msg message.ImmutableDro
 			partition.TombstoneTimeTick = msg.TimeTick()
 			info.meta.CheckpointTimeTick = msg.TimeTick()
 			info.dirty = true
+			info.invalidateWALViewSnapshotLocked()
 			return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
 		}
 	}
@@ -540,6 +584,7 @@ func (info *vChannelView) ObserveCreatePartitionMessageV1(msg message.ImmutableC
 				partition.TombstoneTimeTick = 0
 				info.meta.CheckpointTimeTick = msg.TimeTick()
 				info.dirty = true
+				info.invalidateWALViewSnapshotLocked()
 				return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
 			}
 			return emptyObserveResult()
@@ -551,6 +596,7 @@ func (info *vChannelView) ObserveCreatePartitionMessageV1(msg message.ImmutableC
 	})
 	info.meta.CheckpointTimeTick = msg.TimeTick()
 	info.dirty = true
+	info.invalidateWALViewSnapshotLocked()
 	return moduleapi.ObserveResult{Meta: info.MetaBarrier()}
 }
 
@@ -577,6 +623,7 @@ func (info *vChannelView) maybeMarkTombstonedLocked(dataCheckpointTimeTick uint6
 		info.meta.State = streamingpb.VChannelState_VCHANNEL_STATE_TOMBSTONED
 		info.meta.TombstoneTimeTick = tombstoneTimeTick
 		info.dirty = true
+		info.invalidateWALViewSnapshotLocked()
 		changed = true
 	}
 	for _, partition := range info.meta.GetCollectionInfo().GetPartitions() {
@@ -585,6 +632,7 @@ func (info *vChannelView) maybeMarkTombstonedLocked(dataCheckpointTimeTick uint6
 		}
 		partition.State = streamingpb.PartitionState_PARTITION_STATE_TOMBSTONED
 		info.dirty = true
+		info.invalidateWALViewSnapshotLocked()
 		changed = true
 	}
 	return changed

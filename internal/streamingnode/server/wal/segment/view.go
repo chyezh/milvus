@@ -409,6 +409,16 @@ func (info *segmentView) SealedDataVersion(vchannel string) (qviews.DataVersion,
 	return qviews.FromProtoDataVersion(info.meta.GetSealedAtDataVersion()), true
 }
 
+func (info *segmentView) TombstonedSealedDataVersion() (string, qviews.DataVersion, bool) {
+	info.mu.Lock()
+	defer info.mu.Unlock()
+	if info.meta.GetState() != streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_TOMBSTONED ||
+		info.meta.GetSealedAtDataVersion() == nil {
+		return "", qviews.DataVersion{}, false
+	}
+	return info.meta.GetVchannel(), qviews.FromProtoDataVersion(info.meta.GetSealedAtDataVersion()), true
+}
+
 func cloneSchema(schema *schemapb.CollectionSchema) *schemapb.CollectionSchema {
 	if schema == nil {
 		return nil
