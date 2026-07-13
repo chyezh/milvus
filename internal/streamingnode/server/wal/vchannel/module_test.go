@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
@@ -34,10 +35,12 @@ func TestVChannelRecoveryModuleObservesOnlyItsVChannel(t *testing.T) {
 func TestVChannelRecoveryModuleBuildsWALViewFromOwnedState(t *testing.T) {
 	ctx := context.Background()
 	module := newTestModule(t, "p1", "v1")
+	manager := transformlog.NewStreamManager("p1")
+	manager.Register("v1", module.transformLog)
 	module.SwitchIntoMetaAndData()
 	module.ObserveMessage(ctx, newTestDeleteMessage(t, "v1", 20))
 
-	view, ok := module.BuildWALView(context.Background(), nil, nil)
+	view, ok := module.BuildWALView(context.Background(), manager, nil, nil)
 
 	require.True(t, ok)
 	assert.Equal(t, "p1", view.PChannel)

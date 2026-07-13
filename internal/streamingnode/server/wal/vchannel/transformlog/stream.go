@@ -21,24 +21,9 @@ type streamLogProvider interface {
 	validatePChannel(pchannel string) error
 }
 
-type StreamProvider interface {
-	TransformLogForStream(vchannel string) TransformLog
-	StreamNotifyStateSince(seq uint64) (<-chan struct{}, uint64, []string)
-	ValidatePChannel(pchannel string) error
-}
-
-type providerStreamManager struct {
-	provider StreamProvider
-}
-
-type streamProviderAdapter struct {
-	provider StreamProvider
-}
-
-type singleStreamManager struct {
+type streamManager struct {
 	pchannel string
-	vchannel string
-	log      TransformLog
+	logs     map[string]TransformLog
 
 	streamMu     sync.Mutex
 	streamNotify chan struct{}
@@ -48,61 +33,72 @@ type singleStreamManager struct {
 
 type StreamManager interface {
 	wal.TransformLogStreamManager
-	Notify(vchannel string)
+	Register(vchannel string, log TransformLog)
+	Remove(vchannel string)
 }
 
-// NewStreamManager creates a TransformLog stream manager for one vchannel log.
-func NewStreamManager(pchannel string, vchannel string, log TransformLog) StreamManager {
-	return &singleStreamManager{
+// NewStreamManager creates a TransformLog stream manager for one pchannel.
+func NewStreamManager(pchannel string) StreamManager {
+	return &streamManager{
 		pchannel:     pchannel,
-		vchannel:     vchannel,
-		log:          log,
+		logs:         make(map[string]TransformLog),
 		streamNotify: make(chan struct{}),
 		streamSeqByV: make(map[string]uint64),
 	}
 }
 
-func NewProviderStreamManager(provider StreamProvider) wal.TransformLogStreamManager {
-	return &providerStreamManager{provider: provider}
-}
-
-func (m *providerStreamManager) AcquireStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
-	return newTransformLogStream(ctx, streamProviderAdapter{provider: m.provider}, pchannel)
-}
-
-func (a streamProviderAdapter) logForStream(vchannel string) TransformLog {
-	return a.provider.TransformLogForStream(vchannel)
-}
-
-func (a streamProviderAdapter) validatePChannel(pchannel string) error {
-	return a.provider.ValidatePChannel(pchannel)
-}
-
-func (a streamProviderAdapter) streamNotifyStateSince(seq uint64) (<-chan struct{}, uint64, []string) {
-	return a.provider.StreamNotifyStateSince(seq)
-}
-
-func (m *singleStreamManager) AcquireStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
+func (m *streamManager) AcquireStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
 	return newTransformLogStream(ctx, m, pchannel)
 }
 
-func (m *singleStreamManager) Notify(vchannel string) {
+func (m *streamManager) Register(vchannel string, log TransformLog) {
+	if vchannel == "" || log == nil {
+		return
+	}
+	if transformLog, ok := log.(*transformLog); ok {
+		transformLog.setStreamNotifier(func() {
+			m.notify(vchannel)
+		})
+	}
 	m.streamMu.Lock()
 	defer m.streamMu.Unlock()
+	m.logs[vchannel] = log
+}
+
+func (m *streamManager) Remove(vchannel string) {
+	if vchannel == "" {
+		return
+	}
+	m.streamMu.Lock()
+	log := m.logs[vchannel]
+	delete(m.logs, vchannel)
+	m.notifyLocked(vchannel)
+	m.streamMu.Unlock()
+	if transformLog, ok := log.(*transformLog); ok {
+		transformLog.setStreamNotifier(nil)
+	}
+}
+
+func (m *streamManager) notify(vchannel string) {
+	m.streamMu.Lock()
+	defer m.streamMu.Unlock()
+	m.notifyLocked(vchannel)
+}
+
+func (m *streamManager) notifyLocked(vchannel string) {
 	m.streamSeq++
 	m.streamSeqByV[vchannel] = m.streamSeq
 	close(m.streamNotify)
 	m.streamNotify = make(chan struct{})
 }
 
-func (m *singleStreamManager) logForStream(vchannel string) TransformLog {
-	if vchannel != m.vchannel {
-		return nil
-	}
-	return m.log
+func (m *streamManager) logForStream(vchannel string) TransformLog {
+	m.streamMu.Lock()
+	defer m.streamMu.Unlock()
+	return m.logs[vchannel]
 }
 
-func (m *singleStreamManager) validatePChannel(pchannel string) error {
+func (m *streamManager) validatePChannel(pchannel string) error {
 	if pchannel == "" {
 		return errors.Wrap(wal.ErrTransformLogInvalidReadOption, "pchannel is empty")
 	}
@@ -112,7 +108,7 @@ func (m *singleStreamManager) validatePChannel(pchannel string) error {
 	return nil
 }
 
-func (m *singleStreamManager) streamNotifyStateSince(seq uint64) (<-chan struct{}, uint64, []string) {
+func (m *streamManager) streamNotifyStateSince(seq uint64) (<-chan struct{}, uint64, []string) {
 	m.streamMu.Lock()
 	defer m.streamMu.Unlock()
 	changed := make([]string, 0)
@@ -485,6 +481,13 @@ func (s *transformLogStream) dispatchVChannel(vchannel string) {
 		if len(subs) == 0 {
 			delete(s.byVChannel, vchannel)
 			return
+		}
+		if s.provider.logForStream(vchannel) == nil {
+			err := errors.Wrap(wal.ErrTransformLogVChannelUnavailable, "transform log is removed")
+			for _, sub := range subs {
+				s.finishSubscription(sub, err, true)
+			}
+			continue
 		}
 		var log *transformLog
 		minCursor := uint64(0)

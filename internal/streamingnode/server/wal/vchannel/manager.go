@@ -3,10 +3,7 @@ package vchannel
 import (
 	"context"
 	"sort"
-	"sync"
 	"sync/atomic"
-
-	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
@@ -50,12 +47,7 @@ type PChannelRecoveryManager struct {
 
 	config        PChannelManagerConfig
 	metaAndData   atomic.Bool
-	streamManager wal.TransformLogStreamManager
-
-	streamMu     sync.Mutex
-	streamNotify chan struct{}
-	streamSeq    uint64
-	streamSeqByV map[string]uint64
+	streamManager transformlog.StreamManager
 }
 
 func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecoveryManager, error) {
@@ -63,19 +55,18 @@ func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecovery
 		return nil, merr.WrapErrServiceInternalMsg("pchannel recovery manager pchannel is empty")
 	}
 	manager := &PChannelRecoveryManager{
-		pchannel:     config.PChannel,
-		modules:      typeutil.NewConcurrentMap[string, *VChannelRecoveryModule](),
-		config:       config,
-		streamNotify: make(chan struct{}),
-		streamSeqByV: make(map[string]uint64),
+		pchannel:      config.PChannel,
+		modules:       typeutil.NewConcurrentMap[string, *VChannelRecoveryModule](),
+		config:        config,
+		streamManager: transformlog.NewStreamManager(config.PChannel),
 	}
-	manager.streamManager = transformlog.NewProviderStreamManager(manager)
 	for _, vchannel := range manager.initialVChannels(config) {
 		module, err := manager.newModule(vchannel)
 		if err != nil {
 			return nil, err
 		}
 		manager.modules.Insert(vchannel, module)
+		manager.syncTransformLogStream(module)
 	}
 	return manager, nil
 }
@@ -122,7 +113,9 @@ func (m *PChannelRecoveryManager) ObserveMessage(ctx context.Context, msg messag
 	if module == nil {
 		return moduleapi.ObserveResult{}
 	}
-	return module.ObserveMessage(ctx, msg)
+	result := module.ObserveMessage(ctx, msg)
+	m.syncTransformLogStream(module)
+	return result
 }
 
 func (m *PChannelRecoveryManager) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
@@ -192,7 +185,7 @@ func (m *PChannelRecoveryManager) BuildWALView(
 	if module == nil {
 		return walview.VChannelWALView{}, false
 	}
-	return module.BuildWALView(ctx, baseSelector, loadConfigProvider)
+	return module.BuildWALView(ctx, m.streamManager, baseSelector, loadConfigProvider)
 }
 
 func (m *PChannelRecoveryManager) Module(vchannel string) *VChannelRecoveryModule {
@@ -204,46 +197,6 @@ func (m *PChannelRecoveryManager) AcquireStream(ctx context.Context, pchannel st
 	return m.streamManager.AcquireStream(ctx, pchannel)
 }
 
-func (m *PChannelRecoveryManager) Notify(vchannel string) {
-	m.streamMu.Lock()
-	defer m.streamMu.Unlock()
-	m.streamSeq++
-	m.streamSeqByV[vchannel] = m.streamSeq
-	close(m.streamNotify)
-	m.streamNotify = make(chan struct{})
-}
-
-func (m *PChannelRecoveryManager) TransformLogForStream(vchannel string) transformlog.TransformLog {
-	module := m.Module(vchannel)
-	if module == nil {
-		return nil
-	}
-	return module.transformLog
-}
-
-func (m *PChannelRecoveryManager) ValidatePChannel(pchannel string) error {
-	if pchannel == "" {
-		return errors.Wrap(wal.ErrTransformLogInvalidReadOption, "pchannel is empty")
-	}
-	if m.pchannel != "" && m.pchannel != pchannel {
-		return errors.Wrapf(wal.ErrTransformLogInvalidReadOption, "pchannel mismatch, expected %s, got %s", m.pchannel, pchannel)
-	}
-	return nil
-}
-
-func (m *PChannelRecoveryManager) StreamNotifyStateSince(seq uint64) (<-chan struct{}, uint64, []string) {
-	m.streamMu.Lock()
-	defer m.streamMu.Unlock()
-	changed := make([]string, 0)
-	for vchannel, vchannelSeq := range m.streamSeqByV {
-		if vchannelSeq > seq {
-			changed = append(changed, vchannel)
-		}
-	}
-	sort.Strings(changed)
-	return m.streamNotify, m.streamSeq, changed
-}
-
 func (m *PChannelRecoveryManager) shouldBroadcast(msg message.ImmutableMessage) bool {
 	return msg.VChannel() == "" || msg.IsPChannelLevel()
 }
@@ -252,10 +205,22 @@ func (m *PChannelRecoveryManager) observeBroadcastMessage(ctx context.Context, m
 	results := make([]moduleapi.ObserveResult, 0, m.modules.Len())
 	m.modules.Range(func(_ string, module *VChannelRecoveryModule) bool {
 		result := module.ObserveMessage(ctx, msg)
+		m.syncTransformLogStream(module)
 		results = append(results, result)
 		return true
 	})
 	return moduleapi.ComposeBarriers(results)
+}
+
+func (m *PChannelRecoveryManager) syncTransformLogStream(module *VChannelRecoveryModule) {
+	if module == nil {
+		return
+	}
+	if module.IsActive() {
+		m.streamManager.Register(module.vchannel, module.transformLog)
+		return
+	}
+	m.streamManager.Remove(module.vchannel)
 }
 
 func (m *PChannelRecoveryManager) moduleForMessage(msg message.ImmutableMessage) *VChannelRecoveryModule {
@@ -279,6 +244,9 @@ func (m *PChannelRecoveryManager) moduleForMessage(msg message.ImmutableMessage)
 	module, loaded := m.modules.GetOrInsert(vchannel, module)
 	if !loaded && !switched && m.metaAndData.Load() {
 		module.SwitchIntoMetaAndData()
+	}
+	if !loaded {
+		m.syncTransformLogStream(module)
 	}
 	return module
 }
@@ -312,12 +280,9 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 	if err != nil {
 		return nil, err
 	}
-	module.transformStream = m
 	return module, nil
 }
 
 var _ moduleapi.Module = (*PChannelRecoveryManager)(nil)
 var _ moduleapi.DataFrontierProvider = (*PChannelRecoveryManager)(nil)
 var _ wal.TransformLogStreamManager = (*PChannelRecoveryManager)(nil)
-var _ transformlog.StreamManager = (*PChannelRecoveryManager)(nil)
-var _ transformlog.StreamProvider = (*PChannelRecoveryManager)(nil)

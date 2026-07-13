@@ -7,6 +7,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
@@ -69,7 +70,6 @@ type VChannelRecoveryModule struct {
 	latestInsertTimeTick      uint64
 
 	transformLog     transformlog.TransformLog
-	transformStream  transformlog.StreamManager
 	flushTasks       []scheduler.TaskHandle
 	materializeTasks []scheduler.TaskHandle
 
@@ -121,7 +121,6 @@ func NewModule(config ModuleConfig) (*VChannelRecoveryModule, error) {
 		Store:               config.TransformLogStore,
 		Materializer:        config.TransformLogMaterializer,
 	})
-	module.transformStream = transformlog.NewStreamManager(config.PChannel, config.VChannel, module.transformLog)
 	return module, nil
 }
 
@@ -302,12 +301,17 @@ func (m *VChannelRecoveryModule) DataFrontier(scope moduleapi.Scope) walcheckpoi
 	)
 }
 
+func (m *VChannelRecoveryModule) IsActive() bool {
+	return m != nil && m.vchannelView != nil && m.vchannelView.IsActive()
+}
+
 func (m *VChannelRecoveryModule) BuildWALView(
 	ctx context.Context,
+	transformLogStream wal.TransformLogStreamManager,
 	baseSelector ResourceRecoveryBaseSelector,
 	loadConfigProvider RecoveredLoadConfigProvider,
 ) (walview.VChannelWALView, bool) {
-	if m == nil || m.vchannelView == nil || m.transformLog == nil {
+	if m == nil || m.vchannelView == nil || m.transformLog == nil || transformLogStream == nil {
 		return walview.VChannelWALView{}, false
 	}
 	vchannelSnapshot, ok := m.vchannelView.WALViewSnapshot()
@@ -331,7 +335,7 @@ func (m *VChannelRecoveryModule) BuildWALView(
 	}
 	deleteReplay := newDeleteReplayScanner(
 		ctx,
-		m.transformStream,
+		transformLogStream,
 		m.pchannel,
 		m.vchannel,
 		deleteReplayStartAfter(segmentSnapshot),
@@ -554,7 +558,6 @@ func (m *VChannelRecoveryModule) appendTransformLogMessage(msg message.Immutable
 	if !result.Appended {
 		return moduleapi.ObserveResult{}
 	}
-	m.transformStream.Notify(m.vchannel)
 	if result.ShouldFlush || isTransformBarrierMessage(msg) {
 		m.submitTransformFlushTask(result.DataTimeTick)
 	}
@@ -568,7 +571,6 @@ func (m *VChannelRecoveryModule) flushTransformLogByTimeTick(timetick uint64) mo
 	if !m.transformLog.AppendBarrier(timetick).Appended && !m.transformLog.HasPendingWork() {
 		return moduleapi.ObserveResult{}
 	}
-	m.transformStream.Notify(m.vchannel)
 	m.submitTransformFlushTask(timetick)
 	return moduleapi.ObserveResult{Data: m.transformDataBarrier()}
 }

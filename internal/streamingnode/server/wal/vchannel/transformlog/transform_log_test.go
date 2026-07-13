@@ -17,7 +17,8 @@ import (
 
 func TestReadDrainsCreationTailBeforeFutureAppends(t *testing.T) {
 	transformLog := New(Config{VChannel: "v1"}).(*transformLog)
-	manager := NewStreamManager("p1", "v1", transformLog)
+	manager := NewStreamManager("p1")
+	manager.Register("v1", transformLog)
 	for timeTick := uint64(1); timeTick <= 20; timeTick++ {
 		require.True(t, transformLog.AppendBarrier(timeTick).Appended)
 	}
@@ -37,7 +38,6 @@ func TestReadDrainsCreationTailBeforeFutureAppends(t *testing.T) {
 		return len(handler.events) == 16
 	}, time.Second, 10*time.Millisecond)
 	require.True(t, transformLog.AppendBarrier(21).Appended)
-	manager.Notify("v1")
 
 	for expected := uint64(1); expected <= 20; expected++ {
 		event := <-handler.events
@@ -53,7 +53,8 @@ func TestReadDrainsCreationTailBeforeFutureAppends(t *testing.T) {
 
 func TestReadStopsAtEndTimeTick(t *testing.T) {
 	transformLog := New(Config{VChannel: "v1"}).(*transformLog)
-	manager := NewStreamManager("p1", "v1", transformLog)
+	manager := NewStreamManager("p1")
+	manager.Register("v1", transformLog)
 	require.True(t, transformLog.AppendBarrier(10).Appended)
 	require.True(t, transformLog.AppendBarrier(20).Appended)
 	require.True(t, transformLog.AppendBarrier(30).Appended)
@@ -107,7 +108,8 @@ func TestRecoverKeepsChunksColdUntilRead(t *testing.T) {
 			NextChunkId:        1,
 		},
 	}).(*transformLog)
-	manager := NewStreamManager("p1", "v1", transformLog)
+	manager := NewStreamManager("p1")
+	manager.Register("v1", transformLog)
 
 	result, err := transformLog.Recover(context.Background(), nil)
 	require.NoError(t, err)
@@ -190,7 +192,8 @@ func TestTruncateLoadsRecoveredColdChunkToAdvanceFirstChunk(t *testing.T) {
 
 func TestFlushWhileScannerDrainsDoesNotDuplicateEntries(t *testing.T) {
 	transformLog := New(Config{VChannel: "v1", Store: newMemoryStore()}).(*transformLog)
-	manager := NewStreamManager("p1", "v1", transformLog)
+	manager := NewStreamManager("p1")
+	manager.Register("v1", transformLog)
 	for timeTick := uint64(1); timeTick <= 20; timeTick++ {
 		require.True(t, transformLog.AppendBarrier(timeTick).Appended)
 	}

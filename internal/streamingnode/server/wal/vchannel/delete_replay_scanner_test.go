@@ -23,7 +23,8 @@ func TestDeleteReplayScannerUsesTransformLogStreamManager(t *testing.T) {
 	require.True(t, transformLog.Append(newDeleteReplayTestMessage(t, "v1", 10), transformlog.AppendOption{}).Appended)
 	require.True(t, transformLog.Append(newDeleteReplayTestMessage(t, "v1", 20), transformlog.AppendOption{}).Appended)
 	require.True(t, transformLog.Append(newDeleteReplayTestMessage(t, "v1", 30), transformlog.AppendOption{}).Appended)
-	manager := transformlog.NewStreamManager("test-pchannel", "v1", transformLog)
+	manager := transformlog.NewStreamManager("test-pchannel")
+	manager.Register("v1", transformLog)
 
 	scanner := newDeleteReplayScanner(ctx, manager, "test-pchannel", "v1", 0, 20)
 	defer scanner.Close()

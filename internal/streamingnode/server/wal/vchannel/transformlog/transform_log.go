@@ -111,6 +111,7 @@ type transformLog struct {
 	materializer          Materializer
 	materializeMaxRows    uint64
 	materializeMaxBytes   uint64
+	streamNotifier        func()
 
 	chunks []*chunkDescriptor
 }
@@ -141,6 +142,7 @@ func (t *transformLog) Append(msg message.ImmutableMessage, opt AppendOption) Ap
 		return AppendResult{DataTimeTick: t.buffer.DataTimeTick()}
 	}
 	t.notifyScannersLocked()
+	t.notifyStreamLocked()
 	return AppendResult{
 		Appended:     true,
 		ShouldFlush:  t.buffer.ShouldFlush(),
@@ -156,6 +158,7 @@ func (t *transformLog) AppendBarrier(timeTick uint64) AppendResult {
 	}
 	t.buffer.AppendEntry(transformBarrierEntry(timeTick))
 	t.notifyScannersLocked()
+	t.notifyStreamLocked()
 	return AppendResult{
 		Appended:     true,
 		ShouldFlush:  t.buffer.ShouldFlush(),
@@ -644,6 +647,18 @@ func (t *transformLog) notifyChannel() <-chan struct{} {
 func (t *transformLog) notifyScannersLocked() {
 	close(t.notifyCh)
 	t.notifyCh = make(chan struct{})
+}
+
+func (t *transformLog) setStreamNotifier(notifier func()) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.streamNotifier = notifier
+}
+
+func (t *transformLog) notifyStreamLocked() {
+	if t.streamNotifier != nil {
+		t.streamNotifier()
+	}
 }
 
 func (t *transformLog) latestTimeTickLocked() uint64 {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -154,6 +155,34 @@ func TestPChannelRecoveryManagerProvidesTransformLogStream(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestPChannelRecoveryManagerRemovesClosedVChannelTransformLog(t *testing.T) {
+	ctx := context.Background()
+	manager := newTestManager(t, "p1", "v1")
+	manager.SwitchIntoMetaAndData()
+
+	stream, err := manager.AcquireStream(ctx, "p1")
+	require.NoError(t, err)
+	defer stream.Close()
+
+	sub, err := stream.Subscribe(ctx, wal.TransformLogSubscriptionOption{
+		VChannel:           "v1",
+		StartAfterTimeTick: 0,
+		Handler:            newNoopTransformLogHandler(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, sub.Close())
+
+	result := manager.ObserveMessage(ctx, newTestDropCollectionMessage(t, "v1", 20))
+	require.NotNil(t, result.Meta)
+
+	_, err = stream.Subscribe(ctx, wal.TransformLogSubscriptionOption{
+		VChannel:           "v1",
+		StartAfterTimeTick: 0,
+		Handler:            newNoopTransformLogHandler(),
+	})
+	require.Error(t, err)
+}
+
 func newTestManager(t *testing.T, pchannel string, vchannels ...string) *PChannelRecoveryManager {
 	t.Helper()
 	metas := make(map[string]*streamingpb.VChannelMeta, len(vchannels))
@@ -222,6 +251,32 @@ func newTestCreatePartitionMessage(t *testing.T, vchannel string, timetick uint6
 		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
 		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
 }
+
+func newTestDropCollectionMessage(t *testing.T, vchannel string, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	mutableMsg := message.NewDropCollectionMessageBuilderV1().
+		WithHeader(&message.DropCollectionMessageHeader{
+			CollectionId: 100,
+		}).
+		WithBody(&msgpb.DropCollectionRequest{}).
+		WithVChannel(vchannel).
+		MustBuildMutable()
+	return mutableMsg.WithTimeTick(timetick).
+		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
+}
+
+type noopTransformLogHandler struct{}
+
+func newNoopTransformLogHandler() wal.TransformLogEventHandler {
+	return noopTransformLogHandler{}
+}
+
+func (noopTransformLogHandler) Handle(wal.TransformLogStreamEvent) error {
+	return nil
+}
+
+func (noopTransformLogHandler) Close() {}
 
 func dirtySnapshotVChannels(snapshots []moduleapi.DirtySnapshot) []string {
 	vchannels := make([]string, 0)
