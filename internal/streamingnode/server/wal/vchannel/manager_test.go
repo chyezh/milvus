@@ -14,8 +14,11 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
 )
@@ -202,13 +205,48 @@ func newTestManager(t *testing.T, pchannel string, vchannels ...string) *PChanne
 		VChannelMetas:     metas,
 		TransformLogMetas: map[string]*streamingpb.VChannelTransformLogMeta{},
 		Runtime:           moduleapi.Runtime{},
-		QueryRuntimeModuleBuilders: []QueryRuntimeModuleBuilder{
-			testModuleBuilder{},
+		QueryRuntimeModuleBuilders: []queryresource.QueryRuntimeModuleBuilder{
+			testQueryRuntimeModuleBuilder{},
 		},
 	})
 	require.NoError(t, err)
 	return manager
 }
+
+func testQueryViewMetaAndKey(
+	collectionID int64,
+	replicaID int64,
+	vchannel string,
+	dataVersion qviews.DataVersion,
+	queryVersion int64,
+) (*viewpb.QueryViewMeta, qviews.QueryViewKey) {
+	version := qviews.QueryViewVersion{DataVersion: dataVersion, QueryVersion: queryVersion}
+	meta := &viewpb.QueryViewMeta{
+		CollectionId: collectionID,
+		ReplicaId:    replicaID,
+		Vchannel:     vchannel,
+		Version:      version.IntoProto(),
+	}
+	key := qviews.QueryViewKey{
+		ShardID:          qviews.ShardID{ReplicaID: replicaID, VChannel: vchannel},
+		QueryViewVersion: version,
+	}
+	return meta, key
+}
+
+type testQueryRuntimeModuleBuilder struct{}
+
+func (testQueryRuntimeModuleBuilder) NewRuntime() (queryresource.QueryRuntimeModule, error) {
+	return testQueryRuntimeModule{}, nil
+}
+
+type testQueryRuntimeModule struct{}
+
+func (testQueryRuntimeModule) Prepare(context.Context, walview.VChannelWALView) error { return nil }
+func (testQueryRuntimeModule) ApplyLiveEvent(context.Context, walview.VChannelResourceEvent) {
+}
+func (testQueryRuntimeModule) Advance(qviews.DataVersion) {}
+func (testQueryRuntimeModule) Close()                     {}
 
 func newTestVChannelMeta(vchannel string) *streamingpb.VChannelMeta {
 	return &streamingpb.VChannelMeta{

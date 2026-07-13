@@ -1,4 +1,4 @@
-package vchannel
+package queryresource
 
 import (
 	"context"
@@ -20,7 +20,7 @@ type QueryRuntime struct {
 	pending      []walview.VChannelResourceEvent
 	pendingLimit int
 
-	dispatcher     *queryRuntimeDispatcher
+	dispatcher     *Dispatcher
 	drainScheduled bool
 	applyMu        sync.Mutex
 
@@ -40,7 +40,21 @@ func NewQueryRuntime(modules ...QueryRuntimeModule) *QueryRuntime {
 	return newQueryRuntime(nil, modules...)
 }
 
-func newQueryRuntime(dispatcher *queryRuntimeDispatcher, modules ...QueryRuntimeModule) *QueryRuntime {
+func (r *QueryRuntime) RangeModules(fn func(QueryRuntimeModule) bool) {
+	if r == nil || fn == nil {
+		return
+	}
+	r.mu.Lock()
+	modules := append([]QueryRuntimeModule(nil), r.modules...)
+	r.mu.Unlock()
+	for _, module := range modules {
+		if !fn(module) {
+			return
+		}
+	}
+}
+
+func newQueryRuntime(dispatcher *Dispatcher, modules ...QueryRuntimeModule) *QueryRuntime {
 	runtime := &QueryRuntime{
 		dispatcher:   dispatcher,
 		state:        queryRuntimePreparing,

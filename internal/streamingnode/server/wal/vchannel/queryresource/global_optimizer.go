@@ -1,4 +1,4 @@
-package vchannel
+package queryresource
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 	"github.com/milvus-io/milvus/internal/views/optimizer"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/planpb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/metric"
@@ -25,7 +24,7 @@ type globalOptimizer struct {
 	idf idfOracle
 }
 
-func NewGlobalOptimizer(_ *viewpb.QueryViewOfShard, runtime *QueryRuntime) optimizer.GlobalOptimizer {
+func NewGlobalOptimizer(runtime *QueryRuntime) optimizer.GlobalOptimizer {
 	return globalOptimizer{
 		idf: findIDFOracle(runtime),
 	}
@@ -35,14 +34,15 @@ func findIDFOracle(runtime *QueryRuntime) idfOracle {
 	if runtime == nil {
 		return nil
 	}
-	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
-	for _, module := range runtime.modules {
+	var oracle idfOracle
+	runtime.RangeModules(func(module QueryRuntimeModule) bool {
 		if idf, ok := module.(idfOracle); ok {
-			return idf
+			oracle = idf
+			return false
 		}
-	}
-	return nil
+		return true
+	})
+	return oracle
 }
 
 func (o globalOptimizer) OptimizeSearch(ctx context.Context, req *internalpb.SearchRequest) error {

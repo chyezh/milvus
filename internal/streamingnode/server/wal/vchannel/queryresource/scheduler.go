@@ -1,4 +1,4 @@
-package vchannel
+package queryresource
 
 import (
 	"context"

@@ -12,6 +12,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
 	"github.com/milvus-io/milvus/internal/util/idalloc"
@@ -70,9 +71,9 @@ func RecoverRecoveryStorage(
 
 type RecoveryStorageOption func(*recoveryStorageImpl)
 
-func WithQueryRuntimeModuleBuilders(builders ...vchannel.QueryRuntimeModuleBuilder) RecoveryStorageOption {
+func WithQueryRuntimeModuleBuilders(builders ...queryresource.QueryRuntimeModuleBuilder) RecoveryStorageOption {
 	return func(r *recoveryStorageImpl) {
-		r.queryRuntimeModuleBuilders = append([]vchannel.QueryRuntimeModuleBuilder(nil), builders...)
+		r.queryRuntimeModuleBuilders = append([]queryresource.QueryRuntimeModuleBuilder(nil), builders...)
 	}
 }
 
@@ -140,7 +141,7 @@ type recoveryStorageImpl struct {
 	// pendingSalvageCheckpoint holds the salvage checkpoint captured during force promote.
 	// Set under r.mu; consumed and persisted by the background task to avoid holding the lock.
 	pendingSalvageCheckpoint   *utility.ReplicateCheckpoint
-	queryRuntimeModuleBuilders []vchannel.QueryRuntimeModuleBuilder
+	queryRuntimeModuleBuilders []queryresource.QueryRuntimeModuleBuilder
 }
 
 func (r *recoveryStorageImpl) installCheckpointManager(checkpoint *WALCheckpoint) {

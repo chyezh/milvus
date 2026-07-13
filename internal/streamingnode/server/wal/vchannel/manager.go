@@ -9,6 +9,7 @@ import (
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
@@ -41,7 +42,7 @@ type PChannelManagerConfig struct {
 	TransformLogMaterialBytes uint64
 	OnSegmentSealed           func(walview.SegmentSealedEvent)
 
-	QueryRuntimeModuleBuilders []QueryRuntimeModuleBuilder
+	QueryRuntimeModuleBuilders []queryresource.QueryRuntimeModuleBuilder
 }
 
 // PChannelRecoveryManager owns all vchannel recovery modules on one pchannel.
@@ -52,8 +53,8 @@ type PChannelRecoveryManager struct {
 	config          PChannelManagerConfig
 	metaAndData     atomic.Bool
 	streamManager   transformlog.StreamManager
-	queryScheduler  Scheduler
-	queryDispatcher *queryRuntimeDispatcher
+	queryScheduler  queryresource.Scheduler
+	queryDispatcher *queryresource.Dispatcher
 }
 
 func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecoveryManager, error) {
@@ -65,8 +66,8 @@ func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecovery
 		modules:         typeutil.NewConcurrentMap[string, *VChannelRecoveryModule](),
 		config:          config,
 		streamManager:   transformlog.NewStreamManager(config.PChannel),
-		queryScheduler:  NewScheduler(4),
-		queryDispatcher: newQueryRuntimeDispatcher(defaultLiveEventDispatchConcurrency),
+		queryScheduler:  queryresource.NewScheduler(4),
+		queryDispatcher: queryresource.NewDispatcher(4),
 	}
 	for _, vchannel := range manager.initialVChannels(config) {
 		module, err := manager.newModule(vchannel)
@@ -215,7 +216,7 @@ func (m *PChannelRecoveryManager) QueryRuntime(key qviews.QueryViewKey) (snview.
 	return runtime, true
 }
 
-func (m *PChannelRecoveryManager) GetQueryRuntime(key qviews.QueryViewKey) (*QueryRuntime, bool) {
+func (m *PChannelRecoveryManager) GetQueryRuntime(key qviews.QueryViewKey) (*queryresource.QueryRuntime, bool) {
 	if m == nil {
 		return nil, false
 	}

@@ -10,7 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/views/qviews"
@@ -21,8 +21,8 @@ import (
 )
 
 var (
-	_ vchannel.QueryRuntimeModuleBuilder = (*Provider)(nil)
-	_ vchannel.QueryRuntimeModuleBuilder = (*FutureProvider)(nil)
+	_ queryresource.QueryRuntimeModuleBuilder = (*Provider)(nil)
+	_ queryresource.QueryRuntimeModuleBuilder = (*FutureProvider)(nil)
 )
 
 // Provider loads sealed BM25 resources for a DataVersion and aggregates the
@@ -67,11 +67,11 @@ func NewFutureProvider(client *syncutil.Future[types.MixCoordClient], opts ...Pr
 	}
 }
 
-func (p *FutureProvider) NewRuntime() (vchannel.QueryRuntimeModule, error) {
+func (p *FutureProvider) NewRuntime() (queryresource.QueryRuntimeModule, error) {
 	return &Runtime{future: p}, nil
 }
 
-func (p *Provider) NewRuntime() (vchannel.QueryRuntimeModule, error) {
+func (p *Provider) NewRuntime() (queryresource.QueryRuntimeModule, error) {
 	return &Runtime{provider: p}, nil
 }
 

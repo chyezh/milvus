@@ -1,9 +1,16 @@
-package vchannel
+package queryresource
 
 import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/growingruntime"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 )
+
+func defaultQueryRuntimeModuleBuilders(builders []QueryRuntimeModuleBuilder) []QueryRuntimeModuleBuilder {
+	if len(builders) == 0 {
+		return []QueryRuntimeModuleBuilder{NewGrowingRuntimeModuleBuilder(nil)}
+	}
+	return append([]QueryRuntimeModuleBuilder(nil), builders...)
+}
 
 func minQueryViewDataVersion(refs map[qviews.QueryViewKey]struct{}) (qviews.DataVersion, bool) {
 	var min qviews.DataVersion

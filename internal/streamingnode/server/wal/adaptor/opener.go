@@ -17,8 +17,8 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/recovery"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/idf"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/util"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
@@ -215,8 +215,8 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 		roWAL.Close()
 		return nil, errors.Wrap(err, "when loading streaming node query view meta")
 	}
-	queryRuntimeBuilders := []vchannel.QueryRuntimeModuleBuilder{
-		vchannel.NewGrowingRuntimeModuleBuilder(nil),
+	queryRuntimeBuilders := []queryresource.QueryRuntimeModuleBuilder{
+		queryresource.NewGrowingRuntimeModuleBuilder(nil),
 		idf.NewFutureProvider(
 			resource.Resource().MixCoordClient(),
 			idf.WithChunkManager(resource.Resource().ChunkManager()),

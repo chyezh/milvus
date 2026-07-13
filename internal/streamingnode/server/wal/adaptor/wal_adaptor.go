@@ -20,6 +20,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/viewerror"
@@ -203,14 +204,14 @@ func (w *walAdaptorImpl) GetQueryPlan(ctx context.Context, req *viewpb.GetQueryP
 		mlog.Uint64("transformingTimeTick", mvcc.GetTransformingTimetick()),
 		mlog.Int("workNodeCount", len(plan.WorkNodes)),
 	)
-	var runtime *vchannel.QueryRuntime
+	var runtime *queryresource.QueryRuntime
 	if w.viewResourceManager != nil {
 		runtime, _ = w.viewResourceManager.GetQueryRuntime(qviews.QueryViewKey{
 			ShardID:          shardID,
 			QueryViewVersion: lease.Version,
 		})
 	}
-	optimizer := vchannel.NewGlobalOptimizer(lease.View, runtime)
+	optimizer := queryresource.NewGlobalOptimizer(runtime)
 	switch request := req.GetRequest().(type) {
 	case *viewpb.GetQueryPlanRequest_LegacySearchRequest:
 		if request.LegacySearchRequest == nil {

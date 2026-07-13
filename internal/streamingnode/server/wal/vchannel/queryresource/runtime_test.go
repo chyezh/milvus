@@ -1,4 +1,4 @@
-package vchannel
+package queryresource
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
 func TestQueryRuntimeAdvanceRejectsNonMonotonicWatermark(t *testing.T) {
@@ -100,37 +99,10 @@ func testWALView(collectionID int64, vchannel string, version qviews.DataVersion
 	}
 }
 
-func testQueryViewMetaAndKey(
-	collectionID int64,
-	replicaID int64,
-	vchannel string,
-	dataVersion qviews.DataVersion,
-	queryVersion int64,
-) (*viewpb.QueryViewMeta, qviews.QueryViewKey) {
-	version := qviews.QueryViewVersion{DataVersion: dataVersion, QueryVersion: queryVersion}
-	meta := &viewpb.QueryViewMeta{
-		CollectionId: collectionID,
-		ReplicaId:    replicaID,
-		Vchannel:     vchannel,
-		Version:      version.IntoProto(),
-	}
-	key := qviews.QueryViewKey{
-		ShardID:          qviews.ShardID{ReplicaID: replicaID, VChannel: vchannel},
-		QueryViewVersion: version,
-	}
-	return meta, key
-}
-
 type recordingModule struct {
 	mu       sync.Mutex
 	segments []int64
 	advances []qviews.DataVersion
-}
-
-type testModuleBuilder struct{}
-
-func (testModuleBuilder) NewRuntime() (QueryRuntimeModule, error) {
-	return &recordingModule{}, nil
 }
 
 func (m *recordingModule) Prepare(context.Context, walview.VChannelWALView) error { return nil }

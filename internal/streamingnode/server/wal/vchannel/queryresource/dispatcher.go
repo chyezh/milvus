@@ -1,21 +1,21 @@
-package vchannel
+package queryresource
 
 import "sync"
 
 const defaultLiveEventDispatchConcurrency = 4
 
-type queryRuntimeDispatcher struct {
+type Dispatcher struct {
 	tasks  chan *QueryRuntime
 	closed chan struct{}
 	once   sync.Once
 	wg     sync.WaitGroup
 }
 
-func newQueryRuntimeDispatcher(concurrency int) *queryRuntimeDispatcher {
+func NewDispatcher(concurrency int) *Dispatcher {
 	if concurrency <= 0 {
 		concurrency = 1
 	}
-	dispatcher := &queryRuntimeDispatcher{
+	dispatcher := &Dispatcher{
 		tasks:  make(chan *QueryRuntime, 1024),
 		closed: make(chan struct{}),
 	}
@@ -29,7 +29,7 @@ func newQueryRuntimeDispatcher(concurrency int) *queryRuntimeDispatcher {
 	return dispatcher
 }
 
-func (d *queryRuntimeDispatcher) Submit(runtime *QueryRuntime) bool {
+func (d *Dispatcher) Submit(runtime *QueryRuntime) bool {
 	if d == nil || runtime == nil {
 		return false
 	}
@@ -41,7 +41,7 @@ func (d *queryRuntimeDispatcher) Submit(runtime *QueryRuntime) bool {
 	}
 }
 
-func (d *queryRuntimeDispatcher) Close() {
+func (d *Dispatcher) Close() {
 	if d == nil {
 		return
 	}
@@ -51,7 +51,7 @@ func (d *queryRuntimeDispatcher) Close() {
 	})
 }
 
-func (d *queryRuntimeDispatcher) worker() {
+func (d *Dispatcher) worker() {
 	for {
 		select {
 		case runtime := <-d.tasks:

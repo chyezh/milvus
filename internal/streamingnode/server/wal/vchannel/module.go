@@ -11,6 +11,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
@@ -48,9 +49,9 @@ type ModuleConfig struct {
 	OnSegmentSealed           func(walview.SegmentSealedEvent)
 
 	TransformLogStream         wal.TransformLogStreamManager
-	QueryRuntimeModuleBuilders []QueryRuntimeModuleBuilder
-	QueryResourceScheduler     Scheduler
-	QueryRuntimeDispatcher     *queryRuntimeDispatcher
+	QueryRuntimeModuleBuilders []queryresource.QueryRuntimeModuleBuilder
+	QueryResourceScheduler     queryresource.Scheduler
+	QueryRuntimeDispatcher     *queryresource.Dispatcher
 }
 
 // VChannelRecoveryModule owns all recovery_storage state for one vchannel.
@@ -78,18 +79,8 @@ type VChannelRecoveryModule struct {
 
 	metaAndData bool
 
-	queryRuntimeModuleBuilders []QueryRuntimeModuleBuilder
-	queryScheduler             Scheduler
-	queryDispatcher            *queryRuntimeDispatcher
-	queryTransformLogStream    wal.TransformLogStreamManager
-
-	queryRefs    map[qviews.QueryViewKey]struct{}
-	queryEpoch   map[qviews.QueryViewKey]uint64
-	queryRuntime *QueryRuntime
-	queryTask    BuildTask
-	queryErr     error
-	queryChanged chan struct{}
-	queryClosed  bool
+	queryTransformLogStream wal.TransformLogStreamManager
+	queryResources          *queryresource.Manager
 }
 
 // NewModule creates a single-vchannel recovery module.
@@ -101,22 +92,21 @@ func NewModule(config ModuleConfig) (*VChannelRecoveryModule, error) {
 		return nil, merr.WrapErrServiceInternalMsg("vchannel recovery module vchannel is empty")
 	}
 	module := &VChannelRecoveryModule{
-		pchannel:                   config.PChannel,
-		vchannel:                   config.VChannel,
-		runtime:                    config.Runtime,
-		logger:                     config.Logger,
-		segments:                   make(map[int64]*segment.SegmentView),
-		segmentDataVersionSummary:  cloneSegmentDataVersionSummary(config.SegmentDataVersionSummary),
-		segmentLifecycle:           config.SegmentLifecycle,
-		segmentPackWriter:          config.SegmentPackWriter,
-		queryRuntimeModuleBuilders: defaultQueryRuntimeModuleBuilders(config.QueryRuntimeModuleBuilders),
-		queryScheduler:             config.QueryResourceScheduler,
-		queryDispatcher:            config.QueryRuntimeDispatcher,
-		queryTransformLogStream:    config.TransformLogStream,
-		queryRefs:                  make(map[qviews.QueryViewKey]struct{}),
-		queryEpoch:                 make(map[qviews.QueryViewKey]uint64),
-		queryChanged:               make(chan struct{}),
+		pchannel:                  config.PChannel,
+		vchannel:                  config.VChannel,
+		runtime:                   config.Runtime,
+		logger:                    config.Logger,
+		segments:                  make(map[int64]*segment.SegmentView),
+		segmentDataVersionSummary: cloneSegmentDataVersionSummary(config.SegmentDataVersionSummary),
+		segmentLifecycle:          config.SegmentLifecycle,
+		segmentPackWriter:         config.SegmentPackWriter,
+		queryTransformLogStream:   config.TransformLogStream,
 	}
+	module.queryResources = queryresource.NewManager(queryresource.Config{
+		Builders:   config.QueryRuntimeModuleBuilders,
+		Scheduler:  config.QueryResourceScheduler,
+		Dispatcher: config.QueryRuntimeDispatcher,
+	})
 	module.onSegmentSealed = func(event walview.SegmentSealedEvent) {
 		module.observeQueryResourceEvent(context.Background(), walview.VChannelResourceEvent{SegmentSealed: &event})
 		if config.OnSegmentSealed != nil {

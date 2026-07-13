@@ -1,4 +1,4 @@
-package vchannel
+package queryresource
 
 import (
 	"context"
@@ -14,7 +14,6 @@ import (
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/planpb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/metric"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
@@ -32,7 +31,7 @@ func TestGlobalOptimizerBuildsBM25IDF(t *testing.T) {
 	idf := typeutil.CreateAndSortSparseFloatRow(map[uint32]float32{7: 3})
 	req := testBM25SearchRequest(t, collectionID, inputFieldID, outputFieldID)
 	runtime := NewQueryRuntime(fakeIDFModule{vectors: [][]byte{idf}, avgdl: 9})
-	optimizer := NewGlobalOptimizer(testQueryView(collectionID), runtime)
+	optimizer := NewGlobalOptimizer(runtime)
 
 	require.NoError(t, optimizer.OptimizeSearch(context.Background(), req))
 
@@ -92,14 +91,6 @@ func testBM25Schema(inputFieldID int64, outputFieldID int64) *schemapb.Collectio
 			OutputFieldIds:   []int64{outputFieldID},
 			OutputFieldNames: []string{"sparse"},
 		}},
-	}
-}
-
-func testQueryView(collectionID int64) *viewpb.QueryViewOfShard {
-	return &viewpb.QueryViewOfShard{
-		Meta: &viewpb.QueryViewMeta{
-			CollectionId: collectionID,
-		},
 	}
 }
 
