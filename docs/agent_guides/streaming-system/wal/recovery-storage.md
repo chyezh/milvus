@@ -40,6 +40,6 @@ replay.
 - `internal/streamingnode/server/wal/recovery/` — `RecoveryStorage`, `RecoverySnapshot`, WAL replay orchestration, meta recovery and background persist task
 - `internal/streamingnode/server/wal/moduleapi/` — common RecoveryStorage module contracts, dirty snapshots, data checkpoints, and data frontiers
 - `internal/streamingnode/server/wal/vchannel/` — VChannel metadata, schema history, partition lifecycle, and VChannel tombstones
-- `internal/streamingnode/server/wal/segment/` — growing segment assignment metadata, Insert/L1 persistence, segment lifecycle, and segment tombstones
-- `internal/streamingnode/server/wal/transformlog/` — Delete TransformLog storage, recovery, chunk replay, scanners, and truncation
+- `internal/streamingnode/server/wal/vchannel/segment/` — growing segment assignment metadata, Insert/L1 persistence, segment lifecycle, and segment tombstones
+- `internal/streamingnode/server/wal/vchannel/transformlog/` — Delete TransformLog storage, recovery, chunk replay, scanners, and truncation
 - `internal/streamingnode/server/wal/checkpoint/` — WAL checkpoint manager, meta/data barriers and checkpoint advancement rules

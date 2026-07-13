@@ -6,7 +6,7 @@ import (
 	"go.uber.org/atomic"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
-	waltransformlog "github.com/milvus-io/milvus/internal/streamingnode/server/wal/transformlog"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
 	scheduler "github.com/milvus-io/milvus/pkg/v3/syncutil/preconditioned"
 )
 
@@ -35,7 +35,7 @@ type transformFlushTask struct {
 }
 
 func (t *transformFlushTask) Run(ctx context.Context) error {
-	result, err := t.module.transformLog.Flush(ctx, waltransformlog.FlushOption{TargetTimeTick: t.timetick})
+	result, err := t.module.transformLog.Flush(ctx, transformlog.FlushOption{TargetTimeTick: t.timetick})
 	if err != nil {
 		return err
 	}
@@ -55,7 +55,7 @@ type transformMaterializeTask struct {
 }
 
 func (t *transformMaterializeTask) Run(ctx context.Context) error {
-	_, err := t.module.transformLog.Materialize(ctx, waltransformlog.MaterializeOption{TargetTimeTick: t.timetick})
+	_, err := t.module.transformLog.Materialize(ctx, transformlog.MaterializeOption{TargetTimeTick: t.timetick})
 	if err != nil {
 		return err
 	}
@@ -108,7 +108,6 @@ func (m *VChannelRecoveryModule) transformTaskPrecondition() scheduler.Precondit
 }
 
 func (m *VChannelRecoveryModule) notifyTransformLogUpdated() {
-	m.markDirty()
 	if m.runtime.Notifier == nil {
 		return
 	}

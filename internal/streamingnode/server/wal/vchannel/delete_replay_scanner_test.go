@@ -12,18 +12,18 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
-	waltransformlog "github.com/milvus-io/milvus/internal/streamingnode/server/wal/transformlog"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
 )
 
 func TestDeleteReplayScannerUsesTransformLogStreamManager(t *testing.T) {
 	ctx := context.Background()
-	transformLog := waltransformlog.New(waltransformlog.Config{VChannel: "v1"})
-	require.True(t, transformLog.Append(newDeleteReplayTestMessage(t, "v1", 10), waltransformlog.AppendOption{}).Appended)
-	require.True(t, transformLog.Append(newDeleteReplayTestMessage(t, "v1", 20), waltransformlog.AppendOption{}).Appended)
-	require.True(t, transformLog.Append(newDeleteReplayTestMessage(t, "v1", 30), waltransformlog.AppendOption{}).Appended)
-	manager := waltransformlog.NewStreamManager("test-pchannel", "v1", transformLog)
+	transformLog := transformlog.New(transformlog.Config{VChannel: "v1"})
+	require.True(t, transformLog.Append(newDeleteReplayTestMessage(t, "v1", 10), transformlog.AppendOption{}).Appended)
+	require.True(t, transformLog.Append(newDeleteReplayTestMessage(t, "v1", 20), transformlog.AppendOption{}).Appended)
+	require.True(t, transformLog.Append(newDeleteReplayTestMessage(t, "v1", 30), transformlog.AppendOption{}).Appended)
+	manager := transformlog.NewStreamManager("test-pchannel", "v1", transformLog)
 
 	scanner := newDeleteReplayScanner(ctx, manager, "test-pchannel", "v1", 0, 20)
 	defer scanner.Close()

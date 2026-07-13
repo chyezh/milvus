@@ -10,10 +10,10 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/segment"
-	waltransformlog "github.com/milvus-io/milvus/internal/streamingnode/server/wal/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/util/idalloc"
 	"github.com/milvus-io/milvus/internal/views/qviews"
@@ -189,11 +189,11 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		Scheduler: r.taskScheduler,
 		Notifier:  r,
 	}
-	transformLogStore := waltransformlog.NewObjectChunkStore(
+	transformLogStore := transformlog.NewObjectChunkStore(
 		resource.Resource().ChunkManager(),
 		r.channel.Name,
 	)
-	transformLogMaterializer := waltransformlog.NewSyncMaterializer(
+	transformLogMaterializer := transformlog.NewSyncMaterializer(
 		resource.Resource().ChunkManager(),
 		idalloc.NewMAllocator(resource.Resource().IDAllocator()),
 		syncmgr.BrokerMetaWriter(broker.NewCoordBroker(coord, paramtable.GetNodeID()), paramtable.GetNodeID()),

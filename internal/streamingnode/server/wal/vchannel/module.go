@@ -7,11 +7,10 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/segment"
-	waltransformlog "github.com/milvus-io/milvus/internal/streamingnode/server/wal/transformlog"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
@@ -46,8 +45,8 @@ type ModuleConfig struct {
 	Logger                    *mlog.Logger
 	SegmentLifecycle          segment.Lifecycle
 	SegmentPackWriter         segment.PackWriter
-	TransformLogStore         waltransformlog.Store
-	TransformLogMaterializer  waltransformlog.Materializer
+	TransformLogStore         transformlog.Store
+	TransformLogMaterializer  transformlog.Materializer
 	TransformLogMaxRows       uint64
 	TransformLogMaxBytes      uint64
 	TransformLogMaterialRows  uint64
@@ -69,15 +68,14 @@ type VChannelRecoveryModule struct {
 	segmentDataVersionSummary *streamingpb.SegmentDataVersionSummary
 	latestInsertTimeTick      uint64
 
-	transformLog     waltransformlog.TransformLog
-	transformStream  waltransformlog.StreamManager
+	transformLog     transformlog.TransformLog
+	transformStream  transformlog.StreamManager
 	flushTasks       []scheduler.TaskHandle
 	materializeTasks []scheduler.TaskHandle
 
 	segmentLifecycle  segment.Lifecycle
 	segmentPackWriter segment.PackWriter
 	onSegmentSealed   func(walview.SegmentSealedEvent)
-	onDirty           func()
 
 	metaAndData bool
 }
@@ -114,7 +112,7 @@ func NewModule(config ModuleConfig) (*VChannelRecoveryModule, error) {
 		}
 		module.segments[id] = segment.NewSegmentViewFromMetaWithOptions(meta, schema, module.segmentViewOptions(config)...)
 	}
-	module.transformLog = waltransformlog.New(waltransformlog.Config{
+	module.transformLog = transformlog.New(transformlog.Config{
 		VChannel:            config.VChannel,
 		MaxRows:             config.TransformLogMaxRows,
 		MaterializeMaxRows:  config.TransformLogMaterialRows,
@@ -123,7 +121,7 @@ func NewModule(config ModuleConfig) (*VChannelRecoveryModule, error) {
 		Store:               config.TransformLogStore,
 		Materializer:        config.TransformLogMaterializer,
 	})
-	module.transformStream = waltransformlog.NewStreamManager(config.PChannel, config.VChannel, module.transformLog)
+	module.transformStream = transformlog.NewStreamManager(config.PChannel, config.VChannel, module.transformLog)
 	return module, nil
 }
 
@@ -134,7 +132,6 @@ func (m *VChannelRecoveryModule) segmentViewOptions(config ModuleConfig) []segme
 		segment.WithViewPackWriter(config.SegmentPackWriter),
 		segment.WithViewSegmentSealedNotifier(config.OnSegmentSealed),
 		segment.WithViewDataUpdatedNotifier(func() {
-			m.markDirty()
 			if m.runtime.Notifier != nil {
 				m.runtime.Notifier.NotifyBarrierUpdated()
 			}
@@ -293,17 +290,6 @@ func (m *VChannelRecoveryModule) Recover(ctx context.Context) error {
 	}
 	_, err := m.transformLog.Recover(ctx, nil)
 	return err
-}
-
-func (m *VChannelRecoveryModule) TransformLog() wal.TransformLogAccesser {
-	if m == nil {
-		return wal.NewTransformLogErrorAccesser(wal.ErrTransformLogVChannelUnavailable)
-	}
-	return m.transformStream
-}
-
-func (m *VChannelRecoveryModule) AcquireStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
-	return m.TransformLog().AcquireStream(ctx, pchannel)
 }
 
 func (m *VChannelRecoveryModule) DataFrontier(scope moduleapi.Scope) walcheckpoint.Barrier {
@@ -564,7 +550,7 @@ func (m *VChannelRecoveryModule) appendTransformLogMessage(msg message.Immutable
 	if msg.TimeTick() <= m.transformLog.DataCheckpointTimeTick() {
 		return moduleapi.ObserveResult{}
 	}
-	result := m.transformLog.Append(msg, waltransformlog.AppendOption{})
+	result := m.transformLog.Append(msg, transformlog.AppendOption{})
 	if !result.Appended {
 		return moduleapi.ObserveResult{}
 	}
@@ -620,17 +606,10 @@ func (m *VChannelRecoveryModule) segmentOptions() []segment.ViewOption {
 		segment.WithViewPackWriter(m.segmentPackWriter),
 		segment.WithViewSegmentSealedNotifier(m.onSegmentSealed),
 		segment.WithViewDataUpdatedNotifier(func() {
-			m.markDirty()
 			if m.runtime.Notifier != nil {
 				m.runtime.Notifier.NotifyBarrierUpdated()
 			}
 		}),
-	}
-}
-
-func (m *VChannelRecoveryModule) markDirty() {
-	if m.onDirty != nil {
-		m.onDirty()
 	}
 }
 
@@ -816,4 +795,3 @@ func max(a, b uint64) uint64 {
 var _ moduleapi.Module = (*VChannelRecoveryModule)(nil)
 var _ moduleapi.CheckpointPersistedObserver = (*VChannelRecoveryModule)(nil)
 var _ moduleapi.DataFrontierProvider = (*VChannelRecoveryModule)(nil)
-var _ wal.TransformLogStreamManager = (*VChannelRecoveryModule)(nil)

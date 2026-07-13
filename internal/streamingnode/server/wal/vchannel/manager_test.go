@@ -49,7 +49,33 @@ func TestPChannelRecoveryManagerBroadcastsPChannelMessages(t *testing.T) {
 	assert.Equal(t, uint64(0), result.Data.TimeTick())
 }
 
-func TestPChannelRecoveryManagerKeepsInFlightDirtyVChannelIndexed(t *testing.T) {
+func TestPChannelRecoveryManagerModuleIndexSupportsConcurrentRange(t *testing.T) {
+	manager := newTestManager(t, "p1", "v1", "v2")
+
+	observed := make(map[string]struct{})
+	manager.modules.Range(func(vchannel string, module *VChannelRecoveryModule) bool {
+		require.NotNil(t, module)
+		observed[vchannel] = struct{}{}
+		return true
+	})
+
+	assert.ElementsMatch(t, []string{"v1", "v2"}, mapKeys(observed))
+}
+
+func TestPChannelRecoveryManagerConsumesDirtySnapshotsByScanningModules(t *testing.T) {
+	ctx := context.Background()
+	manager := newTestManager(t, "p1", "v1")
+	manager.SwitchIntoMetaAndData()
+
+	result := manager.Module("v1").ObserveMessage(ctx, newTestCreatePartitionMessage(t, "v1", 20))
+	require.NotNil(t, result.Meta)
+
+	snapshots := manager.ConsumeDirtySnapshots()
+	require.NotEmpty(t, snapshots)
+	assert.Contains(t, dirtySnapshotModuleNames(snapshots), moduleapi.ModuleNameVChannel)
+}
+
+func TestPChannelRecoveryManagerKeepsInFlightDirtyVChannelSnapshots(t *testing.T) {
 	ctx := context.Background()
 	manager := newTestManager(t, "p1", "v1", "v2")
 
@@ -182,6 +208,21 @@ func newTestCreateCollectionMessage(t *testing.T, vchannel string, timetick uint
 		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
 }
 
+func newTestCreatePartitionMessage(t *testing.T, vchannel string, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	mutableMsg := message.NewCreatePartitionMessageBuilderV1().
+		WithHeader(&message.CreatePartitionMessageHeader{
+			CollectionId: 100,
+			PartitionId:  11,
+		}).
+		WithBody(&msgpb.CreatePartitionRequest{}).
+		WithVChannel(vchannel).
+		MustBuildMutable()
+	return mutableMsg.WithTimeTick(timetick).
+		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
+}
+
 func dirtySnapshotVChannels(snapshots []moduleapi.DirtySnapshot) []string {
 	vchannels := make([]string, 0)
 	for _, snapshot := range snapshots {
@@ -195,4 +236,20 @@ func dirtySnapshotVChannels(snapshots []moduleapi.DirtySnapshot) []string {
 		vchannels = append(vchannels, proto.Clone(meta).(*streamingpb.VChannelMeta).GetVchannel())
 	}
 	return vchannels
+}
+
+func dirtySnapshotModuleNames(snapshots []moduleapi.DirtySnapshot) []moduleapi.ModuleName {
+	names := make([]moduleapi.ModuleName, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		names = append(names, snapshot.ModuleName())
+	}
+	return names
+}
+
+func mapKeys[K comparable, V any](m map[K]V) []K {
+	keys := make([]K, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	return keys
 }

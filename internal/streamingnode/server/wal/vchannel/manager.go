@@ -4,20 +4,22 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/segment"
-	waltransformlog "github.com/milvus-io/milvus/internal/streamingnode/server/wal/transformlog"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
 type PChannelManagerConfig struct {
@@ -32,8 +34,8 @@ type PChannelManagerConfig struct {
 	Logger                    *mlog.Logger
 	SegmentLifecycle          segment.Lifecycle
 	SegmentPackWriter         segment.PackWriter
-	TransformLogStore         waltransformlog.Store
-	TransformLogMaterializer  waltransformlog.Materializer
+	TransformLogStore         transformlog.Store
+	TransformLogMaterializer  transformlog.Materializer
 	TransformLogMaxRows       uint64
 	TransformLogMaxBytes      uint64
 	TransformLogMaterialRows  uint64
@@ -43,13 +45,11 @@ type PChannelManagerConfig struct {
 
 // PChannelRecoveryManager owns all vchannel recovery modules on one pchannel.
 type PChannelRecoveryManager struct {
-	mu       sync.Mutex
 	pchannel string
-	modules  map[string]*VChannelRecoveryModule
-	dirty    map[string]struct{}
+	modules  *typeutil.ConcurrentMap[string, *VChannelRecoveryModule]
 
 	config        PChannelManagerConfig
-	metaAndData   bool
+	metaAndData   atomic.Bool
 	streamManager wal.TransformLogStreamManager
 
 	streamMu     sync.Mutex
@@ -64,19 +64,18 @@ func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecovery
 	}
 	manager := &PChannelRecoveryManager{
 		pchannel:     config.PChannel,
-		modules:      make(map[string]*VChannelRecoveryModule),
-		dirty:        make(map[string]struct{}),
+		modules:      typeutil.NewConcurrentMap[string, *VChannelRecoveryModule](),
 		config:       config,
 		streamNotify: make(chan struct{}),
 		streamSeqByV: make(map[string]uint64),
 	}
-	manager.streamManager = waltransformlog.NewProviderStreamManager(manager)
+	manager.streamManager = transformlog.NewProviderStreamManager(manager)
 	for _, vchannel := range manager.initialVChannels(config) {
-		module, err := manager.newModuleLocked(vchannel)
+		module, err := manager.newModule(vchannel)
 		if err != nil {
 			return nil, err
 		}
-		manager.modules[vchannel] = module
+		manager.modules.Insert(vchannel, module)
 	}
 	return manager, nil
 }
@@ -123,24 +122,19 @@ func (m *PChannelRecoveryManager) ObserveMessage(ctx context.Context, msg messag
 	if module == nil {
 		return moduleapi.ObserveResult{}
 	}
-	result := module.ObserveMessage(ctx, msg)
-	m.markDirtyIfNeeded(module.vchannel, result)
-	return result
+	return module.ObserveMessage(ctx, msg)
 }
 
 func (m *PChannelRecoveryManager) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
 	if m == nil {
 		return nil
 	}
-	m.mu.Lock()
-	m.metaAndData = true
-	modules := m.snapshotModulesLocked()
-	m.mu.Unlock()
-
-	snapshots := make(moduleapi.CompositeModuleSnapshot, 0, len(modules)*3)
-	for _, module := range modules {
+	m.metaAndData.Store(true)
+	snapshots := make(moduleapi.CompositeModuleSnapshot, 0, m.modules.Len()*3)
+	m.modules.Range(func(_ string, module *VChannelRecoveryModule) bool {
 		snapshots = append(snapshots, moduleapi.FlattenModuleSnapshot(module.SwitchIntoMetaAndData())...)
-	}
+		return true
+	})
 	return snapshots
 }
 
@@ -148,35 +142,24 @@ func (m *PChannelRecoveryManager) ConsumeDirtySnapshots() []moduleapi.DirtySnaps
 	if m == nil {
 		return nil
 	}
-	modules := m.snapshotDirtyModules()
 	snapshots := make([]moduleapi.DirtySnapshot, 0)
-	stillDirty := make(map[string]struct{})
-	for vchannel, module := range modules {
-		moduleSnapshots := module.ConsumeDirtySnapshots()
-		if len(moduleSnapshots) == 0 {
-			continue
-		}
-		stillDirty[vchannel] = struct{}{}
-		snapshots = append(snapshots, moduleSnapshots...)
-	}
-	m.mu.Lock()
-	for vchannel := range m.dirty {
-		if _, ok := modules[vchannel]; !ok {
-			stillDirty[vchannel] = struct{}{}
-		}
-	}
-	m.dirty = stillDirty
-	m.mu.Unlock()
+	m.modules.Range(func(_ string, module *VChannelRecoveryModule) bool {
+		snapshots = append(snapshots, module.ConsumeDirtySnapshots()...)
+		return true
+	})
 	return snapshots
 }
 
 func (m *PChannelRecoveryManager) Recover(ctx context.Context) error {
-	for _, module := range m.snapshotModules() {
-		if err := module.Recover(ctx); err != nil {
-			return err
+	var err error
+	m.modules.Range(func(_ string, module *VChannelRecoveryModule) bool {
+		if moduleErr := module.Recover(ctx); moduleErr != nil {
+			err = moduleErr
+			return false
 		}
-	}
-	return nil
+		return true
+	})
+	return err
 }
 
 func (m *PChannelRecoveryManager) DataFrontier(scope moduleapi.Scope) walcheckpoint.Barrier {
@@ -190,11 +173,12 @@ func (m *PChannelRecoveryManager) DataFrontier(scope moduleapi.Scope) walcheckpo
 		return nil
 	}
 	barriers := make([]walcheckpoint.Barrier, 0)
-	for _, module := range m.snapshotModules() {
+	m.modules.Range(func(_ string, module *VChannelRecoveryModule) bool {
 		if barrier := module.DataFrontier(scope); barrier != nil {
 			barriers = append(barriers, barrier)
 		}
-	}
+		return true
+	})
 	return walcheckpoint.NewCompositeBarrier(barriers...)
 }
 
@@ -212,9 +196,8 @@ func (m *PChannelRecoveryManager) BuildWALView(
 }
 
 func (m *PChannelRecoveryManager) Module(vchannel string) *VChannelRecoveryModule {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.modules[vchannel]
+	module, _ := m.modules.Get(vchannel)
+	return module
 }
 
 func (m *PChannelRecoveryManager) AcquireStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
@@ -230,7 +213,7 @@ func (m *PChannelRecoveryManager) Notify(vchannel string) {
 	m.streamNotify = make(chan struct{})
 }
 
-func (m *PChannelRecoveryManager) TransformLogForStream(vchannel string) waltransformlog.TransformLog {
+func (m *PChannelRecoveryManager) TransformLogForStream(vchannel string) transformlog.TransformLog {
 	module := m.Module(vchannel)
 	if module == nil {
 		return nil
@@ -266,12 +249,12 @@ func (m *PChannelRecoveryManager) shouldBroadcast(msg message.ImmutableMessage) 
 }
 
 func (m *PChannelRecoveryManager) observeBroadcastMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
-	results := make([]moduleapi.ObserveResult, 0)
-	for _, module := range m.snapshotModules() {
+	results := make([]moduleapi.ObserveResult, 0, m.modules.Len())
+	m.modules.Range(func(_ string, module *VChannelRecoveryModule) bool {
 		result := module.ObserveMessage(ctx, msg)
-		m.markDirtyIfNeeded(module.vchannel, result)
 		results = append(results, result)
-	}
+		return true
+	})
 	return moduleapi.ComposeBarriers(results)
 }
 
@@ -280,24 +263,27 @@ func (m *PChannelRecoveryManager) moduleForMessage(msg message.ImmutableMessage)
 	if vchannel == "" {
 		return nil
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	module := m.modules[vchannel]
+	module, _ := m.modules.Get(vchannel)
 	if module != nil || msg.MessageType() != message.MessageTypeCreateCollection {
 		return module
 	}
-	module, err := m.newModuleLocked(vchannel)
+	module, err := m.newModule(vchannel)
 	if err != nil {
 		return nil
 	}
-	if m.metaAndData {
+	switched := false
+	if m.metaAndData.Load() {
+		module.SwitchIntoMetaAndData()
+		switched = true
+	}
+	module, loaded := m.modules.GetOrInsert(vchannel, module)
+	if !loaded && !switched && m.metaAndData.Load() {
 		module.SwitchIntoMetaAndData()
 	}
-	m.modules[vchannel] = module
 	return module
 }
 
-func (m *PChannelRecoveryManager) newModuleLocked(vchannel string) (*VChannelRecoveryModule, error) {
+func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryModule, error) {
 	segments := make(map[int64]*streamingpb.SegmentAssignmentMeta)
 	for id, meta := range m.config.Segments {
 		if meta.GetVchannel() == vchannel {
@@ -327,61 +313,11 @@ func (m *PChannelRecoveryManager) newModuleLocked(vchannel string) (*VChannelRec
 		return nil, err
 	}
 	module.transformStream = m
-	module.onDirty = func() {
-		m.markDirty(vchannel)
-	}
 	return module, nil
-}
-
-func (m *PChannelRecoveryManager) snapshotModules() []*VChannelRecoveryModule {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.snapshotModulesLocked()
-}
-
-func (m *PChannelRecoveryManager) snapshotModulesLocked() []*VChannelRecoveryModule {
-	modules := make([]*VChannelRecoveryModule, 0, len(m.modules))
-	vchannels := make([]string, 0, len(m.modules))
-	for vchannel := range m.modules {
-		vchannels = append(vchannels, vchannel)
-	}
-	sort.Strings(vchannels)
-	for _, vchannel := range vchannels {
-		modules = append(modules, m.modules[vchannel])
-	}
-	return modules
-}
-
-func (m *PChannelRecoveryManager) snapshotDirtyModules() map[string]*VChannelRecoveryModule {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	modules := make(map[string]*VChannelRecoveryModule, len(m.dirty))
-	for vchannel := range m.dirty {
-		if module := m.modules[vchannel]; module != nil {
-			modules[vchannel] = module
-		}
-	}
-	return modules
-}
-
-func (m *PChannelRecoveryManager) markDirtyIfNeeded(vchannel string, result moduleapi.ObserveResult) {
-	if result.Meta == nil && result.Data == nil {
-		return
-	}
-	m.markDirty(vchannel)
-}
-
-func (m *PChannelRecoveryManager) markDirty(vchannel string) {
-	if vchannel == "" {
-		return
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.dirty[vchannel] = struct{}{}
 }
 
 var _ moduleapi.Module = (*PChannelRecoveryManager)(nil)
 var _ moduleapi.DataFrontierProvider = (*PChannelRecoveryManager)(nil)
 var _ wal.TransformLogStreamManager = (*PChannelRecoveryManager)(nil)
-var _ waltransformlog.StreamManager = (*PChannelRecoveryManager)(nil)
-var _ waltransformlog.StreamProvider = (*PChannelRecoveryManager)(nil)
+var _ transformlog.StreamManager = (*PChannelRecoveryManager)(nil)
+var _ transformlog.StreamProvider = (*PChannelRecoveryManager)(nil)
