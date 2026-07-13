@@ -60,13 +60,31 @@ does not hold the registry lock.
 ```go
 type Event interface {
     mlog.ObjectMarshaler
+    TriggerInfo
+    ComponentInfo
     LogLevel() mlog.Level
     isQueryViewEvent()
+}
+
+type TriggerInfo interface {
+    TriggerInfo() string
+}
+
+type ComponentInfo interface {
+    ComponentInfo() string
 }
 
 type baseEvent struct{}
 
 func (baseEvent) isQueryViewEvent() {}
+
+func (baseEvent) TriggerInfo() string {
+    return ""
+}
+
+func (baseEvent) ComponentInfo() string {
+    return ""
+}
 
 func FieldEvent(event Event) mlog.Field {
     return mlog.Inline(event)
@@ -78,6 +96,16 @@ Every observable event is represented by one concrete Go type and embeds
 mlog field, and inspect events with type assertions or type switches. `LogLevel`
 is part of the event contract so log observers can check whether the target
 level is enabled before constructing the inline event field.
+
+`TriggerInfo` is the low-cardinality reason associated with the event. Events
+that do not represent a state-machine trigger return an empty string. Metrics
+observers consume this value directly and must not re-derive trigger labels from
+event type names.
+
+`ComponentInfo` is the low-cardinality owner component associated with the
+event. The current values are `coord`, `queryNode`, and `streamingNode`.
+Metrics observers consume this value directly and must not re-derive component
+labels from event type names.
 
 ```go
 var _ Event = CoordViewQueryNodeLostAppliedEvent{}

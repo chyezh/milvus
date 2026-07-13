@@ -55,9 +55,43 @@ const (
 	eventCoordSyncViewBatchFailed           = "CoordSyncViewBatchFailed"
 )
 
+const (
+	triggerReportReady             = "reportReady"
+	triggerReportUnrecoverable     = "reportUnrecoverable"
+	triggerPreempt                 = "preempt"
+	triggerHandoff                 = "handoff"
+	triggerRelease                 = "release"
+	triggerAdvanceUnrecoverable    = "advanceUnrecoverable"
+	triggerQueryNodeLost           = "queryNodeLost"
+	triggerQueryNodeSegmentsReady  = "queryNodeSegmentsReady"
+	triggerQueryNodeReleaseDone    = "queryNodeReleaseDone"
+	triggerStreamingResourceReady  = "streamingResourceReady"
+	triggerStreamingRecoveringDone = "streamingRecoveringDone"
+	triggerStreamingReleaseDone    = "streamingReleaseDone"
+)
+
+const (
+	componentCoord         = "coord"
+	componentQueryNode     = "queryNode"
+	componentStreamingNode = "streamingNode"
+)
+
+// TriggerInfo describes the low-cardinality reason for an observable event.
+type TriggerInfo interface {
+	TriggerInfo() string
+}
+
+// ComponentInfo describes the low-cardinality component that owns an
+// observable event.
+type ComponentInfo interface {
+	ComponentInfo() string
+}
+
 // Event is the sealed interface implemented by all QueryView observability events.
 type Event interface {
 	mlog.ObjectMarshaler
+	TriggerInfo
+	ComponentInfo
 	LogLevel() mlog.Level
 	isQueryViewEvent()
 }
@@ -66,6 +100,14 @@ type Event interface {
 type baseEvent struct{}
 
 func (baseEvent) isQueryViewEvent() {}
+
+func (baseEvent) TriggerInfo() string {
+	return ""
+}
+
+func (baseEvent) ComponentInfo() string {
+	return ""
+}
 
 // FieldEvent returns an inline mlog field for a QueryView event.
 func FieldEvent(event Event) mlog.Field {
@@ -128,6 +170,10 @@ func (e CoordViewPreemptedEvent) LogLevel() mlog.Level {
 	return mlog.InfoLevel
 }
 
+func (e CoordViewPreemptedEvent) TriggerInfo() string {
+	return triggerPreempt
+}
+
 func (e CoordViewPreemptedEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
 	enc.AddString(fieldType, eventCoordViewPreempted)
 	enc.AddString(fieldSID, e.View.ShardID.String())
@@ -147,6 +193,10 @@ type CoordViewAdvancedFromUnrecoverableEvent struct {
 
 func (e CoordViewAdvancedFromUnrecoverableEvent) LogLevel() mlog.Level {
 	return mlog.InfoLevel
+}
+
+func (e CoordViewAdvancedFromUnrecoverableEvent) TriggerInfo() string {
+	return triggerAdvanceUnrecoverable
 }
 
 func (e CoordViewAdvancedFromUnrecoverableEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
@@ -169,6 +219,10 @@ func (e CoordViewReleaseRequestedEvent) LogLevel() mlog.Level {
 	return mlog.InfoLevel
 }
 
+func (e CoordViewReleaseRequestedEvent) TriggerInfo() string {
+	return triggerRelease
+}
+
 func (e CoordViewReleaseRequestedEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
 	enc.AddString(fieldType, eventCoordViewReleaseRequested)
 	enc.AddString(fieldSID, e.View.ShardID.String())
@@ -188,6 +242,10 @@ type CoordViewHandoffToNewUpEvent struct {
 
 func (e CoordViewHandoffToNewUpEvent) LogLevel() mlog.Level {
 	return mlog.InfoLevel
+}
+
+func (e CoordViewHandoffToNewUpEvent) TriggerInfo() string {
+	return triggerHandoff
 }
 
 func (e CoordViewHandoffToNewUpEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
@@ -218,6 +276,17 @@ func (e CoordViewReportAppliedEvent) LogLevel() mlog.Level {
 	return mlog.InfoLevel
 }
 
+func (e CoordViewReportAppliedEvent) TriggerInfo() string {
+	switch e.ReportedState {
+	case qviews.QueryViewStateReady:
+		return triggerReportReady
+	case qviews.QueryViewStateUnrecoverable:
+		return triggerReportUnrecoverable
+	default:
+		return "report" + e.ReportedState.String()
+	}
+}
+
 func (e CoordViewReportAppliedEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
 	enc.AddString(fieldType, eventCoordViewReportApplied)
 	enc.AddString(fieldSID, e.View.ShardID.String())
@@ -242,6 +311,10 @@ type CoordViewQueryNodeLostAppliedEvent struct {
 
 func (e CoordViewQueryNodeLostAppliedEvent) LogLevel() mlog.Level {
 	return mlog.WarnLevel
+}
+
+func (e CoordViewQueryNodeLostAppliedEvent) TriggerInfo() string {
+	return triggerQueryNodeLost
 }
 
 func (e CoordViewQueryNodeLostAppliedEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
@@ -284,6 +357,10 @@ type QueryNodeSegmentUnrecoverableEvent struct {
 
 func (e QueryNodeSegmentUnrecoverableEvent) LogLevel() mlog.Level {
 	return mlog.WarnLevel
+}
+
+func (e QueryNodeSegmentUnrecoverableEvent) TriggerInfo() string {
+	return triggerReportUnrecoverable
 }
 
 func (e QueryNodeSegmentUnrecoverableEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
@@ -329,6 +406,10 @@ func (e QueryNodeReleaseDoneEvent) LogLevel() mlog.Level {
 	return mlog.InfoLevel
 }
 
+func (e QueryNodeReleaseDoneEvent) TriggerInfo() string {
+	return triggerQueryNodeReleaseDone
+}
+
 func (e QueryNodeReleaseDoneEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
 	enc.AddString(fieldType, eventQNReleaseDone)
 	enc.AddString(fieldSID, e.View.ShardID.String())
@@ -367,6 +448,10 @@ type StreamingNodeRecoveringDoneEvent struct {
 
 func (e StreamingNodeRecoveringDoneEvent) LogLevel() mlog.Level {
 	return mlog.InfoLevel
+}
+
+func (e StreamingNodeRecoveringDoneEvent) TriggerInfo() string {
+	return triggerStreamingRecoveringDone
 }
 
 func (e StreamingNodeRecoveringDoneEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
@@ -408,6 +493,10 @@ type StreamingNodeReleaseDoneEvent struct {
 
 func (e StreamingNodeReleaseDoneEvent) LogLevel() mlog.Level {
 	return mlog.InfoLevel
+}
+
+func (e StreamingNodeReleaseDoneEvent) TriggerInfo() string {
+	return triggerStreamingReleaseDone
 }
 
 func (e StreamingNodeReleaseDoneEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
@@ -475,6 +564,10 @@ type QueryNodeSegmentsReadyEvent struct {
 
 func (e QueryNodeSegmentsReadyEvent) LogLevel() mlog.Level {
 	return mlog.InfoLevel
+}
+
+func (e QueryNodeSegmentsReadyEvent) TriggerInfo() string {
+	return triggerQueryNodeSegmentsReady
 }
 
 func (e QueryNodeSegmentsReadyEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
@@ -553,6 +646,10 @@ type StreamingNodeResourceReadyEvent struct {
 
 func (e StreamingNodeResourceReadyEvent) LogLevel() mlog.Level {
 	return mlog.InfoLevel
+}
+
+func (e StreamingNodeResourceReadyEvent) TriggerInfo() string {
+	return triggerStreamingResourceReady
 }
 
 func (e StreamingNodeResourceReadyEvent) MarshalLogObject(enc mlog.ObjectEncoder) error {
@@ -669,4 +766,116 @@ func (e CoordSyncViewBatchFailedEvent) MarshalLogObject(enc mlog.ObjectEncoder) 
 		enc.AddString(fieldError, e.Err.Error())
 	}
 	return nil
+}
+
+func (e CoordQueryNodeLostDetectedEvent) ComponentInfo() string {
+	return componentCoord
+}
+
+func (e CoordViewCreatedEvent) ComponentInfo() string {
+	return componentCoord
+}
+
+func (e CoordViewPreemptedEvent) ComponentInfo() string {
+	return componentCoord
+}
+
+func (e CoordViewAdvancedFromUnrecoverableEvent) ComponentInfo() string {
+	return componentCoord
+}
+
+func (e CoordViewReleaseRequestedEvent) ComponentInfo() string {
+	return componentCoord
+}
+
+func (e CoordViewHandoffToNewUpEvent) ComponentInfo() string {
+	return componentCoord
+}
+
+func (e CoordViewReportAppliedEvent) ComponentInfo() string {
+	return componentCoord
+}
+
+func (e CoordViewQueryNodeLostAppliedEvent) ComponentInfo() string {
+	return componentCoord
+}
+
+func (e CoordPersistViewEvent) ComponentInfo() string {
+	return componentCoord
+}
+
+func (e CoordSyncViewBatchEvent) ComponentInfo() string {
+	return componentCoord
+}
+
+func (e CoordSyncViewBatchFailedEvent) ComponentInfo() string {
+	return componentCoord
+}
+
+func (e QueryNodeApplyCoordViewEvent) ComponentInfo() string {
+	return componentQueryNode
+}
+
+func (e QueryNodeSegmentUnrecoverableEvent) ComponentInfo() string {
+	return componentQueryNode
+}
+
+func (e QueryNodeReportViewEvent) ComponentInfo() string {
+	return componentQueryNode
+}
+
+func (e QueryNodeReleaseDoneEvent) ComponentInfo() string {
+	return componentQueryNode
+}
+
+func (e QueryNodeSegmentFailureEvent) ComponentInfo() string {
+	return componentQueryNode
+}
+
+func (e QueryNodeAcquireSegmentsEvent) ComponentInfo() string {
+	return componentQueryNode
+}
+
+func (e QueryNodeSegmentsReadyEvent) ComponentInfo() string {
+	return componentQueryNode
+}
+
+func (e QueryNodeReleaseSegmentsEvent) ComponentInfo() string {
+	return componentQueryNode
+}
+
+func (e StreamingNodeApplyCoordViewEvent) ComponentInfo() string {
+	return componentStreamingNode
+}
+
+func (e StreamingNodeRecoveringDoneEvent) ComponentInfo() string {
+	return componentStreamingNode
+}
+
+func (e StreamingNodeReportViewEvent) ComponentInfo() string {
+	return componentStreamingNode
+}
+
+func (e StreamingNodeReleaseDoneEvent) ComponentInfo() string {
+	return componentStreamingNode
+}
+
+func (e StreamingNodeAcquireResourceEvent) ComponentInfo() string {
+	return componentStreamingNode
+}
+
+func (e StreamingNodeRecoverAcquireResourceEvent) ComponentInfo() string {
+	return componentStreamingNode
+}
+
+func (e StreamingNodeResourceReadyEvent) ComponentInfo() string {
+	return componentStreamingNode
+}
+
+func (e StreamingNodeReleaseResourceEvent) ComponentInfo() string {
+	return componentStreamingNode
+}
+
+func (e StreamingNodePersistViewEvent) ComponentInfo() string {
+	return componentStreamingNode
 }
