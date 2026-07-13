@@ -3,6 +3,7 @@ package transformlog
 import (
 	"context"
 	"io"
+	"sort"
 	"sync"
 
 	"github.com/cockroachdb/errors"
@@ -13,6 +14,116 @@ import (
 )
 
 const defaultStreamCatchupWorkers = 4
+
+type streamLogProvider interface {
+	logForStream(vchannel string) TransformLog
+	streamNotifyStateSince(seq uint64) (<-chan struct{}, uint64, []string)
+	validatePChannel(pchannel string) error
+}
+
+type StreamProvider interface {
+	TransformLogForStream(vchannel string) TransformLog
+	StreamNotifyStateSince(seq uint64) (<-chan struct{}, uint64, []string)
+	ValidatePChannel(pchannel string) error
+}
+
+type providerStreamManager struct {
+	provider StreamProvider
+}
+
+type streamProviderAdapter struct {
+	provider StreamProvider
+}
+
+type singleStreamManager struct {
+	pchannel string
+	vchannel string
+	log      TransformLog
+
+	streamMu     sync.Mutex
+	streamNotify chan struct{}
+	streamSeq    uint64
+	streamSeqByV map[string]uint64
+}
+
+type StreamManager interface {
+	wal.TransformLogStreamManager
+	Notify(vchannel string)
+}
+
+// NewStreamManager creates a TransformLog stream manager for one vchannel log.
+func NewStreamManager(pchannel string, vchannel string, log TransformLog) StreamManager {
+	return &singleStreamManager{
+		pchannel:     pchannel,
+		vchannel:     vchannel,
+		log:          log,
+		streamNotify: make(chan struct{}),
+		streamSeqByV: make(map[string]uint64),
+	}
+}
+
+func NewProviderStreamManager(provider StreamProvider) wal.TransformLogStreamManager {
+	return &providerStreamManager{provider: provider}
+}
+
+func (m *providerStreamManager) AcquireStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
+	return newTransformLogStream(ctx, streamProviderAdapter{provider: m.provider}, pchannel)
+}
+
+func (a streamProviderAdapter) logForStream(vchannel string) TransformLog {
+	return a.provider.TransformLogForStream(vchannel)
+}
+
+func (a streamProviderAdapter) validatePChannel(pchannel string) error {
+	return a.provider.ValidatePChannel(pchannel)
+}
+
+func (a streamProviderAdapter) streamNotifyStateSince(seq uint64) (<-chan struct{}, uint64, []string) {
+	return a.provider.StreamNotifyStateSince(seq)
+}
+
+func (m *singleStreamManager) AcquireStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
+	return newTransformLogStream(ctx, m, pchannel)
+}
+
+func (m *singleStreamManager) Notify(vchannel string) {
+	m.streamMu.Lock()
+	defer m.streamMu.Unlock()
+	m.streamSeq++
+	m.streamSeqByV[vchannel] = m.streamSeq
+	close(m.streamNotify)
+	m.streamNotify = make(chan struct{})
+}
+
+func (m *singleStreamManager) logForStream(vchannel string) TransformLog {
+	if vchannel != m.vchannel {
+		return nil
+	}
+	return m.log
+}
+
+func (m *singleStreamManager) validatePChannel(pchannel string) error {
+	if pchannel == "" {
+		return errors.Wrap(wal.ErrTransformLogInvalidReadOption, "pchannel is empty")
+	}
+	if m.pchannel != "" && m.pchannel != pchannel {
+		return errors.Wrapf(wal.ErrTransformLogInvalidReadOption, "pchannel mismatch, expected %s, got %s", m.pchannel, pchannel)
+	}
+	return nil
+}
+
+func (m *singleStreamManager) streamNotifyStateSince(seq uint64) (<-chan struct{}, uint64, []string) {
+	m.streamMu.Lock()
+	defer m.streamMu.Unlock()
+	changed := make([]string, 0)
+	for vchannel, vchannelSeq := range m.streamSeqByV {
+		if vchannelSeq > seq {
+			changed = append(changed, vchannel)
+		}
+	}
+	sort.Strings(changed)
+	return m.streamNotify, m.streamSeq, changed
+}
 
 type streamRequestKind int
 
@@ -63,18 +174,15 @@ const (
 	subscriptionStateClosed
 )
 
-func (m *Module) AcquireStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
-	if pchannel == "" {
-		return nil, errors.Wrap(wal.ErrTransformLogInvalidReadOption, "pchannel is empty")
-	}
-	if m.pchannel != "" && m.pchannel != pchannel {
-		return nil, errors.Wrapf(wal.ErrTransformLogInvalidReadOption, "pchannel mismatch, expected %s, got %s", m.pchannel, pchannel)
+func newTransformLogStream(ctx context.Context, provider streamLogProvider, pchannel string) (wal.TransformLogStream, error) {
+	if err := provider.validatePChannel(pchannel); err != nil {
+		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx) // #nosec G118 -- cancel is owned by transformLogStream.Close/finish.
 	stream := &transformLogStream{
 		ctx:          ctx,
 		cancel:       cancel,
-		module:       m,
+		provider:     provider,
 		pchannel:     pchannel,
 		requests:     make(chan streamRequest),
 		events:       make(chan streamEvent, 1024),
@@ -83,7 +191,7 @@ func (m *Module) AcquireStream(ctx context.Context, pchannel string) (wal.Transf
 		subs:         make(map[int64]*streamSubscription),
 		byVChannel:   make(map[string]map[int64]*streamSubscription),
 	}
-	_, stream.seenNotifySeq, _ = m.streamNotifyStateSince(0)
+	_, stream.seenNotifySeq, _ = provider.streamNotifyStateSince(0)
 	for i := 0; i < defaultStreamCatchupWorkers; i++ {
 		go stream.catchupWorker()
 	}
@@ -95,7 +203,7 @@ type transformLogStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	module   *Module
+	provider streamLogProvider
 	pchannel string
 
 	requests     chan streamRequest
@@ -171,7 +279,7 @@ func (s *transformLogStream) run() {
 	defer close(s.done)
 	defer close(s.catchupTasks)
 	for {
-		notifyCh, notifySeq, changedVChannels := s.module.streamNotifyStateSince(s.seenNotifySeq)
+		notifyCh, notifySeq, changedVChannels := s.provider.streamNotifyStateSince(s.seenNotifySeq)
 		if notifySeq != s.seenNotifySeq {
 			s.seenNotifySeq = notifySeq
 			s.dispatchChangedLive(changedVChannels)
@@ -215,11 +323,11 @@ func (s *transformLogStream) createSubscription(opt wal.TransformLogSubscription
 	if opt.VChannel == "" {
 		return nil, errors.Wrap(wal.ErrTransformLogInvalidReadOption, "vchannel is empty")
 	}
-	log := s.module.getLog(opt.VChannel)
+	log := s.provider.logForStream(opt.VChannel)
 	if log == nil {
 		return nil, errors.Wrap(wal.ErrTransformLogVChannelUnavailable, "transform log is not found")
 	}
-	transformLog, ok := log.log.(*transformLog)
+	transformLog, ok := log.(*transformLog)
 	if !ok {
 		return nil, merr.WrapErrServiceInternalMsg("transform log implementation does not support streaming")
 	}

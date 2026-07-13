@@ -1,4 +1,4 @@
-package recovery
+package vchannel
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 )
 
-const deleteReplayScannerName = "vchannel-wal-view-delete-replay"
+const deleteReplayScannerName = "vchannel-recovery-module-delete-replay"
 
 func newDeleteReplayScanner(
 	ctx context.Context,

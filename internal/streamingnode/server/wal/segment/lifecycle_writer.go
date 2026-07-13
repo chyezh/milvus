@@ -23,7 +23,7 @@ type segmentLifecycleWriter struct {
 	serverID int64
 }
 
-func NewSegmentLifecycleWriter(coord types.MixCoordClient, serverID int64) segmentLifecycle {
+func NewSegmentLifecycleWriter(coord types.MixCoordClient, serverID int64) Lifecycle {
 	return &segmentLifecycleWriter{
 		coord:    coord,
 		serverID: serverID,
@@ -123,4 +123,4 @@ func buildCommitL1SegmentRequest(serverID int64, meta *streamingpb.SegmentAssign
 	}
 }
 
-var _ segmentLifecycle = (*segmentLifecycleWriter)(nil)
+var _ Lifecycle = (*segmentLifecycleWriter)(nil)

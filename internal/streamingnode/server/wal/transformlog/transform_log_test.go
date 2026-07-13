@@ -16,14 +16,13 @@ import (
 )
 
 func TestReadDrainsCreationTailBeforeFutureAppends(t *testing.T) {
-	module := NewModule("p1", map[string]*streamingpb.VChannelTransformLogMeta{"v1": {}}, nil)
-	module.SwitchIntoMetaAndData()
-	transformLog := module.getLog("v1").log.(*transformLog)
+	transformLog := New(Config{VChannel: "v1"}).(*transformLog)
+	manager := NewStreamManager("p1", "v1", transformLog)
 	for timeTick := uint64(1); timeTick <= 20; timeTick++ {
 		require.True(t, transformLog.AppendBarrier(timeTick).Appended)
 	}
 
-	stream, err := module.AcquireStream(context.Background(), "p1")
+	stream, err := manager.AcquireStream(context.Background(), "p1")
 	require.NoError(t, err)
 	defer stream.Close()
 	handler := newRecordingStreamHandler()
@@ -38,7 +37,7 @@ func TestReadDrainsCreationTailBeforeFutureAppends(t *testing.T) {
 		return len(handler.events) == 16
 	}, time.Second, 10*time.Millisecond)
 	require.True(t, transformLog.AppendBarrier(21).Appended)
-	module.notifyStream("v1")
+	manager.Notify("v1")
 
 	for expected := uint64(1); expected <= 20; expected++ {
 		event := <-handler.events
@@ -53,14 +52,13 @@ func TestReadDrainsCreationTailBeforeFutureAppends(t *testing.T) {
 }
 
 func TestReadStopsAtEndTimeTick(t *testing.T) {
-	module := NewModule("p1", map[string]*streamingpb.VChannelTransformLogMeta{"v1": {}}, nil)
-	module.SwitchIntoMetaAndData()
-	transformLog := module.getLog("v1").log.(*transformLog)
+	transformLog := New(Config{VChannel: "v1"}).(*transformLog)
+	manager := NewStreamManager("p1", "v1", transformLog)
 	require.True(t, transformLog.AppendBarrier(10).Appended)
 	require.True(t, transformLog.AppendBarrier(20).Appended)
 	require.True(t, transformLog.AppendBarrier(30).Appended)
 
-	stream, err := module.AcquireStream(context.Background(), "p1")
+	stream, err := manager.AcquireStream(context.Background(), "p1")
 	require.NoError(t, err)
 	defer stream.Close()
 	handler := newRecordingStreamHandler()
@@ -101,20 +99,22 @@ func TestRecoverKeepsChunksColdUntilRead(t *testing.T) {
 		},
 	}))
 	store.resetReadCount()
-	module := NewModule("p1", map[string]*streamingpb.VChannelTransformLogMeta{
-		"v1": {
+	transformLog := New(Config{
+		VChannel: "v1",
+		Store:    store,
+		Meta: &streamingpb.VChannelTransformLogMeta{
 			CheckpointTimeTick: 10,
 			NextChunkId:        1,
 		},
-	}, store)
-	transformLog := module.getLog("v1").log.(*transformLog)
+	}).(*transformLog)
+	manager := NewStreamManager("p1", "v1", transformLog)
 
 	result, err := transformLog.Recover(context.Background(), nil)
 	require.NoError(t, err)
 	assert.True(t, result.Recovered)
 	assert.Equal(t, 0, store.readCount("v1", 0))
 
-	stream, err := module.AcquireStream(context.Background(), "p1")
+	stream, err := manager.AcquireStream(context.Background(), "p1")
 	require.NoError(t, err)
 	defer stream.Close()
 	handler := newRecordingStreamHandler()
@@ -189,13 +189,13 @@ func TestTruncateLoadsRecoveredColdChunkToAdvanceFirstChunk(t *testing.T) {
 }
 
 func TestFlushWhileScannerDrainsDoesNotDuplicateEntries(t *testing.T) {
-	module := NewModule("p1", map[string]*streamingpb.VChannelTransformLogMeta{"v1": {}}, newMemoryStore())
-	transformLog := module.getLog("v1").log.(*transformLog)
+	transformLog := New(Config{VChannel: "v1", Store: newMemoryStore()}).(*transformLog)
+	manager := NewStreamManager("p1", "v1", transformLog)
 	for timeTick := uint64(1); timeTick <= 20; timeTick++ {
 		require.True(t, transformLog.AppendBarrier(timeTick).Appended)
 	}
 
-	stream, err := module.AcquireStream(context.Background(), "p1")
+	stream, err := manager.AcquireStream(context.Background(), "p1")
 	require.NoError(t, err)
 	defer stream.Close()
 	handler := newRecordingStreamHandler()
@@ -264,7 +264,7 @@ func TestMaterializeAdvancesMaterializedBarrierAfterSnapshotPersisted(t *testing
 		Store:        newMemoryStore(),
 		Materializer: materializer,
 	}).(*transformLog)
-	require.True(t, transformLog.Append(newModuleTestDeleteMessage(t, 10), AppendOption{}).Appended)
+	require.True(t, transformLog.Append(newTransformLogTestDeleteMessage(t, 10), AppendOption{}).Appended)
 	_, err := transformLog.Flush(context.Background(), FlushOption{TargetTimeTick: 20})
 	require.NoError(t, err)
 
@@ -314,7 +314,7 @@ func TestMaterializeSkipsBarrierEntries(t *testing.T) {
 		Materializer: materializer,
 	}).(*transformLog)
 	require.True(t, transformLog.AppendBarrier(5).Appended)
-	require.True(t, transformLog.Append(newModuleTestDeleteMessage(t, 10), AppendOption{}).Appended)
+	require.True(t, transformLog.Append(newTransformLogTestDeleteMessage(t, 10), AppendOption{}).Appended)
 	require.True(t, transformLog.AppendBarrier(20).Appended)
 	_, err := transformLog.Flush(context.Background(), FlushOption{TargetTimeTick: 30})
 	require.NoError(t, err)
@@ -337,7 +337,7 @@ func TestFlushAdvancesCheckpointToFenceTimeTick(t *testing.T) {
 		Store:    newMemoryStore(),
 	}).(*transformLog)
 
-	appendResult := transformLog.Append(newModuleTestDeleteMessage(t, 10), AppendOption{})
+	appendResult := transformLog.Append(newTransformLogTestDeleteMessage(t, 10), AppendOption{})
 	require.True(t, appendResult.Appended)
 
 	result, err := transformLog.Flush(context.Background(), FlushOption{TargetTimeTick: 20})
@@ -359,8 +359,8 @@ func TestFlushKeepsCheckpointAtLastDurableEntryWhenTargetStillHasPendingEntries(
 		MaxRows:  1,
 	}).(*transformLog)
 
-	require.True(t, transformLog.Append(newModuleTestDeleteMessage(t, 10), AppendOption{}).Appended)
-	require.True(t, transformLog.Append(newModuleTestDeleteMessage(t, 11), AppendOption{}).Appended)
+	require.True(t, transformLog.Append(newTransformLogTestDeleteMessage(t, 10), AppendOption{}).Appended)
+	require.True(t, transformLog.Append(newTransformLogTestDeleteMessage(t, 11), AppendOption{}).Appended)
 
 	result, err := transformLog.Flush(context.Background(), FlushOption{TargetTimeTick: 20})
 	require.NoError(t, err)

@@ -9,7 +9,7 @@ import (
 )
 
 type segmentTaskBase struct {
-	segment      *segmentView
+	segment      *SegmentView
 	name         string
 	precondition scheduler.Precondition
 	done         atomic.Bool
@@ -104,7 +104,7 @@ func (t *commitL1SegmentTask) Run(ctx context.Context) error {
 	})
 }
 
-func (s *segmentView) newEnsureGrowingSegmentTaskLocked(timetick uint64) scheduler.Task {
+func (s *SegmentView) newEnsureGrowingSegmentTaskLocked(timetick uint64) scheduler.Task {
 	task := &ensureGrowingSegmentTask{
 		segmentTaskBase: s.newSegmentTaskBaseLocked("ensure-growing-segment"),
 		timetick:        timetick,
@@ -113,7 +113,7 @@ func (s *segmentView) newEnsureGrowingSegmentTaskLocked(timetick uint64) schedul
 	return task
 }
 
-func (s *segmentView) newFlushL1BufferTaskLocked() scheduler.Task {
+func (s *SegmentView) newFlushL1BufferTaskLocked() scheduler.Task {
 	task := &flushL1BufferTask{
 		segmentTaskBase: s.newSegmentTaskBaseLocked("flush-l1-buffer"),
 		timetick:        s.enqueuePendingFlushChunkLocked(),
@@ -122,7 +122,7 @@ func (s *segmentView) newFlushL1BufferTaskLocked() scheduler.Task {
 	return task
 }
 
-func (s *segmentView) newCommitL1SegmentTaskLocked(timetick uint64) scheduler.Task {
+func (s *SegmentView) newCommitL1SegmentTaskLocked(timetick uint64) scheduler.Task {
 	task := &commitL1SegmentTask{
 		segmentTaskBase: s.newSegmentTaskBaseLocked("commit-l1-segment"),
 		timetick:        timetick,
@@ -132,7 +132,7 @@ func (s *segmentView) newCommitL1SegmentTaskLocked(timetick uint64) scheduler.Ta
 	return task
 }
 
-func (s *segmentView) newSegmentTaskBaseLocked(name string) segmentTaskBase {
+func (s *SegmentView) newSegmentTaskBaseLocked(name string) segmentTaskBase {
 	return segmentTaskBase{
 		segment:      s,
 		name:         name,
@@ -140,7 +140,7 @@ func (s *segmentView) newSegmentTaskBaseLocked(name string) segmentTaskBase {
 	}
 }
 
-func (s *segmentView) segmentTaskPreconditionLocked() scheduler.Precondition {
+func (s *SegmentView) segmentTaskPreconditionLocked() scheduler.Precondition {
 	pending := s.pendingTasks[:0]
 	preconditions := make([]scheduler.Precondition, 0, len(s.pendingTasks))
 	for _, task := range s.pendingTasks {

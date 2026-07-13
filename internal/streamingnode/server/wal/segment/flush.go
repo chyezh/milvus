@@ -11,7 +11,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 )
 
-type packWriter interface {
+type PackWriter interface {
 	FlushInsertBuffer(ctx context.Context, pack *flushPack) (*flushResult, error)
 }
 

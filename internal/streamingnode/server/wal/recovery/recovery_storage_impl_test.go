@@ -13,11 +13,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/segment"
-	waltransformlog "github.com/milvus-io/milvus/internal/streamingnode/server/wal/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
@@ -318,7 +315,7 @@ func TestRecoveryStorageCreatesWALViewAfterAlterLoadConfig(t *testing.T) {
 	defer storage.metrics.Close()
 	defer storage.taskScheduler.Close()
 
-	storage.vchannelModule = vchannel.NewModule("test-pchannel", map[string]*streamingpb.VChannelMeta{
+	installTestVChanManager(t, storage, map[string]*streamingpb.VChannelMeta{
 		"test-vchannel": {
 			Vchannel:           "test-vchannel",
 			State:              streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
@@ -337,15 +334,9 @@ func TestRecoveryStorageCreatesWALViewAfterAlterLoadConfig(t *testing.T) {
 				},
 			},
 		},
+	}, map[string]*streamingpb.SegmentDataVersionSummary{
+		"test-vchannel": {DataVersion: &viewpb.DataVersion{StreamingVersion: 11, CompactVersion: 2}},
 	})
-	storage.segmentModule = segment.NewModule("test-pchannel", nil, storage.vchannelModule, nil,
-		segment.WithDataVersionSummaries(map[string]*streamingpb.SegmentDataVersionSummary{
-			"test-vchannel": {DataVersion: &viewpb.DataVersion{StreamingVersion: 11, CompactVersion: 2}},
-		}),
-	)
-	storage.transformLogModule = waltransformlog.NewModule("test-pchannel", nil, nil)
-	storage.transformLogModule.SwitchIntoMetaAndData()
-	storage.modules = []moduleapi.Module{storage.vchannelModule, storage.segmentModule, storage.transformLogModule}
 	listener := &recordingLoadConfigListener{}
 	storage.loadConfigListener = listener
 
@@ -392,37 +383,99 @@ func TestRecoveryStorageCreatesWALViewAfterAlterLoadConfig(t *testing.T) {
 	assert.Same(t, liveMsg, listener.observer.messages[0])
 }
 
-func TestDeleteReplayScannerUsesTransformLogStreamManager(t *testing.T) {
-	ctx := context.Background()
-	module := waltransformlog.NewModule("test-pchannel", map[string]*streamingpb.VChannelTransformLogMeta{
-		"v1": {},
-	}, nil)
-	module.SwitchIntoMetaAndData()
-	module.ObserveMessage(ctx, newRecoveryTestDeleteMessage(t, "v1", 10))
-	module.ObserveMessage(ctx, newRecoveryTestDeleteMessage(t, "v1", 20))
-	module.ObserveMessage(ctx, newRecoveryTestDeleteMessage(t, "v1", 30))
+func TestRecoveryStorageUsesVChannelRecoveryManagerForWALViewAndTransformLog(t *testing.T) {
+	checkpoint := &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(1),
+		TimeTick:  1,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: walimplstest.NewTestMessageID(1),
+			TimeTick:  1,
+		},
+	}
+	storage := newRecoveryStorage(types.PChannelInfo{Name: "test-pchannel"}, checkpoint)
+	defer storage.metrics.Close()
+	defer storage.taskScheduler.Close()
 
-	scanner := newDeleteReplayScanner(ctx, module, "test-pchannel", "v1", 0, 20)
-	defer scanner.Close()
+	loadConfig := &streamingpb.VChannelLoadConfig{
+		Header: &message.AlterLoadConfigMessageHeader{
+			DbId:         10,
+			CollectionId: 100,
+		},
+	}
+	manager, err := vchannel.NewPChannelRecoveryManager(vchannel.PChannelManagerConfig{
+		PChannel: "test-pchannel",
+		VChannelMetas: map[string]*streamingpb.VChannelMeta{
+			"test-vchannel": {
+				Vchannel:           "test-vchannel",
+				State:              streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
+				CheckpointTimeTick: 1,
+				LoadConfig:         loadConfig,
+				CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
+					CollectionId: 100,
+					Partitions: []*streamingpb.PartitionInfoOfVChannel{
+						{PartitionId: 200, State: streamingpb.PartitionState_PARTITION_STATE_NORMAL},
+					},
+					Schemas: []*streamingpb.CollectionSchemaOfVChannel{
+						{
+							Schema:             &schemapb.CollectionSchema{Name: "c100"},
+							State:              streamingpb.VChannelSchemaState_VCHANNEL_SCHEMA_STATE_NORMAL,
+							CheckpointTimeTick: 1,
+						},
+					},
+				},
+			},
+		},
+		SegmentDataVersionSummary: map[string]*streamingpb.SegmentDataVersionSummary{
+			"test-vchannel": {DataVersion: &viewpb.DataVersion{StreamingVersion: 11, CompactVersion: 2}},
+		},
+		TransformLogMetas: map[string]*streamingpb.VChannelTransformLogMeta{
+			"test-vchannel": {},
+		},
+		Runtime: moduleapi.Runtime{
+			Scheduler: storage.taskScheduler,
+			Notifier:  storage,
+		},
+	})
+	require.NoError(t, err)
+	manager.SwitchIntoMetaAndData()
+	storage.vchannelManager = manager
+	storage.modules = []moduleapi.Module{manager}
 
-	first := recvDeleteReplayEvent(t, scanner.Chan())
-	require.NotNil(t, first.Entry)
-	assert.Equal(t, uint64(10), first.Entry.GetTimeTick())
-	second := recvDeleteReplayEvent(t, scanner.Chan())
-	require.NotNil(t, second.Entry)
-	assert.Equal(t, uint64(20), second.Entry.GetTimeTick())
-	caughtUp := recvDeleteReplayEvent(t, scanner.Chan())
-	require.NotNil(t, caughtUp.CaughtUp)
+	view, ok := storage.newVChannelWALView("test-vchannel")
 
-	require.Eventually(t, func() bool {
-		select {
-		case <-scanner.Done():
-			return true
-		default:
-			return false
-		}
-	}, time.Second, 10*time.Millisecond)
-	assert.NoError(t, scanner.Error())
+	require.True(t, ok)
+	assert.Equal(t, "test-pchannel", view.PChannel)
+	assert.Equal(t, "test-vchannel", view.VChannel)
+	assert.Equal(t, int64(100), view.CollectionID)
+	assert.Equal(t, int64(11), view.SegmentSnapshot.DataVersion.StreamingVersion)
+	assert.Equal(t, int64(2), view.SegmentSnapshot.DataVersion.CompactVersion)
+	assert.True(t, proto.Equal(loadConfig, view.LoadConfig))
+	require.NotNil(t, view.Schema)
+	assert.Equal(t, "c100", view.Schema.GetName())
+	assert.Same(t, manager, storage.TransformLog())
+}
+
+func installTestVChanManager(
+	t *testing.T,
+	storage *recoveryStorageImpl,
+	vchannels map[string]*streamingpb.VChannelMeta,
+	summaries map[string]*streamingpb.SegmentDataVersionSummary,
+) *vchannel.PChannelRecoveryManager {
+	t.Helper()
+	manager, err := vchannel.NewPChannelRecoveryManager(vchannel.PChannelManagerConfig{
+		PChannel:                  storage.channel.Name,
+		VChannelMetas:             vchannels,
+		SegmentDataVersionSummary: summaries,
+		Runtime: moduleapi.Runtime{
+			Scheduler: storage.taskScheduler,
+			Notifier:  storage,
+		},
+	})
+	require.NoError(t, err)
+	manager.SwitchIntoMetaAndData()
+	storage.vchannelManager = manager
+	storage.modules = []moduleapi.Module{manager}
+	return manager
 }
 
 func TestRecoveryStorageDetachLoadConfigListenerStopsLoadCallbacks(t *testing.T) {
@@ -438,7 +491,7 @@ func TestRecoveryStorageDetachLoadConfigListenerStopsLoadCallbacks(t *testing.T)
 	defer storage.metrics.Close()
 	defer storage.taskScheduler.Close()
 
-	storage.vchannelModule = vchannel.NewModule("test-pchannel", map[string]*streamingpb.VChannelMeta{
+	installTestVChanManager(t, storage, map[string]*streamingpb.VChannelMeta{
 		"test-vchannel": {
 			Vchannel:           "test-vchannel",
 			State:              streamingpb.VChannelState_VCHANNEL_STATE_NORMAL,
@@ -454,11 +507,7 @@ func TestRecoveryStorageDetachLoadConfigListenerStopsLoadCallbacks(t *testing.T)
 				},
 			},
 		},
-	})
-	storage.segmentModule = segment.NewModule("test-pchannel", nil, storage.vchannelModule, nil)
-	storage.transformLogModule = waltransformlog.NewModule("test-pchannel", nil, nil)
-	storage.transformLogModule.SwitchIntoMetaAndData()
-	storage.modules = []moduleapi.Module{storage.vchannelModule, storage.segmentModule, storage.transformLogModule}
+	}, nil)
 	listener := &recordingLoadConfigListener{}
 	storage.loadConfigListener = listener
 	storage.DetachLoadConfigListener()
@@ -476,7 +525,9 @@ func TestRecoveryStorageDetachLoadConfigListenerStopsLoadCallbacks(t *testing.T)
 
 	require.Empty(t, listener.views)
 	require.Nil(t, listener.observer)
-	require.NotNil(t, storage.vchannelModule.VChannelMeta("test-vchannel").GetLoadConfig())
+	view, ok := storage.newVChannelWALView("test-vchannel")
+	require.True(t, ok)
+	require.NotNil(t, view.LoadConfig)
 }
 
 func TestRecoveryStorageEmitsDropForRecoveredVChannelWithoutLoadConfig(t *testing.T) {
@@ -832,37 +883,4 @@ func newBroadcastAckMessage(t *testing.T, builder interface {
 	return msgs[0].
 		WithTimeTick(10).
 		IntoImmutableMessage(walimplstest.NewTestMessageID(10))
-}
-
-func newRecoveryTestDeleteMessage(t *testing.T, vchannel string, timetick uint64) message.ImmutableDeleteMessageV1 {
-	t.Helper()
-	mutableMsg := message.NewDeleteMessageBuilderV1().
-		WithVChannel(vchannel).
-		WithHeader(&message.DeleteMessageHeader{
-			CollectionId: 1,
-			Rows:         1,
-		}).
-		WithBody(&msgpb.DeleteRequest{
-			Base:         &commonpb.MsgBase{MsgType: commonpb.MsgType_Delete},
-			CollectionID: 1,
-			PartitionID:  10,
-			PrimaryKeys:  &schemapb.IDs{IdField: &schemapb.IDs_IntId{IntId: &schemapb.LongArray{Data: []int64{1}}}},
-			Timestamps:   []uint64{timetick},
-		}).
-		MustBuildMutable()
-	msg := mutableMsg.WithTimeTick(timetick).
-		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
-		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
-	return message.MustAsImmutableDeleteMessageV1(msg)
-}
-
-func recvDeleteReplayEvent(t *testing.T, ch <-chan wal.TransformLogEvent) wal.TransformLogEvent {
-	t.Helper()
-	select {
-	case event := <-ch:
-		return event
-	case <-time.After(time.Second):
-		t.Fatal("timeout waiting delete replay event")
-		return wal.TransformLogEvent{}
-	}
 }

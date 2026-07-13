@@ -22,8 +22,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/tsoutil"
 )
 
-func newSegmentViewFromMeta(meta *streamingpb.SegmentAssignmentMeta, schema *schemapb.CollectionSchema, configs ...runtimeConfig) *segmentView {
-	return newSegmentView(
+func NewSegmentViewFromMeta(meta *streamingpb.SegmentAssignmentMeta, schema *schemapb.CollectionSchema, configs ...runtimeConfig) *SegmentView {
+	return NewSegmentView(
 		meta,
 		meta.GetCheckpointTimeTick(),
 		meta.GetDataCheckpointTimeTick(),
@@ -34,7 +34,7 @@ func newSegmentViewFromMeta(meta *streamingpb.SegmentAssignmentMeta, schema *sch
 	)
 }
 
-func newSegmentView(
+func NewSegmentView(
 	meta *streamingpb.SegmentAssignmentMeta,
 	persistedMetaTimeTick uint64,
 	persistedDataTimeTick uint64,
@@ -42,12 +42,12 @@ func newSegmentView(
 	pending writeOnlyInsertBuffer,
 	schema *schemapb.CollectionSchema,
 	config runtimeConfig,
-) *segmentView {
+) *SegmentView {
 	flushPolicy := config.flushPolicy
 	if flushPolicy == nil {
 		flushPolicy = newDefaultWriteOnlyFlushPolicy()
 	}
-	return &segmentView{
+	return &SegmentView{
 		meta:                  meta,
 		persistedMetaTimeTick: persistedMetaTimeTick,
 		persistedDataTimeTick: persistedDataTimeTick,
@@ -65,8 +65,8 @@ func newSegmentView(
 	}
 }
 
-func newSegmentViewFromCreateSegmentMessage(msg message.ImmutableCreateSegmentMessageV2, schema *schemapb.CollectionSchema, configs ...runtimeConfig) *segmentView {
-	return newSegmentView(
+func NewSegmentViewFromCreateSegmentMessage(msg message.ImmutableCreateSegmentMessageV2, schema *schemapb.CollectionSchema, configs ...runtimeConfig) *SegmentView {
+	return NewSegmentView(
 		newSegmentAssignmentMetaFromCreateSegmentMessage(msg),
 		0,
 		0,
@@ -103,8 +103,8 @@ func newSegmentAssignmentMetaFromCreateSegmentMessage(msg message.ImmutableCreat
 	}
 }
 
-// segmentView tracks the metadata and durability state of a growing segment.
-type segmentView struct {
+// SegmentView tracks the metadata and durability state of a growing segment.
+type SegmentView struct {
 	mu sync.Mutex
 
 	// meta is the in-memory segment recovery state. It is updated synchronously by
@@ -124,8 +124,8 @@ type segmentView struct {
 
 	// lifecycle commits data-side segment state to the coordinator after object
 	// storage output is ready.
-	lifecycle    segmentLifecycle
-	packWriter   packWriter             // writes pending insert data to object storage.
+	lifecycle    Lifecycle
+	packWriter   PackWriter             // writes pending insert data to object storage.
 	runtime      moduleapi.Runtime      // schedules segment-owned data tasks.
 	pendingTasks []scheduler.TaskHandle // unfinished segment tasks used as preconditions.
 	pending      writeOnlyInsertBuffer  // in-memory insert buffer not yet written as L1.
@@ -140,19 +140,72 @@ type segmentView struct {
 	commitL1Limiter    *commitL1Limiter
 }
 
-func (s *segmentView) ID() int64 {
+// ViewOption configures a segment-level recovery view.
+type ViewOption func(*runtimeConfig)
+
+func WithViewLifecycle(lifecycle Lifecycle) ViewOption {
+	return func(config *runtimeConfig) {
+		config.lifecycle = lifecycle
+	}
+}
+
+func WithViewPackWriter(writer PackWriter) ViewOption {
+	return func(config *runtimeConfig) {
+		config.packWriter = writer
+	}
+}
+
+func WithViewRuntime(runtime moduleapi.Runtime) ViewOption {
+	return func(config *runtimeConfig) {
+		config.runtime = runtime
+	}
+}
+
+func WithViewSegmentSealedNotifier(notifier func(walview.SegmentSealedEvent)) ViewOption {
+	return func(config *runtimeConfig) {
+		config.onSegmentSealed = notifier
+	}
+}
+
+func WithViewDataUpdatedNotifier(notifier func()) ViewOption {
+	return func(config *runtimeConfig) {
+		config.onDataUpdated = notifier
+	}
+}
+
+// NewSegmentViewFromMetaWithOptions creates a segment-level recovery view from
+// persisted meta.
+func NewSegmentViewFromMetaWithOptions(meta *streamingpb.SegmentAssignmentMeta, schema *schemapb.CollectionSchema, opts ...ViewOption) *SegmentView {
+	config := runtimeConfig{}
+	for _, opt := range opts {
+		opt(&config)
+	}
+	return NewSegmentViewFromMeta(meta, schema, config)
+}
+
+// NewSegmentViewFromCreateSegmentMessageWithOptions creates a segment-level
+// recovery view from a CreateSegment WAL message.
+func NewSegmentViewFromCreateSegmentMessageWithOptions(msg message.ImmutableCreateSegmentMessageV2, schema *schemapb.CollectionSchema, opts ...ViewOption) *SegmentView {
+	config := runtimeConfig{}
+	for _, opt := range opts {
+		opt(&config)
+	}
+	return NewSegmentViewFromCreateSegmentMessage(msg, schema, config)
+}
+
+func (s *SegmentView) ID() int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.meta.GetSegmentId()
 }
 
-func (s *segmentView) HasDirty() bool {
+func (s *SegmentView) HasDirty() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.dirty
 }
 
-func (s *segmentView) ObserveCreateSegmentMessageV2(_ context.Context, msg message.ImmutableCreateSegmentMessageV2) moduleapi.ObserveResult {
+func (s *SegmentView) ObserveCreateSegmentMessageV2(_ context.Context, msg message.ImmutableCreateSegmentMessageV2) moduleapi.ObserveResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -173,7 +226,7 @@ func (s *segmentView) ObserveCreateSegmentMessageV2(_ context.Context, msg messa
 	return result
 }
 
-func (s *segmentView) ObserveInsertMessageV1(
+func (s *SegmentView) ObserveInsertMessageV1(
 	_ context.Context,
 	msg message.ImmutableInsertMessageV1,
 	assignment *messagespb.PartitionSegmentAssignment,
@@ -207,7 +260,7 @@ func (s *segmentView) ObserveInsertMessageV1(
 	return result
 }
 
-func (s *segmentView) ObserveTxnMessage(_ context.Context, msg message.ImmutableTxnMessage) moduleapi.ObserveResult {
+func (s *SegmentView) ObserveTxnMessage(_ context.Context, msg message.ImmutableTxnMessage) moduleapi.ObserveResult {
 	var task scheduler.Task
 	matched := false
 	appliedData := false
@@ -261,7 +314,7 @@ func (s *segmentView) ObserveTxnMessage(_ context.Context, msg message.Immutable
 	return result
 }
 
-func (s *segmentView) observeInsertMetaLocked(timetick uint64, assignment *messagespb.PartitionSegmentAssignment) {
+func (s *SegmentView) observeInsertMetaLocked(timetick uint64, assignment *messagespb.PartitionSegmentAssignment) {
 	s.ensureStat()
 	s.meta.Stat.ModifiedBinarySize += assignment.GetBinarySize()
 	s.meta.Stat.ModifiedRows += assignment.GetRows()
@@ -270,7 +323,7 @@ func (s *segmentView) observeInsertMetaLocked(timetick uint64, assignment *messa
 	s.dirty = true
 }
 
-func (s *segmentView) Flush(_ context.Context, timetick uint64) moduleapi.ObserveResult {
+func (s *SegmentView) Flush(_ context.Context, timetick uint64) moduleapi.ObserveResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -291,7 +344,7 @@ func (s *segmentView) Flush(_ context.Context, timetick uint64) moduleapi.Observ
 	return result
 }
 
-func (s *segmentView) FlushInsertChunk(ctx context.Context, targetTimeTick uint64) error {
+func (s *SegmentView) FlushInsertChunk(ctx context.Context, targetTimeTick uint64) error {
 	if targetTimeTick == 0 {
 		return nil
 	}
@@ -317,31 +370,31 @@ func (s *segmentView) FlushInsertChunk(ctx context.Context, targetTimeTick uint6
 	return nil
 }
 
-func (info *segmentView) AssignmentMeta() *streamingpb.SegmentAssignmentMeta {
+func (info *SegmentView) AssignmentMeta() *streamingpb.SegmentAssignmentMeta {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	return proto.Clone(info.meta).(*streamingpb.SegmentAssignmentMeta)
 }
 
-func (info *segmentView) IDAndVChannel() (int64, string) {
+func (info *SegmentView) IDAndVChannel() (int64, string) {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	return info.meta.GetSegmentId(), info.meta.GetVchannel()
 }
 
-func (info *segmentView) VChannel() string {
+func (info *SegmentView) VChannel() string {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	return info.meta.GetVchannel()
 }
 
-func (info *segmentView) PartitionID() int64 {
+func (info *SegmentView) PartitionID() int64 {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	return info.meta.GetPartitionId()
 }
 
-func (info *segmentView) MatchesScope(scope moduleapi.Scope) bool {
+func (info *SegmentView) MatchesScope(scope moduleapi.Scope) bool {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	switch scope.Type {
@@ -359,7 +412,7 @@ func (info *segmentView) MatchesScope(scope moduleapi.Scope) bool {
 	}
 }
 
-func (info *segmentView) VisibleSnapshot(vchannel string, dataVersion qviews.DataVersion) (walview.VisibleSegment, bool) {
+func (info *SegmentView) VisibleSnapshot(vchannel string, dataVersion qviews.DataVersion) (walview.VisibleSegment, bool) {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	if info.meta.GetVchannel() != vchannel || !info.visibleAtDataVersionLocked(dataVersion) {
@@ -384,7 +437,7 @@ func (info *segmentView) VisibleSnapshot(vchannel string, dataVersion qviews.Dat
 	return visible, true
 }
 
-func (info *segmentView) visibleAtDataVersionLocked(dataVersion qviews.DataVersion) bool {
+func (info *SegmentView) visibleAtDataVersionLocked(dataVersion qviews.DataVersion) bool {
 	switch info.meta.GetState() {
 	case streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING:
 		return true
@@ -398,7 +451,7 @@ func (info *segmentView) visibleAtDataVersionLocked(dataVersion qviews.DataVersi
 	}
 }
 
-func (info *segmentView) SealedDataVersion(vchannel string) (qviews.DataVersion, bool) {
+func (info *SegmentView) SealedDataVersion(vchannel string) (qviews.DataVersion, bool) {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	if info.meta.GetVchannel() != vchannel ||
@@ -409,7 +462,7 @@ func (info *segmentView) SealedDataVersion(vchannel string) (qviews.DataVersion,
 	return qviews.FromProtoDataVersion(info.meta.GetSealedAtDataVersion()), true
 }
 
-func (info *segmentView) TombstonedSealedDataVersion() (string, qviews.DataVersion, bool) {
+func (info *SegmentView) TombstonedSealedDataVersion() (string, qviews.DataVersion, bool) {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	if info.meta.GetState() != streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_TOMBSTONED ||
@@ -433,27 +486,35 @@ func clonePersistedStorage(storage *streamingpb.L1SegmentPersistedStorage) *stre
 	return proto.Clone(storage).(*streamingpb.L1SegmentPersistedStorage)
 }
 
-func (info *segmentView) metaTimeTick() uint64 {
+func (info *SegmentView) metaTimeTick() uint64 {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	return info.persistedMetaTimeTick
 }
 
-func (info *segmentView) metaBarrier() walcheckpoint.Barrier {
+func (info *SegmentView) metaBarrier() walcheckpoint.Barrier {
 	return walcheckpoint.BarrierFunc(info.metaTimeTick)
 }
 
-func (info *segmentView) dataTimeTick() uint64 {
+func (info *SegmentView) MetaBarrier() walcheckpoint.Barrier {
+	return info.metaBarrier()
+}
+
+func (info *SegmentView) dataTimeTick() uint64 {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	return info.persistedDataTimeTick
 }
 
-func (info *segmentView) dataBarrier() walcheckpoint.Barrier {
+func (info *SegmentView) dataBarrier() walcheckpoint.Barrier {
 	return walcheckpoint.BarrierFunc(info.dataTimeTick)
 }
 
-func (info *segmentView) DurableFrontierTimeTick() uint64 {
+func (info *SegmentView) DataBarrier() walcheckpoint.Barrier {
+	return info.dataBarrier()
+}
+
+func (info *SegmentView) DurableFrontierTimeTick() uint64 {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	if info.meta.GetState() == streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_TOMBSTONED {
@@ -468,7 +529,14 @@ func (info *segmentView) DurableFrontierTimeTick() uint64 {
 	return min(info.persistedMetaTimeTick, info.persistedDataTimeTick)
 }
 
-func (info *segmentView) hasPendingDataWorkLocked() bool {
+func frontierBefore(timetick uint64) uint64 {
+	if timetick == 0 {
+		return 0
+	}
+	return timetick - 1
+}
+
+func (info *SegmentView) hasPendingDataWorkLocked() bool {
 	if info.meta.GetDataCheckpointTimeTick() > info.persistedDataTimeTick {
 		return true
 	}
@@ -487,25 +555,25 @@ func (info *segmentView) hasPendingDataWorkLocked() bool {
 	return false
 }
 
-func (info *segmentView) CreateTimeTick() uint64 {
+func (info *SegmentView) CreateTimeTick() uint64 {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	return info.meta.GetStat().GetCreateSegmentTimeTick()
 }
 
-func (info *segmentView) markMetaPersistedLocked(timetick uint64) {
+func (info *SegmentView) markMetaPersistedLocked(timetick uint64) {
 	if timetick > info.persistedMetaTimeTick {
 		info.persistedMetaTimeTick = timetick
 	}
 }
 
-func (info *segmentView) markDataPersistedLocked(timetick uint64) {
+func (info *SegmentView) markDataPersistedLocked(timetick uint64) {
 	if timetick > info.persistedDataTimeTick {
 		info.persistedDataTimeTick = timetick
 	}
 }
 
-func (info *segmentView) MarkSnapshotPersisted(snapshot *streamingpb.SegmentAssignmentMeta) {
+func (info *SegmentView) MarkSnapshotPersisted(snapshot *streamingpb.SegmentAssignmentMeta) {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	info.markMetaPersistedLocked(snapshot.GetCheckpointTimeTick())
@@ -516,19 +584,19 @@ func (info *segmentView) MarkSnapshotPersisted(snapshot *streamingpb.SegmentAssi
 	info.dirty = !proto.Equal(info.meta, snapshot)
 }
 
-func (info *segmentView) NotifyDataUpdated() {
+func (info *SegmentView) NotifyDataUpdated() {
 	if info.onDataUpdated != nil {
 		info.onDataUpdated()
 	}
 }
 
-func (info *segmentView) NotifySegmentSealed(event walview.SegmentSealedEvent) {
+func (info *SegmentView) NotifySegmentSealed(event walview.SegmentSealedEvent) {
 	if info.onSegmentSealed != nil {
 		info.onSegmentSealed(event)
 	}
 }
 
-func (info *segmentView) markDataCheckpointLocked(timetick uint64) {
+func (info *SegmentView) markDataCheckpointLocked(timetick uint64) {
 	if timetick <= info.meta.GetDataCheckpointTimeTick() {
 		return
 	}
@@ -537,25 +605,25 @@ func (info *segmentView) markDataCheckpointLocked(timetick uint64) {
 	info.prunePendingFlushChunksLocked()
 }
 
-func (info *segmentView) TryFinalizeTombstone() bool {
+func (info *SegmentView) TryFinalizeTombstone() bool {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	return info.maybeMarkTombstonedLocked()
 }
 
-func (info *segmentView) HasReadyTombstoneFinalize() bool {
+func (info *SegmentView) HasReadyTombstoneFinalize() bool {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	return info.tombstoneFinalizeReadyLocked()
 }
 
-func (info *segmentView) SwitchIntoMetaAndData() {
+func (info *SegmentView) SwitchIntoMetaAndData() {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	info.metaAndData = true
 }
 
-func (info *segmentView) SetSchema(schema *schemapb.CollectionSchema) {
+func (info *SegmentView) SetSchema(schema *schemapb.CollectionSchema) {
 	if schema == nil {
 		return
 	}
@@ -564,13 +632,13 @@ func (info *segmentView) SetSchema(schema *schemapb.CollectionSchema) {
 	info.schema = schema
 }
 
-func (info *segmentView) IsGrowing() bool {
+func (info *SegmentView) IsGrowing() bool {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	return info.meta.State == streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING
 }
 
-func (info *segmentView) canReplayInsertLocked(timetick uint64) bool {
+func (info *SegmentView) canReplayInsertLocked(timetick uint64) bool {
 	switch info.meta.GetState() {
 	case streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_GROWING:
 		return true
@@ -581,11 +649,11 @@ func (info *segmentView) canReplayInsertLocked(timetick uint64) bool {
 	}
 }
 
-func (info *segmentView) shouldSkipReplayLocked(timetick uint64) bool {
+func (info *SegmentView) shouldSkipReplayLocked(timetick uint64) bool {
 	return shouldSkipTombstonedSegmentMeta(info.meta, timetick)
 }
 
-func (info *segmentView) TombstonePersisted() bool {
+func (info *SegmentView) TombstonePersisted() bool {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	tombstoneTimeTick := info.meta.GetTombstoneTimeTick()
@@ -596,7 +664,7 @@ func (info *segmentView) TombstonePersisted() bool {
 		info.persistedDataTimeTick >= tombstoneTimeTick
 }
 
-func (info *segmentView) CoveredByTombstone(vchannel string, partitionID int64, timetick uint64) bool {
+func (info *SegmentView) CoveredByTombstone(vchannel string, partitionID int64, timetick uint64) bool {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	if info.meta.GetVchannel() != vchannel {
@@ -609,13 +677,13 @@ func (info *segmentView) CoveredByTombstone(vchannel string, partitionID int64, 
 	return createTimeTick < timetick
 }
 
-func (info *segmentView) TombstonedCleanupReady(metaPhysicalTimeTick uint64, dataPhysicalTimeTick uint64) bool {
+func (info *SegmentView) TombstonedCleanupReady(metaPhysicalTimeTick uint64, dataPhysicalTimeTick uint64) bool {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	return info.tombstonedCleanupReadyLocked(metaPhysicalTimeTick, dataPhysicalTimeTick)
 }
 
-func (info *segmentView) tombstonedCleanupReadyLocked(metaPhysicalTimeTick uint64, dataPhysicalTimeTick uint64) bool {
+func (info *SegmentView) tombstonedCleanupReadyLocked(metaPhysicalTimeTick uint64, dataPhysicalTimeTick uint64) bool {
 	tombstoneTimeTick := info.meta.GetTombstoneTimeTick()
 	return info.meta.GetState() == streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_TOMBSTONED &&
 		tombstoneTimeTick > 0 &&
@@ -626,7 +694,7 @@ func (info *segmentView) tombstonedCleanupReadyLocked(metaPhysicalTimeTick uint6
 		dataPhysicalTimeTick > tombstoneTimeTick
 }
 
-func (info *segmentView) observeFlushMeta(timetick uint64) (bool, uint64, bool) {
+func (info *SegmentView) observeFlushMeta(timetick uint64) (bool, uint64, bool) {
 	if info.meta.State == streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_TOMBSTONED {
 		return false, info.meta.GetCheckpointTimeTick(), false
 	}
@@ -649,14 +717,14 @@ func (info *segmentView) observeFlushMeta(timetick uint64) (bool, uint64, bool) 
 	return true, timetick, true
 }
 
-func (s *segmentView) MarkPendingDataDurable(timetick uint64) {
+func (s *SegmentView) MarkPendingDataDurable(timetick uint64) {
 	if timetick <= s.meta.GetDataCheckpointTimeTick() {
 		return
 	}
 	s.markDataCheckpointLocked(timetick)
 }
 
-func (s *segmentView) markSealedAtDataVersionLocked(version *viewpb.DataVersion) (walview.SegmentSealedEvent, bool) {
+func (s *SegmentView) markSealedAtDataVersionLocked(version *viewpb.DataVersion) (walview.SegmentSealedEvent, bool) {
 	if version == nil {
 		return walview.SegmentSealedEvent{}, false
 	}
@@ -676,7 +744,7 @@ func (s *segmentView) markSealedAtDataVersionLocked(version *viewpb.DataVersion)
 	}, true
 }
 
-func (s *segmentView) maybeMarkTombstonedLocked() bool {
+func (s *SegmentView) maybeMarkTombstonedLocked() bool {
 	if !s.tombstoneFinalizeReadyLocked() {
 		return false
 	}
@@ -687,7 +755,7 @@ func (s *segmentView) maybeMarkTombstonedLocked() bool {
 	return true
 }
 
-func (s *segmentView) tombstoneFinalizeReadyLocked() bool {
+func (s *SegmentView) tombstoneFinalizeReadyLocked() bool {
 	tombstoneTimeTick := s.meta.GetCheckpointTimeTick()
 	return s.meta.GetState() == streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED &&
 		tombstoneTimeTick > 0 &&
@@ -701,7 +769,7 @@ func shouldSkipTombstonedSegmentMeta(meta *streamingpb.SegmentAssignmentMeta, ti
 		timetick <= meta.GetTombstoneTimeTick()
 }
 
-func (s *segmentView) enqueuePendingFlushChunkLocked() uint64 {
+func (s *SegmentView) enqueuePendingFlushChunkLocked() uint64 {
 	chunk := s.pending.takeAll()
 	if len(chunk.entries) == 0 {
 		return 0
@@ -710,7 +778,7 @@ func (s *segmentView) enqueuePendingFlushChunkLocked() uint64 {
 	return chunk.toTimeTick
 }
 
-func (s *segmentView) flushPackForTimeTickLocked(timetick uint64) *flushPack {
+func (s *SegmentView) flushPackForTimeTickLocked(timetick uint64) *flushPack {
 	for _, chunk := range s.pendingFlushChunks {
 		if chunk.toTimeTick == timetick {
 			return chunk.flushPack(s.meta, s.schema)
@@ -719,7 +787,7 @@ func (s *segmentView) flushPackForTimeTickLocked(timetick uint64) *flushPack {
 	return nil
 }
 
-func (s *segmentView) prunePendingFlushChunksLocked() {
+func (s *SegmentView) prunePendingFlushChunksLocked() {
 	dataCheckpoint := s.meta.GetDataCheckpointTimeTick()
 	remaining := s.pendingFlushChunks[:0]
 	for _, chunk := range s.pendingFlushChunks {
@@ -731,7 +799,7 @@ func (s *segmentView) prunePendingFlushChunksLocked() {
 	s.pendingFlushChunks = remaining
 }
 
-func (s *segmentView) appendPersistedStorage(storage *streamingpb.L1SegmentPersistedStorage) {
+func (s *SegmentView) appendPersistedStorage(storage *streamingpb.L1SegmentPersistedStorage) {
 	if s.meta.PersistedStorage == nil {
 		s.meta.PersistedStorage = &streamingpb.L1SegmentPersistedStorage{}
 	}
@@ -747,13 +815,13 @@ func (s *segmentView) appendPersistedStorage(storage *streamingpb.L1SegmentPersi
 	}
 }
 
-func (info *segmentView) ensureStat() {
+func (info *SegmentView) ensureStat() {
 	if info.meta.Stat == nil {
 		info.meta.Stat = &streamingpb.SegmentAssignmentStat{}
 	}
 }
 
-func (info *segmentView) ConsumeDirtyAndGetSnapshot() *streamingpb.SegmentAssignmentMeta {
+func (info *SegmentView) ConsumeDirtyAndGetSnapshot() *streamingpb.SegmentAssignmentMeta {
 	info.mu.Lock()
 	defer info.mu.Unlock()
 	if info.pendingDirtySnapshot != nil {

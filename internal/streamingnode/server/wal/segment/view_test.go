@@ -10,7 +10,7 @@ import (
 )
 
 func TestConsumeDirtySnapshotKeepsStableInFlightView(t *testing.T) {
-	view := newSegmentView(
+	view := NewSegmentView(
 		&streamingpb.SegmentAssignmentMeta{
 			SegmentId:              1,
 			CheckpointTimeTick:     10,

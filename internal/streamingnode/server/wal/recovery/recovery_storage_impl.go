@@ -143,9 +143,7 @@ type recoveryStorageImpl struct {
 	checkpoint             *WALCheckpoint
 	checkpointManager      *walcheckpoint.Manager
 	metaObservedCheckpoint utility.WALConsumeCheckpoint
-	vchannelModule         *vchannel.Module
-	segmentModule          *segment.Module
-	transformLogModule     *waltransformlog.Module
+	vchannelManager        *vchannel.PChannelRecoveryManager
 	modules                []moduleapi.Module
 	taskScheduler          *scheduler.Scheduler
 	dirtyCounter           int // records the message count since last persist snapshot.
@@ -191,28 +189,6 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		Scheduler: r.taskScheduler,
 		Notifier:  r,
 	}
-	r.vchannelModule = vchannel.NewModule(
-		r.channel.Name,
-		vchannels,
-		vchannel.WithModuleRuntime(r.Logger(), moduleRuntime),
-	)
-	r.segmentModule = segment.NewModule(
-		r.channel.Name,
-		segments,
-		r.vchannelModule,
-		segment.NewSegmentLifecycleWriter(coord, paramtable.GetNodeID()),
-		segment.WithDataVersionSummaries(segmentDataVersionSummaries),
-		segment.WithPackWriter(segment.NewBulkPackWriter(
-			resource.Resource().ChunkManager(),
-			idalloc.NewMAllocator(resource.Resource().IDAllocator()),
-			nil,
-		)),
-		segment.WithModuleRuntime(r.Logger(), moduleRuntime),
-		segment.WithSegmentSealedNotifier(func(event walview.SegmentSealedEvent) {
-			r.observeSegmentSealedEvent(event)
-		}),
-		segment.WithDynamicCommitL1Concurrency(&paramtable.Get().StreamingCfg.FlushL1CommitConcurrency),
-	)
 	transformLogStore := waltransformlog.NewObjectChunkStore(
 		resource.Resource().ChunkManager(),
 		r.channel.Name,
@@ -222,26 +198,39 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		idalloc.NewMAllocator(resource.Resource().IDAllocator()),
 		syncmgr.BrokerMetaWriter(broker.NewCoordBroker(coord, paramtable.GetNodeID()), paramtable.GetNodeID()),
 	)
-	r.transformLogModule = waltransformlog.NewModule(
-		r.channel.Name,
-		transformLogMetas,
-		transformLogStore,
-		waltransformlog.WithModuleRuntime(moduleRuntime),
-		waltransformlog.WithModuleMaterializer(transformLogMaterializer),
-		waltransformlog.WithModuleMaterializeLimits(
-			uint64(paramtable.Get().StreamingCfg.FlushL0MaxRowNum.GetAsInt()),
-			uint64(paramtable.Get().StreamingCfg.FlushL0MaxSize.GetAsSize()),
+	manager, err := vchannel.NewPChannelRecoveryManager(vchannel.PChannelManagerConfig{
+		PChannel:                  r.channel.Name,
+		VChannelMetas:             vchannels,
+		Segments:                  segments,
+		SegmentDataVersionSummary: segmentDataVersionSummaries,
+		TransformLogMetas:         transformLogMetas,
+		Runtime:                   moduleRuntime,
+		Logger:                    r.Logger(),
+		SegmentLifecycle:          segment.NewSegmentLifecycleWriter(coord, paramtable.GetNodeID()),
+		SegmentPackWriter: segment.NewBulkPackWriter(
+			resource.Resource().ChunkManager(),
+			idalloc.NewMAllocator(resource.Resource().IDAllocator()),
+			nil,
 		),
-	)
-	if err := r.transformLogModule.Recover(ctx); err != nil {
+		TransformLogStore:         transformLogStore,
+		TransformLogMaterializer:  transformLogMaterializer,
+		TransformLogMaxRows:       uint64(paramtable.Get().StreamingCfg.FlushL0MaxRowNum.GetAsInt()),
+		TransformLogMaterialRows:  uint64(paramtable.Get().StreamingCfg.FlushL0MaxRowNum.GetAsInt()),
+		TransformLogMaterialBytes: uint64(paramtable.Get().StreamingCfg.FlushL0MaxSize.GetAsSize()),
+		OnSegmentSealed: func(event walview.SegmentSealedEvent) {
+			r.observeSegmentSealedEvent(event)
+		},
+	})
+	if err != nil {
 		return err
 	}
-	frontierProvider := newDataFrontierProvider(r.segmentModule, r.transformLogModule)
+	if err := manager.Recover(ctx); err != nil {
+		return err
+	}
+	r.vchannelManager = manager
 	r.modules = []moduleapi.Module{
-		r.vchannelModule,
-		r.segmentModule,
-		r.transformLogModule,
-		newBroadcastAckModule(r.channel.Name, frontierProvider, moduleRuntime),
+		r.vchannelManager,
+		newBroadcastAckModule(r.channel.Name, r.vchannelManager, moduleRuntime),
 	}
 	return nil
 }
@@ -282,8 +271,8 @@ func (r *recoveryStorageImpl) Metrics() RecoveryMetrics {
 }
 
 func (r *recoveryStorageImpl) TransformLog() wal.TransformLogAccesser {
-	if r.transformLogModule != nil {
-		return r.transformLogModule
+	if r.vchannelManager != nil {
+		return r.vchannelManager
 	}
 	return wal.NewTransformLogErrorAccesser(wal.ErrTransformLogVChannelUnavailable)
 }
@@ -422,47 +411,22 @@ func (r *recoveryStorageImpl) emitRecoveredLoadConfigViews(snapshot *RecoverySna
 }
 
 func (r *recoveryStorageImpl) newVChannelWALView(vchannel string) (walview.VChannelWALView, bool) {
-	if r.vchannelModule == nil || r.segmentModule == nil || r.transformLogModule == nil || r.liveObservers == nil {
+	if r.vchannelManager == nil || r.liveObservers == nil {
 		return walview.VChannelWALView{}, false
 	}
-	vchannelSnapshot, ok := r.vchannelModule.WALViewSnapshot(vchannel)
-	if !ok {
-		return walview.VChannelWALView{}, false
-	}
-	loadConfig := vchannelSnapshot.LoadConfig
-	if loadConfig == nil {
-		loadConfig = r.recoveredLoadConfig(vchannel)
-	}
-	if loadConfig == nil {
-		return walview.VChannelWALView{}, false
-	}
-	baseTransformTimeTick := r.transformLogModule.LatestTransformTimeTick(vchannel)
-	baseGrowingTimeTick := max(r.segmentModule.LatestInsertTimeTick(vchannel), baseTransformTimeTick)
-	segmentSnapshot := r.segmentModule.VisibleSnapshot(vchannel, baseGrowingTimeTick)
-	if r.resourceBaseSelector != nil {
-		if base, ok := r.resourceBaseSelector(vchannel); ok {
-			segmentSnapshot = r.segmentModule.VisibleSnapshotAtDataVersion(vchannel, baseGrowingTimeTick, base)
-		}
-	}
-	deleteReplay := newDeleteReplayScanner(
+	return r.vchannelManager.BuildWALView(
 		r.backgroundTaskNotifier.Context(),
-		r.transformLogModule,
-		r.channel.Name,
 		vchannel,
-		deleteReplayStartAfter(segmentSnapshot),
-		baseTransformTimeTick,
+		func(vchannel string) (qviews.DataVersion, bool) {
+			if r.resourceBaseSelector == nil {
+				return qviews.DataVersion{}, false
+			}
+			return r.resourceBaseSelector(vchannel)
+		},
+		func(vchannel string) *streamingpb.VChannelLoadConfig {
+			return r.recoveredLoadConfig(vchannel)
+		},
 	)
-	return walview.VChannelWALView{
-		PChannel:              r.channel.Name,
-		VChannel:              vchannel,
-		CollectionID:          vchannelSnapshot.CollectionID,
-		BaseGrowingTimeTick:   baseGrowingTimeTick,
-		BaseTransformTimeTick: baseTransformTimeTick,
-		LoadConfig:            loadConfig,
-		Schema:                vchannelSnapshot.Schema,
-		SegmentSnapshot:       segmentSnapshot,
-		DeleteReplay:          deleteReplay,
-	}, true
 }
 
 func (r *recoveryStorageImpl) recoveredLoadConfig(vchannel string) *streamingpb.VChannelLoadConfig {
@@ -470,26 +434,6 @@ func (r *recoveryStorageImpl) recoveredLoadConfig(vchannel string) *streamingpb.
 		return nil
 	}
 	return r.recoveredLoadConfigProvider(vchannel)
-}
-
-func deleteReplayStartAfter(snapshot walview.VisibleSegmentSnapshot) uint64 {
-	if len(snapshot.Segments) == 0 {
-		return 0
-	}
-	minCreateTimeTick := uint64(0)
-	for _, segment := range snapshot.Segments {
-		createTimeTick := segment.Assignment.GetStat().GetCreateSegmentTimeTick()
-		if createTimeTick == 0 {
-			continue
-		}
-		if minCreateTimeTick == 0 || createTimeTick < minCreateTimeTick {
-			minCreateTimeTick = createTimeTick
-		}
-	}
-	if minCreateTimeTick == 0 {
-		return 0
-	}
-	return minCreateTimeTick - 1
 }
 
 func (r *recoveryStorageImpl) observeMetaScannerMessage(ctx context.Context, msg message.ImmutableMessage) {

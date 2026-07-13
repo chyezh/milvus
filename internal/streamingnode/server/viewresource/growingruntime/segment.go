@@ -195,9 +195,18 @@ func (s *growingSegment) applyInsert(ctx context.Context, insert walview.Segment
 		},
 		InsertRequest: request,
 	}
-	record, _, err := storage.TransferInsertMsgToInsertRecord(s.collection.Schema(), insertMsg)
+	schema := s.collection.Schema()
+	record, skippedFields, err := storage.TransferInsertMsgToInsertRecord(schema, insertMsg)
 	if err != nil {
 		return err
+	}
+	if len(skippedFields) > 0 {
+		mlog.Warn(ctx, "skip insert payload fields absent from current schema while applying growing segment insert",
+			mlog.FieldCollectionID(request.GetCollectionID()),
+			mlog.FieldSegmentID(s.segmentID),
+			mlog.Int64("partitionID", request.GetPartitionID()),
+			mlog.Int32("schemaVersion", schema.GetVersion()),
+			mlog.Int64s("skippedFieldIDs", skippedFields))
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

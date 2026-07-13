@@ -14,12 +14,12 @@ import (
 
 func TestTransformLogStreamManagerCatchupThenDispatch(t *testing.T) {
 	ctx := context.Background()
-	module := NewModule("pchannel", nil, nil)
-	module.mode = moduleModeMetaAndData
-	require.NotNil(t, module.ObserveMessage(ctx, newModuleTestDeleteMessage(t, 10)).Data)
-	require.NotNil(t, module.ObserveMessage(ctx, newModuleTestDeleteMessage(t, 20)).Data)
+	transformLog := New(Config{VChannel: "v1"})
+	require.True(t, transformLog.Append(newTransformLogTestDeleteMessage(t, 10), AppendOption{}).Appended)
+	require.True(t, transformLog.Append(newTransformLogTestDeleteMessage(t, 20), AppendOption{}).Appended)
+	manager := NewStreamManager("pchannel", "v1", transformLog)
 
-	stream, err := module.AcquireStream(ctx, "pchannel")
+	stream, err := manager.AcquireStream(ctx, "pchannel")
 	require.NoError(t, err)
 	defer stream.Close()
 
@@ -48,20 +48,21 @@ func TestTransformLogStreamManagerCatchupThenDispatch(t *testing.T) {
 	assert.Equal(t, uint64(20), recvStreamEvent(t, handler2.events).Entry.GetTimeTick())
 	require.NotNil(t, recvStreamEvent(t, handler2.events).CaughtUp)
 
-	require.NotNil(t, module.ObserveMessage(ctx, newModuleTestDeleteMessage(t, 30)).Data)
+	require.True(t, transformLog.Append(newTransformLogTestDeleteMessage(t, 30), AppendOption{}).Appended)
+	manager.Notify("v1")
 	assert.Equal(t, uint64(30), recvStreamEvent(t, handler1.events).Entry.GetTimeTick())
 	assert.Equal(t, uint64(30), recvStreamEvent(t, handler2.events).Entry.GetTimeTick())
 }
 
 func TestTransformLogStreamManagerBoundedReplayEmitsCaughtUpAndCloses(t *testing.T) {
 	ctx := context.Background()
-	module := NewModule("pchannel", nil, nil)
-	module.mode = moduleModeMetaAndData
-	require.NotNil(t, module.ObserveMessage(ctx, newModuleTestDeleteMessage(t, 10)).Data)
-	require.NotNil(t, module.ObserveMessage(ctx, newModuleTestDeleteMessage(t, 20)).Data)
-	require.NotNil(t, module.ObserveMessage(ctx, newModuleTestDeleteMessage(t, 30)).Data)
+	transformLog := New(Config{VChannel: "v1"})
+	require.True(t, transformLog.Append(newTransformLogTestDeleteMessage(t, 10), AppendOption{}).Appended)
+	require.True(t, transformLog.Append(newTransformLogTestDeleteMessage(t, 20), AppendOption{}).Appended)
+	require.True(t, transformLog.Append(newTransformLogTestDeleteMessage(t, 30), AppendOption{}).Appended)
+	manager := NewStreamManager("pchannel", "v1", transformLog)
 
-	stream, err := module.AcquireStream(ctx, "pchannel")
+	stream, err := manager.AcquireStream(ctx, "pchannel")
 	require.NoError(t, err)
 	defer stream.Close()
 

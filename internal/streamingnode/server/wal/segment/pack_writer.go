@@ -66,7 +66,7 @@ func NewBulkPackWriter(
 	allocator allocator.Interface,
 	storageConfig *indexpb.StorageConfig,
 	writeRetryOpts ...retry.Option,
-) packWriter {
+) PackWriter {
 	return &growingBulkPackWriter{
 		chunkManager:   chunkManager,
 		allocator:      allocator,
