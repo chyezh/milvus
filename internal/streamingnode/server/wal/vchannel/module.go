@@ -283,14 +283,6 @@ func (m *VChannelRecoveryModule) NotifyCheckpointPersisted(metaTimeTick uint64, 
 	// Snapshot-level persisted callbacks are owned by each DirtySnapshot.
 }
 
-func (m *VChannelRecoveryModule) Recover(ctx context.Context) error {
-	if m == nil || m.transformLog == nil {
-		return nil
-	}
-	_, err := m.transformLog.Recover(ctx, nil)
-	return err
-}
-
 func (m *VChannelRecoveryModule) DataFrontier(scope moduleapi.Scope) walcheckpoint.Barrier {
 	if m == nil || !m.matchesScope(scope) {
 		return nil

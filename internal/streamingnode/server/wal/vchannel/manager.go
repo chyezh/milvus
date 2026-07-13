@@ -143,18 +143,6 @@ func (m *PChannelRecoveryManager) ConsumeDirtySnapshots() []moduleapi.DirtySnaps
 	return snapshots
 }
 
-func (m *PChannelRecoveryManager) Recover(ctx context.Context) error {
-	var err error
-	m.modules.Range(func(_ string, module *VChannelRecoveryModule) bool {
-		if moduleErr := module.Recover(ctx); moduleErr != nil {
-			err = moduleErr
-			return false
-		}
-		return true
-	})
-	return err
-}
-
 func (m *PChannelRecoveryManager) DataFrontier(scope moduleapi.Scope) walcheckpoint.Barrier {
 	if m == nil {
 		return nil

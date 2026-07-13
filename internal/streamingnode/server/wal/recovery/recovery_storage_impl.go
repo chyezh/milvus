@@ -224,9 +224,6 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 	if err != nil {
 		return err
 	}
-	if err := manager.Recover(ctx); err != nil {
-		return err
-	}
 	r.vchannelManager = manager
 	r.modules = []moduleapi.Module{
 		r.vchannelManager,

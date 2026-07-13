@@ -19,7 +19,6 @@ type TransformLog interface {
 	Materialize(context.Context, MaterializeOption) (MaterializeResult, error)
 	Truncate(TruncateOption) TruncateResult
 
-	Recover(context.Context, *streamingpb.VChannelTransformLogMeta) (RecoverResult, error)
 	SnapshotMeta() *streamingpb.VChannelTransformLogMeta
 	LatestTimeTick() uint64
 	DataCheckpointTimeTick() uint64
@@ -90,11 +89,6 @@ type TruncateResult struct {
 	Changed bool
 }
 
-type RecoverResult struct {
-	Recovered          bool
-	CheckpointTimeTick uint64
-}
-
 type transformLog struct {
 	flushMu               sync.Mutex
 	materializeMu         sync.Mutex
@@ -129,6 +123,7 @@ func New(config Config) TransformLog {
 		materializer:          config.Materializer,
 		materializeMaxRows:    config.MaterializeMaxRows,
 		materializeMaxBytes:   config.MaterializeMaxBytes,
+		chunks:                newColdChunkDescriptorsFromMeta(meta),
 	}
 }
 
@@ -275,31 +270,6 @@ func (t *transformLog) Truncate(opt TruncateOption) TruncateResult {
 	}
 	t.mu.Unlock()
 	return TruncateResult{Changed: changed}
-}
-
-func (t *transformLog) Recover(ctx context.Context, meta *streamingpb.VChannelTransformLogMeta) (RecoverResult, error) {
-	_ = ctx
-	t.mu.Lock()
-	if meta != nil {
-		t.meta = cloneMetaOrNew(meta)
-		t.persistedDataTimeTick = t.meta.GetCheckpointTimeTick()
-		t.persistedMaterialized = t.meta.GetMaterializedTimeTick()
-	}
-	recoverMeta := cloneMeta(t.meta)
-	t.chunks = nil
-	t.buffer = newBuffer(t.buffer.maxRows)
-	t.mu.Unlock()
-	if recoverMeta == nil || recoverMeta.GetFirstChunkId() == recoverMeta.GetNextChunkId() {
-		return RecoverResult{}, nil
-	}
-	chunks := make([]*chunkDescriptor, 0, recoverMeta.GetNextChunkId()-recoverMeta.GetFirstChunkId())
-	for chunkID := recoverMeta.GetFirstChunkId(); chunkID < recoverMeta.GetNextChunkId(); chunkID++ {
-		chunks = append(chunks, newColdChunkDescriptor(chunkID))
-	}
-	t.mu.Lock()
-	t.chunks = chunks
-	t.mu.Unlock()
-	return RecoverResult{Recovered: true, CheckpointTimeTick: recoverMeta.GetCheckpointTimeTick()}, nil
 }
 
 func (t *transformLog) SnapshotMeta() *streamingpb.VChannelTransformLogMeta {
@@ -744,6 +714,17 @@ func cloneMetaOrNew(meta *streamingpb.VChannelTransformLogMeta) *streamingpb.VCh
 		return &streamingpb.VChannelTransformLogMeta{}
 	}
 	return cloneMeta(meta)
+}
+
+func newColdChunkDescriptorsFromMeta(meta *streamingpb.VChannelTransformLogMeta) []*chunkDescriptor {
+	if meta == nil || meta.GetFirstChunkId() == meta.GetNextChunkId() {
+		return nil
+	}
+	chunks := make([]*chunkDescriptor, 0, meta.GetNextChunkId()-meta.GetFirstChunkId())
+	for chunkID := meta.GetFirstChunkId(); chunkID < meta.GetNextChunkId(); chunkID++ {
+		chunks = append(chunks, newColdChunkDescriptor(chunkID))
+	}
+	return chunks
 }
 
 func cloneMeta(meta *streamingpb.VChannelTransformLogMeta) *streamingpb.VChannelTransformLogMeta {

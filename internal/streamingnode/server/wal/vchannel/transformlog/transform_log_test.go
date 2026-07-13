@@ -91,7 +91,7 @@ func TestReadStopsAtEndTimeTick(t *testing.T) {
 	requireNoStreamEvent(t, handler.events)
 }
 
-func TestRecoverKeepsChunksColdUntilRead(t *testing.T) {
+func TestNewKeepsRecoveredChunksColdUntilRead(t *testing.T) {
 	store := newMemoryStore()
 	require.NoError(t, store.WriteTransformLogChunk(context.Background(), "v1", &streamingpb.TransformLogChunk{
 		ChunkId: 0,
@@ -111,9 +111,6 @@ func TestRecoverKeepsChunksColdUntilRead(t *testing.T) {
 	manager := NewStreamManager("p1")
 	manager.Register("v1", transformLog)
 
-	result, err := transformLog.Recover(context.Background(), nil)
-	require.NoError(t, err)
-	assert.True(t, result.Recovered)
 	assert.Equal(t, 0, store.readCount("v1", 0))
 
 	stream, err := manager.AcquireStream(context.Background(), "p1")
@@ -152,8 +149,6 @@ func TestMaterializeLoadsRecoveredColdChunk(t *testing.T) {
 			NextChunkId:        1,
 		},
 	}).(*transformLog)
-	_, err := transformLog.Recover(context.Background(), nil)
-	require.NoError(t, err)
 
 	result, err := transformLog.Materialize(context.Background(), MaterializeOption{TargetTimeTick: 10})
 	require.NoError(t, err)
@@ -181,8 +176,6 @@ func TestTruncateLoadsRecoveredColdChunkToAdvanceFirstChunk(t *testing.T) {
 			NextChunkId:        1,
 		},
 	}).(*transformLog)
-	_, err := transformLog.Recover(context.Background(), nil)
-	require.NoError(t, err)
 
 	result := transformLog.Truncate(TruncateOption{TimeTick: 10})
 	assert.True(t, result.Changed)
