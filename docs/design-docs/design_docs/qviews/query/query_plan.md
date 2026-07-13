@@ -22,7 +22,7 @@ Phase 1 needs three PChannel-local facts:
 |---|---|---|
 | QueryPlan MVCC frontiers | WAL adaptor / MVCC manager | MVCC is produced by the WAL path and is only comparable inside one PChannel. |
 | Current query view | `SNQueryViewHandler` | The handler owns StreamingNode QueryView state for one PChannel. |
-| Growing runtime and optimizer inputs | `SNQueryRuntimeManager` and runtime modules | Runtime modules are prepared from WAL recovery state and live WAL events. |
+| Growing runtime and optimizer inputs | `PChannelRecoveryManager`, `VChannelRecoveryModule`, and runtime modules | Runtime modules are prepared from WAL recovery state and live WAL events. |
 
 The component that already joins these three facts is `walAdaptorImpl`. Therefore
 the complete Phase 1 plan generation should be implemented by `walAdaptorImpl`,
@@ -68,7 +68,7 @@ The lease has three important properties:
 
 Only the QueryView lease needs an explicit reference count. The optimizer does
 not need a separate lifetime handle: `walAdaptorImpl.GetQueryPlan` creates the
-optimizer from `viewresource` while holding the selected QueryView lease, uses it
+optimizer from `wal/vchannel` while holding the selected QueryView lease, uses it
 inside the same call, and then calls `Release` after the plan is built, even if
 optimizer execution fails.
 
@@ -183,7 +183,7 @@ The first implementation should:
    Phase 2 calls to nodes that cannot contribute results.
 
 The optimizer does not need `work_nodes` as an explicit input. If an optimizer
-needs distribution information later, it should obtain it from the viewresource-
+needs distribution information later, it should obtain it from the vchannel-
 provided optimizer implementation or from the selected QueryView it already owns
 through the lease boundary.
 
@@ -192,7 +192,7 @@ through the lease boundary.
 Phase 1 is the global optimizer boundary. The first implementation can use a
 no-op optimizer while preserving the right ownership shape.
 
-`GlobalOptimizer` is provided by the `viewresource` package inside
+`GlobalOptimizer` is provided by the `wal/vchannel` package inside
 `walAdaptorImpl.GetQueryPlan`, after the latest Up QueryView lease has been
 acquired. It is a call-scoped capability: the optimizer implementation closes
 over the selected QueryView, the prepared query runtime, and runtime modules
@@ -209,13 +209,13 @@ type GlobalOptimizer interface {
 
 Neither `QueryPlanService` nor callers outside `walAdaptorImpl` should assemble
 or pass `QueryViewStats`, `IDFOracleSnapshot`, `QueryRuntime`, or other resource
-objects. Those are internal to `viewresource`. `walAdaptorImpl.GetQueryPlan`
+objects. Those are internal to the vchannel recovery module. `walAdaptorImpl.GetQueryPlan`
 clones the request, calls the optimizer, and puts the optimized request into the
 returned `QueryPlan`.
 
 The expected first concrete implementation is BM25 IDF optimization backed by
 the IDF oracle runtime. Other global optimizers, such as search parameter tuning,
-can be composed inside the optimizer provided by `viewresource` without changing
+can be composed inside the optimizer provided by `wal/vchannel` without changing
 the `QueryPlanService` contract.
 
 ## 8. QueryPlanService Flow
@@ -248,7 +248,7 @@ walAdaptorImpl.GetQueryPlan(req)
   -> acquire latest Up QueryView lease from SNQueryViewHandler
   -> defer lease.Release()
   -> resolve QueryPlanMVCC from request mode
-  -> create GlobalOptimizer from viewresource using lease.View
+  -> create GlobalOptimizer from wal/vchannel using lease.View
   -> clone request
   -> run optimizer on cloned request
   -> build work_nodes from lease.View
@@ -293,7 +293,7 @@ internal/streamingnode/server/wal/adaptor/
 internal/streamingnode/server/wal/snview/
   query_lease.go               # query-facing read lease for Up SN views
 
-internal/streamingnode/server/viewresource/
+internal/streamingnode/server/wal/vchannel/
   query_optimizer.go           # lease-scoped GlobalOptimizer provider
 
 internal/streamingnode/server/queryplan/

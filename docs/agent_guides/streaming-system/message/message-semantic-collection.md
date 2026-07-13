@@ -41,7 +41,7 @@ All broadcast messages implicitly carry **SharedCluster** via the Broadcaster.
 - **Insert** / **Delete**: DML on a single VChannel. CipherEnabled.
 - **CreateSegment** / **Flush**: WAL-generated (SelfControlled). Allocates or seals a growing segment.
 - **ManualFlush**: Seals all growing segments for a collection on a VChannel.
-- **AlterLoadConfig**: Modifies load configuration — partition set, replica count, load fields, etc. Broadcasts to all collection VChannels plus the CChannel with AckSyncUp. StreamingNode consumes the VChannel copies to publish WAL views, and QueryCoord consumes the CChannel callback to drive load.
+- **AlterLoadConfig**: Modifies load configuration — partition set, replica count, load fields, etc. Broadcasts to all collection VChannels plus the CChannel with AckSyncUp. StreamingNode consumes the VChannel copies to persist vchannel load state; QueryView state machines later drive StreamingNode resource loading through `Acquire`.
 - **DropLoadConfig**: Removes load configuration, unloading/releasing from query nodes. Broadcasts to all collection VChannels plus the CChannel with AckSyncUp. Uses ExclusiveCluster when part of DropCollection flow.
 - **BatchUpdateManifest**: Updates segment manifest versions in batch. Used after compaction or index building. CChannel-only.
 

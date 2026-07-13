@@ -194,7 +194,7 @@ WAL state:
 ```text
 SNQueryViewHandler
   -> selected Up QueryView ref
-  -> SNQueryRuntimeManager / QueryRuntime
+  -> PChannelRecoveryManager / VChannelRecoveryModule / QueryRuntime
   -> growing runtime visibility
   -> concrete SN segment tasks
 ```

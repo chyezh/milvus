@@ -9,8 +9,6 @@ import (
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/viewerror"
 	"github.com/milvus-io/milvus/internal/views/worknode/handler"
-	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
@@ -136,39 +134,6 @@ func OldestUpDataVersions(views []*viewpb.QueryViewOfShard) map[string]qviews.Da
 		current, ok := result[meta.GetVchannel()]
 		if !ok || current.GT(version.DataVersion) {
 			result[meta.GetVchannel()] = version.DataVersion
-		}
-	}
-	return result
-}
-
-func RecoveredLoadConfigs(views []*viewpb.QueryViewOfShard) map[string]*streamingpb.VChannelLoadConfig {
-	selected := make(map[string]*viewpb.QueryViewMeta)
-	selectedVersion := make(map[string]qviews.QueryViewVersion)
-	for _, view := range views {
-		meta := view.GetMeta()
-		if qviews.QueryViewState(meta.GetState()) != qviews.QueryViewStateUp || meta.GetVersion() == nil {
-			continue
-		}
-		version := qviews.FromProtoQueryViewVersion(meta.GetVersion())
-		current, ok := selectedVersion[meta.GetVchannel()]
-		if !ok || current.GT(version) {
-			selected[meta.GetVchannel()] = meta
-			selectedVersion[meta.GetVchannel()] = version
-		}
-	}
-	result := make(map[string]*streamingpb.VChannelLoadConfig, len(selected))
-	for vchannel, meta := range selected {
-		settings := meta.GetSettings()
-		fields := make([]*messagespb.LoadFieldConfig, 0, len(settings.GetRequiredFields()))
-		for _, fieldID := range settings.GetRequiredFields() {
-			fields = append(fields, &messagespb.LoadFieldConfig{FieldId: fieldID})
-		}
-		result[vchannel] = &streamingpb.VChannelLoadConfig{
-			Header: &messagespb.AlterLoadConfigMessageHeader{
-				CollectionId: meta.GetCollectionId(),
-				PartitionIds: append([]int64{}, settings.GetRequiredPartitions()...),
-				LoadFields:   fields,
-			},
 		}
 	}
 	return result

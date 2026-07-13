@@ -13,13 +13,13 @@ import (
 
 	queryplanprovider "github.com/milvus-io/milvus/internal/streamingnode/server/queryplan/provider"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/adaptor/rate"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/viewerror"
@@ -109,7 +109,7 @@ type walAdaptorImpl struct {
 	isFenced               *atomic.Bool
 	appendRateCounter      *utility.AverageRateCounter // tracks append rate (bytes/sec)
 	queryViewHandler       *snview.SNQueryViewHandler
-	viewResourceManager    viewresource.SNQueryRuntimeManager
+	viewResourceManager    *vchannel.PChannelRecoveryManager
 }
 
 // Metrics returns the metrics of the wal.
@@ -203,14 +203,14 @@ func (w *walAdaptorImpl) GetQueryPlan(ctx context.Context, req *viewpb.GetQueryP
 		mlog.Uint64("transformingTimeTick", mvcc.GetTransformingTimetick()),
 		mlog.Int("workNodeCount", len(plan.WorkNodes)),
 	)
-	var runtime *viewresource.QueryRuntime
+	var runtime *vchannel.QueryRuntime
 	if w.viewResourceManager != nil {
 		runtime, _ = w.viewResourceManager.GetQueryRuntime(qviews.QueryViewKey{
 			ShardID:          shardID,
 			QueryViewVersion: lease.Version,
 		})
 	}
-	optimizer := viewresource.NewGlobalOptimizer(lease.View, runtime)
+	optimizer := vchannel.NewGlobalOptimizer(lease.View, runtime)
 	switch request := req.GetRequest().(type) {
 	case *viewpb.GetQueryPlanRequest_LegacySearchRequest:
 		if request.LegacySearchRequest == nil {
@@ -531,10 +531,6 @@ func (w *walAdaptorImpl) Close() {
 	w.forceCancelAfterGracefulTimeout()
 	w.lifetime.Wait()
 
-	if w.param.RecoveryStorage != nil {
-		w.Logger().Info(context.TODO(), "wal begin to detach query resource load config listener...")
-		w.param.RecoveryStorage.DetachLoadConfigListener()
-	}
 	if w.queryViewHandler != nil {
 		w.Logger().Info(context.TODO(), "wal begin to close query view state machine...")
 		w.queryViewHandler.CloseForHandoff()

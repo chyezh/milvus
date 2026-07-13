@@ -38,11 +38,11 @@ type ReleaseResource struct {
 // Resources include growing segments, BM25 IDF statistics, and other
 // shard-level query state required to serve a query view.
 //
-// The resource lifecycle is reference based. AlterLoadConfig creates an
-// initialization reference. Acquire registers a QueryView reference and the
-// first successful QueryView reference removes the initialization reference.
-// Release removes the QueryView reference. Physical resources are closed only
-// after both the initialization reference and all QueryView references are gone.
+// The resource lifecycle is driven by QueryView state machines. Acquire
+// registers a QueryView reference and starts resource preparation from the
+// QueryView meta and the current VChannel recovery state. Release removes the
+// QueryView reference. Physical resources are retained while any QueryView
+// reference needs their data version.
 //
 // # Liveness Contracts
 //
@@ -61,8 +61,7 @@ type ReleaseResource struct {
 // All callbacks MUST be invoked asynchronously (not during the Acquire /
 // Release call itself) to avoid deadlocking the caller's mutex.
 type StreamingNodeResourceManager interface {
-	// Acquire registers a QueryView reference and waits for existing
-	// WAL-triggered resource preparation.
+	// Acquire registers a QueryView reference and starts resource preparation.
 	Acquire(req AcquireResource)
 
 	// Release removes the QueryView reference held by a local state machine.

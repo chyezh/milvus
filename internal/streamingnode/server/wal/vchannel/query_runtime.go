@@ -1,4 +1,4 @@
-package viewresource
+package vchannel
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 
 const defaultLiveEventBufferSize = 1024
 
-// QueryRuntime is the vchannel singleton owned by SNQueryRuntimeManager.
+// QueryRuntime is the vchannel singleton owned by VChannelRecoveryModule.
 type QueryRuntime struct {
 	mu      sync.Mutex
 	cond    *sync.Cond

@@ -3,6 +3,7 @@ package vchannel
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,6 +13,8 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
@@ -125,23 +128,6 @@ func TestPChannelRecoveryManagerAggregatesDataFrontier(t *testing.T) {
 	assert.Equal(t, uint64(0), allFrontier.TimeTick())
 }
 
-func TestPChannelRecoveryManagerBuildsWALViewForIndexedVChannel(t *testing.T) {
-	ctx := context.Background()
-	manager := newTestManager(t, "p1", "v1")
-	manager.SwitchIntoMetaAndData()
-	manager.ObserveMessage(ctx, newTestDeleteMessage(t, "v1", 20))
-
-	view, ok := manager.BuildWALView(ctx, "v1", nil, nil)
-
-	require.True(t, ok)
-	assert.Equal(t, "p1", view.PChannel)
-	assert.Equal(t, "v1", view.VChannel)
-	assert.Equal(t, int64(100), view.CollectionID)
-	assert.Equal(t, uint64(20), view.BaseTransformTimeTick)
-	require.NotNil(t, view.DeleteReplay)
-	defer view.DeleteReplay.Close()
-}
-
 func TestPChannelRecoveryManagerProvidesTransformLogStream(t *testing.T) {
 	ctx := context.Background()
 	manager := newTestManager(t, "p1", "v1")
@@ -183,6 +169,28 @@ func TestPChannelRecoveryManagerRemovesClosedVChannelTransformLog(t *testing.T) 
 	require.Error(t, err)
 }
 
+func TestPChannelRecoveryManagerAcquireBuildsQueryRuntimeWithoutLoadConfigCallback(t *testing.T) {
+	manager := newTestManager(t, "p1", "v1")
+	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
+	meta, key := testQueryViewMetaAndKey(100, 2, "v1", version, 3)
+
+	ready := make(chan struct{})
+	manager.Acquire(snview.AcquireResource{
+		Key:     key,
+		Meta:    meta,
+		OnReady: func() { close(ready) },
+	})
+
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for ready callback")
+	}
+	runtime, ok := manager.GetQueryRuntime(key)
+	require.True(t, ok)
+	require.NotNil(t, runtime)
+}
+
 func newTestManager(t *testing.T, pchannel string, vchannels ...string) *PChannelRecoveryManager {
 	t.Helper()
 	metas := make(map[string]*streamingpb.VChannelMeta, len(vchannels))
@@ -194,6 +202,9 @@ func newTestManager(t *testing.T, pchannel string, vchannels ...string) *PChanne
 		VChannelMetas:     metas,
 		TransformLogMetas: map[string]*streamingpb.VChannelTransformLogMeta{},
 		Runtime:           moduleapi.Runtime{},
+		QueryRuntimeModuleBuilders: []QueryRuntimeModuleBuilder{
+			testModuleBuilder{},
+		},
 	})
 	require.NoError(t, err)
 	return manager

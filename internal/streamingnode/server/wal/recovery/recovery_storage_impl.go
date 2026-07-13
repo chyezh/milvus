@@ -14,9 +14,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/util/idalloc"
-	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -57,7 +55,6 @@ func RecoverRecoveryStorage(
 		rs.Logger().Warn(context.TODO(), "recovery storage failed", mlog.Err(err))
 		return nil, nil, err
 	}
-	rs.emitRecoveredLoadConfigViews(snapshot)
 	// recovery storage start work.
 	rs.metrics.ObserveStateChange(recoveryStorageStateWorking)
 	rs.SetLogger(resource.Resource().Logger().With(
@@ -73,24 +70,9 @@ func RecoverRecoveryStorage(
 
 type RecoveryStorageOption func(*recoveryStorageImpl)
 
-type ResourceRecoveryBaseSelector func(vchannel string) (qviews.DataVersion, bool)
-type RecoveredLoadConfigProvider func(vchannel string) *streamingpb.VChannelLoadConfig
-
-func WithLoadConfigListener(listener walview.LoadConfigListener) RecoveryStorageOption {
+func WithQueryRuntimeModuleBuilders(builders ...vchannel.QueryRuntimeModuleBuilder) RecoveryStorageOption {
 	return func(r *recoveryStorageImpl) {
-		r.loadConfigListener = listener
-	}
-}
-
-func WithResourceRecoveryBaseSelector(selector ResourceRecoveryBaseSelector) RecoveryStorageOption {
-	return func(r *recoveryStorageImpl) {
-		r.resourceBaseSelector = selector
-	}
-}
-
-func WithRecoveredLoadConfigProvider(provider RecoveredLoadConfigProvider) RecoveryStorageOption {
-	return func(r *recoveryStorageImpl) {
-		r.recoveredLoadConfigProvider = provider
+		r.queryRuntimeModuleBuilders = append([]vchannel.QueryRuntimeModuleBuilder(nil), builders...)
 	}
 }
 
@@ -119,7 +101,6 @@ func newRecoveryStorage(channel types.PChannelInfo, cp *utility.WALCheckpoint, o
 		persistNotifier:        make(chan struct{}, 1),
 		gracefulClosed:         false,
 		metrics:                newRecoveryStorageMetrics(channel),
-		liveObservers:          newLiveObserverRegistry(),
 	}
 	rs.taskScheduler = scheduler.New(context.Background())
 	if cp != nil {
@@ -158,11 +139,8 @@ type recoveryStorageImpl struct {
 	alterWALInfo *AlterWALInfo
 	// pendingSalvageCheckpoint holds the salvage checkpoint captured during force promote.
 	// Set under r.mu; consumed and persisted by the background task to avoid holding the lock.
-	pendingSalvageCheckpoint    *utility.ReplicateCheckpoint
-	liveObservers               *liveObserverRegistry
-	loadConfigListener          walview.LoadConfigListener
-	resourceBaseSelector        ResourceRecoveryBaseSelector
-	recoveredLoadConfigProvider RecoveredLoadConfigProvider
+	pendingSalvageCheckpoint   *utility.ReplicateCheckpoint
+	queryRuntimeModuleBuilders []vchannel.QueryRuntimeModuleBuilder
 }
 
 func (r *recoveryStorageImpl) installCheckpointManager(checkpoint *WALCheckpoint) {
@@ -212,14 +190,12 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 			idalloc.NewMAllocator(resource.Resource().IDAllocator()),
 			nil,
 		),
-		TransformLogStore:         transformLogStore,
-		TransformLogMaterializer:  transformLogMaterializer,
-		TransformLogMaxRows:       uint64(paramtable.Get().StreamingCfg.FlushL0MaxRowNum.GetAsInt()),
-		TransformLogMaterialRows:  uint64(paramtable.Get().StreamingCfg.FlushL0MaxRowNum.GetAsInt()),
-		TransformLogMaterialBytes: uint64(paramtable.Get().StreamingCfg.FlushL0MaxSize.GetAsSize()),
-		OnSegmentSealed: func(event walview.SegmentSealedEvent) {
-			r.observeSegmentSealedEvent(event)
-		},
+		TransformLogStore:          transformLogStore,
+		TransformLogMaterializer:   transformLogMaterializer,
+		TransformLogMaxRows:        uint64(paramtable.Get().StreamingCfg.FlushL0MaxRowNum.GetAsInt()),
+		TransformLogMaterialRows:   uint64(paramtable.Get().StreamingCfg.FlushL0MaxRowNum.GetAsInt()),
+		TransformLogMaterialBytes:  uint64(paramtable.Get().StreamingCfg.FlushL0MaxSize.GetAsSize()),
+		QueryRuntimeModuleBuilders: r.queryRuntimeModuleBuilders,
 	})
 	if err != nil {
 		return err
@@ -274,10 +250,8 @@ func (r *recoveryStorageImpl) TransformLog() wal.TransformLogAccesser {
 	return wal.NewTransformLogErrorAccesser(wal.ErrTransformLogVChannelUnavailable)
 }
 
-func (r *recoveryStorageImpl) DetachLoadConfigListener() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.loadConfigListener = nil
+func (r *recoveryStorageImpl) VChannelManager() *vchannel.PChannelRecoveryManager {
+	return r.vchannelManager
 }
 
 // Close closes the recovery storage and wait the background task stop.
@@ -344,10 +318,6 @@ func (r *recoveryStorageImpl) observeMessage(ctx context.Context, msg message.Im
 	r.updateCheckpoint(msg, result.Meta)
 	r.updateDataCheckpoint(msg, result.Data)
 	r.metrics.ObServeInMemMetrics(r.checkpoint.TimeTick)
-	if r.liveObservers != nil {
-		r.liveObservers.Dispatch(ctx, msg)
-	}
-	r.notifyLoadConfigListener(msg)
 
 	r.dirtyCounter++
 	if r.dirtyCounter > r.cfg.maxDirtyMessages {
@@ -366,73 +336,6 @@ func (r *recoveryStorageImpl) observeMetaOnlyMessage(ctx context.Context, msg me
 	}
 }
 
-func (r *recoveryStorageImpl) notifyLoadConfigListener(msg message.ImmutableMessage) {
-	if r.loadConfigListener == nil {
-		return
-	}
-	switch msg.MessageType() {
-	case message.MessageTypeAlterLoadConfig:
-		view, ok := r.newVChannelWALView(msg.VChannel())
-		if ok {
-			r.liveObservers.Register(msg.VChannel(), r.loadConfigListener.OnAlterLoadConfig(view))
-		}
-	case message.MessageTypeDropLoadConfig:
-		drop := message.MustAsImmutableDropLoadConfigMessageV2(msg)
-		r.loadConfigListener.OnDropLoadConfig(walview.DropLoadConfigEvent{
-			PChannel:     r.channel.Name,
-			VChannel:     msg.VChannel(),
-			CollectionID: drop.Header().GetCollectionId(),
-		})
-	}
-}
-
-func (r *recoveryStorageImpl) emitRecoveredLoadConfigViews(snapshot *RecoverySnapshot) {
-	if r.loadConfigListener == nil || snapshot == nil {
-		return
-	}
-	for vchannel, meta := range snapshot.VChannels {
-		if meta.GetLoadConfig() == nil && r.recoveredLoadConfig(vchannel) == nil {
-			r.loadConfigListener.OnDropLoadConfig(walview.DropLoadConfigEvent{
-				PChannel:     r.channel.Name,
-				VChannel:     vchannel,
-				CollectionID: meta.GetCollectionInfo().GetCollectionId(),
-			})
-			continue
-		}
-		view, ok := r.newVChannelWALView(vchannel)
-		if !ok {
-			continue
-		}
-		r.liveObservers.Register(vchannel, r.loadConfigListener.OnAlterLoadConfig(view))
-	}
-}
-
-func (r *recoveryStorageImpl) newVChannelWALView(vchannel string) (walview.VChannelWALView, bool) {
-	if r.vchannelManager == nil || r.liveObservers == nil {
-		return walview.VChannelWALView{}, false
-	}
-	return r.vchannelManager.BuildWALView(
-		r.backgroundTaskNotifier.Context(),
-		vchannel,
-		func(vchannel string) (qviews.DataVersion, bool) {
-			if r.resourceBaseSelector == nil {
-				return qviews.DataVersion{}, false
-			}
-			return r.resourceBaseSelector(vchannel)
-		},
-		func(vchannel string) *streamingpb.VChannelLoadConfig {
-			return r.recoveredLoadConfig(vchannel)
-		},
-	)
-}
-
-func (r *recoveryStorageImpl) recoveredLoadConfig(vchannel string) *streamingpb.VChannelLoadConfig {
-	if r.recoveredLoadConfigProvider == nil {
-		return nil
-	}
-	return r.recoveredLoadConfigProvider(vchannel)
-}
-
 func (r *recoveryStorageImpl) observeMetaScannerMessage(ctx context.Context, msg message.ImmutableMessage) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -443,19 +346,6 @@ func (r *recoveryStorageImpl) observeDataScannerMessage(ctx context.Context, msg
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.observeMessage(ctx, msg)
-}
-
-func (r *recoveryStorageImpl) observeSegmentSealedEvent(event walview.SegmentSealedEvent) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.liveObservers == nil {
-		return
-	}
-	r.liveObservers.DispatchEvent(
-		r.backgroundTaskNotifier.Context(),
-		event.VChannel,
-		walview.VChannelResourceEvent{SegmentSealed: &event},
-	)
 }
 
 func (r *recoveryStorageImpl) observeModulesMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {

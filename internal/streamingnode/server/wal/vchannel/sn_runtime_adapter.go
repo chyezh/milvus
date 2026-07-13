@@ -1,16 +1,11 @@
-package viewresource
+package vchannel
 
 import (
 	"context"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
-	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
-
-func (m *queryRuntimeManager) QueryRuntime(key qviews.QueryViewKey) (snview.QueryRuntime, bool) {
-	return m.GetQueryRuntime(key)
-}
 
 func (r *QueryRuntime) WaitMVCCVisible(ctx context.Context, growingTimetick uint64, transformingTimetick uint64) error {
 	runtime, ok := r.growingRuntime()

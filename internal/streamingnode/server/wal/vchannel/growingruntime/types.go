@@ -12,6 +12,9 @@ import (
 )
 
 func settingsFromWALView(view walview.VChannelWALView) *viewpb.QueryViewSettings {
+	if view.Settings != nil {
+		return view.Settings
+	}
 	return settingsFromAlterLoadConfig(view.LoadConfig.GetHeader())
 }
 

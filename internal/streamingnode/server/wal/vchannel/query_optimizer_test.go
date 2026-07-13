@@ -1,4 +1,4 @@
-package viewresource
+package vchannel
 
 import (
 	"context"

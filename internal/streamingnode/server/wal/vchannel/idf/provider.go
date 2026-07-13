@@ -10,7 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/storage"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/viewresource"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/internal/views/qviews"
@@ -21,8 +21,8 @@ import (
 )
 
 var (
-	_ viewresource.QueryRuntimeModuleBuilder = (*Provider)(nil)
-	_ viewresource.QueryRuntimeModuleBuilder = (*FutureProvider)(nil)
+	_ vchannel.QueryRuntimeModuleBuilder = (*Provider)(nil)
+	_ vchannel.QueryRuntimeModuleBuilder = (*FutureProvider)(nil)
 )
 
 // Provider loads sealed BM25 resources for a DataVersion and aggregates the
@@ -67,11 +67,11 @@ func NewFutureProvider(client *syncutil.Future[types.MixCoordClient], opts ...Pr
 	}
 }
 
-func (p *FutureProvider) NewRuntime() (viewresource.QueryRuntimeModule, error) {
+func (p *FutureProvider) NewRuntime() (vchannel.QueryRuntimeModule, error) {
 	return &Runtime{future: p}, nil
 }
 
-func (p *Provider) NewRuntime() (viewresource.QueryRuntimeModule, error) {
+func (p *Provider) NewRuntime() (vchannel.QueryRuntimeModule, error) {
 	return &Runtime{provider: p}, nil
 }
 
@@ -160,6 +160,12 @@ func (p *Provider) buildOracle(ctx context.Context, walView walview.VChannelWALV
 }
 
 func queryViewSettingsFromWALView(view walview.VChannelWALView) *viewpb.QueryViewSettings {
+	if view.Settings != nil {
+		return view.Settings
+	}
+	if view.LoadConfig == nil {
+		return &viewpb.QueryViewSettings{}
+	}
 	header := view.LoadConfig.GetHeader()
 	if header == nil {
 		return &viewpb.QueryViewSettings{}

@@ -7,6 +7,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
@@ -105,9 +106,8 @@ type RecoveryStorage interface {
 	// TransformLog returns the TransformLog accesser owned by RecoveryStorage.
 	TransformLog() wal.TransformLogAccesser
 
-	// DetachLoadConfigListener stops WAL load-config callbacks to the
-	// StreamingNode query resource manager during pchannel handoff.
-	DetachLoadConfigListener()
+	// VChannelManager returns the PChannel-local vchannel recovery manager.
+	VChannelManager() *vchannel.PChannelRecoveryManager
 
 	// Close closes the recovery storage.
 	Close()

@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
@@ -30,27 +29,6 @@ func TestVChannelRecoveryModuleObservesOnlyItsVChannel(t *testing.T) {
 	result = module.ObserveMessage(ctx, newTestDeleteMessage(t, "v1", 20))
 	require.NotNil(t, result.Data)
 	assert.Equal(t, uint64(0), result.Data.TimeTick())
-}
-
-func TestVChannelRecoveryModuleBuildsWALViewFromOwnedState(t *testing.T) {
-	ctx := context.Background()
-	module := newTestModule(t, "p1", "v1")
-	manager := transformlog.NewStreamManager("p1")
-	manager.Register("v1", module.transformLog)
-	module.SwitchIntoMetaAndData()
-	module.ObserveMessage(ctx, newTestDeleteMessage(t, "v1", 20))
-
-	view, ok := module.BuildWALView(context.Background(), manager, nil, nil)
-
-	require.True(t, ok)
-	assert.Equal(t, "p1", view.PChannel)
-	assert.Equal(t, "v1", view.VChannel)
-	assert.Equal(t, int64(100), view.CollectionID)
-	assert.NotNil(t, view.LoadConfig)
-	assert.Equal(t, uint64(20), view.BaseTransformTimeTick)
-	assert.Equal(t, uint64(20), view.BaseGrowingTimeTick)
-	require.NotNil(t, view.DeleteReplay)
-	defer view.DeleteReplay.Close()
 }
 
 func TestVChannelRecoveryModuleRecoveryBarrierFlushesOwnedTransformLog(t *testing.T) {

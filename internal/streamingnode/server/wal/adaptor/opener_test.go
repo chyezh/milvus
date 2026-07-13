@@ -18,6 +18,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/recovery"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/mocks/streaming/mock_walimpls"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -279,7 +280,8 @@ func (s *stalledRecoveryStorage) TransformLog() wal.TransformLogAccesser {
 	return wal.NewTransformLogErrorAccesser(errors.New("transform log unavailable"))
 }
 
-func (s *stalledRecoveryStorage) DetachLoadConfigListener() {
+func (s *stalledRecoveryStorage) VChannelManager() *vchannel.PChannelRecoveryManager {
+	return nil
 }
 
 func (s *stalledRecoveryStorage) Close() {

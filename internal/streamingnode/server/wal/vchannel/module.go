@@ -3,6 +3,7 @@ package vchannel
 import (
 	"context"
 	"math"
+	"sync"
 
 	"google.golang.org/protobuf/proto"
 
@@ -22,14 +23,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
-
-// ResourceRecoveryBaseSelector optionally selects the base DataVersion used to
-// build the visible growing segment snapshot for this vchannel.
-type ResourceRecoveryBaseSelector func(vchannel string) (qviews.DataVersion, bool)
-
-// RecoveredLoadConfigProvider supplies load config recovered from QueryView
-// state when the vchannel meta no longer owns a load-config anchor.
-type RecoveredLoadConfigProvider func(vchannel string) *streamingpb.VChannelLoadConfig
 
 // ModuleConfig contains the initial state and dependencies for one vchannel
 // recovery module.
@@ -53,10 +46,16 @@ type ModuleConfig struct {
 	TransformLogMaterialRows  uint64
 	TransformLogMaterialBytes uint64
 	OnSegmentSealed           func(walview.SegmentSealedEvent)
+
+	TransformLogStream         wal.TransformLogStreamManager
+	QueryRuntimeModuleBuilders []QueryRuntimeModuleBuilder
+	QueryResourceScheduler     Scheduler
+	QueryRuntimeDispatcher     *queryRuntimeDispatcher
 }
 
 // VChannelRecoveryModule owns all recovery_storage state for one vchannel.
 type VChannelRecoveryModule struct {
+	mu       sync.Mutex
 	pchannel string
 	vchannel string
 
@@ -78,6 +77,19 @@ type VChannelRecoveryModule struct {
 	onSegmentSealed   func(walview.SegmentSealedEvent)
 
 	metaAndData bool
+
+	queryRuntimeModuleBuilders []QueryRuntimeModuleBuilder
+	queryScheduler             Scheduler
+	queryDispatcher            *queryRuntimeDispatcher
+	queryTransformLogStream    wal.TransformLogStreamManager
+
+	queryRefs    map[qviews.QueryViewKey]struct{}
+	queryEpoch   map[qviews.QueryViewKey]uint64
+	queryRuntime *QueryRuntime
+	queryTask    BuildTask
+	queryErr     error
+	queryChanged chan struct{}
+	queryClosed  bool
 }
 
 // NewModule creates a single-vchannel recovery module.
@@ -89,15 +101,27 @@ func NewModule(config ModuleConfig) (*VChannelRecoveryModule, error) {
 		return nil, merr.WrapErrServiceInternalMsg("vchannel recovery module vchannel is empty")
 	}
 	module := &VChannelRecoveryModule{
-		pchannel:                  config.PChannel,
-		vchannel:                  config.VChannel,
-		runtime:                   config.Runtime,
-		logger:                    config.Logger,
-		segments:                  make(map[int64]*segment.SegmentView),
-		segmentDataVersionSummary: cloneSegmentDataVersionSummary(config.SegmentDataVersionSummary),
-		segmentLifecycle:          config.SegmentLifecycle,
-		segmentPackWriter:         config.SegmentPackWriter,
-		onSegmentSealed:           config.OnSegmentSealed,
+		pchannel:                   config.PChannel,
+		vchannel:                   config.VChannel,
+		runtime:                    config.Runtime,
+		logger:                     config.Logger,
+		segments:                   make(map[int64]*segment.SegmentView),
+		segmentDataVersionSummary:  cloneSegmentDataVersionSummary(config.SegmentDataVersionSummary),
+		segmentLifecycle:           config.SegmentLifecycle,
+		segmentPackWriter:          config.SegmentPackWriter,
+		queryRuntimeModuleBuilders: defaultQueryRuntimeModuleBuilders(config.QueryRuntimeModuleBuilders),
+		queryScheduler:             config.QueryResourceScheduler,
+		queryDispatcher:            config.QueryRuntimeDispatcher,
+		queryTransformLogStream:    config.TransformLogStream,
+		queryRefs:                  make(map[qviews.QueryViewKey]struct{}),
+		queryEpoch:                 make(map[qviews.QueryViewKey]uint64),
+		queryChanged:               make(chan struct{}),
+	}
+	module.onSegmentSealed = func(event walview.SegmentSealedEvent) {
+		module.observeQueryResourceEvent(context.Background(), walview.VChannelResourceEvent{SegmentSealed: &event})
+		if config.OnSegmentSealed != nil {
+			config.OnSegmentSealed(event)
+		}
 	}
 	if config.VChannelMeta != nil {
 		module.vchannelView = NewVChannelViewFromMeta(config.VChannelMeta)
@@ -129,7 +153,7 @@ func (m *VChannelRecoveryModule) segmentViewOptions(config ModuleConfig) []segme
 		segment.WithViewRuntime(config.Runtime),
 		segment.WithViewLifecycle(config.SegmentLifecycle),
 		segment.WithViewPackWriter(config.SegmentPackWriter),
-		segment.WithViewSegmentSealedNotifier(config.OnSegmentSealed),
+		segment.WithViewSegmentSealedNotifier(m.onSegmentSealed),
 		segment.WithViewDataUpdatedNotifier(func() {
 			if m.runtime.Notifier != nil {
 				m.runtime.Notifier.NotifyBarrierUpdated()
@@ -149,46 +173,51 @@ func (m *VChannelRecoveryModule) ObserveMessage(ctx context.Context, msg message
 	if funcutil.IsControlChannel(msg.VChannel()) && !msg.IsPChannelLevel() {
 		return moduleapi.ObserveResult{}
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var result moduleapi.ObserveResult
 	switch msg.MessageType() {
 	case message.MessageTypeCreateCollection:
-		return m.handleCreateCollectionMessage(message.MustAsImmutableCreateCollectionMessageV1(msg))
+		result = m.handleCreateCollectionMessage(message.MustAsImmutableCreateCollectionMessageV1(msg))
 	case message.MessageTypeCreatePartition:
-		return m.handleCreatePartitionMessage(message.MustAsImmutableCreatePartitionMessageV1(msg))
+		result = m.handleCreatePartitionMessage(message.MustAsImmutableCreatePartitionMessageV1(msg))
 	case message.MessageTypeSchemaChange:
-		return m.handleSchemaChangeMessage(message.MustAsImmutableSchemaChangeMessageV2(msg))
+		result = m.handleSchemaChangeMessage(message.MustAsImmutableSchemaChangeMessageV2(msg))
 	case message.MessageTypeAlterCollection:
-		return m.handleAlterCollectionMessage(ctx, message.MustAsImmutableAlterCollectionMessageV2(msg))
+		result = m.handleAlterCollectionMessage(ctx, message.MustAsImmutableAlterCollectionMessageV2(msg))
 	case message.MessageTypeDropCollection:
-		return m.handleDropCollectionMessage(ctx, message.MustAsImmutableDropCollectionMessageV1(msg))
+		result = m.handleDropCollectionMessage(ctx, message.MustAsImmutableDropCollectionMessageV1(msg))
 	case message.MessageTypeDropPartition:
-		return m.handleDropPartitionMessage(ctx, message.MustAsImmutableDropPartitionMessageV1(msg))
+		result = m.handleDropPartitionMessage(ctx, message.MustAsImmutableDropPartitionMessageV1(msg))
 	case message.MessageTypeTruncateCollection:
-		return m.handleTruncateCollectionMessage(ctx, message.MustAsImmutableTruncateCollectionMessageV2(msg))
+		result = m.handleTruncateCollectionMessage(ctx, message.MustAsImmutableTruncateCollectionMessageV2(msg))
 	case message.MessageTypeAlterLoadConfig:
-		return m.handleAlterLoadConfigMessage(message.MustAsImmutableAlterLoadConfigMessageV2(msg))
+		result = m.handleAlterLoadConfigMessage(message.MustAsImmutableAlterLoadConfigMessageV2(msg))
 	case message.MessageTypeDropLoadConfig:
-		return m.handleDropLoadConfigMessage(message.MustAsImmutableDropLoadConfigMessageV2(msg))
+		result = m.handleDropLoadConfigMessage(message.MustAsImmutableDropLoadConfigMessageV2(msg))
 	case message.MessageTypeCreateSegment:
-		return m.handleCreateSegmentMessage(ctx, message.MustAsImmutableCreateSegmentMessageV2(msg))
+		result = m.handleCreateSegmentMessage(ctx, message.MustAsImmutableCreateSegmentMessageV2(msg))
 	case message.MessageTypeInsert:
-		return m.handleInsertMessage(ctx, message.MustAsImmutableInsertMessageV1(msg))
+		result = m.handleInsertMessage(ctx, message.MustAsImmutableInsertMessageV1(msg))
 	case message.MessageTypeTxn:
-		return m.handleTxnMessage(ctx, message.AsImmutableTxnMessage(msg))
+		result = m.handleTxnMessage(ctx, message.AsImmutableTxnMessage(msg))
 	case message.MessageTypeFlush:
-		return m.handleFlushMessage(ctx, message.MustAsImmutableFlushMessageV2(msg))
+		result = m.handleFlushMessage(ctx, message.MustAsImmutableFlushMessageV2(msg))
 	case message.MessageTypeManualFlush:
-		return m.handleManualFlushMessage(ctx, msg)
+		result = m.handleManualFlushMessage(ctx, msg)
 	case message.MessageTypeFlushAll:
-		return m.handleFlushAllMessage(ctx, msg)
+		result = m.handleFlushAllMessage(ctx, msg)
 	case message.MessageTypeAlterWAL:
-		return m.handleAlterWALMessage(ctx, msg)
+		result = m.handleAlterWALMessage(ctx, msg)
 	case message.MessageTypeDelete:
-		return m.appendTransformLogMessage(msg)
+		result = m.appendTransformLogMessage(msg)
 	case message.MessageTypeRecoveryBarrier:
-		return m.handleRecoveryBarrierMessage(msg)
+		result = m.handleRecoveryBarrierMessage(msg)
 	default:
-		return moduleapi.ObserveResult{}
+		result = moduleapi.ObserveResult{}
 	}
+	m.observeQueryResourceMessageLocked(ctx, msg)
+	return result
 }
 
 func (m *VChannelRecoveryModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
@@ -295,55 +324,6 @@ func (m *VChannelRecoveryModule) DataFrontier(scope moduleapi.Scope) walcheckpoi
 
 func (m *VChannelRecoveryModule) IsActive() bool {
 	return m != nil && m.vchannelView != nil && m.vchannelView.IsActive()
-}
-
-func (m *VChannelRecoveryModule) BuildWALView(
-	ctx context.Context,
-	transformLogStream wal.TransformLogStreamManager,
-	baseSelector ResourceRecoveryBaseSelector,
-	loadConfigProvider RecoveredLoadConfigProvider,
-) (walview.VChannelWALView, bool) {
-	if m == nil || m.vchannelView == nil || m.transformLog == nil || transformLogStream == nil {
-		return walview.VChannelWALView{}, false
-	}
-	vchannelSnapshot, ok := m.vchannelView.WALViewSnapshot()
-	if !ok {
-		return walview.VChannelWALView{}, false
-	}
-	loadConfig := vchannelSnapshot.LoadConfig
-	if loadConfig == nil && loadConfigProvider != nil {
-		loadConfig = loadConfigProvider(m.vchannel)
-	}
-	if loadConfig == nil {
-		return walview.VChannelWALView{}, false
-	}
-	baseTransformTimeTick := m.transformLog.LatestTimeTick()
-	baseGrowingTimeTick := max(m.latestInsertTimeTick, baseTransformTimeTick)
-	segmentSnapshot := m.visibleSnapshot(baseGrowingTimeTick, m.segmentSnapshotDataVersion())
-	if baseSelector != nil {
-		if base, ok := baseSelector(m.vchannel); ok {
-			segmentSnapshot = m.visibleSnapshot(baseGrowingTimeTick, base)
-		}
-	}
-	deleteReplay := newDeleteReplayScanner(
-		ctx,
-		transformLogStream,
-		m.pchannel,
-		m.vchannel,
-		deleteReplayStartAfter(segmentSnapshot),
-		baseTransformTimeTick,
-	)
-	return walview.VChannelWALView{
-		PChannel:              m.pchannel,
-		VChannel:              m.vchannel,
-		CollectionID:          vchannelSnapshot.CollectionID,
-		BaseGrowingTimeTick:   baseGrowingTimeTick,
-		BaseTransformTimeTick: baseTransformTimeTick,
-		LoadConfig:            loadConfig,
-		Schema:                vchannelSnapshot.Schema,
-		SegmentSnapshot:       segmentSnapshot,
-		DeleteReplay:          deleteReplay,
-	}, true
 }
 
 func (m *VChannelRecoveryModule) handleCreateCollectionMessage(msg message.ImmutableCreateCollectionMessageV1) moduleapi.ObserveResult {

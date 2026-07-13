@@ -8,9 +8,11 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -38,6 +40,8 @@ type PChannelManagerConfig struct {
 	TransformLogMaterialRows  uint64
 	TransformLogMaterialBytes uint64
 	OnSegmentSealed           func(walview.SegmentSealedEvent)
+
+	QueryRuntimeModuleBuilders []QueryRuntimeModuleBuilder
 }
 
 // PChannelRecoveryManager owns all vchannel recovery modules on one pchannel.
@@ -45,9 +49,11 @@ type PChannelRecoveryManager struct {
 	pchannel string
 	modules  *typeutil.ConcurrentMap[string, *VChannelRecoveryModule]
 
-	config        PChannelManagerConfig
-	metaAndData   atomic.Bool
-	streamManager transformlog.StreamManager
+	config          PChannelManagerConfig
+	metaAndData     atomic.Bool
+	streamManager   transformlog.StreamManager
+	queryScheduler  Scheduler
+	queryDispatcher *queryRuntimeDispatcher
 }
 
 func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecoveryManager, error) {
@@ -55,10 +61,12 @@ func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecovery
 		return nil, merr.WrapErrServiceInternalMsg("pchannel recovery manager pchannel is empty")
 	}
 	manager := &PChannelRecoveryManager{
-		pchannel:      config.PChannel,
-		modules:       typeutil.NewConcurrentMap[string, *VChannelRecoveryModule](),
-		config:        config,
-		streamManager: transformlog.NewStreamManager(config.PChannel),
+		pchannel:        config.PChannel,
+		modules:         typeutil.NewConcurrentMap[string, *VChannelRecoveryModule](),
+		config:          config,
+		streamManager:   transformlog.NewStreamManager(config.PChannel),
+		queryScheduler:  NewScheduler(4),
+		queryDispatcher: newQueryRuntimeDispatcher(defaultLiveEventDispatchConcurrency),
 	}
 	for _, vchannel := range manager.initialVChannels(config) {
 		module, err := manager.newModule(vchannel)
@@ -163,19 +171,6 @@ func (m *PChannelRecoveryManager) DataFrontier(scope moduleapi.Scope) walcheckpo
 	return walcheckpoint.NewCompositeBarrier(barriers...)
 }
 
-func (m *PChannelRecoveryManager) BuildWALView(
-	ctx context.Context,
-	vchannel string,
-	baseSelector ResourceRecoveryBaseSelector,
-	loadConfigProvider RecoveredLoadConfigProvider,
-) (walview.VChannelWALView, bool) {
-	module := m.Module(vchannel)
-	if module == nil {
-		return walview.VChannelWALView{}, false
-	}
-	return module.BuildWALView(ctx, m.streamManager, baseSelector, loadConfigProvider)
-}
-
 func (m *PChannelRecoveryManager) Module(vchannel string) *VChannelRecoveryModule {
 	module, _ := m.modules.Get(vchannel)
 	return module
@@ -183,6 +178,68 @@ func (m *PChannelRecoveryManager) Module(vchannel string) *VChannelRecoveryModul
 
 func (m *PChannelRecoveryManager) AcquireStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
 	return m.streamManager.AcquireStream(ctx, pchannel)
+}
+
+func (m *PChannelRecoveryManager) Acquire(req snview.AcquireResource) {
+	if m == nil || req.Meta == nil {
+		panic("query resource acquire misses meta")
+	}
+	module := m.Module(req.Meta.GetVchannel())
+	if module == nil {
+		panic("query resource acquire misses vchannel module")
+	}
+	module.AcquireQueryResource(req)
+}
+
+func (m *PChannelRecoveryManager) Release(req snview.ReleaseResource) {
+	if m == nil {
+		return
+	}
+	module := m.Module(req.Key.ShardID.VChannel)
+	if module == nil {
+		go func() {
+			if req.OnDropped != nil {
+				req.OnDropped()
+			}
+		}()
+		return
+	}
+	module.ReleaseQueryResource(req)
+}
+
+func (m *PChannelRecoveryManager) QueryRuntime(key qviews.QueryViewKey) (snview.QueryRuntime, bool) {
+	runtime, ok := m.GetQueryRuntime(key)
+	if !ok {
+		return nil, false
+	}
+	return runtime, true
+}
+
+func (m *PChannelRecoveryManager) GetQueryRuntime(key qviews.QueryViewKey) (*QueryRuntime, bool) {
+	if m == nil {
+		return nil, false
+	}
+	module := m.Module(key.ShardID.VChannel)
+	if module == nil {
+		return nil, false
+	}
+	return module.QueryRuntime(key)
+}
+
+func (m *PChannelRecoveryManager) Close() {
+	if m == nil {
+		return
+	}
+	m.modules.Range(func(_ string, module *VChannelRecoveryModule) bool {
+		module.CloseQueryResources()
+		return true
+	})
+	if m.queryScheduler != nil {
+		m.queryScheduler.Close()
+	}
+	if m.queryDispatcher != nil {
+		m.queryDispatcher.Close()
+	}
 }
 
 func (m *PChannelRecoveryManager) shouldBroadcast(msg message.ImmutableMessage) bool {
@@ -247,23 +304,27 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 		}
 	}
 	module, err := NewModule(ModuleConfig{
-		PChannel:                  m.pchannel,
-		VChannel:                  vchannel,
-		VChannelMeta:              m.config.VChannelMetas[vchannel],
-		Segments:                  segments,
-		SegmentDataVersionSummary: m.config.SegmentDataVersionSummary[vchannel],
-		TransformLogMeta:          m.config.TransformLogMetas[vchannel],
-		Runtime:                   m.config.Runtime,
-		Logger:                    m.config.Logger,
-		SegmentLifecycle:          m.config.SegmentLifecycle,
-		SegmentPackWriter:         m.config.SegmentPackWriter,
-		TransformLogStore:         m.config.TransformLogStore,
-		TransformLogMaterializer:  m.config.TransformLogMaterializer,
-		TransformLogMaxRows:       m.config.TransformLogMaxRows,
-		TransformLogMaxBytes:      m.config.TransformLogMaxBytes,
-		TransformLogMaterialRows:  m.config.TransformLogMaterialRows,
-		TransformLogMaterialBytes: m.config.TransformLogMaterialBytes,
-		OnSegmentSealed:           m.config.OnSegmentSealed,
+		PChannel:                   m.pchannel,
+		VChannel:                   vchannel,
+		VChannelMeta:               m.config.VChannelMetas[vchannel],
+		Segments:                   segments,
+		SegmentDataVersionSummary:  m.config.SegmentDataVersionSummary[vchannel],
+		TransformLogMeta:           m.config.TransformLogMetas[vchannel],
+		Runtime:                    m.config.Runtime,
+		Logger:                     m.config.Logger,
+		SegmentLifecycle:           m.config.SegmentLifecycle,
+		SegmentPackWriter:          m.config.SegmentPackWriter,
+		TransformLogStore:          m.config.TransformLogStore,
+		TransformLogMaterializer:   m.config.TransformLogMaterializer,
+		TransformLogMaxRows:        m.config.TransformLogMaxRows,
+		TransformLogMaxBytes:       m.config.TransformLogMaxBytes,
+		TransformLogMaterialRows:   m.config.TransformLogMaterialRows,
+		TransformLogMaterialBytes:  m.config.TransformLogMaterialBytes,
+		OnSegmentSealed:            m.config.OnSegmentSealed,
+		TransformLogStream:         m.streamManager,
+		QueryRuntimeModuleBuilders: m.config.QueryRuntimeModuleBuilders,
+		QueryResourceScheduler:     m.queryScheduler,
+		QueryRuntimeDispatcher:     m.queryDispatcher,
 	})
 	if err != nil {
 		return nil, err
@@ -274,3 +335,5 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 var _ moduleapi.Module = (*PChannelRecoveryManager)(nil)
 var _ moduleapi.DataFrontierProvider = (*PChannelRecoveryManager)(nil)
 var _ wal.TransformLogStreamManager = (*PChannelRecoveryManager)(nil)
+var _ snview.StreamingNodeResourceManager = (*PChannelRecoveryManager)(nil)
+var _ snview.QueryRuntimeProvider = (*PChannelRecoveryManager)(nil)
