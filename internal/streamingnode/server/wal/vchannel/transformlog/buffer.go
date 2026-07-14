@@ -176,6 +176,17 @@ func deleteEntryRows(request *msgpb.DeleteRequest) uint64 {
 }
 
 func transformEntryFromMessage(msg message.ImmutableMessage, opt AppendOption) *transformEntry {
+	switch messageutil.ClassifyTransformLogMessage(msg) {
+	case messageutil.TransformLogKindDelete:
+		return deleteTransformEntryFromMessage(msg, opt)
+	case messageutil.TransformLogKindBarrier:
+		return transformBarrierEntry(msg.TimeTick())
+	default:
+		return nil
+	}
+}
+
+func deleteTransformEntryFromMessage(msg message.ImmutableMessage, opt AppendOption) *transformEntry {
 	switch msg.MessageType() {
 	case message.MessageTypeDelete:
 		deleted := message.MustAsImmutableDeleteMessageV1(msg)
@@ -190,22 +201,6 @@ func transformEntryFromMessage(msg message.ImmutableMessage, opt AppendOption) *
 			return nil
 		})
 		return transformEntryFromDeletes(msg.TimeTick(), deletes, opt)
-	case message.MessageTypeCreateCollection,
-		message.MessageTypeRecoveryBarrier,
-		message.MessageTypeFlush,
-		message.MessageTypeManualFlush,
-		message.MessageTypeFlushAll,
-		message.MessageTypeDropPartition,
-		message.MessageTypeDropCollection,
-		message.MessageTypeTruncateCollection,
-		message.MessageTypeAlterWAL:
-		return transformBarrierEntry(msg.TimeTick())
-	case message.MessageTypeAlterCollection:
-		alter := message.MustAsImmutableAlterCollectionMessageV2(msg)
-		if messageutil.IsSchemaChange(alter.Header()) {
-			return transformBarrierEntry(msg.TimeTick())
-		}
-		return nil
 	default:
 		return nil
 	}

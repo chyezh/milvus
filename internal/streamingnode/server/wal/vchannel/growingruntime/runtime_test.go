@@ -100,6 +100,18 @@ func newTestFlushMessage(t *testing.T, vchannel string, segmentID int64, timetic
 		IntoImmutableMessage(rmq.NewRmqID(int64(timetick + 1)))
 }
 
+func newTestManualFlushMessage(t *testing.T, vchannel string, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	mutable := message.NewManualFlushMessageBuilderV2().
+		WithVChannel(vchannel).
+		WithHeader(&message.ManualFlushMessageHeader{CollectionId: 1}).
+		WithBody(&message.ManualFlushMessageBody{}).
+		MustBuildMutable()
+	return mutable.WithTimeTick(timetick).
+		WithLastConfirmed(rmq.NewRmqID(int64(timetick))).
+		IntoImmutableMessage(rmq.NewRmqID(int64(timetick + 1)))
+}
+
 func newTestRecoveryBarrierMessage(t *testing.T, timetick uint64) message.ImmutableMessage {
 	t.Helper()
 	mutable := message.NewRecoveryBarrierMessageBuilderV2().
@@ -119,6 +131,18 @@ func TestRecoveryBarrierAdvancesBothRuntimeFrontiers(t *testing.T) {
 
 	require.Equal(t, uint64(30), runtime.AppliedGrowingTimeTick())
 	require.Equal(t, uint64(30), runtime.AppliedTransformTimeTick())
+}
+
+func TestTransformBarrierMessagesAdvanceRuntimeTransformFrontier(t *testing.T) {
+	runtime := newRuntime()
+
+	runtime.applyLiveMessage(context.Background(), newTestFlushMessage(t, "ch", 10, 40))
+	require.Equal(t, uint64(40), runtime.AppliedGrowingTimeTick())
+	require.Equal(t, uint64(40), runtime.AppliedTransformTimeTick())
+
+	runtime.applyLiveMessage(context.Background(), newTestManualFlushMessage(t, "ch", 50))
+	require.Equal(t, uint64(50), runtime.AppliedGrowingTimeTick())
+	require.Equal(t, uint64(50), runtime.AppliedTransformTimeTick())
 }
 
 func TestRuntimeRejectsLiveInsertAfterFlush(t *testing.T) {

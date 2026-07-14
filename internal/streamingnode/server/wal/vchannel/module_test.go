@@ -7,10 +7,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
+	scheduler "github.com/milvus-io/milvus/pkg/v3/syncutil/preconditioned"
 )
 
 func TestVChannelRecoveryModuleObservesOnlyItsVChannel(t *testing.T) {
@@ -64,6 +67,26 @@ func TestVChannelRecoveryModuleReturnsOwnedDataFrontier(t *testing.T) {
 	}))
 }
 
+func TestVChannelRecoveryModuleRuntimeCreatedSegmentInheritsMetaAndData(t *testing.T) {
+	ctx := context.Background()
+	scheduler := &recordingScheduler{}
+	module := newTestModule(t, "p1", "v1")
+	module.runtime.Scheduler = scheduler
+	module.SwitchIntoMetaAndData()
+
+	result := module.ObserveMessage(ctx, newTestCreateSegmentMessage(t, "v1", 10, 20))
+
+	require.NotNil(t, result.Data)
+	require.Len(t, scheduler.tasks, 1)
+	assert.Equal(t, "growing-ensure-growing-segment", scheduler.tasks[0].Name())
+	require.NotNil(t, module.segments[10])
+
+	result = module.ObserveMessage(ctx, newTestManualFlushMessage(t, "v1", 30))
+
+	require.NotNil(t, result.Data)
+	assert.Contains(t, scheduler.taskNames(), "growing-commit-l1-segment")
+}
+
 func newTestModule(t *testing.T, pchannel string, vchannel string) *VChannelRecoveryModule {
 	t.Helper()
 	module, err := NewModule(ModuleConfig{
@@ -75,6 +98,18 @@ func newTestModule(t *testing.T, pchannel string, vchannel string) *VChannelReco
 			CheckpointTimeTick: 1,
 			CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
 				CollectionId: 100,
+				Partitions: []*streamingpb.PartitionInfoOfVChannel{
+					{
+						PartitionId: 10,
+						State:       streamingpb.PartitionState_PARTITION_STATE_NORMAL,
+					},
+				},
+				Schemas: []*streamingpb.CollectionSchemaOfVChannel{
+					{
+						Schema: &schemapb.CollectionSchema{Name: "c100"},
+						State:  streamingpb.VChannelSchemaState_VCHANNEL_SCHEMA_STATE_NORMAL,
+					},
+				},
 			},
 			LoadConfig: &streamingpb.VChannelLoadConfig{},
 		},
@@ -83,6 +118,39 @@ func newTestModule(t *testing.T, pchannel string, vchannel string) *VChannelReco
 	})
 	require.NoError(t, err)
 	return module
+}
+
+func newTestCreateSegmentMessage(t *testing.T, vchannel string, segmentID int64, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	mutableMsg := message.NewCreateSegmentMessageBuilderV2().
+		WithHeader(&message.CreateSegmentMessageHeader{
+			CollectionId:   100,
+			PartitionId:    10,
+			SegmentId:      segmentID,
+			StorageVersion: 1,
+			Level:          datapb.SegmentLevel_L1,
+		}).
+		WithBody(&message.CreateSegmentMessageBody{}).
+		WithVChannel(vchannel).
+		MustBuildMutable()
+	return mutableMsg.WithTimeTick(timetick).
+		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
+}
+
+func newTestManualFlushMessage(t *testing.T, vchannel string, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	mutableMsg := message.NewManualFlushMessageBuilderV2().
+		WithHeader(&message.ManualFlushMessageHeader{
+			CollectionId: 100,
+			SegmentIds:   []int64{10},
+		}).
+		WithBody(&message.ManualFlushMessageBody{}).
+		WithVChannel(vchannel).
+		MustBuildMutable()
+	return mutableMsg.WithTimeTick(timetick).
+		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
 }
 
 func newTestDeleteMessage(t *testing.T, vchannel string, timetick uint64) message.ImmutableMessage {
@@ -97,6 +165,33 @@ func newTestDeleteMessage(t *testing.T, vchannel string, timetick uint64) messag
 	return mutableMsg.WithTimeTick(timetick).
 		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
 		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
+}
+
+type recordingScheduler struct {
+	tasks []scheduler.Task
+}
+
+func (s *recordingScheduler) Submit(task scheduler.Task) scheduler.TaskHandle {
+	s.tasks = append(s.tasks, task)
+	return taskHandle{done: true}
+}
+
+func (s *recordingScheduler) Notify() {}
+
+func (s *recordingScheduler) taskNames() []string {
+	names := make([]string, 0, len(s.tasks))
+	for _, task := range s.tasks {
+		names = append(names, task.Name())
+	}
+	return names
+}
+
+type taskHandle struct {
+	done bool
+}
+
+func (h taskHandle) Done() bool {
+	return h.done
 }
 
 func newTestRecoveryBarrierMessage(t *testing.T, timetick uint64) message.ImmutableMessage {

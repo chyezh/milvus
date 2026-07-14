@@ -8,6 +8,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
 )
 
 func (r *Runtime) ApplyLiveEvent(ctx context.Context, event walview.VChannelResourceEvent) {
@@ -47,28 +48,7 @@ func (r *Runtime) applyLiveMessage(ctx context.Context, msg message.ImmutableMes
 }
 
 func messageAdvancesTransformFrontier(msg message.ImmutableMessage) bool {
-	if msg == nil {
-		return false
-	}
-	switch msg.MessageType() {
-	case message.MessageTypeDelete, message.MessageTypeRecoveryBarrier:
-		return true
-	case message.MessageTypeTxn:
-		txn := message.AsImmutableTxnMessage(msg)
-		if txn == nil {
-			return false
-		}
-		containsDelete := false
-		_ = txn.RangeOver(func(inner message.ImmutableMessage) error {
-			if inner.MessageType() == message.MessageTypeDelete {
-				containsDelete = true
-			}
-			return nil
-		})
-		return containsDelete
-	default:
-		return false
-	}
+	return messageutil.ClassifyTransformLogMessage(msg) != messageutil.TransformLogKindNone
 }
 
 func advanceTimeTick(value interface {

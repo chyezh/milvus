@@ -421,6 +421,9 @@ func (m *VChannelRecoveryModule) handleCreateSegmentMessage(ctx context.Context,
 			return result
 		}
 		view = segment.NewSegmentViewFromCreateSegmentMessageWithOptions(msg, schema, m.segmentOptions()...)
+		if m.metaAndData {
+			view.SwitchIntoMetaAndData()
+		}
 		m.segments[id] = view
 		result.Meta = view.MetaBarrier()
 	}
@@ -513,6 +516,10 @@ func (m *VChannelRecoveryModule) appendTransformLogMessage(msg message.Immutable
 	if m.transformLog == nil || msg.VChannel() == "" || !m.metaAndData {
 		return moduleapi.ObserveResult{}
 	}
+	kind := messageutil.ClassifyTransformLogMessage(msg)
+	if kind == messageutil.TransformLogKindNone {
+		return moduleapi.ObserveResult{}
+	}
 	if msg.TimeTick() <= m.transformLog.DataCheckpointTimeTick() {
 		return moduleapi.ObserveResult{}
 	}
@@ -520,7 +527,7 @@ func (m *VChannelRecoveryModule) appendTransformLogMessage(msg message.Immutable
 	if !result.Appended {
 		return moduleapi.ObserveResult{}
 	}
-	if result.ShouldFlush || isTransformBarrierMessage(msg) {
+	if result.ShouldFlush || kind == messageutil.TransformLogKindBarrier {
 		m.submitTransformFlushTask(result.DataTimeTick)
 	}
 	return moduleapi.ObserveResult{Data: m.transformDataBarrier()}
@@ -727,26 +734,6 @@ func deleteReplayStartAfter(snapshot walview.VisibleSegmentSnapshot) uint64 {
 
 func composeObserveResults(left moduleapi.ObserveResult, right moduleapi.ObserveResult) moduleapi.ObserveResult {
 	return moduleapi.ComposeBarriers([]moduleapi.ObserveResult{left, right})
-}
-
-func isTransformBarrierMessage(msg message.ImmutableMessage) bool {
-	switch msg.MessageType() {
-	case message.MessageTypeCreateCollection,
-		message.MessageTypeRecoveryBarrier,
-		message.MessageTypeFlush,
-		message.MessageTypeManualFlush,
-		message.MessageTypeFlushAll,
-		message.MessageTypeDropPartition,
-		message.MessageTypeDropCollection,
-		message.MessageTypeTruncateCollection,
-		message.MessageTypeAlterWAL:
-		return true
-	case message.MessageTypeAlterCollection:
-		alter := message.MustAsImmutableAlterCollectionMessageV2(msg)
-		return messageutil.IsSchemaChange(alter.Header())
-	default:
-		return false
-	}
 }
 
 func max(a, b uint64) uint64 {
