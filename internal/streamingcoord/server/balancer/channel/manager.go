@@ -44,9 +44,17 @@ type (
 		CChannelAssignment     *streamingpb.CChannelAssignment
 		PChannelView           *PChannelView // channel metas only, Stats is nil
 		Relations              []types.PChannelInfoAssigned
+		ShardAssignments       map[int64]types.ShardAssignmentInfo
 		ReplicateConfiguration *commonpb.ReplicateConfiguration
 	}
 	WatchChannelAssignmentsCallback func(param WatchChannelAssignmentsCallbackParam) error
+
+	// ShardAssignmentProvider supplies discoverable QueryView shard replicas
+	// grouped by pchannel. ChannelManager maps these entries to current SN
+	// owners when publishing assignment discovery.
+	ShardAssignmentProvider interface {
+		ShardAssignmentsByPChannel() map[string][]types.ShardAssignmentEntry
+	}
 )
 
 // RecoverChannelManager creates a new channel manager.
@@ -224,6 +232,7 @@ type ChannelManager struct {
 	streamingEnableNotifiers []*syncutil.AsyncTaskNotifier[struct{}]
 	replicateConfig          *replicateutil.ConfigHelper
 	replicateRole            atomic.Int32 // lock-free snapshot published after replicateConfig is persisted
+	shardAssignmentProvider  ShardAssignmentProvider
 }
 
 // RegisterStreamingEnabledNotifier registers a notifier into the balancer.
@@ -324,6 +333,15 @@ func (cm *ChannelManager) TriggerWatchUpdate() {
 	cm.cond.LockAndBroadcast()
 	defer cm.cond.L.Unlock()
 
+	cm.version.Local++
+	cm.metrics.UpdateAssignmentVersion(cm.version.Local)
+}
+
+func (cm *ChannelManager) SetShardAssignmentProvider(provider ShardAssignmentProvider) {
+	cm.cond.LockAndBroadcast()
+	defer cm.cond.L.Unlock()
+
+	cm.shardAssignmentProvider = provider
 	cm.version.Local++
 	cm.metrics.UpdateAssignmentVersion(cm.version.Local)
 }
@@ -729,12 +747,14 @@ func (cm *ChannelManager) applyAssignments(cb WatchChannelAssignmentsCallback) (
 	version := cm.version
 	cchannelAssignment := proto.Clone(cm.cchannelMeta).(*streamingpb.CChannelMeta)
 	pchannelViews := newPChannelMetaView(cm.channels)
+	shardAssignmentProvider := cm.shardAssignmentProvider
 	cm.cond.L.Unlock()
 
 	var replicateConfig *commonpb.ReplicateConfiguration
 	if cm.replicateConfig != nil {
 		replicateConfig = cm.replicateConfig.GetReplicateConfiguration()
 	}
+	shardAssignments := buildShardAssignments(assignments, shardAssignmentProvider)
 	return version, cb(WatchChannelAssignmentsCallbackParam{
 		StreamingVersion: cm.streamingVersion,
 		Version:          version,
@@ -743,8 +763,40 @@ func (cm *ChannelManager) applyAssignments(cb WatchChannelAssignmentsCallback) (
 		},
 		PChannelView:           pchannelViews,
 		Relations:              assignments,
+		ShardAssignments:       shardAssignments,
 		ReplicateConfiguration: replicateConfig,
 	})
+}
+
+func buildShardAssignments(
+	assignments []types.PChannelInfoAssigned,
+	provider ShardAssignmentProvider,
+) map[int64]types.ShardAssignmentInfo {
+	if provider == nil {
+		return nil
+	}
+	byPChannel := provider.ShardAssignmentsByPChannel()
+	if len(byPChannel) == 0 {
+		return nil
+	}
+
+	byNode := make(map[int64]types.ShardAssignmentInfo)
+	for _, assignment := range assignments {
+		entries := byPChannel[assignment.Channel.Name]
+		if len(entries) == 0 {
+			continue
+		}
+		nodeAssignment := byNode[assignment.Node.ServerID]
+		nodeAssignment.PChannelAssignments = append(nodeAssignment.PChannelAssignments, types.PChannelShardAssignment{
+			PChannel: assignment.Channel.Name,
+			Entries:  append([]types.ShardAssignmentEntry{}, entries...),
+		})
+		byNode[assignment.Node.ServerID] = nodeAssignment
+	}
+	if len(byNode) == 0 {
+		return nil
+	}
+	return byNode
 }
 
 // waitChanges waits for the layout to be updated.
