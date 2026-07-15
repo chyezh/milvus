@@ -304,7 +304,7 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 			segments[id] = meta
 		}
 	}
-	module, err := NewModule(ModuleConfig{
+	return NewModule(ModuleConfig{
 		PChannel:                   m.pchannel,
 		VChannel:                   vchannel,
 		VChannelMeta:               m.config.VChannelMetas[vchannel],
@@ -327,10 +327,6 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 		QueryResourceScheduler:     m.queryScheduler,
 		QueryRuntimeDispatcher:     m.queryDispatcher,
 	})
-	if err != nil {
-		return nil, err
-	}
-	return module, nil
 }
 
 var _ moduleapi.Module = (*PChannelRecoveryManager)(nil)

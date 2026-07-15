@@ -12,7 +12,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
-	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 )
 
 func (m *VChannelRecoveryModule) AcquireQueryResource(req snview.AcquireResource) {
@@ -46,18 +45,7 @@ func (m *VChannelRecoveryModule) CloseQueryResources() {
 	m.queryResources.Close()
 }
 
-func (m *VChannelRecoveryModule) observeQueryResourceMessageLocked(ctx context.Context, msg message.ImmutableMessage) {
-	m.observeQueryResourceEventLocked(ctx, walview.VChannelResourceEvent{Message: msg})
-}
-
 func (m *VChannelRecoveryModule) observeQueryResourceEvent(ctx context.Context, event walview.VChannelResourceEvent) {
-	if m == nil || m.queryResources == nil {
-		return
-	}
-	m.queryResources.ObserveEvent(ctx, event)
-}
-
-func (m *VChannelRecoveryModule) observeQueryResourceEventLocked(ctx context.Context, event walview.VChannelResourceEvent) {
 	if m == nil || m.queryResources == nil {
 		return
 	}
@@ -107,9 +95,6 @@ func cloneQueryViewSettings(settings *viewpb.QueryViewSettings) *viewpb.QueryVie
 }
 
 func queryViewLoadConfig(meta *viewpb.QueryViewMeta, settings *viewpb.QueryViewSettings) *streamingpb.VChannelLoadConfig {
-	if settings == nil {
-		settings = &viewpb.QueryViewSettings{}
-	}
 	loadFields := make([]*messagespb.LoadFieldConfig, 0, len(settings.GetRequiredFields()))
 	for _, fieldID := range settings.GetRequiredFields() {
 		loadFields = append(loadFields, &messagespb.LoadFieldConfig{FieldId: fieldID})

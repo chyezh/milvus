@@ -327,12 +327,6 @@ func (t *TransformLog) DataBarrierTimeTick() uint64 {
 	return t.persistedDataTimeTick
 }
 
-func (t *TransformLog) materializedTimeTick() uint64 {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.meta.GetMaterializedTimeTick()
-}
-
 func (t *TransformLog) MaterializedBarrierTimeTick() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()

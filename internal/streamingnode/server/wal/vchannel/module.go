@@ -200,14 +200,14 @@ func (m *VChannelRecoveryModule) ObserveMessage(ctx context.Context, msg message
 	case message.MessageTypeDelete:
 		result = moduleapi.ObserveResult{}
 	case message.MessageTypeRecoveryBarrier:
-		result = m.handleRecoveryBarrierMessage(msg)
+		result = moduleapi.ObserveResult{}
 	default:
 		result = moduleapi.ObserveResult{}
 	}
 	if m.transformLog != nil {
 		result = composeObserveResults(result, m.transformLog.ObserveMessage(ctx, msg))
 	}
-	m.observeQueryResourceMessageLocked(ctx, msg)
+	m.observeQueryResourceEvent(ctx, walview.VChannelResourceEvent{Message: msg})
 	return result
 }
 
@@ -354,7 +354,7 @@ func (m *VChannelRecoveryModule) handleAlterCollectionMessage(ctx context.Contex
 		result = composeObserveResults(result, m.vchannelView.ObserveAlterCollectionMessageV2(msg))
 	}
 	if messageutil.IsSchemaChange(msg.Header()) {
-		result = composeObserveResults(result, m.flushSegmentsCreatedBefore(ctx, msg.TimeTick(), func(*segment.SegmentView) bool { return true }))
+		result = composeObserveResults(result, m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick()))
 	}
 	return result
 }
@@ -364,7 +364,7 @@ func (m *VChannelRecoveryModule) handleDropCollectionMessage(ctx context.Context
 	if m.vchannelView != nil {
 		result = composeObserveResults(result, m.vchannelView.ObserveDropCollectionMessageV1(msg))
 	}
-	result = composeObserveResults(result, m.flushSegmentsCreatedBefore(ctx, msg.TimeTick(), func(*segment.SegmentView) bool { return true }))
+	result = composeObserveResults(result, m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick()))
 	return result
 }
 
@@ -373,9 +373,7 @@ func (m *VChannelRecoveryModule) handleDropPartitionMessage(ctx context.Context,
 	if m.vchannelView != nil {
 		result = composeObserveResults(result, m.vchannelView.ObserveDropPartitionMessageV1(msg))
 	}
-	result = composeObserveResults(result, m.flushSegmentsCreatedBefore(ctx, msg.TimeTick(), func(view *segment.SegmentView) bool {
-		return view.PartitionID() == msg.Header().GetPartitionId()
-	}))
+	result = composeObserveResults(result, m.flushPartitionSegmentsCreatedBefore(ctx, msg.TimeTick(), msg.Header().GetPartitionId()))
 	return result
 }
 
@@ -384,7 +382,7 @@ func (m *VChannelRecoveryModule) handleTruncateCollectionMessage(ctx context.Con
 	if m.vchannelView != nil {
 		result = composeObserveResults(result, m.vchannelView.ObserveTruncateCollectionMessageV2(msg))
 	}
-	result = composeObserveResults(result, m.flushSegmentsCreatedBefore(ctx, msg.TimeTick(), func(*segment.SegmentView) bool { return true }))
+	result = composeObserveResults(result, m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick()))
 	return result
 }
 
@@ -474,25 +472,32 @@ func (m *VChannelRecoveryModule) handleFlushMessage(ctx context.Context, msg mes
 }
 
 func (m *VChannelRecoveryModule) handleManualFlushMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
-	return m.flushSegmentsCreatedBefore(ctx, msg.TimeTick(), func(*segment.SegmentView) bool { return true })
+	return m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick())
 }
 
 func (m *VChannelRecoveryModule) handleFlushAllMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
-	return m.flushSegmentsCreatedBefore(ctx, msg.TimeTick(), func(*segment.SegmentView) bool { return true })
+	return m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick())
 }
 
 func (m *VChannelRecoveryModule) handleAlterWALMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
-	return m.flushSegmentsCreatedBefore(ctx, msg.TimeTick(), func(*segment.SegmentView) bool { return true })
+	return m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick())
 }
 
-func (m *VChannelRecoveryModule) handleRecoveryBarrierMessage(msg message.ImmutableMessage) moduleapi.ObserveResult {
-	return moduleapi.ObserveResult{}
-}
-
-func (m *VChannelRecoveryModule) flushSegmentsCreatedBefore(ctx context.Context, timetick uint64, match func(*segment.SegmentView) bool) moduleapi.ObserveResult {
+func (m *VChannelRecoveryModule) flushAllSegmentsCreatedBefore(ctx context.Context, timetick uint64) moduleapi.ObserveResult {
 	result := moduleapi.ObserveResult{}
 	for _, view := range m.segments {
-		if !match(view) || view.CreateTimeTick() >= timetick {
+		if view.CreateTimeTick() >= timetick {
+			continue
+		}
+		result = composeObserveResults(result, view.Flush(ctx, timetick))
+	}
+	return result
+}
+
+func (m *VChannelRecoveryModule) flushPartitionSegmentsCreatedBefore(ctx context.Context, timetick uint64, partitionID int64) moduleapi.ObserveResult {
+	result := moduleapi.ObserveResult{}
+	for _, view := range m.segments {
+		if view.PartitionID() != partitionID || view.CreateTimeTick() >= timetick {
 			continue
 		}
 		result = composeObserveResults(result, view.Flush(ctx, timetick))
