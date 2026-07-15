@@ -20,9 +20,10 @@ import (
 func TestDeleteReplayScannerUsesTransformLogStreamManager(t *testing.T) {
 	ctx := context.Background()
 	transformLog := transformlog.New(transformlog.Config{VChannel: "v1"})
-	require.True(t, transformLog.Append(newDeleteReplayTestMessage(t, "v1", 10), transformlog.AppendOption{}).Appended)
-	require.True(t, transformLog.Append(newDeleteReplayTestMessage(t, "v1", 20), transformlog.AppendOption{}).Appended)
-	require.True(t, transformLog.Append(newDeleteReplayTestMessage(t, "v1", 30), transformlog.AppendOption{}).Appended)
+	transformLog.SwitchIntoMetaAndData()
+	require.NotNil(t, transformLog.ObserveMessage(ctx, newDeleteReplayTestMessage(t, "v1", 10)).Data)
+	require.NotNil(t, transformLog.ObserveMessage(ctx, newDeleteReplayTestMessage(t, "v1", 20)).Data)
+	require.NotNil(t, transformLog.ObserveMessage(ctx, newDeleteReplayTestMessage(t, "v1", 30)).Data)
 	manager := transformlog.NewStreamManager("test-pchannel")
 	manager.Register("v1", transformLog)
 

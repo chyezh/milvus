@@ -248,21 +248,7 @@ func (t *walCheckpointPersistTask) Run(ctx context.Context) error {
 	}
 	rs.metrics.ObServePersistedMetrics(t.checkpoint.TimeTick)
 	rs.simpleTruncateCheckpoint(ctx, t.checkpoint)
-	rs.notifyCheckpointPersisted(t.checkpoint)
 	return nil
-}
-
-func (rs *recoveryStorageImpl) notifyCheckpointPersisted(checkpoint *WALCheckpoint) {
-	if checkpoint.DataCheckpoint == nil {
-		return
-	}
-	for _, module := range rs.modules {
-		observer, ok := module.(moduleapi.CheckpointPersistedObserver)
-		if !ok {
-			continue
-		}
-		observer.NotifyCheckpointPersisted(checkpoint.TimeTick, checkpoint.DataCheckpoint.TimeTick)
-	}
 }
 
 func (rs *recoveryStorageImpl) refreshSnapshotCheckpoint(snapshot *dirtyPersistSnapshot) {

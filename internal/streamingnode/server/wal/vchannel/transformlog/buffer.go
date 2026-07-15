@@ -29,7 +29,7 @@ func newBuffer(maxRows uint64) buffer {
 	return buffer{maxRows: maxRows}
 }
 
-func (b *buffer) Append(msg message.ImmutableMessage, opt AppendOption) bool {
+func (b *buffer) append(msg message.ImmutableMessage, opt appendOption) bool {
 	entry := transformEntryFromMessage(msg, opt)
 	if entry == nil {
 		return false
@@ -175,7 +175,7 @@ func deleteEntryRows(request *msgpb.DeleteRequest) uint64 {
 	return uint64(primaryKeyCount(request.GetPrimaryKeys()))
 }
 
-func transformEntryFromMessage(msg message.ImmutableMessage, opt AppendOption) *transformEntry {
+func transformEntryFromMessage(msg message.ImmutableMessage, opt appendOption) *transformEntry {
 	switch messageutil.ClassifyTransformLogMessage(msg) {
 	case messageutil.TransformLogKindDelete:
 		return deleteTransformEntryFromMessage(msg, opt)
@@ -186,7 +186,7 @@ func transformEntryFromMessage(msg message.ImmutableMessage, opt AppendOption) *
 	}
 }
 
-func deleteTransformEntryFromMessage(msg message.ImmutableMessage, opt AppendOption) *transformEntry {
+func deleteTransformEntryFromMessage(msg message.ImmutableMessage, opt appendOption) *transformEntry {
 	switch msg.MessageType() {
 	case message.MessageTypeDelete:
 		deleted := message.MustAsImmutableDeleteMessageV1(msg)
@@ -206,7 +206,7 @@ func deleteTransformEntryFromMessage(msg message.ImmutableMessage, opt AppendOpt
 	}
 }
 
-func transformEntryFromDeletes(timeTick uint64, deletes []message.ImmutableDeleteMessageV1, opt AppendOption) *transformEntry {
+func transformEntryFromDeletes(timeTick uint64, deletes []message.ImmutableDeleteMessageV1, opt appendOption) *transformEntry {
 	blocks := make([]*streamingpb.TransformDeleteBlock, 0, len(deletes))
 	var rows uint64
 	for _, deleted := range deletes {

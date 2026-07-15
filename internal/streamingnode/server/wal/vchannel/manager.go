@@ -52,7 +52,7 @@ type PChannelRecoveryManager struct {
 
 	config          PChannelManagerConfig
 	metaAndData     atomic.Bool
-	streamManager   transformlog.StreamManager
+	streamManager   *transformlog.StreamManager
 	queryScheduler  queryresource.Scheduler
 	queryDispatcher *queryresource.Dispatcher
 }

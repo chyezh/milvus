@@ -15,8 +15,8 @@ import (
 func TestTransformLogStreamManagerCatchupThenDispatch(t *testing.T) {
 	ctx := context.Background()
 	transformLog := New(Config{VChannel: "v1"})
-	require.True(t, transformLog.Append(newTransformLogTestDeleteMessage(t, 10), AppendOption{}).Appended)
-	require.True(t, transformLog.Append(newTransformLogTestDeleteMessage(t, 20), AppendOption{}).Appended)
+	require.True(t, transformLog.append(newTransformLogTestDeleteMessage(t, 10), appendOption{}).Appended)
+	require.True(t, transformLog.append(newTransformLogTestDeleteMessage(t, 20), appendOption{}).Appended)
 	manager := NewStreamManager("pchannel")
 	manager.Register("v1", transformLog)
 
@@ -49,7 +49,7 @@ func TestTransformLogStreamManagerCatchupThenDispatch(t *testing.T) {
 	assert.Equal(t, uint64(20), recvStreamEvent(t, handler2.events).Entry.GetTimeTick())
 	require.NotNil(t, recvStreamEvent(t, handler2.events).CaughtUp)
 
-	require.True(t, transformLog.Append(newTransformLogTestDeleteMessage(t, 30), AppendOption{}).Appended)
+	require.True(t, transformLog.append(newTransformLogTestDeleteMessage(t, 30), appendOption{}).Appended)
 	assert.Equal(t, uint64(30), recvStreamEvent(t, handler1.events).Entry.GetTimeTick())
 	assert.Equal(t, uint64(30), recvStreamEvent(t, handler2.events).Entry.GetTimeTick())
 }
@@ -57,9 +57,9 @@ func TestTransformLogStreamManagerCatchupThenDispatch(t *testing.T) {
 func TestTransformLogStreamManagerBoundedReplayEmitsCaughtUpAndCloses(t *testing.T) {
 	ctx := context.Background()
 	transformLog := New(Config{VChannel: "v1"})
-	require.True(t, transformLog.Append(newTransformLogTestDeleteMessage(t, 10), AppendOption{}).Appended)
-	require.True(t, transformLog.Append(newTransformLogTestDeleteMessage(t, 20), AppendOption{}).Appended)
-	require.True(t, transformLog.Append(newTransformLogTestDeleteMessage(t, 30), AppendOption{}).Appended)
+	require.True(t, transformLog.append(newTransformLogTestDeleteMessage(t, 10), appendOption{}).Appended)
+	require.True(t, transformLog.append(newTransformLogTestDeleteMessage(t, 20), appendOption{}).Appended)
+	require.True(t, transformLog.append(newTransformLogTestDeleteMessage(t, 30), appendOption{}).Appended)
 	manager := NewStreamManager("pchannel")
 	manager.Register("v1", transformLog)
 

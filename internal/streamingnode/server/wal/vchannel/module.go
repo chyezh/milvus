@@ -20,7 +20,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
-	scheduler "github.com/milvus-io/milvus/pkg/v3/syncutil/preconditioned"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
@@ -69,9 +68,7 @@ type VChannelRecoveryModule struct {
 	segmentDataVersionSummary *streamingpb.SegmentDataVersionSummary
 	latestInsertTimeTick      uint64
 
-	transformLog     transformlog.TransformLog
-	flushTasks       []scheduler.TaskHandle
-	materializeTasks []scheduler.TaskHandle
+	transformLog *transformlog.TransformLog
 
 	segmentLifecycle  segment.Lifecycle
 	segmentPackWriter segment.PackWriter
@@ -134,6 +131,7 @@ func NewModule(config ModuleConfig) (*VChannelRecoveryModule, error) {
 		Meta:                config.TransformLogMeta,
 		Store:               config.TransformLogStore,
 		Materializer:        config.TransformLogMaterializer,
+		Runtime:             config.Runtime,
 	})
 	return module, nil
 }
@@ -200,11 +198,14 @@ func (m *VChannelRecoveryModule) ObserveMessage(ctx context.Context, msg message
 	case message.MessageTypeAlterWAL:
 		result = m.handleAlterWALMessage(ctx, msg)
 	case message.MessageTypeDelete:
-		result = m.appendTransformLogMessage(msg)
+		result = moduleapi.ObserveResult{}
 	case message.MessageTypeRecoveryBarrier:
 		result = m.handleRecoveryBarrierMessage(msg)
 	default:
 		result = moduleapi.ObserveResult{}
+	}
+	if m.transformLog != nil {
+		result = composeObserveResults(result, m.transformLog.ObserveMessage(ctx, msg))
 	}
 	m.observeQueryResourceMessageLocked(ctx, msg)
 	return result
@@ -238,6 +239,7 @@ func (m *VChannelRecoveryModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapsho
 		})
 	}
 	if m.transformLog != nil {
+		m.transformLog.SwitchIntoMetaAndData()
 		snapshots = append(snapshots, &moduleapi.TransformLogModuleSnapshot{
 			TransformLogs: map[string]*streamingpb.VChannelTransformLogMeta{m.vchannel: m.transformLog.SnapshotMeta()},
 		})
@@ -298,10 +300,6 @@ func (m *VChannelRecoveryModule) ConsumeDirtySnapshots() []moduleapi.DirtySnapsh
 	return snapshots
 }
 
-func (m *VChannelRecoveryModule) NotifyCheckpointPersisted(metaTimeTick uint64, dataTimeTick uint64) {
-	// Snapshot-level persisted callbacks are owned by each DirtySnapshot.
-}
-
 func (m *VChannelRecoveryModule) DataFrontier(scope moduleapi.Scope) walcheckpoint.Barrier {
 	if m == nil || !m.matchesScope(scope) {
 		return nil
@@ -333,7 +331,7 @@ func (m *VChannelRecoveryModule) handleCreateCollectionMessage(msg message.Immut
 			vchannelResult = result
 		}
 	}
-	return composeObserveResults(vchannelResult, m.appendTransformLogMessage(msg))
+	return vchannelResult
 }
 
 func (m *VChannelRecoveryModule) handleCreatePartitionMessage(msg message.ImmutableCreatePartitionMessageV1) moduleapi.ObserveResult {
@@ -357,7 +355,6 @@ func (m *VChannelRecoveryModule) handleAlterCollectionMessage(ctx context.Contex
 	}
 	if messageutil.IsSchemaChange(msg.Header()) {
 		result = composeObserveResults(result, m.flushSegmentsCreatedBefore(ctx, msg.TimeTick(), func(*segment.SegmentView) bool { return true }))
-		result = composeObserveResults(result, m.flushTransformLogByTimeTick(msg.TimeTick()))
 	}
 	return result
 }
@@ -368,7 +365,6 @@ func (m *VChannelRecoveryModule) handleDropCollectionMessage(ctx context.Context
 		result = composeObserveResults(result, m.vchannelView.ObserveDropCollectionMessageV1(msg))
 	}
 	result = composeObserveResults(result, m.flushSegmentsCreatedBefore(ctx, msg.TimeTick(), func(*segment.SegmentView) bool { return true }))
-	result = composeObserveResults(result, m.materializeTransformLogByTimeTick(msg.TimeTick()))
 	return result
 }
 
@@ -380,7 +376,6 @@ func (m *VChannelRecoveryModule) handleDropPartitionMessage(ctx context.Context,
 	result = composeObserveResults(result, m.flushSegmentsCreatedBefore(ctx, msg.TimeTick(), func(view *segment.SegmentView) bool {
 		return view.PartitionID() == msg.Header().GetPartitionId()
 	}))
-	result = composeObserveResults(result, m.flushTransformLogByTimeTick(msg.TimeTick()))
 	return result
 }
 
@@ -390,7 +385,6 @@ func (m *VChannelRecoveryModule) handleTruncateCollectionMessage(ctx context.Con
 		result = composeObserveResults(result, m.vchannelView.ObserveTruncateCollectionMessageV2(msg))
 	}
 	result = composeObserveResults(result, m.flushSegmentsCreatedBefore(ctx, msg.TimeTick(), func(*segment.SegmentView) bool { return true }))
-	result = composeObserveResults(result, m.flushTransformLogByTimeTick(msg.TimeTick()))
 	return result
 }
 
@@ -469,7 +463,7 @@ func (m *VChannelRecoveryModule) handleTxnMessage(ctx context.Context, msg messa
 		return nil
 	})
 	m.markLatestInsertTimeTick(msg.VChannel(), msg.TimeTick(), result)
-	return composeObserveResults(result, m.appendTransformLogMessage(msg))
+	return result
 }
 
 func (m *VChannelRecoveryModule) handleFlushMessage(ctx context.Context, msg message.ImmutableFlushMessageV2) moduleapi.ObserveResult {
@@ -480,25 +474,19 @@ func (m *VChannelRecoveryModule) handleFlushMessage(ctx context.Context, msg mes
 }
 
 func (m *VChannelRecoveryModule) handleManualFlushMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
-	result := m.flushSegmentsCreatedBefore(ctx, msg.TimeTick(), func(*segment.SegmentView) bool { return true })
-	return composeObserveResults(result, m.materializeTransformLogByTimeTick(msg.TimeTick()))
+	return m.flushSegmentsCreatedBefore(ctx, msg.TimeTick(), func(*segment.SegmentView) bool { return true })
 }
 
 func (m *VChannelRecoveryModule) handleFlushAllMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
-	result := m.flushSegmentsCreatedBefore(ctx, msg.TimeTick(), func(*segment.SegmentView) bool { return true })
-	return composeObserveResults(result, m.materializeTransformLogByTimeTick(msg.TimeTick()))
+	return m.flushSegmentsCreatedBefore(ctx, msg.TimeTick(), func(*segment.SegmentView) bool { return true })
 }
 
 func (m *VChannelRecoveryModule) handleAlterWALMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
-	result := m.flushSegmentsCreatedBefore(ctx, msg.TimeTick(), func(*segment.SegmentView) bool { return true })
-	return composeObserveResults(result, m.flushTransformLogByTimeTick(msg.TimeTick()))
+	return m.flushSegmentsCreatedBefore(ctx, msg.TimeTick(), func(*segment.SegmentView) bool { return true })
 }
 
 func (m *VChannelRecoveryModule) handleRecoveryBarrierMessage(msg message.ImmutableMessage) moduleapi.ObserveResult {
-	if !m.metaAndData {
-		return moduleapi.ObserveResult{}
-	}
-	return m.flushTransformLogByTimeTick(msg.TimeTick())
+	return moduleapi.ObserveResult{}
 }
 
 func (m *VChannelRecoveryModule) flushSegmentsCreatedBefore(ctx context.Context, timetick uint64, match func(*segment.SegmentView) bool) moduleapi.ObserveResult {
@@ -510,64 +498,6 @@ func (m *VChannelRecoveryModule) flushSegmentsCreatedBefore(ctx context.Context,
 		result = composeObserveResults(result, view.Flush(ctx, timetick))
 	}
 	return result
-}
-
-func (m *VChannelRecoveryModule) appendTransformLogMessage(msg message.ImmutableMessage) moduleapi.ObserveResult {
-	if m.transformLog == nil || msg.VChannel() == "" || !m.metaAndData {
-		return moduleapi.ObserveResult{}
-	}
-	kind := messageutil.ClassifyTransformLogMessage(msg)
-	if kind == messageutil.TransformLogKindNone {
-		return moduleapi.ObserveResult{}
-	}
-	if msg.TimeTick() <= m.transformLog.DataCheckpointTimeTick() {
-		return moduleapi.ObserveResult{}
-	}
-	result := m.transformLog.Append(msg, transformlog.AppendOption{})
-	if !result.Appended {
-		return moduleapi.ObserveResult{}
-	}
-	if result.ShouldFlush || kind == messageutil.TransformLogKindBarrier {
-		m.submitTransformFlushTask(result.DataTimeTick)
-	}
-	return moduleapi.ObserveResult{Data: m.transformDataBarrier()}
-}
-
-func (m *VChannelRecoveryModule) flushTransformLogByTimeTick(timetick uint64) moduleapi.ObserveResult {
-	if !m.metaAndData || timetick <= m.transformLog.DataCheckpointTimeTick() {
-		return moduleapi.ObserveResult{}
-	}
-	if !m.transformLog.AppendBarrier(timetick).Appended && !m.transformLog.HasPendingWork() {
-		return moduleapi.ObserveResult{}
-	}
-	m.submitTransformFlushTask(timetick)
-	return moduleapi.ObserveResult{Data: m.transformDataBarrier()}
-}
-
-func (m *VChannelRecoveryModule) materializeTransformLogByTimeTick(timetick uint64) moduleapi.ObserveResult {
-	result := m.flushTransformLogByTimeTick(timetick)
-	if result.Data != nil {
-		m.submitTransformMaterializeTask(timetick)
-	}
-	return result
-}
-
-func (m *VChannelRecoveryModule) submitTransformFlushTask(timetick uint64) {
-	if m.runtime.Scheduler == nil {
-		return
-	}
-	task := m.newTransformFlushTask(timetick)
-	handle := m.runtime.Scheduler.Submit(task)
-	m.flushTasks = append(m.flushTasks, handle)
-}
-
-func (m *VChannelRecoveryModule) submitTransformMaterializeTask(timetick uint64) {
-	if m.runtime.Scheduler == nil {
-		return
-	}
-	task := m.newTransformMaterializeTask(timetick)
-	handle := m.runtime.Scheduler.Submit(task)
-	m.materializeTasks = append(m.materializeTasks, handle)
 }
 
 func (m *VChannelRecoveryModule) segmentOptions() []segment.ViewOption {
@@ -662,40 +592,15 @@ func (m *VChannelRecoveryModule) segmentFrontierTimeTick(scope moduleapi.Scope) 
 
 func (m *VChannelRecoveryModule) transformFrontierTimeTick(kind moduleapi.DataProgressKind) uint64 {
 	if kind == moduleapi.DataProgressMaterialized {
-		if m.transformLog.HasDirty() || m.hasPendingTransformMaterializeTask() {
+		if m.transformLog.HasDirty() || m.transformLog.HasPendingMaterializeTask() {
 			return m.transformLog.MaterializedBarrierTimeTick()
 		}
 		return math.MaxUint64
 	}
-	if m.transformLog.HasDirty() || m.transformLog.HasPendingWork() || m.hasPendingTransformFlushTask() {
+	if m.transformLog.HasDirty() || m.transformLog.HasPendingWork() || m.transformLog.HasPendingFlushTask() {
 		return m.transformLog.DataBarrierTimeTick()
 	}
 	return math.MaxUint64
-}
-
-func (m *VChannelRecoveryModule) transformDataBarrier() walcheckpoint.Barrier {
-	return walcheckpoint.BarrierFunc(m.transformLog.DataBarrierTimeTick)
-}
-
-func (m *VChannelRecoveryModule) hasPendingTransformFlushTask() bool {
-	m.flushTasks = compactPendingTasks(m.flushTasks)
-	return len(m.flushTasks) > 0
-}
-
-func (m *VChannelRecoveryModule) hasPendingTransformMaterializeTask() bool {
-	m.materializeTasks = compactPendingTasks(m.materializeTasks)
-	return len(m.materializeTasks) > 0
-}
-
-func compactPendingTasks(tasks []scheduler.TaskHandle) []scheduler.TaskHandle {
-	pending := tasks[:0]
-	for _, task := range tasks {
-		if task == nil || task.Done() {
-			continue
-		}
-		pending = append(pending, task)
-	}
-	return pending
 }
 
 func cloneSegmentDataVersionSummary(summary *streamingpb.SegmentDataVersionSummary) *streamingpb.SegmentDataVersionSummary {
@@ -744,5 +649,4 @@ func max(a, b uint64) uint64 {
 }
 
 var _ moduleapi.Module = (*VChannelRecoveryModule)(nil)
-var _ moduleapi.CheckpointPersistedObserver = (*VChannelRecoveryModule)(nil)
 var _ moduleapi.DataFrontierProvider = (*VChannelRecoveryModule)(nil)

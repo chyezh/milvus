@@ -71,3 +71,17 @@ func newTransformLogTestDeleteMessage(t *testing.T, timetick uint64) message.Imm
 		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
 	return message.MustAsImmutableDeleteMessageV1(msg)
 }
+
+func newTransformLogTestManualFlushMessage(t *testing.T, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	mutableMsg := message.NewManualFlushMessageBuilderV2().
+		WithHeader(&message.ManualFlushMessageHeader{
+			CollectionId: 1,
+		}).
+		WithBody(&message.ManualFlushMessageBody{}).
+		WithVChannel("v1").
+		MustBuildMutable()
+	return mutableMsg.WithTimeTick(timetick).
+		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick))).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick + 1)))
+}

@@ -10,20 +10,20 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
-	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 const defaultStreamCatchupWorkers = 4
 
 type streamLogProvider interface {
-	logForStream(vchannel string) TransformLog
+	logForStream(vchannel string) *TransformLog
 	streamNotifyStateSince(seq uint64) (<-chan struct{}, uint64, []string)
 	validatePChannel(pchannel string) error
 }
 
-type streamManager struct {
+// StreamManager owns TransformLog streams for one pchannel.
+type StreamManager struct {
 	pchannel string
-	logs     map[string]TransformLog
+	logs     map[string]*TransformLog
 
 	streamMu     sync.Mutex
 	streamNotify chan struct{}
@@ -31,41 +31,33 @@ type streamManager struct {
 	streamSeqByV map[string]uint64
 }
 
-type StreamManager interface {
-	wal.TransformLogStreamManager
-	Register(vchannel string, log TransformLog)
-	Remove(vchannel string)
-}
-
 // NewStreamManager creates a TransformLog stream manager for one pchannel.
-func NewStreamManager(pchannel string) StreamManager {
-	return &streamManager{
+func NewStreamManager(pchannel string) *StreamManager {
+	return &StreamManager{
 		pchannel:     pchannel,
-		logs:         make(map[string]TransformLog),
+		logs:         make(map[string]*TransformLog),
 		streamNotify: make(chan struct{}),
 		streamSeqByV: make(map[string]uint64),
 	}
 }
 
-func (m *streamManager) AcquireStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
+func (m *StreamManager) AcquireStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
 	return newTransformLogStream(ctx, m, pchannel)
 }
 
-func (m *streamManager) Register(vchannel string, log TransformLog) {
+func (m *StreamManager) Register(vchannel string, log *TransformLog) {
 	if vchannel == "" || log == nil {
 		return
 	}
-	if transformLog, ok := log.(*transformLog); ok {
-		transformLog.setStreamNotifier(func() {
-			m.notify(vchannel)
-		})
-	}
+	log.setStreamNotifier(func() {
+		m.notify(vchannel)
+	})
 	m.streamMu.Lock()
 	defer m.streamMu.Unlock()
 	m.logs[vchannel] = log
 }
 
-func (m *streamManager) Remove(vchannel string) {
+func (m *StreamManager) Remove(vchannel string) {
 	if vchannel == "" {
 		return
 	}
@@ -74,31 +66,31 @@ func (m *streamManager) Remove(vchannel string) {
 	delete(m.logs, vchannel)
 	m.notifyLocked(vchannel)
 	m.streamMu.Unlock()
-	if transformLog, ok := log.(*transformLog); ok {
-		transformLog.setStreamNotifier(nil)
+	if log != nil {
+		log.setStreamNotifier(nil)
 	}
 }
 
-func (m *streamManager) notify(vchannel string) {
+func (m *StreamManager) notify(vchannel string) {
 	m.streamMu.Lock()
 	defer m.streamMu.Unlock()
 	m.notifyLocked(vchannel)
 }
 
-func (m *streamManager) notifyLocked(vchannel string) {
+func (m *StreamManager) notifyLocked(vchannel string) {
 	m.streamSeq++
 	m.streamSeqByV[vchannel] = m.streamSeq
 	close(m.streamNotify)
 	m.streamNotify = make(chan struct{})
 }
 
-func (m *streamManager) logForStream(vchannel string) TransformLog {
+func (m *StreamManager) logForStream(vchannel string) *TransformLog {
 	m.streamMu.Lock()
 	defer m.streamMu.Unlock()
 	return m.logs[vchannel]
 }
 
-func (m *streamManager) validatePChannel(pchannel string) error {
+func (m *StreamManager) validatePChannel(pchannel string) error {
 	if pchannel == "" {
 		return errors.Wrap(wal.ErrTransformLogInvalidReadOption, "pchannel is empty")
 	}
@@ -108,7 +100,7 @@ func (m *streamManager) validatePChannel(pchannel string) error {
 	return nil
 }
 
-func (m *streamManager) streamNotifyStateSince(seq uint64) (<-chan struct{}, uint64, []string) {
+func (m *StreamManager) streamNotifyStateSince(seq uint64) (<-chan struct{}, uint64, []string) {
 	m.streamMu.Lock()
 	defer m.streamMu.Unlock()
 	changed := make([]string, 0)
@@ -323,10 +315,7 @@ func (s *transformLogStream) createSubscription(opt wal.TransformLogSubscription
 	if log == nil {
 		return nil, errors.Wrap(wal.ErrTransformLogVChannelUnavailable, "transform log is not found")
 	}
-	transformLog, ok := log.(*transformLog)
-	if !ok {
-		return nil, merr.WrapErrServiceInternalMsg("transform log implementation does not support streaming")
-	}
+	transformLog := log
 	transformLog.mu.Lock()
 	if opt.StartAfterTimeTick < transformLog.meta.GetTruncateTimeTick() {
 		transformLog.mu.Unlock()
@@ -489,7 +478,7 @@ func (s *transformLogStream) dispatchVChannel(vchannel string) {
 			}
 			continue
 		}
-		var log *transformLog
+		var log *TransformLog
 		minCursor := uint64(0)
 		first := true
 		for _, sub := range subs {
@@ -606,7 +595,7 @@ type streamSubscription struct {
 	cursor         uint64
 	caughtUpTarget uint64
 	handler        wal.TransformLogEventHandler
-	log            *transformLog
+	log            *TransformLog
 	state          subscriptionState
 	ctx            context.Context
 	cancel         context.CancelFunc

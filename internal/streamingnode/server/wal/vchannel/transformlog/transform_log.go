@@ -8,29 +8,13 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
+	scheduler "github.com/milvus-io/milvus/pkg/v3/syncutil/preconditioned"
 )
-
-type TransformLog interface {
-	Append(message.ImmutableMessage, AppendOption) AppendResult
-	AppendBarrier(uint64) AppendResult
-	Flush(context.Context, FlushOption) (FlushResult, error)
-	Materialize(context.Context, MaterializeOption) (MaterializeResult, error)
-	Truncate(TruncateOption) TruncateResult
-
-	SnapshotMeta() *streamingpb.VChannelTransformLogMeta
-	LatestTimeTick() uint64
-	DataCheckpointTimeTick() uint64
-	DataBarrierTimeTick() uint64
-	MaterializedTimeTick() uint64
-	MaterializedBarrierTimeTick() uint64
-	HasDirty() bool
-	ConsumeDirtyAndGetSnapshot() *streamingpb.VChannelTransformLogMeta
-	MarkSnapshotPersisted(*streamingpb.VChannelTransformLogMeta)
-	HasPendingWork() bool
-	ShouldMaterialize() bool
-}
 
 type Config struct {
 	VChannel            string
@@ -40,40 +24,41 @@ type Config struct {
 	Meta                *streamingpb.VChannelTransformLogMeta
 	Store               Store
 	Materializer        Materializer
+	Runtime             moduleapi.Runtime
 }
 
-type AppendResult struct {
+type appendResult struct {
 	Appended     bool
 	ShouldFlush  bool
 	DataTimeTick uint64
 }
 
-type AppendOption struct {
+type appendOption struct {
 	DeleteFilter func(partitionID int64, timeTick uint64) bool
 }
 
-func (o AppendOption) acceptDelete(partitionID int64, timeTick uint64) bool {
+func (o appendOption) acceptDelete(partitionID int64, timeTick uint64) bool {
 	if o.DeleteFilter == nil {
 		return true
 	}
 	return o.DeleteFilter(partitionID, timeTick)
 }
 
-type FlushOption struct {
+type flushOption struct {
 	TargetTimeTick uint64
 }
 
-type FlushResult struct {
+type flushResult struct {
 	Started            bool
 	DurableTimeTick    uint64
 	NextTargetTimeTick uint64
 }
 
-type MaterializeOption struct {
+type materializeOption struct {
 	TargetTimeTick uint64
 }
 
-type MaterializeResult struct {
+type materializeResult struct {
 	Started                 bool
 	MaterializedTimeTick    uint64
 	MaterializedRows        uint64
@@ -81,15 +66,15 @@ type MaterializeResult struct {
 	HasMaterializedSegments bool
 }
 
-type TruncateOption struct {
+type truncateOption struct {
 	TimeTick uint64
 }
 
-type TruncateResult struct {
+type truncateResult struct {
 	Changed bool
 }
 
-type transformLog struct {
+type TransformLog struct {
 	flushMu               sync.Mutex
 	materializeMu         sync.Mutex
 	mu                    sync.Mutex
@@ -105,14 +90,18 @@ type transformLog struct {
 	materializer          Materializer
 	materializeMaxRows    uint64
 	materializeMaxBytes   uint64
+	runtime               moduleapi.Runtime
+	metaAndData           bool
+	flushTasks            []scheduler.TaskHandle
+	materializeTasks      []scheduler.TaskHandle
 	streamNotifier        func()
 
 	chunks []*chunkDescriptor
 }
 
-func New(config Config) TransformLog {
+func New(config Config) *TransformLog {
 	meta := cloneMetaOrNew(config.Meta)
-	return &transformLog{
+	return &TransformLog{
 		vchannel:              config.VChannel,
 		meta:                  meta,
 		persistedDataTimeTick: meta.GetCheckpointTimeTick(),
@@ -123,52 +112,94 @@ func New(config Config) TransformLog {
 		materializer:          config.Materializer,
 		materializeMaxRows:    config.MaterializeMaxRows,
 		materializeMaxBytes:   config.MaterializeMaxBytes,
+		runtime:               config.Runtime,
 		chunks:                newColdChunkDescriptorsFromMeta(meta),
 	}
 }
 
-func (t *transformLog) Append(msg message.ImmutableMessage, opt AppendOption) AppendResult {
+func (t *TransformLog) SwitchIntoMetaAndData() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.metaAndData = true
+}
+
+func (t *TransformLog) ObserveMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
+	if t == nil || msg == nil || !t.isMetaAndData() {
+		return moduleapi.ObserveResult{}
+	}
+	kind := messageutil.ClassifyTransformLogMessage(msg)
+	if kind == messageutil.TransformLogKindNone {
+		return moduleapi.ObserveResult{}
+	}
+	var result appendResult
+	switch kind {
+	case messageutil.TransformLogKindDelete:
+		if msg.TimeTick() <= t.dataCheckpointTimeTick() {
+			return moduleapi.ObserveResult{}
+		}
+		result = t.append(msg, appendOption{})
+	case messageutil.TransformLogKindBarrier:
+		if msg.TimeTick() <= t.dataCheckpointTimeTick() && !t.HasPendingWork() {
+			return moduleapi.ObserveResult{}
+		}
+		result = t.appendBarrier(msg.TimeTick())
+	}
+	if !result.Appended && !t.HasPendingWork() {
+		return moduleapi.ObserveResult{}
+	}
+	if result.Appended && (result.ShouldFlush || kind == messageutil.TransformLogKindBarrier) {
+		t.submitFlushTask(result.DataTimeTick)
+	} else if kind == messageutil.TransformLogKindBarrier {
+		t.submitFlushTask(msg.TimeTick())
+	}
+	if t.shouldMaterializeByMessage(msg) {
+		t.submitMaterializeTask(msg.TimeTick())
+	}
+	return moduleapi.ObserveResult{Data: t.dataBarrier()}
+}
+
+func (t *TransformLog) append(msg message.ImmutableMessage, opt appendOption) appendResult {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if msg.TimeTick() <= t.meta.GetCheckpointTimeTick() || msg.TimeTick() <= t.buffer.DataTimeTick() {
-		return AppendResult{DataTimeTick: t.buffer.DataTimeTick()}
+		return appendResult{DataTimeTick: t.buffer.DataTimeTick()}
 	}
-	if !t.buffer.Append(msg, opt) {
-		return AppendResult{DataTimeTick: t.buffer.DataTimeTick()}
+	if !t.buffer.append(msg, opt) {
+		return appendResult{DataTimeTick: t.buffer.DataTimeTick()}
 	}
 	t.notifyScannersLocked()
 	t.notifyStreamLocked()
-	return AppendResult{
+	return appendResult{
 		Appended:     true,
 		ShouldFlush:  t.buffer.ShouldFlush(),
 		DataTimeTick: t.buffer.DataTimeTick(),
 	}
 }
 
-func (t *transformLog) AppendBarrier(timeTick uint64) AppendResult {
+func (t *TransformLog) appendBarrier(timeTick uint64) appendResult {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if timeTick <= t.meta.GetCheckpointTimeTick() || timeTick <= t.buffer.DataTimeTick() {
-		return AppendResult{DataTimeTick: t.buffer.DataTimeTick()}
+		return appendResult{DataTimeTick: t.buffer.DataTimeTick()}
 	}
 	t.buffer.AppendEntry(transformBarrierEntry(timeTick))
 	t.notifyScannersLocked()
 	t.notifyStreamLocked()
-	return AppendResult{
+	return appendResult{
 		Appended:     true,
 		ShouldFlush:  t.buffer.ShouldFlush(),
 		DataTimeTick: t.buffer.DataTimeTick(),
 	}
 }
 
-func (t *transformLog) Flush(ctx context.Context, opt FlushOption) (FlushResult, error) {
+func (t *TransformLog) flush(ctx context.Context, opt flushOption) (flushResult, error) {
 	t.flushMu.Lock()
 	defer t.flushMu.Unlock()
 	var work flushWork
 	t.mu.Lock()
 	if !t.buffer.StartFlush(opt.TargetTimeTick) && (!t.buffer.IsFlushing() || t.buffer.FlushTargetTimeTick() == 0) {
 		t.mu.Unlock()
-		return FlushResult{}, nil
+		return flushResult{}, nil
 	}
 	targetTimeTick := t.buffer.FlushTargetTimeTick()
 	if targetTimeTick > t.meta.GetCheckpointTimeTick() {
@@ -180,10 +211,10 @@ func (t *transformLog) Flush(ctx context.Context, opt FlushOption) (FlushResult,
 
 	if work.Chunk != nil {
 		if t.store == nil {
-			return FlushResult{}, errors.New("transform log store is nil")
+			return flushResult{}, errors.New("transform log store is nil")
 		}
 		if err := t.store.WriteTransformLogChunk(ctx, t.vchannel, work.Chunk); err != nil {
-			return FlushResult{}, err
+			return flushResult{}, err
 		}
 	}
 
@@ -194,7 +225,7 @@ func (t *transformLog) Flush(ctx context.Context, opt FlushOption) (FlushResult,
 	return result, nil
 }
 
-func (t *transformLog) Materialize(ctx context.Context, opt MaterializeOption) (MaterializeResult, error) {
+func (t *TransformLog) materialize(ctx context.Context, opt materializeOption) (materializeResult, error) {
 	t.materializeMu.Lock()
 	defer t.materializeMu.Unlock()
 	t.mu.Lock()
@@ -204,25 +235,25 @@ func (t *transformLog) Materialize(ctx context.Context, opt MaterializeOption) (
 	}
 	if targetTimeTick <= t.meta.GetMaterializedTimeTick() {
 		t.mu.Unlock()
-		return MaterializeResult{}, nil
+		return materializeResult{}, nil
 	}
 	if targetTimeTick > t.meta.GetCheckpointTimeTick() {
 		targetTimeTick = t.meta.GetCheckpointTimeTick()
 	}
 	if targetTimeTick <= t.meta.GetMaterializedTimeTick() {
 		t.mu.Unlock()
-		return MaterializeResult{}, nil
+		return materializeResult{}, nil
 	}
 	t.mu.Unlock()
 
 	work, err := t.prepareMaterialize(ctx, targetTimeTick)
 	if err != nil {
-		return MaterializeResult{}, err
+		return materializeResult{}, err
 	}
 
 	if len(work.Entries) > 0 {
 		if t.materializer == nil {
-			return MaterializeResult{}, errors.New("transform log materializer is nil")
+			return materializeResult{}, errors.New("transform log materializer is nil")
 		}
 		if err := t.materializer.Materialize(ctx, MaterializeRequest{
 			VChannel:       t.vchannel,
@@ -231,7 +262,7 @@ func (t *transformLog) Materialize(ctx context.Context, opt MaterializeOption) (
 			MaxRows:        t.materializeMaxRows,
 			MaxBytes:       t.materializeMaxBytes,
 		}); err != nil {
-			return MaterializeResult{}, err
+			return materializeResult{}, err
 		}
 	}
 
@@ -240,12 +271,12 @@ func (t *transformLog) Materialize(ctx context.Context, opt MaterializeOption) (
 	return t.commitMaterializeLocked(work), nil
 }
 
-func (t *transformLog) Truncate(opt TruncateOption) TruncateResult {
+func (t *TransformLog) truncate(opt truncateOption) truncateResult {
 	var changed bool
 	t.mu.Lock()
 	if opt.TimeTick <= t.meta.GetTruncateTimeTick() {
 		t.mu.Unlock()
-		return TruncateResult{}
+		return truncateResult{}
 	}
 	t.meta.TruncateTimeTick = opt.TimeTick
 	t.dirty = true
@@ -255,7 +286,7 @@ func (t *transformLog) Truncate(opt TruncateOption) TruncateResult {
 		if chunk.toTimeTick == 0 {
 			t.mu.Unlock()
 			if err := t.loadChunk(context.TODO(), chunk); err != nil {
-				return TruncateResult{Changed: changed}
+				return truncateResult{Changed: changed}
 			}
 			t.mu.Lock()
 			continue
@@ -269,52 +300,52 @@ func (t *transformLog) Truncate(opt TruncateOption) TruncateResult {
 		}
 	}
 	t.mu.Unlock()
-	return TruncateResult{Changed: changed}
+	return truncateResult{Changed: changed}
 }
 
-func (t *transformLog) SnapshotMeta() *streamingpb.VChannelTransformLogMeta {
+func (t *TransformLog) SnapshotMeta() *streamingpb.VChannelTransformLogMeta {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return cloneMeta(t.meta)
 }
 
-func (t *transformLog) LatestTimeTick() uint64 {
+func (t *TransformLog) LatestTimeTick() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return max(t.meta.GetCheckpointTimeTick(), t.buffer.DataTimeTick())
 }
 
-func (t *transformLog) DataCheckpointTimeTick() uint64 {
+func (t *TransformLog) dataCheckpointTimeTick() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.meta.GetCheckpointTimeTick()
 }
 
-func (t *transformLog) DataBarrierTimeTick() uint64 {
+func (t *TransformLog) DataBarrierTimeTick() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.persistedDataTimeTick
 }
 
-func (t *transformLog) MaterializedTimeTick() uint64 {
+func (t *TransformLog) materializedTimeTick() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.meta.GetMaterializedTimeTick()
 }
 
-func (t *transformLog) MaterializedBarrierTimeTick() uint64 {
+func (t *TransformLog) MaterializedBarrierTimeTick() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.persistedMaterialized
 }
 
-func (t *transformLog) HasDirty() bool {
+func (t *TransformLog) HasDirty() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.dirty
 }
 
-func (t *transformLog) ConsumeDirtyAndGetSnapshot() *streamingpb.VChannelTransformLogMeta {
+func (t *TransformLog) ConsumeDirtyAndGetSnapshot() *streamingpb.VChannelTransformLogMeta {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.pendingDirtySnapshot != nil {
@@ -327,7 +358,7 @@ func (t *transformLog) ConsumeDirtyAndGetSnapshot() *streamingpb.VChannelTransfo
 	return cloneMeta(t.pendingDirtySnapshot)
 }
 
-func (t *transformLog) MarkSnapshotPersisted(snapshot *streamingpb.VChannelTransformLogMeta) {
+func (t *TransformLog) MarkSnapshotPersisted(snapshot *streamingpb.VChannelTransformLogMeta) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if snapshot.GetCheckpointTimeTick() > t.persistedDataTimeTick {
@@ -342,7 +373,7 @@ func (t *transformLog) MarkSnapshotPersisted(snapshot *streamingpb.VChannelTrans
 	t.dirty = !proto.Equal(t.meta, snapshot)
 }
 
-func (t *transformLog) HasPendingWork() bool {
+func (t *TransformLog) HasPendingWork() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return !t.buffer.IsEmpty() ||
@@ -350,7 +381,7 @@ func (t *transformLog) HasPendingWork() bool {
 		t.buffer.FlushTargetTimeTick() > t.persistedDataTimeTick
 }
 
-func (t *transformLog) ShouldMaterialize() bool {
+func (t *TransformLog) shouldMaterialize() bool {
 	t.mu.Lock()
 	targetTimeTick := t.meta.GetCheckpointTimeTick()
 	t.mu.Unlock()
@@ -369,20 +400,41 @@ func (t *transformLog) ShouldMaterialize() bool {
 	return rows >= maxRows || bytes >= maxBytes
 }
 
+func (t *TransformLog) isMetaAndData() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.metaAndData
+}
+
+func (t *TransformLog) shouldMaterializeByMessage(msg message.ImmutableMessage) bool {
+	switch msg.MessageType() {
+	case message.MessageTypeDropCollection,
+		message.MessageTypeManualFlush,
+		message.MessageTypeFlushAll:
+		return true
+	default:
+		return false
+	}
+}
+
+func (t *TransformLog) dataBarrier() walcheckpoint.Barrier {
+	return walcheckpoint.BarrierFunc(t.DataBarrierTimeTick)
+}
+
 type flushWork struct {
 	TargetTimeTick uint64
 	Chunk          *streamingpb.TransformLogChunk
 }
 
-func (t *transformLog) prepareFlushLocked(targetTimeTick uint64) flushWork {
+func (t *TransformLog) prepareFlushLocked(targetTimeTick uint64) flushWork {
 	return flushWork{
 		TargetTimeTick: targetTimeTick,
 		Chunk:          t.buffer.FlushChunk(t.meta.GetNextChunkId(), targetTimeTick),
 	}
 }
 
-func (t *transformLog) commitFlushLocked(work flushWork) FlushResult {
-	var result FlushResult
+func (t *TransformLog) commitFlushLocked(work flushWork) flushResult {
+	var result flushResult
 	if work.Chunk != nil {
 		toTimeTick := work.Chunk.GetEntries()[len(work.Chunk.GetEntries())-1].GetTimeTick()
 		t.buffer.DiscardThrough(toTimeTick)
@@ -425,7 +477,7 @@ type materializeWork struct {
 	Bytes          uint64
 }
 
-func (t *transformLog) prepareMaterialize(ctx context.Context, targetTimeTick uint64) (materializeWork, error) {
+func (t *TransformLog) prepareMaterialize(ctx context.Context, targetTimeTick uint64) (materializeWork, error) {
 	work := materializeWork{TargetTimeTick: targetTimeTick}
 	t.mu.Lock()
 	cursor := t.meta.GetMaterializedTimeTick()
@@ -448,7 +500,7 @@ func (t *transformLog) prepareMaterialize(ctx context.Context, targetTimeTick ui
 	}
 }
 
-func (t *transformLog) pendingMaterializeStats(ctx context.Context, targetTimeTick uint64) (uint64, uint64, error) {
+func (t *TransformLog) pendingMaterializeStats(ctx context.Context, targetTimeTick uint64) (uint64, uint64, error) {
 	t.mu.Lock()
 	cursor := t.meta.GetMaterializedTimeTick()
 	t.mu.Unlock()
@@ -471,13 +523,13 @@ func (t *transformLog) pendingMaterializeStats(ctx context.Context, targetTimeTi
 	}
 }
 
-func (t *transformLog) commitMaterializeLocked(work materializeWork) MaterializeResult {
+func (t *TransformLog) commitMaterializeLocked(work materializeWork) materializeResult {
 	if work.TargetTimeTick <= t.meta.GetMaterializedTimeTick() {
-		return MaterializeResult{}
+		return materializeResult{}
 	}
 	t.meta.MaterializedTimeTick = work.TargetTimeTick
 	t.dirty = true
-	return MaterializeResult{
+	return materializeResult{
 		Started:                 true,
 		MaterializedTimeTick:    work.TargetTimeTick,
 		MaterializedRows:        work.Rows,
@@ -486,7 +538,7 @@ func (t *transformLog) commitMaterializeLocked(work materializeWork) Materialize
 	}
 }
 
-func (t *transformLog) nextEntryAfter(ctx context.Context, after uint64) (*streamingpb.TransformLogEntry, bool, error) {
+func (t *TransformLog) nextEntryAfter(ctx context.Context, after uint64) (*streamingpb.TransformLogEntry, bool, error) {
 	for {
 		t.mu.Lock()
 		entry, chunkToLoad, err := t.nextEntryAfterLocked(after)
@@ -506,7 +558,7 @@ func (t *transformLog) nextEntryAfter(ctx context.Context, after uint64) (*strea
 	}
 }
 
-func (t *transformLog) nextEntryAfterLocked(after uint64) (*streamingpb.TransformLogEntry, *chunkDescriptor, error) {
+func (t *TransformLog) nextEntryAfterLocked(after uint64) (*streamingpb.TransformLogEntry, *chunkDescriptor, error) {
 	if after < t.meta.GetTruncateTimeTick() {
 		return nil, nil, errors.Wrap(wal.ErrTransformLogStartPointTruncated, "start point is truncated")
 	}
@@ -531,7 +583,7 @@ func (t *transformLog) nextEntryAfterLocked(after uint64) (*streamingpb.Transfor
 	return nil, nil, nil
 }
 
-func (t *transformLog) loadChunk(ctx context.Context, chunk *chunkDescriptor) error {
+func (t *TransformLog) loadChunk(ctx context.Context, chunk *chunkDescriptor) error {
 	for {
 		t.mu.Lock()
 		switch chunk.state {
@@ -583,7 +635,7 @@ func (t *transformLog) loadChunk(ctx context.Context, chunk *chunkDescriptor) er
 	}
 }
 
-func (t *transformLog) validateLoadedChunkOrderLocked(chunk *chunkDescriptor) error {
+func (t *TransformLog) validateLoadedChunkOrderLocked(chunk *chunkDescriptor) error {
 	if !chunk.loaded() {
 		return nil
 	}
@@ -608,30 +660,30 @@ func (t *transformLog) validateLoadedChunkOrderLocked(chunk *chunkDescriptor) er
 	return nil
 }
 
-func (t *transformLog) notifyChannel() <-chan struct{} {
+func (t *TransformLog) notifyChannel() <-chan struct{} {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	return t.notifyCh
 }
 
-func (t *transformLog) notifyScannersLocked() {
+func (t *TransformLog) notifyScannersLocked() {
 	close(t.notifyCh)
 	t.notifyCh = make(chan struct{})
 }
 
-func (t *transformLog) setStreamNotifier(notifier func()) {
+func (t *TransformLog) setStreamNotifier(notifier func()) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.streamNotifier = notifier
 }
 
-func (t *transformLog) notifyStreamLocked() {
+func (t *TransformLog) notifyStreamLocked() {
 	if t.streamNotifier != nil {
 		t.streamNotifier()
 	}
 }
 
-func (t *transformLog) latestTimeTickLocked() uint64 {
+func (t *TransformLog) latestTimeTickLocked() uint64 {
 	return maxTimeTick(t.meta.GetCheckpointTimeTick(), t.buffer.DataTimeTick())
 }
 
