@@ -20,6 +20,12 @@ StreamingNode would become a compute-intensive and IO-intensive global bottlenec
 
 ## 3. Two-Phase Query Process
 
+For the detailed query-path flow, service boundary, client orchestration, and
+shard discovery design, see [Query Client Design](query/query_client.md).
+For node-side Phase 1 planning and Phase 2 execution, see
+[Query Plan Node-Side Design](query/query_plan.md) and
+[Query Execution Node-Side Design](query/query_execution.md).
+
 1. **Phase One**: Proxy generates a Shard-level query plan from StreamingNode using the highest version QueryView:
    - Includes MVCC
    - Query optimization (BM25, Segment filtering, etc.)
@@ -220,16 +226,14 @@ Loaded → Release
 - Resources are released when their associated query views are released.
 - Multi-version view support enables atomic updates on nodes to ensure resource liveness, reducing the frequency of resource operations.
 
-StreamingNode is the exception for load-intent vchannel resources prepared from WAL.
-`AlterLoadConfig` is persisted as vchannel load state in `VChannelMeta`; `DropLoadConfig`
-clears that state and cancels any in-flight load-initialization task. These load config
-messages are broadcast to all vchannels of the collection, so each SN consumer mutates
-the local `VChannelMeta` for `msg.VChannel()`. `AlterLoadConfig` is a load intent, not
-a DataVersion recovery contract. RecoveryStorage captures a `VChannelWALView` from
-retained SegmentModule and TransformLog state, and the PChannel-local
-StreamingNode resource manager starts an asynchronous initialization task before
-any QueryView exists. Long-term resource retention is driven by local QueryView
-references and temporary recovery anchors, not by the initialization task.
+StreamingNode resources are prepared by QueryView state machines. `AlterLoadConfig`
+is persisted as vchannel load state in `VChannelMeta`, but it no longer starts
+StreamingNode resource loading by itself. When QueryView state enters the local
+Preparing/UpRecovering path, the state machine calls the PChannel-local
+`VChannelRecoveryModule` through `Acquire`; the module builds the query input
+view from its owned DataView, Segment state, and TransformLog, then keeps
+consuming DML so the recovered DataView only grows while the QueryView is live.
+Long-term resource retention is driven by local QueryView references.
 QueryNode sealed segment resources continue to follow QueryNode's segment/view resource
 lifecycle.
 

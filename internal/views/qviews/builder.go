@@ -10,13 +10,13 @@ import (
 // The builder takes segment-to-node assignments and produces the proto that Coord
 // persists and pushes to all nodes via SyncQueryView.
 type QueryViewAtCoordBuilder struct {
-	collectionID                  int64
-	replicaID                     int64
-	vchannel                      string
-	dataVersion                   DataVersion
-	queryVersion                  int64
-	deleteApplyStartAfterTimetick uint64
-	settings                      *viewpb.QueryViewSettings
+	collectionID                int64
+	replicaID                   int64
+	vchannel                    string
+	dataVersion                 DataVersion
+	queryVersion                int64
+	transformStartAfterTimetick uint64
+	settings                    *viewpb.QueryViewSettings
 	// nodeID -> partitionID -> []segmentID
 	assignments map[int64]map[int64][]int64
 }
@@ -40,13 +40,13 @@ func NewQueryViewAtCoordBuilder(
 		panic("vchannel " + vchannel + " not found in DataViewOfCollection")
 	}
 	return &QueryViewAtCoordBuilder{
-		collectionID:                  dataView.CollectionId,
-		replicaID:                     replicaID,
-		vchannel:                      vchannel,
-		dataVersion:                   FromProtoDataVersion(dataView.DataVersion),
-		deleteApplyStartAfterTimetick: shardView.DeleteApplyStartAfterTimetick,
-		queryVersion:                  1,
-		assignments:                   make(map[int64]map[int64][]int64),
+		collectionID:                dataView.CollectionId,
+		replicaID:                   replicaID,
+		vchannel:                    vchannel,
+		dataVersion:                 FromProtoDataVersion(dataView.DataVersion),
+		transformStartAfterTimetick: shardView.TransformStartAfterTimetick,
+		queryVersion:                1,
+		assignments:                 make(map[int64]map[int64][]int64),
 	}
 }
 
@@ -84,9 +84,9 @@ func (b *QueryViewAtCoordBuilder) Build() *viewpb.QueryViewOfShard {
 			DataVersion:  b.dataVersion.IntoProto(),
 			QueryVersion: b.queryVersion,
 		},
-		State:                         viewpb.QueryViewState_QueryViewStatePreparing,
-		Settings:                      b.settings,
-		DeleteApplyStartAfterTimetick: b.deleteApplyStartAfterTimetick,
+		State:                       viewpb.QueryViewState_QueryViewStatePreparing,
+		Settings:                    b.settings,
+		TransformStartAfterTimetick: b.transformStartAfterTimetick,
 	}
 
 	// Build sorted query node list for deterministic output.

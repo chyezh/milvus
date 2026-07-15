@@ -49,6 +49,22 @@ func NewShardIDFromQVMeta(meta *viewpb.QueryViewMeta) ShardID {
 	}
 }
 
+// FromProtoShardID converts a proto ShardID to a domain ShardID.
+func FromProtoShardID(pb *viewpb.ShardID) ShardID {
+	return ShardID{
+		ReplicaID: pb.ReplicaId,
+		VChannel:  pb.Vchannel,
+	}
+}
+
+// IntoProto converts a ShardID to a proto ShardID.
+func (id ShardID) IntoProto() *viewpb.ShardID {
+	return &viewpb.ShardID{
+		ReplicaId: id.ReplicaID,
+		Vchannel:  id.VChannel,
+	}
+}
+
 // NewStateTransition creates a new state transition from the given state.
 func NewStateTransition(from QueryViewState) StateTransition {
 	return StateTransition{

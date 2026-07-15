@@ -181,7 +181,11 @@ Persisted states: **Preparing**, **Up**, **Down**, **Unrecoverable** (write-ahea
 
 ## 2. StreamingNode State Machine
 
-StreamingNode manages growing data and generates query plans. It persists only the Up recovery info for crash recovery.
+StreamingNode manages growing data and generates query plans. It persists only
+the Up recovery info for crash recovery. The persisted recovery info is the
+complete `QueryViewOfShard` received from Coord, including both
+`QueryViewOfStreamingNode` and `QueryViewOfQueryNode`; the latter is required to
+rebuild Phase 1 query plans after StreamingNode restart.
 
 Persisted states: **Up** recovery info only (the latest Up view).
 

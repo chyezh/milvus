@@ -85,18 +85,55 @@ func TestReliable_NormalFlow(t *testing.T) {
 	assert.True(t, waitForCond(respCalled.Load, time.Second))
 }
 
-func TestReliable_NodeNotFound_DrainImmediately(t *testing.T) {
+func TestReliable_NodeNotFound_NotifiesQueryNodeLostAsynchronously(t *testing.T) {
 	// Node NOT added to client — IsNodeAlive returns false.
 	setup := newReliableTestSetup(t)
 	defer setup.syncer.Close()
 
-	var lostCalled atomic.Bool
-	sv := newTestSyncView(1, 1, nil, func(qviews.QueryNode) { lostCalled.Store(true) })
+	firstLostStarted := make(chan struct{})
+	secondLostStarted := make(chan struct{})
+	releaseFirstLost := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(releaseFirstLost) })
 
-	err := setup.syncer.SyncViews(context.Background(), newTestSyncGroup(sv))
-	require.NoError(t, err)
+	sv1 := newTestSyncView(1, 1, nil, func(qviews.QueryNode) {
+		close(firstLostStarted)
+		<-releaseFirstLost
+	})
+	sv2 := newTestSyncView(1, 2, nil, func(qviews.QueryNode) {
+		close(secondLostStarted)
+	})
 
-	assert.True(t, lostCalled.Load(), "OnQueryNodeLost should be called immediately for unknown node")
+	syncReturned := make(chan error, 1)
+	go func() {
+		syncReturned <- setup.syncer.SyncViews(context.Background(), newTestSyncGroup(sv1, sv2))
+	}()
+
+	select {
+	case err := <-syncReturned:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("SyncViews should not wait for OnQueryNodeLost callback to complete")
+	}
+
+	select {
+	case <-firstLostStarted:
+	case <-time.After(time.Second):
+		t.Fatal("OnQueryNodeLost should be notified for unknown query node")
+	}
+
+	select {
+	case <-secondLostStarted:
+		t.Fatal("unknown-node notifications for one node should run in one goroutine")
+	case <-time.After(50 * testTimeUnit):
+	}
+
+	releaseOnce.Do(func() { close(releaseFirstLost) })
+	select {
+	case <-secondLostStarted:
+	case <-time.After(time.Second):
+		t.Fatal("OnQueryNodeLost should continue notifying remaining views")
+	}
 }
 
 func TestReliable_StreamingNodeNotFoundDoesNotCallQueryNodeLost(t *testing.T) {

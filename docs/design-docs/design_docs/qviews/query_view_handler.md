@@ -121,11 +121,18 @@ Duplicate QueryViewKey handling is owned by the handler/SM pair, not by
 
 **Persist-before-report invariant**: Persistence is always executed before report. If SN crashes after reporting but before persisting, Coord would believe the state advanced while SN lost it.
 
+**Full-view persistence invariant**: The SN-persisted Up view is the complete
+`QueryViewOfShard` pushed by Coord, not just `QueryViewOfStreamingNode`. The
+StreamingNode-local resource manager only consumes the SN portion, but
+StreamingNode also owns Phase 1 query planning and must recover the sealed
+`QueryNode` topology after restart. Persisting only the SN portion makes the
+recovered query plan contain only the growing work node.
+
 ### 4.3 SN: Crash Recovery
 
 SN persists only the Up state. On crash recovery:
 
-1. Load persisted Up views from `Catalog`.
+1. Load persisted full Up shard views from `Catalog`.
 2. Create SMs in UpRecovering state (Coord-visible as Up).
 3. Call `resMgr.Recover(OnRecoveringDone, OnUnrecoverable)` for each view.
 4. `OnRecoveringDone` → UpRecovering → Up → report Up.

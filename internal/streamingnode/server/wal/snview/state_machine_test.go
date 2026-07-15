@@ -38,8 +38,19 @@ func buildTestSNView() *viewpb.QueryViewOfStreamingNode {
 	return &viewpb.QueryViewOfStreamingNode{}
 }
 
+func buildTestQueryNodes() []*viewpb.QueryViewOfQueryNode {
+	return []*viewpb.QueryViewOfQueryNode{
+		{
+			NodeId: 10,
+			Partitions: []*viewpb.QueryViewOfPartition{
+				{PartitionId: 20, SegmentIds: []int64{1000}},
+			},
+		},
+	}
+}
+
 func newTestSM() *snQueryViewStateMachine {
-	return newSNQueryViewStateMachine(buildTestMeta(), buildTestSNView())
+	return newSNQueryViewStateMachine(buildTestMeta(), buildTestSNView(), buildTestQueryNodes())
 }
 
 // newReadySM returns a SM in Ready state with all pending drained.
@@ -97,7 +108,7 @@ func newDroppedSM() *snQueryViewStateMachine {
 
 // newRecoveringSM returns a SM in UpRecovering state with all pending drained.
 func newRecoveringSM() *snQueryViewStateMachine {
-	return recoverSNQueryViewStateMachine(buildTestMeta(), buildTestSNView())
+	return recoverSNQueryViewStateMachine(buildTestMeta(), buildTestSNView(), buildTestQueryNodes())
 }
 
 func assertReportState(t *testing.T, sm *snQueryViewStateMachine, expected qviews.QueryViewState) {
@@ -116,13 +127,16 @@ func assertReportState(t *testing.T, sm *snQueryViewStateMachine, expected qview
 	assert.Equal(t, sm.Meta().Version.DataVersion.StreamingVersion, v.Meta.Version.DataVersion.StreamingVersion)
 	assert.Equal(t, sm.Meta().Version.DataVersion.CompactVersion, v.Meta.Version.DataVersion.CompactVersion)
 
-	// Verify report structure: SN report has StreamingNode, no QueryNode.
+	// Verify report structure: SN report has StreamingNode and full QueryNode topology.
 	assert.NotNil(t, v.StreamingNode)
-	assert.Nil(t, v.QueryNode)
+	require.Len(t, v.QueryNode, 1)
+	assert.Equal(t, int64(10), v.QueryNode[0].GetNodeId())
 
 	// Verify report meta is a clone (mutation doesn't affect SM).
 	v.Meta.CollectionId = -1
 	assert.NotEqual(t, int64(-1), sm.Meta().CollectionId)
+	v.QueryNode[0].NodeId = -1
+	assert.NotEqual(t, int64(-1), sm.QueryNodes()[0].GetNodeId())
 }
 
 func assertNoReport(t *testing.T, sm *snQueryViewStateMachine) {
@@ -146,13 +160,16 @@ func assertPersistState(t *testing.T, sm *snQueryViewStateMachine, expected qvie
 	assert.Equal(t, sm.Meta().Version.DataVersion.StreamingVersion, v.Meta.Version.DataVersion.StreamingVersion)
 	assert.Equal(t, sm.Meta().Version.DataVersion.CompactVersion, v.Meta.Version.DataVersion.CompactVersion)
 
-	// Verify persist structure: SN persist has StreamingNode, no QueryNode.
+	// Verify persist structure: SN persist has StreamingNode and full QueryNode topology.
 	assert.NotNil(t, v.StreamingNode)
-	assert.Nil(t, v.QueryNode)
+	require.Len(t, v.QueryNode, 1)
+	assert.Equal(t, int64(10), v.QueryNode[0].GetNodeId())
 
 	// Verify persist meta is a clone (mutation doesn't affect SM).
 	v.Meta.CollectionId = -1
 	assert.NotEqual(t, int64(-1), sm.Meta().CollectionId)
+	v.QueryNode[0].NodeId = -1
+	assert.NotEqual(t, int64(-1), sm.QueryNodes()[0].GetNodeId())
 }
 
 func assertNoPersist(t *testing.T, sm *snQueryViewStateMachine) {
@@ -200,9 +217,11 @@ func TestNew_NoPendingRelease(t *testing.T) {
 func TestNew_MetaAndViewPreserved(t *testing.T) {
 	meta := buildTestMeta()
 	snView := buildTestSNView()
-	sm := newSNQueryViewStateMachine(meta, snView)
+	queryNodes := buildTestQueryNodes()
+	sm := newSNQueryViewStateMachine(meta, snView, queryNodes)
 	assert.Equal(t, meta, sm.Meta())
 	assert.Equal(t, snView, sm.SNView())
+	assert.Equal(t, queryNodes, sm.QueryNodes())
 }
 
 func TestNew_ReportIsClone(t *testing.T) {
@@ -219,7 +238,8 @@ func TestNew_ReportStructure(t *testing.T) {
 	require.NotNil(t, report)
 	assert.NotNil(t, report.Meta)
 	assert.NotNil(t, report.StreamingNode)
-	assert.Nil(t, report.QueryNode)
+	require.Len(t, report.QueryNode, 1)
+	assert.Equal(t, int64(10), report.QueryNode[0].GetNodeId())
 }
 
 // ---------------------------------------------------------------------------
@@ -1238,7 +1258,7 @@ func TestRecoverability_UpRecoveringThenCoordCrash(t *testing.T) {
 }
 
 func TestRecoverability_SNCrashRecovery_FullFlow(t *testing.T) {
-	sm := recoverSNQueryViewStateMachine(buildTestMeta(), buildTestSNView())
+	sm := recoverSNQueryViewStateMachine(buildTestMeta(), buildTestSNView(), buildTestQueryNodes())
 	assert.Equal(t, qviews.QueryViewStateUpRecovering, sm.State())
 	assertNoReport(t, sm)
 	assertNoPersist(t, sm)
