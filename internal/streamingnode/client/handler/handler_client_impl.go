@@ -35,14 +35,16 @@ var (
 )
 
 type handlerClientImpl struct {
-	newTransformLogEventStream func(context.Context, *transformlogclient.EventStreamOptions, streamingpb.StreamingNodeHandlerServiceClient) (*transformlogclient.EventStream, error)
 	lifetime                   *typeutil.Lifetime
 	service                    lazygrpc.Service[streamingpb.StreamingNodeHandlerServiceClient]
+	queryViewClient            QueryViewClient
+	queryViewSyncClient        QueryViewSyncClient
 	rb                         resolver.Builder
 	watcher                    assignment.Watcher
 	rebalanceTrigger           types.AssignmentRebalanceTrigger
 	newProducer                func(ctx context.Context, opts *producer.ProducerOptions, handler streamingpb.StreamingNodeHandlerServiceClient) (Producer, error)
 	newConsumer                func(ctx context.Context, opts *consumer.ConsumerOptions, handlerClient streamingpb.StreamingNodeHandlerServiceClient) (Consumer, error)
+	newTransformLogEventStream func(ctx context.Context, opts *transformlogclient.EventStreamOptions, handlerClient streamingpb.StreamingNodeHandlerServiceClient) (*transformlogclient.EventStream, error)
 }
 
 // GetLatestMVCCTimestampIfLocal gets the latest mvcc timestamp of the vchannel.
