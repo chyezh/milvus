@@ -38,6 +38,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -373,6 +374,10 @@ type fakeQueryViewMetadataMixCoordClient struct {
 	getQVLoadInfoReqs  []*querypb.GetQueryViewSegmentLoadInfoRequest
 	getQVLoadInfoResps []*querypb.GetQueryViewSegmentLoadInfoResponse
 	getQVLoadInfoErrs  []error
+
+	getQVCollectionLoadInfoReqs  []*querypb.GetQueryViewLoadInfoRequest
+	getQVCollectionLoadInfoResps []*querypb.GetQueryViewLoadInfoResponse
+	getQVCollectionLoadInfoErrs  []error
 }
 
 func (c *fakeQueryViewMetadataMixCoordClient) DescribeCollection(_ context.Context, req *milvuspb.DescribeCollectionRequest, _ ...grpc.CallOption) (*milvuspb.DescribeCollectionResponse, error) {
@@ -399,10 +404,49 @@ func (c *fakeQueryViewMetadataMixCoordClient) GetQueryViewSegmentLoadInfo(_ cont
 	return c.getQVLoadInfoResps[len(c.getQVLoadInfoResps)-1], nil
 }
 
+func (c *fakeQueryViewMetadataMixCoordClient) GetQueryViewLoadInfo(_ context.Context, req *querypb.GetQueryViewLoadInfoRequest, _ ...grpc.CallOption) (*querypb.GetQueryViewLoadInfoResponse, error) {
+	c.getQVCollectionLoadInfoReqs = append(c.getQVCollectionLoadInfoReqs, req)
+	idx := len(c.getQVCollectionLoadInfoReqs) - 1
+	if idx < len(c.getQVCollectionLoadInfoErrs) && c.getQVCollectionLoadInfoErrs[idx] != nil {
+		return nil, c.getQVCollectionLoadInfoErrs[idx]
+	}
+	if idx < len(c.getQVCollectionLoadInfoResps) {
+		return c.getQVCollectionLoadInfoResps[idx], nil
+	}
+	return c.getQVCollectionLoadInfoResps[len(c.getQVCollectionLoadInfoResps)-1], nil
+}
+
 func newTestQueryViewLoadMetadataProvider(client types.MixCoordClient) *lazyQueryViewLoadMetadataProvider {
 	future := syncutil.NewFuture[types.MixCoordClient]()
 	future.Set(client)
 	return &lazyQueryViewLoadMetadataProvider{mixCoord: future}
+}
+
+func TestLazyQueryViewLoadMetadataProvider_GetQueryViewLoadInfo(t *testing.T) {
+	indexes := []*indexpb.IndexInfo{{CollectionID: 100, FieldID: 101, IndexName: "vec_idx"}}
+	client := &fakeQueryViewMetadataMixCoordClient{
+		getQVCollectionLoadInfoResps: []*querypb.GetQueryViewLoadInfoResponse{{
+			Status:        &commonpb.Status{ErrorCode: commonpb.ErrorCode_Success},
+			CollectionID:  100,
+			Version:       &viewpb.QueryViewLoadInfoVersion{Version: 7},
+			PartitionIDs:  []int64{10, 20},
+			LoadFields:    []*messagespb.LoadFieldConfig{{FieldId: 100}, {FieldId: 101, IndexId: 1001}},
+			IndexInfoList: indexes,
+		}},
+	}
+	provider := newTestQueryViewLoadMetadataProvider(client)
+
+	info, err := provider.GetQueryViewLoadInfo(context.Background(), 100, qnview.QueryViewLoadInfoVersion{Version: 7})
+
+	require.NoError(t, err)
+	assert.Equal(t, int64(100), info.CollectionID)
+	assert.Equal(t, qnview.QueryViewLoadInfoVersion{Version: 7}, info.Version)
+	assert.Equal(t, []int64{10, 20}, info.PartitionIDs)
+	assert.Equal(t, []*messagespb.LoadFieldConfig{{FieldId: 100}, {FieldId: 101, IndexId: 1001}}, info.LoadFields)
+	assert.Equal(t, indexes, info.IndexInfos)
+	require.Len(t, client.getQVCollectionLoadInfoReqs, 1)
+	assert.Equal(t, int64(100), client.getQVCollectionLoadInfoReqs[0].GetCollectionID())
+	assert.Equal(t, uint64(7), client.getQVCollectionLoadInfoReqs[0].GetVersion().GetVersion())
 }
 
 func TestLazyQueryViewLoadMetadataProvider_GetQueryViewSegmentLoadInfo(t *testing.T) {

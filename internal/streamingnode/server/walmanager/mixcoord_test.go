@@ -16,3 +16,7 @@ type testMixCoordClient struct {
 func (c testMixCoordClient) GetQueryViewSegmentLoadInfo(context.Context, *querypb.GetQueryViewSegmentLoadInfoRequest, ...grpc.CallOption) (*querypb.GetQueryViewSegmentLoadInfoResponse, error) {
 	return &querypb.GetQueryViewSegmentLoadInfoResponse{}, nil
 }
+
+func (c testMixCoordClient) WatchQueryViewSegmentLoadInfo(context.Context, ...grpc.CallOption) (querypb.QueryCoord_WatchQueryViewSegmentLoadInfoClient, error) {
+	return nil, nil
+}

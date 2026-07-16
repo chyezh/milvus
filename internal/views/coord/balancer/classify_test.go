@@ -79,13 +79,13 @@ func placement(segmentID, partitionID, nodeID int64, state coordview.SegmentStat
 
 func testShardStats(
 	upVersion *qviews.QueryViewVersion,
-	settings *viewpb.QueryViewSettings,
+	loadInfoVersion *viewpb.QueryViewLoadInfoVersion,
 	placements ...testSegmentPlacement,
 ) *coordview.ShardStats {
 	stats := &coordview.ShardStats{
-		UpVersion:  upVersion,
-		UpSettings: settings,
-		Segments:   make(map[int64]*coordview.SegmentStats),
+		UpVersion:         upVersion,
+		UpLoadInfoVersion: loadInfoVersion,
+		Segments:          make(map[int64]*coordview.SegmentStats),
 	}
 	for _, p := range placements {
 		segment := stats.Segments[p.segmentID]
@@ -100,6 +100,10 @@ func testShardStats(
 		segment.Nodes[p.nodeID] = p.state
 	}
 	return stats
+}
+
+func loadInfoVersion(version uint64) *viewpb.QueryViewLoadInfoVersion {
+	return &viewpb.QueryViewLoadInfoVersion{Version: version}
 }
 
 func withPreparingVersion(stats *coordview.ShardStats, version *qviews.QueryViewVersion) *coordview.ShardStats {
@@ -167,7 +171,7 @@ func TestClassify_DataVersionAdvanced_Must(t *testing.T) {
 	snap := baseSnap(cfg, shardID)
 	snap.ShardStatsMap()[shardID] = testShardStats(
 		ver(1, 1, 1),
-		&viewpb.QueryViewSettings{RequiredPartitions: []int64{10}},
+		loadInfoVersion(1),
 		placement(101, 10, 1, coordview.SegmentStateUp),
 	)
 	snap.Nodes[1] = &BalanceNode{NodeID: 1, Alive: true}
@@ -182,7 +186,7 @@ func TestClassify_UnavailableNode_Must(t *testing.T) {
 	snap := baseSnap(cfg, shardID)
 	snap.ShardStatsMap()[shardID] = testShardStats(
 		ver(1, 1, 1),
-		&viewpb.QueryViewSettings{RequiredPartitions: []int64{10}},
+		loadInfoVersion(1),
 		placement(101, 10, 1, coordview.SegmentStateUp),
 	)
 	// Node 1 missing from Nodes map — treat as unavailable.
@@ -197,7 +201,7 @@ func TestClassify_NodeStopping_Must(t *testing.T) {
 	snap := baseSnap(cfg, shardID)
 	snap.ShardStatsMap()[shardID] = testShardStats(
 		ver(1, 1, 1),
-		&viewpb.QueryViewSettings{RequiredPartitions: []int64{10}},
+		loadInfoVersion(1),
 		placement(101, 10, 1, coordview.SegmentStateUp),
 	)
 	snap.Nodes[1] = &BalanceNode{NodeID: 1, Alive: true, Stopping: true}
@@ -213,7 +217,7 @@ func TestClassify_PartitionsChanged_Must(t *testing.T) {
 	snap := baseSnap(cfg, shardID)
 	snap.ShardStatsMap()[shardID] = testShardStats(
 		ver(1, 1, 1),
-		&viewpb.QueryViewSettings{RequiredPartitions: []int64{10}},
+		loadInfoVersion(0),
 		placement(101, 10, 1, coordview.SegmentStateUp),
 	)
 	snap.Nodes[1] = &BalanceNode{NodeID: 1, Alive: true}
@@ -229,7 +233,7 @@ func TestClassify_FieldsChanged_Must(t *testing.T) {
 	snap := baseSnap(cfg, shardID)
 	snap.ShardStatsMap()[shardID] = testShardStats(
 		ver(1, 1, 1),
-		&viewpb.QueryViewSettings{RequiredPartitions: []int64{10}},
+		loadInfoVersion(0),
 		placement(101, 10, 1, coordview.SegmentStateUp),
 	)
 	snap.Nodes[1] = &BalanceNode{NodeID: 1, Alive: true}
@@ -244,7 +248,7 @@ func TestClassify_HasPreparingView_None(t *testing.T) {
 	snap := baseSnap(cfg, shardID)
 	snap.ShardStatsMap()[shardID] = withPreparingVersion(testShardStats(
 		ver(1, 1, 1),
-		&viewpb.QueryViewSettings{RequiredPartitions: []int64{10}},
+		loadInfoVersion(1),
 		placement(101, 10, 1, coordview.SegmentStateUp),
 		placement(202, 10, 1, coordview.SegmentStatePreparing),
 	), ver(1, 1, 2))
@@ -275,7 +279,7 @@ func TestClassify_SteadyState_MayOptimize(t *testing.T) {
 	snap := baseSnap(cfg, shardID)
 	snap.ShardStatsMap()[shardID] = testShardStats(
 		ver(1, 1, 1),
-		&viewpb.QueryViewSettings{RequiredPartitions: []int64{10}},
+		loadInfoVersion(1),
 		placement(101, 10, 1, coordview.SegmentStateUp),
 	)
 	snap.Nodes[1] = &BalanceNode{NodeID: 1, Alive: true}
@@ -293,7 +297,7 @@ func TestClassify_MissingDataVersionDoesNotTriggerMust(t *testing.T) {
 	snap := baseSnap(cfg, shardID)
 	snap.ShardStatsMap()[shardID] = testShardStats(
 		ver(1, 1, 1),
-		&viewpb.QueryViewSettings{RequiredPartitions: []int64{10}},
+		loadInfoVersion(1),
 		placement(101, 10, 1, coordview.SegmentStateUp),
 	)
 	snap.Nodes[1] = &BalanceNode{NodeID: 1, Alive: true}

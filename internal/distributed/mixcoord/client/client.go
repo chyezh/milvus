@@ -1708,6 +1708,30 @@ func (c *Client) GetQueryViewSegmentLoadInfo(ctx context.Context, req *querypb.G
 	})
 }
 
+func (c *Client) GetQueryViewLoadInfo(ctx context.Context, req *querypb.GetQueryViewLoadInfoRequest, opts ...grpc.CallOption) (*querypb.GetQueryViewLoadInfoResponse, error) {
+	req = typeutil.Clone(req)
+	commonpbutil.UpdateMsgBase(
+		req.GetBase(),
+		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.grpcClient.GetNodeID())),
+	)
+	return wrapGrpcCall(ctx, c, func(client MixCoordClient) (*querypb.GetQueryViewLoadInfoResponse, error) {
+		return client.GetQueryViewLoadInfo(ctx, req)
+	})
+}
+
+func (c *Client) WatchQueryViewSegmentLoadInfo(ctx context.Context, opts ...grpc.CallOption) (querypb.QueryCoord_WatchQueryViewSegmentLoadInfoClient, error) {
+	ret, err := c.grpcClient.ReCall(ctx, func(client MixCoordClient) (any, error) {
+		if !funcutil.CheckCtxValid(ctx) {
+			return nil, ctx.Err()
+		}
+		return client.WatchQueryViewSegmentLoadInfo(ctx, opts...)
+	})
+	if err != nil || ret == nil {
+		return nil, err
+	}
+	return ret.(querypb.QueryCoord_WatchQueryViewSegmentLoadInfoClient), nil
+}
+
 // LoadBalance migrate the sealed segments on the source node to the dst nodes.
 func (c *Client) LoadBalance(ctx context.Context, req *querypb.LoadBalanceRequest, opts ...grpc.CallOption) (*commonpb.Status, error) {
 	req = typeutil.Clone(req)

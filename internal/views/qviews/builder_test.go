@@ -26,9 +26,7 @@ func TestQueryViewAtCoordBuilder(t *testing.T) {
 		Shards:       []*viewpb.DataViewOfShard{shardView},
 	}
 
-	settings := &viewpb.QueryViewSettings{
-		RequiredPartitions: []int64{1, 2},
-	}
+	loadInfoVersion := &viewpb.QueryViewLoadInfoVersion{Version: 7}
 
 	assignments := map[int64]map[int64][]int64{
 		1001: {1: {100, 101}, 2: {201}},
@@ -37,7 +35,7 @@ func TestQueryViewAtCoordBuilder(t *testing.T) {
 
 	result := NewQueryViewAtCoordBuilder(1, dataView, "v1").
 		SetQueryVersion(3).
-		SetSettings(settings).
+		SetLoadInfoVersion(loadInfoVersion).
 		SetAssignments(assignments).
 		Build()
 
@@ -52,7 +50,7 @@ func TestQueryViewAtCoordBuilder(t *testing.T) {
 	assert.Equal(t, int64(2), result.Meta.Version.DataVersion.StreamingVersion)
 	assert.Equal(t, int64(1), result.Meta.Version.DataVersion.CompactVersion)
 	assert.Equal(t, int64(3), result.Meta.Version.QueryVersion)
-	assert.Equal(t, settings, result.Meta.Settings)
+	assert.Equal(t, loadInfoVersion, result.Meta.LoadInfoVersion)
 	assert.Equal(t, uint64(12345), result.Meta.TransformStartAfterTimetick)
 
 	// Verify query nodes are sorted by node ID.

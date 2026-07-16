@@ -79,11 +79,18 @@ func newCollection(view walview.VChannelWALView) (*segcore.CCollection, error) {
 	if view.Schema == nil {
 		return nil, nil
 	}
-	return segcore.CreateCCollection(&segcore.CreateCCollectionRequest{
+	req := &segcore.CreateCCollectionRequest{
 		CollectionID:  view.CollectionID,
 		Schema:        view.Schema,
-		LoadFieldList: settingsFromWALView(view).GetRequiredFields(),
-	})
+		LoadFieldList: loadFieldIDs(view.LoadFields),
+	}
+	if len(view.IndexInfos) > 0 {
+		indexMeta := segcore.ComposeCollectionIndexMeta(context.TODO(), view.IndexInfos, view.Schema)
+		if len(indexMeta.GetIndexMetas()) > 0 && indexMeta.GetMaxIndexRowCount() > 0 {
+			req.IndexMeta = indexMeta
+		}
+	}
+	return segcore.CreateCCollection(req)
 }
 
 func validateWALViewSnapshot(view walview.VChannelWALView) error {

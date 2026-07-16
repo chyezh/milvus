@@ -51,6 +51,7 @@ type ModuleConfig struct {
 	QueryRuntimeModuleBuilders []queryresource.QueryRuntimeModuleBuilder
 	QueryResourceScheduler     queryresource.Scheduler
 	QueryRuntimeDispatcher     *queryresource.Dispatcher
+	QueryViewLoadInfoProvider  queryresource.LoadInfoProvider
 }
 
 // VChannelRecoveryModule owns all recovery_storage state for one vchannel.
@@ -100,9 +101,10 @@ func NewModule(config ModuleConfig) (*VChannelRecoveryModule, error) {
 		queryTransformLogStream:   config.TransformLogStream,
 	}
 	module.queryResources = queryresource.NewManager(queryresource.Config{
-		Builders:   config.QueryRuntimeModuleBuilders,
-		Scheduler:  config.QueryResourceScheduler,
-		Dispatcher: config.QueryRuntimeDispatcher,
+		Builders:         config.QueryRuntimeModuleBuilders,
+		Scheduler:        config.QueryResourceScheduler,
+		Dispatcher:       config.QueryRuntimeDispatcher,
+		LoadInfoProvider: config.QueryViewLoadInfoProvider,
 	})
 	module.onSegmentSealed = func(event walview.SegmentSealedEvent) {
 		module.observeQueryResourceEvent(context.Background(), walview.VChannelResourceEvent{SegmentSealed: &event})

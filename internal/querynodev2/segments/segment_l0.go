@@ -131,6 +131,10 @@ func (s *L0Segment) DropIndex(ctx context.Context, indexID int64) error {
 	return nil
 }
 
+func (s *L0Segment) LoadIndex(ctx context.Context, loadInfo *querypb.SegmentLoadInfo) error {
+	return merr.WrapErrServiceInternal("unexpected load index on l0 segment")
+}
+
 func (s *L0Segment) Indexes() []*IndexedFieldInfo {
 	return nil
 }

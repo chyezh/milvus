@@ -15,17 +15,19 @@ import (
 type ViewBuilder func(meta *viewpb.QueryViewMeta) (walview.VChannelWALView, bool)
 
 type Config struct {
-	Builders   []QueryRuntimeModuleBuilder
-	Scheduler  Scheduler
-	Dispatcher *Dispatcher
+	Builders         []QueryRuntimeModuleBuilder
+	Scheduler        Scheduler
+	Dispatcher       *Dispatcher
+	LoadInfoProvider LoadInfoProvider
 }
 
 type Manager struct {
 	mu sync.Mutex
 
-	builders   []QueryRuntimeModuleBuilder
-	scheduler  Scheduler
-	dispatcher *Dispatcher
+	builders         []QueryRuntimeModuleBuilder
+	scheduler        Scheduler
+	dispatcher       *Dispatcher
+	loadInfoProvider LoadInfoProvider
 
 	refs    map[qviews.QueryViewKey]struct{}
 	epoch   map[qviews.QueryViewKey]uint64
@@ -38,12 +40,13 @@ type Manager struct {
 
 func NewManager(config Config) *Manager {
 	return &Manager{
-		builders:   defaultQueryRuntimeModuleBuilders(config.Builders),
-		scheduler:  config.Scheduler,
-		dispatcher: config.Dispatcher,
-		refs:       make(map[qviews.QueryViewKey]struct{}),
-		epoch:      make(map[qviews.QueryViewKey]uint64),
-		changed:    make(chan struct{}),
+		builders:         defaultQueryRuntimeModuleBuilders(config.Builders),
+		scheduler:        config.Scheduler,
+		dispatcher:       config.Dispatcher,
+		loadInfoProvider: config.LoadInfoProvider,
+		refs:             make(map[qviews.QueryViewKey]struct{}),
+		epoch:            make(map[qviews.QueryViewKey]uint64),
+		changed:          make(chan struct{}),
 	}
 }
 
@@ -199,7 +202,11 @@ func (m *Manager) startBuildLocked(meta *viewpb.QueryViewMeta, build ViewBuilder
 		panic("failed to build vchannel query resource view")
 	}
 	task := newResourceBuildTask(context.Background(), func(ctx context.Context) (*QueryRuntime, error) {
-		if err := runtime.Initialize(ctx, view); err != nil {
+		resolved, err := m.resolveLoadInfo(ctx, view)
+		if err != nil {
+			return runtime, err
+		}
+		if err := runtime.Initialize(ctx, resolved); err != nil {
 			return runtime, err
 		}
 		return runtime, nil
@@ -209,6 +216,20 @@ func (m *Manager) startBuildLocked(meta *viewpb.QueryViewMeta, build ViewBuilder
 	m.err = nil
 	m.scheduler.Submit(task)
 	go m.finishBuild(task)
+}
+
+func (m *Manager) resolveLoadInfo(ctx context.Context, view walview.VChannelWALView) (walview.VChannelWALView, error) {
+	if view.LoadInfoVersion == nil || m.loadInfoProvider == nil {
+		return view, nil
+	}
+	loadInfo, err := m.loadInfoProvider.QueryViewLoadInfo(ctx, view.CollectionID, view.LoadInfoVersion)
+	if err != nil {
+		return view, err
+	}
+	view.PartitionIDs = loadInfo.PartitionIDs
+	view.LoadFields = loadInfo.LoadFields
+	view.IndexInfos = loadInfo.IndexInfos
+	return view, nil
 }
 
 func (m *Manager) newModules() []QueryRuntimeModule {

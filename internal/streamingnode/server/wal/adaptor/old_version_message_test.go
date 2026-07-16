@@ -30,6 +30,10 @@ func (c oldVersionMixCoordClient) GetQueryViewSegmentLoadInfo(context.Context, *
 	return &querypb.GetQueryViewSegmentLoadInfoResponse{}, nil
 }
 
+func (c oldVersionMixCoordClient) WatchQueryViewSegmentLoadInfo(context.Context, ...grpc.CallOption) (querypb.QueryCoord_WatchQueryViewSegmentLoadInfoClient, error) {
+	return nil, nil
+}
+
 func TestNewOldVersionImmutableMessage(t *testing.T) {
 	rc := mocks.NewMockMixCoordClient(t)
 	rc.EXPECT().DescribeCollectionInternal(mock.Anything, mock.Anything).Return(&milvuspb.DescribeCollectionResponse{

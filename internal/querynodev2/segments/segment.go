@@ -739,6 +739,17 @@ func (s *LocalSegment) DropIndex(ctx context.Context, indexID int64) error {
 	return nil
 }
 
+func (s *LocalSegment) LoadIndex(ctx context.Context, loadInfo *querypb.SegmentLoadInfo) error {
+	if loadInfo == nil {
+		return merr.WrapErrParameterInvalidMsg("segment load info is nil")
+	}
+	// The current C API exposes index replacement through segment Reopen's
+	// load-diff path. Keep this as the Go-level LoadIndex entry so callers can
+	// distinguish index-only updates from data updates without depending on the
+	// lower-level implementation detail.
+	return s.Reopen(ctx, loadInfo)
+}
+
 func (s *LocalSegment) Indexes() []*IndexedFieldInfo {
 	var result []*IndexedFieldInfo
 	s.fieldIndexes.Range(func(key int64, value *IndexedFieldInfo) bool {

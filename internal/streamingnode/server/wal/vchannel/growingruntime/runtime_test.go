@@ -169,6 +169,23 @@ func TestRuntimeRejectsLiveInsertAfterFlush(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestNewCollectionAppliesIndexMetaFromWALView(t *testing.T) {
+	initSegcoreForRuntimeTest(t)
+
+	schema := mock_segcore.GenTestCollectionSchema("snview-resource-index-meta", schemapb.DataType_Int64, false)
+	collection, err := newCollection(walview.VChannelWALView{
+		CollectionID: 1,
+		VChannel:     "ch",
+		Schema:       schema,
+		IndexInfos:   mock_segcore.GenTestIndexInfoList(1, schema),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, collection)
+	defer collection.Release()
+	require.NotNil(t, collection.IndexMeta())
+	require.NotEmpty(t, collection.IndexMeta().GetIndexMetas())
+}
+
 func TestRuntimeTruncateWatermarkAppliesToLateSegmentSealed(t *testing.T) {
 	runtime := newRuntime()
 	runtime.addSegment(newGrowingSegment(nil, 10, 0))

@@ -39,10 +39,7 @@ func assignmentsFromBuilder(builder *qviews.QueryViewAtCoordBuilder) map[int64]i
 func upStats(version qviews.DataVersion, partitions []int64, fields []int64, placements ...testSegmentPlacement) *coordview.ShardStats {
 	return testShardStats(
 		&qviews.QueryViewVersion{DataVersion: version, QueryVersion: 1},
-		&viewpb.QueryViewSettings{
-			RequiredPartitions: partitions,
-			RequiredFields:     fields,
-		},
+		&viewpb.QueryViewLoadInfoVersion{Version: 1},
 		placements...,
 	)
 }
