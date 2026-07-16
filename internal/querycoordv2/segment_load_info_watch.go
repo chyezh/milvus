@@ -117,8 +117,7 @@ func (s *queryViewSegmentLoadInfoWatchSession) sendResponse(resp *querypb.WatchQ
 
 func (s *queryViewSegmentLoadInfoWatchSession) handle(req *querypb.WatchQueryViewSegmentLoadInfoRequest) *querypb.WatchQueryViewSegmentLoadInfoResponse {
 	resp := &querypb.WatchQueryViewSegmentLoadInfoResponse{
-		Status:     merr.Success(),
-		Generation: req.GetGeneration(),
+		Status: merr.Success(),
 	}
 	ctx := s.stream.Context()
 	if err := merr.CheckHealthy(s.server.State()); err != nil {
@@ -195,15 +194,12 @@ func (s *queryViewSegmentLoadInfoWatchSession) buildSnapshots(ctx context.Contex
 			segmentIDs = append(segmentIDs, subscription.segmentID)
 			expected[subscription.segmentID] = subscription.revision
 		}
-		resp, err := s.server.mixCoord.GetQueryViewSegmentLoadInfo(ctx, &querypb.GetQueryViewSegmentLoadInfoRequest{
-			CollectionID: collectionID,
-			SegmentIDs:   segmentIDs,
-		})
-		if err := merr.CheckRPCCall(resp, err); err != nil {
+		infos, indexInfos, err := s.server.mixCoord.GetQueryViewSegmentLoadInfos(ctx, collectionID, segmentIDs)
+		if err != nil {
 			return nil, err
 		}
-		for _, loadInfo := range resp.GetInfos() {
-			revision := calculateQueryViewSegmentLoadInfoRevision(loadInfo, resp.GetIndexInfoList())
+		for _, loadInfo := range infos {
+			revision := calculateQueryViewSegmentLoadInfoRevision(loadInfo, indexInfos)
 			if sameQueryViewSegmentLoadInfoRevision(expected[loadInfo.GetSegmentID()], revision) {
 				continue
 			}
@@ -212,7 +208,7 @@ func (s *queryViewSegmentLoadInfoWatchSession) buildSnapshots(ctx context.Contex
 				SegmentID:     loadInfo.GetSegmentID(),
 				Revision:      revision,
 				LoadInfo:      loadInfo,
-				IndexInfoList: resp.GetIndexInfoList(),
+				IndexInfoList: indexInfos,
 			})
 		}
 	}
@@ -377,8 +373,8 @@ func (w *queryViewSegmentLoadInfoWatcher) notify(collectionID int64, segmentIDs 
 
 func calculateQueryViewSegmentLoadInfoRevision(loadInfo *querypb.SegmentLoadInfo, indexInfos []*indexpb.IndexInfo) *querypb.QueryViewSegmentLoadInfoRevision {
 	return &querypb.QueryViewSegmentLoadInfoRevision{
-		LoadInfoRevision: hashProto(&querypb.GetQueryViewSegmentLoadInfoResponse{
-			Infos:         []*querypb.SegmentLoadInfo{loadInfo},
+		LoadInfoRevision: hashProto(&querypb.QueryViewSegmentLoadInfoSnapshot{
+			LoadInfo:      loadInfo,
 			IndexInfoList: indexInfos,
 		}),
 	}

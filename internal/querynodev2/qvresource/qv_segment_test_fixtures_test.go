@@ -13,7 +13,6 @@ import (
 	"github.com/milvus-io/milvus/internal/querynodev2/segments"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/util/segcore"
-	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/segcorepb"
@@ -112,10 +111,6 @@ type fakeQVLoadMetadataProvider struct {
 
 func (p *fakeQVLoadMetadataProvider) DescribeCollection(context.Context, int64) (*milvuspb.DescribeCollectionResponse, error) {
 	return p.collection, p.err
-}
-
-func (p *fakeQVLoadMetadataProvider) GetQueryViewSegmentLoadInfo(context.Context, int64, ...int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error) {
-	return nil, nil, p.err
 }
 
 func (p *fakeQVLoadMetadataProvider) GetQueryViewLoadInfo(context.Context, int64, qnview.QueryViewLoadInfoVersion) (qnview.QueryViewLoadInfo, error) {

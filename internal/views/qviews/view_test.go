@@ -23,7 +23,7 @@ func TestNewQueryViewAtWorkNodeFromProto(t *testing.T) {
 				QueryVersion: 1,
 			},
 			State:           viewpb.QueryViewState_QueryViewStatePreparing,
-			LoadInfoVersion: &viewpb.QueryViewLoadInfoVersion{Version: 1},
+			LoadInfoVersion: 1,
 		},
 		StreamingNode: &viewpb.QueryViewOfStreamingNode{},
 	}

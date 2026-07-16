@@ -9,7 +9,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 )
@@ -25,7 +24,7 @@ func NewFutureLoadInfoProvider(client *syncutil.Future[types.MixCoordClient]) Lo
 	return &futureLoadInfoProvider{client: client}
 }
 
-func (p *futureLoadInfoProvider) QueryViewLoadInfo(ctx context.Context, collectionID int64, version *viewpb.QueryViewLoadInfoVersion) (QueryViewLoadInfo, error) {
+func (p *futureLoadInfoProvider) QueryViewLoadInfo(ctx context.Context, collectionID int64, version uint64) (QueryViewLoadInfo, error) {
 	client, err := p.client.GetWithContext(ctx)
 	if err != nil {
 		return QueryViewLoadInfo{}, err

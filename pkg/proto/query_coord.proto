@@ -12,7 +12,6 @@ import "schema.proto";
 import "msg.proto";
 import "data_coord.proto";
 import "index_coord.proto";
-import "view.proto";
 import "messages.proto";
 
 service QueryCoord {
@@ -38,9 +37,6 @@ service QueryCoord {
         returns (GetPartitionStatesResponse) {
     }
     rpc GetLoadSegmentInfo(GetSegmentInfoRequest) returns (GetSegmentInfoResponse) {
-    }
-    rpc GetQueryViewSegmentLoadInfo(GetQueryViewSegmentLoadInfoRequest)
-        returns (GetQueryViewSegmentLoadInfoResponse) {
     }
     rpc GetQueryViewLoadInfo(GetQueryViewLoadInfoRequest)
         returns (GetQueryViewLoadInfoResponse) {
@@ -323,28 +319,16 @@ message GetSegmentInfoResponse {
     repeated SegmentInfo infos = 2;
 }
 
-message GetQueryViewSegmentLoadInfoRequest {
-    common.MsgBase base = 1;
-    int64 collectionID = 2;
-    repeated int64 segmentIDs = 3;
-}
-
-message GetQueryViewSegmentLoadInfoResponse {
-    common.Status status = 1;
-    repeated SegmentLoadInfo infos = 2;
-    repeated index.IndexInfo index_info_list = 3;
-}
-
 message GetQueryViewLoadInfoRequest {
     common.MsgBase base = 1;
     int64 collectionID = 2;
-    view.QueryViewLoadInfoVersion version = 3;
+    uint64 version = 3;
 }
 
 message GetQueryViewLoadInfoResponse {
     common.Status status = 1;
     int64 collectionID = 2;
-    view.QueryViewLoadInfoVersion version = 3;
+    uint64 version = 3;
     repeated int64 partitionIDs = 4;
     repeated messages.LoadFieldConfig load_fields = 5;
     repeated index.IndexInfo index_info_list = 6;
@@ -369,7 +353,6 @@ message WatchQueryViewSegmentLoadInfoRequest {
     common.MsgBase base = 1;
     repeated WatchQueryViewSegmentLoadInfoSubscription subscribe = 2;
     repeated WatchQueryViewSegmentLoadInfoUnsubscription unsubscribe = 3;
-    uint64 generation = 4;
 }
 
 message QueryViewSegmentLoadInfoSnapshot {
@@ -383,7 +366,6 @@ message QueryViewSegmentLoadInfoSnapshot {
 message WatchQueryViewSegmentLoadInfoResponse {
     common.Status status = 1;
     repeated QueryViewSegmentLoadInfoSnapshot snapshots = 2;
-    uint64 generation = 3;
 }
 
 message GetShardLeadersRequest {

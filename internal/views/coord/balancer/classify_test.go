@@ -79,7 +79,7 @@ func placement(segmentID, partitionID, nodeID int64, state coordview.SegmentStat
 
 func testShardStats(
 	upVersion *qviews.QueryViewVersion,
-	loadInfoVersion *viewpb.QueryViewLoadInfoVersion,
+	loadInfoVersion uint64,
 	placements ...testSegmentPlacement,
 ) *coordview.ShardStats {
 	stats := &coordview.ShardStats{
@@ -102,8 +102,8 @@ func testShardStats(
 	return stats
 }
 
-func loadInfoVersion(version uint64) *viewpb.QueryViewLoadInfoVersion {
-	return &viewpb.QueryViewLoadInfoVersion{Version: version}
+func loadInfoVersion(version uint64) uint64 {
+	return version
 }
 
 func withPreparingVersion(stats *coordview.ShardStats, version *qviews.QueryViewVersion) *coordview.ShardStats {
@@ -118,7 +118,7 @@ func TestClassify_DesiredAbsentWithResidualViews_Release(t *testing.T) {
 	snap := &BalancerSnapshot{
 		LoadConfigSnapshot: loadmgr.NewLoadConfigSnapshot(1, map[int64]*loadmgr.LoadConfig{}),
 		ShardViewSnapshot: coordview.NewShardViewSnapshot(1, map[qviews.ShardID]*coordview.ShardStats{
-			shardID: testShardStats(nil, nil, placement(101, 0, 1, coordview.SegmentStateUp)),
+			shardID: testShardStats(nil, 0, placement(101, 0, 1, coordview.SegmentStateUp)),
 		}),
 		Nodes: map[int64]*BalanceNode{1: {NodeID: 1, Alive: true}},
 	}
@@ -130,7 +130,7 @@ func TestClassify_DesiredAbsentWithEmptyUpView_Release(t *testing.T) {
 	snap := &BalancerSnapshot{
 		LoadConfigSnapshot: loadmgr.NewLoadConfigSnapshot(1, map[int64]*loadmgr.LoadConfig{}),
 		ShardViewSnapshot: coordview.NewShardViewSnapshot(1, map[qviews.ShardID]*coordview.ShardStats{
-			shardID: testShardStats(ver(1, 1, 1), nil),
+			shardID: testShardStats(ver(1, 1, 1), 0),
 		}),
 	}
 	assert.Equal(t, actionRelease, classifyShard(snap, shardID))
@@ -264,7 +264,7 @@ func TestClassify_UnrecoverableOnly_Must(t *testing.T) {
 	snap := baseSnap(cfg, shardID)
 	snap.ShardStatsMap()[shardID] = testShardStats(
 		nil,
-		nil,
+		0,
 		placement(202, 10, 1, coordview.SegmentStateUnrecoverable),
 	)
 	snap.Nodes[1] = &BalanceNode{NodeID: 1, Alive: true}

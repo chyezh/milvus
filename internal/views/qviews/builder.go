@@ -16,7 +16,7 @@ type QueryViewAtCoordBuilder struct {
 	dataVersion                 DataVersion
 	queryVersion                int64
 	transformStartAfterTimetick uint64
-	loadInfoVersion             *viewpb.QueryViewLoadInfoVersion
+	loadInfoVersion             uint64
 	// nodeID -> partitionID -> []segmentID
 	assignments map[int64]map[int64][]int64
 }
@@ -63,7 +63,7 @@ func (b *QueryViewAtCoordBuilder) SetQueryVersion(queryVersion int64) *QueryView
 
 // SetLoadInfoVersion sets the global load-config snapshot version used to
 // resolve load fields, partitions, and field-index bindings on nodes.
-func (b *QueryViewAtCoordBuilder) SetLoadInfoVersion(version *viewpb.QueryViewLoadInfoVersion) *QueryViewAtCoordBuilder {
+func (b *QueryViewAtCoordBuilder) SetLoadInfoVersion(version uint64) *QueryViewAtCoordBuilder {
 	b.loadInfoVersion = version
 	return b
 }

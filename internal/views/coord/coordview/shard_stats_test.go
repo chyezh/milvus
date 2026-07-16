@@ -17,7 +17,7 @@ func TestStats_Empty(t *testing.T) {
 	stats := mgr.Stats()
 	require.NotNil(t, stats)
 	assert.Nil(t, stats.UpVersion)
-	assert.Nil(t, stats.UpLoadInfoVersion)
+	assert.Zero(t, stats.UpLoadInfoVersion)
 	assert.Empty(t, stats.Segments)
 	assert.Nil(t, stats.PreparingVersion)
 }
@@ -29,7 +29,7 @@ func TestStats_PreparingOnly(t *testing.T) {
 
 	stats := mgr.Stats()
 	assert.Nil(t, stats.UpVersion, "no Up view yet")
-	assert.Nil(t, stats.UpLoadInfoVersion)
+	assert.Zero(t, stats.UpLoadInfoVersion)
 	require.NotNil(t, stats.PreparingVersion)
 	assert.Equal(t, testVersion(1, 1, 1), *stats.PreparingVersion)
 

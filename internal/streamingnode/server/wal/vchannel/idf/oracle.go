@@ -11,7 +11,6 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
@@ -248,7 +247,7 @@ type oracleRuntime struct {
 	collectionID    int64
 	vchannel        string
 	partitionIDs    []int64
-	loadInfoVersion *viewpb.QueryViewLoadInfoVersion
+	loadInfoVersion uint64
 	schema          *schemapb.CollectionSchema
 
 	ctx    context.Context
@@ -632,7 +631,7 @@ func (p *Provider) getSealedBM25Resources(
 	vchannel string,
 	dataVersion qviews.DataVersion,
 	partitionIDs []int64,
-	loadInfoVersion *viewpb.QueryViewLoadInfoVersion,
+	loadInfoVersion uint64,
 ) ([]*datapb.StreamingNodeBM25Resource, error) {
 	resp, err := p.client.GetStreamingNodeQueryViewResources(ctx, &datapb.GetStreamingNodeQueryViewResourcesRequest{
 		CollectionId:    collectionID,

@@ -62,7 +62,7 @@ func makeTestView(collectionID, replicaID int64, vchannel string, sv, cv, qv int
 				QueryVersion: qv,
 			},
 			State:           state,
-			LoadInfoVersion: &viewpb.QueryViewLoadInfoVersion{Version: 7},
+			LoadInfoVersion: 7,
 		},
 		QueryNode: []*viewpb.QueryViewOfQueryNode{
 			{
@@ -124,7 +124,7 @@ func TestQueryViewCatalog_SaveAndList(t *testing.T) {
 	assert.Equal(t, view.Meta.ReplicaId, views[0].Meta.ReplicaId)
 	assert.Equal(t, view.Meta.Vchannel, views[0].Meta.Vchannel)
 	assert.True(t, proto.Equal(view.Meta.Version, views[0].Meta.Version))
-	assert.True(t, proto.Equal(view.Meta.LoadInfoVersion, views[0].Meta.LoadInfoVersion))
+	assert.Equal(t, view.Meta.LoadInfoVersion, views[0].Meta.LoadInfoVersion)
 	assert.Equal(t, view.QueryNode[0].NodeId, views[0].QueryNode[0].NodeId)
 	assert.Equal(t, view.QueryNode[0].Partitions[0].SegmentIds, views[0].QueryNode[0].Partitions[0].SegmentIds)
 }

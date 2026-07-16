@@ -7,7 +7,6 @@ import (
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
 // QueryRuntimeModule is a concrete vchannel resource module managed by
@@ -25,7 +24,7 @@ type QueryRuntimeModuleBuilder interface {
 }
 
 type LoadInfoProvider interface {
-	QueryViewLoadInfo(ctx context.Context, collectionID int64, version *viewpb.QueryViewLoadInfoVersion) (QueryViewLoadInfo, error)
+	QueryViewLoadInfo(ctx context.Context, collectionID int64, version uint64) (QueryViewLoadInfo, error)
 }
 
 type QueryViewLoadInfo struct {

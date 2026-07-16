@@ -308,26 +308,6 @@ func (p *fakeQueryViewLoadMetadataProvider) DescribeCollection(context.Context, 
 	return p.collection, p.err
 }
 
-func (p *fakeQueryViewLoadMetadataProvider) GetQueryViewSegmentLoadInfo(_ context.Context, _ int64, segmentIDs ...int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error) {
-	p.mu.Lock()
-	p.loadInfoCalled = append(p.loadInfoCalled, segmentIDs...)
-	p.mu.Unlock()
-	if p.err != nil || len(segmentIDs) == 0 {
-		return p.loadInfos, p.loadIndexInfos, p.err
-	}
-	keep := make(map[int64]struct{}, len(segmentIDs))
-	for _, segmentID := range segmentIDs {
-		keep[segmentID] = struct{}{}
-	}
-	loadInfos := make([]*querypb.SegmentLoadInfo, 0, len(segmentIDs))
-	for _, info := range p.loadInfos {
-		if _, ok := keep[info.GetSegmentID()]; ok {
-			loadInfos = append(loadInfos, info)
-		}
-	}
-	return loadInfos, p.loadIndexInfos, nil
-}
-
 func (p *fakeQueryViewLoadMetadataProvider) GetQueryViewLoadInfo(context.Context, int64, QueryViewLoadInfoVersion) (QueryViewLoadInfo, error) {
 	return QueryViewLoadInfo{IndexInfos: p.loadIndexInfos}, p.err
 }

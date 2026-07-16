@@ -130,8 +130,8 @@ func loadInfoDiffer(snap *BalancerSnapshot, desired *loadmgr.LoadConfig, stats *
 	if stats == nil {
 		return true
 	}
-	if stats.UpLoadInfoVersion == nil {
+	if stats.UpLoadInfoVersion == 0 {
 		return true
 	}
-	return stats.UpLoadInfoVersion.GetVersion() != snap.LoadConfigSnapshot.Version()
+	return stats.UpLoadInfoVersion != snap.LoadConfigSnapshot.Version()
 }

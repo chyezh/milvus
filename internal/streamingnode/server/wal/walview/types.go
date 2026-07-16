@@ -20,7 +20,7 @@ type VChannelWALView struct {
 	BaseGrowingTimeTick   uint64
 	BaseTransformTimeTick uint64
 
-	LoadInfoVersion *viewpb.QueryViewLoadInfoVersion
+	LoadInfoVersion uint64
 	PartitionIDs    []int64
 	LoadFields      []*messagespb.LoadFieldConfig
 	IndexInfos      []*indexpb.IndexInfo

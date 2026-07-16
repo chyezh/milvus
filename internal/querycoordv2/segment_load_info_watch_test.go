@@ -68,7 +68,6 @@ func TestQueryViewSegmentLoadInfoWatchSession_PushesSnapshotOnNotify(t *testing.
 	}()
 
 	stream.recv <- &querypb.WatchQueryViewSegmentLoadInfoRequest{
-		Generation: 1,
 		Subscribe: []*querypb.WatchQueryViewSegmentLoadInfoSubscription{{
 			CollectionID: collectionID,
 			SegmentID:    segmentID,
@@ -200,12 +199,8 @@ func (m *fakeSegmentLoadInfoWatchMixCoord) setLoadInfo(loadInfo *querypb.Segment
 	m.loadInfo = loadInfo
 }
 
-func (m *fakeSegmentLoadInfoWatchMixCoord) GetQueryViewSegmentLoadInfo(ctx context.Context, req *querypb.GetQueryViewSegmentLoadInfoRequest) (*querypb.GetQueryViewSegmentLoadInfoResponse, error) {
+func (m *fakeSegmentLoadInfoWatchMixCoord) GetQueryViewSegmentLoadInfos(ctx context.Context, collectionID int64, segmentIDs []int64) ([]*querypb.SegmentLoadInfo, []*indexpb.IndexInfo, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return &querypb.GetQueryViewSegmentLoadInfoResponse{
-		Status:        merr.Success(),
-		Infos:         []*querypb.SegmentLoadInfo{m.loadInfo},
-		IndexInfoList: m.indexes,
-	}, nil
+	return []*querypb.SegmentLoadInfo{m.loadInfo}, m.indexes, nil
 }

@@ -31,7 +31,6 @@ const (
 	QueryCoord_SyncNewCreatedPartition_FullMethodName       = "/milvus.proto.query.QueryCoord/SyncNewCreatedPartition"
 	QueryCoord_GetPartitionStates_FullMethodName            = "/milvus.proto.query.QueryCoord/GetPartitionStates"
 	QueryCoord_GetLoadSegmentInfo_FullMethodName            = "/milvus.proto.query.QueryCoord/GetLoadSegmentInfo"
-	QueryCoord_GetQueryViewSegmentLoadInfo_FullMethodName   = "/milvus.proto.query.QueryCoord/GetQueryViewSegmentLoadInfo"
 	QueryCoord_GetQueryViewLoadInfo_FullMethodName          = "/milvus.proto.query.QueryCoord/GetQueryViewLoadInfo"
 	QueryCoord_WatchQueryViewSegmentLoadInfo_FullMethodName = "/milvus.proto.query.QueryCoord/WatchQueryViewSegmentLoadInfo"
 	QueryCoord_LoadBalance_FullMethodName                   = "/milvus.proto.query.QueryCoord/LoadBalance"
@@ -81,7 +80,6 @@ type QueryCoordClient interface {
 	SyncNewCreatedPartition(ctx context.Context, in *SyncNewCreatedPartitionRequest, opts ...grpc.CallOption) (*commonpb.Status, error)
 	GetPartitionStates(ctx context.Context, in *GetPartitionStatesRequest, opts ...grpc.CallOption) (*GetPartitionStatesResponse, error)
 	GetLoadSegmentInfo(ctx context.Context, in *GetSegmentInfoRequest, opts ...grpc.CallOption) (*GetSegmentInfoResponse, error)
-	GetQueryViewSegmentLoadInfo(ctx context.Context, in *GetQueryViewSegmentLoadInfoRequest, opts ...grpc.CallOption) (*GetQueryViewSegmentLoadInfoResponse, error)
 	GetQueryViewLoadInfo(ctx context.Context, in *GetQueryViewLoadInfoRequest, opts ...grpc.CallOption) (*GetQueryViewLoadInfoResponse, error)
 	WatchQueryViewSegmentLoadInfo(ctx context.Context, opts ...grpc.CallOption) (QueryCoord_WatchQueryViewSegmentLoadInfoClient, error)
 	LoadBalance(ctx context.Context, in *LoadBalanceRequest, opts ...grpc.CallOption) (*commonpb.Status, error)
@@ -205,15 +203,6 @@ func (c *queryCoordClient) GetPartitionStates(ctx context.Context, in *GetPartit
 func (c *queryCoordClient) GetLoadSegmentInfo(ctx context.Context, in *GetSegmentInfoRequest, opts ...grpc.CallOption) (*GetSegmentInfoResponse, error) {
 	out := new(GetSegmentInfoResponse)
 	err := c.cc.Invoke(ctx, QueryCoord_GetLoadSegmentInfo_FullMethodName, in, out, opts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *queryCoordClient) GetQueryViewSegmentLoadInfo(ctx context.Context, in *GetQueryViewSegmentLoadInfoRequest, opts ...grpc.CallOption) (*GetQueryViewSegmentLoadInfoResponse, error) {
-	out := new(GetQueryViewSegmentLoadInfoResponse)
-	err := c.cc.Invoke(ctx, QueryCoord_GetQueryViewSegmentLoadInfo_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -562,7 +551,6 @@ type QueryCoordServer interface {
 	SyncNewCreatedPartition(context.Context, *SyncNewCreatedPartitionRequest) (*commonpb.Status, error)
 	GetPartitionStates(context.Context, *GetPartitionStatesRequest) (*GetPartitionStatesResponse, error)
 	GetLoadSegmentInfo(context.Context, *GetSegmentInfoRequest) (*GetSegmentInfoResponse, error)
-	GetQueryViewSegmentLoadInfo(context.Context, *GetQueryViewSegmentLoadInfoRequest) (*GetQueryViewSegmentLoadInfoResponse, error)
 	GetQueryViewLoadInfo(context.Context, *GetQueryViewLoadInfoRequest) (*GetQueryViewLoadInfoResponse, error)
 	WatchQueryViewSegmentLoadInfo(QueryCoord_WatchQueryViewSegmentLoadInfoServer) error
 	LoadBalance(context.Context, *LoadBalanceRequest) (*commonpb.Status, error)
@@ -633,9 +621,6 @@ func (UnimplementedQueryCoordServer) GetPartitionStates(context.Context, *GetPar
 }
 func (UnimplementedQueryCoordServer) GetLoadSegmentInfo(context.Context, *GetSegmentInfoRequest) (*GetSegmentInfoResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetLoadSegmentInfo not implemented")
-}
-func (UnimplementedQueryCoordServer) GetQueryViewSegmentLoadInfo(context.Context, *GetQueryViewSegmentLoadInfoRequest) (*GetQueryViewSegmentLoadInfoResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetQueryViewSegmentLoadInfo not implemented")
 }
 func (UnimplementedQueryCoordServer) GetQueryViewLoadInfo(context.Context, *GetQueryViewLoadInfoRequest) (*GetQueryViewLoadInfoResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetQueryViewLoadInfo not implemented")
@@ -909,24 +894,6 @@ func _QueryCoord_GetLoadSegmentInfo_Handler(srv interface{}, ctx context.Context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(QueryCoordServer).GetLoadSegmentInfo(ctx, req.(*GetSegmentInfoRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _QueryCoord_GetQueryViewSegmentLoadInfo_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetQueryViewSegmentLoadInfoRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(QueryCoordServer).GetQueryViewSegmentLoadInfo(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: QueryCoord_GetQueryViewSegmentLoadInfo_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(QueryCoordServer).GetQueryViewSegmentLoadInfo(ctx, req.(*GetQueryViewSegmentLoadInfoRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1593,10 +1560,6 @@ var QueryCoord_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetLoadSegmentInfo",
 			Handler:    _QueryCoord_GetLoadSegmentInfo_Handler,
-		},
-		{
-			MethodName: "GetQueryViewSegmentLoadInfo",
-			Handler:    _QueryCoord_GetQueryViewSegmentLoadInfo_Handler,
 		},
 		{
 			MethodName: "GetQueryViewLoadInfo",

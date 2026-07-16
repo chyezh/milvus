@@ -86,10 +86,6 @@ func (m *GrpcQueryCoordClient) GetLoadSegmentInfo(ctx context.Context, in *query
 	return &querypb.GetSegmentInfoResponse{}, m.Err
 }
 
-func (m *GrpcQueryCoordClient) GetQueryViewSegmentLoadInfo(ctx context.Context, in *querypb.GetQueryViewSegmentLoadInfoRequest, opts ...grpc.CallOption) (*querypb.GetQueryViewSegmentLoadInfoResponse, error) {
-	return &querypb.GetQueryViewSegmentLoadInfoResponse{}, m.Err
-}
-
 func (m *GrpcQueryCoordClient) GetQueryViewLoadInfo(ctx context.Context, in *querypb.GetQueryViewLoadInfoRequest, opts ...grpc.CallOption) (*querypb.GetQueryViewLoadInfoResponse, error) {
 	return &querypb.GetQueryViewLoadInfoResponse{}, m.Err
 }

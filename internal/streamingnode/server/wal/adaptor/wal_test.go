@@ -50,10 +50,6 @@ type adaptorTestMixCoordClient struct {
 	*mocks.MockMixCoordClient
 }
 
-func (c adaptorTestMixCoordClient) GetQueryViewSegmentLoadInfo(context.Context, *querypb.GetQueryViewSegmentLoadInfoRequest, ...grpc.CallOption) (*querypb.GetQueryViewSegmentLoadInfoResponse, error) {
-	return &querypb.GetQueryViewSegmentLoadInfoResponse{}, nil
-}
-
 func (c adaptorTestMixCoordClient) WatchQueryViewSegmentLoadInfo(context.Context, ...grpc.CallOption) (querypb.QueryCoord_WatchQueryViewSegmentLoadInfoClient, error) {
 	return nil, nil
 }

@@ -9,7 +9,6 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
 func TestManagerResolveLoadInfoAppliesLoadInfoAndIndexInfos(t *testing.T) {
@@ -26,7 +25,7 @@ func TestManagerResolveLoadInfoAppliesLoadInfoAndIndexInfos(t *testing.T) {
 
 	view, err := manager.resolveLoadInfo(context.Background(), walview.VChannelWALView{
 		CollectionID:    1,
-		LoadInfoVersion: &viewpb.QueryViewLoadInfoVersion{Version: 7},
+		LoadInfoVersion: 7,
 	})
 	require.NoError(t, err)
 	require.Equal(t, []int64{10}, view.PartitionIDs)
@@ -48,6 +47,6 @@ type fakeLoadInfoProvider struct {
 	err      error
 }
 
-func (p fakeLoadInfoProvider) QueryViewLoadInfo(context.Context, int64, *viewpb.QueryViewLoadInfoVersion) (QueryViewLoadInfo, error) {
+func (p fakeLoadInfoProvider) QueryViewLoadInfo(context.Context, int64, uint64) (QueryViewLoadInfo, error) {
 	return p.loadInfo, p.err
 }

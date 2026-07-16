@@ -102,16 +102,13 @@ type QueryViewLoadMetadataProvider interface {
 	GetQueryViewLoadInfo(ctx context.Context, collectionID int64, version QueryViewLoadInfoVersion) (QueryViewLoadInfo, error)
 }
 
-type QueryViewLoadInfoVersion struct {
-	// Version is bound to QueryCoord's collection-level load-config snapshot.
-	Version uint64
-}
+// QueryViewLoadInfoVersion is bound to QueryCoord's collection-level
+// load-config snapshot. Segment-level load-info changes are tracked by
+// SegmentLoadInfoRevision.
+type QueryViewLoadInfoVersion uint64
 
-func QueryViewLoadInfoVersionFromProto(version *viewpb.QueryViewLoadInfoVersion) QueryViewLoadInfoVersion {
-	if version == nil {
-		return QueryViewLoadInfoVersion{}
-	}
-	return QueryViewLoadInfoVersion{Version: version.GetVersion()}
+func QueryViewLoadInfoVersionFromProto(version uint64) QueryViewLoadInfoVersion {
+	return QueryViewLoadInfoVersion(version)
 }
 
 type QueryViewLoadInfo struct {

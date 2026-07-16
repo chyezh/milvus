@@ -91,9 +91,7 @@ func allocate(
 		shardID.VChannel,
 	)
 	builder.SetAssignments(assignments)
-	builder.SetLoadInfoVersion(&viewpb.QueryViewLoadInfoVersion{
-		Version: snap.LoadConfigSnapshot.Version(),
-	})
+	builder.SetLoadInfoVersion(snap.LoadConfigSnapshot.Version())
 	return builder
 }
 

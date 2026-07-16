@@ -219,7 +219,7 @@ func (m *Manager) startBuildLocked(meta *viewpb.QueryViewMeta, build ViewBuilder
 }
 
 func (m *Manager) resolveLoadInfo(ctx context.Context, view walview.VChannelWALView) (walview.VChannelWALView, error) {
-	if view.LoadInfoVersion == nil || m.loadInfoProvider == nil {
+	if view.LoadInfoVersion == 0 || m.loadInfoProvider == nil {
 		return view, nil
 	}
 	loadInfo, err := m.loadInfoProvider.QueryViewLoadInfo(ctx, view.CollectionID, view.LoadInfoVersion)

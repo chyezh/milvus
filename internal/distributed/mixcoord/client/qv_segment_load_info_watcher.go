@@ -28,7 +28,6 @@ type segmentLoadInfoWatcher struct {
 	subscriptions   map[segmentLoadInfoWatchKey]qnview.SegmentLoadInfoSubscription
 	dirty           map[segmentLoadInfoWatchKey]qnview.SegmentLoadInfoSubscription
 	unsubscriptions []qnview.SegmentLoadInfoSubscription
-	generation      uint64
 	notify          chan struct{}
 	snapshots       chan *querypb.QueryViewSegmentLoadInfoSnapshot
 }
@@ -80,7 +79,6 @@ func (w *segmentLoadInfoWatcher) Subscribe(subscription qnview.SegmentLoadInfoSu
 	w.mu.Lock()
 	w.subscriptions[key] = subscription
 	w.dirty[key] = subscription
-	w.generation++
 	w.mu.Unlock()
 	w.wake()
 }
@@ -97,7 +95,6 @@ func (w *segmentLoadInfoWatcher) Unsubscribe(collectionID int64, segmentID int64
 		CollectionID: collectionID,
 		SegmentID:    segmentID,
 	})
-	w.generation++
 	w.mu.Unlock()
 	w.wake()
 }
@@ -237,9 +234,7 @@ func (w *segmentLoadInfoWatcher) buildRequestLocked(
 	subscriptions map[segmentLoadInfoWatchKey]qnview.SegmentLoadInfoSubscription,
 	unsubscriptions []qnview.SegmentLoadInfoSubscription,
 ) *querypb.WatchQueryViewSegmentLoadInfoRequest {
-	req := &querypb.WatchQueryViewSegmentLoadInfoRequest{
-		Generation: w.generation,
-	}
+	req := &querypb.WatchQueryViewSegmentLoadInfoRequest{}
 	for _, subscription := range subscriptions {
 		req.Subscribe = append(req.Subscribe, &querypb.WatchQueryViewSegmentLoadInfoSubscription{
 			CollectionID: subscription.CollectionID,

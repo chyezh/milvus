@@ -36,7 +36,7 @@ func TestQueryViewCollectionRuntimeManager_AcquireRefsCollectionAndReleaseUnrefs
 	guard, err := manager.Acquire(context.Background(), qviews.NewQueryViewAtQueryNode(
 		&viewpb.QueryViewMeta{
 			CollectionId:    1,
-			LoadInfoVersion: &viewpb.QueryViewLoadInfoVersion{Version: 7},
+			LoadInfoVersion: 7,
 		},
 		&viewpb.QueryViewOfQueryNode{
 			Partitions: []*viewpb.QueryViewOfPartition{
@@ -84,7 +84,7 @@ func TestQueryViewCollectionRuntimeManager_AcquireUsesLoadInfoVersion(t *testing
 	guard, err := manager.Acquire(context.Background(), qviews.NewQueryViewAtQueryNode(
 		&viewpb.QueryViewMeta{
 			CollectionId:    1,
-			LoadInfoVersion: &viewpb.QueryViewLoadInfoVersion{Version: 7},
+			LoadInfoVersion: 7,
 		},
 		&viewpb.QueryViewOfQueryNode{
 			Partitions: []*viewpb.QueryViewOfPartition{

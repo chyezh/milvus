@@ -40,7 +40,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/metricsinfo"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
@@ -259,7 +258,7 @@ func (s *Server) GetQueryViewLoadInfo(ctx context.Context, req *querypb.GetQuery
 		resp.Status = merr.Status(merr.WrapErrCollectionNotLoaded(req.GetCollectionID()))
 		return resp, nil
 	}
-	resp.Version = &viewpb.QueryViewLoadInfoVersion{Version: snapshot.Version()}
+	resp.Version = snapshot.Version()
 	resp.PartitionIDs = append([]int64(nil), cfg.PartitionIDs...)
 	resp.LoadFields = cloneLoadFields(cfg.LoadFields)
 	return resp, nil
@@ -514,23 +513,6 @@ func (s *Server) GetLoadSegmentInfo(ctx context.Context, req *querypb.GetSegment
 		Status: merr.Success(),
 		Infos:  infos,
 	}, nil
-}
-
-func (s *Server) GetQueryViewSegmentLoadInfo(ctx context.Context, req *querypb.GetQueryViewSegmentLoadInfoRequest) (*querypb.GetQueryViewSegmentLoadInfoResponse, error) {
-	ctx = mlog.WithFields(ctx, mlog.Int64("collectionID", req.GetCollectionID()), mlog.Int64s("segments", req.GetSegmentIDs()))
-	if err := merr.CheckHealthy(s.State()); err != nil {
-		msg := "failed to get query view segment load info"
-		mlog.Warn(ctx, msg, mlog.Err(err))
-		return &querypb.GetQueryViewSegmentLoadInfoResponse{
-			Status: merr.Status(merr.Wrapf(err, "%s", msg)),
-		}, nil
-	}
-	if s.mixCoord == nil {
-		return &querypb.GetQueryViewSegmentLoadInfoResponse{
-			Status: merr.Status(merr.WrapErrServiceUnavailable("mixcoord is not initialized")),
-		}, nil
-	}
-	return s.mixCoord.GetQueryViewSegmentLoadInfo(ctx, req)
 }
 
 func (s *Server) SyncNewCreatedPartition(ctx context.Context, req *querypb.SyncNewCreatedPartitionRequest) (*commonpb.Status, error) {

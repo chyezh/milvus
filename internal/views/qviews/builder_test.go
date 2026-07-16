@@ -26,7 +26,7 @@ func TestQueryViewAtCoordBuilder(t *testing.T) {
 		Shards:       []*viewpb.DataViewOfShard{shardView},
 	}
 
-	loadInfoVersion := &viewpb.QueryViewLoadInfoVersion{Version: 7}
+	loadInfoVersion := uint64(7)
 
 	assignments := map[int64]map[int64][]int64{
 		1001: {1: {100, 101}, 2: {201}},

@@ -112,16 +112,10 @@ message QueryViewMeta {
     QueryViewState state = 5;
     // Version of the global load-config snapshot used to resolve this view's
     // partitions, load fields, and collection index metadata.
-    QueryViewLoadInfoVersion load_info_version = 6;
+    uint64 load_info_version = 6;
     // Inherited from DataViewOfShard at the time this query view was created.
     // TransformLog entries with timetick > this value need to be consumed for this shard.
     uint64 transform_start_after_timetick = 7;
-}
-
-message QueryViewLoadInfoVersion {
-    // Bound to QueryCoord's collection-level LoadConfigSnapshot version.
-    // Segment-level load-info changes are tracked by SegmentLoadInfoRevision.
-    uint64 version = 1;
 }
 
 // QueryViewOfStreamingNode represents the streaming node's portion of a query view.

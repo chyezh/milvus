@@ -1697,17 +1697,6 @@ func (c *Client) GetLoadSegmentInfo(ctx context.Context, req *querypb.GetSegment
 	})
 }
 
-func (c *Client) GetQueryViewSegmentLoadInfo(ctx context.Context, req *querypb.GetQueryViewSegmentLoadInfoRequest, opts ...grpc.CallOption) (*querypb.GetQueryViewSegmentLoadInfoResponse, error) {
-	req = typeutil.Clone(req)
-	commonpbutil.UpdateMsgBase(
-		req.GetBase(),
-		commonpbutil.FillMsgBaseFromClient(paramtable.GetNodeID(), commonpbutil.WithTargetID(c.grpcClient.GetNodeID())),
-	)
-	return wrapGrpcCall(ctx, c, func(client MixCoordClient) (*querypb.GetQueryViewSegmentLoadInfoResponse, error) {
-		return client.GetQueryViewSegmentLoadInfo(ctx, req)
-	})
-}
-
 func (c *Client) GetQueryViewLoadInfo(ctx context.Context, req *querypb.GetQueryViewLoadInfoRequest, opts ...grpc.CallOption) (*querypb.GetQueryViewLoadInfoResponse, error) {
 	req = typeutil.Clone(req)
 	commonpbutil.UpdateMsgBase(
