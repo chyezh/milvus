@@ -4,8 +4,6 @@ import (
 	"github.com/milvus-io/milvus/internal/views/coord/coordview"
 	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
 	"github.com/milvus-io/milvus/internal/views/qviews"
-	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
 // actionKind is the Phase 1 classification for a dirty shard.
@@ -22,7 +20,7 @@ const (
 	actionRelease
 
 	// actionMust: a new view must be generated (e.g., initial load,
-	// data version changed, node unavailable, settings changed).
+	// data version changed, node unavailable, load info changed).
 	// The Policy unconditionally adds the candidate to the plan.
 	actionMust
 
@@ -42,7 +40,7 @@ const (
 //  4. Both absent                         → None
 //  5. Current DataVersion < DataView DV   → Must (data changed)
 //  6. Current view references an unavailable node → Must (node lost)
-//  7. Settings differ (partitions/fields) → Must
+//  7. LoadInfoVersion differs            → Must
 //  8. Already has a Preparing view        → None (avoid stacking)
 //  9. Otherwise                           → MayOptimize
 func classifyShard(snap *BalancerSnapshot, shardID qviews.ShardID) actionKind {
@@ -132,54 +130,8 @@ func loadInfoDiffer(snap *BalancerSnapshot, desired *loadmgr.LoadConfig, stats *
 	if stats == nil {
 		return true
 	}
-	if stats.UpLoadInfoVersion != nil {
-		return stats.UpLoadInfoVersion.GetVersion() != snap.LoadConfigSnapshot.Version()
-	}
-	return settingsDiffer(desired, stats.UpSettings)
-}
-
-// settingsDiffer is the compatibility path for old QueryViews that do not
-// carry a load-info version yet.
-func settingsDiffer(desired *loadmgr.LoadConfig, current *viewpb.QueryViewSettings) bool {
-	if current == nil {
+	if stats.UpLoadInfoVersion == nil {
 		return true
 	}
-	if !int64SetEq(desired.PartitionIDs, current.GetRequiredPartitions()) {
-		return true
-	}
-	if !loadFieldsEq(desired.LoadFields, current.GetRequiredFields()) {
-		return true
-	}
-	return false
-}
-
-// int64SetEq compares two int64 slices as sets (order-insensitive).
-func int64SetEq(a, b []int64) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	m := make(map[int64]int, len(a))
-	for _, v := range a {
-		m[v]++
-	}
-	for _, v := range b {
-		m[v]--
-		if m[v] < 0 {
-			return false
-		}
-	}
-	return true
-}
-
-// loadFieldsEq compares the desired LoadField configs (carrying field IDs)
-// against the current view's required field IDs as a set.
-func loadFieldsEq(desired []*messagespb.LoadFieldConfig, currentFields []int64) bool {
-	if len(desired) != len(currentFields) {
-		return false
-	}
-	desiredIDs := make([]int64, len(desired))
-	for i, f := range desired {
-		desiredIDs[i] = f.GetFieldId()
-	}
-	return int64SetEq(desiredIDs, currentFields)
+	return stats.UpLoadInfoVersion.GetVersion() != snap.LoadConfigSnapshot.Version()
 }

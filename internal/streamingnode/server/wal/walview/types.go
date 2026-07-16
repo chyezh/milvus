@@ -5,6 +5,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -19,9 +20,9 @@ type VChannelWALView struct {
 	BaseGrowingTimeTick   uint64
 	BaseTransformTimeTick uint64
 
-	LoadConfig      *streamingpb.VChannelLoadConfig
-	Settings        *viewpb.QueryViewSettings
 	LoadInfoVersion *viewpb.QueryViewLoadInfoVersion
+	PartitionIDs    []int64
+	LoadFields      []*messagespb.LoadFieldConfig
 	IndexInfos      []*indexpb.IndexInfo
 	Schema          *schemapb.CollectionSchema
 

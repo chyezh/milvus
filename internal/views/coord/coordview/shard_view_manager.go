@@ -138,7 +138,6 @@ func (m *ShardViewManager) statsLocked() *ShardStats {
 		case qviews.QueryViewStateUp:
 			if stats.UpVersion == nil || version.GT(*stats.UpVersion) {
 				stats.UpVersion = &version
-				stats.UpSettings = sm.View().GetMeta().GetSettings()
 				stats.UpLoadInfoVersion = sm.View().GetMeta().GetLoadInfoVersion()
 			}
 		case qviews.QueryViewStatePreparing, qviews.QueryViewStateReady:

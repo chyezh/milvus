@@ -14,7 +14,6 @@ import (
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
@@ -40,7 +39,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/proxypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/rootcoordpb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/metricsinfo"
@@ -1120,7 +1118,7 @@ func (s *mixCoordImpl) GetRecoveryInfoV2(ctx context.Context, req *datapb.GetRec
 }
 
 func (s *mixCoordImpl) GetStreamingNodeQueryViewResources(ctx context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
-	if req.GetSettings() == nil && req.GetLoadInfoVersion() != nil {
+	if req.GetLoadInfoVersion() != nil {
 		loadInfo, err := s.queryCoordServer.GetQueryViewLoadInfo(ctx, &querypb.GetQueryViewLoadInfoRequest{
 			CollectionID: req.GetCollectionId(),
 			Version:      req.GetLoadInfoVersion(),
@@ -1133,21 +1131,16 @@ func (s *mixCoordImpl) GetStreamingNodeQueryViewResources(ctx context.Context, r
 				DataVersion:  req.GetDataVersion(),
 			}, nil
 		}
-		cloned := proto.Clone(req).(*datapb.GetStreamingNodeQueryViewResourcesRequest)
-		cloned.Settings = queryViewSettingsFromLoadInfo(loadInfo)
-		req = cloned
+		req = &datapb.GetStreamingNodeQueryViewResourcesRequest{
+			Base:            req.GetBase(),
+			CollectionId:    req.GetCollectionId(),
+			Vchannel:        req.GetVchannel(),
+			DataVersion:     req.GetDataVersion(),
+			LoadInfoVersion: req.GetLoadInfoVersion(),
+			PartitionIds:    append([]int64(nil), loadInfo.GetPartitionIDs()...),
+		}
 	}
 	return s.datacoordServer.GetStreamingNodeQueryViewResources(ctx, req)
-}
-
-func queryViewSettingsFromLoadInfo(info *querypb.GetQueryViewLoadInfoResponse) *viewpb.QueryViewSettings {
-	settings := &viewpb.QueryViewSettings{
-		RequiredPartitions: append([]int64(nil), info.GetPartitionIDs()...),
-	}
-	for _, field := range info.GetLoadFields() {
-		settings.RequiredFields = append(settings.RequiredFields, field.GetFieldId())
-	}
-	return settings
 }
 
 func (s *mixCoordImpl) GetChannelRecoveryInfo(ctx context.Context, req *datapb.GetChannelRecoveryInfoRequest) (*datapb.GetChannelRecoveryInfoResponse, error) {

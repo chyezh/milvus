@@ -226,9 +226,8 @@ func (m *Manager) resolveLoadInfo(ctx context.Context, view walview.VChannelWALV
 	if err != nil {
 		return view, err
 	}
-	if view.Settings == nil {
-		view.Settings = loadInfo.Settings
-	}
+	view.PartitionIDs = loadInfo.PartitionIDs
+	view.LoadFields = loadInfo.LoadFields
 	view.IndexInfos = loadInfo.IndexInfos
 	return view, nil
 }

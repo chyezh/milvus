@@ -103,6 +103,7 @@ type QueryViewLoadMetadataProvider interface {
 }
 
 type QueryViewLoadInfoVersion struct {
+	// Version is bound to QueryCoord's collection-level load-config snapshot.
 	Version uint64
 }
 

@@ -82,7 +82,7 @@ func newCollection(view walview.VChannelWALView) (*segcore.CCollection, error) {
 	req := &segcore.CreateCCollectionRequest{
 		CollectionID:  view.CollectionID,
 		Schema:        view.Schema,
-		LoadFieldList: settingsFromWALView(view).GetRequiredFields(),
+		LoadFieldList: loadFieldIDs(view.LoadFields),
 	}
 	if len(view.IndexInfos) > 0 {
 		indexMeta := segcore.ComposeCollectionIndexMeta(context.TODO(), view.IndexInfos, view.Schema)

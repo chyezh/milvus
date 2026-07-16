@@ -247,7 +247,7 @@ type oracleRuntime struct {
 
 	collectionID    int64
 	vchannel        string
-	settings        *viewpb.QueryViewSettings
+	partitionIDs    []int64
 	loadInfoVersion *viewpb.QueryViewLoadInfoVersion
 	schema          *schemapb.CollectionSchema
 
@@ -275,7 +275,6 @@ func newOracleRuntime(
 	ctx context.Context,
 	provider *Provider,
 	walView walview.VChannelWALView,
-	settings *viewpb.QueryViewSettings,
 	initialResources []*datapb.StreamingNodeBM25Resource,
 ) (*oracleRuntime, error) {
 	runtimeCtx, cancel := context.WithCancel(context.Background())
@@ -283,7 +282,7 @@ func newOracleRuntime(
 		provider:        provider,
 		collectionID:    walView.CollectionID,
 		vchannel:        walView.VChannel,
-		settings:        settings,
+		partitionIDs:    append([]int64(nil), walView.PartitionIDs...),
 		loadInfoVersion: walView.LoadInfoVersion,
 		schema:          walView.Schema,
 		ctx:             runtimeCtx,
@@ -530,7 +529,7 @@ func (r *oracleRuntime) popPending() (qviews.DataVersion, bool) {
 }
 
 func (r *oracleRuntime) computeDiff(ctx context.Context, target qviews.DataVersion) (*idfDiff, error) {
-	resources, err := r.provider.getSealedBM25Resources(ctx, r.collectionID, r.vchannel, target, r.settings, r.loadInfoVersion)
+	resources, err := r.provider.getSealedBM25Resources(ctx, r.collectionID, r.vchannel, target, r.partitionIDs, r.loadInfoVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -632,15 +631,15 @@ func (p *Provider) getSealedBM25Resources(
 	collectionID int64,
 	vchannel string,
 	dataVersion qviews.DataVersion,
-	settings *viewpb.QueryViewSettings,
+	partitionIDs []int64,
 	loadInfoVersion *viewpb.QueryViewLoadInfoVersion,
 ) ([]*datapb.StreamingNodeBM25Resource, error) {
 	resp, err := p.client.GetStreamingNodeQueryViewResources(ctx, &datapb.GetStreamingNodeQueryViewResourcesRequest{
 		CollectionId:    collectionID,
 		Vchannel:        vchannel,
 		DataVersion:     dataVersion.IntoProto(),
-		Settings:        settings,
 		LoadInfoVersion: loadInfoVersion,
+		PartitionIds:    append([]int64(nil), partitionIDs...),
 	})
 	if err := merr.CheckRPCCall(resp, err); err != nil {
 		return nil, err

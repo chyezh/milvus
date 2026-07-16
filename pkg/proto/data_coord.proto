@@ -625,8 +625,8 @@ message GetStreamingNodeQueryViewResourcesRequest {
   int64 collection_id = 2;
   string vchannel = 3;
   view.DataVersion data_version = 4;
-  view.QueryViewSettings settings = 5;
-  view.QueryViewLoadInfoVersion load_info_version = 6;
+  view.QueryViewLoadInfoVersion load_info_version = 5;
+  repeated int64 partition_ids = 6;
 }
 
 message GetStreamingNodeQueryViewResourcesResponse {

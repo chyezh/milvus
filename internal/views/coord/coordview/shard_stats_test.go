@@ -17,7 +17,7 @@ func TestStats_Empty(t *testing.T) {
 	stats := mgr.Stats()
 	require.NotNil(t, stats)
 	assert.Nil(t, stats.UpVersion)
-	assert.Nil(t, stats.UpSettings)
+	assert.Nil(t, stats.UpLoadInfoVersion)
 	assert.Empty(t, stats.Segments)
 	assert.Nil(t, stats.PreparingVersion)
 }
@@ -29,7 +29,7 @@ func TestStats_PreparingOnly(t *testing.T) {
 
 	stats := mgr.Stats()
 	assert.Nil(t, stats.UpVersion, "no Up view yet")
-	assert.Nil(t, stats.UpSettings)
+	assert.Nil(t, stats.UpLoadInfoVersion)
 	require.NotNil(t, stats.PreparingVersion)
 	assert.Equal(t, testVersion(1, 1, 1), *stats.PreparingVersion)
 
@@ -77,8 +77,7 @@ func TestStats_UpOnly(t *testing.T) {
 	require.NotNil(t, stats.UpVersion)
 	assert.Equal(t, ver1, *stats.UpVersion)
 	assert.Nil(t, stats.PreparingVersion)
-	// Settings not populated in testBuilder; exposed as stored.
-	assert.Equal(t, mgr.upView.View().GetMeta().GetSettings(), stats.UpSettings)
+	assert.Equal(t, mgr.upView.View().GetMeta().GetLoadInfoVersion(), stats.UpLoadInfoVersion)
 
 	require.Len(t, stats.Segments, 2)
 	assert.Nil(t, stats.PreparingVersion, "no in-flight view")

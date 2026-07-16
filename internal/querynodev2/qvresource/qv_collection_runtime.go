@@ -10,7 +10,6 @@ import (
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
@@ -74,13 +73,6 @@ func (m *queryViewCollectionRuntimeManager) Acquire(ctx context.Context, view *q
 }
 
 func (m *queryViewCollectionRuntimeManager) loadInfo(ctx context.Context, meta *viewpb.QueryViewMeta) (qnview.QueryViewLoadInfo, error) {
-	if meta.GetLoadInfoVersion() == nil && meta.GetSettings() != nil {
-		return qnview.QueryViewLoadInfo{
-			CollectionID: meta.GetCollectionId(),
-			PartitionIDs: append([]int64(nil), meta.GetSettings().GetRequiredPartitions()...),
-			LoadFields:   loadFieldsFromSettings(meta.GetSettings()),
-		}, nil
-	}
 	return m.meta.GetQueryViewLoadInfo(ctx, meta.GetCollectionId(), qnview.QueryViewLoadInfoVersionFromProto(meta.GetLoadInfoVersion()))
 }
 
@@ -146,14 +138,6 @@ func loadInfoFieldIDs(info qnview.QueryViewLoadInfo) []int64 {
 	fields := make([]int64, 0, len(info.LoadFields))
 	for _, field := range info.LoadFields {
 		fields = append(fields, field.GetFieldId())
-	}
-	return fields
-}
-
-func loadFieldsFromSettings(settings *viewpb.QueryViewSettings) []*messagespb.LoadFieldConfig {
-	fields := make([]*messagespb.LoadFieldConfig, 0, len(settings.GetRequiredFields()))
-	for _, fieldID := range settings.GetRequiredFields() {
-		fields = append(fields, &messagespb.LoadFieldConfig{FieldId: fieldID})
 	}
 	return fields
 }

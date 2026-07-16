@@ -172,20 +172,6 @@ func syntheticDataView(
 	}
 }
 
-// settingsFromConfig derives QueryViewSettings from a LoadConfig. Partition IDs
-// go into RequiredPartitions; field IDs into RequiredFields. Everything is a
-// "required" list in the current design (no optional/lazy semantics yet).
-func settingsFromConfig(cfg *loadmgr.LoadConfig) *viewpb.QueryViewSettings {
-	fields := make([]int64, len(cfg.LoadFields))
-	for i, f := range cfg.LoadFields {
-		fields[i] = f.GetFieldId()
-	}
-	return &viewpb.QueryViewSettings{
-		RequiredPartitions: append([]int64{}, cfg.PartitionIDs...),
-		RequiredFields:     fields,
-	}
-}
-
 // clonePredictedLoad returns a deep-enough copy of the Nodes map so the Policy
 // can mutate it across shards without altering the source snapshot.
 func clonePredictedLoad(nodes map[int64]*BalanceNode) map[int64]*BalanceNode {

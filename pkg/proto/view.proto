@@ -110,22 +110,17 @@ message QueryViewMeta {
     string vchannel = 3;        // The shard (vchannel) this view covers.
     QueryViewVersion version = 4;
     QueryViewState state = 5;
-    QueryViewSettings settings = 6;
+    // Version of the global load-config snapshot used to resolve this view's
+    // partitions, load fields, and collection index metadata.
+    QueryViewLoadInfoVersion load_info_version = 6;
     // Inherited from DataViewOfShard at the time this query view was created.
     // TransformLog entries with timetick > this value need to be consumed for this shard.
     uint64 transform_start_after_timetick = 7;
-    QueryViewLoadInfoVersion load_info_version = 8;
-}
-
-// QueryViewSettings contains the load configuration for a query view.
-message QueryViewSettings {
-    // Partitions that must be loaded for the view to be available.
-    repeated int64 required_partitions = 1;
-    // Fields that must be loaded for the view to be available.
-    repeated int64 required_fields = 2;
 }
 
 message QueryViewLoadInfoVersion {
+    // Bound to QueryCoord's collection-level LoadConfigSnapshot version.
+    // Segment-level load-info changes are tracked by SegmentLoadInfoRevision.
     uint64 version = 1;
 }
 

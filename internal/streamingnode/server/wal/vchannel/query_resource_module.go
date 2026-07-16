@@ -3,14 +3,10 @@ package vchannel
 import (
 	"context"
 
-	"google.golang.org/protobuf/proto"
-
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
-	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
-	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
@@ -72,39 +68,15 @@ func (m *VChannelRecoveryModule) queryWALViewLocked(meta *viewpb.QueryViewMeta) 
 		max(deleteReplayStartAfter(segmentSnapshot), meta.GetTransformStartAfterTimetick()),
 		baseTransformTimeTick,
 	)
-	settings := cloneQueryViewSettings(meta.GetSettings())
 	return walview.VChannelWALView{
 		PChannel:              m.pchannel,
 		VChannel:              m.vchannel,
 		CollectionID:          vchannelSnapshot.CollectionID,
 		BaseGrowingTimeTick:   baseGrowingTimeTick,
 		BaseTransformTimeTick: baseTransformTimeTick,
-		LoadConfig:            queryViewLoadConfig(meta, settings),
-		Settings:              settings,
 		LoadInfoVersion:       meta.GetLoadInfoVersion(),
 		Schema:                vchannelSnapshot.Schema,
 		SegmentSnapshot:       segmentSnapshot,
 		DeleteReplay:          deleteReplay,
 	}, true
-}
-
-func cloneQueryViewSettings(settings *viewpb.QueryViewSettings) *viewpb.QueryViewSettings {
-	if settings == nil {
-		return nil
-	}
-	return proto.Clone(settings).(*viewpb.QueryViewSettings)
-}
-
-func queryViewLoadConfig(meta *viewpb.QueryViewMeta, settings *viewpb.QueryViewSettings) *streamingpb.VChannelLoadConfig {
-	loadFields := make([]*messagespb.LoadFieldConfig, 0, len(settings.GetRequiredFields()))
-	for _, fieldID := range settings.GetRequiredFields() {
-		loadFields = append(loadFields, &messagespb.LoadFieldConfig{FieldId: fieldID})
-	}
-	return &streamingpb.VChannelLoadConfig{
-		Header: &messagespb.AlterLoadConfigMessageHeader{
-			CollectionId: meta.GetCollectionId(),
-			PartitionIds: append([]int64(nil), settings.GetRequiredPartitions()...),
-			LoadFields:   loadFields,
-		},
-	}
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -40,19 +41,20 @@ func (p *futureLoadInfoProvider) QueryViewLoadInfo(ctx context.Context, collecti
 		return QueryViewLoadInfo{}, errors.Errorf("query view load info collection mismatch: expected %d, got %d", collectionID, resp.GetCollectionID())
 	}
 	return QueryViewLoadInfo{
-		Settings:   queryViewSettingsFromLoadInfo(resp),
-		IndexInfos: nonNilIndexInfos(resp.GetIndexInfoList()),
+		PartitionIDs: append([]int64(nil), resp.GetPartitionIDs()...),
+		LoadFields:   nonNilLoadFields(resp.GetLoadFields()),
+		IndexInfos:   nonNilIndexInfos(resp.GetIndexInfoList()),
 	}, nil
 }
 
-func queryViewSettingsFromLoadInfo(info *querypb.GetQueryViewLoadInfoResponse) *viewpb.QueryViewSettings {
-	settings := &viewpb.QueryViewSettings{
-		RequiredPartitions: append([]int64(nil), info.GetPartitionIDs()...),
+func nonNilLoadFields(fields []*messagespb.LoadFieldConfig) []*messagespb.LoadFieldConfig {
+	nonNil := make([]*messagespb.LoadFieldConfig, 0, len(fields))
+	for _, field := range fields {
+		if field != nil {
+			nonNil = append(nonNil, field)
+		}
 	}
-	for _, field := range info.GetLoadFields() {
-		settings.RequiredFields = append(settings.RequiredFields, field.GetFieldId())
-	}
-	return settings
+	return nonNil
 }
 
 func nonNilIndexInfos(infos []*indexpb.IndexInfo) []*indexpb.IndexInfo {

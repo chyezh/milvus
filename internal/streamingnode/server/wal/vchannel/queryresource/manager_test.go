@@ -8,16 +8,15 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
-func TestManagerResolveLoadInfoAppliesSettingsAndIndexInfos(t *testing.T) {
+func TestManagerResolveLoadInfoAppliesLoadInfoAndIndexInfos(t *testing.T) {
 	provider := fakeLoadInfoProvider{
 		loadInfo: QueryViewLoadInfo{
-			Settings: &viewpb.QueryViewSettings{
-				RequiredPartitions: []int64{10},
-				RequiredFields:     []int64{100, 101},
-			},
+			PartitionIDs: []int64{10},
+			LoadFields:   loadFields(100, 101),
 			IndexInfos: []*indexpb.IndexInfo{
 				{CollectionID: 1, FieldID: 101, IndexName: "sparse_inverted"},
 			},
@@ -30,10 +29,18 @@ func TestManagerResolveLoadInfoAppliesSettingsAndIndexInfos(t *testing.T) {
 		LoadInfoVersion: &viewpb.QueryViewLoadInfoVersion{Version: 7},
 	})
 	require.NoError(t, err)
-	require.Equal(t, []int64{10}, view.Settings.GetRequiredPartitions())
-	require.Equal(t, []int64{100, 101}, view.Settings.GetRequiredFields())
+	require.Equal(t, []int64{10}, view.PartitionIDs)
+	require.Equal(t, loadFields(100, 101), view.LoadFields)
 	require.Len(t, view.IndexInfos, 1)
 	require.Equal(t, int64(101), view.IndexInfos[0].GetFieldID())
+}
+
+func loadFields(fieldIDs ...int64) []*messagespb.LoadFieldConfig {
+	fields := make([]*messagespb.LoadFieldConfig, 0, len(fieldIDs))
+	for _, fieldID := range fieldIDs {
+		fields = append(fields, &messagespb.LoadFieldConfig{FieldId: fieldID})
+	}
+	return fields
 }
 
 type fakeLoadInfoProvider struct {
