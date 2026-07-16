@@ -125,7 +125,7 @@ func newRecoveryStorage(channel types.PChannelInfo, cp *utility.WALCheckpoint, o
 	if rs.nodeScheduler == nil {
 		rs.nodeScheduler = nodescheduler.Get()
 	}
-	rs.taskScheduler = newScopedTaskScheduler(rs.nodeScheduler)
+	rs.taskScheduler = newScopedTaskScheduler(rs.nodeScheduler, cfg.taskConcurrency)
 	return rs
 }
 

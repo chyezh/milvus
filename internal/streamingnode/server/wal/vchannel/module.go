@@ -324,19 +324,18 @@ func (m *VChannelRecoveryModule) ConsumeDirtySnapshots() []moduleapi.DirtySnapsh
 }
 
 func (m *VChannelRecoveryModule) DataFrontier(scope moduleapi.Scope) walcheckpoint.Barrier {
-	if m == nil || !m.matchesScope(scope) {
+	if m == nil {
 		return nil
 	}
-	return walcheckpoint.BarrierFunc(func() uint64 {
-		m.mu.Lock()
-		defer m.mu.Unlock()
-		segmentTimeTick := m.segmentFrontierTimeTick(scope)
-		transformTimeTick := m.transformFrontierTimeTick(scope.Kind)
-		if segmentTimeTick < transformTimeTick {
-			return segmentTimeTick
-		}
-		return transformTimeTick
-	})
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.matchesScope(scope) {
+		return nil
+	}
+	return walcheckpoint.NewCompositeBarrier(
+		walcheckpoint.BarrierFunc(func() uint64 { return m.segmentFrontierTimeTick(scope) }),
+		walcheckpoint.BarrierFunc(func() uint64 { return m.transformFrontierTimeTick(scope.Kind) }),
+	)
 }
 
 func (m *VChannelRecoveryModule) IsActive() bool {
@@ -797,14 +796,20 @@ func (m *VChannelRecoveryModule) notifyFrontierUpdated() {
 }
 
 func (m *VChannelRecoveryModule) transformFrontierTimeTick(kind moduleapi.DataProgressKind) uint64 {
+	m.mu.Lock()
+	transformLog := m.transformLog
+	m.mu.Unlock()
+	if transformLog == nil {
+		return math.MaxUint64
+	}
 	if kind == moduleapi.DataProgressMaterialized {
-		if m.transformLog.HasDirty() || m.transformLog.HasPendingMaterializeTask() {
-			return m.transformLog.MaterializedBarrierTimeTick()
+		if transformLog.HasDirty() || transformLog.HasPendingMaterializeTask() {
+			return transformLog.MaterializedBarrierTimeTick()
 		}
 		return math.MaxUint64
 	}
-	if m.transformLog.HasDirty() || m.transformLog.HasPendingWork() || m.transformLog.HasPendingFlushTask() {
-		return m.transformLog.DataBarrierTimeTick()
+	if transformLog.HasDirty() || transformLog.HasPendingWork() || transformLog.HasPendingFlushTask() {
+		return transformLog.DataBarrierTimeTick()
 	}
 	return math.MaxUint64
 }

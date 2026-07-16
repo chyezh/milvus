@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -255,6 +256,42 @@ func TestVChannelRecoveryModuleReturnsOwnedDataFrontier(t *testing.T) {
 		Kind:     moduleapi.DataProgressDurable,
 		VChannel: "v2",
 	}))
+}
+
+func TestVChannelRecoveryModuleConsumeDirtySnapshotsWaitsForModuleLock(t *testing.T) {
+	module := newTestModule(t, "p1", "v1")
+	module.SwitchIntoMetaAndData()
+
+	module.mu.Lock()
+	done := make(chan struct{})
+	go func() {
+		_ = module.ConsumeDirtySnapshots()
+		close(done)
+	}()
+
+	assert.Never(t, channelClosed(done), 20*time.Millisecond, time.Millisecond)
+	module.mu.Unlock()
+	require.Eventually(t, channelClosed(done), time.Second, time.Millisecond)
+}
+
+func TestVChannelRecoveryModuleDataFrontierWaitsForModuleLock(t *testing.T) {
+	module := newTestModule(t, "p1", "v1")
+	module.SwitchIntoMetaAndData()
+
+	module.mu.Lock()
+	done := make(chan struct{})
+	go func() {
+		_ = module.DataFrontier(moduleapi.Scope{
+			Type:     moduleapi.ScopeVChannel,
+			Kind:     moduleapi.DataProgressDurable,
+			VChannel: "v1",
+		})
+		close(done)
+	}()
+
+	assert.Never(t, channelClosed(done), 20*time.Millisecond, time.Millisecond)
+	module.mu.Unlock()
+	require.Eventually(t, channelClosed(done), time.Second, time.Millisecond)
 }
 
 func TestVChannelRecoveryModuleRuntimeCreatedSegmentInheritsMetaAndData(t *testing.T) {
@@ -561,6 +598,17 @@ func newTestGrowingSegmentMeta(segmentID int64, createTimeTick uint64) *streamin
 			CreateSegmentTimeTick: createTimeTick,
 			Level:                 datapb.SegmentLevel_L1,
 		},
+	}
+}
+
+func channelClosed(ch <-chan struct{}) func() bool {
+	return func() bool {
+		select {
+		case <-ch:
+			return true
+		default:
+			return false
+		}
 	}
 }
 
