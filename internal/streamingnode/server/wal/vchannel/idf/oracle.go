@@ -245,10 +245,11 @@ type idfDiff struct {
 type oracleRuntime struct {
 	provider *Provider
 
-	collectionID int64
-	vchannel     string
-	settings     *viewpb.QueryViewSettings
-	schema       *schemapb.CollectionSchema
+	collectionID    int64
+	vchannel        string
+	settings        *viewpb.QueryViewSettings
+	loadInfoVersion *viewpb.QueryViewLoadInfoVersion
+	schema          *schemapb.CollectionSchema
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -279,20 +280,21 @@ func newOracleRuntime(
 ) (*oracleRuntime, error) {
 	runtimeCtx, cancel := context.WithCancel(context.Background())
 	r := &oracleRuntime{
-		provider:       provider,
-		collectionID:   walView.CollectionID,
-		vchannel:       walView.VChannel,
-		settings:       settings,
-		schema:         walView.Schema,
-		ctx:            runtimeCtx,
-		cancel:         cancel,
-		notify:         make(chan struct{}, 1),
-		closeCh:        make(chan struct{}),
-		currentVersion: walView.SegmentSnapshot.DataVersion,
-		currentStats:   newBM25StatsFromSchema(walView.Schema),
-		currentSealed:  make(map[int64]sealedContribution),
-		currentGrowing: make(map[int64]growingContribution),
-		growingStore:   newGrowingStatsStore(walView.Schema),
+		provider:        provider,
+		collectionID:    walView.CollectionID,
+		vchannel:        walView.VChannel,
+		settings:        settings,
+		loadInfoVersion: walView.LoadInfoVersion,
+		schema:          walView.Schema,
+		ctx:             runtimeCtx,
+		cancel:          cancel,
+		notify:          make(chan struct{}, 1),
+		closeCh:         make(chan struct{}),
+		currentVersion:  walView.SegmentSnapshot.DataVersion,
+		currentStats:    newBM25StatsFromSchema(walView.Schema),
+		currentSealed:   make(map[int64]sealedContribution),
+		currentGrowing:  make(map[int64]growingContribution),
+		growingStore:    newGrowingStatsStore(walView.Schema),
 	}
 	sealed, err := provider.acquireSealedContributions(ctx, initialResources)
 	if err != nil {
@@ -528,7 +530,7 @@ func (r *oracleRuntime) popPending() (qviews.DataVersion, bool) {
 }
 
 func (r *oracleRuntime) computeDiff(ctx context.Context, target qviews.DataVersion) (*idfDiff, error) {
-	resources, err := r.provider.getSealedBM25Resources(ctx, r.collectionID, r.vchannel, target, r.settings)
+	resources, err := r.provider.getSealedBM25Resources(ctx, r.collectionID, r.vchannel, target, r.settings, r.loadInfoVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -631,12 +633,14 @@ func (p *Provider) getSealedBM25Resources(
 	vchannel string,
 	dataVersion qviews.DataVersion,
 	settings *viewpb.QueryViewSettings,
+	loadInfoVersion *viewpb.QueryViewLoadInfoVersion,
 ) ([]*datapb.StreamingNodeBM25Resource, error) {
 	resp, err := p.client.GetStreamingNodeQueryViewResources(ctx, &datapb.GetStreamingNodeQueryViewResourcesRequest{
-		CollectionId: collectionID,
-		Vchannel:     vchannel,
-		DataVersion:  dataVersion.IntoProto(),
-		Settings:     settings,
+		CollectionId:    collectionID,
+		Vchannel:        vchannel,
+		DataVersion:     dataVersion.IntoProto(),
+		Settings:        settings,
+		LoadInfoVersion: loadInfoVersion,
 	})
 	if err := merr.CheckRPCCall(resp, err); err != nil {
 		return nil, err

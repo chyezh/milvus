@@ -29,6 +29,10 @@ func (c testMixCoordClient) GetQueryViewSegmentLoadInfo(ctx context.Context, req
 	return &querypb.GetQueryViewSegmentLoadInfoResponse{}, nil
 }
 
+func (c testMixCoordClient) WatchQueryViewSegmentLoadInfo(context.Context, ...grpc.CallOption) (querypb.QueryCoord_WatchQueryViewSegmentLoadInfoClient, error) {
+	return nil, nil
+}
+
 // OptWriteBufferManager provides a write buffer manager to the resource (test only).
 func OptWriteBufferManager(wbMgr writebuffer.BufferManager) optResourceInit {
 	return func(r *resourceImpl) {

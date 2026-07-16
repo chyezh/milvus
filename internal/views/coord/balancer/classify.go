@@ -78,8 +78,8 @@ func classifyShard(snap *BalancerSnapshot, shardID qviews.ShardID) actionKind {
 		return actionMust
 	}
 
-	// 5. Settings differ between desired and current?
-	if settingsDiffer(desired, stats.UpSettings) {
+	// 5. LoadInfo differs between desired and current?
+	if loadInfoDiffer(snap, desired, stats) {
 		return actionMust
 	}
 
@@ -128,9 +128,18 @@ func hasUnavailableNode(stats *coordview.ShardStats, nodes map[int64]*BalanceNod
 	return false
 }
 
-// settingsDiffer returns true if the desired config's partitions/fields
-// differ from the Up view's settings. Not all LoadConfig fields map to
-// QueryViewSettings — only the ones that affect view composition matter.
+func loadInfoDiffer(snap *BalancerSnapshot, desired *loadmgr.LoadConfig, stats *coordview.ShardStats) bool {
+	if stats == nil {
+		return true
+	}
+	if stats.UpLoadInfoVersion != nil {
+		return stats.UpLoadInfoVersion.GetVersion() != snap.LoadConfigSnapshot.Version()
+	}
+	return settingsDiffer(desired, stats.UpSettings)
+}
+
+// settingsDiffer is the compatibility path for old QueryViews that do not
+// carry a load-info version yet.
 func settingsDiffer(desired *loadmgr.LoadConfig, current *viewpb.QueryViewSettings) bool {
 	if current == nil {
 		return true

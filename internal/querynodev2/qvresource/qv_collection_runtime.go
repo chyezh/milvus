@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
@@ -39,16 +40,20 @@ func (m *queryViewCollectionRuntimeManager) Acquire(ctx context.Context, view *q
 	if collection == nil || collection.GetSchema() == nil {
 		return nil, fmt.Errorf("collection metadata is incomplete")
 	}
+	loadInfo, err := m.loadInfo(ctx, meta)
+	if err != nil {
+		return nil, err
+	}
 	if err := m.collections.PutOrRef(
 		meta.GetCollectionId(),
 		collection.GetSchema(),
-		nil,
+		segments.ComposeIndexMeta(ctx, loadInfo.IndexInfos, collection.GetSchema()),
 		&querypb.LoadMetaInfo{
 			LoadType:        querypb.LoadType_LoadCollection,
 			CollectionID:    meta.GetCollectionId(),
-			PartitionIDs:    qvViewPartitionIDs(view.ViewOfQueryNode()),
+			PartitionIDs:    loadInfoPartitionIDs(loadInfo, view.ViewOfQueryNode()),
 			DbName:          collection.GetDbName(),
-			LoadFields:      append([]int64(nil), meta.GetSettings().GetRequiredFields()...),
+			LoadFields:      loadInfoFieldIDs(loadInfo),
 			SchemaBarrierTs: collection.GetUpdateTimestamp(),
 		},
 	); err != nil {
@@ -66,6 +71,17 @@ func (m *queryViewCollectionRuntimeManager) Acquire(ctx context.Context, view *q
 		schemaVersion: int64(collection.GetUpdateTimestamp()),
 		ccollection:   ccollection,
 	}, nil
+}
+
+func (m *queryViewCollectionRuntimeManager) loadInfo(ctx context.Context, meta *viewpb.QueryViewMeta) (qnview.QueryViewLoadInfo, error) {
+	if meta.GetLoadInfoVersion() == nil && meta.GetSettings() != nil {
+		return qnview.QueryViewLoadInfo{
+			CollectionID: meta.GetCollectionId(),
+			PartitionIDs: append([]int64(nil), meta.GetSettings().GetRequiredPartitions()...),
+			LoadFields:   loadFieldsFromSettings(meta.GetSettings()),
+		}, nil
+	}
+	return m.meta.GetQueryViewLoadInfo(ctx, meta.GetCollectionId(), qnview.QueryViewLoadInfoVersionFromProto(meta.GetLoadInfoVersion()))
 }
 
 type queryViewCollectionRuntimeGuard struct {
@@ -117,6 +133,29 @@ func (g *queryViewCollectionRuntimeGuard) UpdateIndexMeta(ctx context.Context, i
 
 func (g *queryViewCollectionRuntimeGuard) Release() {
 	g.collections.Unref(g.collectionID, 1)
+}
+
+func loadInfoPartitionIDs(info qnview.QueryViewLoadInfo, fallback *viewpb.QueryViewOfQueryNode) []int64 {
+	if len(info.PartitionIDs) > 0 {
+		return append([]int64(nil), info.PartitionIDs...)
+	}
+	return qvViewPartitionIDs(fallback)
+}
+
+func loadInfoFieldIDs(info qnview.QueryViewLoadInfo) []int64 {
+	fields := make([]int64, 0, len(info.LoadFields))
+	for _, field := range info.LoadFields {
+		fields = append(fields, field.GetFieldId())
+	}
+	return fields
+}
+
+func loadFieldsFromSettings(settings *viewpb.QueryViewSettings) []*messagespb.LoadFieldConfig {
+	fields := make([]*messagespb.LoadFieldConfig, 0, len(settings.GetRequiredFields()))
+	for _, fieldID := range settings.GetRequiredFields() {
+		fields = append(fields, &messagespb.LoadFieldConfig{FieldId: fieldID})
+	}
+	return fields
 }
 
 func qvViewPartitionIDs(view *viewpb.QueryViewOfQueryNode) []int64 {

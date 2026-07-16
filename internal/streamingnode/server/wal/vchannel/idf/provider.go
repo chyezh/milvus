@@ -152,7 +152,7 @@ func (p *Provider) buildOracle(ctx context.Context, walView walview.VChannelWALV
 		return nil, errors.New("querycoord client is nil")
 	}
 
-	resources, err := p.getSealedBM25Resources(ctx, walView.CollectionID, walView.VChannel, walView.SegmentSnapshot.DataVersion, settings)
+	resources, err := p.getSealedBM25Resources(ctx, walView.CollectionID, walView.VChannel, walView.SegmentSnapshot.DataVersion, settings, walView.LoadInfoVersion)
 	if err != nil {
 		return nil, err
 	}

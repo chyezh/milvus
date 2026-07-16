@@ -747,6 +747,16 @@ func (s *mockMixCoord) GetQueryViewSegmentLoadInfo(ctx context.Context, req *que
 	panic("implement me")
 }
 
+func (s *mockMixCoord) GetQueryViewLoadInfo(ctx context.Context, req *querypb.GetQueryViewLoadInfoRequest) (*querypb.GetQueryViewLoadInfoResponse, error) {
+	return &querypb.GetQueryViewLoadInfoResponse{
+		Status: merr.Success(),
+	}, nil
+}
+
+func (s *mockMixCoord) WatchQueryViewSegmentLoadInfo(querypb.QueryCoord_WatchQueryViewSegmentLoadInfoServer) error {
+	panic("implement me")
+}
+
 func (s *mockMixCoord) LoadBalance(ctx context.Context, req *querypb.LoadBalanceRequest) (*commonpb.Status, error) {
 	panic("implement me")
 }

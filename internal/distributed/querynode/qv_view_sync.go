@@ -172,6 +172,37 @@ func (p *lazyQueryViewLoadMetadataProvider) GetQueryViewSegmentLoadInfo(ctx cont
 	return resp.GetInfos(), resp.GetIndexInfoList(), nil
 }
 
+func (p *lazyQueryViewLoadMetadataProvider) GetQueryViewLoadInfo(ctx context.Context, collectionID int64, version qnview.QueryViewLoadInfoVersion) (qnview.QueryViewLoadInfo, error) {
+	var resp *querypb.GetQueryViewLoadInfoResponse
+	err := retryQueryViewMetadataRPC(ctx, func(rpcCtx context.Context) error {
+		client, err := p.client(rpcCtx)
+		if err != nil {
+			return merr.Wrapf(err, "get query view load info for collection %d", collectionID)
+		}
+		var callErr error
+		resp, callErr = client.GetQueryViewLoadInfo(rpcCtx, &querypb.GetQueryViewLoadInfoRequest{
+			CollectionID: collectionID,
+			Version: &viewpb.QueryViewLoadInfoVersion{
+				Version: version.Version,
+			},
+		})
+		if err := merr.CheckRPCCall(resp, callErr); err != nil {
+			return merr.Wrapf(err, "get query view load info for collection %d", collectionID)
+		}
+		return nil
+	})
+	if err != nil {
+		return qnview.QueryViewLoadInfo{}, err
+	}
+	return qnview.QueryViewLoadInfo{
+		CollectionID: resp.GetCollectionID(),
+		Version:      qnview.QueryViewLoadInfoVersionFromProto(resp.GetVersion()),
+		PartitionIDs: append([]int64(nil), resp.GetPartitionIDs()...),
+		LoadFields:   resp.GetLoadFields(),
+		IndexInfos:   resp.GetIndexInfoList(),
+	}, nil
+}
+
 func retryQueryViewMetadataRPC(ctx context.Context, fn func(context.Context) error) error {
 	var lastErr error
 	err := retry.Do(ctx, func() error {

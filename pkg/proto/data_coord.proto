@@ -626,6 +626,7 @@ message GetStreamingNodeQueryViewResourcesRequest {
   string vchannel = 3;
   view.DataVersion data_version = 4;
   view.QueryViewSettings settings = 5;
+  view.QueryViewLoadInfoVersion load_info_version = 6;
 }
 
 message GetStreamingNodeQueryViewResourcesResponse {

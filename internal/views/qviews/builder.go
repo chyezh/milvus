@@ -17,6 +17,7 @@ type QueryViewAtCoordBuilder struct {
 	queryVersion                int64
 	transformStartAfterTimetick uint64
 	settings                    *viewpb.QueryViewSettings
+	loadInfoVersion             *viewpb.QueryViewLoadInfoVersion
 	// nodeID -> partitionID -> []segmentID
 	assignments map[int64]map[int64][]int64
 }
@@ -67,6 +68,13 @@ func (b *QueryViewAtCoordBuilder) SetSettings(settings *viewpb.QueryViewSettings
 	return b
 }
 
+// SetLoadInfoVersion sets the load-info version used to resolve load fields,
+// partitions, and field-index bindings on nodes.
+func (b *QueryViewAtCoordBuilder) SetLoadInfoVersion(version *viewpb.QueryViewLoadInfoVersion) *QueryViewAtCoordBuilder {
+	b.loadInfoVersion = version
+	return b
+}
+
 // SetAssignments sets the segment-to-node assignments.
 // The map is keyed by nodeID → partitionID → []segmentID.
 func (b *QueryViewAtCoordBuilder) SetAssignments(assignments map[int64]map[int64][]int64) *QueryViewAtCoordBuilder {
@@ -87,6 +95,7 @@ func (b *QueryViewAtCoordBuilder) Build() *viewpb.QueryViewOfShard {
 		State:                       viewpb.QueryViewState_QueryViewStatePreparing,
 		Settings:                    b.settings,
 		TransformStartAfterTimetick: b.transformStartAfterTimetick,
+		LoadInfoVersion:             b.loadInfoVersion,
 	}
 
 	// Build sorted query node list for deterministic output.

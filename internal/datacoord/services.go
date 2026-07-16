@@ -1272,6 +1272,10 @@ func (s *Server) GetQueryViewSegmentLoadInfo(ctx context.Context, req *querypb.G
 	return resp, nil
 }
 
+func (s *Server) GetQueryViewCollectionIndexInfos(collectionID int64) []*indexpb.IndexInfo {
+	return s.queryViewCollectionIndexInfos(collectionID)
+}
+
 func (s *Server) queryViewCollectionIndexInfos(collectionID int64) []*indexpb.IndexInfo {
 	indexes := s.meta.indexMeta.GetIndexesForCollection(collectionID, "")
 	return lo.Map(indexes, func(index *model.Index, _ int) *indexpb.IndexInfo {

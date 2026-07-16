@@ -20,6 +20,11 @@ type ShardStats struct {
 	// Nil when no view is currently Up.
 	UpSettings *viewpb.QueryViewSettings
 
+	// UpLoadInfoVersion is the load-info version of the current Up view.
+	// Nil when no view is currently Up or the view was created by an old
+	// version that did not carry this field.
+	UpLoadInfoVersion *viewpb.QueryViewLoadInfoVersion
+
 	// PreparingVersion is the version of the current Preparing or Ready view,
 	// if any. Nil when there is no in-flight view.
 	PreparingVersion *qviews.QueryViewVersion

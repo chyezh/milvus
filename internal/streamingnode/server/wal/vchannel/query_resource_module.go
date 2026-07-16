@@ -81,6 +81,7 @@ func (m *VChannelRecoveryModule) queryWALViewLocked(meta *viewpb.QueryViewMeta) 
 		BaseTransformTimeTick: baseTransformTimeTick,
 		LoadConfig:            queryViewLoadConfig(meta, settings),
 		Settings:              settings,
+		LoadInfoVersion:       meta.GetLoadInfoVersion(),
 		Schema:                vchannelSnapshot.Schema,
 		SegmentSnapshot:       segmentSnapshot,
 		DeleteReplay:          deleteReplay,
@@ -89,7 +90,7 @@ func (m *VChannelRecoveryModule) queryWALViewLocked(meta *viewpb.QueryViewMeta) 
 
 func cloneQueryViewSettings(settings *viewpb.QueryViewSettings) *viewpb.QueryViewSettings {
 	if settings == nil {
-		return &viewpb.QueryViewSettings{}
+		return nil
 	}
 	return proto.Clone(settings).(*viewpb.QueryViewSettings)
 }

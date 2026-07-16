@@ -14,6 +14,7 @@ import (
 	"go.uber.org/atomic"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
@@ -39,6 +40,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/proxypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/rootcoordpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/metricsinfo"
@@ -975,6 +977,19 @@ func (s *mixCoordImpl) GetQueryViewSegmentLoadInfo(ctx context.Context, req *que
 	return s.datacoordServer.GetQueryViewSegmentLoadInfo(ctx, req)
 }
 
+func (s *mixCoordImpl) GetQueryViewLoadInfo(ctx context.Context, req *querypb.GetQueryViewLoadInfoRequest) (*querypb.GetQueryViewLoadInfoResponse, error) {
+	resp, err := s.queryCoordServer.GetQueryViewLoadInfo(ctx, req)
+	if err := merr.CheckRPCCall(resp, err); err != nil {
+		return resp, nil
+	}
+	resp.IndexInfoList = s.datacoordServer.GetQueryViewCollectionIndexInfos(req.GetCollectionID())
+	return resp, nil
+}
+
+func (s *mixCoordImpl) WatchQueryViewSegmentLoadInfo(stream querypb.QueryCoord_WatchQueryViewSegmentLoadInfoServer) error {
+	return s.queryCoordServer.WatchQueryViewSegmentLoadInfo(stream)
+}
+
 func (s *mixCoordImpl) LoadBalance(ctx context.Context, req *querypb.LoadBalanceRequest) (*commonpb.Status, error) {
 	return s.queryCoordServer.LoadBalance(ctx, req)
 }
@@ -1105,7 +1120,34 @@ func (s *mixCoordImpl) GetRecoveryInfoV2(ctx context.Context, req *datapb.GetRec
 }
 
 func (s *mixCoordImpl) GetStreamingNodeQueryViewResources(ctx context.Context, req *datapb.GetStreamingNodeQueryViewResourcesRequest) (*datapb.GetStreamingNodeQueryViewResourcesResponse, error) {
+	if req.GetSettings() == nil && req.GetLoadInfoVersion() != nil {
+		loadInfo, err := s.queryCoordServer.GetQueryViewLoadInfo(ctx, &querypb.GetQueryViewLoadInfoRequest{
+			CollectionID: req.GetCollectionId(),
+			Version:      req.GetLoadInfoVersion(),
+		})
+		if err := merr.CheckRPCCall(loadInfo, err); err != nil {
+			return &datapb.GetStreamingNodeQueryViewResourcesResponse{
+				Status:       merr.Status(err),
+				CollectionId: req.GetCollectionId(),
+				Vchannel:     req.GetVchannel(),
+				DataVersion:  req.GetDataVersion(),
+			}, nil
+		}
+		cloned := proto.Clone(req).(*datapb.GetStreamingNodeQueryViewResourcesRequest)
+		cloned.Settings = queryViewSettingsFromLoadInfo(loadInfo)
+		req = cloned
+	}
 	return s.datacoordServer.GetStreamingNodeQueryViewResources(ctx, req)
+}
+
+func queryViewSettingsFromLoadInfo(info *querypb.GetQueryViewLoadInfoResponse) *viewpb.QueryViewSettings {
+	settings := &viewpb.QueryViewSettings{
+		RequiredPartitions: append([]int64(nil), info.GetPartitionIDs()...),
+	}
+	for _, field := range info.GetLoadFields() {
+		settings.RequiredFields = append(settings.RequiredFields, field.GetFieldId())
+	}
+	return settings
 }
 
 func (s *mixCoordImpl) GetChannelRecoveryInfo(ctx context.Context, req *datapb.GetChannelRecoveryInfoRequest) (*datapb.GetChannelRecoveryInfoResponse, error) {
