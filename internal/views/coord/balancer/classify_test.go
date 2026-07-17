@@ -288,6 +288,25 @@ func TestClassify_SteadyState_MayOptimize(t *testing.T) {
 	assert.Equal(t, actionMayOptimize, classifyShard(snap, shardID))
 }
 
+func TestClassify_UnrelatedLoadConfigVersionChangeDoesNotTriggerMust(t *testing.T) {
+	shardID := qviews.ShardID{ReplicaID: 1, VChannel: "v0"}
+	cfg := cfgFor(1, 1, []int64{10}, nil)
+	snap := baseSnap(cfg, shardID)
+	snap.LoadConfigSnapshot = loadmgr.NewLoadConfigSnapshot(2, map[int64]*loadmgr.LoadConfig{
+		cfg.CollectionID: cfg,
+		2:                cfgFor(2, 2, []int64{20}, nil),
+	})
+	snap.ShardStatsMap()[shardID] = testShardStats(
+		ver(1, 1, 1),
+		loadInfoVersion(1),
+		placement(101, 10, 1, coordview.SegmentStateUp),
+	)
+	snap.Nodes[1] = &BalanceNode{NodeID: 1, Alive: true}
+	setTestDataSnapshot(snap, 1, qviews.DataVersion{StreamingVersion: 1, CompactVersion: 1}, nil)
+
+	assert.Equal(t, actionMayOptimize, classifyShard(snap, shardID))
+}
+
 func TestClassify_MissingDataVersionDoesNotTriggerMust(t *testing.T) {
 	// If DataView Manager hasn't yet reported a DataVersion, classifier
 	// should fall through to steady-state instead of falsely requiring a

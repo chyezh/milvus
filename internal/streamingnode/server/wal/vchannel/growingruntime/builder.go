@@ -126,7 +126,7 @@ func drainDeleteReplay(ctx context.Context, scanner wal.TransformLogScanner) ([]
 			if event.Entry != nil {
 				entries = append(entries, event.Entry)
 			}
-			if event.CaughtUp != nil {
+			if event.SyncUp != nil {
 				return entries, scanner.Close()
 			}
 		case <-scanner.Done():
