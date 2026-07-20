@@ -71,7 +71,22 @@ func (r *Runtime) mvccVisibleLocked(growingTimetick uint64, transformTimetick ui
 }
 
 func (r *Runtime) markGrowingTimeTick(timetick uint64) {
-	r.markTimeTick(&r.appliedGrowingTimeTick, timetick)
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	advanced := advanceTimeTick(&r.appliedGrowingTimeTick, timetick)
+	if !advanced {
+		r.mu.Unlock()
+		return
+	}
+	segmentsToRelease := make([]*growingSegment, 0)
+	r.collectSegmentsToReleaseLocked(&segmentsToRelease)
+	r.mvccCond.Broadcast()
+	r.mu.Unlock()
+	for _, segment := range segmentsToRelease {
+		segment.release()
+	}
 }
 
 func (r *Runtime) markTransformTimeTick(timetick uint64) {

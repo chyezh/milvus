@@ -213,6 +213,11 @@ The probe must be fail-open:
 - Only when the runtime is ready, already visible at the target MVCC, and the
   filtered growing segment candidate set is empty, omit StreamingNode.
 
+Flushed segment markers retained by StreamingNode for WAL replay idempotency are
+not growing candidates. The probe must ignore these entries because they have no
+queryable segment handle and exist only to prevent old replayed segment logs
+from resurrecting already sealed data.
+
 `GetQueryPlan` must not call the blocking Phase 2 wait path just to perform this
 optimization. Planning should use a non-blocking "may have visible growing
 segments" style probe; inability to prove emptiness means the plan remains

@@ -37,6 +37,7 @@ type VisibleSegmentSnapshot struct {
 	DataVersion         qviews.DataVersion
 	BaseGrowingTimeTick uint64
 	Segments            []VisibleSegment
+	FlushedSegments     []FlushedSegment
 }
 
 // VisibleSegment is a query-visible segment and its shallow-copied data handles.
@@ -56,6 +57,16 @@ type VisibleSegment struct {
 type SegmentSnapshotData struct {
 	PersistedStorage *streamingpb.L1SegmentPersistedStorage
 	InsertMessages   []message.ImmutableMessage
+}
+
+// FlushedSegment is a non-queryable segment marker kept only to make WAL replay
+// idempotent for flushed segments that are already covered by QueryNode at the
+// query view data version.
+type FlushedSegment struct {
+	SegmentID           int64
+	PartitionID         int64
+	FlushTimeTick       uint64
+	SealedAtDataVersion qviews.DataVersion
 }
 
 // VChannelResourceEvent is the ordered live input delivered after a

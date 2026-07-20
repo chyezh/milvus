@@ -218,6 +218,10 @@ First-version `Acquire*SegmentTasks` behavior:
 8. Release the QueryView/runtime ref.
 9. Return concrete SN Search/Query segment tasks.
 
+StreamingNode task acquisition only returns queryable growing segment handles.
+Flushed segment markers retained by the growing runtime for WAL replay
+idempotency are not task candidates and are never exposed to schedulers.
+
 Phase 1 StreamingNode pruning and Phase 2 task acquisition must use the same
 request-scope filter for growing segment candidates. In the first implementation
 this scope is the request `partition_ids`. If Phase 1 could not prove the

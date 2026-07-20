@@ -60,6 +60,18 @@ func (r *Runtime) Prepare(ctx context.Context, view walview.VChannelWALView) err
 			return context.Canceled
 		}
 	}
+	for _, flushed := range view.SegmentSnapshot.FlushedSegments {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		segment := newGrowingSegmentFromFlushed(collection, flushed)
+		if !r.addSegment(segment) {
+			segment.release()
+			return context.Canceled
+		}
+	}
 	deleteEntries, err := drainDeleteReplay(ctx, view.DeleteReplay)
 	if err != nil {
 		return err

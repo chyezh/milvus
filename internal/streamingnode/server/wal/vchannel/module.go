@@ -553,13 +553,17 @@ func (m *VChannelRecoveryModule) visibleSnapshot(baseGrowingTimeTick uint64, dat
 	}
 	for _, view := range m.segments {
 		visible, ok := view.VisibleSnapshot(m.vchannel, dataVersion)
-		if !ok {
+		if ok {
+			if snapshot.CollectionID == 0 {
+				snapshot.CollectionID = visible.Assignment.GetCollectionId()
+			}
+			snapshot.Segments = append(snapshot.Segments, visible)
 			continue
 		}
-		if snapshot.CollectionID == 0 {
-			snapshot.CollectionID = visible.Assignment.GetCollectionId()
+		flushed, ok := view.FlushedSegmentSnapshot(m.vchannel, dataVersion)
+		if ok {
+			snapshot.FlushedSegments = append(snapshot.FlushedSegments, flushed)
 		}
-		snapshot.Segments = append(snapshot.Segments, visible)
 	}
 	return snapshot
 }

@@ -10,6 +10,9 @@ import (
 )
 
 func loadFieldIDs(fields []*messagespb.LoadFieldConfig) []int64 {
+	if len(fields) == 0 {
+		return nil
+	}
 	ids := make([]int64, 0, len(fields))
 	for _, field := range fields {
 		ids = append(ids, field.GetFieldId())
@@ -103,12 +106,7 @@ func (r *Runtime) Truncate(minDataVersion qviews.DataVersion) {
 		r.hasTruncateDataVersion = true
 	}
 	segmentsToRelease := make([]*growingSegment, 0)
-	for segmentID, segment := range r.segments {
-		if segment.shouldRelease(r.truncateDataVersion) {
-			segmentsToRelease = append(segmentsToRelease, segment)
-			r.removeSegmentMetadataLocked(segmentID)
-		}
-	}
+	r.collectSegmentsToReleaseLocked(&segmentsToRelease)
 	r.mu.Unlock()
 	for _, segment := range segmentsToRelease {
 		segment.release()
@@ -125,6 +123,19 @@ func (r *Runtime) removeSegmentMetadataLocked(segmentID int64) {
 		if id == segmentID {
 			r.segmentIDs = append(r.segmentIDs[:i], r.segmentIDs[i+1:]...)
 			return
+		}
+	}
+}
+
+func (r *Runtime) collectSegmentsToReleaseLocked(segmentsToRelease *[]*growingSegment) {
+	if !r.hasTruncateDataVersion {
+		return
+	}
+	appliedGrowingTimeTick := r.appliedGrowingTimeTick.Load()
+	for segmentID, segment := range r.segments {
+		if segment.shouldReleaseAt(r.truncateDataVersion, appliedGrowingTimeTick) {
+			*segmentsToRelease = append(*segmentsToRelease, segment)
+			r.removeSegmentMetadataLocked(segmentID)
 		}
 	}
 }

@@ -24,7 +24,8 @@ The purpose of `GrowingRuntime` is to:
 2. load historical visible segment data from `VChannelWALView.SegmentSnapshot`;
 3. apply historical deletes from `VChannelWALView.DeleteReplay`;
 4. apply live resource events forwarded by `QueryRuntime`;
-5. release growing segment state no longer needed by active QueryViews.
+5. retain flushed segment markers needed for recovery replay idempotency;
+6. release growing segment state no longer needed by active QueryViews.
 
 `GrowingRuntime` is not a live observer. It does not maintain pending buffers
 and does not expose catchup state. `QueryRuntime.Initialize` owns buffering,
@@ -116,6 +117,8 @@ vchannel-level dispatch.
 GrowingSegment
   segmentID
   partitionID
+  flushed
+  flushTimeTick
   sealedAtDataVersion
   local segment resource handle
   closed state
@@ -123,6 +126,12 @@ GrowingSegment
 
 `GrowingSegment` is the single-segment resource wrapper. It hides the concrete
 storage or segcore implementation from the runtime.
+
+A `GrowingSegment` may be a non-queryable flushed segment marker. The marker has
+segment ID, partition ID, flush timetick, and sealed DataVersion, but no local
+segcore segment handle. It exists only to make WAL replay idempotent for
+flushed segments that are already covered by QueryNode for the current QueryView
+DataVersion.
 
 ### 3.4 Invariants
 
@@ -233,6 +242,12 @@ dispatch and calls segment-scoped methods.
 is acknowledged. WAL `Flush` closes the segment for writes, but it does not
 carry this `DataVersion`.
 
+Segment-scoped replay must be idempotent. For a flushed segment, any
+`CreateSegment` or `Insert` at or before the segment's `flushTimeTick` is an
+old WAL entry and must be ignored instead of recreating a queryable growing
+segment. A `CreateSegment` or `Insert` after the flush timetick is invalid for
+that segment and is treated as corrupted runtime input.
+
 ## 5. Actual Behavior
 
 ### 5.1 Preparation
@@ -242,11 +257,23 @@ QueryRuntime.Initialize
   -> GrowingRuntime.Prepare
   -> load SegmentSnapshot.Segments
   -> create GrowingSegment for each visible growing or flushed-as-growing segment
+  -> load SegmentSnapshot.FlushedSegments as non-queryable flushed segment markers
   -> load persisted segment data
   -> replay snapshot inserts
   -> drain DeleteReplay
   -> mark GrowingRuntime Ready
 ```
+
+`SegmentSnapshot.Segments` contains query-visible segment resources. It may
+include flushed segments whose `sealedAtDataVersion` is newer than the QueryView
+DataVersion and therefore still need StreamingNode service.
+
+`SegmentSnapshot.FlushedSegments` contains flushed segments whose
+`sealedAtDataVersion` is already covered by the QueryView DataVersion. These
+segments are not returned to query task acquisition and do not participate in
+the Phase 1 "may have growing segment" probe. They remain in the runtime only
+as replay guards until their old segment-scoped WAL range is known to be
+consumed.
 
 `Prepare` is synchronous from the module perspective. Build concurrency is
 controlled by the `QueryRuntime` initialization scheduler, not by
@@ -288,7 +315,20 @@ VChannelRecoveryModule computes oldest active QueryView DataVersion
 ```
 
 `Truncate` closes and removes growing segment resources whose retained state is
-strictly older than the oldest active QueryView's required DataVersion.
+covered by the oldest active QueryView's required DataVersion and whose
+segment-scoped replay guard is no longer needed.
+
+A flushed segment can be removed only when both conditions hold:
+
+```text
+appliedGrowingTimeTick > segment.flushTimeTick
+oldestActiveQueryViewDataVersion >= segment.sealedAtDataVersion
+```
+
+The DataVersion condition means QueryNode can serve the sealed segment. The
+timetick condition means `GrowingRuntime` has consumed beyond the segment's WAL
+flush point, so replay cannot later encounter old `CreateSegment` or `Insert`
+messages for that segment.
 
 If no QueryView references remain, the module closes the whole `QueryRuntime`.
 
@@ -299,8 +339,9 @@ StreamingNode Phase 2 request that cannot contribute results.
 
 The probe is only valid when the runtime is already ready and both applied
 frontiers have reached the requested MVCC. It then scans the current growing
-segment map under the runtime lock, applies the same request partition filter as
-Phase 2 task acquisition, and reports whether any candidate exists.
+segment map under the runtime lock, ignores non-queryable flushed segment
+markers, applies the same request partition filter as Phase 2 task acquisition,
+and reports whether any candidate exists.
 
 The probe must be conservative:
 
