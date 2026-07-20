@@ -113,11 +113,11 @@ func (c *qvViewStateMaxAgeCollector) SetProvider(provider func() []QVViewStateMa
 }
 
 var (
-	QVViewStateTotal = prometheus.NewGaugeVec(
+	QVViewStates = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: milvusNamespace,
 			Subsystem: qvSubsystem,
-			Name:      "view_state_total",
+			Name:      "view_states",
 			Help:      "current number of QueryViews by state",
 		}, []string{
 			QVComponentLabel,
@@ -149,6 +149,16 @@ var (
 			QVLeLabel,
 		})
 
+	QVShardLoadStates = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: milvusNamespace,
+			Subsystem: qvSubsystem,
+			Name:      "shard_load_states",
+			Help:      "current number of Coord-visible QueryView shards by load lifecycle state",
+		}, []string{
+			QVStateLabel,
+		})
+
 	QVViewStateMaxAgeSeconds = newQVViewStateMaxAgeCollector()
 )
 
@@ -157,8 +167,9 @@ func SetQVViewStateMaxAgeProvider(provider func() []QVViewStateMaxAgeMetric) {
 }
 
 func RegisterQV(registry *prometheus.Registry) {
-	registry.MustRegister(QVViewStateTotal)
+	registry.MustRegister(QVViewStates)
 	registry.MustRegister(QVViewTransitionTotal)
 	registry.MustRegister(QVViewReadyPercentBucket)
+	registry.MustRegister(QVShardLoadStates)
 	registry.MustRegister(QVViewStateMaxAgeSeconds)
 }

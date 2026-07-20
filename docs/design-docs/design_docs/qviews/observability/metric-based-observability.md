@@ -123,7 +123,7 @@ Disallowed default labels:
 
 ## 6. First-Iteration Metrics
 
-### 6.1 `milvus_qv_view_state_total`
+### 6.1 `milvus_qv_view_states`
 
 Type: Gauge
 
@@ -163,36 +163,43 @@ State handling:
   identify removal from those events, add a dedicated Coord view cleanup event
   instead of guessing from logs.
 
-### 6.2 `milvus_qv_shard_without_up`
+### 6.2 `milvus_qv_shard_load_states`
 
 Type: Gauge
 
-Description: Number of desired shards that do not currently have an Up
-QueryView.
+Description: Number of Coord-visible desired shards by shard load lifecycle
+state.
 
 Labels:
 
 ```text
-reason
+state
 ```
 
-Initial reason set:
+State set:
 
-| Reason | Meaning |
+| State | Meaning |
 |---|---|
-| `no_view` | Desired shard has no active view. |
-| `preparing` | A Preparing or Ready view exists but no Up view exists. |
-| `unrecoverable` | The only active candidate is Unrecoverable. |
-| `dropping` | Active views are being released and no replacement is Up. |
-| `sync_pending` | Coord has synced a view and is waiting for worker response. |
-| `node_unavailable` | QueryNode loss was applied to a pending view. |
+| `loading` | The shard is desired and has active non-release QueryViews, but has not reached Up in the current load lifecycle. |
+| `loaded` | At least one active Coord view for the shard is Up. |
+| `recovering` | The shard reached Up before, has no current Up view, and still has active non-release QueryViews. |
 
 Implementation note:
 
-The first implementation may support only reasons derivable from existing
-Coord events: `preparing`, `unrecoverable`, `dropping`, and `node_unavailable`.
-`no_view` and complete `sync_pending` classification require either Balancer
-desired-state snapshots or additional sync pending events.
+The metric is maintained only by the Coord observer because worker nodes cannot
+see the full shard-level Up state. The observer maintains a per-shard Coord
+summary on state mutation paths and does not scan all views during scrape.
+
+Release/unload is not represented as a load state. QueryViews in `Down`,
+`Dropping`, or `Dropped` are excluded from this shard load lifecycle metric. If
+all active non-release views for a shard leave the lifecycle, the shard metric
+row is removed. A later LoadCollection starts a new lifecycle and is classified
+as `loading`.
+
+`recovering` is inferred from observed shard history: if the shard has reached
+`loaded` in the current lifecycle and later has no Up view while non-release
+views still exist, it is counted as `recovering`. This covers NodeLost-driven
+recovery without requiring metrics code to derive labels from event names.
 
 ### 6.3 `milvus_qv_view_state_max_age_seconds`
 
@@ -530,22 +537,23 @@ Recommended first alerts:
 | Alert | Expression intent |
 |---|---|
 | Stuck non-Up view | `max(milvus_qv_view_state_max_age_seconds) > threshold` |
-| No Up QueryView | `milvus_qv_shard_without_up > 0` for a sustained window |
+| Shard not loaded | `milvus_qv_shard_load_states{state!="loaded"} > 0` for a sustained window |
 | Unrecoverable spike | Rate of `milvus_qv_unrecoverable_total` exceeds baseline |
 | Sync failure spike | Rate of `milvus_qv_sync_failure_total` exceeds baseline |
 
 Thresholds should be derived from expected segment load time and QueryView
-preparation SLA. The metric design intentionally exposes age and reason so the
-alert can be tuned without changing code.
+preparation SLA. The metric design intentionally exposes state and bounded age
+diagnostics so alerts can be tuned without changing code.
 
 ## 12. Implementation Order
 
 1. Add QueryCoord event-derived counters:
    `view_transition_total`, `unrecoverable_total`, and `sync_failure_total`.
 2. Add QueryCoord state cache gauges:
-   `view_state_total`, `view_state_max_age_seconds`, and
+   `view_states`, `view_state_max_age_seconds`, and
    `view_ready_percent_bucket`.
-3. Add `shard_without_up` with reasons derivable from current events.
+3. Add `shard_load_states` with states derivable from current Coord view
+   history.
 4. Add worker-side counters for QueryNode segment preparation and
    StreamingNode resource preparation.
 5. Add sync pending events and then implement `sync_pending`.
@@ -560,7 +568,7 @@ Unit tests should cover:
 - State transition events move `view_state` gauges without double counting.
 - Preparing age starts on Preparing creation and stops when the view leaves the
   blocking state.
-- `shard_without_up` reason changes when the active shard state changes.
+- `shard_load_states` changes when the active shard load lifecycle state changes.
 - Raw error text is never used as a metric label.
 - `MetricsObserver.Observe` does not panic on unknown or partially populated
   events.

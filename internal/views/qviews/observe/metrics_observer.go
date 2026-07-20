@@ -25,6 +25,12 @@ const (
 	readyPercentLeInf = "+Inf"
 )
 
+const (
+	shardLoadStateLoading    = "loading"
+	shardLoadStateRecovering = "recovering"
+	shardLoadStateLoaded     = "loaded"
+)
+
 var readyPercentLeBounds = []string{
 	readyPercentLe0,
 	readyPercentLe25,
@@ -42,6 +48,7 @@ type MetricsObserver struct {
 	topN            int
 	nextID          uint64
 	states          map[metricViewKey]metricViewState
+	shards          map[metricShardKey]*metricShardState
 	topK            map[string]*viewStateAgeHeap
 	topKValidCounts map[string]int
 }
@@ -51,12 +58,24 @@ type metricViewKey struct {
 	view      qviews.QueryViewKey
 }
 
+type metricShardKey struct {
+	component string
+	shard     qviews.ShardID
+}
+
 type metricViewState struct {
 	collectionID int64
 	state        qviews.QueryViewState
 	enteredAt    time.Time
 	version      uint64
 	readyLe      string
+}
+
+type metricShardState struct {
+	activeCount  int
+	upCount      int
+	hasLoaded    bool
+	currentState string
 }
 
 type viewStateAgeCandidate struct {
@@ -103,6 +122,7 @@ func newMetricsObserverWithNow(now func() time.Time) *MetricsObserver {
 		now:             now,
 		topN:            defaultViewStateMaxAgeTopN,
 		states:          make(map[metricViewKey]metricViewState),
+		shards:          make(map[metricShardKey]*metricShardState),
 		topK:            make(map[string]*viewStateAgeHeap),
 		topKValidCounts: make(map[string]int),
 	}
@@ -228,10 +248,16 @@ func (o *MetricsObserver) moveStateWithReadyLe(
 	o.upsertStateLocked(key, collectionID, to, readyLe)
 }
 
-func (o *MetricsObserver) upsertStateLocked(key metricViewKey, collectionID int64, state qviews.QueryViewState, readyLe string) {
+func (o *MetricsObserver) upsertStateLocked(
+	key metricViewKey,
+	collectionID int64,
+	state qviews.QueryViewState,
+	readyLe string,
+) {
 	if old, ok := o.states[key]; ok {
-		metrics.QVViewStateTotal.WithLabelValues(key.component, old.state.String()).Dec()
+		metrics.QVViewStates.WithLabelValues(key.component, old.state.String()).Dec()
 		o.decReadyPercentBucket(key.component, old.state, old.readyLe)
+		o.removeShardState(key, old)
 		o.updateTopKValidCount(key.component, old.state, state)
 	} else if isMaxAgeCandidateState(state) {
 		o.topKValidCounts[key.component]++
@@ -246,9 +272,11 @@ func (o *MetricsObserver) upsertStateLocked(key metricViewKey, collectionID int6
 		readyLe:      readyLe,
 	}
 	o.states[key] = stateSnapshot
+	o.addShardState(key, stateSnapshot)
+	o.cleanupShardState(key)
 	o.pushTopKCandidate(key, stateSnapshot)
 	o.compactTopKCandidates(key.component)
-	metrics.QVViewStateTotal.WithLabelValues(key.component, state.String()).Inc()
+	metrics.QVViewStates.WithLabelValues(key.component, state.String()).Inc()
 	o.incReadyPercentBucket(key.component, state, readyLe)
 }
 
@@ -262,6 +290,8 @@ func (o *MetricsObserver) deleteState(component string, view qviews.QueryViewKey
 		return
 	}
 	delete(o.states, key)
+	o.removeShardState(key, old)
+	o.cleanupShardState(key)
 	if isMaxAgeCandidateState(old.state) {
 		o.topKValidCounts[component]--
 		if o.topKValidCounts[component] <= 0 {
@@ -270,7 +300,7 @@ func (o *MetricsObserver) deleteState(component string, view qviews.QueryViewKey
 	}
 	o.decReadyPercentBucket(component, old.state, old.readyLe)
 	o.compactTopKCandidates(component)
-	metrics.QVViewStateTotal.WithLabelValues(component, old.state.String()).Dec()
+	metrics.QVViewStates.WithLabelValues(component, old.state.String()).Dec()
 }
 
 func (o *MetricsObserver) nextVersion() uint64 {
@@ -350,6 +380,114 @@ func (o *MetricsObserver) compactTopKCandidates(component string) {
 
 func isMaxAgeCandidateState(state qviews.QueryViewState) bool {
 	return state != qviews.QueryViewStateUp && state != qviews.QueryViewStateDropped
+}
+
+func (o *MetricsObserver) addShardState(key metricViewKey, state metricViewState) {
+	shardKey, ok := newMetricShardKey(key)
+	if !ok {
+		return
+	}
+	if !isShardLoadCandidateState(state.state) {
+		return
+	}
+	shardState := o.getShardState(shardKey)
+	oldState := shardState.currentState
+	shardState.activeCount++
+	if state.state == qviews.QueryViewStateUp {
+		shardState.upCount++
+		shardState.hasLoaded = true
+	}
+	o.updateShardLoadStateMetric(shardState, oldState)
+}
+
+func (o *MetricsObserver) removeShardState(key metricViewKey, state metricViewState) {
+	shardKey, ok := newMetricShardKey(key)
+	if !ok {
+		return
+	}
+	shardState, ok := o.shards[shardKey]
+	if !ok {
+		return
+	}
+	if !isShardLoadCandidateState(state.state) {
+		return
+	}
+	oldState := shardState.currentState
+	shardState.activeCount--
+	if state.state == qviews.QueryViewStateUp {
+		shardState.upCount--
+	}
+	o.updateShardLoadStateMetric(shardState, oldState)
+}
+
+func (o *MetricsObserver) getShardState(key metricShardKey) *metricShardState {
+	state, ok := o.shards[key]
+	if ok {
+		return state
+	}
+	state = &metricShardState{}
+	o.shards[key] = state
+	return state
+}
+
+func (o *MetricsObserver) updateShardLoadStateMetric(state *metricShardState, oldState string) {
+	newState := state.loadState()
+	if oldState == newState {
+		return
+	}
+	if oldState != "" {
+		metrics.QVShardLoadStates.WithLabelValues(oldState).Dec()
+	}
+	if newState != "" {
+		metrics.QVShardLoadStates.WithLabelValues(newState).Inc()
+	}
+	state.currentState = newState
+}
+
+func (s *metricShardState) loadState() string {
+	if s.activeCount <= 0 {
+		return ""
+	}
+	if s.upCount > 0 {
+		return shardLoadStateLoaded
+	}
+	if s.hasLoaded {
+		return shardLoadStateRecovering
+	}
+	return shardLoadStateLoading
+}
+
+func newMetricShardKey(key metricViewKey) (metricShardKey, bool) {
+	if key.component != "coord" {
+		return metricShardKey{}, false
+	}
+	return metricShardKey{
+		component: key.component,
+		shard:     key.view.ShardID,
+	}, true
+}
+
+func (o *MetricsObserver) cleanupShardState(key metricViewKey) {
+	shardKey, ok := newMetricShardKey(key)
+	if !ok {
+		return
+	}
+	shardState, ok := o.shards[shardKey]
+	if !ok {
+		return
+	}
+	if shardState.activeCount <= 0 && shardState.currentState == "" {
+		delete(o.shards, shardKey)
+	}
+}
+
+func isShardLoadCandidateState(state qviews.QueryViewState) bool {
+	switch state {
+	case qviews.QueryViewStatePreparing, qviews.QueryViewStateReady, qviews.QueryViewStateUp, qviews.QueryViewStateUnrecoverable:
+		return true
+	default:
+		return false
+	}
 }
 
 func normalizeReadyPercentLe(component string, state qviews.QueryViewState, le string) string {

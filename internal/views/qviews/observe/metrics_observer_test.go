@@ -13,8 +13,8 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/metrics"
 )
 
-func TestMetricsObserverTracksCoordViewStateTotal(t *testing.T) {
-	metrics.QVViewStateTotal.Reset()
+func TestMetricsObserverTracksCoordViewStates(t *testing.T) {
+	metrics.QVViewStates.Reset()
 	metrics.QVViewTransitionTotal.Reset()
 	observer := NewMetricsObserver()
 	view := testQueryViewKey()
@@ -24,7 +24,7 @@ func TestMetricsObserverTracksCoordViewStateTotal(t *testing.T) {
 		State: qviews.QueryViewStatePreparing,
 	})
 
-	assertGaugeValue(t, metrics.QVViewStateTotal, 1, "coord", qviews.QueryViewStatePreparing.String())
+	assertGaugeValue(t, metrics.QVViewStates, 1, "coord", qviews.QueryViewStatePreparing.String())
 
 	observer.Observe(context.Background(), CoordViewReportAppliedEvent{
 		ViewStateTransition: ViewStateTransition{
@@ -36,12 +36,12 @@ func TestMetricsObserverTracksCoordViewStateTotal(t *testing.T) {
 		ResourceReadyPercent: 100,
 	})
 
-	assertGaugeValue(t, metrics.QVViewStateTotal, 0, "coord", qviews.QueryViewStatePreparing.String())
-	assertGaugeValue(t, metrics.QVViewStateTotal, 1, "coord", qviews.QueryViewStateReady.String())
+	assertGaugeValue(t, metrics.QVViewStates, 0, "coord", qviews.QueryViewStatePreparing.String())
+	assertGaugeValue(t, metrics.QVViewStates, 1, "coord", qviews.QueryViewStateReady.String())
 }
 
 func TestMetricsObserverCountsCoordViewTransitions(t *testing.T) {
-	metrics.QVViewStateTotal.Reset()
+	metrics.QVViewStates.Reset()
 	metrics.QVViewTransitionTotal.Reset()
 	observer := NewMetricsObserver()
 	view := testQueryViewKey()
@@ -68,7 +68,7 @@ func TestMetricsObserverCountsCoordViewTransitions(t *testing.T) {
 }
 
 func TestMetricsObserverSeparatesStateTotalByComponent(t *testing.T) {
-	metrics.QVViewStateTotal.Reset()
+	metrics.QVViewStates.Reset()
 	metrics.QVViewTransitionTotal.Reset()
 	observer := NewMetricsObserver()
 	view := testQueryViewKey()
@@ -86,8 +86,8 @@ func TestMetricsObserverSeparatesStateTotalByComponent(t *testing.T) {
 		ReadySegmentCount: 10,
 	})
 
-	assertGaugeValue(t, metrics.QVViewStateTotal, 1, "coord", qviews.QueryViewStatePreparing.String())
-	assertGaugeValue(t, metrics.QVViewStateTotal, 1, "queryNode", qviews.QueryViewStateReady.String())
+	assertGaugeValue(t, metrics.QVViewStates, 1, "coord", qviews.QueryViewStatePreparing.String())
+	assertGaugeValue(t, metrics.QVViewStates, 1, "queryNode", qviews.QueryViewStateReady.String())
 }
 
 func TestMetricsObserverTracksCoordViewReadyPercentBuckets(t *testing.T) {
@@ -180,6 +180,125 @@ milvus_qv_view_ready_percent_bucket{component="coord",le="99",state="Preparing"}
 	})
 	assertGaugeValue(t, metrics.QVViewReadyPercentBucket, 0, "coord", qviews.QueryViewStateReady.String(), "100")
 	assertGaugeValue(t, metrics.QVViewReadyPercentBucket, 0, "coord", qviews.QueryViewStateReady.String(), "+Inf")
+}
+
+func TestMetricsObserverTracksShardLoadState(t *testing.T) {
+	metrics.QVShardLoadStates.Reset()
+	observer := NewMetricsObserver()
+	view := testQueryViewKey()
+
+	observer.Observe(context.Background(), CoordViewCreatedEvent{
+		CollectionID: 10,
+		View:         view,
+		State:        qviews.QueryViewStatePreparing,
+	})
+	assertGaugeValue(t, metrics.QVShardLoadStates, 1, shardLoadStateLoading)
+
+	observer.Observe(context.Background(), CoordViewReportAppliedEvent{
+		ViewStateTransition: ViewStateTransition{
+			CollectionID: 10,
+			View:         view,
+			From:         qviews.QueryViewStatePreparing,
+			To:           qviews.QueryViewStateUp,
+		},
+		ReportedState:        qviews.QueryViewStateUp,
+		ResourceReadyPercent: 100,
+	})
+	assertGaugeValue(t, metrics.QVShardLoadStates, 0, shardLoadStateLoading)
+	assertGaugeValue(t, metrics.QVShardLoadStates, 1, shardLoadStateLoaded)
+
+	nextView := testQueryViewKey()
+	nextView.QueryViewVersion.QueryVersion++
+	observer.Observe(context.Background(), CoordViewCreatedEvent{
+		CollectionID: 10,
+		View:         nextView,
+		State:        qviews.QueryViewStatePreparing,
+	})
+	assertGaugeValue(t, metrics.QVShardLoadStates, 0, shardLoadStateLoading)
+	assertGaugeValue(t, metrics.QVShardLoadStates, 1, shardLoadStateLoaded)
+
+	observer.Observe(context.Background(), CoordViewQueryNodeLostAppliedEvent{
+		ViewStateTransition: ViewStateTransition{
+			CollectionID: 10,
+			View:         view,
+			From:         qviews.QueryViewStateUp,
+			To:           qviews.QueryViewStateUnrecoverable,
+		},
+	})
+	assertGaugeValue(t, metrics.QVShardLoadStates, 0, shardLoadStateLoaded)
+	assertGaugeValue(t, metrics.QVShardLoadStates, 1, shardLoadStateRecovering)
+
+	observer.Observe(context.Background(), CoordViewReleaseRequestedEvent{
+		ViewStateTransition: ViewStateTransition{
+			CollectionID: 10,
+			View:         view,
+			From:         qviews.QueryViewStateUnrecoverable,
+			To:           qviews.QueryViewStateDropping,
+		},
+	})
+	assertGaugeValue(t, metrics.QVShardLoadStates, 1, shardLoadStateRecovering)
+
+	observer.Observe(context.Background(), CoordViewReleaseRequestedEvent{
+		ViewStateTransition: ViewStateTransition{
+			CollectionID: 10,
+			View:         nextView,
+			From:         qviews.QueryViewStatePreparing,
+			To:           qviews.QueryViewStateDropping,
+		},
+	})
+	assertGaugeValue(t, metrics.QVShardLoadStates, 0, shardLoadStateRecovering)
+
+	observer.Observe(context.Background(), CoordViewReportAppliedEvent{
+		ViewStateTransition: ViewStateTransition{
+			CollectionID: 10,
+			View:         view,
+			From:         qviews.QueryViewStateDropping,
+			To:           qviews.QueryViewStateDropped,
+		},
+		ReportedState:        qviews.QueryViewStateDropped,
+		ResourceReadyPercent: 100,
+	})
+	assertGaugeValue(t, metrics.QVShardLoadStates, 0, shardLoadStateRecovering)
+
+	observer.Observe(context.Background(), CoordViewReportAppliedEvent{
+		ViewStateTransition: ViewStateTransition{
+			CollectionID: 10,
+			View:         nextView,
+			From:         qviews.QueryViewStateDropping,
+			To:           qviews.QueryViewStateDropped,
+		},
+		ReportedState:        qviews.QueryViewStateDropped,
+		ResourceReadyPercent: 100,
+	})
+	assertGaugeValue(t, metrics.QVShardLoadStates, 0, shardLoadStateRecovering)
+
+	reloadedView := testQueryViewKey()
+	reloadedView.QueryViewVersion.QueryVersion += 2
+	observer.Observe(context.Background(), CoordViewCreatedEvent{
+		CollectionID: 10,
+		View:         reloadedView,
+		State:        qviews.QueryViewStatePreparing,
+	})
+	assertGaugeValue(t, metrics.QVShardLoadStates, 1, shardLoadStateLoading)
+	assertGaugeValue(t, metrics.QVShardLoadStates, 0, shardLoadStateRecovering)
+}
+
+func TestMetricsObserverIgnoresWorkerShardLoadState(t *testing.T) {
+	metrics.QVShardLoadStates.Reset()
+	observer := NewMetricsObserver()
+	view := testQueryViewKey()
+
+	observer.Observe(context.Background(), QueryNodeSegmentsReadyEvent{
+		ViewStateTransition: ViewStateTransition{
+			CollectionID: 12,
+			View:         view,
+			From:         qviews.QueryViewStatePreparing,
+			To:           qviews.QueryViewStateUp,
+		},
+		ReadySegmentCount: 10,
+	})
+
+	assertGaugeValue(t, metrics.QVShardLoadStates, 0, shardLoadStateLoaded)
 }
 
 func TestMetricsObserverCollectsViewStateMaxAgeSeconds(t *testing.T) {
@@ -382,7 +501,7 @@ func TestMetricsObserverCompactsTopNCandidatesWithoutScrape(t *testing.T) {
 }
 
 func TestMetricsObserverDropsTerminalWorkerViewState(t *testing.T) {
-	metrics.QVViewStateTotal.Reset()
+	metrics.QVViewStates.Reset()
 	metrics.QVViewTransitionTotal.Reset()
 	now := time.Unix(100, 0)
 	observer := newMetricsObserverWithNow(func() time.Time {
@@ -399,7 +518,7 @@ func TestMetricsObserverDropsTerminalWorkerViewState(t *testing.T) {
 		},
 		ReadySegmentCount: 10,
 	})
-	assertGaugeValue(t, metrics.QVViewStateTotal, 1, "queryNode", qviews.QueryViewStateReady.String())
+	assertGaugeValue(t, metrics.QVViewStates, 1, "queryNode", qviews.QueryViewStateReady.String())
 
 	observer.Observe(context.Background(), QueryNodeReleaseDoneEvent{
 		ViewStateTransition: ViewStateTransition{
@@ -410,7 +529,7 @@ func TestMetricsObserverDropsTerminalWorkerViewState(t *testing.T) {
 		},
 	})
 
-	assertGaugeValue(t, metrics.QVViewStateTotal, 0, "queryNode", qviews.QueryViewStateReady.String())
+	assertGaugeValue(t, metrics.QVViewStates, 0, "queryNode", qviews.QueryViewStateReady.String())
 	if got := observer.collectViewStateMaxAge(); len(got) != 0 {
 		t.Fatalf("topN metrics after dropped = %#v, want empty", got)
 	}
