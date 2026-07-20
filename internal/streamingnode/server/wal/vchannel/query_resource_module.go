@@ -15,9 +15,9 @@ func (m *VChannelRecoveryModule) AcquireQueryResource(req snview.AcquireResource
 		panic("query view vchannel does not match recovery module")
 	}
 	m.mu.Lock()
-	epoch := m.queryResources.AcquireLocked(req, m.queryWALViewLocked)
+	m.queryResources.AcquireLocked(req, m.queryWALViewLocked)
 	m.mu.Unlock()
-	go m.queryResources.WaitReady(req.Key, epoch, req.OnReady)
+	go m.queryResources.WaitReady(req.Key, req.OnReady)
 }
 
 func (m *VChannelRecoveryModule) ReleaseQueryResource(req snview.ReleaseResource) {
