@@ -47,17 +47,14 @@ func (s *reliableSyncer) SyncViews(ctx context.Context, group SyncGroup) error {
 	}
 
 	for nodeKey, views := range group.ViewsByNode {
-		rs, closed := s.getOrCreateSyncer(ctx, nodeKey, views)
+		closed, lostViews := s.syncViewsToNode(ctx, nodeKey, views)
 		if closed {
 			return ErrSyncerClosed
 		}
-		if rs != nil {
-			rs.Sync(views)
-			continue
+		if len(lostViews) > 0 {
+			// Node not found — notify views immediately.
+			go notifyQueryNodeLostViews(lostViews)
 		}
-		// Node not found — notify views immediately.
-		lostViews := append([]SyncView(nil), views...)
-		go notifyQueryNodeLostViews(lostViews)
 	}
 	return nil
 }
@@ -79,43 +76,39 @@ func notifyQueryNodeLost(sv SyncView) {
 	sv.OnQueryNodeLost(qn)
 }
 
-// getOrCreateSyncer returns the existing ResumableSyncer for the node,
-// creates one if the node is alive, or returns (nil, false) if the node is not found.
-// Returns (nil, true) if the syncer is closed.
-func (s *reliableSyncer) getOrCreateSyncer(ctx context.Context, nodeKey qviews.WorkNodeKey, views []SyncView) (rs *resumableSyncer, closed bool) {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return nil, true
-	}
-	if rs, ok := s.resumableSyncers[nodeKey]; ok {
-		s.mu.Unlock()
-		return rs, false
-	}
-	if len(views) == 0 {
-		s.mu.Unlock()
-		return nil, false
-	}
-	node := views[0].View.WorkNode()
-	s.mu.Unlock()
-
-	if !s.client.IsNodeAlive(ctx, node) {
-		return nil, false
-	}
-
+// syncViewsToNode enqueues views to a live node under reliableSyncer.mu.
+// The enqueue is in the same critical section as node liveness check and syncer
+// lookup/creation, so node-change drain cannot miss views accepted by SyncViews.
+// Returns closed=true if ReliableSyncer is closed. Returns lostViews when the
+// node is not alive; caller must notify outside s.mu.
+func (s *reliableSyncer) syncViewsToNode(ctx context.Context, nodeKey qviews.WorkNodeKey, views []SyncView) (closed bool, lostViews []SyncView) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return nil, true
+		return true, nil
 	}
 	if rs, ok := s.resumableSyncers[nodeKey]; ok {
-		return rs, false
+		rs.Sync(views)
+		return false, nil
 	}
+	if len(views) == 0 {
+		return false, nil
+	}
+	node := views[0].View.WorkNode()
+
+	// IsNodeAlive is a service-discovery cache lookup. Keep it under s.mu so a
+	// node-change drain cannot run between the alive check, syncer insertion, and
+	// the initial pending enqueue.
+	if !s.client.IsNodeAlive(ctx, node) {
+		return false, append([]SyncView(nil), views...)
+	}
+
 	mlog.Info(ctx, "ReliableSyncer: node discovered on demand, creating ResumableSyncer",
 		mlog.String("node", nodeKey))
-	rs = newResumableSyncer(s.ctx, node, s.client)
+	rs := newResumableSyncer(s.ctx, node, s.client)
 	s.resumableSyncers[nodeKey] = rs
-	return rs, false
+	rs.Sync(views)
+	return false, nil
 }
 
 func (s *reliableSyncer) Close() error {

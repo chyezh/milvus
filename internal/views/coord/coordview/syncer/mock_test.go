@@ -115,11 +115,12 @@ func (s *mockStream) injectResponse(views ...*viewpb.QueryViewOfShard) {
 // ---------------------------------------------------------------------------
 
 type mockViewSyncClient struct {
-	mu           sync.Mutex
-	notifiers    []func()
-	aliveNodes   map[qviews.WorkNodeKey]bool
-	openStreamFn func(ctx context.Context, node qviews.WorkNode) (viewpb.ViewSyncService_SyncQueryViewClient, error)
-	closed       bool
+	mu            sync.Mutex
+	notifiers     []func()
+	aliveNodes    map[qviews.WorkNodeKey]bool
+	isNodeAliveFn func(ctx context.Context, node qviews.WorkNode) bool
+	openStreamFn  func(ctx context.Context, node qviews.WorkNode) (viewpb.ViewSyncService_SyncQueryViewClient, error)
+	closed        bool
 }
 
 func newMockViewSyncClient() *mockViewSyncClient {
@@ -137,7 +138,10 @@ func (c *mockViewSyncClient) RegisterNodeChangedNotifier(notifier func()) {
 	c.notifiers = append(c.notifiers, notifier)
 }
 
-func (c *mockViewSyncClient) IsNodeAlive(_ context.Context, node qviews.WorkNode) bool {
+func (c *mockViewSyncClient) IsNodeAlive(ctx context.Context, node qviews.WorkNode) bool {
+	if c.isNodeAliveFn != nil {
+		return c.isNodeAliveFn(ctx, node)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.aliveNodes[node.Key()]

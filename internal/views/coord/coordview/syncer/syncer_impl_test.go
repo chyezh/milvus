@@ -399,6 +399,94 @@ func TestReliable_NodeRemovedDuringSync(t *testing.T) {
 	assert.True(t, waitForCond(lostCalled.Load, 2*time.Second))
 }
 
+func TestReliable_NodeChangeDrainCannotInterleaveWithLazyCreation(t *testing.T) {
+	node := qviews.NewQueryNode(1)
+	setup := newReliableTestSetup(t, node)
+	defer setup.syncer.Close()
+
+	firstAliveEntered := make(chan struct{})
+	releaseFirstAlive := make(chan struct{})
+	var aliveCalls atomic.Int32
+	setup.client.isNodeAliveFn = func(ctx context.Context, node qviews.WorkNode) bool {
+		if aliveCalls.Add(1) == 1 {
+			close(firstAliveEntered)
+			select {
+			case <-releaseFirstAlive:
+			case <-ctx.Done():
+				return false
+			}
+			return true
+		}
+		setup.client.mu.Lock()
+		defer setup.client.mu.Unlock()
+		return setup.client.aliveNodes[node.Key()]
+	}
+
+	sv := newTestSyncView(1, 1, nil, nil)
+	syncReturned := make(chan error, 1)
+	go func() {
+		syncReturned <- setup.syncer.SyncViews(context.Background(), newTestSyncGroup(sv))
+	}()
+
+	select {
+	case <-firstAliveEntered:
+	case <-time.After(time.Second):
+		t.Fatal("IsNodeAlive should be called during lazy syncer creation")
+	}
+
+	setup.client.removeNode(node)
+	notifyReturned := make(chan struct{})
+	go func() {
+		setup.client.notifyNodeChanged()
+		close(notifyReturned)
+	}()
+
+	select {
+	case <-notifyReturned:
+		t.Fatal("node-change drain should not interleave between IsNodeAlive and syncer insertion")
+	case <-time.After(50 * testTimeUnit):
+	}
+
+	close(releaseFirstAlive)
+	select {
+	case err := <-syncReturned:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("SyncViews should finish after IsNodeAlive is released")
+	}
+	select {
+	case <-notifyReturned:
+	case <-time.After(time.Second):
+		t.Fatal("node-change drain should finish after lazy syncer creation leaves the critical section")
+	}
+}
+
+func TestReliable_SyncViewsToNodeEnqueuesBeforeNodeChangeDrain(t *testing.T) {
+	node := qviews.NewQueryNode(1)
+	setup := newReliableTestSetup(t, node)
+	defer setup.syncer.Close()
+
+	err := setup.syncer.SyncViews(context.Background(), newTestSyncGroup(newTestSyncView(1, 1, nil, nil)))
+	require.NoError(t, err)
+	stream := setup.waitStream(t)
+	stream.waitSend(time.Second)
+
+	var lostCalled atomic.Bool
+	sv := newTestSyncView(1, 2, nil, func(qviews.QueryNode) {
+		lostCalled.Store(true)
+	})
+	inner := setup.syncer.(*reliableSyncer)
+	closed, lostViews := inner.syncViewsToNode(context.Background(), node.Key(), []SyncView{sv})
+	require.False(t, closed)
+	require.Empty(t, lostViews)
+
+	setup.client.removeNode(node)
+	setup.client.notifyNodeChanged()
+
+	assert.True(t, waitForCond(lostCalled.Load, 2*time.Second),
+		"views enqueued by syncViewsToNode must be drained if node-change drain runs immediately after")
+}
+
 func TestReliable_SyncViewsContextCanceled(t *testing.T) {
 	setup := newReliableTestSetup(t)
 	defer setup.syncer.Close()
