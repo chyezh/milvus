@@ -131,14 +131,17 @@ the observed object. The supported cardinalities are `node`, `view`,
 
 ```go
 type ViewStateTransition struct {
-    View qviews.QueryViewKey
-    From qviews.QueryViewState
-    To   qviews.QueryViewState
+    CollectionID int64
+    View         qviews.QueryViewKey
+    From         qviews.QueryViewState
+    To           qviews.QueryViewState
 }
 ```
 
 Events that describe a QueryView state-machine transition embed
-`ViewStateTransition`.
+`ViewStateTransition`. `CollectionID` is populated when the owner layer has the
+collection identity available. Metrics use it only in bounded TopN diagnostic
+series.
 
 ## Events By Cardinality
 
@@ -167,8 +170,9 @@ View events observe one QueryView.
 // CoordViewCreatedEvent is emitted after Coord creates a new Preparing view.
 type CoordViewCreatedEvent struct {
     baseEvent
-    View  qviews.QueryViewKey
-    State qviews.QueryViewState
+    CollectionID int64
+    View         qviews.QueryViewKey
+    State        qviews.QueryViewState
 }
 
 // CoordViewPreemptedEvent is emitted after Coord preempts a Preparing or Ready

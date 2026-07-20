@@ -266,9 +266,10 @@ func (s *snShardView) applyOneLocked(av *handler.ApplyView) {
 	entry.sm.OnCoordStateDelivered(pushedState)
 	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeApplyCoordViewEvent{
 		ViewStateTransition: qvobserve.ViewStateTransition{
-			View: key,
-			From: before,
-			To:   entry.sm.State(),
+			CollectionID: collectionIDForEntry(entry),
+			View:         key,
+			From:         before,
+			To:           entry.sm.State(),
 		},
 	})
 	s.consumeReportPersistAndCleanup(key.QueryViewVersion, entry)
@@ -301,9 +302,10 @@ func (s *snShardView) notifyReady(version qviews.QueryViewVersion) {
 	entry.sm.OnReady()
 	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeResourceReadyEvent{
 		ViewStateTransition: qvobserve.ViewStateTransition{
-			View: key,
-			From: before,
-			To:   entry.sm.State(),
+			CollectionID: collectionIDForEntry(entry),
+			View:         key,
+			From:         before,
+			To:           entry.sm.State(),
 		},
 	})
 	s.consumeReportPersistAndCleanup(version, entry)
@@ -325,9 +327,10 @@ func (s *snShardView) notifyRecoveringDone(version qviews.QueryViewVersion) {
 	entry.sm.OnRecoveringDone()
 	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeRecoveringDoneEvent{
 		ViewStateTransition: qvobserve.ViewStateTransition{
-			View: key,
-			From: before,
-			To:   entry.sm.State(),
+			CollectionID: collectionIDForEntry(entry),
+			View:         key,
+			From:         before,
+			To:           entry.sm.State(),
 		},
 	})
 	s.consumeReportPersistAndCleanup(version, entry)
@@ -362,9 +365,10 @@ func (s *snShardView) notifyDropped(version qviews.QueryViewVersion) {
 	entry.sm.OnDropped()
 	qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeReleaseDoneEvent{
 		ViewStateTransition: qvobserve.ViewStateTransition{
-			View: key,
-			From: before,
-			To:   entry.sm.State(),
+			CollectionID: collectionIDForEntry(entry),
+			View:         key,
+			From:         before,
+			To:           entry.sm.State(),
 		},
 	})
 	s.consumeReportPersistAndCleanup(version, entry)
@@ -437,4 +441,8 @@ func (s *snShardView) releaseQueryResourceLocked(version qviews.QueryViewVersion
 			s.notifyDropped(version)
 		},
 	})
+}
+
+func collectionIDForEntry(entry *snViewEntry) int64 {
+	return entry.sm.Meta().GetCollectionId()
 }

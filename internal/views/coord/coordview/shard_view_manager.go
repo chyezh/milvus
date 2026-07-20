@@ -245,9 +245,10 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 		m.preparingView.EnterUnrecoverable()
 		qvobserve.Observe(ctx, qvobserve.CoordViewPreemptedEvent{
 			ViewStateTransition: qvobserve.ViewStateTransition{
-				View: key,
-				From: before,
-				To:   m.preparingView.State(),
+				CollectionID: m.collectionIDForStateMachine(m.preparingView),
+				View:         key,
+				From:         before,
+				To:           m.preparingView.State(),
 			},
 			PreemptingDataVersion: newDV,
 		})
@@ -269,8 +270,9 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 	m.views[sm.Version()] = sm
 	m.preparingView = sm
 	qvobserve.Observe(ctx, qvobserve.CoordViewCreatedEvent{
-		View:  m.keyForStateMachine(sm),
-		State: sm.State(),
+		CollectionID: m.collectionIDForStateMachine(sm),
+		View:         m.keyForStateMachine(sm),
+		State:        sm.State(),
 	})
 
 	// Process: persist write-ahead + collect sync.
@@ -299,9 +301,10 @@ func (m *ShardViewManager) RequestRelease(ctx context.Context) error {
 		m.preparingView.EnterUnrecoverable()
 		qvobserve.Observe(ctx, qvobserve.CoordViewReleaseRequestedEvent{
 			ViewStateTransition: qvobserve.ViewStateTransition{
-				View: key,
-				From: before,
-				To:   m.preparingView.State(),
+				CollectionID: m.collectionIDForStateMachine(m.preparingView),
+				View:         key,
+				From:         before,
+				To:           m.preparingView.State(),
 			},
 		})
 		m.processStateMachine(m.preparingView)
@@ -314,9 +317,10 @@ func (m *ShardViewManager) RequestRelease(ctx context.Context) error {
 		m.upView.EnterDown()
 		qvobserve.Observe(ctx, qvobserve.CoordViewReleaseRequestedEvent{
 			ViewStateTransition: qvobserve.ViewStateTransition{
-				View: key,
-				From: before,
-				To:   m.upView.State(),
+				CollectionID: m.collectionIDForStateMachine(m.upView),
+				View:         key,
+				From:         before,
+				To:           m.upView.State(),
 			},
 		})
 		m.processStateMachine(m.upView)
@@ -416,9 +420,10 @@ func (m *ShardViewManager) advanceUnrecoverableToDropping() {
 			sm.EnterDropping()
 			qvobserve.Observe(m.ctx, qvobserve.CoordViewAdvancedFromUnrecoverableEvent{
 				ViewStateTransition: qvobserve.ViewStateTransition{
-					View: key,
-					From: before,
-					To:   sm.State(),
+					CollectionID: m.collectionIDForStateMachine(sm),
+					View:         key,
+					From:         before,
+					To:           sm.State(),
 				},
 			})
 			m.processStateMachine(sm)
@@ -436,9 +441,10 @@ func (m *ShardViewManager) downOlderUpView(newUp *CoordQueryViewStateMachine) {
 		m.upView.EnterDown()
 		qvobserve.Observe(m.ctx, qvobserve.CoordViewHandoffToNewUpEvent{
 			ViewStateTransition: qvobserve.ViewStateTransition{
-				View: key,
-				From: before,
-				To:   m.upView.State(),
+				CollectionID: m.collectionIDForStateMachine(m.upView),
+				View:         key,
+				From:         before,
+				To:           m.upView.State(),
 			},
 			NewUpView: m.keyForStateMachine(newUp),
 		})
@@ -534,9 +540,10 @@ func (m *ShardViewManager) makeOnSyncResponse(version qviews.QueryViewVersion, t
 		sm.OnNodeStateReported(resp)
 		qvobserve.Observe(m.ctx, qvobserve.CoordViewReportAppliedEvent{
 			ViewStateTransition: qvobserve.ViewStateTransition{
-				View: m.keyForStateMachine(sm),
-				From: before,
-				To:   sm.State(),
+				CollectionID: m.collectionIDForStateMachine(sm),
+				View:         m.keyForStateMachine(sm),
+				From:         before,
+				To:           sm.State(),
 			},
 			Node:                 target.WorkNode(),
 			ReportedState:        resp.State(),
@@ -588,9 +595,10 @@ func (m *ShardViewManager) makeOnQueryNodeLost(version qviews.QueryViewVersion) 
 		sm.OnQueryNodeLost(node)
 		qvobserve.Observe(m.ctx, qvobserve.CoordViewQueryNodeLostAppliedEvent{
 			ViewStateTransition: qvobserve.ViewStateTransition{
-				View: key,
-				From: before,
-				To:   sm.State(),
+				CollectionID: m.collectionIDForStateMachine(sm),
+				View:         key,
+				From:         before,
+				To:           sm.State(),
 			},
 			Node: node,
 		})
@@ -605,6 +613,10 @@ func (m *ShardViewManager) keyForStateMachine(sm *CoordQueryViewStateMachine) qv
 		ShardID:          m.shardID,
 		QueryViewVersion: sm.Version(),
 	}
+}
+
+func (m *ShardViewManager) collectionIDForStateMachine(sm *CoordQueryViewStateMachine) int64 {
+	return sm.View().GetMeta().GetCollectionId()
 }
 
 func resourceReadyPercent(report qviews.QueryViewAtWorkNode) int64 {

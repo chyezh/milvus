@@ -22,10 +22,11 @@ This design does not change QueryView state-machine behavior. In particular,
 it does not introduce Preparing timeout eviction, new recovery policy, or
 Balancer policy changes.
 
-This design does not put high-cardinality identities into metric labels.
-QueryView version, DataVersion, segment ID, and raw error message remain in
-structured event logs. Metrics provide aggregation and alerting; logs provide
-single-view investigation detail.
+This design does not put high-cardinality identities into default aggregate
+metric labels. QueryView version, DataVersion, segment ID, and raw error
+message remain in structured event logs unless a metric is explicitly defined
+as a bounded TopK diagnostic metric. Metrics provide aggregation and alerting;
+logs and TopK diagnostics provide single-view investigation detail.
 
 ## 3. Architecture
 
@@ -83,7 +84,7 @@ Examples:
 These metrics are maintained by `MetricsObserver` state tables keyed by
 QueryView and shard identities. Those keys may be high cardinality internally,
 but metrics exported from these tables must be aggregated at cluster level
-unless a bounded TopN or debug-only metric is explicitly introduced.
+unless a bounded TopK or debug-only metric is explicitly introduced.
 
 ## 5. Label Policy
 
@@ -100,6 +101,12 @@ Allowed default labels:
 | `node_role` | `querynode` or `streamingnode`. |
 | `node_id` | Allowed for worker-specific sync and readiness metrics. |
 | `status` | Low-cardinality worker-side operation result. |
+| `rank` | Allowed only for bounded TopK diagnostic metrics. |
+| `collection_id` | Allowed only for bounded TopK diagnostic metrics. |
+| `replica_id` | Allowed only for bounded TopK diagnostic metrics. |
+| `vchannel` | Allowed only for bounded TopK diagnostic metrics. |
+| `query_view_version` | Allowed only for bounded TopK diagnostic metrics. |
+| `data_version` | Allowed only for bounded TopK diagnostic metrics. |
 
 Disallowed default labels:
 
@@ -109,8 +116,8 @@ Disallowed default labels:
 | DataVersion | High cardinality; use logs. |
 | Segment ID | High cardinality; use logs. |
 | Raw error string | Unbounded cardinality; classify into `reason`. |
-| Collection ID | High cardinality for large clusters; use logs, diagnostic APIs, or bounded TopN metrics. |
-| Replica ID | Multiplies collection cardinality; use logs, diagnostic APIs, or bounded TopN metrics. |
+| Collection ID | High cardinality for large clusters; use logs, diagnostic APIs, or bounded TopK metrics. |
+| Replica ID | Multiplies collection cardinality; use logs, diagnostic APIs, or bounded TopK metrics. |
 | VChannel name | High cardinality for default dashboards; use only in targeted debug metrics. |
 
 ## 6. First-Iteration Metrics
@@ -186,35 +193,54 @@ Coord events: `preparing`, `unrecoverable`, `dropping`, and `node_unavailable`.
 `no_view` and complete `sync_pending` classification require either Balancer
 desired-state snapshots or additional sync pending events.
 
-### 6.3 `milvus_qv_preparing_age_seconds`
+### 6.3 `milvus_qv_view_state_max_age_seconds`
 
 Type: Gauge
 
-Description: Age in seconds of Coord-visible Preparing or Ready views that
-block the shard Preparing slot.
+Description: Per-component TopK active QueryViews by state age in seconds. The
+metric is a bounded diagnostic metric, not a full per-view export. The default
+TopK is 5 rows for each component.
 
 Labels:
 
 ```text
-none
+component, state, rank, collection_id, replica_id, vchannel, query_view_version, data_version
 ```
 
 Derived from:
 
-- Start time recorded on `CoordViewCreatedEvent` when state is Preparing.
-- Cleared when the view leaves Preparing or Ready through a Coord-visible
-  transition.
+- State entry time recorded on `CoordViewCreatedEvent` and state transition
+  events.
+- High-cardinality identity fields carried by the event, not re-derived by the
+  metric observer.
 
 Export behavior:
 
-The observer stores the start time. Collect-time export computes
-`now - start_time`. This avoids periodic updates in QueryView owner code.
+The observer stores the state entry time and maintains an oldest-first heap for
+each component as events arrive. Collect-time export reads only each
+component's TopK valid heap candidates, computes `now - entered_at` for output,
+and assigns `rank` within that component. It does not scan or sort the full
+QueryView state table on scrape.
+
+Heap candidates use lazy deletion, but compaction does not depend on Prometheus
+scrapes. The observer tracks the valid max-age candidate count for each
+component. State updates and deletions trigger a low-frequency heap rebuild when
+stale candidates grow much larger than that component's valid candidate count;
+if no valid candidate remains, the component heap is removed. Collect-time export
+still skips stale heap roots defensively before returning TopK rows.
+
+`Up` state is intentionally skipped. A long-lived Up view is the healthy steady
+state, so exporting its age adds churn without helping stuck-view diagnosis.
 
 Operational use:
 
-This is the primary alert metric for stuck Preparing. A stuck Preparing view
-can block new DataVersion views and delay StreamingNode growing-resource
-release.
+This is the primary diagnostic metric for stuck Preparing, Ready,
+Unrecoverable, Dropping, or Down states. A stuck Preparing view can block new
+DataVersion views and delay StreamingNode growing-resource release. Alerts
+should normally aggregate by metric value and then use the TopK labels to jump
+directly to the affected collection, replica, shard, and QueryView version.
+Per-component TopK prevents one noisy component from hiding stuck views in
+another component.
 
 ### 6.4 `milvus_qv_view_transition_total`
 
@@ -486,7 +512,7 @@ Recommended first alerts:
 
 | Alert | Expression intent |
 |---|---|
-| Stuck Preparing | `max(milvus_qv_preparing_age_seconds) > threshold` |
+| Stuck non-Up view | `max(milvus_qv_view_state_max_age_seconds) > threshold` |
 | No Up QueryView | `milvus_qv_shard_without_up > 0` for a sustained window |
 | Unrecoverable spike | Rate of `milvus_qv_unrecoverable_total` exceeds baseline |
 | Sync failure spike | Rate of `milvus_qv_sync_failure_total` exceeds baseline |
@@ -500,7 +526,7 @@ alert can be tuned without changing code.
 1. Add QueryCoord event-derived counters:
    `view_transition_total`, `unrecoverable_total`, and `sync_failure_total`.
 2. Add QueryCoord state cache gauges:
-   `view_state_total`, `preparing_age_seconds`, and `reportReady_percent`.
+   `view_state_total`, `view_state_max_age_seconds`, and `reportReady_percent`.
 3. Add `shard_without_up` with reasons derivable from current events.
 4. Add worker-side counters for QueryNode segment preparation and
    StreamingNode resource preparation.

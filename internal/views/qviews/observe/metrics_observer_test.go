@@ -2,7 +2,9 @@ package observe
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
@@ -86,6 +88,240 @@ func TestMetricsObserverSeparatesStateTotalByComponent(t *testing.T) {
 
 	assertGaugeValue(t, metrics.QVViewStateTotal, 1, "coord", qviews.QueryViewStatePreparing.String())
 	assertGaugeValue(t, metrics.QVViewStateTotal, 1, "queryNode", qviews.QueryViewStateReady.String())
+}
+
+func TestMetricsObserverCollectsViewStateMaxAgeSeconds(t *testing.T) {
+	now := time.Unix(100, 0)
+	observer := newMetricsObserverWithNow(func() time.Time {
+		return now
+	})
+	view := testQueryViewKey()
+
+	observer.Observe(context.Background(), CoordViewCreatedEvent{
+		CollectionID: 10,
+		View:         view,
+		State:        qviews.QueryViewStatePreparing,
+	})
+	now = now.Add(10 * time.Second)
+	observer.Observe(context.Background(), CoordViewReportAppliedEvent{
+		ViewStateTransition: ViewStateTransition{
+			CollectionID: 10,
+			View:         view,
+			From:         qviews.QueryViewStatePreparing,
+			To:           qviews.QueryViewStateReady,
+		},
+		ReportedState:        qviews.QueryViewStateReady,
+		ResourceReadyPercent: 100,
+	})
+	now = now.Add(5 * time.Second)
+	observer.Observe(context.Background(), CoordViewReportAppliedEvent{
+		ViewStateTransition: ViewStateTransition{
+			CollectionID: 10,
+			View:         view,
+			From:         qviews.QueryViewStateReady,
+			To:           qviews.QueryViewStateUp,
+		},
+		ReportedState:        qviews.QueryViewStateUp,
+		ResourceReadyPercent: 100,
+	})
+	now = now.Add(20 * time.Second)
+
+	err := testutil.CollectAndCompare(
+		metrics.QVViewStateMaxAgeSeconds,
+		strings.NewReader(`
+# HELP milvus_qv_view_state_max_age_seconds top QueryViews by active state age in seconds
+# TYPE milvus_qv_view_state_max_age_seconds gauge
+`),
+		"milvus_qv_view_state_max_age_seconds",
+	)
+	if err != nil {
+		t.Fatalf("collect max age metric: %v", err)
+	}
+
+	anotherView := testQueryViewKey()
+	anotherView.QueryViewVersion.QueryVersion++
+	observer.Observe(context.Background(), CoordViewCreatedEvent{
+		CollectionID: 11,
+		View:         anotherView,
+		State:        qviews.QueryViewStatePreparing,
+	})
+	now = now.Add(30 * time.Second)
+
+	err = testutil.CollectAndCompare(
+		metrics.QVViewStateMaxAgeSeconds,
+		strings.NewReader(`
+# HELP milvus_qv_view_state_max_age_seconds top QueryViews by active state age in seconds
+# TYPE milvus_qv_view_state_max_age_seconds gauge
+milvus_qv_view_state_max_age_seconds{collection_id="11",component="coord",data_version="10/20",query_view_version="10/20/4",rank="1",replica_id="1",state="Preparing",vchannel="v1"} 30
+`),
+		"milvus_qv_view_state_max_age_seconds",
+	)
+	if err != nil {
+		t.Fatalf("collect max age metric: %v", err)
+	}
+}
+
+func TestMetricsObserverLimitsViewStateMaxAgeSecondsToTopNPerComponent(t *testing.T) {
+	now := time.Unix(100, 0)
+	observer := newMetricsObserverWithNow(func() time.Time {
+		return now
+	})
+
+	for i := 0; i < defaultViewStateMaxAgeTopN+1; i++ {
+		view := testQueryViewKey()
+		view.ShardID.ReplicaID = int64(i + 1)
+		view.QueryViewVersion.QueryVersion = int64(i + 1)
+		observer.Observe(context.Background(), CoordViewCreatedEvent{
+			CollectionID: int64(100 + i),
+			View:         view,
+			State:        qviews.QueryViewStatePreparing,
+		})
+		now = now.Add(time.Second)
+	}
+	for i := 0; i < defaultViewStateMaxAgeTopN+1; i++ {
+		view := testQueryViewKey()
+		view.ShardID.ReplicaID = int64(i + 11)
+		view.QueryViewVersion.QueryVersion = int64(i + 11)
+		observer.Observe(context.Background(), QueryNodeSegmentsReadyEvent{
+			ViewStateTransition: ViewStateTransition{
+				CollectionID: int64(200 + i),
+				View:         view,
+				From:         qviews.QueryViewStatePreparing,
+				To:           qviews.QueryViewStateReady,
+			},
+			ReadySegmentCount: 10,
+		})
+		now = now.Add(time.Second)
+	}
+	now = now.Add(10 * time.Second)
+
+	metrics := observer.collectViewStateMaxAge()
+	want := defaultViewStateMaxAgeTopN * 2
+	if len(metrics) != want {
+		t.Fatalf("topN metric count = %d, want %d", len(metrics), want)
+	}
+	if metrics[0].Component != "coord" || metrics[0].ReplicaID != "1" || metrics[0].Rank != "1" {
+		t.Fatalf("first coord topN metric = %#v, want oldest coord replica with rank 1", metrics[0])
+	}
+	if metrics[defaultViewStateMaxAgeTopN-1].Component != "coord" || metrics[defaultViewStateMaxAgeTopN-1].ReplicaID != "5" || metrics[defaultViewStateMaxAgeTopN-1].Rank != "5" {
+		t.Fatalf("last coord topN metric = %#v, want fifth oldest coord replica with rank 5", metrics[defaultViewStateMaxAgeTopN-1])
+	}
+	if metrics[defaultViewStateMaxAgeTopN].Component != "queryNode" || metrics[defaultViewStateMaxAgeTopN].ReplicaID != "11" || metrics[defaultViewStateMaxAgeTopN].Rank != "1" {
+		t.Fatalf("first queryNode topN metric = %#v, want oldest queryNode replica with rank 1", metrics[defaultViewStateMaxAgeTopN])
+	}
+	if metrics[len(metrics)-1].Component != "queryNode" || metrics[len(metrics)-1].ReplicaID != "15" || metrics[len(metrics)-1].Rank != "5" {
+		t.Fatalf("last queryNode topN metric = %#v, want fifth oldest queryNode replica with rank 5", metrics[len(metrics)-1])
+	}
+}
+
+func TestMetricsObserverRefreshesTopNCandidateOnStateMove(t *testing.T) {
+	now := time.Unix(100, 0)
+	observer := newMetricsObserverWithNow(func() time.Time {
+		return now
+	})
+	view := testQueryViewKey()
+
+	observer.Observe(context.Background(), CoordViewCreatedEvent{
+		CollectionID: 10,
+		View:         view,
+		State:        qviews.QueryViewStatePreparing,
+	})
+	now = now.Add(100 * time.Second)
+	observer.Observe(context.Background(), CoordViewReportAppliedEvent{
+		ViewStateTransition: ViewStateTransition{
+			CollectionID: 10,
+			View:         view,
+			From:         qviews.QueryViewStatePreparing,
+			To:           qviews.QueryViewStateReady,
+		},
+		ReportedState:        qviews.QueryViewStateReady,
+		ResourceReadyPercent: 100,
+	})
+	now = now.Add(3 * time.Second)
+
+	metrics := observer.collectViewStateMaxAge()
+	if len(metrics) != 1 {
+		t.Fatalf("topN metric count = %d, want 1", len(metrics))
+	}
+	if metrics[0].State != qviews.QueryViewStateReady.String() || metrics[0].AgeSeconds != 3 {
+		t.Fatalf("topN metric after state move = %#v, want Ready age 3", metrics[0])
+	}
+}
+
+func TestMetricsObserverCompactsTopNCandidatesWithoutScrape(t *testing.T) {
+	now := time.Unix(100, 0)
+	observer := newMetricsObserverWithNow(func() time.Time {
+		return now
+	})
+	observer.topN = 2
+
+	for i := 0; i < 20; i++ {
+		view := testQueryViewKey()
+		view.ShardID.ReplicaID = int64(i + 1)
+		view.QueryViewVersion.QueryVersion = int64(i + 1)
+		observer.Observe(context.Background(), CoordViewCreatedEvent{
+			CollectionID: int64(100 + i),
+			View:         view,
+			State:        qviews.QueryViewStatePreparing,
+		})
+	}
+
+	for i := 0; i < 20; i++ {
+		view := testQueryViewKey()
+		view.ShardID.ReplicaID = int64(i + 1)
+		view.QueryViewVersion.QueryVersion = int64(i + 1)
+		observer.Observe(context.Background(), CoordViewReportAppliedEvent{
+			ViewStateTransition: ViewStateTransition{
+				CollectionID: int64(100 + i),
+				View:         view,
+				From:         qviews.QueryViewStateReady,
+				To:           qviews.QueryViewStateUp,
+			},
+			ReportedState:        qviews.QueryViewStateUp,
+			ResourceReadyPercent: 100,
+		})
+	}
+
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if h, ok := observer.topK["coord"]; ok && h.Len() != 0 {
+		t.Fatalf("coord topN candidate heap len = %d, want compacted empty without scrape", h.Len())
+	}
+}
+
+func TestMetricsObserverDropsTerminalWorkerViewState(t *testing.T) {
+	metrics.QVViewStateTotal.Reset()
+	metrics.QVViewTransitionTotal.Reset()
+	now := time.Unix(100, 0)
+	observer := newMetricsObserverWithNow(func() time.Time {
+		return now
+	})
+	view := testQueryViewKey()
+
+	observer.Observe(context.Background(), QueryNodeSegmentsReadyEvent{
+		ViewStateTransition: ViewStateTransition{
+			CollectionID: 12,
+			View:         view,
+			From:         qviews.QueryViewStatePreparing,
+			To:           qviews.QueryViewStateReady,
+		},
+		ReadySegmentCount: 10,
+	})
+	assertGaugeValue(t, metrics.QVViewStateTotal, 1, "queryNode", qviews.QueryViewStateReady.String())
+
+	observer.Observe(context.Background(), QueryNodeReleaseDoneEvent{
+		ViewStateTransition: ViewStateTransition{
+			CollectionID: 12,
+			View:         view,
+			From:         qviews.QueryViewStateDropping,
+			To:           qviews.QueryViewStateDropped,
+		},
+	})
+
+	assertGaugeValue(t, metrics.QVViewStateTotal, 0, "queryNode", qviews.QueryViewStateReady.String())
+	if got := observer.collectViewStateMaxAge(); len(got) != 0 {
+		t.Fatalf("topN metrics after dropped = %#v, want empty", got)
+	}
 }
 
 func assertGaugeValue(t *testing.T, collector *prometheus.GaugeVec, expected float64, labels ...string) {

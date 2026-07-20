@@ -109,9 +109,10 @@ func (s *qnShardView) applyOneLocked(av *handler.ApplyView) {
 	entry.sm.OnCoordStateDelivered(pushedState)
 	qvobserve.Observe(context.TODO(), qvobserve.QueryNodeApplyCoordViewEvent{
 		ViewStateTransition: qvobserve.ViewStateTransition{
-			View: key,
-			From: before,
-			To:   entry.sm.State(),
+			CollectionID: collectionIDForEntry(entry),
+			View:         key,
+			From:         before,
+			To:           entry.sm.State(),
 		},
 	})
 	s.consumeReportAndCleanup(key, entry)
@@ -133,9 +134,10 @@ func (s *qnShardView) notifySegmentsReady(version qviews.QueryViewVersion, ready
 	entry.sm.OnSegmentsReady(readySegments)
 	qvobserve.Observe(context.TODO(), qvobserve.QueryNodeSegmentsReadyEvent{
 		ViewStateTransition: qvobserve.ViewStateTransition{
-			View: key,
-			From: before,
-			To:   entry.sm.State(),
+			CollectionID: collectionIDForEntry(entry),
+			View:         key,
+			From:         before,
+			To:           entry.sm.State(),
 		},
 		ReadySegmentCount: countReadySegments(readySegments),
 	})
@@ -158,9 +160,10 @@ func (s *qnShardView) notifyUnrecoverable(version qviews.QueryViewVersion) {
 	entry.sm.OnUnrecoverable()
 	qvobserve.Observe(context.TODO(), qvobserve.QueryNodeSegmentUnrecoverableEvent{
 		ViewStateTransition: qvobserve.ViewStateTransition{
-			View: key,
-			From: before,
-			To:   entry.sm.State(),
+			CollectionID: collectionIDForEntry(entry),
+			View:         key,
+			From:         before,
+			To:           entry.sm.State(),
 		},
 	})
 	s.consumeReportAndCleanup(key, entry)
@@ -182,9 +185,10 @@ func (s *qnShardView) notifyDropped(version qviews.QueryViewVersion) {
 	entry.sm.OnDropped()
 	qvobserve.Observe(context.TODO(), qvobserve.QueryNodeReleaseDoneEvent{
 		ViewStateTransition: qvobserve.ViewStateTransition{
-			View: key,
-			From: before,
-			To:   entry.sm.State(),
+			CollectionID: collectionIDForEntry(entry),
+			View:         key,
+			From:         before,
+			To:           entry.sm.State(),
 		},
 	})
 	s.consumeReportAndCleanup(key, entry)
@@ -223,6 +227,10 @@ func countReadySegments(readySegments map[int64][]int64) int {
 		total += len(segmentIDs)
 	}
 	return total
+}
+
+func collectionIDForEntry(entry *qnViewEntry) int64 {
+	return entry.sm.Meta().GetCollectionId()
 }
 
 func countViewSegments(view *viewpb.QueryViewOfQueryNode) int {

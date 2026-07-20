@@ -116,9 +116,10 @@ func FieldEvent(event Event) mlog.Field {
 
 // ViewStateTransition identifies one QueryView state transition.
 type ViewStateTransition struct {
-	View qviews.QueryViewKey
-	From qviews.QueryViewState
-	To   qviews.QueryViewState
+	CollectionID int64
+	View         qviews.QueryViewKey
+	From         qviews.QueryViewState
+	To           qviews.QueryViewState
 }
 
 // CoordQueryNodeLostDetectedEvent is emitted when Coord sync code observes
@@ -141,8 +142,9 @@ func (e CoordQueryNodeLostDetectedEvent) MarshalLogObject(enc mlog.ObjectEncoder
 // CoordViewCreatedEvent is emitted after Coord creates a new Preparing view.
 type CoordViewCreatedEvent struct {
 	baseEvent
-	View  qviews.QueryViewKey
-	State qviews.QueryViewState
+	CollectionID int64
+	View         qviews.QueryViewKey
+	State        qviews.QueryViewState
 }
 
 func (e CoordViewCreatedEvent) LogLevel() mlog.Level {
