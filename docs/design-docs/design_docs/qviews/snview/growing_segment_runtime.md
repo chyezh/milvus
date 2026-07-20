@@ -172,6 +172,33 @@ type GrowingRuntime interface {
 }
 ```
 
+The query-facing accessors include two categories:
+
+1. Blocking execution accessors used by Phase 2 task providers. These wait until
+   the runtime is visible at the requested MVCC, then acquire concrete growing
+   segment handles for execution.
+2. Non-blocking planning probes used by Phase 1. These may inspect the current
+   runtime only if it is already ready and already visible at the requested
+   MVCC. They must not pin segment handles or wait for catch-up.
+
+The Phase 1 probe should have "may have candidates" semantics:
+
+```go
+type GrowingRuntime interface {
+    // Returns false only when the runtime is already visible at the requested
+    // MVCC and the filtered growing candidate set is definitely empty.
+    // Returns true for any unknown, unsupported, or not-yet-visible state.
+    MayHaveVisibleGrowingSegments(
+        growingTimetick uint64,
+        transformingTimetick uint64,
+        partitionIDs []int64,
+    ) bool
+}
+```
+
+`partitionIDs` is the deterministic request scope produced by Proxy and carried
+through `GetQueryPlanRequest`. An empty list means all partitions.
+
 `Prepare` loads the historical resources from the provided `VChannelWALView`.
 `GrowingRuntime` does not retain the WALView after preparation.
 
@@ -265,7 +292,30 @@ strictly older than the oldest active QueryView's required DataVersion.
 
 If no QueryView references remain, the module closes the whole `QueryRuntime`.
 
-### 5.5 Close
+### 5.5 Query Planning Probe
+
+`GrowingRuntime` may be queried during Phase 1 to avoid dispatching a
+StreamingNode Phase 2 request that cannot contribute results.
+
+The probe is only valid when the runtime is already ready and both applied
+frontiers have reached the requested MVCC. It then scans the current growing
+segment map under the runtime lock, applies the same request partition filter as
+Phase 2 task acquisition, and reports whether any candidate exists.
+
+The probe must be conservative:
+
+- It must not wait for MVCC catch-up.
+- It must not pin or return physical segment handles.
+- It must not perform expensive expression or PK pruning unless the required
+  runtime metadata is already local and the pruning result is exact enough to
+  preserve correctness.
+- If the runtime is not visible or the filter cannot be applied, the caller must
+  keep StreamingNode in the `QueryPlan`.
+
+This makes Phase 1 pruning a latency optimization only. Phase 2 remains the
+source of truth for MVCC waiting, handle acquisition, and execution.
+
+### 5.6 Close
 
 `Close` releases all segment handles and stops module-local workers. It is
 called only by `QueryRuntime.Close`.
