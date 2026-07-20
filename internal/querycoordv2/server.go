@@ -29,6 +29,7 @@ import (
 	"github.com/tikv/client-go/v2/txnkv"
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/atomic"
+	"golang.org/x/sync/singleflight"
 	"golang.org/x/time/rate"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
@@ -39,7 +40,6 @@ import (
 	"github.com/milvus-io/milvus/internal/metacache"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/kv/querycoord"
-	"github.com/milvus-io/milvus/internal/metastore/kv/queryview"
 	"github.com/milvus-io/milvus/internal/querycoordv2/assign"
 	"github.com/milvus-io/milvus/internal/querycoordv2/balance"
 	"github.com/milvus-io/milvus/internal/querycoordv2/checkers"
@@ -55,6 +55,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/proxyutil"
 	"github.com/milvus-io/milvus/internal/util/sessionutil"
 	"github.com/milvus-io/milvus/internal/util/tsoutil"
+	qvresource "github.com/milvus-io/milvus/internal/views/coord/resource"
 	"github.com/milvus-io/milvus/pkg/v3/config"
 	"github.com/milvus-io/milvus/pkg/v3/kv"
 	"github.com/milvus-io/milvus/pkg/v3/metrics"
@@ -71,21 +72,19 @@ import (
 var Params = params.Params
 
 type Server struct {
-	segmentLoadInfoWatcher *queryViewSegmentLoadInfoWatcher
-	loadInfoCatalog        queryview.LoadInfoCatalog
-	ctx                    context.Context
-	cancel                 context.CancelFunc
-	wg                     sync.WaitGroup
-	status                 atomic.Int32
-	etcdCli                *clientv3.Client
-	tikvCli                *txnkv.Client
-	address                string
-	session                sessionutil.SessionInterface
-	sessionWatcher         sessionutil.SessionWatcher
-	sessionWatcherMu       sync.Mutex
-	kv                     kv.MetaKv
-	idAllocator            func() (int64, error)
-	metricsCacheManager    *metricsinfo.MetricsCacheManager
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	wg                  sync.WaitGroup
+	status              atomic.Int32
+	etcdCli             *clientv3.Client
+	tikvCli             *txnkv.Client
+	address             string
+	session             sessionutil.SessionInterface
+	sessionWatcher      sessionutil.SessionWatcher
+	sessionWatcherMu    sync.Mutex
+	kv                  kv.MetaKv
+	idAllocator         func() (int64, error)
+	metricsCacheManager *metricsinfo.MetricsCacheManager
 
 	// Coordinators
 	mixCoord types.MixCoord
@@ -143,6 +142,15 @@ type Server struct {
 
 	// query view runtime
 	qviewsRuntime *qviewsRuntime
+
+	// DQL activity tracking and TTL-based collection release.
+	collectionUsage *collectionUsageManager
+
+	// One shared automatic load and readiness wait per collection across Proxies.
+	autoLoadCollectionGroup singleflight.Group
+
+	// query view segment load info watch
+	segmentLoadInfoWatcher *queryViewSegmentLoadInfoWatcher
 }
 
 type FileResourceObserver interface {
@@ -154,10 +162,10 @@ type FileResourceObserver interface {
 func NewQueryCoord(ctx context.Context) (*Server, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	server := &Server{
-		segmentLoadInfoWatcher: newQueryViewSegmentLoadInfoWatcher(),
 		ctx:                    ctx,
 		cancel:                 cancel,
 		metricsRequest:         metricsinfo.NewMetricsRequest(),
+		segmentLoadInfoWatcher: newQueryViewSegmentLoadInfoWatcher(),
 	}
 	server.UpdateStateCode(commonpb.StateCode_Abnormal)
 	server.queryNodeCreator = session.DefaultQueryNodeCreator
@@ -379,8 +387,10 @@ func (s *Server) initQueryCoord() error {
 	// Init load status cache
 	meta.GlobalFailedLoadCache = meta.NewFailedLoadCache()
 
-	if err := s.initQViewsRuntime(); err != nil { return err }
- mlog.Info(s.ctx, "init querycoord done", mlog.FieldNodeID(paramtable.GetNodeID()), mlog.String("Address", s.address))
+	if err := s.initQViewsRuntime(); err != nil {
+		return err
+	}
+	mlog.Info(s.ctx, "init querycoord done", mlog.FieldNodeID(paramtable.GetNodeID()), mlog.String("Address", s.address))
 	return err
 }
 
@@ -397,6 +407,12 @@ func (s *Server) initQViewsRuntime() error {
 		return err
 	}
 	s.qviewsRuntime = runtime
+	qvresource.Init(runtime.resources)
+	s.collectionUsage = newCollectionUsageManager(
+		runtime.loadConfigStore,
+		s.broker,
+		s.autoReleaseCollection,
+	)
 	return nil
 }
 
@@ -405,7 +421,6 @@ func (s *Server) initMeta() error {
 
 	mlog.Info(s.ctx, "init meta")
 	s.store = querycoord.NewCatalog(s.kv)
-	s.loadInfoCatalog = queryview.NewLoadInfoCatalog(s.kv)
 	s.meta = meta.NewMeta(s.idAllocator, s.store, s.nodeMgr, s.metaView)
 
 	s.broker = meta.NewCoordinatorBroker(
@@ -530,12 +545,20 @@ func (s *Server) startServerLoop() {
 	if s.qviewsRuntime != nil {
 		s.qviewsRuntime.start(s.ctx)
 	}
+	if s.collectionUsage != nil {
+		s.collectionUsage.start(s.ctx)
+	}
 }
 
 func (s *Server) Stop() error {
 	// FOLLOW the dependence graph:
 	// job scheduler -> checker controller -> task scheduler -> dist controller -> cluster -> session
 	// observers -> dist controller
+
+	if s.collectionUsage != nil {
+		mlog.Info(s.ctx, "stop collection usage manager...")
+		s.collectionUsage.close()
+	}
 
 	if s.loadConfigWatcher != nil {
 		mlog.Info(s.ctx, "stop load config watcher...")
