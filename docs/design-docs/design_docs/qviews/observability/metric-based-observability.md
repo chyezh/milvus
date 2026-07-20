@@ -97,6 +97,7 @@ Allowed default labels:
 | `from_state` | State transition source. |
 | `to_state` | State transition target. |
 | `trigger` | Low-cardinality state-machine trigger. |
+| `le` | Prometheus-compatible cumulative bucket upper bound. |
 | `reason` | Low-cardinality failure or no-Up reason. |
 | `node_role` | `querynode` or `streamingnode`. |
 | `node_id` | Allowed for worker-specific sync and readiness metrics. |
@@ -316,26 +317,42 @@ Derived from:
 The first implementation can use `reason="unknown"` until sync errors are
 classified into stable categories.
 
-### 6.7 `milvus_qv_reportReady_percent`
+### 6.7 `milvus_qv_view_ready_percent_bucket`
 
 Type: Gauge
 
-Description: Last worker-reported resource readiness percent observed by
-QueryCoord.
+Description: Current number of Coord-visible non-Up QueryViews by
+worker-reported resource readiness percent cumulative bucket.
 
 Labels:
 
 ```text
-node_role, node_id
+component, state, le
 ```
 
 Derived from:
 
 - `CoordViewReportAppliedEvent.ResourceReadyPercent`
 
-For QueryNode, this value represents segment preparation progress. For
-StreamingNode, it is currently state-derived: resource-ready states report 100
-and other states report 0.
+Bucket values:
+
+```text
+0, 25, 50, 75, 90, 99, 100, +Inf
+```
+
+The observer maintains this metric as current state, not as an event histogram.
+Buckets are cumulative and use the Prometheus `le` label so PromQL helpers such
+as `histogram_quantile` can be used on the current distribution. Coord view
+creation enters the `0` bucket because a view without any report has no known
+resource readiness progress. A Coord report moves the view from its old
+`(state, le)` cumulative rows to the reported bucket's cumulative rows.
+Non-report Coord state transitions preserve the last known `le` value while the
+view remains non-Up. `Up` and `Dropped` states are removed from this metric.
+
+For QueryNode reports, the percent represents segment preparation progress. For
+StreamingNode reports, it is currently state-derived: resource-ready states
+report 100 and other states report 0. The metric is exported from the Coord
+observer because Coord owns the merged worker report view.
 
 ### 6.8 `milvus_qv_sync_pending`
 
@@ -526,7 +543,8 @@ alert can be tuned without changing code.
 1. Add QueryCoord event-derived counters:
    `view_transition_total`, `unrecoverable_total`, and `sync_failure_total`.
 2. Add QueryCoord state cache gauges:
-   `view_state_total`, `view_state_max_age_seconds`, and `reportReady_percent`.
+   `view_state_total`, `view_state_max_age_seconds`, and
+   `view_ready_percent_bucket`.
 3. Add `shard_without_up` with reasons derivable from current events.
 4. Add worker-side counters for QueryNode segment preparation and
    StreamingNode resource preparation.

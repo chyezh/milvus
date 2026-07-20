@@ -90,6 +90,98 @@ func TestMetricsObserverSeparatesStateTotalByComponent(t *testing.T) {
 	assertGaugeValue(t, metrics.QVViewStateTotal, 1, "queryNode", qviews.QueryViewStateReady.String())
 }
 
+func TestMetricsObserverTracksCoordViewReadyPercentBuckets(t *testing.T) {
+	metrics.QVViewReadyPercentBucket.Reset()
+	observer := NewMetricsObserver()
+	view := testQueryViewKey()
+
+	observer.Observe(context.Background(), CoordViewCreatedEvent{
+		CollectionID: 10,
+		View:         view,
+		State:        qviews.QueryViewStatePreparing,
+	})
+	err := testutil.CollectAndCompare(
+		metrics.QVViewReadyPercentBucket,
+		strings.NewReader(`
+# HELP milvus_qv_view_ready_percent_bucket current number of QueryViews by resource readiness percent bucket
+# TYPE milvus_qv_view_ready_percent_bucket gauge
+milvus_qv_view_ready_percent_bucket{component="coord",le="+Inf",state="Preparing"} 1
+milvus_qv_view_ready_percent_bucket{component="coord",le="0",state="Preparing"} 1
+milvus_qv_view_ready_percent_bucket{component="coord",le="100",state="Preparing"} 1
+milvus_qv_view_ready_percent_bucket{component="coord",le="25",state="Preparing"} 1
+milvus_qv_view_ready_percent_bucket{component="coord",le="50",state="Preparing"} 1
+milvus_qv_view_ready_percent_bucket{component="coord",le="75",state="Preparing"} 1
+milvus_qv_view_ready_percent_bucket{component="coord",le="90",state="Preparing"} 1
+milvus_qv_view_ready_percent_bucket{component="coord",le="99",state="Preparing"} 1
+`),
+		"milvus_qv_view_ready_percent_bucket",
+	)
+	if err != nil {
+		t.Fatalf("collect ready percent bucket before report: %v", err)
+	}
+
+	observer.Observe(context.Background(), CoordViewReportAppliedEvent{
+		ViewStateTransition: ViewStateTransition{
+			CollectionID: 10,
+			View:         view,
+			From:         qviews.QueryViewStatePreparing,
+			To:           qviews.QueryViewStatePreparing,
+		},
+		ReportedState:        qviews.QueryViewStatePreparing,
+		ResourceReadyPercent: 42,
+	})
+	err = testutil.CollectAndCompare(
+		metrics.QVViewReadyPercentBucket,
+		strings.NewReader(`
+# HELP milvus_qv_view_ready_percent_bucket current number of QueryViews by resource readiness percent bucket
+# TYPE milvus_qv_view_ready_percent_bucket gauge
+milvus_qv_view_ready_percent_bucket{component="coord",le="+Inf",state="Preparing"} 1
+milvus_qv_view_ready_percent_bucket{component="coord",le="0",state="Preparing"} 0
+milvus_qv_view_ready_percent_bucket{component="coord",le="100",state="Preparing"} 1
+milvus_qv_view_ready_percent_bucket{component="coord",le="25",state="Preparing"} 0
+milvus_qv_view_ready_percent_bucket{component="coord",le="50",state="Preparing"} 1
+milvus_qv_view_ready_percent_bucket{component="coord",le="75",state="Preparing"} 1
+milvus_qv_view_ready_percent_bucket{component="coord",le="90",state="Preparing"} 1
+milvus_qv_view_ready_percent_bucket{component="coord",le="99",state="Preparing"} 1
+`),
+		"milvus_qv_view_ready_percent_bucket",
+	)
+	if err != nil {
+		t.Fatalf("collect ready percent bucket after report: %v", err)
+	}
+	assertGaugeValue(t, metrics.QVViewReadyPercentBucket, 0, "coord", qviews.QueryViewStatePreparing.String(), "0")
+	assertGaugeValue(t, metrics.QVViewReadyPercentBucket, 0, "coord", qviews.QueryViewStatePreparing.String(), "25")
+	assertGaugeValue(t, metrics.QVViewReadyPercentBucket, 1, "coord", qviews.QueryViewStatePreparing.String(), "50")
+
+	observer.Observe(context.Background(), CoordViewReportAppliedEvent{
+		ViewStateTransition: ViewStateTransition{
+			CollectionID: 10,
+			View:         view,
+			From:         qviews.QueryViewStatePreparing,
+			To:           qviews.QueryViewStateReady,
+		},
+		ReportedState:        qviews.QueryViewStateReady,
+		ResourceReadyPercent: 100,
+	})
+	assertGaugeValue(t, metrics.QVViewReadyPercentBucket, 0, "coord", qviews.QueryViewStatePreparing.String(), "50")
+	assertGaugeValue(t, metrics.QVViewReadyPercentBucket, 0, "coord", qviews.QueryViewStateReady.String(), "99")
+	assertGaugeValue(t, metrics.QVViewReadyPercentBucket, 1, "coord", qviews.QueryViewStateReady.String(), "100")
+	assertGaugeValue(t, metrics.QVViewReadyPercentBucket, 1, "coord", qviews.QueryViewStateReady.String(), "+Inf")
+
+	observer.Observe(context.Background(), CoordViewReportAppliedEvent{
+		ViewStateTransition: ViewStateTransition{
+			CollectionID: 10,
+			View:         view,
+			From:         qviews.QueryViewStateReady,
+			To:           qviews.QueryViewStateUp,
+		},
+		ReportedState:        qviews.QueryViewStateUp,
+		ResourceReadyPercent: 100,
+	})
+	assertGaugeValue(t, metrics.QVViewReadyPercentBucket, 0, "coord", qviews.QueryViewStateReady.String(), "100")
+	assertGaugeValue(t, metrics.QVViewReadyPercentBucket, 0, "coord", qviews.QueryViewStateReady.String(), "+Inf")
+}
+
 func TestMetricsObserverCollectsViewStateMaxAgeSeconds(t *testing.T) {
 	now := time.Unix(100, 0)
 	observer := newMetricsObserverWithNow(func() time.Time {

@@ -14,6 +14,28 @@ import (
 
 const defaultViewStateMaxAgeTopN = 5
 
+const (
+	readyPercentLe0   = "0"
+	readyPercentLe25  = "25"
+	readyPercentLe50  = "50"
+	readyPercentLe75  = "75"
+	readyPercentLe90  = "90"
+	readyPercentLe99  = "99"
+	readyPercentLe100 = "100"
+	readyPercentLeInf = "+Inf"
+)
+
+var readyPercentLeBounds = []string{
+	readyPercentLe0,
+	readyPercentLe25,
+	readyPercentLe50,
+	readyPercentLe75,
+	readyPercentLe90,
+	readyPercentLe99,
+	readyPercentLe100,
+	readyPercentLeInf,
+}
+
 type MetricsObserver struct {
 	mu              sync.Mutex
 	now             func() time.Time
@@ -34,6 +56,7 @@ type metricViewState struct {
 	state        qviews.QueryViewState
 	enteredAt    time.Time
 	version      uint64
+	readyLe      string
 }
 
 type viewStateAgeCandidate struct {
@@ -152,6 +175,16 @@ func (o *MetricsObserver) Observe(_ context.Context, event Event) {
 		o.deleteState(component, transition.View)
 		return
 	}
+	if reported, ok := event.(CoordViewReportAppliedEvent); ok {
+		o.moveStateWithReadyLe(
+			component,
+			transition.CollectionID,
+			transition.View,
+			transition.To,
+			readyPercentLe(reported.ResourceReadyPercent),
+		)
+		return
+	}
 	o.moveState(component, transition.CollectionID, transition.View, transition.To)
 }
 
@@ -160,7 +193,7 @@ func (o *MetricsObserver) setState(component string, collectionID int64, view qv
 	defer o.mu.Unlock()
 
 	key := metricViewKey{component: component, view: view}
-	o.upsertStateLocked(key, collectionID, state)
+	o.upsertStateLocked(key, collectionID, state, "")
 }
 
 func (o *MetricsObserver) moveState(component string, collectionID int64, view qviews.QueryViewKey, to qviews.QueryViewState) {
@@ -168,32 +201,55 @@ func (o *MetricsObserver) moveState(component string, collectionID int64, view q
 	defer o.mu.Unlock()
 
 	key := metricViewKey{component: component, view: view}
+	readyLe := ""
 	if old, ok := o.states[key]; ok {
 		if collectionID == 0 {
 			collectionID = old.collectionID
 		}
+		readyLe = old.readyLe
 	}
-	o.upsertStateLocked(key, collectionID, to)
+	o.upsertStateLocked(key, collectionID, to, readyLe)
 }
 
-func (o *MetricsObserver) upsertStateLocked(key metricViewKey, collectionID int64, state qviews.QueryViewState) {
+func (o *MetricsObserver) moveStateWithReadyLe(
+	component string,
+	collectionID int64,
+	view qviews.QueryViewKey,
+	to qviews.QueryViewState,
+	readyLe string,
+) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+
+	key := metricViewKey{component: component, view: view}
+	if old, ok := o.states[key]; ok && collectionID == 0 {
+		collectionID = old.collectionID
+	}
+	o.upsertStateLocked(key, collectionID, to, readyLe)
+}
+
+func (o *MetricsObserver) upsertStateLocked(key metricViewKey, collectionID int64, state qviews.QueryViewState, readyLe string) {
 	if old, ok := o.states[key]; ok {
 		metrics.QVViewStateTotal.WithLabelValues(key.component, old.state.String()).Dec()
+		o.decReadyPercentBucket(key.component, old.state, old.readyLe)
 		o.updateTopKValidCount(key.component, old.state, state)
 	} else if isMaxAgeCandidateState(state) {
 		o.topKValidCounts[key.component]++
 	}
+	readyLe = normalizeReadyPercentLe(key.component, state, readyLe)
 
 	stateSnapshot := metricViewState{
 		collectionID: collectionID,
 		state:        state,
 		enteredAt:    o.now(),
 		version:      o.nextVersion(),
+		readyLe:      readyLe,
 	}
 	o.states[key] = stateSnapshot
 	o.pushTopKCandidate(key, stateSnapshot)
 	o.compactTopKCandidates(key.component)
 	metrics.QVViewStateTotal.WithLabelValues(key.component, state.String()).Inc()
+	o.incReadyPercentBucket(key.component, state, readyLe)
 }
 
 func (o *MetricsObserver) deleteState(component string, view qviews.QueryViewKey) {
@@ -212,6 +268,7 @@ func (o *MetricsObserver) deleteState(component string, view qviews.QueryViewKey
 			delete(o.topKValidCounts, component)
 		}
 	}
+	o.decReadyPercentBucket(component, old.state, old.readyLe)
 	o.compactTopKCandidates(component)
 	metrics.QVViewStateTotal.WithLabelValues(component, old.state.String()).Dec()
 }
@@ -293,6 +350,70 @@ func (o *MetricsObserver) compactTopKCandidates(component string) {
 
 func isMaxAgeCandidateState(state qviews.QueryViewState) bool {
 	return state != qviews.QueryViewStateUp && state != qviews.QueryViewStateDropped
+}
+
+func normalizeReadyPercentLe(component string, state qviews.QueryViewState, le string) string {
+	if component != "coord" || !isReadyPercentCandidateState(state) {
+		return ""
+	}
+	if le == "" {
+		return readyPercentLe0
+	}
+	return le
+}
+
+func isReadyPercentCandidateState(state qviews.QueryViewState) bool {
+	return state != qviews.QueryViewStateUp && state != qviews.QueryViewStateDropped
+}
+
+func readyPercentLe(percent int64) string {
+	switch {
+	case percent < 0:
+		return ""
+	case percent == 0:
+		return readyPercentLe0
+	case percent <= 25:
+		return readyPercentLe25
+	case percent <= 50:
+		return readyPercentLe50
+	case percent <= 75:
+		return readyPercentLe75
+	case percent <= 90:
+		return readyPercentLe90
+	case percent < 100:
+		return readyPercentLe99
+	default:
+		return readyPercentLe100
+	}
+}
+
+func (o *MetricsObserver) incReadyPercentBucket(component string, state qviews.QueryViewState, le string) {
+	idx := readyPercentLeIndex(le)
+	if idx < 0 {
+		return
+	}
+	for _, upperBound := range readyPercentLeBounds[idx:] {
+		metrics.QVViewReadyPercentBucket.WithLabelValues(component, state.String(), upperBound).Inc()
+	}
+}
+
+func (o *MetricsObserver) decReadyPercentBucket(component string, state qviews.QueryViewState, le string) {
+	idx := readyPercentLeIndex(le)
+	if idx < 0 {
+		return
+	}
+	for _, upperBound := range readyPercentLeBounds[idx:] {
+		metrics.QVViewReadyPercentBucket.WithLabelValues(component, state.String(), upperBound).Dec()
+	}
+}
+
+func readyPercentLeIndex(le string) int {
+	for idx, upperBound := range readyPercentLeBounds {
+		if upperBound == le {
+			return idx
+		}
+	}
+	return -1
 }
 
 func metricFromViewState(key metricViewKey, state metricViewState, rank int, now time.Time) metrics.QVViewStateMaxAgeMetric {

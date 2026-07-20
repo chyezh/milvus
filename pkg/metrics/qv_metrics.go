@@ -30,6 +30,7 @@ const (
 	QVFromStateLabel = "from_state"
 	QVToStateLabel   = "to_state"
 	QVTriggerLabel   = "trigger"
+	QVLeLabel        = "le"
 
 	QVRankLabel             = "rank"
 	QVCollectionIDLabel     = "collection_id"
@@ -136,6 +137,18 @@ var (
 			QVTriggerLabel,
 		})
 
+	QVViewReadyPercentBucket = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Namespace: milvusNamespace,
+			Subsystem: qvSubsystem,
+			Name:      "view_ready_percent_bucket",
+			Help:      "current number of QueryViews by resource readiness percent bucket",
+		}, []string{
+			QVComponentLabel,
+			QVStateLabel,
+			QVLeLabel,
+		})
+
 	QVViewStateMaxAgeSeconds = newQVViewStateMaxAgeCollector()
 )
 
@@ -146,5 +159,6 @@ func SetQVViewStateMaxAgeProvider(provider func() []QVViewStateMaxAgeMetric) {
 func RegisterQV(registry *prometheus.Registry) {
 	registry.MustRegister(QVViewStateTotal)
 	registry.MustRegister(QVViewTransitionTotal)
+	registry.MustRegister(QVViewReadyPercentBucket)
 	registry.MustRegister(QVViewStateMaxAgeSeconds)
 }
