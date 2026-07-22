@@ -342,6 +342,7 @@ type commonConfig struct {
 	PreferIPv6LocalIP ParamItem `refreshable:"false"`
 
 	SyncTaskPoolReleaseTimeoutSeconds ParamItem `refreshable:"true"`
+	NodeSchedulerMaxConcurrency       ParamItem `refreshable:"false"`
 
 	EnabledOptimizeExpr               ParamItem `refreshable:"true"`
 	EnableDriverPrefetch              ParamItem `refreshable:"true"`
@@ -1383,6 +1384,15 @@ If enabled, IPv6 ULA/global addresses will be prioritized ahead of IPv4.`,
 		Export:       true,
 	}
 	p.SyncTaskPoolReleaseTimeoutSeconds.Init(base.mgr)
+
+	p.NodeSchedulerMaxConcurrency = ParamItem{
+		Key:          "common.nodeScheduler.maxConcurrency",
+		Version:      "3.0",
+		DefaultValue: strconv.Itoa(hardware.GetCPUNum()),
+		Doc:          "Maximum number of tasks executed concurrently by the process-level node scheduler. Must be greater than zero.",
+		Export:       true,
+	}
+	p.NodeSchedulerMaxConcurrency.Init(base.mgr)
 
 	p.EnabledOptimizeExpr = ParamItem{
 		Key:          "common.enabledOptimizeExpr",
