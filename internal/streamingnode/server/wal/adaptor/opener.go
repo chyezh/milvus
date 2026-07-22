@@ -31,6 +31,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/registry"
 	"github.com/milvus-io/milvus/pkg/v3/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
@@ -261,6 +262,7 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 	param.ShardManager = shards.RecoverShardManager(&shards.ShardManagerRecoverParam{
 		ChannelInfo:            param.ChannelInfo,
 		WAL:                    param.WAL,
+		Scheduler:              nodescheduler.Get(),
 		InitialRecoverSnapshot: snapshot,
 		TxnManager:             param.TxnManager,
 	})

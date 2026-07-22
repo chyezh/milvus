@@ -27,10 +27,18 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/rmq"
+	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
+
+func newTestNodeScheduler(t *testing.T) nodescheduler.Scheduler {
+	t.Helper()
+	scheduler := nodescheduler.New(4)
+	t.Cleanup(scheduler.Close)
+	return scheduler
+}
 
 func TestShardManager(t *testing.T) {
 	paramtable.Init()
@@ -53,6 +61,7 @@ func TestShardManager(t *testing.T) {
 	m := RecoverShardManager(&ShardManagerRecoverParam{
 		ChannelInfo: channel,
 		WAL:         f,
+		Scheduler:   newTestNodeScheduler(t),
 		InitialRecoverSnapshot: &recovery.RecoverySnapshot{
 			VChannels: map[string]*streamingpb.VChannelMeta{
 				"v1": {
@@ -328,6 +337,7 @@ func TestShardManagerAssignSegmentTextUsesV3CreateSegmentWhenStorageV3Enabled(t 
 	m := RecoverShardManager(&ShardManagerRecoverParam{
 		ChannelInfo: channel,
 		WAL:         f,
+		Scheduler:   newTestNodeScheduler(t),
 		InitialRecoverSnapshot: &recovery.RecoverySnapshot{
 			VChannels: map[string]*streamingpb.VChannelMeta{
 				"v_text": {
@@ -401,6 +411,7 @@ func TestShardManagerSchemaVersionCheck(t *testing.T) {
 	m := RecoverShardManager(&ShardManagerRecoverParam{
 		ChannelInfo: channel,
 		WAL:         f,
+		Scheduler:   newTestNodeScheduler(t),
 		InitialRecoverSnapshot: &recovery.RecoverySnapshot{
 			VChannels:          map[string]*streamingpb.VChannelMeta{},
 			SegmentAssignments: map[int64]*streamingpb.SegmentAssignmentMeta{},
@@ -659,6 +670,7 @@ func newShardManagerWithGrowingSegment(t *testing.T, collID, partID, segID int64
 	return RecoverShardManager(&ShardManagerRecoverParam{
 		ChannelInfo: channel,
 		WAL:         f,
+		Scheduler:   newTestNodeScheduler(t),
 		InitialRecoverSnapshot: &recovery.RecoverySnapshot{
 			VChannels: map[string]*streamingpb.VChannelMeta{
 				"v_alter": {
