@@ -236,11 +236,11 @@ It does not shard the persisted DataView payload.
 Suggested keys:
 
 ```
-dv/{collectionID}/{streamingVersion}/{compactVersion}
+datacoord-meta/dataview/{collectionID}/versions/{streamingVersion}/{compactVersion}
 ```
 
-`{S}/{C}` stores a serialized `DataViewOfCollection` membership snapshot. The
-durable record may omit
+`versions/{S}/{C}` stores a serialized `DataViewOfCollection` membership
+snapshot. The durable record may omit
 `transform_start_after_timetick`; that value can be recomputed when
 DataCoord publishes a snapshot or syncs StreamingNode.
 
@@ -249,7 +249,7 @@ Persistence and visibility semantics:
 - A DataView version is durably complete if and only if its full snapshot key
   exists.
 - The latest persisted DataView is the maximum DataVersion under the
-  collection's DataView prefix.
+  collection's `versions/*` prefix.
 - QueryCoord-visible DataView snapshots may lag the latest persisted snapshot
   when DataCoord marks a snapshot as temporarily unavailable in memory, for
   example during the current flush plus sort-compaction path.
@@ -270,9 +270,9 @@ Normal flow:
 1. Apply and persist segment metadata mutation.
 2. Build the next full DataView snapshot from the previous resident DataView
    plus the DataCoord event.
-3. Persist DataView `{D'}`.
+3. Persist `versions/{D'}`.
 4. If the new DataView is available for QueryView construction, notify
-   QueryCoord after DataView `{D'}` is persisted.
+   QueryCoord after `versions/{D'}` is persisted.
 ```
 
 This is not a strict atomic transaction between segment metadata and DataView.

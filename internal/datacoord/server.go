@@ -39,6 +39,7 @@ import (
 	"github.com/milvus-io/milvus/internal/datacoord/broker"
 	"github.com/milvus-io/milvus/internal/datacoord/session"
 	"github.com/milvus-io/milvus/internal/datacoord/task"
+	"github.com/milvus-io/milvus/internal/dataview"
 	datanodeclient "github.com/milvus-io/milvus/internal/distributed/datanode/client"
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
 	"github.com/milvus-io/milvus/internal/kv/tikv"
@@ -639,16 +640,14 @@ func (s *Server) initMeta(chunkManager storage.ChunkManager) error {
 		var err error
 		catalog := datacoord.NewCatalog(s.kv, chunkManager.RootPath(), s.metaRootPath)
 		dataViewStore := &dataViewSegmentStore{}
-		dataViewRecoveryCh := make(chan struct {
+		type dataViewRecoveryResult struct {
 			manager DataViewManager
 			err     error
-		}, 1)
+		}
+		dataViewRecoveryCh := make(chan dataViewRecoveryResult, 1)
 		go func() {
-			manager, err := recoverDataViewManager(s.ctx, catalog, dataViewStore)
-			dataViewRecoveryCh <- struct {
-				manager DataViewManager
-				err     error
-			}{manager: manager, err: err}
+			manager, err := dataview.RecoverManager(s.ctx, catalog, dataViewStore)
+			dataViewRecoveryCh <- dataViewRecoveryResult{manager: manager, err: err}
 		}()
 		s.meta, err = newMeta(s.ctx, catalog, chunkManager, s.broker)
 		dataViewRecovery := <-dataViewRecoveryCh

@@ -47,10 +47,6 @@ func newDataViewManager(catalog metastore.DataCoordCatalog, meta *meta) DataView
 	return dataview.NewManager(catalog, &dataViewSegmentStore{meta: meta})
 }
 
-func recoverDataViewManager(ctx context.Context, catalog dataview.RecoveryCatalog, store *dataViewSegmentStore) (DataViewManager, error) {
-	return dataview.RecoverManager(ctx, catalog, store)
-}
-
 func (s *Server) CreateCollectionDataView(ctx context.Context, collectionID int64, vchannels []string) (*viewpb.DataVersion, error) {
 	if s.dataViewManager == nil {
 		return nil, nil

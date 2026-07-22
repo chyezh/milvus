@@ -186,6 +186,29 @@ func newDataViewTestSegment(collectionID, partitionID, segmentID int64, channel 
 	}
 }
 
+func newTestDataView(collectionID, streamingVersion, compactVersion int64, shards ...*viewpb.DataViewOfShard) *viewpb.DataViewOfCollection {
+	return &viewpb.DataViewOfCollection{
+		CollectionId: collectionID,
+		DataVersion: &viewpb.DataVersion{
+			StreamingVersion: streamingVersion,
+			CompactVersion:   compactVersion,
+		},
+		Shards: shards,
+	}
+}
+
+func newTestDataViewShard(vchannel string, partitionID int64, segmentIDs ...int64) *viewpb.DataViewOfShard {
+	return &viewpb.DataViewOfShard{
+		Vchannel: vchannel,
+		Partitions: []*viewpb.DataViewOfPartition{
+			{
+				PartitionId: partitionID,
+				SegmentIds:  append([]int64(nil), segmentIDs...),
+			},
+		},
+	}
+}
+
 func findDataViewShard(view *viewpb.DataViewOfCollection, vchannel string) (*viewpb.DataViewOfShard, bool) {
 	for _, shard := range view.GetShards() {
 		if shard.GetVchannel() == vchannel {
@@ -819,30 +842,8 @@ func TestDataViewManagerRepairCollectionsUsesCatalogDataViews(t *testing.T) {
 	store.segments[200] = newDataViewTestSegment(2, 20, 200, "ch-2", 2000)
 
 	catalog.views = append(catalog.views,
-		&viewpb.DataViewOfCollection{
-			CollectionId: 1,
-			DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0},
-			Shards: []*viewpb.DataViewOfShard{
-				{
-					Vchannel: "ch-1",
-					Partitions: []*viewpb.DataViewOfPartition{
-						{PartitionId: 10, SegmentIds: []int64{100}},
-					},
-				},
-			},
-		},
-		&viewpb.DataViewOfCollection{
-			CollectionId: 2,
-			DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0},
-			Shards: []*viewpb.DataViewOfShard{
-				{
-					Vchannel: "ch-2",
-					Partitions: []*viewpb.DataViewOfPartition{
-						{PartitionId: 20, SegmentIds: []int64{200}},
-					},
-				},
-			},
-		},
+		newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
+		newTestDataView(2, 1, 0, newTestDataViewShard("ch-2", 20, 200)),
 	)
 
 	require.NoError(t, manager.RepairCollections(ctx, []int64{1}))
@@ -865,30 +866,8 @@ func TestRecoverManagerLoadsAllDataViewsWithoutSegmentMetaRepair(t *testing.T) {
 	ctx := context.Background()
 	catalog := &fakeDataViewCatalog{
 		views: []*viewpb.DataViewOfCollection{
-			{
-				CollectionId: 1,
-				DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0},
-				Shards: []*viewpb.DataViewOfShard{
-					{
-						Vchannel: "ch-1",
-						Partitions: []*viewpb.DataViewOfPartition{
-							{PartitionId: 10, SegmentIds: []int64{100}},
-						},
-					},
-				},
-			},
-			{
-				CollectionId: 2,
-				DataVersion:  &viewpb.DataVersion{StreamingVersion: 2, CompactVersion: 1},
-				Shards: []*viewpb.DataViewOfShard{
-					{
-						Vchannel: "ch-2",
-						Partitions: []*viewpb.DataViewOfPartition{
-							{PartitionId: 20, SegmentIds: []int64{200}},
-						},
-					},
-				},
-			},
+			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
+			newTestDataView(2, 2, 1, newTestDataViewShard("ch-2", 20, 200)),
 		},
 	}
 	store := &fakeDataViewSegmentStore{segments: make(map[int64]*Segment)}
@@ -910,18 +889,7 @@ func TestDataViewManagerRepairCollectionsAlignsSegmentMetaAfterRecover(t *testin
 	ctx := context.Background()
 	catalog := &fakeDataViewCatalog{
 		views: []*viewpb.DataViewOfCollection{
-			{
-				CollectionId: 1,
-				DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0},
-				Shards: []*viewpb.DataViewOfShard{
-					{
-						Vchannel: "ch-1",
-						Partitions: []*viewpb.DataViewOfPartition{
-							{PartitionId: 10, SegmentIds: []int64{100}},
-						},
-					},
-				},
-			},
+			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
 		},
 	}
 	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{

@@ -130,10 +130,10 @@ recovered query plan contain only the growing work node.
 
 SN-local persisted key format:
 
-- `streamingnode-meta/wal/{pchannel}/qv/{collectionID}/{replicaID}/{vchannelOffset}` — `QueryViewOfShard` proto.
+- `streamingnode-meta/wal/{pchannel}/query-view/{collectionID}/{replicaID}/{vchannel}/{streamingVersion}/{compactVersion}/{queryVersion}` — `QueryViewOfShard` proto.
 
-`vchannelOffset` is the shard index of the vchannel within the collection
-metadata. The full vchannel name and versions remain in the value, not the key.
+The key keeps the full vchannel name and the QueryView/DataView version tuple so
+multiple in-flight views for the same shard do not overwrite each other.
 
 ### 4.3 SN: Crash Recovery
 

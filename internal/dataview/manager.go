@@ -480,13 +480,19 @@ func (m *dataViewManager) RepairCollections(ctx context.Context, collectionIDs [
 
 func (m *dataViewManager) recoverFromDataViews(dataViews []*viewpb.DataViewOfCollection) {
 	viewsByCollection := make(map[int64][]*viewpb.DataViewOfCollection)
+	recoveredViews := make(map[int64][]*viewpb.DataViewOfCollection)
 	for _, view := range dataViews {
 		if view == nil {
 			continue
 		}
-		viewsByCollection[view.GetCollectionId()] = append(viewsByCollection[view.GetCollectionId()], view)
+		collectionID := view.GetCollectionId()
+		viewsByCollection[collectionID] = append(viewsByCollection[collectionID], view)
+		recoveredViews[collectionID] = append(recoveredViews[collectionID], canonicalDataViewClone(view))
 	}
-	m.setRecoveredViews(viewsByCollection)
+	m.mu.Lock()
+	m.recoveredAll = true
+	m.recoveredViews = recoveredViews
+	m.mu.Unlock()
 
 	collectionIDs := make([]int64, 0, len(viewsByCollection))
 	for collectionID := range viewsByCollection {
@@ -496,17 +502,6 @@ func (m *dataViewManager) recoverFromDataViews(dataViews []*viewpb.DataViewOfCol
 	for _, collectionID := range collectionIDs {
 		m.recoverCollectionFromDataViews(collectionID, viewsByCollection[collectionID])
 	}
-}
-
-func (m *dataViewManager) setRecoveredViews(viewsByCollection map[int64][]*viewpb.DataViewOfCollection) {
-	recoveredViews := make(map[int64][]*viewpb.DataViewOfCollection, len(viewsByCollection))
-	for collectionID, views := range viewsByCollection {
-		recoveredViews[collectionID] = cloneDataViews(views)
-	}
-	m.mu.Lock()
-	m.recoveredAll = true
-	m.recoveredViews = recoveredViews
-	m.mu.Unlock()
 }
 
 func (m *dataViewManager) recoveredDataViews(collectionID int64) ([]*viewpb.DataViewOfCollection, bool) {

@@ -49,12 +49,10 @@ ETCD persistence layer. Implemented in `internal/metastore/kv/queryview/kv_catal
 
 Persisted key format:
 
-- `qv/{collectionID}/{replicaID}/{vchannelOffset}` — `QueryViewOfShard` proto.
+- `coord/qv/{collectionID}/{replicaID}/{vchannel}/{streamingVersion}/{compactVersion}/{queryVersion}` — `QueryViewOfShard` proto.
 
-`vchannelOffset` is the shard index of the vchannel within the collection
-metadata, parsed from the vchannel name. The key intentionally stores the
-offset, not the full vchannel name or query/data versions. Versions remain in
-the `QueryViewOfShard` value.
+The key keeps the full vchannel name and the QueryView/DataView version tuple so
+multiple in-flight views for the same shard do not overwrite each other.
 
 ### 2.2 ReliableSyncer (existing)
 
