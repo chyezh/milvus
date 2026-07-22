@@ -2,7 +2,6 @@ package qnview
 
 import (
 	"context"
-	"sync"
 
 	"github.com/milvus-io/milvus/internal/querynodev2/segments"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
@@ -15,9 +14,6 @@ type QueryViewSegmentLoadScheduler struct {
 	scheduler nodescheduler.Scheduler
 	loader    PhysicalSegmentLoader
 	estimator SegmentResourceEstimator
-
-	mu      sync.Mutex
-	handles map[int64]nodescheduler.TaskHandle
 }
 
 func NewQueryViewSegmentLoadScheduler(meta QueryViewLoadMetadataProvider, loader PhysicalSegmentLoader, estimators ...SegmentResourceEstimator) *QueryViewSegmentLoadScheduler {
@@ -33,38 +29,15 @@ func newQueryViewSegmentLoadScheduler(scheduler nodescheduler.Scheduler, loader 
 		scheduler: scheduler,
 		loader:    loader,
 		estimator: estimator,
-		handles:   make(map[int64]nodescheduler.TaskHandle),
 	}
 }
 
 func (s *QueryViewSegmentLoadScheduler) Submit(task SegmentLoadTask) {
-	s.mu.Lock()
-	handle := s.scheduler.Submit(&segmentLoadSchedulerTask{scheduler: s, task: task})
-	s.handles[task.SegmentID] = handle
-	s.mu.Unlock()
+	s.scheduler.Submit(&segmentLoadSchedulerTask{scheduler: s, task: task})
 }
 
 func (s *QueryViewSegmentLoadScheduler) Update(task SegmentUpdateTask) {
-	segmentID := task.Snapshot.SegmentID
-	if segmentID == 0 {
-		segmentID = task.Segment.ID()
-	}
-
-	s.mu.Lock()
-	handle := s.scheduler.Submit(&segmentUpdateSchedulerTask{scheduler: s, task: task})
-	s.handles[segmentID] = handle
-	s.mu.Unlock()
-}
-
-func (s *QueryViewSegmentLoadScheduler) Cancel(segmentID int64) SegmentLoadTaskHandle {
-	s.mu.Lock()
-	handle := s.handles[segmentID]
-	delete(s.handles, segmentID)
-	s.mu.Unlock()
-	if handle != nil {
-		handle.Cancel()
-	}
-	return handle
+	s.scheduler.Submit(&segmentUpdateSchedulerTask{scheduler: s, task: task})
 }
 
 func (s *QueryViewSegmentLoadScheduler) load(ctx context.Context, task SegmentLoadTask) error {
@@ -148,8 +121,14 @@ type segmentLoadSchedulerTask struct {
 }
 
 func (t *segmentLoadSchedulerTask) Execute(ctx context.Context) error {
+	if t.task.OnFinished != nil {
+		defer t.task.OnFinished()
+	}
 	ctx, cancel := mergeTaskContext(ctx, t.task.Context)
 	defer cancel()
+	if ctx.Err() != nil {
+		return nil
+	}
 	return t.scheduler.load(ctx, t.task)
 }
 
@@ -182,6 +161,14 @@ func classifySegmentUpdate(current, next SegmentLoadInfoRevision) SegmentUpdateA
 	}
 	return SegmentUpdateReopen | SegmentUpdateLoadIndex
 }
+
+type schedulerTaskFunc func(context.Context) error
+
+func (f schedulerTaskFunc) Execute(ctx context.Context) error {
+	return f(ctx)
+}
+
+var _ nodescheduler.Task = schedulerTaskFunc(nil)
 
 func (s *QueryViewSegmentLoadScheduler) reserve(ctx context.Context, info *querypb.SegmentLoadInfo, collection CollectionRuntime) (ResourceReservation, error) {
 	if s.estimator == nil {

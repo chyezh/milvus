@@ -164,23 +164,31 @@ func (g *fakeTransformLogGuard) Release() {
 }
 
 type fakeQueryViewCollectionRuntimeManager struct {
-	mu          sync.Mutex
-	acquireView *qviews.QueryViewAtQueryNode
-	acquireErr  error
-	guard       *fakeCollectionRuntimeGuard
+	mu           sync.Mutex
+	acquireView  *qviews.QueryViewAtQueryNode
+	acquireErr   error
+	acquireErrs  []error
+	retryable    []bool
+	acquireCalls int
+	guard        *fakeCollectionRuntimeGuard
 }
 
-func (m *fakeQueryViewCollectionRuntimeManager) Acquire(_ context.Context, view *qviews.QueryViewAtQueryNode) (CollectionRuntimeGuard, error) {
+func (m *fakeQueryViewCollectionRuntimeManager) Acquire(_ context.Context, view *qviews.QueryViewAtQueryNode) (CollectionRuntimeGuard, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.acquireView = view
+	idx := m.acquireCalls
+	m.acquireCalls++
+	if idx < len(m.acquireErrs) && m.acquireErrs[idx] != nil {
+		return nil, idx < len(m.retryable) && m.retryable[idx], m.acquireErrs[idx]
+	}
 	if m.acquireErr != nil {
-		return nil, m.acquireErr
+		return nil, false, m.acquireErr
 	}
 	if m.guard == nil {
 		m.guard = &fakeCollectionRuntimeGuard{}
 	}
-	return m.guard, nil
+	return m.guard, false, nil
 }
 
 type fakeCollectionRuntimeGuard struct {
@@ -401,9 +409,8 @@ func (e *fakeSegmentResourceEstimator) Reserve(_ context.Context, info *querypb.
 }
 
 type fakeSegmentLoadScheduler struct {
-	tasks    []SegmentLoadTask
-	updates  []SegmentUpdateTask
-	canceled []int64
+	tasks   []SegmentLoadTask
+	updates []SegmentUpdateTask
 }
 
 func (s *fakeSegmentLoadScheduler) Submit(task SegmentLoadTask) {
@@ -414,9 +421,21 @@ func (s *fakeSegmentLoadScheduler) Update(task SegmentUpdateTask) {
 	s.updates = append(s.updates, task)
 }
 
-func (s *fakeSegmentLoadScheduler) Cancel(segmentID int64) SegmentLoadTaskHandle {
-	s.canceled = append(s.canceled, segmentID)
-	return nil
+func newTestQueryViewSegmentReadinessManager(t *testing.T, physical PhysicalSegmentManager, buffer TransformLogBuffer, collections ...QueryViewCollectionRuntimeManager) *QueryViewSegmentReadinessManager {
+	t.Helper()
+	scheduler := nodescheduler.New(4)
+	t.Cleanup(scheduler.Close)
+	return NewQueryViewSegmentReadinessManagerWithScheduler(scheduler, physical, buffer, collections...)
+}
+
+func newTestViewScopedPhysicalSegmentManager(t *testing.T, scheduler SegmentLoadScheduler, watchers ...SegmentLoadInfoWatcher) *ViewScopedPhysicalSegmentManager {
+	t.Helper()
+	nodeScheduler := nodescheduler.New(4)
+	t.Cleanup(nodeScheduler.Close)
+	if len(watchers) > 0 {
+		return NewViewScopedPhysicalSegmentManagerWithNodeSchedulerAndWatcher(nodeScheduler, scheduler, watchers[0])
+	}
+	return NewViewScopedPhysicalSegmentManagerWithNodeScheduler(nodeScheduler, scheduler)
 }
 
 type fakeSegmentLoadInfoWatcher struct {

@@ -100,8 +100,9 @@ func TestQueryViewSegmentLoadSchedulerCancelCancelsRunningLoad(t *testing.T) {
 	scheduler := newQueryViewSegmentLoadScheduler(nodeScheduler, loader)
 
 	failed := make(chan error, 1)
+	taskCtx, cancel := context.WithCancel(context.Background())
 	scheduler.Submit(SegmentLoadTask{
-		Context:         context.Background(),
+		Context:         taskCtx,
 		SegmentID:       1000,
 		Collection:      &fakeCollectionRuntimeGuard{collectionID: testCollectionID},
 		Snapshot:        testSegmentLoadSnapshot(1000, 10),
@@ -109,7 +110,7 @@ func TestQueryViewSegmentLoadSchedulerCancelCancelsRunningLoad(t *testing.T) {
 	})
 
 	<-started
-	scheduler.Cancel(1000)
+	cancel()
 	select {
 	case err := <-failed:
 		require.ErrorIs(t, err, context.Canceled)
