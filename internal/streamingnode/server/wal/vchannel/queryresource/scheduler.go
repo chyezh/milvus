@@ -8,8 +8,9 @@ import (
 )
 
 type resourceBuildTask struct {
-	build func(context.Context) (*QueryRuntime, error)
-	done  chan struct{}
+	build        func(context.Context) (*QueryRuntime, error)
+	doneCallback func()
+	done         chan struct{}
 
 	mu       sync.Mutex
 	finished bool
@@ -27,6 +28,9 @@ func newResourceBuildTask(build func(context.Context) (*QueryRuntime, error)) *r
 func (t *resourceBuildTask) Execute(ctx context.Context) error {
 	runtime, err := t.build(ctx)
 	t.finish(runtime, err)
+	if t.doneCallback != nil {
+		t.doneCallback()
+	}
 	return err
 }
 
@@ -56,11 +60,15 @@ type scheduledBuild struct {
 	handle nodescheduler.TaskHandle
 }
 
-func scheduleResourceBuild(scheduler nodescheduler.Scheduler, task *resourceBuildTask) *scheduledBuild {
-	return &scheduledBuild{
-		task:   task,
-		handle: scheduler.Submit(task),
+func scheduleResourceBuild(scheduler nodescheduler.Scheduler, task *resourceBuildTask, callbacks ...func(*scheduledBuild)) *scheduledBuild {
+	scheduled := &scheduledBuild{task: task}
+	task.doneCallback = func() {
+		if len(callbacks) > 0 && callbacks[0] != nil {
+			callbacks[0](scheduled)
+		}
 	}
+	scheduled.handle = scheduler.Submit(task)
+	return scheduled
 }
 
 func (t *scheduledBuild) Cancel() {
@@ -74,3 +82,12 @@ func (t *scheduledBuild) Result() (*QueryRuntime, error) {
 }
 
 var _ nodescheduler.Task = (*resourceBuildTask)(nil)
+
+type resourceCallbackTask func()
+
+func (t resourceCallbackTask) Execute(context.Context) error {
+	t()
+	return nil
+}
+
+var _ nodescheduler.Task = resourceCallbackTask(nil)

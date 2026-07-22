@@ -17,7 +17,6 @@ func (m *VChannelRecoveryModule) AcquireQueryResource(req snview.AcquireResource
 	m.mu.Lock()
 	m.queryResources.AcquireLocked(req, m.queryWALViewLocked)
 	m.mu.Unlock()
-	go m.queryResources.WaitReady(req.Key, req.OnReady)
 }
 
 func (m *VChannelRecoveryModule) ReleaseQueryResource(req snview.ReleaseResource) {

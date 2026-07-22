@@ -3,6 +3,7 @@ package queryresource
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -14,6 +15,95 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
+
+func TestManagerBuildNotifiesAllCurrentRefsWithoutWaiterGoroutines(t *testing.T) {
+	scheduler := nodescheduler.New(1)
+	defer scheduler.Close()
+	dispatcher := NewDispatcher(1)
+	defer dispatcher.Close()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	manager := NewManager(Config{
+		Scheduler:  scheduler,
+		Dispatcher: dispatcher,
+		Builders: []QueryRuntimeModuleBuilder{gatedQueryRuntimeModuleBuilder{
+			started: started,
+			release: release,
+		}},
+	})
+
+	ready1 := make(chan struct{})
+	ready2 := make(chan struct{})
+	meta1, key1 := testManagerQueryViewMetaAndKey(1)
+	manager.AcquireLocked(snview.AcquireResource{Key: key1, Meta: meta1, OnReady: func() { close(ready1) }}, testManagerViewBuilder)
+	<-started
+
+	meta2, key2 := testManagerQueryViewMetaAndKey(2)
+	manager.AcquireLocked(snview.AcquireResource{Key: key2, Meta: meta2, OnReady: func() { close(ready2) }}, testManagerViewBuilder)
+	close(release)
+
+	require.Eventually(t, func() bool {
+		select {
+		case <-ready1:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+	require.Eventually(t, func() bool {
+		select {
+		case <-ready2:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+}
+
+func TestManagerReleaseQueuesDroppedCallbackInNodeScheduler(t *testing.T) {
+	scheduler := nodescheduler.New(1)
+	defer scheduler.Close()
+	manager := NewManager(Config{Scheduler: scheduler})
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	blocker := scheduler.Submit(queryResourceTaskFunc(func(context.Context) error {
+		close(started)
+		<-release
+		return nil
+	}))
+	<-started
+
+	dropped := make(chan struct{})
+	manager.Release(snview.ReleaseResource{
+		Key:       qviews.QueryViewKey{},
+		OnDropped: func() { close(dropped) },
+	})
+	select {
+	case <-dropped:
+		t.Fatal("drop callback bypassed node scheduler")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	close(release)
+	require.NoError(t, blocker.Wait(context.Background()))
+	require.Eventually(t, func() bool {
+		select {
+		case <-dropped:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+}
 
 func TestManagerCloseWaitsForRunningBuild(t *testing.T) {
 	scheduler := nodescheduler.New(1)
@@ -125,3 +215,53 @@ func (*blockingQueryRuntimeModule) ApplyLiveEvent(context.Context, walview.VChan
 func (*blockingQueryRuntimeModule) Advance(qviews.DataVersion) {}
 
 func (*blockingQueryRuntimeModule) Close() {}
+
+type gatedQueryRuntimeModuleBuilder struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b gatedQueryRuntimeModuleBuilder) NewRuntime() (QueryRuntimeModule, error) {
+	return &gatedQueryRuntimeModule{started: b.started, release: b.release}, nil
+}
+
+type gatedQueryRuntimeModule struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (m *gatedQueryRuntimeModule) Prepare(ctx context.Context, _ walview.VChannelWALView) error {
+	close(m.started)
+	select {
+	case <-m.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (*gatedQueryRuntimeModule) ApplyLiveEvent(context.Context, walview.VChannelResourceEvent) {}
+
+func (*gatedQueryRuntimeModule) Advance(qviews.DataVersion) {}
+
+func (*gatedQueryRuntimeModule) Close() {}
+
+func testManagerQueryViewMetaAndKey(streamingVersion int64) (*viewpb.QueryViewMeta, qviews.QueryViewKey) {
+	version := qviews.QueryViewVersion{
+		DataVersion:  qviews.DataVersion{StreamingVersion: streamingVersion},
+		QueryVersion: 1,
+	}
+	meta := &viewpb.QueryViewMeta{
+		ReplicaId: 1,
+		Vchannel:  "v1",
+		Version:   version.IntoProto(),
+	}
+	return meta, qviews.QueryViewKey{
+		ShardID:          qviews.ShardID{ReplicaID: 1, VChannel: "v1"},
+		QueryViewVersion: version,
+	}
+}
+
+func testManagerViewBuilder(*viewpb.QueryViewMeta) (walview.VChannelWALView, bool) {
+	return walview.VChannelWALView{}, true
+}

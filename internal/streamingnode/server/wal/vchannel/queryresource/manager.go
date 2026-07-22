@@ -30,12 +30,15 @@ type Manager struct {
 	dispatcher       *Dispatcher
 	loadInfoProvider LoadInfoProvider
 
-	refs    map[qviews.QueryViewKey]struct{}
+	refs    map[qviews.QueryViewKey]queryViewRef
 	runtime *QueryRuntime
 	task    *scheduledBuild
 	err     error
-	changed chan struct{}
 	closed  bool
+}
+
+type queryViewRef struct {
+	onReady func()
 }
 
 func NewManager(config Config) *Manager {
@@ -44,8 +47,7 @@ func NewManager(config Config) *Manager {
 		scheduler:        config.Scheduler,
 		dispatcher:       config.Dispatcher,
 		loadInfoProvider: config.LoadInfoProvider,
-		refs:             make(map[qviews.QueryViewKey]struct{}),
-		changed:          make(chan struct{}),
+		refs:             make(map[qviews.QueryViewKey]queryViewRef),
 	}
 }
 
@@ -56,18 +58,24 @@ func (m *Manager) AcquireLocked(req snview.AcquireResource, build ViewBuilder) {
 	if req.Meta == nil || req.Meta.GetVersion() == nil || req.Meta.GetVersion().GetDataVersion() == nil {
 		panic("query view meta version is nil")
 	}
+	var notifyReady bool
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.closed {
+		m.mu.Unlock()
 		panic("vchannel query resource is closed")
 	}
 	if _, ok := m.refs[req.Key]; !ok {
 		m.assertAcquireMonotonic(req.Key.QueryViewVersion.DataVersion)
-		m.refs[req.Key] = struct{}{}
+		m.refs[req.Key] = queryViewRef{onReady: req.OnReady}
 		if m.runtime == nil && m.task == nil {
 			m.startBuildLocked(req.Meta, build)
+		} else if m.runtime != nil && m.task == nil && m.err == nil {
+			notifyReady = true
 		}
-		m.notifyChangedLocked()
+	}
+	m.mu.Unlock()
+	if notifyReady {
+		m.submitReady(req.Key, req.OnReady)
 	}
 }
 
@@ -81,7 +89,6 @@ func (m *Manager) Release(req snview.ReleaseResource) {
 	m.mu.Lock()
 	if _, ok := m.refs[req.Key]; ok {
 		delete(m.refs, req.Key)
-		m.notifyChangedLocked()
 		advance, hasAdvance = minQueryViewDataVersion(m.refs)
 		advanceRuntime = m.runtime
 	}
@@ -93,13 +100,9 @@ func (m *Manager) Release(req snview.ReleaseResource) {
 	if hasAdvance && advanceRuntime != nil {
 		advanceRuntime.Advance(advance)
 	}
-	go func() {
-		if req.OnDropped != nil {
-			req.OnDropped()
-		}
-	}()
 	cancelTask(task)
 	closeRuntime(runtime)
+	m.submitCallback(req.OnDropped)
 }
 
 func (m *Manager) QueryRuntime(key qviews.QueryViewKey) (*QueryRuntime, bool) {
@@ -123,9 +126,8 @@ func (m *Manager) Close() {
 	}
 	m.mu.Lock()
 	m.closed = true
-	m.notifyChangedLocked()
 	runtime, task := m.takeRuntimeLocked()
-	m.refs = make(map[qviews.QueryViewKey]struct{})
+	m.refs = make(map[qviews.QueryViewKey]queryViewRef)
 	m.mu.Unlock()
 
 	cancelTask(task)
@@ -133,38 +135,6 @@ func (m *Manager) Close() {
 		_, _ = task.Result()
 	}
 	closeRuntime(runtime)
-}
-
-func (m *Manager) WaitReady(key qviews.QueryViewKey, onReady func()) {
-	for {
-		runtime, task, changed, ok := m.runtimeForRef(key)
-		if !ok {
-			return
-		}
-		if changed != nil {
-			<-changed
-			continue
-		}
-		if task != nil {
-			_, err := task.Result()
-			if err != nil {
-				if errors.Is(err, context.Canceled) {
-					return
-				}
-				panic(errors.Wrap(err, "wait query runtime initialization"))
-			}
-			continue
-		}
-		advance, ok := m.oldestDataVersionForRef(key)
-		if !ok {
-			return
-		}
-		runtime.Advance(advance)
-		if onReady != nil && m.hasRef(key) {
-			onReady()
-		}
-		return
-	}
 }
 
 func (m *Manager) ObserveEvent(ctx context.Context, event walview.VChannelResourceEvent) {
@@ -210,9 +180,8 @@ func (m *Manager) startBuildLocked(meta *viewpb.QueryViewMeta, build ViewBuilder
 		return runtime, nil
 	})
 	m.runtime = runtime
-	m.task = scheduleResourceBuild(m.scheduler, task)
+	m.task = scheduleResourceBuild(m.scheduler, task, m.finishBuild)
 	m.err = nil
-	go m.finishBuild(m.task)
 }
 
 func (m *Manager) resolveLoadInfo(ctx context.Context, view walview.VChannelWALView) (walview.VChannelWALView, error) {
@@ -247,7 +216,8 @@ func (m *Manager) newModules() []QueryRuntimeModule {
 }
 
 func (m *Manager) finishBuild(task *scheduledBuild) {
-	runtime, err := task.Result()
+	runtime, err := task.task.Result()
+	ready := make(map[qviews.QueryViewKey]func())
 	m.mu.Lock()
 	if m.task != task {
 		m.mu.Unlock()
@@ -264,8 +234,10 @@ func (m *Manager) finishBuild(task *scheduledBuild) {
 	} else {
 		m.runtime = runtime
 		m.err = nil
+		for key, ref := range m.refs {
+			ready[key] = ref.onReady
+		}
 	}
-	m.notifyChangedLocked()
 	if len(m.refs) == 0 {
 		runtime, task = m.takeRuntimeLocked()
 	} else {
@@ -275,37 +247,50 @@ func (m *Manager) finishBuild(task *scheduledBuild) {
 
 	cancelTask(task)
 	closeRuntime(runtime)
+	for key, onReady := range ready {
+		m.notifyReady(key, onReady)
+	}
 }
 
-func (m *Manager) runtimeForRef(key qviews.QueryViewKey) (*QueryRuntime, *scheduledBuild, <-chan struct{}, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.refs[key]; !ok {
-		return nil, nil, nil, false
+func (m *Manager) submitReady(key qviews.QueryViewKey, onReady func()) {
+	if onReady == nil {
+		return
 	}
-	if m.err != nil && !errors.Is(m.err, context.Canceled) {
-		panic(errors.Wrap(m.err, "query runtime initialization failed"))
-	}
-	if m.runtime == nil && m.task == nil {
-		return nil, nil, m.changed, true
-	}
-	return m.runtime, m.task, nil, true
+	m.submitCallback(func() {
+		m.notifyReady(key, onReady)
+	})
 }
 
-func (m *Manager) oldestDataVersionForRef(key qviews.QueryViewKey) (qviews.DataVersion, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if _, ok := m.refs[key]; !ok {
-		return qviews.DataVersion{}, false
+func (m *Manager) notifyReady(key qviews.QueryViewKey, onReady func()) {
+	if onReady == nil {
+		return
 	}
-	return minQueryViewDataVersion(m.refs)
-}
-
-func (m *Manager) hasRef(key qviews.QueryViewKey) bool {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	_, ok := m.refs[key]
-	return ok
+	runtime := m.runtime
+	advance, hasAdvance := minQueryViewDataVersion(m.refs)
+	ready := ok && runtime != nil && m.task == nil && m.err == nil
+	m.mu.Unlock()
+	if !ready {
+		return
+	}
+	if hasAdvance {
+		runtime.Advance(advance)
+	}
+	onReady()
+}
+
+func (m *Manager) submitCallback(callback func()) {
+	if callback == nil {
+		return
+	}
+	m.mu.Lock()
+	if m.scheduler == nil {
+		m.scheduler = nodescheduler.Get()
+	}
+	scheduler := m.scheduler
+	m.mu.Unlock()
+	scheduler.Submit(resourceCallbackTask(callback))
 }
 
 func (m *Manager) takeRuntimeLocked() (*QueryRuntime, *scheduledBuild) {
@@ -314,9 +299,4 @@ func (m *Manager) takeRuntimeLocked() (*QueryRuntime, *scheduledBuild) {
 	m.task = nil
 	m.err = nil
 	return runtime, task
-}
-
-func (m *Manager) notifyChangedLocked() {
-	close(m.changed)
-	m.changed = make(chan struct{})
 }
