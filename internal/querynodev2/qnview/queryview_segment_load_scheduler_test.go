@@ -5,6 +5,7 @@ package qnview
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,7 +15,14 @@ import (
 	"github.com/milvus-io/milvus/internal/querynodev2/segments"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
+
+type qnTaskFunc func(context.Context) error
+
+func (f qnTaskFunc) Execute(ctx context.Context) error {
+	return f(ctx)
+}
 
 func testSegmentLoadSnapshot(segmentID int64, partitionID int64, indexes ...*indexpb.IndexInfo) SegmentLoadInfoSnapshot {
 	return SegmentLoadInfoSnapshot{
@@ -30,6 +38,122 @@ func testSegmentLoadSnapshot(segmentID int64, partitionID int64, indexes ...*ind
 	}
 }
 
+func TestQueryViewSegmentLoadSchedulerUsesNodeSchedulerQueue(t *testing.T) {
+	nodeScheduler := nodescheduler.New(1)
+	t.Cleanup(nodeScheduler.Close)
+
+	blockStarted := make(chan struct{})
+	release := make(chan struct{})
+	blocker := nodeScheduler.Submit(qnTaskFunc(func(context.Context) error {
+		close(blockStarted)
+		<-release
+		return nil
+	}))
+	<-blockStarted
+
+	loaded := make(chan struct{})
+	loader := &fakePhysicalLoader{
+		loadFn: func(info *querypb.SegmentLoadInfo, collection CollectionRuntime) (TransformSegment, error) {
+			return &fakeTransformSegment{id: info.GetSegmentID()}, nil
+		},
+	}
+	scheduler := newQueryViewSegmentLoadScheduler(nodeScheduler, loader)
+	scheduler.Submit(SegmentLoadTask{
+		SegmentID:  1000,
+		Collection: &fakeCollectionRuntimeGuard{collectionID: testCollectionID},
+		Snapshot:   testSegmentLoadSnapshot(1000, 10),
+		OnLoaded:   func(TransformSegment) { close(loaded) },
+	})
+
+	assert.Never(t, func() bool {
+		select {
+		case <-loaded:
+			return true
+		default:
+			return false
+		}
+	}, 20*time.Millisecond, time.Millisecond)
+	close(release)
+	require.NoError(t, blocker.Wait(context.Background()))
+	require.Eventually(t, func() bool {
+		select {
+		case <-loaded:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, time.Millisecond)
+}
+
+func TestQueryViewSegmentLoadSchedulerCancelCancelsRunningLoad(t *testing.T) {
+	nodeScheduler := nodescheduler.New(1)
+	t.Cleanup(nodeScheduler.Close)
+
+	started := make(chan struct{})
+	loader := &fakePhysicalLoader{
+		loadFnWithContext: func(ctx context.Context, info *querypb.SegmentLoadInfo, collection CollectionRuntime) (TransformSegment, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	scheduler := newQueryViewSegmentLoadScheduler(nodeScheduler, loader)
+
+	failed := make(chan error, 1)
+	scheduler.Submit(SegmentLoadTask{
+		Context:         context.Background(),
+		SegmentID:       1000,
+		Collection:      &fakeCollectionRuntimeGuard{collectionID: testCollectionID},
+		Snapshot:        testSegmentLoadSnapshot(1000, 10),
+		OnUnrecoverable: func(err error) { failed <- err },
+	})
+
+	<-started
+	scheduler.Cancel(1000)
+	select {
+	case err := <-failed:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for canceled load")
+	}
+}
+
+func TestQueryViewSegmentLoadSchedulerUpdateFailureInvokesCallbackOnce(t *testing.T) {
+	nodeScheduler := nodescheduler.New(1)
+	t.Cleanup(nodeScheduler.Close)
+
+	loader := &fakePhysicalLoader{
+		updateFn: func(segment TransformSegment, collection CollectionRuntime, snapshot SegmentLoadInfoSnapshot, action SegmentUpdateAction) error {
+			return errors.New("update failed")
+		},
+	}
+	scheduler := newQueryViewSegmentLoadScheduler(nodeScheduler, loader)
+	failed := make(chan error, 1)
+	var calls atomic.Int32
+	scheduler.Update(SegmentUpdateTask{
+		Segment:    &fakeTransformSegment{id: 1000},
+		Collection: &fakeCollectionRuntimeGuard{collectionID: testCollectionID},
+		Current:    SegmentLoadInfoRevision{Revision: 1},
+		Snapshot: SegmentLoadInfoSnapshot{
+			SegmentID: 1000,
+			Revision:  SegmentLoadInfoRevision{Revision: 2},
+			LoadInfo:  &querypb.SegmentLoadInfo{SegmentID: 1000, CollectionID: testCollectionID},
+		},
+		OnFailed: func(err error) {
+			calls.Add(1)
+			failed <- err
+		},
+	})
+
+	select {
+	case err := <-failed:
+		require.ErrorContains(t, err, "update failed")
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for update failure")
+	}
+	assert.Equal(t, int32(1), calls.Load())
+}
+
 func TestQueryViewSegmentLoadScheduler_ReservesAndReleasesResourceAroundLoad(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
 	runtime := &fakeCollectionRuntimeGuard{collectionID: testCollectionID}
@@ -42,7 +166,7 @@ func TestQueryViewSegmentLoadScheduler_ReservesAndReleasesResourceAroundLoad(t *
 		},
 	}
 	estimator := &fakeSegmentResourceEstimator{}
-	scheduler := NewQueryViewSegmentLoadScheduler(provider, loader, estimator)
+	scheduler := newTestQueryViewSegmentLoadScheduler(t, provider, loader, estimator)
 
 	loadedCh := make(chan TransformSegment, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -81,7 +205,7 @@ func TestQueryViewSegmentLoadScheduler_UsesSegmentLoadInfoFromWatchSnapshot(t *t
 			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID()}, nil
 		},
 	}
-	scheduler := NewQueryViewSegmentLoadScheduler(provider, loader)
+	scheduler := newTestQueryViewSegmentLoadScheduler(t, provider, loader)
 
 	loadedCh := make(chan TransformSegment, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -121,7 +245,7 @@ func TestQueryViewSegmentLoadScheduler_LoadsFromSnapshotWithoutMetadataLookup(t 
 			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID()}, nil
 		},
 	}
-	scheduler := NewQueryViewSegmentLoadScheduler(provider, loader)
+	scheduler := newTestQueryViewSegmentLoadScheduler(t, provider, loader)
 
 	loadedCh := make(chan TransformSegment, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -158,7 +282,7 @@ func TestQueryViewSegmentLoadScheduler_RequiresWatchSnapshotForLoad(t *testing.T
 		loadInfos: []*querypb.SegmentLoadInfo{{SegmentID: 1000, PartitionID: 10}},
 	}
 	loader := &fakePhysicalLoader{}
-	scheduler := NewQueryViewSegmentLoadScheduler(provider, loader)
+	scheduler := newTestQueryViewSegmentLoadScheduler(t, provider, loader)
 
 	unrecoverableCh := make(chan error, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -194,7 +318,7 @@ func TestQueryViewSegmentLoadScheduler_UsesTaskTransformStartTick(t *testing.T) 
 			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID(), startAfter: 10}, nil
 		},
 	}
-	scheduler := NewQueryViewSegmentLoadScheduler(provider, loader)
+	scheduler := newTestQueryViewSegmentLoadScheduler(t, provider, loader)
 
 	loadedCh := make(chan TransformSegment, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -232,7 +356,7 @@ func TestQueryViewSegmentLoadScheduler_PreservesReadableSegment(t *testing.T) {
 			}, nil
 		},
 	}
-	scheduler := NewQueryViewSegmentLoadScheduler(provider, loader)
+	scheduler := newTestQueryViewSegmentLoadScheduler(t, provider, loader)
 
 	loadedCh := make(chan TransformSegment, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -272,7 +396,7 @@ func TestQueryViewSegmentLoadScheduler_UpdatesCollectionIndexMetaBeforeLoad(t *t
 			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID()}, nil
 		},
 	}
-	scheduler := NewQueryViewSegmentLoadScheduler(provider, loader)
+	scheduler := newTestQueryViewSegmentLoadScheduler(t, provider, loader)
 
 	loadedCh := make(chan TransformSegment, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -305,7 +429,7 @@ func TestQueryViewSegmentLoadScheduler_IndexMetaUpdateFailureSkipsReserveAndLoad
 	}
 	loader := &fakePhysicalLoader{}
 	estimator := &fakeSegmentResourceEstimator{}
-	scheduler := NewQueryViewSegmentLoadScheduler(provider, loader, estimator)
+	scheduler := newTestQueryViewSegmentLoadScheduler(t, provider, loader, estimator)
 
 	unrecoverableCh := make(chan error, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -338,7 +462,7 @@ func TestQueryViewSegmentLoadScheduler_ReservationFailureSkipsPhysicalLoad(t *te
 	}
 	loader := &fakePhysicalLoader{}
 	estimator := &fakeSegmentResourceEstimator{err: errors.New("resource rejected")}
-	scheduler := NewQueryViewSegmentLoadScheduler(provider, loader, estimator)
+	scheduler := newTestQueryViewSegmentLoadScheduler(t, provider, loader, estimator)
 
 	unrecoverableCh := make(chan error, 1)
 	scheduler.Submit(SegmentLoadTask{
@@ -365,7 +489,7 @@ func TestQueryViewSegmentLoadScheduler_ReservationFailureSkipsPhysicalLoad(t *te
 
 func TestQueryViewSegmentLoadScheduler_UpdateClassifiesRevisionChange(t *testing.T) {
 	loader := &fakePhysicalLoader{}
-	scheduler := NewQueryViewSegmentLoadScheduler(&fakeQueryViewLoadMetadataProvider{}, loader)
+	scheduler := newTestQueryViewSegmentLoadScheduler(t, &fakeQueryViewLoadMetadataProvider{}, loader)
 	updatedCh := make(chan SegmentLoadInfoRevision, 1)
 
 	current := SegmentLoadInfoRevision{Revision: 10}
@@ -399,7 +523,7 @@ func TestQueryViewSegmentLoadScheduler_UpdateClassifiesRevisionChange(t *testing
 
 func TestQueryViewSegmentLoadScheduler_UpdateClassifiesDataChange(t *testing.T) {
 	loader := &fakePhysicalLoader{}
-	scheduler := NewQueryViewSegmentLoadScheduler(&fakeQueryViewLoadMetadataProvider{}, loader)
+	scheduler := newTestQueryViewSegmentLoadScheduler(t, &fakeQueryViewLoadMetadataProvider{}, loader)
 	updatedCh := make(chan SegmentLoadInfoRevision, 1)
 
 	current := SegmentLoadInfoRevision{Revision: 10}

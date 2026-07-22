@@ -546,7 +546,7 @@ func TestViewScopedPhysicalSegmentManager_AcquireWatchesSnapshotsLoadsAndReports
 		},
 	}
 	watcher := &fakeSegmentLoadInfoWatcher{}
-	mgr := NewViewScopedPhysicalSegmentManagerWithSchedulerAndWatcher(NewQueryViewSegmentLoadScheduler(provider, loader), watcher)
+	mgr := NewViewScopedPhysicalSegmentManagerWithSchedulerAndWatcher(newTestQueryViewSegmentLoadScheduler(t, provider, loader), watcher)
 
 	loadedCh := make(chan []TransformSegment, 3)
 	mgr.Acquire(AcquirePhysicalSegments{
@@ -583,7 +583,7 @@ func TestViewScopedPhysicalSegmentManager_LoadsMissingSegmentsIndependently(t *t
 		},
 	}
 	watcher := &fakeSegmentLoadInfoWatcher{}
-	mgr := NewViewScopedPhysicalSegmentManagerWithSchedulerAndWatcher(NewQueryViewSegmentLoadScheduler(provider, loader), watcher)
+	mgr := NewViewScopedPhysicalSegmentManagerWithSchedulerAndWatcher(newTestQueryViewSegmentLoadScheduler(t, provider, loader), watcher)
 
 	loadedCh := make(chan []TransformSegment, 2)
 	mgr.Acquire(AcquirePhysicalSegments{
@@ -616,7 +616,7 @@ func TestViewScopedPhysicalSegmentManager_ReleaseAfterLastView(t *testing.T) {
 		},
 	}
 	watcher := &fakeSegmentLoadInfoWatcher{}
-	mgr := NewViewScopedPhysicalSegmentManagerWithSchedulerAndWatcher(NewQueryViewSegmentLoadScheduler(provider, loader), watcher)
+	mgr := NewViewScopedPhysicalSegmentManagerWithSchedulerAndWatcher(newTestQueryViewSegmentLoadScheduler(t, provider, loader), watcher)
 
 	ready1 := make(chan []TransformSegment, 3)
 	ready2 := make(chan []TransformSegment, 1)
@@ -650,7 +650,7 @@ func TestViewScopedPhysicalSegmentManager_MissingIndexDoesNotBlockAcquire(t *tes
 	provider := &fakeQueryViewLoadMetadataProvider{}
 	loader := &fakePhysicalLoader{loaded: &fakeTransformSegment{id: 1000, partitionID: 10}}
 	watcher := &fakeSegmentLoadInfoWatcher{}
-	mgr := NewViewScopedPhysicalSegmentManagerWithSchedulerAndWatcher(NewQueryViewSegmentLoadScheduler(provider, loader), watcher)
+	mgr := NewViewScopedPhysicalSegmentManagerWithSchedulerAndWatcher(newTestQueryViewSegmentLoadScheduler(t, provider, loader), watcher)
 
 	loadedCh := make(chan []TransformSegment, 1)
 	unrecoverableCh := make(chan struct{}, 1)

@@ -5,6 +5,7 @@ package qnview
 import (
 	"context"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
@@ -15,6 +16,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
 type fakeTransformSegment struct {
@@ -313,25 +315,29 @@ func (p *fakeQueryViewLoadMetadataProvider) GetQueryViewLoadInfo(context.Context
 }
 
 type fakePhysicalLoader struct {
-	mu              sync.Mutex
-	loadInfos       []*querypb.SegmentLoadInfo
-	collections     []CollectionRuntime
-	updateSnapshots []SegmentLoadInfoSnapshot
-	updateActions   []SegmentUpdateAction
-	released        []int64
-	loaded          TransformSegment
-	loadErr         error
-	updateErr       error
-	releaseErr      error
-	loadFn          func(info *querypb.SegmentLoadInfo, collection CollectionRuntime) (TransformSegment, error)
-	updateFn        func(segment TransformSegment, collection CollectionRuntime, snapshot SegmentLoadInfoSnapshot, action SegmentUpdateAction) error
+	mu                sync.Mutex
+	loadInfos         []*querypb.SegmentLoadInfo
+	collections       []CollectionRuntime
+	updateSnapshots   []SegmentLoadInfoSnapshot
+	updateActions     []SegmentUpdateAction
+	released          []int64
+	loaded            TransformSegment
+	loadErr           error
+	updateErr         error
+	releaseErr        error
+	loadFn            func(info *querypb.SegmentLoadInfo, collection CollectionRuntime) (TransformSegment, error)
+	loadFnWithContext func(context.Context, *querypb.SegmentLoadInfo, CollectionRuntime) (TransformSegment, error)
+	updateFn          func(segment TransformSegment, collection CollectionRuntime, snapshot SegmentLoadInfoSnapshot, action SegmentUpdateAction) error
 }
 
-func (l *fakePhysicalLoader) Load(_ context.Context, info *querypb.SegmentLoadInfo, collection CollectionRuntime) (TransformSegment, error) {
+func (l *fakePhysicalLoader) Load(ctx context.Context, info *querypb.SegmentLoadInfo, collection CollectionRuntime) (TransformSegment, error) {
 	l.mu.Lock()
 	l.loadInfos = append(l.loadInfos, info)
 	l.collections = append(l.collections, collection)
 	l.mu.Unlock()
+	if l.loadFnWithContext != nil {
+		return l.loadFnWithContext(ctx, info, collection)
+	}
 	if l.loadFn != nil {
 		return l.loadFn(info, collection)
 	}
@@ -355,6 +361,17 @@ func (l *fakePhysicalLoader) Release(_ context.Context, segmentIDs []int64) erro
 	defer l.mu.Unlock()
 	l.released = append(l.released, segmentIDs...)
 	return l.releaseErr
+}
+
+func newTestQueryViewSegmentLoadScheduler(
+	t *testing.T,
+	_ QueryViewLoadMetadataProvider,
+	loader PhysicalSegmentLoader,
+	estimators ...SegmentResourceEstimator,
+) *QueryViewSegmentLoadScheduler {
+	nodeScheduler := nodescheduler.New(4)
+	t.Cleanup(nodeScheduler.Close)
+	return newQueryViewSegmentLoadScheduler(nodeScheduler, loader, estimators...)
 }
 
 type fakeResourceReservation struct {
