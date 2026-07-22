@@ -775,6 +775,10 @@ service StreamingNodeManagerService {
     // collect balance info and health check.
     rpc CollectStatus(StreamingNodeManagerCollectStatusRequest)
         returns (StreamingNodeManagerCollectStatusResponse) {};
+
+    // ValidateRuntime validates runtime-dependent artifacts on a streaming node.
+    rpc ValidateRuntime(StreamingNodeManagerValidateRuntimeRequest)
+        returns (StreamingNodeManagerValidateRuntimeResponse) {};
 }
 
 // StreamingManagerAssignRequest is the request message of Assign RPC.
@@ -814,6 +818,27 @@ message StreamingNodeROWALMetrics {
 
 message StreamingNodeManagerCollectStatusResponse {
     StreamingNodeMetrics metrics = 1;
+}
+
+message StreamingNodeRuntimeAnalyzerInfo {
+    string params = 1;
+    string field = 2;
+    string name = 3;
+}
+
+message StreamingNodeRuntimeAnalyzerValidation {
+    repeated StreamingNodeRuntimeAnalyzerInfo analyzer_infos = 1;
+}
+
+message StreamingNodeManagerValidateRuntimeRequest {
+    oneof validation {
+        StreamingNodeRuntimeAnalyzerValidation analyzer = 1;
+    }
+}
+
+message StreamingNodeManagerValidateRuntimeResponse {
+    common.Status status = 1;
+    repeated int64 resource_ids = 2;
 }
 
 ///
