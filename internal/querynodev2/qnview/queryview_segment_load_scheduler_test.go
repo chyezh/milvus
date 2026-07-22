@@ -24,6 +24,21 @@ func (f qnTaskFunc) Execute(ctx context.Context) error {
 	return f(ctx)
 }
 
+type capturedNodeScheduler struct {
+	tasks []nodescheduler.Task
+}
+
+func (s *capturedNodeScheduler) Submit(task nodescheduler.Task) nodescheduler.TaskHandle {
+	s.tasks = append(s.tasks, task)
+	return noopNodeTaskHandle{}
+}
+
+type noopNodeTaskHandle struct{}
+
+func (noopNodeTaskHandle) Cancel() {}
+
+func (noopNodeTaskHandle) Wait(context.Context) error { return nil }
+
 func testSegmentLoadSnapshot(segmentID int64, partitionID int64, indexes ...*indexpb.IndexInfo) SegmentLoadInfoSnapshot {
 	return SegmentLoadInfoSnapshot{
 		CollectionID: testCollectionID,
@@ -119,18 +134,20 @@ func TestQueryViewSegmentLoadSchedulerCancelCancelsRunningLoad(t *testing.T) {
 	}
 }
 
-func TestQueryViewSegmentLoadSchedulerUpdateFailureInvokesCallbackOnce(t *testing.T) {
-	nodeScheduler := nodescheduler.New(1)
-	t.Cleanup(nodeScheduler.Close)
-
+func TestQueryViewSegmentLoadSchedulerUpdateRetriesSameTaskWithErrDelay(t *testing.T) {
+	nodeScheduler := &capturedNodeScheduler{}
+	var attempts atomic.Int32
 	loader := &fakePhysicalLoader{
 		updateFn: func(segment TransformSegment, collection CollectionRuntime, snapshot SegmentLoadInfoSnapshot, action SegmentUpdateAction) error {
-			return errors.New("update failed")
+			if attempts.Add(1) == 1 {
+				return errors.New("update failed")
+			}
+			return nil
 		},
 	}
 	scheduler := newQueryViewSegmentLoadScheduler(nodeScheduler, loader)
-	failed := make(chan error, 1)
-	var calls atomic.Int32
+	var updated atomic.Int32
+	var failed atomic.Int32
 	scheduler.Update(SegmentUpdateTask{
 		Segment:    &fakeTransformSegment{id: 1000},
 		Collection: &fakeCollectionRuntimeGuard{collectionID: testCollectionID},
@@ -140,19 +157,21 @@ func TestQueryViewSegmentLoadSchedulerUpdateFailureInvokesCallbackOnce(t *testin
 			Revision:  SegmentLoadInfoRevision{Revision: 2},
 			LoadInfo:  &querypb.SegmentLoadInfo{SegmentID: 1000, CollectionID: testCollectionID},
 		},
-		OnFailed: func(err error) {
-			calls.Add(1)
-			failed <- err
-		},
+		OnUpdated: func(SegmentLoadInfoRevision) { updated.Add(1) },
+		OnFailed:  func(error) { failed.Add(1) },
 	})
 
-	select {
-	case err := <-failed:
-		require.ErrorContains(t, err, "update failed")
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for update failure")
-	}
-	assert.Equal(t, int32(1), calls.Load())
+	require.Len(t, nodeScheduler.tasks, 1)
+	task := nodeScheduler.tasks[0]
+	require.ErrorIs(t, task.Execute(context.Background()), nodescheduler.ErrDelay)
+	assert.Equal(t, int32(0), updated.Load())
+	assert.Equal(t, int32(0), failed.Load())
+
+	require.NoError(t, task.Execute(context.Background()))
+	assert.Equal(t, int32(2), attempts.Load())
+	assert.Equal(t, int32(1), updated.Load())
+	assert.Equal(t, int32(0), failed.Load())
+	require.Len(t, nodeScheduler.tasks, 1, "retry must reuse the same scheduled task")
 }
 
 func TestQueryViewSegmentLoadScheduler_ReservesAndReleasesResourceAroundLoad(t *testing.T) {

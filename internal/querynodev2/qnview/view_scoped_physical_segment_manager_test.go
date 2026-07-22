@@ -4,9 +4,11 @@ package qnview
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -430,6 +432,49 @@ func TestViewScopedPhysicalSegmentManager_AppliesLoadInfoSnapshotAndCoalescesUpd
 		return len(scheduler.updates) == 2
 	}, time.Second, 10*time.Millisecond)
 	require.Equal(t, uint64(11), scheduler.updates[1].Snapshot.Revision.Revision)
+}
+
+func TestViewScopedPhysicalSegmentManager_KeepsNewerSnapshotPendingWhileUpdateTaskRetries(t *testing.T) {
+	nodeScheduler := &capturedNodeScheduler{}
+	var attempts atomic.Int32
+	loader := &fakePhysicalLoader{
+		updateFn: func(TransformSegment, CollectionRuntime, SegmentLoadInfoSnapshot, SegmentUpdateAction) error {
+			if attempts.Add(1) == 1 {
+				return errors.New("update failed")
+			}
+			return nil
+		},
+	}
+	segmentScheduler := newQueryViewSegmentLoadScheduler(nodeScheduler, loader)
+	managerScheduler := nodescheduler.New(1)
+	t.Cleanup(managerScheduler.Close)
+	mgr := NewViewScopedPhysicalSegmentManagerWithNodeScheduler(managerScheduler, segmentScheduler)
+
+	meta := buildHandlerTestMeta(1)
+	view := &viewpb.QueryViewOfQueryNode{NodeId: 1, Partitions: []*viewpb.QueryViewOfPartition{{PartitionId: 10, SegmentIds: []int64{1000}}}}
+	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
+	runtime := &fakeCollectionRuntimeGuard{collectionID: testCollectionID}
+	mgr.views[key] = &viewRef{segments: map[int64]int64{1000: 10}}
+	mgr.segments[1000] = &physicalSegmentState{
+		segment:      &fakeTransformSegment{id: 1000, partitionID: 10},
+		refs:         map[qviews.QueryViewKey]struct{}{key: {}},
+		requests:     map[qviews.QueryViewKey]segmentLoadRequest{key: {meta: meta, collection: runtime}},
+		revision:     SegmentLoadInfoRevision{Revision: 1},
+		collectionID: testCollectionID,
+	}
+
+	mgr.ApplyLoadInfoSnapshot(context.Background(), SegmentLoadInfoSnapshot{SegmentID: 1000, Revision: SegmentLoadInfoRevision{Revision: 10}})
+	mgr.ApplyLoadInfoSnapshot(context.Background(), SegmentLoadInfoSnapshot{SegmentID: 1000, Revision: SegmentLoadInfoRevision{Revision: 11}})
+	require.Len(t, nodeScheduler.tasks, 1)
+
+	current := nodeScheduler.tasks[0]
+	require.ErrorIs(t, current.Execute(context.Background()), nodescheduler.ErrDelay)
+	require.Len(t, nodeScheduler.tasks, 1)
+
+	require.NoError(t, current.Execute(context.Background()))
+	require.Len(t, nodeScheduler.tasks, 2)
+	next := nodeScheduler.tasks[1].(*segmentUpdateSchedulerTask)
+	assert.Equal(t, uint64(11), next.task.Snapshot.Revision.Revision)
 }
 
 func TestViewScopedPhysicalSegmentManager_WatchesInitialSnapshotUntilLastRelease(t *testing.T) {

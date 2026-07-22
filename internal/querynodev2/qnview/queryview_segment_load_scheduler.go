@@ -98,15 +98,9 @@ func (s *QueryViewSegmentLoadScheduler) update(ctx context.Context, task Segment
 		return nil
 	}
 	if err := updateCollectionIndexMeta(ctx, task.Collection, task.Snapshot.IndexInfos); err != nil {
-		if task.OnFailed != nil {
-			task.OnFailed(err)
-		}
 		return err
 	}
 	if err := s.loader.Update(ctx, task.Segment, task.Collection, task.Snapshot, action); err != nil {
-		if task.OnFailed != nil {
-			task.OnFailed(err)
-		}
 		return err
 	}
 	if task.OnUpdated != nil {
@@ -140,7 +134,24 @@ type segmentUpdateSchedulerTask struct {
 func (t *segmentUpdateSchedulerTask) Execute(ctx context.Context) error {
 	ctx, cancel := mergeTaskContext(ctx, t.task.Context)
 	defer cancel()
-	return t.scheduler.update(ctx, t.task)
+	if ctx.Err() != nil {
+		t.fail(ctx.Err())
+		return nil
+	}
+	if err := t.scheduler.update(ctx, t.task); err != nil {
+		if ctx.Err() != nil {
+			t.fail(ctx.Err())
+			return nil
+		}
+		return nodescheduler.ErrDelay
+	}
+	return nil
+}
+
+func (t *segmentUpdateSchedulerTask) fail(err error) {
+	if t.task.OnFailed != nil {
+		t.task.OnFailed(err)
+	}
 }
 
 func mergeTaskContext(schedulerCtx context.Context, taskCtx context.Context) (context.Context, context.CancelFunc) {

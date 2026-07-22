@@ -3,7 +3,6 @@ package qnview
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/cockroachdb/errors"
 	"google.golang.org/protobuf/proto"
@@ -385,7 +384,7 @@ func (m *ViewScopedPhysicalSegmentManager) nextSegmentUpdateLocked(ctx context.C
 			m.completeSegmentUpdate(segmentID, revision)
 		},
 		OnFailed: func(error) {
-			m.retrySegmentUpdate(ctx, snapshot)
+			m.failSegmentUpdate(segmentID)
 		},
 	}, true
 }
@@ -413,19 +412,12 @@ func (m *ViewScopedPhysicalSegmentManager) completeSegmentUpdate(segmentID int64
 	}
 }
 
-func (m *ViewScopedPhysicalSegmentManager) retrySegmentUpdate(ctx context.Context, snapshot SegmentLoadInfoSnapshot) {
+func (m *ViewScopedPhysicalSegmentManager) failSegmentUpdate(segmentID int64) {
 	m.mu.Lock()
-	if state := m.segments[snapshot.SegmentID]; state != nil {
+	if state := m.segments[segmentID]; state != nil {
 		state.updating = false
 	}
 	m.mu.Unlock()
-	go func() {
-		select {
-		case <-time.After(time.Second):
-			m.ApplyLoadInfoSnapshot(ctx, snapshot)
-		case <-ctx.Done():
-		}
-	}()
 }
 
 func (m *ViewScopedPhysicalSegmentManager) failPhysicalSegmentLoad(segmentID int64, err error) ([]func(), []segmentLoadSubmission) {
