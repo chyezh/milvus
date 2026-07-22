@@ -660,5 +660,7 @@ func max(a, b uint64) uint64 {
 	return b
 }
 
-var _ moduleapi.Module = (*VChannelRecoveryModule)(nil)
-var _ moduleapi.DataFrontierProvider = (*VChannelRecoveryModule)(nil)
+var (
+	_ moduleapi.Module               = (*VChannelRecoveryModule)(nil)
+	_ moduleapi.DataFrontierProvider = (*VChannelRecoveryModule)(nil)
+)

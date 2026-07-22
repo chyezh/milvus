@@ -328,8 +328,10 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 	})
 }
 
-var _ moduleapi.Module = (*PChannelRecoveryManager)(nil)
-var _ moduleapi.DataFrontierProvider = (*PChannelRecoveryManager)(nil)
-var _ wal.TransformLogStreamManager = (*PChannelRecoveryManager)(nil)
-var _ snview.StreamingNodeResourceManager = (*PChannelRecoveryManager)(nil)
-var _ snview.QueryRuntimeProvider = (*PChannelRecoveryManager)(nil)
+var (
+	_ moduleapi.Module                    = (*PChannelRecoveryManager)(nil)
+	_ moduleapi.DataFrontierProvider      = (*PChannelRecoveryManager)(nil)
+	_ wal.TransformLogStreamManager       = (*PChannelRecoveryManager)(nil)
+	_ snview.StreamingNodeResourceManager = (*PChannelRecoveryManager)(nil)
+	_ snview.QueryRuntimeProvider         = (*PChannelRecoveryManager)(nil)
+)

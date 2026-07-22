@@ -5,13 +5,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
-	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
-	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
@@ -543,7 +543,8 @@ func newAckPreconditionMessage(t *testing.T, builder interface{ MustBuildMutable
 
 func newBroadcastAckMessage(t *testing.T, builder interface {
 	MustBuildBroadcast() message.BroadcastMutableMessage
-}) message.ImmutableMessage {
+},
+) message.ImmutableMessage {
 	t.Helper()
 	msgs := builder.MustBuildBroadcast().
 		WithBroadcastID(1).

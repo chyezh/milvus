@@ -228,6 +228,8 @@ func (t *broadcastAckTask) Execute(ctx context.Context) error {
 	return nil
 }
 
-var _ moduleapi.Module = (*broadcastAckModule)(nil)
-var _ walcheckpoint.Barrier = (*broadcastAckBarrier)(nil)
-var _ nodescheduler.Task = (*broadcastAckTask)(nil)
+var (
+	_ moduleapi.Module      = (*broadcastAckModule)(nil)
+	_ walcheckpoint.Barrier = (*broadcastAckBarrier)(nil)
+	_ nodescheduler.Task    = (*broadcastAckTask)(nil)
+)
