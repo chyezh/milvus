@@ -19,6 +19,16 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
+type channelSegmentLoadScheduler struct {
+	tasks chan SegmentLoadTask
+}
+
+func (s *channelSegmentLoadScheduler) Submit(task SegmentLoadTask) {
+	s.tasks <- task
+}
+
+func (s *channelSegmentLoadScheduler) Update(SegmentUpdateTask) {}
+
 func TestViewScopedPhysicalSegmentManager_SubmitsSegmentLoadTasks(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
 	meta.TransformStartAfterTimetick = 99
@@ -111,7 +121,7 @@ func TestViewScopedPhysicalSegmentManager_ReleaseCompletesForQueuedCanceledLoad(
 func TestViewScopedPhysicalSegmentManager_ReleaseCompletesFromTaskFinishedCallback(t *testing.T) {
 	nodeScheduler := nodescheduler.New(1)
 	t.Cleanup(nodeScheduler.Close)
-	segmentScheduler := &fakeSegmentLoadScheduler{}
+	segmentScheduler := &channelSegmentLoadScheduler{tasks: make(chan SegmentLoadTask, 1)}
 	mgr := NewViewScopedPhysicalSegmentManagerWithNodeScheduler(nodeScheduler, segmentScheduler)
 
 	meta := buildHandlerTestMeta(1)
@@ -126,8 +136,12 @@ func TestViewScopedPhysicalSegmentManager_ReleaseCompletesFromTaskFinishedCallba
 		OnLoaded:        func([]TransformSegment) { t.Fatal("unexpected loaded") },
 		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable") },
 	})
-	require.Eventually(t, func() bool { return len(segmentScheduler.tasks) == 1 }, time.Second, time.Millisecond)
-	task := segmentScheduler.tasks[0]
+	var task SegmentLoadTask
+	select {
+	case task = <-segmentScheduler.tasks:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for segment load task")
+	}
 
 	dropped := make(chan struct{})
 	mgr.Release(ReleaseSegments{Key: key, OnDropped: func() { close(dropped) }})
