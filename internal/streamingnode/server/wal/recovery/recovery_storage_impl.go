@@ -21,7 +21,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls"
-	scheduler "github.com/milvus-io/milvus/pkg/v3/syncutil/preconditioned"
+	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/replicateutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/syncutil"
@@ -83,6 +83,12 @@ func WithQueryViewLoadInfoProvider(provider queryresource.LoadInfoProvider) Reco
 	}
 }
 
+func WithNodeScheduler(scheduler nodescheduler.Scheduler) RecoveryStorageOption {
+	return func(r *recoveryStorageImpl) {
+		r.nodeScheduler = scheduler
+	}
+}
+
 func initialCheckpointFromLastTimeTickMessage(lastTimeTickMessage message.ImmutableMessage) *utility.WALCheckpoint {
 	point := utility.WALConsumeCheckpoint{
 		MessageID: lastTimeTickMessage.LastConfirmedMessageID(),
@@ -109,13 +115,16 @@ func newRecoveryStorage(channel types.PChannelInfo, cp *utility.WALCheckpoint, o
 		gracefulClosed:         false,
 		metrics:                newRecoveryStorageMetrics(channel),
 	}
-	rs.taskScheduler = scheduler.New(context.Background())
 	if cp != nil {
 		rs.installCheckpointManager(cp)
 	}
 	for _, opt := range opts {
 		opt(rs)
 	}
+	if rs.nodeScheduler == nil {
+		rs.nodeScheduler = nodescheduler.Get()
+	}
+	rs.taskScheduler = newScopedTaskScheduler(rs.nodeScheduler)
 	return rs
 }
 
@@ -133,7 +142,8 @@ type recoveryStorageImpl struct {
 	metaObservedCheckpoint utility.WALConsumeCheckpoint
 	vchannelManager        *vchannel.PChannelRecoveryManager
 	modules                []moduleapi.Module
-	taskScheduler          *scheduler.Scheduler
+	nodeScheduler          nodescheduler.Scheduler
+	taskScheduler          *scopedTaskScheduler
 	dirtyCounter           int // records the message count since last persist snapshot.
 	moduleDirty            bool
 	// used to trigger the recovery persist operation.
@@ -227,9 +237,6 @@ func (r *recoveryStorageImpl) NotifyBarrierUpdated() {
 	r.checkpointManager.TryAdvanceMetaCheckpoint()
 	r.checkpointManager.TryAdvanceDataCheckpoint()
 	r.notifyPersist()
-	if r.taskScheduler != nil {
-		r.taskScheduler.Notify()
-	}
 }
 
 func (r *recoveryStorageImpl) NotifyModuleUpdated(moduleapi.ModuleName) {
@@ -237,9 +244,6 @@ func (r *recoveryStorageImpl) NotifyModuleUpdated(moduleapi.ModuleName) {
 	r.moduleDirty = true
 	r.mu.Unlock()
 	r.notifyPersist()
-	if r.taskScheduler != nil {
-		r.taskScheduler.Notify()
-	}
 }
 
 // Metrics gets the metrics of the wal.
