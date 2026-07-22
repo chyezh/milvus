@@ -56,7 +56,7 @@ func (s *QueryViewSegmentLoadScheduler) Update(task SegmentUpdateTask) {
 	s.mu.Unlock()
 }
 
-func (s *QueryViewSegmentLoadScheduler) Cancel(segmentID int64) {
+func (s *QueryViewSegmentLoadScheduler) Cancel(segmentID int64) SegmentLoadTaskHandle {
 	s.mu.Lock()
 	handle := s.handles[segmentID]
 	delete(s.handles, segmentID)
@@ -64,6 +64,7 @@ func (s *QueryViewSegmentLoadScheduler) Cancel(segmentID int64) {
 	if handle != nil {
 		handle.Cancel()
 	}
+	return handle
 }
 
 func (s *QueryViewSegmentLoadScheduler) load(ctx context.Context, task SegmentLoadTask) error {

@@ -173,7 +173,11 @@ type PhysicalSegmentLoader interface {
 type SegmentLoadScheduler interface {
 	Submit(task SegmentLoadTask)
 	Update(task SegmentUpdateTask)
-	Cancel(segmentID int64)
+	Cancel(segmentID int64) SegmentLoadTaskHandle
+}
+
+type SegmentLoadTaskHandle interface {
+	Wait(ctx context.Context) error
 }
 
 type SegmentResourceEstimator interface {

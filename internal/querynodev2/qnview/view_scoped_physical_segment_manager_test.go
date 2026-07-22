@@ -14,6 +14,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
 func TestViewScopedPhysicalSegmentManager_SubmitsSegmentLoadTasks(t *testing.T) {
@@ -54,6 +55,66 @@ func TestViewScopedPhysicalSegmentManager_SubmitsSegmentLoadTasks(t *testing.T) 
 	require.Eventually(t, func() bool {
 		return len(loadedCh) == 2
 	}, time.Second, 10*time.Millisecond)
+}
+
+func TestViewScopedPhysicalSegmentManager_ReleaseCompletesForQueuedCanceledLoad(t *testing.T) {
+	nodeScheduler := nodescheduler.New(1)
+	t.Cleanup(nodeScheduler.Close)
+
+	blockStarted := make(chan struct{})
+	releaseBlocker := make(chan struct{})
+	blocker := nodeScheduler.Submit(qnTaskFunc(func(context.Context) error {
+		close(blockStarted)
+		<-releaseBlocker
+		return nil
+	}))
+	<-blockStarted
+
+	segmentScheduler := newQueryViewSegmentLoadScheduler(nodeScheduler, &fakePhysicalLoader{})
+	mgr := NewViewScopedPhysicalSegmentManagerWithScheduler(segmentScheduler)
+	meta := buildHandlerTestMeta(1)
+	view := &viewpb.QueryViewOfQueryNode{
+		NodeId:     1,
+		Partitions: []*viewpb.QueryViewOfPartition{{PartitionId: 10, SegmentIds: []int64{1000}}},
+	}
+	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
+	mgr.Acquire(AcquirePhysicalSegments{
+		Key:        key,
+		Meta:       meta,
+		View:       view,
+		Collection: &fakeCollectionRuntimeGuard{collectionID: testCollectionID},
+		OnLoaded: func([]TransformSegment) {
+			t.Fatal("unexpected loaded segment")
+		},
+		OnUnrecoverable: func() {
+			t.Fatal("unexpected unrecoverable notification")
+		},
+	})
+
+	require.Eventually(t, func() bool {
+		segmentScheduler.mu.Lock()
+		defer segmentScheduler.mu.Unlock()
+		return len(segmentScheduler.handles) == 1
+	}, time.Second, time.Millisecond)
+
+	dropped := make(chan struct{})
+	mgr.Release(ReleaseSegments{
+		Key:       key,
+		OnDropped: func() { close(dropped) },
+	})
+	require.Eventually(t, func() bool {
+		segmentScheduler.mu.Lock()
+		defer segmentScheduler.mu.Unlock()
+		return len(segmentScheduler.handles) == 0
+	}, time.Second, time.Millisecond)
+	close(releaseBlocker)
+	require.NoError(t, blocker.Wait(context.Background()))
+
+	select {
+	case <-dropped:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for queued load cancellation")
+	}
 }
 
 func TestViewScopedPhysicalSegmentManager_PendsResourceFailureWhileOtherSegmentLoads(t *testing.T) {

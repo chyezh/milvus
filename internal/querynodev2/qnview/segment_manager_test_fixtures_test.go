@@ -414,8 +414,9 @@ func (s *fakeSegmentLoadScheduler) Update(task SegmentUpdateTask) {
 	s.updates = append(s.updates, task)
 }
 
-func (s *fakeSegmentLoadScheduler) Cancel(segmentID int64) {
+func (s *fakeSegmentLoadScheduler) Cancel(segmentID int64) SegmentLoadTaskHandle {
 	s.canceled = append(s.canceled, segmentID)
+	return nil
 }
 
 type fakeSegmentLoadInfoWatcher struct {
