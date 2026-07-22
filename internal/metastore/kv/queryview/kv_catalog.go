@@ -8,6 +8,8 @@ import (
 
 	"github.com/milvus-io/milvus/pkg/v3/kv"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/metautil"
 )
 
 const queryViewKeyPrefix = "qv/"
@@ -26,17 +28,16 @@ type QueryViewCatalog interface {
 
 type queryViewCatalog struct {
 	metaKV kv.MetaKv
-	prefix string // full prefix: {rootPrefix}{queryViewKeyPrefix}
+	prefix string
 }
 
 // NewQueryViewCatalog creates a new QueryViewCatalog backed by ETCD.
-// role identifies the component (e.g. "coord" or "streamingnode"), used as key prefix.
 // The provided MetaKv is wrapped with ReliableWriteMetaKv to ensure
 // write operations only fail on context cancellation.
-func NewQueryViewCatalog(metaKV kv.MetaKv, role string) QueryViewCatalog {
+func NewQueryViewCatalog(metaKV kv.MetaKv) QueryViewCatalog {
 	return &queryViewCatalog{
 		metaKV: kv.NewReliableWriteMetaKv(metaKV),
-		prefix: role + "/" + queryViewKeyPrefix,
+		prefix: queryViewKeyPrefix,
 	}
 }
 
@@ -65,14 +66,19 @@ func (c *queryViewCatalog) SaveQueryViews(ctx context.Context, views []*viewpb.Q
 	removals := make([]string, 0)
 
 	for _, view := range views {
-		key := c.buildKey(view.Meta)
+		key, err := c.buildKey(view.Meta)
+		if err != nil {
+			return err
+		}
 		if view.Meta.State == viewpb.QueryViewState_QueryViewStateDropped {
+			delete(saves, key)
 			removals = append(removals, key)
 		} else {
 			data, err := marshalForPersistence(view)
 			if err != nil {
 				return err
 			}
+			removals = removeString(removals, key)
 			saves[key] = string(data)
 		}
 	}
@@ -81,18 +87,21 @@ func (c *queryViewCatalog) SaveQueryViews(ctx context.Context, views []*viewpb.Q
 }
 
 // buildKey constructs the ETCD key for a query view.
-// Format: {prefix}{collection_id}/{replica_id}/{vchannel}/{sv}/{cv}/{qv}
-func (c *queryViewCatalog) buildKey(meta *viewpb.QueryViewMeta) string {
-	dv := meta.Version.DataVersion
-	return fmt.Sprintf("%s%d/%d/%s/%d/%d/%d",
+// Format: {prefix}{collection_id}/{replica_id}/{vchannel_offset}
+func (c *queryViewCatalog) buildKey(meta *viewpb.QueryViewMeta) (string, error) {
+	if meta == nil {
+		return "", merr.WrapErrServiceInternalMsg("query view meta is nil")
+	}
+	vchannelOffset, err := queryViewVChannelOffset(meta.GetCollectionId(), meta.GetVchannel())
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s%d/%d/%d",
 		c.prefix,
-		meta.CollectionId,
-		meta.ReplicaId,
-		meta.Vchannel,
-		dv.StreamingVersion,
-		dv.CompactVersion,
-		meta.Version.QueryVersion,
-	)
+		meta.GetCollectionId(),
+		meta.GetReplicaId(),
+		vchannelOffset,
+	), nil
 }
 
 // marshalForPersistence serializes a QueryViewOfShard for ETCD storage.
@@ -105,4 +114,31 @@ func marshalForPersistence(view *viewpb.QueryViewOfShard) ([]byte, error) {
 		}
 	}
 	return proto.Marshal(clone)
+}
+
+func queryViewVChannelOffset(collectionID int64, vchannel string) (int64, error) {
+	channel, err := metautil.ParseChannel(vchannel, metautil.NewDynChannelMapper())
+	if err != nil {
+		return 0, merr.WrapErrServiceInternalErr(err, "invalid query view vchannel %s", vchannel)
+	}
+	if channel.CollectionID() != collectionID {
+		return 0, merr.WrapErrServiceInternalMsg(
+			"query view vchannel %s collection %d does not match meta collection %d",
+			vchannel,
+			channel.CollectionID(),
+			collectionID,
+		)
+	}
+	return channel.ShardIdx(), nil
+}
+
+func removeString(values []string, value string) []string {
+	for idx := 0; idx < len(values); {
+		if values[idx] == value {
+			values = append(values[:idx], values[idx+1:]...)
+			continue
+		}
+		idx++
+	}
+	return values
 }

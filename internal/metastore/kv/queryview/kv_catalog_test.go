@@ -44,7 +44,7 @@ func newTestCatalog(t *testing.T) (QueryViewCatalog, map[string]string) {
 			return nil
 		}).Maybe()
 
-	catalog := NewQueryViewCatalog(kv, "test")
+	catalog := NewQueryViewCatalog(kv)
 	return catalog, kvStorage
 }
 
@@ -101,7 +101,7 @@ func TestQueryViewCatalog_SaveAndList(t *testing.T) {
 	catalog, _ := newTestCatalog(t)
 	ctx := context.Background()
 
-	view := makeTestView(1, 1, "v1", 1, 0, 1, viewpb.QueryViewState_QueryViewStatePreparing)
+	view := makeTestView(1, 1, "p1_1v0", 1, 0, 1, viewpb.QueryViewState_QueryViewStatePreparing)
 
 	// Save Preparing
 	err := catalog.SaveQueryViews(ctx, []*viewpb.QueryViewOfShard{view})
@@ -133,7 +133,7 @@ func TestQueryViewCatalog_StateTransition(t *testing.T) {
 	catalog, _ := newTestCatalog(t)
 	ctx := context.Background()
 
-	view := makeTestView(1, 1, "v1", 1, 0, 1, viewpb.QueryViewState_QueryViewStatePreparing)
+	view := makeTestView(1, 1, "p1_1v0", 1, 0, 1, viewpb.QueryViewState_QueryViewStatePreparing)
 
 	// Preparing
 	err := catalog.SaveQueryViews(ctx, []*viewpb.QueryViewOfShard{view})
@@ -164,7 +164,7 @@ func TestQueryViewCatalog_DroppedDeletesKey(t *testing.T) {
 	catalog, _ := newTestCatalog(t)
 	ctx := context.Background()
 
-	view := makeTestView(1, 1, "v1", 1, 0, 1, viewpb.QueryViewState_QueryViewStatePreparing)
+	view := makeTestView(1, 1, "p1_1v0", 1, 0, 1, viewpb.QueryViewState_QueryViewStatePreparing)
 
 	// Save then drop
 	err := catalog.SaveQueryViews(ctx, []*viewpb.QueryViewOfShard{view})
@@ -183,13 +183,13 @@ func TestQueryViewCatalog_AtomicDropAndCreate(t *testing.T) {
 	catalog, _ := newTestCatalog(t)
 	ctx := context.Background()
 
-	oldView := makeTestView(1, 1, "v1", 1, 0, 1, viewpb.QueryViewState_QueryViewStateDown)
+	oldView := makeTestView(1, 1, "p1_1v0", 1, 0, 1, viewpb.QueryViewState_QueryViewStateDown)
 	err := catalog.SaveQueryViews(ctx, []*viewpb.QueryViewOfShard{oldView})
 	assert.NoError(t, err)
 
 	// Atomic: drop old + create new
 	oldView.Meta.State = viewpb.QueryViewState_QueryViewStateDropped
-	newView := makeTestView(1, 1, "v1", 2, 0, 1, viewpb.QueryViewState_QueryViewStatePreparing)
+	newView := makeTestView(1, 1, "p2_1v0", 2, 0, 1, viewpb.QueryViewState_QueryViewStatePreparing)
 	err = catalog.SaveQueryViews(ctx, []*viewpb.QueryViewOfShard{oldView, newView})
 	assert.NoError(t, err)
 
@@ -204,28 +204,29 @@ func TestQueryViewCatalog_AtomicUnrecoverableAndCreate(t *testing.T) {
 	catalog, _ := newTestCatalog(t)
 	ctx := context.Background()
 
-	oldView := makeTestView(1, 1, "v1", 1, 0, 1, viewpb.QueryViewState_QueryViewStateUp)
+	oldView := makeTestView(1, 1, "p1_1v0", 1, 0, 1, viewpb.QueryViewState_QueryViewStateUp)
 	err := catalog.SaveQueryViews(ctx, []*viewpb.QueryViewOfShard{oldView})
 	assert.NoError(t, err)
 
 	// Atomic: mark old as Unrecoverable + create new Preparing
 	oldView.Meta.State = viewpb.QueryViewState_QueryViewStateUnrecoverable
-	newView := makeTestView(1, 1, "v1", 1, 0, 2, viewpb.QueryViewState_QueryViewStatePreparing)
+	newView := makeTestView(1, 1, "p2_1v0", 1, 0, 2, viewpb.QueryViewState_QueryViewStatePreparing)
 	err = catalog.SaveQueryViews(ctx, []*viewpb.QueryViewOfShard{oldView, newView})
 	assert.NoError(t, err)
 
 	views, err := catalog.ListQueryViews(ctx)
 	assert.NoError(t, err)
-	assert.Len(t, views, 2)
+	assert.Len(t, views, 1)
+	assert.Equal(t, int64(2), views[0].Meta.Version.QueryVersion)
 }
 
 func TestQueryViewCatalog_MultipleShards(t *testing.T) {
 	catalog, _ := newTestCatalog(t)
 	ctx := context.Background()
 
-	v1 := makeTestView(1, 1, "v1", 1, 0, 1, viewpb.QueryViewState_QueryViewStatePreparing)
-	v2 := makeTestView(1, 1, "v2", 1, 0, 1, viewpb.QueryViewState_QueryViewStateUp)
-	v3 := makeTestView(2, 1, "v1", 3, 0, 1, viewpb.QueryViewState_QueryViewStatePreparing)
+	v1 := makeTestView(1, 1, "p1_1v0", 1, 0, 1, viewpb.QueryViewState_QueryViewStatePreparing)
+	v2 := makeTestView(1, 1, "p2_1v1", 1, 0, 1, viewpb.QueryViewState_QueryViewStateUp)
+	v3 := makeTestView(2, 1, "p1_2v0", 3, 0, 1, viewpb.QueryViewState_QueryViewStatePreparing)
 
 	err := catalog.SaveQueryViews(ctx, []*viewpb.QueryViewOfShard{v1, v2, v3})
 	assert.NoError(t, err)
@@ -257,15 +258,38 @@ func TestBuildKey(t *testing.T) {
 		},
 	}
 
-	c := &queryViewCatalog{prefix: "coord/qv/"}
-	assert.Equal(t, "coord/qv/100/1/by-dev-rootcoord-dml_0_100v0/5/3/2", c.buildKey(meta))
+	c := &queryViewCatalog{prefix: "qv/"}
+	key, err := c.buildKey(meta)
+	assert.NoError(t, err)
+	assert.Equal(t, "qv/100/1/0", key)
 
-	c = &queryViewCatalog{prefix: "streamingnode/qv/"}
-	assert.Equal(t, "streamingnode/qv/100/1/by-dev-rootcoord-dml_0_100v0/5/3/2", c.buildKey(meta))
+	meta.Vchannel = "by-dev-rootcoord-dml_2_100v17"
+	key, err = c.buildKey(meta)
+	assert.NoError(t, err)
+	assert.Equal(t, "qv/100/1/17", key)
+}
+
+func TestQueryViewCatalog_AtomicDropAndCreateUsesShardKey(t *testing.T) {
+	catalog, storage := newTestCatalog(t)
+	ctx := context.Background()
+
+	oldView := makeTestView(1, 1, "p1_1v0", 1, 0, 1, viewpb.QueryViewState_QueryViewStateUp)
+	newView := makeTestView(1, 1, "p2_1v0", 2, 0, 1, viewpb.QueryViewState_QueryViewStatePreparing)
+
+	assert.NoError(t, catalog.SaveQueryViews(ctx, []*viewpb.QueryViewOfShard{oldView}))
+	assert.Contains(t, storage, "qv/1/1/0")
+
+	oldView.Meta.State = viewpb.QueryViewState_QueryViewStateDropped
+	assert.NoError(t, catalog.SaveQueryViews(ctx, []*viewpb.QueryViewOfShard{oldView, newView}))
+
+	views, err := catalog.ListQueryViews(ctx)
+	assert.NoError(t, err)
+	assert.Len(t, views, 1)
+	assert.Equal(t, int64(2), views[0].GetMeta().GetVersion().GetDataVersion().GetStreamingVersion())
 }
 
 func TestMarshalForPersistence_ClearsReadySegmentIds(t *testing.T) {
-	view := makeTestView(1, 1, "v1", 1, 0, 1, viewpb.QueryViewState_QueryViewStatePreparing)
+	view := makeTestView(1, 1, "p1_1v0", 1, 0, 1, viewpb.QueryViewState_QueryViewStatePreparing)
 
 	// Verify source has ready_segment_ids set
 	assert.NotEmpty(t, view.QueryNode[0].Partitions[0].ReadySegmentIds)

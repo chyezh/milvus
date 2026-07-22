@@ -2220,21 +2220,37 @@ func TestDataViewCatalog(t *testing.T) {
 	value, err := proto.Marshal(dataView)
 	assert.NoError(t, err)
 
-	txn.EXPECT().Save(ctx, buildDataViewVersionKey(100, 2, 1), string(value)).Return(nil).Once()
+	txn.EXPECT().Save(ctx, "dv/100/2/1", string(value)).Return(nil).Once()
 	assert.NoError(t, catalog.SaveDataView(ctx, dataView))
 
-	txn.EXPECT().WalkWithPrefix(ctx, buildDataViewVersionPrefix(100), mock.Anything, mock.Anything).
+	txn.EXPECT().WalkWithPrefix(ctx, "dv/100/", mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, _ string, _ int, f func([]byte, []byte) error) error {
-			return f([]byte(buildDataViewVersionKey(100, 2, 1)), value)
+			return f([]byte("dv/100/2/1"), value)
 		}).Once()
 	views, err := catalog.ListDataViews(ctx, 100)
 	assert.NoError(t, err)
 	assert.Len(t, views, 1)
 	assert.True(t, proto.Equal(dataView, views[0]))
 
-	txn.EXPECT().Remove(ctx, buildDataViewVersionKey(100, 2, 1)).Return(nil).Once()
+	otherDataView := proto.Clone(dataView).(*viewpb.DataViewOfCollection)
+	otherDataView.CollectionId = 200
+	otherDataView.DataVersion = &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0}
+	otherValue, err := proto.Marshal(otherDataView)
+	assert.NoError(t, err)
+	txn.EXPECT().WalkWithPrefix(ctx, "dv/", mock.Anything, mock.Anything).
+		RunAndReturn(func(_ context.Context, _ string, _ int, f func([]byte, []byte) error) error {
+			assert.NoError(t, f([]byte("dv/100/2/1"), value))
+			return f([]byte("dv/200/1/0"), otherValue)
+		}).Once()
+	allViews, err := catalog.ListAllDataViews(ctx)
+	assert.NoError(t, err)
+	assert.Len(t, allViews, 2)
+	assert.True(t, proto.Equal(dataView, allViews[0]))
+	assert.True(t, proto.Equal(otherDataView, allViews[1]))
+
+	txn.EXPECT().Remove(ctx, "dv/100/2/1").Return(nil).Once()
 	assert.NoError(t, catalog.DropDataView(ctx, 100, dataView.GetDataVersion()))
 
-	txn.EXPECT().RemoveWithPrefix(ctx, buildDataViewVersionPrefix(100)).Return(nil).Once()
+	txn.EXPECT().RemoveWithPrefix(ctx, "dv/100/").Return(nil).Once()
 	assert.NoError(t, catalog.DropDataViews(ctx, 100))
 }

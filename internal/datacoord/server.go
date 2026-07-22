@@ -638,21 +638,36 @@ func (s *Server) initMeta(chunkManager storage.ChunkManager) error {
 	reloadEtcdFn := func() error {
 		var err error
 		catalog := datacoord.NewCatalog(s.kv, chunkManager.RootPath(), s.metaRootPath)
+		dataViewStore := &dataViewSegmentStore{}
+		dataViewRecoveryCh := make(chan struct {
+			manager DataViewManager
+			err     error
+		}, 1)
+		go func() {
+			manager, err := recoverDataViewManager(s.ctx, catalog, dataViewStore)
+			dataViewRecoveryCh <- struct {
+				manager DataViewManager
+				err     error
+			}{manager: manager, err: err}
+		}()
 		s.meta, err = newMeta(s.ctx, catalog, chunkManager, s.broker)
+		dataViewRecovery := <-dataViewRecoveryCh
 		if err != nil {
 			return err
 		}
-		s.dataViewManager = newDataViewManager(catalog, s.meta)
+		dataViewStore.meta = s.meta
+		if dataViewRecovery.err != nil {
+			return dataViewRecovery.err
+		}
+		s.dataViewManager = dataViewRecovery.manager
 		s.meta.dataViewManager = s.dataViewManager
-		// DataView recovery must see the current collection/partition cache so
-		// DDL trim intent from RootCoord is applied before reconciling segments.
 		if err := s.meta.reloadCollectionsFromRootcoord(s.ctx, s.broker); err != nil {
 			return err
 		}
-		for _, collectionID := range s.meta.recoveredCollectionIDs {
-			if err := s.dataViewManager.RecoverCollection(s.ctx, collectionID); err != nil {
-				return err
-			}
+		// DataView repair must see the current collection/partition cache so
+		// DDL trim intent from RootCoord is applied before reconciling segments.
+		if err := s.dataViewManager.RepairCollections(s.ctx, s.meta.recoveredCollectionIDs); err != nil {
+			return err
 		}
 		return nil
 	}

@@ -38,6 +38,8 @@ type fakeDataViewCatalog struct {
 
 	mu                  sync.Mutex
 	views               []*viewpb.DataViewOfCollection
+	listCalls           int
+	listAllCalls        int
 	saveErrOnce         error
 	blockCollection     int64
 	saveStarted         chan struct{}
@@ -72,11 +74,23 @@ func (c *fakeDataViewCatalog) SaveDataView(ctx context.Context, dataView *viewpb
 func (c *fakeDataViewCatalog) ListDataViews(ctx context.Context, collectionID int64) ([]*viewpb.DataViewOfCollection, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.listCalls++
 	views := make([]*viewpb.DataViewOfCollection, 0)
 	for _, view := range c.views {
 		if view.GetCollectionId() == collectionID {
 			views = append(views, proto.Clone(view).(*viewpb.DataViewOfCollection))
 		}
+	}
+	return views, nil
+}
+
+func (c *fakeDataViewCatalog) ListAllDataViews(ctx context.Context) ([]*viewpb.DataViewOfCollection, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.listAllCalls++
+	views := make([]*viewpb.DataViewOfCollection, 0, len(c.views))
+	for _, view := range c.views {
+		views = append(views, proto.Clone(view).(*viewpb.DataViewOfCollection))
 	}
 	return views, nil
 }
@@ -718,7 +732,7 @@ func TestDataViewManagerRecoverPersistsEmptyViewWhenLatestHadMembership(t *testi
 		},
 	})
 
-	require.NoError(t, manager.RecoverCollection(ctx, 1))
+	require.NoError(t, manager.RepairCollection(ctx, 1))
 	require.Len(t, catalog.views, 2)
 	require.Equal(t, int64(2), catalog.views[1].GetDataVersion().GetStreamingVersion())
 	require.Equal(t, int64(4), catalog.views[1].GetDataVersion().GetCompactVersion())
@@ -741,7 +755,7 @@ func TestDataViewManagerRecoverCompactsFailedPublicationIntoOneView(t *testing.T
 	require.Error(t, err)
 	require.Empty(t, catalog.views)
 
-	require.NoError(t, manager.RecoverCollection(ctx, 1))
+	require.NoError(t, manager.RepairCollection(ctx, 1))
 	require.Len(t, catalog.views, 1)
 	require.Equal(t, int64(1), catalog.views[0].GetDataVersion().GetStreamingVersion())
 	require.Equal(t, int64(0), catalog.views[0].GetDataVersion().GetCompactVersion())
@@ -786,7 +800,7 @@ func TestDataViewManagerRecoverDoesNotReaddHistoricallyRemovedSegments(t *testin
 		},
 	)
 
-	require.NoError(t, manager.RecoverCollection(ctx, 1))
+	require.NoError(t, manager.RepairCollection(ctx, 1))
 	require.Len(t, catalog.views, 2)
 
 	visible, err := manager.LatestVisibleDataView(ctx, 1)
@@ -795,6 +809,137 @@ func TestDataViewManagerRecoverDoesNotReaddHistoricallyRemovedSegments(t *testin
 	require.Equal(t, int64(1), visible.GetDataVersion().GetStreamingVersion())
 	require.Equal(t, int64(1), visible.GetDataVersion().GetCompactVersion())
 	require.Equal(t, []int64{101}, visible.GetShards()[0].GetPartitions()[0].GetSegmentIds())
+}
+
+func TestDataViewManagerRepairCollectionsUsesCatalogDataViews(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, store := newTestDataViewManager()
+	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
+	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
+	store.segments[200] = newDataViewTestSegment(2, 20, 200, "ch-2", 2000)
+
+	catalog.views = append(catalog.views,
+		&viewpb.DataViewOfCollection{
+			CollectionId: 1,
+			DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0},
+			Shards: []*viewpb.DataViewOfShard{
+				{
+					Vchannel: "ch-1",
+					Partitions: []*viewpb.DataViewOfPartition{
+						{PartitionId: 10, SegmentIds: []int64{100}},
+					},
+				},
+			},
+		},
+		&viewpb.DataViewOfCollection{
+			CollectionId: 2,
+			DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0},
+			Shards: []*viewpb.DataViewOfShard{
+				{
+					Vchannel: "ch-2",
+					Partitions: []*viewpb.DataViewOfPartition{
+						{PartitionId: 20, SegmentIds: []int64{200}},
+					},
+				},
+			},
+		},
+	)
+
+	require.NoError(t, manager.RepairCollections(ctx, []int64{1}))
+	require.Equal(t, 1, catalog.listCalls)
+	require.Len(t, catalog.views, 3)
+	require.Equal(t, int64(1), catalog.views[2].GetCollectionId())
+	require.Equal(t, int64(2), catalog.views[2].GetDataVersion().GetStreamingVersion())
+
+	visible1, err := manager.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, visible1)
+	require.Equal(t, []int64{100, 101}, visible1.GetShards()[0].GetPartitions()[0].GetSegmentIds())
+
+	visible2, err := manager.LatestVisibleDataView(ctx, 2)
+	require.NoError(t, err)
+	require.Nil(t, visible2)
+}
+
+func TestRecoverManagerLoadsAllDataViewsWithoutSegmentMetaRepair(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			{
+				CollectionId: 1,
+				DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0},
+				Shards: []*viewpb.DataViewOfShard{
+					{
+						Vchannel: "ch-1",
+						Partitions: []*viewpb.DataViewOfPartition{
+							{PartitionId: 10, SegmentIds: []int64{100}},
+						},
+					},
+				},
+			},
+			{
+				CollectionId: 2,
+				DataVersion:  &viewpb.DataVersion{StreamingVersion: 2, CompactVersion: 1},
+				Shards: []*viewpb.DataViewOfShard{
+					{
+						Vchannel: "ch-2",
+						Partitions: []*viewpb.DataViewOfPartition{
+							{PartitionId: 20, SegmentIds: []int64{200}},
+						},
+					},
+				},
+			},
+		},
+	}
+	store := &fakeDataViewSegmentStore{segments: make(map[int64]*Segment)}
+
+	manager, err := RecoverManager(ctx, catalog, store)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, catalog.listAllCalls)
+	require.Zero(t, catalog.listCalls)
+	snapshot, err := manager.Snapshot(ctx, nil)
+	require.NoError(t, err)
+	require.Len(t, snapshot, 2)
+	require.Equal(t, int64(1), snapshot[0].GetCollectionId())
+	require.Equal(t, int64(2), snapshot[1].GetCollectionId())
+	require.Len(t, catalog.views, 2)
+}
+
+func TestDataViewManagerRepairCollectionsAlignsSegmentMetaAfterRecover(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			{
+				CollectionId: 1,
+				DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0},
+				Shards: []*viewpb.DataViewOfShard{
+					{
+						Vchannel: "ch-1",
+						Partitions: []*viewpb.DataViewOfPartition{
+							{PartitionId: 10, SegmentIds: []int64{100}},
+						},
+					},
+				},
+			},
+		},
+	}
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{
+		100: newDataViewTestSegment(1, 10, 100, "ch-1", 1000),
+		101: newDataViewTestSegment(1, 10, 101, "ch-1", 1100),
+	}}
+	manager, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+
+	require.NoError(t, manager.RepairCollections(ctx, []int64{1}))
+
+	require.Zero(t, catalog.listCalls)
+	require.Len(t, catalog.views, 2)
+	require.Equal(t, int64(2), catalog.views[1].GetDataVersion().GetStreamingVersion())
+	visible, err := manager.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, visible)
+	require.Equal(t, []int64{100, 101}, visible.GetShards()[0].GetPartitions()[0].GetSegmentIds())
 }
 
 func TestDataViewManagerRecoverDoesNotReaddTruncatedSegments(t *testing.T) {
@@ -829,7 +974,7 @@ func TestDataViewManagerRecoverDoesNotReaddTruncatedSegments(t *testing.T) {
 		},
 	)
 
-	require.NoError(t, manager.RecoverCollection(ctx, 1))
+	require.NoError(t, manager.RepairCollection(ctx, 1))
 	require.Len(t, catalog.views, 2)
 
 	visible, err := manager.LatestVisibleDataView(ctx, 1)
@@ -859,7 +1004,7 @@ func TestDataViewManagerRecoverRefreshesDeleteTimetickWithoutVersionBump(t *test
 		},
 	})
 
-	require.NoError(t, manager.RecoverCollection(ctx, 1))
+	require.NoError(t, manager.RepairCollection(ctx, 1))
 	require.Len(t, catalog.views, 1)
 	timeticks, err := manager.ShardTimeTicks(ctx, []int64{1})
 	require.NoError(t, err)
@@ -893,7 +1038,7 @@ func TestDataViewManagerRecoverAddsNeverPublishedStreamingSegment(t *testing.T) 
 		},
 	})
 
-	require.NoError(t, manager.RecoverCollection(ctx, 1))
+	require.NoError(t, manager.RepairCollection(ctx, 1))
 	require.Len(t, catalog.views, 2)
 	require.Equal(t, int64(2), catalog.views[1].GetDataVersion().GetStreamingVersion())
 	require.Equal(t, int64(0), catalog.views[1].GetDataVersion().GetCompactVersion())
@@ -928,7 +1073,7 @@ func TestDataViewManagerRecoverStreamingAdvanceWinsOverCompactHandoff(t *testing
 		},
 	})
 
-	require.NoError(t, manager.RecoverCollection(ctx, 1))
+	require.NoError(t, manager.RepairCollection(ctx, 1))
 	require.Len(t, catalog.views, 2)
 	require.Equal(t, int64(2), catalog.views[1].GetDataVersion().GetStreamingVersion())
 	require.Equal(t, int64(0), catalog.views[1].GetDataVersion().GetCompactVersion())
@@ -959,7 +1104,7 @@ func TestDataViewManagerRecoverTreatsLineageAdditionOutsideCurrentViewAsStreamin
 		},
 	})
 
-	require.NoError(t, manager.RecoverCollection(ctx, 1))
+	require.NoError(t, manager.RepairCollection(ctx, 1))
 	require.Len(t, catalog.views, 2)
 	require.Equal(t, int64(2), catalog.views[1].GetDataVersion().GetStreamingVersion())
 	require.Equal(t, int64(0), catalog.views[1].GetDataVersion().GetCompactVersion())
@@ -1000,7 +1145,7 @@ func TestDataViewManagerRecoverKeepsTemporaryFlushResidentUnavailable(t *testing
 		},
 	)
 
-	require.NoError(t, manager.RecoverCollection(ctx, 1))
+	require.NoError(t, manager.RepairCollection(ctx, 1))
 	require.Len(t, catalog.views, 2)
 	require.Equal(t, int64(2), manager.states[1].latestResident.GetDataVersion().GetStreamingVersion())
 
@@ -1047,7 +1192,7 @@ func TestDataViewManagerRecoverRetainsCompactionInputUntilOutputVisible(t *testi
 		},
 	})
 
-	require.NoError(t, manager.RecoverCollection(ctx, 1))
+	require.NoError(t, manager.RepairCollection(ctx, 1))
 	require.Len(t, catalog.views, 1)
 	visible, err := manager.LatestVisibleDataView(ctx, 1)
 	require.NoError(t, err)
