@@ -21,6 +21,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/walimplstest"
+	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
 func TestPChannelRecoveryManagerCreatesAndRoutesVChannelModules(t *testing.T) {
@@ -196,6 +197,8 @@ func TestPChannelRecoveryManagerAcquireBuildsQueryRuntimeWithoutLoadConfigCallba
 
 func newTestManager(t *testing.T, pchannel string, vchannels ...string) *PChannelRecoveryManager {
 	t.Helper()
+	scheduler := nodescheduler.New(1)
+	t.Cleanup(scheduler.Close)
 	metas := make(map[string]*streamingpb.VChannelMeta, len(vchannels))
 	for _, vchannel := range vchannels {
 		metas[vchannel] = newTestVChannelMeta(vchannel)
@@ -204,12 +207,14 @@ func newTestManager(t *testing.T, pchannel string, vchannels ...string) *PChanne
 		PChannel:          pchannel,
 		VChannelMetas:     metas,
 		TransformLogMetas: map[string]*streamingpb.VChannelTransformLogMeta{},
+		NodeScheduler:     scheduler,
 		Runtime:           moduleapi.Runtime{},
 		QueryRuntimeModuleBuilders: []queryresource.QueryRuntimeModuleBuilder{
 			testQueryRuntimeModuleBuilder{},
 		},
 	})
 	require.NoError(t, err)
+	t.Cleanup(manager.Close)
 	return manager
 }
 

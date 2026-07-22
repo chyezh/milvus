@@ -208,7 +208,8 @@ func TestRecoveryStorageUsesVChannelRecoveryManagerForQueryResourcesAndTransform
 	defer storage.taskScheduler.Close()
 
 	manager, err := vchannel.NewPChannelRecoveryManager(vchannel.PChannelManagerConfig{
-		PChannel: "test-pchannel",
+		PChannel:      "test-pchannel",
+		NodeScheduler: storage.nodeScheduler,
 		Runtime: moduleapi.Runtime{
 			Scheduler: storage.taskScheduler,
 			Notifier:  storage,

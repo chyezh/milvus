@@ -215,6 +215,7 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		TransformLogMaterialBytes:  uint64(paramtable.Get().StreamingCfg.FlushL0MaxSize.GetAsSize()),
 		QueryRuntimeModuleBuilders: r.queryRuntimeModuleBuilders,
 		QueryViewLoadInfoProvider:  r.queryViewLoadInfoProvider,
+		NodeScheduler:              r.nodeScheduler,
 	})
 	if err != nil {
 		return err

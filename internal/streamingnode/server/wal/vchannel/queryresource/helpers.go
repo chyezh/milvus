@@ -25,7 +25,7 @@ func minQueryViewDataVersion(refs map[qviews.QueryViewKey]struct{}) (qviews.Data
 	return min, ok
 }
 
-func cancelTask(task BuildTask) {
+func cancelTask(task *scheduledBuild) {
 	if task != nil {
 		task.Cancel()
 	}

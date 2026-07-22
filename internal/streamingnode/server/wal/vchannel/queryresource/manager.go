@@ -10,13 +10,14 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
 type ViewBuilder func(meta *viewpb.QueryViewMeta) (walview.VChannelWALView, bool)
 
 type Config struct {
 	Builders         []QueryRuntimeModuleBuilder
-	Scheduler        Scheduler
+	Scheduler        nodescheduler.Scheduler
 	Dispatcher       *Dispatcher
 	LoadInfoProvider LoadInfoProvider
 }
@@ -25,13 +26,13 @@ type Manager struct {
 	mu sync.Mutex
 
 	builders         []QueryRuntimeModuleBuilder
-	scheduler        Scheduler
+	scheduler        nodescheduler.Scheduler
 	dispatcher       *Dispatcher
 	loadInfoProvider LoadInfoProvider
 
 	refs    map[qviews.QueryViewKey]struct{}
 	runtime *QueryRuntime
-	task    BuildTask
+	task    *scheduledBuild
 	err     error
 	changed chan struct{}
 	closed  bool
@@ -72,7 +73,7 @@ func (m *Manager) AcquireLocked(req snview.AcquireResource, build ViewBuilder) {
 
 func (m *Manager) Release(req snview.ReleaseResource) {
 	var runtime *QueryRuntime
-	var task BuildTask
+	var task *scheduledBuild
 	var advanceRuntime *QueryRuntime
 	var advance qviews.DataVersion
 	var hasAdvance bool
@@ -128,6 +129,9 @@ func (m *Manager) Close() {
 	m.mu.Unlock()
 
 	cancelTask(task)
+	if task != nil {
+		_, _ = task.Result()
+	}
 	closeRuntime(runtime)
 }
 
@@ -142,7 +146,6 @@ func (m *Manager) WaitReady(key qviews.QueryViewKey, onReady func()) {
 			continue
 		}
 		if task != nil {
-			<-task.Done()
 			_, err := task.Result()
 			if err != nil {
 				if errors.Is(err, context.Canceled) {
@@ -186,7 +189,7 @@ func (m *Manager) startBuildLocked(meta *viewpb.QueryViewMeta, build ViewBuilder
 		panic("query resource view builder is nil")
 	}
 	if m.scheduler == nil {
-		m.scheduler = NewScheduler(4)
+		m.scheduler = nodescheduler.Get()
 	}
 	if m.dispatcher == nil {
 		m.dispatcher = NewDispatcher(defaultLiveEventDispatchConcurrency)
@@ -196,7 +199,7 @@ func (m *Manager) startBuildLocked(meta *viewpb.QueryViewMeta, build ViewBuilder
 	if !ok {
 		panic("failed to build vchannel query resource view")
 	}
-	task := newResourceBuildTask(context.Background(), func(ctx context.Context) (*QueryRuntime, error) {
+	task := newResourceBuildTask(func(ctx context.Context) (*QueryRuntime, error) {
 		resolved, err := m.resolveLoadInfo(ctx, view)
 		if err != nil {
 			return runtime, err
@@ -207,10 +210,9 @@ func (m *Manager) startBuildLocked(meta *viewpb.QueryViewMeta, build ViewBuilder
 		return runtime, nil
 	})
 	m.runtime = runtime
-	m.task = task
+	m.task = scheduleResourceBuild(m.scheduler, task)
 	m.err = nil
-	m.scheduler.Submit(task)
-	go m.finishBuild(task)
+	go m.finishBuild(m.task)
 }
 
 func (m *Manager) resolveLoadInfo(ctx context.Context, view walview.VChannelWALView) (walview.VChannelWALView, error) {
@@ -244,7 +246,7 @@ func (m *Manager) newModules() []QueryRuntimeModule {
 	return modules
 }
 
-func (m *Manager) finishBuild(task BuildTask) {
+func (m *Manager) finishBuild(task *scheduledBuild) {
 	runtime, err := task.Result()
 	m.mu.Lock()
 	if m.task != task {
@@ -275,7 +277,7 @@ func (m *Manager) finishBuild(task BuildTask) {
 	closeRuntime(runtime)
 }
 
-func (m *Manager) runtimeForRef(key qviews.QueryViewKey) (*QueryRuntime, BuildTask, <-chan struct{}, bool) {
+func (m *Manager) runtimeForRef(key qviews.QueryViewKey) (*QueryRuntime, *scheduledBuild, <-chan struct{}, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.refs[key]; !ok {
@@ -306,7 +308,7 @@ func (m *Manager) hasRef(key qviews.QueryViewKey) bool {
 	return ok
 }
 
-func (m *Manager) takeRuntimeLocked() (*QueryRuntime, BuildTask) {
+func (m *Manager) takeRuntimeLocked() (*QueryRuntime, *scheduledBuild) {
 	runtime, task := m.runtime, m.task
 	m.runtime = nil
 	m.task = nil

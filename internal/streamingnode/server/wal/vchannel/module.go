@@ -22,6 +22,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
 // ModuleConfig contains the initial state and dependencies for one vchannel
@@ -49,7 +50,7 @@ type ModuleConfig struct {
 
 	TransformLogStream         wal.TransformLogStreamManager
 	QueryRuntimeModuleBuilders []queryresource.QueryRuntimeModuleBuilder
-	QueryResourceScheduler     queryresource.Scheduler
+	NodeScheduler              nodescheduler.Scheduler
 	QueryRuntimeDispatcher     *queryresource.Dispatcher
 	QueryViewLoadInfoProvider  queryresource.LoadInfoProvider
 }
@@ -102,7 +103,7 @@ func NewModule(config ModuleConfig) (*VChannelRecoveryModule, error) {
 	}
 	module.queryResources = queryresource.NewManager(queryresource.Config{
 		Builders:         config.QueryRuntimeModuleBuilders,
-		Scheduler:        config.QueryResourceScheduler,
+		Scheduler:        config.NodeScheduler,
 		Dispatcher:       config.QueryRuntimeDispatcher,
 		LoadInfoProvider: config.QueryViewLoadInfoProvider,
 	})

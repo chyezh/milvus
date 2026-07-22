@@ -19,6 +19,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
@@ -44,6 +45,7 @@ type PChannelManagerConfig struct {
 
 	QueryRuntimeModuleBuilders []queryresource.QueryRuntimeModuleBuilder
 	QueryViewLoadInfoProvider  queryresource.LoadInfoProvider
+	NodeScheduler              nodescheduler.Scheduler
 }
 
 // PChannelRecoveryManager owns all vchannel recovery modules on one pchannel.
@@ -54,7 +56,6 @@ type PChannelRecoveryManager struct {
 	config          PChannelManagerConfig
 	metaAndData     atomic.Bool
 	streamManager   *transformlog.StreamManager
-	queryScheduler  queryresource.Scheduler
 	queryDispatcher *queryresource.Dispatcher
 }
 
@@ -67,7 +68,6 @@ func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecovery
 		modules:         typeutil.NewConcurrentMap[string, *VChannelRecoveryModule](),
 		config:          config,
 		streamManager:   transformlog.NewStreamManager(config.PChannel),
-		queryScheduler:  queryresource.NewScheduler(4),
 		queryDispatcher: queryresource.NewDispatcher(4),
 	}
 	for _, vchannel := range manager.initialVChannels(config) {
@@ -236,9 +236,6 @@ func (m *PChannelRecoveryManager) Close() {
 		module.CloseQueryResources()
 		return true
 	})
-	if m.queryScheduler != nil {
-		m.queryScheduler.Close()
-	}
 	if m.queryDispatcher != nil {
 		m.queryDispatcher.Close()
 	}
@@ -326,7 +323,7 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 		TransformLogStream:         m.streamManager,
 		QueryRuntimeModuleBuilders: m.config.QueryRuntimeModuleBuilders,
 		QueryViewLoadInfoProvider:  m.config.QueryViewLoadInfoProvider,
-		QueryResourceScheduler:     m.queryScheduler,
+		NodeScheduler:              m.config.NodeScheduler,
 		QueryRuntimeDispatcher:     m.queryDispatcher,
 	})
 }
