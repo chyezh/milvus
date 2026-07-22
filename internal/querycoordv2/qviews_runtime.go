@@ -212,7 +212,7 @@ func newDefaultQViewsRuntimeDependencies(
 	streamingNodeHandler := snhandler.NewHandlerClient(streamingCoordClient.Assignment())
 	return qviewsRuntimeDependencies{
 		queryCoordCatalog:           queryCoordCatalog,
-		queryViewCatalog:            queryview.NewQueryViewCatalog(metaKV),
+		queryViewCatalog:            queryview.NewQueryViewCatalog(metaKV, "coord"),
 		queryNodeClient:             queryNodeManager,
 		resourceGroupManager:        resourceGroupManager,
 		dataViewProvider:            &mixCoordDataViewProvider{mixCoord: mixCoord},

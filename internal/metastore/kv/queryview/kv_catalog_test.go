@@ -44,7 +44,7 @@ func newTestCatalog(t *testing.T) (QueryViewCatalog, map[string]string) {
 			return nil
 		}).Maybe()
 
-	catalog := NewQueryViewCatalog(kv)
+	catalog := NewQueryViewCatalog(kv, "test")
 	return catalog, kvStorage
 }
 
@@ -216,8 +216,7 @@ func TestQueryViewCatalog_AtomicUnrecoverableAndCreate(t *testing.T) {
 
 	views, err := catalog.ListQueryViews(ctx)
 	assert.NoError(t, err)
-	assert.Len(t, views, 1)
-	assert.Equal(t, int64(2), views[0].Meta.Version.QueryVersion)
+	assert.Len(t, views, 2)
 }
 
 func TestQueryViewCatalog_MultipleShards(t *testing.T) {
@@ -258,18 +257,19 @@ func TestBuildKey(t *testing.T) {
 		},
 	}
 
-	c := &queryViewCatalog{prefix: "qv/"}
+	c := &queryViewCatalog{prefix: "coord/qv/"}
 	key, err := c.buildKey(meta)
 	assert.NoError(t, err)
-	assert.Equal(t, "qv/100/1/0", key)
+	assert.Equal(t, "coord/qv/100/1/by-dev-rootcoord-dml_0_100v0/5/3/2", key)
 
 	meta.Vchannel = "by-dev-rootcoord-dml_2_100v17"
+	c = &queryViewCatalog{prefix: "streamingnode/qv/"}
 	key, err = c.buildKey(meta)
 	assert.NoError(t, err)
-	assert.Equal(t, "qv/100/1/17", key)
+	assert.Equal(t, "streamingnode/qv/100/1/by-dev-rootcoord-dml_2_100v17/5/3/2", key)
 }
 
-func TestQueryViewCatalog_AtomicDropAndCreateUsesShardKey(t *testing.T) {
+func TestQueryViewCatalog_KeyKeepsFullVChannelAndVersions(t *testing.T) {
 	catalog, storage := newTestCatalog(t)
 	ctx := context.Background()
 
@@ -277,12 +277,19 @@ func TestQueryViewCatalog_AtomicDropAndCreateUsesShardKey(t *testing.T) {
 	newView := makeTestView(1, 1, "p2_1v0", 2, 0, 1, viewpb.QueryViewState_QueryViewStatePreparing)
 
 	assert.NoError(t, catalog.SaveQueryViews(ctx, []*viewpb.QueryViewOfShard{oldView}))
-	assert.Contains(t, storage, "qv/1/1/0")
+	assert.Contains(t, storage, "test/qv/1/1/p1_1v0/1/0/1")
+
+	assert.NoError(t, catalog.SaveQueryViews(ctx, []*viewpb.QueryViewOfShard{newView}))
+
+	views, err := catalog.ListQueryViews(ctx)
+	assert.NoError(t, err)
+	assert.Len(t, views, 2)
+	assert.Contains(t, storage, "test/qv/1/1/p2_1v0/2/0/1")
 
 	oldView.Meta.State = viewpb.QueryViewState_QueryViewStateDropped
 	assert.NoError(t, catalog.SaveQueryViews(ctx, []*viewpb.QueryViewOfShard{oldView, newView}))
 
-	views, err := catalog.ListQueryViews(ctx)
+	views, err = catalog.ListQueryViews(ctx)
 	assert.NoError(t, err)
 	assert.Len(t, views, 1)
 	assert.Equal(t, int64(2), views[0].GetMeta().GetVersion().GetDataVersion().GetStreamingVersion())

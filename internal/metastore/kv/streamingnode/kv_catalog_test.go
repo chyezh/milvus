@@ -731,7 +731,7 @@ func TestBuildPrefixAndKey(t *testing.T) {
 	assert.Equal(t, "streamingnode-meta/wal/p1/salvage-checkpoint/cluster-a", buildSalvageCheckpointPath("p1", "cluster-a"))
 	assert.Equal(t, "streamingnode-meta/wal/p2/salvage-checkpoint/cluster-b", buildSalvageCheckpointPath("p2", "cluster-b"))
 
-	assert.Equal(t, "streamingnode-meta/wal/p1/qv/", buildQueryViewPrefix("p1"))
+	assert.Equal(t, "streamingnode-meta/wal/p1/query-view/", buildQueryViewPrefix("p1"))
 }
 
 func TestCatalogQueryViews(t *testing.T) {
@@ -763,7 +763,7 @@ func TestCatalogQueryViews(t *testing.T) {
 	catalog := NewCataLog(kv)
 	ctx := context.Background()
 	view := makeQueryViewForCatalogTest("p1_1v0", viewpb.QueryViewState_QueryViewStateUp)
-	key := "streamingnode-meta/wal/p1/qv/1/10/0"
+	key := "streamingnode-meta/wal/p1/query-view/1/10/p1_1v0/20/0/30"
 
 	require.NoError(t, catalog.SaveQueryViews(ctx, "p1", []*viewpb.QueryViewOfShard{view}))
 	require.Contains(t, storage, key)
@@ -790,6 +790,19 @@ func TestCatalogQueryViews(t *testing.T) {
 		require.NoError(t, catalog.SaveQueryViews(ctx, "p1", []*viewpb.QueryViewOfShard{view}))
 		require.NotContains(t, storage, key)
 	}
+
+	view.Meta.State = viewpb.QueryViewState_QueryViewStateUp
+	nextView := proto.Clone(view).(*viewpb.QueryViewOfShard)
+	nextView.Meta.Version.DataVersion.StreamingVersion = 21
+	nextView.Meta.Version.QueryVersion = 1
+	nextKey := "streamingnode-meta/wal/p1/query-view/1/10/p1_1v0/21/0/1"
+	require.NoError(t, catalog.SaveQueryViews(ctx, "p1", []*viewpb.QueryViewOfShard{view, nextView}))
+	require.Contains(t, storage, key)
+	require.Contains(t, storage, nextKey)
+
+	views, err = catalog.ListQueryViews(ctx, "p1")
+	require.NoError(t, err)
+	require.Len(t, views, 2)
 }
 
 func makeQueryViewForCatalogTest(vchannel string, state viewpb.QueryViewState) *viewpb.QueryViewOfShard {

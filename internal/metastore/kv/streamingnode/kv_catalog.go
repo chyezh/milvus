@@ -17,7 +17,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/etcd"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
-	"github.com/milvus-io/milvus/pkg/v3/util/metautil"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
@@ -539,15 +538,19 @@ func buildQueryViewKey(pChannelName string, meta *viewpb.QueryViewMeta) (string,
 	if meta == nil {
 		return "", merr.WrapErrServiceInternalMsg("query view meta is nil")
 	}
-	vchannelOffset, err := queryViewVChannelOffset(meta.GetCollectionId(), meta.GetVchannel())
-	if err != nil {
-		return "", err
+	version := meta.GetVersion()
+	if version == nil || version.GetDataVersion() == nil {
+		return "", merr.WrapErrServiceInternalMsg("query view %s has nil version", meta.GetVchannel())
 	}
-	return fmt.Sprintf("%s%d/%d/%d",
+	dataVersion := version.GetDataVersion()
+	return fmt.Sprintf("%s%d/%d/%s/%d/%d/%d",
 		buildQueryViewPrefix(pChannelName),
 		meta.GetCollectionId(),
 		meta.GetReplicaId(),
-		vchannelOffset,
+		meta.GetVchannel(),
+		dataVersion.GetStreamingVersion(),
+		dataVersion.GetCompactVersion(),
+		version.GetQueryVersion(),
 	), nil
 }
 
@@ -564,22 +567,6 @@ func marshalQueryViewForPersistence(view *viewpb.QueryViewOfShard) ([]byte, erro
 		}
 	}
 	return proto.Marshal(clone)
-}
-
-func queryViewVChannelOffset(collectionID int64, vchannel string) (int64, error) {
-	channel, err := metautil.ParseChannel(vchannel, metautil.NewDynChannelMapper())
-	if err != nil {
-		return 0, merr.WrapErrServiceInternalErr(err, "invalid query view vchannel %s", vchannel)
-	}
-	if channel.CollectionID() != collectionID {
-		return 0, merr.WrapErrServiceInternalMsg(
-			"query view vchannel %s collection %d does not match meta collection %d",
-			vchannel,
-			channel.CollectionID(),
-			collectionID,
-		)
-	}
-	return channel.ShardIdx(), nil
 }
 
 func removeString(values []string, value string) []string {

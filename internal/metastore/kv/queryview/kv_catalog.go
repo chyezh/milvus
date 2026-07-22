@@ -9,7 +9,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/kv"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
-	"github.com/milvus-io/milvus/pkg/v3/util/metautil"
 )
 
 const queryViewKeyPrefix = "qv/"
@@ -28,16 +27,17 @@ type QueryViewCatalog interface {
 
 type queryViewCatalog struct {
 	metaKV kv.MetaKv
-	prefix string
+	prefix string // full prefix: {role}/{queryViewKeyPrefix}
 }
 
 // NewQueryViewCatalog creates a new QueryViewCatalog backed by ETCD.
+// role identifies the component (e.g. "coord" or "streamingnode"), used as key prefix.
 // The provided MetaKv is wrapped with ReliableWriteMetaKv to ensure
 // write operations only fail on context cancellation.
-func NewQueryViewCatalog(metaKV kv.MetaKv) QueryViewCatalog {
+func NewQueryViewCatalog(metaKV kv.MetaKv, role string) QueryViewCatalog {
 	return &queryViewCatalog{
 		metaKV: kv.NewReliableWriteMetaKv(metaKV),
-		prefix: queryViewKeyPrefix,
+		prefix: role + "/" + queryViewKeyPrefix,
 	}
 }
 
@@ -87,20 +87,24 @@ func (c *queryViewCatalog) SaveQueryViews(ctx context.Context, views []*viewpb.Q
 }
 
 // buildKey constructs the ETCD key for a query view.
-// Format: {prefix}{collection_id}/{replica_id}/{vchannel_offset}
+// Format: {prefix}{collection_id}/{replica_id}/{vchannel}/{sv}/{cv}/{qv}
 func (c *queryViewCatalog) buildKey(meta *viewpb.QueryViewMeta) (string, error) {
 	if meta == nil {
 		return "", merr.WrapErrServiceInternalMsg("query view meta is nil")
 	}
-	vchannelOffset, err := queryViewVChannelOffset(meta.GetCollectionId(), meta.GetVchannel())
-	if err != nil {
-		return "", err
+	version := meta.GetVersion()
+	if version == nil || version.GetDataVersion() == nil {
+		return "", merr.WrapErrServiceInternalMsg("query view %s has nil version", meta.GetVchannel())
 	}
-	return fmt.Sprintf("%s%d/%d/%d",
+	dataVersion := version.GetDataVersion()
+	return fmt.Sprintf("%s%d/%d/%s/%d/%d/%d",
 		c.prefix,
 		meta.GetCollectionId(),
 		meta.GetReplicaId(),
-		vchannelOffset,
+		meta.GetVchannel(),
+		dataVersion.GetStreamingVersion(),
+		dataVersion.GetCompactVersion(),
+		version.GetQueryVersion(),
 	), nil
 }
 
@@ -114,22 +118,6 @@ func marshalForPersistence(view *viewpb.QueryViewOfShard) ([]byte, error) {
 		}
 	}
 	return proto.Marshal(clone)
-}
-
-func queryViewVChannelOffset(collectionID int64, vchannel string) (int64, error) {
-	channel, err := metautil.ParseChannel(vchannel, metautil.NewDynChannelMapper())
-	if err != nil {
-		return 0, merr.WrapErrServiceInternalErr(err, "invalid query view vchannel %s", vchannel)
-	}
-	if channel.CollectionID() != collectionID {
-		return 0, merr.WrapErrServiceInternalMsg(
-			"query view vchannel %s collection %d does not match meta collection %d",
-			vchannel,
-			channel.CollectionID(),
-			collectionID,
-		)
-	}
-	return channel.ShardIdx(), nil
 }
 
 func removeString(values []string, value string) []string {
