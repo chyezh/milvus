@@ -25,7 +25,8 @@ import (
 )
 
 type testRecoveryModule struct {
-	result moduleapi.ObserveResult
+	result   moduleapi.ObserveResult
+	snapshot moduleapi.ModuleSnapshot
 }
 
 func (m *testRecoveryModule) Name() moduleapi.ModuleName {
@@ -37,7 +38,7 @@ func (m *testRecoveryModule) ObserveMessage(ctx context.Context, msg message.Imm
 }
 
 func (m *testRecoveryModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
-	return nil
+	return m.snapshot
 }
 
 func (m *testRecoveryModule) ConsumeDirtySnapshots() []moduleapi.DirtySnapshot {
@@ -222,6 +223,54 @@ func TestRecoveryStorageUsesVChannelRecoveryManagerForQueryResourcesAndTransform
 
 	assert.Same(t, manager, storage.TransformLog())
 	assert.Same(t, manager, storage.VChannelManager())
+}
+
+func TestRecoveryStorageSwitchModulesMergesModuleSnapshots(t *testing.T) {
+	checkpoint := &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(1),
+		TimeTick:  1,
+	}
+	storage := newTestRecoveryStorage(t, checkpoint)
+	defer storage.metrics.Close()
+	defer storage.taskScheduler.Close()
+
+	storage.modules = []moduleapi.Module{
+		&testRecoveryModule{snapshot: moduleapi.CompositeModuleSnapshot{
+			&moduleapi.VChannelModuleSnapshot{VChannels: map[string]*streamingpb.VChannelMeta{
+				"v1": {Vchannel: "v1"},
+			}},
+			&moduleapi.SegmentModuleSnapshot{
+				Segments: map[int64]*streamingpb.SegmentAssignmentMeta{
+					1: {SegmentId: 1, Vchannel: "v1"},
+				},
+				DataVersionSummaries: map[string]*streamingpb.SegmentDataVersionSummary{
+					"v1": {},
+				},
+			},
+		}},
+		&testRecoveryModule{snapshot: moduleapi.CompositeModuleSnapshot{
+			&moduleapi.VChannelModuleSnapshot{VChannels: map[string]*streamingpb.VChannelMeta{
+				"v2": {Vchannel: "v2"},
+			}},
+			&moduleapi.SegmentModuleSnapshot{
+				Segments: map[int64]*streamingpb.SegmentAssignmentMeta{
+					2: {SegmentId: 2, Vchannel: "v2"},
+				},
+				DataVersionSummaries: map[string]*streamingpb.SegmentDataVersionSummary{
+					"v2": {},
+				},
+			},
+		}},
+	}
+
+	snapshot := storage.switchModulesIntoMetaAndData()
+
+	assert.Contains(t, snapshot.VChannels, "v1")
+	assert.Contains(t, snapshot.VChannels, "v2")
+	assert.Contains(t, snapshot.SegmentAssignments, int64(1))
+	assert.Contains(t, snapshot.SegmentAssignments, int64(2))
+	assert.Contains(t, snapshot.SegmentDataVersionSummaries, "v1")
+	assert.Contains(t, snapshot.SegmentDataVersionSummaries, "v2")
 }
 
 func TestRecoveryStorageMetaOnlyObserveDoesNotAdvanceDataCheckpoint(t *testing.T) {
