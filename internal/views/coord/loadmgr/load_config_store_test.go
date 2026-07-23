@@ -179,6 +179,19 @@ func TestLoadConfigPersistedStatusIsLoaded(t *testing.T) {
 	}
 }
 
+func TestLoadConfigPersistedStatusIsLoaded(t *testing.T) {
+	cfg := sampleConfig()
+
+	collection := cfg.toCollectionLoadInfoProto()
+	assert.Equal(t, querypb.LoadStatus_Loaded, collection.GetStatus())
+
+	partitions := cfg.toPartitionLoadInfoProtos()
+	require.Len(t, partitions, len(cfg.PartitionIDs))
+	for _, partition := range partitions {
+		assert.Equal(t, querypb.LoadStatus_Loaded, partition.GetStatus())
+	}
+}
+
 func TestPut_UpdateExistingWritesFullConfig(t *testing.T) {
 	store, catalog := newTestStore(t)
 
