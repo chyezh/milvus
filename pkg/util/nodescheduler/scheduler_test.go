@@ -70,7 +70,7 @@ func TestSchedulerMovesDelayedTaskToQueueTail(t *testing.T) {
 		if attempt == 1 {
 			close(firstStarted)
 			<-allowDelay
-			return errors.Wrap(ErrDelay, "not ready")
+			return errors.Mark(errors.New("not ready"), ErrDelay)
 		}
 		return nil
 	}))
