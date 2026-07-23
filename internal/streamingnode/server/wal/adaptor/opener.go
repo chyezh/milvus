@@ -221,6 +221,7 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 		idf.NewFutureProvider(
 			resource.Resource().MixCoordClient(),
 			idf.WithChunkManager(resource.Resource().ChunkManager()),
+			idf.WithNodeScheduler(nodescheduler.Get()),
 		),
 	}
 	rs, snapshot, err := recovery.RecoverRecoveryStorage(
