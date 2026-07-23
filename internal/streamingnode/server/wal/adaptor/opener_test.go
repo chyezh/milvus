@@ -26,14 +26,11 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/rmq"
-	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
 func TestMain(m *testing.M) {
 	paramtable.Init()
-	nodescheduler.Init(4)
-	defer nodescheduler.Close()
 	m.Run()
 }
 

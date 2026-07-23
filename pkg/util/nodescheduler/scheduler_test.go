@@ -19,6 +19,7 @@ package nodescheduler
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -27,6 +28,9 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/milvus-io/milvus/pkg/v3/util/hardware"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
 func TestSchedulerExecutesTasksInFIFOOrder(t *testing.T) {
@@ -142,6 +146,133 @@ func TestSchedulerHonorsConcurrencyLimit(t *testing.T) {
 		require.NoError(t, handle.Wait(context.Background()))
 	}
 	assert.Equal(t, int32(2), maxRunning.Load())
+}
+
+func TestSchedulerResizeScalesUp(t *testing.T) {
+	scheduler := New(1)
+	defer scheduler.Close()
+
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	newTask := func() Task {
+		return TaskFunc(func(context.Context) error {
+			started <- struct{}{}
+			<-release
+			return nil
+		})
+	}
+	first := scheduler.Submit(newTask())
+	second := scheduler.Submit(newTask())
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first task to start")
+	}
+	select {
+	case <-started:
+		t.Fatal("second task started before scheduler resize")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	scheduler.resize(2)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for scaled-up worker")
+	}
+	close(release)
+	require.NoError(t, first.Wait(context.Background()))
+	require.NoError(t, second.Wait(context.Background()))
+}
+
+func TestSchedulerResizeScalesDownBetweenTasks(t *testing.T) {
+	scheduler := New(2)
+	defer scheduler.Close()
+
+	initialStarted := make(chan struct{}, 2)
+	releaseInitial := make(chan struct{})
+	initialTask := func() Task {
+		return TaskFunc(func(context.Context) error {
+			initialStarted <- struct{}{}
+			<-releaseInitial
+			return nil
+		})
+	}
+	first := scheduler.Submit(initialTask())
+	second := scheduler.Submit(initialTask())
+	for i := 0; i < 2; i++ {
+		select {
+		case <-initialStarted:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for initial task to start")
+		}
+	}
+
+	scheduler.resize(1)
+	close(releaseInitial)
+	require.NoError(t, first.Wait(context.Background()))
+	require.NoError(t, second.Wait(context.Background()))
+
+	nextStarted := make(chan struct{}, 2)
+	releaseNext := make(chan struct{})
+	nextTask := func() Task {
+		return TaskFunc(func(context.Context) error {
+			nextStarted <- struct{}{}
+			<-releaseNext
+			return nil
+		})
+	}
+	third := scheduler.Submit(nextTask())
+	fourth := scheduler.Submit(nextTask())
+	select {
+	case <-nextStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for resized worker")
+	}
+	select {
+	case <-nextStarted:
+		t.Fatal("second task started after scheduler scaled down to one worker")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseNext)
+	require.NoError(t, third.Wait(context.Background()))
+	require.NoError(t, fourth.Wait(context.Background()))
+}
+
+func TestSchedulerResizeDoesNotOverProvisionPendingWorkers(t *testing.T) {
+	scheduler := New(2)
+	defer scheduler.Close()
+
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	newTask := func() Task {
+		return TaskFunc(func(context.Context) error {
+			started <- struct{}{}
+			<-release
+			return nil
+		})
+	}
+	first := scheduler.Submit(newTask())
+	second := scheduler.Submit(newTask())
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for task to start")
+		}
+	}
+
+	scheduler.resize(1)
+	scheduler.resize(2)
+	scheduler.mu.Lock()
+	workerCount := scheduler.workerCount
+	scheduler.mu.Unlock()
+	assert.Equal(t, 2, workerCount)
+
+	close(release)
+	require.NoError(t, first.Wait(context.Background()))
+	require.NoError(t, second.Wait(context.Background()))
 }
 
 func TestSchedulerAbandonsOrdinaryErrorAfterOneAttempt(t *testing.T) {
@@ -289,15 +420,68 @@ func TestSchedulerSubmitAfterCloseReturnsCompletedHandle(t *testing.T) {
 func TestSchedulerRejectsNonPositiveConcurrency(t *testing.T) {
 	require.Panics(t, func() { New(0) })
 	require.Panics(t, func() { New(-1) })
+
+	scheduler := New(1)
+	defer scheduler.Close()
+	require.Panics(t, func() { scheduler.resize(0) })
+	require.Panics(t, func() { scheduler.resize(-1) })
 }
 
-func TestGlobalSchedulerLifecycle(t *testing.T) {
-	Close()
-	t.Cleanup(Close)
+func TestConcurrencyFromRatio(t *testing.T) {
+	concurrency, ok := concurrencyFromRatio(8, 1)
+	assert.True(t, ok)
+	assert.Equal(t, 8, concurrency)
 
-	Init(1)
-	require.NotNil(t, Get())
-	require.Panics(t, func() { Init(1) })
+	concurrency, ok = concurrencyFromRatio(8, 0.5)
+	assert.True(t, ok)
+	assert.Equal(t, 4, concurrency)
+
+	concurrency, ok = concurrencyFromRatio(8, 0.01)
+	assert.True(t, ok)
+	assert.Equal(t, 1, concurrency)
+
+	_, ok = concurrencyFromRatio(8, 0)
+	assert.False(t, ok)
+	_, ok = concurrencyFromRatio(8, -1)
+	assert.False(t, ok)
+}
+
+func TestGlobalSchedulerLazyInitializationAndDynamicResize(t *testing.T) {
+	params := paramtable.Get()
+	ratioParam := params.CommonCfg.NodeSchedulerMaxConcurrencyRatio
+	require.NoError(t, params.Reset(ratioParam.Key))
+
+	first := Get()
+	assert.Same(t, first, Get())
+	scheduler := first.(*nodeScheduler)
+
+	cpu := hardware.GetCPUNum()
+	assert.Eventually(t, func() bool {
+		scheduler.mu.Lock()
+		defer scheduler.mu.Unlock()
+		return scheduler.concurrency == cpu
+	}, time.Second, 10*time.Millisecond)
+
+	ratioForTwoWorkers := 2 / float64(cpu)
+	require.NoError(t, params.Save(ratioParam.Key, strconv.FormatFloat(ratioForTwoWorkers, 'g', -1, 64)))
+	assert.Eventually(t, func() bool {
+		scheduler.mu.Lock()
+		defer scheduler.mu.Unlock()
+		return scheduler.concurrency == 2
+	}, time.Second, 10*time.Millisecond)
+
+	require.NoError(t, params.Save(ratioParam.Key, "0"))
+	time.Sleep(20 * time.Millisecond)
+	scheduler.mu.Lock()
+	assert.Equal(t, 2, scheduler.concurrency)
+	scheduler.mu.Unlock()
+
+	require.NoError(t, params.Reset(ratioParam.Key))
+	assert.Eventually(t, func() bool {
+		scheduler.mu.Lock()
+		defer scheduler.mu.Unlock()
+		return scheduler.concurrency == cpu
+	}, time.Second, 10*time.Millisecond)
 }
 
 type TaskFunc func(context.Context) error

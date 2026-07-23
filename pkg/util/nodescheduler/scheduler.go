@@ -19,12 +19,16 @@ package nodescheduler
 import (
 	"container/list"
 	"context"
+	"math"
 	"reflect"
 	"sync"
 
 	"github.com/cockroachdb/errors"
 
+	"github.com/milvus-io/milvus/pkg/v3/config"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
+	"github.com/milvus-io/milvus/pkg/v3/util/hardware"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
 type Scheduler interface {
@@ -71,7 +75,9 @@ type nodeScheduler struct {
 	queue  *list.List
 	closed bool
 
-	workers sync.WaitGroup
+	concurrency int
+	workerCount int
+	workers     sync.WaitGroup
 }
 
 type taskEntry struct {
@@ -126,11 +132,31 @@ func New(concurrency int) *nodeScheduler {
 		queue:  list.New(),
 	}
 	scheduler.cond = sync.NewCond(&scheduler.mu)
-	scheduler.workers.Add(concurrency)
-	for i := 0; i < concurrency; i++ {
-		go scheduler.runWorker()
-	}
+	scheduler.resize(concurrency)
 	return scheduler
+}
+
+func (s *nodeScheduler) resize(concurrency int) {
+	if concurrency <= 0 {
+		panic("node scheduler concurrency must be greater than zero")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.concurrency == concurrency {
+		return
+	}
+
+	s.concurrency = concurrency
+	if concurrency > s.workerCount {
+		additional := concurrency - s.workerCount
+		s.workerCount += additional
+		s.workers.Add(additional)
+		for i := 0; i < additional; i++ {
+			go s.runWorker()
+		}
+	}
+	s.cond.Broadcast()
 }
 
 func (s *nodeScheduler) Submit(task Task) TaskHandle {
@@ -220,16 +246,18 @@ func (s *nodeScheduler) dequeue() *taskEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for s.queue.Len() == 0 && !s.closed {
+	for {
+		if s.closed || s.workerCount > s.concurrency {
+			s.workerCount--
+			return nil
+		}
+		if s.queue.Len() > 0 {
+			element := s.queue.Front()
+			s.queue.Remove(element)
+			return element.Value.(*taskEntry)
+		}
 		s.cond.Wait()
 	}
-	if s.closed {
-		return nil
-	}
-
-	element := s.queue.Front()
-	s.queue.Remove(element)
-	return element.Value.(*taskEntry)
 }
 
 func (s *nodeScheduler) requeue(entry *taskEntry) bool {
@@ -244,35 +272,45 @@ func (s *nodeScheduler) requeue(entry *taskEntry) bool {
 	return true
 }
 
-var global struct {
-	sync.Mutex
-	scheduler *nodeScheduler
-}
-
-func Init(concurrency int) {
-	global.Lock()
-	defer global.Unlock()
-	if global.scheduler != nil {
-		panic("node scheduler is already initialized")
+var getGlobalScheduler = sync.OnceValue(func() *nodeScheduler {
+	params := paramtable.Get()
+	ratioParam := params.CommonCfg.NodeSchedulerMaxConcurrencyRatio
+	cpu := hardware.GetCPUNum()
+	concurrency, ok := concurrencyFromRatio(cpu, ratioParam.GetAsFloat())
+	if !ok {
+		concurrency = cpu
+		mlog.Warn(context.TODO(), "invalid node scheduler concurrency ratio, use default concurrency",
+			mlog.String("value", ratioParam.GetValue()),
+			mlog.Int("concurrency", concurrency))
 	}
-	global.scheduler = New(concurrency)
+
+	scheduler := New(concurrency)
+	params.Watch(ratioParam.Key, config.NewHandler("node-scheduler-concurrency", func(event *config.Event) {
+		if !event.HasUpdated {
+			return
+		}
+		ratio := ratioParam.GetAsFloat()
+		concurrency, ok := concurrencyFromRatio(hardware.GetCPUNum(), ratio)
+		if !ok {
+			mlog.Warn(context.TODO(), "ignore invalid node scheduler concurrency ratio",
+				mlog.String("value", ratioParam.GetValue()))
+			return
+		}
+		scheduler.resize(concurrency)
+		mlog.Info(context.TODO(), "node scheduler concurrency resized",
+			mlog.Float64("ratio", ratio),
+			mlog.Int("concurrency", concurrency))
+	}))
+	return scheduler
+})
+
+func concurrencyFromRatio(cpu int, ratio float64) (int, bool) {
+	if cpu <= 0 || ratio <= 0 || math.IsNaN(ratio) || math.IsInf(ratio, 0) {
+		return 0, false
+	}
+	return max(1, int(float64(cpu)*ratio)), true
 }
 
 func Get() Scheduler {
-	global.Lock()
-	defer global.Unlock()
-	if global.scheduler == nil {
-		panic("node scheduler is not initialized")
-	}
-	return global.scheduler
-}
-
-func Close() {
-	global.Lock()
-	scheduler := global.scheduler
-	global.scheduler = nil
-	global.Unlock()
-	if scheduler != nil {
-		scheduler.Close()
-	}
+	return getGlobalScheduler()
 }
