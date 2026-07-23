@@ -110,7 +110,6 @@ func newTestModule(t *testing.T, pchannel string, vchannel string) *VChannelReco
 					},
 				},
 			},
-			LoadConfig: &streamingpb.VChannelLoadConfig{},
 		},
 		TransformLogMeta: &streamingpb.VChannelTransformLogMeta{},
 		Runtime:          moduleapi.Runtime{},

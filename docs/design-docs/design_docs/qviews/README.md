@@ -226,10 +226,11 @@ Loaded → Release
 - Resources are released when their associated query views are released.
 - Multi-version view support enables atomic updates on nodes to ensure resource liveness, reducing the frequency of resource operations.
 
-StreamingNode resources are prepared by QueryView state machines. `AlterLoadConfig`
-is persisted as vchannel load state in `VChannelMeta`, but it no longer starts
-StreamingNode resource loading by itself. When QueryView state enters the local
-Preparing/UpRecovering path, the state machine calls the PChannel-local
+StreamingNode resources are prepared by QueryView state machines. The QueryView's
+`load_info_version` resolves the required partitions, fields, and index metadata;
+`AlterLoadConfig` no longer creates vchannel-local state in `VChannelMeta`.
+When QueryView state enters the local Preparing/UpRecovering path, the state
+machine calls the PChannel-local
 `VChannelRecoveryModule` through `Acquire`; the module builds the query input
 view from its owned DataView, Segment state, and TransformLog, then keeps
 consuming DML so the recovered DataView only grows while the QueryView is live.
@@ -244,9 +245,8 @@ load, TransformLog registration/catch-up, and release semantics, see
 
 Example: If view A is unreasonable and causes OOM on a node, it is marked as Unrecoverable, but view A still exists on the node and already-loaded resources are not rolled back. After Coord detects this, the Balancer generates a new view B and pushes both views for atomic modification (A Dropped, B Preparing). Resources in (A diff B) are released, resources in (B diff A) are loaded, and resources in A∩B are retained.
 
-For StreamingNode-side resource preparation boundaries, including `AlterLoadConfig`
-initialization, `DropLoadConfig` cleanup, and recovery from `VChannelMeta.load_config`
-before QueryView sync, see
+For StreamingNode-side resource preparation boundaries, including versioned load
+info resolution and QueryView-triggered resource acquisition, see
 [StreamingNode Query Runtime Manager Design](snview/streamingnode_resource_manager.md).
 For StreamingNode growing-side runtime preparation and retention, see
 [StreamingNode Growing Segment Runtime Design](snview/growing_segment_runtime.md).
@@ -270,7 +270,7 @@ StreamingNode, see [StreamingNode IDF Oracle Runtime Design](snview/idf_oracle_r
 | Coord | DataView Manager | Maintaining the storage view list |
 | Coord | Sealed Segment Balancer | Gathering information from all Managers, generating and distributing QueryViews |
 | Coord | QueryView Manager | View state machine transitions, syncing view information to all Nodes |
-| Streaming Node | PChannel Query Resource Manager | Preparing vchannel resources from `VChannelMeta.load_config`, latest schema, SegmentModule views, TransformLog, and BM25 resource RPC |
+| Streaming Node | PChannel Query Resource Manager | Preparing vchannel resources from versioned load info, latest schema, SegmentModule views, TransformLog, and BM25 resource RPC |
 | Streaming Node | QueryView Manager | Listening for view state machine changes, checking prepared view resources, and publishing the required DataVersion watermark for SN-only eviction |
 | Streaming Node | Pure Delete Stream Manager | Acting as subscription server, publishing Delete data to QueryNodes. See [TransformLog View Module](../wal/transform_log_view_module.md). |
 | Streaming Node | Growing Segment Manager | Incremental data management, maintaining Growing Segment lifecycle |

@@ -276,7 +276,6 @@ func newTestVChannelMeta(vchannel string) *streamingpb.VChannelMeta {
 				},
 			},
 		},
-		LoadConfig: &streamingpb.VChannelLoadConfig{},
 	}
 }
 
