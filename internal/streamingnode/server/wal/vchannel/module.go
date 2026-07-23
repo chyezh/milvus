@@ -48,7 +48,7 @@ type ModuleConfig struct {
 	TransformLogMaterialBytes uint64
 	OnSegmentSealed           func(walview.SegmentSealedEvent)
 
-	TransformLogStream         wal.TransformLogStreamManager
+	TransformLogStream         wal.TransformLogStream
 	QueryRuntimeModuleBuilders []queryresource.QueryRuntimeModuleBuilder
 	NodeScheduler              nodescheduler.Scheduler
 	QueryRuntimeDispatcher     *queryresource.Dispatcher
@@ -78,7 +78,7 @@ type VChannelRecoveryModule struct {
 
 	metaAndData bool
 
-	queryTransformLogStream wal.TransformLogStreamManager
+	queryTransformLogStream wal.TransformLogStream
 	queryResources          *queryresource.Manager
 }
 

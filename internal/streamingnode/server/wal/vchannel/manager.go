@@ -53,10 +53,11 @@ type PChannelRecoveryManager struct {
 	pchannel string
 	modules  *typeutil.ConcurrentMap[string, *VChannelRecoveryModule]
 
-	config          PChannelManagerConfig
-	metaAndData     atomic.Bool
-	streamManager   *transformlog.StreamManager
-	queryDispatcher *queryresource.Dispatcher
+	config                  PChannelManagerConfig
+	metaAndData             atomic.Bool
+	streamManager           *transformlog.StreamManager
+	queryTransformLogStream wal.TransformLogStream
+	queryDispatcher         *queryresource.Dispatcher
 }
 
 func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecoveryManager, error) {
@@ -70,9 +71,16 @@ func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecovery
 		streamManager:   transformlog.NewStreamManager(config.PChannel),
 		queryDispatcher: queryresource.NewDispatcher(4),
 	}
+	queryTransformLogStream, err := manager.streamManager.AcquireStream(context.Background(), config.PChannel)
+	if err != nil {
+		manager.queryDispatcher.Close()
+		return nil, err
+	}
+	manager.queryTransformLogStream = queryTransformLogStream
 	for _, vchannel := range manager.initialVChannels(config) {
 		module, err := manager.newModule(vchannel)
 		if err != nil {
+			manager.Close()
 			return nil, err
 		}
 		manager.modules.Insert(vchannel, module)
@@ -236,6 +244,9 @@ func (m *PChannelRecoveryManager) Close() {
 		module.CloseQueryResources()
 		return true
 	})
+	if m.queryTransformLogStream != nil {
+		_ = m.queryTransformLogStream.Close()
+	}
 	if m.queryDispatcher != nil {
 		m.queryDispatcher.Close()
 	}
@@ -320,7 +331,7 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 		TransformLogMaterialRows:   m.config.TransformLogMaterialRows,
 		TransformLogMaterialBytes:  m.config.TransformLogMaterialBytes,
 		OnSegmentSealed:            m.config.OnSegmentSealed,
-		TransformLogStream:         m.streamManager,
+		TransformLogStream:         m.queryTransformLogStream,
 		QueryRuntimeModuleBuilders: m.config.QueryRuntimeModuleBuilders,
 		QueryViewLoadInfoProvider:  m.config.QueryViewLoadInfoProvider,
 		NodeScheduler:              m.config.NodeScheduler,

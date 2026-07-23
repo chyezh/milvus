@@ -145,6 +145,14 @@ func TestPChannelRecoveryManagerProvidesTransformLogStream(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestPChannelRecoveryManagerSharesQueryTransformLogStream(t *testing.T) {
+	manager := newTestManager(t, "p1", "v1", "v2")
+
+	require.NotNil(t, manager.queryTransformLogStream)
+	require.Same(t, manager.queryTransformLogStream, manager.Module("v1").queryTransformLogStream)
+	require.Same(t, manager.queryTransformLogStream, manager.Module("v2").queryTransformLogStream)
+}
+
 func TestPChannelRecoveryManagerRemovesClosedVChannelTransformLog(t *testing.T) {
 	ctx := context.Background()
 	manager := newTestManager(t, "p1", "v1")
