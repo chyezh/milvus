@@ -274,7 +274,7 @@ func (s *nodeScheduler) requeue(entry *taskEntry) bool {
 
 var getGlobalScheduler = sync.OnceValue(func() *nodeScheduler {
 	params := paramtable.Get()
-	ratioParam := params.CommonCfg.NodeSchedulerMaxConcurrencyRatio
+	ratioParam := &params.CommonCfg.NodeSchedulerMaxConcurrencyRatio
 	cpu := hardware.GetCPUNum()
 	concurrency, ok := concurrencyFromRatio(cpu, ratioParam.GetAsFloat())
 	if !ok {

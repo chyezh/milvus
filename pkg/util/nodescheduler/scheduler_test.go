@@ -448,7 +448,7 @@ func TestConcurrencyFromRatio(t *testing.T) {
 
 func TestGlobalSchedulerLazyInitializationAndDynamicResize(t *testing.T) {
 	params := paramtable.Get()
-	ratioParam := params.CommonCfg.NodeSchedulerMaxConcurrencyRatio
+	ratioParam := &params.CommonCfg.NodeSchedulerMaxConcurrencyRatio
 	require.NoError(t, params.Reset(ratioParam.Key))
 
 	first := Get()
