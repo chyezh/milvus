@@ -6,6 +6,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/flushcommon/broker"
 	"github.com/milvus-io/milvus/internal/flushcommon/syncmgr"
+	"github.com/milvus-io/milvus/internal/storagev2/packed"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
@@ -206,7 +207,7 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		SegmentPackWriter: segment.NewBulkPackWriter(
 			resource.Resource().ChunkManager(),
 			idalloc.NewMAllocator(resource.Resource().IDAllocator()),
-			nil,
+			packed.CreateStorageConfig(),
 		),
 		TransformLogStore:          transformLogStore,
 		TransformLogMaterializer:   transformLogMaterializer,
