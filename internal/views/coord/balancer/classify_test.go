@@ -271,6 +271,22 @@ func TestClassify_HasPreparingViewWithAdvancedDataVersion_None(t *testing.T) {
 	assert.Equal(t, actionNone, classifyShard(newPlanningContext(c), shardID))
 }
 
+func TestClassify_HasPreparingViewWithAdvancedDataVersion_None(t *testing.T) {
+	shardID := qviews.ShardID{ReplicaID: 1, VChannel: "v0"}
+	cfg := cfgFor(1, 1, []int64{10}, nil)
+	snap := baseSnap(cfg, shardID)
+	snap.ShardStatsMap()[shardID] = withPreparingVersion(testShardStats(
+		ver(1, 1, 1),
+		loadInfoVersion(1),
+		placement(101, 10, 1, coordview.SegmentStateUp),
+		placement(202, 10, 1, coordview.SegmentStatePreparing),
+	), ver(2, 1, 1))
+	snap.Nodes[1] = &BalanceNode{NodeID: 1, Alive: true}
+	setTestDataSnapshot(snap, 1, qviews.DataVersion{StreamingVersion: 3, CompactVersion: 1}, nil)
+
+	assert.Equal(t, actionNone, classifyShard(snap, shardID))
+}
+
 func TestClassify_UnrecoverableOnly_Must(t *testing.T) {
 	shardID := qviews.ShardID{ReplicaID: 1, VChannel: "by-dev-rootcoord-dml_0_1v0"}
 	cfg := cfgFor(1, 1, []int64{10}, nil)
