@@ -153,9 +153,11 @@ func (f schedulerTaskFunc) Execute(ctx context.Context) error {
 	return f(ctx)
 }
 
-var _ nodescheduler.Task = schedulerTaskFunc(nil)
-var _ nodescheduler.Task = (*SegmentLoadTask)(nil)
-var _ nodescheduler.Task = (*SegmentUpdateTask)(nil)
+var (
+	_ nodescheduler.Task = schedulerTaskFunc(nil)
+	_ nodescheduler.Task = (*SegmentLoadTask)(nil)
+	_ nodescheduler.Task = (*SegmentUpdateTask)(nil)
+)
 
 func updateCollectionIndexMeta(ctx context.Context, collection CollectionRuntime, indexes []*indexpb.IndexInfo) error {
 	updater, ok := collection.(CollectionIndexMetaUpdater)
