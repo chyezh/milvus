@@ -60,7 +60,7 @@ func (c *Client) NewSegmentLoadInfoStream(ctx context.Context) qnview.SegmentLoa
 }
 
 func newSegmentLoadInfoStream(ctx context.Context, open segmentLoadInfoStreamOpener) *segmentLoadInfoStream {
-	streamCtx, cancel := context.WithCancel(ctx)
+	streamCtx, cancel := context.WithCancel(ctx) //nolint:gosec // cancel is stored in the stream and called in Close()
 	s := &segmentLoadInfoStream{
 		ctx:             streamCtx,
 		cancel:          cancel,

@@ -8,13 +8,13 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"google.golang.org/protobuf/proto"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
-	"google.golang.org/protobuf/proto"
 )
 
 type queryViewSegmentLoadInfoSubscription struct {
