@@ -31,9 +31,11 @@ var _ handler.QueryViewHandler = (*SNQueryViewHandler)(nil)
 //
 // # Response Guarantee
 //
-// Every view pushed via ApplyViews is guaranteed to eventually produce a
-// response (via OnReport callback), provided the StreamingNodeResourceManager
-// fulfills its liveness contracts (see StreamingNodeResourceManager doc).
+// Every view pushed via ApplyViews while the handler is open is guaranteed to
+// eventually produce a response (via OnReport callback), provided the
+// StreamingNodeResourceManager fulfills its liveness contracts (see
+// StreamingNodeResourceManager doc). Views arriving after CloseForHandoff are
+// ignored and re-pushed by Coord after it reconnects to the new WAL owner.
 // The response paths are:
 //
 // View does not exist in handler:
@@ -59,6 +61,7 @@ var _ handler.QueryViewHandler = (*SNQueryViewHandler)(nil)
 //   - Other states: SM handles coord push and responds accordingly.
 type SNQueryViewHandler struct {
 	mu             sync.Mutex
+	closed         bool
 	pchannel       string
 	shards         map[qviews.ShardID]*snShardView
 	catalog        metastore.StreamingNodeCataLog
@@ -153,12 +156,16 @@ func (h *SNQueryViewHandler) ApplyViews(views []handler.ApplyView) {
 	// Apply each group atomically under the shard lock.
 	for shardID, shardViews := range grouped {
 		shard := h.getOrCreateShard(shardID)
+		if shard == nil {
+			continue
+		}
 		shard.ApplyViews(shardViews)
 	}
 }
 
 func (h *SNQueryViewHandler) CloseForHandoff() {
 	h.mu.Lock()
+	h.closed = true
 	shards := make([]*snShardView, 0, len(h.shards))
 	for _, shard := range h.shards {
 		shards = append(shards, shard)
@@ -189,6 +196,9 @@ func (h *SNQueryViewHandler) AcquireLatestUpView(ctx context.Context, shardID qv
 func (h *SNQueryViewHandler) getOrCreateShard(shardID qviews.ShardID) *snShardView {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.closed {
+		return nil
+	}
 	shard, ok := h.shards[shardID]
 	if !ok {
 		shard = &snShardView{

@@ -32,6 +32,10 @@ import (
 )
 
 type Scheduler interface {
+	// Submit enqueues the task into an unbounded queue and returns without
+	// waiting for queue capacity or task execution. Tasks may call Submit from
+	// Execute, so implementations must preserve this non-blocking contract to
+	// avoid exhausting all workers on nested submissions.
 	Submit(Task) TaskHandle
 }
 
@@ -176,6 +180,7 @@ func (s *nodeScheduler) Submit(task Task) TaskHandle {
 		entry.finish()
 		return handle
 	}
+	// The queue is intentionally unbounded: Submit must never wait for capacity.
 	s.queue.PushBack(entry)
 	s.cond.Signal()
 	s.mu.Unlock()

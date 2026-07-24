@@ -265,6 +265,43 @@ func TestSNHandler_ApplyViews_NewPreparing(t *testing.T) {
 	require.True(t, ok)
 }
 
+func TestSNHandler_CloseForHandoffRejectsLateView(t *testing.T) {
+	cat := newMockCatalog()
+	mgr := newMockResourceManager()
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+
+	h.CloseForHandoff()
+
+	rc := &reportCollector{}
+	h.ApplyViews([]handler.ApplyView{{
+		View:     newPreparingSNView(1),
+		OnReport: rc.onReport,
+	}})
+
+	assert.Zero(t, mgr.acquiredCount())
+	assert.Zero(t, rc.count())
+}
+
+func TestSNHandler_CloseForHandoffFencesDetachedShard(t *testing.T) {
+	cat := newMockCatalog()
+	mgr := newMockResourceManager()
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+	view := newPreparingSNView(1)
+	shard := h.getOrCreateShard(view.ShardID())
+	require.NotNil(t, shard)
+
+	h.CloseForHandoff()
+
+	rc := &reportCollector{}
+	shard.ApplyViews([]handler.ApplyView{{
+		View:     view,
+		OnReport: rc.onReport,
+	}})
+
+	assert.Zero(t, mgr.acquiredCount())
+	assert.Zero(t, rc.count())
+}
+
 func TestSNHandler_AcquireLatestUpViewReturnsFullTopology(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()

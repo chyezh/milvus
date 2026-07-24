@@ -25,6 +25,7 @@ import (
 // cause deadlocks.
 type snShardView struct {
 	mu              sync.Mutex
+	closed          bool
 	pchannel        string
 	shardID         qviews.ShardID
 	collectionID    int64
@@ -113,6 +114,9 @@ func recoverSnShardView(
 func (s *snShardView) ApplyViews(views []handler.ApplyView) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
 
 	for i := range views {
 		state := views[i].View.State()
@@ -130,6 +134,7 @@ func (s *snShardView) ApplyViews(views []handler.ApplyView) {
 
 func (s *snShardView) CloseForHandoff() {
 	s.mu.Lock()
+	s.closed = true
 	releases := make([]qviews.QueryViewKey, 0, len(s.views))
 	for version, entry := range s.views {
 		key := entry.View.QueryViewKey()
