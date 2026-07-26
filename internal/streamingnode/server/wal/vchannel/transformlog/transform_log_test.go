@@ -68,6 +68,22 @@ func TestObserveMessageOwnsAppendFlushAndMaterializeScheduling(t *testing.T) {
 	assert.IsType(t, &transformMaterializeTask{}, scheduler.tasks[1])
 }
 
+func TestEmptyBarrierAdvancesDurableCheckpointAfterSnapshotPersisted(t *testing.T) {
+	transformLog := New(Config{VChannel: "v1"})
+	transformLog.SwitchIntoMetaAndData()
+
+	result := transformLog.ObserveMessage(context.Background(), newTransformLogTestManualFlushMessage(t, 20))
+	require.NotNil(t, result.Data)
+	assert.Equal(t, uint64(0), result.Data.TimeTick())
+
+	snapshot := transformLog.ConsumeDirtyAndGetSnapshot()
+	require.NotNil(t, snapshot)
+	assert.Equal(t, uint64(20), snapshot.GetCheckpointTimeTick())
+
+	transformLog.MarkSnapshotPersisted(snapshot)
+	assert.Equal(t, uint64(20), result.Data.TimeTick())
+}
+
 func TestReadStopsAtEndTimeTick(t *testing.T) {
 	transformLog := New(Config{VChannel: "v1"})
 	manager := NewStreamManager("p1")
@@ -347,7 +363,7 @@ func TestMaterializeSkipsBarrierEntries(t *testing.T) {
 	require.NotNil(t, materializer.requests[0].Entries[0].GetDelete())
 }
 
-func TestFlushAdvancesCheckpointToLastDurableEntry(t *testing.T) {
+func TestFlushAdvancesCheckpointToTargetWhenAllEntriesThroughTargetAreDurable(t *testing.T) {
 	transformLog := New(Config{
 		VChannel: "v1",
 		Store:    newMemoryStore(),
@@ -359,10 +375,10 @@ func TestFlushAdvancesCheckpointToLastDurableEntry(t *testing.T) {
 	result, err := transformLog.flush(context.Background(), flushOption{TargetTimeTick: 20})
 	require.NoError(t, err)
 	assert.True(t, result.Started)
-	assert.Equal(t, uint64(10), result.DurableTimeTick)
+	assert.Equal(t, uint64(20), result.DurableTimeTick)
 
 	snapshot := transformLog.SnapshotMeta()
-	assert.Equal(t, uint64(10), snapshot.GetCheckpointTimeTick())
+	assert.Equal(t, uint64(20), snapshot.GetCheckpointTimeTick())
 	require.Len(t, transformLog.chunks, 1)
 	require.Len(t, transformLog.chunks[0].entries, 1)
 	assert.Equal(t, uint64(10), transformLog.chunks[0].entries[0].GetTimeTick())
@@ -384,6 +400,12 @@ func TestFlushKeepsCheckpointAtLastDurableEntryWhenTargetStillHasPendingEntries(
 	assert.Equal(t, uint64(10), result.DurableTimeTick)
 	assert.Equal(t, uint64(20), result.NextTargetTimeTick)
 	assert.Equal(t, uint64(10), transformLog.SnapshotMeta().GetCheckpointTimeTick())
+
+	result, err = transformLog.flush(context.Background(), flushOption{TargetTimeTick: result.NextTargetTimeTick})
+	require.NoError(t, err)
+	assert.Equal(t, uint64(20), result.DurableTimeTick)
+	assert.Zero(t, result.NextTargetTimeTick)
+	assert.Equal(t, uint64(20), transformLog.SnapshotMeta().GetCheckpointTimeTick())
 }
 
 func TestShouldMaterializeUsesUnmaterializedRowsAndBytes(t *testing.T) {
