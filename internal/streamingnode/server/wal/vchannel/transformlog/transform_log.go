@@ -184,9 +184,6 @@ func (t *TransformLog) syncUp(timeTick uint64) appendResult {
 		return appendResult{DataTimeTick: t.buffer.DataTimeTick()}
 	}
 	t.syncUpTimeTick = timeTick
-	if !t.buffer.IsFlushing() && !t.buffer.HasFlushWorkThrough(timeTick) {
-		t.advanceCheckpointLocked(timeTick)
-	}
 	t.notifyScannersLocked()
 	t.notifyStreamLocked()
 	return appendResult{
@@ -335,7 +332,13 @@ func (t *TransformLog) dataCheckpointTimeTick() uint64 {
 func (t *TransformLog) DataBarrierTimeTick() uint64 {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.persistedDataTimeTick
+	if t.persistedDataTimeTick < t.meta.GetCheckpointTimeTick() {
+		return t.persistedDataTimeTick
+	}
+	if t.buffer.HasFlushWorkThrough(t.syncUpTimeTick) {
+		return t.persistedDataTimeTick
+	}
+	return maxTimeTick(t.persistedDataTimeTick, t.syncUpTimeTick)
 }
 
 func (t *TransformLog) MaterializedBarrierTimeTick() uint64 {
@@ -462,10 +465,6 @@ func (t *TransformLog) commitFlushLocked(work flushWork) flushResult {
 
 	currentFlushTarget := t.buffer.FlushTargetTimeTick()
 	hasMoreWorkThroughTarget := t.buffer.HasFlushWorkThrough(currentFlushTarget)
-	if !hasMoreWorkThroughTarget {
-		t.advanceCheckpointLocked(currentFlushTarget)
-		result.DurableTimeTick = maxTimeTick(result.DurableTimeTick, currentFlushTarget)
-	}
 	t.buffer.FinishFlush()
 	switch {
 	case hasMoreWorkThroughTarget:
@@ -474,14 +473,6 @@ func (t *TransformLog) commitFlushLocked(work flushWork) flushResult {
 		result.NextTargetTimeTick = t.buffer.DataTimeTick()
 	}
 	return result
-}
-
-func (t *TransformLog) advanceCheckpointLocked(timeTick uint64) {
-	if timeTick <= t.meta.GetCheckpointTimeTick() {
-		return
-	}
-	t.meta.CheckpointTimeTick = timeTick
-	t.dirty = true
 }
 
 type materializeWork struct {
