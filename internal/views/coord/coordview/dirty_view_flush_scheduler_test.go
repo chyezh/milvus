@@ -12,6 +12,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore/kv/queryview"
 	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	qvobserve "github.com/milvus-io/milvus/internal/views/qviews/observe"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
@@ -44,6 +45,37 @@ type capturedDirtyViewEventSubmitter struct {
 	events []dirtyViewEvent
 }
 
+type recordedQueryViewEvents struct {
+	mu     sync.Mutex
+	events []qvobserve.Event
+}
+
+func (r *recordedQueryViewEvents) Observe(_ context.Context, event qvobserve.Event) {
+	r.mu.Lock()
+	r.events = append(r.events, event)
+	r.mu.Unlock()
+}
+
+func (r *recordedQueryViewEvents) ioEvents(shardID qviews.ShardID) (int, []qvobserve.CoordSyncViewAcceptedEvent) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	persisted := 0
+	accepted := make([]qvobserve.CoordSyncViewAcceptedEvent, 0)
+	for _, event := range r.events {
+		switch event := event.(type) {
+		case qvobserve.CoordPersistViewEvent:
+			if event.View.ShardID == shardID {
+				persisted++
+			}
+		case qvobserve.CoordSyncViewAcceptedEvent:
+			if event.View.ShardID == shardID {
+				accepted = append(accepted, event)
+			}
+		}
+	}
+	return persisted, accepted
+}
+
 func (s *capturedDirtyViewEventSubmitter) Submit(event dirtyViewEvent) {
 	s.mu.Lock()
 	s.events = append(s.events, event)
@@ -69,6 +101,13 @@ type blockingFlushCatalog struct {
 	once    sync.Once
 }
 
+type blockingFlushSyncer struct {
+	*mockSyncer
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
 func (c *blockingFlushCatalog) SaveQueryViews(ctx context.Context, views []*viewpb.QueryViewOfShard) error {
 	c.once.Do(func() { close(c.started) })
 	select {
@@ -77,6 +116,16 @@ func (c *blockingFlushCatalog) SaveQueryViews(ctx context.Context, views []*view
 		return ctx.Err()
 	}
 	return c.mockCatalog.SaveQueryViews(ctx, views)
+}
+
+func (s *blockingFlushSyncer) SyncViews(ctx context.Context, group syncer.SyncGroup) error {
+	s.once.Do(func() { close(s.started) })
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return s.mockSyncer.SyncViews(ctx, group)
 }
 
 func newTestDirtyViewFlushScheduler(
@@ -264,6 +313,63 @@ func TestDirtyViewFlushSchedulerPersistsBeforeSync(t *testing.T) {
 	close(catalog.release)
 	require.NoError(t, scheduler.Flush(context.Background()))
 	assert.Equal(t, 1, s.numSyncCalls())
+}
+
+func TestDirtyViewFlushSchedulerObservesCompletedIO(t *testing.T) {
+	catalog := &blockingFlushCatalog{
+		mockCatalog: newMockCatalog(),
+		started:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	s := &blockingFlushSyncer{
+		mockSyncer: newMockSyncer(),
+		started:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	scheduler := newTestDirtyViewFlushScheduler(t, catalog, s, 128)
+	recorder := &recordedQueryViewEvents{}
+	qvobserve.Register(recorder)
+
+	shardID := qviews.ShardID{ReplicaID: 10001, VChannel: "io-event-boundary"}
+	event := dirtyPersistEvent(shardID, 1)
+	view := event.persists[0]
+	event.syncs = []syncer.SyncView{
+		{View: qviews.NewFullQueryViewAtStreamingNode(view.Meta, view.StreamingNode, view.QueryNode)},
+		{View: qviews.NewQueryViewAtQueryNode(view.Meta, view.QueryNode[0])},
+	}
+	scheduler.Submit(event)
+
+	select {
+	case <-catalog.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("catalog persist did not start")
+	}
+	persisted, accepted := recorder.ioEvents(shardID)
+	assert.Zero(t, persisted)
+	assert.Empty(t, accepted)
+
+	close(catalog.release)
+	select {
+	case <-s.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sync enqueue did not start")
+	}
+	persisted, accepted = recorder.ioEvents(shardID)
+	assert.Equal(t, 1, persisted)
+	assert.Empty(t, accepted)
+
+	close(s.release)
+	require.NoError(t, scheduler.Flush(context.Background()))
+	persisted, accepted = recorder.ioEvents(shardID)
+	assert.Equal(t, 1, persisted)
+	require.Len(t, accepted, 2)
+	assert.Equal(t, 1, s.numSyncCalls())
+	nodes := map[qviews.WorkNodeKey]struct{}{}
+	for _, event := range accepted {
+		nodes[event.Node.Key()] = struct{}{}
+	}
+	assert.Contains(t, nodes, event.syncs[0].View.WorkNode().Key())
+	assert.Contains(t, nodes, event.syncs[1].View.WorkNode().Key())
 }
 
 func TestShardViewManagerSubmitsOneShardScopedDirtyEvent(t *testing.T) {

@@ -238,9 +238,12 @@ WorkNode key. It packs ready, non-inflight shard lanes according to the configur
 maximum ETCD transaction operation count. For each claimed batch it performs:
 
 1. Flatten all `persists` and call `catalog.SaveQueryViews` once.
-2. Only after persistence succeeds, group every `syncer.SyncView` by
+2. Emit `CoordPersistViewEvent` for each successfully persisted QueryView.
+3. Only after persistence succeeds, group every `syncer.SyncView` by
    `WorkNodeKey`.
-3. Call `syncer.SyncViews` once for the grouped node syncs.
+4. Call `syncer.SyncViews` once for the grouped node syncs.
+5. Emit `CoordSyncViewAcceptedEvent` for each QueryView accepted by the
+   ReliableSyncer.
 
 The ordering is local to each packed batch: all included QueryView states are
 persisted before any included node sync is dispatched. Different tasks contain

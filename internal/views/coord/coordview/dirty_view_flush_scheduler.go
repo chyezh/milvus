@@ -302,41 +302,28 @@ func (s *DirtyViewFlushScheduler) flushBatch(
 		if err := s.catalog.SaveQueryViews(ctx, persists); err != nil {
 			return err
 		}
-	}
-	if len(viewsByNode) == 0 {
-		return nil
-	}
-	if err := s.syncer.SyncViews(ctx, syncer.SyncGroup{ViewsByNode: viewsByNode}); err != nil {
-		observeDirtyViewSyncFailure(ctx, batch, err)
-		return err
-	}
-	return nil
-}
-
-func observeDirtyViewSyncFailure(
-	ctx context.Context,
-	batch map[qviews.ShardID]*pendingDirtyViewEvent,
-	err error,
-) {
-	type failedView struct {
-		key   qviews.QueryViewKey
-		state qviews.QueryViewState
-	}
-	failed := make(map[failedView]struct{})
-	for _, event := range batch {
-		for key, view := range event.syncs {
-			item := failedView{key: key.view, state: view.View.State()}
-			if _, ok := failed[item]; ok {
-				continue
-			}
-			failed[item] = struct{}{}
-			qvobserve.Observe(ctx, qvobserve.CoordSyncViewBatchFailedEvent{
-				View:  item.key,
-				State: item.state,
-				Err:   err,
+		for _, view := range persists {
+			qvobserve.Observe(ctx, qvobserve.CoordPersistViewEvent{
+				View:  queryViewKeyFromProto(view),
+				State: qviews.QueryViewState(view.GetMeta().GetState()),
 			})
 		}
 	}
+	if len(viewsByNode) > 0 {
+		if err := s.syncer.SyncViews(ctx, syncer.SyncGroup{ViewsByNode: viewsByNode}); err != nil {
+			return err
+		}
+	}
+	for _, views := range viewsByNode {
+		for _, view := range views {
+			qvobserve.Observe(ctx, qvobserve.CoordSyncViewAcceptedEvent{
+				View:  view.View.QueryViewKey(),
+				Node:  view.View.WorkNode(),
+				State: view.View.State(),
+			})
+		}
+	}
+	return nil
 }
 
 // Flush waits until all committed events have been processed. Callers must not

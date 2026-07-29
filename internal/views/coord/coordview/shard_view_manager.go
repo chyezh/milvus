@@ -346,19 +346,11 @@ func (m *ShardViewManager) processStateMachine(sm *CoordQueryViewStateMachine) {
 		// 1. ConsumeFlush persist effect → collect into pending batch.
 		flush := sm.ConsumeFlush()
 		if flush.Persist != nil {
-			qvobserve.Observe(m.ctx, qvobserve.CoordPersistViewEvent{
-				View:  m.keyForStateMachine(sm),
-				State: qviews.QueryViewState(flush.Persist.GetMeta().GetState()),
-			})
 			m.pendingPersists = append(m.pendingPersists, flush.Persist)
 		}
 
 		// 2. ConsumeFlush sync effects → collect into pending batch.
 		if len(flush.Sync) > 0 {
-			qvobserve.Observe(m.ctx, qvobserve.CoordSyncViewBatchEvent{
-				View:  m.keyForStateMachine(sm),
-				State: flush.Sync[0].State(),
-			})
 			m.pendingSyncs = append(m.pendingSyncs, syncEntry{sm: sm, views: flush.Sync})
 		}
 
