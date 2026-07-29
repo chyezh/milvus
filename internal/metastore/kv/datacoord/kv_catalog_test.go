@@ -2158,9 +2158,9 @@ func TestDataViewCatalog(t *testing.T) {
 	value, err := proto.Marshal(dataView)
 	assert.NoError(t, err)
 
-	dataViewKey := "datacoord-meta/dataview/100/versions/2/1"
-	dataViewPrefix := "datacoord-meta/dataview/100/versions/"
-	allDataViewsPrefix := "datacoord-meta/dataview/"
+	dataViewKey := "coord/dv/100/versions/2/1"
+	dataViewPrefix := "coord/dv/100/versions/"
+	allDataViewsPrefix := "coord/dv/"
 	txn.EXPECT().Save(ctx, dataViewKey, string(value)).Return(nil).Once()
 	assert.NoError(t, catalog.SaveDataView(ctx, dataView))
 
@@ -2178,7 +2178,7 @@ func TestDataViewCatalog(t *testing.T) {
 	otherDataView.DataVersion = &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0}
 	otherValue, err := proto.Marshal(otherDataView)
 	assert.NoError(t, err)
-	otherDataViewKey := "datacoord-meta/dataview/200/versions/1/0"
+	otherDataViewKey := "coord/dv/200/versions/1/0"
 	txn.EXPECT().WalkWithPrefix(ctx, allDataViewsPrefix, mock.Anything, mock.Anything).
 		RunAndReturn(func(_ context.Context, _ string, _ int, f func([]byte, []byte) error) error {
 			assert.NoError(t, f([]byte(dataViewKey), value))

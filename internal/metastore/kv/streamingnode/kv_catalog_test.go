@@ -113,6 +113,7 @@ func TestCatalogSegmentAssignments(t *testing.T) {
 
 func TestCatalogTransformLogMeta(t *testing.T) {
 	kv := mocks.NewMetaKv(t)
+	vchannel := "p1_100v2"
 	meta := &streamingpb.VChannelTransformLogMeta{
 		CheckpointTimeTick: 50,
 		FirstChunkId:       3,
@@ -120,57 +121,128 @@ func TestCatalogTransformLogMeta(t *testing.T) {
 	}
 	value, err := proto.Marshal(meta)
 	require.NoError(t, err)
+	key, err := buildTransformLogKey("p1", vchannel)
+	require.NoError(t, err)
 
 	kv.EXPECT().LoadWithPrefix(mock.Anything, buildTransformLogPrefix("p1")).
-		Return([]string{buildTransformLogKey("p1", "v1")}, []string{string(value)}, nil)
+		Return([]string{key}, []string{string(value)}, nil)
 	catalog := NewCataLog(kv)
 	ctx := context.Background()
 	metas, err := catalog.ListTransformLogMeta(ctx, "p1")
 	require.NoError(t, err)
 	require.Len(t, metas, 1)
-	assert.True(t, proto.Equal(meta, metas["v1"]))
+	assert.True(t, proto.Equal(meta, metas[vchannel]))
 
 	kv.EXPECT().MultiSave(mock.Anything, mock.MatchedBy(func(kvs map[string]string) bool {
-		saved, ok := kvs[buildTransformLogKey("p1", "v1")]
+		saved, ok := kvs[key]
 		if !ok {
 			return false
 		}
 		loaded := &streamingpb.VChannelTransformLogMeta{}
 		return proto.Unmarshal([]byte(saved), loaded) == nil && proto.Equal(meta, loaded)
 	})).Return(nil)
-	require.NoError(t, catalog.SaveTransformLogMeta(ctx, "p1", map[string]*streamingpb.VChannelTransformLogMeta{"v1": meta}))
+	require.NoError(t, catalog.SaveTransformLogMeta(ctx, "p1", map[string]*streamingpb.VChannelTransformLogMeta{vchannel: meta}))
 
-	kv.EXPECT().MultiRemove(mock.Anything, []string{buildTransformLogKey("p1", "v1")}).
+	kv.EXPECT().MultiRemove(mock.Anything, []string{key}).
 		Return(nil)
-	require.NoError(t, catalog.DropTransformLogMeta(ctx, "p1", []string{"v1"}))
+	require.NoError(t, catalog.DropTransformLogMeta(ctx, "p1", []string{vchannel}))
 }
 
 func TestCatalogSegmentDataVersionSummary(t *testing.T) {
 	kv := mocks.NewMetaKv(t)
+	vchannel := "p1_100v2"
 	summary := &streamingpb.SegmentDataVersionSummary{
 		DataVersion: &viewpb.DataVersion{StreamingVersion: 10, CompactVersion: 2},
 	}
 	value, err := proto.Marshal(summary)
 	require.NoError(t, err)
+	key, err := buildSegmentDataVersionSummaryKey("p1", vchannel)
+	require.NoError(t, err)
 
 	kv.EXPECT().LoadWithPrefix(mock.Anything, buildSegmentDataVersionSummaryPrefix("p1")).
-		Return([]string{buildSegmentDataVersionSummaryKey("p1", "v1")}, []string{string(value)}, nil)
+		Return([]string{key}, []string{string(value)}, nil)
 	catalog := NewCataLog(kv)
 	ctx := context.Background()
 	summaries, err := catalog.ListSegmentDataVersionSummaries(ctx, "p1")
 	require.NoError(t, err)
 	require.Len(t, summaries, 1)
-	assert.True(t, proto.Equal(summary, summaries["v1"]))
+	assert.True(t, proto.Equal(summary, summaries[vchannel]))
 
 	kv.EXPECT().MultiSave(mock.Anything, mock.MatchedBy(func(kvs map[string]string) bool {
-		saved, ok := kvs[buildSegmentDataVersionSummaryKey("p1", "v1")]
+		saved, ok := kvs[key]
 		if !ok {
 			return false
 		}
 		loaded := &streamingpb.SegmentDataVersionSummary{}
 		return proto.Unmarshal([]byte(saved), loaded) == nil && proto.Equal(summary, loaded)
 	})).Return(nil)
-	require.NoError(t, catalog.SaveSegmentDataVersionSummaries(ctx, "p1", map[string]*streamingpb.SegmentDataVersionSummary{"v1": summary}))
+	require.NoError(t, catalog.SaveSegmentDataVersionSummaries(ctx, "p1", map[string]*streamingpb.SegmentDataVersionSummary{vchannel: summary}))
+}
+
+func TestBuildCompactVChannelRecoveryKeys(t *testing.T) {
+	transformKey, err := buildTransformLogKey("p1", "p1_100v2")
+	require.NoError(t, err)
+	assert.Equal(t, "streamingnode-meta/wal/p1/tl/100/2", transformKey)
+
+	otherTransformKey, err := buildTransformLogKey("p1", "p1_200v3")
+	require.NoError(t, err)
+	assert.Equal(t, "streamingnode-meta/wal/p1/tl/200/3", otherTransformKey)
+	assert.NotEqual(t, transformKey, otherTransformKey)
+
+	summaryKey, err := buildSegmentDataVersionSummaryKey("p1", "p1_100v2")
+	require.NoError(t, err)
+	assert.Equal(t, "streamingnode-meta/wal/p1/sdv/100/2", summaryKey)
+
+	_, err = buildTransformLogKey("p2", "p1_100v2")
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "pchannel")
+}
+
+func TestCatalogListCompactVChannelMetadataRejectsMalformedKeys(t *testing.T) {
+	transformValue, err := proto.Marshal(&streamingpb.VChannelTransformLogMeta{})
+	require.NoError(t, err)
+	summaryValue, err := proto.Marshal(&streamingpb.SegmentDataVersionSummary{})
+	require.NoError(t, err)
+
+	for _, suffix := range []string{
+		"",
+		"100",
+		"100/2/extra",
+		"-1/2",
+		"100/-1",
+		"+100/2",
+		"100/+2",
+		"0100/2",
+		"100/02",
+		"9223372036854775808/2",
+		"100/9223372036854775808",
+	} {
+		t.Run("transform-log-"+suffix, func(t *testing.T) {
+			kv := mocks.NewMetaKv(t)
+			prefix := buildTransformLogPrefix("p1")
+			kv.EXPECT().LoadWithPrefix(mock.Anything, prefix).Return(
+				[]string{prefix + suffix},
+				[]string{string(transformValue)},
+				nil,
+			)
+			metas, err := NewCataLog(kv).ListTransformLogMeta(context.Background(), "p1")
+			require.Error(t, err)
+			assert.Nil(t, metas)
+		})
+
+		t.Run("segment-data-version-"+suffix, func(t *testing.T) {
+			kv := mocks.NewMetaKv(t)
+			prefix := buildSegmentDataVersionSummaryPrefix("p1")
+			kv.EXPECT().LoadWithPrefix(mock.Anything, prefix).Return(
+				[]string{prefix + suffix},
+				[]string{string(summaryValue)},
+				nil,
+			)
+			summaries, err := NewCataLog(kv).ListSegmentDataVersionSummaries(context.Background(), "p1")
+			require.Error(t, err)
+			assert.Nil(t, summaries)
+		})
+	}
 }
 
 func TestCatalogListSegmentAssignmentRejectsMismatchedOwner(t *testing.T) {
@@ -209,7 +281,9 @@ func TestCatalogListRecoveryMetaWithRootPath(t *testing.T) {
 	}
 	summaryValue, err := proto.Marshal(summary)
 	require.NoError(t, err)
-	require.NoError(t, kv.Save(ctx, buildSegmentDataVersionSummaryKey("p1", "v1"), string(summaryValue)))
+	summaryKey, err := buildSegmentDataVersionSummaryKey("p1", "p1_1v0")
+	require.NoError(t, err)
+	require.NoError(t, kv.Save(ctx, summaryKey, string(summaryValue)))
 
 	view := makeQueryViewForCatalogTest("p1_1v0", viewpb.QueryViewState_QueryViewStateUp)
 	viewValue, err := marshalQueryViewForPersistence(view)
@@ -226,7 +300,7 @@ func TestCatalogListRecoveryMetaWithRootPath(t *testing.T) {
 	summaries, err := catalog.ListSegmentDataVersionSummaries(ctx, "p1")
 	require.NoError(t, err)
 	require.Len(t, summaries, 1)
-	assert.True(t, proto.Equal(summary, summaries["v1"]))
+	assert.True(t, proto.Equal(summary, summaries["p1_1v0"]))
 
 	views, err := catalog.ListQueryViews(ctx, "p1")
 	require.NoError(t, err)
@@ -796,7 +870,7 @@ func TestBuildPrefixAndKey(t *testing.T) {
 	assert.Equal(t, "streamingnode-meta/wal/p1/salvage-checkpoint/cluster-a", buildSalvageCheckpointPath("p1", "cluster-a"))
 	assert.Equal(t, "streamingnode-meta/wal/p2/salvage-checkpoint/cluster-b", buildSalvageCheckpointPath("p2", "cluster-b"))
 
-	assert.Equal(t, "streamingnode-meta/wal/p1/query-view/", buildQueryViewPrefix("p1"))
+	assert.Equal(t, "streamingnode-meta/wal/p1/qv/", buildQueryViewPrefix("p1"))
 }
 
 func TestCatalogQueryViews(t *testing.T) {
@@ -828,7 +902,7 @@ func TestCatalogQueryViews(t *testing.T) {
 	catalog := NewCataLog(kv)
 	ctx := context.Background()
 	view := makeQueryViewForCatalogTest("p1_1v0", viewpb.QueryViewState_QueryViewStateUp)
-	key := "streamingnode-meta/wal/p1/query-view/1/10/p1_1v0/20/0/30"
+	key := "streamingnode-meta/wal/p1/qv/1/10/0/20/0/30"
 
 	require.NoError(t, catalog.SaveQueryViews(ctx, "p1", []*viewpb.QueryViewOfShard{view}))
 	require.Contains(t, storage, key)
@@ -860,7 +934,7 @@ func TestCatalogQueryViews(t *testing.T) {
 	nextView := proto.Clone(view).(*viewpb.QueryViewOfShard)
 	nextView.Meta.Version.DataVersion.StreamingVersion = 21
 	nextView.Meta.Version.QueryVersion = 1
-	nextKey := "streamingnode-meta/wal/p1/query-view/1/10/p1_1v0/21/0/1"
+	nextKey := "streamingnode-meta/wal/p1/qv/1/10/0/21/0/1"
 	require.NoError(t, catalog.SaveQueryViews(ctx, "p1", []*viewpb.QueryViewOfShard{view, nextView}))
 	require.Contains(t, storage, key)
 	require.Contains(t, storage, nextKey)
@@ -868,6 +942,37 @@ func TestCatalogQueryViews(t *testing.T) {
 	views, err = catalog.ListQueryViews(ctx, "p1")
 	require.NoError(t, err)
 	require.Len(t, views, 2)
+}
+
+func TestBuildQueryViewKeyRejectsMismatchedIdentity(t *testing.T) {
+	view := makeQueryViewForCatalogTest("p1_1v0", viewpb.QueryViewState_QueryViewStateUp)
+
+	_, err := buildQueryViewKey("p2", view.GetMeta())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "pchannel")
+
+	view.Meta.CollectionId = 2
+	_, err = buildQueryViewKey("p1", view.GetMeta())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "collection")
+}
+
+func TestCatalogListQueryViewsRejectsCompactKeyValueMismatch(t *testing.T) {
+	view := makeQueryViewForCatalogTest("p1_1v0", viewpb.QueryViewState_QueryViewStateUp)
+	value, err := marshalQueryViewForPersistence(view)
+	require.NoError(t, err)
+
+	kv := mocks.NewMetaKv(t)
+	kv.EXPECT().LoadWithPrefix(mock.Anything, buildQueryViewPrefix("p1")).Return(
+		[]string{"streamingnode-meta/wal/p1/qv/1/10/1/20/0/30"},
+		[]string{string(value)},
+		nil,
+	)
+
+	views, err := NewCataLog(kv).ListQueryViews(context.Background(), "p1")
+	require.Error(t, err)
+	assert.Nil(t, views)
+	assert.ErrorContains(t, err, "mismatched query view")
 }
 
 func makeQueryViewForCatalogTest(vchannel string, state viewpb.QueryViewState) *viewpb.QueryViewOfShard {

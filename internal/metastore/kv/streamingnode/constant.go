@@ -5,9 +5,9 @@ const (
 
 	DirectoryWAL                       = "wal"
 	DirectorySegmentAssign             = "segment-assign"
-	DirectorySegmentDataVersionSummary = "segment-data-version-summary"
-	DirectoryTransformLog              = "transform-log"
-	DirectoryQueryView                 = "query-view"
+	DirectorySegmentDataVersionSummary = "sdv"
+	DirectoryTransformLog              = "tl"
+	DirectoryQueryView                 = "qv"
 	DirectoryVChannel                  = "vchannel"
 	DirectorySchema                    = "schema"
 

@@ -16,6 +16,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/etcd"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
@@ -178,9 +179,9 @@ func (c *catalog) ListTransformLogMeta(ctx context.Context, pchannelName string)
 	}
 	metas := make(map[string]*streamingpb.VChannelTransformLogMeta, len(values))
 	for idx, value := range values {
-		vchannel := typeutil.After(keys[idx], prefix)
-		if strings.Contains(vchannel, "/") {
-			continue
+		vchannel, err := parseCompactVChannelKey(keys[idx], prefix, pchannelName)
+		if err != nil {
+			return nil, err
 		}
 		meta := &streamingpb.VChannelTransformLogMeta{}
 		if err := proto.Unmarshal([]byte(value), meta); err != nil {
@@ -195,11 +196,15 @@ func (c *catalog) ListTransformLogMeta(ctx context.Context, pchannelName string)
 func (c *catalog) SaveTransformLogMeta(ctx context.Context, pchannelName string, metas map[string]*streamingpb.VChannelTransformLogMeta) error {
 	kvs := make(map[string]string, len(metas))
 	for vchannel, meta := range metas {
+		key, err := buildTransformLogKey(pchannelName, vchannel)
+		if err != nil {
+			return err
+		}
 		data, err := proto.Marshal(meta)
 		if err != nil {
 			return errors.Wrapf(err, "marshal transform log meta %s at pchannel %s failed", vchannel, pchannelName)
 		}
-		kvs[buildTransformLogKey(pchannelName, vchannel)] = string(data)
+		kvs[key] = string(data)
 	}
 	if len(kvs) == 0 {
 		return nil
@@ -214,7 +219,11 @@ func (c *catalog) SaveTransformLogMeta(ctx context.Context, pchannelName string,
 func (c *catalog) DropTransformLogMeta(ctx context.Context, pchannelName string, vchannels []string) error {
 	removes := make([]string, 0, len(vchannels))
 	for _, vchannel := range vchannels {
-		removes = append(removes, buildTransformLogKey(pchannelName, vchannel))
+		key, err := buildTransformLogKey(pchannelName, vchannel)
+		if err != nil {
+			return err
+		}
+		removes = append(removes, key)
 	}
 	if len(removes) == 0 {
 		return nil
@@ -326,9 +335,9 @@ func (c *catalog) ListSegmentDataVersionSummaries(ctx context.Context, pChannelN
 
 	summaries := make(map[string]*streamingpb.SegmentDataVersionSummary, len(values))
 	for idx, value := range values {
-		vchannel := typeutil.After(keys[idx], prefix)
-		if vchannel == "" || strings.Contains(vchannel, "/") {
-			return nil, errors.Errorf("mismatched segment data version summary recovery meta, key %s", keys[idx])
+		vchannel, err := parseCompactVChannelKey(keys[idx], prefix, pChannelName)
+		if err != nil {
+			return nil, err
 		}
 		summary := &streamingpb.SegmentDataVersionSummary{}
 		if err = proto.Unmarshal([]byte(value), summary); err != nil {
@@ -343,7 +352,10 @@ func (c *catalog) ListSegmentDataVersionSummaries(ctx context.Context, pChannelN
 func (c *catalog) SaveSegmentDataVersionSummaries(ctx context.Context, pChannelName string, summaries map[string]*streamingpb.SegmentDataVersionSummary) error {
 	kvs := make(map[string]string, len(summaries))
 	for vchannel, summary := range summaries {
-		key := buildSegmentDataVersionSummaryKey(pChannelName, vchannel)
+		key, err := buildSegmentDataVersionSummaryKey(pChannelName, vchannel)
+		if err != nil {
+			return err
+		}
 		data, err := proto.Marshal(summary)
 		if err != nil {
 			return errors.Wrapf(err, "marshal segment data version summary for vchannel %s at pchannel %s failed", vchannel, pChannelName)
@@ -381,7 +393,11 @@ func (c *catalog) ListQueryViews(ctx context.Context, pChannelName string) ([]*v
 		}
 		expectedKey := typeutil.After(expectedFullKey, prefix)
 		if key != expectedKey {
-			panic(fmt.Sprintf("mismatched query view recovery meta, key %s, meta %s", keys[idx], view.GetMeta().GetVchannel()))
+			return nil, merr.WrapErrDataIntegrityMsg(
+				"mismatched query view recovery meta, key %s, vchannel %s",
+				keys[idx],
+				view.GetMeta().GetVchannel(),
+			)
 		}
 		views = append(views, view)
 	}
@@ -513,13 +529,45 @@ func buildSegmentAssignmentKey(pChannelName string, segmentID int64) string {
 }
 
 // buildSegmentDataVersionSummaryKey returns the key for a specific vchannel segment data version summary.
-func buildSegmentDataVersionSummaryKey(pChannelName string, vchannelName string) string {
-	return buildSegmentDataVersionSummaryPrefix(pChannelName) + vchannelName
+func buildSegmentDataVersionSummaryKey(pChannelName string, vchannelName string) (string, error) {
+	return buildCompactVChannelKey(buildSegmentDataVersionSummaryPrefix(pChannelName), pChannelName, vchannelName)
 }
 
 // buildTransformLogKey returns the key for a specific transform log's metadata.
-func buildTransformLogKey(pChannelName string, vchannelName string) string {
-	return buildTransformLogPrefix(pChannelName) + vchannelName
+func buildTransformLogKey(pChannelName string, vchannelName string) (string, error) {
+	return buildCompactVChannelKey(buildTransformLogPrefix(pChannelName), pChannelName, vchannelName)
+}
+
+func buildCompactVChannelKey(prefix string, pchannelName string, vchannelName string) (string, error) {
+	pchannel, collectionID, vchannelIndex, err := funcutil.ParseVChannel(vchannelName)
+	if err != nil {
+		return "", err
+	}
+	if pchannel != pchannelName {
+		return "", merr.WrapErrServiceInternalMsg(
+			"vchannel %s pchannel %s mismatches catalog pchannel %s",
+			vchannelName,
+			pchannel,
+			pchannelName,
+		)
+	}
+	return fmt.Sprintf("%s%d/%d", prefix, collectionID, vchannelIndex), nil
+}
+
+func parseCompactVChannelKey(key string, prefix string, pchannelName string) (string, error) {
+	components := strings.Split(typeutil.After(key, prefix), "/")
+	if len(components) != 2 || components[0] == "" || components[1] == "" {
+		return "", merr.WrapErrDataIntegrityMsg("malformed compact vchannel metadata key %s", key)
+	}
+	collectionID, err := strconv.ParseInt(components[0], 10, 64)
+	if err != nil || collectionID < 0 || strconv.FormatInt(collectionID, 10) != components[0] {
+		return "", merr.WrapErrDataIntegrityMsg("malformed compact vchannel metadata key %s", key)
+	}
+	vchannelIndex, err := strconv.ParseInt(components[1], 10, strconv.IntSize)
+	if err != nil || vchannelIndex < 0 || strconv.FormatInt(vchannelIndex, 10) != components[1] {
+		return "", merr.WrapErrDataIntegrityMsg("malformed compact vchannel metadata key %s", key)
+	}
+	return funcutil.GetVirtualChannel(pchannelName, collectionID, int(vchannelIndex)), nil
 }
 
 // buildQueryViewKey returns the key for a specific StreamingNode query view recovery meta.
@@ -531,12 +579,32 @@ func buildQueryViewKey(pChannelName string, meta *viewpb.QueryViewMeta) (string,
 	if version == nil || version.GetDataVersion() == nil {
 		return "", merr.WrapErrServiceInternalMsg("query view %s has nil version", meta.GetVchannel())
 	}
+	pchannel, collectionID, vchannelIndex, err := funcutil.ParseVChannel(meta.GetVchannel())
+	if err != nil {
+		return "", err
+	}
+	if pchannel != pChannelName {
+		return "", merr.WrapErrServiceInternalMsg(
+			"query view vchannel %s pchannel %s mismatches catalog pchannel %s",
+			meta.GetVchannel(),
+			pchannel,
+			pChannelName,
+		)
+	}
+	if collectionID != meta.GetCollectionId() {
+		return "", merr.WrapErrServiceInternalMsg(
+			"query view collection %d mismatches vchannel %s collection %d",
+			meta.GetCollectionId(),
+			meta.GetVchannel(),
+			collectionID,
+		)
+	}
 	dataVersion := version.GetDataVersion()
-	return fmt.Sprintf("%s%d/%d/%s/%d/%d/%d",
+	return fmt.Sprintf("%s%d/%d/%d/%d/%d/%d",
 		buildQueryViewPrefix(pChannelName),
 		meta.GetCollectionId(),
 		meta.GetReplicaId(),
-		meta.GetVchannel(),
+		vchannelIndex,
 		dataVersion.GetStreamingVersion(),
 		dataVersion.GetCompactVersion(),
 		version.GetQueryVersion(),
