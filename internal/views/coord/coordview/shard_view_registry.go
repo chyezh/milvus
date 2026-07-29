@@ -8,6 +8,8 @@ import (
 	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
 // ShardViewRegistry owns the lifecycle of every ShardViewManager on this Coord
@@ -19,10 +21,9 @@ import (
 //
 // All methods are safe for concurrent use.
 type ShardViewRegistry struct {
-	mu      sync.RWMutex
-	ctx     context.Context
-	catalog queryview.QueryViewCatalog
-	syncer  syncer.ReliableSyncer
+	mu             sync.RWMutex
+	ctx            context.Context
+	flushScheduler *DirtyViewFlushScheduler
 
 	version  uint64
 	shards   map[qviews.ShardID]*ShardViewManager
@@ -57,22 +58,33 @@ func RecoverShardViewRegistry(
 		byShardID[sid] = append(byShardID[sid], v)
 	}
 
+	flushScheduler := newDirtyViewFlushScheduler(
+		catalog,
+		s,
+		paramtable.Get().MetaStoreCfg.MaxEtcdTxnNum.GetAsInt(),
+		nodescheduler.Get(),
+	)
+	batch := flushScheduler.Begin()
 	shards := make(map[qviews.ShardID]*ShardViewManager, len(byShardID))
 	for sid, recovered := range byShardID {
-		shards[sid] = NewShardViewManager(ctx, sid, catalog, s, recovered)
+		shards[sid] = newShardViewManager(ctx, sid, flushScheduler, recovered)
 	}
+	batch.Commit()
 
 	registry := &ShardViewRegistry{
-		ctx:     ctx,
-		catalog: catalog,
-		syncer:  s,
-		version: 1,
-		shards:  shards,
-		stats:   make(map[qviews.ShardID]*ShardStats, len(shards)),
+		ctx:            ctx,
+		flushScheduler: flushScheduler,
+		version:        1,
+		shards:         shards,
+		stats:          make(map[qviews.ShardID]*ShardStats, len(shards)),
 	}
 	for sid, mgr := range shards {
 		mgr.SetStatsObserver(registry.onShardStatsChanged)
 		registry.stats[sid] = mgr.Stats()
+	}
+	if err := flushScheduler.Flush(ctx); err != nil {
+		flushScheduler.Close()
+		return nil, err
 	}
 	return registry, nil
 }
@@ -88,7 +100,7 @@ func (r *ShardViewRegistry) Ensure(shardID qviews.ShardID) *ShardViewManager {
 	}
 	r.mu.RUnlock()
 
-	mgr := NewShardViewManager(r.ctx, shardID, r.catalog, r.syncer, nil)
+	mgr := newShardViewManager(r.ctx, shardID, r.flushScheduler, nil)
 	mgr.SetStatsObserver(r.onShardStatsChanged)
 	stats := emptyShardStats()
 
@@ -103,6 +115,20 @@ func (r *ShardViewRegistry) Ensure(shardID qviews.ShardID) *ShardViewManager {
 	r.version++
 	r.mu.Unlock()
 	return mgr
+}
+
+func (r *ShardViewRegistry) Close() {
+	if r == nil || r.flushScheduler == nil {
+		return
+	}
+	r.flushScheduler.Close()
+}
+
+// Begin opens an explicit cross-shard QueryView flush batch. Existing flush
+// tasks continue running; events emitted before the returned token is committed
+// are held and dispatched together as disjoint ShardID-lane tasks.
+func (r *ShardViewRegistry) Begin() DirtyViewBatch {
+	return r.flushScheduler.Begin()
 }
 
 // Get returns the ShardViewManager for shardID, or nil if absent.

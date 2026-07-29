@@ -383,8 +383,8 @@ Persist events observe one persisted QueryView state write.
 #### Coord
 
 ```go
-// CoordPersistViewEvent is emitted when ShardViewManager.flush persists a view
-// state.
+// CoordPersistViewEvent is emitted when ShardViewManager captures one QueryView
+// persistence effect in a shard-scoped dirty event.
 type CoordPersistViewEvent struct {
     baseEvent
     View  qviews.QueryViewKey
@@ -411,16 +411,16 @@ Sync-batch events observe one QueryView sync to one worker-node batch.
 #### Coord
 
 ```go
-// CoordSyncViewBatchEvent is emitted when ShardViewManager.flush syncs a view
-// state to one worker-node batch.
+// CoordSyncViewBatchEvent is emitted when ShardViewManager captures one
+// QueryView sync effect for a worker node in a shard-scoped dirty event.
 type CoordSyncViewBatchEvent struct {
     baseEvent
     View  qviews.QueryViewKey
     State qviews.QueryViewState
 }
 
-// CoordSyncViewBatchFailedEvent is emitted when ShardViewManager.flush fails to
-// sync a view state to one worker-node batch.
+// CoordSyncViewBatchFailedEvent is emitted when a DirtyViewFlushScheduler task
+// fails to sync a QueryView state to one worker-node batch.
 type CoordSyncViewBatchFailedEvent struct {
     baseEvent
     View  qviews.QueryViewKey

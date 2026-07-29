@@ -80,6 +80,7 @@ type mockSyncer struct {
 	mu          sync.Mutex
 	syncedViews []syncer.SyncView  // accumulated across all calls
 	syncCalls   []syncer.SyncGroup // per-call groups
+	waitFlush   func()
 }
 
 func newMockSyncer() *mockSyncer {
@@ -101,27 +102,45 @@ func (s *mockSyncer) Close() error { return nil }
 // findOnSyncResponse returns the latest OnSyncResponse callback for the given work node and version.
 func (s *mockSyncer) findOnSyncResponse(node qviews.WorkNode, version qviews.QueryViewVersion) func(resp qviews.QueryViewAtWorkNode) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	// Search in reverse to find the latest.
 	for i := len(s.syncedViews) - 1; i >= 0; i-- {
 		sv := s.syncedViews[i]
 		if sv.View.Version().EQ(version) && sv.View.WorkNode().Key() == node.Key() {
-			return sv.OnSyncResponse
+			callback, waitFlush := sv.OnSyncResponse, s.waitFlush
+			s.mu.Unlock()
+			return func(resp qviews.QueryViewAtWorkNode) bool {
+				done := callback(resp)
+				if waitFlush != nil {
+					waitFlush()
+				}
+				return done
+			}
 		}
 	}
+	s.mu.Unlock()
 	return nil
 }
 
 // findOnQueryNodeLost returns the latest OnQueryNodeLost callback for the given node and version.
 func (s *mockSyncer) findOnQueryNodeLost(node qviews.WorkNode, version qviews.QueryViewVersion) func(qviews.QueryNode) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	for i := len(s.syncedViews) - 1; i >= 0; i-- {
 		sv := s.syncedViews[i]
 		if sv.View.Version().EQ(version) && sv.View.WorkNode().Key() == node.Key() {
-			return sv.OnQueryNodeLost
+			callback, waitFlush := sv.OnQueryNodeLost, s.waitFlush
+			s.mu.Unlock()
+			if callback == nil {
+				return nil
+			}
+			return func(node qviews.QueryNode) {
+				callback(node)
+				if waitFlush != nil {
+					waitFlush()
+				}
+			}
 		}
 	}
+	s.mu.Unlock()
 	return nil
 }
 
@@ -194,14 +213,46 @@ func buildTestViewWithVersion(numQN int, sv, cv, qv int64) *viewpb.QueryViewOfSh
 	return view
 }
 
-func newTestManager(catalog *mockCatalog, s *mockSyncer, recovered ...*viewpb.QueryViewOfShard) *ShardViewManager {
-	return NewShardViewManager(
-		context.Background(),
-		testShardID,
-		catalog,
-		s,
-		recovered,
-	)
+type testShardViewManager struct {
+	*ShardViewManager
+	t         *testing.T
+	scheduler *DirtyViewFlushScheduler
+}
+
+func (m *testShardViewManager) AddPreparing(ctx context.Context, builder *qviews.QueryViewAtCoordBuilder) error {
+	err := m.ShardViewManager.AddPreparing(ctx, builder)
+	if err == nil {
+		m.waitFlush()
+	}
+	return err
+}
+
+func (m *testShardViewManager) RequestRelease(ctx context.Context) error {
+	err := m.ShardViewManager.RequestRelease(ctx)
+	if err == nil {
+		m.waitFlush()
+	}
+	return err
+}
+
+func (m *testShardViewManager) waitFlush() {
+	m.t.Helper()
+	require.NoError(m.t, m.scheduler.Flush(context.Background()))
+}
+
+func newTestManager(t *testing.T, catalog *mockCatalog, s *mockSyncer, recovered ...*viewpb.QueryViewOfShard) *testShardViewManager {
+	t.Helper()
+	scheduler := newTestDirtyViewFlushScheduler(t, catalog, s, 128)
+	manager := &testShardViewManager{
+		ShardViewManager: newShardViewManager(context.Background(), testShardID, scheduler, recovered),
+		t:                t,
+		scheduler:        scheduler,
+	}
+	s.mu.Lock()
+	s.waitFlush = manager.waitFlush
+	s.mu.Unlock()
+	manager.waitFlush()
+	return manager
 }
 
 // simulateNodeResponse simulates a node responding by finding and invoking the OnSyncResponse callback.
@@ -240,7 +291,7 @@ func simulateNodeResponse(t *testing.T, s *mockSyncer, node qviews.WorkNode, ver
 func TestAddPreparing_Success(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManager(catalog, s)
+	mgr := newTestManager(t, catalog, s)
 
 	b := testBuilder(1, 1, 2)
 	err := mgr.AddPreparing(context.Background(), b)
@@ -268,7 +319,7 @@ func TestAddPreparing_Success(t *testing.T) {
 func TestAddPreparing_SameDataVersionIncrementsQueryVersion(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManager(catalog, s)
+	mgr := newTestManager(t, catalog, s)
 
 	// Add first view with DV(1,1) → QV=1.
 	b1 := testBuilder(1, 1, 1)
@@ -298,7 +349,7 @@ func TestAddPreparing_SameDataVersionIncrementsQueryVersion(t *testing.T) {
 func TestAddPreparing_PreemptsPreparing(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManager(catalog, s)
+	mgr := newTestManager(t, catalog, s)
 
 	// Add v1 Preparing.
 	b1 := testBuilder(1, 1, 1)
@@ -314,9 +365,10 @@ func TestAddPreparing_PreemptsPreparing(t *testing.T) {
 	// Unrecoverable(v1) + Preparing(v2).
 	require.Equal(t, 1, catalog.numSaveCalls())
 	states := catalog.savedStates()
-	require.Len(t, states, 2)
-	assert.Equal(t, viewpb.QueryViewState_QueryViewStateUnrecoverable, states[0]) // v1 preempted
-	assert.Equal(t, viewpb.QueryViewState_QueryViewStatePreparing, states[1])     // v2 new
+	assert.ElementsMatch(t, []viewpb.QueryViewState{
+		viewpb.QueryViewState_QueryViewStateUnrecoverable,
+		viewpb.QueryViewState_QueryViewStatePreparing,
+	}, states)
 
 	// Should have synced in ONE SyncViews call.
 	assert.Equal(t, 1, s.numSyncCalls())
@@ -330,7 +382,7 @@ func TestAddPreparing_PreemptsPreparing(t *testing.T) {
 func TestAddPreparing_PreemptsReady(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManager(catalog, s)
+	mgr := newTestManager(t, catalog, s)
 
 	// Add and drive v1 to Ready.
 	b1 := testBuilder(1, 1, 1)
@@ -364,7 +416,7 @@ func TestAddPreparing_PreemptsReady(t *testing.T) {
 func TestAddPreparing_DataVersionRollbackRejected(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManager(catalog, s)
+	mgr := newTestManager(t, catalog, s)
 
 	// Add v1 with DV(2,1).
 	b1 := testBuilder(2, 1, 1)
@@ -379,7 +431,7 @@ func TestAddPreparing_DataVersionRollbackRejected(t *testing.T) {
 func TestAddPreparing_BatchPersistAtomicity(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManager(catalog, s)
+	mgr := newTestManager(t, catalog, s)
 
 	// Add v1 Preparing.
 	b1 := testBuilder(1, 1, 1)
@@ -402,7 +454,7 @@ func TestAddPreparing_BatchPersistAtomicity(t *testing.T) {
 func TestNormalFlow_PrepareToUpCascade(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManager(catalog, s)
+	mgr := newTestManager(t, catalog, s)
 
 	// Add v1 and drive it to Up.
 	b1 := testBuilder(1, 1, 1)
@@ -437,9 +489,10 @@ func TestNormalFlow_PrepareToUpCascade(t *testing.T) {
 	// After v2 reaches Up, v1 should be cascaded to Down.
 	// Persisted: v2 Up + v1 Down.
 	states := catalog.savedStates()
-	require.Len(t, states, 2)
-	assert.Equal(t, viewpb.QueryViewState_QueryViewStateUp, states[0])   // v2 Up
-	assert.Equal(t, viewpb.QueryViewState_QueryViewStateDown, states[1]) // v1 Down
+	assert.ElementsMatch(t, []viewpb.QueryViewState{
+		viewpb.QueryViewState_QueryViewStateUp,
+		viewpb.QueryViewState_QueryViewStateDown,
+	}, states)
 
 	// SN should have received Down push for v1.
 	cb := s.findOnSyncResponse(testSN, ver1)
@@ -449,7 +502,7 @@ func TestNormalFlow_PrepareToUpCascade(t *testing.T) {
 func TestSyncResponseCompletesCurrentNodeSync(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManager(catalog, s)
+	mgr := newTestManager(t, catalog, s)
 
 	b := testBuilder(1, 1, 1)
 	ver1 := testVersion(1, 1, 1)
@@ -483,7 +536,7 @@ func TestSyncResponseCompletesCurrentNodeSync(t *testing.T) {
 
 func TestStreamingNodeSyncHasNoQueryNodeLostCallback(t *testing.T) {
 	s := newMockSyncer()
-	mgr := newTestManager(newMockCatalog(), s)
+	mgr := newTestManager(t, newMockCatalog(), s)
 
 	ver1 := testVersion(1, 1, 1)
 	require.NoError(t, mgr.AddPreparing(context.Background(), testBuilder(1, 1, 1)))
@@ -499,7 +552,7 @@ func TestStreamingNodeSyncHasNoQueryNodeLostCallback(t *testing.T) {
 func TestFullLifecycle_DownToDropped(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManager(catalog, s)
+	mgr := newTestManager(t, catalog, s)
 
 	// Add and drive v1 to Up.
 	b1 := testBuilder(1, 1, 1)
@@ -550,7 +603,7 @@ func TestFullLifecycle_DownToDropped(t *testing.T) {
 func TestQueryNodeLost_TriggersUnrecoverable(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManager(catalog, s)
+	mgr := newTestManager(t, catalog, s)
 
 	b := testBuilder(1, 1, 1)
 	ver1 := testVersion(1, 1, 1)
@@ -603,7 +656,7 @@ func TestQueryNodeLost_TriggersUnrecoverable(t *testing.T) {
 func TestQueryNodeLost_DroppingCleanupCompletes(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManager(catalog, s)
+	mgr := newTestManager(t, catalog, s)
 
 	b := testBuilder(1, 1, 2)
 	ver1 := testVersion(1, 1, 1)
@@ -650,7 +703,7 @@ func TestQueryNodeLost_DroppingCleanupCompletes(t *testing.T) {
 func TestRequestRelease_UpView(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManager(catalog, s)
+	mgr := newTestManager(t, catalog, s)
 
 	// Drive v1 to Up.
 	b := testBuilder(1, 1, 1)
@@ -679,7 +732,7 @@ func TestRequestRelease_UpView(t *testing.T) {
 func TestRequestRelease_PreparingView(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManager(catalog, s)
+	mgr := newTestManager(t, catalog, s)
 
 	b := testBuilder(1, 1, 1)
 	require.NoError(t, mgr.AddPreparing(context.Background(), b))
@@ -708,7 +761,7 @@ func TestRequestRelease_PreparingView(t *testing.T) {
 func TestRequestRelease_MixedViews(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManager(catalog, s)
+	mgr := newTestManager(t, catalog, s)
 
 	// v1: drive to Up.
 	b1 := testBuilder(1, 1, 1)
@@ -746,7 +799,7 @@ func TestRecovery_PreparingView(t *testing.T) {
 	// Recover a Preparing view.
 	v1 := buildTestViewWithVersion(1, 1, 1, 1)
 	v1.Meta.State = viewpb.QueryViewState_QueryViewStatePreparing
-	mgr := newTestManager(catalog, s, v1)
+	mgr := newTestManager(t, catalog, s, v1)
 
 	// Should re-push Preparing to all nodes.
 	assert.Equal(t, 2, s.syncViewCount()) // SN + QN1
@@ -766,7 +819,7 @@ func TestRecovery_UnrecoverableView(t *testing.T) {
 	// Recover an Unrecoverable view.
 	v1 := buildTestViewWithVersion(1, 1, 1, 1)
 	v1.Meta.State = viewpb.QueryViewState_QueryViewStateUnrecoverable
-	mgr := newTestManager(catalog, s, v1)
+	mgr := newTestManager(t, catalog, s, v1)
 
 	// Stays Unrecoverable, waits for AddPreparing to advance to Dropping.
 	ver1 := testVersion(1, 1, 1)
@@ -786,7 +839,7 @@ func TestRecovery_FastForward_SNReportsUp(t *testing.T) {
 	// Recover a Preparing view. SN already has Up from previous run.
 	v1 := buildTestViewWithVersion(1, 1, 1, 1)
 	v1.Meta.State = viewpb.QueryViewState_QueryViewStatePreparing
-	mgr := newTestManager(catalog, s, v1)
+	mgr := newTestManager(t, catalog, s, v1)
 	ver1 := testVersion(1, 1, 1)
 
 	// QN1 Ready.
@@ -815,7 +868,7 @@ func TestRecovery_FastForward_SNReportsUp(t *testing.T) {
 func TestCallback_RemovedView_ReturnsTrue(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManager(catalog, s)
+	mgr := newTestManager(t, catalog, s)
 
 	b := testBuilder(1, 1, 1)
 	ver1 := testVersion(1, 1, 1)
@@ -850,7 +903,7 @@ func TestCallback_RemovedView_ReturnsTrue(t *testing.T) {
 func TestOnQueryNodeLost_RemovedView_NoOp(t *testing.T) {
 	catalog := newMockCatalog()
 	s := newMockSyncer()
-	mgr := newTestManager(catalog, s)
+	mgr := newTestManager(t, catalog, s)
 
 	b := testBuilder(1, 1, 1)
 	ver1 := testVersion(1, 1, 1)
@@ -875,4 +928,27 @@ func TestOnQueryNodeLost_RemovedView_NoOp(t *testing.T) {
 	mgr.mu.Lock()
 	assert.Empty(t, mgr.views)
 	mgr.mu.Unlock()
+}
+
+func TestShardViewManagerConsumesOnlyProcessedStateMachineEffects(t *testing.T) {
+	untouched := NewCoordQueryViewStateMachine(buildTestViewWithVersion(1, 1, 1, 1))
+	processed := NewCoordQueryViewStateMachine(buildTestViewWithVersion(1, 1, 1, 2))
+	manager := &ShardViewManager{
+		ctx:     context.Background(),
+		shardID: testShardID,
+		views: map[qviews.QueryViewVersion]*CoordQueryViewStateMachine{
+			untouched.Version(): untouched,
+			processed.Version(): processed,
+		},
+	}
+
+	manager.mu.Lock()
+	manager.processStateMachine(processed)
+	event := manager.consumeDirtyEventLocked()
+	manager.mu.Unlock()
+
+	require.Len(t, event.persists, 1)
+	assert.Equal(t, processed.Version(), qviews.FromProtoQueryViewVersion(event.persists[0].GetMeta().GetVersion()))
+	assert.Len(t, event.syncs, 2)
+	assert.False(t, untouched.ConsumeFlush().Empty())
 }

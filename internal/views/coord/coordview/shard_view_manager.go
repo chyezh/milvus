@@ -5,11 +5,9 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/milvus-io/milvus/internal/metastore/kv/queryview"
 	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	qvobserve "github.com/milvus-io/milvus/internal/views/qviews/observe"
-	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
@@ -17,8 +15,8 @@ import (
 // within a single replica on the Coord side.
 //
 // It orchestrates CoordQueryViewStateMachine instances and their cross-view
-// interactions, calling Catalog for ETCD persistence and ReliableSyncer for
-// node sync. Node responses are delivered via callbacks registered with the syncer.
+// interactions. After each operation it emits one immutable shard-scoped dirty
+// event; DirtyViewFlushScheduler owns all cross-shard batching and I/O.
 //
 // Invariants (maintained by all methods):
 //   - At most one view in Preparing or Ready state (tracked by preparingView).
@@ -26,12 +24,11 @@ import (
 //
 // Thread-safety: All methods are thread-safe.
 type ShardViewManager struct {
-	ctx     context.Context // lifecycle context for Catalog calls within callbacks
-	mu      sync.Mutex
-	shardID qviews.ShardID
-	catalog queryview.QueryViewCatalog
-	syncer  syncer.ReliableSyncer
-	observe func(qviews.ShardID, *ShardStats)
+	ctx            context.Context // lifecycle context used by callbacks and event observation
+	mu             sync.Mutex
+	shardID        qviews.ShardID
+	eventSubmitter dirtyViewEventSubmitter
+	observe        func(qviews.ShardID, *ShardStats)
 
 	// All active views keyed by version for O(1) lookup.
 	views map[qviews.QueryViewVersion]*CoordQueryViewStateMachine
@@ -42,40 +39,38 @@ type ShardViewManager struct {
 	upView        *CoordQueryViewStateMachine // Up state; nil if none
 
 	// Accumulates persist and sync operations within a single lock-hold scope.
-	// All persists are flushed in a single SaveQueryViews call, then all syncs
-	// are flushed in a single SyncViews call. This ensures atomicity at the
-	// persistence layer and reduces the number of I/O calls.
+	// The accumulated effects are moved into one immutable dirtyViewEvent before
+	// the manager releases the lock.
 	// Must only be accessed under m.mu.
 	pendingPersists []*viewpb.QueryViewOfShard
 	pendingSyncs    []syncEntry
 }
 
-// syncEntry pairs a state machine with its per-node views for deferred sync dispatch.
+// syncEntry pairs a state machine with its per-node views for deferred event submission.
 type syncEntry struct {
 	sm    *CoordQueryViewStateMachine
 	views []qviews.QueryViewAtWorkNode
 }
 
-// NewShardViewManager creates a new ShardViewManager for the given shard.
+// newShardViewManager creates a new ShardViewManager for the given shard.
 //
-// ctx is the lifecycle context used for Catalog calls within callbacks.
+// ctx is the lifecycle context used by callbacks and event observation.
 // recoveredViews are views loaded from ETCD during crash recovery.
 // Unrecoverable views remain Unrecoverable after construction, waiting for
 // AddPreparing or RequestRelease to advance them to Dropping.
-// Active views in other states are pushed to their target nodes via syncer.
-func NewShardViewManager(
+// Active views in other states are emitted through eventSubmitter for the
+// DirtyViewFlushScheduler to persist and push to their target nodes.
+func newShardViewManager(
 	ctx context.Context,
 	shardID qviews.ShardID,
-	catalog queryview.QueryViewCatalog,
-	s syncer.ReliableSyncer,
+	eventSubmitter dirtyViewEventSubmitter,
 	recoveredViews []*viewpb.QueryViewOfShard,
 ) *ShardViewManager {
 	m := &ShardViewManager{
-		ctx:     ctx,
-		shardID: shardID,
-		catalog: catalog,
-		syncer:  s,
-		views:   make(map[qviews.QueryViewVersion]*CoordQueryViewStateMachine, len(recoveredViews)),
+		ctx:            ctx,
+		shardID:        shardID,
+		eventSubmitter: eventSubmitter,
+		views:          make(map[qviews.QueryViewVersion]*CoordQueryViewStateMachine, len(recoveredViews)),
 	}
 
 	// Recover state machines from persisted views.
@@ -98,7 +93,7 @@ func NewShardViewManager(
 	for _, sm := range recovered {
 		m.processStateMachine(sm)
 	}
-	m.flush()
+	m.submitDirtyEvent(m.consumeDirtyEventLocked())
 	return m
 }
 
@@ -229,12 +224,12 @@ func segmentSet(segments []int64) map[int64]bool {
 // Validation: The new DataVersion must not be lower than any existing view's DataVersion.
 func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.QueryViewAtCoordBuilder) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	newDV := builder.DataVersion()
 
 	// Validate no DataVersion rollback.
 	if err := m.validateDataVersionLocked(newDV); err != nil {
+		m.mu.Unlock()
 		return err
 	}
 
@@ -275,12 +270,14 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 		State:        sm.State(),
 	})
 
-	// Process: persist write-ahead + collect sync.
+	// Process: collect persist and sync effects.
 	m.processStateMachine(sm)
 
-	// Flush all accumulated I/O.
-	m.flush()
+	// Move all accumulated effects into one shard-scoped event.
+	event := m.consumeDirtyEventLocked()
 	m.publishStatsLocked()
+	m.mu.Unlock()
+	m.submitDirtyEvent(event)
 	return nil
 }
 
@@ -293,7 +290,6 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 // The actual cleanup completes asynchronously through callbacks.
 func (m *ShardViewManager) RequestRelease(ctx context.Context) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	if m.preparingView != nil {
 		key := m.keyForStateMachine(m.preparingView)
@@ -330,36 +326,40 @@ func (m *ShardViewManager) RequestRelease(ctx context.Context) error {
 	// Advance all Unrecoverable views (preempted or naturally failed) to Dropping.
 	m.advanceUnrecoverableToDropping()
 
-	m.flush()
+	event := m.consumeDirtyEventLocked()
 	m.publishStatsLocked()
+	m.mu.Unlock()
+	m.submitDirtyEvent(event)
 	return nil
 }
 
 // processStateMachine consumes pending I/O from a state machine and handles
 // cascading effects (Up-then-Down, Unrecoverable→Dropping, Dropped removal).
-// I/O is collected into pendingPersists/pendingSyncs for deferred execution.
+// I/O is collected into pendingPersists/pendingSyncs for deferred event
+// submission.
 //
 // Also maintains preparingView/upView pointers on state transitions.
 //
 // Must be called under m.mu.
 func (m *ShardViewManager) processStateMachine(sm *CoordQueryViewStateMachine) {
 	for {
-		// 1. ConsumePersist → collect into pending batch.
-		if persist := sm.ConsumePersist(); persist != nil {
+		// 1. ConsumeFlush persist effect → collect into pending batch.
+		flush := sm.ConsumeFlush()
+		if flush.Persist != nil {
 			qvobserve.Observe(m.ctx, qvobserve.CoordPersistViewEvent{
 				View:  m.keyForStateMachine(sm),
-				State: qviews.QueryViewState(persist.GetMeta().GetState()),
+				State: qviews.QueryViewState(flush.Persist.GetMeta().GetState()),
 			})
-			m.pendingPersists = append(m.pendingPersists, persist)
+			m.pendingPersists = append(m.pendingPersists, flush.Persist)
 		}
 
-		// 2. ConsumeSync → collect into pending batch.
-		if views := sm.ConsumeSync(); len(views) > 0 {
+		// 2. ConsumeFlush sync effects → collect into pending batch.
+		if len(flush.Sync) > 0 {
 			qvobserve.Observe(m.ctx, qvobserve.CoordSyncViewBatchEvent{
 				View:  m.keyForStateMachine(sm),
-				State: views[0].State(),
+				State: flush.Sync[0].State(),
 			})
-			m.pendingSyncs = append(m.pendingSyncs, syncEntry{sm: sm, views: views})
+			m.pendingSyncs = append(m.pendingSyncs, syncEntry{sm: sm, views: flush.Sync})
 		}
 
 		// 3. Handle cascading effects based on current state.
@@ -453,73 +453,31 @@ func (m *ShardViewManager) downOlderUpView(newUp *CoordQueryViewStateMachine) {
 	}
 }
 
-// flush executes all accumulated I/O: first persist all, then sync all.
-//
-// Both Catalog (ETCD) and ReliableSyncer provide reliable delivery:
-// they only return errors when the Coordinator is shutting down (context
-// canceled). In that case the Coordinator will perform a full recovery
-// on next startup, reconstructing all state machines from ETCD, so
-// transient in-memory / persisted inconsistencies are self-healing.
-//
-// Must be called under m.mu.
-func (m *ShardViewManager) flush() {
-	// 1. Persist all in a single call.
-	if len(m.pendingPersists) > 0 {
-		if err := m.catalog.SaveQueryViews(m.ctx, m.pendingPersists); err != nil {
-			// SaveQueryViews only fails when the Coordinator is shutting down
-			// (ctx canceled). On next startup a full recovery from ETCD will
-			// reconstruct all state machines, so this is safe to log-and-skip.
-			mlog.Warn(m.ctx, "failed to persist query views",
-				mlog.String("shardID", m.shardID.String()),
-				mlog.Int("count", len(m.pendingPersists)),
-				mlog.Err(err),
-			)
-		}
-		m.pendingPersists = m.pendingPersists[:0]
+// consumeDirtyEventLocked moves the current operation's accumulated effects
+// into an immutable shard event. Cross-shard merging and batch execution belong
+// to DirtyViewFlushScheduler.
+func (m *ShardViewManager) consumeDirtyEventLocked() dirtyViewEvent {
+	event := dirtyViewEvent{
+		shardID:  m.shardID,
+		persists: m.pendingPersists,
 	}
-
-	// 2. Sync all in a single call.
-	if len(m.pendingSyncs) > 0 {
-		viewsByNode := make(map[qviews.WorkNodeKey][]syncer.SyncView)
-		for _, entry := range m.pendingSyncs {
-			version := entry.sm.Version()
-			for _, view := range entry.views {
-				node := view.WorkNode()
-				key := node.Key()
-				var onQueryNodeLost func(qviews.QueryNode)
-				if _, ok := node.(qviews.QueryNode); ok {
-					onQueryNodeLost = m.makeOnQueryNodeLost(version)
-				}
-				viewsByNode[key] = append(viewsByNode[key], syncer.SyncView{
-					View:            view,
-					OnSyncResponse:  m.makeOnSyncResponse(version, view),
-					OnQueryNodeLost: onQueryNodeLost,
-				})
+	for _, entry := range m.pendingSyncs {
+		version := entry.sm.Version()
+		for _, view := range entry.views {
+			var onQueryNodeLost func(qviews.QueryNode)
+			if _, ok := view.WorkNode().(qviews.QueryNode); ok {
+				onQueryNodeLost = m.makeOnQueryNodeLost(version)
 			}
+			event.syncs = append(event.syncs, syncer.SyncView{
+				View:            view,
+				OnSyncResponse:  m.makeOnSyncResponse(version, view),
+				OnQueryNodeLost: onQueryNodeLost,
+			})
 		}
-		if len(viewsByNode) > 0 {
-			if err := m.syncer.SyncViews(m.ctx, syncer.SyncGroup{ViewsByNode: viewsByNode}); err != nil {
-				for _, entry := range m.pendingSyncs {
-					if len(entry.views) == 0 {
-						continue
-					}
-					qvobserve.Observe(m.ctx, qvobserve.CoordSyncViewBatchFailedEvent{
-						View:  m.keyForStateMachine(entry.sm),
-						State: entry.views[0].State(),
-						Err:   err,
-					})
-				}
-				// SyncViews only fails when the Coordinator is shutting down
-				// (ctx canceled or syncer closed). On next startup a full
-				// recovery will re-push all outstanding syncs.
-				mlog.Warn(m.ctx, "failed to sync views to nodes",
-					mlog.String("shardID", m.shardID.String()),
-					mlog.Err(err),
-				)
-			}
-		}
-		m.pendingSyncs = m.pendingSyncs[:0]
 	}
+	m.pendingPersists = nil
+	m.pendingSyncs = nil
+	return event
 }
 
 // makeOnSyncResponse creates a callback that processes node responses for a view sync.
@@ -529,10 +487,10 @@ func (m *ShardViewManager) flush() {
 func (m *ShardViewManager) makeOnSyncResponse(version qviews.QueryViewVersion, target qviews.QueryViewAtWorkNode) func(resp qviews.QueryViewAtWorkNode) bool {
 	return func(resp qviews.QueryViewAtWorkNode) bool {
 		m.mu.Lock()
-		defer m.mu.Unlock()
 
 		sm, ok := m.views[version]
 		if !ok {
+			m.mu.Unlock()
 			return true // view already removed, stop tracking
 		}
 
@@ -550,11 +508,14 @@ func (m *ShardViewManager) makeOnSyncResponse(version qviews.QueryViewVersion, t
 			ResourceReadyPercent: resourceReadyPercent(resp),
 		})
 		m.processStateMachine(sm)
-		m.flush()
+		event := m.consumeDirtyEventLocked()
 		m.publishStatsLocked()
 
 		_, exists := m.views[version]
-		return !exists || syncResponseCompletesTarget(target.State(), resp.State())
+		completed := !exists || syncResponseCompletesTarget(target.State(), resp.State())
+		m.mu.Unlock()
+		m.submitDirtyEvent(event)
+		return completed
 	}
 }
 
@@ -580,10 +541,10 @@ func syncResponseCompletesTarget(target, reported qviews.QueryViewState) bool {
 func (m *ShardViewManager) makeOnQueryNodeLost(version qviews.QueryViewVersion) func(qviews.QueryNode) {
 	return func(node qviews.QueryNode) {
 		m.mu.Lock()
-		defer m.mu.Unlock()
 
 		sm, ok := m.views[version]
 		if !ok {
+			m.mu.Unlock()
 			return // view already removed
 		}
 
@@ -603,8 +564,16 @@ func (m *ShardViewManager) makeOnQueryNodeLost(version qviews.QueryViewVersion) 
 			Node: node,
 		})
 		m.processStateMachine(sm)
-		m.flush()
+		event := m.consumeDirtyEventLocked()
 		m.publishStatsLocked()
+		m.mu.Unlock()
+		m.submitDirtyEvent(event)
+	}
+}
+
+func (m *ShardViewManager) submitDirtyEvent(event dirtyViewEvent) {
+	if !event.empty() {
+		m.eventSubmitter.Submit(event)
 	}
 }
 

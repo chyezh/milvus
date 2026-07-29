@@ -17,7 +17,26 @@ func newTestRegistry(t *testing.T, catalog *mockCatalog, s *mockSyncer) *ShardVi
 	t.Helper()
 	reg, err := RecoverShardViewRegistry(context.Background(), catalog, s)
 	require.NoError(t, err)
+	t.Cleanup(reg.Close)
 	return reg
+}
+
+func TestRegistry_FlushesAcrossManagers(t *testing.T) {
+	catalog := newMockCatalog()
+	s := newMockSyncer()
+	reg := newTestRegistry(t, catalog, s)
+
+	shard1 := qviews.ShardID{ReplicaID: 1, VChannel: "v1"}
+	shard2 := qviews.ShardID{ReplicaID: 1, VChannel: "v2"}
+	batch := reg.Begin()
+	require.NoError(t, reg.Ensure(shard1).AddPreparing(context.Background(), testBuilderForShard(1, shard1)))
+	require.NoError(t, reg.Ensure(shard2).AddPreparing(context.Background(), testBuilderForShard(2, shard2)))
+	assert.Zero(t, catalog.numSaveCalls())
+	batch.Commit()
+	require.NoError(t, reg.flushScheduler.Flush(context.Background()))
+
+	assert.Equal(t, 1, catalog.numSaveCalls())
+	assert.Len(t, catalog.saved, 2)
 }
 
 func TestRegistry_EmptyRecovery(t *testing.T) {
@@ -64,6 +83,7 @@ func TestRegistry_RecoverWithPersistedViews(t *testing.T) {
 
 	reg, err := RecoverShardViewRegistry(context.Background(), catalog, newMockSyncer())
 	require.NoError(t, err)
+	t.Cleanup(reg.Close)
 
 	assert.Len(t, reg.Snapshot().StatsMap(), 2)
 

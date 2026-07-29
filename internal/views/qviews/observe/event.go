@@ -682,8 +682,8 @@ func (e StreamingNodeReleaseResourceEvent) MarshalLogObject(enc mlog.ObjectEncod
 	return nil
 }
 
-// CoordPersistViewEvent is emitted when ShardViewManager.flush persists a view
-// state.
+// CoordPersistViewEvent is emitted when ShardViewManager captures one QueryView
+// persistence effect in a shard-scoped dirty event.
 type CoordPersistViewEvent struct {
 	baseEvent
 	View  qviews.QueryViewKey
@@ -724,8 +724,8 @@ func (e StreamingNodePersistViewEvent) MarshalLogObject(enc mlog.ObjectEncoder) 
 	return nil
 }
 
-// CoordSyncViewBatchEvent is emitted when ShardViewManager.flush syncs a view
-// state to one worker-node batch.
+// CoordSyncViewBatchEvent is emitted when ShardViewManager captures one
+// QueryView sync effect for a worker node in a shard-scoped dirty event.
 type CoordSyncViewBatchEvent struct {
 	baseEvent
 	View  qviews.QueryViewKey
@@ -745,8 +745,8 @@ func (e CoordSyncViewBatchEvent) MarshalLogObject(enc mlog.ObjectEncoder) error 
 	return nil
 }
 
-// CoordSyncViewBatchFailedEvent is emitted when ShardViewManager.flush fails to
-// sync a view state to one worker-node batch.
+// CoordSyncViewBatchFailedEvent is emitted when a DirtyViewFlushScheduler task
+// fails to sync a view state to one worker-node batch.
 type CoordSyncViewBatchFailedEvent struct {
 	baseEvent
 	View  qviews.QueryViewKey

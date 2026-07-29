@@ -12,7 +12,7 @@ import (
 )
 
 func TestStats_Empty(t *testing.T) {
-	mgr := newTestManager(newMockCatalog(), newMockSyncer())
+	mgr := newTestManager(t, newMockCatalog(), newMockSyncer())
 
 	stats := mgr.Stats()
 	require.NotNil(t, stats)
@@ -23,7 +23,7 @@ func TestStats_Empty(t *testing.T) {
 }
 
 func TestStats_PreparingOnly(t *testing.T) {
-	mgr := newTestManager(newMockCatalog(), newMockSyncer())
+	mgr := newTestManager(t, newMockCatalog(), newMockSyncer())
 
 	require.NoError(t, mgr.AddPreparing(context.Background(), testBuilder(1, 1, 2)))
 
@@ -47,7 +47,7 @@ func TestStats_PreparingOnly(t *testing.T) {
 }
 
 func TestStats_EmptyPreparingView(t *testing.T) {
-	mgr := newTestManager(newMockCatalog(), newMockSyncer())
+	mgr := newTestManager(t, newMockCatalog(), newMockSyncer())
 	b := testBuilder(1, 1, 1)
 	b.SetAssignments(map[int64]map[int64][]int64{})
 
@@ -63,7 +63,7 @@ func TestStats_EmptyPreparingView(t *testing.T) {
 
 func TestStats_UpOnly(t *testing.T) {
 	s := newMockSyncer()
-	mgr := newTestManager(newMockCatalog(), s)
+	mgr := newTestManager(t, newMockCatalog(), s)
 
 	// Drive v1 to Up.
 	ver1 := testVersion(1, 1, 1)
@@ -94,7 +94,7 @@ func TestStats_UpOnly(t *testing.T) {
 
 func TestStats_UpAndPreparing(t *testing.T) {
 	s := newMockSyncer()
-	mgr := newTestManager(newMockCatalog(), s)
+	mgr := newTestManager(t, newMockCatalog(), s)
 
 	// Drive v1 to Up.
 	ver1 := testVersion(1, 1, 1)
@@ -137,7 +137,7 @@ func TestStats_ReadyViewStillAppearsAsPending(t *testing.T) {
 	// A view in Ready state is still considered "not Up" for Stats purposes;
 	// its placements should show Up=false.
 	s := newMockSyncer()
-	mgr := newTestManager(newMockCatalog(), s)
+	mgr := newTestManager(t, newMockCatalog(), s)
 
 	ver := testVersion(1, 1, 1)
 	require.NoError(t, mgr.AddPreparing(context.Background(), testBuilder(1, 1, 1)))
@@ -162,7 +162,7 @@ func TestStats_ReadyViewStillAppearsAsPending(t *testing.T) {
 
 func TestStats_PartialReadySegments(t *testing.T) {
 	s := newMockSyncer()
-	mgr := newTestManager(newMockCatalog(), s)
+	mgr := newTestManager(t, newMockCatalog(), s)
 
 	b := testBuilder(1, 1, 1)
 	b.SetAssignments(map[int64]map[int64][]int64{
@@ -192,7 +192,7 @@ func TestStats_PartialReadySegments(t *testing.T) {
 
 func TestStats_UnrecoverableIncludedByNode(t *testing.T) {
 	s := newMockSyncer()
-	mgr := newTestManager(newMockCatalog(), s)
+	mgr := newTestManager(t, newMockCatalog(), s)
 
 	ver := testVersion(1, 1, 1)
 	require.NoError(t, mgr.AddPreparing(context.Background(), testBuilder(1, 1, 1)))
@@ -216,7 +216,7 @@ func TestStats_UnrecoverableIncludedByNode(t *testing.T) {
 
 func TestStats_UnrecoverableSegmentWithoutReady(t *testing.T) {
 	s := newMockSyncer()
-	mgr := newTestManager(newMockCatalog(), s)
+	mgr := newTestManager(t, newMockCatalog(), s)
 
 	ver := testVersion(1, 1, 1)
 	require.NoError(t, mgr.AddPreparing(context.Background(), testBuilder(1, 1, 1)))
@@ -269,7 +269,7 @@ func TestStats_DownViewMappedToReady(t *testing.T) {
 	// QNs do not receive Down, so v1 placements remain loaded and are exposed
 	// as Ready-level reusable placements.
 	s := newMockSyncer()
-	mgr := newTestManager(newMockCatalog(), s)
+	mgr := newTestManager(t, newMockCatalog(), s)
 
 	// Drive v1 to Up (node 1, seg 1001).
 	ver1 := testVersion(1, 1, 1)

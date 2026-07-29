@@ -1,137 +1,263 @@
 # Shard View Manager Design
 
-> This document describes the design of `ShardViewManager`, which manages multiple QueryViews for a single shard (vchannel) within a single replica on the Coord side.
-> Reference: [Distributed Query View Design](README.md), [QueryView State Machine](query_view_state_machine.md), [view.proto](../../../../pkg/proto/view.proto), [ReliableSyncer](../../../../internal/views/coord/coordview/syncer/reliable_syncer.go), [CoordQueryViewStateMachine](../../../../internal/views/coord/coordview/state_machine.go)
+> This document describes the Coord-side management of QueryViews for one shard
+> (vchannel) and the shared flush scheduler used to externalize state-machine
+> effects across shards.
+> Reference: [Distributed Query View Design](README.md),
+> [QueryView State Machine](query_view_state_machine.md),
+> [view.proto](../../../../pkg/proto/view.proto),
+> [ReliableSyncer](../../../../internal/views/coord/coordview/syncer/reliable_syncer.go),
+> [CoordQueryViewStateMachine](../../../../internal/views/coord/coordview/state_machine.go),
+> [NodeScheduler](../../../../pkg/util/nodescheduler/scheduler.go).
 
 ## 1. Overview
 
-`ShardViewManager` is the Coord-side component responsible for:
+`ShardViewManager` is the in-memory owner of the QueryViews for one shard on one
+replica. It is responsible for:
 
-1. Maintaining the set of active QueryViews for one shard (typically 2–3, double/triple buffer pattern).
-2. Orchestrating multiple `CoordQueryViewStateMachine` instances and their cross-view interactions.
-3. Persisting view state to ETCD via `QueryViewCatalog`.
-4. Pushing view state to nodes via `ReliableSyncer`, with response handling through callbacks.
-5. Supporting crash recovery from ETCD-persisted views + node responses.
+1. Maintaining the active QueryView set, normally following a double/triple
+   buffer pattern.
+2. Orchestrating `CoordQueryViewStateMachine` instances and cross-view
+   interactions such as preemption and Up-then-Down handoff.
+3. Creating response and QueryNode-loss callbacks for node synchronization.
+4. Publishing per-shard placement statistics.
+5. Emitting one immutable shard-scoped dirty event after each state operation.
+
+The manager does not perform ETCD or node-sync I/O itself. All managers owned by
+one `ShardViewRegistry` share one `DirtyViewFlushScheduler`. The scheduler merges
+events by `ShardID`, claims disjoint shard lanes into concurrent batch tasks,
+persists QueryView states, and only then dispatches the corresponding node syncs.
 
 ### Architecture Position
 
-```
+```text
 Sealed Segment Balancer
-        │  (generates QueryViewAtCoordBuilder)
+        │  AddPreparing / RequestRelease
         ▼
- ShardViewManager
-        │
-        ├── calls Catalog ────────→ ETCD (persistence)
-        └── calls ReliableSyncer ─→ SyncQueryView RPC ─→ StreamingNode / QueryNode
-                                           │
-                                   Node Responses
-                                           │
-                                           ▼
-                               ReliableSyncer routes to
-                              ShardViewManager callbacks
+ ShardViewRegistry
+        │ owns
+        ├──────────────► ShardViewManager per shard
+        │                        │
+        │                        │ Submit(DirtyViewEvent)
+        │                        ▼
+        └──────────────► DirtyViewFlushScheduler
+                                  │ keyed batching by ShardID
+                                  │ Submit multiple batch tasks
+                                  ▼
+                            NodeScheduler
+                                  │
+                    ┌─────────────┴─────────────┐
+                    ▼                           ▼
+             QueryViewCatalog            ReliableSyncer
+               ETCD persist              SyncQueryView RPC
+                                                │
+                                                ▼
+                                    ShardViewManager callbacks
 ```
 
 ### Design Principles
 
-- **Active component**: Directly calls `Catalog` for persistence and `ReliableSyncer` for node sync.
-- **Callback-driven**: Node responses are delivered via `OnSyncResponse` registered with `ReliableSyncer`. QueryNode loss for an active QN-targeted sync is delivered via `OnQueryNodeLost`. StreamingNode loss is not a per-view event.
-- **Self-contained**: Once a view is added via `AddPreparing`, all subsequent state transitions are driven internally through callbacks. External input is only `AddPreparing` and `RequestRelease`.
-- **Up-then-Down**: When a new view reaches Up, all older Up views are automatically transitioned to Down.
-- **Preemption**: A new `AddPreparing` preempts any existing Preparing/Ready view by injecting a synthetic Unrecoverable response.
-- **Batch I/O**: All persist and sync operations within a single method call are batched into one `SaveQueryViews` + one `SyncViews` call for atomicity.
-- **Builds on CoordQueryViewStateMachine**: Per-view state machine logic is delegated to `CoordQueryViewStateMachine`. ShardViewManager consumes its `ConsumePersist()` / `ConsumeSync()` outputs and orchestrates multi-view interactions.
+- **In-memory state owner**: `ShardViewManager` performs state transitions and
+  maintains fast pointers and statistics, but does not block on external I/O.
+- **Keyed shared batching**: One task can contain multiple shards, multiple tasks
+  can run concurrently, and one `ShardID` never appears in two running tasks.
+- **Write-ahead ordering**: Every flush batch completes `SaveQueryViews` before
+  calling `SyncViews`.
+- **Latest-state coalescing**: Unflushed persist and sync effects are replaced
+  independently by newer transitions, allowing the state machine to fast-forward
+  without queuing every intermediate state.
+- **Callback-driven**: `ReliableSyncer` delivers node responses and QueryNode-loss
+  notifications through callbacks registered by the manager.
+- **Node-level scheduling**: QueryView flush tasks reuse the common
+  `NodeScheduler`; the QueryView package owns no dedicated worker goroutine.
+- **No external I/O under manager lock**: A manager consumes pending effects into
+  an immutable event while holding `m.mu`, then submits it after releasing the
+  lock.
 
-## 2. Dependencies
+## 2. Components and Dependencies
 
-### 2.1 QueryViewCatalog (existing)
+### 2.1 ShardViewRegistry
 
-ETCD persistence layer. Implemented in `internal/metastore/kv/queryview/kv_catalog.go`.
+`ShardViewRegistry` owns all `ShardViewManager` instances and exactly one
+`DirtyViewFlushScheduler`. Recovery opens one explicit Begin/Commit batch,
+reconstructs every manager, commits all emitted recovery events, and waits for
+the resulting keyed tasks before returning.
+
+`Close` closes the flush scheduler before the QueryView runtime closes the
+underlying `ReliableSyncer`.
+
+### 2.2 QueryViewCatalog
+
+The ETCD persistence layer is implemented in
+`internal/metastore/kv/queryview/kv_catalog.go`.
 
 Persisted key format:
 
-- `coord/qv/{collectionID}/{replicaID}/{vchannel}/{streamingVersion}/{compactVersion}/{queryVersion}` — `QueryViewOfShard` proto.
+- `coord/qv/{collectionID}/{replicaID}/{vchannel}/{streamingVersion}/{compactVersion}/{queryVersion}`
 
-The key keeps the full vchannel name and the QueryView/DataView version tuple so
-multiple in-flight views for the same shard do not overwrite each other.
+The key retains the full vchannel and version tuple, so multiple in-flight views
+for one shard do not overwrite each other.
 
-### 2.2 ReliableSyncer (existing)
+### 2.3 ReliableSyncer
 
-Reliable delivery of QueryView syncs from Coord to work nodes. Defined in `internal/views/coord/coordview/syncer/reliable_syncer.go`.
+`ReliableSyncer` provides resumable delivery from Coord to StreamingNode and
+QueryNode.
 
-Key properties used by ShardViewManager:
+Properties used by this design:
 
-- **Delivery guarantee**: Every outstanding sync eventually receives either a real node response (via `OnSyncResponse`) or, for QueryNode targets, a QueryNode-lost notification (via `OnQueryNodeLost`).
-- **Callback model**: Each `SyncView` carries `OnSyncResponse` (invoked on response) and optionally `OnQueryNodeLost` (invoked only for QueryNode loss). The syncer removes the entry after the current sync completes or after draining the lost QueryNode.
-- **Pre-grouped**: `SyncGroup.ViewsByNode` is a map keyed by `WorkNodeKey`, pre-grouping views by target node.
-- **Replace semantics**: Calling `SyncViews` for a viewKey that already has an outstanding entry replaces the old entry and its callbacks.
-- **Non-blocking**: `SyncViews` returns after enqueuing.
+- `SyncGroup.ViewsByNode` groups syncs by `WorkNodeKey`.
+- Each `SyncView` carries `OnSyncResponse` and, for QueryNode targets,
+  `OnQueryNodeLost`.
+- A newer sync for the same QueryView and node replaces the older pending sync
+  and its callbacks.
+- `SyncViews` returns after the views have been accepted by the reliable syncer.
 
-### 2.3 CoordQueryViewStateMachine (existing)
+### 2.4 CoordQueryViewStateMachine
 
-Per-view state machine. Defined in `internal/views/coord/coordview/state_machine.go`. Key interface used:
-- `OnNodeStateReported(report)` — process a node response
-- `ConsumePersist() / ConsumeSync()` — consume pending I/O signals
-- `EnterDown()` — transition Up → Down
-- `EnterDropping()` — transition Unrecoverable → Dropping
-- `State()` — current state
-
-## 3. Interface
+The per-view state machine owns the latest pending external effect:
 
 ```go
-// NewShardViewManager creates a new ShardViewManager for the given shard.
-// ctx: lifecycle context for Catalog calls within callbacks.
-// recoveredViews: views loaded from ETCD during crash recovery.
-// Unrecoverable views remain Unrecoverable after construction, waiting for
-// AddPreparing or RequestRelease to advance them to Dropping.
-// Active views in other states are pushed to their target nodes via syncer.
-func NewShardViewManager(ctx, shardID, catalog, syncer, recoveredViews) *ShardViewManager
-
-// AddPreparing adds a new view in Preparing state from a builder.
-// The manager assigns QueryVersion automatically:
-//   - Same DataVersion as existing views: QV = max(existing QV for same DV) + 1
-//   - New DataVersion: QV = 1
-// Preempts any existing Preparing/Ready view.
-// Validates no DataVersion rollback against existing views.
-func (m *ShardViewManager) AddPreparing(ctx, builder *qviews.QueryViewAtCoordBuilder) error
-
-// RequestRelease initiates teardown of all views in this shard.
-// Up views → Down (normal teardown). Preparing/Ready views → Unrecoverable → Dropping.
-// Actual cleanup completes asynchronously through callbacks.
-func (m *ShardViewManager) RequestRelease(ctx) error
+type queryViewFlush struct {
+    Persist *viewpb.QueryViewOfShard
+    Sync    []qviews.QueryViewAtWorkNode
+}
 ```
+
+`Persist` and `Sync` have replace semantics. `ConsumeFlush` atomically drains
+both values. This is distinct from the reliable syncer's own pending map: the
+state-machine pending value represents effects not yet handed to the external
+systems, while the syncer pending map represents accepted but not yet
+acknowledged RPC work.
+
+### 2.5 DirtyViewFlushScheduler
+
+The Registry-level scheduler owns:
+
+- Pending immutable events merged by `ShardID` and versioned QueryView key.
+- The set of inflight `ShardID` lanes.
+- Explicit Begin/Commit-held shard lanes.
+- Multiple queued or running one-shot batch tasks.
+- Batch sizing using `MetaStoreCfg.MaxEtcdTxnNum`.
+- Persist-before-sync execution.
+- Lifecycle cancellation and explicit waiting for recovery and tests.
+
+Every task runs through the global `NodeScheduler`. A task claims only shard
+lanes that are not already inflight. New work for an inflight shard stays pending
+until that task finishes; work for an unrelated shard may immediately enter a
+different task.
+
+## 3. Interfaces
+
+Managers are constructed only by `ShardViewRegistry`:
+
+```go
+func newShardViewManager(
+    ctx context.Context,
+    shardID qviews.ShardID,
+    eventSubmitter dirtyViewEventSubmitter,
+    recoveredViews []*viewpb.QueryViewOfShard,
+) *ShardViewManager
+```
+
+External lifecycle operations remain:
+
+```go
+func (m *ShardViewManager) AddPreparing(
+    ctx context.Context,
+    builder *qviews.QueryViewAtCoordBuilder,
+) error
+
+func (m *ShardViewManager) RequestRelease(ctx context.Context) error
+```
+
+`AddPreparing` assigns QueryVersion automatically, rejects DataVersion rollback,
+and preempts an existing Preparing or Ready view. `RequestRelease` starts the
+normal teardown of all views in the shard. Both methods mutate state under
+`m.mu`, atomically consume the resulting effects into one `dirtyViewEvent`,
+release the lock, and submit that event to the Scheduler.
 
 ## 4. Internal Flow
 
-### 4.1 Batch I/O
+### 4.1 State Transition and Event Submission
 
-All operations accumulate persist and sync entries into `ShardViewManager`'s inline fields:
+Every state-changing entry point follows the same pattern:
 
-- `pendingPersists []*viewpb.QueryViewOfShard` — accumulated persist entries.
-- `pendingSyncs []syncEntry` — accumulated sync entries (`sm` + per-node views pairs).
+1. Acquire `m.mu`.
+2. Apply the state-machine input.
+3. Run `processStateMachine` for each changed state machine. It consumes that
+   state machine's `ConsumeFlush` result into manager-local pending slices and
+   updates `preparingView`, `upView`, and cascading Up-then-Down state.
+4. Move the accumulated effects into one immutable shard-scoped event with
+   persistence, node-sync, and callback information.
+5. Release `m.mu`.
+6. Call `DirtyViewFlushScheduler.Submit(event)`.
 
-After all state machine processing is complete, `flush()` executes:
-1. One `catalog.SaveQueryViews()` call for all accumulated persists.
-2. One `syncer.SyncViews()` call with all accumulated syncs merged into a single `ViewsByNode` map.
-
-This ensures atomicity at the persistence layer and reduces I/O overhead.
+The same pattern is used by `AddPreparing`, `RequestRelease`,
+`OnSyncResponse`, and `OnQueryNodeLost`. The Scheduler never calls back into a
+manager to scan its state.
 
 ### 4.2 processStateMachine
 
-After any state machine event (node response, AddPreparing, RequestRelease), `processStateMachine(sm)` is called:
+`processStateMachine` consumes the current state machine's pending external
+effects and handles its in-memory cross-view effects:
 
-1. `ConsumePersist()` → if non-nil, append to `pendingPersists`.
-2. `ConsumeSync()` → if non-nil, append to `pendingSyncs`.
-3. Handle cascading effects based on current state:
-   - **Preparing/Ready**: Update `preparingView` pointer.
-   - **Up**: Clear `preparingView` if it was this SM, call `downOlderUpView` to cascade older Up view to Down, update `upView` pointer.
-   - **Down**: Clear `upView` if it was this SM.
-   - **Unrecoverable**: Clear `preparingView`/`upView` if they were this SM. Stay in Unrecoverable — the Manager defers advancement to Dropping until `AddPreparing` or `RequestRelease`, so that the old view's Dropped sync and the new view's Preparing sync can be batched together.
-   - **Dropping**: Return (wait for all nodes to confirm Dropped via callbacks).
-   - **Dropped**: Remove view from manager.
+- **Preparing/Ready**: Update `preparingView`.
+- **Up**: Clear `preparingView` when applicable, transition an older Up view to
+  Down, and update `upView`.
+- **Down**: Clear `upView` when applicable.
+- **Unrecoverable**: Clear the fast pointers and remain stable until
+  `AddPreparing` or `RequestRelease` advances the view to Dropping.
+- **Dropping**: Wait for node callbacks.
+- **Dropped**: The final ETCD deletion effect is first moved into the manager's
+  pending persist slice, then the state machine is removed.
 
-### 4.3 Sync Routing (collectSyncViews)
+Effects are consumed only from state machines explicitly processed by the
+current operation. Untouched resident views are not scanned.
 
-The sync proto's state determines routing:
+### 4.3 Emitting One Shard Event
+
+`consumeDirtyEventLocked` transfers the current operation's manager-local
+pending effects:
+
+1. Acquire `m.mu`.
+2. Reuse the persist effects accumulated by `processStateMachine`.
+3. Convert accumulated node targets into `syncer.SyncView` values with the
+   correct callbacks.
+4. Move both pending slices into one immutable `dirtyViewEvent` keyed by the
+   manager's `ShardID`.
+5. Clear the manager fields without retaining or reusing the event's backing
+   arrays.
+
+No Catalog or ReliableSyncer call is performed while `m.mu` is held.
+
+### 4.4 Keyed Concurrent Batch Flush
+
+The scheduler merges pending events per `ShardID`. Persist effects are latest-win
+per versioned QueryView key; sync effects are latest-win per QueryView key and
+WorkNode key. It packs ready, non-inflight shard lanes according to the configured
+maximum ETCD transaction operation count. For each claimed batch it performs:
+
+1. Flatten all `persists` and call `catalog.SaveQueryViews` once.
+2. Only after persistence succeeds, group every `syncer.SyncView` by
+   `WorkNodeKey`.
+3. Call `syncer.SyncViews` once for the grouped node syncs.
+
+The ordering is local to each packed batch: all included QueryView states are
+persisted before any included node sync is dispatched. Different tasks contain
+disjoint shard lanes and may execute concurrently.
+
+If new work for an inflight shard arrives during I/O, it remains pending until
+the task completes and is then eligible for a successor task. Unrelated shard
+work can be claimed by another task immediately.
+
+`Begin()` opens an explicit batching window without stopping existing tasks.
+Events submitted within nested windows are held from new dispatch. The outermost
+idempotent `Commit()` releases the held lanes and fans them out into as many
+disjoint batch tasks as the configured batch size requires.
+
+### 4.5 Sync Routing
+
+The target state determines routing:
 
 | Sync State | Route To |
 |---|---|
@@ -140,54 +266,104 @@ The sync proto's state determines routing:
 | Down | SN only |
 | Dropped | SN + all QNs |
 
-Views are collected into a shared `ViewsByNode` map for the batch.
+### 4.6 Callback Model
 
-### 4.4 Callback Model
+Each accepted sync registers callbacks:
 
-Each `SyncViews` call registers per-node callbacks:
-- **OnSyncResponse**: Acquires `m.mu`, finds the SM by version, calls `sm.OnNodeStateReported(resp)`, calls `processStateMachine(sm)`, flushes. Returns true when the current node-targeted sync is complete, stopping ReliableSyncer tracking for that entry.
-- **OnQueryNodeLost**: Registered only for QueryNode targets. Acquires `m.mu`, finds the SM by version, calls `sm.OnQueryNodeLost(qn)`, calls `processStateMachine(sm)`, flushes. In Preparing this transitions to Unrecoverable; in Dropping it marks the QN cleanup as complete.
+- **OnSyncResponse**: Looks up the state machine by version, applies
+  `OnNodeStateReported`, processes in-memory cascading effects, publishes stats,
+  unlocks, and submits the resulting shard event. It returns whether the current
+  node-targeted sync has completed.
+- **OnQueryNodeLost**: Registered only for QueryNode targets. It applies
+  `OnQueryNodeLost`, processes the resulting state, publishes stats, unlocks,
+  and marks the manager dirty. In Preparing this makes the view Unrecoverable;
+  in Dropping it treats the lost QueryNode cleanup as complete. The resulting
+  shard event is submitted after unlocking.
 
-### 4.5 AddPreparing
+Callbacks for an already removed view stop tracking without creating new work.
 
-1. `builder.DataVersion()` → validate no rollback against ALL views.
-2. Find existing Preparing/Ready view → preempt via `sm.EnterUnrecoverable()`, `processStateMachine(sm)`.
-3. Advance all Unrecoverable views to Dropping via `advanceUnrecoverableToDropping()`, so their Dropped sync is batched with the new Preparing sync.
-4. Compute QueryVersion: `max(QV for views with same DV) + 1`.
-5. `builder.SetQueryVersion(qv)` → `builder.Build()` → new SM → `processStateMachine(sm)`.
-6. `flush()`.
+### 4.7 AddPreparing
 
-> **TODO**: Add maxViews check (default 3) to limit total active views. During preemption, `maxViews+1` should be allowed temporarily (preempted view is draining).
+1. Validate the new DataVersion against all resident views.
+2. Preempt an existing Preparing or Ready view by entering Unrecoverable.
+3. Advance Unrecoverable views to Dropping so their Dropped sync can be batched
+   with the replacement Preparing sync.
+4. Assign `max(QueryVersion for the same DataVersion) + 1`, or 1 when the
+   DataVersion is new.
+5. Build and register the new state machine.
+6. Update in-memory pointers and stats.
+7. Emit one shard event, unlock, and submit it.
 
-### 4.6 RequestRelease
+### 4.8 RequestRelease
 
-- **Preparing/Ready view**: `sm.EnterUnrecoverable()` → `processStateMachine(sm)`.
-- **Up view**: `sm.EnterDown()` → `processStateMachine(sm)`.
-- Advance all Unrecoverable views to Dropping via `advanceUnrecoverableToDropping()`.
-- `flush()`.
+- Preparing or Ready views enter Unrecoverable.
+- Up views enter Down.
+- All Unrecoverable views advance to Dropping.
+- The manager publishes the new stats, emits one shard event, unlocks, and
+  submits it.
 
-## 5. Thread Safety
+Cleanup continues asynchronously through reliable node callbacks.
 
-All access serialized via `m.mu`. Callbacks from ReliableSyncer's recv goroutines acquire the lock. Catalog writes happen under the lock (acceptable: ETCD writes are fast, `ReliableWriteMetaKv` only fails on ctx cancellation). `SyncViews` is non-blocking.
+## 5. Recovery and Shutdown
 
-## 6. Invariants
+During recovery, persisted views are grouped by `ShardID` and reconstructed as
+state machines. Recovered Preparing and Down views create pending sync effects.
+The Registry holds all emitted events inside one Begin/Commit window, commits
+them into keyed tasks, and waits for the Scheduler to become idle before recovery
+completes.
 
-1. **Preemption**: A new Preparing view preempts any existing Preparing/Ready view. At most one non-draining Preparing/Ready view at a time.
-2. **Max Views**: *(TODO — not yet implemented)* Total active views ≤ `maxViews` (default 3). During preemption, `maxViews+1` should be allowed temporarily (preempted view is draining).
-3. **DataVersion Rollback Prevention**: New Preparing view's DataVersion must not be lower than any existing view's DataVersion.
-4. **QueryVersion Auto-Assignment**: The manager assigns QueryVersion = `max(QV for views with same DV) + 1`, or 1 if no matching DV exists.
-5. **Write-Ahead Persistence**: State persisted BEFORE pushing to nodes (batch persist then batch sync).
-6. **Batch Atomicity**: All persists within a single operation (AddPreparing, RequestRelease, callback) are flushed in one `SaveQueryViews` call. All syncs are flushed in one `SyncViews` call.
-7. **Up-then-Down**: When a new view reaches Up, all older Up views immediately transition to Down.
-8. **Deferred Dropping**: Unrecoverable views stay in Unrecoverable until `AddPreparing` or `RequestRelease` advances them to Dropping, allowing the old view's Dropped sync and the new view's Preparing sync to be batched together.
+On shutdown, the QueryView runtime stops the balancer, closes the Registry and
+its flush scheduler, then closes `ReliableSyncer`. This prevents a flush task
+from submitting new sync work after the syncer has closed.
 
-## 7. Package Location
+## 6. Thread Safety
 
-```
+- `ShardViewManager.mu` protects its state machines, fast pointers, and atomic
+  event creation.
+- `DirtyViewFlushScheduler.mu` protects pending events, inflight and held shard
+  lanes, queued task accounting, terminal error, and closed state.
+- No external ETCD or RPC enqueue operation runs while a manager lock is held.
+- No Catalog or ReliableSyncer I/O runs while the Scheduler lock is held.
+- The shared `NodeScheduler` queue is unbounded and non-blocking, so submitting
+  an event does not wait for a batch task to execute.
+
+## 7. Invariants
+
+1. **Preemption**: At most one non-draining Preparing or Ready view exists per
+   shard.
+2. **Max Views**: The total active-view limit is still a separate TODO; a
+   preempted draining view may temporarily coexist with its replacement.
+3. **DataVersion Rollback Prevention**: A new Preparing view cannot have a lower
+   DataVersion than any resident view.
+4. **QueryVersion Assignment**: QueryVersion is one greater than the maximum for
+   the same DataVersion, or 1 for a new DataVersion.
+5. **Write-Ahead Persistence**: A packed flush persists every included state
+   before dispatching any included node sync.
+6. **Latest-State Coalescing**: Multiple unflushed transitions may skip
+   intermediate external states, but retain the latest pending persist and sync
+   effects independently.
+7. **Dirty-State Preservation**: Work created for an inflight shard is processed
+   by a successor task after that shard lane is released.
+8. **Up-then-Down**: When a new view reaches Up, any older Up view immediately
+   enters Down.
+9. **Deferred Dropping**: Unrecoverable remains stable until replacement or
+   release logic advances it to Dropping.
+10. **Dropped Persistence**: A Dropped state machine is removed only after its
+    final ETCD deletion effect has been captured in an immutable dirty event.
+11. **Shard-Lane Serialization**: Old and new QueryView versions of one
+    `ShardID` cannot be flushed by concurrent tasks.
+12. **Cross-Shard Parallelism**: Different `ShardID` lanes may execute in
+    different NodeScheduler tasks concurrently.
+
+## 8. Package Location
+
+```text
 internal/views/coord/coordview/
-    syncer/reliable_syncer.go   // ReliableSyncer interface (existing)
-    state_machine.go            // CoordQueryViewStateMachine (existing)
-    shard_view_manager.go       // ShardViewManager implementation
-    errors.go                   // Error sentinels
-    shard_view_manager_test.go  // Tests
+    dirty_view_flush_scheduler.go       # Keyed event aggregation and batch tasks
+    dirty_view_flush_scheduler_test.go  # Begin/Commit, batching, lane concurrency
+    shard_view_registry.go        # Registry and scheduler lifecycle owner
+    shard_view_manager.go         # Per-shard in-memory orchestration
+    state_machine.go              # Per-view lifecycle and pending effects
+    syncer/reliable_syncer.go     # Reliable node delivery
+    shard_view_manager_test.go    # Manager lifecycle tests
 ```
