@@ -459,7 +459,7 @@ func TestGlobalSchedulerLazyInitializationAndDynamicResize(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		scheduler.mu.Lock()
 		defer scheduler.mu.Unlock()
-		return scheduler.concurrency == cpu
+		return scheduler.concurrency == 2*cpu
 	}, time.Second, 10*time.Millisecond)
 
 	ratioForTwoWorkers := 2 / float64(cpu)
@@ -480,7 +480,7 @@ func TestGlobalSchedulerLazyInitializationAndDynamicResize(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		scheduler.mu.Lock()
 		defer scheduler.mu.Unlock()
-		return scheduler.concurrency == cpu
+		return scheduler.concurrency == 2*cpu
 	}, time.Second, 10*time.Millisecond)
 }
 
