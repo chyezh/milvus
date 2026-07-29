@@ -19,7 +19,11 @@ import (
 // asyncAllocSegment allocates a new growing segment asynchronously.
 func (m *partitionManager) asyncAllocSegment(schemaVersion int32, requiresStorageV3 bool) {
 	if m.onAllocating != nil {
-		m.Logger().Debug(context.TODO(), "segment alloc worker is already on allocating")
+		m.Logger().Debug(context.TODO(), "segment alloc worker is already on allocating",
+			mlog.FieldVChannel(m.vchannel),
+			mlog.FieldCollectionID(m.collectionID),
+			mlog.FieldPartitionID(m.partitionID),
+		)
 		// manager is already on allocating.
 		return
 	}
@@ -71,17 +75,37 @@ func (w *segmentAllocWorker) do() {
 			return
 		}
 		if status.AsStreamingError(err).IsUnrecoverable() {
-			w.Logger().Warn(w.ctx, "allocate new growing segment with unrecoverable error, stop retrying", mlog.Err(err))
+			w.Logger().Warn(w.ctx, "allocate new growing segment with unrecoverable error, stop retrying",
+				mlog.FieldVChannel(w.vchannel),
+				mlog.FieldCollectionID(w.collectionID),
+				mlog.FieldPartitionID(w.partitionID),
+				mlog.Err(err),
+			)
 			return
 		}
 		nextInterval := retryBackoff.NextBackOff()
-		w.Logger().Info(w.ctx, "failed to allocate new growing segment, retrying", mlog.Duration("nextInterval", nextInterval), mlog.Err(err))
+		w.Logger().Info(w.ctx, "failed to allocate new growing segment, retrying",
+			mlog.FieldVChannel(w.vchannel),
+			mlog.FieldCollectionID(w.collectionID),
+			mlog.FieldPartitionID(w.partitionID),
+			mlog.Duration("nextInterval", nextInterval),
+			mlog.Err(err),
+		)
 		select {
 		case <-w.ctx.Done():
-			w.Logger().Info(w.ctx, "segment allocation canceled", mlog.Err(w.ctx.Err()))
+			w.Logger().Info(w.ctx, "segment allocation canceled",
+				mlog.FieldVChannel(w.vchannel),
+				mlog.FieldCollectionID(w.collectionID),
+				mlog.FieldPartitionID(w.partitionID),
+				mlog.Err(w.ctx.Err()),
+			)
 			return
 		case <-w.wal.Available():
-			w.Logger().Warn(w.ctx, "wal is unavailable, stop alloc new segment")
+			w.Logger().Warn(w.ctx, "wal is unavailable, stop alloc new segment",
+				mlog.FieldVChannel(w.vchannel),
+				mlog.FieldCollectionID(w.collectionID),
+				mlog.FieldPartitionID(w.partitionID),
+			)
 			return
 		case <-time.After(nextInterval):
 		}
@@ -120,11 +144,24 @@ func (w *segmentAllocWorker) doOnce() error {
 
 	result, err := w.wal.Append(w.ctx, msg)
 	if err != nil {
-		w.Logger().Warn(w.ctx, "failed to append create segment message", mlog.FieldMessage(msg), mlog.Err(err))
+		w.Logger().Warn(w.ctx, "failed to append create segment message",
+			mlog.FieldVChannel(w.vchannel),
+			mlog.FieldCollectionID(w.collectionID),
+			mlog.FieldPartitionID(w.partitionID),
+			mlog.FieldMessage(msg),
+			mlog.Err(err),
+		)
 		return err
 	}
 	w.Logger().Info(w.ctx,
-		"append create segment message", mlog.FieldMessage(msg), mlog.String("messageID", result.MessageID.String()), mlog.Uint64("timetick", result.TimeTick))
+		"append create segment message",
+		mlog.FieldVChannel(w.vchannel),
+		mlog.FieldCollectionID(w.collectionID),
+		mlog.FieldPartitionID(w.partitionID),
+		mlog.FieldMessage(msg),
+		mlog.String("messageID", result.MessageID.String()),
+		mlog.Uint64("timetick", result.TimeTick),
+	)
 	return nil
 }
 
@@ -139,7 +176,12 @@ func (w *segmentAllocWorker) initSegmentConfig() error {
 	// Allocate new segment id.
 	segmentID, err := resource.Resource().IDAllocator().Allocate(w.ctx)
 	if err != nil {
-		w.Logger().Warn(w.ctx, "failed to allocate segment id", mlog.Err(err))
+		w.Logger().Warn(w.ctx, "failed to allocate segment id",
+			mlog.FieldVChannel(w.vchannel),
+			mlog.FieldCollectionID(w.collectionID),
+			mlog.FieldPartitionID(w.partitionID),
+			mlog.Err(err),
+		)
 		return err
 	}
 	w.segmentID = segmentID
