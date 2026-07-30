@@ -76,3 +76,81 @@ The broader package set passed through the non-adaptor packages, but the
 combined run still needs the adaptor package to be executed separately with
 `-gcflags='all=-N -l'`, matching the existing Mockey requirement for those
 tests.
+
+## QueryView Assignment Discovery Progress
+
+This stage fixed QueryView shard assignment discovery when an Up shard moves to
+a different WAL replica binding:
+
+- `CollectionLoadManager.ObserveShardUp` now treats `(shardID, walReplicaID)`
+  as the published assignment identity.
+- Re-observing the same shard with the same `walReplicaID` remains a no-op.
+- Re-observing the same shard with a different `walReplicaID` updates
+  `ShardAssignmentsByPChannel` and triggers the shard assignment notifier.
+- This keeps QueryClient routing aligned with the current Up QueryView binding
+  after WAL replica rebalance or QueryView rebinding.
+
+The adaptor RO open tests were also adjusted to use a valid segcore test
+schema. RO open now initializes real QueryView query resources, so a placeholder
+schema containing only field ID 0 is no longer a valid fixture.
+
+Additional commands run:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/views/coord/loadmgr -run TestCollectionLoadManager_DiscoverableShardAssignments -count=1 -timeout 120s
+```
+
+This command was first run before the loadmgr fix and failed with the old
+`WALReplicaID: 3` still published after observing `WALReplicaID: 5`. It passed
+after the fix.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/views/coord/loadmgr -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/querycoordv2 -run 'Test.*QViews|TestQViews|TestQViewsRuntime|TestSeedDiscoverable' -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/streamingnode/server/wal/adaptor -run 'TestWALAdaptorGetQueryPlanBuildsPlanFromLatestUpView|TestBuildQueryPlanWorkNodes|TestROWALAdaptor|TestOpenROWAL' -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/distributed/streaming ./internal/streamingcoord/server/balancer ./internal/streamingcoord/server/balancer/channel ./internal/streamingcoord/client/assignment ./internal/streamingcoord/server/service/discover ./internal/coordinator/snmanager ./internal/views/coord/balancer ./internal/views/coord/loadmgr ./internal/views/coord/coordview ./internal/views/coord/coordview/syncer ./internal/views/qviews ./internal/views/worknode/handler ./internal/views/queryclient ./internal/views/queryclient/resolver ./internal/streamingnode/client/handler ./internal/streamingnode/client/handler/registry ./internal/streamingnode/client/handler/transformlog ./internal/streamingnode/server/queryplan ./internal/streamingnode/server/service/handler/transformlog ./internal/streamingnode/server/service ./internal/streamingnode/server/walmanager ./pkg/streaming/util/types -count=1 -timeout 240s
+```
+
+All four commands above passed.
+
+## WAL Adaptor Full-Package Verification Progress
+
+This stage fixed the adaptor full-package verification gap:
+
+- `TestWAL` recovery fixture now allows the new recovery background persistence
+  calls for segment assignments, segment data-version summaries, transform-log
+  metadata, and dropped recovery projections.
+- `TestWAL` create-collection fixtures now use a valid segcore test schema
+  instead of an empty schema. The empty schema caused segment flush tasks to
+  retry forever after real recovery/query-resource initialization became part
+  of the WAL replica path.
+- The previous full adaptor package timeout is resolved.
+
+Additional commands run:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/streamingnode/server/wal/adaptor -run '^TestWAL$' -count=1 -timeout 180s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/streamingnode/server/wal/adaptor -count=1 -timeout 240s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/distributed/streaming ./internal/streamingcoord/server/balancer ./internal/streamingcoord/server/balancer/channel ./internal/streamingcoord/client/assignment ./internal/streamingcoord/server/service/discover ./internal/coordinator/snmanager ./internal/views/coord/balancer ./internal/views/coord/loadmgr ./internal/views/coord/coordview ./internal/views/coord/coordview/syncer ./internal/views/qviews ./internal/views/worknode/handler ./internal/views/queryclient ./internal/views/queryclient/resolver ./internal/streamingnode/client/handler ./internal/streamingnode/client/handler/registry ./internal/streamingnode/client/handler/transformlog ./internal/streamingnode/server/queryplan ./internal/streamingnode/server/service/handler/transformlog ./internal/streamingnode/server/service ./internal/streamingnode/server/walmanager ./pkg/streaming/util/types -count=1 -timeout 240s
+```
+
+```bash
+git diff --check
+```
+
+All four commands above passed.
