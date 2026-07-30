@@ -20,6 +20,26 @@ This stage focused on StreamingNode read-only WAL runtime behavior:
 - walmanager tests were updated for the new `walReplicaID` expected-state
   signature.
 
+## Follow-up Progress
+
+This stage added assignment fencing and read-only replica migration cleanup:
+
+- StreamingCoord assignment RPCs and assignment discovery now carry
+  `assignment_epoch` for WAL replica operations.
+- `PChannelInfoAssigned` carries the WAL replica assignment epoch so
+  StreamingNode walmanager can compare same-term replica assignments.
+- StreamingNode walmanager orders WAL replica runtime state by `(term,
+  assignment_epoch, available)`.
+- Stale remove requests with an older `assignment_epoch` are ignored and no
+  longer close a newer same-term WAL replica runtime.
+- Read-only WAL replica reassignment preserves the old `ActiveNode` only for
+  healthy make-before-break migration.
+- Failed or unavailable read-only replica reassignment clears the serviceable
+  old `ActiveNode` while keeping history for cleanup and diagnostics.
+- After a successful read-only replica assignment, StreamingCoord removes
+  historical owners using the recorded old assignment epochs, avoiding leaked
+  old runtimes without racing the new owner.
+
 ## Verification
 
 Commands run:
@@ -38,3 +58,21 @@ git diff --check
 
 All commands passed.
 
+Additional commands run:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingnode/server/walmanager -run TestWALLifetimeUsesAssignmentEpochForSameTermWALReplica -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingnode/server/service ./internal/streamingnode/client/manager ./internal/streamingnode/server/walmanager ./internal/streamingcoord/server/balancer/channel ./internal/streamingcoord/server/balancer -run 'TestManagerServiceAssignRemoveWALReplica|TestManager|TestWAL|TestChannelManager|TestMutablePChannel|TestBalancer' -count=1 -timeout 180s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingnode/server/service ./internal/streamingnode/client/manager ./internal/streamingnode/server/walmanager ./internal/streamingcoord/server/balancer/channel ./internal/streamingcoord/server/balancer -count=1 -timeout 180s
+```
+
+The broader package set passed through the non-adaptor packages, but the
+combined run still needs the adaptor package to be executed separately with
+`-gcflags='all=-N -l'`, matching the existing Mockey requirement for those
+tests.
