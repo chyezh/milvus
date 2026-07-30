@@ -41,6 +41,7 @@ const (
 	FileResourceVersionKey              = MetaPrefix + "/file_resource_version"
 	SnapshotPrefix                      = MetaPrefix + "/snapshot"
 	DataViewPrefix                      = "coord/dv"
+	DataViewDropMarkerPrefix            = DataViewPrefix + "/drop"
 
 	NonRemoveFlagTomestone = "non-removed"
 	RemoveFlagTomestone    = "removed"
