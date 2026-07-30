@@ -864,3 +864,114 @@ git diff --check
 ```
 
 Passed.
+
+## Primary WAL Switchover Readiness
+
+The current-state audit found that `maybeSwitchWALPrimaryReplicaForShardUp`
+could trigger WAL primary switchover as soon as one target `AccessModeRO`
+QueryView reached Up in the primary resource group. That was too early for a
+PChannel that already had other primary-serving shards still only Up on the
+current `AccessModeRW` replica.
+
+This update narrows the automatic switchover trigger:
+
+- The trigger still only considers a target WAL replica that is serviceable
+  `AccessModeRO` in `streaming.primaryResourceGroup`.
+- If a serviceable `AccessModeRW` replica already exists in the primary
+  resource group, no switch is requested.
+- Before calling StreamingCoord to switch primary, QueryCoord now checks the
+  current `ShardViewSnapshot`. For every Up shard on the same PChannel whose
+  current WAL binding is a serviceable `AccessModeRW` replica, the target WAL
+  replica must already have an Up QueryView for the same vchannel and the same
+  load-info version.
+- The check intentionally does not require equal data version, query version,
+  segment placement, or transform-log start position; those remain properties
+  of the QueryView Up transition itself, matching the WAL replica design.
+
+Tests added:
+
+- `TestMaybeSwitchWALPrimaryReplicaForShardUpWaitsForAllPrimaryServingShards`
+  covers the missing-shard case and prevents one Up target shard from promoting
+  the whole PChannel too early.
+- `TestMaybeSwitchWALPrimaryReplicaForShardUpRequiresSettingsAlignedTarget`
+  covers the settings-alignment boundary and confirms aligned target Up views
+  can still trigger switchover.
+
+Commands run:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/querycoordv2 -run TestMaybeSwitchWALPrimaryReplicaForShardUpWaitsForAllPrimaryServingShards -count=1 -timeout 120s
+```
+
+Initial red run failed at compile time because the production helper still had
+only the old single-shard signature. After implementation, the command passed.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/querycoordv2 -run 'TestMaybeSwitchWALPrimaryReplicaForShardUp|TestNewQViewsRuntimeSwitchesWALPrimaryForRecoveredUpShard' -count=1 -timeout 120s
+```
+
+Passed.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/querycoordv2 -count=1 -timeout 180s
+```
+
+Failed because package-level Mockey tests require
+`-gcflags='all=-N -l'`.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -count=1 -timeout 240s
+```
+
+Passed.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/views/queryclient ./internal/views/queryclient/resolver -count=1 -timeout 120s
+```
+
+Passed.
+
+```bash
+set -o pipefail && source scripts/setenv.sh && go test -p 1 -tags 'test,dynamic' -gcflags='all=-N -l' $(git diff --name-only -- '*.go' | xargs -r dirname | sort -u | sed 's#^#./#') -count=1 -timeout 300s 2>&1 | tee /tmp/qv_changed_pkgs_primary_readiness.log
+```
+
+Passed.
+
+## Primary WAL Promotion Failure Bookkeeping
+
+The promotion audit confirmed that StreamingNode `Assign` waits for
+`OpenWALReplica`, and the RW opener appends `RecoveryBarrier` before returning
+an available WAL. Therefore `AssignWALReplicasDone` after a successful promote
+RPC is the correct serviceability point.
+
+The failure path needed one more metadata transition. Before this update, a
+failed target RW open left the PChannel at the advanced term with
+`PrimaryReplicaID` already switched to the target, but the target replica stayed
+in `ASSIGNING`. QueryCoord would not retry through the RO fast path because the
+target was no longer a serviceable RO replica. The fix keeps the advanced term
+and primary identity, but marks the current primary RW replica `UNAVAILABLE`
+when the promote RPC fails. That preserves the non-rollback invariant and lets
+the normal balance loop retry primary assignment with a newer term.
+
+Tests added:
+
+- `TestBalancerSwitchWALPrimaryReplicaKeepsAdvancedTermAndMarksTargetUnavailableOnAssignFailure`
+  covers the promote failure path. The red run showed only the initial
+  switched meta was persisted; after the fix, a second meta update records the
+  target primary RW replica as `UNAVAILABLE`.
+
+Commands run and passed:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer -run TestBalancerSwitchWALPrimaryReplicaKeepsAdvancedTermAndMarksTargetUnavailableOnAssignFailure -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer/channel ./internal/streamingcoord/server/balancer -count=1 -timeout 180s
+```
+
+```bash
+set -o pipefail && source scripts/setenv.sh && go test -p 1 -tags 'test,dynamic' -gcflags='all=-N -l' $(git diff --name-only -- '*.go' | xargs -r dirname | sort -u | sed 's#^#./#') -count=1 -timeout 300s 2>&1 | tee /tmp/qv_changed_pkgs_promotion_failure.log
+```
+
+Passed.
