@@ -216,8 +216,6 @@ func (b *DefaultBalancer) apply(ctx context.Context, plan *BalancePlan) error {
 	if plan == nil {
 		return nil
 	}
-	batch := b.viewRegistry.Begin()
-	defer batch.Commit()
 	var errs []error
 	// Planning is batched, but applying a view may wait for its DataView ref.
 	// Do not hold a registry-wide flush window across that wait. Each manager
