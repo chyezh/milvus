@@ -243,3 +243,117 @@ participates in that random failure path, so opening an RW WAL in package-wide
 test order can fail before the WAL under test is usable. The focused `TestWAL`
 command above passed, so this remains a test-fixture flake to fix separately
 rather than evidence of the RO TransformLog change failing.
+
+## WAL Replica Binding And RecoveryBarrier Verification Progress
+
+This stage fixed two follow-up issues found during verification and design
+audit:
+
+- The test WAL implementation no longer injects random append errors for
+  `RecoveryBarrier` messages. RecoveryBarrier still observes real fenced-channel
+  errors, but package tests no longer fail randomly while opening an RW WAL.
+- Added a regression test that appends many RecoveryBarrier messages with
+  random error injection enabled; before the fix it failed with `random error`,
+  after the fix it passed.
+- QueryView balancer planning now tracks RW WAL replica usage per vchannel
+  within one reconcile cycle. The first QueryView replica can bind to the
+  serviceable RW WAL replica; additional QueryReplicas for the same vchannel
+  request an RO WAL replica instead of all becoming primary-serving by binding
+  to the same RW replica.
+- Reprepare of an existing Up primary QueryView keeps its current RW WAL
+  binding, so data-version or load-version advancement does not accidentally
+  block itself behind the per-vchannel primary slot.
+
+Additional commands run:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./pkg/streaming/walimpls/impls/walimplstest -run TestRecoveryBarrierAppendBypassesRandomFenceError -count=1 -timeout 120s
+```
+
+This command was first run before the fixture fix and failed with
+`random error`. It passed after the fix.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./pkg/streaming/walimpls/impls/walimplstest -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/views/coord/balancer -run 'TestDefaultBalancePolicy_(OnlyOneReplicaBindsReadWriteWALPerShard|ReprepareKeepsExistingReadWriteWALBinding)' -count=1 -timeout 120s
+```
+
+`TestDefaultBalancePolicy_OnlyOneReplicaBindsReadWriteWALPerShard` was first
+run before the QV balancer fix and failed because both QueryReplicas prepared
+with `walReplicaID = 0` and no RO WAL demand was emitted. The focused command
+above passed after the fix.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/views/coord/balancer -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/distributed/streaming ./internal/streamingcoord/server/balancer ./internal/streamingcoord/server/balancer/channel ./internal/streamingcoord/client/assignment ./internal/streamingcoord/server/service/discover ./internal/coordinator/snmanager ./internal/views/coord/balancer ./internal/views/coord/loadmgr ./internal/views/coord/coordview ./internal/views/coord/coordview/syncer ./internal/views/qviews ./internal/views/worknode/handler ./internal/views/queryclient ./internal/views/queryclient/resolver ./internal/streamingnode/client/handler ./internal/streamingnode/client/handler/registry ./internal/streamingnode/client/handler/transformlog ./internal/streamingnode/server/queryplan ./internal/streamingnode/server/service/handler/transformlog ./internal/streamingnode/server/service ./internal/streamingnode/server/walmanager ./pkg/streaming/util/types ./pkg/streaming/walimpls/impls/walimplstest -count=1 -timeout 240s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/streamingnode/server/wal/adaptor -count=1 -timeout 240s
+```
+
+```bash
+git diff --check
+```
+
+All commands above passed after the corresponding fixes.
+
+## Primary Switchover QueryView Readiness Progress
+
+This stage tightened the StreamingCoord metadata state machine around WAL
+primary switchover:
+
+- `ChannelManager.SwitchWALPrimaryReplica` now checks the current published
+  QueryView shard assignments before switching `PrimaryReplicaID`.
+- If the current primary WAL replica has a discoverable shard assignment on the
+  PChannel, the target WAL replica must already have a discoverable assignment
+  for the same `(collectionID, shardIndex)`.
+- The check intentionally ignores `QueryReplicaID`. QueryView primary status is
+  derived from the WAL replica access mode after the switch, so the target only
+  needs an Up QueryView for the shard on that WAL replica.
+- If no shard assignment provider is registered, or if the current primary has
+  no discoverable QueryView shards on the PChannel, the switch keeps the legacy
+  behavior and is allowed.
+- This turns the design's "prepare target QV first, then switch WAL access
+  mode" rule into a hard metadata precondition. The current code still exposes
+  primary switch as an explicit StreamingNodeManager operation; automatic
+  QV-triggered primary migration policy remains a later integration step.
+
+Additional commands run:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer/channel -run TestChannelManagerRejectsPrimarySwitchUntilTargetHasPrimaryServingShards -count=1 -timeout 120s
+```
+
+This command was first run before the precondition fix and failed because
+`SwitchWALPrimaryReplica` advanced the term and switched primary even though
+the target WAL replica had no published QueryView shard. It passed after the
+fix.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer/channel -run 'TestChannelManager(RejectsPrimarySwitchUntilTargetHasPrimaryServingShards|SwitchWALPrimaryReplicaWhenTargetHasPrimaryServingShards|SwitchWALPrimaryReplica)' -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer/channel -count=1 -timeout 180s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/distributed/streaming ./internal/streamingcoord/server/balancer ./internal/streamingcoord/server/balancer/channel ./internal/streamingcoord/client/assignment ./internal/streamingcoord/server/service/discover ./internal/coordinator/snmanager ./internal/views/coord/balancer ./internal/views/coord/loadmgr ./internal/views/coord/coordview ./internal/views/coord/coordview/syncer ./internal/views/qviews ./internal/views/worknode/handler ./internal/views/queryclient ./internal/views/queryclient/resolver ./internal/streamingnode/client/handler ./internal/streamingnode/client/handler/registry ./internal/streamingnode/client/handler/transformlog ./internal/streamingnode/server/queryplan ./internal/streamingnode/server/service/handler/transformlog ./internal/streamingnode/server/service ./internal/streamingnode/server/walmanager ./pkg/streaming/util/types ./pkg/streaming/walimpls/impls/walimplstest -count=1 -timeout 240s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/streamingnode/server/wal/adaptor -count=1 -timeout 240s
+```
+
+```bash
+git diff --check
+```
+
+All commands above passed after the precondition fix.
