@@ -612,3 +612,47 @@ registering the StreamingNode shard assignment provider through the mocked
 StreamingCoord balancer. The likely next fix is to update `TestServer` mock
 setup to expect the provider registration and initial assignment update, matching
 the QueryView runtime startup contract.
+
+## QueryCoord ServerSuite QueryView Adaptation
+
+This stage fixed the remaining QueryCoord package failures after the service API
+projection work:
+
+- The shared `initStreamingSystem()` test helper now allows the QueryView
+  runtime startup calls to register the shard assignment provider, register the
+  WAL replica dependency provider, and publish the initial shard assignment
+  update through the mocked StreamingCoord balancer.
+- `ServerSuite` setup and recovery checks now verify QueryView load config when
+  the QueryView runtime is active. Legacy `meta.Exist` checks are kept only for
+  non-QueryView runtime paths.
+- `ServerSuite` node-up and node-down checks now validate `nodeMgr` plus
+  ResourceGroup membership in QueryView mode instead of expecting legacy
+  collection replica membership to be updated.
+- `qviewsRuntime.stop()` is idempotent, so repeated server shutdown does not
+  close QueryView clients twice.
+- `Server.Stop()` is now guarded by `sync.Once`, preserving the existing
+  idempotent Stop contract even when downstream clients are not idempotent.
+
+Commands run and passed:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run '^TestServer$/^TestStop$' -count=1 -timeout 60s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run '^TestServer$/^TestUpdateAutoBalanceConfigLoop$' -count=1 -timeout 80s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run '^TestServer$/^Test(NodeDown|NodeUp|NodeUpdate|Recover|Stop|UpdateAutoBalanceConfigLoop)$' -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -count=1 -timeout 300s
+```
+
+```bash
+git diff --check
+```
+
+All commands above passed.
