@@ -404,3 +404,35 @@ source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoo
 
 Both package commands passed after updating the old RW auto-rebalance test
 expectation to the new primary-switchover model.
+
+## QueryView Runtime WAL Primary Switch Hook Progress
+
+This stage started wiring the QueryView runtime into the explicit WAL primary
+switchover loop:
+
+- `newQViewsRuntime` installs a WAL replica provider from StreamingCoord
+  assignment discovery when one is not injected by tests.
+- The default QueryView balancer is connected to a WAL replica demand executor,
+  so RO WAL replica creation requests can be routed to StreamingCoord through
+  `EnsureReadOnlyWALReplica`.
+- The shard stats observer now publishes discoverable shard assignments with
+  the Up shard's `walReplicaID`.
+- When an Up shard is observed on a serviceable RO WAL replica in the
+  configured primary resource group, and the same PChannel has no serviceable
+  RW replica in that group, QueryCoord asks StreamingCoord to switch WAL
+  primary to that WAL replica.
+- QueryView still does not persist or decide a separate primary flag. The
+  primary-serving property remains derived from the WAL replica's current
+  `AccessModeRW` state after StreamingCoord completes the switch.
+
+The switch request remains best-effort from the QueryView runtime. StreamingCoord
+keeps the authoritative readiness precondition and rejects the switch until the
+target WAL replica has all required published primary-serving shards.
+
+Follow-up verification still needed:
+
+- Audit startup seeding for already-Up shards. `seedDiscoverableShards` records
+  the wal-replica-aware assignment, but the automatic primary-switch trigger is
+  currently driven by the shard Up observer.
+- Re-run the broader QueryCoord and QueryView balancer package set after the
+  runtime hook is finalized.
