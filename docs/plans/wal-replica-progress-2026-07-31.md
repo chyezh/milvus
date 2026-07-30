@@ -656,3 +656,71 @@ git diff --check
 ```
 
 All commands above passed.
+
+## WAL Replica Assignment Error Report Progress
+
+This stage fixed the read-only WAL replica assignment error path:
+
+- `ReportAssignmentErrorRequest` now carries optional `wal_replica_id` and
+  `assignment_epoch` fields. `wal_replica_id = 0` keeps the legacy PChannel
+  primary behavior.
+- `AssignmentService` exposes `ReportWALReplicaAssignmentError`, and the
+  assignment discover client sends replica-specific error reports fenced by
+  `(pchannel, walReplicaID, assignmentEpoch)`.
+- Duplicate or stale RO replica error reports are ignored by assignment epoch
+  instead of PChannel write term, because RO reassignments do not advance term.
+- StreamingCoord discover server routes replica-specific reports to
+  `MarkWALReplicasAsUnavailable` and keeps legacy `MarkAsUnavailable` for
+  primary/PChannel reports.
+- `ChannelManager.MarkWALReplicasAsUnavailable` marks only non-primary
+  read-only replicas unavailable when the reported epoch still matches. It does
+  not mutate the PChannel primary projection or advance `Term`.
+- StreamingNode handler creation for WAL replica-bound TransformLog streams now
+  reports permanent wrong-node failures through the replica-specific path, with
+  a legacy fallback for callers that only implement the old rebalance trigger.
+- A WAL replica report is treated as replica-specific only when the reported
+  assignment is `AccessModeRO`. After primary switchover, the primary replica
+  may have a non-zero `walReplicaID`; its wrong-node failures must still use
+  the legacy PChannel primary report so StreamingCoord can mark the RW
+  assignment unavailable.
+- Generated proto code and generated test mocks were updated for the new
+  interface and request fields.
+
+Commands run and passed:
+
+```bash
+source scripts/setenv.sh && make generated-proto
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/streamingcoord/client/assignment -run '^TestAssignmentDiscoverClientReportWALReplicaAssignmentError$' -count=1 -timeout 60s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/streamingcoord/client/assignment -run '^TestAssignmentDiscoverClientReportsReadWriteWALReplicaErrorAsPChannelError$' -count=1 -timeout 60s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/streamingnode/client/handler -run '^TestHandlerClientReportsWALReplicaAssignmentError$' -count=1 -timeout 60s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/streamingnode/client/handler -run '^TestHandlerClientReportsReadWriteWALReplicaErrorAsPChannelError$' -count=1 -timeout 60s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/streamingcoord/server/balancer/channel ./internal/streamingcoord/server/service/discover ./internal/streamingcoord/client/assignment ./internal/streamingnode/client/handler -count=1 -timeout 300s
+```
+
+```bash
+source scripts/setenv.sh && go test -p 1 -tags 'test,dynamic' -gcflags='all=-N -l' $(git diff --name-only -- '*.go' | xargs -r dirname | sort -u | sed 's#^#./#') -count=1 -timeout 300s 2>&1 | tee /tmp/qv_changed_pkgs_p1.log
+```
+
+```bash
+git diff --check
+```
+
+The first changed-package run failed because `querycoordv2`'s local
+`fakeRuntimeAssignmentService` had not yet implemented the new
+`ReportWALReplicaAssignmentError` method. The fake was updated and the second
+changed-package run passed.
