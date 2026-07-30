@@ -70,19 +70,19 @@ func TestPChannelRecoveryManagerModuleIndexSupportsConcurrentRange(t *testing.T)
 	assert.ElementsMatch(t, []string{"v1", "v2"}, mapKeys(observed))
 }
 
-func TestPChannelRecoveryManagerSwitchAggregatesVChannelMetaSnapshot(t *testing.T) {
+func TestPChannelRecoveryManagerSwitchAggregatesWritePathRecoverySnapshot(t *testing.T) {
 	manager := newTestManager(t, "p1", "v1", "v2")
 
 	snapshots := moduleapi.FlattenModuleSnapshot(manager.SwitchIntoMetaAndData())
 
-	vchannelSnapshots := make([]*moduleapi.VChannelModuleSnapshot, 0)
+	writeSnapshots := make([]*moduleapi.WritePathRecoveryModuleSnapshot, 0)
 	for _, snapshot := range snapshots {
-		if typed, ok := snapshot.(*moduleapi.VChannelModuleSnapshot); ok {
-			vchannelSnapshots = append(vchannelSnapshots, typed)
+		if typed, ok := snapshot.(*moduleapi.WritePathRecoveryModuleSnapshot); ok {
+			writeSnapshots = append(writeSnapshots, typed)
 		}
 	}
-	require.Len(t, vchannelSnapshots, 1)
-	assert.ElementsMatch(t, []string{"v1", "v2"}, mapKeys(vchannelSnapshots[0].VChannels))
+	require.Len(t, writeSnapshots, 1)
+	assert.ElementsMatch(t, []string{"v1", "v2"}, mapKeys(writeSnapshots[0].VChannels))
 }
 
 func TestGroupSegmentsByVChannel(t *testing.T) {
@@ -140,6 +140,7 @@ func TestPChannelRecoveryManagerReleasesInitialState(t *testing.T) {
 
 	module := manager.Module("v1")
 	require.NotNil(t, module)
+	require.Same(t, vchannelMeta, module.vchannelView.meta)
 	require.True(t, proto.Equal(vchannelMeta, module.vchannelView.AssignmentMeta()))
 	require.True(t, proto.Equal(versionSummary, module.segmentDataVersionSummary))
 	require.True(t, proto.Equal(transformLogMeta, module.transformLog.SnapshotMeta()))

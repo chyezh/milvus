@@ -57,6 +57,7 @@ type PChannelRecoveryManager struct {
 	segmentsByVChannel    map[string]map[int64]*streamingpb.SegmentAssignmentMeta
 	dirtyMu               sync.Mutex
 	dirtyModules          map[string]*VChannelRecoveryModule
+	cleanupModules        map[string]*VChannelRecoveryModule
 	durableFrontiers      *minimumFrontierIndex[string]
 	materializedFrontiers *minimumFrontierIndex[string]
 
@@ -191,10 +192,19 @@ func aggregateModuleSnapshots(snapshots []moduleapi.ModuleSnapshot) moduleapi.Mo
 	segments := make(map[int64]*streamingpb.SegmentAssignmentMeta)
 	summaries := make(map[string]*streamingpb.SegmentDataVersionSummary)
 	transformLogs := make(map[string]*streamingpb.VChannelTransformLogMeta)
+	writePathVChannels := make(map[string]moduleapi.VChannelWritePathRecoveryState)
+	writePathSegments := make(map[int64]moduleapi.SegmentWritePathRecoveryState)
 	others := make(moduleapi.CompositeModuleSnapshot, 0)
 
 	for _, snapshot := range snapshots {
 		switch typed := snapshot.(type) {
+		case *moduleapi.WritePathRecoveryModuleSnapshot:
+			for vchannel, state := range typed.VChannels {
+				writePathVChannels[vchannel] = state
+			}
+			for segmentID, state := range typed.GrowingSegments {
+				writePathSegments[segmentID] = state
+			}
 		case *moduleapi.VChannelModuleSnapshot:
 			for vchannel, meta := range typed.VChannels {
 				vchannels[vchannel] = meta
@@ -218,6 +228,12 @@ func aggregateModuleSnapshots(snapshots []moduleapi.ModuleSnapshot) moduleapi.Mo
 	}
 
 	result := make(moduleapi.CompositeModuleSnapshot, 0, 3+len(others))
+	if len(writePathVChannels) > 0 || len(writePathSegments) > 0 {
+		result = append(result, &moduleapi.WritePathRecoveryModuleSnapshot{
+			VChannels:       writePathVChannels,
+			GrowingSegments: writePathSegments,
+		})
+	}
 	if len(vchannels) > 0 {
 		result = append(result, &moduleapi.VChannelModuleSnapshot{VChannels: vchannels})
 	}
@@ -242,11 +258,43 @@ func (m *PChannelRecoveryManager) ConsumeDirtySnapshots() []moduleapi.DirtySnaps
 	for _, module := range m.takeDirtyModules() {
 		dirty := module.ConsumeDirtySnapshots()
 		snapshots = append(snapshots, dirty...)
+		if module.HasCleanupCandidates() {
+			m.markCleanupCandidate(module)
+		}
 		if len(dirty) > 0 {
 			m.markModuleDirty(module)
 		}
 	}
 	return snapshots
+}
+
+func (m *PChannelRecoveryManager) ConsumeCleanupSnapshots(cleanup moduleapi.CleanupContext) []moduleapi.DirtySnapshot {
+	m.dirtyMu.Lock()
+	candidates := m.cleanupModules
+	m.cleanupModules = nil
+	m.dirtyMu.Unlock()
+	var snapshots []moduleapi.DirtySnapshot
+	for vchannel, module := range candidates {
+		snapshots = append(snapshots, module.ConsumeCleanupSnapshots(cleanup)...)
+		if module.HasCleanupCandidates() {
+			m.dirtyMu.Lock()
+			if m.cleanupModules == nil {
+				m.cleanupModules = make(map[string]*VChannelRecoveryModule)
+			}
+			m.cleanupModules[vchannel] = module
+			m.dirtyMu.Unlock()
+		}
+	}
+	return snapshots
+}
+
+func (m *PChannelRecoveryManager) markCleanupCandidate(module *VChannelRecoveryModule) {
+	m.dirtyMu.Lock()
+	if m.cleanupModules == nil {
+		m.cleanupModules = make(map[string]*VChannelRecoveryModule)
+	}
+	m.cleanupModules[module.vchannel] = module
+	m.dirtyMu.Unlock()
 }
 
 func (m *PChannelRecoveryManager) DataFrontier(scope moduleapi.Scope) walcheckpoint.Barrier {
@@ -410,7 +458,7 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 			m.markModuleUpdatedByVChannel(vchannel)
 		},
 	}
-	return NewModule(ModuleConfig{
+	return newModuleFromOwnedRecoveryState(ModuleConfig{
 		PChannel:                   m.pchannel,
 		VChannel:                   vchannel,
 		VChannelMeta:               m.config.VChannelMetas[vchannel],

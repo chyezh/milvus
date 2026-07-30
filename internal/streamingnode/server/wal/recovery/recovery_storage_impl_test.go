@@ -79,6 +79,16 @@ type notifyingDirtyModule struct {
 	notify func()
 }
 
+type recordingCleanupModule struct {
+	testRecoveryModule
+	cleanup moduleapi.CleanupContext
+}
+
+func (m *recordingCleanupModule) ConsumeCleanupSnapshots(cleanup moduleapi.CleanupContext) []moduleapi.DirtySnapshot {
+	m.cleanup = cleanup
+	return nil
+}
+
 func (m *notifyingDirtyModule) ConsumeDirtySnapshots() []moduleapi.DirtySnapshot {
 	if m.notify != nil {
 		m.notify()
@@ -99,6 +109,25 @@ func newTestRecoveryStorage(t *testing.T, checkpoint *utility.WALCheckpoint) *re
 		checkpoint,
 		WithNodeScheduler(nodeScheduler),
 	)
+}
+
+func TestConsumeDirtySnapshotUsesLastPersistedPhysicalCheckpointsForCleanup(t *testing.T) {
+	storage := newTestRecoveryStorage(t, &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(10),
+		TimeTick:  10,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: walimplstest.NewTestMessageID(9),
+			TimeTick:  9,
+		},
+	})
+	module := &recordingCleanupModule{}
+	storage.modules = []moduleapi.Module{module}
+	storage.checkpoint.TimeTick = 100
+	storage.checkpoint.DataCheckpoint.TimeTick = 90
+
+	assert.Nil(t, storage.consumeDirtySnapshot())
+	assert.Equal(t, uint64(10), module.cleanup.MetaPhysicalTimeTick)
+	assert.Equal(t, uint64(9), module.cleanup.DataPhysicalTimeTick)
 }
 
 func (b *recordingRecoveryStreamBuilder) WALName() message.WALName {

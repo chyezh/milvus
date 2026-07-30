@@ -232,6 +232,9 @@ func (rs *recoveryStorageImpl) persistCheckpointSnapshot(ctx context.Context, sn
 		return err
 	}
 	if snapshot.CheckpointDirty {
+		rs.mu.Lock()
+		rs.persistedCheckpoint = snapshot.Checkpoint.Clone()
+		rs.mu.Unlock()
 		rs.metrics.ObServePersistedMetrics(snapshot.Checkpoint.TimeTick)
 		rs.simpleTruncateCheckpoint(ctx, snapshot.Checkpoint)
 	}
