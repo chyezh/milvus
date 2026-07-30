@@ -139,6 +139,20 @@ func TestMixCoord_FlushAll(t *testing.T) {
 	})
 }
 
+func TestMixCoordDropCollectionDataView(t *testing.T) {
+	mockey.PatchConvey("delegate collection data view deletion to datacoord", t, func() {
+		dataCoord := &datacoord.Server{}
+		coord := &mixCoordImpl{datacoordServer: dataCoord}
+		mockey.Mock((*datacoord.Server).DropCollectionDataView).
+			To(func(ctx context.Context, collectionID int64) error {
+				assert.Equal(t, int64(100), collectionID)
+				return nil
+			}).Build()
+
+		assert.NoError(t, coord.DropCollectionDataView(context.Background(), 100))
+	})
+}
+
 func TestMixCoord_checkExpiredPOSIXDIR(t *testing.T) {
 	t.Run("POSIX mode disabled", func(t *testing.T) {
 		paramtable.Init()

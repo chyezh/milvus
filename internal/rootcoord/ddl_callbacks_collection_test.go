@@ -30,6 +30,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/metastore/model"
 	"github.com/milvus-io/milvus/internal/mocks"
+	"github.com/milvus-io/milvus/internal/types"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/walimpls/impls/rmq"
@@ -38,8 +39,34 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
+type dataViewDropTrackingMixCoord struct {
+	types.MixCoord
+	droppedCollectionIDs   []int64
+	dropCollectionDataView func(context.Context, int64) error
+}
+
+func (m *dataViewDropTrackingMixCoord) DropCollectionDataView(ctx context.Context, collectionID int64) error {
+	m.droppedCollectionIDs = append(m.droppedCollectionIDs, collectionID)
+	if m.dropCollectionDataView != nil {
+		return m.dropCollectionDataView(ctx, collectionID)
+	}
+	return nil
+}
+
 func TestDDLCallbacksCollectionDDL(t *testing.T) {
 	core := initStreamingSystemAndCore(t)
+	dropAttempts := 0
+	mixCoord := &dataViewDropTrackingMixCoord{
+		MixCoord: core.mixCoord,
+		dropCollectionDataView: func(context.Context, int64) error {
+			dropAttempts++
+			if dropAttempts == 1 {
+				return merr.WrapErrServiceInternalMsg("injected data view drop failure")
+			}
+			return nil
+		},
+	}
+	core.mixCoord = mixCoord
 
 	ctx := context.Background()
 	dbName := "testDB" + funcutil.RandomString(10)
@@ -169,6 +196,7 @@ func TestDDLCallbacksCollectionDDL(t *testing.T) {
 		CollectionName: collectionName,
 	})
 	require.NoError(t, merr.CheckRPCCall(status, err))
+	require.Equal(t, []int64{coll.CollectionID, coll.CollectionID}, mixCoord.droppedCollectionIDs)
 	_, err = core.meta.GetCollectionByName(ctx, dbName, collectionName, typeutil.MaxTimestamp, false)
 	require.Error(t, err)
 	// drop a dropped collection should be idempotent.

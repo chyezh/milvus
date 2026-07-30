@@ -57,6 +57,14 @@ func (s *Server) CreateCollectionDataView(ctx context.Context, collectionID int6
 	})
 }
 
+func (s *Server) DropCollectionDataView(ctx context.Context, collectionID int64) error {
+	if s.dataViewManager == nil {
+		return nil
+	}
+	_, err := s.dataViewManager.OnDropCollection(ctx, collectionID)
+	return err
+}
+
 func (s *Server) Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewOfCollection, error) {
 	if s.dataViewManager == nil {
 		return nil, nil

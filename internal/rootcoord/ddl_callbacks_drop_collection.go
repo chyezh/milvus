@@ -37,6 +37,10 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
+type collectionDataViewDropper interface {
+	DropCollectionDataView(ctx context.Context, collectionID int64) error
+}
+
 func (c *Core) broadcastDropCollectionV1(ctx context.Context, req *milvuspb.DropCollectionRequest) error {
 	broadcaster, err := c.startBroadcastWithCollectionLock(ctx, req.GetDbName(), req.GetCollectionName())
 	if err != nil {
@@ -125,7 +129,16 @@ func (c *DDLCallback) dropCollectionV1AckCallback(ctx context.Context, result me
 					mlog.Int64("collectionID", collectionID), mlog.Err(err))
 			}
 
-			// 3. drop the collection meta itself.
+			// 3. drop DataView metadata before the collection becomes unavailable.
+			// The ack callback is retried until it succeeds, so returning an error
+			// here preserves the deletion across coordinator failures.
+			if dropper, ok := c.mixCoord.(collectionDataViewDropper); ok {
+				if err := dropper.DropCollectionDataView(ctx, collectionID); err != nil {
+					return merr.Wrap(err, "failed to drop collection data view")
+				}
+			}
+
+			// 4. drop the collection meta itself.
 			if err := c.meta.DropCollection(ctx, collectionID, result.TimeTick); err != nil {
 				return merr.Wrap(err, "failed to drop collection")
 			}

@@ -258,6 +258,10 @@ func (s *mixCoordImpl) CreateCollectionDataView(ctx context.Context, collectionI
 	return err
 }
 
+func (s *mixCoordImpl) DropCollectionDataView(ctx context.Context, collectionID int64) error {
+	return s.datacoordServer.DropCollectionDataView(ctx, collectionID)
+}
+
 func (s *mixCoordImpl) checkExpiredPOSIXDIR() {
 	if !paramtable.Get().CommonCfg.EnablePosixMode.GetAsBool() {
 		return

@@ -75,14 +75,15 @@ func (c *fakeDataViewReferenceChecker) ReferencedDataVersions(collectionID int64
 }
 
 type fakeGCDataViewManager struct {
-	calls             []fakeGCDataViewCall
-	createEvents      []CreateCollectionDataViewEvent
-	flushEvents       []FlushDataViewEvent
-	l0CompactEvents   []L0CompactDataViewEvent
-	snapshotRequested []int64
-	snapshotViews     []*viewpb.DataViewOfCollection
-	segmentReferenced bool
-	segmentRefErr     error
+	calls              []fakeGCDataViewCall
+	createEvents       []CreateCollectionDataViewEvent
+	droppedCollections []int64
+	flushEvents        []FlushDataViewEvent
+	l0CompactEvents    []L0CompactDataViewEvent
+	snapshotRequested  []int64
+	snapshotViews      []*viewpb.DataViewOfCollection
+	segmentReferenced  bool
+	segmentRefErr      error
 }
 
 type fakeGCDataViewCall struct {
@@ -131,6 +132,7 @@ func (m *fakeGCDataViewManager) OnTruncate(ctx context.Context, event TruncateDa
 }
 
 func (m *fakeGCDataViewManager) OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error) {
+	m.droppedCollections = append(m.droppedCollections, collectionID)
 	return nil, nil
 }
 

@@ -36,6 +36,22 @@ func TestServerCreateCollectionDataViewReturnsEmptyWithoutDataViewManager(t *tes
 	require.Nil(t, version)
 }
 
+func TestServerDropCollectionDataViewDelegatesToDataViewManager(t *testing.T) {
+	manager := &fakeGCDataViewManager{}
+	server := &Server{dataViewManager: manager}
+
+	err := server.DropCollectionDataView(context.Background(), 10)
+
+	require.NoError(t, err)
+	require.Equal(t, []int64{10}, manager.droppedCollections)
+}
+
+func TestServerDropCollectionDataViewReturnsNilWithoutDataViewManager(t *testing.T) {
+	server := &Server{}
+
+	require.NoError(t, server.DropCollectionDataView(context.Background(), 10))
+}
+
 func TestServerSnapshotDelegatesToDataViewManager(t *testing.T) {
 	manager := &fakeGCDataViewManager{
 		snapshotViews: []*viewpb.DataViewOfCollection{
