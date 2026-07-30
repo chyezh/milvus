@@ -724,3 +724,92 @@ The first changed-package run failed because `querycoordv2`'s local
 `fakeRuntimeAssignmentService` had not yet implemented the new
 `ReportWALReplicaAssignmentError` method. The fake was updated and the second
 changed-package run passed.
+
+## Read-Only WAL Replica Release Progress
+
+This stage added the release side of QueryView-owned read-only WAL replica
+demand and tightened final deletion safety:
+
+- `ChannelManager.RemoveWALReplicas` now rechecks the registered QueryView WAL
+  replica dependency provider immediately before deleting a dropping WAL
+  replica entry. This protects the race where a replica is marked `DROPPING`,
+  but a pending or Up QueryView dependency appears before the final remove CAS.
+- `balancerImpl.ReleaseReadOnlyWALReplica` now implements the explicit
+  StreamingCoord release flow for non-primary read-only WAL replicas:
+  record the current active runtime assignment, mark the replica `DROPPING`,
+  send `Remove` to the active StreamingNode with the old runtime
+  `assignment_epoch`, then remove the replica entry from the single PChannel
+  meta key.
+- The release flow does not advance the PChannel write `Term` and does not
+  remove the primary WAL replica.
+- `StreamingNodeManager` exposes `ReleaseReadOnlyWALReplica`, and QueryCoord's
+  `streamingCoordWALReplicaDemandExecutor` forwards QueryView release intents
+  through that API.
+- QueryView balance plans now carry `WALReplicaReleases`. The default policy
+  emits releases for serviceable `AccessModeRO` WAL replicas that are not
+  referenced by current shard WAL dependencies or by QueryViews prepared in the
+  same reconcile cycle. StreamingCoord remains the final dependency gate,
+  including pending sync dependencies that are not visible in the balancer
+  snapshot.
+- Existing mock balancer code was updated for the new release method.
+
+Commands run and passed:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer/channel -run TestChannelManagerRejectsRemovingDroppingWALReplicaWithQueryViewDependency -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer -run TestBalancerReleaseReadOnlyWALReplicaRemovesActiveRuntimeAndMeta -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/coordinator/snmanager -run TestStreamingNodeManagerReleaseReadOnlyWALReplica -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/views/coord/balancer -run 'TestBalancer_ReconcileAppliesWALReplicaRelease|TestDefaultBalancePolicy_ReleasesUnusedReadOnlyWALReplica' -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run 'TestStreamingCoordWALReplicaDemandExecutorDelegatesReleaseToStreamingNodeManager' -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer/channel -count=1 -timeout 180s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer -count=1 -timeout 180s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/views/coord/balancer -count=1 -timeout 180s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/coordinator/snmanager -count=1 -timeout 180s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run 'Test(StreamingCoordWALReplicaDemandExecutor|MaybeSwitchWALPrimaryReplicaForShardUp|NewQViewsRuntime|QViewsRuntimeStartRegistersStreamingCoordProviders|QViewsWALReplicaDependencyProvider)' -count=1 -timeout 180s
+```
+
+Follow-up changed-package rerun:
+
+```bash
+source scripts/setenv.sh && go test -p 1 -tags 'test,dynamic' -gcflags='all=-N -l' $(git diff --name-only -- '*.go' | xargs -r dirname | sort -u | sed 's#^#./#') -count=1 -timeout 300s 2>&1 | tee /tmp/qv_changed_pkgs_release_rerun.log
+```
+
+This rerun reported a remaining `internal/querycoordv2` test failure in
+`TestStreamingCoordWALReplicaDemandExecutorDelegatesToStreamingNodeManager`:
+the old ensure-path test still expects `WatchChannelAssignments` to be called
+unconditionally. The related release-path test already treats that watch as
+optional, which matches the runtime path when the assignment watcher is not
+started by this unit test.
+
+```bash
+git diff --check -- docs/plans/wal-replica-progress-2026-07-31.md
+```
+
+Passed.
