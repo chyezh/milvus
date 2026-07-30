@@ -154,3 +154,92 @@ git diff --check
 ```
 
 All four commands above passed.
+
+## Primary Switchover Runtime Propagation Progress
+
+This stage aligned the StreamingCoord runtime assignment path with the WAL
+replica meta model:
+
+- `SwitchWALPrimaryReplica` records the old primary WAL replica before the meta
+  CAS, increments the PChannel write `term`, and switches access mode in the
+  single PChannel meta value.
+- After the meta switch succeeds, StreamingCoord sends a demotion assignment to
+  the old primary owner with the new `term`, `AccessModeRO`, and a new
+  `assignment_epoch`.
+- StreamingCoord also sends a promotion assignment to the target owner with the
+  same new `term`, `AccessModeRW`, and the target replica assignment epoch.
+- `AssignWALReplicasDone` is called for the target primary only after the target
+  promotion RPC succeeds, so a failed promotion is not reported as serviceable.
+- Demotion and promotion errors are combined and returned to the caller. The
+  metadata switch is still the source of truth; failed runtime propagation is a
+  follow-up reconciliation problem rather than a metadata rollback.
+
+This keeps `Term` as the PChannel write-chain epoch, while `assignment_epoch`
+fences per-replica runtime assignment churn within the same term.
+
+Additional commands run:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer -run TestBalancerSwitchWALPrimaryReplicaAssignsTargetAsReadWrite -count=1 -timeout 120s
+```
+
+The focused test was first run before the runtime demotion fix and failed
+because the old primary owner did not receive the expected `AccessModeRO`
+assignment. It passed after the fix.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer -count=1 -timeout 180s
+```
+
+This command passed.
+
+## RO WAL TransformLog Progress
+
+This stage connected read-only WAL replicas to their local QueryView
+TransformLog resources:
+
+- `roWALAdaptorImpl.TransformLog()` now returns the recovered QueryView resource
+  manager when it is available.
+- If a read-only WAL has not recovered query resources yet, TransformLog access
+  returns an unavailable accesser error instead of exposing an empty or
+  write-path TransformLog implementation.
+- The RO open recovery test now acquires a TransformLog stream for a recovered
+  QueryView VChannel and verifies that catchup can reach `SyncUp`.
+
+This matches the selected model: the durable WAL backend remains shared by
+PChannel, while each WAL replica serves its own local QueryView projection,
+including TransformLog state used by QueryNodes.
+
+Additional commands run:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/streamingnode/server/wal/adaptor -run TestOpenROWALRecoversQueryViewHandlerAndVChannelModules -count=1 -timeout 120s
+```
+
+The focused test was first run before the TransformLog access fix and failed
+with `STREAMING_CODE_ON_SHUTDOWN: read only wal does not serve transform log`.
+It passed after the fix.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/streamingnode/server/wal/adaptor -run '^TestWAL$' -count=1 -timeout 180s
+```
+
+This command passed.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/streamingnode/server/wal/adaptor -count=1 -timeout 240s
+```
+
+This full adaptor package command failed during `TestWAL` while appending the
+initial RecoveryBarrier:
+
+```text
+when building interceptor params: append recovery barrier message failed: random error
+```
+
+Investigation found the failure comes from the test WAL implementation's random
+append-error injection for non-TimeTick messages. RecoveryBarrier currently
+participates in that random failure path, so opening an RW WAL in package-wide
+test order can fail before the WAL under test is usable. The focused `TestWAL`
+command above passed, so this remains a test-fixture flake to fix separately
+rather than evidence of the RO TransformLog change failing.
