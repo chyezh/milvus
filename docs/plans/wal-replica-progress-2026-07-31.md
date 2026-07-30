@@ -357,3 +357,50 @@ git diff --check
 ```
 
 All commands above passed after the precondition fix.
+
+## Ordinary Balance RW Primary Pinning Progress
+
+This stage fixed one remaining design violation in the StreamingCoord ordinary
+balance path:
+
+- `balance()` still used the legacy `AssignPChannels` path for all serviceable
+  RW PChannels. When `streaming.primaryResourceGroup` changed, the status
+  collection hint could filter out the old primary owner and make the policy
+  treat the RW PChannel as unassigned.
+- Added a regression test where the old RW primary's StreamingNode remains
+  alive in `rg-old` while the primary RG hint switches to `rg-new`. Before the
+  fix, ordinary balance reassigned the RW PChannel to the new RG and advanced
+  the term. After the fix, no ordinary `Assign` is issued.
+- `CurrentLayout` now distinguishes all nodes needed to represent the current
+  layout from nodes that ordinary balance may choose as new targets.
+- When a configured primary RG filters out a still-discovered RW primary owner,
+  `generateCurrentLayout` keeps that owner as a pinned current assignment but
+  excludes it from assignable candidates.
+- `CurrentLayout.AllowRebalance` now rejects auto-rebalance of already assigned
+  RW PChannels. RW write-owner movement must go through the explicit WAL
+  primary switchover path that checks QueryView readiness.
+- Existing vchannelfair policy fairness tests were updated to exercise ordinary
+  rebalance with RO channels, matching the new split: RO replicas can use
+  ordinary make-before-break assignment, while RW primary movement is planned
+  separately.
+
+Additional commands run:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer -run TestBalancer_PrimaryResourceGroupChangeDoesNotReassignServiceableRWPrimary -count=1 -timeout 120s
+```
+
+This command was first run before the fix and failed because the serviceable RW
+primary was reassigned from node 1 to node 2 by ordinary balance. It passed
+after the fix.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer/policy/vchannelfair -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer -count=1 -timeout 180s
+```
+
+Both package commands passed after updating the old RW auto-rebalance test
+expectation to the new primary-switchover model.
