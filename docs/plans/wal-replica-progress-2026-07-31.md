@@ -193,6 +193,79 @@ source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoo
 
 This command passed.
 
+## QueryCoord QueryView Load-Config Service Progress
+
+This stage adapted more QueryCoord service and DDL callback paths to use the
+QueryView load-config model instead of assuming legacy `meta/targetMgr` state:
+
+- `CollectionLoadManager.SyncNewCreatedPartition` now updates the stored
+  QueryView `LoadConfig` for collection loads and skips partition-load configs
+  that should not automatically absorb new partitions.
+- `SyncNewCreatedPartition` routes through the QueryView runtime load manager
+  when available, with the legacy job path kept as fallback.
+- `RefreshCollection`, `ManualUpdateCurrentTarget`, `GetPartitionStates`, and
+  `GetReplicas` now read QueryView load-config state when the QueryView runtime
+  store is available.
+- Release-partition and transfer-replica callbacks now preserve QueryView
+  load-config fields such as load type, partition IDs, replica layout, selected
+  fields, and user-specified replica mode when generating alter-load messages.
+- Focused service tests were moved away from legacy replica/target assertions
+  where the architecture now stores desired state in QueryView load configs.
+
+Additional commands run:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/views/coord/loadmgr -run 'TestCollectionLoadManager_SyncNewCreatedPartition' -count=1 -timeout 120s
+```
+
+This command was first run before the load-manager method existed and failed
+at compile time. It passed after adding `SyncNewCreatedPartition`.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/views/coord/loadmgr ./internal/querycoordv2 -run 'Test(CollectionLoadManager_SyncNewCreatedPartition|SyncNewCreatedPartitionUsesQViewsLoadConfig)' -count=1 -timeout 120s
+```
+
+This command was first run before the QueryCoord service path used the
+QueryView load-config store and failed because the QV config was unchanged. It
+passed after routing the service through `CollectionLoadManager`.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run 'Test(ReleasePartitionsUsesQViewsLoadConfig|TransferReplicaUsesQViewsLoadConfig)' -count=1 -timeout 120s
+```
+
+This command was first run before release-partition and transfer-replica
+callbacks used QueryView state. It passed after the callbacks generated alter
+load-config messages from the current QueryView config.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run 'Test(ReleasePartitionsDropLoadConfigBroadcastsToCollectionVChannels|ReleasePartitionsUsesQViewsLoadConfig|TransferReplicaUsesQViewsLoadConfig|SyncNewCreatedPartitionUsesQViewsLoadConfig)' -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run 'TestService/Test(SyncNewCreatedPartition|ReleasePartition|TransferReplica)$' -count=1 -timeout 180s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run 'TestService/Test(LoadCollectionWithUserSpecifiedReplicaMode|LoadCollectionWithoutUserSpecifiedReplicaMode|LoadPartitionsWithUserSpecifiedReplicaMode|LoadPartitionsWithoutUserSpecifiedReplicaMode|LoadPartitionWithLoadFields|LoadPartitionWithUserSpecifiedReplicaMode|LoadPartitionUpdateUserSpecifiedReplicaMode|ManualUpdateCurrentTarget|RefreshCollection)$' -count=1 -timeout 180s
+```
+
+The three focused commands above passed.
+
+The full `internal/querycoordv2` package still has legacy-service-suite
+failures to adapt:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -count=1 -timeout 240s
+```
+
+Known remaining failures include `TestGetReplicas`, `TestGetSegmentInfo`,
+`TestGetShardLeaders`, `TestGetShardLeadersFailed`,
+`TestGetShardLeadersWithUnserviceableShards`, `TestHandleNodeUp`, and the
+legacy load-balance service tests. The common cause is that these paths still
+expect legacy replica manager, target manager, or dist-manager state, while the
+QueryView architecture now stores desired load state in `loadConfigStore` and
+published shard state in `shardViewRegistry`.
+
 ## RO WAL TransformLog Progress
 
 This stage connected read-only WAL replicas to their local QueryView
