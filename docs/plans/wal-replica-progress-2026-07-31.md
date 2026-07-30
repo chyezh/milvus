@@ -813,3 +813,54 @@ git diff --check -- docs/plans/wal-replica-progress-2026-07-31.md
 ```
 
 Passed.
+
+## Read-Only WAL Replica Release Follow-Up
+
+This follow-up closed two gaps found during the current-state audit:
+
+- `ReleaseReadOnlyWALReplica` now collects cleanup assignments for both
+  `ActiveNode` and `TargetNode` before marking the replica `DROPPING`. This
+  covers cancellation of an `AccessModeRO` make-before-break migration and
+  prevents half-prepared target runtimes from being leaked.
+- `mutablePChannel.MarkWALReplicaAsDropping` now permits non-primary
+  read-only replicas in `ASSIGNING` to enter `DROPPING`; the target remains
+  persisted until final metadata removal, so recovery still has an explicit
+  cleanup target.
+- The active cleanup uses the matching assignment history epoch when present,
+  while the target cleanup uses the current assignment epoch.
+- `internal/distributed/streaming`'s balancer test fixture now treats the
+  background `StreamingNodeManager` assignment watcher as optional/reusable and
+  closes the global manager at test end. This removes a mock panic exposed by
+  the changed-package run.
+
+Commands run and passed:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run 'TestStreamingCoordWALReplicaDemandExecutorDelegates(ToStreamingNodeManager|ReleaseToStreamingNodeManager)' -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer -run 'TestBalancerReleaseReadOnlyWALReplica(RemovesActiveRuntimeAndMeta|CleansActiveAndTargetRuntime)' -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer/channel -count=1 -timeout 180s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer -count=1 -timeout 180s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/distributed/streaming -count=1 -timeout 120s
+```
+
+```bash
+set -o pipefail && source scripts/setenv.sh && go test -p 1 -tags 'test,dynamic' -gcflags='all=-N -l' $(git diff --name-only -- '*.go' | xargs -r dirname | sort -u | sed 's#^#./#') -count=1 -timeout 300s 2>&1 | tee /tmp/qv_changed_pkgs_release_rerun4.log
+```
+
+```bash
+git diff --check
+```
+
+Passed.
