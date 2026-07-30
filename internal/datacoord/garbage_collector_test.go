@@ -66,12 +66,19 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
-type fakeDataViewReferenceChecker struct {
-	versions map[int64][]*viewpb.DataVersion
+type fakeDataViewGarbageCollector struct {
+	calls []struct {
+		collectionID int64
+		retainLatest int
+	}
 }
 
-func (c *fakeDataViewReferenceChecker) ReferencedDataVersions(collectionID int64) []*viewpb.DataVersion {
-	return c.versions[collectionID]
+func (c *fakeDataViewGarbageCollector) GarbageCollect(_ context.Context, collectionID int64, retainLatest int) error {
+	c.calls = append(c.calls, struct {
+		collectionID int64
+		retainLatest int
+	}{collectionID: collectionID, retainLatest: retainLatest})
+	return nil
 }
 
 type fakeGCDataViewManager struct {
@@ -186,22 +193,18 @@ func TestGarbageCollector_recycleDataViews(t *testing.T) {
 	}
 	m.collections.Insert(1, &collectionInfo{ID: 1})
 	m.collections.Insert(2, &collectionInfo{ID: 2})
-	refs := &fakeDataViewReferenceChecker{versions: map[int64][]*viewpb.DataVersion{
-		2: {{StreamingVersion: 3, CompactVersion: 1}},
-	}}
-	gc := newGarbageCollector(m, newMockHandler(), GcOption{dataViewRefs: refs})
+	guardedGC := &fakeDataViewGarbageCollector{}
+	gc := newGarbageCollector(m, newMockHandler(), GcOption{dataViewGC: guardedGC})
 
 	gc.recycleDataViews(context.Background(), nil)
 
-	require.Len(t, manager.calls, 2)
-	byCollection := make(map[int64]fakeGCDataViewCall)
-	for _, call := range manager.calls {
-		byCollection[call.collectionID] = call
+	require.Empty(t, manager.calls, "normal GC must not bypass the collection reference guard")
+	require.Len(t, guardedGC.calls, 2)
+	byCollection := make(map[int64]int, len(guardedGC.calls))
+	for _, call := range guardedGC.calls {
+		byCollection[call.collectionID] = call.retainLatest
 	}
-	require.Equal(t, 1, byCollection[1].retainLatest)
-	require.Empty(t, byCollection[1].protected)
-	require.Equal(t, 1, byCollection[2].retainLatest)
-	require.Equal(t, []*viewpb.DataVersion{{StreamingVersion: 3, CompactVersion: 1}}, byCollection[2].protected)
+	require.Equal(t, map[int64]int{1: 1, 2: 1}, byCollection)
 }
 
 func Test_garbageCollector_basic(t *testing.T) {

@@ -37,13 +37,22 @@ func TestServerCreateCollectionDataViewReturnsEmptyWithoutDataViewManager(t *tes
 }
 
 func TestServerDropCollectionDataViewDelegatesToDataViewManager(t *testing.T) {
-	manager := &fakeGCDataViewManager{}
-	server := &Server{dataViewManager: manager}
+	catalog := &testDataViewReferenceCatalog{markerPresent: make(map[int64]struct{})}
+	dataViews := &testDataViewReferenceDataViews{
+		dataViewFn: func(context.Context, int64, *viewpb.DataVersion) (*viewpb.DataViewOfCollection, error) {
+			return nil, nil
+		},
+		garbageCollectFn: func(context.Context, int64, []*viewpb.DataVersion, int) error { return nil },
+		dropCollectionFn: func(context.Context, int64) (*viewpb.DataVersion, error) { return nil, nil },
+	}
+	server := &Server{dataViewReferences: newTestDataViewReferenceManager(t, catalog, dataViews, func(int64) bool { return true })}
 
 	err := server.DropCollectionDataView(context.Background(), 10)
 
 	require.NoError(t, err)
-	require.Equal(t, []int64{10}, manager.droppedCollections)
+	require.Equal(t, []int64{10}, catalog.marked)
+	require.NoError(t, server.FinalizeDropCollectionDataView(context.Background(), 10))
+	require.Equal(t, []int64{10}, catalog.unmarked)
 }
 
 func TestServerDropCollectionDataViewReturnsNilWithoutDataViewManager(t *testing.T) {
