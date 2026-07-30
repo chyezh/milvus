@@ -549,3 +549,66 @@ git diff --check
 ```
 
 This command passed.
+
+## QueryView Service API Projection Progress
+
+This stage adapted QueryCoord read APIs that were still assuming legacy
+`ReplicaManager`, `targetMgr`, and dist state to the QueryView architecture:
+
+- `GetReplicas` now projects replica information from QueryView load config and
+  Up shard stats. QueryNode membership is derived from the serviceable shard
+  placements reported by `shardViewRegistry`.
+- `GetLoadSegmentInfo` now reads segment placement from Up `ShardStats` and
+  returns `ErrSegmentNotLoaded` when a requested segment is not present in the
+  QueryView projection.
+- `GetShardLeaders` now derives shard leader candidates from Up QueryView shard
+  stats. Strict mode still reports `ErrChannelNotAvailable` when no serviceable
+  shard is available; relaxed mode can return an empty shard list.
+- Legacy manual sealed segment `LoadBalance` is rejected in QueryView mode with
+  `ErrParameterInvalid`. Placement movement under QueryView should be expressed
+  through the QueryView balancer and view synchronization flow.
+- DDL callback tests that observe load state were updated to assert QueryView
+  load config instead of legacy collection or partition load metadata.
+- Node-up service tests now check resource group membership in QueryView mode
+  and no longer expect legacy target manager or dist initialization side
+  effects.
+
+Focused commands run and passed:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run 'Test(GetReplicasUsesQViewsShardStats|Service/Test(GetPartitionStates|GetReplicas))$' -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run 'TestService/TestDDLCallbacksReleasePartition$' -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run 'Test(Service/TestGetSegmentInfo|GetLoadSegmentInfoUsesQViewsShardStats)$' -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run 'Test(GetShardLeadersUsesQViewsShardStats|Service/TestGetShardLeaders|Service/TestGetShardLeadersFailed|Service/TestGetShardLeadersWithUnserviceableShards)$' -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run 'TestService/Test(DDLCallbacksLoadPartition|DDLCallbacksLoadCollectionForceOverrideUserSpecifiedReplicaMode)$' -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run 'TestService/Test(LoadBalance|LoadBalanceFailed|LoadBalanceWithEmptySegmentList|LoadBalanceWithNoDstNode|HandleNodeUp)$' -count=1 -timeout 120s
+```
+
+The full QueryCoord package command still fails:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -count=1 -timeout 240s
+```
+
+The remaining failures are currently isolated to `TestServer`, with panics in
+`TestNodeDown`, `TestNodeUp`, `TestNodeUpdate`, `TestRecover`, `TestStop`, and
+`TestUpdateAutoBalanceConfigLoop`. The stack points at QueryView runtime start
+registering the StreamingNode shard assignment provider through the mocked
+StreamingCoord balancer. The likely next fix is to update `TestServer` mock
+setup to expect the provider registration and initial assignment update, matching
+the QueryView runtime startup contract.
