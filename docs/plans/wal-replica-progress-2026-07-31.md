@@ -407,8 +407,8 @@ expectation to the new primary-switchover model.
 
 ## QueryView Runtime WAL Primary Switch Hook Progress
 
-This stage started wiring the QueryView runtime into the explicit WAL primary
-switchover loop:
+This stage wired the QueryView runtime into the explicit WAL primary switchover
+loop:
 
 - `newQViewsRuntime` installs a WAL replica provider from StreamingCoord
   assignment discovery when one is not injected by tests.
@@ -421,6 +421,13 @@ switchover loop:
   configured primary resource group, and the same PChannel has no serviceable
   RW replica in that group, QueryCoord asks StreamingCoord to switch WAL
   primary to that WAL replica.
+- Runtime startup now scans recovered Up shard stats after registering the
+  shard assignment provider and publishing the initial assignment update. This
+  covers QueryCoord restart cases where `RegisterStatsObserver` does not replay
+  the recovered snapshot.
+- Startup switch attempts are deduplicated by `(pchannel, walReplicaID)` so a
+  recovered multi-shard PChannel does not issue repeated identical switch
+  requests.
 - QueryView still does not persist or decide a separate primary flag. The
   primary-serving property remains derived from the WAL replica's current
   `AccessModeRW` state after StreamingCoord completes the switch.
@@ -429,10 +436,43 @@ The switch request remains best-effort from the QueryView runtime. StreamingCoor
 keeps the authoritative readiness precondition and rejects the switch until the
 target WAL replica has all required published primary-serving shards.
 
-Follow-up verification still needed:
+Additional commands run:
 
-- Audit startup seeding for already-Up shards. `seedDiscoverableShards` records
-  the wal-replica-aware assignment, but the automatic primary-switch trigger is
-  currently driven by the shard Up observer.
-- Re-run the broader QueryCoord and QueryView balancer package set after the
-  runtime hook is finalized.
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run TestNewQViewsRuntimeSwitchesWALPrimaryForRecoveredUpShard -count=1 -timeout 120s
+```
+
+This command was first run before the startup scan fix and failed because no
+WAL primary switch request was issued for the recovered Up shard. It passed
+after the fix.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 -run 'Test(MaybeSwitchWALPrimaryReplicaForShardUp|NewQViewsRuntime|StreamingCoordWALReplicaDemandExecutor|QViewsRuntimeStartRegistersStreamingCoordProviders|QViewsWALReplicaDependencyProvider)' -count=1 -timeout 120s
+```
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 ./internal/views/coord/balancer -run 'Test(MaybeSwitchWALPrimaryReplicaForShardUp|NewQViewsRuntime|StreamingCoordWALReplicaDemandExecutor|QViewsRuntimeStartRegistersStreamingCoordProviders|QViewsWALReplicaDependencyProvider|DefaultBalancePolicy|SnapshotBuilder)' -count=1 -timeout 180s
+```
+
+Both commands passed.
+
+The broader related package command below passed every listed package except
+`internal/querycoordv2`:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/querycoordv2 ./internal/distributed/streaming ./internal/streamingcoord/server/balancer ./internal/streamingcoord/server/balancer/channel ./internal/streamingcoord/client/assignment ./internal/streamingcoord/server/service/discover ./internal/coordinator/snmanager ./internal/views/coord/balancer ./internal/views/coord/loadmgr ./internal/views/coord/coordview ./internal/views/coord/coordview/syncer ./internal/views/qviews ./internal/views/worknode/handler ./internal/views/queryclient ./internal/views/queryclient/resolver ./internal/streamingnode/client/handler ./internal/streamingnode/client/handler/registry ./internal/streamingnode/client/handler/transformlog ./internal/streamingnode/server/queryplan ./internal/streamingnode/server/service/handler/transformlog ./internal/streamingnode/server/service ./internal/streamingnode/server/walmanager ./pkg/streaming/util/types ./pkg/streaming/walimpls/impls/walimplstest -count=1 -timeout 300s
+```
+
+The remaining `internal/querycoordv2` full-package failures are in legacy
+`ServiceSuite` paths such as `TestSyncNewCreatedPartition`,
+`TestReleasePartition`, and `TestTransferReplica`. The observed root cause is
+that these tests still assert old `meta/targetMgr` load state after the load
+path has been moved to QueryView `loadConfigStore` and `shardViewRegistry`.
+Focused QueryView runtime and balancer tests pass; the legacy service suite
+needs a separate QueryView-architecture adaptation pass.
+
+```bash
+git diff --check
+```
+
+This command passed.
