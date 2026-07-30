@@ -21,9 +21,10 @@ import (
 //
 // All methods are safe for concurrent use.
 type ShardViewRegistry struct {
-	mu             sync.RWMutex
-	ctx            context.Context
-	flushScheduler *DirtyViewFlushScheduler
+	mu                 sync.RWMutex
+	ctx                context.Context
+	flushScheduler     *DirtyViewFlushScheduler
+	dataViewReferences qviews.DataViewReferenceManager
 
 	version  uint64
 	shards   map[qviews.ShardID]*ShardViewManager
@@ -43,7 +44,9 @@ func RecoverShardViewRegistry(
 	ctx context.Context,
 	catalog queryview.QueryViewCatalog,
 	s syncer.ReliableSyncer,
+	dataViewReferences ...qviews.DataViewReferenceManager,
 ) (*ShardViewRegistry, error) {
+	refs := dataViewReferenceManagerOrNoop(dataViewReferences)
 	views, err := catalog.ListQueryViews(ctx)
 	if err != nil {
 		return nil, err
@@ -67,22 +70,34 @@ func RecoverShardViewRegistry(
 	batch := flushScheduler.Begin()
 	shards := make(map[qviews.ShardID]*ShardViewManager, len(byShardID))
 	for sid, recovered := range byShardID {
-		shards[sid] = newShardViewManager(ctx, sid, flushScheduler, recovered)
+		manager, err := RecoverShardViewManager(ctx, sid, flushScheduler, refs, recovered)
+		if err != nil {
+			for _, recoveredManager := range shards {
+				recoveredManager.unpinAllReferences()
+			}
+			flushScheduler.Close()
+			return nil, err
+		}
+		shards[sid] = manager
 	}
 	batch.Commit()
 
 	registry := &ShardViewRegistry{
-		ctx:            ctx,
-		flushScheduler: flushScheduler,
-		version:        1,
-		shards:         shards,
-		stats:          make(map[qviews.ShardID]*ShardStats, len(shards)),
+		ctx:                ctx,
+		flushScheduler:     flushScheduler,
+		dataViewReferences: refs,
+		version:            1,
+		shards:             shards,
+		stats:              make(map[qviews.ShardID]*ShardStats, len(shards)),
 	}
 	for sid, mgr := range shards {
 		mgr.SetStatsObserver(registry.onShardStatsChanged)
 		registry.stats[sid] = mgr.Stats()
 	}
 	if err := flushScheduler.Flush(ctx); err != nil {
+		for _, manager := range shards {
+			manager.unpinAllReferences()
+		}
 		flushScheduler.Close()
 		return nil, err
 	}
@@ -100,7 +115,7 @@ func (r *ShardViewRegistry) Ensure(shardID qviews.ShardID) *ShardViewManager {
 	}
 	r.mu.RUnlock()
 
-	mgr := newShardViewManager(r.ctx, shardID, r.flushScheduler, nil)
+	mgr := newShardViewManager(r.ctx, shardID, r.flushScheduler, nil, r.dataViewReferences)
 	mgr.SetStatsObserver(r.onShardStatsChanged)
 	stats := emptyShardStats()
 
