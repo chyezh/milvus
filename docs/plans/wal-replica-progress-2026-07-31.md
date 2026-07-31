@@ -865,6 +865,85 @@ git diff --check
 
 Passed.
 
+## QueryNode Phase 2 WALReplica Routing
+
+The follow-up audit found one remaining query-serving boundary after making
+QueryView keys WALReplica-aware. Query planning and StreamingNode Phase 2
+routing already carried the WAL replica binding, but QueryNode Phase 2 requests
+still contained only:
+
+```text
+ShardID + QueryViewVersion
+```
+
+That is ambiguous when the same QueryReplica/VChannel/QueryViewVersion exists
+on more than one WAL replica. QueryNode had been made conservative by refusing
+version-only lookup when more than one same-version view exists, but that only
+turned the ambiguity into a retryable not-found path.
+
+The fix carries the selected WAL replica through Phase 2:
+
+- Added `wal_replica_id` to `SearchOnViewRequest`, `QueryOnViewRequest`, and
+  `RequeryOnViewRequest`.
+- `shardViewQueryClient` writes the selected shard's WAL replica binding into
+  Search/Query Phase 2 requests.
+- `viewquery.TaskProvider` now receives the WAL replica ID from the request.
+- QueryNode `AcquireReadyView`, `WaitTransformVisible`, and
+  `AcquireSealedSegmentHandles` use the full `(shard, walReplicaID, version)`
+  `QueryViewKey`.
+- StreamingNode task providers keep using the WAL replica selected by the
+  incoming metadata/request and use that ID when looking up local query runtime
+  resources.
+
+Tests added or extended:
+
+- `TestQNHandler_AcquireReadyViewUsesWALReplicaID`
+- `TestShardSearchReturnsQueryPlanMVCCForRequery` now asserts Phase 2
+  `wal_replica_id`.
+- `TestServerSearchOnViewDelegatesAndReleasesTasks` and
+  `TestServerQueryOnViewDelegatesAndReleasesTasks` now assert provider
+  forwarding of `wal_replica_id`.
+
+Commands run:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/views/queryclient ./internal/querynodev2/qnview -run 'TestShardSearchReturnsQueryPlanMVCCForRequery|TestQNHandler_AcquireReadyViewUsesWALReplicaID' -count=1 -timeout 120s
+```
+
+Initial red run failed because `SearchOnViewRequest` had no
+`GetWalReplicaId()` and `AcquireReadyView` did not accept a WAL replica ID.
+
+```bash
+source scripts/setenv.sh && make generated-proto
+```
+
+Passed and regenerated `pkg/proto/viewpb/view.pb.go` after adding Phase 2
+request WAL replica fields.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/views/queryclient ./internal/querynodev2/qnview ./internal/views/viewquery -run 'TestShardSearchReturnsQueryPlanMVCCForRequery|TestQNHandler_AcquireReadyViewUsesWALReplicaID|TestServer(SearchOnView|QueryOnView)DelegatesAndReleasesTasks' -count=1 -timeout 120s
+```
+
+Passed.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/querynodev2/qnview ./internal/querynodev2/transformlogbuffer ./internal/querynodev2/qvresource ./internal/views/qviews ./internal/views/coord/coordview ./internal/views/coord/coordview/syncer ./internal/views/queryclient ./internal/views/viewquery ./internal/distributed/streaming -count=1 -timeout 240s
+```
+
+Passed.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' -gcflags='all=-N -l' ./internal/views/queryclient ./internal/views/viewquery ./internal/querynodev2/qnview ./internal/querynodev2/client/handler ./internal/streamingnode/server/wal/snview ./internal/streamingnode/server/wal/adaptor -run 'TestShardSearchReturnsQueryPlanMVCCForRequery|TestSessionSearch|TestServer(SearchOnView|QueryOnView)DelegatesAndReleasesTasks|TestQNHandler_(AcquireReadyViewUsesWALReplicaID|AcquireQuerySegmentTasks|AcquireSearchSegmentTasks)|TestSNHandler_Acquire|TestOpenROWALRecoversQueryViewHandlerAndVChannelModules|TestFilterQueryViewsByWALReplica|TestPChannelViewQueryServer' -count=1 -timeout 240s
+```
+
+Passed.
+
+```bash
+git diff --check
+```
+
+Passed.
+
 ## QueryView Key WALReplica Boundary
 
 After making QueryNode TransformLog routing WALReplica-aware, a second
