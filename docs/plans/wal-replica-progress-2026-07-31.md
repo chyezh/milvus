@@ -944,6 +944,145 @@ git diff --check
 
 Passed.
 
+## Requery ShardPlan WALReplica Boundary
+
+The Requery audit found that `RequeryOnViewRequest` already has
+`wal_replica_id`, but the retained `ShardPlan` still stored only the selected
+`ShardID`, `QueryViewVersion`, MVCC, and work nodes. That is insufficient for a
+future `RequeryRunner`: Requery must target the same WAL replica selected during
+Phase 1, not merely the same shard and QueryView version.
+
+The fix stores the selected `WALReplicaID` in `ShardPlan` when
+`shardViewQueryClient` finishes a shard execution. Search/Query Phase 2 already
+uses that WAL replica for immediate dispatch, and the retained plan now carries
+the same boundary for deferred Requery dispatch.
+
+Test added:
+
+- `TestShardSearchReturnsQueryPlanMVCCForRequery` now asserts the returned
+  `ShardPlan.WALReplicaID`.
+
+Commands run:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/views/queryclient -run TestShardSearchReturnsQueryPlanMVCCForRequery -count=1 -timeout 120s
+```
+
+Initial red run failed at compile time because `ShardPlan` had no
+`WALReplicaID` field. After implementation, the focused test passed.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/views/queryclient -run 'TestShardSearchReturnsQueryPlanMVCCForRequery|TestSessionSearch|TestSessionSearchOnSecondaryFailsWhenPrimaryWALIsNotServiceable|Test.*Legacy' -count=1 -timeout 120s
+```
+
+Passed.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/views/queryclient -count=1 -timeout 120s
+```
+
+Passed.
+
+## ReadOnly WAL Release Pending Sync Guard
+
+The release audit found that the policy already skips read-only WAL replicas
+that are referenced by resident ShardStats or by the current plan, but the
+design also requires no pending QueryView sync dependency before removing a
+replica. A delayed StreamingNode sync can still target an otherwise unused WAL
+replica, so releasing it in the same window can race with the outstanding
+QueryView state transition.
+
+The fix adds a WAL replica dependency view to the balancer snapshot:
+
+- `ShardViewRegistry.HasWALReplicaDependency` now includes both resident
+  ShardStats and outstanding syncer dependencies.
+- `DirtyViewFlushScheduler` exposes pending StreamingNode sync dependencies
+  before they are accepted by `ReliableSyncer`.
+- `SnapshotBuilder` records WAL replicas that still have dependencies in the
+  built `BalancerSnapshot`.
+- `unusedReadOnlyWALReplicaReleases` checks the snapshot dependency before
+  emitting a `WALReplicaRelease`.
+
+Tests added or extended:
+
+- `TestDefaultBalancePolicy_DoesNotReleaseReadOnlyWALReplicaWithPendingSyncDependency`
+- `TestRegistry_HasWALReplicaDependencyIncludesSyncerPending`
+- `TestSnapshotBuilder_AttachesPendingWALReplicaDependencies`
+
+Commands run:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/views/coord/balancer -run TestDefaultBalancePolicy_DoesNotReleaseReadOnlyWALReplicaWithPendingSyncDependency -count=1 -timeout 120s
+```
+
+Initial red run failed at compile time because `BalancerSnapshot` had no
+pending WAL replica dependency field. After implementation, the focused test
+passed.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/views/coord/balancer ./internal/views/coord/coordview -run 'TestDefaultBalancePolicy_DoesNotReleaseReadOnlyWALReplicaWithPendingSyncDependency|TestSnapshotBuilder_AttachesPendingWALReplicaDependencies|TestRegistry_HasWALReplicaDependency' -count=1 -timeout 180s
+```
+
+Passed.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/views/coord/balancer ./internal/views/coord/coordview ./internal/views/coord/coordview/syncer -count=1 -timeout 240s
+```
+
+Passed.
+
+## ReadOnly WALReplica Zero Assignment Error Boundary
+
+The assignment-error audit found that a read-only WAL replica can legitimately
+have `walReplicaID = 0` after the initial primary replica is demoted to
+READONLY. The previous error-report path treated `wal_replica_id = 0` as the
+legacy PChannel-only case even when the reported access mode was READONLY.
+
+That can mark the PChannel assignment unavailable instead of marking the
+specific read-only WAL replica unavailable, and the client-side duplicate
+filter can use PChannel write term instead of replica-scoped
+`AssignmentEpoch`.
+
+The fix is:
+
+- StreamingCoord assignment-discover server treats every READONLY report as a
+  WAL replica assignment error, including `walReplicaID = 0`.
+- The assignment-discover client duplicate filter uses replica-scoped
+  `AssignmentEpoch` when either `wal_replica_id` is non-zero or the reported
+  access mode is READONLY. This keeps the old non-zero WAL replica behavior and
+  fixes the replica-zero READONLY case.
+- READWRITE reports still use the PChannel term path.
+- The `ReportAssignmentErrorRequest.wal_replica_id` comment now documents that
+  `0` is a valid WAL replica ID for READONLY reports.
+
+Tests added:
+
+- `TestAssignmentDiscoverReportsReadOnlyReplicaZeroAsWALReplicaError`
+- `TestAssignmentDiscoverClientReportReadOnlyWALReplicaZeroErrorDedupesByEpoch`
+
+Commands run:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/service/discover ./internal/streamingcoord/client/assignment -run 'TestAssignmentDiscoverReportsReadOnlyReplicaZeroAsWALReplicaError|TestAssignmentDiscoverClientReportReadOnlyWALReplicaZeroErrorDedupesByEpoch' -count=1 -timeout 120s
+```
+
+Initial red run failed because the server called `MarkAsUnavailable` for a
+READONLY `wal_replica_id = 0` report, and the client duplicate filter used term
+ordering instead of `AssignmentEpoch` for the same case. After implementation,
+the focused tests passed.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/service/discover ./internal/streamingcoord/client/assignment -count=1 -timeout 180s
+```
+
+Passed.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/service/discover ./internal/streamingcoord/client/assignment ./pkg/streaming/util/types -count=1 -timeout 180s && git diff --check
+```
+
+Passed.
+
 ## QueryView Key WALReplica Boundary
 
 After making QueryNode TransformLog routing WALReplica-aware, a second
