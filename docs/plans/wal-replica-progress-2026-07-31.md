@@ -865,6 +865,90 @@ git diff --check
 
 Passed.
 
+## QueryView Key WALReplica Boundary
+
+After making QueryNode TransformLog routing WALReplica-aware, a second
+identity boundary issue remained in the QueryNode view state machine. The
+runtime key for a QueryView only contained:
+
+```text
+queryReplicaID + vchannel + queryViewVersion
+```
+
+That key can collide when the same QueryReplica/VChannel/QueryViewVersion is
+present on more than one WAL replica. Even if the Coord balancer normally bumps
+`QueryVersion` when creating a replacement view through `AddPreparing`, the
+WAL replica binding is a real part of the QueryView runtime identity and should
+not be implicit.
+
+The fix extends `qviews.QueryViewKey` with `WALReplicaID`. Default `0` preserves
+the existing single-replica identity and keeps old views compatible. For
+non-zero bindings, the key now distinguishes:
+
+```text
+queryReplicaID + vchannel + walReplicaID + queryViewVersion
+```
+
+The key is populated from:
+
+- `QueryViewOfStreamingNode.wal_replica_id` for StreamingNode/full views;
+- `QueryViewOfQueryNode.wal_replica_id` for QueryNode views;
+- persisted full QueryViews in the dirty flush scheduler;
+- Coord `ShardViewManager.keyForStateMachine`.
+
+QueryNode `qnShardView` now stores entries by full `QueryViewKey` instead of by
+`QueryViewVersion` alone. The existing query lease API is still version-based
+for the legacy single-active-view path; it keeps working when only one view has
+the requested version. If a future query path needs to choose among multiple
+same-version WAL replicas, the query request path should pass the WAL replica
+binding explicitly rather than relying on version-only lookup.
+
+Test added:
+
+- `TestQNHandler_ApplyViews_DoesNotMergeWALReplicaViewsWithSameVersion` first
+  failed because two QueryNode views with the same shard/version but different
+  `walReplicaID` were merged and only one segment acquire was issued. After the
+  fix both views have distinct `QueryViewKey`s and both are acquired.
+
+Commands run:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/querynodev2/qnview -run TestQNHandler_ApplyViews_DoesNotMergeWALReplicaViewsWithSameVersion -count=1 -timeout 120s
+```
+
+Initial red run failed with `expected: 2, actual: 1` acquired views.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/querynodev2/qnview ./internal/views/qviews -run 'TestQNHandler_ApplyViews_DoesNotMergeWALReplicaViewsWithSameVersion|TestQNHandler_ApplyViews_NewPreparing|TestNewQueryViewAtWorkNodeFromProto|TestQueryViewAtCoordBuilder' -count=1 -timeout 120s
+```
+
+Passed.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/querynodev2/qnview ./internal/querynodev2/transformlogbuffer ./internal/querynodev2/qvresource ./internal/views/qviews ./internal/views/coord/coordview ./internal/views/coord/coordview/syncer ./internal/distributed/streaming -count=1 -timeout 240s
+```
+
+The QueryView-related packages passed, but full `internal/distributed/streaming`
+failed in an unrelated test setup panic:
+
+```text
+panic: no return value specified for WatchChannelAssignments
+```
+
+The focused distributed TransformLog test still passed:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/distributed/streaming -run TestTransformLogStreamManagerPassesWALReplicaID -count=1 -timeout 120s
+```
+
+Passed.
+
+```bash
+git diff --check
+```
+
+Passed.
+
 ## Primary WAL Switchover Readiness
 
 The current-state audit found that `maybeSwitchWALPrimaryReplicaForShardUp`
@@ -1103,3 +1187,87 @@ source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/metastore/kv
 Failed in existing `TestCatalog_SaveRecoverySnapshot_DroppedVChannelIsRetained`
 with `unknown vchannel schema state in recovery meta: vchannel vch1 schema 5`.
 The failure is outside the QueryView recovery key path.
+
+## QueryNode TransformLog WALReplica Routing
+
+The QueryNode TransformLog audit found that the StreamingNode/client/server
+TransformLog stream path already supports multiplexing multiple vchannel
+subscriptions on one stream and already carries `walReplicaID` through the
+remote `SubscribeTransform` stream metadata. The missing boundary was on the
+QueryNode consumption side:
+
+- `TransformLogStreamManager.AcquireStream` accepted only `pchannel`.
+- `transformlogbuffer.Buffer` cached streams and vchannel buffers by pchannel
+  or vchannel only.
+- `QueryViewOfQueryNode` did not carry the WAL replica binding, so the QueryNode
+  could not route TransformLog reads to the WAL replica selected by QueryView
+  balancer.
+
+The fix makes the QueryNode TransformLog path WALReplica-aware:
+
+- Added `QueryViewOfQueryNode.wal_replica_id` with backward-compatible default
+  `0`.
+- `QueryViewAtCoordBuilder` writes the WAL replica binding into both
+  StreamingNode and QueryNode view portions.
+- `CoordQueryViewStateMachine` syncs QueryNode views with the same WAL replica
+  binding as the StreamingNode view, including recovered/persisted views where
+  old QueryNode entries did not have the field.
+- `TransformLogStreamManager.AcquireStream` now accepts `(pchannel,
+  walReplicaID)`, and distributed streaming passes that ID into
+  `handlerClient.AcquireTransformLogStream`.
+- `transformlogbuffer.Buffer` caches streams by `(pchannel, walReplicaID)` and
+  vchannel buffers by `(vchannel, walReplicaID)`, so the same vchannel can have
+  independent TransformLog subscriptions on different WAL replicas.
+- QueryNode segment load tasks stamp the view's WAL replica binding onto loaded
+  transform segments when the segment supports the optional setter; buffer
+  registration can then choose the matching per-replica vchannel buffer.
+
+Tests added or extended:
+
+- `TestBufferAcquireSeparatesStreamsByWALReplica`
+- `TestBufferAcquireSeparatesSameVChannelByWALReplica`
+- `TestSegmentLoadTask_StampsWALReplicaID`
+- `TestStateMachineSyncsQueryNodesWithWALReplicaBinding`
+- `TestTransformLogStreamManagerPassesWALReplicaID`
+- Existing qviews builder/view tests now assert QueryNode WALReplicaID.
+
+Commands run:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/querynodev2/transformlogbuffer -run TestBufferAcquireSeparatesStreamsByWALReplica -count=1 -timeout 120s
+```
+
+Initial red run failed because `TransformLogStreamManager` accepted only
+`pchannel`.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/querynodev2/transformlogbuffer -run TestBufferAcquireSeparatesSameVChannelByWALReplica -count=1 -timeout 120s
+```
+
+Initial red run failed because `Buffer.channels` was keyed only by vchannel and
+the second WAL replica did not acquire its own stream.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/querynodev2/qnview -run TestSegmentLoadTask_StampsWALReplicaID -count=1 -timeout 120s
+```
+
+Initial red run failed because `SegmentLoadTask` had no `WALReplicaID` field.
+
+```bash
+source scripts/setenv.sh && make generated-proto
+```
+
+Passed and regenerated `pkg/proto/viewpb/view.pb.go` after adding
+`QueryViewOfQueryNode.wal_replica_id`.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/querynodev2/transformlogbuffer ./internal/querynodev2/qnview ./internal/querynodev2/qvresource ./internal/views/qviews ./internal/views/coord/coordview ./internal/distributed/streaming ./internal/streamingnode/client/handler ./internal/streamingnode/server/service/handler/transformlog ./internal/streamingnode/server/wal/vchannel ./internal/streamingnode/server/wal/vchannel/transformlog -count=1 -timeout 240s
+```
+
+Passed.
+
+```bash
+git diff --check
+```
+
+Passed.
