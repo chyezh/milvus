@@ -21,9 +21,19 @@ func (rs *recoveryStorageImpl) isDirty() bool {
 	}
 
 	rs.mu.Lock()
-	defer rs.mu.Unlock()
 	checkpointDirty := rs.checkpointManager != nil && rs.checkpointManager.HasDirty()
-	return rs.dirtyCounter > 0 || rs.moduleDirty || rs.pendingSalvageCheckpoint != nil || checkpointDirty
+	dirty := rs.dirtyCounter > 0 || rs.moduleDirty || rs.pendingSalvageCheckpoint != nil || checkpointDirty
+	rs.mu.Unlock()
+	if dirty {
+		return true
+	}
+
+	for _, module := range rs.modules {
+		if cleanupModule, ok := module.(moduleapi.PendingCleanupModule); ok && cleanupModule.HasPendingCleanup() {
+			return true
+		}
+	}
+	return false
 }
 
 // TODO: !!! all recovery persist operation should be a compare-and-swap operation to

@@ -288,6 +288,12 @@ func (m *PChannelRecoveryManager) ConsumeCleanupSnapshots(cleanup moduleapi.Clea
 	return snapshots
 }
 
+func (m *PChannelRecoveryManager) HasPendingCleanup() bool {
+	m.dirtyMu.Lock()
+	defer m.dirtyMu.Unlock()
+	return len(m.cleanupModules) > 0
+}
+
 func (m *PChannelRecoveryManager) markCleanupCandidate(module *VChannelRecoveryModule) {
 	m.dirtyMu.Lock()
 	if m.cleanupModules == nil {
@@ -458,7 +464,7 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 			m.markModuleUpdatedByVChannel(vchannel)
 		},
 	}
-	return newModuleFromOwnedRecoveryState(ModuleConfig{
+	module, err := newModuleFromOwnedRecoveryState(ModuleConfig{
 		PChannel:                   m.pchannel,
 		VChannel:                   vchannel,
 		VChannelMeta:               m.config.VChannelMetas[vchannel],
@@ -483,6 +489,13 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 		QueryRuntimeDispatcher:     m.queryDispatcher,
 		OnFrontierUpdated:          func() { m.refreshModuleFrontiersByVChannel(vchannel) },
 	})
+	if err != nil {
+		return nil, err
+	}
+	if module.HasCleanupCandidates() {
+		m.markCleanupCandidate(module)
+	}
+	return module, nil
 }
 
 func (m *PChannelRecoveryManager) markModuleUpdatedByVChannel(vchannel string) {
@@ -548,6 +561,7 @@ func (n *dirtyTrackingNotifier) NotifyBarrierUpdated() {
 
 var (
 	_ moduleapi.Module                    = (*PChannelRecoveryManager)(nil)
+	_ moduleapi.PendingCleanupModule      = (*PChannelRecoveryManager)(nil)
 	_ moduleapi.DataFrontierProvider      = (*PChannelRecoveryManager)(nil)
 	_ wal.TransformLogStreamManager       = (*PChannelRecoveryManager)(nil)
 	_ snview.StreamingNodeResourceManager = (*PChannelRecoveryManager)(nil)

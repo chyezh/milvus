@@ -146,6 +146,12 @@ func newModule(config ModuleConfig, adoptVChannelMeta bool) (*VChannelRecoveryMo
 		var view *segment.SegmentView
 		view = segment.NewSegmentViewFromMetaWithConfig(meta, schema, module.segmentViewConfig())
 		module.segments[id] = view
+		if view.TombstonePersisted() {
+			if module.cleanupSegments == nil {
+				module.cleanupSegments = make(map[int64]*segment.SegmentView)
+			}
+			module.cleanupSegments[id] = view
+		}
 		module.segmentFrontiers.Update(id, view.CollectionID(), view.PartitionID(), view.DurableFrontierTimeTick())
 	}
 	module.transformLog = transformlog.New(transformlog.Config{

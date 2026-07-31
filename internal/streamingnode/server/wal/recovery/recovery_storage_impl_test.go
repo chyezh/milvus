@@ -89,6 +89,22 @@ func (m *recordingCleanupModule) ConsumeCleanupSnapshots(cleanup moduleapi.Clean
 	return nil
 }
 
+type pendingCleanupModule struct {
+	testRecoveryModule
+	pending  bool
+	consumed int
+}
+
+func (m *pendingCleanupModule) ConsumeCleanupSnapshots(moduleapi.CleanupContext) []moduleapi.DirtySnapshot {
+	m.consumed++
+	m.pending = false
+	return nil
+}
+
+func (m *pendingCleanupModule) HasPendingCleanup() bool {
+	return m.pending
+}
+
 func (m *notifyingDirtyModule) ConsumeDirtySnapshots() []moduleapi.DirtySnapshot {
 	if m.notify != nil {
 		m.notify()
@@ -128,6 +144,22 @@ func TestConsumeDirtySnapshotUsesLastPersistedPhysicalCheckpointsForCleanup(t *t
 	assert.Nil(t, storage.consumeDirtySnapshot())
 	assert.Equal(t, uint64(10), module.cleanup.MetaPhysicalTimeTick)
 	assert.Equal(t, uint64(9), module.cleanup.DataPhysicalTimeTick)
+}
+
+func TestRecoveryStorageCloseDrainsPendingCleanup(t *testing.T) {
+	storage := newTestRecoveryStorage(t, &utility.WALCheckpoint{
+		MessageID: walimplstest.NewTestMessageID(10),
+		TimeTick:  10,
+		DataCheckpoint: &utility.WALConsumeCheckpoint{
+			MessageID: walimplstest.NewTestMessageID(9),
+			TimeTick:  9,
+		},
+	})
+	module := &pendingCleanupModule{pending: true}
+	storage.modules = []moduleapi.Module{module}
+
+	require.NoError(t, storage.persistDritySnapshotWhenClosing())
+	assert.Equal(t, 1, module.consumed)
 }
 
 func (b *recordingRecoveryStreamBuilder) WALName() message.WALName {

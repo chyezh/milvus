@@ -31,6 +31,13 @@ type CleanupModule interface {
 	ConsumeCleanupSnapshots(CleanupContext) []DirtySnapshot
 }
 
+// PendingCleanupModule exposes whether a cleanup module still has work that
+// RecoveryStorage must drain before closing.
+type PendingCleanupModule interface {
+	CleanupModule
+	HasPendingCleanup() bool
+}
+
 type ModuleName string
 
 const (
