@@ -975,3 +975,131 @@ set -o pipefail && source scripts/setenv.sh && go test -p 1 -tags 'test,dynamic'
 ```
 
 Passed.
+
+## Resource Group Hard-Bucket Audit
+
+The Resource Group placement audit focused on the StreamingCoord side of WAL
+replica placement. The design requires Resource Group to be a hard placement
+bucket: if the requested WAL replica Resource Group has no eligible
+StreamingNode, the WAL replica must remain not serviceable instead of falling
+back to another Resource Group.
+
+The current balance path already enforces this for primary WAL placement:
+
+- `balance` reads `streaming.primaryResourceGroup` and passes it into
+  `CollectAllStatus`.
+- `generateCurrentLayout` builds `AssignableNodes` only from the healthy nodes
+  returned by `CollectAllStatus(ctx, primaryRG)`.
+- `pinServiceableReadWriteOwner` may preserve an existing serviceable
+  `AccessModeRW` owner in `ChannelsToNodes`, but it does not add that node to
+  `AssignableNodes`.
+- The vchannel-fair policy chooses new assignment targets only from
+  `CurrentLayout.GetAssignableNodeIDs()`.
+- If the primary Resource Group has no healthy StreamingNodes, `TotalNodes()`
+  is zero and balance returns an error instead of assigning to nodes from other
+  Resource Groups.
+
+Test added:
+
+- `TestBalancer_PrimaryResourceGroupWithoutHealthyNodesDoesNotFallback` covers
+  a dynamic PChannel with `streaming.primaryResourceGroup = rg-primary`, no
+  healthy nodes in `rg-primary`, and a healthy StreamingNode in `rg-other`.
+  The test asserts that no PChannel assignment is published and no StreamingNode
+  `Assign` call is made.
+
+Commands run:
+
+```bash
+source scripts/setenv.sh && /home/chyezh/repository/chyezh/claude/MILVUS/.codex/skills/milvus-cluster-manage/scripts/milvus_control start_milvus_inf
+```
+
+Failed because the shared infrastructure lock is currently held by
+`/home/chyezh/repository/chyezh/milvus-worktree/qv_search`. The following
+commands are pure mock-based package tests and were run without starting a new
+clean dependency environment.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer -run TestBalancer_PrimaryResourceGroupWithoutHealthyNodesDoesNotFallback -count=1 -timeout 120s
+```
+
+Passed.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer -run 'TestBalancer_PrimaryResourceGroup(ChangeTriggersBalance|ChangeDoesNotReassignServiceableRWPrimary|WithoutHealthyNodesDoesNotFallback)' -count=1 -timeout 120s
+```
+
+Passed.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingcoord/server/balancer -count=1 -timeout 180s
+```
+
+Passed.
+
+## QueryView Recovery Key Boundary
+
+The recovery metadata audit found that authoritative WAL recovery state remains
+PChannel-scoped as required: consume checkpoint, VChannel metadata, Segment
+assignment, Segment data version summaries, and TransformLog metadata are still
+loaded from and saved under the PChannel WAL recovery root.
+
+StreamingNode QueryView recovery state had a missing per-replica key boundary.
+`SaveQueryViews` stored records under:
+
+```text
+streamingnode-meta/wal/{pchannel}/query-view/{collectionID}/{queryReplicaID}/{vchannel}/{streamingVersion}/{compactVersion}/{queryVersion}
+```
+
+That key can collide when the same QueryReplica/VChannel/version has local
+QueryView state on multiple WAL replicas of the same PChannel. The value already
+contains `QueryViewOfStreamingNode.walReplicaID`, and RO WAL open filters loaded
+views by that field, but the storage key still allowed overwrite before
+recovery.
+
+The fix changes newly-written StreamingNode QueryView recovery keys to:
+
+```text
+streamingnode-meta/wal/{pchannel}/query-view/{walReplicaID}/{collectionID}/{queryReplicaID}/{vchannel}/{streamingVersion}/{compactVersion}/{queryVersion}
+```
+
+`ListQueryViews` remains backward-compatible with the old key shape so old
+single-replica recovery entries can be loaded after upgrade. `SaveQueryViews`
+also removes the legacy key for the same QueryView when writing or deleting a
+new per-WAL-replica entry, so recovered legacy state migrates naturally on the
+next state persistence.
+
+Tests added:
+
+- `TestCatalogQueryViewsAreScopedByWALReplica` first failed because two
+  QueryViews with identical QueryView identity but different WAL replica IDs
+  overwrote the same old key. After the fix, both keys are persisted and listed.
+  The same test also covers legacy key read compatibility.
+
+Commands run:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/metastore/kv/streamingnode -run TestCatalogQueryViewsAreScopedByWALReplica -count=1 -timeout 120s
+```
+
+Initial red run failed because only the legacy key without `walReplicaID` was
+written. After implementation, the focused QueryView catalog tests passed:
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/metastore/kv/streamingnode -run 'TestCatalogQueryViewsAreScopedByWALReplica|TestCatalogQueryViews|TestCatalogListRecoveryMetaWithRootPath' -count=1 -timeout 120s
+```
+
+Passed.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/streamingnode/server/wal/adaptor -run 'TestOpenROWALRecoversQueryViewHandlerAndVChannelModules|TestFilterQueryViewsByWALReplica' -count=1 -timeout 120s
+```
+
+Passed.
+
+```bash
+source scripts/setenv.sh && go test -tags 'test,dynamic' ./internal/metastore/kv/streamingnode -count=1 -timeout 180s
+```
+
+Failed in existing `TestCatalog_SaveRecoverySnapshot_DroppedVChannelIsRetained`
+with `unknown vchannel schema state in recovery meta: vchannel vch1 schema 5`.
+The failure is outside the QueryView recovery key path.
