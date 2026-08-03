@@ -570,11 +570,10 @@ func (o *openerAdaptorImpl) openROWAL(ctx context.Context, l walimpls.WALImpls, 
 	}
 	persistedViews = filterQueryViewsByWALReplica(persistedViews, opt.WALReplicaID)
 	resMgr, err := vchannel.NewPChannelRecoveryManager(vchannel.PChannelManagerConfig{
-		PChannel:                  opt.Channel.Name,
-		VChannelMetas:             recoveryMeta.vchannels,
-		Segments:                  recoveryMeta.segments,
-		SegmentDataVersionSummary: recoveryMeta.segmentDataVersionSummaries,
-		TransformLogMetas:         recoveryMeta.transformLogs,
+		PChannel:          opt.Channel.Name,
+		VChannelMetas:     recoveryMeta.vchannels,
+		Segments:          recoveryMeta.segments,
+		TransformLogMetas: recoveryMeta.transformLogs,
 		QueryRuntimeModuleBuilders: []queryresource.QueryRuntimeModuleBuilder{
 			queryresource.NewGrowingRuntimeModuleBuilder(nil),
 			idf.NewFutureProvider(
@@ -624,10 +623,9 @@ func (w *roWALAdaptorImpl) registerReadOnlyFunctionRunners(recoveryMeta *readOnl
 }
 
 type readOnlyRecoveryMeta struct {
-	vchannels                   map[string]*streamingpb.VChannelMeta
-	segments                    map[int64]*streamingpb.SegmentAssignmentMeta
-	segmentDataVersionSummaries map[string]*streamingpb.SegmentDataVersionSummary
-	transformLogs               map[string]*streamingpb.VChannelTransformLogMeta
+	vchannels     map[string]*streamingpb.VChannelMeta
+	segments      map[int64]*streamingpb.SegmentAssignmentMeta
+	transformLogs map[string]*streamingpb.VChannelTransformLogMeta
 }
 
 func loadReadOnlyRecoveryMeta(ctx context.Context, catalog metastore.StreamingNodeCataLog, pchannel string) (*readOnlyRecoveryMeta, error) {
@@ -647,19 +645,14 @@ func loadReadOnlyRecoveryMeta(ctx context.Context, catalog metastore.StreamingNo
 	if err != nil {
 		return nil, err
 	}
-	segmentDataVersionSummaries, err := catalog.ListSegmentDataVersionSummaries(ctx, pchannel)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to list segment data version summaries")
-	}
 	transformLogMetas, err := catalog.ListTransformLogMeta(ctx, pchannel)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to list transform log meta")
 	}
 	return &readOnlyRecoveryMeta{
-		vchannels:                   vchannelMetas,
-		segments:                    segmentMetas,
-		segmentDataVersionSummaries: segmentDataVersionSummaries,
-		transformLogs:               transformLogMetas,
+		vchannels:     vchannelMetas,
+		segments:      segmentMetas,
+		transformLogs: transformLogMetas,
 	}, nil
 }
 

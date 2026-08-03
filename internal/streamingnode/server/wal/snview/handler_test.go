@@ -326,6 +326,31 @@ func TestSNHandler_ApplyViewsKeepsSameVersionOnDifferentWALReplicas(t *testing.T
 	assert.True(t, ok)
 }
 
+func TestSNHandler_AcquireUnrecoverableTargetsWALReplica(t *testing.T) {
+	cat := newMockCatalog()
+	mgr := newMockResourceManager()
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+
+	rc1 := &reportCollector{}
+	rc2 := &reportCollector{}
+	view1 := newPreparingSNViewOnWALReplica(1, 1)
+	view2 := newPreparingSNViewOnWALReplica(1, 2)
+	h.ApplyViews([]handler.ApplyView{
+		{View: view1, OnReport: rc1.onReport},
+		{View: view2, OnReport: rc2.onReport},
+	})
+
+	req, ok := mgr.getAcquired(view1.QueryViewKey())
+	require.True(t, ok)
+	require.NotNil(t, req.OnUnrecoverable)
+	req.OnUnrecoverable()
+
+	require.Equal(t, 2, rc1.count())
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, rc1.last().State())
+	require.Equal(t, 1, rc2.count())
+	assert.Equal(t, qviews.QueryViewStatePreparing, rc2.last().State())
+}
+
 func TestSNHandler_CloseForHandoffRejectsLateView(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()

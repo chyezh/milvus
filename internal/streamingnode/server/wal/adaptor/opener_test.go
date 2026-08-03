@@ -26,7 +26,6 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/replicate/replicates"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/shard"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/metricsutil"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/recovery"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
@@ -368,7 +367,6 @@ func TestOpenROWALRecoversQueryViewHandlerAndVChannelModules(t *testing.T) {
 		},
 	}, nil)
 	catalog.EXPECT().ListSegmentAssignment(mock.Anything, channel.Name).Return(nil, nil)
-	catalog.EXPECT().ListSegmentDataVersionSummaries(mock.Anything, channel.Name).Return(nil, nil)
 	catalog.EXPECT().ListTransformLogMeta(mock.Anything, channel.Name).Return(nil, nil)
 	catalog.EXPECT().ListQueryViews(mock.Anything, channel.Name).Return([]*viewpb.QueryViewOfShard{
 		persistedView,
@@ -458,7 +456,6 @@ func TestOpenROWALTailsPChannelWALForLocalQueryResources(t *testing.T) {
 		newOpenROTestVChannelMeta(),
 	}, nil)
 	catalog.EXPECT().ListSegmentAssignment(mock.Anything, channel.Name).Return(nil, nil)
-	catalog.EXPECT().ListSegmentDataVersionSummaries(mock.Anything, channel.Name).Return(nil, nil)
 	catalog.EXPECT().ListTransformLogMeta(mock.Anything, channel.Name).Return(nil, nil)
 	catalog.EXPECT().ListQueryViews(mock.Anything, channel.Name).Return(nil, nil)
 	resource.InitForTest(t, resource.OptStreamingNodeCatalog(catalog))
@@ -479,17 +476,11 @@ func TestOpenROWALTailsPChannelWALForLocalQueryResources(t *testing.T) {
 
 	roWAL := opened.(*roWALAdaptorImpl)
 	assert.Eventually(t, func() bool {
-		snapshot := roWAL.viewResourceManager.SwitchIntoMetaAndData()
-		composite, ok := snapshot.(moduleapi.CompositeModuleSnapshot)
-		if !ok {
-			return false
-		}
-		for _, item := range composite {
-			vchannelSnapshot, ok := item.(*moduleapi.VChannelModuleSnapshot)
-			if !ok {
+		for _, snapshot := range roWAL.viewResourceManager.ConsumeDirtySnapshots() {
+			meta, ok := snapshot.Payload().(*streamingpb.VChannelMeta)
+			if !ok || meta.GetVchannel() != queryPlanTestVChannel {
 				continue
 			}
-			meta := vchannelSnapshot.VChannels[queryPlanTestVChannel]
 			for _, partition := range meta.GetCollectionInfo().GetPartitions() {
 				if partition.GetPartitionId() == 30 {
 					return true
@@ -521,7 +512,6 @@ func TestOpenROWALBuildsQueryRuntimeFromReplayedTransformBarrier(t *testing.T) {
 		newOpenROTestVChannelMeta(),
 	}, nil)
 	catalog.EXPECT().ListSegmentAssignment(mock.Anything, channel.Name).Return(nil, nil)
-	catalog.EXPECT().ListSegmentDataVersionSummaries(mock.Anything, channel.Name).Return(nil, nil)
 	catalog.EXPECT().ListTransformLogMeta(mock.Anything, channel.Name).Return(nil, nil)
 	catalog.EXPECT().ListQueryViews(mock.Anything, channel.Name).Return(nil, nil)
 	resource.InitForTest(t, resource.OptStreamingNodeCatalog(catalog))
