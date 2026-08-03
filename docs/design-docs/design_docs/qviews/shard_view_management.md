@@ -83,6 +83,12 @@ Sealed Segment Balancer
 reconstructs every manager, commits all emitted recovery events, and waits for
 the resulting keyed tasks before returning.
 
+The Registry also maintains immutable per-shard stats and reverse indexes for
+Balancer scope resolution. The collection index supports resident-manager
+lookup by collection; the node index follows the latest placement stats.
+Managers remain resident until the Registry closes. Removing a Dropped
+QueryView state machine does not remove its owning manager.
+
 `Close` closes the flush scheduler before the QueryView runtime closes the
 underlying `ReliableSyncer`.
 
@@ -311,9 +317,12 @@ Cleanup continues asynchronously through reliable node callbacks.
 
 During recovery, persisted views are grouped by `ShardID` and reconstructed as
 state machines. Recovered Preparing and Down views create pending sync effects.
-The Registry holds all emitted events inside one Begin/Commit window, commits
-them into keyed tasks, and waits for the Scheduler to become idle before recovery
-completes.
+The Registry holds all emitted events inside one Begin/Commit window. Before
+committing that window, it records each manager's initial stats, builds the
+collection and node indexes, and installs the manager stats observer. It then
+commits the held events and waits for the Scheduler to become idle. This order
+ensures that an immediate recovery sync callback cannot update manager stats
+between the initial snapshot and observer installation.
 
 On shutdown, the QueryView runtime stops the balancer, closes the Registry and
 its flush scheduler, then closes `ReliableSyncer`. This prevents a flush task
@@ -357,6 +366,9 @@ from submitting new sync work after the syncer has closed.
     `ShardID` cannot be flushed by concurrent tasks.
 12. **Cross-Shard Parallelism**: Different `ShardID` lanes may execute in
     different NodeScheduler tasks concurrently.
+13. **Registry Residency**: A manager remains resident after its last QueryView
+    reaches Dropped. QueryView state transitions do not prune collection index
+    entries; node index entries follow the manager's current stats.
 
 ## 8. Package Location
 

@@ -4,10 +4,13 @@ import (
 	"context"
 	"sync"
 
+	"golang.org/x/exp/maps"
+
 	"github.com/milvus-io/milvus/internal/metastore/kv/queryview"
 	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/metautil"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
@@ -30,6 +33,11 @@ type ShardViewRegistry struct {
 	shards   map[qviews.ShardID]*ShardViewManager
 	stats    map[qviews.ShardID]*ShardStats
 	snapshot *ShardViewSnapshot
+
+	// Reverse indexes cover resident shards. The collection index changes with
+	// shard lifecycle, while the node index tracks current Stats placements.
+	collectionShards map[int64]map[qviews.ShardID]struct{}
+	nodeShards       map[int64]map[qviews.ShardID]struct{}
 
 	statsObservers []func(qviews.ShardID, *ShardStats)
 }
@@ -80,7 +88,6 @@ func RecoverShardViewRegistry(
 		}
 		shards[sid] = manager
 	}
-	batch.Commit()
 
 	registry := &ShardViewRegistry{
 		ctx:                ctx,
@@ -89,11 +96,20 @@ func RecoverShardViewRegistry(
 		version:            1,
 		shards:             shards,
 		stats:              make(map[qviews.ShardID]*ShardStats, len(shards)),
+		collectionShards:   make(map[int64]map[qviews.ShardID]struct{}),
+		nodeShards:         make(map[int64]map[qviews.ShardID]struct{}),
 	}
 	for sid, mgr := range shards {
+		stats := mgr.Stats()
+		registry.stats[sid] = stats
+		registry.addCollectionShardLocked(sid)
+		registry.addNodeShardsLocked(sid, stats)
 		mgr.SetStatsObserver(registry.onShardStatsChanged)
-		registry.stats[sid] = mgr.Stats()
 	}
+	// Recovery sync callbacks may update manager stats immediately. Install all
+	// observers and indexes before releasing the held recovery events so those
+	// updates cannot be lost between the initial Stats call and observer setup.
+	batch.Commit()
 	if err := flushScheduler.Flush(ctx); err != nil {
 		for _, manager := range shards {
 			manager.unpinAllReferences()
@@ -127,6 +143,7 @@ func (r *ShardViewRegistry) Ensure(shardID qviews.ShardID) *ShardViewManager {
 	}
 	r.shards[shardID] = mgr
 	r.stats[shardID] = stats
+	r.addCollectionShardLocked(shardID)
 	r.version++
 	r.mu.Unlock()
 	return mgr
@@ -170,6 +187,50 @@ func (r *ShardViewRegistry) Snapshot() *ShardViewSnapshot {
 		r.publishSnapshotLocked()
 	}
 	return r.snapshot
+}
+
+// SnapshotForShards returns an immutable snapshot containing only the
+// requested resident shards. It does not refresh the cached full snapshot.
+func (r *ShardViewRegistry) SnapshotForShards(shardIDs []qviews.ShardID) *ShardViewSnapshot {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	stats := make(map[qviews.ShardID]*ShardStats, len(shardIDs))
+	for _, shardID := range shardIDs {
+		if shardStats, ok := r.stats[shardID]; ok {
+			stats[shardID] = shardStats
+		}
+	}
+	return &ShardViewSnapshot{
+		version: r.version,
+		stats:   stats,
+	}
+}
+
+// CollectionShards returns the resident shards belonging to collectionID.
+func (r *ShardViewRegistry) CollectionShards(collectionID int64) []qviews.ShardID {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return maps.Keys(r.collectionShards[collectionID])
+}
+
+// NodeShards returns the resident shards with placements on nodeID.
+func (r *ShardViewRegistry) NodeShards(nodeID int64) []qviews.ShardID {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return maps.Keys(r.nodeShards[nodeID])
+}
+
+// ShardIDs returns all resident shard IDs.
+func (r *ShardViewRegistry) ShardIDs() []qviews.ShardID {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	shardIDs := make([]qviews.ShardID, 0, len(r.shards))
+	for shardID := range r.shards {
+		shardIDs = append(shardIDs, shardID)
+	}
+	return shardIDs
 }
 
 // RegisterStatsObserver registers an observer for future per-shard stats
@@ -220,7 +281,9 @@ func (r *ShardViewRegistry) onShardStatsChanged(shardID qviews.ShardID, stats *S
 		r.mu.Unlock()
 		return
 	}
+	r.removeNodeShardsLocked(shardID, r.stats[shardID])
 	r.stats[shardID] = stats
+	r.addNodeShardsLocked(shardID, stats)
 	r.version++
 	observers := append([]func(qviews.ShardID, *ShardStats){}, r.statsObservers...)
 	r.mu.Unlock()
@@ -232,6 +295,56 @@ func (r *ShardViewRegistry) onShardStatsChanged(shardID qviews.ShardID, stats *S
 
 func (r *ShardViewRegistry) publishSnapshotLocked() {
 	r.snapshot = NewShardViewSnapshot(r.version, r.stats)
+}
+
+func (r *ShardViewRegistry) addCollectionShardLocked(shardID qviews.ShardID) {
+	channel, err := metautil.ParseChannel(shardID.VChannel, metautil.NewDynChannelMapper())
+	if err != nil {
+		return
+	}
+	shards := r.collectionShards[channel.CollectionID()]
+	if shards == nil {
+		shards = make(map[qviews.ShardID]struct{})
+		r.collectionShards[channel.CollectionID()] = shards
+	}
+	shards[shardID] = struct{}{}
+}
+
+func (r *ShardViewRegistry) addNodeShardsLocked(shardID qviews.ShardID, stats *ShardStats) {
+	if stats == nil {
+		return
+	}
+	for _, segment := range stats.Segments {
+		if segment == nil {
+			continue
+		}
+		for nodeID := range segment.Nodes {
+			shards := r.nodeShards[nodeID]
+			if shards == nil {
+				shards = make(map[qviews.ShardID]struct{})
+				r.nodeShards[nodeID] = shards
+			}
+			shards[shardID] = struct{}{}
+		}
+	}
+}
+
+func (r *ShardViewRegistry) removeNodeShardsLocked(shardID qviews.ShardID, stats *ShardStats) {
+	if stats == nil {
+		return
+	}
+	for _, segment := range stats.Segments {
+		if segment == nil {
+			continue
+		}
+		for nodeID := range segment.Nodes {
+			shards := r.nodeShards[nodeID]
+			delete(shards, shardID)
+			if len(shards) == 0 {
+				delete(r.nodeShards, nodeID)
+			}
+		}
+	}
 }
 
 func emptyShardStats() *ShardStats {
