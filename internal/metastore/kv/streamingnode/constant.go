@@ -3,13 +3,12 @@ package streamingnode
 const (
 	MetaPrefix = "streamingnode-meta"
 
-	DirectoryWAL                       = "wal"
-	DirectorySegmentAssign             = "segment-assign"
-	DirectorySegmentDataVersionSummary = "sdv"
-	DirectoryTransformLog              = "tl"
-	DirectoryQueryView                 = "qv"
-	DirectoryVChannel                  = "vchannel"
-	DirectorySchema                    = "schema"
+	DirectoryWAL           = "wal"
+	DirectorySegmentAssign = "segment-assign"
+	DirectoryTransformLog  = "tl"
+	DirectoryQueryView     = "qv"
+	DirectoryVChannel      = "vchannel"
+	DirectorySchema        = "schema"
 
 	KeyConsumeCheckpoint = "consume-checkpoint"
 	KeySalvageCheckpoint = "salvage-checkpoint"

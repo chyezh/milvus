@@ -19,6 +19,10 @@ type StreamingNodeCataLog interface {
 	// SaveVChannels save vchannel on current pchannel.
 	SaveVChannels(ctx context.Context, pchannelName string, vchannels map[string]*streamingpb.VChannelMeta) error
 
+	// SaveVChannelBaseMetas saves only the vchannel base records without
+	// rewriting separately stored schema records.
+	SaveVChannelBaseMetas(ctx context.Context, pchannelName string, vchannels map[string]*streamingpb.VChannelMeta) error
+
 	// DropVChannels drops retained vchannel recovery meta on current pchannel.
 	DropVChannels(ctx context.Context, pchannelName string, vchannels map[string]*streamingpb.VChannelMeta) error
 
@@ -39,12 +43,6 @@ type StreamingNodeCataLog interface {
 
 	// DropSegmentAssignments drops retained segment assignment recovery meta for the wal.
 	DropSegmentAssignments(ctx context.Context, pChannelName string, segmentIDs []int64) error
-
-	// ListSegmentDataVersionSummaries lists segment data version summaries for the wal.
-	ListSegmentDataVersionSummaries(ctx context.Context, pChannelName string) (map[string]*streamingpb.SegmentDataVersionSummary, error)
-
-	// SaveSegmentDataVersionSummaries saves segment data version summaries for the wal.
-	SaveSegmentDataVersionSummaries(ctx context.Context, pChannelName string, summaries map[string]*streamingpb.SegmentDataVersionSummary) error
 
 	// ListQueryViews lists persisted StreamingNode query views for the wal.
 	ListQueryViews(ctx context.Context, pChannelName string) ([]*viewpb.QueryViewOfShard, error)

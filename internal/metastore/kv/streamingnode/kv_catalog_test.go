@@ -148,35 +148,35 @@ func TestCatalogTransformLogMeta(t *testing.T) {
 	require.NoError(t, catalog.DropTransformLogMeta(ctx, "p1", []string{vchannel}))
 }
 
-func TestCatalogSegmentDataVersionSummary(t *testing.T) {
+func TestCatalogSaveVChannelBaseMetasDoesNotRewriteSchemas(t *testing.T) {
 	kv := mocks.NewMetaKv(t)
-	vchannel := "p1_100v2"
-	summary := &streamingpb.SegmentDataVersionSummary{
-		DataVersion: &viewpb.DataVersion{StreamingVersion: 10, CompactVersion: 2},
+	meta := &streamingpb.VChannelMeta{
+		Vchannel: "p1_100v2",
+		CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
+			Schemas: []*streamingpb.CollectionSchemaOfVChannel{{
+				State:              streamingpb.VChannelSchemaState_VCHANNEL_SCHEMA_STATE_NORMAL,
+				CheckpointTimeTick: 10,
+			}},
+		},
+		SegmentDataVersionSummary: &viewpb.DataVersion{StreamingVersion: 12, CompactVersion: 3},
 	}
-	value, err := proto.Marshal(summary)
-	require.NoError(t, err)
-	key, err := buildSegmentDataVersionSummaryKey("p1", vchannel)
-	require.NoError(t, err)
-
-	kv.EXPECT().LoadWithPrefix(mock.Anything, buildSegmentDataVersionSummaryPrefix("p1")).
-		Return([]string{key}, []string{string(value)}, nil)
-	catalog := NewCataLog(kv)
-	ctx := context.Background()
-	summaries, err := catalog.ListSegmentDataVersionSummaries(ctx, "p1")
-	require.NoError(t, err)
-	require.Len(t, summaries, 1)
-	assert.True(t, proto.Equal(summary, summaries[vchannel]))
-
+	key := buildVChannelKey("p1", meta.GetVchannel())
 	kv.EXPECT().MultiSave(mock.Anything, mock.MatchedBy(func(kvs map[string]string) bool {
+		require.Len(t, kvs, 1)
 		saved, ok := kvs[key]
 		if !ok {
 			return false
 		}
-		loaded := &streamingpb.SegmentDataVersionSummary{}
-		return proto.Unmarshal([]byte(saved), loaded) == nil && proto.Equal(summary, loaded)
+		loaded := &streamingpb.VChannelMeta{}
+		return proto.Unmarshal([]byte(saved), loaded) == nil &&
+			len(loaded.GetCollectionInfo().GetSchemas()) == 0 &&
+			proto.Equal(meta.GetSegmentDataVersionSummary(), loaded.GetSegmentDataVersionSummary())
 	})).Return(nil)
-	require.NoError(t, catalog.SaveSegmentDataVersionSummaries(ctx, "p1", map[string]*streamingpb.SegmentDataVersionSummary{vchannel: summary}))
+
+	catalog := NewCataLog(kv).(*catalog)
+	require.NoError(t, catalog.SaveVChannelBaseMetas(context.Background(), "p1", map[string]*streamingpb.VChannelMeta{
+		meta.GetVchannel(): meta,
+	}))
 }
 
 func TestBuildCompactVChannelRecoveryKeys(t *testing.T) {
@@ -189,10 +189,6 @@ func TestBuildCompactVChannelRecoveryKeys(t *testing.T) {
 	assert.Equal(t, "streamingnode-meta/wal/p1/tl/200/3", otherTransformKey)
 	assert.NotEqual(t, transformKey, otherTransformKey)
 
-	summaryKey, err := buildSegmentDataVersionSummaryKey("p1", "p1_100v2")
-	require.NoError(t, err)
-	assert.Equal(t, "streamingnode-meta/wal/p1/sdv/100/2", summaryKey)
-
 	_, err = buildTransformLogKey("p2", "p1_100v2")
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "pchannel")
@@ -200,8 +196,6 @@ func TestBuildCompactVChannelRecoveryKeys(t *testing.T) {
 
 func TestCatalogListCompactVChannelMetadataRejectsMalformedKeys(t *testing.T) {
 	transformValue, err := proto.Marshal(&streamingpb.VChannelTransformLogMeta{})
-	require.NoError(t, err)
-	summaryValue, err := proto.Marshal(&streamingpb.SegmentDataVersionSummary{})
 	require.NoError(t, err)
 
 	for _, suffix := range []string{
@@ -228,19 +222,6 @@ func TestCatalogListCompactVChannelMetadataRejectsMalformedKeys(t *testing.T) {
 			metas, err := NewCataLog(kv).ListTransformLogMeta(context.Background(), "p1")
 			require.Error(t, err)
 			assert.Nil(t, metas)
-		})
-
-		t.Run("segment-data-version-"+suffix, func(t *testing.T) {
-			kv := mocks.NewMetaKv(t)
-			prefix := buildSegmentDataVersionSummaryPrefix("p1")
-			kv.EXPECT().LoadWithPrefix(mock.Anything, prefix).Return(
-				[]string{prefix + suffix},
-				[]string{string(summaryValue)},
-				nil,
-			)
-			summaries, err := NewCataLog(kv).ListSegmentDataVersionSummaries(context.Background(), "p1")
-			require.Error(t, err)
-			assert.Nil(t, summaries)
 		})
 	}
 }
@@ -276,14 +257,17 @@ func TestCatalogListRecoveryMetaWithRootPath(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, kv.Save(ctx, buildSegmentAssignmentKey("p1", 10), string(segmentValue)))
 
-	summary := &streamingpb.SegmentDataVersionSummary{
-		DataVersion: &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 2},
+	vchannel := &streamingpb.VChannelMeta{
+		Vchannel: "p1_1v0",
+		CollectionInfo: &streamingpb.CollectionInfoOfVChannel{
+			Schemas: []*streamingpb.CollectionSchemaOfVChannel{{
+				State:              streamingpb.VChannelSchemaState_VCHANNEL_SCHEMA_STATE_NORMAL,
+				CheckpointTimeTick: 1,
+			}},
+		},
+		SegmentDataVersionSummary: &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 2},
 	}
-	summaryValue, err := proto.Marshal(summary)
-	require.NoError(t, err)
-	summaryKey, err := buildSegmentDataVersionSummaryKey("p1", "p1_1v0")
-	require.NoError(t, err)
-	require.NoError(t, kv.Save(ctx, summaryKey, string(summaryValue)))
+	require.NoError(t, catalog.SaveVChannels(ctx, "p1", map[string]*streamingpb.VChannelMeta{vchannel.GetVchannel(): vchannel}))
 
 	view := makeQueryViewForCatalogTest("p1_1v0", viewpb.QueryViewState_QueryViewStateUp)
 	viewValue, err := marshalQueryViewForPersistence(view)
@@ -297,10 +281,10 @@ func TestCatalogListRecoveryMetaWithRootPath(t *testing.T) {
 	require.Len(t, segments, 1)
 	assert.Equal(t, int64(10), segments[0].GetSegmentId())
 
-	summaries, err := catalog.ListSegmentDataVersionSummaries(ctx, "p1")
+	vchannels, err := catalog.ListVChannel(ctx, "p1")
 	require.NoError(t, err)
-	require.Len(t, summaries, 1)
-	assert.True(t, proto.Equal(summary, summaries["p1_1v0"]))
+	require.Len(t, vchannels, 1)
+	assert.True(t, proto.Equal(vchannel.GetSegmentDataVersionSummary(), vchannels[0].GetSegmentDataVersionSummary()))
 
 	views, err := catalog.ListQueryViews(ctx, "p1")
 	require.NoError(t, err)
@@ -1016,6 +1000,14 @@ func (kv *rootedMemoryKV) LoadWithPrefix(ctx context.Context, key string) ([]str
 
 func (kv *rootedMemoryKV) Save(ctx context.Context, key, value string) error {
 	return kv.MemoryKV.Save(ctx, kv.GetPath(key), value)
+}
+
+func (kv *rootedMemoryKV) MultiSave(ctx context.Context, kvs map[string]string) error {
+	rooted := make(map[string]string, len(kvs))
+	for key, value := range kvs {
+		rooted[kv.GetPath(key)] = value
+	}
+	return kv.MemoryKV.MultiSave(ctx, rooted)
 }
 
 func (kv *rootedMemoryKV) CompareVersionAndSwap(context.Context, string, int64, string) (bool, error) {

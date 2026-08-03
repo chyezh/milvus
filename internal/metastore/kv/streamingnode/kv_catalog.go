@@ -152,6 +152,23 @@ func (c *catalog) SaveVChannels(ctx context.Context, pchannelName string, vchann
 	return nil
 }
 
+// SaveVChannelBaseMetas saves only vchannel base records. Collection schemas
+// are stored under separate keys and are intentionally not rewritten here.
+func (c *catalog) SaveVChannelBaseMetas(ctx context.Context, pchannelName string, vchannels map[string]*streamingpb.VChannelMeta) error {
+	kvs := make(map[string]string, len(vchannels))
+	for _, info := range vchannels {
+		data, err := marshalVChannelBaseMeta(pchannelName, info)
+		if err != nil {
+			return err
+		}
+		kvs[buildVChannelKey(pchannelName, info.GetVchannel())] = data
+	}
+	maxTxnNum := paramtable.Get().MetaStoreCfg.MaxEtcdTxnNum.GetAsInt()
+	return etcd.SaveByBatchWithLimit(kvs, maxTxnNum, func(partialKvs map[string]string) error {
+		return c.metaKV.MultiSave(ctx, partialKvs)
+	})
+}
+
 // DropVChannels drops retained vchannel recovery meta on current pchannel.
 func (c *catalog) DropVChannels(ctx context.Context, pchannelName string, vchannels map[string]*streamingpb.VChannelMeta) error {
 	removes := make([]string, 0)
@@ -253,17 +270,25 @@ func (c *catalog) getRemovalAndSaveForVChannel(pchannelName string, info *stream
 			return nil, nil, errors.Errorf("unknown vchannel schema state in recovery meta: vchannel %s schema %d", info.GetVchannel(), schema.GetCheckpointTimeTick())
 		}
 	}
-	// Schema is saved in the other key, so we don't need to save it in the vchannel meta.
-	// swap it first to marshal the vchannel meta without schema.
-	oldSchema := info.CollectionInfo.Schemas
+	data, err := marshalVChannelBaseMeta(pchannelName, info)
+	if err != nil {
+		return nil, nil, err
+	}
+	kvs[key] = data
+	return removes, kvs, nil
+}
+
+func marshalVChannelBaseMeta(pchannelName string, info *streamingpb.VChannelMeta) (string, error) {
+	// Schema is saved in separate keys. The caller passes a stable snapshot, so
+	// temporarily excluding it avoids an additional full-meta clone.
+	oldSchemas := info.CollectionInfo.Schemas
 	info.CollectionInfo.Schemas = nil
 	data, err := proto.Marshal(info)
-	info.CollectionInfo.Schemas = oldSchema
+	info.CollectionInfo.Schemas = oldSchemas
 	if err != nil {
-		return nil, nil, errors.Wrapf(err, "marshal vchannel %d at pchannel %s failed", info.GetVchannel(), pchannelName)
+		return "", errors.Wrapf(err, "marshal vchannel %s at pchannel %s failed", info.GetVchannel(), pchannelName)
 	}
-	kvs[key] = string(data)
-	return removes, kvs, nil
+	return string(data), nil
 }
 
 // ListSegmentAssignment lists the segment assignment info of the pchannel.
@@ -323,53 +348,6 @@ func (c *catalog) DropSegmentAssignments(ctx context.Context, pChannelName strin
 	return etcd.RemoveByBatchWithLimit(removes, maxTxnNum, func(partialRemoves []string) error {
 		return c.metaKV.MultiRemove(ctx, partialRemoves)
 	})
-}
-
-// ListSegmentDataVersionSummaries lists the segment data version summaries of the pchannel.
-func (c *catalog) ListSegmentDataVersionSummaries(ctx context.Context, pChannelName string) (map[string]*streamingpb.SegmentDataVersionSummary, error) {
-	prefix := buildSegmentDataVersionSummaryPrefix(pChannelName)
-	keys, values, err := c.metaKV.LoadWithPrefix(ctx, prefix)
-	if err != nil {
-		return nil, err
-	}
-
-	summaries := make(map[string]*streamingpb.SegmentDataVersionSummary, len(values))
-	for idx, value := range values {
-		vchannel, err := parseCompactVChannelKey(keys[idx], prefix, pChannelName)
-		if err != nil {
-			return nil, err
-		}
-		summary := &streamingpb.SegmentDataVersionSummary{}
-		if err = proto.Unmarshal([]byte(value), summary); err != nil {
-			return nil, errors.Wrapf(err, "unmarshal pchannel %s failed", keys[idx])
-		}
-		summaries[vchannel] = summary
-	}
-	return summaries, nil
-}
-
-// SaveSegmentDataVersionSummaries saves segment data version summaries to meta storage.
-func (c *catalog) SaveSegmentDataVersionSummaries(ctx context.Context, pChannelName string, summaries map[string]*streamingpb.SegmentDataVersionSummary) error {
-	kvs := make(map[string]string, len(summaries))
-	for vchannel, summary := range summaries {
-		key, err := buildSegmentDataVersionSummaryKey(pChannelName, vchannel)
-		if err != nil {
-			return err
-		}
-		data, err := proto.Marshal(summary)
-		if err != nil {
-			return errors.Wrapf(err, "marshal segment data version summary for vchannel %s at pchannel %s failed", vchannel, pChannelName)
-		}
-		kvs[key] = string(data)
-	}
-
-	maxTxnNum := paramtable.Get().MetaStoreCfg.MaxEtcdTxnNum.GetAsInt()
-	if len(kvs) > 0 {
-		return etcd.SaveByBatchWithLimit(kvs, maxTxnNum, func(partialKvs map[string]string) error {
-			return c.metaKV.MultiSave(ctx, partialKvs)
-		})
-	}
-	return nil
 }
 
 // ListQueryViews lists the StreamingNode query view recovery meta of the pchannel.
@@ -496,11 +474,6 @@ func buildSegmentAssignmentPrefix(pChannelName string) string {
 	return buildWALPrefix(pChannelName) + DirectorySegmentAssign + "/"
 }
 
-// buildSegmentDataVersionSummaryPrefix returns the prefix for all segment data version summaries under a pchannel.
-func buildSegmentDataVersionSummaryPrefix(pChannelName string) string {
-	return buildWALPrefix(pChannelName) + DirectorySegmentDataVersionSummary + "/"
-}
-
 // buildTransformLogPrefix returns the prefix for transform log metadata under a pchannel.
 func buildTransformLogPrefix(pChannelName string) string {
 	return buildWALPrefix(pChannelName) + DirectoryTransformLog + "/"
@@ -526,11 +499,6 @@ func buildVChannelSchemaKey(pChannelName string, vchannelName string, version ui
 // buildSegmentAssignmentKey returns the key for a specific segment assignment.
 func buildSegmentAssignmentKey(pChannelName string, segmentID int64) string {
 	return buildSegmentAssignmentPrefix(pChannelName) + strconv.FormatInt(segmentID, 10)
-}
-
-// buildSegmentDataVersionSummaryKey returns the key for a specific vchannel segment data version summary.
-func buildSegmentDataVersionSummaryKey(pChannelName string, vchannelName string) (string, error) {
-	return buildCompactVChannelKey(buildSegmentDataVersionSummaryPrefix(pChannelName), pChannelName, vchannelName)
 }
 
 // buildTransformLogKey returns the key for a specific transform log's metadata.

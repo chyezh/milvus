@@ -102,6 +102,9 @@ func recoverSnShardView(
 			OnReady: func() {
 				s.notifyRecoveringDone(v)
 			},
+			OnUnrecoverable: func() {
+				s.notifyUnrecoverable(v)
+			},
 		})
 	}
 
@@ -245,6 +248,9 @@ func (s *snShardView) applyOneLocked(av *handler.ApplyView) {
 				OnReady: func() {
 					s.notifyReady(version)
 				},
+				OnUnrecoverable: func() {
+					s.notifyUnrecoverable(version)
+				},
 			})
 		case qviews.QueryViewStateDropped:
 			// View doesn't exist (e.g., SN restarted). Report Dropped immediately
@@ -313,6 +319,20 @@ func (s *snShardView) notifyReady(version qviews.QueryViewVersion) {
 			To:           entry.sm.State(),
 		},
 	})
+	s.consumeReportPersistAndCleanup(version, entry)
+}
+
+// notifyUnrecoverable is called by ResourceManager when the requested
+// resources can no longer be reconstructed at the QueryView DataVersion.
+func (s *snShardView) notifyUnrecoverable(version qviews.QueryViewVersion) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, exists := s.views[version]
+	if !exists {
+		return
+	}
+	entry.sm.OnUnrecoverable()
 	s.consumeReportPersistAndCleanup(version, entry)
 }
 
