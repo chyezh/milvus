@@ -119,8 +119,10 @@ inherits the SN's primary/secondary status for the corresponding pchannel.
   first obtains `QueryPlanMVCC` from primary and forwards it to the target. SN
   does not distinguish Session from Strong; primary planning is sent as
   `consistency_level=Strong`.
-- **Bounded / Eventual**: MVCC can come from any replica's SN. Secondary SNs use
-  their WAL subscription position. Uses `consistency_level` mode.
+- **Bounded / Eventual**: When the selected target is primary, the primary SN
+  generates MVCC from the WAL with `consistency_level` mode. When the selected
+  target is secondary/read-only, Proxy first obtains `QueryPlanMVCC` from the
+  primary SN and forwards it to the target.
 
 **MVCC is pchannel-granularity.** Multiple vchannels sharing the same pchannel share
 the same WAL, so `GetMVCCTimestamp` returns pchannel-level WAL read frontiers.
@@ -128,8 +130,8 @@ The request carries vchannel; the client automatically maps vchannel→pchannel 
 routing, and the SN derives pchannel from vchannel internally.
 
 **The `GetQueryPlan` request supports two mutually exclusive MVCC modes** (via oneof):
-- `consistency_level`: SN generates MVCC from WAL. For Strong consistency on a
-  non-primary SN, returns `NOT_PRIMARY` error.
+- `consistency_level`: SN generates MVCC from WAL. Read-only secondary SNs
+  return `NOT_PRIMARY` because they do not own the write chain.
 - `query_plan_mvcc`: Proxy provides a pre-obtained `QueryPlanMVCC`. SN uses it
   directly, skipping WAL lookup.
 
@@ -148,20 +150,18 @@ QueryNode targets consume `transforming_timetick`.
 
 ```
 Proxy selects target replica (load balancing):
-  if non-strong consistency:
-    → target SN: GetQueryPlan(consistency_level=Bounded/Eventual) → plan → Phase 2
-  if strong consistency AND target is primary:
-    → primary SN: GetQueryPlan(consistency_level=Strong) → plan → Phase 2
-  if strong consistency AND target is NOT primary:
+  if target is primary:
+    → primary SN: GetQueryPlan(consistency_level=...) → plan → Phase 2
+  if target is NOT primary:
     → primary SN: GetMVCCTimestamp() → mvcc
     → target SN: GetQueryPlan(query_plan_mvcc=mvcc) → plan → Phase 2
   if session consistency:
-    → same routing as strong; primary planning uses consistency_level=Strong
+    → same routing as above; primary planning uses consistency_level=Strong
 ```
 
 **Error handling for stale primary mapping:**
 Proxy's knowledge of which replica is primary may be stale (e.g., after SN failover).
-When a non-primary SN receives a Strong consistency request, it returns
+When a non-primary SN receives a consistency-level request, it returns
 `VIEW_CODE_NOT_PRIMARY`. Proxy then refreshes the primary mapping from
 StreamingCoord/WAL binding and retries.
 
@@ -358,7 +358,8 @@ Implements both QueryPlanService and ViewQueryService gRPC servers.
 **Phase 1 — GetQueryPlan:**
 1. Find the latest Up-state query view for the requested shard.
 2. Generate `QueryPlanMVCC` based on consistency level (from WAL).
-   - If `consistency_level=Strong` and this SN is not primary → return `NOT_PRIMARY`.
+   - If `consistency_level` is provided and this SN is read-only secondary →
+     return `NOT_PRIMARY`.
    - If `query_plan_mvcc` provided → use directly, skip WAL lookup.
 3. Run Global Optimizers on the request.
 4. Build work node list from the query view (SN itself + all QNs).

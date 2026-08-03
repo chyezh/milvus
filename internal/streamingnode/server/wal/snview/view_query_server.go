@@ -67,11 +67,15 @@ func (s *PChannelViewQueryServer) taskProviderForVChannel(ctx context.Context, v
 	if err != nil {
 		return nil, viewerror.NewUnknownError("%s", err.Error())
 	}
+	walReplicaID, err := worknodehandler.DecodeQueryViewWALReplicaIDFromIncomingContext(ctx)
+	if err != nil {
+		return nil, viewerror.NewUnknownError("%s", err.Error())
+	}
 	expectedPChannel := funcutil.ToPhysicalChannel(vchannel)
 	if pchannel.Name != expectedPChannel {
 		return nil, viewerror.NewUnknownError("query view pchannel metadata mismatch, expected %s, got %s", expectedPChannel, pchannel.Name)
 	}
-	rawWAL, err := s.walManager.GetAvailableWAL(pchannel)
+	rawWAL, err := s.walManager.GetAvailableWALReplica(pchannel, walReplicaID)
 	if err != nil {
 		return nil, viewerror.NewOnShutdownError("local WAL for vchannel %s is unavailable: %s", vchannel, err.Error())
 	}
@@ -94,4 +98,5 @@ func asViewQueryGRPCError(err error) error {
 
 type pchannelWALProvider interface {
 	GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error)
+	GetAvailableWALReplica(channel types.PChannelInfo, walReplicaID int64) (wal.WAL, error)
 }

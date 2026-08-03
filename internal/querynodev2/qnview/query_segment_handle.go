@@ -16,9 +16,9 @@ type SealedSegmentHandle interface {
 }
 
 type sealedSegmentHandle struct {
-	manager   *QueryViewSegmentReadinessManager
-	segmentID int64
-	segment   TransformSegment
+	manager    *QueryViewSegmentReadinessManager
+	segmentKey segmentRefKey
+	segment    TransformSegment
 }
 
 func (h *sealedSegmentHandle) ID() int64 {
@@ -39,7 +39,7 @@ func (h *sealedSegmentHandle) Release() {
 	}
 	manager := h.manager
 	h.manager = nil
-	manager.releaseSealedSegmentHandle(h.segmentID)
+	manager.releaseSealedSegmentHandle(h.segmentKey)
 }
 
 func (m *QueryViewSegmentReadinessManager) AcquireSealedSegmentHandles(ctx context.Context, key qviews.QueryViewKey, view *viewpb.QueryViewOfQueryNode) ([]SealedSegmentHandle, error) {
@@ -57,11 +57,11 @@ func (m *QueryViewSegmentReadinessManager) AcquireSealedSegmentHandles(ctx conte
 		return nil, viewerror.NewViewNotFound("query view %s is not found", key.String())
 	}
 	for segmentID := range segmentPartitions {
-		state := m.segments[segmentID]
+		segmentKey := newSegmentRefKey(segmentID, key.WALReplicaID)
+		state := m.segments[segmentKey]
 		if state == nil || state.state != transformSegmentLoaded || state.segment == nil {
 			for _, handle := range handles {
-				segmentID := handle.ID()
-				rollback := m.segments[segmentID]
+				rollback := m.segments[handle.(*sealedSegmentHandle).segmentKey]
 				if rollback != nil && rollback.queryRefs > 0 {
 					rollback.queryRefs--
 				}
@@ -70,23 +70,23 @@ func (m *QueryViewSegmentReadinessManager) AcquireSealedSegmentHandles(ctx conte
 		}
 		state.queryRefs++
 		handles = append(handles, &sealedSegmentHandle{
-			manager:   m,
-			segmentID: segmentID,
-			segment:   state.segment,
+			manager:    m,
+			segmentKey: segmentKey,
+			segment:    state.segment,
 		})
 	}
 	return handles, nil
 }
 
-func (m *QueryViewSegmentReadinessManager) releaseSealedSegmentHandle(segmentID int64) {
+func (m *QueryViewSegmentReadinessManager) releaseSealedSegmentHandle(segmentKey segmentRefKey) {
 	var segment TransformSegment
 	m.mu.Lock()
-	state := m.segments[segmentID]
+	state := m.segments[segmentKey]
 	if state != nil && state.queryRefs > 0 {
 		state.queryRefs--
 		if state.queryRefs == 0 && len(state.refs) == 0 {
 			segment = state.segment
-			delete(m.segments, segmentID)
+			delete(m.segments, segmentKey)
 		}
 	}
 	m.mu.Unlock()

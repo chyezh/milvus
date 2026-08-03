@@ -47,7 +47,7 @@ func newInterceptorBuilders() []interceptors.InterceptorBuilder {
 func newManager(opener wal.Opener) Manager {
 	return &managerImpl{
 		lifetime: typeutil.NewGenericLifetime[managerState](managerOpenable | managerRemoveable | managerGetable),
-		wltMap:   typeutil.NewConcurrentMap[string, *walLifetime](),
+		wltMap:   typeutil.NewConcurrentMap[types.ChannelID, *walLifetime](),
 		opener:   opener,
 		logger:   resource.Resource().Logger().With(mlog.FieldComponent("wal-manager")),
 	}
@@ -57,68 +57,94 @@ func newManager(opener wal.Opener) Manager {
 type managerImpl struct {
 	lifetime *typeutil.GenericLifetime[managerState]
 
-	wltMap *typeutil.ConcurrentMap[string, *walLifetime]
+	wltMap *typeutil.ConcurrentMap[types.ChannelID, *walLifetime]
 	opener wal.Opener // wal allocator
 	logger *mlog.Logger
 }
 
 // Open opens a wal instance for the channel on this Manager.
 func (m *managerImpl) Open(ctx context.Context, channel types.PChannelInfo) (err error) {
+	return m.OpenWALReplica(ctx, channel, 0, 0)
+}
+
+// OpenWALReplica opens a wal replica instance for the channel on this Manager.
+func (m *managerImpl) OpenWALReplica(ctx context.Context, channel types.PChannelInfo, walReplicaID int64, assignmentEpoch int64) (err error) {
 	// reject operation if manager is closing.
 	if !m.lifetime.AddIf(isOpenable) {
 		return errWALManagerClosed
 	}
+	channelID := walReplicaChannelID(channel, walReplicaID)
 	defer func() {
 		m.lifetime.Done()
 		if err != nil {
-			m.logger.Warn(ctx, "open wal failed", mlog.Err(err), mlog.String("channel", channel.String()))
+			m.logger.Warn(ctx, "open wal failed", mlog.Err(err), mlog.String("channel", channel.String()), mlog.String("channelID", channelID.String()))
 			return
 		}
-		m.logger.Info(ctx, "open wal success", mlog.String("channel", channel.String()))
+		m.logger.Info(ctx, "open wal success", mlog.String("channel", channel.String()), mlog.String("channelID", channelID.String()))
 	}()
 
-	return m.getWALLifetime(channel.Name).Open(ctx, channel)
+	return m.getWALLifetime(channelID).Open(ctx, channel, walReplicaID, assignmentEpoch)
 }
 
 // Remove removes the wal instance for the channel.
 func (m *managerImpl) Remove(ctx context.Context, channel types.PChannelInfo) (err error) {
+	return m.RemoveWALReplica(ctx, channel, 0, 0)
+}
+
+// RemoveWALReplica removes the wal replica instance for the channel.
+func (m *managerImpl) RemoveWALReplica(ctx context.Context, channel types.PChannelInfo, walReplicaID int64, assignmentEpoch int64) (err error) {
 	// reject operation if manager is closing.
 	if !m.lifetime.AddIf(isRemoveable) {
 		return errWALManagerClosed
 	}
+	channelID := walReplicaChannelID(channel, walReplicaID)
 	defer func() {
 		m.lifetime.Done()
 		if err != nil {
-			m.logger.Warn(ctx, "remove wal failed", mlog.Err(err), mlog.String("channel", channel.Name), mlog.Int64("term", channel.Term))
+			m.logger.Warn(ctx, "remove wal failed", mlog.Err(err), mlog.String("channel", channel.Name), mlog.Int64("term", channel.Term), mlog.String("channelID", channelID.String()))
 			return
 		}
-		m.logger.Info(ctx, "remove wal success", mlog.String("channel", channel.Name), mlog.Int64("term", channel.Term))
+		m.logger.Info(ctx, "remove wal success", mlog.String("channel", channel.Name), mlog.Int64("term", channel.Term), mlog.String("channelID", channelID.String()))
 	}()
 
-	return m.getWALLifetime(channel.Name).Remove(ctx, channel.Term)
+	return m.getWALLifetime(channelID).Remove(ctx, channel.Term, assignmentEpoch)
 }
 
 // GetAvailableWAL returns a available wal instance for the channel.
 // Return nil if the wal instance is not found.
 func (m *managerImpl) GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error) {
+	return m.GetAvailableWALReplica(channel, 0)
+}
+
+// GetAvailableWALReplica returns a available wal replica instance for the channel.
+// Return nil if the wal instance is not found.
+func (m *managerImpl) GetAvailableWALReplica(channel types.PChannelInfo, walReplicaID int64) (wal.WAL, error) {
 	// reject operation if manager is closing.
 	if !m.lifetime.AddIf(isGetable) {
 		return nil, errWALManagerClosed
 	}
 	defer m.lifetime.Done()
 
-	l := m.getWALLifetime(channel.Name).GetWAL()
+	l := m.getWALLifetime(walReplicaChannelID(channel, walReplicaID)).GetWAL()
 	if l == nil || !l.IsAvailable() {
 		return nil, status.NewChannelNotExist(channel.Name)
 	}
 
-	currentTerm := l.Channel().Term
-	if currentTerm != channel.Term {
+	currentChannel := l.Channel()
+	currentTerm := currentChannel.Term
+	if currentTerm != channel.Term && !isReadOnlyWALReplicaTermCompatible(channel, currentChannel) {
 		return nil, status.NewUnmatchedChannelTerm(channel.Name, channel.Term, currentTerm)
+	}
+	if currentChannel.AccessMode != channel.AccessMode {
+		return nil, status.NewChannelNotExist(channel.Name)
 	}
 	// wal's lifetime is fully managed by wal manager,
 	// so wrap the wal instance to prevent it from being closed by other components.
 	return nopCloseWAL{l}, nil
+}
+
+func isReadOnlyWALReplicaTermCompatible(requested types.PChannelInfo, current types.PChannelInfo) bool {
+	return requested.AccessMode == types.AccessModeRO && current.AccessMode == types.AccessModeRO
 }
 
 // GetAvailableRawWALByPChannel returns the available raw wal instance for the pchannel.
@@ -128,7 +154,7 @@ func (m *managerImpl) GetAvailableRawWALByPChannel(pchannel string) (wal.WAL, er
 	}
 	defer m.lifetime.Done()
 
-	l := m.getWALLifetime(pchannel).GetWAL()
+	l := m.getWALLifetime(types.ChannelID{Name: pchannel}).GetWAL()
 	if l == nil || !l.IsAvailable() {
 		return nil, status.NewChannelNotExist(pchannel)
 	}
@@ -142,9 +168,9 @@ func (m *managerImpl) Metrics() (*types.StreamingNodeMetrics, error) {
 	defer m.lifetime.Done()
 
 	metrics := make(map[types.ChannelID]types.WALMetrics)
-	m.wltMap.Range(func(channel string, lt *walLifetime) bool {
+	m.wltMap.Range(func(channelID types.ChannelID, lt *walLifetime) bool {
 		if l := lt.GetWAL(); l != nil {
-			metrics[l.Channel().ChannelID()] = l.Metrics()
+			metrics[channelID] = l.Metrics()
 		}
 		return true
 	})
@@ -158,7 +184,7 @@ func (m *managerImpl) Close() {
 	m.lifetime.SetState(managerRemoveable)
 	m.lifetime.Wait()
 	// close all underlying walLifetime.
-	m.wltMap.Range(func(channel string, wlt *walLifetime) bool {
+	m.wltMap.Range(func(channelID types.ChannelID, wlt *walLifetime) bool {
 		wlt.Close()
 		return true
 	})
@@ -170,19 +196,26 @@ func (m *managerImpl) Close() {
 }
 
 // getWALLifetime returns the wal lifetime for the channel.
-func (m *managerImpl) getWALLifetime(channel string) *walLifetime {
-	if wlt, loaded := m.wltMap.Get(channel); loaded {
+func (m *managerImpl) getWALLifetime(channelID types.ChannelID) *walLifetime {
+	if wlt, loaded := m.wltMap.Get(channelID); loaded {
 		return wlt
 	}
 
 	// Perform a cas here.
-	newWLT := newWALLifetime(m.opener, channel, m.logger)
-	wlt, loaded := m.wltMap.GetOrInsert(channel, newWLT)
+	newWLT := newWALLifetime(m.opener, channelID.String(), m.logger)
+	wlt, loaded := m.wltMap.GetOrInsert(channelID, newWLT)
 	// if loaded, lifetime is exist, close the redundant lifetime.
 	if loaded {
 		newWLT.Close()
 	}
 	return wlt
+}
+
+func walReplicaChannelID(channel types.PChannelInfo, walReplicaID int64) types.ChannelID {
+	return types.ChannelID{
+		Name:         channel.Name,
+		WALReplicaID: walReplicaID,
+	}
 }
 
 type managerState int32

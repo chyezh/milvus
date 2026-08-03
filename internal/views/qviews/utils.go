@@ -149,11 +149,15 @@ func (dv DataVersion) IntoProto() *viewpb.DataVersion {
 // QueryViewKey uniquely identifies a query view by shard and version.
 type QueryViewKey struct {
 	ShardID          ShardID
+	WALReplicaID     int64
 	QueryViewVersion QueryViewVersion
 }
 
 // String returns the string representation of the query view key.
 func (k QueryViewKey) String() string {
+	if k.WALReplicaID != 0 {
+		return fmt.Sprintf("%s#%d-%s", k.ShardID, k.WALReplicaID, k.QueryViewVersion)
+	}
 	return fmt.Sprintf("%s-%s", k.ShardID, k.QueryViewVersion)
 }
 

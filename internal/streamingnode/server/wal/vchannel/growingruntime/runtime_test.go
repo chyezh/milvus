@@ -221,7 +221,7 @@ func TestDrainDeleteReplayUsesSharedTransformLogStream(t *testing.T) {
 		owner.Release()
 		manager.Register(vchannel, log)
 	}
-	stream, err := manager.AcquireStream(ctx, "p1")
+	stream, err := manager.AcquireStream(ctx, "p1", 0)
 	require.NoError(t, err)
 	defer stream.Close()
 

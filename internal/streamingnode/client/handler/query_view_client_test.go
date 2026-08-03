@@ -7,8 +7,11 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	grpcstatus "google.golang.org/grpc/status"
 
+	"github.com/milvus-io/milvus/internal/util/streamingutil/service/balancer/picker"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/internal/views/viewerror"
@@ -30,21 +33,24 @@ func TestHandlerClientGetQueryPlanRoutesByShardPChannel(t *testing.T) {
 		getQueryPlan: func(ctx context.Context, req *viewpb.GetQueryPlanRequest) (*viewpb.GetQueryPlanResponse, error) {
 			serverID, ok := contextutil.GetPickServerID(ctx)
 			require.True(t, ok)
-			require.Equal(t, int64(101), serverID)
+			require.Equal(t, int64(202), serverID)
 			pchannel, err := worknodehandler.DecodeQueryViewPChannelFromOutgoingContext(ctx)
 			require.NoError(t, err)
 			require.Equal(t, types.PChannelInfo{
 				Name:       "p0",
-				Term:       1,
-				AccessMode: types.AccessModeRW,
+				Term:       3,
+				AccessMode: types.AccessModeRO,
 			}, pchannel)
+			walReplicaID, err := worknodehandler.DecodeQueryViewWALReplicaIDFromOutgoingContext(ctx)
+			require.NoError(t, err)
+			require.Equal(t, int64(2), walReplicaID)
 			require.Same(t, planReq, req)
 			return planResp, nil
 		},
 	}
 	client := newTestHandlerClient(queryPlanService, nil, nil)
 
-	resp, err := client.QueryViewClient().GetQueryPlan(context.Background(), shardID, planReq)
+	resp, err := client.QueryViewClient().GetQueryPlan(context.Background(), shardID, 2, planReq)
 
 	require.NoError(t, err)
 	require.Same(t, planResp, resp)
@@ -57,21 +63,24 @@ func TestHandlerClientViewQueryRoutesByStreamingWorkNode(t *testing.T) {
 		searchOnView: func(ctx context.Context, req *viewpb.SearchOnViewRequest) (*viewpb.SearchOnViewResponse, error) {
 			serverID, ok := contextutil.GetPickServerID(ctx)
 			require.True(t, ok)
-			require.Equal(t, int64(101), serverID)
+			require.Equal(t, int64(202), serverID)
 			pchannel, err := worknodehandler.DecodeQueryViewPChannelFromOutgoingContext(ctx)
 			require.NoError(t, err)
 			require.Equal(t, types.PChannelInfo{
 				Name:       "p0",
-				Term:       1,
-				AccessMode: types.AccessModeRW,
+				Term:       3,
+				AccessMode: types.AccessModeRO,
 			}, pchannel)
+			walReplicaID, err := worknodehandler.DecodeQueryViewWALReplicaIDFromOutgoingContext(ctx)
+			require.NoError(t, err)
+			require.Equal(t, int64(2), walReplicaID)
 			require.Same(t, searchReq, req)
 			return searchResp, nil
 		},
 	}
 	client := newTestHandlerClient(nil, viewQueryService, nil)
 
-	resp, err := client.QueryViewClient().SearchOnView(context.Background(), types.PChannelInfo{Name: "p0"}, searchReq)
+	resp, err := client.QueryViewClient().SearchOnView(context.Background(), types.PChannelInfo{Name: "p0"}, 2, searchReq)
 
 	require.NoError(t, err)
 	require.Same(t, searchResp, resp)
@@ -86,10 +95,82 @@ func TestHandlerClientConvertsViewQueryRPCError(t *testing.T) {
 	}
 	client := newTestHandlerClient(nil, viewQueryService, nil)
 
-	_, err := client.QueryViewClient().SearchOnView(context.Background(), types.PChannelInfo{Name: "p0"}, &viewpb.SearchOnViewRequest{})
+	_, err := client.QueryViewClient().SearchOnView(context.Background(), types.PChannelInfo{Name: "p0"}, 0, &viewpb.SearchOnViewRequest{})
 
 	require.Error(t, err)
 	require.True(t, viewerror.AsViewError(err).IsViewNotFound())
+}
+
+func TestHandlerClientRetriesViewQueryTransportErrorThroughAssignmentLoop(t *testing.T) {
+	queryResp := &viewpb.QueryOnViewResponse{}
+	attempts := 0
+	viewQueryService := &fakeViewQueryServiceClient{
+		queryOnView: func(ctx context.Context, req *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error) {
+			serverID, ok := contextutil.GetPickServerID(ctx)
+			require.True(t, ok)
+			require.Equal(t, int64(202), serverID)
+			attempts++
+			if attempts == 1 {
+				return nil, picker.ErrSubConnNotExist
+			}
+			return queryResp, nil
+		},
+	}
+	client := newTestHandlerClient(nil, viewQueryService, nil)
+	trigger := &handlerFakeWALReplicaRebalanceTrigger{}
+	client.rebalanceTrigger = trigger
+	client.watcher = fakeAssignmentWatcher{
+		walReplicaAssignments: map[types.ChannelID]*types.PChannelInfoAssigned{
+			{Name: "p0", WALReplicaID: 2}: {
+				Channel:         types.PChannelInfo{Name: "p0", Term: 3, AccessMode: types.AccessModeRO},
+				WALReplicaID:    2,
+				AssignmentEpoch: 7,
+				Node:            types.StreamingNodeInfo{ServerID: 202, Address: "localhost-ro"},
+			},
+		},
+		watchWALReplica: func(context.Context, types.ChannelID, *types.PChannelInfoAssigned) error {
+			return nil
+		},
+	}
+
+	resp, err := client.QueryViewClient().QueryOnView(context.Background(), types.PChannelInfo{Name: "p0"}, 2, &viewpb.QueryOnViewRequest{})
+
+	require.NoError(t, err)
+	require.Same(t, queryResp, resp)
+	require.Equal(t, 2, attempts)
+	require.NotNil(t, trigger.reportedWALAssignment)
+	require.Equal(t, int64(2), trigger.reportedWALAssignment.WALReplicaID)
+	require.Equal(t, int64(7), trigger.reportedWALAssignment.AssignmentEpoch)
+}
+
+func TestHandlerClientDoesNotRetryCanceledViewQueryRPC(t *testing.T) {
+	attempts := 0
+	viewQueryService := &fakeViewQueryServiceClient{
+		queryOnView: func(ctx context.Context, req *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error) {
+			attempts++
+			return nil, grpcstatus.Error(codes.Canceled, "context canceled")
+		},
+	}
+	client := newTestHandlerClient(nil, viewQueryService, nil)
+	client.watcher = fakeAssignmentWatcher{
+		walReplicaAssignments: map[types.ChannelID]*types.PChannelInfoAssigned{
+			{Name: "p0", WALReplicaID: 2}: {
+				Channel:      types.PChannelInfo{Name: "p0", Term: 3, AccessMode: types.AccessModeRO},
+				WALReplicaID: 2,
+				Node:         types.StreamingNodeInfo{ServerID: 202, Address: "localhost-ro"},
+			},
+		},
+		watchWALReplica: func(context.Context, types.ChannelID, *types.PChannelInfoAssigned) error {
+			require.FailNow(t, "canceled RPC should not enter assignment retry loop")
+			return nil
+		},
+	}
+
+	resp, err := client.QueryViewClient().QueryOnView(context.Background(), types.PChannelInfo{Name: "p0"}, 2, &viewpb.QueryOnViewRequest{})
+
+	require.Error(t, err)
+	require.Nil(t, resp)
+	require.Equal(t, 1, attempts)
 }
 
 func TestHandlerClientViewSyncRoutesByPChannelAssignment(t *testing.T) {
@@ -97,20 +178,23 @@ func TestHandlerClientViewSyncRoutesByPChannelAssignment(t *testing.T) {
 		syncQueryView: func(ctx context.Context) (viewpb.ViewSyncService_SyncQueryViewClient, error) {
 			serverID, ok := contextutil.GetPickServerID(ctx)
 			require.True(t, ok)
-			require.Equal(t, int64(101), serverID)
+			require.Equal(t, int64(202), serverID)
 			pchannel, err := worknodehandler.DecodeQueryViewPChannelFromOutgoingContext(ctx)
 			require.NoError(t, err)
 			require.Equal(t, types.PChannelInfo{
 				Name:       "p0",
-				Term:       1,
-				AccessMode: types.AccessModeRW,
+				Term:       3,
+				AccessMode: types.AccessModeRO,
 			}, pchannel)
+			walReplicaID, err := worknodehandler.DecodeQueryViewWALReplicaIDFromOutgoingContext(ctx)
+			require.NoError(t, err)
+			require.Equal(t, int64(2), walReplicaID)
 			return &noopViewSyncClientStream{ctx: ctx}, nil
 		},
 	}
 	client := newTestHandlerClient(nil, nil, viewSyncService)
 
-	_, err := client.QueryViewSyncClient().SyncQueryView(context.Background(), "p0")
+	_, err := client.QueryViewSyncClient().SyncQueryView(context.Background(), "p0", 2)
 
 	require.NoError(t, err)
 }
@@ -122,6 +206,17 @@ func newTestHandlerClient(queryPlanService viewpb.QueryPlanServiceClient, viewQu
 			assignment: &types.PChannelInfoAssigned{
 				Channel: types.PChannelInfo{Name: "p0", Term: 1, AccessMode: types.AccessModeRW},
 				Node:    types.StreamingNodeInfo{ServerID: 101, Address: "localhost"},
+			},
+			walReplicaAssignments: map[types.ChannelID]*types.PChannelInfoAssigned{
+				{Name: "p0"}: {
+					Channel: types.PChannelInfo{Name: "p0", Term: 1, AccessMode: types.AccessModeRW},
+					Node:    types.StreamingNodeInfo{ServerID: 101, Address: "localhost"},
+				},
+				{Name: "p0", WALReplicaID: 2}: {
+					Channel:      types.PChannelInfo{Name: "p0", Term: 3, AccessMode: types.AccessModeRO},
+					WALReplicaID: 2,
+					Node:         types.StreamingNodeInfo{ServerID: 202, Address: "localhost-ro"},
+				},
 			},
 		},
 	}
@@ -138,14 +233,27 @@ func newTestHandlerClient(queryPlanService viewpb.QueryPlanServiceClient, viewQu
 }
 
 type fakeAssignmentWatcher struct {
-	assignment *types.PChannelInfoAssigned
+	assignment            *types.PChannelInfoAssigned
+	walReplicaAssignments map[types.ChannelID]*types.PChannelInfoAssigned
+	watchWALReplica       func(context.Context, types.ChannelID, *types.PChannelInfoAssigned) error
 }
 
 func (w fakeAssignmentWatcher) Get(context.Context, string) *types.PChannelInfoAssigned {
 	return w.assignment
 }
 
+func (w fakeAssignmentWatcher) GetWALReplica(_ context.Context, channelID types.ChannelID) *types.PChannelInfoAssigned {
+	return w.walReplicaAssignments[channelID]
+}
+
 func (w fakeAssignmentWatcher) Watch(context.Context, string, *types.PChannelInfoAssigned) error {
+	return context.Canceled
+}
+
+func (w fakeAssignmentWatcher) WatchWALReplica(ctx context.Context, channelID types.ChannelID, previous *types.PChannelInfoAssigned) error {
+	if w.watchWALReplica != nil {
+		return w.watchWALReplica(ctx, channelID, previous)
+	}
 	return context.Canceled
 }
 

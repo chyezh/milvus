@@ -14,11 +14,12 @@ var _ viewquery.TaskProvider = (*QNQueryViewHandler)(nil)
 func (h *QNQueryViewHandler) AcquireSearchSegmentTasks(
 	ctx context.Context,
 	shardID qviews.ShardID,
+	walReplicaID int64,
 	version qviews.QueryViewVersion,
 	mvcc *viewpb.QueryPlanMVCC,
 	req *internalpb.SearchRequest,
 ) (viewquery.SearchSegmentTasks, error) {
-	lease, err := h.AcquireReadyView(ctx, shardID, version)
+	lease, err := h.AcquireReadyView(ctx, shardID, walReplicaID, version)
 	if err != nil {
 		return nil, err
 	}
@@ -28,7 +29,7 @@ func (h *QNQueryViewHandler) AcquireSearchSegmentTasks(
 	if err := h.localOptimizer.OptimizeSearch(ctx, req); err != nil {
 		return nil, err
 	}
-	key := qviews.QueryViewKey{ShardID: shardID, QueryViewVersion: version}
+	key := qviews.QueryViewKey{ShardID: shardID, WALReplicaID: walReplicaID, QueryViewVersion: version}
 	if err := h.segMgr.WaitTransformVisible(ctx, key, mvcc.GetTransformingTimetick()); err != nil {
 		return nil, err
 	}
@@ -50,11 +51,12 @@ func (h *QNQueryViewHandler) AcquireSearchSegmentTasks(
 func (h *QNQueryViewHandler) AcquireQuerySegmentTasks(
 	ctx context.Context,
 	shardID qviews.ShardID,
+	walReplicaID int64,
 	version qviews.QueryViewVersion,
 	mvcc *viewpb.QueryPlanMVCC,
 	req *internalpb.RetrieveRequest,
 ) (viewquery.QuerySegmentTasks, error) {
-	lease, err := h.AcquireReadyView(ctx, shardID, version)
+	lease, err := h.AcquireReadyView(ctx, shardID, walReplicaID, version)
 	if err != nil {
 		return nil, err
 	}
@@ -64,7 +66,7 @@ func (h *QNQueryViewHandler) AcquireQuerySegmentTasks(
 	if err := h.localOptimizer.OptimizeRetrieve(ctx, req); err != nil {
 		return nil, err
 	}
-	key := qviews.QueryViewKey{ShardID: shardID, QueryViewVersion: version}
+	key := qviews.QueryViewKey{ShardID: shardID, WALReplicaID: walReplicaID, QueryViewVersion: version}
 	if err := h.segMgr.WaitTransformVisible(ctx, key, mvcc.GetTransformingTimetick()); err != nil {
 		return nil, err
 	}

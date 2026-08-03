@@ -13,8 +13,11 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
+	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/pkg/v3/mocks/proto/mock_streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -213,6 +216,55 @@ func TestRemoteConsumerSkipsTraceForTimeTickMessage(t *testing.T) {
 
 	msgSC := trace.SpanContextFromContext(message.ExtractTraceContext(context.Background(), param.Message))
 	assert.False(t, msgSC.IsValid())
+}
+
+func TestCreateConsumerPassesWALReplicaIDInHeader(t *testing.T) {
+	c := mock_streamingpb.NewMockStreamingNodeHandlerServiceClient(t)
+	cc := mock_streamingpb.NewMockStreamingNodeHandlerService_ConsumeClient(t)
+	recvCh := make(chan *streamingpb.ConsumeResponse, 2)
+	cc.EXPECT().Recv().RunAndReturn(func() (*streamingpb.ConsumeResponse, error) {
+		msg, ok := <-recvCh
+		if !ok {
+			return nil, io.EOF
+		}
+		return msg, nil
+	})
+	cc.EXPECT().Send(mock.Anything).Return(nil).Maybe()
+	c.EXPECT().Consume(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, opts ...grpc.CallOption) (streamingpb.StreamingNodeHandlerService_ConsumeClient, error) {
+			meta, ok := metadata.FromOutgoingContext(ctx)
+			require.True(t, ok)
+			createReq, err := contextutil.GetCreateConsumer(metadata.NewIncomingContext(context.Background(), meta))
+			require.NoError(t, err)
+			assert.Equal(t, int64(2), createReq.GetWalReplicaId())
+			return cc, nil
+		},
+	)
+	cc.EXPECT().CloseSend().RunAndReturn(func() error {
+		recvCh <- &streamingpb.ConsumeResponse{Response: &streamingpb.ConsumeResponse_Close{}}
+		close(recvCh)
+		return nil
+	}).Maybe()
+
+	recvCh <- &streamingpb.ConsumeResponse{
+		Response: &streamingpb.ConsumeResponse_Create{
+			Create: &streamingpb.CreateConsumerResponse{},
+		},
+	}
+	consumer, err := CreateConsumer(context.Background(), &ConsumerOptions{
+		Assignment: &types.PChannelInfoAssigned{
+			Channel:      types.PChannelInfo{Name: "test", Term: 3, AccessMode: types.AccessModeRW},
+			WALReplicaID: 2,
+			Node:         types.StreamingNodeInfo{ServerID: 1, Address: "localhost"},
+		},
+		VChannel:       "test_100v0",
+		DeliverPolicy:  options.DeliverPolicyAll(),
+		MessageHandler: make(adaptor.ChanMessageHandler),
+	}, c)
+
+	require.NoError(t, err)
+	require.NotNil(t, consumer)
+	consumer.Close()
 }
 
 func TestRemoteConsumerStartsDistConsumeSpanOnlyOnTxnCommit(t *testing.T) {

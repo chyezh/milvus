@@ -37,7 +37,7 @@ type handlerServiceImpl struct {
 
 // GetReplicateCheckpoint returns the replicate checkpoint of the wal.
 func (hs *handlerServiceImpl) GetReplicateCheckpoint(ctx context.Context, req *streamingpb.GetReplicateCheckpointRequest) (*streamingpb.GetReplicateCheckpointResponse, error) {
-	wal, err := hs.walManager.GetAvailableWAL(types.NewPChannelInfoFromProto(req.GetPchannel()))
+	wal, err := hs.walManager.GetAvailableWALReplica(types.NewPChannelInfoFromProto(req.GetPchannel()), req.GetWalReplicaId())
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +50,7 @@ func (hs *handlerServiceImpl) GetReplicateCheckpoint(ctx context.Context, req *s
 
 // GetSalvageCheckpoint returns all salvage checkpoints captured during force promote.
 func (hs *handlerServiceImpl) GetSalvageCheckpoint(ctx context.Context, req *streamingpb.GetSalvageCheckpointRequest) (*streamingpb.GetSalvageCheckpointResponse, error) {
-	wal, err := hs.walManager.GetAvailableWAL(types.NewPChannelInfoFromProto(req.GetPchannel()))
+	wal, err := hs.walManager.GetAvailableWALReplica(types.NewPChannelInfoFromProto(req.GetPchannel()), req.GetWalReplicaId())
 	if err != nil {
 		return nil, err
 	}

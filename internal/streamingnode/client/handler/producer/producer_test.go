@@ -13,7 +13,10 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 
+	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/pkg/v3/mocks/proto/mock_streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/mocks/streaming/util/mock_ratelimit"
@@ -160,6 +163,52 @@ func TestProducer(t *testing.T) {
 	assert.True(t, producer.IsAvailable())
 	producer.Close()
 	assert.False(t, producer.IsAvailable())
+}
+
+func TestCreateProducerPassesWALReplicaIDInHeader(t *testing.T) {
+	c := mock_streamingpb.NewMockStreamingNodeHandlerServiceClient(t)
+	cc := mock_streamingpb.NewMockStreamingNodeHandlerService_ProduceClient(t)
+	recvCh := make(chan *streamingpb.ProduceResponse, 1)
+	cc.EXPECT().Recv().RunAndReturn(func() (*streamingpb.ProduceResponse, error) {
+		msg, ok := <-recvCh
+		if !ok {
+			return nil, io.EOF
+		}
+		return msg, nil
+	})
+	cc.EXPECT().Send(mock.Anything).Return(nil).Maybe()
+	c.EXPECT().Produce(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, _ ...grpc.CallOption) (streamingpb.StreamingNodeHandlerService_ProduceClient, error) {
+			meta, ok := metadata.FromOutgoingContext(ctx)
+			require.True(t, ok)
+			createReq, err := contextutil.GetCreateProducer(metadata.NewIncomingContext(context.Background(), meta))
+			require.NoError(t, err)
+			assert.Equal(t, int64(2), createReq.GetWalReplicaId())
+			return cc, nil
+		},
+	)
+	cc.EXPECT().CloseSend().RunAndReturn(func() error {
+		recvCh <- &streamingpb.ProduceResponse{Response: &streamingpb.ProduceResponse_Close{}}
+		close(recvCh)
+		return nil
+	}).Maybe()
+
+	recvCh <- &streamingpb.ProduceResponse{
+		Response: &streamingpb.ProduceResponse_Create{
+			Create: &streamingpb.CreateProducerResponse{},
+		},
+	}
+	producer, err := CreateProducer(context.Background(), &ProducerOptions{
+		Assignment: &types.PChannelInfoAssigned{
+			Channel:      types.PChannelInfo{Name: "test", Term: 3, AccessMode: types.AccessModeRW},
+			WALReplicaID: 2,
+			Node:         types.StreamingNodeInfo{ServerID: 1, Address: "localhost"},
+		},
+	}, c)
+
+	require.NoError(t, err)
+	require.NotNil(t, producer)
+	producer.Close()
 }
 
 func TestProducerAppendOverwritesTraceContextDuringSerialization(t *testing.T) {

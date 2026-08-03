@@ -624,7 +624,7 @@ func TestBuildShardAssignmentsMapsPChannelEntriesToOwner(t *testing.T) {
 			Channel: types.PChannelInfo{Name: "p3"},
 			Node:    types.StreamingNodeInfo{ServerID: 2},
 		},
-	}, provider)
+	}, nil, provider)
 
 	require.Len(t, assignments, 1)
 	assert.Equal(t, types.ShardAssignmentInfo{
@@ -645,12 +645,1212 @@ func TestBuildShardAssignmentsMapsPChannelEntriesToOwner(t *testing.T) {
 	}, assignments[1])
 }
 
+func TestBuildShardAssignmentsMapsEntriesToWALReplicaOwner(t *testing.T) {
+	provider := staticShardAssignmentProvider{
+		assignments: map[string][]types.ShardAssignmentEntry{
+			"p1": {
+				{CollectionID: 100, ShardIndex: 0, ReplicaID: 10, WALReplicaID: 0},
+				{CollectionID: 100, ShardIndex: 0, ReplicaID: 20, WALReplicaID: 2},
+			},
+		},
+	}
+
+	assignments := buildShardAssignments([]types.PChannelInfoAssigned{
+		{
+			Channel:      types.PChannelInfo{Name: "p1"},
+			WALReplicaID: 0,
+			Node:         types.StreamingNodeInfo{ServerID: 1},
+		},
+	}, []types.WALReplicaInfoAssigned{
+		{
+			Replica: types.WALReplicaInfo{
+				ChannelID:  types.ChannelID{Name: "p1", WALReplicaID: 0},
+				AccessMode: types.AccessModeRW,
+			},
+			Node: types.StreamingNodeInfo{ServerID: 1},
+		},
+		{
+			Replica: types.WALReplicaInfo{
+				ChannelID:  types.ChannelID{Name: "p1", WALReplicaID: 2},
+				AccessMode: types.AccessModeRO,
+			},
+			Node: types.StreamingNodeInfo{ServerID: 2},
+		},
+	}, provider)
+
+	assert.Equal(t, types.ShardAssignmentInfo{
+		PChannelAssignments: []types.PChannelShardAssignment{
+			{
+				PChannel: "p1",
+				Entries: []types.ShardAssignmentEntry{
+					{CollectionID: 100, ShardIndex: 0, ReplicaID: 10, WALReplicaID: 0},
+				},
+			},
+		},
+	}, assignments[1])
+	assert.Equal(t, types.ShardAssignmentInfo{
+		PChannelAssignments: []types.PChannelShardAssignment{
+			{
+				PChannel: "p1",
+				Entries: []types.ShardAssignmentEntry{
+					{CollectionID: 100, ShardIndex: 0, ReplicaID: 20, WALReplicaID: 2},
+				},
+			},
+		},
+	}, assignments[2])
+}
+
+func TestBuildWALReplicaAssignmentsPublishesServiceableActiveOwners(t *testing.T) {
+	channels := map[ChannelID]*PChannelMeta{
+		newChannelID("p1"): newPChannelMetaFromProto(&streamingpb.PChannelMeta{
+			Channel:          &streamingpb.PChannelInfo{Name: "p1", Term: 7},
+			PrimaryReplicaId: 1,
+			NextReplicaId:    5,
+			Replicas: []*streamingpb.WALReplicaAssignment{
+				{
+					ReplicaId:  1,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+					ActiveNode: &streamingpb.StreamingNodeInfo{ServerId: 10, Address: "localhost:10"},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+				{
+					ReplicaId:     2,
+					AccessMode:    streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					ResourceGroup: "rg1",
+					ActiveNode:    &streamingpb.StreamingNodeInfo{ServerId: 11, Address: "localhost:11"},
+					State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+				{
+					ReplicaId:     3,
+					AccessMode:    streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					ResourceGroup: "rg1",
+					ActiveNode:    &streamingpb.StreamingNodeInfo{ServerId: 12, Address: "localhost:12"},
+					TargetNode:    &streamingpb.StreamingNodeInfo{ServerId: 13, Address: "localhost:13"},
+					State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING,
+				},
+				{
+					ReplicaId:  4,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					TargetNode: &streamingpb.StreamingNodeInfo{ServerId: 14, Address: "localhost:14"},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING,
+				},
+			},
+		}, nil),
+		newChannelID("p2"): newPChannelMetaFromProto(&streamingpb.PChannelMeta{
+			Channel:          &streamingpb.PChannelInfo{Name: "p2", Term: 8},
+			PrimaryReplicaId: 0,
+			NextReplicaId:    1,
+			Replicas: []*streamingpb.WALReplicaAssignment{
+				{
+					ReplicaId:  0,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+					TargetNode: &streamingpb.StreamingNodeInfo{ServerId: 20, Address: "localhost:20"},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING,
+				},
+			},
+		}, nil),
+	}
+
+	assert.ElementsMatch(t, []types.WALReplicaInfoAssigned{
+		{
+			Replica: types.WALReplicaInfo{
+				ChannelID:         types.ChannelID{Name: "p1", WALReplicaID: 1},
+				AccessMode:        types.AccessModeRW,
+				PChannelWriteTerm: 7,
+				State:             streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+			},
+			Node: types.StreamingNodeInfo{ServerID: 10, Address: "localhost:10"},
+		},
+		{
+			Replica: types.WALReplicaInfo{
+				ChannelID:         types.ChannelID{Name: "p1", WALReplicaID: 2},
+				AccessMode:        types.AccessModeRO,
+				ResourceGroup:     "rg1",
+				PChannelWriteTerm: 7,
+				State:             streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+			},
+			Node: types.StreamingNodeInfo{ServerID: 11, Address: "localhost:11"},
+		},
+		{
+			Replica: types.WALReplicaInfo{
+				ChannelID:         types.ChannelID{Name: "p1", WALReplicaID: 3},
+				AccessMode:        types.AccessModeRO,
+				ResourceGroup:     "rg1",
+				PChannelWriteTerm: 7,
+				State:             streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING,
+			},
+			Node: types.StreamingNodeInfo{ServerID: 12, Address: "localhost:12"},
+		},
+	}, buildWALReplicaAssignments(channels))
+}
+
+func TestChannelManagerReassignsNonDefaultPrimaryReplicaFromLegacyPath(t *testing.T) {
+	ResetStaticPChannelStatsManager()
+	RecoverPChannelStatsManager([]string{})
+
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	resource.InitForTest(resource.OptStreamingCatalog(catalog), resource.OptSession(s))
+
+	ctx := context.Background()
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{
+		Pchannel: "test",
+	}, nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{
+		Version: 1,
+	}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{
+		{
+			Channel: &streamingpb.PChannelInfo{
+				Name:       "test-channel",
+				Term:       10,
+				AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+			},
+			Node:             &streamingpb.StreamingNodeInfo{ServerId: 6},
+			State:            streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+			PrimaryReplicaId: 1,
+			NextReplicaId:    2,
+			Replicas: []*streamingpb.WALReplicaAssignment{
+				{
+					ReplicaId:  0,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					ActiveNode: &streamingpb.StreamingNodeInfo{ServerId: 5},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+				{
+					ReplicaId:       1,
+					AccessMode:      streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+					AssignmentEpoch: 3,
+					ActiveNode:      &streamingpb.StreamingNodeInfo{ServerId: 6},
+					State:           streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+					ResourceGroup:   "rg-secondary",
+				},
+			},
+		},
+	}, nil)
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	var saved *streamingpb.PChannelMeta
+	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, metas []*streamingpb.PChannelMeta) error {
+			saved = proto.Clone(metas[0]).(*streamingpb.PChannelMeta)
+			return nil
+		},
+	)
+
+	manager, err := RecoverChannelManager(ctx)
+	require.NoError(t, err)
+
+	modified, err := manager.AssignPChannels(ctx, map[ChannelID]types.PChannelInfoAssigned{
+		newChannelID("test-channel"): {
+			Channel: types.PChannelInfo{
+				Name:       "test-channel",
+				Term:       10,
+				AccessMode: types.AccessModeRW,
+			},
+			Node: types.StreamingNodeInfo{ServerID: 5},
+		},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, modified, 1)
+	require.NotNil(t, saved)
+	view := manager.CurrentPChannelsView()
+	pchannel := view.Channels[newChannelID("test-channel")]
+	assert.Equal(t, int64(11), pchannel.CurrentTerm())
+	assert.Equal(t, int64(1), pchannel.PrimaryReplicaID())
+	assert.Equal(t, int64(5), pchannel.CurrentServerID())
+	primary, ok := pchannel.WALReplica(1)
+	require.True(t, ok)
+	assert.Equal(t, int64(6), primary.GetActiveNode().GetServerId())
+	assert.Equal(t, int64(5), primary.GetTargetNode().GetServerId())
+	assert.Equal(t, int64(4), primary.GetAssignmentEpoch())
+	assert.Equal(t, int64(1), saved.GetPrimaryReplicaId())
+}
+
+func TestChannelManagerReadOnlyWALReplicaLifecycle(t *testing.T) {
+	ResetStaticPChannelStatsManager()
+	RecoverPChannelStatsManager([]string{})
+
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	resource.InitForTest(resource.OptStreamingCatalog(catalog), resource.OptSession(s))
+
+	ctx := context.Background()
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{
+		Pchannel: "test",
+	}, nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{
+		Version: 1,
+	}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{
+		{
+			Channel: &streamingpb.PChannelInfo{
+				Name:       "test-channel",
+				Term:       1,
+				AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+			},
+			Node:  &streamingpb.StreamingNodeInfo{ServerId: 1},
+			State: streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+	}, nil)
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	var saved []*streamingpb.PChannelMeta
+	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, metas []*streamingpb.PChannelMeta) error {
+			saved = append(saved, proto.Clone(metas[0]).(*streamingpb.PChannelMeta))
+			return nil
+		})
+
+	manager, err := RecoverChannelManager(ctx)
+	require.NoError(t, err)
+
+	replicaKey, err := manager.CreateReadOnlyWALReplica(ctx, "test-channel", "rg-a")
+	require.NoError(t, err)
+	assert.Equal(t, ChannelID{Name: "test-channel", WALReplicaID: 1}, replicaKey)
+	require.Len(t, saved, 1)
+	assert.Len(t, saved[0].GetReplicas(), 2)
+	assert.Equal(t, "rg-a", saved[0].GetReplicas()[1].GetResourceGroup())
+
+	updates, err := manager.AssignWALReplicas(ctx, map[ChannelID]types.StreamingNodeInfo{
+		replicaKey: {ServerID: 2, Address: "localhost:2"},
+	})
+	require.NoError(t, err)
+	assert.Contains(t, updates, replicaKey)
+	require.Len(t, saved, 2)
+	assert.Equal(t, int64(1), saved[1].GetChannel().GetTerm())
+	assert.Equal(t, int64(2), saved[1].GetReplicas()[1].GetTargetNode().GetServerId())
+	assert.Equal(t, streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING, saved[1].GetReplicas()[1].GetState())
+
+	require.NoError(t, manager.AssignWALReplicasDone(ctx, map[ChannelID]int64{replicaKey: 1}))
+	require.Len(t, saved, 3)
+	assert.Equal(t, int64(2), saved[2].GetReplicas()[1].GetActiveNode().GetServerId())
+	assert.Nil(t, saved[2].GetReplicas()[1].GetTargetNode())
+
+	assignment, err := manager.GetLatestChannelAssignment()
+	require.NoError(t, err)
+	assert.Contains(t, assignment.WALReplicaRelations, types.WALReplicaInfoAssigned{
+		Replica: types.WALReplicaInfo{
+			ChannelID:         replicaKey,
+			AccessMode:        types.AccessModeRO,
+			ResourceGroup:     "rg-a",
+			PChannelWriteTerm: 1,
+			AssignmentEpoch:   1,
+			State:             streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+		Node: types.StreamingNodeInfo{ServerID: 2, Address: "localhost:2"},
+	})
+
+	require.NoError(t, manager.MarkWALReplicasAsDropping(ctx, []ChannelID{replicaKey}))
+	require.Len(t, saved, 4)
+	assert.Equal(t, streamingpb.PChannelMetaState_PCHANNEL_META_STATE_DROPPING, saved[3].GetReplicas()[1].GetState())
+
+	require.NoError(t, manager.RemoveWALReplicas(ctx, []ChannelID{replicaKey}))
+	require.Len(t, saved, 5)
+	assert.Len(t, saved[4].GetReplicas(), 1)
+	assert.Equal(t, int64(0), saved[4].GetReplicas()[0].GetReplicaId())
+}
+
+func TestChannelManagerMarksReadOnlyWALReplicaUnavailableWithoutTouchingPrimary(t *testing.T) {
+	ResetStaticPChannelStatsManager()
+	RecoverPChannelStatsManager([]string{})
+
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	resource.InitForTest(resource.OptStreamingCatalog(catalog), resource.OptSession(s))
+
+	ctx := context.Background()
+	replicaID := ChannelID{Name: "test-channel", WALReplicaID: 1}
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{
+		Pchannel: "test",
+	}, nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{
+		Version: 1,
+	}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{
+		{
+			Channel: &streamingpb.PChannelInfo{
+				Name:       "test-channel",
+				Term:       7,
+				AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+			},
+			Node:             &streamingpb.StreamingNodeInfo{ServerId: 1},
+			State:            streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+			PrimaryReplicaId: 0,
+			NextReplicaId:    2,
+			Replicas: []*streamingpb.WALReplicaAssignment{
+				{
+					ReplicaId:       0,
+					AccessMode:      streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+					AssignmentEpoch: 3,
+					ActiveNode:      &streamingpb.StreamingNodeInfo{ServerId: 1},
+					State:           streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+				{
+					ReplicaId:       1,
+					AccessMode:      streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					AssignmentEpoch: 5,
+					ActiveNode:      &streamingpb.StreamingNodeInfo{ServerId: 2},
+					State:           streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+			},
+		},
+	}, nil)
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	var saved *streamingpb.PChannelMeta
+	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, metas []*streamingpb.PChannelMeta) error {
+			require.Len(t, metas, 1)
+			saved = proto.Clone(metas[0]).(*streamingpb.PChannelMeta)
+			return nil
+		})
+
+	manager, err := RecoverChannelManager(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, manager.MarkWALReplicasAsUnavailable(ctx, []ChannelID{replicaID}, 5))
+
+	require.NotNil(t, saved)
+	assert.Equal(t, streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED, saved.GetState())
+	assert.Equal(t, streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE, saved.GetChannel().GetAccessMode())
+	assert.Equal(t, int64(7), saved.GetChannel().GetTerm())
+	assert.Equal(t, int64(0), saved.GetPrimaryReplicaId())
+	assert.Equal(t, streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED, saved.GetReplicas()[0].GetState())
+	assert.Equal(t, streamingpb.PChannelMetaState_PCHANNEL_META_STATE_UNAVAILABLE, saved.GetReplicas()[1].GetState())
+	assert.Equal(t, int64(5), saved.GetReplicas()[1].GetAssignmentEpoch())
+}
+
+func TestChannelManagerMarksReadOnlyWALReplicaActiveUnavailableDuringAssigning(t *testing.T) {
+	ResetStaticPChannelStatsManager()
+	RecoverPChannelStatsManager([]string{})
+
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	resource.InitForTest(resource.OptStreamingCatalog(catalog), resource.OptSession(s))
+
+	ctx := context.Background()
+	replicaID := ChannelID{Name: "test-channel", WALReplicaID: 1}
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{
+		Pchannel: "test",
+	}, nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{
+		Version: 1,
+	}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{
+		{
+			Channel: &streamingpb.PChannelInfo{
+				Name:       "test-channel",
+				Term:       7,
+				AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+			},
+			Node:             &streamingpb.StreamingNodeInfo{ServerId: 1},
+			State:            streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+			PrimaryReplicaId: 0,
+			NextReplicaId:    2,
+			Replicas: []*streamingpb.WALReplicaAssignment{
+				{
+					ReplicaId:       0,
+					AccessMode:      streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+					AssignmentEpoch: 3,
+					ActiveNode:      &streamingpb.StreamingNodeInfo{ServerId: 1},
+					State:           streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+				{
+					ReplicaId:       1,
+					AccessMode:      streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					AssignmentEpoch: 5,
+					ActiveNode:      &streamingpb.StreamingNodeInfo{ServerId: 2},
+					TargetNode:      &streamingpb.StreamingNodeInfo{ServerId: 3},
+					State:           streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING,
+				},
+			},
+		},
+	}, nil)
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	var saved *streamingpb.PChannelMeta
+	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, metas []*streamingpb.PChannelMeta) error {
+			require.Len(t, metas, 1)
+			saved = proto.Clone(metas[0]).(*streamingpb.PChannelMeta)
+			return nil
+		})
+
+	manager, err := RecoverChannelManager(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, manager.MarkWALReplicasAsUnavailable(ctx, []ChannelID{replicaID}, 5))
+
+	require.NotNil(t, saved)
+	replica := saved.GetReplicas()[1]
+	assert.Equal(t, streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING, replica.GetState())
+	assert.Nil(t, replica.GetActiveNode())
+	assert.Equal(t, int64(3), replica.GetTargetNode().GetServerId())
+	assert.Equal(t, int64(5), replica.GetAssignmentEpoch())
+
+	assignment, err := manager.GetLatestChannelAssignment()
+	require.NoError(t, err)
+	for _, relation := range assignment.WALReplicaRelations {
+		assert.NotEqual(t, replicaID, relation.Replica.ChannelID)
+	}
+}
+
+func TestChannelManagerRejectsInvalidReadOnlyWALReplicaOperations(t *testing.T) {
+	ResetStaticPChannelStatsManager()
+	RecoverPChannelStatsManager([]string{})
+
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	resource.InitForTest(resource.OptStreamingCatalog(catalog), resource.OptSession(s))
+
+	ctx := context.Background()
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{
+		Pchannel: "test",
+	}, nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{
+		Version: 1,
+	}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{
+		{
+			Channel: &streamingpb.PChannelInfo{Name: "test-channel", Term: 1},
+			Node:    &streamingpb.StreamingNodeInfo{ServerId: 1},
+			State:   streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+	}, nil)
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	manager, err := RecoverChannelManager(ctx)
+	require.NoError(t, err)
+
+	_, err = manager.CreateReadOnlyWALReplica(ctx, "missing-channel", "rg-a")
+	assert.ErrorIs(t, err, ErrChannelNotExist)
+
+	_, err = manager.AssignWALReplicas(ctx, map[ChannelID]types.StreamingNodeInfo{
+		{Name: "test-channel", WALReplicaID: 100}: {ServerID: 2},
+	})
+	assert.ErrorIs(t, err, ErrWALReplicaNotExist)
+
+	err = manager.MarkWALReplicasAsDropping(ctx, []ChannelID{{Name: "test-channel"}})
+	assert.ErrorIs(t, err, ErrWALReplicaOperationInvalid)
+}
+
+func TestChannelManagerRejectsOrdinaryAssignForPrimaryWALReplica(t *testing.T) {
+	ResetStaticPChannelStatsManager()
+	RecoverPChannelStatsManager([]string{})
+
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	resource.InitForTest(resource.OptStreamingCatalog(catalog), resource.OptSession(s))
+
+	ctx := context.Background()
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{
+		Pchannel: "test",
+	}, nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{
+		Version: 1,
+	}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{
+		{
+			Channel: &streamingpb.PChannelInfo{
+				Name:       "test-channel",
+				Term:       7,
+				AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+			},
+			Node:  &streamingpb.StreamingNodeInfo{ServerId: 1},
+			State: streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+		},
+	}, nil)
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	manager, err := RecoverChannelManager(ctx)
+	require.NoError(t, err)
+
+	_, err = manager.AssignWALReplicas(ctx, map[ChannelID]types.StreamingNodeInfo{
+		{Name: "test-channel"}: {ServerID: 2},
+	})
+	assert.ErrorIs(t, err, ErrWALReplicaOperationInvalid)
+
+	view := manager.CurrentPChannelsView()
+	pchannel := view.Channels[ChannelID{Name: "test-channel"}]
+	assert.Equal(t, int64(7), pchannel.CurrentTerm())
+	assert.Equal(t, int64(1), pchannel.CurrentServerID())
+}
+
+func TestChannelManagerSwitchWALPrimaryReplica(t *testing.T) {
+	ResetStaticPChannelStatsManager()
+	RecoverPChannelStatsManager([]string{})
+
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	resource.InitForTest(resource.OptStreamingCatalog(catalog), resource.OptSession(s))
+
+	ctx := context.Background()
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{
+		Pchannel: "test",
+	}, nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{
+		Version: 1,
+	}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{
+		{
+			Channel:          &streamingpb.PChannelInfo{Name: "test-channel", Term: 7},
+			PrimaryReplicaId: 0,
+			NextReplicaId:    2,
+			Replicas: []*streamingpb.WALReplicaAssignment{
+				{
+					ReplicaId:  0,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+					ActiveNode: &streamingpb.StreamingNodeInfo{ServerId: 1},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+				{
+					ReplicaId:  1,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					ActiveNode: &streamingpb.StreamingNodeInfo{ServerId: 2},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+			},
+		},
+	}, nil)
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	var saved *streamingpb.PChannelMeta
+	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, metas []*streamingpb.PChannelMeta) error {
+			require.Len(t, metas, 1)
+			saved = proto.Clone(metas[0]).(*streamingpb.PChannelMeta)
+			return nil
+		})
+
+	manager, err := RecoverChannelManager(ctx)
+	require.NoError(t, err)
+
+	err = manager.SwitchWALPrimaryReplica(ctx, "test-channel", 1)
+	require.NoError(t, err)
+	require.NotNil(t, saved)
+	assert.Equal(t, int64(8), saved.GetChannel().GetTerm())
+	assert.Equal(t, int64(1), saved.GetPrimaryReplicaId())
+	assert.Equal(t, streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING, saved.GetState())
+	assert.Equal(t, int64(2), saved.GetNode().GetServerId())
+	assert.Equal(t, streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY, saved.GetReplicas()[0].GetAccessMode())
+	assert.Equal(t, streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE, saved.GetReplicas()[1].GetAccessMode())
+	assert.Equal(t, streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING, saved.GetReplicas()[1].GetState())
+
+	view := manager.CurrentPChannelsView()
+	pchannel := view.Channels[ChannelID{Name: "test-channel"}]
+	assert.Equal(t, int64(8), pchannel.CurrentTerm())
+	assert.Equal(t, int64(1), pchannel.PrimaryReplicaID())
+	assert.Equal(t, int64(2), pchannel.CurrentServerID())
+
+	locatedNodeID, ok := manager.GetLatestWALLocated(ctx, "test-channel")
+	assert.False(t, ok)
+	assert.Zero(t, locatedNodeID)
+}
+
+func TestChannelManagerSwitchWALPrimaryReplicaNoopsWhenTargetAlreadyPrimary(t *testing.T) {
+	ResetStaticPChannelStatsManager()
+	RecoverPChannelStatsManager([]string{})
+
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	resource.InitForTest(resource.OptStreamingCatalog(catalog), resource.OptSession(s))
+
+	ctx := context.Background()
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{
+		Pchannel: "test",
+	}, nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{
+		Version: 1,
+	}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{
+		{
+			Channel: &streamingpb.PChannelInfo{
+				Name:       "test-channel",
+				Term:       8,
+				AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+			},
+			Node:             &streamingpb.StreamingNodeInfo{ServerId: 2},
+			State:            streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING,
+			PrimaryReplicaId: 1,
+			NextReplicaId:    2,
+			Replicas: []*streamingpb.WALReplicaAssignment{
+				{
+					ReplicaId:  0,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					ActiveNode: &streamingpb.StreamingNodeInfo{ServerId: 1},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+				{
+					ReplicaId:  1,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+					ActiveNode: &streamingpb.StreamingNodeInfo{ServerId: 2},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING,
+				},
+			},
+		},
+	}, nil)
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+
+	manager, err := RecoverChannelManager(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, manager.SwitchWALPrimaryReplica(ctx, "test-channel", 1))
+	view := manager.CurrentPChannelsView()
+	pchannel := view.Channels[ChannelID{Name: "test-channel"}]
+	assert.Equal(t, int64(8), pchannel.CurrentTerm())
+	assert.Equal(t, int64(1), pchannel.PrimaryReplicaID())
+}
+
+func TestChannelManagerReopensUnavailablePrimaryWALReplica(t *testing.T) {
+	ResetStaticPChannelStatsManager()
+	RecoverPChannelStatsManager([]string{})
+
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	resource.InitForTest(resource.OptStreamingCatalog(catalog), resource.OptSession(s))
+
+	ctx := context.Background()
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{
+		Pchannel: "test",
+	}, nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{
+		Version: 1,
+	}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{
+		{
+			Channel: &streamingpb.PChannelInfo{
+				Name:       "test-channel",
+				Term:       8,
+				AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+			},
+			Node:             &streamingpb.StreamingNodeInfo{ServerId: 2},
+			State:            streamingpb.PChannelMetaState_PCHANNEL_META_STATE_UNAVAILABLE,
+			PrimaryReplicaId: 1,
+			NextReplicaId:    2,
+			Replicas: []*streamingpb.WALReplicaAssignment{
+				{
+					ReplicaId:  0,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					ActiveNode: &streamingpb.StreamingNodeInfo{ServerId: 1},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+				{
+					ReplicaId:       1,
+					AccessMode:      streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+					AssignmentEpoch: 4,
+					ActiveNode:      &streamingpb.StreamingNodeInfo{ServerId: 2},
+					State:           streamingpb.PChannelMetaState_PCHANNEL_META_STATE_UNAVAILABLE,
+				},
+			},
+		},
+	}, nil)
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	var saved *streamingpb.PChannelMeta
+	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, metas []*streamingpb.PChannelMeta) error {
+			require.Len(t, metas, 1)
+			saved = proto.Clone(metas[0]).(*streamingpb.PChannelMeta)
+			return nil
+		})
+
+	manager, err := RecoverChannelManager(ctx)
+	require.NoError(t, err)
+
+	modified, err := manager.AssignPChannels(ctx, map[ChannelID]types.PChannelInfoAssigned{
+		{Name: "test-channel"}: {
+			Channel: types.PChannelInfo{
+				Name:       "test-channel",
+				Term:       8,
+				AccessMode: types.AccessModeRW,
+			},
+			Node: types.StreamingNodeInfo{ServerID: 3},
+		},
+	})
+
+	require.NoError(t, err)
+	require.Len(t, modified, 1)
+	require.NotNil(t, saved)
+	assert.Equal(t, int64(9), saved.GetChannel().GetTerm())
+	assert.Equal(t, int64(1), saved.GetPrimaryReplicaId())
+	assert.Equal(t, streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING, saved.GetState())
+	assert.Equal(t, int64(3), saved.GetNode().GetServerId())
+	primary := saved.GetReplicas()[1]
+	assert.Equal(t, int64(1), primary.GetReplicaId())
+	assert.Equal(t, streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE, primary.GetAccessMode())
+	assert.Equal(t, int64(5), primary.GetAssignmentEpoch())
+	assert.Equal(t, int64(2), primary.GetActiveNode().GetServerId())
+	assert.Equal(t, int64(3), primary.GetTargetNode().GetServerId())
+	assert.Equal(t, streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING, primary.GetState())
+}
+
+func TestChannelManagerRejectsPrimarySwitchUntilTargetHasPrimaryServingShards(t *testing.T) {
+	ResetStaticPChannelStatsManager()
+	RecoverPChannelStatsManager([]string{})
+
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	resource.InitForTest(resource.OptStreamingCatalog(catalog), resource.OptSession(s))
+
+	ctx := context.Background()
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{
+		Pchannel: "test",
+	}, nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{
+		Version: 1,
+	}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{
+		{
+			Channel:          &streamingpb.PChannelInfo{Name: "test-channel", Term: 7},
+			PrimaryReplicaId: 0,
+			NextReplicaId:    2,
+			Replicas: []*streamingpb.WALReplicaAssignment{
+				{
+					ReplicaId:  0,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+					ActiveNode: &streamingpb.StreamingNodeInfo{ServerId: 1},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+				{
+					ReplicaId:  1,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					ActiveNode: &streamingpb.StreamingNodeInfo{ServerId: 2},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+			},
+		},
+	}, nil)
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	manager, err := RecoverChannelManager(ctx)
+	require.NoError(t, err)
+	manager.SetShardAssignmentProvider(staticShardAssignmentProvider{
+		assignments: map[string][]types.ShardAssignmentEntry{
+			"test-channel": {
+				{CollectionID: 10, ShardIndex: 0, ReplicaID: 100, WALReplicaID: 0},
+			},
+		},
+	})
+
+	err = manager.SwitchWALPrimaryReplica(ctx, "test-channel", 1)
+
+	assert.ErrorIs(t, err, ErrWALReplicaOperationInvalid)
+	view := manager.CurrentPChannelsView()
+	pchannel := view.Channels[ChannelID{Name: "test-channel"}]
+	assert.Equal(t, int64(7), pchannel.CurrentTerm())
+	assert.Equal(t, int64(0), pchannel.PrimaryReplicaID())
+}
+
+func TestChannelManagerSwitchWALPrimaryReplicaWhenTargetHasPrimaryServingShards(t *testing.T) {
+	ResetStaticPChannelStatsManager()
+	RecoverPChannelStatsManager([]string{})
+
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	resource.InitForTest(resource.OptStreamingCatalog(catalog), resource.OptSession(s))
+
+	ctx := context.Background()
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{
+		Pchannel: "test",
+	}, nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{
+		Version: 1,
+	}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{
+		{
+			Channel:          &streamingpb.PChannelInfo{Name: "test-channel", Term: 7},
+			PrimaryReplicaId: 0,
+			NextReplicaId:    2,
+			Replicas: []*streamingpb.WALReplicaAssignment{
+				{
+					ReplicaId:  0,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+					ActiveNode: &streamingpb.StreamingNodeInfo{ServerId: 1},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+				{
+					ReplicaId:  1,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					ActiveNode: &streamingpb.StreamingNodeInfo{ServerId: 2},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+			},
+		},
+	}, nil)
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	var saved *streamingpb.PChannelMeta
+	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, metas []*streamingpb.PChannelMeta) error {
+			require.Len(t, metas, 1)
+			saved = proto.Clone(metas[0]).(*streamingpb.PChannelMeta)
+			return nil
+		})
+
+	manager, err := RecoverChannelManager(ctx)
+	require.NoError(t, err)
+	manager.SetShardAssignmentProvider(staticShardAssignmentProvider{
+		assignments: map[string][]types.ShardAssignmentEntry{
+			"test-channel": {
+				{CollectionID: 10, ShardIndex: 0, ReplicaID: 100, WALReplicaID: 0},
+				{CollectionID: 10, ShardIndex: 0, ReplicaID: 101, WALReplicaID: 1},
+			},
+		},
+	})
+
+	err = manager.SwitchWALPrimaryReplica(ctx, "test-channel", 1)
+
+	require.NoError(t, err)
+	require.NotNil(t, saved)
+	assert.Equal(t, int64(8), saved.GetChannel().GetTerm())
+	assert.Equal(t, int64(1), saved.GetPrimaryReplicaId())
+}
+
+func TestChannelManagerDoesNotPublishSwitchingPrimaryInLegacyRelations(t *testing.T) {
+	ResetStaticPChannelStatsManager()
+	RecoverPChannelStatsManager([]string{})
+
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	resource.InitForTest(resource.OptStreamingCatalog(catalog), resource.OptSession(s))
+
+	ctx := context.Background()
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{
+		Pchannel: "test",
+	}, nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{
+		Version: 1,
+	}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{
+		{
+			Channel: &streamingpb.PChannelInfo{
+				Name:       "test-channel",
+				Term:       7,
+				AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+			},
+			Node:             &streamingpb.StreamingNodeInfo{ServerId: 1},
+			State:            streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+			PrimaryReplicaId: 0,
+			NextReplicaId:    2,
+			Replicas: []*streamingpb.WALReplicaAssignment{
+				{
+					ReplicaId:       0,
+					AccessMode:      streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+					AssignmentEpoch: 3,
+					ActiveNode:      &streamingpb.StreamingNodeInfo{ServerId: 1},
+					State:           streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+				{
+					ReplicaId:       1,
+					AccessMode:      streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					AssignmentEpoch: 7,
+					ActiveNode:      &streamingpb.StreamingNodeInfo{ServerId: 2},
+					State:           streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+			},
+		},
+	}, nil)
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).Return(nil)
+
+	manager, err := RecoverChannelManager(ctx)
+	require.NoError(t, err)
+	require.NoError(t, manager.SwitchWALPrimaryReplica(ctx, "test-channel", 1))
+
+	assignment, err := manager.GetLatestChannelAssignment()
+	require.NoError(t, err)
+	assert.Empty(t, assignment.Relations, "legacy pchannel assignment must not expose the new primary before RW open is done")
+	assert.NotContains(t, assignment.WALReplicaRelations, types.WALReplicaInfoAssigned{
+		Replica: types.WALReplicaInfo{
+			ChannelID:         types.ChannelID{Name: "test-channel", WALReplicaID: 1},
+			AccessMode:        types.AccessModeRW,
+			PChannelWriteTerm: 8,
+			AssignmentEpoch:   8,
+			State:             streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING,
+		},
+		Node: types.StreamingNodeInfo{ServerID: 2},
+	})
+}
+
+func TestChannelManagerAllowsAssignDoneWithQueryViewDependency(t *testing.T) {
+	ResetStaticPChannelStatsManager()
+	RecoverPChannelStatsManager([]string{})
+
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	resource.InitForTest(resource.OptStreamingCatalog(catalog), resource.OptSession(s))
+
+	ctx := context.Background()
+	replicaID := ChannelID{Name: "test-channel", WALReplicaID: 1}
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{
+		Pchannel: "test",
+	}, nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{
+		Version: 1,
+	}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{
+		{
+			Channel:          &streamingpb.PChannelInfo{Name: "test-channel", Term: 7},
+			PrimaryReplicaId: 0,
+			NextReplicaId:    2,
+			Replicas: []*streamingpb.WALReplicaAssignment{
+				{
+					ReplicaId:  0,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+					ActiveNode: &streamingpb.StreamingNodeInfo{ServerId: 1},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+				{
+					ReplicaId:  1,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					ActiveNode: &streamingpb.StreamingNodeInfo{ServerId: 2},
+					TargetNode: &streamingpb.StreamingNodeInfo{ServerId: 3},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING,
+				},
+			},
+		},
+	}, nil)
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).Return(nil)
+
+	manager, err := RecoverChannelManager(ctx)
+	require.NoError(t, err)
+	manager.SetWALReplicaDependencyProvider(staticWALReplicaDependencyProvider{
+		dependencies: map[ChannelID]bool{replicaID: true},
+	})
+
+	err = manager.AssignWALReplicasDone(ctx, map[ChannelID]int64{replicaID: 0})
+	require.NoError(t, err)
+
+	view := manager.CurrentPChannelsView()
+	replica, ok := view.Channels[ChannelID{Name: "test-channel"}].WALReplica(1)
+	require.True(t, ok)
+	assert.Equal(t, streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED, replica.GetState())
+	assert.Equal(t, int64(3), replica.GetActiveNode().GetServerId())
+	assert.Nil(t, replica.GetTargetNode())
+}
+
+func TestChannelManagerIgnoresStaleWALReplicaAssignDone(t *testing.T) {
+	ResetStaticPChannelStatsManager()
+	RecoverPChannelStatsManager([]string{})
+
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	resource.InitForTest(resource.OptStreamingCatalog(catalog), resource.OptSession(s))
+
+	ctx := context.Background()
+	replicaID := ChannelID{Name: "test-channel", WALReplicaID: 1}
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{
+		Pchannel: "test",
+	}, nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{
+		Version: 1,
+	}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{
+		{
+			Channel:          &streamingpb.PChannelInfo{Name: "test-channel", Term: 7},
+			PrimaryReplicaId: 0,
+			NextReplicaId:    2,
+			Replicas: []*streamingpb.WALReplicaAssignment{
+				{
+					ReplicaId:  0,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+					ActiveNode: &streamingpb.StreamingNodeInfo{ServerId: 1},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+				{
+					ReplicaId:       1,
+					AccessMode:      streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					AssignmentEpoch: 1,
+					ActiveNode:      &streamingpb.StreamingNodeInfo{ServerId: 2},
+					TargetNode:      &streamingpb.StreamingNodeInfo{ServerId: 3},
+					State:           streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING,
+				},
+			},
+		},
+	}, nil)
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	saveCount := 0
+	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, metas []*streamingpb.PChannelMeta) error {
+			saveCount++
+			return nil
+		}).Once()
+
+	manager, err := RecoverChannelManager(ctx)
+	require.NoError(t, err)
+
+	_, err = manager.AssignWALReplicas(ctx, map[ChannelID]types.StreamingNodeInfo{
+		replicaID: {ServerID: 4},
+	})
+	require.NoError(t, err)
+
+	err = manager.AssignWALReplicasDone(ctx, map[ChannelID]int64{replicaID: 1})
+	require.NoError(t, err)
+
+	view := manager.CurrentPChannelsView()
+	replica, ok := view.Channels[ChannelID{Name: "test-channel"}].WALReplica(1)
+	require.True(t, ok)
+	assert.Equal(t, streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING, replica.GetState())
+	assert.Equal(t, int64(2), replica.GetAssignmentEpoch())
+	assert.Equal(t, int64(4), replica.GetTargetNode().GetServerId())
+	assert.Equal(t, 1, saveCount)
+}
+
+func TestChannelManagerRejectsDroppingWALReplicaWithQueryViewDependency(t *testing.T) {
+	ResetStaticPChannelStatsManager()
+	RecoverPChannelStatsManager([]string{})
+
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	resource.InitForTest(resource.OptStreamingCatalog(catalog), resource.OptSession(s))
+
+	ctx := context.Background()
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{
+		Pchannel: "test",
+	}, nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{
+		Version: 1,
+	}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{
+		{
+			Channel: &streamingpb.PChannelInfo{
+				Name:       "test-channel",
+				Term:       7,
+				AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+			},
+			Node:             &streamingpb.StreamingNodeInfo{ServerId: 1},
+			State:            streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+			PrimaryReplicaId: 0,
+			NextReplicaId:    2,
+			Replicas: []*streamingpb.WALReplicaAssignment{
+				{
+					ReplicaId:  0,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+					ActiveNode: &streamingpb.StreamingNodeInfo{ServerId: 1},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+				{
+					ReplicaId:     1,
+					AccessMode:    streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					ResourceGroup: "rg-a",
+					ActiveNode:    &streamingpb.StreamingNodeInfo{ServerId: 2},
+					State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+			},
+		},
+	}, nil)
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).Return(nil).Maybe()
+
+	manager, err := RecoverChannelManager(ctx)
+	require.NoError(t, err)
+	replicaID := ChannelID{Name: "test-channel", WALReplicaID: 1}
+	manager.SetWALReplicaDependencyProvider(staticWALReplicaDependencyProvider{
+		dependencies: map[ChannelID]bool{replicaID: true},
+	})
+
+	err = manager.MarkWALReplicasAsDropping(ctx, []ChannelID{replicaID})
+	assert.ErrorIs(t, err, ErrWALReplicaOperationInvalid)
+
+	view := manager.CurrentPChannelsView()
+	replica, ok := view.Channels[ChannelID{Name: "test-channel"}].WALReplica(1)
+	require.True(t, ok)
+	assert.Equal(t, streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED, replica.GetState())
+}
+
+func TestChannelManagerRejectsRemovingDroppingWALReplicaWithQueryViewDependency(t *testing.T) {
+	ResetStaticPChannelStatsManager()
+	RecoverPChannelStatsManager([]string{})
+
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	resource.InitForTest(resource.OptStreamingCatalog(catalog), resource.OptSession(s))
+
+	ctx := context.Background()
+	replicaID := ChannelID{Name: "test-channel", WALReplicaID: 1}
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{
+		Pchannel: "test",
+	}, nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{
+		Version: 1,
+	}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{
+		{
+			Channel: &streamingpb.PChannelInfo{
+				Name:       "test-channel",
+				Term:       7,
+				AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+			},
+			Node:             &streamingpb.StreamingNodeInfo{ServerId: 1},
+			State:            streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+			PrimaryReplicaId: 0,
+			NextReplicaId:    2,
+			Replicas: []*streamingpb.WALReplicaAssignment{
+				{
+					ReplicaId:  0,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+					ActiveNode: &streamingpb.StreamingNodeInfo{ServerId: 1},
+					State:      streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+				{
+					ReplicaId:     1,
+					AccessMode:    streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					ResourceGroup: "rg-a",
+					ActiveNode:    &streamingpb.StreamingNodeInfo{ServerId: 2},
+					State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+				},
+			},
+		},
+	}, nil)
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).Return(nil).Once()
+
+	manager, err := RecoverChannelManager(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, manager.MarkWALReplicasAsDropping(ctx, []ChannelID{replicaID}))
+	manager.SetWALReplicaDependencyProvider(staticWALReplicaDependencyProvider{
+		dependencies: map[ChannelID]bool{replicaID: true},
+	})
+
+	err = manager.RemoveWALReplicas(ctx, []ChannelID{replicaID})
+	assert.ErrorIs(t, err, ErrWALReplicaOperationInvalid)
+
+	view := manager.CurrentPChannelsView()
+	replica, ok := view.Channels[ChannelID{Name: "test-channel"}].WALReplica(1)
+	require.True(t, ok)
+	assert.Equal(t, streamingpb.PChannelMetaState_PCHANNEL_META_STATE_DROPPING, replica.GetState())
+}
+
 type staticShardAssignmentProvider struct {
 	assignments map[string][]types.ShardAssignmentEntry
 }
 
 func (p staticShardAssignmentProvider) ShardAssignmentsByPChannel() map[string][]types.ShardAssignmentEntry {
 	return p.assignments
+}
+
+type staticWALReplicaDependencyProvider struct {
+	dependencies map[ChannelID]bool
+}
+
+func (p staticWALReplicaDependencyProvider) HasWALReplicaDependency(replicaID ChannelID) bool {
+	return p.dependencies[replicaID]
 }
 
 func TestChannelManager_AddPChannels(t *testing.T) {

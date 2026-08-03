@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	streamingstatus "github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
@@ -241,6 +242,81 @@ func TestResumable_ResponseCallbackCanEnqueueFollowUpForSameView(t *testing.T) {
 	require.True(t, ok, "follow-up sync enqueued from callback should be sent")
 	require.Len(t, req.GetViews().QueryViews, 1)
 	assert.Equal(t, viewpb.QueryViewState(qviews.QueryViewStateDropped), req.GetViews().QueryViews[0].GetMeta().GetState())
+}
+
+func TestResumable_StreamingNodeWrongReplicaCompletesTeardown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	node := qviews.NewStreamingNodeFromVChannelAndWALReplica(testVChannel, 3)
+	client := newMockViewSyncClient()
+	streamReady := make(chan *mockStream, 5)
+	client.openStreamFn = func(ctx context.Context, _ qviews.WorkNode) (viewpb.ViewSyncService_SyncQueryViewClient, error) {
+		s := newMockStream(ctx)
+		streamReady <- s
+		return s, nil
+	}
+
+	rs := newResumableSyncer(ctx, node, client)
+	defer rs.Close()
+
+	stream := waitStream(t, streamReady)
+
+	var droppedReported atomic.Bool
+	down := newTestSNViewWithStateAndWALReplica(1, viewpb.QueryViewState_QueryViewStateDown, 3, func(resp qviews.QueryViewAtWorkNode) bool {
+		droppedReported.Store(resp.State() == qviews.QueryViewStateDropped)
+		return true
+	})
+	preparing := newTestSNViewWithStateAndWALReplica(2, viewpb.QueryViewState_QueryViewStatePreparing, 3, func(qviews.QueryViewAtWorkNode) bool {
+		t.Fatal("preparing view should not be completed on wrong streaming node")
+		return true
+	})
+
+	rs.Sync([]SyncView{down, preparing})
+	_, ok := stream.waitSend(time.Second)
+	require.True(t, ok)
+
+	stream.setRecvErr(streamingstatus.NewChannelNotExist(node.PChannel))
+
+	require.Eventually(t, droppedReported.Load, time.Second, 10*time.Millisecond)
+	protos := rs.pending.CollectProtos()
+	require.Len(t, protos, 1)
+	assert.Equal(t, preparing.View.QueryViewKey(), qviews.NewQueryViewAtWorkNodeFromProto(protos[0]).QueryViewKey())
+}
+
+func TestResumable_StreamingNodeWrongReplicaGRPCErrorCompletesTeardown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	node := qviews.NewStreamingNodeFromVChannelAndWALReplica(testVChannel, 3)
+	client := newMockViewSyncClient()
+	streamReady := make(chan *mockStream, 5)
+	client.openStreamFn = func(ctx context.Context, _ qviews.WorkNode) (viewpb.ViewSyncService_SyncQueryViewClient, error) {
+		s := newMockStream(ctx)
+		streamReady <- s
+		return s, nil
+	}
+
+	rs := newResumableSyncer(ctx, node, client)
+	defer rs.Close()
+
+	stream := waitStream(t, streamReady)
+
+	var droppedReported atomic.Bool
+	down := newTestSNViewWithStateAndWALReplica(1, viewpb.QueryViewState_QueryViewStateDown, 3, func(resp qviews.QueryViewAtWorkNode) bool {
+		droppedReported.Store(resp.State() == qviews.QueryViewStateDropped)
+		return true
+	})
+	rs.Sync([]SyncView{down})
+	_, ok := stream.waitSend(time.Second)
+	require.True(t, ok)
+
+	stream.setRecvErr(streamingstatus.NewGRPCStatusFromStreamingError(
+		streamingstatus.NewChannelNotExist(node.PChannel),
+	).Err())
+
+	require.Eventually(t, droppedReported.Load, time.Second, 10*time.Millisecond)
+	assert.Nil(t, rs.pending.CollectProtos())
 }
 
 // TestResumable_OpenStreamError verifies the syncer retries with backoff on stream open failure.

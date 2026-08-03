@@ -15,7 +15,7 @@ import (
 type QueryViewSyncClient interface {
 	// SyncQueryView opens a pchannel-scoped QueryView sync stream to the StreamingNode
 	// that owns the current pchannel assignment.
-	SyncQueryView(ctx context.Context, pchannel string) (viewpb.ViewSyncService_SyncQueryViewClient, error)
+	SyncQueryView(ctx context.Context, pchannel string, walReplicaID int64) (viewpb.ViewSyncService_SyncQueryViewClient, error)
 }
 
 type queryViewSyncClient struct {
@@ -34,14 +34,15 @@ func (hc *handlerClientImpl) QueryViewSyncClient() QueryViewSyncClient {
 	return hc.queryViewSyncClient
 }
 
-func (c *queryViewSyncClient) SyncQueryView(ctx context.Context, pchannel string) (viewpb.ViewSyncService_SyncQueryViewClient, error) {
-	logger := mlog.With(mlog.FieldPChannel(pchannel), mlog.String("handler", "ViewSyncService.SyncQueryView"))
-	result, err := c.owner.createHandlerAfterStreamingNodeReady(ctx, logger, pchannel, func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
+func (c *queryViewSyncClient) SyncQueryView(ctx context.Context, pchannel string, walReplicaID int64) (viewpb.ViewSyncService_SyncQueryViewClient, error) {
+	channelID := types.ChannelID{Name: pchannel, WALReplicaID: walReplicaID}
+	logger := mlog.With(mlog.FieldPChannel(pchannel), mlog.Int64("walReplicaID", walReplicaID), mlog.String("handler", "ViewSyncService.SyncQueryView"))
+	result, err := c.owner.createHandlerAfterWALReplicaReady(ctx, logger, channelID, func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
 		client, err := c.viewSyncService.GetService(ctx)
 		if err != nil {
 			return nil, err
 		}
-		stream, err := client.SyncQueryView(worknodehandler.EncodeQueryViewPChannelToOutgoingContext(ctx, assign.Channel))
+		stream, err := client.SyncQueryView(worknodehandler.EncodeQueryViewWALReplicaToOutgoingContext(ctx, assign.Channel, walReplicaID))
 		if err != nil {
 			return nil, streamingstatus.ConvertStreamingError("ViewSyncService.SyncQueryView", err)
 		}

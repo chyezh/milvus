@@ -23,9 +23,11 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/consumer"
 	"github.com/milvus-io/milvus/internal/streamingnode/client/handler/producer"
 	handlerregistry "github.com/milvus-io/milvus/internal/streamingnode/client/handler/registry"
+	transformlogclient "github.com/milvus-io/milvus/internal/streamingnode/client/handler/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/service/contextutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
+	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/mocks/proto/mock_streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/mocks/streaming/util/mock_types"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
@@ -39,11 +41,30 @@ import (
 type shutdownWALManager struct{}
 
 func (m shutdownWALManager) GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error) {
+	return m.GetAvailableWALReplica(channel, 0)
+}
+
+func (m shutdownWALManager) GetAvailableWALReplica(types.PChannelInfo, int64) (wal.WAL, error) {
 	return nil, status.NewOnShutdownError("wal manager is closed")
 }
 
 func (m shutdownWALManager) Metrics() (*types.StreamingNodeMetrics, error) {
 	return nil, status.NewOnShutdownError("wal manager is closed")
+}
+
+type handlerFakeWALReplicaRebalanceTrigger struct {
+	reportedPChannelAssignment *types.PChannelInfo
+	reportedWALAssignment      *types.PChannelInfoAssigned
+}
+
+func (t *handlerFakeWALReplicaRebalanceTrigger) ReportAssignmentError(ctx context.Context, pchannel types.PChannelInfo, err error) error {
+	t.reportedPChannelAssignment = &pchannel
+	return nil
+}
+
+func (t *handlerFakeWALReplicaRebalanceTrigger) ReportWALReplicaAssignmentError(ctx context.Context, assignment types.PChannelInfoAssigned, err error) error {
+	t.reportedWALAssignment = &assignment
+	return nil
 }
 
 func TestHandlerClient(t *testing.T) {
@@ -263,6 +284,187 @@ func TestHandlerClientReadOnlyAssignmentWaitsForNextAssignment(t *testing.T) {
 	}
 }
 
+func TestHandlerClientCreateProducerUsesLocalWALReplica(t *testing.T) {
+	paramtable.Init()
+	paramtable.SetLocalComponentEnabled(typeutil.StreamingNodeRole)
+	handlerregistry.ResetRegisterLocalWALManager()
+	t.Cleanup(resetLocalWALManagerToNoStreamingNodeDeployed)
+
+	assignment := &types.PChannelInfoAssigned{
+		Channel:      types.PChannelInfo{Name: "pchannel", Term: 1, AccessMode: types.AccessModeRW},
+		WALReplicaID: 2,
+		Node:         types.StreamingNodeInfo{ServerID: 1, Address: "localhost"},
+	}
+	localWAL := mock_wal.NewMockWAL(t)
+	localWAL.EXPECT().Register(mock.Anything).Return()
+	handlerregistry.RegisterLocalWALManager(handlerFakeWALManager{
+		wal:          localWAL,
+		walReplicaID: 2,
+	})
+
+	w := mock_assignment.NewMockWatcher(t)
+	w.EXPECT().Get(mock.Anything, "pchannel").Return(assignment)
+	service := mock_lazygrpc.NewMockService[streamingpb.StreamingNodeHandlerServiceClient](t)
+
+	handler := &handlerClientImpl{
+		lifetime: typeutil.NewLifetime(),
+		service:  service,
+		watcher:  w,
+	}
+
+	producer, err := handler.CreateProducer(context.Background(), &ProducerOptions{PChannel: "pchannel"})
+	assert.NoError(t, err)
+	assert.NotNil(t, producer)
+}
+
+func TestHandlerClientGetLatestMVCCTimestampIfLocalUsesWALReplica(t *testing.T) {
+	paramtable.Init()
+	paramtable.SetLocalComponentEnabled(typeutil.StreamingNodeRole)
+	handlerregistry.ResetRegisterLocalWALManager()
+	t.Cleanup(resetLocalWALManagerToNoStreamingNodeDeployed)
+
+	assignment := &types.PChannelInfoAssigned{
+		Channel:      types.PChannelInfo{Name: "pchannel", Term: 1, AccessMode: types.AccessModeRW},
+		WALReplicaID: 2,
+		Node:         types.StreamingNodeInfo{ServerID: 1, Address: "localhost"},
+	}
+	localWAL := mock_wal.NewMockWAL(t)
+	localWAL.EXPECT().Channel().Return(assignment.Channel)
+	localWAL.EXPECT().GetLatestMVCCTimestamp(mock.Anything, "pchannel_100v0").Return(uint64(100), nil)
+	handlerregistry.RegisterLocalWALManager(handlerFakeWALManager{
+		wal:          localWAL,
+		walReplicaID: 2,
+	})
+
+	w := mock_assignment.NewMockWatcher(t)
+	w.EXPECT().Get(mock.Anything, "pchannel").Return(assignment)
+
+	handler := &handlerClientImpl{
+		lifetime: typeutil.NewLifetime(),
+		watcher:  w,
+	}
+
+	ts, err := handler.GetLatestMVCCTimestampIfLocal(context.Background(), "pchannel_100v0")
+	assert.NoError(t, err)
+	assert.Equal(t, uint64(100), ts)
+}
+
+func TestHandlerClientGetReplicateCheckpointUsesLocalWALReplica(t *testing.T) {
+	paramtable.Init()
+	paramtable.SetLocalComponentEnabled(typeutil.StreamingNodeRole)
+	handlerregistry.ResetRegisterLocalWALManager()
+	t.Cleanup(resetLocalWALManagerToNoStreamingNodeDeployed)
+
+	assignment := &types.PChannelInfoAssigned{
+		Channel:      types.PChannelInfo{Name: "pchannel", Term: 1, AccessMode: types.AccessModeRW},
+		WALReplicaID: 2,
+		Node:         types.StreamingNodeInfo{ServerID: 1, Address: "localhost"},
+	}
+	checkpoint := &wal.ReplicateCheckpoint{
+		ClusterID: "cluster",
+		PChannel:  "pchannel",
+		TimeTick:  100,
+	}
+	localWAL := mock_wal.NewMockWAL(t)
+	localWAL.EXPECT().GetReplicateCheckpoint().Return(checkpoint, nil)
+	handlerregistry.RegisterLocalWALManager(handlerFakeWALManager{
+		wal:          localWAL,
+		walReplicaID: 2,
+	})
+
+	w := mock_assignment.NewMockWatcher(t)
+	w.EXPECT().Get(mock.Anything, "pchannel").Return(assignment)
+	service := mock_lazygrpc.NewMockService[streamingpb.StreamingNodeHandlerServiceClient](t)
+
+	handler := &handlerClientImpl{
+		lifetime: typeutil.NewLifetime(),
+		service:  service,
+		watcher:  w,
+	}
+
+	actual, err := handler.GetReplicateCheckpoint(context.Background(), "pchannel")
+	assert.NoError(t, err)
+	assert.Same(t, checkpoint, actual)
+}
+
+func TestHandlerClientGetReplicateCheckpointSendsWALReplicaIDInRequest(t *testing.T) {
+	assignment := &types.PChannelInfoAssigned{
+		Channel:      types.PChannelInfo{Name: "pchannel", Term: 1, AccessMode: types.AccessModeRW},
+		WALReplicaID: 2,
+		Node:         types.StreamingNodeInfo{ServerID: 1, Address: "localhost"},
+	}
+
+	service := mock_lazygrpc.NewMockService[streamingpb.StreamingNodeHandlerServiceClient](t)
+	handlerServiceClient := mock_streamingpb.NewMockStreamingNodeHandlerServiceClient(t)
+	handlerServiceClient.EXPECT().GetReplicateCheckpoint(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, req *streamingpb.GetReplicateCheckpointRequest, opts ...grpc.CallOption) (*streamingpb.GetReplicateCheckpointResponse, error) {
+			assert.Equal(t, int64(2), req.GetWalReplicaId())
+			assert.Equal(t, "pchannel", req.GetPchannel().GetName())
+			return &streamingpb.GetReplicateCheckpointResponse{
+				Checkpoint: &commonpb.ReplicateCheckpoint{
+					ClusterId: "cluster",
+					Pchannel:  "pchannel",
+					TimeTick:  100,
+				},
+			}, nil
+		})
+	service.EXPECT().GetService(mock.Anything).Return(handlerServiceClient, nil)
+
+	w := mock_assignment.NewMockWatcher(t)
+	w.EXPECT().Get(mock.Anything, "pchannel").Return(assignment)
+
+	handler := &handlerClientImpl{
+		lifetime: typeutil.NewLifetime(),
+		service:  service,
+		watcher:  w,
+	}
+
+	checkpoint, err := handler.GetReplicateCheckpoint(context.Background(), "pchannel")
+	assert.NoError(t, err)
+	assert.NotNil(t, checkpoint)
+	assert.Equal(t, uint64(100), checkpoint.TimeTick)
+}
+
+func TestHandlerClientGetSalvageCheckpointSendsWALReplicaIDInRequest(t *testing.T) {
+	assignment := &types.PChannelInfoAssigned{
+		Channel:      types.PChannelInfo{Name: "pchannel", Term: 1, AccessMode: types.AccessModeRW},
+		WALReplicaID: 2,
+		Node:         types.StreamingNodeInfo{ServerID: 1, Address: "localhost"},
+	}
+
+	service := mock_lazygrpc.NewMockService[streamingpb.StreamingNodeHandlerServiceClient](t)
+	handlerServiceClient := mock_streamingpb.NewMockStreamingNodeHandlerServiceClient(t)
+	handlerServiceClient.EXPECT().GetSalvageCheckpoint(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, req *streamingpb.GetSalvageCheckpointRequest, opts ...grpc.CallOption) (*streamingpb.GetSalvageCheckpointResponse, error) {
+			assert.Equal(t, int64(2), req.GetWalReplicaId())
+			assert.Equal(t, "pchannel", req.GetPchannel().GetName())
+			return &streamingpb.GetSalvageCheckpointResponse{
+				Checkpoints: []*commonpb.ReplicateCheckpoint{
+					{
+						ClusterId: "cluster",
+						Pchannel:  "pchannel",
+						TimeTick:  100,
+					},
+				},
+			}, nil
+		})
+	service.EXPECT().GetService(mock.Anything).Return(handlerServiceClient, nil)
+
+	w := mock_assignment.NewMockWatcher(t)
+	w.EXPECT().Get(mock.Anything, "pchannel").Return(assignment)
+
+	handler := &handlerClientImpl{
+		lifetime: typeutil.NewLifetime(),
+		service:  service,
+		watcher:  w,
+	}
+
+	checkpoints, err := handler.GetSalvageCheckpoint(context.Background(), "pchannel")
+	assert.NoError(t, err)
+	assert.Len(t, checkpoints, 1)
+	assert.Equal(t, uint64(100), checkpoints[0].TimeTick)
+}
+
 func TestHandlerClient_PrepareReleaseManualFlushIfLocal(t *testing.T) {
 	assignment := &types.PChannelInfoAssigned{
 		Channel: types.PChannelInfo{Name: "pchannel", Term: 1, AccessMode: types.AccessModeRO},
@@ -297,9 +499,46 @@ func TestHandlerClient_PrepareReleaseManualFlushIfLocal(t *testing.T) {
 	assert.False(t, prepared)
 }
 
+func TestHandlerClientPrepareReleaseManualFlushIfLocalUsesWALReplica(t *testing.T) {
+	paramtable.Init()
+	paramtable.SetLocalComponentEnabled(typeutil.StreamingNodeRole)
+	handlerregistry.ResetRegisterLocalWALManager()
+	t.Cleanup(resetLocalWALManagerToNoStreamingNodeDeployed)
+
+	assignment := &types.PChannelInfoAssigned{
+		Channel:      types.PChannelInfo{Name: "pchannel", Term: 1, AccessMode: types.AccessModeRW},
+		WALReplicaID: 2,
+		Node:         types.StreamingNodeInfo{ServerID: 1, Address: "localhost"},
+	}
+	localWAL := mock_wal.NewMockWAL(t)
+	localWAL.EXPECT().Channel().Return(assignment.Channel)
+	handlerregistry.RegisterLocalWALManager(handlerFakeWALManager{
+		wal:          localWAL,
+		walReplicaID: 2,
+	})
+	preparer := &handlerFakeReleaseManualFlushPreparer{prepared: true}
+	handlerregistry.RegisterLocalReleaseManualFlushPreparer(preparer)
+
+	w := mock_assignment.NewMockWatcher(t)
+	w.EXPECT().Get(mock.Anything, "pchannel").Return(assignment)
+
+	handler := &handlerClientImpl{
+		lifetime: typeutil.NewLifetime(),
+		watcher:  w,
+	}
+
+	prepared, err := handler.PrepareReleaseManualFlushIfLocal(context.Background(), 100, "pchannel_100v0", []int64{1001})
+	assert.NoError(t, err)
+	assert.True(t, prepared)
+	assert.Equal(t, assignment.Channel, preparer.pchannel)
+	assert.Equal(t, int64(2), preparer.walReplicaID)
+}
+
 func TestHandlerClient_PrepareReleaseManualFlushIfLocalReturnsLocalWALShutdown(t *testing.T) {
 	paramtable.Init()
 	paramtable.SetLocalComponentEnabled(typeutil.StreamingNodeRole)
+	handlerregistry.ResetRegisterLocalWALManager()
+	t.Cleanup(resetLocalWALManagerToNoStreamingNodeDeployed)
 	handlerregistry.RegisterLocalWALManager(shutdownWALManager{})
 
 	assignment := &types.PChannelInfoAssigned{
@@ -345,10 +584,8 @@ func TestHandlerClient_PrepareReleaseManualFlushIfLocalWaitsForAssignmentReady(t
 func TestHandlerClientAcquireTransformLogStreamUsesLocalWAL(t *testing.T) {
 	paramtable.Init()
 	paramtable.SetLocalComponentEnabled(typeutil.StreamingNodeRole)
-	t.Cleanup(func() {
-		handlerregistry.ResetRegisterLocalWALManager()
-		handlerregistry.RegisterLocalWALManager(handlerFakeWALManager{err: handlerregistry.ErrNoStreamingNodeDeployed})
-	})
+	handlerregistry.ResetRegisterLocalWALManager()
+	t.Cleanup(resetLocalWALManagerToNoStreamingNodeDeployed)
 
 	assignment := &types.PChannelInfoAssigned{
 		Channel: types.PChannelInfo{Name: "pchannel", Term: 1},
@@ -363,7 +600,7 @@ func TestHandlerClientAcquireTransformLogStreamUsesLocalWAL(t *testing.T) {
 
 	service := mock_lazygrpc.NewMockService[streamingpb.StreamingNodeHandlerServiceClient](t)
 	w := mock_assignment.NewMockWatcher(t)
-	w.EXPECT().Get(mock.Anything, "pchannel").Return(assignment)
+	w.EXPECT().GetWALReplica(mock.Anything, types.ChannelID{Name: "pchannel"}).Return(assignment)
 
 	handler := &handlerClientImpl{
 		lifetime: typeutil.NewLifetime(),
@@ -375,6 +612,139 @@ func TestHandlerClientAcquireTransformLogStreamUsesLocalWAL(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Same(t, localStream, stream)
 	assert.Equal(t, 1, localManager.acquireCount)
+}
+
+func TestHandlerClientAcquireTransformLogStreamRoutesWALReplica(t *testing.T) {
+	paramtable.Init()
+
+	assignment := &types.PChannelInfoAssigned{
+		Channel:      types.PChannelInfo{Name: "pchannel", Term: 1, AccessMode: types.AccessModeRO},
+		WALReplicaID: 2,
+		Node:         types.StreamingNodeInfo{ServerID: 2, Address: "localhost"},
+	}
+	localStream := &handlerFakeTransformLogStream{done: make(chan struct{})}
+
+	service := mock_lazygrpc.NewMockService[streamingpb.StreamingNodeHandlerServiceClient](t)
+	handlerServiceClient := mock_streamingpb.NewMockStreamingNodeHandlerServiceClient(t)
+	service.EXPECT().GetService(mock.Anything).Return(handlerServiceClient, nil)
+	w := mock_assignment.NewMockWatcher(t)
+	w.EXPECT().GetWALReplica(mock.Anything, types.ChannelID{Name: "pchannel", WALReplicaID: 2}).Return(assignment)
+
+	handler := &handlerClientImpl{
+		lifetime: typeutil.NewLifetime(),
+		service:  service,
+		watcher:  w,
+		newTransformLogEventStream: func(ctx context.Context, opts *transformlogclient.EventStreamOptions, handlerClient streamingpb.StreamingNodeHandlerServiceClient) (*transformlogclient.EventStream, error) {
+			assert.Equal(t, assignment, opts.Assignment)
+			assert.Equal(t, int64(2), opts.Assignment.WALReplicaID)
+			assert.Equal(t, handlerServiceClient, handlerClient)
+			return &transformlogclient.EventStream{}, nil
+		},
+	}
+
+	stream, err := handler.AcquireTransformLogStream(context.Background(), "pchannel", 2)
+	assert.NoError(t, err)
+	assert.NotNil(t, stream)
+	assert.NotSame(t, localStream, stream)
+}
+
+func TestHandlerClientReportsWALReplicaAssignmentError(t *testing.T) {
+	assignment := &types.PChannelInfoAssigned{
+		Channel:         types.PChannelInfo{Name: "pchannel", Term: 1, AccessMode: types.AccessModeRO},
+		WALReplicaID:    2,
+		AssignmentEpoch: 7,
+		Node:            types.StreamingNodeInfo{ServerID: 2, Address: "localhost"},
+	}
+	channelID := types.ChannelID{Name: "pchannel", WALReplicaID: 2}
+
+	w := mock_assignment.NewMockWatcher(t)
+	w.EXPECT().GetWALReplica(mock.Anything, channelID).Return(assignment)
+	w.EXPECT().WatchWALReplica(mock.Anything, channelID, assignment).Return(context.Canceled)
+
+	trigger := &handlerFakeWALReplicaRebalanceTrigger{}
+	handler := &handlerClientImpl{
+		lifetime:         typeutil.NewLifetime(),
+		watcher:          w,
+		rebalanceTrigger: trigger,
+	}
+
+	_, err := handler.createHandlerAfterWALReplicaReady(
+		context.Background(),
+		mlog.With(),
+		channelID,
+		func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
+			return nil, status.NewChannelNotExist("pchannel")
+		},
+	)
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, trigger.reportedPChannelAssignment)
+	assert.Equal(t, assignment, trigger.reportedWALAssignment)
+}
+
+func TestHandlerClientReportsReadWriteWALReplicaErrorWithReplicaIdentity(t *testing.T) {
+	assignment := types.PChannelInfoAssigned{
+		Channel: types.PChannelInfo{
+			Name:       "pchannel",
+			Term:       11,
+			AccessMode: types.AccessModeRW,
+		},
+		WALReplicaID:    2,
+		AssignmentEpoch: 7,
+		Node:            types.StreamingNodeInfo{ServerID: 2, Address: "localhost"},
+	}
+	trigger := &handlerFakeWALReplicaRebalanceTrigger{}
+	handler := &handlerClientImpl{
+		rebalanceTrigger: trigger,
+	}
+
+	err := handler.reportWALReplicaAssignmentError(context.Background(), assignment, status.NewChannelNotExist("pchannel"))
+
+	assert.NoError(t, err)
+	assert.Nil(t, trigger.reportedPChannelAssignment)
+	assert.Equal(t, &assignment, trigger.reportedWALAssignment)
+}
+
+func TestHandlerClientStreamingNodeReadyReportsReadWriteWALReplicaErrorWithReplicaIdentity(t *testing.T) {
+	assignment := &types.PChannelInfoAssigned{
+		Channel: types.PChannelInfo{
+			Name:       "pchannel",
+			Term:       11,
+			AccessMode: types.AccessModeRW,
+		},
+		WALReplicaID:    2,
+		AssignmentEpoch: 7,
+		Node:            types.StreamingNodeInfo{ServerID: 2, Address: "localhost"},
+	}
+
+	w := mock_assignment.NewMockWatcher(t)
+	w.EXPECT().Get(mock.Anything, "pchannel").Return(assignment)
+	w.EXPECT().Watch(mock.Anything, "pchannel", assignment).Return(context.Canceled)
+
+	trigger := &handlerFakeWALReplicaRebalanceTrigger{}
+	handler := &handlerClientImpl{
+		lifetime:         typeutil.NewLifetime(),
+		watcher:          w,
+		rebalanceTrigger: trigger,
+	}
+
+	_, err := handler.createHandlerAfterStreamingNodeReady(
+		context.Background(),
+		mlog.With(),
+		"pchannel",
+		func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
+			return nil, status.NewChannelNotExist("pchannel")
+		},
+	)
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, trigger.reportedPChannelAssignment)
+	assert.Equal(t, assignment, trigger.reportedWALAssignment)
+}
+
+func resetLocalWALManagerToNoStreamingNodeDeployed() {
+	handlerregistry.ResetRegisterLocalWALManager()
+	handlerregistry.RegisterLocalWALManager(handlerFakeWALManager{err: handlerregistry.ErrNoStreamingNodeDeployed})
 }
 
 func TestHandlerClient_GetReplicateCheckpointReplicateViolation(t *testing.T) {
@@ -495,13 +865,21 @@ var (
 )
 
 type handlerFakeWALManager struct {
-	wal wal.WAL
-	err error
+	wal          wal.WAL
+	err          error
+	walReplicaID int64
 }
 
-func (m handlerFakeWALManager) GetAvailableWAL(types.PChannelInfo) (wal.WAL, error) {
+func (m handlerFakeWALManager) GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error) {
+	return m.GetAvailableWALReplica(channel, 0)
+}
+
+func (m handlerFakeWALManager) GetAvailableWALReplica(_ types.PChannelInfo, walReplicaID int64) (wal.WAL, error) {
 	if m.err != nil {
 		return nil, m.err
+	}
+	if m.walReplicaID != walReplicaID {
+		return nil, handlerregistry.ErrNoStreamingNodeDeployed
 	}
 	return m.wal, nil
 }
@@ -510,12 +888,24 @@ func (m handlerFakeWALManager) Metrics() (*types.StreamingNodeMetrics, error) {
 	return &types.StreamingNodeMetrics{}, nil
 }
 
+type handlerFakeReleaseManualFlushPreparer struct {
+	pchannel     types.PChannelInfo
+	walReplicaID int64
+	prepared     bool
+}
+
+func (p *handlerFakeReleaseManualFlushPreparer) PrepareReleaseManualFlush(ctx context.Context, pchannel types.PChannelInfo, walReplicaID int64, collectionID int64, vchannel string, releaseSegmentIDs []int64) (bool, error) {
+	p.pchannel = pchannel
+	p.walReplicaID = walReplicaID
+	return p.prepared, nil
+}
+
 type handlerFakeTransformLogStreamManager struct {
 	stream       wal.TransformLogStream
 	acquireCount int
 }
 
-func (m *handlerFakeTransformLogStreamManager) AcquireStream(context.Context, string) (wal.TransformLogStream, error) {
+func (m *handlerFakeTransformLogStreamManager) AcquireStream(context.Context, string, int64) (wal.TransformLogStream, error) {
 	m.acquireCount++
 	return m.stream, nil
 }

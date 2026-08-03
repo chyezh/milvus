@@ -408,9 +408,11 @@ SWITCH:
   ActiveNode = SN-C
   TargetNode = nil
   State = ASSIGNED
+  Histories keep SN-B until cleanup succeeds
 
 CLEANUP:
   stop/release old runtime on SN-B
+  clear Histories only after the release succeeds
 ```
 
 Only `ActiveNode` is published as the serviceable owner for
@@ -443,9 +445,13 @@ ASSIGNING:
 ASSIGNED:
   ActiveNode = SN-C
   TargetNode = nil
+  Histories keep SN-B until cleanup succeeds
 ```
 
 In both healthy migration and failover, the PChannel write term is unchanged.
+The old owner cleanup target must remain persisted after the new owner becomes
+`ASSIGNED`; otherwise a StreamingCoord restart or failed cleanup RPC can lose
+the only recoverable reference to the old runtime.
 
 ## 7. AccessMode Switch
 
@@ -633,8 +639,8 @@ replicaID != PrimaryReplicaID
 replica.AccessMode == READONLY
 replica.State is ASSIGNED or UNAVAILABLE
 replica.TargetNode is empty
-QV balancer reports no Preparing, Ready, or Up QueryView depends on replicaID
-no pending QueryView sync depends on replicaID
+QV balancer reports no active non-Dropped QueryView depends on replicaID
+no pending QueryView sync or teardown depends on replicaID
 ```
 
 The removal flow is:
@@ -647,6 +653,7 @@ ASSIGNED or UNAVAILABLE:
 cleanup targets:
   ActiveNode if present
   TargetNode if present
+  Histories entries if present
 
 healthy cleanup target:
   send stop/release local RO runtime

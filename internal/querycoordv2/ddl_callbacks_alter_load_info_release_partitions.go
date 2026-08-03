@@ -39,6 +39,54 @@ func (s *Server) broadcastAlterLoadConfigCollectionV2ForReleasePartitions(ctx co
 		return false, err
 	}
 
+	if s.qviewsRuntime != nil && s.qviewsRuntime.loadConfigStore != nil {
+		currentLoadConfig := s.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[req.GetCollectionID()]
+		if currentLoadConfig == nil {
+			return true, nil
+		}
+
+		partitionIDsSet := typeutil.NewSet(currentLoadConfig.PartitionIDs...)
+		previousLength := len(partitionIDsSet)
+		for _, partitionID := range req.PartitionIDs {
+			partitionIDsSet.Remove(partitionID)
+		}
+		if len(partitionIDsSet) == previousLength {
+			return false, nil
+		}
+
+		var msg message.BroadcastMutableMessage
+		if len(partitionIDsSet) == 0 {
+			msg = message.NewDropLoadConfigMessageBuilderV2().
+				WithHeader(&message.DropLoadConfigMessageHeader{
+					DbId:         coll.DbId,
+					CollectionId: coll.CollectionID,
+				}).
+				WithBody(&message.DropLoadConfigMessageBody{}).
+				WithBroadcast(collectionLoadConfigBroadcastChannels(coll), message.OptBuildBroadcastAckSyncUp()).
+				MustBuildBroadcast()
+			collectionReleased = true
+		} else {
+			msg, err = s.generateAlterLoadConfigMessageForLoadCollection(ctx, coll, currentLoadConfig, qviewsExpectedLoadConfig{
+				PartitionIDs:             partitionIDsSet.Collect(),
+				LoadType:                 currentLoadConfig.LoadType,
+				ReplicaNumber:            qviewsReplicaNumber(currentLoadConfig),
+				FieldIndexID:             qviewsLoadFieldIndexID(currentLoadConfig),
+				LoadFields:               qviewsLoadFieldIDs(currentLoadConfig),
+				Priority:                 commonpb.LoadPriority_HIGH,
+				UserSpecifiedReplicaMode: currentLoadConfig.UserSpecifiedReplicaMode,
+			})
+			if err != nil {
+				return false, err
+			}
+			if msg == nil {
+				return false, nil
+			}
+			collectionReleased = false
+		}
+		_, err = broadcaster.Broadcast(ctx, msg)
+		return collectionReleased, err
+	}
+
 	currentLoadConfig := s.getCurrentLoadConfig(ctx, req.GetCollectionID())
 	if currentLoadConfig.Collection == nil {
 		// collection is not loaded, return success directly.

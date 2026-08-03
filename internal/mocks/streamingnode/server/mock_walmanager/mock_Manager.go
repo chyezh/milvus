@@ -114,6 +114,65 @@ func (_c *MockManager_GetAvailableWAL_Call) RunAndReturn(run func(types.PChannel
 	return _c
 }
 
+// GetAvailableWALReplica provides a mock function with given fields: channel, walReplicaID
+func (_m *MockManager) GetAvailableWALReplica(channel types.PChannelInfo, walReplicaID int64) (wal.WAL, error) {
+	ret := _m.Called(channel, walReplicaID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for GetAvailableWALReplica")
+	}
+
+	var r0 wal.WAL
+	var r1 error
+	if rf, ok := ret.Get(0).(func(types.PChannelInfo, int64) (wal.WAL, error)); ok {
+		return rf(channel, walReplicaID)
+	}
+	if rf, ok := ret.Get(0).(func(types.PChannelInfo, int64) wal.WAL); ok {
+		r0 = rf(channel, walReplicaID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).(wal.WAL)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(types.PChannelInfo, int64) error); ok {
+		r1 = rf(channel, walReplicaID)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// MockManager_GetAvailableWALReplica_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'GetAvailableWALReplica'
+type MockManager_GetAvailableWALReplica_Call struct {
+	*mock.Call
+}
+
+// GetAvailableWALReplica is a helper method to define mock.On call
+//   - channel types.PChannelInfo
+//   - walReplicaID int64
+func (_e *MockManager_Expecter) GetAvailableWALReplica(channel interface{}, walReplicaID interface{}) *MockManager_GetAvailableWALReplica_Call {
+	return &MockManager_GetAvailableWALReplica_Call{Call: _e.mock.On("GetAvailableWALReplica", channel, walReplicaID)}
+}
+
+func (_c *MockManager_GetAvailableWALReplica_Call) Run(run func(channel types.PChannelInfo, walReplicaID int64)) *MockManager_GetAvailableWALReplica_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(types.PChannelInfo), args[1].(int64))
+	})
+	return _c
+}
+
+func (_c *MockManager_GetAvailableWALReplica_Call) Return(_a0 wal.WAL, _a1 error) *MockManager_GetAvailableWALReplica_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *MockManager_GetAvailableWALReplica_Call) RunAndReturn(run func(types.PChannelInfo, int64) (wal.WAL, error)) *MockManager_GetAvailableWALReplica_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // GetAvailableRawWALByPChannel provides a mock function with given fields: pchannel
 func (_m *MockManager) GetAvailableRawWALByPChannel(pchannel string) (wal.WAL, error) {
 	ret := _m.Called(pchannel)
@@ -276,6 +335,55 @@ func (_c *MockManager_Open_Call) RunAndReturn(run func(context.Context, types.PC
 	return _c
 }
 
+// OpenWALReplica provides a mock function with given fields: ctx, channel, walReplicaID, assignmentEpoch
+func (_m *MockManager) OpenWALReplica(ctx context.Context, channel types.PChannelInfo, walReplicaID int64, assignmentEpoch int64) error {
+	ret := _m.Called(ctx, channel, walReplicaID, assignmentEpoch)
+
+	if len(ret) == 0 {
+		panic("no return value specified for OpenWALReplica")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, types.PChannelInfo, int64, int64) error); ok {
+		r0 = rf(ctx, channel, walReplicaID, assignmentEpoch)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MockManager_OpenWALReplica_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'OpenWALReplica'
+type MockManager_OpenWALReplica_Call struct {
+	*mock.Call
+}
+
+// OpenWALReplica is a helper method to define mock.On call
+//   - ctx context.Context
+//   - channel types.PChannelInfo
+//   - walReplicaID int64
+//   - assignmentEpoch int64
+func (_e *MockManager_Expecter) OpenWALReplica(ctx interface{}, channel interface{}, walReplicaID interface{}, assignmentEpoch interface{}) *MockManager_OpenWALReplica_Call {
+	return &MockManager_OpenWALReplica_Call{Call: _e.mock.On("OpenWALReplica", ctx, channel, walReplicaID, assignmentEpoch)}
+}
+
+func (_c *MockManager_OpenWALReplica_Call) Run(run func(ctx context.Context, channel types.PChannelInfo, walReplicaID int64, assignmentEpoch int64)) *MockManager_OpenWALReplica_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(types.PChannelInfo), args[2].(int64), args[3].(int64))
+	})
+	return _c
+}
+
+func (_c *MockManager_OpenWALReplica_Call) Return(_a0 error) *MockManager_OpenWALReplica_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockManager_OpenWALReplica_Call) RunAndReturn(run func(context.Context, types.PChannelInfo, int64, int64) error) *MockManager_OpenWALReplica_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // Remove provides a mock function with given fields: ctx, channel
 func (_m *MockManager) Remove(ctx context.Context, channel types.PChannelInfo) error {
 	ret := _m.Called(ctx, channel)
@@ -319,6 +427,55 @@ func (_c *MockManager_Remove_Call) Return(_a0 error) *MockManager_Remove_Call {
 }
 
 func (_c *MockManager_Remove_Call) RunAndReturn(run func(context.Context, types.PChannelInfo) error) *MockManager_Remove_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// RemoveWALReplica provides a mock function with given fields: ctx, channel, walReplicaID, assignmentEpoch
+func (_m *MockManager) RemoveWALReplica(ctx context.Context, channel types.PChannelInfo, walReplicaID int64, assignmentEpoch int64) error {
+	ret := _m.Called(ctx, channel, walReplicaID, assignmentEpoch)
+
+	if len(ret) == 0 {
+		panic("no return value specified for RemoveWALReplica")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(context.Context, types.PChannelInfo, int64, int64) error); ok {
+		r0 = rf(ctx, channel, walReplicaID, assignmentEpoch)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// MockManager_RemoveWALReplica_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'RemoveWALReplica'
+type MockManager_RemoveWALReplica_Call struct {
+	*mock.Call
+}
+
+// RemoveWALReplica is a helper method to define mock.On call
+//   - ctx context.Context
+//   - channel types.PChannelInfo
+//   - walReplicaID int64
+//   - assignmentEpoch int64
+func (_e *MockManager_Expecter) RemoveWALReplica(ctx interface{}, channel interface{}, walReplicaID interface{}, assignmentEpoch interface{}) *MockManager_RemoveWALReplica_Call {
+	return &MockManager_RemoveWALReplica_Call{Call: _e.mock.On("RemoveWALReplica", ctx, channel, walReplicaID, assignmentEpoch)}
+}
+
+func (_c *MockManager_RemoveWALReplica_Call) Run(run func(ctx context.Context, channel types.PChannelInfo, walReplicaID int64, assignmentEpoch int64)) *MockManager_RemoveWALReplica_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(types.PChannelInfo), args[2].(int64), args[3].(int64))
+	})
+	return _c
+}
+
+func (_c *MockManager_RemoveWALReplica_Call) Return(_a0 error) *MockManager_RemoveWALReplica_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockManager_RemoveWALReplica_Call) RunAndReturn(run func(context.Context, types.PChannelInfo, int64, int64) error) *MockManager_RemoveWALReplica_Call {
 	_c.Call.Return(run)
 	return _c
 }

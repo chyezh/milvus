@@ -19,10 +19,11 @@ package querycoordv2
 import (
 	"context"
 
-	"github.com/milvus-io/milvus/internal/querycoordv2/job"
 	"github.com/milvus-io/milvus/internal/querycoordv2/utils"
+	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
@@ -54,30 +55,27 @@ func (s *Server) broadcastAlterLoadConfigCollectionV2ForLoadPartitions(ctx conte
 		return err
 	}
 
-	currentLoadConfig := s.getCurrentLoadConfig(ctx, req.GetCollectionID())
-	partitionIDsSet := typeutil.NewSet(currentLoadConfig.GetPartitionIDs()...)
+	currentLoadConfig := s.qviewsRuntime.loadConfigStore.Snapshot().ConfigsMap()[req.GetCollectionID()]
+	if err := checkQViewsLoadPartitionsReplicaNumber(currentLoadConfig, expectedReplicasNumber); err != nil {
+		return err
+	}
+	partitionIDsSet := typeutil.NewSet[int64]()
+	if currentLoadConfig != nil {
+		partitionIDsSet.Insert(currentLoadConfig.PartitionIDs...)
+	}
 	// add new incoming partitionIDs.
 	for _, partition := range req.PartitionIDs {
 		partitionIDsSet.Insert(partition)
 	}
-	alterLoadConfigReq := &job.AlterLoadConfigRequest{
-		Meta:           s.meta,
-		CollectionInfo: coll,
-		ControlChannel: loadConfigBroadcastChannel(),
-		Current:        s.getCurrentLoadConfig(ctx, req.GetCollectionID()),
-		Expected: job.ExpectedLoadConfig{
-			ExpectedPartitionIDs:             partitionIDsSet.Collect(),
-			ExpectedReplicaNumber:            expectedReplicasNumber,
-			ExpectedFieldIndexID:             req.GetFieldIndexID(),
-			ExpectedLoadFields:               req.GetLoadFields(),
-			ExpectedPriority:                 req.GetPriority(),
-			ExpectedUserSpecifiedReplicaMode: userSpecifiedReplicaMode,
-		},
-	}
-	if err := alterLoadConfigReq.CheckIfLoadPartitionsExecutable(); err != nil {
-		return err
-	}
-	msg, err := job.GenerateAlterLoadConfigMessage(ctx, alterLoadConfigReq)
+	msg, err := s.generateAlterLoadConfigMessageForLoadCollection(ctx, coll, currentLoadConfig, qviewsExpectedLoadConfig{
+		PartitionIDs:             partitionIDsSet.Collect(),
+		LoadType:                 querypb.LoadType_LoadPartition,
+		ReplicaNumber:            expectedReplicasNumber,
+		FieldIndexID:             req.GetFieldIndexID(),
+		LoadFields:               req.GetLoadFields(),
+		Priority:                 req.GetPriority(),
+		UserSpecifiedReplicaMode: userSpecifiedReplicaMode,
+	})
 	if err != nil {
 		return err
 	}
@@ -90,4 +88,18 @@ func (s *Server) broadcastAlterLoadConfigCollectionV2ForLoadPartitions(ctx conte
 	}
 	_, err = broadcaster.Broadcast(ctx, msg)
 	return err
+}
+
+func checkQViewsLoadPartitionsReplicaNumber(current *loadmgr.LoadConfig, expected map[string]int) error {
+	if current == nil {
+		return nil
+	}
+	expectedReplicaNumber := 0
+	for _, num := range expected {
+		expectedReplicaNumber += num
+	}
+	if len(current.Replicas) != expectedReplicaNumber {
+		return merr.WrapErrParameterInvalid(len(current.Replicas), expectedReplicaNumber, "can't change the replica number for loaded partitions")
+	}
+	return nil
 }

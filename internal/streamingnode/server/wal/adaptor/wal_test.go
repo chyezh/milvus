@@ -19,6 +19,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/mocks"
 	"github.com/milvus-io/milvus/internal/mocks/mock_metastore"
+	"github.com/milvus-io/milvus/internal/mocks/util/mock_segcore"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors/lock"
@@ -58,6 +59,10 @@ type walTestFramework struct {
 	b            wal.OpenerBuilder
 	t            *testing.T
 	messageCount int
+}
+
+func walAdaptorTestSchema(collectionName string) *schemapb.CollectionSchema {
+	return mock_segcore.GenTestCollectionSchema(collectionName, schemapb.DataType_Int64, false)
 }
 
 func TestFencedError(t *testing.T) {
@@ -101,8 +106,16 @@ func initResourceForTest(t *testing.T) {
 	catalog.EXPECT().GetConsumeCheckpoint(mock.Anything, mock.Anything).Return(nil, nil)
 	catalog.EXPECT().SaveConsumeCheckpoint(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	catalog.EXPECT().ListSegmentAssignment(mock.Anything, mock.Anything).Return(nil, nil)
+	catalog.EXPECT().ListSegmentDataVersionSummaries(mock.Anything, mock.Anything).Return(nil, nil)
+	catalog.EXPECT().ListTransformLogMeta(mock.Anything, mock.Anything).Return(nil, nil)
 	catalog.EXPECT().ListVChannel(mock.Anything, mock.Anything).Return(nil, nil)
 	catalog.EXPECT().SaveVChannels(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	catalog.EXPECT().DropVChannels(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	catalog.EXPECT().SaveSegmentAssignments(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	catalog.EXPECT().SaveSegmentDataVersionSummaries(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	catalog.EXPECT().DropSegmentAssignments(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	catalog.EXPECT().SaveTransformLogMeta(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
+	catalog.EXPECT().DropTransformLogMeta(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
 	catalog.EXPECT().ListQueryViews(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	catalog.EXPECT().GetSalvageCheckpoint(mock.Anything, mock.Anything).Return(nil, nil).Maybe()
 	catalog.EXPECT().SaveRecoverySnapshot(mock.Anything, mock.Anything, mock.Anything).Return(nil).Maybe()
@@ -189,7 +202,7 @@ func (f *testOneWALFramework) Run() {
 				PartitionIds: []int64{200},
 			}).
 			WithBody(&msgpb.CreateCollectionRequest{
-				CollectionSchema: &schemapb.CollectionSchema{Name: "test_collection_100"},
+				CollectionSchema: walAdaptorTestSchema("test_collection_100"),
 			}).
 			WithVChannel(testVChannel).
 			MustBuildMutable()
@@ -302,7 +315,7 @@ func (f *testOneWALFramework) testSendCreateCollection(ctx context.Context, w wa
 			PartitionIds: []int64{2},
 		}).
 		WithBody(&msgpb.CreateCollectionRequest{
-			CollectionSchema: &schemapb.CollectionSchema{Name: "test_collection"},
+			CollectionSchema: walAdaptorTestSchema("test_collection"),
 		}).
 		WithVChannel(testVChannel).
 		BuildMutable()

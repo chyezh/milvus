@@ -46,7 +46,8 @@ func CreateConsumer(
 	handlerClient streamingpb.StreamingNodeHandlerServiceClient,
 ) (Consumer, error) {
 	ctx = contextutil.WithCreateConsumer(ctx, &streamingpb.CreateConsumerRequest{
-		Pchannel: types.NewProtoFromPChannelInfo(opts.Assignment.Channel),
+		Pchannel:     types.NewProtoFromPChannelInfo(opts.Assignment.Channel),
+		WalReplicaId: opts.Assignment.WALReplicaID,
 	})
 
 	// TODO: configurable or auto adjust grpc.MaxCallRecvMsgSize

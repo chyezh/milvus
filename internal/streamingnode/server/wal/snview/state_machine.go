@@ -128,6 +128,8 @@ func (sm *snQueryViewStateMachine) OnCoordStateDelivered(pushedState qviews.Quer
 		sm.handleCoordUp()
 	case qviews.QueryViewStateDown:
 		sm.handleCoordDown()
+	case qviews.QueryViewStateUnrecoverable:
+		sm.handleCoordUnrecoverable()
 	case qviews.QueryViewStateDropped:
 		sm.handleCoordDropped()
 	}
@@ -269,6 +271,22 @@ func (sm *snQueryViewStateMachine) handleCoordDown() {
 		// Re-push or node has advanced/diverged: re-report current state
 		// so Coord can fast-forward.
 		sm.pendingReport = sm.buildReport()
+	}
+}
+
+func (sm *snQueryViewStateMachine) handleCoordUnrecoverable() {
+	switch sm.state {
+	case qviews.QueryViewStateUp, qviews.QueryViewStateUpRecovering, qviews.QueryViewStateDown:
+		sm.state = qviews.QueryViewStateUnrecoverable
+		sm.pendingReport = sm.buildReport()
+		sm.pendingPersist = sm.buildReport()
+	case qviews.QueryViewStatePreparing, qviews.QueryViewStateReady:
+		sm.state = qviews.QueryViewStateUnrecoverable
+		sm.pendingReport = sm.buildReport()
+	case qviews.QueryViewStateUnrecoverable, qviews.QueryViewStateDropped:
+		sm.pendingReport = sm.buildReport()
+	case qviews.QueryViewStateDropping:
+		// Already releasing resources, wait for OnDropped callback.
 	}
 }
 

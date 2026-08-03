@@ -141,6 +141,12 @@ func newPreparingQNView(nodeID int64, version int64) qviews.QueryViewAtWorkNode 
 	return qviews.NewQueryViewAtQueryNode(buildHandlerTestMeta(version), buildHandlerTestQNView(nodeID))
 }
 
+func newPreparingQNViewWithWALReplica(nodeID int64, version int64, walReplicaID int64) qviews.QueryViewAtWorkNode {
+	view := buildHandlerTestQNView(nodeID)
+	view.WalReplicaId = walReplicaID
+	return qviews.NewQueryViewAtQueryNode(buildHandlerTestMeta(version), view)
+}
+
 func newDroppedQNView(nodeID int64, version int64) qviews.QueryViewAtWorkNode {
 	meta := buildHandlerTestMeta(version)
 	meta.State = viewpb.QueryViewState_QueryViewStateDropped
@@ -210,6 +216,24 @@ func TestQNHandler_ApplyViews_NewPreparing(t *testing.T) {
 	assert.True(t, proto.Equal(buildHandlerTestQNView(1), req.View))
 	assert.NotNil(t, req.OnReady)
 	assert.NotNil(t, req.OnUnrecoverable)
+}
+
+func TestQNHandler_ApplyViews_DoesNotMergeWALReplicaViewsWithSameVersion(t *testing.T) {
+	mgr := newMockSegmentManager()
+	h := NewQNQueryViewHandler(mgr)
+
+	viewOnReplica2 := newPreparingQNViewWithWALReplica(1, 1, 2)
+	viewOnReplica3 := newPreparingQNViewWithWALReplica(1, 1, 3)
+	h.ApplyViews([]handler.ApplyView{
+		{View: viewOnReplica2},
+		{View: viewOnReplica3},
+	})
+
+	assert.Equal(t, 2, mgr.acquiredCount())
+	_, ok := mgr.getAcquired(viewOnReplica2.QueryViewKey())
+	assert.True(t, ok)
+	_, ok = mgr.getAcquired(viewOnReplica3.QueryViewKey())
+	assert.True(t, ok)
 }
 
 func TestQNHandler_ApplyViews_UnknownViewReportsUnrecoverable(t *testing.T) {

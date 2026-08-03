@@ -7,6 +7,7 @@ import (
 	"errors"
 	"slices"
 	"sort"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -22,33 +23,40 @@ import (
 )
 
 type fakeStreamManager struct {
-	mu      sync.Mutex
-	streams map[string]*fakeStream
-	calls   []string
+	mu             sync.Mutex
+	streams        map[string]*fakeStream
+	calls          []fakeStreamKey
+	recreateClosed bool
 }
 
 func newFakeStreamManager() *fakeStreamManager {
 	return &fakeStreamManager{streams: make(map[string]*fakeStream)}
 }
 
-func (m *fakeStreamManager) AcquireStream(_ context.Context, pchannel string) (wal.TransformLogStream, error) {
+func (m *fakeStreamManager) AcquireStream(_ context.Context, pchannel string, walReplicaID int64) (wal.TransformLogStream, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.calls = append(m.calls, pchannel)
-	stream := m.streams[pchannel]
-	if stream == nil {
+	key := fakeStreamKey{pchannel: pchannel, walReplicaID: walReplicaID}
+	m.calls = append(m.calls, key)
+	stream := m.streams[key.String()]
+	if stream == nil || (m.recreateClosed && stream.isDone()) {
 		stream = newFakeStream()
-		m.streams[pchannel] = stream
+		m.streams[key.String()] = stream
 	}
 	return stream, nil
 }
 
 func (m *fakeStreamManager) callCount(pchannel string) int {
+	return m.callCountForReplica(pchannel, 0)
+}
+
+func (m *fakeStreamManager) callCountForReplica(pchannel string, walReplicaID int64) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	count := 0
+	key := fakeStreamKey{pchannel: pchannel, walReplicaID: walReplicaID}
 	for _, call := range m.calls {
-		if call == pchannel {
+		if call == key {
 			count++
 		}
 	}
@@ -56,9 +64,31 @@ func (m *fakeStreamManager) callCount(pchannel string) int {
 }
 
 func (m *fakeStreamManager) stream(pchannel string) *fakeStream {
+	return m.streamForReplica(pchannel, 0)
+}
+
+func (m *fakeStreamManager) streamForReplica(pchannel string, walReplicaID int64) *fakeStream {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.streams[pchannel]
+	return m.streams[fakeStreamKey{pchannel: pchannel, walReplicaID: walReplicaID}.String()]
+}
+
+func (m *fakeStreamManager) setStreamForReplica(pchannel string, walReplicaID int64, stream *fakeStream) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.streams[fakeStreamKey{pchannel: pchannel, walReplicaID: walReplicaID}.String()] = stream
+}
+
+type fakeStreamKey struct {
+	pchannel     string
+	walReplicaID int64
+}
+
+func (k fakeStreamKey) String() string {
+	if k.walReplicaID == 0 {
+		return k.pchannel
+	}
+	return k.pchannel + "#" + strconv.FormatInt(k.walReplicaID, 10)
 }
 
 type fakeStream struct {
@@ -67,6 +97,7 @@ type fakeStream struct {
 	err           error
 	closeOnce     sync.Once
 	subscriptions []wal.TransformLogSubscriptionOption
+	closedSubs    map[string]int
 
 	subscribeStarted chan struct{}
 	subscribeRelease chan struct{}
@@ -77,7 +108,8 @@ type fakeStream struct {
 
 func newFakeStream() *fakeStream {
 	return &fakeStream{
-		done: make(chan struct{}),
+		done:       make(chan struct{}),
+		closedSubs: make(map[string]int),
 	}
 }
 
@@ -114,7 +146,7 @@ func (s *fakeStream) Subscribe(_ context.Context, opt wal.TransformLogSubscripti
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.subscriptions = append(s.subscriptions, opt)
-	return fakeSubscription{id: int64(len(s.subscriptions)), vchannel: opt.VChannel}, nil
+	return fakeSubscription{id: int64(len(s.subscriptions)), vchannel: opt.VChannel, stream: s}, nil
 }
 
 func (s *fakeStream) Done() <-chan struct{} {
@@ -123,6 +155,15 @@ func (s *fakeStream) Done() <-chan struct{} {
 
 func (s *fakeStream) Error() error {
 	return s.err
+}
+
+func (s *fakeStream) isDone() bool {
+	select {
+	case <-s.done:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *fakeStream) Close() error {
@@ -163,6 +204,18 @@ func (s *fakeStream) subscriptionVChannels() []string {
 	return vchannels
 }
 
+func (s *fakeStream) subscriptionCloseCount(vchannel string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closedSubs[vchannel]
+}
+
+func (s *fakeStream) closeSubscription(vchannel string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closedSubs[vchannel]++
+}
+
 func requireSubscriptionVChannels(t *testing.T, stream *fakeStream, expected []string) {
 	t.Helper()
 	require.Eventually(t, func() bool {
@@ -181,6 +234,7 @@ func stringSetEqual(left []string, right []string) bool {
 type fakeSubscription struct {
 	id       int64
 	vchannel string
+	stream   *fakeStream
 }
 
 func (s fakeSubscription) ID() int64 {
@@ -192,6 +246,9 @@ func (s fakeSubscription) VChannel() string {
 }
 
 func (s fakeSubscription) Close() error {
+	if s.stream != nil {
+		s.stream.closeSubscription(s.vchannel)
+	}
 	return nil
 }
 
@@ -291,6 +348,80 @@ func TestBufferAcquireMultiplexesVChannelsOnOnePChannelStream(t *testing.T) {
 		Entry:    &streamingpb.TransformLogEntry{TimeTick: 60},
 	})
 	require.NoError(t, <-waitDone)
+}
+
+func TestBufferAcquireSeparatesStreamsByWALReplica(t *testing.T) {
+	streams := newFakeStreamManager()
+	buffer := New(streams)
+
+	guard1, err := buffer.Acquire(context.Background(), newTestQueryViewOnWALReplica("p_1v0", 50, 2))
+	require.NoError(t, err)
+	defer guard1.Release()
+	guard2, err := buffer.Acquire(context.Background(), newTestQueryViewOnWALReplica("p_2v0", 50, 3))
+	require.NoError(t, err)
+	defer guard2.Release()
+
+	require.Equal(t, 1, streams.callCountForReplica("p", 2))
+	require.Equal(t, 1, streams.callCountForReplica("p", 3))
+	requireSubscriptionVChannels(t, streams.streamForReplica("p", 2), []string{"p_1v0"})
+	requireSubscriptionVChannels(t, streams.streamForReplica("p", 3), []string{"p_2v0"})
+}
+
+func TestBufferAcquireSeparatesSameVChannelByWALReplica(t *testing.T) {
+	streams := newFakeStreamManager()
+	buffer := New(streams)
+
+	guard1, err := buffer.Acquire(context.Background(), newTestQueryViewOnWALReplica("p_1v0", 50, 2))
+	require.NoError(t, err)
+	defer guard1.Release()
+	guard2, err := buffer.Acquire(context.Background(), newTestQueryViewOnWALReplica("p_1v0", 50, 3))
+	require.NoError(t, err)
+	defer guard2.Release()
+
+	require.Equal(t, 1, streams.callCountForReplica("p", 2))
+	require.Equal(t, 1, streams.callCountForReplica("p", 3))
+	requireSubscriptionVChannels(t, streams.streamForReplica("p", 2), []string{"p_1v0"})
+	requireSubscriptionVChannels(t, streams.streamForReplica("p", 3), []string{"p_1v0"})
+}
+
+func TestBufferReleaseOneVChannelKeepsSharedWALReplicaStreamOpen(t *testing.T) {
+	streams := newFakeStreamManager()
+	buffer := New(streams)
+
+	guard1, err := buffer.Acquire(context.Background(), newTestQueryViewOnWALReplica("p_1v0", 50, 2))
+	require.NoError(t, err)
+	guard2, err := buffer.Acquire(context.Background(), newTestQueryViewOnWALReplica("p_2v0", 50, 2))
+	require.NoError(t, err)
+	stream := streams.streamForReplica("p", 2)
+	require.NotNil(t, stream)
+	requireSubscriptionVChannels(t, stream, []string{"p_1v0", "p_2v0"})
+
+	guard1.Release()
+
+	require.Equal(t, 1, stream.subscriptionCloseCount("p_1v0"))
+	require.Equal(t, 0, stream.subscriptionCloseCount("p_2v0"))
+	select {
+	case <-stream.Done():
+		t.Fatal("shared WAL replica transform log stream closed while another vchannel was still acquired")
+	default:
+	}
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- guard2.WaitTransformVisible(context.Background(), 60)
+	}()
+	stream.emit(wal.TransformLogStreamEvent{
+		VChannel: "p_2v0",
+		Entry:    &streamingpb.TransformLogEntry{TimeTick: 60},
+	})
+	require.NoError(t, <-waitDone)
+
+	guard2.Release()
+	select {
+	case <-stream.Done():
+	case <-time.After(time.Second):
+		t.Fatal("shared WAL replica transform log stream was not closed after the last vchannel release")
+	}
 }
 
 func TestBufferAcquireWaitsForSubscriptionResult(t *testing.T) {
@@ -401,6 +532,7 @@ func TestBufferAcquireReturnsUnrecoverableSubscriptionError(t *testing.T) {
 
 func TestBufferAcquireDoesNotPoisonBufferOnRecoverableSubscriptionError(t *testing.T) {
 	streams := newFakeStreamManager()
+	streams.recreateClosed = true
 	stream := newFakeStream()
 	stream.subscribeErrs = []error{errors.New("transient stream failure")}
 	streams.streams["v1"] = stream
@@ -414,6 +546,7 @@ func TestBufferAcquireDoesNotPoisonBufferOnRecoverableSubscriptionError(t *testi
 	require.NoError(t, err)
 	require.NotNil(t, guard)
 	defer guard.Release()
+	stream = streams.stream("v1")
 	requireSubscriptionVChannels(t, stream, []string{"v1"})
 }
 
@@ -630,6 +763,60 @@ func TestGuardWaitTransformVisibleUsesVChannelFrontier(t *testing.T) {
 	require.NoError(t, <-waitDone)
 }
 
+func TestGuardWaitTransformVisibleRecoversClosedPChannelStream(t *testing.T) {
+	streams := newFakeStreamManager()
+	streams.recreateClosed = true
+	buffer := New(streams)
+	guard, err := buffer.Acquire(context.Background(), newTestQueryViewOnWALReplica("p_1v0", 50, 2))
+	require.NoError(t, err)
+	defer guard.Release()
+
+	first := streams.streamForReplica("p", 2)
+	require.NotNil(t, first)
+	requireSubscriptionVChannels(t, first, []string{"p_1v0"})
+	first.emit(wal.TransformLogStreamEvent{VChannel: "p_1v0", SyncUp: &wal.TransformLogSyncUp{TimeTick: 60}})
+	require.NoError(t, guard.WaitTransformVisible(context.Background(), 60))
+
+	require.NoError(t, first.Close())
+	require.Eventually(t, func() bool {
+		return streams.callCountForReplica("p", 2) >= 2
+	}, time.Second, 10*time.Millisecond)
+
+	second := streams.streamForReplica("p", 2)
+	require.NotSame(t, first, second)
+	requireSubscriptionVChannels(t, second, []string{"p_1v0"})
+
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- guard.WaitTransformVisible(context.Background(), 80)
+	}()
+	second.emit(wal.TransformLogStreamEvent{VChannel: "p_1v0", SyncUp: &wal.TransformLogSyncUp{TimeTick: 80}})
+	require.NoError(t, <-waitDone)
+}
+
+func TestGuardWaitTransformVisibleDoesNotForkRecoveryAfterResubscribeFailure(t *testing.T) {
+	streams := newFakeStreamManager()
+	buffer := New(streams)
+	guard, err := buffer.Acquire(context.Background(), newTestQueryViewOnWALReplica("p_1v0", 50, 2))
+	require.NoError(t, err)
+	defer guard.Release()
+
+	first := streams.streamForReplica("p", 2)
+	require.NotNil(t, first)
+	requireSubscriptionVChannels(t, first, []string{"p_1v0"})
+
+	second := newFakeStream()
+	second.subscribeErr = errors.New("transient resubscribe failure")
+	streams.setStreamForReplica("p", 2, second)
+	require.NoError(t, first.Close())
+	require.Eventually(t, func() bool {
+		return streams.callCountForReplica("p", 2) >= 2
+	}, time.Second, 10*time.Millisecond)
+
+	time.Sleep(250 * time.Millisecond)
+	require.LessOrEqual(t, streams.callCountForReplica("p", 2), 5)
+}
+
 func TestGuardWaitTransformVisibleWaitsForLiveApply(t *testing.T) {
 	streams := newFakeStreamManager()
 	buffer := New(streams)
@@ -718,11 +905,15 @@ func TestBufferRegisterSegmentFailsWhenScannerFailsBeforeSyncUp(t *testing.T) {
 }
 
 func newTestQueryView(vchannel string, startAfter uint64) *qviews.QueryViewAtQueryNode {
+	return newTestQueryViewOnWALReplica(vchannel, startAfter, 0)
+}
+
+func newTestQueryViewOnWALReplica(vchannel string, startAfter uint64, walReplicaID int64) *qviews.QueryViewAtQueryNode {
 	return qviews.NewQueryViewAtQueryNode(
 		&viewpb.QueryViewMeta{
 			Vchannel:                    vchannel,
 			TransformStartAfterTimetick: startAfter,
 		},
-		&viewpb.QueryViewOfQueryNode{NodeId: 1},
+		&viewpb.QueryViewOfQueryNode{NodeId: 1, WalReplicaId: walReplicaID},
 	).(*qviews.QueryViewAtQueryNode)
 }

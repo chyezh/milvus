@@ -336,6 +336,33 @@ func TestSegmentLoadTask_UsesTaskTransformStartTick(t *testing.T) {
 	assert.Same(t, physical, unwrapper.UnwrapTransformSegment())
 }
 
+func TestSegmentLoadTask_StampsWALReplicaID(t *testing.T) {
+	loader := &fakePhysicalLoader{
+		loadFn: func(info *querypb.SegmentLoadInfo, collection CollectionRuntime) (TransformSegment, error) {
+			return &fakeTransformSegment{id: info.GetSegmentID(), partitionID: info.GetPartitionID()}, nil
+		},
+	}
+	loadedCh := make(chan TransformSegment, 1)
+	submitTestSegmentLoadTask(t, loader, SegmentLoadTask{
+		Context:      context.Background(),
+		SegmentID:    1000,
+		WALReplicaID: 7,
+		Snapshot:     testSegmentLoadSnapshot(1000, 10),
+		OnLoaded:     func(segment TransformSegment) { loadedCh <- segment },
+		OnUnrecoverable: func(error) {
+			t.Fatal("unexpected unrecoverable")
+		},
+	})
+
+	var loaded TransformSegment
+	select {
+	case loaded = <-loadedCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for loaded segment")
+	}
+	assert.Equal(t, int64(7), loaded.(interface{ WALReplicaID() int64 }).WALReplicaID())
+}
+
 func TestSegmentLoadTask_PreservesReadableSegment(t *testing.T) {
 	collection := &segments.Collection{}
 	loader := &fakePhysicalLoader{

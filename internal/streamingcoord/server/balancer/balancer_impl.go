@@ -129,6 +129,10 @@ func (b *balancerImpl) SetShardAssignmentProvider(provider ShardAssignmentProvid
 	b.channelMetaManager.SetShardAssignmentProvider(provider)
 }
 
+func (b *balancerImpl) SetWALReplicaDependencyProvider(provider WALReplicaDependencyProvider) {
+	b.channelMetaManager.SetWALReplicaDependencyProvider(provider)
+}
+
 func (b *balancerImpl) TriggerShardAssignmentUpdate() {
 	b.channelMetaManager.TriggerWatchUpdate()
 }
@@ -301,6 +305,30 @@ func (b *balancerImpl) MarkAsUnavailable(ctx context.Context, pChannels []types.
 	ctx, cancel := contextutil.MergeContext(ctx, b.ctx)
 	defer cancel()
 	_, err := b.sendRequestAndWaitFinish(ctx, newOpMarkAsUnavailable(ctx, pChannels))
+	return err
+}
+
+func (b *balancerImpl) MarkWALReplicasAsUnavailable(ctx context.Context, replicas []types.ChannelID, assignmentEpoch int64) error {
+	if !b.lifetime.Add(typeutil.LifetimeStateWorking) {
+		return status.NewOnShutdownError("balancer is closing")
+	}
+	defer b.lifetime.Done()
+
+	ctx, cancel := contextutil.MergeContext(ctx, b.ctx)
+	defer cancel()
+	_, err := b.sendRequestAndWaitFinish(ctx, newOpMarkWALReplicasAsUnavailable(ctx, replicas, assignmentEpoch))
+	return err
+}
+
+func (b *balancerImpl) MarkWALPrimaryReplicaAsUnavailable(ctx context.Context, replicaID types.ChannelID, assignmentEpoch int64) error {
+	if !b.lifetime.Add(typeutil.LifetimeStateWorking) {
+		return status.NewOnShutdownError("balancer is closing")
+	}
+	defer b.lifetime.Done()
+
+	ctx, cancel := contextutil.MergeContext(ctx, b.ctx)
+	defer cancel()
+	_, err := b.sendRequestAndWaitFinish(ctx, newOpMarkWALPrimaryReplicaAsUnavailable(ctx, replicaID, assignmentEpoch))
 	return err
 }
 

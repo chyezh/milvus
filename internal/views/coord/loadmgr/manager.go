@@ -6,6 +6,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/util/metautil"
@@ -36,6 +37,7 @@ type discoverableShard struct {
 	pchannel     string
 	shardIndex   int32
 	replicaID    int64
+	walReplicaID int64
 }
 
 func NewCollectionLoadManager(
@@ -89,6 +91,34 @@ func (m *CollectionLoadManager) ReleaseCollection(
 	return nil
 }
 
+// SyncNewCreatedPartition adds a newly created partition to the desired state
+// only when the collection was loaded as a whole collection. Partition-load
+// configs intentionally stay unchanged: creating a partition does not imply it
+// should be loaded.
+func (m *CollectionLoadManager) SyncNewCreatedPartition(
+	ctx context.Context,
+	collectionID int64,
+	partitionID int64,
+) (bool, error) {
+	current := m.store.Snapshot().ConfigsMap()[collectionID]
+	if current == nil || current.LoadType != querypb.LoadType_LoadCollection {
+		return false, nil
+	}
+	for _, existing := range current.PartitionIDs {
+		if existing == partitionID {
+			return false, nil
+		}
+	}
+
+	next := current.Clone()
+	next.PartitionIDs = append(next.PartitionIDs, partitionID)
+	if err := m.store.Put(ctx, next); err != nil {
+		return false, err
+	}
+	m.notifyCollection(collectionID)
+	return true, nil
+}
+
 // SetShardAssignmentNotifier installs the callback used to publish
 // discoverable shard assignment changes.
 func (m *CollectionLoadManager) SetShardAssignmentNotifier(notifier ShardAssignmentNotifier) {
@@ -97,20 +127,21 @@ func (m *CollectionLoadManager) SetShardAssignmentNotifier(notifier ShardAssignm
 	m.shardAssignmentNotifier = notifier
 }
 
-// ObserveShardUp marks a shard as discoverable the first time it reaches Up.
-// Later QueryView version changes for the same shard do not change assignment
-// discovery; the shard remains discoverable until the collection is released.
-func (m *CollectionLoadManager) ObserveShardUp(shardID qviews.ShardID) {
-	if m.markDiscoverable(shardID) {
+// ObserveShardUp marks a shard as discoverable when it reaches Up. Later
+// QueryView version changes for the same WAL replica do not change assignment
+// discovery, but a WAL replica binding change must be published so query
+// clients route the shard through the current serving WAL replica.
+func (m *CollectionLoadManager) ObserveShardUp(shardID qviews.ShardID, walReplicaID ...int64) {
+	if m.markDiscoverable(shardID, firstWALReplicaID(walReplicaID)) {
 		m.notifyShardAssignmentsChanged()
 	}
 }
 
-// MarkShardDiscoverable marks a shard as discoverable. It is exported for the
-// coordview registry adapter and tests; callers should pass a shard that has
-// reached Up.
-func (m *CollectionLoadManager) MarkShardDiscoverable(shardID qviews.ShardID) bool {
-	return m.markDiscoverable(shardID)
+// MarkShardDiscoverable marks a shard as discoverable and returns whether the
+// published assignment changed. It is exported for the coordview registry
+// adapter and tests; callers should pass a shard that has reached Up.
+func (m *CollectionLoadManager) MarkShardDiscoverable(shardID qviews.ShardID, walReplicaID ...int64) bool {
+	return m.markDiscoverable(shardID, firstWALReplicaID(walReplicaID))
 }
 
 // ShardAssignmentsByPChannel returns a snapshot of discoverable shard replicas,
@@ -126,27 +157,36 @@ func (m *CollectionLoadManager) ShardAssignmentsByPChannel() map[string][]types.
 			CollectionID: shard.collectionID,
 			ShardIndex:   shard.shardIndex,
 			ReplicaID:    shard.replicaID,
+			WALReplicaID: shard.walReplicaID,
 		})
 	}
 	return assignments
 }
 
-func (m *CollectionLoadManager) markDiscoverable(shardID qviews.ShardID) bool {
-	shard, ok := newDiscoverableShard(shardID)
+func (m *CollectionLoadManager) markDiscoverable(shardID qviews.ShardID, walReplicaID int64) bool {
+	shard, ok := newDiscoverableShard(shardID, walReplicaID)
 	if !ok {
 		return false
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, exists := m.discoverableShards[shardID]; exists {
+	existing, exists := m.discoverableShards[shardID]
+	if exists && existing.walReplicaID == shard.walReplicaID {
 		return false
 	}
 	m.discoverableShards[shardID] = shard
 	return true
 }
 
-func newDiscoverableShard(shardID qviews.ShardID) (discoverableShard, bool) {
+func firstWALReplicaID(replicaIDs []int64) int64 {
+	if len(replicaIDs) == 0 {
+		return 0
+	}
+	return replicaIDs[0]
+}
+
+func newDiscoverableShard(shardID qviews.ShardID, walReplicaID int64) (discoverableShard, bool) {
 	ch, err := metautil.ParseChannel(shardID.VChannel, metautil.NewDynChannelMapper())
 	if err != nil {
 		return discoverableShard{}, false
@@ -156,6 +196,7 @@ func newDiscoverableShard(shardID qviews.ShardID) (discoverableShard, bool) {
 		pchannel:     ch.PhysicalName(),
 		shardIndex:   int32(ch.ShardIdx()),
 		replicaID:    shardID.ReplicaID,
+		walReplicaID: walReplicaID,
 	}, true
 }
 

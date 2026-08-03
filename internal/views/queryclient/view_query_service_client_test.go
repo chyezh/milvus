@@ -2,6 +2,7 @@ package queryclient
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -16,10 +17,11 @@ func TestCompositeViewQueryServiceClientDispatchesByWorkNode(t *testing.T) {
 	qnClient := &fakeQueryNodeViewQueryServiceClient{queryResp: &viewpb.QueryOnViewResponse{}}
 	client := NewCompositeViewQueryServiceClient(snClient, qnClient)
 
-	searchResp, err := client.SearchOnView(context.Background(), qviews.StreamingNode{PChannel: "p0"}, &viewpb.SearchOnViewRequest{})
+	searchResp, err := client.SearchOnView(context.Background(), qviews.StreamingNode{PChannel: "p0", WALReplicaID: 2}, &viewpb.SearchOnViewRequest{})
 	require.NoError(t, err)
 	require.Same(t, snClient.searchResp, searchResp)
 	require.Equal(t, types.PChannelInfo{Name: "p0"}, snClient.pchannel)
+	require.Equal(t, int64(2), snClient.walReplicaID)
 
 	queryResp, err := client.QueryOnView(context.Background(), qviews.NewQueryNode(11), &viewpb.QueryOnViewRequest{})
 	require.NoError(t, err)
@@ -27,27 +29,41 @@ func TestCompositeViewQueryServiceClientDispatchesByWorkNode(t *testing.T) {
 	require.Equal(t, int64(11), qnClient.nodeID)
 }
 
-type fakeStreamingNodeViewQueryServiceClient struct {
-	pchannel   types.PChannelInfo
-	searchResp *viewpb.SearchOnViewResponse
+func TestCompositeViewQueryServiceClientAddsWorkNodeContextToErrors(t *testing.T) {
+	qnClient := &fakeQueryNodeViewQueryServiceClient{queryErr: errors.New("boom")}
+	client := NewCompositeViewQueryServiceClient(&fakeStreamingNodeViewQueryServiceClient{}, qnClient)
+
+	_, err := client.QueryOnView(context.Background(), qviews.NewQueryNode(11), &viewpb.QueryOnViewRequest{})
+
+	require.Error(t, err)
+	require.ErrorContains(t, err, "workNode=qn@11")
+	require.ErrorContains(t, err, "boom")
 }
 
-func (f *fakeStreamingNodeViewQueryServiceClient) SearchOnView(_ context.Context, pchannel types.PChannelInfo, _ *viewpb.SearchOnViewRequest) (*viewpb.SearchOnViewResponse, error) {
+type fakeStreamingNodeViewQueryServiceClient struct {
+	pchannel     types.PChannelInfo
+	walReplicaID int64
+	searchResp   *viewpb.SearchOnViewResponse
+}
+
+func (f *fakeStreamingNodeViewQueryServiceClient) SearchOnView(_ context.Context, pchannel types.PChannelInfo, walReplicaID int64, _ *viewpb.SearchOnViewRequest) (*viewpb.SearchOnViewResponse, error) {
 	f.pchannel = pchannel
+	f.walReplicaID = walReplicaID
 	return f.searchResp, nil
 }
 
-func (f *fakeStreamingNodeViewQueryServiceClient) QueryOnView(context.Context, types.PChannelInfo, *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error) {
+func (f *fakeStreamingNodeViewQueryServiceClient) QueryOnView(context.Context, types.PChannelInfo, int64, *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error) {
 	return &viewpb.QueryOnViewResponse{}, nil
 }
 
-func (f *fakeStreamingNodeViewQueryServiceClient) RequeryOnView(context.Context, types.PChannelInfo, *viewpb.RequeryOnViewRequest) (*viewpb.RequeryOnViewResponse, error) {
+func (f *fakeStreamingNodeViewQueryServiceClient) RequeryOnView(context.Context, types.PChannelInfo, int64, *viewpb.RequeryOnViewRequest) (*viewpb.RequeryOnViewResponse, error) {
 	return &viewpb.RequeryOnViewResponse{}, nil
 }
 
 type fakeQueryNodeViewQueryServiceClient struct {
 	nodeID    int64
 	queryResp *viewpb.QueryOnViewResponse
+	queryErr  error
 }
 
 func (f *fakeQueryNodeViewQueryServiceClient) SearchOnView(context.Context, int64, *viewpb.SearchOnViewRequest) (*viewpb.SearchOnViewResponse, error) {
@@ -56,6 +72,9 @@ func (f *fakeQueryNodeViewQueryServiceClient) SearchOnView(context.Context, int6
 
 func (f *fakeQueryNodeViewQueryServiceClient) QueryOnView(_ context.Context, nodeID int64, _ *viewpb.QueryOnViewRequest) (*viewpb.QueryOnViewResponse, error) {
 	f.nodeID = nodeID
+	if f.queryErr != nil {
+		return nil, f.queryErr
+	}
 	return f.queryResp, nil
 }
 

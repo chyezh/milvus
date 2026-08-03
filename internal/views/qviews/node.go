@@ -65,20 +65,32 @@ func (q QueryNode) String() string {
 
 // NewStreamingNodeFromVChannel creates a new streaming node by vchannel.
 func NewStreamingNodeFromVChannel(vchannel string) StreamingNode {
+	return NewStreamingNodeFromVChannelAndWALReplica(vchannel, 0)
+}
+
+// NewStreamingNodeFromVChannelAndWALReplica creates a new streaming node by vchannel and WAL replica.
+func NewStreamingNodeFromVChannelAndWALReplica(vchannel string, walReplicaID int64) StreamingNode {
 	pchannel := funcutil.ToPhysicalChannel(vchannel)
-	return StreamingNode{PChannel: pchannel}
+	return StreamingNode{
+		PChannel:     pchannel,
+		WALReplicaID: walReplicaID,
+	}
 }
 
 // StreamingNode identifies a streaming node by its bound physical channel.
 type StreamingNode struct {
-	PChannel string
+	PChannel     string
+	WALReplicaID int64
 }
 
 func (StreamingNode) isWorkNode()        {}
 func (StreamingNode) NodeType() NodeType { return NodeTypeStreamingNode }
 
 func (s StreamingNode) Key() WorkNodeKey {
-	return fmt.Sprintf("%s@%s", s.NodeType(), s.PChannel)
+	if s.WALReplicaID == 0 {
+		return fmt.Sprintf("%s@%s", s.NodeType(), s.PChannel)
+	}
+	return fmt.Sprintf("%s@%s#%d", s.NodeType(), s.PChannel, s.WALReplicaID)
 }
 
 func (s StreamingNode) String() string {

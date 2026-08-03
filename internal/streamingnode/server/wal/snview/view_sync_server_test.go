@@ -12,9 +12,11 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	streamingstatus "github.com/milvus-io/milvus/internal/util/streamingutil/status"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	worknodehandler "github.com/milvus-io/milvus/internal/views/worknode/handler"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
+	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 )
 
 func TestPChannelViewSyncServerRejectsUnavailableWAL(t *testing.T) {
@@ -25,7 +27,7 @@ func TestPChannelViewSyncServerRejectsUnavailableWAL(t *testing.T) {
 		Name:       "p0",
 		Term:       1,
 		AccessMode: types.AccessModeRW,
-	}))
+	}, 2))
 
 	err := server.SyncQueryView(stream)
 
@@ -43,7 +45,7 @@ func TestPChannelViewSyncServerClosesStreamWhenWALCloses(t *testing.T) {
 		Name:       "p0",
 		Term:       1,
 		AccessMode: types.AccessModeRW,
-	}))
+	}, 2))
 
 	done := make(chan error, 1)
 	go func() {
@@ -61,6 +63,7 @@ func TestPChannelViewSyncServerClosesStreamWhenWALCloses(t *testing.T) {
 	}
 	close(stream.recvCh)
 	require.NoError(t, <-done)
+	require.Equal(t, int64(2), server.walManager.(*fakeViewSyncWALManager).walReplicaID)
 }
 
 func TestPChannelViewSyncServerUsesWrappedWALProvider(t *testing.T) {
@@ -99,22 +102,76 @@ func TestPChannelViewSyncServerUsesWrappedWALProvider(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
-func newIncomingViewSyncContext(pchannel types.PChannelInfo) context.Context {
-	outgoingCtx := worknodehandler.EncodeQueryViewPChannelToOutgoingContext(context.Background(), pchannel)
+func TestPChannelScopedQueryViewHandlerFiltersWALReplica(t *testing.T) {
+	raw := &capturingViewSyncQueryViewHandler{}
+	handler := &pchannelScopedQueryViewHandler{
+		pchannel:     "p0",
+		walReplicaID: 2,
+		handler:      raw,
+	}
+	var reports []qviews.QueryViewAtWorkNode
+	matched := newTestApplyView(1, 2, func(report qviews.QueryViewAtWorkNode) {
+		reports = append(reports, report)
+	})
+	mismatched := newTestApplyView(2, 3, func(report qviews.QueryViewAtWorkNode) {
+		reports = append(reports, report)
+	})
+
+	handler.ApplyViews([]worknodehandler.ApplyView{matched, mismatched})
+
+	require.Len(t, raw.views, 1)
+	require.Equal(t, matched.View.QueryViewKey(), raw.views[0].View.QueryViewKey())
+	require.Len(t, reports, 1)
+	require.Equal(t, qviews.QueryViewStateUnrecoverable, reports[0].State())
+}
+
+func newIncomingViewSyncContext(pchannel types.PChannelInfo, walReplicaID ...int64) context.Context {
+	replicaID := int64(0)
+	if len(walReplicaID) > 0 {
+		replicaID = walReplicaID[0]
+	}
+	outgoingCtx := worknodehandler.EncodeQueryViewWALReplicaToOutgoingContext(context.Background(), pchannel, replicaID)
 	md, _ := metadata.FromOutgoingContext(outgoingCtx)
 	return metadata.NewIncomingContext(context.Background(), md)
 }
 
+func newTestApplyView(queryReplicaID int64, walReplicaID int64, onReport func(qviews.QueryViewAtWorkNode)) worknodehandler.ApplyView {
+	meta := &viewpb.QueryViewMeta{
+		CollectionId: 1,
+		ReplicaId:    queryReplicaID,
+		Vchannel:     funcutil.GetVirtualChannel("p0", 1, 0),
+		Version: &viewpb.QueryViewVersion{
+			DataVersion:  &viewpb.DataVersion{StreamingVersion: 1},
+			QueryVersion: 1,
+		},
+		State: viewpb.QueryViewState_QueryViewStatePreparing,
+	}
+	return worknodehandler.ApplyView{
+		View: qviews.NewQueryViewAtStreamingNode(meta, &viewpb.QueryViewOfStreamingNode{
+			WalReplicaId: walReplicaID,
+		}),
+		OnReport: onReport,
+	}
+}
+
 type fakeViewSyncWALManager struct {
-	wal wal.WAL
-	err error
+	channel      types.PChannelInfo
+	walReplicaID int64
+	wal          wal.WAL
+	err          error
 }
 
 func (m *fakeViewSyncWALManager) Open(context.Context, types.PChannelInfo) error {
 	return nil
 }
 
-func (m *fakeViewSyncWALManager) GetAvailableWAL(types.PChannelInfo) (wal.WAL, error) {
+func (m *fakeViewSyncWALManager) GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error) {
+	return m.GetAvailableWALReplica(channel, 0)
+}
+
+func (m *fakeViewSyncWALManager) GetAvailableWALReplica(channel types.PChannelInfo, walReplicaID int64) (wal.WAL, error) {
+	m.channel = channel
+	m.walReplicaID = walReplicaID
 	return m.wal, m.err
 }
 
@@ -157,6 +214,14 @@ func (w wrappedTestWAL) UnwrapWAL() wal.WAL {
 type fakeViewSyncQueryViewHandler struct{}
 
 func (fakeViewSyncQueryViewHandler) ApplyViews([]worknodehandler.ApplyView) {}
+
+type capturingViewSyncQueryViewHandler struct {
+	views []worknodehandler.ApplyView
+}
+
+func (h *capturingViewSyncQueryViewHandler) ApplyViews(views []worknodehandler.ApplyView) {
+	h.views = append(h.views, views...)
+}
 
 type testSyncQueryViewServerStream struct {
 	ctx         context.Context

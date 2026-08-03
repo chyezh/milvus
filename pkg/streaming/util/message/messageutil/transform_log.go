@@ -41,6 +41,7 @@ func ClassifyTransformLogMessage(msg message.ImmutableMessage) TransformLogKind 
 		}
 		return TransformLogKindNone
 	case message.MessageTypeCreateCollection,
+		message.MessageTypeTimeTick,
 		message.MessageTypeRecoveryBarrier,
 		message.MessageTypeFlush,
 		message.MessageTypeManualFlush,

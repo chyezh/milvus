@@ -22,6 +22,9 @@ func (h *discoverGrpcServerHelper) SendFullAssignment(param balancer.WatchChanne
 	}
 	assignmentsMap := make(map[int64]*streamingpb.StreamingNodeAssignment)
 	for _, relation := range param.Relations {
+		if _, ok := nodes[relation.Node.ServerID]; !ok {
+			continue
+		}
 		if assignmentsMap[relation.Node.ServerID] == nil {
 			assignmentsMap[relation.Node.ServerID] = newStreamingNodeAssignment(relation.Node, param.ShardAssignments)
 		}
@@ -36,6 +39,21 @@ func (h *discoverGrpcServerHelper) SendFullAssignment(param balancer.WatchChanne
 		default:
 			panic("undefined pchannel access mode")
 		}
+	}
+	for _, relation := range param.WALReplicaRelations {
+		node, ok := nodes[relation.Node.ServerID]
+		if !ok {
+			continue
+		}
+		if assignmentsMap[relation.Node.ServerID] == nil {
+			assignmentsMap[relation.Node.ServerID] = newStreamingNodeAssignment(relation.Node, param.ShardAssignments)
+		}
+		replica := relation.Replica
+		replica.ResourceGroup = node.ResourceGroup
+		assignmentsMap[relation.Node.ServerID].WalReplicas = append(
+			assignmentsMap[relation.Node.ServerID].WalReplicas,
+			types.NewProtoFromWALReplicaInfo(replica),
+		)
 	}
 	for _, node := range nodes {
 		if assignmentsMap[node.ServerID] == nil {
@@ -79,6 +97,7 @@ func newStreamingNodeAssignment(
 		Node:              types.NewProtoFromStreamingNodeInfo(node),
 		Channels:          make([]*streamingpb.PChannelInfo, 0),
 		SecondaryChannels: make([]*streamingpb.PChannelInfo, 0),
+		WalReplicas:       make([]*streamingpb.WALReplicaInfo, 0),
 	}
 	if shardAssignment, ok := shardAssignments[node.ServerID]; ok {
 		assignment.ShardAssignment = types.NewProtoFromShardAssignmentInfo(shardAssignment)

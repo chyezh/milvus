@@ -29,6 +29,7 @@ type fakeTransformSegment struct {
 	waitErr      error
 	waitTimetick uint64
 	waitCalled   bool
+	walReplicaID int64
 }
 
 func (s *fakeTransformSegment) ID() int64 {
@@ -67,6 +68,14 @@ func (s *fakeTransformSegment) WaitTransformApplied(_ context.Context, timetick 
 func (s *fakeTransformSegment) Release(context.Context) error {
 	s.released = true
 	return nil
+}
+
+func (s *fakeTransformSegment) SetWALReplicaID(walReplicaID int64) {
+	s.walReplicaID = walReplicaID
+}
+
+func (s *fakeTransformSegment) WALReplicaID() int64 {
+	return s.walReplicaID
 }
 
 type fakeReadableTransformSegment struct {
@@ -112,6 +121,7 @@ type fakeTransformLogBuffer struct {
 	acquireErr       error
 	guard            *fakeTransformLogGuard
 	registerSegments []int64
+	registerReplicas []int64
 	registerErr      error
 	regs             []*fakeTransformRegistration
 }
@@ -137,6 +147,11 @@ func (b *fakeTransformLogBuffer) RegisterSegment(_ context.Context, segment Tran
 	}
 	reg := newFakeTransformRegistration()
 	b.registerSegments = append(b.registerSegments, segment.ID())
+	if withReplica, ok := segment.(interface{ WALReplicaID() int64 }); ok {
+		b.registerReplicas = append(b.registerReplicas, withReplica.WALReplicaID())
+	} else {
+		b.registerReplicas = append(b.registerReplicas, 0)
+	}
 	b.regs = append(b.regs, reg)
 	return reg, nil
 }

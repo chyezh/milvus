@@ -25,7 +25,7 @@ func TestReadSyncsInitialFrontierBeforeFutureUpdates(t *testing.T) {
 		require.True(t, transformLog.syncUp(timeTick).Appended)
 	}
 
-	stream, err := manager.AcquireStream(context.Background(), "p1")
+	stream, err := manager.AcquireStream(context.Background(), "p1", 0)
 	require.NoError(t, err)
 	defer stream.Close()
 	handler := newRecordingStreamHandler()
@@ -132,7 +132,7 @@ func TestReadStopsAtEndTimeTick(t *testing.T) {
 	require.True(t, transformLog.append(newTransformLogTestDeleteMessage(t, 30), appendOption{}).Appended)
 	require.True(t, transformLog.syncUp(40).Appended)
 
-	stream, err := manager.AcquireStream(context.Background(), "p1")
+	stream, err := manager.AcquireStream(context.Background(), "p1", 0)
 	require.NoError(t, err)
 	defer stream.Close()
 	handler := newRecordingStreamHandler()
@@ -187,7 +187,7 @@ func TestNewKeepsRecoveredChunksColdUntilRead(t *testing.T) {
 
 	assert.Equal(t, 0, store.readCount("v1", 0))
 
-	stream, err := manager.AcquireStream(context.Background(), "p1")
+	stream, err := manager.AcquireStream(context.Background(), "p1", 0)
 	require.NoError(t, err)
 	defer stream.Close()
 	handler := newRecordingStreamHandler()
@@ -265,7 +265,7 @@ func TestFlushWhileScannerDrainsDoesNotDuplicateEntries(t *testing.T) {
 		require.True(t, transformLog.append(newTransformLogTestDeleteMessage(t, timeTick), appendOption{}).Appended)
 	}
 
-	stream, err := manager.AcquireStream(context.Background(), "p1")
+	stream, err := manager.AcquireStream(context.Background(), "p1", 0)
 	require.NoError(t, err)
 	defer stream.Close()
 	handler := newRecordingStreamHandler()

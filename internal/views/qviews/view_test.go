@@ -37,12 +37,19 @@ func TestNewQueryViewAtWorkNodeFromProto(t *testing.T) {
 	}, qv.Version())
 	assert.True(t, proto.Equal(qv.IntoProto(), pb))
 
+	pb.StreamingNode.WalReplicaId = 2
+	qv = NewQueryViewAtWorkNodeFromProto(pb)
+	assert.Equal(t, NewStreamingNodeFromVChannelAndWALReplica("v1", 2), qv.WorkNode())
+	assert.Equal(t, "sn@v1#2", qv.WorkNode().String())
+	assert.Equal(t, int64(2), qv.(*QueryViewAtStreamingNode).WALReplicaID())
+
 	pb.StreamingNode = nil
-	pb.QueryNode = []*viewpb.QueryViewOfQueryNode{{NodeId: 1}}
+	pb.QueryNode = []*viewpb.QueryViewOfQueryNode{{NodeId: 1, WalReplicaId: 2}}
 	qv = NewQueryViewAtWorkNodeFromProto(pb)
 	qv.(*QueryViewAtQueryNode).ViewOfQueryNode()
 	assert.Equal(t, NewQueryNode(1), qv.WorkNode())
 	assert.Equal(t, "qn@1", qv.WorkNode().String())
+	assert.Equal(t, int64(2), qv.(*QueryViewAtQueryNode).WALReplicaID())
 	assert.Equal(t, ShardID{ReplicaID: 1, VChannel: "v1"}, qv.ShardID())
 	assert.Equal(t, QueryViewStatePreparing, qv.State())
 	assert.True(t, proto.Equal(qv.IntoProto(), pb))

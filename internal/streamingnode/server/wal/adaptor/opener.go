@@ -8,6 +8,7 @@ import (
 	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
+	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/resource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/interceptors"
@@ -17,6 +18,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/recovery"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/idf"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
 	"github.com/milvus-io/milvus/internal/util/streamingutil/status"
@@ -24,6 +26,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	msgadaptor "github.com/milvus-io/milvus/pkg/v3/streaming/util/message/adaptor"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
@@ -123,7 +126,7 @@ func (o *openerAdaptorImpl) Open(ctx context.Context, opt *wal.OpenOption) (wal.
 	case types.AccessModeRW:
 		wal, err = o.openRWWAL(ctx, l, opt)
 	case types.AccessModeRO:
-		wal, err = o.openROWAL(l)
+		wal, err = o.openROWAL(ctx, l, opt)
 	default:
 		panic("unknown access mode")
 	}
@@ -217,6 +220,7 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 	if err != nil {
 		return nil, errors.Wrap(err, "when loading streaming node query view meta")
 	}
+	persistedViews = filterQueryViewsByWALReplica(persistedViews, opt.WALReplicaID)
 	queryRuntimeBuilders := []queryresource.QueryRuntimeModuleBuilder{
 		queryresource.NewGrowingRuntimeModuleBuilder(nil),
 		idf.NewFutureProvider(
@@ -258,6 +262,11 @@ func (o *openerAdaptorImpl) openRWWAL(ctx context.Context, l walimpls.WALImpls, 
 		snHandler.CloseForHandoff()
 		resMgr.Close()
 		return o.handleAlterWAL(ctx, opt, roWAL, rs, resources, snapshot)
+	}
+	if err := snHandler.WaitRecoveredViews(ctx); err != nil {
+		snHandler.CloseForHandoff()
+		resMgr.Close()
+		return nil, errors.Wrap(err, "when waiting for recovered streaming node query views")
 	}
 
 	param.LastConfirmedMessageID = determineLastConfirmedMessageID(param.LastTimeTickMessage.MessageID(), snapshot.TxnBuffer)
@@ -535,13 +544,158 @@ func (o *openerAdaptorImpl) handleAlterWALAdvanceCheckpointsStage(ctx context.Co
 }
 
 // openROWAL opens a read only wal instance for the channel.
-func (o *openerAdaptorImpl) openROWAL(l walimpls.WALImpls) (wal.WAL, error) {
+func (o *openerAdaptorImpl) openROWAL(ctx context.Context, l walimpls.WALImpls, opt *wal.OpenOption) (wal.WAL, error) {
 	id := o.idAllocator.Allocate()
-	wal := adaptImplsToROWAL(l, func() {
+	roWAL := adaptImplsToROWAL(l, func() {
 		o.walInstances.Remove(id)
 	})
-	o.walInstances.Insert(id, wal)
-	return wal, nil
+	catalog := resource.Resource().StreamingNodeCatalog()
+
+	cpProto, err := catalog.GetConsumeCheckpoint(ctx, opt.Channel.Name)
+	if err != nil {
+		roWAL.Close()
+		return nil, errors.Wrap(err, "failed to get read-only wal checkpoint from catalog")
+	}
+	cp := utility.NewWALCheckpointFromProto(cpProto)
+	recoveryMeta, err := loadReadOnlyRecoveryMeta(ctx, catalog, opt.Channel.Name)
+	if err != nil {
+		roWAL.Close()
+		return nil, errors.Wrap(err, "when loading read-only wal recovery meta")
+	}
+	roWAL.registerReadOnlyFunctionRunners(recoveryMeta, opt.WALReplicaID)
+	persistedViews, err := catalog.ListQueryViews(ctx, opt.Channel.Name)
+	if err != nil {
+		roWAL.Close()
+		return nil, errors.Wrap(err, "when loading read-only streaming node query view meta")
+	}
+	persistedViews = filterQueryViewsByWALReplica(persistedViews, opt.WALReplicaID)
+	resMgr, err := vchannel.NewPChannelRecoveryManager(vchannel.PChannelManagerConfig{
+		PChannel:                  opt.Channel.Name,
+		VChannelMetas:             recoveryMeta.vchannels,
+		Segments:                  recoveryMeta.segments,
+		SegmentDataVersionSummary: recoveryMeta.segmentDataVersionSummaries,
+		TransformLogMetas:         recoveryMeta.transformLogs,
+		QueryRuntimeModuleBuilders: []queryresource.QueryRuntimeModuleBuilder{
+			queryresource.NewGrowingRuntimeModuleBuilder(nil),
+			idf.NewFutureProvider(
+				resource.Resource().MixCoordClient(),
+				idf.WithChunkManager(resource.Resource().ChunkManager()),
+				idf.WithNodeScheduler(nodescheduler.Get()),
+			),
+		},
+		QueryViewLoadInfoProvider: queryresource.NewFutureLoadInfoProvider(resource.Resource().MixCoordClient()),
+		NodeScheduler:             nodescheduler.Get(),
+	})
+	if err != nil {
+		roWAL.Close()
+		return nil, errors.Wrap(err, "when building read-only wal query resource manager")
+	}
+	resMgr.SwitchIntoReadOnlyProjection()
+	roWAL.viewResourceManager = resMgr
+	roWAL.queryViewHandler = snview.RecoverPChannelSNQueryViewHandler(opt.Channel.Name, catalog, resMgr, persistedViews)
+	roWAL.startReadOnlyProjectionScanner(readOnlyProjectionStartMessageID(cp))
+	o.walInstances.Insert(id, roWAL)
+	return roWAL, nil
+}
+
+func readOnlyProjectionStartMessageID(cp *utility.WALCheckpoint) message.MessageID {
+	if cp == nil {
+		return nil
+	}
+	if cp.DataCheckpoint != nil && cp.DataCheckpoint.MessageID != nil {
+		return cp.DataCheckpoint.MessageID
+	}
+	return cp.MessageID
+}
+
+func (w *roWALAdaptorImpl) registerReadOnlyFunctionRunners(recoveryMeta *readOnlyRecoveryMeta, walReplicaID int64) {
+	if recoveryMeta == nil {
+		return
+	}
+	for _, vchannelMeta := range recoveryMeta.vchannels {
+		collectionInfo := vchannelMeta.GetCollectionInfo()
+		schemas := collectionInfo.GetSchemas()
+		if len(schemas) == 0 {
+			continue
+		}
+		latest := schemas[len(schemas)-1].GetSchema()
+		w.registerReadOnlyFunctionRunner(collectionInfo.GetCollectionId(), vchannelMeta.GetVchannel(), walReplicaID, latest)
+	}
+}
+
+type readOnlyRecoveryMeta struct {
+	vchannels                   map[string]*streamingpb.VChannelMeta
+	segments                    map[int64]*streamingpb.SegmentAssignmentMeta
+	segmentDataVersionSummaries map[string]*streamingpb.SegmentDataVersionSummary
+	transformLogs               map[string]*streamingpb.VChannelTransformLogMeta
+}
+
+func loadReadOnlyRecoveryMeta(ctx context.Context, catalog metastore.StreamingNodeCataLog, pchannel string) (*readOnlyRecoveryMeta, error) {
+	vchannels, err := catalog.ListVChannel(ctx, pchannel)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list vchannels")
+	}
+	vchannelMetas, err := readOnlyVChannelMetaMap(vchannels)
+	if err != nil {
+		return nil, err
+	}
+	segments, err := catalog.ListSegmentAssignment(ctx, pchannel)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list segment assignments")
+	}
+	segmentMetas, err := readOnlySegmentAssignmentMetaMap(segments)
+	if err != nil {
+		return nil, err
+	}
+	segmentDataVersionSummaries, err := catalog.ListSegmentDataVersionSummaries(ctx, pchannel)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list segment data version summaries")
+	}
+	transformLogMetas, err := catalog.ListTransformLogMeta(ctx, pchannel)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to list transform log meta")
+	}
+	return &readOnlyRecoveryMeta{
+		vchannels:                   vchannelMetas,
+		segments:                    segmentMetas,
+		segmentDataVersionSummaries: segmentDataVersionSummaries,
+		transformLogs:               transformLogMetas,
+	}, nil
+}
+
+func readOnlyVChannelMetaMap(vchannels []*streamingpb.VChannelMeta) (map[string]*streamingpb.VChannelMeta, error) {
+	metas := make(map[string]*streamingpb.VChannelMeta, len(vchannels))
+	for _, meta := range vchannels {
+		vchannel := meta.GetVchannel()
+		if _, ok := metas[vchannel]; ok {
+			return nil, errors.Errorf("duplicate vchannel owner in read-only recovery meta: %s", vchannel)
+		}
+		metas[vchannel] = meta
+	}
+	return metas, nil
+}
+
+func readOnlySegmentAssignmentMetaMap(segments []*streamingpb.SegmentAssignmentMeta) (map[int64]*streamingpb.SegmentAssignmentMeta, error) {
+	metas := make(map[int64]*streamingpb.SegmentAssignmentMeta, len(segments))
+	for _, meta := range segments {
+		segmentID := meta.GetSegmentId()
+		if _, ok := metas[segmentID]; ok {
+			return nil, errors.Errorf("duplicate segment owner in read-only recovery meta: %d", segmentID)
+		}
+		metas[segmentID] = meta
+	}
+	return metas, nil
+}
+
+func filterQueryViewsByWALReplica(views []*viewpb.QueryViewOfShard, walReplicaID int64) []*viewpb.QueryViewOfShard {
+	filtered := make([]*viewpb.QueryViewOfShard, 0, len(views))
+	for _, view := range views {
+		if view.GetStreamingNode().GetWalReplicaId() != walReplicaID {
+			continue
+		}
+		filtered = append(filtered, view)
+	}
+	return filtered
 }
 
 // Close the wal opener, release the underlying resources.

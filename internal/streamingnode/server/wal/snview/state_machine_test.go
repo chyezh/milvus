@@ -1352,6 +1352,16 @@ func TestPersist_DownDeletes(t *testing.T) {
 	assert.Equal(t, viewpb.QueryViewState_QueryViewStateDown, persist.Meta.State)
 }
 
+func TestPersist_CoordUnrecoverableFromUpDeletes(t *testing.T) {
+	sm := newUpSM()
+	sm.OnCoordStateDelivered(qviews.QueryViewStateUnrecoverable)
+
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, sm.State())
+	assertReportState(t, sm, qviews.QueryViewStateUnrecoverable)
+	assertPersistState(t, sm, qviews.QueryViewStateUnrecoverable)
+	assertNoRelease(t, sm)
+}
+
 func TestPersist_UnrecoverableFromUpRecoveringRetainsRecoveryInfo(t *testing.T) {
 	sm := newRecoveringSM()
 	sm.OnUnrecoverable()

@@ -70,7 +70,7 @@ func (c *DefaultViewSyncClient) OpenSyncStream(ctx context.Context, node qviews.
 		if c.streamingNodes == nil {
 			return nil, merr.WrapErrServiceInternalMsg("streamingnode query view sync client is nil")
 		}
-		return c.streamingNodes.SyncQueryView(ctx, n.PChannel)
+		return c.streamingNodes.SyncQueryView(ctx, n.PChannel, n.WALReplicaID)
 	default:
 		return nil, merr.WrapErrServiceInternalMsg("unknown work node type %T", node)
 	}

@@ -16,9 +16,15 @@ type Manager interface {
 	// Return `UnmatchedChannelTerm` error if the channel term is not matched.
 	Open(ctx context.Context, channel types.PChannelInfo) error
 
+	// OpenWALReplica opens a wal replica instance for the channel on this Manager.
+	OpenWALReplica(ctx context.Context, channel types.PChannelInfo, walReplicaID int64, assignmentEpoch int64) error
+
 	// GetAvailableWAL returns a available wal instance for the channel.
 	// Return nil if the wal instance is not found.
 	GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error)
+
+	// GetAvailableWALReplica returns an available WAL replica instance for the channel.
+	GetAvailableWALReplica(channel types.PChannelInfo, walReplicaID int64) (wal.WAL, error)
 
 	// GetAvailableRawWALByPChannel returns the available raw wal instance for the pchannel.
 	GetAvailableRawWALByPChannel(pchannel string) (wal.WAL, error)
@@ -30,6 +36,9 @@ type Manager interface {
 	// Return `IgnoreOperation` error if the channel is not found.
 	// Return `UnmatchedChannelTerm` error if the channel term is not matched.
 	Remove(ctx context.Context, channel types.PChannelInfo) error
+
+	// RemoveWALReplica removes the wal replica instance for the channel.
+	RemoveWALReplica(ctx context.Context, channel types.PChannelInfo, walReplicaID int64, assignmentEpoch int64) error
 
 	// Close these manager and release all managed WAL.
 	Close()

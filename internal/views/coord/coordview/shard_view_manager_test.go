@@ -13,6 +13,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
 
 // ---------------------------------------------------------------------------
@@ -134,10 +135,11 @@ func (c *mockCatalog) reset() {
 
 // mockSyncer records all SyncViews calls and allows triggering callbacks.
 type mockSyncer struct {
-	mu          sync.Mutex
-	syncedViews []syncer.SyncView  // accumulated across all calls
-	syncCalls   []syncer.SyncGroup // per-call groups
-	waitFlush   func()
+	mu                     sync.Mutex
+	syncedViews            []syncer.SyncView  // accumulated across all calls
+	syncCalls              []syncer.SyncGroup // per-call groups
+	waitFlush              func()
+	walReplicaDependencies map[types.ChannelID]struct{}
 }
 
 func newMockSyncer() *mockSyncer {
@@ -155,6 +157,13 @@ func (s *mockSyncer) SyncViews(_ context.Context, group syncer.SyncGroup) error 
 }
 
 func (s *mockSyncer) Close() error { return nil }
+
+func (s *mockSyncer) HasWALReplicaDependency(replicaID types.ChannelID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.walReplicaDependencies[replicaID]
+	return ok
+}
 
 // findOnSyncResponse returns the latest OnSyncResponse callback for the given work node and version.
 func (s *mockSyncer) findOnSyncResponse(node qviews.WorkNode, version qviews.QueryViewVersion) func(resp qviews.QueryViewAtWorkNode) bool {
@@ -807,6 +816,66 @@ func TestQueryNodeLost_TriggersUnrecoverable(t *testing.T) {
 	require.Len(t, mgr.views, 1)
 	assert.Equal(t, qviews.QueryViewStatePreparing, mgr.views[ver2].State())
 	mgr.mu.Unlock()
+}
+
+func TestQueryNodeLost_UpViewTriggersUnrecoverable(t *testing.T) {
+	catalog := newMockCatalog()
+	s := newMockSyncer()
+	mgr := newTestManager(t, catalog, s)
+
+	b := testBuilder(1, 1, 1)
+	ver1 := testVersion(1, 1, 1)
+	require.NoError(t, mgr.AddPreparing(context.Background(), b))
+	simulateNodeResponse(t, s, testQN1, ver1, qviews.QueryViewStateReady)
+	simulateNodeResponse(t, s, testSN, ver1, qviews.QueryViewStateReady)
+	simulateNodeResponse(t, s, testSN, ver1, qviews.QueryViewStateUp)
+
+	catalog.reset()
+	s.reset()
+	affected := mgr.OnQueryNodeLost(testQN1)
+	mgr.waitFlush()
+
+	require.True(t, affected)
+	states := catalog.savedStates()
+	require.Len(t, states, 1)
+	assert.Equal(t, viewpb.QueryViewState_QueryViewStateUnrecoverable, states[0])
+	require.Equal(t, 1, s.syncViewCount())
+
+	mgr.mu.Lock()
+	require.Len(t, mgr.views, 1)
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, mgr.views[ver1].State())
+	mgr.mu.Unlock()
+
+	s.mu.Lock()
+	synced := s.syncedViews[0].View
+	s.mu.Unlock()
+	assert.Equal(t, testSN.Key(), synced.WorkNode().Key())
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, synced.State())
+}
+
+func TestQueryNodeLost_RecoveredUnrecoverableResyncsStreamingNode(t *testing.T) {
+	catalog := newMockCatalog()
+	s := newMockSyncer()
+	recovered := buildTestViewWithVersion(1, 1, 1, 1)
+	recovered.Meta.State = viewpb.QueryViewState_QueryViewStateUnrecoverable
+	mgr := newTestManager(t, catalog, s, recovered)
+	ver1 := testVersion(1, 1, 1)
+
+	catalog.reset()
+	s.reset()
+	affected := mgr.OnQueryNodeLost(testQN1)
+	mgr.waitFlush()
+
+	require.True(t, affected)
+	assert.Empty(t, catalog.savedStates())
+	require.Equal(t, 1, s.syncViewCount())
+
+	s.mu.Lock()
+	synced := s.syncedViews[0].View
+	s.mu.Unlock()
+	assert.Equal(t, ver1, synced.Version())
+	assert.Equal(t, testSN.Key(), synced.WorkNode().Key())
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, synced.State())
 }
 
 func TestQueryNodeLost_DroppingCleanupCompletes(t *testing.T) {

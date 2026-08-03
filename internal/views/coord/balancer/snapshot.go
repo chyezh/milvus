@@ -7,6 +7,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
 
 // BalancerSnapshot is the world view consumed by BalancePolicy.Plan.
@@ -21,6 +22,11 @@ type BalancerSnapshot struct {
 	ShardViewSnapshot  *coordview.ShardViewSnapshot
 	DataViewSnapshot   *DataViewSnapshot
 	NodeSnapshot       *NodeSnapshot
+	WALReplicaSnapshot *WALReplicaSnapshot
+
+	// PendingWALReplicaDependencies records WAL replicas that still have
+	// outstanding QueryView sync work and therefore cannot be released yet.
+	PendingWALReplicaDependencies map[types.ChannelID]struct{}
 
 	// Per-node info with cross-shard aggregates embedded.
 	Nodes map[int64]*BalanceNode
@@ -96,6 +102,16 @@ func (s *BalancerSnapshot) ShardStatsMap() map[qviews.ShardID]*coordview.ShardSt
 		return nil
 	}
 	return s.ShardViewSnapshot.StatsMap()
+}
+
+func (s *BalancerSnapshot) HasWALReplicaDependency(replicaID types.ChannelID) bool {
+	if s == nil {
+		return false
+	}
+	if _, ok := s.PendingWALReplicaDependencies[replicaID]; ok {
+		return true
+	}
+	return s.ShardViewSnapshot.HasWALReplicaDependency(replicaID)
 }
 
 // BalanceNode combines a QueryNode's identity and health with cross-shard

@@ -14,6 +14,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	qvobserve "github.com/milvus-io/milvus/internal/views/qviews/observe"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
@@ -370,6 +371,40 @@ func TestDirtyViewFlushSchedulerObservesCompletedIO(t *testing.T) {
 	}
 	assert.Contains(t, nodes, event.syncs[0].View.WorkNode().Key())
 	assert.Contains(t, nodes, event.syncs[1].View.WorkNode().Key())
+}
+
+func TestDirtyViewFlushSchedulerTracksInflightWALReplicaDependency(t *testing.T) {
+	s := &blockingFlushSyncer{
+		mockSyncer: newMockSyncer(),
+		started:    make(chan struct{}),
+		release:    make(chan struct{}),
+	}
+	scheduler := newTestDirtyViewFlushScheduler(t, newMockCatalog(), s, 128)
+
+	view := buildTestViewWithVersion(1, 1, 1, 1)
+	view.StreamingNode.WalReplicaId = 3
+	replicaID := types.ChannelID{
+		Name:         qviews.NewStreamingNodeFromVChannel(view.GetMeta().GetVchannel()).PChannel,
+		WALReplicaID: 3,
+	}
+	event := dirtyViewEvent{
+		shardID: testShardID,
+		syncs: []syncer.SyncView{{
+			View: qviews.NewFullQueryViewAtStreamingNode(view.Meta, view.StreamingNode, view.QueryNode),
+		}},
+	}
+	scheduler.Submit(event)
+
+	select {
+	case <-s.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("sync enqueue did not start")
+	}
+	assert.True(t, scheduler.HasWALReplicaDependency(replicaID))
+
+	close(s.release)
+	require.NoError(t, scheduler.Flush(context.Background()))
+	assert.False(t, scheduler.HasWALReplicaDependency(replicaID))
 }
 
 func TestShardViewManagerSubmitsOneShardScopedDirtyEvent(t *testing.T) {

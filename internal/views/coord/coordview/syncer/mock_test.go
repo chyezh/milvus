@@ -22,6 +22,7 @@ type mockStream struct {
 	ctx     context.Context
 	sendCh  chan *viewpb.SyncRequest  // captures what syncer sends
 	recvCh  chan *viewpb.SyncResponse // test injects responses
+	errCh   chan error                // test injects recv errors
 	sendMu  sync.Mutex
 	sendErr error // if non-nil, Send returns this immediately
 }
@@ -31,6 +32,7 @@ func newMockStream(ctx context.Context) *mockStream {
 		ctx:    ctx,
 		sendCh: make(chan *viewpb.SyncRequest, 100),
 		recvCh: make(chan *viewpb.SyncResponse, 100),
+		errCh:  make(chan error, 1),
 	}
 }
 
@@ -54,6 +56,8 @@ func (s *mockStream) Recv() (*viewpb.SyncResponse, error) {
 	select {
 	case <-s.ctx.Done():
 		return nil, io.EOF
+	case err := <-s.errCh:
+		return nil, err
 	case resp, ok := <-s.recvCh:
 		if !ok {
 			return nil, io.EOF
@@ -74,6 +78,11 @@ func (s *mockStream) setSendErr(err error) {
 	s.sendMu.Lock()
 	s.sendErr = err
 	s.sendMu.Unlock()
+}
+
+// setRecvErr sets the error returned by future Recv calls.
+func (s *mockStream) setRecvErr(err error) {
+	s.errCh <- err
 }
 
 // collectSent drains all currently buffered SyncRequests from sendCh.
@@ -232,6 +241,43 @@ func newTestSNView(version int64) qviews.QueryViewAtWorkNode {
 		State: viewpb.QueryViewState_QueryViewStatePreparing,
 	}
 	return qviews.NewQueryViewAtStreamingNode(meta, &viewpb.QueryViewOfStreamingNode{})
+}
+
+func newTestSNViewWithWALReplica(
+	version int64,
+	walReplicaID int64,
+	onResp func(qviews.QueryViewAtWorkNode) bool,
+) SyncView {
+	return newTestSNViewWithStateAndWALReplica(
+		version,
+		viewpb.QueryViewState_QueryViewStatePreparing,
+		walReplicaID,
+		onResp,
+	)
+}
+
+func newTestSNViewWithStateAndWALReplica(
+	version int64,
+	state viewpb.QueryViewState,
+	walReplicaID int64,
+	onResp func(qviews.QueryViewAtWorkNode) bool,
+) SyncView {
+	meta := &viewpb.QueryViewMeta{
+		CollectionId: testCollectionID,
+		ReplicaId:    testReplicaID,
+		Vchannel:     testVChannel,
+		Version: &viewpb.QueryViewVersion{
+			DataVersion:  &viewpb.DataVersion{StreamingVersion: version, CompactVersion: 1},
+			QueryVersion: version,
+		},
+		State: state,
+	}
+	return SyncView{
+		View: qviews.NewQueryViewAtStreamingNode(meta, &viewpb.QueryViewOfStreamingNode{
+			WalReplicaId: walReplicaID,
+		}),
+		OnSyncResponse: onResp,
+	}
 }
 
 // newTestSyncView creates a SyncView for a QN with configurable callbacks.

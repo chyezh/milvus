@@ -28,7 +28,11 @@ func (s *PChannelViewSyncServer) SyncQueryView(stream viewpb.ViewSyncService_Syn
 	if err != nil {
 		return asViewSyncStreamingGRPCError(err)
 	}
-	rawWAL, err := s.walManager.GetAvailableWAL(pchannel)
+	walReplicaID, err := handler.DecodeQueryViewWALReplicaIDFromIncomingContext(stream.Context())
+	if err != nil {
+		return asViewSyncStreamingGRPCError(err)
+	}
+	rawWAL, err := s.walManager.GetAvailableWALReplica(pchannel, walReplicaID)
 	if err != nil {
 		return asViewSyncStreamingGRPCError(err)
 	}
@@ -38,8 +42,9 @@ func (s *PChannelViewSyncServer) SyncQueryView(stream viewpb.ViewSyncService_Syn
 	}
 	queryViewHandler := provider.QueryViewHandler()
 	return handler.NewViewSyncServer(&pchannelScopedQueryViewHandler{
-		pchannel: pchannel.Name,
-		handler:  queryViewHandler,
+		pchannel:     pchannel.Name,
+		walReplicaID: walReplicaID,
+		handler:      queryViewHandler,
 	}).SyncQueryViewUntil(stream, rawWAL.Available())
 }
 
@@ -51,15 +56,18 @@ func asViewSyncStreamingGRPCError(err error) error {
 }
 
 type pchannelScopedQueryViewHandler struct {
-	pchannel string
-	handler  handler.QueryViewHandler
+	pchannel     string
+	walReplicaID int64
+	handler      handler.QueryViewHandler
 }
 
 func (h *pchannelScopedQueryViewHandler) ApplyViews(views []handler.ApplyView) {
 	var matched []handler.ApplyView
 	for _, view := range views {
 		shardID := view.View.ShardID()
-		if shardID == (qviews.ShardID{}) || funcutil.ToPhysicalChannel(shardID.VChannel) != h.pchannel {
+		if shardID == (qviews.ShardID{}) ||
+			funcutil.ToPhysicalChannel(shardID.VChannel) != h.pchannel ||
+			view.View.IntoProto().GetStreamingNode().GetWalReplicaId() != h.walReplicaID {
 			reportUnrecoverable([]handler.ApplyView{view})
 			continue
 		}

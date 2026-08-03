@@ -6,10 +6,13 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/cockroachdb/errors"
 
+	streamingstatus "github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
 
 // resumableSyncer manages a single gRPC bidirectional stream to a work node.
@@ -71,6 +74,10 @@ func (rs *resumableSyncer) DrainPendingIfNodeLost() {
 	rs.pending.Drain(rs.node)
 }
 
+func (rs *resumableSyncer) HasWALReplicaDependency(replicaID types.ChannelID) bool {
+	return rs.pending.HasWALReplicaDependency(replicaID)
+}
+
 // loop is the single goroutine that manages the stream lifecycle:
 // create stream → re-push pending → send/recv → on break, backoff and retry.
 func (rs *resumableSyncer) loop() {
@@ -91,6 +98,7 @@ func (rs *resumableSyncer) loop() {
 			}
 			mlog.Warn(rs.ctx, "ResumableSyncer: failed to open stream",
 				mlog.String("node", rs.node.String()), mlog.Err(err))
+			rs.completeStreamingNodeTeardownIfUnavailable(err)
 
 			nextBackoff := bo.NextBackOff()
 			select {
@@ -119,8 +127,9 @@ func (rs *resumableSyncer) loop() {
 		}()
 
 		// Recv blocks until stream breaks.
-		rs.recvLoop(stream)
+		err = rs.recvLoop(stream)
 		_ = stream.CloseSend()
+		rs.completeStreamingNodeTeardownIfUnavailable(err)
 
 		// Stream broke — cancel send loop and wait.
 		streamCancel()
@@ -145,19 +154,23 @@ func (rs *resumableSyncer) sendLoop(ctx context.Context, stream viewpb.ViewSyncS
 
 // recvLoop receives responses and routes them to pending callbacks.
 // Returns when the stream breaks.
-func (rs *resumableSyncer) recvLoop(stream viewpb.ViewSyncService_SyncQueryViewClient) {
+func (rs *resumableSyncer) recvLoop(stream viewpb.ViewSyncService_SyncQueryViewClient) error {
 	for {
 		resp, err := stream.Recv()
 		if err != nil {
+			var streamingErr *streamingstatus.StreamingError
+			if !errors.As(err, &streamingErr) {
+				err = streamingstatus.ConvertStreamingError("ViewSyncService.SyncQueryView.Recv", err)
+			}
 			mlog.Warn(rs.ctx, "ResumableSyncer: stream recv failed",
 				mlog.String("node", rs.node.String()), mlog.Err(err))
-			return
+			return err
 		}
 
 		viewsResp := resp.GetViews()
 		if viewsResp == nil {
 			if resp.GetClose() != nil {
-				return
+				return nil
 			}
 			continue
 		}
@@ -166,6 +179,21 @@ func (rs *resumableSyncer) recvLoop(stream viewpb.ViewSyncService_SyncQueryViewC
 			rs.pending.MatchResponse(pb)
 		}
 	}
+}
+
+func (rs *resumableSyncer) completeStreamingNodeTeardownIfUnavailable(err error) {
+	if err == nil {
+		return
+	}
+	sn, ok := rs.node.(qviews.StreamingNode)
+	if !ok {
+		return
+	}
+	streamingErr := streamingstatus.AsStreamingError(err)
+	if streamingErr == nil || !streamingErr.IsWrongStreamingNode() {
+		return
+	}
+	rs.pending.CompleteStreamingNodeTeardownIfUnavailable(sn)
 }
 
 // rePush sends all pending entries for this node through the stream in batches

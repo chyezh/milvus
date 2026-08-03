@@ -21,14 +21,14 @@ func TestInitialWALState(t *testing.T) {
 	assert.Nil(t, currentState.GetWAL())
 	assert.NoError(t, currentState.GetLastError())
 
-	assert.Equal(t, toStateString(currentState), "(-1,false)")
+	assert.Equal(t, toStateString(currentState), "(-1,0,false)")
 
 	expectedState := initialExpectedWALState
 	assert.Equal(t, types.InitialTerm, expectedState.Term())
 	assert.False(t, expectedState.Available())
 	assert.Zero(t, expectedState.GetPChannelInfo())
 	assert.Equal(t, context.Background(), expectedState.Context())
-	assert.Equal(t, toStateString(expectedState), "(-1,false)")
+	assert.Equal(t, toStateString(expectedState), "(-1,0,false)")
 }
 
 func TestAvailableCurrentWALState(t *testing.T) {
@@ -37,48 +37,49 @@ func TestAvailableCurrentWALState(t *testing.T) {
 		Term: 1,
 	})
 
-	state := newAvailableCurrentState(l)
+	state := newAvailableCurrentState(l, 0)
 	assert.Equal(t, int64(1), state.Term())
 	assert.True(t, state.Available())
 	assert.Equal(t, l, state.GetWAL())
 	assert.Nil(t, state.GetLastError())
 
-	assert.Equal(t, toStateString(state), "(1,true)")
+	assert.Equal(t, toStateString(state), "(1,0,true)")
 }
 
 func TestUnavailableCurrentWALState(t *testing.T) {
 	err := errors.New("test")
-	state := newUnavailableCurrentState(1, err)
+	state := newUnavailableCurrentState(1, 0, err)
 
 	assert.Equal(t, int64(1), state.Term())
 	assert.False(t, state.Available())
 	assert.Nil(t, state.GetWAL())
 	assert.ErrorIs(t, state.GetLastError(), err)
 
-	assert.Equal(t, toStateString(state), "(1,false)")
+	assert.Equal(t, toStateString(state), "(1,0,false)")
 }
 
 func TestAvailableExpectedWALState(t *testing.T) {
 	channel := types.PChannelInfo{}
-	state := newAvailableExpectedState(context.Background(), channel)
+	state := newAvailableExpectedState(context.Background(), channel, 0, 0)
 
 	assert.Equal(t, int64(0), state.Term())
 	assert.True(t, state.Available())
 	assert.Equal(t, context.Background(), state.Context())
 	assert.Equal(t, channel, state.GetPChannelInfo())
+	assert.Equal(t, int64(0), state.WALReplicaID())
 
-	assert.Equal(t, toStateString(state), "(0,true)")
+	assert.Equal(t, toStateString(state), "(0,0,true)")
 }
 
 func TestUnavailableExpectedWALState(t *testing.T) {
-	state := newUnavailableExpectedState(1)
+	state := newUnavailableExpectedState(1, 0)
 
 	assert.Equal(t, int64(1), state.Term())
 	assert.False(t, state.Available())
 	assert.Zero(t, state.GetPChannelInfo())
 	assert.Equal(t, context.Background(), state.Context())
 
-	assert.Equal(t, toStateString(state), "(1,false)")
+	assert.Equal(t, toStateString(state), "(1,0,false)")
 }
 
 func TestIsStateBefore(t *testing.T) {
@@ -92,12 +93,12 @@ func TestIsStateBefore(t *testing.T) {
 	})
 
 	cases := []walState{
-		newAvailableCurrentState(l),
-		newUnavailableCurrentState(1, nil),
+		newAvailableCurrentState(l, 0),
+		newUnavailableCurrentState(1, 0, nil),
 		newAvailableExpectedState(context.Background(), types.PChannelInfo{
 			Term: 3,
-		}),
-		newUnavailableExpectedState(5),
+		}, 0, 0),
+		newUnavailableExpectedState(5, 0),
 	}
 	for _, s := range cases {
 		assert.True(t, isStateBefore(initialCurrentWALState, s))
@@ -119,7 +120,7 @@ func TestStateWithCond(t *testing.T) {
 
 	// test notification.
 	wg := sync.WaitGroup{}
-	targetState := newUnavailableCurrentState(10, nil)
+	targetState := newUnavailableCurrentState(10, 0, nil)
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
 		go func() {
@@ -145,9 +146,9 @@ func TestStateWithCond(t *testing.T) {
 					l.EXPECT().Channel().Return(types.PChannelInfo{
 						Term: i % 2,
 					}).Maybe()
-					newState = newAvailableCurrentState(l)
+					newState = newAvailableCurrentState(l, 0)
 				} else {
-					newState = newUnavailableCurrentState(i%3, nil)
+					newState = newUnavailableCurrentState(i%3, 0, nil)
 				}
 				stateCond.SetStateAndNotify(newState)
 
@@ -176,4 +177,14 @@ func TestStateWithCond(t *testing.T) {
 	defer cancel()
 	err := stateCond.WatchChanged(ctx, targetState)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestStateWithCondWakesOnAssignmentEpochChange(t *testing.T) {
+	oldState := newUnavailableCurrentState(7, 1, nil)
+	stateCond := newWALStateWithCond[currentWALState](oldState)
+	assert.True(t, stateCond.SetStateAndNotify(newUnavailableCurrentState(7, 3, nil)))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	assert.NoError(t, stateCond.WatchChanged(ctx, oldState))
 }

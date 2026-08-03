@@ -23,6 +23,7 @@ type (
 	WatchChannelAssignmentsCallbackParam = channel.WatchChannelAssignmentsCallbackParam
 	WatchChannelAssignmentsCallback      = channel.WatchChannelAssignmentsCallback
 	ShardAssignmentProvider              = channel.ShardAssignmentProvider
+	WALReplicaDependencyProvider         = channel.WALReplicaDependencyProvider
 )
 
 // Balancer is a load balancer to balance the load of log node.
@@ -45,6 +46,18 @@ type Balancer interface {
 	// propagating through the WAL layout before signaling Ready.
 	// If streaming.primaryResourceGroup is not configured, returns nil.
 	ConfirmPrimaryResourceGroupReady(ctx context.Context) error
+
+	// EnsureReadOnlyWALReplica materializes a serviceable read-only WAL replica
+	// for the PChannel in the requested resource group.
+	EnsureReadOnlyWALReplica(ctx context.Context, pchannel string, resourceGroup string) error
+
+	// ReleaseReadOnlyWALReplica releases a non-primary read-only WAL replica
+	// after QueryView no longer depends on it.
+	ReleaseReadOnlyWALReplica(ctx context.Context, pchannel string, walReplicaID int64) error
+
+	// SwitchWALPrimaryReplica promotes an existing serviceable read-only WAL replica
+	// to the PChannel read-write primary.
+	SwitchWALPrimaryReplica(ctx context.Context, pchannel string, targetReplicaID int64) error
 
 	// AllocVirtualChannels allocates virtual channels for a collection.
 	AllocVirtualChannels(ctx context.Context, param AllocVChannelParam) ([]string, error)
@@ -79,6 +92,12 @@ type Balancer interface {
 
 	// MarkAsAvailable marks the pchannels as available, and trigger a rebalance.
 	MarkAsUnavailable(ctx context.Context, pChannels []types.PChannelInfo) error
+
+	// MarkWALReplicasAsUnavailable marks read-only WAL replicas as unavailable.
+	MarkWALReplicasAsUnavailable(ctx context.Context, replicas []types.ChannelID, assignmentEpoch int64) error
+
+	// MarkWALPrimaryReplicaAsUnavailable marks a failed primary WAL replica open as unavailable.
+	MarkWALPrimaryReplicaAsUnavailable(ctx context.Context, replicaID types.ChannelID, assignmentEpoch int64) error
 
 	// UpdateReplicateConfiguration updates the replicate configuration.
 	UpdateReplicateConfiguration(ctx context.Context, result message.BroadcastResultAlterReplicateConfigMessageV2) error

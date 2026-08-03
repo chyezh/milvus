@@ -45,12 +45,24 @@ func (qv *queryViewAtWorkNodeBase) Version() QueryViewVersion {
 func (qv *queryViewAtWorkNodeBase) QueryViewKey() QueryViewKey {
 	return QueryViewKey{
 		ShardID:          qv.ShardID(),
+		WALReplicaID:     qv.walReplicaIDForKey(),
 		QueryViewVersion: qv.Version(),
 	}
 }
 
 func (qv *queryViewAtWorkNodeBase) IntoProto() *viewpb.QueryViewOfShard {
 	return proto.Clone(qv.inner).(*viewpb.QueryViewOfShard)
+}
+
+func (qv *queryViewAtWorkNodeBase) walReplicaIDForKey() int64 {
+	if sn := qv.inner.GetStreamingNode(); sn != nil {
+		return sn.GetWalReplicaId()
+	}
+	queryNodes := qv.inner.GetQueryNode()
+	if len(queryNodes) == 1 {
+		return queryNodes[0].GetWalReplicaId()
+	}
+	return 0
 }
 
 // NewQueryViewAtWorkNodeFromProto creates a new query view at work node from proto.
@@ -103,11 +115,15 @@ type QueryViewAtStreamingNode struct {
 }
 
 func (qv *QueryViewAtStreamingNode) WorkNode() WorkNode {
-	return NewStreamingNodeFromVChannel(qv.inner.Meta.Vchannel)
+	return NewStreamingNodeFromVChannelAndWALReplica(qv.inner.Meta.Vchannel, qv.WALReplicaID())
 }
 
 func (qv *QueryViewAtStreamingNode) ViewOfStreamingNode() *viewpb.QueryViewOfStreamingNode {
 	return qv.inner.StreamingNode
+}
+
+func (qv *QueryViewAtStreamingNode) WALReplicaID() int64 {
+	return qv.inner.GetStreamingNode().GetWalReplicaId()
 }
 
 // NewQueryViewAtQueryNode creates a new query view at query node.
@@ -135,6 +151,10 @@ func (qv *QueryViewAtQueryNode) WorkNode() WorkNode {
 
 func (qv *QueryViewAtQueryNode) NodeID() int64 {
 	return qv.ViewOfQueryNode().NodeId
+}
+
+func (qv *QueryViewAtQueryNode) WALReplicaID() int64 {
+	return qv.ViewOfQueryNode().GetWalReplicaId()
 }
 
 func (qv *QueryViewAtQueryNode) ViewOfQueryNode() *viewpb.QueryViewOfQueryNode {

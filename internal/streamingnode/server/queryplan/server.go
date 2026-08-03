@@ -16,6 +16,7 @@ import (
 
 type walManager interface {
 	GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error)
+	GetAvailableWALReplica(channel types.PChannelInfo, walReplicaID int64) (wal.WAL, error)
 }
 
 type Server struct {
@@ -66,7 +67,11 @@ func (s *Server) providerForVChannel(ctx context.Context, vchannel string) (prov
 	if pchannel.Name != expectedPChannel {
 		return nil, viewerror.NewUnknownError("query view pchannel metadata mismatch, expected %s, got %s", expectedPChannel, pchannel.Name)
 	}
-	rawWAL, err := s.walManager.GetAvailableWAL(pchannel)
+	walReplicaID, err := worknodehandler.DecodeQueryViewWALReplicaIDFromIncomingContext(ctx)
+	if err != nil {
+		return nil, viewerror.NewUnknownError("%s", err.Error())
+	}
+	rawWAL, err := s.walManager.GetAvailableWALReplica(pchannel, walReplicaID)
 	if err != nil {
 		return nil, viewerror.NewOnShutdownError("local WAL for vchannel %s is unavailable: %s", vchannel, err.Error())
 	}

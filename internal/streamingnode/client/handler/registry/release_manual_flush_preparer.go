@@ -19,7 +19,7 @@ var (
 
 // ReleaseManualFlushPreparer prepares process-local release handoff.
 type ReleaseManualFlushPreparer interface {
-	PrepareReleaseManualFlush(ctx context.Context, pchannel types.PChannelInfo, collectionID int64, vchannel string, releaseSegmentIDs []int64) (prepared bool, err error)
+	PrepareReleaseManualFlush(ctx context.Context, pchannel types.PChannelInfo, walReplicaID int64, collectionID int64, vchannel string, releaseSegmentIDs []int64) (prepared bool, err error)
 }
 
 // RegisterLocalReleaseManualFlushPreparer registers the process-local release handoff preparer.

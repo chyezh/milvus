@@ -758,6 +758,202 @@ func TestBalancer_PrimaryResourceGroupChangeDoesNotReassignServiceableRWPrimary(
 	}
 }
 
+func TestBalancer_PrimaryResourceGroupChangeDoesNotReassignAssigningRWPrimary(t *testing.T) {
+	paramtable.Init()
+	oldTriggerInterval := paramtable.Get().StreamingCfg.WALBalancerTriggerInterval.SwapTempValue("1h")
+	oldExpectedStreamingNodeNum := paramtable.Get().StreamingCfg.WALBalancerExpectedInitialStreamingNodeNum.SwapTempValue("0")
+	defer paramtable.Get().StreamingCfg.WALBalancerTriggerInterval.SwapTempValue(oldTriggerInterval)
+	defer paramtable.Get().StreamingCfg.WALBalancerExpectedInitialStreamingNodeNum.SwapTempValue(oldExpectedStreamingNodeNum)
+	assert.NoError(t, paramtable.Get().Save(paramtable.Get().StreamingCfg.PrimaryResourceGroup.Key, "rg-new"))
+	defer func() {
+		assert.NoError(t, paramtable.Get().Remove(paramtable.Get().StreamingCfg.PrimaryResourceGroup.Key))
+	}()
+
+	etcdClient, _ := kvfactory.GetEtcdAndPath()
+	channel.ResetStaticPChannelStatsManager()
+	channel.RecoverPChannelStatsManager([]string{})
+
+	balanceCollected := make(chan struct{}, 1)
+	assignCh := make(chan types.PChannelInfoAssigned, 1)
+	streamingNodeManager := mock_manager.NewMockManagerClient(t)
+	streamingNodeManager.EXPECT().WatchNodeChanged(mock.Anything).Return(make(chan struct{}), nil)
+	streamingNodeManager.EXPECT().Assign(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, assignment types.PChannelInfoAssigned) error {
+		select {
+		case assignCh <- assignment:
+		default:
+		}
+		return nil
+	}).Maybe()
+	streamingNodeManager.EXPECT().Remove(mock.Anything, mock.Anything).Return(nil).Maybe()
+	streamingNodeManager.EXPECT().GetAllStreamingNodes(mock.Anything).Return(map[int64]*types.StreamingNodeInfoWithResourceGroup{
+		1: {
+			StreamingNodeInfo: types.StreamingNodeInfo{ServerID: 1, Address: "localhost:1"},
+			ResourceGroup:     "rg-old",
+		},
+		2: {
+			StreamingNodeInfo: types.StreamingNodeInfo{ServerID: 2, Address: "localhost:2"},
+			ResourceGroup:     "rg-new",
+		},
+	}, nil).Maybe()
+	streamingNodeManager.EXPECT().CollectAllStatus(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, resourceGroupHint string) (map[int64]*types.StreamingNodeStatus, error) {
+		if resourceGroupHint != "rg-new" {
+			return nil, fmt.Errorf("unexpected resource group hint %q", resourceGroupHint)
+		}
+		select {
+		case balanceCollected <- struct{}{}:
+		default:
+		}
+		return map[int64]*types.StreamingNodeStatus{
+			2: {StreamingNodeInfo: types.StreamingNodeInfo{ServerID: 2, Address: "localhost:2"}},
+		}, nil
+	}).Maybe()
+
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	resource.InitForTest(
+		resource.OptETCD(etcdClient),
+		resource.OptStreamingCatalog(catalog),
+		resource.OptStreamingManagerClient(streamingNodeManager),
+		resource.OptSession(s),
+	)
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(nil, nil)
+	catalog.EXPECT().SaveCChannel(mock.Anything, mock.Anything).Return(nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{Version: channel.StreamingVersion260}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Unset()
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{
+		{
+			Channel: &streamingpb.PChannelInfo{
+				Name:       "test-channel",
+				Term:       10,
+				AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+			},
+			Node:             &streamingpb.StreamingNodeInfo{ServerId: 2},
+			State:            streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING,
+			PrimaryReplicaId: 1,
+			NextReplicaId:    2,
+			Replicas: []*streamingpb.WALReplicaAssignment{
+				{
+					ReplicaId:     0,
+					AccessMode:    streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+					ActiveNode:    &streamingpb.StreamingNodeInfo{ServerId: 1},
+					State:         streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+					ResourceGroup: "rg-old",
+				},
+				{
+					ReplicaId:       1,
+					AccessMode:      streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+					AssignmentEpoch: 3,
+					ActiveNode:      &streamingpb.StreamingNodeInfo{ServerId: 2},
+					State:           streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNING,
+					ResourceGroup:   "rg-new",
+				},
+			},
+		},
+	}, nil)
+	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).Return(nil).Maybe()
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+
+	ctx := context.Background()
+	b, err := balancer.RecoverBalancer(ctx, newStaticChannelProvider("test-channel"))
+	assert.NoError(t, err)
+	assert.NotNil(t, b)
+	defer b.Close()
+
+	assert.Eventually(t, func() bool {
+		select {
+		case <-balanceCollected:
+			return true
+		default:
+			return false
+		}
+	}, 3*time.Second, 10*time.Millisecond)
+
+	select {
+	case assignment := <-assignCh:
+		assert.Failf(t, "assigning RW primary was reassigned by ordinary balance", "assignment=%s", assignment.String())
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func TestBalancer_PrimaryResourceGroupWithoutHealthyNodesDoesNotFallback(t *testing.T) {
+	paramtable.Init()
+	oldTriggerInterval := paramtable.Get().StreamingCfg.WALBalancerTriggerInterval.SwapTempValue("1h")
+	oldExpectedStreamingNodeNum := paramtable.Get().StreamingCfg.WALBalancerExpectedInitialStreamingNodeNum.SwapTempValue("0")
+	defer paramtable.Get().StreamingCfg.WALBalancerTriggerInterval.SwapTempValue(oldTriggerInterval)
+	defer paramtable.Get().StreamingCfg.WALBalancerExpectedInitialStreamingNodeNum.SwapTempValue(oldExpectedStreamingNodeNum)
+	assert.NoError(t, paramtable.Get().Save(paramtable.Get().StreamingCfg.PrimaryResourceGroup.Key, "rg-primary"))
+	defer func() {
+		assert.NoError(t, paramtable.Get().Remove(paramtable.Get().StreamingCfg.PrimaryResourceGroup.Key))
+	}()
+
+	etcdClient, _ := kvfactory.GetEtcdAndPath()
+	channel.ResetStaticPChannelStatsManager()
+	channel.RecoverPChannelStatsManager([]string{})
+
+	assignCh := make(chan types.PChannelInfoAssigned, 1)
+	streamingNodeManager := mock_manager.NewMockManagerClient(t)
+	streamingNodeManager.EXPECT().WatchNodeChanged(mock.Anything).Return(make(chan struct{}), nil)
+	streamingNodeManager.EXPECT().Assign(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, assignment types.PChannelInfoAssigned) error {
+		select {
+		case assignCh <- assignment:
+		default:
+		}
+		return nil
+	}).Maybe()
+	streamingNodeManager.EXPECT().Remove(mock.Anything, mock.Anything).Return(nil).Maybe()
+	streamingNodeManager.EXPECT().GetAllStreamingNodes(mock.Anything).Return(map[int64]*types.StreamingNodeInfoWithResourceGroup{
+		1: {
+			StreamingNodeInfo: types.StreamingNodeInfo{ServerID: 1, Address: "localhost:1"},
+			ResourceGroup:     "rg-other",
+		},
+	}, nil).Maybe()
+	streamingNodeManager.EXPECT().CollectAllStatus(mock.Anything, mock.Anything).RunAndReturn(func(ctx context.Context, resourceGroupHint string) (map[int64]*types.StreamingNodeStatus, error) {
+		switch resourceGroupHint {
+		case "rg-primary":
+			return map[int64]*types.StreamingNodeStatus{}, nil
+		default:
+			return nil, fmt.Errorf("unexpected resource group hint %q", resourceGroupHint)
+		}
+	}).Maybe()
+
+	catalog := mock_metastore.NewMockStreamingCoordCataLog(t)
+	s := sessionutil.NewMockSession(t)
+	s.EXPECT().GetRegisteredRevision().Return(int64(1))
+	resource.InitForTest(
+		resource.OptETCD(etcdClient),
+		resource.OptStreamingCatalog(catalog),
+		resource.OptStreamingManagerClient(streamingNodeManager),
+		resource.OptSession(s),
+	)
+	catalog.EXPECT().GetCChannel(mock.Anything).Return(&streamingpb.CChannelMeta{Pchannel: "control-channel"}, nil)
+	catalog.EXPECT().GetVersion(mock.Anything).Return(&streamingpb.StreamingVersion{Version: channel.StreamingVersion260}, nil)
+	catalog.EXPECT().ListPChannel(mock.Anything).Unset()
+	catalog.EXPECT().ListPChannel(mock.Anything).Return([]*streamingpb.PChannelMeta{}, nil)
+	catalog.EXPECT().SavePChannels(mock.Anything, mock.Anything).Return(nil).Maybe()
+	catalog.EXPECT().GetReplicateConfiguration(mock.Anything).Return(nil, nil)
+
+	provider := newStaticChannelProvider()
+	ctx := context.Background()
+	b, err := balancer.RecoverBalancer(ctx, provider)
+	assert.NoError(t, err)
+	assert.NotNil(t, b)
+	defer b.Close()
+
+	provider.ch <- []string{"dynamic-channel"}
+	time.Sleep(100 * time.Millisecond)
+
+	assignment, err := b.GetLatestChannelAssignment()
+	assert.NoError(t, err)
+	assert.Empty(t, assignment.Relations)
+
+	select {
+	case assignment := <-assignCh:
+		assert.Failf(t, "pchannel assignment fell back outside primary resource group", "assignment=%s", assignment.String())
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestBalancer_DynamicChannelFromProvider(t *testing.T) {
 	paramtable.Init()
 	paramtable.Get().StreamingCfg.WALBalancerExpectedInitialStreamingNodeNum.SwapTempValue("0")

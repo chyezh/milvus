@@ -5,6 +5,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
 
 // pendingSyncQueryViews tracks query views dispatched to a single work node
@@ -21,6 +22,13 @@ type pendingSyncQueryViews struct {
 type pendingSyncEntry struct {
 	revision uint64
 	view     SyncView
+}
+
+type pendingSyncCompletion struct {
+	key      qviews.QueryViewKey
+	revision uint64
+	view     SyncView
+	response qviews.QueryViewAtWorkNode
 }
 
 func newPendingSyncQueryViews() *pendingSyncQueryViews {
@@ -95,6 +103,52 @@ func (p *pendingSyncQueryViews) MatchResponse(pb *viewpb.QueryViewOfShard) {
 	p.mu.Unlock()
 }
 
+// CompleteStreamingNodeTeardownIfUnavailable completes teardown syncs whose
+// target StreamingNode WAL replica is already unavailable.
+//
+// When a WAL replica disappears before acknowledging Down/Dropped, there is no
+// live runtime left that can report the final state. Treating that as Dropped
+// is valid only for teardown targets. Creation/serving targets must continue to
+// rely on real node responses.
+func (p *pendingSyncQueryViews) CompleteStreamingNodeTeardownIfUnavailable(node qviews.StreamingNode) {
+	p.mu.Lock()
+	completions := make([]pendingSyncCompletion, 0)
+	for key, entry := range p.entries {
+		sn, ok := entry.view.View.WorkNode().(qviews.StreamingNode)
+		if !ok || sn.Key() != node.Key() {
+			continue
+		}
+		state := entry.view.View.State()
+		if state != qviews.QueryViewStateDown && state != qviews.QueryViewStateDropped {
+			continue
+		}
+
+		respPB := entry.view.View.IntoProto()
+		respPB.Meta.State = viewpb.QueryViewState_QueryViewStateDropped
+		completions = append(completions, pendingSyncCompletion{
+			key:      key,
+			revision: entry.revision,
+			view:     entry.view,
+			response: qviews.NewQueryViewAtWorkNodeFromProto(respPB),
+		})
+	}
+	p.mu.Unlock()
+
+	for _, completion := range completions {
+		if !completion.view.OnSyncResponse(completion.response) {
+			continue
+		}
+
+		p.mu.Lock()
+		current, ok := p.entries[completion.key]
+		if ok && current.revision == completion.revision {
+			delete(p.entries, completion.key)
+			p.removeUnsentLocked(completion.key)
+		}
+		p.mu.Unlock()
+	}
+}
+
 // Drain removes all pending entries and invokes OnQueryNodeLost for each entry
 // only when the lost node is a QueryNode.
 func (p *pendingSyncQueryViews) Drain(node qviews.WorkNode) {
@@ -136,4 +190,38 @@ func (p *pendingSyncQueryViews) CollectProtos() []*viewpb.QueryViewOfShard {
 		protos = append(protos, sv.view.View.IntoProto())
 	}
 	return protos
+}
+
+func (p *pendingSyncQueryViews) removeUnsentLocked(key qviews.QueryViewKey) {
+	if len(p.unsent) == 0 {
+		return
+	}
+
+	filtered := p.unsent[:0]
+	for _, pb := range p.unsent {
+		if qviews.NewQueryViewAtWorkNodeFromProto(pb).QueryViewKey() == key {
+			continue
+		}
+		filtered = append(filtered, pb)
+	}
+	p.unsent = filtered
+	if len(p.unsent) == 0 {
+		p.unsent = nil
+	}
+}
+
+func (p *pendingSyncQueryViews) HasWALReplicaDependency(replicaID types.ChannelID) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, entry := range p.entries {
+		sn, ok := entry.view.View.WorkNode().(qviews.StreamingNode)
+		if !ok {
+			continue
+		}
+		if sn.PChannel == replicaID.Name && sn.WALReplicaID == replicaID.WALReplicaID {
+			return true
+		}
+	}
+	return false
 }

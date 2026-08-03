@@ -141,6 +141,8 @@ type Server struct {
 
 	// query view segment load info watch
 	segmentLoadInfoWatcher *queryViewSegmentLoadInfoWatcher
+
+	stopOnce sync.Once
 }
 
 type FileResourceObserver interface {
@@ -537,86 +539,88 @@ func (s *Server) startServerLoop() {
 }
 
 func (s *Server) Stop() error {
-	// FOLLOW the dependence graph:
-	// job scheduler -> checker controller -> task scheduler -> dist controller -> cluster -> session
-	// observers -> dist controller
+	s.stopOnce.Do(func() {
+		// FOLLOW the dependence graph:
+		// job scheduler -> checker controller -> task scheduler -> dist controller -> cluster -> session
+		// observers -> dist controller
 
-	if s.loadConfigWatcher != nil {
-		mlog.Info(s.ctx, "stop load config watcher...")
-		s.loadConfigWatcher.Close()
-	}
+		if s.loadConfigWatcher != nil {
+			mlog.Info(s.ctx, "stop load config watcher...")
+			s.loadConfigWatcher.Close()
+		}
 
-	if s.qviewsRuntime != nil {
-		mlog.Info(s.ctx, "stop query view runtime...")
-		s.qviewsRuntime.stop()
-	}
-	if s.streamingNodeManager != nil {
-		s.streamingNodeManager.Close()
-	}
+		if s.qviewsRuntime != nil {
+			mlog.Info(s.ctx, "stop query view runtime...")
+			s.qviewsRuntime.stop()
+		}
+		if s.streamingNodeManager != nil {
+			s.streamingNodeManager.Close()
+		}
 
-	if s.jobScheduler != nil {
-		mlog.Info(s.ctx, "stop job scheduler...")
-		s.jobScheduler.Stop()
-	}
+		if s.jobScheduler != nil {
+			mlog.Info(s.ctx, "stop job scheduler...")
+			s.jobScheduler.Stop()
+		}
 
-	if s.checkerController != nil {
-		mlog.Info(s.ctx, "stop checker controller...")
-		s.checkerController.Stop()
-	}
+		if s.checkerController != nil {
+			mlog.Info(s.ctx, "stop checker controller...")
+			s.checkerController.Stop()
+		}
 
-	if s.taskScheduler != nil {
-		mlog.Info(s.ctx, "stop task scheduler...")
-		s.taskScheduler.Stop()
-	}
+		if s.taskScheduler != nil {
+			mlog.Info(s.ctx, "stop task scheduler...")
+			s.taskScheduler.Stop()
+		}
 
-	mlog.Info(s.ctx, "stop observers...")
-	if s.collectionObserver != nil {
-		s.collectionObserver.Stop()
-	}
-	if s.targetObserver != nil {
-		s.targetObserver.Stop()
-	}
+		mlog.Info(s.ctx, "stop observers...")
+		if s.collectionObserver != nil {
+			s.collectionObserver.Stop()
+		}
+		if s.targetObserver != nil {
+			s.targetObserver.Stop()
+		}
 
-	// save target to meta store, after querycoord restart, make it fast to recover current target
-	// should save target after target observer stop, incase of target changed
-	if s.targetMgr != nil {
-		s.targetMgr.SaveCurrentTarget(s.ctx, s.store)
-	}
+		// save target to meta store, after querycoord restart, make it fast to recover current target
+		// should save target after target observer stop, incase of target changed
+		if s.targetMgr != nil {
+			s.targetMgr.SaveCurrentTarget(s.ctx, s.store)
+		}
 
-	if s.replicaObserver != nil {
-		s.replicaObserver.Stop()
-	}
-	if s.resourceObserver != nil {
-		s.resourceObserver.Stop()
-	}
-	if s.leaderCacheObserver != nil {
-		s.leaderCacheObserver.Stop()
-	}
+		if s.replicaObserver != nil {
+			s.replicaObserver.Stop()
+		}
+		if s.resourceObserver != nil {
+			s.resourceObserver.Stop()
+		}
+		if s.leaderCacheObserver != nil {
+			s.leaderCacheObserver.Stop()
+		}
 
-	if s.distController != nil {
-		mlog.Info(s.ctx, "stop dist controller...")
-		s.distController.Stop()
-	}
+		if s.distController != nil {
+			mlog.Info(s.ctx, "stop dist controller...")
+			s.distController.Stop()
+		}
 
-	if s.cluster != nil {
-		mlog.Info(s.ctx, "stop cluster...")
-		s.cluster.Stop()
-	}
+		if s.cluster != nil {
+			mlog.Info(s.ctx, "stop cluster...")
+			s.cluster.Stop()
+		}
 
-	s.sessionWatcherMu.Lock()
-	if s.sessionWatcher != nil {
-		s.sessionWatcher.Stop()
-	}
-	s.sessionWatcherMu.Unlock()
+		s.sessionWatcherMu.Lock()
+		if s.sessionWatcher != nil {
+			s.sessionWatcher.Stop()
+		}
+		s.sessionWatcherMu.Unlock()
 
-	s.cancel()
-	s.wg.Wait()
+		s.cancel()
+		s.wg.Wait()
 
-	if s.session != nil {
-		s.session.Stop()
-	}
+		if s.session != nil {
+			s.session.Stop()
+		}
 
-	mlog.Info(s.ctx, "QueryCoord stop successfully")
+		mlog.Info(s.ctx, "QueryCoord stop successfully")
+	})
 	return nil
 }
 
@@ -798,6 +802,7 @@ func (s *Server) handleNodeUp(node int64) {
 func (s *Server) handleNodeDown(node int64) {
 	if s.qviewsRuntime != nil {
 		s.meta.HandleNodeDown(context.Background(), node)
+		s.qviewsRuntime.handleQueryNodeDown(node)
 		metrics.QueryCoordLastHeartbeatTimeStamp.DeleteLabelValues(fmt.Sprint(node))
 		s.metricsCacheManager.InvalidateSystemInfoMetrics()
 		return

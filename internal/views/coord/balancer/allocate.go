@@ -7,12 +7,15 @@ import (
 	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/metautil"
 )
 
 type allocationResult struct {
-	builder     *qviews.QueryViewAtCoordBuilder
-	assignments map[int64]int64
-	rowsByNode  map[int64]int64
+	builder      *qviews.QueryViewAtCoordBuilder
+	walDemand    *WALReplicaDemand
+	walReplicaID int64
+	assignments  map[int64]int64
+	rowsByNode   map[int64]int64
 }
 
 // allocate produces a complete candidate for shardID against the supplied
@@ -29,6 +32,7 @@ func allocate(
 	snap *BalancerSnapshot,
 	shardID qviews.ShardID,
 	baseRows map[int64]int64,
+	walPlan *walReplicaPlanState,
 ) *allocationResult {
 	desired := snap.ConfigForShard(shardID)
 	if desired == nil {
@@ -92,18 +96,51 @@ func allocate(
 	}
 
 	dataVersion, _ := snap.DataVersionForCollection(desired.CollectionID)
+	walReplicaID, ok := selectWALReplicaForShard(snap, shardID, replica.ResourceGroup, walPlan)
+	if !ok {
+		demand, ok := walReplicaDemandForShard(shardID.VChannel, replica.ResourceGroup)
+		if !ok {
+			return nil
+		}
+		return &allocationResult{walDemand: &demand}
+	}
 	builder := qviews.NewQueryViewAtCoordBuilder(
 		replica.ReplicaID,
 		syntheticDataView(desired, dataVersion, shardDV),
 		shardID.VChannel,
 	)
+	builder.SetWALReplicaID(walReplicaID)
 	builder.SetAssignments(assignments)
 	builder.SetLoadInfoVersion(snap.LoadConfigSnapshot.ConfigVersion(desired.CollectionID))
 	return &allocationResult{
-		builder:     builder,
-		assignments: flatAssignments,
-		rowsByNode:  ctx.assignedRows,
+		builder:      builder,
+		walReplicaID: walReplicaID,
+		assignments:  flatAssignments,
+		rowsByNode:   ctx.assignedRows,
 	}
+}
+
+func selectWALReplicaForShard(
+	snap *BalancerSnapshot,
+	shardID qviews.ShardID,
+	resourceGroup string,
+	walPlan *walReplicaPlanState,
+) (int64, bool) {
+	if walPlan != nil {
+		return walPlan.Select(shardID, resourceGroup)
+	}
+	return snap.WALReplicaIDForShard(shardID.VChannel, resourceGroup)
+}
+
+func walReplicaDemandForShard(vchannel string, resourceGroup string) (WALReplicaDemand, bool) {
+	ch, err := metautil.ParseChannel(vchannel, metautil.NewDynChannelMapper())
+	if err != nil {
+		return WALReplicaDemand{}, false
+	}
+	return WALReplicaDemand{
+		PChannel:      ch.PhysicalName(),
+		ResourceGroup: resourceGroup,
+	}, true
 }
 
 type segmentNodeStates map[int64]map[int64]coordview.SegmentState

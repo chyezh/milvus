@@ -101,6 +101,68 @@ func TestCollectionLoadManager_ReleaseCollectionKeepsRegistryForReconcile(t *tes
 	assert.Equal(t, []int64{100, 100}, notified)
 }
 
+func TestCollectionLoadManager_SyncNewCreatedPartitionForLoadedCollection(t *testing.T) {
+	catalog := mocks.NewQueryCoordCatalog(t)
+	store := newEmptyLoadConfigStore(t, catalog)
+	var notified []int64
+	manager := NewCollectionLoadManager(
+		store,
+		func(qviews.ShardID) {},
+		func(collectionID int64) { notified = append(notified, collectionID) },
+	)
+
+	cfg := &LoadConfig{
+		DbID:         1,
+		CollectionID: 100,
+		LoadType:     querypb.LoadType_LoadCollection,
+		PartitionIDs: []int64{10},
+		Replicas: []*ReplicaAssignment{
+			{ReplicaID: 1000, ResourceGroup: "rg1", Priority: commonpb.LoadPriority_HIGH},
+		},
+	}
+	catalog.EXPECT().SaveCollection(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything).Return(nil).Once()
+	require.NoError(t, store.Put(context.Background(), cfg))
+
+	catalog.EXPECT().SaveCollection(mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+		Run(func(_ context.Context, collection *querypb.CollectionLoadInfo, partitions ...*querypb.PartitionLoadInfo) {
+			assert.Equal(t, querypb.LoadType_LoadCollection, collection.GetLoadType())
+			require.Len(t, partitions, 2)
+		}).
+		Return(nil).Once()
+	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything).Return(nil).Once()
+
+	changed, err := manager.SyncNewCreatedPartition(context.Background(), 100, 20)
+	require.NoError(t, err)
+	assert.True(t, changed)
+	assert.ElementsMatch(t, []int64{10, 20}, store.Snapshot().ConfigsMap()[100].PartitionIDs)
+	assert.Equal(t, []int64{100}, notified)
+}
+
+func TestCollectionLoadManager_SyncNewCreatedPartitionSkipsPartitionLoad(t *testing.T) {
+	catalog := mocks.NewQueryCoordCatalog(t)
+	store := newEmptyLoadConfigStore(t, catalog)
+	manager := NewCollectionLoadManager(store, func(qviews.ShardID) {}, func(int64) {})
+
+	cfg := &LoadConfig{
+		DbID:         1,
+		CollectionID: 100,
+		LoadType:     querypb.LoadType_LoadPartition,
+		PartitionIDs: []int64{10},
+		Replicas: []*ReplicaAssignment{
+			{ReplicaID: 1000, ResourceGroup: "rg1", Priority: commonpb.LoadPriority_HIGH},
+		},
+	}
+	catalog.EXPECT().SaveCollection(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	catalog.EXPECT().SaveReplica(mock.Anything, mock.Anything).Return(nil).Once()
+	require.NoError(t, store.Put(context.Background(), cfg))
+
+	changed, err := manager.SyncNewCreatedPartition(context.Background(), 100, 20)
+	require.NoError(t, err)
+	assert.False(t, changed)
+	assert.ElementsMatch(t, []int64{10}, store.Snapshot().ConfigsMap()[100].PartitionIDs)
+}
+
 func TestCollectionLoadManager_DiscoverableShardAssignments(t *testing.T) {
 	catalog := mocks.NewQueryCoordCatalog(t)
 	store := newEmptyLoadConfigStore(t, catalog)
@@ -112,15 +174,15 @@ func TestCollectionLoadManager_DiscoverableShardAssignments(t *testing.T) {
 		ReplicaID: 1000,
 		VChannel:  "by-dev-rootcoord-dml_0_100v2",
 	}
-	manager.ObserveShardUp(shardID)
-	manager.ObserveShardUp(shardID)
+	manager.ObserveShardUp(shardID, 3)
+	manager.ObserveShardUp(shardID, 5)
 
 	assignments := manager.ShardAssignmentsByPChannel()
 	require.Len(t, assignments, 1)
 	assert.Equal(t, []types.ShardAssignmentEntry{
-		{CollectionID: 100, ShardIndex: 2, ReplicaID: 1000},
+		{CollectionID: 100, ShardIndex: 2, ReplicaID: 1000, WALReplicaID: 5},
 	}, assignments["by-dev-rootcoord-dml_0"])
-	assert.Equal(t, 1, assignmentUpdates)
+	assert.Equal(t, 2, assignmentUpdates)
 
 	catalog.EXPECT().SaveCollection(mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 	require.NoError(t, store.Put(context.Background(), &LoadConfig{CollectionID: 100}))
@@ -130,5 +192,5 @@ func TestCollectionLoadManager_DiscoverableShardAssignments(t *testing.T) {
 		CollectionId: 100,
 	}))
 	assert.Empty(t, manager.ShardAssignmentsByPChannel())
-	assert.Equal(t, 2, assignmentUpdates)
+	assert.Equal(t, 3, assignmentUpdates)
 }

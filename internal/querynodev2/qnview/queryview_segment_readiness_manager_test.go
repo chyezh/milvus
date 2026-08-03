@@ -11,7 +11,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	streamingstatus "github.com/milvus-io/milvus/internal/util/streamingutil/status"
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/internal/views/viewerror"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
@@ -208,6 +211,104 @@ func TestQueryViewSegmentReadinessManager_WaitTransformVisibleUsesTransformGuard
 	assert.False(t, segment.waitCalled)
 	assert.True(t, buffer.guard.waitCalled)
 	assert.Equal(t, uint64(120), buffer.guard.waitTimetick)
+}
+
+func TestQueryViewSegmentReadinessManager_WaitTransformVisibleMapsUnavailableTransformLogToViewInvalidated(t *testing.T) {
+	meta := buildHandlerTestMeta(1)
+	meta.TransformStartAfterTimetick = 100
+	view := buildHandlerTestQNView(1)
+	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
+
+	segment := &fakeTransformSegment{id: 1000, partitionID: 10}
+	physical := fakePhysicalSegmentManager{
+		acquire: func(req AcquirePhysicalSegments) {
+			req.OnLoaded([]TransformSegment{segment})
+		},
+		release: func(req ReleaseSegments) {
+			req.OnDropped()
+		},
+	}
+	buffer := &fakeTransformLogBuffer{}
+	mgr := newTestQueryViewSegmentReadinessManager(t, physical, buffer)
+
+	readyCh := make(chan map[int64][]int64, 1)
+	mgr.Acquire(AcquireSegments{
+		Key: key, Meta: meta, View: view,
+		OnReady:         func(ready map[int64][]int64) { readyCh <- ready },
+		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable") },
+	})
+
+	require.Eventually(t, func() bool {
+		buffer.mu.Lock()
+		defer buffer.mu.Unlock()
+		return len(buffer.regs) == 1
+	}, time.Second, 10*time.Millisecond)
+	buffer.mu.Lock()
+	close(buffer.regs[0].waitCh)
+	buffer.guard.waitErr = wal.ErrTransformLogVChannelUnavailable
+	buffer.mu.Unlock()
+	require.Eventually(t, func() bool {
+		select {
+		case <-readyCh:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	err := mgr.WaitTransformVisible(context.Background(), key, 120)
+
+	require.Error(t, err)
+	assert.True(t, viewerror.AsViewError(err).IsViewInvalidated())
+}
+
+func TestQueryViewSegmentReadinessManager_WaitTransformVisibleMapsRemoteUnavailableTransformLogToViewInvalidated(t *testing.T) {
+	meta := buildHandlerTestMeta(1)
+	meta.TransformStartAfterTimetick = 100
+	view := buildHandlerTestQNView(1)
+	key := qviews.NewQueryViewAtQueryNode(meta, view).QueryViewKey()
+
+	segment := &fakeTransformSegment{id: 1000, partitionID: 10}
+	physical := fakePhysicalSegmentManager{
+		acquire: func(req AcquirePhysicalSegments) {
+			req.OnLoaded([]TransformSegment{segment})
+		},
+		release: func(req ReleaseSegments) {
+			req.OnDropped()
+		},
+	}
+	buffer := &fakeTransformLogBuffer{}
+	mgr := newTestQueryViewSegmentReadinessManager(t, physical, buffer)
+
+	readyCh := make(chan map[int64][]int64, 1)
+	mgr.Acquire(AcquireSegments{
+		Key: key, Meta: meta, View: view,
+		OnReady:         func(ready map[int64][]int64) { readyCh <- ready },
+		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable") },
+	})
+
+	require.Eventually(t, func() bool {
+		buffer.mu.Lock()
+		defer buffer.mu.Unlock()
+		return len(buffer.regs) == 1
+	}, time.Second, 10*time.Millisecond)
+	buffer.mu.Lock()
+	close(buffer.regs[0].waitCh)
+	buffer.guard.waitErr = streamingstatus.NewChannelNotExist("pchannel_100v0")
+	buffer.mu.Unlock()
+	require.Eventually(t, func() bool {
+		select {
+		case <-readyCh:
+			return true
+		default:
+			return false
+		}
+	}, time.Second, 10*time.Millisecond)
+
+	err := mgr.WaitTransformVisible(context.Background(), key, 120)
+
+	require.Error(t, err)
+	assert.True(t, viewerror.AsViewError(err).IsViewInvalidated())
 }
 
 func TestQueryViewSegmentReadinessManager_AcquiresCollectionGuardBeforePhysicalAcquire(t *testing.T) {
@@ -863,6 +964,71 @@ func TestQueryViewSegmentReadinessManager_KeepsEnsureRegisterVChannelTogether(t 
 	assert.Equal(t, "vchannel-1", buffer.registeredChannel[1000])
 	assert.Equal(t, "vchannel-2", buffer.registeredChannel[2000])
 }
+
+func TestQueryViewSegmentReadinessManager_DoesNotShareTransformSegmentAcrossWALReplicas(t *testing.T) {
+	meta := buildHandlerTestMeta(1)
+	viewReplica2 := &viewpb.QueryViewOfQueryNode{
+		NodeId:       1,
+		WalReplicaId: 2,
+		Partitions:   []*viewpb.QueryViewOfPartition{{PartitionId: 10, SegmentIds: []int64{1000}}},
+	}
+	keyReplica2 := qviews.NewQueryViewAtQueryNode(meta, viewReplica2).QueryViewKey()
+	viewReplica3 := &viewpb.QueryViewOfQueryNode{
+		NodeId:       1,
+		WalReplicaId: 3,
+		Partitions:   []*viewpb.QueryViewOfPartition{{PartitionId: 10, SegmentIds: []int64{1000}}},
+	}
+	keyReplica3 := qviews.NewQueryViewAtQueryNode(meta, viewReplica3).QueryViewKey()
+
+	physicalCalls := make(chan int64, 2)
+	physical := fakePhysicalSegmentManager{
+		acquire: func(req AcquirePhysicalSegments) {
+			walReplicaID := req.View.GetWalReplicaId()
+			physicalCalls <- walReplicaID
+			segment := &fakeTransformSegment{id: 1000, partitionID: 10}
+			segment.SetWALReplicaID(walReplicaID)
+			req.OnLoaded([]TransformSegment{segment})
+		},
+		release: func(req ReleaseSegments) { req.OnDropped() },
+	}
+	buffer := &fakeTransformLogBuffer{}
+	mgr := newTestQueryViewSegmentReadinessManager(t, physical, buffer)
+
+	readyCh := make(chan int64, 2)
+	mgr.Acquire(AcquireSegments{
+		Key: keyReplica2, Meta: meta, View: viewReplica2,
+		OnReady:         func(map[int64][]int64) { readyCh <- 2 },
+		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable for replica 2") },
+	})
+	require.Eventually(t, func() bool {
+		buffer.mu.Lock()
+		defer buffer.mu.Unlock()
+		return len(buffer.regs) == 1
+	}, time.Second, 10*time.Millisecond)
+	buffer.mu.Lock()
+	close(buffer.regs[0].waitCh)
+	buffer.mu.Unlock()
+	assert.Equal(t, int64(2), <-readyCh)
+
+	mgr.Acquire(AcquireSegments{
+		Key: keyReplica3, Meta: meta, View: viewReplica3,
+		OnReady:         func(map[int64][]int64) { readyCh <- 3 },
+		OnUnrecoverable: func() { t.Fatal("unexpected unrecoverable for replica 3") },
+	})
+	require.Eventually(t, func() bool {
+		buffer.mu.Lock()
+		defer buffer.mu.Unlock()
+		return len(buffer.regs) == 2
+	}, time.Second, 10*time.Millisecond)
+	buffer.mu.Lock()
+	close(buffer.regs[1].waitCh)
+	registerReplicas := append([]int64(nil), buffer.registerReplicas...)
+	buffer.mu.Unlock()
+	assert.Equal(t, int64(3), <-readyCh)
+	assert.ElementsMatch(t, []int64{2, 3}, registerReplicas)
+	assert.ElementsMatch(t, []int64{2, 3}, []int64{<-physicalCalls, <-physicalCalls})
+}
+
 func TestQueryViewSegmentReadinessManager_FailureReportsUnrecoverable(t *testing.T) {
 	meta := buildHandlerTestMeta(1)
 	view := buildHandlerTestQNView(1)

@@ -26,6 +26,8 @@ type StreamManager struct {
 	logs     map[string]*TransformLog
 
 	streamMu     sync.Mutex
+	closed       bool
+	streams      map[*transformLogStream]struct{}
 	streamNotify chan struct{}
 	streamSeq    uint64
 	streamSeqByV map[string]uint64
@@ -36,13 +38,61 @@ func NewStreamManager(pchannel string) *StreamManager {
 	return &StreamManager{
 		pchannel:     pchannel,
 		logs:         make(map[string]*TransformLog),
+		streams:      make(map[*transformLogStream]struct{}),
 		streamNotify: make(chan struct{}),
 		streamSeqByV: make(map[string]uint64),
 	}
 }
 
-func (m *StreamManager) AcquireStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
-	return newTransformLogStream(ctx, m, pchannel)
+func (m *StreamManager) AcquireStream(ctx context.Context, pchannel string, _ int64) (wal.TransformLogStream, error) {
+	m.streamMu.Lock()
+	if m.closed {
+		m.streamMu.Unlock()
+		return nil, errors.New("transform log stream manager is closed")
+	}
+	m.streamMu.Unlock()
+
+	stream, err := newTransformLogStream(ctx, m, pchannel)
+	if err != nil {
+		return nil, err
+	}
+
+	m.streamMu.Lock()
+	if m.closed {
+		m.streamMu.Unlock()
+		_ = stream.Close()
+		return nil, errors.New("transform log stream manager is closed")
+	}
+	stream.onFinish = m.removeStream
+	m.streams[stream] = struct{}{}
+	m.streamMu.Unlock()
+	return stream, nil
+}
+
+func (m *StreamManager) Close() {
+	m.streamMu.Lock()
+	if m.closed {
+		m.streamMu.Unlock()
+		return
+	}
+	m.closed = true
+	streams := make([]*transformLogStream, 0, len(m.streams))
+	for stream := range m.streams {
+		streams = append(streams, stream)
+	}
+	m.logs = make(map[string]*TransformLog)
+	m.notifyLocked("")
+	m.streamMu.Unlock()
+
+	for _, stream := range streams {
+		_ = stream.Close()
+	}
+}
+
+func (m *StreamManager) removeStream(stream *transformLogStream) {
+	m.streamMu.Lock()
+	defer m.streamMu.Unlock()
+	delete(m.streams, stream)
 }
 
 func (m *StreamManager) Register(vchannel string, log *TransformLog) {
@@ -52,6 +102,10 @@ func (m *StreamManager) Register(vchannel string, log *TransformLog) {
 	log.setStreamNotifier(m)
 	m.streamMu.Lock()
 	defer m.streamMu.Unlock()
+	if m.closed {
+		log.setStreamNotifier(nil)
+		return
+	}
 	m.logs[vchannel] = log
 }
 
@@ -60,6 +114,10 @@ func (m *StreamManager) Remove(vchannel string) {
 		return
 	}
 	m.streamMu.Lock()
+	if m.closed {
+		m.streamMu.Unlock()
+		return
+	}
 	log := m.logs[vchannel]
 	delete(m.logs, vchannel)
 	m.notifyLocked(vchannel)
@@ -161,7 +219,7 @@ const (
 	subscriptionStateClosed
 )
 
-func newTransformLogStream(ctx context.Context, provider streamLogProvider, pchannel string) (wal.TransformLogStream, error) {
+func newTransformLogStream(ctx context.Context, provider streamLogProvider, pchannel string) (*transformLogStream, error) {
 	if err := provider.validatePChannel(pchannel); err != nil {
 		return nil, err
 	}
@@ -206,6 +264,7 @@ type transformLogStream struct {
 	errMu      sync.Mutex
 	err        error
 	finishOnce sync.Once
+	onFinish   func(*transformLogStream)
 }
 
 func (s *transformLogStream) Subscribe(ctx context.Context, opt wal.TransformLogSubscriptionOption) (wal.TransformLogSubscription, error) {
@@ -589,6 +648,9 @@ func (s *transformLogStream) finish(err error) {
 		s.cancel()
 		for _, sub := range s.subs {
 			s.finishSubscription(sub, err, false)
+		}
+		if s.onFinish != nil {
+			s.onFinish(s)
 		}
 	})
 }

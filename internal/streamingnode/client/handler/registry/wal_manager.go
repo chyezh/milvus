@@ -31,10 +31,15 @@ func RegisterLocalWALManager(manager WALManager) {
 
 // GetLocalAvailableWAL returns a available wal instance for the channel.
 func GetLocalAvailableWAL(channel types.PChannelInfo) (wal.WAL, error) {
+	return GetLocalAvailableWALReplica(channel, 0)
+}
+
+// GetLocalAvailableWALReplica returns an available local WAL replica.
+func GetLocalAvailableWALReplica(channel types.PChannelInfo, walReplicaID int64) (wal.WAL, error) {
 	if !paramtable.IsLocalComponentEnabled(typeutil.StreamingNodeRole) {
 		return nil, ErrNoStreamingNodeDeployed
 	}
-	l, err := registry.Get().GetAvailableWAL(channel)
+	l, err := registry.Get().GetAvailableWALReplica(channel, walReplicaID)
 	if err != nil {
 		return nil, err
 	}
@@ -55,6 +60,10 @@ type WALManager interface {
 	// GetAvailableWAL returns a available wal instance for the channel.
 	// Return nil if the wal instance is not found.
 	GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error)
+
+	// GetAvailableWALReplica returns a available wal instance for the WAL replica.
+	// Return nil if the wal instance is not found.
+	GetAvailableWALReplica(channel types.PChannelInfo, walReplicaID int64) (wal.WAL, error)
 
 	// Metrics return all the metrics of current wal manager.
 	Metrics() (*types.StreamingNodeMetrics, error)

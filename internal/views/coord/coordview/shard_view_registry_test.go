@@ -11,6 +11,7 @@ import (
 	viewsyncer "github.com/milvus-io/milvus/internal/views/coord/coordview/syncer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	streamingtypes "github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
 
 type immediateLostRecoverySyncer struct {
@@ -32,6 +33,10 @@ func (s *immediateLostRecoverySyncer) SyncViews(_ context.Context, group viewsyn
 }
 
 func (*immediateLostRecoverySyncer) Close() error { return nil }
+
+func (*immediateLostRecoverySyncer) HasWALReplicaDependency(streamingtypes.ChannelID) bool {
+	return false
+}
 
 // newTestRegistry builds a fresh (empty) registry via the recovery path with
 // an empty catalog.
@@ -468,4 +473,61 @@ func shardStatsForNodes(segmentNodes map[int64][]int64) *ShardStats {
 		}
 	}
 	return stats
+}
+
+func TestRegistry_HasWALReplicaDependency(t *testing.T) {
+	catalog := newMockCatalog()
+	s := newMockSyncer()
+	reg := newTestRegistry(t, catalog, s)
+
+	builder := testBuilder(1, 1, 1)
+	builder.SetWALReplicaID(3)
+	require.NoError(t, reg.Ensure(testShardID).AddPreparing(context.Background(), builder))
+
+	pchannel := qviews.NewStreamingNodeFromVChannel(testVChannel).PChannel
+	assert.True(t, reg.HasWALReplicaDependency(streamingtypes.ChannelID{Name: pchannel, WALReplicaID: 3}))
+	assert.False(t, reg.HasWALReplicaDependency(streamingtypes.ChannelID{Name: pchannel, WALReplicaID: 4}))
+	assert.False(t, reg.HasWALReplicaDependency(streamingtypes.ChannelID{Name: "other", WALReplicaID: 3}))
+}
+
+func TestRegistry_HasWALReplicaDependencyIncludesSyncerPending(t *testing.T) {
+	catalog := newMockCatalog()
+	pchannel := qviews.NewStreamingNodeFromVChannel(testVChannel).PChannel
+	s := newMockSyncer()
+	s.walReplicaDependencies = map[streamingtypes.ChannelID]struct{}{
+		{Name: pchannel, WALReplicaID: 3}: {},
+	}
+	reg := newTestRegistry(t, catalog, s)
+
+	assert.True(t, reg.HasWALReplicaDependency(streamingtypes.ChannelID{Name: pchannel, WALReplicaID: 3}))
+	assert.False(t, reg.HasWALReplicaDependency(streamingtypes.ChannelID{Name: pchannel, WALReplicaID: 4}))
+}
+
+func TestRegistry_OnQueryNodeLostMarksAffectedUpViews(t *testing.T) {
+	catalog := newMockCatalog()
+	s := newMockSyncer()
+	reg := newTestRegistry(t, catalog, s)
+
+	mgr := reg.Ensure(testShardID)
+	ver := testVersion(1, 1, 1)
+	require.NoError(t, mgr.AddPreparing(context.Background(), testBuilder(1, 1, 1)))
+	require.NoError(t, reg.flushScheduler.Flush(context.Background()))
+	simulateNodeResponse(t, s, testQN1, ver, qviews.QueryViewStateReady)
+	simulateNodeResponse(t, s, testSN, ver, qviews.QueryViewStateReady)
+	require.NoError(t, reg.flushScheduler.Flush(context.Background()))
+	simulateNodeResponse(t, s, testSN, ver, qviews.QueryViewStateUp)
+	require.NoError(t, reg.flushScheduler.Flush(context.Background()))
+
+	catalog.reset()
+	affected := reg.OnQueryNodeLost(testQN1)
+	require.NoError(t, reg.flushScheduler.Flush(context.Background()))
+
+	assert.Equal(t, []qviews.ShardID{testShardID}, affected)
+	require.Len(t, catalog.savedStates(), 1)
+	assert.Equal(t, viewpb.QueryViewState_QueryViewStateUnrecoverable, catalog.savedStates()[0])
+
+	stats := reg.Snapshot().StatsMap()[testShardID]
+	require.NotNil(t, stats)
+	assert.Nil(t, stats.UpVersion)
+	assert.Equal(t, SegmentStateUnrecoverable, stats.Segments[1001].Nodes[testQN1.ID])
 }

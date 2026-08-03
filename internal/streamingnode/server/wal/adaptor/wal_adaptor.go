@@ -196,6 +196,7 @@ func (w *walAdaptorImpl) GetQueryPlan(ctx context.Context, req *viewpb.GetQueryP
 	if w.viewResourceManager != nil {
 		runtime, _ = w.viewResourceManager.GetQueryRuntime(qviews.QueryViewKey{
 			ShardID:          shardID,
+			WALReplicaID:     lease.View.GetStreamingNode().GetWalReplicaId(),
 			QueryViewVersion: lease.Version,
 		})
 	}
@@ -314,7 +315,8 @@ func buildQueryPlanWorkNodes(view *viewpb.QueryViewOfShard, options queryPlanWor
 		nodes = append(nodes, &viewpb.QueryPlanWorkNode{
 			Node: &viewpb.QueryPlanWorkNode_StreamingNode{
 				StreamingNode: &viewpb.StreamingWorkNode{
-					Pchannel: qviews.NewStreamingNodeFromVChannel(view.GetMeta().GetVchannel()).PChannel,
+					Pchannel:     qviews.NewStreamingNodeFromVChannel(view.GetMeta().GetVchannel()).PChannel,
+					WalReplicaId: view.GetStreamingNode().GetWalReplicaId(),
 				},
 			},
 		})

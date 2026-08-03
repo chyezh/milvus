@@ -5,6 +5,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 )
 
 // DefaultBalancePolicy is the built-in three-phase policy described in
@@ -67,24 +68,35 @@ func (p *DefaultBalancePolicy) Plan(snap *BalancerSnapshot, dirty []qviews.Shard
 	sortCandidates(optional)
 
 	projectedRows := initialProjectedRows(snap.Nodes)
+	walPlan := newWALReplicaPlanState(snap)
 	for _, shardID := range plan.Releases {
 		projectedRows = withoutRows(projectedRows, currentShardRows(snap, shardID))
+		walPlan.Release(shardID)
 	}
 
 	for _, candidate := range mandatory {
 		baseRows := withoutRows(projectedRows, currentShardRows(snap, candidate.shardID))
-		result := allocate(snap, candidate.shardID, baseRows)
+		result := allocate(snap, candidate.shardID, baseRows, walPlan)
 		if result == nil {
+			continue
+		}
+		if result.walDemand != nil {
+			appendWALReplicaDemand(plan, *result.walDemand)
 			continue
 		}
 		plan.Prepares[candidate.shardID] = result.builder
 		projectedRows = withRows(baseRows, result.rowsByNode)
+		walPlan.Accept(candidate.shardID, result.walReplicaID)
 	}
 
 	for _, candidate := range optional {
 		baseRows := withoutRows(projectedRows, currentShardRows(snap, candidate.shardID))
-		result := allocate(snap, candidate.shardID, baseRows)
+		result := allocate(snap, candidate.shardID, baseRows, walPlan)
 		if result == nil {
+			continue
+		}
+		if result.walDemand != nil {
+			appendWALReplicaDemand(plan, *result.walDemand)
 			continue
 		}
 		if assignmentsEqual(currentSegmentNodes(snap, candidate.shardID), result.assignments) {
@@ -92,12 +104,68 @@ func (p *DefaultBalancePolicy) Plan(snap *BalancerSnapshot, dirty []qviews.Shard
 		}
 		plan.Prepares[candidate.shardID] = result.builder
 		projectedRows = withRows(baseRows, result.rowsByNode)
+		walPlan.Accept(candidate.shardID, result.walReplicaID)
 	}
 
 	sort.Slice(plan.Releases, func(i, j int) bool {
 		return shardLess(plan.Releases[i], plan.Releases[j])
 	})
+	plan.WALReplicaReleases = unusedReadOnlyWALReplicaReleases(snap, plan)
 	return plan
+}
+
+func appendWALReplicaDemand(plan *BalancePlan, demand WALReplicaDemand) {
+	for _, existing := range plan.WALReplicaDemands {
+		if existing == demand {
+			return
+		}
+	}
+	plan.WALReplicaDemands = append(plan.WALReplicaDemands, demand)
+}
+
+func unusedReadOnlyWALReplicaReleases(snap *BalancerSnapshot, plan *BalancePlan) []WALReplicaRelease {
+	if snap == nil || snap.WALReplicaSnapshot == nil {
+		return nil
+	}
+	used := make(map[types.ChannelID]struct{})
+	for shardID, stats := range snap.ShardStatsMap() {
+		if stats == nil {
+			continue
+		}
+		pchannel, ok := pchannelForVChannel(shardID.VChannel)
+		if !ok {
+			continue
+		}
+		for walReplicaID := range stats.WALReplicaDependencies {
+			used[types.ChannelID{Name: pchannel, WALReplicaID: walReplicaID}] = struct{}{}
+		}
+	}
+	for shardID, builder := range plan.Prepares {
+		if builder == nil {
+			continue
+		}
+		pchannel, ok := pchannelForVChannel(shardID.VChannel)
+		if !ok {
+			continue
+		}
+		view := builder.Build()
+		used[types.ChannelID{Name: pchannel, WALReplicaID: view.GetStreamingNode().GetWalReplicaId()}] = struct{}{}
+	}
+
+	releases := make([]WALReplicaRelease, 0)
+	for _, replica := range snap.WALReplicaSnapshot.ReadOnlyReplicas() {
+		if snap.HasWALReplicaDependency(replica.ChannelID) {
+			continue
+		}
+		if _, ok := used[replica.ChannelID]; ok {
+			continue
+		}
+		releases = append(releases, WALReplicaRelease{
+			PChannel:     replica.ChannelID.Name,
+			WALReplicaID: replica.ChannelID.WALReplicaID,
+		})
+	}
+	return releases
 }
 
 func initialProjectedRows(nodes map[int64]*BalanceNode) map[int64]int64 {

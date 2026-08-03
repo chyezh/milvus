@@ -9,6 +9,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	qvobserve "github.com/milvus-io/milvus/internal/views/qviews/observe"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
@@ -69,6 +70,7 @@ func queryViewKeyFromProto(view *viewpb.QueryViewOfShard) qviews.QueryViewKey {
 	meta := view.GetMeta()
 	return qviews.QueryViewKey{
 		ShardID:          qviews.NewShardIDFromQVMeta(meta),
+		WALReplicaID:     view.GetStreamingNode().GetWalReplicaId(),
 		QueryViewVersion: qviews.FromProtoQueryViewVersion(meta.GetVersion()),
 	}
 }
@@ -86,7 +88,7 @@ type DirtyViewFlushScheduler struct {
 	pending     map[qviews.ShardID]*pendingDirtyViewEvent
 	ready       map[qviews.ShardID]struct{}
 	readyOps    int
-	inflight    map[qviews.ShardID]struct{}
+	inflight    map[qviews.ShardID]*pendingDirtyViewEvent
 	held        map[qviews.ShardID]struct{}
 	batchDepth  int
 	queuedTasks int
@@ -132,7 +134,7 @@ func newDirtyViewFlushScheduler(
 		nodeScheduler: nodeScheduler,
 		pending:       make(map[qviews.ShardID]*pendingDirtyViewEvent),
 		ready:         make(map[qviews.ShardID]struct{}),
-		inflight:      make(map[qviews.ShardID]struct{}),
+		inflight:      make(map[qviews.ShardID]*pendingDirtyViewEvent),
 		held:          make(map[qviews.ShardID]struct{}),
 		tasks:         make(map[*dirtyViewFlushTask]nodescheduler.TaskHandle),
 		notify:        make(chan struct{}, 1),
@@ -206,6 +208,44 @@ func (s *DirtyViewFlushScheduler) Submit(event dirtyViewEvent) {
 	s.signalLocked()
 }
 
+func (s *DirtyViewFlushScheduler) HasWALReplicaDependency(replicaID types.ChannelID) bool {
+	if s == nil {
+		return false
+	}
+	if s.syncer != nil && s.syncer.HasWALReplicaDependency(replicaID) {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, event := range s.pending {
+		if dirtyViewEventHasWALReplicaDependency(event, replicaID) {
+			return true
+		}
+	}
+	for _, event := range s.inflight {
+		if dirtyViewEventHasWALReplicaDependency(event, replicaID) {
+			return true
+		}
+	}
+	return false
+}
+
+func dirtyViewEventHasWALReplicaDependency(event *pendingDirtyViewEvent, replicaID types.ChannelID) bool {
+	if event == nil {
+		return false
+	}
+	for _, syncView := range event.syncs {
+		streamingNode, ok := syncView.View.WorkNode().(qviews.StreamingNode)
+		if !ok {
+			continue
+		}
+		if streamingNode.PChannel == replicaID.Name && streamingNode.WALReplicaID == replicaID.WALReplicaID {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *DirtyViewFlushScheduler) scheduleReadyTasksLocked() {
 	if s.closed || s.err != nil || s.batchDepth > 0 {
 		return
@@ -242,7 +282,7 @@ func (s *DirtyViewFlushScheduler) claim() map[qviews.ShardID]*pendingDirtyViewEv
 		claimed[shardID] = event
 		s.removeReadyLocked(shardID)
 		delete(s.pending, shardID)
-		s.inflight[shardID] = struct{}{}
+		s.inflight[shardID] = event
 		usedOps += ops
 		if usedOps >= s.maxTxnOps {
 			break

@@ -57,6 +57,9 @@ func (t *SegmentLoadTask) load(ctx context.Context) (TransformSegment, error) {
 	if err != nil {
 		return nil, err
 	}
+	if marker, ok := segment.(interface{ SetWALReplicaID(int64) }); ok {
+		marker.SetWALReplicaID(t.WALReplicaID)
+	}
 	if t.TransformStartAfterTimeTick > 0 {
 		segment = &transformStartSegment{
 			TransformSegment: segment,
@@ -178,6 +181,13 @@ func (s *transformStartSegment) UnwrapTransformSegment() TransformSegment {
 
 func (s *transformStartSegment) TransformStartAfterTimeTick() uint64 {
 	return s.startAfter
+}
+
+func (s *transformStartSegment) WALReplicaID() int64 {
+	if segment, ok := s.TransformSegment.(interface{ WALReplicaID() int64 }); ok {
+		return segment.WALReplicaID()
+	}
+	return 0
 }
 
 func (s *transformStartSegment) QuerySegment() segments.Segment {

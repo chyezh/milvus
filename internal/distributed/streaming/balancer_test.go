@@ -48,13 +48,17 @@ func TestBalancer(t *testing.T) {
 		}
 		<-ctx.Done()
 		return ctx.Err()
-	})
+	}).Maybe()
 	sbalancer.EXPECT().RegisterStreamingEnabledNotifier(mock.Anything).RunAndReturn(func(notifier *syncutil.AsyncTaskNotifier[struct{}]) {
 		notifier.Cancel()
 	})
 
 	snmanager.ResetStreamingNodeManager()
 	balance.Register(sbalancer)
+	defer func() {
+		snmanager.StaticStreamingNodeManager.Close()
+		balance.ResetBalancer()
+	}()
 
 	balancer := balancerImpl{
 		walAccesserImpl: &walAccesserImpl{},
@@ -77,6 +81,11 @@ func TestBalancer(t *testing.T) {
 	assert.Error(t, err)
 	assert.Nil(t, nodes)
 
+	// Stop the background manager watcher before replacing WatchChannelAssignments
+	// expectations. The foreground GetWALDistribution call below still uses the
+	// registered balancer directly, so it can cover the error branch without
+	// racing the manager goroutine on the same mock.
+	snmanager.StaticStreamingNodeManager.Close()
 	sbalancer.EXPECT().WatchChannelAssignments(mock.Anything, mock.Anything).Unset()
 	sbalancer.EXPECT().WatchChannelAssignments(mock.Anything, mock.Anything).Return(errors.New("test"))
 	assignment, err = balancer.GetWALDistribution(context.Background(), 1)

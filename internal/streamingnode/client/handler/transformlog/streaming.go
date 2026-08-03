@@ -28,7 +28,8 @@ func CreateEventStream(
 ) (*EventStream, error) {
 	pchannel := opts.Assignment.Channel.Name
 	ctx = contextutil.WithCreateTransformStream(ctx, &streamingpb.CreateTransformStreamRequest{
-		Pchannel: types.NewProtoFromPChannelInfo(opts.Assignment.Channel),
+		Pchannel:     types.NewProtoFromPChannelInfo(opts.Assignment.Channel),
+		WalReplicaId: opts.Assignment.WALReplicaID,
 	})
 	streamClient, err := handlerClient.SubscribeTransform(ctx, grpc.MaxCallRecvMsgSize(math.MaxInt32))
 	if err != nil {

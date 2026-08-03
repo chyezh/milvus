@@ -17,6 +17,7 @@ type QueryViewAtCoordBuilder struct {
 	queryVersion                int64
 	transformStartAfterTimetick uint64
 	loadInfoVersion             uint64
+	walReplicaID                int64
 	// nodeID -> partitionID -> []segmentID
 	assignments map[int64]map[int64][]int64
 }
@@ -65,6 +66,12 @@ func (b *QueryViewAtCoordBuilder) SetQueryVersion(queryVersion int64) *QueryView
 // resolve load fields, partitions, and field-index bindings on nodes.
 func (b *QueryViewAtCoordBuilder) SetLoadInfoVersion(version uint64) *QueryViewAtCoordBuilder {
 	b.loadInfoVersion = version
+	return b
+}
+
+// SetWALReplicaID sets the WAL replica binding for the streaming-node view.
+func (b *QueryViewAtCoordBuilder) SetWALReplicaID(replicaID int64) *QueryViewAtCoordBuilder {
+	b.walReplicaID = replicaID
 	return b
 }
 
@@ -117,14 +124,15 @@ func (b *QueryViewAtCoordBuilder) Build() *viewpb.QueryViewOfShard {
 		}
 
 		queryNodes = append(queryNodes, &viewpb.QueryViewOfQueryNode{
-			NodeId:     nodeID,
-			Partitions: partitions,
+			NodeId:       nodeID,
+			Partitions:   partitions,
+			WalReplicaId: b.walReplicaID,
 		})
 	}
 
 	return &viewpb.QueryViewOfShard{
 		Meta:          meta,
 		QueryNode:     queryNodes,
-		StreamingNode: &viewpb.QueryViewOfStreamingNode{},
+		StreamingNode: &viewpb.QueryViewOfStreamingNode{WalReplicaId: b.walReplicaID},
 	}
 }

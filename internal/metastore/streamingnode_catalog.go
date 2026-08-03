@@ -44,10 +44,12 @@ type StreamingNodeCataLog interface {
 	// DropSegmentAssignments drops retained segment assignment recovery meta for the wal.
 	DropSegmentAssignments(ctx context.Context, pChannelName string, segmentIDs []int64) error
 
-	// ListQueryViews lists persisted StreamingNode query views for the wal.
+	// ListQueryViews lists persisted StreamingNode query views under the pchannel.
+	// The stored records are scoped by WAL replica ID inside the pchannel.
 	ListQueryViews(ctx context.Context, pChannelName string) ([]*viewpb.QueryViewOfShard, error)
 
-	// SaveQueryViews saves StreamingNode query views for the wal.
+	// SaveQueryViews saves StreamingNode query views under the pchannel.
+	// The stored records are scoped by WAL replica ID inside the pchannel.
 	SaveQueryViews(ctx context.Context, pChannelName string, views []*viewpb.QueryViewOfShard) error
 
 	// GetConsumeCheckpoint gets the consuming checkpoint of the wal.

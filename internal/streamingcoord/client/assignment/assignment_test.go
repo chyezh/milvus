@@ -64,12 +64,29 @@ func TestAssignmentService(t *testing.T) {
 								SecondaryChannels: []*streamingpb.PChannelInfo{
 									{Name: "c1-ro", Term: 3, AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY},
 								},
+								WalReplicas: []*streamingpb.WALReplicaInfo{
+									{
+										Pchannel:          "c1",
+										WalReplicaId:      0,
+										AccessMode:        streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE,
+										PchannelWriteTerm: 1,
+										State:             streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+									},
+									{
+										Pchannel:          "c1-ro",
+										WalReplicaId:      2,
+										AccessMode:        streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+										ResourceGroup:     "rg1",
+										PchannelWriteTerm: 3,
+										State:             streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+									},
+								},
 								ShardAssignment: &streamingpb.ShardAssignmentInfo{
 									PchannelAssignments: []*streamingpb.PChannelShardAssignment{
 										{
 											Pchannel: "c1-ro",
 											Entries: []*streamingpb.ShardAssignmentEntry{
-												{CollectionId: 100, ShardIndex: 1, ReplicaId: 10},
+												{CollectionId: 100, ShardIndex: 1, ReplicaId: 10, WalReplicaId: 2},
 												{CollectionId: 101, ShardIndex: 2, ReplicaId: 11},
 											},
 										},
@@ -126,11 +143,18 @@ func TestAssignmentService(t *testing.T) {
 		{
 			PChannel: "c1-ro",
 			Entries: []types.ShardAssignmentEntry{
-				{CollectionID: 100, ShardIndex: 1, ReplicaID: 10},
+				{CollectionID: 100, ShardIndex: 1, ReplicaID: 10, WALReplicaID: 2},
 				{CollectionID: 101, ShardIndex: 2, ReplicaID: 11},
 			},
 		},
 	}, assign.Assignments[1].ShardAssignment.PChannelAssignments)
+	assert.Equal(t, types.WALReplicaInfo{
+		ChannelID:         types.ChannelID{Name: "c1-ro", WALReplicaID: 2},
+		AccessMode:        types.AccessModeRO,
+		ResourceGroup:     "rg1",
+		PChannelWriteTerm: 3,
+		State:             streamingpb.PChannelMetaState_PCHANNEL_META_STATE_ASSIGNED,
+	}, assign.Assignments[1].WALReplicas[types.ChannelID{Name: "c1-ro", WALReplicaID: 2}])
 
 	resp, err := assignmentService.UpdateWALBalancePolicy(ctx, &streamingpb.UpdateWALBalancePolicyRequest{})
 	assert.NoError(t, err)
@@ -170,6 +194,138 @@ func TestAssignmentService(t *testing.T) {
 	_, err = assignmentService.GetReplicateConfiguration(ctx)
 	se = status.AsStreamingError(err)
 	assert.Equal(t, streamingpb.StreamingCode_STREAMING_CODE_ON_SHUTDOWN, se.Code)
+}
+
+func TestAssignmentDiscoverClientReportWALReplicaAssignmentError(t *testing.T) {
+	c := &assignmentDiscoverClient{
+		lifetime:                         typeutil.NewLifetime(),
+		requestCh:                        make(chan *streamingpb.AssignmentDiscoverRequest, 1),
+		exitCh:                           make(chan struct{}),
+		lastErrorReportedTerm:            make(map[string]int64),
+		lastErrorReportedWALReplicaEpoch: make(map[types.ChannelID]int64),
+	}
+	assignment := types.PChannelInfoAssigned{
+		Channel:         types.PChannelInfo{Name: "c1", Term: 7, AccessMode: types.AccessModeRO},
+		WALReplicaID:    2,
+		AssignmentEpoch: 9,
+	}
+
+	c.ReportWALReplicaAssignmentError(assignment, status.NewChannelNotExist("c1"))
+
+	req := <-c.requestCh
+	report := req.GetReportError()
+	assert.Equal(t, "c1", report.GetPchannel().GetName())
+	assert.Equal(t, int64(7), report.GetPchannel().GetTerm())
+	assert.Equal(t, int64(2), report.GetWalReplicaId())
+	assert.Equal(t, int64(9), report.GetAssignmentEpoch())
+	assert.Equal(t, streamingpb.StreamingCode_STREAMING_CODE_CHANNEL_NOT_EXIST, report.GetErr().GetCode())
+
+	assert.False(t, c.shouldIgnore(req))
+	assert.True(t, c.shouldIgnore(req))
+	assert.True(t, c.shouldIgnore(&streamingpb.AssignmentDiscoverRequest{
+		Command: &streamingpb.AssignmentDiscoverRequest_ReportError{
+			ReportError: &streamingpb.ReportAssignmentErrorRequest{
+				Pchannel:        &streamingpb.PChannelInfo{Name: "c1"},
+				WalReplicaId:    2,
+				AssignmentEpoch: 8,
+			},
+		},
+	}))
+	assert.False(t, c.shouldIgnore(&streamingpb.AssignmentDiscoverRequest{
+		Command: &streamingpb.AssignmentDiscoverRequest_ReportError{
+			ReportError: &streamingpb.ReportAssignmentErrorRequest{
+				Pchannel:        &streamingpb.PChannelInfo{Name: "c1"},
+				WalReplicaId:    2,
+				AssignmentEpoch: 10,
+			},
+		},
+	}))
+}
+
+func TestAssignmentDiscoverClientReportReadOnlyWALReplicaZeroErrorDedupesByEpoch(t *testing.T) {
+	c := &assignmentDiscoverClient{
+		lifetime:                         typeutil.NewLifetime(),
+		requestCh:                        make(chan *streamingpb.AssignmentDiscoverRequest, 1),
+		exitCh:                           make(chan struct{}),
+		lastErrorReportedTerm:            make(map[string]int64),
+		lastErrorReportedWALReplicaEpoch: make(map[types.ChannelID]int64),
+	}
+	assignment := types.PChannelInfoAssigned{
+		Channel:         types.PChannelInfo{Name: "c1", Term: 7, AccessMode: types.AccessModeRO},
+		WALReplicaID:    0,
+		AssignmentEpoch: 9,
+	}
+
+	c.ReportWALReplicaAssignmentError(assignment, status.NewChannelNotExist("c1"))
+
+	req := <-c.requestCh
+	report := req.GetReportError()
+	assert.Equal(t, "c1", report.GetPchannel().GetName())
+	assert.Equal(t, int64(7), report.GetPchannel().GetTerm())
+	assert.Equal(t, streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY, report.GetPchannel().GetAccessMode())
+	assert.Equal(t, int64(0), report.GetWalReplicaId())
+	assert.Equal(t, int64(9), report.GetAssignmentEpoch())
+
+	assert.False(t, c.shouldIgnore(req))
+	assert.True(t, c.shouldIgnore(req))
+	assert.True(t, c.shouldIgnore(&streamingpb.AssignmentDiscoverRequest{
+		Command: &streamingpb.AssignmentDiscoverRequest_ReportError{
+			ReportError: &streamingpb.ReportAssignmentErrorRequest{
+				Pchannel: &streamingpb.PChannelInfo{
+					Name:       "c1",
+					Term:       8,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+				},
+				WalReplicaId:    0,
+				AssignmentEpoch: 8,
+			},
+		},
+	}))
+	assert.False(t, c.shouldIgnore(&streamingpb.AssignmentDiscoverRequest{
+		Command: &streamingpb.AssignmentDiscoverRequest_ReportError{
+			ReportError: &streamingpb.ReportAssignmentErrorRequest{
+				Pchannel: &streamingpb.PChannelInfo{
+					Name:       "c1",
+					Term:       6,
+					AccessMode: streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READONLY,
+				},
+				WalReplicaId:    0,
+				AssignmentEpoch: 10,
+			},
+		},
+	}))
+}
+
+func TestAssignmentDiscoverClientReportsReadWriteWALReplicaErrorWithReplicaIdentity(t *testing.T) {
+	c := &assignmentDiscoverClient{
+		lifetime:                         typeutil.NewLifetime(),
+		requestCh:                        make(chan *streamingpb.AssignmentDiscoverRequest, 1),
+		exitCh:                           make(chan struct{}),
+		lastErrorReportedTerm:            make(map[string]int64),
+		lastErrorReportedWALReplicaEpoch: make(map[types.ChannelID]int64),
+	}
+	assignment := types.PChannelInfoAssigned{
+		Channel: types.PChannelInfo{
+			Name:       "c1",
+			Term:       11,
+			AccessMode: types.AccessModeRW,
+		},
+		WALReplicaID:    2,
+		AssignmentEpoch: 9,
+	}
+
+	c.ReportWALReplicaAssignmentError(assignment, status.NewChannelNotExist("c1"))
+
+	req := <-c.requestCh
+	report := req.GetReportError()
+	assert.Equal(t, "c1", report.GetPchannel().GetName())
+	assert.Equal(t, int64(11), report.GetPchannel().GetTerm())
+	assert.Equal(t, streamingpb.PChannelAccessMode_PCHANNEL_ACCESS_READWRITE, report.GetPchannel().GetAccessMode())
+	assert.Equal(t, int64(2), report.GetWalReplicaId())
+	assert.Equal(t, int64(9), report.GetAssignmentEpoch())
+
+	assert.False(t, c.shouldIgnore(req))
+	assert.True(t, c.shouldIgnore(req))
 }
 
 func TestGetReplicateConfiguration_FreshRead(t *testing.T) {

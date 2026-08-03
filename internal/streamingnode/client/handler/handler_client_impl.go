@@ -61,7 +61,7 @@ func (hc *handlerClientImpl) GetLatestMVCCTimestampIfLocal(ctx context.Context, 
 	}
 
 	// Get the wal at local registry.
-	w, err := registry.GetLocalAvailableWAL(assign.Channel)
+	w, err := registry.GetLocalAvailableWALReplica(assign.Channel, assign.WALReplicaID)
 	if err != nil {
 		return 0, err
 	}
@@ -83,7 +83,7 @@ func (hc *handlerClientImpl) GetReplicateCheckpoint(ctx context.Context, pchanne
 		if assign.Channel.AccessMode != types.AccessModeRW {
 			return nil, status.NewInner("replicate checkpoint can only be read for RW channel")
 		}
-		localWAL, err := registry.GetLocalAvailableWAL(assign.Channel)
+		localWAL, err := registry.GetLocalAvailableWALReplica(assign.Channel, assign.WALReplicaID)
 		if err == nil {
 			return localWAL.GetReplicateCheckpoint()
 		}
@@ -95,7 +95,8 @@ func (hc *handlerClientImpl) GetReplicateCheckpoint(ctx context.Context, pchanne
 			return nil, err
 		}
 		resp, err := handlerService.GetReplicateCheckpoint(ctx, &streamingpb.GetReplicateCheckpointRequest{
-			Pchannel: types.NewProtoFromPChannelInfo(assign.Channel),
+			Pchannel:     types.NewProtoFromPChannelInfo(assign.Channel),
+			WalReplicaId: assign.WALReplicaID,
 		})
 		if err != nil {
 			return nil, err
@@ -120,7 +121,7 @@ func (hc *handlerClientImpl) GetSalvageCheckpoint(ctx context.Context, pchannel 
 		if assign.Channel.AccessMode != types.AccessModeRW {
 			return nil, status.NewInner("salvage checkpoint can only be read for RW channel")
 		}
-		localWAL, err := registry.GetLocalAvailableWAL(assign.Channel)
+		localWAL, err := registry.GetLocalAvailableWALReplica(assign.Channel, assign.WALReplicaID)
 		if err == nil {
 			// Local WAL - get salvage checkpoints directly
 			return localWAL.GetSalvageCheckpoint(), nil
@@ -133,7 +134,8 @@ func (hc *handlerClientImpl) GetSalvageCheckpoint(ctx context.Context, pchannel 
 			return nil, err
 		}
 		resp, err := handlerService.GetSalvageCheckpoint(ctx, &streamingpb.GetSalvageCheckpointRequest{
-			Pchannel: types.NewProtoFromPChannelInfo(assign.Channel),
+			Pchannel:     types.NewProtoFromPChannelInfo(assign.Channel),
+			WalReplicaId: assign.WALReplicaID,
 		})
 		if err != nil {
 			return nil, err
@@ -169,7 +171,7 @@ func (hc *handlerClientImpl) PrepareReleaseManualFlushIfLocal(ctx context.Contex
 		assign = hc.watcher.Get(ctx, pchannel)
 	}
 
-	w, err := registry.GetLocalAvailableWAL(assign.Channel)
+	w, err := registry.GetLocalAvailableWALReplica(assign.Channel, assign.WALReplicaID)
 	if err != nil {
 		return false, err
 	}
@@ -181,7 +183,7 @@ func (hc *handlerClientImpl) PrepareReleaseManualFlushIfLocal(ctx context.Contex
 	if err != nil {
 		return false, err
 	}
-	return preparer.PrepareReleaseManualFlush(ctx, assign.Channel, collectionID, vchannel, releaseSegmentIDs)
+	return preparer.PrepareReleaseManualFlush(ctx, assign.Channel, assign.WALReplicaID, collectionID, vchannel, releaseSegmentIDs)
 }
 
 // GetWALMetricsIfLocal gets the metrics of the local wal.
@@ -207,7 +209,7 @@ func (hc *handlerClientImpl) CreateProducer(ctx context.Context, opts *ProducerO
 			return nil, status.NewInner("producer can only be created for RW channel")
 		}
 		// Check if the localWAL is assigned at local
-		localWAL, err := registry.GetLocalAvailableWAL(assign.Channel)
+		localWAL, err := registry.GetLocalAvailableWALReplica(assign.Channel, assign.WALReplicaID)
 		if err == nil {
 			return localWAL, nil
 		}
@@ -247,7 +249,7 @@ func (hc *handlerClientImpl) CreateConsumer(ctx context.Context, opts *ConsumerO
 	deliverPolicy := opts.DeliverPolicy
 	c, err := hc.createHandlerAfterStreamingNodeReady(ctx, logger, opts.PChannel, func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
 		// Check if the localWAL is assigned at local
-		localWAL, err := registry.GetLocalAvailableWAL(assign.Channel)
+		localWAL, err := registry.GetLocalAvailableWALReplica(assign.Channel, assign.WALReplicaID)
 		if err == nil {
 			localScanner, err := localWAL.Read(ctx, wal.ReadOption{
 				VChannel:               opts.VChannel,
@@ -303,7 +305,7 @@ func (hc *handlerClientImpl) CreateConsumer(ctx context.Context, opts *ConsumerO
 	return c.(Consumer), nil
 }
 
-func (hc *handlerClientImpl) AcquireTransformLogStream(ctx context.Context, pchannel string) (wal.TransformLogStream, error) {
+func (hc *handlerClientImpl) AcquireTransformLogStream(ctx context.Context, pchannel string, walReplicaIDs ...int64) (wal.TransformLogStream, error) {
 	if !hc.lifetime.Add(typeutil.LifetimeStateWorking) {
 		return nil, ErrClientClosed
 	}
@@ -312,11 +314,17 @@ func (hc *handlerClientImpl) AcquireTransformLogStream(ctx context.Context, pcha
 	if pchannel == "" {
 		return nil, errors.New("pchannel is required")
 	}
-	logger := mlog.With(mlog.String("pchannel", pchannel), mlog.String("handler", "transformlog-event-stream"))
-	s, err := hc.createHandlerAfterStreamingNodeReady(ctx, logger, pchannel, func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
-		localWAL, err := registry.GetLocalAvailableWAL(assign.Channel)
+	walReplicaID := firstWALReplicaID(walReplicaIDs)
+	channelID := types.ChannelID{Name: pchannel, WALReplicaID: walReplicaID}
+	logger := mlog.With(
+		mlog.String("pchannel", pchannel),
+		mlog.Int64("walReplicaID", walReplicaID),
+		mlog.String("handler", "transformlog-event-stream"),
+	)
+	s, err := hc.createHandlerAfterWALReplicaReady(ctx, logger, channelID, func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error) {
+		localWAL, err := registry.GetLocalAvailableWALReplica(assign.Channel, assign.WALReplicaID)
 		if err == nil {
-			return localWAL.TransformLog().AcquireStream(ctx, pchannel)
+			return localWAL.TransformLog().AcquireStream(ctx, pchannel, assign.WALReplicaID)
 		}
 		if !shouldUseRemoteWAL(err) {
 			return nil, err
@@ -335,7 +343,18 @@ func (hc *handlerClientImpl) AcquireTransformLogStream(ctx context.Context, pcha
 	return s.(wal.TransformLogStream), nil
 }
 
+func firstWALReplicaID(walReplicaIDs []int64) int64 {
+	if len(walReplicaIDs) == 0 {
+		return 0
+	}
+	return walReplicaIDs[0]
+}
+
 type handlerCreateFunc func(ctx context.Context, assign *types.PChannelInfoAssigned) (any, error)
+
+type walReplicaAssignmentRebalanceTrigger interface {
+	ReportWALReplicaAssignmentError(ctx context.Context, assignment types.PChannelInfoAssigned, err error) error
+}
 
 // createHandlerAfterStreamingNodeReady creates a handler until streaming node ready.
 // If streaming node is not ready, it will block until new assignment term is coming or context timeout.
@@ -371,7 +390,7 @@ func (hc *handlerClientImpl) createHandlerAfterStreamingNodeReady(ctx context.Co
 
 			// Check if the error is permanent failure until new assignment.
 			if isPermanentFailureUntilNewAssignment(err) {
-				reportErr := hc.rebalanceTrigger.ReportAssignmentError(ctx, assign.Channel, err)
+				reportErr := hc.reportWALReplicaAssignmentError(ctx, *assign, err)
 				logger.Info(ctx, "report assignment error", mlog.NamedError("assignmentError", err), mlog.Err(reportErr))
 			}
 		} else {
@@ -391,12 +410,75 @@ func (hc *handlerClientImpl) createHandlerAfterStreamingNodeReady(ctx context.Co
 	}
 }
 
+func (hc *handlerClientImpl) createHandlerAfterWALReplicaReady(ctx context.Context, logger *mlog.Logger, channelID types.ChannelID, create handlerCreateFunc) (any, error) {
+	// TODO: backoff should be configurable.
+	backoff := backoff.NewExponentialBackOff()
+	backoff.InitialInterval = 100 * time.Millisecond
+	backoff.MaxInterval = 10 * time.Second
+	backoff.MaxElapsedTime = 0
+	backoff.Reset()
+
+	for {
+		assign := hc.watcher.GetWALReplica(ctx, channelID)
+		if assign != nil {
+			ctx = contextutil.WithPickServerID(ctx, assign.Node.ServerID)
+			createResult, err := create(ctx, assign)
+			if err == nil {
+				logger.Info(ctx, "create handler success", mlog.Any("assignment", assign), mlog.Bool("isLocal", registry.IsLocal(createResult)))
+				return createResult, nil
+			}
+			logger.Warn(ctx, "create handler failed", mlog.Any("assignment", assign), mlog.Err(err))
+
+			if status.AsStreamingError(err).IsUnrecoverable() {
+				logger.Warn(ctx, "create handler failed with unrecoverable error, stop retrying", mlog.Err(err))
+				return nil, err
+			}
+
+			if isPermanentFailureUntilNewAssignment(err) {
+				reportErr := hc.reportWALReplicaAssignmentError(ctx, *assign, err)
+				logger.Info(ctx, "report assignment error", mlog.NamedError("assignmentError", err), mlog.Err(reportErr))
+			}
+		} else {
+			mlog.Warn(ctx, "wal replica assignment not found", mlog.String("channelID", channelID.String()))
+		}
+
+		start := time.Now()
+		nextBackoff := backoff.NextBackOff()
+		logger.Info(ctx, "wait for next backoff", mlog.Duration("nextBackoff", nextBackoff))
+		isAssignemtChange, err := hc.waitForNextWALReplicaBackoff(ctx, channelID, assign, nextBackoff)
+		cost := time.Since(start)
+		if err != nil {
+			logger.Warn(ctx, "wait for next backoff failed", mlog.Err(err), mlog.Duration("cost", cost))
+			return nil, err
+		}
+		logger.Info(ctx, "wait for next backoff done", mlog.Bool("isAssignmentChange", isAssignemtChange), mlog.Duration("cost", cost))
+	}
+}
+
+func (hc *handlerClientImpl) reportWALReplicaAssignmentError(ctx context.Context, assignment types.PChannelInfoAssigned, err error) error {
+	if trigger, ok := hc.rebalanceTrigger.(walReplicaAssignmentRebalanceTrigger); ok &&
+		(assignment.WALReplicaID != 0 || assignment.AssignmentEpoch != 0 || assignment.Channel.AccessMode == types.AccessModeRO) {
+		return trigger.ReportWALReplicaAssignmentError(ctx, assignment, err)
+	}
+	return hc.rebalanceTrigger.ReportAssignmentError(ctx, assignment.Channel, err)
+}
+
 // waitForNextBackoff waits for next backoff.
 func (hc *handlerClientImpl) waitForNextBackoff(ctx context.Context, pchannel string, assign *types.PChannelInfoAssigned, nextBackoff time.Duration) (bool, error) {
 	ctx, cancel := context.WithTimeoutCause(ctx, nextBackoff, errWaitNextBackoff)
 	defer cancel()
 	// Block until new assignment term is coming.
 	err := hc.watcher.Watch(ctx, pchannel, assign)
+	if err == nil || errors.Is(context.Cause(ctx), errWaitNextBackoff) {
+		return err == nil, nil
+	}
+	return false, err
+}
+
+func (hc *handlerClientImpl) waitForNextWALReplicaBackoff(ctx context.Context, channelID types.ChannelID, assign *types.PChannelInfoAssigned, nextBackoff time.Duration) (bool, error) {
+	ctx, cancel := context.WithTimeoutCause(ctx, nextBackoff, errWaitNextBackoff)
+	defer cancel()
+	err := hc.watcher.WatchWALReplica(ctx, channelID, assign)
 	if err == nil || errors.Is(context.Cause(ctx), errWaitNextBackoff) {
 		return err == nil, nil
 	}

@@ -37,11 +37,12 @@ func TestPChannelViewQueryServerDelegatesToWALTaskProvider(t *testing.T) {
 		Name:       "p0",
 		Term:       7,
 		AccessMode: types.AccessModeRW,
-	}), req)
+	}, 2), req)
 
 	require.NoError(t, err)
 	assert.Same(t, scheduler.searchResult, resp.GetLegacyResults())
 	assert.Equal(t, types.PChannelInfo{Name: "p0", Term: 7, AccessMode: types.AccessModeRW}, manager.channel)
+	assert.Equal(t, int64(2), manager.walReplicaID)
 	assert.Equal(t, qviews.ShardID{ReplicaID: 1, VChannel: "p0_100v0"}, raw.searchShardID)
 	assert.Equal(t, 1, raw.searchTasks.releaseCount)
 }
@@ -95,9 +96,10 @@ func TestPChannelViewQueryServerRejectsMismatchedPChannelMetadata(t *testing.T) 
 }
 
 type fakeViewQueryWALManager struct {
-	channel types.PChannelInfo
-	wal     wal.WAL
-	err     error
+	channel      types.PChannelInfo
+	walReplicaID int64
+	wal          wal.WAL
+	err          error
 }
 
 func testViewQueryVersion() qviews.QueryViewVersion {
@@ -108,7 +110,12 @@ func testViewQueryVersion() qviews.QueryViewVersion {
 }
 
 func (m *fakeViewQueryWALManager) GetAvailableWAL(channel types.PChannelInfo) (wal.WAL, error) {
+	return m.GetAvailableWALReplica(channel, 0)
+}
+
+func (m *fakeViewQueryWALManager) GetAvailableWALReplica(channel types.PChannelInfo, walReplicaID int64) (wal.WAL, error) {
 	m.channel = channel
+	m.walReplicaID = walReplicaID
 	return m.wal, m.err
 }
 
@@ -123,6 +130,7 @@ type fakeViewQueryWAL struct {
 func (w *fakeViewQueryWAL) AcquireSearchSegmentTasks(
 	_ context.Context,
 	shardID qviews.ShardID,
+	_ int64,
 	_ qviews.QueryViewVersion,
 	_ *viewpb.QueryPlanMVCC,
 	_ *internalpb.SearchRequest,
@@ -134,6 +142,7 @@ func (w *fakeViewQueryWAL) AcquireSearchSegmentTasks(
 func (w *fakeViewQueryWAL) AcquireQuerySegmentTasks(
 	_ context.Context,
 	shardID qviews.ShardID,
+	_ int64,
 	_ qviews.QueryViewVersion,
 	_ *viewpb.QueryPlanMVCC,
 	_ *internalpb.RetrieveRequest,

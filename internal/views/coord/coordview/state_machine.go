@@ -174,15 +174,25 @@ func (sm *CoordQueryViewStateMachine) OnQueryNodeLost(node qviews.QueryNode) {
 	}
 
 	switch sm.state {
-	case qviews.QueryViewStatePreparing:
+	case qviews.QueryViewStatePreparing, qviews.QueryViewStateReady:
 		sm.transitionToUnrecoverable()
-	case qviews.QueryViewStateDropping:
+	case qviews.QueryViewStateUp:
+		sm.transitionToUnrecoverable()
+		sm.pending.Sync = sm.syncStreamingNodeForState(qviews.QueryViewStateUnrecoverable)
+	case qviews.QueryViewStateUnrecoverable:
+		sm.pending.Sync = sm.syncStreamingNodeForState(qviews.QueryViewStateUnrecoverable)
+	case qviews.QueryViewStateDown, qviews.QueryViewStateDropping:
 		sm.qnStates[node.ID] = qviews.QueryViewStateDropped
 		if sm.allNodesDropped() {
 			sm.state = qviews.QueryViewStateDropped
 			sm.pending.Persist = sm.viewWithState(qviews.QueryViewStateDropped)
 		}
 	}
+}
+
+func (sm *CoordQueryViewStateMachine) HasQueryNode(node qviews.QueryNode) bool {
+	_, ok := sm.qnStates[node.ID]
+	return ok
 }
 
 // EnterDown is called by the Manager to transition this view from Up to Down.
@@ -336,10 +346,22 @@ func (sm *CoordQueryViewStateMachine) syncViewsForState(state qviews.QueryViewSt
 	views = append(views, qviews.NewFullQueryViewAtStreamingNode(meta, sm.view.StreamingNode, sm.view.QueryNode))
 	if includeQN {
 		for _, qn := range sm.view.QueryNode {
-			views = append(views, qviews.NewQueryViewAtQueryNode(meta, qn))
+			qnView := proto.Clone(qn).(*viewpb.QueryViewOfQueryNode)
+			if sm.view.GetStreamingNode().GetWalReplicaId() != 0 {
+				qnView.WalReplicaId = sm.view.GetStreamingNode().GetWalReplicaId()
+			}
+			views = append(views, qviews.NewQueryViewAtQueryNode(meta, qnView))
 		}
 	}
 	return views
+}
+
+func (sm *CoordQueryViewStateMachine) syncStreamingNodeForState(state qviews.QueryViewState) []qviews.QueryViewAtWorkNode {
+	meta := proto.Clone(sm.view.Meta).(*viewpb.QueryViewMeta)
+	meta.State = viewpb.QueryViewState(state)
+	return []qviews.QueryViewAtWorkNode{
+		qviews.NewFullQueryViewAtStreamingNode(meta, sm.view.StreamingNode, sm.view.QueryNode),
+	}
 }
 
 func (sm *CoordQueryViewStateMachine) updateNodeState(report qviews.QueryViewAtWorkNode) {

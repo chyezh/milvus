@@ -133,6 +133,81 @@ func TestStreamingNodeManager(t *testing.T) {
 	m.Close()
 }
 
+func TestStreamingNodeManagerEnsureReadOnlyWALReplica(t *testing.T) {
+	balance.ResetBalancer()
+	m := newStreamingNodeManager()
+	defer m.Close()
+
+	b := mock_balancer.NewMockBalancer(t)
+	b.EXPECT().WatchChannelAssignments(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, cb balancer.WatchChannelAssignmentsCallback) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}).Maybe()
+	b.EXPECT().EnsureReadOnlyWALReplica(mock.Anything, "p0", "rg1").Return(nil).Once()
+	balance.Register(b)
+
+	assert.NoError(t, m.EnsureReadOnlyWALReplica(context.Background(), "p0", "rg1"))
+}
+
+func TestStreamingNodeManagerReleaseReadOnlyWALReplica(t *testing.T) {
+	balance.ResetBalancer()
+	m := newStreamingNodeManager()
+	defer m.Close()
+
+	b := mock_balancer.NewMockBalancer(t)
+	b.EXPECT().WatchChannelAssignments(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, cb balancer.WatchChannelAssignmentsCallback) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}).Maybe()
+	b.EXPECT().ReleaseReadOnlyWALReplica(mock.Anything, "p0", int64(3)).Return(nil).Once()
+	balance.Register(b)
+
+	assert.NoError(t, m.ReleaseReadOnlyWALReplica(context.Background(), "p0", 3))
+}
+
+func TestStreamingNodeManagerSwitchWALPrimaryReplica(t *testing.T) {
+	balance.ResetBalancer()
+	m := newStreamingNodeManager()
+	defer m.Close()
+
+	b := mock_balancer.NewMockBalancer(t)
+	b.EXPECT().WatchChannelAssignments(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, cb balancer.WatchChannelAssignmentsCallback) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}).Maybe()
+	b.EXPECT().SwitchWALPrimaryReplica(mock.Anything, "p0", int64(1)).Return(nil).Once()
+	balance.Register(b)
+
+	assert.NoError(t, m.SwitchWALPrimaryReplica(context.Background(), "p0", 1))
+}
+
+func TestStreamingNodeManagerRegisterWALReplicaDependencyProvider(t *testing.T) {
+	balance.ResetBalancer()
+	m := newStreamingNodeManager()
+	defer m.Close()
+
+	b := mock_balancer.NewMockBalancer(t)
+	b.EXPECT().WatchChannelAssignments(mock.Anything, mock.Anything).RunAndReturn(
+		func(ctx context.Context, cb balancer.WatchChannelAssignmentsCallback) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}).Maybe()
+	provider := staticWALReplicaDependencyProvider{}
+	b.EXPECT().SetWALReplicaDependencyProvider(provider).Return().Once()
+	balance.Register(b)
+
+	assert.NoError(t, m.RegisterWALReplicaDependencyProvider(context.Background(), provider))
+}
+
+type staticWALReplicaDependencyProvider struct{}
+
+func (staticWALReplicaDependencyProvider) HasWALReplicaDependency(types.ChannelID) bool {
+	return false
+}
+
 func TestStreamingReadyNotifier(t *testing.T) {
 	n := NewStreamingReadyNotifier()
 	assert.False(t, n.IsReady())

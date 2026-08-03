@@ -51,10 +51,13 @@ func (w *walLifetime) GetWAL() wal.WAL {
 }
 
 // Open opens a wal instance for the channel on this Manager.
-func (w *walLifetime) Open(ctx context.Context, channel types.PChannelInfo) error {
+func (w *walLifetime) Open(ctx context.Context, channel types.PChannelInfo, walReplicaID int64, assignmentEpoch int64) error {
 	// Set expected WAL state to available at given term.
-	expected := newAvailableExpectedState(ctx, channel)
+	expected := newAvailableExpectedState(ctx, channel, walReplicaID, assignmentEpoch)
 	if !w.statePair.SetExpectedState(expected) {
+		if isSameExpectedWALState(w.statePair.GetExpectedState(), expected) {
+			return w.statePair.WaitCurrentStateReachExpected(ctx, expected)
+		}
 		return status.NewIgnoreOperation("channel %s with expired term %d, cannot change expected state for open", channel.Name, channel.Term)
 	}
 
@@ -63,10 +66,13 @@ func (w *walLifetime) Open(ctx context.Context, channel types.PChannelInfo) erro
 }
 
 // Remove removes the wal instance for the channel on this Manager.
-func (w *walLifetime) Remove(ctx context.Context, term int64) error {
+func (w *walLifetime) Remove(ctx context.Context, term int64, assignmentEpoch int64) error {
 	// Set expected WAL state to unavailable at given term.
-	expected := newUnavailableExpectedState(term)
+	expected := newUnavailableExpectedState(term, assignmentEpoch)
 	if !w.statePair.SetExpectedState(expected) {
+		if isSameExpectedWALState(w.statePair.GetExpectedState(), expected) {
+			return w.statePair.WaitCurrentStateReachExpected(ctx, expected)
+		}
 		return status.NewIgnoreOperation("expired term %d, cannot change expected state for remove", term)
 	}
 
@@ -92,7 +98,7 @@ func (w *walLifetime) Close() {
 	logger := mlog.With(mlog.String("current", toStateString(currentState)))
 	if oldWAL := currentState.GetWAL(); oldWAL != nil {
 		oldWAL.Close()
-		w.statePair.SetCurrentState(newUnavailableCurrentState(currentState.Term(), nil))
+		w.statePair.SetCurrentState(newUnavailableCurrentState(currentState.Term(), currentState.AssignmentEpoch(), nil))
 		logger.Info(w.ctx, "close current term wal done at wal life time close")
 	}
 	logger.Info(w.ctx, "wal lifetime closed")
@@ -143,29 +149,30 @@ func (w *walLifetime) doLifetimeChanged(expectedState expectedWALState) {
 		logger.Info(w.ctx, "close current term wal done")
 		// Push term to current state unavailable and open a new wal.
 		// -> (currentTerm,false)
-		w.statePair.SetCurrentState(newUnavailableCurrentState(term, nil))
+		w.statePair.SetCurrentState(newUnavailableCurrentState(term, currentState.AssignmentEpoch(), nil))
 	}
 
 	// If expected state is unavailable, change term to expected state and return.
 	if !expectedState.Available() {
 		// -> (expectedTerm,false)
-		w.statePair.SetCurrentState(newUnavailableCurrentState(expectedState.Term(), nil))
+		w.statePair.SetCurrentState(newUnavailableCurrentState(expectedState.Term(), expectedState.AssignmentEpoch(), nil))
 		return
 	}
 
 	// If expected state is available, open a new wal.
 	// TODO: merge the expectedState and expected state context together.
 	l, err := w.opener.Open(expectedState.Context(), &wal.OpenOption{
-		Channel: expectedState.GetPChannelInfo(),
+		Channel:      expectedState.GetPChannelInfo(),
+		WALReplicaID: expectedState.WALReplicaID(),
 	})
 	if err != nil {
 		logger.Warn(w.ctx, "open new wal fail", mlog.Err(err))
 		// Open new wal at expected term failed, push expected term to current state unavailable.
 		// -> (expectedTerm,false)
-		w.statePair.SetCurrentState(newUnavailableCurrentState(expectedState.Term(), err))
+		w.statePair.SetCurrentState(newUnavailableCurrentState(expectedState.Term(), expectedState.AssignmentEpoch(), err))
 		return
 	}
 	logger.Info(w.ctx, "open new wal done")
 	// -> (expectedTerm,true)
-	w.statePair.SetCurrentState(newAvailableCurrentState(l))
+	w.statePair.SetCurrentState(newAvailableCurrentState(l, expectedState.AssignmentEpoch()))
 }

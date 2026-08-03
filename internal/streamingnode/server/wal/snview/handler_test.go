@@ -100,6 +100,7 @@ type mockResourceManager struct {
 	releaseCallback map[qviews.QueryViewKey]func() // captured OnDropped callbacks
 	ops             *[]string
 	runtime         QueryRuntime
+	releaseNow      bool
 }
 
 func newMockResourceManager() *mockResourceManager {
@@ -118,12 +119,16 @@ func (m *mockResourceManager) Acquire(req AcquireResource) {
 
 func (m *mockResourceManager) Release(req ReleaseResource) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.ops != nil {
 		*m.ops = append(*m.ops, fmt.Sprintf("release:%s", req.Key.QueryViewVersion))
 	}
 	m.released = append(m.released, req.Key)
 	m.releaseCallback[req.Key] = req.OnDropped
+	releaseNow := m.releaseNow
+	m.mu.Unlock()
+	if releaseNow && req.OnDropped != nil {
+		req.OnDropped()
+	}
 }
 
 func (m *mockResourceManager) QueryRuntime(qviews.QueryViewKey) (QueryRuntime, bool) {
@@ -186,25 +191,44 @@ func newPreparingSNView(version int64) qviews.QueryViewAtWorkNode {
 	return qviews.NewQueryViewAtStreamingNode(buildHandlerTestMeta(version), &viewpb.QueryViewOfStreamingNode{})
 }
 
+func newPreparingSNViewOnWALReplica(version int64, walReplicaID int64) qviews.QueryViewAtWorkNode {
+	return qviews.NewQueryViewAtStreamingNode(buildHandlerTestMeta(version), &viewpb.QueryViewOfStreamingNode{
+		WalReplicaId: walReplicaID,
+	})
+}
+
 func newSNViewWithState(version int64, state viewpb.QueryViewState) qviews.QueryViewAtWorkNode {
 	meta := buildHandlerTestMeta(version)
 	meta.State = state
 	return qviews.NewQueryViewAtStreamingNode(meta, &viewpb.QueryViewOfStreamingNode{})
 }
 
+func newSNViewWithStateOnWALReplica(version int64, state viewpb.QueryViewState, walReplicaID int64) qviews.QueryViewAtWorkNode {
+	meta := buildHandlerTestMeta(version)
+	meta.State = state
+	return qviews.NewQueryViewAtStreamingNode(meta, &viewpb.QueryViewOfStreamingNode{
+		WalReplicaId: walReplicaID,
+	})
+}
+
 func newFullSNViewWithState(version int64, state viewpb.QueryViewState, qnNodeIDs ...int64) qviews.QueryViewAtWorkNode {
+	return newFullSNViewWithStateOnWALReplica(version, state, 0, qnNodeIDs...)
+}
+
+func newFullSNViewWithStateOnWALReplica(version int64, state viewpb.QueryViewState, walReplicaID int64, qnNodeIDs ...int64) qviews.QueryViewAtWorkNode {
 	meta := buildHandlerTestMeta(version)
 	meta.State = state
 	queryNodes := make([]*viewpb.QueryViewOfQueryNode, 0, len(qnNodeIDs))
 	for _, nodeID := range qnNodeIDs {
 		queryNodes = append(queryNodes, &viewpb.QueryViewOfQueryNode{
-			NodeId: nodeID,
+			NodeId:       nodeID,
+			WalReplicaId: walReplicaID,
 			Partitions: []*viewpb.QueryViewOfPartition{
 				{PartitionId: 10, SegmentIds: []int64{nodeID * 100}},
 			},
 		})
 	}
-	return qviews.NewFullQueryViewAtStreamingNode(meta, &viewpb.QueryViewOfStreamingNode{}, queryNodes)
+	return qviews.NewFullQueryViewAtStreamingNode(meta, &viewpb.QueryViewOfStreamingNode{WalReplicaId: walReplicaID}, queryNodes)
 }
 
 type reportCollector struct {
@@ -284,6 +308,24 @@ func TestSNHandler_AcquireUnrecoverableReportsUnrecoverable(t *testing.T) {
 	assert.Equal(t, 0, cat.savedCount())
 }
 
+func TestSNHandler_ApplyViewsKeepsSameVersionOnDifferentWALReplicas(t *testing.T) {
+	cat := newMockCatalog()
+	mgr := newMockResourceManager()
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+
+	view1 := newPreparingSNViewOnWALReplica(1, 1)
+	view2 := newPreparingSNViewOnWALReplica(1, 2)
+	h.ApplyViews([]handler.ApplyView{
+		{View: view1},
+		{View: view2},
+	})
+
+	_, ok := mgr.getAcquired(view1.QueryViewKey())
+	assert.True(t, ok)
+	_, ok = mgr.getAcquired(view2.QueryViewKey())
+	assert.True(t, ok)
+}
+
 func TestSNHandler_CloseForHandoffRejectsLateView(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
@@ -321,6 +363,24 @@ func TestSNHandler_CloseForHandoffFencesDetachedShard(t *testing.T) {
 	assert.Zero(t, rc.count())
 }
 
+func TestSNHandler_CloseForHandoffPreservesWALReplicaIDWhenVersionIsZero(t *testing.T) {
+	cat := newMockCatalog()
+	mgr := newMockResourceManager()
+	mgr.releaseNow = true
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+	meta := buildHandlerTestMeta(1)
+	meta.Version = (&qviews.QueryViewVersion{}).IntoProto()
+	view := qviews.NewQueryViewAtStreamingNode(meta, &viewpb.QueryViewOfStreamingNode{
+		WalReplicaId: 3,
+	})
+	h.ApplyViews([]handler.ApplyView{{View: view}})
+
+	h.CloseForHandoff()
+
+	require.Len(t, mgr.released, 1)
+	assert.Equal(t, int64(3), mgr.released[0].WALReplicaID)
+}
+
 func TestSNHandler_AcquireLatestUpViewReturnsFullTopology(t *testing.T) {
 	cat := newMockCatalog()
 	mgr := newMockResourceManager()
@@ -346,6 +406,36 @@ func TestSNHandler_AcquireLatestUpViewReturnsFullTopology(t *testing.T) {
 	require.Len(t, lease.View.GetQueryNode(), 2)
 	assert.Equal(t, int64(101), lease.View.GetQueryNode()[0].GetNodeId())
 	assert.Equal(t, int64(102), lease.View.GetQueryNode()[1].GetNodeId())
+}
+
+func TestSNHandler_CoordUnrecoverableInvalidatesUpView(t *testing.T) {
+	cat := newMockCatalog()
+	mgr := newMockResourceManager()
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, nil)
+
+	rc := &reportCollector{}
+	view := newFullSNViewWithState(1, viewpb.QueryViewState_QueryViewStatePreparing, 101)
+	h.ApplyViews([]handler.ApplyView{
+		{View: view, OnReport: rc.onReport},
+	})
+	acquired, ok := mgr.getAcquired(view.QueryViewKey())
+	require.True(t, ok)
+	acquired.OnReady()
+	h.ApplyViews([]handler.ApplyView{
+		{View: newFullSNViewWithState(1, viewpb.QueryViewState_QueryViewStateUp, 101), OnReport: rc.onReport},
+	})
+
+	_, err := h.AcquireLatestUpView(context.Background(), view.ShardID())
+	require.NoError(t, err)
+
+	h.ApplyViews([]handler.ApplyView{
+		{View: newFullSNViewWithState(1, viewpb.QueryViewState_QueryViewStateUnrecoverable, 101), OnReport: rc.onReport},
+	})
+
+	_, err = h.AcquireLatestUpView(context.Background(), view.ShardID())
+	require.Error(t, err)
+	assert.Equal(t, qviews.QueryViewStateUnrecoverable, rc.last().State())
+	assert.Equal(t, 0, mgr.releasedCount())
 }
 
 func TestSNHandler_QueryViewLeaseDefersResourceRelease(t *testing.T) {
@@ -637,20 +727,20 @@ func TestSNHandler_Recover_CreatesUpRecoveringViews(t *testing.T) {
 	persistedView := &viewpb.QueryViewOfShard{
 		Meta:          meta,
 		QueryNode:     []*viewpb.QueryViewOfQueryNode{{NodeId: 101}},
-		StreamingNode: &viewpb.QueryViewOfStreamingNode{},
+		StreamingNode: &viewpb.QueryViewOfStreamingNode{WalReplicaId: 2},
 	}
 
 	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, []*viewpb.QueryViewOfShard{persistedView})
 
 	// ResourceManager should have Acquire called for recovered Up views.
-	key := newPreparingSNView(1).QueryViewKey()
+	key := qviews.NewQueryViewAtWorkNodeFromProto(persistedView).QueryViewKey()
 	acquireReq, ok := mgr.getAcquired(key)
 	require.True(t, ok)
 
 	// Register callback via ApplyViews (simulating Coord re-push).
 	rc := &reportCollector{}
 	h.ApplyViews([]handler.ApplyView{
-		{View: newFullSNViewWithState(1, viewpb.QueryViewState_QueryViewStatePreparing, 101), OnReport: rc.onReport},
+		{View: newFullSNViewWithStateOnWALReplica(1, viewpb.QueryViewState_QueryViewStatePreparing, 2, 101), OnReport: rc.onReport},
 	})
 
 	// UpRecovering: Coord re-push Preparing → no report (SM suppresses).
@@ -664,6 +754,50 @@ func TestSNHandler_Recover_CreatesUpRecoveringViews(t *testing.T) {
 	require.Len(t, rc.last().IntoProto().GetQueryNode(), 1)
 	assert.Equal(t, int64(101), rc.last().IntoProto().GetQueryNode()[0].GetNodeId())
 	// Already persisted as Up — no new save (catalog save count unchanged).
+}
+
+func TestSNHandler_WaitRecoveredViewsBlocksUntilRecoveredResourcesReady(t *testing.T) {
+	cat := newMockCatalog()
+	mgr := newMockResourceManager()
+
+	meta := buildHandlerTestMeta(1)
+	meta.State = viewpb.QueryViewState_QueryViewStateUp
+	persistedView := &viewpb.QueryViewOfShard{
+		Meta:          meta,
+		QueryNode:     []*viewpb.QueryViewOfQueryNode{{NodeId: 101}},
+		StreamingNode: &viewpb.QueryViewOfStreamingNode{WalReplicaId: 2},
+	}
+	h := recoverSNQueryViewHandler(testPChannel, cat, mgr, []*viewpb.QueryViewOfShard{persistedView})
+
+	waitCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- h.WaitRecoveredViews(waitCtx)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+		t.Fatal("recovered views should wait for resource readiness")
+	default:
+	}
+
+	key := qviews.NewQueryViewAtWorkNodeFromProto(persistedView).QueryViewKey()
+	acquireReq, ok := mgr.getAcquired(key)
+	require.True(t, ok)
+	acquireReq.OnReady()
+
+	require.NoError(t, <-done)
+	lease, err := h.AcquireLatestUpView(context.Background(), newPreparingSNView(1).ShardID())
+	require.NoError(t, err)
+	lease.Release()
+}
+
+func TestSNHandler_WaitRecoveredViewsReturnsImmediatelyWithoutPersistedViews(t *testing.T) {
+	h := recoverSNQueryViewHandler(testPChannel, newMockCatalog(), newMockResourceManager(), nil)
+
+	require.NoError(t, h.WaitRecoveredViews(context.Background()))
 }
 
 func TestSNHandler_Recover_RestoresFullTopologyForQueryPlan(t *testing.T) {

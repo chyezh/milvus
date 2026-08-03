@@ -22,7 +22,7 @@ type TransformLogSyncUp struct {
 }
 
 type TransformLogStreamManager interface {
-	AcquireStream(ctx context.Context, pchannel string) (TransformLogStream, error)
+	AcquireStream(ctx context.Context, pchannel string, walReplicaID int64) (TransformLogStream, error)
 }
 
 type TransformLogStream interface {
@@ -67,6 +67,6 @@ func NewTransformLogErrorAccesser(err error) TransformLogAccesser {
 	return transformLogErrorAccesser{err: err}
 }
 
-func (a transformLogErrorAccesser) AcquireStream(context.Context, string) (TransformLogStream, error) {
+func (a transformLogErrorAccesser) AcquireStream(context.Context, string, int64) (TransformLogStream, error) {
 	return nil, a.err
 }
