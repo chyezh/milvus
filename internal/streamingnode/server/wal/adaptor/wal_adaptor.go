@@ -449,10 +449,6 @@ func (w *walAdaptorImpl) Append(ctx context.Context, msg message.MutableMessage)
 	ctx = utility.WithExtraAppendResult(ctx, &extraAppendResult)
 	messageID, err := w.interceptorBuildResult.Interceptor.DoAppend(ctx, msg,
 		func(ctx context.Context, msg message.MutableMessage) (message.MessageID, error) {
-			if notPersistHint := utility.GetNotPersisted(ctx); notPersistHint != nil {
-				// do not persist the message if the hint is set.
-				return notPersistHint.MessageID, nil
-			}
 			metricsGuard.StartWALImplAppend()
 			msgID, err := w.retryAppendWhenRecoverableError(ctx, msg)
 			metricsGuard.FinishWALImplAppend()
