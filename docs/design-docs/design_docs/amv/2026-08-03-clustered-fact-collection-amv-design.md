@@ -1,14 +1,12 @@
 # Fact Collection 与 Aggregate Materialized View 设计
 
 > 状态：Proposed
->
-> 本文从用户能力和数据布局重新定义事实表型 Collection、Aggregate Materialized View（AMV）、高聚合 Balance 和嵌套查询。本文不继承旧方案中通过大量 `create_collection` 可选参数组合能力的设计。
 
 ## 1. 功能目标与动机
 
 ### 1.1 典型用户需求场景：Agent Tracing
 
-本文重点面向 [Agent Tracing](https://zilliverse.feishu.cn/docx/Sb6FdTFz1oipDpxOw3ncgp38ned) 场景。一次 Agent 运行通常是一棵由 Trace、Span、Event 和 Score 组成的调用树：
+本文重点面向 [Agent Tracing](https://zilliverse.feishu.cn/docx/Sb6FdTFz1oipDpxOw3ncgp38ned) 场景等具备明确的聚合需求与联合查询的场景。比如一次 Agent 运行通常是一棵由 Trace、Span、Event 和 Score 组成的调用树：
 
 ```text
 Trace
@@ -166,7 +164,9 @@ Fact Collection 复用 Milvus 的 Shard。Shard 是 WAL 顺序、写入扩展和
 
 Fact Collection 复用 Milvus 的 Partition。Partition 是 Shard 内用于切分数据的逻辑管理单元，Partition Key 决定数据进入哪个目标 Partition。
 
-- 典型的 Agent Tracing 场景可以使用日期作为 Partition Key；
+- Partition Key 可以直接引用 Schema Field，也可以由 Milvus 内置的确定性函数生成；
+- 函数输出是 Collection 布局中的逻辑 Partition Key，不要求成为 Fact Schema Field；
+- 典型的 Agent Tracing 场景可以使用 `toDate(timestamp)` 生成日期 Partition Key；
 - Partition Key 通常是日期、枚举等低基数字段；
 - Partition 可以用于查询剪枝、冷热管理和历史数据清理；
 - Partition 应由 Milvus 根据 Partition Definition 自动生成，避免用户手动创建和维护。
@@ -207,7 +207,7 @@ Sealed 数据存储在对象存储中，并由 QueryNode 加载和查询，其�
 
    单个 L2 Segment 内部仍然有序；同时，一个 Partition 下的多个 L2 Segment 按 Sort Key Range 有序排列，Range 通常不重叠。每个 Segment 保存对应字段的 Min/Max、时间范围、行数和数据量等统计信息，查询可以根据目标 Sort Key Range 快速定位连续的 Segment 范围，再访问标量、全文或向量索引。
 
-Compaction 完成后，新的 L2 Segment 替代对应的旧 Sealed Segment；替换需要通过 DataView 原子发布，保证查询在同一个 Snapshot 下不会遗漏或重复读取数据。一个 Partition 可以同时存在 Growing Segment、尚未参与 Compaction 的 L1 Segment 和已经完成 Compaction 的 L2 Segment。
+Compaction 完成后，新的 L2 Segment 通过 DataView 原子替代旧 Sealed Segment，保证查询不会遗漏或重复读取数据。一个 Partition 可以同时存在 Growing Segment、尚未参与 Compaction 的 L1 Segment 和已经完成 Compaction 的 L2 Segment。
 
 **Sort Key**
 
@@ -217,13 +217,13 @@ Sort Key 的前缀应该优先选择高频等值过滤、范围过滤、Group-By
 
 ```text
 Shard Key     = trace_id
-Partition Key = event_date
+Partition Key = toDate(timestamp)
 Sort Key      = (trace_id, timestamp)
 ```
 
 同一天、同一个 Shard 内的数据进入同一个 Partition；L2 Compaction 再按照 `trace_id` 和 `timestamp` 排序，使同一个 Trace 的 Event 按时间连续存储。
 
-查询需要读取当前 Snapshot 下可见的 Growing、L1 和 L2 数据。Growing 数据主要依赖已有索引和扫描；L1 可以利用单个 Segment 的 Sort Key Range 做独立裁剪，但多个 L1 Range 可能相互重叠；L2 可以利用 Partition 级有序且通常不重叠的 Sort Key Range 快速定位连续的 Segment 范围：
+查询需要读取同一读边界下的 Growing、L1 和 L2 数据。Growing 数据主要依赖已有索引和扫描；L1 可以利用单个 Segment 的 Sort Key Range 做独立裁剪，但多个 L1 Range 可能相互重叠；L2 可以利用 Partition 级有序且通常不重叠的 Sort Key Range 快速定位连续的 Segment 范围：
 
 ```text
 Shard Key Filter
@@ -265,9 +265,20 @@ AMV 具有以下基础语义：
 
    AMV 拥有独立的 Collection ID，可以独立 Load、Release、Query 和 Drop。一个 Fact Collection 可以创建多个 AMV，每个 AMV 可以使用不同的 Group-By Fields 和 Aggregate Functions。
 
-3. **Aggregate State Storage**
+3. **Eventual Consistency**
 
-   AMV Schema 只包含 Group-By Fields 和 Aggregate Fields。AMV 对用户暴露 Group Key 和最终 Aggregate Result，内部保存可持续合并的 Aggregate State，而不是反复覆盖一行最终聚合结果。
+   AMV 不与 Fact Collection 提供基于 TimeTick 的强一致性。查询读取执行时已经生成的最新可用 Aggregate State，不保证 Fact、不同 AMV 或不同 AMV Shard 位于同一个 Source TimeTick。AMV 只保证在 Source 数据停止变化且 Backfill 与增量消费追平后，最终结果与完整聚合 Fact Collection 等价。
+
+4. **Aggregate State Storage**
+
+   AMV Schema 由用户创建，只允许包含两类字段：
+
+   - 普通标量字段，作为 Group-By Fields；
+   - `DataType.AGGREGATE_STATE` 字段，保存 Aggregate State。
+
+   `function`、`argument_types` 等是 `DataType.AGGREGATE_STATE` 的类型属性，共同确定 State 的兼容性和最终结果类型。`countState`、`sumState` 等只描述对应的 State 语义，不是独立的 Schema DataType。
+
+   Describe Collection 返回 `DataType.AGGREGATE_STATE`、类型属性及其 Result Type；普通 Query 对该字段执行隐式 Merge 和 Finalize，不向用户暴露二进制 State，也不要求用户调用 `sumMerge` 一类函数。
 
    Group Key 由一个或多个 Group-By Fields 按定义顺序编码形成。例如 `(trace_id, event_date)` 是一个复合 Group Key，只有两个字段值都相同的 Event 才属于同一个 Group。
 
@@ -331,9 +342,7 @@ Shard-local AMV
   -> Partition-local AMV
 ```
 
-此时同一个 Group 的 State 位于一个确定的 Source/AMV Partition 中，AMV 构建、Compaction、Merge 和 Finalize 都可以限制在该 Partition 内执行。
-
-如果 AMV 不是 Shard-local，或者两者的分区规则不同，就不能使用 Partition-local 优化。
+此时同一个 Group 的所有原始数据位于一个确定的 Source Partition 中，AMV 的初始化 Backfill 可以按照 Partition 粒度来执行。
 
 #### 2.2.3 单个 Shard 里的单个 Partition 的数据组织形式
 
@@ -351,35 +360,20 @@ AMV Shard
 
 **Growing Aggregate State**
 
-- Source Event 到达后，StreamingNode 根据 Group Key 查找或创建对应的 Aggregate State；
-- 每条 Event 只产生一次 Aggregate Contribution，并增量更新 COUNT、SUM、AVG、MIN、MAX 等状态；
-- Growing State 在 Flush 前即可参与查询；
-- Flush 将当前状态写成不可变的 L1 State Segment，单个 Segment 内按照 Group Key 有序。
+- QueryRuntime 按 WAL 顺序将 Source Event Apply 到 AMV Growing Segment；
+- AMV 按 Partition 和 Group Key 聚合，并允许跨 WAL Apply Batch 持续 Merge 当前 Aggregate State；
+- Query 直接读取 Growing State，Sync 只负责将 Dirty State 持久化为按 Group Key 有序的 State Chunk；
+- AMV 直接使用当前 `(Shard, Partition)` 的 Growing Segment，不需要为每个 Group Key 预分配 Segment。
 
 **Sealed Aggregate State**
 
-- 不同 L1 State Segment 可能包含相同 Group Key，其 Group Key Range 也可以相互重叠；
+- Seal 按 Group Key 合并 State Chunk，并提交为不可变的 L1 State Segment；
+- 单个 L1 Segment 内相同 Group Key 被折叠，不同 L1 Segment 仍可能包含相同 Group Key；
 - L2 State Compaction 在同一个 `(Shard, Partition)` 内归并相同 Group Key 的 Aggregate State，并按连续的 Group Key Range 切分新的 L2 State Segment；
 - 一个 Partition 下的多个 L2 State Segment 按 Group Key Range 有序排列，Range 通常不重叠；
 - Compaction 输出仍然是可继续 Merge 的 Aggregate State，而不是不可修改的最终结果。
 
-Aggregate State 的具体内容由聚合函数决定：
-
-```text
-COUNT -> count
-SUM   -> sum
-AVG   -> (sum, count)
-MIN   -> min
-MAX   -> max
-```
-
-Aggregate State 必须满足可结合的 Merge 语义：
-
-```text
-Merge(Merge(A, B), C) == Merge(A, Merge(B, C))
-```
-
-查询需要合并当前 Snapshot 下可见的 Growing、L1 和 L2 State，再生成用户可见的聚合结果：
+查询需要合并当前 AMV DataView 和 Growing Segment 中最新可用的 State，再生成用户可见的聚合结果：
 
 ```text
 Growing State
@@ -393,625 +387,384 @@ Growing State
 
 用户查询看到的是 `Finalize(State)`，而不是 State 的内部编码。依赖最终聚合值的 Filter 必须在同一个 Group 的全部可见 State 完成 Merge 和 Finalize 后执行，不能直接作用于单个 Partial State。
 
-## 3. Fact Collection
+#### 2.2.4 Aggregate Function 支持范围
 
-### 3.1 创建语义
+Aggregate State 和 Aggregate Merge 分别对齐 ClickHouse 的 `-State` 和 `-Merge` 语义：`xxxState` 表示一种具体的强类型 State，`xxxMerge` 合并相同 State Type 并返回最终结果。
 
-FC 使用独立创建 API，避免向普通 `create_collection` 继续平铺互斥选项：
+可能支持的算子范围如下，具体首版范围由实现阶段确定：
+
+| Aggregate Function | Aggregate State | Aggregate Merge |
+|---|---|---|
+| `COUNT(*)`：统计行数 | `countState()` | `countMerge(state)` |
+| `COUNT_IF(condition)`：统计满足条件的行数 | `countIfState(condition)` | `countIfMerge(state)` |
+| `SUM(value)`：计算数值总和 | `sumState(value)` | `sumMerge(state)` |
+| `SUM_IF(value, condition)`：计算满足条件的数值总和 | `sumIfState(value, condition)` | `sumIfMerge(state)` |
+| `AVG(value)`：计算数值平均值 | `avgState(value)` | `avgMerge(state)` |
+| `AVG_IF(value, condition)`：计算满足条件的数值平均值 | `avgIfState(value, condition)` | `avgIfMerge(state)` |
+| `MIN(value)`：返回最小值 | `minState(value)` | `minMerge(state)` |
+| `MAX(value)`：返回最大值 | `maxState(value)` | `maxMerge(state)` |
+| `FIRST_BY(value, order_key)`：返回 Order Key 最小的 Value | `firstByState(value, order_key)` | `firstByMerge(state)` |
+| `LAST_BY(value, order_key)`：返回 Order Key 最大的 Value | `lastByState(value, order_key)` | `lastByMerge(state)` |
+| `VECTOR_SUM(vector)`：返回逐维求和向量 | `vectorSumState(vector)` | `vectorSumMerge(state)` |
+| `VECTOR_AVG(vector)`：返回逐维算术平均向量 | `vectorAvgState(vector)` | `vectorAvgMerge(state)` |
+| `APPROX_COUNT_DISTINCT(value)`：返回近似去重数量 | `approxCountDistinctState(value)` | `approxCountDistinctMerge(state)` |
+| `PERCENTILE(value, p)`：返回指定百分位值 | `percentileState(value, p)` | `percentileMerge(state)` |
+| `QUANTILE(value, q)`：返回指定分位值 | `quantileState(value, q)` | `quantileMerge(state)` |
+| `TOP_K(value, k)`：返回出现频率最高的 K 个值 | `topKState(value, k)` | `topKMerge(state)` |
+
+`FIRST_BY` 和 `LAST_BY` 的 Order Key 必须形成确定性顺序；`VECTOR_SUM` 和 `VECTOR_AVG` 只接受维度及元素类型一致的向量。
+
+## 3. 表的创建语义
+
+1. **统一创建 API**
+
+   普通 Collection、Fact Collection 和 AMV 统一使用 `create_collection`，复用 CreateCollection RPC 和 WAL DDL 链路。
+
+2. **显式 Collection 类型**
+
+   - 未指定或设置为 `REGULAR`：普通 Collection；
+   - 设置为 `FACT`：Fact Collection；
+   - 设置为 `AGGREGATE_MATERIALIZED_VIEW`：AMV。
+
+3. **参数校验**
+
+   SDK 和服务端不能根据参数组合推断 Collection 类型，并且必须拒绝不属于当前类型的参数。
+
+### 3.1 创建 Fact Collection
+
+Fact Collection 在现有 API 上增加类型、分片、分区和排序参数：
 
 ```python
-client.create_fact_collection(
+from pymilvus import DataType
+
+event_schema = client.create_schema(auto_id=False, enable_dynamic_field=False)
+event_schema.add_field("span_id", DataType.VARCHAR, is_primary=True, max_length=256)
+event_schema.add_field("trace_id", DataType.VARCHAR, max_length=256)
+event_schema.add_field("status", DataType.VARCHAR, max_length=64)
+event_schema.add_field("tokens", DataType.INT64)
+event_schema.add_field("timestamp", DataType.INT64)
+event_schema.add_field("embedding", DataType.FLOAT_VECTOR, dim=1536)
+
+client.create_collection(
     collection_name="events",
     schema=event_schema,
-    shard_key_field="run_id",
-    partition_key_field="project_id",
+    collection_type="FACT",
+    shard_key_field="trace_id",
+    partition_by="toDate(timestamp)",
     num_shards=16,
-    partitions_per_shard=16,
-    order_by_fields=["project_id", "run_id", "event_time", "event_id"],
+    order_by_fields=["trace_id", "timestamp"],
 )
 ```
 
-该 API 隐含 Append-only、系统管理的 Shard-local Partition 和 Key-aware Compaction，不再要求用户设置 `mutation_mode` 或 `routing_mode`。用户分别指定 Shard Key 和 Partition Key，但不能直接创建、删除或选择物理 Partition。
+1. **Schema**
 
-RootCoord 为 FC 保存不可变布局定义：
+   Source Schema 只保存 `timestamp`，不保存 `event_date`。
 
-```text
-FactCollectionDefinition {
-  shard_key_field_id
-  shard_hash_version
-  shard_count
-  partition_key_field_id
-  partition_hash_version
-  partitions_per_shard
-  partition_owners[]
-  sort_key_field_ids[]
-  sort_encoding_version
-}
-```
+2. **Partition Function**
 
-### 3.2 Append-only 与重复 Primary Key
+   - `toDate(timestamp)` 在服务端生成日期 Partition Key；
+   - 生成值不作为 Fact Field 存储，也不要求客户端写入；
+   - `toDate` 是 Milvus Built-in Function，由服务端解析、执行并持久化定义；
+   - 不支持客户端回调或 UDF。
 
-FC 只接受 Insert。以下请求在进入 WAL 前失败：
+3. **写入语义**
 
-- Update；
-- Partial Update；
-- Upsert；
-- Delete by Primary Key；
-- Delete by Expression。
+   固定为 Append-only 和 No Unique Primary Key。
 
-FC 不执行普通 Collection 的 Primary Key 最新版本覆盖语义。重复 Primary Key 的每次 Insert 都是一条独立、可见的事实，也都会产生一次 AMV Contribution。
+4. **布局约束**
 
-底层使用隐藏物理行身份保证每条事实唯一：
+   - Shard Count、Shard Key、Partition Function、Sort Key 及其编码版本创建后不可原地修改；
+   - 物理 Partition 根据 Partition Function 的输出按需创建，并由系统管理。
 
-```text
-PhysicalRowID = (source_vchannel, wal_message_id, row_offset)
-```
+### 3.2 创建 AMV
 
-因此：
-
-- Primary Key Filter 可以返回多行；
-- Get by Primary Key 不再假设最多返回一行；
-- Primary Key 不能作为 Delete 或 Upsert 的定位依据；
-- Segment 内部索引、Search Hit、Requery、Pagination 和 Proxy Reduce 使用 PhysicalRowID 区分事实行，不能按用户 Primary Key 去重；
-- 查询结果仍输出用户 Primary Key，因此同一请求可以返回多个相同 Primary Key、但 PhysicalRowID 不同的 Hit；
-- 调用方若需要业务幂等，必须提供独立 Idempotency Token，或者自行保证不重复提交。
-
-TTL 可以清理 FC 的事实行，但不会向 AMV 发送 Retract。AMV 表示 Lifetime Aggregate，而不是当前仍保留事实行的聚合。
-
-### 3.3 写入路由
-
-Proxy 对每一行分别读取 Shard Key 和 Partition Key，并使用 Collection 持久化的 Hash Version 执行两级路由：
-
-```text
-ShardKey
-  -> ShardRouteToken
-  -> VChannel
-
-PartitionKey
-  -> PartitionRouteToken
-  -> LocalPartitionID
-
-(VChannel, LocalPartitionID)
-  -> PartitionID
-```
-
-Proxy 按 `(vchannel, partition_id)` 对 Insert 行重新分组。不能继续按 Primary Key 选择 VChannel，也不能使用跨 Shard 共享的全局 Partition。
-
-StreamingNode 在 WAL Append 前执行权威校验：
-
-1. Collection 是 FC；
-2. 请求只包含 Insert；
-3. Shard Key 和 Partition Key 存在且非 NULL；
-4. 重新计算的 VChannel 与消息 VChannel 一致；
-5. 根据 Partition Key 重新计算的 Local Partition 与消息 Partition 一致；
-6. Partition Owner 是当前 VChannel；
-7. Schema Version、Hash Version 和 Sort Definition 与 Collection 元数据一致。
-
-校验失败的消息不能进入 Source WAL。
-
-### 3.4 Segment 与 Compaction
-
-FC 仍使用 Growing -> Sealed Segment 生命周期。
-
-Growing 阶段只要求正确路由，不要求新写入已经满足全局排序。Flush 产生 L1 Segment；L2 Clustering Compaction 在以下范围内执行：
-
-```text
-(collection_id, vchannel, partition)
-```
-
-Compaction 执行：
-
-```text
-Read input segments
-  -> Sort by configured Sort Key
-  -> Apply TTL physical cleanup
-  -> Split by ordered range
-  -> Write L2 segments
-```
-
-在同一个 Partition 内，Segment 边界应尽量避免切开相同 Shard Key。单个 Shard Key 超过 Segment Hard Limit 时允许拆分为多个 Whale Segment，并记录相同的 Shard Key Range 和连续 Part Number。如果数据不满足 `ShardKey -> PartitionKey`，同一个 Shard Key 可以出现在同一 Shard 的多个 Partition 中。
-
-每个 L2 Segment 至少记录：
-
-- Partition Key min/max；
-- Shard Key min/max；
-- 完整 Sort Key min/max；
-- Partition ID 和 Owner VChannel；
-- Sort Encoding Version；
-- 是否为 Whale Shard Key Segment；
-- Row Count、Storage Size 和时间范围。
-
-修改 Shard Key、Partition Key、Shard Count、Partitions Per Shard、Partition Ownership 或 Sort Key 都需要全量 Rewrite，不允许普通 Alter 原地完成。
-
-### 3.5 Query Pruning
-
-Shard Key 和 Partition Key 提供不同层级的查询剪枝：
-
-- 只有 Shard Key 等值或 `IN` 条件时，Proxy 可以裁剪到目标 Shard，但仍需访问该 Shard 内的多个 Partition；
-- 只有 Partition Key 等值或 `IN` 条件时，查询仍需访问所有 Shard，但每个 Shard 只需访问匹配的 Local Partition；
-- 同时具有 Shard Key 和 Partition Key 条件时，可以直接计算目标 `(vchannel, partition_id)`；
-- 不包含两种 Key 条件的请求可能访问全部 Shard 和 Partition。
-
-QueryNode 再根据 Segment 的 Partition Key Range、Shard Key Range 和 Sort Key Range 做二次裁剪。Hash Bucket 可能包含多个 Partition Key 值，因此 Partition Pruning 后仍需执行精确标量过滤。
-
-函数依赖 `ShardKey -> PartitionKey` 本身不能从 Shard Key 计算出 Partition Key；除非查询同时提供 Partition Key 或系统具有额外映射，否则不能据此跳过该 Shard 内的其他 Partition。
-
-### 3.6 Import 与恢复
-
-Bulk Import 必须使用与 Insert 相同的 Shard Key Router、Partition Key Router 和 Sort Encoding。存在 AMV 时，Import 只有两种合法实现：
-
-1. 转换为 Source WAL Insert；
-2. 同时生成 FC Segment 和所有 AMV State Segment，并在一个可恢复 Manifest 中原子发布 Source Range。
-
-在 AMV-aware Import 可用前，对已经存在 AMV 的 FC 拒绝传统 Direct Segment Import。
-
-恢复时必须使用 Collection 持久化的 Shard/Partition Hash Version、Partition Ownership 和 Sort Encoding Version，不能使用升级后的集群默认值重新计算旧布局。
-
-## 4. Aggregate Materialized View
-
-### 4.1 定义与创建
-
-只有 FC 可以作为 AMV Source。普通 Collection、External Collection 和另一个 AMV 不能直接创建 AMV。
-
-AMV 使用独立创建 API：
+AMV 的 Source 必须是 Fact Collection，且 AMV 不能继续作为另一个 AMV 的 Source：
 
 ```python
-client.create_aggregate_materialized_view(
-    collection_name="run_summary",
-    source_collection_name="events",
-    group_by_fields=["run_id"],
-    aggregates={
-        "event_count": Aggregate.count("*"),
-        "error_count": Aggregate.count_if("event_type == 'error'"),
-        "total_tokens": Aggregate.sum("tokens"),
-        "avg_tokens": Aggregate.avg("tokens"),
-        "first_event_time": Aggregate.min("event_time"),
-        "last_event_time": Aggregate.max("event_time"),
-    },
-)
-```
+from pymilvus import DataType
 
-`partition_by_fields` 是可选参数。未指定时，AMV 在每个 Source Shard 中使用一个 Default Partition；指定时，字段必须来自 `group_by_fields`。内部请求还可以表达基于 Group-By Fields 的确定性 Partition Expression。
-
-Aggregate 不是新的字段数据类型。RootCoord 根据 Group-By Fields 和 Aggregate Definition 生成只读 Result Schema，并从普通 Collection ID 空间分配 AMV Collection ID。
-
-AMV 复用普通 Collection 的：
-
-- 名称空间和权限；
-- Describe、List、Load、Release、Query 和 Drop；
-- DataView、QueryView 和 Segment 生命周期。
-
-AMV 不允许用户写入，也不拥有用户可见的 Partition 管理接口。
-
-一个 FC 可以创建多个 AMV；每个 AMV 具有独立的 Definition Version、Aggregate State、DataView 和 Load 生命周期。
-
-### 4.2 Aggregate-State LSM
-
-AMV 使用 Aggregate-State LSM 存储模型，而不是不断覆盖一行最终结果：
-
-```text
-Key:
-  (amv_id, definition_version, group_by_key)
-
-Value:
-  AggregateStateTuple
-```
-
-Source Insert 生成 Merge Operand：
-
-```text
-Source Event
-  -> Accumulate Contribution
-  -> Growing Aggregate State
-  -> Flush Immutable State Segment
-  -> L2 State Compaction
-  -> Query-time Merge and Finalize
-```
-
-AMV Growing State 类似 LSM MemTable；AMV State Segment 类似不可变 SSTable；Compaction 合并相同 Group Key 的 State，但输出仍然是可继续 Merge 的 State。
-
-查询顺序固定为：
-
-```text
-Scan visible State
-  -> Node-local Merge
-  -> Shard-level Merge
-  -> Cross-shard Merge when required
-  -> Finalize
-  -> Apply Aggregate Result Filter
-  -> Order / Limit / Render
-```
-
-依赖最终聚合值的 Filter 不能在单个 Partial State 上提前执行。
-
-Pebble 的 Go-native Merge Operator 可以用于 StreamingNode 本地 Growing State、Spill 或原型验证，但它不是分布式 AMV 的完整实现。Milvus 仍负责 Source WAL Frontier、State Segment 发布、对象存储、DataView、QueryView 和跨节点 Merge。
-
-### 4.3 Source-aligned AMV
-
-所有 AMV 都继承 Source Fact Collection 的 Shard Count、VChannel 和 Shard Ownership。AMV 不创建独立 Shard，不建立写入时的跨 Shard Shuffle，也不拥有独立的 AMV WAL。
-
-Source StreamingNode 在消费 Source WAL 时同时生成 AMV Aggregate Contribution，再根据 AMV Partition Definition 在当前 Source Shard 内选择目标 AMV Partition。未指定 Partition Definition 时，所有 State 写入当前 AMV Shard 的 Default Partition。
-
-State Segment 使用：
-
-```text
-(derived_collection_id, source_vchannel, amv_partition_id, group_key_range)
-```
-
-每个 Contribution 携带唯一 Source Identity：
-
-```text
-(source_collection_id, source_vchannel, wal_message_id, row_offset, amv_definition_version)
-```
-
-AMV Checkpoint 使用 Source WAL Frontier 和 Source Identity 避免 Replay 重复累计 COUNT/SUM。Fact 和 AMV 共享 Source WAL MVCC，但拥有独立 DataVersion 和 QueryView。
-
-AMV 的 Locality 决定查询合并范围：
-
-- Group-By Fields 包含 Source Shard Key 时，AMV 是 Shard-local，可以在单个 AMV Shard 内完成 Merge 和 Finalize；
-- Group-By Fields 不包含 Source Shard Key 时，AMV 是 Cross-shard，需要查询时执行跨 Source Shard Merge。
-
-AMV Partition Definition 只能引用 Group-By Fields，因此同一个 Group 在一个 Source Shard 内会稳定进入同一个 AMV Partition。
-
-当一个 Shard-local AMV 与 Fact Collection 使用相同的分区规则时，它进一步成为 Partition-local AMV。Source Contribution 可以直接进入对应 AMV Partition，Backfill、State Compaction、Merge 和 Finalize 都可以限制在单个 Partition 内执行。
-
-其他情况不能使用 Partition-local 优化，StreamingNode 按照 AMV 自己的分区规则组织 State。
-
-### 4.4 Cross-shard AMV 查询合并
-
-当 Group-By Fields 不包含 Source Shard Key 时，每个 Source-aligned AMV Shard 只保存本 Source Shard 产生的 Partial State：
-
-```text
-Source Shard 0 -> PartialState(group_a, shard_0)
-Source Shard 1 -> PartialState(group_a, shard_1)
-Source Shard 2 -> PartialState(group_a, shard_2)
-```
-
-查询时按照目标 Snapshot 扫描所有 Source Shard 的可见 State，再按 Group Key 执行分层 Merge：
-
-```text
-Source-aligned AMV Shards
-  -> AMV Partition State Merge
-  -> Shard-local State Merge
-  -> Cross-shard Merge by Group Key
-  -> Finalize
-  -> Aggregate Result Filter
-```
-
-任一 Source Shard 尚未处理到目标 Snapshot 时，不能把不完整的 Cross-shard AMV 结果声明为最终结果。依赖聚合值的 Filter、Order 和 Limit 必须在完整的 Cross-shard Merge 和 Finalize 后执行。
-
-该路径避免了写入时 Shuffle、独立 AMV WAL 和第二套 Shard Layout，但把成本移动到查询侧。高基数 Group-By 可能产生较大的跨节点 Merge 状态，查询引擎不能假设 Cross-shard AMV 的结果集总是很小。
-
-### 4.5 创建、Backfill 与恢复
-
-创建 AMV 时，RootCoord 在 Source WAL 建立 Barrier `T0`：
-
-```text
-Backfill       = Source data <= T0
-Streaming Delta = Source WAL insert > T0
-```
-
-DataNode 按 Source Shard 和 Partition 扫描 FC 的有序 Segment，并按照 AMV Partition Definition 生成初始 State Segment；StreamingNode 同时累计 `T0` 之后的 Delta。Backfill 和 Delta Catch-up 都完成后，AMV 才进入 Available。
-
-AMV Checkpoint 必须记录：
-
-- Definition Version；
-- State Encoding Version；
-- 每个 Source VChannel 的 Durable Source Frontier；
-- State Segment Manifest；
-- AMV Partition Definition 和 Encoding Version；
-- Fact/AMV Partition Rule Match Result；
-- 未完成 Flush 的 Replay 去重边界。
-
-恢复不能依赖 Aggregate Function 自身幂等。COUNT 和 SUM 的重复 Accumulate 会直接产生错误结果。
-
-## 5. FC 与 AMV 的高聚合 Balance
-
-### 5.1 目标
-
-当前 QueryView Balancer 以 Segment 为分配单元，并综合 Stickiness、Node Load 和 Shard Fanout。FC 和 AMV 需要在此基础上增加 Partition、Sort Range 和 Source/View Affinity。
-
-Balance 的目标不是把 Segment 尽量均匀散开，而是在容量允许时减少一次查询需要访问的节点数：
-
-```text
-同 Shard
-  -> Partition-local AMV 同 Partition
-       -> 相邻 Sort Key / Group Key Range
-            -> FC 和 AMV 对应 State Range
-```
-
-### 5.2 硬约束与软约束
-
-硬约束：
-
-- Segment 只能进入目标 Replica 的健康 QueryNode；
-- Partition 的 Owner Shard 不可改变；
-- QueryView 不能把 Segment 放入另一个 VChannel 的 Shard View；
-- 节点必须支持 Segment 和 Aggregate State Encoding Version。
-
-软约束按优先级参与评分：
-
-- 复用当前节点，避免无意义迁移；
-- 控制节点总 Row/Bytes/Memory Load；
-- 减少一个 Shard 打开的 QueryNode 数；
-- 减少一个 Partition 打开的 QueryNode 数；
-- 把相邻 Sort Key Range 放在同一节点；
-- 当 FC 和 AMV 都已 Load 时，优先共置相同 Source Shard 的数据；Partition-local AMV 进一步共置对应 Partition Range；
-- 避免 Whale Shard Key 把单个节点压垮。
-
-### 5.3 Placement Group 与切分
-
-Balancer 首先按 Placement Group 分配，而不是逐 Segment 独立贪心：
-
-```text
-PlacementGroup {
-  lineage_id
-  replica_id
-  source_vchannel
-  partition_id
-  sort_key_range
-  fact_segments[]
-  amv_state_segments[]
-}
-```
-
-如果整个 Partition 可以放入一个节点，则优先整组放置。若 Partition 超过节点目标容量，则按不重叠 Sort Key Range 切成多个 Placement Slice。
-
-同一个 Partition 内的相同 Shard Key 正常情况下不能跨 Slice；Whale Shard Key 是例外。Whale Slice 必须允许并行查询和最终 Merge，不能为了共置形成不可调度的超大硬约束。
-
-### 5.4 Source 与 AMV Affinity
-
-AMV 与 Source FC 可以独立 Load 和 Release，正确性不依赖共置。所有 AMV Shard 都与 Source 对齐，因此始终可以建立 Shard-level Placement Affinity。
-
-Partition-local AMV 可以进一步建立 Partition-level Affinity；其他 AMV 只建立 Shard-level Affinity，不能假设 Source PartitionID 与 AMV PartitionID 一一对应。
-
-当两者都已 Load 时，Balancer 使用相同的 `lineage_id` 和 Source Range 建立软 Affinity：
-
-```text
-events / shard-3 / partition-50 / run_id[a, m]
-run_summary / shard-3 / partition-50 / run_id[a, m]
-  -> prefer same QueryNode
-```
-
-共置成功时，Shard-local Nested Query 可以减少跨节点 Build Result 传输；Cross-shard AMV 也可以先在各 Source Shard 内完成 Local Merge，再执行全局 Merge。Partition-local AMV 还可以把构建、Compaction 和查询合并限制在对应 Partition。共置失败时，Proxy 仍按 QueryView 执行正确的查询，只是 Fanout 和网络开销更高。
-
-### 5.5 Balance 可观测性
-
-至少暴露：
-
-- 每个 Shard 和 Partition 的 QueryNode Fanout；
-- Placement Group/Slice 数量；
-- FC/AMV Shard-level Affinity 命中率；
-- Partition-local AMV 的 Partition-level Affinity 命中率；
-- 因容量、节点状态或版本不兼容导致的 Affinity Break；
-- 每次 Balance 的迁移 Bytes 和预期 Fanout 变化；
-- Whale Shard Key 数量及其节点分布。
-
-## 6. 用户交互
-
-### 6.1 创建 FC
-
-```python
-from pymilvus import DataType, MilvusClient
-
-client = MilvusClient(uri="http://localhost:19530")
-
-event_schema = client.create_schema(
+trace_summary_schema = client.create_schema(
     auto_id=False,
     enable_dynamic_field=False,
 )
-event_schema.add_field(
-    field_name="event_id",
-    datatype=DataType.VARCHAR,
-    is_primary=True,
-    max_length=256,
+trace_summary_schema.add_field("trace_id", DataType.VARCHAR, max_length=256)
+trace_summary_schema.add_field("event_date", DataType.DATE)
+trace_summary_schema.add_field(
+    "event_count",
+    DataType.AGGREGATE_STATE,
+    function="count",
 )
-event_schema.add_field(
-    field_name="run_id",
-    datatype=DataType.VARCHAR,
-    max_length=256,
+trace_summary_schema.add_field(
+    "error_count",
+    DataType.AGGREGATE_STATE,
+    function="countIf",
+    argument_types=[DataType.BOOL],
 )
-event_schema.add_field("project_id", DataType.VARCHAR, max_length=256)
-event_schema.add_field("event_type", DataType.VARCHAR, max_length=64)
-event_schema.add_field("tokens", DataType.INT64)
-event_schema.add_field("event_time", DataType.INT64)
-event_schema.add_field("embedding", DataType.FLOAT_VECTOR, dim=1536)
-
-client.create_fact_collection(
-    collection_name="events",
-    schema=event_schema,
-    shard_key_field="run_id",
-    partition_key_field="project_id",
-    num_shards=16,
-    partitions_per_shard=16,
-    order_by_fields=["project_id", "run_id", "event_time", "event_id"],
+trace_summary_schema.add_field(
+    "total_tokens",
+    DataType.AGGREGATE_STATE,
+    function="sum",
+    argument_types=[DataType.INT64],
 )
-```
-
-重复 `event_id` 的 Insert 会生成多条独立事实：
-
-```python
-client.insert(
-    collection_name="events",
-    data=[
-        {"event_id": "e1", "run_id": "r1", "project_id": "p1", "event_time": 100, "tokens": 10, "embedding": v1},
-        {"event_id": "e1", "run_id": "r1", "project_id": "p1", "event_time": 101, "tokens": 20, "embedding": v2},
-    ],
+trace_summary_schema.add_field(
+    "last_event_time",
+    DataType.AGGREGATE_STATE,
+    function="max",
+    argument_types=[DataType.INT64],
 )
-```
 
-### 6.2 创建 AMV
-
-```python
-from pymilvus import Aggregate
-
-client.create_aggregate_materialized_view(
-    collection_name="run_summary",
+client.create_collection(
+    collection_name="trace_summary",
+    schema=trace_summary_schema,
+    collection_type="AGGREGATE_MATERIALIZED_VIEW",
     source_collection_name="events",
-    group_by_fields=["run_id", "project_id"],
-    partition_by_fields=["project_id"],
-    aggregates={
-        "event_count": Aggregate.count("*"),
-        "error_count": Aggregate.count_if("event_type == 'error'"),
-        "total_tokens": Aggregate.sum("tokens"),
-        "last_event_time": Aggregate.max("event_time"),
+    field_mappings={
+        "trace_id": "trace_id",
+        "event_date": "toDate(timestamp)",
+        "event_count": "count(*)",
+        "error_count": "countIf(status == 'ERROR')",
+        "total_tokens": "sum(tokens)",
+        "last_event_time": "max(timestamp)",
     },
-)
-
-client.create_aggregate_materialized_view(
-    collection_name="project_summary",
-    source_collection_name="events",
-    group_by_fields=["project_id"],
-    aggregates={
-        "event_count": Aggregate.count("*"),
-        "total_tokens": Aggregate.sum("tokens"),
-    },
+    partition_by="event_date",
 )
 ```
 
-`run_summary` 的 Group-By Fields 包含 Source Shard Key `run_id`，并且使用与 Fact Collection 相同的 `project_id` 分区规则，因此它是 Partition-local AMV。`project_summary` 未指定分区规则，并且 Group-By Fields 不包含 Source Shard Key，因此它是 Cross-shard AMV，查询时需要按 `project_id` 执行跨 Shard Merge。
+1. **Schema**
 
-AMV 使用普通 Collection 查询生命周期：
+   - 普通标量字段自动成为 Group-By Fields；
+   - `DataType.AGGREGATE_STATE` 字段成为 Aggregate Fields；
+   - 用户不定义 Primary Key；内部使用 Group Key、Source Range 和 State Segment 标识 Partial State。
+
+2. **Field Mapping**
+
+   - `field_mappings` 必须覆盖每个 AMV Field；
+   - Aggregate Mapping 的函数和输入类型必须与目标字段的类型属性一致；
+   - `event_date` 可以由 `toDate(timestamp)` 生成，不要求存在于 Source Schema。
+
+3. **Partition**
+
+   - `partition_by` 可选，且只能引用 Group-By Field；
+   - 未指定时，每个 Source Shard 只有一个 AMV Partition；
+   - 与 Fact Collection 使用相同的规范化分区表达式时，可以使用 Partition-local 优化。
+
+4. **生命周期**
+
+   - AMV 拥有独立 Collection ID，可以独立 Load、Release、Query 和 Drop；
+   - AMV 不允许用户写入或手工管理 Partition。
+
+5. **历史数据构建**
+
+   - 系统在每个 Source Shard 建立 Barrier `T0`；
+   - `T0` 之前的数据由 DataNode Backfill，之后的数据由 StreamingNode 增量处理；
+   - 两部分追平后，系统原子发布 AMV 为 Available；
+   - 构建期间不阻塞 Fact Collection 写入，AMV 在 Available 前不可查询；
+   - 任务切分和聚合优化详见 [5.2 Backfill](#52-backfill)。
+
+## 4. 写路径
+
+### 4.1 Fact 写入与路由
+
+Proxy 按行执行两级路由：
+
+```text
+Shard Key     -> VChannel
+Partition Key -> 当前 VChannel 内的 Partition
+```
+
+StreamingNode 在写入前重新校验 Collection 类型、Append-only 语义、路由结果和布局版本。校验通过后只写入 Source WAL，不创建独立 AMV WAL，也不执行跨 Shard Shuffle。
+
+### 4.2 Growing Segment 到 L1 Sealed Segment
+
+```text
+Source WAL
+  -> Apply
+  -> Growing Segment
+       -> Sync -> Persisted L1 Chunk
+       -> Seal / Commit -> DataView
+```
+
+1. **WAL Apply**
+
+   - Fact 将原始行追加到当前 Growing Segment；
+   - AMV 按 Partition 和 Group Key 原地合并 State，并允许跨 Apply Batch 持续更新当前 State；
+   - AMV 直接写入当前 `(Shard, Partition)` 的 Growing Segment，不经过 Segment 预分配。
+
+2. **Sync**
+
+   - Fact 将新增行写成 Data Chunk；
+   - AMV 将 Dirty State 写成按 Group Key 有序的 State Chunk；
+   - Chunk 持久化后推进对应的 Persisted TimeTick；
+   - 每个 Source Shard 的安全 Checkpoint 为：
+
+   ```text
+   min(Fact Persisted TimeTick, AMV 1 Persisted TimeTick, ...)
+   ```
+
+3. **Seal 与 Commit**
+
+   - Seal 冻结 Growing Segment，并完成最后一次 Sync；
+   - Fact 按 Sort Key 对 Chunk 做 Segment-local Merge Sort；
+   - AMV 按 Group Key 合并 State Chunk，并将相同 Group Key 折叠为一份 State；
+   - Fact 和 AMV 分别提交为不可变的 L1 Sealed Segment；
+   - L1 加入 DataView 后，推进对应 Collection 的 DataVersion。
+
+### 4.3 Import
+
+Import 在后台直接生成 Fact 和全部 AMV 的 L1 Segment，无需写入 Source WAL：
+
+```text
+Imported Rows
+  -> Shard / Partition Routing
+  -> Fact L1 Segments
+  -> AMV L1 State Segments
+  -> Import Commit
+  -> Add to DataView
+```
+
+1. **后台构建**
+
+   - 使用与普通 Insert 相同的 Shard、Partition 和 Sort Encoding；
+   - Fact L1 Segment 按 Fact Sort Key 排序；
+   - 每个 AMV 的 L1 State Segment 按 Group Key 排序；
+   - 构建可以使用 per-shard、partition-local 和有序聚合优化。
+
+2. **Commit 前**
+
+   - Fact 和 AMV Segment 保持 Importing 状态；
+   - Segment 不进入 DataView；
+   - 构建失败或重试不执行 Import Commit。
+
+3. **Import Commit**
+
+   - 同一个 Import Commit 同时提交 Fact 和全部 AMV 的 L1 Segment；
+   - Commit 持久化 Segment Metadata，清除 Importing 状态，并将 Segment 加入各自 Collection 的 DataView；
+   - 新 Segment 作为 loadable membership 推进对应 DataView 的 `streaming_version`；
+   - 不允许只发布 Fact 或部分 AMV Segment；重复 Commit 是 No-op。
+
+## 5. Compaction 与 Backfill
+
+### 5.1 正常 Compaction
+
+#### 5.1.1 Fact Compaction
+
+Fact Compaction 沿用第 2.1.3 节的数据组织方式：Flush 生成 Segment 内按 Sort Key 有序的 L1 Segment；L2 Compaction 在单个 `(Shard, Partition)` 内归并排序，并按连续 Sort Key Range 输出 L2 Segment。
+
+Segment 记录 Shard Key、Partition Key、Sort Key 和时间范围等统计信息。相同 Shard Key 应尽量保持连续；单个 Key 超过 Segment 大小限制时允许拆分。
+
+Compaction 只是已有事实的物理重写，不能再次产生 AMV Contribution。TTL 只清理 Fact 数据，不向 AMV 发送 Retract，因此 AMV 表示 Lifetime Aggregate。
+
+#### 5.1.2 AMV State Compaction
+
+AMV L1 Segment 内按 Group Key 聚合和排序，不同 L1 Segment 仍可能包含相同 Group Key。L2 State Compaction 在单个 `(Shard, AMV Partition)` 内合并相同 Group Key 的 Aggregate State，并按 Group Key Range 输出新的 State Segment。
+
+Aggregate Function 及其 State 定义见 [2.2.4 Aggregate Function 支持范围](#224-aggregate-function-支持范围)。Compaction 输出仍是可继续合并的 State，不是最终聚合值。输出 State 的内部 TimeTick 取所有输入 State TimeTick 的最大值。Cross-shard AMV 只在各 Source Shard 内压缩 Partial State，跨 Shard 合并留在查询阶段。
+
+### 5.2 Backfill
+
+1. **任务边界**
+
+   - 以 Source Shard 为基本执行边界；
+   - Partition-local AMV 可以进一步按 `(Source Shard, Source Partition)` 构建。
+
+2. **有序聚合**
+
+   当 AMV Group Key 相对于 Fact Sort Key 单调非递减时，可以顺序扫描并直接生成 Aggregate State：
+
+   ```text
+   Ordered Source Scan
+     -> Accumulate Current Group
+     -> Group Key Changes
+     -> Emit Aggregate State
+   ```
+
+   例如，在 `toDate(timestamp)` Partition 内：
+
+   ```text
+   Fact Sort Key = (trace_id, timestamp)
+   AMV Group Key = (trace_id, event_date)
+   event_date     = toDate(timestamp)
+   ```
+
+   `event_date` 在 Partition 内为常量，因此相同 Group Key 连续。Fact L2 可以直接顺序扫描；Range 重叠的 Fact L1 需要先 K-way Merge，或者分别生成 Partial State。无法证明保序时，回退到 Hash/Spill Aggregation。
+
+3. **构建产物**
+
+   - Backfill 生成 AMV L1 State Segment；
+   - 产物由 AMV Definition Version 和 Source Range 标识；
+   - 失败重试不能重复累计同一批 Source 数据。
+
+## 6. AMV 最终一致性与 TimeTick
+
+### 6.1 最终一致性
+
+- AMV 不与 Fact Collection 保证相同的 Source TimeTick；
+- AMV Query 不等待或使用 QueryPlanMVCC，也不按 TimeTick 过滤 Aggregate State；
+- AMV 不保存历史 Aggregate State，不支持历史快照查询；
+- 每个 AMV Shard 读取本地最新可用 State，Cross-shard Query 不要求所有 Shard 位于同一 Source TimeTick；
+- 当 Source 数据停止变化且 Backfill 与增量消费追平后，AMV 最终结果必须与完整聚合 Fact Collection 等价。
+
+### 6.2 TimeTick
+
+AMV 保留 Milvus 的内部 TimeTick 列。它表示 Aggregate State 已经包含的最大 Source TimeTick，只用于恢复、进度跟踪和问题排查，不参与查询可见性判断。
+
+- Source Row 生成 State 时，TimeTick 取输入行的最大值；
+- Growing State 原地 Merge 时，TimeTick 取当前 State 与新增 State 的最大值；
+- Sync 和 Seal 输出 State 时，TimeTick 取所有输入 State 的最大值；
+- Compaction 输出 State 时，TimeTick 取所有输入 State 的最大值。
+
+```text
+Output State TimeTick = MAX(Input State TimeTick)
+```
+
+### 6.3 DataView
+
+AMV 仍使用 DataView 原子管理 Segment Membership。Query 固定当前 AMV DataView，并读取执行时最新可用的 Growing State；Flush、Import 和 Compaction 的 DataView 切换保证 Segment 不会重复或遗漏，但不提供 Fact 与 AMV 的 TimeTick 一致性。
+
+## 7. 读路径
+
+### 7.1 AMV 查询
+
+用户将 AMV 作为普通只读 Collection 查询。AMV Query 不使用 QueryPlanMVCC，也不依赖 Sync 或 DataCheckpoint，直接读取各 Shard 执行时最新可用的 Aggregate State。执行顺序固定为：
+
+```text
+Growing + L1 + L2 State
+  -> Merge by Group Key
+  -> Cross-shard Merge when required
+  -> Finalize
+  -> Aggregate Result Filter
+  -> Order / Limit / Result
+```
+
+Shard-local AMV 在单个 Source Shard 内完成 Merge；Cross-shard AMV 必须先汇总所有 Source Shard 的 Partial State，但不同 Shard 的 State 不保证对应同一个 Source TimeTick。依赖聚合结果的 Filter、Order 和 Limit 只能在完整 Merge 和 Finalize 后执行。
+
+### 7.2 嵌套子查询
+
+嵌套查询由服务端编译为 Query DAG，中间 Key Set 不返回客户端。例如先筛选 Trace，再下钻 Event 做向量搜索：
 
 ```python
-client.load_collection("run_summary")
-
-rows = client.query(
-    collection_name="run_summary",
+selected_traces = Subquery(
+    collection_name="trace_summary",
     filter="total_tokens > {min_tokens} and error_count == 0",
     filter_params={"min_tokens": 100000},
-    output_fields=["run_id", "project_id", "event_count", "total_tokens"],
-)
-```
-
-### 6.3 多层嵌套子查询
-
-嵌套查询使用服务端 `Subquery` Runtime Operand，不把中间 ID List 展开到客户端：
-
-```python
-from pymilvus import Subquery
-
-large_projects = Subquery(
-    collection_name="project_summary",
-    filter="total_tokens > {project_min_tokens}",
-    filter_params={"project_min_tokens": 10000000},
-    output_field="project_id",
-)
-
-healthy_runs = Subquery(
-    collection_name="run_summary",
-    filter=(
-        "project_id in {large_projects} "
-        "and total_tokens > {run_min_tokens} "
-        "and error_count == 0"
-    ),
-    filter_params={
-        "large_projects": large_projects,
-        "run_min_tokens": 100000,
-    },
-    output_field="run_id",
+    output_field="trace_id",
 )
 
 results = client.search(
     collection_name="events",
     data=[query_vector],
     anns_field="embedding",
-    filter="run_id in {healthy_runs} and event_type == {event_type}",
-    filter_params={
-        "healthy_runs": healthy_runs,
-        "event_type": "observation",
-    },
+    filter="trace_id in {selected_traces}",
+    filter_params={"selected_traces": selected_traces},
     limit=100,
-    output_fields=["event_id", "run_id", "project_id"],
 )
 ```
 
-Planner 把嵌套关系编译为 Query DAG，并从最深层 Build 开始执行：
-
 ```text
-project_summary Build
-  -> project_id Set
-  -> run_summary Build
-  -> run_id Set
-  -> events ANN Probe
+trace_summary Build
+  -> Exact trace_id Set
+  -> events Filter
+  -> ANN Search
 ```
 
-规则如下：
-
-- 嵌套深度由 `max_nested_subquery_depth` 限制；
-- 不支持 Correlated Subquery；
-- 中间 Value Set 必须保持精确语义；
-- 小结果可以 Inline，大结果写入带 Snapshot 和 TTL 的 Exact Artifact；
-- Bloom Filter 只能作为预过滤，False Positive 必须通过 Exact Artifact 消除；
-- Aggregate Result Filter 必须在 State Merge 和 Finalize 后执行；
-- ANN 必须在完整 AMV 条件生成精确 Filter Bitset 后执行；
-- 同一 Source Lineage 且 Shard Key 对齐的 Build/Probe 使用相同 Source WAL MVCC，并按 Shard 流式执行；Shard Key 和 Partition Key 都对齐时可以进一步按 Partition 执行；
-- Cross-shard AMV 或不同 Lineage 的子查询需要在完整 State Merge 和 Finalize 后执行 Global Build/Exchange，不能把单个 Shard 的 Partial State 当作最终结果。
-
-### 6.4 API 与内部请求边界
-
-普通 Collection、FC 和 AMV 使用互斥的创建请求：
-
-```text
-CreateCollectionRequest
-CreateFactCollectionRequest
-CreateAggregateMaterializedViewRequest
-```
-
-三者最终都生成统一 Collection Identity，但各自的请求类型只能表达合法参数组合。RootCoord 内部使用判别联合保存定义：
-
-```text
-CollectionDefinition {
-  collection_id
-  name
-  schema
-
-  oneof kind {
-    RegularCollectionDefinition
-    FactCollectionDefinition
-    AggregateMaterializedViewDefinition
-  }
-}
-```
-
-这样不会让 Shard Key、Partition Key、Source Collection、Aggregate Definition、External Storage 等互斥能力继续在一个平铺请求中形成组合爆炸。
-
-### 6.5 当前实现适配点
-
-- Proxy Insert 当前按 Primary Key 选择 VChannel、按普通 Collection 的 Partition Key 选择全局 Partition；FC 需要改为 Shard Key 决定 VChannel、Partition Key 决定 Shard 内 Local Partition 的两级 Router：
-  - `internal/proxy/task_insert_streaming.go`
-  - `pkg/util/typeutil/hash.go`
-- 当前查询链路普遍把 Primary Key 当作 Row Identity；FC 需要把内部 PhysicalRowID 贯穿 Segment、Search Hit、Requery 和 Reduce，同时允许用户 Primary Key 重复输出。
-- StreamingNode Shard Interceptor 当前按 Collection/Partition 管理 Segment Assignment；需要增加 FC 路由校验和固定 Partition Owner：
-  - `internal/streamingnode/server/wal/interceptors/shard/`
-- RecoveryStorage 已按 PChannel/VChannel/Segment 模块维护 WAL 状态，可扩展 AMV State Runtime 和 Frontier：
-  - `internal/streamingnode/server/wal/recovery/`
-  - `internal/streamingnode/server/wal/vchannel/`
-- AMV State Runtime 必须绑定 Source VChannel，直接消费 Source WAL，并按照可选的 AMV Partition Definition 生成 State Segment；不能新增独立 AMV Dispatcher、跨 Shard Shuffle Runtime 或 AMV WAL。
-- DataView 已按 VChannel/Partition 组织 Segment Membership，可以直接表达 Partition，但必须增加 Partition Owner 和 Sort Range 不变量：
-  - `pkg/proto/view.proto`
-  - `docs/design-docs/design_docs/qviews/data_view.md`
-- QueryView Balancer 当前具有 Stickiness、Node Load 和 Fanout 评分，需要增加 Partition/Range/Lineage Affinity：
-  - `internal/views/coord/balancer/`
-  - `docs/design-docs/design_docs/qviews/balancer_design.md`
-- 当前 Query 聚合和 Search Aggregation 可作为 Aggregate Function 与嵌套定义的 SDK 先例，但尚未提供持久化 AMV：
-  - `tests/python_client/testcases/test_query_aggregation.py`
-  - `tests/python_client/milvus_client/test_milvus_client_search_aggregation.py`
-
-### 6.6 验收条件
-
-1. 相同 Shard Key 的任意 Insert 始终进入同一个 VChannel；相同 Partition Key 在每个 Shard 内始终映射到相同 Local Partition。
-2. 每个物理 Partition 由 `(ShardID, LocalPartitionID)` 唯一标识并只归属于一个 Shard，Partitions Per Shard 和 Owner 创建后不可修改。
-3. FC 拒绝 Update、Upsert 和 Delete，但允许多条相同 Primary Key 的事实同时可见。
-4. L2 Segment 按用户 Sort Key 有序，并输出可用于 Partition Key、Shard Key 和 Sort Range Pruning 的统计信息。
-5. 只有 FC 可以创建 AMV，一个 FC 可以拥有多个独立 AMV。
-6. AMV 使用 Mergeable Aggregate State，不通过随机覆盖最终结果行维护统计信息。
-7. 所有 AMV 的 Shard Count、VChannel 和 Shard Ownership 都与 Source FC 对齐，不建立写入时跨 Shard Shuffle 或独立 AMV WAL。
-8. AMV Partition Definition 是可选的；未指定时每个 AMV Shard 使用一个 Default Partition，指定时只能引用 Group-By Fields 或基于这些字段的确定性表达式。
-9. Group-By Fields 包含 Source Shard Key 时为 Shard-local AMV，不包含时为 Cross-shard AMV，并在查询时执行完整 Cross-shard State Merge。
-10. Shard-local AMV 与 Fact Collection 使用相同分区规则时成为 Partition-local AMV，其构建、Compaction、Merge 和 Finalize 可以限制在单个 Partition 内执行。
-11. Source WAL Replay 不会让同一 Aggregate Contribution 重复累计。
-12. Balance 在容量允许时减少 Shard/Partition Fanout，并优先建立 FC/AMV Shard-level Affinity；Partition-local AMV 进一步建立 Partition-level Affinity。
-13. 共置失败只影响性能，不影响 QueryView 查询正确性。
-14. Aggregate Filter 只在完整 Merge 和 Finalize 后执行。
-15. 多层 Subquery 在服务端形成 Query DAG，中间 Key Set 保持精确语义，ANN 在完整标量过滤之后执行。
+系统支持多层非关联子查询。AMV 子查询读取最新可用聚合状态，Fact 子查询或外层查询使用自身的 MVCC，两者不保证处于同一个 Source TimeTick。小型 Key Set 可以随请求传递；高基数 Key Set 由服务端分区或 Spill，避免要求单个 Proxy 常驻全部结果。Bloom Filter 只能用于预过滤，最终结果必须由精确 Key Set 校验。ANN 必须在完整聚合条件生成精确过滤结果后执行。
