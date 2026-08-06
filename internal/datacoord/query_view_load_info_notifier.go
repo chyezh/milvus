@@ -22,14 +22,11 @@ package datacoord
 // state from the durable complete snapshot.
 type QueryViewLoadInfoNotifier interface {
 	NotifySegments(collectionID int64, segmentIDs ...int64)
-	NotifyCollection(collectionID int64)
 }
 
 type noopQueryViewLoadInfoNotifier struct{}
 
 func (noopQueryViewLoadInfoNotifier) NotifySegments(int64, ...int64) {}
-
-func (noopQueryViewLoadInfoNotifier) NotifyCollection(int64) {}
 
 func (s *Server) SetQueryViewLoadInfoNotifier(notifier QueryViewLoadInfoNotifier) {
 	if notifier == nil {
@@ -44,11 +41,5 @@ func (s *Server) SetQueryViewLoadInfoNotifier(notifier QueryViewLoadInfoNotifier
 func (m *meta) notifyQueryViewSegments(collectionID int64, segmentIDs ...int64) {
 	if m != nil && m.queryViewLoadInfoNotifier != nil {
 		m.queryViewLoadInfoNotifier.NotifySegments(collectionID, segmentIDs...)
-	}
-}
-
-func (s *Server) notifyQueryViewCollection(collectionID int64) {
-	if s.queryViewLoadInfoNotifier != nil {
-		s.queryViewLoadInfoNotifier.NotifyCollection(collectionID)
 	}
 }

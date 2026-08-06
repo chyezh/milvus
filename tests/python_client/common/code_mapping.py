@@ -43,6 +43,7 @@ class IndexErrorMessage(ExceptionsMessage):
     NotConfigable = "{0} is not a configable index property"
     InvalidOffsetCache = "invalid offset cache index params"
     OneIndexPerField = "at most one distinct index is allowed per field"
+    AlterOnLoadedCollection = "can't alter index on loaded collection, please release the collection first"
 
 
 class QueryErrorMessage(ExceptionsMessage):

@@ -243,7 +243,6 @@ func applyExternalCollectionSegmentUpdate(
 
 	upsertSegmentMap := make(map[int64]*datapb.SegmentInfo)
 	validUpdatedSegments := make([]*datapb.SegmentInfo, 0, len(updatedSegments))
-	patchedSegmentIDs := make([]int64, 0, len(updatedSegments))
 	for _, seg := range updatedSegments {
 		if seg == nil {
 			continue
@@ -288,7 +287,6 @@ func applyExternalCollectionSegmentUpdate(
 			if err := validateExternalRefreshPatch(existing, incoming, collectionID); err != nil {
 				return err
 			}
-			patchedSegmentIDs = append(patchedSegmentIDs, incoming.GetID())
 			continue
 		}
 		if err := validateExternalRefreshNewSegment(incoming); err != nil {
@@ -470,7 +468,6 @@ func applyExternalCollectionSegmentUpdate(
 	if patchErr != nil {
 		return patchErr
 	}
-	mt.notifyQueryViewSegments(collectionID, patchedSegmentIDs...)
 	if mt.dataViewManager != nil {
 		addSegmentIDs := lo.Map(normalizedUpdatedSegments, func(segment *datapb.SegmentInfo, _ int) int64 {
 			return segment.GetID()

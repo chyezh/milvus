@@ -183,26 +183,13 @@ updates. After a QueryNode process restart the in-memory revisions are lost, so
 new subscriptions start from revision zero and QueryCoord returns full current
 snapshots.
 
-DataCoord invalidates these snapshots only after the corresponding metadata is
-durable. A finished segment index, text-index stats, and current-format JSON key
-stats notify the exact segment. DropIndex and AlterIndex notify active
-subscriptions for the target collection. A committed BatchUpdateManifest item,
-an in-place external collection segment patch, and an in-place schema-bump
-compaction also notify the exact segment because they change the packed
-SegmentLoadInfo without changing loadable membership. CreateIndex
+DataCoord invalidates these snapshots only after the corresponding segment
+index metadata is durable. A finished segment index, text-index stats, and
+current-format JSON key stats notify the exact segment. CreateIndex
 acknowledgement itself does not notify: each segment is refreshed when its own
-index reaches Finished. Copy/restore output segments do not need a separate
-notification before they join DataView because their initial subscription reads
-the complete metadata persisted before the membership publication. These
-events do not change DataView, QueryView, or LoadConfig; a newly loaded segment
-always obtains the latest complete snapshot from its initial subscription.
-
-AlterIndex is allowed while the collection is loaded. Its durable metadata
-change is applied to already-loaded segments through the collection-wide
-notification above instead of requiring a release/reload cycle. DropIndex keeps
-its independent compatibility rule that a vector index cannot be dropped while
-the collection is loaded; scalar and JSON index drops use the same watcher
-refresh path.
+index reaches Finished. These events do not change DataView, QueryView, or
+LoadConfig; a newly loaded segment obtains the latest complete snapshot from
+its initial subscription.
 
 This boundary keeps task execution self-contained: a load/update task never
 performs a metadata lookup. It operates only on the immutable snapshot captured

@@ -505,9 +505,8 @@ func (st *statsTask) prepareJobRequest(ctx context.Context, segment *SegmentInfo
 
 func (st *statsTask) SetJobInfo(ctx context.Context, result *workerpb.StatsResult) error {
 	var (
-		err                      error
-		loadInfoChanged          bool
-		loadInfoChangedSegmentID = st.GetSegmentID()
+		err             error
+		loadInfoChanged bool
 	)
 	switch st.GetSubJobType() {
 	case indexpb.StatsSubJob_TextIndexJob:
@@ -545,8 +544,6 @@ func (st *statsTask) SetJobInfo(ctx context.Context, result *workerpb.StatsResul
 						mlog.FieldSegmentID(st.GetTargetSegmentID()), mlog.Err(err))
 					break
 				}
-				loadInfoChanged = true
-				loadInfoChangedSegmentID = st.GetTargetSegmentID()
 			}
 		}
 	case indexpb.StatsSubJob_BM25Job:
@@ -576,13 +573,10 @@ func (st *statsTask) SetJobInfo(ctx context.Context, result *workerpb.StatsResul
 			if !errors.Is(updateErr, merr.ErrSegmentNotFound) {
 				return updateErr
 			}
-		} else {
-			loadInfoChanged = true
-			loadInfoChangedSegmentID = segID
 		}
 	}
 	if loadInfoChanged {
-		st.meta.notifyQueryViewSegments(st.GetCollectionID(), loadInfoChangedSegmentID)
+		st.meta.notifyQueryViewSegments(st.GetCollectionID(), st.GetSegmentID())
 	}
 
 	mlog.Info(ctx, "SetJobInfo for stats task success", mlog.FieldTaskID(st.GetTaskID()),

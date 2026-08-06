@@ -15,7 +15,6 @@ import (
 type qvCollectionManager interface {
 	Get(collectionID int64) *segments.Collection
 	PutOrRef(collectionID int64, schema *schemapb.CollectionSchema, meta *segcorepb.CollectionIndexMeta, loadMeta *querypb.LoadMetaInfo) error
-	UpdateSchema(collectionID int64, schema *schemapb.CollectionSchema, schemaBarrierTs uint64) error
 	Ref(collectionID int64, count uint32) bool
 	Unref(collectionID int64, count uint32) bool
 }

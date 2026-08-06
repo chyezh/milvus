@@ -62,17 +62,6 @@ type CollectionIndexMetaUpdater interface {
 	UpdateIndexMeta(ctx context.Context, indexes []*indexpb.IndexInfo) error
 }
 
-type CollectionSchemaUpdater interface {
-	UpdateSchema(ctx context.Context, schema *schemapb.CollectionSchema, schemaBarrierTs uint64) error
-}
-
-// CollectionLoadMetadataUpdater applies one collection-level load metadata
-// snapshot in QueryNode-local delivery order. Delivery versions are assigned by
-// SegmentLoadInfoStream and are unrelated to the content-hash segment revision.
-type CollectionLoadMetadataUpdater interface {
-	UpdateLoadMetadata(ctx context.Context, deliveryVersion uint64, schema *schemapb.CollectionSchema, schemaBarrierTs uint64, indexes []*indexpb.IndexInfo) error
-}
-
 // TransformSegment consumes transform-log entries for one loaded sealed segment.
 type TransformSegment interface {
 	ID() int64
@@ -141,14 +130,11 @@ func (r SegmentLoadInfoRevision) Empty() bool {
 }
 
 type SegmentLoadInfoSnapshot struct {
-	CollectionID     int64
-	SegmentID        int64
-	Revision         SegmentLoadInfoRevision
-	DeliveryVersion  uint64
-	LoadInfo         *querypb.SegmentLoadInfo
-	IndexInfos       []*indexpb.IndexInfo
-	CollectionSchema *schemapb.CollectionSchema
-	SchemaBarrierTs  uint64
+	CollectionID int64
+	SegmentID    int64
+	Revision     SegmentLoadInfoRevision
+	LoadInfo     *querypb.SegmentLoadInfo
+	IndexInfos   []*indexpb.IndexInfo
 }
 
 type SegmentLoadInfoSubscriptionOption struct {

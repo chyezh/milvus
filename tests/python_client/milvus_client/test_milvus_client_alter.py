@@ -30,11 +30,11 @@ class TestMilvusClientAlterIndex(TestMilvusClientV2Base):
         """
         target: test alter index
         method: 1. alter index after load
-                verify alter successfully
+                verify alter fail
                 2. alter index after release
                 verify alter successfully
                 3. drop index properties after load
-                verify drop successfully
+                verify drop fail
                 4. drop index properties after release
                 verify drop successfully
         expected: alter successfully
@@ -46,33 +46,36 @@ class TestMilvusClientAlterIndex(TestMilvusClientV2Base):
         self.load_collection(client, collection_name)
         res1 = self.describe_index(client, collection_name, index_name=idx_names[0])[0]
         assert res1.get("mmap.enabled", None) is None
+        error = {
+            ct.err_code: 104,
+            ct.err_msg: f"can't alter index on loaded collection, "
+            f"please release the collection first: collection already loaded[collection={collection_name}]",
+        }
         # 1. alter index after load
         self.alter_index_properties(
             client,
             collection_name,
             idx_names[0],
             properties={"mmap.enabled": True},
+            check_task=CheckTasks.err_res,
+            check_items=error,
         )
-        res2 = self.describe_index(client, collection_name, index_name=idx_names[0])[0]
-        assert res2.get("mmap.enabled", None) == "True"
-        # 3. drop index properties after load
         self.drop_index_properties(
             client,
             collection_name,
             idx_names[0],
             property_keys=["mmap.enabled"],
+            check_task=CheckTasks.err_res,
+            check_items=error,
         )
-        res3 = self.describe_index(client, collection_name, index_name=idx_names[0])[0]
-        assert res3.get("mmap.enabled", None) is None
         self.release_collection(client, collection_name)
         # 2. alter index after release
         self.alter_index_properties(client, collection_name, idx_names[0], properties={"mmap.enabled": True})
-        res4 = self.describe_index(client, collection_name, index_name=idx_names[0])[0]
-        assert res4.get("mmap.enabled", None) == "True"
-        # 4. drop index properties after release
+        res2 = self.describe_index(client, collection_name, index_name=idx_names[0])[0]
+        assert res2.get("mmap.enabled", None) == "True"
         self.drop_index_properties(client, collection_name, idx_names[0], property_keys=["mmap.enabled"])
-        res5 = self.describe_index(client, collection_name, index_name=idx_names[0])[0]
-        assert res5.get("mmap.enabled", None) is None
+        res3 = self.describe_index(client, collection_name, index_name=idx_names[0])[0]
+        assert res3.get("mmap.enabled", None) is None
 
     @pytest.mark.tags(CaseLabel.L1)
     def test_milvus_client_alter_index_unsupported_properties(self):

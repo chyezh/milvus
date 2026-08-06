@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 
-	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/querynodev2/qnview"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 )
@@ -25,8 +24,7 @@ func TestSegmentLoadInfoStream_ReopensAndResubscribesFromDeliveredRevision(t *te
 		streams:   make(chan *fakeSegmentLoadInfoWatchStream, 2),
 		allowOpen: make(chan struct{}),
 	}
-	snapshots := make(chan qnview.SegmentLoadInfoSnapshot, 3)
-	secondSnapshots := make(chan qnview.SegmentLoadInfoSnapshot, 1)
+	snapshots := make(chan qnview.SegmentLoadInfoSnapshot, 1)
 	stream := newSegmentLoadInfoStream(ctx, opener.watch)
 	defer stream.Close()
 	sub := stream.Subscribe(qnview.SegmentLoadInfoSubscriptionOption{
@@ -44,10 +42,7 @@ func TestSegmentLoadInfoStream_ReopensAndResubscribesFromDeliveredRevision(t *te
 		CollectionID: 200,
 		SegmentID:    2000,
 		Revision:     qnview.SegmentLoadInfoRevision{Revision: 5},
-		Handler: segmentLoadInfoHandlerFunc(func(snapshot qnview.SegmentLoadInfoSnapshot) error {
-			secondSnapshots <- snapshot
-			return nil
-		}),
+		Handler:      segmentLoadInfoHandlerFunc(func(qnview.SegmentLoadInfoSnapshot) error { return nil }),
 	})
 	require.NotNil(t, secondSub)
 	defer secondSub.Close()
@@ -59,58 +54,18 @@ func TestSegmentLoadInfoStream_ReopensAndResubscribesFromDeliveredRevision(t *te
 	assert.Equal(t, uint64(1), subscriptionRevision(t, req1, 1000))
 	assert.Equal(t, uint64(5), subscriptionRevision(t, req1, 2000))
 	stream1.recv <- &querypb.WatchQueryViewSegmentLoadInfoResponse{
-		Snapshots: []*querypb.QueryViewSegmentLoadInfoSnapshot{
-			{
-				CollectionID:     100,
-				SegmentID:        1000,
-				Revision:         &querypb.QueryViewSegmentLoadInfoRevision{LoadInfoRevision: 2},
-				LoadInfo:         &querypb.SegmentLoadInfo{SegmentID: 1000, CollectionID: 100},
-				CollectionSchema: &schemapb.CollectionSchema{Version: 7},
-				SchemaBarrierTs:  700,
-			},
-			{
-				CollectionID: 200,
-				SegmentID:    2000,
-				Revision:     &querypb.QueryViewSegmentLoadInfoRevision{LoadInfoRevision: 6},
-				LoadInfo:     &querypb.SegmentLoadInfo{SegmentID: 2000, CollectionID: 200},
-			},
-		},
-	}
-	var firstDeliveryVersion uint64
-	select {
-	case snapshot := <-snapshots:
-		assert.Equal(t, qnview.SegmentLoadInfoRevision{Revision: 2}, snapshot.Revision)
-		assert.Equal(t, int32(7), snapshot.CollectionSchema.GetVersion())
-		assert.Equal(t, uint64(700), snapshot.SchemaBarrierTs)
-		firstDeliveryVersion = snapshot.DeliveryVersion
-		assert.NotZero(t, firstDeliveryVersion)
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for snapshot")
-	}
-	select {
-	case snapshot := <-secondSnapshots:
-		assert.Equal(t, qnview.SegmentLoadInfoRevision{Revision: 6}, snapshot.Revision)
-		assert.Equal(t, firstDeliveryVersion, snapshot.DeliveryVersion,
-			"all snapshots in one watcher response must share one delivery version")
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for second segment snapshot")
-	}
-	stream1.recv <- &querypb.WatchQueryViewSegmentLoadInfoResponse{
 		Snapshots: []*querypb.QueryViewSegmentLoadInfoSnapshot{{
 			CollectionID: 100,
 			SegmentID:    1000,
-			Revision:     &querypb.QueryViewSegmentLoadInfoRevision{LoadInfoRevision: 3},
+			Revision:     &querypb.QueryViewSegmentLoadInfoRevision{LoadInfoRevision: 2},
 			LoadInfo:     &querypb.SegmentLoadInfo{SegmentID: 1000, CollectionID: 100},
 		}},
 	}
-	var secondDeliveryVersion uint64
 	select {
 	case snapshot := <-snapshots:
-		assert.Equal(t, qnview.SegmentLoadInfoRevision{Revision: 3}, snapshot.Revision)
-		assert.Greater(t, snapshot.DeliveryVersion, firstDeliveryVersion)
-		secondDeliveryVersion = snapshot.DeliveryVersion
+		assert.Equal(t, qnview.SegmentLoadInfoRevision{Revision: 2}, snapshot.Revision)
 	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for second snapshot")
+		t.Fatal("timed out waiting for snapshot")
 	}
 	stream1.assertNoSend(t)
 
@@ -120,25 +75,8 @@ func TestSegmentLoadInfoStream_ReopensAndResubscribesFromDeliveredRevision(t *te
 	defer close(stream2.recv)
 	req2 := stream2.waitSend(t)
 	require.Len(t, req2.GetSubscribe(), 2)
-	assert.Equal(t, uint64(3), subscriptionRevision(t, req2, 1000))
-	assert.Equal(t, uint64(6), subscriptionRevision(t, req2, 2000))
-
-	stream2.recv <- &querypb.WatchQueryViewSegmentLoadInfoResponse{
-		Snapshots: []*querypb.QueryViewSegmentLoadInfoSnapshot{{
-			CollectionID: 100,
-			SegmentID:    1000,
-			Revision:     &querypb.QueryViewSegmentLoadInfoRevision{LoadInfoRevision: 4},
-			LoadInfo:     &querypb.SegmentLoadInfo{SegmentID: 1000, CollectionID: 100},
-		}},
-	}
-	select {
-	case snapshot := <-snapshots:
-		assert.Equal(t, qnview.SegmentLoadInfoRevision{Revision: 4}, snapshot.Revision)
-		assert.Greater(t, snapshot.DeliveryVersion, secondDeliveryVersion,
-			"transport reconnect must not reset delivery ordering")
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for snapshot after reconnect")
-	}
+	assert.Equal(t, uint64(2), subscriptionRevision(t, req2, 1000))
+	assert.Equal(t, uint64(5), subscriptionRevision(t, req2, 2000))
 }
 
 func TestSegmentLoadInfoStream_KeysSubscriptionsBySegmentID(t *testing.T) {

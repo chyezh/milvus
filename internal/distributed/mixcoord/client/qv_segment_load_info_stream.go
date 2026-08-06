@@ -3,7 +3,6 @@ package grpcmixcoordclient
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
@@ -30,7 +29,6 @@ type segmentLoadInfoStream struct {
 	unsubscriptions []*segmentLoadInfoSubscription
 	notify          chan struct{}
 	closeOnce       sync.Once
-	deliveryVersion atomic.Uint64
 }
 
 type segmentLoadInfoSubscription struct {
@@ -210,14 +208,13 @@ func (s *segmentLoadInfoStream) recvLoop(stream querypb.QueryCoord_WatchQueryVie
 			mlog.Warn(s.ctx, "query view segment load info stream response failed", mlog.Err(err))
 			return
 		}
-		deliveryVersion := s.deliveryVersion.Add(1)
 		for _, snapshot := range resp.GetSnapshots() {
-			s.handleSnapshot(snapshot, deliveryVersion)
+			s.handleSnapshot(snapshot)
 		}
 	}
 }
 
-func (s *segmentLoadInfoStream) handleSnapshot(snapshot *querypb.QueryViewSegmentLoadInfoSnapshot, deliveryVersion uint64) {
+func (s *segmentLoadInfoStream) handleSnapshot(snapshot *querypb.QueryViewSegmentLoadInfoSnapshot) {
 	if snapshot == nil {
 		return
 	}
@@ -230,14 +227,11 @@ func (s *segmentLoadInfoStream) handleSnapshot(snapshot *querypb.QueryViewSegmen
 	s.mu.Unlock()
 
 	localSnapshot := qnview.SegmentLoadInfoSnapshot{
-		CollectionID:     snapshot.GetCollectionID(),
-		SegmentID:        snapshot.GetSegmentID(),
-		Revision:         fromQueryViewSegmentLoadInfoRevisionPB(snapshot.GetRevision()),
-		DeliveryVersion:  deliveryVersion,
-		LoadInfo:         snapshot.GetLoadInfo(),
-		IndexInfos:       snapshot.GetIndexInfoList(),
-		CollectionSchema: snapshot.GetCollectionSchema(),
-		SchemaBarrierTs:  snapshot.GetSchemaBarrierTs(),
+		CollectionID: snapshot.GetCollectionID(),
+		SegmentID:    snapshot.GetSegmentID(),
+		Revision:     fromQueryViewSegmentLoadInfoRevisionPB(snapshot.GetRevision()),
+		LoadInfo:     snapshot.GetLoadInfo(),
+		IndexInfos:   snapshot.GetIndexInfoList(),
 	}
 	if err := sub.handle(localSnapshot); err != nil {
 		s.removeSubscription(sub, err)

@@ -26,8 +26,6 @@ type fakeQVCollectionManager struct {
 	putIndexMeta    *segcorepb.CollectionIndexMeta
 	putLoadMeta     *querypb.LoadMetaInfo
 	putCount        int
-	updateSchema    *schemapb.CollectionSchema
-	updateBarrier   uint64
 	refCollection   int64
 	refCount        uint32
 	unrefCollection int64
@@ -46,12 +44,6 @@ func (m *fakeQVCollectionManager) PutOrRef(collectionID int64, schema *schemapb.
 	m.putIndexMeta = indexMeta
 	m.putLoadMeta = loadMeta
 	m.putCount++
-	return m.err
-}
-
-func (m *fakeQVCollectionManager) UpdateSchema(_ int64, schema *schemapb.CollectionSchema, schemaBarrierTs uint64) error {
-	m.updateSchema = schema
-	m.updateBarrier = schemaBarrierTs
 	return m.err
 }
 

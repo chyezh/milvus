@@ -3,15 +3,12 @@ package querycoordv2
 import (
 	"context"
 	"io"
-	"maps"
 	"slices"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
-	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
-	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -335,9 +332,8 @@ func TestQueryViewSegmentLoadInfoWatchSession_PushesSnapshotOnNotify(t *testing.
 		NumOfRows:    10,
 	}
 	mixCoord := &fakeSegmentLoadInfoWatchMixCoord{
-		loadInfo:       loadInfo,
-		indexes:        []*indexpb.IndexInfo{{CollectionID: collectionID, IndexID: 10}},
-		collectionInfo: &milvuspb.DescribeCollectionResponse{Schema: &schemapb.CollectionSchema{Version: 7}, UpdateTimestamp: 700},
+		loadInfo: loadInfo,
+		indexes:  []*indexpb.IndexInfo{{CollectionID: collectionID, IndexID: 10}},
 	}
 	server := &Server{
 		ctx:                    ctx,
@@ -373,8 +369,6 @@ func TestQueryViewSegmentLoadInfoWatchSession_PushesSnapshotOnNotify(t *testing.
 	require.Len(t, resp.GetSnapshots(), 1)
 	assert.Equal(t, segmentID, resp.GetSnapshots()[0].GetSegmentID())
 	assert.Equal(t, int64(20), resp.GetSnapshots()[0].GetLoadInfo().GetNumOfRows())
-	assert.Equal(t, int32(7), resp.GetSnapshots()[0].GetCollectionSchema().GetVersion())
-	assert.Equal(t, uint64(700), resp.GetSnapshots()[0].GetSchemaBarrierTs())
 
 	stream.closeRecv()
 	require.NoError(t, <-done)
@@ -386,104 +380,6 @@ func TestQueryViewSegmentLoadInfoWatchSession_PushesSnapshotOnNotify(t *testing.
 	})
 	server.NotifyQueryViewSegmentLoadInfoChanged(collectionID, segmentID)
 	assertNoWatchResponse(t, stream.send)
-}
-
-func TestQueryViewSegmentLoadInfoWatcher_NotifyCollection(t *testing.T) {
-	watcher := newQueryViewSegmentLoadInfoWatcher()
-	first := newTestQueryViewSegmentLoadInfoWatchSession(watcher)
-	second := newTestQueryViewSegmentLoadInfoWatchSession(watcher)
-	watcher.register(first)
-	watcher.register(second)
-	t.Cleanup(func() {
-		watcher.unregister(first)
-		watcher.unregister(second)
-	})
-
-	first.subscribe(queryViewSegmentLoadInfoSubscription{collectionID: 100, segmentID: 1000})
-	first.subscribe(queryViewSegmentLoadInfoSubscription{collectionID: 200, segmentID: 2000})
-	second.subscribe(queryViewSegmentLoadInfoSubscription{collectionID: 100, segmentID: 1000})
-	second.subscribe(queryViewSegmentLoadInfoSubscription{collectionID: 100, segmentID: 1001})
-
-	watcher.notifyCollection(100)
-
-	assert.Equal(t, map[int64]struct{}{1000: {}}, dirtySegments(first))
-	assert.Equal(t, map[int64]struct{}{1000: {}, 1001: {}}, dirtySegments(second))
-}
-
-func TestQueryViewSegmentLoadInfoWatcher_CleansCollectionIndex(t *testing.T) {
-	watcher := newQueryViewSegmentLoadInfoWatcher()
-	session := newTestQueryViewSegmentLoadInfoWatchSession(watcher)
-	watcher.register(session)
-	session.subscribe(queryViewSegmentLoadInfoSubscription{collectionID: 100, segmentID: 1000})
-	session.subscribe(queryViewSegmentLoadInfoSubscription{collectionID: 200, segmentID: 2000})
-
-	session.unsubscribe(1000)
-	assert.NotContains(t, watcher.byCollection, int64(100))
-	assert.Contains(t, watcher.byCollection, int64(200))
-
-	watcher.unregister(session)
-	assert.Empty(t, watcher.bySegment)
-	assert.Empty(t, watcher.byCollection)
-}
-
-func TestQueryViewSegmentLoadInfoWatcher_ConcurrentSubscriptionChanges(t *testing.T) {
-	watcher := newQueryViewSegmentLoadInfoWatcher()
-	sessions := make([]*queryViewSegmentLoadInfoWatchSession, 8)
-	for i := range sessions {
-		sessions[i] = newTestQueryViewSegmentLoadInfoWatchSession(watcher)
-		watcher.register(sessions[i])
-	}
-
-	var wg sync.WaitGroup
-	for sessionIndex, session := range sessions {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for offset := range 200 {
-				collectionID := int64(100 + offset%4)
-				segmentID := int64(sessionIndex*1000 + offset + 1)
-				session.subscribe(queryViewSegmentLoadInfoSubscription{
-					collectionID: collectionID,
-					segmentID:    segmentID,
-				})
-				if offset%2 == 0 {
-					session.unsubscribe(segmentID)
-				}
-			}
-		}()
-	}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for range 200 {
-			for collectionID := int64(100); collectionID < 104; collectionID++ {
-				watcher.notifyCollection(collectionID)
-			}
-		}
-	}()
-	wg.Wait()
-
-	for _, session := range sessions {
-		watcher.unregister(session)
-	}
-	assert.Empty(t, watcher.bySession)
-	assert.Empty(t, watcher.bySegment)
-	assert.Empty(t, watcher.byCollection)
-}
-
-func newTestQueryViewSegmentLoadInfoWatchSession(watcher *queryViewSegmentLoadInfoWatcher) *queryViewSegmentLoadInfoWatchSession {
-	return &queryViewSegmentLoadInfoWatchSession{
-		watcher:       watcher,
-		subscriptions: make(map[int64]queryViewSegmentLoadInfoSubscription),
-		notifyCh:      make(chan struct{}, 1),
-		dirty:         make(map[int64]struct{}),
-	}
-}
-
-func dirtySegments(session *queryViewSegmentLoadInfoWatchSession) map[int64]struct{} {
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	return maps.Clone(session.dirty)
 }
 
 type eofSegmentLoadInfoWatchServer struct {
@@ -573,10 +469,9 @@ func assertNoWatchResponse(t *testing.T, ch <-chan *querypb.WatchQueryViewSegmen
 
 type fakeSegmentLoadInfoWatchMixCoord struct {
 	componenttypes.MixCoord
-	mu             sync.Mutex
-	loadInfo       *querypb.SegmentLoadInfo
-	indexes        []*indexpb.IndexInfo
-	collectionInfo *milvuspb.DescribeCollectionResponse
+	mu       sync.Mutex
+	loadInfo *querypb.SegmentLoadInfo
+	indexes  []*indexpb.IndexInfo
 }
 
 func (m *fakeSegmentLoadInfoWatchMixCoord) setLoadInfo(loadInfo *querypb.SegmentLoadInfo) {
@@ -589,10 +484,4 @@ func (m *fakeSegmentLoadInfoWatchMixCoord) GetQueryViewSegmentLoadInfos(ctx cont
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return []*querypb.SegmentLoadInfo{m.loadInfo}, m.indexes, nil
-}
-
-func (m *fakeSegmentLoadInfoWatchMixCoord) DescribeCollection(context.Context, *milvuspb.DescribeCollectionRequest) (*milvuspb.DescribeCollectionResponse, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.collectionInfo, nil
 }

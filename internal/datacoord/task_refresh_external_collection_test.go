@@ -1535,12 +1535,10 @@ func TestApplyExternalCollectionSegmentUpdate_UpsertExistingSegment(t *testing.T
 	collectionID := int64(100)
 	partitionID := int64(1)
 	segmentID := int64(10)
-	recorder := newQueryViewLoadInfoNotificationRecorder()
 	mt := &meta{
-		collections:               newTestCollections(collectionID),
-		segments:                  NewSegmentsInfo(),
-		catalog:                   &stubCatalog{},
-		queryViewLoadInfoNotifier: recorder,
+		collections: newTestCollections(collectionID),
+		segments:    NewSegmentsInfo(),
+		catalog:     &stubCatalog{},
 	}
 	oldSeg := &datapb.SegmentInfo{
 		ID:             segmentID,
@@ -1601,10 +1599,6 @@ func TestApplyExternalCollectionSegmentUpdate_UpsertExistingSegment(t *testing.T
 	assert.Equal(t, `{"base_path":"old","ver":2}`, got.GetManifestPath())
 	assert.Equal(t, int32(4), got.GetSchemaVersion())
 	assert.ElementsMatch(t, []int64{100, 101, 102, 103}, got.GetBinlogs()[0].GetChildFields())
-	assert.Equal(t, []queryViewLoadInfoNotification{{
-		collectionID: collectionID,
-		segmentIDs:   []int64{segmentID},
-	}}, recorder.segments())
 }
 
 func TestApplyExternalRefreshPatchClearsStatsPlaceholders(t *testing.T) {
@@ -2343,11 +2337,9 @@ func TestRefreshExternalCollectionTask_SetJobInfo_UpdateSegmentsInfoFailed(t *te
 	assert.NoError(t, err)
 
 	segments := NewSegmentsInfo()
-	recorder := newQueryViewLoadInfoNotificationRecorder()
 	mt := &meta{
-		segments:                  segments,
-		collections:               newTestCollections(100),
-		queryViewLoadInfoNotifier: recorder,
+		segments:    segments,
+		collections: newTestCollections(100),
 	}
 
 	alloc := &stubAllocator{nextID: 99999}
@@ -2375,7 +2367,6 @@ func TestRefreshExternalCollectionTask_SetJobInfo_UpdateSegmentsInfoFailed(t *te
 	err = task.SetJobInfo(ctx, resp)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "update segments failed")
-	assert.Empty(t, recorder.segments())
 }
 
 // ==================== CreateTaskOnWorker Additional Tests ====================

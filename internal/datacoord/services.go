@@ -1218,17 +1218,12 @@ func (s *Server) GetStreamingNodeQueryViewResources(ctx context.Context, req *da
 			))
 			return resp, nil
 		}
-		cloned := segment.Clone()
-		if err := binlog.DecompressBinLogs(cloned.SegmentInfo); err != nil {
-			resp.Status = merr.Status(err)
-			return resp, nil
-		}
-		byID[cloned.GetID()] = &datapb.StreamingNodeBM25Resource{
-			SegmentId:      cloned.GetID(),
-			PartitionId:    cloned.GetPartitionID(),
-			Bm25Binlogs:    cloned.GetBm25Statslogs(),
-			StorageVersion: cloned.GetStorageVersion(),
-			ManifestPath:   cloned.GetManifestPath(),
+		byID[segment.GetID()] = &datapb.StreamingNodeBM25Resource{
+			SegmentId:      segment.GetID(),
+			PartitionId:    segment.GetPartitionID(),
+			Bm25Binlogs:    segment.GetBm25Statslogs(),
+			StorageVersion: segment.GetStorageVersion(),
+			ManifestPath:   segment.GetManifestPath(),
 		}
 	}
 	for _, segmentID := range segmentIDs {
@@ -1265,9 +1260,6 @@ func (s *Server) GetQueryViewSegmentLoadInfos(ctx context.Context, collectionID 
 			return nil, nil, merr.WrapErrSegmentNotFound(segmentID, fmt.Sprintf("segment does not belong to collection %d", collectionID))
 		}
 		cloned := segment.Clone()
-		if err := s.appendCompactToDeleteSources(ctx, cloned, segmentID); err != nil {
-			return nil, nil, err
-		}
 		if err := binlog.DecompressBinLogs(cloned.SegmentInfo); err != nil {
 			return nil, nil, err
 		}
@@ -1303,25 +1295,24 @@ func packQueryViewCollectionIndexInfos(indexes []*model.Index) []*indexpb.IndexI
 
 func (s *Server) packQueryViewSegmentLoadInfo(segment *datapb.SegmentInfo, indexInfos []*indexpb.IndexInfo, segmentIndexes map[int64]*model.SegmentIndex) *querypb.SegmentLoadInfo {
 	loadInfo := &querypb.SegmentLoadInfo{
-		SegmentID:          segment.GetID(),
-		PartitionID:        segment.GetPartitionID(),
-		CollectionID:       segment.GetCollectionID(),
-		BinlogPaths:        segment.GetBinlogs(),
-		NumOfRows:          segment.GetNumOfRows(),
-		Deltalogs:          segment.GetDeltalogs(),
-		CompactionFrom:     segment.GetCompactionFrom(),
-		IndexInfos:         s.packQueryViewFieldIndexInfos(segmentIndexes, indexInfos),
-		InsertChannel:      segment.GetInsertChannel(),
-		StartPosition:      segment.GetStartPosition(),
-		DeltaPosition:      segment.GetDmlPosition(),
-		Level:              segment.GetLevel(),
-		StorageVersion:     segment.GetStorageVersion(),
-		IsSorted:           segment.GetIsSorted(),
-		Priority:           commonpb.LoadPriority_HIGH,
-		ManifestPath:       segment.GetManifestPath(),
-		DataVersion:        segment.GetDataVersion(),
-		CommitTimestamp:    segment.GetCommitTimestamp(),
-		ChildManifestPaths: segment.GetChildManifestPaths(),
+		SegmentID:       segment.GetID(),
+		PartitionID:     segment.GetPartitionID(),
+		CollectionID:    segment.GetCollectionID(),
+		BinlogPaths:     segment.GetBinlogs(),
+		NumOfRows:       segment.GetNumOfRows(),
+		Deltalogs:       segment.GetDeltalogs(),
+		CompactionFrom:  segment.GetCompactionFrom(),
+		IndexInfos:      s.packQueryViewFieldIndexInfos(segmentIndexes, indexInfos),
+		InsertChannel:   segment.GetInsertChannel(),
+		StartPosition:   segment.GetStartPosition(),
+		DeltaPosition:   segment.GetDmlPosition(),
+		Level:           segment.GetLevel(),
+		StorageVersion:  segment.GetStorageVersion(),
+		IsSorted:        segment.GetIsSorted(),
+		Priority:        commonpb.LoadPriority_HIGH,
+		ManifestPath:    segment.GetManifestPath(),
+		DataVersion:     segment.GetDataVersion(),
+		CommitTimestamp: segment.GetCommitTimestamp(),
 	}
 	if segment.GetManifestPath() == "" {
 		loadInfo.Statslogs = segment.GetStatslogs()
