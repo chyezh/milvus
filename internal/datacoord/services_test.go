@@ -4668,6 +4668,7 @@ func TestServer_BatchUpdateManifest_Callback(t *testing.T) {
 		ctx := context.Background()
 
 		registry.ResetRegistration()
+		recorder := newQueryViewLoadInfoNotificationRecorder()
 
 		mockUpdateSegmentsInfo := mockey.Mock((*meta).UpdateSegmentsInfo).To(
 			func(m *meta, ctx context.Context, operators ...UpdateOperator) error {
@@ -4676,8 +4677,11 @@ func TestServer_BatchUpdateManifest_Callback(t *testing.T) {
 		defer mockUpdateSegmentsInfo.UnPatch()
 
 		server := &Server{
-			ctx:  ctx,
-			meta: &meta{segments: NewSegmentsInfo()},
+			ctx: ctx,
+			meta: &meta{
+				segments:                  NewSegmentsInfo(),
+				queryViewLoadInfoNotifier: recorder,
+			},
 		}
 		server.stateCode.Store(commonpb.StateCode_Healthy)
 		RegisterDDLCallbacks(server)
@@ -4703,6 +4707,10 @@ func TestServer_BatchUpdateManifest_Callback(t *testing.T) {
 			},
 		})
 		assert.NoError(t, err)
+		assert.Equal(t, []queryViewLoadInfoNotification{{
+			collectionID: 100,
+			segmentIDs:   []int64{1, 2},
+		}}, recorder.segments())
 	})
 
 	t.Run("empty_items", func(t *testing.T) {
@@ -4739,6 +4747,7 @@ func TestServer_BatchUpdateManifest_Callback(t *testing.T) {
 		ctx := context.Background()
 
 		registry.ResetRegistration()
+		recorder := newQueryViewLoadInfoNotificationRecorder()
 
 		mockUpdateSegmentsInfo := mockey.Mock((*meta).UpdateSegmentsInfo).To(
 			func(m *meta, ctx context.Context, operators ...UpdateOperator) error {
@@ -4747,8 +4756,11 @@ func TestServer_BatchUpdateManifest_Callback(t *testing.T) {
 		defer mockUpdateSegmentsInfo.UnPatch()
 
 		server := &Server{
-			ctx:  ctx,
-			meta: &meta{segments: NewSegmentsInfo()},
+			ctx: ctx,
+			meta: &meta{
+				segments:                  NewSegmentsInfo(),
+				queryViewLoadInfoNotifier: recorder,
+			},
 		}
 		server.stateCode.Store(commonpb.StateCode_Healthy)
 		RegisterDDLCallbacks(server)
@@ -4773,6 +4785,7 @@ func TestServer_BatchUpdateManifest_Callback(t *testing.T) {
 			},
 		})
 		assert.Error(t, err)
+		assert.Empty(t, recorder.segments())
 	})
 
 	t.Run("v2_column_groups_dispatches_operator", func(t *testing.T) {
@@ -5720,6 +5733,12 @@ func TestHandleCommitVchannelRPC(t *testing.T) {
 	ctx := context.Background()
 
 	importMetaMock := NewMockImportMeta(t)
+	importMetaMock.EXPECT().GetJob(mock.Anything, int64(3001)).Return(&importJob{
+		ImportJob: &datapb.ImportJob{
+			JobID:        3001,
+			CollectionID: 100,
+		},
+	})
 	importMetaMock.EXPECT().HandleCommitVchannel(mock.Anything, int64(3001), "vchan-0", mock.AnythingOfType("func() error")).
 		RunAndReturn(func(ctx context.Context, jobID int64, vchannel string, callback func() error) error {
 			// Execute the callback to verify it works correctly.

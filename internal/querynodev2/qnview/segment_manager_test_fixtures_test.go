@@ -198,6 +198,8 @@ type fakeCollectionRuntimeGuard struct {
 	databaseName   string
 	schema         *schemapb.CollectionSchema
 	schemaVersion  int64
+	updatedSchema  *schemapb.CollectionSchema
+	schemaBarrier  uint64
 	updatedIndexes []*indexpb.IndexInfo
 	updateErr      error
 }
@@ -234,6 +236,13 @@ func (g *fakeCollectionRuntimeGuard) PinnedCollection() *segments.Collection {
 
 func (g *fakeCollectionRuntimeGuard) UpdateIndexMeta(_ context.Context, indexes []*indexpb.IndexInfo) error {
 	g.updatedIndexes = append([]*indexpb.IndexInfo(nil), indexes...)
+	return g.updateErr
+}
+
+func (g *fakeCollectionRuntimeGuard) UpdateSchema(_ context.Context, schema *schemapb.CollectionSchema, schemaBarrierTs uint64) error {
+	g.updatedSchema = schema
+	g.schemaBarrier = schemaBarrierTs
+	g.schema = schema
 	return g.updateErr
 }
 

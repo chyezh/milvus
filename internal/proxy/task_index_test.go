@@ -24,6 +24,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bytedance/mockey"
 	"github.com/cockroachdb/errors"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -176,6 +177,31 @@ func TestDropIndexTask_PreExecute(t *testing.T) {
 		err := dit.PreExecute(ctx)
 		assert.NoError(t, err)
 	})
+}
+
+func TestAlterIndexTaskPreExecuteAllowsLoadedCollection(t *testing.T) {
+	ctx := context.Background()
+	collectionID := UniqueID(1)
+	collectionName := "loaded_collection"
+
+	originalMetaCache := globalMetaCache
+	globalMetaCache = &MetaCache{}
+	defer func() { globalMetaCache = originalMetaCache }()
+	mockGetCollectionID := mockey.Mock((*MetaCache).GetCollectionID).Return(collectionID, nil).Build()
+	defer mockGetCollectionID.UnPatch()
+	task := &alterIndexTask{
+		ctx: ctx,
+		req: &milvuspb.AlterIndexRequest{
+			Base:           &commonpb.MsgBase{},
+			CollectionName: collectionName,
+			IndexName:      "tenant_inverted",
+			ExtraParams: []*commonpb.KeyValuePair{
+				{Key: common.MmapEnabledKey, Value: "true"},
+			},
+		},
+	}
+
+	assert.NoError(t, task.PreExecute(ctx))
 }
 
 func getMockQueryCoord() *mocks.MockMixCoordClient {

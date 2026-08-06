@@ -12,6 +12,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
+	"github.com/milvus-io/milvus/internal/querynodev2/qnview"
 	"github.com/milvus-io/milvus/internal/querynodev2/segments"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 )
@@ -41,6 +42,28 @@ func TestQueryViewPhysicalSegmentLoader_LoadBorrowsCollectionAndWrapsSegment(t *
 	assert.Equal(t, int64(100), loaded.PartitionID())
 	assert.Equal(t, "v1", loaded.VChannel())
 	assert.Equal(t, uint64(50), loaded.TransformStartAfterTimeTick())
+}
+
+func TestQueryViewPhysicalSegmentLoaderUpdateDoesNotUseContentHashAsOrderedLoadVersion(t *testing.T) {
+	loader := &fakeQVLoader{}
+	physical := newQueryViewPhysicalSegmentLoader(&fakeQVCollectionManager{}, &fakeQVSegmentManager{}, loader)
+	segment := newQueryViewTransformSegment(&fakeQVSegment{id: 10, partitionID: 100}, &fakeQVSegmentManager{}, "v1", 50)
+
+	err := physical.Update(
+		context.Background(),
+		segment,
+		fakeQVCollectionRuntime{collectionID: 1},
+		qnview.SegmentLoadInfoSnapshot{
+			SegmentID: 10,
+			Revision:  qnview.SegmentLoadInfoRevision{Revision: ^uint64(0)},
+			LoadInfo:  &querypb.SegmentLoadInfo{CollectionID: 1, SegmentID: 10},
+		},
+		qnview.SegmentUpdateLoadIndex,
+	)
+	require.NoError(t, err)
+	assert.True(t, loader.loadIndexCalled)
+	assert.Zero(t, loader.version,
+		"SegmentLoadInfoRevision is a non-monotonic equality token and must not enter an ordered loader version slot")
 }
 
 func TestRealQVSegmentLoader_NewSegmentUsesPinnedCollection(t *testing.T) {

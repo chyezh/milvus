@@ -2,6 +2,7 @@ package qvresource
 
 import (
 	"context"
+	"sync"
 
 	"github.com/cockroachdb/errors"
 
@@ -19,12 +20,46 @@ import (
 type queryViewCollectionRuntimeManager struct {
 	meta        qnview.QueryViewLoadMetadataProvider
 	collections qvCollectionManager
+
+	loadMetadataMu     sync.Mutex
+	loadMetadataStates map[int64]*collectionLoadMetadataState
+}
+
+type collectionLoadMetadataState struct {
+	mu              sync.Mutex
+	deliveryVersion uint64
+	refs            uint32
 }
 
 func newQueryViewCollectionRuntimeManager(meta qnview.QueryViewLoadMetadataProvider, collections qvCollectionManager) *queryViewCollectionRuntimeManager {
 	return &queryViewCollectionRuntimeManager{
-		meta:        meta,
-		collections: collections,
+		meta:               meta,
+		collections:        collections,
+		loadMetadataStates: make(map[int64]*collectionLoadMetadataState),
+	}
+}
+
+func (m *queryViewCollectionRuntimeManager) acquireLoadMetadataState(collectionID int64) *collectionLoadMetadataState {
+	m.loadMetadataMu.Lock()
+	defer m.loadMetadataMu.Unlock()
+	state := m.loadMetadataStates[collectionID]
+	if state == nil {
+		state = &collectionLoadMetadataState{}
+		m.loadMetadataStates[collectionID] = state
+	}
+	state.refs++
+	return state
+}
+
+func (m *queryViewCollectionRuntimeManager) releaseLoadMetadataState(collectionID int64, expected *collectionLoadMetadataState) {
+	m.loadMetadataMu.Lock()
+	defer m.loadMetadataMu.Unlock()
+	if m.loadMetadataStates[collectionID] != expected {
+		return
+	}
+	expected.refs--
+	if expected.refs == 0 {
+		delete(m.loadMetadataStates, collectionID)
 	}
 }
 
@@ -66,8 +101,10 @@ func (m *queryViewCollectionRuntimeManager) Acquire(ctx context.Context, view *q
 		ccollection = localCollection.GetCCollection()
 	}
 	return &queryViewCollectionRuntimeGuard{
+		manager:       m,
 		collections:   m.collections,
 		collection:    localCollection,
+		loadMetadata:  m.acquireLoadMetadataState(meta.GetCollectionId()),
 		collectionID:  meta.GetCollectionId(),
 		databaseName:  collection.GetDbName(),
 		schema:        collection.GetSchema(),
@@ -92,8 +129,10 @@ func (m *queryViewCollectionRuntimeManager) loadInfo(ctx context.Context, meta *
 }
 
 type queryViewCollectionRuntimeGuard struct {
+	manager       *queryViewCollectionRuntimeManager
 	collections   qvCollectionManager
 	collection    *segments.Collection
+	loadMetadata  *collectionLoadMetadataState
 	collectionID  int64
 	databaseName  string
 	schema        *schemapb.CollectionSchema
@@ -110,6 +149,9 @@ func (g *queryViewCollectionRuntimeGuard) DatabaseName() string {
 }
 
 func (g *queryViewCollectionRuntimeGuard) Schema() *schemapb.CollectionSchema {
+	if g.collection != nil {
+		return g.collection.Schema()
+	}
 	return g.schema
 }
 
@@ -126,12 +168,46 @@ func (g *queryViewCollectionRuntimeGuard) PinnedCollection() *segments.Collectio
 }
 
 func (g *queryViewCollectionRuntimeGuard) UpdateIndexMeta(ctx context.Context, indexes []*indexpb.IndexInfo) error {
-	indexMeta := segments.ComposeIndexMeta(ctx, indexes, g.schema)
+	indexMeta := segments.ComposeIndexMeta(ctx, indexes, g.collection.Schema())
 	return g.collection.UpdateIndexMeta(indexMeta)
+}
+
+func (g *queryViewCollectionRuntimeGuard) UpdateSchema(_ context.Context, schema *schemapb.CollectionSchema, schemaBarrierTs uint64) error {
+	return g.collections.UpdateSchema(g.collectionID, schema, schemaBarrierTs)
+}
+
+func (g *queryViewCollectionRuntimeGuard) UpdateLoadMetadata(ctx context.Context, deliveryVersion uint64, schema *schemapb.CollectionSchema, schemaBarrierTs uint64, indexes []*indexpb.IndexInfo) error {
+	if deliveryVersion == 0 || g.loadMetadata == nil {
+		if schema != nil {
+			if err := g.UpdateSchema(ctx, schema, schemaBarrierTs); err != nil {
+				return err
+			}
+		}
+		return g.UpdateIndexMeta(ctx, indexes)
+	}
+
+	g.loadMetadata.mu.Lock()
+	defer g.loadMetadata.mu.Unlock()
+	if deliveryVersion <= g.loadMetadata.deliveryVersion {
+		return nil
+	}
+	if schema != nil {
+		if err := g.UpdateSchema(ctx, schema, schemaBarrierTs); err != nil {
+			return err
+		}
+	}
+	if err := g.UpdateIndexMeta(ctx, indexes); err != nil {
+		return err
+	}
+	g.loadMetadata.deliveryVersion = deliveryVersion
+	return nil
 }
 
 func (g *queryViewCollectionRuntimeGuard) Release() {
 	g.collections.Unref(g.collectionID, 1)
+	if g.manager != nil {
+		g.manager.releaseLoadMetadataState(g.collectionID, g.loadMetadata)
+	}
 }
 
 func loadInfoPartitionIDs(info qnview.QueryViewLoadInfo, fallback *viewpb.QueryViewOfQueryNode) []int64 {

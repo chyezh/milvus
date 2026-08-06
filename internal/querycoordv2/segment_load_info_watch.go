@@ -1,6 +1,7 @@
 package querycoordv2
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"hash/fnv"
@@ -11,9 +12,12 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
+	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
+	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
+	"github.com/milvus-io/milvus/pkg/v3/util/commonpbutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
@@ -49,10 +53,25 @@ func (s *Server) WatchQueryViewSegmentLoadInfo(stream querypb.QueryCoord_WatchQu
 }
 
 func (s *Server) NotifyQueryViewSegmentLoadInfoChanged(collectionID int64, segmentIDs ...int64) {
+	s.NotifySegments(collectionID, segmentIDs...)
+}
+
+func (s *Server) NotifySegments(collectionID int64, segmentIDs ...int64) {
 	if s.segmentLoadInfoWatcher == nil {
 		return
 	}
 	s.segmentLoadInfoWatcher.notify(collectionID, segmentIDs...)
+}
+
+func (s *Server) NotifyQueryViewCollectionLoadInfoChanged(collectionID int64) {
+	s.NotifyCollection(collectionID)
+}
+
+func (s *Server) NotifyCollection(collectionID int64) {
+	if s.segmentLoadInfoWatcher == nil {
+		return
+	}
+	s.segmentLoadInfoWatcher.notifyCollection(collectionID)
 }
 
 func (s *queryViewSegmentLoadInfoWatchSession) run() error {
@@ -202,17 +221,31 @@ func (s *queryViewSegmentLoadInfoWatchSession) buildSnapshots(ctx context.Contex
 		if err != nil {
 			return nil, err
 		}
+		collection, err := s.server.mixCoord.DescribeCollection(ctx, &milvuspb.DescribeCollectionRequest{
+			Base: commonpbutil.NewMsgBase(
+				commonpbutil.WithMsgType(commonpb.MsgType_DescribeCollection),
+			),
+			CollectionID: collectionID,
+		})
+		if err := merr.CheckRPCCall(collection, err); err != nil {
+			return nil, err
+		}
+		if collection.GetSchema() == nil {
+			return nil, merr.WrapErrServiceInternalMsg("collection schema is missing for query view segment load info, collectionID=%d", collectionID)
+		}
 		for _, loadInfo := range infos {
 			revision := calculateQueryViewSegmentLoadInfoRevision(loadInfo, indexInfos)
 			if sameQueryViewSegmentLoadInfoRevision(expected[loadInfo.GetSegmentID()], revision) {
 				continue
 			}
 			snapshots = append(snapshots, &querypb.QueryViewSegmentLoadInfoSnapshot{
-				CollectionID:  collectionID,
-				SegmentID:     loadInfo.GetSegmentID(),
-				Revision:      revision,
-				LoadInfo:      loadInfo,
-				IndexInfoList: indexInfos,
+				CollectionID:     collectionID,
+				SegmentID:        loadInfo.GetSegmentID(),
+				Revision:         revision,
+				LoadInfo:         loadInfo,
+				IndexInfoList:    indexInfos,
+				CollectionSchema: collection.GetSchema(),
+				SchemaBarrierTs:  collection.GetUpdateTimestamp(),
 			})
 		}
 	}
@@ -225,17 +258,18 @@ func (s *queryViewSegmentLoadInfoWatchSession) subscribe(subscription queryViewS
 	delete(s.dirty, subscription.segmentID)
 	s.mu.Unlock()
 	if s.watcher != nil {
-		s.watcher.subscribe(s, subscription.segmentID)
+		s.watcher.subscribe(s, subscription.collectionID, subscription.segmentID)
 	}
 }
 
 func (s *queryViewSegmentLoadInfoWatchSession) unsubscribe(segmentID int64) {
 	s.mu.Lock()
+	subscription, ok := s.subscriptions[segmentID]
 	delete(s.subscriptions, segmentID)
 	delete(s.dirty, segmentID)
 	s.mu.Unlock()
-	if s.watcher != nil {
-		s.watcher.unsubscribe(s, segmentID)
+	if ok && s.watcher != nil {
+		s.watcher.unsubscribe(s, subscription.collectionID, segmentID)
 	}
 }
 
@@ -294,15 +328,19 @@ func (s *queryViewSegmentLoadInfoWatchSession) clear() {
 }
 
 type queryViewSegmentLoadInfoWatcher struct {
-	mu        sync.RWMutex
-	sessions  map[*queryViewSegmentLoadInfoWatchSession]struct{}
-	bySegment map[int64]map[*queryViewSegmentLoadInfoWatchSession]struct{}
+	mu           sync.RWMutex
+	sessions     map[*queryViewSegmentLoadInfoWatchSession]struct{}
+	bySession    map[*queryViewSegmentLoadInfoWatchSession]map[int64]int64
+	bySegment    map[int64]map[*queryViewSegmentLoadInfoWatchSession]struct{}
+	byCollection map[int64]map[int64]map[*queryViewSegmentLoadInfoWatchSession]struct{}
 }
 
 func newQueryViewSegmentLoadInfoWatcher() *queryViewSegmentLoadInfoWatcher {
 	return &queryViewSegmentLoadInfoWatcher{
-		sessions:  make(map[*queryViewSegmentLoadInfoWatchSession]struct{}),
-		bySegment: make(map[int64]map[*queryViewSegmentLoadInfoWatchSession]struct{}),
+		sessions:     make(map[*queryViewSegmentLoadInfoWatchSession]struct{}),
+		bySession:    make(map[*queryViewSegmentLoadInfoWatchSession]map[int64]int64),
+		bySegment:    make(map[int64]map[*queryViewSegmentLoadInfoWatchSession]struct{}),
+		byCollection: make(map[int64]map[int64]map[*queryViewSegmentLoadInfoWatchSession]struct{}),
 	}
 }
 
@@ -310,8 +348,9 @@ func (w *queryViewSegmentLoadInfoWatcher) register(session *queryViewSegmentLoad
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.sessions[session] = struct{}{}
-	for segmentID := range session.subscriptions {
-		w.addSubscriptionLocked(session, segmentID)
+	w.bySession[session] = make(map[int64]int64)
+	for _, subscription := range session.subscriptions {
+		w.addSubscriptionLocked(session, subscription.collectionID, subscription.segmentID)
 	}
 }
 
@@ -319,42 +358,77 @@ func (w *queryViewSegmentLoadInfoWatcher) unregister(session *queryViewSegmentLo
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	delete(w.sessions, session)
-	for segmentID, sessions := range w.bySegment {
-		delete(sessions, session)
-		if len(sessions) == 0 {
-			delete(w.bySegment, segmentID)
-		}
+	for segmentID, collectionID := range w.bySession[session] {
+		w.removeSubscriptionLocked(session, collectionID, segmentID)
 	}
+	delete(w.bySession, session)
 }
 
-func (w *queryViewSegmentLoadInfoWatcher) subscribe(session *queryViewSegmentLoadInfoWatchSession, segmentID int64) {
+func (w *queryViewSegmentLoadInfoWatcher) subscribe(session *queryViewSegmentLoadInfoWatchSession, collectionID, segmentID int64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if _, ok := w.sessions[session]; !ok {
 		return
 	}
-	w.addSubscriptionLocked(session, segmentID)
+	w.addSubscriptionLocked(session, collectionID, segmentID)
 }
 
-func (w *queryViewSegmentLoadInfoWatcher) addSubscriptionLocked(session *queryViewSegmentLoadInfoWatchSession, segmentID int64) {
+func (w *queryViewSegmentLoadInfoWatcher) addSubscriptionLocked(session *queryViewSegmentLoadInfoWatchSession, collectionID, segmentID int64) {
+	if previousCollectionID, ok := w.bySession[session][segmentID]; ok {
+		w.removeSubscriptionLocked(session, previousCollectionID, segmentID)
+	}
+	w.bySession[session][segmentID] = collectionID
+
 	sessions, ok := w.bySegment[segmentID]
 	if !ok {
 		sessions = make(map[*queryViewSegmentLoadInfoWatchSession]struct{})
 		w.bySegment[segmentID] = sessions
 	}
 	sessions[session] = struct{}{}
+
+	segments, ok := w.byCollection[collectionID]
+	if !ok {
+		segments = make(map[int64]map[*queryViewSegmentLoadInfoWatchSession]struct{})
+		w.byCollection[collectionID] = segments
+	}
+	collectionSessions, ok := segments[segmentID]
+	if !ok {
+		collectionSessions = make(map[*queryViewSegmentLoadInfoWatchSession]struct{})
+		segments[segmentID] = collectionSessions
+	}
+	collectionSessions[session] = struct{}{}
 }
 
-func (w *queryViewSegmentLoadInfoWatcher) unsubscribe(session *queryViewSegmentLoadInfoWatchSession, segmentID int64) {
+func (w *queryViewSegmentLoadInfoWatcher) unsubscribe(session *queryViewSegmentLoadInfoWatchSession, collectionID, segmentID int64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.removeSubscriptionLocked(session, collectionID, segmentID)
+}
+
+func (w *queryViewSegmentLoadInfoWatcher) removeSubscriptionLocked(session *queryViewSegmentLoadInfoWatchSession, collectionID, segmentID int64) {
+	delete(w.bySession[session], segmentID)
+
 	sessions, ok := w.bySegment[segmentID]
+	if ok {
+		delete(sessions, session)
+		if len(sessions) == 0 {
+			delete(w.bySegment, segmentID)
+		}
+	}
+
+	segments, ok := w.byCollection[collectionID]
 	if !ok {
 		return
 	}
-	delete(sessions, session)
-	if len(sessions) == 0 {
-		delete(w.bySegment, segmentID)
+	collectionSessions, ok := segments[segmentID]
+	if ok {
+		delete(collectionSessions, session)
+		if len(collectionSessions) == 0 {
+			delete(segments, segmentID)
+		}
+	}
+	if len(segments) == 0 {
+		delete(w.byCollection, collectionID)
 	}
 }
 
@@ -375,11 +449,28 @@ func (w *queryViewSegmentLoadInfoWatcher) notify(collectionID int64, segmentIDs 
 	}
 }
 
+func (w *queryViewSegmentLoadInfoWatcher) notifyCollection(collectionID int64) {
+	if collectionID == 0 {
+		return
+	}
+	targets := make(map[*queryViewSegmentLoadInfoWatchSession][]int64)
+	w.mu.RLock()
+	for segmentID, sessions := range w.byCollection[collectionID] {
+		for session := range sessions {
+			targets[session] = append(targets[session], segmentID)
+		}
+	}
+	w.mu.RUnlock()
+	for session, segmentIDs := range targets {
+		session.markDirty(collectionID, segmentIDs)
+	}
+}
+
 func calculateQueryViewSegmentLoadInfoRevision(loadInfo *querypb.SegmentLoadInfo, indexInfos []*indexpb.IndexInfo) *querypb.QueryViewSegmentLoadInfoRevision {
-	snapshot := &querypb.QueryViewSegmentLoadInfoSnapshot{
+	snapshot := proto.Clone(&querypb.QueryViewSegmentLoadInfoSnapshot{
 		LoadInfo:      loadInfo,
 		IndexInfoList: indexInfos,
-	}
+	}).(*querypb.QueryViewSegmentLoadInfoSnapshot)
 	canonicalizeQueryViewSegmentLoadInfoSnapshot(snapshot)
 	return &querypb.QueryViewSegmentLoadInfoRevision{
 		LoadInfoRevision: hashProto(snapshot),
@@ -398,11 +489,79 @@ func canonicalizeQueryViewSegmentLoadInfoSnapshot(snapshot *querypb.QueryViewSeg
 	if loadInfo == nil {
 		return
 	}
+	canonicalizeFieldBinlogs(loadInfo.BinlogPaths)
+	canonicalizeFieldBinlogs(loadInfo.Statslogs)
+	canonicalizeFieldBinlogs(loadInfo.Deltalogs)
+	canonicalizeFieldBinlogs(loadInfo.Bm25Logs)
 	for _, index := range loadInfo.GetIndexInfos() {
 		sortKeyValuePairs(index.IndexParams)
 		slices.Sort(index.IndexFilePaths)
 	}
 	slices.SortFunc(loadInfo.IndexInfos, compareFieldIndexInfo)
+	for _, stats := range loadInfo.GetTextStatsLogs() {
+		slices.Sort(stats.Files)
+	}
+	for _, stats := range loadInfo.GetJsonKeyStatsLogs() {
+		slices.Sort(stats.Files)
+	}
+	slices.Sort(loadInfo.CompactionFrom)
+	slices.Sort(loadInfo.ChildManifestPaths)
+}
+
+func canonicalizeFieldBinlogs(fieldBinlogs []*datapb.FieldBinlog) {
+	for _, fieldBinlog := range fieldBinlogs {
+		slices.Sort(fieldBinlog.ChildFields)
+		slices.SortFunc(fieldBinlog.Binlogs, compareBinlog)
+	}
+	slices.SortFunc(fieldBinlogs, compareFieldBinlog)
+}
+
+func compareFieldBinlog(left, right *datapb.FieldBinlog) int {
+	if result := cmp.Compare(left.GetFieldID(), right.GetFieldID()); result != 0 {
+		return result
+	}
+	if result := cmp.Compare(left.GetFormat(), right.GetFormat()); result != 0 {
+		return result
+	}
+	if result := slices.Compare(left.GetChildFields(), right.GetChildFields()); result != 0 {
+		return result
+	}
+	if result := slices.CompareFunc(left.GetBinlogs(), right.GetBinlogs(), compareBinlog); result != 0 {
+		return result
+	}
+	return compareProto(left, right)
+}
+
+func compareBinlog(left, right *datapb.Binlog) int {
+	if result := cmp.Compare(left.GetLogID(), right.GetLogID()); result != 0 {
+		return result
+	}
+	if result := cmp.Compare(left.GetLogPath(), right.GetLogPath()); result != 0 {
+		return result
+	}
+	if result := cmp.Compare(left.GetTimestampFrom(), right.GetTimestampFrom()); result != 0 {
+		return result
+	}
+	if result := cmp.Compare(left.GetTimestampTo(), right.GetTimestampTo()); result != 0 {
+		return result
+	}
+	if result := cmp.Compare(left.GetEntriesNum(), right.GetEntriesNum()); result != 0 {
+		return result
+	}
+	if result := cmp.Compare(left.GetLogSize(), right.GetLogSize()); result != 0 {
+		return result
+	}
+	if result := cmp.Compare(left.GetMemorySize(), right.GetMemorySize()); result != 0 {
+		return result
+	}
+	return compareProto(left, right)
+}
+
+func compareProto(left, right proto.Message) int {
+	options := proto.MarshalOptions{Deterministic: true}
+	leftBytes, _ := options.Marshal(left)
+	rightBytes, _ := options.Marshal(right)
+	return bytes.Compare(leftBytes, rightBytes)
 }
 
 func sortKeyValuePairs(pairs []*commonpb.KeyValuePair) {
@@ -410,7 +569,10 @@ func sortKeyValuePairs(pairs []*commonpb.KeyValuePair) {
 		if result := cmp.Compare(left.GetKey(), right.GetKey()); result != 0 {
 			return result
 		}
-		return cmp.Compare(left.GetValue(), right.GetValue())
+		if result := cmp.Compare(left.GetValue(), right.GetValue()); result != 0 {
+			return result
+		}
+		return compareProto(left, right)
 	})
 }
 
@@ -424,7 +586,10 @@ func compareIndexInfo(left, right *indexpb.IndexInfo) int {
 	if result := cmp.Compare(left.GetIndexID(), right.GetIndexID()); result != 0 {
 		return result
 	}
-	return cmp.Compare(left.GetIndexName(), right.GetIndexName())
+	if result := cmp.Compare(left.GetIndexName(), right.GetIndexName()); result != 0 {
+		return result
+	}
+	return compareProto(left, right)
 }
 
 func compareFieldIndexInfo(left, right *querypb.FieldIndexInfo) int {
@@ -437,7 +602,10 @@ func compareFieldIndexInfo(left, right *querypb.FieldIndexInfo) int {
 	if result := cmp.Compare(left.GetBuildID(), right.GetBuildID()); result != 0 {
 		return result
 	}
-	return cmp.Compare(left.GetIndexName(), right.GetIndexName())
+	if result := cmp.Compare(left.GetIndexName(), right.GetIndexName()); result != 0 {
+		return result
+	}
+	return compareProto(left, right)
 }
 
 func hashProto(message proto.Message) uint64 {

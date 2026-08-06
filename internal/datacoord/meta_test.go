@@ -3208,6 +3208,7 @@ func (suite *MetaBasicSuite) TestCompleteBumpSchemaVersionCompactionMutation() {
 
 func (suite *MetaBasicSuite) TestCompleteCompactionMutation_DispatchesBumpSchemaVersion() {
 	manifestPath := packed.MarshalManifestPath("/data/segments/1", 10)
+	recorder := newQueryViewLoadInfoNotificationRecorder()
 	segs := NewSegmentsInfo()
 	segs.SetSegment(1, &SegmentInfo{SegmentInfo: &datapb.SegmentInfo{
 		ID:             1,
@@ -3222,8 +3223,9 @@ func (suite *MetaBasicSuite) TestCompleteCompactionMutation_DispatchesBumpSchema
 		ManifestPath:   manifestPath,
 	}})
 	m := &meta{
-		catalog:  &datacoord.Catalog{MetaKv: NewMetaMemoryKV()},
-		segments: segs,
+		catalog:                   &datacoord.Catalog{MetaKv: NewMetaMemoryKV()},
+		segments:                  segs,
+		queryViewLoadInfoNotifier: recorder,
 	}
 	task := &datapb.CompactionTask{
 		InputSegments: []int64{1},
@@ -3247,6 +3249,10 @@ func (suite *MetaBasicSuite) TestCompleteCompactionMutation_DispatchesBumpSchema
 	suite.NotNil(mutation)
 	suite.Require().Len(infos, 1)
 	suite.EqualValues(task.GetSchema().GetVersion(), infos[0].GetSchemaVersion())
+	suite.Equal([]queryViewLoadInfoNotification{{
+		collectionID: 100,
+		segmentIDs:   []int64{1},
+	}}, recorder.segments())
 }
 
 func TestMeta(t *testing.T) {

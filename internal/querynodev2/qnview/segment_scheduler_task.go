@@ -43,7 +43,7 @@ func (t *SegmentLoadTask) load(ctx context.Context) (TransformSegment, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := updateCollectionIndexMeta(ctx, t.Collection, indexes); err != nil {
+	if err := updateCollectionRuntime(ctx, t.Collection, t.Snapshot, indexes); err != nil {
 		return nil, err
 	}
 	reservation, err := t.reserve(ctx, loadInfo)
@@ -104,14 +104,14 @@ func (t *SegmentUpdateTask) Execute(schedulerCtx context.Context) error {
 
 func (t *SegmentUpdateTask) update(ctx context.Context) error {
 	action := classifySegmentUpdate(t.Current, t.Snapshot.Revision)
+	if err := updateCollectionRuntime(ctx, t.Collection, t.Snapshot, t.Snapshot.IndexInfos); err != nil {
+		return err
+	}
 	if action == SegmentUpdateNone {
 		if t.OnUpdated != nil {
 			t.OnUpdated(t.Current)
 		}
 		return nil
-	}
-	if err := updateCollectionIndexMeta(ctx, t.Collection, t.Snapshot.IndexInfos); err != nil {
-		return err
 	}
 	if err := t.loader.Update(ctx, t.Segment, t.Collection, t.Snapshot, action); err != nil {
 		return err
@@ -165,6 +165,20 @@ func updateCollectionIndexMeta(ctx context.Context, collection CollectionRuntime
 		return nil
 	}
 	return updater.UpdateIndexMeta(ctx, indexes)
+}
+
+func updateCollectionRuntime(ctx context.Context, collection CollectionRuntime, snapshot SegmentLoadInfoSnapshot, indexes []*indexpb.IndexInfo) error {
+	if updater, ok := collection.(CollectionLoadMetadataUpdater); ok {
+		return updater.UpdateLoadMetadata(ctx, snapshot.DeliveryVersion, snapshot.CollectionSchema, snapshot.SchemaBarrierTs, indexes)
+	}
+	if snapshot.CollectionSchema != nil {
+		if updater, ok := collection.(CollectionSchemaUpdater); ok {
+			if err := updater.UpdateSchema(ctx, snapshot.CollectionSchema, snapshot.SchemaBarrierTs); err != nil {
+				return err
+			}
+		}
+	}
+	return updateCollectionIndexMeta(ctx, collection, indexes)
 }
 
 type transformStartSegment struct {

@@ -360,6 +360,12 @@ message QueryViewSegmentLoadInfoSnapshot {
     QueryViewSegmentLoadInfoRevision revision = 3;
     SegmentLoadInfo load_info = 4;
     repeated index.IndexInfo index_info_list = 5;
+    // Collection schema paired with the complete segment load snapshot. It is
+    // intentionally excluded from load_info_revision: the revision tracks the
+    // physical segment resource, while this schema lets the same update task
+    // refresh a retained QueryView's collection runtime before reopen.
+    schema.CollectionSchema collection_schema = 6;
+    uint64 schema_barrier_ts = 7;
 }
 
 message WatchQueryViewSegmentLoadInfoResponse {

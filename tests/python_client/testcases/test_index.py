@@ -1413,7 +1413,7 @@ class TestIndexInvalid(TestcaseBase):
         method: 1. data preparation and create index
         2. load collection
         3. enable mmap on index
-        expected: raise exception
+        expected: alter succeeds and the loaded collection remains searchable
         """
         c_name = cf.gen_unique_str(prefix)
         collection_w = self.init_collection_wrap(c_name, schema=default_schema)
@@ -1423,11 +1423,12 @@ class TestIndexInvalid(TestcaseBase):
         )
         collection_w.load()
         collection_w.alter_index(
-            binary_field_name,
+            ct.default_index_name,
             {"mmap.enabled": True},
-            check_task=CheckTasks.err_res,
-            check_items={ct.err_code: 104, ct.err_msg: "can't alter index on loaded collection"},
         )
+        assert collection_w.index(index_name=ct.default_index_name)[0].params["mmap.enabled"] == "True"
+        vectors = [[random.random() for _ in range(default_dim)] for _ in range(default_nq)]
+        collection_w.search(vectors, default_search_field, default_search_params, default_limit)
 
     @pytest.mark.tags(CaseLabel.L2)
     def test_turning_on_mmap_for_scalar_index(self):
@@ -2704,14 +2705,14 @@ class TestBitmapIndex(TestcaseBase):
         """
         target:
             1. alter offset cache on `BITMAP` index scalar
-            2. alter offset cache on loaded collection failed
+            2. alter offset cache on loaded collection
         method:
             1. build scalar index on scalar field
             2. alter offset cache on scalar field
             3. load collection
             4. alter offset cache again
         expected:
-            1. alter index raises expected error after loading collection
+            1. alter index succeeds after loading collection
         """
         # init params
         collection_name, primary_field = f"{request.function.__name__}", "INT64_pk"
@@ -2739,14 +2740,13 @@ class TestBitmapIndex(TestcaseBase):
 
         self.collection_wrap.load()
 
-        # enable offset cache on loaded collection
+        # disable offset cache on loaded collection
         for n in self.bitmap_support_dtype_names:
             self.collection_wrap.alter_index(
                 index_name=n,
-                extra_params=AlterIndexParams.index_offset_cache(),
-                check_task=CheckTasks.err_res,
-                check_items={ct.err_code: 104, ct.err_msg: iem.AlterOnLoadedCollection},
+                extra_params=AlterIndexParams.index_offset_cache(False),
             )
+            assert self.collection_wrap.index(index_name=n)[0].params["indexoffsetcache.enabled"] == "False"
 
     @pytest.mark.tags(CaseLabel.L1)
     @pytest.mark.parametrize("auto_id", [True, False])

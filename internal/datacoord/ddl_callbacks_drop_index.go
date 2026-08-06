@@ -24,5 +24,9 @@ import (
 
 func (s *DDLCallbacks) dropIndexV2Callback(ctx context.Context, result message.BroadcastResultDropIndexMessageV2) error {
 	header := result.Message.Header()
-	return s.meta.indexMeta.MarkIndexAsDeleted(ctx, header.GetCollectionId(), header.GetIndexIds())
+	if err := s.meta.indexMeta.MarkIndexAsDeleted(ctx, header.GetCollectionId(), header.GetIndexIds()); err != nil {
+		return err
+	}
+	s.notifyQueryViewCollection(header.GetCollectionId())
+	return nil
 }

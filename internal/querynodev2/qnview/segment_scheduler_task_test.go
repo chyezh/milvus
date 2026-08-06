@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/querynodev2/segments"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
@@ -38,6 +39,23 @@ type noopNodeTaskHandle struct{}
 func (noopNodeTaskHandle) Cancel() {}
 
 func (noopNodeTaskHandle) Wait(context.Context) error { return nil }
+
+type recordingLoadMetadataRuntime struct {
+	*fakeCollectionRuntimeGuard
+	deliveryVersion uint64
+	loadSchema      *schemapb.CollectionSchema
+	loadBarrier     uint64
+	loadIndexes     []*indexpb.IndexInfo
+	loadMetadataErr error
+}
+
+func (r *recordingLoadMetadataRuntime) UpdateLoadMetadata(_ context.Context, deliveryVersion uint64, schema *schemapb.CollectionSchema, schemaBarrierTs uint64, indexes []*indexpb.IndexInfo) error {
+	r.deliveryVersion = deliveryVersion
+	r.loadSchema = schema
+	r.loadBarrier = schemaBarrierTs
+	r.loadIndexes = append([]*indexpb.IndexInfo(nil), indexes...)
+	return r.loadMetadataErr
+}
 
 func testSegmentLoadSnapshot(segmentID int64, partitionID int64, indexes ...*indexpb.IndexInfo) SegmentLoadInfoSnapshot {
 	return SegmentLoadInfoSnapshot{
@@ -179,7 +197,7 @@ func TestSegmentLoadTask_ReservesAndReleasesResourceAroundLoad(t *testing.T) {
 	}
 	estimator := &fakeSegmentResourceEstimator{}
 	loadedCh := make(chan TransformSegment, 1)
-	submitTestSegmentLoadTask(t, loader, SegmentLoadTask{
+	handle := submitTestSegmentLoadTask(t, loader, SegmentLoadTask{
 		Context:    context.Background(),
 		SegmentID:  1000,
 		Collection: runtime,
@@ -190,9 +208,12 @@ func TestSegmentLoadTask_ReservesAndReleasesResourceAroundLoad(t *testing.T) {
 		},
 	}, estimator)
 
-	require.Eventually(t, func() bool {
-		return len(loadedCh) == 1
-	}, time.Second, 10*time.Millisecond)
+	require.NoError(t, handle.Wait(context.Background()))
+	select {
+	case <-loadedCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for loaded segment")
+	}
 	require.Len(t, estimator.infos, 1)
 	assert.Equal(t, int64(1000), estimator.infos[0].GetSegmentID())
 	require.Len(t, estimator.collections, 1)
@@ -394,6 +415,83 @@ func TestSegmentLoadTask_UpdatesCollectionIndexMetaBeforeLoad(t *testing.T) {
 	assert.ElementsMatch(t, indexes, runtime.updatedIndexes)
 }
 
+func TestSegmentLoadTaskRefreshesCollectionSchemaBeforePhysicalLoad(t *testing.T) {
+	runtime := &fakeCollectionRuntimeGuard{
+		collectionID: testCollectionID,
+		schema:       &schemapb.CollectionSchema{Version: 1},
+	}
+	latestSchema := &schemapb.CollectionSchema{Version: 2}
+	loader := &fakePhysicalLoader{
+		loadFn: func(info *querypb.SegmentLoadInfo, collection CollectionRuntime) (TransformSegment, error) {
+			assert.Same(t, latestSchema, runtime.updatedSchema)
+			assert.Equal(t, uint64(200), runtime.schemaBarrier)
+			return &fakeTransformSegment{id: info.GetSegmentID()}, nil
+		},
+	}
+	loadedCh := make(chan struct{}, 1)
+	snapshot := testSegmentLoadSnapshot(1000, 10)
+	snapshot.CollectionSchema = latestSchema
+	snapshot.SchemaBarrierTs = 200
+
+	submitTestSegmentLoadTask(t, loader, SegmentLoadTask{
+		Context:    context.Background(),
+		SegmentID:  1000,
+		Collection: runtime,
+		Snapshot:   snapshot,
+		OnLoaded:   func(TransformSegment) { loadedCh <- struct{}{} },
+		OnUnrecoverable: func(err error) {
+			t.Fatalf("unexpected load failure: %v", err)
+		},
+	}, nil)
+
+	select {
+	case <-loadedCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for load")
+	}
+}
+
+func TestSegmentLoadTaskUsesSnapshotDeliveryVersionForCombinedCollectionMetadataUpdate(t *testing.T) {
+	latestSchema := &schemapb.CollectionSchema{Version: 2}
+	indexes := []*indexpb.IndexInfo{{CollectionID: testCollectionID, FieldID: 101, IndexName: "vec_idx"}}
+	runtime := &recordingLoadMetadataRuntime{
+		fakeCollectionRuntimeGuard: &fakeCollectionRuntimeGuard{collectionID: testCollectionID},
+	}
+	loader := &fakePhysicalLoader{
+		loadFn: func(info *querypb.SegmentLoadInfo, collection CollectionRuntime) (TransformSegment, error) {
+			assert.Equal(t, uint64(7), runtime.deliveryVersion)
+			assert.Same(t, latestSchema, runtime.loadSchema)
+			assert.Equal(t, uint64(200), runtime.loadBarrier)
+			assert.ElementsMatch(t, indexes, runtime.loadIndexes)
+			return &fakeTransformSegment{id: info.GetSegmentID()}, nil
+		},
+	}
+	loadedCh := make(chan struct{}, 1)
+	snapshot := testSegmentLoadSnapshot(1000, 10, indexes...)
+	snapshot.DeliveryVersion = 7
+	snapshot.CollectionSchema = latestSchema
+	snapshot.SchemaBarrierTs = 200
+
+	submitTestSegmentLoadTask(t, loader, SegmentLoadTask{
+		Context:    context.Background(),
+		SegmentID:  1000,
+		Collection: runtime,
+		Snapshot:   snapshot,
+		OnLoaded:   func(TransformSegment) { loadedCh <- struct{}{} },
+		OnUnrecoverable: func(err error) {
+			t.Fatalf("unexpected load failure: %v", err)
+		},
+	}, nil)
+
+	select {
+	case <-loadedCh:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for load")
+	}
+	assert.Nil(t, runtime.updatedSchema, "combined updater must replace the legacy split update path")
+	assert.Nil(t, runtime.updatedIndexes, "combined updater must replace the legacy split update path")
+}
+
 func TestSegmentLoadTask_IndexMetaUpdateFailureSkipsReserveAndLoad(t *testing.T) {
 	runtime := &fakeCollectionRuntimeGuard{collectionID: testCollectionID, updateErr: errors.New("index meta update failed")}
 	indexes := []*indexpb.IndexInfo{{CollectionID: testCollectionID, FieldID: 101, IndexName: "vec_idx"}}
@@ -478,6 +576,94 @@ func TestSegmentUpdateTask_ClassifiesRevisionChange(t *testing.T) {
 	require.Len(t, loader.updateActions, 1)
 	require.True(t, loader.updateActions[0].Has(SegmentUpdateReopen))
 	require.True(t, loader.updateActions[0].Has(SegmentUpdateLoadIndex))
+}
+
+func TestSegmentUpdateTaskRefreshesCollectionSchemaBeforePhysicalUpdate(t *testing.T) {
+	runtime := &fakeCollectionRuntimeGuard{
+		collectionID: testCollectionID,
+		schema:       &schemapb.CollectionSchema{Version: 1},
+	}
+	latestSchema := &schemapb.CollectionSchema{Version: 2}
+	loader := &fakePhysicalLoader{
+		updateFn: func(TransformSegment, CollectionRuntime, SegmentLoadInfoSnapshot, SegmentUpdateAction) error {
+			assert.Same(t, latestSchema, runtime.updatedSchema)
+			assert.Equal(t, uint64(200), runtime.schemaBarrier)
+			return nil
+		},
+	}
+	updatedCh := make(chan SegmentLoadInfoRevision, 1)
+
+	submitTestSegmentUpdateTask(t, loader, SegmentUpdateTask{
+		Segment:    &fakeTransformSegment{id: 1000, partitionID: 10},
+		Collection: runtime,
+		Current:    SegmentLoadInfoRevision{Revision: 10},
+		Snapshot: SegmentLoadInfoSnapshot{
+			CollectionID:     testCollectionID,
+			SegmentID:        1000,
+			Revision:         SegmentLoadInfoRevision{Revision: 11},
+			LoadInfo:         &querypb.SegmentLoadInfo{SegmentID: 1000, CollectionID: testCollectionID},
+			CollectionSchema: latestSchema,
+			SchemaBarrierTs:  200,
+		},
+		OnUpdated: func(revision SegmentLoadInfoRevision) { updatedCh <- revision },
+		OnFailed: func(err error) {
+			t.Fatalf("unexpected update failure: %v", err)
+		},
+	})
+
+	select {
+	case got := <-updatedCh:
+		require.Equal(t, SegmentLoadInfoRevision{Revision: 11}, got)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for update")
+	}
+}
+
+func TestSegmentUpdateTaskUsesSnapshotDeliveryVersionForCombinedCollectionMetadataUpdate(t *testing.T) {
+	latestSchema := &schemapb.CollectionSchema{Version: 2}
+	indexes := []*indexpb.IndexInfo{{CollectionID: testCollectionID, FieldID: 101, IndexName: "vec_idx"}}
+	runtime := &recordingLoadMetadataRuntime{
+		fakeCollectionRuntimeGuard: &fakeCollectionRuntimeGuard{collectionID: testCollectionID},
+	}
+	loader := &fakePhysicalLoader{
+		updateFn: func(TransformSegment, CollectionRuntime, SegmentLoadInfoSnapshot, SegmentUpdateAction) error {
+			assert.Equal(t, uint64(8), runtime.deliveryVersion)
+			assert.Same(t, latestSchema, runtime.loadSchema)
+			assert.Equal(t, uint64(300), runtime.loadBarrier)
+			assert.ElementsMatch(t, indexes, runtime.loadIndexes)
+			return nil
+		},
+	}
+	updatedCh := make(chan SegmentLoadInfoRevision, 1)
+
+	submitTestSegmentUpdateTask(t, loader, SegmentUpdateTask{
+		Segment:    &fakeTransformSegment{id: 1000, partitionID: 10},
+		Collection: runtime,
+		Current:    SegmentLoadInfoRevision{Revision: 10},
+		Snapshot: SegmentLoadInfoSnapshot{
+			CollectionID:     testCollectionID,
+			SegmentID:        1000,
+			Revision:         SegmentLoadInfoRevision{Revision: 11},
+			DeliveryVersion:  8,
+			LoadInfo:         &querypb.SegmentLoadInfo{SegmentID: 1000, CollectionID: testCollectionID},
+			IndexInfos:       indexes,
+			CollectionSchema: latestSchema,
+			SchemaBarrierTs:  300,
+		},
+		OnUpdated: func(revision SegmentLoadInfoRevision) { updatedCh <- revision },
+		OnFailed: func(err error) {
+			t.Fatalf("unexpected update failure: %v", err)
+		},
+	})
+
+	select {
+	case got := <-updatedCh:
+		require.Equal(t, SegmentLoadInfoRevision{Revision: 11}, got)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for update")
+	}
+	assert.Nil(t, runtime.updatedSchema, "combined updater must replace the legacy split update path")
+	assert.Nil(t, runtime.updatedIndexes, "combined updater must replace the legacy split update path")
 }
 
 func TestSegmentUpdateTask_ClassifiesDataChange(t *testing.T) {

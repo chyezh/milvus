@@ -554,6 +554,19 @@ Examples:
 These changes may affect QueryNode load/reopen behavior through other metadata
 paths, but DataView does not advance DataVersion for them.
 
+After such an in-place update is durably committed, changes that alter the
+physical resource required by an already-loaded QueryNode segment are refreshed
+through the segment-load-info watch path. This wakeup is independent from
+DataView: it updates the physical resource held by an existing QueryView and
+must not create a replacement QueryView merely because the segment content
+revision changed.
+
+Persisting L0 delete logs into the recovery representation of an L1/L2 segment
+is the exception. A running QueryNode has already consumed those deletes from
+TransformLog, so that persistence update does not reopen the segment. A later
+initial load or process recovery reads the durable delete source from the
+latest complete snapshot.
+
 ### 6.8 L0 Delete Segments
 
 L0 segments are delete-log carriers, not loadable sealed segments.

@@ -784,14 +784,6 @@ func (t *alterIndexTask) PreExecute(ctx context.Context) error {
 	// 	return err
 	// }
 
-	loaded, err := isCollectionLoaded(ctx, t.mixCoord, collection)
-	if err != nil {
-		return err
-	}
-	if loaded {
-		return merr.WrapErrCollectionLoaded(collName, "can't alter index on loaded collection, please release the collection first")
-	}
-
 	return nil
 }
 

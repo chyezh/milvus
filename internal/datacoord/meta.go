@@ -97,9 +97,10 @@ type meta struct {
 	collections            *typeutil.ConcurrentMap[UniqueID, *collectionInfo] // collection id to collection info
 	recoveredCollectionIDs []int64
 
-	segMu           lock.RWMutex
-	segments        *SegmentsInfo // segment id to segment info
-	dataViewManager DataViewManager
+	segMu                     lock.RWMutex
+	segments                  *SegmentsInfo // segment id to segment info
+	dataViewManager           DataViewManager
+	queryViewLoadInfoNotifier QueryViewLoadInfoNotifier
 
 	channelCPs   *channelCPs // vChannel -> channel checkpoint/see position
 	chunkManager storage.ChunkManager
@@ -2773,6 +2774,18 @@ func (m *meta) CompleteCompactionMutation(ctx context.Context, t *datapb.Compact
 	}()
 	if err != nil {
 		return nil, nil, err
+	}
+	inputSegments := lo.SliceToMap(t.GetInputSegments(), func(segmentID int64) (int64, struct{}) {
+		return segmentID, struct{}{}
+	})
+	inPlaceSegments := make(map[int64][]int64)
+	for _, segment := range newSegments {
+		if _, ok := inputSegments[segment.GetID()]; ok {
+			inPlaceSegments[segment.GetCollectionID()] = append(inPlaceSegments[segment.GetCollectionID()], segment.GetID())
+		}
+	}
+	for collectionID, segmentIDs := range inPlaceSegments {
+		m.notifyQueryViewSegments(collectionID, segmentIDs...)
 	}
 	m.publishDataViewAfterCompaction(ctx, t, lo.Map(newSegments, func(segment *SegmentInfo, _ int) int64 {
 		return segment.GetID()

@@ -1218,12 +1218,17 @@ func (s *Server) GetStreamingNodeQueryViewResources(ctx context.Context, req *da
 			))
 			return resp, nil
 		}
-		byID[segment.GetID()] = &datapb.StreamingNodeBM25Resource{
-			SegmentId:      segment.GetID(),
-			PartitionId:    segment.GetPartitionID(),
-			Bm25Binlogs:    segment.GetBm25Statslogs(),
-			StorageVersion: segment.GetStorageVersion(),
-			ManifestPath:   segment.GetManifestPath(),
+		cloned := segment.Clone()
+		if err := binlog.DecompressBinLogs(cloned.SegmentInfo); err != nil {
+			resp.Status = merr.Status(err)
+			return resp, nil
+		}
+		byID[cloned.GetID()] = &datapb.StreamingNodeBM25Resource{
+			SegmentId:      cloned.GetID(),
+			PartitionId:    cloned.GetPartitionID(),
+			Bm25Binlogs:    cloned.GetBm25Statslogs(),
+			StorageVersion: cloned.GetStorageVersion(),
+			ManifestPath:   cloned.GetManifestPath(),
 		}
 	}
 	for _, segmentID := range segmentIDs {
@@ -1248,8 +1253,8 @@ func (s *Server) GetQueryViewSegmentLoadInfos(ctx context.Context, collectionID 
 		return nil, nil, nil
 	}
 
-	indexInfos := s.queryViewCollectionIndexInfos(collectionID)
-	segmentIndexes := s.meta.indexMeta.GetSegmentsIndexes(collectionID, segmentIDs)
+	indexes, segmentIndexes := s.meta.indexMeta.getQueryViewIndexSnapshot(collectionID, segmentIDs)
+	indexInfos := packQueryViewCollectionIndexInfos(indexes)
 	infos := make([]*querypb.SegmentLoadInfo, 0, len(segmentIDs))
 	for _, segmentID := range segmentIDs {
 		segment := s.meta.GetSegment(ctx, segmentID)
@@ -1260,6 +1265,9 @@ func (s *Server) GetQueryViewSegmentLoadInfos(ctx context.Context, collectionID 
 			return nil, nil, merr.WrapErrSegmentNotFound(segmentID, fmt.Sprintf("segment does not belong to collection %d", collectionID))
 		}
 		cloned := segment.Clone()
+		if err := s.appendCompactToDeleteSources(ctx, cloned, segmentID); err != nil {
+			return nil, nil, err
+		}
 		if err := binlog.DecompressBinLogs(cloned.SegmentInfo); err != nil {
 			return nil, nil, err
 		}
@@ -1275,6 +1283,10 @@ func (s *Server) GetQueryViewCollectionIndexInfos(collectionID int64) []*indexpb
 
 func (s *Server) queryViewCollectionIndexInfos(collectionID int64) []*indexpb.IndexInfo {
 	indexes := s.meta.indexMeta.GetIndexesForCollection(collectionID, "")
+	return packQueryViewCollectionIndexInfos(indexes)
+}
+
+func packQueryViewCollectionIndexInfos(indexes []*model.Index) []*indexpb.IndexInfo {
 	return lo.Map(indexes, func(index *model.Index, _ int) *indexpb.IndexInfo {
 		return &indexpb.IndexInfo{
 			CollectionID:    index.CollectionID,
@@ -1291,29 +1303,32 @@ func (s *Server) queryViewCollectionIndexInfos(collectionID int64) []*indexpb.In
 
 func (s *Server) packQueryViewSegmentLoadInfo(segment *datapb.SegmentInfo, indexInfos []*indexpb.IndexInfo, segmentIndexes map[int64]*model.SegmentIndex) *querypb.SegmentLoadInfo {
 	loadInfo := &querypb.SegmentLoadInfo{
-		SegmentID:       segment.GetID(),
-		PartitionID:     segment.GetPartitionID(),
-		CollectionID:    segment.GetCollectionID(),
-		BinlogPaths:     segment.GetBinlogs(),
-		NumOfRows:       segment.GetNumOfRows(),
-		Deltalogs:       segment.GetDeltalogs(),
-		CompactionFrom:  segment.GetCompactionFrom(),
-		IndexInfos:      s.packQueryViewFieldIndexInfos(segmentIndexes, indexInfos),
-		InsertChannel:   segment.GetInsertChannel(),
-		StartPosition:   segment.GetStartPosition(),
-		DeltaPosition:   segment.GetDmlPosition(),
-		Level:           segment.GetLevel(),
-		StorageVersion:  segment.GetStorageVersion(),
-		IsSorted:        segment.GetIsSorted(),
-		Priority:        commonpb.LoadPriority_HIGH,
-		ManifestPath:    segment.GetManifestPath(),
-		DataVersion:     segment.GetDataVersion(),
-		CommitTimestamp: segment.GetCommitTimestamp(),
+		SegmentID:          segment.GetID(),
+		PartitionID:        segment.GetPartitionID(),
+		CollectionID:       segment.GetCollectionID(),
+		BinlogPaths:        segment.GetBinlogs(),
+		NumOfRows:          segment.GetNumOfRows(),
+		Deltalogs:          segment.GetDeltalogs(),
+		CompactionFrom:     segment.GetCompactionFrom(),
+		IndexInfos:         s.packQueryViewFieldIndexInfos(segmentIndexes, indexInfos),
+		InsertChannel:      segment.GetInsertChannel(),
+		StartPosition:      segment.GetStartPosition(),
+		DeltaPosition:      segment.GetDmlPosition(),
+		Level:              segment.GetLevel(),
+		StorageVersion:     segment.GetStorageVersion(),
+		IsSorted:           segment.GetIsSorted(),
+		Priority:           commonpb.LoadPriority_HIGH,
+		ManifestPath:       segment.GetManifestPath(),
+		DataVersion:        segment.GetDataVersion(),
+		CommitTimestamp:    segment.GetCommitTimestamp(),
+		ChildManifestPaths: segment.GetChildManifestPaths(),
 	}
 	if segment.GetManifestPath() == "" {
 		loadInfo.Statslogs = segment.GetStatslogs()
 		loadInfo.TextStatsLogs = segment.GetTextStatsLogs()
 		loadInfo.Bm25Logs = segment.GetBm25Statslogs()
+		loadInfo.JsonKeyStatsLogs = segment.GetJsonKeyStats()
+	} else {
 		loadInfo.JsonKeyStatsLogs = segment.GetJsonKeyStats()
 	}
 	return loadInfo
@@ -1331,27 +1346,29 @@ func (s *Server) packQueryViewFieldIndexInfos(segmentIndexes map[int64]*model.Se
 		if segmentIndex.IndexState != commonpb.IndexState_Finished {
 			continue
 		}
-		indexParams := s.meta.indexMeta.GetIndexParams(segmentIndex.CollectionID, segmentIndex.IndexID)
-		indexParams = append(indexParams, s.meta.indexMeta.GetTypeParams(segmentIndex.CollectionID, segmentIndex.IndexID)...)
+		collectionIndex, ok := collectionIndexByID[segmentIndex.IndexID]
+		if !ok {
+			continue
+		}
+		indexParams := common.CloneKeyValuePairs(collectionIndex.GetIndexParams())
+		indexParams = append(indexParams, common.CloneKeyValuePairs(collectionIndex.GetTypeParams())...)
 		for _, param := range indexParams {
 			if param.Key == common.IndexTypeKey && segmentIndex.IndexType != "" && segmentIndex.IndexType != param.Value {
 				param.Value = segmentIndex.IndexType
 				break
 			}
 		}
-		indexName := s.meta.indexMeta.GetIndexNameByID(segmentIndex.CollectionID, segmentIndex.IndexID)
+		indexName := collectionIndex.GetIndexName()
 		if segmentIndex.IndexType != "" && segmentIndex.IndexType != indexName {
 			indexName = segmentIndex.IndexType
 		}
-		if collectionIndex, ok := collectionIndexByID[segmentIndex.IndexID]; ok {
-			params := funcutil.KeyValuePair2Map(indexParams)
-			for _, kv := range collectionIndex.GetUserIndexParams() {
-				if indexparams.IsConfigableIndexParam(kv.GetKey()) {
-					params[kv.GetKey()] = kv.GetValue()
-				}
+		params := funcutil.KeyValuePair2Map(indexParams)
+		for _, kv := range collectionIndex.GetUserIndexParams() {
+			if indexparams.IsConfigableIndexParam(kv.GetKey()) {
+				params[kv.GetKey()] = kv.GetValue()
 			}
-			indexParams = funcutil.Map2KeyValuePair(params)
 		}
+		indexParams = funcutil.Map2KeyValuePair(params)
 		indexParams = append(indexParams, &commonpb.KeyValuePair{
 			Key:   common.LoadPriorityKey,
 			Value: commonpb.LoadPriority_HIGH.String(),
@@ -1364,7 +1381,7 @@ func (s *Server) packQueryViewFieldIndexInfos(segmentIndexes map[int64]*model.Se
 			segmentIndex.BuildID,
 			segmentIndex.IndexVersion)
 		infos = append(infos, &querypb.FieldIndexInfo{
-			FieldID:                   s.meta.indexMeta.GetFieldIDByIndexID(segmentIndex.CollectionID, segmentIndex.IndexID),
+			FieldID:                   collectionIndex.GetFieldID(),
 			EnableIndex:               true,
 			IndexName:                 indexName,
 			IndexID:                   segmentIndex.IndexID,
