@@ -504,7 +504,10 @@ func (st *statsTask) prepareJobRequest(ctx context.Context, segment *SegmentInfo
 }
 
 func (st *statsTask) SetJobInfo(ctx context.Context, result *workerpb.StatsResult) error {
-	var err error
+	var (
+		err             error
+		loadInfoChanged bool
+	)
 	switch st.GetSubJobType() {
 	case indexpb.StatsSubJob_TextIndexJob:
 		err = st.meta.UpdateSegmentsInfo(ctx, updateStatsResultIfManifestMatches(ctx, st.GetSegmentID(), st.GetTaskID(), result))
@@ -513,6 +516,7 @@ func (st *statsTask) SetJobInfo(ctx context.Context, result *workerpb.StatsResul
 				mlog.FieldSegmentID(st.GetSegmentID()), mlog.Err(err))
 			break
 		}
+		loadInfoChanged = queryViewTextLoadInfoChanged(result)
 	case indexpb.StatsSubJob_JsonKeyIndexJob:
 		err = st.meta.UpdateSegmentsInfo(ctx, updateStatsResultIfManifestMatches(ctx, st.GetSegmentID(), st.GetTaskID(), result))
 		if err != nil {
@@ -520,6 +524,7 @@ func (st *statsTask) SetJobInfo(ctx context.Context, result *workerpb.StatsResul
 				mlog.FieldSegmentID(st.GetSegmentID()), mlog.Err(err))
 			break
 		}
+		loadInfoChanged = queryViewJSONLoadInfoChanged(result)
 	case indexpb.StatsSubJob_Sort:
 		// For V2 segments (no manifest), persist statsLogs and bm25Logs.
 		// For V3 segments (manifest set), stats are already in manifest.
@@ -552,7 +557,6 @@ func (st *statsTask) SetJobInfo(ctx context.Context, result *workerpb.StatsResul
 	if err != nil && !errors.Is(err, merr.ErrSegmentNotFound) {
 		return err
 	}
-
 	// Update segment manifest version so subsequent stats tasks use the latest version.
 	if manifest := result.GetManifest(); manifest != "" &&
 		st.GetSubJobType() != indexpb.StatsSubJob_TextIndexJob &&
@@ -571,11 +575,31 @@ func (st *statsTask) SetJobInfo(ctx context.Context, result *workerpb.StatsResul
 			}
 		}
 	}
+	if loadInfoChanged {
+		st.meta.notifyQueryViewSegments(st.GetCollectionID(), st.GetSegmentID())
+	}
 
 	mlog.Info(ctx, "SetJobInfo for stats task success", mlog.FieldTaskID(st.GetTaskID()),
 		mlog.Int64("oldSegmentID", st.GetSegmentID()), mlog.Int64("targetSegmentID", st.GetTargetSegmentID()),
 		mlog.String("subJobType", st.GetSubJobType().String()), mlog.String("state", st.GetState().String()))
 	return nil
+}
+
+func queryViewJSONLoadInfoChanged(result *workerpb.StatsResult) bool {
+	if result.GetManifest() != "" && result.GetManifest() != result.GetBaseManifest() {
+		return true
+	}
+	for _, stats := range result.GetJsonKeyStatsLogs() {
+		if stats.GetJsonKeyStatsDataFormat() == common.JSONStatsDataFormatVersion {
+			return true
+		}
+	}
+	return false
+}
+
+func queryViewTextLoadInfoChanged(result *workerpb.StatsResult) bool {
+	return result.GetManifest() != "" && result.GetManifest() != result.GetBaseManifest() ||
+		len(result.GetTextStatsLogs()) > 0
 }
 
 func updateStatsResultIfManifestMatches(ctx context.Context, segmentID, taskID int64, result *workerpb.StatsResult) UpdateOperator {

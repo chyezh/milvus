@@ -97,9 +97,10 @@ type meta struct {
 	collections            *typeutil.ConcurrentMap[UniqueID, *collectionInfo] // collection id to collection info
 	recoveredCollectionIDs []int64
 
-	segMu           lock.RWMutex
-	segments        *SegmentsInfo // segment id to segment info
-	dataViewManager DataViewManager
+	segMu                     lock.RWMutex
+	segments                  *SegmentsInfo // segment id to segment info
+	dataViewManager           DataViewManager
+	queryViewLoadInfoNotifier QueryViewLoadInfoNotifier
 
 	channelCPs   *channelCPs // vChannel -> channel checkpoint/see position
 	chunkManager storage.ChunkManager

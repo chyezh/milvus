@@ -651,6 +651,24 @@ func (s *statsTaskSuite) TestSetJobInfoJSONStatsResultManifestHandling() {
 			JsonKeyStatsDataFormat: common.JSONStatsDataFormatVersion,
 		},
 	}
+	oldFormatStatsLogs := map[int64]*datapb.JsonKeyStats{
+		500: {
+			FieldID:                500,
+			Version:                1,
+			BuildID:                s.taskID,
+			JsonKeyStatsDataFormat: common.JSONStatsDataFormatVersion - 1,
+		},
+	}
+	mixedFormatStatsLogs := map[int64]*datapb.JsonKeyStats{
+		500: oldFormatStatsLogs[500],
+		501: {
+			FieldID:                501,
+			Version:                1,
+			BuildID:                s.taskID + 1,
+			JsonKeyStatsDataFormat: common.JSONStatsDataFormatVersion,
+		},
+	}
+	persistErr := errors.New("persist json stats failed")
 
 	testCases := []struct {
 		name           string
@@ -661,6 +679,8 @@ func (s *statsTaskSuite) TestSetJobInfoJSONStatsResultManifestHandling() {
 		expectManifest string
 		expectStats    bool
 		expectCatalog  bool
+		expectNotify   bool
+		persistErr     error
 		expectErr      error
 	}{
 		{
@@ -681,6 +701,7 @@ func (s *statsTaskSuite) TestSetJobInfoJSONStatsResultManifestHandling() {
 			expectManifest: resultManifest,
 			expectStats:    true,
 			expectCatalog:  true,
+			expectNotify:   true,
 		},
 		{
 			name:           "empty_stats_noop",
@@ -690,10 +711,45 @@ func (s *statsTaskSuite) TestSetJobInfoJSONStatsResultManifestHandling() {
 			logs:           map[int64]*datapb.JsonKeyStats{},
 			expectManifest: currentManifest,
 		},
+		{
+			name:           "persistence_failure_does_not_notify",
+			current:        currentManifest,
+			base:           currentManifest,
+			result:         resultManifest,
+			logs:           statsLogs,
+			expectManifest: currentManifest,
+			expectCatalog:  true,
+			persistErr:     persistErr,
+			expectErr:      persistErr,
+		},
+		{
+			name:           "old_format_stats_do_not_notify",
+			current:        currentManifest,
+			base:           currentManifest,
+			result:         currentManifest,
+			logs:           oldFormatStatsLogs,
+			expectManifest: currentManifest,
+			expectStats:    true,
+			expectCatalog:  true,
+		},
+		{
+			name:           "mixed_format_stats_notify_current_format_change",
+			current:        currentManifest,
+			base:           currentManifest,
+			result:         currentManifest,
+			logs:           mixedFormatStatsLogs,
+			expectManifest: currentManifest,
+			expectStats:    true,
+			expectCatalog:  true,
+			expectNotify:   true,
+		},
 	}
 
 	for _, testCase := range testCases {
 		s.Run(testCase.name, func() {
+			recorder := newQueryViewLoadInfoNotificationRecorder()
+			s.mt.queryViewLoadInfoNotifier = recorder
+			defer func() { s.mt.queryViewLoadInfoNotifier = nil }()
 			restore := s.installJSONStatsSegment(testCase.current)
 			defer restore()
 
@@ -706,7 +762,7 @@ func (s *statsTaskSuite) TestSetJobInfoJSONStatsResultManifestHandling() {
 					_ ...metastore.BinlogsIncrement,
 				) error {
 					alterSegmentsCount++
-					return nil
+					return testCase.persistErr
 				}).Build()
 			defer mockAlterSegments.UnPatch()
 			s.mt.catalog = &mockeyDataCoordCatalog{}
@@ -741,6 +797,14 @@ func (s *statsTaskSuite) TestSetJobInfoJSONStatsResultManifestHandling() {
 			} else {
 				s.Equal(0, alterSegmentsCount)
 			}
+			if testCase.expectNotify {
+				s.Equal([]queryViewLoadInfoNotification{{
+					collectionID: s.collID,
+					segmentIDs:   []int64{s.segID},
+				}}, recorder.segments())
+			} else {
+				s.Empty(recorder.segments())
+			}
 		})
 	}
 }
@@ -758,6 +822,7 @@ func (s *statsTaskSuite) TestSetJobInfoTextStatsResultManifestHandling() {
 			Files:   []string{"files/insert_log/1/2/1179/_stats/text_index.500/tokenizer.json"},
 		},
 	}
+	persistErr := errors.New("persist text stats failed")
 
 	testCases := []struct {
 		name           string
@@ -768,6 +833,8 @@ func (s *statsTaskSuite) TestSetJobInfoTextStatsResultManifestHandling() {
 		expectManifest string
 		expectStats    bool
 		expectCatalog  bool
+		expectNotify   bool
+		persistErr     error
 		expectErr      error
 	}{
 		{
@@ -788,6 +855,7 @@ func (s *statsTaskSuite) TestSetJobInfoTextStatsResultManifestHandling() {
 			expectManifest: resultManifest,
 			expectStats:    true,
 			expectCatalog:  true,
+			expectNotify:   true,
 		},
 		{
 			name:           "empty_stats_noop",
@@ -797,10 +865,24 @@ func (s *statsTaskSuite) TestSetJobInfoTextStatsResultManifestHandling() {
 			logs:           map[int64]*datapb.TextIndexStats{},
 			expectManifest: currentManifest,
 		},
+		{
+			name:           "persistence_failure_does_not_notify",
+			current:        currentManifest,
+			base:           currentManifest,
+			result:         resultManifest,
+			logs:           statsLogs,
+			expectManifest: currentManifest,
+			expectCatalog:  true,
+			persistErr:     persistErr,
+			expectErr:      persistErr,
+		},
 	}
 
 	for _, testCase := range testCases {
 		s.Run(testCase.name, func() {
+			recorder := newQueryViewLoadInfoNotificationRecorder()
+			s.mt.queryViewLoadInfoNotifier = recorder
+			defer func() { s.mt.queryViewLoadInfoNotifier = nil }()
 			restore := s.installJSONStatsSegment(testCase.current)
 			defer restore()
 
@@ -813,7 +895,7 @@ func (s *statsTaskSuite) TestSetJobInfoTextStatsResultManifestHandling() {
 					_ ...metastore.BinlogsIncrement,
 				) error {
 					alterSegmentsCount++
-					return nil
+					return testCase.persistErr
 				}).Build()
 			defer mockAlterSegments.UnPatch()
 			s.mt.catalog = &mockeyDataCoordCatalog{}
@@ -847,6 +929,14 @@ func (s *statsTaskSuite) TestSetJobInfoTextStatsResultManifestHandling() {
 				s.Equal(1, alterSegmentsCount)
 			} else {
 				s.Equal(0, alterSegmentsCount)
+			}
+			if testCase.expectNotify {
+				s.Equal([]queryViewLoadInfoNotification{{
+					collectionID: s.collID,
+					segmentIDs:   []int64{s.segID},
+				}}, recorder.segments())
+			} else {
+				s.Empty(recorder.segments())
 			}
 		})
 	}
