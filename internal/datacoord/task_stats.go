@@ -934,6 +934,25 @@ func (st *statsTask) shouldPublishPreparedManifest(ctx context.Context, segmentI
 		// current pointer; fall through to the ordinary no-op path instead of
 		// re-publishing an identical revision.
 		result.GetManifest() != segment.GetManifestPath()
+
+}
+
+func queryViewJSONLoadInfoChanged(result *workerpb.StatsResult) bool {
+	if result.GetManifest() != "" && result.GetManifest() != result.GetBaseManifest() {
+		return true
+	}
+	for _, stats := range result.GetJsonKeyStatsLogs() {
+		if stats.GetJsonKeyStatsDataFormat() == common.JSONStatsDataFormatVersion {
+			return true
+		}
+	}
+	return false
+}
+
+func queryViewTextLoadInfoChanged(result *workerpb.StatsResult) bool {
+	return result.GetManifest() != "" && result.GetManifest() != result.GetBaseManifest() ||
+		len(result.GetTextStatsLogs()) > 0
+
 }
 
 func queryViewJSONLoadInfoChanged(result *workerpb.StatsResult) bool {
