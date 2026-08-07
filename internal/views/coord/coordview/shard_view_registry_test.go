@@ -81,6 +81,44 @@ func TestRegistry_EnsureCreatesOnce(t *testing.T) {
 	assert.Len(t, reg.Snapshot().StatsMap(), 1)
 }
 
+func TestRegistry_RemovesManagerAfterLastViewDropped(t *testing.T) {
+	catalog := newMockCatalog()
+	s := newMockSyncer()
+	reg := newTestRegistry(t, catalog, s)
+	shardID := qviews.ShardID{
+		ReplicaID: 1,
+		VChannel:  "by-dev-rootcoord-dml_100v0",
+	}
+	mgr := reg.Ensure(shardID)
+	builder := testBuilderForShard(100, shardID)
+	builder.SetAssignments(nil)
+
+	require.NoError(t, mgr.AddPreparing(context.Background(), builder))
+	require.NoError(t, reg.flushScheduler.Flush(context.Background()))
+	require.NoError(t, mgr.RequestRelease(context.Background()))
+	require.NoError(t, reg.flushScheduler.Flush(context.Background()))
+
+	version := testVersion(1, 1, 1)
+	sn := qviews.NewStreamingNodeFromVChannel(shardID.VChannel)
+	callback := s.findOnSyncResponse(sn, version)
+	require.NotNil(t, callback)
+	response := qviews.NewQueryViewAtStreamingNode(&viewpb.QueryViewMeta{
+		CollectionId: 100,
+		ReplicaId:    shardID.ReplicaID,
+		Vchannel:     shardID.VChannel,
+		Version:      version.IntoProto(),
+		State:        viewpb.QueryViewState_QueryViewStateDropped,
+	}, &viewpb.QueryViewOfStreamingNode{})
+	require.True(t, callback(response))
+	require.NoError(t, reg.flushScheduler.Flush(context.Background()))
+
+	assert.Nil(t, reg.Get(shardID))
+	assert.Empty(t, reg.CollectionShards(100))
+	assert.Empty(t, reg.ShardIDs())
+	assert.NotContains(t, reg.Snapshot().StatsMap(), shardID)
+	assert.NotSame(t, mgr, reg.Ensure(shardID))
+}
+
 func TestRegistry_RecoverWithPersistedViews(t *testing.T) {
 	catalog := newMockCatalog()
 
@@ -269,6 +307,12 @@ func TestRecoverShardViewRegistryAllowsTerminalCleanup(t *testing.T) {
 	require.Equal(t, qviews.QueryViewStateDropping, manager.views[testVersion(3, 1, 2)].State())
 	manager.mu.Unlock()
 	require.Empty(t, refs.unpins)
+
+	version := testVersion(3, 1, 2)
+	simulateNodeResponse(t, s, testSN, version, qviews.QueryViewStateDropped)
+	simulateNodeResponse(t, s, testQN1, version, qviews.QueryViewStateDropped)
+	require.NoError(t, registry.flushScheduler.Flush(context.Background()))
+	require.Nil(t, registry.Get(qviews.NewShardIDFromQVMeta(view.GetMeta())))
 }
 
 func TestRecoverShardViewRegistryRollsBackReferencesOnFailure(t *testing.T) {
