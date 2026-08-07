@@ -53,6 +53,7 @@ func (l *queryViewPhysicalSegmentLoader) Update(ctx context.Context, segment qnv
 	if snapshot.LoadInfo == nil {
 		return fmt.Errorf("query view segment load info is nil")
 	}
+	segment = qnview.UnwrapTransformSegment(segment)
 	transform, ok := segment.(*queryViewTransformSegment)
 	if !ok {
 		return fmt.Errorf("unexpected query view transform segment type %T", segment)

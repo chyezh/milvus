@@ -66,6 +66,36 @@ func TestQueryViewPhysicalSegmentLoaderUpdateDoesNotUseContentHashAsOrderedLoadV
 		"SegmentLoadInfoRevision is a non-monotonic equality token and must not enter an ordered loader version slot")
 }
 
+func TestQueryViewPhysicalSegmentLoaderUpdateUnwrapsTransformSegment(t *testing.T) {
+	loader := &fakeQVLoader{}
+	physical := newQueryViewPhysicalSegmentLoader(&fakeQVCollectionManager{}, &fakeQVSegmentManager{}, loader)
+	segment := newQueryViewTransformSegment(&fakeQVSegment{id: 10, partitionID: 100}, &fakeQVSegmentManager{}, "v1", 50)
+	wrapper := &testTransformSegmentWrapper{TransformSegment: &testTransformSegmentWrapper{TransformSegment: segment}}
+
+	err := physical.Update(
+		context.Background(),
+		wrapper,
+		fakeQVCollectionRuntime{collectionID: 1},
+		qnview.SegmentLoadInfoSnapshot{
+			SegmentID: 10,
+			Revision:  qnview.SegmentLoadInfoRevision{Revision: 2},
+			LoadInfo:  &querypb.SegmentLoadInfo{CollectionID: 1, SegmentID: 10},
+		},
+		qnview.SegmentUpdateReopen|qnview.SegmentUpdateLoadIndex,
+	)
+	require.NoError(t, err)
+	assert.True(t, loader.reopenCalled)
+	assert.True(t, loader.loadIndexCalled)
+}
+
+type testTransformSegmentWrapper struct {
+	qnview.TransformSegment
+}
+
+func (s *testTransformSegmentWrapper) UnwrapTransformSegment() qnview.TransformSegment {
+	return s.TransformSegment
+}
+
 func TestRealQVSegmentLoader_NewSegmentUsesPinnedCollection(t *testing.T) {
 	schema := &schemapb.CollectionSchema{Name: "coll"}
 	localCollection := segments.NewCollectionWithoutSegcoreForTest(1, schema)
