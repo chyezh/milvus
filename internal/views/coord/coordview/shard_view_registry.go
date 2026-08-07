@@ -105,6 +105,7 @@ func RecoverShardViewRegistry(
 		registry.addCollectionShardLocked(sid)
 		registry.addNodeShardsLocked(sid, stats)
 		mgr.SetStatsObserver(registry.onShardStatsChanged)
+		mgr.setOnEmpty(registry.removeEmptyManager)
 	}
 	// Recovery sync callbacks may update manager stats immediately. Install all
 	// observers and indexes before releasing the held recovery events so those
@@ -133,6 +134,7 @@ func (r *ShardViewRegistry) Ensure(shardID qviews.ShardID) *ShardViewManager {
 
 	mgr := newShardViewManager(r.ctx, shardID, r.flushScheduler, nil, r.dataViewReferences)
 	mgr.SetStatsObserver(r.onShardStatsChanged)
+	mgr.setOnEmpty(r.removeEmptyManager)
 	stats := emptyShardStats()
 
 	r.mu.Lock()
@@ -168,6 +170,28 @@ func (r *ShardViewRegistry) Get(shardID qviews.ShardID) *ShardViewManager {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.shards[shardID]
+}
+
+// removeEmptyManager reclaims a manager after its last QueryView has completed
+// durable removal. Recheck both emptiness and identity because the callback is
+// invoked after releasing the manager lock.
+func (r *ShardViewRegistry) removeEmptyManager(shardID qviews.ShardID, manager *ShardViewManager) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if len(manager.views) != 0 {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.shards[shardID] != manager {
+		return
+	}
+	r.removeNodeShardsLocked(shardID, r.stats[shardID])
+	r.removeCollectionShardLocked(shardID)
+	delete(r.stats, shardID)
+	delete(r.shards, shardID)
+	r.version++
 }
 
 // Snapshot returns the current resident immutable shard-view snapshot. It
@@ -308,6 +332,19 @@ func (r *ShardViewRegistry) addCollectionShardLocked(shardID qviews.ShardID) {
 		r.collectionShards[channel.CollectionID()] = shards
 	}
 	shards[shardID] = struct{}{}
+}
+
+func (r *ShardViewRegistry) removeCollectionShardLocked(shardID qviews.ShardID) {
+	channel, err := metautil.ParseChannel(shardID.VChannel, metautil.NewDynChannelMapper())
+	if err != nil {
+		return
+	}
+	collectionID := channel.CollectionID()
+	shards := r.collectionShards[collectionID]
+	delete(shards, shardID)
+	if len(shards) == 0 {
+		delete(r.collectionShards, collectionID)
+	}
 }
 
 func (r *ShardViewRegistry) addNodeShardsLocked(shardID qviews.ShardID, stats *ShardStats) {
