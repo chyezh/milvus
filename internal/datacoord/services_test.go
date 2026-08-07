@@ -2365,7 +2365,7 @@ func TestServer_DropSegmentsByTime(t *testing.T) {
 		assert.Error(t, err)
 	})
 
-	t.Run("watch channel checkpoint failed", func(t *testing.T) {
+	t.Run("does not wait for legacy channel checkpoint", func(t *testing.T) {
 		s := &Server{}
 		s.stateCode.Store(commonpb.StateCode_Healthy)
 
@@ -2373,12 +2373,11 @@ func TestServer_DropSegmentsByTime(t *testing.T) {
 		assert.NoError(t, err)
 		s.meta = meta
 
-		// WatchChannelCheckpoint will wait indefinitely, so we use a context with timeout
 		ctxWithTimeout, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 		defer cancel()
 
 		err = s.DropSegmentsByTime(ctxWithTimeout, collectionID, map[string]uint64{channelName: flushTs})
-		assert.Error(t, err)
+		assert.NoError(t, err)
 	})
 
 	t.Run("success - drop segments", func(t *testing.T) {
@@ -2388,15 +2387,6 @@ func TestServer_DropSegmentsByTime(t *testing.T) {
 		meta, err := newMemoryMeta(t)
 		assert.NoError(t, err)
 		s.meta = meta
-
-		// Set channel checkpoint to satisfy WatchChannelCheckpoint
-		pos := &msgpb.MsgPosition{
-			ChannelName: channelName,
-			MsgID:       []byte{0, 0, 0, 0, 0, 0, 0, 0},
-			Timestamp:   flushTs,
-		}
-		err = meta.UpdateChannelCheckpoint(ctx, channelName, pos)
-		assert.NoError(t, err)
 
 		// Add segments to drop (timestamp <= flushTs)
 		seg1 := &SegmentInfo{

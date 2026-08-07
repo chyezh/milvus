@@ -565,7 +565,7 @@ func TestBroadcastAckModulePreconditionsFollowMessageFlow(t *testing.T) {
 	}
 }
 
-func TestBroadcastAckModuleUsesMaterializedFrontierForSynchronousFlushAndDrop(t *testing.T) {
+func TestBroadcastAckModuleUsesRequiredDataFrontierForSynchronousOperations(t *testing.T) {
 	blockingBarrier := walcheckpoint.BarrierFunc(func() uint64 { return 9 })
 	view := &recordingFrontierView{barrier: blockingBarrier}
 	module := newBroadcastAckModule("test-pchannel", view, moduleapi.Runtime{})
@@ -578,6 +578,14 @@ func TestBroadcastAckModuleUsesMaterializedFrontierForSynchronousFlushAndDrop(t 
 		msg  message.ImmutableMessage
 		kind moduleapi.DataProgressKind
 	}{
+		{
+			name: "truncate collection waits for durable frontier",
+			msg: newAckPreconditionMessage(t, message.NewTruncateCollectionMessageBuilderV2().
+				WithVChannel("v1").
+				WithHeader(&message.TruncateCollectionMessageHeader{CollectionId: 1}).
+				WithBody(&message.TruncateCollectionMessageBody{})),
+			kind: moduleapi.DataProgressDurable,
+		},
 		{
 			name: "drop collection waits for materialized frontier",
 			msg: newAckPreconditionMessage(t, message.NewDropCollectionMessageBuilderV1().

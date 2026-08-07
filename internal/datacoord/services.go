@@ -2433,14 +2433,12 @@ func (s *Server) DropSegmentsByTime(ctx context.Context, collectionID int64, flu
 		mlog.Int64("collectionID", collectionID))
 
 	for channelName, flushTs := range flushTsList {
-		// wait until the checkpoint reaches or exceeds the flush timestamp
-		err := s.meta.WatchChannelCheckpoint(ctx, channelName, flushTs)
-		if err != nil {
-			mlog.Warn(ctx, "WatchChannelCheckpoint failed", mlog.Err(err))
-			return err
-		}
+		// TruncateCollection invokes this callback only after its AckSyncUp
+		// barrier reaches the durable data frontier. StreamingNode does not
+		// advance DataCoord's legacy channel checkpoint during normal WAL
+		// consumption, so waiting on that checkpoint here could block indefinitely.
 		if s.dataViewManager != nil {
-			_, err = s.dataViewManager.OnTruncate(ctx, TruncateDataViewEvent{
+			_, err := s.dataViewManager.OnTruncate(ctx, TruncateDataViewEvent{
 				CollectionID: collectionID,
 				VChannel:     channelName,
 				FlushTs:      flushTs,
@@ -2451,7 +2449,7 @@ func (s *Server) DropSegmentsByTime(ctx context.Context, collectionID int64, flu
 			}
 		}
 		// drop segments that were updated before the flush timestamp
-		err = s.meta.TruncateChannelByTime(ctx, channelName, flushTs)
+		err := s.meta.TruncateChannelByTime(ctx, channelName, flushTs)
 		if err != nil {
 			mlog.Warn(context.TODO(), "TruncateChannelByTime failed", mlog.Err(err))
 			return err
