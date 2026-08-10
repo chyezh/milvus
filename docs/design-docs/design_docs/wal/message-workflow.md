@@ -1,408 +1,298 @@
 # Message Workflow
 
-This document describes how RecoveryStorage modules handle each consumer-observable persisted WAL message type. Transaction control messages are consumed by the transaction assembly layer and are not delivered to RecoveryStorage modules. Deprecated message types are not listed.
+This document describes how RecoveryStorage handles consumer-observable
+persisted WAL messages. Transaction control records consumed by transaction
+assembly and deprecated message types are out of scope.
 
-Common rules:
+Completion and checkpoint rules are defined by
+[WAL Message Ack Design](message_ack.md).
 
-- RecoveryStorage dispatches every persisted message to every module.
-- Recovery scans and live consumption use the same module `ObserveMessage` implementation.
-- In MetaOnly mode, `ObserveMessage` updates only View.Meta and does not submit Data-chain work.
-- In MetaAndData mode, `ObserveMessage` enables Data-chain buffering and task submission.
-- Each data module updates its own View.Meta synchronously in `ObserveMessage`.
-- Each data module updates its own View.Data asynchronously through Scheduler
-  tasks.
-- Dirty snapshots are consumed and persisted by RecoveryStorage. After
-  persistence succeeds, RecoveryStorage calls `DirtySnapshot.MarkPersisted()`.
-- CheckpointManager advances physical checkpoints only after returned barriers disappear.
-- AckModule submits an ack task and returns a DataBarrier for every persisted message with a `BroadcastHeader`.
-- AckModule's DataBarrier disappears only after the coordinator broadcast Ack API succeeds.
-- AckModule preconditions are defined by message type and message scope.
-- Messages irrelevant to a module do not mutate its Views and return no module barrier.
+## 1. Common Dispatch Rules
 
-## TimeTick
+RecoveryStorage dispatches every persisted data-scanner message through one
+explicit Message Ack envelope:
 
-VChannelModule, SegmentModule, and TransformLogModule do not update any View
-for TimeTick.
+```text
+NewRecord with implicit dispatch Ref
+  -> PChannelRecoveryManager observes the message
+  -> affected VChannelRecoveryModule instances observe the message
+  -> each actual SegmentView and TransformLog consumer calls Retain()
+  -> broadcastAckModule calls Retain() for BroadcastHeader messages
+  -> RecoveryStorage calls Seal()
+       -> forbid later Retain()
+       -> release implicit dispatch Ref
+```
 
-AckModule does not ack TimeTick. CheckpointManager can treat the message as immediate for both lanes unless another module returns a barrier.
+The AckRecord point is the logical consumed-through boundary:
 
-## CreateCollection
+```text
+Point.MessageID = message.LastConfirmedMessageID()
+Point.TimeTick  = message.TimeTick()
+```
 
-VChannelModule observes the message through the common `ObserveMessage` path.
-If the target VChannel View is absent, it creates the View. The View.Meta
-contains collection information, initial partitions, schema history, normal
-vchannel state, and `MetaTimeTick` equal to the message timetick. The View
-becomes dirty and returns a Meta barrier.
+Recovery resumes with `DeliverPolicyStartFrom(Point.MessageID)`. This may
+replay completed messages, but the LastConfirmed anchor prevents a later
+TimeTick from being skipped.
 
-No data task is required. AckModule returns an ack DataBarrier for the broadcast
-message and calls the coordinator Ack API after previous ack task completion.
+Metadata mutations are captured as dirty snapshots. RecoveryStorage freezes a
+persist-batch boundary, writes every captured DirtySnapshot, and writes that
+batch's checkpoint last.
 
-## DropCollection
+Data checkpoint advancement is driven by the continuous Message Ack completed
+frontier frozen for the same persist batch.
 
-SegmentModule flushes every retained segment in the target vchannel whose create
-timetick is older than the message timetick. TransformLogModule first flushes
-the target vchannel TransformLog buffer to make Delete entries durable, then
-materializes TransformLog entries up to the message timetick into L0 segments.
-These operations return Data barriers owned by the affected SegmentModule and
-TransformLogModule state.
+For a broadcast message, BroadcastAck waits until the sealed AckRecord has only
+its own Ref, calls the coordinator Ack API, and releases that Ref. It does not
+use message-type-specific readiness or materialization rules.
 
-VChannelModule updates the VChannel View.Meta to dropped at the message
-timetick and marks the View dirty. The retained View remains available for
-historical-message filtering and VChannelModule-local tombstone finalization.
+`AckSyncUp` only disables Coordinator FastAck and requires Coordinator to wait
+for this RecoveryStorage-side Ack. It does not add checkpoint persistence to
+the BroadcastAck readiness rule.
 
-AckModule returns an ack DataBarrier for the broadcast message. The ack
-precondition waits for previous ack task completion and the target vchannel's
-composed SegmentModule/TransformLogModule materialized frontier to reach the
-DropCollection timetick.
+Ack does not define Segment or TransformLog task order. Each consumer owns its
+execution dependencies and calls `Ref.Done()` only after its own success
+condition is satisfied. Work that is retried, canceled, or abandoned during
+close retains its Ref; restart reconstructs a new AckRecord from WAL.
 
-## TruncateCollection
+## 2. Ack Reference Summary
 
-SegmentModule flushes every retained segment in the target vchannel whose create
-timetick is older than the message timetick. TransformLogModule flushes the
-target vchannel TransformLog buffer.
+| Reference | Retained when | Released when |
+|---|---|---|
+| Implicit dispatch Ref | `NewRecord` for every data-scanner message | `Seal()` after all top-level observers return |
+| Segment consumer Ref | One per actual SegmentView or module-local parent operation | Its data or lifecycle work succeeds |
+| TransformLog consumer Ref | A message appends transform payload or requires pending transform entries to flush | The containing TransformLog chunk is durable and committed in memory |
+| BroadcastAck Ref | Message has a `BroadcastHeader` | The sealed record has no other Refs and coordinator Ack succeeds |
 
-VChannelModule advances the target VChannel View.Meta and `MetaTimeTick` to the
-TruncateCollection timetick. The collection View.Meta is not removed by this
-message. Data barriers are returned for the affected SegmentModule and
-TransformLogModule work. AckModule returns an ack DataBarrier for the broadcast
-message. The ack precondition waits for previous ack task completion and the
-target vchannel's composed Data frontier to reach the TruncateCollection
-timetick.
+TransformLog materialization is independent from TransformLog Ref completion.
 
-## CreatePartition
+## 3. Message Workflows
 
-VChannelModule updates the target VChannel View.Meta by adding the partition in
-normal state and advances `MetaTimeTick` to the message timetick. The View
-becomes dirty and returns a Meta barrier.
+### TimeTick
 
-No data task is required. AckModule returns an ack DataBarrier for the broadcast
-message and calls the coordinator Ack API after previous ack task completion.
+TimeTick does not mutate VChannel, Segment, or TransformLog recovery state and
+does not retain a consumer Ref. It has no `BroadcastHeader` and is immediately
+complete after `Seal()` releases the implicit dispatch Ref.
 
-## DropPartition
+### CreateCollection
 
-SegmentModule flushes every retained segment in the partition whose create
-timetick is older than the message timetick. TransformLogModule flushes the
-vchannel TransformLog buffer.
+The target `VChannelRecoveryModule` creates or updates VChannel metadata,
+partition state, schema history, and the VChannel dirty snapshot. No Segment or
+TransformLog Ref is required when there is no pending transform payload.
 
-VChannelModule updates the partition state in VChannel View.Meta to dropped at
-the message timetick and marks the View dirty. The partition metadata remains
-retained until VChannelModule-local tombstone cleanup removes it.
+The broadcast module retains its own Ref, which can run after the record is
+sealed and any actual VChannel-internal data Refs finish. VChannel metadata
+is included in a DirtySnapshot before a later persist-batch checkpoint is
+written.
 
-AckModule returns an ack DataBarrier for the broadcast message. The ack
-precondition waits for previous ack task completion, the affected partition's
-SegmentModule Data frontier, and the vchannel TransformLogModule Data frontier
-to reach the DropPartition timetick.
+### CreatePartition
 
-## Import
+The target VChannel updates partition metadata and emits a dirty snapshot. It
+normally retains no Segment or TransformLog Ref. BroadcastAck follows the
+common last-reference rule.
 
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for
-Import. Import state transitions are not owned by StreamingNode recovery.
+### DropCollection
 
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
+The target VChannel records collection-drop metadata and tombstones. In
+MetaAndData mode:
 
-## CommitImport
+- every SegmentView that flushes or commits pending data retains its own Ref;
+- TransformLog retains a Ref when preceding Delete entries need a chunk flush;
+- any separately scheduled L0 materialization does not extend the TransformLog
+  Ref;
+- BroadcastAck waits for the actual Segment and TransformLog refs, then calls
+  the coordinator Ack API.
 
-VChannelModule, SegmentModule, and TransformLogModule do not commit import
-lifecycle state. Segment lifecycle changes produced by import are not modeled
-as growing segment lifecycle changes.
+### TruncateCollection
 
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
+The target VChannel advances truncation metadata. SegmentViews and TransformLog
+retain Refs only for concrete data work caused by the message. BroadcastAck
+uses the common last-reference rule and does not inspect VChannel-local
+timetick progress.
 
-## RollbackImport
+### DropPartition
 
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for
-RollbackImport.
+The VChannel records the partition tombstone. SegmentViews in the affected
+partition may retain direct Refs while flushing pending data. TransformLog may
+retain a Ref to flush preceding Delete entries. The
+BroadcastAck task waits for those refs, not for partition/vchannel frontier
+objects.
 
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
+### Import, CommitImport, RollbackImport, BatchUpdateManifest
 
-## BatchUpdateManifest
+These messages do not create local Segment or TransformLog persistence work in
+RecoveryStorage unless a current VChannel handler explicitly adds such work.
+Their broadcast acknowledgement normally waits only for the record to be
+sealed, previous broadcast FIFO order, and any Ref retained by another
+observer.
 
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for
-BatchUpdateManifest.
+### CreateSegment
 
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
+`VChannelRecoveryModule` creates the target SegmentView using the schema valid
+at the message timetick and updates Segment metadata.
 
-## CreateSegment
+In MetaAndData mode, ensure-growing work retains a direct Ref before task
+submission. The Ref releases after the lifecycle side effect succeeds.
+Segment metadata is marked dirty for the next persist batch.
 
-SegmentModule observes the message through the common `ObserveMessage` path. If
-the target Segment View is absent, it creates the View. SegmentModule reads
-`SchemaAt(vchannel, partitionID, timetick)` from VChannelModule to attach the
-correct historical schema. Segment View.Meta records collection, partition,
-vchannel, segment id, storage version, growing state, create timetick, row
-limits, schema snapshot, and `MetaTimeTick` equal to the message timetick. The
-View becomes dirty and returns a Meta barrier.
+### Insert
 
-In MetaAndData mode, SegmentModule submits an EnsureGrowingSegment task for the
-segment. The Segment View returns a Data barrier until the lifecycle side effect
-completes and the View.Data progress is persisted.
+The target SegmentView updates in-memory statistics and appends the payload plus
+a direct message Ref to its pending L1 buffer.
 
-This message is not a broadcast message, so AckModule does not call the coordinator Ack API.
+```text
+Insert@T
+  -> pending Segment buffer retains Ref
+  -> flush policy seals a chunk containing Insert@T
+  -> object write succeeds and chunk is installed
+  -> Insert@T Ref.Done()
+```
 
-## Insert
+A chunk may contain several WAL messages. Failure keeps every contained Ref
+pending. The task updates Segment metadata and marks it dirty before releasing
+the contained Refs.
 
-SegmentModule finds the target Segment View from the message assignment. It
-updates Segment View.Meta stats synchronously: modified rows, binary size, last
-modified timestamp, and `MetaTimeTick`. The Segment View becomes dirty and
-returns a Meta barrier.
+### Delete
 
-In MetaAndData mode, the insert payload is appended to the Segment View's in-memory L1 buffer. The Segment View returns a Data barrier. If the flush policy is triggered, it submits a Segment-owned FlushBuffer task to write a fixed chunk to object storage. Task completion updates View.Data, advances `DataTimeTick`, and marks the View dirty. The Data barrier advances after the dirty View snapshot is persisted.
+TransformLog converts Delete into a vchannel-level transform entry and appends
+it with a direct message Ref. The Ref remains pending until the chunk
+containing the entry is durably written and committed into TransformLog state.
 
-This message is not a broadcast message, so AckModule does not call the coordinator Ack API.
+Delete legality is guaranteed by WAL write-time checks and replay is
+idempotent against TransformLog metadata. TransformLog does not need to inspect
+Segment private state.
 
-## Delete
+Delete is not a broadcast message, so BroadcastAck does not retain a Ref.
 
-TransformLogModule handles Delete as vchannel-level TransformLog data. In
-MetaOnly mode it does not append data buffers. In MetaAndData mode it appends
-the Delete WAL message to the TransformLog buffer and returns a TransformLog
-Data barrier.
+### Flush
 
-TransformLogModule does not validate Delete replay through VChannelModule or
-SegmentModule state. Delete legality is guaranteed by WAL write-time checks,
-exclusive/shared lock ordering, and WAL message order. Replay-side behavior is
-module-local idempotent consumption based on TransformLog meta.
+The target SegmentView records the sealed transition and may retain direct Refs
+for pending chunk flush and commit-L1 work.
 
-When the TransformLog buffer reaches policy thresholds or a later flush-style
-message requires it, TransformLogModule submits a TransformLog task. Task
-completion writes chunk data, updates TransformLog meta and `DataTimeTick`,
-marks a TransformLog DirtySnapshot, and notifies RecoveryStorage. RecoveryStorage
-persists the snapshot and calls `DirtySnapshot.MarkPersisted()`, which advances
-the Data barrier.
+TransformLog treats Flush as a sync-up barrier. If preceding Delete entries
+need to be flushed, it retains a Ref until their containing chunks are durable.
+It does not retain a Ref for materialization.
 
-This message is not a broadcast message, so AckModule does not call the coordinator Ack API.
+### ManualFlush
 
-## Flush
+All retained SegmentViews in the target VChannel may retain direct Refs
+for required flush/commit work. TransformLog flushes preceding Delete entries
+and retains a Ref until chunk durability.
 
-SegmentModule flushes the specified Segment View. The segment View.Meta is
-closed at the flush timetick and marked dirty. If the segment was already
-tombstoned for that timetick, the message is skipped.
+ManualFlush may also trigger L0 materialization as an independent downstream
+task. Neither the TransformLog Ref, BroadcastAck, nor RecoveryStorage Data
+checkpoint waits for materialization.
 
-In MetaAndData mode, SegmentModule submits the Segment-owned CommitL1Segment
-task. The Segment Data barrier remains until all pending L1 output is durable,
-lifecycle commit completes, View.Data advances to the flush timetick, and the
-dirty View snapshot is persisted.
+BroadcastAck runs after the Segment and TransformLog refs have completed.
 
-This message is not a broadcast message, so AckModule does not call the coordinator Ack API.
+### FlushAll
 
-## ManualFlush
+Each local VChannel applies the same rules as ManualFlush to its SegmentViews
+and TransformLog. Every actual SegmentView and TransformLog consumer directly
+retains its own Ref on the same message AckRecord.
 
-SegmentModule flushes every retained segment in the target vchannel whose
-create timetick is older than the message timetick. It ignores any segment id
-hints in the message body for recovery semantics.
+BroadcastAck remains FIFO and waits for all actual refs on the PChannel-wide
+message. It does not wait for an all-local materialized frontier.
 
-TransformLogModule flushes the target vchannel TransformLog buffer to the
-message timetick and then materializes TransformLog entries up to that timetick
-into L0 segments.
+### Txn
 
-The affected Segment Views and TransformLog return Data barriers according to
-their durable and materialized progress rules. AckModule returns an ack
-DataBarrier for the broadcast message. The ack precondition waits for previous
-ack task completion and the target vchannel's composed
-SegmentModule/TransformLogModule materialized frontier to reach the ManualFlush
-timetick.
+A committed transaction is observed as one atomic WAL message:
 
-## FlushAll
+- every affected SegmentView retains its own Ref for Insert work;
+- Delete bodies produce one TransformLog entry at the transaction timetick and
+  retain a TransformLog Ref until that entry's chunk is durable;
+- all metadata changes are captured by the next persist batch.
 
-SegmentModule flushes every retained segment on the PChannel whose create
-timetick is older than the message timetick. TransformLogModule flushes all
-eligible TransformLog buffers and materializes all local TransformLogs up to
-the message timetick.
+The transaction is not split into independent external recovery messages.
 
-AckModule returns an ack DataBarrier for the broadcast message. The ack
-precondition waits for previous ack task completion and the all-local composed
-SegmentModule/TransformLogModule materialized frontier to reach the FlushAll
-timetick.
+### AlterCollection
 
-## AlterReplicateConfig
+The VChannel records collection metadata changes. For a schema change, retained
+SegmentViews may flush pending data before moving to the new schema boundary,
+and TransformLog may flush preceding Delete entries. Those operations retain
+direct Segment and TransformLog Refs.
 
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for
-replication topology changes.
+Non-schema alterations normally require metadata publication only.
+BroadcastAck waits for Refs actually retained by the message and does not
+query composed module progress.
 
-RecoveryStorage records replicate configuration progress in WALCheckpoint-related state outside the data modules. AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
+### AlterLoadConfig And DropLoadConfig
 
-## Txn
+QueryView metadata is the query-resource load trigger. These messages do not
+create VChannel-local QueryRuntime references in RecoveryStorage. Any
+RecoveryStorage metadata observation is independent from QueryView resource
+lifetime.
 
-Txn is the synthetic committed transaction message delivered by the recovery stream. It may contain Insert and Delete body messages.
+BroadcastAck follows the common last-reference rule.
 
-For Insert bodies, SegmentModule updates each affected Segment View once at the
-transaction timetick, appends the insert payload to the Segment L1 buffer in
-MetaAndData mode, and returns the composed Meta/Data barriers for those
-segments.
+### AlterReplicateConfig
 
-For Delete bodies, TransformLogModule handles the Txn message directly as one
-atomic WAL message. It collects all Delete bodies in the transaction, groups
-them into one TransformLog entry per vchannel at the transaction timetick, and
-returns TransformLog Data barriers. The Txn is not split by external recovery
-code before it reaches TransformLogModule.
+RecoveryStorage records replication progress in WAL checkpoint-related state.
+It does not require Segment or TransformLog data work unless another observer
+retains a Ref. BroadcastAck follows FIFO ordering.
 
-This synthetic message is not a broadcast message, so AckModule does not call the coordinator Ack API.
+### Database, Alias, RBAC, Resource Group, And Index Broadcasts
 
-## AlterCollection
+This category includes:
 
-VChannelModule updates collection metadata in the VChannel View.Meta and
-advances `MetaTimeTick`.
+- CreateDatabase, AlterDatabase, DropDatabase;
+- AlterAlias, DropAlias;
+- AlterUser, DropUser, AlterRole, DropRole;
+- AlterUserRole, DropUserRole;
+- AlterPrivilege, DropPrivilege;
+- AlterPrivilegeGroup, DropPrivilegeGroup, RestoreRBAC;
+- AlterResourceGroup, DropResourceGroup;
+- CreateIndex, AlterIndex, DropIndex.
 
-If the AlterCollection changes schema, SegmentModule first flushes every
-retained segment in the target vchannel whose create timetick is older than the
-message timetick, and TransformLogModule flushes the target vchannel
-TransformLog buffer. Then VChannelModule updates schema history. New segments
-created after this timetick read the new schema through `SchemaAt`; existing
-retained SegmentModule state keeps the schema snapshot it already owns.
-Non-schema alterations do not require SegmentModule or TransformLogModule data
-flush work.
+These messages normally do not mutate local VChannel, Segment, or TransformLog
+recovery state. `broadcastAckModule` retains its Ref and acknowledges them after
+the record is sealed, prior broadcast ordering, and any Ref retained by another
+observer.
 
-AckModule returns an ack DataBarrier for the broadcast message. For
-schema-changing AlterCollection, the ack precondition waits for previous ack
-task completion and the target vchannel's composed SegmentModule/TransformLogModule
-Data frontier to reach the AlterCollection timetick. For non-schema
-AlterCollection, it waits only for previous ack task completion.
+### AlterWAL
 
-## AlterLoadConfig
+AlterWAL is PChannel scoped. Local VChannels may flush eligible Segment pending
+data and TransformLog entries up to the message timetick. The message-level
+AckRecord receives one direct Ref from every actual consumer across all affected
+VChannels.
 
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for AlterLoadConfig.
+BroadcastAck waits for those refs and FIFO order. It does not wait for a
+composed all-local progress value or TransformLog materialization.
 
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
+### RecoveryBarrier
 
-## DropLoadConfig
+RecoveryBarrier advances TransformLog's volatile sync-up frontier. If preceding
+Delete entries need a chunk flush, TransformLog retains a Ref until durability.
+It is not a coordinator broadcast acknowledgement.
 
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for DropLoadConfig.
+## 4. Persist Batch Publication
 
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
+For every message that mutates recovery metadata:
 
-## CreateDatabase
+```text
+observe and mutate in-memory state
+  -> mark the component dirty
+```
 
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for CreateDatabase.
+RecoveryStorage later freezes one batch boundary, consumes stable
+DirtySnapshots covering that boundary, persists all of them, and persists the
+frozen checkpoint last. An asynchronous consumer must mutate metadata and mark
+it dirty before `Ref.Done()`, so every message in the frozen Ack completed
+frontier is represented by the batch snapshots.
 
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
+## 5. Invariants
 
-## AlterDatabase
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for AlterDatabase.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## DropDatabase
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for DropDatabase.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## AlterAlias
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for AlterAlias.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## DropAlias
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for DropAlias.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## AlterUser
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for AlterUser.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## DropUser
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for DropUser.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## AlterRole
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for AlterRole.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## DropRole
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for DropRole.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## AlterUserRole
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for AlterUserRole.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## DropUserRole
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for DropUserRole.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## AlterPrivilege
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for AlterPrivilege.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## DropPrivilege
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for DropPrivilege.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## AlterPrivilegeGroup
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for AlterPrivilegeGroup.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## DropPrivilegeGroup
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for DropPrivilegeGroup.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## RestoreRBAC
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for RestoreRBAC.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## AlterResourceGroup
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for AlterResourceGroup.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## DropResourceGroup
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for DropResourceGroup.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## CreateIndex
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for CreateIndex.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## AlterIndex
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for AlterIndex.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## DropIndex
-
-VChannelModule, SegmentModule, and TransformLogModule do not mutate Views for DropIndex.
-
-AckModule returns an ack DataBarrier for the broadcast message and calls the coordinator Ack API after previous ack task completion.
-
-## AlterWAL
-
-SegmentModule and TransformLogModule treat AlterWAL as a PChannel-wide flush
-barrier. SegmentModule flushes every retained segment whose create timetick is
-older than the message timetick, and TransformLogModule flushes all eligible
-TransformLog buffers.
-
-RecoveryStorage records AlterWAL information in WALCheckpoint-related state
-outside the data modules. AckModule returns an ack DataBarrier for the broadcast
-message. The ack precondition waits for previous ack task completion and the
-all-local composed SegmentModule/TransformLogModule Data frontier to reach the
-AlterWAL timetick.
+1. One data-scanner message owns one Ack record.
+2. The implicit dispatch Ref remains retained until RecoveryStorage seals the
+   record after all observers return.
+3. Every actual Segment and TransformLog consumer retains a direct Ref before
+   exposing asynchronous work.
+4. Broadcast messages use the same Segment and TransformLog retain rules as
+   non-broadcast messages.
+5. BroadcastAck waits for actual message refs, not inferred timetick frontiers.
+6. TransformLog Ack completion does not wait for materialization.
+7. Every persist batch writes all captured DirtySnapshots before its frozen
+   checkpoint.
+8. Async consumers mutate metadata and mark it dirty before `Ref.Done()`.
+9. Checkpoint recovery pairs `LastConfirmedMessageID` with
+   `DeliverPolicyStartFrom`.
+10. Ack does not provide task ordering or failed completion states.

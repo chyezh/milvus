@@ -1,141 +1,140 @@
 # Broadcast Ack Module
 
-`AckModule` owns StreamingNode local acknowledgement for broadcast WAL messages.
-It is a RecoveryStorage module because broadcast ack is a replayable Data-side
-effect.
+`broadcastAckModule` owns StreamingNode-local acknowledgement for persisted
+broadcast WAL messages. It is a RecoveryStorage module because the coordinator
+Ack is a replayable data-side effect.
+
+Message completion and checkpoint semantics are defined by
+[WAL Message Ack Design](message_ack.md).
 
 ## 1. Ownership
 
-`AckModule` owns:
+`broadcastAckModule` owns:
 
-- detecting persisted messages that carry a `BroadcastHeader`;
-- submitting coordinator broadcast Ack RPC tasks;
-- ordering ack tasks by WAL ack order;
-- Data barriers that block RecoveryStorage Data checkpoint until ack succeeds.
+- detecting persisted messages carrying a `BroadcastHeader`;
+- retaining one Ref for each such message;
+- preserving acknowledgement order within one PChannel;
+- submitting `streaming.WAL().Broadcast().Ack(ctx, msg)`;
+- retrying failed coordinator Ack calls;
+- releasing its Ref only after the Ack call succeeds.
 
-`AckModule` does not own:
+It does not own:
 
-- VChannel, Segment, or TransformLog metadata;
-- data flush decisions;
-- object storage writes;
-- module dirty snapshots.
+- VChannel, Segment, TransformLog, or DataView metadata;
+- object-storage flush decisions;
+- TransformLog materialization;
+- module dirty snapshots;
+- Meta or Data checkpoint advancement.
 
-## 2. Ack As Data Work
+## 2. Ack As Message Work
 
-Broadcast ack is a Data-side effect. For every persisted message with a
-`BroadcastHeader`, AckModule submits an ack task in MetaAndData mode and returns
-a Data barrier. The Data barrier disappears only after the coordinator Ack API
-succeeds.
+For every persisted message carrying a `BroadcastHeader`, the module calls
+`Retain()` during `ObserveMessage` and stores the returned Ref with the queued
+broadcast task.
 
-Ack is replayable and idempotent. If StreamingNode crashes after sending ack
-but before WALCheckpoint persistence, recovery may send the same ack again.
+The Ref belongs to the same AckRecord used by SegmentView and TransformLog
+consumers. It blocks completion of that WAL message until the external
+broadcast Ack has succeeded.
+
+The module expresses its data-side completion only through its retained Ref.
+RecoveryStorage derives its data checkpoint from the continuous completed Ack
+frontier frozen for a persist batch.
+
+Broadcast Ack is replayable and idempotent. If StreamingNode crashes after the
+coordinator call succeeds but before the recovery checkpoint is persisted, WAL
+replay may send the same Ack again.
+
+For a message with `BroadcastHeader.AckSyncUp`, Coordinator Broadcaster skips
+its FastAck path and waits for this consuming-side Ack. `AckSyncUp` does not add
+another RecoveryStorage readiness condition and does not mean the
+RecoveryStorage checkpoint has already been persisted.
 
 ## 3. Preconditions
 
-Ack tasks always wait for previous ack task completion. Some message types also
-wait for data-module progress before acking the coordinator.
+The queue head may acknowledge its message when:
 
-Preconditions are defined by message type and message scope:
-
-- VChannel-scoped flush/drop/schema-changing messages wait for the composed
-  durable Data frontier of affected modules in that vchannel.
-- Partition-scoped drop messages wait for the composed Data frontier of the
-  affected partition.
-- PChannel-wide flush-style messages wait for the composed all-local data-module
-  Data frontier.
-- `DropCollection`, `ManualFlush`, and `FlushAll` wait for the composed
-  materialized frontier. For SegmentModule this is the normal L1 Data frontier;
-  for TransformLogModule this is the L0 materialized frontier backed by
-  `materialized_time_tick`.
-- Broadcast messages without growing-data dependency wait only for previous ack
-  task completion.
-
-Examples:
-
-- `DropCollection` waits for the target vchannel's composed materialized
-  SegmentModule/TransformLogModule frontier.
-- `DropPartition` waits for the affected partition's SegmentModule frontier and
-  the vchannel TransformLogModule durable frontier.
-- `ManualFlush` waits for the target vchannel's composed materialized
-  SegmentModule/TransformLogModule frontier.
-- `FlushAll` waits for all local SegmentModule/TransformLogModule
-  materialized frontiers.
-- `CommitImport` waits only for previous ack task completion.
-
-## 4. Module Interaction
-
-AckModule does not call data modules to flush data, persist Views, or mutate
-state. It only observes module barriers/frontiers exposed through the
-RecoveryStorage framework.
-
-This keeps ack logic as transport-level acknowledgement while leaving business
-decisions inside VChannelModule, SegmentModule, and TransformLogModule.
-
-## 5. ModuleAPI Implementation
-
-`AckModule` implements the core `Module` API. It depends on a composed
-`DataFrontierProvider` built by RecoveryStorage.
-
-```go
-type AckModule struct {
-    frontierProvider moduleapi.DataFrontierProvider
-}
-
-var _ moduleapi.Module = (*AckModule)(nil)
+```text
+record.Sealed() && record.RefCount() == 1
 ```
 
-### Module.Name
+The remaining reference is the queue head's own BroadcastAck Ref. `Sealed()`
+proves that all observers have returned and no new consumer may retain the
+record. `RefCount() == 1` proves that every other asynchronous consumer has
+completed.
 
-Returns `ModuleNameAck`.
+No message-type-specific readiness table is required.
 
-### Module.ObserveMessage
+The task does not wait for:
 
-If the message has no `BroadcastHeader`, AckModule returns an empty
-`ObserveResult`.
+- a Segment or TransformLog timetick frontier;
+- RecoveryStorage Data checkpoint progress;
+- RecoveryStorage checkpoint publication;
+- TransformLog materialization.
 
-If the message has a `BroadcastHeader`, AckModule creates an ack task and
-returns a Data barrier. The task precondition combines:
+If a broadcast message causes Segment or TransformLog data work, those
+consumers must retain their own Refs before dispatch is sealed. The
+BroadcastAck precondition then observes their real completion directly.
 
-- previous ack task completion;
-- the composed Data frontier for the message scope when required by message
-  semantics.
+## 4. Ordering
 
-AckModule does not return Meta barriers.
+Broadcast acknowledgements remain FIFO within one PChannel:
 
-### Module.SwitchIntoMetaAndData
-
-Switches ack processing into MetaAndData mode and returns nil. AckModule does
-not contribute WAL open data snapshots.
-
-### Module.ConsumeDirtySnapshots
-
-Returns nil. Ack state is represented by in-memory Data barriers and replayable
-coordinator Ack RPCs, not by catalog snapshots.
-
-### DataFrontierProvider Dependency
-
-AckModule asks the provider for scope barriers:
-
-```go
-frontierProvider.DataFrontier(scope)
+```text
+message A queue head
+  -> wait until A is sealed and only BroadcastAck's Ref remains
+  -> Ack(A) succeeds
+  -> A's BroadcastAck Ref.Done()
+  -> submit message B queue head
 ```
 
-The provider composes all modules implementing `DataFrontierView`, such as
-SegmentModule and TransformLogModule. AckModule does not depend on those
-modules directly.
+A later broadcast is not acknowledged before an earlier one, even if the later
+message's other Refs have already completed. StreamingCoord relies on this
+per-PChannel WAL order.
 
-AckModule sets `scope.Kind` to `DataProgressDurable` for ordinary data
-dependencies and `DataProgressMaterialized` for `DropCollection`,
-`ManualFlush`, and `FlushAll`.
+## 5. Retry And Close
 
-AckModule does not implement `DataCheckpointView`, `DataFrontierView`, or
-`CheckpointPersistedObserver`.
+If another message consumer is still pending, the task returns the scheduler's
+delay signal and keeps its Ref.
 
-## 6. Invariants
+If `Broadcast().Ack` fails, the task is delayed and retried. It does not call
+`Done()` and does not advance the FIFO queue.
 
-1. AckModule returns Data barriers, not Meta barriers.
-2. Ack tasks are ordered by WAL ack order.
-3. Ack preconditions wait on module frontiers but do not mutate module state.
-4. Ack is idempotent across recovery.
-5. RecoveryStorage Data checkpoint cannot pass a broadcast message until its
-   ack barrier disappears.
+BroadcastAck has no failed completion state. Context cancellation and
+RecoveryStorage close also keep the Ref retained. Shutdown may discard the
+in-memory queue only because the persisted Data checkpoint remains behind the
+message and WAL replay will rebuild the BroadcastAck Ref.
+
+After `Broadcast().Ack` succeeds:
+
+1. call `Done()` on the task's Ref;
+2. remove the task from the queue head;
+3. submit the next queued broadcast task;
+4. let the AckRecord zero transition notify RecoveryStorage when this was the
+   final Ref.
+
+## 6. ModuleAPI
+
+`broadcastAckModule` implements `moduleapi.Module`:
+
+- `Name()` returns `ModuleNameAck`;
+- `ObserveMessage()` retains one Ref and enqueues a task only for a broadcast
+  message in MetaAndData mode;
+- `SwitchIntoMetaAndData()` enables broadcast acknowledgement and returns no
+  recovery snapshot;
+- `ConsumeDirtySnapshots()` returns nil because Ack state is replayed from WAL,
+  not persisted as module metadata.
+
+## 7. Invariants
+
+1. Every observed broadcast message in MetaAndData mode owns exactly one
+   BroadcastAck Ref.
+2. BroadcastAck waits for a sealed record with only its own Ref, not inferred
+   module frontiers.
+3. The coordinator call remains FIFO per PChannel.
+4. A failed coordinator call keeps the Ref pending and remains retryable.
+5. The Ref is released only after the coordinator call succeeds.
+6. BroadcastAck does not wait for checkpoint publication or
+   TransformLog materialization.
+7. `AckSyncUp` disables Coordinator FastAck but does not change the
+   RecoveryStorage Ack precondition.
+8. Cancellation and close never release an incomplete BroadcastAck Ref.

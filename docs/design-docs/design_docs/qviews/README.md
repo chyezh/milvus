@@ -201,10 +201,10 @@ Growing → Sealed [DataVersion D1] → Release
 | **Release** | SN required DataVersion watermark ≥ D1 and no retained view needs this Segment | Segment does not participate in any queries | Noop |
 
 The Sealed state is retained on StreamingNode until the local required DataVersion
-watermark reaches D1. This delayed GC is required for crash recovery when
-a persisted Up view is older than the latest local SegmentModule state: the old Up
-view still needs flushed-at-D1 segments as growing-side resources if its DataVersion is
-lower than D1.
+watermark reaches D1. This delayed GC is required for crash recovery when a
+persisted Up view is older than the latest SegmentView state owned by the
+VChannelRecoveryModule: the old Up view still needs flushed-at-D1 segments as
+growing-side resources if its DataVersion is lower than D1.
 
 ## 9. Historical Query Segment Lifecycle
 
@@ -270,13 +270,13 @@ StreamingNode, see [StreamingNode IDF Oracle Runtime Design](snview/idf_oracle_r
 | Coord | DataView Manager | Maintaining the storage view list |
 | Coord | Sealed Segment Balancer | Gathering information from all Managers, generating and distributing QueryViews |
 | Coord | QueryView Manager | View state machine transitions, syncing view information to all Nodes |
-| Streaming Node | PChannel Query Resource Manager | Preparing vchannel resources from versioned load info, latest schema, SegmentModule views, TransformLog, and BM25 resource RPC |
+| Streaming Node | PChannel Query Resource Manager | Preparing vchannel resources from versioned load info, latest schema, VChannel-owned SegmentViews, TransformLog, and BM25 resource RPC |
 | Streaming Node | QueryView Manager | Listening for view state machine changes, checking prepared view resources, and publishing the required DataVersion watermark for SN-only eviction |
-| Streaming Node | Pure Delete Stream Manager | Acting as subscription server, publishing Delete data to QueryNodes. See [TransformLog View Module](../wal/transform_log_view_module.md). |
+| Streaming Node | Pure Delete Stream Manager | Acting as subscription server, publishing Delete data to QueryNodes. See [TransformLog Design](../wal/transform_log_view_module.md). |
 | Streaming Node | Growing Segment Manager | Incremental data management, maintaining Growing Segment lifecycle |
 | Query Node | QueryView Manager | Listening for view state machine changes, applying to Sealed Segments |
 | Query Node | Sealed Segment Manager | Historical data management, maintaining Sealed Segment lifecycle |
-| Query Node | Pure Delete Stream Manager | Acting as subscription client, applying Delete data to each Segment. See [TransformLog View Module](../wal/transform_log_view_module.md). |
+| Query Node | Pure Delete Stream Manager | Acting as subscription client, applying Delete data to each Segment. See [TransformLog Design](../wal/transform_log_view_module.md). |
 
 ### 11.3 SyncQueryView RPC
 

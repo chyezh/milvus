@@ -41,8 +41,8 @@ catchup, and the transition to `Ready`.
 | `GrowingRuntime` | QueryRuntime module that owns the vchannel segment map and segment-level dispatch. | It does not decide resource references or call WAL modules directly. |
 | `GrowingSegment` | Owns one segment's local resource handle and applies segment-scoped persisted data, inserts, deletes, and sealed metadata. | It does not own vchannel-level message dispatch or DataVersion watermarks. |
 | `VChannelWALView` | Provides no-gap WAL input for the selected base DataVersion. | Its contract is defined in [StreamingNode VChannel WAL View Design](../../wal/streamingnode_vchannel_wal_view.md). |
-| `SegmentModule` | Owns segment metadata, visible snapshot construction, and segment metadata GC. | It is consumed only through `VChannelWALView`; runtime components do not call it directly. |
-| `TransformLogModule` | Owns transform log storage published through the PChannel-level shared stream. | `GrowingRuntime.Prepare` creates and closes its own bounded vchannel subscription. |
+| `SegmentView` | VChannelRecoveryModule-internal owner of segment metadata, visible snapshot construction, and segment metadata GC. | It is consumed only through `VChannelWALView`; runtime components do not call it directly. |
+| `TransformLog` | VChannelRecoveryModule-internal owner of transform log storage published through the PChannel-level shared stream. | `GrowingRuntime.Prepare` creates and closes its own bounded vchannel subscription. |
 
 ## 3. Component Relationships And Invariants
 
@@ -140,8 +140,8 @@ DataVersion.
 2. `GrowingRuntime` does not own the vchannel live-event buffer.
 3. `GrowingRuntime` does not own pending live-event buffering.
 4. `GrowingRuntime` does not expose a catchup handle.
-5. Runtime preparation never reads `SegmentModule` or `TransformLogModule`
-   directly.
+5. Runtime preparation never reads `SegmentView` or `TransformLog` internal
+   state directly.
 6. `VChannelWALView` owns the no-gap input guarantee.
 7. Snapshot segment membership during preparation comes only from
    `VChannelWALView.SegmentSnapshot.Segments`.
@@ -305,7 +305,7 @@ Segment sealing has two relevant moments:
 
 The second value is required for retention. It is delivered through live
 resource events captured by `RecoveryStorage` and forwarded by `QueryRuntime`.
-`GrowingRuntime` must not query `SegmentModule` directly to refresh it.
+`GrowingRuntime` must not query `SegmentView` directly to refresh it.
 
 ### 5.4 Truncation
 

@@ -3,12 +3,13 @@
 > StreamingNode-side query runtime ownership for QueryView.
 
 This document defines the PChannel-local recovery manager, the VChannel-level
-query runtime, and the reference model used by WAL recovery and the
-StreamingNode QueryView state machine.
+query runtime, and the reference model used by the StreamingNode QueryView
+state machine.
 
 ## 1. Purpose
 
-StreamingNode query resources are owned by the WAL recovery model:
+StreamingNode query resources are built from state owned by the WAL recovery
+model:
 
 ```text
 PChannelRecoveryManager
@@ -27,16 +28,20 @@ live DML dispatch. Once a runtime is recovered, the module continues consuming
 DML and the DataView visible to the runtime only grows while the QueryView is
 live.
 
+WAL message completion, object-storage/etcd publication, RecoveryStorage
+checkpoints, and broadcast acknowledgement are not QueryView resource state.
+They are defined by [WAL Message Ack Design](../../wal/message_ack.md).
+
 ## 2. Boundaries
 
 | Component | Role | Boundary |
 |---|---|---|
-| `RecoveryStorage` | Restores PChannel WAL state, manages checkpoints, persists dirty module snapshots, and exposes `VChannelManager()`. | It does not build query runtimes, publish load callbacks, or own live observers. |
+| `RecoveryStorage` | Restores and persists PChannel WAL state and exposes `VChannelManager()`. | It does not build query runtimes, publish load callbacks, or own live query observers. |
 | `PChannelRecoveryManager` | Owns all `VChannelRecoveryModule` instances on one PChannel, the vchannel index, the shared build scheduler, and the live-event dispatcher. Implements `snview.StreamingNodeResourceManager`. | It does not own QueryView state transitions. |
 | `VChannelRecoveryModule` | Owns one VChannel's metadata, growing segments, TransformLog, DataView recovery, QueryRuntime lifecycle, and DML event dispatch. | It does not coordinate across VChannels except through manager-provided scheduler/dispatcher. |
-| `QueryRuntime` | Owns one live-event buffer, initializes resource modules from a WAL input view, drains buffered events in WAL order, and advances DataVersion watermarks. | It does not own QueryView references or WAL module snapshots. |
-| `QueryRuntimeModule` | Common lifecycle interface implemented by growing segment runtime, IDF oracle runtime, and future resource modules. | It does not manage QueryView references or runtime scheduling. |
-| `QueryViewStateMachine` | Owns QueryView transitions. Calls `Acquire` when a local QueryView starts using StreamingNode resources and `Release` when the QueryView leaves. | It does not build csegments, BM25 resources, TransformLog scanners, or DataView snapshots. |
+| `QueryRuntime` | Owns one live-event buffer, initializes resource modules from a WAL input view, drains buffered events in WAL order, and advances DataVersion watermarks. | It does not own WAL checkpoints, Message Ack records, or QueryView references. |
+| `QueryRuntimeModule` | Common lifecycle interface implemented by growing segment runtime, IDF oracle runtime, and future query resource modules. | It does not manage QueryView references or RecoveryStorage persistence. |
+| `QueryViewStateMachine` | Owns QueryView transitions. Calls `Acquire` when a local QueryView starts using StreamingNode resources and `Release` when the QueryView leaves. | It does not build csegments, BM25 resources, TransformLog scanners, DataView snapshots, or WAL Ack records. |
 
 ## 3. Normal Acquire
 
@@ -74,9 +79,12 @@ Events observed while the runtime build task is still running are buffered in
 the same `QueryRuntime` event buffer. After the runtime becomes ready, the shared
 dispatcher drains future events through the same per-runtime serialized path.
 
+Live query observation is not a WAL persistence completion signal. QueryRuntime
+and its modules neither retain nor release data-message Ack Refs.
+
 ## 5. References
 
-The resource reference model is QueryView-only:
+The query resource reference model is QueryView-only:
 
 ```text
 resource refs = queryViewRefs[QueryViewVersion]
@@ -90,9 +98,13 @@ Rules:
 3. Later `Acquire` calls add references and advance the runtime to the oldest
    referenced DataVersion.
 4. `Release(QueryView)` removes the corresponding reference.
-5. Resources can be closed only after all QueryView references are gone.
+5. Query resources can be closed only after all QueryView references are gone.
 6. WAL handoff close drains QueryView references through
    `QueryViewStateMachine.CloseForHandoff` before the manager is closed.
+
+QueryView references protect temporary query-serving resources. They are
+independent from WAL Message Ack references, which protect persistence and
+checkpoint decisions.
 
 ## 6. Crash Recovery
 
@@ -106,6 +118,9 @@ Recovery rebuilds state from WAL metadata and QueryView metadata:
    its owned DataView/TransformLog state.
 5. After runtime initialization, the module continues consuming DML and
    dispatching live resource events to the runtime.
+
+WAL Message Ack state is rebuilt independently by RecoveryStorage replay and is
+not recovered from QueryView state.
 
 ## 7. Interfaces
 
