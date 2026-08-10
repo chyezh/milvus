@@ -29,13 +29,10 @@ func TestPChannelRecoveryManagerCreatesAndRoutesVChannelModules(t *testing.T) {
 	manager := newTestManager(t, "p1", "v1")
 	manager.SwitchIntoMetaAndData()
 
-	result := manager.ObserveMessage(ctx, newTestDeleteMessage(t, "v2", 10))
-	assert.Nil(t, result.Meta)
-	assert.Nil(t, result.Data)
+	observeTestMessage(ctx, t, manager, newTestDeleteMessage(t, "v2", 10))
 	assert.Nil(t, manager.Module("v2"))
 
-	result = manager.ObserveMessage(ctx, newTestCreateCollectionMessage(t, "v2", 20))
-	require.NotNil(t, result.Meta)
+	observeTestMessage(ctx, t, manager, newTestCreateCollectionMessage(t, "v2", 20))
 	require.NotNil(t, manager.Module("v2"))
 	assert.True(t, manager.Module("v2").metaAndData)
 
@@ -48,13 +45,13 @@ func TestPChannelRecoveryManagerBroadcastsPChannelMessages(t *testing.T) {
 	ctx := context.Background()
 	manager := newTestManager(t, "p1", "v1", "v2")
 	manager.SwitchIntoMetaAndData()
-	manager.ObserveMessage(ctx, newTestDeleteMessage(t, "v1", 10))
-	manager.ObserveMessage(ctx, newTestDeleteMessage(t, "v2", 11))
+	observeTestMessage(ctx, t, manager, newTestDeleteMessage(t, "v1", 10))
+	observeTestMessage(ctx, t, manager, newTestDeleteMessage(t, "v2", 11))
 
-	result := manager.ObserveMessage(ctx, newTestRecoveryBarrierMessage(t, 20))
+	observeTestMessage(ctx, t, manager, newTestRecoveryBarrierMessage(t, 20))
 
-	require.NotNil(t, result.Data)
-	assert.Equal(t, uint64(0), result.Data.TimeTick())
+	assert.Equal(t, uint64(20), manager.Module("v1").transformLog.LatestTimeTick())
+	assert.Equal(t, uint64(20), manager.Module("v2").transformLog.LatestTimeTick())
 }
 
 func TestPChannelRecoveryManagerModuleIndexSupportsConcurrentRange(t *testing.T) {
@@ -195,8 +192,7 @@ func TestPChannelRecoveryManagerConsumesDirtySnapshotsFromUpdatedModule(t *testi
 	manager := newTestManager(t, "p1", "v1")
 	manager.SwitchIntoMetaAndData()
 
-	result := manager.ObserveMessage(ctx, newTestCreatePartitionMessage(t, "v1", 20))
-	require.NotNil(t, result.Meta)
+	observeTestMessage(ctx, t, manager, newTestCreatePartitionMessage(t, "v1", 20))
 
 	snapshots := manager.ConsumeDirtySnapshots()
 	require.NotEmpty(t, snapshots)
@@ -208,10 +204,8 @@ func TestPChannelRecoveryManagerDoesNotScanCleanModulesForDirtySnapshots(t *test
 	manager := newTestManager(t, "p1", "v1", "v2")
 	manager.SwitchIntoMetaAndData()
 
-	result := manager.Module("v2").ObserveMessage(ctx, newTestCreatePartitionMessage(t, "v2", 20))
-	require.NotNil(t, result.Meta)
-	result = manager.ObserveMessage(ctx, newTestCreatePartitionMessage(t, "v1", 20))
-	require.NotNil(t, result.Meta)
+	observeTestMessage(ctx, t, manager.Module("v2"), newTestCreatePartitionMessage(t, "v2", 20))
+	observeTestMessage(ctx, t, manager, newTestCreatePartitionMessage(t, "v1", 20))
 
 	snapshots := manager.ConsumeDirtySnapshots()
 	assert.Contains(t, dirtySnapshotVChannels(snapshots), "v1")
@@ -223,7 +217,7 @@ func TestPChannelRecoveryManagerTracksAsyncModuleUpdates(t *testing.T) {
 	module := manager.Module("v1")
 	require.NotNil(t, module.runtime.Notifier)
 
-	module.runtime.Notifier.NotifyBarrierUpdated()
+	module.runtime.Notifier.NotifyModuleUpdated(moduleapi.ModuleNameTransformLog)
 	dirty := manager.takeDirtyModules()
 	assert.Same(t, module, dirty["v1"])
 }
@@ -232,7 +226,7 @@ func TestPChannelRecoveryManagerKeepsInFlightDirtyVChannelSnapshots(t *testing.T
 	ctx := context.Background()
 	manager := newTestManager(t, "p1", "v1", "v2")
 
-	manager.ObserveMessage(ctx, newTestCreateCollectionMessage(t, "v3", 20))
+	observeTestMessage(ctx, t, manager, newTestCreateCollectionMessage(t, "v3", 20))
 	first := manager.ConsumeDirtySnapshots()
 	require.NotEmpty(t, first)
 	assert.Contains(t, dirtySnapshotVChannels(first), "v3")
@@ -245,36 +239,6 @@ func TestPChannelRecoveryManagerKeepsInFlightDirtyVChannelSnapshots(t *testing.T
 		snapshot.MarkPersisted()
 	}
 	assert.Empty(t, manager.ConsumeDirtySnapshots())
-}
-
-func TestPChannelRecoveryManagerAggregatesDataFrontier(t *testing.T) {
-	ctx := context.Background()
-	manager := newTestManager(t, "p1", "v1", "v2")
-	manager.SwitchIntoMetaAndData()
-	manager.ObserveMessage(ctx, newTestDeleteMessage(t, "v1", 10))
-
-	v1Frontier := manager.DataFrontier(moduleapi.Scope{
-		Type:     moduleapi.ScopeVChannel,
-		Kind:     moduleapi.DataProgressDurable,
-		VChannel: "v1",
-	})
-	require.NotNil(t, v1Frontier)
-	assert.Equal(t, uint64(0), v1Frontier.TimeTick())
-
-	v2Frontier := manager.DataFrontier(moduleapi.Scope{
-		Type:     moduleapi.ScopeVChannel,
-		Kind:     moduleapi.DataProgressDurable,
-		VChannel: "v2",
-	})
-	require.NotNil(t, v2Frontier)
-	assert.NotZero(t, v2Frontier.TimeTick())
-
-	allFrontier := manager.DataFrontier(moduleapi.Scope{
-		Type: moduleapi.ScopeAll,
-		Kind: moduleapi.DataProgressDurable,
-	})
-	require.NotNil(t, allFrontier)
-	assert.Equal(t, uint64(0), allFrontier.TimeTick())
 }
 
 func TestPChannelRecoveryManagerProvidesTransformLogStream(t *testing.T) {
@@ -315,8 +279,7 @@ func TestPChannelRecoveryManagerRemovesClosedVChannelTransformLog(t *testing.T) 
 	require.NoError(t, err)
 	require.NoError(t, sub.Close())
 
-	result := manager.ObserveMessage(ctx, newTestDropCollectionMessage(t, "v1", 20))
-	require.NotNil(t, result.Meta)
+	observeTestMessage(ctx, t, manager, newTestDropCollectionMessage(t, "v1", 20))
 
 	_, err = stream.Subscribe(ctx, wal.TransformLogSubscriptionOption{
 		VChannel:           "v1",

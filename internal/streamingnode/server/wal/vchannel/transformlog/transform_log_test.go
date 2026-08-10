@@ -12,7 +12,9 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
@@ -56,25 +58,28 @@ func TestObserveMessageOwnsAppendFlushAndMaterializeScheduling(t *testing.T) {
 	})
 	transformLog.SwitchIntoMetaAndData()
 
-	deleteResult := transformLog.ObserveMessage(context.Background(), newTransformLogTestDeleteMessage(t, 10))
-	require.NotNil(t, deleteResult.Data)
-	assert.Equal(t, uint64(0), deleteResult.Data.TimeTick())
+	deleteMsg := newTransformLogTestDeleteMessage(t, 10)
+	deleteRecord := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 10}, nil)
+	transformLog.ObserveMessage(context.Background(), messageack.NewMessage(deleteMsg, deleteRecord))
 	assert.Empty(t, scheduler.tasks)
 
-	flushResult := transformLog.ObserveMessage(context.Background(), newTransformLogTestManualFlushMessage(t, 20))
-	require.NotNil(t, flushResult.Data)
+	flushMsg := newTransformLogTestManualFlushMessage(t, 20)
+	flushRecord := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 20}, nil)
+	transformLog.ObserveMessage(context.Background(), messageack.NewMessage(flushMsg, flushRecord))
 	require.Len(t, scheduler.tasks, 2)
 	assert.IsType(t, &transformFlushTask{}, scheduler.tasks[0])
 	assert.IsType(t, &transformMaterializeTask{}, scheduler.tasks[1])
 }
 
-func TestEmptyBarrierAdvancesInMemoryFrontierWithoutDirtySnapshot(t *testing.T) {
+func TestEmptyBarrierDoesNotCreateDirtySnapshot(t *testing.T) {
 	transformLog := New(Config{VChannel: "v1"})
 	transformLog.SwitchIntoMetaAndData()
 
-	result := transformLog.ObserveMessage(context.Background(), newTransformLogTestManualFlushMessage(t, 20))
-	require.NotNil(t, result.Data)
-	assert.Equal(t, uint64(20), result.Data.TimeTick())
+	msg := newTransformLogTestManualFlushMessage(t, 20)
+	record := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 20}, nil)
+	transformLog.ObserveMessage(context.Background(), messageack.NewMessage(msg, record))
+	record.Seal()
+	assert.True(t, record.Completed())
 	assert.Zero(t, transformLog.SnapshotMeta().GetCheckpointTimeTick())
 	assert.Nil(t, transformLog.ConsumeDirtyAndGetSnapshot())
 }
@@ -312,7 +317,7 @@ func TestConsumeDirtySnapshotKeepsStableInFlightView(t *testing.T) {
 	assert.Nil(t, transformLog.ConsumeDirtyAndGetSnapshot())
 }
 
-func TestMaterializeAdvancesMaterializedBarrierAfterSnapshotPersisted(t *testing.T) {
+func TestMaterializeAdvancesPersistedCursorAfterSnapshotPersisted(t *testing.T) {
 	materializer := &recordingMaterializer{}
 	transformLog := New(Config{
 		VChannel:     "by-dev-rootcoord-dml_1v0",
@@ -331,14 +336,14 @@ func TestMaterializeAdvancesMaterializedBarrierAfterSnapshotPersisted(t *testing
 	assert.Equal(t, uint64(20), result.MaterializedTimeTick)
 	require.Len(t, materializer.requests, 1)
 	require.Len(t, materializer.requests[0].Entries, 1)
-	assert.Equal(t, uint64(0), transformLog.MaterializedBarrierTimeTick())
+	assert.Equal(t, uint64(0), transformLog.persistedMaterialized)
 
 	snapshot := transformLog.ConsumeDirtyAndGetSnapshot()
 	require.NotNil(t, snapshot)
 	assert.Equal(t, uint64(20), snapshot.GetMaterializedTimeTick())
 
 	transformLog.MarkSnapshotPersisted(snapshot)
-	assert.Equal(t, uint64(20), transformLog.MaterializedBarrierTimeTick())
+	assert.Equal(t, uint64(20), transformLog.persistedMaterialized)
 }
 
 func TestMaterializeWithoutEntriesOnlyAdvancesCursor(t *testing.T) {
@@ -387,7 +392,7 @@ func TestMaterializeSkipsBarrierEntries(t *testing.T) {
 	require.NotNil(t, materializer.requests[0].Entries[0].GetDelete())
 }
 
-func TestFlushPersistsLastEntryAndExposesBarrierAfterSnapshotPersisted(t *testing.T) {
+func TestFlushPersistsLastEntryAndKeepsSyncUpSeparate(t *testing.T) {
 	transformLog := New(Config{
 		VChannel: "v1",
 		Store:    newMemoryStore(),
@@ -402,12 +407,13 @@ func TestFlushPersistsLastEntryAndExposesBarrierAfterSnapshotPersisted(t *testin
 	assert.True(t, result.Started)
 	assert.Equal(t, uint64(10), result.DurableTimeTick)
 	assert.Equal(t, uint64(10), transformLog.SnapshotMeta().GetCheckpointTimeTick())
-	assert.Zero(t, transformLog.DataBarrierTimeTick())
+	assert.Zero(t, transformLog.persistedDataTimeTick)
 
 	snapshot := transformLog.ConsumeDirtyAndGetSnapshot()
 	require.NotNil(t, snapshot)
 	transformLog.MarkSnapshotPersisted(snapshot)
-	assert.Equal(t, uint64(20), transformLog.DataBarrierTimeTick())
+	assert.Equal(t, uint64(10), transformLog.persistedDataTimeTick)
+	assert.Equal(t, uint64(20), transformLog.LatestTimeTick())
 	require.Len(t, transformLog.chunks, 1)
 	require.Len(t, transformLog.chunks[0].entries, 1)
 	assert.Equal(t, uint64(10), transformLog.chunks[0].entries[0].GetTimeTick())
@@ -433,7 +439,7 @@ func TestFlushKeepsCheckpointAtLastDurableEntryWhenTargetStillHasPendingEntries(
 	firstSnapshot := transformLog.ConsumeDirtyAndGetSnapshot()
 	require.NotNil(t, firstSnapshot)
 	transformLog.MarkSnapshotPersisted(firstSnapshot)
-	assert.Equal(t, uint64(10), transformLog.DataBarrierTimeTick())
+	assert.Equal(t, uint64(10), transformLog.persistedDataTimeTick)
 
 	result, err = transformLog.flush(context.Background(), flushOption{TargetTimeTick: result.NextTargetTimeTick})
 	require.NoError(t, err)
@@ -443,7 +449,8 @@ func TestFlushKeepsCheckpointAtLastDurableEntryWhenTargetStillHasPendingEntries(
 	secondSnapshot := transformLog.ConsumeDirtyAndGetSnapshot()
 	require.NotNil(t, secondSnapshot)
 	transformLog.MarkSnapshotPersisted(secondSnapshot)
-	assert.Equal(t, uint64(20), transformLog.DataBarrierTimeTick())
+	assert.Equal(t, uint64(11), transformLog.persistedDataTimeTick)
+	assert.Equal(t, uint64(20), transformLog.LatestTimeTick())
 }
 
 func TestShouldMaterializeUsesUnmaterializedRowsAndBytes(t *testing.T) {

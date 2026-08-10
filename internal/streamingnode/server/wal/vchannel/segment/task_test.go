@@ -108,7 +108,7 @@ func TestRecoveredFinalCommitIsNotRepeated(t *testing.T) {
 	segment := NewSegmentViewFromMeta(
 		meta,
 		&schemapb.CollectionSchema{},
-		runtimeConfig{lifecycle: recorder, metaAndData: true},
+		runtimeConfig{lifecycle: recorder, metaAndData: true, owner: &recordingSegmentViewOwner{}},
 	)
 	task := &commitL1SegmentTask{
 		segmentTaskBase: segmentTaskBase{segment: segment},
@@ -129,7 +129,7 @@ func TestRecoveredDataCheckpointDoesNotProveFinalCommit(t *testing.T) {
 	segment := NewSegmentViewFromMeta(
 		meta,
 		&schemapb.CollectionSchema{},
-		runtimeConfig{lifecycle: recorder, metaAndData: true},
+		runtimeConfig{lifecycle: recorder, metaAndData: true, owner: &recordingSegmentViewOwner{}},
 	)
 	segment.mu.Lock()
 	task := segment.newRecoveredCommitL1SegmentTaskLocked(30)
@@ -180,7 +180,7 @@ func newFinalCommitTestSegment(recorder *segmentTaskRecorder, segmentID int64) *
 	return NewSegmentViewFromMeta(
 		newFinalCommitTestMeta(segmentID),
 		&schemapb.CollectionSchema{},
-		runtimeConfig{lifecycle: recorder, metaAndData: true},
+		runtimeConfig{lifecycle: recorder, metaAndData: true, owner: &recordingSegmentViewOwner{}},
 	)
 }
 

@@ -36,7 +36,6 @@ func (m *VChannelRecoveryModule) ReleaseQueryResource(req snview.ReleaseResource
 	m.mu.Unlock()
 	if changed && m.runtime.Notifier != nil {
 		m.runtime.Notifier.NotifyModuleUpdated(moduleapi.ModuleNameSegment)
-		m.runtime.Notifier.NotifyBarrierUpdated()
 	}
 }
 

@@ -5,12 +5,14 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
-	"github.com/stretchr/testify/require"
-
 	"github.com/milvus-io/milvus/internal/mocks/util/mock_segcore"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/transformlog"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/util/initcore"
@@ -150,7 +152,13 @@ func TestDrainDeleteReplayUsesSharedTransformLogStream(t *testing.T) {
 	for _, vchannel := range []string{"v1", "v2"} {
 		log := transformlog.New(transformlog.Config{VChannel: vchannel})
 		log.SwitchIntoMetaAndData()
-		require.NotNil(t, log.ObserveMessage(ctx, newTestTransformDeleteMessage(t, vchannel, 10)).Data)
+		raw := newTestTransformDeleteMessage(t, vchannel, 10)
+		record := messageack.NewRecord(utility.WALConsumeCheckpoint{
+			MessageID: raw.LastConfirmedMessageID(),
+			TimeTick:  raw.TimeTick(),
+		}, nil)
+		log.ObserveMessage(ctx, messageack.NewMessage(raw, record))
+		record.Seal()
 		manager.Register(vchannel, log)
 	}
 	stream, err := manager.AcquireStream(ctx, "p1")

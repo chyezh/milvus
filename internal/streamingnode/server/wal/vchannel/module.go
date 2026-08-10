@@ -2,12 +2,11 @@ package vchannel
 
 import (
 	"context"
-	"math"
 	"sync"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
-	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/segment"
@@ -50,12 +49,11 @@ type ModuleConfig struct {
 	NodeScheduler              nodescheduler.Scheduler
 	QueryRuntimeDispatcher     *queryresource.Dispatcher
 	QueryViewLoadInfoProvider  queryresource.LoadInfoProvider
-	OnFrontierUpdated          func()
 }
 
 // VChannelRecoveryModule owns all recovery_storage state for one vchannel.
 type VChannelRecoveryModule struct {
-	// mu serializes WAL observation with snapshots and frontier reads. In
+	// mu serializes WAL observation with snapshot state transitions. In
 	// particular, segments may grow when CreateSegment is observed while the
 	// recovery background task is collecting dirty snapshots.
 	mu       sync.Mutex
@@ -65,13 +63,12 @@ type VChannelRecoveryModule struct {
 	runtime moduleapi.Runtime
 	logger  *mlog.Logger
 
-	vchannelView     *VChannelView
-	segments         map[int64]*segment.SegmentView
-	dirtyMu          sync.Mutex
-	dirtySegments    map[int64]*segment.SegmentView
-	cleanupSegments  map[int64]*segment.SegmentView
-	pendingCleanup   map[int64]*segment.SegmentView
-	segmentFrontiers *segmentFrontierIndex
+	vchannelView    *VChannelView
+	segments        map[int64]*segment.SegmentView
+	dirtyMu         sync.Mutex
+	dirtySegments   map[int64]*segment.SegmentView
+	cleanupSegments map[int64]*segment.SegmentView
+	pendingCleanup  map[int64]*segment.SegmentView
 
 	latestInsertTimeTick uint64
 
@@ -80,7 +77,6 @@ type VChannelRecoveryModule struct {
 	segmentLifecycle        segment.Lifecycle
 	segmentPackWriter       segment.PackWriter
 	externalOnSegmentSealed func(walview.SegmentSealedEvent)
-	onFrontierUpdated       func()
 
 	metaAndData bool
 
@@ -110,12 +106,10 @@ func newModule(config ModuleConfig, adoptVChannelMeta bool) (*VChannelRecoveryMo
 		runtime:                 config.Runtime,
 		logger:                  config.Logger,
 		segments:                make(map[int64]*segment.SegmentView),
-		segmentFrontiers:        newSegmentFrontierIndex(),
 		segmentLifecycle:        config.SegmentLifecycle,
 		segmentPackWriter:       config.SegmentPackWriter,
 		externalOnSegmentSealed: config.OnSegmentSealed,
 		queryTransformLogStream: config.TransformLogStream,
-		onFrontierUpdated:       config.OnFrontierUpdated,
 	}
 	module.queryResources = queryresource.NewManager(queryresource.Config{
 		Builders:         config.QueryRuntimeModuleBuilders,
@@ -147,7 +141,6 @@ func newModule(config ModuleConfig, adoptVChannelMeta bool) (*VChannelRecoveryMo
 			module.cleanupSegments[id] = view
 			module.advanceSegmentDataVersionSummaryLocked(view)
 		}
-		module.segmentFrontiers.Update(id, view.CollectionID(), view.PartitionID(), view.DurableFrontierTimeTick())
 	}
 	module.transformLog = transformlog.New(transformlog.Config{
 		VChannel:            config.VChannel,
@@ -175,61 +168,54 @@ func (m *VChannelRecoveryModule) Name() moduleapi.ModuleName {
 	return moduleapi.ModuleNameVChannel
 }
 
-func (m *VChannelRecoveryModule) ObserveMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
-	if m == nil || msg == nil || !m.shouldObserve(msg) {
-		return moduleapi.ObserveResult{}
+func (m *VChannelRecoveryModule) ObserveMessage(ctx context.Context, msg messageack.Message) {
+	if m == nil || msg.ImmutableMessage == nil || !m.shouldObserve(msg) {
+		return
 	}
 	if funcutil.IsControlChannel(msg.VChannel()) && !msg.IsPChannelLevel() {
-		return moduleapi.ObserveResult{}
+		return
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var result moduleapi.ObserveResult
-	switch msg.MessageType() {
+	raw := msg.Message()
+	switch raw.MessageType() {
 	case message.MessageTypeCreateCollection:
-		result = m.handleCreateCollectionMessage(message.MustAsImmutableCreateCollectionMessageV1(msg))
+		m.handleCreateCollectionMessage(message.MustAsImmutableCreateCollectionMessageV1(raw))
 	case message.MessageTypeCreatePartition:
-		result = m.handleCreatePartitionMessage(message.MustAsImmutableCreatePartitionMessageV1(msg))
+		m.handleCreatePartitionMessage(message.MustAsImmutableCreatePartitionMessageV1(raw))
 	case message.MessageTypeSchemaChange:
-		result = m.handleSchemaChangeMessage(message.MustAsImmutableSchemaChangeMessageV2(msg))
+		m.handleSchemaChangeMessage(message.MustAsImmutableSchemaChangeMessageV2(raw))
 	case message.MessageTypeAlterCollection:
-		result = m.handleAlterCollectionMessage(ctx, message.MustAsImmutableAlterCollectionMessageV2(msg))
+		m.handleAlterCollectionMessage(ctx, message.MustAsImmutableAlterCollectionMessageV2(raw), msg.Ack())
 	case message.MessageTypeDropCollection:
-		result = m.handleDropCollectionMessage(ctx, message.MustAsImmutableDropCollectionMessageV1(msg))
+		m.handleDropCollectionMessage(ctx, message.MustAsImmutableDropCollectionMessageV1(raw), msg.Ack())
 	case message.MessageTypeDropPartition:
-		result = m.handleDropPartitionMessage(ctx, message.MustAsImmutableDropPartitionMessageV1(msg))
+		m.handleDropPartitionMessage(ctx, message.MustAsImmutableDropPartitionMessageV1(raw), msg.Ack())
 	case message.MessageTypeTruncateCollection:
-		result = m.handleTruncateCollectionMessage(ctx, message.MustAsImmutableTruncateCollectionMessageV2(msg))
+		m.handleTruncateCollectionMessage(ctx, message.MustAsImmutableTruncateCollectionMessageV2(raw), msg.Ack())
 	case message.MessageTypeAlterLoadConfig:
-		result = m.handleAlterLoadConfigMessage(message.MustAsImmutableAlterLoadConfigMessageV2(msg))
+		m.handleAlterLoadConfigMessage(message.MustAsImmutableAlterLoadConfigMessageV2(raw))
 	case message.MessageTypeDropLoadConfig:
-		result = m.handleDropLoadConfigMessage(message.MustAsImmutableDropLoadConfigMessageV2(msg))
+		m.handleDropLoadConfigMessage(message.MustAsImmutableDropLoadConfigMessageV2(raw))
 	case message.MessageTypeCreateSegment:
-		result = m.handleCreateSegmentMessage(ctx, message.MustAsImmutableCreateSegmentMessageV2(msg))
+		m.handleCreateSegmentMessage(ctx, message.MustAsImmutableCreateSegmentMessageV2(raw), msg.Ack())
 	case message.MessageTypeInsert:
-		result = m.handleInsertMessage(ctx, message.MustAsImmutableInsertMessageV1(msg))
+		m.handleInsertMessage(ctx, message.MustAsImmutableInsertMessageV1(raw), msg.Ack())
 	case message.MessageTypeTxn:
-		result = m.handleTxnMessage(ctx, message.AsImmutableTxnMessage(msg))
+		m.handleTxnMessage(ctx, message.AsImmutableTxnMessage(raw), msg.Ack())
 	case message.MessageTypeFlush:
-		result = m.handleFlushMessage(ctx, message.MustAsImmutableFlushMessageV2(msg))
+		m.handleFlushMessage(ctx, message.MustAsImmutableFlushMessageV2(raw), msg.Ack())
 	case message.MessageTypeManualFlush:
-		result = m.handleManualFlushMessage(ctx, msg)
+		m.handleManualFlushMessage(ctx, raw, msg.Ack())
 	case message.MessageTypeFlushAll:
-		result = m.handleFlushAllMessage(ctx, msg)
+		m.handleFlushAllMessage(ctx, raw, msg.Ack())
 	case message.MessageTypeAlterWAL:
-		result = m.handleAlterWALMessage(ctx, msg)
-	case message.MessageTypeDelete:
-		result = moduleapi.ObserveResult{}
-	case message.MessageTypeRecoveryBarrier:
-		result = moduleapi.ObserveResult{}
-	default:
-		result = moduleapi.ObserveResult{}
+		m.handleAlterWALMessage(ctx, raw, msg.Ack())
 	}
 	if m.transformLog != nil {
-		result = composeObserveResults(result, m.transformLog.ObserveMessage(ctx, msg))
+		m.transformLog.ObserveMessage(ctx, msg)
 	}
-	m.observeQueryResourceEvent(ctx, walview.VChannelResourceEvent{Message: msg})
-	return result
+	m.observeQueryResourceEvent(ctx, walview.VChannelResourceEvent{Message: raw})
 }
 
 func (m *VChannelRecoveryModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
@@ -248,7 +234,6 @@ func (m *VChannelRecoveryModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapsho
 	}
 	for id, view := range m.segments {
 		view.SwitchIntoMetaAndData()
-		m.refreshSegmentFrontierLocked(id, view)
 		if state, ok := view.WritePathRecoveryState(); ok {
 			if snapshot.GrowingSegments == nil {
 				snapshot.GrowingSegments = make(map[int64]moduleapi.SegmentWritePathRecoveryState)
@@ -323,21 +308,6 @@ func (m *VChannelRecoveryModule) ConsumeDirtySnapshots() []moduleapi.DirtySnapsh
 	return snapshots
 }
 
-func (m *VChannelRecoveryModule) DataFrontier(scope moduleapi.Scope) walcheckpoint.Barrier {
-	if m == nil {
-		return nil
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if !m.matchesScope(scope) {
-		return nil
-	}
-	return walcheckpoint.NewCompositeBarrier(
-		walcheckpoint.BarrierFunc(func() uint64 { return m.segmentFrontierTimeTick(scope) }),
-		walcheckpoint.BarrierFunc(func() uint64 { return m.transformFrontierTimeTick(scope.Kind) }),
-	)
-}
-
 func (m *VChannelRecoveryModule) IsActive() bool {
 	if m == nil {
 		return false
@@ -347,135 +317,141 @@ func (m *VChannelRecoveryModule) IsActive() bool {
 	return m.vchannelView != nil && m.vchannelView.IsActive()
 }
 
-func (m *VChannelRecoveryModule) handleCreateCollectionMessage(msg message.ImmutableCreateCollectionMessageV1) moduleapi.ObserveResult {
-	vchannelResult := moduleapi.ObserveResult{}
+func (m *VChannelRecoveryModule) handleCreateCollectionMessage(msg message.ImmutableCreateCollectionMessageV1) {
 	if m.vchannelView == nil {
 		m.vchannelView = NewVChannelViewFromCreateCollectionMessage(msg)
 		if m.metaAndData {
 			m.vchannelView.SwitchIntoMetaAndData()
 		}
-		vchannelResult.Meta = m.vchannelView.MetaBarrier()
 	} else {
-		replacement, result := m.vchannelView.ObserveCreateCollectionMessageV1(msg)
+		replacement, _ := m.vchannelView.ObserveCreateCollectionMessageV1(msg)
 		if replacement != nil {
 			m.vchannelView = replacement
-			vchannelResult.Meta = m.vchannelView.MetaBarrier()
-		} else {
-			vchannelResult = result
 		}
 	}
-	return vchannelResult
 }
 
-func (m *VChannelRecoveryModule) handleCreatePartitionMessage(msg message.ImmutableCreatePartitionMessageV1) moduleapi.ObserveResult {
+func (m *VChannelRecoveryModule) handleCreatePartitionMessage(msg message.ImmutableCreatePartitionMessageV1) {
 	if m.vchannelView == nil {
-		return moduleapi.ObserveResult{}
+		return
 	}
-	return m.vchannelView.ObserveCreatePartitionMessageV1(msg)
+	m.vchannelView.ObserveCreatePartitionMessageV1(msg)
 }
 
-func (m *VChannelRecoveryModule) handleSchemaChangeMessage(msg message.ImmutableSchemaChangeMessageV2) moduleapi.ObserveResult {
+func (m *VChannelRecoveryModule) handleSchemaChangeMessage(msg message.ImmutableSchemaChangeMessageV2) {
 	if m.vchannelView == nil {
-		return moduleapi.ObserveResult{}
+		return
 	}
-	return m.vchannelView.ObserveSchemaChangeMessageV2(msg)
+	m.vchannelView.ObserveSchemaChangeMessageV2(msg)
 }
 
-func (m *VChannelRecoveryModule) handleAlterCollectionMessage(ctx context.Context, msg message.ImmutableAlterCollectionMessageV2) moduleapi.ObserveResult {
-	result := moduleapi.ObserveResult{}
+func (m *VChannelRecoveryModule) handleAlterCollectionMessage(
+	ctx context.Context,
+	msg message.ImmutableAlterCollectionMessageV2,
+	ack messageack.Record,
+) {
 	if m.vchannelView != nil {
-		result = composeObserveResults(result, m.vchannelView.ObserveAlterCollectionMessageV2(msg))
+		m.vchannelView.ObserveAlterCollectionMessageV2(msg)
 	}
 	if messageutil.IsSchemaChange(msg.Header()) {
-		result = composeObserveResults(result, m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick()))
+		m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick(), ack)
 	}
-	return result
 }
 
-func (m *VChannelRecoveryModule) handleDropCollectionMessage(ctx context.Context, msg message.ImmutableDropCollectionMessageV1) moduleapi.ObserveResult {
-	result := moduleapi.ObserveResult{}
+func (m *VChannelRecoveryModule) handleDropCollectionMessage(
+	ctx context.Context,
+	msg message.ImmutableDropCollectionMessageV1,
+	ack messageack.Record,
+) {
 	if m.vchannelView != nil {
-		result = composeObserveResults(result, m.vchannelView.ObserveDropCollectionMessageV1(msg))
+		m.vchannelView.ObserveDropCollectionMessageV1(msg)
 	}
-	result = composeObserveResults(result, m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick()))
-	return result
+	m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick(), ack)
 }
 
-func (m *VChannelRecoveryModule) handleDropPartitionMessage(ctx context.Context, msg message.ImmutableDropPartitionMessageV1) moduleapi.ObserveResult {
-	result := moduleapi.ObserveResult{}
+func (m *VChannelRecoveryModule) handleDropPartitionMessage(
+	ctx context.Context,
+	msg message.ImmutableDropPartitionMessageV1,
+	ack messageack.Record,
+) {
 	if m.vchannelView != nil {
-		result = composeObserveResults(result, m.vchannelView.ObserveDropPartitionMessageV1(msg))
+		m.vchannelView.ObserveDropPartitionMessageV1(msg)
 	}
-	result = composeObserveResults(result, m.flushPartitionSegmentsCreatedBefore(ctx, msg.TimeTick(), msg.Header().GetPartitionId()))
-	return result
+	m.flushPartitionSegmentsCreatedBefore(ctx, msg.TimeTick(), msg.Header().GetPartitionId(), ack)
 }
 
-func (m *VChannelRecoveryModule) handleTruncateCollectionMessage(ctx context.Context, msg message.ImmutableTruncateCollectionMessageV2) moduleapi.ObserveResult {
-	result := moduleapi.ObserveResult{}
+func (m *VChannelRecoveryModule) handleTruncateCollectionMessage(
+	ctx context.Context,
+	msg message.ImmutableTruncateCollectionMessageV2,
+	ack messageack.Record,
+) {
 	if m.vchannelView != nil {
-		result = composeObserveResults(result, m.vchannelView.ObserveTruncateCollectionMessageV2(msg))
+		m.vchannelView.ObserveTruncateCollectionMessageV2(msg)
 	}
-	result = composeObserveResults(result, m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick()))
-	return result
+	m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick(), ack)
 }
 
-func (m *VChannelRecoveryModule) handleAlterLoadConfigMessage(msg message.ImmutableAlterLoadConfigMessageV2) moduleapi.ObserveResult {
+func (m *VChannelRecoveryModule) handleAlterLoadConfigMessage(msg message.ImmutableAlterLoadConfigMessageV2) {
 	if m.vchannelView == nil {
-		return moduleapi.ObserveResult{}
+		return
 	}
-	return m.vchannelView.ObserveAlterLoadConfigMessageV2(msg)
+	m.vchannelView.ObserveAlterLoadConfigMessageV2(msg)
 }
 
-func (m *VChannelRecoveryModule) handleDropLoadConfigMessage(msg message.ImmutableDropLoadConfigMessageV2) moduleapi.ObserveResult {
+func (m *VChannelRecoveryModule) handleDropLoadConfigMessage(msg message.ImmutableDropLoadConfigMessageV2) {
 	if m.vchannelView == nil {
-		return moduleapi.ObserveResult{}
+		return
 	}
-	return m.vchannelView.ObserveDropLoadConfigMessageV2(msg)
+	m.vchannelView.ObserveDropLoadConfigMessageV2(msg)
 }
 
-func (m *VChannelRecoveryModule) handleCreateSegmentMessage(ctx context.Context, msg message.ImmutableCreateSegmentMessageV2) moduleapi.ObserveResult {
+func (m *VChannelRecoveryModule) handleCreateSegmentMessage(
+	ctx context.Context,
+	msg message.ImmutableCreateSegmentMessageV2,
+	ack messageack.Record,
+) {
 	id := msg.Header().GetSegmentId()
 	view := m.segments[id]
-	result := moduleapi.ObserveResult{}
 	if view == nil {
 		var schema *schemapb.CollectionSchema
 		if m.vchannelView != nil {
 			schema = m.vchannelView.CreateSegmentSchema(msg.Header().GetPartitionId(), msg.TimeTick())
 		}
 		if schema == nil {
-			return result
+			return
 		}
 		view = segment.NewSegmentViewFromCreateSegmentMessageWithConfig(msg, schema, m.segmentViewConfig())
 		if m.metaAndData {
 			view.SwitchIntoMetaAndData()
 		}
 		m.segments[id] = view
-		result.Meta = view.MetaBarrier()
 	}
-	result = composeObserveResults(result, view.ObserveCreateSegmentMessageV2(ctx, msg))
+	view.ObserveCreateSegmentMessageV2(ctx, msg, ack)
 	m.markSegmentUpdatedLocked(id)
-	return result
 }
 
-func (m *VChannelRecoveryModule) handleInsertMessage(ctx context.Context, msg message.ImmutableInsertMessageV1) moduleapi.ObserveResult {
-	result := moduleapi.ObserveResult{}
+func (m *VChannelRecoveryModule) handleInsertMessage(
+	ctx context.Context,
+	msg message.ImmutableInsertMessageV1,
+	ack messageack.Record,
+) {
+	changed := false
 	for _, partition := range msg.Header().GetPartitions() {
 		view := m.segments[partition.GetSegmentAssignment().GetSegmentId()]
 		if view == nil {
 			continue
 		}
-		result = composeObserveResults(result, view.ObserveInsertMessageV1(ctx, msg, partition))
+		changed = view.ObserveInsertMessageV1(ctx, msg, partition, ack) || changed
 		m.markSegmentUpdatedLocked(view.ID())
 	}
-	m.markLatestInsertTimeTick(msg.VChannel(), msg.TimeTick(), result)
-	return result
+	m.markLatestInsertTimeTick(msg.VChannel(), msg.TimeTick(), changed)
 }
 
-func (m *VChannelRecoveryModule) handleTxnMessage(ctx context.Context, msg message.ImmutableTxnMessage) moduleapi.ObserveResult {
+func (m *VChannelRecoveryModule) handleTxnMessage(ctx context.Context, msg message.ImmutableTxnMessage, ack messageack.Record) {
 	if msg == nil {
-		return moduleapi.ObserveResult{}
+		return
 	}
-	result := moduleapi.ObserveResult{}
+	changed := false
 	observed := make(map[int64]struct{})
 	_ = msg.RangeOver(func(inner message.ImmutableMessage) error {
 		if inner.MessageType() != message.MessageTypeInsert {
@@ -492,74 +468,81 @@ func (m *VChannelRecoveryModule) handleTxnMessage(ctx context.Context, msg messa
 				continue
 			}
 			observed[id] = struct{}{}
-			result = composeObserveResults(result, view.ObserveTxnMessage(ctx, msg))
+			changed = view.ObserveTxnMessage(ctx, msg, ack) || changed
 			m.markSegmentUpdatedLocked(id)
 		}
 		return nil
 	})
-	m.markLatestInsertTimeTick(msg.VChannel(), msg.TimeTick(), result)
-	return result
+	m.markLatestInsertTimeTick(msg.VChannel(), msg.TimeTick(), changed)
 }
 
-func (m *VChannelRecoveryModule) handleFlushMessage(ctx context.Context, msg message.ImmutableFlushMessageV2) moduleapi.ObserveResult {
+func (m *VChannelRecoveryModule) handleFlushMessage(
+	ctx context.Context,
+	msg message.ImmutableFlushMessageV2,
+	ack messageack.Record,
+) {
 	id := msg.Header().GetSegmentId()
 	if segment := m.segments[id]; segment != nil {
-		result := segment.Flush(ctx, msg.TimeTick())
+		segment.Flush(ctx, msg.TimeTick(), ack)
 		m.markSegmentUpdatedLocked(id)
-		return result
 	}
-	return moduleapi.ObserveResult{}
 }
 
-func (m *VChannelRecoveryModule) handleManualFlushMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
-	return m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick())
+func (m *VChannelRecoveryModule) handleManualFlushMessage(
+	ctx context.Context,
+	msg message.ImmutableMessage,
+	ack messageack.Record,
+) {
+	m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick(), ack)
 }
 
-func (m *VChannelRecoveryModule) handleFlushAllMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
-	return m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick())
+func (m *VChannelRecoveryModule) handleFlushAllMessage(
+	ctx context.Context,
+	msg message.ImmutableMessage,
+	ack messageack.Record,
+) {
+	m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick(), ack)
 }
 
-func (m *VChannelRecoveryModule) handleAlterWALMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
-	return m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick())
+func (m *VChannelRecoveryModule) handleAlterWALMessage(
+	ctx context.Context,
+	msg message.ImmutableMessage,
+	ack messageack.Record,
+) {
+	m.flushAllSegmentsCreatedBefore(ctx, msg.TimeTick(), ack)
 }
 
-func (m *VChannelRecoveryModule) flushAllSegmentsCreatedBefore(ctx context.Context, timetick uint64) moduleapi.ObserveResult {
-	result := moduleapi.ObserveResult{}
+func (m *VChannelRecoveryModule) flushAllSegmentsCreatedBefore(
+	ctx context.Context,
+	timetick uint64,
+	ack messageack.Record,
+) {
 	for _, view := range m.segments {
 		if view.CreateTimeTick() >= timetick {
 			continue
 		}
-		result = composeObserveResults(result, view.Flush(ctx, timetick))
+		view.Flush(ctx, timetick, ack)
 		m.markSegmentUpdatedLocked(view.ID())
 	}
-	return result
 }
 
-func (m *VChannelRecoveryModule) flushPartitionSegmentsCreatedBefore(ctx context.Context, timetick uint64, partitionID int64) moduleapi.ObserveResult {
-	result := moduleapi.ObserveResult{}
+func (m *VChannelRecoveryModule) flushPartitionSegmentsCreatedBefore(
+	ctx context.Context,
+	timetick uint64,
+	partitionID int64,
+	ack messageack.Record,
+) {
 	for _, view := range m.segments {
 		if view.PartitionID() != partitionID || view.CreateTimeTick() >= timetick {
 			continue
 		}
-		result = composeObserveResults(result, view.Flush(ctx, timetick))
+		view.Flush(ctx, timetick, ack)
 		m.markSegmentUpdatedLocked(view.ID())
 	}
-	return result
 }
 
 func (m *VChannelRecoveryModule) shouldObserve(msg message.ImmutableMessage) bool {
 	return msg.VChannel() == m.vchannel || msg.VChannel() == "" || msg.IsPChannelLevel()
-}
-
-func (m *VChannelRecoveryModule) matchesScope(scope moduleapi.Scope) bool {
-	switch scope.Type {
-	case moduleapi.ScopeAll:
-		return true
-	case moduleapi.ScopeVChannel, moduleapi.ScopePartition:
-		return scope.VChannel == "" || scope.VChannel == m.vchannel
-	default:
-		return false
-	}
 }
 
 func (m *VChannelRecoveryModule) visibleSnapshot(baseGrowingTimeTick uint64, dataVersion qviews.DataVersion) walview.VisibleSegmentSnapshot {
@@ -596,24 +579,13 @@ func (m *VChannelRecoveryModule) segmentSnapshotDataVersion() qviews.DataVersion
 	return dataVersion
 }
 
-func (m *VChannelRecoveryModule) markLatestInsertTimeTick(vchannel string, timetick uint64, result moduleapi.ObserveResult) {
-	if vchannel != m.vchannel || (result.Meta == nil && result.Data == nil) {
+func (m *VChannelRecoveryModule) markLatestInsertTimeTick(vchannel string, timetick uint64, changed bool) {
+	if vchannel != m.vchannel || !changed {
 		return
 	}
 	if timetick > m.latestInsertTimeTick {
 		m.latestInsertTimeTick = timetick
 	}
-}
-
-func (m *VChannelRecoveryModule) segmentFrontierTimeTick(scope moduleapi.Scope) uint64 {
-	if scope.Type == moduleapi.ScopePartition {
-		return m.segmentFrontiers.Partition(scope.CollectionID, scope.PartitionID)
-	}
-	return m.segmentFrontiers.All()
-}
-
-func (m *VChannelRecoveryModule) dataFrontierTimeTick(kind moduleapi.DataProgressKind) uint64 {
-	return min(m.segmentFrontiers.All(), m.transformFrontierTimeTick(kind))
 }
 
 func (m *VChannelRecoveryModule) markSegmentUpdatedLocked(segmentID int64) {
@@ -624,7 +596,7 @@ func (m *VChannelRecoveryModule) markSegmentUpdatedLocked(segmentID int64) {
 func (m *VChannelRecoveryModule) SegmentDataUpdated(segmentID int64, view *segment.SegmentView) {
 	m.markSegmentViewUpdated(segmentID, view)
 	if m.runtime.Notifier != nil {
-		m.runtime.Notifier.NotifyBarrierUpdated()
+		m.runtime.Notifier.NotifyModuleUpdated(moduleapi.ModuleNameSegment)
 	}
 }
 
@@ -639,7 +611,6 @@ func (m *VChannelRecoveryModule) markSegmentViewUpdated(segmentID int64, view *s
 	m.mu.Lock()
 	m.markSegmentViewUpdatedLocked(segmentID, view)
 	m.mu.Unlock()
-	m.notifyFrontierUpdated()
 }
 
 func (m *VChannelRecoveryModule) markSegmentViewUpdatedLocked(segmentID int64, view *segment.SegmentView) {
@@ -648,7 +619,6 @@ func (m *VChannelRecoveryModule) markSegmentViewUpdatedLocked(segmentID int64, v
 	}
 	m.tryFinalizeSegmentLocked(segmentID, view)
 	m.markSegmentDirty(segmentID, view)
-	m.refreshSegmentFrontierLocked(segmentID, view)
 }
 
 func (m *VChannelRecoveryModule) tryFinalizeSegmentLocked(segmentID int64, view *segment.SegmentView) bool {
@@ -665,7 +635,6 @@ func (m *VChannelRecoveryModule) tryFinalizeSegmentsLocked() bool {
 	changed := false
 	for segmentID, view := range m.segments {
 		if m.tryFinalizeSegmentLocked(segmentID, view) {
-			m.refreshSegmentFrontierLocked(segmentID, view)
 			changed = true
 		}
 	}
@@ -676,7 +645,6 @@ func (m *VChannelRecoveryModule) markTransformSnapshotPersisted(snapshot *stream
 	m.mu.Lock()
 	m.transformLog.MarkSnapshotPersisted(snapshot)
 	m.mu.Unlock()
-	m.notifyFrontierUpdated()
 }
 
 func (m *VChannelRecoveryModule) markSegmentSnapshotPersisted(
@@ -693,12 +661,10 @@ func (m *VChannelRecoveryModule) markSegmentSnapshotPersisted(
 		}
 		m.cleanupSegments[segmentID] = view
 	}
-	m.refreshSegmentFrontierLocked(segmentID, view)
 	m.mu.Unlock()
 	if tombstonePersisted && m.runtime.Notifier != nil {
 		m.runtime.Notifier.NotifyModuleUpdated(moduleapi.ModuleNameSegment)
 	}
-	m.notifyFrontierUpdated()
 }
 
 func (m *VChannelRecoveryModule) HasCleanupCandidates() bool {
@@ -759,7 +725,6 @@ func (m *VChannelRecoveryModule) completeSegmentCleanup(segmentID int64, view *s
 	}
 	delete(m.pendingCleanup, segmentID)
 	delete(m.segments, segmentID)
-	m.segmentFrontiers.Remove(segmentID)
 	m.dirtyMu.Lock()
 	delete(m.dirtySegments, segmentID)
 	m.dirtyMu.Unlock()
@@ -782,38 +747,6 @@ func (m *VChannelRecoveryModule) takeDirtySegments() map[int64]*segment.SegmentV
 	return dirty
 }
 
-func (m *VChannelRecoveryModule) refreshSegmentFrontierLocked(segmentID int64, view *segment.SegmentView) {
-	if view == nil {
-		return
-	}
-	m.segmentFrontiers.Update(segmentID, view.CollectionID(), view.PartitionID(), view.DurableFrontierTimeTick())
-}
-
-func (m *VChannelRecoveryModule) notifyFrontierUpdated() {
-	if m.onFrontierUpdated != nil {
-		m.onFrontierUpdated()
-	}
-}
-
-func (m *VChannelRecoveryModule) transformFrontierTimeTick(kind moduleapi.DataProgressKind) uint64 {
-	m.mu.Lock()
-	transformLog := m.transformLog
-	m.mu.Unlock()
-	if transformLog == nil {
-		return math.MaxUint64
-	}
-	if kind == moduleapi.DataProgressMaterialized {
-		if transformLog.HasDirty() || transformLog.HasPendingMaterializeTask() {
-			return transformLog.MaterializedBarrierTimeTick()
-		}
-		return math.MaxUint64
-	}
-	if transformLog.HasDirty() || transformLog.HasPendingWork() || transformLog.HasPendingFlushTask() {
-		return transformLog.DataBarrierTimeTick()
-	}
-	return math.MaxUint64
-}
-
 func deleteReplayStartAfter(snapshot walview.VisibleSegmentSnapshot) uint64 {
 	if len(snapshot.Segments) == 0 {
 		return 0
@@ -834,10 +767,6 @@ func deleteReplayStartAfter(snapshot walview.VisibleSegmentSnapshot) uint64 {
 	return minCreateTimeTick - 1
 }
 
-func composeObserveResults(left moduleapi.ObserveResult, right moduleapi.ObserveResult) moduleapi.ObserveResult {
-	return moduleapi.ComposeBarriers([]moduleapi.ObserveResult{left, right})
-}
-
 func max(a, b uint64) uint64 {
 	if a >= b {
 		return a
@@ -845,7 +774,4 @@ func max(a, b uint64) uint64 {
 	return b
 }
 
-var (
-	_ moduleapi.Module               = (*VChannelRecoveryModule)(nil)
-	_ moduleapi.DataFrontierProvider = (*VChannelRecoveryModule)(nil)
-)
+var _ moduleapi.Module = (*VChannelRecoveryModule)(nil)

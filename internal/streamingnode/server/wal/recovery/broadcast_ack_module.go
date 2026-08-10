@@ -4,39 +4,14 @@ import (
 	"context"
 	"sync"
 
-	"go.uber.org/atomic"
+	"github.com/cockroachdb/errors"
 
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
-	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
-	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message/messageutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
-
-type dataFrontierProvider struct {
-	views []moduleapi.DataFrontierProvider
-}
-
-func newDataFrontierProvider(views ...moduleapi.DataFrontierProvider) moduleapi.DataFrontierProvider {
-	filtered := make([]moduleapi.DataFrontierProvider, 0, len(views))
-	for _, view := range views {
-		if view != nil {
-			filtered = append(filtered, view)
-		}
-	}
-	return dataFrontierProvider{views: filtered}
-}
-
-func (p dataFrontierProvider) DataFrontier(scope moduleapi.Scope) walcheckpoint.Barrier {
-	barriers := make([]walcheckpoint.Barrier, 0, len(p.views))
-	for _, view := range p.views {
-		if barrier := view.DataFrontier(scope); barrier != nil {
-			barriers = append(barriers, barrier)
-		}
-	}
-	return walcheckpoint.NewCompositeBarrier(barriers...)
-}
 
 type moduleMode int
 
@@ -46,28 +21,18 @@ const (
 )
 
 type broadcastAckModule struct {
-	channelName  string
-	frontierView moduleapi.DataFrontierProvider
-	runtime      moduleapi.Runtime
-	acked        *atomic.Uint64
-	mode         moduleMode
-	ackTaskMu    sync.Mutex
-	ackTaskHead  *broadcastAckTask
-	ackTaskTail  *broadcastAckTask
-	ack          func(context.Context, message.ImmutableMessage) error
+	runtime     moduleapi.Runtime
+	mode        moduleMode
+	ackTaskMu   sync.Mutex
+	ackTaskHead *broadcastAckTask
+	ackTaskTail *broadcastAckTask
+	ack         func(context.Context, message.ImmutableMessage) error
 }
 
-func newBroadcastAckModule(
-	channelName string,
-	frontierView moduleapi.DataFrontierProvider,
-	runtime moduleapi.Runtime,
-) *broadcastAckModule {
+func newBroadcastAckModule(runtime moduleapi.Runtime) *broadcastAckModule {
 	return &broadcastAckModule{
-		channelName:  channelName,
-		frontierView: frontierView,
-		runtime:      runtime,
-		acked:        atomic.NewUint64(0),
-		mode:         moduleModeMetaOnly,
+		runtime: runtime,
+		mode:    moduleModeMetaOnly,
 		ack: func(ctx context.Context, msg message.ImmutableMessage) error {
 			return streaming.WAL().Broadcast().Ack(ctx, msg)
 		},
@@ -78,21 +43,21 @@ func (m *broadcastAckModule) Name() moduleapi.ModuleName {
 	return moduleapi.ModuleNameAck
 }
 
-func (m *broadcastAckModule) ObserveMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
-	header := msg.BroadcastHeader()
-	if header == nil || m.mode != moduleModeMetaAndData {
-		return moduleapi.ObserveResult{}
+func (m *broadcastAckModule) ObserveMessage(_ context.Context, msg messageack.Message) {
+	if msg.ImmutableMessage == nil || msg.BroadcastHeader() == nil || m.mode != moduleModeMetaAndData {
+		return
 	}
-
-	barrier := &broadcastAckBarrier{
-		timetick: msg.TimeTick(),
-		acked:    m.acked,
+	record := msg.Ack()
+	if record == nil {
+		panic("broadcast ack observed data message without ack record")
 	}
-	task := m.newTask(msg)
-	if m.runtime.Scheduler != nil {
-		m.enqueueTask(task)
+	task := &broadcastAckTask{
+		module: m,
+		msg:    msg.Message(),
+		record: record,
+		ref:    record.Retain(),
 	}
-	return moduleapi.ObserveResult{Data: barrier}
+	m.enqueueTask(task)
 }
 
 func (m *broadcastAckModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
@@ -102,14 +67,6 @@ func (m *broadcastAckModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
 
 func (m *broadcastAckModule) ConsumeDirtySnapshots() []moduleapi.DirtySnapshot {
 	return nil
-}
-
-func (m *broadcastAckModule) newTask(msg message.ImmutableMessage) *broadcastAckTask {
-	return &broadcastAckTask{
-		module:   m,
-		msg:      msg,
-		frontier: m.buildFrontier(msg),
-	}
 }
 
 func (m *broadcastAckModule) enqueueTask(task *broadcastAckTask) {
@@ -123,7 +80,7 @@ func (m *broadcastAckModule) enqueueTask(task *broadcastAckTask) {
 	m.ackTaskTail = task
 	m.ackTaskMu.Unlock()
 
-	if shouldSubmit {
+	if shouldSubmit && m.runtime.Scheduler != nil {
 		m.runtime.Scheduler.Submit(task)
 	}
 }
@@ -142,122 +99,32 @@ func (m *broadcastAckModule) finishTask(task *broadcastAckTask) {
 	}
 	m.ackTaskMu.Unlock()
 
-	if next != nil {
+	if next != nil && m.runtime.Scheduler != nil {
 		m.runtime.Scheduler.Submit(next)
 	}
 }
 
-func (m *broadcastAckModule) buildFrontier(msg message.ImmutableMessage) walcheckpoint.Barrier {
-	switch msg.MessageType() {
-	case message.MessageTypeDropCollection:
-		return m.vchannelFrontier(msg.VChannel(), moduleapi.DataProgressMaterialized)
-	case message.MessageTypeTruncateCollection:
-		return m.vchannelFrontier(msg.VChannel(), moduleapi.DataProgressDurable)
-	case message.MessageTypeDropPartition:
-		drop := message.MustAsImmutableDropPartitionMessageV1(msg)
-		header := drop.Header()
-		return m.partitionFrontier(drop.VChannel(), header.GetCollectionId(), header.GetPartitionId(), moduleapi.DataProgressDurable)
-	case message.MessageTypeManualFlush:
-		return m.vchannelFrontier(msg.VChannel(), moduleapi.DataProgressMaterialized)
-	case message.MessageTypeFlushAll:
-		return m.allFrontier(moduleapi.DataProgressMaterialized)
-	case message.MessageTypeAlterCollection:
-		alter := message.MustAsImmutableAlterCollectionMessageV2(msg)
-		if messageutil.IsSchemaChange(alter.Header()) {
-			return m.vchannelFrontier(alter.VChannel(), moduleapi.DataProgressDurable)
-		}
-	case message.MessageTypeAlterWAL:
-		return m.allFrontier(moduleapi.DataProgressDurable)
-	default:
-	}
-	return nil
-}
-
-func (m *broadcastAckModule) partitionFrontier(
-	vchannel string,
-	collectionID int64,
-	partitionID int64,
-	kind moduleapi.DataProgressKind,
-) walcheckpoint.Barrier {
-	return m.frontier(moduleapi.Scope{
-		Type:         moduleapi.ScopePartition,
-		Kind:         kind,
-		VChannel:     vchannel,
-		CollectionID: collectionID,
-		PartitionID:  partitionID,
-	})
-}
-
-func (m *broadcastAckModule) allFrontier(kind moduleapi.DataProgressKind) walcheckpoint.Barrier {
-	return m.frontier(moduleapi.Scope{
-		Type: moduleapi.ScopeAll,
-		Kind: kind,
-	})
-}
-
-func (m *broadcastAckModule) vchannelFrontier(vchannel string, kind moduleapi.DataProgressKind) walcheckpoint.Barrier {
-	return m.frontier(moduleapi.Scope{
-		Type:     moduleapi.ScopeVChannel,
-		Kind:     kind,
-		VChannel: vchannel,
-	})
-}
-
-func (m *broadcastAckModule) markAcked(timetick uint64) {
-	for {
-		current := m.acked.Load()
-		if current >= timetick {
-			return
-		}
-		if m.acked.CompareAndSwap(current, timetick) {
-			return
-		}
-	}
-}
-
-func (m *broadcastAckModule) frontier(scope moduleapi.Scope) walcheckpoint.Barrier {
-	if m.frontierView == nil {
-		return nil
-	}
-	return m.frontierView.DataFrontier(scope)
-}
-
-type broadcastAckBarrier struct {
-	timetick uint64
-	acked    *atomic.Uint64
-}
-
-func (b *broadcastAckBarrier) TimeTick() uint64 {
-	if b.acked.Load() < b.timetick {
-		return 0
-	}
-	return b.timetick
-}
-
 type broadcastAckTask struct {
-	module   *broadcastAckModule
-	msg      message.ImmutableMessage
-	frontier walcheckpoint.Barrier
-	next     *broadcastAckTask
+	module *broadcastAckModule
+	msg    message.ImmutableMessage
+	record messageack.Record
+	ref    messageack.Ref
+	next   *broadcastAckTask
 }
 
 func (t *broadcastAckTask) Execute(ctx context.Context) error {
-	if t.frontier != nil && t.frontier.TimeTick() < t.msg.TimeTick() {
+	if !t.record.Sealed() || t.record.RefCount() != 1 {
 		return nodescheduler.ErrDelay
 	}
-	defer t.module.finishTask(t)
 	if err := t.module.ack(ctx, t.msg); err != nil {
-		return err
+		return errors.Mark(err, nodescheduler.ErrDelay)
 	}
-	t.module.markAcked(t.msg.TimeTick())
-	if t.module.runtime.Notifier != nil {
-		t.module.runtime.Notifier.NotifyBarrierUpdated()
-	}
+	t.ref.Done()
+	t.module.finishTask(t)
 	return nil
 }
 
 var (
-	_ moduleapi.Module      = (*broadcastAckModule)(nil)
-	_ walcheckpoint.Barrier = (*broadcastAckBarrier)(nil)
-	_ nodescheduler.Task    = (*broadcastAckTask)(nil)
+	_ moduleapi.Module   = (*broadcastAckModule)(nil)
+	_ nodescheduler.Task = (*broadcastAckTask)(nil)
 )

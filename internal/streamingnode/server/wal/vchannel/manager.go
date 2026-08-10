@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
-	walcheckpoint "github.com/milvus-io/milvus/internal/streamingnode/server/wal/checkpoint"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
@@ -53,12 +53,10 @@ type PChannelRecoveryManager struct {
 	pchannel string
 	modules  *typeutil.ConcurrentMap[string, *VChannelRecoveryModule]
 
-	segmentsByVChannel    map[string]map[int64]*streamingpb.SegmentAssignmentMeta
-	dirtyMu               sync.Mutex
-	dirtyModules          map[string]*VChannelRecoveryModule
-	cleanupModules        map[string]*VChannelRecoveryModule
-	durableFrontiers      *minimumFrontierIndex[string]
-	materializedFrontiers *minimumFrontierIndex[string]
+	segmentsByVChannel map[string]map[int64]*streamingpb.SegmentAssignmentMeta
+	dirtyMu            sync.Mutex
+	dirtyModules       map[string]*VChannelRecoveryModule
+	cleanupModules     map[string]*VChannelRecoveryModule
 
 	config                  PChannelManagerConfig
 	metaAndData             atomic.Bool
@@ -73,15 +71,13 @@ func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecovery
 	}
 	segmentsByVChannel := groupSegmentsByVChannel(config.Segments)
 	manager := &PChannelRecoveryManager{
-		pchannel:              config.PChannel,
-		modules:               typeutil.NewConcurrentMap[string, *VChannelRecoveryModule](),
-		segmentsByVChannel:    segmentsByVChannel,
-		dirtyModules:          make(map[string]*VChannelRecoveryModule),
-		durableFrontiers:      newMinimumFrontierIndex[string](),
-		materializedFrontiers: newMinimumFrontierIndex[string](),
-		config:                config,
-		streamManager:         transformlog.NewStreamManager(config.PChannel),
-		queryDispatcher:       queryresource.NewDispatcher(4),
+		pchannel:           config.PChannel,
+		modules:            typeutil.NewConcurrentMap[string, *VChannelRecoveryModule](),
+		segmentsByVChannel: segmentsByVChannel,
+		dirtyModules:       make(map[string]*VChannelRecoveryModule),
+		config:             config,
+		streamManager:      transformlog.NewStreamManager(config.PChannel),
+		queryDispatcher:    queryresource.NewDispatcher(4),
 	}
 	queryTransformLogStream, err := manager.streamManager.AcquireStream(context.Background(), config.PChannel)
 	if err != nil {
@@ -96,7 +92,6 @@ func NewPChannelRecoveryManager(config PChannelManagerConfig) (*PChannelRecovery
 			return nil, err
 		}
 		manager.modules.Insert(vchannel, module)
-		manager.refreshModuleFrontiers(module)
 		manager.syncTransformLogStream(module)
 	}
 	manager.releaseInitialState()
@@ -148,24 +143,24 @@ func (m *PChannelRecoveryManager) Name() moduleapi.ModuleName {
 	return moduleapi.ModuleNameVChannel
 }
 
-func (m *PChannelRecoveryManager) ObserveMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
-	if m == nil || msg == nil {
-		return moduleapi.ObserveResult{}
+func (m *PChannelRecoveryManager) ObserveMessage(ctx context.Context, msg messageack.Message) {
+	if m == nil || msg.ImmutableMessage == nil {
+		return
 	}
 	if funcutil.IsControlChannel(msg.VChannel()) && !msg.IsPChannelLevel() {
-		return moduleapi.ObserveResult{}
+		return
 	}
 	if m.shouldBroadcast(msg) {
-		return m.observeBroadcastMessage(ctx, msg)
+		m.observeBroadcastMessage(ctx, msg)
+		return
 	}
 	module := m.moduleForMessage(msg)
 	if module == nil {
-		return moduleapi.ObserveResult{}
+		return
 	}
-	result := module.ObserveMessage(ctx, msg)
+	module.ObserveMessage(ctx, msg)
 	m.markModuleUpdated(module)
 	m.syncTransformLogStream(module)
-	return result
 }
 
 func (m *PChannelRecoveryManager) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
@@ -176,7 +171,6 @@ func (m *PChannelRecoveryManager) SwitchIntoMetaAndData() moduleapi.ModuleSnapsh
 	snapshots := make([]moduleapi.ModuleSnapshot, 0, m.modules.Len()*3)
 	m.modules.Range(func(_ string, module *VChannelRecoveryModule) bool {
 		snapshots = append(snapshots, moduleapi.FlattenModuleSnapshot(module.SwitchIntoMetaAndData())...)
-		m.refreshModuleFrontiers(module)
 		return true
 	})
 	return aggregateModuleSnapshots(snapshots)
@@ -293,32 +287,6 @@ func (m *PChannelRecoveryManager) markCleanupCandidate(module *VChannelRecoveryM
 	m.dirtyMu.Unlock()
 }
 
-func (m *PChannelRecoveryManager) DataFrontier(scope moduleapi.Scope) walcheckpoint.Barrier {
-	if m == nil {
-		return nil
-	}
-	if scope.Type == moduleapi.ScopeAll {
-		if scope.Kind == moduleapi.DataProgressMaterialized {
-			return walcheckpoint.BarrierFunc(m.materializedFrontiers.Minimum)
-		}
-		return walcheckpoint.BarrierFunc(m.durableFrontiers.Minimum)
-	}
-	if scope.VChannel != "" && (scope.Type == moduleapi.ScopeVChannel || scope.Type == moduleapi.ScopePartition) {
-		if module := m.Module(scope.VChannel); module != nil {
-			return module.DataFrontier(scope)
-		}
-		return nil
-	}
-	barriers := make([]walcheckpoint.Barrier, 0)
-	m.modules.Range(func(_ string, module *VChannelRecoveryModule) bool {
-		if barrier := module.DataFrontier(scope); barrier != nil {
-			barriers = append(barriers, barrier)
-		}
-		return true
-	})
-	return walcheckpoint.NewCompositeBarrier(barriers...)
-}
-
 func (m *PChannelRecoveryManager) Module(vchannel string) *VChannelRecoveryModule {
 	module, _ := m.modules.Get(vchannel)
 	return module
@@ -394,16 +362,13 @@ func (m *PChannelRecoveryManager) shouldBroadcast(msg message.ImmutableMessage) 
 	return msg.VChannel() == "" || msg.IsPChannelLevel()
 }
 
-func (m *PChannelRecoveryManager) observeBroadcastMessage(ctx context.Context, msg message.ImmutableMessage) moduleapi.ObserveResult {
-	results := make([]moduleapi.ObserveResult, 0, m.modules.Len())
+func (m *PChannelRecoveryManager) observeBroadcastMessage(ctx context.Context, msg messageack.Message) {
 	m.modules.Range(func(_ string, module *VChannelRecoveryModule) bool {
-		result := module.ObserveMessage(ctx, msg)
+		module.ObserveMessage(ctx, msg)
 		m.markModuleUpdated(module)
 		m.syncTransformLogStream(module)
-		results = append(results, result)
 		return true
 	})
-	return moduleapi.ComposeBarriers(results)
 }
 
 func (m *PChannelRecoveryManager) syncTransformLogStream(module *VChannelRecoveryModule) {
@@ -440,7 +405,6 @@ func (m *PChannelRecoveryManager) moduleForMessage(msg message.ImmutableMessage)
 		module.SwitchIntoMetaAndData()
 	}
 	if !loaded {
-		m.refreshModuleFrontiers(module)
 		m.syncTransformLogStream(module)
 	}
 	return module
@@ -476,7 +440,6 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 		QueryViewLoadInfoProvider:  m.config.QueryViewLoadInfoProvider,
 		NodeScheduler:              m.config.NodeScheduler,
 		QueryRuntimeDispatcher:     m.queryDispatcher,
-		OnFrontierUpdated:          func() { m.refreshModuleFrontiersByVChannel(vchannel) },
 	})
 	if err != nil {
 		return nil, err
@@ -496,18 +459,11 @@ func (m *PChannelRecoveryManager) markModuleUpdatedByVChannel(vchannel string) {
 	}
 }
 
-func (m *PChannelRecoveryManager) refreshModuleFrontiersByVChannel(vchannel string) {
-	if module := m.Module(vchannel); module != nil {
-		m.refreshModuleFrontiers(module)
-	}
-}
-
 func (m *PChannelRecoveryManager) markModuleUpdated(module *VChannelRecoveryModule) {
 	if module == nil {
 		return
 	}
 	m.markModuleDirty(module)
-	m.refreshModuleFrontiers(module)
 }
 
 func (m *PChannelRecoveryManager) markModuleDirty(module *VChannelRecoveryModule) {
@@ -524,14 +480,6 @@ func (m *PChannelRecoveryManager) takeDirtyModules() map[string]*VChannelRecover
 	return dirty
 }
 
-func (m *PChannelRecoveryManager) refreshModuleFrontiers(module *VChannelRecoveryModule) {
-	if module == nil {
-		return
-	}
-	m.durableFrontiers.Update(module.vchannel, module.dataFrontierTimeTick(moduleapi.DataProgressDurable))
-	m.materializedFrontiers.Update(module.vchannel, module.dataFrontierTimeTick(moduleapi.DataProgressMaterialized))
-}
-
 type dirtyTrackingNotifier struct {
 	inner   moduleapi.ModuleNotifier
 	onDirty func()
@@ -544,17 +492,9 @@ func (n *dirtyTrackingNotifier) NotifyModuleUpdated(name moduleapi.ModuleName) {
 	}
 }
 
-func (n *dirtyTrackingNotifier) NotifyBarrierUpdated() {
-	n.onDirty()
-	if n.inner != nil {
-		n.inner.NotifyBarrierUpdated()
-	}
-}
-
 var (
 	_ moduleapi.Module                    = (*PChannelRecoveryManager)(nil)
 	_ moduleapi.PendingCleanupModule      = (*PChannelRecoveryManager)(nil)
-	_ moduleapi.DataFrontierProvider      = (*PChannelRecoveryManager)(nil)
 	_ wal.TransformLogStreamManager       = (*PChannelRecoveryManager)(nil)
 	_ snview.StreamingNodeResourceManager = (*PChannelRecoveryManager)(nil)
 	_ snview.QueryRuntimeProvider         = (*PChannelRecoveryManager)(nil)
