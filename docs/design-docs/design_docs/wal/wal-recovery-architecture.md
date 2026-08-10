@@ -196,8 +196,8 @@ the frozen Ack completed frontier has exposed all metadata that the subsequent
 DirtySnapshot capture must persist.
 
 There is no per-message metadata checkpoint queue or generic data checkpoint
-barrier queue. The checkpoint manager tracks the latest observed point, the
-ordered Ack completed frontier, and the last persisted batch. TransformLog
+barrier queue. RecoveryStorage directly owns the latest observed point, the
+ordered Ack tracker, and the immutable in-flight persist batch. TransformLog
 materialization is outside the message Ack completion boundary.
 
 Snapshots newer than the frozen checkpoint are permitted because current
