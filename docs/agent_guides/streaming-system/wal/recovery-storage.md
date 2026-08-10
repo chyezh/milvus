@@ -78,4 +78,5 @@ See
 - `internal/streamingnode/server/wal/vchannel/` — VChannel metadata, schema history, partition lifecycle, and VChannel tombstones
 - `internal/streamingnode/server/wal/vchannel/segment/` — growing segment assignment metadata, Insert/L1 persistence, segment lifecycle, and segment tombstones
 - `internal/streamingnode/server/wal/vchannel/transformlog/` — Delete TransformLog storage, recovery, chunk replay, scanners, and truncation
-- `internal/streamingnode/server/wal/checkpoint/` — WAL checkpoint state, frozen persist-batch points, and advancement rules
+- `internal/streamingnode/server/wal/recovery/` owns frozen persist-batch points
+  and checkpoint advancement; there is no separate checkpoint barrier manager.
