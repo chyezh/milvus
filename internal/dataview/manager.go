@@ -58,7 +58,7 @@ type Manager interface {
 	RetryAssignedFlushPublication(ctx context.Context, collectionID, segmentID int64, assignedVersion *viewpb.DataVersion, empty bool) (*viewpb.DataVersion, error)
 	CommitStreamingView(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
 	CommitRewrite(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
-	CommitSegmentTrim(ctx context.Context, collectionID int64, targets []SegmentTrimTarget, finalize SegmentTrimFinalize) (*viewpb.DataVersion, error)
+	CommitSegmentTrim(ctx context.Context, collectionID int64, resolveTargets SegmentTrimTargetResolver, finalize SegmentTrimFinalize) (*viewpb.DataVersion, error)
 	OnCreateCollection(ctx context.Context, event CreateCollectionDataViewEvent) (*viewpb.DataVersion, error)
 	OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error)
 	OnImport(ctx context.Context, event ImportDataViewEvent) (*viewpb.DataVersion, error)
@@ -135,10 +135,12 @@ type TruncateDataViewEvent struct {
 	FlushTs      uint64
 }
 
-type SegmentTrimTarget struct {
-	SegmentID int64
-}
+// SegmentTrimTargetResolver returns the current target IDs while the
+// collection DataView state lock is held.
+type SegmentTrimTargetResolver func(context.Context) []int64
 
+// SegmentTrimFinalize persistently applies the resolved trim scope before the
+// collection DataView state lock is released.
 type SegmentTrimFinalize func(context.Context) error
 
 type collectionDataViewState struct {

@@ -148,13 +148,12 @@ func (m *fakeGCDataViewManager) CommitRewrite(
 func (m *fakeGCDataViewManager) CommitSegmentTrim(
 	ctx context.Context,
 	collectionID int64,
-	targets []dataview.SegmentTrimTarget,
+	resolveTargets dataview.SegmentTrimTargetResolver,
 	finalize dataview.SegmentTrimFinalize,
 ) (*viewpb.DataVersion, error) {
+	targets := resolveTargets(ctx)
 	mutation := dataview.PublishedMutation{Remove: make([]int64, 0, len(targets))}
-	for _, target := range targets {
-		mutation.Remove = append(mutation.Remove, target.SegmentID)
-	}
+	mutation.Remove = append(mutation.Remove, targets...)
 	m.rewriteMutations = append(m.rewriteMutations, mutation)
 	if m.publishVersionErr != nil {
 		return m.publishedVersion, m.publishVersionErr

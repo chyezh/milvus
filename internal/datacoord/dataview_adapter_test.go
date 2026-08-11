@@ -2,7 +2,6 @@ package datacoord
 
 import (
 	"context"
-	"reflect"
 	"testing"
 
 	"github.com/bytedance/mockey"
@@ -17,24 +16,20 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
-func TestSegmentTrimTargetContainsOnlySegmentID(t *testing.T) {
-	targetType := reflect.TypeOf(SegmentTrimTarget{})
-	require.Equal(t, 1, targetType.NumField())
-	require.Equal(t, "SegmentID", targetType.Field(0).Name)
-}
-
 func TestCommitDataViewTrimPassesExplicitIDsWithoutReadingSegmentMetadata(t *testing.T) {
 	manager := &recordingSegmentTrimManager{}
 	meta := &meta{dataViewManager: manager}
 
 	require.NotPanics(t, func() {
-		_, err := meta.commitDataViewTrim(context.Background(), 1, []int64{100, 200}, nil)
+		_, err := meta.commitDataViewTrim(context.Background(), 1, func(context.Context) []int64 {
+			return []int64{100, 200}
+		}, nil)
 		require.NoError(t, err)
 	})
-	require.Equal(t, []SegmentTrimTarget{{SegmentID: 100}, {SegmentID: 200}}, manager.targets)
+	require.Equal(t, []int64{100, 200}, manager.targets)
 }
 
-func TestSegmentIDsForPartitionUsesLockedMetaAccessor(t *testing.T) {
+func TestSegmentIDsForDataViewPartitionTrimUsesLockedMetaAccessor(t *testing.T) {
 	mt := &meta{ctx: context.Background(), segments: NewSegmentsInfo()}
 	selectCalled := false
 	patch := mockey.Mock((*meta).SelectSegments).To(func(_ *meta, _ context.Context, _ ...SegmentFilter) []*SegmentInfo {
@@ -43,13 +38,17 @@ func TestSegmentIDsForPartitionUsesLockedMetaAccessor(t *testing.T) {
 	}).Build()
 	defer patch.UnPatch()
 
-	segmentIDs := mt.segmentIDsForPartition(1, map[int64]struct{}{10: {}})
+	segmentIDs := mt.segmentIDsForDataViewTrim(
+		context.Background(),
+		1,
+		dataViewPartitionTrimFilter(map[int64]struct{}{10: {}}),
+	)
 
 	require.True(t, selectCalled)
 	require.Equal(t, []int64{100}, segmentIDs)
 }
 
-func TestSegmentIDsForTruncateUsesLockedMetaAccessor(t *testing.T) {
+func TestSegmentIDsForDataViewTruncateTrimUsesLockedMetaAccessor(t *testing.T) {
 	mt := &meta{ctx: context.Background(), segments: NewSegmentsInfo()}
 	selectCalled := false
 	patch := mockey.Mock((*meta).SelectSegments).To(func(_ *meta, _ context.Context, _ ...SegmentFilter) []*SegmentInfo {
@@ -58,7 +57,7 @@ func TestSegmentIDsForTruncateUsesLockedMetaAccessor(t *testing.T) {
 	}).Build()
 	defer patch.UnPatch()
 
-	segmentIDs := mt.segmentIDsForTruncate(1, "ch-0", 100)
+	segmentIDs := mt.segmentIDsForDataViewTrim(context.Background(), 1, dataViewTruncateTrimFilter("ch-0", 100))
 
 	require.True(t, selectCalled)
 	require.Equal(t, []int64{100}, segmentIDs)
@@ -110,16 +109,16 @@ func TestLoadableCompactionMembershipsUsesLockedMetaAccessor(t *testing.T) {
 
 type recordingSegmentTrimManager struct {
 	DataViewManager
-	targets []SegmentTrimTarget
+	targets []int64
 }
 
 func (m *recordingSegmentTrimManager) CommitSegmentTrim(
 	ctx context.Context,
 	collectionID int64,
-	targets []SegmentTrimTarget,
+	resolveTargets SegmentTrimTargetResolver,
 	finalize SegmentTrimFinalize,
 ) (*viewpb.DataVersion, error) {
-	m.targets = append([]SegmentTrimTarget(nil), targets...)
+	m.targets = append([]int64(nil), resolveTargets(ctx)...)
 	if finalize != nil {
 		if err := finalize(ctx); err != nil {
 			return nil, err

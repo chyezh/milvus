@@ -44,7 +44,7 @@ type (
 	DropPartitionDataViewEvent       = dataview.DropPartitionDataViewEvent
 	TruncateDataViewEvent            = dataview.TruncateDataViewEvent
 	SegmentMembership                = dataview.SegmentMembership
-	SegmentTrimTarget                = dataview.SegmentTrimTarget
+	SegmentTrimTargetResolver        = dataview.SegmentTrimTargetResolver
 	SegmentTrimFinalize              = dataview.SegmentTrimFinalize
 	PublishedMutation                = dataview.PublishedMutation
 )
@@ -279,43 +279,27 @@ func (m *meta) commitDataViewRewrite(
 func (m *meta) commitDataViewTrim(
 	ctx context.Context,
 	collectionID int64,
-	segmentIDs []int64,
+	resolveTargets SegmentTrimTargetResolver,
 	finalize SegmentTrimFinalize,
 ) (*viewpb.DataVersion, error) {
 	if m.dataViewManager == nil {
 		return nil, nil
 	}
-	targets := make([]SegmentTrimTarget, 0, len(segmentIDs))
-	for _, segmentID := range segmentIDs {
-		targets = append(targets, SegmentTrimTarget{SegmentID: segmentID})
-	}
-	return m.dataViewManager.CommitSegmentTrim(ctx, collectionID, targets, finalize)
+	return m.dataViewManager.CommitSegmentTrim(ctx, collectionID, resolveTargets, finalize)
 }
 
-func (m *meta) finalizeDataViewTrim(ctx context.Context, collectionID int64, segmentIDs []int64) error {
+func (m *meta) finalizeDataViewTrim(ctx context.Context, collectionID int64, trimFilter SegmentFilter) error {
 	m.segMu.Lock()
 	defer m.segMu.Unlock()
 
+	filters := []SegmentFilter{WithCollection(collectionID)}
+	if trimFilter != nil {
+		filters = append(filters, trimFilter)
+	}
+	segments := m.segments.GetSegmentsBySelector(filters...)
 	metricMutation := &segMetricMutation{stateChange: make(segmentMetricStateChange)}
-	segmentsToDrop := make([]*SegmentInfo, 0, len(segmentIDs))
-	for _, segmentID := range segmentIDs {
-		// segMu is already held for the complete persistent finalization.
-		segment := m.segments.GetSegment(segmentID)
-		if segment == nil {
-			return merr.WrapErrServiceUnavailableMsg(
-				"segment %d disappeared before finalizing DataView trim of collection %d",
-				segmentID,
-				collectionID,
-			)
-		}
-		if segment.GetCollectionID() != collectionID {
-			return merr.WrapErrDataIntegrityMsg(
-				"trimmed segment %d belongs to collection %d, requested collection %d",
-				segmentID,
-				segment.GetCollectionID(),
-				collectionID,
-			)
-		}
+	segmentsToDrop := make([]*SegmentInfo, 0, len(segments))
+	for _, segment := range segments {
 		if segment.GetState() == commonpb.SegmentState_Dropped {
 			continue
 		}
@@ -326,10 +310,10 @@ func (m *meta) finalizeDataViewTrim(ctx context.Context, collectionID int64, seg
 	if len(segmentsToDrop) == 0 {
 		return nil
 	}
-	segments := lo.Map(segmentsToDrop, func(segment *SegmentInfo, _ int) *datapb.SegmentInfo {
+	segmentsProto := lo.Map(segmentsToDrop, func(segment *SegmentInfo, _ int) *datapb.SegmentInfo {
 		return segment.SegmentInfo
 	})
-	if err := m.catalog.AlterSegments(ctx, segments); err != nil {
+	if err := m.catalog.AlterSegments(ctx, segmentsProto); err != nil {
 		return err
 	}
 	for _, segment := range segmentsToDrop {
@@ -357,25 +341,28 @@ func (m *meta) commitDataViewStreaming(
 	return m.dataViewManager.CommitStreamingView(ctx, collectionID, PublishedMutation{Add: memberships})
 }
 
-func (m *meta) segmentIDsForPartition(collectionID int64, partitionIDs map[int64]struct{}) []int64 {
-	segments := m.SelectSegments(m.ctx, WithCollection(collectionID), SegmentFilterFunc(func(segment *SegmentInfo) bool {
+func dataViewPartitionTrimFilter(partitionIDs map[int64]struct{}) SegmentFilter {
+	return SegmentFilterFunc(func(segment *SegmentInfo) bool {
 		_, ok := partitionIDs[segment.GetPartitionID()]
 		return ok
-	}))
-	return lo.Map(segments, func(segment *SegmentInfo, _ int) int64 { return segment.GetID() })
+	})
 }
 
-func (m *meta) segmentIDsForTruncate(collectionID int64, vchannel string, flushTs uint64) []int64 {
-	segments := m.SelectSegments(m.ctx, WithCollection(collectionID), SegmentFilterFunc(func(segment *SegmentInfo) bool {
+func dataViewTruncateTrimFilter(vchannel string, flushTs uint64) SegmentFilter {
+	return SegmentFilterFunc(func(segment *SegmentInfo) bool {
 		if segment.GetInsertChannel() != vchannel {
 			return false
 		}
-		effectiveTs := segment.GetCommitTimestamp()
-		if effectiveTs == 0 && segment.GetDmlPosition() != nil {
-			effectiveTs = segment.GetDmlPosition().GetTimestamp()
-		}
-		return effectiveTs <= flushTs
-	}))
+		return segmentEffectiveDmlTs(segment.SegmentInfo) <= flushTs
+	})
+}
+
+func (m *meta) segmentIDsForDataViewTrim(ctx context.Context, collectionID int64, trimFilter SegmentFilter) []int64 {
+	filters := []SegmentFilter{WithCollection(collectionID)}
+	if trimFilter != nil {
+		filters = append(filters, trimFilter)
+	}
+	segments := m.SelectSegments(ctx, filters...)
 	return lo.Map(segments, func(segment *SegmentInfo, _ int) int64 { return segment.GetID() })
 }
 

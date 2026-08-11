@@ -3246,6 +3246,226 @@ func TestServer_NotifyDropPartitionKeepsLockThroughMetadataFinalize(t *testing.T
 	require.EqualValues(t, 2, later.GetStreamingVersion())
 }
 
+func TestServer_NotifyDropPartitionRefreshesTargetsAfterPreLockEnumeration(t *testing.T) {
+	ctx := context.Background()
+	meta, realManager, _ := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 100)
+	assigned := assignDDLTrimSegment(t, realManager, 100, 2)
+	_, err := realManager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 100))},
+	})
+	require.NoError(t, err)
+
+	beforeCore := make(chan struct{})
+	continueCore := make(chan struct{})
+	manager := &blockingDDLTrimDataViewManager{
+		DataViewManager: realManager,
+		beforeCore:      beforeCore,
+		continueCore:    continueCore,
+	}
+	meta.dataViewManager = manager
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	trimDone := make(chan error, 1)
+	go func() {
+		trimDone <- server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+	}()
+	waitDDLTrimSignal(t, beforeCore)
+
+	addDDLTrimSegment(t, meta, 200, 10, "ch-0", 200)
+	rewritten, err := realManager.CommitRewrite(ctx, 1, PublishedMutation{
+		Add:    []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 200))},
+		Remove: []int64{100},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, rewritten.GetStreamingVersion())
+	require.EqualValues(t, 1, rewritten.GetCompactVersion())
+	close(continueCore)
+
+	require.NoError(t, <-trimDone)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 200).GetState())
+	requirePublishedDataViewVersion(t, meta, 1, 2, 2)
+	visible, err := realManager.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	require.Empty(t, visible.GetShards())
+}
+
+func TestServer_DropSegmentsByTimeRefreshesTargetsAfterPreLockEnumeration(t *testing.T) {
+	ctx := context.Background()
+	meta, realManager, _ := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 900)
+	assigned := assignDDLTrimSegment(t, realManager, 100, 2)
+	_, err := realManager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 100))},
+	})
+	require.NoError(t, err)
+	require.NoError(t, meta.UpdateChannelCheckpoint(ctx, "ch-0", &msgpb.MsgPosition{
+		ChannelName: "ch-0",
+		MsgID:       []byte{0},
+		Timestamp:   1000,
+	}))
+
+	beforeCore := make(chan struct{})
+	continueCore := make(chan struct{})
+	manager := &blockingDDLTrimDataViewManager{
+		DataViewManager: realManager,
+		beforeCore:      beforeCore,
+		continueCore:    continueCore,
+	}
+	meta.dataViewManager = manager
+	server := &Server{meta: meta, dataViewManager: manager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	trimDone := make(chan error, 1)
+	go func() {
+		trimDone <- server.DropSegmentsByTime(ctx, 1, map[string]uint64{"ch-0": 1000})
+	}()
+	waitDDLTrimSignal(t, beforeCore)
+
+	addDDLTrimSegment(t, meta, 200, 10, "ch-0", 900)
+	rewritten, err := realManager.CommitRewrite(ctx, 1, PublishedMutation{
+		Add:    []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 200))},
+		Remove: []int64{100},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, rewritten.GetStreamingVersion())
+	require.EqualValues(t, 1, rewritten.GetCompactVersion())
+	close(continueCore)
+
+	require.NoError(t, <-trimDone)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 200).GetState())
+	requirePublishedDataViewVersion(t, meta, 1, 2, 2)
+	visible, err := realManager.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	require.Empty(t, visible.GetShards())
+}
+
+func TestServer_NotifyDropPartitionDoesNotFinalizeLaterCollectionBeforeItsDataView(t *testing.T) {
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	for collectionID, channel := range map[int64]string{1: "ch-1", 2: "ch-2"} {
+		meta.AddCollection(&collectionInfo{
+			ID:            collectionID,
+			Partitions:    []int64{10},
+			VChannelNames: []string{channel},
+		})
+	}
+	manager := newDataViewManager(meta.catalog, meta)
+	meta.dataViewManager = manager
+	for collectionID, channel := range map[int64]string{1: "ch-1", 2: "ch-2"} {
+		_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+			CollectionID: collectionID,
+			VChannels:    []string{channel},
+		})
+		require.NoError(t, err)
+		segmentID := collectionID * 100
+		require.NoError(t, meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+			ID:            segmentID,
+			CollectionID:  collectionID,
+			PartitionID:   10,
+			InsertChannel: channel,
+			State:         commonpb.SegmentState_Flushed,
+			Level:         datapb.SegmentLevel_L1,
+			NumOfRows:     100,
+		})))
+		assigned, err := manager.AssignFlushVersion(ctx, collectionID, segmentID)
+		require.NoError(t, err)
+		_, err = manager.CommitPublishedView(ctx, collectionID, assigned, PublishedMutation{
+			Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, segmentID))},
+		})
+		require.NoError(t, err)
+	}
+
+	orderedCollections := mockey.Mock((*meta).GetCollectionIDsByPartition).
+		Return([]int64{1, 2}).
+		Build()
+	defer orderedCollections.UnPatch()
+	failingManager := &failCollectionDDLTrimDataViewManager{
+		DataViewManager:  manager,
+		failCollectionID: 2,
+	}
+	meta.dataViewManager = failingManager
+	server := &Server{meta: meta, dataViewManager: failingManager, segmentManager: NewMockManager(t)}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err = server.NotifyDropPartition(ctx, "ch-1", []int64{10})
+
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	require.Equal(t, commonpb.SegmentState_Flushed, meta.GetSegment(ctx, 200).GetState())
+	visible1, err := manager.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	require.Empty(t, visible1.GetShards())
+	visible2, err := manager.LatestVisibleDataView(ctx, 2)
+	require.NoError(t, err)
+	require.Equal(t, []int64{200}, visible2.GetShards()[0].GetPartitions()[0].GetSegmentIds())
+}
+
+func TestServer_DropSegmentsByTimeDoesNotFinalizeOtherCollection(t *testing.T) {
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	manager := newDataViewManager(meta.catalog, meta)
+	meta.dataViewManager = manager
+	for _, collectionID := range []int64{1, 2} {
+		meta.AddCollection(&collectionInfo{
+			ID:            collectionID,
+			Partitions:    []int64{10},
+			VChannelNames: []string{"ch-0"},
+		})
+		_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+			CollectionID: collectionID,
+			VChannels:    []string{"ch-0"},
+		})
+		require.NoError(t, err)
+		segmentID := collectionID * 100
+		require.NoError(t, meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+			ID:            segmentID,
+			CollectionID:  collectionID,
+			PartitionID:   10,
+			InsertChannel: "ch-0",
+			State:         commonpb.SegmentState_Flushed,
+			Level:         datapb.SegmentLevel_L1,
+			NumOfRows:     100,
+			DmlPosition: &msgpb.MsgPosition{
+				ChannelName: "ch-0",
+				Timestamp:   900,
+			},
+		})))
+		assigned, err := manager.AssignFlushVersion(ctx, collectionID, segmentID)
+		require.NoError(t, err)
+		_, err = manager.CommitPublishedView(ctx, collectionID, assigned, PublishedMutation{
+			Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, segmentID))},
+		})
+		require.NoError(t, err)
+	}
+	require.NoError(t, meta.UpdateChannelCheckpoint(ctx, "ch-0", &msgpb.MsgPosition{
+		ChannelName: "ch-0",
+		MsgID:       []byte{0},
+		Timestamp:   1000,
+	}))
+	server := &Server{meta: meta, dataViewManager: manager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err = server.DropSegmentsByTime(ctx, 1, map[string]uint64{"ch-0": 1000})
+
+	require.NoError(t, err)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	require.Equal(t, commonpb.SegmentState_Flushed, meta.GetSegment(ctx, 200).GetState())
+	visible1, err := manager.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	require.Empty(t, visible1.GetShards())
+	visible2, err := manager.LatestVisibleDataView(ctx, 2)
+	require.NoError(t, err)
+	require.Equal(t, []int64{200}, visible2.GetShards()[0].GetPartitions()[0].GetSegmentIds())
+}
+
 type blockingDDLTrimDataViewManager struct {
 	DataViewManager
 	beforeCore       chan struct{}
@@ -3257,7 +3477,7 @@ type blockingDDLTrimDataViewManager struct {
 func (m *blockingDDLTrimDataViewManager) CommitSegmentTrim(
 	ctx context.Context,
 	collectionID int64,
-	targets []SegmentTrimTarget,
+	resolveTargets SegmentTrimTargetResolver,
 	finalize SegmentTrimFinalize,
 ) (*viewpb.DataVersion, error) {
 	if m.beforeCore != nil {
@@ -3272,7 +3492,24 @@ func (m *blockingDDLTrimDataViewManager) CommitSegmentTrim(
 			return originalFinalize(ctx)
 		}
 	}
-	return m.DataViewManager.CommitSegmentTrim(ctx, collectionID, targets, finalize)
+	return m.DataViewManager.CommitSegmentTrim(ctx, collectionID, resolveTargets, finalize)
+}
+
+type failCollectionDDLTrimDataViewManager struct {
+	DataViewManager
+	failCollectionID int64
+}
+
+func (m *failCollectionDDLTrimDataViewManager) CommitSegmentTrim(
+	ctx context.Context,
+	collectionID int64,
+	resolveTargets SegmentTrimTargetResolver,
+	finalize SegmentTrimFinalize,
+) (*viewpb.DataVersion, error) {
+	if collectionID == m.failCollectionID {
+		return nil, merr.WrapErrServiceUnavailableMsg("injected trim failure for collection %d", collectionID)
+	}
+	return m.DataViewManager.CommitSegmentTrim(ctx, collectionID, resolveTargets, finalize)
 }
 
 func waitDDLTrimSignal(t *testing.T, signal <-chan struct{}) {
