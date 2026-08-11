@@ -28,8 +28,10 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	balancerapi "github.com/milvus-io/milvus/internal/views/coord/balancer/api"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 type SegmentStore interface {
@@ -64,6 +66,8 @@ type Manager interface {
 
 	RepairCollection(ctx context.Context, collectionID int64) error
 	RepairCollections(ctx context.Context, collectionIDs []int64) error
+	Get(ctx context.Context, collectionID int64, version qviews.DataVersion) (DataViewRef, error)
+	LatestPublished(ctx context.Context, collectionID int64) (DataViewRef, error)
 	DataView(ctx context.Context, collectionID int64, dataVersion *viewpb.DataVersion) (*viewpb.DataViewOfCollection, error)
 	LatestVisibleDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error)
 	Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewOfCollection, error)
@@ -131,6 +135,7 @@ type collectionDataViewState struct {
 	latestResident *viewpb.DataViewOfCollection
 	latestVisible  *viewpb.DataViewOfCollection
 	dropped        bool
+	refs           map[qviews.DataVersion]int
 }
 
 type dataViewManager struct {
@@ -452,11 +457,6 @@ func (m *dataViewManager) OnDropCollection(ctx context.Context, collectionID int
 	state.latestResident = nil
 	state.latestVisible = nil
 	state.dropped = true
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.states[collectionID] == state {
-		delete(m.states, collectionID)
-	}
 	return nil, nil
 }
 
@@ -607,6 +607,46 @@ func (m *dataViewManager) LatestVisibleDataView(ctx context.Context, collectionI
 		return nil, nil
 	}
 	return m.withDeleteTimetick(ctx, state.latestVisible), nil
+}
+
+func (m *dataViewManager) Get(
+	ctx context.Context,
+	collectionID int64,
+	version qviews.DataVersion,
+) (DataViewRef, error) {
+	state := m.getOrCreateState(collectionID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	if state.dropped {
+		return nil, unavailableDataViewError(collectionID, version)
+	}
+	versionProto := version.IntoProto()
+	if state.latestVisible != nil && compareDataVersion(state.latestVisible.GetDataVersion(), versionProto) == 0 {
+		return newDataViewRef(state, newDataView(state.latestVisible)), nil
+	}
+
+	views, err := m.catalog.ListDataViews(ctx, collectionID)
+	if err != nil {
+		return nil, err
+	}
+	for _, view := range views {
+		if compareDataVersion(view.GetDataVersion(), versionProto) == 0 {
+			return newDataViewRef(state, newDataView(view)), nil
+		}
+	}
+	return nil, unavailableDataViewError(collectionID, version)
+}
+
+func (m *dataViewManager) LatestPublished(ctx context.Context, collectionID int64) (DataViewRef, error) {
+	state := m.getOrCreateState(collectionID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	if state.dropped || state.latestVisible == nil {
+		return nil, unavailableLatestDataViewError(collectionID)
+	}
+	return newDataViewRef(state, newDataView(state.latestVisible)), nil
 }
 
 func (m *dataViewManager) DataView(ctx context.Context, collectionID int64, dataVersion *viewpb.DataVersion) (*viewpb.DataViewOfCollection, error) {
@@ -923,10 +963,45 @@ func (m *dataViewManager) getOrCreateState(collectionID int64) *collectionDataVi
 
 	state := m.states[collectionID]
 	if state == nil {
-		state = &collectionDataViewState{collectionID: collectionID}
+		state = &collectionDataViewState{
+			collectionID: collectionID,
+			refs:         make(map[qviews.DataVersion]int),
+		}
 		m.states[collectionID] = state
 	}
 	return state
+}
+
+func newDataViewRef(state *collectionDataViewState, view *DataView) DataViewRef {
+	version := view.Version()
+	state.refs[version]++
+	return &dataViewRef{
+		view: view,
+		release: func() {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			if state.refs[version] <= 1 {
+				delete(state.refs, version)
+				return
+			}
+			state.refs[version]--
+		},
+	}
+}
+
+func unavailableDataViewError(collectionID int64, version qviews.DataVersion) error {
+	return merr.WrapErrServiceNotReadyMsg(
+		"data view %s of collection %d is no longer available",
+		version.String(),
+		collectionID,
+	)
+}
+
+func unavailableLatestDataViewError(collectionID int64) error {
+	return merr.WrapErrServiceNotReadyMsg(
+		"latest published data view of collection %d is no longer available",
+		collectionID,
+	)
 }
 
 func (m *dataViewManager) listStates() []*collectionDataViewState {

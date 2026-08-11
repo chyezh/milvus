@@ -44,6 +44,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	broker2 "github.com/milvus-io/milvus/internal/datacoord/broker"
+	"github.com/milvus-io/milvus/internal/dataview"
 	kvmocks "github.com/milvus-io/milvus/internal/kv/mocks"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/metastore/kv/binlog"
@@ -54,6 +55,7 @@ import (
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
 	balancerapi "github.com/milvus-io/milvus/internal/views/coord/balancer/api"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/objectstorage"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
@@ -150,6 +152,18 @@ func (m *fakeGCDataViewManager) RepairCollection(ctx context.Context, collection
 
 func (m *fakeGCDataViewManager) RepairCollections(ctx context.Context, collectionIDs []int64) error {
 	return nil
+}
+
+func (m *fakeGCDataViewManager) Get(
+	ctx context.Context,
+	collectionID int64,
+	version qviews.DataVersion,
+) (dataview.DataViewRef, error) {
+	return nil, merr.WrapErrServiceNotReadyMsg("fake data view references are not available")
+}
+
+func (m *fakeGCDataViewManager) LatestPublished(ctx context.Context, collectionID int64) (dataview.DataViewRef, error) {
+	return nil, merr.WrapErrServiceNotReadyMsg("fake data view references are not available")
 }
 
 func (m *fakeGCDataViewManager) LatestVisibleDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error) {
