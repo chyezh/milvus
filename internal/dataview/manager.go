@@ -551,7 +551,10 @@ func (m *dataViewManager) recoverCollectionFromDataViews(collectionID int64, per
 func (m *dataViewManager) repairCollectionWithDataViews(ctx context.Context, collectionID int64, persistedViews []*viewpb.DataViewOfCollection) error {
 	state := m.getOrCreateState(collectionID)
 	state.mu.Lock()
-	state.dropped = false
+	if state.dropped {
+		state.mu.Unlock()
+		return nil
+	}
 
 	latestPersisted := latestDataView(persistedViews)
 	segments := m.segments.SelectSegments(ctx, collectionID)

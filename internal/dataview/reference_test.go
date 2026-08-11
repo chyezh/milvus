@@ -112,6 +112,30 @@ func TestDataViewRefSurvivesTerminalCollection(t *testing.T) {
 	require.Zero(t, dataViewReferenceCount(t, manager, 1, domainVersion))
 }
 
+func TestDataViewRefRepairDoesNotReopenTerminalCollection(t *testing.T) {
+	ctx := context.Background()
+	bootstrap, catalog, store := newTestDataViewManager()
+	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
+
+	version, err := bootstrap.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})
+	require.NoError(t, err)
+	recovered, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+	manager := recovered.(*dataViewManager)
+	domainVersion := qviews.FromProtoDataVersion(version)
+
+	_, err = manager.OnDropCollection(ctx, 1)
+	require.NoError(t, err)
+	require.True(t, dataViewStateDropped(t, manager, 1))
+	require.NoError(t, manager.RepairCollection(ctx, 1))
+
+	_, err = manager.Get(ctx, 1, domainVersion)
+	requireUnavailableDataViewError(t, err)
+	_, err = manager.LatestPublished(ctx, 1)
+	requireUnavailableDataViewError(t, err)
+	require.True(t, dataViewStateDropped(t, manager, 1))
+}
+
 func TestDataViewRefRejectsMissingView(t *testing.T) {
 	ctx := context.Background()
 	manager, _, _ := newTestDataViewManager()
@@ -134,6 +158,15 @@ func dataViewReferenceCount(
 	state.mu.RLock()
 	defer state.mu.RUnlock()
 	return state.refs[version]
+}
+
+func dataViewStateDropped(t *testing.T, manager *dataViewManager, collectionID int64) bool {
+	t.Helper()
+	state := manager.getState(collectionID)
+	require.NotNil(t, state)
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	return state.dropped
 }
 
 func requireUnavailableDataViewError(t *testing.T, err error) {
