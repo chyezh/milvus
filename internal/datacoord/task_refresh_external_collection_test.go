@@ -1440,6 +1440,8 @@ func TestApplyExternalCollectionSegmentUpdateForBaseline_ReplayNewSegment(t *tes
 		segments:    NewSegmentsInfo(),
 		catalog:     catalog,
 	}
+	manager := &fakeGCDataViewManager{}
+	mt.dataViewManager = manager
 	incoming := newTestExternalRefreshSegment(segmentID, collectionID, 100)
 	incoming.ManifestPath = packed.MarshalManifestPath(manifestBasePath, 1)
 
@@ -1452,6 +1454,9 @@ func TestApplyExternalCollectionSegmentUpdateForBaseline_ReplayNewSegment(t *tes
 		[]*datapb.SegmentInfo{incoming},
 	)
 	assert.NoError(t, err)
+	assert.Empty(t, manager.publishedMutations)
+	assert.Len(t, manager.rewriteMutations, 1)
+	assert.Equal(t, segmentID, manager.rewriteMutations[0].Add[0].SegmentID)
 
 	// Match the V3 catalog representation after a DataCoord restart: the
 	// manifest and aggregate stats survive, while fake binlogs do not. Also

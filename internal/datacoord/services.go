@@ -748,10 +748,8 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 
 		segment := s.meta.GetSegment(ctx, req.GetSegmentID())
 		if isImmediatelyLoadableFlushSegment(segment) {
-			published, err := s.dataViewManager.OnFlush(ctx, FlushDataViewEvent{
-				CollectionID:    req.GetCollectionID(),
-				SegmentIDs:      []int64{req.GetSegmentID()},
-				AssignedVersion: assigned,
+			published, err := s.dataViewManager.CommitPublishedView(ctx, req.GetCollectionID(), assigned, PublishedMutation{
+				Add: []SegmentMembership{publishedSegmentMembership(segment)},
 			})
 			if err != nil {
 				err = dataViewPublicationError(req.GetSegmentID(), err)
@@ -2459,10 +2457,11 @@ func (s *Server) NotifyDropPartition(ctx context.Context, channel string, partit
 		mlog.Any("partitionID", partitionIDs))
 	if s.dataViewManager != nil {
 		for _, collectionID := range s.meta.GetCollectionIDsByPartition(ctx, partitionIDs) {
-			if _, err := s.dataViewManager.OnDropPartition(ctx, DropPartitionDataViewEvent{
-				CollectionID: collectionID,
-				PartitionIDs: partitionIDs,
-			}); err != nil {
+			partitionSet := make(map[int64]struct{}, len(partitionIDs))
+			for _, partitionID := range partitionIDs {
+				partitionSet[partitionID] = struct{}{}
+			}
+			if _, err := s.meta.commitDataViewRewrite(ctx, collectionID, nil, s.meta.segmentIDsForPartition(collectionID, partitionSet)); err != nil {
 				return err
 			}
 		}
@@ -2489,11 +2488,7 @@ func (s *Server) DropSegmentsByTime(ctx context.Context, collectionID int64, flu
 			return err
 		}
 		if s.dataViewManager != nil {
-			_, err = s.dataViewManager.OnTruncate(ctx, TruncateDataViewEvent{
-				CollectionID: collectionID,
-				VChannel:     channelName,
-				FlushTs:      flushTs,
-			})
+			_, err = s.meta.commitDataViewRewrite(ctx, collectionID, nil, s.meta.segmentIDsForTruncate(collectionID, channelName, flushTs))
 			if err != nil {
 				mlog.Warn(ctx, "OnTruncate DataView failed", mlog.Err(err))
 				return err
@@ -3411,14 +3406,8 @@ func (s *Server) HandleCommitVchannel(ctx context.Context, req *datapb.HandleCom
 			return err
 		}
 		if s.dataViewManager != nil && collectionID != 0 {
-			if _, err := s.dataViewManager.OnImport(ctx, ImportDataViewEvent{
-				CollectionID: collectionID,
-				SegmentIDs:   segIDs,
-			}); err != nil {
-				mlog.Warn(ctx, "failed to publish DataView after import commit",
-					mlog.FieldJobID(jobID),
-					mlog.String("vchannel", vchannel),
-					mlog.Err(err))
+			if _, err := s.meta.commitDataViewRewrite(ctx, collectionID, segIDs, nil); err != nil {
+				return merr.Wrapf(err, "publish DataView after import job %d vchannel %s", jobID, vchannel)
 			}
 		}
 		return nil

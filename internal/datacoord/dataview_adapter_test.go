@@ -11,6 +11,7 @@ import (
 	balancerapi "github.com/milvus-io/milvus/internal/views/coord/balancer/api"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
@@ -255,6 +256,41 @@ func TestFlushVersionRecoveryIncludesSegmentsOutsideCurrentPartitions(t *testing
 	require.Equal(t, int64(8), durable.GetAllocatedStreamingVersion())
 }
 
+func TestPublishDataViewAfterVisibleSortCompactionCommitsRewrite(t *testing.T) {
+	ctx := context.Background()
+	m, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	manager := &fakeGCDataViewManager{publishedVersion: &viewpb.DataVersion{StreamingVersion: 7, CompactVersion: 1}}
+	m.dataViewManager = manager
+	require.NoError(t, m.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:                  100,
+		CollectionID:        1,
+		PartitionID:         10,
+		InsertChannel:       "ch-0",
+		State:               commonpb.SegmentState_Dropped,
+		Level:               datapb.SegmentLevel_L1,
+		SealedAtDataVersion: &viewpb.DataVersion{StreamingVersion: 7},
+	})))
+	require.NoError(t, m.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            101,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-0",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+	})))
+
+	err = m.publishDataViewAfterCompaction(ctx, &datapb.CompactionTask{
+		Type:          datapb.CompactionType_SortCompaction,
+		CollectionID:  1,
+		InputSegments: []int64{100},
+	}, []int64{101})
+
+	require.NoError(t, err)
+	require.Empty(t, manager.publishedMutations)
+	require.Len(t, manager.rewriteMutations, 1)
+}
+
 func TestGetCollectionIDsByPartitionUsesSegmentMeta(t *testing.T) {
 	m := &meta{
 		collections: typeutil.NewConcurrentMap[UniqueID, *collectionInfo](),
@@ -277,4 +313,119 @@ func TestGetCollectionIDsByPartitionUsesSegmentMeta(t *testing.T) {
 	collectionIDs := m.GetCollectionIDsByPartition(context.Background(), []int64{11})
 
 	require.Equal(t, []int64{1}, collectionIDs)
+}
+
+func TestPublishDataViewAfterSortCompactionUsesInheritedFlushVersion(t *testing.T) {
+	ctx := context.Background()
+	m, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	manager := &fakeGCDataViewManager{publishedVersion: &viewpb.DataVersion{StreamingVersion: 7}}
+	m.dataViewManager = manager
+	require.NoError(t, m.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:                  100,
+		CollectionID:        1,
+		PartitionID:         10,
+		InsertChannel:       "ch-0",
+		State:               commonpb.SegmentState_Dropped,
+		Level:               datapb.SegmentLevel_L1,
+		IsInvisible:         true,
+		SealedAtDataVersion: &viewpb.DataVersion{StreamingVersion: 7},
+	})))
+	require.NoError(t, m.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            101,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-0",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+	})))
+
+	m.publishDataViewAfterCompaction(ctx, &datapb.CompactionTask{
+		Type:          datapb.CompactionType_SortCompaction,
+		CollectionID:  1,
+		InputSegments: []int64{100},
+	}, []int64{101})
+
+	require.Len(t, manager.publishedMutations, 1)
+	require.Empty(t, manager.rewriteMutations)
+	require.Equal(t, int64(7), manager.publishedAssigned[0].GetStreamingVersion())
+	require.Equal(t, []int64{100}, manager.publishedMutations[0].Remove)
+	require.Equal(t, int64(101), manager.publishedMutations[0].Add[0].SegmentID)
+}
+
+func TestPublishDataViewAfterMixCompactionCommitsRewrite(t *testing.T) {
+	ctx := context.Background()
+	m, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	manager := &fakeGCDataViewManager{publishedVersion: &viewpb.DataVersion{StreamingVersion: 7, CompactVersion: 1}}
+	m.dataViewManager = manager
+	require.NoError(t, m.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            101,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-0",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+	})))
+
+	m.publishDataViewAfterCompaction(ctx, &datapb.CompactionTask{
+		Type:          datapb.CompactionType_MixCompaction,
+		CollectionID:  1,
+		InputSegments: []int64{100},
+	}, []int64{101})
+
+	require.Empty(t, manager.publishedMutations)
+	require.Len(t, manager.rewriteMutations, 1)
+	require.Equal(t, []int64{100}, manager.rewriteMutations[0].Remove)
+	require.Equal(t, int64(101), manager.rewriteMutations[0].Add[0].SegmentID)
+}
+
+func TestPublishDataViewAfterCompactionReturnsPublicationFailure(t *testing.T) {
+	ctx := context.Background()
+	m, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	m.dataViewManager = &fakeGCDataViewManager{
+		publishVersionErr: merr.WrapErrServiceUnavailableMsg("publication failed"),
+	}
+	require.NoError(t, m.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            101,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-0",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+	})))
+
+	err = m.publishDataViewAfterCompaction(ctx, &datapb.CompactionTask{
+		Type:          datapb.CompactionType_MixCompaction,
+		CollectionID:  1,
+		InputSegments: []int64{100},
+	}, []int64{101})
+
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+}
+
+func TestPublishDataViewAfterCompactionRejectsDroppedOutput(t *testing.T) {
+	ctx := context.Background()
+	m, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	manager := &fakeGCDataViewManager{}
+	m.dataViewManager = manager
+	require.NoError(t, m.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            101,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-0",
+		State:         commonpb.SegmentState_Dropped,
+		Level:         datapb.SegmentLevel_L1,
+	})))
+
+	err = m.publishDataViewAfterCompaction(ctx, &datapb.CompactionTask{
+		Type:          datapb.CompactionType_MixCompaction,
+		CollectionID:  1,
+		InputSegments: []int64{100},
+	}, []int64{101})
+
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	require.Empty(t, manager.rewriteMutations)
 }

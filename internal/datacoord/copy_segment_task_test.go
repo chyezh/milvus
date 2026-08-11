@@ -687,10 +687,46 @@ func (s *CopySegmentTaskSuite) TestQueryTaskOnWorker_CompletedSyncsTask() {
 	s.Equal(datapb.CopySegmentTaskState_CopySegmentTaskCompleted, updatedTask.GetState())
 }
 
+func (s *CopySegmentTaskSuite) TestQueryTaskOnWorker_PublicationFailureRemainsRetryable() {
+	cluster := session.NewMockCluster(s.T())
+	cluster.EXPECT().QueryCopySegment(mock.Anything, mock.Anything).Return(
+		&datapb.QueryCopySegmentResponse{
+			TaskID: 1001,
+			State:  datapb.CopySegmentTaskState_CopySegmentTaskCompleted,
+			SegmentResults: []*datapb.CopySegmentResult{
+				{
+					SegmentId:    2001,
+					ImportedRows: 100,
+					Binlogs:      makeTestCopySegmentBinlogs(),
+					ManifestPath: "manifest-path",
+				},
+			},
+		},
+		nil,
+	)
+
+	task := createTestCopyTask(100, 2001).(*copySegmentTask)
+	copyMeta, m := newCopySegmentTaskTestMeta(s.T(), task)
+	s.NoError(copyMeta.AddJob(context.Background(), newTestCopyJob(100, datapb.CopySegmentJobState_CopySegmentJobExecuting)))
+	m.dataViewManager = &fakeGCDataViewManager{
+		publishVersionErr: merr.WrapErrServiceUnavailableMsg("publication failed"),
+	}
+	s.NoError(m.AddSegment(context.Background(), newTestCopySegment(2001)))
+
+	task.QueryTaskOnWorker(cluster)
+
+	updatedTask := copyMeta.GetTask(context.Background(), 1001)
+	s.Equal(datapb.CopySegmentTaskState_CopySegmentTaskInProgress, updatedTask.GetState())
+	s.Equal(datapb.CopySegmentJobState_CopySegmentJobExecuting,
+		copyMeta.GetJob(context.Background(), 100).GetState())
+}
+
 func (s *CopySegmentTaskSuite) TestSyncCopySegmentTask_CompletedUpdatesSegment() {
 	ctx := context.Background()
 	task := createTestCopyTask(100, 2001).(*copySegmentTask)
 	copyMeta, m := newCopySegmentTaskTestMeta(s.T(), task)
+	manager := &fakeGCDataViewManager{}
+	m.dataViewManager = manager
 
 	err := m.AddSegment(ctx, newTestCopySegment(2001))
 	s.NoError(err)
@@ -720,6 +756,9 @@ func (s *CopySegmentTaskSuite) TestSyncCopySegmentTask_CompletedUpdatesSegment()
 	updatedTask := copyMeta.GetTask(ctx, 1001)
 	s.Equal(datapb.CopySegmentTaskState_CopySegmentTaskCompleted, updatedTask.GetState())
 	s.NotZero(updatedTask.(*copySegmentTask).task.Load().GetCompleteTs())
+	s.Empty(manager.publishedMutations)
+	s.Len(manager.rewriteMutations, 1)
+	s.Equal(int64(2001), manager.rewriteMutations[0].Add[0].SegmentID)
 }
 
 func (s *CopySegmentTaskSuite) TestSyncCopySegmentTask_FailedResponseUpdatesTask() {

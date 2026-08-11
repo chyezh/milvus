@@ -19,6 +19,7 @@ package datacoord
 import (
 	"context"
 
+	"github.com/samber/lo"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/dataview"
@@ -41,6 +42,8 @@ type (
 	ExternalRefreshDataViewEvent     = dataview.ExternalRefreshDataViewEvent
 	DropPartitionDataViewEvent       = dataview.DropPartitionDataViewEvent
 	TruncateDataViewEvent            = dataview.TruncateDataViewEvent
+	SegmentMembership                = dataview.SegmentMembership
+	PublishedMutation                = dataview.PublishedMutation
 )
 
 type dataViewSegmentStore struct {
@@ -193,6 +196,85 @@ func newDataViewSegment(segment *SegmentInfo) *dataview.Segment {
 		CompactionFrom:              append([]int64(nil), segment.GetCompactionFrom()...),
 		SealedAtDataVersion:         sealedAtDataVersion,
 	}
+}
+
+func publishedSegmentMembership(segment *SegmentInfo) dataview.SegmentMembership {
+	return dataview.SegmentMembership{
+		SegmentID:    segment.GetID(),
+		CollectionID: segment.GetCollectionID(),
+		PartitionID:  segment.GetPartitionID(),
+		VChannel:     segment.GetInsertChannel(),
+		State:        segment.GetState(),
+		Level:        segment.GetLevel(),
+		IsImporting:  segment.GetIsImporting(),
+		IsInvisible:  segment.GetIsInvisible(),
+	}
+}
+
+func clonePublishedDataVersion(version *viewpb.DataVersion) *viewpb.DataVersion {
+	if version == nil {
+		return nil
+	}
+	return proto.Clone(version).(*viewpb.DataVersion)
+}
+
+func (m *meta) loadablePublishedMemberships(segmentIDs []int64) ([]dataview.SegmentMembership, bool) {
+	memberships := make([]dataview.SegmentMembership, 0, len(segmentIDs))
+	for _, segmentID := range segmentIDs {
+		segment := m.segments.GetSegment(segmentID)
+		if segment == nil {
+			return nil, false
+		}
+		if !isImmediatelyLoadableFlushSegment(segment) {
+			return nil, false
+		}
+		memberships = append(memberships, publishedSegmentMembership(segment))
+	}
+	return memberships, true
+}
+
+func (m *meta) commitDataViewRewrite(
+	ctx context.Context,
+	collectionID int64,
+	addSegmentIDs []int64,
+	removeSegmentIDs []int64,
+) (*viewpb.DataVersion, error) {
+	if m.dataViewManager == nil {
+		return nil, nil
+	}
+	memberships, ready := m.loadablePublishedMemberships(addSegmentIDs)
+	if !ready {
+		return nil, merr.WrapErrServiceUnavailableMsg(
+			"published membership for collection %d is not loadable",
+			collectionID,
+		)
+	}
+	return m.dataViewManager.CommitRewrite(ctx, collectionID, PublishedMutation{
+		Add:    memberships,
+		Remove: append([]int64(nil), removeSegmentIDs...),
+	})
+}
+
+func (m *meta) segmentIDsForPartition(collectionID int64, partitionIDs map[int64]struct{}) []int64 {
+	segments := m.segments.GetSegmentsBySelector(WithCollection(collectionID), SegmentFilterFunc(func(segment *SegmentInfo) bool {
+		_, ok := partitionIDs[segment.GetPartitionID()]
+		return ok
+	}))
+	return lo.Map(segments, func(segment *SegmentInfo, _ int) int64 { return segment.GetID() })
+}
+
+func (m *meta) segmentIDsForTruncate(collectionID int64, vchannel string, flushTs uint64) []int64 {
+	segments := m.segments.GetSegmentsBySelector(WithCollection(collectionID), SegmentFilterFunc(func(segment *SegmentInfo) bool {
+		if segment.GetInsertChannel() != vchannel {
+			return false
+		}
+		effectiveTs := segment.GetCommitTimestamp()
+		if effectiveTs == 0 && segment.GetDmlPosition() != nil {
+			effectiveTs = segment.GetDmlPosition().GetTimestamp()
+		}
+		return effectiveTs <= flushTs
+	}))
+	return lo.Map(segments, func(segment *SegmentInfo, _ int) int64 { return segment.GetID() })
 }
 
 func dataViewSegmentMemSize(segment *SegmentInfo) int64 {

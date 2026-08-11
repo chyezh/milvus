@@ -2831,28 +2831,40 @@ func (m *meta) CompleteCompactionMutation(ctx context.Context, t *datapb.Compact
 	if err != nil {
 		return nil, nil, err
 	}
-	m.publishDataViewAfterCompaction(ctx, t, lo.Map(newSegments, func(segment *SegmentInfo, _ int) int64 {
-		return segment.GetID()
-	}))
 	return newSegments, metricMutation, nil
 }
 
-func (m *meta) publishDataViewAfterCompaction(ctx context.Context, t *datapb.CompactionTask, compactTo []int64) {
+func (m *meta) publishDataViewAfterCompaction(ctx context.Context, t *datapb.CompactionTask, compactTo []int64) error {
 	if m.dataViewManager == nil {
-		return
+		return nil
 	}
-	if _, err := m.dataViewManager.OnCompact(ctx, CompactDataViewEvent{
-		CollectionID: t.GetCollectionID(),
-		CompactFrom:  t.GetInputSegments(),
-		CompactTo:    compactTo,
-	}); err != nil {
-		mlog.Warn(ctx, "failed to publish DataView after compaction",
-			mlog.Int64("planID", t.GetPlanID()),
-			mlog.FieldCollectionID(t.GetCollectionID()),
-			mlog.Int64s("compactFrom", t.GetInputSegments()),
-			mlog.Int64s("compactTo", compactTo),
-			mlog.Err(err))
+	memberships, ready := m.loadablePublishedMemberships(compactTo)
+	if !ready {
+		return merr.WrapErrServiceUnavailableMsg(
+			"compaction %d output membership is not loadable",
+			t.GetPlanID(),
+		)
 	}
+	mutation := PublishedMutation{
+		Add:    memberships,
+		Remove: append([]int64(nil), t.GetInputSegments()...),
+	}
+	var err error
+	if t.GetType() == datapb.CompactionType_SortCompaction {
+		input := m.segments.GetSegment(t.GetInputSegments()[0])
+		assigned := input.GetSealedAtDataVersion()
+		if input.GetIsInvisible() && assigned != nil {
+			_, err = m.dataViewManager.CommitPublishedView(ctx, t.GetCollectionID(), assigned, mutation)
+		} else {
+			_, err = m.dataViewManager.CommitRewrite(ctx, t.GetCollectionID(), mutation)
+		}
+	} else {
+		_, err = m.dataViewManager.CommitRewrite(ctx, t.GetCollectionID(), mutation)
+	}
+	if err != nil {
+		return merr.Wrapf(err, "publish DataView after compaction %d", t.GetPlanID())
+	}
+	return nil
 }
 
 // buildSegment utility function for compose datapb.SegmentInfo struct with provided info
@@ -3508,6 +3520,7 @@ func (m *meta) completeSortCompactionMutation(
 		SchemaVersion:                 outputSchemaVersion,
 		CommitTimestamp:               0, // Normalized: row timestamps already rewritten
 		DeleteApplyStartAfterTimetick: deleteApplyStartAfterTimetick,
+		SealedAtDataVersion:           clonePublishedDataVersion(oldSegment.GetSealedAtDataVersion()),
 	}
 	// Statistics is computed at the compactor and shipped on the
 	// CompactionSegment. V3 outputs whose stats live in the manifest are

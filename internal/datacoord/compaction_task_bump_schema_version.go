@@ -384,6 +384,14 @@ func (t *bumpSchemaVersionTask) saveSegmentMeta(result *datapb.CompactionPlanRes
 }
 
 func (t *bumpSchemaVersionTask) processMetaSaved() bool {
+	if meta, ok := t.meta.(*meta); ok {
+		if err := meta.publishDataViewAfterCompaction(context.TODO(), t.GetTaskProto(), t.GetTaskProto().GetResultSegments()); err != nil {
+			mlog.Warn(context.TODO(), "bumpSchemaVersionTask unable to publish DataView",
+				mlog.Int64("planID", t.GetTaskProto().GetPlanID()),
+				mlog.Err(err))
+			return false
+		}
+	}
 	err := t.updateAndSaveTaskMeta(setState(datapb.CompactionTaskState_completed))
 	if err != nil {
 		mlog.Warn(context.TODO(), "bumpSchemaVersionTask unable to processMetaSaved",

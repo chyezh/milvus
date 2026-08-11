@@ -25,6 +25,7 @@ import (
 	"github.com/milvus-io/milvus/internal/coordinator/snmanager"
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/datacoord/broker"
+	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/internal/distributed/streaming"
 	etcdkv "github.com/milvus-io/milvus/internal/kv/etcd"
 	datacoordkv "github.com/milvus-io/milvus/internal/metastore/kv/datacoord"
@@ -538,8 +539,11 @@ func (s *ServerSuite) TestSaveBinlogPathsReturnsExactAssignedDataVersion() {
 	s.Require().Equal("7", resp.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
 	s.Require().Equal("0", resp.GetExtraInfo()[statusExtraInfoDataViewCompactVersion])
 	s.Require().Equal([]int64{100}, manager.assignedSegments)
-	s.Require().Len(manager.flushEvents, 1)
-	s.Require().True(proto.Equal(assigned, manager.flushEvents[0].AssignedVersion))
+	s.Require().Empty(manager.flushEvents)
+	s.Require().Len(manager.publishedMutations, 1)
+	s.Require().Equal([]int64{100}, lo.Map(manager.publishedMutations[0].Add, func(membership dataview.SegmentMembership, _ int) int64 {
+		return membership.SegmentID
+	}))
 }
 
 func (s *ServerSuite) TestSaveBinlogPathsPersistsExactAssignedDataVersion() {
@@ -2552,6 +2556,9 @@ func TestServer_DropSegmentsByTime(t *testing.T) {
 		meta, err := newMemoryMeta(t)
 		assert.NoError(t, err)
 		s.meta = meta
+		manager := &fakeGCDataViewManager{}
+		s.dataViewManager = manager
+		meta.dataViewManager = manager
 
 		// Set channel checkpoint to satisfy WatchChannelCheckpoint
 		pos := &msgpb.MsgPosition{
@@ -2608,7 +2615,61 @@ func TestServer_DropSegmentsByTime(t *testing.T) {
 		seg2After := meta.GetSegment(ctx, seg2.ID)
 		assert.NotNil(t, seg2After)
 		assert.NotEqual(t, commonpb.SegmentState_Dropped, seg2After.GetState())
+		require.Len(t, manager.rewriteMutations, 1)
+		require.Equal(t, []int64{1}, manager.rewriteMutations[0].Remove)
 	})
+}
+
+func TestServer_NotifyDropPartitionCommitsRewriteBeforeMetadataDrop(t *testing.T) {
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	meta.AddCollection(&collectionInfo{ID: 1, Partitions: []int64{10}})
+	require.NoError(t, meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            100,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-0",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+	})))
+	manager := &fakeGCDataViewManager{}
+	meta.dataViewManager = manager
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err = server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+
+	require.NoError(t, err)
+	require.Len(t, manager.rewriteMutations, 1)
+	require.Equal(t, []int64{100}, manager.rewriteMutations[0].Remove)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+}
+
+func TestServer_NotifyDropPartitionPublicationFailurePreservesSegment(t *testing.T) {
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	meta.AddCollection(&collectionInfo{ID: 1, Partitions: []int64{10}})
+	require.NoError(t, meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            100,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-0",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+	})))
+	manager := &fakeGCDataViewManager{publishVersionErr: merr.WrapErrServiceUnavailableMsg("publication failed")}
+	meta.dataViewManager = manager
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: NewMockManager(t)}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err = server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	require.Equal(t, commonpb.SegmentState_Flushed, meta.GetSegment(ctx, 100).GetState())
 }
 
 func TestGetSegmentInfo_WithCompaction(t *testing.T) {
@@ -5960,6 +6021,9 @@ func TestHandleCommitVchannelRPC_StoresCommitTimestamp(t *testing.T) {
 			segments: segments,
 		},
 	}
+	manager := &fakeGCDataViewManager{}
+	server.dataViewManager = manager
+	server.meta.dataViewManager = manager
 	server.stateCode.Store(commonpb.StateCode_Healthy)
 
 	resp, err := server.HandleCommitVchannel(ctx, &datapb.HandleCommitVchannelRequest{
@@ -5976,6 +6040,11 @@ func TestHandleCommitVchannelRPC_StoresCommitTimestamp(t *testing.T) {
 		assert.EqualValues(t, 500, seg.GetDeleteApplyStartAfterTimetick())
 		assert.False(t, seg.GetIsImporting())
 	}
+	require.Empty(t, manager.publishedMutations)
+	require.Len(t, manager.rewriteMutations, 1)
+	require.ElementsMatch(t, segIDs, lo.Map(manager.rewriteMutations[0].Add, func(membership dataview.SegmentMembership, _ int) int64 {
+		return membership.SegmentID
+	}))
 }
 
 func TestHandleCommitVchannelRPC_MissingJobReturnsError(t *testing.T) {

@@ -86,6 +86,7 @@ func (m *dataViewManager) AssignFlushVersion(
 				return nil, err
 			}
 		}
+		registerPendingAssignedEpochLocked(state, assigned)
 		return proto.Clone(assigned).(*viewpb.DataVersion), nil
 	}
 
@@ -99,6 +100,7 @@ func (m *dataViewManager) AssignFlushVersion(
 		)
 	}
 	advanceAllocatedStreamingVersionLocked(state, assigned.GetStreamingVersion())
+	registerPendingAssignedEpochLocked(state, assigned)
 	if err := m.saveAllocatedStreamingVersionLocked(ctx, state, catalog, assigned.GetStreamingVersion()); err != nil {
 		return nil, err
 	}
@@ -139,15 +141,29 @@ func (m *dataViewManager) recoverFlushVersionStateLocked(
 	if resident := dataVersionFromView(state.latestResident); resident.GetStreamingVersion() > allocated {
 		allocated = resident.GetStreamingVersion()
 	}
+	publishedStreaming := durable.GetPublishedDataVersion().GetStreamingVersion()
 	for _, segment := range segments.ListAllSegmentsForVersionAllocation(ctx, state.collectionID) {
 		if assigned := segment.GetSealedAtDataVersion(); assigned.GetStreamingVersion() > allocated {
 			allocated = assigned.GetStreamingVersion()
+		}
+		if assigned := segment.GetSealedAtDataVersion(); assigned.GetStreamingVersion() > publishedStreaming {
+			registerPendingAssignedEpochLocked(state, assigned)
 		}
 	}
 	durable.AllocatedStreamingVersion = allocated
 	state.versionState = durable
 	state.versionStateRecovered = true
 	return nil
+}
+
+func registerPendingAssignedEpochLocked(state *collectionDataViewState, assigned *viewpb.DataVersion) {
+	if assigned == nil || assigned.GetStreamingVersion() <= state.versionState.GetPublishedDataVersion().GetStreamingVersion() {
+		return
+	}
+	if state.pendingAssigned == nil {
+		state.pendingAssigned = make(map[int64]struct{})
+	}
+	state.pendingAssigned[assigned.GetStreamingVersion()] = struct{}{}
 }
 
 func advanceAllocatedStreamingVersionLocked(state *collectionDataViewState, streamingVersion int64) {

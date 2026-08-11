@@ -39,6 +39,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"go.uber.org/atomic"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
@@ -94,6 +95,9 @@ type fakeGCDataViewManager struct {
 	publishVersionErr  error
 	assignedSegments   []int64
 	flushEvents        []FlushDataViewEvent
+	publishedMutations []dataview.PublishedMutation
+	publishedAssigned  []*viewpb.DataVersion
+	rewriteMutations   []dataview.PublishedMutation
 	l0CompactEvents    []L0CompactDataViewEvent
 	snapshotRequested  []int64
 	snapshotViews      []*viewpb.DataViewOfCollection
@@ -104,6 +108,26 @@ type fakeGCDataViewManager struct {
 func (m *fakeGCDataViewManager) AssignFlushVersion(ctx context.Context, collectionID, segmentID int64) (*viewpb.DataVersion, error) {
 	m.assignedSegments = append(m.assignedSegments, segmentID)
 	return m.assignedVersion, m.assignVersionErr
+}
+
+func (m *fakeGCDataViewManager) CommitPublishedView(
+	ctx context.Context,
+	collectionID int64,
+	assignedVersion *viewpb.DataVersion,
+	mutation dataview.PublishedMutation,
+) (*viewpb.DataVersion, error) {
+	m.publishedMutations = append(m.publishedMutations, mutation)
+	m.publishedAssigned = append(m.publishedAssigned, proto.Clone(assignedVersion).(*viewpb.DataVersion))
+	return m.publishedVersion, m.publishVersionErr
+}
+
+func (m *fakeGCDataViewManager) CommitRewrite(
+	ctx context.Context,
+	collectionID int64,
+	mutation dataview.PublishedMutation,
+) (*viewpb.DataVersion, error) {
+	m.rewriteMutations = append(m.rewriteMutations, mutation)
+	return m.publishedVersion, m.publishVersionErr
 }
 
 type fakeGCDataViewCall struct {

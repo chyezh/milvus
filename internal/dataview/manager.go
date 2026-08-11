@@ -54,6 +54,8 @@ type RecoveryCatalog interface {
 
 type Manager interface {
 	AssignFlushVersion(ctx context.Context, collectionID, segmentID int64) (*viewpb.DataVersion, error)
+	CommitPublishedView(ctx context.Context, collectionID int64, assignedVersion *viewpb.DataVersion, mutation PublishedMutation) (*viewpb.DataVersion, error)
+	CommitRewrite(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
 	OnCreateCollection(ctx context.Context, event CreateCollectionDataViewEvent) (*viewpb.DataVersion, error)
 	OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error)
 	OnImport(ctx context.Context, event ImportDataViewEvent) (*viewpb.DataVersion, error)
@@ -142,6 +144,9 @@ type collectionDataViewState struct {
 	versionState          *viewpb.CollectionDataVersionState
 	versionStateRecovered bool
 	persistedAllocated    int64
+	publicationRecovered  bool
+	pendingAssigned       map[int64]struct{}
+	readyPublications     map[int64]PublishedMutation
 }
 
 type dataViewManager struct {
@@ -335,25 +340,62 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 		return dataVersionFromView(state.latestResident), nil
 	}
 
-	persistedViews, err := m.catalog.ListDataViews(ctx, event.CollectionID)
-	if err != nil {
-		return nil, err
-	}
-	latestPersisted := latestDataView(persistedViews)
-	if latestPersisted != nil {
-		state.latestResident = canonicalDataViewClone(latestPersisted)
-		state.latestVisible = m.latestVisiblePersistedView(ctx, persistedViews)
-		return dataVersionFromView(state.latestResident), nil
+	if catalog, ok := m.catalog.(publishedDataViewCatalog); ok {
+		durable, err := catalog.GetDataViewVersionState(ctx, event.CollectionID)
+		if err != nil {
+			return nil, err
+		}
+		if durable != nil {
+			if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
+				return nil, err
+			}
+			if state.latestResident != nil {
+				return dataVersionFromView(state.latestResident), nil
+			}
+		} else {
+			persistedViews, err := catalog.ListDataViews(ctx, event.CollectionID)
+			if err != nil {
+				return nil, err
+			}
+			if latestPersisted := latestDataView(persistedViews); latestPersisted != nil {
+				state.latestResident = canonicalDataViewClone(latestPersisted)
+				state.latestVisible = m.latestVisiblePersistedView(ctx, persistedViews)
+				return dataVersionFromView(state.latestResident), nil
+			}
+			state.versionState = &viewpb.CollectionDataVersionState{CollectionId: event.CollectionID}
+			state.publicationRecovered = true
+		}
+	} else {
+		persistedViews, err := m.catalog.ListDataViews(ctx, event.CollectionID)
+		if err != nil {
+			return nil, err
+		}
+		latestPersisted := latestDataView(persistedViews)
+		if latestPersisted != nil {
+			state.latestResident = canonicalDataViewClone(latestPersisted)
+			state.latestVisible = m.latestVisiblePersistedView(ctx, persistedViews)
+			return dataVersionFromView(state.latestResident), nil
+		}
 	}
 
 	view := buildEmptyDataView(event.CollectionID, event.VChannels)
 	view.DataVersion = nextDataVersion(nil, dataViewAdvanceStreaming)
 	toPersist := cloneDataViewWithoutDeleteTimetick(view)
-	if err := m.catalog.SaveDataView(ctx, toPersist); err != nil {
-		return nil, err
+	if catalog, ok := m.catalog.(publishedDataViewCatalog); ok {
+		if state.versionState == nil {
+			state.versionState = &viewpb.CollectionDataVersionState{CollectionId: event.CollectionID}
+		}
+		if err := m.persistPublishedLocked(ctx, state, catalog, toPersist); err != nil {
+			return nil, err
+		}
+		state.publicationRecovered = true
+	} else {
+		if err := m.catalog.SaveDataView(ctx, toPersist); err != nil {
+			return nil, err
+		}
+		state.latestResident = canonicalDataViewClone(toPersist)
+		state.latestVisible = m.withDeleteTimetick(ctx, state.latestResident)
 	}
-	state.latestResident = canonicalDataViewClone(toPersist)
-	state.latestVisible = m.withDeleteTimetick(ctx, state.latestResident)
 	return dataVersionFromView(state.latestResident), nil
 }
 
@@ -1053,8 +1095,10 @@ func (m *dataViewManager) getOrCreateState(collectionID int64) *collectionDataVi
 	state := m.states[collectionID]
 	if state == nil {
 		state = &collectionDataViewState{
-			collectionID: collectionID,
-			refs:         make(map[qviews.DataVersion]int),
+			collectionID:      collectionID,
+			refs:              make(map[qviews.DataVersion]int),
+			pendingAssigned:   make(map[int64]struct{}),
+			readyPublications: make(map[int64]PublishedMutation),
 		}
 		m.states[collectionID] = state
 	}
