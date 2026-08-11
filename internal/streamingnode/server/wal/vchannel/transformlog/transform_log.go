@@ -8,7 +8,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
@@ -52,7 +51,7 @@ type flushResult struct {
 	Started            bool
 	DurableTimeTick    uint64
 	NextTargetTimeTick uint64
-	CompletedRefs      []messageack.Ref
+	CompletedMessages  []message.RetainedImmutableMessage
 }
 
 type materializeOption struct {
@@ -99,7 +98,7 @@ type TransformLog struct {
 	metaAndData           bool
 	flushTasks            []*transformFlushTask
 	materializeTasks      []*transformMaterializeTask
-	pendingRefs           []pendingRef
+	pendingMessages       []pendingMessage
 	streamNotifier        streamNotifier
 
 	chunks []*chunkDescriptor
@@ -129,18 +128,13 @@ func (t *TransformLog) SwitchIntoMetaAndData() {
 	t.metaAndData = true
 }
 
-func (t *TransformLog) ObserveMessage(ctx context.Context, msg messageack.Message) {
-	if t == nil || msg.ImmutableMessage == nil || !t.isMetaAndData() {
+func (t *TransformLog) ObserveMessage(ctx context.Context, msg message.ImmutableMessage) {
+	if t == nil || msg == nil || !t.isMetaAndData() {
 		return
 	}
-	raw := msg.Message()
-	kind := messageutil.ClassifyTransformLogMessage(raw)
+	kind := messageutil.ClassifyTransformLogMessage(msg)
 	if kind == messageutil.TransformLogKindNone {
 		return
-	}
-	ack := msg.Ack()
-	if ack == nil {
-		panic("transform log data work observed without message ack record")
 	}
 	var result appendResult
 	switch kind {
@@ -148,12 +142,12 @@ func (t *TransformLog) ObserveMessage(ctx context.Context, msg messageack.Messag
 		if msg.TimeTick() <= t.dataCheckpointTimeTick() {
 			return
 		}
-		result = t.appendWithAck(raw, appendOption{}, ack)
+		result = t.appendWithMessage(msg, appendOption{}, msg)
 	case messageutil.TransformLogKindBarrier:
 		if msg.TimeTick() <= t.latestTimeTick() && !t.HasPendingWork() {
 			return
 		}
-		result = t.syncUpWithAck(msg.TimeTick(), ack)
+		result = t.syncUpWithMessage(msg.TimeTick(), msg)
 	}
 	if !result.Appended && !result.HasFlushWork {
 		return
@@ -163,16 +157,20 @@ func (t *TransformLog) ObserveMessage(ctx context.Context, msg messageack.Messag
 	} else if kind == messageutil.TransformLogKindBarrier && result.HasFlushWork {
 		t.submitFlushTask(result.DataTimeTick)
 	}
-	if t.shouldMaterializeByMessage(raw) {
-		t.submitMaterializeTask(raw.TimeTick())
+	if t.shouldMaterializeByMessage(msg) {
+		t.submitMaterializeTask(msg.TimeTick())
 	}
 }
 
 func (t *TransformLog) append(msg message.ImmutableMessage, opt appendOption) appendResult {
-	return t.appendWithAck(msg, opt, nil)
+	return t.appendWithMessage(msg, opt, nil)
 }
 
-func (t *TransformLog) appendWithAck(msg message.ImmutableMessage, opt appendOption, ack messageack.Record) appendResult {
+func (t *TransformLog) appendWithMessage(
+	msg message.ImmutableMessage,
+	opt appendOption,
+	owner message.ImmutableMessage,
+) appendResult {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if msg.TimeTick() <= t.meta.GetCheckpointTimeTick() || msg.TimeTick() <= t.buffer.DataTimeTick() {
@@ -181,7 +179,7 @@ func (t *TransformLog) appendWithAck(msg message.ImmutableMessage, opt appendOpt
 	if !t.buffer.append(msg, opt) {
 		return appendResult{DataTimeTick: t.buffer.DataTimeTick()}
 	}
-	t.retainRefLocked(msg.TimeTick(), ack)
+	t.retainMessageLocked(msg.TimeTick(), owner)
 	t.notifyStreamLocked()
 	return appendResult{
 		Appended:     true,
@@ -192,27 +190,27 @@ func (t *TransformLog) appendWithAck(msg message.ImmutableMessage, opt appendOpt
 }
 
 func (t *TransformLog) syncUp(timeTick uint64) appendResult {
-	return t.syncUpWithAck(timeTick, nil)
+	return t.syncUpWithMessage(timeTick, nil)
 }
 
-func (t *TransformLog) syncUpWithAck(timeTick uint64, ack messageack.Record) appendResult {
+func (t *TransformLog) syncUpWithMessage(timeTick uint64, owner message.ImmutableMessage) appendResult {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	appended := false
 	if timeTick <= t.syncUpTimeTick {
-		return t.syncUpResultLocked(false, ack)
+		return t.syncUpResultLocked(false, owner)
 	}
 	t.syncUpTimeTick = timeTick
 	appended = true
 	t.notifyStreamLocked()
-	return t.syncUpResultLocked(appended, ack)
+	return t.syncUpResultLocked(appended, owner)
 }
 
-func (t *TransformLog) syncUpResultLocked(appended bool, ack messageack.Record) appendResult {
+func (t *TransformLog) syncUpResultLocked(appended bool, owner message.ImmutableMessage) appendResult {
 	hasFlushWork := !t.buffer.IsEmpty() || t.buffer.IsFlushing()
 	dataTimeTick := t.buffer.DataTimeTick()
 	if hasFlushWork {
-		t.retainRefLocked(dataTimeTick, ack)
+		t.retainMessageLocked(dataTimeTick, owner)
 	}
 	return appendResult{
 		Appended:     appended,
@@ -468,7 +466,7 @@ func (t *TransformLog) commitFlushLocked(work flushWork) flushResult {
 		if result.DurableTimeTick > t.meta.GetCheckpointTimeTick() {
 			t.meta.CheckpointTimeTick = result.DurableTimeTick
 		}
-		result.CompletedRefs = t.takeRefsThroughLocked(result.DurableTimeTick)
+		result.CompletedMessages = t.takeMessagesThroughLocked(result.DurableTimeTick)
 	}
 
 	currentFlushTarget := t.buffer.FlushTargetTimeTick()
@@ -483,40 +481,44 @@ func (t *TransformLog) commitFlushLocked(work flushWork) flushResult {
 	return result
 }
 
-func (t *TransformLog) retainRefLocked(timetick uint64, ack messageack.Record) {
-	if ack == nil {
+func (t *TransformLog) retainMessageLocked(timetick uint64, msg message.ImmutableMessage) {
+	if msg == nil {
 		return
 	}
-	t.pendingRefs = append(t.pendingRefs, pendingRef{
+	refCounted, ok := msg.(message.RefCountedImmutableMessage)
+	if !ok {
+		panic("transform log data work observed without reference-count capability")
+	}
+	t.pendingMessages = append(t.pendingMessages, pendingMessage{
 		timetick: timetick,
-		ref:      ack.Retain(),
+		message:  refCounted.Retain(),
 	})
 }
 
-func (t *TransformLog) takeRefsThroughLocked(timetick uint64) []messageack.Ref {
-	completed := make([]messageack.Ref, 0)
-	pending := t.pendingRefs[:0]
-	for _, item := range t.pendingRefs {
+func (t *TransformLog) takeMessagesThroughLocked(timetick uint64) []message.RetainedImmutableMessage {
+	completed := make([]message.RetainedImmutableMessage, 0)
+	pending := t.pendingMessages[:0]
+	for _, item := range t.pendingMessages {
 		if item.timetick <= timetick {
-			completed = append(completed, item.ref)
+			completed = append(completed, item.message)
 			continue
 		}
 		pending = append(pending, item)
 	}
-	clear(t.pendingRefs[len(pending):])
-	t.pendingRefs = pending
+	clear(t.pendingMessages[len(pending):])
+	t.pendingMessages = pending
 	return completed
 }
 
-func completeRefs(refs []messageack.Ref) {
-	for _, ref := range refs {
-		ref.Done()
+func releaseMessages(messages []message.RetainedImmutableMessage) {
+	for _, msg := range messages {
+		msg.Release()
 	}
 }
 
-type pendingRef struct {
+type pendingMessage struct {
 	timetick uint64
-	ref      messageack.Ref
+	message  message.RetainedImmutableMessage
 }
 
 type materializeWork struct {

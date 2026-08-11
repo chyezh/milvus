@@ -64,7 +64,7 @@ func (t *transformFlushTask) Execute(ctx context.Context) error {
 			t.log.submitMaterializeTask(t.log.dataCheckpointTimeTick())
 		}
 		t.log.notifyUpdated()
-		completeRefs(result.CompletedRefs)
+		releaseMessages(result.CompletedMessages)
 		return nil
 	})
 }

@@ -381,11 +381,10 @@ func consumePointReached(current, point utility.WALConsumeCheckpoint) bool {
 
 // observeMessage observes a message and update the recovery storage.
 func (r *recoveryStorageImpl) observeMessage(ctx context.Context, msg message.ImmutableMessage) {
-	point := consumePointFromMessage(msg)
-	record := r.ackTracker.Track(point)
-	r.observeModulesMessage(ctx, messageack.NewMessage(msg, record))
-	r.updateCheckpoint(msg)
-	record.Seal()
+	tracked := r.ackTracker.Track(msg)
+	r.observeModulesMessage(ctx, tracked)
+	r.updateCheckpoint(tracked)
+	tracked.Seal()
 	r.metrics.ObServeInMemMetrics(r.checkpoint.TimeTick)
 
 	r.dirtyCounter++
@@ -395,7 +394,7 @@ func (r *recoveryStorageImpl) observeMessage(ctx context.Context, msg message.Im
 }
 
 func (r *recoveryStorageImpl) observeMetaOnlyMessage(ctx context.Context, msg message.ImmutableMessage) {
-	r.observeModulesMessage(ctx, messageack.NewMetaMessage(msg))
+	r.observeModulesMessage(ctx, msg)
 	r.updateCheckpoint(msg)
 	r.metrics.ObServeInMemMetrics(r.checkpoint.TimeTick)
 
@@ -417,7 +416,7 @@ func (r *recoveryStorageImpl) observeDataScannerMessage(ctx context.Context, msg
 	r.observeMessage(ctx, msg)
 }
 
-func (r *recoveryStorageImpl) observeModulesMessage(ctx context.Context, msg messageack.Message) {
+func (r *recoveryStorageImpl) observeModulesMessage(ctx context.Context, msg message.ImmutableMessage) {
 	if len(r.modules) == 0 {
 		panic("recovery modules are not initialized")
 	}

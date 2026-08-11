@@ -12,9 +12,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
@@ -58,28 +56,31 @@ func TestObserveMessageOwnsAppendFlushAndMaterializeScheduling(t *testing.T) {
 	})
 	transformLog.SwitchIntoMetaAndData()
 
-	deleteMsg := newTransformLogTestDeleteMessage(t, 10)
-	deleteRecord := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 10}, nil)
-	transformLog.ObserveMessage(context.Background(), messageack.NewMessage(deleteMsg, deleteRecord))
+	deleteMessage := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
+	transformLog.ObserveMessage(context.Background(), deleteMessage)
 	assert.Empty(t, scheduler.tasks)
 
-	flushMsg := newTransformLogTestManualFlushMessage(t, 20)
-	flushRecord := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 20}, nil)
-	transformLog.ObserveMessage(context.Background(), messageack.NewMessage(flushMsg, flushRecord))
+	flushMessage := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
+	transformLog.ObserveMessage(context.Background(), flushMessage)
 	require.Len(t, scheduler.tasks, 2)
 	assert.IsType(t, &transformFlushTask{}, scheduler.tasks[0])
 	assert.IsType(t, &transformMaterializeTask{}, scheduler.tasks[1])
+
+	deleteMessage.Seal()
+	flushMessage.Seal()
+	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
+	assert.True(t, deleteMessage.Completed())
+	assert.True(t, flushMessage.Completed())
 }
 
 func TestEmptyBarrierDoesNotCreateDirtySnapshot(t *testing.T) {
 	transformLog := New(Config{VChannel: "v1"})
 	transformLog.SwitchIntoMetaAndData()
 
-	msg := newTransformLogTestManualFlushMessage(t, 20)
-	record := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 20}, nil)
-	transformLog.ObserveMessage(context.Background(), messageack.NewMessage(msg, record))
-	record.Seal()
-	assert.True(t, record.Completed())
+	msg := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
+	transformLog.ObserveMessage(context.Background(), msg)
+	msg.Seal()
+	assert.True(t, msg.Completed())
 	assert.Zero(t, transformLog.SnapshotMeta().GetCheckpointTimeTick())
 	assert.Nil(t, transformLog.ConsumeDirtyAndGetSnapshot())
 }

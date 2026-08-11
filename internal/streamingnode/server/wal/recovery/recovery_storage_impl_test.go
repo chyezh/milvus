@@ -10,7 +10,6 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel"
@@ -30,7 +29,7 @@ func (m *testRecoveryModule) Name() moduleapi.ModuleName {
 	return moduleapi.ModuleName("test")
 }
 
-func (m *testRecoveryModule) ObserveMessage(context.Context, messageack.Message) {}
+func (m *testRecoveryModule) ObserveMessage(context.Context, message.ImmutableMessage) {}
 
 func (m *testRecoveryModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
 	return m.snapshot

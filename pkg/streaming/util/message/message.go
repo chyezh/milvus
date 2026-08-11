@@ -191,6 +191,32 @@ type ImmutableMessage interface {
 	IntoBroadcastMutableMessage() BroadcastMutableMessage
 }
 
+// RefCountedImmutableMessage is a borrowed immutable message view that can
+// create retained handles for asynchronous consumers.
+type RefCountedImmutableMessage interface {
+	ImmutableMessage
+
+	Retain() RetainedImmutableMessage
+}
+
+// RetainedImmutableMessage owns one reference to an immutable message.
+type RetainedImmutableMessage interface {
+	ImmutableMessage
+
+	Sealed() bool
+	IsExclusive() bool
+	Release()
+}
+
+// RefCountedImmutableMessageController controls the dispatch lifetime of a
+// ref-counted immutable message.
+type RefCountedImmutableMessageController interface {
+	RefCountedImmutableMessage
+
+	Seal()
+	Completed() bool
+}
+
 // ImmutableTxnMessage is the read-only transaction message interface.
 // Once a transaction is committed, the wal will generate a transaction message.
 // The MessageType() is always return MessageTypeTransaction if it's a transaction message.
@@ -272,4 +298,18 @@ type SpecializedImmutableMessage[H proto.Message, B proto.Message] interface {
 
 	// MustBody return the message body, panic if error occurs.
 	MustBody() B
+}
+
+// RefCountedSpecializedImmutableMessage preserves reference-count capability
+// after immutable message specialization.
+type RefCountedSpecializedImmutableMessage[H proto.Message, B proto.Message] interface {
+	SpecializedImmutableMessage[H, B]
+	RefCountedImmutableMessage
+}
+
+// RetainedSpecializedImmutableMessage preserves retained-handle ownership
+// after immutable message specialization.
+type RetainedSpecializedImmutableMessage[H proto.Message, B proto.Message] interface {
+	SpecializedImmutableMessage[H, B]
+	RetainedImmutableMessage
 }

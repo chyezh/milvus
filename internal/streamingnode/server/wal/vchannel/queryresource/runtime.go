@@ -6,6 +6,7 @@ import (
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 )
 
 const defaultLiveEventBufferSize = 1024
@@ -109,6 +110,11 @@ func (r *QueryRuntime) ObserveEvent(ctx context.Context, event walview.VChannelR
 	case <-ctx.Done():
 		return false
 	default:
+	}
+	if event.Message != nil {
+		if _, ok := event.Message.(message.RefCountedImmutableMessage); ok {
+			event.Message = message.CloneImmutableMessage(event.Message)
+		}
 	}
 	r.mu.Lock()
 	if r.state == queryRuntimeClosed {

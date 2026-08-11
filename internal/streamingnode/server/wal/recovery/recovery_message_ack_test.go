@@ -11,7 +11,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
@@ -23,22 +22,21 @@ import (
 )
 
 type retainingRecoveryModule struct {
-	record messageack.Record
-	ref    messageack.Ref
-	ack    messageack.Record
+	message message.RefCountedImmutableMessage
+	handle  message.RetainedImmutableMessage
 }
 
 func (m *retainingRecoveryModule) Name() moduleapi.ModuleName {
 	return moduleapi.ModuleName("retaining-test")
 }
 
-func (m *retainingRecoveryModule) ObserveMessage(_ context.Context, msg messageack.Message) {
-	m.ack = msg.Ack()
-	if m.ack == nil {
+func (m *retainingRecoveryModule) ObserveMessage(_ context.Context, msg message.ImmutableMessage) {
+	refCounted, ok := msg.(message.RefCountedImmutableMessage)
+	if !ok {
 		return
 	}
-	m.record = m.ack
-	m.ref = m.ack.Retain()
+	m.message = refCounted
+	m.handle = refCounted.Retain()
 }
 
 func (m *retainingRecoveryModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
@@ -49,7 +47,7 @@ func (m *retainingRecoveryModule) ConsumeDirtySnapshots() []moduleapi.DirtySnaps
 	return nil
 }
 
-func TestDataScannerSealsRecordAfterAllModulesObserve(t *testing.T) {
+func TestDataScannerSealsMessageAfterAllModulesObserve(t *testing.T) {
 	checkpoint := &utility.WALCheckpoint{
 		MessageID: walimplstest.NewTestMessageID(1),
 		TimeTick:  10,
@@ -72,19 +70,20 @@ func TestDataScannerSealsRecordAfterAllModulesObserve(t *testing.T) {
 
 	storage.observeDataScannerMessage(context.Background(), msg)
 
-	require.NotNil(t, module.record)
-	assert.True(t, module.record.Sealed())
-	assert.Equal(t, int64(1), module.record.RefCount())
+	require.NotNil(t, module.message)
+	require.NotNil(t, module.handle)
+	assert.True(t, module.handle.Sealed())
+	assert.True(t, module.handle.IsExclusive())
 	point := storage.ackTracker.CompletedPoint()
 	assert.Equal(t, uint64(10), point.TimeTick)
 
-	module.ref.Done()
+	module.handle.Release()
 	point = storage.ackTracker.CompletedPoint()
 	require.True(t, msg.LastConfirmedMessageID().EQ(point.MessageID))
 	assert.Equal(t, msg.TimeTick(), point.TimeTick)
 }
 
-func TestMetaScannerUsesEnvelopeWithoutAckRecord(t *testing.T) {
+func TestMetaScannerUsesOrdinaryImmutableMessage(t *testing.T) {
 	checkpoint := &utility.WALCheckpoint{
 		MessageID: walimplstest.NewTestMessageID(1),
 		TimeTick:  10,
@@ -107,7 +106,8 @@ func TestMetaScannerUsesEnvelopeWithoutAckRecord(t *testing.T) {
 
 	storage.observeMetaScannerMessage(context.Background(), msg)
 
-	assert.Nil(t, module.ack)
+	assert.Nil(t, module.message)
+	assert.Nil(t, module.handle)
 	assert.True(t, msg.LastConfirmedMessageID().EQ(storage.checkpoint.MessageID))
 	assert.Equal(t, msg.TimeTick(), storage.checkpoint.TimeTick)
 	assert.Equal(t, uint64(10), storage.ackTracker.CompletedPoint().TimeTick)
@@ -262,7 +262,7 @@ func TestPersistRetryKeepsFrozenCheckpointAndSchedulesAckFollowUp(t *testing.T) 
 	require.NotNil(t, storage.pendingPersistSnapshot.Checkpoint.DataCheckpoint)
 	assert.Equal(t, uint64(10), storage.pendingPersistSnapshot.Checkpoint.DataCheckpoint.TimeTick)
 
-	module.ref.Done()
+	module.handle.Release()
 	assert.Equal(t, uint64(20), storage.ackTracker.CompletedPoint().TimeTick)
 
 	require.NoError(t, storage.persistDirtySnapshot(context.Background(), mlog.DebugLevel))

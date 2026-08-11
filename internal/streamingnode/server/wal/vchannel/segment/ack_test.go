@@ -9,9 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
@@ -23,7 +21,8 @@ import (
 func TestEnsureGrowingRetainsRefUntilLifecycleSucceeds(t *testing.T) {
 	scheduler := &recordingSegmentScheduler{}
 	lifecycle := &failingSegmentLifecycle{err: errors.New("not ready")}
-	msg := newSegmentAckCreateMessage(t, 10)
+	msg, controller := newSegmentAckCreateMessage(t, 10)
+	timetick := msg.TimeTick()
 	view := NewSegmentViewFromCreateSegmentMessage(
 		msg,
 		nil,
@@ -34,21 +33,19 @@ func TestEnsureGrowingRetainsRefUntilLifecycleSucceeds(t *testing.T) {
 			owner:       &recordingSegmentViewOwner{},
 		},
 	)
-	record := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: msg.TimeTick()}, nil)
-
-	assert.True(t, view.ObserveCreateSegmentMessageV2(context.Background(), msg, record))
-	record.Seal()
+	assert.True(t, view.ObserveCreateSegmentMessageV2(context.Background(), msg))
+	controller.Seal()
 	require.Len(t, scheduler.tasks, 1)
-	assert.Equal(t, int64(1), record.RefCount())
+	assert.False(t, controller.Completed())
 
 	err := scheduler.tasks[0].Execute(context.Background())
 	assert.True(t, errors.Is(err, nodescheduler.ErrDelay))
-	assert.Equal(t, int64(1), record.RefCount())
+	assert.False(t, controller.Completed())
 
 	lifecycle.err = nil
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.True(t, record.Completed())
-	assert.Equal(t, msg.TimeTick(), view.AssignmentMeta().GetDataCheckpointTimeTick())
+	assert.True(t, controller.Completed())
+	assert.Equal(t, timetick, view.AssignmentMeta().GetDataCheckpointTimeTick())
 	assert.True(t, view.HasDirty())
 }
 
@@ -78,23 +75,21 @@ func TestInsertChunkReleasesEveryCoveredMessageRefAfterDurableMetadataUpdate(t *
 			owner:       &recordingSegmentViewOwner{},
 		},
 	)
-	firstMsg, firstAssignment := newSegmentAckInsertMessage(t, 10, 1)
-	secondMsg, secondAssignment := newSegmentAckInsertMessage(t, 20, 2)
-	firstRecord := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 10}, nil)
-	secondRecord := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 20}, nil)
+	firstMsg, firstAssignment, first := newSegmentAckInsertMessage(t, 10, 1)
+	secondMsg, secondAssignment, second := newSegmentAckInsertMessage(t, 20, 2)
 
-	assert.True(t, view.ObserveInsertMessageV1(context.Background(), firstMsg, firstAssignment, firstRecord))
-	firstRecord.Seal()
-	assert.True(t, view.ObserveInsertMessageV1(context.Background(), secondMsg, secondAssignment, secondRecord))
-	secondRecord.Seal()
+	assert.True(t, view.ObserveInsertMessageV1(context.Background(), firstMsg, firstAssignment))
+	first.Seal()
+	assert.True(t, view.ObserveInsertMessageV1(context.Background(), secondMsg, secondAssignment))
+	second.Seal()
 	require.Len(t, scheduler.tasks, 1)
-	assert.False(t, firstRecord.Completed())
-	assert.False(t, secondRecord.Completed())
+	assert.False(t, first.Completed())
+	assert.False(t, second.Completed())
 
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
 	assert.Equal(t, 1, writer.calls)
-	assert.True(t, firstRecord.Completed())
-	assert.True(t, secondRecord.Completed())
+	assert.True(t, first.Completed())
+	assert.True(t, second.Completed())
 	assert.Equal(t, uint64(20), view.AssignmentMeta().GetDataCheckpointTimeTick())
 	assert.True(t, view.HasDirty())
 }
@@ -103,21 +98,21 @@ func TestFinalCommitRetainsRefUntilLifecycleSucceeds(t *testing.T) {
 	scheduler := &recordingSegmentScheduler{}
 	lifecycle := &failingSegmentLifecycle{err: errors.New("not ready")}
 	view := newSegmentAckGrowingView(scheduler, lifecycle)
-	record := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 20}, nil)
+	msg, controller := newSegmentAckDataMessage(t, 20)
 
-	assert.True(t, view.Flush(context.Background(), 20, record))
-	record.Seal()
+	assert.True(t, view.Flush(context.Background(), msg))
+	controller.Seal()
 	require.Len(t, scheduler.tasks, 1)
-	assert.False(t, record.Completed())
+	assert.False(t, controller.Completed())
 
 	err := scheduler.tasks[0].Execute(context.Background())
 	assert.True(t, errors.Is(err, nodescheduler.ErrDelay))
-	assert.False(t, record.Completed())
+	assert.False(t, controller.Completed())
 	assert.Equal(t, uint64(1), view.AssignmentMeta().GetDataCheckpointTimeTick())
 
 	lifecycle.err = nil
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.True(t, record.Completed())
+	assert.True(t, controller.Completed())
 	assert.Equal(t, 2, lifecycle.commitCalls)
 	assert.Equal(t, uint64(20), view.AssignmentMeta().GetDataCheckpointTimeTick())
 	assert.NotNil(t, view.AssignmentMeta().GetSealedAtDataVersion())
@@ -128,12 +123,12 @@ func TestRepeatedFlushRefsSharePendingFinalCommit(t *testing.T) {
 	scheduler := &recordingSegmentScheduler{}
 	lifecycle := &failingSegmentLifecycle{}
 	view := newSegmentAckGrowingView(scheduler, lifecycle)
-	first := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 20}, nil)
-	second := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 30}, nil)
+	firstMsg, first := newSegmentAckDataMessage(t, 20)
+	secondMsg, second := newSegmentAckDataMessage(t, 30)
 
-	assert.True(t, view.Flush(context.Background(), 20, first))
+	assert.True(t, view.Flush(context.Background(), firstMsg))
 	first.Seal()
-	assert.False(t, view.Flush(context.Background(), 30, second))
+	assert.False(t, view.Flush(context.Background(), secondMsg))
 	second.Seal()
 	require.Len(t, scheduler.tasks, 1)
 	assert.False(t, first.Completed())
@@ -209,7 +204,10 @@ func (w *recordingPackWriter) FlushInsertBuffer(context.Context, *flushPack) (*f
 	return &flushResult{PersistedStorage: &streamingpb.L1SegmentPersistedStorage{}}, nil
 }
 
-func newSegmentAckCreateMessage(t *testing.T, timetick uint64) message.ImmutableCreateSegmentMessageV2 {
+func newSegmentAckCreateMessage(
+	t *testing.T,
+	timetick uint64,
+) (message.ImmutableCreateSegmentMessageV2, message.RefCountedImmutableMessageController) {
 	t.Helper()
 	mutable := message.NewCreateSegmentMessageBuilderV2().
 		WithVChannel("v1").
@@ -221,17 +219,19 @@ func newSegmentAckCreateMessage(t *testing.T, timetick uint64) message.Immutable
 		}).
 		WithBody(&message.CreateSegmentMessageBody{}).
 		MustBuildMutable()
-	return message.MustAsImmutableCreateSegmentMessageV2(mutable.
+	raw := mutable.
 		WithTimeTick(timetick).
 		WithLastConfirmed(walimplstest.NewTestMessageID(int64(timetick - 1))).
-		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick))))
+		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick)))
+	controller := message.NewRefCountedImmutableMessage(raw, nil)
+	return message.MustAsImmutableCreateSegmentMessageV2(controller), controller
 }
 
 func newSegmentAckInsertMessage(
 	t *testing.T,
 	timetick uint64,
 	messageID int64,
-) (message.ImmutableInsertMessageV1, *messagespb.PartitionSegmentAssignment) {
+) (message.ImmutableInsertMessageV1, *messagespb.PartitionSegmentAssignment, message.RefCountedImmutableMessageController) {
 	t.Helper()
 	assignment := &messagespb.PartitionSegmentAssignment{
 		PartitionId: 10,
@@ -250,8 +250,21 @@ func newSegmentAckInsertMessage(
 		WithBody(&msgpb.InsertRequest{NumRows: 1}).
 		BuildMutable()
 	require.NoError(t, err)
-	return message.MustAsImmutableInsertMessageV1(mutable.
+	raw := mutable.
 		WithTimeTick(timetick).
 		WithLastConfirmed(walimplstest.NewTestMessageID(messageID - 1)).
-		IntoImmutableMessage(walimplstest.NewTestMessageID(messageID))), assignment
+		IntoImmutableMessage(walimplstest.NewTestMessageID(messageID))
+	controller := message.NewRefCountedImmutableMessage(raw, nil)
+	return message.MustAsImmutableInsertMessageV1(controller), assignment, controller
+}
+
+func newSegmentAckDataMessage(
+	t *testing.T,
+	timetick uint64,
+) (message.ImmutableMessage, message.RefCountedImmutableMessageController) {
+	t.Helper()
+	raw := message.CreateTestTimeTickSyncMessage(t, 1, timetick, walimplstest.NewTestMessageID(int64(timetick-1))).
+		IntoImmutableMessage(walimplstest.NewTestMessageID(int64(timetick)))
+	controller := message.NewRefCountedImmutableMessage(raw, nil)
+	return controller, controller
 }

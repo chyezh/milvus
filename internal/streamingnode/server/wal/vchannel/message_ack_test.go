@@ -4,13 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 )
 
 type testMessageObserver interface {
-	ObserveMessage(context.Context, messageack.Message)
+	ObserveMessage(context.Context, message.ImmutableMessage)
 }
 
 func observeTestMessage(
@@ -18,13 +16,10 @@ func observeTestMessage(
 	t *testing.T,
 	observer testMessageObserver,
 	raw message.ImmutableMessage,
-) messageack.Record {
+) message.RefCountedImmutableMessageController {
 	t.Helper()
-	record := messageack.NewRecord(utility.WALConsumeCheckpoint{
-		MessageID: raw.LastConfirmedMessageID(),
-		TimeTick:  raw.TimeTick(),
-	}, nil)
-	observer.ObserveMessage(ctx, messageack.NewMessage(raw, record))
-	record.Seal()
-	return record
+	controller := message.NewRefCountedImmutableMessage(raw, nil)
+	observer.ObserveMessage(ctx, controller)
+	controller.Seal()
+	return controller
 }

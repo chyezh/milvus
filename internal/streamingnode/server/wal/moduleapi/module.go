@@ -6,14 +6,14 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
 type Module interface {
 	Name() ModuleName
-	ObserveMessage(ctx context.Context, msg messageack.Message)
+	ObserveMessage(ctx context.Context, msg message.ImmutableMessage)
 	SwitchIntoMetaAndData() ModuleSnapshot
 	// ConsumeDirtySnapshots captures module-local dirty views as stable
 	// snapshots for RecoveryStorage-owned catalog persistence. It does not

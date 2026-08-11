@@ -9,10 +9,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/utility"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
+	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
@@ -29,20 +28,19 @@ func TestTransformLogFailedChunkWriteRetainsMessageRef(t *testing.T) {
 		Runtime:  moduleapi.Runtime{Scheduler: scheduler},
 	})
 	transformLog.SwitchIntoMetaAndData()
-	msg := newTransformLogTestDeleteMessage(t, 10)
-	record := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: msg.TimeTick()}, nil)
+	controller := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
 
-	transformLog.ObserveMessage(context.Background(), messageack.NewMessage(msg, record))
-	record.Seal()
+	transformLog.ObserveMessage(context.Background(), controller)
+	controller.Seal()
 	require.Len(t, scheduler.tasks, 1)
 
 	err := scheduler.tasks[0].Execute(context.Background())
 	assert.True(t, errors.Is(err, nodescheduler.ErrDelay))
-	assert.False(t, record.Completed())
+	assert.False(t, controller.Completed())
 
 	store.err = nil
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.True(t, record.Completed())
+	assert.True(t, controller.Completed())
 	assert.Equal(t, uint64(10), transformLog.SnapshotMeta().GetCheckpointTimeTick())
 	assert.True(t, transformLog.HasDirty())
 }
@@ -58,22 +56,20 @@ func TestTransformLogBarrierRefCompletesWithoutMaterialization(t *testing.T) {
 		Runtime:      moduleapi.Runtime{Scheduler: scheduler},
 	})
 	transformLog.SwitchIntoMetaAndData()
-	deleteMsg := newTransformLogTestDeleteMessage(t, 10)
-	deleteRecord := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 10}, nil)
-	barrierMsg := newTransformLogTestManualFlushMessage(t, 20)
-	barrierRecord := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 20}, nil)
+	deleteMessage := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
+	barrierMessage := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
 
-	transformLog.ObserveMessage(context.Background(), messageack.NewMessage(deleteMsg, deleteRecord))
-	deleteRecord.Seal()
-	transformLog.ObserveMessage(context.Background(), messageack.NewMessage(barrierMsg, barrierRecord))
-	barrierRecord.Seal()
+	transformLog.ObserveMessage(context.Background(), deleteMessage)
+	deleteMessage.Seal()
+	transformLog.ObserveMessage(context.Background(), barrierMessage)
+	barrierMessage.Seal()
 	require.Len(t, scheduler.tasks, 2)
 	assert.IsType(t, &transformFlushTask{}, scheduler.tasks[0])
 	assert.IsType(t, &transformMaterializeTask{}, scheduler.tasks[1])
 
 	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
-	assert.True(t, deleteRecord.Completed())
-	assert.True(t, barrierRecord.Completed())
+	assert.True(t, deleteMessage.Completed())
+	assert.True(t, barrierMessage.Completed())
 	assert.Empty(t, materializer.requests)
 }
 
@@ -86,18 +82,15 @@ func TestTransformLogMultiChunkFlushReleasesRefsByDurablePrefix(t *testing.T) {
 		Runtime:  moduleapi.Runtime{Scheduler: scheduler},
 	})
 	transformLog.SwitchIntoMetaAndData()
-	firstMsg := newTransformLogTestDeleteMessage(t, 10)
-	secondMsg := newTransformLogTestDeleteMessage(t, 11)
-	barrierMsg := newTransformLogTestManualFlushMessage(t, 20)
-	first := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 10}, nil)
-	second := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 11}, nil)
-	barrier := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 20}, nil)
+	first := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
+	second := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 11))
+	barrier := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
 
-	transformLog.ObserveMessage(context.Background(), messageack.NewMessage(firstMsg, first))
+	transformLog.ObserveMessage(context.Background(), first)
 	first.Seal()
-	transformLog.ObserveMessage(context.Background(), messageack.NewMessage(secondMsg, second))
+	transformLog.ObserveMessage(context.Background(), second)
 	second.Seal()
-	transformLog.ObserveMessage(context.Background(), messageack.NewMessage(barrierMsg, barrier))
+	transformLog.ObserveMessage(context.Background(), barrier)
 	barrier.Seal()
 	require.GreaterOrEqual(t, len(scheduler.tasks), 3)
 
@@ -125,10 +118,9 @@ func TestTransformLogRegistersBarrierRefBeforeConcurrentFlushCommit(t *testing.T
 		Store:    store,
 	})
 	transformLog.SwitchIntoMetaAndData()
-	deleteMsg := newTransformLogTestDeleteMessage(t, 10)
-	deleteRecord := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 10}, nil)
-	transformLog.ObserveMessage(context.Background(), messageack.NewMessage(deleteMsg, deleteRecord))
-	deleteRecord.Seal()
+	deleteMessage := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
+	transformLog.ObserveMessage(context.Background(), deleteMessage)
+	deleteMessage.Seal()
 
 	type flushOutcome struct {
 		result flushResult
@@ -141,19 +133,19 @@ func TestTransformLogRegistersBarrierRefBeforeConcurrentFlushCommit(t *testing.T
 	}()
 	<-store.writeStarted
 
-	innerBarrierRecord := messageack.NewRecord(utility.WALConsumeCheckpoint{TimeTick: 20}, nil)
-	barrierRecord := &blockingRetainRecord{
-		Record:        innerBarrierRecord,
-		retainStarted: make(chan struct{}),
-		releaseRetain: make(chan struct{}),
+	barrierController := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
+	barrierMessage := &blockingRefCountedMessage{
+		ImmutableMessage: barrierController,
+		controller:       barrierController,
+		retainStarted:    make(chan struct{}),
+		releaseRetain:    make(chan struct{}),
 	}
-	barrierMsg := newTransformLogTestManualFlushMessage(t, 20)
 	observeDone := make(chan struct{})
 	go func() {
-		transformLog.ObserveMessage(context.Background(), messageack.NewMessage(barrierMsg, barrierRecord))
+		transformLog.ObserveMessage(context.Background(), barrierMessage)
 		close(observeDone)
 	}()
-	<-barrierRecord.retainStarted
+	<-barrierMessage.retainStarted
 
 	close(store.releaseWrite)
 	var flush flushResult
@@ -161,21 +153,21 @@ func TestTransformLogRegistersBarrierRefBeforeConcurrentFlushCommit(t *testing.T
 	case outcome := <-flushDone:
 		require.NoError(t, outcome.err)
 		flush = outcome.result
-		completeRefs(flush.CompletedRefs)
+		releaseMessages(flush.CompletedMessages)
 	case <-time.After(100 * time.Millisecond):
 	}
-	close(barrierRecord.releaseRetain)
+	close(barrierMessage.releaseRetain)
 	if !flush.Started {
 		outcome := <-flushDone
 		require.NoError(t, outcome.err)
 		flush = outcome.result
-		completeRefs(flush.CompletedRefs)
+		releaseMessages(flush.CompletedMessages)
 	}
 	<-observeDone
-	innerBarrierRecord.Seal()
+	barrierController.Seal()
 
-	assert.True(t, deleteRecord.Completed())
-	assert.True(t, innerBarrierRecord.Completed())
+	assert.True(t, deleteMessage.Completed())
+	assert.True(t, barrierController.Completed())
 }
 
 type failingTransformLogStore struct {
@@ -183,16 +175,21 @@ type failingTransformLogStore struct {
 	err error
 }
 
-type blockingRetainRecord struct {
-	messageack.Record
+type blockingRefCountedMessage struct {
+	message.ImmutableMessage
+	controller    message.RefCountedImmutableMessageController
 	retainStarted chan struct{}
 	releaseRetain chan struct{}
 }
 
-func (r *blockingRetainRecord) Retain() messageack.Ref {
-	close(r.retainStarted)
-	<-r.releaseRetain
-	return r.Record.Retain()
+func (m *blockingRefCountedMessage) Retain() message.RetainedImmutableMessage {
+	close(m.retainStarted)
+	<-m.releaseRetain
+	return m.controller.Retain()
+}
+
+func newRefCountedTransformMessage(raw message.ImmutableMessage) message.RefCountedImmutableMessageController {
+	return message.NewRefCountedImmutableMessage(raw, nil)
 }
 
 type blockingTransformLogWriteStore struct {

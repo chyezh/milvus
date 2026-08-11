@@ -7,7 +7,6 @@ import (
 	"sync/atomic"
 
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
@@ -146,8 +145,8 @@ func (m *PChannelRecoveryManager) Name() moduleapi.ModuleName {
 	return moduleapi.ModuleNameVChannel
 }
 
-func (m *PChannelRecoveryManager) ObserveMessage(ctx context.Context, msg messageack.Message) {
-	if m == nil || msg.ImmutableMessage == nil {
+func (m *PChannelRecoveryManager) ObserveMessage(ctx context.Context, msg message.ImmutableMessage) {
+	if m == nil || msg == nil {
 		return
 	}
 	if funcutil.IsControlChannel(msg.VChannel()) && !msg.IsPChannelLevel() {
@@ -365,7 +364,7 @@ func (m *PChannelRecoveryManager) shouldBroadcast(msg message.ImmutableMessage) 
 	return msg.VChannel() == "" || msg.IsPChannelLevel()
 }
 
-func (m *PChannelRecoveryManager) observeBroadcastMessage(ctx context.Context, msg messageack.Message) {
+func (m *PChannelRecoveryManager) observeBroadcastMessage(ctx context.Context, msg message.ImmutableMessage) {
 	m.modules.Range(func(_ string, module *VChannelRecoveryModule) bool {
 		module.ObserveMessage(ctx, msg)
 		m.markModuleUpdated(module)

@@ -10,18 +10,18 @@ import (
 )
 
 type writeOnlyInsertBuffer struct {
-	entries      []message.ImmutableMessage
+	entries      []message.RetainedImmutableMessage
 	fromTimeTick uint64
 	toTimeTick   uint64
 	rows         uint64
 	binarySize   uint64
 }
 
-func (b *writeOnlyInsertBuffer) append(msg message.ImmutableInsertMessageV1, assignment *messagespb.PartitionSegmentAssignment) {
+func (b *writeOnlyInsertBuffer) append(msg message.RetainedImmutableMessage, assignment *messagespb.PartitionSegmentAssignment) {
 	b.appendMessage(msg, assignment.GetRows(), assignment.GetBinarySize())
 }
 
-func (b *writeOnlyInsertBuffer) appendMessage(msg message.ImmutableMessage, rows uint64, binarySize uint64) {
+func (b *writeOnlyInsertBuffer) appendMessage(msg message.RetainedImmutableMessage, rows uint64, binarySize uint64) {
 	timetick := msg.TimeTick()
 	if len(b.entries) == 0 {
 		b.fromTimeTick = timetick
@@ -40,7 +40,22 @@ func (b writeOnlyInsertBuffer) Messages() []message.ImmutableMessage {
 	if len(b.entries) == 0 {
 		return nil
 	}
-	return cloneGrowingSegmentInsertMessages(b.entries)
+	messages := make([]message.ImmutableMessage, len(b.entries))
+	for idx, entry := range b.entries {
+		messages[idx] = message.CloneImmutableMessage(entry)
+	}
+	return messages
+}
+
+func (b writeOnlyInsertBuffer) borrowedMessages() []message.ImmutableMessage {
+	if len(b.entries) == 0 {
+		return nil
+	}
+	messages := make([]message.ImmutableMessage, len(b.entries))
+	for idx, entry := range b.entries {
+		messages[idx] = entry
+	}
+	return messages
 }
 
 func (b *writeOnlyInsertBuffer) flushPack(meta *streamingpb.SegmentAssignmentMeta, schema *schemapb.CollectionSchema) *flushPack {
@@ -55,7 +70,7 @@ func (b *writeOnlyInsertBuffer) flushPack(meta *streamingpb.SegmentAssignmentMet
 		Schema:       schema,
 		Rows:         b.rows,
 		BinarySize:   b.binarySize,
-		Inserts:      b.entries,
+		Inserts:      b.borrowedMessages(),
 	}
 }
 
@@ -67,13 +82,4 @@ func (b *writeOnlyInsertBuffer) takeAll() writeOnlyInsertBuffer {
 	chunk := *b
 	b.reset()
 	return chunk
-}
-
-func cloneGrowingSegmentInsertMessages(entries []message.ImmutableMessage) []message.ImmutableMessage {
-	if len(entries) == 0 {
-		return nil
-	}
-	cloned := make([]message.ImmutableMessage, len(entries))
-	copy(cloned, entries)
-	return cloned
 }

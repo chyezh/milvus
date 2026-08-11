@@ -52,10 +52,10 @@ func (t *ensureGrowingSegmentTask) Execute(ctx context.Context) error {
 		}
 
 		segment.mu.Lock()
-		refs := segment.markPendingDataDurableLocked(t.timetick)
+		handles := segment.markPendingDataDurableLocked(t.timetick)
 		segment.mu.Unlock()
 		segment.NotifyDataUpdated()
-		completeDataRefs(refs)
+		releaseMessages(handles)
 		return nil
 	})
 }
@@ -103,12 +103,12 @@ func (t *commitL1SegmentTask) Execute(ctx context.Context) error {
 		}
 
 		segment.mu.Lock()
-		refs := segment.markPendingDataDurableLocked(t.timetick)
+		handles := segment.markPendingDataDurableLocked(t.timetick)
 		segment.finalCommitDone = true
 		sealedEvent, sealed := segment.markSealedAtDataVersionLocked(sealedAt)
 		segment.mu.Unlock()
 		segment.NotifyDataUpdated()
-		completeDataRefs(refs)
+		releaseMessages(handles)
 		if sealed {
 			segment.NotifySegmentSealed(sealedEvent)
 		}

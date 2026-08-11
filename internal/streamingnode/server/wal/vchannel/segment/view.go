@@ -9,7 +9,6 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/walview"
 	"github.com/milvus-io/milvus/internal/views/qviews"
@@ -165,7 +164,7 @@ type SegmentView struct {
 	// ordered by toTimeTick. Chunks stay here until segment data checkpoint advances
 	// over them.
 	pendingFlushChunks []writeOnlyInsertBuffer
-	pendingDataRefs    []pendingDataRef
+	pendingDataHandles []pendingDataHandle
 	flushPolicy        flushPolicy                // decides when pending insert data should be flushed.
 	schema             *schemapb.CollectionSchema // schema used to encode pending insert data.
 	metaAndData        bool                       // false during meta-only replay; true when data tasks may run.
@@ -188,7 +187,6 @@ func (s *SegmentView) HasDirty() bool {
 func (s *SegmentView) ObserveCreateSegmentMessageV2(
 	_ context.Context,
 	msg message.ImmutableCreateSegmentMessageV2,
-	ack messageack.Record,
 ) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -203,7 +201,7 @@ func (s *SegmentView) ObserveCreateSegmentMessageV2(
 	if timetick <= s.meta.GetDataCheckpointTimeTick() {
 		return false
 	}
-	s.retainDataRefLocked(timetick, ack)
+	s.retainDataHandleLocked(timetick, msg)
 	task := s.newEnsureGrowingSegmentTaskLocked(timetick)
 	s.runtime.Scheduler.Submit(task)
 	return true
@@ -213,7 +211,6 @@ func (s *SegmentView) ObserveInsertMessageV1(
 	_ context.Context,
 	msg message.ImmutableInsertMessageV1,
 	assignment *messagespb.PartitionSegmentAssignment,
-	ack messageack.Record,
 ) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -235,8 +232,7 @@ func (s *SegmentView) ObserveInsertMessageV1(
 	if msg.TimeTick() <= s.pending.DataTimeTick() {
 		return changed
 	}
-	s.retainDataRefLocked(msg.TimeTick(), ack)
-	s.pending.append(msg, assignment)
+	s.pending.append(retainImmutableMessage(msg), assignment)
 	changed = true
 	if s.flushPolicy != nil && s.flushPolicy.ShouldFlush(s.pending, msg.TimeTick()) {
 		task := s.newFlushL1BufferTaskLocked()
@@ -245,7 +241,7 @@ func (s *SegmentView) ObserveInsertMessageV1(
 	return changed
 }
 
-func (s *SegmentView) ObserveTxnMessage(_ context.Context, msg message.ImmutableTxnMessage, ack messageack.Record) bool {
+func (s *SegmentView) ObserveTxnMessage(_ context.Context, msg message.ImmutableTxnMessage) bool {
 	var task segmentTask
 	matched := false
 	appliedData := false
@@ -283,8 +279,7 @@ func (s *SegmentView) ObserveTxnMessage(_ context.Context, msg message.Immutable
 		return false
 	}
 	if appliedData {
-		s.retainDataRefLocked(timetick, ack)
-		s.pending.appendMessage(msg, rows, binarySize)
+		s.pending.appendMessage(retainImmutableMessage(msg), rows, binarySize)
 		if s.flushPolicy != nil && s.flushPolicy.ShouldFlush(s.pending, timetick) {
 			task = s.newFlushL1BufferTaskLocked()
 		}
@@ -304,10 +299,11 @@ func (s *SegmentView) observeInsertMetaLocked(timetick uint64, assignment *messa
 	s.dirty = true
 }
 
-func (s *SegmentView) Flush(_ context.Context, timetick uint64, ack messageack.Record) bool {
+func (s *SegmentView) Flush(_ context.Context, msg message.ImmutableMessage) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	timetick := msg.TimeTick()
 	closed, flushTimeTick, metaChanged := s.observeFlushMeta(timetick)
 	if !s.metaAndData {
 		return metaChanged
@@ -318,7 +314,7 @@ func (s *SegmentView) Flush(_ context.Context, timetick uint64, ack messageack.R
 	if s.finalCommitDone {
 		return metaChanged
 	}
-	s.retainDataRefLocked(flushTimeTick, ack)
+	s.retainDataHandleLocked(flushTimeTick, msg)
 	task := s.newCommitL1SegmentTaskLocked(flushTimeTick)
 	if task != nil {
 		s.runtime.Scheduler.Submit(task)
@@ -346,10 +342,10 @@ func (s *SegmentView) FlushInsertChunk(ctx context.Context, targetTimeTick uint6
 
 	s.mu.Lock()
 	s.appendPersistedStorage(result.PersistedStorage)
-	refs := s.markPendingDataDurableLocked(targetTimeTick)
+	handles := s.markPendingDataDurableLocked(targetTimeTick)
 	s.mu.Unlock()
 	s.NotifyDataUpdated()
-	completeDataRefs(refs)
+	releaseMessages(handles)
 	return nil
 }
 
@@ -717,48 +713,60 @@ func (info *SegmentView) observeFlushMeta(timetick uint64) (bool, uint64, bool) 
 	return true, timetick, true
 }
 
-func (s *SegmentView) markPendingDataDurableLocked(timetick uint64) []messageack.Ref {
+func (s *SegmentView) markPendingDataDurableLocked(timetick uint64) []message.RetainedImmutableMessage {
 	if timetick <= s.meta.GetDataCheckpointTimeTick() {
 		return nil
 	}
+	completed := s.takeDataHandlesThroughLocked(timetick)
+	for _, chunk := range s.pendingFlushChunks {
+		if chunk.toTimeTick > timetick {
+			break
+		}
+		completed = append(completed, chunk.entries...)
+	}
 	s.markDataCheckpointLocked(timetick)
-	return s.takeDataRefsThroughLocked(timetick)
+	return completed
 }
 
-func (s *SegmentView) retainDataRefLocked(timetick uint64, ack messageack.Record) {
-	if ack == nil {
-		panic("segment data work observed without message ack record")
-	}
-	s.pendingDataRefs = append(s.pendingDataRefs, pendingDataRef{
+func (s *SegmentView) retainDataHandleLocked(timetick uint64, msg message.ImmutableMessage) {
+	s.pendingDataHandles = append(s.pendingDataHandles, pendingDataHandle{
 		timetick: timetick,
-		ref:      ack.Retain(),
+		message:  retainImmutableMessage(msg),
 	})
 }
 
-func (s *SegmentView) takeDataRefsThroughLocked(timetick uint64) []messageack.Ref {
-	completed := make([]messageack.Ref, 0)
-	pending := s.pendingDataRefs[:0]
-	for _, item := range s.pendingDataRefs {
+func (s *SegmentView) takeDataHandlesThroughLocked(timetick uint64) []message.RetainedImmutableMessage {
+	completed := make([]message.RetainedImmutableMessage, 0)
+	pending := s.pendingDataHandles[:0]
+	for _, item := range s.pendingDataHandles {
 		if item.timetick <= timetick {
-			completed = append(completed, item.ref)
+			completed = append(completed, item.message)
 			continue
 		}
 		pending = append(pending, item)
 	}
-	clear(s.pendingDataRefs[len(pending):])
-	s.pendingDataRefs = pending
+	clear(s.pendingDataHandles[len(pending):])
+	s.pendingDataHandles = pending
 	return completed
 }
 
-func completeDataRefs(refs []messageack.Ref) {
-	for _, ref := range refs {
-		ref.Done()
+func releaseMessages(messages []message.RetainedImmutableMessage) {
+	for _, msg := range messages {
+		msg.Release()
 	}
 }
 
-type pendingDataRef struct {
+func retainImmutableMessage(msg message.ImmutableMessage) message.RetainedImmutableMessage {
+	refCounted, ok := msg.(message.RefCountedImmutableMessage)
+	if !ok {
+		panic("segment data work observed without reference-count capability")
+	}
+	return refCounted.Retain()
+}
+
+type pendingDataHandle struct {
 	timetick uint64
-	ref      messageack.Ref
+	message  message.RetainedImmutableMessage
 }
 
 func (s *SegmentView) markSealedAtDataVersionLocked(version *viewpb.DataVersion) (walview.SegmentSealedEvent, bool) {

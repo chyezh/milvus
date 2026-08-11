@@ -12,7 +12,6 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
-	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
@@ -344,10 +343,7 @@ func TestPChannelRecoveryManagerWALViewUsesDataObservedFrontier(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(manager.Close)
 	insert := newTestInsertMessage(t, "v1", 10, 20)
-	manager.ObserveMessage(
-		context.Background(),
-		messageack.NewMetaMessage(insert),
-	)
+	manager.ObserveMessage(context.Background(), insert)
 	manager.SwitchIntoMetaAndData()
 	meta, _ := testQueryViewMetaAndKey(100, 2, "v1", qviews.DataVersion{}, 3)
 	module := manager.Module("v1")
