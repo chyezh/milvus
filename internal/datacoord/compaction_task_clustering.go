@@ -607,6 +607,9 @@ func (t *clusteringCompactionTask) completeTask() error {
 	if meta, ok := t.meta.(*meta); ok {
 		if err = meta.publishDataViewAfterCompaction(context.TODO(), t.GetTaskProto(), t.GetTaskProto().GetResultSegments()); err != nil {
 			mlog.Warn(context.TODO(), "completeTask publish DataView failed", mlog.Err(err))
+			if merr.IsRetryableErr(err) {
+				return nil
+			}
 			return err
 		}
 	}

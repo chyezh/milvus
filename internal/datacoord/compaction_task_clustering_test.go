@@ -759,6 +759,67 @@ func (s *ClusteringCompactionTaskSuite) TestProcessIndexingState() {
 	})
 }
 
+func (s *ClusteringCompactionTaskSuite) addClusteringPublicationSegments() {
+	for _, segment := range []*datapb.SegmentInfo{
+		{ID: 101, CollectionID: 1, PartitionID: 10, InsertChannel: "ch-1", NumOfRows: 100, State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1},
+		{ID: 102, CollectionID: 1, PartitionID: 10, InsertChannel: "ch-1", NumOfRows: 100, State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1},
+		{ID: 1000, CollectionID: 1, PartitionID: 10, InsertChannel: "ch-1", NumOfRows: 100, State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L2, IsInvisible: true},
+		{ID: 1100, CollectionID: 1, PartitionID: 10, InsertChannel: "ch-1", NumOfRows: 100, State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L2, IsInvisible: true},
+	} {
+		s.Require().NoError(s.meta.AddSegment(context.TODO(), NewSegmentInfo(segment)))
+	}
+}
+
+func (s *ClusteringCompactionTaskSuite) TestProcessIndexingRetryablePublicationFailureDoesNotConsumeRetryBudget() {
+	s.addClusteringPublicationSegments()
+	publication := &fakeGCDataViewManager{
+		publishVersionErr: merr.WrapErrServiceUnavailableMsg("publication unavailable"),
+	}
+	s.meta.dataViewManager = publication
+	task := s.generateBasicTask(false)
+	task.maxRetryTimes = 3
+	s.Require().NoError(task.updateAndSaveTaskMeta(setState(datapb.CompactionTaskState_indexing)))
+
+	for i := 0; i < int(task.maxRetryTimes)+2; i++ {
+		task.Process()
+	}
+
+	s.Equal(datapb.CompactionTaskState_indexing, task.GetTaskProto().GetState())
+	s.Zero(task.GetTaskProto().GetRetryTimes())
+	persisted := s.meta.GetCompactionTasksByTriggerID(context.TODO(), task.GetTaskProto().GetTriggerID())
+	s.Require().Len(persisted, 1)
+	s.Equal(datapb.CompactionTaskState_indexing, persisted[0].GetState())
+	s.Zero(persisted[0].GetRetryTimes())
+
+	restarted := newClusteringCompactionTask(
+		persisted[0],
+		s.mockAlloc,
+		s.meta,
+		s.handler,
+		s.analyzeScheduler,
+		newMockVersionManager(),
+	)
+	restarted.maxRetryTimes = 3
+	publication.publishVersionErr = nil
+
+	s.True(restarted.Process())
+	s.Equal(datapb.CompactionTaskState_completed, restarted.GetTaskProto().GetState())
+	s.Zero(restarted.GetTaskProto().GetRetryTimes())
+}
+
+func (s *ClusteringCompactionTaskSuite) TestProcessIndexingNonRetryablePublicationFailureFailsTask() {
+	s.addClusteringPublicationSegments()
+	s.meta.dataViewManager = &fakeGCDataViewManager{
+		publishVersionErr: merr.WrapErrDataIntegrityMsg("invalid publication"),
+	}
+	task := s.generateBasicTask(false)
+	task.maxRetryTimes = 3
+	s.Require().NoError(task.updateAndSaveTaskMeta(setState(datapb.CompactionTaskState_indexing)))
+
+	s.True(task.Process())
+	s.Equal(datapb.CompactionTaskState_failed, task.GetTaskProto().GetState())
+}
+
 func (s *ClusteringCompactionTaskSuite) TestProcessAnalyzingState() {
 	s.Run("analyze task not found", func() {
 		task := s.generateBasicTask(false)
