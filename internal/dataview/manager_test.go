@@ -1247,6 +1247,33 @@ func TestRecoverManagerBackfillsDurableHeadForLegacySnapshots(t *testing.T) {
 	require.Equal(t, []int64{100, 200}, ref.DataView().SegmentIDs("ch-1", 10))
 }
 
+func TestRecoverManagerBackfillsStateForSnapshotOnlyLegacyCollection(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
+			newTestDataView(1, 2, 0, newTestDataViewShard("ch-1", 10, 100, 200)),
+		},
+	}
+	store := &fakeDataViewSegmentStore{segments: make(map[int64]*Segment)}
+
+	manager, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+	requireDataVersion(t, catalog.versionStates[1].GetPublishedDataVersion(), 2, 0)
+	require.Equal(t, int64(2), catalog.versionStates[1].GetAllocatedStreamingVersion())
+
+	version, err := manager.CommitStreamingView(ctx, 1, PublishedMutation{
+		Add: []SegmentMembership{loadableMembership(1, 10, 300, "ch-1")},
+	})
+	require.NoError(t, err)
+	requireDataVersion(t, version, 3, 0)
+	requireDataVersion(t, catalog.versionStates[1].GetPublishedDataVersion(), 3, 0)
+	ref, err := manager.LatestPublished(ctx, 1)
+	require.NoError(t, err)
+	t.Cleanup(ref.Deref)
+	require.Equal(t, []int64{100, 200, 300}, ref.DataView().SegmentIDs("ch-1", 10))
+}
+
 func TestDataViewManagerRepairCollectionsAlignsSegmentMetaAfterRecover(t *testing.T) {
 	ctx := context.Background()
 	catalog := &fakeDataViewCatalog{

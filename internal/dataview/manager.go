@@ -336,12 +336,21 @@ func RecoverManager(ctx context.Context, catalog RecoveryCatalog, segments Segme
 				return nil, err
 			}
 			if durable == nil {
-				continue
+				durable = &viewpb.CollectionDataVersionState{CollectionId: collectionID}
 			}
 			if published == nil {
 				published = latestDataView(persistedViews)
 				if published == nil {
 					continue
+				}
+				if published.GetCollectionId() != collectionID ||
+					published.GetDataVersion() == nil ||
+					published.GetDataVersion().GetStreamingVersion() <= 0 ||
+					published.GetDataVersion().GetCompactVersion() < 0 {
+					return nil, merr.WrapErrDataIntegrityMsg(
+						"invalid legacy DataView migration snapshot for collection %d",
+						collectionID,
+					)
 				}
 				durable = proto.Clone(durable).(*viewpb.CollectionDataVersionState)
 				durable.PublishedDataVersion = cloneDataVersion(published.GetDataVersion())
