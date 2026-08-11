@@ -18,6 +18,7 @@ package dataview
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -45,7 +46,15 @@ func (c *fakeDataViewCatalog) SavePublishedDataView(
 		c.versionStates = make(map[int64]*viewpb.CollectionDataVersionState)
 	}
 	c.versionStates[state.GetCollectionId()] = proto.Clone(state).(*viewpb.CollectionDataVersionState)
-	c.views = append(c.views, proto.Clone(view).(*viewpb.DataViewOfCollection))
+	stored := proto.Clone(view).(*viewpb.DataViewOfCollection)
+	for i, current := range c.views {
+		if current.GetCollectionId() == stored.GetCollectionId() &&
+			compareDataVersion(current.GetDataVersion(), stored.GetDataVersion()) == 0 {
+			c.views[i] = stored
+			return nil
+		}
+	}
+	c.views = append(c.views, stored)
 	return nil
 }
 
@@ -92,6 +101,59 @@ func TestPublicationSuppressesDuplicateMembership(t *testing.T) {
 	require.NoError(t, err)
 	requireDataVersion(t, version, 1, 0)
 	require.Len(t, catalog.views, 1)
+}
+
+func TestPublicationPersistenceFailureClassification(t *testing.T) {
+	t.Run("raw metastore error is retryable", func(t *testing.T) {
+		ctx := context.Background()
+		manager, catalog, _ := newTestDataViewManager()
+		catalog.saveErrOnce = errors.New("raw metastore failure")
+		mutation := PublishedMutation{
+			Add: []SegmentMembership{loadableMembership(1, 10, 100, "ch-0")},
+		}
+
+		published, err := manager.CommitPublishedView(
+			ctx,
+			1,
+			&viewpb.DataVersion{StreamingVersion: 1},
+			mutation,
+		)
+
+		require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+		require.True(t, merr.IsRetryableErr(err))
+		require.Nil(t, published)
+		require.Empty(t, catalog.views)
+
+		published, err = manager.CommitPublishedView(
+			ctx,
+			1,
+			&viewpb.DataVersion{StreamingVersion: 1},
+			mutation,
+		)
+		require.NoError(t, err)
+		requireDataVersion(t, published, 1, 0)
+	})
+
+	t.Run("typed error keeps its code", func(t *testing.T) {
+		ctx := context.Background()
+		manager, catalog, _ := newTestDataViewManager()
+		catalog.saveErrOnce = merr.WrapErrDataIntegrityMsg("persisted snapshot is invalid")
+
+		published, err := manager.CommitPublishedView(
+			ctx,
+			1,
+			&viewpb.DataVersion{StreamingVersion: 1},
+			PublishedMutation{
+				Add: []SegmentMembership{loadableMembership(1, 10, 100, "ch-0")},
+			},
+		)
+
+		require.ErrorIs(t, err, merr.ErrDataIntegrity)
+		require.NotErrorIs(t, err, merr.ErrServiceUnavailable)
+		require.False(t, merr.IsRetryableErr(err))
+		require.Nil(t, published)
+		require.Empty(t, catalog.views)
+	})
 }
 
 func TestPublicationCompactRewriteAdvancesCompactVersion(t *testing.T) {

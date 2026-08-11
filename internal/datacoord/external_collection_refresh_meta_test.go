@@ -520,6 +520,63 @@ func TestExternalCollectionRefreshMeta_UpdateJobState(t *testing.T) {
 }
 
 func TestExternalCollectionRefreshMeta_UpdateJobStateWithPreApply(t *testing.T) {
+	t.Run("retryable_pre_apply_failure_keeps_job_nonterminal", func(t *testing.T) {
+		catalog := &stubCatalog{}
+		jobs := []*datapb.ExternalCollectionRefreshJob{
+			{JobId: 1, CollectionId: 100, State: indexpb.JobState_JobStateInProgress},
+		}
+		mockListJobs := mockey.Mock((*stubCatalog).ListExternalCollectionRefreshJobs).Return(jobs, nil).Build()
+		defer mockListJobs.UnPatch()
+		mockListTasks := mockey.Mock((*stubCatalog).ListExternalCollectionRefreshTasks).Return(nil, nil).Build()
+		defer mockListTasks.UnPatch()
+
+		var savedJobs []*datapb.ExternalCollectionRefreshJob
+		mockSave := mockey.Mock((*stubCatalog).SaveExternalCollectionRefreshJob).
+			To(func(_ context.Context, job *datapb.ExternalCollectionRefreshJob) error {
+				savedJobs = append(savedJobs, proto.Clone(job).(*datapb.ExternalCollectionRefreshJob))
+				return nil
+			}).Build()
+		defer mockSave.UnPatch()
+
+		meta, err := newExternalCollectionRefreshMeta(context.Background(), catalog)
+		assert.NoError(t, err)
+		attempts := 0
+		preApply := func(*datapb.ExternalCollectionRefreshJob) error {
+			attempts++
+			if attempts == 1 {
+				return merr.WrapErrServiceUnavailableMsg("publication failed")
+			}
+			return nil
+		}
+
+		applied, err := meta.UpdateJobStateWithPreApply(
+			1,
+			indexpb.JobState_JobStateFinished,
+			"",
+			preApply,
+		)
+
+		assert.False(t, applied)
+		assert.Error(t, err)
+		assert.True(t, merr.IsRetryableErr(err))
+		assert.Empty(t, savedJobs)
+		assert.Equal(t, indexpb.JobState_JobStateInProgress, meta.GetJob(1).GetState())
+
+		applied, err = meta.UpdateJobStateWithPreApply(
+			1,
+			indexpb.JobState_JobStateFinished,
+			"",
+			preApply,
+		)
+
+		assert.True(t, applied)
+		assert.NoError(t, err)
+		assert.Equal(t, 2, attempts)
+		assert.Len(t, savedJobs, 1)
+		assert.Equal(t, indexpb.JobState_JobStateFinished, savedJobs[0].GetState())
+		assert.Equal(t, indexpb.JobState_JobStateFinished, meta.GetJob(1).GetState())
+	})
+
 	t.Run("pre_apply_failure_marks_job_failed", func(t *testing.T) {
 		catalog := &stubCatalog{}
 		jobs := []*datapb.ExternalCollectionRefreshJob{

@@ -40,6 +40,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/taskcommon"
 	"github.com/milvus-io/milvus/pkg/v3/util/lock"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -49,6 +50,24 @@ import (
 
 type CopySegmentTaskSuite struct {
 	suite.Suite
+}
+
+type failPublishedDataViewCatalog struct {
+	metastore.DataCoordCatalog
+	errOnce error
+}
+
+func (c *failPublishedDataViewCatalog) SavePublishedDataView(
+	ctx context.Context,
+	state *viewpb.CollectionDataVersionState,
+	view *viewpb.DataViewOfCollection,
+) error {
+	if c.errOnce != nil {
+		err := c.errOnce
+		c.errOnce = nil
+		return err
+	}
+	return c.DataCoordCatalog.SavePublishedDataView(ctx, state, view)
 }
 
 func TestCopySegmentTask(t *testing.T) {
@@ -719,6 +738,57 @@ func (s *CopySegmentTaskSuite) TestQueryTaskOnWorker_PublicationFailureRemainsRe
 	s.Equal(datapb.CopySegmentTaskState_CopySegmentTaskInProgress, updatedTask.GetState())
 	s.Equal(datapb.CopySegmentJobState_CopySegmentJobExecuting,
 		copyMeta.GetJob(context.Background(), 100).GetState())
+}
+
+func (s *CopySegmentTaskSuite) TestQueryTaskOnWorker_RawPublicationFailureRemainsRetryable() {
+	cluster := session.NewMockCluster(s.T())
+	cluster.EXPECT().QueryCopySegment(mock.Anything, mock.Anything).Return(
+		&datapb.QueryCopySegmentResponse{
+			TaskID: 1001,
+			State:  datapb.CopySegmentTaskState_CopySegmentTaskCompleted,
+			SegmentResults: []*datapb.CopySegmentResult{
+				{
+					SegmentId:    2001,
+					ImportedRows: 100,
+					Binlogs:      makeTestCopySegmentBinlogs(),
+					ManifestPath: "manifest-path",
+				},
+			},
+		},
+		nil,
+	).Twice()
+
+	task := createTestCopyTask(100, 2001).(*copySegmentTask)
+	copyMeta, m := newCopySegmentTaskTestMeta(s.T(), task)
+	s.NoError(copyMeta.AddJob(context.Background(), newTestCopyJob(100, datapb.CopySegmentJobState_CopySegmentJobExecuting)))
+	catalog := &failPublishedDataViewCatalog{DataCoordCatalog: m.catalog}
+	manager := newDataViewManager(catalog, m)
+	_, err := manager.OnCreateCollection(context.Background(), CreateCollectionDataViewEvent{
+		CollectionID: 100,
+		VChannels:    []string{"ch1"},
+	})
+	s.NoError(err)
+	catalog.errOnce = errors.New("raw metastore publication failure")
+	m.dataViewManager = manager
+	s.NoError(m.AddSegment(context.Background(), newTestCopySegment(2001)))
+
+	task.QueryTaskOnWorker(cluster)
+
+	updatedTask := copyMeta.GetTask(context.Background(), 1001)
+	s.Equal(datapb.CopySegmentTaskState_CopySegmentTaskInProgress, updatedTask.GetState())
+	s.Equal(datapb.CopySegmentJobState_CopySegmentJobExecuting,
+		copyMeta.GetJob(context.Background(), 100).GetState())
+
+	task.QueryTaskOnWorker(cluster)
+
+	updatedTask = copyMeta.GetTask(context.Background(), 1001)
+	s.Equal(datapb.CopySegmentTaskState_CopySegmentTaskCompleted, updatedTask.GetState())
+	s.Equal(datapb.CopySegmentJobState_CopySegmentJobExecuting,
+		copyMeta.GetJob(context.Background(), 100).GetState())
+	view, err := manager.LatestVisibleDataView(context.Background(), 100)
+	s.NoError(err)
+	s.Equal(int64(2), view.GetDataVersion().GetStreamingVersion())
+	s.Equal([]int64{2001}, view.GetShards()[0].GetPartitions()[0].GetSegmentIds())
 }
 
 func (s *CopySegmentTaskSuite) TestSyncCopySegmentTask_CompletedUpdatesSegment() {

@@ -421,6 +421,9 @@ func (m *externalCollectionRefreshMeta) UpdateJobStateWithPreApply(
 
 	if preApply != nil {
 		if err := preApply(job); err != nil {
+			if merr.IsRetryableErr(err) {
+				return false, err
+			}
 			cloneJob := proto.Clone(job).(*datapb.ExternalCollectionRefreshJob)
 			cloneJob.State = indexpb.JobState_JobStateFailed
 			cloneJob.FailReason = err.Error()

@@ -314,6 +314,13 @@ func (s *ServerSuite) TestSaveBinlogPath_StorageVersionImmutable() {
 
 func (s *ServerSuite) TestSaveBinlogPath_SaveDroppedSegment() {
 	s.testServer.meta.AddCollection(&collectionInfo{ID: 0})
+	manager := newDataViewManager(s.testServer.meta.catalog, s.testServer.meta)
+	s.testServer.dataViewManager = manager
+	_, err := manager.OnCreateCollection(context.Background(), CreateCollectionDataViewEvent{
+		CollectionID: 0,
+		VChannels:    []string{"ch1"},
+	})
+	s.Require().NoError(err)
 
 	segments := map[int64]commonpb.SegmentState{
 		0: commonpb.SegmentState_Flushed,
@@ -351,6 +358,8 @@ func (s *ServerSuite) TestSaveBinlogPath_SaveDroppedSegment() {
 		{"segID=2, sealed to dropped", 2, false, true, 0, commonpb.SegmentState_Dropped},
 	}
 
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
 	paramtable.Get().Save(paramtable.Get().DataCoordCfg.EnableAutoCompaction.Key, "False")
 	defer paramtable.Get().Reset(paramtable.Get().DataCoordCfg.EnableAutoCompaction.Key)
 	for _, test := range tests {

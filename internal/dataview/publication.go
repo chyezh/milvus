@@ -18,6 +18,7 @@ package dataview
 
 import (
 	"context"
+	"fmt"
 	"math"
 
 	"google.golang.org/protobuf/proto"
@@ -385,7 +386,7 @@ func (m *dataViewManager) persistPublishedLocked(
 	}
 	nextState.PublishedDataVersion = cloneDataVersion(toPersist.GetDataVersion())
 	if err := catalog.SavePublishedDataView(ctx, nextState, toPersist); err != nil {
-		return merr.Wrapf(err, "publish DataView for collection %d", state.collectionID)
+		return publishedDataViewPersistenceError(state.collectionID, err)
 	}
 	state.versionState = nextState
 	state.persistedAllocated = nextState.GetAllocatedStreamingVersion()
@@ -393,6 +394,16 @@ func (m *dataViewManager) persistPublishedLocked(
 	state.latestVisible = canonicalDataViewClone(toPersist)
 	m.rememberRecoveredDataView(toPersist)
 	return nil
+}
+
+func publishedDataViewPersistenceError(collectionID int64, err error) error {
+	if merr.IsMilvusError(err) {
+		return merr.Wrapf(err, "publish DataView for collection %d", collectionID)
+	}
+	return merr.WrapErrServiceUnavailable(
+		fmt.Sprintf("publish DataView for collection %d", collectionID),
+		err.Error(),
+	)
 }
 
 func publishedMutationBase(collectionID int64, current *viewpb.DataViewOfCollection) *viewpb.DataViewOfCollection {
