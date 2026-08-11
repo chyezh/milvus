@@ -309,7 +309,9 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 	state := m.getOrCreateState(event.CollectionID)
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	state.dropped = false
+	if state.dropped {
+		return nil, nil
+	}
 
 	if state.latestResident != nil {
 		if state.latestVisible == nil {

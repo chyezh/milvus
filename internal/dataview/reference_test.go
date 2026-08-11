@@ -136,6 +136,32 @@ func TestDataViewRefRepairDoesNotReopenTerminalCollection(t *testing.T) {
 	require.True(t, dataViewStateDropped(t, manager, 1))
 }
 
+func TestDataViewRefLateCreateDoesNotReopenTerminalCollection(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, store := newTestDataViewManager()
+	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
+
+	version, err := manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})
+	require.NoError(t, err)
+	domainVersion := qviews.FromProtoDataVersion(version)
+	_, err = manager.OnDropCollection(ctx, 1)
+	require.NoError(t, err)
+
+	lateVersion, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+		CollectionID: 1,
+		VChannels:    []string{"ch-1"},
+	})
+	require.NoError(t, err)
+
+	_, err = manager.Get(ctx, 1, domainVersion)
+	requireUnavailableDataViewError(t, err)
+	_, err = manager.LatestPublished(ctx, 1)
+	requireUnavailableDataViewError(t, err)
+	require.True(t, dataViewStateDropped(t, manager, 1))
+	require.Nil(t, lateVersion)
+	require.Empty(t, catalog.views)
+}
+
 func TestDataViewRefRejectsMissingView(t *testing.T) {
 	ctx := context.Background()
 	manager, _, _ := newTestDataViewManager()
