@@ -693,14 +693,15 @@ func (m *dataViewManager) repairCollectionWithDataViews(ctx context.Context, col
 	latestPersisted := latestDataView(persistedViews)
 	segments := m.segments.SelectSegments(ctx, collectionID)
 	pendingRetainedInputs := pendingRetainedCompactionInputs(segments)
-	residentExpected := buildDataViewFromSegments(collectionID, segments, true)
+	recoverableSegments := recoverableSegmentsAtPublishedHead(latestPersisted, segments, state.versionState.GetPublishedDataVersion())
+	residentExpected := buildDataViewFromSegments(collectionID, recoverableSegments, true)
 	if isDataViewMembershipEqual(latestPersisted, residentExpected) {
 		state.latestResident = canonicalDataViewClone(latestPersisted)
 		state.latestVisible = m.latestVisiblePersistedView(ctx, persistedViews)
 		state.mu.Unlock()
 		return nil
 	}
-	expected := buildRecoverExpectedDataView(collectionID, latestPersisted, segments, pendingRetainedInputs)
+	expected := buildRecoverExpectedDataView(collectionID, latestPersisted, recoverableSegments, pendingRetainedInputs)
 	pruneHistoricallyRemovedSegments(latestPersisted, expected, persistedViews)
 	if isDataViewMembershipEqual(latestPersisted, expected) {
 		state.latestResident = canonicalDataViewClone(latestPersisted)
@@ -744,6 +745,23 @@ func (m *dataViewManager) repairCollectionWithDataViews(ctx context.Context, col
 	}
 	state.mu.Unlock()
 	return nil
+}
+
+func recoverableSegmentsAtPublishedHead(
+	latest *viewpb.DataViewOfCollection,
+	segments []*Segment,
+	published *viewpb.DataVersion,
+) []*Segment {
+	publishedStreaming := published.GetStreamingVersion()
+	result := make([]*Segment, 0, len(segments))
+	for _, segment := range segments {
+		assigned := segment.GetSealedAtDataVersion()
+		if assigned.GetStreamingVersion() > publishedStreaming && !dataViewContainsSegment(latest, segment.GetID()) {
+			continue
+		}
+		result = append(result, segment)
+	}
+	return result
 }
 
 func (m *dataViewManager) LatestVisibleDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error) {

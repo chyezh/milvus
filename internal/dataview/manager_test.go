@@ -1339,6 +1339,65 @@ func TestRecoverManagerRepairAtomicallyAdvancesPublishedHead(t *testing.T) {
 	require.Equal(t, []int64{100, 101}, publishedSegmentIDs(t, restartedVisible, "ch-1", 10))
 }
 
+func TestRecoverManagerRepairPreservesAssignedStreamingEpochs(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
+		},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 3,
+				PublishedDataVersion:      &viewpb.DataVersion{StreamingVersion: 1},
+			},
+		},
+	}
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{
+		100: newDataViewTestSegment(1, 10, 100, "ch-1", 1000),
+		101: newDataViewTestSegment(1, 10, 101, "ch-1", 1100),
+		102: newDataViewTestSegment(1, 10, 102, "ch-1", 1200),
+	}}
+	store.segments[100].SealedAtDataVersion = &viewpb.DataVersion{StreamingVersion: 1}
+	store.segments[101].SealedAtDataVersion = &viewpb.DataVersion{StreamingVersion: 2}
+	store.segments[102].SealedAtDataVersion = &viewpb.DataVersion{StreamingVersion: 3}
+
+	manager, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+	require.NoError(t, manager.RepairCollections(ctx, []int64{1}))
+
+	state, err := catalog.GetDataViewVersionState(ctx, 1)
+	require.NoError(t, err)
+	requireDataVersion(t, state.GetPublishedDataVersion(), 1, 0)
+	require.Equal(t, int64(3), state.GetAllocatedStreamingVersion())
+	require.Len(t, catalog.views, 1)
+	visible, err := manager.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	requireDataVersion(t, visible.GetDataVersion(), 1, 0)
+	require.Equal(t, []int64{100}, publishedSegmentIDs(t, visible, "ch-1", 10))
+
+	published, err := manager.CommitPublishedView(ctx, 1, &viewpb.DataVersion{StreamingVersion: 2}, PublishedMutation{
+		Add: []SegmentMembership{loadableMembership(1, 10, 101, "ch-1")},
+	})
+	require.NoError(t, err)
+	requireDataVersion(t, published, 2, 0)
+	published, err = manager.CommitPublishedView(ctx, 1, &viewpb.DataVersion{StreamingVersion: 3}, PublishedMutation{
+		Add: []SegmentMembership{loadableMembership(1, 10, 102, "ch-1")},
+	})
+	require.NoError(t, err)
+	requireDataVersion(t, published, 3, 0)
+
+	later, err := manager.CommitStreamingView(ctx, 1, PublishedMutation{
+		Add: []SegmentMembership{loadableMembership(1, 10, 103, "ch-1")},
+	})
+	require.NoError(t, err)
+	requireDataVersion(t, later, 4, 0)
+	ref, err := manager.LatestPublished(ctx, 1)
+	require.NoError(t, err)
+	t.Cleanup(ref.Deref)
+	require.Equal(t, []int64{100, 101, 102, 103}, ref.DataView().SegmentIDs("ch-1", 10))
+}
+
 func TestDataViewManagerRecoverDoesNotReaddTruncatedSegments(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, store := newTestDataViewManager()
