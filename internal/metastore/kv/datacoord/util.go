@@ -407,6 +407,10 @@ func buildDataViewVersionKey(collectionID, streamingVersion, compactVersion int6
 	return fmt.Sprintf("%s/%d/versions/%d/%d", DataViewPrefix, collectionID, streamingVersion, compactVersion)
 }
 
+func buildDataViewVersionStateKey(collectionID int64) string {
+	return fmt.Sprintf("%s/%d/state", DataViewPrefix, collectionID)
+}
+
 func buildDataViewDropMarkerKey(collectionID int64) string {
 	return fmt.Sprintf("%s/%d", DataViewDropMarkerPrefix, collectionID)
 }

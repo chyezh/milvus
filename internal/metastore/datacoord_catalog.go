@@ -85,6 +85,9 @@ type DataCoordCatalog interface {
 	ListDataViews(ctx context.Context, collectionID int64) ([]*viewpb.DataViewOfCollection, error)
 	DropDataView(ctx context.Context, collectionID int64, dataVersion *viewpb.DataVersion) error
 	DropDataViews(ctx context.Context, collectionID int64) error
+	SaveDataViewVersionState(ctx context.Context, state *viewpb.CollectionDataVersionState) error
+	GetDataViewVersionState(ctx context.Context, collectionID int64) (*viewpb.CollectionDataVersionState, error)
+	SavePublishedDataView(ctx context.Context, state *viewpb.CollectionDataVersionState, view *viewpb.DataViewOfCollection) error
 
 	// TODO: From MarkChannelAdded to DropChannel, it's totally a redundant design by now, remove it in future.
 	MarkChannelAdded(ctx context.Context, channel string) error
