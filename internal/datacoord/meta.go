@@ -2838,7 +2838,7 @@ func (m *meta) publishDataViewAfterCompaction(ctx context.Context, t *datapb.Com
 	if m.dataViewManager == nil {
 		return nil
 	}
-	memberships, ready := m.loadablePublishedMemberships(compactTo)
+	memberships, ready := m.loadableCompactionMemberships(compactTo)
 	if !ready {
 		return merr.WrapErrServiceUnavailableMsg(
 			"compaction %d output membership is not loadable",

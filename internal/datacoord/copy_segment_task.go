@@ -804,7 +804,7 @@ func SyncCopySegmentTask(task CopySegmentTask, resp *datapb.QueryCopySegmentResp
 				return err
 			}
 			if meta.dataViewManager != nil {
-				if _, err := meta.commitDataViewRewrite(ctx, task.GetCollectionId(), []int64{result.GetSegmentId()}, nil); err != nil {
+				if _, err := meta.commitDataViewStreaming(ctx, task.GetCollectionId(), []int64{result.GetSegmentId()}); err != nil {
 					return merr.Wrapf(err, "publish DataView after copy segment task %d", task.GetTaskId())
 				}
 			}

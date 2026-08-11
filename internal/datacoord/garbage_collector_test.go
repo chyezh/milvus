@@ -97,6 +97,7 @@ type fakeGCDataViewManager struct {
 	flushEvents        []FlushDataViewEvent
 	publishedMutations []dataview.PublishedMutation
 	publishedAssigned  []*viewpb.DataVersion
+	streamingMutations []dataview.PublishedMutation
 	rewriteMutations   []dataview.PublishedMutation
 	l0CompactEvents    []L0CompactDataViewEvent
 	snapshotRequested  []int64
@@ -127,6 +128,15 @@ func (m *fakeGCDataViewManager) CommitRewrite(
 	mutation dataview.PublishedMutation,
 ) (*viewpb.DataVersion, error) {
 	m.rewriteMutations = append(m.rewriteMutations, mutation)
+	return m.publishedVersion, m.publishVersionErr
+}
+
+func (m *fakeGCDataViewManager) CommitStreamingView(
+	ctx context.Context,
+	collectionID int64,
+	mutation dataview.PublishedMutation,
+) (*viewpb.DataVersion, error) {
+	m.streamingMutations = append(m.streamingMutations, mutation)
 	return m.publishedVersion, m.publishVersionErr
 }
 

@@ -757,8 +757,39 @@ func (s *CopySegmentTaskSuite) TestSyncCopySegmentTask_CompletedUpdatesSegment()
 	s.Equal(datapb.CopySegmentTaskState_CopySegmentTaskCompleted, updatedTask.GetState())
 	s.NotZero(updatedTask.(*copySegmentTask).task.Load().GetCompleteTs())
 	s.Empty(manager.publishedMutations)
-	s.Len(manager.rewriteMutations, 1)
-	s.Equal(int64(2001), manager.rewriteMutations[0].Add[0].SegmentID)
+	s.Len(manager.streamingMutations, 1)
+	s.Equal(int64(2001), manager.streamingMutations[0].Add[0].SegmentID)
+}
+
+func (s *CopySegmentTaskSuite) TestSyncCopySegmentTask_AddOnlyPublishesStreamingVersion() {
+	ctx := context.Background()
+	task := createTestCopyTask(100, 2001).(*copySegmentTask)
+	copyMeta, m := newCopySegmentTaskTestMeta(s.T(), task)
+	manager := newDataViewManager(m.catalog, m)
+	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 100, VChannels: []string{"ch1"}})
+	s.NoError(err)
+	m.dataViewManager = manager
+	s.NoError(m.AddSegment(ctx, newTestCopySegment(2001)))
+
+	err = SyncCopySegmentTask(task, &datapb.QueryCopySegmentResponse{
+		TaskID: 1001,
+		State:  datapb.CopySegmentTaskState_CopySegmentTaskCompleted,
+		SegmentResults: []*datapb.CopySegmentResult{
+			{
+				SegmentId:    2001,
+				ImportedRows: 100,
+				Binlogs:      makeTestCopySegmentBinlogs(),
+				ManifestPath: "manifest-path",
+			},
+		},
+	}, copyMeta, m)
+	s.NoError(err)
+
+	view, err := manager.LatestVisibleDataView(ctx, 100)
+	s.NoError(err)
+	s.Equal(int64(2), view.GetDataVersion().GetStreamingVersion())
+	s.Zero(view.GetDataVersion().GetCompactVersion())
+	s.Equal([]int64{2001}, view.GetShards()[0].GetPartitions()[0].GetSegmentIds())
 }
 
 func (s *CopySegmentTaskSuite) TestSyncCopySegmentTask_FailedResponseUpdatesTask() {

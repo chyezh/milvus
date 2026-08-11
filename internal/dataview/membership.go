@@ -71,3 +71,22 @@ func addPublishedMembership(view *viewpb.DataViewOfCollection, membership Segmen
 	partition.SegmentIds = append(partition.SegmentIds, membership.SegmentID)
 	return true
 }
+
+func dataViewContainsMembership(view *viewpb.DataViewOfCollection, membership SegmentMembership) bool {
+	for _, shard := range view.GetShards() {
+		if shard.GetVchannel() != membership.VChannel {
+			continue
+		}
+		for _, partition := range shard.GetPartitions() {
+			if partition.GetPartitionId() != membership.PartitionID {
+				continue
+			}
+			for _, segmentID := range partition.GetSegmentIds() {
+				if segmentID == membership.SegmentID {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}

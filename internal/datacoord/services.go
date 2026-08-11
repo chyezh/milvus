@@ -3406,7 +3406,7 @@ func (s *Server) HandleCommitVchannel(ctx context.Context, req *datapb.HandleCom
 			return err
 		}
 		if s.dataViewManager != nil && collectionID != 0 {
-			if _, err := s.meta.commitDataViewRewrite(ctx, collectionID, segIDs, nil); err != nil {
+			if _, err := s.meta.commitDataViewStreaming(ctx, collectionID, segIDs); err != nil {
 				return merr.Wrapf(err, "publish DataView after import job %d vchannel %s", jobID, vchannel)
 			}
 		}
@@ -3439,6 +3439,9 @@ func (s *Server) getImportSegmentIDsByVchannel(ctx context.Context, jobID int64,
 				continue
 			}
 			if seg.GetInsertChannel() != vchannel {
+				continue
+			}
+			if seg.GetState() == commonpb.SegmentState_Dropped {
 				continue
 			}
 			segIDs = append(segIDs, segID)

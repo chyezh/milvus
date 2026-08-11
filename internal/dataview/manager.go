@@ -55,6 +55,7 @@ type RecoveryCatalog interface {
 type Manager interface {
 	AssignFlushVersion(ctx context.Context, collectionID, segmentID int64) (*viewpb.DataVersion, error)
 	CommitPublishedView(ctx context.Context, collectionID int64, assignedVersion *viewpb.DataVersion, mutation PublishedMutation) (*viewpb.DataVersion, error)
+	CommitStreamingView(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
 	CommitRewrite(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
 	OnCreateCollection(ctx context.Context, event CreateCollectionDataViewEvent) (*viewpb.DataVersion, error)
 	OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error)
@@ -322,6 +323,38 @@ func RecoverManager(ctx context.Context, catalog RecoveryCatalog, segments Segme
 		return nil, err
 	}
 	manager.recoverFromDataViews(dataViews)
+	if publishedCatalog, ok := catalog.(publishedDataViewCatalog); ok {
+		viewsByCollection := make(map[int64][]*viewpb.DataViewOfCollection)
+		for _, view := range dataViews {
+			if view != nil {
+				viewsByCollection[view.GetCollectionId()] = append(viewsByCollection[view.GetCollectionId()], view)
+			}
+		}
+		for collectionID, persistedViews := range viewsByCollection {
+			durable, published, err := recoverPublishedDataView(ctx, publishedCatalog, collectionID)
+			if err != nil {
+				return nil, err
+			}
+			if durable == nil {
+				continue
+			}
+			if published == nil {
+				published = latestDataView(persistedViews)
+				if published == nil {
+					continue
+				}
+				durable = proto.Clone(durable).(*viewpb.CollectionDataVersionState)
+				durable.PublishedDataVersion = cloneDataVersion(published.GetDataVersion())
+				if published.GetDataVersion().GetStreamingVersion() > durable.GetAllocatedStreamingVersion() {
+					durable.AllocatedStreamingVersion = published.GetDataVersion().GetStreamingVersion()
+				}
+				if err := publishedCatalog.SavePublishedDataView(ctx, durable, cloneDataViewWithoutDeleteTimetick(published)); err != nil {
+					return nil, merr.Wrapf(err, "backfill published DataView head for collection %d", collectionID)
+				}
+			}
+			manager.recoverCollectionFromDataViews(collectionID, []*viewpb.DataViewOfCollection{published})
+		}
+	}
 	return manager, nil
 }
 
@@ -351,6 +384,18 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 			}
 			if state.latestResident != nil {
 				return dataVersionFromView(state.latestResident), nil
+			}
+			if durable.GetPublishedDataVersion() == nil {
+				persistedViews, err := catalog.ListDataViews(ctx, event.CollectionID)
+				if err != nil {
+					return nil, err
+				}
+				if latestPersisted := latestDataView(persistedViews); latestPersisted != nil {
+					if err := m.persistPublishedLocked(ctx, state, catalog, latestPersisted); err != nil {
+						return nil, err
+					}
+					return dataVersionFromView(state.latestResident), nil
+				}
 			}
 		} else {
 			persistedViews, err := catalog.ListDataViews(ctx, event.CollectionID)

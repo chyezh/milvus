@@ -195,3 +195,32 @@ func TestAssignFlushVersionRecoveryUsesMaximumPersistedAssignment(t *testing.T) 
 	require.Equal(t, int64(3), catalog.versionStates[1].GetPublishedDataVersion().GetStreamingVersion())
 	require.Equal(t, int64(2), catalog.versionStates[1].GetPublishedDataVersion().GetCompactVersion())
 }
+
+func TestAssignFlushVersionPreservesRecoveredMaximumAfterPublicationRecovery(t *testing.T) {
+	ctx := context.Background()
+	_, catalog, store := newTestDataViewManager()
+	catalog.versionStates = map[int64]*viewpb.CollectionDataVersionState{
+		1: {
+			CollectionId:              1,
+			AllocatedStreamingVersion: 4,
+			PublishedDataVersion:      &viewpb.DataVersion{StreamingVersion: 3},
+		},
+	}
+	catalog.views = []*viewpb.DataViewOfCollection{newTestDataView(1, 3, 0)}
+	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
+	store.segments[100].SealedAtDataVersion = &viewpb.DataVersion{StreamingVersion: 5}
+	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
+	store.segments[101].SealedAtDataVersion = &viewpb.DataVersion{StreamingVersion: 7}
+	store.segments[102] = newDataViewTestSegment(1, 10, 102, "ch-1", 1200)
+
+	restarted := NewManager(catalog, store)
+	_, err := restarted.CommitPublishedView(ctx, 1, &viewpb.DataVersion{StreamingVersion: 7}, PublishedMutation{
+		Add: []SegmentMembership{loadableMembership(1, 10, 101, "ch-1")},
+	})
+	require.Error(t, err)
+	require.True(t, merr.IsRetryableErr(err))
+
+	assigned, err := restarted.AssignFlushVersion(ctx, 1, 102)
+	require.NoError(t, err)
+	require.Equal(t, int64(8), assigned.GetStreamingVersion())
+}

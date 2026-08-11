@@ -278,6 +278,7 @@ func TestPublishDataViewAfterVisibleSortCompactionCommitsRewrite(t *testing.T) {
 		InsertChannel: "ch-0",
 		State:         commonpb.SegmentState_Flushed,
 		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     1,
 	})))
 
 	err = m.publishDataViewAfterCompaction(ctx, &datapb.CompactionTask{
@@ -338,6 +339,7 @@ func TestPublishDataViewAfterSortCompactionUsesInheritedFlushVersion(t *testing.
 		InsertChannel: "ch-0",
 		State:         commonpb.SegmentState_Flushed,
 		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     1,
 	})))
 
 	m.publishDataViewAfterCompaction(ctx, &datapb.CompactionTask{
@@ -366,6 +368,7 @@ func TestPublishDataViewAfterMixCompactionCommitsRewrite(t *testing.T) {
 		InsertChannel: "ch-0",
 		State:         commonpb.SegmentState_Flushed,
 		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     1,
 	})))
 
 	m.publishDataViewAfterCompaction(ctx, &datapb.CompactionTask{
@@ -405,7 +408,7 @@ func TestPublishDataViewAfterCompactionReturnsPublicationFailure(t *testing.T) {
 	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
 }
 
-func TestPublishDataViewAfterCompactionRejectsDroppedOutput(t *testing.T) {
+func TestPublishDataViewAfterCompactionCommitsRemoveOnlyForDroppedOutput(t *testing.T) {
 	ctx := context.Background()
 	m, err := newMemoryMeta(t)
 	require.NoError(t, err)
@@ -426,6 +429,8 @@ func TestPublishDataViewAfterCompactionRejectsDroppedOutput(t *testing.T) {
 		InputSegments: []int64{100},
 	}, []int64{101})
 
-	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
-	require.Empty(t, manager.rewriteMutations)
+	require.NoError(t, err)
+	require.Len(t, manager.rewriteMutations, 1)
+	require.Empty(t, manager.rewriteMutations[0].Add)
+	require.Equal(t, []int64{100}, manager.rewriteMutations[0].Remove)
 }

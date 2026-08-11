@@ -113,6 +113,62 @@ func TestPublicationCompactRewriteAdvancesCompactVersion(t *testing.T) {
 	require.Equal(t, []int64{101}, publishedSegmentIDs(t, catalog.views[1], "ch-0", 10))
 }
 
+func TestPublicationStreamingMutationAdvancesAndRetriesAfterRestart(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, store := newTestDataViewManager()
+	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-0"}})
+	require.NoError(t, err)
+	mutation := PublishedMutation{Add: []SegmentMembership{loadableMembership(1, 10, 100, "ch-0")}}
+
+	version, err := manager.CommitStreamingView(ctx, 1, mutation)
+	require.NoError(t, err)
+	requireDataVersion(t, version, 2, 0)
+	requireDataVersion(t, catalog.versionStates[1].GetPublishedDataVersion(), 2, 0)
+	require.Equal(t, int64(2), catalog.versionStates[1].GetAllocatedStreamingVersion())
+
+	restarted := NewManager(catalog, store)
+	retried, err := restarted.CommitStreamingView(ctx, 1, mutation)
+	require.NoError(t, err)
+	requireDataVersion(t, retried, 2, 0)
+	require.Len(t, catalog.views, 2)
+}
+
+func TestPublicationStreamingMutationWaitsForPendingAssignedFlush(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, store := newTestDataViewManager()
+	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-0"}})
+	require.NoError(t, err)
+	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-0", 1000)
+	assigned, err := manager.AssignFlushVersion(ctx, 1, 100)
+	require.NoError(t, err)
+	requireDataVersion(t, assigned, 2, 0)
+
+	published, err := manager.CommitStreamingView(ctx, 1, PublishedMutation{
+		Add: []SegmentMembership{loadableMembership(1, 10, 200, "ch-0")},
+	})
+	require.Error(t, err)
+	require.True(t, merr.IsRetryableErr(err))
+	require.Nil(t, published)
+	require.Len(t, catalog.views, 1)
+}
+
+func TestPublicationStreamingMutationRetryRequiresExactAddedMembership(t *testing.T) {
+	ctx := context.Background()
+	manager, _, _ := newTestDataViewManager()
+	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-0"}})
+	require.NoError(t, err)
+	_, err = manager.CommitStreamingView(ctx, 1, PublishedMutation{
+		Add: []SegmentMembership{loadableMembership(1, 10, 100, "ch-0")},
+	})
+	require.NoError(t, err)
+
+	published, err := manager.CommitStreamingView(ctx, 1, PublishedMutation{
+		Add: []SegmentMembership{loadableMembership(1, 11, 100, "ch-0")},
+	})
+	require.ErrorIs(t, err, merr.ErrDataIntegrity)
+	require.Nil(t, published)
+}
+
 func TestPublicationMetadataOnlyMutationIsNoOp(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, _ := newTestDataViewManager()
@@ -240,6 +296,27 @@ func TestPublicationRetryProvesDurableAssignedMutation(t *testing.T) {
 	require.Len(t, catalog.views, 1)
 }
 
+func TestPublicationRetryRejectsDurableSnapshotWithExtraMembership(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, _ := newTestDataViewManager()
+	assigned := &viewpb.DataVersion{StreamingVersion: 1}
+
+	_, err := manager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{
+			loadableMembership(1, 10, 100, "ch-0"),
+			loadableMembership(1, 10, 200, "ch-0"),
+		},
+	})
+	require.NoError(t, err)
+
+	published, err := manager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{loadableMembership(1, 10, 100, "ch-0")},
+	})
+	require.ErrorIs(t, err, merr.ErrDataIntegrity)
+	require.Nil(t, published)
+	require.Len(t, catalog.views, 1)
+}
+
 func TestPublicationAssignmentStateFailureStillBlocksLaterEpoch(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, store := newTestDataViewManager()
@@ -304,6 +381,33 @@ func TestPublicationCreateCollectionRecoversDurableHeadBeforeNewerOrphan(t *test
 	view, err := manager.LatestVisibleDataView(ctx, 1)
 	require.NoError(t, err)
 	require.Equal(t, []int64{100}, publishedSegmentIDs(t, view, "ch-0", 10))
+}
+
+func TestPublicationCreateCollectionBackfillsLegacySnapshotWhenDurableHeadIsMissing(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, _ := newTestDataViewManager()
+	catalog.views = []*viewpb.DataViewOfCollection{
+		newTestDataView(1, 1, 0, newTestDataViewShard("ch-0", 10, 100)),
+		newTestDataView(1, 2, 0, newTestDataViewShard("ch-0", 10, 100, 200)),
+	}
+	catalog.versionStates = map[int64]*viewpb.CollectionDataVersionState{
+		1: {
+			CollectionId:              1,
+			AllocatedStreamingVersion: 2,
+		},
+	}
+
+	version, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+		CollectionID: 1,
+		VChannels:    []string{"ch-0"},
+	})
+
+	require.NoError(t, err)
+	requireDataVersion(t, version, 2, 0)
+	requireDataVersion(t, catalog.versionStates[1].GetPublishedDataVersion(), 2, 0)
+	view, err := manager.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, []int64{100, 200}, publishedSegmentIDs(t, view, "ch-0", 10))
 }
 
 func loadableMembership(collectionID, partitionID, segmentID int64, vchannel string) SegmentMembership {

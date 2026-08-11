@@ -22,6 +22,7 @@ import (
 	"github.com/samber/lo"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/views/coord/balancer"
@@ -233,6 +234,24 @@ func (m *meta) loadablePublishedMemberships(segmentIDs []int64) ([]dataview.Segm
 	return memberships, true
 }
 
+func (m *meta) loadableCompactionMemberships(segmentIDs []int64) ([]dataview.SegmentMembership, bool) {
+	memberships := make([]dataview.SegmentMembership, 0, len(segmentIDs))
+	for _, segmentID := range segmentIDs {
+		segment := m.segments.GetSegment(segmentID)
+		if segment == nil {
+			return nil, false
+		}
+		if segment.GetState() == commonpb.SegmentState_Dropped || segment.GetNumOfRows() == 0 {
+			continue
+		}
+		if !isImmediatelyLoadableFlushSegment(segment) {
+			return nil, false
+		}
+		memberships = append(memberships, publishedSegmentMembership(segment))
+	}
+	return memberships, true
+}
+
 func (m *meta) commitDataViewRewrite(
 	ctx context.Context,
 	collectionID int64,
@@ -253,6 +272,24 @@ func (m *meta) commitDataViewRewrite(
 		Add:    memberships,
 		Remove: append([]int64(nil), removeSegmentIDs...),
 	})
+}
+
+func (m *meta) commitDataViewStreaming(
+	ctx context.Context,
+	collectionID int64,
+	addSegmentIDs []int64,
+) (*viewpb.DataVersion, error) {
+	if m.dataViewManager == nil {
+		return nil, nil
+	}
+	memberships, ready := m.loadablePublishedMemberships(addSegmentIDs)
+	if !ready {
+		return nil, merr.WrapErrServiceUnavailableMsg(
+			"published membership for collection %d is not loadable",
+			collectionID,
+		)
+	}
+	return m.dataViewManager.CommitStreamingView(ctx, collectionID, PublishedMutation{Add: memberships})
 }
 
 func (m *meta) segmentIDsForPartition(collectionID int64, partitionIDs map[int64]struct{}) []int64 {

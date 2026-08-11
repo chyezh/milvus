@@ -486,7 +486,13 @@ func applyExternalCollectionSegmentUpdateForBaseline(
 		addSegmentIDs := lo.Map(normalizedUpdatedSegments, func(segment *datapb.SegmentInfo, _ int) int64 {
 			return segment.GetID()
 		})
-		if _, err := mt.commitDataViewRewrite(ctx, collectionID, addSegmentIDs, segmentsToDrop); err != nil {
+		var err error
+		if len(segmentsToDrop) == 0 && len(addSegmentIDs) > 0 {
+			_, err = mt.commitDataViewStreaming(ctx, collectionID, addSegmentIDs)
+		} else {
+			_, err = mt.commitDataViewRewrite(ctx, collectionID, addSegmentIDs, segmentsToDrop)
+		}
+		if err != nil {
 			return merr.Wrap(err, "publish DataView after external collection refresh")
 		}
 	}

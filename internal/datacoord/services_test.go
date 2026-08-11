@@ -6041,10 +6041,75 @@ func TestHandleCommitVchannelRPC_StoresCommitTimestamp(t *testing.T) {
 		assert.False(t, seg.GetIsImporting())
 	}
 	require.Empty(t, manager.publishedMutations)
-	require.Len(t, manager.rewriteMutations, 1)
-	require.ElementsMatch(t, segIDs, lo.Map(manager.rewriteMutations[0].Add, func(membership dataview.SegmentMembership, _ int) int64 {
+	require.Len(t, manager.streamingMutations, 1)
+	require.ElementsMatch(t, segIDs, lo.Map(manager.streamingMutations[0].Add, func(membership dataview.SegmentMembership, _ int) int64 {
 		return membership.SegmentID
 	}))
+}
+
+func TestHandleCommitVchannelRPC_PublishesOnlyFinalSortedImportMembership(t *testing.T) {
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	importMeta, err := NewImportMeta(ctx, meta.catalog, nil, meta)
+	require.NoError(t, err)
+	require.NoError(t, importMeta.AddJob(ctx, &importJob{
+		ImportJob: &datapb.ImportJob{
+			JobID:        3001,
+			CollectionID: 100,
+			State:        internalpb.ImportJobState_Uncommitted,
+			Vchannels:    []string{"vchan-0"},
+		},
+		tr: timerecord.NewTimeRecorder("sorted import job"),
+	}))
+	task := &importTask{tr: timerecord.NewTimeRecorder("sorted import task")}
+	task.task.Store(&datapb.ImportTaskV2{
+		JobID:            3001,
+		TaskID:           4001,
+		CollectionID:     100,
+		SegmentIDs:       []int64{10},
+		SortedSegmentIDs: []int64{20},
+		State:            datapb.ImportTaskStateV2_Completed,
+	})
+	require.NoError(t, importMeta.AddTask(ctx, task))
+	require.NoError(t, meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            10,
+		CollectionID:  100,
+		PartitionID:   10,
+		InsertChannel: "vchan-0",
+		State:         commonpb.SegmentState_Dropped,
+		IsImporting:   true,
+	})))
+	require.NoError(t, meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            20,
+		CollectionID:  100,
+		PartitionID:   10,
+		InsertChannel: "vchan-0",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+		IsImporting:   true,
+	})))
+	manager := newDataViewManager(meta.catalog, meta)
+	_, err = manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 100, VChannels: []string{"vchan-0"}})
+	require.NoError(t, err)
+	meta.dataViewManager = manager
+	server := &Server{importMeta: importMeta, meta: meta, dataViewManager: manager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	resp, err := server.HandleCommitVchannel(ctx, &datapb.HandleCommitVchannelRequest{
+		JobId:           3001,
+		Vchannel:        "vchan-0",
+		CommitTimestamp: 500,
+	})
+
+	require.NoError(t, err)
+	require.NoError(t, merr.Error(resp))
+	view, err := manager.LatestVisibleDataView(ctx, 100)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), view.GetDataVersion().GetStreamingVersion())
+	require.Zero(t, view.GetDataVersion().GetCompactVersion())
+	require.Equal(t, []int64{20}, view.GetShards()[0].GetPartitions()[0].GetSegmentIds())
+	require.Contains(t, importMeta.GetJob(ctx, 3001).GetCommittedVchannels(), "vchan-0")
 }
 
 func TestHandleCommitVchannelRPC_MissingJobReturnsError(t *testing.T) {

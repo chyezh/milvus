@@ -92,6 +92,72 @@ func (m *dataViewManager) CommitPublishedView(
 	return cloneDataVersion(assignedVersion), nil
 }
 
+// CommitStreamingView atomically allocates and publishes a new Streaming
+// epoch for an explicit add-only membership mutation. Membership equality is
+// the durable idempotency proof for retries after a lost response.
+func (m *dataViewManager) CommitStreamingView(
+	ctx context.Context,
+	collectionID int64,
+	mutation PublishedMutation,
+) (*viewpb.DataVersion, error) {
+	if len(mutation.Remove) != 0 || len(mutation.Add) == 0 {
+		return nil, merr.WrapErrServiceInternalMsg("Streaming DataView mutation for collection %d must be add-only", collectionID)
+	}
+	if err := validatePublishedMutation(collectionID, mutation); err != nil {
+		return nil, err
+	}
+	catalog, ok := m.catalog.(publishedDataViewCatalog)
+	if !ok {
+		return nil, merr.WrapErrServiceNotReadyMsg("published data view catalog is not initialized")
+	}
+	state := m.getOrCreateState(collectionID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.dropped {
+		return nil, merr.WrapErrServiceNotReadyMsg("data view collection %d is terminal", collectionID)
+	}
+	if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
+		return nil, err
+	}
+
+	next := publishedMutationBase(collectionID, state.latestResident)
+	changed := applyPublishedMutation(next, mutation)
+	for _, membership := range mutation.Add {
+		if !dataViewContainsMembership(next, membership) {
+			return nil, merr.WrapErrDataIntegrityMsg(
+				"Streaming DataView mutation for collection %d does not contain segment %d at %s/%d",
+				collectionID,
+				membership.SegmentID,
+				membership.VChannel,
+				membership.PartitionID,
+			)
+		}
+	}
+	if !changed {
+		return dataVersionFromView(state.latestResident), nil
+	}
+	if pending := minimumPendingStreamingVersion(state.pendingAssigned); pending != 0 {
+		return nil, merr.WrapErrServiceUnavailableMsg(
+			"Streaming DataView mutation for collection %d is waiting for assigned epoch %d/0",
+			collectionID,
+			pending,
+		)
+	}
+	current := state.versionState.GetPublishedDataVersion()
+	if current == nil || current.GetStreamingVersion() == 0 {
+		return nil, merr.WrapErrServiceNotReadyMsg("collection %d has no published Streaming epoch", collectionID)
+	}
+	nextStreaming := state.versionState.GetAllocatedStreamingVersion()
+	if current.GetStreamingVersion() > nextStreaming {
+		nextStreaming = current.GetStreamingVersion()
+	}
+	next.DataVersion = &viewpb.DataVersion{StreamingVersion: nextStreaming + 1}
+	if err := m.persistPublishedLocked(ctx, state, catalog, next); err != nil {
+		return nil, err
+	}
+	return dataVersionFromView(next), nil
+}
+
 // CommitRewrite atomically publishes an independent rewrite of the current
 // published membership at the next compact version.
 func (m *dataViewManager) CommitRewrite(
@@ -170,6 +236,7 @@ func (m *dataViewManager) recoverPublicationStateLocked(
 			}
 		}
 	}
+	recoveredAllocated := state.versionState.GetAllocatedStreamingVersion()
 	durable, published, err := recoverPublishedDataView(ctx, catalog, state.collectionID)
 	if err != nil {
 		return err
@@ -178,6 +245,9 @@ func (m *dataViewManager) recoverPublicationStateLocked(
 		durable = &viewpb.CollectionDataVersionState{CollectionId: state.collectionID}
 	} else {
 		durable = proto.Clone(durable).(*viewpb.CollectionDataVersionState)
+	}
+	if recoveredAllocated > durable.GetAllocatedStreamingVersion() {
+		durable.AllocatedStreamingVersion = recoveredAllocated
 	}
 	state.versionState = durable
 	state.persistedAllocated = durable.GetAllocatedStreamingVersion()
@@ -241,10 +311,9 @@ func verifyDurableAssignedPublication(
 		return merr.Wrapf(err, "list DataView snapshots for assigned publication %d/0 of collection %d",
 			assignedVersion.GetStreamingVersion(), collectionID)
 	}
+	var target *viewpb.DataViewOfCollection
+	var predecessor *viewpb.DataViewOfCollection
 	for _, view := range views {
-		if !proto.Equal(view.GetDataVersion(), assignedVersion) {
-			continue
-		}
 		if view.GetCollectionId() != collectionID {
 			return merr.WrapErrDataIntegrityMsg(
 				"assigned publication collection mismatch: requested=%d, stored=%d",
@@ -252,54 +321,50 @@ func verifyDurableAssignedPublication(
 				view.GetCollectionId(),
 			)
 		}
-		for _, membership := range mutation.Add {
-			if !dataViewContainsMembership(view, membership) {
+		switch comparison := compareDataVersion(view.GetDataVersion(), assignedVersion); {
+		case comparison == 0:
+			if target != nil && !proto.Equal(canonicalDataViewClone(target), canonicalDataViewClone(view)) {
 				return merr.WrapErrDataIntegrityMsg(
-					"assigned publication %d/0 for collection %d does not contain segment %d at %s/%d",
+					"assigned publication %d/0 for collection %d has conflicting durable snapshots",
 					assignedVersion.GetStreamingVersion(),
 					collectionID,
-					membership.SegmentID,
-					membership.VChannel,
-					membership.PartitionID,
 				)
 			}
+			target = view
+		case comparison < 0 && (predecessor == nil || compareDataVersion(view.GetDataVersion(), predecessor.GetDataVersion()) > 0):
+			predecessor = view
 		}
-		for _, segmentID := range mutation.Remove {
-			if dataViewContainsSegment(view, segmentID) {
-				return merr.WrapErrDataIntegrityMsg(
-					"assigned publication %d/0 for collection %d still contains removed segment %d",
-					assignedVersion.GetStreamingVersion(),
-					collectionID,
-					segmentID,
-				)
-			}
-		}
-		return nil
 	}
-	return merr.WrapErrDataIntegrityMsg(
-		"assigned publication %d/0 is missing for collection %d",
-		assignedVersion.GetStreamingVersion(),
-		collectionID,
-	)
-}
+	if target == nil {
+		return merr.WrapErrDataIntegrityMsg(
+			"assigned publication %d/0 is missing for collection %d",
+			assignedVersion.GetStreamingVersion(),
+			collectionID,
+		)
+	}
+	if assignedVersion.GetStreamingVersion() > 1 && predecessor == nil {
+		return merr.WrapErrDataIntegrityMsg(
+			"assigned publication %d/0 for collection %d has no durable predecessor for exact retry verification",
+			assignedVersion.GetStreamingVersion(),
+			collectionID,
+		)
+	}
 
-func dataViewContainsMembership(view *viewpb.DataViewOfCollection, membership SegmentMembership) bool {
-	for _, shard := range view.GetShards() {
-		if shard.GetVchannel() != membership.VChannel {
-			continue
-		}
-		for _, partition := range shard.GetPartitions() {
-			if partition.GetPartitionId() != membership.PartitionID {
-				continue
-			}
-			for _, segmentID := range partition.GetSegmentIds() {
-				if segmentID == membership.SegmentID {
-					return true
-				}
-			}
-		}
+	expected := publishedMutationBase(collectionID, predecessor)
+	applyPublishedMutation(expected, mutation)
+	expected.DataVersion = cloneDataVersion(assignedVersion)
+	expected = cloneDataViewWithoutDeleteTimetick(expected)
+	canonicalizeDataView(expected)
+	actual := cloneDataViewWithoutDeleteTimetick(target)
+	canonicalizeDataView(actual)
+	if !proto.Equal(expected, actual) {
+		return merr.WrapErrDataIntegrityMsg(
+			"assigned publication %d/0 for collection %d does not exactly match the requested mutation",
+			assignedVersion.GetStreamingVersion(),
+			collectionID,
+		)
 	}
-	return false
+	return nil
 }
 
 func (m *dataViewManager) persistPublishedLocked(

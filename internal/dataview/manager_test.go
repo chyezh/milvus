@@ -1149,6 +1149,66 @@ func TestRecoverManagerLoadsAllDataViewsWithoutSegmentMetaRepair(t *testing.T) {
 	require.Len(t, catalog.views, 2)
 }
 
+func TestRecoverManagerUsesDurablePublishedHeadInsteadOfNewerOrphan(t *testing.T) {
+	ctx := context.Background()
+	head := newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100))
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			head,
+			newTestDataView(1, 2, 0, newTestDataViewShard("ch-1", 10, 200)),
+		},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 2,
+				PublishedDataVersion:      &viewpb.DataVersion{StreamingVersion: 1},
+			},
+		},
+	}
+	store := &fakeDataViewSegmentStore{segments: make(map[int64]*Segment)}
+
+	manager, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+	ref, err := manager.LatestPublished(ctx, 1)
+	require.NoError(t, err)
+	t.Cleanup(ref.Deref)
+	require.Equal(t, int64(1), ref.DataView().Version().StreamingVersion)
+	require.Equal(t, []int64{100}, ref.DataView().SegmentIDs("ch-1", 10))
+
+	version, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-1"}})
+	require.NoError(t, err)
+	requireDataVersion(t, version, 1, 0)
+}
+
+func TestRecoverManagerBackfillsDurableHeadForLegacySnapshots(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
+			newTestDataView(1, 2, 0, newTestDataViewShard("ch-1", 10, 100, 200)),
+		},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 2,
+			},
+		},
+	}
+	store := &fakeDataViewSegmentStore{segments: make(map[int64]*Segment)}
+
+	manager, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+	version, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-1"}})
+	require.NoError(t, err)
+	requireDataVersion(t, version, 2, 0)
+	requireDataVersion(t, catalog.versionStates[1].GetPublishedDataVersion(), 2, 0)
+
+	ref, err := manager.LatestPublished(ctx, 1)
+	require.NoError(t, err)
+	t.Cleanup(ref.Deref)
+	require.Equal(t, []int64{100, 200}, ref.DataView().SegmentIDs("ch-1", 10))
+}
+
 func TestDataViewManagerRepairCollectionsAlignsSegmentMetaAfterRecover(t *testing.T) {
 	ctx := context.Background()
 	catalog := &fakeDataViewCatalog{
