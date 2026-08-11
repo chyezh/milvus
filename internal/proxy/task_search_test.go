@@ -20,6 +20,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -48,6 +50,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/function/embedding"
 	"github.com/milvus-io/milvus/internal/util/function/highlight"
 	"github.com/milvus-io/milvus/internal/util/reduce"
+	"github.com/milvus-io/milvus/internal/util/searchutil"
 	"github.com/milvus-io/milvus/internal/util/segcore"
 	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
@@ -62,6 +65,86 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
+
+func TestSearchTaskWritesRetainedMemoryAccounting(t *testing.T) {
+	outputPath := filepath.Join(t.TempDir(), "retained-memory.jsonl")
+	chunk := &internalpb.SearchResults{
+		ResultData: &schemapb.SearchResultData{
+			Ids: &schemapb.IDs{IdField: &schemapb.IDs_IntId{
+				IntId: &schemapb.LongArray{Data: []int64{1, 2}},
+			}},
+		},
+	}
+	accounting := searchutil.NewRetainedMemoryAccounting(10, 1, 2)
+	accounting.SetMode(searchutil.RetainedMemoryModeBatch)
+	accounting.Retain(chunk, searchutil.RetainedMemoryBatchResults, chunk)
+	accounting.Release(chunk, chunk)
+	result := &milvuspb.SearchResults{
+		Status: merr.Success(),
+		Results: &schemapb.SearchResultData{
+			Ids: &schemapb.IDs{IdField: &schemapb.IDs_IntId{
+				IntId: &schemapb.LongArray{Data: []int64{1, 2}},
+			}},
+		},
+	}
+	task := &searchTask{
+		result:                   result,
+		retainedMemory:           accounting,
+		retainedMemoryOutputPath: outputPath,
+	}
+
+	task.finishRetainedMemoryAccounting(context.Background())
+	task.finishRetainedMemoryAccounting(context.Background())
+
+	encoded, err := os.ReadFile(outputPath)
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(string(encoded), "\n"))
+	var snapshot searchutil.RetainedMemorySnapshot
+	require.NoError(t, json.Unmarshal(encoded, &snapshot))
+	require.Equal(t, searchutil.RetainedMemoryModeBatch, snapshot.Mode)
+	require.Equal(t, int64(proto.Size(result)), snapshot.FinalResponseBytes)
+	require.Zero(t, snapshot.CurrentRetainedBytes)
+	require.Equal(t, snapshot.AcceptedBytesTotal, snapshot.ReleasedBytesTotal)
+}
+
+func TestAppendFinalSearchChunkPreservesOrderAndAppliesOffset(t *testing.T) {
+	output := &schemapb.SearchResultData{
+		NumQueries: 2,
+		TopK:       2,
+		Ids:        &schemapb.IDs{},
+		Topks:      make([]int64, 2),
+	}
+	seenPerQuery := make([]int64, 2)
+	chunks := []*schemapb.SearchResultData{
+		{
+			NumQueries: 2,
+			TopK:       3,
+			Topks:      []int64{3, 1},
+			Ids: &schemapb.IDs{IdField: &schemapb.IDs_IntId{
+				IntId: &schemapb.LongArray{Data: []int64{10, 11, 12, 20}},
+			}},
+			Scores: []float32{-0.1, -0.2, -0.3, -1.0},
+		},
+		{
+			NumQueries: 2,
+			TopK:       3,
+			Topks:      []int64{0, 2},
+			Ids: &schemapb.IDs{IdField: &schemapb.IDs_IntId{
+				IntId: &schemapb.LongArray{Data: []int64{21, 22}},
+			}},
+			Scores: []float32{-1.1, -1.2},
+		},
+	}
+
+	for _, chunk := range chunks {
+		_, err := appendFinalSearchChunk(output, chunk, seenPerQuery, 1, 2, metric.L2)
+		require.NoError(t, err)
+	}
+
+	require.Equal(t, []int64{11, 12, 21, 22}, output.GetIds().GetIntId().GetData())
+	require.Equal(t, []float32{0.2, 0.3, 1.1, 1.2}, output.GetScores())
+	require.Equal(t, []int64{2, 2}, output.GetTopks())
+}
 
 func TestSearchTaskFillResultSkipsTopksInsufficientForSearchAggregation(t *testing.T) {
 	aggCtx, err := search_agg.NewContext(1, []search_agg.LevelContext{{OwnFieldIDs: []int64{101}, Size: 1}}, nil, nil)

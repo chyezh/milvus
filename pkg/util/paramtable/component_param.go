@@ -2410,8 +2410,11 @@ type proxyConfig struct {
 
 	GracefulStopTimeout ParamItem `refreshable:"true"`
 
-	SlowQuerySpanInSeconds ParamItem `refreshable:"true"`
-	QueryNodePoolingSize   ParamItem `refreshable:"false"`
+	SlowQuerySpanInSeconds   ParamItem `refreshable:"true"`
+	QueryNodePoolingSize     ParamItem `refreshable:"false"`
+	EnableSearchStreaming    ParamItem `refreshable:"false"`
+	SearchStreamChunkSize    ParamItem `refreshable:"false"`
+	RetainedMemoryOutputPath ParamItem `refreshable:"false"`
 
 	HybridSearchRequeryPolicy ParamItem `refreshable:"true"`
 }
@@ -3051,6 +3054,33 @@ Disabled if the value is less or equal to 0.`,
 		Export:       true,
 	}
 	p.QueryNodePoolingSize.Init(base.mgr)
+
+	p.EnableSearchStreaming = ParamItem{
+		Key:          "proxy.queryView.enableSearchStreaming",
+		Version:      "3.0.0",
+		DefaultValue: "false",
+		Doc:          "route supported Search requests through Streaming Reduce",
+		Export:       true,
+	}
+	p.EnableSearchStreaming.Init(base.mgr)
+
+	p.SearchStreamChunkSize = ParamItem{
+		Key:          "proxy.queryView.searchStreamChunkSize",
+		Version:      "3.0.0",
+		DefaultValue: "1024",
+		Doc:          "maximum number of Units in each Search stream Chunk",
+		Export:       true,
+	}
+	p.SearchStreamChunkSize.Init(base.mgr)
+
+	p.RetainedMemoryOutputPath = ParamItem{
+		Key:          "proxy.queryView.retainedMemoryOutputPath",
+		Version:      "3.0.0",
+		DefaultValue: "",
+		Doc:          "append QueryView iterator retained-memory accounting records to this JSONL file; empty disables accounting",
+		Export:       true,
+	}
+	p.RetainedMemoryOutputPath.Init(base.mgr)
 }
 
 // /////////////////////////////////////////////////////////////////////////////

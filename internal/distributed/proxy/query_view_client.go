@@ -24,6 +24,7 @@ import (
 	streamingnodehandler "github.com/milvus-io/milvus/internal/streamingnode/client/handler"
 	"github.com/milvus-io/milvus/internal/views/queryclient"
 	"github.com/milvus-io/milvus/internal/views/queryclient/resolver"
+	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
 )
 
 type viewQueryClientSetter interface {
@@ -63,7 +64,10 @@ func newDefaultProxyViewQueryClient(etcdCli *clientv3.Client) (queryclient.Clien
 		queryNodeClient.QueryViewClient(),
 	)
 	client := queryclient.NewLegacyViewQueryClient(
-		queryclient.ViewQueryClientConfig{},
+		queryclient.ViewQueryClientConfig{
+			EnableSearchStreaming: paramtable.Get().ProxyCfg.EnableSearchStreaming.GetAsBool(),
+			SearchStreamChunkSize: paramtable.Get().ProxyCfg.SearchStreamChunkSize.GetAsInt(),
+		},
 		queryPlanClient,
 		queryServiceClient,
 		shardResolver,
