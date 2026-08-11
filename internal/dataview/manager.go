@@ -364,6 +364,11 @@ func RecoverManager(ctx context.Context, catalog RecoveryCatalog, segments Segme
 			}
 			manager.retainRecoveredDataViewsThrough(collectionID, published.GetDataVersion())
 			manager.recoverCollectionFromDataViews(collectionID, []*viewpb.DataViewOfCollection{published})
+			state := manager.getOrCreateState(collectionID)
+			state.mu.Lock()
+			state.versionState = proto.Clone(durable).(*viewpb.CollectionDataVersionState)
+			state.persistedAllocated = durable.GetAllocatedStreamingVersion()
+			state.mu.Unlock()
 		}
 	}
 	return manager, nil
@@ -711,13 +716,27 @@ func (m *dataViewManager) repairCollectionWithDataViews(ctx context.Context, col
 	advance := classifyRecoverAdvance(latestPersisted, expected, m.segments)
 	expected.DataVersion = nextDataVersion(latestPersisted, advance)
 	toPersist := cloneDataViewWithoutDeleteTimetick(expected)
-	if err := m.catalog.SaveDataView(ctx, toPersist); err != nil {
-		state.mu.Unlock()
-		return err
+	if catalog, ok := m.catalog.(publishedDataViewCatalog); ok {
+		published := state.versionState.GetPublishedDataVersion()
+		if published == nil || latestPersisted == nil || compareDataVersion(published, latestPersisted.GetDataVersion()) != 0 {
+			if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
+				state.mu.Unlock()
+				return err
+			}
+		}
+		if err := m.persistPublishedLocked(ctx, state, catalog, toPersist); err != nil {
+			state.mu.Unlock()
+			return err
+		}
+	} else {
+		if err := m.catalog.SaveDataView(ctx, toPersist); err != nil {
+			state.mu.Unlock()
+			return err
+		}
+		m.rememberRecoveredDataView(toPersist)
+		state.latestResident = canonicalDataViewClone(toPersist)
 	}
-	m.rememberRecoveredDataView(toPersist)
 
-	state.latestResident = canonicalDataViewClone(toPersist)
 	if m.isDataViewVisibleFromBase(ctx, latestPersisted, state.latestResident, pendingRetainedInputs) {
 		state.latestVisible = m.withDeleteTimetick(ctx, state.latestResident)
 	} else {

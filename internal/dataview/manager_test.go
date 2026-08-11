@@ -1299,6 +1299,46 @@ func TestDataViewManagerRepairCollectionsAlignsSegmentMetaAfterRecover(t *testin
 	require.Equal(t, []int64{100, 101}, visible.GetShards()[0].GetPartitions()[0].GetSegmentIds())
 }
 
+func TestRecoverManagerRepairAtomicallyAdvancesPublishedHead(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
+		},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 7,
+				PublishedDataVersion:      &viewpb.DataVersion{StreamingVersion: 1},
+			},
+		},
+	}
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{
+		100: newDataViewTestSegment(1, 10, 100, "ch-1", 1000),
+		101: newDataViewTestSegment(1, 10, 101, "ch-1", 1100),
+	}}
+
+	manager, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+	require.NoError(t, manager.RepairCollections(ctx, []int64{1}))
+
+	state, err := catalog.GetDataViewVersionState(ctx, 1)
+	require.NoError(t, err)
+	requireDataVersion(t, state.GetPublishedDataVersion(), 2, 0)
+	require.Equal(t, int64(7), state.GetAllocatedStreamingVersion())
+	visible, err := manager.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	requireDataVersion(t, visible.GetDataVersion(), 2, 0)
+	require.Equal(t, []int64{100, 101}, publishedSegmentIDs(t, visible, "ch-1", 10))
+
+	restarted, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+	restartedVisible, err := restarted.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	requireDataVersion(t, restartedVisible.GetDataVersion(), 2, 0)
+	require.Equal(t, []int64{100, 101}, publishedSegmentIDs(t, restartedVisible, "ch-1", 10))
+}
+
 func TestDataViewManagerRecoverDoesNotReaddTruncatedSegments(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, store := newTestDataViewManager()
