@@ -61,7 +61,7 @@ func (m *dataViewManager) AssignFlushVersion(
 		return nil, merr.WrapErrSegmentNotFound(segmentID)
 	}
 	if segment.GetCollectionID() != collectionID {
-		return nil, merr.WrapErrDataIntegrityMsg(
+		return nil, merr.WrapErrParameterInvalidMsg(
 			"flush segment %d belongs to collection %d, requested collection %d",
 			segmentID,
 			segment.GetCollectionID(),
@@ -98,6 +98,7 @@ func (m *dataViewManager) AssignFlushVersion(
 			err,
 		)
 	}
+	advanceAllocatedStreamingVersionLocked(state, assigned.GetStreamingVersion())
 	if err := m.saveAllocatedStreamingVersionLocked(ctx, state, catalog, assigned.GetStreamingVersion()); err != nil {
 		return nil, err
 	}
@@ -147,6 +148,15 @@ func (m *dataViewManager) recoverFlushVersionStateLocked(
 	state.versionState = durable
 	state.versionStateRecovered = true
 	return nil
+}
+
+func advanceAllocatedStreamingVersionLocked(state *collectionDataViewState, streamingVersion int64) {
+	if streamingVersion <= state.versionState.GetAllocatedStreamingVersion() {
+		return
+	}
+	next := proto.Clone(state.versionState).(*viewpb.CollectionDataVersionState)
+	next.AllocatedStreamingVersion = streamingVersion
+	state.versionState = next
 }
 
 func (m *dataViewManager) saveAllocatedStreamingVersionLocked(

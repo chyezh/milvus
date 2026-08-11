@@ -144,7 +144,7 @@ func TestRecoveredDataCheckpointDoesNotProveFinalCommit(t *testing.T) {
 	assert.Equal(t, []int64{100}, recorder.commitSegmentIDs)
 }
 
-func TestFinalCommitRetriesMissingDataVersion(t *testing.T) {
+func TestFinalCommitAcceptsLegacyMissingDataVersion(t *testing.T) {
 	recorder := &segmentTaskRecorder{returnNilVersion: true}
 	segment := newFinalCommitTestSegment(recorder, 100)
 	task := &commitL1SegmentTask{
@@ -152,7 +152,23 @@ func TestFinalCommitRetriesMissingDataVersion(t *testing.T) {
 		timetick:        30,
 	}
 
+	require.NoError(t, task.Execute(context.Background()))
+	assert.True(t, task.Done())
+	assert.True(t, segment.finalCommitDone)
+	assert.Nil(t, segment.AssignmentMeta().GetSealedAtDataVersion())
+}
+
+func TestFinalCommitRetriesDataCoordError(t *testing.T) {
+	businessErr := errors.New("datacoord unavailable")
+	recorder := &segmentTaskRecorder{commitErr: businessErr}
+	segment := newFinalCommitTestSegment(recorder, 100)
+	task := &commitL1SegmentTask{
+		segmentTaskBase: segmentTaskBase{segment: segment},
+		timetick:        30,
+	}
+
 	err := task.Execute(context.Background())
+	require.ErrorIs(t, err, businessErr)
 	require.True(t, errors.Is(err, nodescheduler.ErrDelay))
 	assert.False(t, task.Done())
 	assert.False(t, segment.finalCommitDone)
@@ -175,6 +191,7 @@ func (t *testSegmentTask) Execute(ctx context.Context) error {
 type segmentTaskRecorder struct {
 	commitSegmentIDs []int64
 	commitVersions   []*viewpb.DataVersion
+	commitErr        error
 	returnNilVersion bool
 }
 
@@ -184,6 +201,9 @@ func (r *segmentTaskRecorder) EnsureGrowingSegment(context.Context, *streamingpb
 
 func (r *segmentTaskRecorder) CommitL1Segment(_ context.Context, meta *streamingpb.SegmentAssignmentMeta) (*viewpb.DataVersion, error) {
 	r.commitSegmentIDs = append(r.commitSegmentIDs, meta.GetSegmentId())
+	if r.commitErr != nil {
+		return nil, r.commitErr
+	}
 	if r.returnNilVersion {
 		return nil, nil
 	}

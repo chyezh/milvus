@@ -6,7 +6,6 @@ import (
 	"github.com/cockroachdb/errors"
 	"go.uber.org/atomic"
 
-	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
@@ -101,16 +100,14 @@ func (t *commitL1SegmentTask) Execute(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if sealedAt == nil {
-			return merr.WrapErrServiceUnavailableMsg(
-				"DataCoord returned no DataVersion for flushed segment %d",
-				meta.GetSegmentId(),
-			)
-		}
 
 		segment.mu.Lock()
 		segment.MarkPendingDataDurable(t.timetick)
 		segment.finalCommitDone = true
+		// A successful response without DataVersion is valid during a rolling
+		// upgrade from a legacy DataCoord. New DataCoord versions guarantee the
+		// version in successful responses; actual RPC/status failures still return
+		// above and remain retriable through segmentTaskBase.execute.
 		sealedEvent, sealed := segment.markSealedAtDataVersionLocked(sealedAt)
 		segment.mu.Unlock()
 		segment.NotifyDataUpdated()

@@ -27,6 +27,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 func TestAssignFlushVersionFirstAndRepeat(t *testing.T) {
@@ -123,6 +124,40 @@ func TestAssignFlushVersionStateSaveFailureRepairsOnRetry(t *testing.T) {
 	require.Equal(t, int64(1), retried.GetStreamingVersion())
 	require.Equal(t, int64(1), catalog.versionStates[1].GetAllocatedStreamingVersion())
 	require.Equal(t, 1, store.assignmentSaves)
+}
+
+func TestAssignFlushVersionStateSaveFailureDoesNotReuseVersion(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, store := newTestDataViewManager()
+	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
+	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
+	catalog.saveVersionErrOnce = errors.New("state save failed")
+
+	_, err := manager.AssignFlushVersion(ctx, 1, 100)
+	require.Error(t, err)
+	require.Equal(t, int64(1), store.segments[100].GetSealedAtDataVersion().GetStreamingVersion())
+	require.Nil(t, catalog.versionStates[1])
+
+	second, err := manager.AssignFlushVersion(ctx, 1, 101)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), second.GetStreamingVersion())
+	require.Equal(t, int64(2), catalog.versionStates[1].GetAllocatedStreamingVersion())
+
+	first, err := manager.AssignFlushVersion(ctx, 1, 100)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), first.GetStreamingVersion())
+	require.Equal(t, int64(2), catalog.versionStates[1].GetAllocatedStreamingVersion())
+	require.Equal(t, 2, store.assignmentSaves)
+}
+
+func TestAssignFlushVersionCollectionMismatchIsInputError(t *testing.T) {
+	ctx := context.Background()
+	manager, _, store := newTestDataViewManager()
+	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
+
+	_, err := manager.AssignFlushVersion(ctx, 2, 100)
+	require.ErrorIs(t, err, merr.ErrParameterInvalid)
+	require.Equal(t, merr.InputError, merr.GetErrorType(err))
 }
 
 func TestAssignFlushVersionRecoveryIncludesLegacySnapshotVersion(t *testing.T) {
