@@ -49,7 +49,7 @@ type ModuleConfig struct {
 	NodeScheduler              nodescheduler.Scheduler
 	QueryRuntimeDispatcher     *queryresource.Dispatcher
 	QueryViewLoadInfoProvider  queryresource.LoadInfoProvider
-	RecoveryBoundaryReached    bool
+	DataObservedTimeTick       uint64
 }
 
 // VChannelRecoveryModule owns all recovery_storage state for one vchannel.
@@ -71,7 +71,7 @@ type VChannelRecoveryModule struct {
 	cleanupSegments map[int64]*segment.SegmentView
 	pendingCleanup  map[int64]*segment.SegmentView
 
-	latestInsertTimeTick uint64
+	dataObservedTimeTick uint64
 
 	transformLog *transformlog.TransformLog
 
@@ -80,9 +80,6 @@ type VChannelRecoveryModule struct {
 	externalOnSegmentSealed func(walview.SegmentSealedEvent)
 
 	metaAndData bool
-	// recoveryBoundaryReached becomes true only after data replay observes the
-	// RecoveryBarrier. Query resources cannot snapshot WAL state before then.
-	recoveryBoundaryReached bool
 
 	queryTransformLogStream wal.TransformLogStream
 	queryResources          *queryresource.Manager
@@ -114,7 +111,7 @@ func newModule(config ModuleConfig, adoptVChannelMeta bool) (*VChannelRecoveryMo
 		segmentPackWriter:       config.SegmentPackWriter,
 		externalOnSegmentSealed: config.OnSegmentSealed,
 		queryTransformLogStream: config.TransformLogStream,
-		recoveryBoundaryReached: config.RecoveryBoundaryReached,
+		dataObservedTimeTick:    config.DataObservedTimeTick,
 	}
 	module.queryResources = queryresource.NewManager(queryresource.Config{
 		Builders:         config.QueryRuntimeModuleBuilders,
@@ -220,13 +217,10 @@ func (m *VChannelRecoveryModule) ObserveMessage(ctx context.Context, msg message
 	if m.transformLog != nil {
 		m.transformLog.ObserveMessage(ctx, msg)
 	}
-	m.observeQueryResourceEvent(ctx, walview.VChannelResourceEvent{Message: raw})
-	if raw.MessageType() == message.MessageTypeRecoveryBarrier && msg.Ack() != nil {
-		m.recoveryBoundaryReached = true
-		if m.metaAndData {
-			m.queryResources.TryBuildLocked(m.queryWALViewLocked)
-		}
+	if msg.Ack() != nil && raw.TimeTick() > m.dataObservedTimeTick {
+		m.dataObservedTimeTick = raw.TimeTick()
 	}
+	m.observeQueryResourceEvent(ctx, walview.VChannelResourceEvent{Message: raw})
 }
 
 func (m *VChannelRecoveryModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
@@ -447,23 +441,20 @@ func (m *VChannelRecoveryModule) handleInsertMessage(
 	msg message.ImmutableInsertMessageV1,
 	ack messageack.Record,
 ) {
-	changed := false
 	for _, partition := range msg.Header().GetPartitions() {
 		view := m.segments[partition.GetSegmentAssignment().GetSegmentId()]
 		if view == nil {
 			continue
 		}
-		changed = view.ObserveInsertMessageV1(ctx, msg, partition, ack) || changed
+		view.ObserveInsertMessageV1(ctx, msg, partition, ack)
 		m.markSegmentUpdatedLocked(view.ID())
 	}
-	m.markLatestInsertTimeTick(msg.VChannel(), msg.TimeTick(), changed)
 }
 
 func (m *VChannelRecoveryModule) handleTxnMessage(ctx context.Context, msg message.ImmutableTxnMessage, ack messageack.Record) {
 	if msg == nil {
 		return
 	}
-	changed := false
 	observed := make(map[int64]struct{})
 	_ = msg.RangeOver(func(inner message.ImmutableMessage) error {
 		if inner.MessageType() != message.MessageTypeInsert {
@@ -480,12 +471,11 @@ func (m *VChannelRecoveryModule) handleTxnMessage(ctx context.Context, msg messa
 				continue
 			}
 			observed[id] = struct{}{}
-			changed = view.ObserveTxnMessage(ctx, msg, ack) || changed
+			view.ObserveTxnMessage(ctx, msg, ack)
 			m.markSegmentUpdatedLocked(id)
 		}
 		return nil
 	})
-	m.markLatestInsertTimeTick(msg.VChannel(), msg.TimeTick(), changed)
 }
 
 func (m *VChannelRecoveryModule) handleFlushMessage(
@@ -589,15 +579,6 @@ func (m *VChannelRecoveryModule) segmentSnapshotDataVersion() qviews.DataVersion
 		}
 	}
 	return dataVersion
-}
-
-func (m *VChannelRecoveryModule) markLatestInsertTimeTick(vchannel string, timetick uint64, changed bool) {
-	if vchannel != m.vchannel || !changed {
-		return
-	}
-	if timetick > m.latestInsertTimeTick {
-		m.latestInsertTimeTick = timetick
-	}
 }
 
 func (m *VChannelRecoveryModule) markSegmentUpdatedLocked(segmentID int64) {

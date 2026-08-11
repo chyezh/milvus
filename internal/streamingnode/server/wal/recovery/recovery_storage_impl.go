@@ -207,13 +207,14 @@ func (r *recoveryStorageImpl) initRecoveryModules(
 		syncmgr.BrokerMetaWriter(broker.NewCoordBroker(coord, paramtable.GetNodeID()), paramtable.GetNodeID()),
 	)
 	manager, err := vchannel.NewPChannelRecoveryManager(vchannel.PChannelManagerConfig{
-		PChannel:          r.channel.Name,
-		VChannelMetas:     vchannels,
-		Segments:          segments,
-		TransformLogMetas: transformLogMetas,
-		Runtime:           moduleRuntime,
-		Logger:            r.Logger(),
-		SegmentLifecycle:  segment.NewSegmentLifecycleWriter(coord, paramtable.GetNodeID()),
+		PChannel:               r.channel.Name,
+		DataCheckpointTimeTick: r.checkpoint.DataCheckpoint.TimeTick,
+		VChannelMetas:          vchannels,
+		Segments:               segments,
+		TransformLogMetas:      transformLogMetas,
+		Runtime:                moduleRuntime,
+		Logger:                 r.Logger(),
+		SegmentLifecycle:       segment.NewSegmentLifecycleWriter(coord, paramtable.GetNodeID()),
 		SegmentPackWriter: segment.NewBulkPackWriter(
 			resource.Resource().ChunkManager(),
 			idalloc.NewMAllocator(resource.Resource().IDAllocator()),

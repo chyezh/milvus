@@ -61,7 +61,7 @@ func (m *VChannelRecoveryModule) observeQueryResourceEvent(ctx context.Context, 
 }
 
 func (m *VChannelRecoveryModule) queryWALViewLocked(meta *viewpb.QueryViewMeta) (walview.VChannelWALView, bool) {
-	if m == nil || !m.recoveryBoundaryReached || m.vchannelView == nil || m.transformLog == nil || m.queryTransformLogStream == nil {
+	if m == nil || m.vchannelView == nil || m.transformLog == nil || m.queryTransformLogStream == nil {
 		return walview.VChannelWALView{}, false
 	}
 	vchannelSnapshot, ok := m.vchannelView.WALViewSnapshot()
@@ -78,7 +78,7 @@ func (m *VChannelRecoveryModule) queryWALViewLocked(meta *viewpb.QueryViewMeta) 
 		return walview.VChannelWALView{}, false
 	}
 	baseTransformTimeTick := m.transformLog.LatestTimeTick()
-	baseGrowingTimeTick := max(m.latestInsertTimeTick, baseTransformTimeTick)
+	baseGrowingTimeTick := m.dataObservedTimeTick
 	dataVersion := qviews.FromProtoDataVersion(meta.GetVersion().GetDataVersion())
 	segmentSnapshot := m.visibleSnapshot(baseGrowingTimeTick, dataVersion)
 	return walview.VChannelWALView{

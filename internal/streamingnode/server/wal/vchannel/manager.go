@@ -26,6 +26,9 @@ import (
 
 type PChannelManagerConfig struct {
 	PChannel string
+	// DataCheckpointTimeTick is the persisted data-observed frontier used to
+	// initialize WAL views before live data replay resumes.
+	DataCheckpointTimeTick uint64
 
 	VChannelMetas     map[string]*streamingpb.VChannelMeta
 	Segments          map[int64]*streamingpb.SegmentAssignmentMeta
@@ -60,7 +63,6 @@ type PChannelRecoveryManager struct {
 
 	config                  PChannelManagerConfig
 	metaAndData             atomic.Bool
-	recoveryBoundaryReached atomic.Bool
 	streamManager           *transformlog.StreamManager
 	queryTransformLogStream wal.TransformLogStream
 	queryDispatcher         *queryresource.Dispatcher
@@ -370,9 +372,6 @@ func (m *PChannelRecoveryManager) observeBroadcastMessage(ctx context.Context, m
 		m.syncTransformLogStream(module)
 		return true
 	})
-	if msg.MessageType() == message.MessageTypeRecoveryBarrier && msg.Ack() != nil {
-		m.recoveryBoundaryReached.Store(true)
-	}
 }
 
 func (m *PChannelRecoveryManager) syncTransformLogStream(module *VChannelRecoveryModule) {
@@ -444,7 +443,7 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 		QueryViewLoadInfoProvider:  m.config.QueryViewLoadInfoProvider,
 		NodeScheduler:              m.config.NodeScheduler,
 		QueryRuntimeDispatcher:     m.queryDispatcher,
-		RecoveryBoundaryReached:    m.recoveryBoundaryReached.Load(),
+		DataObservedTimeTick:       m.config.DataCheckpointTimeTick,
 	})
 	if err != nil {
 		return nil, err
