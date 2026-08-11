@@ -597,6 +597,79 @@ func (s *ServerSuite) TestSaveBinlogPathsLostResponseRetryReturnsOriginalAssigne
 	s.Require().Equal(int64(2), latest.GetDataVersion().GetStreamingVersion())
 }
 
+func (s *ServerSuite) TestSaveBinlogPathsEmptyFlushCompletesAssignedVersionAndRetries() {
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableAutoCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableAutoCompaction.Key)
+
+	ctx := context.Background()
+	manager := newDataViewManager(s.testServer.meta.catalog, s.testServer.meta)
+	s.testServer.dataViewManager = manager
+	s.testServer.meta.AddCollection(&collectionInfo{ID: 1, VChannelNames: []string{"ch-1"}})
+	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+		CollectionID: 1,
+		VChannels:    []string{"ch-1"},
+	})
+	s.Require().NoError(err)
+	s.Require().NoError(s.testServer.meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            107,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-1",
+		State:         commonpb.SegmentState_Flushing,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     0,
+	})))
+	request := &datapb.SaveBinlogPathsRequest{
+		SegmentID:    107,
+		CollectionID: 1,
+		PartitionID:  10,
+		SegLevel:     datapb.SegmentLevel_L1,
+		Flushed:      true,
+		CheckPoints: []*datapb.CheckPoint{{
+			SegmentID: 107,
+			NumOfRows: 0,
+		}},
+	}
+
+	first, err := s.testServer.SaveBinlogPaths(ctx, proto.Clone(request).(*datapb.SaveBinlogPathsRequest))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(first))
+	s.Require().Equal("2", first.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+	s.Require().Equal(commonpb.SegmentState_Dropped, s.testServer.meta.GetSegment(ctx, 107).GetState())
+	s.Require().True(proto.Equal(
+		&viewpb.DataVersion{StreamingVersion: 2},
+		s.testServer.meta.GetSegment(ctx, 107).GetSealedAtDataVersion(),
+	))
+	state, err := s.testServer.meta.catalog.GetDataViewVersionState(ctx, 1)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), state.GetAllocatedStreamingVersion())
+	s.Require().True(proto.Equal(&viewpb.DataVersion{StreamingVersion: 2}, state.GetPublishedDataVersion()))
+
+	retried, err := s.testServer.SaveBinlogPaths(ctx, proto.Clone(request).(*datapb.SaveBinlogPathsRequest))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(retried))
+	s.Require().Equal("2", retried.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+	state, err = s.testServer.meta.catalog.GetDataViewVersionState(ctx, 1)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), state.GetAllocatedStreamingVersion())
+
+	s.Require().NoError(s.testServer.meta.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            108,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-1",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     1,
+	})))
+	later, err := s.testServer.meta.commitDataViewStreaming(ctx, 1, []int64{108})
+	s.Require().NoError(err)
+	s.Require().Equal(int64(3), later.GetStreamingVersion())
+	s.Require().Zero(later.GetCompactVersion())
+}
+
 func (s *ServerSuite) TestSaveBinlogPathsReturnsPublicationFailure() {
 	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
 	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
