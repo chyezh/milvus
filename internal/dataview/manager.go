@@ -715,6 +715,12 @@ func (m *dataViewManager) repairCollectionWithDataViews(ctx context.Context, col
 	}
 
 	advance := classifyRecoverAdvance(latestPersisted, expected, m.segments)
+	if advance == dataViewAdvanceStreaming && hasUnpublishedAssignedEpoch(segments, state.versionState.GetPublishedDataVersion()) {
+		state.latestResident = canonicalDataViewClone(latestPersisted)
+		state.latestVisible = m.latestVisiblePersistedView(ctx, persistedViews)
+		state.mu.Unlock()
+		return nil
+	}
 	expected.DataVersion = nextDataVersion(latestPersisted, advance)
 	toPersist := cloneDataViewWithoutDeleteTimetick(expected)
 	if catalog, ok := m.catalog.(publishedDataViewCatalog); ok {
@@ -762,6 +768,16 @@ func recoverableSegmentsAtPublishedHead(
 		result = append(result, segment)
 	}
 	return result
+}
+
+func hasUnpublishedAssignedEpoch(segments []*Segment, published *viewpb.DataVersion) bool {
+	publishedStreaming := published.GetStreamingVersion()
+	for _, segment := range segments {
+		if segment.GetSealedAtDataVersion().GetStreamingVersion() > publishedStreaming {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *dataViewManager) LatestVisibleDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error) {
