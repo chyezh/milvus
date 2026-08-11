@@ -284,7 +284,7 @@ func (m *dataViewManager) drainReadyPublicationsLocked(
 
 		next := publishedMutationBase(state.collectionID, state.latestResident)
 		applyPublishedMutation(next, mutation)
-		if isDataViewMembershipEqual(state.latestResident, next) {
+		if isDataViewMembershipEqual(state.latestResident, next) && !isAssignedRemoveOnlyCompletion(mutation) {
 			return requestedPublished, nil
 		}
 		next.DataVersion = &viewpb.DataVersion{StreamingVersion: nextStreaming}
@@ -297,6 +297,10 @@ func (m *dataViewManager) drainReadyPublicationsLocked(
 			requestedPublished = true
 		}
 	}
+}
+
+func isAssignedRemoveOnlyCompletion(mutation PublishedMutation) bool {
+	return len(mutation.Add) == 0 && len(mutation.Remove) > 0
 }
 
 func verifyDurableAssignedPublication(

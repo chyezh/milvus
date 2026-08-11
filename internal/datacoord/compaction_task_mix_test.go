@@ -282,6 +282,91 @@ func (s *MixCompactionTaskSuite) TestProcess() {
 	})
 }
 
+func (s *MixCompactionTaskSuite) TestProcessMetaSaved_DelayedSortDroppedOutputCompletesAssignedEpoch() {
+	ctx := context.Background()
+	m, err := newMemoryMeta(s.T())
+	s.Require().NoError(err)
+	manager := newDataViewManager(m.catalog, m)
+	_, err = manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+		CollectionID: 1,
+		VChannels:    []string{"ch-0"},
+	})
+	s.Require().NoError(err)
+	m.dataViewManager = manager
+	s.Require().NoError(m.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            50,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-0",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     100,
+	})))
+	base, err := m.commitDataViewStreaming(ctx, 1, []int64{50})
+	s.Require().NoError(err)
+	s.EqualValues(2, base.GetStreamingVersion())
+
+	s.Require().NoError(m.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            100,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-0",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     100,
+		IsInvisible:   true,
+	})))
+	assigned, err := manager.AssignFlushVersion(ctx, 1, 100)
+	s.Require().NoError(err)
+	s.EqualValues(3, assigned.GetStreamingVersion())
+	s.Require().NoError(m.UpdateSegmentsInfo(ctx, UpdateStatusOperator(100, commonpb.SegmentState_Dropped)))
+	s.Require().NoError(m.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            101,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-0",
+		State:         commonpb.SegmentState_Dropped,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     0,
+	})))
+
+	task := newMixCompactionTask(&datapb.CompactionTask{
+		PlanID:         10,
+		TriggerID:      20,
+		CollectionID:   1,
+		PartitionID:    10,
+		Channel:        "ch-0",
+		Type:           datapb.CompactionType_SortCompaction,
+		State:          datapb.CompactionTaskState_meta_saved,
+		InputSegments:  []int64{100},
+		ResultSegments: []int64{101},
+	}, nil, m, newMockVersionManager())
+
+	s.True(task.Process())
+	s.Equal(datapb.CompactionTaskState_completed, task.GetTaskProto().GetState())
+	state, err := m.catalog.GetDataViewVersionState(ctx, 1)
+	s.Require().NoError(err)
+	s.EqualValues(3, state.GetPublishedDataVersion().GetStreamingVersion())
+	s.Zero(state.GetPublishedDataVersion().GetCompactVersion())
+	view, err := manager.LatestVisibleDataView(ctx, 1)
+	s.Require().NoError(err)
+	s.Equal([]int64{50}, view.GetShards()[0].GetPartitions()[0].GetSegmentIds())
+
+	s.Require().NoError(m.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            200,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-0",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     100,
+	})))
+	later, err := m.commitDataViewStreaming(ctx, 1, []int64{200})
+	s.Require().NoError(err)
+	s.EqualValues(4, later.GetStreamingVersion())
+	s.Zero(later.GetCompactVersion())
+}
+
 func (s *MixCompactionTaskSuite) TestQueryTaskOnWorker() {
 	cluster := session.NewMockCluster(s.T())
 

@@ -277,6 +277,34 @@ func TestPublicationAssignedNoChangeDoesNotReportSuccess(t *testing.T) {
 	requireDataVersion(t, catalog.versionStates[1].GetPublishedDataVersion(), 1, 0)
 }
 
+func TestPublicationAssignedRemoveOnlyCompletionAdvancesUnchangedMembership(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, store := newTestDataViewManager()
+	_, err := manager.CommitPublishedView(ctx, 1, &viewpb.DataVersion{StreamingVersion: 1}, PublishedMutation{
+		Add: []SegmentMembership{loadableMembership(1, 10, 50, "ch-0")},
+	})
+	require.NoError(t, err)
+	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-0", 1000)
+	assigned, err := manager.AssignFlushVersion(ctx, 1, 100)
+	require.NoError(t, err)
+	requireDataVersion(t, assigned, 2, 0)
+
+	published, err := manager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Remove: []int64{100},
+	})
+	require.NoError(t, err)
+	requireDataVersion(t, published, 2, 0)
+	requireDataVersion(t, catalog.versionStates[1].GetPublishedDataVersion(), 2, 0)
+	require.Len(t, catalog.views, 2)
+	require.Equal(t, []int64{50}, publishedSegmentIDs(t, catalog.views[1], "ch-0", 10))
+
+	later, err := manager.CommitStreamingView(ctx, 1, PublishedMutation{
+		Add: []SegmentMembership{loadableMembership(1, 10, 200, "ch-0")},
+	})
+	require.NoError(t, err)
+	requireDataVersion(t, later, 3, 0)
+}
+
 func TestPublicationRetryProvesDurableAssignedMutation(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, _ := newTestDataViewManager()
