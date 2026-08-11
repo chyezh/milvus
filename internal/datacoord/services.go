@@ -663,6 +663,11 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 		if segment.State == commonpb.SegmentState_Dropped {
 			mlog.Info(context.TODO(), "save to dropped segment, ignore this request")
 			if req.GetFlushed() && req.GetSegLevel() != datapb.SegmentLevel_L0 && segment.GetSealedAtDataVersion() != nil {
+				if err := s.completeAssignedFlushDataViewPublication(ctx, req, segment, segment.GetSealedAtDataVersion()); err != nil {
+					mlog.Error(ctx, "failed to complete DataView publication retry after flush",
+						mlog.FieldSegmentID(req.GetSegmentID()), mlog.Err(err))
+					return merr.Status(err), nil
+				}
 				return successWithFlushedDataVersion(segment.GetSealedAtDataVersion()), nil
 			}
 			return merr.Success(), nil
@@ -750,33 +755,9 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 		flushedDataVersion = assigned
 
 		segment := s.meta.GetSegment(ctx, req.GetSegmentID())
-		mutation := PublishedMutation{}
-		shouldPublish := false
-		if segment.GetState() == commonpb.SegmentState_Dropped {
-			mutation.Remove = []int64{req.GetSegmentID()}
-			shouldPublish = true
-		} else if isImmediatelyLoadableFlushSegment(segment) {
-			mutation.Add = []SegmentMembership{publishedSegmentMembership(segment)}
-			shouldPublish = true
-		}
-		if shouldPublish {
-			published, err := s.dataViewManager.CommitPublishedView(ctx, req.GetCollectionID(), assigned, mutation)
-			if err != nil {
-				err = dataViewPublicationError(req.GetSegmentID(), err)
-				mlog.Error(ctx, "failed to publish DataView after flush", mlog.FieldSegmentID(req.GetSegmentID()), mlog.Err(err))
-				return merr.Status(err), nil
-			}
-			if !proto.Equal(assigned, published) {
-				err := merr.WrapErrDataIntegrityMsg(
-					"published DataVersion %d/%d differs from assigned flush version %d/%d for segment %d",
-					published.GetStreamingVersion(),
-					published.GetCompactVersion(),
-					assigned.GetStreamingVersion(),
-					assigned.GetCompactVersion(),
-					req.GetSegmentID(),
-				)
-				return merr.Status(err), nil
-			}
+		if err := s.completeAssignedFlushDataViewPublication(ctx, req, segment, assigned); err != nil {
+			mlog.Error(ctx, "failed to publish DataView after flush", mlog.FieldSegmentID(req.GetSegmentID()), mlog.Err(err))
+			return merr.Status(err), nil
 		}
 	}
 
@@ -821,6 +802,43 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 	}
 
 	return successWithFlushedDataVersion(flushedDataVersion), nil
+}
+
+func (s *Server) completeAssignedFlushDataViewPublication(
+	ctx context.Context,
+	req *datapb.SaveBinlogPathsRequest,
+	segment *SegmentInfo,
+	assigned *viewpb.DataVersion,
+) error {
+	if s.dataViewManager == nil {
+		return merr.WrapErrServiceNotReadyMsg("data view manager is not initialized")
+	}
+
+	mutation := PublishedMutation{}
+	switch {
+	case segment.GetState() == commonpb.SegmentState_Dropped:
+		mutation.Remove = []int64{req.GetSegmentID()}
+	case isImmediatelyLoadableFlushSegment(segment):
+		mutation.Add = []SegmentMembership{publishedSegmentMembership(segment)}
+	default:
+		return nil
+	}
+
+	published, err := s.dataViewManager.CommitPublishedView(ctx, req.GetCollectionID(), assigned, mutation)
+	if err != nil {
+		return dataViewPublicationError(req.GetSegmentID(), err)
+	}
+	if !proto.Equal(assigned, published) {
+		return merr.WrapErrDataIntegrityMsg(
+			"published DataVersion %d/%d differs from assigned flush version %d/%d for segment %d",
+			published.GetStreamingVersion(),
+			published.GetCompactVersion(),
+			assigned.GetStreamingVersion(),
+			assigned.GetCompactVersion(),
+			req.GetSegmentID(),
+		)
+	}
+	return nil
 }
 
 func dataViewPublicationError(segmentID int64, err error) error {
