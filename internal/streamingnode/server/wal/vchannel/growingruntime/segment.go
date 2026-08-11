@@ -397,6 +397,7 @@ func loadInfoFromVisibleSegment(segment walview.VisibleSegment) *querypb.Segment
 	loadInfo := &querypb.SegmentLoadInfo{
 		SegmentID:      segment.SegmentID,
 		PartitionID:    segment.PartitionID,
+		NumOfRows:      persistedRowCount(segment),
 		Level:          datapb.SegmentLevel_L1,
 		BinlogPaths:    make([]*datapb.FieldBinlog, 0),
 		Statslogs:      make([]*datapb.FieldBinlog, 0),
@@ -420,6 +421,30 @@ func loadInfoFromVisibleSegment(segment walview.VisibleSegment) *querypb.Segment
 		loadInfo.Statslogs = append(loadInfo.Statslogs, persisted.GetMergedStatsBinlog())
 	}
 	return loadInfo
+}
+
+func persistedRowCount(segment walview.VisibleSegment) int64 {
+	var total int64
+	for _, batch := range segment.Data.PersistedStorage.GetBinlogs() {
+		var batchRows int64
+		for _, field := range batch.GetFieldBinlog() {
+			var fieldRows int64
+			for _, binlog := range field.GetBinlogs() {
+				fieldRows += binlog.GetEntriesNum()
+			}
+			if fieldRows > batchRows {
+				batchRows = fieldRows
+			}
+		}
+		total += batchRows
+	}
+	if total > 0 || segment.Assignment == nil {
+		return total
+	}
+	if segment.Assignment.GetDataCheckpointTimeTick() >= segment.Assignment.GetCheckpointTimeTick() {
+		return int64(segment.Assignment.GetStat().GetModifiedRows())
+	}
+	return 0
 }
 
 func repeatedTimeTicks(timeTick uint64, n int) []typeutil.Timestamp {
