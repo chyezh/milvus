@@ -483,6 +483,9 @@ message SegmentInfo {
   // DataView derives shard-level delete_apply_start_after_timetick from this
   // persisted segment metadata field.
   uint64 delete_apply_start_after_timetick = 39;
+
+  // DataVersion assigned when this segment left StreamingNode growing ownership.
+  view.DataVersion sealed_at_data_version = 40;
 }
 
 // Statistics carries aggregate metrics for a segment so DataCoord can make

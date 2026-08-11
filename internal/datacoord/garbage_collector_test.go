@@ -88,12 +88,22 @@ type fakeGCDataViewManager struct {
 	calls              []fakeGCDataViewCall
 	createEvents       []CreateCollectionDataViewEvent
 	droppedCollections []int64
+	assignedVersion    *viewpb.DataVersion
+	assignVersionErr   error
+	publishedVersion   *viewpb.DataVersion
+	publishVersionErr  error
+	assignedSegments   []int64
 	flushEvents        []FlushDataViewEvent
 	l0CompactEvents    []L0CompactDataViewEvent
 	snapshotRequested  []int64
 	snapshotViews      []*viewpb.DataViewOfCollection
 	segmentReferenced  bool
 	segmentRefErr      error
+}
+
+func (m *fakeGCDataViewManager) AssignFlushVersion(ctx context.Context, collectionID, segmentID int64) (*viewpb.DataVersion, error) {
+	m.assignedSegments = append(m.assignedSegments, segmentID)
+	return m.assignedVersion, m.assignVersionErr
 }
 
 type fakeGCDataViewCall struct {
@@ -109,7 +119,7 @@ func (m *fakeGCDataViewManager) OnCreateCollection(ctx context.Context, event Cr
 
 func (m *fakeGCDataViewManager) OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error) {
 	m.flushEvents = append(m.flushEvents, event)
-	return nil, nil
+	return m.publishedVersion, m.publishVersionErr
 }
 
 func (m *fakeGCDataViewManager) OnImport(ctx context.Context, event ImportDataViewEvent) (*viewpb.DataVersion, error) {

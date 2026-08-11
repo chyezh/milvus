@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
@@ -49,6 +50,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/messagespb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/workerpb"
 	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	types2 "github.com/milvus-io/milvus/pkg/v3/streaming/util/types"
@@ -514,6 +516,137 @@ func (s *ServerSuite) TestSaveBinlogPath_L0Segment() {
 	s.EqualValues(datapb.SegmentLevel_L0, segment.GetLevel())
 	s.Empty(manager.l0CompactEvents)
 	s.Empty(manager.flushEvents)
+}
+
+func (s *ServerSuite) TestSaveBinlogPathsReturnsExactAssignedDataVersion() {
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableAutoCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableAutoCompaction.Key)
+
+	assigned := &viewpb.DataVersion{StreamingVersion: 7}
+	manager := &fakeGCDataViewManager{
+		assignedVersion:  assigned,
+		publishedVersion: proto.Clone(assigned).(*viewpb.DataVersion),
+	}
+	s.testServer.dataViewManager = manager
+	s.addSaveBinlogPathsDataVersionSegment(s.T(), 100)
+
+	resp, err := s.testServer.SaveBinlogPaths(context.Background(), saveBinlogPathsDataVersionRequest(100))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(resp))
+	s.Require().Equal("7", resp.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+	s.Require().Equal("0", resp.GetExtraInfo()[statusExtraInfoDataViewCompactVersion])
+	s.Require().Equal([]int64{100}, manager.assignedSegments)
+	s.Require().Len(manager.flushEvents, 1)
+	s.Require().True(proto.Equal(assigned, manager.flushEvents[0].AssignedVersion))
+}
+
+func (s *ServerSuite) TestSaveBinlogPathsPersistsExactAssignedDataVersion() {
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableAutoCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableAutoCompaction.Key)
+
+	s.testServer.dataViewManager = newDataViewManager(s.testServer.meta.catalog, s.testServer.meta)
+	s.addSaveBinlogPathsDataVersionSegment(s.T(), 104)
+
+	resp, err := s.testServer.SaveBinlogPaths(context.Background(), saveBinlogPathsDataVersionRequest(104))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(resp))
+	s.Require().Equal("1", resp.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+	s.Require().Equal("0", resp.GetExtraInfo()[statusExtraInfoDataViewCompactVersion])
+	s.Require().True(proto.Equal(
+		&viewpb.DataVersion{StreamingVersion: 1},
+		s.testServer.meta.GetSegment(context.Background(), 104).GetSealedAtDataVersion(),
+	))
+}
+
+func (s *ServerSuite) TestSaveBinlogPathsReturnsPublicationFailure() {
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableAutoCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableAutoCompaction.Key)
+
+	manager := &fakeGCDataViewManager{
+		assignedVersion:   &viewpb.DataVersion{StreamingVersion: 7},
+		publishVersionErr: merr.WrapErrServiceUnavailableMsg("publication failed"),
+	}
+	s.testServer.dataViewManager = manager
+	s.addSaveBinlogPathsDataVersionSegment(s.T(), 101)
+
+	resp, err := s.testServer.SaveBinlogPaths(context.Background(), saveBinlogPathsDataVersionRequest(101))
+	s.Require().NoError(err)
+	s.Require().ErrorIs(merr.Error(resp), merr.ErrServiceUnavailable)
+	s.Require().Empty(resp.GetExtraInfo())
+}
+
+func (s *ServerSuite) TestSaveBinlogPathsRejectsPublishedVersionMismatch() {
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableAutoCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableAutoCompaction.Key)
+
+	manager := &fakeGCDataViewManager{
+		assignedVersion:  &viewpb.DataVersion{StreamingVersion: 7},
+		publishedVersion: &viewpb.DataVersion{StreamingVersion: 8},
+	}
+	s.testServer.dataViewManager = manager
+	s.addSaveBinlogPathsDataVersionSegment(s.T(), 102)
+
+	resp, err := s.testServer.SaveBinlogPaths(context.Background(), saveBinlogPathsDataVersionRequest(102))
+	s.Require().NoError(err)
+	s.Require().ErrorIs(merr.Error(resp), merr.ErrDataIntegrity)
+	s.Require().Empty(resp.GetExtraInfo())
+}
+
+func (s *ServerSuite) TestSaveBinlogPathsDelayedFlushSkipsPublication() {
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "true")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableCompaction.Key, "true")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableAutoCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableAutoCompaction.Key)
+
+	manager := &fakeGCDataViewManager{
+		assignedVersion:   &viewpb.DataVersion{StreamingVersion: 7},
+		publishVersionErr: merr.WrapErrServiceUnavailableMsg("must not publish delayed flush"),
+	}
+	s.testServer.dataViewManager = manager
+	s.addSaveBinlogPathsDataVersionSegment(s.T(), 103)
+
+	resp, err := s.testServer.SaveBinlogPaths(context.Background(), saveBinlogPathsDataVersionRequest(103))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(resp))
+	s.Require().Equal("7", resp.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+	s.Require().Empty(manager.flushEvents)
+	s.Require().True(s.testServer.meta.GetSegment(context.Background(), 103).GetIsInvisible())
+}
+
+func (s *ServerSuite) addSaveBinlogPathsDataVersionSegment(t *testing.T, segmentID int64) {
+	s.testServer.meta.AddCollection(&collectionInfo{ID: 1})
+	require.NoError(t, s.testServer.meta.AddSegment(context.Background(), NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            segmentID,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-1",
+		State:         commonpb.SegmentState_Sealed,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     1,
+	})))
+}
+
+func saveBinlogPathsDataVersionRequest(segmentID int64) *datapb.SaveBinlogPathsRequest {
+	return &datapb.SaveBinlogPathsRequest{
+		SegmentID:    segmentID,
+		CollectionID: 1,
+		PartitionID:  10,
+		Flushed:      true,
+		CheckPoints: []*datapb.CheckPoint{{
+			SegmentID: segmentID,
+			NumOfRows: 1,
+		}},
+	}
 }
 
 func (s *ServerSuite) TestSaveBinlogPath_NormalCase() {

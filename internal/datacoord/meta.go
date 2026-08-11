@@ -50,6 +50,7 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/proto/indexpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/rootcoordpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/conc"
 	"github.com/milvus-io/milvus/pkg/v3/util/funcutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/lock"
@@ -915,6 +916,37 @@ func (m *meta) UpdateSegment(segmentID int64, operators ...SegmentOperator) erro
 
 	mlog.Info(context.TODO(), "meta update: update segment - complete",
 		mlog.Int64("segmentID", segmentID))
+	return nil
+}
+
+func (m *meta) SetSegmentSealedAtDataVersion(ctx context.Context, segmentID int64, version *viewpb.DataVersion) error {
+	m.segMu.Lock()
+	defer m.segMu.Unlock()
+
+	segment := m.segments.GetSegment(segmentID)
+	if segment == nil {
+		return merr.WrapErrSegmentNotFound(segmentID)
+	}
+	if current := segment.GetSealedAtDataVersion(); current != nil {
+		if proto.Equal(current, version) {
+			return nil
+		}
+		return merr.WrapErrDataIntegrityMsg(
+			"segment %d sealed data version changed from %d/%d to %d/%d",
+			segmentID,
+			current.GetStreamingVersion(),
+			current.GetCompactVersion(),
+			version.GetStreamingVersion(),
+			version.GetCompactVersion(),
+		)
+	}
+
+	cloned := segment.Clone()
+	cloned.SealedAtDataVersion = proto.Clone(version).(*viewpb.DataVersion)
+	if err := m.catalog.AlterSegments(ctx, []*datapb.SegmentInfo{cloned.SegmentInfo}); err != nil {
+		return err
+	}
+	m.segments.SetSegment(segmentID, cloned)
 	return nil
 }
 

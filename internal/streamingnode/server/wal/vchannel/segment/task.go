@@ -6,6 +6,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"go.uber.org/atomic"
 
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
@@ -99,6 +100,12 @@ func (t *commitL1SegmentTask) Execute(ctx context.Context) error {
 		sealedAt, err := segment.lifecycle.CommitL1Segment(ctx, meta)
 		if err != nil {
 			return err
+		}
+		if sealedAt == nil {
+			return merr.WrapErrServiceUnavailableMsg(
+				"DataCoord returned no DataVersion for flushed segment %d",
+				meta.GetSegmentId(),
+			)
 		}
 
 		segment.mu.Lock()

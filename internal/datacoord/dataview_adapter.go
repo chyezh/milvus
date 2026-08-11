@@ -19,6 +19,8 @@ package datacoord
 import (
 	"context"
 
+	"google.golang.org/protobuf/proto"
+
 	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/internal/views/coord/balancer"
@@ -132,6 +134,14 @@ func (s *dataViewSegmentStore) SelectSegments(ctx context.Context, collectionID 
 	return result
 }
 
+func (s *dataViewSegmentStore) SaveSealedAtDataVersion(
+	ctx context.Context,
+	segmentID int64,
+	version *viewpb.DataVersion,
+) error {
+	return s.meta.SetSegmentSealedAtDataVersion(ctx, segmentID, version)
+}
+
 func (s *dataViewSegmentStore) validPartitions(collectionID int64) map[int64]struct{} {
 	collection := s.meta.GetCollection(collectionID)
 	if collection == nil || len(collection.Partitions) == 0 {
@@ -147,6 +157,10 @@ func (s *dataViewSegmentStore) validPartitions(collectionID int64) map[int64]str
 func newDataViewSegment(segment *SegmentInfo) *dataview.Segment {
 	if segment == nil {
 		return nil
+	}
+	var sealedAtDataVersion *viewpb.DataVersion
+	if version := segment.GetSealedAtDataVersion(); version != nil {
+		sealedAtDataVersion = proto.Clone(version).(*viewpb.DataVersion)
 	}
 	return &dataview.Segment{
 		ID:                          segment.GetID(),
@@ -165,6 +179,7 @@ func newDataViewSegment(segment *SegmentInfo) *dataview.Segment {
 		TransformStartAfterTimetick: segment.GetDeleteApplyStartAfterTimetick(),
 		CreatedByCompaction:         segment.GetCreatedByCompaction(),
 		CompactionFrom:              append([]int64(nil), segment.GetCompactionFrom()...),
+		SealedAtDataVersion:         sealedAtDataVersion,
 	}
 }
 

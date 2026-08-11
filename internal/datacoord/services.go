@@ -27,6 +27,7 @@ import (
 	"github.com/samber/lo"
 	"go.opentelemetry.io/otel"
 	"golang.org/x/time/rate"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/milvuspb"
@@ -728,16 +729,46 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 		return merr.Status(err), nil
 	}
 	var flushedDataVersion *viewpb.DataVersion
-	if s.dataViewManager != nil && req.GetFlushed() && req.GetSegLevel() != datapb.SegmentLevel_L0 {
-		version, err := s.dataViewManager.OnFlush(ctx, FlushDataViewEvent{
-			CollectionID:         req.GetCollectionID(),
-			SegmentIDs:           []int64{req.GetSegmentID()},
-			TemporaryUnavailable: enableSortCompaction(),
-		})
+	if req.GetFlushed() && req.GetSegLevel() != datapb.SegmentLevel_L0 {
+		if s.dataViewManager == nil {
+			err := merr.WrapErrServiceNotReadyMsg("data view manager is not initialized")
+			return merr.Status(err), nil
+		}
+
+		assigned, err := s.dataViewManager.AssignFlushVersion(ctx, req.GetCollectionID(), req.GetSegmentID())
 		if err != nil {
-			mlog.Warn(ctx, "failed to publish DataView after flush", mlog.Err(err))
-		} else {
-			flushedDataVersion = version
+			mlog.Error(ctx, "failed to assign flush DataVersion", mlog.FieldSegmentID(req.GetSegmentID()), mlog.Err(err))
+			return merr.Status(err), nil
+		}
+		if assigned == nil {
+			err := merr.WrapErrDataIntegrityMsg("flush segment %d has no assigned DataVersion", req.GetSegmentID())
+			return merr.Status(err), nil
+		}
+		flushedDataVersion = assigned
+
+		segment := s.meta.GetSegment(ctx, req.GetSegmentID())
+		if isImmediatelyLoadableFlushSegment(segment) {
+			published, err := s.dataViewManager.OnFlush(ctx, FlushDataViewEvent{
+				CollectionID:    req.GetCollectionID(),
+				SegmentIDs:      []int64{req.GetSegmentID()},
+				AssignedVersion: assigned,
+			})
+			if err != nil {
+				err = dataViewPublicationError(req.GetSegmentID(), err)
+				mlog.Error(ctx, "failed to publish DataView after flush", mlog.FieldSegmentID(req.GetSegmentID()), mlog.Err(err))
+				return merr.Status(err), nil
+			}
+			if !proto.Equal(assigned, published) {
+				err := merr.WrapErrDataIntegrityMsg(
+					"published DataVersion %d/%d differs from assigned flush version %d/%d for segment %d",
+					published.GetStreamingVersion(),
+					published.GetCompactVersion(),
+					assigned.GetStreamingVersion(),
+					assigned.GetCompactVersion(),
+					req.GetSegmentID(),
+				)
+				return merr.Status(err), nil
+			}
 		}
 	}
 
@@ -782,6 +813,24 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 	}
 
 	return successWithFlushedDataVersion(flushedDataVersion), nil
+}
+
+func dataViewPublicationError(segmentID int64, err error) error {
+	if merr.IsMilvusError(err) {
+		return merr.Wrapf(err, "publish DataView for flushed segment %d", segmentID)
+	}
+	return merr.WrapErrServiceUnavailable(
+		fmt.Sprintf("publish DataView for flushed segment %d", segmentID),
+		err.Error(),
+	)
+}
+
+func isImmediatelyLoadableFlushSegment(segment *SegmentInfo) bool {
+	return segment != nil &&
+		segment.GetState() == commonpb.SegmentState_Flushed &&
+		segment.GetLevel() != datapb.SegmentLevel_L0 &&
+		!segment.GetIsImporting() &&
+		!segment.GetIsInvisible()
 }
 
 func successWithFlushedDataVersion(version *viewpb.DataVersion) *commonpb.Status {

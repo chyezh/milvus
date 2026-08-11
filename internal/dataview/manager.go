@@ -53,6 +53,7 @@ type RecoveryCatalog interface {
 }
 
 type Manager interface {
+	AssignFlushVersion(ctx context.Context, collectionID, segmentID int64) (*viewpb.DataVersion, error)
 	OnCreateCollection(ctx context.Context, event CreateCollectionDataViewEvent) (*viewpb.DataVersion, error)
 	OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error)
 	OnImport(ctx context.Context, event ImportDataViewEvent) (*viewpb.DataVersion, error)
@@ -88,6 +89,7 @@ type FlushDataViewEvent struct {
 	CollectionID         int64
 	SegmentIDs           []int64
 	TemporaryUnavailable bool
+	AssignedVersion      *viewpb.DataVersion
 }
 
 type ImportDataViewEvent struct {
@@ -136,6 +138,10 @@ type collectionDataViewState struct {
 	latestVisible  *viewpb.DataViewOfCollection
 	dropped        bool
 	refs           map[qviews.DataVersion]int
+
+	versionState          *viewpb.CollectionDataVersionState
+	versionStateRecovered bool
+	persistedAllocated    int64
 }
 
 type dataViewManager struct {
@@ -164,6 +170,7 @@ type Segment struct {
 	TransformStartAfterTimetick uint64
 	CreatedByCompaction         bool
 	CompactionFrom              []int64
+	SealedAtDataVersion         *viewpb.DataVersion
 }
 
 func (s *Segment) GetID() int64 {
@@ -269,6 +276,13 @@ func (s *Segment) GetCompactionFrom() []int64 {
 	return s.CompactionFrom
 }
 
+func (s *Segment) GetSealedAtDataVersion() *viewpb.DataVersion {
+	if s == nil {
+		return nil
+	}
+	return s.SealedAtDataVersion
+}
+
 type dataViewAdvance int
 
 const (
@@ -283,6 +297,7 @@ type dataViewMembershipMutation struct {
 	dropSegmentIDs  []int64
 	advance         dataViewAdvance
 	allowInvisible  bool
+	assignedVersion *viewpb.DataVersion
 	dropPredicate   func(segmentID int64, partitionID int64, vchannel string) bool
 	classifyAdvance func(removed bool, added bool) dataViewAdvance
 }
@@ -344,10 +359,11 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 
 func (m *dataViewManager) OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error) {
 	return m.applyMembershipMutation(ctx, dataViewMembershipMutation{
-		collectionID:   event.CollectionID,
-		addSegmentIDs:  event.SegmentIDs,
-		advance:        dataViewAdvanceStreaming,
-		allowInvisible: event.TemporaryUnavailable,
+		collectionID:    event.CollectionID,
+		addSegmentIDs:   event.SegmentIDs,
+		advance:         dataViewAdvanceStreaming,
+		allowInvisible:  event.TemporaryUnavailable,
+		assignedVersion: event.AssignedVersion,
 	})
 }
 
@@ -940,7 +956,11 @@ func (m *dataViewManager) applyMembershipMutation(ctx context.Context, mutation 
 	if mutation.classifyAdvance != nil {
 		advance = mutation.classifyAdvance(removed, added)
 	}
-	next.DataVersion = nextDataVersion(state.latestResident, advance)
+	if mutation.assignedVersion != nil {
+		next.DataVersion = proto.Clone(mutation.assignedVersion).(*viewpb.DataVersion)
+	} else {
+		next.DataVersion = nextDataVersion(state.latestResident, advance)
+	}
 	toPersist := cloneDataViewWithoutDeleteTimetick(next)
 	if err := m.catalog.SaveDataView(ctx, toPersist); err != nil {
 		state.mu.Unlock()

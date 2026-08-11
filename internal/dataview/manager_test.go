@@ -38,15 +38,44 @@ type fakeDataViewCatalog struct {
 
 	mu                  sync.Mutex
 	views               []*viewpb.DataViewOfCollection
+	versionStates       map[int64]*viewpb.CollectionDataVersionState
 	listCalls           int
 	listAllCalls        int
 	saveErrOnce         error
+	saveVersionErrOnce  error
+	saveVersionCalls    int
 	blockCollection     int64
 	saveStarted         chan struct{}
 	saveBlock           chan struct{}
 	blockDropCollection int64
 	dropStarted         chan struct{}
 	dropBlock           chan struct{}
+}
+
+func (c *fakeDataViewCatalog) SaveDataViewVersionState(ctx context.Context, state *viewpb.CollectionDataVersionState) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.saveVersionCalls++
+	if c.saveVersionErrOnce != nil {
+		err := c.saveVersionErrOnce
+		c.saveVersionErrOnce = nil
+		return err
+	}
+	if c.versionStates == nil {
+		c.versionStates = make(map[int64]*viewpb.CollectionDataVersionState)
+	}
+	c.versionStates[state.GetCollectionId()] = proto.Clone(state).(*viewpb.CollectionDataVersionState)
+	return nil
+}
+
+func (c *fakeDataViewCatalog) GetDataViewVersionState(ctx context.Context, collectionID int64) (*viewpb.CollectionDataVersionState, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	state := c.versionStates[collectionID]
+	if state == nil {
+		return nil, nil
+	}
+	return proto.Clone(state).(*viewpb.CollectionDataVersionState), nil
 }
 
 func (c *fakeDataViewCatalog) SaveDataView(ctx context.Context, dataView *viewpb.DataViewOfCollection) error {
@@ -133,14 +162,20 @@ func (c *fakeDataViewCatalog) DropDataViews(ctx context.Context, collectionID in
 }
 
 type fakeDataViewSegmentStore struct {
-	segments map[int64]*Segment
+	mu              sync.RWMutex
+	segments        map[int64]*Segment
+	assignmentSaves int
 }
 
 func (s *fakeDataViewSegmentStore) GetSegment(ctx context.Context, segID int64) *Segment {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.segments[segID]
 }
 
 func (s *fakeDataViewSegmentStore) GetSegments(ctx context.Context, segIDs []int64) []*Segment {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	segments := make([]*Segment, 0, len(segIDs))
 	for _, segmentID := range segIDs {
 		if segment := s.segments[segmentID]; segment != nil {
@@ -151,6 +186,8 @@ func (s *fakeDataViewSegmentStore) GetSegments(ctx context.Context, segIDs []int
 }
 
 func (s *fakeDataViewSegmentStore) SelectSegments(ctx context.Context, collectionID int64) []*Segment {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	segments := make([]*Segment, 0, len(s.segments))
 	for _, segment := range s.segments {
 		if segment.GetCollectionID() == collectionID {
@@ -158,6 +195,18 @@ func (s *fakeDataViewSegmentStore) SelectSegments(ctx context.Context, collectio
 		}
 	}
 	return segments
+}
+
+func (s *fakeDataViewSegmentStore) SaveSealedAtDataVersion(ctx context.Context, segmentID int64, version *viewpb.DataVersion) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	segment := s.segments[segmentID]
+	if segment == nil {
+		return errors.New("segment missing")
+	}
+	segment.SealedAtDataVersion = proto.Clone(version).(*viewpb.DataVersion)
+	s.assignmentSaves++
+	return nil
 }
 
 func newTestDataViewManager() (*dataViewManager, *fakeDataViewCatalog, *fakeDataViewSegmentStore) {
