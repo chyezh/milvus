@@ -310,7 +310,7 @@ func (m *specializedImmutableMessageView[H, B]) unwrapImmutableMessage() Immutab
 }
 
 func (m *specializedImmutableMessageView[H, B]) Header() H {
-	_ = m.ImmutableMessage.MessageType()
+	_ = m.MessageType()
 	return m.header
 }
 
