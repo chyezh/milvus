@@ -136,8 +136,7 @@ type TruncateDataViewEvent struct {
 }
 
 type SegmentTrimTarget struct {
-	SegmentID       int64
-	AssignedVersion *viewpb.DataVersion
+	SegmentID int64
 }
 
 type SegmentTrimFinalize func(context.Context) error

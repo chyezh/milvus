@@ -224,7 +224,7 @@ func clonePublishedDataVersion(version *viewpb.DataVersion) *viewpb.DataVersion 
 func (m *meta) loadablePublishedMemberships(segmentIDs []int64) ([]dataview.SegmentMembership, bool) {
 	memberships := make([]dataview.SegmentMembership, 0, len(segmentIDs))
 	for _, segmentID := range segmentIDs {
-		segment := m.segments.GetSegment(segmentID)
+		segment := m.GetSegment(m.ctx, segmentID)
 		if segment == nil {
 			return nil, false
 		}
@@ -239,7 +239,7 @@ func (m *meta) loadablePublishedMemberships(segmentIDs []int64) ([]dataview.Segm
 func (m *meta) loadableCompactionMemberships(segmentIDs []int64) ([]dataview.SegmentMembership, bool) {
 	memberships := make([]dataview.SegmentMembership, 0, len(segmentIDs))
 	for _, segmentID := range segmentIDs {
-		segment := m.segments.GetSegment(segmentID)
+		segment := m.GetSegment(m.ctx, segmentID)
 		if segment == nil {
 			return nil, false
 		}
@@ -287,11 +287,7 @@ func (m *meta) commitDataViewTrim(
 	}
 	targets := make([]SegmentTrimTarget, 0, len(segmentIDs))
 	for _, segmentID := range segmentIDs {
-		target := SegmentTrimTarget{SegmentID: segmentID}
-		if segment := m.segments.GetSegment(segmentID); segment != nil {
-			target.AssignedVersion = clonePublishedDataVersion(segment.GetSealedAtDataVersion())
-		}
-		targets = append(targets, target)
+		targets = append(targets, SegmentTrimTarget{SegmentID: segmentID})
 	}
 	return m.dataViewManager.CommitSegmentTrim(ctx, collectionID, targets, finalize)
 }
@@ -303,6 +299,7 @@ func (m *meta) finalizeDataViewTrim(ctx context.Context, collectionID int64, seg
 	metricMutation := &segMetricMutation{stateChange: make(segmentMetricStateChange)}
 	segmentsToDrop := make([]*SegmentInfo, 0, len(segmentIDs))
 	for _, segmentID := range segmentIDs {
+		// segMu is already held for the complete persistent finalization.
 		segment := m.segments.GetSegment(segmentID)
 		if segment == nil {
 			return merr.WrapErrServiceUnavailableMsg(
@@ -361,7 +358,7 @@ func (m *meta) commitDataViewStreaming(
 }
 
 func (m *meta) segmentIDsForPartition(collectionID int64, partitionIDs map[int64]struct{}) []int64 {
-	segments := m.segments.GetSegmentsBySelector(WithCollection(collectionID), SegmentFilterFunc(func(segment *SegmentInfo) bool {
+	segments := m.SelectSegments(m.ctx, WithCollection(collectionID), SegmentFilterFunc(func(segment *SegmentInfo) bool {
 		_, ok := partitionIDs[segment.GetPartitionID()]
 		return ok
 	}))
@@ -369,7 +366,7 @@ func (m *meta) segmentIDsForPartition(collectionID int64, partitionIDs map[int64
 }
 
 func (m *meta) segmentIDsForTruncate(collectionID int64, vchannel string, flushTs uint64) []int64 {
-	segments := m.segments.GetSegmentsBySelector(WithCollection(collectionID), SegmentFilterFunc(func(segment *SegmentInfo) bool {
+	segments := m.SelectSegments(m.ctx, WithCollection(collectionID), SegmentFilterFunc(func(segment *SegmentInfo) bool {
 		if segment.GetInsertChannel() != vchannel {
 			return false
 		}

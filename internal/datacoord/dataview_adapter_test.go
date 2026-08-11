@@ -2,8 +2,10 @@ package datacoord
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
+	"github.com/bytedance/mockey"
 	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
@@ -14,6 +16,117 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
+
+func TestSegmentTrimTargetContainsOnlySegmentID(t *testing.T) {
+	targetType := reflect.TypeOf(SegmentTrimTarget{})
+	require.Equal(t, 1, targetType.NumField())
+	require.Equal(t, "SegmentID", targetType.Field(0).Name)
+}
+
+func TestCommitDataViewTrimPassesExplicitIDsWithoutReadingSegmentMetadata(t *testing.T) {
+	manager := &recordingSegmentTrimManager{}
+	meta := &meta{dataViewManager: manager}
+
+	require.NotPanics(t, func() {
+		_, err := meta.commitDataViewTrim(context.Background(), 1, []int64{100, 200}, nil)
+		require.NoError(t, err)
+	})
+	require.Equal(t, []SegmentTrimTarget{{SegmentID: 100}, {SegmentID: 200}}, manager.targets)
+}
+
+func TestSegmentIDsForPartitionUsesLockedMetaAccessor(t *testing.T) {
+	mt := &meta{ctx: context.Background(), segments: NewSegmentsInfo()}
+	selectCalled := false
+	patch := mockey.Mock((*meta).SelectSegments).To(func(_ *meta, _ context.Context, _ ...SegmentFilter) []*SegmentInfo {
+		selectCalled = true
+		return []*SegmentInfo{NewSegmentInfo(&datapb.SegmentInfo{ID: 100})}
+	}).Build()
+	defer patch.UnPatch()
+
+	segmentIDs := mt.segmentIDsForPartition(1, map[int64]struct{}{10: {}})
+
+	require.True(t, selectCalled)
+	require.Equal(t, []int64{100}, segmentIDs)
+}
+
+func TestSegmentIDsForTruncateUsesLockedMetaAccessor(t *testing.T) {
+	mt := &meta{ctx: context.Background(), segments: NewSegmentsInfo()}
+	selectCalled := false
+	patch := mockey.Mock((*meta).SelectSegments).To(func(_ *meta, _ context.Context, _ ...SegmentFilter) []*SegmentInfo {
+		selectCalled = true
+		return []*SegmentInfo{NewSegmentInfo(&datapb.SegmentInfo{ID: 100})}
+	}).Build()
+	defer patch.UnPatch()
+
+	segmentIDs := mt.segmentIDsForTruncate(1, "ch-0", 100)
+
+	require.True(t, selectCalled)
+	require.Equal(t, []int64{100}, segmentIDs)
+}
+
+func TestLoadablePublishedMembershipsUsesLockedMetaAccessor(t *testing.T) {
+	mt := &meta{ctx: context.Background(), segments: NewSegmentsInfo()}
+	getCalled := false
+	patch := mockey.Mock((*meta).GetSegment).To(func(_ *meta, _ context.Context, _ int64) *SegmentInfo {
+		getCalled = true
+		return NewSegmentInfo(&datapb.SegmentInfo{
+			ID:           100,
+			CollectionID: 1,
+			State:        commonpb.SegmentState_Flushed,
+			Level:        datapb.SegmentLevel_L1,
+			NumOfRows:    1,
+		})
+	}).Build()
+	defer patch.UnPatch()
+
+	memberships, ready := mt.loadablePublishedMemberships([]int64{100})
+
+	require.True(t, getCalled)
+	require.True(t, ready)
+	require.Equal(t, []SegmentMembership{{SegmentID: 100, CollectionID: 1, State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1}}, memberships)
+}
+
+func TestLoadableCompactionMembershipsUsesLockedMetaAccessor(t *testing.T) {
+	mt := &meta{ctx: context.Background(), segments: NewSegmentsInfo()}
+	getCalled := false
+	patch := mockey.Mock((*meta).GetSegment).To(func(_ *meta, _ context.Context, _ int64) *SegmentInfo {
+		getCalled = true
+		return NewSegmentInfo(&datapb.SegmentInfo{
+			ID:           100,
+			CollectionID: 1,
+			State:        commonpb.SegmentState_Flushed,
+			Level:        datapb.SegmentLevel_L1,
+			NumOfRows:    1,
+		})
+	}).Build()
+	defer patch.UnPatch()
+
+	memberships, ready := mt.loadableCompactionMemberships([]int64{100})
+
+	require.True(t, getCalled)
+	require.True(t, ready)
+	require.Equal(t, []SegmentMembership{{SegmentID: 100, CollectionID: 1, State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1}}, memberships)
+}
+
+type recordingSegmentTrimManager struct {
+	DataViewManager
+	targets []SegmentTrimTarget
+}
+
+func (m *recordingSegmentTrimManager) CommitSegmentTrim(
+	ctx context.Context,
+	collectionID int64,
+	targets []SegmentTrimTarget,
+	finalize SegmentTrimFinalize,
+) (*viewpb.DataVersion, error) {
+	m.targets = append([]SegmentTrimTarget(nil), targets...)
+	if finalize != nil {
+		if err := finalize(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return nil, nil
+}
 
 func (m *fakeGCDataViewManager) DataViewSnapshotForCollections(ctx context.Context, collectionIDs map[int64]struct{}) *balancerapi.DataViewSnapshot {
 	return balancerapi.NewDataViewSnapshot(0, m.snapshotViews, nil)

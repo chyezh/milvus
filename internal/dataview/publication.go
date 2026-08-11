@@ -292,12 +292,12 @@ func (m *dataViewManager) CommitSegmentTrim(
 	}
 
 	for _, target := range assignedTargets {
-		streamingVersion := target.AssignedVersion.GetStreamingVersion()
+		streamingVersion := target.assignedVersion.GetStreamingVersion()
 		if streamingVersion <= state.versionState.GetPublishedDataVersion().GetStreamingVersion() {
 			continue
 		}
 		state.pendingAssigned[streamingVersion] = struct{}{}
-		state.readyPublications[streamingVersion] = PublishedMutation{Remove: []int64{target.SegmentID}}
+		state.readyPublications[streamingVersion] = PublishedMutation{Remove: []int64{target.segmentID}}
 		if pending := minimumPendingStreamingVersion(state.pendingAssigned); pending != streamingVersion {
 			return nil, merr.WrapErrServiceUnavailableMsg(
 				"trim of assigned DataVersion %d/0 for collection %d is waiting for earlier assigned epoch %d/0",
@@ -346,8 +346,8 @@ func (m *dataViewManager) resolveSegmentTrimTargetsLocked(
 	ctx context.Context,
 	collectionID int64,
 	targets []SegmentTrimTarget,
-) ([]SegmentTrimTarget, error) {
-	assignedTargets := make([]SegmentTrimTarget, 0, len(targets))
+) ([]resolvedSegmentTrimTarget, error) {
+	assignedTargets := make([]resolvedSegmentTrimTarget, 0, len(targets))
 	for _, target := range targets {
 		segment := m.segments.GetSegment(ctx, target.SegmentID)
 		if segment == nil {
@@ -378,15 +378,20 @@ func (m *dataViewManager) resolveSegmentTrimTargetsLocked(
 				collectionID,
 			)
 		}
-		assignedTargets = append(assignedTargets, SegmentTrimTarget{
-			SegmentID:       target.SegmentID,
-			AssignedVersion: cloneDataVersion(assigned),
+		assignedTargets = append(assignedTargets, resolvedSegmentTrimTarget{
+			segmentID:       target.SegmentID,
+			assignedVersion: cloneDataVersion(assigned),
 		})
 	}
 	sort.Slice(assignedTargets, func(i, j int) bool {
-		return assignedTargets[i].AssignedVersion.GetStreamingVersion() < assignedTargets[j].AssignedVersion.GetStreamingVersion()
+		return assignedTargets[i].assignedVersion.GetStreamingVersion() < assignedTargets[j].assignedVersion.GetStreamingVersion()
 	})
 	return assignedTargets, nil
+}
+
+type resolvedSegmentTrimTarget struct {
+	segmentID       int64
+	assignedVersion *viewpb.DataVersion
 }
 
 func (m *dataViewManager) refreshDurablePublicationLocked(
