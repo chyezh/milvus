@@ -39,7 +39,17 @@ func recoverPublishedDataView(
 	if err != nil {
 		return nil, nil, merr.Wrapf(err, "recover data view version state for collection %d", collectionID)
 	}
-	if state == nil || state.GetPublishedDataVersion() == nil {
+	if state == nil {
+		return state, nil, nil
+	}
+	if state.GetCollectionId() != collectionID {
+		return nil, nil, merr.WrapErrDataIntegrityMsg(
+			"data view version state collection mismatch: requested=%d, stored=%d",
+			collectionID,
+			state.GetCollectionId(),
+		)
+	}
+	if state.GetPublishedDataVersion() == nil {
 		return state, nil, nil
 	}
 
@@ -49,6 +59,13 @@ func recoverPublishedDataView(
 	}
 	for _, view := range views {
 		if proto.Equal(view.GetDataVersion(), state.GetPublishedDataVersion()) {
+			if view.GetCollectionId() != collectionID {
+				return nil, nil, merr.WrapErrDataIntegrityMsg(
+					"published data view collection mismatch: requested=%d, stored=%d",
+					collectionID,
+					view.GetCollectionId(),
+				)
+			}
 			return state, view, nil
 		}
 	}

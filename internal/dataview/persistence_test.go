@@ -115,6 +115,35 @@ func TestRecoverPublishedDataViewMissingHeadIsDataIntegrityError(t *testing.T) {
 	require.Equal(t, 1, catalog.listCalls)
 }
 
+func TestRecoverPublishedDataViewRejectsMismatchedStateCollection(t *testing.T) {
+	catalog := &publishedDataViewRecoveryCatalogStub{
+		state: &viewpb.CollectionDataVersionState{
+			CollectionId:              200,
+			AllocatedStreamingVersion: 1,
+		},
+	}
+
+	_, _, err := recoverPublishedDataView(context.Background(), catalog, 100)
+	require.ErrorIs(t, err, merr.ErrDataIntegrity)
+	require.Zero(t, catalog.listCalls)
+}
+
+func TestRecoverPublishedDataViewRejectsMismatchedSnapshotCollection(t *testing.T) {
+	state := &viewpb.CollectionDataVersionState{
+		CollectionId:              100,
+		AllocatedStreamingVersion: 2,
+		PublishedDataVersion:      &viewpb.DataVersion{StreamingVersion: 2, CompactVersion: 1},
+	}
+	catalog := &publishedDataViewRecoveryCatalogStub{
+		state: state,
+		views: []*viewpb.DataViewOfCollection{dataViewWithVersion(200, 2, 1)},
+	}
+
+	_, _, err := recoverPublishedDataView(context.Background(), catalog, 100)
+	require.ErrorIs(t, err, merr.ErrDataIntegrity)
+	require.Equal(t, 1, catalog.listCalls)
+}
+
 func dataViewWithVersion(collectionID, streamingVersion, compactVersion int64) *viewpb.DataViewOfCollection {
 	return &viewpb.DataViewOfCollection{
 		CollectionId: collectionID,

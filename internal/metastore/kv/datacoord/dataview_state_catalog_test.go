@@ -26,6 +26,7 @@ import (
 
 	memkv "github.com/milvus-io/milvus/internal/kv/mem"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 type dataViewMemoryMetaKV struct {
@@ -137,6 +138,32 @@ func TestDataViewVersionStateRepeatedPublicationIsIdempotent(t *testing.T) {
 	require.True(t, proto.Equal(view, views[0]))
 }
 
+func TestDataViewVersionStatePublicationRejectsMismatchedCollectionIDs(t *testing.T) {
+	ctx := context.Background()
+	kv := newDataViewMemoryMetaKV()
+	catalog := NewCatalog(kv, rootPath, "")
+	state, view := publishedDataViewFixture()
+	state.CollectionId = 101
+
+	multiSaveCalls := countDataViewMultiSaveCalls(t)
+	err := catalog.SavePublishedDataView(ctx, state, view)
+	require.Zero(t, *multiSaveCalls)
+	require.ErrorIs(t, err, merr.ErrServiceInternal)
+}
+
+func TestDataViewVersionStatePublicationRejectsMismatchedPublishedVersion(t *testing.T) {
+	ctx := context.Background()
+	kv := newDataViewMemoryMetaKV()
+	catalog := NewCatalog(kv, rootPath, "")
+	state, view := publishedDataViewFixture()
+	state.PublishedDataVersion = &viewpb.DataVersion{StreamingVersion: 2, CompactVersion: 2}
+
+	multiSaveCalls := countDataViewMultiSaveCalls(t)
+	err := catalog.SavePublishedDataView(ctx, state, view)
+	require.Zero(t, *multiSaveCalls)
+	require.ErrorIs(t, err, merr.ErrServiceInternal)
+}
+
 func TestListAllDataViewsIgnoresVersionStateKeys(t *testing.T) {
 	ctx := context.Background()
 	kv := newDataViewMemoryMetaKV()
@@ -170,4 +197,18 @@ func publishedDataViewFixture() (*viewpb.CollectionDataVersionState, *viewpb.Dat
 				},
 			},
 		}
+}
+
+func countDataViewMultiSaveCalls(t *testing.T) *int {
+	var origin func(*memkv.MemoryKV, context.Context, map[string]string) error
+	calls := new(int)
+	patch := mockey.Mock((*memkv.MemoryKV).MultiSave).
+		To(func(store *memkv.MemoryKV, ctx context.Context, kvs map[string]string) error {
+			(*calls)++
+			return origin(store, ctx, kvs)
+		}).
+		Origin(&origin).
+		Build()
+	t.Cleanup(func() { patch.UnPatch() })
+	return calls
 }

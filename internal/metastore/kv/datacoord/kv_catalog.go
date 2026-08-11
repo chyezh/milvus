@@ -552,6 +552,22 @@ func (kc *Catalog) SavePublishedDataView(
 	state *viewpb.CollectionDataVersionState,
 	view *viewpb.DataViewOfCollection,
 ) error {
+	if state.GetCollectionId() != view.GetCollectionId() {
+		return merr.WrapErrServiceInternalMsg(
+			"data view publication collection mismatch: state=%d, view=%d",
+			state.GetCollectionId(),
+			view.GetCollectionId(),
+		)
+	}
+	if !proto.Equal(state.GetPublishedDataVersion(), view.GetDataVersion()) {
+		return merr.WrapErrServiceInternalMsg(
+			"data view publication version mismatch for collection %d: state=%s, view=%s",
+			state.GetCollectionId(),
+			state.GetPublishedDataVersion(),
+			view.GetDataVersion(),
+		)
+	}
+
 	stateValue, err := proto.Marshal(state)
 	if err != nil {
 		return merr.WrapErrSerializationFailed(err, "marshal data view version state for collection %d", state.GetCollectionId())
