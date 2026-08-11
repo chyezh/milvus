@@ -54,9 +54,10 @@ type CopySegmentTaskSuite struct {
 
 type failPublishedDataViewCatalog struct {
 	metastore.DataCoordCatalog
-	errOnce         error
-	getStateErrOnce error
-	listErrOnce     error
+	errOnce            error
+	persistThenErrOnce error
+	getStateErrOnce    error
+	listErrOnce        error
 }
 
 func (c *failPublishedDataViewCatalog) SavePublishedDataView(
@@ -64,6 +65,14 @@ func (c *failPublishedDataViewCatalog) SavePublishedDataView(
 	state *viewpb.CollectionDataVersionState,
 	view *viewpb.DataViewOfCollection,
 ) error {
+	if c.persistThenErrOnce != nil {
+		err := c.persistThenErrOnce
+		c.persistThenErrOnce = nil
+		if persistErr := c.DataCoordCatalog.SavePublishedDataView(ctx, state, view); persistErr != nil {
+			return persistErr
+		}
+		return err
+	}
 	if c.errOnce != nil {
 		err := c.errOnce
 		c.errOnce = nil

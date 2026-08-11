@@ -2807,6 +2807,9 @@ func (m *meta) ValidateSegmentStateBeforeCompleteCompactionMutation(t *datapb.Co
 }
 
 func (m *meta) CompleteCompactionMutation(ctx context.Context, t *datapb.CompactionTask, result *datapb.CompactionPlanResult) ([]*SegmentInfo, *segMetricMutation, error) {
+	if err := m.ensureCompactionInputsPublished(ctx, t); err != nil {
+		return nil, nil, err
+	}
 	var (
 		newSegments    []*SegmentInfo
 		metricMutation *segMetricMutation
@@ -2832,6 +2835,69 @@ func (m *meta) CompleteCompactionMutation(ctx context.Context, t *datapb.Compact
 		return nil, nil, err
 	}
 	return newSegments, metricMutation, nil
+}
+
+func (m *meta) ensureCompactionInputsPublished(ctx context.Context, task *datapb.CompactionTask) error {
+	if m.dataViewManager == nil || task.GetType() == datapb.CompactionType_SortCompaction {
+		return nil
+	}
+
+	m.segMu.RLock()
+	var required *viewpb.DataVersion
+	var requiredSegmentID int64
+	for _, segmentID := range task.GetInputSegments() {
+		segment := m.segments.GetSegment(segmentID)
+		if segment == nil {
+			continue
+		}
+		assigned := segment.GetSealedAtDataVersion()
+		if assigned.GetStreamingVersion() > required.GetStreamingVersion() {
+			required = proto.Clone(assigned).(*viewpb.DataVersion)
+			requiredSegmentID = segmentID
+		}
+	}
+	m.segMu.RUnlock()
+	if required == nil {
+		return nil
+	}
+
+	state, err := m.catalog.GetDataViewVersionState(ctx, task.GetCollectionID())
+	if err != nil {
+		if merr.IsMilvusError(err) {
+			return merr.Wrapf(err, "read durable DataView head before compaction %d", task.GetPlanID())
+		}
+		return merr.WrapErrServiceUnavailable(
+			fmt.Sprintf("read durable DataView head before compaction %d", task.GetPlanID()),
+			err.Error(),
+		)
+	}
+	published := state.GetPublishedDataVersion()
+	if published.GetStreamingVersion() < required.GetStreamingVersion() {
+		return merr.WrapErrServiceUnavailableMsg(
+			"compaction %d input segment %d is assigned to unpublished DataVersion %d/0; durable head is %d/%d",
+			task.GetPlanID(),
+			requiredSegmentID,
+			required.GetStreamingVersion(),
+			published.GetStreamingVersion(),
+			published.GetCompactVersion(),
+		)
+	}
+	latest, err := m.dataViewManager.LatestPublished(ctx, task.GetCollectionID())
+	if err != nil {
+		return merr.Wrapf(err, "read resident published DataView before compaction %d", task.GetPlanID())
+	}
+	defer latest.Deref()
+	resident := latest.DataView().Version()
+	if resident.StreamingVersion < required.GetStreamingVersion() {
+		return merr.WrapErrServiceUnavailableMsg(
+			"compaction %d input segment %d is assigned to DataVersion %d/0, but the resident published head is %s",
+			task.GetPlanID(),
+			requiredSegmentID,
+			required.GetStreamingVersion(),
+			resident.String(),
+		)
+	}
+	return nil
 }
 
 func (m *meta) publishDataViewAfterCompaction(ctx context.Context, t *datapb.CompactionTask, compactTo []int64) error {

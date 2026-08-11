@@ -5,16 +5,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/datacoord/allocator"
 	"github.com/milvus-io/milvus/internal/datacoord/session"
+	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/internalpb"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/taskcommon"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 	"github.com/milvus-io/milvus/pkg/v3/util/paramtable"
@@ -365,6 +369,114 @@ func (s *MixCompactionTaskSuite) TestProcessMetaSaved_DelayedSortDroppedOutputCo
 	s.Require().NoError(err)
 	s.EqualValues(4, later.GetStreamingVersion())
 	s.Zero(later.GetCompactVersion())
+}
+
+func (s *MixCompactionTaskSuite) TestMixCompactionWaitsForAssignedFlushPublication() {
+	ctx := context.Background()
+	m, err := newMemoryMeta(s.T())
+	s.Require().NoError(err)
+	catalog := &failPublishedDataViewCatalog{DataCoordCatalog: m.catalog}
+	manager := newDataViewManager(catalog, m)
+	m.dataViewManager = manager
+	_, err = manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+		CollectionID: 1,
+		VChannels:    []string{"ch-0"},
+	})
+	s.Require().NoError(err)
+	s.Require().NoError(m.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            100,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-0",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     100,
+	})))
+	assigned, err := manager.AssignFlushVersion(ctx, 1, 100)
+	s.Require().NoError(err)
+	s.EqualValues(2, assigned.GetStreamingVersion())
+	catalog.errOnce = errors.New("raw metastore publication failure")
+	_, err = manager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(m.GetSegment(ctx, 100))},
+	})
+	s.Require().ErrorIs(err, merr.ErrServiceUnavailable)
+	s.True(merr.IsRetryableErr(err))
+
+	task := &datapb.CompactionTask{
+		PlanID:        10,
+		CollectionID:  1,
+		PartitionID:   10,
+		Channel:       "ch-0",
+		Type:          datapb.CompactionType_MixCompaction,
+		InputSegments: []int64{100},
+		Schema:        &schemapb.CollectionSchema{Version: 1},
+	}
+	result := &datapb.CompactionPlanResult{Segments: []*datapb.CompactionSegment{{
+		SegmentID: 200,
+		NumOfRows: 100,
+	}}}
+	_, _, err = m.CompleteCompactionMutation(ctx, task, result)
+	s.Require().ErrorIs(err, merr.ErrServiceUnavailable)
+	s.True(merr.IsRetryableErr(err))
+	s.Nil(m.GetSegment(ctx, 200))
+	s.Equal(commonpb.SegmentState_Flushed, m.GetSegment(ctx, 100).GetState())
+
+	catalog.persistThenErrOnce = errors.New("lost publication response")
+	_, err = manager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(m.GetSegment(ctx, 100))},
+	})
+	s.Require().ErrorIs(err, merr.ErrServiceUnavailable)
+	state, err := m.catalog.GetDataViewVersionState(ctx, 1)
+	s.Require().NoError(err)
+	s.True(proto.Equal(&viewpb.DataVersion{StreamingVersion: 2}, state.GetPublishedDataVersion()))
+	_, _, err = m.CompleteCompactionMutation(ctx, task, result)
+	s.Require().ErrorIs(err, merr.ErrServiceUnavailable)
+	s.True(merr.IsRetryableErr(err))
+	s.Nil(m.GetSegment(ctx, 200))
+	s.Equal(commonpb.SegmentState_Flushed, m.GetSegment(ctx, 100).GetState())
+
+	published, err := manager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(m.GetSegment(ctx, 100))},
+	})
+	s.Require().NoError(err)
+	s.EqualValues(2, published.GetStreamingVersion())
+	s.Require().NoError(m.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            300,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-0",
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     100,
+	})))
+	pending, err := manager.AssignFlushVersion(ctx, 1, 300)
+	s.Require().NoError(err)
+	s.EqualValues(3, pending.GetStreamingVersion())
+
+	newSegments, _, err := m.CompleteCompactionMutation(ctx, task, result)
+	s.Require().NoError(err)
+	s.Require().Len(newSegments, 1)
+	s.EqualValues(200, newSegments[0].GetID())
+	s.Equal(commonpb.SegmentState_Dropped, m.GetSegment(ctx, 100).GetState())
+	s.Require().NoError(m.publishDataViewAfterCompaction(ctx, task, []int64{200}))
+	state, err = m.catalog.GetDataViewVersionState(ctx, 1)
+	s.Require().NoError(err)
+	s.True(proto.Equal(&viewpb.DataVersion{StreamingVersion: 2, CompactVersion: 1}, state.GetPublishedDataVersion()))
+
+	recoveryCatalog, ok := m.catalog.(dataview.RecoveryCatalog)
+	s.Require().True(ok)
+	restarted, err := dataview.RecoverManager(ctx, recoveryCatalog, &dataViewSegmentStore{meta: m})
+	s.Require().NoError(err)
+	s.Require().NoError(restarted.RepairCollections(ctx, []int64{1}))
+	visible, err := restarted.LatestVisibleDataView(ctx, 1)
+	s.Require().NoError(err)
+	s.True(proto.Equal(&viewpb.DataVersion{StreamingVersion: 2, CompactVersion: 1}, visible.GetDataVersion()))
+	s.Equal([]int64{200}, visible.GetShards()[0].GetPartitions()[0].GetSegmentIds())
+	published, err = restarted.CommitPublishedView(ctx, 1, pending, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(m.GetSegment(ctx, 300))},
+	})
+	s.Require().NoError(err)
+	s.EqualValues(3, published.GetStreamingVersion())
 }
 
 func (s *MixCompactionTaskSuite) TestQueryTaskOnWorker() {
