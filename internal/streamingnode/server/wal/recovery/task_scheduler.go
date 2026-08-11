@@ -57,7 +57,7 @@ func (s *scopedTaskScheduler) Submit(task nodescheduler.Task) nodescheduler.Task
 		task:  task,
 		done:  make(chan struct{}),
 	}
-	entry.ctx, entry.cancel = context.WithCancel(context.Background())
+	entry.ctx, entry.cancel = context.WithCancel(context.Background()) //nolint:gosec // cancel is stored and called when the task finishes
 
 	s.mu.Lock()
 	if s.closed {
