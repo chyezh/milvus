@@ -122,6 +122,20 @@ func (m *fakeGCDataViewManager) CommitPublishedView(
 	return m.publishedVersion, m.publishVersionErr
 }
 
+func (m *fakeGCDataViewManager) RetryAssignedFlushPublication(
+	ctx context.Context,
+	collectionID int64,
+	segmentID int64,
+	assignedVersion *viewpb.DataVersion,
+	empty bool,
+) (*viewpb.DataVersion, error) {
+	if empty {
+		m.publishedMutations = append(m.publishedMutations, dataview.PublishedMutation{Remove: []int64{segmentID}})
+	}
+	m.publishedAssigned = append(m.publishedAssigned, proto.Clone(assignedVersion).(*viewpb.DataVersion))
+	return m.publishedVersion, m.publishVersionErr
+}
+
 func (m *fakeGCDataViewManager) CommitRewrite(
 	ctx context.Context,
 	collectionID int64,

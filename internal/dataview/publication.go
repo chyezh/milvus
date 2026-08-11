@@ -93,6 +93,74 @@ func (m *dataViewManager) CommitPublishedView(
 	return cloneDataVersion(assignedVersion), nil
 }
 
+// RetryAssignedFlushPublication resolves a flush retry after the segment has
+// already moved to Dropped. A durable published head plus the exact assigned
+// snapshot proves a prior successful publication without reconstructing the
+// original mutation from the segment's later lifecycle state. If the head is
+// still behind, only a genuinely empty segment can complete with a remove-only
+// publication.
+func (m *dataViewManager) RetryAssignedFlushPublication(
+	ctx context.Context,
+	collectionID int64,
+	segmentID int64,
+	assignedVersion *viewpb.DataVersion,
+	empty bool,
+) (*viewpb.DataVersion, error) {
+	if assignedVersion == nil || assignedVersion.GetStreamingVersion() <= 0 || assignedVersion.GetCompactVersion() != 0 {
+		return nil, merr.WrapErrServiceInternalMsg("invalid assigned DataVersion for collection %d", collectionID)
+	}
+	catalog, ok := m.catalog.(publishedDataViewCatalog)
+	if !ok {
+		return nil, merr.WrapErrServiceNotReadyMsg("published data view catalog is not initialized")
+	}
+	state := m.getOrCreateState(collectionID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.dropped {
+		return nil, merr.WrapErrServiceNotReadyMsg("data view collection %d is terminal", collectionID)
+	}
+	if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
+		return nil, err
+	}
+
+	assignedStreaming := assignedVersion.GetStreamingVersion()
+	if state.versionState.GetPublishedDataVersion().GetStreamingVersion() >= assignedStreaming {
+		if err := verifyDurableAssignedSnapshot(ctx, catalog, collectionID, assignedVersion); err != nil {
+			return nil, err
+		}
+		return cloneDataVersion(assignedVersion), nil
+	}
+	if !empty {
+		return nil, merr.WrapErrServiceUnavailableMsg(
+			"publication of assigned DataVersion %d/0 for dropped non-empty segment %d in collection %d is not durable",
+			assignedStreaming,
+			segmentID,
+			collectionID,
+		)
+	}
+
+	if state.pendingAssigned == nil {
+		state.pendingAssigned = make(map[int64]struct{})
+	}
+	if state.readyPublications == nil {
+		state.readyPublications = make(map[int64]PublishedMutation)
+	}
+	state.pendingAssigned[assignedStreaming] = struct{}{}
+	state.readyPublications[assignedStreaming] = PublishedMutation{Remove: []int64{segmentID}}
+	requestedPublished, err := m.drainReadyPublicationsLocked(ctx, state, catalog, assignedStreaming)
+	if err != nil {
+		return nil, err
+	}
+	if !requestedPublished {
+		return nil, merr.WrapErrServiceUnavailableMsg(
+			"publication of assigned DataVersion %d/0 for collection %d is waiting for an earlier assigned epoch",
+			assignedStreaming,
+			collectionID,
+		)
+	}
+	return cloneDataVersion(assignedVersion), nil
+}
+
 // CommitStreamingView atomically allocates and publishes a new Streaming
 // epoch for an explicit add-only membership mutation. Membership equality is
 // the durable idempotency proof for retries after a lost response.
@@ -365,6 +433,48 @@ func verifyDurableAssignedPublication(
 	if !proto.Equal(expected, actual) {
 		return merr.WrapErrDataIntegrityMsg(
 			"assigned publication %d/0 for collection %d does not exactly match the requested mutation",
+			assignedVersion.GetStreamingVersion(),
+			collectionID,
+		)
+	}
+	return nil
+}
+
+func verifyDurableAssignedSnapshot(
+	ctx context.Context,
+	catalog publishedDataViewCatalog,
+	collectionID int64,
+	assignedVersion *viewpb.DataVersion,
+) error {
+	views, err := catalog.ListDataViews(ctx, collectionID)
+	if err != nil {
+		return merr.Wrapf(err, "list DataView snapshots for assigned publication %d/0 of collection %d",
+			assignedVersion.GetStreamingVersion(), collectionID)
+	}
+	var target *viewpb.DataViewOfCollection
+	for _, view := range views {
+		if view.GetCollectionId() != collectionID {
+			return merr.WrapErrDataIntegrityMsg(
+				"assigned publication collection mismatch: requested=%d, stored=%d",
+				collectionID,
+				view.GetCollectionId(),
+			)
+		}
+		if compareDataVersion(view.GetDataVersion(), assignedVersion) != 0 {
+			continue
+		}
+		if target != nil && !proto.Equal(canonicalDataViewClone(target), canonicalDataViewClone(view)) {
+			return merr.WrapErrDataIntegrityMsg(
+				"assigned publication %d/0 for collection %d has conflicting durable snapshots",
+				assignedVersion.GetStreamingVersion(),
+				collectionID,
+			)
+		}
+		target = view
+	}
+	if target == nil {
+		return merr.WrapErrDataIntegrityMsg(
+			"assigned publication %d/0 is missing for collection %d",
 			assignedVersion.GetStreamingVersion(),
 			collectionID,
 		)

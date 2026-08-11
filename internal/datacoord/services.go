@@ -815,16 +815,24 @@ func (s *Server) completeAssignedFlushDataViewPublication(
 	}
 
 	mutation := PublishedMutation{}
+	var published *viewpb.DataVersion
+	var err error
 	switch {
 	case segment.GetState() == commonpb.SegmentState_Dropped:
-		mutation.Remove = []int64{req.GetSegmentID()}
+		published, err = s.dataViewManager.RetryAssignedFlushPublication(
+			ctx,
+			req.GetCollectionID(),
+			req.GetSegmentID(),
+			assigned,
+			segment.GetNumOfRows() == 0,
+		)
 	case isImmediatelyLoadableFlushSegment(segment):
 		mutation.Add = []SegmentMembership{publishedSegmentMembership(segment)}
+		published, err = s.dataViewManager.CommitPublishedView(ctx, req.GetCollectionID(), assigned, mutation)
 	default:
 		return nil
 	}
 
-	published, err := s.dataViewManager.CommitPublishedView(ctx, req.GetCollectionID(), assigned, mutation)
 	if err != nil {
 		return dataViewPublicationError(req.GetSegmentID(), err)
 	}
