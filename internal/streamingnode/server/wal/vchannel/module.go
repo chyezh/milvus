@@ -49,6 +49,7 @@ type ModuleConfig struct {
 	NodeScheduler              nodescheduler.Scheduler
 	QueryRuntimeDispatcher     *queryresource.Dispatcher
 	QueryViewLoadInfoProvider  queryresource.LoadInfoProvider
+	RecoveryBoundaryReached    bool
 }
 
 // VChannelRecoveryModule owns all recovery_storage state for one vchannel.
@@ -79,6 +80,9 @@ type VChannelRecoveryModule struct {
 	externalOnSegmentSealed func(walview.SegmentSealedEvent)
 
 	metaAndData bool
+	// recoveryBoundaryReached becomes true only after data replay observes the
+	// RecoveryBarrier. Query resources cannot snapshot WAL state before then.
+	recoveryBoundaryReached bool
 
 	queryTransformLogStream wal.TransformLogStream
 	queryResources          *queryresource.Manager
@@ -110,6 +114,7 @@ func newModule(config ModuleConfig, adoptVChannelMeta bool) (*VChannelRecoveryMo
 		segmentPackWriter:       config.SegmentPackWriter,
 		externalOnSegmentSealed: config.OnSegmentSealed,
 		queryTransformLogStream: config.TransformLogStream,
+		recoveryBoundaryReached: config.RecoveryBoundaryReached,
 	}
 	module.queryResources = queryresource.NewManager(queryresource.Config{
 		Builders:         config.QueryRuntimeModuleBuilders,
@@ -216,6 +221,12 @@ func (m *VChannelRecoveryModule) ObserveMessage(ctx context.Context, msg message
 		m.transformLog.ObserveMessage(ctx, msg)
 	}
 	m.observeQueryResourceEvent(ctx, walview.VChannelResourceEvent{Message: raw})
+	if raw.MessageType() == message.MessageTypeRecoveryBarrier && msg.Ack() != nil {
+		m.recoveryBoundaryReached = true
+		if m.metaAndData {
+			m.queryResources.TryBuildLocked(m.queryWALViewLocked)
+		}
+	}
 }
 
 func (m *VChannelRecoveryModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
@@ -244,6 +255,7 @@ func (m *VChannelRecoveryModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapsho
 	if m.transformLog != nil {
 		m.transformLog.SwitchIntoMetaAndData()
 	}
+	m.queryResources.TryBuildLocked(m.queryWALViewLocked)
 	return snapshot
 }
 
@@ -602,6 +614,9 @@ func (m *VChannelRecoveryModule) SegmentDataUpdated(segmentID int64, view *segme
 
 func (m *VChannelRecoveryModule) SegmentSealed(event walview.SegmentSealedEvent) {
 	m.observeQueryResourceEvent(context.Background(), walview.VChannelResourceEvent{SegmentSealed: &event})
+	m.mu.Lock()
+	m.queryResources.TryBuildLocked(m.queryWALViewLocked)
+	m.mu.Unlock()
 	if m.externalOnSegmentSealed != nil {
 		m.externalOnSegmentSealed(event)
 	}

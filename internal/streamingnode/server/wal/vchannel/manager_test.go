@@ -12,6 +12,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/schemapb"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
+	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/messageack"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/snview"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/vchannel/queryresource"
@@ -289,8 +290,9 @@ func TestPChannelRecoveryManagerRemovesClosedVChannelTransformLog(t *testing.T) 
 	require.Error(t, err)
 }
 
-func TestPChannelRecoveryManagerAcquireBuildsQueryRuntimeWithoutLoadConfigCallback(t *testing.T) {
+func TestPChannelRecoveryManagerAcquireWaitsForRecoveryBarrier(t *testing.T) {
 	manager := newTestManager(t, "p1", "v1")
+	manager.SwitchIntoMetaAndData()
 	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
 	meta, key := testQueryViewMetaAndKey(100, 2, "v1", version, 3)
 
@@ -303,12 +305,139 @@ func TestPChannelRecoveryManagerAcquireBuildsQueryRuntimeWithoutLoadConfigCallba
 
 	select {
 	case <-ready:
+		t.Fatal("query runtime became ready before data replay reached the recovery barrier")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	observeTestMessage(context.Background(), t, manager, newTestRecoveryBarrierMessage(t, 30))
+	select {
+	case <-ready:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for ready callback")
 	}
 	runtime, ok := manager.GetQueryRuntime(key)
 	require.True(t, ok)
 	require.NotNil(t, runtime)
+}
+
+func TestPChannelRecoveryManagerIgnoresMetaOnlyRecoveryBarrier(t *testing.T) {
+	manager := newTestManager(t, "p1", "v1")
+	version := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
+	meta, key := testQueryViewMetaAndKey(100, 2, "v1", version, 3)
+	ready := make(chan struct{})
+	manager.Acquire(snview.AcquireResource{
+		Key:     key,
+		Meta:    meta,
+		OnReady: func() { close(ready) },
+	})
+	manager.ObserveMessage(
+		context.Background(),
+		messageack.NewMetaMessage(newTestRecoveryBarrierMessage(t, 30)),
+	)
+
+	select {
+	case <-ready:
+		t.Fatal("query runtime became ready before switching into meta-and-data mode")
+	case <-time.After(20 * time.Millisecond):
+	}
+	manager.SwitchIntoMetaAndData()
+
+	select {
+	case <-ready:
+		t.Fatal("query runtime became ready after only meta replay reached the recovery barrier")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	observeTestMessage(context.Background(), t, manager, newTestRecoveryBarrierMessage(t, 40))
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for ready callback after data replay reached the barrier")
+	}
+	runtime, ok := manager.GetQueryRuntime(key)
+	require.True(t, ok)
+	require.NotNil(t, runtime)
+}
+
+func TestPChannelRecoveryManagerRemembersDataRecoveryBarrierForNewVChannel(t *testing.T) {
+	manager := newTestManager(t, "p1")
+	manager.SwitchIntoMetaAndData()
+	observeTestMessage(context.Background(), t, manager, newTestRecoveryBarrierMessage(t, 30))
+	observeTestMessage(context.Background(), t, manager, newTestCreateCollectionMessage(t, "v1", 40))
+
+	version := qviews.DataVersion{}
+	meta, key := testQueryViewMetaAndKey(100, 2, "v1", version, 3)
+	ready := make(chan struct{})
+	manager.Acquire(snview.AcquireResource{
+		Key:     key,
+		Meta:    meta,
+		OnReady: func() { close(ready) },
+	})
+
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for a vchannel created after the data recovery barrier")
+	}
+	runtime, ok := manager.GetQueryRuntime(key)
+	require.True(t, ok)
+	require.NotNil(t, runtime)
+}
+
+func TestPChannelRecoveryManagerAcquireWaitsForRecoveredSegmentFinalCommit(t *testing.T) {
+	scheduler := &recordingScheduler{}
+	lifecycle := &recordingSegmentLifecycle{}
+	manager, err := NewPChannelRecoveryManager(PChannelManagerConfig{
+		PChannel:      "p1",
+		VChannelMetas: map[string]*streamingpb.VChannelMeta{"v1": newTestVChannelMeta("v1")},
+		Segments: map[int64]*streamingpb.SegmentAssignmentMeta{
+			10: {
+				CollectionId:           100,
+				PartitionId:            10,
+				SegmentId:              10,
+				Vchannel:               "v1",
+				State:                  streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED,
+				CheckpointTimeTick:     30,
+				DataCheckpointTimeTick: 20,
+				PersistedStorage:       &streamingpb.L1SegmentPersistedStorage{},
+				Stat:                   &streamingpb.SegmentAssignmentStat{CreateSegmentTimeTick: 10},
+			},
+		},
+		TransformLogMetas: map[string]*streamingpb.VChannelTransformLogMeta{},
+		Runtime:           moduleapi.Runtime{Scheduler: scheduler},
+		SegmentLifecycle:  lifecycle,
+		NodeScheduler:     scheduler,
+		QueryRuntimeModuleBuilders: []queryresource.QueryRuntimeModuleBuilder{
+			testQueryRuntimeModuleBuilder{},
+		},
+	})
+	require.NoError(t, err)
+	defer manager.Close()
+	manager.SwitchIntoMetaAndData()
+
+	version := qviews.DataVersion{StreamingVersion: 1}
+	meta, key := testQueryViewMetaAndKey(100, 2, "v1", version, 3)
+	ready := false
+	manager.Acquire(snview.AcquireResource{
+		Key:     key,
+		Meta:    meta,
+		OnReady: func() { ready = true },
+	})
+	observeTestMessage(context.Background(), t, manager, newTestRecoveryBarrierMessage(t, 40))
+
+	require.Len(t, scheduler.tasks, 1)
+	assert.False(t, ready)
+	require.NoError(t, scheduler.tasks[0].Execute(context.Background()))
+	require.Equal(t, []int64{10}, lifecycle.committedSegmentIDs)
+	require.Len(t, scheduler.tasks, 2)
+	assert.False(t, ready)
+
+	require.NoError(t, scheduler.tasks[1].Execute(context.Background()))
+	require.Len(t, scheduler.tasks, 3)
+	assert.False(t, ready)
+	require.NoError(t, scheduler.tasks[2].Execute(context.Background()))
+	assert.True(t, ready)
+	require.NotNil(t, manager.Module("v1").segments[10].AssignmentMeta().GetSealedAtDataVersion())
 }
 
 func newTestManager(t *testing.T, pchannel string, vchannels ...string) *PChannelRecoveryManager {

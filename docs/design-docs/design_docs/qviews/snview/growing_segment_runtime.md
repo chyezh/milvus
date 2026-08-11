@@ -156,6 +156,11 @@ DataVersion.
     corrupted and the StreamingNode must fail critically.
 12. `Advance(oldestDataVersion)` is the only external GC signal from
     QueryView references.
+13. Initial preparation never receives a `FLUSHED` segment with a nil
+    `SealedAtDataVersion`; the owning `VChannelRecoveryModule` resolves such
+    final commits before capturing the WAL view.
+14. DataVersion is not a VChannel frontier. Preparation never waits for a local
+    maximum sealed version to reach the target QueryView version.
 
 ## 4. Interface Description
 
@@ -240,9 +245,11 @@ Live resource events are not applied directly to a single segment. They first
 enter `QueryRuntime`, then `GrowingRuntime`, which performs vchannel-level
 dispatch and calls segment-scoped methods.
 
-`MarkSealed` records the `DataVersion` assigned after the segment's flush commit
-is acknowledged. WAL `Flush` closes the segment for writes, but it does not
-carry this `DataVersion`.
+`MarkSealed` records the exact first `DataVersion` whose DataView membership
+contains the segment. WAL `Flush` closes the segment for writes, but it does not
+carry this `DataVersion`. Retrying the final commit must return the same first
+join version even if other VChannels have advanced the collection DataVersion
+since the original commit.
 
 Segment-scoped replay must be idempotent. For a flushed segment, any
 `CreateSegment` or `Insert` at or before the segment's `flushTimeTick` is an
@@ -253,6 +260,13 @@ that segment and is treated as corrupted runtime input.
 ## 5. Actual Behavior
 
 ### 5.1 Preparation
+
+Before `VChannelWALView` is captured, bounded RecoveryStorage replay must be
+complete and the owning module must have resolved every retained
+`FLUSHED && SealedAtDataVersion == nil` segment. Resolution schedules or reuses
+the segment's idempotent final-commit task and delays QueryView readiness; the
+runtime must not conservatively load an unresolved flushed segment as queryable
+because QueryNode may already serve it.
 
 ```text
 QueryRuntime.Initialize
@@ -281,6 +295,22 @@ consumed.
 controlled by the `QueryRuntime` initialization scheduler, not by
 `GrowingRuntime`.
 
+The classification is per segment using the complete lexicographically ordered
+`(streaming_version, compact_version)` value:
+
+```text
+GROWING
+    -> queryable growing segment
+
+FLUSHED && SealedAtDataVersion > QueryView.DataVersion
+    -> queryable flushed-as-growing segment
+
+FLUSHED && SealedAtDataVersion <= QueryView.DataVersion
+    -> non-queryable replay marker
+```
+
+No aggregate or maximum sealed version participates in this decision.
+
 ### 5.2 Live Event Apply
 
 ```text
@@ -306,6 +336,12 @@ Segment sealing has two relevant moments:
 The second value is required for retention. It is delivered through live
 resource events captured by `RecoveryStorage` and forwarded by `QueryRuntime`.
 `GrowingRuntime` must not query `SegmentView` directly to refresh it.
+
+`SealedAtDataVersion` is a membership fact, not an acknowledgement timestamp:
+it identifies the first DataView snapshot containing the segment. An
+idempotent final-commit retry must recover that original value rather than the
+collection's current latest DataVersion. Otherwise a QueryView between those
+two versions could query the segment from both QueryNode and StreamingNode.
 
 ### 5.4 Truncation
 

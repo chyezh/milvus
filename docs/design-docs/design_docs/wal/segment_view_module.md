@@ -103,6 +103,12 @@ sealed metadata transition. In MetaAndData mode, pending Insert data and the
 commit-L1 side effect retain Refs until all required work is durable and
 accepted by the segment lifecycle writer.
 
+The final commit returns the exact first DataView version whose membership
+contains this segment. The SegmentView stores that value as
+`SealedAtDataVersion`. Repeating the external commit after a lost response must
+return the same value even if unrelated Flushes have advanced the collection's
+current DataVersion.
+
 ### 3.5 Flush-Style Broadcast Messages
 
 DropCollection, DropPartition, TruncateCollection, ManualFlush, FlushAll,
@@ -175,7 +181,11 @@ On recovery:
 4. replayed messages at or before the durable Segment data checkpoint are
    skipped, while messages not covered by that data checkpoint are applied
    against recovered Growing or Flushed state;
-5. new replay work creates fresh Message Ack refs.
+5. new replay work creates fresh Message Ack refs;
+6. every recovered `FLUSHED` segment without `SealedAtDataVersion` immediately
+   schedules or reuses one final-commit task. That task first completes any
+   remaining data work, then performs the idempotent lifecycle commit and
+   installs the returned version.
 
 Ack refs themselves are not recovered from Segment metadata.
 
@@ -206,3 +216,7 @@ unfinished Insert work.
 9. Every broadcast-triggered Segment consumer retains a direct Ref before
    BroadcastAck can observe completion.
 10. Async Segment consumers mark metadata dirty before releasing their Ref.
+11. `SealedAtDataVersion` is the segment's first DataView membership version,
+    not the latest collection version observed by a retry.
+12. Every retained `FLUSHED` segment without `SealedAtDataVersion` has one
+    pending or retrying final-commit task before QueryView WAL view capture.

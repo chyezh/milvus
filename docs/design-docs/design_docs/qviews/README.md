@@ -121,6 +121,12 @@ Key observations:
   manifest updates, segment-level data version changes, and delete frontier
   refreshes do not advance DataVersion unless membership changes.
 
+Because DataVersion is collection-level, `streaming_version` is not a
+per-VChannel Flush frontier. A Flush from one VChannel may advance the version
+used by QueryViews for every shard in the collection. StreamingNode must not
+require a VChannel-local maximum `SealedAtDataVersion` to reach the target
+QueryView DataVersion before preparing that view.
+
 ## 6. Query Side — Query View (QueryView)
 
 ### 6.1 Version Number
@@ -197,7 +203,7 @@ Growing → Sealed [DataVersion D1] → Release
 | State | State Transition Condition | Description | Query Behavior |
 |---|---|---|---|
 | **Growing** | Discovered from WAL | Segment is in Growing state; Coord has not yet managed it | Always queried |
-| **Sealed [D1]** | Consumed Flush event from WAL | Segment becomes Sealed at version D1 (meaning Coord has seen this Segment in views ≥ D1) | View Version < (D1,0): Always queried; View Version ≥ (D1,0): Not queried (data is already on QN) |
+| **Sealed [D1]** | Final Flush commit obtains `SealedAtDataVersion=D1` | Segment becomes Sealed at version D1 (meaning the segment is present in DataView snapshots at or after D1 until a later membership rewrite removes it) | View DataVersion < D1: queried on SN; View DataVersion ≥ D1: represented by a non-queryable replay marker because the target DataView already covers the Flush handoff |
 | **Release** | SN required DataVersion watermark ≥ D1 and no retained view needs this Segment | Segment does not participate in any queries | Noop |
 
 The Sealed state is retained on StreamingNode until the local required DataVersion
@@ -205,6 +211,12 @@ watermark reaches D1. This delayed GC is required for crash recovery when a
 persisted Up view is older than the latest SegmentView state owned by the
 VChannelRecoveryModule: the old Up view still needs flushed-at-D1 segments as
 growing-side resources if its DataVersion is lower than D1.
+
+Before a QueryView can become Ready, every locally retained `FLUSHED` segment
+must have a non-nil `SealedAtDataVersion`. Missing values trigger or reuse the
+segment's idempotent final-commit task. Once no value is missing, each segment
+is classified independently against the target QueryView DataVersion; there is
+no VChannel-level ordered DataVersion fence.
 
 ## 9. Historical Query Segment Lifecycle
 

@@ -75,3 +75,27 @@ vchannel subscription on the PChannel-owned stream and closes only that
 subscription after replay. Multiple live QueryViews share the same VChannel
 singleton runtime; the runtime advances to the oldest DataVersion still
 referenced by active QueryViews.
+
+WAL view capture has the following readiness preconditions:
+
+1. bounded RecoveryStorage WAL replay is complete, so persisted segment state
+   has observed every recovery message through the recovery boundary;
+2. no retained segment is `FLUSHED` with a nil `SealedAtDataVersion`;
+3. any missing value has triggered or reused the segment's idempotent final
+   commit and WAL view capture waits for its completion.
+
+After these conditions hold, snapshot selection is purely per segment:
+
+```text
+GROWING
+    -> SegmentSnapshot.Segments
+FLUSHED && SealedAtDataVersion > target DataVersion
+    -> SegmentSnapshot.Segments
+FLUSHED && SealedAtDataVersion <= target DataVersion
+    -> SegmentSnapshot.FlushedSegments
+```
+
+The comparison uses the complete DataVersion. There is no requirement that the
+maximum sealed version observed by this VChannel reaches the QueryView version.
+DataVersion is collection-level and may advance because another VChannel
+flushed independently.

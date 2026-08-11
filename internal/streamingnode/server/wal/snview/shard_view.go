@@ -40,6 +40,7 @@ type snShardView struct {
 type snViewEntry struct {
 	handler.ApplyView
 	sm             *snQueryViewStateMachine
+	recovered      bool
 	queryRefs      int
 	releasePending bool
 }
@@ -66,6 +67,7 @@ func recoverSnShardView(
 		entries[version] = &snViewEntry{
 			ApplyView: handler.ApplyView{View: view},
 			sm:        sm,
+			recovered: true,
 		}
 	}
 	s := &snShardView{
@@ -270,6 +272,10 @@ func (s *snShardView) applyOneLocked(av *handler.ApplyView) {
 		return
 	}
 
+	if pushedState == qviews.QueryViewStateUp {
+		s.retireSupersededRecoveredViewsLocked(key.QueryViewVersion)
+	}
+
 	// Existing view: replace callback and deliver coord push.
 	entry.ApplyView = *av
 	entry.sm.UpdateView(av.View.IntoProto())
@@ -284,6 +290,34 @@ func (s *snShardView) applyOneLocked(av *handler.ApplyView) {
 		},
 	})
 	s.consumeReportPersistAndCleanup(key.QueryViewVersion, entry)
+}
+
+// retireSupersededRecoveredViewsLocked removes startup-only views that are no
+// longer known by Coord. A higher Up view is sufficient proof that these older
+// recovered views must not keep the shared query runtime at an obsolete
+// DataVersion. Normal handoff views are not marked recovered and remain under
+// Coord's lease-driven lifecycle.
+func (s *snShardView) retireSupersededRecoveredViewsLocked(upVersion qviews.QueryViewVersion) {
+	for version, entry := range s.views {
+		if !entry.recovered || !upVersion.GT(version) {
+			continue
+		}
+		state := entry.sm.State()
+		if state != qviews.QueryViewStateUp && state != qviews.QueryViewStateUpRecovering {
+			continue
+		}
+		key := entry.View.QueryViewKey()
+		entry.sm.OnCoordStateDelivered(qviews.QueryViewStateDropped)
+		qvobserve.Observe(context.TODO(), qvobserve.StreamingNodeApplyCoordViewEvent{
+			ViewStateTransition: qvobserve.ViewStateTransition{
+				CollectionID: collectionIDForEntry(entry),
+				View:         key,
+				From:         state,
+				To:           entry.sm.State(),
+			},
+		})
+		s.consumeReportPersistAndCleanup(version, entry)
+	}
 }
 
 func (s *snShardView) setCollectionIDLocked(collectionID int64) {

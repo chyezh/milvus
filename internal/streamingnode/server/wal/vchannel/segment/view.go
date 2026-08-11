@@ -582,6 +582,29 @@ func (info *SegmentView) HasReadyTombstoneFinalize() bool {
 	return info.tombstoneFinalizeReadyLocked()
 }
 
+// EnsureFinalCommit reports whether a flushed segment has a stable sealed
+// DataVersion. When it does not, the method schedules or reuses the segment's
+// single final-commit task.
+func (info *SegmentView) EnsureFinalCommit() bool {
+	info.mu.Lock()
+	if info.meta.GetState() != streamingpb.SegmentAssignmentState_SEGMENT_ASSIGNMENT_STATE_FLUSHED ||
+		info.meta.GetSealedAtDataVersion() != nil {
+		info.mu.Unlock()
+		return true
+	}
+	if !info.metaAndData {
+		info.mu.Unlock()
+		return false
+	}
+	task := info.newCommitL1SegmentTaskLocked(info.meta.GetCheckpointTimeTick())
+	scheduler := info.runtime.Scheduler
+	info.mu.Unlock()
+	if task != nil {
+		scheduler.Submit(task)
+	}
+	return false
+}
+
 func (info *SegmentView) SwitchIntoMetaAndData() {
 	info.mu.Lock()
 	if info.metaAndData {

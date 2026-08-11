@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -31,6 +32,30 @@ func newTestInsertMessage(t *testing.T, vchannel string, timetick uint64) messag
 	mutable, err := message.NewInsertMessageBuilderV1().
 		WithVChannel(vchannel).
 		WithHeader(&message.InsertMessageHeader{}).
+		WithBody(&msgpb.InsertRequest{}).
+		BuildMutable()
+	require.NoError(t, err)
+	return mutable.WithTimeTick(timetick).
+		WithLastConfirmedUseMessageID().
+		IntoImmutableMessage(rmq.NewRmqID(int64(timetick)))
+}
+
+func newTestAssignedInsertMessage(t *testing.T, vchannel string, segmentID int64, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	mutable, err := message.NewInsertMessageBuilderV1().
+		WithVChannel(vchannel).
+		WithHeader(&message.InsertMessageHeader{
+			CollectionId: 1,
+			Partitions: []*messagespb.PartitionSegmentAssignment{
+				{
+					PartitionId: 10,
+					Rows:        1,
+					SegmentAssignment: &messagespb.SegmentAssignment{
+						SegmentId: segmentID,
+					},
+				},
+			},
+		}).
 		WithBody(&msgpb.InsertRequest{}).
 		BuildMutable()
 	require.NoError(t, err)
@@ -146,6 +171,44 @@ func newTestTransformDeleteMessage(t *testing.T, vchannel string, timetick uint6
 		IntoImmutableMessage(rmq.NewRmqID(int64(timetick + 1)))
 }
 
+func newTestInsertDeleteTxnMessage(t *testing.T, vchannel string, segmentID int64, timetick uint64) message.ImmutableMessage {
+	t.Helper()
+	txnContext := message.TxnContext{TxnID: message.TxnID(timetick), Keepalive: time.Second}
+	begin := message.NewBeginTxnMessageBuilderV2().
+		WithVChannel(vchannel).
+		WithHeader(&message.BeginTxnMessageHeader{}).
+		WithBody(&message.BeginTxnMessageBody{}).
+		MustBuildMutable().
+		WithTxnContext(txnContext).
+		WithTimeTick(timetick - 2).
+		WithLastConfirmed(rmq.NewRmqID(int64(timetick - 2))).
+		IntoImmutableMessage(rmq.NewRmqID(int64(timetick - 2)))
+	beginMessage, err := message.AsImmutableBeginTxnMessageV2(begin)
+	require.NoError(t, err)
+
+	insert := newTestAssignedInsertMessage(t, vchannel, segmentID, timetick-1)
+	deleteMessage := newTestTransformDeleteMessage(t, vchannel, timetick-1)
+
+	commit := message.NewCommitTxnMessageBuilderV2().
+		WithVChannel(vchannel).
+		WithHeader(&message.CommitTxnMessageHeader{}).
+		WithBody(&message.CommitTxnMessageBody{}).
+		MustBuildMutable().
+		WithTxnContext(txnContext).
+		WithTimeTick(timetick).
+		WithLastConfirmed(rmq.NewRmqID(int64(timetick))).
+		IntoImmutableMessage(rmq.NewRmqID(int64(timetick + 1)))
+	commitMessage, err := message.AsImmutableCommitTxnMessageV2(commit)
+	require.NoError(t, err)
+
+	txn, err := message.NewImmutableTxnMessageBuilder(beginMessage).
+		Add(insert).
+		Add(deleteMessage).
+		Build(commitMessage)
+	require.NoError(t, err)
+	return txn
+}
+
 func TestDrainDeleteReplayUsesSharedTransformLogStream(t *testing.T) {
 	ctx := context.Background()
 	manager := transformlog.NewStreamManager("p1")
@@ -190,6 +253,48 @@ func TestRecoveryBarrierAdvancesBothRuntimeFrontiers(t *testing.T) {
 
 	require.Equal(t, uint64(30), runtime.AppliedGrowingTimeTick())
 	require.Equal(t, uint64(30), runtime.AppliedTransformTimeTick())
+}
+
+func TestRuntimeSkipsInsertAtOrBelowGrowingFrontier(t *testing.T) {
+	runtime := newRuntime()
+	runtime.markGrowingTimeTick(30)
+
+	runtime.applyLiveMessage(context.Background(), newTestAssignedInsertMessage(t, "ch", 100, 20))
+
+	require.Empty(t, runtime.SegmentIDs())
+	require.Equal(t, uint64(30), runtime.AppliedGrowingTimeTick())
+}
+
+func TestRuntimeSkipsFlushAtOrBelowGrowingFrontier(t *testing.T) {
+	runtime := newRuntime()
+	runtime.addSegment(newGrowingSegment(nil, 100, 10))
+	runtime.markGrowingTimeTick(30)
+
+	runtime.applyLiveMessage(context.Background(), newTestFlushMessage(t, "ch", 100, 20))
+
+	require.False(t, runtime.SegmentFlushed(100))
+	require.Equal(t, uint64(30), runtime.AppliedGrowingTimeTick())
+}
+
+func TestRuntimeTxnGatesGrowingAndTransformEffectsIndependently(t *testing.T) {
+	runtime := newRuntime()
+	runtime.markGrowingTimeTick(50)
+	runtime.markTransformTimeTick(20)
+
+	runtime.applyLiveMessage(context.Background(), newTestInsertDeleteTxnMessage(t, "ch", 100, 40))
+
+	require.Empty(t, runtime.SegmentIDs())
+	require.Equal(t, uint64(50), runtime.AppliedGrowingTimeTick())
+	require.Equal(t, uint64(40), runtime.AppliedTransformTimeTick())
+}
+
+func TestRuntimeDeleteAdvancesBothFrontiers(t *testing.T) {
+	runtime := newRuntime()
+
+	runtime.applyLiveMessage(context.Background(), newTestTransformDeleteMessage(t, "ch", 40))
+
+	require.Equal(t, uint64(40), runtime.AppliedGrowingTimeTick())
+	require.Equal(t, uint64(40), runtime.AppliedTransformTimeTick())
 }
 
 func TestTransformBarrierMessagesAdvanceRuntimeTransformFrontier(t *testing.T) {

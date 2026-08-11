@@ -52,6 +52,8 @@ QueryViewStateMachine.Acquire(qv)
   -> PChannelRecoveryManager.Acquire
   -> VChannelRecoveryModule registers the QueryView reference
   -> if no runtime exists:
+       wait until bounded RecoveryStorage replay is complete
+       resolve every FLUSHED segment without SealedAtDataVersion
        build WAL input view from QueryView meta + DataView + TransformLog
        create QueryRuntime
        submit build task to the shared scheduler
@@ -63,6 +65,19 @@ QueryViewStateMachine.Acquire(qv)
 `AlterLoadConfig` does not create VChannel-local load state. QueryView metadata
 identifies the versioned load info, and the QueryView state machine is the load
 trigger.
+
+The readiness gate is segment-local:
+
+```text
+no retained segment has
+  state == FLUSHED && SealedAtDataVersion == nil
+```
+
+An unresolved segment triggers or reuses its idempotent final-commit task. Once
+all retained flushed segments have a version, the module classifies them
+independently against the target QueryView DataVersion. It must not wait for a
+VChannel-local maximum `SealedAtDataVersion` to reach the target version;
+collection-level DataVersion can advance because of unrelated VChannels.
 
 ## 4. Live DML
 
@@ -111,12 +126,16 @@ checkpoint decisions.
 Recovery rebuilds state from WAL metadata and QueryView metadata:
 
 1. `RecoveryStorage` recovers `PChannelRecoveryManager` from VChannel metadata,
-   Segment metadata, TransformLog metadata, and WAL replay.
+   Segment metadata, TransformLog metadata, and completes bounded WAL replay.
 2. `SNQueryViewHandler` recovers persisted QueryView state.
 3. Recovered QueryView state machines call `Acquire` for local resources.
-4. `VChannelRecoveryModule` builds the WAL input view from QueryView meta and
-   its owned DataView/TransformLog state.
-5. After runtime initialization, the module continues consuming DML and
+4. `VChannelRecoveryModule` resolves any recovered `FLUSHED` segment without a
+   `SealedAtDataVersion`, then builds the WAL input view from QueryView meta and
+   its owned Segment/TransformLog state.
+5. The segment snapshot includes queryable resources when
+   `SealedAtDataVersion > QueryView.DataVersion` and non-queryable replay markers
+   when `SealedAtDataVersion <= QueryView.DataVersion`.
+6. After runtime initialization, the module continues consuming DML and
    dispatching live resource events to the runtime.
 
 WAL Message Ack state is rebuilt independently by RecoveryStorage replay and is

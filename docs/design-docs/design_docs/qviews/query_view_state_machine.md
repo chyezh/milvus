@@ -196,15 +196,24 @@ Persisted states: **Up** recovery info only (the latest Up view).
 
 **Automatic Behavior:**
 1. Check replica information.
-2. Transition growing segments to queryable state.
-3. Check whether the local Flusher's data_version > the view's data_version.
+2. Wait for the owning RecoveryStorage to finish bounded WAL recovery before
+   capturing the VChannel WAL view.
+3. For every retained segment in `FLUSHED` state without
+   `SealedAtDataVersion`, trigger or reuse its idempotent final-commit task and
+   wait for the exact first DataView version containing that segment.
+4. Build the growing snapshot by comparing each segment's complete
+   `SealedAtDataVersion` with the target QueryView DataVersion.
+
+There is no check that a VChannel-local maximum DataVersion reaches the target
+QueryView DataVersion. DataVersion is collection-level and may be advanced by
+Flushes on other VChannels, so it cannot serve as a VChannel recovery fence.
 
 **Transitions:**
 
 | Target State | Trigger | Transition Behavior |
 |---|---|---|
 | Ready | Resource preparation succeeded | Report Ready to Coord |
-| Unrecoverable | data_version expired (growing segments already flushed and released) | Report Unrecoverable to Coord |
+| Unrecoverable | Required retained segment state or another local query resource cannot be prepared | Report Unrecoverable to Coord |
 | Dropped | Received Dropped push from Coord (Coord aborted this view) | Release any prepared resources |
 
 **Possible Coord States (and this node's reaction):**
@@ -263,14 +272,19 @@ Coord and QueryNode never enter this state. For Coord-visible reporting, UpRecov
 - WAL consumption has not yet caught up; growing segment data ([A2] portion) is incomplete.
 
 **Automatic Behavior:**
-1. Replay WAL from the checkpoint position to recover growing segments.
-2. Do NOT serve queries (data is incomplete).
+1. Complete bounded RecoveryStorage WAL replay and rebuild retained SegmentView
+   state.
+2. Resolve every `FLUSHED` segment without `SealedAtDataVersion` through its
+   idempotent final-commit task.
+3. Build the QueryRuntime by classifying every segment against the persisted
+   QueryView DataVersion.
+4. Do NOT serve queries until the QueryRuntime is ready.
 
 **Transitions:**
 
 | Target State | Trigger | Transition Behavior |
 |---|---|---|
-| Up | WAL consumption catches up to current position | Begin serving queries |
+| Up | Bounded recovery, pending final commits, and QueryRuntime initialization complete | Begin serving queries |
 | Down | Received Down push from Coord | Delete recovery info; abandon WAL catch-up |
 | Unrecoverable | Local resource failure during WAL recovery (e.g., OOM) | Report Unrecoverable to Coord |
 
@@ -302,7 +316,7 @@ Coord and QueryNode never enter this state. For Coord-visible reporting, UpRecov
 ### 2.6 Unrecoverable
 
 **Entry Conditions:**
-- data_version check failed during Preparing (growing segments already flushed to sealed and released).
+- Required retained segment state is unavailable during Preparing.
 - Local resource failure during UpRecovering (e.g., OOM while replaying WAL to recover growing segments).
 
 **Automatic Behavior:**

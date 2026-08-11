@@ -129,6 +129,14 @@ Delete replay.
 QueryRuntime for active QueryViews. It forwards live DML events after updating
 recovery state.
 
+Before capturing a WAL view, it waits for bounded RecoveryStorage replay to
+complete and resolves every retained `FLUSHED` SegmentView whose
+`SealedAtDataVersion` is nil. Resolution triggers or reuses the SegmentView's
+idempotent final-commit task. Once every flushed segment has its exact first
+DataView membership version, the module classifies segments independently
+against the target QueryView DataVersion. It does not maintain a VChannel-level
+DataVersion fence.
+
 QueryView references protect temporary serving resources only. They do not:
 
 - retain Message Ack Refs;
@@ -165,7 +173,9 @@ After construction:
 2. modules switch into MetaAndData mode;
 3. data replay starts from the persisted Data checkpoint;
 4. replay creates new Message Ack records for unfinished messages;
-5. QueryView state recovery independently reacquires query resources.
+5. bounded replay reaches the recovery boundary;
+6. QueryView state recovery independently reacquires query resources, waiting
+   for any recovered final commits before WAL view capture.
 
 ## 9. Invariants
 
@@ -178,3 +188,5 @@ After construction:
 5. QueryRuntime observation does not participate in Message Ack.
 6. Every broadcast-related Segment/TransformLog consumer retains a direct Ref.
 7. Async VChannel-owned consumers mark metadata dirty before releasing a Ref.
+8. QueryView readiness requires no retained `FLUSHED` SegmentView with a nil
+   `SealedAtDataVersion`; it does not require an aggregate DataVersion fence.

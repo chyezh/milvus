@@ -60,6 +60,7 @@ type PChannelRecoveryManager struct {
 
 	config                  PChannelManagerConfig
 	metaAndData             atomic.Bool
+	recoveryBoundaryReached atomic.Bool
 	streamManager           *transformlog.StreamManager
 	queryTransformLogStream wal.TransformLogStream
 	queryDispatcher         *queryresource.Dispatcher
@@ -369,6 +370,9 @@ func (m *PChannelRecoveryManager) observeBroadcastMessage(ctx context.Context, m
 		m.syncTransformLogStream(module)
 		return true
 	})
+	if msg.MessageType() == message.MessageTypeRecoveryBarrier && msg.Ack() != nil {
+		m.recoveryBoundaryReached.Store(true)
+	}
 }
 
 func (m *PChannelRecoveryManager) syncTransformLogStream(module *VChannelRecoveryModule) {
@@ -440,6 +444,7 @@ func (m *PChannelRecoveryManager) newModule(vchannel string) (*VChannelRecoveryM
 		QueryViewLoadInfoProvider:  m.config.QueryViewLoadInfoProvider,
 		NodeScheduler:              m.config.NodeScheduler,
 		QueryRuntimeDispatcher:     m.queryDispatcher,
+		RecoveryBoundaryReached:    m.recoveryBoundaryReached.Load(),
 	})
 	if err != nil {
 		return nil, err

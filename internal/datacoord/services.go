@@ -661,6 +661,17 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 
 		if segment.State == commonpb.SegmentState_Dropped {
 			mlog.Info(context.TODO(), "save to dropped segment, ignore this request")
+			if s.dataViewManager != nil && req.GetFlushed() {
+				version, err := s.dataViewManager.OnFlush(ctx, FlushDataViewEvent{
+					CollectionID: req.GetCollectionID(),
+					SegmentIDs:   []int64{req.GetSegmentID()},
+				})
+				if err != nil {
+					mlog.Warn(ctx, "failed to recover DataView version for dropped segment", mlog.Err(err))
+				} else {
+					return successWithFlushedDataVersion(version), nil
+				}
+			}
 			return merr.Success(), nil
 		}
 
