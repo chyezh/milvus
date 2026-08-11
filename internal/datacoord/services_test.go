@@ -2971,6 +2971,246 @@ func TestServer_NotifyDropPartitionPublicationFailurePreservesSegment(t *testing
 	require.Equal(t, commonpb.SegmentState_Flushed, meta.GetSegment(ctx, 100).GetState())
 }
 
+func TestServer_NotifyDropPartitionCompletesTargetedAssignedEpochBeforeMetadataDrop(t *testing.T) {
+	ctx := context.Background()
+	meta, manager, catalog := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 100)
+	assigned := assignDDLTrimSegment(t, manager, 100, 2)
+	catalog.errOnce = errors.New("raw metastore publication failure")
+	_, err := manager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 100))},
+	})
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err = server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+
+	require.NoError(t, err)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	requirePublishedDataViewVersion(t, meta, 1, 2, 0)
+	visible, err := manager.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	require.Empty(t, visible.GetShards())
+
+	addDDLTrimSegment(t, meta, 200, 20, "ch-0", 200)
+	later, err := meta.commitDataViewStreaming(ctx, 1, []int64{200})
+	require.NoError(t, err)
+	require.EqualValues(t, 3, later.GetStreamingVersion())
+}
+
+func TestServer_DropSegmentsByTimeCompletesTargetedAssignedEpochBeforeMetadataDrop(t *testing.T) {
+	ctx := context.Background()
+	meta, manager, catalog := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 900)
+	assigned := assignDDLTrimSegment(t, manager, 100, 2)
+	catalog.errOnce = errors.New("raw metastore publication failure")
+	_, err := manager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 100))},
+	})
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	require.NoError(t, meta.UpdateChannelCheckpoint(ctx, "ch-0", &msgpb.MsgPosition{
+		ChannelName: "ch-0",
+		MsgID:       []byte{0},
+		Timestamp:   1000,
+	}))
+	server := &Server{meta: meta, dataViewManager: manager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err = server.DropSegmentsByTime(ctx, 1, map[string]uint64{"ch-0": 1000})
+
+	require.NoError(t, err)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	requirePublishedDataViewVersion(t, meta, 1, 2, 0)
+
+	addDDLTrimSegment(t, meta, 200, 20, "ch-0", 1100)
+	later, err := meta.commitDataViewStreaming(ctx, 1, []int64{200})
+	require.NoError(t, err)
+	require.EqualValues(t, 3, later.GetStreamingVersion())
+}
+
+func TestServer_NotifyDropPartitionDoesNotOvertakeEarlierNonTargetedAssignedEpoch(t *testing.T) {
+	ctx := context.Background()
+	meta, manager, _ := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 20, "ch-0", 100)
+	assignDDLTrimSegment(t, manager, 100, 2)
+	addDDLTrimSegment(t, meta, 200, 10, "ch-0", 200)
+	assignDDLTrimSegment(t, manager, 200, 3)
+
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Maybe()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err := server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	require.True(t, merr.IsRetryableErr(err))
+	require.Equal(t, commonpb.SegmentState_Flushed, meta.GetSegment(ctx, 200).GetState())
+	requirePublishedDataViewVersion(t, meta, 1, 1, 0)
+}
+
+func TestServer_NotifyDropPartitionCompletesTargetBeforeUnrelatedLaterAssignedEpoch(t *testing.T) {
+	ctx := context.Background()
+	meta, manager, _ := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 100)
+	assignDDLTrimSegment(t, manager, 100, 2)
+	addDDLTrimSegment(t, meta, 200, 20, "ch-0", 200)
+	laterAssigned := assignDDLTrimSegment(t, manager, 200, 3)
+
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err := server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+
+	require.NoError(t, err)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	require.Equal(t, commonpb.SegmentState_Flushed, meta.GetSegment(ctx, 200).GetState())
+	requirePublishedDataViewVersion(t, meta, 1, 2, 0)
+	published, err := manager.CommitPublishedView(ctx, 1, laterAssigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 200))},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 3, published.GetStreamingVersion())
+}
+
+func TestServer_NotifyDropPartitionCompactRemovesAlreadyPublishedTarget(t *testing.T) {
+	ctx := context.Background()
+	meta, manager, _ := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 100)
+	assigned := assignDDLTrimSegment(t, manager, 100, 2)
+	_, err := manager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 100))},
+	})
+	require.NoError(t, err)
+
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err = server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+
+	require.NoError(t, err)
+	requirePublishedDataViewVersion(t, meta, 1, 2, 1)
+	visible, err := manager.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	require.Empty(t, visible.GetShards())
+}
+
+func TestServer_NotifyDropPartitionRefreshesDurableAssignedPublicationBeforeTrim(t *testing.T) {
+	ctx := context.Background()
+	meta, manager, catalog := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 100)
+	assigned := assignDDLTrimSegment(t, manager, 100, 2)
+	catalog.persistThenErrOnce = errors.New("lost publication response")
+	_, err := manager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{publishedSegmentMembership(meta.GetSegment(ctx, 100))},
+	})
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	requirePublishedDataViewVersion(t, meta, 1, 2, 0)
+
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err = server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+
+	require.NoError(t, err)
+	requirePublishedDataViewVersion(t, meta, 1, 2, 1)
+	visible, err := manager.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	require.Empty(t, visible.GetShards())
+}
+
+func TestServer_NotifyDropPartitionDropsUnassignedSegmentWithoutStreamingAdvance(t *testing.T) {
+	ctx := context.Background()
+	meta, manager, _ := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 100)
+	segment := meta.GetSegment(ctx, 100).Clone()
+	segment.IsImporting = true
+	meta.segments.SetSegment(100, segment)
+
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	err := server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+
+	require.NoError(t, err)
+	require.Nil(t, meta.GetSegment(ctx, 100).GetSealedAtDataVersion())
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	state, err := meta.catalog.GetDataViewVersionState(ctx, 1)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, state.GetPublishedDataVersion().GetStreamingVersion())
+}
+
+func newDDLTrimDataViewTest(t *testing.T) (*meta, DataViewManager, *failPublishedDataViewCatalog) {
+	t.Helper()
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	meta.AddCollection(&collectionInfo{
+		ID:            1,
+		Partitions:    []int64{10, 20},
+		VChannelNames: []string{"ch-0"},
+	})
+	catalog := &failPublishedDataViewCatalog{DataCoordCatalog: meta.catalog}
+	manager := newDataViewManager(catalog, meta)
+	meta.dataViewManager = manager
+	_, err = manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+		CollectionID: 1,
+		VChannels:    []string{"ch-0"},
+	})
+	require.NoError(t, err)
+	return meta, manager, catalog
+}
+
+func addDDLTrimSegment(t *testing.T, meta *meta, segmentID, partitionID int64, channel string, timestamp uint64) {
+	t.Helper()
+	require.NoError(t, meta.AddSegment(context.Background(), NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            segmentID,
+		CollectionID:  1,
+		PartitionID:   partitionID,
+		InsertChannel: channel,
+		State:         commonpb.SegmentState_Flushed,
+		Level:         datapb.SegmentLevel_L1,
+		NumOfRows:     100,
+		DmlPosition: &msgpb.MsgPosition{
+			ChannelName: channel,
+			Timestamp:   timestamp,
+		},
+	})))
+}
+
+func assignDDLTrimSegment(t *testing.T, manager DataViewManager, segmentID, expectedStreaming int64) *viewpb.DataVersion {
+	t.Helper()
+	assigned, err := manager.AssignFlushVersion(context.Background(), 1, segmentID)
+	require.NoError(t, err)
+	require.Equal(t, expectedStreaming, assigned.GetStreamingVersion())
+	require.Zero(t, assigned.GetCompactVersion())
+	return assigned
+}
+
+func requirePublishedDataViewVersion(
+	t *testing.T,
+	meta *meta,
+	collectionID, expectedStreaming, expectedCompact int64,
+) {
+	t.Helper()
+	state, err := meta.catalog.GetDataViewVersionState(context.Background(), collectionID)
+	require.NoError(t, err)
+	require.Equal(t, expectedStreaming, state.GetPublishedDataVersion().GetStreamingVersion())
+	require.Equal(t, expectedCompact, state.GetPublishedDataVersion().GetCompactVersion())
+}
+
 func TestGetSegmentInfo_WithCompaction(t *testing.T) {
 	setupParent := func(t *testing.T, collID, partID, parentID int64) *Server {
 		t.Helper()

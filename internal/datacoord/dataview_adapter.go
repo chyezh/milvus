@@ -44,6 +44,7 @@ type (
 	DropPartitionDataViewEvent       = dataview.DropPartitionDataViewEvent
 	TruncateDataViewEvent            = dataview.TruncateDataViewEvent
 	SegmentMembership                = dataview.SegmentMembership
+	SegmentTrimTarget                = dataview.SegmentTrimTarget
 	PublishedMutation                = dataview.PublishedMutation
 )
 
@@ -272,6 +273,25 @@ func (m *meta) commitDataViewRewrite(
 		Add:    memberships,
 		Remove: append([]int64(nil), removeSegmentIDs...),
 	})
+}
+
+func (m *meta) commitDataViewTrim(
+	ctx context.Context,
+	collectionID int64,
+	segmentIDs []int64,
+) (*viewpb.DataVersion, error) {
+	if m.dataViewManager == nil {
+		return nil, nil
+	}
+	targets := make([]SegmentTrimTarget, 0, len(segmentIDs))
+	for _, segmentID := range segmentIDs {
+		target := SegmentTrimTarget{SegmentID: segmentID}
+		if segment := m.segments.GetSegment(segmentID); segment != nil {
+			target.AssignedVersion = clonePublishedDataVersion(segment.GetSealedAtDataVersion())
+		}
+		targets = append(targets, target)
+	}
+	return m.dataViewManager.CommitSegmentTrim(ctx, collectionID, targets)
 }
 
 func (m *meta) commitDataViewStreaming(

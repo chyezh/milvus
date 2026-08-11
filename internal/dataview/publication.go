@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sort"
 
 	"google.golang.org/protobuf/proto"
 
@@ -250,15 +251,153 @@ func (m *dataViewManager) CommitRewrite(
 	if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
 		return nil, err
 	}
+	return m.commitRewriteLocked(ctx, state, catalog, mutation)
+}
 
-	next := publishedMutationBase(collectionID, state.latestResident)
+// CommitSegmentTrim completes explicitly targeted unpublished assigned epochs
+// before removing any target that is still present in the published view.
+func (m *dataViewManager) CommitSegmentTrim(
+	ctx context.Context,
+	collectionID int64,
+	targets []SegmentTrimTarget,
+) (*viewpb.DataVersion, error) {
+	targetIDs := make([]int64, 0, len(targets))
+	assignedTargets := make([]SegmentTrimTarget, 0, len(targets))
+	for _, target := range targets {
+		if target.SegmentID <= 0 {
+			return nil, merr.WrapErrServiceInternalMsg("invalid segment %d for DataView trim of collection %d", target.SegmentID, collectionID)
+		}
+		targetIDs = append(targetIDs, target.SegmentID)
+		assigned := target.AssignedVersion
+		if assigned == nil {
+			continue
+		}
+		if assigned.GetStreamingVersion() <= 0 || assigned.GetCompactVersion() != 0 {
+			return nil, merr.WrapErrServiceInternalMsg(
+				"invalid assigned DataVersion %d/%d for trimmed segment %d in collection %d",
+				assigned.GetStreamingVersion(),
+				assigned.GetCompactVersion(),
+				target.SegmentID,
+				collectionID,
+			)
+		}
+		assignedTargets = append(assignedTargets, target)
+	}
+	sort.Slice(assignedTargets, func(i, j int) bool {
+		return assignedTargets[i].AssignedVersion.GetStreamingVersion() < assignedTargets[j].AssignedVersion.GetStreamingVersion()
+	})
+
+	catalog, ok := m.catalog.(publishedDataViewCatalog)
+	if !ok {
+		return nil, merr.WrapErrServiceNotReadyMsg("published data view catalog is not initialized")
+	}
+	state := m.getOrCreateState(collectionID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.dropped {
+		return nil, merr.WrapErrServiceNotReadyMsg("data view collection %d is terminal", collectionID)
+	}
+	if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
+		return nil, err
+	}
+	if err := m.refreshDurablePublicationLocked(ctx, state, catalog); err != nil {
+		return nil, err
+	}
+
+	for _, target := range assignedTargets {
+		streamingVersion := target.AssignedVersion.GetStreamingVersion()
+		if streamingVersion <= state.versionState.GetPublishedDataVersion().GetStreamingVersion() {
+			continue
+		}
+		state.pendingAssigned[streamingVersion] = struct{}{}
+		state.readyPublications[streamingVersion] = PublishedMutation{Remove: []int64{target.SegmentID}}
+		if pending := minimumPendingStreamingVersion(state.pendingAssigned); pending != streamingVersion {
+			return nil, merr.WrapErrServiceUnavailableMsg(
+				"trim of assigned DataVersion %d/0 for collection %d is waiting for earlier assigned epoch %d/0",
+				streamingVersion,
+				collectionID,
+				pending,
+			)
+		}
+		next := publishedMutationBase(collectionID, state.latestResident)
+		applyPublishedMutation(next, state.readyPublications[streamingVersion])
+		next.DataVersion = &viewpb.DataVersion{StreamingVersion: streamingVersion}
+		if err := m.persistPublishedLocked(ctx, state, catalog, next); err != nil {
+			return nil, err
+		}
+		delete(state.pendingAssigned, streamingVersion)
+		delete(state.readyPublications, streamingVersion)
+	}
+
+	publishedTargets := make([]int64, 0, len(targetIDs))
+	for _, segmentID := range targetIDs {
+		if dataViewContainsSegment(state.latestResident, segmentID) {
+			publishedTargets = append(publishedTargets, segmentID)
+		}
+	}
+	if len(publishedTargets) == 0 {
+		return dataVersionFromView(state.latestResident), nil
+	}
+	return m.commitRewriteLocked(ctx, state, catalog, PublishedMutation{Remove: publishedTargets})
+}
+
+func (m *dataViewManager) refreshDurablePublicationLocked(
+	ctx context.Context,
+	state *collectionDataViewState,
+	catalog publishedDataViewCatalog,
+) error {
+	durable, published, err := recoverPublishedDataView(ctx, catalog, state.collectionID)
+	if err != nil {
+		return err
+	}
+	if durable == nil || durable.GetPublishedDataVersion() == nil || published == nil {
+		return merr.WrapErrServiceNotReadyMsg("collection %d has no durable published DataView", state.collectionID)
+	}
+	current := state.versionState.GetPublishedDataVersion()
+	if compareDataVersion(durable.GetPublishedDataVersion(), current) < 0 {
+		return merr.WrapErrDataIntegrityMsg(
+			"durable published DataView for collection %d regressed from %d/%d to %d/%d",
+			state.collectionID,
+			current.GetStreamingVersion(),
+			current.GetCompactVersion(),
+			durable.GetPublishedDataVersion().GetStreamingVersion(),
+			durable.GetPublishedDataVersion().GetCompactVersion(),
+		)
+	}
+	persistedAllocated := durable.GetAllocatedStreamingVersion()
+	durable = proto.Clone(durable).(*viewpb.CollectionDataVersionState)
+	if state.versionState.GetAllocatedStreamingVersion() > durable.GetAllocatedStreamingVersion() {
+		durable.AllocatedStreamingVersion = state.versionState.GetAllocatedStreamingVersion()
+	}
+	state.versionState = durable
+	state.persistedAllocated = persistedAllocated
+	state.latestResident = canonicalDataViewClone(published)
+	state.latestVisible = canonicalDataViewClone(published)
+	m.rememberRecoveredDataView(published)
+	publishedStreaming := durable.GetPublishedDataVersion().GetStreamingVersion()
+	for streamingVersion := range state.pendingAssigned {
+		if streamingVersion <= publishedStreaming {
+			delete(state.pendingAssigned, streamingVersion)
+			delete(state.readyPublications, streamingVersion)
+		}
+	}
+	return nil
+}
+
+func (m *dataViewManager) commitRewriteLocked(
+	ctx context.Context,
+	state *collectionDataViewState,
+	catalog publishedDataViewCatalog,
+	mutation PublishedMutation,
+) (*viewpb.DataVersion, error) {
+	next := publishedMutationBase(state.collectionID, state.latestResident)
 	applyPublishedMutation(next, mutation)
 	if isDataViewMembershipEqual(state.latestResident, next) {
 		return dataVersionFromView(state.latestResident), nil
 	}
 	current := state.versionState.GetPublishedDataVersion()
 	if current == nil || current.GetStreamingVersion() == 0 {
-		return nil, merr.WrapErrServiceNotReadyMsg("collection %d has no published Streaming epoch to rewrite", collectionID)
+		return nil, merr.WrapErrServiceNotReadyMsg("collection %d has no published Streaming epoch to rewrite", state.collectionID)
 	}
 	next.DataVersion = &viewpb.DataVersion{
 		StreamingVersion: current.GetStreamingVersion(),

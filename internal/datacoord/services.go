@@ -2492,12 +2492,13 @@ func (s *Server) NotifyDropPartition(ctx context.Context, channel string, partit
 		mlog.String("channelname", channel),
 		mlog.Any("partitionID", partitionIDs))
 	if s.dataViewManager != nil {
+		partitionSet := make(map[int64]struct{}, len(partitionIDs))
+		for _, partitionID := range partitionIDs {
+			partitionSet[partitionID] = struct{}{}
+		}
 		for _, collectionID := range s.meta.GetCollectionIDsByPartition(ctx, partitionIDs) {
-			partitionSet := make(map[int64]struct{}, len(partitionIDs))
-			for _, partitionID := range partitionIDs {
-				partitionSet[partitionID] = struct{}{}
-			}
-			if _, err := s.meta.commitDataViewRewrite(ctx, collectionID, nil, s.meta.segmentIDsForPartition(collectionID, partitionSet)); err != nil {
+			segmentIDs := s.meta.segmentIDsForPartition(collectionID, partitionSet)
+			if _, err := s.meta.commitDataViewTrim(ctx, collectionID, segmentIDs); err != nil {
 				return err
 			}
 		}
@@ -2524,9 +2525,10 @@ func (s *Server) DropSegmentsByTime(ctx context.Context, collectionID int64, flu
 			return err
 		}
 		if s.dataViewManager != nil {
-			_, err = s.meta.commitDataViewRewrite(ctx, collectionID, nil, s.meta.segmentIDsForTruncate(collectionID, channelName, flushTs))
+			segmentIDs := s.meta.segmentIDsForTruncate(collectionID, channelName, flushTs)
+			_, err = s.meta.commitDataViewTrim(ctx, collectionID, segmentIDs)
 			if err != nil {
-				mlog.Warn(ctx, "OnTruncate DataView failed", mlog.Err(err))
+				mlog.Warn(ctx, "trim truncated segments from DataView failed", mlog.Err(err))
 				return err
 			}
 		}

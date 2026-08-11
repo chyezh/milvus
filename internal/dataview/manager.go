@@ -58,6 +58,7 @@ type Manager interface {
 	RetryAssignedFlushPublication(ctx context.Context, collectionID, segmentID int64, assignedVersion *viewpb.DataVersion, empty bool) (*viewpb.DataVersion, error)
 	CommitStreamingView(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
 	CommitRewrite(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
+	CommitSegmentTrim(ctx context.Context, collectionID int64, targets []SegmentTrimTarget) (*viewpb.DataVersion, error)
 	OnCreateCollection(ctx context.Context, event CreateCollectionDataViewEvent) (*viewpb.DataVersion, error)
 	OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error)
 	OnImport(ctx context.Context, event ImportDataViewEvent) (*viewpb.DataVersion, error)
@@ -132,6 +133,11 @@ type TruncateDataViewEvent struct {
 	CollectionID int64
 	VChannel     string
 	FlushTs      uint64
+}
+
+type SegmentTrimTarget struct {
+	SegmentID       int64
+	AssignedVersion *viewpb.DataVersion
 }
 
 type collectionDataViewState struct {

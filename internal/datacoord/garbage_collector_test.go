@@ -145,6 +145,19 @@ func (m *fakeGCDataViewManager) CommitRewrite(
 	return m.publishedVersion, m.publishVersionErr
 }
 
+func (m *fakeGCDataViewManager) CommitSegmentTrim(
+	ctx context.Context,
+	collectionID int64,
+	targets []dataview.SegmentTrimTarget,
+) (*viewpb.DataVersion, error) {
+	mutation := dataview.PublishedMutation{Remove: make([]int64, 0, len(targets))}
+	for _, target := range targets {
+		mutation.Remove = append(mutation.Remove, target.SegmentID)
+	}
+	m.rewriteMutations = append(m.rewriteMutations, mutation)
+	return m.publishedVersion, m.publishVersionErr
+}
+
 func (m *fakeGCDataViewManager) CommitStreamingView(
 	ctx context.Context,
 	collectionID int64,
