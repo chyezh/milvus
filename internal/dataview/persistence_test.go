@@ -31,16 +31,72 @@ import (
 type publishedDataViewRecoveryCatalogStub struct {
 	state     *viewpb.CollectionDataVersionState
 	views     []*viewpb.DataViewOfCollection
+	getErr    error
+	listErr   error
 	listCalls int
 }
 
 func (c *publishedDataViewRecoveryCatalogStub) GetDataViewVersionState(context.Context, int64) (*viewpb.CollectionDataVersionState, error) {
-	return c.state, nil
+	return c.state, c.getErr
 }
 
 func (c *publishedDataViewRecoveryCatalogStub) ListDataViews(context.Context, int64) ([]*viewpb.DataViewOfCollection, error) {
 	c.listCalls++
-	return c.views, nil
+	return c.views, c.listErr
+}
+
+func TestRecoverPublishedDataViewClassifiesRawReadFailuresAsRetryable(t *testing.T) {
+	t.Run("version state read", func(t *testing.T) {
+		catalog := &publishedDataViewRecoveryCatalogStub{getErr: errors.New("raw state read failure")}
+
+		_, _, err := recoverPublishedDataView(context.Background(), catalog, 100)
+
+		require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+		require.True(t, merr.IsRetryableErr(err))
+		require.Contains(t, err.Error(), "read DataView version state")
+	})
+
+	t.Run("snapshot list read", func(t *testing.T) {
+		catalog := &publishedDataViewRecoveryCatalogStub{
+			state: &viewpb.CollectionDataVersionState{
+				CollectionId:         100,
+				PublishedDataVersion: &viewpb.DataVersion{StreamingVersion: 1},
+			},
+			listErr: errors.New("raw snapshot list failure"),
+		}
+
+		_, _, err := recoverPublishedDataView(context.Background(), catalog, 100)
+
+		require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+		require.True(t, merr.IsRetryableErr(err))
+		require.Contains(t, err.Error(), "read DataView snapshots")
+	})
+}
+
+func TestRecoverPublishedDataViewPreservesTypedReadFailures(t *testing.T) {
+	t.Run("version state read", func(t *testing.T) {
+		catalog := &publishedDataViewRecoveryCatalogStub{getErr: merr.WrapErrDataIntegrityMsg("invalid state")}
+
+		_, _, err := recoverPublishedDataView(context.Background(), catalog, 100)
+
+		require.ErrorIs(t, err, merr.ErrDataIntegrity)
+		require.NotErrorIs(t, err, merr.ErrServiceUnavailable)
+	})
+
+	t.Run("snapshot list read", func(t *testing.T) {
+		catalog := &publishedDataViewRecoveryCatalogStub{
+			state: &viewpb.CollectionDataVersionState{
+				CollectionId:         100,
+				PublishedDataVersion: &viewpb.DataVersion{StreamingVersion: 1},
+			},
+			listErr: merr.WrapErrDataIntegrityMsg("invalid snapshots"),
+		}
+
+		_, _, err := recoverPublishedDataView(context.Background(), catalog, 100)
+
+		require.ErrorIs(t, err, merr.ErrDataIntegrity)
+		require.NotErrorIs(t, err, merr.ErrServiceUnavailable)
+	})
 }
 
 func TestRecoverPublishedDataViewMissingStateSkipsSnapshots(t *testing.T) {

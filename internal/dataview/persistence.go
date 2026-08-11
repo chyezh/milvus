@@ -18,6 +18,7 @@ package dataview
 
 import (
 	"context"
+	"fmt"
 
 	"google.golang.org/protobuf/proto"
 
@@ -37,7 +38,11 @@ func recoverPublishedDataView(
 ) (*viewpb.CollectionDataVersionState, *viewpb.DataViewOfCollection, error) {
 	state, err := catalog.GetDataViewVersionState(ctx, collectionID)
 	if err != nil {
-		return nil, nil, merr.Wrapf(err, "recover data view version state for collection %d", collectionID)
+		return nil, nil, dataViewPersistenceReadError(
+			err,
+			"read DataView version state for collection %d",
+			collectionID,
+		)
 	}
 	if state == nil {
 		return state, nil, nil
@@ -55,7 +60,11 @@ func recoverPublishedDataView(
 
 	views, err := catalog.ListDataViews(ctx, collectionID)
 	if err != nil {
-		return nil, nil, merr.Wrapf(err, "list data view snapshots for collection %d", collectionID)
+		return nil, nil, dataViewPersistenceReadError(
+			err,
+			"read DataView snapshots for collection %d",
+			collectionID,
+		)
 	}
 	for _, view := range views {
 		if proto.Equal(view.GetDataVersion(), state.GetPublishedDataVersion()) {
@@ -77,4 +86,11 @@ func recoverPublishedDataView(
 		version.GetStreamingVersion(),
 		version.GetCompactVersion(),
 	)
+}
+
+func dataViewPersistenceReadError(err error, format string, args ...any) error {
+	if merr.IsMilvusError(err) {
+		return merr.Wrapf(err, format, args...)
+	}
+	return merr.WrapErrServiceUnavailable(fmt.Sprintf(format, args...), err.Error())
 }

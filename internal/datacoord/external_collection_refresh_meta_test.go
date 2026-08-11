@@ -26,6 +26,7 @@ import (
 	"github.com/bytedance/mockey"
 	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus/internal/metastore"
@@ -441,7 +442,7 @@ func TestExternalCollectionRefreshMeta_UpdateJobState(t *testing.T) {
 
 		applied, err := meta.UpdateJobState(1, indexpb.JobState_JobStateInProgress, "")
 		assert.Error(t, err)
-		assert.False(t, applied)
+		require.False(t, applied)
 
 		// State should remain Init
 		assert.Equal(t, indexpb.JobState_JobStateInit, meta.GetJob(1).GetState())
@@ -520,6 +521,88 @@ func TestExternalCollectionRefreshMeta_UpdateJobState(t *testing.T) {
 }
 
 func TestExternalCollectionRefreshMeta_UpdateJobStateWithPreApply(t *testing.T) {
+	t.Run("post_restart_publication_snapshot_read_failure_keeps_job_nonterminal", func(t *testing.T) {
+		ctx := context.Background()
+		collectionID := int64(100)
+		vchannel := "by-dev-rootcoord-dml_0_v1"
+		mt, err := newMemoryMeta(t)
+		assert.NoError(t, err)
+		incoming := newTestExternalRefreshSegment(10, collectionID, 100)
+		mt.AddCollection(&collectionInfo{
+			ID:            collectionID,
+			VChannelNames: []string{vchannel},
+			Partitions:    []int64{incoming.GetPartitionID()},
+		})
+		dataViewCatalog := &failPublishedDataViewCatalog{DataCoordCatalog: mt.catalog}
+		manager := newDataViewManager(dataViewCatalog, mt)
+		_, err = manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+			CollectionID: collectionID,
+			VChannels:    []string{vchannel},
+		})
+		assert.NoError(t, err)
+		dataViewCatalog.listErrOnce = errors.New("raw metastore publication-snapshot read failure")
+		mt.dataViewManager = newDataViewManager(dataViewCatalog, mt)
+
+		refreshCatalog := &stubCatalog{}
+		jobs := []*datapb.ExternalCollectionRefreshJob{
+			{JobId: 1, CollectionId: collectionID, State: indexpb.JobState_JobStateInProgress},
+		}
+		mockListJobs := mockey.Mock((*stubCatalog).ListExternalCollectionRefreshJobs).Return(jobs, nil).Build()
+		defer mockListJobs.UnPatch()
+		mockListTasks := mockey.Mock((*stubCatalog).ListExternalCollectionRefreshTasks).Return(nil, nil).Build()
+		defer mockListTasks.UnPatch()
+
+		var savedJobs []*datapb.ExternalCollectionRefreshJob
+		mockSave := mockey.Mock((*stubCatalog).SaveExternalCollectionRefreshJob).
+			To(func(_ context.Context, job *datapb.ExternalCollectionRefreshJob) error {
+				savedJobs = append(savedJobs, proto.Clone(job).(*datapb.ExternalCollectionRefreshJob))
+				return nil
+			}).Build()
+		defer mockSave.UnPatch()
+
+		refreshMeta, err := newExternalCollectionRefreshMeta(ctx, refreshCatalog)
+		assert.NoError(t, err)
+		preApply := func(*datapb.ExternalCollectionRefreshJob) error {
+			return applyExternalCollectionSegmentUpdateForBaseline(
+				ctx,
+				mt,
+				collectionID,
+				nil,
+				nil,
+				[]*datapb.SegmentInfo{incoming},
+			)
+		}
+
+		applied, err := refreshMeta.UpdateJobStateWithPreApply(
+			1,
+			indexpb.JobState_JobStateFinished,
+			"",
+			preApply,
+		)
+
+		require.False(t, applied)
+		assert.Error(t, err)
+		assert.True(t, merr.IsRetryableErr(err))
+		assert.Empty(t, savedJobs)
+		assert.Equal(t, indexpb.JobState_JobStateInProgress, refreshMeta.GetJob(1).GetState())
+
+		applied, err = refreshMeta.UpdateJobStateWithPreApply(
+			1,
+			indexpb.JobState_JobStateFinished,
+			"",
+			preApply,
+		)
+
+		assert.True(t, applied)
+		assert.NoError(t, err)
+		assert.Len(t, savedJobs, 1)
+		assert.Equal(t, indexpb.JobState_JobStateFinished, refreshMeta.GetJob(1).GetState())
+		view, err := mt.dataViewManager.LatestVisibleDataView(ctx, collectionID)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(2), view.GetDataVersion().GetStreamingVersion())
+		assert.Equal(t, []int64{incoming.GetID()}, view.GetShards()[0].GetPartitions()[0].GetSegmentIds())
+	})
+
 	t.Run("retryable_pre_apply_failure_keeps_job_nonterminal", func(t *testing.T) {
 		catalog := &stubCatalog{}
 		jobs := []*datapb.ExternalCollectionRefreshJob{
