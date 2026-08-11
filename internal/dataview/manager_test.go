@@ -1180,6 +1180,44 @@ func TestRecoverManagerUsesDurablePublishedHeadInsteadOfNewerOrphan(t *testing.T
 	requireDataVersion(t, version, 1, 0)
 }
 
+func TestRecoverManagerRepairDoesNotAdoptNewerOrphanThanDurableHead(t *testing.T) {
+	ctx := context.Background()
+	head := newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100))
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			head,
+			newTestDataView(1, 2, 0, newTestDataViewShard("ch-1", 10, 200)),
+		},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 2,
+				PublishedDataVersion:      &viewpb.DataVersion{StreamingVersion: 1},
+			},
+		},
+	}
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{
+		100: newDataViewTestSegment(1, 10, 100, "ch-1", 1000),
+	}}
+
+	manager, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+	require.NoError(t, manager.RepairCollections(ctx, []int64{1}))
+
+	ref, err := manager.LatestPublished(ctx, 1)
+	require.NoError(t, err)
+	t.Cleanup(ref.Deref)
+	require.Equal(t, int64(1), ref.DataView().Version().StreamingVersion)
+	require.Zero(t, ref.DataView().Version().CompactVersion)
+	require.Equal(t, []int64{100}, ref.DataView().SegmentIDs("ch-1", 10))
+	visible, err := manager.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	requireDataVersion(t, visible.GetDataVersion(), 1, 0)
+	require.Equal(t, []int64{100}, publishedSegmentIDs(t, visible, "ch-1", 10))
+	requireDataVersion(t, catalog.versionStates[1].GetPublishedDataVersion(), 1, 0)
+	require.Len(t, catalog.views, 2)
+}
+
 func TestRecoverManagerBackfillsDurableHeadForLegacySnapshots(t *testing.T) {
 	ctx := context.Background()
 	catalog := &fakeDataViewCatalog{

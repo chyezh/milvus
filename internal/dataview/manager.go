@@ -352,6 +352,7 @@ func RecoverManager(ctx context.Context, catalog RecoveryCatalog, segments Segme
 					return nil, merr.Wrapf(err, "backfill published DataView head for collection %d", collectionID)
 				}
 			}
+			manager.retainRecoveredDataViewsThrough(collectionID, published.GetDataVersion())
 			manager.recoverCollectionFromDataViews(collectionID, []*viewpb.DataViewOfCollection{published})
 		}
 	}
@@ -641,6 +642,19 @@ func (m *dataViewManager) rememberRecoveredDataView(view *viewpb.DataViewOfColle
 		}
 	}
 	m.recoveredViews[collectionID] = append(views, canonicalDataViewClone(view))
+}
+
+func (m *dataViewManager) retainRecoveredDataViewsThrough(collectionID int64, head *viewpb.DataVersion) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	views := m.recoveredViews[collectionID]
+	retained := views[:0]
+	for _, view := range views {
+		if compareDataVersion(view.GetDataVersion(), head) <= 0 {
+			retained = append(retained, view)
+		}
+	}
+	m.recoveredViews[collectionID] = retained
 }
 
 func (m *dataViewManager) recoverCollectionFromDataViews(collectionID int64, persistedViews []*viewpb.DataViewOfCollection) {
