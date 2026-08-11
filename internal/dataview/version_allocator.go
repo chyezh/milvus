@@ -32,6 +32,7 @@ type flushVersionCatalog interface {
 
 type flushVersionSegmentStore interface {
 	SaveSealedAtDataVersion(ctx context.Context, segmentID int64, version *viewpb.DataVersion) error
+	ListAllSegmentsForVersionAllocation(ctx context.Context, collectionID int64) []*Segment
 }
 
 func (m *dataViewManager) AssignFlushVersion(
@@ -68,7 +69,7 @@ func (m *dataViewManager) AssignFlushVersion(
 		)
 	}
 
-	if err := m.recoverFlushVersionStateLocked(ctx, state, catalog); err != nil {
+	if err := m.recoverFlushVersionStateLocked(ctx, state, catalog, segments); err != nil {
 		return nil, err
 	}
 	if assigned := segment.GetSealedAtDataVersion(); assigned != nil {
@@ -107,6 +108,7 @@ func (m *dataViewManager) recoverFlushVersionStateLocked(
 	ctx context.Context,
 	state *collectionDataViewState,
 	catalog flushVersionCatalog,
+	segments flushVersionSegmentStore,
 ) error {
 	if state.versionStateRecovered {
 		return nil
@@ -136,7 +138,7 @@ func (m *dataViewManager) recoverFlushVersionStateLocked(
 	if resident := dataVersionFromView(state.latestResident); resident.GetStreamingVersion() > allocated {
 		allocated = resident.GetStreamingVersion()
 	}
-	for _, segment := range m.segments.SelectSegments(ctx, state.collectionID) {
+	for _, segment := range segments.ListAllSegmentsForVersionAllocation(ctx, state.collectionID) {
 		if assigned := segment.GetSealedAtDataVersion(); assigned.GetStreamingVersion() > allocated {
 			allocated = assigned.GetStreamingVersion()
 		}

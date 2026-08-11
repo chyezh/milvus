@@ -31,6 +31,7 @@ import (
 	"github.com/milvus-io/milvus/internal/metastore"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 type fakeDataViewCatalog struct {
@@ -186,6 +187,18 @@ func (s *fakeDataViewSegmentStore) GetSegments(ctx context.Context, segIDs []int
 }
 
 func (s *fakeDataViewSegmentStore) SelectSegments(ctx context.Context, collectionID int64) []*Segment {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	segments := make([]*Segment, 0, len(s.segments))
+	for _, segment := range s.segments {
+		if segment.GetCollectionID() == collectionID {
+			segments = append(segments, segment)
+		}
+	}
+	return segments
+}
+
+func (s *fakeDataViewSegmentStore) ListAllSegmentsForVersionAllocation(ctx context.Context, collectionID int64) []*Segment {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	segments := make([]*Segment, 0, len(s.segments))
@@ -374,6 +387,102 @@ func TestDataViewManagerOnFlushCreatesVisibleView(t *testing.T) {
 	require.NotNil(t, view)
 	require.Equal(t, uint64(1000), view.GetShards()[0].GetTransformStartAfterTimetick())
 	require.Equal(t, []int64{100}, view.GetShards()[0].GetPartitions()[0].GetSegmentIds())
+}
+
+func TestDataViewManagerOnFlushRetryReturnsExactPersistedAssignedVersion(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, store := newTestDataViewManager()
+	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
+	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
+
+	version, err := manager.OnFlush(ctx, FlushDataViewEvent{
+		CollectionID:    1,
+		SegmentIDs:      []int64{100},
+		AssignedVersion: &viewpb.DataVersion{StreamingVersion: 1},
+	})
+	require.NoError(t, err)
+	requireDataVersion(t, version, 1, 0)
+
+	version, err = manager.OnFlush(ctx, FlushDataViewEvent{
+		CollectionID:    1,
+		SegmentIDs:      []int64{101},
+		AssignedVersion: &viewpb.DataVersion{StreamingVersion: 2},
+	})
+	require.NoError(t, err)
+	requireDataVersion(t, version, 2, 0)
+
+	version, err = manager.OnFlush(ctx, FlushDataViewEvent{
+		CollectionID:    1,
+		SegmentIDs:      []int64{100},
+		AssignedVersion: &viewpb.DataVersion{StreamingVersion: 1},
+	})
+	require.NoError(t, err)
+	requireDataVersion(t, version, 1, 0)
+	require.Len(t, catalog.views, 2)
+
+	latest, err := manager.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	requireDataVersion(t, latest.GetDataVersion(), 2, 0)
+	require.True(t, dataViewContainsSegment(latest, 100))
+	require.True(t, dataViewContainsSegment(latest, 101))
+}
+
+func TestDataViewManagerOnFlushRetryRejectsMissingAssignedSnapshot(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, store := newTestDataViewManager()
+	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
+	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
+
+	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{
+		CollectionID:    1,
+		SegmentIDs:      []int64{100},
+		AssignedVersion: &viewpb.DataVersion{StreamingVersion: 1},
+	})))
+	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{
+		CollectionID:    1,
+		SegmentIDs:      []int64{101},
+		AssignedVersion: &viewpb.DataVersion{StreamingVersion: 2},
+	})))
+	catalog.mu.Lock()
+	catalog.views = catalog.views[1:]
+	catalog.mu.Unlock()
+
+	_, err := manager.OnFlush(ctx, FlushDataViewEvent{
+		CollectionID:    1,
+		SegmentIDs:      []int64{100},
+		AssignedVersion: &viewpb.DataVersion{StreamingVersion: 1},
+	})
+	require.ErrorIs(t, err, merr.ErrDataIntegrity)
+	require.Len(t, catalog.views, 1)
+}
+
+func TestDataViewManagerOnFlushRetryRejectsAssignedSnapshotWithoutSegment(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, store := newTestDataViewManager()
+	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
+	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
+
+	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{
+		CollectionID:    1,
+		SegmentIDs:      []int64{100},
+		AssignedVersion: &viewpb.DataVersion{StreamingVersion: 1},
+	})))
+	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{
+		CollectionID:    1,
+		SegmentIDs:      []int64{101},
+		AssignedVersion: &viewpb.DataVersion{StreamingVersion: 2},
+	})))
+	catalog.mu.Lock()
+	catalog.views[0] = newTestDataView(1, 1, 0)
+	catalog.mu.Unlock()
+
+	_, err := manager.OnFlush(ctx, FlushDataViewEvent{
+		CollectionID:    1,
+		SegmentIDs:      []int64{100},
+		AssignedVersion: &viewpb.DataVersion{StreamingVersion: 1},
+	})
+	require.ErrorIs(t, err, merr.ErrDataIntegrity)
+	require.Len(t, catalog.views, 2)
 }
 
 func TestDataViewManagerOnFlushSkipsNonLoadableSegments(t *testing.T) {

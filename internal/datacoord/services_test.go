@@ -562,6 +562,37 @@ func (s *ServerSuite) TestSaveBinlogPathsPersistsExactAssignedDataVersion() {
 	))
 }
 
+func (s *ServerSuite) TestSaveBinlogPathsLostResponseRetryReturnsOriginalAssignedVersion() {
+	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)
+	paramtable.Get().Save(Params.DataCoordCfg.EnableAutoCompaction.Key, "false")
+	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableAutoCompaction.Key)
+
+	manager := newDataViewManager(s.testServer.meta.catalog, s.testServer.meta)
+	s.testServer.dataViewManager = manager
+	s.addSaveBinlogPathsDataVersionSegment(s.T(), 105)
+	s.addSaveBinlogPathsDataVersionSegment(s.T(), 106)
+
+	first, err := s.testServer.SaveBinlogPaths(context.Background(), saveBinlogPathsDataVersionRequest(105))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(first))
+	s.Require().Equal("1", first.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+
+	second, err := s.testServer.SaveBinlogPaths(context.Background(), saveBinlogPathsDataVersionRequest(106))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(second))
+	s.Require().Equal("2", second.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+
+	retried, err := s.testServer.SaveBinlogPaths(context.Background(), saveBinlogPathsDataVersionRequest(105))
+	s.Require().NoError(err)
+	s.Require().NoError(merr.Error(retried))
+	s.Require().Equal("1", retried.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
+
+	latest, err := manager.LatestVisibleDataView(context.Background(), 1)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(2), latest.GetDataVersion().GetStreamingVersion())
+}
+
 func (s *ServerSuite) TestSaveBinlogPathsReturnsPublicationFailure() {
 	paramtable.Get().Save(Params.DataCoordCfg.EnableSortCompaction.Key, "false")
 	defer paramtable.Get().Reset(Params.DataCoordCfg.EnableSortCompaction.Key)

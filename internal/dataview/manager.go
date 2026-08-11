@@ -940,7 +940,24 @@ func (m *dataViewManager) applyMembershipMutation(ctx context.Context, mutation 
 		added = addSegmentToDataView(next, segment) || added
 	}
 	canonicalizeDataView(next)
-	if isDataViewMembershipEqual(state.latestResident, next) {
+	membershipEqual := isDataViewMembershipEqual(state.latestResident, next)
+	if mutation.assignedVersion != nil &&
+		(membershipEqual || compareDataVersion(dataVersionFromView(state.latestResident), mutation.assignedVersion) >= 0) {
+		version, err := m.verifyPersistedAssignedFlushVersion(ctx, mutation)
+		if err != nil {
+			state.mu.Unlock()
+			return nil, err
+		}
+		if state.latestResident != nil {
+			state.latestResident = m.withDeleteTimetick(ctx, state.latestResident)
+		}
+		if state.latestVisible != nil {
+			state.latestVisible = m.withDeleteTimetick(ctx, state.latestVisible)
+		}
+		state.mu.Unlock()
+		return version, nil
+	}
+	if membershipEqual {
 		if state.latestResident != nil {
 			state.latestResident = m.withDeleteTimetick(ctx, state.latestResident)
 		}
@@ -974,6 +991,53 @@ func (m *dataViewManager) applyMembershipMutation(ctx context.Context, mutation 
 	version := dataVersionFromView(state.latestResident)
 	state.mu.Unlock()
 	return version, nil
+}
+
+func (m *dataViewManager) verifyPersistedAssignedFlushVersion(
+	ctx context.Context,
+	mutation dataViewMembershipMutation,
+) (*viewpb.DataVersion, error) {
+	views, err := m.catalog.ListDataViews(ctx, mutation.collectionID)
+	if err != nil {
+		return nil, merr.Wrapf(
+			err,
+			"list DataView snapshots for assigned flush version %d/%d of collection %d",
+			mutation.assignedVersion.GetStreamingVersion(),
+			mutation.assignedVersion.GetCompactVersion(),
+			mutation.collectionID,
+		)
+	}
+	for _, view := range views {
+		if !proto.Equal(view.GetDataVersion(), mutation.assignedVersion) {
+			continue
+		}
+		if view.GetCollectionId() != mutation.collectionID {
+			return nil, merr.WrapErrDataIntegrityMsg(
+				"assigned flush DataView collection mismatch: requested=%d, stored=%d",
+				mutation.collectionID,
+				view.GetCollectionId(),
+			)
+		}
+		for _, segmentID := range mutation.addSegmentIDs {
+			if !dataViewContainsSegment(view, segmentID) {
+				return nil, merr.WrapErrDataIntegrityMsg(
+					"assigned flush DataView %d/%d for collection %d does not contain segment %d",
+					mutation.assignedVersion.GetStreamingVersion(),
+					mutation.assignedVersion.GetCompactVersion(),
+					mutation.collectionID,
+					segmentID,
+				)
+			}
+		}
+		return proto.Clone(view.GetDataVersion()).(*viewpb.DataVersion), nil
+	}
+
+	return nil, merr.WrapErrDataIntegrityMsg(
+		"assigned flush DataView %d/%d is missing for collection %d",
+		mutation.assignedVersion.GetStreamingVersion(),
+		mutation.assignedVersion.GetCompactVersion(),
+		mutation.collectionID,
+	)
 }
 
 func (m *dataViewManager) getState(collectionID int64) *collectionDataViewState {

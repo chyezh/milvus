@@ -216,6 +216,45 @@ func TestDataViewRecoveryUsesCollectionPartitions(t *testing.T) {
 	require.Equal(t, []int64{100}, view.GetShards()[0].GetPartitions()[0].GetSegmentIds())
 }
 
+func TestFlushVersionRecoveryIncludesSegmentsOutsideCurrentPartitions(t *testing.T) {
+	ctx := context.Background()
+	m, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	m.AddCollection(&collectionInfo{
+		ID:         1,
+		Partitions: []int64{10},
+	})
+	require.NoError(t, m.catalog.SaveDataViewVersionState(ctx, &viewpb.CollectionDataVersionState{
+		CollectionId:              1,
+		AllocatedStreamingVersion: 4,
+	}))
+	require.NoError(t, m.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:                  100,
+		CollectionID:        1,
+		PartitionID:         11,
+		InsertChannel:       "ch-1",
+		State:               commonpb.SegmentState_Dropped,
+		Level:               datapb.SegmentLevel_L1,
+		SealedAtDataVersion: &viewpb.DataVersion{StreamingVersion: 7},
+	})))
+	require.NoError(t, m.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
+		ID:            101,
+		CollectionID:  1,
+		PartitionID:   10,
+		InsertChannel: "ch-1",
+		State:         commonpb.SegmentState_Sealed,
+		Level:         datapb.SegmentLevel_L1,
+	})))
+	manager := newDataViewManager(m.catalog, m)
+
+	assigned, err := manager.AssignFlushVersion(ctx, 1, 101)
+	require.NoError(t, err)
+	require.Equal(t, int64(8), assigned.GetStreamingVersion())
+	durable, err := m.catalog.GetDataViewVersionState(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, int64(8), durable.GetAllocatedStreamingVersion())
+}
+
 func TestGetCollectionIDsByPartitionUsesSegmentMeta(t *testing.T) {
 	m := &meta{
 		collections: typeutil.NewConcurrentMap[UniqueID, *collectionInfo](),

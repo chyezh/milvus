@@ -134,6 +134,18 @@ func (s *dataViewSegmentStore) SelectSegments(ctx context.Context, collectionID 
 	return result
 }
 
+func (s *dataViewSegmentStore) ListAllSegmentsForVersionAllocation(
+	ctx context.Context,
+	collectionID int64,
+) []*dataview.Segment {
+	segments := s.meta.SelectSegments(ctx, WithCollection(collectionID))
+	result := make([]*dataview.Segment, 0, len(segments))
+	for _, segment := range segments {
+		result = append(result, newDataViewSegment(segment))
+	}
+	return result
+}
+
 func (s *dataViewSegmentStore) SaveSealedAtDataVersion(
 	ctx context.Context,
 	segmentID int64,
