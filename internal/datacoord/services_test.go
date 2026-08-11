@@ -3152,6 +3152,138 @@ func TestServer_NotifyDropPartitionDropsUnassignedSegmentWithoutStreamingAdvance
 	require.EqualValues(t, 1, state.GetPublishedDataVersion().GetStreamingVersion())
 }
 
+func TestServer_NotifyDropPartitionRereadsAssignmentAfterAdapterSnapshot(t *testing.T) {
+	ctx := context.Background()
+	meta, realManager, _ := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 100)
+	beforeCore := make(chan struct{})
+	continueCore := make(chan struct{})
+	manager := &blockingDDLTrimDataViewManager{
+		DataViewManager: realManager,
+		beforeCore:      beforeCore,
+		continueCore:    continueCore,
+	}
+	meta.dataViewManager = manager
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	trimDone := make(chan error, 1)
+	go func() {
+		trimDone <- server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+	}()
+	waitDDLTrimSignal(t, beforeCore)
+	assigned := assignDDLTrimSegment(t, realManager, 100, 2)
+	close(continueCore)
+
+	require.NoError(t, <-trimDone)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	requirePublishedDataViewVersion(t, meta, 1, 2, 0)
+	visible, err := realManager.LatestVisibleDataView(ctx, 1)
+	require.NoError(t, err)
+	require.Empty(t, visible.GetShards())
+	require.EqualValues(t, 2, assigned.GetStreamingVersion())
+
+	addDDLTrimSegment(t, meta, 200, 20, "ch-0", 200)
+	later, err := meta.commitDataViewStreaming(ctx, 1, []int64{200})
+	require.NoError(t, err)
+	require.EqualValues(t, 3, later.GetStreamingVersion())
+}
+
+func TestServer_NotifyDropPartitionKeepsLockThroughMetadataFinalize(t *testing.T) {
+	ctx := context.Background()
+	meta, realManager, _ := newDDLTrimDataViewTest(t)
+	addDDLTrimSegment(t, meta, 100, 10, "ch-0", 100)
+	beforeFinalize := make(chan struct{})
+	continueFinalize := make(chan struct{})
+	manager := &blockingDDLTrimDataViewManager{
+		DataViewManager:  realManager,
+		beforeFinalize:   beforeFinalize,
+		continueFinalize: continueFinalize,
+	}
+	meta.dataViewManager = manager
+	segmentManager := NewMockManager(t)
+	segmentManager.EXPECT().DropSegmentsOfPartition(mock.Anything, "ch-0", []int64{10}).Once()
+	server := &Server{meta: meta, dataViewManager: manager, segmentManager: segmentManager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	trimDone := make(chan error, 1)
+	go func() {
+		trimDone <- server.NotifyDropPartition(ctx, "ch-0", []int64{10})
+	}()
+	waitDDLTrimSignal(t, beforeFinalize)
+	type assignmentResult struct {
+		version *viewpb.DataVersion
+		err     error
+	}
+	assignmentStarted := make(chan struct{})
+	assignmentDone := make(chan assignmentResult, 1)
+	go func() {
+		close(assignmentStarted)
+		version, err := realManager.AssignFlushVersion(ctx, 1, 100)
+		assignmentDone <- assignmentResult{version: version, err: err}
+	}()
+	waitDDLTrimSignal(t, assignmentStarted)
+	select {
+	case result := <-assignmentDone:
+		require.FailNowf(t, "flush assignment completed while metadata finalization was paused", "result: %+v", result)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(continueFinalize)
+
+	require.NoError(t, <-trimDone)
+	result := <-assignmentDone
+	require.Error(t, result.err)
+	require.Nil(t, result.version)
+	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
+	require.Nil(t, meta.GetSegment(ctx, 100).GetSealedAtDataVersion())
+	requirePublishedDataViewVersion(t, meta, 1, 1, 0)
+
+	addDDLTrimSegment(t, meta, 200, 20, "ch-0", 200)
+	later, err := meta.commitDataViewStreaming(ctx, 1, []int64{200})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, later.GetStreamingVersion())
+}
+
+type blockingDDLTrimDataViewManager struct {
+	DataViewManager
+	beforeCore       chan struct{}
+	continueCore     chan struct{}
+	beforeFinalize   chan struct{}
+	continueFinalize chan struct{}
+}
+
+func (m *blockingDDLTrimDataViewManager) CommitSegmentTrim(
+	ctx context.Context,
+	collectionID int64,
+	targets []SegmentTrimTarget,
+	finalize SegmentTrimFinalize,
+) (*viewpb.DataVersion, error) {
+	if m.beforeCore != nil {
+		close(m.beforeCore)
+		<-m.continueCore
+	}
+	if m.beforeFinalize != nil {
+		originalFinalize := finalize
+		finalize = func(ctx context.Context) error {
+			close(m.beforeFinalize)
+			<-m.continueFinalize
+			return originalFinalize(ctx)
+		}
+	}
+	return m.DataViewManager.CommitSegmentTrim(ctx, collectionID, targets, finalize)
+}
+
+func waitDDLTrimSignal(t *testing.T, signal <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-signal:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "timed out waiting for DDL trim synchronization point")
+	}
+}
+
 func newDDLTrimDataViewTest(t *testing.T) (*meta, DataViewManager, *failPublishedDataViewCatalog) {
 	t.Helper()
 	ctx := context.Background()

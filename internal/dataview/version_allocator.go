@@ -21,6 +21,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
@@ -88,6 +89,13 @@ func (m *dataViewManager) AssignFlushVersion(
 		}
 		registerPendingAssignedEpochLocked(state, assigned)
 		return proto.Clone(assigned).(*viewpb.DataVersion), nil
+	}
+	if segment.GetState() == commonpb.SegmentState_Dropped {
+		return nil, merr.WrapErrServiceNotReadyMsg(
+			"cannot assign a new flush DataVersion to dropped segment %d in collection %d",
+			segmentID,
+			collectionID,
+		)
 	}
 
 	assigned := &viewpb.DataVersion{

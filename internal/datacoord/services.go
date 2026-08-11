@@ -729,13 +729,6 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 		UpdateSegmentStats(req.GetSegmentID(), req.GetStats()),
 	)
 
-	// Update segment info in memory and meta. Stale updates (segment already
-	// flushed / outdated time tick) are swallowed inside UpdateSegmentsInfo as
-	// benign no-ops, so any error here is a real failure.
-	if err := s.meta.UpdateSegmentsInfo(ctx, operators...); err != nil {
-		mlog.Error(context.TODO(), "save binlog and checkpoints failed", mlog.Err(err))
-		return merr.Status(err), nil
-	}
 	var flushedDataVersion *viewpb.DataVersion
 	if req.GetFlushed() && req.GetSegLevel() != datapb.SegmentLevel_L0 {
 		if s.dataViewManager == nil {
@@ -753,9 +746,19 @@ func (s *Server) SaveBinlogPaths(ctx context.Context, req *datapb.SaveBinlogPath
 			return merr.Status(err), nil
 		}
 		flushedDataVersion = assigned
+	}
 
+	// Update segment info in memory and meta. Stale updates (segment already
+	// flushed / outdated time tick) are swallowed inside UpdateSegmentsInfo as
+	// benign no-ops, so any error here is a real failure.
+	if err := s.meta.UpdateSegmentsInfo(ctx, operators...); err != nil {
+		mlog.Error(context.TODO(), "save binlog and checkpoints failed", mlog.Err(err))
+		return merr.Status(err), nil
+	}
+
+	if flushedDataVersion != nil {
 		segment := s.meta.GetSegment(ctx, req.GetSegmentID())
-		if err := s.completeAssignedFlushDataViewPublication(ctx, req, segment, assigned); err != nil {
+		if err := s.completeAssignedFlushDataViewPublication(ctx, req, segment, flushedDataVersion); err != nil {
 			mlog.Error(ctx, "failed to publish DataView after flush", mlog.FieldSegmentID(req.GetSegmentID()), mlog.Err(err))
 			return merr.Status(err), nil
 		}
@@ -2498,10 +2501,14 @@ func (s *Server) NotifyDropPartition(ctx context.Context, channel string, partit
 		}
 		for _, collectionID := range s.meta.GetCollectionIDsByPartition(ctx, partitionIDs) {
 			segmentIDs := s.meta.segmentIDsForPartition(collectionID, partitionSet)
-			if _, err := s.meta.commitDataViewTrim(ctx, collectionID, segmentIDs); err != nil {
+			if _, err := s.meta.commitDataViewTrim(ctx, collectionID, segmentIDs, func(ctx context.Context) error {
+				return s.meta.finalizeDataViewTrim(ctx, collectionID, segmentIDs)
+			}); err != nil {
 				return err
 			}
 		}
+		s.segmentManager.DropSegmentsOfPartition(ctx, channel, partitionIDs)
+		return nil
 	}
 	s.segmentManager.DropSegmentsOfPartition(ctx, channel, partitionIDs)
 	// release all segments of the partition.
@@ -2526,17 +2533,20 @@ func (s *Server) DropSegmentsByTime(ctx context.Context, collectionID int64, flu
 		}
 		if s.dataViewManager != nil {
 			segmentIDs := s.meta.segmentIDsForTruncate(collectionID, channelName, flushTs)
-			_, err = s.meta.commitDataViewTrim(ctx, collectionID, segmentIDs)
+			_, err = s.meta.commitDataViewTrim(ctx, collectionID, segmentIDs, func(ctx context.Context) error {
+				return s.meta.finalizeDataViewTrim(ctx, collectionID, segmentIDs)
+			})
 			if err != nil {
 				mlog.Warn(ctx, "trim truncated segments from DataView failed", mlog.Err(err))
 				return err
 			}
-		}
-		// drop segments that were updated before the flush timestamp
-		err = s.meta.TruncateChannelByTime(ctx, channelName, flushTs)
-		if err != nil {
-			mlog.Warn(context.TODO(), "TruncateChannelByTime failed", mlog.Err(err))
-			return err
+		} else {
+			// drop segments that were updated before the flush timestamp
+			err = s.meta.TruncateChannelByTime(ctx, channelName, flushTs)
+			if err != nil {
+				mlog.Warn(context.TODO(), "TruncateChannelByTime failed", mlog.Err(err))
+				return err
+			}
 		}
 	}
 

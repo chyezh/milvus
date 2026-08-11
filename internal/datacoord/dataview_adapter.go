@@ -45,6 +45,7 @@ type (
 	TruncateDataViewEvent            = dataview.TruncateDataViewEvent
 	SegmentMembership                = dataview.SegmentMembership
 	SegmentTrimTarget                = dataview.SegmentTrimTarget
+	SegmentTrimFinalize              = dataview.SegmentTrimFinalize
 	PublishedMutation                = dataview.PublishedMutation
 )
 
@@ -279,6 +280,7 @@ func (m *meta) commitDataViewTrim(
 	ctx context.Context,
 	collectionID int64,
 	segmentIDs []int64,
+	finalize SegmentTrimFinalize,
 ) (*viewpb.DataVersion, error) {
 	if m.dataViewManager == nil {
 		return nil, nil
@@ -291,7 +293,53 @@ func (m *meta) commitDataViewTrim(
 		}
 		targets = append(targets, target)
 	}
-	return m.dataViewManager.CommitSegmentTrim(ctx, collectionID, targets)
+	return m.dataViewManager.CommitSegmentTrim(ctx, collectionID, targets, finalize)
+}
+
+func (m *meta) finalizeDataViewTrim(ctx context.Context, collectionID int64, segmentIDs []int64) error {
+	m.segMu.Lock()
+	defer m.segMu.Unlock()
+
+	metricMutation := &segMetricMutation{stateChange: make(segmentMetricStateChange)}
+	segmentsToDrop := make([]*SegmentInfo, 0, len(segmentIDs))
+	for _, segmentID := range segmentIDs {
+		segment := m.segments.GetSegment(segmentID)
+		if segment == nil {
+			return merr.WrapErrServiceUnavailableMsg(
+				"segment %d disappeared before finalizing DataView trim of collection %d",
+				segmentID,
+				collectionID,
+			)
+		}
+		if segment.GetCollectionID() != collectionID {
+			return merr.WrapErrDataIntegrityMsg(
+				"trimmed segment %d belongs to collection %d, requested collection %d",
+				segmentID,
+				segment.GetCollectionID(),
+				collectionID,
+			)
+		}
+		if segment.GetState() == commonpb.SegmentState_Dropped {
+			continue
+		}
+		cloned := segment.Clone()
+		updateSegStateAndPrepareMetrics(cloned, commonpb.SegmentState_Dropped, metricMutation)
+		segmentsToDrop = append(segmentsToDrop, cloned)
+	}
+	if len(segmentsToDrop) == 0 {
+		return nil
+	}
+	segments := lo.Map(segmentsToDrop, func(segment *SegmentInfo, _ int) *datapb.SegmentInfo {
+		return segment.SegmentInfo
+	})
+	if err := m.catalog.AlterSegments(ctx, segments); err != nil {
+		return err
+	}
+	for _, segment := range segmentsToDrop {
+		m.segments.SetSegment(segment.GetID(), segment)
+	}
+	metricMutation.commit()
+	return nil
 }
 
 func (m *meta) commitDataViewStreaming(

@@ -260,32 +260,15 @@ func (m *dataViewManager) CommitSegmentTrim(
 	ctx context.Context,
 	collectionID int64,
 	targets []SegmentTrimTarget,
+	finalize SegmentTrimFinalize,
 ) (*viewpb.DataVersion, error) {
 	targetIDs := make([]int64, 0, len(targets))
-	assignedTargets := make([]SegmentTrimTarget, 0, len(targets))
 	for _, target := range targets {
 		if target.SegmentID <= 0 {
 			return nil, merr.WrapErrServiceInternalMsg("invalid segment %d for DataView trim of collection %d", target.SegmentID, collectionID)
 		}
 		targetIDs = append(targetIDs, target.SegmentID)
-		assigned := target.AssignedVersion
-		if assigned == nil {
-			continue
-		}
-		if assigned.GetStreamingVersion() <= 0 || assigned.GetCompactVersion() != 0 {
-			return nil, merr.WrapErrServiceInternalMsg(
-				"invalid assigned DataVersion %d/%d for trimmed segment %d in collection %d",
-				assigned.GetStreamingVersion(),
-				assigned.GetCompactVersion(),
-				target.SegmentID,
-				collectionID,
-			)
-		}
-		assignedTargets = append(assignedTargets, target)
 	}
-	sort.Slice(assignedTargets, func(i, j int) bool {
-		return assignedTargets[i].AssignedVersion.GetStreamingVersion() < assignedTargets[j].AssignedVersion.GetStreamingVersion()
-	})
 
 	catalog, ok := m.catalog.(publishedDataViewCatalog)
 	if !ok {
@@ -298,6 +281,10 @@ func (m *dataViewManager) CommitSegmentTrim(
 		return nil, merr.WrapErrServiceNotReadyMsg("data view collection %d is terminal", collectionID)
 	}
 	if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
+		return nil, err
+	}
+	assignedTargets, err := m.resolveSegmentTrimTargetsLocked(ctx, collectionID, targets)
+	if err != nil {
 		return nil, err
 	}
 	if err := m.refreshDurablePublicationLocked(ctx, state, catalog); err != nil {
@@ -336,9 +323,70 @@ func (m *dataViewManager) CommitSegmentTrim(
 		}
 	}
 	if len(publishedTargets) == 0 {
+		if finalize != nil {
+			if err := finalize(ctx); err != nil {
+				return nil, err
+			}
+		}
 		return dataVersionFromView(state.latestResident), nil
 	}
-	return m.commitRewriteLocked(ctx, state, catalog, PublishedMutation{Remove: publishedTargets})
+	version, err := m.commitRewriteLocked(ctx, state, catalog, PublishedMutation{Remove: publishedTargets})
+	if err != nil {
+		return nil, err
+	}
+	if finalize != nil {
+		if err := finalize(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return version, nil
+}
+
+func (m *dataViewManager) resolveSegmentTrimTargetsLocked(
+	ctx context.Context,
+	collectionID int64,
+	targets []SegmentTrimTarget,
+) ([]SegmentTrimTarget, error) {
+	assignedTargets := make([]SegmentTrimTarget, 0, len(targets))
+	for _, target := range targets {
+		segment := m.segments.GetSegment(ctx, target.SegmentID)
+		if segment == nil {
+			return nil, merr.WrapErrServiceUnavailableMsg(
+				"segment %d disappeared before DataView trim of collection %d",
+				target.SegmentID,
+				collectionID,
+			)
+		}
+		if segment.GetCollectionID() != collectionID {
+			return nil, merr.WrapErrDataIntegrityMsg(
+				"trimmed segment %d belongs to collection %d, requested collection %d",
+				target.SegmentID,
+				segment.GetCollectionID(),
+				collectionID,
+			)
+		}
+		assigned := segment.GetSealedAtDataVersion()
+		if assigned == nil {
+			continue
+		}
+		if assigned.GetStreamingVersion() <= 0 || assigned.GetCompactVersion() != 0 {
+			return nil, merr.WrapErrDataIntegrityMsg(
+				"trimmed segment %d has invalid assigned DataVersion %d/%d in collection %d",
+				target.SegmentID,
+				assigned.GetStreamingVersion(),
+				assigned.GetCompactVersion(),
+				collectionID,
+			)
+		}
+		assignedTargets = append(assignedTargets, SegmentTrimTarget{
+			SegmentID:       target.SegmentID,
+			AssignedVersion: cloneDataVersion(assigned),
+		})
+	}
+	sort.Slice(assignedTargets, func(i, j int) bool {
+		return assignedTargets[i].AssignedVersion.GetStreamingVersion() < assignedTargets[j].AssignedVersion.GetStreamingVersion()
+	})
+	return assignedTargets, nil
 }
 
 func (m *dataViewManager) refreshDurablePublicationLocked(

@@ -149,13 +149,22 @@ func (m *fakeGCDataViewManager) CommitSegmentTrim(
 	ctx context.Context,
 	collectionID int64,
 	targets []dataview.SegmentTrimTarget,
+	finalize dataview.SegmentTrimFinalize,
 ) (*viewpb.DataVersion, error) {
 	mutation := dataview.PublishedMutation{Remove: make([]int64, 0, len(targets))}
 	for _, target := range targets {
 		mutation.Remove = append(mutation.Remove, target.SegmentID)
 	}
 	m.rewriteMutations = append(m.rewriteMutations, mutation)
-	return m.publishedVersion, m.publishVersionErr
+	if m.publishVersionErr != nil {
+		return m.publishedVersion, m.publishVersionErr
+	}
+	if finalize != nil {
+		if err := finalize(ctx); err != nil {
+			return nil, err
+		}
+	}
+	return m.publishedVersion, nil
 }
 
 func (m *fakeGCDataViewManager) CommitStreamingView(
