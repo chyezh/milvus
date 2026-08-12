@@ -381,7 +381,7 @@ func findDataViewShard(view *viewpb.DataViewOfCollection, vchannel string) (*vie
 	return nil, false
 }
 
-func TestDataViewManagerOnCreateCollectionCreatesEmptyVisibleView(t *testing.T) {
+func TestDataViewManagerInitializeCollectionCreatesEmptyPublishedView(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, _ := newTestDataViewManager()
 
@@ -416,7 +416,7 @@ func TestDataViewManagerOnCreateCollectionCreatesEmptyVisibleView(t *testing.T) 
 	require.True(t, ok)
 }
 
-func TestDataViewManagerOnCreateCollectionIsIdempotent(t *testing.T) {
+func TestDataViewManagerInitializeCollectionIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, _ := newTestDataViewManager()
 	event := CollectionInitialization{
@@ -434,7 +434,7 @@ func TestDataViewManagerOnCreateCollectionIsIdempotent(t *testing.T) {
 	require.Len(t, catalog.views, 1)
 }
 
-func TestDataViewManagerOnCreateCollectionReusesPersistedView(t *testing.T) {
+func TestDataViewManagerInitializeCollectionReusesPersistedView(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, _ := newTestDataViewManager()
 	catalog.views = append(catalog.views, &viewpb.DataViewOfCollection{
@@ -459,7 +459,7 @@ func TestDataViewManagerOnCreateCollectionReusesPersistedView(t *testing.T) {
 	require.Equal(t, "ch-0", visible.GetShards()[0].GetVchannel())
 }
 
-func TestDataViewManagerOnCreateCollectionDoesNotPublishOrphanSnapshot(t *testing.T) {
+func TestDataViewManagerInitializeCollectionDoesNotPublishOrphanSnapshot(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, _ := newTestDataViewManager()
 	catalog.views = append(catalog.views, newTestDataView(1, 1, 0, newTestDataViewShard("ch-0", 10, 100)))
