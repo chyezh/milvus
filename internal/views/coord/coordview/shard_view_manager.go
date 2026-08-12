@@ -803,13 +803,14 @@ func (m *ShardViewManager) derefAllReferences() {
 	}
 }
 
-func (m *ShardViewManager) closeReferences() {
+func (m *ShardViewManager) stopAccepting() {
 	m.mu.Lock()
-	if m.closed {
-		m.mu.Unlock()
-		return
-	}
 	m.closed = true
+	m.mu.Unlock()
+}
+
+func (m *ShardViewManager) releaseReferences() {
+	m.mu.Lock()
 	refs := make([]dataview.DataViewRef, 0, len(m.views))
 	for _, managed := range m.views {
 		refs = append(refs, managed.dataViewRef)

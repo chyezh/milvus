@@ -147,7 +147,8 @@ func (r *ShardViewRegistry) Ensure(shardID qviews.ShardID) *ShardViewManager {
 	// Re-check under the write lock.
 	if r.closed {
 		r.mu.Unlock()
-		mgr.closeReferences()
+		mgr.stopAccepting()
+		mgr.releaseReferences()
 		return nil
 	}
 	if mgr, ok := r.shards[shardID]; ok {
@@ -167,7 +168,6 @@ func (r *ShardViewRegistry) Close() {
 		return
 	}
 	r.closeOnce.Do(func() {
-		r.flushScheduler.Close()
 		r.mu.Lock()
 		r.closed = true
 		managers := make([]*ShardViewManager, 0, len(r.shards))
@@ -176,7 +176,11 @@ func (r *ShardViewRegistry) Close() {
 		}
 		r.mu.Unlock()
 		for _, manager := range managers {
-			manager.closeReferences()
+			manager.stopAccepting()
+		}
+		r.flushScheduler.Close()
+		for _, manager := range managers {
+			manager.releaseReferences()
 		}
 	})
 }

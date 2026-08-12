@@ -3,6 +3,7 @@ package coordview
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -15,10 +16,41 @@ import (
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
+	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
 type immediateLostRecoverySyncer struct {
 	lostCallbacks atomic.Int64
+}
+
+type blockingCloseHandle struct {
+	started chan struct{}
+	release chan struct{}
+	onWait  sync.Once
+}
+
+func (h *blockingCloseHandle) Cancel() {}
+func (h *blockingCloseHandle) Wait(context.Context) error {
+	h.onWait.Do(func() { close(h.started) })
+	<-h.release
+	return nil
+}
+
+func newRegistryWithBlockingClose(t *testing.T, dataViews DataViewManager) (*ShardViewRegistry, *blockingCloseHandle) {
+	t.Helper()
+	registry, err := RecoverShardViewRegistry(context.Background(), newMockCatalog(), newMockSyncer(), dataViews)
+	require.NoError(t, err)
+	handle := &blockingCloseHandle{started: make(chan struct{}), release: make(chan struct{})}
+	registry.flushScheduler.nodeScheduler = &blockingCloseScheduler{handle: handle}
+	return registry, handle
+}
+
+type blockingCloseScheduler struct {
+	handle *blockingCloseHandle
+}
+
+func (s *blockingCloseScheduler) Submit(nodescheduler.Task) nodescheduler.TaskHandle {
+	return s.handle
 }
 
 func (s *immediateLostRecoverySyncer) SyncViews(_ context.Context, group viewsyncer.SyncGroup) error {
@@ -117,6 +149,40 @@ func TestShardViewRegistryEnsureAfterCloseDoesNotCreateManager(t *testing.T) {
 	registry.Close()
 	require.Nil(t, registry.Ensure(testShardID))
 	require.Nil(t, registry.Get(testShardID))
+}
+
+func TestShardViewRegistryPublishesNoNewWorkFenceBeforeSchedulerCloseReturns(t *testing.T) {
+	dataViews := &testDataViewManager{refs: make(map[qviews.DataVersion][]*trackedDataViewRef)}
+	registry, handle := newRegistryWithBlockingClose(t, dataViews)
+	manager := registry.Ensure(testShardID)
+	require.NoError(t, manager.AddPreparing(context.Background(), testBuilder(1, 1, 1)))
+
+	closeDone := make(chan struct{})
+	go func() {
+		registry.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-handle.started:
+	case <-time.After(time.Second):
+		t.Fatal("scheduler Close did not begin waiting")
+	}
+
+	require.Nil(t, registry.Ensure(qviews.ShardID{ReplicaID: 2, VChannel: "late"}))
+	err := manager.AddPreparing(context.Background(), testBuilder(2, 1, 1))
+	require.ErrorIs(t, err, merr.ErrServiceNotReady)
+	lateRef := dataViews.refs[qviews.DataVersion{StreamingVersion: 2, CompactVersion: 1}][0]
+	require.Equal(t, 1, lateRef.derefCount)
+	residentRef := dataViews.refs[qviews.DataVersion{StreamingVersion: 1, CompactVersion: 1}][0]
+	require.Zero(t, residentRef.derefCount, "resident refs stay live until scheduler is fully stopped")
+
+	close(handle.release)
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("registry Close did not complete")
+	}
+	require.Equal(t, 1, residentRef.derefCount)
 }
 
 func TestRegistry_EnsureCreatesOnce(t *testing.T) {
