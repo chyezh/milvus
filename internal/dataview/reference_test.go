@@ -246,6 +246,28 @@ func TestDataViewRefRecoversPublishedHeadBeforeExactLookup(t *testing.T) {
 	require.Equal(t, []int64{100}, ref.DataView().SegmentIDs("ch-1", 10))
 }
 
+func TestDataViewRefLatestPublishedRecoversDurableHead(t *testing.T) {
+	ctx := context.Background()
+	head := newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100))
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{head},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 1,
+				PublishedDataVersion:      head.GetDataVersion(),
+			},
+		},
+	}
+	manager := NewManager(catalog, &fakeDataViewSegmentStore{segments: map[int64]*Segment{}})
+
+	ref, err := manager.LatestPublished(ctx, 1)
+	require.NoError(t, err)
+	t.Cleanup(ref.Deref)
+	require.Equal(t, qviews.DataVersion{StreamingVersion: 1}, ref.DataView().Version())
+	require.Equal(t, []int64{100}, ref.DataView().SegmentIDs("ch-1", 10))
+}
+
 func TestDataViewRefRejectsSnapshotWithoutPublishedHead(t *testing.T) {
 	ctx := context.Background()
 	catalog := &fakeDataViewCatalog{

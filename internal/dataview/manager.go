@@ -580,7 +580,15 @@ func (m *dataViewManager) LatestPublished(ctx context.Context, collectionID int6
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	if state.dropped || state.published == nil {
+	if state.dropped {
+		return nil, unavailableLatestDataViewError(collectionID)
+	}
+	if catalog, ok := m.catalog.(publishedDataViewCatalog); ok {
+		if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
+			return nil, err
+		}
+	}
+	if state.published == nil {
 		return nil, unavailableLatestDataViewError(collectionID)
 	}
 	return newDataViewRef(state, newDataView(state.published)), nil
