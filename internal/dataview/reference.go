@@ -47,3 +47,20 @@ func (r *dataViewRef) DataView() *DataView {
 func (r *dataViewRef) Deref() {
 	r.once.Do(r.release)
 }
+
+func newDataViewRef(state *collectionDataViewState, view *DataView) DataViewRef {
+	version := view.Version()
+	state.refs[version]++
+	return &dataViewRef{
+		view: view,
+		release: func() {
+			state.mu.Lock()
+			defer state.mu.Unlock()
+			if state.refs[version] <= 1 {
+				delete(state.refs, version)
+				return
+			}
+			state.refs[version]--
+		},
+	}
+}

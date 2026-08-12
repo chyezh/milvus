@@ -17,7 +17,10 @@
 package dataview
 
 import (
+	"go/ast"
 	"go/build"
+	"go/parser"
+	"go/token"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -82,5 +85,75 @@ func TestManagerExposesStateOperationsInsteadOfLifecycleEvents(t *testing.T) {
 	for _, method := range []string{"OnCreateCollection", "OnDropCollection"} {
 		_, ok := managerType.MethodByName(method)
 		require.False(t, ok, "dataview.Manager must not expose lifecycle event method %s", method)
+	}
+}
+
+func TestDataViewManagerResponsibilitiesStayInFocusedFiles(t *testing.T) {
+	_, filename, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+
+	packageDir := filepath.Dir(filename)
+	parsed, err := parser.ParseDir(token.NewFileSet(), packageDir, nil, 0)
+	require.NoError(t, err)
+
+	functionFiles := make(map[string]string)
+	typeFiles := make(map[string]string)
+	for sourceFile, file := range parsed["dataview"].Files {
+		for _, declaration := range file.Decls {
+			switch declaration := declaration.(type) {
+			case *ast.FuncDecl:
+				name := declaration.Name.Name
+				if declaration.Recv != nil {
+					receiver := declaration.Recv.List[0].Type
+					if pointer, ok := receiver.(*ast.StarExpr); ok {
+						receiver = pointer.X
+					}
+					if identifier, ok := receiver.(*ast.Ident); ok {
+						name = identifier.Name + "." + name
+					}
+				}
+				functionFiles[name] = filepath.Base(sourceFile)
+			case *ast.GenDecl:
+				for _, spec := range declaration.Specs {
+					typeSpec, ok := spec.(*ast.TypeSpec)
+					if ok {
+						typeFiles[typeSpec.Name.Name] = filepath.Base(sourceFile)
+					}
+				}
+			}
+		}
+	}
+
+	expectedTypeFiles := map[string]string{
+		"SegmentStore":             "segment.go",
+		"Segment":                  "segment.go",
+		"dataViewUnavailableError": "access.go",
+	}
+	for declaration, expectedFile := range expectedTypeFiles {
+		require.Equal(t, expectedFile, typeFiles[declaration],
+			"%s must stay in the focused DataView unit %s", declaration, expectedFile)
+	}
+
+	expectedFunctionFiles := map[string]string{
+		"RecoverManager": "recovery.go",
+		"dataViewManager.latestLegacyLoadablePersistedView": "recovery.go",
+		"dataViewManager.InitializeCollection":              "collection.go",
+		"dataViewManager.MarkCollectionTerminal":            "collection.go",
+		"dataViewManager.FinalizeDropCollection":            "collection.go",
+		"dataViewManager.Get":                               "access.go",
+		"dataViewManager.LatestPublished":                   "access.go",
+		"dataViewManager.SegmentSnapshot":                   "frontier.go",
+		"dataViewManager.ShardTimeTicks":                    "frontier.go",
+		"segmentTransformStartAfterTimetick":                "frontier.go",
+		"dataViewManager.IsSegmentReferenced":               "gc.go",
+		"dataViewManager.GarbageCollect":                    "gc.go",
+		"dataViewManager.updateRetainedMembership":          "gc.go",
+		"canonicalDataViewClone":                            "view.go",
+		"cloneDataVersion":                                  "view.go",
+		"dataVersionKey":                                    "view.go",
+	}
+	for declaration, expectedFile := range expectedFunctionFiles {
+		require.Equal(t, expectedFile, functionFiles[declaration],
+			"%s must stay in the focused DataView unit %s", declaration, expectedFile)
 	}
 }
