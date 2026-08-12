@@ -259,6 +259,26 @@ func TestPublicationMetadataOnlyMutationIsNoOp(t *testing.T) {
 	require.Len(t, catalog.views, 1)
 }
 
+func TestPublicationRejectsDurablePublishedHeadRegression(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, _ := newTestDataViewManager()
+	_, err := manager.InitializeCollection(ctx, CollectionInitialization{
+		CollectionID: 1,
+		VChannels:    []string{"ch-0"},
+	})
+	require.NoError(t, err)
+	_, err = manager.CommitStreamingView(ctx, 1, PublishedMutation{
+		Add: []SegmentMembership{loadableMembership(1, 10, 100, "ch-0")},
+	})
+	require.NoError(t, err)
+
+	catalog.versionStates[1].PublishedDataVersion = &viewpb.DataVersion{StreamingVersion: 1}
+	version, err := manager.CommitSegmentTrim(ctx, 1, func(context.Context) []int64 { return nil }, nil)
+
+	require.ErrorIs(t, err, merr.ErrDataIntegrity)
+	require.Nil(t, version)
+}
+
 func TestPublicationDelayedSortOutputInheritsFlushVersion(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, store := newTestDataViewManager()

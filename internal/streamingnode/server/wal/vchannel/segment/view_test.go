@@ -141,7 +141,7 @@ func (o *recordingSegmentViewOwner) SegmentSealed(event walview.SegmentSealedEve
 	o.sealed = event
 }
 
-func TestFlushedSegmentSnapshotReturnsFilteredSealedSegment(t *testing.T) {
+func TestFlushedSegmentSnapshotSwitchesAtSealedDataVersion(t *testing.T) {
 	view := NewSegmentView(
 		&streamingpb.SegmentAssignmentMeta{
 			CollectionId:       1,
@@ -163,11 +163,18 @@ func TestFlushedSegmentSnapshotReturnsFilteredSealedSegment(t *testing.T) {
 		runtimeConfig{},
 	)
 
-	_, visible := view.VisibleSnapshot("ch", qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1})
-	flushed, flushedSegment := view.FlushedSegmentSnapshot("ch", qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1})
+	before := qviews.DataVersion{StreamingVersion: 10}
+	_, visibleBefore := view.VisibleSnapshot("ch", before)
+	_, flushedBefore := view.FlushedSegmentSnapshot("ch", before)
+	require.True(t, visibleBefore)
+	require.False(t, flushedBefore)
 
-	require.False(t, visible)
-	require.True(t, flushedSegment)
+	atSeal := qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}
+	_, visibleAtSeal := view.VisibleSnapshot("ch", atSeal)
+	flushed, flushedAtSeal := view.FlushedSegmentSnapshot("ch", atSeal)
+
+	require.False(t, visibleAtSeal)
+	require.True(t, flushedAtSeal)
 	assert.Equal(t, int64(100), flushed.SegmentID)
 	assert.Equal(t, int64(10), flushed.PartitionID)
 	assert.Equal(t, uint64(50), flushed.FlushTimeTick)
