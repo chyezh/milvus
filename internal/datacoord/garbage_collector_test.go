@@ -294,6 +294,84 @@ func Test_garbageCollector_basic(t *testing.T) {
 	})
 }
 
+func TestGarbageCollectorLifecycle(t *testing.T) {
+	t.Run("close before start prevents workers", func(t *testing.T) {
+		mockey.PatchConvey("closed collector cannot start", t, func() {
+			gc := newGarbageCollector(nil, nil, GcOption{
+				cli:     &mocks.ChunkManager{},
+				enabled: true,
+			})
+			var workCalls atomic.Int32
+			mockey.Mock((*garbageCollector).work).
+				To(func(*garbageCollector, context.Context) {
+					workCalls.Inc()
+				}).Build()
+
+			gc.close()
+			gc.start()
+
+			require.Zero(t, workCalls.Load())
+		})
+	})
+
+	t.Run("close waits for active worker", func(t *testing.T) {
+		mockey.PatchConvey("active worker drains before close returns", t, func() {
+			gc := newGarbageCollector(nil, nil, GcOption{
+				cli:     &mocks.ChunkManager{},
+				enabled: true,
+			})
+			workerStarted := make(chan struct{})
+			releaseWorker := make(chan struct{})
+			mockey.Mock((*garbageCollector).work).
+				To(func(gc *garbageCollector, _ context.Context) {
+					gc.wg.Add(1)
+					go func() {
+						defer gc.wg.Done()
+						close(workerStarted)
+						<-releaseWorker
+					}()
+				}).Build()
+
+			gc.start()
+			<-workerStarted
+			closeDone := make(chan struct{})
+			go func() {
+				gc.close()
+				close(closeDone)
+			}()
+			<-gc.ctx.Done()
+			select {
+			case <-closeDone:
+				t.Fatal("close returned before active worker stopped")
+			default:
+			}
+
+			close(releaseWorker)
+			<-closeDone
+		})
+	})
+
+	t.Run("start is idempotent", func(t *testing.T) {
+		mockey.PatchConvey("workers start only once", t, func() {
+			gc := newGarbageCollector(nil, nil, GcOption{
+				cli:     &mocks.ChunkManager{},
+				enabled: true,
+			})
+			var workCalls atomic.Int32
+			mockey.Mock((*garbageCollector).work).
+				To(func(*garbageCollector, context.Context) {
+					workCalls.Inc()
+				}).Build()
+
+			gc.start()
+			gc.start()
+
+			require.Equal(t, int32(1), workCalls.Load())
+			gc.close()
+		})
+	})
+}
+
 func validateMinioPrefixElements(t *testing.T, manager *storage.RemoteChunkManager, bucketName string, prefix string, elements []string) {
 	cli := manager.UnderlyingObjectStorage().(*storage.MinioObjectStorage).Client
 	var current []string

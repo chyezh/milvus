@@ -77,7 +77,9 @@ type garbageCollector struct {
 	meta    *meta
 	handler Handler
 
-	startOnce        sync.Once
+	lifecycleMu      sync.Mutex
+	started          bool
+	stopped          bool
 	stopOnce         sync.Once
 	wg               sync.WaitGroup
 	cmdCh            chan gcCmd
@@ -276,15 +278,21 @@ func newGarbageCollector(meta *meta, handler Handler, opt GcOption) *garbageColl
 
 // start a goroutine and perform gc check every `checkInterval`
 func (gc *garbageCollector) start() {
-	if gc.option.enabled {
-		if gc.option.cli == nil {
-			mlog.Warn(gc.ctx, "DataCoord gc enabled, but SSO client is not provided")
-			return
-		}
-		gc.startOnce.Do(func() {
-			gc.work(gc.ctx)
-		})
+	if !gc.option.enabled {
+		return
 	}
+	if gc.option.cli == nil {
+		mlog.Warn(gc.ctx, "DataCoord gc enabled, but SSO client is not provided")
+		return
+	}
+
+	gc.lifecycleMu.Lock()
+	defer gc.lifecycleMu.Unlock()
+	if gc.started || gc.stopped {
+		return
+	}
+	gc.started = true
+	gc.work(gc.ctx)
 }
 
 // GcStatus holds the current status of the garbage collector.
@@ -569,9 +577,15 @@ func (gc *garbageCollector) collectionGCPaused(collectionID int64) bool {
 
 // close stop the garbage collector.
 func (gc *garbageCollector) close() {
-	gc.stopOnce.Do(func() {
+	gc.lifecycleMu.Lock()
+	if !gc.stopped {
+		gc.stopped = true
 		gc.cancel()
-		gc.wg.Wait()
+	}
+	gc.lifecycleMu.Unlock()
+
+	gc.wg.Wait()
+	gc.stopOnce.Do(func() {
 		if gc.option.removeObjectPool != nil {
 			gc.option.removeObjectPool.Release()
 		}
