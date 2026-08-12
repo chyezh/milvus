@@ -467,6 +467,7 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 		if err := m.catalog.SaveDataView(ctx, toPersist); err != nil {
 			return nil, err
 		}
+		m.invalidateRetainedMembership(event.CollectionID)
 		state.latestResident = canonicalDataViewClone(toPersist)
 		state.latestVisible = m.withDeleteTimetick(ctx, state.latestResident)
 	}
@@ -768,6 +769,7 @@ func (m *dataViewManager) repairCollectionWithDataViews(ctx context.Context, col
 			state.mu.Unlock()
 			return err
 		}
+		m.invalidateRetainedMembership(collectionID)
 		m.rememberRecoveredDataView(toPersist)
 		state.latestResident = canonicalDataViewClone(toPersist)
 	}
@@ -1125,21 +1127,9 @@ func (m *dataViewManager) updateRetainedMembership(collectionID int64, views []*
 	m.retainedMu.Unlock()
 }
 
-func (m *dataViewManager) addRetainedMembership(collectionID int64, view *viewpb.DataViewOfCollection) {
-	if view == nil {
-		return
-	}
+func (m *dataViewManager) invalidateRetainedMembership(collectionID int64) {
 	m.retainedMu.Lock()
-	segments, ok := m.retained[collectionID]
-	if !ok {
-		m.retainedMu.Unlock()
-		return
-	}
-	for _, partition := range dataViewPartitions(view) {
-		for _, segmentID := range partition.GetSegmentIds() {
-			segments[segmentID]++
-		}
-	}
+	delete(m.retained, collectionID)
 	m.retainedMu.Unlock()
 }
 
@@ -1221,7 +1211,7 @@ func (m *dataViewManager) applyMembershipMutation(ctx context.Context, mutation 
 	}
 
 	state.latestResident = canonicalDataViewClone(toPersist)
-	m.addRetainedMembership(state.collectionID, toPersist)
+	m.invalidateRetainedMembership(state.collectionID)
 	if m.isDataViewVisibleFromBase(ctx, previousResident, state.latestResident, nil) {
 		state.latestVisible = m.withDeleteTimetick(ctx, state.latestResident)
 	}

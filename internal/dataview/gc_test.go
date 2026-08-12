@@ -124,3 +124,23 @@ func TestDataViewRetainedMembershipIncludesPublicationAfterCacheInitialization(t
 	require.NoError(t, err)
 	require.True(t, referenced, "published head remains retained after GC")
 }
+
+func TestDataViewRetainedMembershipDropsRemovedSegmentAfterPublicationAndGC(t *testing.T) {
+	ctx := context.Background()
+	manager, _, store := newTestDataViewManager()
+	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 100)
+	store.segments[200] = newDataViewTestSegment(1, 10, 200, "ch-1", 100)
+	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})))
+	referenced, err := manager.IsSegmentReferenced(ctx, 1, 100)
+	require.NoError(t, err)
+	require.True(t, referenced)
+
+	require.NoError(t, noErrorVersion(manager.OnCompact(ctx, CompactDataViewEvent{CollectionID: 1, CompactFrom: []int64{100}, CompactTo: []int64{200}})))
+	referenced, err = manager.IsSegmentReferenced(ctx, 1, 100)
+	require.NoError(t, err)
+	require.True(t, referenced, "old retained DataView still protects the removed segment")
+	require.NoError(t, manager.GarbageCollect(ctx, 1, 1))
+	referenced, err = manager.IsSegmentReferenced(ctx, 1, 100)
+	require.NoError(t, err)
+	require.False(t, referenced, "removed segment must leave the cache after its DataView is collected")
+}

@@ -751,7 +751,7 @@ func (m *dataViewManager) persistPublishedLocked(
 	state.persistedAllocated = nextState.GetAllocatedStreamingVersion()
 	state.latestResident = canonicalDataViewClone(toPersist)
 	state.latestVisible = canonicalDataViewClone(toPersist)
-	m.addRetainedMembership(state.collectionID, toPersist)
+	m.invalidateRetainedMembership(state.collectionID)
 	m.rememberRecoveredDataView(toPersist)
 	return nil
 }
