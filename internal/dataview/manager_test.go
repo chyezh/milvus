@@ -231,9 +231,9 @@ func newTestDataViewManager() (*dataViewManager, *fakeDataViewCatalog, *fakeData
 }
 
 func dataViewSnapshotForTest(
+	ctx context.Context,
 	t *testing.T,
 	manager *dataViewManager,
-	ctx context.Context,
 	collectionIDs map[int64]struct{},
 ) *balancerapi.DataViewSnapshot {
 	t.Helper()
@@ -333,7 +333,7 @@ func TestDataViewManagerOnCreateCollectionCreatesEmptyVisibleView(t *testing.T) 
 	require.Len(t, visible.GetShards(), 2)
 	require.Zero(t, visible.GetShards()[0].GetTransformStartAfterTimetick())
 
-	snapshot := dataViewSnapshotForTest(t, manager, ctx, nil)
+	snapshot := dataViewSnapshotForTest(ctx, t, manager, nil)
 	_, ok := snapshot.ShardView(1, "ch-0")
 	require.True(t, ok)
 	_, ok = snapshot.ShardView(1, "ch-1")
@@ -690,7 +690,7 @@ func TestDataViewManagerDataViewSnapshotForBalancer(t *testing.T) {
 	store.segments[100].MemSize = 4096
 	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})))
 
-	snapshot := dataViewSnapshotForTest(t, manager, ctx, nil)
+	snapshot := dataViewSnapshotForTest(ctx, t, manager, nil)
 	require.NotNil(t, snapshot)
 
 	version, ok := snapshot.DataVersion(1)
@@ -735,7 +735,7 @@ func TestDataViewManagerDataViewSnapshotForCollectionsScope(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			snapshot := dataViewSnapshotForTest(t, manager, ctx, test.scope)
+			snapshot := dataViewSnapshotForTest(ctx, t, manager, test.scope)
 			_, has1 := snapshot.DataVersion(1)
 			_, has2 := snapshot.DataVersion(2)
 			require.Equal(t, test.has1, has1)
@@ -743,13 +743,13 @@ func TestDataViewManagerDataViewSnapshotForCollectionsScope(t *testing.T) {
 		})
 	}
 
-	snapshot := dataViewSnapshotForTest(t, manager, ctx, map[int64]struct{}{1: {}})
+	snapshot := dataViewSnapshotForTest(ctx, t, manager, map[int64]struct{}{1: {}})
 	shard, ok := snapshot.ShardView(1, "ch-1")
 	require.True(t, ok)
 	require.Equal(t, []int64{100}, shard.GetPartitions()[0].GetSegmentIds())
 	shard.Partitions[0].SegmentIds[0] = 999
 
-	snapshot = dataViewSnapshotForTest(t, manager, ctx, map[int64]struct{}{1: {}})
+	snapshot = dataViewSnapshotForTest(ctx, t, manager, map[int64]struct{}{1: {}})
 	shard, ok = snapshot.ShardView(1, "ch-1")
 	require.True(t, ok)
 	require.Equal(t, []int64{100}, shard.GetPartitions()[0].GetSegmentIds())
@@ -776,7 +776,7 @@ func TestDataViewManagerDataViewSnapshotForCollectionsTimeticks(t *testing.T) {
 		),
 	}
 
-	snapshot := dataViewSnapshotForTest(t, manager, ctx, map[int64]struct{}{1: {}})
+	snapshot := dataViewSnapshotForTest(ctx, t, manager, map[int64]struct{}{1: {}})
 	shared, ok := snapshot.ShardView(1, "ch-shared")
 	require.True(t, ok)
 	require.Equal(t, uint64(700), shared.GetTransformStartAfterTimetick())

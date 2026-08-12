@@ -18,12 +18,12 @@ package dataview
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math"
 	"sort"
 	"sync"
 
+	"github.com/cockroachdb/errors"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
