@@ -39,6 +39,17 @@ type testDataViewManager struct {
 	getArrived chan struct{}
 }
 
+type blockingDirtyViewSubmitter struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingDirtyViewSubmitter) Submit(dirtyViewEvent) {
+	s.once.Do(func() { close(s.started) })
+	<-s.release
+}
+
 func (m *testDataViewManager) Get(_ context.Context, _ int64, version qviews.DataVersion) (dataview.DataViewRef, error) {
 	if m.getStarted != nil {
 		select {
@@ -414,6 +425,38 @@ func TestShardViewManagerDataViewRefGetDoesNotHoldManagerLock(t *testing.T) {
 		require.NoError(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("AddPreparing did not complete")
+	}
+}
+
+func TestShardViewManagerCloseCannotFenceBetweenMutationAndSubmit(t *testing.T) {
+	dataViews := &testDataViewManager{refs: make(map[qviews.DataVersion][]*trackedDataViewRef)}
+	submit := &blockingDirtyViewSubmitter{started: make(chan struct{}), release: make(chan struct{})}
+	mgr := newShardViewManager(context.Background(), testShardID, submit, nil, dataViews)
+
+	addDone := make(chan error, 1)
+	go func() { addDone <- mgr.AddPreparing(context.Background(), testBuilder(1, 1, 1)) }()
+	select {
+	case <-submit.started:
+	case <-time.After(time.Second):
+		t.Fatal("AddPreparing did not reach Submit")
+	}
+
+	closeDone := make(chan struct{})
+	go func() {
+		mgr.stopAccepting()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+		t.Fatal("shutdown fence passed before AddPreparing submitted its event")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(submit.release)
+	require.NoError(t, <-addDone)
+	select {
+	case <-closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("shutdown fence did not complete")
 	}
 }
 

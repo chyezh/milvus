@@ -27,6 +27,7 @@ import (
 // Thread-safety: All methods are thread-safe.
 type ShardViewManager struct {
 	ctx            context.Context // lifecycle context used by callbacks and event observation
+	operationMu    sync.Mutex
 	mu             sync.Mutex
 	shardID        qviews.ShardID
 	eventSubmitter dirtyViewEventSubmitter
@@ -345,9 +346,11 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 		return err
 	}
 
+	m.operationMu.Lock()
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
+		m.operationMu.Unlock()
 		ref.Deref()
 		return merr.WrapErrServiceNotReadyMsg("shard view manager %s is closed", m.shardID.String())
 	}
@@ -355,6 +358,7 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 	// Validate no DataVersion rollback.
 	if err := m.validateDataVersionLocked(newDV); err != nil {
 		m.mu.Unlock()
+		m.operationMu.Unlock()
 		ref.Deref()
 		return err
 	}
@@ -407,6 +411,7 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 	m.publishStatsLocked()
 	m.mu.Unlock()
 	m.submitDirtyEvent(event)
+	m.operationMu.Unlock()
 	return nil
 }
 
@@ -418,7 +423,13 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 //
 // The actual cleanup completes asynchronously through callbacks.
 func (m *ShardViewManager) RequestRelease(ctx context.Context) error {
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return merr.WrapErrServiceNotReadyMsg("shard view manager %s is closed", m.shardID.String())
+	}
 
 	if m.preparingView != nil {
 		key := m.keyForStateMachine(m.preparingView)
@@ -618,6 +629,8 @@ func (m *ShardViewManager) consumeDirtyEventLocked() dirtyViewEvent {
 // Returns true when this node has completed the sync represented by target.
 func (m *ShardViewManager) makeOnSyncResponse(version qviews.QueryViewVersion, target qviews.QueryViewAtWorkNode) func(resp qviews.QueryViewAtWorkNode) bool {
 	return func(resp qviews.QueryViewAtWorkNode) bool {
+		m.operationMu.Lock()
+		defer m.operationMu.Unlock()
 		m.mu.Lock()
 		if m.closed {
 			m.mu.Unlock()
@@ -677,6 +690,8 @@ func syncResponseCompletesTarget(target, reported qviews.QueryViewState) bool {
 
 func (m *ShardViewManager) makeOnQueryNodeLost(version qviews.QueryViewVersion) func(qviews.QueryNode) {
 	return func(node qviews.QueryNode) {
+		m.operationMu.Lock()
+		defer m.operationMu.Unlock()
 		m.mu.Lock()
 		if m.closed {
 			m.mu.Unlock()
@@ -804,6 +819,8 @@ func (m *ShardViewManager) derefAllReferences() {
 }
 
 func (m *ShardViewManager) stopAccepting() {
+	m.operationMu.Lock()
+	defer m.operationMu.Unlock()
 	m.mu.Lock()
 	m.closed = true
 	m.mu.Unlock()
