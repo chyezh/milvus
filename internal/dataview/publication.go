@@ -190,7 +190,7 @@ func (m *dataViewManager) CommitStreamingView(
 		return nil, err
 	}
 
-	next := publishedMutationBase(collectionID, state.latestResident)
+	next := publishedMutationBase(collectionID, state.published)
 	changed := applyPublishedMutation(next, mutation)
 	for _, membership := range mutation.Add {
 		if !dataViewContainsMembership(next, membership) {
@@ -204,7 +204,7 @@ func (m *dataViewManager) CommitStreamingView(
 		}
 	}
 	if !changed {
-		return dataVersionFromView(state.latestResident), nil
+		return dataVersionFromView(state.published), nil
 	}
 	if pending := minimumPendingStreamingVersion(state.pendingAssigned); pending != 0 {
 		return nil, merr.WrapErrServiceUnavailableMsg(
@@ -325,7 +325,7 @@ func (m *dataViewManager) CommitSegmentTrim(
 				pending,
 			)
 		}
-		next := publishedMutationBase(collectionID, state.latestResident)
+		next := publishedMutationBase(collectionID, state.published)
 		applyPublishedMutation(next, state.readyPublications[streamingVersion])
 		next.DataVersion = &viewpb.DataVersion{StreamingVersion: streamingVersion}
 		if err := m.persistPublishedLocked(ctx, state, catalog, next); err != nil {
@@ -337,12 +337,12 @@ func (m *dataViewManager) CommitSegmentTrim(
 
 	publishedTargets := make([]int64, 0, len(targetIDs))
 	for _, segmentID := range targetIDs {
-		if dataViewContainsSegment(state.latestResident, segmentID) {
+		if dataViewContainsSegment(state.published, segmentID) {
 			publishedTargets = append(publishedTargets, segmentID)
 		}
 	}
 	if len(publishedTargets) == 0 {
-		return dataVersionFromView(state.latestResident), nil
+		return dataVersionFromView(state.published), nil
 	}
 	version, err := m.commitRewriteLocked(ctx, state, catalog, PublishedMutation{Remove: publishedTargets})
 	if err != nil {
@@ -481,8 +481,7 @@ func (m *dataViewManager) refreshDurablePublicationLocked(
 	}
 	state.versionState = durable
 	state.persistedAllocated = persistedAllocated
-	state.latestResident = canonicalDataViewClone(published)
-	state.latestVisible = canonicalDataViewClone(published)
+	state.published = canonicalDataViewClone(published)
 	m.rememberRecoveredDataView(published)
 	publishedStreaming := durable.GetPublishedDataVersion().GetStreamingVersion()
 	for streamingVersion := range state.pendingAssigned {
@@ -500,10 +499,10 @@ func (m *dataViewManager) commitRewriteLocked(
 	catalog publishedDataViewCatalog,
 	mutation PublishedMutation,
 ) (*viewpb.DataVersion, error) {
-	next := publishedMutationBase(state.collectionID, state.latestResident)
+	next := publishedMutationBase(state.collectionID, state.published)
 	applyPublishedMutation(next, mutation)
-	if isDataViewMembershipEqual(state.latestResident, next) {
-		return dataVersionFromView(state.latestResident), nil
+	if isDataViewMembershipEqual(state.published, next) {
+		return dataVersionFromView(state.published), nil
 	}
 	current := state.versionState.GetPublishedDataVersion()
 	if current == nil || current.GetStreamingVersion() == 0 {
@@ -570,8 +569,7 @@ func (m *dataViewManager) recoverPublicationStateLocked(
 	state.versionState = durable
 	state.persistedAllocated = durable.GetAllocatedStreamingVersion()
 	if published != nil {
-		state.latestResident = canonicalDataViewClone(published)
-		state.latestVisible = canonicalDataViewClone(published)
+		state.published = canonicalDataViewClone(published)
 	}
 	if state.pendingAssigned == nil {
 		state.pendingAssigned = make(map[int64]struct{})
@@ -600,9 +598,9 @@ func (m *dataViewManager) drainReadyPublicationsLocked(
 			return requestedPublished, nil
 		}
 
-		next := publishedMutationBase(state.collectionID, state.latestResident)
+		next := publishedMutationBase(state.collectionID, state.published)
 		applyPublishedMutation(next, mutation)
-		if isDataViewMembershipEqual(state.latestResident, next) && !isAssignedRemoveOnlyCompletion(mutation) {
+		if isDataViewMembershipEqual(state.published, next) && !isAssignedRemoveOnlyCompletion(mutation) {
 			return requestedPublished, nil
 		}
 		next.DataVersion = &viewpb.DataVersion{StreamingVersion: nextStreaming}
@@ -749,8 +747,7 @@ func (m *dataViewManager) persistPublishedLocked(
 	}
 	state.versionState = nextState
 	state.persistedAllocated = nextState.GetAllocatedStreamingVersion()
-	state.latestResident = canonicalDataViewClone(toPersist)
-	state.latestVisible = canonicalDataViewClone(toPersist)
+	state.published = canonicalDataViewClone(toPersist)
 	m.invalidateRetainedMembership(state.collectionID)
 	m.rememberRecoveredDataView(toPersist)
 	return nil

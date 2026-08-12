@@ -49,11 +49,11 @@ func (m *dataViewManager) DataViewSnapshotRefForCollections(
 	releases := make([]DataViewRef, 0, len(states))
 	for _, state := range states {
 		state.mu.Lock()
-		if state.dropped || state.latestVisible == nil {
+		if state.dropped || state.published == nil {
 			state.mu.Unlock()
 			continue
 		}
-		view := canonicalDataViewClone(state.latestVisible)
+		view := canonicalDataViewClone(state.published)
 		ref := newDataViewRef(state, newDataView(view))
 		state.mu.Unlock()
 		releases = append(releases, ref)

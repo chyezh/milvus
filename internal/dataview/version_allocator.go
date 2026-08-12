@@ -146,8 +146,8 @@ func (m *dataViewManager) recoverFlushVersionStateLocked(
 	if published := durable.GetPublishedDataVersion(); published.GetStreamingVersion() > allocated {
 		allocated = published.GetStreamingVersion()
 	}
-	if resident := dataVersionFromView(state.latestResident); resident.GetStreamingVersion() > allocated {
-		allocated = resident.GetStreamingVersion()
+	if publishedViewVersion := dataVersionFromView(state.published); publishedViewVersion.GetStreamingVersion() > allocated {
+		allocated = publishedViewVersion.GetStreamingVersion()
 	}
 	publishedStreaming := durable.GetPublishedDataVersion().GetStreamingVersion()
 	for _, segment := range segments.ListAllSegmentsForVersionAllocation(ctx, state.collectionID) {

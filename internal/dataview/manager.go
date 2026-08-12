@@ -138,10 +138,9 @@ type collectionDataViewState struct {
 	mu           sync.RWMutex
 	collectionID int64
 
-	latestResident *viewpb.DataViewOfCollection
-	latestVisible  *viewpb.DataViewOfCollection
-	dropped        bool
-	refs           map[qviews.DataVersion]int
+	published *viewpb.DataViewOfCollection
+	dropped   bool
+	refs      map[qviews.DataVersion]int
 
 	versionState          *viewpb.CollectionDataVersionState
 	versionStateRecovered bool
@@ -395,11 +394,9 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 		return nil, nil
 	}
 
-	if state.latestResident != nil {
-		if state.latestVisible == nil {
-			state.latestVisible = m.withDeleteTimetick(ctx, state.latestResident)
-		}
-		return dataVersionFromView(state.latestResident), nil
+	if state.published != nil {
+		state.published = m.withDeleteTimetick(ctx, state.published)
+		return dataVersionFromView(state.published), nil
 	}
 
 	if catalog, ok := m.catalog.(publishedDataViewCatalog); ok {
@@ -411,8 +408,8 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 			if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
 				return nil, err
 			}
-			if state.latestResident != nil {
-				return dataVersionFromView(state.latestResident), nil
+			if state.published != nil {
+				return dataVersionFromView(state.published), nil
 			}
 			if durable.GetPublishedDataVersion() == nil {
 				persistedViews, err := catalog.ListDataViews(ctx, event.CollectionID)
@@ -423,7 +420,7 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 					if err := m.persistPublishedLocked(ctx, state, catalog, latestPersisted); err != nil {
 						return nil, err
 					}
-					return dataVersionFromView(state.latestResident), nil
+					return dataVersionFromView(state.published), nil
 				}
 			}
 		} else {
@@ -432,9 +429,8 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 				return nil, err
 			}
 			if latestPersisted := latestDataView(persistedViews); latestPersisted != nil {
-				state.latestResident = canonicalDataViewClone(latestPersisted)
-				state.latestVisible = m.latestVisiblePersistedView(ctx, persistedViews)
-				return dataVersionFromView(state.latestResident), nil
+				state.published = canonicalDataViewClone(latestPersisted)
+				return dataVersionFromView(state.published), nil
 			}
 			state.versionState = &viewpb.CollectionDataVersionState{CollectionId: event.CollectionID}
 			state.publicationRecovered = true
@@ -446,9 +442,8 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 		}
 		latestPersisted := latestDataView(persistedViews)
 		if latestPersisted != nil {
-			state.latestResident = canonicalDataViewClone(latestPersisted)
-			state.latestVisible = m.latestVisiblePersistedView(ctx, persistedViews)
-			return dataVersionFromView(state.latestResident), nil
+			state.published = canonicalDataViewClone(latestPersisted)
+			return dataVersionFromView(state.published), nil
 		}
 	}
 
@@ -468,18 +463,29 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 			return nil, err
 		}
 		m.invalidateRetainedMembership(event.CollectionID)
-		state.latestResident = canonicalDataViewClone(toPersist)
-		state.latestVisible = m.withDeleteTimetick(ctx, state.latestResident)
+		state.published = canonicalDataViewClone(toPersist)
+		state.published = m.withDeleteTimetick(ctx, state.published)
 	}
-	return dataVersionFromView(state.latestResident), nil
+	return dataVersionFromView(state.published), nil
 }
 
 func (m *dataViewManager) OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error) {
+	if event.TemporaryUnavailable {
+		if event.AssignedVersion != nil {
+			return cloneDataVersion(event.AssignedVersion), nil
+		}
+		state := m.getState(event.CollectionID)
+		if state == nil {
+			return nil, nil
+		}
+		state.mu.RLock()
+		defer state.mu.RUnlock()
+		return dataVersionFromView(state.published), nil
+	}
 	return m.applyMembershipMutation(ctx, dataViewMembershipMutation{
 		collectionID:    event.CollectionID,
 		addSegmentIDs:   event.SegmentIDs,
 		advance:         dataViewAdvanceStreaming,
-		allowInvisible:  event.TemporaryUnavailable,
 		assignedVersion: event.AssignedVersion,
 	})
 }
@@ -502,15 +508,24 @@ func (m *dataViewManager) OnCopySegmentComplete(ctx context.Context, event CopyS
 
 func (m *dataViewManager) OnCompact(ctx context.Context, event CompactDataViewEvent) (*viewpb.DataVersion, error) {
 	if m.hasPendingCompactOutput(ctx, event.CompactTo, event.AllowInvisibleTo) {
-		return nil, nil
+		return dataVersionFromView(m.publishedView(ctx, event.CollectionID)), nil
 	}
 	return m.applyMembershipMutation(ctx, dataViewMembershipMutation{
 		collectionID:   event.CollectionID,
 		addSegmentIDs:  event.CompactTo,
 		dropSegmentIDs: event.CompactFrom,
 		advance:        dataViewAdvanceCompact,
-		allowInvisible: event.AllowInvisibleTo,
 	})
+}
+
+func (m *dataViewManager) publishedView(ctx context.Context, collectionID int64) *viewpb.DataViewOfCollection {
+	state := m.getState(collectionID)
+	if state == nil {
+		return nil
+	}
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	return m.withDeleteTimetick(ctx, state.published)
 }
 
 func (m *dataViewManager) OnL0Compact(ctx context.Context, event L0CompactDataViewEvent) (*viewpb.DataVersion, error) {
@@ -524,13 +539,10 @@ func (m *dataViewManager) OnL0Compact(ctx context.Context, event L0CompactDataVi
 		return nil, nil
 	}
 
-	if state.latestResident != nil {
-		state.latestResident = m.withDeleteTimetick(ctx, state.latestResident)
+	if state.published != nil {
+		state.published = m.withDeleteTimetick(ctx, state.published)
 	}
-	if state.latestVisible != nil {
-		state.latestVisible = m.withDeleteTimetick(ctx, state.latestVisible)
-	}
-	version := dataVersionFromView(state.latestResident)
+	version := dataVersionFromView(state.published)
 	state.mu.Unlock()
 	return version, nil
 }
@@ -586,8 +598,7 @@ func (m *dataViewManager) OnDropCollection(ctx context.Context, collectionID int
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	state.latestResident = nil
-	state.latestVisible = nil
+	state.published = nil
 	state.dropped = true
 	return nil, nil
 }
@@ -686,8 +697,7 @@ func (m *dataViewManager) recoverCollectionFromDataViews(collectionID int64, per
 	defer state.mu.Unlock()
 
 	state.dropped = false
-	state.latestResident = canonicalDataViewClone(latestDataView(persistedViews))
-	state.latestVisible = canonicalDataViewClone(state.latestResident)
+	state.published = canonicalDataViewClone(latestDataView(persistedViews))
 }
 
 func (m *dataViewManager) LatestVisibleDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error) {
@@ -698,10 +708,10 @@ func (m *dataViewManager) LatestVisibleDataView(ctx context.Context, collectionI
 	state.mu.RLock()
 	defer state.mu.RUnlock()
 
-	if state.dropped || state.latestVisible == nil {
+	if state.dropped || state.published == nil {
 		return nil, nil
 	}
-	return m.withDeleteTimetick(ctx, state.latestVisible), nil
+	return m.withDeleteTimetick(ctx, state.published), nil
 }
 
 func (m *dataViewManager) Get(
@@ -717,8 +727,8 @@ func (m *dataViewManager) Get(
 		return nil, unavailableDataViewError(collectionID, version)
 	}
 	versionProto := version.IntoProto()
-	if state.latestVisible != nil && compareDataVersion(state.latestVisible.GetDataVersion(), versionProto) == 0 {
-		return newDataViewRef(state, newDataView(state.latestVisible)), nil
+	if state.published != nil && compareDataVersion(state.published.GetDataVersion(), versionProto) == 0 {
+		return newDataViewRef(state, newDataView(state.published)), nil
 	}
 
 	views, err := m.catalog.ListDataViews(ctx, collectionID)
@@ -738,10 +748,10 @@ func (m *dataViewManager) LatestPublished(ctx context.Context, collectionID int6
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	if state.dropped || state.latestVisible == nil {
+	if state.dropped || state.published == nil {
 		return nil, unavailableLatestDataViewError(collectionID)
 	}
-	return newDataViewRef(state, newDataView(state.latestVisible)), nil
+	return newDataViewRef(state, newDataView(state.published)), nil
 }
 
 func (m *dataViewManager) DataView(ctx context.Context, collectionID int64, dataVersion *viewpb.DataVersion) (*viewpb.DataViewOfCollection, error) {
@@ -754,8 +764,8 @@ func (m *dataViewManager) DataView(ctx context.Context, collectionID int64, data
 		state.mu.RUnlock()
 		return nil, nil
 	}
-	if state.latestVisible != nil && compareDataVersion(state.latestVisible.GetDataVersion(), dataVersion) == 0 {
-		view := m.withDeleteTimetick(ctx, state.latestVisible)
+	if state.published != nil && compareDataVersion(state.published.GetDataVersion(), dataVersion) == 0 {
+		view := m.withDeleteTimetick(ctx, state.published)
 		state.mu.RUnlock()
 		return view, nil
 	}
@@ -790,11 +800,11 @@ func (m *dataViewManager) Snapshot(ctx context.Context, collectionIDs []int64) (
 	views := make([]*viewpb.DataViewOfCollection, 0, len(states))
 	for _, state := range states {
 		state.mu.RLock()
-		if state.dropped || state.latestVisible == nil {
+		if state.dropped || state.published == nil {
 			state.mu.RUnlock()
 			continue
 		}
-		views = append(views, m.withDeleteTimetick(ctx, state.latestVisible))
+		views = append(views, m.withDeleteTimetick(ctx, state.published))
 		state.mu.RUnlock()
 	}
 	return views, nil
@@ -830,8 +840,8 @@ func (m *dataViewManager) DataViewSnapshotForCollections(ctx context.Context, co
 	seenSegments := make(map[int64]struct{})
 	for _, state := range states {
 		state.mu.RLock()
-		if !state.dropped && state.latestVisible != nil {
-			view := canonicalDataViewClone(state.latestVisible)
+		if !state.dropped && state.published != nil {
+			view := canonicalDataViewClone(state.published)
 			views = append(views, view)
 			for _, partition := range dataViewPartitions(view) {
 				for _, segmentID := range partition.GetSegmentIds() {
@@ -1055,8 +1065,7 @@ func (m *dataViewManager) applyMembershipMutation(ctx context.Context, mutation 
 		return nil, nil
 	}
 
-	previousResident := canonicalDataViewClone(state.latestResident)
-	next := canonicalDataViewClone(state.latestResident)
+	next := canonicalDataViewClone(state.published)
 	if next == nil {
 		next = &viewpb.DataViewOfCollection{
 			CollectionId: mutation.collectionID,
@@ -1080,31 +1089,25 @@ func (m *dataViewManager) applyMembershipMutation(ctx context.Context, mutation 
 		added = addSegmentToDataView(next, segment) || added
 	}
 	canonicalizeDataView(next)
-	membershipEqual := isDataViewMembershipEqual(state.latestResident, next)
+	membershipEqual := isDataViewMembershipEqual(state.published, next)
 	if mutation.assignedVersion != nil &&
-		(membershipEqual || compareDataVersion(dataVersionFromView(state.latestResident), mutation.assignedVersion) >= 0) {
+		(membershipEqual || compareDataVersion(dataVersionFromView(state.published), mutation.assignedVersion) >= 0) {
 		version, err := m.verifyPersistedAssignedFlushVersion(ctx, mutation)
 		if err != nil {
 			state.mu.Unlock()
 			return nil, err
 		}
-		if state.latestResident != nil {
-			state.latestResident = m.withDeleteTimetick(ctx, state.latestResident)
-		}
-		if state.latestVisible != nil {
-			state.latestVisible = m.withDeleteTimetick(ctx, state.latestVisible)
+		if state.published != nil {
+			state.published = m.withDeleteTimetick(ctx, state.published)
 		}
 		state.mu.Unlock()
 		return version, nil
 	}
 	if membershipEqual {
-		if state.latestResident != nil {
-			state.latestResident = m.withDeleteTimetick(ctx, state.latestResident)
+		if state.published != nil {
+			state.published = m.withDeleteTimetick(ctx, state.published)
 		}
-		if state.latestVisible != nil {
-			state.latestVisible = m.withDeleteTimetick(ctx, state.latestVisible)
-		}
-		version := dataVersionFromView(state.latestResident)
+		version := dataVersionFromView(state.published)
 		state.mu.Unlock()
 		return version, nil
 	}
@@ -1116,7 +1119,7 @@ func (m *dataViewManager) applyMembershipMutation(ctx context.Context, mutation 
 	if mutation.assignedVersion != nil {
 		next.DataVersion = proto.Clone(mutation.assignedVersion).(*viewpb.DataVersion)
 	} else {
-		next.DataVersion = nextDataVersion(state.latestResident, advance)
+		next.DataVersion = nextDataVersion(state.published, advance)
 	}
 	toPersist := cloneDataViewWithoutDeleteTimetick(next)
 	if err := m.catalog.SaveDataView(ctx, toPersist); err != nil {
@@ -1124,12 +1127,10 @@ func (m *dataViewManager) applyMembershipMutation(ctx context.Context, mutation 
 		return nil, err
 	}
 
-	state.latestResident = canonicalDataViewClone(toPersist)
+	state.published = canonicalDataViewClone(toPersist)
 	m.invalidateRetainedMembership(state.collectionID)
-	if m.isDataViewVisibleFromBase(ctx, previousResident, state.latestResident, nil) {
-		state.latestVisible = m.withDeleteTimetick(ctx, state.latestResident)
-	}
-	version := dataVersionFromView(state.latestResident)
+	state.published = m.withDeleteTimetick(ctx, state.published)
+	version := dataVersionFromView(state.published)
 	state.mu.Unlock()
 	return version, nil
 }
@@ -1270,61 +1271,6 @@ func (m *dataViewManager) listStates() []*collectionDataViewState {
 	return states
 }
 
-func (m *dataViewManager) isDataViewVisibleFromBase(
-	ctx context.Context,
-	base *viewpb.DataViewOfCollection,
-	view *viewpb.DataViewOfCollection,
-	loadableExceptions map[int64]struct{},
-) bool {
-	if view == nil {
-		return false
-	}
-	baseSegments := dataViewSegmentIDSet(base)
-	for _, partition := range dataViewPartitions(view) {
-		for _, segmentID := range partition.GetSegmentIds() {
-			if _, ok := baseSegments[segmentID]; ok {
-				continue
-			}
-			if !isDataViewLoadableSegment(m.segments.GetSegment(ctx, segmentID)) {
-				if _, ok := loadableExceptions[segmentID]; ok {
-					continue
-				}
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func (m *dataViewManager) latestVisiblePersistedView(ctx context.Context, views []*viewpb.DataViewOfCollection) *viewpb.DataViewOfCollection {
-	if len(views) == 0 {
-		return nil
-	}
-	ordered := make([]*viewpb.DataViewOfCollection, 0, len(views))
-	for _, view := range views {
-		if view != nil {
-			ordered = append(ordered, view)
-		}
-	}
-	sort.Slice(ordered, func(i, j int) bool {
-		return compareDataVersion(ordered[i].GetDataVersion(), ordered[j].GetDataVersion()) < 0
-	})
-
-	var previous *viewpb.DataViewOfCollection
-	var latestVisible *viewpb.DataViewOfCollection
-	var loadableExceptions map[int64]struct{}
-	for _, view := range ordered {
-		if loadableExceptions == nil {
-			loadableExceptions = pendingRetainedCompactionInputs(m.segments.SelectSegments(ctx, view.GetCollectionId()))
-		}
-		if m.isDataViewVisibleFromBase(ctx, previous, view, loadableExceptions) {
-			latestVisible = view
-		}
-		previous = view
-	}
-	return m.withDeleteTimetick(ctx, latestVisible)
-}
-
 func (m *dataViewManager) latestLegacyLoadablePersistedView(
 	ctx context.Context,
 	views []*viewpb.DataViewOfCollection,
@@ -1443,13 +1389,7 @@ func isDataViewJoinableSegment(segment *Segment, allowInvisible bool) bool {
 }
 
 func isDataViewPendingVisibilitySegment(segment *Segment, allowInvisible bool) bool {
-	if segment == nil {
-		return false
-	}
-	if segment.GetState() != commonpb.SegmentState_Flushed {
-		return false
-	}
-	if segment.GetLevel() == datapb.SegmentLevel_L0 {
+	if segment == nil || segment.GetState() != commonpb.SegmentState_Flushed || segment.GetLevel() == datapb.SegmentLevel_L0 {
 		return false
 	}
 	if segment.GetIsImporting() {
@@ -1723,30 +1663,6 @@ func dedupSortedInt64s(values []int64) []int64 {
 		write++
 	}
 	return values[:write]
-}
-
-func pendingRetainedCompactionInputs(segments []*Segment) map[int64]struct{} {
-	byID := make(map[int64]*Segment, len(segments))
-	for _, segment := range segments {
-		if segment != nil {
-			byID[segment.GetID()] = segment
-		}
-	}
-
-	retained := make(map[int64]struct{})
-	for _, segment := range segments {
-		if !isDataViewPendingVisibilitySegment(segment, false) {
-			continue
-		}
-		for _, inputID := range segment.GetCompactionFrom() {
-			input := byID[inputID]
-			if input == nil || input.GetIsInvisible() || input.GetIsImporting() || input.GetLevel() == datapb.SegmentLevel_L0 {
-				continue
-			}
-			retained[inputID] = struct{}{}
-		}
-	}
-	return retained
 }
 
 func isDataViewMembershipEqual(left, right *viewpb.DataViewOfCollection) bool {
