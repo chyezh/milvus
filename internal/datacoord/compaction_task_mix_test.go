@@ -291,7 +291,7 @@ func (s *MixCompactionTaskSuite) TestProcessMetaSaved_DelayedSortDroppedOutputCo
 	m, err := newMemoryMeta(s.T())
 	s.Require().NoError(err)
 	manager := newDataViewManager(m.catalog, m)
-	_, err = manager.InitializeCollection(ctx, CreateCollectionDataViewEvent{
+	_, err = manager.InitializeCollection(ctx, DataViewCollectionInitialization{
 		CollectionID: 1,
 		VChannels:    []string{"ch-0"},
 	})
@@ -378,7 +378,7 @@ func (s *MixCompactionTaskSuite) TestMixCompactionWaitsForAssignedFlushPublicati
 	catalog := &failPublishedDataViewCatalog{DataCoordCatalog: m.catalog}
 	manager := newDataViewManager(catalog, m)
 	m.dataViewManager = manager
-	_, err = manager.InitializeCollection(ctx, CreateCollectionDataViewEvent{
+	_, err = manager.InitializeCollection(ctx, DataViewCollectionInitialization{
 		CollectionID: 1,
 		VChannels:    []string{"ch-0"},
 	})

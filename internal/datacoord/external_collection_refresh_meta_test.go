@@ -535,7 +535,7 @@ func TestExternalCollectionRefreshMeta_UpdateJobStateWithPreApply(t *testing.T) 
 		})
 		dataViewCatalog := &failPublishedDataViewCatalog{DataCoordCatalog: mt.catalog}
 		manager := newDataViewManager(dataViewCatalog, mt)
-		_, err = manager.InitializeCollection(ctx, CreateCollectionDataViewEvent{
+		_, err = manager.InitializeCollection(ctx, DataViewCollectionInitialization{
 			CollectionID: collectionID,
 			VChannels:    []string{vchannel},
 		})

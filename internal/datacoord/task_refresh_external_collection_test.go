@@ -1524,7 +1524,7 @@ func TestApplyExternalCollectionSegmentUpdateForBaseline_AddOnlyPublishesStreami
 		Partitions:    []int64{1},
 	})
 	manager := newDataViewManager(mt.catalog, mt)
-	_, err = manager.InitializeCollection(ctx, CreateCollectionDataViewEvent{
+	_, err = manager.InitializeCollection(ctx, DataViewCollectionInitialization{
 		CollectionID: collectionID,
 		VChannels:    []string{"by-dev-rootcoord-dml_0_v1"},
 	})

@@ -32,12 +32,12 @@ import (
 )
 
 type (
-	DataViewManager               = dataview.Manager
-	CreateCollectionDataViewEvent = dataview.CollectionInitialization
-	SegmentMembership             = dataview.SegmentMembership
-	SegmentTrimTargetResolver     = dataview.SegmentTrimTargetResolver
-	SegmentTrimFinalize           = dataview.SegmentTrimFinalize
-	PublishedMutation             = dataview.PublishedMutation
+	DataViewManager                  = dataview.Manager
+	DataViewCollectionInitialization = dataview.CollectionInitialization
+	SegmentMembership                = dataview.SegmentMembership
+	SegmentTrimTargetResolver        = dataview.SegmentTrimTargetResolver
+	SegmentTrimFinalize              = dataview.SegmentTrimFinalize
+	PublishedMutation                = dataview.PublishedMutation
 )
 
 type dataViewSegmentStore struct {

@@ -87,7 +87,7 @@ func (c *fakeDataViewGarbageCollector) GarbageCollect(_ context.Context, collect
 
 type fakeGCDataViewManager struct {
 	calls              []fakeGCDataViewCall
-	createEvents       []CreateCollectionDataViewEvent
+	createEvents       []DataViewCollectionInitialization
 	droppedCollections []int64
 	assignedVersion    *viewpb.DataVersion
 	assignVersionErr   error

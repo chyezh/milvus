@@ -139,7 +139,7 @@ func TestServerCreateCollectionDataViewDelegatesToDataViewManager(t *testing.T) 
 
 	require.NoError(t, err)
 	require.Nil(t, version)
-	require.Equal(t, []CreateCollectionDataViewEvent{{
+	require.Equal(t, []DataViewCollectionInitialization{{
 		CollectionID: 10,
 		VChannels:    []string{"ch-0", "ch-1"},
 	}}, manager.createEvents)
