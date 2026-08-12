@@ -428,8 +428,11 @@ func TestSnapshotBuilder_CollectsSegmentsFromDataViewsAndPlacements(t *testing.T
 	assert.Equal(t, int64(300), info.MemSize)
 	assert.Equal(t, int64(30), info.RowNum)
 
-	// DataView stays owned by DataViewSnapshot and is exposed through lookup.
-	assert.Same(t, shardDV, snap.DataViewForShard(shardA))
+	// DataView stays owned by DataViewSnapshot and lookup returns an isolated
+	// immutable value rather than the provider's mutable proto pointer.
+	actualShard := snap.DataViewForShard(shardA)
+	assert.NotSame(t, shardDV, actualShard)
+	assert.Equal(t, shardDV, actualShard)
 
 	// DataVersion stays owned by DataViewSnapshot and is exposed through lookup.
 	dv, ok := snap.DataVersionForCollection(collID)

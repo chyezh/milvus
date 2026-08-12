@@ -332,8 +332,8 @@ type DataViewManager interface {
 
     Get(ctx context.Context, collectionID int64, version qviews.DataVersion) (DataViewRef, error)
     LatestPublished(ctx context.Context, collectionID int64) (DataViewRef, error)
-    DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (balancerapi.DataViewSnapshotRef, error)
-    SegmentSnapshot(ctx context.Context, segmentIDs []int64) balancerapi.SegmentSnapshot
+    DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (dataview.SnapshotRef, error)
+    SegmentSnapshot(ctx context.Context, segmentIDs []int64) dataview.SegmentSnapshot
     ShardTimeTicks(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewShardTimeTick, error)
     IsSegmentReferenced(ctx context.Context, collectionID, segmentID int64) (bool, error)
     GarbageCollect(ctx context.Context, collectionID int64, retainLatest int) error
@@ -627,11 +627,13 @@ BalancePolicy.Plan(...)
 QueryViewAtCoordBuilder(DataView, assignments)
 ```
 
-The Balancer acquires `DataViewSnapshotRefForCollections` and treats its
-DataViews as immutable during one reconcile cycle. It holds the snapshot ref
-through planning and application, then releases it. If DataVersion advances
-while a plan is being built, that new DataView is consumed by the next reconcile
-cycle.
+The immutable snapshot value, reference, and segment lookup types are owned by
+`internal/dataview`; the Balancer is only a consumer and must not define the
+DataView manager's output model. The Balancer acquires
+`DataViewSnapshotRefForCollections` and treats its DataViews as immutable during
+one reconcile cycle. It holds the snapshot ref through planning and
+application, then releases it. If DataVersion advances while a plan is being
+built, that new DataView is consumed by the next reconcile cycle.
 
 QueryCoord must acquire a manager-owned reference, for example through
 `LatestPublished(collectionID)` or `Get(collectionID, version)`. It must not

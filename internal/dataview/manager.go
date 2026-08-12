@@ -28,7 +28,6 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
-	balancerapi "github.com/milvus-io/milvus/internal/views/coord/balancer/api"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
@@ -66,8 +65,8 @@ type Manager interface {
 
 	Get(ctx context.Context, collectionID int64, version qviews.DataVersion) (DataViewRef, error)
 	LatestPublished(ctx context.Context, collectionID int64) (DataViewRef, error)
-	DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (balancerapi.DataViewSnapshotRef, error)
-	SegmentSnapshot(ctx context.Context, segmentIDs []int64) balancerapi.SegmentSnapshot
+	DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (SnapshotRef, error)
+	SegmentSnapshot(ctx context.Context, segmentIDs []int64) SegmentSnapshot
 	ShardTimeTicks(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewShardTimeTick, error)
 	IsSegmentReferenced(ctx context.Context, collectionID int64, segmentID int64) (bool, error)
 	GarbageCollect(ctx context.Context, collectionID int64, retainLatest int) error
@@ -621,16 +620,24 @@ func (m *dataViewManager) snapshot(ctx context.Context, collectionIDs []int64) [
 	return views
 }
 
-type segmentSnapshot map[int64]*balancerapi.SegmentInfo
+type segmentSnapshot map[int64]*SegmentInfo
 
-func (s segmentSnapshot) Get(segmentID int64) (*balancerapi.SegmentInfo, bool) {
+func (s segmentSnapshot) Get(segmentID int64) (*SegmentInfo, bool) {
 	info, ok := s[segmentID]
 	return info, ok
 }
 
+func (s segmentSnapshot) Range(yield func(segmentID int64, info *SegmentInfo) bool) {
+	for segmentID, info := range s {
+		if !yield(segmentID, info) {
+			return
+		}
+	}
+}
+
 // SegmentSnapshot looks up arbitrary segment metadata without requiring the
 // segments to belong to the latest visible DataViews.
-func (m *dataViewManager) SegmentSnapshot(ctx context.Context, segmentIDs []int64) balancerapi.SegmentSnapshot {
+func (m *dataViewManager) SegmentSnapshot(ctx context.Context, segmentIDs []int64) SegmentSnapshot {
 	return newSegmentSnapshot(segmentIDs, m.getSegments(ctx, segmentIDs))
 }
 
@@ -647,14 +654,14 @@ func (m *dataViewManager) getSegments(ctx context.Context, segmentIDs []int64) m
 	return segments
 }
 
-func newSegmentSnapshot(segmentIDs []int64, segmentsByID map[int64]*Segment) balancerapi.SegmentSnapshot {
+func newSegmentSnapshot(segmentIDs []int64, segmentsByID map[int64]*Segment) SegmentSnapshot {
 	segments := make(segmentSnapshot, len(segmentIDs))
 	for _, segmentID := range segmentIDs {
 		segment := segmentsByID[segmentID]
 		if segment == nil {
 			continue
 		}
-		segments[segmentID] = &balancerapi.SegmentInfo{
+		segments[segmentID] = &SegmentInfo{
 			SegmentID:   segment.GetID(),
 			PartitionID: segment.GetPartitionID(),
 			MemSize:     segment.GetMemSize(),

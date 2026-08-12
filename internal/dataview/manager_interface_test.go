@@ -17,11 +17,27 @@
 package dataview
 
 import (
+	"go/build"
+	"path/filepath"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestDataViewCoreDoesNotDependOnBalancer(t *testing.T) {
+	_, filename, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+
+	pkg, err := build.Default.ImportDir(filepath.Dir(filename), 0)
+	require.NoError(t, err)
+	for _, imported := range pkg.Imports {
+		require.False(t, strings.HasPrefix(imported, "github.com/milvus-io/milvus/internal/views/coord/balancer"),
+			"DataView core must not depend on Balancer consumer package %s", imported)
+	}
+}
 
 func TestManagerExposesStateOperationsInsteadOfLifecycleEvents(t *testing.T) {
 	managerType := reflect.TypeOf((*Manager)(nil)).Elem()

@@ -3,7 +3,7 @@ package balancer
 import (
 	"context"
 
-	balancerapi "github.com/milvus-io/milvus/internal/views/coord/balancer/api"
+	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
@@ -70,12 +70,12 @@ type DataViewProvider interface {
 
 // DataViewSnapshotRef keeps the immutable DataView snapshot's manager-owned
 // references live for the duration of one planning cycle.
-type DataViewSnapshotRef = balancerapi.DataViewSnapshotRef
+type DataViewSnapshotRef = dataview.SnapshotRef
 
 type (
-	DataViewSnapshot = balancerapi.DataViewSnapshot
-	SegmentInfo      = balancerapi.SegmentInfo
-	SegmentSnapshot  = balancerapi.SegmentSnapshot
+	DataViewSnapshot = dataview.Snapshot
+	SegmentInfo      = dataview.SegmentInfo
+	SegmentSnapshot  = dataview.SegmentSnapshot
 )
 
 func NewDataViewSnapshot(
@@ -83,5 +83,5 @@ func NewDataViewSnapshot(
 	collections []*viewpb.DataViewOfCollection,
 	segments SegmentSnapshot,
 ) *DataViewSnapshot {
-	return balancerapi.NewDataViewSnapshot(version, collections, segments)
+	return dataview.NewSnapshot(version, collections, segments)
 }

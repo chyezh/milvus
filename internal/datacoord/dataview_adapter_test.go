@@ -9,7 +9,7 @@ import (
 
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
-	balancerapi "github.com/milvus-io/milvus/internal/views/coord/balancer/api"
+	"github.com/milvus-io/milvus/internal/dataview"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
@@ -127,7 +127,7 @@ func (m *recordingSegmentTrimManager) CommitSegmentTrim(
 	return nil, nil
 }
 
-func (m *fakeGCDataViewManager) SegmentSnapshot(ctx context.Context, segmentIDs []int64) balancerapi.SegmentSnapshot {
+func (m *fakeGCDataViewManager) SegmentSnapshot(ctx context.Context, segmentIDs []int64) dataview.SegmentSnapshot {
 	return nil
 }
 

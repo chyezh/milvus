@@ -30,7 +30,6 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus/internal/metastore"
-	balancerapi "github.com/milvus-io/milvus/internal/views/coord/balancer/api"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
@@ -250,7 +249,7 @@ func dataViewSnapshotForTest(
 	t *testing.T,
 	manager *dataViewManager,
 	collectionIDs map[int64]struct{},
-) *balancerapi.DataViewSnapshot {
+) *Snapshot {
 	t.Helper()
 	ref, err := manager.DataViewSnapshotRefForCollections(ctx, collectionIDs)
 	require.NoError(t, err)

@@ -158,11 +158,12 @@ a scoped trigger cannot be narrowed safely, it uses the same full planning
 scope; only an explicit or periodic full trigger also rebuilds the row-count
 ledger.
 
-The DataView provider exposes both full and collection-scoped reads:
+The DataView provider exposes referenced collection-scoped reads. Snapshot
+values and references are owned by `internal/dataview`; Balancer only aliases
+the consumer-facing names used by its planning code:
 
 ```go
-DataViewSnapshot(ctx context.Context) *DataViewSnapshot
-DataViewSnapshotForCollections(ctx context.Context, collectionIDs map[int64]struct{}) *DataViewSnapshot
+DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (dataview.SnapshotRef, error)
 SegmentSnapshot(ctx context.Context, segmentIDs []int64) SegmentSnapshot
 ```
 

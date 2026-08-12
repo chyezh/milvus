@@ -55,7 +55,6 @@ import (
 	"github.com/milvus-io/milvus/internal/mocks"
 	"github.com/milvus-io/milvus/internal/storage"
 	"github.com/milvus-io/milvus/internal/storagev2/packed"
-	balancerapi "github.com/milvus-io/milvus/internal/views/coord/balancer/api"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/objectstorage"
@@ -200,16 +199,16 @@ func (m *fakeGCDataViewManager) LatestPublished(ctx context.Context, collectionI
 	return nil, merr.WrapErrServiceNotReadyMsg("fake data view references are not available")
 }
 
-func (m *fakeGCDataViewManager) DataViewSnapshotRefForCollections(context.Context, map[int64]struct{}) (balancerapi.DataViewSnapshotRef, error) {
-	return &fakeGCDataViewSnapshotRef{snapshot: balancerapi.NewDataViewSnapshot(0, m.snapshotViews, nil)}, nil
+func (m *fakeGCDataViewManager) DataViewSnapshotRefForCollections(context.Context, map[int64]struct{}) (dataview.SnapshotRef, error) {
+	return &fakeGCDataViewSnapshotRef{snapshot: dataview.NewSnapshot(0, m.snapshotViews, nil)}, nil
 }
 
 type fakeGCDataViewSnapshotRef struct {
-	snapshot *balancerapi.DataViewSnapshot
+	snapshot *dataview.Snapshot
 }
 
-func (r *fakeGCDataViewSnapshotRef) Snapshot() *balancerapi.DataViewSnapshot { return r.snapshot }
-func (*fakeGCDataViewSnapshotRef) Release()                                  {}
+func (r *fakeGCDataViewSnapshotRef) Snapshot() *dataview.Snapshot { return r.snapshot }
+func (*fakeGCDataViewSnapshotRef) Release()                       {}
 
 func (m *fakeGCDataViewManager) ShardTimeTicks(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewShardTimeTick, error) {
 	return nil, nil
