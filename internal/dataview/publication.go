@@ -480,6 +480,7 @@ func (m *dataViewManager) refreshDurablePublicationLocked(
 		durable.AllocatedStreamingVersion = state.versionState.GetAllocatedStreamingVersion()
 	}
 	state.versionState = durable
+	state.versionStatePersisted = true
 	state.persistedAllocated = persistedAllocated
 	state.published = canonicalDataViewClone(published)
 	m.rememberRecoveredDataView(published)
@@ -558,6 +559,7 @@ func (m *dataViewManager) recoverPublicationStateLocked(
 	if err != nil {
 		return err
 	}
+	versionStatePersisted := durable != nil
 	if durable == nil {
 		durable = &viewpb.CollectionDataVersionState{CollectionId: state.collectionID}
 	} else {
@@ -567,6 +569,7 @@ func (m *dataViewManager) recoverPublicationStateLocked(
 		durable.AllocatedStreamingVersion = recoveredAllocated
 	}
 	state.versionState = durable
+	state.versionStatePersisted = versionStatePersisted
 	state.persistedAllocated = durable.GetAllocatedStreamingVersion()
 	if published != nil {
 		state.published = canonicalDataViewClone(published)
@@ -746,6 +749,7 @@ func (m *dataViewManager) persistPublishedLocked(
 		return publishedDataViewPersistenceError(state.collectionID, err)
 	}
 	state.versionState = nextState
+	state.versionStatePersisted = true
 	state.persistedAllocated = nextState.GetAllocatedStreamingVersion()
 	state.published = canonicalDataViewClone(toPersist)
 	m.invalidateRetainedMembership(state.collectionID)

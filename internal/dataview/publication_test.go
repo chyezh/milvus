@@ -509,7 +509,7 @@ func TestPublicationCreateCollectionRecoversDurableHeadBeforeNewerOrphan(t *test
 	require.Equal(t, []int64{100}, publishedSegmentIDs(t, view, "ch-0", 10))
 }
 
-func TestPublicationCreateCollectionBackfillsLegacySnapshotWhenDurableHeadIsMissing(t *testing.T) {
+func TestPublicationCreateCollectionRejectsOrphanSnapshotWhenDurableHeadIsMissing(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, _ := newTestDataViewManager()
 	catalog.views = []*viewpb.DataViewOfCollection{
@@ -523,17 +523,16 @@ func TestPublicationCreateCollectionBackfillsLegacySnapshotWhenDurableHeadIsMiss
 		},
 	}
 
-	version, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
 		CollectionID: 1,
 		VChannels:    []string{"ch-0"},
 	})
 
-	require.NoError(t, err)
-	requireDataVersion(t, version, 2, 0)
-	requireDataVersion(t, catalog.versionStates[1].GetPublishedDataVersion(), 2, 0)
-	view, err := latestPublishedDataView(ctx, manager, 1)
-	require.NoError(t, err)
-	require.Equal(t, []int64{100, 200}, publishedSegmentIDs(t, view, "ch-0", 10))
+	require.Error(t, err)
+	require.Nil(t, catalog.versionStates[1].GetPublishedDataVersion())
+	view, getErr := latestPublishedDataView(ctx, manager, 1)
+	require.NoError(t, getErr)
+	require.Nil(t, view)
 }
 
 func loadableMembership(collectionID, partitionID, segmentID int64, vchannel string) SegmentMembership {

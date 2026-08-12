@@ -397,6 +397,27 @@ func TestDataViewManagerOnCreateCollectionReusesPersistedView(t *testing.T) {
 	require.Equal(t, "ch-0", visible.GetShards()[0].GetVchannel())
 }
 
+func TestDataViewManagerOnCreateCollectionDoesNotPublishOrphanSnapshot(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, _ := newTestDataViewManager()
+	catalog.views = append(catalog.views, newTestDataView(1, 1, 0, newTestDataViewShard("ch-0", 10, 100)))
+	catalog.versionStates = map[int64]*viewpb.CollectionDataVersionState{
+		1: {
+			CollectionId:              1,
+			AllocatedStreamingVersion: 1,
+		},
+	}
+
+	_, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+		CollectionID: 1,
+		VChannels:    []string{"ch-0"},
+	})
+	require.Error(t, err)
+	state, getErr := catalog.GetDataViewVersionState(ctx, 1)
+	require.NoError(t, getErr)
+	require.Nil(t, state.GetPublishedDataVersion())
+}
+
 func TestDataViewManagerOnFlushCreatesVisibleView(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, store := newTestDataViewManager()
@@ -1151,6 +1172,32 @@ func TestRecoverManagerAllowsAllocatedStateWithoutPublishedHeadOrSnapshots(t *te
 	require.Nil(t, state.versionState.GetPublishedDataVersion())
 }
 
+func TestRecoverManagerDoesNotPublishOrphanWhenDurableHeadIsAbsent(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
+		},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 1,
+			},
+		},
+	}
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{
+		100: newDataViewTestSegment(1, 10, 100, "ch-1", 1000),
+	}}
+
+	manager, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+	_, err = manager.LatestPublished(ctx, 1)
+	requireUnavailableDataViewError(t, err)
+	state, err := catalog.GetDataViewVersionState(ctx, 1)
+	require.NoError(t, err)
+	require.Nil(t, state.GetPublishedDataVersion())
+}
+
 func TestRecoverManagerRepairDoesNotAdoptNewerOrphanThanDurableHead(t *testing.T) {
 	ctx := context.Background()
 	head := newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100))
@@ -1428,7 +1475,7 @@ func TestRecoverManagerLegacyMigrationRejectsDroppedFirstSnapshot(t *testing.T) 
 	require.Nil(t, catalog.versionStates)
 }
 
-func TestRecoverManagerBackfillsDurableHeadForLegacySnapshots(t *testing.T) {
+func TestRecoverManagerDoesNotBackfillHeadWhenDurableStateAlreadyExists(t *testing.T) {
 	ctx := context.Background()
 	catalog := &fakeDataViewCatalog{
 		views: []*viewpb.DataViewOfCollection{
@@ -1449,15 +1496,11 @@ func TestRecoverManagerBackfillsDurableHeadForLegacySnapshots(t *testing.T) {
 
 	manager, err := RecoverManager(ctx, catalog, store)
 	require.NoError(t, err)
-	version, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-1"}})
-	require.NoError(t, err)
-	requireDataVersion(t, version, 2, 0)
-	requireDataVersion(t, catalog.versionStates[1].GetPublishedDataVersion(), 2, 0)
-
-	ref, err := manager.LatestPublished(ctx, 1)
-	require.NoError(t, err)
-	t.Cleanup(ref.Deref)
-	require.Equal(t, []int64{100, 200}, ref.DataView().SegmentIDs("ch-1", 10))
+	_, err = manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-1"}})
+	require.Error(t, err)
+	require.Nil(t, catalog.versionStates[1].GetPublishedDataVersion())
+	_, err = manager.LatestPublished(ctx, 1)
+	requireUnavailableDataViewError(t, err)
 }
 
 func TestRecoverManagerBackfillsStateForSnapshotOnlyLegacyCollection(t *testing.T) {

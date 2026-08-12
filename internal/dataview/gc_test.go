@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
 
 func TestDataViewSnapshotRefProtectsAllCollectionViewsUntilRelease(t *testing.T) {
@@ -102,6 +103,72 @@ func TestDataViewRetainedMembershipTracksGarbageCollectedViews(t *testing.T) {
 	referenced, err = manager.IsSegmentReferenced(ctx, 1, 100)
 	require.NoError(t, err)
 	require.False(t, referenced, "segment becomes eligible after its last DataView is collected")
+}
+
+func TestDataViewRetainedMembershipIgnoresNewerOrphanBeforeGarbageCollect(t *testing.T) {
+	ctx := context.Background()
+	head := newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100))
+	orphan := newTestDataView(1, 2, 0, newTestDataViewShard("ch-1", 10, 200))
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{head, orphan},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 2,
+				PublishedDataVersion:      &viewpb.DataVersion{StreamingVersion: 1},
+			},
+		},
+	}
+	manager := NewManager(catalog, &fakeDataViewSegmentStore{segments: make(map[int64]*Segment)})
+
+	referenced, err := manager.IsSegmentReferenced(ctx, 1, 100)
+	require.NoError(t, err)
+	require.True(t, referenced, "published head membership must protect physical segment GC")
+
+	referenced, err = manager.IsSegmentReferenced(ctx, 1, 200)
+	require.NoError(t, err)
+	require.False(t, referenced, "newer orphan membership must not block physical segment GC")
+}
+
+func TestDataViewRetainedMembershipIgnoresSnapshotsWithoutPublishedHead(t *testing.T) {
+	ctx := context.Background()
+	orphan := newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100))
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{orphan},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 1,
+			},
+		},
+	}
+	manager := NewManager(catalog, &fakeDataViewSegmentStore{segments: make(map[int64]*Segment)})
+
+	referenced, err := manager.IsSegmentReferenced(ctx, 1, 100)
+	require.NoError(t, err)
+	require.False(t, referenced, "snapshot without a published head must not block physical segment GC")
+}
+
+func TestDataViewGarbageCollectDropsSnapshotsWithoutPublishedHead(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
+			newTestDataView(1, 2, 0, newTestDataViewShard("ch-1", 10, 200)),
+		},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 2,
+			},
+		},
+	}
+	manager := NewManager(catalog, &fakeDataViewSegmentStore{segments: make(map[int64]*Segment)})
+
+	require.NoError(t, manager.GarbageCollect(ctx, 1, 1))
+	views, err := catalog.ListDataViews(ctx, 1)
+	require.NoError(t, err)
+	require.Empty(t, views, "all snapshots are orphaned when durable state has no published head")
 }
 
 func TestDataViewRetainedMembershipIncludesPublicationAfterCacheInitialization(t *testing.T) {

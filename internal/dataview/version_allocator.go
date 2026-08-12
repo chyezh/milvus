@@ -129,6 +129,7 @@ func (m *dataViewManager) recoverFlushVersionStateLocked(
 	if err != nil {
 		return flushVersionPersistenceError("load data view version state", err)
 	}
+	versionStatePersisted := durable != nil
 	if durable == nil {
 		durable = &viewpb.CollectionDataVersionState{CollectionId: state.collectionID}
 	} else if durable.GetCollectionId() != state.collectionID {
@@ -160,6 +161,7 @@ func (m *dataViewManager) recoverFlushVersionStateLocked(
 	}
 	durable.AllocatedStreamingVersion = allocated
 	state.versionState = durable
+	state.versionStatePersisted = versionStatePersisted
 	state.versionStateRecovered = true
 	return nil
 }
@@ -197,6 +199,7 @@ func (m *dataViewManager) saveAllocatedStreamingVersionLocked(
 		return flushVersionPersistenceError("persist allocated streaming version", err)
 	}
 	state.versionState = next
+	state.versionStatePersisted = true
 	state.persistedAllocated = next.GetAllocatedStreamingVersion()
 	return nil
 }

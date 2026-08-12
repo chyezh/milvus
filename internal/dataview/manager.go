@@ -95,6 +95,7 @@ type collectionDataViewState struct {
 	refs      map[qviews.DataVersion]int
 
 	versionState          *viewpb.CollectionDataVersionState
+	versionStatePersisted bool
 	versionStateRecovered bool
 	persistedAllocated    int64
 	publicationRecovered  bool
@@ -290,10 +291,11 @@ func RecoverManager(ctx context.Context, catalog RecoveryCatalog, segments Segme
 			if err != nil {
 				return nil, err
 			}
+			versionStatePersisted := durable != nil
 			if durable == nil {
 				durable = &viewpb.CollectionDataVersionState{CollectionId: collectionID}
 			}
-			if published == nil && len(persistedViews) > 0 {
+			if !versionStatePersisted && published == nil && len(persistedViews) > 0 {
 				// Legacy catalogs predate the durable published head and may contain
 				// a newer snapshot for an invisible sort/compaction handoff. During
 				// this one-time migration, select the newest snapshot whose added
@@ -323,16 +325,22 @@ func RecoverManager(ctx context.Context, catalog RecoveryCatalog, segments Segme
 				if err := publishedCatalog.SavePublishedDataView(ctx, durable, cloneDataViewWithoutDeleteTimetick(published)); err != nil {
 					return nil, merr.Wrapf(err, "backfill published DataView head for collection %d", collectionID)
 				}
+				versionStatePersisted = true
 			}
 			if published != nil {
 				manager.retainRecoveredDataViewsThrough(collectionID, published.GetDataVersion())
 				manager.recoverCollectionFromDataViews(collectionID, []*viewpb.DataViewOfCollection{published})
 				retained, _ := manager.recoveredDataViews(collectionID)
 				manager.updateRetainedMembership(collectionID, retained)
+			} else if versionStatePersisted {
+				manager.retainRecoveredDataViewsThrough(collectionID, nil)
+				manager.updateRetainedMembership(collectionID, nil)
+				manager.recoverCollectionFromDataViews(collectionID, nil)
 			}
 			state := manager.getOrCreateState(collectionID)
 			state.mu.Lock()
 			state.versionState = proto.Clone(durable).(*viewpb.CollectionDataVersionState)
+			state.versionStatePersisted = versionStatePersisted
 			state.persistedAllocated = durable.GetAllocatedStreamingVersion()
 			state.mu.Unlock()
 		}
@@ -370,11 +378,11 @@ func (m *dataViewManager) OnCreateCollection(ctx context.Context, event CreateCo
 				if err != nil {
 					return nil, err
 				}
-				if latestPersisted := latestDataView(persistedViews); latestPersisted != nil {
-					if err := m.persistPublishedLocked(ctx, state, catalog, latestPersisted); err != nil {
-						return nil, err
-					}
-					return dataVersionFromView(state.published), nil
+				if len(persistedViews) > 0 {
+					return nil, merr.WrapErrServiceNotReadyMsg(
+						"collection %d has DataView snapshots but no durable published head",
+						event.CollectionID,
+					)
 				}
 			}
 		} else {
@@ -699,11 +707,28 @@ func (m *dataViewManager) IsSegmentReferenced(ctx context.Context, collectionID 
 	if segments != nil {
 		return referenced, nil
 	}
+	var publishedVersion *viewpb.DataVersion
+	if catalog, ok := m.catalog.(publishedDataViewCatalog); ok {
+		if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
+			return true, err
+		}
+		publishedVersion = cloneDataVersion(state.versionState.GetPublishedDataVersion())
+	}
 	views, err := m.catalog.ListDataViews(ctx, collectionID)
 	if err != nil {
 		return true, err
 	}
-	m.updateRetainedMembership(collectionID, views)
+	retained := views[:0]
+	for _, view := range views {
+		version := view.GetDataVersion()
+		_, hasLiveRef := state.refs[qviews.FromProtoDataVersion(version)]
+		isPublishedHistory := !state.versionStatePersisted ||
+			(publishedVersion != nil && compareDataVersion(version, publishedVersion) <= 0)
+		if isPublishedHistory || hasLiveRef {
+			retained = append(retained, view)
+		}
+	}
+	m.updateRetainedMembership(collectionID, retained)
 	m.retainedMu.RLock()
 	_, referenced = m.retained[collectionID][segmentID]
 	m.retainedMu.RUnlock()
@@ -723,11 +748,13 @@ func (m *dataViewManager) GarbageCollect(ctx context.Context, collectionID int64
 		return err
 	}
 	var publishedVersion *viewpb.DataVersion
+	versionStatePersisted := false
 	if publishedCatalog, ok := m.catalog.(publishedDataViewCatalog); ok {
 		versionState, err := publishedCatalog.GetDataViewVersionState(ctx, collectionID)
 		if err != nil {
 			return err
 		}
+		versionStatePersisted = versionState != nil
 		if versionState != nil && versionState.GetPublishedDataVersion() != nil {
 			publishedVersion = cloneDataVersion(versionState.GetPublishedDataVersion())
 		}
@@ -765,7 +792,8 @@ func (m *dataViewManager) GarbageCollect(ctx context.Context, collectionID int64
 	authoritativeCount := 0
 	for _, view := range views {
 		version := view.GetDataVersion()
-		isPublishedHistory := publishedVersion == nil || compareDataVersion(version, publishedVersion) <= 0
+		isPublishedHistory := (!versionStatePersisted && publishedVersion == nil) ||
+			(publishedVersion != nil && compareDataVersion(version, publishedVersion) <= 0)
 		if isPublishedHistory && authoritativeCount < retainLatest {
 			authoritativeCount++
 			continue
