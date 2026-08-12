@@ -37,7 +37,6 @@ import (
 type SegmentStore interface {
 	GetSegment(ctx context.Context, segID int64) *Segment
 	GetSegments(ctx context.Context, segIDs []int64) []*Segment
-	SelectSegments(ctx context.Context, collectionID int64) []*Segment
 	SaveSealedAtDataVersion(ctx context.Context, segmentID int64, version *viewpb.DataVersion) error
 	ListAllSegmentsForVersionAllocation(ctx context.Context, collectionID int64) []*Segment
 }

@@ -60,6 +60,8 @@ func TestDataViewDependenciesRequireDurablePublicationAndFlushVersionState(t *te
 		_, ok := segmentStoreType.MethodByName(method)
 		require.True(t, ok, "dataview.SegmentStore must require %s", method)
 	}
+	_, exposesMembershipScan := segmentStoreType.MethodByName("SelectSegments")
+	require.False(t, exposesMembershipScan, "dataview.SegmentStore must not expose collection membership scans")
 }
 
 func TestManagerExposesStateOperationsInsteadOfLifecycleEvents(t *testing.T) {

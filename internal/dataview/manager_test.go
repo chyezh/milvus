@@ -202,18 +202,6 @@ func (s *fakeDataViewSegmentStore) GetSegments(ctx context.Context, segIDs []int
 	return segments
 }
 
-func (s *fakeDataViewSegmentStore) SelectSegments(ctx context.Context, collectionID int64) []*Segment {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	segments := make([]*Segment, 0, len(s.segments))
-	for _, segment := range s.segments {
-		if segment.GetCollectionID() == collectionID {
-			segments = append(segments, segment)
-		}
-	}
-	return segments
-}
-
 func (s *fakeDataViewSegmentStore) ListAllSegmentsForVersionAllocation(ctx context.Context, collectionID int64) []*Segment {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

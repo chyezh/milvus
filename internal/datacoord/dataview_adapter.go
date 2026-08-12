@@ -99,21 +99,6 @@ func (s *dataViewSegmentStore) GetSegments(_ context.Context, segmentIDs []int64
 	return result
 }
 
-func (s *dataViewSegmentStore) SelectSegments(ctx context.Context, collectionID int64) []*dataview.Segment {
-	segments := s.meta.SelectSegments(ctx, WithCollection(collectionID))
-	result := make([]*dataview.Segment, 0, len(segments))
-	validPartitions := s.validPartitions(collectionID)
-	for _, segment := range segments {
-		if validPartitions != nil {
-			if _, ok := validPartitions[segment.GetPartitionID()]; !ok {
-				continue
-			}
-		}
-		result = append(result, newDataViewSegment(segment))
-	}
-	return result
-}
-
 func (s *dataViewSegmentStore) ListAllSegmentsForVersionAllocation(
 	ctx context.Context,
 	collectionID int64,
@@ -132,18 +117,6 @@ func (s *dataViewSegmentStore) SaveSealedAtDataVersion(
 	version *viewpb.DataVersion,
 ) error {
 	return s.meta.SetSegmentSealedAtDataVersion(ctx, segmentID, version)
-}
-
-func (s *dataViewSegmentStore) validPartitions(collectionID int64) map[int64]struct{} {
-	collection := s.meta.GetCollection(collectionID)
-	if collection == nil || len(collection.Partitions) == 0 {
-		return nil
-	}
-	partitions := make(map[int64]struct{}, len(collection.Partitions))
-	for _, partitionID := range collection.Partitions {
-		partitions[partitionID] = struct{}{}
-	}
-	return partitions
 }
 
 func newDataViewSegment(segment *SegmentInfo) *dataview.Segment {
