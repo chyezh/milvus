@@ -25,6 +25,8 @@ import (
 // All methods are safe for concurrent use.
 type ShardViewRegistry struct {
 	mu             sync.RWMutex
+	closeOnce      sync.Once
+	closed         bool
 	ctx            context.Context
 	flushScheduler *DirtyViewFlushScheduler
 	dataViews      DataViewManager
@@ -126,6 +128,10 @@ func RecoverShardViewRegistry(
 func (r *ShardViewRegistry) Ensure(shardID qviews.ShardID) *ShardViewManager {
 	// Fast path: already present.
 	r.mu.RLock()
+	if r.closed {
+		r.mu.RUnlock()
+		return nil
+	}
 	if mgr, ok := r.shards[shardID]; ok {
 		r.mu.RUnlock()
 		return mgr
@@ -139,6 +145,11 @@ func (r *ShardViewRegistry) Ensure(shardID qviews.ShardID) *ShardViewManager {
 
 	r.mu.Lock()
 	// Re-check under the write lock.
+	if r.closed {
+		r.mu.Unlock()
+		mgr.closeReferences()
+		return nil
+	}
 	if mgr, ok := r.shards[shardID]; ok {
 		r.mu.Unlock()
 		return mgr
@@ -155,7 +166,19 @@ func (r *ShardViewRegistry) Close() {
 	if r == nil || r.flushScheduler == nil {
 		return
 	}
-	r.flushScheduler.Close()
+	r.closeOnce.Do(func() {
+		r.flushScheduler.Close()
+		r.mu.Lock()
+		r.closed = true
+		managers := make([]*ShardViewManager, 0, len(r.shards))
+		for _, manager := range r.shards {
+			managers = append(managers, manager)
+		}
+		r.mu.Unlock()
+		for _, manager := range managers {
+			manager.closeReferences()
+		}
+	})
 }
 
 // Begin opens an explicit cross-shard QueryView flush batch. Existing flush

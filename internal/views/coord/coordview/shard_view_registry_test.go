@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -68,6 +69,54 @@ func TestRegistry_EmptyRecovery(t *testing.T) {
 	reg := newTestRegistry(t, newMockCatalog(), newMockSyncer())
 	assert.Empty(t, reg.Snapshot().StatsMap())
 	assert.Nil(t, reg.Get(testShardID))
+}
+
+func TestShardViewRegistryCloseDerefsResidentDataViewRefsExactlyOnce(t *testing.T) {
+	dataViews := &testDataViewManager{refs: make(map[qviews.DataVersion][]*trackedDataViewRef)}
+	registry, err := RecoverShardViewRegistry(context.Background(), newMockCatalog(), newMockSyncer(), dataViews)
+	require.NoError(t, err)
+	manager := registry.Ensure(testShardID)
+	require.NoError(t, manager.AddPreparing(context.Background(), testBuilder(1, 1, 1)))
+	require.NoError(t, registry.flushScheduler.Flush(context.Background()))
+	ref := dataViews.refs[qviews.DataVersion{StreamingVersion: 1, CompactVersion: 1}][0]
+	require.Zero(t, ref.derefCount)
+
+	registry.Close()
+	require.Equal(t, 1, ref.derefCount)
+	registry.Close()
+	require.Equal(t, 1, ref.derefCount)
+}
+
+func TestShardViewRegistryCloseRejectsBlockedAddPreparingAndReleasesLateRef(t *testing.T) {
+	dataViews := &testDataViewManager{
+		refs:       make(map[qviews.DataVersion][]*trackedDataViewRef),
+		getStarted: make(chan struct{}),
+		getRelease: make(chan struct{}),
+	}
+	registry, err := RecoverShardViewRegistry(context.Background(), newMockCatalog(), newMockSyncer(), dataViews)
+	require.NoError(t, err)
+	manager := registry.Ensure(testShardID)
+
+	result := make(chan error, 1)
+	go func() { result <- manager.AddPreparing(context.Background(), testBuilder(1, 1, 1)) }()
+	select {
+	case <-dataViews.getStarted:
+	case <-time.After(time.Second):
+		t.Fatal("DataViewManager.Get did not start")
+	}
+	registry.Close()
+	close(dataViews.getRelease)
+	require.Error(t, <-result)
+	require.Len(t, dataViews.refs[qviews.DataVersion{StreamingVersion: 1, CompactVersion: 1}], 1)
+	require.Equal(t, 1, dataViews.refs[qviews.DataVersion{StreamingVersion: 1, CompactVersion: 1}][0].derefCount)
+}
+
+func TestShardViewRegistryEnsureAfterCloseDoesNotCreateManager(t *testing.T) {
+	registry, err := RecoverShardViewRegistry(context.Background(), newMockCatalog(), newMockSyncer())
+	require.NoError(t, err)
+	registry.Close()
+	require.Nil(t, registry.Ensure(testShardID))
+	require.Nil(t, registry.Get(testShardID))
 }
 
 func TestRegistry_EnsureCreatesOnce(t *testing.T) {

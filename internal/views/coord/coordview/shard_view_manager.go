@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	qvobserve "github.com/milvus-io/milvus/internal/views/qviews/observe"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 // ShardViewManager manages multiple QueryViews for a single shard (vchannel)
@@ -49,6 +50,7 @@ type ShardViewManager struct {
 	pendingRemovals []*managedQueryView
 
 	dataViews DataViewManager
+	closed    bool
 }
 
 // DataViewManager is kept as a package alias for callers during the ownership
@@ -344,6 +346,11 @@ func (m *ShardViewManager) AddPreparing(ctx context.Context, builder *qviews.Que
 	}
 
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		ref.Deref()
+		return merr.WrapErrServiceNotReadyMsg("shard view manager %s is closed", m.shardID.String())
+	}
 
 	// Validate no DataVersion rollback.
 	if err := m.validateDataVersionLocked(newDV); err != nil {
@@ -612,6 +619,10 @@ func (m *ShardViewManager) consumeDirtyEventLocked() dirtyViewEvent {
 func (m *ShardViewManager) makeOnSyncResponse(version qviews.QueryViewVersion, target qviews.QueryViewAtWorkNode) func(resp qviews.QueryViewAtWorkNode) bool {
 	return func(resp qviews.QueryViewAtWorkNode) bool {
 		m.mu.Lock()
+		if m.closed {
+			m.mu.Unlock()
+			return true
+		}
 
 		managed, ok := m.views[version]
 		if !ok {
@@ -667,6 +678,10 @@ func syncResponseCompletesTarget(target, reported qviews.QueryViewState) bool {
 func (m *ShardViewManager) makeOnQueryNodeLost(version qviews.QueryViewVersion) func(qviews.QueryNode) {
 	return func(node qviews.QueryNode) {
 		m.mu.Lock()
+		if m.closed {
+			m.mu.Unlock()
+			return
+		}
 
 		managed, ok := m.views[version]
 		if !ok {
@@ -777,8 +792,31 @@ func (m *ShardViewManager) hasPendingRemoval(target *managedQueryView) bool {
 }
 
 func (m *ShardViewManager) derefAllReferences() {
+	m.mu.Lock()
+	refs := make([]dataview.DataViewRef, 0, len(m.views))
 	for _, managed := range m.views {
-		managed.dataViewRef.Deref()
+		refs = append(refs, managed.dataViewRef)
+	}
+	m.mu.Unlock()
+	for _, ref := range refs {
+		ref.Deref()
+	}
+}
+
+func (m *ShardViewManager) closeReferences() {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	m.closed = true
+	refs := make([]dataview.DataViewRef, 0, len(m.views))
+	for _, managed := range m.views {
+		refs = append(refs, managed.dataViewRef)
+	}
+	m.mu.Unlock()
+	for _, ref := range refs {
+		ref.Deref()
 	}
 }
 
