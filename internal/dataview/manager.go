@@ -51,6 +51,7 @@ type Catalog interface {
 type RecoveryCatalog interface {
 	Catalog
 	ListAllDataViews(ctx context.Context) ([]*viewpb.DataViewOfCollection, error)
+	ListAllDataViewVersionStates(ctx context.Context) ([]*viewpb.CollectionDataVersionState, error)
 }
 
 type Manager interface {
@@ -260,12 +261,31 @@ func RecoverManager(ctx context.Context, catalog RecoveryCatalog, segments Segme
 	manager.recoverFromDataViews(dataViews)
 	if publishedCatalog, ok := catalog.(publishedDataViewCatalog); ok {
 		viewsByCollection := make(map[int64][]*viewpb.DataViewOfCollection)
+		collectionIDs := make(map[int64]struct{})
 		for _, view := range dataViews {
 			if view != nil {
 				viewsByCollection[view.GetCollectionId()] = append(viewsByCollection[view.GetCollectionId()], view)
+				collectionIDs[view.GetCollectionId()] = struct{}{}
 			}
 		}
-		for collectionID, persistedViews := range viewsByCollection {
+		versionStates, err := catalog.ListAllDataViewVersionStates(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, versionState := range versionStates {
+			if versionState != nil {
+				collectionIDs[versionState.GetCollectionId()] = struct{}{}
+			}
+		}
+		orderedCollectionIDs := make([]int64, 0, len(collectionIDs))
+		for collectionID := range collectionIDs {
+			orderedCollectionIDs = append(orderedCollectionIDs, collectionID)
+		}
+		sort.Slice(orderedCollectionIDs, func(i, j int) bool {
+			return orderedCollectionIDs[i] < orderedCollectionIDs[j]
+		})
+		for _, collectionID := range orderedCollectionIDs {
+			persistedViews := viewsByCollection[collectionID]
 			durable, published, err := recoverPublishedDataView(ctx, publishedCatalog, collectionID)
 			if err != nil {
 				return nil, err
@@ -273,7 +293,7 @@ func RecoverManager(ctx context.Context, catalog RecoveryCatalog, segments Segme
 			if durable == nil {
 				durable = &viewpb.CollectionDataVersionState{CollectionId: collectionID}
 			}
-			if published == nil {
+			if published == nil && len(persistedViews) > 0 {
 				// Legacy catalogs predate the durable published head and may contain
 				// a newer snapshot for an invisible sort/compaction handoff. During
 				// this one-time migration, select the newest snapshot whose added
@@ -304,10 +324,12 @@ func RecoverManager(ctx context.Context, catalog RecoveryCatalog, segments Segme
 					return nil, merr.Wrapf(err, "backfill published DataView head for collection %d", collectionID)
 				}
 			}
-			manager.retainRecoveredDataViewsThrough(collectionID, published.GetDataVersion())
-			manager.recoverCollectionFromDataViews(collectionID, []*viewpb.DataViewOfCollection{published})
-			retained, _ := manager.recoveredDataViews(collectionID)
-			manager.updateRetainedMembership(collectionID, retained)
+			if published != nil {
+				manager.retainRecoveredDataViewsThrough(collectionID, published.GetDataVersion())
+				manager.recoverCollectionFromDataViews(collectionID, []*viewpb.DataViewOfCollection{published})
+				retained, _ := manager.recoveredDataViews(collectionID)
+				manager.updateRetainedMembership(collectionID, retained)
+			}
 			state := manager.getOrCreateState(collectionID)
 			state.mu.Lock()
 			state.versionState = proto.Clone(durable).(*viewpb.CollectionDataVersionState)

@@ -81,6 +81,43 @@ func TestDataViewVersionStateSaveAndLoad(t *testing.T) {
 	require.Nil(t, missing)
 }
 
+func TestListAllDataViewVersionStates(t *testing.T) {
+	ctx := context.Background()
+	kv := newDataViewMemoryMetaKV()
+	catalog := NewCatalog(kv, rootPath, "")
+	first := &viewpb.CollectionDataVersionState{
+		CollectionId:              100,
+		AllocatedStreamingVersion: 2,
+		PublishedDataVersion:      &viewpb.DataVersion{StreamingVersion: 1},
+	}
+	second := &viewpb.CollectionDataVersionState{
+		CollectionId:              200,
+		AllocatedStreamingVersion: 4,
+		PublishedDataVersion:      &viewpb.DataVersion{StreamingVersion: 3, CompactVersion: 1},
+	}
+	require.NoError(t, catalog.SaveDataViewVersionState(ctx, second))
+	require.NoError(t, catalog.SaveDataViewVersionState(ctx, first))
+	require.NoError(t, catalog.MarkDataViewCollectionDropped(ctx, 300))
+
+	states, err := catalog.ListAllDataViewVersionStates(ctx)
+	require.NoError(t, err)
+	require.Len(t, states, 2)
+	require.True(t, proto.Equal(first, states[0]))
+	require.True(t, proto.Equal(second, states[1]))
+}
+
+func TestListAllDataViewVersionStatesRejectsCollectionMismatch(t *testing.T) {
+	ctx := context.Background()
+	kv := newDataViewMemoryMetaKV()
+	catalog := NewCatalog(kv, rootPath, "")
+	value, err := proto.Marshal(&viewpb.CollectionDataVersionState{CollectionId: 200})
+	require.NoError(t, err)
+	require.NoError(t, kv.Save(ctx, buildDataViewVersionStateKey(100), string(value)))
+
+	_, err = catalog.ListAllDataViewVersionStates(ctx)
+	require.ErrorIs(t, err, merr.ErrDataIntegrity)
+}
+
 func TestDataViewVersionStatePublishedAtomically(t *testing.T) {
 	ctx := context.Background()
 	kv := newDataViewMemoryMetaKV()

@@ -18,6 +18,7 @@ package dataview
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -125,6 +126,19 @@ func (c *fakeDataViewCatalog) ListAllDataViews(ctx context.Context) ([]*viewpb.D
 		views = append(views, proto.Clone(view).(*viewpb.DataViewOfCollection))
 	}
 	return views, nil
+}
+
+func (c *fakeDataViewCatalog) ListAllDataViewVersionStates(ctx context.Context) ([]*viewpb.CollectionDataVersionState, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	states := make([]*viewpb.CollectionDataVersionState, 0, len(c.versionStates))
+	for _, state := range c.versionStates {
+		states = append(states, proto.Clone(state).(*viewpb.CollectionDataVersionState))
+	}
+	sort.Slice(states, func(i, j int) bool {
+		return states[i].GetCollectionId() < states[j].GetCollectionId()
+	})
+	return states, nil
 }
 
 func (c *fakeDataViewCatalog) DropDataView(ctx context.Context, collectionID int64, dataVersion *viewpb.DataVersion) error {
@@ -1095,6 +1109,46 @@ func TestRecoverManagerUsesDurablePublishedHeadInsteadOfNewerOrphan(t *testing.T
 	version, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-1"}})
 	require.NoError(t, err)
 	requireDataVersion(t, version, 1, 0)
+}
+
+func TestRecoverManagerRejectsPublishedHeadWhenCollectionHasNoSnapshots(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 1,
+				PublishedDataVersion:      &viewpb.DataVersion{StreamingVersion: 1},
+			},
+		},
+	}
+
+	_, err := RecoverManager(ctx, catalog, &fakeDataViewSegmentStore{segments: map[int64]*Segment{}})
+	require.ErrorIs(t, err, merr.ErrDataIntegrity)
+}
+
+func TestRecoverManagerAllowsAllocatedStateWithoutPublishedHeadOrSnapshots(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 1,
+			},
+		},
+	}
+
+	manager, err := RecoverManager(ctx, catalog, &fakeDataViewSegmentStore{segments: map[int64]*Segment{}})
+	require.NoError(t, err)
+	_, err = manager.LatestPublished(ctx, 1)
+	requireUnavailableDataViewError(t, err)
+
+	state := manager.(*dataViewManager).getState(1)
+	require.NotNil(t, state)
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	require.Equal(t, int64(1), state.versionState.GetAllocatedStreamingVersion())
+	require.Nil(t, state.versionState.GetPublishedDataVersion())
 }
 
 func TestRecoverManagerRepairDoesNotAdoptNewerOrphanThanDurableHead(t *testing.T) {
