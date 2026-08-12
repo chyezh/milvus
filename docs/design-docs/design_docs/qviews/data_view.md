@@ -203,14 +203,16 @@ QueryCoord must not modify DataView or assign DataVersion.
 
 ### 4.3 DataViewManager State Model
 
-The first implementation keeps one resident state per collection in DataCoord:
+DataCoord keeps one collection-scoped published state. The implementation may
+retain an internal working copy while a mutation is being persisted, but that
+working copy is never a QueryCoord-visible snapshot and is not an independent
+authority.
 
 ```go
 type collectionDataViewState struct {
     collectionID int64
 
-    latestResident *viewpb.DataViewOfCollection
-    latestVisible  *viewpb.DataViewOfCollection
+    published *viewpb.DataViewOfCollection
 }
 ```
 
@@ -218,15 +220,10 @@ Definitions:
 
 - **latest persisted DataView**: the maximum DataVersion found under the
   collection's DataView version prefix in the metastore.
-- **latest resident DataView**: the latest linear DataView held by DataCoord in
-  memory. It may be unavailable for QueryView construction, for example the
-  temporary flush DataView before sort-compaction handoff.
-- **latest visible DataView**: the latest resident DataView that DataCoord has
-  marked available for QueryCoord/Balancer.
-
-QueryCoord can only consume `latestVisible`. DataCoord internal event handling
-continues from `latestResident`, so unavailable temporary DataViews still keep
-the collection's DataView history linear.
+The published snapshot is the sole QueryCoord membership authority. A flush
+whose output is not yet loadable receives and durably retains its
+`sealed_at_data_version`, but does not publish a temporary DataView. The later
+loadable completion publishes the inherited streaming epoch.
 
 ## 5. Persistence
 
@@ -318,30 +315,18 @@ Version choice during reconciliation, in priority order:
 | Only delete frontier differs | unchanged; refresh the latest DataView-derived timetick |
 | No membership or delete frontier diff | unchanged |
 
-This means several segment events may be compacted into a single DataView
-snapshot. DataVersion reflects persisted DataView changes, not every
-individual segment metadata event.
-
-The priority is intentional. Recovery uses the same segment visibility rules as
-the current `GetRecoveryInfoV2` path to compute the expected DataView. If the
-computed DataView is identical to the latest DataView, recovery does not create
-another version. If it differs, recovery classifies the final diff rather than
-replaying every missed event. New flush/import data is treated as a streaming
-epoch update and has priority over compact handoff when both appear in the same
-recovery diff, because it is also the signal used by the query side to evict
-overlapped growing data. Compaction handoff is treated as a compact-version
-update only when no streaming-version event is present. A pure delete frontier
-mismatch only updates the in-memory/sync payload for the latest view and does
-not advance DataVersion.
-
-Recovery classification does not require a new durable reason field. It can use
-existing segment metadata, such as segment state and compact-from/compaction
-lineage, to distinguish flush/import additions from compaction handoff.
+DataVersion reflects explicit persisted membership commits, not an inferred
+diff against SegmentMeta. Recovery loads the durable published head and
+re-drives only assigned, incomplete flush publication; it does not guess a new
+version from compaction lineage or reconstruct membership from SegmentMeta.
 
 ## 6. Mutation Semantics
 
-DataViewManager is the DataCoord component that applies DataCoord events to the
-persisted loadable membership.
+DataViewManager is the DataCoord component that applies explicit DataCoord
+membership commits to the persisted loadable membership. The event-named
+adapter methods remain as compatibility shims for existing DataCoord callers;
+new flows use `CommitPublishedView`, `CommitStreamingView`, `CommitRewrite`,
+and `CommitSegmentTrim` with explicit mutations.
 
 Suggested interface shape:
 
@@ -361,7 +346,7 @@ type DataViewManager interface {
 
     RepairCollection(ctx context.Context, collectionID int64) error
     RepairCollections(ctx context.Context, collectionIDs []int64) error
-    LatestVisibleDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error)
+    LatestPublishedDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error)
     Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewOfCollection, error)
 }
 ```
@@ -413,13 +398,9 @@ are normal no-op success cases.
 `OnFlush` is triggered by StreamingNode flush completion through
 `SaveBinlogPaths`.
 
-Flush is special in the current implementation. StreamingNode flush can first
-produce a temporary sealed segment. A DataView that contains this temporary
-segment is not yet usable by QueryView, because the system still needs the
-follow-up sort compaction to produce the final loadable segment. DataCoord
-therefore keeps an in-memory availability state for such DataViews and does not
-expose them to QueryCoord/Balancer as QueryView input until the sorted handoff
-is ready.
+StreamingNode flush can first produce a temporary sealed segment that still
+needs sort processing. Such a segment receives its deterministic
+`sealed_at_data_version`, but never enters a published DataView.
 
 If the flushed segment is immediately usable, it joins DataView and advances:
 
@@ -427,16 +408,10 @@ If the flushed segment is immediately usable, it joins DataView and advances:
 (S, C) -> (S+1, 0)
 ```
 
-If the flush output must pass through sort compaction first, the flush-side
-DataView advances to `(S+1, 0)` in DataCoord but remains unavailable to
-QueryView in memory. The later sort-compaction handoff replaces the temporary
-segment with the final segment, advances compact version in the same streaming
-epoch, for example `(S+1, 0) -> (S+1, 1)`, and makes the resulting DataView
-available. QueryCoord first observes this data with the increased
-`streaming_version`, which is the signal needed to evict overlapped growing
-data. In the future, when StreamingNode produces sorted flush output directly,
-this temporary unavailable state can disappear and `OnFlush` can add the usable
-segment directly.
+If the flush output must pass through sort compaction first, publication waits.
+The final sorted segment inherits the original assigned `(S+1, 0)` and is
+published at that exact streaming epoch. It is not an independent compact
+rewrite and does not create an unavailable snapshot.
 
 Dropped flush output, partial checkpoint updates, and binlog-only updates do
 not change DataView.
@@ -499,7 +474,8 @@ Some membership changes are not caused by segment production:
 
 - `OnDropPartition` removes loadable segments in the dropped partition.
 - `OnTruncate` removes loadable segments before the truncate fence.
-- `OnDropCollection` deletes the whole DataView record.
+- DropCollection first makes the collection terminal, then deletes DataView
+  snapshots only after durable QueryView cleanup and live-reference drainage.
 
 DropPartition and truncate advance `compact_version` if they remove loadable
 membership:
@@ -508,8 +484,9 @@ membership:
 (S, C) -> (S, C+1)
 ```
 
-DropCollection does not need to advance DataVersion because the collection view
-no longer exists.
+DropCollection does not advance DataVersion because the collection view no
+longer exists. The durable terminal marker rejects new exact-version and
+Balancer snapshot references while existing refs remain readable.
 
 DropPartition and truncate first persist a collection-scoped logical-removal
 fence by marking every matching SegmentMeta record `Dropped`, then publish the
@@ -518,6 +495,12 @@ scope and assigned epochs are resolved again after metadata finalization so
 concurrent replacement outputs cannot escape the trim.
 
 The durable DataView head remains the sole QueryCoord membership authority.
+Physical segment GC consults manager-owned retained-membership accounting. The
+published head, configured retention window, and every live DataViewRef are
+protected; callers cannot provide an independent protected-version list.
+Balancer planning acquires refs for the exact snapshots it reads and releases
+them after planning and application. On process recovery, QueryView state
+machines reacquire their exact refs or enter cleanup before DataCoord starts GC.
 Until the trim publication succeeds, the prior head may still contain a fenced
 segment and existing QueryViews may continue to use it. The `Dropped` state
 prevents that segment from joining future repaired DataViews; it does not revoke
@@ -655,7 +638,7 @@ DataVersion advances while a plan is being built, that new DataView is consumed
 by the next reconcile cycle.
 
 QueryCoord must request a visible view, for example through
-`LatestVisibleDataView(collectionID)`. It must not select the maximum persisted
+`LatestPublishedDataView(collectionID)`. It must not select the maximum persisted
 DataVersion by itself, because the latest persisted DataView may be a temporary
 flush view that is not yet allowed to participate in QueryView construction.
 

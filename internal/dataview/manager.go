@@ -61,14 +61,6 @@ type Manager interface {
 	CommitRewrite(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
 	CommitSegmentTrim(ctx context.Context, collectionID int64, resolveTargets SegmentTrimTargetResolver, finalize SegmentTrimFinalize) (*viewpb.DataVersion, error)
 	OnCreateCollection(ctx context.Context, event CreateCollectionDataViewEvent) (*viewpb.DataVersion, error)
-	OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error)
-	OnImport(ctx context.Context, event ImportDataViewEvent) (*viewpb.DataVersion, error)
-	OnCopySegmentComplete(ctx context.Context, event CopySegmentCompleteDataViewEvent) (*viewpb.DataVersion, error)
-	OnCompact(ctx context.Context, event CompactDataViewEvent) (*viewpb.DataVersion, error)
-	OnL0Compact(ctx context.Context, event L0CompactDataViewEvent) (*viewpb.DataVersion, error)
-	OnExternalRefresh(ctx context.Context, event ExternalRefreshDataViewEvent) (*viewpb.DataVersion, error)
-	OnDropPartition(ctx context.Context, event DropPartitionDataViewEvent) (*viewpb.DataVersion, error)
-	OnTruncate(ctx context.Context, event TruncateDataViewEvent) (*viewpb.DataVersion, error)
 	OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error)
 
 	RepairCollection(ctx context.Context, collectionID int64) error
