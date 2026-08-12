@@ -471,13 +471,12 @@ func TestDataViewManagerOnCreateCollectionDoesNotPublishOrphanSnapshot(t *testin
 	require.Nil(t, state.GetPublishedDataVersion())
 }
 
-func TestDataViewManagerOnFlushCreatesVisibleView(t *testing.T) {
+func TestDataViewManagerAssignedFlushCreatesPublishedView(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, store := newTestDataViewManager()
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
 
-	version, err := manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})
-	require.NoError(t, err)
+	version := assignAndPublishTestSegment(ctx, t, manager, 100)
 	requireDataVersion(t, version, 1, 0)
 
 	require.Len(t, catalog.views, 1)
@@ -612,13 +611,12 @@ func TestDataViewManagerOnFlushSkipsNonLoadableSegments(t *testing.T) {
 	require.Nil(t, view)
 }
 
-func TestDataViewManagerOnFlushExposesVisibleTimeTick(t *testing.T) {
+func TestDataViewManagerPublishedFlushExposesVisibleTimeTick(t *testing.T) {
 	ctx := context.Background()
 	manager, _, store := newTestDataViewManager()
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
 
-	_, err := manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})
-	require.NoError(t, err)
+	assignAndPublishTestSegment(ctx, t, manager, 100)
 
 	timeticks, err := manager.ShardTimeTicks(ctx, []int64{1})
 	require.NoError(t, err)
@@ -636,14 +634,7 @@ func TestDataViewManagerFlushTemporaryThenSortHandoff(t *testing.T) {
 	assigned, err := manager.AssignFlushVersion(ctx, 1, 100)
 	require.NoError(t, err)
 
-	version, err := manager.OnFlush(ctx, FlushDataViewEvent{
-		CollectionID:         1,
-		SegmentIDs:           []int64{100},
-		TemporaryUnavailable: true,
-		AssignedVersion:      assigned,
-	})
-	require.NoError(t, err)
-	requireDataVersion(t, version, 1, 0)
+	requireDataVersion(t, assigned, 1, 0)
 	require.Empty(t, catalog.views)
 	visible, err := latestPublishedDataView(ctx, manager, 1)
 	require.NoError(t, err)
@@ -654,10 +645,8 @@ func TestDataViewManagerFlushTemporaryThenSortHandoff(t *testing.T) {
 	final.CompactionFrom = []int64{100}
 	store.segments[101] = final
 
-	version, err = manager.OnCompact(ctx, CompactDataViewEvent{
-		CollectionID: 1,
-		CompactFrom:  []int64{100},
-		CompactTo:    []int64{101},
+	version, err := manager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
+		Add: []SegmentMembership{testMembership(final)},
 	})
 	require.NoError(t, err)
 	requireDataVersion(t, version, 1, 0)
@@ -672,26 +661,26 @@ func TestDataViewManagerFlushTemporaryThenSortHandoff(t *testing.T) {
 	require.Equal(t, uint64(1100), visible.GetShards()[0].GetTransformStartAfterTimetick())
 }
 
-func TestDataViewManagerImportAndCopySegmentCompleteAdvanceStreamingVersion(t *testing.T) {
+func TestDataViewManagerExplicitAddOnlyCommitsAdvanceStreamingVersion(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, store := newTestDataViewManager()
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
 	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
 
-	require.NoError(t, noErrorVersion(manager.OnImport(ctx, ImportDataViewEvent{
-		CollectionID: 1,
-		SegmentIDs:   []int64{100},
-	})))
-	require.NoError(t, noErrorVersion(manager.OnCopySegmentComplete(ctx, CopySegmentCompleteDataViewEvent{
-		CollectionID: 1,
-		SegmentIDs:   []int64{101},
-	})))
+	_, err := manager.InitializeCollection(ctx, CollectionInitialization{CollectionID: 1, VChannels: []string{"ch-1"}})
+	require.NoError(t, err)
+	_, err = manager.CommitStreamingView(ctx, 1, PublishedMutation{Add: []SegmentMembership{testMembership(store.segments[100])}})
+	require.NoError(t, err)
+	_, err = manager.CommitStreamingView(ctx, 1, PublishedMutation{Add: []SegmentMembership{testMembership(store.segments[101])}})
+	require.NoError(t, err)
 
-	require.Len(t, catalog.views, 2)
+	require.Len(t, catalog.views, 3)
 	require.Equal(t, int64(1), catalog.views[0].GetDataVersion().GetStreamingVersion())
 	require.Equal(t, int64(0), catalog.views[0].GetDataVersion().GetCompactVersion())
 	require.Equal(t, int64(2), catalog.views[1].GetDataVersion().GetStreamingVersion())
 	require.Equal(t, int64(0), catalog.views[1].GetDataVersion().GetCompactVersion())
+	require.Equal(t, int64(3), catalog.views[2].GetDataVersion().GetStreamingVersion())
+	require.Equal(t, int64(0), catalog.views[2].GetDataVersion().GetCompactVersion())
 	view, err := latestPublishedDataView(ctx, manager, 1)
 	require.NoError(t, err)
 	require.NotNil(t, view)
@@ -702,16 +691,14 @@ func TestDataViewManagerTemporaryFlushKeepsPreviousVisibleView(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, store := newTestDataViewManager()
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
-	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})))
+	assignAndPublishTestSegment(ctx, t, manager, 100)
 
 	temp := newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
 	temp.IsInvisible = true
 	store.segments[101] = temp
-	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{
-		CollectionID:         1,
-		SegmentIDs:           []int64{101},
-		TemporaryUnavailable: true,
-	})))
+	assigned, err := manager.AssignFlushVersion(ctx, 1, 101)
+	require.NoError(t, err)
+	requireDataVersion(t, assigned, 2, 0)
 
 	require.Len(t, catalog.views, 1)
 	visible, err := latestPublishedDataView(ctx, manager, 1)
@@ -725,16 +712,13 @@ func TestDataViewManagerShardTimeTicksUseLatestVisibleView(t *testing.T) {
 	ctx := context.Background()
 	manager, _, store := newTestDataViewManager()
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
-	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})))
+	assignAndPublishTestSegment(ctx, t, manager, 100)
 
 	temp := newDataViewTestSegment(1, 10, 101, "ch-1", 800)
 	temp.IsInvisible = true
 	store.segments[101] = temp
-	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{
-		CollectionID:         1,
-		SegmentIDs:           []int64{101},
-		TemporaryUnavailable: true,
-	})))
+	_, err := manager.AssignFlushVersion(ctx, 1, 101)
+	require.NoError(t, err)
 
 	timeticks, err := manager.ShardTimeTicks(ctx, []int64{1})
 	require.NoError(t, err)
@@ -747,16 +731,13 @@ func TestDataViewManagerSnapshotReturnsLatestVisibleClone(t *testing.T) {
 	ctx := context.Background()
 	manager, _, store := newTestDataViewManager()
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
-	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})))
+	assignAndPublishTestSegment(ctx, t, manager, 100)
 
 	temp := newDataViewTestSegment(1, 10, 101, "ch-1", 800)
 	temp.IsInvisible = true
 	store.segments[101] = temp
-	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{
-		CollectionID:         1,
-		SegmentIDs:           []int64{101},
-		TemporaryUnavailable: true,
-	})))
+	_, err := manager.AssignFlushVersion(ctx, 1, 101)
+	require.NoError(t, err)
 
 	views := manager.snapshot(ctx, []int64{1})
 	require.Len(t, views, 1)
@@ -776,7 +757,7 @@ func TestDataViewManagerDataViewSnapshotForBalancer(t *testing.T) {
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
 	store.segments[100].NumOfRows = 11
 	store.segments[100].MemSize = 4096
-	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})))
+	assignAndPublishTestSegment(ctx, t, manager, 100)
 
 	snapshot := dataViewSnapshotForTest(ctx, t, manager, nil)
 	require.NotNil(t, snapshot)
@@ -803,13 +784,10 @@ func TestDataViewManagerDataViewSnapshotForCollectionsScope(t *testing.T) {
 	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
 	store.segments[101].IsInvisible = true
 	store.segments[200] = newDataViewTestSegment(2, 20, 200, "ch-2", 1200)
-	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})))
-	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{
-		CollectionID:         1,
-		SegmentIDs:           []int64{101},
-		TemporaryUnavailable: true,
-	})))
-	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 2, SegmentIDs: []int64{200}})))
+	assignAndPublishTestSegment(ctx, t, manager, 100)
+	_, err := manager.AssignFlushVersion(ctx, 1, 101)
+	require.NoError(t, err)
+	assignAndPublishTestSegment(ctx, t, manager, 200)
 
 	tests := []struct {
 		name  string
