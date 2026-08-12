@@ -117,8 +117,7 @@ func TestRetainedImmutableDoesNotExposeMessageAfterRelease(t *testing.T) {
 	raw := CreateTestInsertMessage(t, 100, 2, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))
 	owner := NewOwnedImmutableMessage(raw, nil)
-	retained := owner.Clone()
-	typed := newRetainedImmutable[ImmutableMessage](raw, retained)
+	typed := MustAsOwnedImmutableInsertMessageV1(owner).Clone()
 
 	typed.Release()
 	assert.Panics(t, func() { _ = typed.Message() })
@@ -161,6 +160,18 @@ func TestMustAsOwnedImmutableInsertMessageV1RejectsMismatchedOwner(t *testing.T)
 	owner := NewOwnedImmutableMessage(raw, nil)
 
 	assert.Panics(t, func() { MustAsOwnedImmutableInsertMessageV1(owner) })
+	owner.Release()
+}
+
+func TestMustAsOwnedImmutableTxnMessage(t *testing.T) {
+	txn := buildRefCountedTestTxn(t)
+	owner := NewOwnedImmutableMessage(txn, nil)
+	var owned OwnedImmutableTxnMessage = MustAsOwnedImmutableTxnMessage(owner)
+
+	assert.Same(t, txn, owned.Message())
+	retained := owned.Clone()
+	assert.Same(t, txn, retained.Message())
+	retained.Release()
 	owner.Release()
 }
 
