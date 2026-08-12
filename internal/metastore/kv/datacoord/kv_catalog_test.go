@@ -2160,6 +2160,7 @@ func TestDataViewCatalog(t *testing.T) {
 
 	dataViewKey := "coord/dv/100/versions/2/1"
 	dataViewPrefix := "coord/dv/100/versions/"
+	dataViewCollectionPrefix := "coord/dv/100/"
 	allDataViewsPrefix := "coord/dv/"
 	txn.EXPECT().Save(ctx, dataViewKey, string(value)).Return(nil).Once()
 	assert.NoError(t, catalog.SaveDataView(ctx, dataView))
@@ -2194,7 +2195,7 @@ func TestDataViewCatalog(t *testing.T) {
 	txn.EXPECT().Remove(ctx, dataViewKey).Return(nil).Once()
 	assert.NoError(t, catalog.DropDataView(ctx, 100, dataView.GetDataVersion()))
 
-	txn.EXPECT().RemoveWithPrefix(ctx, dataViewPrefix).Return(nil).Once()
+	txn.EXPECT().RemoveWithPrefix(ctx, dataViewCollectionPrefix).Return(nil).Once()
 	assert.NoError(t, catalog.DropDataViews(ctx, 100))
 }
 

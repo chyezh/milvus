@@ -103,6 +103,26 @@ func TestDataViewDropWithoutRefsStillWaitsForFinalizeBarrier(t *testing.T) {
 	require.Empty(t, views)
 }
 
+func TestDataViewFinalizeDropRemovesDurableStateBeforeRestart(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, _ := newTestDataViewManager()
+	_, err := manager.InitializeCollection(ctx, CollectionInitialization{
+		CollectionID: 1,
+		VChannels:    []string{"ch-1"},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, catalog.versionStates[1])
+
+	require.NoError(t, manager.MarkCollectionTerminal(ctx, 1))
+	require.NoError(t, manager.FinalizeDropCollection(ctx, 1))
+	require.Empty(t, catalog.views)
+	require.Nil(t, catalog.versionStates[1])
+
+	restarted, err := RecoverManager(ctx, catalog, &fakeDataViewSegmentStore{segments: make(map[int64]*Segment)})
+	require.NoError(t, err)
+	require.NotNil(t, restarted)
+}
+
 func TestDataViewFinalizeDropRejectsLiveRefs(t *testing.T) {
 	ctx := context.Background()
 	manager, _, store := newTestDataViewManager()

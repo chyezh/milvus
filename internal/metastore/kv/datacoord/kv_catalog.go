@@ -656,7 +656,7 @@ func (kc *Catalog) DropDataView(ctx context.Context, collectionID int64, dataVer
 }
 
 func (kc *Catalog) DropDataViews(ctx context.Context, collectionID int64) error {
-	return kc.MetaKv.RemoveWithPrefix(ctx, buildDataViewVersionPrefix(collectionID))
+	return kc.MetaKv.RemoveWithPrefix(ctx, buildDataViewCollectionPrefix(collectionID))
 }
 
 func (kc *Catalog) MarkDataViewCollectionDropped(ctx context.Context, collectionID int64) error {

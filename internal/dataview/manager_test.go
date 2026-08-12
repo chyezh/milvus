@@ -175,6 +175,7 @@ func (c *fakeDataViewCatalog) DropDataViews(ctx context.Context, collectionID in
 		}
 	}
 	c.views = views
+	delete(c.versionStates, collectionID)
 	return nil
 }
 
