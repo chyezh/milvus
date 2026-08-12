@@ -70,6 +70,16 @@ type DataViewProvider interface {
 	SegmentSnapshot(ctx context.Context, segmentIDs []int64) SegmentSnapshot
 }
 
+// DataViewSnapshotRef keeps the immutable DataView snapshot's manager-owned
+// references live for the duration of one planning cycle.
+type DataViewSnapshotRef = balancerapi.DataViewSnapshotRef
+
+// RefAwareDataViewProvider is implemented by providers that can protect the
+// exact DataView versions represented by a Balancer snapshot.
+type RefAwareDataViewProvider interface {
+	DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (DataViewSnapshotRef, error)
+}
+
 type (
 	DataViewSnapshot = balancerapi.DataViewSnapshot
 	SegmentInfo      = balancerapi.SegmentInfo

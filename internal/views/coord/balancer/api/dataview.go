@@ -15,6 +15,13 @@ type DataViewSnapshot struct {
 	segments          SegmentSnapshot
 }
 
+// DataViewSnapshotRef owns the DataView references represented by one
+// immutable Balancer snapshot.
+type DataViewSnapshotRef interface {
+	Snapshot() *DataViewSnapshot
+	Release()
+}
+
 func NewDataViewSnapshot(
 	version uint64,
 	collections []*viewpb.DataViewOfCollection,

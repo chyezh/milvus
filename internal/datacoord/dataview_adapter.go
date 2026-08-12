@@ -88,6 +88,9 @@ func (s *Server) Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb
 }
 
 func (s *Server) DataViewProvider() balancer.DataViewProvider {
+	if s.dataViewLifecycle != nil {
+		return s.dataViewLifecycle
+	}
 	return s.dataViewManager
 }
 

@@ -30,6 +30,28 @@ type BalancerSnapshot struct {
 
 	// Tunable parameters for the allocation algorithm.
 	Config *BalanceConfig
+
+	// closeDataView releases manager-owned DataView references acquired for the
+	// planning cycle. It is intentionally private; callers use Close.
+	closeDataView func()
+	buildErr      error
+}
+
+// Close releases resources held by provider snapshots. It is idempotent.
+func (s *BalancerSnapshot) Close() {
+	if s == nil || s.closeDataView == nil {
+		return
+	}
+	close := s.closeDataView
+	s.closeDataView = nil
+	close()
+}
+
+func (s *BalancerSnapshot) BuildError() error {
+	if s == nil {
+		return nil
+	}
+	return s.buildErr
 }
 
 // ConfigForShard returns the LoadConfig owning the given shard, or nil if

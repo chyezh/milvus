@@ -1781,6 +1781,8 @@ func TestDataViewManagerDropCollectionDropsStateAndCatalog(t *testing.T) {
 	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})))
 
 	require.NoError(t, noErrorVersion(manager.OnDropCollection(ctx, 1)))
+	require.NotEmpty(t, catalog.views)
+	require.NoError(t, manager.FinalizeDropCollection(ctx, 1))
 	require.Empty(t, catalog.views)
 
 	visible, err := manager.LatestVisibleDataView(ctx, 1)
@@ -1828,7 +1830,7 @@ func TestDataViewManagerSegmentReferenceUsesRetainedViews(t *testing.T) {
 	require.False(t, referenced)
 }
 
-func TestDataViewManagerGarbageCollectRetainsLatestAndProtectedViews(t *testing.T) {
+func TestDataViewManagerGarbageCollectRetainsLatestViews(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, _ := newTestDataViewManager()
 	catalog.views = append(
@@ -1851,17 +1853,13 @@ func TestDataViewManagerGarbageCollectRetainsLatestAndProtectedViews(t *testing.
 		},
 	)
 
-	require.NoError(t, manager.GarbageCollect(ctx, 1, []*viewpb.DataVersion{
-		{StreamingVersion: 1, CompactVersion: 0},
-	}, 1))
+	require.NoError(t, manager.GarbageCollect(ctx, 1, 1))
 
 	views, err := catalog.ListDataViews(ctx, 1)
 	require.NoError(t, err)
-	require.Len(t, views, 2)
-	require.Equal(t, int64(1), views[0].GetDataVersion().GetStreamingVersion())
+	require.Len(t, views, 1)
+	require.Equal(t, int64(2), views[0].GetDataVersion().GetStreamingVersion())
 	require.Equal(t, int64(0), views[0].GetDataVersion().GetCompactVersion())
-	require.Equal(t, int64(2), views[1].GetDataVersion().GetStreamingVersion())
-	require.Equal(t, int64(0), views[1].GetDataVersion().GetCompactVersion())
 
 	views, err = catalog.ListDataViews(ctx, 2)
 	require.NoError(t, err)
@@ -1886,13 +1884,13 @@ func TestDataViewManagerGarbageCollectHonorsManagerOwnedRefs(t *testing.T) {
 
 	ref, err := manager.Get(ctx, 1, qviews.DataVersion{StreamingVersion: 1})
 	require.NoError(t, err)
-	require.NoError(t, manager.GarbageCollect(ctx, 1, nil, 1))
+	require.NoError(t, manager.GarbageCollect(ctx, 1, 1))
 	views, err := catalog.ListDataViews(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, views, 2, "live manager-owned ref must protect the old DataView")
 
 	ref.Deref()
-	require.NoError(t, manager.GarbageCollect(ctx, 1, nil, 1))
+	require.NoError(t, manager.GarbageCollect(ctx, 1, 1))
 	views, err = catalog.ListDataViews(ctx, 1)
 	require.NoError(t, err)
 	require.Len(t, views, 1)
@@ -1952,7 +1950,7 @@ func TestDataViewManagerGarbageCollectDoesNotBlockOtherCollections(t *testing.T)
 
 	blockedErr := make(chan error, 1)
 	go func() {
-		blockedErr <- manager.GarbageCollect(ctx, 1, nil, 1)
+		blockedErr <- manager.GarbageCollect(ctx, 1, 1)
 	}()
 	<-catalog.dropStarted
 

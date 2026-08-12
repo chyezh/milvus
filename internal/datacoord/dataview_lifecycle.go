@@ -18,11 +18,14 @@ package datacoord
 
 import (
 	"context"
+	"sort"
 	"sync"
 
 	"github.com/milvus-io/milvus/internal/dataview"
+	"github.com/milvus-io/milvus/internal/views/coord/balancer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 type dataViewDropMarkerCatalog interface {
@@ -33,8 +36,12 @@ type dataViewDropMarkerCatalog interface {
 
 type dataViewLifecycleDataViews interface {
 	dataview.ReferenceManager
-	GarbageCollect(ctx context.Context, collectionID int64, protected []*viewpb.DataVersion, retainLatest int) error
+	GarbageCollect(ctx context.Context, collectionID int64, retainLatest int) error
 	OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error)
+}
+
+type dataViewDropFinalizer interface {
+	FinalizeDropCollection(ctx context.Context, collectionID int64) error
 }
 
 func (m *dataViewLifecycle) Get(ctx context.Context, collectionID int64, version qviews.DataVersion) (dataview.DataViewRef, error) {
@@ -62,6 +69,87 @@ type dataViewLifecycle struct {
 	catalog          dataViewDropMarkerCatalog
 	collectionExists func(int64) bool
 }
+
+func (m *dataViewLifecycle) dataViewProvider() balancer.DataViewProvider {
+	provider, _ := m.dataViews.(balancer.DataViewProvider)
+	return provider
+}
+
+func (m *dataViewLifecycle) DataViewSnapshot(ctx context.Context) *balancer.DataViewSnapshot {
+	provider := m.dataViewProvider()
+	if provider == nil {
+		return balancer.NewDataViewSnapshot(0, nil, nil)
+	}
+	return provider.DataViewSnapshot(ctx)
+}
+
+func (m *dataViewLifecycle) DataViewSnapshotForCollections(ctx context.Context, ids map[int64]struct{}) *balancer.DataViewSnapshot {
+	provider := m.dataViewProvider()
+	if provider == nil {
+		return balancer.NewDataViewSnapshot(0, nil, nil)
+	}
+	return provider.DataViewSnapshotForCollections(ctx, ids)
+}
+
+func (m *dataViewLifecycle) SegmentSnapshot(ctx context.Context, ids []int64) balancer.SegmentSnapshot {
+	provider := m.dataViewProvider()
+	if provider == nil {
+		return nil
+	}
+	return provider.SegmentSnapshot(ctx, ids)
+}
+
+func (m *dataViewLifecycle) DataViewSnapshotRefForCollections(ctx context.Context, ids map[int64]struct{}) (balancer.DataViewSnapshotRef, error) {
+	provider, ok := m.dataViews.(interface {
+		DataViewSnapshotRefForCollections(context.Context, map[int64]struct{}) (balancer.DataViewSnapshotRef, error)
+	})
+	base := m.dataViewProvider()
+	if base == nil {
+		return nil, merr.WrapErrServiceNotReadyMsg("data view provider is not initialized")
+	}
+	collectionIDs := make([]int64, 0)
+	if ids == nil {
+		m.mu.Lock()
+		for id := range m.states {
+			collectionIDs = append(collectionIDs, id)
+		}
+		m.mu.Unlock()
+	} else {
+		for id := range ids {
+			collectionIDs = append(collectionIDs, id)
+		}
+	}
+	sort.Slice(collectionIDs, func(i, j int) bool { return collectionIDs[i] < collectionIDs[j] })
+	states := make([]*dataViewLifecycleState, 0, len(collectionIDs))
+	for _, id := range collectionIDs {
+		state := m.getOrCreateState(id)
+		state.mu.Lock()
+		if state.terminal {
+			state.mu.Unlock()
+			for _, held := range states {
+				held.mu.Unlock()
+			}
+			return nil, dataview.NewUnavailableDataViewError(id, qviews.DataVersion{})
+		}
+		states = append(states, state)
+	}
+	defer func() {
+		for _, state := range states {
+			state.mu.Unlock()
+		}
+	}()
+	if ok {
+		return provider.DataViewSnapshotRefForCollections(ctx, ids)
+	}
+	return &legacyDataViewSnapshotRef{snapshot: base.DataViewSnapshotForCollections(ctx, ids)}, nil
+}
+
+type legacyDataViewSnapshotRef struct {
+	snapshot *balancer.DataViewSnapshot
+}
+
+func (r *legacyDataViewSnapshotRef) Snapshot() *balancer.DataViewSnapshot { return r.snapshot }
+func (*legacyDataViewSnapshotRef) Release()                               {}
 
 func recoverDataViewLifecycle(
 	ctx context.Context,
@@ -106,7 +194,7 @@ func (m *dataViewLifecycle) GarbageCollect(ctx context.Context, collectionID int
 	if state.terminal {
 		return nil
 	}
-	return m.dataViews.GarbageCollect(ctx, collectionID, nil, retainLatest)
+	return m.dataViews.GarbageCollect(ctx, collectionID, retainLatest)
 }
 
 func (m *dataViewLifecycle) DropCollection(ctx context.Context, collectionID int64) error {
@@ -126,6 +214,11 @@ func (m *dataViewLifecycle) FinalizeDropCollection(ctx context.Context, collecti
 	state := m.getOrCreateState(collectionID)
 	state.mu.Lock()
 	defer state.mu.Unlock()
+	if finalizer, ok := m.dataViews.(dataViewDropFinalizer); ok {
+		if err := finalizer.FinalizeDropCollection(ctx, collectionID); err != nil {
+			return err
+		}
+	}
 	return m.catalog.UnmarkDataViewCollectionDropped(ctx, collectionID)
 }
 

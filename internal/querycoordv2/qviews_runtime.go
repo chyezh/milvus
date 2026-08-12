@@ -257,6 +257,18 @@ func (p *mixCoordDataViewProvider) DataViewSnapshotForCollections(ctx context.Co
 	return provider.DataViewSnapshotForCollections(ctx, collectionIDs)
 }
 
+func (p *mixCoordDataViewProvider) DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (balancer.DataViewSnapshotRef, error) {
+	provider := p.provider()
+	if provider == nil {
+		return nil, merr.WrapErrServiceNotReadyMsg("data view provider is not initialized")
+	}
+	refProvider, ok := provider.(balancer.RefAwareDataViewProvider)
+	if !ok {
+		return nil, merr.WrapErrServiceInternalMsg("data view provider does not support references")
+	}
+	return refProvider.DataViewSnapshotRefForCollections(ctx, collectionIDs)
+}
+
 func (p *mixCoordDataViewProvider) SegmentSnapshot(ctx context.Context, segmentIDs []int64) balancer.SegmentSnapshot {
 	provider := p.provider()
 	if provider == nil {

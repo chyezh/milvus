@@ -159,6 +159,7 @@ func TestDataViewRefLateCreateDoesNotReopenTerminalCollection(t *testing.T) {
 	requireUnavailableDataViewError(t, err)
 	require.True(t, dataViewStateDropped(t, manager, 1))
 	require.Nil(t, lateVersion)
+	require.NoError(t, manager.FinalizeDropCollection(ctx, 1))
 	require.Empty(t, catalog.views)
 }
 

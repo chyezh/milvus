@@ -83,7 +83,7 @@ type Manager interface {
 	SegmentSnapshot(ctx context.Context, segmentIDs []int64) balancerapi.SegmentSnapshot
 	ShardTimeTicks(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewShardTimeTick, error)
 	IsSegmentReferenced(ctx context.Context, collectionID int64, segmentID int64) (bool, error)
-	GarbageCollect(ctx context.Context, collectionID int64, protected []*viewpb.DataVersion, retainLatest int) error
+	GarbageCollect(ctx context.Context, collectionID int64, retainLatest int) error
 }
 
 type CreateCollectionDataViewEvent struct {
@@ -168,6 +168,8 @@ type dataViewManager struct {
 	states         map[int64]*collectionDataViewState
 	recoveredAll   bool
 	recoveredViews map[int64][]*viewpb.DataViewOfCollection
+	retainedMu     sync.RWMutex
+	retained       map[int64]map[int64]int
 }
 
 type Segment struct {
@@ -324,6 +326,7 @@ func NewManager(catalog Catalog, segments SegmentStore) Manager {
 		catalog:  catalog,
 		segments: segments,
 		states:   make(map[int64]*collectionDataViewState),
+		retained: make(map[int64]map[int64]int),
 	}
 }
 
@@ -582,13 +585,27 @@ func (m *dataViewManager) OnDropCollection(ctx context.Context, collectionID int
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	if err := m.catalog.DropDataViews(ctx, collectionID); err != nil {
-		return nil, err
-	}
 	state.latestResident = nil
 	state.latestVisible = nil
 	state.dropped = true
 	return nil, nil
+}
+
+func (m *dataViewManager) FinalizeDropCollection(ctx context.Context, collectionID int64) error {
+	state := m.getOrCreateState(collectionID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if !state.dropped {
+		return nil
+	}
+	if len(state.refs) != 0 {
+		return merr.WrapErrServiceNotReadyMsg("data view references for terminal collection %d have not drained", collectionID)
+	}
+	if err := m.catalog.DropDataViews(ctx, collectionID); err != nil {
+		return err
+	}
+	m.updateRetainedMembership(collectionID, nil)
+	return nil
 }
 
 func (m *dataViewManager) RepairCollection(ctx context.Context, collectionID int64) error {
@@ -690,6 +707,7 @@ func (m *dataViewManager) recoverCollectionFromDataViews(collectionID int64, per
 	state.dropped = false
 	state.latestResident = canonicalDataViewClone(latestDataView(persistedViews))
 	state.latestVisible = canonicalDataViewClone(state.latestResident)
+	m.updateRetainedMembership(collectionID, persistedViews)
 }
 
 func (m *dataViewManager) repairCollectionWithDataViews(ctx context.Context, collectionID int64, persistedViews []*viewpb.DataViewOfCollection) error {
@@ -1031,23 +1049,25 @@ func (m *dataViewManager) ShardTimeTicks(ctx context.Context, collectionIDs []in
 }
 
 func (m *dataViewManager) IsSegmentReferenced(ctx context.Context, collectionID int64, segmentID int64) (bool, error) {
-	state := m.getOrCreateState(collectionID)
-	state.mu.RLock()
-	defer state.mu.RUnlock()
-
+	m.retainedMu.RLock()
+	segments := m.retained[collectionID]
+	_, referenced := segments[segmentID]
+	m.retainedMu.RUnlock()
+	if segments != nil {
+		return referenced, nil
+	}
 	views, err := m.catalog.ListDataViews(ctx, collectionID)
 	if err != nil {
 		return true, err
 	}
-	for _, view := range views {
-		if dataViewContainsSegment(view, segmentID) {
-			return true, nil
-		}
-	}
-	return false, nil
+	m.updateRetainedMembership(collectionID, views)
+	m.retainedMu.RLock()
+	_, referenced = m.retained[collectionID][segmentID]
+	m.retainedMu.RUnlock()
+	return referenced, nil
 }
 
-func (m *dataViewManager) GarbageCollect(ctx context.Context, collectionID int64, protected []*viewpb.DataVersion, retainLatest int) error {
+func (m *dataViewManager) GarbageCollect(ctx context.Context, collectionID int64, retainLatest int) error {
 	state := m.getOrCreateState(collectionID)
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -1062,10 +1082,7 @@ func (m *dataViewManager) GarbageCollect(ctx context.Context, collectionID int64
 	sort.Slice(views, func(i, j int) bool {
 		return compareDataVersion(views[i].GetDataVersion(), views[j].GetDataVersion()) > 0
 	})
-	protectedSet := make(map[string]struct{}, len(protected))
-	for _, version := range protected {
-		protectedSet[dataVersionKey(version)] = struct{}{}
-	}
+	protectedSet := make(map[string]struct{})
 	for version, count := range state.refs {
 		if count > 0 {
 			protectedSet[dataVersionKey(version.IntoProto())] = struct{}{}
@@ -1083,7 +1100,26 @@ func (m *dataViewManager) GarbageCollect(ctx context.Context, collectionID int64
 			return err
 		}
 	}
+	remaining, err := m.catalog.ListDataViews(ctx, collectionID)
+	if err != nil {
+		return err
+	}
+	m.updateRetainedMembership(collectionID, remaining)
 	return nil
+}
+
+func (m *dataViewManager) updateRetainedMembership(collectionID int64, views []*viewpb.DataViewOfCollection) {
+	segments := make(map[int64]int)
+	for _, view := range views {
+		for _, partition := range dataViewPartitions(view) {
+			for _, segmentID := range partition.GetSegmentIds() {
+				segments[segmentID]++
+			}
+		}
+	}
+	m.retainedMu.Lock()
+	m.retained[collectionID] = segments
+	m.retainedMu.Unlock()
 }
 
 func (m *dataViewManager) applyMembershipMutation(ctx context.Context, mutation dataViewMembershipMutation) (*viewpb.DataVersion, error) {

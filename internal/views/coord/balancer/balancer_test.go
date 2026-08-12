@@ -11,11 +11,59 @@ import (
 	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 type testSnapshotSource struct {
 	snapshot     *BalancerSnapshot
 	afterCapture func()
+	dirty        []qviews.ShardID
+}
+
+func TestBalancer_ReconcileHoldsDataViewRefThroughPlanAndApply(t *testing.T) {
+	reg := emptyRegistry(t)
+	released := false
+	snap := &BalancerSnapshot{
+		ShardViewSnapshot: reg.Snapshot(),
+		closeDataView:     func() { released = true },
+	}
+	source := &testSnapshotSource{snapshot: snap, dirty: []qviews.ShardID{{ReplicaID: 1, VChannel: "v0"}}}
+	policy := &releaseCheckingPolicy{t: t, released: &released}
+	b := &DefaultBalancer{snapshotBuilder: source, viewRegistry: reg, policy: policy, queue: newTriggerQueue()}
+	b.Trigger()
+	require.NoError(t, b.Reconcile(context.Background()))
+	require.True(t, released)
+}
+
+func TestBalancer_ReconcileReleasesDataViewRefOnNoDirtyAndBuildError(t *testing.T) {
+	reg := emptyRegistry(t)
+	for _, buildErr := range []error{nil, merr.WrapErrServiceNotReadyMsg("snapshot unavailable")} {
+		released := false
+		source := &testSnapshotSource{snapshot: &BalancerSnapshot{
+			ShardViewSnapshot: reg.Snapshot(),
+			closeDataView:     func() { released = true },
+			buildErr:          buildErr,
+		}}
+		b := &DefaultBalancer{snapshotBuilder: source, viewRegistry: reg, policy: NewDefaultBalancePolicy(), queue: newTriggerQueue()}
+		b.Trigger()
+		err := b.Reconcile(context.Background())
+		if buildErr != nil {
+			require.Error(t, err)
+		} else {
+			require.NoError(t, err)
+		}
+		require.True(t, released)
+	}
+}
+
+type releaseCheckingPolicy struct {
+	t        *testing.T
+	released *bool
+}
+
+func (p *releaseCheckingPolicy) Plan(*BalancerSnapshot, []qviews.ShardID) *BalancePlan {
+	require.False(p.t, *p.released)
+	return &BalancePlan{}
 }
 
 func (s *testSnapshotSource) build(context.Context, triggerBatch) (*BalancerSnapshot, []qviews.ShardID) {
@@ -23,7 +71,11 @@ func (s *testSnapshotSource) build(context.Context, triggerBatch) (*BalancerSnap
 	if s.afterCapture != nil {
 		s.afterCapture()
 	}
-	shards := make([]qviews.ShardID, 0, len(snapshot.ShardStatsMap()))
+	shards := append([]qviews.ShardID(nil), s.dirty...)
+	if len(shards) > 0 {
+		return snapshot, shards
+	}
+	shards = make([]qviews.ShardID, 0, len(snapshot.ShardStatsMap()))
 	for shardID := range snapshot.ShardStatsMap() {
 		shards = append(shards, shardID)
 	}

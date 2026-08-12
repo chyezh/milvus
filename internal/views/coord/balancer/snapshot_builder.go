@@ -115,7 +115,18 @@ func (b *SnapshotBuilder) build(ctx context.Context, pending triggerBatch) (*Bal
 	scope := pending.resolveScope(loadSnapshot, b.viewRegistry)
 
 	// 2. Read scoped DataViews and expand collection triggers into target shards.
-	dataViewSnapshot := b.dataViewProvider.DataViewSnapshotForCollections(ctx, scope.collectionIDs)
+	var dataViewSnapshot *DataViewSnapshot
+	var releaseDataView func()
+	if provider, ok := b.dataViewProvider.(RefAwareDataViewProvider); ok {
+		ref, err := provider.DataViewSnapshotRefForCollections(ctx, scope.collectionIDs)
+		if err != nil {
+			return &BalancerSnapshot{Config: b.config, LoadConfigSnapshot: loadSnapshot, buildErr: err}, nil
+		}
+		dataViewSnapshot = ref.Snapshot()
+		releaseDataView = ref.Release
+	} else {
+		dataViewSnapshot = b.dataViewProvider.DataViewSnapshotForCollections(ctx, scope.collectionIDs)
+	}
 	scope.AddDataViewShards(loadSnapshot, dataViewSnapshot)
 	targetShards := maps.Keys(scope.targetShards)
 
@@ -136,6 +147,7 @@ func (b *SnapshotBuilder) build(ctx context.Context, pending triggerBatch) (*Bal
 		ShardViewSnapshot:     targetSnapshot,
 		DataViewSnapshot:      dataViewSnapshot,
 		ShardRowStatsSnapshot: b.rowCountLedger.shardRowStatsSnapshot(targetShards),
+		closeDataView:         releaseDataView,
 	}
 
 	// 5. Attach cluster-wide row counts to the current node snapshot.

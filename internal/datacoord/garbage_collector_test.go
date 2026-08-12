@@ -270,10 +270,9 @@ func (m *fakeGCDataViewManager) IsSegmentReferenced(ctx context.Context, collect
 	return m.segmentReferenced, m.segmentRefErr
 }
 
-func (m *fakeGCDataViewManager) GarbageCollect(ctx context.Context, collectionID int64, protected []*viewpb.DataVersion, retainLatest int) error {
+func (m *fakeGCDataViewManager) GarbageCollect(ctx context.Context, collectionID int64, retainLatest int) error {
 	m.calls = append(m.calls, fakeGCDataViewCall{
 		collectionID: collectionID,
-		protected:    protected,
 		retainLatest: retainLatest,
 	})
 	return nil

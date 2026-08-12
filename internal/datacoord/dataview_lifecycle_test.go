@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus/internal/dataview"
+	"github.com/milvus-io/milvus/internal/views/coord/balancer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 )
@@ -63,9 +64,23 @@ func (c *testDataViewLifecycleCatalog) UnmarkDataViewCollectionDropped(_ context
 }
 
 type testDataViewLifecycleDataViews struct {
-	garbageCollectFn func(context.Context, int64, []*viewpb.DataVersion, int) error
+	garbageCollectFn func(context.Context, int64, int) error
 	dropCollectionFn func(context.Context, int64) (*viewpb.DataVersion, error)
 	getFn            func(context.Context, int64, qviews.DataVersion) (dataview.DataViewRef, error)
+}
+
+func TestDataViewLifecycleSnapshotRefRejectsTerminalCollection(t *testing.T) {
+	catalog := &testDataViewLifecycleCatalog{markerPresent: map[int64]struct{}{100: {}}}
+	dataViews := &testDataViewLifecycleDataViews{
+		garbageCollectFn: func(context.Context, int64, int) error { return nil },
+		dropCollectionFn: func(context.Context, int64) (*viewpb.DataVersion, error) { return nil, nil },
+		getFn: func(context.Context, int64, qviews.DataVersion) (dataview.DataViewRef, error) {
+			return nil, nil
+		},
+	}
+	lifecycle := newTestDataViewLifecycle(t, catalog, dataViews)
+	_, err := lifecycle.DataViewSnapshotRefForCollections(context.Background(), map[int64]struct{}{100: {}})
+	require.Error(t, err)
 }
 
 type testLifecycleDataViewRef struct{}
@@ -73,8 +88,51 @@ type testLifecycleDataViewRef struct{}
 func (*testLifecycleDataViewRef) DataView() *dataview.DataView { return nil }
 func (*testLifecycleDataViewRef) Deref()                       {}
 
-func (m *testDataViewLifecycleDataViews) GarbageCollect(ctx context.Context, collectionID int64, protected []*viewpb.DataVersion, retainLatest int) error {
-	return m.garbageCollectFn(ctx, collectionID, protected, retainLatest)
+type blockingSnapshotLifecycleDataViews struct {
+	*testDataViewLifecycleDataViews
+	started chan struct{}
+	release chan struct{}
+}
+
+func (m *blockingSnapshotLifecycleDataViews) DataViewSnapshotRefForCollections(context.Context, map[int64]struct{}) (balancer.DataViewSnapshotRef, error) {
+	close(m.started)
+	<-m.release
+	return &legacyDataViewSnapshotRef{snapshot: balancer.NewDataViewSnapshot(0, nil, nil)}, nil
+}
+
+func TestDataViewLifecycleSnapshotAcquisitionSerializesWithDropMarker(t *testing.T) {
+	catalog := &testDataViewLifecycleCatalog{markerPresent: make(map[int64]struct{})}
+	dataViews := &blockingSnapshotLifecycleDataViews{
+		testDataViewLifecycleDataViews: &testDataViewLifecycleDataViews{
+			garbageCollectFn: func(context.Context, int64, int) error { return nil },
+			dropCollectionFn: func(context.Context, int64) (*viewpb.DataVersion, error) { return nil, nil },
+			getFn:            func(context.Context, int64, qviews.DataVersion) (dataview.DataViewRef, error) { return nil, nil },
+		},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	lifecycle, err := recoverDataViewLifecycle(context.Background(), catalog, dataViews, func(int64) bool { return true })
+	require.NoError(t, err)
+	refDone := make(chan error, 1)
+	go func() {
+		_, err := lifecycle.DataViewSnapshotRefForCollections(context.Background(), map[int64]struct{}{100: {}})
+		refDone <- err
+	}()
+	<-dataViews.started
+	dropDone := make(chan error, 1)
+	go func() { dropDone <- lifecycle.DropCollection(context.Background(), 100) }()
+	select {
+	case err := <-dropDone:
+		t.Fatalf("drop crossed in-flight snapshot acquisition: %v", err)
+	default:
+	}
+	close(dataViews.release)
+	require.NoError(t, <-refDone)
+	require.NoError(t, <-dropDone)
+}
+
+func (m *testDataViewLifecycleDataViews) GarbageCollect(ctx context.Context, collectionID int64, retainLatest int) error {
+	return m.garbageCollectFn(ctx, collectionID, retainLatest)
 }
 
 func (m *testDataViewLifecycleDataViews) OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error) {
@@ -95,7 +153,7 @@ func newTestDataViewLifecycle(t *testing.T, catalog *testDataViewLifecycleCatalo
 func TestDataViewLifecycleRecoversTerminalMarker(t *testing.T) {
 	catalog := &testDataViewLifecycleCatalog{markerPresent: map[int64]struct{}{100: {}}}
 	dataViews := &testDataViewLifecycleDataViews{
-		garbageCollectFn: func(context.Context, int64, []*viewpb.DataVersion, int) error { return nil },
+		garbageCollectFn: func(context.Context, int64, int) error { return nil },
 		dropCollectionFn: func(context.Context, int64) (*viewpb.DataVersion, error) { return nil, nil },
 	}
 
@@ -108,7 +166,7 @@ func TestDataViewLifecycleRecoversTerminalMarker(t *testing.T) {
 func TestDataViewLifecycleDropIsTerminalAndMarkerFirst(t *testing.T) {
 	catalog := &testDataViewLifecycleCatalog{markerPresent: make(map[int64]struct{})}
 	dataViews := &testDataViewLifecycleDataViews{
-		garbageCollectFn: func(context.Context, int64, []*viewpb.DataVersion, int) error { return nil },
+		garbageCollectFn: func(context.Context, int64, int) error { return nil },
 		dropCollectionFn: func(_ context.Context, collectionID int64) (*viewpb.DataVersion, error) {
 			catalog.mu.Lock()
 			defer catalog.mu.Unlock()
@@ -133,10 +191,9 @@ func TestDataViewLifecycleGarbageCollectPreservesTask5Boundary(t *testing.T) {
 	catalog := &testDataViewLifecycleCatalog{markerPresent: make(map[int64]struct{})}
 	called := false
 	dataViews := &testDataViewLifecycleDataViews{
-		garbageCollectFn: func(_ context.Context, collectionID int64, protected []*viewpb.DataVersion, retainLatest int) error {
+		garbageCollectFn: func(_ context.Context, collectionID int64, retainLatest int) error {
 			called = true
 			require.Equal(t, int64(100), collectionID)
-			require.Nil(t, protected, "DataView manager owns ref accounting; Task 5 must not recreate caller pin bookkeeping")
 			require.Equal(t, 1, retainLatest)
 			return nil
 		},
@@ -157,7 +214,7 @@ func TestDataViewLifecycleGetRejectsRecoveredTerminalMarkerWithoutDelegate(t *te
 	catalog := &testDataViewLifecycleCatalog{markerPresent: map[int64]struct{}{100: {}}}
 	delegated := false
 	dataViews := &testDataViewLifecycleDataViews{
-		garbageCollectFn: func(context.Context, int64, []*viewpb.DataVersion, int) error { return nil },
+		garbageCollectFn: func(context.Context, int64, int) error { return nil },
 		dropCollectionFn: func(context.Context, int64) (*viewpb.DataVersion, error) { return nil, nil },
 		getFn: func(context.Context, int64, qviews.DataVersion) (dataview.DataViewRef, error) {
 			delegated = true
@@ -176,7 +233,7 @@ func TestDataViewLifecycleGetRejectsAbsentCollectionWithoutDelegate(t *testing.T
 	catalog := &testDataViewLifecycleCatalog{markerPresent: make(map[int64]struct{})}
 	delegated := false
 	dataViews := &testDataViewLifecycleDataViews{
-		garbageCollectFn: func(context.Context, int64, []*viewpb.DataVersion, int) error { return nil },
+		garbageCollectFn: func(context.Context, int64, int) error { return nil },
 		dropCollectionFn: func(context.Context, int64) (*viewpb.DataVersion, error) { return nil, nil },
 		getFn: func(context.Context, int64, qviews.DataVersion) (dataview.DataViewRef, error) {
 			delegated = true
@@ -195,7 +252,7 @@ func TestDataViewLifecycleGetDelegatesLiveCollection(t *testing.T) {
 	catalog := &testDataViewLifecycleCatalog{markerPresent: make(map[int64]struct{})}
 	expected := &testLifecycleDataViewRef{}
 	dataViews := &testDataViewLifecycleDataViews{
-		garbageCollectFn: func(context.Context, int64, []*viewpb.DataVersion, int) error { return nil },
+		garbageCollectFn: func(context.Context, int64, int) error { return nil },
 		dropCollectionFn: func(context.Context, int64) (*viewpb.DataVersion, error) { return nil, nil },
 		getFn: func(_ context.Context, collectionID int64, version qviews.DataVersion) (dataview.DataViewRef, error) {
 			require.Equal(t, int64(100), collectionID)
