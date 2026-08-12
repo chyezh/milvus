@@ -212,12 +212,10 @@ func (m *dataViewManager) DataViewSnapshotRefForCollections(
 	references := make([]DataViewRef, 0, len(states))
 	for _, state := range states {
 		state.mu.Lock()
-		if catalog, ok := m.catalog.(publishedDataViewCatalog); ok {
-			if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
-				state.mu.Unlock()
-				releaseDataViewRefs(references)
-				return nil, err
-			}
+		if err := m.recoverPublicationStateLocked(ctx, state, m.catalog); err != nil {
+			state.mu.Unlock()
+			releaseDataViewRefs(references)
+			return nil, err
 		}
 		if state.dropped || state.published == nil {
 			state.mu.Unlock()

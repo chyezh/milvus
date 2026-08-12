@@ -26,30 +26,11 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
-type flushVersionCatalog interface {
-	GetDataViewVersionState(ctx context.Context, collectionID int64) (*viewpb.CollectionDataVersionState, error)
-	SaveDataViewVersionState(ctx context.Context, state *viewpb.CollectionDataVersionState) error
-}
-
-type flushVersionSegmentStore interface {
-	SaveSealedAtDataVersion(ctx context.Context, segmentID int64, version *viewpb.DataVersion) error
-	ListAllSegmentsForVersionAllocation(ctx context.Context, collectionID int64) []*Segment
-}
-
 func (m *dataViewManager) AssignFlushVersion(
 	ctx context.Context,
 	collectionID int64,
 	segmentID int64,
 ) (*viewpb.DataVersion, error) {
-	catalog, ok := m.catalog.(flushVersionCatalog)
-	if !ok {
-		return nil, merr.WrapErrServiceNotReadyMsg("data view version catalog is not initialized")
-	}
-	segments, ok := m.segments.(flushVersionSegmentStore)
-	if !ok {
-		return nil, merr.WrapErrServiceNotReadyMsg("data view segment version store is not initialized")
-	}
-
 	state := m.getOrCreateState(collectionID)
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -70,7 +51,7 @@ func (m *dataViewManager) AssignFlushVersion(
 		)
 	}
 
-	if err := m.recoverFlushVersionStateLocked(ctx, state, catalog, segments); err != nil {
+	if err := m.recoverFlushVersionStateLocked(ctx, state, m.catalog, m.segments); err != nil {
 		return nil, err
 	}
 	if assigned := segment.GetSealedAtDataVersion(); assigned != nil {
@@ -83,7 +64,7 @@ func (m *dataViewManager) AssignFlushVersion(
 			)
 		}
 		if assigned.GetStreamingVersion() > state.persistedAllocated {
-			if err := m.saveAllocatedStreamingVersionLocked(ctx, state, catalog, assigned.GetStreamingVersion()); err != nil {
+			if err := m.saveAllocatedStreamingVersionLocked(ctx, state, m.catalog, assigned.GetStreamingVersion()); err != nil {
 				return nil, err
 			}
 		}
@@ -101,7 +82,7 @@ func (m *dataViewManager) AssignFlushVersion(
 	assigned := &viewpb.DataVersion{
 		StreamingVersion: state.versionState.GetAllocatedStreamingVersion() + 1,
 	}
-	if err := segments.SaveSealedAtDataVersion(ctx, segmentID, assigned); err != nil {
+	if err := m.segments.SaveSealedAtDataVersion(ctx, segmentID, assigned); err != nil {
 		return nil, flushVersionPersistenceError(
 			"persist sealed data version for segment",
 			err,
@@ -109,7 +90,7 @@ func (m *dataViewManager) AssignFlushVersion(
 	}
 	advanceAllocatedStreamingVersionLocked(state, assigned.GetStreamingVersion())
 	registerPendingAssignedEpochLocked(state, assigned)
-	if err := m.saveAllocatedStreamingVersionLocked(ctx, state, catalog, assigned.GetStreamingVersion()); err != nil {
+	if err := m.saveAllocatedStreamingVersionLocked(ctx, state, m.catalog, assigned.GetStreamingVersion()); err != nil {
 		return nil, err
 	}
 	return proto.Clone(assigned).(*viewpb.DataVersion), nil
@@ -118,8 +99,8 @@ func (m *dataViewManager) AssignFlushVersion(
 func (m *dataViewManager) recoverFlushVersionStateLocked(
 	ctx context.Context,
 	state *collectionDataViewState,
-	catalog flushVersionCatalog,
-	segments flushVersionSegmentStore,
+	catalog Catalog,
+	segments SegmentStore,
 ) error {
 	if state.versionStateRecovered {
 		return nil
@@ -188,7 +169,7 @@ func advanceAllocatedStreamingVersionLocked(state *collectionDataViewState, stre
 func (m *dataViewManager) saveAllocatedStreamingVersionLocked(
 	ctx context.Context,
 	state *collectionDataViewState,
-	catalog flushVersionCatalog,
+	catalog Catalog,
 	streamingVersion int64,
 ) error {
 	next := proto.Clone(state.versionState).(*viewpb.CollectionDataVersionState)

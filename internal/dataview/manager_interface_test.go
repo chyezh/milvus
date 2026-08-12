@@ -39,6 +39,29 @@ func TestDataViewCoreDoesNotDependOnBalancer(t *testing.T) {
 	}
 }
 
+func TestDataViewDependenciesRequireDurablePublicationAndFlushVersionState(t *testing.T) {
+	catalogType := reflect.TypeOf((*Catalog)(nil)).Elem()
+	for _, method := range []string{
+		"GetDataViewVersionState",
+		"SaveDataViewVersionState",
+		"SavePublishedDataView",
+	} {
+		_, ok := catalogType.MethodByName(method)
+		require.True(t, ok, "dataview.Catalog must require %s", method)
+	}
+	_, exposesBareSnapshotWrite := catalogType.MethodByName("SaveDataView")
+	require.False(t, exposesBareSnapshotWrite, "dataview.Catalog must not expose non-atomic snapshot publication")
+
+	segmentStoreType := reflect.TypeOf((*SegmentStore)(nil)).Elem()
+	for _, method := range []string{
+		"ListAllSegmentsForVersionAllocation",
+		"SaveSealedAtDataVersion",
+	} {
+		_, ok := segmentStoreType.MethodByName(method)
+		require.True(t, ok, "dataview.SegmentStore must require %s", method)
+	}
+}
+
 func TestManagerExposesStateOperationsInsteadOfLifecycleEvents(t *testing.T) {
 	managerType := reflect.TypeOf((*Manager)(nil)).Elem()
 

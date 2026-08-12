@@ -636,27 +636,19 @@ func (s *Server) initMeta(chunkManager storage.ChunkManager) error {
 	reloadEtcdFn := func() error {
 		var err error
 		catalog := datacoord.NewCatalog(s.kv, chunkManager.RootPath(), s.metaRootPath)
-		dataViewStore := &dataViewSegmentStore{}
-		type dataViewRecoveryResult struct {
-			manager DataViewManager
-			err     error
-		}
-		dataViewRecoveryCh := make(chan dataViewRecoveryResult, 1)
-		go func() {
-			manager, err := dataview.RecoverManager(s.ctx, catalog, dataViewStore)
-			dataViewRecoveryCh <- dataViewRecoveryResult{manager: manager, err: err}
-		}()
 		s.meta, err = newMeta(s.ctx, catalog, chunkManager, s.broker)
-		dataViewRecovery := <-dataViewRecoveryCh
 		if err != nil {
 			return err
 		}
 		s.meta.queryViewLoadInfoNotifier = s.queryViewLoadInfoNotifier
-		dataViewStore.meta = s.meta
-		if dataViewRecovery.err != nil {
-			return dataViewRecovery.err
+		s.dataViewManager, err = dataview.RecoverManager(
+			s.ctx,
+			catalog,
+			&dataViewSegmentStore{meta: s.meta},
+		)
+		if err != nil {
+			return err
 		}
-		s.dataViewManager = dataViewRecovery.manager
 		s.meta.dataViewManager = s.dataViewManager
 		if err := s.meta.reloadCollectionsFromRootcoord(s.ctx, s.broker); err != nil {
 			return err

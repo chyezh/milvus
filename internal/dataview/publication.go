@@ -28,12 +28,6 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
-type publishedDataViewCatalog interface {
-	GetDataViewVersionState(ctx context.Context, collectionID int64) (*viewpb.CollectionDataVersionState, error)
-	SavePublishedDataView(ctx context.Context, state *viewpb.CollectionDataVersionState, view *viewpb.DataViewOfCollection) error
-	ListDataViews(ctx context.Context, collectionID int64) ([]*viewpb.DataViewOfCollection, error)
-}
-
 // CommitPublishedView completes an explicitly assigned Streaming epoch. A
 // later ready epoch is retained but returns a retryable error until every
 // earlier assigned epoch has completed.
@@ -50,23 +44,19 @@ func (m *dataViewManager) CommitPublishedView(
 		return nil, err
 	}
 
-	catalog, ok := m.catalog.(publishedDataViewCatalog)
-	if !ok {
-		return nil, merr.WrapErrServiceNotReadyMsg("published data view catalog is not initialized")
-	}
 	state := m.getOrCreateState(collectionID)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	if state.dropped {
 		return nil, merr.WrapErrServiceNotReadyMsg("data view collection %d is terminal", collectionID)
 	}
-	if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
+	if err := m.recoverPublicationStateLocked(ctx, state, m.catalog); err != nil {
 		return nil, err
 	}
 
 	assignedStreaming := assignedVersion.GetStreamingVersion()
 	if published := state.versionState.GetPublishedDataVersion(); published.GetStreamingVersion() >= assignedStreaming {
-		if err := verifyDurableAssignedPublication(ctx, catalog, collectionID, assignedVersion, mutation); err != nil {
+		if err := verifyDurableAssignedPublication(ctx, m.catalog, collectionID, assignedVersion, mutation); err != nil {
 			return nil, err
 		}
 		return cloneDataVersion(assignedVersion), nil
@@ -80,7 +70,7 @@ func (m *dataViewManager) CommitPublishedView(
 	state.pendingAssigned[assignedStreaming] = struct{}{}
 	state.readyPublications[assignedStreaming] = clonePublishedMutation(mutation)
 
-	requestedPublished, err := m.drainReadyPublicationsLocked(ctx, state, catalog, assignedStreaming)
+	requestedPublished, err := m.drainReadyPublicationsLocked(ctx, state, m.catalog, assignedStreaming)
 	if err != nil {
 		return nil, err
 	}
@@ -110,23 +100,19 @@ func (m *dataViewManager) RetryAssignedFlushPublication(
 	if assignedVersion == nil || assignedVersion.GetStreamingVersion() <= 0 || assignedVersion.GetCompactVersion() != 0 {
 		return nil, merr.WrapErrServiceInternalMsg("invalid assigned DataVersion for collection %d", collectionID)
 	}
-	catalog, ok := m.catalog.(publishedDataViewCatalog)
-	if !ok {
-		return nil, merr.WrapErrServiceNotReadyMsg("published data view catalog is not initialized")
-	}
 	state := m.getOrCreateState(collectionID)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	if state.dropped {
 		return nil, merr.WrapErrServiceNotReadyMsg("data view collection %d is terminal", collectionID)
 	}
-	if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
+	if err := m.recoverPublicationStateLocked(ctx, state, m.catalog); err != nil {
 		return nil, err
 	}
 
 	assignedStreaming := assignedVersion.GetStreamingVersion()
 	if state.versionState.GetPublishedDataVersion().GetStreamingVersion() >= assignedStreaming {
-		if err := verifyDurableAssignedSnapshot(ctx, catalog, collectionID, assignedVersion); err != nil {
+		if err := verifyDurableAssignedSnapshot(ctx, m.catalog, collectionID, assignedVersion); err != nil {
 			return nil, err
 		}
 		return cloneDataVersion(assignedVersion), nil
@@ -148,7 +134,7 @@ func (m *dataViewManager) RetryAssignedFlushPublication(
 	}
 	state.pendingAssigned[assignedStreaming] = struct{}{}
 	state.readyPublications[assignedStreaming] = PublishedMutation{Remove: []int64{segmentID}}
-	requestedPublished, err := m.drainReadyPublicationsLocked(ctx, state, catalog, assignedStreaming)
+	requestedPublished, err := m.drainReadyPublicationsLocked(ctx, state, m.catalog, assignedStreaming)
 	if err != nil {
 		return nil, err
 	}
@@ -176,17 +162,13 @@ func (m *dataViewManager) CommitStreamingView(
 	if err := validatePublishedMutation(collectionID, mutation); err != nil {
 		return nil, err
 	}
-	catalog, ok := m.catalog.(publishedDataViewCatalog)
-	if !ok {
-		return nil, merr.WrapErrServiceNotReadyMsg("published data view catalog is not initialized")
-	}
 	state := m.getOrCreateState(collectionID)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	if state.dropped {
 		return nil, merr.WrapErrServiceNotReadyMsg("data view collection %d is terminal", collectionID)
 	}
-	if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
+	if err := m.recoverPublicationStateLocked(ctx, state, m.catalog); err != nil {
 		return nil, err
 	}
 
@@ -222,7 +204,7 @@ func (m *dataViewManager) CommitStreamingView(
 		nextStreaming = current.GetStreamingVersion()
 	}
 	next.DataVersion = &viewpb.DataVersion{StreamingVersion: nextStreaming + 1}
-	if err := m.persistPublishedLocked(ctx, state, catalog, next); err != nil {
+	if err := m.persistPublishedLocked(ctx, state, m.catalog, next); err != nil {
 		return nil, err
 	}
 	return dataVersionFromView(next), nil
@@ -238,20 +220,16 @@ func (m *dataViewManager) CommitRewrite(
 	if err := validatePublishedMutation(collectionID, mutation); err != nil {
 		return nil, err
 	}
-	catalog, ok := m.catalog.(publishedDataViewCatalog)
-	if !ok {
-		return nil, merr.WrapErrServiceNotReadyMsg("published data view catalog is not initialized")
-	}
 	state := m.getOrCreateState(collectionID)
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	if state.dropped {
 		return nil, merr.WrapErrServiceNotReadyMsg("data view collection %d is terminal", collectionID)
 	}
-	if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
+	if err := m.recoverPublicationStateLocked(ctx, state, m.catalog); err != nil {
 		return nil, err
 	}
-	return m.commitRewriteLocked(ctx, state, catalog, mutation)
+	return m.commitRewriteLocked(ctx, state, m.catalog, mutation)
 }
 
 // CommitSegmentTrim persists the scoped SegmentMeta removal fence before it
@@ -262,10 +240,6 @@ func (m *dataViewManager) CommitSegmentTrim(
 	resolveTargets SegmentTrimTargetResolver,
 	finalize SegmentTrimFinalize,
 ) (*viewpb.DataVersion, error) {
-	catalog, ok := m.catalog.(publishedDataViewCatalog)
-	if !ok {
-		return nil, merr.WrapErrServiceNotReadyMsg("published data view catalog is not initialized")
-	}
 	state := m.getOrCreateState(collectionID)
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -275,10 +249,10 @@ func (m *dataViewManager) CommitSegmentTrim(
 	if resolveTargets == nil {
 		return nil, merr.WrapErrServiceInternalMsg("target resolver is nil for DataView trim of collection %d", collectionID)
 	}
-	if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
+	if err := m.recoverPublicationStateLocked(ctx, state, m.catalog); err != nil {
 		return nil, err
 	}
-	if err := m.refreshDurablePublicationLocked(ctx, state, catalog); err != nil {
+	if err := m.refreshDurablePublicationLocked(ctx, state, m.catalog); err != nil {
 		return nil, err
 	}
 	targetIDs, err := resolveSegmentTrimTargetIDs(ctx, resolveTargets, collectionID)
@@ -328,7 +302,7 @@ func (m *dataViewManager) CommitSegmentTrim(
 		next := publishedMutationBase(collectionID, state.published)
 		applyPublishedMutation(next, state.readyPublications[streamingVersion])
 		next.DataVersion = &viewpb.DataVersion{StreamingVersion: streamingVersion}
-		if err := m.persistPublishedLocked(ctx, state, catalog, next); err != nil {
+		if err := m.persistPublishedLocked(ctx, state, m.catalog, next); err != nil {
 			return nil, err
 		}
 		delete(state.pendingAssigned, streamingVersion)
@@ -344,7 +318,7 @@ func (m *dataViewManager) CommitSegmentTrim(
 	if len(publishedTargets) == 0 {
 		return dataVersionFromView(state.published), nil
 	}
-	version, err := m.commitRewriteLocked(ctx, state, catalog, PublishedMutation{Remove: publishedTargets})
+	version, err := m.commitRewriteLocked(ctx, state, m.catalog, PublishedMutation{Remove: publishedTargets})
 	if err != nil {
 		return nil, err
 	}
@@ -454,7 +428,7 @@ type resolvedSegmentTrimTarget struct {
 func (m *dataViewManager) refreshDurablePublicationLocked(
 	ctx context.Context,
 	state *collectionDataViewState,
-	catalog publishedDataViewCatalog,
+	catalog Catalog,
 ) error {
 	durable, published, err := recoverPublishedDataView(ctx, catalog, state.collectionID)
 	if err != nil {
@@ -497,7 +471,7 @@ func (m *dataViewManager) refreshDurablePublicationLocked(
 func (m *dataViewManager) commitRewriteLocked(
 	ctx context.Context,
 	state *collectionDataViewState,
-	catalog publishedDataViewCatalog,
+	catalog Catalog,
 	mutation PublishedMutation,
 ) (*viewpb.DataVersion, error) {
 	next := publishedMutationBase(state.collectionID, state.published)
@@ -542,17 +516,13 @@ func validatePublishedMutation(collectionID int64, mutation PublishedMutation) e
 func (m *dataViewManager) recoverPublicationStateLocked(
 	ctx context.Context,
 	state *collectionDataViewState,
-	catalog publishedDataViewCatalog,
+	catalog Catalog,
 ) error {
 	if state.publicationRecovered {
 		return nil
 	}
-	if versionCatalog, ok := m.catalog.(flushVersionCatalog); ok {
-		if segmentStore, ok := m.segments.(flushVersionSegmentStore); ok {
-			if err := m.recoverFlushVersionStateLocked(ctx, state, versionCatalog, segmentStore); err != nil {
-				return err
-			}
-		}
+	if err := m.recoverFlushVersionStateLocked(ctx, state, m.catalog, m.segments); err != nil {
+		return err
 	}
 	recoveredAllocated := state.versionState.GetAllocatedStreamingVersion()
 	durable, published, err := recoverPublishedDataView(ctx, catalog, state.collectionID)
@@ -587,7 +557,7 @@ func (m *dataViewManager) recoverPublicationStateLocked(
 func (m *dataViewManager) drainReadyPublicationsLocked(
 	ctx context.Context,
 	state *collectionDataViewState,
-	catalog publishedDataViewCatalog,
+	catalog Catalog,
 	requestedStreaming int64,
 ) (bool, error) {
 	requestedPublished := false
@@ -624,7 +594,7 @@ func isAssignedRemoveOnlyCompletion(mutation PublishedMutation) bool {
 
 func verifyDurableAssignedPublication(
 	ctx context.Context,
-	catalog publishedDataViewCatalog,
+	catalog Catalog,
 	collectionID int64,
 	assignedVersion *viewpb.DataVersion,
 	mutation PublishedMutation,
@@ -692,7 +662,7 @@ func verifyDurableAssignedPublication(
 
 func verifyDurableAssignedSnapshot(
 	ctx context.Context,
-	catalog publishedDataViewCatalog,
+	catalog Catalog,
 	collectionID int64,
 	assignedVersion *viewpb.DataVersion,
 ) error {
@@ -735,7 +705,7 @@ func verifyDurableAssignedSnapshot(
 func (m *dataViewManager) persistPublishedLocked(
 	ctx context.Context,
 	state *collectionDataViewState,
-	catalog publishedDataViewCatalog,
+	catalog Catalog,
 	view *viewpb.DataViewOfCollection,
 ) error {
 	toPersist := cloneDataViewWithoutDeleteTimetick(view)

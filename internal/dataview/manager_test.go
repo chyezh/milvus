@@ -433,7 +433,7 @@ func TestDataViewManagerInitializeCollectionIsIdempotent(t *testing.T) {
 	require.Len(t, catalog.views, 1)
 }
 
-func TestDataViewManagerInitializeCollectionReusesPersistedView(t *testing.T) {
+func TestDataViewManagerInitializeCollectionRejectsSnapshotOnlyLegacyCollection(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, _ := newTestDataViewManager()
 	catalog.views = append(catalog.views, &viewpb.DataViewOfCollection{
@@ -447,15 +447,14 @@ func TestDataViewManagerInitializeCollectionReusesPersistedView(t *testing.T) {
 		VChannels:    []string{"ch-0"},
 	})
 
-	require.NoError(t, err)
-	requireDataVersion(t, version, 1, 0)
+	require.Error(t, err)
+	require.Nil(t, version)
 	require.Len(t, catalog.views, 1)
+	require.Nil(t, catalog.versionStates)
 
 	visible, err := testPublishedProto(ctx, manager, 1)
 	require.NoError(t, err)
-	require.NotNil(t, visible)
-	require.Len(t, visible.GetShards(), 1)
-	require.Equal(t, "ch-0", visible.GetShards()[0].GetVchannel())
+	require.Nil(t, visible)
 }
 
 func TestDataViewManagerInitializeCollectionDoesNotPublishOrphanSnapshot(t *testing.T) {
@@ -1087,6 +1086,11 @@ func TestRecoverManagerAllowsAllocatedStateWithoutPublishedHeadOrSnapshots(t *te
 	require.NoError(t, err)
 	_, err = manager.LatestPublished(ctx, 1)
 	requireUnavailableDataViewError(t, err)
+	version, err := manager.InitializeCollection(ctx, CollectionInitialization{CollectionID: 1, VChannels: []string{"ch-1"}})
+	require.Error(t, err)
+	require.Nil(t, version)
+	require.Empty(t, catalog.views)
+	require.Nil(t, catalog.versionStates[1].GetPublishedDataVersion())
 
 	state := manager.(*dataViewManager).getState(1)
 	require.NotNil(t, state)
@@ -1455,6 +1459,23 @@ func TestRecoverManagerBackfillsStateForSnapshotOnlyLegacyCollection(t *testing.
 	require.NoError(t, err)
 	t.Cleanup(ref.Deref)
 	require.Equal(t, []int64{100, 200, 300}, ref.DataView().SegmentIDs("ch-1", 10))
+}
+
+func TestRecoverManagerLegacyBackfillClassifiesRawPersistenceFailureAsRetryable(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
+		},
+		saveErrOnce: errors.New("metastore unavailable"),
+	}
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{
+		100: newDataViewTestSegment(1, 10, 100, "ch-1", 1000),
+	}}
+
+	_, err := RecoverManager(ctx, catalog, store)
+	require.Error(t, err)
+	require.True(t, merr.IsRetryableErr(err))
 }
 
 func TestRecoverManagerRepairPreservesAssignedStreamingEpochs(t *testing.T) {
