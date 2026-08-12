@@ -27,6 +27,23 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
+func (m *dataViewManager) LatestPublishedDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error) {
+	state := m.getState(collectionID)
+	if state == nil {
+		return nil, nil
+	}
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	if state.dropped || state.published == nil {
+		return nil, nil
+	}
+	return m.withDeleteTimetick(ctx, state.published), nil
+}
+
+func latestPublishedDataView(ctx context.Context, manager Manager, collectionID int64) (*viewpb.DataViewOfCollection, error) {
+	return manager.(*dataViewManager).LatestPublishedDataView(ctx, collectionID)
+}
+
 // The legacy helpers below keep old unit-test scenarios readable while the
 // production manager exposes only explicit publication operations.
 type FlushDataViewEvent struct {

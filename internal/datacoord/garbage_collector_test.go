@@ -201,14 +201,6 @@ func (m *fakeGCDataViewManager) LatestPublished(ctx context.Context, collectionI
 	return nil, merr.WrapErrServiceNotReadyMsg("fake data view references are not available")
 }
 
-func (m *fakeGCDataViewManager) LatestPublishedDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error) {
-	return nil, nil
-}
-
-func (m *fakeGCDataViewManager) DataView(ctx context.Context, collectionID int64, dataVersion *viewpb.DataVersion) (*viewpb.DataViewOfCollection, error) {
-	return nil, nil
-}
-
 func (m *fakeGCDataViewManager) Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewOfCollection, error) {
 	m.snapshotRequested = append([]int64(nil), collectionIDs...)
 	return m.snapshotViews, nil

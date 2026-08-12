@@ -1542,7 +1542,7 @@ func TestApplyExternalCollectionSegmentUpdateForBaseline_AddOnlyPublishesStreami
 	)
 	require.NoError(t, err)
 
-	view, err := manager.LatestPublishedDataView(ctx, collectionID)
+	view, err := latestPublishedDataView(ctx, manager, collectionID)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), view.GetDataVersion().GetStreamingVersion())
 	require.Zero(t, view.GetDataVersion().GetCompactVersion())

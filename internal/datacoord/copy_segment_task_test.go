@@ -820,7 +820,7 @@ func (s *CopySegmentTaskSuite) TestQueryTaskOnWorker_RawPublicationFailureRemain
 	s.Equal(datapb.CopySegmentTaskState_CopySegmentTaskCompleted, updatedTask.GetState())
 	s.Equal(datapb.CopySegmentJobState_CopySegmentJobExecuting,
 		copyMeta.GetJob(context.Background(), 100).GetState())
-	view, err := manager.LatestPublishedDataView(context.Background(), 100)
+	view, err := latestPublishedDataView(context.Background(), manager, 100)
 	s.NoError(err)
 	s.Equal(int64(2), view.GetDataVersion().GetStreamingVersion())
 	s.Equal([]int64{2001}, view.GetShards()[0].GetPartitions()[0].GetSegmentIds())
@@ -870,7 +870,7 @@ func (s *CopySegmentTaskSuite) TestQueryTaskOnWorker_PostRestartPublicationSnaps
 	s.Equal(datapb.CopySegmentTaskState_CopySegmentTaskCompleted, updatedTask.GetState())
 	s.Equal(datapb.CopySegmentJobState_CopySegmentJobExecuting,
 		copyMeta.GetJob(context.Background(), 100).GetState())
-	view, err := m.dataViewManager.LatestPublishedDataView(context.Background(), 100)
+	view, err := latestPublishedDataView(context.Background(), m.dataViewManager, 100)
 	s.NoError(err)
 	s.Equal(int64(2), view.GetDataVersion().GetStreamingVersion())
 	s.Equal([]int64{2001}, view.GetShards()[0].GetPartitions()[0].GetSegmentIds())
@@ -940,7 +940,7 @@ func (s *CopySegmentTaskSuite) TestSyncCopySegmentTask_AddOnlyPublishesStreaming
 	}, copyMeta, m)
 	s.NoError(err)
 
-	view, err := manager.LatestPublishedDataView(ctx, 100)
+	view, err := latestPublishedDataView(ctx, manager, 100)
 	s.NoError(err)
 	s.Equal(int64(2), view.GetDataVersion().GetStreamingVersion())
 	s.Zero(view.GetDataVersion().GetCompactVersion())

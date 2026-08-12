@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,6 +46,7 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/broadcast"
 	"github.com/milvus-io/milvus/internal/streamingcoord/server/broadcaster/registry"
 	"github.com/milvus-io/milvus/internal/types"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/kv"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
@@ -66,6 +68,38 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/tsoutil"
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
+
+type trackingDataViewManager struct {
+	DataViewManager
+	requestedCollectionID int64
+	requestedVersion      qviews.DataVersion
+	derefCount            int
+}
+
+func (m *trackingDataViewManager) Get(
+	ctx context.Context,
+	collectionID int64,
+	version qviews.DataVersion,
+) (dataview.DataViewRef, error) {
+	m.requestedCollectionID = collectionID
+	m.requestedVersion = version
+	ref, err := m.DataViewManager.Get(ctx, collectionID, version)
+	if err != nil {
+		return nil, err
+	}
+	return &trackingDataViewRef{DataViewRef: ref, onDeref: func() { m.derefCount++ }}, nil
+}
+
+type trackingDataViewRef struct {
+	dataview.DataViewRef
+	onDeref func()
+	once    sync.Once
+}
+
+func (r *trackingDataViewRef) Deref() {
+	r.DataViewRef.Deref()
+	r.once.Do(r.onDeref)
+}
 
 type ServerSuite struct {
 	suite.Suite
@@ -100,6 +134,137 @@ func (s *ServerSuite) TearDownTest() {
 
 func TestServerSuite(t *testing.T) {
 	suite.Run(t, new(ServerSuite))
+}
+
+func TestGetStreamingNodeQueryViewResourcesUsesExactDataViewRef(t *testing.T) {
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+
+	segments := []*SegmentInfo{
+		NewSegmentInfo(&datapb.SegmentInfo{
+			ID:             100,
+			CollectionID:   1,
+			PartitionID:    10,
+			InsertChannel:  "ch-1",
+			State:          commonpb.SegmentState_Flushed,
+			Level:          datapb.SegmentLevel_L1,
+			StorageVersion: 11,
+			ManifestPath:   "manifest-100",
+			Bm25Statslogs: []*datapb.FieldBinlog{{
+				FieldID: 101,
+			}},
+		}),
+		NewSegmentInfo(&datapb.SegmentInfo{
+			ID:             200,
+			CollectionID:   1,
+			PartitionID:    20,
+			InsertChannel:  "ch-1",
+			State:          commonpb.SegmentState_Flushed,
+			Level:          datapb.SegmentLevel_L1,
+			StorageVersion: 22,
+			ManifestPath:   "manifest-200",
+		}),
+		NewSegmentInfo(&datapb.SegmentInfo{
+			ID:            300,
+			CollectionID:  1,
+			PartitionID:   10,
+			InsertChannel: "ch-2",
+			State:         commonpb.SegmentState_Flushed,
+			Level:         datapb.SegmentLevel_L1,
+		}),
+	}
+	for _, segment := range segments {
+		require.NoError(t, meta.AddSegment(ctx, segment))
+	}
+
+	realManager := newDataViewManager(meta.catalog, meta)
+	_, err = realManager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{
+		CollectionID: 1,
+		VChannels:    []string{"ch-1", "ch-2"},
+	})
+	require.NoError(t, err)
+	version, err := realManager.CommitStreamingView(ctx, 1, PublishedMutation{Add: []SegmentMembership{
+		{SegmentID: 100, CollectionID: 1, VChannel: "ch-1", PartitionID: 10, State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1},
+		{SegmentID: 200, CollectionID: 1, VChannel: "ch-1", PartitionID: 20, State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1},
+		{SegmentID: 300, CollectionID: 1, VChannel: "ch-2", PartitionID: 10, State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1},
+	}})
+	require.NoError(t, err)
+
+	manager := &trackingDataViewManager{DataViewManager: realManager}
+	server := &Server{meta: meta, dataViewManager: manager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	resp, err := server.GetStreamingNodeQueryViewResources(ctx, &datapb.GetStreamingNodeQueryViewResourcesRequest{
+		CollectionId: 1,
+		Vchannel:     "ch-1",
+		DataVersion:  version,
+		PartitionIds: []int64{10},
+	})
+	require.NoError(t, err)
+	require.NoError(t, merr.Error(resp.GetStatus()))
+	require.Equal(t, int64(1), manager.requestedCollectionID)
+	require.Equal(t, qviews.FromProtoDataVersion(version), manager.requestedVersion)
+	require.Equal(t, 1, manager.derefCount)
+	require.Equal(t, []*datapb.StreamingNodeBM25Resource{{
+		SegmentId:      100,
+		PartitionId:    10,
+		Bm25Binlogs:    segments[0].GetBm25Statslogs(),
+		StorageVersion: 11,
+		ManifestPath:   "manifest-100",
+	}}, resp.GetBm25Resources())
+}
+
+func TestGetStreamingNodeQueryViewResourcesUnavailableDataView(t *testing.T) {
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	manager := newDataViewManager(meta.catalog, meta)
+	version, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-1"}})
+	require.NoError(t, err)
+	server := &Server{meta: meta, dataViewManager: manager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	t.Run("missing version", func(t *testing.T) {
+		resp, err := server.GetStreamingNodeQueryViewResources(ctx, &datapb.GetStreamingNodeQueryViewResourcesRequest{
+			CollectionId: 1,
+			Vchannel:     "ch-1",
+			DataVersion:  &viewpb.DataVersion{StreamingVersion: 99},
+		})
+		require.NoError(t, err)
+		require.Error(t, merr.Error(resp.GetStatus()))
+	})
+
+	t.Run("terminal collection", func(t *testing.T) {
+		_, err := manager.OnDropCollection(ctx, 1)
+		require.NoError(t, err)
+		resp, err := server.GetStreamingNodeQueryViewResources(ctx, &datapb.GetStreamingNodeQueryViewResourcesRequest{
+			CollectionId: 1,
+			Vchannel:     "ch-1",
+			DataVersion:  version,
+		})
+		require.NoError(t, err)
+		require.Error(t, merr.Error(resp.GetStatus()))
+	})
+}
+
+func TestGetStreamingNodeQueryViewResourcesRejectsMissingShard(t *testing.T) {
+	ctx := context.Background()
+	meta, err := newMemoryMeta(t)
+	require.NoError(t, err)
+	manager := newDataViewManager(meta.catalog, meta)
+	version, err := manager.OnCreateCollection(ctx, CreateCollectionDataViewEvent{CollectionID: 1, VChannels: []string{"ch-1"}})
+	require.NoError(t, err)
+	server := &Server{meta: meta, dataViewManager: manager}
+	server.stateCode.Store(commonpb.StateCode_Healthy)
+
+	resp, err := server.GetStreamingNodeQueryViewResources(ctx, &datapb.GetStreamingNodeQueryViewResourcesRequest{
+		CollectionId: 1,
+		Vchannel:     "ch-missing",
+		DataVersion:  version,
+	})
+	require.NoError(t, err)
+	require.Error(t, merr.Error(resp.GetStatus()))
 }
 
 func (s *ServerSuite) TestGetFlushState_ByFlushTs() {
@@ -598,7 +763,7 @@ func (s *ServerSuite) TestSaveBinlogPathsLostResponseRetryReturnsOriginalAssigne
 	s.Require().NoError(merr.Error(retried))
 	s.Require().Equal("1", retried.GetExtraInfo()[statusExtraInfoDataViewStreamingVersion])
 
-	latest, err := manager.LatestPublishedDataView(context.Background(), 1)
+	latest, err := latestPublishedDataView(context.Background(), manager, 1)
 	s.Require().NoError(err)
 	s.Require().Equal(int64(2), latest.GetDataVersion().GetStreamingVersion())
 }
@@ -3054,7 +3219,7 @@ func TestServer_NotifyDropPartitionCompletesTargetedAssignedEpochAfterRemovalFen
 	require.NoError(t, err)
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
 	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
-	visible, err := manager.LatestPublishedDataView(ctx, 1)
+	visible, err := latestPublishedDataView(ctx, manager, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible.GetShards())
 
@@ -3122,14 +3287,14 @@ func TestServer_DropSegmentsByTimeRemovalFenceSurvivesPublicationFailureAndResta
 	state, err := meta.catalog.GetDataViewVersionState(ctx, 1)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, state.GetPublishedDataVersion().GetStreamingVersion())
-	visible, err := restarted.LatestPublishedDataView(ctx, 1)
+	visible, err := latestPublishedDataView(ctx, restarted, 1)
 	require.NoError(t, err)
 	require.Empty(t, dataViewShardSegmentIDs(dataViewShard(visible, "ch-0"), nil))
 
 	server.dataViewManager = restarted
 	require.NoError(t, server.DropSegmentsByTime(ctx, 1, map[string]uint64{"ch-0": 1000}))
 	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
-	visible, err = restarted.LatestPublishedDataView(ctx, 1)
+	visible, err = latestPublishedDataView(ctx, restarted, 1)
 	require.NoError(t, err)
 	require.Empty(t, dataViewShardSegmentIDs(dataViewShard(visible, "ch-0"), nil))
 }
@@ -3154,13 +3319,13 @@ func TestServer_NotifyDropPartitionRemovalFenceKeepsPublishedViewUntilRetry(t *t
 	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
 	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
-	visible, err := manager.LatestPublishedDataView(ctx, 1)
+	visible, err := latestPublishedDataView(ctx, manager, 1)
 	require.NoError(t, err)
 	require.Equal(t, []int64{100}, visible.GetShards()[0].GetPartitions()[0].GetSegmentIds())
 
 	require.NoError(t, server.NotifyDropPartition(ctx, "ch-0", []int64{10}))
 	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 1)
-	visible, err = manager.LatestPublishedDataView(ctx, 1)
+	visible, err = latestPublishedDataView(ctx, manager, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible.GetShards())
 }
@@ -3231,7 +3396,7 @@ func TestServer_NotifyDropPartitionCompactRemovesAlreadyPublishedTarget(t *testi
 
 	require.NoError(t, err)
 	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 1)
-	visible, err := manager.LatestPublishedDataView(ctx, 1)
+	visible, err := latestPublishedDataView(ctx, manager, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible.GetShards())
 }
@@ -3257,7 +3422,7 @@ func TestServer_NotifyDropPartitionRefreshesDurableAssignedPublicationBeforeTrim
 
 	require.NoError(t, err)
 	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 1)
-	visible, err := manager.LatestPublishedDataView(ctx, 1)
+	visible, err := latestPublishedDataView(ctx, manager, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible.GetShards())
 }
@@ -3313,7 +3478,7 @@ func TestServer_NotifyDropPartitionRereadsAssignmentAfterAdapterSnapshot(t *test
 	require.NoError(t, <-trimDone)
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
 	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 0)
-	visible, err := realManager.LatestPublishedDataView(ctx, 1)
+	visible, err := latestPublishedDataView(ctx, realManager, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible.GetShards())
 	require.EqualValues(t, 2, assigned.GetStreamingVersion())
@@ -3422,7 +3587,7 @@ func TestServer_NotifyDropPartitionRefreshesTargetsAfterPreLockEnumeration(t *te
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 200).GetState())
 	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 2)
-	visible, err := realManager.LatestPublishedDataView(ctx, 1)
+	visible, err := latestPublishedDataView(ctx, realManager, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible.GetShards())
 }
@@ -3473,7 +3638,7 @@ func TestServer_DropSegmentsByTimeRefreshesTargetsAfterPreLockEnumeration(t *tes
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 200).GetState())
 	requireLatestPublishedDataViewVersion(t, meta, 1, 2, 2)
-	visible, err := realManager.LatestPublishedDataView(ctx, 1)
+	visible, err := latestPublishedDataView(ctx, realManager, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible.GetShards())
 }
@@ -3532,10 +3697,10 @@ func TestServer_NotifyDropPartitionDoesNotFinalizeLaterCollectionBeforeItsDataVi
 	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
 	require.Equal(t, commonpb.SegmentState_Flushed, meta.GetSegment(ctx, 200).GetState())
-	visible1, err := manager.LatestPublishedDataView(ctx, 1)
+	visible1, err := latestPublishedDataView(ctx, manager, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible1.GetShards())
-	visible2, err := manager.LatestPublishedDataView(ctx, 2)
+	visible2, err := latestPublishedDataView(ctx, manager, 2)
 	require.NoError(t, err)
 	require.Equal(t, []int64{200}, visible2.GetShards()[0].GetPartitions()[0].GetSegmentIds())
 }
@@ -3591,10 +3756,10 @@ func TestServer_DropSegmentsByTimeDoesNotFinalizeOtherCollection(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, commonpb.SegmentState_Dropped, meta.GetSegment(ctx, 100).GetState())
 	require.Equal(t, commonpb.SegmentState_Flushed, meta.GetSegment(ctx, 200).GetState())
-	visible1, err := manager.LatestPublishedDataView(ctx, 1)
+	visible1, err := latestPublishedDataView(ctx, manager, 1)
 	require.NoError(t, err)
 	require.Empty(t, visible1.GetShards())
-	visible2, err := manager.LatestPublishedDataView(ctx, 2)
+	visible2, err := latestPublishedDataView(ctx, manager, 2)
 	require.NoError(t, err)
 	require.Equal(t, []int64{200}, visible2.GetShards()[0].GetPartitions()[0].GetSegmentIds())
 }
@@ -7145,7 +7310,7 @@ func TestHandleCommitVchannelRPC_PublishesOnlyFinalSortedImportMembership(t *tes
 
 	require.NoError(t, err)
 	require.NoError(t, merr.Error(resp))
-	view, err := manager.LatestPublishedDataView(ctx, 100)
+	view, err := latestPublishedDataView(ctx, manager, 100)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), view.GetDataVersion().GetStreamingVersion())
 	require.Zero(t, view.GetDataVersion().GetCompactVersion())

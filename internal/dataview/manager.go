@@ -65,8 +65,6 @@ type Manager interface {
 
 	Get(ctx context.Context, collectionID int64, version qviews.DataVersion) (DataViewRef, error)
 	LatestPublished(ctx context.Context, collectionID int64) (DataViewRef, error)
-	DataView(ctx context.Context, collectionID int64, dataVersion *viewpb.DataVersion) (*viewpb.DataViewOfCollection, error)
-	LatestPublishedDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error)
 	Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewOfCollection, error)
 	DataViewSnapshot(ctx context.Context) *balancerapi.DataViewSnapshot
 	DataViewSnapshotForCollections(ctx context.Context, collectionIDs map[int64]struct{}) *balancerapi.DataViewSnapshot
@@ -512,20 +510,6 @@ func (m *dataViewManager) recoverCollectionFromDataViews(collectionID int64, per
 	state.published = canonicalDataViewClone(latestDataView(persistedViews))
 }
 
-func (m *dataViewManager) LatestPublishedDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error) {
-	state := m.getState(collectionID)
-	if state == nil {
-		return nil, nil
-	}
-	state.mu.RLock()
-	defer state.mu.RUnlock()
-
-	if state.dropped || state.published == nil {
-		return nil, nil
-	}
-	return m.withDeleteTimetick(ctx, state.published), nil
-}
-
 func (m *dataViewManager) Get(
 	ctx context.Context,
 	collectionID int64,
@@ -564,35 +548,6 @@ func (m *dataViewManager) LatestPublished(ctx context.Context, collectionID int6
 		return nil, unavailableLatestDataViewError(collectionID)
 	}
 	return newDataViewRef(state, newDataView(state.published)), nil
-}
-
-func (m *dataViewManager) DataView(ctx context.Context, collectionID int64, dataVersion *viewpb.DataVersion) (*viewpb.DataViewOfCollection, error) {
-	if dataVersion == nil {
-		return nil, nil
-	}
-	state := m.getOrCreateState(collectionID)
-	state.mu.RLock()
-	if state.dropped {
-		state.mu.RUnlock()
-		return nil, nil
-	}
-	if state.published != nil && compareDataVersion(state.published.GetDataVersion(), dataVersion) == 0 {
-		view := m.withDeleteTimetick(ctx, state.published)
-		state.mu.RUnlock()
-		return view, nil
-	}
-	state.mu.RUnlock()
-
-	views, err := m.catalog.ListDataViews(ctx, collectionID)
-	if err != nil {
-		return nil, err
-	}
-	for _, view := range views {
-		if compareDataVersion(view.GetDataVersion(), dataVersion) == 0 {
-			return m.withDeleteTimetick(ctx, view), nil
-		}
-	}
-	return nil, nil
 }
 
 func (m *dataViewManager) Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewOfCollection, error) {

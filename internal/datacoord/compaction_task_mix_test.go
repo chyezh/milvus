@@ -352,7 +352,7 @@ func (s *MixCompactionTaskSuite) TestProcessMetaSaved_DelayedSortDroppedOutputCo
 	s.Require().NoError(err)
 	s.EqualValues(3, state.GetPublishedDataVersion().GetStreamingVersion())
 	s.Zero(state.GetPublishedDataVersion().GetCompactVersion())
-	view, err := manager.LatestPublishedDataView(ctx, 1)
+	view, err := latestPublishedDataView(ctx, manager, 1)
 	s.Require().NoError(err)
 	s.Equal([]int64{50}, view.GetShards()[0].GetPartitions()[0].GetSegmentIds())
 
@@ -467,7 +467,7 @@ func (s *MixCompactionTaskSuite) TestMixCompactionWaitsForAssignedFlushPublicati
 	s.Require().True(ok)
 	restarted, err := dataview.RecoverManager(ctx, recoveryCatalog, &dataViewSegmentStore{meta: m})
 	s.Require().NoError(err)
-	visible, err := restarted.LatestPublishedDataView(ctx, 1)
+	visible, err := latestPublishedDataView(ctx, restarted, 1)
 	s.Require().NoError(err)
 	s.True(proto.Equal(&viewpb.DataVersion{StreamingVersion: 2, CompactVersion: 1}, visible.GetDataVersion()))
 	s.Equal([]int64{200}, visible.GetShards()[0].GetPartitions()[0].GetSegmentIds())

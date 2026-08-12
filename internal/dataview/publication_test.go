@@ -504,7 +504,7 @@ func TestPublicationCreateCollectionRecoversDurableHeadBeforeNewerOrphan(t *test
 
 	require.NoError(t, err)
 	requireDataVersion(t, version, 1, 0)
-	view, err := manager.LatestPublishedDataView(ctx, 1)
+	view, err := latestPublishedDataView(ctx, manager, 1)
 	require.NoError(t, err)
 	require.Equal(t, []int64{100}, publishedSegmentIDs(t, view, "ch-0", 10))
 }
@@ -531,7 +531,7 @@ func TestPublicationCreateCollectionBackfillsLegacySnapshotWhenDurableHeadIsMiss
 	require.NoError(t, err)
 	requireDataVersion(t, version, 2, 0)
 	requireDataVersion(t, catalog.versionStates[1].GetPublishedDataVersion(), 2, 0)
-	view, err := manager.LatestPublishedDataView(ctx, 1)
+	view, err := latestPublishedDataView(ctx, manager, 1)
 	require.NoError(t, err)
 	require.Equal(t, []int64{100, 200}, publishedSegmentIDs(t, view, "ch-0", 10))
 }

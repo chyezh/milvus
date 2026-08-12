@@ -43,6 +43,7 @@ import (
 	"github.com/milvus-io/milvus/internal/util/importutilv2"
 	"github.com/milvus-io/milvus/internal/util/segmentutil"
 	"github.com/milvus-io/milvus/internal/util/streamingutil"
+	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/common"
 	"github.com/milvus-io/milvus/pkg/v3/metrics"
 	"github.com/milvus-io/milvus/pkg/v3/mlog"
@@ -1267,13 +1268,14 @@ func (s *Server) GetStreamingNodeQueryViewResources(ctx context.Context, req *da
 		resp.Status = merr.Status(merr.WrapErrServiceInternalMsg("data view manager is nil"))
 		return resp, nil
 	}
-	dataView, err := s.dataViewManager.DataView(ctx, req.GetCollectionId(), req.GetDataVersion())
+	ref, err := s.dataViewManager.Get(ctx, req.GetCollectionId(), qviews.FromProtoDataVersion(req.GetDataVersion()))
 	if err != nil {
 		resp.Status = merr.Status(err)
 		return resp, nil
 	}
-	shard := dataViewShard(dataView, req.GetVchannel())
-	if shard == nil {
+	defer ref.Deref()
+	dataView := ref.DataView()
+	if !dataView.HasVChannel(req.GetVchannel()) {
 		resp.Status = merr.Status(merr.WrapErrServiceInternalMsg(
 			"data view shard not found, collectionID=%d, vchannel=%s, dataVersion=(%d,%d)",
 			req.GetCollectionId(),
@@ -1283,8 +1285,7 @@ func (s *Server) GetStreamingNodeQueryViewResources(ctx context.Context, req *da
 		))
 		return resp, nil
 	}
-
-	segmentIDs := dataViewShardSegmentIDs(shard, req.GetPartitionIds())
+	segmentIDs := dataView.SegmentIDsForVChannel(req.GetVchannel(), req.GetPartitionIds())
 	if len(segmentIDs) == 0 {
 		return resp, nil
 	}
