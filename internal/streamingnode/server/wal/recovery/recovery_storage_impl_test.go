@@ -29,7 +29,7 @@ func (m *testRecoveryModule) Name() moduleapi.ModuleName {
 	return moduleapi.ModuleName("test")
 }
 
-func (m *testRecoveryModule) ObserveMessage(context.Context, message.ImmutableMessage) {}
+func (m *testRecoveryModule) ObserveMessage(context.Context, message.OwnedImmutableMessage) {}
 
 func (m *testRecoveryModule) SwitchIntoMetaAndData() moduleapi.ModuleSnapshot {
 	return m.snapshot

@@ -3,6 +3,8 @@ package message
 import (
 	"sync"
 	"sync/atomic"
+
+	"google.golang.org/protobuf/proto"
 )
 
 type refCountedImmutableMessageCore struct {
@@ -15,12 +17,12 @@ type refCountedImmutableMessageCore struct {
 	finalizer     func()
 }
 
-// NewRefCountedImmutableMessageOwner takes ownership of msg and creates its
-// unique root reference.
-func NewRefCountedImmutableMessageOwner(
+// NewOwnedImmutableMessage takes ownership of msg and creates its unique root
+// reference.
+func NewOwnedImmutableMessage(
 	msg ImmutableMessage,
 	finalizer func(),
-) RefCountedImmutableMessageOwner {
+) OwnedImmutableMessage {
 	if msg == nil {
 		panic("ref-counted immutable message is nil")
 	}
@@ -29,7 +31,7 @@ func NewRefCountedImmutableMessageOwner(
 		refCount:  1,
 		finalizer: finalizer,
 	}
-	return &refCountedImmutableMessageOwner{core: core}
+	return &ownedImmutableMessage{core: core}
 }
 
 func (c *refCountedImmutableMessageCore) loadMessage() ImmutableMessage {
@@ -111,25 +113,25 @@ func (c *refCountedImmutableMessageCore) finishFinalization(finalizer func(), fi
 	}
 }
 
-type refCountedImmutableMessageOwner struct {
+type ownedImmutableMessage struct {
 	core *refCountedImmutableMessageCore
 }
 
-func (m *refCountedImmutableMessageOwner) Message() ImmutableMessage {
+func (m *ownedImmutableMessage) Message() ImmutableMessage {
 	if m.core == nil {
 		panic("ref-counted immutable message owner accessed after release")
 	}
 	return m.core.loadMessage()
 }
 
-func (m *refCountedImmutableMessageOwner) Clone() RetainedImmutableMessage {
+func (m *ownedImmutableMessage) Clone() RetainedImmutableMessage {
 	if m.core == nil {
 		panic("ref-counted immutable message owner cloned after release")
 	}
 	return m.core.ownerClone()
 }
 
-func (m *refCountedImmutableMessageOwner) Release() {
+func (m *ownedImmutableMessage) Release() {
 	if m.core != nil {
 		m.core.releaseOwner()
 		m.core = nil
@@ -162,61 +164,51 @@ func (m *retainedImmutableMessage) loadCore() *refCountedImmutableMessageCore {
 	return core
 }
 
-// OwnedMessage combines a specialized immutable message with the root owner
-// that protects it during synchronous dispatch.
-type OwnedMessage[T ImmutableMessage] struct {
+type ownedImmutable[T ImmutableMessage] struct {
 	message T
-	owner   RefCountedImmutableMessageOwner
+	owner   OwnedImmutableMessage
 }
 
-func NewOwnedMessage[T ImmutableMessage](owner RefCountedImmutableMessageOwner, msg T) OwnedMessage[T] {
-	return OwnedMessage[T]{message: msg, owner: owner}
+func newOwnedImmutable[T ImmutableMessage](owner OwnedImmutableMessage, msg T) OwnedImmutable[T] {
+	return &ownedImmutable[T]{message: msg, owner: owner}
 }
 
-func (m OwnedMessage[T]) Message() T {
-	if m.owner != nil {
-		_ = m.owner.Message()
-	}
+func (m *ownedImmutable[T]) Message() T {
+	_ = m.owner.Message()
 	return m.message
 }
 
-func (m OwnedMessage[T]) Clone() RetainedMessage[T] {
-	return RetainedMessage[T]{message: m.message, retained: m.owner.Clone()}
+func (m *ownedImmutable[T]) Clone() RetainedImmutable[T] {
+	return newRetainedImmutable(m.message, m.owner.Clone())
 }
 
-func (m OwnedMessage[T]) CloneHandle() RetainedImmutableMessage {
+func (m *ownedImmutable[T]) CloneHandle() RetainedImmutableMessage {
 	return m.owner.Clone()
 }
 
-func (m OwnedMessage[T]) Untyped() OwnedMessage[ImmutableMessage] {
-	return OwnedMessage[ImmutableMessage]{message: m.message, owner: m.owner}
+func (m *ownedImmutable[T]) Untyped() OwnedImmutable[ImmutableMessage] {
+	return newOwnedImmutable[ImmutableMessage](m.owner, m.message)
 }
 
-// RetainedMessage combines typed access with one independently releasable
-// reference. The typed message remains valid until Release.
-type RetainedMessage[T ImmutableMessage] struct {
+type retainedImmutable[T ImmutableMessage] struct {
 	message  T
 	retained RetainedImmutableMessage
 }
 
-func (m RetainedMessage[T]) Message() T {
+func newRetainedImmutable[T ImmutableMessage](msg T, retained RetainedImmutableMessage) RetainedImmutable[T] {
+	return &retainedImmutable[T]{message: msg, retained: retained}
+}
+
+func (m *retainedImmutable[T]) Message() T {
 	_ = m.retained.Message()
 	return m.message
 }
 
-func (m RetainedMessage[T]) Clone() RetainedMessage[T] {
-	return RetainedMessage[T]{message: m.message, retained: m.retained.Clone()}
+func (m *retainedImmutable[T]) Clone() RetainedImmutable[T] {
+	return newRetainedImmutable(m.message, m.retained.Clone())
 }
 
-func (m RetainedMessage[T]) Untyped() RetainedMessage[ImmutableMessage] {
-	return RetainedMessage[ImmutableMessage]{message: m.message, retained: m.retained}
-}
-
-func (m RetainedMessage[T]) Handle() RetainedImmutableMessage {
-	return m.retained
-}
-
-func (m *RetainedMessage[T]) Release() {
+func (m *retainedImmutable[T]) Release() {
 	if m.retained != nil {
 		m.retained.Release()
 		m.retained = nil
@@ -225,7 +217,33 @@ func (m *RetainedMessage[T]) Release() {
 	}
 }
 
+// MustAsSpecializedOwnedImmutableMessage converts the message protected by
+// owner to a typed immutable message and binds both values in one owned view.
+func MustAsSpecializedOwnedImmutableMessage[H proto.Message, B proto.Message](
+	owner OwnedImmutableMessage,
+) SpecializedOwnedImmutableMessage[H, B] {
+	msg := MustAsSpecializedImmutableMessage[H, B](owner.Message())
+	return newOwnedImmutable(owner, msg)
+}
+
+// MustAsOwnedImmutableMessage binds owner to its underlying immutable message.
+func MustAsOwnedImmutableMessage(owner OwnedImmutableMessage) OwnedImmutable[ImmutableMessage] {
+	return newOwnedImmutable(owner, owner.Message())
+}
+
+// MustAsOwnedImmutableTxnMessage binds owner to its transaction message.
+// The transaction and all of its child messages share one lifetime.
+func MustAsOwnedImmutableTxnMessage(owner OwnedImmutableMessage) OwnedImmutable[ImmutableTxnMessage] {
+	txn := AsImmutableTxnMessage(owner.Message())
+	if txn == nil {
+		panic("failed to parse immutable transaction message")
+	}
+	return newOwnedImmutable(owner, txn)
+}
+
 var (
-	_ RefCountedImmutableMessageOwner = (*refCountedImmutableMessageOwner)(nil)
-	_ RetainedImmutableMessage        = (*retainedImmutableMessage)(nil)
+	_ OwnedImmutableMessage               = (*ownedImmutableMessage)(nil)
+	_ RetainedImmutableMessage            = (*retainedImmutableMessage)(nil)
+	_ OwnedImmutable[ImmutableMessage]    = (*ownedImmutable[ImmutableMessage])(nil)
+	_ RetainedImmutable[ImmutableMessage] = (*retainedImmutable[ImmutableMessage])(nil)
 )

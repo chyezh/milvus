@@ -8,7 +8,7 @@ import (
 )
 
 type testMessageObserver interface {
-	ObserveDataMessage(context.Context, message.RefCountedImmutableMessageOwner)
+	ObserveMessage(context.Context, message.OwnedImmutableMessage)
 }
 
 func observeTestMessage(
@@ -18,8 +18,8 @@ func observeTestMessage(
 	raw message.ImmutableMessage,
 ) message.ImmutableMessage {
 	t.Helper()
-	owner := message.NewRefCountedImmutableMessageOwner(raw, nil)
-	observer.ObserveDataMessage(ctx, owner)
+	owner := message.NewOwnedImmutableMessage(raw, nil)
+	observer.ObserveMessage(ctx, owner)
 	owner.Release()
 	return raw
 }

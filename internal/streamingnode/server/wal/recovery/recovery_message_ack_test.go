@@ -22,6 +22,7 @@ import (
 )
 
 type retainingRecoveryModule struct {
+	owner   message.OwnedImmutableMessage
 	message message.ImmutableMessage
 	handle  message.RetainedImmutableMessage
 }
@@ -30,12 +31,11 @@ func (m *retainingRecoveryModule) Name() moduleapi.ModuleName {
 	return moduleapi.ModuleName("retaining-test")
 }
 
-func (m *retainingRecoveryModule) ObserveMessage(_ context.Context, _ message.ImmutableMessage) {}
-
-func (m *retainingRecoveryModule) ObserveDataMessage(
+func (m *retainingRecoveryModule) ObserveMessage(
 	_ context.Context,
-	owner message.RefCountedImmutableMessageOwner,
+	owner message.OwnedImmutableMessage,
 ) {
+	m.owner = owner
 	m.message = owner.Message()
 	m.handle = owner.Clone()
 }
@@ -73,6 +73,7 @@ func TestDataScannerReleasesOwnerAfterAllModulesObserve(t *testing.T) {
 
 	require.NotNil(t, module.message)
 	require.NotNil(t, module.handle)
+	assert.Panics(t, func() { module.owner.Message() })
 	assert.Equal(t, msg.TimeTick(), module.handle.Message().TimeTick())
 	point := storage.ackTracker.CompletedPoint()
 	assert.Equal(t, uint64(10), point.TimeTick)
@@ -132,7 +133,7 @@ func TestBroadcastDataMessageCompletesAfterConsumersAndCoordinatorAck(t *testing
 	assert.Equal(t, msg.TimeTick(), completed.TimeTick)
 }
 
-func TestMetaScannerUsesOrdinaryImmutableMessage(t *testing.T) {
+func TestMetaScannerOwnerIsNotTracked(t *testing.T) {
 	checkpoint := &utility.WALCheckpoint{
 		MessageID: walimplstest.NewTestMessageID(1),
 		TimeTick:  10,
@@ -155,11 +156,14 @@ func TestMetaScannerUsesOrdinaryImmutableMessage(t *testing.T) {
 
 	storage.observeMetaScannerMessage(context.Background(), msg)
 
-	assert.Nil(t, module.message)
-	assert.Nil(t, module.handle)
+	require.NotNil(t, module.message)
+	require.NotNil(t, module.handle)
+	assert.Equal(t, msg.TimeTick(), module.handle.Message().TimeTick())
 	assert.True(t, msg.LastConfirmedMessageID().EQ(storage.checkpoint.MessageID))
 	assert.Equal(t, msg.TimeTick(), storage.checkpoint.TimeTick)
 	assert.Equal(t, uint64(10), storage.ackTracker.CompletedPoint().TimeTick)
+	assert.Zero(t, storage.ackTracker.Pending())
+	module.handle.Release()
 }
 
 func TestDataScannerReplayDoesNotRegressMetaCheckpoint(t *testing.T) {

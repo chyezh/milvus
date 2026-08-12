@@ -191,9 +191,9 @@ type ImmutableMessage interface {
 	IntoBroadcastMutableMessage() BroadcastMutableMessage
 }
 
-// RefCountedImmutableMessageOwner owns the root reference to one immutable
-// message. Clone creates independently releasable references for consumers.
-type RefCountedImmutableMessageOwner interface {
+// OwnedImmutableMessage owns the root reference to one immutable message.
+// Clone creates independently releasable references for consumers.
+type OwnedImmutableMessage interface {
 	Message() ImmutableMessage
 	Clone() RetainedImmutableMessage
 	Release()
@@ -203,6 +203,23 @@ type RefCountedImmutableMessageOwner interface {
 type RetainedImmutableMessage interface {
 	Message() ImmutableMessage
 	Clone() RetainedImmutableMessage
+	Release()
+}
+
+// OwnedImmutable combines a typed immutable message with the root owner that
+// protects it during synchronous dispatch.
+type OwnedImmutable[T ImmutableMessage] interface {
+	Message() T
+	Clone() RetainedImmutable[T]
+	CloneHandle() RetainedImmutableMessage
+	Untyped() OwnedImmutable[ImmutableMessage]
+}
+
+// RetainedImmutable combines typed access with one independently releasable
+// reference. The typed message remains valid until Release.
+type RetainedImmutable[T ImmutableMessage] interface {
+	Message() T
+	Clone() RetainedImmutable[T]
 	Release()
 }
 
@@ -287,4 +304,14 @@ type SpecializedImmutableMessage[H proto.Message, B proto.Message] interface {
 
 	// MustBody return the message body, panic if error occurs.
 	MustBody() B
+}
+
+// SpecializedOwnedImmutableMessage is the owned form of a specialized immutable message.
+type SpecializedOwnedImmutableMessage[H proto.Message, B proto.Message] interface {
+	OwnedImmutable[SpecializedImmutableMessage[H, B]]
+}
+
+// SpecializedRetainedImmutableMessage is the retained form of a specialized immutable message.
+type SpecializedRetainedImmutableMessage[H proto.Message, B proto.Message] interface {
+	RetainedImmutable[SpecializedImmutableMessage[H, B]]
 }

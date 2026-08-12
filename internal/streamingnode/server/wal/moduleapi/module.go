@@ -13,19 +13,15 @@ import (
 
 type Module interface {
 	Name() ModuleName
-	ObserveMessage(ctx context.Context, msg message.ImmutableMessage)
+	// ObserveMessage receives the message owner for both Meta-only and
+	// MetaAndData replay. Meta-only owners are not tracked by RecoveryStorage.
+	// Implementations must clone the owner synchronously for asynchronous work.
+	ObserveMessage(ctx context.Context, owner message.OwnedImmutableMessage)
 	SwitchIntoMetaAndData() ModuleSnapshot
 	// ConsumeDirtySnapshots captures module-local dirty views as stable
 	// snapshots for RecoveryStorage-owned catalog persistence. It does not
 	// return an error because it only snapshots in-memory state.
 	ConsumeDirtySnapshots() []DirtySnapshot
-}
-
-// DataMessageObserver receives the single data-scanner owner. Implementations
-// must clone it synchronously for every asynchronous consumer they create.
-// The owner is released by the final RecoveryStorage sink.
-type DataMessageObserver interface {
-	ObserveDataMessage(ctx context.Context, owner message.RefCountedImmutableMessageOwner)
 }
 
 type CleanupContext struct {

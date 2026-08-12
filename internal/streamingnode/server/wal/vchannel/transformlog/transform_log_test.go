@@ -14,7 +14,6 @@ import (
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal"
 	"github.com/milvus-io/milvus/internal/streamingnode/server/wal/moduleapi"
 	"github.com/milvus-io/milvus/pkg/v3/proto/streamingpb"
-	"github.com/milvus-io/milvus/pkg/v3/streaming/util/message"
 	"github.com/milvus-io/milvus/pkg/v3/util/nodescheduler"
 )
 
@@ -59,12 +58,12 @@ func TestObserveMessageOwnsAppendFlushAndMaterializeScheduling(t *testing.T) {
 
 	deleteOwner := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
 	deleteProbe := deleteOwner.Clone()
-	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(deleteOwner, deleteOwner.Message()))
+	transformLog.ObserveMessage(context.Background(), deleteOwner)
 	assert.Empty(t, scheduler.tasks)
 
 	flushOwner := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
 	flushProbe := flushOwner.Clone()
-	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(flushOwner, flushOwner.Message()))
+	transformLog.ObserveMessage(context.Background(), flushOwner)
 	require.Len(t, scheduler.tasks, 2)
 	assert.IsType(t, &transformFlushTask{}, scheduler.tasks[0])
 	assert.IsType(t, &transformMaterializeTask{}, scheduler.tasks[1])
@@ -86,7 +85,7 @@ func TestEmptyBarrierDoesNotCreateDirtySnapshot(t *testing.T) {
 
 	owner := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
 	probe := owner.Clone()
-	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(owner, owner.Message()))
+	transformLog.ObserveMessage(context.Background(), owner)
 	owner.Release()
 	assert.NotPanics(t, func() { _ = probe.Message() })
 	probe.Release()

@@ -32,7 +32,7 @@ func TestTransformLogFailedChunkWriteRetainsMessageRef(t *testing.T) {
 	owner := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
 	probe := owner.Clone()
 
-	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(owner, owner.Message()))
+	transformLog.ObserveMessage(context.Background(), owner)
 	owner.Release()
 	require.Len(t, scheduler.tasks, 1)
 
@@ -56,7 +56,7 @@ func TestTransformLogDoesNotCloneUnrelatedMessage(t *testing.T) {
 	base := newRefCountedTransformMessage(raw)
 	owner := &countingTransformOwner{owner: base}
 
-	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(owner, raw))
+	transformLog.ObserveMessage(context.Background(), owner)
 	owner.Release()
 
 	assert.Zero(t, owner.cloneCount)
@@ -77,9 +77,9 @@ func TestTransformLogBarrierRefCompletesWithoutMaterialization(t *testing.T) {
 	deleteMessage := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
 	barrierMessage := newRefCountedTransformMessage(newTransformLogTestManualFlushMessage(t, 20))
 
-	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(deleteMessage, deleteMessage.Message()))
+	transformLog.ObserveMessage(context.Background(), deleteMessage)
 	deleteMessage.Release()
-	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(barrierMessage, barrierMessage.Message()))
+	transformLog.ObserveMessage(context.Background(), barrierMessage)
 	barrierMessage.Release()
 	require.Len(t, scheduler.tasks, 2)
 	assert.IsType(t, &transformFlushTask{}, scheduler.tasks[0])
@@ -107,11 +107,11 @@ func TestTransformLogMultiChunkFlushReleasesRefsByDurablePrefix(t *testing.T) {
 	secondProbe := second.Clone()
 	barrierProbe := barrier.Clone()
 
-	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(first, first.Message()))
+	transformLog.ObserveMessage(context.Background(), first)
 	first.Release()
-	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(second, second.Message()))
+	transformLog.ObserveMessage(context.Background(), second)
 	second.Release()
-	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(barrier, barrier.Message()))
+	transformLog.ObserveMessage(context.Background(), barrier)
 	barrier.Release()
 	require.GreaterOrEqual(t, len(scheduler.tasks), 3)
 
@@ -145,7 +145,7 @@ func TestTransformLogRegistersBarrierRefBeforeConcurrentFlushCommit(t *testing.T
 	})
 	transformLog.SwitchIntoMetaAndData()
 	deleteMessage := newRefCountedTransformMessage(newTransformLogTestDeleteMessage(t, 10))
-	transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage(deleteMessage, deleteMessage.Message()))
+	transformLog.ObserveMessage(context.Background(), deleteMessage)
 	deleteMessage.Release()
 
 	type flushOutcome struct {
@@ -167,7 +167,7 @@ func TestTransformLogRegistersBarrierRefBeforeConcurrentFlushCommit(t *testing.T
 	}
 	observeDone := make(chan struct{})
 	go func() {
-		transformLog.ObserveDataMessage(context.Background(), message.NewOwnedMessage[message.ImmutableMessage](barrierMessage, barrierMessage.Message()))
+		transformLog.ObserveMessage(context.Background(), barrierMessage)
 		close(observeDone)
 	}()
 	<-barrierMessage.retainStarted
@@ -201,7 +201,7 @@ type failingTransformLogStore struct {
 }
 
 type blockingMessageOwner struct {
-	owner         message.RefCountedImmutableMessageOwner
+	owner         message.OwnedImmutableMessage
 	retainStarted chan struct{}
 	releaseRetain chan struct{}
 }
@@ -220,12 +220,12 @@ func (m *blockingMessageOwner) Release() {
 	m.owner.Release()
 }
 
-func newRefCountedTransformMessage(raw message.ImmutableMessage) message.RefCountedImmutableMessageOwner {
-	return message.NewRefCountedImmutableMessageOwner(raw, nil)
+func newRefCountedTransformMessage(raw message.ImmutableMessage) message.OwnedImmutableMessage {
+	return message.NewOwnedImmutableMessage(raw, nil)
 }
 
 type countingTransformOwner struct {
-	owner      message.RefCountedImmutableMessageOwner
+	owner      message.OwnedImmutableMessage
 	cloneCount int
 }
 

@@ -22,6 +22,8 @@ func NewMessageTypeWithVersion(t MessageType, v Version) MessageTypeWithVersion 
 // GetSerializeType returns the specialized message type for the given message type and version.
 func GetSerializeType(mv MessageTypeWithVersion) (MessageSpecializedType, bool) {
 	if mv.Version == VersionOld {
+		// There's some old messages that is coming from old arch of msgstream.
+		// We need to convert them to versionV1 to find the specialized type.
 		mv.Version = VersionV1
 	}
 	typ, ok := messageTypeVersionSpecializedMap[mv]

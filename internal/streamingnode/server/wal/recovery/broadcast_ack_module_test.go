@@ -148,7 +148,7 @@ func TestBroadcastAckKeepsFIFOUntilQueueHeadSucceeds(t *testing.T) {
 }
 
 type releaseOnlyMessageOwner struct {
-	owner    message.RefCountedImmutableMessageOwner
+	owner    message.OwnedImmutableMessage
 	released bool
 }
 

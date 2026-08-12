@@ -386,7 +386,7 @@ func consumePointReached(current, point utility.WALConsumeCheckpoint) bool {
 // observeMessage observes a message and update the recovery storage.
 func (r *recoveryStorageImpl) observeMessage(ctx context.Context, msg message.ImmutableMessage) {
 	owner, tracked := r.ackTracker.Track(msg)
-	r.observeDataModulesMessage(ctx, owner)
+	r.observeModulesMessage(ctx, owner)
 	r.updateCheckpoint(owner.Message())
 	// BroadcastAck is the final owner-release sink. It does not inspect or retain
 	// the owner; broadcast acknowledgement is coordinated through the tracker.
@@ -400,7 +400,9 @@ func (r *recoveryStorageImpl) observeMessage(ctx context.Context, msg message.Im
 }
 
 func (r *recoveryStorageImpl) observeMetaOnlyMessage(ctx context.Context, msg message.ImmutableMessage) {
-	r.observeModulesMessage(ctx, msg)
+	owner := message.NewOwnedImmutableMessage(msg, nil)
+	r.observeModulesMessage(ctx, owner)
+	owner.Release()
 	r.updateCheckpoint(msg)
 	r.metrics.ObServeInMemMetrics(r.checkpoint.TimeTick)
 
@@ -422,28 +424,15 @@ func (r *recoveryStorageImpl) observeDataScannerMessage(ctx context.Context, msg
 	r.observeMessage(ctx, msg)
 }
 
-func (r *recoveryStorageImpl) observeModulesMessage(ctx context.Context, msg message.ImmutableMessage) {
-	if len(r.modules) == 0 {
-		panic("recovery modules are not initialized")
-	}
-	for _, module := range r.modules {
-		module.ObserveMessage(ctx, msg)
-	}
-}
-
-func (r *recoveryStorageImpl) observeDataModulesMessage(
+func (r *recoveryStorageImpl) observeModulesMessage(
 	ctx context.Context,
-	owner message.RefCountedImmutableMessageOwner,
+	owner message.OwnedImmutableMessage,
 ) {
 	if len(r.modules) == 0 {
 		panic("recovery modules are not initialized")
 	}
 	for _, module := range r.modules {
-		if observer, ok := module.(moduleapi.DataMessageObserver); ok {
-			observer.ObserveDataMessage(ctx, owner)
-			continue
-		}
-		module.ObserveMessage(ctx, owner.Message())
+		module.ObserveMessage(ctx, owner)
 	}
 }
 

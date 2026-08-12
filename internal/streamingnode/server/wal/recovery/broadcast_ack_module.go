@@ -31,7 +31,7 @@ func newBroadcastAckModule(runtime moduleapi.Runtime) *broadcastAckModule {
 }
 
 func (m *broadcastAckModule) Accept(
-	owner message.RefCountedImmutableMessageOwner,
+	owner message.OwnedImmutableMessage,
 	tracked *messageack.TrackedMessage,
 ) {
 	owner.Release()

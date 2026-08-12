@@ -12,11 +12,11 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 )
 
-func TestRefCountedImmutableMessageOwnerCloneAndFinalize(t *testing.T) {
+func TestOwnedImmutableMessageCloneAndFinalize(t *testing.T) {
 	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))
 	var finalizerCalls atomic.Int32
-	owner := NewRefCountedImmutableMessageOwner(raw, func() {
+	owner := NewOwnedImmutableMessage(raw, func() {
 		finalizerCalls.Add(1)
 	})
 
@@ -40,10 +40,10 @@ func TestRefCountedImmutableMessageOwnerCloneAndFinalize(t *testing.T) {
 	first.Release()
 }
 
-func TestRefCountedImmutableMessageOwnerReleaseDoesNotInvalidateClones(t *testing.T) {
+func TestOwnedImmutableMessageReleaseDoesNotInvalidateClones(t *testing.T) {
 	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))
-	owner := NewRefCountedImmutableMessageOwner(raw, nil)
+	owner := NewOwnedImmutableMessage(raw, nil)
 	clone := owner.Clone()
 
 	owner.Release()
@@ -52,11 +52,11 @@ func TestRefCountedImmutableMessageOwnerReleaseDoesNotInvalidateClones(t *testin
 	clone.Release()
 }
 
-func TestRefCountedImmutableMessageOwnerWithoutConsumers(t *testing.T) {
+func TestOwnedImmutableMessageWithoutConsumers(t *testing.T) {
 	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))
 	var finalized atomic.Bool
-	owner := NewRefCountedImmutableMessageOwner(raw, func() {
+	owner := NewOwnedImmutableMessage(raw, func() {
 		finalized.Store(true)
 	})
 
@@ -68,7 +68,7 @@ func TestRetainedImmutableMessageConcurrentReleaseFinalizesOnce(t *testing.T) {
 	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))
 	var finalizerCalls atomic.Int32
-	owner := NewRefCountedImmutableMessageOwner(raw, func() {
+	owner := NewOwnedImmutableMessage(raw, func() {
 		finalizerCalls.Add(1)
 	})
 	handles := make([]RetainedImmutableMessage, 64)
@@ -89,7 +89,7 @@ func TestRetainedImmutableMessageConcurrentReleaseFinalizesOnce(t *testing.T) {
 func TestRetainedImmutableMessageCloneIsIndependent(t *testing.T) {
 	raw := CreateTestInsertMessage(t, 100, 2, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))
-	owner := NewRefCountedImmutableMessageOwner(raw, nil)
+	owner := NewOwnedImmutableMessage(raw, nil)
 	first := owner.Clone()
 	second := first.Clone()
 
@@ -99,12 +99,12 @@ func TestRetainedImmutableMessageCloneIsIndependent(t *testing.T) {
 	owner.Release()
 }
 
-func TestRetainedMessageDoesNotExposeMessageAfterRelease(t *testing.T) {
+func TestRetainedImmutableDoesNotExposeMessageAfterRelease(t *testing.T) {
 	raw := CreateTestInsertMessage(t, 100, 2, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))
-	owner := NewRefCountedImmutableMessageOwner(raw, nil)
+	owner := NewOwnedImmutableMessage(raw, nil)
 	retained := owner.Clone()
-	typed := RetainedMessage[ImmutableMessage]{message: raw, retained: retained}
+	typed := newRetainedImmutable[ImmutableMessage](raw, retained)
 
 	typed.Release()
 	assert.Panics(t, func() { _ = typed.Message() })
@@ -113,7 +113,7 @@ func TestRetainedMessageDoesNotExposeMessageAfterRelease(t *testing.T) {
 
 func TestRetainedTxnKeepsWholeTransactionAlive(t *testing.T) {
 	txn := buildRefCountedTestTxn(t)
-	owner := NewRefCountedImmutableMessageOwner(txn, nil)
+	owner := NewOwnedImmutableMessage(txn, nil)
 	retained := owner.Clone()
 
 	retainedTxn := AsImmutableTxnMessage(retained.Message())
@@ -128,10 +128,32 @@ func TestRetainedTxnKeepsWholeTransactionAlive(t *testing.T) {
 	owner.Release()
 }
 
+func TestMustAsOwnedImmutableInsertMessageV1(t *testing.T) {
+	raw := CreateTestInsertMessage(t, 100, 2, 20, testMessageID("10")).
+		IntoImmutableMessage(testMessageID("11"))
+	owner := NewOwnedImmutableMessage(raw, nil)
+	owned := MustAsOwnedImmutableInsertMessageV1(owner)
+
+	assert.Equal(t, raw.MessageID(), owned.Message().MessageID())
+	retained := owned.Clone()
+	assert.Equal(t, raw.MessageID(), retained.Message().MessageID())
+	retained.Release()
+	owner.Release()
+}
+
+func TestMustAsOwnedImmutableInsertMessageV1RejectsMismatchedOwner(t *testing.T) {
+	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
+		IntoImmutableMessage(testMessageID("11"))
+	owner := NewOwnedImmutableMessage(raw, nil)
+
+	assert.Panics(t, func() { MustAsOwnedImmutableInsertMessageV1(owner) })
+	owner.Release()
+}
+
 func TestCloneImmutableMessageCanOutliveOwner(t *testing.T) {
 	raw := CreateTestInsertMessage(t, 100, 2, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))
-	owner := NewRefCountedImmutableMessageOwner(raw, nil)
+	owner := NewOwnedImmutableMessage(raw, nil)
 	cloned := CloneImmutableMessage(owner.Message())
 	owner.Release()
 

@@ -38,7 +38,7 @@ func NewTracker(initial utility.WALConsumeCheckpoint, onAdvance func(utility.WAL
 	}
 }
 
-func (t *Tracker) Track(raw message.ImmutableMessage) (message.RefCountedImmutableMessageOwner, *TrackedMessage) {
+func (t *Tracker) Track(raw message.ImmutableMessage) (message.OwnedImmutableMessage, *TrackedMessage) {
 	entry := &trackedEntry{
 		point: utility.WALConsumeCheckpoint{
 			MessageID: raw.LastConfirmedMessageID(),
@@ -49,7 +49,7 @@ func (t *Tracker) Track(raw message.ImmutableMessage) (message.RefCountedImmutab
 		broadcastAckRequired:  raw.BroadcastHeader() != nil,
 		broadcastAckCompleted: raw.BroadcastHeader() == nil,
 	}
-	owner := message.NewRefCountedImmutableMessageOwner(raw, func() {
+	owner := message.NewOwnedImmutableMessage(raw, func() {
 		t.completeConsumers(entry)
 	})
 
