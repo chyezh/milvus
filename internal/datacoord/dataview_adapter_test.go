@@ -287,45 +287,6 @@ func TestDataViewSegmentStoreGetSegmentsMapsBatch(t *testing.T) {
 	require.Equal(t, int64(11), segments[1].GetNumOfRows())
 }
 
-func TestDataViewRecoveryUsesCollectionPartitions(t *testing.T) {
-	ctx := context.Background()
-	m, err := newMemoryMeta(t)
-	require.NoError(t, err)
-	m.AddCollection(&collectionInfo{
-		ID:         1,
-		Partitions: []int64{10},
-	})
-	require.NoError(t, m.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
-		ID:            100,
-		CollectionID:  1,
-		PartitionID:   10,
-		InsertChannel: "ch-1",
-		State:         commonpb.SegmentState_Flushed,
-		Level:         datapb.SegmentLevel_L1,
-		DmlPosition:   &msgpb.MsgPosition{ChannelName: "ch-1", Timestamp: 1000},
-	})))
-	require.NoError(t, m.AddSegment(ctx, NewSegmentInfo(&datapb.SegmentInfo{
-		ID:            101,
-		CollectionID:  1,
-		PartitionID:   11,
-		InsertChannel: "ch-1",
-		State:         commonpb.SegmentState_Flushed,
-		Level:         datapb.SegmentLevel_L1,
-		DmlPosition:   &msgpb.MsgPosition{ChannelName: "ch-1", Timestamp: 1000},
-	})))
-	manager := newDataViewManager(m.catalog, m)
-
-	require.NoError(t, manager.RepairCollection(ctx, 1))
-	view, err := manager.LatestVisibleDataView(ctx, 1)
-
-	require.NoError(t, err)
-	require.NotNil(t, view)
-	require.Len(t, view.GetShards(), 1)
-	require.Len(t, view.GetShards()[0].GetPartitions(), 1)
-	require.Equal(t, int64(10), view.GetShards()[0].GetPartitions()[0].GetPartitionId())
-	require.Equal(t, []int64{100}, view.GetShards()[0].GetPartitions()[0].GetSegmentIds())
-}
-
 func TestFlushVersionRecoveryIncludesSegmentsOutsideCurrentPartitions(t *testing.T) {
 	ctx := context.Background()
 	m, err := newMemoryMeta(t)

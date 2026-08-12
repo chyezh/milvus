@@ -1002,131 +1002,6 @@ func TestDataViewManagerExternalRefreshClassifiesActualMembershipChange(t *testi
 	require.Equal(t, int64(1), catalog.views[2].GetDataVersion().GetCompactVersion())
 }
 
-func TestDataViewManagerRecoverPersistsEmptyViewWhenLatestHadMembership(t *testing.T) {
-	ctx := context.Background()
-	manager, catalog, _ := newTestDataViewManager()
-	catalog.views = append(catalog.views, &viewpb.DataViewOfCollection{
-		CollectionId: 1,
-		DataVersion:  &viewpb.DataVersion{StreamingVersion: 2, CompactVersion: 3},
-		Shards: []*viewpb.DataViewOfShard{
-			{
-				Vchannel: "ch-1",
-				Partitions: []*viewpb.DataViewOfPartition{
-					{PartitionId: 10, SegmentIds: []int64{100}},
-				},
-			},
-		},
-	})
-
-	require.NoError(t, manager.RepairCollection(ctx, 1))
-	require.Len(t, catalog.views, 2)
-	require.Equal(t, int64(2), catalog.views[1].GetDataVersion().GetStreamingVersion())
-	require.Equal(t, int64(4), catalog.views[1].GetDataVersion().GetCompactVersion())
-	require.Empty(t, catalog.views[1].GetShards())
-
-	visible, err := manager.LatestVisibleDataView(ctx, 1)
-	require.NoError(t, err)
-	require.NotNil(t, visible)
-	require.Empty(t, visible.GetShards())
-}
-
-func TestDataViewManagerRecoverCompactsFailedPublicationIntoOneView(t *testing.T) {
-	ctx := context.Background()
-	manager, catalog, store := newTestDataViewManager()
-	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
-	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
-	catalog.saveErrOnce = errors.New("dataview persistence failed")
-
-	_, err := manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})
-	require.Error(t, err)
-	require.Empty(t, catalog.views)
-
-	require.NoError(t, manager.RepairCollection(ctx, 1))
-	require.Len(t, catalog.views, 1)
-	require.Equal(t, int64(1), catalog.views[0].GetDataVersion().GetStreamingVersion())
-	require.Equal(t, int64(0), catalog.views[0].GetDataVersion().GetCompactVersion())
-	require.Equal(t, []int64{100, 101}, catalog.views[0].GetShards()[0].GetPartitions()[0].GetSegmentIds())
-
-	visible, err := manager.LatestVisibleDataView(ctx, 1)
-	require.NoError(t, err)
-	require.NotNil(t, visible)
-	require.Equal(t, []int64{100, 101}, visible.GetShards()[0].GetPartitions()[0].GetSegmentIds())
-}
-
-func TestDataViewManagerRecoverDoesNotReaddHistoricallyRemovedSegments(t *testing.T) {
-	ctx := context.Background()
-	manager, catalog, store := newTestDataViewManager()
-	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
-	store.segments[101] = newDataViewTestSegment(1, 11, 101, "ch-1", 1100)
-	catalog.views = append(
-		catalog.views,
-		&viewpb.DataViewOfCollection{
-			CollectionId: 1,
-			DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0},
-			Shards: []*viewpb.DataViewOfShard{
-				{
-					Vchannel: "ch-1",
-					Partitions: []*viewpb.DataViewOfPartition{
-						{PartitionId: 10, SegmentIds: []int64{100}},
-						{PartitionId: 11, SegmentIds: []int64{101}},
-					},
-				},
-			},
-		},
-		&viewpb.DataViewOfCollection{
-			CollectionId: 1,
-			DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 1},
-			Shards: []*viewpb.DataViewOfShard{
-				{
-					Vchannel: "ch-1",
-					Partitions: []*viewpb.DataViewOfPartition{
-						{PartitionId: 11, SegmentIds: []int64{101}},
-					},
-				},
-			},
-		},
-	)
-
-	require.NoError(t, manager.RepairCollection(ctx, 1))
-	require.Len(t, catalog.views, 2)
-
-	visible, err := manager.LatestVisibleDataView(ctx, 1)
-	require.NoError(t, err)
-	require.NotNil(t, visible)
-	require.Equal(t, int64(1), visible.GetDataVersion().GetStreamingVersion())
-	require.Equal(t, int64(1), visible.GetDataVersion().GetCompactVersion())
-	require.Equal(t, []int64{101}, visible.GetShards()[0].GetPartitions()[0].GetSegmentIds())
-}
-
-func TestDataViewManagerRepairCollectionsUsesCatalogDataViews(t *testing.T) {
-	ctx := context.Background()
-	manager, catalog, store := newTestDataViewManager()
-	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
-	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
-	store.segments[200] = newDataViewTestSegment(2, 20, 200, "ch-2", 2000)
-
-	catalog.views = append(
-		catalog.views,
-		newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
-		newTestDataView(2, 1, 0, newTestDataViewShard("ch-2", 20, 200)),
-	)
-
-	require.NoError(t, manager.RepairCollections(ctx, []int64{1}))
-	require.Equal(t, 1, catalog.listCalls)
-	require.Len(t, catalog.views, 3)
-	require.Equal(t, int64(1), catalog.views[2].GetCollectionId())
-	require.Equal(t, int64(2), catalog.views[2].GetDataVersion().GetStreamingVersion())
-
-	visible1, err := manager.LatestVisibleDataView(ctx, 1)
-	require.NoError(t, err)
-	require.NotNil(t, visible1)
-	require.Equal(t, []int64{100, 101}, visible1.GetShards()[0].GetPartitions()[0].GetSegmentIds())
-
-	visible2, err := manager.LatestVisibleDataView(ctx, 2)
-	require.NoError(t, err)
-	require.Nil(t, visible2)
-}
-
 func TestRecoverManagerLoadsAllDataViewsWithoutSegmentMetaRepair(t *testing.T) {
 	ctx := context.Background()
 	catalog := &fakeDataViewCatalog{
@@ -1135,7 +1010,10 @@ func TestRecoverManagerLoadsAllDataViewsWithoutSegmentMetaRepair(t *testing.T) {
 			newTestDataView(2, 2, 1, newTestDataViewShard("ch-2", 20, 200)),
 		},
 	}
-	store := &fakeDataViewSegmentStore{segments: make(map[int64]*Segment)}
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{
+		100: newDataViewTestSegment(1, 10, 100, "ch-1", 1000),
+		200: newDataViewTestSegment(1, 10, 200, "ch-1", 2000),
+	}}
 
 	manager, err := RecoverManager(ctx, catalog, store)
 
@@ -1166,7 +1044,10 @@ func TestRecoverManagerUsesDurablePublishedHeadInsteadOfNewerOrphan(t *testing.T
 			},
 		},
 	}
-	store := &fakeDataViewSegmentStore{segments: make(map[int64]*Segment)}
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{
+		100: newDataViewTestSegment(1, 10, 100, "ch-1", 1000),
+		200: newDataViewTestSegment(1, 10, 200, "ch-1", 2000),
+	}}
 
 	manager, err := RecoverManager(ctx, catalog, store)
 	require.NoError(t, err)
@@ -1203,8 +1084,6 @@ func TestRecoverManagerRepairDoesNotAdoptNewerOrphanThanDurableHead(t *testing.T
 
 	manager, err := RecoverManager(ctx, catalog, store)
 	require.NoError(t, err)
-	require.NoError(t, manager.RepairCollections(ctx, []int64{1}))
-
 	ref, err := manager.LatestPublished(ctx, 1)
 	require.NoError(t, err)
 	t.Cleanup(ref.Deref)
@@ -1217,6 +1096,247 @@ func TestRecoverManagerRepairDoesNotAdoptNewerOrphanThanDurableHead(t *testing.T
 	require.Equal(t, []int64{100}, publishedSegmentIDs(t, visible, "ch-1", 10))
 	requireDataVersion(t, catalog.versionStates[1].GetPublishedDataVersion(), 1, 0)
 	require.Len(t, catalog.views, 2)
+}
+
+func TestRecoverManagerDoesNotInferMembershipFromSegmentMeta(t *testing.T) {
+	ctx := context.Background()
+	head := newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100))
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{head},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 1,
+				PublishedDataVersion:      &viewpb.DataVersion{StreamingVersion: 1},
+			},
+		},
+	}
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{
+		100: newDataViewTestSegment(1, 10, 100, "ch-1", 1000),
+		// SegmentMeta may be ahead of the published DataView. Generic recovery
+		// repair must not infer a new membership or allocate a version.
+		101: newDataViewTestSegment(1, 10, 101, "ch-1", 1100),
+	}}
+
+	manager, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+	require.Len(t, catalog.views, 1)
+	ref, err := manager.LatestPublished(ctx, 1)
+	require.NoError(t, err)
+	t.Cleanup(ref.Deref)
+	require.Equal(t, []int64{100}, ref.DataView().SegmentIDs("ch-1", 10))
+}
+
+func TestRecoverManagerLegacyMigrationSkipsUnavailableLatestSnapshot(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
+			newTestDataView(1, 2, 0, newTestDataViewShard("ch-1", 10, 100, 101)),
+		},
+	}
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{
+		100: newDataViewTestSegment(1, 10, 100, "ch-1", 1000),
+		101: func() *Segment {
+			segment := newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
+			segment.IsInvisible = true
+			return segment
+		}(),
+	}}
+
+	manager, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+	ref, err := manager.LatestPublished(ctx, 1)
+	require.NoError(t, err)
+	t.Cleanup(ref.Deref)
+	requireDataVersion(t, ref.DataView().Version().IntoProto(), 1, 0)
+	require.Equal(t, []int64{100}, ref.DataView().SegmentIDs("ch-1", 10))
+	state, err := catalog.GetDataViewVersionState(ctx, 1)
+	require.NoError(t, err)
+	requireDataVersion(t, state.GetPublishedDataVersion(), 1, 0)
+}
+
+func TestRecoverManagerLegacyMigrationRejectsWithoutLoadableCandidate(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 2, 0, newTestDataViewShard("ch-1", 10, 101)),
+		},
+	}
+	segment := newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
+	segment.IsInvisible = true
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{101: segment}}
+
+	_, err := RecoverManager(ctx, catalog, store)
+	require.ErrorIs(t, err, merr.ErrDataIntegrity)
+	require.Nil(t, catalog.versionStates)
+}
+
+func TestRecoverManagerLegacyMigrationAllowsDroppedRetainedMember(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
+			newTestDataView(1, 2, 0, newTestDataViewShard("ch-1", 10, 100, 101)),
+		},
+	}
+	old := newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
+	old.State = commonpb.SegmentState_Dropped
+	newSegment := newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{100: old, 101: newSegment}}
+
+	manager, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+	ref, err := manager.LatestPublished(ctx, 1)
+	require.NoError(t, err)
+	t.Cleanup(ref.Deref)
+	requireDataVersion(t, ref.DataView().Version().IntoProto(), 2, 0)
+	require.Equal(t, []int64{100, 101}, ref.DataView().SegmentIDs("ch-1", 10))
+}
+
+func TestRecoverManagerLegacyMigrationDoesNotCarryInvalidIntermediateMembership(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
+			newTestDataView(1, 2, 0, newTestDataViewShard("ch-1", 10, 100, 101)),
+			newTestDataView(1, 3, 0, newTestDataViewShard("ch-1", 10, 100, 101, 102)),
+		},
+	}
+	newSegment := newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
+	invalid := newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
+	invalid.IsInvisible = true
+	latest := newDataViewTestSegment(1, 10, 102, "ch-1", 1200)
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{100: newSegment, 101: invalid, 102: latest}}
+
+	manager, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+	ref, err := manager.LatestPublished(ctx, 1)
+	require.NoError(t, err)
+	t.Cleanup(ref.Deref)
+	requireDataVersion(t, ref.DataView().Version().IntoProto(), 1, 0)
+	require.Equal(t, []int64{100}, ref.DataView().SegmentIDs("ch-1", 10))
+}
+
+func TestRecoverManagerRetainsMembershipFromEveryDurableSnapshot(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
+			newTestDataView(1, 2, 0, newTestDataViewShard("ch-1", 10, 200)),
+		},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 2,
+				PublishedDataVersion:      &viewpb.DataVersion{StreamingVersion: 2},
+			},
+		},
+	}
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{
+		100: newDataViewTestSegment(1, 10, 100, "ch-1", 1000),
+		200: newDataViewTestSegment(1, 10, 200, "ch-1", 2000),
+	}}
+
+	manager, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+	referenced, err := manager.IsSegmentReferenced(ctx, 1, 100)
+	require.NoError(t, err)
+	require.True(t, referenced)
+}
+
+func TestDataViewManagerGarbageCollectKeepsDurablePublishedHeadAndDropsNewerOrphan(t *testing.T) {
+	ctx := context.Background()
+	head := newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100))
+	orphan := newTestDataView(1, 2, 0, newTestDataViewShard("ch-1", 10, 200))
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{head, orphan},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 2,
+				PublishedDataVersion:      &viewpb.DataVersion{StreamingVersion: 1},
+			},
+		},
+	}
+	store := &fakeDataViewSegmentStore{segments: make(map[int64]*Segment)}
+
+	manager, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+	require.NoError(t, manager.GarbageCollect(ctx, 1, 1))
+
+	views, err := catalog.ListDataViews(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, views, 1)
+	requireDataVersion(t, views[0].GetDataVersion(), 1, 0)
+	referenced, err := manager.IsSegmentReferenced(ctx, 1, 100)
+	require.NoError(t, err)
+	require.True(t, referenced)
+	referenced, err = manager.IsSegmentReferenced(ctx, 1, 200)
+	require.NoError(t, err)
+	require.False(t, referenced)
+
+	restarted, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+	ref, err := restarted.LatestPublished(ctx, 1)
+	require.NoError(t, err)
+	t.Cleanup(ref.Deref)
+	requireDataVersion(t, ref.DataView().Version().IntoProto(), 1, 0)
+	require.Equal(t, []int64{100}, ref.DataView().SegmentIDs("ch-1", 10))
+}
+
+func TestDataViewManagerGarbageCollectRejectsMissingDurablePublishedHead(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 2, 0, newTestDataViewShard("ch-1", 10, 200)),
+		},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:         1,
+				PublishedDataVersion: &viewpb.DataVersion{StreamingVersion: 1},
+			},
+		},
+	}
+	manager := NewManager(catalog, &fakeDataViewSegmentStore{segments: make(map[int64]*Segment)})
+
+	err := manager.GarbageCollect(ctx, 1, 1)
+	require.ErrorIs(t, err, merr.ErrDataIntegrity)
+	views, listErr := catalog.ListDataViews(ctx, 1)
+	require.NoError(t, listErr)
+	require.Len(t, views, 1, "GC must not delete snapshots when the durable head is missing")
+}
+
+func TestRecoverManagerLegacyMigrationRejectsNonFlushedFirstSnapshot(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
+		},
+	}
+	segment := newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
+	segment.State = commonpb.SegmentState_Sealed
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{100: segment}}
+
+	_, err := RecoverManager(ctx, catalog, store)
+	require.ErrorIs(t, err, merr.ErrDataIntegrity)
+	require.Nil(t, catalog.versionStates)
+}
+
+func TestRecoverManagerLegacyMigrationRejectsDroppedFirstSnapshot(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
+		},
+	}
+	segment := newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
+	segment.State = commonpb.SegmentState_Dropped
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{100: segment}}
+
+	_, err := RecoverManager(ctx, catalog, store)
+	require.ErrorIs(t, err, merr.ErrDataIntegrity)
+	require.Nil(t, catalog.versionStates)
 }
 
 func TestRecoverManagerBackfillsDurableHeadForLegacySnapshots(t *testing.T) {
@@ -1233,7 +1353,10 @@ func TestRecoverManagerBackfillsDurableHeadForLegacySnapshots(t *testing.T) {
 			},
 		},
 	}
-	store := &fakeDataViewSegmentStore{segments: make(map[int64]*Segment)}
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{
+		100: newDataViewTestSegment(1, 10, 100, "ch-1", 1000),
+		200: newDataViewTestSegment(1, 10, 200, "ch-1", 2000),
+	}}
 
 	manager, err := RecoverManager(ctx, catalog, store)
 	require.NoError(t, err)
@@ -1256,7 +1379,10 @@ func TestRecoverManagerBackfillsStateForSnapshotOnlyLegacyCollection(t *testing.
 			newTestDataView(1, 2, 0, newTestDataViewShard("ch-1", 10, 100, 200)),
 		},
 	}
-	store := &fakeDataViewSegmentStore{segments: make(map[int64]*Segment)}
+	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{
+		100: newDataViewTestSegment(1, 10, 100, "ch-1", 1000),
+		200: newDataViewTestSegment(1, 10, 200, "ch-1", 2000),
+	}}
 
 	manager, err := RecoverManager(ctx, catalog, store)
 	require.NoError(t, err)
@@ -1273,71 +1399,6 @@ func TestRecoverManagerBackfillsStateForSnapshotOnlyLegacyCollection(t *testing.
 	require.NoError(t, err)
 	t.Cleanup(ref.Deref)
 	require.Equal(t, []int64{100, 200, 300}, ref.DataView().SegmentIDs("ch-1", 10))
-}
-
-func TestDataViewManagerRepairCollectionsAlignsSegmentMetaAfterRecover(t *testing.T) {
-	ctx := context.Background()
-	catalog := &fakeDataViewCatalog{
-		views: []*viewpb.DataViewOfCollection{
-			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
-		},
-	}
-	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{
-		100: newDataViewTestSegment(1, 10, 100, "ch-1", 1000),
-		101: newDataViewTestSegment(1, 10, 101, "ch-1", 1100),
-	}}
-	manager, err := RecoverManager(ctx, catalog, store)
-	require.NoError(t, err)
-
-	require.NoError(t, manager.RepairCollections(ctx, []int64{1}))
-
-	require.Zero(t, catalog.listCalls)
-	require.Len(t, catalog.views, 2)
-	require.Equal(t, int64(2), catalog.views[1].GetDataVersion().GetStreamingVersion())
-	visible, err := manager.LatestVisibleDataView(ctx, 1)
-	require.NoError(t, err)
-	require.NotNil(t, visible)
-	require.Equal(t, []int64{100, 101}, visible.GetShards()[0].GetPartitions()[0].GetSegmentIds())
-}
-
-func TestRecoverManagerRepairAtomicallyAdvancesPublishedHead(t *testing.T) {
-	ctx := context.Background()
-	catalog := &fakeDataViewCatalog{
-		views: []*viewpb.DataViewOfCollection{
-			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
-		},
-		versionStates: map[int64]*viewpb.CollectionDataVersionState{
-			1: {
-				CollectionId:              1,
-				AllocatedStreamingVersion: 7,
-				PublishedDataVersion:      &viewpb.DataVersion{StreamingVersion: 1},
-			},
-		},
-	}
-	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{
-		100: newDataViewTestSegment(1, 10, 100, "ch-1", 1000),
-		101: newDataViewTestSegment(1, 10, 101, "ch-1", 1100),
-	}}
-
-	manager, err := RecoverManager(ctx, catalog, store)
-	require.NoError(t, err)
-	require.NoError(t, manager.RepairCollections(ctx, []int64{1}))
-
-	state, err := catalog.GetDataViewVersionState(ctx, 1)
-	require.NoError(t, err)
-	requireDataVersion(t, state.GetPublishedDataVersion(), 2, 0)
-	require.Equal(t, int64(7), state.GetAllocatedStreamingVersion())
-	visible, err := manager.LatestVisibleDataView(ctx, 1)
-	require.NoError(t, err)
-	requireDataVersion(t, visible.GetDataVersion(), 2, 0)
-	require.Equal(t, []int64{100, 101}, publishedSegmentIDs(t, visible, "ch-1", 10))
-
-	restarted, err := RecoverManager(ctx, catalog, store)
-	require.NoError(t, err)
-	restartedVisible, err := restarted.LatestVisibleDataView(ctx, 1)
-	require.NoError(t, err)
-	requireDataVersion(t, restartedVisible.GetDataVersion(), 2, 0)
-	require.Equal(t, []int64{100, 101}, publishedSegmentIDs(t, restartedVisible, "ch-1", 10))
 }
 
 func TestRecoverManagerRepairPreservesAssignedStreamingEpochs(t *testing.T) {
@@ -1365,8 +1426,6 @@ func TestRecoverManagerRepairPreservesAssignedStreamingEpochs(t *testing.T) {
 
 	manager, err := RecoverManager(ctx, catalog, store)
 	require.NoError(t, err)
-	require.NoError(t, manager.RepairCollections(ctx, []int64{1}))
-
 	state, err := catalog.GetDataViewVersionState(ctx, 1)
 	require.NoError(t, err)
 	requireDataVersion(t, state.GetPublishedDataVersion(), 1, 0)
@@ -1433,7 +1492,6 @@ func TestRecoverManagerRepairDefersStreamingAdvanceBehindAssignedEpoch(t *testin
 
 	restarted, err := RecoverManager(ctx, catalog, store)
 	require.NoError(t, err)
-	require.NoError(t, restarted.RepairCollections(ctx, []int64{1}))
 	state, err := catalog.GetDataViewVersionState(ctx, 1)
 	require.NoError(t, err)
 	requireDataVersion(t, state.GetPublishedDataVersion(), 1, 0)
@@ -1457,321 +1515,6 @@ func TestRecoverManagerRepairDefersStreamingAdvanceBehindAssignedEpoch(t *testin
 	require.NoError(t, err)
 	t.Cleanup(ref.Deref)
 	require.Equal(t, []int64{100, 101, 102}, ref.DataView().SegmentIDs("ch-1", 10))
-}
-
-func TestRecoverManagerRepairAllowsCompactAdvanceWithPendingAssignedEpoch(t *testing.T) {
-	ctx := context.Background()
-	catalog := &fakeDataViewCatalog{
-		views: []*viewpb.DataViewOfCollection{
-			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
-		},
-		versionStates: map[int64]*viewpb.CollectionDataVersionState{
-			1: {
-				CollectionId:              1,
-				AllocatedStreamingVersion: 2,
-				PublishedDataVersion:      &viewpb.DataVersion{StreamingVersion: 1},
-			},
-		},
-	}
-	compactedInput := newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
-	compactedInput.State = commonpb.SegmentState_Dropped
-	compactOutput := newDataViewTestSegment(1, 10, 200, "ch-1", 1100)
-	compactOutput.CompactionFrom = []int64{100}
-	pendingFlush := newDataViewTestSegment(1, 10, 101, "ch-1", 1200)
-	pendingFlush.SealedAtDataVersion = &viewpb.DataVersion{StreamingVersion: 2}
-	store := &fakeDataViewSegmentStore{segments: map[int64]*Segment{
-		100: compactedInput,
-		101: pendingFlush,
-		200: compactOutput,
-	}}
-
-	manager, err := RecoverManager(ctx, catalog, store)
-	require.NoError(t, err)
-	require.NoError(t, manager.RepairCollections(ctx, []int64{1}))
-	state, err := catalog.GetDataViewVersionState(ctx, 1)
-	require.NoError(t, err)
-	requireDataVersion(t, state.GetPublishedDataVersion(), 1, 1)
-	require.Equal(t, int64(2), state.GetAllocatedStreamingVersion())
-	visible, err := manager.LatestVisibleDataView(ctx, 1)
-	require.NoError(t, err)
-	requireDataVersion(t, visible.GetDataVersion(), 1, 1)
-	require.Equal(t, []int64{200}, publishedSegmentIDs(t, visible, "ch-1", 10))
-}
-
-func TestDataViewManagerRecoverDoesNotReaddTruncatedSegments(t *testing.T) {
-	ctx := context.Background()
-	manager, catalog, store := newTestDataViewManager()
-	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
-	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
-	catalog.views = append(
-		catalog.views,
-		&viewpb.DataViewOfCollection{
-			CollectionId: 1,
-			DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0},
-			Shards: []*viewpb.DataViewOfShard{
-				{
-					Vchannel: "ch-1",
-					Partitions: []*viewpb.DataViewOfPartition{
-						{PartitionId: 10, SegmentIds: []int64{100, 101}},
-					},
-				},
-			},
-		},
-		&viewpb.DataViewOfCollection{
-			CollectionId: 1,
-			DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 1},
-			Shards: []*viewpb.DataViewOfShard{
-				{
-					Vchannel: "ch-1",
-					Partitions: []*viewpb.DataViewOfPartition{
-						{PartitionId: 10, SegmentIds: []int64{101}},
-					},
-				},
-			},
-		},
-	)
-
-	require.NoError(t, manager.RepairCollection(ctx, 1))
-	require.Len(t, catalog.views, 2)
-
-	visible, err := manager.LatestVisibleDataView(ctx, 1)
-	require.NoError(t, err)
-	require.NotNil(t, visible)
-	require.Equal(t, int64(1), visible.GetDataVersion().GetStreamingVersion())
-	require.Equal(t, int64(1), visible.GetDataVersion().GetCompactVersion())
-	require.Equal(t, []int64{101}, visible.GetShards()[0].GetPartitions()[0].GetSegmentIds())
-}
-
-func TestDataViewManagerRecoverRefreshesDeleteTimetickWithoutVersionBump(t *testing.T) {
-	ctx := context.Background()
-	catalog := &fakeDataViewCatalog{}
-	store := &fakeDataViewSegmentStore{segments: make(map[int64]*Segment)}
-	manager := NewManager(catalog, store).(*dataViewManager)
-	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 500)
-	catalog.views = append(catalog.views, &viewpb.DataViewOfCollection{
-		CollectionId: 1,
-		DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0},
-		Shards: []*viewpb.DataViewOfShard{
-			{
-				Vchannel: "ch-1",
-				Partitions: []*viewpb.DataViewOfPartition{
-					{PartitionId: 10, SegmentIds: []int64{100}},
-				},
-			},
-		},
-	})
-
-	require.NoError(t, manager.RepairCollection(ctx, 1))
-	require.Len(t, catalog.views, 1)
-	timeticks, err := manager.ShardTimeTicks(ctx, []int64{1})
-	require.NoError(t, err)
-	require.Len(t, timeticks, 1)
-	require.Equal(t, "ch-1", timeticks[0].GetVchannel())
-	require.Equal(t, uint64(500), timeticks[0].GetTransformStartAfterTimetick())
-
-	visible, err := manager.LatestVisibleDataView(ctx, 1)
-	require.NoError(t, err)
-	require.NotNil(t, visible)
-	require.Equal(t, int64(1), visible.GetDataVersion().GetStreamingVersion())
-	require.Equal(t, int64(0), visible.GetDataVersion().GetCompactVersion())
-	require.Equal(t, uint64(500), visible.GetShards()[0].GetTransformStartAfterTimetick())
-}
-
-func TestDataViewManagerRecoverAddsNeverPublishedStreamingSegment(t *testing.T) {
-	ctx := context.Background()
-	manager, catalog, store := newTestDataViewManager()
-	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
-	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
-	catalog.views = append(catalog.views, &viewpb.DataViewOfCollection{
-		CollectionId: 1,
-		DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0},
-		Shards: []*viewpb.DataViewOfShard{
-			{
-				Vchannel: "ch-1",
-				Partitions: []*viewpb.DataViewOfPartition{
-					{PartitionId: 10, SegmentIds: []int64{100}},
-				},
-			},
-		},
-	})
-
-	require.NoError(t, manager.RepairCollection(ctx, 1))
-	require.Len(t, catalog.views, 2)
-	require.Equal(t, int64(2), catalog.views[1].GetDataVersion().GetStreamingVersion())
-	require.Equal(t, int64(0), catalog.views[1].GetDataVersion().GetCompactVersion())
-
-	visible, err := manager.LatestVisibleDataView(ctx, 1)
-	require.NoError(t, err)
-	require.NotNil(t, visible)
-	require.Equal(t, []int64{100, 101}, visible.GetShards()[0].GetPartitions()[0].GetSegmentIds())
-}
-
-func TestDataViewManagerRecoverStreamingAdvanceWinsOverCompactHandoff(t *testing.T) {
-	ctx := context.Background()
-	manager, catalog, store := newTestDataViewManager()
-	old := newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
-	old.State = commonpb.SegmentState_Dropped
-	compactOutput := newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
-	compactOutput.CompactionFrom = []int64{100}
-	streamingOutput := newDataViewTestSegment(1, 10, 200, "ch-1", 1200)
-	store.segments[100] = old
-	store.segments[101] = compactOutput
-	store.segments[200] = streamingOutput
-	catalog.views = append(catalog.views, &viewpb.DataViewOfCollection{
-		CollectionId: 1,
-		DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0},
-		Shards: []*viewpb.DataViewOfShard{
-			{
-				Vchannel: "ch-1",
-				Partitions: []*viewpb.DataViewOfPartition{
-					{PartitionId: 10, SegmentIds: []int64{100}},
-				},
-			},
-		},
-	})
-
-	require.NoError(t, manager.RepairCollection(ctx, 1))
-	require.Len(t, catalog.views, 2)
-	require.Equal(t, int64(2), catalog.views[1].GetDataVersion().GetStreamingVersion())
-	require.Equal(t, int64(0), catalog.views[1].GetDataVersion().GetCompactVersion())
-	require.Equal(t, []int64{101, 200}, catalog.views[1].GetShards()[0].GetPartitions()[0].GetSegmentIds())
-}
-
-func TestDataViewManagerRecoverTreatsLineageAdditionOutsideCurrentViewAsStreaming(t *testing.T) {
-	ctx := context.Background()
-	manager, catalog, store := newTestDataViewManager()
-	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
-	importInput := newDataViewTestSegment(1, 10, 200, "ch-1", 1050)
-	importInput.State = commonpb.SegmentState_Dropped
-	importOutput := newDataViewTestSegment(1, 10, 201, "ch-1", 1100)
-	importOutput.CreatedByCompaction = true
-	importOutput.CompactionFrom = []int64{200}
-	store.segments[200] = importInput
-	store.segments[201] = importOutput
-	catalog.views = append(catalog.views, &viewpb.DataViewOfCollection{
-		CollectionId: 1,
-		DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 2},
-		Shards: []*viewpb.DataViewOfShard{
-			{
-				Vchannel: "ch-1",
-				Partitions: []*viewpb.DataViewOfPartition{
-					{PartitionId: 10, SegmentIds: []int64{100}},
-				},
-			},
-		},
-	})
-
-	require.NoError(t, manager.RepairCollection(ctx, 1))
-	require.Len(t, catalog.views, 2)
-	require.Equal(t, int64(2), catalog.views[1].GetDataVersion().GetStreamingVersion())
-	require.Equal(t, int64(0), catalog.views[1].GetDataVersion().GetCompactVersion())
-	require.Equal(t, []int64{100, 201}, catalog.views[1].GetShards()[0].GetPartitions()[0].GetSegmentIds())
-}
-
-func TestDataViewManagerRecoverKeepsTemporaryFlushResidentUnavailable(t *testing.T) {
-	ctx := context.Background()
-	manager, catalog, store := newTestDataViewManager()
-	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
-	temp := newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
-	temp.IsInvisible = true
-	store.segments[101] = temp
-	catalog.views = append(
-		catalog.views,
-		&viewpb.DataViewOfCollection{
-			CollectionId: 1,
-			DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0},
-			Shards: []*viewpb.DataViewOfShard{
-				{
-					Vchannel: "ch-1",
-					Partitions: []*viewpb.DataViewOfPartition{
-						{PartitionId: 10, SegmentIds: []int64{100}},
-					},
-				},
-			},
-		},
-		&viewpb.DataViewOfCollection{
-			CollectionId: 1,
-			DataVersion:  &viewpb.DataVersion{StreamingVersion: 2, CompactVersion: 0},
-			Shards: []*viewpb.DataViewOfShard{
-				{
-					Vchannel: "ch-1",
-					Partitions: []*viewpb.DataViewOfPartition{
-						{PartitionId: 10, SegmentIds: []int64{100, 101}},
-					},
-				},
-			},
-		},
-	)
-
-	require.NoError(t, manager.RepairCollection(ctx, 1))
-	require.Len(t, catalog.views, 2)
-	require.Equal(t, int64(2), manager.states[1].latestResident.GetDataVersion().GetStreamingVersion())
-
-	visible, err := manager.LatestVisibleDataView(ctx, 1)
-	require.NoError(t, err)
-	require.NotNil(t, visible)
-	require.Equal(t, int64(1), visible.GetDataVersion().GetStreamingVersion())
-	require.Equal(t, []int64{100}, visible.GetShards()[0].GetPartitions()[0].GetSegmentIds())
-
-	temp.State = commonpb.SegmentState_Dropped
-	final := newDataViewTestSegment(1, 10, 102, "ch-1", 1200)
-	final.CompactionFrom = []int64{101}
-	store.segments[102] = final
-	require.NoError(t, noErrorVersion(manager.OnCompact(ctx, CompactDataViewEvent{
-		CollectionID: 1,
-		CompactFrom:  []int64{101},
-		CompactTo:    []int64{102},
-	})))
-	require.Len(t, catalog.views, 3)
-	require.Equal(t, int64(2), catalog.views[2].GetDataVersion().GetStreamingVersion())
-	require.Equal(t, int64(1), catalog.views[2].GetDataVersion().GetCompactVersion())
-}
-
-func TestDataViewManagerRecoverRetainsCompactionInputUntilOutputVisible(t *testing.T) {
-	ctx := context.Background()
-	manager, catalog, store := newTestDataViewManager()
-	input := newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
-	input.State = commonpb.SegmentState_Dropped
-	output := newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
-	output.IsInvisible = true
-	output.CompactionFrom = []int64{100}
-	store.segments[100] = input
-	store.segments[101] = output
-	catalog.views = append(catalog.views, &viewpb.DataViewOfCollection{
-		CollectionId: 1,
-		DataVersion:  &viewpb.DataVersion{StreamingVersion: 1, CompactVersion: 0},
-		Shards: []*viewpb.DataViewOfShard{
-			{
-				Vchannel: "ch-1",
-				Partitions: []*viewpb.DataViewOfPartition{
-					{PartitionId: 10, SegmentIds: []int64{100}},
-				},
-			},
-		},
-	})
-
-	require.NoError(t, manager.RepairCollection(ctx, 1))
-	require.Len(t, catalog.views, 1)
-	visible, err := manager.LatestVisibleDataView(ctx, 1)
-	require.NoError(t, err)
-	require.NotNil(t, visible)
-	require.Equal(t, int64(1), visible.GetDataVersion().GetStreamingVersion())
-	require.Equal(t, int64(0), visible.GetDataVersion().GetCompactVersion())
-	require.Equal(t, []int64{100}, visible.GetShards()[0].GetPartitions()[0].GetSegmentIds())
-
-	output.IsInvisible = false
-	require.NoError(t, noErrorVersion(manager.OnCompact(ctx, CompactDataViewEvent{
-		CollectionID: 1,
-		CompactFrom:  []int64{100},
-		CompactTo:    []int64{101},
-	})))
-	require.Len(t, catalog.views, 2)
-	require.Equal(t, int64(1), catalog.views[1].GetDataVersion().GetStreamingVersion())
-	require.Equal(t, int64(1), catalog.views[1].GetDataVersion().GetCompactVersion())
-	visible, err = manager.LatestVisibleDataView(ctx, 1)
-	require.NoError(t, err)
-	require.NotNil(t, visible)
-	require.Equal(t, []int64{101}, visible.GetShards()[0].GetPartitions()[0].GetSegmentIds())
 }
 
 func TestDataViewManagerDropCollectionDropsStateAndCatalog(t *testing.T) {

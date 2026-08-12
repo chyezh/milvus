@@ -670,17 +670,6 @@ func (s *Server) initMeta(chunkManager storage.ChunkManager) error {
 		if err != nil {
 			return err
 		}
-		// DataView repair must see the current collection/partition cache so
-		// DDL trim intent from RootCoord is applied before reconciling segments.
-		repairCollectionIDs := make([]int64, 0, len(s.meta.recoveredCollectionIDs))
-		for _, collectionID := range s.meta.recoveredCollectionIDs {
-			if !s.dataViewLifecycle.IsTerminal(collectionID) {
-				repairCollectionIDs = append(repairCollectionIDs, collectionID)
-			}
-		}
-		if err := s.dataViewManager.RepairCollections(s.ctx, repairCollectionIDs); err != nil {
-			return err
-		}
 		return nil
 	}
 	return retry.Do(s.ctx, reloadEtcdFn, retry.Attempts(connMetaMaxRetryTime))

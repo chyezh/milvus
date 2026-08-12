@@ -319,6 +319,42 @@ func TestPublicationRestartDoesNotOvertakePersistedEarlierAssignment(t *testing.
 	require.Empty(t, catalog.views)
 }
 
+func TestPublicationRecoveryDoesNotOvertakeEarlierAssignedEpochOutOfOrder(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, store := newTestDataViewManager()
+	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-0", 1000)
+	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-0", 2000)
+	store.segments[102] = newDataViewTestSegment(1, 10, 102, "ch-0", 3000)
+
+	_, err := manager.CommitPublishedView(ctx, 1, &viewpb.DataVersion{StreamingVersion: 1}, PublishedMutation{
+		Add: []SegmentMembership{loadableMembership(1, 10, 100, "ch-0")},
+	})
+	require.NoError(t, err)
+	second, err := manager.AssignFlushVersion(ctx, 1, 101)
+	require.NoError(t, err)
+	third, err := manager.AssignFlushVersion(ctx, 1, 102)
+	require.NoError(t, err)
+	requireDataVersion(t, second, 2, 0)
+	requireDataVersion(t, third, 3, 0)
+
+	restarted, err := RecoverManager(ctx, catalog, store)
+	require.NoError(t, err)
+	published, err := restarted.CommitPublishedView(ctx, 1, third, PublishedMutation{
+		Add: []SegmentMembership{loadableMembership(1, 10, 102, "ch-0")},
+	})
+	require.Error(t, err)
+	require.True(t, merr.IsRetryableErr(err))
+	require.Nil(t, published)
+	requireDataVersion(t, catalog.versionStates[1].GetPublishedDataVersion(), 1, 0)
+
+	published, err = restarted.CommitPublishedView(ctx, 1, second, PublishedMutation{
+		Add: []SegmentMembership{loadableMembership(1, 10, 101, "ch-0")},
+	})
+	require.NoError(t, err)
+	requireDataVersion(t, published, 2, 0)
+	requireDataVersion(t, catalog.views[len(catalog.views)-1].GetDataVersion(), 3, 0)
+}
+
 func TestPublicationAssignedNoChangeDoesNotReportSuccess(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, _ := newTestDataViewManager()

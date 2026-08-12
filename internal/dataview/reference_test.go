@@ -127,8 +127,6 @@ func TestDataViewRefRepairDoesNotReopenTerminalCollection(t *testing.T) {
 	_, err = manager.OnDropCollection(ctx, 1)
 	require.NoError(t, err)
 	require.True(t, dataViewStateDropped(t, manager, 1))
-	require.NoError(t, manager.RepairCollection(ctx, 1))
-
 	_, err = manager.Get(ctx, 1, domainVersion)
 	requireUnavailableDataViewError(t, err)
 	_, err = manager.LatestPublished(ctx, 1)

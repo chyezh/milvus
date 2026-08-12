@@ -63,8 +63,6 @@ type Manager interface {
 	OnCreateCollection(ctx context.Context, event CreateCollectionDataViewEvent) (*viewpb.DataVersion, error)
 	OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error)
 
-	RepairCollection(ctx context.Context, collectionID int64) error
-	RepairCollections(ctx context.Context, collectionIDs []int64) error
 	Get(ctx context.Context, collectionID int64, version qviews.DataVersion) (DataViewRef, error)
 	LatestPublished(ctx context.Context, collectionID int64) (DataViewRef, error)
 	DataView(ctx context.Context, collectionID int64, dataVersion *viewpb.DataVersion) (*viewpb.DataViewOfCollection, error)
@@ -345,9 +343,17 @@ func RecoverManager(ctx context.Context, catalog RecoveryCatalog, segments Segme
 				durable = &viewpb.CollectionDataVersionState{CollectionId: collectionID}
 			}
 			if published == nil {
-				published = latestDataView(persistedViews)
+				// Legacy catalogs predate the durable published head and may contain
+				// a newer snapshot for an invisible sort/compaction handoff. During
+				// this one-time migration, select the newest snapshot whose added
+				// membership is loadable; after the head is backfilled, recovery never
+				// performs this SegmentMeta-based visibility selection again.
+				published = manager.latestLegacyLoadablePersistedView(ctx, persistedViews)
 				if published == nil {
-					continue
+					return nil, merr.WrapErrDataIntegrityMsg(
+						"legacy DataView snapshots for collection %d have no loadable migration head",
+						collectionID,
+					)
 				}
 				if published.GetCollectionId() != collectionID ||
 					published.GetDataVersion() == nil ||
@@ -369,6 +375,8 @@ func RecoverManager(ctx context.Context, catalog RecoveryCatalog, segments Segme
 			}
 			manager.retainRecoveredDataViewsThrough(collectionID, published.GetDataVersion())
 			manager.recoverCollectionFromDataViews(collectionID, []*viewpb.DataViewOfCollection{published})
+			retained, _ := manager.recoveredDataViews(collectionID)
+			manager.updateRetainedMembership(collectionID, retained)
 			state := manager.getOrCreateState(collectionID)
 			state.mu.Lock()
 			state.versionState = proto.Clone(durable).(*viewpb.CollectionDataVersionState)
@@ -601,27 +609,6 @@ func (m *dataViewManager) FinalizeDropCollection(ctx context.Context, collection
 	return nil
 }
 
-func (m *dataViewManager) RepairCollection(ctx context.Context, collectionID int64) error {
-	persistedViews, ok := m.recoveredDataViews(collectionID)
-	if ok {
-		return m.repairCollectionWithDataViews(ctx, collectionID, persistedViews)
-	}
-	persistedViews, err := m.catalog.ListDataViews(ctx, collectionID)
-	if err != nil {
-		return err
-	}
-	return m.repairCollectionWithDataViews(ctx, collectionID, persistedViews)
-}
-
-func (m *dataViewManager) RepairCollections(ctx context.Context, collectionIDs []int64) error {
-	for _, collectionID := range collectionIDs {
-		if err := m.RepairCollection(ctx, collectionID); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (m *dataViewManager) recoverFromDataViews(dataViews []*viewpb.DataViewOfCollection) {
 	viewsByCollection := make(map[int64][]*viewpb.DataViewOfCollection)
 	recoveredViews := make(map[int64][]*viewpb.DataViewOfCollection)
@@ -645,6 +632,7 @@ func (m *dataViewManager) recoverFromDataViews(dataViews []*viewpb.DataViewOfCol
 	sort.Slice(collectionIDs, func(i, j int) bool { return collectionIDs[i] < collectionIDs[j] })
 	for _, collectionID := range collectionIDs {
 		m.recoverCollectionFromDataViews(collectionID, viewsByCollection[collectionID])
+		m.updateRetainedMembership(collectionID, viewsByCollection[collectionID])
 	}
 }
 
@@ -700,106 +688,6 @@ func (m *dataViewManager) recoverCollectionFromDataViews(collectionID int64, per
 	state.dropped = false
 	state.latestResident = canonicalDataViewClone(latestDataView(persistedViews))
 	state.latestVisible = canonicalDataViewClone(state.latestResident)
-	m.updateRetainedMembership(collectionID, persistedViews)
-}
-
-func (m *dataViewManager) repairCollectionWithDataViews(ctx context.Context, collectionID int64, persistedViews []*viewpb.DataViewOfCollection) error {
-	state := m.getOrCreateState(collectionID)
-	state.mu.Lock()
-	if state.dropped {
-		state.mu.Unlock()
-		return nil
-	}
-
-	latestPersisted := latestDataView(persistedViews)
-	segments := m.segments.SelectSegments(ctx, collectionID)
-	pendingRetainedInputs := pendingRetainedCompactionInputs(segments)
-	recoverableSegments := recoverableSegmentsAtPublishedHead(latestPersisted, segments, state.versionState.GetPublishedDataVersion())
-	residentExpected := buildDataViewFromSegments(collectionID, recoverableSegments, true)
-	if isDataViewMembershipEqual(latestPersisted, residentExpected) {
-		state.latestResident = canonicalDataViewClone(latestPersisted)
-		state.latestVisible = m.latestVisiblePersistedView(ctx, persistedViews)
-		state.mu.Unlock()
-		return nil
-	}
-	expected := buildRecoverExpectedDataView(collectionID, latestPersisted, recoverableSegments, pendingRetainedInputs)
-	pruneHistoricallyRemovedSegments(latestPersisted, expected, persistedViews)
-	if isDataViewMembershipEqual(latestPersisted, expected) {
-		state.latestResident = canonicalDataViewClone(latestPersisted)
-		state.latestVisible = m.latestVisiblePersistedView(ctx, persistedViews)
-		state.mu.Unlock()
-		return nil
-	}
-	if latestPersisted == nil && isDataViewEmpty(expected) {
-		state.mu.Unlock()
-		return nil
-	}
-
-	advance := classifyRecoverAdvance(latestPersisted, expected, m.segments)
-	if advance == dataViewAdvanceStreaming && hasUnpublishedAssignedEpoch(segments, state.versionState.GetPublishedDataVersion()) {
-		state.latestResident = canonicalDataViewClone(latestPersisted)
-		state.latestVisible = m.latestVisiblePersistedView(ctx, persistedViews)
-		state.mu.Unlock()
-		return nil
-	}
-	expected.DataVersion = nextDataVersion(latestPersisted, advance)
-	toPersist := cloneDataViewWithoutDeleteTimetick(expected)
-	if catalog, ok := m.catalog.(publishedDataViewCatalog); ok {
-		published := state.versionState.GetPublishedDataVersion()
-		if published == nil || latestPersisted == nil || compareDataVersion(published, latestPersisted.GetDataVersion()) != 0 {
-			if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
-				state.mu.Unlock()
-				return err
-			}
-		}
-		if err := m.persistPublishedLocked(ctx, state, catalog, toPersist); err != nil {
-			state.mu.Unlock()
-			return err
-		}
-	} else {
-		if err := m.catalog.SaveDataView(ctx, toPersist); err != nil {
-			state.mu.Unlock()
-			return err
-		}
-		m.invalidateRetainedMembership(collectionID)
-		m.rememberRecoveredDataView(toPersist)
-		state.latestResident = canonicalDataViewClone(toPersist)
-	}
-
-	if m.isDataViewVisibleFromBase(ctx, latestPersisted, state.latestResident, pendingRetainedInputs) {
-		state.latestVisible = m.withDeleteTimetick(ctx, state.latestResident)
-	} else {
-		state.latestVisible = m.latestVisiblePersistedView(ctx, persistedViews)
-	}
-	state.mu.Unlock()
-	return nil
-}
-
-func recoverableSegmentsAtPublishedHead(
-	latest *viewpb.DataViewOfCollection,
-	segments []*Segment,
-	published *viewpb.DataVersion,
-) []*Segment {
-	publishedStreaming := published.GetStreamingVersion()
-	result := make([]*Segment, 0, len(segments))
-	for _, segment := range segments {
-		assigned := segment.GetSealedAtDataVersion()
-		if assigned.GetStreamingVersion() > publishedStreaming && !dataViewContainsSegment(latest, segment.GetID()) {
-			continue
-		}
-		result = append(result, segment)
-	}
-	return result
-}
-
-func hasUnpublishedAssignedEpoch(segments []*Segment, published *viewpb.DataVersion) bool {
-	publishedStreaming := published.GetStreamingVersion()
-	for _, segment := range segments {
-		if segment.GetSealedAtDataVersion().GetStreamingVersion() > publishedStreaming {
-			return true
-		}
-	}
-	return false
 }
 
 func (m *dataViewManager) LatestVisibleDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error) {
@@ -1076,6 +964,16 @@ func (m *dataViewManager) GarbageCollect(ctx context.Context, collectionID int64
 	if err != nil {
 		return err
 	}
+	var publishedVersion *viewpb.DataVersion
+	if publishedCatalog, ok := m.catalog.(publishedDataViewCatalog); ok {
+		versionState, err := publishedCatalog.GetDataViewVersionState(ctx, collectionID)
+		if err != nil {
+			return err
+		}
+		if versionState != nil && versionState.GetPublishedDataVersion() != nil {
+			publishedVersion = cloneDataVersion(versionState.GetPublishedDataVersion())
+		}
+	}
 	sort.Slice(views, func(i, j int) bool {
 		return compareDataVersion(views[i].GetDataVersion(), views[j].GetDataVersion()) > 0
 	})
@@ -1085,9 +983,33 @@ func (m *dataViewManager) GarbageCollect(ctx context.Context, collectionID int64
 			protectedSet[dataVersionKey(version.IntoProto())] = struct{}{}
 		}
 	}
-	for idx, view := range views {
+	if publishedVersion != nil {
+		// The version-state record is the authority after recovery. A newer
+		// snapshot can only be an unpublished orphan and must not displace the
+		// published head in the retention window.
+		protectedSet[dataVersionKey(publishedVersion)] = struct{}{}
+	}
+	foundPublished := publishedVersion == nil
+	for _, view := range views {
+		if compareDataVersion(view.GetDataVersion(), publishedVersion) == 0 {
+			foundPublished = true
+			break
+		}
+	}
+	if !foundPublished {
+		return merr.WrapErrDataIntegrityMsg(
+			"published data view snapshot is missing for collection %d at version %d/%d",
+			collectionID,
+			publishedVersion.GetStreamingVersion(),
+			publishedVersion.GetCompactVersion(),
+		)
+	}
+	authoritativeCount := 0
+	for _, view := range views {
 		version := view.GetDataVersion()
-		if idx < retainLatest {
+		isPublishedHistory := publishedVersion == nil || compareDataVersion(version, publishedVersion) <= 0
+		if isPublishedHistory && authoritativeCount < retainLatest {
+			authoritativeCount++
 			continue
 		}
 		if _, ok := protectedSet[dataVersionKey(version)]; ok {
@@ -1403,6 +1325,46 @@ func (m *dataViewManager) latestVisiblePersistedView(ctx context.Context, views 
 	return m.withDeleteTimetick(ctx, latestVisible)
 }
 
+func (m *dataViewManager) latestLegacyLoadablePersistedView(
+	ctx context.Context,
+	views []*viewpb.DataViewOfCollection,
+) *viewpb.DataViewOfCollection {
+	ordered := cloneDataViews(views)
+	sort.Slice(ordered, func(i, j int) bool {
+		return compareDataVersion(ordered[i].GetDataVersion(), ordered[j].GetDataVersion()) < 0
+	})
+	var latest *viewpb.DataViewOfCollection
+	historicalSegments := make(map[int64]struct{})
+	for _, view := range ordered {
+		loadable := true
+		for segmentID := range dataViewSegmentIDSet(view) {
+			segment := m.segments.GetSegment(ctx, segmentID)
+			_, appearedBefore := historicalSegments[segmentID]
+			if !isLegacyMigratableMembership(segment, appearedBefore) {
+				loadable = false
+				break
+			}
+		}
+		if loadable {
+			latest = view
+		}
+		for segmentID := range dataViewSegmentIDSet(view) {
+			historicalSegments[segmentID] = struct{}{}
+		}
+	}
+	return m.withDeleteTimetick(ctx, latest)
+}
+
+func isLegacyMigratableMembership(segment *Segment, appearedBefore bool) bool {
+	if segment == nil || segment.GetIsInvisible() || segment.GetIsImporting() || segment.GetLevel() == datapb.SegmentLevel_L0 {
+		return false
+	}
+	if segment.GetState() == commonpb.SegmentState_Flushed {
+		return true
+	}
+	return appearedBefore && segment.GetState() == commonpb.SegmentState_Dropped
+}
+
 func (m *dataViewManager) hasPendingCompactOutput(ctx context.Context, compactTo []int64, allowInvisible bool) bool {
 	for _, segmentID := range compactTo {
 		segment := m.segments.GetSegment(ctx, segmentID)
@@ -1597,29 +1559,6 @@ func removeSegmentFromDataView(view *viewpb.DataViewOfCollection, segmentID int6
 	})
 }
 
-func addSegmentFromDataView(view *viewpb.DataViewOfCollection, source *viewpb.DataViewOfCollection, target int64) bool {
-	if view == nil || source == nil || view.GetCollectionId() != source.GetCollectionId() {
-		return false
-	}
-	if dataViewContainsSegment(view, target) {
-		return false
-	}
-	for _, shard := range source.GetShards() {
-		for _, partition := range shard.GetPartitions() {
-			for _, segmentID := range partition.GetSegmentIds() {
-				if segmentID != target {
-					continue
-				}
-				targetShard := findOrCreateDataViewShard(view, shard.GetVchannel())
-				targetPartition := findOrCreateDataViewPartition(targetShard, partition.GetPartitionId())
-				targetPartition.SegmentIds = append(targetPartition.SegmentIds, target)
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func removeSegmentsByPredicate(view *viewpb.DataViewOfCollection, predicate func(segmentID int64, partitionID int64, vchannel string) bool) bool {
 	changed := false
 	for _, shard := range view.GetShards() {
@@ -1786,41 +1725,6 @@ func dedupSortedInt64s(values []int64) []int64 {
 	return values[:write]
 }
 
-func buildDataViewFromSegments(collectionID int64, segments []*Segment, allowInvisible ...bool) *viewpb.DataViewOfCollection {
-	view := &viewpb.DataViewOfCollection{
-		CollectionId: collectionID,
-		DataVersion:  &viewpb.DataVersion{},
-	}
-	allowInvisibleSegment := len(allowInvisible) > 0 && allowInvisible[0]
-	sort.Slice(segments, func(i, j int) bool {
-		return segments[i].GetID() < segments[j].GetID()
-	})
-	for _, segment := range segments {
-		if isDataViewJoinableSegment(segment, allowInvisibleSegment) {
-			addSegmentToDataView(view, segment)
-		}
-	}
-	canonicalizeDataView(view)
-	return view
-}
-
-func buildRecoverExpectedDataView(
-	collectionID int64,
-	latest *viewpb.DataViewOfCollection,
-	segments []*Segment,
-	pendingRetainedInputs map[int64]struct{},
-) *viewpb.DataViewOfCollection {
-	expected := buildDataViewFromSegments(collectionID, segments)
-	if latest == nil || len(pendingRetainedInputs) == 0 {
-		return expected
-	}
-	for segmentID := range pendingRetainedInputs {
-		addSegmentFromDataView(expected, latest, segmentID)
-	}
-	canonicalizeDataView(expected)
-	return expected
-}
-
 func pendingRetainedCompactionInputs(segments []*Segment) map[int64]struct{} {
 	byID := make(map[int64]*Segment, len(segments))
 	for _, segment := range segments {
@@ -1862,80 +1766,6 @@ func isDataViewMembershipEqual(left, right *viewpb.DataViewOfCollection) bool {
 
 func isDataViewEmpty(view *viewpb.DataViewOfCollection) bool {
 	return view == nil || len(view.GetShards()) == 0
-}
-
-func classifyRecoverAdvance(latest, expected *viewpb.DataViewOfCollection, segments SegmentStore) dataViewAdvance {
-	if latest == nil {
-		return dataViewAdvanceStreaming
-	}
-	latestSegments := dataViewSegmentIDSet(latest)
-	added := expectedAddedSegmentIDs(latest, expected)
-	for _, segmentID := range added {
-		segment := segments.GetSegment(context.TODO(), segmentID)
-		if segment == nil {
-			continue
-		}
-		if isRecoverStreamingAddition(segment, latestSegments) {
-			return dataViewAdvanceStreaming
-		}
-	}
-	return dataViewAdvanceCompact
-}
-
-func isRecoverStreamingAddition(segment *Segment, latestSegments map[int64]struct{}) bool {
-	if segment == nil {
-		return false
-	}
-	if !segment.GetCreatedByCompaction() && len(segment.GetCompactionFrom()) == 0 {
-		return true
-	}
-	for _, inputID := range segment.GetCompactionFrom() {
-		if _, ok := latestSegments[inputID]; ok {
-			return false
-		}
-	}
-	return true
-}
-
-func expectedAddedSegmentIDs(latest, expected *viewpb.DataViewOfCollection) []int64 {
-	known := make(map[int64]struct{})
-	for _, partition := range dataViewPartitions(latest) {
-		for _, segmentID := range partition.GetSegmentIds() {
-			known[segmentID] = struct{}{}
-		}
-	}
-	added := make([]int64, 0)
-	for _, partition := range dataViewPartitions(expected) {
-		for _, segmentID := range partition.GetSegmentIds() {
-			if _, ok := known[segmentID]; !ok {
-				added = append(added, segmentID)
-			}
-		}
-	}
-	return added
-}
-
-func pruneHistoricallyRemovedSegments(latest, expected *viewpb.DataViewOfCollection, persistedViews []*viewpb.DataViewOfCollection) {
-	if latest == nil || expected == nil {
-		return
-	}
-	current := dataViewSegmentIDSet(latest)
-	historical := make(map[int64]struct{})
-	for _, view := range persistedViews {
-		if compareDataVersion(view.GetDataVersion(), latest.GetDataVersion()) > 0 {
-			continue
-		}
-		for segmentID := range dataViewSegmentIDSet(view) {
-			historical[segmentID] = struct{}{}
-		}
-	}
-	removeSegmentsByPredicate(expected, func(segmentID int64, partitionID int64, vchannel string) bool {
-		if _, ok := current[segmentID]; ok {
-			return false
-		}
-		_, wasRetainedBefore := historical[segmentID]
-		return wasRetainedBefore
-	})
 }
 
 func dataViewSegmentIDSet(view *viewpb.DataViewOfCollection) map[int64]struct{} {

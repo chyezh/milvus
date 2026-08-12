@@ -3123,20 +3123,19 @@ func TestServer_DropSegmentsByTimeRemovalFenceSurvivesPublicationFailureAndResta
 	restarted, err := dataview.RecoverManager(ctx, recoveryCatalog, &dataViewSegmentStore{meta: meta})
 	require.NoError(t, err)
 	meta.dataViewManager = restarted
-	require.NoError(t, restarted.RepairCollections(ctx, []int64{1}))
 	state, err := meta.catalog.GetDataViewVersionState(ctx, 1)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, state.GetPublishedDataVersion().GetStreamingVersion())
 	visible, err := restarted.LatestVisibleDataView(ctx, 1)
 	require.NoError(t, err)
-	require.Empty(t, visible.GetShards())
+	require.Empty(t, dataViewShardSegmentIDs(dataViewShard(visible, "ch-0"), nil))
 
 	server.dataViewManager = restarted
 	require.NoError(t, server.DropSegmentsByTime(ctx, 1, map[string]uint64{"ch-0": 1000}))
 	requirePublishedDataViewVersion(t, meta, 1, 2, 0)
 	visible, err = restarted.LatestVisibleDataView(ctx, 1)
 	require.NoError(t, err)
-	require.Empty(t, visible.GetShards())
+	require.Empty(t, dataViewShardSegmentIDs(dataViewShard(visible, "ch-0"), nil))
 }
 
 func TestServer_NotifyDropPartitionRemovalFenceKeepsPublishedViewUntilRetry(t *testing.T) {

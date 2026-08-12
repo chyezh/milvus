@@ -467,7 +467,6 @@ func (s *MixCompactionTaskSuite) TestMixCompactionWaitsForAssignedFlushPublicati
 	s.Require().True(ok)
 	restarted, err := dataview.RecoverManager(ctx, recoveryCatalog, &dataViewSegmentStore{meta: m})
 	s.Require().NoError(err)
-	s.Require().NoError(restarted.RepairCollections(ctx, []int64{1}))
 	visible, err := restarted.LatestVisibleDataView(ctx, 1)
 	s.Require().NoError(err)
 	s.True(proto.Equal(&viewpb.DataVersion{StreamingVersion: 2, CompactVersion: 1}, visible.GetDataVersion()))
