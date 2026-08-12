@@ -307,7 +307,7 @@ func (s *SegmentView) observeInsertMetaLocked(timetick uint64, assignment *messa
 
 func (s *SegmentView) Flush(
 	_ context.Context,
-	owned message.OwnedImmutable[message.ImmutableMessage],
+	owned message.OwnedImmutableMessage,
 ) bool {
 	msg := owned.Message()
 	s.mu.Lock()
@@ -324,7 +324,7 @@ func (s *SegmentView) Flush(
 	if s.finalCommitDone {
 		return metaChanged
 	}
-	s.retainDataHandleLocked(flushTimeTick, owned.CloneHandle())
+	s.retainDataHandleLocked(flushTimeTick, owned.Clone())
 	task := s.newCommitL1SegmentTaskLocked(flushTimeTick)
 	if task != nil {
 		s.runtime.Scheduler.Submit(task)

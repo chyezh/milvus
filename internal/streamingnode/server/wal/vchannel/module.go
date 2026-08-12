@@ -213,11 +213,11 @@ func (m *VChannelRecoveryModule) ObserveMessage(
 	case message.MessageTypeFlush:
 		m.handleFlushMessage(ctx, message.MustAsOwnedImmutableFlushMessageV2(owner))
 	case message.MessageTypeManualFlush:
-		m.handleManualFlushMessage(ctx, message.MustAsOwnedImmutableMessage(owner))
+		m.handleManualFlushMessage(ctx, owner)
 	case message.MessageTypeFlushAll:
-		m.handleFlushAllMessage(ctx, message.MustAsOwnedImmutableMessage(owner))
+		m.handleFlushAllMessage(ctx, owner)
 	case message.MessageTypeAlterWAL:
-		m.handleAlterWALMessage(ctx, message.MustAsOwnedImmutableMessage(owner))
+		m.handleAlterWALMessage(ctx, owner)
 	}
 	if m.transformLog != nil {
 		m.transformLog.ObserveMessage(ctx, owner)
@@ -502,28 +502,28 @@ func (m *VChannelRecoveryModule) handleFlushMessage(
 
 func (m *VChannelRecoveryModule) handleManualFlushMessage(
 	ctx context.Context,
-	msg message.OwnedImmutable[message.ImmutableMessage],
+	msg message.OwnedImmutableMessage,
 ) {
 	m.flushAllSegmentsCreatedBefore(ctx, msg)
 }
 
 func (m *VChannelRecoveryModule) handleFlushAllMessage(
 	ctx context.Context,
-	msg message.OwnedImmutable[message.ImmutableMessage],
+	msg message.OwnedImmutableMessage,
 ) {
 	m.flushAllSegmentsCreatedBefore(ctx, msg)
 }
 
 func (m *VChannelRecoveryModule) handleAlterWALMessage(
 	ctx context.Context,
-	msg message.OwnedImmutable[message.ImmutableMessage],
+	msg message.OwnedImmutableMessage,
 ) {
 	m.flushAllSegmentsCreatedBefore(ctx, msg)
 }
 
 func (m *VChannelRecoveryModule) flushAllSegmentsCreatedBefore(
 	ctx context.Context,
-	msg message.OwnedImmutable[message.ImmutableMessage],
+	msg message.OwnedImmutableMessage,
 ) {
 	for _, view := range m.segments {
 		if view.CreateTimeTick() >= msg.Message().TimeTick() {
@@ -536,7 +536,7 @@ func (m *VChannelRecoveryModule) flushAllSegmentsCreatedBefore(
 
 func (m *VChannelRecoveryModule) flushPartitionSegmentsCreatedBefore(
 	ctx context.Context,
-	msg message.OwnedImmutable[message.ImmutableMessage],
+	msg message.OwnedImmutableMessage,
 	partitionID int64,
 ) {
 	for _, view := range m.segments {

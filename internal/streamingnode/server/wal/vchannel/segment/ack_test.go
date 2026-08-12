@@ -109,7 +109,7 @@ func TestFinalCommitRetainsRefUntilLifecycleSucceeds(t *testing.T) {
 	_, controller := newSegmentAckDataMessage(t, 20)
 	probe := controller.Clone()
 
-	assert.True(t, view.Flush(context.Background(), message.MustAsOwnedImmutableMessage(controller)))
+	assert.True(t, view.Flush(context.Background(), controller))
 	controller.Release()
 	require.Len(t, scheduler.tasks, 1)
 	assert.NotPanics(t, func() { _ = probe.Message().TimeTick() })
@@ -138,9 +138,9 @@ func TestRepeatedFlushRefsSharePendingFinalCommit(t *testing.T) {
 	firstProbe := first.Clone()
 	secondProbe := second.Clone()
 
-	assert.True(t, view.Flush(context.Background(), message.MustAsOwnedImmutableMessage(first)))
+	assert.True(t, view.Flush(context.Background(), first))
 	first.Release()
-	assert.False(t, view.Flush(context.Background(), message.MustAsOwnedImmutableMessage(second)))
+	assert.False(t, view.Flush(context.Background(), second))
 	second.Release()
 	require.Len(t, scheduler.tasks, 1)
 	assert.NotPanics(t, func() { _ = firstProbe.Message().TimeTick() })

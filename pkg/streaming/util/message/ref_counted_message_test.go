@@ -52,6 +52,20 @@ func TestOwnedImmutableMessageReleaseDoesNotInvalidateClones(t *testing.T) {
 	clone.Release()
 }
 
+func TestOwnedImmutableMessageUntypedSharesLifetime(t *testing.T) {
+	raw := CreateTestInsertMessage(t, 100, 2, 20, testMessageID("10")).
+		IntoImmutableMessage(testMessageID("11"))
+	owner := NewOwnedImmutableMessage(raw, nil)
+	typed := MustAsOwnedImmutableInsertMessageV1(owner)
+	untyped := typed.Untyped()
+	retained := untyped.Clone()
+
+	owner.Release()
+	assert.Panics(t, func() { _ = untyped.Message() })
+	assert.Equal(t, raw.MessageID(), retained.Message().MessageID())
+	retained.Release()
+}
+
 func TestOwnedImmutableMessageWithoutConsumers(t *testing.T) {
 	raw := CreateTestTimeTickSyncMessage(t, 1, 20, testMessageID("10")).
 		IntoImmutableMessage(testMessageID("11"))

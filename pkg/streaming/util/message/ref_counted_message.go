@@ -186,8 +186,8 @@ func (m *ownedImmutable[T]) CloneHandle() RetainedImmutableMessage {
 	return m.owner.Clone()
 }
 
-func (m *ownedImmutable[T]) Untyped() OwnedImmutable[ImmutableMessage] {
-	return newOwnedImmutable[ImmutableMessage](m.owner, m.message)
+func (m *ownedImmutable[T]) Untyped() OwnedImmutableMessage {
+	return m.owner
 }
 
 type retainedImmutable[T ImmutableMessage] struct {
@@ -224,11 +224,6 @@ func MustAsSpecializedOwnedImmutableMessage[H proto.Message, B proto.Message](
 ) SpecializedOwnedImmutableMessage[H, B] {
 	msg := MustAsSpecializedImmutableMessage[H, B](owner.Message())
 	return newOwnedImmutable(owner, msg)
-}
-
-// MustAsOwnedImmutableMessage binds owner to its underlying immutable message.
-func MustAsOwnedImmutableMessage(owner OwnedImmutableMessage) OwnedImmutable[ImmutableMessage] {
-	return newOwnedImmutable(owner, owner.Message())
 }
 
 // MustAsOwnedImmutableTxnMessage binds owner to its transaction message.

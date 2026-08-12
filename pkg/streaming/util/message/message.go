@@ -212,7 +212,7 @@ type OwnedImmutable[T ImmutableMessage] interface {
 	Message() T
 	Clone() RetainedImmutable[T]
 	CloneHandle() RetainedImmutableMessage
-	Untyped() OwnedImmutable[ImmutableMessage]
+	Untyped() OwnedImmutableMessage
 }
 
 // RetainedImmutable combines typed access with one independently releasable
