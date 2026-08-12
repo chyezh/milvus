@@ -77,26 +77,40 @@ func (m *dataViewLifecycle) SegmentSnapshot(ctx context.Context, ids []int64) ba
 
 func (m *dataViewLifecycle) DataViewSnapshotRefForCollections(ctx context.Context, ids map[int64]struct{}) (balancer.DataViewSnapshotRef, error) {
 	collectionIDs := make([]int64, 0)
+	statesByID := make(map[int64]*dataViewLifecycleState)
+	holdLifecycleLock := ids == nil
+	m.mu.Lock()
 	if ids == nil {
-		m.mu.Lock()
-		for id := range m.states {
+		for id, state := range m.states {
 			collectionIDs = append(collectionIDs, id)
+			statesByID[id] = state
 		}
-		m.mu.Unlock()
 	} else {
 		for id := range ids {
 			collectionIDs = append(collectionIDs, id)
+			state := m.states[id]
+			if state == nil {
+				state = &dataViewLifecycleState{}
+				m.states[id] = state
+			}
+			statesByID[id] = state
 		}
+	}
+	if !holdLifecycleLock {
+		m.mu.Unlock()
 	}
 	sort.Slice(collectionIDs, func(i, j int) bool { return collectionIDs[i] < collectionIDs[j] })
 	states := make([]*dataViewLifecycleState, 0, len(collectionIDs))
 	for _, id := range collectionIDs {
-		state := m.getOrCreateState(id)
+		state := statesByID[id]
 		state.mu.Lock()
 		if state.terminal {
 			state.mu.Unlock()
 			for _, held := range states {
 				held.mu.Unlock()
+			}
+			if holdLifecycleLock {
+				m.mu.Unlock()
 			}
 			return nil, dataview.NewUnavailableDataViewError(id, qviews.DataVersion{})
 		}
@@ -105,6 +119,9 @@ func (m *dataViewLifecycle) DataViewSnapshotRefForCollections(ctx context.Contex
 	defer func() {
 		for _, state := range states {
 			state.mu.Unlock()
+		}
+		if holdLifecycleLock {
+			m.mu.Unlock()
 		}
 	}()
 	return m.dataViews.DataViewSnapshotRefForCollections(ctx, ids)

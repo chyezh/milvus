@@ -20,6 +20,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -136,6 +137,46 @@ func TestDataViewLifecycleSnapshotAcquisitionSerializesWithDropMarker(t *testing
 	close(dataViews.release)
 	require.NoError(t, <-refDone)
 	require.NoError(t, <-dropDone)
+}
+
+func TestDataViewLifecycleFullSnapshotAcquisitionFencesUnknownCollectionDrop(t *testing.T) {
+	catalog := &testDataViewLifecycleCatalog{markerPresent: make(map[int64]struct{})}
+	dataViews := &blockingSnapshotLifecycleDataViews{
+		testDataViewLifecycleDataViews: &testDataViewLifecycleDataViews{
+			garbageCollectFn: func(context.Context, int64, int) error { return nil },
+			dropCollectionFn: func(context.Context, int64) (*viewpb.DataVersion, error) { return nil, nil },
+			getFn:            func(context.Context, int64, qviews.DataVersion) (dataview.DataViewRef, error) { return nil, nil },
+		},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	lifecycle, err := recoverDataViewLifecycle(context.Background(), catalog, dataViews, func(int64) bool { return true })
+	require.NoError(t, err)
+
+	refDone := make(chan error, 1)
+	go func() {
+		_, err := lifecycle.DataViewSnapshotRefForCollections(context.Background(), nil)
+		refDone <- err
+	}()
+	<-dataViews.started
+
+	dropDone := make(chan error, 1)
+	go func() { dropDone <- lifecycle.DropCollection(context.Background(), 100) }()
+	require.Never(t, func() bool {
+		catalog.mu.Lock()
+		defer catalog.mu.Unlock()
+		return len(catalog.marked) > 0
+	}, 100*time.Millisecond, 5*time.Millisecond)
+	select {
+	case err := <-dropDone:
+		t.Fatalf("drop crossed in-flight full snapshot acquisition: %v", err)
+	default:
+	}
+
+	close(dataViews.release)
+	require.NoError(t, <-refDone)
+	require.NoError(t, <-dropDone)
+	require.Equal(t, []int64{100}, catalog.marked)
 }
 
 func (m *testDataViewLifecycleDataViews) GarbageCollect(ctx context.Context, collectionID int64, retainLatest int) error {
