@@ -119,7 +119,7 @@ func TestDataViewLifecycleSnapshotAcquisitionSerializesWithDropMarker(t *testing
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	lifecycle, err := recoverDataViewLifecycle(context.Background(), catalog, dataViews, func(int64) bool { return true })
+	lifecycle, err := recoverDataViewLifecycle(context.Background(), catalog, dataViews)
 	require.NoError(t, err)
 	refDone := make(chan error, 1)
 	go func() {
@@ -150,7 +150,7 @@ func TestDataViewLifecycleFullSnapshotAcquisitionFencesUnknownCollectionDrop(t *
 		started: make(chan struct{}),
 		release: make(chan struct{}),
 	}
-	lifecycle, err := recoverDataViewLifecycle(context.Background(), catalog, dataViews, func(int64) bool { return true })
+	lifecycle, err := recoverDataViewLifecycle(context.Background(), catalog, dataViews)
 	require.NoError(t, err)
 
 	refDone := make(chan error, 1)
@@ -215,7 +215,7 @@ func (m *testDataViewLifecycleDataViews) SegmentSnapshot(context.Context, []int6
 
 func newTestDataViewLifecycle(t *testing.T, catalog *testDataViewLifecycleCatalog, dataViews *testDataViewLifecycleDataViews) *dataViewLifecycle {
 	t.Helper()
-	lifecycle, err := recoverDataViewLifecycle(context.Background(), catalog, dataViews, func(int64) bool { return true })
+	lifecycle, err := recoverDataViewLifecycle(context.Background(), catalog, dataViews)
 	require.NoError(t, err)
 	return lifecycle
 }
@@ -291,7 +291,7 @@ func TestDataViewLifecycleGetRejectsRecoveredTerminalMarkerWithoutDelegate(t *te
 			return nil, nil
 		},
 	}
-	lifecycle, err := recoverDataViewLifecycle(context.Background(), catalog, dataViews, func(int64) bool { return true })
+	lifecycle, err := recoverDataViewLifecycle(context.Background(), catalog, dataViews)
 	require.NoError(t, err)
 
 	_, err = lifecycle.Get(context.Background(), 100, qviews.DataVersion{StreamingVersion: 3})
@@ -299,23 +299,27 @@ func TestDataViewLifecycleGetRejectsRecoveredTerminalMarkerWithoutDelegate(t *te
 	require.False(t, delegated)
 }
 
-func TestDataViewLifecycleGetRejectsAbsentCollectionWithoutDelegate(t *testing.T) {
+func TestDataViewLifecycleGetDelegatesWhenCollectionCacheIsNotPopulated(t *testing.T) {
 	catalog := &testDataViewLifecycleCatalog{markerPresent: make(map[int64]struct{})}
 	delegated := false
+	expected := &testLifecycleDataViewRef{}
 	dataViews := &testDataViewLifecycleDataViews{
 		garbageCollectFn: func(context.Context, int64, int) error { return nil },
 		dropCollectionFn: func(context.Context, int64) (*viewpb.DataVersion, error) { return nil, nil },
-		getFn: func(context.Context, int64, qviews.DataVersion) (dataview.DataViewRef, error) {
+		getFn: func(_ context.Context, collectionID int64, version qviews.DataVersion) (dataview.DataViewRef, error) {
 			delegated = true
-			return nil, nil
+			require.Equal(t, int64(100), collectionID)
+			require.Equal(t, qviews.DataVersion{StreamingVersion: 1}, version)
+			return expected, nil
 		},
 	}
-	lifecycle, err := recoverDataViewLifecycle(context.Background(), catalog, dataViews, func(int64) bool { return false })
+	lifecycle, err := recoverDataViewLifecycle(context.Background(), catalog, dataViews)
 	require.NoError(t, err)
 
-	_, err = lifecycle.Get(context.Background(), 100, qviews.DataVersion{StreamingVersion: 3})
-	require.True(t, dataview.IsUnavailableDataViewError(err))
-	require.False(t, delegated)
+	actual, err := lifecycle.Get(context.Background(), 100, qviews.DataVersion{StreamingVersion: 1})
+	require.NoError(t, err)
+	require.True(t, delegated)
+	require.Same(t, expected, actual)
 }
 
 func TestDataViewLifecycleGetDelegatesLiveCollection(t *testing.T) {
@@ -330,7 +334,7 @@ func TestDataViewLifecycleGetDelegatesLiveCollection(t *testing.T) {
 			return expected, nil
 		},
 	}
-	lifecycle, err := recoverDataViewLifecycle(context.Background(), catalog, dataViews, func(int64) bool { return true })
+	lifecycle, err := recoverDataViewLifecycle(context.Background(), catalog, dataViews)
 	require.NoError(t, err)
 
 	actual, err := lifecycle.Get(context.Background(), 100, qviews.DataVersion{StreamingVersion: 3})

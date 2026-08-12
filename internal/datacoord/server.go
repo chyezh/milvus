@@ -665,7 +665,6 @@ func (s *Server) initMeta(chunkManager storage.ChunkManager) error {
 			s.ctx,
 			catalog,
 			s.dataViewManager,
-			func(collectionID int64) bool { return s.meta.GetCollection(collectionID) != nil },
 		)
 		if err != nil {
 			return err

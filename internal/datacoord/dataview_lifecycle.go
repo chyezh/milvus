@@ -50,8 +50,10 @@ func (m *dataViewLifecycle) Get(ctx context.Context, collectionID int64, version
 	defer state.mu.Unlock()
 	// Hold the collection lifecycle lock through acquisition so DropCollection's
 	// durable terminal marker is a strict fence: either this Get owns its ref
-	// first, or a marked/absent collection cannot acquire a new ref afterward.
-	if state.terminal || (m.collectionExists != nil && !m.collectionExists(collectionID)) {
+	// first, or a marked collection cannot acquire a new ref afterward. The
+	// DataCoord collection cache is populated lazily and is not an existence
+	// authority for newly created collections.
+	if state.terminal {
 		return nil, dataview.NewUnavailableDataViewError(collectionID, version)
 	}
 	return m.dataViews.Get(ctx, collectionID, version)
@@ -63,11 +65,10 @@ type dataViewLifecycleState struct {
 }
 
 type dataViewLifecycle struct {
-	mu               sync.Mutex
-	states           map[int64]*dataViewLifecycleState
-	dataViews        dataViewLifecycleDataViews
-	catalog          dataViewDropMarkerCatalog
-	collectionExists func(int64) bool
+	mu        sync.Mutex
+	states    map[int64]*dataViewLifecycleState
+	dataViews dataViewLifecycleDataViews
+	catalog   dataViewDropMarkerCatalog
 }
 
 func (m *dataViewLifecycle) SegmentSnapshot(ctx context.Context, ids []int64) balancer.SegmentSnapshot {
@@ -130,13 +131,11 @@ func recoverDataViewLifecycle(
 	ctx context.Context,
 	catalog dataViewDropMarkerCatalog,
 	dataViews dataViewLifecycleDataViews,
-	collectionExists func(int64) bool,
 ) (*dataViewLifecycle, error) {
 	manager := &dataViewLifecycle{
-		states:           make(map[int64]*dataViewLifecycleState),
-		dataViews:        dataViews,
-		catalog:          catalog,
-		collectionExists: collectionExists,
+		states:    make(map[int64]*dataViewLifecycleState),
+		dataViews: dataViews,
+		catalog:   catalog,
 	}
 	droppedCollections, err := catalog.ListDroppedDataViewCollections(ctx)
 	if err != nil {
