@@ -288,6 +288,58 @@ func newDataViewTestSegment(collectionID, partitionID, segmentID int64, channel 
 	}
 }
 
+func testMembership(segment *Segment) SegmentMembership {
+	return SegmentMembership{
+		SegmentID:    segment.GetID(),
+		CollectionID: segment.GetCollectionID(),
+		PartitionID:  segment.GetPartitionID(),
+		VChannel:     segment.GetInsertChannel(),
+		State:        segment.GetState(),
+		Level:        segment.GetLevel(),
+		IsImporting:  segment.GetIsImporting(),
+		IsInvisible:  segment.GetIsInvisible(),
+	}
+}
+
+func assignAndPublishTestSegment(
+	ctx context.Context,
+	t *testing.T,
+	manager *dataViewManager,
+	segmentID int64,
+) *viewpb.DataVersion {
+	t.Helper()
+	segment := manager.segments.GetSegment(ctx, segmentID)
+	require.NotNil(t, segment)
+	assigned, err := manager.AssignFlushVersion(ctx, segment.GetCollectionID(), segmentID)
+	require.NoError(t, err)
+	published, err := manager.CommitPublishedView(ctx, segment.GetCollectionID(), assigned, PublishedMutation{
+		Add: []SegmentMembership{testMembership(segment)},
+	})
+	require.NoError(t, err)
+	require.Equal(t, assigned, published)
+	return published
+}
+
+func commitTestRewrite(
+	ctx context.Context,
+	t *testing.T,
+	manager *dataViewManager,
+	collectionID int64,
+	remove []int64,
+	addSegmentIDs ...int64,
+) *viewpb.DataVersion {
+	t.Helper()
+	mutation := PublishedMutation{Remove: append([]int64(nil), remove...)}
+	for _, segmentID := range addSegmentIDs {
+		segment := manager.segments.GetSegment(ctx, segmentID)
+		require.NotNil(t, segment)
+		mutation.Add = append(mutation.Add, testMembership(segment))
+	}
+	version, err := manager.CommitRewrite(ctx, collectionID, mutation)
+	require.NoError(t, err)
+	return version
+}
+
 func newTestDataView(collectionID, streamingVersion, compactVersion int64, shards ...*viewpb.DataViewOfShard) *viewpb.DataViewOfCollection {
 	return &viewpb.DataViewOfCollection{
 		CollectionId: collectionID,

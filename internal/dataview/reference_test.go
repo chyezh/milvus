@@ -33,14 +33,12 @@ func TestDataViewRefProtectsExactImmutableView(t *testing.T) {
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
 	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
 
-	firstVersion, err := manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})
-	require.NoError(t, err)
+	firstVersion := assignAndPublishTestSegment(ctx, t, manager, 100)
 	firstRef, err := manager.Get(ctx, 1, qviews.FromProtoDataVersion(firstVersion))
 	require.NoError(t, err)
 	t.Cleanup(firstRef.Deref)
 
-	_, err = manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{101}})
-	require.NoError(t, err)
+	assignAndPublishTestSegment(ctx, t, manager, 101)
 
 	view := firstRef.DataView()
 	require.Equal(t, int64(1), view.CollectionID())
@@ -57,8 +55,7 @@ func TestDataViewRefDerefIsIdempotent(t *testing.T) {
 	manager, _, store := newTestDataViewManager()
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
 
-	version, err := manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})
-	require.NoError(t, err)
+	version := assignAndPublishTestSegment(ctx, t, manager, 100)
 	domainVersion := qviews.FromProtoDataVersion(version)
 	ref, err := manager.Get(ctx, 1, domainVersion)
 	require.NoError(t, err)
@@ -75,16 +72,14 @@ func TestDataViewRefLatestPublishedProtectsExactView(t *testing.T) {
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
 	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
 
-	version, err := manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})
-	require.NoError(t, err)
+	version := assignAndPublishTestSegment(ctx, t, manager, 100)
 	domainVersion := qviews.FromProtoDataVersion(version)
 	ref, err := manager.LatestPublished(ctx, 1)
 	require.NoError(t, err)
 	t.Cleanup(ref.Deref)
 	require.Equal(t, 1, dataViewReferenceCount(t, manager, 1, domainVersion))
 
-	_, err = manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{101}})
-	require.NoError(t, err)
+	assignAndPublishTestSegment(ctx, t, manager, 101)
 	require.Equal(t, domainVersion, ref.DataView().Version())
 	require.Equal(t, []int64{100}, ref.DataView().SegmentIDs("ch-1", 10))
 }
@@ -94,8 +89,7 @@ func TestDataViewRefSurvivesTerminalCollection(t *testing.T) {
 	manager, _, store := newTestDataViewManager()
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
 
-	version, err := manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})
-	require.NoError(t, err)
+	version := assignAndPublishTestSegment(ctx, t, manager, 100)
 	domainVersion := qviews.FromProtoDataVersion(version)
 	ref, err := manager.Get(ctx, 1, domainVersion)
 	require.NoError(t, err)
@@ -118,8 +112,7 @@ func TestDataViewRefRepairDoesNotReopenTerminalCollection(t *testing.T) {
 	bootstrap, catalog, store := newTestDataViewManager()
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
 
-	version, err := bootstrap.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})
-	require.NoError(t, err)
+	version := assignAndPublishTestSegment(ctx, t, bootstrap, 100)
 	recovered, err := RecoverManager(ctx, catalog, store)
 	require.NoError(t, err)
 	manager := recovered.(*dataViewManager)
@@ -140,10 +133,9 @@ func TestDataViewRefLateCreateDoesNotReopenTerminalCollection(t *testing.T) {
 	manager, catalog, store := newTestDataViewManager()
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
 
-	version, err := manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})
-	require.NoError(t, err)
+	version := assignAndPublishTestSegment(ctx, t, manager, 100)
 	domainVersion := qviews.FromProtoDataVersion(version)
-	err = manager.MarkCollectionTerminal(ctx, 1)
+	err := manager.MarkCollectionTerminal(ctx, 1)
 	require.NoError(t, err)
 
 	lateVersion, err := manager.InitializeCollection(ctx, CollectionInitialization{
