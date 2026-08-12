@@ -50,6 +50,33 @@ type fakeDataViewProvider struct {
 	segmentRequestHook func()
 }
 
+type testDataViewSnapshotRef struct {
+	snapshot *DataViewSnapshot
+}
+
+func (r *testDataViewSnapshotRef) Snapshot() *DataViewSnapshot { return r.snapshot }
+func (*testDataViewSnapshotRef) Release()                      {}
+
+func (f *fakeDataViewProvider) DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (DataViewSnapshotRef, error) {
+	return &testDataViewSnapshotRef{snapshot: f.DataViewSnapshotForCollections(ctx, collectionIDs)}, nil
+}
+
+type bareDataViewProvider struct {
+	provider *fakeDataViewProvider
+}
+
+func (p *bareDataViewProvider) DataViewSnapshot(ctx context.Context) *DataViewSnapshot {
+	return p.provider.DataViewSnapshot(ctx)
+}
+
+func (p *bareDataViewProvider) DataViewSnapshotForCollections(ctx context.Context, collectionIDs map[int64]struct{}) *DataViewSnapshot {
+	return p.provider.DataViewSnapshotForCollections(ctx, collectionIDs)
+}
+
+func (p *bareDataViewProvider) SegmentSnapshot(ctx context.Context, segmentIDs []int64) SegmentSnapshot {
+	return p.provider.SegmentSnapshot(ctx, segmentIDs)
+}
+
 func (f *fakeDataViewProvider) DataViewSnapshot(context.Context) *DataViewSnapshot {
 	return NewDataViewSnapshot(1, f.collections, newMapSegmentSnapshot(f.segments))
 }
@@ -204,6 +231,21 @@ func TestSnapshotBuilder_EmptyInputs(t *testing.T) {
 	assert.Equal(t, uint64(1), snap.DataViewSnapshot.Version())
 	assert.Empty(t, snap.Nodes)
 	assert.NotNil(t, snap.Config)
+}
+
+func TestSnapshotBuilder_RejectsProviderWithoutSnapshotRefs(t *testing.T) {
+	store := emptyLoadConfigStore(t)
+	reg := emptyRegistry(t)
+	builder := NewSnapshotBuilder(
+		store,
+		reg,
+		&fakeNodeProvider{infos: map[int64]*NodeInfo{}},
+		&bareDataViewProvider{provider: &fakeDataViewProvider{}},
+		&BalanceConfig{},
+	)
+
+	snapshot := buildFullSnapshot(builder)
+	require.Error(t, snapshot.BuildError())
 }
 
 func TestSnapshotBuilder_NodeInfosCopied(t *testing.T) {

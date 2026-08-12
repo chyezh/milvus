@@ -69,6 +69,36 @@ type testDataViewLifecycleDataViews struct {
 	getFn            func(context.Context, int64, qviews.DataVersion) (dataview.DataViewRef, error)
 }
 
+type bareSnapshotLifecycleDataViews struct {
+	*testDataViewLifecycleDataViews
+}
+
+func (*bareSnapshotLifecycleDataViews) DataViewSnapshot(context.Context) *balancer.DataViewSnapshot {
+	return balancer.NewDataViewSnapshot(0, nil, nil)
+}
+
+func (*bareSnapshotLifecycleDataViews) DataViewSnapshotForCollections(context.Context, map[int64]struct{}) *balancer.DataViewSnapshot {
+	return balancer.NewDataViewSnapshot(0, nil, nil)
+}
+
+func (*bareSnapshotLifecycleDataViews) SegmentSnapshot(context.Context, []int64) balancer.SegmentSnapshot {
+	return nil
+}
+
+func TestDataViewLifecycleSnapshotRefRejectsBareProvider(t *testing.T) {
+	catalog := &testDataViewLifecycleCatalog{markerPresent: make(map[int64]struct{})}
+	dataViews := &bareSnapshotLifecycleDataViews{testDataViewLifecycleDataViews: &testDataViewLifecycleDataViews{
+		garbageCollectFn: func(context.Context, int64, int) error { return nil },
+		dropCollectionFn: func(context.Context, int64) (*viewpb.DataVersion, error) { return nil, nil },
+		getFn:            func(context.Context, int64, qviews.DataVersion) (dataview.DataViewRef, error) { return nil, nil },
+	}}
+	lifecycle, err := recoverDataViewLifecycle(context.Background(), catalog, dataViews, func(int64) bool { return true })
+	require.NoError(t, err)
+
+	_, err = lifecycle.DataViewSnapshotRefForCollections(context.Background(), map[int64]struct{}{100: {}})
+	require.Error(t, err)
+}
+
 func TestDataViewLifecycleSnapshotRefRejectsTerminalCollection(t *testing.T) {
 	catalog := &testDataViewLifecycleCatalog{markerPresent: map[int64]struct{}{100: {}}}
 	dataViews := &testDataViewLifecycleDataViews{
@@ -97,8 +127,15 @@ type blockingSnapshotLifecycleDataViews struct {
 func (m *blockingSnapshotLifecycleDataViews) DataViewSnapshotRefForCollections(context.Context, map[int64]struct{}) (balancer.DataViewSnapshotRef, error) {
 	close(m.started)
 	<-m.release
-	return &legacyDataViewSnapshotRef{snapshot: balancer.NewDataViewSnapshot(0, nil, nil)}, nil
+	return &testLifecycleSnapshotRef{snapshot: balancer.NewDataViewSnapshot(0, nil, nil)}, nil
 }
+
+type testLifecycleSnapshotRef struct {
+	snapshot *balancer.DataViewSnapshot
+}
+
+func (r *testLifecycleSnapshotRef) Snapshot() *balancer.DataViewSnapshot { return r.snapshot }
+func (*testLifecycleSnapshotRef) Release()                               {}
 
 func TestDataViewLifecycleSnapshotAcquisitionSerializesWithDropMarker(t *testing.T) {
 	catalog := &testDataViewLifecycleCatalog{markerPresent: make(map[int64]struct{})}

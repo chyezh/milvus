@@ -10,6 +10,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/coord/loadmgr"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 // SnapshotBuilder assembles a BalancerSnapshot from the various sources:
@@ -115,18 +116,20 @@ func (b *SnapshotBuilder) build(ctx context.Context, pending triggerBatch) (*Bal
 	scope := pending.resolveScope(loadSnapshot, b.viewRegistry)
 
 	// 2. Read scoped DataViews and expand collection triggers into target shards.
-	var dataViewSnapshot *DataViewSnapshot
-	var releaseDataView func()
-	if provider, ok := b.dataViewProvider.(RefAwareDataViewProvider); ok {
-		ref, err := provider.DataViewSnapshotRefForCollections(ctx, scope.collectionIDs)
-		if err != nil {
-			return &BalancerSnapshot{Config: b.config, LoadConfigSnapshot: loadSnapshot, buildErr: err}, nil
-		}
-		dataViewSnapshot = ref.Snapshot()
-		releaseDataView = ref.Release
-	} else {
-		dataViewSnapshot = b.dataViewProvider.DataViewSnapshotForCollections(ctx, scope.collectionIDs)
+	provider, ok := b.dataViewProvider.(RefAwareDataViewProvider)
+	if !ok {
+		return &BalancerSnapshot{
+			Config:             b.config,
+			LoadConfigSnapshot: loadSnapshot,
+			buildErr:           merr.WrapErrServiceInternalMsg("data view provider does not support references"),
+		}, nil
 	}
+	ref, err := provider.DataViewSnapshotRefForCollections(ctx, scope.collectionIDs)
+	if err != nil {
+		return &BalancerSnapshot{Config: b.config, LoadConfigSnapshot: loadSnapshot, buildErr: err}, nil
+	}
+	dataViewSnapshot := ref.Snapshot()
+	releaseDataView := ref.Release
 	scope.AddDataViewShards(loadSnapshot, dataViewSnapshot)
 	targetShards := maps.Keys(scope.targetShards)
 

@@ -137,19 +137,8 @@ func (m *dataViewLifecycle) DataViewSnapshotRefForCollections(ctx context.Contex
 	if ok {
 		return provider.DataViewSnapshotRefForCollections(ctx, ids)
 	}
-	base := m.dataViewProvider()
-	if base == nil {
-		return nil, merr.WrapErrServiceNotReadyMsg("data view provider is not initialized")
-	}
-	return &legacyDataViewSnapshotRef{snapshot: base.DataViewSnapshotForCollections(ctx, ids)}, nil
+	return nil, merr.WrapErrServiceInternalMsg("data view provider does not support references")
 }
-
-type legacyDataViewSnapshotRef struct {
-	snapshot *balancer.DataViewSnapshot
-}
-
-func (r *legacyDataViewSnapshotRef) Snapshot() *balancer.DataViewSnapshot { return r.snapshot }
-func (*legacyDataViewSnapshotRef) Release()                               {}
 
 func recoverDataViewLifecycle(
 	ctx context.Context,
