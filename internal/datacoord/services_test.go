@@ -3772,25 +3772,24 @@ type blockingDDLTrimDataViewManager struct {
 	continueFinalize chan struct{}
 }
 
-func (m *blockingDDLTrimDataViewManager) CommitSegmentTrim(
+func (m *blockingDDLTrimDataViewManager) CommitMetadataFirst(
 	ctx context.Context,
 	collectionID int64,
-	resolveTargets SegmentTrimTargetResolver,
-	finalize SegmentTrimFinalize,
+	commit MetadataFirstCommit,
 ) (*viewpb.DataVersion, error) {
 	if m.beforeCore != nil {
 		close(m.beforeCore)
 		<-m.continueCore
 	}
 	if m.beforeFinalize != nil {
-		originalFinalize := finalize
-		finalize = func(ctx context.Context) error {
+		originalCommit := commit
+		commit = func(ctx context.Context, validate MetadataFirstPlanValidator) (MetadataFirstPlan, error) {
 			close(m.beforeFinalize)
 			<-m.continueFinalize
-			return originalFinalize(ctx)
+			return originalCommit(ctx, validate)
 		}
 	}
-	return m.DataViewManager.CommitSegmentTrim(ctx, collectionID, resolveTargets, finalize)
+	return m.DataViewManager.CommitMetadataFirst(ctx, collectionID, commit)
 }
 
 type failCollectionDDLTrimDataViewManager struct {
@@ -3798,16 +3797,15 @@ type failCollectionDDLTrimDataViewManager struct {
 	failCollectionID int64
 }
 
-func (m *failCollectionDDLTrimDataViewManager) CommitSegmentTrim(
+func (m *failCollectionDDLTrimDataViewManager) CommitMetadataFirst(
 	ctx context.Context,
 	collectionID int64,
-	resolveTargets SegmentTrimTargetResolver,
-	finalize SegmentTrimFinalize,
+	commit MetadataFirstCommit,
 ) (*viewpb.DataVersion, error) {
 	if collectionID == m.failCollectionID {
 		return nil, merr.WrapErrServiceUnavailableMsg("injected trim failure for collection %d", collectionID)
 	}
-	return m.DataViewManager.CommitSegmentTrim(ctx, collectionID, resolveTargets, finalize)
+	return m.DataViewManager.CommitMetadataFirst(ctx, collectionID, commit)
 }
 
 func waitDDLTrimSignal(t *testing.T, signal <-chan struct{}) {

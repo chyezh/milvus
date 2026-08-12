@@ -273,10 +273,141 @@ func TestPublicationRejectsDurablePublishedHeadRegression(t *testing.T) {
 	require.NoError(t, err)
 
 	catalog.versionStates[1].PublishedDataVersion = &viewpb.DataVersion{StreamingVersion: 1}
-	version, err := manager.CommitSegmentTrim(ctx, 1, func(context.Context) []int64 { return nil }, nil)
+	version, err := manager.CommitMetadataFirst(ctx, 1, func(
+		context.Context,
+		MetadataFirstPlanValidator,
+	) (MetadataFirstPlan, error) {
+		return MetadataFirstPlan{}, nil
+	})
 
 	require.ErrorIs(t, err, merr.ErrDataIntegrity)
 	require.Nil(t, version)
+}
+
+func TestMetadataFirstCommitValidatesBeforeMetadataPersistence(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, store := newTestDataViewManager()
+	_, err := manager.InitializeCollection(ctx, CollectionInitialization{CollectionID: 1, VChannels: []string{"ch-0"}})
+	require.NoError(t, err)
+	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-0", 1000)
+	store.segments[200] = newDataViewTestSegment(1, 10, 200, "ch-0", 2000)
+	_, err = manager.AssignFlushVersion(ctx, 1, 100)
+	require.NoError(t, err)
+	second, err := manager.AssignFlushVersion(ctx, 1, 200)
+	require.NoError(t, err)
+
+	metadataPersisted := false
+	published, err := manager.CommitMetadataFirst(ctx, 1, func(
+		_ context.Context,
+		validate MetadataFirstPlanValidator,
+	) (MetadataFirstPlan, error) {
+		plan := MetadataFirstPlan{Assigned: []AssignedMutation{{
+			Version:  second,
+			Mutation: PublishedMutation{Remove: []int64{200}},
+		}}}
+		if err := validate(plan); err != nil {
+			return MetadataFirstPlan{}, err
+		}
+		metadataPersisted = true
+		return plan, nil
+	})
+
+	require.ErrorIs(t, err, merr.ErrServiceUnavailable)
+	require.False(t, metadataPersisted)
+	require.Nil(t, published)
+	require.Len(t, catalog.views, 1)
+}
+
+func TestMetadataFirstCommitAppliesExplicitAssignedAndRewritePlan(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, store := newTestDataViewManager()
+	_, err := manager.CommitPublishedView(ctx, 1, &viewpb.DataVersion{StreamingVersion: 1}, PublishedMutation{
+		Add: []SegmentMembership{loadableMembership(1, 10, 50, "ch-0")},
+	})
+	require.NoError(t, err)
+	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-0", 1000)
+	assigned, err := manager.AssignFlushVersion(ctx, 1, 100)
+	require.NoError(t, err)
+
+	validated := false
+	version, err := manager.CommitMetadataFirst(ctx, 1, func(
+		_ context.Context,
+		validate MetadataFirstPlanValidator,
+	) (MetadataFirstPlan, error) {
+		plan := MetadataFirstPlan{
+			Assigned: []AssignedMutation{{
+				Version:  assigned,
+				Mutation: PublishedMutation{Remove: []int64{100}},
+			}},
+			Rewrite: PublishedMutation{Remove: []int64{50}},
+		}
+		require.NoError(t, validate(plan))
+		validated = true
+		return plan, nil
+	})
+
+	require.NoError(t, err)
+	require.True(t, validated)
+	requireDataVersion(t, version, 2, 1)
+	requireDataVersion(t, catalog.views[len(catalog.views)-2].GetDataVersion(), 2, 0)
+	requireDataVersion(t, catalog.views[len(catalog.views)-1].GetDataVersion(), 2, 1)
+	require.Empty(t, catalog.views[len(catalog.views)-1].GetShards())
+}
+
+func TestMetadataFirstCommitRejectsUnallocatedAssignedEpoch(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, _ := newTestDataViewManager()
+	_, err := manager.InitializeCollection(ctx, CollectionInitialization{CollectionID: 1, VChannels: []string{"ch-0"}})
+	require.NoError(t, err)
+
+	metadataPersisted := false
+	published, err := manager.CommitMetadataFirst(ctx, 1, func(
+		_ context.Context,
+		validate MetadataFirstPlanValidator,
+	) (MetadataFirstPlan, error) {
+		plan := MetadataFirstPlan{Assigned: []AssignedMutation{{
+			Version:  &viewpb.DataVersion{StreamingVersion: 2},
+			Mutation: PublishedMutation{Remove: []int64{100}},
+		}}}
+		if err := validate(plan); err != nil {
+			return MetadataFirstPlan{}, err
+		}
+		metadataPersisted = true
+		return plan, nil
+	})
+
+	require.ErrorIs(t, err, merr.ErrDataIntegrity)
+	require.False(t, metadataPersisted)
+	require.Nil(t, published)
+	require.Len(t, catalog.views, 1)
+}
+
+func TestMetadataFirstCommitRejectsInvalidRemoveID(t *testing.T) {
+	ctx := context.Background()
+	manager, catalog, store := newTestDataViewManager()
+	_, err := manager.InitializeCollection(ctx, CollectionInitialization{CollectionID: 1, VChannels: []string{"ch-0"}})
+	require.NoError(t, err)
+	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-0", 1000)
+	assigned, err := manager.AssignFlushVersion(ctx, 1, 100)
+	require.NoError(t, err)
+
+	published, err := manager.CommitMetadataFirst(ctx, 1, func(
+		_ context.Context,
+		validate MetadataFirstPlanValidator,
+	) (MetadataFirstPlan, error) {
+		plan := MetadataFirstPlan{Assigned: []AssignedMutation{{
+			Version:  assigned,
+			Mutation: PublishedMutation{Remove: []int64{0}},
+		}}}
+		if err := validate(plan); err != nil {
+			return MetadataFirstPlan{}, err
+		}
+		return plan, nil
+	})
+
+	require.ErrorIs(t, err, merr.ErrServiceInternal)
+	require.Nil(t, published)
+	require.Len(t, catalog.views, 1)
 }
 
 func TestPublicationDelayedSortOutputInheritsFlushVersion(t *testing.T) {

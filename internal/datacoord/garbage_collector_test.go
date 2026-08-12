@@ -141,21 +141,16 @@ func (m *fakeGCDataViewManager) CommitRewrite(
 	return m.publishedVersion, m.publishVersionErr
 }
 
-func (m *fakeGCDataViewManager) CommitSegmentTrim(
+func (m *fakeGCDataViewManager) CommitMetadataFirst(
 	ctx context.Context,
 	collectionID int64,
-	resolveTargets dataview.SegmentTrimTargetResolver,
-	finalize dataview.SegmentTrimFinalize,
+	commit dataview.MetadataFirstCommit,
 ) (*viewpb.DataVersion, error) {
-	targets := resolveTargets(ctx)
-	mutation := dataview.PublishedMutation{Remove: make([]int64, 0, len(targets))}
-	mutation.Remove = append(mutation.Remove, targets...)
-	m.rewriteMutations = append(m.rewriteMutations, mutation)
-	if finalize != nil {
-		if err := finalize(ctx); err != nil {
-			return nil, err
-		}
+	plan, err := commit(ctx, func(dataview.MetadataFirstPlan) error { return nil })
+	if err != nil {
+		return nil, err
 	}
+	m.rewriteMutations = append(m.rewriteMutations, plan.Rewrite)
 	if m.publishVersionErr != nil {
 		return m.publishedVersion, m.publishVersionErr
 	}

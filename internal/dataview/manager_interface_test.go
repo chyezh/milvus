@@ -78,14 +78,18 @@ func TestDataViewSegmentProjectionExcludesMembershipInferenceFields(t *testing.T
 func TestManagerExposesStateOperationsInsteadOfLifecycleEvents(t *testing.T) {
 	managerType := reflect.TypeOf((*Manager)(nil)).Elem()
 
-	for _, method := range []string{"InitializeCollection", "MarkCollectionTerminal"} {
+	for _, method := range []string{"InitializeCollection", "MarkCollectionTerminal", "CommitMetadataFirst"} {
 		_, ok := managerType.MethodByName(method)
 		require.True(t, ok, "dataview.Manager must expose state operation %s", method)
 	}
-	for _, method := range []string{"OnCreateCollection", "OnDropCollection"} {
+	for _, method := range []string{"OnCreateCollection", "OnDropCollection", "CommitSegmentTrim"} {
 		_, ok := managerType.MethodByName(method)
 		require.False(t, ok, "dataview.Manager must not expose lifecycle event method %s", method)
 	}
+
+	packagePath := reflect.TypeOf((*MetadataFirstCommit)(nil)).Elem()
+	require.Equal(t, 2, packagePath.NumIn(), "metadata-first callback receives context and the core plan validator")
+	require.Equal(t, 2, packagePath.NumOut(), "metadata-first callback returns an explicit plan and an error")
 }
 
 func TestDataViewManagerResponsibilitiesStayInFocusedFiles(t *testing.T) {

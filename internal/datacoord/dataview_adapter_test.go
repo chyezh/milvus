@@ -16,51 +16,29 @@ import (
 	"github.com/milvus-io/milvus/pkg/v3/util/typeutil"
 )
 
-func TestCommitDataViewTrimPassesExplicitIDsWithoutReadingSegmentMetadata(t *testing.T) {
-	manager := &recordingSegmentTrimManager{}
-	meta := &meta{dataViewManager: manager}
+func TestMetadataFirstTrimPlanReturnsExplicitPublications(t *testing.T) {
+	segments := []*SegmentInfo{
+		NewSegmentInfo(&datapb.SegmentInfo{
+			ID:                  100,
+			CollectionID:        1,
+			SealedAtDataVersion: &viewpb.DataVersion{StreamingVersion: 2},
+		}),
+		NewSegmentInfo(&datapb.SegmentInfo{
+			ID:                  200,
+			CollectionID:        1,
+			SealedAtDataVersion: &viewpb.DataVersion{StreamingVersion: 2},
+		}),
+		NewSegmentInfo(&datapb.SegmentInfo{ID: 300, CollectionID: 1}),
+	}
 
-	require.NotPanics(t, func() {
-		_, err := meta.commitDataViewTrim(context.Background(), 1, func(context.Context) []int64 {
-			return []int64{100, 200}
-		}, nil)
-		require.NoError(t, err)
-	})
-	require.Equal(t, []int64{100, 200}, manager.targets)
-}
+	plan, err := metadataFirstTrimPlan(1, segments)
 
-func TestSegmentIDsForDataViewPartitionTrimUsesLockedMetaAccessor(t *testing.T) {
-	mt := &meta{ctx: context.Background(), segments: NewSegmentsInfo()}
-	selectCalled := false
-	patch := mockey.Mock((*meta).SelectSegments).To(func(_ *meta, _ context.Context, _ ...SegmentFilter) []*SegmentInfo {
-		selectCalled = true
-		return []*SegmentInfo{NewSegmentInfo(&datapb.SegmentInfo{ID: 100})}
-	}).Build()
-	defer patch.UnPatch()
-
-	segmentIDs := mt.segmentIDsForDataViewTrim(
-		context.Background(),
-		1,
-		dataViewPartitionTrimFilter(map[int64]struct{}{10: {}}),
-	)
-
-	require.True(t, selectCalled)
-	require.Equal(t, []int64{100}, segmentIDs)
-}
-
-func TestSegmentIDsForDataViewTruncateTrimUsesLockedMetaAccessor(t *testing.T) {
-	mt := &meta{ctx: context.Background(), segments: NewSegmentsInfo()}
-	selectCalled := false
-	patch := mockey.Mock((*meta).SelectSegments).To(func(_ *meta, _ context.Context, _ ...SegmentFilter) []*SegmentInfo {
-		selectCalled = true
-		return []*SegmentInfo{NewSegmentInfo(&datapb.SegmentInfo{ID: 100})}
-	}).Build()
-	defer patch.UnPatch()
-
-	segmentIDs := mt.segmentIDsForDataViewTrim(context.Background(), 1, dataViewTruncateTrimFilter("ch-0", 100))
-
-	require.True(t, selectCalled)
-	require.Equal(t, []int64{100}, segmentIDs)
+	require.NoError(t, err)
+	require.Equal(t, []AssignedMutation{{
+		Version:  &viewpb.DataVersion{StreamingVersion: 2},
+		Mutation: PublishedMutation{Remove: []int64{100, 200}},
+	}}, plan.Assigned)
+	require.Equal(t, PublishedMutation{Remove: []int64{100, 200, 300}}, plan.Rewrite)
 }
 
 func TestLoadablePublishedMembershipsUsesLockedMetaAccessor(t *testing.T) {
@@ -105,26 +83,6 @@ func TestLoadableCompactionMembershipsUsesLockedMetaAccessor(t *testing.T) {
 	require.True(t, getCalled)
 	require.True(t, ready)
 	require.Equal(t, []SegmentMembership{{SegmentID: 100, CollectionID: 1, State: commonpb.SegmentState_Flushed, Level: datapb.SegmentLevel_L1}}, memberships)
-}
-
-type recordingSegmentTrimManager struct {
-	DataViewManager
-	targets []int64
-}
-
-func (m *recordingSegmentTrimManager) CommitSegmentTrim(
-	ctx context.Context,
-	collectionID int64,
-	resolveTargets SegmentTrimTargetResolver,
-	finalize SegmentTrimFinalize,
-) (*viewpb.DataVersion, error) {
-	m.targets = append([]int64(nil), resolveTargets(ctx)...)
-	if finalize != nil {
-		if err := finalize(ctx); err != nil {
-			return nil, err
-		}
-	}
-	return nil, nil
 }
 
 func (m *fakeGCDataViewManager) SegmentSnapshot(ctx context.Context, segmentIDs []int64) dataview.SegmentSnapshot {

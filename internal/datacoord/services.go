@@ -2502,11 +2502,7 @@ func (s *Server) NotifyDropPartition(ctx context.Context, channel string, partit
 		}
 		trimFilter := dataViewPartitionTrimFilter(partitionSet)
 		for _, collectionID := range s.meta.GetCollectionIDsByPartition(ctx, partitionIDs) {
-			if _, err := s.meta.commitDataViewTrim(ctx, collectionID, func(ctx context.Context) []int64 {
-				return s.meta.segmentIDsForDataViewTrim(ctx, collectionID, trimFilter)
-			}, func(ctx context.Context) error {
-				return s.meta.finalizeDataViewTrim(ctx, collectionID, trimFilter)
-			}); err != nil {
+			if _, err := s.meta.commitDataViewTrim(ctx, collectionID, trimFilter); err != nil {
 				return err
 			}
 		}
@@ -2536,11 +2532,7 @@ func (s *Server) DropSegmentsByTime(ctx context.Context, collectionID int64, flu
 		}
 		if s.dataViewManager != nil {
 			trimFilter := dataViewTruncateTrimFilter(channelName, flushTs)
-			_, err = s.meta.commitDataViewTrim(ctx, collectionID, func(ctx context.Context) []int64 {
-				return s.meta.segmentIDsForDataViewTrim(ctx, collectionID, trimFilter)
-			}, func(ctx context.Context) error {
-				return s.meta.finalizeDataViewTrim(ctx, collectionID, trimFilter)
-			})
+			_, err = s.meta.commitDataViewTrim(ctx, collectionID, trimFilter)
 			if err != nil {
 				mlog.Warn(ctx, "trim truncated segments from DataView failed", mlog.Err(err))
 				return err

@@ -45,7 +45,7 @@ type Manager interface {
 	RetryAssignedFlushPublication(ctx context.Context, collectionID, segmentID int64, assignedVersion *viewpb.DataVersion, removeOnly bool) (*viewpb.DataVersion, error)
 	CommitStreamingView(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
 	CommitRewrite(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
-	CommitSegmentTrim(ctx context.Context, collectionID int64, resolveTargets SegmentTrimTargetResolver, finalize SegmentTrimFinalize) (*viewpb.DataVersion, error)
+	CommitMetadataFirst(ctx context.Context, collectionID int64, commit MetadataFirstCommit) (*viewpb.DataVersion, error)
 	InitializeCollection(ctx context.Context, initialization CollectionInitialization) (*viewpb.DataVersion, error)
 	MarkCollectionTerminal(ctx context.Context, collectionID int64) error
 
@@ -63,13 +63,28 @@ type CollectionInitialization struct {
 	VChannels    []string
 }
 
-// SegmentTrimTargetResolver returns the current target IDs while the
-// collection DataView state lock is held.
-type SegmentTrimTargetResolver func(context.Context) []int64
+// AssignedMutation completes one already allocated Streaming epoch with an
+// explicit membership mutation.
+type AssignedMutation struct {
+	Version  *viewpb.DataVersion
+	Mutation PublishedMutation
+}
 
-// SegmentTrimFinalize persistently applies the resolved trim scope before the
-// collection DataView state lock is released.
-type SegmentTrimFinalize func(context.Context) error
+// MetadataFirstPlan describes the DataView publications enabled by one
+// metadata commit. The callback owns all business-specific metadata reads and
+// persistence; DataView only validates and applies this explicit plan.
+type MetadataFirstPlan struct {
+	Assigned []AssignedMutation
+	Rewrite  PublishedMutation
+}
+
+// MetadataFirstPlanValidator checks whether a plan can follow the current
+// durable DataView head without overtaking an unfinished Streaming epoch.
+type MetadataFirstPlanValidator func(MetadataFirstPlan) error
+
+// MetadataFirstCommit persists business metadata before returning the exact
+// DataView publications enabled by that durable metadata state.
+type MetadataFirstCommit func(context.Context, MetadataFirstPlanValidator) (MetadataFirstPlan, error)
 
 type collectionDataViewState struct {
 	mu           sync.RWMutex

@@ -18,6 +18,7 @@ package datacoord
 
 import (
 	"context"
+	"sort"
 
 	"github.com/samber/lo"
 	"google.golang.org/protobuf/proto"
@@ -35,8 +36,10 @@ type (
 	DataViewManager                  = dataview.Manager
 	DataViewCollectionInitialization = dataview.CollectionInitialization
 	SegmentMembership                = dataview.SegmentMembership
-	SegmentTrimTargetResolver        = dataview.SegmentTrimTargetResolver
-	SegmentTrimFinalize              = dataview.SegmentTrimFinalize
+	AssignedMutation                 = dataview.AssignedMutation
+	MetadataFirstPlan                = dataview.MetadataFirstPlan
+	MetadataFirstPlanValidator       = dataview.MetadataFirstPlanValidator
+	MetadataFirstCommit              = dataview.MetadataFirstCommit
 	PublishedMutation                = dataview.PublishedMutation
 )
 
@@ -222,24 +225,97 @@ func (m *meta) commitDataViewRewrite(
 func (m *meta) commitDataViewTrim(
 	ctx context.Context,
 	collectionID int64,
-	resolveTargets SegmentTrimTargetResolver,
-	finalize SegmentTrimFinalize,
+	trimFilter SegmentFilter,
 ) (*viewpb.DataVersion, error) {
 	if m.dataViewManager == nil {
 		return nil, nil
 	}
-	return m.dataViewManager.CommitSegmentTrim(ctx, collectionID, resolveTargets, finalize)
+	return m.dataViewManager.CommitMetadataFirst(ctx, collectionID, func(
+		ctx context.Context,
+		validate MetadataFirstPlanValidator,
+	) (MetadataFirstPlan, error) {
+		m.segMu.Lock()
+		defer m.segMu.Unlock()
+
+		segments := m.segmentsForDataViewTrimLocked(collectionID, trimFilter)
+		plan, err := metadataFirstTrimPlan(collectionID, segments)
+		if err != nil {
+			return MetadataFirstPlan{}, err
+		}
+		if err := validate(plan); err != nil {
+			return MetadataFirstPlan{}, err
+		}
+		if err := m.persistDataViewTrimLocked(ctx, segments); err != nil {
+			return MetadataFirstPlan{}, err
+		}
+		return plan, nil
+	})
 }
 
-func (m *meta) finalizeDataViewTrim(ctx context.Context, collectionID int64, trimFilter SegmentFilter) error {
-	m.segMu.Lock()
-	defer m.segMu.Unlock()
-
+func (m *meta) segmentsForDataViewTrimLocked(collectionID int64, trimFilter SegmentFilter) []*SegmentInfo {
 	filters := []SegmentFilter{WithCollection(collectionID)}
 	if trimFilter != nil {
 		filters = append(filters, trimFilter)
 	}
-	segments := m.segments.GetSegmentsBySelector(filters...)
+	return m.segments.GetSegmentsBySelector(filters...)
+}
+
+func metadataFirstTrimPlan(collectionID int64, segments []*SegmentInfo) (MetadataFirstPlan, error) {
+	plan := MetadataFirstPlan{
+		Rewrite: PublishedMutation{Remove: make([]int64, 0, len(segments))},
+	}
+	assignedByVersion := make(map[int64][]int64)
+	for _, segment := range segments {
+		if segment.GetCollectionID() != collectionID {
+			return MetadataFirstPlan{}, merr.WrapErrDataIntegrityMsg(
+				"trimmed segment %d belongs to collection %d, requested collection %d",
+				segment.GetID(),
+				segment.GetCollectionID(),
+				collectionID,
+			)
+		}
+		segmentID := segment.GetID()
+		if segmentID <= 0 {
+			return MetadataFirstPlan{}, merr.WrapErrServiceInternalMsg(
+				"invalid segment %d for metadata-first commit of collection %d",
+				segmentID,
+				collectionID,
+			)
+		}
+		plan.Rewrite.Remove = append(plan.Rewrite.Remove, segmentID)
+		assigned := segment.GetSealedAtDataVersion()
+		if assigned == nil {
+			continue
+		}
+		if assigned.GetStreamingVersion() <= 0 || assigned.GetCompactVersion() != 0 {
+			return MetadataFirstPlan{}, merr.WrapErrDataIntegrityMsg(
+				"trimmed segment %d has invalid assigned DataVersion %d/%d in collection %d",
+				segmentID,
+				assigned.GetStreamingVersion(),
+				assigned.GetCompactVersion(),
+				collectionID,
+			)
+		}
+		streamingVersion := assigned.GetStreamingVersion()
+		assignedByVersion[streamingVersion] = append(assignedByVersion[streamingVersion], segmentID)
+	}
+	sort.Slice(plan.Rewrite.Remove, func(i, j int) bool {
+		return plan.Rewrite.Remove[i] < plan.Rewrite.Remove[j]
+	})
+	for streamingVersion, segmentIDs := range assignedByVersion {
+		sort.Slice(segmentIDs, func(i, j int) bool { return segmentIDs[i] < segmentIDs[j] })
+		plan.Assigned = append(plan.Assigned, AssignedMutation{
+			Version:  &viewpb.DataVersion{StreamingVersion: streamingVersion},
+			Mutation: PublishedMutation{Remove: segmentIDs},
+		})
+	}
+	sort.Slice(plan.Assigned, func(i, j int) bool {
+		return plan.Assigned[i].Version.GetStreamingVersion() < plan.Assigned[j].Version.GetStreamingVersion()
+	})
+	return plan, nil
+}
+
+func (m *meta) persistDataViewTrimLocked(ctx context.Context, segments []*SegmentInfo) error {
 	metricMutation := &segMetricMutation{stateChange: make(segmentMetricStateChange)}
 	segmentsToDrop := make([]*SegmentInfo, 0, len(segments))
 	for _, segment := range segments {
@@ -298,15 +374,6 @@ func dataViewTruncateTrimFilter(vchannel string, flushTs uint64) SegmentFilter {
 		}
 		return segmentEffectiveDmlTs(segment.SegmentInfo) <= flushTs
 	})
-}
-
-func (m *meta) segmentIDsForDataViewTrim(ctx context.Context, collectionID int64, trimFilter SegmentFilter) []int64 {
-	filters := []SegmentFilter{WithCollection(collectionID)}
-	if trimFilter != nil {
-		filters = append(filters, trimFilter)
-	}
-	segments := m.SelectSegments(ctx, filters...)
-	return lo.Map(segments, func(segment *SegmentInfo, _ int) int64 { return segment.GetID() })
 }
 
 func dataViewSegmentMemSize(segment *SegmentInfo) int64 {

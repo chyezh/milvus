@@ -20,7 +20,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"sort"
 
 	"google.golang.org/protobuf/proto"
 
@@ -232,13 +231,13 @@ func (m *dataViewManager) CommitRewrite(
 	return m.commitRewriteLocked(ctx, state, m.catalog, mutation)
 }
 
-// CommitSegmentTrim persists the scoped SegmentMeta removal fence before it
-// completes targeted unpublished assigned epochs and removes published targets.
-func (m *dataViewManager) CommitSegmentTrim(
+// CommitMetadataFirst holds the collection publication lock while the caller
+// persists business metadata, then applies only the explicit DataView plan
+// returned by that metadata commit.
+func (m *dataViewManager) CommitMetadataFirst(
 	ctx context.Context,
 	collectionID int64,
-	resolveTargets SegmentTrimTargetResolver,
-	finalize SegmentTrimFinalize,
+	commit MetadataFirstCommit,
 ) (*viewpb.DataVersion, error) {
 	state := m.getOrCreateState(collectionID)
 	state.mu.Lock()
@@ -246,8 +245,8 @@ func (m *dataViewManager) CommitSegmentTrim(
 	if state.dropped {
 		return nil, merr.WrapErrServiceNotReadyMsg("data view collection %d is terminal", collectionID)
 	}
-	if resolveTargets == nil {
-		return nil, merr.WrapErrServiceInternalMsg("target resolver is nil for DataView trim of collection %d", collectionID)
+	if commit == nil {
+		return nil, merr.WrapErrServiceInternalMsg("metadata-first commit is nil for collection %d", collectionID)
 	}
 	if err := m.recoverPublicationStateLocked(ctx, state, m.catalog); err != nil {
 		return nil, err
@@ -255,45 +254,27 @@ func (m *dataViewManager) CommitSegmentTrim(
 	if err := m.refreshDurablePublicationLocked(ctx, state, m.catalog); err != nil {
 		return nil, err
 	}
-	targetIDs, err := resolveSegmentTrimTargetIDs(ctx, resolveTargets, collectionID)
+	validate := func(plan MetadataFirstPlan) error {
+		return validateMetadataFirstPlanLocked(collectionID, state, plan)
+	}
+	plan, err := commit(ctx, validate)
 	if err != nil {
 		return nil, err
 	}
-	assignedTargets, err := m.resolveSegmentTrimTargetsLocked(ctx, collectionID, targetIDs)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateSegmentTrimOrderingLocked(state, assignedTargets); err != nil {
-		return nil, err
-	}
-	if finalize != nil {
-		if err := finalize(ctx); err != nil {
-			return nil, err
-		}
-	}
-
-	targetIDs, err = resolveSegmentTrimTargetIDs(ctx, resolveTargets, collectionID)
-	if err != nil {
-		return nil, err
-	}
-	assignedTargets, err = m.resolveSegmentTrimTargetsLocked(ctx, collectionID, targetIDs)
-	if err != nil {
-		return nil, err
-	}
-	if err := validateSegmentTrimOrderingLocked(state, assignedTargets); err != nil {
+	if err := validate(plan); err != nil {
 		return nil, err
 	}
 
-	for _, target := range assignedTargets {
-		streamingVersion := target.assignedVersion.GetStreamingVersion()
+	for _, assigned := range plan.Assigned {
+		streamingVersion := assigned.Version.GetStreamingVersion()
 		if streamingVersion <= state.versionState.GetPublishedDataVersion().GetStreamingVersion() {
 			continue
 		}
 		state.pendingAssigned[streamingVersion] = struct{}{}
-		state.readyPublications[streamingVersion] = PublishedMutation{Remove: []int64{target.segmentID}}
+		state.readyPublications[streamingVersion] = clonePublishedMutation(assigned.Mutation)
 		if pending := minimumPendingStreamingVersion(state.pendingAssigned); pending != streamingVersion {
 			return nil, merr.WrapErrServiceUnavailableMsg(
-				"trim of assigned DataVersion %d/0 for collection %d is waiting for earlier assigned epoch %d/0",
+				"metadata-first publication of assigned DataVersion %d/0 for collection %d is waiting for earlier assigned epoch %d/0",
 				streamingVersion,
 				collectionID,
 				pending,
@@ -309,59 +290,71 @@ func (m *dataViewManager) CommitSegmentTrim(
 		delete(state.readyPublications, streamingVersion)
 	}
 
-	publishedTargets := make([]int64, 0, len(targetIDs))
-	for _, segmentID := range targetIDs {
+	rewrite := clonePublishedMutation(plan.Rewrite)
+	removals := rewrite.Remove[:0]
+	for _, segmentID := range rewrite.Remove {
 		if dataViewContainsSegment(state.published, segmentID) {
-			publishedTargets = append(publishedTargets, segmentID)
+			removals = append(removals, segmentID)
 		}
 	}
-	if len(publishedTargets) == 0 {
+	rewrite.Remove = removals
+	if len(rewrite.Add) == 0 && len(rewrite.Remove) == 0 {
 		return dataVersionFromView(state.published), nil
 	}
-	version, err := m.commitRewriteLocked(ctx, state, m.catalog, PublishedMutation{Remove: publishedTargets})
+	version, err := m.commitRewriteLocked(ctx, state, m.catalog, rewrite)
 	if err != nil {
 		return nil, err
 	}
 	return version, nil
 }
 
-func resolveSegmentTrimTargetIDs(
-	ctx context.Context,
-	resolveTargets SegmentTrimTargetResolver,
+func validateMetadataFirstPlanLocked(
 	collectionID int64,
-) ([]int64, error) {
-	targetIDs := append([]int64(nil), resolveTargets(ctx)...)
-	for _, segmentID := range targetIDs {
-		if segmentID <= 0 {
-			return nil, merr.WrapErrServiceInternalMsg("invalid segment %d for DataView trim of collection %d", segmentID, collectionID)
-		}
-	}
-	return targetIDs, nil
-}
-
-func validateSegmentTrimOrderingLocked(
 	state *collectionDataViewState,
-	assignedTargets []resolvedSegmentTrimTarget,
+	plan MetadataFirstPlan,
 ) error {
-	pending := make(map[int64]struct{}, len(state.pendingAssigned)+len(assignedTargets))
+	pending := make(map[int64]struct{}, len(state.pendingAssigned)+len(plan.Assigned))
 	for streamingVersion := range state.pendingAssigned {
 		pending[streamingVersion] = struct{}{}
 	}
 	publishedStreaming := state.versionState.GetPublishedDataVersion().GetStreamingVersion()
-	for _, target := range assignedTargets {
-		streamingVersion := target.assignedVersion.GetStreamingVersion()
+	previousStreaming := int64(0)
+	for _, assigned := range plan.Assigned {
+		if assigned.Version == nil || assigned.Version.GetStreamingVersion() <= 0 || assigned.Version.GetCompactVersion() != 0 {
+			return merr.WrapErrServiceInternalMsg("invalid assigned DataVersion in metadata-first plan for collection %d", collectionID)
+		}
+		if err := validatePublishedMutation(collectionID, assigned.Mutation); err != nil {
+			return err
+		}
+		streamingVersion := assigned.Version.GetStreamingVersion()
+		if streamingVersion > publishedStreaming {
+			if _, allocated := state.pendingAssigned[streamingVersion]; !allocated {
+				return merr.WrapErrDataIntegrityMsg(
+					"metadata-first plan for collection %d completes unallocated Streaming epoch %d/0",
+					collectionID,
+					streamingVersion,
+				)
+			}
+		}
+		if previousStreaming != 0 && streamingVersion <= previousStreaming {
+			return merr.WrapErrServiceInternalMsg("metadata-first assigned versions for collection %d are not strictly increasing", collectionID)
+		}
+		previousStreaming = streamingVersion
 		if streamingVersion > publishedStreaming {
 			pending[streamingVersion] = struct{}{}
 		}
 	}
-	for _, target := range assignedTargets {
-		streamingVersion := target.assignedVersion.GetStreamingVersion()
+	if err := validatePublishedMutation(collectionID, plan.Rewrite); err != nil {
+		return err
+	}
+	for _, assigned := range plan.Assigned {
+		streamingVersion := assigned.Version.GetStreamingVersion()
 		if streamingVersion <= publishedStreaming {
 			continue
 		}
 		if earlier := minimumPendingStreamingVersion(pending); earlier != streamingVersion {
 			return merr.WrapErrServiceUnavailableMsg(
-				"trim of assigned DataVersion %d/0 for collection %d is waiting for earlier assigned epoch %d/0",
+				"metadata-first publication of assigned DataVersion %d/0 for collection %d is waiting for earlier assigned epoch %d/0",
 				streamingVersion,
 				state.collectionID,
 				earlier,
@@ -371,58 +364,6 @@ func validateSegmentTrimOrderingLocked(
 		publishedStreaming = streamingVersion
 	}
 	return nil
-}
-
-func (m *dataViewManager) resolveSegmentTrimTargetsLocked(
-	ctx context.Context,
-	collectionID int64,
-	targetIDs []int64,
-) ([]resolvedSegmentTrimTarget, error) {
-	assignedTargets := make([]resolvedSegmentTrimTarget, 0, len(targetIDs))
-	for _, segmentID := range targetIDs {
-		segment := m.segments.GetSegment(ctx, segmentID)
-		if segment == nil {
-			return nil, merr.WrapErrServiceUnavailableMsg(
-				"segment %d disappeared before DataView trim of collection %d",
-				segmentID,
-				collectionID,
-			)
-		}
-		if segment.GetCollectionID() != collectionID {
-			return nil, merr.WrapErrDataIntegrityMsg(
-				"trimmed segment %d belongs to collection %d, requested collection %d",
-				segmentID,
-				segment.GetCollectionID(),
-				collectionID,
-			)
-		}
-		assigned := segment.GetSealedAtDataVersion()
-		if assigned == nil {
-			continue
-		}
-		if assigned.GetStreamingVersion() <= 0 || assigned.GetCompactVersion() != 0 {
-			return nil, merr.WrapErrDataIntegrityMsg(
-				"trimmed segment %d has invalid assigned DataVersion %d/%d in collection %d",
-				segmentID,
-				assigned.GetStreamingVersion(),
-				assigned.GetCompactVersion(),
-				collectionID,
-			)
-		}
-		assignedTargets = append(assignedTargets, resolvedSegmentTrimTarget{
-			segmentID:       segmentID,
-			assignedVersion: cloneDataVersion(assigned),
-		})
-	}
-	sort.Slice(assignedTargets, func(i, j int) bool {
-		return assignedTargets[i].assignedVersion.GetStreamingVersion() < assignedTargets[j].assignedVersion.GetStreamingVersion()
-	})
-	return assignedTargets, nil
-}
-
-type resolvedSegmentTrimTarget struct {
-	segmentID       int64
-	assignedVersion *viewpb.DataVersion
 }
 
 func (m *dataViewManager) refreshDurablePublicationLocked(
@@ -494,6 +435,15 @@ func (m *dataViewManager) commitRewriteLocked(
 }
 
 func validatePublishedMutation(collectionID int64, mutation PublishedMutation) error {
+	for _, segmentID := range mutation.Remove {
+		if segmentID <= 0 {
+			return merr.WrapErrServiceInternalMsg(
+				"invalid removed segment %d in published mutation for collection %d",
+				segmentID,
+				collectionID,
+			)
+		}
+	}
 	for _, membership := range mutation.Add {
 		if membership.SegmentID <= 0 || membership.CollectionID != collectionID || membership.VChannel == "" {
 			return merr.WrapErrServiceInternalMsg(
