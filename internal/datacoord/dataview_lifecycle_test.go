@@ -161,7 +161,20 @@ func TestDataViewLifecycleFullSnapshotAcquisitionFencesUnknownCollectionDrop(t *
 	<-dataViews.started
 
 	dropDone := make(chan error, 1)
-	go func() { dropDone <- lifecycle.DropCollection(context.Background(), 100) }()
+	dropStarted := make(chan struct{})
+	go func() {
+		close(dropStarted)
+		dropDone <- lifecycle.DropCollection(context.Background(), 100)
+	}()
+	<-dropStarted
+	select {
+	case err := <-dropDone:
+		t.Fatalf("drop crossed in-flight full snapshot acquisition: %v", err)
+	default:
+	}
+	catalog.mu.Lock()
+	require.Empty(t, catalog.marked)
+	catalog.mu.Unlock()
 	require.Never(t, func() bool {
 		catalog.mu.Lock()
 		defer catalog.mu.Unlock()

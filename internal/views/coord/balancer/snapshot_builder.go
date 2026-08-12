@@ -128,6 +128,14 @@ func (b *SnapshotBuilder) build(ctx context.Context, pending triggerBatch) (*Bal
 		}, nil
 	}
 	dataViewSnapshot := ref.Snapshot()
+	if dataViewSnapshot == nil {
+		ref.Release()
+		return &BalancerSnapshot{
+			Config:             b.config,
+			LoadConfigSnapshot: loadSnapshot,
+			buildErr:           merr.WrapErrServiceInternalMsg("data view provider returned a nil referenced snapshot"),
+		}, nil
+	}
 	releaseDataView := ref.Release
 	scope.AddDataViewShards(loadSnapshot, dataViewSnapshot)
 	targetShards := maps.Keys(scope.targetShards)

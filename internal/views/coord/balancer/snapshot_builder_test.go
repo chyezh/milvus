@@ -16,6 +16,7 @@ import (
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/querypb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
+	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 // --- fake providers used throughout the tests ---
@@ -51,6 +52,7 @@ type fakeDataViewProvider struct {
 	snapshotRefAcquires int
 	snapshotRefReleases int
 	nilSnapshotRef      bool
+	nilSnapshot         bool
 }
 
 type testDataViewSnapshotRef struct {
@@ -72,8 +74,12 @@ func (f *fakeDataViewProvider) DataViewSnapshotRefForCollections(ctx context.Con
 	if f.nilSnapshotRef {
 		return nil, nil
 	}
+	var snapshot *DataViewSnapshot
+	if !f.nilSnapshot {
+		snapshot = f.snapshotForCollections(ctx, collectionIDs)
+	}
 	return &testDataViewSnapshotRef{
-		snapshot: f.snapshotForCollections(ctx, collectionIDs),
+		snapshot: snapshot,
 		release:  func() { f.snapshotRefReleases++ },
 	}, nil
 }
@@ -90,7 +96,27 @@ func TestSnapshotBuilder_RejectsNilSnapshotRef(t *testing.T) {
 	)
 
 	snapshot := buildFullSnapshot(builder)
-	require.Error(t, snapshot.BuildError())
+	require.ErrorIs(t, snapshot.BuildError(), merr.ErrServiceInternal)
+}
+
+func TestSnapshotBuilder_RejectsNilReferencedSnapshotAndReleasesRef(t *testing.T) {
+	store := emptyLoadConfigStore(t)
+	reg := emptyRegistry(t)
+	provider := &fakeDataViewProvider{nilSnapshot: true}
+	builder := NewSnapshotBuilder(
+		store,
+		reg,
+		&fakeNodeProvider{infos: map[int64]*NodeInfo{}},
+		provider,
+		&BalanceConfig{},
+	)
+
+	snapshot := buildFullSnapshot(builder)
+	require.ErrorIs(t, snapshot.BuildError(), merr.ErrServiceInternal)
+	require.Equal(t, 1, provider.snapshotRefAcquires)
+	require.Equal(t, 1, provider.snapshotRefReleases)
+	snapshot.Close()
+	require.Equal(t, 1, provider.snapshotRefReleases)
 }
 
 func (f *fakeDataViewProvider) snapshotForCollections(_ context.Context, collectionIDs map[int64]struct{}) *DataViewSnapshot {
