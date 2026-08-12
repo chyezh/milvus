@@ -23,6 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/milvus-io/milvus/internal/views/qviews"
+	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
 	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
@@ -168,6 +169,99 @@ func TestDataViewRefRejectsMissingView(t *testing.T) {
 	_, err := manager.Get(ctx, 1, qviews.DataVersion{StreamingVersion: 1})
 	requireUnavailableDataViewError(t, err)
 	_, err = manager.LatestPublished(ctx, 1)
+	requireUnavailableDataViewError(t, err)
+}
+
+func TestDataViewRefRejectsSnapshotNewerThanPublishedHead(t *testing.T) {
+	ctx := context.Background()
+	head := newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100))
+	orphan := newTestDataView(1, 2, 0, newTestDataViewShard("ch-1", 10, 200))
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{head, orphan},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 2,
+				PublishedDataVersion:      head.GetDataVersion(),
+			},
+		},
+	}
+	manager, err := RecoverManager(ctx, catalog, &fakeDataViewSegmentStore{segments: map[int64]*Segment{}})
+	require.NoError(t, err)
+
+	headRef, err := manager.Get(ctx, 1, qviews.DataVersion{StreamingVersion: 1})
+	require.NoError(t, err)
+	t.Cleanup(headRef.Deref)
+	require.Equal(t, []int64{100}, headRef.DataView().SegmentIDs("ch-1", 10))
+
+	_, err = manager.Get(ctx, 1, qviews.DataVersion{StreamingVersion: 2})
+	requireUnavailableDataViewError(t, err)
+}
+
+func TestDataViewRefAllowsPublishedHistoricalSnapshot(t *testing.T) {
+	ctx := context.Background()
+	historical := newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100))
+	head := newTestDataView(1, 2, 0, newTestDataViewShard("ch-1", 10, 100, 200))
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{historical, head},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 2,
+				PublishedDataVersion:      head.GetDataVersion(),
+			},
+		},
+	}
+	manager, err := RecoverManager(ctx, catalog, &fakeDataViewSegmentStore{segments: map[int64]*Segment{}})
+	require.NoError(t, err)
+
+	ref, err := manager.Get(ctx, 1, qviews.DataVersion{StreamingVersion: 1})
+	require.NoError(t, err)
+	t.Cleanup(ref.Deref)
+	require.Equal(t, []int64{100}, ref.DataView().SegmentIDs("ch-1", 10))
+}
+
+func TestDataViewRefRecoversPublishedHeadBeforeExactLookup(t *testing.T) {
+	ctx := context.Background()
+	head := newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100))
+	orphan := newTestDataView(1, 2, 0, newTestDataViewShard("ch-1", 10, 200))
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{head, orphan},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 2,
+				PublishedDataVersion:      head.GetDataVersion(),
+			},
+		},
+	}
+	manager := NewManager(catalog, &fakeDataViewSegmentStore{segments: map[int64]*Segment{}})
+
+	_, err := manager.Get(ctx, 1, qviews.DataVersion{StreamingVersion: 2})
+	requireUnavailableDataViewError(t, err)
+
+	ref, err := manager.Get(ctx, 1, qviews.DataVersion{StreamingVersion: 1})
+	require.NoError(t, err)
+	t.Cleanup(ref.Deref)
+	require.Equal(t, []int64{100}, ref.DataView().SegmentIDs("ch-1", 10))
+}
+
+func TestDataViewRefRejectsSnapshotWithoutPublishedHead(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
+		},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 1,
+			},
+		},
+	}
+	manager := NewManager(catalog, &fakeDataViewSegmentStore{segments: map[int64]*Segment{}})
+
+	_, err := manager.Get(ctx, 1, qviews.DataVersion{StreamingVersion: 1})
 	requireUnavailableDataViewError(t, err)
 }
 

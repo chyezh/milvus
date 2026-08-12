@@ -520,8 +520,16 @@ func (m *dataViewManager) Get(
 	if state.dropped {
 		return nil, unavailableDataViewError(collectionID, version)
 	}
+	if catalog, ok := m.catalog.(publishedDataViewCatalog); ok {
+		if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
+			return nil, err
+		}
+	}
 	versionProto := version.IntoProto()
-	if state.published != nil && compareDataVersion(state.published.GetDataVersion(), versionProto) == 0 {
+	if state.published == nil || compareDataVersion(versionProto, state.published.GetDataVersion()) > 0 {
+		return nil, unavailableDataViewError(collectionID, version)
+	}
+	if compareDataVersion(state.published.GetDataVersion(), versionProto) == 0 {
 		return newDataViewRef(state, newDataView(state.published)), nil
 	}
 
