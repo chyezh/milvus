@@ -1061,6 +1061,13 @@ func (s *Server) initMixCoord() error {
 	return nil
 }
 
+// StopGarbageCollection synchronously fences DataCoord garbage collection.
+func (s *Server) StopGarbageCollection() {
+	if s.garbageCollector != nil {
+		s.garbageCollector.close()
+	}
+}
+
 // Stop do the Server finalize processes
 // it checks the server status is healthy, if not, just quit
 // if Server is healthy, set server state to stopped, release etcd session,
@@ -1071,7 +1078,7 @@ func (s *Server) Stop() error {
 		return nil
 	}
 	mlog.Info(s.ctx, "datacoord server shutdown")
-	s.garbageCollector.close()
+	s.StopGarbageCollection()
 	mlog.Info(s.ctx, "datacoord garbage collector stopped")
 
 	if s.meta != nil {

@@ -371,6 +371,10 @@ func (s *mixCoordImpl) Stop() error {
 	s.GracefulStop()
 	mlog.Info(s.ctx, "graceful stop done")
 
+	// QueryCoord shutdown releases durable QueryView references, so DataCoord GC
+	// must be fully stopped before those DataView protections are removed.
+	s.datacoordServer.StopGarbageCollection()
+
 	if err := s.queryCoordServer.Stop(); err != nil {
 		mlog.Error(s.ctx, "Failed to stop queryCoord", mlog.Err(err))
 	}

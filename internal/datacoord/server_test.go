@@ -91,6 +91,26 @@ func TestGetTimeTickChannel(t *testing.T) {
 	assert.EqualValues(t, Params.CommonCfg.DataCoordTimeTick.GetValue(), resp.Value)
 }
 
+func TestServerStopGarbageCollectionIsNilSafeAndIdempotent(t *testing.T) {
+	server := &Server{}
+	assert.NotPanics(t, func() {
+		server.StopGarbageCollection()
+		server.StopGarbageCollection()
+	})
+
+	gc := newGarbageCollector(nil, nil, GcOption{})
+	server.garbageCollector = gc
+	assert.NotPanics(t, func() {
+		server.StopGarbageCollection()
+		server.StopGarbageCollection()
+	})
+	select {
+	case <-gc.ctx.Done():
+	default:
+		t.Fatal("garbage collector context was not canceled")
+	}
+}
+
 func TestGetSegmentStates(t *testing.T) {
 	t.Run("normal cases", func(t *testing.T) {
 		svr := newTestServer(t)
