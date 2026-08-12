@@ -103,3 +103,24 @@ func TestDataViewRetainedMembershipTracksGarbageCollectedViews(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, referenced, "segment becomes eligible after its last DataView is collected")
 }
+
+func TestDataViewRetainedMembershipIncludesPublicationAfterCacheInitialization(t *testing.T) {
+	ctx := context.Background()
+	manager, _, store := newTestDataViewManager()
+	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 100)
+	store.segments[200] = newDataViewTestSegment(1, 10, 200, "ch-1", 100)
+	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})))
+
+	referenced, err := manager.IsSegmentReferenced(ctx, 1, 100)
+	require.NoError(t, err)
+	require.True(t, referenced, "initialize retained-membership cache")
+	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{200}})))
+
+	referenced, err = manager.IsSegmentReferenced(ctx, 1, 200)
+	require.NoError(t, err)
+	require.True(t, referenced, "newly published member must be added to an initialized cache")
+	require.NoError(t, manager.GarbageCollect(ctx, 1, 1))
+	referenced, err = manager.IsSegmentReferenced(ctx, 1, 200)
+	require.NoError(t, err)
+	require.True(t, referenced, "published head remains retained after GC")
+}

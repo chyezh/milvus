@@ -1049,6 +1049,9 @@ func (m *dataViewManager) ShardTimeTicks(ctx context.Context, collectionIDs []in
 }
 
 func (m *dataViewManager) IsSegmentReferenced(ctx context.Context, collectionID int64, segmentID int64) (bool, error) {
+	state := m.getOrCreateState(collectionID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
 	m.retainedMu.RLock()
 	segments := m.retained[collectionID]
 	_, referenced := segments[segmentID]
@@ -1119,6 +1122,24 @@ func (m *dataViewManager) updateRetainedMembership(collectionID int64, views []*
 	}
 	m.retainedMu.Lock()
 	m.retained[collectionID] = segments
+	m.retainedMu.Unlock()
+}
+
+func (m *dataViewManager) addRetainedMembership(collectionID int64, view *viewpb.DataViewOfCollection) {
+	if view == nil {
+		return
+	}
+	m.retainedMu.Lock()
+	segments, ok := m.retained[collectionID]
+	if !ok {
+		m.retainedMu.Unlock()
+		return
+	}
+	for _, partition := range dataViewPartitions(view) {
+		for _, segmentID := range partition.GetSegmentIds() {
+			segments[segmentID]++
+		}
+	}
 	m.retainedMu.Unlock()
 }
 
@@ -1200,6 +1221,7 @@ func (m *dataViewManager) applyMembershipMutation(ctx context.Context, mutation 
 	}
 
 	state.latestResident = canonicalDataViewClone(toPersist)
+	m.addRetainedMembership(state.collectionID, toPersist)
 	if m.isDataViewVisibleFromBase(ctx, previousResident, state.latestResident, nil) {
 		state.latestVisible = m.withDeleteTimetick(ctx, state.latestResident)
 	}
