@@ -64,6 +64,14 @@ func TestDataViewDependenciesRequireDurablePublicationAndFlushVersionState(t *te
 	require.False(t, exposesMembershipScan, "dataview.SegmentStore must not expose collection membership scans")
 }
 
+func TestDataViewSegmentProjectionExcludesMembershipInferenceFields(t *testing.T) {
+	segmentType := reflect.TypeOf(Segment{})
+	for _, field := range []string{"InsertChannel", "DmlPosition", "CreatedByCompaction", "CompactionFrom"} {
+		_, ok := segmentType.FieldByName(field)
+		require.False(t, ok, "dataview.Segment must not carry legacy membership inference field %s", field)
+	}
+}
+
 func TestManagerExposesStateOperationsInsteadOfLifecycleEvents(t *testing.T) {
 	managerType := reflect.TypeOf((*Manager)(nil)).Elem()
 

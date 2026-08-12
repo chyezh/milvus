@@ -266,17 +266,12 @@ func requireDataVersion(t *testing.T, version *viewpb.DataVersion, streamingVers
 
 func newDataViewTestSegment(collectionID, partitionID, segmentID int64, channel string, dmlTs uint64) *Segment {
 	return &Segment{
-		ID:            segmentID,
-		CollectionID:  collectionID,
-		PartitionID:   partitionID,
-		InsertChannel: channel,
-		State:         commonpb.SegmentState_Flushed,
-		Level:         datapb.SegmentLevel_L1,
+		ID:           segmentID,
+		CollectionID: collectionID,
+		PartitionID:  partitionID,
+		State:        commonpb.SegmentState_Flushed,
+		Level:        datapb.SegmentLevel_L1,
 		StartPosition: &msgpb.MsgPosition{
-			ChannelName: channel,
-			Timestamp:   dmlTs,
-		},
-		DmlPosition: &msgpb.MsgPosition{
 			ChannelName: channel,
 			Timestamp:   dmlTs,
 		},
@@ -289,7 +284,7 @@ func testMembership(segment *Segment) SegmentMembership {
 		SegmentID:    segment.GetID(),
 		CollectionID: segment.GetCollectionID(),
 		PartitionID:  segment.GetPartitionID(),
-		VChannel:     segment.GetInsertChannel(),
+		VChannel:     segment.GetStartPosition().GetChannelName(),
 		State:        segment.GetState(),
 		Level:        segment.GetLevel(),
 		IsImporting:  segment.GetIsImporting(),
@@ -591,7 +586,6 @@ func TestDataViewManagerFlushTemporaryThenSortHandoff(t *testing.T) {
 
 	temp.State = commonpb.SegmentState_Dropped
 	final := newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
-	final.CompactionFrom = []int64{100}
 	store.segments[101] = final
 
 	version, err := manager.CommitPublishedView(ctx, 1, assigned, PublishedMutation{
@@ -848,7 +842,6 @@ func TestDataViewManagerExplicitRewriteWaitsForLoadableOutput(t *testing.T) {
 
 	output := newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
 	output.IsInvisible = true
-	output.CompactionFrom = []int64{100}
 	store.segments[101] = output
 	_, err := manager.CommitRewrite(ctx, 1, PublishedMutation{
 		Remove: []int64{100},
@@ -899,11 +892,10 @@ func TestDataViewManagerDeleteTimetickRefreshDoesNotPersistVersion(t *testing.T)
 	require.Equal(t, int64(0), view.GetDataVersion().GetCompactVersion())
 }
 
-func TestDataViewManagerDeleteTimetickUsesSegmentFieldBeforeDmlPosition(t *testing.T) {
+func TestDataViewManagerDeleteTimetickUsesDedicatedSegmentField(t *testing.T) {
 	ctx := context.Background()
 	manager, _, store := newTestDataViewManager()
 	store.segments[100] = newDataViewTestSegment(1, 10, 100, "ch-1", 1000)
-	store.segments[100].DmlPosition.Timestamp = 5000
 	store.segments[100].TransformStartAfterTimetick = 900
 
 	assignAndPublishTestSegment(ctx, t, manager, 100)
@@ -922,7 +914,6 @@ func TestDataViewManagerDeleteTimetickFallbackForLegacySegments(t *testing.T) {
 	store.segments[101] = newDataViewTestSegment(1, 10, 101, "ch-1", 1100)
 	store.segments[101].TransformStartAfterTimetick = 0
 	store.segments[101].StartPosition.Timestamp = 800
-	store.segments[101].DmlPosition.Timestamp = 7000
 
 	_, err := manager.CommitPublishedView(ctx, 1, &viewpb.DataVersion{StreamingVersion: 1}, PublishedMutation{
 		Add: []SegmentMembership{testMembership(store.segments[100]), testMembership(store.segments[101])},

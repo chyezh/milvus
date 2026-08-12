@@ -120,7 +120,6 @@ type Segment struct {
 	ID                          int64
 	CollectionID                int64
 	PartitionID                 int64
-	InsertChannel               string
 	NumOfRows                   int64
 	MemSize                     int64
 	State                       commonpb.SegmentState
@@ -128,11 +127,8 @@ type Segment struct {
 	IsImporting                 bool
 	IsInvisible                 bool
 	StartPosition               *msgpb.MsgPosition
-	DmlPosition                 *msgpb.MsgPosition
 	CommitTimestamp             uint64
 	TransformStartAfterTimetick uint64
-	CreatedByCompaction         bool
-	CompactionFrom              []int64
 	SealedAtDataVersion         *viewpb.DataVersion
 }
 
@@ -155,13 +151,6 @@ func (s *Segment) GetPartitionID() int64 {
 		return 0
 	}
 	return s.PartitionID
-}
-
-func (s *Segment) GetInsertChannel() string {
-	if s == nil {
-		return ""
-	}
-	return s.InsertChannel
 }
 
 func (s *Segment) GetNumOfRows() int64 {
@@ -200,13 +189,6 @@ func (s *Segment) GetIsInvisible() bool {
 	return s != nil && s.IsInvisible
 }
 
-func (s *Segment) GetDmlPosition() *msgpb.MsgPosition {
-	if s == nil {
-		return nil
-	}
-	return s.DmlPosition
-}
-
 func (s *Segment) GetStartPosition() *msgpb.MsgPosition {
 	if s == nil {
 		return nil
@@ -226,17 +208,6 @@ func (s *Segment) GetTransformStartAfterTimetick() uint64 {
 		return 0
 	}
 	return s.TransformStartAfterTimetick
-}
-
-func (s *Segment) GetCreatedByCompaction() bool {
-	return s != nil && s.CreatedByCompaction
-}
-
-func (s *Segment) GetCompactionFrom() []int64 {
-	if s == nil {
-		return nil
-	}
-	return s.CompactionFrom
 }
 
 func (s *Segment) GetSealedAtDataVersion() *viewpb.DataVersion {
