@@ -180,6 +180,7 @@ func TestFlushedSegmentSnapshotSwitchesAtSealedDataVersion(t *testing.T) {
 	assert.Equal(t, uint64(50), flushed.FlushTimeTick)
 	assert.Equal(t, qviews.DataVersion{StreamingVersion: 10, CompactVersion: 1}, flushed.SealedAtDataVersion)
 }
+
 func TestPrunePendingFlushChunksClearsDiscardedBackingSlots(t *testing.T) {
 	view := &SegmentView{
 		meta: &streamingpb.SegmentAssignmentMeta{DataCheckpointTimeTick: 20},

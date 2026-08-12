@@ -380,8 +380,6 @@ func TestShardViewManagerDataViewRefAcquiredBeforePersist(t *testing.T) {
 	dataViews := &testDataViewManager{refs: make(map[qviews.DataVersion][]*trackedDataViewRef)}
 	catalog := newMockCatalog()
 	catalog.onSave = func() { events = append(events, "persist") }
-	dataViews.mu.Lock()
-	dataViews.mu.Unlock()
 	mgr := newTestManagerWithDataViewManager(t, catalog, newMockSyncer(), dataViews)
 
 	require.NoError(t, mgr.AddPreparing(context.Background(), testBuilder(1, 1, 1)))
