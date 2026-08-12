@@ -72,13 +72,6 @@ func (s *Server) FinalizeDropCollectionDataView(ctx context.Context, collectionI
 	return s.dataViewLifecycle.FinalizeDropCollection(ctx, collectionID)
 }
 
-func (s *Server) Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewOfCollection, error) {
-	if s.dataViewManager == nil {
-		return nil, nil
-	}
-	return s.dataViewManager.Snapshot(ctx, collectionIDs)
-}
-
 func (s *Server) DataViewProvider() balancer.DataViewProvider {
 	if s.dataViewLifecycle != nil {
 		return s.dataViewLifecycle

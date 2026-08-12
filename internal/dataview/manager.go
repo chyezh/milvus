@@ -65,9 +65,7 @@ type Manager interface {
 
 	Get(ctx context.Context, collectionID int64, version qviews.DataVersion) (DataViewRef, error)
 	LatestPublished(ctx context.Context, collectionID int64) (DataViewRef, error)
-	Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewOfCollection, error)
-	DataViewSnapshot(ctx context.Context) *balancerapi.DataViewSnapshot
-	DataViewSnapshotForCollections(ctx context.Context, collectionIDs map[int64]struct{}) *balancerapi.DataViewSnapshot
+	DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (balancerapi.DataViewSnapshotRef, error)
 	SegmentSnapshot(ctx context.Context, segmentIDs []int64) balancerapi.SegmentSnapshot
 	ShardTimeTicks(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewShardTimeTick, error)
 	IsSegmentReferenced(ctx context.Context, collectionID int64, segmentID int64) (bool, error)
@@ -550,7 +548,7 @@ func (m *dataViewManager) LatestPublished(ctx context.Context, collectionID int6
 	return newDataViewRef(state, newDataView(state.published)), nil
 }
 
-func (m *dataViewManager) Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewOfCollection, error) {
+func (m *dataViewManager) snapshot(ctx context.Context, collectionIDs []int64) []*viewpb.DataViewOfCollection {
 	states := make([]*collectionDataViewState, 0, len(collectionIDs))
 	if len(collectionIDs) == 0 {
 		states = m.listStates()
@@ -574,11 +572,7 @@ func (m *dataViewManager) Snapshot(ctx context.Context, collectionIDs []int64) (
 		views = append(views, m.withDeleteTimetick(ctx, state.published))
 		state.mu.RUnlock()
 	}
-	return views, nil
-}
-
-func (m *dataViewManager) DataViewSnapshot(ctx context.Context) *balancerapi.DataViewSnapshot {
-	return m.DataViewSnapshotForCollections(ctx, nil)
+	return views
 }
 
 type segmentSnapshot map[int64]*balancerapi.SegmentInfo
@@ -586,46 +580,6 @@ type segmentSnapshot map[int64]*balancerapi.SegmentInfo
 func (s segmentSnapshot) Get(segmentID int64) (*balancerapi.SegmentInfo, bool) {
 	info, ok := s[segmentID]
 	return info, ok
-}
-
-// DataViewSnapshotForCollections builds an immutable snapshot from the latest
-// visible DataViews in the requested collection scope.
-func (m *dataViewManager) DataViewSnapshotForCollections(ctx context.Context, collectionIDs map[int64]struct{}) *balancerapi.DataViewSnapshot {
-	states := make([]*collectionDataViewState, 0, len(collectionIDs))
-	if collectionIDs == nil {
-		states = m.listStates()
-	} else {
-		for collectionID := range collectionIDs {
-			if state := m.getState(collectionID); state != nil {
-				states = append(states, state)
-			}
-		}
-	}
-
-	views := make([]*viewpb.DataViewOfCollection, 0, len(states))
-	segmentIDs := make([]int64, 0)
-	seenSegments := make(map[int64]struct{})
-	for _, state := range states {
-		state.mu.RLock()
-		if !state.dropped && state.published != nil {
-			view := canonicalDataViewClone(state.published)
-			views = append(views, view)
-			for _, partition := range dataViewPartitions(view) {
-				for _, segmentID := range partition.GetSegmentIds() {
-					if _, ok := seenSegments[segmentID]; ok {
-						continue
-					}
-					seenSegments[segmentID] = struct{}{}
-					segmentIDs = append(segmentIDs, segmentID)
-				}
-			}
-		}
-		state.mu.RUnlock()
-	}
-
-	segments := m.getSegments(ctx, segmentIDs)
-	setDataViewDeleteTimeticks(views, segments)
-	return balancerapi.NewDataViewSnapshot(0, views, newSegmentSnapshot(segmentIDs, segments))
 }
 
 // SegmentSnapshot looks up arbitrary segment metadata without requiring the
@@ -696,10 +650,7 @@ func setDataViewDeleteTimeticks(views []*viewpb.DataViewOfCollection, segments m
 }
 
 func (m *dataViewManager) ShardTimeTicks(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewShardTimeTick, error) {
-	views, err := m.Snapshot(ctx, collectionIDs)
-	if err != nil {
-		return nil, err
-	}
+	views := m.snapshot(ctx, collectionIDs)
 	timeticks := make([]*viewpb.DataViewShardTimeTick, 0)
 	for _, view := range views {
 		timeticks = append(timeticks, dataViewTimeTicks(view)...)

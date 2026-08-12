@@ -29,6 +29,7 @@ import (
 	"github.com/milvus-io/milvus-proto/go-api/v3/commonpb"
 	"github.com/milvus-io/milvus-proto/go-api/v3/msgpb"
 	"github.com/milvus-io/milvus/internal/metastore"
+	balancerapi "github.com/milvus-io/milvus/internal/views/coord/balancer/api"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/datapb"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
@@ -229,6 +230,19 @@ func newTestDataViewManager() (*dataViewManager, *fakeDataViewCatalog, *fakeData
 	return NewManager(catalog, store).(*dataViewManager), catalog, store
 }
 
+func dataViewSnapshotForTest(
+	t *testing.T,
+	manager *dataViewManager,
+	ctx context.Context,
+	collectionIDs map[int64]struct{},
+) *balancerapi.DataViewSnapshot {
+	t.Helper()
+	ref, err := manager.DataViewSnapshotRefForCollections(ctx, collectionIDs)
+	require.NoError(t, err)
+	t.Cleanup(ref.Release)
+	return ref.Snapshot()
+}
+
 func noErrorVersion(_ *viewpb.DataVersion, err error) error {
 	return err
 }
@@ -319,7 +333,7 @@ func TestDataViewManagerOnCreateCollectionCreatesEmptyVisibleView(t *testing.T) 
 	require.Len(t, visible.GetShards(), 2)
 	require.Zero(t, visible.GetShards()[0].GetTransformStartAfterTimetick())
 
-	snapshot := manager.DataViewSnapshot(ctx)
+	snapshot := dataViewSnapshotForTest(t, manager, ctx, nil)
 	_, ok := snapshot.ShardView(1, "ch-0")
 	require.True(t, ok)
 	_, ok = snapshot.ShardView(1, "ch-1")
@@ -656,16 +670,14 @@ func TestDataViewManagerSnapshotReturnsLatestVisibleClone(t *testing.T) {
 		TemporaryUnavailable: true,
 	})))
 
-	views, err := manager.Snapshot(ctx, []int64{1})
-	require.NoError(t, err)
+	views := manager.snapshot(ctx, []int64{1})
 	require.Len(t, views, 1)
 	require.Equal(t, int64(1), views[0].GetDataVersion().GetStreamingVersion())
 	require.Equal(t, []int64{100}, views[0].GetShards()[0].GetPartitions()[0].GetSegmentIds())
 	require.Equal(t, uint64(1000), views[0].GetShards()[0].GetTransformStartAfterTimetick())
 
 	views[0].Shards[0].Partitions[0].SegmentIds[0] = 999
-	views, err = manager.Snapshot(ctx, []int64{1})
-	require.NoError(t, err)
+	views = manager.snapshot(ctx, []int64{1})
 	require.Len(t, views, 1)
 	require.Equal(t, []int64{100}, views[0].GetShards()[0].GetPartitions()[0].GetSegmentIds())
 }
@@ -678,7 +690,7 @@ func TestDataViewManagerDataViewSnapshotForBalancer(t *testing.T) {
 	store.segments[100].MemSize = 4096
 	require.NoError(t, noErrorVersion(manager.OnFlush(ctx, FlushDataViewEvent{CollectionID: 1, SegmentIDs: []int64{100}})))
 
-	snapshot := manager.DataViewSnapshot(ctx)
+	snapshot := dataViewSnapshotForTest(t, manager, ctx, nil)
 	require.NotNil(t, snapshot)
 
 	version, ok := snapshot.DataVersion(1)
@@ -723,7 +735,7 @@ func TestDataViewManagerDataViewSnapshotForCollectionsScope(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			snapshot := manager.DataViewSnapshotForCollections(ctx, test.scope)
+			snapshot := dataViewSnapshotForTest(t, manager, ctx, test.scope)
 			_, has1 := snapshot.DataVersion(1)
 			_, has2 := snapshot.DataVersion(2)
 			require.Equal(t, test.has1, has1)
@@ -731,13 +743,13 @@ func TestDataViewManagerDataViewSnapshotForCollectionsScope(t *testing.T) {
 		})
 	}
 
-	snapshot := manager.DataViewSnapshotForCollections(ctx, map[int64]struct{}{1: {}})
+	snapshot := dataViewSnapshotForTest(t, manager, ctx, map[int64]struct{}{1: {}})
 	shard, ok := snapshot.ShardView(1, "ch-1")
 	require.True(t, ok)
 	require.Equal(t, []int64{100}, shard.GetPartitions()[0].GetSegmentIds())
 	shard.Partitions[0].SegmentIds[0] = 999
 
-	snapshot = manager.DataViewSnapshotForCollections(ctx, map[int64]struct{}{1: {}})
+	snapshot = dataViewSnapshotForTest(t, manager, ctx, map[int64]struct{}{1: {}})
 	shard, ok = snapshot.ShardView(1, "ch-1")
 	require.True(t, ok)
 	require.Equal(t, []int64{100}, shard.GetPartitions()[0].GetSegmentIds())
@@ -755,6 +767,7 @@ func TestDataViewManagerDataViewSnapshotForCollectionsTimeticks(t *testing.T) {
 		&viewpb.DataViewOfPartition{PartitionId: 11, SegmentIds: []int64{101}})
 	manager.states[1] = &collectionDataViewState{
 		collectionID: 1,
+		refs:         make(map[qviews.DataVersion]int),
 		published: newTestDataView(
 			1, 1, 0,
 			sharedShard,
@@ -763,7 +776,7 @@ func TestDataViewManagerDataViewSnapshotForCollectionsTimeticks(t *testing.T) {
 		),
 	}
 
-	snapshot := manager.DataViewSnapshotForCollections(ctx, map[int64]struct{}{1: {}})
+	snapshot := dataViewSnapshotForTest(t, manager, ctx, map[int64]struct{}{1: {}})
 	shared, ok := snapshot.ShardView(1, "ch-shared")
 	require.True(t, ok)
 	require.Equal(t, uint64(700), shared.GetTransformStartAfterTimetick())
@@ -791,8 +804,7 @@ func TestDataViewManagerPublishedStateIsLatestAuthority(t *testing.T) {
 	require.Equal(t, qviews.DataVersion{StreamingVersion: 2, CompactVersion: 1}, latest.DataView().Version())
 	latest.Deref()
 
-	views, err := manager.Snapshot(ctx, []int64{1})
-	require.NoError(t, err)
+	views := manager.snapshot(ctx, []int64{1})
 	require.Len(t, views, 1)
 	requireDataVersion(t, views[0].GetDataVersion(), 2, 1)
 	require.Equal(t, []int64{100}, views[0].GetShards()[0].GetPartitions()[0].GetSegmentIds())
@@ -1043,8 +1055,8 @@ func TestRecoverManagerLoadsAllDataViewsWithoutSegmentMetaRepair(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, catalog.listAllCalls)
 	require.Zero(t, catalog.listCalls)
-	snapshot, err := manager.Snapshot(ctx, nil)
-	require.NoError(t, err)
+	concrete := manager.(*dataViewManager)
+	snapshot := concrete.snapshot(ctx, nil)
 	require.Len(t, snapshot, 2)
 	require.Equal(t, int64(1), snapshot[0].GetCollectionId())
 	require.Equal(t, int64(2), snapshot[1].GetCollectionId())

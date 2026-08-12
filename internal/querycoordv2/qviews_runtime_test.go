@@ -229,12 +229,8 @@ func (m *fakeRuntimeResourceGroupManager) GetNodes(context.Context, string) ([]i
 
 type fakeRuntimeDataViewProvider struct{}
 
-func (p *fakeRuntimeDataViewProvider) DataViewSnapshot(context.Context) *balancer.DataViewSnapshot {
-	return balancer.NewDataViewSnapshot(0, nil, nil)
-}
-
-func (p *fakeRuntimeDataViewProvider) DataViewSnapshotForCollections(context.Context, map[int64]struct{}) *balancer.DataViewSnapshot {
-	return balancer.NewDataViewSnapshot(0, nil, nil)
+func (p *fakeRuntimeDataViewProvider) DataViewSnapshotRefForCollections(context.Context, map[int64]struct{}) (balancer.DataViewSnapshotRef, error) {
+	return emptyDataViewSnapshotRef{}, nil
 }
 
 func (p *fakeRuntimeDataViewProvider) SegmentSnapshot(context.Context, []int64) balancer.SegmentSnapshot {

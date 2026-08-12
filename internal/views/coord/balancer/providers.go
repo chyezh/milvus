@@ -61,24 +61,16 @@ func (s *NodeSnapshot) Range(fn func(int64, *NodeInfo) bool) {
 	}
 }
 
-// DataViewProvider supplies the immutable data-view snapshot consumed by the
-// Balancer. The method name intentionally does not collide with
-// dataview.Manager.Snapshot(ctx, collectionIDs).
+// DataViewProvider supplies manager-referenced immutable data-view snapshots
+// consumed by the Balancer.
 type DataViewProvider interface {
-	DataViewSnapshot(ctx context.Context) *DataViewSnapshot
-	DataViewSnapshotForCollections(ctx context.Context, collectionIDs map[int64]struct{}) *DataViewSnapshot
+	DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (DataViewSnapshotRef, error)
 	SegmentSnapshot(ctx context.Context, segmentIDs []int64) SegmentSnapshot
 }
 
 // DataViewSnapshotRef keeps the immutable DataView snapshot's manager-owned
 // references live for the duration of one planning cycle.
 type DataViewSnapshotRef = balancerapi.DataViewSnapshotRef
-
-// RefAwareDataViewProvider is implemented by providers that can protect the
-// exact DataView versions represented by a Balancer snapshot.
-type RefAwareDataViewProvider interface {
-	DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (DataViewSnapshotRef, error)
-}
 
 type (
 	DataViewSnapshot = balancerapi.DataViewSnapshot

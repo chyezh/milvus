@@ -98,7 +98,6 @@ type fakeGCDataViewManager struct {
 	publishedAssigned  []*viewpb.DataVersion
 	streamingMutations []dataview.PublishedMutation
 	rewriteMutations   []dataview.PublishedMutation
-	snapshotRequested  []int64
 	snapshotViews      []*viewpb.DataViewOfCollection
 	segmentReferenced  bool
 	segmentRefErr      error
@@ -201,14 +200,16 @@ func (m *fakeGCDataViewManager) LatestPublished(ctx context.Context, collectionI
 	return nil, merr.WrapErrServiceNotReadyMsg("fake data view references are not available")
 }
 
-func (m *fakeGCDataViewManager) Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewOfCollection, error) {
-	m.snapshotRequested = append([]int64(nil), collectionIDs...)
-	return m.snapshotViews, nil
+func (m *fakeGCDataViewManager) DataViewSnapshotRefForCollections(context.Context, map[int64]struct{}) (balancerapi.DataViewSnapshotRef, error) {
+	return &fakeGCDataViewSnapshotRef{snapshot: balancerapi.NewDataViewSnapshot(0, m.snapshotViews, nil)}, nil
 }
 
-func (m *fakeGCDataViewManager) DataViewSnapshot(ctx context.Context) *balancerapi.DataViewSnapshot {
-	return balancerapi.NewDataViewSnapshot(0, m.snapshotViews, nil)
+type fakeGCDataViewSnapshotRef struct {
+	snapshot *balancerapi.DataViewSnapshot
 }
+
+func (r *fakeGCDataViewSnapshotRef) Snapshot() *balancerapi.DataViewSnapshot { return r.snapshot }
+func (*fakeGCDataViewSnapshotRef) Release()                                  {}
 
 func (m *fakeGCDataViewManager) ShardTimeTicks(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewShardTimeTick, error) {
 	return nil, nil

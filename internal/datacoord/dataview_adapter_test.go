@@ -127,10 +127,6 @@ func (m *recordingSegmentTrimManager) CommitSegmentTrim(
 	return nil, nil
 }
 
-func (m *fakeGCDataViewManager) DataViewSnapshotForCollections(ctx context.Context, collectionIDs map[int64]struct{}) *balancerapi.DataViewSnapshot {
-	return balancerapi.NewDataViewSnapshot(0, m.snapshotViews, nil)
-}
-
 func (m *fakeGCDataViewManager) SegmentSnapshot(ctx context.Context, segmentIDs []int64) balancerapi.SegmentSnapshot {
 	return nil
 }
@@ -178,30 +174,6 @@ func TestServerDropCollectionDataViewReturnsNilWithoutDataViewManager(t *testing
 	server := &Server{}
 
 	require.NoError(t, server.DropCollectionDataView(context.Background(), 10))
-}
-
-func TestServerSnapshotDelegatesToDataViewManager(t *testing.T) {
-	manager := &fakeGCDataViewManager{
-		snapshotViews: []*viewpb.DataViewOfCollection{
-			{CollectionId: 10, DataVersion: &viewpb.DataVersion{StreamingVersion: 1}},
-		},
-	}
-	server := &Server{dataViewManager: manager}
-
-	views, err := server.Snapshot(context.Background(), []int64{10})
-
-	require.NoError(t, err)
-	require.Equal(t, []int64{10}, manager.snapshotRequested)
-	require.Equal(t, manager.snapshotViews, views)
-}
-
-func TestServerSnapshotReturnsEmptyWithoutDataViewManager(t *testing.T) {
-	server := &Server{}
-
-	views, err := server.Snapshot(context.Background(), []int64{10})
-
-	require.NoError(t, err)
-	require.Nil(t, views)
 }
 
 func TestDataViewSegmentStoreSelectSegmentsSkipsDroppedPartition(t *testing.T) {

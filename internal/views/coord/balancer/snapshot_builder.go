@@ -116,17 +116,16 @@ func (b *SnapshotBuilder) build(ctx context.Context, pending triggerBatch) (*Bal
 	scope := pending.resolveScope(loadSnapshot, b.viewRegistry)
 
 	// 2. Read scoped DataViews and expand collection triggers into target shards.
-	provider, ok := b.dataViewProvider.(RefAwareDataViewProvider)
-	if !ok {
+	ref, err := b.dataViewProvider.DataViewSnapshotRefForCollections(ctx, scope.collectionIDs)
+	if err != nil {
+		return &BalancerSnapshot{Config: b.config, LoadConfigSnapshot: loadSnapshot, buildErr: err}, nil
+	}
+	if ref == nil {
 		return &BalancerSnapshot{
 			Config:             b.config,
 			LoadConfigSnapshot: loadSnapshot,
-			buildErr:           merr.WrapErrServiceInternalMsg("data view provider does not support references"),
+			buildErr:           merr.WrapErrServiceInternalMsg("data view provider returned a nil snapshot reference"),
 		}, nil
-	}
-	ref, err := provider.DataViewSnapshotRefForCollections(ctx, scope.collectionIDs)
-	if err != nil {
-		return &BalancerSnapshot{Config: b.config, LoadConfigSnapshot: loadSnapshot, buildErr: err}, nil
 	}
 	dataViewSnapshot := ref.Snapshot()
 	releaseDataView := ref.Release

@@ -25,7 +25,6 @@ import (
 	"github.com/milvus-io/milvus/internal/views/coord/balancer"
 	"github.com/milvus-io/milvus/internal/views/qviews"
 	"github.com/milvus-io/milvus/pkg/v3/proto/viewpb"
-	"github.com/milvus-io/milvus/pkg/v3/util/merr"
 )
 
 type dataViewDropMarkerCatalog interface {
@@ -36,6 +35,8 @@ type dataViewDropMarkerCatalog interface {
 
 type dataViewLifecycleDataViews interface {
 	dataview.ReferenceManager
+	DataViewSnapshotRefForCollections(context.Context, map[int64]struct{}) (balancer.DataViewSnapshotRef, error)
+	SegmentSnapshot(context.Context, []int64) balancer.SegmentSnapshot
 	GarbageCollect(ctx context.Context, collectionID int64, retainLatest int) error
 	OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error)
 }
@@ -70,39 +71,11 @@ type dataViewLifecycle struct {
 	collectionExists func(int64) bool
 }
 
-func (m *dataViewLifecycle) dataViewProvider() balancer.DataViewProvider {
-	provider, _ := m.dataViews.(balancer.DataViewProvider)
-	return provider
-}
-
-func (m *dataViewLifecycle) DataViewSnapshot(ctx context.Context) *balancer.DataViewSnapshot {
-	provider := m.dataViewProvider()
-	if provider == nil {
-		return balancer.NewDataViewSnapshot(0, nil, nil)
-	}
-	return provider.DataViewSnapshot(ctx)
-}
-
-func (m *dataViewLifecycle) DataViewSnapshotForCollections(ctx context.Context, ids map[int64]struct{}) *balancer.DataViewSnapshot {
-	provider := m.dataViewProvider()
-	if provider == nil {
-		return balancer.NewDataViewSnapshot(0, nil, nil)
-	}
-	return provider.DataViewSnapshotForCollections(ctx, ids)
-}
-
 func (m *dataViewLifecycle) SegmentSnapshot(ctx context.Context, ids []int64) balancer.SegmentSnapshot {
-	provider := m.dataViewProvider()
-	if provider == nil {
-		return nil
-	}
-	return provider.SegmentSnapshot(ctx, ids)
+	return m.dataViews.SegmentSnapshot(ctx, ids)
 }
 
 func (m *dataViewLifecycle) DataViewSnapshotRefForCollections(ctx context.Context, ids map[int64]struct{}) (balancer.DataViewSnapshotRef, error) {
-	provider, ok := m.dataViews.(interface {
-		DataViewSnapshotRefForCollections(context.Context, map[int64]struct{}) (balancer.DataViewSnapshotRef, error)
-	})
 	collectionIDs := make([]int64, 0)
 	if ids == nil {
 		m.mu.Lock()
@@ -134,10 +107,7 @@ func (m *dataViewLifecycle) DataViewSnapshotRefForCollections(ctx context.Contex
 			state.mu.Unlock()
 		}
 	}()
-	if ok {
-		return provider.DataViewSnapshotRefForCollections(ctx, ids)
-	}
-	return nil, merr.WrapErrServiceInternalMsg("data view provider does not support references")
+	return m.dataViews.DataViewSnapshotRefForCollections(ctx, ids)
 }
 
 func recoverDataViewLifecycle(

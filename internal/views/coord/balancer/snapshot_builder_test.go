@@ -45,43 +45,55 @@ type fakeDataViewProvider struct {
 	collections []*viewpb.DataViewOfCollection
 	segments    map[int64]*SegmentInfo
 
-	collectionRequests []map[int64]struct{}
-	segmentRequests    [][]int64
-	segmentRequestHook func()
+	collectionRequests  []map[int64]struct{}
+	segmentRequests     [][]int64
+	segmentRequestHook  func()
+	snapshotRefAcquires int
+	snapshotRefReleases int
+	nilSnapshotRef      bool
 }
 
 type testDataViewSnapshotRef struct {
 	snapshot *DataViewSnapshot
+	release  func()
 }
 
 func (r *testDataViewSnapshotRef) Snapshot() *DataViewSnapshot { return r.snapshot }
-func (*testDataViewSnapshotRef) Release()                      {}
+func (r *testDataViewSnapshotRef) Release() {
+	if r.release != nil {
+		release := r.release
+		r.release = nil
+		release()
+	}
+}
 
 func (f *fakeDataViewProvider) DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (DataViewSnapshotRef, error) {
-	return &testDataViewSnapshotRef{snapshot: f.DataViewSnapshotForCollections(ctx, collectionIDs)}, nil
+	f.snapshotRefAcquires++
+	if f.nilSnapshotRef {
+		return nil, nil
+	}
+	return &testDataViewSnapshotRef{
+		snapshot: f.snapshotForCollections(ctx, collectionIDs),
+		release:  func() { f.snapshotRefReleases++ },
+	}, nil
 }
 
-type bareDataViewProvider struct {
-	provider *fakeDataViewProvider
+func TestSnapshotBuilder_RejectsNilSnapshotRef(t *testing.T) {
+	store := emptyLoadConfigStore(t)
+	reg := emptyRegistry(t)
+	builder := NewSnapshotBuilder(
+		store,
+		reg,
+		&fakeNodeProvider{infos: map[int64]*NodeInfo{}},
+		&fakeDataViewProvider{nilSnapshotRef: true},
+		&BalanceConfig{},
+	)
+
+	snapshot := buildFullSnapshot(builder)
+	require.Error(t, snapshot.BuildError())
 }
 
-func (p *bareDataViewProvider) DataViewSnapshot(ctx context.Context) *DataViewSnapshot {
-	return p.provider.DataViewSnapshot(ctx)
-}
-
-func (p *bareDataViewProvider) DataViewSnapshotForCollections(ctx context.Context, collectionIDs map[int64]struct{}) *DataViewSnapshot {
-	return p.provider.DataViewSnapshotForCollections(ctx, collectionIDs)
-}
-
-func (p *bareDataViewProvider) SegmentSnapshot(ctx context.Context, segmentIDs []int64) SegmentSnapshot {
-	return p.provider.SegmentSnapshot(ctx, segmentIDs)
-}
-
-func (f *fakeDataViewProvider) DataViewSnapshot(context.Context) *DataViewSnapshot {
-	return NewDataViewSnapshot(1, f.collections, newMapSegmentSnapshot(f.segments))
-}
-
-func (f *fakeDataViewProvider) DataViewSnapshotForCollections(_ context.Context, collectionIDs map[int64]struct{}) *DataViewSnapshot {
+func (f *fakeDataViewProvider) snapshotForCollections(_ context.Context, collectionIDs map[int64]struct{}) *DataViewSnapshot {
 	f.collectionRequests = append(f.collectionRequests, collectionIDs)
 	selected := f.collections
 	if collectionIDs != nil {
@@ -214,12 +226,13 @@ func addShardWithPreparingView(
 func TestSnapshotBuilder_EmptyInputs(t *testing.T) {
 	store := emptyLoadConfigStore(t)
 	reg := emptyRegistry(t)
+	provider := &fakeDataViewProvider{}
 
 	builder := NewSnapshotBuilder(
 		store,
 		reg,
 		&fakeNodeProvider{infos: map[int64]*NodeInfo{}},
-		&fakeDataViewProvider{},
+		provider,
 		&BalanceConfig{},
 	)
 
@@ -231,21 +244,11 @@ func TestSnapshotBuilder_EmptyInputs(t *testing.T) {
 	assert.Equal(t, uint64(1), snap.DataViewSnapshot.Version())
 	assert.Empty(t, snap.Nodes)
 	assert.NotNil(t, snap.Config)
-}
-
-func TestSnapshotBuilder_RejectsProviderWithoutSnapshotRefs(t *testing.T) {
-	store := emptyLoadConfigStore(t)
-	reg := emptyRegistry(t)
-	builder := NewSnapshotBuilder(
-		store,
-		reg,
-		&fakeNodeProvider{infos: map[int64]*NodeInfo{}},
-		&bareDataViewProvider{provider: &fakeDataViewProvider{}},
-		&BalanceConfig{},
-	)
-
-	snapshot := buildFullSnapshot(builder)
-	require.Error(t, snapshot.BuildError())
+	require.Equal(t, 1, provider.snapshotRefAcquires)
+	require.Zero(t, provider.snapshotRefReleases)
+	snap.Close()
+	snap.Close()
+	require.Equal(t, 1, provider.snapshotRefReleases)
 }
 
 func TestSnapshotBuilder_NodeInfosCopied(t *testing.T) {
@@ -653,7 +656,7 @@ func TestSnapshotBuilder_ScopedRefreshUsesCachedNonTargetAndMatchesFullPlan(t *t
 		Config:             builder.config,
 		LoadConfigSnapshot: store.Snapshot(),
 		ShardViewSnapshot:  registry.Snapshot(),
-		DataViewSnapshot:   provider.DataViewSnapshot(context.Background()),
+		DataViewSnapshot:   provider.snapshotForCollections(context.Background(), nil),
 		NodeSnapshot:       nodeProvider.Snapshot(),
 	}
 	oracle.Nodes = buildBalanceNodes(oracle.NodeSnapshot)
