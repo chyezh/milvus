@@ -36,6 +36,35 @@ func TestDataViewSnapshotRefProtectsAllCollectionViewsUntilRelease(t *testing.T)
 	require.Len(t, views, 1)
 }
 
+func TestDataViewSnapshotRefRecoversPublishedHeadForScopedLazyManager(t *testing.T) {
+	ctx := context.Background()
+	catalog := &fakeDataViewCatalog{
+		views: []*viewpb.DataViewOfCollection{
+			newTestDataView(1, 1, 0, newTestDataViewShard("ch-1", 10, 100)),
+		},
+		versionStates: map[int64]*viewpb.CollectionDataVersionState{
+			1: {
+				CollectionId:              1,
+				AllocatedStreamingVersion: 1,
+				PublishedDataVersion:      &viewpb.DataVersion{StreamingVersion: 1},
+			},
+		},
+	}
+	manager := NewManager(catalog, &fakeDataViewSegmentStore{segments: map[int64]*Segment{
+		100: newDataViewTestSegment(1, 10, 100, "ch-1", 1000),
+	}})
+
+	ref, err := manager.DataViewSnapshotRefForCollections(ctx, map[int64]struct{}{1: {}})
+	require.NoError(t, err)
+	t.Cleanup(ref.Release)
+	version, ok := ref.Snapshot().DataVersion(1)
+	require.True(t, ok)
+	require.Equal(t, qviews.DataVersion{StreamingVersion: 1}, version)
+	shard, ok := ref.Snapshot().ShardView(1, "ch-1")
+	require.True(t, ok)
+	require.Equal(t, []int64{100}, shard.GetPartitions()[0].GetSegmentIds())
+}
+
 func TestDataViewDropWaitsForRefsAndFinalizeBarrier(t *testing.T) {
 	ctx := context.Background()
 	manager, catalog, store := newTestDataViewManager()

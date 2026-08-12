@@ -37,9 +37,7 @@ func (m *dataViewManager) DataViewSnapshotRefForCollections(
 		states = m.listStates()
 	} else {
 		for collectionID := range collectionIDs {
-			if state := m.getState(collectionID); state != nil {
-				states = append(states, state)
-			}
+			states = append(states, m.getOrCreateState(collectionID))
 		}
 	}
 
@@ -49,6 +47,15 @@ func (m *dataViewManager) DataViewSnapshotRefForCollections(
 	releases := make([]DataViewRef, 0, len(states))
 	for _, state := range states {
 		state.mu.Lock()
+		if catalog, ok := m.catalog.(publishedDataViewCatalog); ok {
+			if err := m.recoverPublicationStateLocked(ctx, state, catalog); err != nil {
+				state.mu.Unlock()
+				for _, ref := range releases {
+					ref.Deref()
+				}
+				return nil, err
+			}
+		}
 		if state.dropped || state.published == nil {
 			state.mu.Unlock()
 			continue
