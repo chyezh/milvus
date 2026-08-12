@@ -35,6 +35,16 @@ func (c *fakeDataViewCatalog) SavePublishedDataView(
 	state *viewpb.CollectionDataVersionState,
 	view *viewpb.DataViewOfCollection,
 ) error {
+	if view.GetCollectionId() == c.blockCollection && c.saveBlock != nil {
+		if c.saveStarted != nil {
+			select {
+			case <-c.saveStarted:
+			default:
+				close(c.saveStarted)
+			}
+		}
+		<-c.saveBlock
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.saveErrOnce != nil {
@@ -504,7 +514,7 @@ func TestPublicationCreateCollectionRecoversDurableHeadBeforeNewerOrphan(t *test
 
 	require.NoError(t, err)
 	requireDataVersion(t, version, 1, 0)
-	view, err := latestPublishedDataView(ctx, manager, 1)
+	view, err := testPublishedProto(ctx, manager, 1)
 	require.NoError(t, err)
 	require.Equal(t, []int64{100}, publishedSegmentIDs(t, view, "ch-0", 10))
 }
@@ -530,7 +540,7 @@ func TestPublicationCreateCollectionRejectsOrphanSnapshotWhenDurableHeadIsMissin
 
 	require.Error(t, err)
 	require.Nil(t, catalog.versionStates[1].GetPublishedDataVersion())
-	view, getErr := latestPublishedDataView(ctx, manager, 1)
+	view, getErr := testPublishedProto(ctx, manager, 1)
 	require.NoError(t, getErr)
 	require.Nil(t, view)
 }
