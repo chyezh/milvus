@@ -55,7 +55,7 @@ type RecoveryCatalog interface {
 type Manager interface {
 	AssignFlushVersion(ctx context.Context, collectionID, segmentID int64) (*viewpb.DataVersion, error)
 	CommitPublishedView(ctx context.Context, collectionID int64, assignedVersion *viewpb.DataVersion, mutation PublishedMutation) (*viewpb.DataVersion, error)
-	RetryAssignedFlushPublication(ctx context.Context, collectionID, segmentID int64, assignedVersion *viewpb.DataVersion, empty bool) (*viewpb.DataVersion, error)
+	RetryAssignedFlushPublication(ctx context.Context, collectionID, segmentID int64, assignedVersion *viewpb.DataVersion, removeOnly bool) (*viewpb.DataVersion, error)
 	CommitStreamingView(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
 	CommitRewrite(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
 	CommitSegmentTrim(ctx context.Context, collectionID int64, resolveTargets SegmentTrimTargetResolver, finalize SegmentTrimFinalize) (*viewpb.DataVersion, error)

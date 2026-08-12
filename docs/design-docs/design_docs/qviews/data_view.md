@@ -289,10 +289,14 @@ no new DataView version is persisted and QueryCoord is not notified. Later
 events or recovery may compact multiple segment metadata changes into one
 DataView update.
 
-DropPartition and truncate are exceptions to the default ordering. These
-destructive trim operations should update DataView first, then update segment
-metadata. This prevents QueryCoord from building new QueryViews over membership
-that has already been logically removed by DDL/trim intent.
+DropPartition and truncate also follow SegmentMeta-first ordering, but their
+metadata mutation has a narrower meaning: it is a durable, collection-scoped
+logical-removal fence. DataCoord validates assigned-epoch ordering, persists
+the matching SegmentMeta records as `Dropped`, then publishes the DataView
+trim. QueryCoord-visible membership remains authoritative until that trim is
+durable; an older retained DataView may therefore continue to reference and
+load a fenced segment while publication is retried. DataView and QueryView
+references continue to protect the segment's physical lifetime.
 
 ### 5.2 Reconciliation Semantics
 
@@ -507,15 +511,19 @@ membership:
 DropCollection does not need to advance DataVersion because the collection view
 no longer exists.
 
-DropPartition and truncate are DataView-first operations: DataCoord removes the
-membership from DataView before marking the affected segment metadata dropped or
-trimmed. This keeps QueryCoord from seeing a new QueryView candidate that still
-contains logically removed membership.
+DropPartition and truncate first persist a collection-scoped logical-removal
+fence by marking every matching SegmentMeta record `Dropped`, then publish the
+DataView trim while holding the same collection serialization lock. The target
+scope and assigned epochs are resolved again after metadata finalization so
+concurrent replacement outputs cannot escape the trim.
 
-Recovery must also respect the persisted DDL/trim intent, such as
-collection/partition metadata or truncate metadata, so a crash after DataView
-update but before segment metadata update does not cause the removed segments to
-be rebuilt back into DataView.
+The durable DataView head remains the sole QueryCoord membership authority.
+Until the trim publication succeeds, the prior head may still contain a fenced
+segment and existing QueryViews may continue to use it. The `Dropped` state
+prevents that segment from joining future repaired DataViews; it does not revoke
+membership from an already-published or retained DataView. A publication
+failure is retryable, and retry completes the assigned remove-only epoch or
+compact removal from the same authoritative head.
 
 There is no separate `OnDropChannel` event in the current DataCoord behavior.
 Channel-level effects should be represented by the actual DDL/trim operation
@@ -810,6 +818,12 @@ Compaction, DropPartition, and truncate may mark segment metadata as
 segment should not join future DataViews; it does not mean the segment can no
 longer be loaded by an already-retained DataView.
 
+For DropPartition and truncate, this separation also covers the interval after
+the logical-removal fence is durable but before DataView trim publication
+succeeds. The old DataView remains valid and keeps the segment live; retrying
+publication must not allow physical cleanup to race ahead of retained DataView
+or QueryView references.
+
 Physical cleanup of segment files, binlogs, manifests, and indexes is allowed
 only after all of the following are true:
 
@@ -866,9 +880,12 @@ difference does not create a new DataVersion; DataCoord refreshes the derived
 timetick for the latest view and syncs it through the normal DataView metadata
 refresh path.
 
-For DataView-first DropPartition or truncate, recovery must apply the persisted
-DDL/trim metadata when computing the expected DataView, even if the segmentMeta
-state mutation has not completed yet.
+For DropPartition or truncate, recovery must treat the persisted `Dropped`
+SegmentMeta state as the durable logical-removal fence. It must not re-add a
+fenced target when repairing from an older DataView head. If the corresponding
+trim publication was interrupted, normal DDL retry completes the assigned
+remove-only epochs and/or compact membership removal; retained older DataViews
+continue to protect physical data until then.
 
 Because each DataView version is persisted as a single full snapshot value,
 DataCoord treats every readable version key as a complete persisted snapshot.
@@ -902,8 +919,10 @@ The first implementation should cover at least:
    `(S+1, 0) -> (S+1, 1)`, and makes the DataView visible.
 4. Recovery sees both flush/import additions and compact handoff; streaming
    version wins and advances to `(S+1, 0)`.
-5. DropPartition or truncate updates DataView first, crashes before segmentMeta
-   mutation, and recovery does not add removed segments back.
+5. DropPartition or truncate persists the scoped SegmentMeta removal fence,
+   crashes before DataView trim publication, and recovery does not add fenced
+   targets back; retry completes the trim while the retained old DataView keeps
+   physical data live.
 6. L0 compact refreshes `delete_apply_start_after_timetick` without advancing
    DataVersion.
 7. Delete-timetick-only recovery refreshes metadata without creating a new
@@ -934,6 +953,10 @@ The first implementation should cover at least:
     that segment metadata cannot describe.
 14. QueryCoord only consumes DataViews that DataCoord marks visible/available
     for QueryView construction.
+15. DropPartition and truncate persist a collection-scoped SegmentMeta removal
+    fence before DataView trim publication; the fence prevents recovery
+    re-addition, while retained DataView and QueryView references remain the
+    authority for visibility and physical lifetime until publication succeeds.
 
 ## 14. Open Implementation Choices
 

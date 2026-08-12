@@ -127,9 +127,9 @@ func (m *fakeGCDataViewManager) RetryAssignedFlushPublication(
 	collectionID int64,
 	segmentID int64,
 	assignedVersion *viewpb.DataVersion,
-	empty bool,
+	removeOnly bool,
 ) (*viewpb.DataVersion, error) {
-	if empty {
+	if removeOnly {
 		m.publishedMutations = append(m.publishedMutations, dataview.PublishedMutation{Remove: []int64{segmentID}})
 	}
 	m.publishedAssigned = append(m.publishedAssigned, proto.Clone(assignedVersion).(*viewpb.DataVersion))
@@ -155,13 +155,13 @@ func (m *fakeGCDataViewManager) CommitSegmentTrim(
 	mutation := dataview.PublishedMutation{Remove: make([]int64, 0, len(targets))}
 	mutation.Remove = append(mutation.Remove, targets...)
 	m.rewriteMutations = append(m.rewriteMutations, mutation)
-	if m.publishVersionErr != nil {
-		return m.publishedVersion, m.publishVersionErr
-	}
 	if finalize != nil {
 		if err := finalize(ctx); err != nil {
 			return nil, err
 		}
+	}
+	if m.publishVersionErr != nil {
+		return m.publishedVersion, m.publishVersionErr
 	}
 	return m.publishedVersion, nil
 }

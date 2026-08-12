@@ -827,7 +827,7 @@ func (s *Server) completeAssignedFlushDataViewPublication(
 			req.GetCollectionID(),
 			req.GetSegmentID(),
 			assigned,
-			segment.GetNumOfRows() == 0,
+			req.GetDropped() || segment.GetNumOfRows() == 0,
 		)
 	case isImmediatelyLoadableFlushSegment(segment):
 		mutation.Add = []SegmentMembership{publishedSegmentMembership(segment)}
