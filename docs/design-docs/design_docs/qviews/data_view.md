@@ -203,16 +203,18 @@ QueryCoord must not modify DataView or assign DataVersion.
 
 ### 4.3 DataViewManager State Model
 
-DataCoord keeps one collection-scoped published state. The implementation may
-retain an internal working copy while a mutation is being persisted, but that
-working copy is never a QueryCoord-visible snapshot and is not an independent
-authority.
+DataCoord keeps one collection-scoped published state. The current
+compatibility implementation also retains resident/visible working copies while
+mutations and delayed flush handoffs are being processed. Those copies are
+internal caches only; the durable published head remains the sole external
+membership authority and neither cache is an independent persisted state.
 
 ```go
 type collectionDataViewState struct {
     collectionID int64
 
-    published *viewpb.DataViewOfCollection
+    latestResident *viewpb.DataViewOfCollection // internal working cache
+    latestVisible  *viewpb.DataViewOfCollection // QueryCoord-facing cache
 }
 ```
 
@@ -220,10 +222,13 @@ Definitions:
 
 - **latest persisted DataView**: the maximum DataVersion found under the
   collection's DataView version prefix in the metastore.
-The published snapshot is the sole QueryCoord membership authority. A flush
-whose output is not yet loadable receives and durably retains its
-`sealed_at_data_version`, but does not publish a temporary DataView. The later
-loadable completion publishes the inherited streaming epoch.
+
+The published head is the sole QueryCoord membership authority. A flush whose
+output is not yet loadable receives and durably retains its
+`sealed_at_data_version`; the compatibility resident/visible caches may track
+that handoff internally, but QueryCoord is notified only for a loadable
+published snapshot. The later loadable completion publishes the inherited
+streaming epoch.
 
 ## 5. Persistence
 
@@ -316,17 +321,19 @@ Version choice during reconciliation, in priority order:
 | No membership or delete frontier diff | unchanged |
 
 DataVersion reflects explicit persisted membership commits, not an inferred
-diff against SegmentMeta. Recovery loads the durable published head and
-re-drives only assigned, incomplete flush publication; it does not guess a new
-version from compaction lineage or reconstruct membership from SegmentMeta.
+diff during normal event handling. Recovery still uses the existing
+compatibility reconciliation path when a publication is incomplete; it must
+preserve the durable published head and the SegmentMeta-first fence, and must
+not guess versions from compaction lineage when an explicit assigned epoch is
+available.
 
 ## 6. Mutation Semantics
 
 DataViewManager is the DataCoord component that applies explicit DataCoord
 membership commits to the persisted loadable membership. The event-named
-adapter methods remain as compatibility shims for existing DataCoord callers;
-new flows use `CommitPublishedView`, `CommitStreamingView`, `CommitRewrite`,
-and `CommitSegmentTrim` with explicit mutations.
+methods remain only as compatibility shims for tests and older adapters; new
+flows use `CommitPublishedView`, `CommitStreamingView`, `CommitRewrite`, and
+`CommitSegmentTrim` with explicit mutations.
 
 Suggested interface shape:
 
@@ -334,32 +341,36 @@ Suggested interface shape:
 func RecoverManager(ctx context.Context, catalog RecoveryCatalog, segments SegmentStore) (Manager, error)
 
 type DataViewManager interface {
-    OnFlush(ctx context.Context, event FlushDataViewEvent) (*viewpb.DataVersion, error)
-    OnImport(ctx context.Context, event ImportDataViewEvent) (*viewpb.DataVersion, error)
-    OnCopySegmentComplete(ctx context.Context, event CopySegmentCompleteDataViewEvent) (*viewpb.DataVersion, error)
-    OnCompact(ctx context.Context, event CompactDataViewEvent) (*viewpb.DataVersion, error)
-    OnL0Compact(ctx context.Context, event L0CompactDataViewEvent) (*viewpb.DataVersion, error)
-    OnExternalRefresh(ctx context.Context, event ExternalRefreshDataViewEvent) (*viewpb.DataVersion, error)
-    OnDropPartition(ctx context.Context, event DropPartitionDataViewEvent) (*viewpb.DataVersion, error)
-    OnTruncate(ctx context.Context, event TruncateDataViewEvent) (*viewpb.DataVersion, error)
+    AssignFlushVersion(ctx context.Context, collectionID, segmentID int64) (*viewpb.DataVersion, error)
+    CommitPublishedView(ctx context.Context, collectionID int64, assigned *viewpb.DataVersion, mutation PublishedMutation) (*viewpb.DataVersion, error)
+    CommitStreamingView(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
+    CommitRewrite(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
+    CommitSegmentTrim(ctx context.Context, collectionID int64, resolve SegmentTrimTargetResolver, finalize SegmentTrimFinalize) (*viewpb.DataVersion, error)
+    OnCreateCollection(ctx context.Context, event CreateCollectionDataViewEvent) (*viewpb.DataVersion, error)
     OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error)
 
     RepairCollection(ctx context.Context, collectionID int64) error
     RepairCollections(ctx context.Context, collectionIDs []int64) error
-    LatestPublishedDataView(ctx context.Context, collectionID int64) (*viewpb.DataViewOfCollection, error)
+    Get(ctx context.Context, collectionID int64, version qviews.DataVersion) (DataViewRef, error)
+    LatestPublished(ctx context.Context, collectionID int64) (DataViewRef, error)
     Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewOfCollection, error)
 }
 ```
+
+The concrete manager temporarily retains event-named helper methods for legacy
+tests and older concrete adapters, but those helpers are not part of the
+production `Manager` contract. Production DataCoord flows publish explicit
+membership mutations through the `Commit*` methods above.
 
 `RecoverManager` restores all DataViews directly from metastore using a
 collection-hint-free full scan. `RepairCollection(s)` is the separate recovery
 repair step that reconciles DataView with SegmentMeta after SegmentMeta and
 collection/partition metadata have recovered.
 
-Every `On*` method returns the DataVersion generated or affected by the event.
-If the event only refreshes derived metadata, for example L0 compaction changing
-`delete_apply_start_after_timetick`, it returns the current DataVersion without
-advancing it.
+The concrete compatibility `On*` helpers return the DataVersion generated or
+affected by the event. If the event only refreshes derived metadata, for
+example L0 compaction changing `delete_apply_start_after_timetick`, it returns
+the current DataVersion without advancing it.
 
 Internal helpers should keep the normal path event-driven:
 
@@ -408,10 +419,11 @@ If the flushed segment is immediately usable, it joins DataView and advances:
 (S, C) -> (S+1, 0)
 ```
 
-If the flush output must pass through sort compaction first, publication waits.
-The final sorted segment inherits the original assigned `(S+1, 0)` and is
-published at that exact streaming epoch. It is not an independent compact
-rewrite and does not create an unavailable snapshot.
+If the flush output must pass through sort compaction first, QueryCoord
+publication waits. The final sorted segment inherits the original assigned
+`(S+1, 0)` and is published at that exact streaming epoch. Any compatibility
+resident/visible state used during the handoff is not exposed as an independent
+QueryCoord snapshot.
 
 Dropped flush output, partial checkpoint updates, and binlog-only updates do
 not change DataView.
@@ -637,10 +649,11 @@ The Balancer treats DataView as immutable during one reconcile cycle. If
 DataVersion advances while a plan is being built, that new DataView is consumed
 by the next reconcile cycle.
 
-QueryCoord must request a visible view, for example through
-`LatestPublishedDataView(collectionID)`. It must not select the maximum persisted
-DataVersion by itself, because the latest persisted DataView may be a temporary
-flush view that is not yet allowed to participate in QueryView construction.
+QueryCoord must acquire a manager-owned reference, for example through
+`LatestPublished(collectionID)` or `Get(collectionID, version)`. It must not
+select the maximum persisted DataVersion by itself, because compatibility
+resident state may temporarily be ahead of the QueryCoord-visible published
+snapshot.
 
 Phase 1 uses DataVersion comparison:
 
