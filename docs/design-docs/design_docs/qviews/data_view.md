@@ -315,7 +315,7 @@ membership commits to the persisted loadable membership. Business adapters use
 `CommitPublishedView`, `CommitStreamingView`, `CommitRewrite`, and
 `CommitSegmentTrim` with explicit mutations.
 
-Suggested interface shape:
+Current interface shape:
 
 ```go
 func RecoverManager(ctx context.Context, catalog RecoveryCatalog, segments SegmentStore) (Manager, error)
@@ -323,30 +323,39 @@ func RecoverManager(ctx context.Context, catalog RecoveryCatalog, segments Segme
 type DataViewManager interface {
     AssignFlushVersion(ctx context.Context, collectionID, segmentID int64) (*viewpb.DataVersion, error)
     CommitPublishedView(ctx context.Context, collectionID int64, assigned *viewpb.DataVersion, mutation PublishedMutation) (*viewpb.DataVersion, error)
+    RetryAssignedFlushPublication(ctx context.Context, collectionID, segmentID int64, assigned *viewpb.DataVersion, removeOnly bool) (*viewpb.DataVersion, error)
     CommitStreamingView(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
     CommitRewrite(ctx context.Context, collectionID int64, mutation PublishedMutation) (*viewpb.DataVersion, error)
     CommitSegmentTrim(ctx context.Context, collectionID int64, resolve SegmentTrimTargetResolver, finalize SegmentTrimFinalize) (*viewpb.DataVersion, error)
-    OnCreateCollection(ctx context.Context, event CreateCollectionDataViewEvent) (*viewpb.DataVersion, error)
-    OnDropCollection(ctx context.Context, collectionID int64) (*viewpb.DataVersion, error)
+    InitializeCollection(ctx context.Context, initialization CollectionInitialization) (*viewpb.DataVersion, error)
+    MarkCollectionTerminal(ctx context.Context, collectionID int64) error
 
     Get(ctx context.Context, collectionID int64, version qviews.DataVersion) (DataViewRef, error)
     LatestPublished(ctx context.Context, collectionID int64) (DataViewRef, error)
-    Snapshot(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewOfCollection, error)
+    DataViewSnapshotRefForCollections(ctx context.Context, collectionIDs map[int64]struct{}) (balancerapi.DataViewSnapshotRef, error)
+    SegmentSnapshot(ctx context.Context, segmentIDs []int64) balancerapi.SegmentSnapshot
+    ShardTimeTicks(ctx context.Context, collectionIDs []int64) ([]*viewpb.DataViewShardTimeTick, error)
+    IsSegmentReferenced(ctx context.Context, collectionID, segmentID int64) (bool, error)
+    GarbageCollect(ctx context.Context, collectionID int64, retainLatest int) error
 }
 ```
+
+Collection-drop finalization is owned by the lifecycle wrapper around the core
+manager. It durably marks the collection terminal, calls
+`MarkCollectionTerminal`, waits for durable QueryView cleanup and live refs to
+drain, then removes the collection snapshots and version state.
 
 `RecoverManager` restores the durable published head directly from metastore.
 There is no generic post-recovery SegmentMeta repair phase. If an explicit
 business publication failed, that business workflow retries its `Commit*`
 operation after recovery.
 
-Internal helpers should keep the normal path event-driven:
+Internal helpers keep publication state-oriented and explicit:
 
 ```go
 buildNextView(base, mutation) -> next
 deriveDeleteTimetick(view, segmentMeta) -> per-shard timetick
 persistSnapshotAndPublishedHead(view) error
-notifyQC(view)
 ```
 
 Business adapters carry the affected collection, vchannel, partition, and
@@ -354,15 +363,14 @@ segment IDs from the completed DataCoord mutation. DataViewManager must not
 discover the next view by scanning all segment metadata on the normal path or
 during recovery.
 
-The event handler checks whether each affected segment is already loadable:
-
-- If the affected segment is loadable and not already in DataView, add it.
-- If an old member is dropped, compacted away, or removed by DDL/truncate, remove
-  it.
-- If the event only changes segment content or delete frontier, keep
-  DataVersion unchanged.
-- If the event's output is still not loadable, keep it pending or ignore it
-  until the later visibility event completes the same logical operation.
+Business adapters own completion and loadability gates before calling the
+manager. They submit the final affected IDs as `SegmentMembership` values and
+explicit removals. The manager validates that every added membership is
+loadable and belongs to the target collection, but it never scans SegmentMeta
+to discover membership, classify the transition, or wait for a later business
+event. Metadata-only changes do not call a membership commit. Delayed outputs
+remain outside DataView until their owning adapter submits the final loadable
+membership at the already-assigned epoch.
 
 A single DataCoord mutation batch advances DataVersion at most once.
 
@@ -370,10 +378,15 @@ Commit adapters must be idempotent. Repeated requests and mutations whose
 membership is already reflected in the published head are normal no-op success
 cases after durable verification.
 
-### 6.1 Flush Events
+### 6.1 Flush Publication Flow
 
-`OnFlush` is triggered by StreamingNode flush completion through
-`SaveBinlogPaths`.
+`SaveBinlogPaths` is the Streaming flush adapter. It first invokes
+`AssignFlushVersion`, then persists the SegmentMeta changes. For an immediately
+loadable output it invokes `CommitPublishedView` with the exact assigned epoch
+and explicit membership before returning success. A retry whose segment has
+already become Dropped uses `RetryAssignedFlushPublication` to verify a durable
+prior publication or explicitly complete an empty/remove-only epoch; the
+manager does not reconstruct the original mutation from current SegmentMeta.
 
 StreamingNode flush can first produce a temporary sealed segment that still
 needs sort processing. Such a segment receives its deterministic
@@ -393,7 +406,7 @@ expose an intermediate DataView snapshot to QueryCoord.
 Dropped flush output, partial checkpoint updates, and binlog-only updates do
 not change DataView.
 
-### 6.2 Import Events
+### 6.2 Import Publication
 
 The import adapter runs after import completion.
 
@@ -410,7 +423,7 @@ When imported segments become loadable, they join DataView and advance:
 
 L0 import output follows the L0 rules and does not join membership.
 
-### 6.3 Compact Events
+### 6.3 Compaction Rewrite
 
 The compaction adapter runs after compaction completion.
 
@@ -433,7 +446,7 @@ metadata without changing membership does not advance DataView. If a schema-bump
 task performs a full replacement with a different loadable segment ID, it is a
 compact rewrite and advances `compact_version`.
 
-### 6.4 L0 Compact Events
+### 6.4 L0 Compaction Projection
 
 The L0 compaction adapter runs after Level-0 delete compaction.
 
@@ -445,7 +458,7 @@ Therefore the L0 adapter only refreshes the derived
 `delete_apply_start_after_timetick`. It does not advance DataVersion unless the
 same mutation also changes non-L0 loadable membership.
 
-### 6.5 DDL / Trim Events
+### 6.5 DDL / Trim Commits
 
 Some membership changes are not caused by segment production:
 
@@ -485,7 +498,7 @@ membership from an already-published or retained DataView. A publication
 failure is retryable, and retry completes the assigned remove-only epoch or
 compact removal from the same authoritative head.
 
-There is no separate `OnDropChannel` event in the current DataCoord behavior.
+There is no separate DropChannel commit in the current DataCoord behavior.
 Channel-level effects should be represented by the actual DDL/trim operation
 that changes membership, or by collection drop.
 
@@ -538,7 +551,7 @@ Rules:
   also changes.
 - L0 state can affect the derived `delete_apply_start_after_timetick`.
 
-### 6.9 Copy Segment Complete Events
+### 6.9 Copy Segment Completion
 
 The copy-segment adapter runs after a copy segment task has persisted the target
 segment result into DataCoord metadata.
@@ -565,7 +578,7 @@ Partial copy progress, restore job creation, copied index metadata before the
 target segment is loadable, and task state updates that do not change loadable
 membership do not change DataView.
 
-### 6.10 External Collection Refresh
+### 6.10 External Collection Refresh Commit
 
 The external-refresh adapter runs after an external collection refresh applies
 its segment patch.
@@ -584,9 +597,13 @@ external source snapshot and should advance `compact_version` once.
 
 ### 6.11 DropCollection
 
-DropCollection deletes the whole DataView. It does not need to advance
-DataVersion because the collection view no longer exists. QueryCoord releases
-QueryViews through the load-config release path.
+DropCollection does not advance DataVersion because the collection view no
+longer exists. The lifecycle owner first persists a terminal marker and invokes
+`MarkCollectionTerminal`, which rejects new exact-version and Balancer snapshot
+refs while preserving existing refs. QueryCoord releases QueryViews through the
+load-config release path. Only after durable QueryView cleanup and ref drainage
+does lifecycle-owned finalization remove the collection snapshots and version
+state and clear the terminal marker.
 
 ## 7. QueryCoord Consumption
 
@@ -596,7 +613,7 @@ published DataView snapshot.
 ```
 DataCoord DataViewManager
         |
-        | in-process snapshot / watch / refresh
+        | ref-owned in-process snapshot / watch / refresh
         v
 QueryCoord DataViewProvider
         |
@@ -610,9 +627,11 @@ BalancePolicy.Plan(...)
 QueryViewAtCoordBuilder(DataView, assignments)
 ```
 
-The Balancer treats DataView as immutable during one reconcile cycle. If
-DataVersion advances while a plan is being built, that new DataView is consumed
-by the next reconcile cycle.
+The Balancer acquires `DataViewSnapshotRefForCollections` and treats its
+DataViews as immutable during one reconcile cycle. It holds the snapshot ref
+through planning and application, then releases it. If DataVersion advances
+while a plan is being built, that new DataView is consumed by the next reconcile
+cycle.
 
 QueryCoord must acquire a manager-owned reference, for example through
 `LatestPublished(collectionID)` or `Get(collectionID, version)`. It must not
