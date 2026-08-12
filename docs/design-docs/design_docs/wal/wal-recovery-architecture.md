@@ -72,9 +72,10 @@ MetaPoint = latest completely observed WAL point
 DataPoint = latest continuous fully completed Tracker point
 ```
 
-Meta-only replay passes a normal `ImmutableMessage` to modules. It does not
-create reference-counted messages or Tracker entries. The data scanner creates
-one Owner and one Tracker entry for every message.
+Meta-only replay creates one `OwnedImmutableMessage` and passes it through the
+same module entry as data replay. It does not create a Tracker entry and
+RecoveryStorage releases the Owner after synchronous dispatch. The data
+scanner creates one Owner and one Tracker entry for every message.
 
 The DataPoint may lag MetaPoint while Segment or TransformLog work is pending or
 while a broadcast Coordinator ACK is retrying. A persist batch always bounds
@@ -86,7 +87,7 @@ For one data-scanner message:
 
 ```text
 owner, tracked = Tracker.Track(raw)
-  -> PChannelRecoveryManager.ObserveDataMessage(owner)
+  -> PChannelRecoveryManager.ObserveMessage(owner)
        -> route by message scope
        -> concrete Segment/TransformLog consumers Clone(owner)
        -> synchronous metadata mutations are marked dirty
@@ -199,24 +200,20 @@ reconstructs them. Idempotent Coordinator ACK may be repeated.
 
 ```go
 type Module interface {
-    ObserveMessage(ctx context.Context, msg message.ImmutableMessage)
+    ObserveMessage(ctx context.Context, owner message.OwnedImmutableMessage)
     SwitchIntoMetaAndData() ModuleSnapshot
     ConsumeDirtySnapshots() []DirtySnapshot
 }
-
-type DataMessageObserver interface {
-    ObserveDataMessage(ctx context.Context, owner message.RefCountedImmutableMessageOwner)
-}
 ```
 
-`ObserveMessage` is used for Meta-only replay. `ObserveDataMessage` gives the
-unique data-scanner Owner to the top-level `PChannelRecoveryManager` so it can
-synchronously clone for real consumers. The final Owner release is
-RecoveryStorage-owned and is routed through the dedicated BroadcastAck sink.
+Both replay lanes call `ObserveMessage`. The only difference is ownership
+provenance: Meta-only uses a temporary non-Tracker Owner released by
+RecoveryStorage after synchronous dispatch; Data replay uses the Tracker Owner,
+whose final top-level release is routed through the dedicated BroadcastAck sink.
 
 ## 12. Invariants
 
-1. Meta-only replay never claims data completion.
+1. Meta-only replay never creates a Tracker entry or claims data completion.
 2. Every data-scanner message has one Tracker entry and one Owner.
 3. Actual asynchronous data work owns retained handles; observation alone does
    not create a handle.

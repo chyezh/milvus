@@ -34,9 +34,10 @@ Point.TimeTick  = M.TimeTick()
 Recovery uses `Point.MessageID` with `DeliverPolicyStartFrom`. Completed
 messages may be replayed; an unfinished message must never be skipped.
 
-Meta-only replay uses the ordinary immutable message interface and does not
-create a Tracker entry. It rebuilds synchronous metadata and the transaction
-buffer, then advances the Meta checkpoint.
+Meta-only replay creates a temporary Owner and uses the same module
+`ObserveMessage` entry, but it does not create a Tracker entry. RecoveryStorage
+releases that Owner after synchronous dispatch, rebuilds metadata and the
+transaction buffer, then advances the Meta checkpoint.
 
 There is no explicit negative ACK. A module that has no work for a message
 simply does not clone the Owner. BroadcastAck still receives every data-scanner
@@ -48,7 +49,8 @@ checkpoint contract.
 
 | Holder | Creation | Release/completion condition |
 |---|---|---|
-| Owner root | `Tracker.Track` | Dedicated BroadcastAck sink receives it and unconditionally calls `Release` |
+| Data Owner root | `Tracker.Track` | Dedicated BroadcastAck sink receives it and unconditionally calls `Release` |
+| Meta-only Owner root | `NewOwnedImmutableMessage` | RecoveryStorage releases it after synchronous module dispatch |
 | Segment handle | Segment sees concrete async work | Required object/lifecycle work succeeds, metadata is dirty |
 | TransformLog handle | Delete or barrier requires chunk flush | Covering chunk is durable and committed, metadata is dirty |
 | Tracker entry message | `Tracker.Track` | Both local consumers and required broadcast ACK complete, then entry leaves continuous prefix |

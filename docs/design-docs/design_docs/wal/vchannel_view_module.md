@@ -45,7 +45,7 @@ ref-counted immutable message.
 Within one VChannel:
 
 ```text
-ObserveDataMessage(Owner)
+ObserveMessage(Owner)
   -> update VChannelView metadata
   -> route the same ref-counted message to affected SegmentViews
   -> route the same message to TransformLog

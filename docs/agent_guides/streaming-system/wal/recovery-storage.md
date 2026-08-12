@@ -38,7 +38,8 @@ Persists WAL consumer state to the catalog (etcd) and object storage. **Core inv
    from the checkpoint MessageID through the startup `RecoveryBarrier` with
    Meta-only envelopes. This reconstructs current metadata and the uncommitted
    `TxnBuffer`, but it does not claim that Insert or Transform data has been
-   replayed through the barrier.
+   replayed through the barrier. Each envelope receives a temporary
+   `OwnedImmutableMessage` for the common module API, but no Tracker entry.
 4. **Data replay and QueryView recovery**: Switch modules into MetaAndData mode
    and start the DataScanner from the persisted Data checkpoint. Persisted
    QueryViews may build their QueryRuntime concurrently from the current

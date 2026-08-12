@@ -37,13 +37,13 @@ top-level RecoveryStorage modules. BroadcastAck is a dedicated RecoveryStorage
 sink rather than a `moduleapi.Module`: it has no Meta-only observer, mode
 transition, or dirty snapshot.
 
-## 2. RefCountedImmutableMessage
+## 2. Immutable Message Ownership
 
 The generic wrapper is implemented in `pkg/streaming/util/message`. It owns the
 underlying `ImmutableMessage` until the final reference is released.
 
 ```go
-type RefCountedImmutableMessageOwner interface {
+type OwnedImmutableMessage interface {
     Message() ImmutableMessage
     Clone() RetainedImmutableMessage
     Release()
@@ -56,7 +56,7 @@ type RetainedImmutableMessage interface {
 }
 ```
 
-`NewRefCountedImmutableMessageOwner(msg, finalizer)` takes ownership of `msg`
+`NewOwnedImmutableMessage(msg, finalizer)` takes ownership of `msg`
 and creates the unique root reference. The constructor does not copy the
 message. The finalizer is invoked exactly once, after the reference count
 reaches zero, and is the wrapper's only completion callback.
@@ -79,15 +79,36 @@ reference is released, the wrapper clears its pointer to the underlying
 message after running the finalizer, allowing the message, payload, properties,
 and complete transaction to become eligible for Go GC.
 
-Typed specialization is a view over the same owner or retained handle:
+Typed specialization is a view over the same owner or retained handle. It is
+defined directly alongside `SpecializedImmutableMessage`; there is no generic
+`OwnedImmutable[T]` or `RetainedImmutable[T]` layer:
 
 ```go
-type OwnedMessage[T ImmutableMessage] struct { /* typed message + owner */ }
-type RetainedMessage[T ImmutableMessage] struct { /* typed message + handle */ }
+type SpecializedOwnedImmutableMessage[H proto.Message, B proto.Message] interface {
+    Message() SpecializedImmutableMessage[H, B]
+    Clone() SpecializedRetainedImmutableMessage[H, B]
+    CloneHandle() RetainedImmutableMessage
+    Untyped() OwnedImmutableMessage
+}
+
+type SpecializedRetainedImmutableMessage[H proto.Message, B proto.Message] interface {
+    Message() SpecializedImmutableMessage[H, B]
+    Clone() SpecializedRetainedImmutableMessage[H, B]
+    Release()
+}
 ```
 
-These helpers carry no second lifecycle and no separate Ack argument. A typed
-retained value must release its handle when its asynchronous operation ends.
+Generated concrete types such as `OwnedImmutableInsertMessageV1` and
+`RetainedImmutableInsertMessageV1` alias these specialized interfaces. They do
+not nest another generic ownership interface and carry no second lifecycle or
+separate Ack argument. A specialized retained value must release its handle
+when its asynchronous operation ends.
+
+The consumer-assembled `ImmutableTxnMessage` is not a header/body specialized
+message. It therefore uses the direct `OwnedImmutableTxnMessage` and
+`RetainedImmutableTxnMessage` interfaces. These interfaces still retain the
+complete transaction as one message; child messages never receive independent
+ownership.
 
 ## 3. Tracker
 
@@ -157,7 +178,7 @@ is held:
 ```text
 read M
   -> owner, tracked = Tracker.Track(M)
-  -> PChannelRecoveryManager.ObserveDataMessage(owner)
+  -> PChannelRecoveryManager.ObserveMessage(owner)
        -> affected VChannel modules
        -> actual Segment/TransformLog consumers synchronously Clone(owner)
        -> QueryRuntime receives a normal immutable copy
@@ -172,7 +193,7 @@ acknowledge a message just because it observed it. A module that has no work for
 a message simply does not clone it.
 
 All clones required by asynchronous work are created before the corresponding
-`ObserveDataMessage` call returns. There is no later global retain operation.
+`ObserveMessage` call returns. There is no later global retain operation.
 
 For a non-broadcast message, BroadcastAck releases the Owner and does nothing
 else. The last actual consumer release invokes the Tracker finalizer, which
@@ -266,6 +287,10 @@ advancing past an unfinished entry is not.
 
 Meta-only replay does not create message Ack entries. It consumes DirtySnapshot
 state and advances the Meta checkpoint as part of bounded metadata recovery.
+RecoveryStorage still creates an `OwnedImmutableMessage` for each Meta-only
+message so every module uses the same `ObserveMessage` contract. That Owner is
+not registered with the Tracker and RecoveryStorage releases it immediately
+after synchronous module dispatch.
 
 ## 7. Broadcast And AckSyncUp
 
@@ -293,7 +318,8 @@ before a crash may be repeated safely.
 
 ## 9. Invariants
 
-1. Each data-scanner message has one Tracker entry and one Owner.
+1. Every observed message has one Owner; only data-scanner messages have a
+   Tracker entry.
 2. The Tracker entry owns the WAL point and retains the original message until
    the entry leaves the completed prefix.
 3. Each actual asynchronous consumer owns one retained message handle.
